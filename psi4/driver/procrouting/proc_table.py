@@ -89,6 +89,7 @@ procedures = {
         'sf-sapt'       : sapt.run_sf_sapt,
         'sapt(dft)'     : sapt.run_sapt_dft,
         'sapt0'         : proc.run_sapt,
+        'asapt'         : proc.run_asapt,
         'ssapt0'        : proc.run_sapt,
         'sapt2'         : proc.run_sapt,
         'sapt2+'        : proc.run_sapt,

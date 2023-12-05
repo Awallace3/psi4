@@ -29,6 +29,7 @@
 #include "asapt0.h"
 #include "atomic.h"
 
+#include <cstdint>
 #include <ctime>
 
 #include "psi4/physconst.h"
@@ -71,11 +72,11 @@ ASAPT0::ASAPT0(SharedWavefunction d, SharedWavefunction mA, SharedWavefunction m
     //full_orbital_    = options.get_bool("ASAPT_FULL_ORBITAL");
     //multipole_       = options.get_bool("ASAPT_MULTIPOLE");
     //multipole_order_ = options.get_int("ASAPT_MULTIPOLE_ORDER");
-    
+
     // TODO: Use general memory manager?
     memory_ = (unsigned long int)(Process::environment.get_memory() * options.get_double("SAPT_MEM_FACTOR") * 0.125);
 
-    // should this be cpks or cphf? 
+    // should this be cpks or cphf?
     cpks_maxiter_ = options.get_int("MAXITER");
     cpks_delta_ = options.get_double("D_CONVERGENCE");
 
@@ -169,7 +170,7 @@ double ASAPT0::compute_energy() {
     timer_on("ASAPT: PS");
     ps();
     timer_off("ASAPT: PS");
-    
+
     timer_on("ASAPT: DF");
     df();
     timer_off("ASAPT: DF");
@@ -177,7 +178,7 @@ double ASAPT0::compute_energy() {
     timer_on("ASAPT: Elst");
     elst();
     timer_off("ASAPT: Elst");
-    
+
     timer_on("ASAPT: Exch");
     exch();
     timer_off("ASAPT: Exch");
@@ -191,7 +192,7 @@ double ASAPT0::compute_energy() {
     timer_off("ASAPT: Disp");
 
     //if (multipole_) {
-    //    
+    //
     //    timer_on("ASAPT: Mult Elst");
     //    elst_multipole();
     //    timer_off("ASAPT: Mult Elst");
@@ -299,55 +300,56 @@ void ASAPT0::analyze() {
 
     // Print Order 1
     outfile->Printf("Elst_A\n");
-    Elst_A->print_out();
+    /* Elst_A->print_out(); */
+    Elst_A->print();
 
     outfile->Printf("Elst_B\n");
-    Elst_B->print_out();
+    Elst_B->print();
 
     outfile->Printf("Exch_A\n");
-    Exch_A->print_out();
+    Exch_A->print();
 
     outfile->Printf("Exch_B\n");
-    Exch_B->print_out();
+    Exch_B->print();
 
     outfile->Printf("IndAB_A\n");
-    IndAB_A->print_out();
+    IndAB_A->print();
 
     outfile->Printf("IndAB_B\n");
-    IndAB_B->print_out();
+    IndAB_B->print();
 
     outfile->Printf("IndBA_A\n");
-    IndBA_A->print_out();
+    IndBA_A->print();
 
     outfile->Printf("IndBA_B\n");
-    IndBA_B->print_out();
+    IndBA_B->print();
 
     outfile->Printf("Disp_A\n");
-    Disp_A->print_out();
+    Disp_A->print();
 
     outfile->Printf("Disp_B\n");
-    Disp_B->print_out();
+    Disp_B->print();
 
     // Print Order 0
     outfile->Printf("Elst Total: \n");
-    auto Elst_sum = Elst_A->collapse(0);
-    Elst_sum->print_out();
-
-    outfile->Printf("Exch Total: \n");
-    auto Exch_sum = Exch_A->collapse(0);
-    Exch_sum->print_out();
-
-    outfile->Printf("IndAB Total: \n");
-    auto IndAB_sum = IndAB_A->collapse(0);
-    IndAB_sum->print_out();
-
-    outfile->Printf("IndBA Total: \n");
-    auto IndBA_sum = IndBA_A->collapse(0);
-    IndBA_sum->print_out();
-
-    outfile->Printf("Disp Total: \n");
-    auto Disp_sum = Disp_A->collapse(0);
-    Disp_sum->print_out();
+    /* auto Elst_sum = Elst_A->collapse(0); */
+    /* Elst_sum->print_out(); */
+    /*  */
+    /* outfile->Printf("Exch Total: \n"); */
+    /* auto Exch_sum = Exch_A->collapse(0); */
+    /* Exch_sum->print_out(); */
+    /*  */
+    /* outfile->Printf("IndAB Total: \n"); */
+    /* auto IndAB_sum = IndAB_A->collapse(0); */
+    /* IndAB_sum->print_out(); */
+    /*  */
+    /* outfile->Printf("IndBA Total: \n"); */
+    /* auto IndBA_sum = IndBA_A->collapse(0); */
+    /* IndBA_sum->print_out(); */
+    /*  */
+    /* outfile->Printf("Disp Total: \n"); */
+    /* auto Disp_sum = Disp_A->collapse(0); */
+    /* Disp_sum->print_out(); */
 
 }
 
@@ -358,7 +360,7 @@ void ASAPT0::analyze() {
 void ASAPT0::atomize()
 {
     outfile->Printf(" ATOMIZATION:\n\n");
-    
+
     atomic_A_ = AtomicDensity::build("STOCKHOLDER", primary_A_, Process::environment.options);
     atomic_A_->set_name("A");
     atomic_A_->compute(linalg::doublet(Cocc_A_,Cocc_A_,false,true));
@@ -387,9 +389,9 @@ void ASAPT0::localize()
 
         int nfA = eps_focc_A_->dimpi()[0];
         std::shared_ptr<Matrix> FcfA(new Matrix("FcfA", nfA, nfA));
-        FcfA->set_diagonal(eps_focc_A_); 
+        FcfA->set_diagonal(eps_focc_A_);
         std::shared_ptr<Matrix> FlfA = localfA->fock_update(FcfA);
-        FlfA->set_name("FlfA");    
+        FlfA->set_name("FlfA");
         //FcfA->print();
         //FlfA->print();
 
@@ -401,16 +403,16 @@ void ASAPT0::localize()
 
         int naA = eps_aocc_A_->dimpi()[0];
         std::shared_ptr<Matrix> FcaA(new Matrix("FcaA", naA, naA));
-        FcaA->set_diagonal(eps_aocc_A_); 
+        FcaA->set_diagonal(eps_aocc_A_);
         std::shared_ptr<Matrix> FlaA = localaA->fock_update(FcaA);
-        FlaA->set_name("FlaA");    
+        FlaA->set_name("FlaA");
         //FcaA->print();
         //FlaA->print();
 
         std::vector<std::shared_ptr<Matrix> > LAlist;
         LAlist.push_back(Lfocc_A);
         LAlist.push_back(Laocc_A);
-        Locc_A_ = linalg::horzcat(LAlist); 
+        Locc_A_ = linalg::horzcat(LAlist);
 
         Uocc_A_ = std::shared_ptr<Matrix>(new Matrix("Uocc A", nfA + naA, nfA + naA));
         double** Uocc_Ap = Uocc_A_->pointer();
@@ -431,9 +433,9 @@ void ASAPT0::localize()
 
         int nfB = eps_focc_B_->dimpi()[0];
         std::shared_ptr<Matrix> FcfB(new Matrix("FcfB", nfB, nfB));
-        FcfB->set_diagonal(eps_focc_B_); 
+        FcfB->set_diagonal(eps_focc_B_);
         std::shared_ptr<Matrix> FlfB = localfB->fock_update(FcfB);
-        FlfB->set_name("FlfB");    
+        FlfB->set_name("FlfB");
         //FcfB->print();
         //FlfB->print();
 
@@ -445,16 +447,16 @@ void ASAPT0::localize()
 
         int naB = eps_aocc_B_->dimpi()[0];
         std::shared_ptr<Matrix> FcaB(new Matrix("FcaA", naB, naB));
-        FcaB->set_diagonal(eps_aocc_B_); 
+        FcaB->set_diagonal(eps_aocc_B_);
         std::shared_ptr<Matrix> FlaB = localaB->fock_update(FcaB);
-        FlaB->set_name("FlaB");    
+        FlaB->set_name("FlaB");
         //FcaB->print();
         //FlaB->print();
 
         std::vector<std::shared_ptr<Matrix> > LBlist;
         LBlist.push_back(Lfocc_B);
         LBlist.push_back(Laocc_B);
-        Locc_B_ = linalg::horzcat(LBlist); 
+        Locc_B_ = linalg::horzcat(LBlist);
 
         Uocc_B_ = std::shared_ptr<Matrix>(new Matrix("Uocc B", nfB + naB, nfB + naB));
         double** Uocc_Bp = Uocc_B_->pointer();
@@ -477,9 +479,9 @@ void ASAPT0::localize()
 
         int na = eps_occ_A_->dimpi()[0];
         std::shared_ptr<Matrix> FcA(new Matrix("FcA", na, na));
-        FcA->set_diagonal(eps_occ_A_); 
+        FcA->set_diagonal(eps_occ_A_);
         std::shared_ptr<Matrix> FlA = localA->fock_update(FcA);
-        FlA->set_name("FlA");    
+        FlA->set_name("FlA");
 
         //FcA->print();
         //FlA->print();
@@ -492,9 +494,9 @@ void ASAPT0::localize()
 
         int nb = eps_occ_B_->dimpi()[0];
         std::shared_ptr<Matrix> FcB(new Matrix("FcB", nb, nb));
-        FcB->set_diagonal(eps_occ_B_); 
+        FcB->set_diagonal(eps_occ_B_);
         std::shared_ptr<Matrix> FlB = localB->fock_update(FcB);
-        FlB->set_name("FlB");    
+        FlB->set_name("FlB");
 
         //FcB->print();
         //FlB->print();
@@ -540,21 +542,21 @@ void ASAPT0::populate()
     double** Q2Bp = Q2B->pointer();
 
     // => Molecular Grid <= //
-    
+
     std::shared_ptr<MolecularGrid> grid = atomic_A_->grid();
     int max_points = grid->max_points();
     double* xp = grid->x();
     double* yp = grid->y();
     double* zp = grid->z();
     double* wp = grid->w();
-        
+
     // => Temps <= //
-    
+
     std::shared_ptr<Matrix> WA(new Matrix("WA", nA, max_points));
     std::shared_ptr<Matrix> WB(new Matrix("WB", nB, max_points));
     double** WAp = WA->pointer();
     double** WBp = WB->pointer();
-    
+
     // => Local orbital collocation computer <= //
 
     std::shared_ptr<UKSFunctions> points = std::shared_ptr<UKSFunctions>(new UKSFunctions(primary_,grid->max_points(),grid->max_functions()));
@@ -582,8 +584,8 @@ void ASAPT0::populate()
         }
         atomic_A_->compute_weights(npoints,&xp[offset],&yp[offset],&zp[offset],WAp,&wp[offset]);
         atomic_B_->compute_weights(npoints,&xp[offset],&yp[offset],&zp[offset],WBp,&wp[offset]);
-        C_DGEMM('N','T',nA,na,npoints,1.0,WAp[0],max_points,psiap[0],max_points,1.0,Q2Ap[0],na); 
-        C_DGEMM('N','T',nB,nb,npoints,1.0,WBp[0],max_points,psibp[0],max_points,1.0,Q2Bp[0],nb); 
+        C_DGEMM('N','T',nA,na,npoints,1.0,WAp[0],max_points,psiap[0],max_points,1.0,Q2Ap[0],na);
+        C_DGEMM('N','T',nB,nb,npoints,1.0,WBp[0],max_points,psibp[0],max_points,1.0,Q2Bp[0],nb);
         offset += npoints;
     }
 
@@ -594,8 +596,8 @@ void ASAPT0::populate()
     for (int a = 0; a < na; a++) {
         double val = 0.0;
         for (int A = 0; A < nA; A++) {
-            val += Q2Ap[A][a]; 
-        } 
+            val += Q2Ap[A][a];
+        }
         C_DSCAL(nA,1.0/val,&Q2Ap[0][a],na);
         outfile->Printf("    %4d: %11.3E\n", a+1, fabs(1.0 - val));
     }
@@ -605,8 +607,8 @@ void ASAPT0::populate()
     for (int b = 0; b < nb; b++) {
         double val = 0.0;
         for (int B = 0; B < nB; B++) {
-            val += Q2Bp[B][b]; 
-        } 
+            val += Q2Bp[B][b];
+        }
         C_DSCAL(nB,1.0/val,&Q2Bp[0][b],nb);
         outfile->Printf("    %4d: %11.3E\n", b+1, fabs(1.0 - val));
     }
@@ -616,9 +618,9 @@ void ASAPT0::populate()
 
     // => Globals <= //
 
-    Q_A_ = Q2A; 
-    Q_B_ = Q2B; 
-    
+    Q_A_ = Q2A;
+    Q_B_ = Q2B;
+
     R_A_ = linalg::doublet(Q_A_,Uocc_A_,false,true);
     R_B_ = linalg::doublet(Q_B_,Uocc_B_,false,true);
 
@@ -631,7 +633,7 @@ void ASAPT0::populate()
 void ASAPT0::ps()
 {
     outfile->Printf("  ATOMIC PSEUDOSPECTRAL:\n\n");
-    
+
     // ==> Sizing <== //
 
     int nn  = primary_->nbf();
@@ -665,7 +667,7 @@ void ASAPT0::ps()
     int nQ = jkfit_->nbf();
 
     // ==> Auxiliary basis representation of atomic ESP (unfitted) <== //
-    
+
     // Grid Definition
     std::shared_ptr<Vector> x = atomic_A_->x();
     std::shared_ptr<Vector> y = atomic_A_->y();
@@ -699,7 +701,7 @@ void ASAPT0::ps()
     double** VABp = VAB->pointer();
     double** VBAp = VBA->pointer();
 
-    // Threading 
+    // Threading
     int nthreads = 0;
     #ifdef _OPENMP
         nthreads = omp_get_max_threads();
@@ -717,114 +719,122 @@ void ASAPT0::ps()
         VtempT.push_back(std::shared_ptr<Matrix>(new Matrix("Vtemp",nQ,1)));
         QACT.push_back(std::shared_ptr<Matrix>(new Matrix("QACT",nA,nQ)));
         QBDT.push_back(std::shared_ptr<Matrix>(new Matrix("QBDT",nB,nQ)));
-        VintT.push_back(std::shared_ptr<PotentialInt>(static_cast<PotentialInt*>(Vfact->ao_potential())));
-        VintT[thread]->set_charge_field(ZxyzT[thread]);
+        /* VintT.push_back(std::shared_ptr<PotentialInt>(static_cast<PotentialInt*>(Vfact->ao_potential()))); */
+        // print Vfact->ao_potential() and VintT[thread] to see if they are the same
+        // printf("Vfact->ao_potential() = %p\n", Vfact->ao_potential());
+        /* VintT.push_back(std::shared_ptr<PotentialInt>(Vfact->ao_potential())); */
+        /* VintT[thread]->set_charge_field(ZxyzT[thread]); */
     }
 
-    std::shared_ptr<Matrix> Zxyz(new Matrix("Zxyz",1,4));
-    double** Zxyzp = Zxyz->pointer();
-    std::shared_ptr<PotentialInt> Vint(static_cast<PotentialInt*>(Vfact->ao_potential()));
-    Vint->set_charge_field(Zxyz);
-    std::shared_ptr<Matrix> Vtemp(new Matrix("Vtemp",nQ,1));
-    double** Vtempp = Vtemp->pointer();
+    // TODO: make Zxyz2p
 
-    // Master loop 
-    for (int offset = 0; offset < nP; offset += max_points) {
-        int npoints = (offset + max_points >= nP ? nP - offset : max_points);
-        atomic_A_->compute_weights(npoints,&xp[offset],&yp[offset],&zp[offset],QAPp,&rhoap[offset]);
-        atomic_B_->compute_weights(npoints,&xp[offset],&yp[offset],&zp[offset],QBQp,&rhobp[offset]);
-
-        #pragma omp parallel for schedule(dynamic)
-        for (int P = 0; P < npoints; P++) {
-
-            // Thread info
-            int thread = 0;
-            #ifdef _OPENMP
-                thread = omp_get_thread_num();
-            #endif
-
-            // Pointers
-            double** ZxyzTp = ZxyzT[thread]->pointer();
-            double** VtempTp = VtempT[thread]->pointer();
-            double** QACTp = QACT[thread]->pointer();       
-            double** QBDTp = QBDT[thread]->pointer();       
- 
-            // Absolute point indexing
-            int Pabs = P + offset;
-            
-            // => Q_A^P and Q_B^Q <= //
-
-            VtempT[thread]->zero();
-            ZxyzTp[0][0] = 1.0;
-            ZxyzTp[0][1] = xp[Pabs];
-            ZxyzTp[0][2] = yp[Pabs];
-            ZxyzTp[0][3] = zp[Pabs]; 
-            VintT[thread]->compute(VtempT[thread]);
-
-            // Potential integrals add a spurious minus sign
-            C_DGER(nA,nQ,-wp[Pabs],&QAPp[0][P],max_points,VtempTp[0],1,QACTp[0],nQ);
-            C_DGER(nB,nQ,-wp[Pabs],&QBQp[0][P],max_points,VtempTp[0],1,QBDTp[0],nQ);
-
-        }
-
-        for (int P = 0; P < npoints; P++) {
-        
-            // Absolute point indexing
-            int Pabs = P + offset;
-            
-            // => V_A^B <= //
-
-            for (int B = 0; B < nB; B++) {
-                double Z  = monomer_B_->Z(cB[B]);
-                double xc = monomer_B_->x(cB[B]);
-                double yc = monomer_B_->y(cB[B]);
-                double zc = monomer_B_->z(cB[B]);
-                double R = sqrt((xp[Pabs] - xc) * (xp[Pabs] - xc) + 
-                                (yp[Pabs] - yc) * (yp[Pabs] - yc) + 
-                                (zp[Pabs] - zc) * (zp[Pabs] - zc));
-                if (R < 1.0E-12) continue;
-                double Q = Z * wp[Pabs] / R; 
-                for (int A = 0; A < nA; A++) {
-                    VABp[A][B] += -1.0 * Q * QAPp[A][P]; 
-                }
-            }
-            
-            // => V_B^A <= //
-
-            for (int A = 0; A < nA; A++) {
-                double Z  = monomer_A_->Z(cA[A]);
-                double xc = monomer_A_->x(cA[A]);
-                double yc = monomer_A_->y(cA[A]);
-                double zc = monomer_A_->z(cA[A]);
-                double R = sqrt((xp[Pabs] - xc) * (xp[Pabs] - xc) + 
-                                (yp[Pabs] - yc) * (yp[Pabs] - yc) + 
-                                (zp[Pabs] - zc) * (zp[Pabs] - zc));
-                if (R < 1.0E-12) continue;
-                double Q = Z * wp[Pabs] / R; 
-                for (int B = 0; B < nB; B++) {
-                    VBAp[B][A] += -1.0 * Q * QBQp[B][P]; 
-                }
-            }
-
-        }
-    }
-
-    for (int thread = 0; thread < nthreads; thread++) {
-        QAC->add(QACT[thread]);
-        QBD->add(QBDT[thread]);
-    }
-
-    vars_["QAC"] = QAC;
-    vars_["QBD"] = QBD;
-    vars_["VAB"] = VAB;   
-    vars_["VBA"] = VBA;   
+    /* std::shared_ptr<Matrix> Zxyz(new Matrix("Zxyz",1,4)); */
+    /* double** Zxyzp = Zxyz->pointer(); */
+    /* std::shared_ptr<PotentialInt> Vint(static_cast<PotentialInt*>(Vfact->ao_potential())); */
+    /* Vint->set_charge_field(Zxyz); */
+    /* std::shared_ptr<Matrix> Vtemp(new Matrix("Vtemp",nQ,1)); */
+    /* double** Vtempp = Vtemp->pointer(); */
+    /*  */
+    /* // Master loop */
+    /* for (int offset = 0; offset < nP; offset += max_points) { */
+    /*     int npoints = (offset + max_points >= nP ? nP - offset : max_points); */
+    /*     atomic_A_->compute_weights(npoints,&xp[offset],&yp[offset],&zp[offset],QAPp,&rhoap[offset]); */
+    /*     atomic_B_->compute_weights(npoints,&xp[offset],&yp[offset],&zp[offset],QBQp,&rhobp[offset]); */
+    /*  */
+    /*     #pragma omp parallel for schedule(dynamic) */
+    /*     for (int P = 0; P < npoints; P++) { */
+    /*  */
+    /*         // Thread info */
+    /*         int thread = 0; */
+    /*         #ifdef _OPENMP */
+    /*             thread = omp_get_thread_num(); */
+    /*         #endif */
+    /*  */
+    /*         // Pointers */
+    /*         double** ZxyzTp = ZxyzT[thread]->pointer(); */
+    /*         double** VtempTp = VtempT[thread]->pointer(); */
+    /*         double** QACTp = QACT[thread]->pointer(); */
+    /*         double** QBDTp = QBDT[thread]->pointer(); */
+    /*  */
+    /*         // Absolute point indexing */
+    /*         int Pabs = P + offset; */
+    /*  */
+    /*         // => Q_A^P and Q_B^Q <= // */
+    /*  */
+    /*         VtempT[thread]->zero(); */
+    /*         ZxyzTp[0][0] = 1.0; */
+    /*         ZxyzTp[0][1] = xp[Pabs]; */
+    /*         ZxyzTp[0][2] = yp[Pabs]; */
+    /*         ZxyzTp[0][3] = zp[Pabs]; */
+    /*         VintT[thread]->compute(VtempT[thread]); */
+    /*  */
+    /*         // Potential integrals add a spurious minus sign */
+    /*         C_DGER(nA,nQ,-wp[Pabs],&QAPp[0][P],max_points,VtempTp[0],1,QACTp[0],nQ); */
+    /*         C_DGER(nB,nQ,-wp[Pabs],&QBQp[0][P],max_points,VtempTp[0],1,QBDTp[0],nQ); */
+    /*  */
+    /*     } */
+    /*  */
+    /*     for (int P = 0; P < npoints; P++) { */
+    /*  */
+    /*         // Absolute point indexing */
+    /*         int Pabs = P + offset; */
+    /*  */
+    /*         // => V_A^B <= // */
+    /*  */
+    /*         for (int B = 0; B < nB; B++) { */
+    /*             double Z  = monomer_B_->Z(cB[B]); */
+    /*             double xc = monomer_B_->x(cB[B]); */
+    /*             double yc = monomer_B_->y(cB[B]); */
+    /*             double zc = monomer_B_->z(cB[B]); */
+    /*             double R = sqrt((xp[Pabs] - xc) * (xp[Pabs] - xc) + */
+    /*                             (yp[Pabs] - yc) * (yp[Pabs] - yc) + */
+    /*                             (zp[Pabs] - zc) * (zp[Pabs] - zc)); */
+    /*             if (R < 1.0E-12) continue; */
+    /*             double Q = Z * wp[Pabs] / R; */
+    /*             for (int A = 0; A < nA; A++) { */
+    /*                 VABp[A][B] += -1.0 * Q * QAPp[A][P]; */
+    /*             } */
+    /*         } */
+    /*  */
+    /*         // => V_B^A <= // */
+    /*  */
+    /*         for (int A = 0; A < nA; A++) { */
+    /*             double Z  = monomer_A_->Z(cA[A]); */
+    /*             double xc = monomer_A_->x(cA[A]); */
+    /*             double yc = monomer_A_->y(cA[A]); */
+    /*             double zc = monomer_A_->z(cA[A]); */
+    /*             double R = sqrt((xp[Pabs] - xc) * (xp[Pabs] - xc) + */
+    /*                             (yp[Pabs] - yc) * (yp[Pabs] - yc) + */
+    /*                             (zp[Pabs] - zc) * (zp[Pabs] - zc)); */
+    /*             if (R < 1.0E-12) continue; */
+    /*             double Q = Z * wp[Pabs] / R; */
+    /*             for (int B = 0; B < nB; B++) { */
+    /*                 VBAp[B][A] += -1.0 * Q * QBQp[B][P]; */
+    /*             } */
+    /*         } */
+    /*  */
+    /*     } */
+    /* } */
+    /*  */
+    /* for (int thread = 0; thread < nthreads; thread++) { */
+    /*     QAC->add(QACT[thread]); */
+    /*     QBD->add(QBDT[thread]); */
+    /* } */
+    /* vars_["QAC"] = QAC; */
+    /* vars_["QBD"] = QBD; */
+    /* vars_["VAB"] = VAB; */
+    /* vars_["VBA"] = VBA; */
+    vars_["QAC"] = 0;
+    vars_["QBD"] = 0;
+    vars_["VAB"] = 0;
+    vars_["VBA"] = 0;
 }
 
 
 void ASAPT0::df()
 {
     outfile->Printf("  ATOMIC DENSITY FITTING:\n\n");
-    
+
     // ==> Sizing <== //
 
     int nn  = primary_->nbf();
@@ -899,7 +909,7 @@ void ASAPT0::df()
     //////std::shared_ptr<Tensor> AarT = ints["Aar"];
     //////std::shared_ptr<Tensor> AbsT = ints["Abs"];
 
-   
+
     // ==> Symmetrically-Fitted Atomic ESPs <== //
 
     std::shared_ptr<Matrix> QAC = vars_["QAC"];
@@ -922,75 +932,85 @@ void ASAPT0::df()
     dfh_->add_disk_tensor("WBar_nuc", std::make_tuple(nB, na, nr));
 
     // => Nuclear Part (PITA) <= //
-    
+
     auto Zxyz2 = std::make_shared<Matrix>("Zxyz", 1, 4);
-    double** Zxyz2p = Zxyz2->pointer();
+    std::vector<std::pair<double, std::array<double, 3>>> Zxyz;
     auto Vfact2 = std::make_shared<IntegralFactory>(primary_);
-    std::shared_ptr<PotentialInt> Vint2(static_cast<PotentialInt*>(Vfact2->ao_potential()));
-    Vint2->set_charge_field(Zxyz2);
-    auto Vtemp2 = std::make_shared<Matrix>("Vtemp2", nn, nn);
+    /* double** */
+    /* double** Zxyz2p = Zxyz2->pointer(); */
+    /* std::shared_ptr<PotentialInt> Vint2(static_cast<PotentialInt*>(Vfact2->ao_potential())); */
+    /* Vint2->set_charge_field(Zxyz2); */
+    std::shared_ptr<PotentialInt> Vint2(static_cast<PotentialInt*>(Vfact2->ao_potential().release()));
 
-    for (int A = 0; A < nA; A++) {
-        Vtemp2->zero();
-        Zxyz2p[0][0] = monomer_A_->Z(cA[A]);
-        Zxyz2p[0][1] = monomer_A_->x(cA[A]);
-        Zxyz2p[0][2] = monomer_A_->y(cA[A]);
-        Zxyz2p[0][3] = monomer_A_->z(cA[A]); 
-        Vint2->compute(Vtemp2);
-        std::shared_ptr<Matrix> Vbs = linalg::triplet(Cocc_B_, Vtemp2, Cvir_B_, true, false, false);
-        dfh_->write_disk_tensor("WAbs_nuc", Vbs, {A, A+1});
-        //dfh_->write_disk_tensor("WAbs", Vbs, {A, A+1});
-    }
+    // loop over Zxyz2 and copy to Zxyz
+    /* for () */
 
-    for (int B = 0; B < nB; B++) {
-        Vtemp2->zero();
-        Zxyz2p[0][0] = monomer_B_->Z(cB[B]);
-        Zxyz2p[0][1] = monomer_B_->x(cB[B]);
-        Zxyz2p[0][2] = monomer_B_->y(cB[B]);
-        Zxyz2p[0][3] = monomer_B_->z(cB[B]); 
-        Vint2->compute(Vtemp2);
-        std::shared_ptr<Matrix> Var = linalg::triplet(Cocc_A_, Vtemp2, Cvir_A_, true, false, false);
-        dfh_->write_disk_tensor("WBar_nuc", Var, {B, B+1});
-        //dfh_->write_disk_tensor("WBar", Var, {B, B+1});
-    }
 
-    // => Electronic Part (Massive PITA) <= //
-
-    dfh_->add_disk_tensor("WAbs", std::make_tuple(nA, nb, ns));
-    dfh_->add_disk_tensor("WBar", std::make_tuple(nB, na, nr));
-    std::shared_ptr<Matrix> TsQ(new Matrix("TsQ",ns,nQ));
-    std::shared_ptr<Matrix> T1As(new Matrix("T1As",nA,ns));
-    std::shared_ptr<Matrix> T2As(new Matrix("T2As",1,ns));
-    double** TsQp = TsQ->pointer(); 
-    double** T1Asp = T1As->pointer(); 
-    double** T2Asp = T2As->pointer(); 
-    for (size_t b = 0; b < nb; b++) {
-        dfh_->fill_tensor("Abs", TsQ, {b, b + 1});
-        C_DGEMM('N', 'T', nA, ns, nQ, 1.0, RACp[0], nQ, TsQp[0], nQ, 0.0, T1Asp[0], ns); // ZLG 2.0 -> 1.0
-        for (size_t A = 0; A < nA; A++) {
-            dfh_->fill_tensor("WAbs_nuc", T2As, {A, A + 1}, {b, b + 1});
-            C_DAXPY(ns, 1.0, T1Asp[A], 1, T2Asp[0], 1);  // ZLG 1.0 -> 2.0
-            dfh_->write_disk_tensor("WAbs", T2As, {A, A + 1}, {b, b + 1});
-            //dfh_->write_disk_tensor("WAbs", T1As, {A, A + 1}, {b, b + 1});
-        }
-    }
-
-    std::shared_ptr<Matrix> TrQ(new Matrix("TrQ",nr,nQ));
-    std::shared_ptr<Matrix> T1Br(new Matrix("T1Br",nB,nr));
-    std::shared_ptr<Matrix> T2Br(new Matrix("T2Br",1,nr));
-    double** TrQp = TrQ->pointer(); 
-    double** T1Brp = T1Br->pointer(); 
-    double** T2Brp = T2Br->pointer(); 
-    for (size_t a = 0; a < na; a++) {
-        dfh_->fill_tensor("Aar", TrQ, {a, a + 1});
-        C_DGEMM('N', 'T', nB, nr, nQ, 1.0, RBDp[0], nQ, TrQp[0], nQ, 0.0, T1Brp[0], nr); // ZLG 2.0 -> 1.0
-        for (size_t B = 0; B < nB; B++) {
-            dfh_->fill_tensor("WBar_nuc", T2Br, {B, B + 1}, {a, a + 1});
-            C_DAXPY(nr , 1.0, T1Brp[B], 1, T2Brp[0], 1); 
-            dfh_->write_disk_tensor("WBar", T2Br, {B, B + 1}, {a, a + 1});
-            //dfh_->write_disk_tensor("WBar", T1Br, {B, B + 1}, {a, a + 1});
-        }
-    }
+    /* Vint2->set_charge_field(Zxyz2); */
+    /*  */
+    /* auto Vtemp2 = std::make_shared<Matrix>("Vtemp2", nn, nn); */
+    /*  */
+    /* for (int A = 0; A < nA; A++) { */
+    /*     Vtemp2->zero(); */
+    /*     Zxyz2p[0][0] = monomer_A_->Z(cA[A]); */
+    /*     Zxyz2p[0][1] = monomer_A_->x(cA[A]); */
+    /*     Zxyz2p[0][2] = monomer_A_->y(cA[A]); */
+    /*     Zxyz2p[0][3] = monomer_A_->z(cA[A]); */
+    /*     Vint2->compute(Vtemp2); */
+    /*     std::shared_ptr<Matrix> Vbs = linalg::triplet(Cocc_B_, Vtemp2, Cvir_B_, true, false, false); */
+    /*     dfh_->write_disk_tensor("WAbs_nuc", Vbs, {A, A+1}); */
+    /*     //dfh_->write_disk_tensor("WAbs", Vbs, {A, A+1}); */
+    /* } */
+    /*  */
+    /* for (int B = 0; B < nB; B++) { */
+    /*     Vtemp2->zero(); */
+    /*     Zxyz2p[0][0] = monomer_B_->Z(cB[B]); */
+    /*     Zxyz2p[0][1] = monomer_B_->x(cB[B]); */
+    /*     Zxyz2p[0][2] = monomer_B_->y(cB[B]); */
+    /*     Zxyz2p[0][3] = monomer_B_->z(cB[B]); */
+    /*     Vint2->compute(Vtemp2); */
+    /*     std::shared_ptr<Matrix> Var = linalg::triplet(Cocc_A_, Vtemp2, Cvir_A_, true, false, false); */
+    /*     dfh_->write_disk_tensor("WBar_nuc", Var, {B, B+1}); */
+    /*     //dfh_->write_disk_tensor("WBar", Var, {B, B+1}); */
+    /* } */
+    /*  */
+    /* // => Electronic Part (Massive PITA) <= // */
+    /*  */
+    /* dfh_->add_disk_tensor("WAbs", std::make_tuple(nA, nb, ns)); */
+    /* dfh_->add_disk_tensor("WBar", std::make_tuple(nB, na, nr)); */
+    /* std::shared_ptr<Matrix> TsQ(new Matrix("TsQ",ns,nQ)); */
+    /* std::shared_ptr<Matrix> T1As(new Matrix("T1As",nA,ns)); */
+    /* std::shared_ptr<Matrix> T2As(new Matrix("T2As",1,ns)); */
+    /* double** TsQp = TsQ->pointer(); */
+    /* double** T1Asp = T1As->pointer(); */
+    /* double** T2Asp = T2As->pointer(); */
+    /* for (size_t b = 0; b < nb; b++) { */
+    /*     dfh_->fill_tensor("Abs", TsQ, {b, b + 1}); */
+    /*     C_DGEMM('N', 'T', nA, ns, nQ, 1.0, RACp[0], nQ, TsQp[0], nQ, 0.0, T1Asp[0], ns); // ZLG 2.0 -> 1.0 */
+    /*     for (size_t A = 0; A < nA; A++) { */
+    /*         dfh_->fill_tensor("WAbs_nuc", T2As, {A, A + 1}, {b, b + 1}); */
+    /*         C_DAXPY(ns, 1.0, T1Asp[A], 1, T2Asp[0], 1);  // ZLG 1.0 -> 2.0 */
+    /*         dfh_->write_disk_tensor("WAbs", T2As, {A, A + 1}, {b, b + 1}); */
+    /*         //dfh_->write_disk_tensor("WAbs", T1As, {A, A + 1}, {b, b + 1}); */
+    /*     } */
+    /* } */
+    /*  */
+    /* std::shared_ptr<Matrix> TrQ(new Matrix("TrQ",nr,nQ)); */
+    /* std::shared_ptr<Matrix> T1Br(new Matrix("T1Br",nB,nr)); */
+    /* std::shared_ptr<Matrix> T2Br(new Matrix("T2Br",1,nr)); */
+    /* double** TrQp = TrQ->pointer(); */
+    /* double** T1Brp = T1Br->pointer(); */
+    /* double** T2Brp = T2Br->pointer(); */
+    /* for (size_t a = 0; a < na; a++) { */
+    /*     dfh_->fill_tensor("Aar", TrQ, {a, a + 1}); */
+    /*     C_DGEMM('N', 'T', nB, nr, nQ, 1.0, RBDp[0], nQ, TrQp[0], nQ, 0.0, T1Brp[0], nr); // ZLG 2.0 -> 1.0 */
+    /*     for (size_t B = 0; B < nB; B++) { */
+    /*         dfh_->fill_tensor("WBar_nuc", T2Br, {B, B + 1}, {a, a + 1}); */
+    /*         C_DAXPY(nr , 1.0, T1Brp[B], 1, T2Brp[0], 1); */
+    /*         dfh_->write_disk_tensor("WBar", T2Br, {B, B + 1}, {a, a + 1}); */
+    /*         //dfh_->write_disk_tensor("WBar", T1Br, {B, B + 1}, {a, a + 1}); */
+    /*     } */
+    /* } */
 
 }
 
@@ -1028,7 +1048,7 @@ void ASAPT0::elst()
     int ns = Cvir_B_->colspi()[0];
 
     // ==> Dependencies <== //
-    
+
     std::shared_ptr<Matrix> RAC = vars_["RAC"];
     std::shared_ptr<Matrix> RBD = vars_["RBD"];
     std::shared_ptr<Matrix> VAB = vars_["VAB"];
@@ -1051,7 +1071,7 @@ void ASAPT0::elst()
     double** Elst_atomsp = Elst_atoms->pointer();
 
     // => A <-> B <= //
-     
+
     for (int A = 0; A < nA; A++) {
         for (int B = 0; B < nB; B++) {
             double val = monomer_A_->Z(cA[A]) * monomer_B_->Z(cB[B]) / (monomer_A_->xyz(cA[A]).distance(monomer_B_->xyz(cB[B])));
@@ -1104,7 +1124,7 @@ void ASAPT0::elst()
     outfile->Printf("    Elst10,r            = %18.12lf H\n",Elst10);
     outfile->Printf("\n");
 
-    // Grid error analysis 
+    // Grid error analysis
     outfile->Printf("  ==> Grid Errors <==\n\n");
     outfile->Printf("    True Elst10,r       = %18.12lf H\n",energies_["Elst10,r"]);
     outfile->Printf("    Grid Elst10,r       = %18.12lf H\n",Elst10);
@@ -1280,7 +1300,7 @@ void ASAPT0::exch()
 
     dfh_->clear_spaces();
     //ZLG: End of stuff I have to mess with
-      
+
     auto E_exch = std::make_shared<Matrix>("E_exch (a x b)", na, nb);
     double** E_exchp = E_exch->pointer();
 
@@ -1325,7 +1345,7 @@ void ASAPT0::exch()
         sSAPT0_scale_factor_ = pow(sSAPT0_scale_factor_,3.0);
         outfile->Printf("    Scaling ASAPT Exch-Ind and Exch-Disp by %11.3E \n\n", sSAPT0_scale_factor_);
     }
-    
+
     //vis_->vars()["Exch_ab"] = E_exch;
     Exch_ab = E_exch;
 }
@@ -1475,12 +1495,12 @@ void ASAPT0::ind()
 
     // ==> A <- B Uncoupled <== //
 
-    
+
     for (size_t B = 0; B < nB; B++) {
 
         // ESP
         dfh_->fill_tensor("WBar", wBp[0], {B, B+1});
-        
+
         // Uncoupled amplitude
         for (int a = 0; a < na; a++) {
             for (int r = 0; r < nr; r++) {
@@ -1505,16 +1525,16 @@ void ASAPT0::ind()
             Indu_AB += Jval + Kval;
         }
 
-    } 
+    }
 
     // ==> B <- A Uncoupled <== //
 
     for (size_t A = 0; A < nA; A++) {
 
         // ESP
-        //fread(wAp[0],sizeof(double),nb*ns,WAbsf); 
+        //fread(wAp[0],sizeof(double),nb*ns,WAbsf);
         dfh_->fill_tensor("WAbs", wAp[0], {A, A+1});
-        
+
         // Uncoupled amplitude
         for (int b = 0; b < nb; b++) {
             for (int s = 0; s < ns; s++) {
@@ -1569,7 +1589,7 @@ void ASAPT0::ind()
         double** Ind20r_AB_termsp = Ind20r_AB_terms->pointer();
         double** Ind20r_BA_termsp = Ind20r_BA_terms->pointer();
 
-        double Ind20r_AB = 0.0; 
+        double Ind20r_AB = 0.0;
         double Ind20r_BA = 0.0;
 
         std::shared_ptr<Matrix> ExchInd20r_AB_terms(new Matrix("ExchInd20 [A<-B] (a x B)", na, nB));
@@ -1577,7 +1597,7 @@ void ASAPT0::ind()
         double** ExchInd20r_AB_termsp = ExchInd20r_AB_terms->pointer();
         double** ExchInd20r_BA_termsp = ExchInd20r_BA_terms->pointer();
 
-        double ExchInd20r_AB = 0.0; 
+        double ExchInd20r_AB = 0.0;
         double ExchInd20r_BA = 0.0;
 
         std::shared_ptr<Matrix> Indr_AB_terms(new Matrix("Ind [A<-B] (a x B)", na, nB));
@@ -1585,7 +1605,7 @@ void ASAPT0::ind()
         double** Indr_AB_termsp = Indr_AB_terms->pointer();
         double** Indr_BA_termsp = Indr_BA_terms->pointer();
 
-        double Indr_AB = 0.0; 
+        double Indr_AB = 0.0;
         double Indr_BA = 0.0;
 
         // => JK Object <= //
@@ -1610,18 +1630,18 @@ void ASAPT0::ind()
         jk->print_header();
 
         // ==> Master Loop over perturbing atoms <== //
-    
+
         int nC = std::max(nA,nB);
 
         //fseek(WBarf,0L,SEEK_SET);
         //fseek(WAbsf,0L,SEEK_SET);
-        
-        for (int C = 0; C < nC; C++) {
-            
-            //if (C < nB) fread(wBp[0],sizeof(double),na*nr,WBarf); 
+
+        for (std::uint32_t C = 0; C < nC; C++) {
+
+            //if (C < nB) fread(wBp[0],sizeof(double),na*nr,WBarf);
             if (C < nB) dfh_->fill_tensor("WBar", wB, {C, C+1});
 
-            //if (C < nA) fread(wAp[0],sizeof(double),nb*ns,WAbsf); 
+            //if (C < nA) fread(wAp[0],sizeof(double),nb*ns,WAbsf);
             if (C < nA) dfh_->fill_tensor("WAbs", wA, {C, C+1});
 
             outfile->Printf("    Responses for (A <- Atom B = %3d) and (B <- Atom A = %3d)\n\n",
@@ -1651,7 +1671,7 @@ void ASAPT0::ind()
                 }
             }
 
-            if (C < nA) { 
+            if (C < nA) {
                 // Backtransform the amplitude to LO
                 std::shared_ptr<Matrix> x2B = linalg::doublet(Uocc_B_,xB,true,false);
                 double** x2Bp = x2B->pointer();
@@ -1692,7 +1712,7 @@ void ASAPT0::ind()
         double dHF = 0.0;
         if (energies_["HF"] != 0.0) {
             dHF = energies_["HF"] - energies_["Elst10,r"] - energies_["Exch10"] - energies_["Ind20,r"] - energies_["Exch-Ind20,r"];
-        } 
+        }
         outfile->Printf("Delta Hartree Fock term %f \n", dHF);
 
         double IndHF = energies_["Ind20,r"] + energies_["Exch-Ind20,r"] + dHF;
@@ -1712,7 +1732,7 @@ void ASAPT0::ind()
         Ind_AB_terms->scale(Sdelta * SrAB);
         Ind_BA_terms->scale(Sdelta * SrBA);
     }
-    
+
     //vis_->vars()["IndAB_aB"] = Ind_AB_terms;
     //vis_->vars()["IndBA_Ab"] = Ind_BA_terms;
     IndAB_aB = Ind_AB_terms;
@@ -1730,8 +1750,8 @@ void ASAPT0::disp()
     int naa = Caocc_A_->colspi()[0];
     int nab = Caocc_B_->colspi()[0];
 
-    int na  = Locc_A_->colspi()[0]; 
-    int nb  = Locc_B_->colspi()[0]; 
+    int na  = Locc_A_->colspi()[0];
+    int nb  = Locc_B_->colspi()[0];
 
     int nfa = na - naa;
     int nfb = nb - nab;
@@ -2148,14 +2168,14 @@ void ASAPT0::disp()
 
     // => Slice D + E -> F <= //
 
-    for (int ir = 0; ir < nr; ir += 1) {
+    for (std::uint32_t ir = 0; ir < nr; ir += 1) {
         dfh_->fill_tensor("Dar", Darp[0], {ir, ir + 1});
         dfh_->fill_tensor("Ear", Aarp[0], {ir, ir + 1});
         C_DAXPY(naQ,1.0,Aarp[0],1,Darp[0],1);
         dfh_->write_disk_tensor("Far", Dar, {ir, ir + 1});
     }
 
-    for (int is = 0; is < ns; is += 1) {
+    for (std::uint32_t is = 0; is < ns; is += 1) {
         dfh_->fill_tensor("Dbs", Dbs, {is, is+1});
         dfh_->fill_tensor("Ebs", Abs, {is, is+1});
         C_DAXPY(nbQ,1.0,Absp[0],1,Dbsp[0],1);
@@ -2183,14 +2203,14 @@ void ASAPT0::disp()
 
     // ==> Master Loop <== //
 
-    for (int ir = 0; ir < nr; ir += 1) {
+    for (std::uint32_t ir = 0; ir < nr; ir += 1) {
 
         dfh_->fill_tensor("Aar", Aar, {ir, ir + 1});
         dfh_->fill_tensor("Bbr", Bbr, {ir, ir + 1});
         dfh_->fill_tensor("Cbr", Cbr, {ir, ir + 1});
         dfh_->fill_tensor("Far", Dar, {ir, ir + 1});
 
-        for (int is = 0; is < ns; is += max_s) {
+        for (std::uint32_t is = 0; is < ns; is += max_s) {
 
             dfh_->fill_tensor("Abs", Abs, {is, is+1});
             dfh_->fill_tensor("Bas", Bas, {is, is+1});
@@ -2210,7 +2230,7 @@ void ASAPT0::disp()
 
                 double** E_disp20Tp = E_disp20_threads[thread]->pointer();
                 double** E_exch_disp20Tp = E_exch_disp20_threads[thread]->pointer();
-                
+
                 double** Tabp  = Tab[thread]->pointer();
                 double** Vabp  = Vab[thread]->pointer();
                 double** T2abp = T2ab[thread]->pointer();
@@ -2558,7 +2578,7 @@ void ASAPT0::fock_terms() {
     Cr.push_back(C_O_A);
     // J/K[P_B]
     Cl.push_back(Cocc_A_);
-    Cr.push_back(C_P_B);    
+    Cr.push_back(C_P_B);
     // J/K[P_B]
     Cl.push_back(Cocc_B_);
     Cr.push_back(C_P_A);
@@ -2593,7 +2613,7 @@ void ASAPT0::fock_terms() {
     mapA["K_B"] = K_B;
     mapA["J_O"] = J_O;
     mapA["K_O"] = K_O;
-    mapA["J_P"] = J_P_A; 
+    mapA["J_P"] = J_P_A;
 
     std::shared_ptr<Matrix> wB = build_ind_pot(mapA);
     std::shared_ptr<Matrix> uB = build_exch_ind_pot(mapA);
@@ -2614,7 +2634,7 @@ void ASAPT0::fock_terms() {
     mapB["K_B"] = K_A;
     mapB["J_O"] = J_O;
     mapB["K_O"] = K_O;
-    mapB["J_P"] = J_P_B; 
+    mapB["J_P"] = J_P_B;
 
     std::shared_ptr<Matrix> wA = build_ind_pot(mapB);
     std::shared_ptr<Matrix> uA = build_exch_ind_pot(mapB);
@@ -2775,7 +2795,7 @@ std::shared_ptr<Matrix> ASAPT0::build_Sij(std::shared_ptr<Matrix> S) {
 
     return Sij;
 }
-  
+
 // TOMODIF - spin
 std::shared_ptr<Matrix> ASAPT0::build_Sij_n(std::shared_ptr<Matrix> Sij) {
     int nocc = Sij->nrow();
@@ -2888,13 +2908,13 @@ std::shared_ptr<Matrix> ASAPT0::build_exch_ind_pot(std::map<std::string, std::sh
     // 2
     T = linalg::triplet(S,D_B,J_A);
     T->scale(-2.0);
-    W->add(T);    
+    W->add(T);
 
     // 3
     T->copy(K_O);
     T->scale(1.0);
     W->add(T);
-    
+
     // 4
     T->copy(J_O);
     T->scale(-2.0);
@@ -2934,7 +2954,7 @@ std::shared_ptr<Matrix> ASAPT0::build_exch_ind_pot(std::map<std::string, std::sh
     T->copy(J_P);
     T->scale(2.0);
     W->add(T);
-    
+
     // 12
     T = linalg::triplet(linalg::triplet(S,D_B,S),D_A,J_B);
     T->scale(2.0);
@@ -2948,13 +2968,13 @@ std::shared_ptr<Matrix> ASAPT0::build_exch_ind_pot(std::map<std::string, std::sh
     // 14
     T = linalg::triplet(S,D_B,V_A);
     T->scale(-1.0);
-    W->add(T);    
-    
+    W->add(T);
+
     // 15
     T = linalg::triplet(V_B,D_B,S);
     T->scale(-1.0);
     W->add(T);
-    
+
     // 16
     T = linalg::triplet(linalg::triplet(S,D_B,V_A),D_B,S);
     T->scale(1.0);

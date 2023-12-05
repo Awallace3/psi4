@@ -102,7 +102,7 @@ void AtomicDensity::compute_total_density()
     double* y2p = grid_->y();
     double* z2p = grid_->z();
     double* w2p = grid_->w();
-    int* index = grid_->index();  // this is empty !?!?
+    /* int* index = grid_->index();  // this is empty !?!? */
     outfile->Printf("Total number of points is %d (npoints2) \n", npoints2);
 
     // Density computer (in blocks)
@@ -159,20 +159,28 @@ void AtomicDensity::compute_total_density()
         //zp[index[i]] = z2p[i];
         //wp[index[i]] = w2p[i];
         //rhop[index[i]] = rho2p[i];
-        xp[index[i]] = x2p[i];
-        yp[index[i]] = y2p[i];
-        zp[index[i]] = z2p[i];
-        wp[index[i]] = w2p[i];
-        rhop[index[i]] = rho2p[i];
+        //
+        /* xp[index[i]] = x2p[i]; */
+        /* yp[index[i]] = y2p[i]; */
+        /* zp[index[i]] = z2p[i]; */
+        /* wp[index[i]] = w2p[i]; */
+        /* rhop[index[i]] = rho2p[i]; */
+
+        xp[i] = x2p[i];
+        yp[i] = y2p[i];
+        zp[i] = z2p[i];
+        wp[i] = w2p[i];
+        rhop[i] = rho2p[i];
         //outfile->Printf(" In the code %d %d %f \n", i, index[i], rho2p[i]);
     }
 
     // Debug stuff
-    //x_->print();
-    //y_->print();
-    //z_->print();
-    //w_->print();
-    //rho_->print();
+    std::printf("Debugging Total Density");
+    x_->print();
+    y_->print();
+    z_->print();
+    w_->print();
+    rho_->print();
 }
 
 StockholderDensity::StockholderDensity() : AtomicDensity()
@@ -310,7 +318,7 @@ void StockholderDensity::compute(std::shared_ptr<Matrix> D)
     double** statep = state->pointer();
     double** errorp = error->pointer();
 
-    std::shared_ptr<DIISManager> diis_manager(new DIISManager(diis_max_vecs_, "ISA DIIS vector", DIISManager::LargestError, DIISManager::StoragePolicy::OnDisk));
+    std::shared_ptr<DIISManager> diis_manager(new DIISManager(diis_max_vecs_, "ISA DIIS vector", DIISManager::RemovalPolicy::LargestError, DIISManager::StoragePolicy::OnDisk));
     /* diis_manager->set_error_vector_size(1, DIISEntry::Matrix, error.get()); */
     diis_manager->set_error_vector_size(1, error.get());
     diis_manager->set_vector_size(1, state.get());

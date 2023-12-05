@@ -4487,6 +4487,9 @@ def run_psimrcc_scf(name, **kwargs):
 
     return psimrcc_wfn
 
+# TODO: add asapt here
+def run_asapt(name, **kwargs):
+    return
 
 def run_sapt(name, **kwargs):
     """Function encoding sequence of PSI module calls for
