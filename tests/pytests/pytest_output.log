@@ -1,0 +1,2 @@
+2023-12-05:11:44:01,507 INFO     [psi4.driver.task_planner:286] PLANNING Atomic:  keywords={'DF_BASIS_ELST': 'JUN-CC-PVDZ-JKFIT', 'DF_BASIS_SAPT': 'JUN-CC-PVDZ-RI', 'DF_BASIS_SCF': 'JUN-CC-PVDZ-JKFIT', 'LOCAL_CONVERGENCE': 1e-10, 'function_kwargs': {}}
+2023-12-05:11:44:01,510 INFO     [psi4.driver.driver:517] Compute energy(): method=asapt, basis=jun-cc-pvdz, molecule=default, nre=272.4618213488531

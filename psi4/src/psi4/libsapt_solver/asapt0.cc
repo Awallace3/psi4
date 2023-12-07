@@ -719,11 +719,10 @@ void ASAPT0::ps()
         VtempT.push_back(std::shared_ptr<Matrix>(new Matrix("Vtemp",nQ,1)));
         QACT.push_back(std::shared_ptr<Matrix>(new Matrix("QACT",nA,nQ)));
         QBDT.push_back(std::shared_ptr<Matrix>(new Matrix("QBDT",nB,nQ)));
-        /* VintT.push_back(std::shared_ptr<PotentialInt>(static_cast<PotentialInt*>(Vfact->ao_potential()))); */
+        VintT.push_back(std::shared_ptr<PotentialInt>(static_cast<PotentialInt*>(Vfact->ao_potential().release()))); 
+        printf("VintT[%d] = %p\n",thread,VintT[thread].get());
         // print Vfact->ao_potential() and VintT[thread] to see if they are the same
-        // printf("Vfact->ao_potential() = %p\n", Vfact->ao_potential());
-        /* VintT.push_back(std::shared_ptr<PotentialInt>(Vfact->ao_potential())); */
-        /* VintT[thread]->set_charge_field(ZxyzT[thread]); */
+        // VintT[thread]->set_charge_field(ZxyzT[thread]);
     }
 
     // TODO: make Zxyz2p
