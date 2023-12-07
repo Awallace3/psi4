@@ -29,17 +29,14 @@
 import numpy as np
 
 from psi4 import core
-from psi4.driver import constants
-from psi4.driver import p4util
-from psi4.driver.p4util.exceptions import *
-from psi4.driver.molutil import *
-from psi4.driver.procrouting.proc import scf_helper
-from psi4.driver.procrouting import proc_util
 
-from . import sapt_jk_terms
-from .sapt_util import print_sapt_var, print_sapt_hf_summary, print_sapt_dft_summary
-from . import sapt_mp2_terms
-from . import sapt_sf_terms
+from ... import p4util
+from ...constants import constants
+from ...p4util.exceptions import *
+from .. import proc_util
+from ..proc import scf_helper
+from . import sapt_jk_terms, sapt_mp2_terms, sapt_sf_terms
+from .sapt_util import print_sapt_dft_summary, print_sapt_hf_summary, print_sapt_var
 
 # Only export the run_ scripts
 __all__ = ['run_sapt_dft', 'sapt_dft', 'run_sf_sapt']
@@ -269,7 +266,7 @@ def run_sapt_dft(name, **kwargs):
 
     # Call SAPT(DFT)
     sapt_jk = wfn_B.jk()
-    sapt_dft(dimer_wfn, wfn_A, wfn_B, sapt_jk=sapt_jk, data=data, print_header=False, delta_hf=delta_hf)
+    sapt_dft(dimer_wfn, wfn_A, wfn_B, do_dft=do_dft, sapt_jk=sapt_jk, data=data, print_header=False, delta_hf=delta_hf)
 
     # Copy data back into globals
     for k, v in data.items():
@@ -306,7 +303,7 @@ def sapt_dft_header(sapt_dft_functional="unknown",
     core.print_out("   JK Algorithm            %12s\n" % jk_alg)
 
 
-def sapt_dft(dimer_wfn, wfn_A, wfn_B, sapt_jk=None, sapt_jk_B=None, data=None, print_header=True, cleanup_jk=True, delta_hf=False):
+def sapt_dft(dimer_wfn, wfn_A, wfn_B, do_dft=True, sapt_jk=None, sapt_jk_B=None, data=None, print_header=True, cleanup_jk=True, delta_hf=False):
     """
     The primary SAPT(DFT) algorithm to compute the interaction energy once the wavefunctions have been built.
 
@@ -436,18 +433,21 @@ def sapt_dft(dimer_wfn, wfn_A, wfn_B, sapt_jk=None, sapt_jk_B=None, data=None, p
 
     # Dispersion
     core.timer_on("SAPT(DFT):disp")
-    core.timer_on("FDDS disp")
+    
     primary_basis = wfn_A.basisset()
-    core.print_out("\n")
     aux_basis = core.BasisSet.build(dimer_wfn.molecule(), "DF_BASIS_MP2", core.get_option("DFMP2", "DF_BASIS_MP2"),
-                                    "RIFIT", core.get_global_option('BASIS'))
-    x_alpha = wfn_B.functional().x_alpha()
-    if not is_hybrid:
-        x_alpha = 0.0
-    fdds_disp = sapt_mp2_terms.df_fdds_dispersion(primary_basis, aux_basis, cache, is_hybrid, x_alpha)
-    data.update(fdds_disp)
-    core.timer_off("FDDS disp")
-
+                                        "RIFIT", core.get_global_option('BASIS'))
+    
+    if do_dft:
+        core.timer_on("FDDS disp")
+        core.print_out("\n")
+        x_alpha = wfn_B.functional().x_alpha()
+        if not is_hybrid:
+            x_alpha = 0.0
+        fdds_disp = sapt_mp2_terms.df_fdds_dispersion(primary_basis, aux_basis, cache, is_hybrid, x_alpha)
+        data.update(fdds_disp)
+        core.timer_off("FDDS disp")
+    
     core.timer_on("MP2 disp")
     if core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
         mp2_disp = sapt_mp2_terms.df_mp2_fisapt_dispersion(wfn_A, primary_basis, aux_basis, cache, do_print=True)
@@ -462,26 +462,27 @@ def sapt_dft(dimer_wfn, wfn_A, wfn_B, sapt_jk=None, sapt_jk_B=None, data=None, p
     data.update(mp2_disp)
 
     # Exchange-dispersion scaling
-    exch_disp_scheme = core.get_option("SAPT", "SAPT_DFT_EXCH_DISP_SCALE_SCHEME")
-    core.print_out("    %-33s % s\n" % ("Scaling Scheme", exch_disp_scheme))
-    if exch_disp_scheme == "NONE":
-        data["Exch-Disp20,r"] = data["Exch-Disp20,u"]
-    elif exch_disp_scheme == "FIXED":
-        exch_disp_scale = core.get_option("SAPT", "SAPT_DFT_EXCH_DISP_FIXED_SCALE")
-        core.print_out("    %-28s % 10.3f\n" % ("Scaling Factor", exch_disp_scale))
-        data["Exch-Disp20,r"] = exch_disp_scale * data["Exch-Disp20,u"]
-    elif exch_disp_scheme == "DISP":
-        exch_disp_scale = data["Disp20"] / data["Disp20,u"]
-        data["Exch-Disp20,r"] = exch_disp_scale * data["Exch-Disp20,u"]
-    if exch_disp_scheme != "NONE":
-        core.print_out(print_sapt_var("Est. Exch-Disp20,r", data["Exch-Disp20,r"], short=True) + "\n")
+    if do_dft:
+        exch_disp_scheme = core.get_option("SAPT", "SAPT_DFT_EXCH_DISP_SCALE_SCHEME")
+        core.print_out("    %-33s % s\n" % ("Scaling Scheme", exch_disp_scheme))
+        if exch_disp_scheme == "NONE":
+            data["Exch-Disp20,r"] = data["Exch-Disp20,u"]
+        elif exch_disp_scheme == "FIXED":
+            exch_disp_scale = core.get_option("SAPT", "SAPT_DFT_EXCH_DISP_FIXED_SCALE")
+            core.print_out("    %-28s % 10.3f\n" % ("Scaling Factor", exch_disp_scale))
+            data["Exch-Disp20,r"] = exch_disp_scale * data["Exch-Disp20,u"]
+        elif exch_disp_scheme == "DISP":
+            exch_disp_scale = data["Disp20"] / data["Disp20,u"]
+            data["Exch-Disp20,r"] = exch_disp_scale * data["Exch-Disp20,u"]
+        if exch_disp_scheme != "NONE":
+            core.print_out(print_sapt_var("Est. Exch-Disp20,r", data["Exch-Disp20,r"], short=True) + "\n")
 
     core.timer_off("MP2 disp")
     core.timer_off("SAPT(DFT):disp")
-
+    
     # Print out final data
     core.print_out("\n")
-    core.print_out(print_sapt_dft_summary(data, "SAPT(DFT)"))
+    core.print_out(print_sapt_dft_summary(data, "SAPT(DFT)", do_dft=do_dft))
 
     return data
 

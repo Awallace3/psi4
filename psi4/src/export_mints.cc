@@ -32,6 +32,8 @@
 #include <pybind11/stl_bind.h>
 #include <pybind11/operators.h>
 
+#include <libint2.hpp>
+
 #include "psi4/libdpd/dpd.h"
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/deriv.h"
@@ -319,8 +321,8 @@ void export_mints(py::module& m) {
     typedef void (Vector::*vector_three)(double alpha, double beta, const Vector &other);
 
     py::class_<Dimension>(m, "Dimension", "Initializes and defines Dimension Objects")
-        .def(py::init<int>())
-        .def(py::init<int, const std::string&>())
+        .def(py::init<size_t>())
+        .def(py::init<size_t, const std::string&>())
         .def(py::init<const std::vector<int>&>())
         .def("print_out", &Dimension::print, "Print out the dimension object to the output file")
         .def("init", &Dimension::init, "Re-initializes the dimension object")
@@ -855,9 +857,9 @@ void export_mints(py::module& m) {
         .def("connectivity", &Molecule::connectivity, "Gets molecule connectivity")
         .def("reinterpret_coordentry", &Molecule::set_reinterpret_coordentry,
              "Do reinterpret coordinate entries during update_geometry().")
-        .def("fix_orientation", &Molecule::set_orientation_fixed, "Fix the orientation at its current frame")
+        .def("fix_orientation", &Molecule::set_orientation_fixed, "Fix the orientation at its current frame. Expert use only; use before molecule finalized by update_geometry.")
         .def("fix_com", &Molecule::set_com_fixed,
-             "Sets whether to fix the Cartesian position, or to translate to the C.O.M.")
+             "Sets whether to fix the Cartesian position, or to translate to the C.O.M. Expert use only; use before molecule finalized by update_geometry.")
         .def("orientation_fixed", &Molecule::orientation_fixed, "Get whether or not orientation is fixed")
         .def("com_fixed", &Molecule::com_fixed, "Gets whether or not center of mass is fixed")
         .def("symmetry_from_input", &Molecule::symmetry_from_input, "Returns the symmetry specified in the input")
@@ -1617,20 +1619,18 @@ void export_mints(py::module& m) {
         .def("integral", &OrbitalSpace::integral, "The integral factory used to create C")
         .def("dim", &OrbitalSpace::dim, "MO dimensions")
         .def("print_out", &OrbitalSpace::print, "Print information about the orbital space to the output file")
-        .def_static("build_cabs_space", &OrbitalSpace::build_cabs_space,
+	   .def_static("build_cabs_space", &OrbitalSpace::build_cabs_space,
                     "Given two spaces, it projects out one space from the other and returns the new spaces \
                     The first argument (orb_space) is the space to project out. The returned space will be orthogonal to this \
-                    The second argument (ri_space) is the space that is being projected on. The returned space = this space - orb_space \
+                    The second argument (ri_space) is the space that is being projected on. The returned space = ri_space - orb_space \
                     The third argument is the tolerance for linear dependencies",
-                    "orb_space"_a, "ri_space"_a, "linear_tol"_a)
+                    "orb_space"_a, "ri_space"_a, "linear_tol"_a = 1.e-6)
         .def_static("build_ri_space", &OrbitalSpace::build_ri_space,
-                    "Given two basis sets, it merges the basis sets and then constructs an orthogonalized \
+                    "Given combined basis sets, it constructs an orthogonalized \
                     space with the same span. Linearly dependent orbitals are thrown out. \
-                    The first argument, molecule, is the molecule to construct the basis for \
-                    The second argument, obs_key, is the option keyword for orbital basis set 'BASIS' \
-                    The third argument, aux_key, is the option keyword for auxiliery basis set 'DF_BASIS_MP2' \
-                    The fourth argument, lindep_tol, is the tolerance for linear dependencies",
-                    "molecule"_a, "obs_key"_a, "aux_key"_a, "lindep_tol"_a);
+                    The first argument, combined, is the two basis sets together but unorthogonalized \
+                    The second argument, lindep_tol, is the tolerance for linear dependencies",
+                    "combined"_a, "lindep_tol"_a = 1.e-6);
 
     py::class_<ExternalPotential, std::shared_ptr<ExternalPotential>>(
         m, "ExternalPotential", "Stores external potential field, computes external potential matrix")
@@ -1642,6 +1642,7 @@ void export_mints(py::module& m) {
              "Append a vector of charge tuples to a current ExternalPotential")
         .def("addBasis", &ExternalPotential::addBasis, "Add a basis of S auxiliary functions iwth Df coefficients",
              "basis"_a, "coefs"_a)
+        .def("gradient_on_charges", &ExternalPotential::gradient_on_charges, "Get the gradient on the embedded charges")
         .def("clear", &ExternalPotential::clear, "Reset the field to zero (eliminates all entries)")
         .def("computePotentialMatrix", &ExternalPotential::computePotentialMatrix,
              "Compute the external potential matrix in the given basis set", "basis"_a)

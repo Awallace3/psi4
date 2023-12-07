@@ -42,13 +42,12 @@
 #include <string>
 #include <vector>
 #include <map>
-PRAGMA_WARNING_PUSH
-PRAGMA_WARNING_IGNORE_DEPRECATED_DECLARATIONS
+#include <type_traits>
+#include <algorithm>
 #include <memory>
-PRAGMA_WARNING_POP
 
 namespace libint2 {
-    struct Shell;
+struct Shell;
 }
 namespace psi {
 
@@ -81,7 +80,7 @@ class PSI_API BasisSet {
     std::vector<GaussianShell> shells_;
     //! Array of ECP shells
     std::vector<GaussianShell> ecp_shells_;
-    //! Array of Libint2 shells
+    //! Array of Libint2 shells; updated from shells with update_l2_shells()
     std::vector<libint2::Shell> l2_shells_;
 
     //! The number of core electrons for each atom type
@@ -128,6 +127,8 @@ class PSI_API BasisSet {
     std::vector<int> n_prim_per_shell_;
     /// The first (Cartesian) atomic orbital in each shell
     std::vector<int> shell_first_ao_;
+    /// First exponent for i:th shell
+    std::vector<int> shell_first_exponent_;
     /// The first (Cartesian / spherical) basis function in each shell
     std::vector<int> shell_first_basis_function_;
     /// Shell number to atomic center.
@@ -165,6 +166,9 @@ class PSI_API BasisSet {
     std::vector<double> uerd_coefficients_;
     /// The flattened list of Cartesian coordinates for each atom
     std::vector<double> xyz_;
+
+    /// Update Libint2 shells
+    void update_l2_shells(bool embed_normalization = true);
 
    public:
     BasisSet();
@@ -341,9 +345,9 @@ class PSI_API BasisSet {
     void print_detail(std::string out) const;
     void print_detail() const { print_detail("outfile"); }
 
-    /** Returns a string in CFOUR-style of the basis (per-atom)
-     *  Format from http://slater.chemie.uni-mainz.de/cfour/index.php?n=Main.OldFormatOfAnEntryInTheGENBASFile
-     */
+    /// @brief Returns a string in CFOUR-style of the basis (per-atom). Format from
+    /// https://web.archive.org/web/20221130013041/http://slater.chemie.uni-mainz.de/cfour/index.php?n=Main.OldFormatOfAnEntryInTheGENBASFile
+    /// @return CFOUR-style of the basis (per-atom)
     std::string print_detail_cfour() const;
 
     /** Refresh internal basis set data. Useful if someone has pushed to shells_.
@@ -400,12 +404,44 @@ class PSI_API BasisSet {
     void move_atom(int atom, const Vector3 &trans);
     // Returns the values of the basis functions at a point
     void compute_phi(double *phi_ao, double x, double y, double z);
+    // Converts the contraction to match the SAP approach.
+    void convert_sap_contraction();
     
-   private: 
+   private:
     /// Helper functions for frozen core to reduce LOC
     int atom_to_period(int Z);
     int period_to_full_shell(int p);
 };
+
+/// @brief Determine if two floating-point numbers are practically equal. Simply comparing two FP numbers is usually
+/// a bad idea due to numerical noise. They *can* be equal, but only in fairly specific circumstances.
+/// @param a : first number
+/// @param b : second number
+/// @param THR : (optional) equality threshold
+/// @return True if their absolute difference is smaller than THR, false otherwise.
+bool fpeq(const double a, const double b, const double THR = 1.0E-14);
+
+/// @brief Determine if a particular value is abscent from an std::vector. If the type is floating-point, make sure
+/// it is a double and use a fuzzy equality to account for numerical noise.
+/// @tparam T : Type of the value. If floating-point, it must be a double.
+/// @param container : Containter to search in
+/// @param value : Value to look for
+/// @return : true if none of the elements of container are equal to value
+template <typename T>
+bool none_of_equal(const std::vector<T> &container, const T value) {
+    // The equality threshold in fpeq is set for the expected precision of double. Other FP types could be
+    // implemented in the future if needed, but this function should refuse to process them until then.
+    // Without this check implicit conversion rules could silently promote eg. a float to double when calling fpeq.
+    static_assert(false == (std::is_floating_point<T>::value && !std::is_same<T, double>::value),
+                  "Support for FP types other than double is not implemented in none_of_equal");
+    return std::none_of(container.cbegin(), container.cend(), [value](const T X) {
+        if constexpr (std::is_floating_point<T>::value) {
+            return fpeq(X, value);
+        } else {
+            return X == value;
+        }
+    });
+}
 
 }  // namespace psi
 

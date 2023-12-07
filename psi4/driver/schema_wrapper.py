@@ -51,12 +51,13 @@ from typing import Any, Dict, Union
 import numpy as np
 import qcelemental as qcel
 import qcengine as qcng
+
+from psi4 import core
 from psi4.extras import exit_printing
 from psi4.header import print_header
 from psi4.metadata import __version__
-from psi4.driver import driver, p4util
 
-from psi4 import core
+from . import driver, p4util
 
 pp = pprint.PrettyPrinter(width=120, compact=True, indent=1)
 
@@ -586,7 +587,7 @@ def run_json_qcschema(json_data, clean, json_serialization, keep_wfn=False):
     # Set options
     ## The Forte plugin needs special treatment.
     try:
-        import forte # Needed for Forte options to run.
+        import forte  # Needed for Forte options to run.
     except ImportError:
         pass
     else:
@@ -613,6 +614,13 @@ def run_json_qcschema(json_data, clean, json_serialization, keep_wfn=False):
     if json_data["driver"] == "properties":
         if "properties" not in kwargs:
             kwargs["properties"] = list(default_properties_)
+
+    # Handle extra files
+    if "extras" in json_data:
+        # remove conditional when run_json is retired
+        extra_infiles = json_data["extras"].get("extra_infiles", {})
+        for fl, contents in extra_infiles.items():
+            Path(fl).write_text(contents)
 
     # Actual driver run
     val, wfn = methods_dict_[json_data["driver"]](method, **kwargs)
@@ -717,6 +725,8 @@ def run_json_qcschema(json_data, clean, json_serialization, keep_wfn=False):
         "psi4.hess": Path(core.get_writer_file_prefix(wfn.molecule().name()) + ".hess"),
         # binary "psi4.180.npy": Path(core.get_writer_file_prefix(wfn.molecule().name()) + ".180.npy"),
         "timer.dat": Path("timer.dat"),  # ok for `psi4 --qcschema` but no file collected for `qcengine.run_program(..., "psi4")`
+        "grid_esp.dat": Path("grid_esp.dat"),
+        "grid_field.dat": Path("grid_field.dat"),
     }
     json_data["native_files"] = {fl: flpath.read_text() for fl, flpath in files.items() if flpath.exists()}
 

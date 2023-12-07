@@ -31,36 +31,39 @@ calls for each of the *name* values of the energy(), optimize(),
 response(), and frequency() function. *name* can be assumed lowercase by here.
 
 """
-import re
 import os
-import sys
+import re
 import shutil
 import subprocess
+import sys
 import warnings
 from typing import Dict, List, Union
 
 import numpy as np
-from qcelemental import constants
-from qcelemental.util import which
+from qcelemental.util import parse_version, which
 
-from psi4 import extras
-from psi4 import core
-from psi4.driver import p4util
-from psi4.driver import qcdb
-from psi4.driver import psifiles as psif
-from psi4.driver.p4util.exceptions import ManagedMethodError, PastureRequiredError, UpgradeHelper, ValidationError, docs_table_link
+from psi4 import core, extras
+
+from .. import p4util
+from .. import psifiles as psif
+from .. import qcdb
+from ..constants import constants
+from ..p4util.exceptions import (
+    ManagedMethodError,
+    PastureRequiredError,
+    UpgradeHelper,
+    ValidationError,
+    docs_table_link,
+)
+
 #from psi4.driver.molutil import *
-from psi4.driver.qcdb.basislist import corresponding_basis
-# never import driver, wrappers, or aliases into this file
-
+from ..qcdb.basislist import corresponding_basis
+from . import dft, empirical_dispersion, mcscf, proc_util, response, solvent
 from .proc_data import method_algorithm_type
 from .roa import run_roa
-from . import proc_util
-from . import empirical_dispersion
-from . import dft
-from . import mcscf
-from . import response
-from . import solvent
+
+# never import driver, wrappers, or aliases into this file
+
 
 
 # ADVICE on new additions:
@@ -1485,6 +1488,11 @@ def scf_wavefunction_factory(name, ref_wfn, reference, **kwargs):
             wfn.set_sad_fitting_basissets(sad_fitting_list)
             optstash.restore()
 
+    if core.get_option("SCF", "GUESS") == "SAPGAU":
+        # Populate sapgau basis
+        sapgau = core.BasisSet.build(wfn.molecule(), "SAPGAU_BASIS", core.get_global_option("SAPGAU_BASIS"))
+        wfn.set_basisset("SAPGAU", sapgau)
+
     if hasattr(core, "EXTERN") and 'external_potentials' in kwargs:
         core.print_out("\n  Warning! Both an external potential EXTERN object and the external_potential" +
                        " keyword argument are specified. The external_potentials keyword argument will be ignored.\n")
@@ -1728,6 +1736,12 @@ def scf_helper(name, post_scf=True, **kwargs):
             core.set_global_option('BASIS', 'minix')
         elif name in ['pbeh3c', 'pbeh-3c']:
             core.set_global_option('BASIS', 'def2-msvp')
+        elif name in ['r2scan3c', 'r2scan-3c']:
+            core.set_global_option('BASIS', 'def2-mTZVPP')
+        elif name in ['b973c', 'b97-3c']:
+            core.set_global_option('BASIS', 'def2-mTZVP')
+        elif name in ['wb97x3c', 'wb97x-3c']:
+            core.set_global_option('BASIS', 'vdzp')
 
     # the FIRST scf call
     if cast:
@@ -1848,7 +1862,7 @@ def scf_helper(name, post_scf=True, **kwargs):
     # DDPCM preparation
     if core.get_option('SCF', 'DDX'):
         if not solvent._have_ddx:
-            raise ModuleNotFoundError('Python module ddx not found. Solve by installing it: `pip install pyddx`')
+            raise ModuleNotFoundError('Python module ddx not found. Solve by installing it: `conda install -c conda-forge pyddx` or `pip install pyddx`')
         ddx_options = solvent.ddx.get_ddx_options(scf_molecule)
         scf_wfn.ddx = solvent.ddx.DdxInterface(
             molecule=scf_molecule, options=ddx_options,
@@ -1859,7 +1873,7 @@ def scf_helper(name, post_scf=True, **kwargs):
     # PE preparation
     if core.get_option('SCF', 'PE'):
         if not solvent._have_pe:
-            raise ModuleNotFoundError('Python module cppe not found. Solve by installing it: `conda install -c psi4 pycppe`')
+            raise ModuleNotFoundError('Python module cppe not found. Solve by installing it: `conda install -c conda-forge cppe`')
         # PE needs information about molecule and basis set
         pol_embed_options = solvent.pol_embed.get_pe_options()
         core.print_out(f""" Using potential file
@@ -3686,9 +3700,8 @@ def run_adcc(name, **kwargs):
         from adcc.exceptions import InvalidReference
     except ModuleNotFoundError:
         raise ValidationError("adcc extras qc_module not available. Try installing "
-            "via 'pip install adcc' or 'conda install -c adcc adcc'.")
+            "via 'pip install adcc' or 'conda install -c conda-forge adcc'.")
 
-    from pkg_resources import parse_version
     min_version = "0.15.16"
     if parse_version(adcc.__version__) < parse_version(min_version):
         raise ModuleNotFoundError("adcc version {} is required at least. "
@@ -4542,16 +4555,21 @@ def run_sapt(name, **kwargs):
     dimer_wfn = scf_helper('RHF', molecule=sapt_dimer, **kwargs)
     core.timer_off("SAPT: Dimer SCF")
 
+    necp_ab = dimer_wfn.basisset().n_ecp_core()
+    share_df_ints = ((sapt_basis == 'dimer') and (ri == 'DF') and not (necp_ab and (os.name == 'nt')))
+    if (sapt_basis == 'dimer') and (ri == 'DF') and not share_df_ints:
+        core.print_out(f"\n  Turning off SAPT DF integrals sharing because of ECP: {necp_ab}\n\n")
+
     if do_delta_mp2:
         select_mp2("mp2", ref_wfn=dimer_wfn, **kwargs)
         mp2_corl_interaction_e = core.variable('MP2 CORRELATION ENERGY')
 
     optstash2.restore()
-    if (sapt_basis == 'dimer') and (ri == 'DF'):
+    if share_df_ints:
         core.set_global_option('DF_INTS_IO', 'LOAD')
 
     # Compute Monomer A wavefunction
-    if (sapt_basis == 'dimer') and (ri == 'DF'):
+    if share_df_ints:
         core.IO.change_file_namespace(97, 'dimer', 'monomerA')
 
     core.IO.set_default_namespace('monomerA')
@@ -4568,7 +4586,7 @@ def run_sapt(name, **kwargs):
         mp2_corl_interaction_e -= core.variable('MP2 CORRELATION ENERGY')
 
     # Compute Monomer B wavefunction
-    if (sapt_basis == 'dimer') and (ri == 'DF'):
+    if share_df_ints:
         core.IO.change_file_namespace(97, 'monomerA', 'monomerB')
     core.IO.set_default_namespace('monomerB')
     core.print_out('\n')
@@ -4957,6 +4975,11 @@ def run_mrcc(name, **kwargs):
     os.chdir(mrcc_tmpdir)
 
     # Generate integrals and input file (dumps files to the current directory)
+    if core.get_option('FNOCC', 'NAT_ORBS'):
+        mints = core.MintsHelper(ref_wfn.basisset())
+        mints.set_print(1)
+        mints.integrals()
+
     core.mrcc_generate_input(ref_wfn, level)
     ref_wfn.set_module("mrcc")
 

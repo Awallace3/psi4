@@ -56,6 +56,7 @@
 #include <regex>
 #include <stdexcept>
 #include <cstdio>
+#include <iomanip>
 #include <cstdlib>
 #include <cmath>
 #include <map>
@@ -118,12 +119,11 @@ BasisSet::BasisSet() {
     name_ = "(Empty Basis Set)";
     key_ = "(Empty Basis Set)";
     target_ = "(Empty Basis Set)";
-    shells_[0] = GaussianShell(Gaussian, 0, nprimitive_, uoriginal_coefficients_.data(), ucoefficients_.data(), uerd_coefficients_.data(),
-                               uexponents_.data(), GaussianType(0), 0, xyz_.data(), 0);
+    shells_[0] = GaussianShell(Gaussian, 0, nprimitive_, uoriginal_coefficients_.data(), ucoefficients_.data(),
+                               uerd_coefficients_.data(), uexponents_.data(), GaussianType(0), 0, xyz_.data(), 0);
 }
 
-BasisSet::~BasisSet() {
-}
+BasisSet::~BasisSet() {}
 
 std::shared_ptr<BasisSet> BasisSet::build(std::shared_ptr<Molecule> /*molecule*/,
                                           const std::vector<ShellInfo> & /*shells*/) {
@@ -213,7 +213,7 @@ int BasisSet::n_frozen_core(const std::string &depth, SharedMolecule mol) {
                 // If center is a post-lanthanide or a post-actinide in Nth period,
                 // freeze all 14 of its (N-2)f electrons too
                 if (current_shell > 5) {
-                    if ((Z + ECP - delta) >= 18 ) delta += 14;
+                    if ((Z + ECP - delta) >= 18) delta += 14;
                 }
                 // If this center has an ECP, some electrons are already frozen
                 if (ECP > 0) delta -= ECP;
@@ -262,7 +262,9 @@ int BasisSet::n_frozen_core(const std::string &depth, SharedMolecule mol) {
                 int current_shell = atom_to_period(Z + ECP);
                 int delta = period_to_full_shell(std::max(current_shell - req_shell, 0));
                 // If this center has an ECP, some electrons are already frozen
-                if (delta < ECP) throw PSIEXCEPTION("ECP on atom freezes more electrons than requested by choosing a previous shell.");
+                if (delta < ECP)
+                    throw PSIEXCEPTION(
+                        "ECP on atom freezes more electrons than requested by choosing a previous shell.");
                 if (ECP > 0) delta -= ECP;
                 // Keep track of current valence electrons
                 mol_valence = mol_valence + Z - delta;
@@ -475,66 +477,55 @@ void BasisSet::print_detail(std::string out) const {
     }
 }
 
+/// @brief Returns a string in CFOUR-style of the basis (per-atom). Format from
+/// https://web.archive.org/web/20221130013041/http://slater.chemie.uni-mainz.de/cfour/index.php?n=Main.OldFormatOfAnEntryInTheGENBASFile
+/// @return CFOUR-style of the basis (per-atom)
 std::string BasisSet::print_detail_cfour() const {
-    char buffer[120];
     std::stringstream ss;
-    std::string nameUpperCase = name_;
-    to_upper(nameUpperCase);
+    ss << std::fixed << std::showpoint;
+    const std::string nameUpperCase = to_upper_copy(name_);
 
     for (int uA = 0; uA < molecule_->nunique(); uA++) {
-        const int A = molecule_->unique(uA);
+        const auto A = molecule_->unique(uA);
+        ss << molecule_->symbol(A) << ":P4_" << A + 1 << '\n';
+        ss << "Psi4 basis " << nameUpperCase << " for element " << molecule_->symbol(A) << " atom " << A + 1 << "\n\n";
 
-        sprintf(buffer, "%s:P4_%d\n", molecule_->symbol(A).c_str(), A + 1);
-        ss << buffer;
-        sprintf(buffer, "Psi4 basis %s for element %s atom %d\n\n", nameUpperCase.c_str(), molecule_->symbol(A).c_str(),
-                A + 1);
-        ss << buffer;
-
-        int first_shell = center_to_shell_[A];
-        int n_shell = center_to_nshell_[A];
-
-        int max_am_center = 0;
-        for (int Q = 0; Q < n_shell; Q++)
-            max_am_center =
-                (shells_[Q + first_shell].am() > max_am_center) ? shells_[Q + first_shell].am() : max_am_center;
-
-        std::vector<std::vector<int>> shell_per_am(max_am_center + 1);
-        for (int Q = 0; Q < n_shell; Q++) shell_per_am[shells_[Q + first_shell].am()].push_back(Q);
+        const auto first_shell = center_to_shell_[A];
+        const auto n_shell = center_to_nshell_[A];
+        // Use immediately evaluated lambdas for complicated initialiation of const objects
+        const auto max_am_center = [&] {
+            int max = 0;
+            for (int Q = 0; Q < n_shell; Q++) {
+                if (shells_[Q + first_shell].am() > max) max = shells_[Q + first_shell].am();
+            }
+            return max;
+        }();
+        const auto shell_per_am = [&] {
+            std::vector<std::vector<int>> tmpvec(max_am_center + 1);
+            for (int Q = 0; Q < n_shell; Q++) tmpvec[shells_[Q + first_shell].am()].push_back(Q);
+            return tmpvec;
+        }();
 
         // Write number of shells in the basis set
-        sprintf(buffer, "%3d\n", max_am_center + 1);
-        ss << buffer;
-
+        ss << to_str_width(max_am_center + 1, 3) << '\n';
         // Write angular momentum for each shell
-        for (int am = 0; am <= max_am_center; am++) {
-            sprintf(buffer, "%5d", am);
-            ss << buffer;
-        }
-        sprintf(buffer, "\n");
-        ss << buffer;
-
+        for (int am = 0; am <= max_am_center; am++) ss << to_str_width(am, 5);
+        ss << '\n';
         // Write number of contracted basis functions for each shell
-        for (int am = 0; am <= max_am_center; am++) {
-            sprintf(buffer, "%5lu", shell_per_am[am].size());
-            ss << buffer;
-        }
-        sprintf(buffer, "\n");
-        ss << buffer;
+        for (int am = 0; am <= max_am_center; am++) ss << to_str_width(shell_per_am[am].size(), 5);
+        ss << '\n';
 
         std::vector<std::vector<double>> exp_per_am(max_am_center + 1);
         std::vector<std::vector<double>> coef_per_am(max_am_center + 1);
         for (int am = 0; am <= max_am_center; am++) {
-            // TODO: std::find safe on floats? seems to work
             // Collect unique exponents among all functions
             for (size_t Q = 0; Q < shell_per_am[am].size(); Q++) {
                 for (int K = 0; K < shells_[shell_per_am[am][Q] + first_shell].nprimitive(); K++) {
-                    if (!(std::find(exp_per_am[am].begin(), exp_per_am[am].end(),
-                                    shells_[shell_per_am[am][Q] + first_shell].exp(K)) != exp_per_am[am].end())) {
+                    if (none_of_equal(exp_per_am[am], shells_[shell_per_am[am][Q] + first_shell].exp(K))) {
                         exp_per_am[am].push_back(shells_[shell_per_am[am][Q] + first_shell].exp(K));
                     }
                 }
             }
-
             // Collect coefficients for each exp among all functions, zero otherwise
             for (size_t Q = 0; Q < shell_per_am[am].size(); Q++) {
                 for (size_t ep = 0, K = 0; ep < exp_per_am[am].size(); ep++) {
@@ -551,44 +542,33 @@ std::string BasisSet::print_detail_cfour() const {
         }
 
         // Write number of exponents for each shell
-        for (int am = 0; am <= max_am_center; am++) {
-            sprintf(buffer, "%5lu", exp_per_am[am].size());
-            ss << buffer;
-        }
-        sprintf(buffer, "\n\n");
-        ss << buffer;
+        for (int am = 0; am <= max_am_center; am++) ss << to_str_width(exp_per_am[am].size(), 5);
+        ss << "\n\n";
 
         for (int am = 0; am <= max_am_center; am++) {
             // Write exponents for each shell
             for (size_t ep = 0; ep < exp_per_am[am].size(); ep++) {
-                if (exp_per_am[am][ep] >= 10000000.0)
-                    sprintf(buffer, "%13.4f ", exp_per_am[am][ep]);
-                else if (exp_per_am[am][ep] >= 1000000.0)
-                    sprintf(buffer, "%13.5f ", exp_per_am[am][ep]);
-                else if (exp_per_am[am][ep] >= 100000.0)
-                    sprintf(buffer, "%13.6f ", exp_per_am[am][ep]);
-                else
-                    sprintf(buffer, "%14.7f", exp_per_am[am][ep]);
-                ss << buffer;
-                if (((ep + 1) % 5 == 0) || ((ep + 1) == exp_per_am[am].size())) {
-                    sprintf(buffer, "\n");
-                    ss << buffer;
+                if (exp_per_am[am][ep] >= 10000000.0) {
+                    ss << std::setprecision(4) << std::setw(13) << exp_per_am[am][ep] << ' ';
+                } else if (exp_per_am[am][ep] >= 1000000.0) {
+                    ss << std::setprecision(5) << std::setw(13) << exp_per_am[am][ep] << ' ';
+                } else if (exp_per_am[am][ep] >= 100000.0) {
+                    ss << std::setprecision(6) << std::setw(13) << exp_per_am[am][ep] << ' ';
+                } else {
+                    ss << std::setprecision(7) << std::setw(14) << exp_per_am[am][ep] << ' ';
                 }
+                if (((ep + 1) % 5 == 0) || ((ep + 1) == exp_per_am[am].size())) ss << '\n';
             }
-            sprintf(buffer, "\n");
-            ss << buffer;
+            ss << '\n';
 
             // Write contraction coefficients for each shell
             for (size_t ep = 0; ep < exp_per_am[am].size(); ep++) {
                 for (size_t bf = 0; bf < shell_per_am[am].size(); bf++) {
-                    sprintf(buffer, "%10.7f ", coef_per_am[am][bf * exp_per_am[am].size() + ep]);
-                    ss << buffer;
+                    ss << std::setprecision(7) << std::setw(10) << coef_per_am[am][bf * exp_per_am[am].size() + ep] << ' ';
                 }
-                sprintf(buffer, "\n");
-                ss << buffer;
+                ss << '\n';
             }
-            sprintf(buffer, "\n");
-            ss << buffer;
+            ss << '\n';
         }
     }
     return ss.str();
@@ -766,10 +746,10 @@ BasisSet::BasisSet(const std::string &basistype, SharedMolecule mol,
     }
 
     shell_first_ao_ = std::vector<int>(n_shells_);
+    shell_first_exponent_ = std::vector<int>(n_shells_);
     shell_first_basis_function_ = std::vector<int>(n_shells_);
     shells_ = std::vector<GaussianShell>(n_shells_);
     ecp_shells_ = std::vector<GaussianShell>(n_ecp_shells_);
-    l2_shells_.resize(n_shells_);
     ao_to_shell_ = std::vector<int>(nao_);
     function_to_shell_ = std::vector<int>(nbf_);
     function_center_ = std::vector<int>(nbf_);
@@ -823,12 +803,8 @@ BasisSet::BasisSet(const std::string &basistype, SharedMolecule mol,
                     GaussianShell(shelltype, am, shell_nprim, &uoriginal_coefficients_[ustart + atom_nprim],
                                   &ucoefficients_[ustart + atom_nprim], &uerd_coefficients_[ustart + atom_nprim],
                                   &uexponents_[ustart + atom_nprim], puream, n, &xyz_.data()[3 * n], bf_count);
-                auto l2c = libint2::svector<double>(&uoriginal_coefficients_[ustart + atom_nprim],
-                                                    &uoriginal_coefficients_[ustart + atom_nprim + shell_nprim]);
-                auto l2e = libint2::svector<double>(&uexponents_[ustart + atom_nprim],
-                                                    &uexponents_[ustart + atom_nprim + shell_nprim]);
-                l2_shells_[shell_count] =
-                    libint2::Shell{l2e, {{am, static_cast<bool>(puream), l2c}}, {{xyz[0], xyz[1], xyz[2]}}};
+                shell_first_exponent_[shell_count] = ustart + atom_nprim;
+                n_prim_per_shell_[shell_count] = shell_nprim;
             } else {
                 throw PSIEXCEPTION("Unexpected shell type in BasisSet constructor!");
             }
@@ -846,6 +822,8 @@ BasisSet::BasisSet(const std::string &basistype, SharedMolecule mol,
             throw PSIEXCEPTION("Problem with nprimitive in basis set construction!");
         }
     }
+    // Update the libint2 shell data
+    update_l2_shells();
 
     /*
      * Now loop over ECPs and finalize metadata
@@ -872,9 +850,9 @@ BasisSet::BasisSet(const std::string &basistype, SharedMolecule mol,
                 max_ecp_am_ = max_ecp_am_ > std::abs(am) ? max_ecp_am_ : std::abs(am);
                 ecp_shell_center_[ecp_shell_count] = n;
                 if (shelltype == ECPType1 || shelltype == ECPType2) {
-                    ecp_shells_[ecp_shell_count] =
-                        GaussianShell(shelltype, am, ecp_shell_nprim, &uecpcoefficients_[ustart + atom_nprim],
-                                      &uecpexponents_[ustart + atom_nprim], &uecpns_[ustart + atom_nprim], n, &xyz_.data()[3 * n]);
+                    ecp_shells_[ecp_shell_count] = GaussianShell(
+                        shelltype, am, ecp_shell_nprim, &uecpcoefficients_[ustart + atom_nprim],
+                        &uecpexponents_[ustart + atom_nprim], &uecpns_[ustart + atom_nprim], n, &xyz_.data()[3 * n]);
                 } else {
                     throw PSIEXCEPTION("Unknown ECP shell type in BasisSet constructor!");
                 }
@@ -885,6 +863,21 @@ BasisSet::BasisSet(const std::string &basistype, SharedMolecule mol,
                 throw PSIEXCEPTION("Problem with nprimitive in ECP basis set construction!");
             }
         }
+    }
+}
+
+void BasisSet::update_l2_shells(bool embed_normalization) {
+    l2_shells_.resize(n_shells_);
+    for (auto ishell = 0; ishell < n_shells_; ishell++) {
+        auto am = shells_[ishell].am();
+        auto center_index = shell_to_center(ishell);
+        Vector3 xyz = molecule_->xyz(center_index);
+
+        auto offset = shell_first_exponent_[ishell];
+        auto nprim = n_prim_per_shell_[ishell];
+        auto l2c = libint2::svector<double>(&uoriginal_coefficients_[offset], &uoriginal_coefficients_[offset + nprim]);
+        auto l2e = libint2::svector<double>(&uexponents_[offset], &uexponents_[offset + nprim]);
+        l2_shells_[ishell] = libint2::Shell{l2e, {{am, puream_, l2c}}, {{xyz[0], xyz[1], xyz[2]}}, embed_normalization};
     }
 }
 
@@ -1207,7 +1200,7 @@ void BasisSet::move_atom(int atom, const Vector3 &trans) {
     }
 }
 
-void BasisSet::compute_phi(double* phi_ao, double x, double y, double z) {
+void BasisSet::compute_phi(double *phi_ao, double x, double y, double z) {
     zero_arr(phi_ao, nbf());
 
     int ao = 0;
@@ -1233,8 +1226,9 @@ void BasisSet::compute_phi(double* phi_ao, double x, double y, double z) {
 
             for (int l = 0; l < INT_NCART(am); l++) {
                 Vector3 &components = exp_ao[am][l];
-                cart_buffer[l] += pow(dx, static_cast<double>(components[0])) * pow(dy, static_cast<double>(components[1])) *
-                                pow(dz, static_cast<double>(components[2])) * cexpr;
+                cart_buffer[l] += pow(dx, static_cast<double>(components[0])) *
+                                  pow(dy, static_cast<double>(components[1])) *
+                                  pow(dz, static_cast<double>(components[2])) * cexpr;
             }
 
             for (int ind = 0; ind < s_transform.n(); ind++) {
@@ -1248,11 +1242,42 @@ void BasisSet::compute_phi(double* phi_ao, double x, double y, double z) {
         } else {
             for (int l = 0; l < INT_NCART(am); l++) {
                 Vector3 &components = exp_ao[am][l];
-                phi_ao[ao + l] += pow(dx, static_cast<double>(components[0])) * pow(dy, static_cast<double>(components[1])) *
-                                pow(dz, static_cast<double>(components[2])) * cexpr;
+                phi_ao[ao + l] += pow(dx, static_cast<double>(components[0])) *
+                                  pow(dy, static_cast<double>(components[1])) *
+                                  pow(dz, static_cast<double>(components[2])) * cexpr;
             }
         }
 
         ao += INT_NFUNC(puream_, am);
     }  // nshell
+}
+
+bool psi::fpeq(const double a, const double b, const double THR/* = 1.0E-14*/) {
+    if (std::abs(a - b) < THR) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+void BasisSet::convert_sap_contraction() {
+  if(max_am_ != 0) {
+    throw PSIEXCEPTION("SAP potentials should be composed of a single S function per atom, and not contain higher angular momentum!");
+  }
+
+  // Coefficients need to be scaled by (expn/pi)^1.5 to go from the
+  // original tabulated error function fits to two-electron integrals,
+  // see doi:10.1063/5.0004046
+  for (int i = 0; i < n_uprimitive_; i++) {
+    // A minus sign is necessary here since the coefficients are
+    // chosen to be negative because of V(r) = - Z(r)/r in the
+    // expansion
+    uoriginal_coefficients_[i] *= -std::pow(uexponents_[i]/M_PI,1.5);
+  }
+  ucoefficients_ = uoriginal_coefficients_;
+  uerd_coefficients_ = uoriginal_coefficients_;
+
+  // Now we just need to recreate the Libint2 data, telling it to skip
+  // the usual renormalization steps
+  update_l2_shells(false);
 }

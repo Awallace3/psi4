@@ -1,11 +1,10 @@
 #!/usr/bin/env python
+import subprocess
 import sys
 import time
-import subprocess
-
 
 # <<<  run ctest  >>>
-retcode = subprocess.Popen(['ctest', '-j2', '-L', 'smoke'], bufsize=0,
+retcode = subprocess.Popen(['ctest', '-j2', '-L', "plug|smoke"], bufsize=0,
                             stdout=subprocess.PIPE, universal_newlines=True)
 print_all = False
 ctestout = ''

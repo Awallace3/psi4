@@ -30,8 +30,8 @@ import atexit
 import datetime
 import itertools
 import os
-from typing import List, Optional, Union
 from pathlib import Path
+from typing import List, Optional, Union
 
 from qcelemental.util import which, which_import
 
@@ -147,7 +147,7 @@ _addons_ = {
     "ecpint": _CMake_to_Py_boolean("@ENABLE_ecpint@"),
     "libefp": which_import("pylibefp", return_bool=True),
     "erd": _CMake_to_Py_boolean("@ENABLE_erd@"),
-    "gdma": _CMake_to_Py_boolean("@ENABLE_gdma@"),
+    "gdma": which_import("gdma", return_bool=True),  # package pygdma, import gdma
     "ipi": which_import("ipi", return_bool=True),
     "pcmsolver": _CMake_to_Py_boolean("@ENABLE_PCMSolver@"),
     "cppe": which_import("cppe", return_bool=True),
@@ -163,7 +163,6 @@ _addons_ = {
     "snsmp2": which_import("snsmp2", return_bool=True),
     "resp": which_import("resp", return_bool=True),
     "psi4fockci": which_import("psi4fockci", return_bool=True),
-    "adcc": which_import("adcc", return_bool=True),
     "mdi": which_import("mdi", return_bool=True),
     "cct3": which_import("cct3", return_bool=True),
     "dftd4": which_import("dftd4", return_bool=True),
@@ -174,6 +173,7 @@ _addons_ = {
     "psixas": which_import("psixas", return_bool=True),
     #"mctc-gcp": psi4_which("mctc-gcp", return_bool=True),
     "bse": which_import("basis_set_exchange", return_bool=True),
+    "einsums": _CMake_to_Py_boolean("@ENABLE_Einsums@"),
 }
 
 
@@ -225,7 +225,7 @@ def test(extent: str = "full", extras: List = None) -> int:
         raise RuntimeError('Testing module `pytest` is not installed. Run `conda install pytest`')
     abs_test_dir = os.path.sep.join([os.path.abspath(os.path.dirname(__file__)), "tests"])
 
-    command = ['-rws', '-v']
+    command = ['-rws', '-v', '--color', 'yes']
     if extent.lower() == 'smoke':
         command.extend(['-m', 'smoke'])
     elif extent.lower() == 'quick':
@@ -284,6 +284,7 @@ def set_output_file(
 
     # Get the custom logger
     import logging
+
     from psi4 import logger
     if not inherit_loglevel:
         logger.setLevel(loglevel)

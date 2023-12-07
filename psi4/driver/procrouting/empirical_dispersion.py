@@ -27,16 +27,16 @@
 #
 
 import collections
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Union
 
 import numpy as np
-from qcelemental.models import AtomicInput
 import qcengine as qcng
+from qcelemental.models import AtomicInput
 
 from psi4 import core
-from psi4.driver import p4util
-from psi4.driver import driver_findif
-from psi4.driver.p4util.exceptions import ValidationError
+
+from .. import p4util
+from ..p4util.exceptions import ValidationError
 
 _engine_can_do = collections.OrderedDict([
     # engine order establishes default for each disp
@@ -58,7 +58,19 @@ def _capable_engines_for_disp()-> Dict[str, List[str]]:
     capable engines, where the engine in the first element is available, if any are.
 
     """
-    from qcengine.testing import _programs as _programs_qcng
+    try:
+        from qcengine.testing import _programs as _programs_qcng
+    except ModuleNotFoundError:
+        # _programs_qcng is up-to-date with current harnesses but it requires pytest present, so let's provide a workaround
+        from qcelemental.util import which, which_import
+        _programs_qcng = {
+            "dftd3": which("dftd3", return_bool=True),
+            "dftd4": which_import("dftd4", return_bool=True),
+            "s-dftd3": which_import("dftd3", return_bool=True),
+            "mctc-gcp": which("mctc-gcp", return_bool=True),
+            "gcp": which("gcp", return_bool=True),
+            "mp2d": which("mp2d", return_bool=True),
+        }
 
     programs_disp = {k: v for k, v in _programs_qcng.items() if k in _engine_can_do}
     programs_disp["libdisp"] = True
@@ -70,7 +82,7 @@ def _capable_engines_for_disp()-> Dict[str, List[str]]:
         for disp in disps:
             capable[disp].append(eng)
     for disp, engines in capable.items():
-        capable_sorted_by_available[disp] = sorted(engines, key=lambda x: (not programs_disp[x], x))
+        capable_sorted_by_available[disp] = sorted(engines, key=lambda x: programs_disp[x], reverse=True)
 
     return capable_sorted_by_available
 
@@ -266,7 +278,7 @@ class EmpiricalDispersion():
                     wfn.set_variable("PAIRWISE DISPERSION CORRECTION ANALYSIS",
                                      jobrec.extras['qcvars']["2-BODY PAIRWISE DISPERSION CORRECTION ANALYSIS"])
 
-            if self.fctldash in ['hf3c', 'pbeh3c']:
+            if self.fctldash in ['hf3c', 'pbeh3c', 'r2scan3c', 'b973c']:
                 jobrec = qcng.compute(
                     resi,
                     self.gcp_engine,
@@ -332,7 +344,7 @@ class EmpiricalDispersion():
                     if "CURRENT" not in k:
                         wfn.set_variable(k, float(qca) if isinstance(qca, str) else qca)
 
-            if self.fctldash in ['hf3c', 'pbeh3c']:
+            if self.fctldash in ['hf3c', 'pbeh3c', 'r2scan3c', 'b973c']:
                 jobrec = qcng.compute(
                     resi,
                     self.gcp_engine,
@@ -364,6 +376,8 @@ class EmpiricalDispersion():
             (3*nat, 3*nat) dispersion Hessian [Eh/a0/a0].
 
         """
+        from psi4.driver.driver_findif import assemble_hessian_from_gradients, hessian_from_gradients_geometries
+
         optstash = p4util.OptionsState(['PRINT'], ['PARENT_SYMMETRY'])
         core.set_global_option('PRINT', 0)
 
@@ -379,14 +393,14 @@ class EmpiricalDispersion():
         # Record undisplaced symmetry for projection of diplaced point groups
         core.set_global_option("PARENT_SYMMETRY", molecule.schoenflies_symbol())
 
-        findif_meta_dict = driver_findif.hessian_from_gradients_geometries(molclone, -1)
+        findif_meta_dict = hessian_from_gradients_geometries(molclone, -1)
         for displacement in findif_meta_dict["displacements"].values():
             geom_array = np.reshape(displacement["geometry"], (-1, 3))
             molclone.set_geometry(core.Matrix.from_array(geom_array))
             molclone.update_geometry()
             displacement["gradient"] = self.compute_gradient(molclone).np.ravel().tolist()
 
-        H = driver_findif.assemble_hessian_from_gradients(findif_meta_dict, -1)
+        H = assemble_hessian_from_gradients(findif_meta_dict, -1)
         if wfn is not None:
             wfn.set_variable('DISPERSION CORRECTION HESSIAN', H)
         optstash.restore()
