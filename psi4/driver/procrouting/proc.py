@@ -4495,6 +4495,10 @@ def run_psimrcc_scf(name, **kwargs):
 
 # TODO: add asapt here
 def run_asapt(name, **kwargs):
+    """Function encoding sequence of PSI module calls for
+    an ASAPT calculation of any level.
+
+    """
     return
 
 def run_sapt(name, **kwargs):
