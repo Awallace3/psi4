@@ -726,6 +726,15 @@ void ASAPT0::ps()
     }
 
     // TODO: make Zxyz2p
+    std::vector<std::pair<double, std::array<double, 3>>> Zxyz2;
+    // set size of Zxyz2 to be same size of ZxyzT
+    for (int thread = 0; thread < nthreads; thread++) {
+        Zxyz2.push_back(std::make_pair(1.0, std::array<double, 3>()));
+    }
+    std::shared_ptr<PotentialInt> Vint(static_cast<PotentialInt*>(Vfact->ao_potential().release()));
+    Vint->set_charge_field(Zxyz2);
+    std::shared_ptr<Matrix> Vtemp(new Matrix("Vtemp",nQ,1));
+    double** Vtempp = Vtemp->pointer();
 
     /* std::shared_ptr<Matrix> Zxyz(new Matrix("Zxyz",1,4)); */
     /* double** Zxyzp = Zxyz->pointer(); */
