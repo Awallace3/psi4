@@ -332,9 +332,24 @@ void ASAPT0::analyze() {
 
     // Print Order 0
     outfile->Printf("Elst Total: \n");
-    /* auto Elst_sum = Elst_A->collapse(0); */
-    /* Elst_sum->print_out(); */
-    /*  */
+    double Elst_sum = 0.0;
+    for (int i=0; i < Elst_A->dimpi()[0]; ++i) {
+        Elst_sum += Elst_A->get(i,0);
+    }
+    outfile->Printf("    %11.3E\n", Elst_sum);
+
+    outfile->Printf("Exch Total: \n");
+    double Exch_sum = 0.0;
+    for (int i=0; i < Exch_A->dimpi()[0]; ++i) {
+        Exch_sum += Exch_A->get(i,0);
+    }
+    outfile->Printf("    %11.3E\n", Exch_sum);
+
+    outfile->Printf("IndAB Total: \n");
+    // auto IndAB_sum = std::reduce(IndAB_A->pointer(), IndAB_A->pointer() + IndAB_A->size(), 0.0);
+    // outfile->Printf("    %11.3E\n", IndAB_sum);
+
+
     /* outfile->Printf("Exch Total: \n"); */
     /* auto Exch_sum = Exch_A->collapse(0); */
     /* Exch_sum->print_out(); */
@@ -3312,12 +3327,5 @@ std::map<std::string, std::shared_ptr<Matrix> > CPKS_ASAPT0::product(std::map<st
 
     return s;
 }
-
-
-
-
-
-
-
 }  // namespace sapt
 }  // namespace psi

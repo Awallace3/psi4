@@ -990,7 +990,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         /*- SUBSECTION SAPT(HF) -*/
 
         /*- The level of theory for SAPT -*/
-        options.add_str("SAPT_LEVEL", "SAPT0", "SAPT0 SAPT2 SAPT2+ SAPT2+3");
+        options.add_str("SAPT_LEVEL", "SAPT0",  "SAPT0 SAPT2 SAPT2+ SAPT2+3");
 
         /*- Whether or not to perform exchange scaling for SAPT exchange components.
         Default is false, i.e. no scaling. If set to true, performs scaling with
