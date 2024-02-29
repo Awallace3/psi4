@@ -153,6 +153,7 @@ void AtomicDensity::compute_total_density()
     //    outfile->Printf(" %6d: (%15.5f %15.5f %15.5f %15.5f ) vs  (%15.5f %15.5f %15.5f %15.5f) \n", i, xp[i], yp[i], zp[i], wp[i], x2p[i], y2p[i], z2p[i], w2p[i]);
     //}
 
+    // TODO: Pick up here...
     for (int i = 0; i < npoints2; i++) {
         //xp[index[i]] = x2p[i];
         //yp[index[i]] = y2p[i];
@@ -175,7 +176,7 @@ void AtomicDensity::compute_total_density()
     }
 
     // Debug stuff
-    std::printf("Debugging Total Density");
+    // std::printf("Debugging Total Density");
     // x_->print();
     // y_->print();
     // z_->print();
