@@ -346,6 +346,7 @@ void ASAPT0::analyze() {
     outfile->Printf("    %11.3E\n", Exch_sum);
 
     outfile->Printf("IndAB Total: \n");
+
     // auto IndAB_sum = std::reduce(IndAB_A->pointer(), IndAB_A->pointer() + IndAB_A->size(), 0.0);
     // outfile->Printf("    %11.3E\n", IndAB_sum);
 

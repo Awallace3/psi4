@@ -53,8 +53,10 @@ def template_helper(*args):
             if isinstance(arg, ambit.BlockedTensor):
                 template.append(ambit.BlockedTensor)
             else:
+                print(arg)
                 raise TypeError("Unrecognized object type for DIIS.")
         else:
+            print(arg)
             raise TypeError("Unrecognized object type for DIIS.")
 
     return template

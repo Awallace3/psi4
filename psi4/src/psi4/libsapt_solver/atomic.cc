@@ -176,11 +176,11 @@ void AtomicDensity::compute_total_density()
 
     // Debug stuff
     std::printf("Debugging Total Density");
-    x_->print();
-    y_->print();
-    z_->print();
-    w_->print();
-    rho_->print();
+    // x_->print();
+    // y_->print();
+    // z_->print();
+    // w_->print();
+    // rho_->print();
 }
 
 StockholderDensity::StockholderDensity() : AtomicDensity()
@@ -320,8 +320,8 @@ void StockholderDensity::compute(std::shared_ptr<Matrix> D)
 
     std::shared_ptr<DIISManager> diis_manager(new DIISManager(diis_max_vecs_, "ISA DIIS vector", DIISManager::RemovalPolicy::LargestError, DIISManager::StoragePolicy::OnDisk));
     /* diis_manager->set_error_vector_size(1, DIISEntry::Matrix, error.get()); */
-    diis_manager->set_error_vector_size(1, error.get());
-    diis_manager->set_vector_size(1, state.get());
+    diis_manager->set_error_vector_size(error.get());
+    diis_manager->set_vector_size(state.get());
 
     // Store last iteration
     std::vector<std::vector<double> > ws_old = ws_;
@@ -492,13 +492,13 @@ void StockholderDensity::compute(std::shared_ptr<Matrix> D)
                     offset2++;
                 }
             }
-            diis_manager->add_entry(2,error.get(),state.get());
+            diis_manager->add_entry(error.get(),state.get());
             diis_iter++;
         }
 
         // DIIS Extrapolate
         if (diis_ && diis_iter >= diis_min_vecs_) {
-            diis_manager->extrapolate(1,state.get());
+            diis_manager->extrapolate(state.get());
             int offset2 = 0;
             for (int A = 0; A < ws_.size(); A++) {
                 for (int R = 0; R < ws_[A].size(); R++) {
