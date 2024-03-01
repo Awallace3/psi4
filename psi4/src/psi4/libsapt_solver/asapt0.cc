@@ -210,9 +210,9 @@ double ASAPT0::compute_energy() {
     //    timer_off("ASAPT: Ind Orbs");
     //}
 
-    timer_on("ASAPT: Anal");
+    timer_on("ASAPT: Analysis");
     analyze();
-    timer_off("ASAPT: Anal");
+    timer_off("ASAPT: Analysis");
 
     print_trailer();
     return 0.0;
@@ -346,6 +346,8 @@ void ASAPT0::analyze() {
     outfile->Printf("    %11.3E\n", Exch_sum);
 
     outfile->Printf("IndAB Total: \n");
+
+    // auto IndAB_sum = std::reduce(IndAB_A->pointer(), IndAB_A->pointer() + IndAB_A., 0.0);
 
     // auto IndAB_sum = std::reduce(IndAB_A->pointer(), IndAB_A->pointer() + IndAB_A->size(), 0.0);
     // outfile->Printf("    %11.3E\n", IndAB_sum);
@@ -957,6 +959,7 @@ void ASAPT0::df()
 
     // => Nuclear Part (PITA) <= //
 
+    printf("Nuclear Part\n");
     auto Zxyz2 = std::make_shared<Matrix>("Zxyz", 1, 4);
     std::vector<std::pair<double, std::array<double, 3>>> Zxyz;
     auto Vfact2 = std::make_shared<IntegralFactory>(primary_);
