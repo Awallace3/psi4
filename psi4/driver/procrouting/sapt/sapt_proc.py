@@ -250,6 +250,28 @@ def run_sapt_dft(name, **kwargs):
                            **kwargs)
         data["DFT MONOMERB"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT): Monomer B DFT")
+        if do_delta_dft:
+            core.IO.set_default_namespace('dimer')
+            core.print_out("\n")
+            core.print_out("         ---------------------------------------------------------\n")
+            core.print_out("         " + "SAPT(DFT): delta DFT Segment".center(58) + "\n")
+            core.print_out("\n")
+            core.timer_on("SAPT(DFT):delta DFT")
+            wfn_dimer = scf_helper(sapt_dft_functional,
+                               post_scf=False,
+                               molecule=monomerA,
+                               banner="SAPT(DFT): delta DFT Dimer",
+                               **kwargs)
+            data["DFT DIMER"] = core.variable("CURRENT ENERGY")
+            core.timer_off("SAPT(DFT):delta DFT")
+            core.print_out("\n")
+
+            ddft_value = hf_data["DFT DIMER"] - hf_data["DFT MONOMERA"] - hf_data["DFT MONOMERB"]
+            data["DDFT VALUE"] = ddft_value
+    else:
+        core.print_out("\n")
+        core.print_out("Turning off delta DFT correction\n")
+        do_delta_dft = False
 
     # Save JK object
     sapt_jk = wfn_B.jk()
@@ -267,7 +289,7 @@ def run_sapt_dft(name, **kwargs):
 
     # Call SAPT(DFT)
     sapt_jk = wfn_B.jk()
-    sapt_dft(dimer_wfn, wfn_A, wfn_B, do_dft=do_dft, sapt_jk=sapt_jk, data=data, print_header=False, delta_hf=delta_hf)
+    sapt_dft(dimer_wfn, wfn_A, wfn_B, do_dft=do_dft, sapt_jk=sapt_jk, data=data, print_header=False, delta_hf=delta_hf, delta_dft=do_delta_dft)
 
     # Copy data back into globals
     for k, v in data.items():
@@ -304,7 +326,7 @@ def sapt_dft_header(sapt_dft_functional="unknown",
     core.print_out("   JK Algorithm            %12s\n" % jk_alg)
 
 
-def sapt_dft(dimer_wfn, wfn_A, wfn_B, do_dft=True, sapt_jk=None, sapt_jk_B=None, data=None, print_header=True, cleanup_jk=True, delta_hf=False):
+def sapt_dft(dimer_wfn, wfn_A, wfn_B, do_dft=True, sapt_jk=None, sapt_jk_B=None, data=None, print_header=True, cleanup_jk=True, delta_hf=False, delta_dft=False):
     """
     The primary SAPT(DFT) algorithm to compute the interaction energy once the wavefunctions have been built.
 
@@ -404,6 +426,11 @@ def sapt_dft(dimer_wfn, wfn_A, wfn_B, do_dft=True, sapt_jk=None, sapt_jk_B=None,
         sapt_hf_delta = data["DHF VALUE"] - total_sapt
         core.set_variable("SAPT(DFT) Delta HF", sapt_hf_delta)
         data["Delta HF Correction"] = core.variable("SAPT(DFT) Delta HF")
+    if delta_dft:
+        total_sapt_dft = (data['Elst1,r'] + data['Exch1'] + data['Ind2,r'] + data['Exch-Ind2,r'])
+        sapt_dft_delta = data["DDFT VALUE"] - total_sapt_dft
+        core.set_variable("SAPT(DFT) Delta DFT", sapt_dft_delta)
+        data["Delta DFT Correction"] = core.variable("SAPT(DFT) Delta DFT")
 
     core.timer_off("SAPT(DFT):ind")
 
