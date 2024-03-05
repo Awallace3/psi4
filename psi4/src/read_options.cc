@@ -1131,6 +1131,8 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_str("SAPT_DFT_GRAC_DETERMINATION", "INPUT", "INPUT");
         /*- Enables the hybrid xc kernel in dispersion? !expert -*/
         options.add_bool("SAPT_DFT_DO_HYBRID", true);
+        /*- Compute teh Delta-DFT correction? -*/
+        options.add_bool("SAPT_DFT_DO_DDFT", true);
         /*- Scheme for approximating exchange-dispersion for SAPT-DFT.
         Previous to Nov 2022, default was ``FIXED`` with Hesselmann value.
         ``NONE`` Use unscaled ``Exch-Disp2,u`` .

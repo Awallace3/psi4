@@ -66,6 +66,7 @@ def run_sapt_dft(name, **kwargs):
     mon_a_shift = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_A")
     mon_b_shift = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_B")
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
+    do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
     do_dft = sapt_dft_functional != "HF"
 
