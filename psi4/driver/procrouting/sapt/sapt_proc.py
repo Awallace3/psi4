@@ -259,14 +259,14 @@ def run_sapt_dft(name, **kwargs):
             core.timer_on("SAPT(DFT):delta DFT")
             wfn_dimer = scf_helper(sapt_dft_functional,
                                post_scf=False,
-                               molecule=monomerA,
+                               molecule=sapt_dimer,
                                banner="SAPT(DFT): delta DFT Dimer",
                                **kwargs)
             data["DFT DIMER"] = core.variable("CURRENT ENERGY")
             core.timer_off("SAPT(DFT):delta DFT")
             core.print_out("\n")
 
-            ddft_value = hf_data["DFT DIMER"] - hf_data["DFT MONOMERA"] - hf_data["DFT MONOMERB"]
+            ddft_value = data["DFT DIMER"] - data["DFT MONOMERA"] - data["DFT MONOMERB"]
             data["DDFT VALUE"] = ddft_value
     else:
         core.print_out("\n")
@@ -426,8 +426,10 @@ def sapt_dft(dimer_wfn, wfn_A, wfn_B, do_dft=True, sapt_jk=None, sapt_jk_B=None,
         sapt_hf_delta = data["DHF VALUE"] - total_sapt
         core.set_variable("SAPT(DFT) Delta HF", sapt_hf_delta)
         data["Delta HF Correction"] = core.variable("SAPT(DFT) Delta HF")
+    
+    # Set Delta DFT for SAPT(DFT) if requested
     if delta_dft:
-        total_sapt_dft = (data['Elst1,r'] + data['Exch1'] + data['Ind2,r'] + data['Exch-Ind2,r'])
+        total_sapt_dft = (data["Elst10,r"] + data["Exch10"] + data["Ind20,r"] + data["Exch-Ind20,r"])
         sapt_dft_delta = data["DDFT VALUE"] - total_sapt_dft
         core.set_variable("SAPT(DFT) Delta DFT", sapt_dft_delta)
         data["Delta DFT Correction"] = core.variable("SAPT(DFT) Delta DFT")
@@ -507,11 +509,11 @@ def sapt_dft(dimer_wfn, wfn_A, wfn_B, do_dft=True, sapt_jk=None, sapt_jk_B=None,
 
     core.timer_off("MP2 disp")
     core.timer_off("SAPT(DFT):disp")
-    
+
+
     # Print out final data
     core.print_out("\n")
     core.print_out(print_sapt_dft_summary(data, "SAPT(DFT)", do_dft=do_dft))
-
     return data
 
 

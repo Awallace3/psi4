@@ -156,6 +156,9 @@ def print_sapt_dft_summary(data, name, do_dft=True, short=False):
 
     if "Delta HF Correction" in list(data):
         ret += print_sapt_var("  delta HF,r (2)", data["Delta HF Correction"]) + "\n"
+    if "Delta DFT Correction" in list(data):
+        ret += "      ---------------" + "\n"
+        ret += print_sapt_var("  delta DFT,r (2)", data["Delta DFT Correction"]) + "\n"
 
     ret += "\n"
     core.set_variable("SAPT IND ENERGY", ind)
