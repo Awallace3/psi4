@@ -2,7 +2,9 @@ import pytest
 import psi4
 from utils import *
 from addons import using, uusing
+from qcelemental import constants
 
+hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
 pytestmark = [pytest.mark.psi, pytest.mark.api]
 
 
@@ -29,15 +31,16 @@ def test_sapt_dft2():
                      "sapt_dft_grac_shift_b": 0.136,
                      "SAPT_DFT_FUNCTIONAL": dft_functional,
                      "SAPT_DFT_DO_DDFT": True,
+                     "SAPT_DFT_D4_IE": True,
       })
-    # monA_mol = mol_dimer.extract_subsets(1)
-    # monB_mol = mol_dimer.extract_subsets(2)
-    # dimer = psi4.energy(dft_functional, molecule=mol_dimer)
-    # monA = psi4.energy(dft_functional, molecule=monA_mol)
-    # monB = psi4.energy(dft_functional, molecule=monB_mol)
-
     # Seems like choosing dimer basis actually changes IE quite significantly for aDZ: DHF users dimer basis so making same choice here
+    # d4_params = {"s8": 0.95948085, "a1": 0.38574991, "a2": 4.80688534, "s9": 1.0}
     mol_dimer, mol_monA, mol_monB = prepare_sapt_molecule(mol_dimer, 'dimer')
+    dimer_d4, _ = mol_dimer.run_dftd4(dft_functional, 'd4bjeeqatm') # run_dftd4 returns energy and C6s
+    monA_d4, _ = mol_monA.run_dftd4(dft_functional, 'd4bjeeqatm')
+    monB_d4, _ = mol_monB.run_dftd4(dft_functional, 'd4bjeeqatm')
+    d4_IE = dimer_d4 - monA_d4 - monB_d4
+    print(f"{d4_IE = }")
     run_scf(dft_functional, molecule=mol_dimer)
     dimer = psi4.core.variable("CURRENT ENERGY")
     run_scf(dft_functional, molecule=mol_monA)
@@ -56,9 +59,7 @@ def test_sapt_dft2():
     DFT_MONA = psi4.core.variable("DFT MONOMER A ENERGY")
     DFT_MONB = psi4.core.variable("DFT MONOMER B ENERGY")
     DFT_DIMER = psi4.core.variable("DFT DIMER ENERGY")
-    # This passes test, so must be DFT_IE...
-    # DFT_IE = DFT_DIMER - DFT_MONA - DFT_MONB
-    # delta_DFT = DFT_IE - ELST - EXCH - (IND - DELTA_HF)
+    D4_IE = psi4.core.variable("D4 IE")
     DFT_IE = DFT_DIMER - DFT_MONA - DFT_MONB
     print(f"Calc\n   {DFT_DIMER = }\n   {DFT_MONA = }\n   {DFT_MONB = }")
     print(f"Test\n   {dimer     = }\n   {monA     = }\n   {monB     = }")
@@ -67,6 +68,12 @@ def test_sapt_dft2():
     print(f"{DDFT = }")
     print(f"{DFT_IE = }")
     print(f"{dft_IE = }")
+    print(f"{d4_IE = }")
+    delta_DFT *= hartree_to_kcalmol
+    delta_DFT_d4_disp = d4_IE + delta_DFT
+    assert compare_values(d4_IE, psi4.variable("D4 IE"), 7, "D4 IE")
     assert compare_values(delta_DFT, psi4.variable("SAPT(DFT) DELTA DFT"), 7, "SAPT(DFT) delta DFT")
 
+
 test_sapt_dft2()
+# does PBE0 have abnormally large dispersion? run dftd4 with default parameters!

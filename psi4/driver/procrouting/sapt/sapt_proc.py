@@ -72,6 +72,7 @@ def run_sapt_dft(name, **kwargs):
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
     do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
+    sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     do_dft = sapt_dft_functional != "HF"
 
     if do_delta_dft and do_dft:
@@ -82,9 +83,6 @@ def run_sapt_dft(name, **kwargs):
         core.print_out("\n")
         core.timer_on("SAPT(DFT):delta DFT")
         # set molecule 
-
-        # mononmer_A_molecule = sapt_dimer_molecule.extract_subsets(1)
-        # mononmer_B_molecule = sapt_dimer_molecule.extract_subsets(2)
 
         monomer_A_molecule = monomerA
         monomer_B_molecule = monomerB
@@ -106,6 +104,24 @@ def run_sapt_dft(name, **kwargs):
         core.print_out("\n")
 
         data["DDFT VALUE"] = data["DFT DIMER ENERGY"] - data["DFT MONOMER A ENERGY"] - data["DFT MONOMER B ENERGY"]
+    else:
+        raise ValueError("SAPT(DFT): delta DFT correction requested when running HF. Set SAPT_DFT_DO_DDFT to False or use a DFT functional.")
+    if sapt_dft_D4_IE:
+        core.print_out("\n")
+        core.print_out("         ---------------------------------------------------------\n")
+        core.print_out("         " + "SAPT(DFT): D4 Interaction Energy".center(58) + "\n")
+        core.print_out("\n")
+        core.timer_on("SAPT(DFT):D4 Interaction Energy")
+        dimer_d4, _ = sapt_dimer.run_dftd4(sapt_dft_functional, 'd4bjeeqatm')
+        data["D4 DIMER"] = dimer_d4
+        monA_d4, _ = monomerA.run_dftd4(sapt_dft_functional, 'd4bjeeqatm')
+        data["D4 MONOMER A"] = monA_d4
+        monB_d4, _ = monomerB.run_dftd4(sapt_dft_functional, 'd4bjeeqatm')
+        data["D4 MONOMER B"] = monB_d4
+        data["D4 IE"] = dimer_d4 - monA_d4 - monB_d4
+        core.timer_off("SAPT(DFT):D4 Interaction Energy")
+
+
 
     # Print out the title and some information
     core.print_out("\n")
@@ -447,8 +463,8 @@ def sapt_dft(dimer_wfn, wfn_A, wfn_B, do_dft=True, sapt_jk=None, sapt_jk_B=None,
     
     # Set Delta DFT for SAPT(DFT) if requested
     if delta_dft:
-        total_sapt_dft = (data["Elst10,r"] + data["Exch10"] + data["Ind20,r"] + data["Exch-Ind20,r"])
-        sapt_dft_delta = data["DDFT VALUE"] - total_sapt_dft
+        sapt_dft_elst_exch_indu = (data["Elst10,r"] + data["Exch10"] + data["Ind20,r"] + data["Exch-Ind20,r"])
+        sapt_dft_delta = data["DDFT VALUE"] - sapt_dft_elst_exch_indu
         core.set_variable("SAPT(DFT) Delta DFT", sapt_dft_delta)
         data["Delta DFT Correction"] = core.variable("SAPT(DFT) Delta DFT")
 
