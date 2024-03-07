@@ -34,9 +34,12 @@ from ... import p4util
 from ...constants import constants
 from ...p4util.exceptions import *
 from .. import proc_util
-from ..proc import scf_helper
+from ..proc import scf_helper, run_scf
 from . import sapt_jk_terms, sapt_mp2_terms, sapt_sf_terms
 from .sapt_util import print_sapt_dft_summary, print_sapt_hf_summary, print_sapt_var
+
+# Import energy module for SAPT(DFT) delta DFT
+# from ... import energy
 
 # Only export the run_ scripts
 __all__ = ['run_sapt_dft', 'sapt_dft', 'run_sf_sapt']
@@ -55,12 +58,13 @@ def run_sapt_dft(name, **kwargs):
     # Get the molecule of interest
     ref_wfn = kwargs.get('ref_wfn', None)
     if ref_wfn is None:
-        sapt_dimer = kwargs.pop('molecule', core.get_active_molecule())
+        sapt_dimer_molecule = kwargs.pop('molecule', core.get_active_molecule())
     else:
         core.print_out('Warning! SAPT argument "ref_wfn" is only able to use molecule information.')
-        sapt_dimer = ref_wfn.molecule()
+        sapt_dimer_molecule = ref_wfn.molecule()
 
-    sapt_dimer, monomerA, monomerB = proc_util.prepare_sapt_molecule(sapt_dimer, "dimer")
+    data = {}
+    sapt_dimer, monomerA, monomerB = proc_util.prepare_sapt_molecule(sapt_dimer_molecule, "dimer")
 
     # Grab overall settings
     mon_a_shift = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_A")
@@ -69,6 +73,30 @@ def run_sapt_dft(name, **kwargs):
     do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
     do_dft = sapt_dft_functional != "HF"
+
+    if do_delta_dft and do_dft:
+        core.IO.set_default_namespace('dimer')
+        core.print_out("\n")
+        core.print_out("         ---------------------------------------------------------\n")
+        core.print_out("         " + "SAPT(DFT): delta DFT Segment".center(58) + "\n")
+        core.print_out("\n")
+        core.timer_on("SAPT(DFT):delta DFT")
+        # set molecule 
+
+        mononmer_A_molecule = sapt_dimer_molecule.extract_subsets(1)
+        mononmer_B_molecule = sapt_dimer_molecule.extract_subsets(2)
+
+        run_scf(sapt_dft_functional.lower(), molecule=sapt_dimer_molecule)
+        data["DFT DIMER ENERGY"] = core.variable("CURRENT ENERGY")
+        run_scf(sapt_dft_functional.lower(), molecule=mononmer_A_molecule)
+        data["DFT MONOMER A ENERGY"] = core.variable("CURRENT ENERGY")
+        run_scf(sapt_dft_functional.lower(), molecule=mononmer_B_molecule)
+        data["DFT MONOMER B ENERGY"] = core.variable("CURRENT ENERGY")
+
+        core.timer_off("SAPT(DFT):delta DFT")
+        core.print_out("\n")
+
+        data["DDFT VALUE"] = data["DFT DIMER ENERGY"] - data["DFT MONOMER A ENERGY"] - data["DFT MONOMER B ENERGY"]
 
     # Print out the title and some information
     core.print_out("\n")
@@ -106,7 +134,6 @@ def run_sapt_dft(name, **kwargs):
         raise ValidationError('SAPT(DFT) currently only supports restricted references.')
 
     core.IO.set_default_namespace('dimer')
-    data = {}
 
     if (core.get_global_option('SCF_TYPE') == 'DF'):
         # core.set_global_option('DF_INTS_IO', 'LOAD')
@@ -250,24 +277,6 @@ def run_sapt_dft(name, **kwargs):
                            **kwargs)
         data["DFT MONOMERB"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT): Monomer B DFT")
-        if do_delta_dft:
-            core.IO.set_default_namespace('dimer')
-            core.print_out("\n")
-            core.print_out("         ---------------------------------------------------------\n")
-            core.print_out("         " + "SAPT(DFT): delta DFT Segment".center(58) + "\n")
-            core.print_out("\n")
-            core.timer_on("SAPT(DFT):delta DFT")
-            wfn_dimer = scf_helper(sapt_dft_functional,
-                               post_scf=False,
-                               molecule=sapt_dimer,
-                               banner="SAPT(DFT): delta DFT Dimer",
-                               **kwargs)
-            data["DFT DIMER"] = core.variable("CURRENT ENERGY")
-            core.timer_off("SAPT(DFT):delta DFT")
-            core.print_out("\n")
-
-            ddft_value = data["DFT DIMER"] - data["DFT MONOMERA"] - data["DFT MONOMERB"]
-            data["DDFT VALUE"] = ddft_value
     else:
         core.print_out("\n")
         core.print_out("Turning off delta DFT correction\n")

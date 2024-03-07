@@ -1,0 +1,12 @@
+2024-03-06:16:31:12,861 INFO     [psi4.driver.task_planner:285] PLANNING Atomic:  keywords={'D_CONVERGENCE': 1e-08, 'E_CONVERGENCE': 1e-08, 'SAPT_DFT_DO_DDFT': 1, 'SAPT_DFT_FUNCTIONAL': 'PBE0', 'SAPT_DFT_GRAC_SHIFT_A': 0.136, 'SAPT_DFT_GRAC_SHIFT_B': 0.136, 'function_kwargs': {}}
+2024-03-06:16:31:12,951 INFO     [psi4.driver.driver:523] Compute energy(): method=pbe0, basis=aug-cc-pvdz, molecule=default, nre=36.66284788072676
+2024-03-06:16:31:27,456 INFO     [psi4.driver.driver:526] Return energy(): -152.72802782902983
+2024-03-06:16:31:27,660 INFO     [psi4.driver.task_planner:285] PLANNING Atomic:  keywords={'D_CONVERGENCE': 1e-08, 'E_CONVERGENCE': 1e-08, 'SCF__INTS_TOLERANCE': 1e-12, 'SAPT_DFT_DO_DDFT': 1, 'SAPT_DFT_FUNCTIONAL': 'PBE0', 'SAPT_DFT_GRAC_SHIFT_A': 0.136, 'SAPT_DFT_GRAC_SHIFT_B': 0.136, 'function_kwargs': {}}
+2024-03-06:16:31:27,751 INFO     [psi4.driver.driver:523] Compute energy(): method=pbe0, basis=aug-cc-pvdz, molecule=default, nre=9.163830152278887
+2024-03-06:16:31:33,349 INFO     [psi4.driver.driver:526] Return energy(): -76.3599110934613
+2024-03-06:16:31:33,550 INFO     [psi4.driver.task_planner:285] PLANNING Atomic:  keywords={'D_CONVERGENCE': 1e-08, 'E_CONVERGENCE': 1e-08, 'SCF__INTS_TOLERANCE': 1e-12, 'SAPT_DFT_DO_DDFT': 1, 'SAPT_DFT_FUNCTIONAL': 'PBE0', 'SAPT_DFT_GRAC_SHIFT_A': 0.136, 'SAPT_DFT_GRAC_SHIFT_B': 0.136, 'function_kwargs': {}}
+2024-03-06:16:31:33,554 INFO     [psi4.driver.driver:523] Compute energy(): method=pbe0, basis=aug-cc-pvdz, molecule=default, nre=9.178038911705691
+2024-03-06:16:31:38,55 INFO     [psi4.driver.driver:526] Return energy(): -76.35992389485389
+2024-03-06:16:31:38,258 INFO     [psi4.driver.task_planner:285] PLANNING Atomic:  keywords={'D_CONVERGENCE': 1e-08, 'E_CONVERGENCE': 1e-08, 'SCF__INTS_TOLERANCE': 1e-12, 'SAPT_DFT_DO_DDFT': 1, 'SAPT_DFT_FUNCTIONAL': 'PBE0', 'SAPT_DFT_GRAC_SHIFT_A': 0.136, 'SAPT_DFT_GRAC_SHIFT_B': 0.136, 'function_kwargs': {}}
+2024-03-06:16:31:38,262 INFO     [psi4.driver.driver:523] Compute energy(): method=sapt(dft), basis=aug-cc-pvdz, molecule=default, nre=36.662847880726765
+2024-03-06:16:32:58,255 INFO     [psi4.driver.driver:526] Return energy(): -0.006801100418710203
