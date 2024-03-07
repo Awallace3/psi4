@@ -30,18 +30,19 @@ def test_sapt_dft2():
                      "SAPT_DFT_FUNCTIONAL": dft_functional,
                      "SAPT_DFT_DO_DDFT": True,
       })
-    monA_mol = mol_dimer.extract_subsets(1)
-    monB_mol = mol_dimer.extract_subsets(2)
-    # Seems like choosing dimer basis actually changes IE quite significantly for aDZ
-    # mol_dimer, monA_mol, monB_mol = prepare_sapt_molecule(mol, 'dimer')
+    # monA_mol = mol_dimer.extract_subsets(1)
+    # monB_mol = mol_dimer.extract_subsets(2)
     # dimer = psi4.energy(dft_functional, molecule=mol_dimer)
     # monA = psi4.energy(dft_functional, molecule=monA_mol)
     # monB = psi4.energy(dft_functional, molecule=monB_mol)
+
+    # Seems like choosing dimer basis actually changes IE quite significantly for aDZ: DHF users dimer basis so making same choice here
+    mol_dimer, mol_monA, mol_monB = prepare_sapt_molecule(mol_dimer, 'dimer')
     run_scf(dft_functional, molecule=mol_dimer)
     dimer = psi4.core.variable("CURRENT ENERGY")
-    run_scf(dft_functional, molecule=monA_mol)
+    run_scf(dft_functional, molecule=mol_monA)
     monA = psi4.core.variable("CURRENT ENERGY")
-    run_scf(dft_functional, molecule=monB_mol)
+    run_scf(dft_functional, molecule=mol_monB)
     monB = psi4.core.variable("CURRENT ENERGY")
     dft_IE = dimer - monA - monB
     print(f"{dft_IE = }")
@@ -66,6 +67,6 @@ def test_sapt_dft2():
     print(f"{DDFT = }")
     print(f"{DFT_IE = }")
     print(f"{dft_IE = }")
-    assert compare_values(delta_DFT, psi4.variable("SAPT(DFT) DELTA DFT"), 7, "delta DFT")
+    assert compare_values(delta_DFT, psi4.variable("SAPT(DFT) DELTA DFT"), 7, "SAPT(DFT) delta DFT")
 
 test_sapt_dft2()

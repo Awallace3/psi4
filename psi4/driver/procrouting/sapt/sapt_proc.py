@@ -83,15 +83,24 @@ def run_sapt_dft(name, **kwargs):
         core.timer_on("SAPT(DFT):delta DFT")
         # set molecule 
 
-        mononmer_A_molecule = sapt_dimer_molecule.extract_subsets(1)
-        mononmer_B_molecule = sapt_dimer_molecule.extract_subsets(2)
+        # mononmer_A_molecule = sapt_dimer_molecule.extract_subsets(1)
+        # mononmer_B_molecule = sapt_dimer_molecule.extract_subsets(2)
 
+        monomer_A_molecule = monomerA
+        monomer_B_molecule = monomerB
+
+        core.timer_on("SAPT(DFT):Dimer DFT")
         run_scf(sapt_dft_functional.lower(), molecule=sapt_dimer_molecule)
         data["DFT DIMER ENERGY"] = core.variable("CURRENT ENERGY")
-        run_scf(sapt_dft_functional.lower(), molecule=mononmer_A_molecule)
+        core.timer_off("SAPT(DFT):Dimer DFT")
+        core.timer_on("SAPT(DFT):Monomer A DFT")
+        run_scf(sapt_dft_functional.lower(), molecule=monomer_A_molecule)
         data["DFT MONOMER A ENERGY"] = core.variable("CURRENT ENERGY")
-        run_scf(sapt_dft_functional.lower(), molecule=mononmer_B_molecule)
+        core.timer_off("SAPT(DFT):Monomer A DFT")
+        core.timer_on("SAPT(DFT):Monomer B DFT")
+        run_scf(sapt_dft_functional.lower(), molecule=monomer_B_molecule)
         data["DFT MONOMER B ENERGY"] = core.variable("CURRENT ENERGY")
+        core.timer_off("SAPT(DFT):Monomer B DFT")
 
         core.timer_off("SAPT(DFT):delta DFT")
         core.print_out("\n")
