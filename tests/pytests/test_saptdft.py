@@ -58,6 +58,10 @@ def test_sapt_dft2():
     DDFT = psi4.core.variable("SAPT(DFT) DELTA DFT")
     DFT_MONA = psi4.core.variable("DFT MONOMER A ENERGY")
     DFT_MONB = psi4.core.variable("DFT MONOMER B ENERGY")
+    # print(f"{monA = }")
+    # print(f"{psi4.variable('DFT MONOMERA') = }")
+    # assert compare_values(monA, psi4.variable("DFT MONOMERA"), 6, "DFT MONOMERA")
+    # assert compare_values(monB, psi4.variable("DFT MONOMERB"), 6, "DFT MONOMERB")
     DFT_DIMER = psi4.core.variable("DFT DIMER ENERGY")
     D4_IE = psi4.core.variable("D4 IE")
     DFT_IE = DFT_DIMER - DFT_MONA - DFT_MONB
@@ -69,11 +73,14 @@ def test_sapt_dft2():
     print(f"{DFT_IE = }")
     print(f"{dft_IE = }")
     print(f"{d4_IE = }")
-    delta_DFT *= hartree_to_kcalmol
-    delta_DFT_d4_disp = d4_IE + delta_DFT
     assert compare_values(d4_IE, psi4.variable("D4 IE"), 7, "D4 IE")
     assert compare_values(delta_DFT, psi4.variable("SAPT(DFT) DELTA DFT"), 7, "SAPT(DFT) delta DFT")
 
+    d4_IE *= hartree_to_kcalmol
+    delta_DFT *= hartree_to_kcalmol
+    delta_DFT_d4_disp = d4_IE + delta_DFT
+    print(f"{delta_DFT = }")
+    print(f"{delta_DFT_d4_disp = }")
+
 
 test_sapt_dft2()
-# does PBE0 have abnormally large dispersion? run dftd4 with default parameters!

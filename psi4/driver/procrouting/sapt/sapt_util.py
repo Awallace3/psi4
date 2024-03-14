@@ -172,6 +172,9 @@ def print_sapt_dft_summary(data, name, do_dft=True, short=False):
         if core.get_option("SAPT", "SAPT_DFT_EXCH_DISP_SCALE_SCHEME") != "NONE":
             ret += print_sapt_var("  Est. Exch-Disp2,r", data["Exch-Disp20,r"]) + "\n"
         ret += print_sapt_var("  Exch-Disp2,u", data["Exch-Disp20,u"]) + "\n"
+        if "D4 IE" in list(data):
+            ret += "      ---------------" + "\n"
+            ret += print_sapt_var("  D4 IE", data["D4 IE"]) + "\n"
         ret += "\n"
         core.set_variable("SAPT DISP ENERGY", disp)
     else:
@@ -179,6 +182,9 @@ def print_sapt_dft_summary(data, name, do_dft=True, short=False):
         ret += print_sapt_var("Dispersion", disp) + "\n"
         ret += print_sapt_var("  Disp20", data["Disp20,u"]) + "\n"
         ret += print_sapt_var("  Exch-Disp20", data["Exch-Disp20,u"]) + "\n"
+        if "D4 IE" in list(data):
+            ret += "      ---------------" + "\n"
+            ret += print_sapt_var("  D4 IE", data["D4 IE"]) + "\n"
         ret += "\n"
         core.set_variable("SAPT DISP ENERGY", disp)
     

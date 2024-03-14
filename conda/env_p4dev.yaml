@@ -1,0 +1,78 @@
+name: p4dev
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+    # build
+  - c-compiler
+  - cmake
+  - cxx-compiler
+  #- dpcpp_linux-64            # opt'l with cxx-compiler
+  - ninja
+    # non-qc buildtime required
+  - blas-devel                # req'd with libblas
+  - eigen                     # req'd with libint
+  - libblas=*=*mkl
+  - libboost-headers          # req'd with libint
+  - llvm-openmp
+  - numpy
+  - pip                       # req'd with python; Package installer not strictly needed but needs to be tied to this python if used.
+  - pybind11>=2.10.*
+  - python
+    # qc buildtime required
+  - gau2grid
+  #- psi4::libint              # opt'l with libint; Optionally for linux-64, an AM=7 build is available here.
+  - libint
+  - libxc-c
+  - optking
+  - qcelemental
+  - qcengine
+    # buildtime optional
+  - ambit
+  - dkh
+  - einsums=*=mkl*
+  - fortran-compiler
+  - libecpint
+  - pcmsolver
+  - range-v3                  # req'd with einsums
+  - zlib                      # req'd with einsums
+  - zlib                      # req'd with einsums
+    # runtime required
+  - msgpack-python            # req'd with qcelemental
+  - networkx                  # req'd with qcelemental
+  - scipy
+    # runtime optional
+  - adcc
+  - basis_set_exchange
+  - cppe==0.3.1
+  - dftd3-python
+  - dftd4-python
+  - gcp-correction
+  - geometric
+  - i-pi
+  - openfermion=1             # req'd with openfermionpsi4; Shouldn't need to specify but do for the pydantic transition.
+  - openfermionpsi4
+  - postgresql                # req'd with qcfractal; Easy way to use QCFractal, but you can instead supply your own database.
+  - pydantic=1                # req'd with openfermionpsi4
+  - pyddx
+  - pygdma
+  - pylibefp
+  - pymdi
+  - qcfractal
+  - toml                      # req'd with dftd4-python
+    # test
+  - memory_profiler
+  - pytest<8
+  - pytest-xdist              # req'd with pytest; Parallel runner not strictly needed but very handy.
+    # docs
+  - autodoc-pydantic=1        # req'd with sphinx
+  - doxygen
+  - ipykernel                 # req'd with nbsphinx
+  - nbsphinx
+  - python-graphviz
+  - qcportal                  # req'd with sphinx; Required for docs to resolve objects in pydantic classes.
+  - sphinx
+  - sphinx-autodoc-typehints  # req'd with sphinx
+  - sphinx-automodapi         # req'd with sphinx
+  - psi4::sphinx-psi-theme
+  - sphinx-tabs               # req'd with sphinx
