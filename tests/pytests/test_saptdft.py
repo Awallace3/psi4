@@ -56,12 +56,12 @@ def test_sapt_dft2():
     DISP = psi4.core.variable("SAPT DISP ENERGY")
     DELTA_HF = psi4.core.variable("SAPT(DFT) DELTA HF")
     DDFT = psi4.core.variable("SAPT(DFT) DELTA DFT")
-    DFT_MONA = psi4.core.variable("DFT MONOMER A ENERGY")
-    DFT_MONB = psi4.core.variable("DFT MONOMER B ENERGY")
     # print(f"{monA = }")
     # print(f"{psi4.variable('DFT MONOMERA') = }")
     # assert compare_values(monA, psi4.variable("DFT MONOMERA"), 6, "DFT MONOMERA")
     # assert compare_values(monB, psi4.variable("DFT MONOMERB"), 6, "DFT MONOMERB")
+    DFT_MONA = psi4.core.variable("DFT MONOMER A ENERGY")
+    DFT_MONB = psi4.core.variable("DFT MONOMER B ENERGY")
     DFT_DIMER = psi4.core.variable("DFT DIMER ENERGY")
     D4_IE = psi4.core.variable("D4 IE")
     DFT_IE = DFT_DIMER - DFT_MONA - DFT_MONB
@@ -73,8 +73,11 @@ def test_sapt_dft2():
     print(f"{DFT_IE = }")
     print(f"{dft_IE = }")
     print(f"{d4_IE = }")
+    total_saptdftd4_ddft = ELST + EXCH + IND + DDFT - DELTA_HF + D4_IE
     assert compare_values(d4_IE, psi4.variable("D4 IE"), 7, "D4 IE")
     assert compare_values(delta_DFT, psi4.variable("SAPT(DFT) DELTA DFT"), 7, "SAPT(DFT) delta DFT")
+    assert compare_values(dft_IE, DFT_IE, 7, "DFT IE")
+    assert compare_values(total_saptdftd4_ddft, DFT_IE + D4_IE, 7, "SAPT(DFT)D4 TOTAL equals DFT-D4 IE")
 
     d4_IE *= hartree_to_kcalmol
     delta_DFT *= hartree_to_kcalmol
@@ -83,4 +86,5 @@ def test_sapt_dft2():
     print(f"{delta_DFT_d4_disp = }")
 
 
-test_sapt_dft2()
+if __name__ == "__main__":
+    test_sapt_dft2()
