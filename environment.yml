@@ -1,9 +1,0 @@
-name: p4env311
-channels:
-  - conda-forge
-  - nodefaults
-dependencies:
-  - python=3.11
-  - psi4
-  - conda-forge/label/libint_dev::libint
-  - dftd3-python
