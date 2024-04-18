@@ -247,6 +247,8 @@ for key in functionals:
         procedures['energy']['fisapt0-' + disp] = proc.run_fisapt
         procedures['energy']['sapt(dft)-' + disp] = sapt.run_sapt_dft
 
+procedures['energy']['sapt0-d4'] = proc.run_sapt
+
 # Will complete modelchem spec with basis='(auto)' for following methods
 integrated_basis_methods = [
     'g2', 'gaussian-2',
