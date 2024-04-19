@@ -740,7 +740,7 @@ void ASAPT0::ps()
         VintT.push_back(std::shared_ptr<PotentialInt>(static_cast<PotentialInt*>(Vfact->ao_potential().release()))); 
         printf("VintT[%d] = %p\n",thread,VintT[thread].get());
         // print Vfact->ao_potential() and VintT[thread] to see if they are the same
-        // VintT[thread]->set_charge_field(ZxyzT[thread]);
+        VintT[thread]->set_charge_field(ZxyzT[thread]);
     }
 
     // TODO: make Zxyz2p
@@ -754,12 +754,12 @@ void ASAPT0::ps()
     std::shared_ptr<Matrix> Vtemp(new Matrix("Vtemp",nQ,1));
     double** Vtempp = Vtemp->pointer();
 
-    /* std::shared_ptr<Matrix> Zxyz(new Matrix("Zxyz",1,4)); */
-    /* double** Zxyzp = Zxyz->pointer(); */
-    /* std::shared_ptr<PotentialInt> Vint(static_cast<PotentialInt*>(Vfact->ao_potential())); */
-    /* Vint->set_charge_field(Zxyz); */
-    /* std::shared_ptr<Matrix> Vtemp(new Matrix("Vtemp",nQ,1)); */
-    /* double** Vtempp = Vtemp->pointer(); */
+    std::shared_ptr<Matrix> Zxyz(new Matrix("Zxyz",1,4)); 
+    double** Zxyzp = Zxyz->pointer(); 
+    std::shared_ptr<PotentialInt> Vint(static_cast<PotentialInt*>(Vfact->ao_potential())); 
+    Vint->set_charge_field(Zxyz); 
+    std::shared_ptr<Matrix> Vtemp(new Matrix("Vtemp",nQ,1));
+    double** Vtempp = Vtemp->pointer(); 
     /*  */
     /* // Master loop */
     /* for (int offset = 0; offset < nP; offset += max_points) { */
