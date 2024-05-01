@@ -63,8 +63,16 @@ def run_sapt_dft(name, **kwargs):
     sapt_dimer, monomerA, monomerB = proc_util.prepare_sapt_molecule(sapt_dimer, "dimer")
 
     # Grab overall settings
+    do_mon_grac_shift_A = False
+    do_mon_grac_shift_B = False
     mon_a_shift = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_A")
     mon_b_shift = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_B")
+    if mon_a_shift == float(-99):
+        do_mon_grac_shift_A = True
+    if mon_a_shift == float(-99):
+        do_mon_grac_shift_A = False
+    sapt_dft_grac_convergence_tier = core.get_option("SAPT", "SAPT_DFT_GRAC_CONVERGENCE_TIER")
+
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
     do_dft = sapt_dft_functional != "HF"
@@ -96,6 +104,12 @@ def run_sapt_dft(name, **kwargs):
     if (do_dft):
         core.print_out("     DFT (Monomer A)\n")
         core.print_out("     DFT (Monomer B)\n")
+    if do_mon_grac_shift_A:
+        core.print_out("     GRAC(Monomer A)\n")
+        compute_GRAC_shift(monomerA, sap_dft_grac_convergence_tier)
+    if do_mon_grac_shift_B:
+        core.print_out("     GRAC(Monomer B)\n")
+        compute_GRAC_shift(monomerB, sap_dft_grac_convergence_tier)
     core.print_out("\n")
 
     if do_dft and ((mon_a_shift == 0.0) or (mon_b_shift == 0.0)):
@@ -277,6 +291,10 @@ def run_sapt_dft(name, **kwargs):
     optstash.restore()
 
     return dimer_wfn
+
+def compute_GRAC_shift(molecule, sap_dft_grac_convergence_tier='medium'):
+
+    return
 
 
 def sapt_dft_header(sapt_dft_functional="unknown",
