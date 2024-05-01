@@ -1648,7 +1648,7 @@ class Molecule(LibmintsMolecule):
             # * this can legitimately happen if total chg or mult has been set
             #   independently b/c fragment chg/mult not reset. so try again.
             print(
-                """Following warning is harmless if you've altered chgmult through `set_molecular_change` or `set_multiplicity`. Such alterations are an expert feature. Specifying in the original molecule string is preferred. Nonphysical masses may also trigger the warning."""
+                """Following warning is harmless if you've altered chgmult through `set_molecular_charge` or `set_multiplicity`. Such alterations are an expert feature. Specifying in the original molecule string is preferred. Nonphysical masses may also trigger the warning."""
             )
             molrec['fragment_charges'] = [None] * len(fragments)
             molrec['fragment_multiplicities'] = [None] * len(fragments)
