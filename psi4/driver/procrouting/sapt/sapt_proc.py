@@ -292,7 +292,19 @@ def run_sapt_dft(name, **kwargs):
 
     return dimer_wfn
 
+def sapt_dft_grac_convergence_tier_options():
+    return {
+        "single": {},
+        "medium": {
+            
+        },
+        "high": {},
+    }
+
 def compute_GRAC_shift(molecule, sap_dft_grac_convergence_tier='medium'):
+    if sap_dft_grac_convergence_tier != 'single':
+        for k, v in sapt_dft_grac_convergence_tier_options()[sap_dft_grac_convergence_tier].items():
+            core.set_local_option('GRAC', k, v)
 
     return
 
