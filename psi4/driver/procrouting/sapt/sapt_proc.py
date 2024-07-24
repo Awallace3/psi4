@@ -103,7 +103,7 @@ def run_sapt_dft(name, **kwargs):
         core.timer_off("SAPT(DFT):delta DFT")
         core.print_out("\n")
 
-        data["DDFT VALUE"] = data["DFT DIMER ENERGY"] - data["DFT MONOMER A ENERGY"] - data["DFT MONOMER B ENERGY"]
+        data["DFT IE"] = data["DFT DIMER ENERGY"] - data["DFT MONOMER A ENERGY"] - data["DFT MONOMER B ENERGY"]
     else:
         raise ValueError("SAPT(DFT): delta DFT correction requested when running HF. Set SAPT_DFT_DO_DDFT to False or use a DFT functional.")
     if sapt_dft_D4_IE:
@@ -464,7 +464,7 @@ def sapt_dft(dimer_wfn, wfn_A, wfn_B, do_dft=True, sapt_jk=None, sapt_jk_B=None,
     # Set Delta DFT for SAPT(DFT) if requested
     if delta_dft:
         sapt_dft_elst_exch_indu = (data["Elst10,r"] + data["Exch10"] + data["Ind20,r"] + data["Exch-Ind20,r"])
-        sapt_dft_delta = data["DDFT VALUE"] - sapt_dft_elst_exch_indu
+        sapt_dft_delta = data["DFT IE"] - sapt_dft_elst_exch_indu
         core.set_variable("SAPT(DFT) Delta DFT", sapt_dft_delta)
         data["Delta DFT Correction"] = core.variable("SAPT(DFT) Delta DFT")
 
