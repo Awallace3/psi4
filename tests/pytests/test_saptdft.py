@@ -7,6 +7,60 @@ from qcelemental import constants
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
 pytestmark = [pytest.mark.psi, pytest.mark.api]
 
+# TODO AMW: use MBD to ensure DFT interaction energy is correct
+
+def test_sapt_dft_interaction_energy():
+    from psi4.driver.procrouting.proc_util import prepare_sapt_molecule
+    from psi4.driver.procrouting.proc import run_scf
+    mol_dimer = psi4.geometry("""
+  O -2.930978458   -0.216411437    0.000000000
+  H -3.655219777    1.440921844    0.000000000
+  H -1.133225297    0.076934530    0.000000000
+   --
+  O  2.552311356    0.210645882    0.000000000
+  H  3.175492012   -0.706268134   -1.433472544
+  H  3.175492012   -0.706268134    1.433472544
+  units bohr
+""")
+    dft_functional = "pbe0"
+    psi4.set_memory("16 gb")
+    psi4.set_num_threads(4)
+    psi4.set_options({'basis': 'STO-3G',
+                     "e_convergence": 1e-8,
+                     "d_convergence": 1e-8,
+                     "sapt_dft_grac_shift_a": 0.136,
+                     "sapt_dft_grac_shift_b": 0.136,
+                     "SAPT_DFT_FUNCTIONAL": dft_functional,
+                     "SAPT_DFT_DO_DDFT": True,
+                     "SAPT_DFT_D4_IE": True,
+      })
+    dft_IE = psi4.energy(dft_functional, bsse_type="CP") * hartree_to_kcalmol
+
+    psi4.energy("SAPT(DFT)")
+    ELST = psi4.core.variable("SAPT ELST ENERGY")
+    EXCH = psi4.core.variable("SAPT EXCH ENERGY")
+    IND = psi4.core.variable("SAPT IND ENERGY")
+    DISP = psi4.core.variable("SAPT DISP ENERGY")
+    DFT_MONA = psi4.core.variable("DFT MONOMER A ENERGY")
+    DFT_MONB = psi4.core.variable("DFT MONOMER B ENERGY")
+    DFT_DIMER = psi4.core.variable("DFT DIMER ENERGY")
+    D4_IE = psi4.core.variable("D4 IE")
+    DFT_IE = (DFT_DIMER - DFT_MONA - DFT_MONB) * hartree_to_kcalmol
+    print(f"bsse: {dft_IE = }")
+    print(f"SAPT: {DFT_IE = }")
+    assert compare_values(dft_IE, DFT_IE, 7, "DFT IE")
+
+    # get dft_IE from SAPT(DFT) Delta DFT term to back-calculate
+    ELST = psi4.core.variable("SAPT ELST ENERGY")
+    EXCH = psi4.core.variable("SAPT EXCH ENERGY")
+    IND = psi4.core.variable("SAPT IND ENERGY")
+    DISP = psi4.core.variable("SAPT DISP ENERGY")
+    DELTA_HF = psi4.core.variable("SAPT(DFT) DELTA HF")
+    DDFT = psi4.core.variable("SAPT(DFT) DELTA DFT")
+    DFT_IE_from_dDFT = (DDFT + ELST + EXCH + IND - DELTA_HF) * hartree_to_kcalmol
+    assert compare_values(DFT_IE_from_dDFT, DFT_IE, 7, "DFT IE")
+    print(f"dDFT: {DFT_IE_from_dDFT = }")
+
 
 def test_sapt_dft2():
     from psi4.driver.procrouting.proc_util import prepare_sapt_molecule
@@ -87,4 +141,5 @@ def test_sapt_dft2():
 
 
 if __name__ == "__main__":
-    test_sapt_dft2()
+    # test_sapt_dft2()
+    test_sapt_dft_interaction_energy()

@@ -91,10 +91,12 @@ def run_sapt_dft(name, **kwargs):
         run_scf(sapt_dft_functional.lower(), molecule=sapt_dimer_molecule)
         data["DFT DIMER ENERGY"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT):Dimer DFT")
+
         core.timer_on("SAPT(DFT):Monomer A DFT")
         run_scf(sapt_dft_functional.lower(), molecule=monomer_A_molecule)
         data["DFT MONOMER A ENERGY"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT):Monomer A DFT")
+
         core.timer_on("SAPT(DFT):Monomer B DFT")
         run_scf(sapt_dft_functional.lower(), molecule=monomer_B_molecule)
         data["DFT MONOMER B ENERGY"] = core.variable("CURRENT ENERGY")
@@ -104,7 +106,7 @@ def run_sapt_dft(name, **kwargs):
         core.print_out("\n")
 
         data["DFT IE"] = data["DFT DIMER ENERGY"] - data["DFT MONOMER A ENERGY"] - data["DFT MONOMER B ENERGY"]
-    else:
+    elif do_delta_dft and not do_dft:
         raise ValueError("SAPT(DFT): delta DFT correction requested when running HF. Set SAPT_DFT_DO_DDFT to False or use a DFT functional.")
     if sapt_dft_D4_IE:
         core.print_out("\n")
