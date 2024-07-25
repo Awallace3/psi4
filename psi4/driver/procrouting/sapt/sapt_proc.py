@@ -82,7 +82,6 @@ def run_sapt_dft(name, **kwargs):
         core.print_out("         " + "SAPT(DFT): delta DFT Segment".center(58) + "\n")
         core.print_out("\n")
         core.timer_on("SAPT(DFT):delta DFT")
-        # set molecule 
 
         monomer_A_molecule = monomerA
         monomer_B_molecule = monomerB
@@ -104,7 +103,7 @@ def run_sapt_dft(name, **kwargs):
         core.print_out("\n")
 
         data["DDFT VALUE"] = data["DFT DIMER ENERGY"] - data["DFT MONOMER A ENERGY"] - data["DFT MONOMER B ENERGY"]
-    else:
+    elif do_delta_dft and do_delta_hf:
         raise ValueError("SAPT(DFT): delta DFT correction requested when running HF. Set SAPT_DFT_DO_DDFT to False or use a DFT functional.")
     if sapt_dft_D4_IE:
         core.print_out("\n")
