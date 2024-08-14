@@ -1,6 +1,6 @@
 if(${ENABLE_Libint1t})
 find_package(Libint 1.2.0 CONFIG QUIET COMPONENTS ${MAX_AM_ERI})
-
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(${Libint_FOUND})
     get_property(_loc TARGET Libint::int PROPERTY LOCATION)
     message(STATUS "${Cyan}Found Libint ${Libint_MAX_AM_ERI}${ColourReset}: ${_loc} (found version ${Libint_VERSION})")
