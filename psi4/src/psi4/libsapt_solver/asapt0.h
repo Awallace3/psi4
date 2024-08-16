@@ -36,6 +36,8 @@
 #include "psi4/libqt/qt.h"
 #include <map>
 #include <array>
+#include <stdio.h>
+#include <iostream>
 
 #ifdef _OPENMP
 #include <omp.h>
