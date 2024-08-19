@@ -100,7 +100,7 @@ public:
     virtual void compute(std::shared_ptr<Matrix> D) = 0;
     /// Compute weights for npoints at (x,y,z), and place in w (nA x npoints). Also multiplies in rhop if not NULL
     virtual void compute_weights(int npoints, double* x, double* y, double* z, double** w, double* rhop = NULL, int atom = -1, double* rho0p = NULL) = 0;
-    /// Compute and disply the atomic charges, multiplying the electronic part by scale
+    /// Compute and display the atomic charges, multiplying the electronic part by scale
     virtual void compute_charges(double scale = 2.0) = 0;
     /// Compute and return the atomic charges, multiplying the electronic part by scale
     virtual std::shared_ptr<Matrix> charges(double scale = 2.0) = 0;

@@ -394,8 +394,8 @@ void ASAPT0::localize() {
         FcfA->set_diagonal(eps_focc_A_);
         std::shared_ptr<Matrix> FlfA = localfA->fock_update(FcfA);
         FlfA->set_name("FlfA");
-        // FcfA->print();
-        // FlfA->print();
+        FcfA->print();
+        FlfA->print();
 
         outfile->Printf("  Local Valence Orbitals for Monomer A:\n\n");
         std::shared_ptr<Localizer> localaA =
@@ -409,8 +409,8 @@ void ASAPT0::localize() {
         FcaA->set_diagonal(eps_aocc_A_);
         std::shared_ptr<Matrix> FlaA = localaA->fock_update(FcaA);
         FlaA->set_name("FlaA");
-        // FcaA->print();
-        // FlaA->print();
+        FcaA->print();
+        FlaA->print();
 
         std::vector<std::shared_ptr<Matrix>> LAlist;
         LAlist.push_back(Lfocc_A);
@@ -708,9 +708,17 @@ void ASAPT0::ps() {
 
     // Integral computers and thread-safe targets
     
-    std::shared_ptr<IntegralFactory> Vfact =
-        // std::make_shared<IntegralFactory>(jkfit_, BasisSet::zero_ao_basis_set(), jkfit_, BasisSet::zero_ao_basis_set());
-        std::make_shared<IntegralFactory>(jkfit_, jkfit_->zero_ao_basis_set(), jkfit_, jkfit_->zero_ao_basis_set());
+    std::shared_ptr<IntegralFactory> Vfact = std::make_shared<IntegralFactory>(jkfit_,BasisSet::zero_ao_basis_set(), jkfit_,BasisSet::zero_ao_basis_set());
+    // std::shared_ptr<IntegralFactory> Vfact = std::make_shared<IntegralFactory>(jkfit_);
+
+    // auto factory = std::make_shared<IntegralFactory>(basis);
+    // std::shared_ptr<OneBodyAOInt> Sint(factory->ao_potential());
+    
+    std::vector<std::pair<double, std::array<double, 3>>> Zxyz2;
+    for (int thread = 0; thread < nthreads; thread++) {
+        Zxyz2.push_back(std::make_pair(1.0, std::array<double, 3>()));
+    }
+
     std::vector<std::shared_ptr<Matrix>> ZxyzT;
     std::vector<std::shared_ptr<Matrix>> VtempT;
     std::vector<std::shared_ptr<Matrix>> QACT;
@@ -722,31 +730,15 @@ void ASAPT0::ps() {
         QACT.push_back(std::shared_ptr<Matrix>(new Matrix("QACT", nA, nQ)));
         QBDT.push_back(std::shared_ptr<Matrix>(new Matrix("QBDT", nB, nQ)));
         // potential integrals have different bra and ket basis...?
-        VintT.push_back(std::shared_ptr<PotentialInt>(static_cast<PotentialInt*>(Vfact->ao_potential().release())));
-        // VintT.push_back(
-        //     // std::shared_ptr<PotentialInt>(static_cast<PotentialInt*>(Vfact->ao_potential().release()))
-        //     Vfact->ao_potential()
-        // );
-        // printf("ZxyzT[%d] = %\n", thread, ZxyzT[thread]);
-        // print Vfact->ao_potential() and VintT[thread] to see if they are the same
+        // VintT.push_back(std::shared_ptr<PotentialInt>(static_cast<PotentialInt*>(Vfact->ao_potential().release())));
         // VintT[thread]->set_charge_field(ZxyzT[thread]);
-        // convert Matrix to vector
-        // VintT[thread]->set_charge_field(ZxyzT[thread]->copy());
+        // VintT[thread]->set_charge_field(Zxyz2);
     }
+    printf("initial vecs");
 
     // TODO: make Zxyz2p
-    std::vector<std::pair<double, std::array<double, 3>>> Zxyz2;
-    // set size of Zxyz2 to be same size of ZxyzT
-    for (int thread = 0; thread < nthreads; thread++) {
-        Zxyz2.push_back(std::make_pair(1.0, std::array<double, 3>()));
-    }
-    std::shared_ptr<PotentialInt> Vint(static_cast<PotentialInt*>(Vfact->ao_potential().release()));
-    Vint->set_charge_field(Zxyz2);
-    std::shared_ptr<Matrix> Vtemp(new Matrix("Vtemp",nQ,1));
-    double** Vtempp = Vtemp->pointer();
-
-    std::shared_ptr<Matrix> Zxyz(new Matrix("Zxyz",1,4));
-    double** Zxyzp = Zxyz->pointer();
+    // std::shared_ptr<PotentialInt> Vint(static_cast<PotentialInt*>(Vfact->ao_potential().release()));
+    // VintT->set_charge_field(Zxyz2);
 
     /*  */
     /* // Master loop */
