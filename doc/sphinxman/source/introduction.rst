@@ -3,7 +3,7 @@
 .. #
 .. # Psi4: an open-source quantum chemistry software package
 .. #
-.. # Copyright (c) 2007-2023 The Psi4 Developers.
+.. # Copyright (c) 2007-2024 The Psi4 Developers.
 .. #
 .. # The copyrights for code used from other parties are included in
 .. # the corresponding files.
@@ -604,7 +604,7 @@ Architectures
 Compilers
     |PSIfour| has been successfully compiled using Intel, GCC, and Clang
     compilers. :ref:`Compiler requirements <faq:approvedcxx>` are primarily
-    C++17 compliance (now GCC version 7.0 or above).
+    C++20 compliance (now GCC version 10.0 or above).
     For some architectures, a :ref:`precompiled binary
     <sec:conda>` is available. See :ref:`Compiling and Installing
     <sec:installFile>` for details.
@@ -620,6 +620,7 @@ Python
     |PSIfour| 1.7 supports Python 3.8, 3.9, 3.10, and 3.11 (no binary packages for 3.11).
     |PSIfour| 1.8 supports Python 3.8, 3.9, 3.10, and 3.11.
     |PSIfour| 1.9 supports Python 3.8, 3.9, 3.10, 3.11, and 3.12.
+    |PSIfour| 1.10 is anticipated to support Python 3.8, 3.9, 3.10, 3.11, and 3.12.
     The future plan is to (1) be compatible with 3.8 and above until there is a good reason to drop
     older versions but (2) only build and test for versions conda-forge supports.
     The current master supports 3.8, 3.9, 3.10, 3.11, and 3.12.

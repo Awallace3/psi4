@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2024 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -161,9 +161,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
 
     /*- Psi4 dies if energy does not converge. !expert -*/
     options.add_bool("DIE_IF_NOT_CONVERGED", true);
-    /*- Integral package to use. If compiled with ERD or Simint support, change this option to use them; LibInt is used
+    /*- Integral package to use. If compiled with Simint support, change this option to use them; LibInt2 is used
        otherwise. -*/
-    options.add_str("INTEGRAL_PACKAGE", "LIBINT2", "ERD LIBINT1 SIMINT LIBINT2");
+    options.add_str("INTEGRAL_PACKAGE", "LIBINT2", "LIBINT2 SIMINT");
 #ifdef USING_BrianQC
     /*- Whether to enable using the BrianQC GPU module -*/
     options.add_bool("BRIANQC_ENABLE", false);
@@ -269,7 +269,25 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- How many NOONS to print -- used in libscf_solver/uhf.cc and libmints/oeprop.cc -*/
     options.add_str("PRINT_NOONS", "3");
 
-    ///MBIS Options (libmints/oeprop.cc)
+    /// Tensor Hypercontration (THC) Options (libmints/thc_eri.cc)
+
+    /*- Use DF approximation when computing LS-THC factorization? -*/
+    options.add_bool("LS_THC_DF", true);
+    /*- Number of spherical points in LS-THC grid -*/
+    options.add_int("LS_THC_SPHERICAL_POINTS", 50);
+    /*- Number of radial points in LS-THC grid -*/
+    options.add_int("LS_THC_RADIAL_POINTS", 10);
+    /*- Screening criteria for basis function values on LS-THC grids !expert -*/
+    options.add_double("LS_THC_BASIS_TOLERANCE", 1.0E-10);
+    /*- Grid weights cutoff for LS-THC grids !expert -*/
+    options.add_double("LS_THC_WEIGHTS_TOLERANCE", 1.0E-12);
+    /*- Pruning scheme for LS-THC grids !expert -*/
+    options.add_str("LS_THC_PRUNING_SCHEME", "ROBUST", 
+                        "ROBUST TREUTLER NONE FLAT P_GAUSSIAN D_GAUSSIAN P_SLATER D_SLATER LOG_GAUSSIAN LOG_SLATER NONE");
+    /*- Tolerance for pseudoinversion of grid point overlap matrix (Parrish 2012 eq. 30) !expert -*/
+    options.add_double("LS_THC_S_EPSILON", 1.0E-10);
+
+    /// MBIS Options (libmints/oeprop.cc)
 
     /*- Maximum Number of MBIS Iterations -*/
     options.add_int("MBIS_MAXITER", 500);
@@ -1010,14 +1028,11 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         be computed even if they are not needed for the requested term !expert -*/
         options.add_bool("SAPT0_E20DISP", false);
 
-        /*- Convergence criterion for energy (change) in the SAPT
-        $E@@{ind,resp}^{(20)}$ term during solution of the CPHF equations. -*/
-
-        options.add_double("E_CONVERGENCE", 1e-10);
-
-        /*- Convergence criterion for residual of the CPHF coefficients in the SAPT
-        $E@@{ind,resp}^{(20)}$ term. -*/
-        options.add_double("D_CONVERGENCE", 1e-8);
+        /*- Convergence criterion for residual of the CPHF/CPKS coefficients
+          in the SAPT $E@@{ind,resp}^{(20)}$ term. This applies to
+          wavefunction-based SAPT or SAPT(DFT). See |fisapt__cphf_r_convergence| for 
+          fragment-partitioned or intramolecular SAPT. -*/
+        options.add_double("CPHF_R_CONVERGENCE", 1e-8);
 
         /*- Solve the CPHF equations to compute coupled induction and
             exchange-induction. These are not available for ROHF, and
@@ -1167,7 +1182,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_double("FISAPT_MEM_SAFETY_FACTOR", 0.9);
         /*- Convergence criterion for residual of the CPHF coefficients in the SAPT
         $E@@{ind,resp}^{(20)}$ term. -*/
-        options.add_double("D_CONVERGENCE", 1E-8);
+        options.add_double("CPHF_R_CONVERGENCE", 1E-8);
         /*- Maximum number of iterations for CPHF -*/
         options.add_int("MAXITER", 50);
         /*- Schwarz screening threshold. Mininum absolute value below which TEI are neglected. -*/
@@ -1656,7 +1671,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
 
         /*- Number of threads for integrals (may be turned down if memory is an issue). 0 is blank -*/
         options.add_int("DF_INTS_NUM_THREADS", 0);
-        /*- IO caching for CP corrections, etc !expert -*/
+        /*- IO caching for CP corrections, etc. Changing this selects Disk_DF over Mem_DF. Note that setting this forces DiskDFJK when SCF_TYPE=DF. !expert -*/
         options.add_str("DF_INTS_IO", "NONE", "NONE SAVE LOAD");
         /*- Fitting Condition, i.e. eigenvalue threshold for RI basis. Analogous to S_TOLERANCE !expert -*/
         options.add_double("DF_FITTING_CONDITION", 1.0E-10);
@@ -2534,6 +2549,8 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
 
         /*- SUBSECTION Expert Options -*/
 
+        /*- Which DLPNO Algorithm to run (not set by user) !expert -*/
+        options.add_str("DLPNO_ALGORITHM", "MP2", "MP2");
         /*- Occupation number threshold for removing PNOs !expert -*/
         options.add_double("T_CUT_PNO", 1e-8);
         /*- DOI threshold for including PAO (u) in domain of LMO (i) !expert -*/
@@ -2554,6 +2571,17 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_double("S_CUT", 1e-8);
         /*- Fock matrix threshold for treating ampltudes as coupled during local MP2 iterations !expert -*/
         options.add_double("F_CUT", 1e-5);
+
+        /*- SUBSECTION DOI Grid Options -*/
+
+        /*- Number of spherical points in DOI grid !expert -*/
+        options.add_int("DOI_SPHERICAL_POINTS", 50);
+        /*- Number of radial points in DOI grid !expert -*/
+        options.add_int("DOI_RADIAL_POINTS", 25);
+        /*- Screening criteria for basis function values on DOI grids !expert -*/
+        options.add_double("DOI_BASIS_TOLERANCE", 1.0E-10);
+        /*- Pruning scheme for DOI grids !expert -*/
+        options.add_str("DOI_PRUNING_SCHEME", "ROBUST", "ROBUST TREUTLER NONE FLAT P_GAUSSIAN D_GAUSSIAN P_SLATER D_SLATER LOG_GAUSSIAN LOG_SLATER NONE");
     }
     if (name == "PSIMRCC" || options.read_globals()) {
         /*- MODULEDESCRIPTION Performs multireference coupled cluster computations.  This theory
@@ -2668,12 +2696,12 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         /*- Specifies minimum search, transition-state search, or IRC following -*/
         options.add_str("OPT_TYPE", "MIN", "MIN TS IRC");
         /*- Geometry optimization step type, either Newton-Raphson or Rational Function Optimization -*/
-        options.add_str("STEP_TYPE", "RFO", "RFO P_RFO NR SD LINESEARCH");
+        options.add_str("STEP_TYPE", "RFO", "RFO RS_I_RFO P_RFO NR SD LINESEARCH");
         /*- Geometry optimization coordinates to use.
             REDUNDANT and INTERNAL are synonyms and the default.
             CARTESIAN uses only cartesian coordinates.
             BOTH uses both redundant and cartesian coordinates.  -*/
-        options.add_str("OPT_COORDINATES", "INTERNAL", "REDUNDANT INTERNAL CARTESIAN BOTH");
+        options.add_str("OPT_COORDINATES", "INTERNAL", "REDUNDANT INTERNAL CARTESIAN BOTH CUSTOM");
         /*- Do follow the initial RFO vector after the first step? -*/
         options.add_bool("RFO_FOLLOW_ROOT", false);
         /*- Root for RFO to follow, 0 being lowest (for a minimum) -*/

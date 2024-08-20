@@ -3,7 +3,7 @@
 #
 # Psi4: an open-source quantum chemistry software package
 #
-# Copyright (c) 2007-2023 The Psi4 Developers.
+# Copyright (c) 2007-2024 The Psi4 Developers.
 #
 # The copyrights for code used from other parties are included in
 # the corresponding files.
@@ -84,6 +84,8 @@ def exit_printing(start_time: datetime.datetime = None, success: bool = None) ->
     if start_time is not None:
         run_time = end_time - start_time
         run_time = str(run_time).split('.')
+        # python "helpfully" truncates microseconds if zero. Undo that.
+        if len(run_time) == 1: run_time.append("000000")
         run_time = run_time[0] + '.' + run_time[1][:2]
         core.print_out("\n    Psi4 wall time for execution: {}\n".format(run_time))
 
@@ -146,7 +148,6 @@ _addons_ = {
     "dkh": _CMake_to_Py_boolean("@ENABLE_dkh@"),
     "ecpint": _CMake_to_Py_boolean("@ENABLE_ecpint@"),
     "libefp": which_import("pylibefp", return_bool=True),
-    "erd": _CMake_to_Py_boolean("@ENABLE_erd@"),
     "gdma": which_import("gdma", return_bool=True),  # package pygdma, import gdma
     "ipi": which_import("ipi", return_bool=True),
     "pcmsolver": _CMake_to_Py_boolean("@ENABLE_PCMSolver@"),

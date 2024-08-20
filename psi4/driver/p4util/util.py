@@ -3,7 +3,7 @@
 #
 # Psi4: an open-source quantum chemistry software package
 #
-# Copyright (c) 2007-2023 The Psi4 Developers.
+# Copyright (c) 2007-2024 The Psi4 Developers.
 #
 # The copyrights for code used from other parties are included in
 # the corresponding files.
@@ -114,9 +114,6 @@ def cubeprop(wfn: core.Wavefunction, **kwargs):
     # By default compute the orbitals
     if not core.has_global_option_changed('CUBEPROP_TASKS'):
         core.set_global_option('CUBEPROP_TASKS', ['ORBITALS'])
-
-    if ((core.get_global_option('INTEGRAL_PACKAGE') == 'ERD') and ('ESP' in core.get_global_option('CUBEPROP_TASKS'))):
-        raise ValidationError('INTEGRAL_PACKAGE ERD does not play nicely with electrostatic potential, so stopping.')
 
     cp = core.CubeProperties(wfn)
     cp.compute_properties()
@@ -357,9 +354,9 @@ def libint2_configuration() -> Dict[str, List[int]]:
 
 def _l2_config_style_eri_llll():
     skel = {"onebody_": [], "eri_c4_": [], "eri_c3_": [], "eri_c2_": []}
-    skel_re = {"onebody_": "onebody_\w_d\d", "eri_c4_": "eri_\w..._d\d", "eri_c3_":  "eri_\w.._d\d", "eri_c2_": "eri_\w._d\d"}
+    skel_re = {"onebody_": r"onebody_\w_d\d", "eri_c4_": r"eri_\w..._d\d", "eri_c3_":  r"eri_\w.._d\d", "eri_c2_": r"eri_\w._d\d"}
 
-    amstr = "SPDFGHIKLMNOPQRTUVWXYZ"
+    amstr = "SPDFGHIKLMNOQRTUVWXYZ"
     libint2_configuration = core._libint2_configuration()
 
     for k, v in skel_re.items():
@@ -412,12 +409,12 @@ def _l2_config_style_eri_c4():
 
 def libint2_print_out() -> None:
     ams = libint2_configuration()
-    # excluding sph_emultipole
-    sho = {1: 'standard', 2: 'gaussian'}[core._libint2_solid_harmonics_ordering()]
     core.print_out("   => Libint2 <=\n\n");
+    # when L2 is pure cmake core.print_out(core.libint2_citation());
 
     core.print_out(f"    Primary   basis highest AM E, G, H:  {', '.join(('-' if d is None else str(d)) for d in ams['eri'])}\n")
     core.print_out(f"    Auxiliary basis highest AM E, G, H:  {', '.join(('-' if d is None else str(d)) for d in ams['eri3'])}\n")
     core.print_out(f"    Onebody   basis highest AM E, G, H:  {', '.join(('-' if d is None else str(d)) for d in ams['onebody'])}\n")
-    core.print_out(f"    Solid Harmonics ordering:            {sho}\n")
+    # excluding sph_emultipole
+    core.print_out(f"    Solid Harmonics ordering:            {core.libint2_solid_harmonics_ordering()}\n")
 

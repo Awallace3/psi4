@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.19 FATAL_ERROR)
 cmake_policy(SET CMP0094 NEW)
 project(psi4-core
         LANGUAGES C CXX)
@@ -97,6 +97,15 @@ else()
     message(STATUS "Disabled dkh ${dkh_DIR}")
 endif()
 
+if(${ENABLE_IntegratorXX})
+    find_package(IntegratorXX CONFIG REQUIRED)
+    get_property(_loc TARGET IntegratorXX::IntegratorXX PROPERTY LOCATION)
+    list(APPEND _addons ${_loc})
+    message(STATUS "${Cyan}Using IntegratorXX${ColourReset}: ${_loc} (version ${IntegratorXX_VERSION})")
+else()
+    message(STATUS "Disabled IntegratorXX")
+endif()
+
 if(${ENABLE_ecpint})
     find_package(ecpint 1.0.7 CONFIG REQUIRED)
     get_property(_loc TARGET ECPINT::ecpint PROPERTY LOCATION)
@@ -126,22 +135,13 @@ else()
 endif()
 
 if(${ENABLE_Einsums})
-    find_package(Einsums 0.3 CONFIG REQUIRED)
+    find_package(Einsums 0.5 CONFIG REQUIRED)
     get_property(_loc TARGET Einsums::einsums PROPERTY LOCATION)
     list(APPEND _addons ${_loc})
     message(STATUS "${Cyan}Using Einsums${ColourReset}: ${_loc} (version ${Einsums_VERSION})")
 else()
     message(STATUS "Disabled Einsums ${Einsums_DIR}")
 endif ()
-
-if(${ENABLE_erd})
-    find_package(erd 3.0.6 CONFIG REQUIRED)
-    get_property(_loc TARGET erd::erd PROPERTY LOCATION)
-    list(APPEND _addons ${_loc})
-    message(STATUS "${Cyan}Using erd${ColourReset}: ${_loc} (version ${erd_VERSION})")
-else()
-    message(STATUS "Disabled erd ${erd_DIR}")
-endif()
 
 find_package(gau2grid 2.0 CONFIG REQUIRED)
 get_property(_loc TARGET gau2grid::gg PROPERTY LOCATION)
@@ -159,31 +159,24 @@ else()
     message(STATUS "Disabled gdma ${gdma_DIR}")
 endif()
 
-if(${ENABLE_Libint1t})
-find_package(Libint 1.2.0 CONFIG REQUIRED COMPONENTS ${MAX_AM_ERI})
-get_property(_loc TARGET Libint::int PROPERTY LOCATION)
-list(APPEND _addons ${_loc})
-message(STATUS "${Cyan}Using Libint ${Libint_MAX_AM_ERI}${ColourReset}: ${_loc} (version ${Libint_VERSION})")
-endif()
-
 find_package(
   Libint2
-  2.7.2
+  2.8.1
   CONFIG
   REQUIRED
-  COMPONENTS
-    sss
-    CXX_ho
-    impure_sh
-    "eri_c4_d0_l${MAX_AM_ERI}" eri_c3_d0_l4 eri_c2_d0_l4 onebody_d0_l4
-     eri_c4_d1_l2              eri_c3_d1_l3 eri_c2_d1_l3 onebody_d1_l3
-                                                         onebody_d2_l3
-  OPTIONAL_COMPONENTS
-     eri_c4_d2_l2              eri_c3_d2_l3 eri_c2_d2_l3
+#  COMPONENTS
+#    sss
+#    CXX_ho
+#    impure_sh
+#    "eri_c4_d0_l${MAX_AM_ERI}" eri_c3_d0_l4 eri_c2_d0_l4 onebody_d0_l4
+#     eri_c4_d1_l2              eri_c3_d1_l3 eri_c2_d1_l3 onebody_d1_l3
+#                                                         onebody_d2_l3
+#  OPTIONAL_COMPONENTS
+#     eri_c4_d2_l2              eri_c3_d2_l3 eri_c2_d2_l3
   )
 get_property(_loc TARGET Libint2::int2 PROPERTY LOCATION)
-get_property(Libint2_VERSION_ver TARGET Libint2::int2 PROPERTY Libint2_VERSION)
-get_property(Libint2_MAX_AM_ERI TARGET Libint2::int2 PROPERTY Libint2_MAX_AM_ERI)
+# defer until upstream provides full-dress targets get_property(Libint2_VERSION TARGET Libint2::int2 PROPERTY Libint2_VERSION)
+# defer until upstream provides full-dress targets get_property(Libint2_MAX_AM_ERI TARGET Libint2::int2 PROPERTY Libint2_MAX_AM_ERI)
 list(APPEND _addons ${_loc})
 message(STATUS "${Cyan}Using Libint2 ${Libint2_MAX_AM_ERI}${ColourReset}: ${_loc} (version ${Libint2_VERSION})")
 
@@ -223,7 +216,7 @@ else()
     message(STATUS "Disabled BrianQC ${BrianQC_DIR}")
 endif()
 
-find_package(Libxc 6.0.0 CONFIG REQUIRED COMPONENTS C)
+find_package(Libxc 6.1.0 CONFIG REQUIRED COMPONENTS C)
 get_property(_loc TARGET Libxc::xc PROPERTY LOCATION)
 list(APPEND _addons ${_loc})
 message(STATUS "${Cyan}Using Libxc${ColourReset}: ${_loc} (version ${Libxc_VERSION})")

@@ -3,7 +3,7 @@
 #
 # Psi4: an open-source quantum chemistry software package
 #
-# Copyright (c) 2007-2023 The Psi4 Developers.
+# Copyright (c) 2007-2024 The Psi4 Developers.
 #
 # The copyrights for code used from other parties are included in
 # the corresponding files.
@@ -132,6 +132,7 @@ funcs.append({
 
 funcs.append({
     "name": "PW91",
+    "alias": ["PWPW"],
     "x_functionals": {
         "GGA_X_PW91": {}
     },
@@ -144,6 +145,7 @@ funcs.append({
 
 funcs.append({
     "name": "mPWPW",
+    "alias": ["mPW91"],
     "x_functionals": {
         "GGA_X_mPW91": {}
     },

@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2024 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -51,7 +51,6 @@
 using namespace psi;
 
 namespace psi {
-
 
 CompositeJK::CompositeJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary, Options& options) : JK(primary), auxiliary_(auxiliary), options_(options) {
     timer_on("CompositeJK: Setup");
@@ -302,7 +301,7 @@ void CompositeJK::compute_JK() {
         timer_on("CompositeJK: " + k_algo_->name());
 
         if (k_algo_->name() == "COSX") {
-            std::string gridname = k_algo_->get_COSX_grid();
+            std::string gridname = get_COSX_grid();
             timer_on("COSX " + gridname + " Grid");
         }
 
@@ -313,7 +312,7 @@ void CompositeJK::compute_JK() {
         }
 
         if (k_algo_->name() == "COSX") {
-            std::string gridname = k_algo_->get_COSX_grid();
+            std::string gridname = get_COSX_grid();
             timer_off("COSX " + gridname + " Grid");
         }
 
@@ -332,5 +331,25 @@ void CompositeJK::compute_JK() {
 }
 
 void CompositeJK::postiterations() {}
+
+// => Method-specific knobs go here <= //
+
+void CompositeJK::set_COSX_grid(std::string current_grid) { 
+    if (k_algo_->name() == "COSX") {
+        auto k_algo_derived = std::dynamic_pointer_cast<COSK>(k_algo_); 
+        k_algo_derived->set_grid(current_grid); 
+    } else {
+        throw PSIEXCEPTION("CompositeJK::set_COSX_grid() was called, but COSX is not selected in SCF_TYPE!");
+    }
+}
+
+std::string CompositeJK::get_COSX_grid() { 
+    if (k_algo_->name() == "COSX") {
+        auto k_algo_derived = std::dynamic_pointer_cast<COSK>(k_algo_); 
+        return k_algo_derived->get_grid(); 
+    } else {
+        throw PSIEXCEPTION("CompositeJK::get_COSX_grid() was called, but COSX is not selected in SCF_TYPE!");
+    }
+}
 
 }  // namespace psi

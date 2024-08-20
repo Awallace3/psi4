@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2024 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -126,17 +126,6 @@ class PSI_API SplitJK {
     * print name of method
     */
     virtual std::string name() = 0;
-
-    /**
-    * Method-specific knobs, if necessary
-    */
-    virtual void set_COSX_grid(std::string current_grid) {
-        throw PSIEXCEPTION("SplitJK::set_COSX_grid was called, but COSX is not being used!");
-    }
-
-    virtual std::string get_COSX_grid() {
-        throw PSIEXCEPTION("SplitJK::get_COSX_grid was called, but COSX is not being used!");
-    };
 };
 
 // ==> Start SplitJK Coulomb (J) Algorithms here <== //
@@ -307,8 +296,8 @@ class PSI_API COSK : public SplitJK {
     std::string name() override { return "COSX"; }
 
     // setter/getter for the COSX grid used for this SCF iteration
-    void set_COSX_grid(std::string current_grid) override { current_grid_ = current_grid; };
-    std::string get_COSX_grid() override { return current_grid_; };
+    void set_grid(std::string current_grid) { current_grid_ = current_grid; };
+    std::string get_grid() { return current_grid_; };
 };
 
 }

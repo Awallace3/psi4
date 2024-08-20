@@ -3,7 +3,7 @@
 #
 # Psi4: an open-source quantum chemistry software package
 #
-# Copyright (c) 2007-2023 The Psi4 Developers.
+# Copyright (c) 2007-2024 The Psi4 Developers.
 #
 # The copyrights for code used from other parties are included in
 # the corresponding files.
@@ -99,7 +99,7 @@ funcs.append({
 
 funcs.append({
     "name": "mGGA_MS0",
-    "alias": ["MGGA-MS0"],
+    "alias": ["MGGA-MS0", "MS0"],
     "x_functionals": {
         "MGGA_X_MS0": {}
     },
@@ -112,7 +112,7 @@ funcs.append({
 
 funcs.append({
     "name": "mGGA_MS1",
-    "alias": ["MGGA-MS1"],
+    "alias": ["MGGA-MS1", "MS1"],
     "x_functionals": {
         "MGGA_X_MS1": {}
     },
@@ -125,7 +125,7 @@ funcs.append({
 
 funcs.append({
     "name": "mGGA_MS2",
-    "alias": ["MGGA-MS2"],
+    "alias": ["MGGA-MS2", "MS2"],
     "x_functionals": {
         "MGGA_X_MS2": {}
     },
@@ -138,7 +138,7 @@ funcs.append({
 
 funcs.append({
     "name": "mGGA_MVS",
-    "alias": ["MGGA-MVS"],
+    "alias": ["MGGA-MVS", "MVS"],
     "x_functionals": {
         "MGGA_X_MVS": {}
     },

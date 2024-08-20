@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2024 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -25,15 +25,13 @@
  *
  * @END LICENSE
  */
-// Need libint for maximum angular momentum
-#ifdef ENABLE_Libint1t
-#include <libint/libint.h>
-#endif
-#include <libint2/shell.h>
+
 /*!
     \defgroup MINTS libmints: Integral library
     \ingroup MINTS
 */
+
+#include <libint2/shell.h>
 
 #include "psi4/libciomr/libciomr.h"
 #include "psi4/psifiles.h"
@@ -875,8 +873,12 @@ void BasisSet::update_l2_shells(bool embed_normalization) {
 
         auto offset = shell_first_exponent_[ishell];
         auto nprim = n_prim_per_shell_[ishell];
-        auto l2c = libint2::svector<double>(&uoriginal_coefficients_[offset], &uoriginal_coefficients_[offset + nprim]);
-        auto l2e = libint2::svector<double>(&uexponents_[offset], &uexponents_[offset + nprim]);
+        std::vector<double>::iterator c_first = uoriginal_coefficients_.begin() + offset;
+        std::vector<double>::iterator c_last = c_first + nprim;
+        auto l2c = libint2::svector<double>(c_first, c_last);
+        std::vector<double>::iterator e_first = uexponents_.begin() + offset;
+        std::vector<double>::iterator e_last = e_first + nprim;
+        auto l2e = libint2::svector<double>(e_first, e_last);
         l2_shells_[ishell] = libint2::Shell{l2e, {{am, puream_, l2c}}, {{xyz[0], xyz[1], xyz[2]}}, embed_normalization};
     }
 }

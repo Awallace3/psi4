@@ -3,7 +3,7 @@
 .. #
 .. # Psi4: an open-source quantum chemistry software package
 .. #
-.. # Copyright (c) 2007-2023 The Psi4 Developers.
+.. # Copyright (c) 2007-2024 The Psi4 Developers.
 .. #
 .. # The copyrights for code used from other parties are included in
 .. # the corresponding files.
@@ -169,6 +169,10 @@ The Hessian may be computed during an optimization using the
 
 Transition States and Reaction Paths
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Optking currently has two transition state algorithms. The current default is the
+newer RS_I_RFO algorithm [Besalu:1998:265]_ . The old algorithm can be used by setting
+`STEP_TYPE P_RFO` for `OPT_TYPE TS`
 
 * Calculate a starting Hessian and optimize the "transition state" of
   linear water (note that without a reasonable starting geometry and

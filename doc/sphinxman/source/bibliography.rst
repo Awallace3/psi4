@@ -3,7 +3,7 @@
 .. #
 .. # Psi4: an open-source quantum chemistry software package
 .. #
-.. # Copyright (c) 2007-2023 The Psi4 Developers.
+.. # Copyright (c) 2007-2024 The Psi4 Developers.
 .. #
 .. # The copyrights for code used from other parties are included in
 .. # the corresponding files.
@@ -148,6 +148,10 @@ Bibliography
 .. [Bofill:1994:1]
    Bofill,
    *J. Comp. Chem.* **15**, 1-11 (1994).
+
+.. [Besalu:1998:265]
+   Besalú, E., Bofill, J.,
+   *Theor Chem Acc* **100**, 265–274 (1998)
 
 .. [Piecuch:1999:6103]
    P. Piecuch, S. A. Kicharski, and R. J. Bartlett,
@@ -741,3 +745,12 @@ Bibliography
    *J. Chem. Phys.* **154**, 064103 (2021).
    https://doi.org/10.1063/5.0040021
 
+.. not yet referenced [Parrish:2012:224106]
+.. not yet referenced    R. M. Parrish, E. G. Hohenstein, T. J. Martinez, C. D. Sherrill
+.. not yet referenced    *J. Chem. Phys.* **137**, 224106 (2012).
+.. not yet referenced    https://doi.org/10.1063/1.4768233
+
+.. not yet referenced [Matthews:2020:1382]
+.. not yet referenced   D. A. Matthews
+.. not yet referenced   *J. Chem. Theory Comput.* **16**, 1382 (2020).
+.. not yet referenced   https://doi.org/10.1021/acs.jctc.9b01205

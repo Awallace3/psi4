@@ -3,7 +3,7 @@
 #
 # Psi4: an open-source quantum chemistry software package
 #
-# Copyright (c) 2007-2023 The Psi4 Developers.
+# Copyright (c) 2007-2024 The Psi4 Developers.
 #
 # The copyrights for code used from other parties are included in
 # the corresponding files.
@@ -37,7 +37,6 @@ Also, many Python extensions to core classes:
  - JK (constructor)
  - VBase (grid)
  - OEProp (avail prop)
- - ERISieve (constructor)
 """
 
 __all__ = [
@@ -1044,8 +1043,7 @@ def _multipole_plumper(compressed: np.ndarray, order: int) -> np.ndarray:
 
 
 def _core_has_variable(key: str) -> bool:
-    """Whether scalar or array :ref:`QCVariable <sec:appendices:qcvars>` *key*
-    has been set in global memory.
+    """Whether scalar or array :ref:`QCVariable <sec:appendices:qcvars>` *key* has been set in global memory.
 
     Parameters
     ----------
@@ -1058,8 +1056,7 @@ def _core_has_variable(key: str) -> bool:
 
 
 def _core_wavefunction_has_variable(self: core.Wavefunction, key: str) -> bool:
-    """Whether scalar or array :ref:`QCVariable <sec:appendices:qcvars>` *key*
-    has been set on *self*.
+    """Whether scalar or array :ref:`QCVariable <sec:appendices:qcvars>` *key* has been set on *self*.
 
     Parameters
     ----------
@@ -1176,8 +1173,7 @@ def _core_wavefunction_variable(self: core.Wavefunction, key: str) -> Union[floa
 
 
 def _core_set_variable(key: str, val: Union[core.Matrix, np.ndarray, float]) -> None:
-    """Sets scalar or array :ref:`QCVariable <sec:appendices:qcvars>` *key* to
-    *val* in global memory.
+    """Sets scalar or array :ref:`QCVariable <sec:appendices:qcvars>` *key* to *val* in global memory.
 
     Parameters
     ----------
@@ -1217,8 +1213,7 @@ def _core_set_variable(key: str, val: Union[core.Matrix, np.ndarray, float]) -> 
 
 
 def _core_wavefunction_set_variable(self: core.Wavefunction, key: str, val: Union[core.Matrix, np.ndarray, float]) -> None:
-    """Sets scalar or array :ref:`QCVariable <sec:appendices:qcvars>` *key* to
-    *val* on *self*.
+    """Sets scalar or array :ref:`QCVariable <sec:appendices:qcvars>` *key* to *val* on *self*.
 
     Parameters
     ----------
@@ -1264,8 +1259,7 @@ def _core_wavefunction_set_variable(self: core.Wavefunction, key: str, val: Unio
 
 
 def _core_del_variable(key: str) -> None:
-    """Removes scalar or array :ref:`QCVariable <sec:appendices:qcvars>` *key*
-    from global memory if present.
+    """Removes scalar or array :ref:`QCVariable <sec:appendices:qcvars>` *key* from global memory if present.
 
     Parameters
     ----------
@@ -1281,8 +1275,7 @@ def _core_del_variable(key: str) -> None:
 
 
 def _core_wavefunction_del_variable(self: core.Wavefunction, key: str) -> None:
-    """Removes scalar or array :ref:`QCVariable <sec:appendices:qcvars>` *key*
-    from *self* if present.
+    """Removes scalar or array :ref:`QCVariable <sec:appendices:qcvars>` *key* from *self* if present.
 
     Parameters
     ----------
@@ -1535,40 +1528,3 @@ core.Matrix.doublet = staticmethod(_core_doublet)
 core.Matrix.triplet = staticmethod(_core_triplet)
 
 
-@staticmethod
-def _core_erisieve_build(
-        orbital_basis: core.BasisSet,
-        cutoff: float = 0.0,
-        do_csam: bool = False
-    ) -> core.ERISieve:
-    """
-    This function previously constructed a Psi4 ERISieve object from an input basis set, with an optional cutoff threshold for
-    ERI screening and an optional input to enable CSAM screening (over Schwarz screening).
-
-    However, as the ERISieve class was removed from Psi4 in v1.9, the function now throws with an UpgradeHelper
-    exception, and lets the user know to use TwoBodyAOInt instead.
-
-    Parameters
-    ----------
-    orbital_basis
-        Basis set to use in the ERISieve object.
-    cutoff
-        Integral cutoff threshold to use for Schwarz/CSAM screening. Defaults to 0.0, disabling screening entirely.
-    do_csam
-        Use CSAM screening? If True, CSAM screening is used; else, Schwarz screening is used. By default,
-        Schwarz screening is utilized.
-
-    Returns
-    -------
-    ERISieve
-        Initialized ERISieve object.
-
-    Example
-    -------
-    >>> sieve = psi4.core.ERISieve.build(bas, cutoff, csam)
-    """
-
-    raise UpgradeHelper("ERISieve", "TwoBodyAOInt", 1.8, " The ERISieve class has been removed and replaced with the TwoBodyAOInt class. ERISieve.build(orbital_basis, cutoff, do_csam) can be replaced with the command sequence factory = psi4.core.IntegralFactory(basis); factory.eri(0).")
-
-
-core.ERISieve.build = _core_erisieve_build
