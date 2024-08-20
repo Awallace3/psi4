@@ -52,6 +52,7 @@
 #include "psi4/libpsi4util/process.h"
 
 #include <memory>
+#include <numeric>
 
 namespace psi {
 namespace sapt {
@@ -260,22 +261,6 @@ void ASAPT0::analyze() {
     d_->set_array_variable("Pop_A", NA);
     d_->set_array_variable("Pop_B", NB);
 
-    auto Elst_A = Elst_AB->collapse(1);
-    auto Elst_B = Elst_AB->collapse(0);
-    auto Exch_A = Exch_AB->collapse(1);
-    auto Exch_B = Exch_AB->collapse(0);
-    auto Exch_a = Exch_ab->collapse(1);
-    auto Exch_b = Exch_ab->collapse(0);
-    auto IndAB_A = IndAB_AB->collapse(1);
-    auto IndAB_B = IndAB_AB->collapse(0);
-    auto IndAB_a = IndAB_aB->collapse(1);
-    auto IndBA_A = IndBA_AB->collapse(1);
-    auto IndBA_B = IndBA_AB->collapse(0);
-    auto IndBA_b = IndBA_Ab->collapse(0);
-    auto Disp_A = Disp_AB->collapse(1);
-    auto Disp_B = Disp_AB->collapse(0);
-    auto Disp_a = Disp_ab->collapse(1);
-    auto Disp_b = Disp_ab->collapse(0);
 
     // Print Order 2
     outfile->Printf("Elst_AB\n");
@@ -293,9 +278,25 @@ void ASAPT0::analyze() {
     outfile->Printf("Disp_AB\n");
     Disp_AB->print_out();
 
+    auto Elst_B = Elst_AB->collapse(Elst_AB->rowspi(), 0);
+    auto Elst_A = Elst_AB->collapse(Elst_AB->colspi(), 1);
+    auto Exch_A = Exch_AB->collapse(Elst_AB->colspi(), 1);
+    auto Exch_B = Exch_AB->collapse(Elst_AB->rowspi(), 0);
+    auto Exch_a = Exch_ab->collapse(Elst_AB->colspi(), 1);
+    auto Exch_b = Exch_ab->collapse(Elst_AB->rowspi(), 0);
+    auto IndAB_A = IndAB_AB->collapse(Elst_AB->colspi(), 1);
+    auto IndAB_B = IndAB_AB->collapse(Elst_AB->rowspi(), 0);
+    auto IndAB_a = IndAB_aB->collapse(Elst_AB->colspi(), 1);
+    auto IndBA_A = IndBA_AB->collapse(Elst_AB->colspi(), 1);
+    auto IndBA_B = IndBA_AB->collapse(Elst_AB->rowspi(), 0);
+    auto IndBA_b = IndBA_Ab->collapse(Elst_AB->rowspi(), 0);
+    auto Disp_A = Disp_AB->collapse(Elst_AB->colspi(), 1);
+    auto Disp_B = Disp_AB->collapse(Elst_AB->rowspi(), 0);
+    auto Disp_a = Disp_ab->collapse(Elst_AB->colspi(), 1);
+    auto Disp_b = Disp_ab->collapse(Elst_AB->rowspi(), 0);
+
     // Print Order 1
     outfile->Printf("Elst_A\n");
-    /* Elst_A->print_out(); */
     Elst_A->print();
 
     outfile->Printf("Elst_B\n");
@@ -329,19 +330,20 @@ void ASAPT0::analyze() {
     outfile->Printf("Elst Total: \n");
     double Elst_sum = 0.0;
     for (int i = 0; i < Elst_A->dimpi()[0]; ++i) {
-        Elst_sum += Elst_A->get(i, 0);
+        Elst_sum += Elst_A->get(0, i);
     }
     outfile->Printf("    %11.3E\n", Elst_sum);
 
     outfile->Printf("Exch Total: \n");
     double Exch_sum = 0.0;
     for (int i = 0; i < Exch_A->dimpi()[0]; ++i) {
-        Exch_sum += Exch_A->get(i, 0);
+        Exch_sum += Exch_A->get(0, i);
     }
     outfile->Printf("    %11.3E\n", Exch_sum);
 
     outfile->Printf("IndAB Total: \n");
 
+    // auto IndAB_sum = std::reduce(IndAB_A->pointer(), IndAB_A->pointer() + IndAB_A->dim());
     // auto IndAB_sum = std::reduce(IndAB_A->pointer(), IndAB_A->pointer() + IndAB_A., 0.0);
 
     // auto IndAB_sum = std::reduce(IndAB_A->pointer(), IndAB_A->pointer() + IndAB_A->size(), 0.0);
@@ -707,12 +709,7 @@ void ASAPT0::ps() {
 #endif
 
     // Integral computers and thread-safe targets
-    
-    std::shared_ptr<IntegralFactory> Vfact = std::make_shared<IntegralFactory>(jkfit_,BasisSet::zero_ao_basis_set(), jkfit_,BasisSet::zero_ao_basis_set());
-    // std::shared_ptr<IntegralFactory> Vfact = std::make_shared<IntegralFactory>(jkfit_);
-
-    // auto factory = std::make_shared<IntegralFactory>(basis);
-    // std::shared_ptr<OneBodyAOInt> Sint(factory->ao_potential());
+    std::shared_ptr<IntegralFactory> Vfact = std::make_shared<IntegralFactory>(jkfit_, BasisSet::zero_ao_basis_set(), jkfit_, BasisSet::zero_ao_basis_set());
     
     std::vector<std::pair<double, std::array<double, 3>>> Zxyz2;
     for (int thread = 0; thread < nthreads; thread++) {
@@ -730,18 +727,11 @@ void ASAPT0::ps() {
         QACT.push_back(std::shared_ptr<Matrix>(new Matrix("QACT", nA, nQ)));
         QBDT.push_back(std::shared_ptr<Matrix>(new Matrix("QBDT", nB, nQ)));
         // potential integrals have different bra and ket basis...?
-        // VintT.push_back(std::shared_ptr<PotentialInt>(static_cast<PotentialInt*>(Vfact->ao_potential().release())));
-        // VintT[thread]->set_charge_field(ZxyzT[thread]);
-        // VintT[thread]->set_charge_field(Zxyz2);
+        VintT.push_back(std::shared_ptr<PotentialInt>(static_cast<PotentialInt*>(Vfact->ao_potential().release())));
+        VintT[thread]->set_charge_field(Zxyz2);
     }
-    printf("initial vecs");
 
-    // TODO: make Zxyz2p
-    // std::shared_ptr<PotentialInt> Vint(static_cast<PotentialInt*>(Vfact->ao_potential().release()));
-    // VintT->set_charge_field(Zxyz2);
-
-    /*  */
-    /* // Master loop */
+    // Master loop
     for (int offset = 0; offset < nP; offset += max_points) { 
         int npoints = (offset + max_points >= nP ? nP - offset : max_points); 
         atomic_A_->compute_weights(npoints,&xp[offset],&yp[offset],&zp[offset],QAPp,&rhoap[offset]); 
@@ -830,10 +820,7 @@ void ASAPT0::ps() {
     vars_["QBD"] = QBD; 
     vars_["VAB"] = VAB; 
     vars_["VBA"] = VBA; 
-    vars_["QAC"] = 0;
-    vars_["QBD"] = 0;
-    vars_["VAB"] = 0;
-    vars_["VBA"] = 0;
+    outfile->Printf("\n\n  ATOMIC PSEUDOSPECTRAL COMPLETE\n\n");
 }
 
 void ASAPT0::df() {
@@ -920,6 +907,7 @@ void ASAPT0::df() {
     vars_.erase("QAC");
     vars_.erase("QBD");
 
+    // segfault here... so QAC or QBD is not being set properly
     std::shared_ptr<Matrix> RAC = linalg::doublet(QAC, J_mhalf);
     std::shared_ptr<Matrix> RBD = linalg::doublet(QBD, J_mhalf);
     double** RACp = RAC->pointer();
@@ -936,81 +924,78 @@ void ASAPT0::df() {
     // => Nuclear Part (PITA) <= //
 
     printf("Nuclear Part\n");
-    auto Zxyz2 = std::make_shared<Matrix>("Zxyz", 1, 4);
-    std::vector<std::pair<double, std::array<double, 3>>> Zxyz;
+    // auto Zxyz2 = std::make_shared<Matrix>("Zxyz", 1, 4);
+    std::vector<std::pair<double, std::array<double, 3>>> Zxyz2;
+    Zxyz2.push_back(std::make_pair(1.0, std::array<double, 3>()));
+    // std::vector<std::pair<double, std::array<double, 3>>> Zxyz;
     auto Vfact2 = std::make_shared<IntegralFactory>(primary_);
-    /* double** Zxyz2p = Zxyz2->pointer(); */
-    /* std::shared_ptr<PotentialInt> Vint2(static_cast<PotentialInt*>(Vfact2->ao_potential())); */
-    /* Vint2->set_charge_field(Zxyz2); */
+    // initiliazie Zxyz2p as point fo Zxyz2
+    // double **Zxyz2p = Zxyz2->pointer();
     std::shared_ptr<PotentialInt> Vint2(static_cast<PotentialInt*>(Vfact2->ao_potential().release()));
+    printf("\nNuclear Part Complete\n");
 
     // loop over Zxyz2 and copy to Zxyz
 
-    // Vint2->set_charge_field(Zxyz2); 
-    //  
-    // auto Vtemp2 = std::make_shared<Matrix>("Vtemp2", nn, nn); 
-    //  
-    // for (int A = 0; A < nA; A++) { 
-    //     Vtemp2->zero(); 
-    //     Zxyz2p[0][0] = monomer_A_->Z(cA[A]); 
-    //     Zxyz2p[0][1] = monomer_A_->x(cA[A]); 
-    //     Zxyz2p[0][2] = monomer_A_->y(cA[A]); 
-    //     Zxyz2p[0][3] = monomer_A_->z(cA[A]); 
-    //     Vint2->compute(Vtemp2); 
-    //     std::shared_ptr<Matrix> Vbs = linalg::triplet(Cocc_B_, Vtemp2, Cvir_B_, true, false, false); 
-    //     dfh_->write_disk_tensor("WAbs_nuc", Vbs, {A, A+1}); 
-    //     //dfh_->write_disk_tensor("WAbs", Vbs, {A, A+1}); 
-    // } 
-    //  
-    // for (int B = 0; B < nB; B++) { 
-    //     Vtemp2->zero(); 
-    //     Zxyz2p[0][0] = monomer_B_->Z(cB[B]); 
-    //     Zxyz2p[0][1] = monomer_B_->x(cB[B]); 
-    //     Zxyz2p[0][2] = monomer_B_->y(cB[B]); 
-    //     Zxyz2p[0][3] = monomer_B_->z(cB[B]); 
-    //     Vint2->compute(Vtemp2); 
-    //     std::shared_ptr<Matrix> Var = linalg::triplet(Cocc_A_, Vtemp2, Cvir_A_, true, false, false); 
-    //     dfh_->write_disk_tensor("WBar_nuc", Var, {B, B+1}); 
-    //     //dfh_->write_disk_tensor("WBar", Var, {B, B+1}); 
-    // } 
-    //  
-    // // => Electronic Part (Massive PITA) <= // 
-    //  
-    // dfh_->add_disk_tensor("WAbs", std::make_tuple(nA, nb, ns)); 
-    // dfh_->add_disk_tensor("WBar", std::make_tuple(nB, na, nr)); 
-    // std::shared_ptr<Matrix> TsQ(new Matrix("TsQ",ns,nQ)); 
-    // std::shared_ptr<Matrix> T1As(new Matrix("T1As",nA,ns)); 
-    // std::shared_ptr<Matrix> T2As(new Matrix("T2As",1,ns)); 
-    // double** TsQp = TsQ->pointer(); 
-    // double** T1Asp = T1As->pointer(); 
-    // double** T2Asp = T2As->pointer(); 
-    // for (size_t b = 0; b < nb; b++) { 
-    //     dfh_->fill_tensor("Abs", TsQ, {b, b + 1}); 
-    //     C_DGEMM('N', 'T', nA, ns, nQ, 1.0, RACp[0], nQ, TsQp[0], nQ, 0.0, T1Asp[0], ns); // ZLG 2.0 -> 1.0 
-    //     for (size_t A = 0; A < nA; A++) { 
-    //         dfh_->fill_tensor("WAbs_nuc", T2As, {A, A + 1}, {b, b + 1}); 
-    //         C_DAXPY(ns, 1.0, T1Asp[A], 1, T2Asp[0], 1);  // ZLG 1.0 -> 2.0 
-    //         dfh_->write_disk_tensor("WAbs", T2As, {A, A + 1}, {b, b + 1}); 
-    //         //dfh_->write_disk_tensor("WAbs", T1As, {A, A + 1}, {b, b + 1}); 
-    //     } 
-    // } 
-    //  
-    // std::shared_ptr<Matrix> TrQ(new Matrix("TrQ",nr,nQ)); 
-    // std::shared_ptr<Matrix> T1Br(new Matrix("T1Br",nB,nr)); 
-    // std::shared_ptr<Matrix> T2Br(new Matrix("T2Br",1,nr)); 
-    // double** TrQp = TrQ->pointer(); 
-    // double** T1Brp = T1Br->pointer(); 
-    // double** T2Brp = T2Br->pointer(); 
-    // for (size_t a = 0; a < na; a++) { 
-    //     dfh_->fill_tensor("Aar", TrQ, {a, a + 1}); 
-    //     C_DGEMM('N', 'T', nB, nr, nQ, 1.0, RBDp[0], nQ, TrQp[0], nQ, 0.0, T1Brp[0], nr); // ZLG 2.0 -> 1.0 
-    //     for (size_t B = 0; B < nB; B++) { 
-    //         dfh_->fill_tensor("WBar_nuc", T2Br, {B, B + 1}, {a, a + 1}); 
-    //         C_DAXPY(nr , 1.0, T1Brp[B], 1, T2Brp[0], 1); 
-    //         dfh_->write_disk_tensor("WBar", T2Br, {B, B + 1}, {a, a + 1}); 
-    //         //dfh_->write_disk_tensor("WBar", T1Br, {B, B + 1}, {a, a + 1}); 
-    //     } 
-    // } 
+    Vint2->set_charge_field(Zxyz2); 
+     
+    auto Vtemp2 = std::make_shared<Matrix>("Vtemp2", nn, nn); 
+     
+    for (ulong A = 0; A < nA; A++) { 
+        Vtemp2->zero(); 
+        // Zxyz2p[0] = monomer_A_->Z(cA[A]); 
+        Zxyz2[0].second[0] = monomer_A_->x(cA[A]); 
+        Zxyz2[0].second[1] = monomer_A_->y(cA[A]); 
+        Zxyz2[0].second[2] = monomer_A_->z(cA[A]); 
+        Vint2->compute(Vtemp2); 
+        std::shared_ptr<Matrix> Vbs = linalg::triplet(Cocc_B_, Vtemp2, Cvir_B_, true, false, false); 
+        dfh_->write_disk_tensor("WAbs_nuc", Vbs, {A, A+1}); 
+    } 
+     
+    for (ulong B = 0; B < nB; B++) { 
+        Vtemp2->zero(); 
+        Zxyz2[0].second[0] = monomer_B_->x(cA[B]); 
+        Zxyz2[0].second[1] = monomer_B_->y(cA[B]); 
+        Zxyz2[0].second[2] = monomer_B_->z(cA[B]); 
+        Vint2->compute(Vtemp2); 
+        std::shared_ptr<Matrix> Var = linalg::triplet(Cocc_A_, Vtemp2, Cvir_A_, true, false, false); 
+        dfh_->write_disk_tensor("WBar_nuc", Var, {B, B+1}); 
+    } 
+     
+    // => Electronic Part (Massive PITA) <= // 
+     
+    dfh_->add_disk_tensor("WAbs", std::make_tuple(nA, nb, ns)); 
+    dfh_->add_disk_tensor("WBar", std::make_tuple(nB, na, nr)); 
+    std::shared_ptr<Matrix> TsQ(new Matrix("TsQ",ns,nQ)); 
+    std::shared_ptr<Matrix> T1As(new Matrix("T1As",nA,ns)); 
+    std::shared_ptr<Matrix> T2As(new Matrix("T2As",1,ns)); 
+    double** TsQp = TsQ->pointer(); 
+    double** T1Asp = T1As->pointer(); 
+    double** T2Asp = T2As->pointer(); 
+    for (size_t b = 0; b < nb; b++) { 
+        dfh_->fill_tensor("Abs", TsQ, {b, b + 1}); 
+        C_DGEMM('N', 'T', nA, ns, nQ, 1.0, RACp[0], nQ, TsQp[0], nQ, 0.0, T1Asp[0], ns); // ZLG 2.0 -> 1.0 
+        for (size_t A = 0; A < nA; A++) { 
+            dfh_->fill_tensor("WAbs_nuc", T2As, {A, A + 1}, {b, b + 1}); 
+            C_DAXPY(ns, 1.0, T1Asp[A], 1, T2Asp[0], 1);  // ZLG 1.0 -> 2.0 
+            dfh_->write_disk_tensor("WAbs", T2As, {A, A + 1}, {b, b + 1}); 
+        } 
+    } 
+     
+    std::shared_ptr<Matrix> TrQ(new Matrix("TrQ",nr,nQ)); 
+    std::shared_ptr<Matrix> T1Br(new Matrix("T1Br",nB,nr)); 
+    std::shared_ptr<Matrix> T2Br(new Matrix("T2Br",1,nr)); 
+    double** TrQp = TrQ->pointer(); 
+    double** T1Brp = T1Br->pointer(); 
+    double** T2Brp = T2Br->pointer(); 
+    for (size_t a = 0; a < na; a++) { 
+        dfh_->fill_tensor("Aar", TrQ, {a, a + 1}); 
+        C_DGEMM('N', 'T', nB, nr, nQ, 1.0, RBDp[0], nQ, TrQp[0], nQ, 0.0, T1Brp[0], nr); // ZLG 2.0 -> 1.0 
+        for (size_t B = 0; B < nB; B++) { 
+            dfh_->fill_tensor("WBar_nuc", T2Br, {B, B + 1}, {a, a + 1}); 
+            C_DAXPY(nr , 1.0, T1Brp[B], 1, T2Brp[0], 1); 
+            dfh_->write_disk_tensor("WBar", T2Br, {B, B + 1}, {a, a + 1}); 
+        } 
+    } 
 }
 
 void ASAPT0::elst() {
@@ -1603,8 +1588,10 @@ void ASAPT0::ind() {
         if (jk_memory < 0L) {
             throw PSIEXCEPTION("Too little static memory for ASAPT::induction");
         }
-        auto jk = JK::build_JK(primary_, jkfit_, options_, false, jk_memory);
-        jk->set_memory((unsigned long int)jk_memory);
+        // auto jk = JK::build_JK(primary_, jkfit_, options_, false, jk_memory);
+        std::shared_ptr<JK> jk = JK::build_JK(primary_, jkfit_, options_, false, (size_t)jk_memory);
+        // jk->set_memory((unsigned long int)jk_memory);
+        jk->set_memory((size_t)jk_memory);
         jk->set_do_J(true);
         jk->set_do_K(true);
         jk->initialize();
