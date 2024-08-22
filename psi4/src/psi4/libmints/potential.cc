@@ -50,6 +50,8 @@ using namespace psi;
 PotentialInt::PotentialInt(std::vector<SphericalTransform> &st, std::shared_ptr<BasisSet> bs1,
                            std::shared_ptr<BasisSet> bs2, int deriv)
     : OneBodyAOInt(st, bs1, bs2, deriv) {
+    bs1->print_by_level();
+    bs2->print_by_level();
     if (bs1 != bs2) {
         outfile->Printf("*********************************************************************************************************************\n");
         outfile->Printf("When computing potential integrals with different bra and ket basis, the atom definition is taken from the bra basis.\n");

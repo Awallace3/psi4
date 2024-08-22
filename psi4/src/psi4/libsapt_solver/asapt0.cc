@@ -261,7 +261,6 @@ void ASAPT0::analyze() {
     d_->set_array_variable("Pop_A", NA);
     d_->set_array_variable("Pop_B", NB);
 
-
     // Print Order 2
     outfile->Printf("Elst_AB\n");
     Elst_AB->print_out();
@@ -642,6 +641,15 @@ void ASAPT0::ps() {
     int na = Cocc_A_->colspi()[0];
     int nb = Cocc_B_->colspi()[0];
 
+    int nD = 0;
+    std::vector<int> cD;
+    for (int D = 0; D < dimer_->natom(); D++) {
+        if (dimer_->Z(D) != 0.0) {
+            nD++;
+            cD.push_back(D);
+        }
+    }
+
     int nA = 0;
     std::vector<int> cA;
     for (int A = 0; A < monomer_A_->natom(); A++) {
@@ -708,120 +716,143 @@ void ASAPT0::ps() {
     nthreads = omp_get_max_threads();
 #endif
 
+    printf("Before IntegralFactory");
     // Integral computers and thread-safe targets
-    std::shared_ptr<IntegralFactory> Vfact = std::make_shared<IntegralFactory>(jkfit_, BasisSet::zero_ao_basis_set(), jkfit_, BasisSet::zero_ao_basis_set());
-    // std::shared_ptr<IntegralFactory> Vfact = std::make_shared<IntegralFactory>(primary_A_, BasisSet::zero_ao_basis_set(), primary_A_, BasisSet::zero_ao_basis_set());
-    
-    std::vector<std::pair<double, std::array<double, 3>>> Zxyz2;
-    for (int thread = 0; thread < nthreads; thread++) {
-        Zxyz2.push_back(std::make_pair(1.0, std::array<double, 3>()));
-    }
+    // std::shared_ptr<IntegralFactory> Vfact = std::make_shared<IntegralFactory>(jkfit_, BasisSet::zero_ao_basis_set(),
+    // jkfit_, BasisSet::zero_ao_basis_set());
+    std::shared_ptr<IntegralFactory> Vfact = std::make_shared<IntegralFactory>(jkfit_, jkfit_, jkfit_, jkfit_);
 
-    std::vector<std::shared_ptr<Matrix>> ZxyzT;
     std::vector<std::shared_ptr<Matrix>> VtempT;
     std::vector<std::shared_ptr<Matrix>> QACT;
     std::vector<std::shared_ptr<Matrix>> QBDT;
     std::vector<std::shared_ptr<PotentialInt>> VintT;
+    printf("Before VintT");
+    outfile->Printf("  Before VinT:\n\n");
+    printf("basis1\n");
+    Vfact->basis1()->print_by_level();
+    printf("basis2\n");
+    Vfact->basis2()->print_by_level();
+    printf("basis3\n");
+    Vfact->basis3()->print_by_level();
+    printf("basis4\n");
+    Vfact->basis4()->print_by_level();
+
+
+    std::vector<std::vector<std::pair<double, std::array<double, 3>>>> ZxyzT;
     for (int thread = 0; thread < nthreads; thread++) {
-        ZxyzT.push_back(std::shared_ptr<Matrix>(new Matrix("Zxyz", 1, 4)));
-        VtempT.push_back(std::shared_ptr<Matrix>(new Matrix("Vtemp", nQ, 1)));
-        QACT.push_back(std::shared_ptr<Matrix>(new Matrix("QACT", nA, nQ)));
-        QBDT.push_back(std::shared_ptr<Matrix>(new Matrix("QBDT", nB, nQ)));
+        printf("thread: %d\n", thread);
+        // Need to determine what the charges
+        std::vector<std::pair<double, std::array<double, 3>>> ZxyzTmp;
+        // maybe don't do this?
+        for (int i = 0; i < dimer_->natom(); i++) {
+            printf("i: %d\n", i);
+            ZxyzTmp.push_back(
+                std::make_pair(dimer_->Z(i), std::array<double, 3>({dimer_->x(i), dimer_->y(i), dimer_->z(i)})));
+        }
+        ZxyzT.push_back(ZxyzTmp);
+        VtempT.push_back(std::make_shared<Matrix>("Vtemp", nQ, 1));
+        QACT.push_back(std::make_shared<Matrix>("QACT", nA, nQ));
+        QBDT.push_back(std::make_shared<Matrix>("QBDT", nB, nQ));
         // potential integrals have different bra and ket basis...?
-        VintT.push_back(std::shared_ptr<PotentialInt>(static_cast<PotentialInt*>(Vfact->ao_potential().release())));
-        VintT[thread]->set_charge_field(Zxyz2);
+        auto tmp = Vfact->ao_potential().release();
+        VintT.push_back(std::unique_ptr<PotentialInt>(static_cast<PotentialInt*>(tmp)));
+        VintT[thread]->set_charge_field(ZxyzT[thread]);
     }
+    outfile->Printf("  After VinT:\n\n");
+
+    // std::shared_ptr<Matrix> Zxyz(new Matrix("Zxyz",1,4));
+    // double** Zxyzp = Zxyz->pointer();
+    // std::shared_ptr<PotentialInt> Vint(static_cast<PotentialInt*>(Vfact->ao_potential()));
+    // Vint->set_charge_field(Zxyz);
+    // std::shared_ptr<Matrix> Vtemp(new Matrix("Vtemp",nQ,1));
+    // double** Vtempp = Vtemp->pointer();
 
     // Master loop
-    for (int offset = 0; offset < nP; offset += max_points) { 
-        int npoints = (offset + max_points >= nP ? nP - offset : max_points); 
-        atomic_A_->compute_weights(npoints,&xp[offset],&yp[offset],&zp[offset],QAPp,&rhoap[offset]); 
-        atomic_B_->compute_weights(npoints,&xp[offset],&yp[offset],&zp[offset],QBQp,&rhobp[offset]); 
-     
-        #pragma omp parallel for schedule(dynamic) 
-        for (int P = 0; P < npoints; P++) { 
-     
-            // Thread info 
-            int thread = 0; 
-            #ifdef _OPENMP 
-                thread = omp_get_thread_num(); 
-            #endif 
-     
-            // Pointers 
-            double** ZxyzTp = ZxyzT[thread]->pointer(); 
-            double** VtempTp = VtempT[thread]->pointer(); 
-            double** QACTp = QACT[thread]->pointer(); 
-            double** QBDTp = QBDT[thread]->pointer(); 
-     
-            // Absolute point indexing 
-            int Pabs = P + offset; 
-     
-            // => Q_A^P and Q_B^Q <= // 
-     
-            VtempT[thread]->zero(); 
-            ZxyzTp[0][0] = 1.0; 
-            ZxyzTp[0][1] = xp[Pabs]; 
-            ZxyzTp[0][2] = yp[Pabs]; 
-            ZxyzTp[0][3] = zp[Pabs]; 
-            VintT[thread]->compute(VtempT[thread]); 
-     
-            // Potential integrals add a spurious minus sign 
-            C_DGER(nA,nQ,-wp[Pabs],&QAPp[0][P],max_points,VtempTp[0],1,QACTp[0],nQ); 
-            C_DGER(nB,nQ,-wp[Pabs],&QBQp[0][P],max_points,VtempTp[0],1,QBDTp[0],nQ); 
-     
-        } 
-     
-        for (int P = 0; P < npoints; P++) { 
-     
-            // Absolute point indexing 
-            int Pabs = P + offset; 
-     
-            // => V_A^B <= // 
-     
-            for (int B = 0; B < nB; B++) { 
-                double Z  = monomer_B_->Z(cB[B]); 
-                double xc = monomer_B_->x(cB[B]); 
-                double yc = monomer_B_->y(cB[B]); 
-                double zc = monomer_B_->z(cB[B]); 
-                double R = sqrt((xp[Pabs] - xc) * (xp[Pabs] - xc) + 
-                                (yp[Pabs] - yc) * (yp[Pabs] - yc) + 
-                                (zp[Pabs] - zc) * (zp[Pabs] - zc)); 
-                if (R < 1.0E-12) continue; 
-                double Q = Z * wp[Pabs] / R; 
-                for (int A = 0; A < nA; A++) { 
-                    VABp[A][B] += -1.0 * Q * QAPp[A][P]; 
-                } 
-            } 
-     
-            // => V_B^A <= // 
-     
-            for (int A = 0; A < nA; A++) { 
-                double Z  = monomer_A_->Z(cA[A]); 
-                double xc = monomer_A_->x(cA[A]); 
-                double yc = monomer_A_->y(cA[A]); 
-                double zc = monomer_A_->z(cA[A]); 
-                double R = sqrt((xp[Pabs] - xc) * (xp[Pabs] - xc) + 
-                                (yp[Pabs] - yc) * (yp[Pabs] - yc) + 
-                                (zp[Pabs] - zc) * (zp[Pabs] - zc)); 
-                if (R < 1.0E-12) continue; 
-                double Q = Z * wp[Pabs] / R; 
-                for (int B = 0; B < nB; B++) { 
-                    VBAp[B][A] += -1.0 * Q * QBQp[B][P]; 
-                } 
-            } 
-     
-        } 
-    } 
-     
-    for (int thread = 0; thread < nthreads; thread++) { 
-        QAC->add(QACT[thread]); 
-        QBD->add(QBDT[thread]); 
-    } 
+    for (int offset = 0; offset < nP; offset += max_points) {
+        int npoints = (offset + max_points >= nP ? nP - offset : max_points);
+        atomic_A_->compute_weights(npoints, &xp[offset], &yp[offset], &zp[offset], QAPp, &rhoap[offset]);
+        atomic_B_->compute_weights(npoints, &xp[offset], &yp[offset], &zp[offset], QBQp, &rhobp[offset]);
+
+#pragma omp parallel for schedule(dynamic)
+        for (int P = 0; P < npoints; P++) {
+            // Thread info
+            int thread = 0;
+#ifdef _OPENMP
+            thread = omp_get_thread_num();
+#endif
+
+            // Pointers
+            // double** ZxyzTp = ZxyzT[thread];
+            double** VtempTp = VtempT[thread]->pointer();
+            double** QACTp = QACT[thread]->pointer();
+            double** QBDTp = QBDT[thread]->pointer();
+
+            // Absolute point indexing
+            int Pabs = P + offset;
+
+            // => Q_A^P and Q_B^Q <= //
+
+            VtempT[thread]->zero();
+            // need to do if not setting xyzs above
+            // ZxyzT[thread][0].first = 1.0;
+            // ZxyzT[thread][0].second[0] = xp[Pabs];
+            // ZxyzT[thread][0].second[1] = yp[Pabs];
+            // ZxyzT[thread][0].second[2] = zp[Pabs];
+            VintT[thread]->compute(VtempT[thread]);
+
+            // Potential integrals add a spurious minus sign
+            C_DGER(nA, nQ, -wp[Pabs], &QAPp[0][P], max_points, VtempTp[0], 1, QACTp[0], nQ);
+            C_DGER(nB, nQ, -wp[Pabs], &QBQp[0][P], max_points, VtempTp[0], 1, QBDTp[0], nQ);
+        }
+        printf("Secondary Loop\n");
+
+        for (int P = 0; P < npoints; P++) {
+            // Absolute point indexing
+            int Pabs = P + offset;
+
+            // => V_A^B <= //
+
+            for (int B = 0; B < nB; B++) {
+                double Z = monomer_B_->Z(cB[B]);
+                double xc = monomer_B_->x(cB[B]);
+                double yc = monomer_B_->y(cB[B]);
+                double zc = monomer_B_->z(cB[B]);
+                double R = sqrt((xp[Pabs] - xc) * (xp[Pabs] - xc) + (yp[Pabs] - yc) * (yp[Pabs] - yc) +
+                                (zp[Pabs] - zc) * (zp[Pabs] - zc));
+                if (R < 1.0E-12) continue;
+                double Q = Z * wp[Pabs] / R;
+                for (int A = 0; A < nA; A++) {
+                    VABp[A][B] += -1.0 * Q * QAPp[A][P];
+                }
+            }
+
+            // => V_B^A <= //
+
+            for (int A = 0; A < nA; A++) {
+                double Z = monomer_A_->Z(cA[A]);
+                double xc = monomer_A_->x(cA[A]);
+                double yc = monomer_A_->y(cA[A]);
+                double zc = monomer_A_->z(cA[A]);
+                double R = sqrt((xp[Pabs] - xc) * (xp[Pabs] - xc) + (yp[Pabs] - yc) * (yp[Pabs] - yc) +
+                                (zp[Pabs] - zc) * (zp[Pabs] - zc));
+                if (R < 1.0E-12) continue;
+                double Q = Z * wp[Pabs] / R;
+                for (int B = 0; B < nB; B++) {
+                    VBAp[B][A] += -1.0 * Q * QBQp[B][P];
+                }
+            }
+        }
+    }
+
+    for (int thread = 0; thread < nthreads; thread++) {
+        QAC->add(QACT[thread]);
+        QBD->add(QBDT[thread]);
+    }
     // QCA and QBD are responsible for the large Elst10,r (3) errors...
-    vars_["QAC"] = QAC; 
-    vars_["QBD"] = QBD; 
-    vars_["VAB"] = VAB; 
-    vars_["VBA"] = VBA; 
+    vars_["QAC"] = QAC;
+    vars_["QBD"] = QBD;
+    vars_["VAB"] = VAB;
+    vars_["VBA"] = VBA;
     outfile->Printf("\n\n  ATOMIC PSEUDOSPECTRAL COMPLETE\n\n");
 }
 
@@ -930,69 +961,69 @@ void ASAPT0::df() {
     Zxyz2.push_back(std::make_pair(1.0, std::array<double, 3>()));
     auto Vfact2 = std::make_shared<IntegralFactory>(primary_);
     std::shared_ptr<PotentialInt> Vint2(static_cast<PotentialInt*>(Vfact2->ao_potential().release()));
-    Vint2->set_charge_field(Zxyz2); 
-    auto Vtemp2 = std::make_shared<Matrix>("Vtemp2", nn, nn); 
+    Vint2->set_charge_field(Zxyz2);
+    auto Vtemp2 = std::make_shared<Matrix>("Vtemp2", nn, nn);
 
-    for (ulong A = 0; A < nA; A++) { 
-        Vtemp2->zero(); 
-        Zxyz2[0].first = monomer_A_->Z(cA[A]); 
-        Zxyz2[0].second[0] = monomer_A_->x(cA[A]); 
-        Zxyz2[0].second[1] = monomer_A_->y(cA[A]); 
-        Zxyz2[0].second[2] = monomer_A_->z(cA[A]); 
-        Vint2->compute(Vtemp2); 
+    for (ulong A = 0; A < nA; A++) {
+        Vtemp2->zero();
+        Zxyz2[0].first = monomer_A_->Z(cA[A]);
+        Zxyz2[0].second[0] = monomer_A_->x(cA[A]);
+        Zxyz2[0].second[1] = monomer_A_->y(cA[A]);
+        Zxyz2[0].second[2] = monomer_A_->z(cA[A]);
+        Vint2->compute(Vtemp2);
         // Vtemp2->print();
-        std::shared_ptr<Matrix> Vbs = linalg::triplet(Cocc_B_, Vtemp2, Cvir_B_, true, false, false); 
-        dfh_->write_disk_tensor("WAbs_nuc", Vbs, {A, A+1}); 
-    } 
-     
-    for (ulong B = 0; B < nB; B++) { 
-        Vtemp2->zero(); 
-        Zxyz2[0].first = monomer_B_->Z(cB[B]); 
-        Zxyz2[0].second[0] = monomer_B_->x(cB[B]); 
-        Zxyz2[0].second[1] = monomer_B_->y(cB[B]); 
-        Zxyz2[0].second[2] = monomer_B_->z(cB[B]); 
-        Vint2->compute(Vtemp2); 
+        std::shared_ptr<Matrix> Vbs = linalg::triplet(Cocc_B_, Vtemp2, Cvir_B_, true, false, false);
+        dfh_->write_disk_tensor("WAbs_nuc", Vbs, {A, A + 1});
+    }
+
+    for (ulong B = 0; B < nB; B++) {
+        Vtemp2->zero();
+        Zxyz2[0].first = monomer_B_->Z(cB[B]);
+        Zxyz2[0].second[0] = monomer_B_->x(cB[B]);
+        Zxyz2[0].second[1] = monomer_B_->y(cB[B]);
+        Zxyz2[0].second[2] = monomer_B_->z(cB[B]);
+        Vint2->compute(Vtemp2);
         // Vtemp2->print();
-        std::shared_ptr<Matrix> Var = linalg::triplet(Cocc_A_, Vtemp2, Cvir_A_, true, false, false); 
-        dfh_->write_disk_tensor("WBar_nuc", Var, {B, B+1}); 
-    } 
-     
-    // => Electronic Part (Massive PITA) <= // 
+        std::shared_ptr<Matrix> Var = linalg::triplet(Cocc_A_, Vtemp2, Cvir_A_, true, false, false);
+        dfh_->write_disk_tensor("WBar_nuc", Var, {B, B + 1});
+    }
+
+    // => Electronic Part (Massive PITA) <= //
     printf("\nElectronic Part\n");
-     
-    dfh_->add_disk_tensor("WAbs", std::make_tuple(nA, nb, ns)); 
-    dfh_->add_disk_tensor("WBar", std::make_tuple(nB, na, nr)); 
-    std::shared_ptr<Matrix> TsQ(new Matrix("TsQ",ns,nQ)); 
-    std::shared_ptr<Matrix> T1As(new Matrix("T1As",nA,ns)); 
-    std::shared_ptr<Matrix> T2As(new Matrix("T2As",1,ns)); 
-    double** TsQp = TsQ->pointer(); 
-    double** T1Asp = T1As->pointer(); 
-    double** T2Asp = T2As->pointer(); 
-    for (size_t b = 0; b < nb; b++) { 
-        dfh_->fill_tensor("Abs", TsQ, {b, b + 1}); 
-        C_DGEMM('N', 'T', nA, ns, nQ, 1.0, RACp[0], nQ, TsQp[0], nQ, 0.0, T1Asp[0], ns); // ZLG 2.0 -> 1.0 
-        for (size_t A = 0; A < nA; A++) { 
-            dfh_->fill_tensor("WAbs_nuc", T2As, {A, A + 1}, {b, b + 1}); 
-            C_DAXPY(ns, 1.0, T1Asp[A], 1, T2Asp[0], 1);  // ZLG 1.0 -> 2.0 
-            dfh_->write_disk_tensor("WAbs", T2As, {A, A + 1}, {b, b + 1}); 
-        } 
-    } 
-     
-    std::shared_ptr<Matrix> TrQ(new Matrix("TrQ",nr,nQ)); 
-    std::shared_ptr<Matrix> T1Br(new Matrix("T1Br",nB,nr)); 
-    std::shared_ptr<Matrix> T2Br(new Matrix("T2Br",1,nr)); 
-    double** TrQp = TrQ->pointer(); 
-    double** T1Brp = T1Br->pointer(); 
-    double** T2Brp = T2Br->pointer(); 
-    for (size_t a = 0; a < na; a++) { 
-        dfh_->fill_tensor("Aar", TrQ, {a, a + 1}); 
-        C_DGEMM('N', 'T', nB, nr, nQ, 1.0, RBDp[0], nQ, TrQp[0], nQ, 0.0, T1Brp[0], nr); // ZLG 2.0 -> 1.0 
-        for (size_t B = 0; B < nB; B++) { 
-            dfh_->fill_tensor("WBar_nuc", T2Br, {B, B + 1}, {a, a + 1}); 
-            C_DAXPY(nr , 1.0, T1Brp[B], 1, T2Brp[0], 1); 
-            dfh_->write_disk_tensor("WBar", T2Br, {B, B + 1}, {a, a + 1}); 
-        } 
-    } 
+
+    dfh_->add_disk_tensor("WAbs", std::make_tuple(nA, nb, ns));
+    dfh_->add_disk_tensor("WBar", std::make_tuple(nB, na, nr));
+    std::shared_ptr<Matrix> TsQ(new Matrix("TsQ", ns, nQ));
+    std::shared_ptr<Matrix> T1As(new Matrix("T1As", nA, ns));
+    std::shared_ptr<Matrix> T2As(new Matrix("T2As", 1, ns));
+    double** TsQp = TsQ->pointer();
+    double** T1Asp = T1As->pointer();
+    double** T2Asp = T2As->pointer();
+    for (size_t b = 0; b < nb; b++) {
+        dfh_->fill_tensor("Abs", TsQ, {b, b + 1});
+        C_DGEMM('N', 'T', nA, ns, nQ, 1.0, RACp[0], nQ, TsQp[0], nQ, 0.0, T1Asp[0], ns);  // ZLG 2.0 -> 1.0
+        for (size_t A = 0; A < nA; A++) {
+            dfh_->fill_tensor("WAbs_nuc", T2As, {A, A + 1}, {b, b + 1});
+            C_DAXPY(ns, 1.0, T1Asp[A], 1, T2Asp[0], 1);  // ZLG 1.0 -> 2.0
+            dfh_->write_disk_tensor("WAbs", T2As, {A, A + 1}, {b, b + 1});
+        }
+    }
+
+    std::shared_ptr<Matrix> TrQ(new Matrix("TrQ", nr, nQ));
+    std::shared_ptr<Matrix> T1Br(new Matrix("T1Br", nB, nr));
+    std::shared_ptr<Matrix> T2Br(new Matrix("T2Br", 1, nr));
+    double** TrQp = TrQ->pointer();
+    double** T1Brp = T1Br->pointer();
+    double** T2Brp = T2Br->pointer();
+    for (size_t a = 0; a < na; a++) {
+        dfh_->fill_tensor("Aar", TrQ, {a, a + 1});
+        C_DGEMM('N', 'T', nB, nr, nQ, 1.0, RBDp[0], nQ, TrQp[0], nQ, 0.0, T1Brp[0], nr);  // ZLG 2.0 -> 1.0
+        for (size_t B = 0; B < nB; B++) {
+            dfh_->fill_tensor("WBar_nuc", T2Br, {B, B + 1}, {a, a + 1});
+            C_DAXPY(nr, 1.0, T1Brp[B], 1, T2Brp[0], 1);
+            dfh_->write_disk_tensor("WBar", T2Br, {B, B + 1}, {a, a + 1});
+        }
+    }
     printf("\nElectronic Part Complete\n");
 }
 
