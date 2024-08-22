@@ -710,6 +710,7 @@ void ASAPT0::ps() {
 
     // Integral computers and thread-safe targets
     std::shared_ptr<IntegralFactory> Vfact = std::make_shared<IntegralFactory>(jkfit_, BasisSet::zero_ao_basis_set(), jkfit_, BasisSet::zero_ao_basis_set());
+    // std::shared_ptr<IntegralFactory> Vfact = std::make_shared<IntegralFactory>(primary_A_, BasisSet::zero_ao_basis_set(), primary_A_, BasisSet::zero_ao_basis_set());
     
     std::vector<std::pair<double, std::array<double, 3>>> Zxyz2;
     for (int thread = 0; thread < nthreads; thread++) {
@@ -816,6 +817,7 @@ void ASAPT0::ps() {
         QAC->add(QACT[thread]); 
         QBD->add(QBDT[thread]); 
     } 
+    // QCA and QBD are responsible for the large Elst10,r (3) errors...
     vars_["QAC"] = QAC; 
     vars_["QBD"] = QBD; 
     vars_["VAB"] = VAB; 
@@ -924,44 +926,39 @@ void ASAPT0::df() {
     // => Nuclear Part (PITA) <= //
 
     printf("Nuclear Part\n");
-    // auto Zxyz2 = std::make_shared<Matrix>("Zxyz", 1, 4);
     std::vector<std::pair<double, std::array<double, 3>>> Zxyz2;
     Zxyz2.push_back(std::make_pair(1.0, std::array<double, 3>()));
-    // std::vector<std::pair<double, std::array<double, 3>>> Zxyz;
     auto Vfact2 = std::make_shared<IntegralFactory>(primary_);
-    // initiliazie Zxyz2p as point fo Zxyz2
-    // double **Zxyz2p = Zxyz2->pointer();
     std::shared_ptr<PotentialInt> Vint2(static_cast<PotentialInt*>(Vfact2->ao_potential().release()));
-    printf("\nNuclear Part Complete\n");
-
-    // loop over Zxyz2 and copy to Zxyz
-
     Vint2->set_charge_field(Zxyz2); 
-     
     auto Vtemp2 = std::make_shared<Matrix>("Vtemp2", nn, nn); 
-     
+
     for (ulong A = 0; A < nA; A++) { 
         Vtemp2->zero(); 
-        // Zxyz2p[0] = monomer_A_->Z(cA[A]); 
+        Zxyz2[0].first = monomer_A_->Z(cA[A]); 
         Zxyz2[0].second[0] = monomer_A_->x(cA[A]); 
         Zxyz2[0].second[1] = monomer_A_->y(cA[A]); 
         Zxyz2[0].second[2] = monomer_A_->z(cA[A]); 
         Vint2->compute(Vtemp2); 
+        // Vtemp2->print();
         std::shared_ptr<Matrix> Vbs = linalg::triplet(Cocc_B_, Vtemp2, Cvir_B_, true, false, false); 
         dfh_->write_disk_tensor("WAbs_nuc", Vbs, {A, A+1}); 
     } 
      
     for (ulong B = 0; B < nB; B++) { 
         Vtemp2->zero(); 
-        Zxyz2[0].second[0] = monomer_B_->x(cA[B]); 
-        Zxyz2[0].second[1] = monomer_B_->y(cA[B]); 
-        Zxyz2[0].second[2] = monomer_B_->z(cA[B]); 
+        Zxyz2[0].first = monomer_B_->Z(cB[B]); 
+        Zxyz2[0].second[0] = monomer_B_->x(cB[B]); 
+        Zxyz2[0].second[1] = monomer_B_->y(cB[B]); 
+        Zxyz2[0].second[2] = monomer_B_->z(cB[B]); 
         Vint2->compute(Vtemp2); 
+        // Vtemp2->print();
         std::shared_ptr<Matrix> Var = linalg::triplet(Cocc_A_, Vtemp2, Cvir_A_, true, false, false); 
         dfh_->write_disk_tensor("WBar_nuc", Var, {B, B+1}); 
     } 
      
     // => Electronic Part (Massive PITA) <= // 
+    printf("\nElectronic Part\n");
      
     dfh_->add_disk_tensor("WAbs", std::make_tuple(nA, nb, ns)); 
     dfh_->add_disk_tensor("WBar", std::make_tuple(nB, na, nr)); 
@@ -996,6 +993,7 @@ void ASAPT0::df() {
             dfh_->write_disk_tensor("WBar", T2Br, {B, B + 1}, {a, a + 1}); 
         } 
     } 
+    printf("\nElectronic Part Complete\n");
 }
 
 void ASAPT0::elst() {
@@ -1065,6 +1063,7 @@ void ASAPT0::elst() {
 
     // => a <-> b <= //
 
+    // Elst10_3 is wayyyy to big. error is coming from creation of RAC and RBD likely...
     std::shared_ptr<Matrix> Elst10_3 = linalg::doublet(RAC, RBD, false, true);
     double** Elst10_3p = Elst10_3->pointer();
     for (int A = 0; A < nA; A++) {
