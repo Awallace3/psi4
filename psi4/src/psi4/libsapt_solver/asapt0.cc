@@ -709,28 +709,35 @@ void ASAPT0::ps() {
 #endif
 
     // Integral computers and thread-safe targets
-    std::shared_ptr<IntegralFactory> Vfact = std::make_shared<IntegralFactory>(jkfit_, BasisSet::zero_ao_basis_set(), jkfit_, BasisSet::zero_ao_basis_set());
+    // std::shared_ptr<IntegralFactory> Vfact = std::make_shared<IntegralFactory>(jkfit_, BasisSet::zero_ao_basis_set(), jkfit_, BasisSet::zero_ao_basis_set());
+    std::shared_ptr<IntegralFactory> Vfact = std::make_shared<IntegralFactory>(jkfit_, jkfit_, jkfit_, jkfit_);
     // std::shared_ptr<IntegralFactory> Vfact = std::make_shared<IntegralFactory>(primary_A_, BasisSet::zero_ao_basis_set(), primary_A_, BasisSet::zero_ao_basis_set());
     
-    std::vector<std::pair<double, std::array<double, 3>>> Zxyz2;
-    for (int thread = 0; thread < nthreads; thread++) {
-        Zxyz2.push_back(std::make_pair(1.0, std::array<double, 3>()));
-    }
+    // std::vector<std::pair<double, std::array<double, 3>>> Zxyz2;
+    // for (int thread = 0; thread < nthreads; thread++) {
+    //     Zxyz2.push_back(std::make_pair(1.0, std::array<double, 3>()));
+    // }
 
-    std::vector<std::shared_ptr<Matrix>> ZxyzT;
+    std::vector<std::shared_ptr<std::vector<std::pair<double, std::array<double, 3>>>>> ZxyzT;
     std::vector<std::shared_ptr<Matrix>> VtempT;
     std::vector<std::shared_ptr<Matrix>> QACT;
     std::vector<std::shared_ptr<Matrix>> QBDT;
     std::vector<std::shared_ptr<PotentialInt>> VintT;
+
+    outfile->Printf("Threaded objects creating...\n");
     for (int thread = 0; thread < nthreads; thread++) {
-        ZxyzT.push_back(std::shared_ptr<Matrix>(new Matrix("Zxyz", 1, 4)));
+        // ZxyzT.push_back(std::shared_ptr<Matrix>(new Matrix("Zxyz", 1, 4)));
+        std::shared_ptr<std::vector<std::pair<double, std::array<double, 3>>>>tmp_zxyz;
+        tmp_zxyz->push_back(std::make_pair(1.0, std::array<double, 3>()));
+        ZxyzT.push_back(tmp_zxyz);
         VtempT.push_back(std::shared_ptr<Matrix>(new Matrix("Vtemp", nQ, 1)));
         QACT.push_back(std::shared_ptr<Matrix>(new Matrix("QACT", nA, nQ)));
         QBDT.push_back(std::shared_ptr<Matrix>(new Matrix("QBDT", nB, nQ)));
         // potential integrals have different bra and ket basis...?
         VintT.push_back(std::shared_ptr<PotentialInt>(static_cast<PotentialInt*>(Vfact->ao_potential().release())));
-        VintT[thread]->set_charge_field(Zxyz2);
+        // VintT[thread]->set_charge_field(*ZxyzT[thread]);
     }
+    outfile->Printf("Threaded objects created\n");
 
     // Master loop
     for (int offset = 0; offset < nP; offset += max_points) { 
@@ -748,7 +755,7 @@ void ASAPT0::ps() {
             #endif 
      
             // Pointers 
-            double** ZxyzTp = ZxyzT[thread]->pointer(); 
+            auto ZxyzTp = ZxyzT[thread]; 
             double** VtempTp = VtempT[thread]->pointer(); 
             double** QACTp = QACT[thread]->pointer(); 
             double** QBDTp = QBDT[thread]->pointer(); 
@@ -758,12 +765,16 @@ void ASAPT0::ps() {
      
             // => Q_A^P and Q_B^Q <= // 
      
+            outfile->Printf("  VtempT %d:\n", thread);
             VtempT[thread]->zero(); 
-            ZxyzTp[0][0] = 1.0; 
-            ZxyzTp[0][1] = xp[Pabs]; 
-            ZxyzTp[0][2] = yp[Pabs]; 
-            ZxyzTp[0][3] = zp[Pabs]; 
+            outfile->Printf("  ZxyzTp %d:\n", thread);
+            (*ZxyzTp)[0].first = 1.0; 
+            (*ZxyzTp)[0].second[1] = xp[Pabs]; 
+            (*ZxyzTp)[0].second[2] = yp[Pabs]; 
+            (*ZxyzTp)[0].second[3] = zp[Pabs]; 
+            outfile->Printf("  VtempT[thread] start %d:\n", thread);
             VintT[thread]->compute(VtempT[thread]); 
+            outfile->Printf("  VtempT[thread] complete %d:\n", thread);
      
             // Potential integrals add a spurious minus sign 
             C_DGER(nA,nQ,-wp[Pabs],&QAPp[0][P],max_points,VtempTp[0],1,QACTp[0],nQ); 
