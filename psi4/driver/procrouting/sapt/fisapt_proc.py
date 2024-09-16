@@ -40,6 +40,8 @@ def fisapt_compute_energy(self, external_potentials=None):
 
     # => Header <=
 
+    FISAPT_FSAPT_OUTPUT_TO_PSIVARS = core.get_option("FISAPT", "FISAPT_FSAPT_OUTPUT_TO_PSIVARS")
+
     self.print_header()
 
     # => Zero-th Order Wavefunction <=
@@ -116,7 +118,9 @@ def fisapt_compute_energy(self, external_potentials=None):
         #    text.append("\n    Empirical Dispersion Energy [Eh] =     {:24.16f}\n".format(Edisp))
         #    text.append('\n')
         #    core.print_out('\n'.join(text))
-        self.fdrop(external_potentials)
+
+        if not FISAPT_FSAPT_OUTPUT_TO_PSIVARS:
+            self.fdrop(external_potentials)
 
     # => Scalar-Field Analysis <=
 

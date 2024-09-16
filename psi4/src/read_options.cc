@@ -1169,6 +1169,8 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_double("SAPT_FDDS_V2_RHO_CUTOFF", 1.e-6);
         /*- Which MP2 Exch-Disp module to use? !expert -*/
         options.add_str("SAPT_DFT_MP2_DISP_ALG", "SAPT", "FISAPT SAPT");
+        /*- Run SAPT(DFT) in FISAPT mode -*/
+        options.add_bool("SAPT_DFT_FISAPT", false);
         /*- Interior option to clean up printing !expert -*/
         options.add_bool("SAPT_QUIET", false);
     }
@@ -1229,6 +1231,8 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("SSAPT0_SCALE", false);
         /*- Filepath to drop sSAPT0 exchange-scaling F-SAPT data within input file directory -*/
         options.add_str_i("FISAPT_FSSAPT_FILEPATH", "s-fsapt/");
+        /*- Optionally store FSAPT output to psi variables instead of output files -*/
+        options.add_bool("FISAPT_FSAPT_OUTPUT_TO_PSIVARS", false);
 
         // => CubicScalarGrid options <= //
 
