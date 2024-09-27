@@ -1151,6 +1151,8 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("SAPT_DFT_DO_HYBRID", true);
         /*- Compute the Delta-DFT correction? -*/
         options.add_bool("SAPT_DFT_DO_DDFT", false);
+        /*- Do SAPT(DFT) Dispersion? Might turn off if using Delte-DFT correction and SAPT_DFT_D4_IE -*/
+        options.add_bool("SAPT_DFT_DO_DISP", true);
         /*- Compute -D4 dispersion in SAPT(DFT) for SAPT(DFT)-D4? !expert -*/
         options.add_bool("SAPT_DFT_D4_IE", false);
         /*- Scheme for approximating exchange-dispersion for SAPT-DFT.
