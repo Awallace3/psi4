@@ -76,6 +76,47 @@ def run_sapt_dft(name, **kwargs):
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     do_dft = sapt_dft_functional != "HF"
 
+    # Print out the title and some information
+    core.print_out("\n")
+    core.print_out("         ---------------------------------------------------------\n")
+    core.print_out("         " + "SAPT(DFT) Procedure".center(58) + "\n")
+    core.print_out("\n")
+    core.print_out("         " + "by Daniel G. A. Smith".center(58) + "\n")
+    core.print_out("         ---------------------------------------------------------\n")
+    core.print_out("\n")
+
+    # core.print_out("  !!!  WARNING:  SAPT(DFT) capability is in beta. Please use with caution. !!!\n\n")
+    core.print_out("Warning! The default value of SAPT_DFT_EXCH_DISP_SCALE_SCHEME has changed from DISP to FIXED. Please be careful comparing results with earlier versions. \n\n")
+
+    core.print_out("  ==> Algorithm <==\n\n")
+    core.print_out("   SAPT DFT Functional     %12s\n" % str(sapt_dft_functional))
+    core.print_out("   Monomer A GRAC Shift    %12.6f\n" % mon_a_shift)
+    core.print_out("   Monomer B GRAC Shift    %12.6f\n" % mon_b_shift)
+    core.print_out("   Delta HF                %12s\n" % ("True" if do_delta_hf else "False"))
+    core.print_out("   JK Algorithm            %12s\n" % core.get_global_option("SCF_TYPE"))
+    core.print_out("\n")
+    core.print_out("   Required computations:\n")
+    if (do_delta_hf):
+        core.print_out("     HF  (Dimer)\n")
+        core.print_out("     HF  (Monomer A)\n")
+        core.print_out("     HF  (Monomer B)\n")
+    if (do_dft):
+        core.print_out("     DFT (Monomer A)\n")
+        core.print_out("     DFT (Monomer B)\n")
+    if (do_delta_dft):
+        core.print_out("     Delta DFT Correction:\n")
+        core.print_out("       DFT (Dimer)\n")
+        core.print_out("       DFT (Monomer A: No Asymptotic Correction)\n")
+        core.print_out("       DFT (Monomer B: No Asymptotic Correction)\n")
+
+    core.print_out("\n")
+
+    if do_dft and ((mon_a_shift == 0.0) or (mon_b_shift == 0.0)):
+        raise ValidationError('SAPT(DFT): must set both "SAPT_DFT_GRAC_SHIFT_A" and "B".')
+
+    if (core.get_option('SCF', 'REFERENCE') != 'RHF'):
+        raise ValidationError('SAPT(DFT) currently only supports restricted references.')
+
     if do_delta_dft and do_dft:
         core.IO.set_default_namespace('dimer')
         core.print_out("\n")
@@ -122,42 +163,6 @@ def run_sapt_dft(name, **kwargs):
         data["D4 IE"] = dimer_d4 - monA_d4 - monB_d4
         core.timer_off("SAPT(DFT):D4 Interaction Energy")
 
-
-
-    # Print out the title and some information
-    core.print_out("\n")
-    core.print_out("         ---------------------------------------------------------\n")
-    core.print_out("         " + "SAPT(DFT) Procedure".center(58) + "\n")
-    core.print_out("\n")
-    core.print_out("         " + "by Daniel G. A. Smith".center(58) + "\n")
-    core.print_out("         ---------------------------------------------------------\n")
-    core.print_out("\n")
-
-    # core.print_out("  !!!  WARNING:  SAPT(DFT) capability is in beta. Please use with caution. !!!\n\n")
-    core.print_out("Warning! The default value of SAPT_DFT_EXCH_DISP_SCALE_SCHEME has changed from DISP to FIXED. Please be careful comparing results with earlier versions. \n\n")
-
-    core.print_out("  ==> Algorithm <==\n\n")
-    core.print_out("   SAPT DFT Functional     %12s\n" % str(sapt_dft_functional))
-    core.print_out("   Monomer A GRAC Shift    %12.6f\n" % mon_a_shift)
-    core.print_out("   Monomer B GRAC Shift    %12.6f\n" % mon_b_shift)
-    core.print_out("   Delta HF                %12s\n" % ("True" if do_delta_hf else "False"))
-    core.print_out("   JK Algorithm            %12s\n" % core.get_global_option("SCF_TYPE"))
-    core.print_out("\n")
-    core.print_out("   Required computations:\n")
-    if (do_delta_hf):
-        core.print_out("     HF  (Dimer)\n")
-        core.print_out("     HF  (Monomer A)\n")
-        core.print_out("     HF  (Monomer B)\n")
-    if (do_dft):
-        core.print_out("     DFT (Monomer A)\n")
-        core.print_out("     DFT (Monomer B)\n")
-    core.print_out("\n")
-
-    if do_dft and ((mon_a_shift == 0.0) or (mon_b_shift == 0.0)):
-        raise ValidationError('SAPT(DFT): must set both "SAPT_DFT_GRAC_SHIFT_A" and "B".')
-
-    if (core.get_option('SCF', 'REFERENCE') != 'RHF'):
-        raise ValidationError('SAPT(DFT) currently only supports restricted references.')
 
     core.IO.set_default_namespace('dimer')
 

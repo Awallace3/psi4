@@ -28,6 +28,8 @@ def test_sapt_dft_compute_ddft_d4():
     psi4.set_options(
         {
             "basis": "STO-3G",
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
             "sapt_dft_grac_shift_a": 0.136,
             "sapt_dft_grac_shift_b": 0.136,
             "SAPT_DFT_FUNCTIONAL": dft_functional,
@@ -40,14 +42,28 @@ def test_sapt_dft_compute_ddft_d4():
         psi4.energy(dft_functional, bsse_type="CP", molecule=mol_dimer)
         * hartree_to_kcalmol
     )
+    # many-body energies
+    # dimer    :-150.5070040376297698
+    # monomer A: -75.2534797048230359
+    # monomer B: -75.2469427300573841
 
     psi4.energy("SAPT(DFT)")
+    # sapt(dft) DFT energies
+    # dimer    :-150.5070038696833024
+    # monomer A: -75.2469415558837937
+    # monomer B: -75.2534791716759486
+
     ELST = psi4.core.variable("SAPT ELST ENERGY")
     EXCH = psi4.core.variable("SAPT EXCH ENERGY")
     IND = psi4.core.variable("SAPT IND ENERGY")
     DFT_MONA = psi4.core.variable("DFT MONOMER A ENERGY")
     DFT_MONB = psi4.core.variable("DFT MONOMER B ENERGY")
+    # DFT_MONA = psi4.core.variable("DFT MONOMERA")
+    # DFT_MONB = psi4.core.variable("DFT MONOMERB")
     DFT_DIMER = psi4.core.variable("DFT DIMER ENERGY")
+    # DFT_DIMER = psi4.core.variable("DFT DIMER")
+
+    print(f"{DFT_DIMER = }\n{DFT_MONA = }\n{DFT_MONB = }")
     DFT_IE = (DFT_DIMER - DFT_MONA - DFT_MONB) * hartree_to_kcalmol
     print(f"bsse: {dft_IE = }")
     print(f"SAPT: {DFT_IE = }")
