@@ -34,16 +34,13 @@
     \brief   This class stores all the basic info regarding MOs
 */
 
-#include <string>
-
-#include "psi4/libmints/wavefunction.h"
 #include "moinfo_base.h"
 
 namespace psi {
 
 class MOInfoSCF : public MOInfoBase {
    public:
-    MOInfoSCF(Wavefunction& ref_wfn_, Options& options_, bool silent_ = false);
+    MOInfoSCF(Wavefunction& ref_wfn_, Options& options_);
     ~MOInfoSCF();
 
    private:
@@ -51,7 +48,7 @@ class MOInfoSCF : public MOInfoBase {
     void print_mo();
 };
 
-extern MOInfoSCF* moinfo_scf;
+extern MOInfoSCF* moinfo_scf;  // Unfortunate, but psi::mcscf assumes that this is declared.
 
 }  // namespace psi
 

@@ -39,7 +39,6 @@
 #include "psi4/libmints/sobasis.h"
 #include "psi4/libciomr/libciomr.h"
 
-;
 using namespace psi;
 
 MatrixFactory::MatrixFactory() { nirrep_ = 0; }
@@ -111,7 +110,7 @@ std::unique_ptr<Matrix> MatrixFactory::create_matrix(int symmetry) { return std:
 /// Returns a new Matrix object with default dimensions
 SharedMatrix MatrixFactory::create_shared_matrix() const { return std::make_shared<Matrix>(nirrep_, rowspi_, colspi_); }
 
-void MatrixFactory::create_matrix(Matrix& mat, int symmetry) { mat.init(nirrep_, rowspi_, colspi_, "", symmetry); }
+void MatrixFactory::create_matrix(Matrix& mat, int symmetry) { mat.init(rowspi_, colspi_, "", symmetry); }
 
 /// Returns a new Matrix object named name with default dimensions
 std::unique_ptr<Matrix> MatrixFactory::create_matrix(std::string name, int symmetry) {
@@ -131,7 +130,7 @@ SharedMatrix MatrixFactory::create_shared_matrix(const std::string& name, int ro
 }
 
 void MatrixFactory::create_matrix(Matrix& mat, std::string name, int symmetry) {
-    mat.init(nirrep_, rowspi_, colspi_, name, symmetry);
+    mat.init(rowspi_, colspi_, name, symmetry);
 }
 
 /// Returns a new Vector object with default dimensions

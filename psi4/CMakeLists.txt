@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.19 FATAL_ERROR)
 cmake_policy(SET CMP0094 NEW)
 project(psi4-core
         LANGUAGES C CXX)
@@ -97,6 +97,15 @@ else()
     message(STATUS "Disabled dkh ${dkh_DIR}")
 endif()
 
+if(${ENABLE_IntegratorXX})
+    find_package(IntegratorXX CONFIG REQUIRED)
+    get_property(_loc TARGET IntegratorXX::IntegratorXX PROPERTY LOCATION)
+    list(APPEND _addons ${_loc})
+    message(STATUS "${Cyan}Using IntegratorXX${ColourReset}: ${_loc} (version ${IntegratorXX_VERSION})")
+else()
+    message(STATUS "Disabled IntegratorXX")
+endif()
+
 if(${ENABLE_ecpint})
     find_package(ecpint 1.0.7 CONFIG REQUIRED)
     get_property(_loc TARGET ECPINT::ecpint PROPERTY LOCATION)
@@ -126,7 +135,7 @@ else()
 endif()
 
 if(${ENABLE_Einsums})
-    find_package(Einsums 0.3 CONFIG REQUIRED)
+    find_package(Einsums 0.5 CONFIG REQUIRED)
     get_property(_loc TARGET Einsums::einsums PROPERTY LOCATION)
     list(APPEND _addons ${_loc})
     message(STATUS "${Cyan}Using Einsums${ColourReset}: ${_loc} (version ${Einsums_VERSION})")
@@ -134,19 +143,28 @@ else()
     message(STATUS "Disabled Einsums ${Einsums_DIR}")
 endif ()
 
-if(${ENABLE_erd})
-    find_package(erd 3.0.6 CONFIG REQUIRED)
-    get_property(_loc TARGET erd::erd PROPERTY LOCATION)
-    list(APPEND _addons ${_loc})
-    message(STATUS "${Cyan}Using erd${ColourReset}: ${_loc} (version ${erd_VERSION})")
-else()
-    message(STATUS "Disabled erd ${erd_DIR}")
-endif()
-
 find_package(gau2grid 2.0 CONFIG REQUIRED)
 get_property(_loc TARGET gau2grid::gg PROPERTY LOCATION)
 list(APPEND _addons ${_loc})
 message(STATUS "${Cyan}Using gau2grid${ColourReset}: ${_loc} (version ${gau2grid_VERSION})")
+
+if(${ENABLE_gauxc})
+    if(NOT "${gauxc_DIR}" STREQUAL "")
+        if("${IntegratorXX_DIR}" STREQUAL "")
+            set(IntegratorXX_DIR ${gauxc_DIR}/../IntegratorXX)
+        endif()
+        set(ExchCXX_DIR ${gauxc_DIR}/../ExchCXX)
+    endif()
+
+    get_property(BLAS_LIBRARIES TARGET tgt::lapk PROPERTY INTERFACE_LINK_LIBRARIES)
+
+    find_package(gauxc CONFIG REQUIRED COMPONENTS IntegratorXX ExchCXX)
+    get_property(_loc TARGET gauxc::gauxc PROPERTY LOCATION)
+    list(APPEND _addons ${_loc})
+    message(STATUS "${Cyan}Using gauxc${ColourReset}: ${_loc} (version ${gauxc_VERSION})")
+else()
+    message(STATUS "Disabled GauXC ${gauxc_DIR}")
+endif()
 
 if(${ENABLE_gdma})
     # neither gdma nor pygdma actually needed c-side; runtime detection would
@@ -159,27 +177,20 @@ else()
     message(STATUS "Disabled gdma ${gdma_DIR}")
 endif()
 
-if(${ENABLE_Libint1t})
-find_package(Libint 1.2.0 CONFIG REQUIRED COMPONENTS ${MAX_AM_ERI})
-get_property(_loc TARGET Libint::int PROPERTY LOCATION)
-list(APPEND _addons ${_loc})
-message(STATUS "${Cyan}Using Libint ${Libint_MAX_AM_ERI}${ColourReset}: ${_loc} (version ${Libint_VERSION})")
-endif()
-
 find_package(
   Libint2
-  2.7.2
+  2.8.1
   CONFIG
   REQUIRED
-  COMPONENTS
-    sss
-    CXX_ho
-    impure_sh
-    "eri_c4_d0_l${MAX_AM_ERI}" eri_c3_d0_l4 eri_c2_d0_l4 onebody_d0_l4
-     eri_c4_d1_l2              eri_c3_d1_l3 eri_c2_d1_l3 onebody_d1_l3
-                                                         onebody_d2_l3
-  OPTIONAL_COMPONENTS
-     eri_c4_d2_l2              eri_c3_d2_l3 eri_c2_d2_l3
+#  COMPONENTS
+#    sss
+#    CXX_ho
+#    impure_sh
+#    "eri_c4_d0_l${MAX_AM_ERI}" eri_c3_d0_l4 eri_c2_d0_l4 onebody_d0_l4
+#     eri_c4_d1_l2              eri_c3_d1_l3 eri_c2_d1_l3 onebody_d1_l3
+#                                                         onebody_d2_l3
+#  OPTIONAL_COMPONENTS
+#     eri_c4_d2_l2              eri_c3_d2_l3 eri_c2_d2_l3
   )
 get_property(_loc TARGET Libint2::int2 PROPERTY LOCATION)
 # defer until upstream provides full-dress targets get_property(Libint2_VERSION TARGET Libint2::int2 PROPERTY Libint2_VERSION)
@@ -233,6 +244,12 @@ if(APPLE)
 elseif(UNIX)
     set(PRE_LIBRARY_OPTION -Wl,--whole-archive)
     set(POST_LIBRARY_OPTION -Wl,--no-whole-archive)
+endif()
+
+# add -pedantic-errors flag here, if FORCE_PEDANTIC is enabled 
+if(${FORCE_PEDANTIC}) 
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pedantic-errors")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pedantic-errors")
 endif()
 
 # <<<  Build  >>>
@@ -330,6 +347,7 @@ install(
 install(
   DIRECTORY
     ../tests/pytests/test_fchk_writer
+    ../tests/pytests/test_gauxc_writer
     ../tests/pytests/test_molden_writer
     ../tests/pytests/test_psi4_qcschema
   DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR}/psi4/tests/
