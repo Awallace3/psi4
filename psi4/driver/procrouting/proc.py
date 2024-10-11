@@ -4528,6 +4528,9 @@ def run_sapt(name, **kwargs):
 
     do_delta_mp2 = True if name.endswith('dmp2') else False
     do_empirical_disp = True if '-d' in name.lower() else False
+    delta_corrected_dispersion_basisset = core.get_global_option(
+        'SAPT_DELTA_CORRECTED_DISPERSION_BASISSET'
+    )
 
     if do_empirical_disp:
         ## Make sure we are turning SAPT0 dispersion off
@@ -4659,6 +4662,7 @@ def run_sapt(name, **kwargs):
     e_sapt = core.sapt(dimer_wfn, monomerA_wfn, monomerB_wfn)
     dimer_wfn.set_module("sapt")
 
+
     from psi4.driver.qcdb.psivardefs import sapt_psivars
     p4util.expand_psivars(sapt_psivars())
     optstash.restore()
@@ -4668,6 +4672,8 @@ def run_sapt(name, **kwargs):
         sapt_name = "sapt0"
     else:
         sapt_name = name
+
+        
 
     # Make sure we got induction, otherwise replace it with uncoupled induction
     which_ind = 'IND'
@@ -4687,6 +4693,15 @@ def run_sapt(name, **kwargs):
     if do_empirical_disp:
         proc_util.sapt_empirical_dispersion(name, dimer_wfn)
 
+    sapt_vars = core.get_variables()
+
+    if delta_corrected_dispersion_basisset != "":
+        print("delta corrected dispersion...")
+        core.set_local_option("BASIS", delta_corrected_dispersion_basisset)
+        core.set_local_option('SAPT', 'SAPT_LEVEL', 'SAPT0')
+        core.sapt(dimer_wfn, monomerA_wfn, monomerB_wfn)
+        print("delta corrected dispersion complete!")
+        print(core.get_variables())
     return dimer_wfn
 
 

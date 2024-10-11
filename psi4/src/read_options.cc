@@ -1023,10 +1023,12 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         The integrals are computed before any terms, so all integrals will
         be computed even if they are not needed for the requested term !expert -*/
         options.add_bool("SAPT0_E20IND", false);
-        /*- For SAPT0 only, compute only second-order induction
+        /*- For SAPT0 only, compute only second-order dispersion
         The integrals are computed before any terms, so all integrals will
         be computed even if they are not needed for the requested term !expert -*/
         options.add_bool("SAPT0_E20DISP", false);
+        /*- Compute SAPT delta-corrected dispersion. Takes in a valid basis set as a string -*/
+        options.add_str("SAPT_DELTA_CORRECTED_DISPERSION_BASISSET", "");
 
         /*- Convergence criterion for residual of the CPHF/CPKS coefficients
           in the SAPT $E@@{ind,resp}^{(20)}$ term. This applies to
