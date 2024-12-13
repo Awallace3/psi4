@@ -3,7 +3,7 @@
 .. #
 .. # Psi4: an open-source quantum chemistry software package
 .. #
-.. # Copyright (c) 2007-2023 The Psi4 Developers.
+.. # Copyright (c) 2007-2024 The Psi4 Developers.
 .. #
 .. # The copyrights for code used from other parties are included in
 .. # the corresponding files.
@@ -1065,6 +1065,10 @@ PSI Variables by Alpha
 
    Per-atom expectation value of r^3 [a0^3], equivalent to the volume
    of the MBIS-partitioned density.
+
+.. psivar:: MBIS VALENCE CHARGES
+
+   Per-atom valence charges [e] computed from an MBIS partitioned density.
 
 .. psivar:: MBIS VALENCE WIDTHS
 

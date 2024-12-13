@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2024 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -51,6 +51,7 @@ class Options;
 class PSIO;
 class DFHelper;
 class DFTGrid;
+class PetiteList;
 
 namespace pk {
 class PKManager;
@@ -248,8 +249,6 @@ class PSI_API JK {
     double do_csam_;
     /// Whether to all desymmetrization, for cases when it's already been performed elsewhere
     std::vector<bool> input_symmetry_cast_map_;
-    /// Use severe screening techniques? Useful in early SCF iterations (defaults to false)
-    bool early_screening_;
     /// Number of ERI shell quartets computed, i.e., not screened out
     size_t num_computed_shells_;
     /// Tally of ERI shell n-lets (triplets, quartets) computed per SCF iteration 
@@ -485,14 +484,6 @@ class PSI_API JK {
     */
     virtual void set_omega_beta(double beta) { omega_beta_ = beta; }
     double get_omega_beta() { return omega_beta_; }
-
-    /**
-    * Enable severe screening techniques, which can be useful in early 
-    *       SCF iterations.
-    * @param early_screening early screening status (defaults to false)
-    */
-    void set_early_screening(bool early_screening) { early_screening_ = early_screening; }
-    bool get_early_screening() { return early_screening_; }
 
     // => Computers <= //
 
@@ -1297,14 +1288,27 @@ class PSI_API CompositeJK : public JK {
     void clear_D_prev() { D_prev_.clear();}
 
     // => Knobs <= //
-    std::string name() override { return "CompositeJK"; }
-
+    std::string name() override { return j_algo_->name() + "+" + k_algo_->name(); }
+ 
     /**
     * Set to do K tasks
     * @param do_K do K matrices or not,
     *        defaults to true
     */
     virtual void set_do_K(bool do_K) override;
+
+    /**
+    * Knobs for getting and setting current COSX grid for this SCF iteration, if COSX is used
+    * throws if COSX is not used
+    */
+    void set_COSX_grid(std::string current_grid);
+    std::string get_COSX_grid();
+
+    /**
+    * Get maximum AM for GauXC used for snLinK, if GauXC support is enabled
+    * Throws if GauXC is not installed or if snLinK is not being used
+    */
+    int get_snLinK_max_am();
 
     /**
     * Print header information regarding JK

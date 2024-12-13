@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2024 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -31,6 +31,23 @@
 
 #include <vector>
 
+#ifdef USING_gauxc
+  #include <gauxc/types.hpp>
+  #include <gauxc/util/environment.hpp>
+
+  #include <gauxc/xc_integrator.hpp>
+  #include <gauxc/xc_integrator/impl.hpp>
+  #include <gauxc/xc_integrator/integrator_factory.hpp>
+
+  #include <gauxc/molgrid/defaults.hpp>
+
+  #include <gauxc/molecular_weights.hpp>
+
+  #include <eigen3/Eigen/Core>
+
+  #include <optional>
+#endif
+
 #include "psi4/pragma.h"
 PRAGMA_WARNING_PUSH
 PRAGMA_WARNING_IGNORE_DEPRECATED_DECLARATIONS
@@ -39,6 +56,7 @@ PRAGMA_WARNING_IGNORE_DEPRECATED_DECLARATIONS
 PRAGMA_WARNING_POP
 #include "psi4/libmints/typedefs.h"
 #include "psi4/libmints/dimension.h"
+#include "psi4/libpsi4util/exception.h"
 
 namespace psi {
 class MinimalInterface;
@@ -84,8 +102,6 @@ class PSI_API SplitJK {
 
     // Perform Density matrix-based integral screening?
     bool density_screening_;
-    /// Use severe screening techniques? Useful in early SCF iterations
-    bool early_screening_;
     /// Left-right symmetric?
     bool lr_symmetric_;
 
@@ -107,7 +123,6 @@ class PSI_API SplitJK {
 
     // => Knobs <= //
 
-    void set_early_screening(bool early_screening) { early_screening_ = early_screening; }
     void set_lr_symmetric(bool lr_symmetric) { lr_symmetric_ = lr_symmetric; }
     /// Bench accessors
     void set_bench(int bench) { bench_ = bench; }
@@ -128,6 +143,10 @@ class PSI_API SplitJK {
     * print name of method
     */
     virtual std::string name() = 0;
+
+    /**
+    * Method-specific knobs, if necessary
+    */
 };
 
 // ==> Start SplitJK Coulomb (J) Algorithms here <== //
@@ -236,16 +255,19 @@ class PSI_API LinK : public SplitJK {
  * doi: 10.1016/j.chemphys.2008.10.036
  */
 class PSI_API COSK : public SplitJK {
+
     // => Semi-Numerical Stuff <= //
 
-    /// Small DFTGrid for initial SCF iterations
-    std::shared_ptr<DFTGrid> grid_init_;
-    /// Large DFTGrid for the final SCF iteration
-    std::shared_ptr<DFTGrid> grid_final_;
-    /// Overlap fitting metric for grid_initial_
-    SharedMatrix Q_init_;
-    /// Overlap fitting metric for grid_final_
-    SharedMatrix Q_final_;
+    /// COSX grids
+    /// Currently contains two grids:
+    /// -  A small DFTGrid for the pre-convergence SCF iterations
+    /// -  A large DFTGrid for the final SCF iteration
+    std::unordered_map<std::string, std::shared_ptr<DFTGrid> > grids_;
+    /// COSX grid currently in use for this iteration
+    std::string current_grid_;
+
+    /// Overlap fitting metric for different COSX grids
+    std::unordered_map<std::string, SharedMatrix> Q_mat_;
 
     // integral cutoff
     double kscreen_;
@@ -293,9 +315,129 @@ class PSI_API COSK : public SplitJK {
     * print name of method
     */
     std::string name() override { return "COSX"; }
+
+    // setter/getter for the COSX grid used for this SCF iteration
+    void set_grid(std::string current_grid) { current_grid_ = current_grid; };
+    std::string get_grid() { return current_grid_; };
+};
+
+
+/**
+ * @brief constructs the K matrix using the GauXC implementation of the 
+ * seminumerical Linear Exchange (sn-LinK) algorithm, 
+ * doi: https://doi.org/10.1063/5.0151070 
+ */
+class PSI_API snLinK : public SplitJK {
+    // => general Psi4 settings <= //
+    // are we doing an incremental Fock build this iteration?
+    bool incfock_iter_;
+
+  #ifdef USING_gauxc
+    // use Eigen for matrix inputs to GauXC
+    // perhaps this can be changed later
+    using matrix_type = Eigen::MatrixXd;
+
+    // => Cartesian-Spherical Transformation stuff <= // 
+    /// The AO->CartAO transformation matrix, which is used for transforming
+    /// matrices between pure and Cartesian representations.
+    SharedMatrix sph_to_cart_matrix_;
+
+    // => Gaussian-CCA Transformation stuff <= //
+    bool is_cca_;
+
+    std::optional<Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic> > permutation_matrix_;
+    Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic> generate_permutation_matrix(
+        const std::shared_ptr<BasisSet> psi4_basisset);
+
+    // => Semi-Numerical Stuff <= //
+    // are we running snLinK on GPUs?
+    bool use_gpu_; 
+    // what grid pruning scheme is being used?
+    std::string pruning_scheme_;
+    // what radial quadrature scheme is being used?
+    std::string radial_scheme_;
+    // how many radial points for the grid?
+    size_t radial_points_; 
+    // how many spherical/angular points for the grid?
+    size_t spherical_points_; 
+    // basis cutoff
+    double basis_tol_;
+   
+    /// Factory for generating GauXC "Load Balancer" objects
+    std::unique_ptr<GauXC::LoadBalancerFactory> gauxc_load_balancer_factory_;
+
+    /// Factory for generating GauXC "Weights Module" objects
+    std::unique_ptr<GauXC::MolecularWeightsFactory> gauxc_mol_weights_factory_;
+
+    /// GauXC integrator for actually performing snLinK
+    GauXC::IntegratorSettingsSNLinK integrator_settings_;
+    std::unique_ptr<GauXC::XCIntegratorFactory<matrix_type> > integrator_factory_;
+    std::shared_ptr<GauXC::XCIntegrator<matrix_type> > integrator_;
+  
+    // => Psi4 -> GauXC conversion functions <= // 
+    GauXC::Molecule psi4_to_gauxc_molecule(std::shared_ptr<Molecule> psi4_molecule);
+    template<typename T> GauXC::BasisSet<T> psi4_to_gauxc_basisset(std::shared_ptr<BasisSet> psi4_basisset, double basis_tol, bool force_cartesian);
+
+    // => Psi4 -> GauXC enum mappings <= //
+    std::tuple<
+        std::unordered_map<std::string, GauXC::PruningScheme>, 
+        std::unordered_map<std::string, GauXC::RadialQuad> 
+    > generate_enum_mappings();
+    
+    // => Other useful stuff <= //
+    /// Eigen matrix printout format    
+    Eigen::IOFormat format_;
+
+    // maximum supported AM for current GauXC instance
+    int gauxc_max_am_;
+  #endif
+
+  public:
+    // => Constructors < = //
+
+    /**
+     * @param primary primary basis set for this system.
+     *        AO2USO transforms will be built with the molecule
+     *        contained in this basis object, so the incoming
+     *        C matrices must have the same spatial symmetry
+     *        structure as this molecule
+     */
+    snLinK(std::shared_ptr<BasisSet> primary, Options& options);
+    /// Destructor
+    ~snLinK() override;
+
+    /// Build the exchange (K) matrix using sn-LinK 
+    /// primary reference is https://doi.org/10.1063/5.0151070 
+    void build_G_component(std::vector<std::shared_ptr<Matrix> >& D,
+                 std::vector<std::shared_ptr<Matrix> >& G_comp,
+         std::vector<std::shared_ptr<TwoBodyAOInt> >& eri_computers) override;
+
+    // => Knobs <= //
+    /**
+    * Print header information regarding JK
+    * type on output file
+    */
+    void print_header() const override;
+
+    /**
+    * print name of method
+    */
+    std::string name() override { return "sn-LinK"; }
+
+    // setters and getters
+    void set_incfock_iter(bool incfock_iter) { incfock_iter_ = incfock_iter; }
+
+    int get_max_am() {
+      #ifdef USING_gauxc
+        return gauxc_max_am_;
+      #else
+        throw PSIEXCEPTION("Psi4 is not installed with GauXC support!");
+      #endif
+    }
 };
 
 }
 
 #endif
+
 

@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2024 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -39,10 +39,12 @@
 #include "psi4/liboptions/liboptions.h"
 #include "psi4/lib3index/dftensor.h"
 
+#include <memory>
 #include <unordered_set>
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <cctype>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -50,7 +52,6 @@
 using namespace psi;
 
 namespace psi {
-
 
 CompositeJK::CompositeJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary, Options& options) : JK(primary), auxiliary_(auxiliary), options_(options) {
     timer_on("CompositeJK: Setup");
@@ -93,11 +94,10 @@ void CompositeJK::common_init() {
     // other options
     density_screening_ = options_.get_str("SCREENING") == "DENSITY";
     set_cutoff(options_.get_double("INTS_TOLERANCE"));
-    early_screening_ = k_type == "COSX" ? true : false;
 
     // pre-construct per-thread TwoBodyAOInt objects for computing 3- and 4-index ERIs
     timer_on("CompositeJK: ERI Computers");
-    
+
     auto zero = BasisSet::zero_ao_basis_set();
 
     // initialize 4-Center ERIs
@@ -146,7 +146,11 @@ void CompositeJK::common_init() {
     // COSX
     } else if (k_type == "COSX") {
         k_algo_ = std::make_shared<COSK>(primary_, options_);
-    
+
+    // sn-LinK (via GauXC) 
+    } else if (k_type == "SNLINK") {
+        k_algo_ = std::make_shared<snLinK>(primary_, options_);
+ 
     // No K algorithm specified in SCF_TYPE
     } else if (k_type == "NONE") {
         k_algo_ = nullptr;
@@ -249,11 +253,9 @@ void CompositeJK::compute_JK() {
     if (do_wK_) throw PSIEXCEPTION("CompositeJK algorithms do not support wK integrals yet!");
 
     // set compute()-specific parameters
-    j_algo_->set_early_screening(early_screening_);
     j_algo_->set_lr_symmetric(lr_symmetric_);
     
     if (do_K_) {
-        k_algo_->set_early_screening(early_screening_);
         k_algo_->set_lr_symmetric(lr_symmetric_);
     }
 
@@ -266,6 +268,11 @@ void CompositeJK::compute_JK() {
         auto Dnorm = Process::environment.globals["SCF D NORM"];
         // Do IFB on this iteration?
         do_incfock_iter_ = (Dnorm >= incfock_conv) && !initial_iteration_ && (incfock_count_ % reset != reset - 1);
+
+        if (k_algo_->name() == "sn-LinK") {
+            auto k_algo_derived = std::dynamic_pointer_cast<snLinK>(k_algo_); 
+            k_algo_derived->set_incfock_iter(do_incfock_iter_);
+        }
 
         if (!initial_iteration_ && (Dnorm >= incfock_conv)) incfock_count_ += 1;
 
@@ -288,20 +295,25 @@ void CompositeJK::compute_JK() {
 
     // Coulomb Matrix
     if (do_J_) {
-        timer_on("CompositeJK: J");
+        timer_on("CompositeJK: " + j_algo_->name());
 
         j_algo_->build_G_component(D_ref_, J_ao_, eri_computers_["3-Center"]);
 
         if (get_bench()) {
             computed_shells_per_iter_["Triplets"].push_back(j_algo_->num_computed_shells());
         }
-
-        timer_off("CompositeJK: J");
+ 
+        timer_off("CompositeJK: " + j_algo_->name());
     }
 
     // Exchange Matrix
     if (do_K_) {
-        timer_on("CompositeJK: K");
+        timer_on("CompositeJK: " + k_algo_->name());
+
+        if (k_algo_->name() == "COSX") {
+            std::string gridname = get_COSX_grid();
+            timer_on("COSX " + gridname + " Grid");
+        }
 
         k_algo_->build_G_component(D_ref_, K_ao_, eri_computers_["4-Center"]);
 
@@ -309,7 +321,12 @@ void CompositeJK::compute_JK() {
             computed_shells_per_iter_["Quartets"].push_back(k_algo_->num_computed_shells());
         }
 
-        timer_off("CompositeJK: K");
+        if (k_algo_->name() == "COSX") {
+            std::string gridname = get_COSX_grid();
+            timer_off("COSX " + gridname + " Grid");
+        }
+
+        timer_off("CompositeJK: " + k_algo_->name());
     }
 
     // => Finalize Incremental Fock if required <= //
@@ -324,5 +341,34 @@ void CompositeJK::compute_JK() {
 }
 
 void CompositeJK::postiterations() {}
+
+// => Method-specific knobs go here <= //
+
+void CompositeJK::set_COSX_grid(std::string current_grid) { 
+    if (k_algo_->name() == "COSX") {
+        auto k_algo_derived = std::dynamic_pointer_cast<COSK>(k_algo_); 
+        k_algo_derived->set_grid(current_grid); 
+    } else {
+        throw PSIEXCEPTION("CompositeJK::set_COSX_grid() was called, but COSX is not selected in SCF_TYPE!");
+    }
+}
+
+std::string CompositeJK::get_COSX_grid() { 
+    if (k_algo_->name() == "COSX") {
+        auto k_algo_derived = std::dynamic_pointer_cast<COSK>(k_algo_); 
+        return k_algo_derived->get_grid(); 
+    } else {
+        throw PSIEXCEPTION("CompositeJK::get_COSX_grid() was called, but COSX is not selected in SCF_TYPE!");
+    }
+}
+
+int CompositeJK::get_snLinK_max_am() { 
+    if (k_algo_->name() == "sn-LinK") {
+        auto k_algo_derived = std::dynamic_pointer_cast<snLinK>(k_algo_); 
+        return k_algo_derived->get_max_am(); 
+    } else {
+        throw PSIEXCEPTION("CompositeJK::get_snLinK_max_am() was called, but snLinK is not selected in SCF_TYPE!");
+    }
+}
 
 }  // namespace psi

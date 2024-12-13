@@ -3,7 +3,7 @@
 #
 # Psi4: an open-source quantum chemistry software package
 #
-# Copyright (c) 2007-2023 The Psi4 Developers.
+# Copyright (c) 2007-2024 The Psi4 Developers.
 #
 # The copyrights for code used from other parties are included in
 # the corresponding files.
@@ -491,7 +491,7 @@ def _geom_generator(mol: Union["qcdb.Molecule", core.Molecule], freq_irrep_only:
         "gradients to determine vibrational frequencies and \n"
         "  normal modes. Resulting frequencies are only valid at stationary points",
         "2_0":
-        "gradients to determine vibrational frequencies and \n"
+        "energies to determine vibrational frequencies and \n"
         "  normal modes. Resulting frequencies are only valid at stationary points"
     }
 
