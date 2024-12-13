@@ -124,24 +124,30 @@ def run_sapt_dft(name, **kwargs):
             core.set_global_option('DF_INTS_IO', 'SAVE')
         core.timer_on("SAPT(DFT):Dimer SCF")
         hf_data = {}
+
+        # core.set_global_option("SAVE_JK", True)
+        core.set_local_option("SCF", "SAVE_JK", True)
         hf_wfn_dimer = scf_helper("SCF", molecule=sapt_dimer, banner="SAPT(DFT): delta HF Dimer", **kwargs)
         hf_data["HF DIMER"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT):Dimer SCF")
 
         core.timer_on("SAPT(DFT):Monomer A SCF")
-        if (core.get_global_option('SCF_TYPE') in ['DF', 'DISK_DF']):
-            core.IO.change_file_namespace(97, 'dimer', 'monomerA')
+        # if (core.get_global_option('SCF_TYPE') in ['DF', 'DISK_DF']):
+        #     core.IO.change_file_namespace(97, 'dimer', 'monomerA')
 
-        hf_wfn_A = scf_helper("SCF", molecule=monomerA, banner="SAPT(DFT): delta HF Monomer A", **kwargs)
+        jk_obj = hf_wfn_dimer.jk()
+        print("JK_OBJ:")
+        print(jk_obj)
+        hf_wfn_A = scf_helper("SCF", molecule=monomerA, banner="SAPT(DFT): delta HF Monomer A", jk=jk_obj, **kwargs)
         hf_data["HF MONOMER A"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT):Monomer A SCF")
 
         core.timer_on("SAPT(DFT):Monomer B SCF")
-        core.set_global_option("SAVE_JK", True)
-        if (core.get_global_option('SCF_TYPE') in ['DF', 'DISK_DF']):
-            core.IO.change_file_namespace(97, 'monomerA', 'monomerB')
+        # core.set_global_option("SAVE_JK", True)
+        # if (core.get_global_option('SCF_TYPE') in ['DF', 'DISK_DF']):
+        #     core.IO.change_file_namespace(97, 'monomerA', 'monomerB')
 
-        hf_wfn_B = scf_helper("SCF", molecule=monomerB, banner="SAPT(DFT): delta HF Monomer B", **kwargs)
+        hf_wfn_B = scf_helper("SCF", molecule=monomerB, banner="SAPT(DFT): delta HF Monomer B", jk=jk_obj, **kwargs)
         hf_data["HF MONOMER B"] = core.variable("CURRENT ENERGY")
         core.set_global_option("SAVE_JK", False)
         core.timer_off("SAPT(DFT):Monomer B SCF")

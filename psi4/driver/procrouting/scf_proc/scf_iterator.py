@@ -77,8 +77,10 @@ def scf_compute_energy(self):
         # reset the DIIS & JK objects in prep for DIRECT
         if self.initialized_diis_manager_:
             self.diis_manager_.reset_subspace()
+
         self.initialize_jk(self.memory_jk_)
     else:
+        print("TESTING2")
         self.initialize()
     self.iteration_energies = []
 
@@ -149,7 +151,16 @@ def scf_initialize(self):
         collocation_size = 0
 
     # Change allocation for collocation matrices based on DFT type
-    jk = _build_jk(self, total_memory)
+    print(f"{self.jk = }")
+    initialize_jk_obj = False
+    if isinstance(self.jk(), core.JK):
+        print("JK is core.JK")
+        jk = self.jk()
+    else:
+        print("building JK")
+        initialize_jk_obj = True
+        jk = _build_jk(self, total_memory)
+    print(jk)
     jk_size = jk.memory_estimate()
 
     # Give remaining to collocation
@@ -190,7 +201,9 @@ def scf_initialize(self):
     if self.attempt_number_ == 1:
         mints = core.MintsHelper(self.basisset())
 
-        self.initialize_jk(self.memory_jk_, jk=jk)
+        if initialize_jk_obj:
+            print("initialize_jk_obj call")
+            self.initialize_jk(self.memory_jk_, jk=jk)
         if self.V_potential():
             self.V_potential().build_collocation_cache(self.memory_collocation_)
         core.timer_on("HF: Form core H")

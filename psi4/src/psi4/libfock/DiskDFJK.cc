@@ -503,6 +503,7 @@ void DiskDFJK::postiterations() {
     Qrmn_.reset();
 }
 void DiskDFJK::initialize_JK_core() {
+    outfile->Printf("initialize_JK_core:\n");
     size_t three_memory = ((size_t)auxiliary_->nbf()) * n_function_pairs_;
     size_t two_memory = ((size_t)auxiliary_->nbf()) * auxiliary_->nbf();
 
@@ -691,7 +692,7 @@ void DiskDFJK::initialize_JK_disk() {
 
     // outfile->Printf( "Buffer memory = %ld words\n", buffer_memory);
 
-    // outfile->Printf("Schwarz Shell Pairs:\n");
+    outfile->Printf("Schwarz Shell Pairs:\n");
     // for (int MN = 0; MN < nshellpairs; MN++) {
     //    outfile->Printf("  %3d: (%3d,%3d)\n", MN, schwarz_shell_pairs[2*MN], schwarz_shell_pairs[2*MN + 1]);
     //}
@@ -897,6 +898,8 @@ void DiskDFJK::initialize_JK_disk() {
 #endif
 
     // ==> Main loop <== //
+    outfile->Printf("nblock: %ld\n", nblock);
+
     for (int block = 0; block < nblock; block++) {
         int MN_start_val = MN_start_b[block];
         int mn_start_val = mn_start_b[block];
@@ -905,6 +908,7 @@ void DiskDFJK::initialize_JK_disk() {
 
         // ==> (A|mn) integrals <== //
 
+        outfile->Printf("Timer on JK: (A|mn)\n");
         timer_on("JK: (A|mn)");
 
 #pragma omp parallel for schedule(guided) num_threads(nthread)
