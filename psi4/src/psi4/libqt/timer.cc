@@ -1076,6 +1076,7 @@ void stop_skip_timers() {
 ** \ingroup QT
 */
 PSI_API void timer_on(const std::string &key) {
+    printf("timer_on for: %s\n", key.c_str());
     omp_set_lock(&lock_timer);
     extern bool skip_timers;
     if (skip_timers) {
@@ -1189,6 +1190,7 @@ void parallel_timer_on(const std::string &key, int thread_rank) {
         omp_unset_lock(&lock_timer);
         return;
     }
+    printf("parallel_timer_on for: %s\n", key.c_str());
     extern std::list<Timer_Structure *> ser_on_timers;
     extern std::vector<std::list<Timer_Structure *>> par_on_timers;
     extern Timer_Structure parallel_timer;

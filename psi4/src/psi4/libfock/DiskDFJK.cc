@@ -517,6 +517,7 @@ void DiskDFJK::initialize_JK_core() {
 
     // Try to load
     if (df_ints_io_ == "LOAD") {
+        outfile->Printf("  Loading integrals from disk.\n");
         psio_->open(unit_, PSIO_OPEN_OLD);
         psio_->read_entry(unit_, "(Q|mn) Integrals", (char*)Qmnp[0], sizeof(double) * n_function_pairs_ * auxiliary_->nbf());
         psio_->close(unit_, 1);
@@ -947,6 +948,7 @@ void DiskDFJK::initialize_JK_disk() {
             }
         }
 
+        outfile->Printf("Timer off JK: (A|mn)\n");
         timer_off("JK: (A|mn)");
 
         // ==> (Q|mn) fitting <== //
@@ -1026,6 +1028,7 @@ void DiskDFJK::initialize_wK_core() {
     int numP, Pshell, MU, NU, P, PHI, mu, nu, nummu, numnu, omu, onu;
     // The integrals (A|mn)
 
+    outfile->Printf("Timer on JK: (A|mn)^L\n");
     timer_on("JK: (A|mn)^L");
 
 #pragma omp parallel for private(numP, Pshell, MU, NU, P, PHI, mu, nu, nummu, numnu, omu, onu, \
@@ -1064,6 +1067,7 @@ void DiskDFJK::initialize_wK_core() {
         }
     }
 
+    outfile->Printf("Timer off JK: (A|mn)^L\n");
     timer_off("JK: (A|mn)^L");
 
     // => Fitting <= //
@@ -1077,6 +1081,7 @@ void DiskDFJK::initialize_wK_core() {
 
     timer_off("JK: (A|Q)^-1");
 
+    outfile->Printf("Timer on JK: (Q|mn)^L\n");
     timer_on("JK: (Q|mn)^L");
 
     // Fitting in one GEMM (being a clever bastard)
@@ -1086,6 +1091,7 @@ void DiskDFJK::initialize_wK_core() {
 
     // The integrals (A|w|mn)
 
+    outfile->Printf("Timer on JK: (A|mn)^R\n");
     timer_on("JK: (A|mn)^R");
 
 #pragma omp parallel for private(numP, Pshell, MU, NU, P, PHI, mu, nu, nummu, numnu, omu, onu, \
@@ -1124,6 +1130,7 @@ void DiskDFJK::initialize_wK_core() {
         }
     }
 
+    outfile->Printf("Timer off JK: (A|mn)^R\n");
     timer_off("JK: (A|mn)^R");
 
     // Try to save
@@ -1375,6 +1382,7 @@ void DiskDFJK::initialize_wK_disk() {
 
         // ==> (A|mn) integrals <== //
 
+        outfile->Printf("Timer on JK: (A|mn)^L\n");
         timer_on("JK: (A|mn)^L");
 
 #pragma omp parallel for schedule(guided) num_threads(nthread)
@@ -1413,10 +1421,12 @@ void DiskDFJK::initialize_wK_disk() {
             }
         }
 
+        outfile->Printf("Timer off JK: (A|mn)^L\n");
         timer_off("JK: (A|mn)^L");
 
         // ==> (Q|mn) fitting <== //
 
+        outfile->Printf("Timer on JK: (Q|mn)^L\n");
         timer_on("JK: (Q|mn)^L");
 
         for (int mn = 0; mn < mn_col_val; mn += naux) {
