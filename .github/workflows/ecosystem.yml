@@ -77,7 +77,7 @@ jobs:
             cmargs: >
               -D CMAKE_VERBOSE_MAKEFILE=OFF
               -D psi4_SKIP_ENABLE_Fortran=ON
-              -D CMAKE_CXX_FLAGS="-IC:\Users\runneradmin\miniconda3\envs\p4build\opt\compiler\include"
+              -D CMAKE_CXX_FLAGS="-IC:\Miniconda\envs\p4build\opt\compiler\include"
 
             # Notes:
             # * When not using cache file, need to additionally specify the following:
@@ -197,15 +197,14 @@ jobs:
         show-channel-urls: true
         python-version: ${{ matrix.cfg.python-version }}
         auto-activate-base: false
-        miniforge-variant: Mambaforge
-        use-mamba: true
         add-pip-as-python-dependency: true
         channels: conda-forge
+        conda-remove-defaults: true
 
     - name: Buildtime Conda environment
       run: |
-        mamba info
-        mamba list
+        conda info
+        conda list
 
     - name: Configure Psi4, ${{ matrix.cfg.label }}
       run: |
@@ -229,12 +228,7 @@ jobs:
           ${{ matrix.cfg.cmargs }}
 
     - name: Compile & Install Psi4
-      run: |
-        if [[ "${{ runner.os }}" == "Linux" ]]; then
-          # limit to avoid GHA OOM errors in libmints
-          export CMAKE_BUILD_PARALLEL_LEVEL=2
-        fi
-        cmake --build objdir --config Release --target install
+      run: cmake --build objdir --config Release --target install
 
     - name: Linked dependencies, ldd (L)
       if: runner.os == 'Linux'
@@ -268,8 +262,8 @@ jobs:
 
     - name: Runtime Conda environment
       run: |
-        mamba info
-        mamba list
+        conda info
+        conda list
         if [[ "${{ runner.os }}" != "Windows" ]]; then
           # on Windows, cmd varies: `qcengine.exe`
           qcengine info
