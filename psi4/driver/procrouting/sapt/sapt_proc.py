@@ -151,11 +151,19 @@ def run_sapt_dft(name, **kwargs):
     if do_dft:
         core.print_out("     DFT  (Monomer A)\n")
         core.print_out("     DFT  (Monomer B)\n")
-    if (do_delta_dft):
+    if do_mon_grac_shift_A:
+        core.print_out("     GRAC (Monomer A)\n")
+    if do_mon_grac_shift_B:
+        core.print_out("     GRAC (Monomer B)\n")
+    if do_delta_dft:
         core.print_out("     Delta DFT Correction:\n")
         core.print_out("       DFT (Dimer)\n")
         core.print_out("       DFT (Monomer A: No Asymptotic Correction)\n")
         core.print_out("       DFT (Monomer B: No Asymptotic Correction)\n")
+
+    core.print_out("\n")
+    core.print_out("   Beginning setup computations\n")
+
     if do_mon_grac_shift_A:
         core.print_out("     GRAC (Monomer A)\n")
         compute_GRAC_shift(
