@@ -185,3 +185,21 @@ def test_grimme_3c(mtdbas, ref, mode):
         ene = psi4.energy(mtdbas, bsse_type='nocp')
         assert psi4.compare_values(kcal * (ref[0] - ref[1] - ref[2]), kcal * ene, 1.1e-3, mtdbas)
 
+
+@pytest.mark.nbody
+def test_d3mbj2b_large():
+    import os
+    data_dir = os.path.join(os.path.dirname(__file__), "molecules")
+    with open(os.path.join(data_dir, "d3mbj2b_large.xyz")) as f:
+        xyz = "".join(f.readlines()[2:])
+    dimer = psi4.geometry(f"2 1\n{xyz}\nunits angstrom""")
+    print(dimer)
+    energyB = dimer.run_dftd3('hf', 'd3mbj2b', dertype=0)
+    print(f'Completed D3 for Protein: {energyB} Eh')
+    # energyA = mA.run_dftd3('hf', 'd3mbj2b', dertype=0)
+    # print(f'Completed D3 for Ligand: {energyA} Eh')
+
+    return
+
+if __name__ == "__main__":
+    test_d3mbj2b_large()
