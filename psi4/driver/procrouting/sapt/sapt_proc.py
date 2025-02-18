@@ -164,9 +164,11 @@ def run_sapt_dft(name, **kwargs):
     core.print_out("\n")
     core.print_out("   Beginning setup computations\n")
 
+    wfn_A_jk = None
+    wfn_B_jk = None
     if do_mon_grac_shift_A:
         core.print_out("     GRAC (Monomer A)\n")
-        compute_GRAC_shift(
+        wfn_A_jk = compute_GRAC_shift(
             monA,
             core.get_option("SAPT", "SAPT_DFT_GRAC_CONVERGENCE_TIER"),
             "Monomer A",
@@ -174,7 +176,7 @@ def run_sapt_dft(name, **kwargs):
         mon_a_shift = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_A")
     if do_mon_grac_shift_B:
         core.print_out("     GRAC (Monomer B)\n")
-        compute_GRAC_shift(
+        wfn_B_jk = compute_GRAC_shift(
             monB,
             core.get_option("SAPT", "SAPT_DFT_GRAC_CONVERGENCE_TIER"),
             "Monomer B",
@@ -559,7 +561,7 @@ def compute_GRAC_shift(
             )
     core.set_local_option("SCF", "REFERENCE", scf_reference)
     optstash.restore()
-    return
+    return wfn_neutral.jk
 
 
 def sapt_dft_header(
