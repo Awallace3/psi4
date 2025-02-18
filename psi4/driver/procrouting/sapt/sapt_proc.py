@@ -194,57 +194,6 @@ def run_sapt_dft(name, **kwargs):
             "SAPT(DFT) currently only supports restricted references."
         )
 
-    if do_delta_dft and do_dft:
-        core.IO.set_default_namespace('dimer')
-        core.print_out("\n")
-        core.print_out("         ---------------------------------------------------------\n")
-        core.print_out("         " + "SAPT(DFT): delta DFT Segment".center(58) + "\n")
-        core.print_out("\n")
-        core.timer_on("SAPT(DFT):delta DFT")
-
-        monomer_A_molecule = monomerA
-        monomer_B_molecule = monomerB
-
-        core.timer_on("SAPT(DFT):Dimer DFT")
-        run_scf(sapt_dft_functional.lower(), molecule=sapt_dimer_molecule)
-        data["DFT DIMER ENERGY"] = core.variable("CURRENT ENERGY")
-        core.timer_off("SAPT(DFT):Dimer DFT")
-
-        core.timer_on("SAPT(DFT):Monomer A DFT")
-        if wfn_A_grac:
-            run_scf(sapt_dft_functional.lower(), molecule=monomer_A_molecule, jk=wfn_A_grac.jk())
-        else:
-            run_scf(sapt_dft_functional.lower(), molecule=monomer_A_molecule)
-        data["DFT MONOMER A ENERGY"] = core.variable("CURRENT ENERGY")
-        core.timer_off("SAPT(DFT):Monomer A DFT")
-
-        core.timer_on("SAPT(DFT):Monomer B DFT")
-        if wfn_B_grac:
-            run_scf(sapt_dft_functional.lower(), molecule=monomer_B_molecule, jk=wfn_B_grac.jk())
-        else:
-            run_scf(sapt_dft_functional.lower(), molecule=monomer_B_molecule)
-        data["DFT MONOMER B ENERGY"] = core.variable("CURRENT ENERGY")
-        core.timer_off("SAPT(DFT):Monomer B DFT")
-
-        core.timer_off("SAPT(DFT):delta DFT")
-        core.print_out("\n")
-        data["DFT IE"] = data["DFT DIMER ENERGY"] - data["DFT MONOMER A ENERGY"] - data["DFT MONOMER B ENERGY"]
-    elif do_delta_dft and not do_dft:
-        raise ValueError("SAPT(DFT): delta DFT correction requested when running HF. Set SAPT_DFT_DO_DDFT to False or use a DFT functional.")
-    if sapt_dft_D4_IE:
-        core.print_out("\n")
-        core.print_out("         ---------------------------------------------------------\n")
-        core.print_out("         " + "SAPT(DFT): D4 Interaction Energy".center(58) + "\n")
-        core.print_out("\n")
-        core.timer_on("SAPT(DFT):D4 Interaction Energy")
-        dimer_d4, _ = sapt_dimer.run_dftd4(sapt_dft_functional, 'd4bjeeqatm')
-        data["D4 DIMER"] = dimer_d4
-        monA_d4, _ = monomerA.run_dftd4(sapt_dft_functional, 'd4bjeeqatm')
-        data["D4 MONOMER A"] = monA_d4
-        monB_d4, _ = monomerB.run_dftd4(sapt_dft_functional, 'd4bjeeqatm')
-        data["D4 MONOMER B"] = monB_d4
-        data["D4 IE"] = dimer_d4 - monA_d4 - monB_d4
-        core.timer_off("SAPT(DFT):D4 Interaction Energy")
 
     core.IO.set_default_namespace('dimer')
 
@@ -420,6 +369,60 @@ def run_sapt_dft(name, **kwargs):
     # Save JK object
     sapt_jk = wfn_B.jk()
     wfn_A.set_jk(sapt_jk)
+
+    if do_delta_dft and do_dft:
+        optstash2 = p4util.OptionsState(
+            ["SCF_TYPE"],
+            ["SCF", "REFERENCE"],
+            ["SCF", "DFT_GRAC_SHIFT"],
+            ["SCF", "SAVE_JK"],
+        )
+        core.set_local_option("SCF", "DFT_GRAC_SHIFT", 0.0)
+        core.IO.set_default_namespace('dimer')
+        core.print_out("\n")
+        core.print_out("         ---------------------------------------------------------\n")
+        core.print_out("         " + "SAPT(DFT): delta DFT Segment".center(58) + "\n")
+        core.print_out("\n")
+        core.timer_on("SAPT(DFT):delta DFT")
+
+        monomer_A_molecule = monomerA
+        monomer_B_molecule = monomerB
+
+        core.timer_on("SAPT(DFT):Dimer DFT")
+        run_scf(sapt_dft_functional.lower(), molecule=sapt_dimer_molecule)
+        data["DFT DIMER ENERGY"] = core.variable("CURRENT ENERGY")
+        core.timer_off("SAPT(DFT):Dimer DFT")
+
+        core.timer_on("SAPT(DFT):Monomer A DFT")
+        run_scf(sapt_dft_functional.lower(), molecule=monomer_A_molecule, jk=sapt_jk)
+        data["DFT MONOMER A ENERGY"] = core.variable("CURRENT ENERGY")
+        core.timer_off("SAPT(DFT):Monomer A DFT")
+
+        core.timer_on("SAPT(DFT):Monomer B DFT")
+        run_scf(sapt_dft_functional.lower(), molecule=monomer_B_molecule, jk=sapt_jk)
+        data["DFT MONOMER B ENERGY"] = core.variable("CURRENT ENERGY")
+        core.timer_off("SAPT(DFT):Monomer B DFT")
+
+        core.timer_off("SAPT(DFT):delta DFT")
+        core.print_out("\n")
+        data["DFT IE"] = data["DFT DIMER ENERGY"] - data["DFT MONOMER A ENERGY"] - data["DFT MONOMER B ENERGY"]
+        optstash2.restore()
+    elif do_delta_dft and not do_dft:
+        raise ValueError("SAPT(DFT): delta DFT correction requested when running HF. Set SAPT_DFT_DO_DDFT to False or use a DFT functional.")
+    if sapt_dft_D4_IE:
+        core.print_out("\n")
+        core.print_out("         ---------------------------------------------------------\n")
+        core.print_out("         " + "SAPT(DFT): D4 Interaction Energy".center(58) + "\n")
+        core.print_out("\n")
+        core.timer_on("SAPT(DFT):D4 Interaction Energy")
+        dimer_d4, _ = sapt_dimer.run_dftd4(sapt_dft_functional, 'd4bjeeqatm')
+        data["D4 DIMER"] = dimer_d4
+        monA_d4, _ = monomerA.run_dftd4(sapt_dft_functional, 'd4bjeeqatm')
+        data["D4 MONOMER A"] = monA_d4
+        monB_d4, _ = monomerB.run_dftd4(sapt_dft_functional, 'd4bjeeqatm')
+        data["D4 MONOMER B"] = monB_d4
+        data["D4 IE"] = dimer_d4 - monA_d4 - monB_d4
+        core.timer_off("SAPT(DFT):D4 Interaction Energy")
     core.set_global_option("SAVE_JK", False)
 
     core.set_global_option("DFT_GRAC_SHIFT", 0.0)
