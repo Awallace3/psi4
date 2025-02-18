@@ -164,11 +164,11 @@ def run_sapt_dft(name, **kwargs):
     core.print_out("\n")
     core.print_out("   Beginning setup computations\n")
 
-    wfn_A_jk = None
-    wfn_B_jk = None
+    wfn_A_grac = None
+    wfn_B_grac = None
     if do_mon_grac_shift_A:
         core.print_out("     GRAC (Monomer A)\n")
-        wfn_A_jk = compute_GRAC_shift(
+        wfn_A_grac = compute_GRAC_shift(
             monA,
             core.get_option("SAPT", "SAPT_DFT_GRAC_CONVERGENCE_TIER"),
             "Monomer A",
@@ -176,7 +176,7 @@ def run_sapt_dft(name, **kwargs):
         mon_a_shift = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_A")
     if do_mon_grac_shift_B:
         core.print_out("     GRAC (Monomer B)\n")
-        wfn_B_jk = compute_GRAC_shift(
+        wfn_A_grac = compute_GRAC_shift(
             monB,
             core.get_option("SAPT", "SAPT_DFT_GRAC_CONVERGENCE_TIER"),
             "Monomer B",
@@ -211,12 +211,18 @@ def run_sapt_dft(name, **kwargs):
         core.timer_off("SAPT(DFT):Dimer DFT")
 
         core.timer_on("SAPT(DFT):Monomer A DFT")
-        run_scf(sapt_dft_functional.lower(), molecule=monomer_A_molecule)
+        if wfn_A_grac:
+            run_scf(sapt_dft_functional.lower(), molecule=monomer_A_molecule, jk=wfn_A_grac.jk())
+        else:
+            run_scf(sapt_dft_functional.lower(), molecule=monomer_A_molecule)
         data["DFT MONOMER A ENERGY"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT):Monomer A DFT")
 
         core.timer_on("SAPT(DFT):Monomer B DFT")
-        run_scf(sapt_dft_functional.lower(), molecule=monomer_B_molecule)
+        if wfn_B_grac:
+            run_scf(sapt_dft_functional.lower(), molecule=monomer_B_molecule, jk=wfn_B_grac.jk())
+        else:
+            run_scf(sapt_dft_functional.lower(), molecule=monomer_B_molecule)
         data["DFT MONOMER B ENERGY"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT):Monomer B DFT")
 
@@ -561,7 +567,7 @@ def compute_GRAC_shift(
             )
     core.set_local_option("SCF", "REFERENCE", scf_reference)
     optstash.restore()
-    return wfn_neutral.jk
+    return wfn_neutral
 
 
 def sapt_dft_header(
