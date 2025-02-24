@@ -81,10 +81,10 @@ def run_sapt_dft(name, **kwargs):
 
     if np.isclose(mon_a_shift, -99.0, atol=1e-6):
         do_mon_grac_shift_A = True
-        print("Monomer A GRAC shift set to -99.0, will compute automatically.")
+        core.print_out("Monomer A GRAC shift set to -99.0, will compute automatically.")
     if np.isclose(mon_b_shift, -99.0, atol=1e-6):
         do_mon_grac_shift_B = True
-        print("Monomer B GRAC shift set to -99.0, will compute automatically.")
+        core.print_out("Monomer B GRAC shift set to -99.0, will compute automatically.")
 
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
     do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
@@ -503,11 +503,10 @@ def compute_GRAC_shift(
     dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
     scf_reference = core.get_option("SCF", "REFERENCE")
 
-    print(f"Computing GRAC shift for {label} using {sapt_dft_grac_convergence_tier}...")
+    core.print_out(f"Computing GRAC shift for {label} using {sapt_dft_grac_convergence_tier}...")
     grac_options = sapt_dft_grac_convergence_tier_options()[
         sapt_dft_grac_convergence_tier.upper()
     ]
-    print(f"{grac_options = }")
     for options in grac_options:
         for key, val in options.items():
             core.set_local_option("SCF", key, val)
