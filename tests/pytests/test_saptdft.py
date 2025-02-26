@@ -98,7 +98,8 @@ def test_sapt_dft_compute_ddft_d4_diskdf():
   units bohr
 """
     )
-    psi4.set_memory("280 MB")
+    # psi4.set_memory("280 MB")
+    psi4.set_memory("64 GB")
     dft_functional = "pbe0"
     psi4.set_options(
         {

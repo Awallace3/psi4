@@ -217,8 +217,6 @@ def run_sapt_dft(name, **kwargs):
         core.timer_off("SAPT(DFT):Dimer SCF")
 
         core.timer_on("SAPT(DFT):Monomer A SCF")
-        core.IO.change_file_namespace(97, 'dimer', 'monomerA')
-
         jk_obj = hf_wfn_dimer.jk()
         if jk_obj.name() == "DiskDFJK":
             jk_obj_A = None
@@ -226,13 +224,20 @@ def run_sapt_dft(name, **kwargs):
         else:
             jk_obj_A = jk_obj
             jk_obj_B = jk_obj
+        jk_obj_A = jk_obj
+        jk_obj_B = jk_obj
+        # core.IO.change_file_namespace(97, 'dimer', 'monomerA')
+        # core.set_local_option("SCF", "SAVE_JK", True)
+        # core.set_global_option('DF_INTS_IO', 'LOAD')
         hf_wfn_A = scf_helper("SCF", molecule=monomerA, banner="SAPT(DFT): delta HF Monomer A", jk=jk_obj_A, **kwargs)
         hf_data["HF MONOMER A"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT):Monomer A SCF")
 
         core.timer_on("SAPT(DFT):Monomer B SCF")
-        core.IO.change_file_namespace(97, 'monomerA', 'monomerB')
+        # core.IO.change_file_namespace(97, 'monomerA', 'monomerB')
 
+        # core.set_local_option("SCF", "SAVE_JK", True)
+        # core.set_global_option('DF_INTS_IO', 'LOAD')
         hf_wfn_B = scf_helper("SCF", molecule=monomerB, banner="SAPT(DFT): delta HF Monomer B", jk=jk_obj_B, **kwargs)
         hf_data["HF MONOMER B"] = core.variable("CURRENT ENERGY")
         core.set_global_option("SAVE_JK", False)
