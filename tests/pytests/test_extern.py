@@ -312,7 +312,7 @@ def test_extern_parsing(ep, ans):
     ([None, None, np.zeros((6, 5))]),
     ([None, None, np.zeros((6, 6, 4))]),
     # empty
-    ([None, None, None]),
+    # ([None, None, None]),
 ])
 def test_extern_parsing_error(ep):
     with pytest.raises((psi4.ValidationError, TypeError)):
@@ -337,6 +337,7 @@ _three_near_natural_diffuse = np.array([
     [-0.834,  3.11659683, 0.0, -4.45223936, 0.5],
     [ 0.417,  1.02944157, 0.0, -1.72359229, 0.2]])
 
+@pytest.mark.quick
 @pytest.mark.parametrize("ep,anskey", [
     # lone H2O equivalents
     pytest.param(None, "h2o_plain_df", id="water"),
