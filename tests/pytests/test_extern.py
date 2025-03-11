@@ -337,6 +337,13 @@ _three_near_natural_diffuse = np.array([
     [-0.834,  3.11659683, 0.0, -4.45223936, 0.5],
     [ 0.417,  1.02944157, 0.0, -1.72359229, 0.2]])
 
+_two_very_near_points = np.array([
+    [ 1.0, -1.5,  0.1, 2.14],
+    [-1.0, -1.5,  0.2, 2.14]])
+_two_very_near_sharp_diffuse = np.array([
+    [ 1.0, -1.5,  0.1, 2.14, 1000000000.0],
+    [-1.0, -1.5,  0.2, 2.14, 1000000000.0]])
+
 @pytest.mark.quick
 @pytest.mark.parametrize("ep,anskey", [
     # lone H2O equivalents
@@ -351,6 +358,11 @@ _three_near_natural_diffuse = np.array([
     pytest.param([None, _three_near_sharp_diffuse], "h2o_ee_df", id="water_D"),
     # H2O + diffuse charge H2O equivalents
     pytest.param([None, _three_near_natural_diffuse], "h2o_dd_df", id="water_DD"),
+    # H2O + very near strong charges equivalents
+    pytest.param(_two_very_near_points, "h2o_de_df", id="water_near_PP"),
+    pytest.param([None, _two_very_near_sharp_diffuse], "h2o_de_df", id="water_near_DD"),
+    pytest.param([_two_very_near_points[:1], _two_very_near_sharp_diffuse[1:]], "h2o_de_df", id="water_near_DP"),
+    pytest.param([_two_very_near_points[1:], _two_very_near_sharp_diffuse[:1]], "h2o_de_df", id="water_near_PD"),
 ])
 def test_extern_points_diffuse(ep, anskey):
 
@@ -370,6 +382,9 @@ def test_extern_points_diffuse(ep, anskey):
         "h2o_dd_df": {  # uncorroborated, merely to check calc stable
             #"energy": -76.01481363, # all 0.2
             "energy": -76.014805897408,
+        },
+        "h2o_de_df": {
+            "energy": -42.27378086,
         },
     }
 
