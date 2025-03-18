@@ -356,6 +356,8 @@ _two_very_near_sharp_diffuse = np.array([
     pytest.param(_three_near_points, "h2o_ee_df", id="water_P"),
     pytest.param([_one_far_point, _three_near_sharp_diffuse], "h2o_ee_df", id="water_farP_D"),
     pytest.param([None, _three_near_sharp_diffuse], "h2o_ee_df", id="water_D"),
+    pytest.param([_three_near_points[:1], _three_near_sharp_diffuse[1:]], "h2o_ee_df", id="water_2P_D"),
+    pytest.param([_three_near_points[1:], _three_near_sharp_diffuse[:1]], "h2o_ee_df", id="water_P_2D"),
     # H2O + diffuse charge H2O equivalents
     pytest.param([None, _three_near_natural_diffuse], "h2o_dd_df", id="water_DD"),
     # H2O + very near strong charges equivalents
