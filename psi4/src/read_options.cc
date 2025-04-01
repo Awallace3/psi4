@@ -1139,16 +1139,23 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
 
         /*- SUBSECTION SAPT(DFT) -*/
 
-        /*- Monomer A GRAC shift in Hartree. Set to -99 to automatically
-           compute prior to SAPT(DFT)  -*/
+        /*- Monomer A GRAC shift in Hartree. To automatically compute prior to
+        SAPT(DFT), do NOT set this option and set |sapt__sapt_dft_grac_compute|
+        to "SINGLE" or "ITERATIVE" as described below. */
         options.add_double("SAPT_DFT_GRAC_SHIFT_A", 0.0);
-        /*- Monomer B GRAC shift in Hartree. Set to -99 to automatically
-           compute prior to SAPT(DFT) -*/
+        /*- Monomer B GRAC shift in Hartree. To automatically compute prior to
+        SAPT(DFT), do NOT set this option and set |sapt__sapt_dft_grac_compute|
+        to "SINGLE" or "ITERATIVE" as described below. */
         options.add_double("SAPT_DFT_GRAC_SHIFT_B", 0.0);
-        /*- SAPT_DFT_GRAC_CONVERGENCE_TIER will specify how hard psi4 should
-          try to converge the cation for a GRAC shift before failing the
-          calculation completely -*/
-        options.add_str("SAPT_DFT_GRAC_CONVERGENCE_TIER", "SINGLE", "SINGLE ITERATIVE");
+        /*- SAPT_DFT_GRAC_COMPUTE will enable automatically computing GRAC
+         shifts prior to running SAPT(DFT). Note that the user must not specify
+         a value for SAPT_DFT_GRAC_SHIFT_A or SAPT_DFT_GRAC_SHIFT_B to trigger
+         this GRAC computation. "SINGLE" will try only once to converge the
+         cation for computing a GRAC shift. "ITERATIVE" will adjust local Psi4
+         options ("LEVEL_SHIFT", "LEVEL_SHIFT_CUTOFF") to attempt to converge
+         the neutral/cation calculations. "ITERATIVE" will try 3 times to
+         converge the cation before failing the SAPT(DFT) computation. -*/
+        options.add_str("SAPT_DFT_GRAC_COMPUTE", "NONE", "NONE SINGLE ITERATIVE");
         /*- Compute the Delta-HF correction? -*/
         options.add_bool("SAPT_DFT_DO_DHF", true);
         /*- Enables the hybrid xc kernel in dispersion? !expert -*/
@@ -1681,7 +1688,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
 
         /*- Number of threads for integrals (may be turned down if memory is an issue). 0 is blank -*/
         options.add_int("DF_INTS_NUM_THREADS", 0);
-        /*- IO caching for CP corrections, etc. Changing this selects Disk_DF over Mem_DF. Note that setting this forces DiskDFJK when SCF_TYPE=DF. !expert -*/
+        /*- IO caching for CP corrections, etc. Previous to v1.10, changing this selected Disk_DF over Mem_DF.
+	That is, setting this forced DiskDFJK when SCF_TYPE=DF. Starting with v1.10, changing this affects 
+ 	|globals__scf_type| = ``CD`` or ``DISK_DF`` but does not force ``DISK_DF`` when given ``DF``. !expert -*/
         options.add_str("DF_INTS_IO", "NONE", "NONE SAVE LOAD");
         /*- Fitting Condition, i.e. eigenvalue threshold for RI basis. Analogous to S_TOLERANCE !expert -*/
         options.add_double("DF_FITTING_CONDITION", 1.0E-10);

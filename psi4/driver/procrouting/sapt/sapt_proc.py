@@ -78,13 +78,12 @@ def run_sapt_dft(name, **kwargs):
     do_mon_grac_shift_B = False
     mon_a_shift = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_A")
     mon_b_shift = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_B")
+    SAPT_DFT_GRAC_COMPUTE = core.get_option("SAPT", "SAPT_DFT_GRAC_COMPUTE")
 
-    if np.isclose(mon_a_shift, -99.0, atol=1e-6):
+    if not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_A") and SAPT_DFT_GRAC_COMPUTE.upper() != "NONE":
         do_mon_grac_shift_A = True
-        core.print_out("Monomer A GRAC shift set to -99.0, will compute automatically.")
-    if np.isclose(mon_b_shift, -99.0, atol=1e-6):
+    if not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_B") and SAPT_DFT_GRAC_COMPUTE.upper() != "NONE":
         do_mon_grac_shift_B = True
-        core.print_out("Monomer B GRAC shift set to -99.0, will compute automatically.")
 
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
     do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
@@ -104,8 +103,8 @@ def run_sapt_dft(name, **kwargs):
         sapt_dimer = ref_wfn.molecule()
 
     if do_mon_grac_shift_A or do_mon_grac_shift_B:
-        monA = sapt_dimer.extract_subsets(1)
-        monB = sapt_dimer.extract_subsets(2)
+        monomerA_mon_only_bf = sapt_dimer.extract_subsets(1)
+        monomerB_mon_only_bf = sapt_dimer.extract_subsets(2)
 
     sapt_dimer, monomerA, monomerB = proc_util.prepare_sapt_molecule(
         sapt_dimer, "dimer"
@@ -153,6 +152,7 @@ def run_sapt_dft(name, **kwargs):
         core.print_out("     DFT  (Monomer B)\n")
     if do_mon_grac_shift_A:
         core.print_out("     GRAC (Monomer A)\n")
+<<<<<<< HEAD
     if do_mon_grac_shift_B:
         core.print_out("     GRAC (Monomer B)\n")
     if do_delta_dft:
@@ -169,24 +169,27 @@ def run_sapt_dft(name, **kwargs):
     if do_mon_grac_shift_A:
         core.print_out("     GRAC (Monomer A)\n")
         wfn_A_grac = compute_GRAC_shift(
-            monA,
-            core.get_option("SAPT", "SAPT_DFT_GRAC_CONVERGENCE_TIER"),
+            monomerA_mon_only_bf,
+            SAPT_DFT_GRAC_COMPUTE,
             "Monomer A",
         )
         mon_a_shift = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_A")
     if do_mon_grac_shift_B:
         core.print_out("     GRAC (Monomer B)\n")
-        wfn_A_grac = compute_GRAC_shift(
-            monB,
-            core.get_option("SAPT", "SAPT_DFT_GRAC_CONVERGENCE_TIER"),
+        compute_GRAC_shift(
+            monomerB_mon_only_bf,
+            SAPT_DFT_GRAC_COMPUTE,
             "Monomer B",
         )
         mon_b_shift = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_B")
+
+    core.set_variable("SAPT_DFT_GRAC_SHIFT_A", mon_a_shift)
+    core.set_variable("SAPT_DFT_GRAC_SHIFT_B", mon_b_shift)
     core.print_out("\n")
 
-    if do_dft and ((mon_a_shift == 0.0) or (mon_b_shift == 0.0)):
+    if do_dft and ((not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_A")) or (not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_B"))) and SAPT_DFT_GRAC_COMPUTE.upper() == "NONE":
         raise ValidationError(
-            'SAPT(DFT): must set both "SAPT_DFT_GRAC_SHIFT_A" and "B". To automatically compute the GRAC shift, set to -99.0.'
+            'SAPT(DFT): must set both "SAPT_DFT_GRAC_SHIFT_A" and "B". To automatically compute the GRAC shift, set SAPT_DFT_GRAC_COMPUTE to "ITERATIVE" or "SINGLE".'
         )
 
     if core.get_option("SCF", "REFERENCE") != "RHF":
@@ -194,8 +197,6 @@ def run_sapt_dft(name, **kwargs):
             "SAPT(DFT) currently only supports restricted references."
         )
 
-
-    core.IO.set_default_namespace('dimer')
 
     # Save integrals
     # We want to try to re-use itegrals for the dimer and monomer SCF's. If we
@@ -474,41 +475,42 @@ def run_sapt_dft(name, **kwargs):
     return dimer_wfn
 
 
-def sapt_dft_grac_convergence_tier_options():
-    return {
-        "SINGLE": [
-            {
-                "SCF_INITIAL_ACCELERATOR": "ADIIS",
-            }
-        ],
-        "ITERATIVE": [
-            {
-                "SCF_INITIAL_ACCELERATOR": "ADIIS",
-            },
-            {
-                "LEVEL_SHIFT": 0.01,
-                "LEVEL_SHIFT_CUTOFF": 0.01,
-                "SCF_INITIAL_ACCELERATOR": "ADIIS",
-                "MAXITER": 200,
-            },
-            {
-                "LEVEL_SHIFT": 0.02,
-                "LEVEL_SHIFT_CUTOFF": 0.02,
-                "SCF_INITIAL_ACCELERATOR": "ADIIS",
-                "MAXITER": 200,
-            },
-        ],
-    }
+sapt_dft_grac_convergence_tier_options = {
+    "SINGLE": [
+        {
+            "SCF_INITIAL_ACCELERATOR": "ADIIS",
+        }
+    ],
+    "ITERATIVE": [
+        {
+            "SCF_INITIAL_ACCELERATOR": "ADIIS",
+        },
+        {
+            "LEVEL_SHIFT": 0.01,
+            "LEVEL_SHIFT_CUTOFF": 0.01,
+            "SCF_INITIAL_ACCELERATOR": "ADIIS",
+            "MAXITER": 200,
+        },
+        {
+            "LEVEL_SHIFT": 0.02,
+            "LEVEL_SHIFT_CUTOFF": 0.02,
+            "SCF_INITIAL_ACCELERATOR": "ADIIS",
+            "MAXITER": 200,
+        },
+    ],
+}
 
 
-def compute_GRAC_shift(
-    molecule, sapt_dft_grac_convergence_tier="SINGLE", label="Monomer A"
-):
+def compute_GRAC_shift(molecule, sapt_dft_grac_convergence_tier="SINGLE", label="Monomer A"):
     optstash = p4util.OptionsState(
         ["SCF_TYPE"],
         ["SCF", "REFERENCE"],
         ["SCF", "DFT_GRAC_SHIFT"],
         ["SCF", "SAVE_JK"],
+        ["SCF", "MAXITER"],
+        ["LEVEL_SHIFT"],
+        ["LEVEL_SHIFT_CUTOFF"],
+        ["SCF_INITIAL_ACCELERATOR"],
     )
 
     dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
@@ -566,8 +568,7 @@ def compute_GRAC_shift(
         E_cation = wfn_cation.energy()
         grac = E_cation - E_neutral + HOMO
         if grac >= 1 or grac <= -1:
-            print(f"{grac = }")
-            raise Exception("Invalid GRAC")
+            raise Exception(f"The computed GRAC shift ({grac = }) exceeds the bounds of -1 < x < 1 and should not be used to approximate the ionization potential.")
         if label == "Monomer A":
             core.set_global_option("SAPT_DFT_GRAC_SHIFT_A", grac)
             core.set_variable("SAPT_DFT_GRAC_SHIFT_A", grac)
