@@ -152,7 +152,6 @@ def run_sapt_dft(name, **kwargs):
         core.print_out("     DFT  (Monomer B)\n")
     if do_mon_grac_shift_A:
         core.print_out("     GRAC (Monomer A)\n")
-<<<<<<< HEAD
     if do_mon_grac_shift_B:
         core.print_out("     GRAC (Monomer B)\n")
     if do_delta_dft:
