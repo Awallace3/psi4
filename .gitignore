@@ -159,10 +159,6 @@ GTAGS
 GPATH
 GRTAGS
 Pipfile.lock
-<<<<<<< HEAD
 tmp
 pytest_output.*
-=======
-pytest_output.dat
-pytest_output.log
->>>>>>> saptdft_auto_grac
+fsapt
