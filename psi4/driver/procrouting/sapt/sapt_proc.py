@@ -588,7 +588,7 @@ def compute_GRAC_shift(molecule, sapt_dft_grac_convergence_tier="SINGLE", label=
     scf_reference = core.get_option("SCF", "REFERENCE")
 
     core.print_out(f"Computing GRAC shift for {label} using {sapt_dft_grac_convergence_tier}...")
-    grac_options = sapt_dft_grac_convergence_tier_options()[
+    grac_options = sapt_dft_grac_convergence_tier_options[
         sapt_dft_grac_convergence_tier.upper()
     ]
     core.print_out(f"{grac_options = }")
