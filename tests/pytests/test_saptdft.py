@@ -186,12 +186,11 @@ def test_sapt_dft_compute_ddft_d4_auto_grac():
             "basis": "STO-3G",
             "e_convergence": 1e-8,
             "d_convergence": 1e-8,
-            "sapt_dft_grac_shift_a": -99,
-            "sapt_dft_grac_shift_b": -99,
             "SAPT_DFT_FUNCTIONAL": dft_functional,
             "SAPT_DFT_DO_DDFT": True,
             "SAPT_DFT_D4_IE": True,
             "SAPT_DFT_DO_DISP": True,
+            "SAPT_DFT_GRAC_COMPUTE": "SINGLE",
         }
     )
     dft_IE = (
