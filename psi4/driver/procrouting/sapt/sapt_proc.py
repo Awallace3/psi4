@@ -815,6 +815,7 @@ def sapt_dft(
         elif exch_disp_scheme == "DISP":
             exch_disp_scale = data["Disp20"] / data["Disp20,u"]
             data["Exch-Disp20,r"] = exch_disp_scale * data["Exch-Disp20,u"]
+        print(data['Exch-Disp20,r'])
         if exch_disp_scheme != "NONE":
             core.print_out(
                 print_sapt_var("Est. Exch-Disp20,r",

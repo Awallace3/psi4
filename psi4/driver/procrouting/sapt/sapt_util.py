@@ -166,6 +166,7 @@ def print_sapt_dft_summary(data, name, do_dft=True, short=False):
     # Dispersion
     if do_dft:
         disp = data["Disp20"] + data["Exch-Disp20,r"]
+        print(f"{disp = }")
         ret += print_sapt_var("Dispersion", disp) + "\n"
         ret += print_sapt_var("  Disp2,r", data["Disp20"]) + "\n"
         ret += print_sapt_var("  Disp2,u", data["Disp20,u"]) + "\n"
