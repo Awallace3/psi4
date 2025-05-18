@@ -782,7 +782,6 @@ def sapt_dft(
                 is_hybrid = is_x_hybrid
             else:
                 is_hybrid = False
-            is_hybrid = False
 
         # Dispersion
         core.timer_on("SAPT(DFT):disp")
