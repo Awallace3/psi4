@@ -310,21 +310,21 @@ def test_sapt_dft_compute_ddft_d4_auto_grac():
         0.1981702737,
         # aug-cc-pvdz target, 0.1307 (using experimental IP from CCCBDB)
         # 0.13053068183319516,
-        psi4.core.variable("SAPT_DFT_GRAC_SHIFT_A"),
+        psi4.core.variable("SAPT DFT GRAC SHIFT A"),
         8,
-        "SAPT_DFT_GRAC_SHIFT_A",
+        "SAPT DFT GRAC SHIFT A",
     )
     compare_values(
         #  STO-3G target
         0.1983742234,
         # aug-cc-pvdz target, 0.1307 (using experimental IP from CCCBDB)
         # 0.13063798506967816,
-        psi4.core.variable("SAPT_DFT_GRAC_SHIFT_B"),
+        psi4.core.variable("SAPT DFT GRAC SHIFT B"),
         8,
-        "SAPT_DFT_GRAC_SHIFT_B",
+        "SAPT DFT GRAC SHIFT B",
     )
-    print(f"{psi4.core.variable('SAPT_DFT_GRAC_SHIFT_A') = }")
-    print(f"{psi4.core.variable('SAPT_DFT_GRAC_SHIFT_B') = }")
+    print(f"{psi4.core.variable('SAPT DFT GRAC SHIFT A') = }")
+    print(f"{psi4.core.variable('SAPT DFT GRAC SHIFT B') = }")
 
 
 @pytest.mark.saptdft
