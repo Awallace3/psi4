@@ -10,6 +10,31 @@ from pprint import pprint as pp
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
 pytestmark = [pytest.mark.psi, pytest.mark.api]
 
+_sapt_testing_mols = {
+    "neutral_water_dimer": """
+0 1
+8   -0.702196054   -0.056060256   0.009942262
+1   -1.022193224   0.846775782   -0.011488714
+1   0.257521062   0.042121496   0.005218999
+--
+0 1
+8   2.268880784   0.026340101   0.000508029
+1   2.645502399   -0.412039965   0.766632411
+1   2.641145101   -0.449872874   -0.744894473
+units angstrom
+""",
+    "hydroxide": """
+-1 1
+8   -0.702196054   -0.056060256   0.009942262
+1   -1.022193224   0.846775782   -0.011488714
+--
+0 1
+8   2.268880784   0.026340101   0.000508029
+1   2.645502399   -0.412039965   0.766632411
+1   2.641145101   -0.449872874   -0.744894473
+units angstrom
+""",
+}
 
 @pytest.mark.saptdft
 def test_sapt_dft_compute_ddft_d4():
@@ -102,8 +127,6 @@ def test_sapt_dft_compute_ddft_d4_diskdf():
   units bohr
 """
     )
-    # psi4.set_memory("280 MB")
-    psi4.set_memory("64 GB")
     dft_functional = "pbe0"
     psi4.set_options(
         {
@@ -184,7 +207,7 @@ def test_sapt_dft_diskdf():
     dft_functional = "pbe0"
     psi4.set_options(
         {
-            "basis": "aug-cc-pvqz",
+            "basis": "aug-cc-pvdz",
             "e_convergence": 1e-8,
             "d_convergence": 1e-8,
             "scf_type": "disk_df",
@@ -211,28 +234,16 @@ def test_sapt_dft_diskdf():
     # monomer A: -75.2469415558837937
     # monomer B: -75.2534791716759486
 
-    ELST = psi4.core.variable("SAPT ELST ENERGY")
-    EXCH = psi4.core.variable("SAPT EXCH ENERGY")
-    IND = psi4.core.variable("SAPT IND ENERGY")
     DFT_MONA = psi4.core.variable("DFT MONOMER A ENERGY")
     DFT_MONB = psi4.core.variable("DFT MONOMER B ENERGY")
-    # DFT_MONA = psi4.core.variable("DFT MONOMERA")
-    # DFT_MONB = psi4.core.variable("DFT MONOMERB")
     DFT_DIMER = psi4.core.variable("DFT DIMER ENERGY")
-    # DFT_DIMER = psi4.core.variable("DFT DIMER")
 
     print(f"{DFT_DIMER = }\n{DFT_MONA = }\n{DFT_MONB = }")
     DFT_IE = (DFT_DIMER - DFT_MONA - DFT_MONB) * hartree_to_kcalmol
     print(f"bsse: {dft_IE = }")
     print(f"SAPT: {DFT_IE = }")
     assert compare_values(dft_IE, DFT_IE, 7, "DFT IE")
-    assert compare_values(-4.130018077857232, DFT_IE, 7, "DFT IE")
-
-    # get dft_IE from SAPT(DFT) Delta DFT term to back-calculate
-    ELST = psi4.core.variable("SAPT ELST ENERGY")
-    EXCH = psi4.core.variable("SAPT EXCH ENERGY")
-    IND = psi4.core.variable("SAPT IND ENERGY")
-    DELTA_HF = psi4.core.variable("SAPT(DFT) DELTA HF")
+    assert compare_values(-4.91463144301158, DFT_IE, 7, "DFT IE")
 
 
 @pytest.mark.saptdft
@@ -258,8 +269,7 @@ def test_sapt_dft_compute_ddft_d4_auto_grac():
             "basis": "STO-3G",
             "e_convergence": 1e-8,
             "d_convergence": 1e-8,
-            "sapt_dft_grac_shift_a": -99,
-            "sapt_dft_grac_shift_b": -99,
+            "sapt_dft_grac_compute": "SINGLE",
             "SAPT_DFT_FUNCTIONAL": dft_functional,
             "SAPT_DFT_DO_DDFT": True,
             "SAPT_DFT_D4_IE": True,
@@ -351,74 +361,54 @@ def test_dftd4():
 
 @pytest.mark.saptdft
 @pytest.mark.parametrize(
-    "SAPT_DFT_GRAC_COMPUTE, refA, refB, gracA, gracB, geometry",
+    "SAPT_DFT_GRAC_COMPUTE, refA, refB, gracA, gracB, geometry, grac_basis",
     [
         (
             "SINGLE",
             0.19807358,
             0.19830016,
-            0.0,
-            0.0,
-            """
-0 1
-8   -0.702196054   -0.056060256   0.009942262
-1   -1.022193224   0.846775782   -0.011488714
-1   0.257521062   0.042121496   0.005218999
---
-0 1
-8   2.268880784   0.026340101   0.000508029
-1   2.645502399   -0.412039965   0.766632411
-1   2.641145101   -0.449872874   -0.744894473
-units angstrom
-""",
+            None,
+            None,
+            'neutral_water_dimer',
+            None,
         ),
         (
             "SINGLE",
             0.1307,
             0.19830016,
             0.1307,
-            0.0,
-            """
-0 1
-8   -0.702196054   -0.056060256   0.009942262
-1   -1.022193224   0.846775782   -0.011488714
-1   0.257521062   0.042121496   0.005218999
---
-0 1
-8   2.268880784   0.026340101   0.000508029
-1   2.645502399   -0.412039965   0.766632411
-1   2.641145101   -0.449872874   -0.744894473
-units angstrom
-""",
+            None,
+            'neutral_water_dimer',
+            None,
         ),
         (
             "ITERATIVE",
-            0.3258340368,
+            0.2303073898,
             0.19830016,
-            0.0,
-            0.0,
-            """
--1 1
-8   -0.702196054   -0.056060256   0.009942262
-1   -1.022193224   0.846775782   -0.011488714
---
-0 1
-8   2.268880784   0.026340101   0.000508029
-1   2.645502399   -0.412039965   0.766632411
-1   2.641145101   -0.449872874   -0.744894473
-units angstrom
-""",
+            None,
+            None,
+            "hydroxide",
+            None,
+        ),
+        (
+            "ITERATIVE",
+            0.0924377691,
+            0.1306379832,
+            None,
+            None,
+            "hydroxide",
+            "aug-cc-pvdz",
         ),
     ],
 )
-def test_saptdft_auto_grac(SAPT_DFT_GRAC_COMPUTE, refA, refB, gracA, gracB, geometry):
+def test_saptdft_auto_grac(SAPT_DFT_GRAC_COMPUTE, refA, refB, gracA, gracB, geometry, grac_basis):
     """
     For SAPT(DFT), one must compute a GRAC shift for each monomer. Ideally,
     this GRAC shift should be close to the experimental Ionization Potential
     (IP) of the monomer. Basis set incompleteness prevents this here.
     e.g., aug-DZ H2O has a shift of 0.1306, compared to 0.1307 experimental IP.
     """
-    mol_dimer = psi4.geometry(geometry)
+    mol_dimer = psi4.geometry(_sapt_testing_mols[geometry])
     psi4.set_options(
         {
             "basis": "STO-3G",
@@ -426,22 +416,24 @@ def test_saptdft_auto_grac(SAPT_DFT_GRAC_COMPUTE, refA, refB, gracA, gracB, geom
             "SAPT_DFT_GRAC_COMPUTE": SAPT_DFT_GRAC_COMPUTE,
         }
     )
-    if gracA != 0.0:
+    if grac_basis is not None:
+        psi4.set_options({"SAPT_DFT_GRAC_BASIS": grac_basis})
+    if gracA is not None:
         psi4.set_options({"SAPT_DFT_GRAC_SHIFT_A": gracA})
-    if gracB != 0.0:
+    if gracB is not None:
         psi4.set_options({"SAPT_DFT_GRAC_SHIFT_B": gracB})
     psi4.energy("SAPT(DFT)", molecule=mol_dimer)
     compare_values(
         refA,
-        psi4.core.variable("SAPT_DFT_GRAC_SHIFT_A"),
+        psi4.core.variable("SAPT DFT GRAC SHIFT A"),
         8,
-        "SAPT_DFT_GRAC_SHIFT_A",
+        "SAPT DFT GRAC SHIFT A",
     )
-    compare_values(
+    assert compare_values(
         refB,
-        psi4.core.variable("SAPT_DFT_GRAC_SHIFT_B"),
+        psi4.core.variable("SAPT DFT GRAC SHIFT B"),
         8,
-        "SAPT_DFT_GRAC_SHIFT_B",
+        "SAPT DFT GRAC SHIFT B",
     )
     return
 
@@ -980,18 +972,19 @@ no_com
 
 
 if __name__ == "__main__":
-    test_saptdft_external_potential(
-        "c",
-        ["C"],
-        "sapt(dft)",
-        {
-            "Edisp": -0.003035986247790965,
-            "Eelst": -0.013872053118092253,
-            "Eexch": 0.02117011636321129,
-            "Eind": -0.004613609990417991,
-            "Enuc": 37.565065473343004,
-            "Etot": -0.0003515329930899192,
-        },
-        8,
-    )
-    test_fisapt0_sapthf_external_potential()
+    test_sapt_dft_diskdf()
+    # test_saptdft_external_potential(
+    #     "c",
+    #     ["C"],
+    #     "sapt(dft)",
+    #     {
+    #         "Edisp": -0.003035986247790965,
+    #         "Eelst": -0.013872053118092253,
+    #         "Eexch": 0.02117011636321129,
+    #         "Eind": -0.004613609990417991,
+    #         "Enuc": 37.565065473343004,
+    #         "Etot": -0.0003515329930899192,
+    #     },
+    #     8,
+    # )
+    # test_fisapt0_sapthf_external_potential()
