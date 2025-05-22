@@ -632,19 +632,104 @@ no_com
     )
 
 
-if __name__ == "__main__":
-    test_saptdft_external_potential(
-        "c",
-        ["C"],
-        "sapt(dft)",
-        {
-            "Edisp": -0.003035986247790965,
-            "Eelst": -0.013872053118092253,
-            "Eexch": 0.02117011636321129,
-            "Eind": -0.004613609990417991,
-            "Enuc": 37.565065473343004,
-            "Etot": -0.0003515329930899192,
+def test_qcng_embedded_saptdft():
+    import qcengine as qcng
+    atin = {
+        "driver": "energy",
+        "extras": {},
+        "id": "53500",
+        # "keywords": {"SAPT_DFT_GRAC_COMPUTE": "SINGLE"},
+        "keywords": {
+            # "SAPT_DFT_GRAC_COMPUTE": "SINGLE"
+            "SAPT_DFT_GRAC_SHIFT_A": 0.1307,
+            "SAPT_DFT_GRAC_SHIFT_B": 0.1307,
         },
-        8,
+        "model": {"basis": "sto-3g", "method": "sapt(dft)"},
+        "molecule": {
+            "extras": {},
+            "fix_com": True,
+            "fix_orientation": True,
+            "fragment_charges": [0.0, 0.0],
+            "fragment_multiplicities": [1, 1],
+            "fragments": [[0, 1, 2], [3, 4, 5]],
+            "geometry": [
+                -1.3269582284372,
+                -0.1059385303631,
+                0.0187881522475,
+                -1.9316652406588,
+                1.6001743176504,
+                -0.0217105229937,
+                0.486644278717,
+                0.0795980914346,
+                0.009862478759,
+                4.287563293074,
+                0.0497755770069,
+                0.0009600356738,
+                4.9992749983517,
+                -0.7786426865932,
+                1.4487252956894,
+                4.9910408984847,
+                -0.8501365231326,
+                -1.4076465463372,
+            ],
+            "id": 53204,
+            "identifiers": {
+                "molecular_formula": "H4O2",
+                "molecule_hash": "fa17e4abd32ccf4b5a3db8da6d94507f9ef6941f",
+            },
+            "molecular_charge": 0.0,
+            "molecular_multiplicity": 1,
+            "name": "H4O2",
+            "provenance": {
+                "creator": "QCElemental",
+                "routine": "qcelemental.molparse.from_string",
+                "version": "0.29.0",
+            },
+            "schema_name": "qcschema_molecule",
+            "schema_version": 2,
+            "symbols": ["O", "H", "H", "O", "H", "H"],
+            "validated": True,
+        },
+        "protocols": {"stdout": True},
+        "provenance": {
+            "creator": "QCElemental",
+            "routine": "qcelemental.models.results",
+            "version": "0.29.0",
+        },
+        "schema_name": "qcschema_input",
+        "schema_version": 1,
+    }
+
+    ret = psi4.schema_wrapper.run_qcschema(
+        atin,
     )
-    test_fisapt0_sapthf_external_potential()
+    print(ret)
+    # print(ret.properties)
+    # print(ret.extras)
+    ret = qcng.compute(
+        atin,
+        "psi4",
+        raise_error=True,
+    )
+    print(ret)
+    return
+
+
+if __name__ == "__main__":
+    test_qcng_embedded_saptdft()
+
+    # test_saptdft_external_potential(
+    #     "c",
+    #     ["C"],
+    #     "sapt(dft)",
+    #     {
+    #         "Edisp": -0.003035986247790965,
+    #         "Eelst": -0.013872053118092253,
+    #         "Eexch": 0.02117011636321129,
+    #         "Eind": -0.004613609990417991,
+    #         "Enuc": 37.565065473343004,
+    #         "Etot": -0.0003515329930899192,
+    #     },
+    #     8,
+    # )
+    # test_fisapt0_sapthf_external_potential()
