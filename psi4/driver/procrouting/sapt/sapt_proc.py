@@ -64,14 +64,23 @@ def run_sapt_dft(name, **kwargs):
     # Get the molecule of interest
     ref_wfn = kwargs.get('ref_wfn', None)
     if ref_wfn is None:
-        sapt_dimer_molecule = kwargs.pop('molecule', core.get_active_molecule())
+        sapt_dimer_initial = kwargs.pop("molecule", core.get_active_molecule())
     else:
-        core.print_out('Warning! SAPT argument "ref_wfn" is only able to use molecule information.')
-        sapt_dimer_molecule = ref_wfn.molecule()
+        core.print_out(
+            'Warning! SAPT argument "ref_wfn" is only able to use molecule information.'
+        )
+        sapt_dimer_initial = ref_wfn.molecule()
+
+    sapt_dimer, monomerA, monomerB = proc_util.prepare_sapt_molecule(
+        sapt_dimer_initial, "dimer"
+    )
+
+    if getattr(sapt_dimer_initial, "_initial_cartesian", None) is not None:
+        sapt_dimer._initial_cartesian = sapt_dimer_initial._initial_cartesian
+        monomerA._initial_cartesian = core.Matrix.from_array(sapt_dimer._initial_cartesian.np.copy())
+        monomerB._initial_cartesian = core.Matrix.from_array(sapt_dimer._initial_cartesian.np.copy())
 
     data = {}
-    sapt_dimer, monomerA, monomerB = proc_util.prepare_sapt_molecule(sapt_dimer_molecule, "dimer")
-
     # Grab overall settings
     do_mon_grac_shift_A = False
     do_mon_grac_shift_B = False
@@ -90,25 +99,6 @@ def run_sapt_dft(name, **kwargs):
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     do_dft = sapt_dft_functional != "HF"
-
-    # Get the molecule of interest
-    ref_wfn = kwargs.get("ref_wfn", None)
-    if ref_wfn is None:
-        sapt_dimer_initial = kwargs.pop("molecule", core.get_active_molecule())
-    else:
-        core.print_out(
-            'Warning! SAPT argument "ref_wfn" is only able to use molecule information.'
-        )
-        sapt_dimer_initial = ref_wfn.molecule()
-
-    sapt_dimer, monomerA, monomerB = proc_util.prepare_sapt_molecule(
-        sapt_dimer_initial, "dimer"
-    )
-
-    if getattr(sapt_dimer_initial, "_initial_cartesian", None) is not None:
-        sapt_dimer._initial_cartesian = sapt_dimer_initial._initial_cartesian
-        monomerA._initial_cartesian = core.Matrix.from_array(sapt_dimer._initial_cartesian.np.copy())
-        monomerB._initial_cartesian = core.Matrix.from_array(sapt_dimer._initial_cartesian.np.copy())
 
     if do_mon_grac_shift_A or do_mon_grac_shift_B:
         monomerA_mon_only_bf = sapt_dimer.extract_subsets(1)
@@ -453,7 +443,7 @@ def run_sapt_dft(name, **kwargs):
         monomer_B_molecule = monomerB
 
         core.timer_on("SAPT(DFT):Dimer DFT")
-        run_scf(sapt_dft_functional.lower(), molecule=sapt_dimer_molecule)
+        run_scf(sapt_dft_functional.lower(), molecule=sapt_dimer)
         data["DFT DIMER ENERGY"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT):Dimer DFT")
 
