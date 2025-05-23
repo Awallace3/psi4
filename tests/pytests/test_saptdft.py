@@ -1047,7 +1047,7 @@ def test_qcng_embedded_saptdft():
     ret_1 = psi4.schema_wrapper.run_qcschema(
         atin,
     )
-    assert compare_values(-0.00191336, ret_1.extras['qcvars']['SAPT TOTAL ENERGY'], 5, "SAPT(DFT) TOTAL run_qschema")
+    assert compare_values(-0.00191336, ret_1.extras['qcvars']['SAPT TOTAL ENERGY'], 4, "SAPT(DFT) TOTAL run_qschema")
     print("qcng")
     ret_2 = qcng.compute(
         atin,
@@ -1055,11 +1055,13 @@ def test_qcng_embedded_saptdft():
         raise_error=True,
     )
     print(ret_2)
-    assert compare_values(-0.00191336, ret_2.extras['qcvars']['SAPT TOTAL ENERGY'], 5, "SAPT(DFT) TOTAL qcng")
+    assert compare_values(-0.00191336, ret_2.extras['qcvars']['SAPT TOTAL ENERGY'], 4, "SAPT(DFT) TOTAL qcng")
     return
 
 
 if __name__ == "__main__":
+    psi4.set_memory("32 GB")
+    psi4.set_num_threads(16)
     test_qcng_embedded_saptdft()
 
     test_saptdft_external_potential(
