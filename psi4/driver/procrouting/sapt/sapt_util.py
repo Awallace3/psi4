@@ -190,7 +190,7 @@ def print_sapt_dft_summary(data, name, do_dft=True, short=False, do_disp=True, d
         subtract_delta_hf_for_total_dispersion = -data["Delta HF Correction"]
         ret += print_sapt_var("  -delta HF,r (2)", subtract_delta_hf_for_total_dispersion) + "\n"
         ret += print_sapt_var("  GD4 IE", data["D4 IE"]) + "\n"
-    elif "Delta DFT Correction" in list(data):
+    if "Delta DFT Correction" in list(data):
         ret += "      ---------------" + "\n"
         ret += print_sapt_var("  delta DFT,r (2)", data["Delta DFT Correction"]) + "\n"
 
