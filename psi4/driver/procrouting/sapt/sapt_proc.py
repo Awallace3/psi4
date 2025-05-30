@@ -540,6 +540,12 @@ sapt_dft_grac_convergence_tier_options = {
             "SCF_INITIAL_ACCELERATOR": "ADIIS",
             "MAXITER": 200,
         },
+        {
+            "LEVEL_SHIFT": 0.01,
+            "LEVEL_SHIFT_CUTOFF": 1e-2,
+            "SCF_INITIAL_ACCELERATOR": "ADIIS",
+            "MAXITER": 200,
+        },
     ],
 }
 
