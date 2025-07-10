@@ -972,7 +972,7 @@ no_com
 
 
 if __name__ == "__main__":
-    test_sapt_dft_diskdf()
+    # test_sapt_dft_diskdf()
     # test_saptdft_external_potential(
     #     "c",
     #     ["C"],
@@ -987,4 +987,4 @@ if __name__ == "__main__":
     #     },
     #     8,
     # )
-    # test_fisapt0_sapthf_external_potential()
+    test_fisapt0_sapthf_external_potential()
