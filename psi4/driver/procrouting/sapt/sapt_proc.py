@@ -64,14 +64,23 @@ def run_sapt_dft(name, **kwargs):
     # Get the molecule of interest
     ref_wfn = kwargs.get('ref_wfn', None)
     if ref_wfn is None:
-        sapt_dimer_molecule = kwargs.pop('molecule', core.get_active_molecule())
+        sapt_dimer_initial = kwargs.pop("molecule", core.get_active_molecule())
     else:
-        core.print_out('Warning! SAPT argument "ref_wfn" is only able to use molecule information.')
-        sapt_dimer_molecule = ref_wfn.molecule()
+        core.print_out(
+            'Warning! SAPT argument "ref_wfn" is only able to use molecule information.'
+        )
+        sapt_dimer_initial = ref_wfn.molecule()
+
+    sapt_dimer, monomerA, monomerB = proc_util.prepare_sapt_molecule(
+        sapt_dimer_initial, "dimer"
+    )
+
+    if getattr(sapt_dimer_initial, "_initial_cartesian", None) is not None:
+        sapt_dimer._initial_cartesian = sapt_dimer_initial._initial_cartesian
+        monomerA._initial_cartesian = core.Matrix.from_array(sapt_dimer._initial_cartesian.np.copy())
+        monomerB._initial_cartesian = core.Matrix.from_array(sapt_dimer._initial_cartesian.np.copy())
 
     data = {}
-    sapt_dimer, monomerA, monomerB = proc_util.prepare_sapt_molecule(sapt_dimer_molecule, "dimer")
-
     # Grab overall settings
     do_mon_grac_shift_A = False
     do_mon_grac_shift_B = False
@@ -90,25 +99,6 @@ def run_sapt_dft(name, **kwargs):
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     do_dft = sapt_dft_functional != "HF"
-
-    # Get the molecule of interest
-    ref_wfn = kwargs.get("ref_wfn", None)
-    if ref_wfn is None:
-        sapt_dimer_initial = kwargs.pop("molecule", core.get_active_molecule())
-    else:
-        core.print_out(
-            'Warning! SAPT argument "ref_wfn" is only able to use molecule information.'
-        )
-        sapt_dimer_initial = ref_wfn.molecule()
-
-    sapt_dimer, monomerA, monomerB = proc_util.prepare_sapt_molecule(
-        sapt_dimer_initial, "dimer"
-    )
-
-    if getattr(sapt_dimer_initial, "_initial_cartesian", None) is not None:
-        sapt_dimer._initial_cartesian = sapt_dimer_initial._initial_cartesian
-        monomerA._initial_cartesian = core.Matrix.from_array(sapt_dimer._initial_cartesian.np.copy())
-        monomerB._initial_cartesian = core.Matrix.from_array(sapt_dimer._initial_cartesian.np.copy())
 
     if do_mon_grac_shift_A or do_mon_grac_shift_B:
         monomerA_mon_only_bf = sapt_dimer.extract_subsets(1)
@@ -198,7 +188,7 @@ def run_sapt_dft(name, **kwargs):
 
     if do_dft and ((not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_A")) or (not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_B"))) and grac_compute == "NONE":
         raise ValidationError(
-            'SAPT(DFT): must set both "SAPT_DFT_GRAC_SHIFT_A" and "B". To automatically compute the GRAC shift, set SAPT_DFT_GRAC_COMPUTE to "ITERATIVE" or "SINGLE".'
+            'SAPT(DFT): User must set both "SAPT_DFT_GRAC_SHIFT_A" and "_B".  Or, to automatically compute the GRAC shift, set SAPT_DFT_GRAC_COMPUTE to "ITERATIVE" or "SINGLE".'
         )
 
     if core.get_option("SCF", "REFERENCE") != "RHF":
@@ -453,7 +443,7 @@ def run_sapt_dft(name, **kwargs):
         monomer_B_molecule = monomerB
 
         core.timer_on("SAPT(DFT):Dimer DFT")
-        run_scf(sapt_dft_functional.lower(), molecule=sapt_dimer_molecule)
+        run_scf(sapt_dft_functional.lower(), molecule=sapt_dimer)
         data["DFT DIMER ENERGY"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT):Dimer DFT")
 
@@ -539,14 +529,20 @@ sapt_dft_grac_convergence_tier_options = {
             "SCF_INITIAL_ACCELERATOR": "ADIIS",
         },
         {
-            "LEVEL_SHIFT": 0.01,
-            "LEVEL_SHIFT_CUTOFF": 0.01,
+            "LEVEL_SHIFT": 0.1,
+            "LEVEL_SHIFT_CUTOFF": 1e-05,
             "SCF_INITIAL_ACCELERATOR": "ADIIS",
             "MAXITER": 200,
         },
         {
-            "LEVEL_SHIFT": 0.02,
-            "LEVEL_SHIFT_CUTOFF": 0.02,
+            "LEVEL_SHIFT": 0.5,
+            "LEVEL_SHIFT_CUTOFF": 1e-3,
+            "SCF_INITIAL_ACCELERATOR": "ADIIS",
+            "MAXITER": 200,
+        },
+        {
+            "LEVEL_SHIFT": 0.01,
+            "LEVEL_SHIFT_CUTOFF": 1e-2,
             "SCF_INITIAL_ACCELERATOR": "ADIIS",
             "MAXITER": 200,
         },
@@ -594,7 +590,7 @@ def compute_GRAC_shift(molecule, sapt_dft_grac_convergence_tier, label):
         mol_qcel = qcel.models.Molecule(**mol_qcel_dict)
         mol_cation = core.Molecule.from_schema(mol_qcel.dict())
 
-        core.print_out(f"\n\n  ==> GRAC {label}: Given {given_charge} <==\n\n")
+        core.print_out(f"\n\n  ==> GRAC {label} Given Molecule: charge={mol_given.molecular_charge()} mult={mol_given.multiplicity()} <==\n\n")
         try:
             if mol_given.multiplicity() != 1:
                 core.set_local_option("SCF", "REFERENCE", "UHF")
@@ -608,7 +604,7 @@ def compute_GRAC_shift(molecule, sapt_dft_grac_convergence_tier, label):
                 core.set_local_option("SCF", "REFERENCE", "UHF")
             else:
                 core.set_local_option("SCF", "REFERENCE", "RHF")
-            core.print_out(f"\n\n  ==> GRAC {label}: Cation <==\n\n")
+            core.print_out(f"\n\n  ==> GRAC {label} Electron Removed Molecule: charge={mol_cation.molecular_charge()} mult={mol_cation.multiplicity()} <==\n\n")
             wfn_cation = run_scf(
                 dft_functional.lower(),
                 molecule=mol_cation,
