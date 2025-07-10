@@ -251,11 +251,11 @@ def run_sapt_dft(name, **kwargs):
 
         if do_ext_potential:
             kwargs["external_potentials"] = {}
-        if ext_pot_C:
+        if ext_pot_C is not None:
             kwargs["external_potentials"]["C"] = ext_pot_C
-        if ext_pot_A:
+        if ext_pot_A is not None:
             kwargs["external_potentials"]["A"] = ext_pot_A
-        if ext_pot_B:
+        if ext_pot_B is not None:
             kwargs["external_potentials"]["B"] = ext_pot_B
 
         if do_dft:  # For SAPT(HF) do the JK terms in sapt_dft()
@@ -385,7 +385,7 @@ def run_sapt_dft(name, **kwargs):
 
         core.set_global_option("SAVE_JK", True)
         core.IO.set_default_namespace('monomerB')
-        if do_ext_potential and (ext_pot_B or ext_pot_C):
+        if do_ext_potential and (ext_pot_B is not None or ext_pot_C is not None):
             kwargs["external_potentials"] = {}
             kwargs["external_potentials"]['C'] = construct_external_potential_in_field_C([ext_pot_C, ext_pot_B])
         wfn_B = scf_helper(sapt_dft_functional,
@@ -398,11 +398,11 @@ def run_sapt_dft(name, **kwargs):
         core.timer_off("SAPT(DFT): Monomer B DFT")
         if do_ext_potential:
             kwargs["external_potentials"] = {}
-        if ext_pot_C:
+        if ext_pot_C is not None:
             kwargs["external_potentials"]["C"] = ext_pot_C
-        if ext_pot_A:
+        if ext_pot_A is not None:
             kwargs["external_potentials"]["A"] = ext_pot_A
-        if ext_pot_B:
+        if ext_pot_B is not None:
             kwargs["external_potentials"]["B"] = ext_pot_B
     kwargs["external_potentials"] = {}
     if do_ext_potential:
@@ -411,12 +411,12 @@ def run_sapt_dft(name, **kwargs):
             construct_external_potential_in_field_C([ext_pot_A, ext_pot_B]),
             dimer_wfn,
         )
-        if ext_pot_C:
+        if ext_pot_C is not None:
             kwargs["external_potentials"]["C"] = ext_pot_C
-        if ext_pot_A:
+        if ext_pot_A is not None:
             kwargs["external_potentials"]["A"] = ext_pot_A
             _set_external_potentials_to_wavefunction(ext_pot_A, wfn_A)
-        if ext_pot_B:
+        if ext_pot_B is not None:
             kwargs["external_potentials"]["B"] = ext_pot_B
             _set_external_potentials_to_wavefunction(ext_pot_B, wfn_B)
 

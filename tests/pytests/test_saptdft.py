@@ -1060,10 +1060,52 @@ def test_qcng_embedded_saptdft():
     return
 
 
+def test_charge_field_B():
+    dimer =psi4.geometry('''
+    0 1
+    8   60.268880784   0.026340101   0.000508029
+    1   60.645502399   -0.412039965   0.766632411
+    1   60.641145101   -0.449872874   -0.744894473
+    --
+    0 1
+    8   50.268880784   0.026340101   0.000508029
+    1   50.645502399   -0.412039965   0.766632411
+    1   50.641145101   -0.449872874   -0.744894473
+    units angstrom
+    symmetry c1
+    no_com
+    no_reorient
+    ''')
+
+    Chargefield_B = np.array([
+    0.5972,4.802,-1.38,23.692
+    ,-0.5679,4.723,-0.45,22.895
+    ,-0.3662,4.229,-1.231,25.089
+    ,0.1123,3.188,-0.936,25.072
+    ,0.009333,11.667,9.479,19.280
+    ,0.009333,10.878,8.794,19.002
+    ,0.283950,12.371,7.698,26.868
+    ,0.283950,13.479,7.947,26.797]).reshape((-1,4))
+    Chargefield_B[:,[1,2,3]] /= qcel.constants.bohr2angstroms
+
+    psi4.set_options({
+    'basis': 'jun-cc-pv(D+d)z',
+    'freeze_core': 'True',
+    'scf_type': 'df',
+    'mp2_type': 'df',
+    'fisapt_do_fsapt': 'false',
+    'SAPT_DFT_GRAC_COMPUTE': 'single'
+    })
+
+    # e = psi4.energy('fisapt0', external_potentials={'B':Chargefield_B})
+    e = psi4.energy('sapt(dft)', external_potentials={'B':Chargefield_B})
+
+
 if __name__ == "__main__":
     psi4.set_memory("32 GB")
     psi4.set_num_threads(16)
-    test_qcng_embedded_saptdft()
+    test_charge_field_B()
+    # test_qcng_embedded_saptdft()
 
     # test_saptdft_external_potential(
     #     "c",

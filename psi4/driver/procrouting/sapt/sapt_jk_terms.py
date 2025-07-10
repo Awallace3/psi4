@@ -84,10 +84,10 @@ def build_sapt_jk_cache(
 
     # External Potentials need to add to V_A and V_B
     if external_potentials:
-        if external_potentials.get("A"):
+        if external_potentials.get("A") is not None:
             ext_A = wfn_A.external_pot().computePotentialMatrix(wfn_A.basisset())
             cache["V_A"].add(ext_A)
-        if external_potentials.get("B"):
+        if external_potentials.get("B") is not None:
             ext_B = wfn_B.external_pot().computePotentialMatrix(wfn_B.basisset())
             cache["V_B"].add(ext_B)
 
@@ -130,9 +130,9 @@ def build_sapt_jk_cache(
     cache["extern_extern_IE"] = 0.0
     if external_potentials:
         dimer_nr += wfn_dimer.external_pot().computeNuclearEnergy(wfn_dimer.molecule()) 
-        if external_potentials.get("A"):
+        if external_potentials.get("A") is not None:
             monA_nr += wfn_A.external_pot().computeNuclearEnergy(wfn_A.molecule())
-        if external_potentials.get("B"):
+        if external_potentials.get("B") is not None:
             monB_nr += wfn_B.external_pot().computeNuclearEnergy(wfn_B.molecule())
         if external_potentials.get("A") and external_potentials.get("B"):
             cache["extern_extern_IE"] = wfn_A.external_pot().computeExternExternInteraction(wfn_B.external_pot())

@@ -1041,6 +1041,11 @@ PSI Variables by Alpha
 
    Property of partial atomic charges [e] by the method of L\ |o_dots|\ wdin, (nat,).
 
+.. psivar:: LOWDIN SPINS
+
+   Property of partial atomic spin population by the method of L\ |o_dots|\ wdin, (nat,).
+   Consider this the fractional number of unpaired electrons.
+
 .. psivar:: MAYER INDICES
 
    Property of Mayer bond indices, (nat, nat).
@@ -1700,6 +1705,14 @@ PSI Variables by Alpha
 
    The total electronic interaction energy [E_h] for the labeled SAPT level
    of theory that incorporates MP2 induction correction.
+
+.. psivar:: SAPT DFT GRAC SHIFT A
+   SAPT DFT GRAC SHIFT B
+
+   The gradient-regulation asymptotic correction (GRAC) [E_h] 
+   improves the accuracy of SAPT(DFT) calculations by correctly
+   describing the electron density at longe-range.
+
 
 .. psivar:: SCF ITERATIONS
    ADC ITERATIONS
