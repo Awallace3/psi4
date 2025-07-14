@@ -39,6 +39,7 @@ from . import sapt_jk_terms, sapt_mp2_terms, sapt_sf_terms
 from .sapt_util import print_sapt_dft_summary, print_sapt_hf_summary, print_sapt_var
 import qcelemental as qcel
 from ...p4util.exceptions import ConvergenceError
+from .constants import r4r2_dftd4
 
 # Import energy module for SAPT(DFT) delta DFT
 # from ... import energy
@@ -92,6 +93,17 @@ def run_sapt_dft(name, **kwargs):
         do_mon_grac_shift_A = True
     if not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_B") and grac_compute.upper() != "NONE":
         do_mon_grac_shift_B = True
+
+    if "-d4" in name.lower():
+        d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
+        if d4_type == "supermolecular":
+            core.set_local_option("SAPT", "SAPT_DFT_D4_IE", True)
+            core.set_local_option("SAPT", "SAPT_DFT_DO_DISP", False)
+        elif d4_type == "intermolecular":
+            core.set_local_option("SAPT", "SAPT_DFT_D4_IE", True)
+            core.set_local_option("SAPT", "SAPT_DFT_DO_DISP", False)
+        else:
+            raise ValueError("SAPT(DFT)-D4 must be specified as 'SAPT(DFT)-D4(S)' or 'SAPT(DFT)-D4(I)' through setting SAPT_DFT_D4_TYPE to 'supermolecular' or 'intermolecular'.")
 
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
     do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
@@ -469,13 +481,40 @@ def run_sapt_dft(name, **kwargs):
         core.print_out("         " + "SAPT(DFT): D4 Interaction Energy".center(58) + "\n")
         core.print_out("\n")
         core.timer_on("SAPT(DFT):D4 Interaction Energy")
-        dimer_d4, _ = sapt_dimer.run_dftd4(sapt_dft_functional, 'd4bjeeqatm')
-        data["D4 DIMER"] = dimer_d4
-        monA_d4, _ = monomerA.run_dftd4(sapt_dft_functional, 'd4bjeeqatm')
-        data["D4 MONOMER A"] = monA_d4
-        monB_d4, _ = monomerB.run_dftd4(sapt_dft_functional, 'd4bjeeqatm')
-        data["D4 MONOMER B"] = monB_d4
-        data["D4 IE"] = dimer_d4 - monA_d4 - monB_d4
+        if d4_type == 'supermolecular':
+            params = {
+                "s6": 1.00000000e00,
+                "s8": 1.20417708e00,
+                "a1": 9.09018333e-01,
+                "a2": 3.24886637e-10,
+                "s9": 0.00000000e00,
+            }
+            dimer_d4, _ = sapt_dimer.run_dftd4(dashparam=params, dashlvl='d4bjeeqatm')
+            data["D4 DIMER"] = dimer_d4
+            monA_d4, _ = monomerA.run_dftd4(dashparam=params, dashlvl='d4bjeeqatm')
+            data["D4 MONOMER A"] = monA_d4
+            monB_d4, _ = monomerB.run_dftd4(dashparam=params, dashlvl='d4bjeeqatm')
+            data["D4 MONOMER B"] = monB_d4
+            data["D4 IE"] = dimer_d4 - monA_d4 - monB_d4
+        elif d4_type == 'intermolecular':
+            dimer_d4, _ = sapt_dimer.run_dftd4(sapt_dft_functional, property=True)
+            print(type(sapt_dimer))
+            print(monomerA.natom(), monomerB.natom())
+            geom, _, _, elez, _ = sapt_dimer.to_arrays()
+            elez = np.array(elez, dtype=np.int32)
+            monAs = np.array([i for i in range(monomerA.natom()) if monomerA.Z(i) > 0])
+            monBs = np.array([i for i in range(monomerB.natom()) if monomerB.Z(i) > 0])
+            data['D4 IE'] = dftd4_c6_intermolecular_dispersion(
+                elez,
+                geom,
+                C6s=core.variable("DFTD4 C6 COEFFICIENTS").np,
+                monAs=monAs,
+                monBs=monBs,
+                params=[1.0, 0.89529649, -0.82043591, 0.03264695]
+            )
+            print('D4 IE:', data['D4 IE'])
+        else:
+            raise ValueError("SAPT(DFT): d4_type must be 'supermolecular' or 'intermolecular'.")
         core.timer_off("SAPT(DFT):D4 Interaction Energy")
     core.set_global_option("SAVE_JK", False)
 
@@ -629,6 +668,44 @@ def compute_GRAC_shift(molecule, sapt_dft_grac_convergence_tier, label):
             raise Exception(f"The computed GRAC shift ({grac} [E_h]) for {label} exceeds the bounds of -1 < x < 1 and should not be used to approximate the ionization potential.")
     optstash.restore()
     return grac
+
+
+def dftd4_c6_intermolecular_dispersion(
+    atomic_numbers: np.ndarray,  # shape (n_atoms,)
+    geometry: np.ndarray,        # shape (n_atoms, 3)
+    C6s: np.ndarray,             # shape (n_atoms, n_atoms)
+    monAs: np.ndarray,           # shape (nA,)
+    monBs: np.ndarray,           # shape (nB,)
+    params: list,                # [s6, s8, a1, a2]
+) -> float:
+    s6, s8, a1, a2 = params
+    energy = 0.0
+    print(f"{atomic_numbers = }")
+    print(f"{geometry = }")
+
+    for A in monAs:
+        el1 = atomic_numbers[A]
+        Q_A = np.sqrt(0.5 * np.sqrt(el1) * r4r2_dftd4[el1 - 1])
+
+        for B in monBs:
+            el2 = atomic_numbers[B]
+            Q_B = np.sqrt(0.5 * np.sqrt(el2) * r4r2_dftd4[el2 - 1])
+
+            rrij = 3.0 * Q_A * Q_B
+            r0ij = a1 * np.sqrt(rrij) + a2
+
+            rij_vec = geometry[A] - geometry[B]
+            dis2 = np.dot(rij_vec, rij_vec)
+
+            t6 = 1.0 / (dis2**3 + r0ij**6)
+            t8 = 1.0 / (dis2**4 + r0ij**8)
+
+            edisp = s6 * t6 + s8 * rrij * t8
+
+            de = -0.5 * C6s[A, B] * edisp
+            energy += de
+
+    return 2.0 * energy
 
 
 def sapt_dft_header(

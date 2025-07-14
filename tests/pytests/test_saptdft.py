@@ -111,6 +111,60 @@ def test_sapt_dft_compute_ddft_d4():
     assert compare_values(-4.130018048599092, DFT_IE, 7, "DFT IE")
     print(f"dDFT: {DFT_IE_from_dDFT = }")
 
+
+@pytest.mark.saptdft
+@pytest.mark.dftd4
+def test_saptdftd4():
+    """
+    Test SAPT(DFT)-D4
+    """
+    mol_dimer = psi4.geometry(
+        """
+  O -2.930978458   -0.216411437    0.000000000
+  H -3.655219777    1.440921844    0.000000000
+  H -1.133225297    0.076934530    0.000000000
+   --
+  O  2.552311356    0.210645882    0.000000000
+  H  3.175492012   -0.706268134   -1.433472544
+  H  3.175492012   -0.706268134    1.433472544
+  units bohr
+"""
+    )
+    dft_functional = "pbe0"
+    psi4.set_options(
+        {
+            "basis": "STO-3G",
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
+            "sapt_dft_grac_shift_a": 0.136,
+            "sapt_dft_grac_shift_b": 0.136,
+            "SAPT_DFT_FUNCTIONAL": dft_functional,
+            "SAPT_DFT_D4_TYPE": "intermolecular",
+        }
+    )
+    psi4.energy("SAPT(DFT)-D4")
+    vars = psi4.core.variables()
+    DISP = vars["SAPT DISP ENERGY"]
+    # TODO: parameters need to be verified in sapt_proc.py with DFT-D4 manuscript
+    assert compare_values(-0.0041772889, DISP, 8, "DFT-D4 DISP")
+
+    psi4.set_options(
+        {
+            "basis": "STO-3G",
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
+            "sapt_dft_grac_shift_a": 0.136,
+            "sapt_dft_grac_shift_b": 0.136,
+            "SAPT_DFT_FUNCTIONAL": dft_functional,
+            "SAPT_DFT_D4_TYPE": "supermolecular",
+        }
+    )
+    psi4.energy("SAPT(DFT)-D4")
+    DISP = psi4.core.variable("SAPT DISP ENERGY")
+    assert compare_values(-0.0036056912, DISP, 8, "DFT-D4 DISP")
+
+
+
 @pytest.mark.saptdft
 @pytest.mark.dftd4
 def test_sapt_dft_compute_ddft_d4_diskdf():
@@ -1102,9 +1156,10 @@ def test_charge_field_B():
 
 
 if __name__ == "__main__":
-    psi4.set_memory("32 GB")
-    psi4.set_num_threads(16)
-    test_charge_field_B()
+    psi4.set_memory("14 GB")
+    psi4.set_num_threads(8)
+    test_saptdftd4()
+    # test_charge_field_B()
     # test_qcng_embedded_saptdft()
 
     # test_saptdft_external_potential(
