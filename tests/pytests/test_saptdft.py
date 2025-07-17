@@ -1131,7 +1131,7 @@ def test_charge_field_B():
     no_reorient
     ''')
 
-    Chargefield_B = np.array([
+    Chargefield = np.array([
     0.5972,4.802,-1.38,23.692
     ,-0.5679,4.723,-0.45,22.895
     ,-0.3662,4.229,-1.231,25.089
@@ -1140,7 +1140,7 @@ def test_charge_field_B():
     ,0.009333,10.878,8.794,19.002
     ,0.283950,12.371,7.698,26.868
     ,0.283950,13.479,7.947,26.797]).reshape((-1,4))
-    Chargefield_B[:,[1,2,3]] /= qcel.constants.bohr2angstroms
+    Chargefield[:,[1,2,3]] /= qcel.constants.bohr2angstroms
 
     psi4.set_options({
     'basis': 'jun-cc-pv(D+d)z',
@@ -1151,8 +1151,10 @@ def test_charge_field_B():
     'SAPT_DFT_GRAC_COMPUTE': 'single'
     })
 
-    # e = psi4.energy('fisapt0', external_potentials={'B':Chargefield_B})
-    e = psi4.energy('sapt(dft)', external_potentials={'B':Chargefield_B})
+    e = psi4.energy('sapt(dft)', external_potentials={'B':Chargefield})
+    e = psi4.energy('sapt(dft)', external_potentials={'A':Chargefield})
+    e = psi4.energy('sapt(dft)', external_potentials={'a':Chargefield})
+    e = psi4.energy('sapt(dft)', external_potentials={'b':Chargefield})
 
 
 if __name__ == "__main__":
