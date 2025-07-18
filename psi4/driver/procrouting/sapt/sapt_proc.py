@@ -485,6 +485,9 @@ def run_sapt_dft(name, **kwargs):
         core.print_out("         " + "SAPT(DFT): D4 Interaction Energy".center(58) + "\n")
         core.print_out("\n")
         core.timer_on("SAPT(DFT):D4 Interaction Energy")
+        proc_util.sapt_empirical_dispersion(name, dimer_wfn)
+        print(name)
+        print('proc_util sapt(dft)-d4 complete')
         if d4_type == 'supermolecular':
             params = {
                 "s6": 1.00000000e00,

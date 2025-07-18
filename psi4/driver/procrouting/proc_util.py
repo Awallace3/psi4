@@ -278,9 +278,9 @@ def sapt_empirical_dispersion(name, dimer_wfn, **kwargs):
     # Get the names right between SAPT0 and FISAPT0
     saptd_name = name.split('-')[0].upper()
     if saptd_name == "SAPT0":
-        sapt0_name = "SAPT0"
+        sapt_name = "SAPT0"
     else:
-        sapt0_name = "SAPT"
+        sapt_name = "SAPT"
 
     save_pair = (saptd_name == "FISAPT0")
 
@@ -304,7 +304,7 @@ def sapt_empirical_dispersion(name, dimer_wfn, **kwargs):
     saptd_en = {}
     saptd_en['DISP'] = disp_interaction_energy
     for term in ['ELST', 'EXCH', 'IND']:
-        en = core.variable(' '.join([sapt0_name, term, 'ENERGY']))
+        en = core.variable(' '.join([sapt_name, term, 'ENERGY']))
         saptd_en[term] = en
         core.set_variable(' '.join([saptd_name + '-D', term, 'ENERGY']), en)
         core.set_variable(' '.join(['SAPT', term, 'ENERGY']), en)

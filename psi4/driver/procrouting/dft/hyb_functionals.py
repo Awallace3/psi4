@@ -185,6 +185,56 @@ funcs.append({
 })
 
 funcs.append({
+    # Note: putting SAPT(DFT)-D4(S) gets pulled into an HF-D4 calculation that
+    # I don't know how to avoid, so dropping second ()...
+    "name": "SAPT(DFT)-D4(S)",
+    "c_functionals": {},
+    "x_hf": {
+        "alpha": 1.0
+    },
+    "dispersion": {
+        "type": "d4bjeeqatm",
+        "nlc": False,
+        "params": {
+            "s6": 1.00000000e00,
+            "s8": 1.20417708e00,
+            "a1": 9.09018333e-01,
+            "a2": 3.24886637e-10,
+            's9': 0.000,
+        },
+    },
+    "description":
+    '    SAPT(DFT)-D4S, or also called SAPT(DFT)-D4(S) is the supermolecular -D4 interaction energy with D4 dispersion using Sherrill Group BJ damping parameters\n',
+    "citation":
+    '    TBA\n',
+    "doi": "",
+})
+
+funcs.append({
+    "name": "SAPT(DFT)-D4I",
+    "c_functionals": {},
+    "x_hf": {
+        "alpha": 1.0
+    },
+    "dispersion": {
+        "type": "d4bjeeqatm",
+        "nlc": False,
+        "params": {
+            "s6": 1.00000000e00,
+            "s8": 0.89529649,
+            "a1": -0.82043591,
+            "a2": 0.03264695,
+            's9': 0.000,
+        },
+    },
+    "description":
+    '    SAPT(DFT)-D4I, or also called SAPT(DFT)-D4(I), is the intermolecular -D4 interaction energy with D4 dispersion using Sherrill Group BJ damping parameters\n',
+    "citation":
+    '    TBA\n',
+    "doi": "",
+})
+
+funcs.append({
     "name": "HF-D4",
     "c_functionals": {},
     "x_hf": {
@@ -207,6 +257,7 @@ funcs.append({
     '    Caldeweyher, E.; Ehlert, S.; Hansen, A.; Neugebauer, H.; Spicher, S.; Bannwarth, C.; Grimmme, S., J. Chem. Phys. 150, 154122 (2019)\n',
     "doi": "10.1063/1.5090222150",
 })
+
 
 funcs.append({
     "name": "wB97X3c",
