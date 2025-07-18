@@ -1162,8 +1162,7 @@ def test_charge_field_inputs():
 if __name__ == "__main__":
     psi4.set_memory("14 GB")
     psi4.set_num_threads(8)
-    test_charge_field_inputs()
-    # test_saptdftd4()
+    test_saptdftd4()
     # test_charge_field_B()
     # test_qcng_embedded_saptdft()
 
