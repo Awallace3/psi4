@@ -40,6 +40,7 @@ from .sapt_util import print_sapt_dft_summary, print_sapt_hf_summary, print_sapt
 import qcelemental as qcel
 from ...p4util.exceptions import ConvergenceError
 from .constants import r4r2_dftd4
+import einsums as ein
 
 # Import energy module for SAPT(DFT) delta DFT
 # from ... import energy
@@ -56,6 +57,7 @@ def run_sapt_dft(name, **kwargs):
         ["SCF", "SAVE_JK"],
     )
 
+    ein.initialize()
     core.tstart()
     # Alter default algorithm
     if not core.has_global_option_changed("SCF_TYPE"):
@@ -188,11 +190,10 @@ def run_sapt_dft(name, **kwargs):
     do_ext_potential = kwargs.get("external_potentials")
     external_potentials = kwargs.pop("external_potentials", {})
     # Ensure that external potential label is case-insentive
-    print(f"EXT_POT: {external_potentials}")
     external_potentials = {k.upper(): v for k, v in external_potentials.items()}
-    print(f"EXT_POT: {external_potentials}")
     if do_ext_potential:
         kwargs["external_potentials"] = {}
+
     def construct_external_potential_in_field_C(arrays):
         output = []
         for i, array in enumerate(arrays):
