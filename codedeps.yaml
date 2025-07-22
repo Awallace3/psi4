@@ -1357,10 +1357,17 @@ data:
       host: github
       account: Einsums
       name: Einsums
+<<<<<<< HEAD
       commit: v1.0.6
     cmake:
       name: Einsums
       constraint: 1.0.6
+=======
+      commit: v1.0.3
+    cmake:
+      name: Einsums
+      constraint: 1.0.3
+>>>>>>> saptdft_ext_pot_d4
       target: Einsums::Einsums
     #  components:
     #  ENABLE_Einsums

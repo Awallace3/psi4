@@ -1139,16 +1139,45 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
 
         /*- SUBSECTION SAPT(DFT) -*/
 
-        /*- Monomer A GRAC shift in Hartree -*/
+        /*- Monomer A GRAC shift in Hartree. To automatically compute prior to
+        SAPT(DFT), do NOT set this option and set |sapt__sapt_dft_grac_compute|
+        to "SINGLE" or "ITERATIVE" as described below. -*/
         options.add_double("SAPT_DFT_GRAC_SHIFT_A", 0.0);
-        /*- Monomer B GRAC shift in Hartree -*/
+        /*- Monomer B GRAC shift in Hartree. To automatically compute prior to
+        SAPT(DFT), do NOT set this option and set |sapt__sapt_dft_grac_compute|
+        to "SINGLE" or "ITERATIVE" as described below. -*/
         options.add_double("SAPT_DFT_GRAC_SHIFT_B", 0.0);
+        /*- SAPT_DFT_GRAC_COMPUTE will enable automatically computing GRAC
+         shifts prior to running SAPT(DFT). Note that the user must not specify
+         a value for SAPT_DFT_GRAC_SHIFT_A or SAPT_DFT_GRAC_SHIFT_B to trigger
+         this GRAC computation. "SINGLE" will try only once to converge the
+         cation for computing a GRAC shift. "ITERATIVE" will adjust local Psi4
+         options ("LEVEL_SHIFT", "LEVEL_SHIFT_CUTOFF") to attempt to converge
+         the neutral/cation calculations. "ITERATIVE" will try 3 times to
+         converge the cation before failing the SAPT(DFT) computation. -*/
+        options.add_str("SAPT_DFT_GRAC_COMPUTE", "NONE", "NONE SINGLE ITERATIVE");
+        /*- To ensure that the GRAC shift is computed with a sufficiently large
+          basis set, the user can specify a larger basis set for the GRAC
+          calculation, which can be different from the basis set used for the
+          SAPT(DFT) calculation. -*/
+        options.add_str("SAPT_DFT_GRAC_BASIS", "AUTO");
         /*- Compute the Delta-HF correction? -*/
         options.add_bool("SAPT_DFT_DO_DHF", true);
-        /*- How is the GRAC correction determined? !expert -*/
-        options.add_str("SAPT_DFT_GRAC_DETERMINATION", "INPUT", "INPUT");
         /*- Enables the hybrid xc kernel in dispersion? !expert -*/
         options.add_bool("SAPT_DFT_DO_HYBRID", true);
+        /*- Compute the Delta-DFT correction? -*/
+        options.add_bool("SAPT_DFT_DO_DDFT", false);
+        /*- Do SAPT(DFT) Dispersion? Might turn off if using Delte-DFT correction and SAPT_DFT_D4_IE -*/
+        options.add_bool("SAPT_DFT_DO_DISP", true);
+        /*- Compute -D4 dispersion in SAPT(DFT) for SAPT(DFT)-D4? !expert -*/
+        options.add_bool("SAPT_DFT_D4_IE", false);
+        /*- Specify if -D4 correction for SAPT(DFT)-D4 should be computed as
+         * SAPT(DFT)-D4(I) for intermolecular
+          or SAPT(DFT)-D4(S) for supermolecular. Note, SAPT(DFT)-D4(S) mimics
+          SAPT0-D3 and SAPT0-D4; however, SAPT(DFT)-D4 performs better with
+          respect to high-level SAPT dispersion when computed intermolecularly
+          !expert -*/
+        options.add_str("SAPT_DFT_D4_TYPE", "INTERMOLECULAR", "INTERMOLECULAR SUPERMOLECULAR");
         /*- Scheme for approximating exchange-dispersion for SAPT-DFT.
         Previous to Nov 2022, default was ``FIXED`` with Hesselmann value.
         ``NONE`` Use unscaled ``Exch-Disp2,u`` .
