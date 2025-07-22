@@ -3,7 +3,7 @@
 .. #
 .. # Psi4: an open-source quantum chemistry software package
 .. #
-.. # Copyright (c) 2007-2024 The Psi4 Developers.
+.. # Copyright (c) 2007-2025 The Psi4 Developers.
 .. #
 .. # The copyrights for code used from other parties are included in
 .. # the corresponding files.
@@ -1705,6 +1705,15 @@ PSI Variables by Alpha
 
    The total electronic interaction energy [E_h] for the labeled SAPT level
    of theory that incorporates MP2 induction correction.
+
+.. psivar:: SAPT DFT GRAC SHIFT A
+   SAPT DFT GRAC SHIFT B
+
+   The gradient-regulation asymptotic correction (GRAC) [E_h] 
+   used in a SAPT(DFT) computation for monomer A or B, respectively,
+   to improve the accuracy by correctly describing the electron density
+   at long-range.
+
 
 .. psivar:: SCF ITERATIONS
    ADC ITERATIONS
