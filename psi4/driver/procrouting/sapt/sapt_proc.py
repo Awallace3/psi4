@@ -188,11 +188,11 @@ def run_sapt_dft(name, **kwargs):
     do_ext_potential = kwargs.get("external_potentials")
     external_potentials = kwargs.pop("external_potentials", {})
     # Ensure that external potential label is case-insentive
-    print(f"EXT_POT: {external_potentials}")
     external_potentials = {k.upper(): v for k, v in external_potentials.items()}
-    print(f"EXT_POT: {external_potentials}")
     if do_ext_potential:
         kwargs["external_potentials"] = {}
+
+
     def construct_external_potential_in_field_C(arrays):
         output = []
         for i, array in enumerate(arrays):
