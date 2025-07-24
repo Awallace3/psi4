@@ -187,6 +187,10 @@ def run_sapt_dft(name, **kwargs):
     core.print_out("\n")
     do_ext_potential = kwargs.get("external_potentials")
     external_potentials = kwargs.pop("external_potentials", {})
+    # Ensure that external potential label is case-insentive
+    print(f"EXT_POT: {external_potentials}")
+    external_potentials = {k.upper(): v for k, v in external_potentials.items()}
+    print(f"EXT_POT: {external_potentials}")
     if do_ext_potential:
         kwargs["external_potentials"] = {}
     def construct_external_potential_in_field_C(arrays):
@@ -373,7 +377,7 @@ def run_sapt_dft(name, **kwargs):
 
         core.IO.set_default_namespace('monomerA')
         core.set_global_option("SAVE_JK", True)
-        if do_ext_potential and (ext_pot_A or ext_pot_C):
+        if do_ext_potential and (ext_pot_A is not None or ext_pot_C is not None):
             kwargs["external_potentials"] = {}
             kwargs["external_potentials"]['C'] = construct_external_potential_in_field_C([ext_pot_C, ext_pot_A])
         wfn_A = scf_helper(sapt_dft_functional,

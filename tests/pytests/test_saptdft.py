@@ -1114,8 +1114,8 @@ def test_qcng_embedded_saptdft():
     return
 
 
-def test_charge_field_B():
-    dimer =psi4.geometry('''
+def test_charge_field_inputs():
+    dimer = psi4.geometry('''
     0 1
     8   60.268880784   0.026340101   0.000508029
     1   60.645502399   -0.412039965   0.766632411
@@ -1151,14 +1151,19 @@ def test_charge_field_B():
     'SAPT_DFT_GRAC_COMPUTE': 'single'
     })
 
-    # e = psi4.energy('fisapt0', external_potentials={'B':Chargefield_B})
-    e = psi4.energy('sapt(dft)', external_potentials={'B':Chargefield_B})
+    e_a = psi4.energy('sapt(dft)', external_potentials={'A':Chargefield}, molecule=dimer)
+    e_A = psi4.energy('sapt(dft)', external_potentials={'a':Chargefield}, molecule=dimer)
+    assert compare_values(e_A, e_a, 7, "e_A==e_a")
+    e_b = psi4.energy('sapt(dft)', external_potentials={'b':Chargefield}, molecule=dimer)
+    e_B = psi4.energy('sapt(dft)', external_potentials={'B':Chargefield}, molecule=dimer)
+    assert compare_values(e_B, e_b, 7, "e_A==e_a")
 
 
 if __name__ == "__main__":
     psi4.set_memory("14 GB")
     psi4.set_num_threads(8)
-    test_saptdftd4()
+    test_charge_field_inputs()
+    # test_saptdftd4()
     # test_charge_field_B()
     # test_qcng_embedded_saptdft()
 
