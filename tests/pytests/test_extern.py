@@ -316,7 +316,7 @@ def test_extern_parsing(ep, ans):
 ])
 def test_extern_parsing_error(ep):
     with pytest.raises((psi4.ValidationError, TypeError)):
-        psi4.procrouting.proc.validate_external_potential(ep)
+        psi4.p4util.validate_external_potential(ep)
 
 
 _one_far_point = [[0.001, 100.0, 0.0, 0.0]]
