@@ -162,3 +162,4 @@ Pipfile.lock
 fsapt
 tmp
 pytest_output.*
+profile.txt

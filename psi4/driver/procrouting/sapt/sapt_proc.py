@@ -32,7 +32,7 @@ from psi4 import core
 
 from ... import p4util
 from ...constants import constants
-from ...p4util.exceptions import *
+from ...p4util.exceptions import ValidationError
 from .. import proc_util
 from ..proc import scf_helper, run_scf, _set_external_potentials_to_wavefunction
 from . import sapt_jk_terms, sapt_mp2_terms, sapt_sf_terms
@@ -49,6 +49,32 @@ import einsums as ein
 __all__ = ["run_sapt_dft", "sapt_dft", "run_sf_sapt"]
 
 
+def einsum_example():
+    a = 5
+    dtype = np.float64
+    array = "einsums"
+    core.tstart()
+    # tmp_A = np.array([[1., 2., 3.], [4., 5., 6.]], dtype=np.float64)
+    tmp_A = np.array([4., 5., 6.], dtype=np.float64)
+    tmp_B = np.array([1., 2., 3.], dtype=np.float64)
+    print("EINSUM A:", tmp_A)
+    A = ein.core.RuntimeTensorD(tmp_A)
+    B = ein.core.RuntimeTensorD(tmp_B)
+    print("EINSUM A:", A)
+    print("EINSUM B:", B)
+    
+    # A = ein.utils.random_tensor_factory("A", [a], dtype, array)
+    # B = ein.utils.random_tensor_factory("A", [a], dtype, array)
+    shape = [A.size(), B.size()]
+    print("EINSUM SHAPE:", shape)
+    C = ein.utils.tensor_factory("C", shape, dtype, 'numpy')
+
+    plan = ein.core.compile_plan("ij", "i", "j")
+    plan.execute(0.0, C, 1.0, A, B)
+    print("EINSUM C:", C)
+    return
+
+
 def run_sapt_dft(name, **kwargs):
     optstash = p4util.OptionsState(
         ["SCF_TYPE"],
@@ -58,7 +84,8 @@ def run_sapt_dft(name, **kwargs):
     )
 
     ein.initialize()
-    core.tstart()
+    einsum_example()
+
     # Alter default algorithm
     if not core.has_global_option_changed("SCF_TYPE"):
         core.set_global_option("SCF_TYPE", "DF")
@@ -486,6 +513,7 @@ def run_sapt_dft(name, **kwargs):
         core.print_out("         " + "SAPT(DFT): D4 Interaction Energy".center(58) + "\n")
         core.print_out("\n")
         core.timer_on("SAPT(DFT):D4 Interaction Energy")
+        d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
         if d4_type == 'supermolecular':
             params = {
                 "s6": 1.00000000e00,

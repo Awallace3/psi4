@@ -1159,10 +1159,18 @@ def test_charge_field_inputs():
     assert compare_values(e_B, e_b, 7, "e_A==e_a")
 
 
+def test_einsum_terms():
+    pass
+
+
 if __name__ == "__main__":
     psi4.set_memory("14 GB")
     psi4.set_num_threads(8)
-    test_qcng_embedded_saptdft()
+    # test_sapt_dft_compute_ddft_d4_auto_grac()
+    # test_sapt_dft_diskdf()
+    # test_qcng_embedded_saptdft()
+    test_fisapt0_sapthf_external_potential()
+    # test_qcng_embedded_saptdft()
     # test_saptdftd4()
     # test_charge_field_B()
     # test_qcng_embedded_saptdft()
