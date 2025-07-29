@@ -94,8 +94,11 @@ def run_sapt_dft(name, **kwargs):
     if not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_B") and grac_compute.upper() != "NONE":
         do_mon_grac_shift_B = True
 
-    if "-d4" in name.lower():
-        d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
+    d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
+    saptdft_d4 = "-d4" in name.lower()
+    if saptdft_d4:
+        # Only disable SAPT(DFT)'s dispersion term if running SAPT(DFT)-D4.
+        # Important to allow DFT-D4 scheme with a delta-DFT.
         if d4_type == "supermolecular":
             core.set_local_option("SAPT", "SAPT_DFT_D4_IE", True)
             core.set_local_option("SAPT", "SAPT_DFT_DO_DISP", False)
@@ -165,8 +168,6 @@ def run_sapt_dft(name, **kwargs):
     core.print_out("\n")
     core.print_out("   Beginning setup computations\n")
 
-    wfn_A_grac = None
-    wfn_B_grac = None
     if do_mon_grac_shift_A:
         core.print_out("     GRAC (Monomer A)\n")
         mon_a_shift = compute_GRAC_shift(
@@ -188,11 +189,10 @@ def run_sapt_dft(name, **kwargs):
     do_ext_potential = kwargs.get("external_potentials")
     external_potentials = kwargs.pop("external_potentials", {})
     # Ensure that external potential label is case-insentive
-    print(f"EXT_POT: {external_potentials}")
     external_potentials = {k.upper(): v for k, v in external_potentials.items()}
-    print(f"EXT_POT: {external_potentials}")
     if do_ext_potential:
         kwargs["external_potentials"] = {}
+
     def construct_external_potential_in_field_C(arrays):
         output = []
         for i, array in enumerate(arrays):
@@ -480,49 +480,15 @@ def run_sapt_dft(name, **kwargs):
     elif do_delta_dft and not do_dft:
         raise ValueError("SAPT(DFT): delta DFT correction requested when running HF. Set SAPT_DFT_DO_DDFT to False or use a DFT functional.")
     if sapt_dft_D4_IE:
-        core.print_out("\n")
-        core.print_out("         ---------------------------------------------------------\n")
-        core.print_out("         " + "SAPT(DFT): D4 Interaction Energy".center(58) + "\n")
-        core.print_out("\n")
-        core.timer_on("SAPT(DFT):D4 Interaction Energy")
-        proc_util.sapt_empirical_dispersion(name, dimer_wfn)
-        print(name)
-        print('proc_util sapt(dft)-d4 complete')
-        if d4_type == 'supermolecular':
-            params = {
-                "s6": 1.00000000e00,
-                "s8": 1.20417708e00,
-                "a1": 9.09018333e-01,
-                "a2": 3.24886637e-10,
-                "s9": 0.00000000e00,
-            }
-            dimer_d4, _ = sapt_dimer.run_dftd4(dashparam=params, dashlvl='d4bjeeqatm')
-            data["D4 DIMER"] = dimer_d4
-            monA_d4, _ = monomerA.run_dftd4(dashparam=params, dashlvl='d4bjeeqatm')
-            data["D4 MONOMER A"] = monA_d4
-            monB_d4, _ = monomerB.run_dftd4(dashparam=params, dashlvl='d4bjeeqatm')
-            data["D4 MONOMER B"] = monB_d4
-            data["D4 IE"] = dimer_d4 - monA_d4 - monB_d4
-        elif d4_type == 'intermolecular':
-            dimer_d4, _ = sapt_dimer.run_dftd4(sapt_dft_functional, property=True)
-            print(type(sapt_dimer))
-            print(monomerA.natom(), monomerB.natom())
-            geom, _, _, elez, _ = sapt_dimer.to_arrays()
-            elez = np.array(elez, dtype=np.int32)
-            monAs = np.array([i for i in range(monomerA.natom()) if monomerA.Z(i) > 0])
-            monBs = np.array([i for i in range(monomerB.natom()) if monomerB.Z(i) > 0])
-            data['D4 IE'] = dftd4_c6_intermolecular_dispersion(
-                elez,
-                geom,
-                C6s=core.variable("DFTD4 C6 COEFFICIENTS").np,
-                monAs=monAs,
-                monBs=monBs,
-                params=[1.0, 0.89529649, -0.82043591, 0.03264695]
-            )
-            print('D4 IE:', data['D4 IE'])
-        else:
-            raise ValueError("SAPT(DFT): d4_type must be 'supermolecular' or 'intermolecular'.")
-        core.timer_off("SAPT(DFT):D4 Interaction Energy")
+        data = compute_emprical_dispersion(
+            sapt_dimer,
+            monomerA,
+            monomerB,
+            data,
+            d4_type,
+            sapt_dft_functional,
+            saptdft_d4,
+        )
     core.set_global_option("SAVE_JK", False)
 
     core.set_global_option("DFT_GRAC_SHIFT", 0.0)
@@ -594,6 +560,58 @@ sapt_dft_grac_convergence_tier_options = {
         },
     ],
 }
+
+def compute_emprical_dispersion(
+    sapt_dimer: core.Molecule,
+    monomerA: core.Molecule,
+    monomerB: core.Molecule,
+    data: dict,
+    d4_type: str = 'supermolecular',
+    sapt_dft_functional: str = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL"),
+    saptdft_d4: bool = False,
+):
+    core.print_out("\n")
+    core.print_out("         ---------------------------------------------------------\n")
+    core.print_out("         " + "SAPT(DFT): D4 Interaction Energy".center(58) + "\n")
+    core.print_out("\n")
+    core.timer_on("SAPT(DFT):D4 Interaction Energy")
+    if d4_type == 'supermolecular':
+        # TODO: make the call more like sapt_empirical from proc_util.py. Abstract away params
+        params = {
+            "s6": 1.00000000e00,
+            "s8": 1.20417708e00,
+            "a1": 9.09018333e-01,
+            "a2": 3.24886637e-10,
+            "s9": 0.00000000e00,
+        }
+        dimer_d4, _ = sapt_dimer.run_dftd4(dashparam=params, dashlvl='d4bjeeqatm')
+        data["D4 DIMER"] = dimer_d4
+        monA_d4, _ = monomerA.run_dftd4(dashparam=params, dashlvl='d4bjeeqatm')
+        data["D4 MONOMER A"] = monA_d4
+        monB_d4, _ = monomerB.run_dftd4(dashparam=params, dashlvl='d4bjeeqatm')
+        data["D4 MONOMER B"] = monB_d4
+        data["D4 IE"] = dimer_d4 - monA_d4 - monB_d4
+    elif d4_type == 'intermolecular':
+        dimer_d4, _ = sapt_dimer.run_dftd4(sapt_dft_functional, property=True)
+        print(type(sapt_dimer))
+        print(monomerA.natom(), monomerB.natom())
+        geom, _, _, elez, _ = sapt_dimer.to_arrays()
+        elez = np.array(elez, dtype=np.int32)
+        monAs = np.array([i for i in range(monomerA.natom()) if monomerA.Z(i) > 0])
+        monBs = np.array([i for i in range(monomerB.natom()) if monomerB.Z(i) > 0])
+        data['D4 IE'] = dftd4_c6_intermolecular_dispersion(
+            elez,
+            geom,
+            C6s=core.variable("DFTD4 C6 COEFFICIENTS").np,
+            monAs=monAs,
+            monBs=monBs,
+            params=[1.0, 0.89529649, -0.82043591, 0.03264695]
+        )
+        print('D4 IE:', data['D4 IE'])
+    else:
+        raise ValueError("SAPT(DFT): d4_type must be 'supermolecular' or 'intermolecular'.")
+    core.timer_off("SAPT(DFT):D4 Interaction Energy")
+    return data
 
 
 def compute_GRAC_shift(molecule, sapt_dft_grac_convergence_tier, label):
