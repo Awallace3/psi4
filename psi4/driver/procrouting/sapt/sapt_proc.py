@@ -877,10 +877,10 @@ def sapt_dft(
     # Electrostatics
     core.timer_on("SAPT(DFT):elst")
     elst, extern_extern_IE = sapt_jk_terms.electrostatics(cache, True)
-    elst_ein, extern_extern_IE_ein = sapt_jk_terms_ein.electrostatics(cache_ein, True)
-    data["extern_extern_IE"] = extern_extern_IE
     print("ELST REG:", elst)
-    print("ELST EIN:", elst_ein)
+    elst, extern_extern_IE = sapt_jk_terms_ein.electrostatics(cache_ein, True)
+    data["extern_extern_IE"] = extern_extern_IE
+    print("ELST EIN:", elst)
     data.update(elst)
     core.timer_off("SAPT(DFT):elst")
 

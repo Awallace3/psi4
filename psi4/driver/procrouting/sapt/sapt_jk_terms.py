@@ -59,8 +59,7 @@ def build_sapt_jk_cache(
     # First grab the orbitals
     cache["Cocc_A"] = wfn_A.Ca_subset("AO", "OCC")
     print("Cocc_A.shape:", cache["Cocc_A"].shape)
-    print(cache["Cocc_A"].np[:2])
-    print(cache["Cocc_A"].np[-2])
+    print(cache["Cocc_A"].np)
     cache["Cvir_A"] = wfn_A.Ca_subset("AO", "VIR")
 
     cache["Cocc_B"] = wfn_B.Ca_subset("AO", "OCC")
@@ -86,6 +85,11 @@ def build_sapt_jk_cache(
     cache["V_A"] = mints.ao_potential()
     mints = core.MintsHelper(wfn_B.basisset())
     cache["V_B"] = mints.ao_potential()
+
+    print("V_A.shape:", cache["V_A"].shape)
+    print(cache["V_A"].np)
+    print("V_B.shape:", cache["V_B"].shape)
+    print(cache["V_B"].np)
 
     # External Potentials need to add to V_A and V_B
     if external_potentials:

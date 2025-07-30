@@ -59,32 +59,44 @@ def build_sapt_jk_cache(
 
     # First grab the orbitals
     cache["Cocc_A"] = ein.core.RuntimeTensorD(wfn_A.Ca_subset("AO", "OCC").np)
+    cache['Cocc_A'].set_name("Cocc_A")
     print("Cocc_A.shape:", cache["Cocc_A"].shape)
-    print(cache["Cocc_A"][:2])
-    print(cache["Cocc_A"][-2:])
+    print(cache["Cocc_A"])
+    print(wfn_A.Ca_subset("AO", "OCC").np)
     cache["Cvir_A"] = ein.core.RuntimeTensorD(wfn_A.Ca_subset("AO", "VIR").np)
+    cache['Cvir_A'].set_name("Cvir_A")
 
     cache["Cocc_B"] =  ein.core.RuntimeTensorD(wfn_B.Ca_subset("AO", "OCC").np)
+    cache['Cocc_B'].set_name("Cocc_B")
     cache["Cvir_B"] =  ein.core.RuntimeTensorD(wfn_B.Ca_subset("AO", "VIR").np)
+    cache['Cvir_B'].set_name("Cvir_B")
 
     cache["eps_occ_A"] = ein.core.RuntimeTensorD(wfn_A.epsilon_a_subset("AO", "OCC").np)
     cache["eps_vir_A"] = ein.core.RuntimeTensorD(wfn_A.epsilon_a_subset("AO", "VIR").np)
-
     cache["eps_occ_B"] = ein.core.RuntimeTensorD(wfn_B.epsilon_a_subset("AO", "OCC").np)
     cache["eps_vir_B"] = ein.core.RuntimeTensorD(wfn_B.epsilon_a_subset("AO", "VIR").np)
 
-    # Build the densities as HF takes an extra "step"
-    plan_matmul_tt = ein.core.compile_plan("ij", "ik", "kj")
-    plan_matmul_tT = ein.core.compile_plan("ji", "ik", "jk")
-    cache["D_A"] = ein.utils.tensor_factory("D_A", [cache["Cocc_A"].shape[0], cache["Cocc_A"].shape[0]], np.float64, 'numpy')
-    cache["D_B"] = ein.utils.tensor_factory("D_B", [cache["Cocc_B"].shape[0], cache["Cocc_B"].shape[0]], np.float64, 'numpy')
-    plan_matmul_tT.execute(0.0, cache['D_A'], 1.0, cache['Cocc_A'], cache['Cocc_A'])
-    print("D_A:", cache['D_A'].shape)
-    print(cache['D_A'])
-    plan_matmul_tT.execute(0.0, cache['D_B'], 1.0, cache['Cocc_B'], cache['Cocc_B'])
+    cache["eps_occ_A"].set_name("eps_occ_A")
+    cache["eps_vir_A"].set_name("eps_vir_A")
+    cache["eps_occ_B"].set_name("eps_occ_B")
+    cache["eps_vir_B"].set_name("eps_vir_B")
 
-    # cache["P_A"] = core.doublet(cache["Cvir_A"], cache["Cvir_A"], False, True)
-    # cache["P_B"] = core.doublet(cache["Cvir_B"], cache["Cvir_B"], False, True)
+    # Build the densities as HF takes an extra "step"
+    cache["D_A"] = ein.utils.tensor_factory("D_A", [cache["Cocc_A"].shape[0], cache["Cocc_A"].shape[0]], np.float64, 'numpy')
+
+    # Should be fine, but only fills in half the matrix... is it because of the symmetry? How can I fix this to use plan_matmul_tT?
+    # plan_matmul_tT = ein.core.compile_plan("ij", "ik", "jk")
+    plan_matmul_tt = ein.core.compile_plan("ij", "ik", "kj")
+    plan_matmul_tt.execute(0.0, cache['D_A'], 1.0, cache['Cocc_A'], cache['Cocc_A'].T)
+
+    cache["D_B"] = ein.utils.tensor_factory("D_B", [cache["Cocc_B"].shape[0], cache["Cocc_B"].shape[0]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, cache['D_B'], 1.0, cache['Cocc_B'], cache['Cocc_B'].T)
+    print("D_B:", cache['D_B'].shape)
+    print(cache['D_B'])
+    print((wfn_B.Ca_subset("AO", "OCC").np @ wfn_B.Ca_subset("AO", "OCC").np.T))
+
+    assert np.allclose(cache["D_A"], (wfn_A.Ca_subset("AO", "OCC").np @ wfn_A.Ca_subset("AO", "OCC").np.T))
+    assert np.allclose(cache["D_B"], (wfn_B.Ca_subset("AO", "OCC").np @ wfn_B.Ca_subset("AO", "OCC").np.T))
 
     cache["P_A"] = ein.utils.tensor_factory("P_A", [cache["Cvir_A"].shape[0], cache["Cvir_A"].shape[0]], np.float64, 'numpy')
     cache["P_B"] = ein.utils.tensor_factory("P_B", [cache["Cvir_B"].shape[0], cache["Cvir_B"].shape[0]], np.float64, 'numpy')
@@ -93,9 +105,14 @@ def build_sapt_jk_cache(
 
     # Potential ints
     mints = core.MintsHelper(wfn_A.basisset())
-    mints = core.MintsHelper(wfn_B.basisset())
     cache["V_A"] = ein.core.RuntimeTensorD(mints.ao_potential().np)
+    mints = core.MintsHelper(wfn_B.basisset())
     cache["V_B"] = ein.core.RuntimeTensorD(mints.ao_potential().np)
+
+    print("V_A.shape:", cache["V_A"].shape)
+    print(cache["V_A"])
+    print("V_B.shape:", cache["V_B"].shape)
+    print(cache["V_B"])
 
     # External Potentials need to add to V_A and V_B
     # TODO: update this for einsums adding
@@ -178,14 +195,15 @@ def electrostatics(cache, do_print=True):
     plan_vector_dot = ein.core.compile_plan("", "i", "i")
     Elst10_tmp = ein.utils.tensor_factory("Elst10_tmp", [1], np.float64, 'numpy')
     plan_vector_dot.execute(0.0, Elst10_tmp, 1.0, cache["D_A"], cache["V_B"])
-    Elst10 += 2.0 * Elst10_tmp
+    Elst10 += 2.0 * Elst10_tmp[0]
     print(Elst10, Elst10_tmp)
-    Elst10_tmp = ein.utils.tensor_factory("Elst10_tmp", [1], np.float64, 'numpy')
+
     plan_vector_dot.execute(0.0, Elst10_tmp, 1.0, cache["D_B"], cache["V_A"])
-    Elst10 += 2.0 * Elst10_tmp
+    Elst10 += 2.0 * Elst10_tmp[0]
     print(Elst10, Elst10_tmp)
+
     plan_vector_dot.execute(0.0, Elst10_tmp, 1.0, cache["D_B"], cache["J_A"])
-    Elst10 += 4.0 * Elst10_tmp
+    Elst10 += 4.0 * Elst10_tmp[0]
     print(Elst10, Elst10_tmp)
     # Elst10 += 2.0 * plan_vector_dot.execute(0.0, cache["D_A"], 1.0, cache["V_B"])
     # Elst10 += 2.0 * plan_vector_dot.execute(0.0, cache["D_B"], 1.0, cache["V_A"])
