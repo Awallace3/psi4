@@ -86,11 +86,6 @@ def build_sapt_jk_cache(
     mints = core.MintsHelper(wfn_B.basisset())
     cache["V_B"] = mints.ao_potential()
 
-    print("V_A.shape:", cache["V_A"].shape)
-    print(cache["V_A"].np)
-    print("V_B.shape:", cache["V_B"].shape)
-    print(cache["V_B"].np)
-
     # External Potentials need to add to V_A and V_B
     if external_potentials:
         if external_potentials.get("A") is not None:

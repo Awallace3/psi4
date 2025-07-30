@@ -152,7 +152,7 @@ def run_sapt_dft(name, **kwargs):
     )
     core.print_out("         " + "SAPT(DFT) Procedure".center(58) + "\n")
     core.print_out("\n")
-    core.print_out("         " + "by Daniel G. A. Smith".center(58) + "\n")
+    core.print_out("         " + "by Daniel G. A. Smith and Austin M. Wallace".center(58) + "\n")
     core.print_out(
         "         ---------------------------------------------------------\n"
     )
@@ -887,6 +887,9 @@ def sapt_dft(
     # Exchange
     core.timer_on("SAPT(DFT):exch")
     exch = sapt_jk_terms.exchange(cache, sapt_jk, True)
+    print("EXCH REG:", exch)
+    exch = sapt_jk_terms_ein.exchange(cache_ein, sapt_jk, True)
+    print("EXCH EIN:", exch)
     data.update(exch)
     core.timer_off("SAPT(DFT):exch")
 

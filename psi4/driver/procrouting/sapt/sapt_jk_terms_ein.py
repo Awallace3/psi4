@@ -125,7 +125,6 @@ def build_sapt_jk_cache(
             cache["V_B"].add(ext_B)
 
     # Anything else we might need
-    # cache["S"] = wfn_A.S().clone()
     cache["S"] = ein.core.RuntimeTensorD(wfn_A.S().clone().np)
 
     # J and K matrices
@@ -233,41 +232,59 @@ def exchange(cache, jk, do_print=True):
     if do_print:
         core.print_out("\n  ==> E10 Exchange <== \n\n")
 
+    plan_matmul_tt = ein.core.compile_plan("ij", "ik", "kj")
+    plan_vector_dot = ein.core.compile_plan("", "ij", "ij")
+
     # Build potenitals
-    h_A = cache["V_A"].clone()
-    h_A.axpy(2.0, cache["J_A"])
-    h_A.axpy(-1.0, cache["K_A"])
+    h_A = cache["V_A"].copy()
+    print("EINSUMS EXCHANGE")
+    ein.core.axpy(2.0, cache["J_A"], h_A)
+    ein.core.axpy(-1.0, cache["K_A"], h_A)
 
-    h_B = cache["V_B"].clone()
-    h_B.axpy(2.0, cache["J_B"])
-    h_B.axpy(-1.0, cache["K_B"])
+    h_B = cache["V_B"].copy()
+    ein.core.axpy(2.0, cache["J_B"], h_B)
+    ein.core.axpy(-1.0, cache["K_B"], h_B)
 
-    w_A = cache["V_A"].clone()
-    w_A.axpy(2.0, cache["J_A"])
+    w_A = cache["V_A"].copy()
+    ein.core.axpy(2.0, cache["J_A"], w_A)
 
-    w_B = cache["V_B"].clone()
-    w_B.axpy(2.0, cache["J_B"])
+    w_B = cache["V_B"].copy()
+    ein.core.axpy(2.0, cache["J_B"], w_B)
 
     # Build inverse exchange metric
     nocc_A = cache["Cocc_A"].shape[1]
     nocc_B = cache["Cocc_B"].shape[1]
-    SAB = core.triplet(cache["Cocc_A"], cache["S"], cache["Cocc_B"], True, False, False)
+    SA = ein.utils.tensor_factory("SAB", [cache["Cocc_A"].shape[1], cache["S"].shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, SA, 1.0, cache["Cocc_A"].T, cache["S"])
+    SAB = ein.utils.tensor_factory("SAB", [cache["Cocc_A"].shape[1], cache["Cocc_B"].shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, SAB, 1.0, SA, cache["Cocc_B"])
     num_occ = nocc_A + nocc_B
 
     Sab = core.Matrix(num_occ, num_occ)
-    Sab.np[:nocc_A, nocc_A:] = SAB.np
-    Sab.np[nocc_A:, :nocc_A] = SAB.np.T
+    Sab.np[:nocc_A, nocc_A:] = SAB
+    Sab.np[nocc_A:, :nocc_A] = SAB.T
     Sab.np[np.diag_indices_from(Sab.np)] += 1
     Sab.power(-1.0, 1.0e-14)
     Sab.np[np.diag_indices_from(Sab.np)] -= 1.0
 
-    Tmo_AA = core.Matrix.from_array(Sab.np[:nocc_A, :nocc_A])
-    Tmo_BB = core.Matrix.from_array(Sab.np[nocc_A:, nocc_A:])
-    Tmo_AB = core.Matrix.from_array(Sab.np[:nocc_A, nocc_A:])
+    Tmo_AA = ein.core.RuntimeTensorD(Sab.np[:nocc_A, :nocc_A])
+    Tmo_BB = ein.core.RuntimeTensorD(Sab.np[nocc_A:, nocc_A:])
+    Tmo_AB = ein.core.RuntimeTensorD(Sab.np[:nocc_A, nocc_A:])
 
-    T_A = np.dot(cache["Cocc_A"], Tmo_AA).dot(cache["Cocc_A"].np.T)
-    T_B = np.dot(cache["Cocc_B"], Tmo_BB).dot(cache["Cocc_B"].np.T)
-    T_AB = np.dot(cache["Cocc_A"], Tmo_AB).dot(cache["Cocc_B"].np.T)
+    T_A_tmp = ein.utils.tensor_factory("T_A_tmp", [cache["Cocc_A"].shape[0], Tmo_AA.shape[1]], np.float64, 'numpy')
+    T_A = ein.utils.tensor_factory("T_A", [cache["Cocc_A"].shape[0], cache["Cocc_A"].shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, T_A_tmp, 1.0, cache["Cocc_A"], Tmo_AA)
+    plan_matmul_tt.execute(0.0, T_A, 1.0, T_A_tmp, cache["Cocc_A"].T)
+
+    T_B_tmp = ein.utils.tensor_factory("T_B_tmp", [cache["Cocc_B"].shape[0], Tmo_BB.shape[1]], np.float64, 'numpy')
+    T_B = ein.utils.tensor_factory("T_B", [cache["Cocc_B"].shape[0], cache["Cocc_B"].shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, T_B_tmp, 1.0, cache["Cocc_B"], Tmo_BB)
+    plan_matmul_tt.execute(0.0, T_B, 1.0, T_B_tmp, cache["Cocc_B"].T)
+
+    T_AB_tmp = ein.utils.tensor_factory("T_AB_tmp", [cache["Cocc_A"].shape[0], Tmo_AB.shape[1]], np.float64, 'numpy')
+    T_AB = ein.utils.tensor_factory("T_AB", [cache["Cocc_A"].shape[0], cache["Cocc_B"].shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, T_AB_tmp, 1.0, cache["Cocc_A"], Tmo_AB)
+    plan_matmul_tt.execute(0.0, T_AB, 1.0, T_AB_tmp, cache["Cocc_B"].T)
 
     S = cache["S"]
 
@@ -280,32 +297,71 @@ def exchange(cache, jk, do_print=True):
     # Compute the J and K matrices
     jk.C_clear()
 
-    jk.C_left_add(cache["Cocc_A"])
-    jk.C_right_add(core.doublet(cache["Cocc_A"], Tmo_AA, False, False))
+    jk.C_left_add(core.Matrix.from_array(cache["Cocc_A"]))
+    jk_C_right_tmp = ein.utils.tensor_factory("jk_C_right_tmp", [cache["Cocc_A"].shape[0], Tmo_AA.shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, jk_C_right_tmp, 1.0, cache["Cocc_A"], Tmo_AA)
+    jk.C_right_add(core.Matrix.from_array(jk_C_right_tmp))
 
-    jk.C_left_add(cache["Cocc_B"])
-    jk.C_right_add(core.doublet(cache["Cocc_A"], Tmo_AB, False, False))
+    jk.C_left_add(core.Matrix.from_array(cache["Cocc_B"]))
+    jk_C_right_tmp = ein.utils.tensor_factory("jk_C_right_tmp", [cache["Cocc_A"].shape[0], Tmo_AB.shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, jk_C_right_tmp, 1.0, cache["Cocc_A"], Tmo_AB)
+    jk.C_right_add(core.Matrix.from_array(jk_C_right_tmp))
 
-    jk.C_left_add(cache["Cocc_A"])
-    jk.C_right_add(core.Matrix.chain_dot(P_B, S, cache["Cocc_A"]))
-
+    jk.C_left_add(core.Matrix.from_array(cache["Cocc_A"]))
+    PB_S = ein.utils.tensor_factory("PB_S", [P_B.shape[0], S.shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, PB_S, 1.0, P_B, S)
+    PB_S_CA = ein.utils.tensor_factory("PB_S", [P_B.shape[0], cache["Cocc_A"].shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, PB_S_CA, 1.0, PB_S, cache['Cocc_A'])
+    jk.C_right_add(core.Matrix.from_array(PB_S_CA))
     jk.compute()
 
     JT_A, JT_AB, Jij = jk.J()
     KT_A, KT_AB, Kij = jk.K()
+    JT_A = ein.core.RuntimeTensorD(JT_A.np)
+    JT_AB = ein.core.RuntimeTensorD(JT_AB.np)
+    Jij = ein.core.RuntimeTensorD(Jij.np)
+    KT_A = ein.core.RuntimeTensorD(KT_A.np)
+    KT_AB = ein.core.RuntimeTensorD(KT_AB.np)
+    Kij = ein.core.RuntimeTensorD(Kij.np)
 
     # Start S^2
     Exch_s2 = 0.0
 
-    tmp = core.Matrix.chain_dot(D_A, S, D_B, S, P_A)
-    Exch_s2 -= 2.0 * w_B.vector_dot(tmp)
+    DA_S = ein.utils.tensor_factory("DA_S", [D_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    DA_S_DB = ein.utils.tensor_factory("DA_S_DB", [D_A.shape[0], D_B.shape[-1]], np.float64, 'numpy')
+    DA_S_DB_S = ein.utils.tensor_factory("DA_S_DB_S", [D_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    DA_S_DB_S_PA = ein.utils.tensor_factory("DA_S_DB_S_PA", [D_A.shape[0], P_A.shape[0]], np.float64, 'numpy')
+    wB_DA_S_DB_S_PA = ein.utils.tensor_factory("wB_DA_S_DB_S_PA", [1], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, DA_S, 1.0, D_A, S)
+    plan_matmul_tt.execute(0.0, DA_S_DB, 1.0, DA_S, D_B)
+    plan_matmul_tt.execute(0.0, DA_S_DB_S, 1.0, DA_S_DB, S)
+    plan_matmul_tt.execute(0.0, DA_S_DB_S_PA, 1.0, DA_S_DB_S, P_A)
+    plan_vector_dot.execute(0.0, wB_DA_S_DB_S_PA, 1.0, w_B, DA_S_DB_S_PA)
+    Exch_s2 -= 2.0 * wB_DA_S_DB_S_PA[0]
 
-    tmp = core.Matrix.chain_dot(D_B, S, D_A, S, P_B)
-    Exch_s2 -= 2.0 * w_A.vector_dot(tmp)
+    # tmp = core.Matrix.chain_dot(D_B, S, D_A, S, P_B)
+    DB_S = ein.utils.tensor_factory("DB_S", [D_B.shape[0], S.shape[1]], np.float64, 'numpy')
+    DB_S_DA = ein.utils.tensor_factory("DB_S_DA", [D_B.shape[0], D_A.shape[-1]], np.float64, 'numpy')
+    DB_S_DA_S = ein.utils.tensor_factory("DB_S_DA_S", [D_B.shape[0], S.shape[1]], np.float64, 'numpy')
+    DB_S_DA_S_PB = ein.utils.tensor_factory("DB_S_DA_S_PB", [D_B.shape[0], P_B.shape[0]], np.float64, 'numpy')
+    wA_DB_S_DA_S_PB = ein.utils.tensor_factory("wA_DB_S_DA_S_PB", [1], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, DB_S, 1.0, D_B, S)
+    plan_matmul_tt.execute(0.0, DB_S_DA, 1.0, DB_S, D_A)
+    plan_matmul_tt.execute(0.0, DB_S_DA_S, 1.0, DB_S_DA, S)
+    plan_matmul_tt.execute(0.0, DB_S_DA_S_PB, 1.0, DB_S_DA_S, P_B)
+    plan_vector_dot.execute(0.0, wA_DB_S_DA_S_PB, 1.0, w_A, DB_S_DA_S_PB)
+    Exch_s2 -= 2.0 * wA_DB_S_DA_S_PB[0]
 
-    tmp = core.Matrix.chain_dot(P_A, S, D_B)
-    Exch_s2 -= 2.0 * Kij.vector_dot(tmp)
+    # NOTE: Kij is wrong, but PA_S_DB is correct, looking above...
+    PA_S = ein.utils.tensor_factory("PA_S", [P_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    PA_S_DB = ein.utils.tensor_factory("PA_S_DB", [P_A.shape[0], D_B.shape[1]], np.float64, 'numpy')
+    Kij_PA_S_DB = ein.utils.tensor_factory("Kij_PA_S_DB", [1], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, PA_S, 1.0, P_A, S)
+    plan_matmul_tt.execute(0.0, PA_S_DB, 1.0, PA_S, D_B)
+    plan_vector_dot.execute(0.0, Kij_PA_S_DB, 1.0, Kij, PA_S_DB)
+    Exch_s2 -= 2.0 * Kij_PA_S_DB[0]
 
+    # Currently incorrect but runs... suspect towards beginning of exchange function
     if do_print:
         core.print_out(print_sapt_var("Exch10(S^2) ", Exch_s2, short=True))
         core.print_out("\n")
