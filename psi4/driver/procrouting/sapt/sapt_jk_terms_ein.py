@@ -109,11 +109,6 @@ def build_sapt_jk_cache(
     mints = core.MintsHelper(wfn_B.basisset())
     cache["V_B"] = ein.core.RuntimeTensorD(mints.ao_potential().np)
 
-    print("V_A.shape:", cache["V_A"].shape)
-    print(cache["V_A"])
-    print("V_B.shape:", cache["V_B"].shape)
-    print(cache["V_B"])
-
     # External Potentials need to add to V_A and V_B
     # TODO: update this for einsums adding
     if external_potentials:
@@ -188,27 +183,15 @@ def electrostatics(cache, do_print=True):
 
     # ELST
     Elst10 = 0.0
-    # Elst10 += 2.0 * cache["D_A"].vector_dot(cache["V_B"])
-    # Elst10 += 2.0 * cache["D_B"].vector_dot(cache["V_A"])
-    # Elst10 += 4.0 * cache["D_B"].vector_dot(cache["J_A"])
     plan_vector_dot = ein.core.compile_plan("", "i", "i")
     Elst10_tmp = ein.utils.tensor_factory("Elst10_tmp", [1], np.float64, 'numpy')
     plan_vector_dot.execute(0.0, Elst10_tmp, 1.0, cache["D_A"], cache["V_B"])
     Elst10 += 2.0 * Elst10_tmp[0]
-    print(Elst10, Elst10_tmp)
-
     plan_vector_dot.execute(0.0, Elst10_tmp, 1.0, cache["D_B"], cache["V_A"])
     Elst10 += 2.0 * Elst10_tmp[0]
-    print(Elst10, Elst10_tmp)
-
     plan_vector_dot.execute(0.0, Elst10_tmp, 1.0, cache["D_B"], cache["J_A"])
     Elst10 += 4.0 * Elst10_tmp[0]
-    print(Elst10, Elst10_tmp)
-    # Elst10 += 2.0 * plan_vector_dot.execute(0.0, cache["D_A"], 1.0, cache["V_B"])
-    # Elst10 += 2.0 * plan_vector_dot.execute(0.0, cache["D_B"], 1.0, cache["V_A"])
-    # Elst10 += 4.0 * plan_vector_dot.execute(0.0, cache["D_B"], 1.0, cache["J_A"])
     Elst10 += cache["nuclear_repulsion_energy"]
-    print(Elst10, cache["nuclear_repulsion_energy"])
 
     if do_print:
         core.print_out(print_sapt_var("Elst10,r ", Elst10, short=True))
