@@ -255,17 +255,17 @@ def exchange(cache, jk, do_print=True):
     Tmo_AB = ein.core.RuntimeTensorD(Sab.np[:nocc_A, nocc_A:])
 
     T_A_tmp = ein.utils.tensor_factory("T_A_tmp", [cache["Cocc_A"].shape[0], Tmo_AA.shape[1]], np.float64, 'numpy')
-    T_A = ein.utils.tensor_factory("T_A", [cache["Cocc_A"].shape[0], cache["Cocc_A"].shape[1]], np.float64, 'numpy')
+    T_A = ein.utils.tensor_factory("T_A", [cache["Cocc_A"].shape[0], cache["Cocc_A"].shape[0]], np.float64, 'numpy')
     plan_matmul_tt.execute(0.0, T_A_tmp, 1.0, cache["Cocc_A"], Tmo_AA)
     plan_matmul_tt.execute(0.0, T_A, 1.0, T_A_tmp, cache["Cocc_A"].T)
 
     T_B_tmp = ein.utils.tensor_factory("T_B_tmp", [cache["Cocc_B"].shape[0], Tmo_BB.shape[1]], np.float64, 'numpy')
-    T_B = ein.utils.tensor_factory("T_B", [cache["Cocc_B"].shape[0], cache["Cocc_B"].shape[1]], np.float64, 'numpy')
+    T_B = ein.utils.tensor_factory("T_B", [cache["Cocc_B"].shape[0], cache["Cocc_B"].shape[0]], np.float64, 'numpy')
     plan_matmul_tt.execute(0.0, T_B_tmp, 1.0, cache["Cocc_B"], Tmo_BB)
     plan_matmul_tt.execute(0.0, T_B, 1.0, T_B_tmp, cache["Cocc_B"].T)
 
     T_AB_tmp = ein.utils.tensor_factory("T_AB_tmp", [cache["Cocc_A"].shape[0], Tmo_AB.shape[1]], np.float64, 'numpy')
-    T_AB = ein.utils.tensor_factory("T_AB", [cache["Cocc_A"].shape[0], cache["Cocc_B"].shape[1]], np.float64, 'numpy')
+    T_AB = ein.utils.tensor_factory("T_AB", [cache["Cocc_A"].shape[0], cache["Cocc_B"].shape[0]], np.float64, 'numpy')
     plan_matmul_tt.execute(0.0, T_AB_tmp, 1.0, cache["Cocc_A"], Tmo_AB)
     plan_matmul_tt.execute(0.0, T_AB, 1.0, T_AB_tmp, cache["Cocc_B"].T)
 
@@ -344,21 +344,36 @@ def exchange(cache, jk, do_print=True):
     plan_vector_dot.execute(0.0, Kij_PA_S_DB, 1.0, Kij, PA_S_DB)
     Exch_s2 -= 2.0 * Kij_PA_S_DB[0]
 
-    # Currently incorrect but runs... suspect towards beginning of exchange function
     if do_print:
         core.print_out(print_sapt_var("Exch10(S^2) ", Exch_s2, short=True))
         core.print_out("\n")
 
     # Start Sinf
     Exch10 = 0.0
-    Exch10 -= 2.0 * np.vdot(cache["D_A"], cache["K_B"])
-    Exch10 += 2.0 * np.vdot(T_A, h_B.np)
-    Exch10 += 2.0 * np.vdot(T_B, h_A.np)
-    Exch10 += 2.0 * np.vdot(T_AB, h_A.np + h_B.np)
-    Exch10 += 4.0 * np.vdot(T_B, JT_AB.np - 0.5 * KT_AB.np)
-    Exch10 += 4.0 * np.vdot(T_A, JT_AB.np - 0.5 * KT_AB.np)
-    Exch10 += 4.0 * np.vdot(T_B, JT_A.np - 0.5 * KT_A.np)
-    Exch10 += 4.0 * np.vdot(T_AB, JT_AB.np - 0.5 * KT_AB.np.T)
+    DA_KB = ein.utils.tensor_factory("DA_KB", [1], np.float64, 'numpy')
+    plan_vector_dot.execute(0.0, DA_KB, 1.0, D_A, cache["K_B"])
+    Exch10 -= 2.0 * DA_KB[0]
+    TA_hB = ein.utils.tensor_factory("TA_hB", [1], np.float64, 'numpy')
+    plan_vector_dot.execute(0.0, TA_hB, 1.0, T_A, h_B)
+    Exch10 += 2.0 * TA_hB[0]
+    TB_hA = ein.utils.tensor_factory("TB_hA", [1], np.float64, 'numpy')
+    plan_vector_dot.execute(0.0, TB_hA, 1.0, T_B, h_A)
+    Exch10 += 2.0 * TB_hA[0]
+    T_hAphB = ein.utils.tensor_factory("T_hAphB", [1], np.float64, 'numpy')
+    plan_vector_dot.execute(0.0, T_hAphB, 1.0, T_AB, h_A + h_B)
+    Exch10 += 2.0 * T_hAphB[0]
+    T_B_JT_ABmKT_AB = ein.utils.tensor_factory("T_B_JT_ABmKT_AB", [1], np.float64, 'numpy')
+    plan_vector_dot.execute(0.0, T_B_JT_ABmKT_AB, 1.0, T_B, JT_AB - 0.5 * KT_AB)
+    Exch10 += 4.0 * T_B_JT_ABmKT_AB[0]
+    T_A_JT_ABmKT_AB = ein.utils.tensor_factory("T_A_JT_ABmKT_AB", [1], np.float64, 'numpy')
+    plan_vector_dot.execute(0.0, T_A_JT_ABmKT_AB, 1.0, T_A, JT_AB - 0.5 * KT_AB.T)
+    Exch10 += 4.0 * T_A_JT_ABmKT_AB[0]
+    TB_JTAmKTA = ein.utils.tensor_factory("TB_JTAmKTA", [1], np.float64, 'numpy')
+    plan_vector_dot.execute(0.0, TB_JTAmKTA, 1.0, T_B, JT_A - 0.5 * KT_A)
+    Exch10 += 4.0 * TB_JTAmKTA[0]
+    TAB_JTABmKTAB = ein.utils.tensor_factory("TAB_JTABmKTAB", [1], np.float64, 'numpy')
+    plan_vector_dot.execute(0.0, TAB_JTABmKTAB, 1.0, T_AB, JT_AB - 0.5 * KT_AB.T)
+    Exch10 += 4.0 * TAB_JTABmKTAB[0]
 
     if do_print:
         core.set_variable("Exch10", Exch10)
