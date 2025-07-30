@@ -35,7 +35,7 @@ from ...constants import constants
 from ...p4util.exceptions import ValidationError
 from .. import proc_util
 from ..proc import scf_helper, run_scf, _set_external_potentials_to_wavefunction
-from . import sapt_jk_terms, sapt_mp2_terms, sapt_sf_terms
+from . import sapt_jk_terms, sapt_jk_terms_ein, sapt_mp2_terms, sapt_sf_terms
 from .sapt_util import print_sapt_dft_summary, print_sapt_hf_summary, print_sapt_var
 import qcelemental as qcel
 from ...p4util.exceptions import ConvergenceError
@@ -84,7 +84,7 @@ def run_sapt_dft(name, **kwargs):
     )
 
     ein.initialize()
-    einsum_example()
+    # einsum_example()
 
     # Alter default algorithm
     if not core.has_global_option_changed("SCF_TYPE"):
@@ -194,8 +194,6 @@ def run_sapt_dft(name, **kwargs):
     core.print_out("\n")
     core.print_out("   Beginning setup computations\n")
 
-    wfn_A_grac = None
-    wfn_B_grac = None
     if do_mon_grac_shift_A:
         core.print_out("     GRAC (Monomer A)\n")
         mon_a_shift = compute_GRAC_shift(
@@ -330,6 +328,10 @@ def run_sapt_dft(name, **kwargs):
 
             # Build cache
             hf_cache = sapt_jk_terms.build_sapt_jk_cache(
+               hf_wfn_dimer, hf_wfn_A, hf_wfn_B, sapt_jk, True
+            )
+
+            hf_cache = sapt_jk_terms_ein.build_sapt_jk_cache(
                hf_wfn_dimer, hf_wfn_A, hf_wfn_B, sapt_jk, True
             )
 
@@ -869,12 +871,14 @@ def sapt_dft(
 
     # Build SAPT cache
     cache = sapt_jk_terms.build_sapt_jk_cache(dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials)
+    # cache = sapt_jk_terms_ein.build_sapt_jk_cache(dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials)
     core.timer_off("SAPT(DFT):Build JK")
 
     # Electrostatics
     core.timer_on("SAPT(DFT):elst")
     elst, extern_extern_IE = sapt_jk_terms.electrostatics(cache, True)
     data["extern_extern_IE"] = extern_extern_IE
+    # core.print_out("ELST EIN:", elst)
     data.update(elst)
     core.timer_off("SAPT(DFT):elst")
 

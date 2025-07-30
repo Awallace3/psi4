@@ -36,6 +36,7 @@ units angstrom
 """,
 }
 
+
 @pytest.mark.saptdft
 @pytest.mark.dftd4
 def test_sapt_dft_compute_ddft_d4():
@@ -93,10 +94,10 @@ def test_sapt_dft_compute_ddft_d4():
     DFT_DIMER = psi4.core.variable("DFT DIMER ENERGY")
     # DFT_DIMER = psi4.core.variable("DFT DIMER")
 
-    print(f"{DFT_DIMER = }\n{DFT_MONA = }\n{DFT_MONB = }")
+    print(f"{DFT_DIMER=}\n{DFT_MONA=}\n{DFT_MONB=}")
     DFT_IE = (DFT_DIMER - DFT_MONA - DFT_MONB) * hartree_to_kcalmol
-    print(f"bsse: {dft_IE = }")
-    print(f"SAPT: {DFT_IE = }")
+    print(f"bsse: {dft_IE=}")
+    print(f"SAPT: {DFT_IE=}")
     assert compare_values(dft_IE, DFT_IE, 7, "DFT IE")
     assert compare_values(-4.130018077857232, DFT_IE, 7, "DFT IE")
 
@@ -109,7 +110,7 @@ def test_sapt_dft_compute_ddft_d4():
     DFT_IE_from_dDFT = (DDFT + ELST + EXCH + IND - DELTA_HF) * hartree_to_kcalmol
     assert compare_values(DFT_IE_from_dDFT, DFT_IE, 7, "DFT IE")
     assert compare_values(-4.130018048599092, DFT_IE, 7, "DFT IE")
-    print(f"dDFT: {DFT_IE_from_dDFT = }")
+    print(f"dDFT: {DFT_IE_from_dDFT=}")
 
 
 @pytest.mark.saptdft
@@ -162,7 +163,6 @@ def test_saptdftd4():
     psi4.energy("SAPT(DFT)-D4")
     DISP = psi4.core.variable("SAPT DISP ENERGY")
     assert compare_values(-0.0036056912, DISP, 8, "DFT-D4 DISP")
-
 
 
 @pytest.mark.saptdft
@@ -223,10 +223,10 @@ def test_sapt_dft_compute_ddft_d4_diskdf():
     DFT_DIMER = psi4.core.variable("DFT DIMER ENERGY")
     # DFT_DIMER = psi4.core.variable("DFT DIMER")
 
-    print(f"{DFT_DIMER = }\n{DFT_MONA = }\n{DFT_MONB = }")
+    print(f"{DFT_DIMER=}\n{DFT_MONA=}\n{DFT_MONB=}")
     DFT_IE = (DFT_DIMER - DFT_MONA - DFT_MONB) * hartree_to_kcalmol
-    print(f"bsse: {dft_IE = }")
-    print(f"SAPT: {DFT_IE = }")
+    print(f"bsse: {dft_IE=}")
+    print(f"SAPT: {DFT_IE=}")
     assert compare_values(dft_IE, DFT_IE, 7, "DFT IE")
     assert compare_values(-4.130018077857232, DFT_IE, 7, "DFT IE")
 
@@ -239,7 +239,7 @@ def test_sapt_dft_compute_ddft_d4_diskdf():
     DFT_IE_from_dDFT = (DDFT + ELST + EXCH + IND - DELTA_HF) * hartree_to_kcalmol
     assert compare_values(DFT_IE_from_dDFT, DFT_IE, 7, "DFT IE")
     assert compare_values(-4.130018048599092, DFT_IE, 7, "DFT IE")
-    print(f"dDFT: {DFT_IE_from_dDFT = }")
+    print(f"dDFT: {DFT_IE_from_dDFT=}")
 
 
 @pytest.mark.saptdft
@@ -295,10 +295,10 @@ def test_sapt_dft_diskdf():
     DFT_MONB = psi4.core.variable("DFT MONOMER B ENERGY")
     DFT_DIMER = psi4.core.variable("DFT DIMER ENERGY")
 
-    print(f"{DFT_DIMER = }\n{DFT_MONA = }\n{DFT_MONB = }")
+    print(f"{DFT_DIMER=}\n{DFT_MONA=}\n{DFT_MONB=}")
     DFT_IE = (DFT_DIMER - DFT_MONA - DFT_MONB) * hartree_to_kcalmol
-    print(f"bsse: {dft_IE = }")
-    print(f"SAPT: {DFT_IE = }")
+    print(f"bsse: {dft_IE=}")
+    print(f"SAPT: {DFT_IE=}")
     assert compare_values(dft_IE, DFT_IE, 7, "DFT IE")
     assert compare_values(-4.91463144301158, DFT_IE, 7, "DFT IE")
 
@@ -346,10 +346,10 @@ def test_sapt_dft_compute_ddft_d4_auto_grac():
     DFT_MONB = psi4.core.variable("DFT MONOMER B ENERGY")
     DFT_DIMER = psi4.core.variable("DFT DIMER ENERGY")
 
-    print(f"{DFT_DIMER = }\n{DFT_MONA = }\n{DFT_MONB = }")
+    print(f"{DFT_DIMER=}\n{DFT_MONA=}\n{DFT_MONB=}")
     DFT_IE = (DFT_DIMER - DFT_MONA - DFT_MONB) * hartree_to_kcalmol
-    print(f"bsse: {dft_IE = }")
-    print(f"SAPT: {DFT_IE = }")
+    print(f"bsse: {dft_IE=}")
+    print(f"SAPT: {DFT_IE=}")
     assert compare_values(dft_IE, DFT_IE, 7, "DFT IE")
     assert compare_values(-4.130018077857232, DFT_IE, 7, "DFT IE")
 
@@ -362,7 +362,7 @@ def test_sapt_dft_compute_ddft_d4_auto_grac():
     DFT_IE_from_dDFT = (DDFT + ELST + EXCH + IND - DELTA_HF) * hartree_to_kcalmol
     assert compare_values(DFT_IE_from_dDFT, DFT_IE, 7, "DFT IE")
     assert compare_values(-4.130018048599092, DFT_IE, 7, "DFT IE")
-    print(f"dDFT: {DFT_IE_from_dDFT = }")
+    print(f"dDFT: {DFT_IE_from_dDFT=}")
     compare_values(
         #  STO-3G target
         0.1981702737,
@@ -381,8 +381,8 @@ def test_sapt_dft_compute_ddft_d4_auto_grac():
         8,
         "SAPT DFT GRAC SHIFT B",
     )
-    print(f"{psi4.core.variable('SAPT DFT GRAC SHIFT A') = }")
-    print(f"{psi4.core.variable('SAPT DFT GRAC SHIFT B') = }")
+    print(f"{psi4.core.variable('SAPT DFT GRAC SHIFT A')=}")
+    print(f"{psi4.core.variable('SAPT DFT GRAC SHIFT B')=}")
 
 
 @pytest.mark.saptdft
@@ -418,6 +418,7 @@ def test_dftd4():
     DISP = psi4.core.variable("SAPT DISP ENERGY")
     assert compare_values(-0.005731715146359108, DISP, 8, "DFT-D4 DISP")
 
+
 @pytest.mark.saptdft
 @pytest.mark.parametrize(
     "SAPT_DFT_GRAC_COMPUTE, refA, refB, gracA, gracB, geometry, grac_basis",
@@ -428,7 +429,7 @@ def test_dftd4():
             0.19830016,
             None,
             None,
-            'neutral_water_dimer',
+            "neutral_water_dimer",
             None,
         ),
         (
@@ -437,7 +438,7 @@ def test_dftd4():
             0.19830016,
             0.1307,
             None,
-            'neutral_water_dimer',
+            "neutral_water_dimer",
             None,
         ),
         (
@@ -460,7 +461,9 @@ def test_dftd4():
         ),
     ],
 )
-def test_saptdft_auto_grac(SAPT_DFT_GRAC_COMPUTE, refA, refB, gracA, gracB, geometry, grac_basis):
+def test_saptdft_auto_grac(
+    SAPT_DFT_GRAC_COMPUTE, refA, refB, gracA, gracB, geometry, grac_basis
+):
     """
     For SAPT(DFT), one must compute a GRAC shift for each monomer. Ideally,
     this GRAC shift should be close to the experimental Ionization Potential
@@ -629,17 +632,13 @@ no_com
     all_external_potentials = {
         "A": [
             [0.417, np.array([-0.5496, -0.6026, 1.5720]) / psi_bohr2angstroms],
-            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) /
-             psi_bohr2angstroms],
+            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) / psi_bohr2angstroms],
             [0.417, np.array([-1.9361, -0.4028, 2.2769]) / psi_bohr2angstroms],
         ],
         "B": [
-            [0.417, np.array([-2.5628, -0.8269, -1.6696]) /
-             psi_bohr2angstroms],
-            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) /
-             psi_bohr2angstroms],
-            [0.417, np.array([-1.8988, -0.4993, -0.3072]) /
-             psi_bohr2angstroms],
+            [0.417, np.array([-2.5628, -0.8269, -1.6696]) / psi_bohr2angstroms],
+            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) / psi_bohr2angstroms],
+            [0.417, np.array([-1.8988, -0.4993, -0.3072]) / psi_bohr2angstroms],
         ],
         "C": [
             [0.417, np.array([1.1270, 1.5527, -0.1658]) / psi_bohr2angstroms],
@@ -834,17 +833,13 @@ no_com
     all_external_potentials = {
         "A": [
             [0.417, np.array([-0.5496, -0.6026, 1.5720]) / psi_bohr2angstroms],
-            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) /
-             psi_bohr2angstroms],
+            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) / psi_bohr2angstroms],
             [0.417, np.array([-1.9361, -0.4028, 2.2769]) / psi_bohr2angstroms],
         ],
         "B": [
-            [0.417, np.array([-2.5628, -0.8269, -1.6696]) /
-             psi_bohr2angstroms],
-            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) /
-             psi_bohr2angstroms],
-            [0.417, np.array([-1.8988, -0.4993, -0.3072]) /
-             psi_bohr2angstroms],
+            [0.417, np.array([-2.5628, -0.8269, -1.6696]) / psi_bohr2angstroms],
+            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) / psi_bohr2angstroms],
+            [0.417, np.array([-1.8988, -0.4993, -0.3072]) / psi_bohr2angstroms],
         ],
         "C": [
             [0.417, np.array([1.1270, 1.5527, -0.1658]) / psi_bohr2angstroms],
@@ -946,17 +941,13 @@ no_com
     external_potentials = {
         "A": [
             [0.417, np.array([-0.5496, -0.6026, 1.5720]) / psi_bohr2angstroms],
-            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) /
-             psi_bohr2angstroms],
+            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) / psi_bohr2angstroms],
             [0.417, np.array([-1.9361, -0.4028, 2.2769]) / psi_bohr2angstroms],
         ],
         "B": [
-            [0.417, np.array([-2.5628, -0.8269, -1.6696]) /
-             psi_bohr2angstroms],
-            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) /
-             psi_bohr2angstroms],
-            [0.417, np.array([-1.8988, -0.4993, -0.3072]) /
-             psi_bohr2angstroms],
+            [0.417, np.array([-2.5628, -0.8269, -1.6696]) / psi_bohr2angstroms],
+            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) / psi_bohr2angstroms],
+            [0.417, np.array([-1.8988, -0.4993, -0.3072]) / psi_bohr2angstroms],
         ],
         "C": [
             [0.417, np.array([1.1270, 1.5527, -0.1658]) / psi_bohr2angstroms],
@@ -1029,8 +1020,10 @@ no_com
         "Enuc",
     )
 
+
 def test_qcng_embedded_saptdft():
     import qcengine as qcng
+
     atin = {
         "driver": "energy",
         "extras": {},
@@ -1102,7 +1095,12 @@ def test_qcng_embedded_saptdft():
         atin,
     )
     print(ret_1)
-    assert compare_values(-0.00191336, ret_1.extras['qcvars']['SAPT TOTAL ENERGY'], 4, "SAPT(DFT) TOTAL run_qschema")
+    assert compare_values(
+        -0.00191336,
+        ret_1.extras["qcvars"]["SAPT TOTAL ENERGY"],
+        4,
+        "SAPT(DFT) TOTAL run_qschema",
+    )
     print("qcng")
     ret_2 = qcng.compute(
         atin,
@@ -1110,12 +1108,17 @@ def test_qcng_embedded_saptdft():
         raise_error=True,
     )
     print(ret_2)
-    assert compare_values(-0.00191336, ret_2.extras['qcvars']['SAPT TOTAL ENERGY'], 4, "SAPT(DFT) TOTAL qcng")
+    assert compare_values(
+        -0.00191336,
+        ret_2.extras["qcvars"]["SAPT TOTAL ENERGY"],
+        4,
+        "SAPT(DFT) TOTAL qcng",
+    )
     return
 
 
 def test_charge_field_inputs():
-    dimer = psi4.geometry('''
+    dimer = psi4.geometry("""
     0 1
     8   60.268880784   0.026340101   0.000508029
     1   60.645502399   -0.412039965   0.766632411
@@ -1129,47 +1132,121 @@ def test_charge_field_inputs():
     symmetry c1
     no_com
     no_reorient
-    ''')
+    """)
 
-    Chargefield = np.array([
-    0.5972,4.802,-1.38,23.692
-    ,-0.5679,4.723,-0.45,22.895
-    ,-0.3662,4.229,-1.231,25.089
-    ,0.1123,3.188,-0.936,25.072
-    ,0.009333,11.667,9.479,19.280
-    ,0.009333,10.878,8.794,19.002
-    ,0.283950,12.371,7.698,26.868
-    ,0.283950,13.479,7.947,26.797]).reshape((-1,4))
-    Chargefield[:,[1,2,3]] /= qcel.constants.bohr2angstroms
+    Chargefield = np.array(
+        [
+            0.5972,
+            4.802,
+            -1.38,
+            23.692,
+            -0.5679,
+            4.723,
+            -0.45,
+            22.895,
+            -0.3662,
+            4.229,
+            -1.231,
+            25.089,
+            0.1123,
+            3.188,
+            -0.936,
+            25.072,
+            0.009333,
+            11.667,
+            9.479,
+            19.280,
+            0.009333,
+            10.878,
+            8.794,
+            19.002,
+            0.283950,
+            12.371,
+            7.698,
+            26.868,
+            0.283950,
+            13.479,
+            7.947,
+            26.797,
+        ]
+    ).reshape((-1, 4))
+    Chargefield[:, [1, 2, 3]] /= qcel.constants.bohr2angstroms
 
-    psi4.set_options({
-    'basis': 'jun-cc-pv(D+d)z',
-    'freeze_core': 'True',
-    'scf_type': 'df',
-    'mp2_type': 'df',
-    'fisapt_do_fsapt': 'false',
-    'SAPT_DFT_GRAC_COMPUTE': 'single'
-    })
+    psi4.set_options(
+        {
+            "basis": "jun-cc-pv(D+d)z",
+            "freeze_core": "True",
+            "scf_type": "df",
+            "mp2_type": "df",
+            "fisapt_do_fsapt": "false",
+            "SAPT_DFT_GRAC_COMPUTE": "single",
+        }
+    )
 
-    e_a = psi4.energy('sapt(dft)', external_potentials={'A':Chargefield}, molecule=dimer)
-    e_A = psi4.energy('sapt(dft)', external_potentials={'a':Chargefield}, molecule=dimer)
+    e_a = psi4.energy(
+        "sapt(dft)", external_potentials={"A": Chargefield}, molecule=dimer
+    )
+    e_A = psi4.energy(
+        "sapt(dft)", external_potentials={"a": Chargefield}, molecule=dimer
+    )
     assert compare_values(e_A, e_a, 7, "e_A==e_a")
-    e_b = psi4.energy('sapt(dft)', external_potentials={'b':Chargefield}, molecule=dimer)
-    e_B = psi4.energy('sapt(dft)', external_potentials={'B':Chargefield}, molecule=dimer)
+    e_b = psi4.energy(
+        "sapt(dft)", external_potentials={"b": Chargefield}, molecule=dimer
+    )
+    e_B = psi4.energy(
+        "sapt(dft)", external_potentials={"B": Chargefield}, molecule=dimer
+    )
     assert compare_values(e_B, e_b, 7, "e_A==e_a")
 
 
 def test_einsum_terms():
-    pass
+    """
+    from sapt-dft1 ctest
+    """
+    DHF = -0.01189736  #TEST
+    Eref_nh = {
+        "SAPT ELST ENERGY": -0.10190449,  # TEST
+        "SAPT EXCH ENERGY": 0.36545706,  # TEST
+        "SAPT IND ENERGY": -0.00840483,  # TEST
+        "SAPT DISP ENERGY": -0.24398704,  # TEST
+        "CURRENT ENERGY": 0.01122234,
+    }  # TEST
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ar 1 6.5
+  units bohr
+    """)
+    psi4.set_options(
+        {
+            "basis": "aug-cc-pvdz",
+            "scf_type": "df",
+            "sapt_dft_grac_shift_a": 0.203293,
+            "sapt_dft_grac_shift_b": 0.138264,
+            "SAPT_DFT_DO_DHF": False,
+            "SAPT_DFT_DO_HYBRID": False,
+            "SAPT_DFT_EXCH_DISP_SCALE_SCHEME": "None",
+        }
+    )
+    psi4.energy("sapt(dft)", molecule=mol)
+    for k, v in Eref_nh.items():  # TEST
+        if k in ["SAPT IND ENERGY", "CURRENT ENERGY"]:
+            ref = (v - DHF) / 1000.0
+        else:
+            ref = v / 1000.0
+        assert compare_values(
+            ref, psi4.variable(k), 6, "!hyb, xd=none, !dHF: " + k
+        )  # TEST
 
 
 if __name__ == "__main__":
     psi4.set_memory("14 GB")
     psi4.set_num_threads(8)
+    test_einsum_terms()
     # test_sapt_dft_compute_ddft_d4_auto_grac()
     # test_sapt_dft_diskdf()
     # test_qcng_embedded_saptdft()
-    test_fisapt0_sapthf_external_potential()
+    # test_fisapt0_sapthf_external_potential()
     # test_qcng_embedded_saptdft()
     # test_saptdftd4()
     # test_charge_field_B()
