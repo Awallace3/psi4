@@ -58,6 +58,9 @@ def build_sapt_jk_cache(
 
     # First grab the orbitals
     cache["Cocc_A"] = wfn_A.Ca_subset("AO", "OCC")
+    print("Cocc_A.shape:", cache["Cocc_A"].shape)
+    print(cache["Cocc_A"].np[:2])
+    print(cache["Cocc_A"].np[-2])
     cache["Cvir_A"] = wfn_A.Ca_subset("AO", "VIR")
 
     cache["Cocc_B"] = wfn_B.Ca_subset("AO", "OCC")
@@ -71,6 +74,8 @@ def build_sapt_jk_cache(
 
     # Build the densities as HF takes an extra "step"
     cache["D_A"] = core.doublet(cache["Cocc_A"], cache["Cocc_A"], False, True)
+    print("D_A:", cache['D_A'].np.shape)
+    print(cache['D_A'].np)
     cache["D_B"] = core.doublet(cache["Cocc_B"], cache["Cocc_B"], False, True)
 
     cache["P_A"] = core.doublet(cache["Cvir_A"], cache["Cvir_A"], False, True)
@@ -254,9 +259,13 @@ def electrostatics(cache, do_print=True):
     # ELST
     Elst10 = 0.0
     Elst10 += 2.0 * cache["D_A"].vector_dot(cache["V_B"])
+    print(Elst10, cache["D_A"].vector_dot(cache["V_B"]))
     Elst10 += 2.0 * cache["D_B"].vector_dot(cache["V_A"])
+    print(Elst10, cache["D_B"].vector_dot(cache["V_A"]))
     Elst10 += 4.0 * cache["D_B"].vector_dot(cache["J_A"])
+    print(Elst10, cache["D_B"].vector_dot(cache["J_A"]))
     Elst10 += cache["nuclear_repulsion_energy"]
+    print(Elst10, cache["nuclear_repulsion_energy"])
 
     if do_print:
         core.print_out(print_sapt_var("Elst10,r ", Elst10, short=True))

@@ -58,34 +58,47 @@ def build_sapt_jk_cache(
     cache["wfn_B"] = wfn_B
 
     # First grab the orbitals
-    # cache["Cocc_A"] = ein.core.RuntimeTensorD(wfn_A.Ca_subset("AO", "OCC").np)
-    # cache["Cvir_A"] = ein.core.RuntimeTensorD(wfn_A.Ca_subset("AO", "VIR").np)
-    cache["Cocc_A"] = wfn_A.Ca_subset("AO", "OCC")
-    cache["Cvir_A"] = wfn_A.Ca_subset("AO", "VIR")
+    cache["Cocc_A"] = ein.core.RuntimeTensorD(wfn_A.Ca_subset("AO", "OCC").np)
+    print("Cocc_A.shape:", cache["Cocc_A"].shape)
+    print(cache["Cocc_A"][:2])
+    print(cache["Cocc_A"][-2:])
+    cache["Cvir_A"] = ein.core.RuntimeTensorD(wfn_A.Ca_subset("AO", "VIR").np)
 
-    cache["Cocc_B"] = wfn_B.Ca_subset("AO", "OCC")
-    cache["Cvir_B"] = wfn_B.Ca_subset("AO", "VIR")
+    cache["Cocc_B"] =  ein.core.RuntimeTensorD(wfn_B.Ca_subset("AO", "OCC").np)
+    cache["Cvir_B"] =  ein.core.RuntimeTensorD(wfn_B.Ca_subset("AO", "VIR").np)
 
-    cache["eps_occ_A"] = wfn_A.epsilon_a_subset("AO", "OCC")
-    cache["eps_vir_A"] = wfn_A.epsilon_a_subset("AO", "VIR")
+    cache["eps_occ_A"] = ein.core.RuntimeTensorD(wfn_A.epsilon_a_subset("AO", "OCC").np)
+    cache["eps_vir_A"] = ein.core.RuntimeTensorD(wfn_A.epsilon_a_subset("AO", "VIR").np)
 
-    cache["eps_occ_B"] = wfn_B.epsilon_a_subset("AO", "OCC")
-    cache["eps_vir_B"] = wfn_B.epsilon_a_subset("AO", "VIR")
+    cache["eps_occ_B"] = ein.core.RuntimeTensorD(wfn_B.epsilon_a_subset("AO", "OCC").np)
+    cache["eps_vir_B"] = ein.core.RuntimeTensorD(wfn_B.epsilon_a_subset("AO", "VIR").np)
 
     # Build the densities as HF takes an extra "step"
-    cache["D_A"] = core.doublet(cache["Cocc_A"], cache["Cocc_A"], False, True)
-    cache["D_B"] = core.doublet(cache["Cocc_B"], cache["Cocc_B"], False, True)
+    plan_matmul_tt = ein.core.compile_plan("ij", "ik", "kj")
+    plan_matmul_tT = ein.core.compile_plan("ji", "ik", "jk")
+    cache["D_A"] = ein.utils.tensor_factory("D_A", [cache["Cocc_A"].shape[0], cache["Cocc_A"].shape[0]], np.float64, 'numpy')
+    cache["D_B"] = ein.utils.tensor_factory("D_B", [cache["Cocc_B"].shape[0], cache["Cocc_B"].shape[0]], np.float64, 'numpy')
+    plan_matmul_tT.execute(0.0, cache['D_A'], 1.0, cache['Cocc_A'], cache['Cocc_A'])
+    print("D_A:", cache['D_A'].shape)
+    print(cache['D_A'])
+    plan_matmul_tT.execute(0.0, cache['D_B'], 1.0, cache['Cocc_B'], cache['Cocc_B'])
 
-    cache["P_A"] = core.doublet(cache["Cvir_A"], cache["Cvir_A"], False, True)
-    cache["P_B"] = core.doublet(cache["Cvir_B"], cache["Cvir_B"], False, True)
+    # cache["P_A"] = core.doublet(cache["Cvir_A"], cache["Cvir_A"], False, True)
+    # cache["P_B"] = core.doublet(cache["Cvir_B"], cache["Cvir_B"], False, True)
+
+    cache["P_A"] = ein.utils.tensor_factory("P_A", [cache["Cvir_A"].shape[0], cache["Cvir_A"].shape[0]], np.float64, 'numpy')
+    cache["P_B"] = ein.utils.tensor_factory("P_B", [cache["Cvir_B"].shape[0], cache["Cvir_B"].shape[0]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, cache['P_A'], 1.0, cache['Cvir_A'], cache['Cvir_A'].T)
+    plan_matmul_tt.execute(0.0, cache['P_B'], 1.0, cache['Cvir_B'], cache['Cvir_B'].T)
 
     # Potential ints
     mints = core.MintsHelper(wfn_A.basisset())
-    cache["V_A"] = mints.ao_potential()
     mints = core.MintsHelper(wfn_B.basisset())
-    cache["V_B"] = mints.ao_potential()
+    cache["V_A"] = ein.core.RuntimeTensorD(mints.ao_potential().np)
+    cache["V_B"] = ein.core.RuntimeTensorD(mints.ao_potential().np)
 
     # External Potentials need to add to V_A and V_B
+    # TODO: update this for einsums adding
     if external_potentials:
         if external_potentials.get("A") is not None:
             ext_A = wfn_A.external_pot().computePotentialMatrix(wfn_A.basisset())
@@ -95,7 +108,8 @@ def build_sapt_jk_cache(
             cache["V_B"].add(ext_B)
 
     # Anything else we might need
-    cache["S"] = wfn_A.S().clone()
+    # cache["S"] = wfn_A.S().clone()
+    cache["S"] = ein.core.RuntimeTensorD(wfn_A.S().clone().np)
 
     # J and K matrices
     jk.C_clear()
@@ -109,127 +123,27 @@ def build_sapt_jk_cache(
     jk.C_right_add(wfn_B.Ca_subset("SO", "OCC"))
 
     # K_O J/K
-    C_O_A = core.triplet(cache["D_B"], cache["S"], cache["Cocc_A"], False, False, False)
-    jk.C_left_add(C_O_A)
-    jk.C_right_add(cache["Cocc_A"])
+    # C_O_A = core.triplet(cache["D_B"], cache["S"], cache["Cocc_A"], False, False, False)
+    C_O_A = ein.utils.tensor_factory("C_O_A", [cache["D_B"].shape[0], cache["Cocc_A"].shape[1]], np.float64, 'numpy')
+    D_B__S = ein.utils.tensor_factory("D_B__S", [cache["D_B"].shape[0], cache["S"].shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, D_B__S, 1.0, cache["D_B"], cache["S"])
+    plan_matmul_tt.execute(0.0, C_O_A, 1.0, D_B__S, cache["Cocc_A"])
+
+    C_O_A_matrix = core.Matrix.from_array(C_O_A)
+    # Q: How can I convert jk to use RuntimeTensorD?
+    print(type(jk), dir(jk))
+    jk.C_left_add(C_O_A_matrix)
+    jk.C_right_add(core.Matrix.from_array(cache["Cocc_A"]))
 
     jk.compute()
 
     # Clone them as the JK object will overwrite.
-    cache["J_A"] = jk.J()[0].clone()
-    cache["K_A"] = jk.K()[0].clone()
-
-    cache["J_B"] = jk.J()[1].clone()
-    cache["K_B"] = jk.K()[1].clone()
-
-    cache["J_O"] = jk.J()[2].clone()
-    cache["K_O"] = jk.K()[2].clone()
-    cache["K_O"].transpose_this()
-
-    monA_nr = wfn_A.molecule().nuclear_repulsion_energy()
-    monB_nr = wfn_B.molecule().nuclear_repulsion_energy()
-    dimer_nr = wfn_A.molecule().extract_subsets([1, 2]).nuclear_repulsion_energy()
-
-    cache["extern_extern_IE"] = 0.0
-    if external_potentials:
-        dimer_nr += wfn_dimer.external_pot().computeNuclearEnergy(wfn_dimer.molecule()) 
-        if external_potentials.get("A") is not None:
-            monA_nr += wfn_A.external_pot().computeNuclearEnergy(wfn_A.molecule())
-        if external_potentials.get("B") is not None:
-            monB_nr += wfn_B.external_pot().computeNuclearEnergy(wfn_B.molecule())
-        if external_potentials.get("A") is not None and external_potentials.get("B") is not None:
-            cache["extern_extern_IE"] = wfn_A.external_pot().computeExternExternInteraction(wfn_B.external_pot())
-
-    cache["nuclear_repulsion_energy"] = dimer_nr - monA_nr - monB_nr
-    print("EINSUM CACHE")
-    pp(cache)
-    return cache
-
-
-def build_sapt_jk_cache_sums(
-    wfn_dimer: core.Wavefunction,
-    wfn_A: core.Wavefunction,
-    wfn_B: core.Wavefunction,
-    jk: core.JK,
-    do_print=True,
-    external_potentials=None,
-):
-    """
-    Constructs the DCBS cache data required to compute ELST/EXCH/IND
-    """
-    core.print_out("\n  ==> Preparing SAPT Data Cache <== \n\n")
-    jk.print_header()
-
-    cache = {}
-    cache["wfn_A"] = wfn_A
-    cache["wfn_B"] = wfn_B
-
-    # First grab the orbitals
-    cache["Cocc_A"] = wfn_A.Ca_subset("AO", "OCC")
-    cache["Cvir_A"] = wfn_A.Ca_subset("AO", "VIR")
-
-    cache["Cocc_B"] = wfn_B.Ca_subset("AO", "OCC")
-    cache["Cvir_B"] = wfn_B.Ca_subset("AO", "VIR")
-
-    cache["eps_occ_A"] = wfn_A.epsilon_a_subset("AO", "OCC")
-    cache["eps_vir_A"] = wfn_A.epsilon_a_subset("AO", "VIR")
-
-    cache["eps_occ_B"] = wfn_B.epsilon_a_subset("AO", "OCC")
-    cache["eps_vir_B"] = wfn_B.epsilon_a_subset("AO", "VIR")
-
-    # Build the densities as HF takes an extra "step"
-    cache["D_A"] = core.doublet(cache["Cocc_A"], cache["Cocc_A"], False, True)
-    cache["D_B"] = core.doublet(cache["Cocc_B"], cache["Cocc_B"], False, True)
-
-    cache["P_A"] = core.doublet(cache["Cvir_A"], cache["Cvir_A"], False, True)
-    cache["P_B"] = core.doublet(cache["Cvir_B"], cache["Cvir_B"], False, True)
-
-    # Potential ints
-    mints = core.MintsHelper(wfn_A.basisset())
-    cache["V_A"] = mints.ao_potential()
-    mints = core.MintsHelper(wfn_B.basisset())
-    cache["V_B"] = mints.ao_potential()
-
-    # External Potentials need to add to V_A and V_B
-    if external_potentials:
-        if external_potentials.get("A") is not None:
-            ext_A = wfn_A.external_pot().computePotentialMatrix(wfn_A.basisset())
-            cache["V_A"].add(ext_A)
-        if external_potentials.get("B") is not None:
-            ext_B = wfn_B.external_pot().computePotentialMatrix(wfn_B.basisset())
-            cache["V_B"].add(ext_B)
-
-    # Anything else we might need
-    cache["S"] = wfn_A.S().clone()
-
-    # J and K matrices
-    jk.C_clear()
-
-    # Normal J/K for Monomer A
-    jk.C_left_add(wfn_A.Ca_subset("SO", "OCC"))
-    jk.C_right_add(wfn_A.Ca_subset("SO", "OCC"))
-
-    # Normal J/K for Monomer B
-    jk.C_left_add(wfn_B.Ca_subset("SO", "OCC"))
-    jk.C_right_add(wfn_B.Ca_subset("SO", "OCC"))
-
-    # K_O J/K
-    C_O_A = core.triplet(cache["D_B"], cache["S"], cache["Cocc_A"], False, False, False)
-    jk.C_left_add(C_O_A)
-    jk.C_right_add(cache["Cocc_A"])
-
-    jk.compute()
-
-    # Clone them as the JK object will overwrite.
-    cache["J_A"] = jk.J()[0].clone()
-    cache["K_A"] = jk.K()[0].clone()
-
-    cache["J_B"] = jk.J()[1].clone()
-    cache["K_B"] = jk.K()[1].clone()
-
-    cache["J_O"] = jk.J()[2].clone()
-    cache["K_O"] = jk.K()[2].clone()
-    cache["K_O"].transpose_this()
+    cache["J_A"] = ein.core.RuntimeTensorD(jk.J()[0].clone().np)
+    cache["K_A"] = ein.core.RuntimeTensorD(jk.K()[0].clone().np)
+    cache["J_B"] = ein.core.RuntimeTensorD(jk.J()[1].clone().np)
+    cache["K_B"] = ein.core.RuntimeTensorD(jk.K()[1].clone().np)
+    cache["J_O"] = ein.core.RuntimeTensorD(jk.J()[2].clone().np)
+    cache["K_O"] = ein.core.RuntimeTensorD(jk.K()[2].clone().np).T
 
     monA_nr = wfn_A.molecule().nuclear_repulsion_energy()
     monB_nr = wfn_B.molecule().nuclear_repulsion_energy()
@@ -258,10 +172,26 @@ def electrostatics(cache, do_print=True):
 
     # ELST
     Elst10 = 0.0
-    Elst10 += 2.0 * cache["D_A"].vector_dot(cache["V_B"])
-    Elst10 += 2.0 * cache["D_B"].vector_dot(cache["V_A"])
-    Elst10 += 4.0 * cache["D_B"].vector_dot(cache["J_A"])
+    # Elst10 += 2.0 * cache["D_A"].vector_dot(cache["V_B"])
+    # Elst10 += 2.0 * cache["D_B"].vector_dot(cache["V_A"])
+    # Elst10 += 4.0 * cache["D_B"].vector_dot(cache["J_A"])
+    plan_vector_dot = ein.core.compile_plan("", "i", "i")
+    Elst10_tmp = ein.utils.tensor_factory("Elst10_tmp", [1], np.float64, 'numpy')
+    plan_vector_dot.execute(0.0, Elst10_tmp, 1.0, cache["D_A"], cache["V_B"])
+    Elst10 += 2.0 * Elst10_tmp
+    print(Elst10, Elst10_tmp)
+    Elst10_tmp = ein.utils.tensor_factory("Elst10_tmp", [1], np.float64, 'numpy')
+    plan_vector_dot.execute(0.0, Elst10_tmp, 1.0, cache["D_B"], cache["V_A"])
+    Elst10 += 2.0 * Elst10_tmp
+    print(Elst10, Elst10_tmp)
+    plan_vector_dot.execute(0.0, Elst10_tmp, 1.0, cache["D_B"], cache["J_A"])
+    Elst10 += 4.0 * Elst10_tmp
+    print(Elst10, Elst10_tmp)
+    # Elst10 += 2.0 * plan_vector_dot.execute(0.0, cache["D_A"], 1.0, cache["V_B"])
+    # Elst10 += 2.0 * plan_vector_dot.execute(0.0, cache["D_B"], 1.0, cache["V_A"])
+    # Elst10 += 4.0 * plan_vector_dot.execute(0.0, cache["D_B"], 1.0, cache["J_A"])
     Elst10 += cache["nuclear_repulsion_energy"]
+    print(Elst10, cache["nuclear_repulsion_energy"])
 
     if do_print:
         core.print_out(print_sapt_var("Elst10,r ", Elst10, short=True))

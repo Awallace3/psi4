@@ -871,14 +871,16 @@ def sapt_dft(
 
     # Build SAPT cache
     cache = sapt_jk_terms.build_sapt_jk_cache(dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials)
-    # cache = sapt_jk_terms_ein.build_sapt_jk_cache(dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials)
+    cache_ein = sapt_jk_terms_ein.build_sapt_jk_cache(dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials)
     core.timer_off("SAPT(DFT):Build JK")
 
     # Electrostatics
     core.timer_on("SAPT(DFT):elst")
     elst, extern_extern_IE = sapt_jk_terms.electrostatics(cache, True)
+    elst_ein, extern_extern_IE_ein = sapt_jk_terms_ein.electrostatics(cache_ein, True)
     data["extern_extern_IE"] = extern_extern_IE
-    # core.print_out("ELST EIN:", elst)
+    print("ELST REG:", elst)
+    print("ELST EIN:", elst_ein)
     data.update(elst)
     core.timer_off("SAPT(DFT):elst")
 
