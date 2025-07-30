@@ -1201,28 +1201,27 @@ def test_charge_field_inputs():
 
 def test_einsum_terms():
     """
-    from sapt-dft1 ctest
+    built from sapt-dft1 ctest
     """
-    DHF = -0.01189736  #TEST
     Eref_nh = {
-        "SAPT ELST ENERGY": -0.10190449,  # TEST
-        "SAPT EXCH ENERGY": 0.36545706,  # TEST
-        "SAPT IND ENERGY": -0.00840483,  # TEST
-        "SAPT DISP ENERGY": -0.24398704,  # TEST
-        "CURRENT ENERGY": 0.01122234,
+        "SAPT ELST ENERGY": -0.22987897,  # mEh
+        "SAPT EXCH ENERGY": 0.59560159,  # mEh
+        "SAPT IND ENERGY": -0.00010341,   # mEh
+        "SAPT DISP ENERGY":  0.00000574,   # mEh
+        "CURRENT ENERGY":  0.36562495,    # mEh
     }  # TEST
     mol = psi4.geometry("""
   Ne
   --
-  Ar 1 6.5
+  Ne 1 4.5
   units bohr
     """)
     psi4.set_options(
         {
-            "basis": "aug-cc-pvdz",
+            "basis": "sto-3g",
             "scf_type": "df",
             "sapt_dft_grac_shift_a": 0.203293,
-            "sapt_dft_grac_shift_b": 0.138264,
+            "sapt_dft_grac_shift_b": 0.203293,
             "SAPT_DFT_DO_DHF": False,
             "SAPT_DFT_DO_HYBRID": False,
             "SAPT_DFT_EXCH_DISP_SCALE_SCHEME": "None",
@@ -1230,13 +1229,10 @@ def test_einsum_terms():
     )
     psi4.energy("sapt(dft)", molecule=mol)
     for k, v in Eref_nh.items():  # TEST
-        if k in ["SAPT IND ENERGY", "CURRENT ENERGY"]:
-            ref = (v - DHF) / 1000.0
-        else:
-            ref = v / 1000.0
+        ref = v
         assert compare_values(
-            ref, psi4.variable(k), 6, "!hyb, xd=none, !dHF: " + k
-        )  # TEST
+            ref, psi4.variable(k) * 1000, 6, "!hyb, xd=none, !dHF: " + k
+        )
 
 
 if __name__ == "__main__":
