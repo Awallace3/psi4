@@ -904,6 +904,15 @@ def sapt_dft(
         conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
         Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
     )
+    ind = sapt_jk_terms_ein.induction(
+        cache_ein,
+        sapt_jk,
+        True,
+        sapt_jk_B=sapt_jk_B,
+        maxiter=core.get_option("SAPT", "MAXITER"),
+        conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
+        Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
+    )
     data.update(ind)
 
     # Set Delta HF for SAPT(HF)

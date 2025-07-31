@@ -417,23 +417,47 @@ def induction(
     J_O = cache["J_O"]
 
     jk.C_clear()
+    DB_S = ein.utils.tensor_factory("DB_S", [D_B.shape[0], S.shape[1]], np.float64, 'numpy')
+    DB_S_CA = ein.utils.tensor_factory("DB_S_CA", [D_B.shape[0], cache["Cocc_A"].shape[1]], np.float64, 'numpy')
+    plan_matmul_tt = ein.core.compile_plan("ij", "ik", "kj")
+    plan_matmul_tt.execute(0.0, DB_S, 1.0, D_B, S)
+    plan_matmul_tt.execute(0.0, DB_S_CA, 1.0, DB_S, cache["Cocc_A"])
 
-    jk.C_left_add(core.Matrix.chain_dot(D_B, S, cache["Cocc_A"]))
-    jk.C_right_add(cache["Cocc_A"])
+    jk.C_left_add(core.Matrix.from_array(DB_S_CA))
+    jk.C_right_add(core.Matrix.from_array(cache["Cocc_A"]))
 
-    jk.C_left_add(core.Matrix.chain_dot(D_B, S, D_A, S, cache["Cocc_B"]))
-    jk.C_right_add(cache["Cocc_B"])
+    DB_S_DA = ein.utils.tensor_factory("DB_S_DA", [D_B.shape[0], D_A.shape[1]], np.float64, 'numpy')
+    DB_S_DA_S = ein.utils.tensor_factory("DB_S_DA_S", [D_B.shape[0], S.shape[1]], np.float64, 'numpy')
+    DB_S_DA_S_CB = ein.utils.tensor_factory("DB_S_DA_S_CB", [D_B.shape[0], cache["Cocc_B"].shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, DB_S_DA, 1.0, DB_S, D_A)
+    plan_matmul_tt.execute(0.0, DB_S_DA_S, 1.0, DB_S_DA, S)
+    plan_matmul_tt.execute(0.0, DB_S_DA_S_CB, 1.0, DB_S_DA_S, cache["Cocc_B"])
+    jk.C_left_add(core.Matrix.from_array(DB_S_DA_S_CB))
+    jk.C_right_add(core.Matrix.from_array(cache["Cocc_B"]))
 
-    jk.C_left_add(core.Matrix.chain_dot(D_A, S, D_B, S, cache["Cocc_A"]))
-    jk.C_right_add(cache["Cocc_A"])
+    D_A_S = ein.utils.tensor_factory("D_A_S", [D_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    D_A_S_DB = ein.utils.tensor_factory("D_A_S_CB", [D_A.shape[0], cache["D_B"].shape[1]], np.float64, 'numpy')
+    DA_S_DB_CA = ein.utils.tensor_factory("D_A_S_CB", [D_A.shape[0], cache["Cocc_A"].shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, D_A_S, 1.0, D_A, S)
+    plan_matmul_tt.execute(0.0, D_A_S_DB, 1.0, D_A_S, D_B)
+    plan_matmul_tt.execute(0.0, DA_S_DB_CA, 1.0, D_A_S_DB, cache["Cocc_A"])
+    jk.C_left_add(core.Matrix.from_array(DA_S_DB_CA))
+    jk.C_right_add(core.Matrix.from_array(cache["Cocc_A"]))
 
     jk.compute()
 
     J_Ot, J_P_B, J_P_A = jk.J()
     K_Ot, K_P_B, K_P_A = jk.K()
 
+    J_Ot = ein.core.RuntimeTensorD(J_Ot.np)
+    J_P_B = ein.core.RuntimeTensorD(J_P_B.np)
+    J_P_A = ein.core.RuntimeTensorD(J_P_A.np)
+    K_Ot = ein.core.RuntimeTensorD(K_Ot.np)
+    K_P_B = ein.core.RuntimeTensorD(K_P_B.np)
+    K_P_A = ein.core.RuntimeTensorD(K_P_A.np)
+
     # Exch-Ind Potential A
-    EX_A = K_B.clone()
+    EX_A = K_B.copy()
     EX_A.scale(-1.0)
     EX_A.axpy(-2.0, J_O)
     EX_A.axpy(1.0, K_O)
