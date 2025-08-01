@@ -458,10 +458,25 @@ def induction(
 
     # Exch-Ind Potential A
     EX_A = K_B.copy()
-    EX_A.scale(-1.0)
-    EX_A.axpy(-2.0, J_O)
-    EX_A.axpy(1.0, K_O)
-    EX_A.axpy(2.0, J_P_B)
+    EX_A *= -1.0
+    ein.core.axpy(-2.0, J_O, EX_A)
+    ein.core.axpy(1.0, K_O, EX_A)
+    ein.core.axpy(2.0, J_P_B, EX_A)
+
+    # If tensors share same dimensions, we can reuse them. Explicit for now, but update later.
+    S_DB = ein.utils.tensor_factory("S_DB", [S.shape[0], D_B.shape[1]], np.float64, 'numpy')
+    S_DB_VA = ein.utils.tensor_factory("S_DB_VA", [S.shape[0], V_A.shape[1]], np.float64, 'numpy')
+    S_DB_JA = ein.utils.tensor_factory("S_DB_JA", [S.shape[0], J_A.shape[1]], np.float64, 'numpy')
+    S_DB_KA = ein.utils.tensor_factory("S_DB_KA", [S.shape[0], K_A.shape[1]], np.float64, 'numpy')
+    S_DB_S = ein.utils.tensor_factory("S_DB_S", [S.shape[0], S.shape[1]], np.float64, 'numpy')
+    S_DB_S_DA = ein.utils.tensor_factory("S_DB_S_DA", [S.shape[0], D_A.shape[1]], np.float64, 'numpy')
+    S_DB_S_DA_VB = ein.utils.tensor_factory("S_DB_S_DA_VB", [S.shape[0], V_B.shape[1]], np.float64, 'numpy')
+    S_DB_S_DA_JB = ein.utils.tensor_factory("S_DB_S_DA_JB", [S.shape[0], J_B.shape[1]], np.float64, 'numpy')
+    S_DB_JA_DB = ein.utils.tensor_factory("S_DB_JA_DB", [S.shape[0], D_B.shape[1]], np.float64, 'numpy')
+    S_DB_JA_DB_S = ein.utils.tensor_factory("S_DB_JA_DB_S", [S.shape[0], S.shape[1]], np.float64, 'numpy')
+    S_DB_VA_DB_S = ein.utils.tensor_factory("S_DB_VA_DB_S", [S.shape[0], S.shape[1]], np.float64, 'numpy')
+    # Ensure you have all the tensors initialized
+
 
     EX_A.axpy(-1.0, core.Matrix.chain_dot(S, D_B, V_A))
     EX_A.axpy(-2.0, core.Matrix.chain_dot(S, D_B, J_A))
