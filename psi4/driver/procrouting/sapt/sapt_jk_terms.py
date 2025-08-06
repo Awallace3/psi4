@@ -470,6 +470,7 @@ def induction(
     EX_B.axpy(-1.0, core.Matrix.chain_dot(S, D_A, K_O))
 
     EX_B.axpy(-1.0, core.Matrix.chain_dot(V_A, D_A, S))
+    print(EX_B.np)
     EX_B.axpy(-2.0, core.Matrix.chain_dot(J_A, D_A, S))
     EX_B.axpy(1.0, core.Matrix.chain_dot(K_A, D_A, S))
     EX_B.axpy(1.0, core.Matrix.chain_dot(V_A, D_B, S, D_A, S))
