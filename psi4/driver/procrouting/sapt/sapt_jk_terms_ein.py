@@ -416,31 +416,34 @@ def induction(
     K_O = cache["K_O"]
     J_O = cache["J_O"]
 
-    jk.C_clear()
-    DB_S = ein.utils.tensor_factory("DB_S", [D_B.shape[0], S.shape[1]], np.float64, 'numpy')
-    DB_S_CA = ein.utils.tensor_factory("DB_S_CA", [D_B.shape[0], cache["Cocc_A"].shape[1]], np.float64, 'numpy')
+    # Set up matrix multiplication plans
     plan_matmul_tt = ein.core.compile_plan("ij", "ik", "kj")
+
+    # Prepare JK calculations
+    jk.C_clear()
+    
+    DB_S_CA = ein.utils.tensor_factory("DB_S_CA", [D_B.shape[0], cache["Cocc_A"].shape[1]], np.float64, 'numpy')
+    DB_S = ein.utils.tensor_factory("DB_S", [D_B.shape[0], S.shape[1]], np.float64, 'numpy')
     plan_matmul_tt.execute(0.0, DB_S, 1.0, D_B, S)
     plan_matmul_tt.execute(0.0, DB_S_CA, 1.0, DB_S, cache["Cocc_A"])
-
     jk.C_left_add(core.Matrix.from_array(DB_S_CA))
     jk.C_right_add(core.Matrix.from_array(cache["Cocc_A"]))
 
+    DB_S_DA_S_CB = ein.utils.tensor_factory("DB_S_DA_S_CB", [D_B.shape[0], cache["Cocc_B"].shape[1]], np.float64, 'numpy')
     DB_S_DA = ein.utils.tensor_factory("DB_S_DA", [D_B.shape[0], D_A.shape[1]], np.float64, 'numpy')
     DB_S_DA_S = ein.utils.tensor_factory("DB_S_DA_S", [D_B.shape[0], S.shape[1]], np.float64, 'numpy')
-    DB_S_DA_S_CB = ein.utils.tensor_factory("DB_S_DA_S_CB", [D_B.shape[0], cache["Cocc_B"].shape[1]], np.float64, 'numpy')
     plan_matmul_tt.execute(0.0, DB_S_DA, 1.0, DB_S, D_A)
     plan_matmul_tt.execute(0.0, DB_S_DA_S, 1.0, DB_S_DA, S)
     plan_matmul_tt.execute(0.0, DB_S_DA_S_CB, 1.0, DB_S_DA_S, cache["Cocc_B"])
     jk.C_left_add(core.Matrix.from_array(DB_S_DA_S_CB))
     jk.C_right_add(core.Matrix.from_array(cache["Cocc_B"]))
 
-    D_A_S = ein.utils.tensor_factory("D_A_S", [D_A.shape[0], S.shape[1]], np.float64, 'numpy')
-    D_A_S_DB = ein.utils.tensor_factory("D_A_S_CB", [D_A.shape[0], cache["D_B"].shape[1]], np.float64, 'numpy')
-    DA_S_DB_CA = ein.utils.tensor_factory("D_A_S_CB", [D_A.shape[0], cache["Cocc_A"].shape[1]], np.float64, 'numpy')
-    plan_matmul_tt.execute(0.0, D_A_S, 1.0, D_A, S)
-    plan_matmul_tt.execute(0.0, D_A_S_DB, 1.0, D_A_S, D_B)
-    plan_matmul_tt.execute(0.0, DA_S_DB_CA, 1.0, D_A_S_DB, cache["Cocc_A"])
+    DA_S_DB_CA = ein.utils.tensor_factory("DA_S_DB_CA", [D_A.shape[0], cache["Cocc_A"].shape[1]], np.float64, 'numpy')
+    DA_S = ein.utils.tensor_factory("DA_S", [D_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    DA_S_DB = ein.utils.tensor_factory("DA_S_DB", [D_A.shape[0], D_B.shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, DA_S, 1.0, D_A, S)
+    plan_matmul_tt.execute(0.0, DA_S_DB, 1.0, DA_S, D_B)
+    plan_matmul_tt.execute(0.0, DA_S_DB_CA, 1.0, DA_S_DB, cache["Cocc_A"])
     jk.C_left_add(core.Matrix.from_array(DA_S_DB_CA))
     jk.C_right_add(core.Matrix.from_array(cache["Cocc_A"]))
 
@@ -463,89 +466,225 @@ def induction(
     ein.core.axpy(1.0, K_O, EX_A)
     ein.core.axpy(2.0, J_P_B, EX_A)
 
-    # If tensors share same dimensions, we can reuse them. Explicit for now, but update later.
-    S_DB = ein.utils.tensor_factory("S_DB", [S.shape[0], D_B.shape[1]], np.float64, 'numpy')
+    # Create intermediate tensors for EX_A chain operations
     S_DB_VA = ein.utils.tensor_factory("S_DB_VA", [S.shape[0], V_A.shape[1]], np.float64, 'numpy')
-    S_DB_JA = ein.utils.tensor_factory("S_DB_JA", [S.shape[0], J_A.shape[1]], np.float64, 'numpy')
+    S_DB_JA = ein.utils.tensor_factory("S_DB_JA", [S.shape[0], J_A.shape[1]], np.float64, 'numpy') 
     S_DB_KA = ein.utils.tensor_factory("S_DB_KA", [S.shape[0], K_A.shape[1]], np.float64, 'numpy')
-    S_DB_S = ein.utils.tensor_factory("S_DB_S", [S.shape[0], S.shape[1]], np.float64, 'numpy')
-    S_DB_S_DA = ein.utils.tensor_factory("S_DB_S_DA", [S.shape[0], D_A.shape[1]], np.float64, 'numpy')
     S_DB_S_DA_VB = ein.utils.tensor_factory("S_DB_S_DA_VB", [S.shape[0], V_B.shape[1]], np.float64, 'numpy')
     S_DB_S_DA_JB = ein.utils.tensor_factory("S_DB_S_DA_JB", [S.shape[0], J_B.shape[1]], np.float64, 'numpy')
-    S_DB_JA_DB = ein.utils.tensor_factory("S_DB_JA_DB", [S.shape[0], D_B.shape[1]], np.float64, 'numpy')
-    S_DB_JA_DB_S = ein.utils.tensor_factory("S_DB_JA_DB_S", [S.shape[0], S.shape[1]], np.float64, 'numpy')
     S_DB_VA_DB_S = ein.utils.tensor_factory("S_DB_VA_DB_S", [S.shape[0], S.shape[1]], np.float64, 'numpy')
-    # Ensure you have all the tensors initialized
+    S_DB_JA_DB_S = ein.utils.tensor_factory("S_DB_JA_DB_S", [S.shape[0], S.shape[1]], np.float64, 'numpy')
+    S_DB_KO_T = ein.utils.tensor_factory("S_DB_KO_T", [S.shape[0], K_O.shape[0]], np.float64, 'numpy')
+    VB_DB_S = ein.utils.tensor_factory("VB_DB_S", [V_B.shape[0], S.shape[1]], np.float64, 'numpy')
+    JB_DB_S = ein.utils.tensor_factory("JB_DB_S", [J_B.shape[0], S.shape[1]], np.float64, 'numpy')
+    KB_DB_S = ein.utils.tensor_factory("KB_DB_S", [K_B.shape[0], S.shape[1]], np.float64, 'numpy')
+    VB_DA_S_DB_S = ein.utils.tensor_factory("VB_DA_S_DB_S", [V_B.shape[0], S.shape[1]], np.float64, 'numpy')
+    JB_DA_S_DB_S = ein.utils.tensor_factory("JB_DA_S_DB_S", [J_B.shape[0], S.shape[1]], np.float64, 'numpy')
+    KO_DB_S = ein.utils.tensor_factory("KO_DB_S", [K_O.shape[0], S.shape[1]], np.float64, 'numpy')
 
+    # Compute all the EX_A chain operations using einsums
+    plan_matmul_tt.execute(0.0, S_DB_VA, 1.0, DB_S, V_A)
+    plan_matmul_tt.execute(0.0, S_DB_JA, 1.0, DB_S, J_A)
+    plan_matmul_tt.execute(0.0, S_DB_KA, 1.0, DB_S, K_A)
+    plan_matmul_tt.execute(0.0, S_DB_S_DA_VB, 1.0, DB_S_DA_S, V_B)
+    plan_matmul_tt.execute(0.0, S_DB_S_DA_JB, 1.0, DB_S_DA_S, J_B)
+    
+    # For S_DB_VA_DB_S: need V_A @ D_B @ S
+    VA_DB = ein.utils.tensor_factory("VA_DB", [V_A.shape[0], D_B.shape[1]], np.float64, 'numpy')
+    VA_DB_S = ein.utils.tensor_factory("VA_DB_S", [V_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, VA_DB, 1.0, V_A, D_B)
+    plan_matmul_tt.execute(0.0, VA_DB_S, 1.0, VA_DB, S)
+    plan_matmul_tt.execute(0.0, S_DB_VA_DB_S, 1.0, DB_S, VA_DB_S)
+    
+    # For S_DB_JA_DB_S: need J_A @ D_B @ S
+    JA_DB = ein.utils.tensor_factory("JA_DB", [J_A.shape[0], D_B.shape[1]], np.float64, 'numpy')
+    JA_DB_S = ein.utils.tensor_factory("JA_DB_S", [J_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, JA_DB, 1.0, J_A, D_B)
+    plan_matmul_tt.execute(0.0, JA_DB_S, 1.0, JA_DB, S)
+    plan_matmul_tt.execute(0.0, S_DB_JA_DB_S, 1.0, DB_S, JA_DB_S)
 
-    EX_A.axpy(-1.0, core.Matrix.chain_dot(S, D_B, V_A))
-    EX_A.axpy(-2.0, core.Matrix.chain_dot(S, D_B, J_A))
-    EX_A.axpy(1.0, core.Matrix.chain_dot(S, D_B, K_A))
-    EX_A.axpy(1.0, core.Matrix.chain_dot(S, D_B, S, D_A, V_B))
-    EX_A.axpy(2.0, core.Matrix.chain_dot(S, D_B, S, D_A, J_B))
-    EX_A.axpy(1.0, core.Matrix.chain_dot(S, D_B, V_A, D_B, S))
-    EX_A.axpy(2.0, core.Matrix.chain_dot(S, D_B, J_A, D_B, S))
-    EX_A.axpy(-1.0, core.Matrix.chain_dot(S, D_B, K_O, trans=[False, False, True]))
+    # For S_DB_KO^T: need K_O^T
+    plan_matmul_tt.execute(0.0, S_DB_KO_T, 1.0, DB_S, K_O.T)
+    
+    # For V_B @ D_B @ S etc.
+    plan_matmul_tt.execute(0.0, VB_DB_S, 1.0, V_B, DB_S)
+    plan_matmul_tt.execute(0.0, JB_DB_S, 1.0, J_B, DB_S)
+    plan_matmul_tt.execute(0.0, KB_DB_S, 1.0, K_B, DB_S)
+    
+    # For V_B @ D_A @ S @ D_B @ S
+    VB_DA_S = ein.utils.tensor_factory("VB_DA_S", [V_B.shape[0], S.shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, VB_DA_S, 1.0, V_B, DA_S)
+    plan_matmul_tt.execute(0.0, VB_DA_S_DB_S, 1.0, VB_DA_S, DB_S)
+    
+    # For J_B @ D_A @ S @ D_B @ S  
+    JB_DA_S = ein.utils.tensor_factory("JB_DA_S", [J_B.shape[0], S.shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, JB_DA_S, 1.0, J_B, DA_S)
+    plan_matmul_tt.execute(0.0, JB_DA_S_DB_S, 1.0, JB_DA_S, DB_S)
 
-    EX_A.axpy(-1.0, core.Matrix.chain_dot(V_B, D_B, S))
-    EX_A.axpy(-2.0, core.Matrix.chain_dot(J_B, D_B, S))
-    EX_A.axpy(1.0, core.Matrix.chain_dot(K_B, D_B, S))
-    EX_A.axpy(1.0, core.Matrix.chain_dot(V_B, D_A, S, D_B, S))
-    EX_A.axpy(2.0, core.Matrix.chain_dot(J_B, D_A, S, D_B, S))
-    EX_A.axpy(-1.0, core.Matrix.chain_dot(K_O, D_B, S))
+    # For K_O @ D_B @ S
+    plan_matmul_tt.execute(0.0, KO_DB_S, 1.0, K_O, DB_S)
 
-    EX_A = core.Matrix.chain_dot(
-        cache["Cocc_A"], EX_A, cache["Cvir_A"], trans=[True, False, False]
-    )
+    # Apply all the axpy operations to EX_A
+    ein.core.axpy(-1.0, S_DB_VA, EX_A)
+    ein.core.axpy(-2.0, S_DB_JA, EX_A)
+    ein.core.axpy(1.0, S_DB_KA, EX_A)
+    ein.core.axpy(1.0, S_DB_S_DA_VB, EX_A)
+    ein.core.axpy(2.0, S_DB_S_DA_JB, EX_A)
+    ein.core.axpy(1.0, S_DB_VA_DB_S, EX_A)
+    ein.core.axpy(2.0, S_DB_JA_DB_S, EX_A)
+    ein.core.axpy(-1.0, S_DB_KO_T, EX_A)
+    ein.core.axpy(-1.0, VB_DB_S, EX_A)
+    ein.core.axpy(-2.0, JB_DB_S, EX_A)
+    ein.core.axpy(1.0, KB_DB_S, EX_A)
+    ein.core.axpy(1.0, VB_DA_S_DB_S, EX_A)
+    ein.core.axpy(2.0, JB_DA_S_DB_S, EX_A)
+    ein.core.axpy(-1.0, KO_DB_S, EX_A)
 
-    # Exch-Ind Potential B
-    EX_B = K_A.clone()
-    EX_B.scale(-1.0)
-    EX_B.axpy(-2.0, J_O)
-    EX_B.axpy(1.0, K_O.transpose())
-    EX_B.axpy(2.0, J_P_A)
+    # Transform EX_A to MO basis: C_A^T @ EX_A @ C_vir_A
+    EX_A_tmp = ein.utils.tensor_factory("EX_A_tmp", [cache["Cocc_A"].shape[1], EX_A.shape[1]], np.float64, 'numpy')
+    EX_A_MO = ein.utils.tensor_factory("EX_A_MO", [cache["Cocc_A"].shape[1], cache["Cvir_A"].shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, EX_A_tmp, 1.0, cache["Cocc_A"].T, EX_A)
+    plan_matmul_tt.execute(0.0, EX_A_MO, 1.0, EX_A_tmp, cache["Cvir_A"])
 
-    EX_B.axpy(-1.0, core.Matrix.chain_dot(S, D_A, V_B))
-    EX_B.axpy(-2.0, core.Matrix.chain_dot(S, D_A, J_B))
-    EX_B.axpy(1.0, core.Matrix.chain_dot(S, D_A, K_B))
-    EX_B.axpy(1.0, core.Matrix.chain_dot(S, D_A, S, D_B, V_A))
-    EX_B.axpy(2.0, core.Matrix.chain_dot(S, D_A, S, D_B, J_A))
-    EX_B.axpy(1.0, core.Matrix.chain_dot(S, D_A, V_B, D_A, S))
-    EX_B.axpy(2.0, core.Matrix.chain_dot(S, D_A, J_B, D_A, S))
-    EX_B.axpy(-1.0, core.Matrix.chain_dot(S, D_A, K_O))
+    # Complete EX_B construction using einsums
+    EX_B = K_A.copy()
+    EX_B *= -1.0
+    ein.core.axpy(-2.0, J_O, EX_B)
+    ein.core.axpy(1.0, K_O.T, EX_B)
+    ein.core.axpy(2.0, J_P_A, EX_B)
 
-    EX_B.axpy(-1.0, core.Matrix.chain_dot(V_A, D_A, S))
-    EX_B.axpy(-2.0, core.Matrix.chain_dot(J_A, D_A, S))
-    EX_B.axpy(1.0, core.Matrix.chain_dot(K_A, D_A, S))
-    EX_B.axpy(1.0, core.Matrix.chain_dot(V_A, D_B, S, D_A, S))
-    EX_B.axpy(2.0, core.Matrix.chain_dot(J_A, D_B, S, D_A, S))
-    EX_B.axpy(-1.0, core.Matrix.chain_dot(K_O, D_A, S, trans=[True, False, False]))
+    # Create tensors for EX_B operations
+    DA_S_VB = ein.utils.tensor_factory("DA_S_VB", [D_A.shape[0], V_B.shape[1]], np.float64, 'numpy')
+    DA_S_JB = ein.utils.tensor_factory("DA_S_JB", [D_A.shape[0], J_B.shape[1]], np.float64, 'numpy')
+    DA_S_KB = ein.utils.tensor_factory("DA_S_KB", [D_A.shape[0], K_B.shape[1]], np.float64, 'numpy')
+    DA_S_S_DB_VA = ein.utils.tensor_factory("DA_S_S_DB_VA", [D_A.shape[0], V_A.shape[1]], np.float64, 'numpy')
+    DA_S_S_DB_JA = ein.utils.tensor_factory("DA_S_S_DB_JA", [D_A.shape[0], J_A.shape[1]], np.float64, 'numpy')
+    DA_S_VB_DA_S = ein.utils.tensor_factory("DA_S_VB_DA_S", [D_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    DA_S_JB_DA_S = ein.utils.tensor_factory("DA_S_JB_DA_S", [D_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    DA_S_KO = ein.utils.tensor_factory("DA_S_KO", [D_A.shape[0], K_O.shape[1]], np.float64, 'numpy')
+    VA_DA_S = ein.utils.tensor_factory("VA_DA_S", [V_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    JA_DA_S = ein.utils.tensor_factory("JA_DA_S", [J_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    KA_DA_S = ein.utils.tensor_factory("KA_DA_S", [K_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    VA_DB_S_DA_S = ein.utils.tensor_factory("VA_DB_S_DA_S", [V_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    JA_DB_S_DA_S = ein.utils.tensor_factory("JA_DB_S_DA_S", [J_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    KO_T_DA_S = ein.utils.tensor_factory("KO_T_DA_S", [K_O.shape[0], S.shape[1]], np.float64, 'numpy')
 
-    EX_B = core.Matrix.chain_dot(
-        cache["Cocc_B"], EX_B, cache["Cvir_B"], trans=[True, False, False]
-    )
+    # Compute EX_B chain operations
+    plan_matmul_tt.execute(0.0, DA_S_VB, 1.0, DA_S, V_B)
+    plan_matmul_tt.execute(0.0, DA_S_JB, 1.0, DA_S, J_B)
+    plan_matmul_tt.execute(0.0, DA_S_KB, 1.0, DA_S, K_B)
+    plan_matmul_tt.execute(0.0, DA_S_S_DB_VA, 1.0, DA_S_DB, V_A)
+    plan_matmul_tt.execute(0.0, DA_S_S_DB_JA, 1.0, DA_S_DB, J_A)
+    
+    # For DA_S_VB_DA_S: need V_B @ D_A @ S
+    VB_DA_S_temp = ein.utils.tensor_factory("VB_DA_S_temp", [V_B.shape[0], S.shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, VB_DA_S_temp, 1.0, V_B, DA_S)
+    plan_matmul_tt.execute(0.0, DA_S_VB_DA_S, 1.0, DA_S, VB_DA_S_temp)
+    
+    # For DA_S_JB_DA_S: need J_B @ D_A @ S
+    JB_DA_S_temp = ein.utils.tensor_factory("JB_DA_S_temp", [J_B.shape[0], S.shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, JB_DA_S_temp, 1.0, J_B, DA_S)
+    plan_matmul_tt.execute(0.0, DA_S_JB_DA_S, 1.0, DA_S, JB_DA_S_temp)
 
-    # Build electrostatic potenital
-    w_A = cache["V_A"].clone()
-    w_A.axpy(2.0, cache["J_A"])
+    # For DA_S @ K_O
+    plan_matmul_tt.execute(0.0, DA_S_KO, 1.0, DA_S, K_O)
+    
+    # For V_A @ D_A @ S etc.
+    plan_matmul_tt.execute(0.0, VA_DA_S, 1.0, V_A, DA_S)
+    plan_matmul_tt.execute(0.0, JA_DA_S, 1.0, J_A, DA_S)
+    plan_matmul_tt.execute(0.0, KA_DA_S, 1.0, K_A, DA_S)
+    
+    # For V_A @ D_B @ S @ D_A @ S
+    VA_DB_S = ein.utils.tensor_factory("VA_DB_S", [V_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, VA_DB_S, 1.0, V_A, DB_S)
+    plan_matmul_tt.execute(0.0, VA_DB_S_DA_S, 1.0, VA_DB_S, DA_S)
+    
+    # For J_A @ D_B @ S @ D_A @ S
+    JA_DB_S = ein.utils.tensor_factory("JA_DB_S", [J_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, JA_DB_S, 1.0, J_A, DB_S)
+    plan_matmul_tt.execute(0.0, JA_DB_S_DA_S, 1.0, JA_DB_S, DA_S)
 
-    w_B = cache["V_B"].clone()
-    w_B.axpy(2.0, cache["J_B"])
+    # For K_O^T @ D_A @ S
+    plan_matmul_tt.execute(0.0, KO_T_DA_S, 1.0, K_O.T, DA_S)
 
-    w_B_MOA = core.triplet(cache["Cocc_A"], w_B, cache["Cvir_A"], True, False, False)
-    w_A_MOB = core.triplet(cache["Cocc_B"], w_A, cache["Cvir_B"], True, False, False)
+    # Apply all the axpy operations to EX_B
+    ein.core.axpy(-1.0, DA_S_VB, EX_B)
+    ein.core.axpy(-2.0, DA_S_JB, EX_B)
+    ein.core.axpy(1.0, DA_S_KB, EX_B)
+    ein.core.axpy(1.0, DA_S_S_DB_VA, EX_B)
+    ein.core.axpy(2.0, DA_S_S_DB_JA, EX_B)
+    ein.core.axpy(1.0, DA_S_VB_DA_S, EX_B)
+    ein.core.axpy(2.0, DA_S_JB_DA_S, EX_B)
+    ein.core.axpy(-1.0, DA_S_KO, EX_B)
+    ein.core.axpy(-1.0, VA_DA_S, EX_B)
+    ein.core.axpy(-2.0, JA_DA_S, EX_B)
+    ein.core.axpy(1.0, KA_DA_S, EX_B)
+    ein.core.axpy(1.0, VA_DB_S_DA_S, EX_B)
+    ein.core.axpy(2.0, JA_DB_S_DA_S, EX_B)
+    ein.core.axpy(-1.0, KO_T_DA_S, EX_B)
 
-    # Do uncoupled
+    # Transform EX_B to MO basis: C_B^T @ EX_B @ C_vir_B
+    EX_B_tmp = ein.utils.tensor_factory("EX_B_tmp", [cache["Cocc_B"].shape[1], EX_B.shape[1]], np.float64, 'numpy')
+    EX_B_MO = ein.utils.tensor_factory("EX_B_MO", [cache["Cocc_B"].shape[1], cache["Cvir_B"].shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, EX_B_tmp, 1.0, cache["Cocc_B"].T, EX_B)
+    plan_matmul_tt.execute(0.0, EX_B_MO, 1.0, EX_B_tmp, cache["Cvir_B"])
+
+    # Build electrostatic potential using einsums
+    w_A = V_A.copy()
+    ein.core.axpy(2.0, J_A, w_A)
+    
+    w_B = V_B.copy() 
+    ein.core.axpy(2.0, J_B, w_B)
+
+    # Transform to MO basis: C_A^T @ w_B @ C_vir_A
+    w_B_tmp = ein.utils.tensor_factory("w_B_tmp", [cache["Cocc_A"].shape[1], w_B.shape[1]], np.float64, 'numpy')
+    w_B_MOA = ein.utils.tensor_factory("w_B_MOA", [cache["Cocc_A"].shape[1], cache["Cvir_A"].shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, w_B_tmp, 1.0, cache["Cocc_A"].T, w_B)
+    plan_matmul_tt.execute(0.0, w_B_MOA, 1.0, w_B_tmp, cache["Cvir_A"])
+
+    w_A_tmp = ein.utils.tensor_factory("w_A_tmp", [cache["Cocc_B"].shape[1], w_A.shape[1]], np.float64, 'numpy')
+    w_A_MOB = ein.utils.tensor_factory("w_A_MOB", [cache["Cocc_B"].shape[1], cache["Cvir_B"].shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, w_A_tmp, 1.0, cache["Cocc_B"].T, w_A)
+    plan_matmul_tt.execute(0.0, w_A_MOB, 1.0, w_A_tmp, cache["Cvir_B"])
+
+    # Do uncoupled induction calculations
     core.print_out("   => Uncoupled Induction <= \n\n")
-    unc_x_B_MOA = w_B_MOA.clone()
-    unc_x_B_MOA.np[:] /= cache["eps_occ_A"].np.reshape(-1, 1) - cache["eps_vir_A"].np
-    unc_x_A_MOB = w_A_MOB.clone()
-    unc_x_A_MOB.np[:] /= cache["eps_occ_B"].np.reshape(-1, 1) - cache["eps_vir_B"].np
+    
+    # Create uncoupled response vectors by element-wise division
+    unc_x_B_MOA = w_B_MOA.copy()
+    unc_x_A_MOB = w_A_MOB.copy()
+    
+    # Convert to numpy for element-wise operations, then back to einsums
+    eps_occ_A_np = cache["eps_occ_A"]
+    eps_vir_A_np = cache["eps_vir_A"] 
+    eps_occ_B_np = cache["eps_occ_B"]
+    eps_vir_B_np = cache["eps_vir_B"]
+    
+    for i in range(unc_x_B_MOA.shape[0]):
+        for a in range(unc_x_B_MOA.shape[1]):
+            unc_x_B_MOA[i, a] /= (eps_occ_A_np[i] - eps_vir_A_np[a])
+    
+    for i in range(unc_x_A_MOB.shape[0]):
+        for a in range(unc_x_A_MOB.shape[1]):
+            unc_x_A_MOB[i, a] /= (eps_occ_B_np[i] - eps_vir_B_np[a])
 
-    unc_ind_ab = 2.0 * unc_x_B_MOA.vector_dot(w_B_MOA)
-    unc_ind_ba = 2.0 * unc_x_A_MOB.vector_dot(w_A_MOB)
-    unc_indexch_ab = 2.0 * unc_x_B_MOA.vector_dot(EX_A)
-    unc_indexch_ba = 2.0 * unc_x_A_MOB.vector_dot(EX_B)
+    # Compute uncoupled induction energies using vector dot products
+    plan_vector_dot = ein.core.compile_plan("", "ij", "ij")
+    
+    unc_ind_ab_tensor = ein.utils.tensor_factory("unc_ind_ab", [1], np.float64, 'numpy')
+    unc_ind_ba_tensor = ein.utils.tensor_factory("unc_ind_ba", [1], np.float64, 'numpy')
+    unc_indexch_ab_tensor = ein.utils.tensor_factory("unc_indexch_ab", [1], np.float64, 'numpy')
+    unc_indexch_ba_tensor = ein.utils.tensor_factory("unc_indexch_ba", [1], np.float64, 'numpy')
+    
+    plan_vector_dot.execute(0.0, unc_ind_ab_tensor, 1.0, unc_x_B_MOA, w_B_MOA)
+    plan_vector_dot.execute(0.0, unc_ind_ba_tensor, 1.0, unc_x_A_MOB, w_A_MOB)
+    plan_vector_dot.execute(0.0, unc_indexch_ab_tensor, 1.0, unc_x_B_MOA, EX_A_MO)
+    plan_vector_dot.execute(0.0, unc_indexch_ba_tensor, 1.0, unc_x_A_MOB, EX_B_MO)
+
+    unc_ind_ab = 2.0 * unc_ind_ab_tensor[0]
+    unc_ind_ba = 2.0 * unc_ind_ba_tensor[0]
+    unc_indexch_ab = 2.0 * unc_indexch_ab_tensor[0]
+    unc_indexch_ba = 2.0 * unc_indexch_ba_tensor[0]
 
     ret = {}
     ret["Ind20,u (A<-B)"] = unc_ind_ab
@@ -566,178 +705,347 @@ def induction(
 
     if do_print:
         for name in plist:
-            # core.set_variable(name, ret[name])
             core.print_out(print_sapt_var(name, ret[name], short=True))
             core.print_out("\n")
 
-    # Exch-Ind without S^2
+    # Exch-Ind without S^2 (Sinf calculations)
     if Sinf:
         nocc_A = cache["Cocc_A"].shape[1]
         nocc_B = cache["Cocc_B"].shape[1]
-        SAB = core.triplet(
-            cache["Cocc_A"], cache["S"], cache["Cocc_B"], True, False, False
-        )
+        
+        # Compute SAB using einsums
+        SAB_tmp = ein.utils.tensor_factory("SAB_tmp", [nocc_A, S.shape[1]], np.float64, 'numpy')
+        SAB = ein.utils.tensor_factory("SAB", [nocc_A, nocc_B], np.float64, 'numpy')
+        plan_matmul_tt.execute(0.0, SAB_tmp, 1.0, cache["Cocc_A"].T, S)
+        plan_matmul_tt.execute(0.0, SAB, 1.0, SAB_tmp, cache["Cocc_B"])
+        
         num_occ = nocc_A + nocc_B
 
+        # Build Sab matrix (still using psi4 Matrix for matrix operations like power)
         Sab = core.Matrix(num_occ, num_occ)
-        Sab.np[:nocc_A, nocc_A:] = SAB.np
-        Sab.np[nocc_A:, :nocc_A] = SAB.np.T
+        Sab.np[:nocc_A, nocc_A:] = SAB
+        Sab.np[nocc_A:, :nocc_A] = SAB.T
         Sab.np[np.diag_indices_from(Sab.np)] += 1
         Sab.power(-1.0, 1.0e-14)
 
-        Tmo_AA = core.Matrix.from_array(Sab.np[:nocc_A, :nocc_A])
-        Tmo_BB = core.Matrix.from_array(Sab.np[nocc_A:, nocc_A:])
-        Tmo_AB = core.Matrix.from_array(Sab.np[:nocc_A, nocc_A:])
+        Tmo_AA = ein.core.RuntimeTensorD(Sab.np[:nocc_A, :nocc_A])
+        Tmo_BB = ein.core.RuntimeTensorD(Sab.np[nocc_A:, nocc_A:])
+        Tmo_AB = ein.core.RuntimeTensorD(Sab.np[:nocc_A, nocc_A:])
 
-        T_A = core.triplet(cache["Cocc_A"], Tmo_AA, cache["Cocc_A"], False, False, True)
-        T_B = core.triplet(cache["Cocc_B"], Tmo_BB, cache["Cocc_B"], False, False, True)
-        T_AB = core.triplet(
-            cache["Cocc_A"], Tmo_AB, cache["Cocc_B"], False, False, True
-        )
+        # Compute T matrices using einsums
+        T_A_tmp = ein.utils.tensor_factory("T_A_tmp", [cache["Cocc_A"].shape[0], Tmo_AA.shape[1]], np.float64, 'numpy')
+        T_A = ein.utils.tensor_factory("T_A", [cache["Cocc_A"].shape[0], cache["Cocc_A"].shape[0]], np.float64, 'numpy')
+        plan_matmul_tt.execute(0.0, T_A_tmp, 1.0, cache["Cocc_A"], Tmo_AA)
+        plan_matmul_tt.execute(0.0, T_A, 1.0, T_A_tmp, cache["Cocc_A"].T)
 
-        sT_A = core.Matrix.chain_dot(
-            cache["Cvir_A"],
-            unc_x_B_MOA,
-            Tmo_AA,
-            cache["Cocc_A"],
-            trans=[False, True, False, True],
-        )
-        sT_B = core.Matrix.chain_dot(
-            cache["Cvir_B"],
-            unc_x_A_MOB,
-            Tmo_BB,
-            cache["Cocc_B"],
-            trans=[False, True, False, True],
-        )
-        sT_AB = core.Matrix.chain_dot(
-            cache["Cvir_A"],
-            unc_x_B_MOA,
-            Tmo_AB,
-            cache["Cocc_B"],
-            trans=[False, True, False, True],
-        )
-        sT_BA = core.Matrix.chain_dot(
-            cache["Cvir_B"],
-            unc_x_A_MOB,
-            Tmo_AB,
-            cache["Cocc_A"],
-            trans=[False, True, True, True],
-        )
+        T_B_tmp = ein.utils.tensor_factory("T_B_tmp", [cache["Cocc_B"].shape[0], Tmo_BB.shape[1]], np.float64, 'numpy')
+        T_B = ein.utils.tensor_factory("T_B", [cache["Cocc_B"].shape[0], cache["Cocc_B"].shape[0]], np.float64, 'numpy')
+        plan_matmul_tt.execute(0.0, T_B_tmp, 1.0, cache["Cocc_B"], Tmo_BB)
+        plan_matmul_tt.execute(0.0, T_B, 1.0, T_B_tmp, cache["Cocc_B"].T)
 
+        T_AB_tmp = ein.utils.tensor_factory("T_AB_tmp", [cache["Cocc_A"].shape[0], Tmo_AB.shape[1]], np.float64, 'numpy')
+        T_AB = ein.utils.tensor_factory("T_AB", [cache["Cocc_A"].shape[0], cache["Cocc_B"].shape[0]], np.float64, 'numpy')
+        plan_matmul_tt.execute(0.0, T_AB_tmp, 1.0, cache["Cocc_A"], Tmo_AB)
+        plan_matmul_tt.execute(0.0, T_AB, 1.0, T_AB_tmp, cache["Cocc_B"].T)
+
+        # Compute sT matrices using einsums
+        sT_A_tmp1 = ein.utils.tensor_factory("sT_A_tmp1", [cache["Cvir_A"].shape[1], unc_x_B_MOA.shape[0]], np.float64, 'numpy')
+        sT_A_tmp2 = ein.utils.tensor_factory("sT_A_tmp2", [cache["Cvir_A"].shape[1], Tmo_AA.shape[1]], np.float64, 'numpy')
+        sT_A = ein.utils.tensor_factory("sT_A", [cache["Cvir_A"].shape[0], cache["Cocc_A"].shape[0]], np.float64, 'numpy')
+        plan_matmul_tt.execute(0.0, sT_A_tmp1, 1.0, cache["Cvir_A"].T, unc_x_B_MOA.T)
+        plan_matmul_tt.execute(0.0, sT_A_tmp2, 1.0, sT_A_tmp1, Tmo_AA)
+        plan_matmul_tt.execute(0.0, sT_A, 1.0, sT_A_tmp2.T, cache["Cocc_A"].T)
+
+        sT_B_tmp1 = ein.utils.tensor_factory("sT_B_tmp1", [cache["Cvir_B"].shape[1], unc_x_A_MOB.shape[0]], np.float64, 'numpy')
+        sT_B_tmp2 = ein.utils.tensor_factory("sT_B_tmp2", [cache["Cvir_B"].shape[1], Tmo_BB.shape[1]], np.float64, 'numpy')
+        sT_B = ein.utils.tensor_factory("sT_B", [cache["Cvir_B"].shape[0], cache["Cocc_B"].shape[0]], np.float64, 'numpy')
+        plan_matmul_tt.execute(0.0, sT_B_tmp1, 1.0, cache["Cvir_B"].T, unc_x_A_MOB.T)
+        plan_matmul_tt.execute(0.0, sT_B_tmp2, 1.0, sT_B_tmp1, Tmo_BB)
+        plan_matmul_tt.execute(0.0, sT_B, 1.0, sT_B_tmp2.T, cache["Cocc_B"].T)
+
+        sT_AB_tmp1 = ein.utils.tensor_factory("sT_AB_tmp1", [cache["Cvir_A"].shape[1], unc_x_B_MOA.shape[0]], np.float64, 'numpy')
+        sT_AB_tmp2 = ein.utils.tensor_factory("sT_AB_tmp2", [cache["Cvir_A"].shape[1], Tmo_AB.shape[1]], np.float64, 'numpy')
+        sT_AB = ein.utils.tensor_factory("sT_AB", [cache["Cvir_A"].shape[0], cache["Cocc_B"].shape[0]], np.float64, 'numpy')
+        plan_matmul_tt.execute(0.0, sT_AB_tmp1, 1.0, cache["Cvir_A"].T, unc_x_B_MOA.T)
+        plan_matmul_tt.execute(0.0, sT_AB_tmp2, 1.0, sT_AB_tmp1, Tmo_AB)
+        plan_matmul_tt.execute(0.0, sT_AB, 1.0, sT_AB_tmp2.T, cache["Cocc_B"].T)
+
+        sT_BA_tmp1 = ein.utils.tensor_factory("sT_BA_tmp1", [cache["Cvir_B"].shape[1], unc_x_A_MOB.shape[0]], np.float64, 'numpy')
+        sT_BA_tmp2 = ein.utils.tensor_factory("sT_BA_tmp2", [cache["Cvir_B"].shape[1], Tmo_AB.shape[0]], np.float64, 'numpy')
+        sT_BA = ein.utils.tensor_factory("sT_BA", [cache["Cvir_B"].shape[0], cache["Cocc_A"].shape[0]], np.float64, 'numpy')
+        plan_matmul_tt.execute(0.0, sT_BA_tmp1, 1.0, cache["Cvir_B"].T, unc_x_A_MOB.T)
+        plan_matmul_tt.execute(0.0, sT_BA_tmp2, 1.0, sT_BA_tmp1, Tmo_AB.T)
+        plan_matmul_tt.execute(0.0, sT_BA, 1.0, sT_BA_tmp2.T, cache["Cocc_A"].T)
+
+        # Compute JK matrices for Sinf
         jk.C_clear()
+        
+        CA_Tmo_AA = ein.utils.tensor_factory("CA_Tmo_AA", [cache["Cocc_A"].shape[0], Tmo_AA.shape[1]], np.float64, 'numpy')
+        CB_Tmo_BB = ein.utils.tensor_factory("CB_Tmo_BB", [cache["Cocc_B"].shape[0], Tmo_BB.shape[1]], np.float64, 'numpy')
+        CA_Tmo_AB = ein.utils.tensor_factory("CA_Tmo_AB", [cache["Cocc_A"].shape[0], Tmo_AB.shape[1]], np.float64, 'numpy')
+        
+        plan_matmul_tt.execute(0.0, CA_Tmo_AA, 1.0, cache["Cocc_A"], Tmo_AA)
+        plan_matmul_tt.execute(0.0, CB_Tmo_BB, 1.0, cache["Cocc_B"], Tmo_BB)
+        plan_matmul_tt.execute(0.0, CA_Tmo_AB, 1.0, cache["Cocc_A"], Tmo_AB)
 
-        jk.C_left_add(core.Matrix.chain_dot(cache["Cocc_A"], Tmo_AA))
-        jk.C_right_add(cache["Cocc_A"])
+        jk.C_left_add(core.Matrix.from_array(CA_Tmo_AA))
+        jk.C_right_add(core.Matrix.from_array(cache["Cocc_A"]))
 
-        jk.C_left_add(core.Matrix.chain_dot(cache["Cocc_B"], Tmo_BB))
-        jk.C_right_add(cache["Cocc_B"])
+        jk.C_left_add(core.Matrix.from_array(CB_Tmo_BB))
+        jk.C_right_add(core.Matrix.from_array(cache["Cocc_B"]))
 
-        jk.C_left_add(core.Matrix.chain_dot(cache["Cocc_A"], Tmo_AB))
-        jk.C_right_add(cache["Cocc_B"])
+        jk.C_left_add(core.Matrix.from_array(CA_Tmo_AB))
+        jk.C_right_add(core.Matrix.from_array(cache["Cocc_B"]))
 
         jk.compute()
 
         J_AA_inf, J_BB_inf, J_AB_inf = jk.J()
         K_AA_inf, K_BB_inf, K_AB_inf = jk.K()
 
-        # A <- B
-        EX_AA_inf = V_B.clone()
-        EX_AA_inf.axpy(
-            -1.00, core.Matrix.chain_dot(S, T_AB, V_B, trans=[False, True, False])
-        )
-        EX_AA_inf.axpy(-1.00, core.Matrix.chain_dot(S, T_B, V_B))
-        EX_AA_inf.axpy(2.00, J_AB_inf)
-        EX_AA_inf.axpy(
-            -2.00, core.Matrix.chain_dot(S, T_AB, J_AB_inf, trans=[False, True, False])
-        )
-        EX_AA_inf.axpy(-2.00, core.Matrix.chain_dot(S, T_B, J_AB_inf))
-        EX_AA_inf.axpy(2.00, J_BB_inf)
-        EX_AA_inf.axpy(
-            -2.00, core.Matrix.chain_dot(S, T_AB, J_BB_inf, trans=[False, True, False])
-        )
-        EX_AA_inf.axpy(-2.00, core.Matrix.chain_dot(S, T_B, J_BB_inf))
-        EX_AA_inf.axpy(-1.00, K_AB_inf.transpose())
-        EX_AA_inf.axpy(
-            1.00, core.Matrix.chain_dot(S, T_AB, K_AB_inf, trans=[False, True, True])
-        )
-        EX_AA_inf.axpy(
-            1.00, core.Matrix.chain_dot(S, T_B, K_AB_inf, trans=[False, False, True])
-        )
-        EX_AA_inf.axpy(-1.00, K_BB_inf)
-        EX_AA_inf.axpy(
-            1.00, core.Matrix.chain_dot(S, T_AB, K_BB_inf, trans=[False, True, False])
-        )
-        EX_AA_inf.axpy(1.00, core.Matrix.chain_dot(S, T_B, K_BB_inf))
+        J_AA_inf = ein.core.RuntimeTensorD(J_AA_inf.np)
+        J_BB_inf = ein.core.RuntimeTensorD(J_BB_inf.np)
+        J_AB_inf = ein.core.RuntimeTensorD(J_AB_inf.np)
+        K_AA_inf = ein.core.RuntimeTensorD(K_AA_inf.np)
+        K_BB_inf = ein.core.RuntimeTensorD(K_BB_inf.np)
+        K_AB_inf = ein.core.RuntimeTensorD(K_AB_inf.np)
 
-        EX_AB_inf = V_A.clone()
-        EX_AB_inf.axpy(
-            -1.00, core.Matrix.chain_dot(S, T_AB, V_A, trans=[False, True, False])
-        )
-        EX_AB_inf.axpy(-1.00, core.Matrix.chain_dot(S, T_B, V_A))
-        EX_AB_inf.axpy(2.00, J_AA_inf)
-        EX_AB_inf.axpy(
-            -2.00, core.Matrix.chain_dot(S, T_AB, J_AA_inf, trans=[False, True, False])
-        )
-        EX_AB_inf.axpy(-2.00, core.Matrix.chain_dot(S, T_B, J_AA_inf))
-        EX_AB_inf.axpy(2.00, J_AB_inf)
-        EX_AB_inf.axpy(
-            -2.00, core.Matrix.chain_dot(S, T_AB, J_AB_inf, trans=[False, True, False])
-        )
-        EX_AB_inf.axpy(-2.00, core.Matrix.chain_dot(S, T_B, J_AB_inf))
-        EX_AB_inf.axpy(-1.00, K_AA_inf)
-        EX_AB_inf.axpy(
-            1.00, core.Matrix.chain_dot(S, T_AB, K_AA_inf, trans=[False, True, False])
-        )
-        EX_AB_inf.axpy(1.00, core.Matrix.chain_dot(S, T_B, K_AA_inf))
-        EX_AB_inf.axpy(-1.00, K_AB_inf)
-        EX_AB_inf.axpy(
-            1.00, core.Matrix.chain_dot(S, T_AB, K_AB_inf, trans=[False, True, False])
-        )
-        EX_AB_inf.axpy(1.00, core.Matrix.chain_dot(S, T_B, K_AB_inf))
+        # Build EX_AA_inf (A <- B)
+        EX_AA_inf = V_B.copy()
+        
+        # Compute all intermediate tensors for EX_AA_inf
+        S_TAB_T_VB = ein.utils.tensor_factory("S_TAB_T_VB", [S.shape[0], V_B.shape[1]], np.float64, 'numpy')
+        S_TB_VB = ein.utils.tensor_factory("S_TB_VB", [S.shape[0], V_B.shape[1]], np.float64, 'numpy')
+        S_TAB_T_JAB_inf = ein.utils.tensor_factory("S_TAB_T_JAB_inf", [S.shape[0], J_AB_inf.shape[1]], np.float64, 'numpy')
+        S_TB_JAB_inf = ein.utils.tensor_factory("S_TB_JAB_inf", [S.shape[0], J_AB_inf.shape[1]], np.float64, 'numpy')
+        S_TAB_T_JBB_inf = ein.utils.tensor_factory("S_TAB_T_JBB_inf", [S.shape[0], J_BB_inf.shape[1]], np.float64, 'numpy')
+        S_TB_JBB_inf = ein.utils.tensor_factory("S_TB_JBB_inf", [S.shape[0], J_BB_inf.shape[1]], np.float64, 'numpy')
+        S_TAB_T_KAB_inf_T = ein.utils.tensor_factory("S_TAB_T_KAB_inf_T", [S.shape[0], K_AB_inf.shape[0]], np.float64, 'numpy')
+        S_TB_KAB_inf_T = ein.utils.tensor_factory("S_TB_KAB_inf_T", [S.shape[0], K_AB_inf.shape[0]], np.float64, 'numpy')
+        S_TAB_T_KBB_inf = ein.utils.tensor_factory("S_TAB_T_KBB_inf", [S.shape[0], K_BB_inf.shape[1]], np.float64, 'numpy')
+        S_TB_KBB_inf = ein.utils.tensor_factory("S_TB_KBB_inf", [S.shape[0], K_BB_inf.shape[1]], np.float64, 'numpy')
 
-        # B <- A
-        EX_BB_inf = V_A.clone()
-        EX_BB_inf.axpy(-1.00, core.Matrix.chain_dot(S, T_AB, V_A))
-        EX_BB_inf.axpy(-1.00, core.Matrix.chain_dot(S, T_A, V_A))
-        EX_BB_inf.axpy(2.00, J_AB_inf)
-        EX_BB_inf.axpy(-2.00, core.Matrix.chain_dot(S, T_AB, J_AB_inf))
-        EX_BB_inf.axpy(-2.00, core.Matrix.chain_dot(S, T_A, J_AB_inf))
-        EX_BB_inf.axpy(2.00, J_AA_inf)
-        EX_BB_inf.axpy(-2.00, core.Matrix.chain_dot(S, T_AB, J_AA_inf))
-        EX_BB_inf.axpy(-2.00, core.Matrix.chain_dot(S, T_A, J_AA_inf))
-        EX_BB_inf.axpy(-1.00, K_AB_inf)
-        EX_BB_inf.axpy(1.00, core.Matrix.chain_dot(S, T_AB, K_AB_inf))
-        EX_BB_inf.axpy(1.00, core.Matrix.chain_dot(S, T_A, K_AB_inf))
-        EX_BB_inf.axpy(-1.00, K_AA_inf)
-        EX_BB_inf.axpy(1.00, core.Matrix.chain_dot(S, T_AB, K_AA_inf))
-        EX_BB_inf.axpy(1.00, core.Matrix.chain_dot(S, T_A, K_AA_inf))
+        plan_matmul_tt.execute(0.0, S_TAB_T_VB, 1.0, S, T_AB.T)
+        plan_matmul_tt.execute(0.0, S_TAB_T_VB, 1.0, S_TAB_T_VB, V_B)
+        plan_matmul_tt.execute(0.0, S_TB_VB, 1.0, S, T_B)
+        plan_matmul_tt.execute(0.0, S_TB_VB, 1.0, S_TB_VB, V_B)
+        
+        plan_matmul_tt.execute(0.0, S_TAB_T_JAB_inf, 1.0, S, T_AB.T)
+        plan_matmul_tt.execute(0.0, S_TAB_T_JAB_inf, 1.0, S_TAB_T_JAB_inf, J_AB_inf)
+        plan_matmul_tt.execute(0.0, S_TB_JAB_inf, 1.0, S, T_B)
+        plan_matmul_tt.execute(0.0, S_TB_JAB_inf, 1.0, S_TB_JAB_inf, J_AB_inf)
+        
+        plan_matmul_tt.execute(0.0, S_TAB_T_JBB_inf, 1.0, S, T_AB.T)
+        plan_matmul_tt.execute(0.0, S_TAB_T_JBB_inf, 1.0, S_TAB_T_JBB_inf, J_BB_inf)
+        plan_matmul_tt.execute(0.0, S_TB_JBB_inf, 1.0, S, T_B)
+        plan_matmul_tt.execute(0.0, S_TB_JBB_inf, 1.0, S_TB_JBB_inf, J_BB_inf)
+        
+        plan_matmul_tt.execute(0.0, S_TAB_T_KAB_inf_T, 1.0, S, T_AB.T)
+        plan_matmul_tt.execute(0.0, S_TAB_T_KAB_inf_T, 1.0, S_TAB_T_KAB_inf_T, K_AB_inf.T)
+        plan_matmul_tt.execute(0.0, S_TB_KAB_inf_T, 1.0, S, T_B)
+        plan_matmul_tt.execute(0.0, S_TB_KAB_inf_T, 1.0, S_TB_KAB_inf_T, K_AB_inf.T)
+        
+        plan_matmul_tt.execute(0.0, S_TAB_T_KBB_inf, 1.0, S, T_AB.T)
+        plan_matmul_tt.execute(0.0, S_TAB_T_KBB_inf, 1.0, S_TAB_T_KBB_inf, K_BB_inf)
+        plan_matmul_tt.execute(0.0, S_TB_KBB_inf, 1.0, S, T_B)
+        plan_matmul_tt.execute(0.0, S_TB_KBB_inf, 1.0, S_TB_KBB_inf, K_BB_inf)
 
-        EX_BA_inf = V_B.clone()
-        EX_BA_inf.axpy(-1.00, core.Matrix.chain_dot(S, T_AB, V_B))
-        EX_BA_inf.axpy(-1.00, core.Matrix.chain_dot(S, T_A, V_B))
-        EX_BA_inf.axpy(2.00, J_BB_inf)
-        EX_BA_inf.axpy(-2.00, core.Matrix.chain_dot(S, T_AB, J_BB_inf))
-        EX_BA_inf.axpy(-2.00, core.Matrix.chain_dot(S, T_A, J_BB_inf))
-        EX_BA_inf.axpy(2.00, J_AB_inf)
-        EX_BA_inf.axpy(-2.00, core.Matrix.chain_dot(S, T_AB, J_AB_inf))
-        EX_BA_inf.axpy(-2.00, core.Matrix.chain_dot(S, T_A, J_AB_inf))
-        EX_BA_inf.axpy(-1.00, K_BB_inf)
-        EX_BA_inf.axpy(1.00, core.Matrix.chain_dot(S, T_AB, K_BB_inf))
-        EX_BA_inf.axpy(1.00, core.Matrix.chain_dot(S, T_A, K_BB_inf))
-        EX_BA_inf.axpy(-1.00, K_AB_inf.transpose())
-        EX_BA_inf.axpy(
-            1.00, core.Matrix.chain_dot(S, T_AB, K_AB_inf, trans=[False, False, True])
-        )
-        EX_BA_inf.axpy(
-            1.00, core.Matrix.chain_dot(S, T_A, K_AB_inf, trans=[False, False, True])
-        )
+        # Apply operations to EX_AA_inf
+        ein.core.axpy(-1.0, S_TAB_T_VB, EX_AA_inf)
+        ein.core.axpy(-1.0, S_TB_VB, EX_AA_inf)
+        ein.core.axpy(2.0, J_AB_inf, EX_AA_inf)
+        ein.core.axpy(-2.0, S_TAB_T_JAB_inf, EX_AA_inf)
+        ein.core.axpy(-2.0, S_TB_JAB_inf, EX_AA_inf)
+        ein.core.axpy(2.0, J_BB_inf, EX_AA_inf)
+        ein.core.axpy(-2.0, S_TAB_T_JBB_inf, EX_AA_inf)
+        ein.core.axpy(-2.0, S_TB_JBB_inf, EX_AA_inf)
+        ein.core.axpy(-1.0, K_AB_inf.T, EX_AA_inf)
+        ein.core.axpy(1.0, S_TAB_T_KAB_inf_T, EX_AA_inf)
+        ein.core.axpy(1.0, S_TB_KAB_inf_T, EX_AA_inf)
+        ein.core.axpy(-1.0, K_BB_inf, EX_AA_inf)
+        ein.core.axpy(1.0, S_TAB_T_KBB_inf, EX_AA_inf)
+        ein.core.axpy(1.0, S_TB_KBB_inf, EX_AA_inf)
 
-        unc_ind_ab_total = 2.0 * (
-            sT_A.vector_dot(EX_AA_inf) + sT_AB.vector_dot(EX_AB_inf)
-        )
-        unc_ind_ba_total = 2.0 * (
-            sT_B.vector_dot(EX_BB_inf) + sT_BA.vector_dot(EX_BA_inf)
-        )
+        # Build EX_AB_inf
+        EX_AB_inf = V_A.copy()
+        
+        # Compute all intermediate tensors for EX_AB_inf
+        S_TAB_T_VA = ein.utils.tensor_factory("S_TAB_T_VA", [S.shape[0], V_A.shape[1]], np.float64, 'numpy')
+        S_TB_VA = ein.utils.tensor_factory("S_TB_VA", [S.shape[0], V_A.shape[1]], np.float64, 'numpy')
+        S_TAB_T_JAA_inf = ein.utils.tensor_factory("S_TAB_T_JAA_inf", [S.shape[0], J_AA_inf.shape[1]], np.float64, 'numpy')
+        S_TB_JAA_inf = ein.utils.tensor_factory("S_TB_JAA_inf", [S.shape[0], J_AA_inf.shape[1]], np.float64, 'numpy')
+        S_TAB_T_JAB_inf_2 = ein.utils.tensor_factory("S_TAB_T_JAB_inf_2", [S.shape[0], J_AB_inf.shape[1]], np.float64, 'numpy')
+        S_TB_JAB_inf_2 = ein.utils.tensor_factory("S_TB_JAB_inf_2", [S.shape[0], J_AB_inf.shape[1]], np.float64, 'numpy')
+        S_TAB_T_KAA_inf = ein.utils.tensor_factory("S_TAB_T_KAA_inf", [S.shape[0], K_AA_inf.shape[1]], np.float64, 'numpy')
+        S_TB_KAA_inf = ein.utils.tensor_factory("S_TB_KAA_inf", [S.shape[0], K_AA_inf.shape[1]], np.float64, 'numpy')
+        S_TAB_T_KAB_inf_2 = ein.utils.tensor_factory("S_TAB_T_KAB_inf_2", [S.shape[0], K_AB_inf.shape[1]], np.float64, 'numpy')
+        S_TB_KAB_inf_2 = ein.utils.tensor_factory("S_TB_KAB_inf_2", [S.shape[0], K_AB_inf.shape[1]], np.float64, 'numpy')
+
+        plan_matmul_tt.execute(0.0, S_TAB_T_VA, 1.0, S, T_AB.T)
+        plan_matmul_tt.execute(0.0, S_TAB_T_VA, 1.0, S_TAB_T_VA, V_A)
+        plan_matmul_tt.execute(0.0, S_TB_VA, 1.0, S, T_B)
+        plan_matmul_tt.execute(0.0, S_TB_VA, 1.0, S_TB_VA, V_A)
+        
+        plan_matmul_tt.execute(0.0, S_TAB_T_JAA_inf, 1.0, S, T_AB.T)
+        plan_matmul_tt.execute(0.0, S_TAB_T_JAA_inf, 1.0, S_TAB_T_JAA_inf, J_AA_inf)
+        plan_matmul_tt.execute(0.0, S_TB_JAA_inf, 1.0, S, T_B)
+        plan_matmul_tt.execute(0.0, S_TB_JAA_inf, 1.0, S_TB_JAA_inf, J_AA_inf)
+        
+        plan_matmul_tt.execute(0.0, S_TAB_T_JAB_inf_2, 1.0, S, T_AB.T)
+        plan_matmul_tt.execute(0.0, S_TAB_T_JAB_inf_2, 1.0, S_TAB_T_JAB_inf_2, J_AB_inf)
+        plan_matmul_tt.execute(0.0, S_TB_JAB_inf_2, 1.0, S, T_B)
+        plan_matmul_tt.execute(0.0, S_TB_JAB_inf_2, 1.0, S_TB_JAB_inf_2, J_AB_inf)
+        
+        plan_matmul_tt.execute(0.0, S_TAB_T_KAA_inf, 1.0, S, T_AB.T)
+        plan_matmul_tt.execute(0.0, S_TAB_T_KAA_inf, 1.0, S_TAB_T_KAA_inf, K_AA_inf)
+        plan_matmul_tt.execute(0.0, S_TB_KAA_inf, 1.0, S, T_B)
+        plan_matmul_tt.execute(0.0, S_TB_KAA_inf, 1.0, S_TB_KAA_inf, K_AA_inf)
+        
+        plan_matmul_tt.execute(0.0, S_TAB_T_KAB_inf_2, 1.0, S, T_AB.T)
+        plan_matmul_tt.execute(0.0, S_TAB_T_KAB_inf_2, 1.0, S_TAB_T_KAB_inf_2, K_AB_inf)
+        plan_matmul_tt.execute(0.0, S_TB_KAB_inf_2, 1.0, S, T_B)
+        plan_matmul_tt.execute(0.0, S_TB_KAB_inf_2, 1.0, S_TB_KAB_inf_2, K_AB_inf)
+
+        # Apply operations to EX_AB_inf
+        ein.core.axpy(-1.0, S_TAB_T_VA, EX_AB_inf)
+        ein.core.axpy(-1.0, S_TB_VA, EX_AB_inf)
+        ein.core.axpy(2.0, J_AA_inf, EX_AB_inf)
+        ein.core.axpy(-2.0, S_TAB_T_JAA_inf, EX_AB_inf)
+        ein.core.axpy(-2.0, S_TB_JAA_inf, EX_AB_inf)
+        ein.core.axpy(2.0, J_AB_inf, EX_AB_inf)
+        ein.core.axpy(-2.0, S_TAB_T_JAB_inf_2, EX_AB_inf)
+        ein.core.axpy(-2.0, S_TB_JAB_inf_2, EX_AB_inf)
+        ein.core.axpy(-1.0, K_AA_inf, EX_AB_inf)
+        ein.core.axpy(1.0, S_TAB_T_KAA_inf, EX_AB_inf)
+        ein.core.axpy(1.0, S_TB_KAA_inf, EX_AB_inf)
+        ein.core.axpy(-1.0, K_AB_inf, EX_AB_inf)
+        ein.core.axpy(1.0, S_TAB_T_KAB_inf_2, EX_AB_inf)
+        ein.core.axpy(1.0, S_TB_KAB_inf_2, EX_AB_inf)
+
+        # Build EX_BB_inf (B <- A)
+        EX_BB_inf = V_A.copy()
+        
+        # Compute all intermediate tensors for EX_BB_inf
+        S_TAB_VA = ein.utils.tensor_factory("S_TAB_VA", [S.shape[0], V_A.shape[1]], np.float64, 'numpy')
+        S_TA_VA = ein.utils.tensor_factory("S_TA_VA", [S.shape[0], V_A.shape[1]], np.float64, 'numpy')
+        S_TAB_JAB_inf = ein.utils.tensor_factory("S_TAB_JAB_inf", [S.shape[0], J_AB_inf.shape[1]], np.float64, 'numpy')
+        S_TA_JAB_inf = ein.utils.tensor_factory("S_TA_JAB_inf", [S.shape[0], J_AB_inf.shape[1]], np.float64, 'numpy')
+        S_TAB_JAA_inf = ein.utils.tensor_factory("S_TAB_JAA_inf", [S.shape[0], J_AA_inf.shape[1]], np.float64, 'numpy')
+        S_TA_JAA_inf = ein.utils.tensor_factory("S_TA_JAA_inf", [S.shape[0], J_AA_inf.shape[1]], np.float64, 'numpy')
+        S_TAB_KAB_inf = ein.utils.tensor_factory("S_TAB_KAB_inf", [S.shape[0], K_AB_inf.shape[1]], np.float64, 'numpy')
+        S_TA_KAB_inf = ein.utils.tensor_factory("S_TA_KAB_inf", [S.shape[0], K_AB_inf.shape[1]], np.float64, 'numpy')
+        S_TAB_KAA_inf = ein.utils.tensor_factory("S_TAB_KAA_inf", [S.shape[0], K_AA_inf.shape[1]], np.float64, 'numpy')
+        S_TA_KAA_inf = ein.utils.tensor_factory("S_TA_KAA_inf", [S.shape[0], K_AA_inf.shape[1]], np.float64, 'numpy')
+
+        plan_matmul_tt.execute(0.0, S_TAB_VA, 1.0, S, T_AB)
+        plan_matmul_tt.execute(0.0, S_TAB_VA, 1.0, S_TAB_VA, V_A)
+        plan_matmul_tt.execute(0.0, S_TA_VA, 1.0, S, T_A)
+        plan_matmul_tt.execute(0.0, S_TA_VA, 1.0, S_TA_VA, V_A)
+        
+        plan_matmul_tt.execute(0.0, S_TAB_JAB_inf, 1.0, S, T_AB)
+        plan_matmul_tt.execute(0.0, S_TAB_JAB_inf, 1.0, S_TAB_JAB_inf, J_AB_inf)
+        plan_matmul_tt.execute(0.0, S_TA_JAB_inf, 1.0, S, T_A)
+        plan_matmul_tt.execute(0.0, S_TA_JAB_inf, 1.0, S_TA_JAB_inf, J_AB_inf)
+        
+        plan_matmul_tt.execute(0.0, S_TAB_JAA_inf, 1.0, S, T_AB)
+        plan_matmul_tt.execute(0.0, S_TAB_JAA_inf, 1.0, S_TAB_JAA_inf, J_AA_inf)
+        plan_matmul_tt.execute(0.0, S_TA_JAA_inf, 1.0, S, T_A)
+        plan_matmul_tt.execute(0.0, S_TA_JAA_inf, 1.0, S_TA_JAA_inf, J_AA_inf)
+        
+        plan_matmul_tt.execute(0.0, S_TAB_KAB_inf, 1.0, S, T_AB)
+        plan_matmul_tt.execute(0.0, S_TAB_KAB_inf, 1.0, S_TAB_KAB_inf, K_AB_inf)
+        plan_matmul_tt.execute(0.0, S_TA_KAB_inf, 1.0, S, T_A)
+        plan_matmul_tt.execute(0.0, S_TA_KAB_inf, 1.0, S_TA_KAB_inf, K_AB_inf)
+        
+        plan_matmul_tt.execute(0.0, S_TAB_KAA_inf, 1.0, S, T_AB)
+        plan_matmul_tt.execute(0.0, S_TAB_KAA_inf, 1.0, S_TAB_KAA_inf, K_AA_inf)
+        plan_matmul_tt.execute(0.0, S_TA_KAA_inf, 1.0, S, T_A)
+        plan_matmul_tt.execute(0.0, S_TA_KAA_inf, 1.0, S_TA_KAA_inf, K_AA_inf)
+
+        # Apply operations to EX_BB_inf
+        ein.core.axpy(-1.0, S_TAB_VA, EX_BB_inf)
+        ein.core.axpy(-1.0, S_TA_VA, EX_BB_inf)
+        ein.core.axpy(2.0, J_AB_inf, EX_BB_inf)
+        ein.core.axpy(-2.0, S_TAB_JAB_inf, EX_BB_inf)
+        ein.core.axpy(-2.0, S_TA_JAB_inf, EX_BB_inf)
+        ein.core.axpy(2.0, J_AA_inf, EX_BB_inf)
+        ein.core.axpy(-2.0, S_TAB_JAA_inf, EX_BB_inf)
+        ein.core.axpy(-2.0, S_TA_JAA_inf, EX_BB_inf)
+        ein.core.axpy(-1.0, K_AB_inf, EX_BB_inf)
+        ein.core.axpy(1.0, S_TAB_KAB_inf, EX_BB_inf)
+        ein.core.axpy(1.0, S_TA_KAB_inf, EX_BB_inf)
+        ein.core.axpy(-1.0, K_AA_inf, EX_BB_inf)
+        ein.core.axpy(1.0, S_TAB_KAA_inf, EX_BB_inf)
+        ein.core.axpy(1.0, S_TA_KAA_inf, EX_BB_inf)
+
+        # Build EX_BA_inf
+        EX_BA_inf = V_B.copy()
+        
+        # Compute all intermediate tensors for EX_BA_inf
+        S_TAB_VB = ein.utils.tensor_factory("S_TAB_VB", [S.shape[0], V_B.shape[1]], np.float64, 'numpy')
+        S_TA_VB = ein.utils.tensor_factory("S_TA_VB", [S.shape[0], V_B.shape[1]], np.float64, 'numpy')
+        S_TAB_JBB_inf_2 = ein.utils.tensor_factory("S_TAB_JBB_inf_2", [S.shape[0], J_BB_inf.shape[1]], np.float64, 'numpy')
+        S_TA_JBB_inf_2 = ein.utils.tensor_factory("S_TA_JBB_inf_2", [S.shape[0], J_BB_inf.shape[1]], np.float64, 'numpy')
+        S_TAB_JAB_inf_3 = ein.utils.tensor_factory("S_TAB_JAB_inf_3", [S.shape[0], J_AB_inf.shape[1]], np.float64, 'numpy')
+        S_TA_JAB_inf_3 = ein.utils.tensor_factory("S_TA_JAB_inf_3", [S.shape[0], J_AB_inf.shape[1]], np.float64, 'numpy')
+        S_TAB_KBB_inf_2 = ein.utils.tensor_factory("S_TAB_KBB_inf_2", [S.shape[0], K_BB_inf.shape[1]], np.float64, 'numpy')
+        S_TA_KBB_inf_2 = ein.utils.tensor_factory("S_TA_KBB_inf_2", [S.shape[0], K_BB_inf.shape[1]], np.float64, 'numpy')
+        S_TAB_KAB_inf_T_2 = ein.utils.tensor_factory("S_TAB_KAB_inf_T_2", [S.shape[0], K_AB_inf.shape[0]], np.float64, 'numpy')
+        S_TA_KAB_inf_T_2 = ein.utils.tensor_factory("S_TA_KAB_inf_T_2", [S.shape[0], K_AB_inf.shape[0]], np.float64, 'numpy')
+
+        plan_matmul_tt.execute(0.0, S_TAB_VB, 1.0, S, T_AB)
+        plan_matmul_tt.execute(0.0, S_TAB_VB, 1.0, S_TAB_VB, V_B)
+        plan_matmul_tt.execute(0.0, S_TA_VB, 1.0, S, T_A)
+        plan_matmul_tt.execute(0.0, S_TA_VB, 1.0, S_TA_VB, V_B)
+        
+        plan_matmul_tt.execute(0.0, S_TAB_JBB_inf_2, 1.0, S, T_AB)
+        plan_matmul_tt.execute(0.0, S_TAB_JBB_inf_2, 1.0, S_TAB_JBB_inf_2, J_BB_inf)
+        plan_matmul_tt.execute(0.0, S_TA_JBB_inf_2, 1.0, S, T_A)
+        plan_matmul_tt.execute(0.0, S_TA_JBB_inf_2, 1.0, S_TA_JBB_inf_2, J_BB_inf)
+        
+        plan_matmul_tt.execute(0.0, S_TAB_JAB_inf_3, 1.0, S, T_AB)
+        plan_matmul_tt.execute(0.0, S_TAB_JAB_inf_3, 1.0, S_TAB_JAB_inf_3, J_AB_inf)
+        plan_matmul_tt.execute(0.0, S_TA_JAB_inf_3, 1.0, S, T_A)
+        plan_matmul_tt.execute(0.0, S_TA_JAB_inf_3, 1.0, S_TA_JAB_inf_3, J_AB_inf)
+        
+        plan_matmul_tt.execute(0.0, S_TAB_KBB_inf_2, 1.0, S, T_AB)
+        plan_matmul_tt.execute(0.0, S_TAB_KBB_inf_2, 1.0, S_TAB_KBB_inf_2, K_BB_inf)
+        plan_matmul_tt.execute(0.0, S_TA_KBB_inf_2, 1.0, S, T_A)
+        plan_matmul_tt.execute(0.0, S_TA_KBB_inf_2, 1.0, S_TA_KBB_inf_2, K_BB_inf)
+        
+        plan_matmul_tt.execute(0.0, S_TAB_KAB_inf_T_2, 1.0, S, T_AB)
+        plan_matmul_tt.execute(0.0, S_TAB_KAB_inf_T_2, 1.0, S_TAB_KAB_inf_T_2, K_AB_inf.T)
+        plan_matmul_tt.execute(0.0, S_TA_KAB_inf_T_2, 1.0, S, T_A)
+        plan_matmul_tt.execute(0.0, S_TA_KAB_inf_T_2, 1.0, S_TA_KAB_inf_T_2, K_AB_inf.T)
+
+        # Apply operations to EX_BA_inf
+        ein.core.axpy(-1.0, S_TAB_VB, EX_BA_inf)
+        ein.core.axpy(-1.0, S_TA_VB, EX_BA_inf)
+        ein.core.axpy(2.0, J_BB_inf, EX_BA_inf)
+        ein.core.axpy(-2.0, S_TAB_JBB_inf_2, EX_BA_inf)
+        ein.core.axpy(-2.0, S_TA_JBB_inf_2, EX_BA_inf)
+        ein.core.axpy(2.0, J_AB_inf, EX_BA_inf)
+        ein.core.axpy(-2.0, S_TAB_JAB_inf_3, EX_BA_inf)
+        ein.core.axpy(-2.0, S_TA_JAB_inf_3, EX_BA_inf)
+        ein.core.axpy(-1.0, K_BB_inf, EX_BA_inf)
+        ein.core.axpy(1.0, S_TAB_KBB_inf_2, EX_BA_inf)
+        ein.core.axpy(1.0, S_TA_KBB_inf_2, EX_BA_inf)
+        ein.core.axpy(-1.0, K_AB_inf.T, EX_BA_inf)
+        ein.core.axpy(1.0, S_TAB_KAB_inf_T_2, EX_BA_inf)
+        ein.core.axpy(1.0, S_TA_KAB_inf_T_2, EX_BA_inf)
+
+        # Compute uncoupled Sinf energies using vector dot products
+        unc_ind_ab_total_tensor_1 = ein.utils.tensor_factory("unc_ind_ab_total_1", [1], np.float64, 'numpy')
+        unc_ind_ab_total_tensor_2 = ein.utils.tensor_factory("unc_ind_ab_total_2", [1], np.float64, 'numpy')
+        unc_ind_ba_total_tensor_1 = ein.utils.tensor_factory("unc_ind_ba_total_1", [1], np.float64, 'numpy')
+        unc_ind_ba_total_tensor_2 = ein.utils.tensor_factory("unc_ind_ba_total_2", [1], np.float64, 'numpy')
+        
+        plan_vector_dot.execute(0.0, unc_ind_ab_total_tensor_1, 1.0, sT_A, EX_AA_inf)
+        plan_vector_dot.execute(0.0, unc_ind_ab_total_tensor_2, 1.0, sT_AB, EX_AB_inf)
+        plan_vector_dot.execute(0.0, unc_ind_ba_total_tensor_1, 1.0, sT_B, EX_BB_inf)
+        plan_vector_dot.execute(0.0, unc_ind_ba_total_tensor_2, 1.0, sT_BA, EX_BA_inf)
+
+        unc_ind_ab_total = 2.0 * (unc_ind_ab_total_tensor_1[0] + unc_ind_ab_total_tensor_2[0])
+        unc_ind_ba_total = 2.0 * (unc_ind_ba_total_tensor_1[0] + unc_ind_ba_total_tensor_2[0])
         unc_indexch_ab_inf = unc_ind_ab_total - unc_ind_ab
         unc_indexch_ba_inf = unc_ind_ba_total - unc_ind_ba
 
@@ -748,24 +1056,42 @@ def induction(
         if do_print:
             for name in plist[3:]:
                 name = name + " (S^inf)"
-
                 core.print_out(print_sapt_var(name, ret[name], short=True))
                 core.print_out("\n")
 
-    # Do coupled
+    # Do coupled induction calculations
     if do_response:
         core.print_out("\n   => Coupled Induction <= \n\n")
 
         cphf_r_convergence = core.get_option("SAPT", "CPHF_R_CONVERGENCE")
 
+        # Convert einsums tensors back to psi4 Matrices for CPHF solver
+        w_B_MOA_matrix = core.Matrix.from_array(w_B_MOA)
+        w_A_MOB_matrix = core.Matrix.from_array(w_A_MOB)
+
         x_B_MOA, x_A_MOB = _sapt_cpscf_solve(
-            cache, jk, w_B_MOA, w_A_MOB, 20, cphf_r_convergence, sapt_jk_B=sapt_jk_B
+            cache, jk, w_B_MOA_matrix, w_A_MOB_matrix, 20, cphf_r_convergence, sapt_jk_B=sapt_jk_B
         )
 
-        ind_ab = 2.0 * x_B_MOA.vector_dot(w_B_MOA)
-        ind_ba = 2.0 * x_A_MOB.vector_dot(w_A_MOB)
-        indexch_ab = 2.0 * x_B_MOA.vector_dot(EX_A)
-        indexch_ba = 2.0 * x_A_MOB.vector_dot(EX_B)
+        # Convert solution vectors back to einsums tensors
+        x_B_MOA_ein = ein.core.RuntimeTensorD(x_B_MOA.np)
+        x_A_MOB_ein = ein.core.RuntimeTensorD(x_A_MOB.np)
+
+        # Compute coupled induction energies
+        ind_ab_tensor = ein.utils.tensor_factory("ind_ab", [1], np.float64, 'numpy')
+        ind_ba_tensor = ein.utils.tensor_factory("ind_ba", [1], np.float64, 'numpy')
+        indexch_ab_tensor = ein.utils.tensor_factory("indexch_ab", [1], np.float64, 'numpy')
+        indexch_ba_tensor = ein.utils.tensor_factory("indexch_ba", [1], np.float64, 'numpy')
+
+        plan_vector_dot.execute(0.0, ind_ab_tensor, 1.0, x_B_MOA_ein, w_B_MOA)
+        plan_vector_dot.execute(0.0, ind_ba_tensor, 1.0, x_A_MOB_ein, w_A_MOB)
+        plan_vector_dot.execute(0.0, indexch_ab_tensor, 1.0, x_B_MOA_ein, EX_A_MO)
+        plan_vector_dot.execute(0.0, indexch_ba_tensor, 1.0, x_A_MOB_ein, EX_B_MO)
+
+        ind_ab = 2.0 * ind_ab_tensor[0]
+        ind_ba = 2.0 * ind_ba_tensor[0]
+        indexch_ab = 2.0 * indexch_ab_tensor[0]
+        indexch_ba = 2.0 * indexch_ba_tensor[0]
 
         ret["Ind20,r (A<-B)"] = ind_ab
         ret["Ind20,r (A->B)"] = ind_ba
@@ -778,48 +1104,53 @@ def induction(
             core.print_out("\n")
             for name in plist:
                 name = name.replace(",u", ",r")
-
-                # core.set_variable(name, ret[name])
                 core.print_out(print_sapt_var(name, ret[name], short=True))
                 core.print_out("\n")
 
-        # Exch-Ind without S^2
+        # Coupled Exch-Ind without S^2 (if Sinf)
         if Sinf:
-            cT_A = core.Matrix.chain_dot(
-                cache["Cvir_A"],
-                x_B_MOA,
-                Tmo_AA,
-                cache["Cocc_A"],
-                trans=[False, True, False, True],
-            )
-            cT_B = core.Matrix.chain_dot(
-                cache["Cvir_B"],
-                x_A_MOB,
-                Tmo_BB,
-                cache["Cocc_B"],
-                trans=[False, True, False, True],
-            )
-            cT_AB = core.Matrix.chain_dot(
-                cache["Cvir_A"],
-                x_B_MOA,
-                Tmo_AB,
-                cache["Cocc_B"],
-                trans=[False, True, False, True],
-            )
-            cT_BA = core.Matrix.chain_dot(
-                cache["Cvir_B"],
-                x_A_MOB,
-                Tmo_AB,
-                cache["Cocc_A"],
-                trans=[False, True, True, True],
-            )
+            # Compute cT matrices using coupled amplitudes
+            cT_A_tmp1 = ein.utils.tensor_factory("cT_A_tmp1", [cache["Cvir_A"].shape[1], x_B_MOA_ein.shape[0]], np.float64, 'numpy')
+            cT_A_tmp2 = ein.utils.tensor_factory("cT_A_tmp2", [cache["Cvir_A"].shape[1], Tmo_AA.shape[1]], np.float64, 'numpy')
+            cT_A = ein.utils.tensor_factory("cT_A", [cache["Cvir_A"].shape[0], cache["Cocc_A"].shape[0]], np.float64, 'numpy')
+            plan_matmul_tt.execute(0.0, cT_A_tmp1, 1.0, cache["Cvir_A"].T, x_B_MOA_ein.T)
+            plan_matmul_tt.execute(0.0, cT_A_tmp2, 1.0, cT_A_tmp1, Tmo_AA)
+            plan_matmul_tt.execute(0.0, cT_A, 1.0, cT_A_tmp2.T, cache["Cocc_A"].T)
 
-            ind_ab_total = 2.0 * (
-                cT_A.vector_dot(EX_AA_inf) + cT_AB.vector_dot(EX_AB_inf)
-            )
-            ind_ba_total = 2.0 * (
-                cT_B.vector_dot(EX_BB_inf) + cT_BA.vector_dot(EX_BA_inf)
-            )
+            cT_B_tmp1 = ein.utils.tensor_factory("cT_B_tmp1", [cache["Cvir_B"].shape[1], x_A_MOB_ein.shape[0]], np.float64, 'numpy')
+            cT_B_tmp2 = ein.utils.tensor_factory("cT_B_tmp2", [cache["Cvir_B"].shape[1], Tmo_BB.shape[1]], np.float64, 'numpy')
+            cT_B = ein.utils.tensor_factory("cT_B", [cache["Cvir_B"].shape[0], cache["Cocc_B"].shape[0]], np.float64, 'numpy')
+            plan_matmul_tt.execute(0.0, cT_B_tmp1, 1.0, cache["Cvir_B"].T, x_A_MOB_ein.T)
+            plan_matmul_tt.execute(0.0, cT_B_tmp2, 1.0, cT_B_tmp1, Tmo_BB)
+            plan_matmul_tt.execute(0.0, cT_B, 1.0, cT_B_tmp2.T, cache["Cocc_B"].T)
+
+            cT_AB_tmp1 = ein.utils.tensor_factory("cT_AB_tmp1", [cache["Cvir_A"].shape[1], x_B_MOA_ein.shape[0]], np.float64, 'numpy')
+            cT_AB_tmp2 = ein.utils.tensor_factory("cT_AB_tmp2", [cache["Cvir_A"].shape[1], Tmo_AB.shape[1]], np.float64, 'numpy')
+            cT_AB = ein.utils.tensor_factory("cT_AB", [cache["Cvir_A"].shape[0], cache["Cocc_B"].shape[0]], np.float64, 'numpy')
+            plan_matmul_tt.execute(0.0, cT_AB_tmp1, 1.0, cache["Cvir_A"].T, x_B_MOA_ein.T)
+            plan_matmul_tt.execute(0.0, cT_AB_tmp2, 1.0, cT_AB_tmp1, Tmo_AB)
+            plan_matmul_tt.execute(0.0, cT_AB, 1.0, cT_AB_tmp2.T, cache["Cocc_B"].T)
+
+            cT_BA_tmp1 = ein.utils.tensor_factory("cT_BA_tmp1", [cache["Cvir_B"].shape[1], x_A_MOB_ein.shape[0]], np.float64, 'numpy')
+            cT_BA_tmp2 = ein.utils.tensor_factory("cT_BA_tmp2", [cache["Cvir_B"].shape[1], Tmo_AB.shape[0]], np.float64, 'numpy')
+            cT_BA = ein.utils.tensor_factory("cT_BA", [cache["Cvir_B"].shape[0], cache["Cocc_A"].shape[0]], np.float64, 'numpy')
+            plan_matmul_tt.execute(0.0, cT_BA_tmp1, 1.0, cache["Cvir_B"].T, x_A_MOB_ein.T)
+            plan_matmul_tt.execute(0.0, cT_BA_tmp2, 1.0, cT_BA_tmp1, Tmo_AB.T)
+            plan_matmul_tt.execute(0.0, cT_BA, 1.0, cT_BA_tmp2.T, cache["Cocc_A"].T)
+
+            # Compute coupled Sinf energies using vector dot products
+            ind_ab_total_tensor_1 = ein.utils.tensor_factory("ind_ab_total_1", [1], np.float64, 'numpy')
+            ind_ab_total_tensor_2 = ein.utils.tensor_factory("ind_ab_total_2", [1], np.float64, 'numpy')
+            ind_ba_total_tensor_1 = ein.utils.tensor_factory("ind_ba_total_1", [1], np.float64, 'numpy')
+            ind_ba_total_tensor_2 = ein.utils.tensor_factory("ind_ba_total_2", [1], np.float64, 'numpy')
+            
+            plan_vector_dot.execute(0.0, ind_ab_total_tensor_1, 1.0, cT_A, EX_AA_inf)
+            plan_vector_dot.execute(0.0, ind_ab_total_tensor_2, 1.0, cT_AB, EX_AB_inf)
+            plan_vector_dot.execute(0.0, ind_ba_total_tensor_1, 1.0, cT_B, EX_BB_inf)
+            plan_vector_dot.execute(0.0, ind_ba_total_tensor_2, 1.0, cT_BA, EX_BA_inf)
+
+            ind_ab_total = 2.0 * (ind_ab_total_tensor_1[0] + ind_ab_total_tensor_2[0])
+            ind_ba_total = 2.0 * (ind_ba_total_tensor_1[0] + ind_ba_total_tensor_2[0])
             indexch_ab_inf = ind_ab_total - ind_ab
             indexch_ba_inf = ind_ba_total - ind_ba
 
@@ -830,7 +1161,6 @@ def induction(
             if do_print:
                 for name in plist[3:]:
                     name = name.replace(",u", ",r") + " (S^inf)"
-
                     core.print_out(print_sapt_var(name, ret[name], short=True))
                     core.print_out("\n")
 
@@ -848,12 +1178,27 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     else:
         cache["wfn_B"].set_jk(jk)
 
-    # Make a preconditioner function
-    P_A = core.Matrix(cache["eps_occ_A"].shape[0], cache["eps_vir_A"].shape[0])
-    P_A.np[:] = cache["eps_occ_A"].np.reshape(-1, 1) - cache["eps_vir_A"].np
+    def setup_P_X(eps_occ, eps_vir, name='P_X'):
+        P_X = ein.utils.tensor_factory(name, [eps_occ.shape[0], eps_vir.shape[0]], np.float64, 'numpy')
 
-    P_B = core.Matrix(cache["eps_occ_B"].shape[0], cache["eps_vir_B"].shape[0])
-    P_B.np[:] = cache["eps_occ_B"].np.reshape(-1, 1) - cache["eps_vir_B"].np
+        ones_occ = ein.utils.tensor_factory("ones_occ", [eps_occ.shape[0]], np.float64, 'numpy')
+        ones_vir = ein.utils.tensor_factory("ones_vir", [eps_vir.shape[0]], np.float64, 'numpy')
+        ones_occ.fill(1.0)
+        ones_vir.fill(1.0)
+        plan_outer = ein.core.compile_plan("ia", "i", "a")
+        plan_outer.execute(0.0, P_X, 1.0, eps_occ, ones_vir)
+        eps_vir_2D = ein.utils.tensor_factory("eps_vir_2D", [eps_occ.shape[0], eps_vir.shape[0]], np.float64, 'numpy')
+        plan_outer.execute(0.0, eps_vir_2D, 1.0, ones_occ, eps_vir)
+        ein.core.axpy(-1.0, eps_vir_2D, P_X)
+        return P_X
+
+    # Make a preconditioner function
+    P_A = setup_P_X(cache['eps_occ_A'], cache['eps_vir_A'])
+    P_B = setup_P_X(cache['eps_occ_B'], cache['eps_vir_B'])
+    P_A = core.Matrix.from_array(P_A, "P_A")
+    P_B = core.Matrix.from_array(P_B, "P_B")
+
+    print(P_A.np)
 
     # Preconditioner function
     def apply_precon(x_vec, act_mask):
