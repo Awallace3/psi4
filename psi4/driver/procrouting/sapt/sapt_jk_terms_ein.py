@@ -465,11 +465,10 @@ def induction(
     K_P_A = ein.core.RuntimeTensorD(K_P_A.np)
 
     # Exch-Ind Potential A
-    print("EX Chain")
     EX_A = K_B.copy()
     EX_A *= -1.0
     ein.core.axpy(-2.0, J_O, EX_A)
-    ein.core.axpy(1.0, K_O.T, EX_A)
+    ein.core.axpy(1.0, K_O, EX_A)
     ein.core.axpy(2.0, J_P_B, EX_A)
 
     # Create intermediate tensors for EX_A chain operations
@@ -565,10 +564,12 @@ def induction(
     S_DA_JB_DA_S = ein.utils.tensor_factory("S_DA_JB_DA_S", [S.shape[0], S.shape[1]], np.float64, 'numpy')
     S_DA_KO = ein.utils.tensor_factory("S_DA_KO", [S.shape[0], K_O.shape[0]], np.float64, 'numpy')
     VA_DA_S = ein.utils.tensor_factory("VA_DA_S", [V_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    JA_DA = ein.utils.tensor_factory("JA_DA", [J_A.shape[0], D_A.shape[1]], np.float64, 'numpy')
     JA_DA_S = ein.utils.tensor_factory("JA_DA_S", [J_A.shape[0], S.shape[1]], np.float64, 'numpy')
     KA_DA_S = ein.utils.tensor_factory("KA_DA_S", [K_A.shape[0], S.shape[1]], np.float64, 'numpy')
     VA_DB_S_DA_S = ein.utils.tensor_factory("VA_DB_S_DA_S", [V_A.shape[0], S.shape[1]], np.float64, 'numpy')
     JA_DB_S_DA_S = ein.utils.tensor_factory("JA_DB_S_DA_S", [J_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    KO_DA = ein.utils.tensor_factory("KO_DA", [K_O.shape[0], D_A.shape[1]], np.float64, 'numpy')
     KO_DA_S = ein.utils.tensor_factory("KO_DA_S", [K_O.shape[0], S.shape[1]], np.float64, 'numpy')
     S_DA_VB_DA = ein.utils.tensor_factory("S_DA_VB_DA", [S_DA.shape[0], D_A.shape[1]], np.float64, 'numpy')
     S_DA_VB_DA_S = ein.utils.tensor_factory("S_DA_VB_DA_S", [S_DA.shape[0], S.shape[1]], np.float64, 'numpy')
@@ -593,13 +594,15 @@ def induction(
     plan_matmul_tt.execute(0.0, S_DA_JB_DA_S, 1.0, S_DA_JB_DA, S)
     plan_matmul_tt.execute(0.0, S_DA_KO, 1.0, S_DA, K_O)
     plan_matmul_tt.execute(0.0, VA_DA_S, 1.0, V_A, DA_S)
-    plan_matmul_tt.execute(0.0, JA_DA_S, 1.0, J_A, DA_S)
+    plan_matmul_tt.execute(0.0, JA_DA, 1.0, J_A, D_A)
+    plan_matmul_tt.execute(0.0, JA_DA_S, 1.0, JA_DA, S)
     plan_matmul_tt.execute(0.0, KA_DA_S, 1.0, K_A, DA_S)
     plan_matmul_tt.execute(0.0, VA_DB_S, 1.0, V_A, DB_S)
     plan_matmul_tt.execute(0.0, VA_DB_S_DA_S, 1.0, VA_DB_S, DA_S)
     plan_matmul_tt.execute(0.0, JA_DB_S, 1.0, J_A, DB_S)
     plan_matmul_tt.execute(0.0, JA_DB_S_DA_S, 1.0, JA_DB_S, DA_S)
-    plan_matmul_tt.execute(0.0, KO_DA_S, 1.0, K_O, DA_S)
+    plan_matmul_tt.execute(0.0, KO_DA, 1.0, K_O.T, D_A)
+    plan_matmul_tt.execute(0.0, KO_DA_S, 1.0, KO_DA, S)
 
     # Bpply all the axpy operations to EX_B
     ein.core.axpy(-1.0, S_DA_VB, EX_B)
@@ -612,7 +615,6 @@ def induction(
     ein.core.axpy(-1.0, S_DA_KO, EX_B)
 
     ein.core.axpy(-1.0, VA_DA_S, EX_B)
-    print(EX_B)
     ein.core.axpy(-2.0, JA_DA_S, EX_B)
     ein.core.axpy(1.0, KA_DA_S, EX_B)
     ein.core.axpy(1.0, VA_DB_S_DA_S, EX_B)
@@ -624,9 +626,6 @@ def induction(
     EX_B_MO = ein.utils.tensor_factory("EX_B_MO", [cache["Cocc_B"].shape[1], cache["Cvir_B"].shape[1]], np.float64, 'numpy')
     plan_matmul_tt.execute(0.0, EX_B_tmp, 1.0, cache["Cocc_B"].T, EX_B)
     plan_matmul_tt.execute(0.0, EX_B_MO, 1.0, EX_B_tmp, cache["Cvir_B"])
-
-    print(f"EX_B_MO shape: {EX_B_MO.shape}")
-    print(EX_B_MO)
 
     # Build electrostatic potential using einsums
     w_A = V_A.copy()

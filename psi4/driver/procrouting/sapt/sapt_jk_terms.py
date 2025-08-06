@@ -426,7 +426,6 @@ def induction(
     K_Ot, K_P_B, K_P_A = jk.K()
 
     # Exch-Ind Potential A
-    print("EX Chain")
     EX_A = K_B.clone()
     EX_A.scale(-1.0)
     EX_A.axpy(-2.0, J_O)
@@ -470,7 +469,6 @@ def induction(
     EX_B.axpy(-1.0, core.Matrix.chain_dot(S, D_A, K_O))
 
     EX_B.axpy(-1.0, core.Matrix.chain_dot(V_A, D_A, S))
-    print(EX_B.np)
     EX_B.axpy(-2.0, core.Matrix.chain_dot(J_A, D_A, S))
     EX_B.axpy(1.0, core.Matrix.chain_dot(K_A, D_A, S))
     EX_B.axpy(1.0, core.Matrix.chain_dot(V_A, D_B, S, D_A, S))
@@ -480,8 +478,6 @@ def induction(
     EX_B = core.Matrix.chain_dot(
         cache["Cocc_B"], EX_B, cache["Cvir_B"], trans=[True, False, False]
     )
-    print(f"EX_B_MO shape: {EX_B.np.shape}")
-    print(EX_B.np)
 
     # Build electrostatic potenital
     w_A = cache["V_A"].clone()
