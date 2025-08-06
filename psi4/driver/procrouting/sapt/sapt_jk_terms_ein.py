@@ -60,9 +60,6 @@ def build_sapt_jk_cache(
     # First grab the orbitals
     cache["Cocc_A"] = ein.core.RuntimeTensorD(wfn_A.Ca_subset("AO", "OCC").np)
     cache['Cocc_A'].set_name("Cocc_A")
-    print("Cocc_A.shape:", cache["Cocc_A"].shape)
-    print(cache["Cocc_A"])
-    print(wfn_A.Ca_subset("AO", "OCC").np)
     cache["Cvir_A"] = ein.core.RuntimeTensorD(wfn_A.Ca_subset("AO", "VIR").np)
     cache['Cvir_A'].set_name("Cvir_A")
 
@@ -82,22 +79,17 @@ def build_sapt_jk_cache(
     cache["eps_vir_B"].set_name("eps_vir_B")
 
     # Build the densities as HF takes an extra "step"
-    cache["D_A"] = ein.utils.tensor_factory("D_A", [cache["Cocc_A"].shape[0], cache["Cocc_A"].shape[0]], np.float64, 'numpy')
 
     # Should be fine, but only fills in half the matrix... is it because of the symmetry? How can I fix this to use plan_matmul_tT?
     # plan_matmul_tT = ein.core.compile_plan("ij", "ik", "jk")
     plan_matmul_tt = ein.core.compile_plan("ij", "ik", "kj")
-    plan_matmul_tt.execute(0.0, cache['D_A'], 1.0, cache['Cocc_A'], cache['Cocc_A'].T)
-
+    # D_X corresponds to P^{X,occ}
+    cache["D_A"] = ein.utils.tensor_factory("D_A", [cache["Cocc_A"].shape[0], cache["Cocc_A"].shape[0]], np.float64, 'numpy')
     cache["D_B"] = ein.utils.tensor_factory("D_B", [cache["Cocc_B"].shape[0], cache["Cocc_B"].shape[0]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, cache['D_A'], 1.0, cache['Cocc_A'], cache['Cocc_A'].T)
     plan_matmul_tt.execute(0.0, cache['D_B'], 1.0, cache['Cocc_B'], cache['Cocc_B'].T)
-    print("D_B:", cache['D_B'].shape)
-    print(cache['D_B'])
-    print((wfn_B.Ca_subset("AO", "OCC").np @ wfn_B.Ca_subset("AO", "OCC").np.T))
 
-    assert np.allclose(cache["D_A"], (wfn_A.Ca_subset("AO", "OCC").np @ wfn_A.Ca_subset("AO", "OCC").np.T))
-    assert np.allclose(cache["D_B"], (wfn_B.Ca_subset("AO", "OCC").np @ wfn_B.Ca_subset("AO", "OCC").np.T))
-
+    # P_X corresponds to P^{X,vir}
     cache["P_A"] = ein.utils.tensor_factory("P_A", [cache["Cvir_A"].shape[0], cache["Cvir_A"].shape[0]], np.float64, 'numpy')
     cache["P_B"] = ein.utils.tensor_factory("P_B", [cache["Cvir_B"].shape[0], cache["Cvir_B"].shape[0]], np.float64, 'numpy')
     plan_matmul_tt.execute(0.0, cache['P_A'], 1.0, cache['Cvir_A'], cache['Cvir_A'].T)
@@ -120,6 +112,7 @@ def build_sapt_jk_cache(
             cache["V_B"].add(ext_B)
 
     # Anything else we might need
+    # S corresponds to the overlap matrix, S^{AO}
     cache["S"] = ein.core.RuntimeTensorD(wfn_A.S().clone().np)
 
     # J and K matrices
@@ -136,13 +129,12 @@ def build_sapt_jk_cache(
     # K_O J/K
     # C_O_A = core.triplet(cache["D_B"], cache["S"], cache["Cocc_A"], False, False, False)
     C_O_A = ein.utils.tensor_factory("C_O_A", [cache["D_B"].shape[0], cache["Cocc_A"].shape[1]], np.float64, 'numpy')
-    D_B__S = ein.utils.tensor_factory("D_B__S", [cache["D_B"].shape[0], cache["S"].shape[1]], np.float64, 'numpy')
-    plan_matmul_tt.execute(0.0, D_B__S, 1.0, cache["D_B"], cache["S"])
-    plan_matmul_tt.execute(0.0, C_O_A, 1.0, D_B__S, cache["Cocc_A"])
+    DB_S = ein.utils.tensor_factory("DB_S", [cache["D_B"].shape[0], cache["S"].shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, DB_S, 1.0, cache["D_B"], cache["S"])
+    plan_matmul_tt.execute(0.0, C_O_A, 1.0, DB_S, cache["Cocc_A"])
 
     C_O_A_matrix = core.Matrix.from_array(C_O_A)
     # Q: How can I convert jk to use RuntimeTensorD?
-    print(type(jk), dir(jk))
     jk.C_left_add(C_O_A_matrix)
     jk.C_right_add(core.Matrix.from_array(cache["Cocc_A"]))
 
@@ -175,8 +167,10 @@ def build_sapt_jk_cache(
 
 
 def electrostatics(cache, do_print=True):
-    """
+    r"""
     Computes the E10 electrostatics from a build_sapt_jk_cache datacache.
+
+    Equation E^{(1)}_{\rm elst} = 2P^A \cdot V^B + 2P^B \cdot V^A + 4P^B \cdot J^A + V_{\rm nuc}
     """
     if do_print:
         core.print_out("\n  ==> E10 Electostatics <== \n\n")
@@ -208,8 +202,14 @@ def electrostatics(cache, do_print=True):
 
 
 def exchange(cache, jk, do_print=True):
-    """
+    r"""
     Computes the E10 exchange (S^2 and S^inf) from a build_sapt_jk_cache datacache.
+
+    Equation E^{(1)}_{\rm exch}(S^2) = 
+        -2(P^{A,occ} S^{AO} P^{B,occ} S^{AO} P^{A,vir}) \cdot \omega^{B}
+        -2(P^{B,occ} S^{AO} P^{A,occ} S^{AO} P^{B,vir}) \cdot \omega^{B}
+        -2(P^{A,vir} S^{AO} P^{B,occ}) \cdot K[P^{A,occ} S^{AO} P^{B,vir}]
+
     """
 
     if do_print:
@@ -280,6 +280,9 @@ def exchange(cache, jk, do_print=True):
     # Compute the J and K matrices
     jk.C_clear()
 
+    # QA: I am getting the right answer, but I do not understand exactly how
+    # this maps to equations 11, 12, 13, and 9... Shouldn't jk_C_right_tmp be
+    # (Tmo_AA @ Cocc_A.T) instead of the (Cocc_A @ Tmo_AA)?
     jk.C_left_add(core.Matrix.from_array(cache["Cocc_A"]))
     jk_C_right_tmp = ein.utils.tensor_factory("jk_C_right_tmp", [cache["Cocc_A"].shape[0], Tmo_AA.shape[1]], np.float64, 'numpy')
     plan_matmul_tt.execute(0.0, jk_C_right_tmp, 1.0, cache["Cocc_A"], Tmo_AA)
@@ -398,7 +401,7 @@ def induction(
     """
 
     if do_print:
-        core.print_out("\n  ==> E20 Induction <== \n\n")
+        core.print_out("\n  ==> E20 Induction Einsums <== \n\n")
 
     # Build Induction and Exchange-Induction potentials
     S = cache["S"]
@@ -460,6 +463,7 @@ def induction(
     K_P_A = ein.core.RuntimeTensorD(K_P_A.np)
 
     # Exch-Ind Potential A
+    print("EX Chain")
     EX_A = K_B.copy()
     EX_A *= -1.0
     ein.core.axpy(-2.0, J_O, EX_A)
@@ -467,14 +471,18 @@ def induction(
     ein.core.axpy(2.0, J_P_B, EX_A)
 
     # Create intermediate tensors for EX_A chain operations
+    S_DB = ein.utils.tensor_factory("S_DB", [S.shape[0], D_B.shape[1]], np.float64, 'numpy')
+    S_DA = ein.utils.tensor_factory("S_DA", [S.shape[0], D_A.shape[1]], np.float64, 'numpy')
     S_DB_VA = ein.utils.tensor_factory("S_DB_VA", [S.shape[0], V_A.shape[1]], np.float64, 'numpy')
     S_DB_JA = ein.utils.tensor_factory("S_DB_JA", [S.shape[0], J_A.shape[1]], np.float64, 'numpy') 
     S_DB_KA = ein.utils.tensor_factory("S_DB_KA", [S.shape[0], K_A.shape[1]], np.float64, 'numpy')
+    S_DB_S = ein.utils.tensor_factory("S_DB_S", [S.shape[0], S.shape[1]], np.float64, 'numpy')
+    S_DB_S_DA = ein.utils.tensor_factory("S_DB_S_DA", [S.shape[0], D_A.shape[1]], np.float64, 'numpy')
     S_DB_S_DA_VB = ein.utils.tensor_factory("S_DB_S_DA_VB", [S.shape[0], V_B.shape[1]], np.float64, 'numpy')
     S_DB_S_DA_JB = ein.utils.tensor_factory("S_DB_S_DA_JB", [S.shape[0], J_B.shape[1]], np.float64, 'numpy')
     S_DB_VA_DB_S = ein.utils.tensor_factory("S_DB_VA_DB_S", [S.shape[0], S.shape[1]], np.float64, 'numpy')
     S_DB_JA_DB_S = ein.utils.tensor_factory("S_DB_JA_DB_S", [S.shape[0], S.shape[1]], np.float64, 'numpy')
-    S_DB_KO_T = ein.utils.tensor_factory("S_DB_KO_T", [S.shape[0], K_O.shape[0]], np.float64, 'numpy')
+    S_DB_KO = ein.utils.tensor_factory("S_DB_KO", [S.shape[0], K_O.shape[0]], np.float64, 'numpy')
     VB_DB_S = ein.utils.tensor_factory("VB_DB_S", [V_B.shape[0], S.shape[1]], np.float64, 'numpy')
     JB_DB_S = ein.utils.tensor_factory("JB_DB_S", [J_B.shape[0], S.shape[1]], np.float64, 'numpy')
     KB_DB_S = ein.utils.tensor_factory("KB_DB_S", [K_B.shape[0], S.shape[1]], np.float64, 'numpy')
@@ -483,28 +491,30 @@ def induction(
     KO_DB_S = ein.utils.tensor_factory("KO_DB_S", [K_O.shape[0], S.shape[1]], np.float64, 'numpy')
 
     # Compute all the EX_A chain operations using einsums
-    plan_matmul_tt.execute(0.0, S_DB_VA, 1.0, DB_S, V_A)
-    plan_matmul_tt.execute(0.0, S_DB_JA, 1.0, DB_S, J_A)
-    plan_matmul_tt.execute(0.0, S_DB_KA, 1.0, DB_S, K_A)
-    plan_matmul_tt.execute(0.0, S_DB_S_DA_VB, 1.0, DB_S_DA_S, V_B)
-    plan_matmul_tt.execute(0.0, S_DB_S_DA_JB, 1.0, DB_S_DA_S, J_B)
+    plan_matmul_tt.execute(0.0, S_DB, 1.0, S, D_B)
+    plan_matmul_tt.execute(0.0, S_DA, 1.0, S, D_A)
+    plan_matmul_tt.execute(0.0, S_DB_VA, 1.0, S_DB, V_A)
+    plan_matmul_tt.execute(0.0, S_DB_JA, 1.0, S_DB, J_A)
+    plan_matmul_tt.execute(0.0, S_DB_KA, 1.0, S_DB, K_A)
+    plan_matmul_tt.execute(0.0, S_DB_S, 1.0, S_DB, S)
+    plan_matmul_tt.execute(0.0, S_DB_S_DA, 1.0, S_DB_S, D_A)
+    plan_matmul_tt.execute(0.0, S_DB_S_DA_VB, 1.0, S_DB_S_DA, V_B)
+    plan_matmul_tt.execute(0.0, S_DB_S_DA_JB, 1.0, S_DB_S_DA, J_B)
     
     # For S_DB_VA_DB_S: need V_A @ D_B @ S
-    VA_DB = ein.utils.tensor_factory("VA_DB", [V_A.shape[0], D_B.shape[1]], np.float64, 'numpy')
-    VA_DB_S = ein.utils.tensor_factory("VA_DB_S", [V_A.shape[0], S.shape[1]], np.float64, 'numpy')
-    plan_matmul_tt.execute(0.0, VA_DB, 1.0, V_A, D_B)
-    plan_matmul_tt.execute(0.0, VA_DB_S, 1.0, VA_DB, S)
-    plan_matmul_tt.execute(0.0, S_DB_VA_DB_S, 1.0, DB_S, VA_DB_S)
+    S_DB_VA_DB = ein.utils.tensor_factory("S_DB_VA_DB", [S_DB.shape[0], D_B.shape[1]], np.float64, 'numpy')
+    S_DB_VA_DB_S = ein.utils.tensor_factory("S_DB_VA_DB_S", [S_DB.shape[0], S.shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, S_DB_VA_DB, 1.0, S_DB_VA, D_B)
+    plan_matmul_tt.execute(0.0, S_DB_VA_DB_S, 1.0, S_DB_VA_DB, S)
     
     # For S_DB_JA_DB_S: need J_A @ D_B @ S
-    JA_DB = ein.utils.tensor_factory("JA_DB", [J_A.shape[0], D_B.shape[1]], np.float64, 'numpy')
-    JA_DB_S = ein.utils.tensor_factory("JA_DB_S", [J_A.shape[0], S.shape[1]], np.float64, 'numpy')
-    plan_matmul_tt.execute(0.0, JA_DB, 1.0, J_A, D_B)
-    plan_matmul_tt.execute(0.0, JA_DB_S, 1.0, JA_DB, S)
-    plan_matmul_tt.execute(0.0, S_DB_JA_DB_S, 1.0, DB_S, JA_DB_S)
+    S_DB_JA_DB = ein.utils.tensor_factory("S_DB_JA_DB", [J_A.shape[0], D_B.shape[1]], np.float64, 'numpy')
+    S_DB_JA_DB_S = ein.utils.tensor_factory("S_DB_JA_DB_S", [J_A.shape[0], S.shape[1]], np.float64, 'numpy')
+    plan_matmul_tt.execute(0.0, S_DB_JA_DB, 1.0, S_DB_JA, D_B)
+    plan_matmul_tt.execute(0.0, S_DB_JA_DB_S, 1.0, S_DB_JA_DB, S)
 
     # For S_DB_KO^T: need K_O^T
-    plan_matmul_tt.execute(0.0, S_DB_KO_T, 1.0, DB_S, K_O.T)
+    plan_matmul_tt.execute(0.0, S_DB_KO, 1.0, S_DB, K_O.T)
     
     # For V_B @ D_B @ S etc.
     plan_matmul_tt.execute(0.0, VB_DB_S, 1.0, V_B, DB_S)
@@ -532,7 +542,7 @@ def induction(
     ein.core.axpy(2.0, S_DB_S_DA_JB, EX_A)
     ein.core.axpy(1.0, S_DB_VA_DB_S, EX_A)
     ein.core.axpy(2.0, S_DB_JA_DB_S, EX_A)
-    ein.core.axpy(-1.0, S_DB_KO_T, EX_A)
+    ein.core.axpy(-1.0, S_DB_KO, EX_A)
     ein.core.axpy(-1.0, VB_DB_S, EX_A)
     ein.core.axpy(-2.0, JB_DB_S, EX_A)
     ein.core.axpy(1.0, KB_DB_S, EX_A)
@@ -545,6 +555,7 @@ def induction(
     EX_A_MO = ein.utils.tensor_factory("EX_A_MO", [cache["Cocc_A"].shape[1], cache["Cvir_A"].shape[1]], np.float64, 'numpy')
     plan_matmul_tt.execute(0.0, EX_A_tmp, 1.0, cache["Cocc_A"].T, EX_A)
     plan_matmul_tt.execute(0.0, EX_A_MO, 1.0, EX_A_tmp, cache["Cvir_A"])
+    # This shows that there is an error in the einsums chain above...
 
     # Complete EX_B construction using einsums
     EX_B = K_A.copy()
@@ -628,6 +639,9 @@ def induction(
     EX_B_MO = ein.utils.tensor_factory("EX_B_MO", [cache["Cocc_B"].shape[1], cache["Cvir_B"].shape[1]], np.float64, 'numpy')
     plan_matmul_tt.execute(0.0, EX_B_tmp, 1.0, cache["Cocc_B"].T, EX_B)
     plan_matmul_tt.execute(0.0, EX_B_MO, 1.0, EX_B_tmp, cache["Cvir_B"])
+
+    print(f"EX_B_MO shape: {EX_B_MO.shape}")
+    print(EX_B_MO)
 
     # Build electrostatic potential using einsums
     w_A = V_A.copy()

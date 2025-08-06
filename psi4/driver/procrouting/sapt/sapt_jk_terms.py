@@ -426,6 +426,7 @@ def induction(
     K_Ot, K_P_B, K_P_A = jk.K()
 
     # Exch-Ind Potential A
+    print("EX Chain")
     EX_A = K_B.clone()
     EX_A.scale(-1.0)
     EX_A.axpy(-2.0, J_O)
@@ -478,6 +479,8 @@ def induction(
     EX_B = core.Matrix.chain_dot(
         cache["Cocc_B"], EX_B, cache["Cvir_B"], trans=[True, False, False]
     )
+    print(f"EX_B_MO shape: {EX_B.np.shape}")
+    print(EX_B.np)
 
     # Build electrostatic potenital
     w_A = cache["V_A"].clone()
@@ -803,7 +806,7 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
         cache["wfn_B"].set_jk(jk)
 
     # Make a preconditioner function
-    print("sapt_cpsfh_solve")
+    print("sapt_cpsch_solve")
     P_A = core.Matrix(cache["eps_occ_A"].shape[0], cache["eps_vir_A"].shape[0])
     print(cache["eps_occ_A"].np.reshape(-1, 1), cache["eps_vir_A"].np)
     P_A.np[:] = cache["eps_occ_A"].np.reshape(-1, 1) - cache["eps_vir_A"].np
