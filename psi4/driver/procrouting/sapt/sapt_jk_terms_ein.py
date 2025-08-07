@@ -1107,6 +1107,7 @@ def induction(
 
         # Coupled Exch-Ind without S^2 (if Sinf)
         if Sinf:
+            # TODO: need a test for Sinf... highly certain Einsums are wrong here...
             # Compute cT matrices using coupled amplitudes
             cT_A_tmp1 = ein.utils.tensor_factory("cT_A_tmp1", [cache["Cvir_A"].shape[1], x_B_MOA_ein.shape[0]], np.float64, 'numpy')
             cT_A_tmp2 = ein.utils.tensor_factory("cT_A_tmp2", [cache["Cvir_A"].shape[1], Tmo_AA.shape[1]], np.float64, 'numpy')

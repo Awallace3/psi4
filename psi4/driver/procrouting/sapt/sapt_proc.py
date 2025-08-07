@@ -35,7 +35,7 @@ from ...constants import constants
 from ...p4util.exceptions import ValidationError
 from .. import proc_util
 from ..proc import scf_helper, run_scf, _set_external_potentials_to_wavefunction
-from . import sapt_jk_terms, sapt_jk_terms_ein, sapt_mp2_terms, sapt_sf_terms
+from . import sapt_jk_terms, sapt_jk_terms_ein, sapt_mp2_terms, sapt_mp2_terms_ein, sapt_sf_terms
 from .sapt_util import print_sapt_dft_summary, print_sapt_hf_summary, print_sapt_var
 import qcelemental as qcel
 from ...p4util.exceptions import ConvergenceError
@@ -975,6 +975,7 @@ def sapt_dft(
             if not is_hybrid:
                 x_alpha = 0.0
             fdds_disp = sapt_mp2_terms.df_fdds_dispersion(primary_basis, aux_basis, cache, is_hybrid, x_alpha)
+            fdds_disp = sapt_mp2_terms_ein.df_fdds_dispersion(primary_basis, aux_basis, cache_ein, is_hybrid, x_alpha)
             data.update(fdds_disp)
             nfrozen_A = 0
             nfrozen_B = 0
