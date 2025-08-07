@@ -39,6 +39,8 @@ from pprint import pprint as pp
 import einsums as ein
 
 
+# Equations come from https://doi.org/10.1063/5.0090688
+
 def build_sapt_jk_cache(
     wfn_dimer: core.Wavefunction,
     wfn_A: core.Wavefunction,
@@ -97,9 +99,14 @@ def build_sapt_jk_cache(
 
     # Potential ints
     mints = core.MintsHelper(wfn_A.basisset())
-    cache["V_A"] = ein.core.RuntimeTensorD(mints.ao_potential().np)
+    # cache["V_A"] = ein.core.RuntimeTensorD(mints.ao_potential().np)
+    tmp = mints.ao_potential().np
+    cache["V_A"] = ein.utils.tensor_factory("V_A", [tmp.shape[0], tmp.shape[1]], np.float64, 'numpy')
+    cache["V_A"][:] = tmp[:]
     mints = core.MintsHelper(wfn_B.basisset())
-    cache["V_B"] = ein.core.RuntimeTensorD(mints.ao_potential().np)
+    tmp = mints.ao_potential().np
+    cache["V_B"] = ein.utils.tensor_factory("V_B", [tmp.shape[0], tmp.shape[1]], np.float64, 'numpy')
+    cache["V_B"][:] = tmp[:]
 
     # External Potentials need to add to V_A and V_B
     # TODO: update this for einsums adding
@@ -170,21 +177,15 @@ def electrostatics(cache, do_print=True):
     r"""
     Computes the E10 electrostatics from a build_sapt_jk_cache datacache.
 
-    Equation E^{(1)}_{\rm elst} = 2P^A \cdot V^B + 2P^B \cdot V^A + 4P^B \cdot J^A + V_{\rm nuc}
+    Equation 4. E^{(1)}_{\rm elst} = 2P^A \cdot V^B + 2P^B \cdot V^A + 4P^B \cdot J^A + V_{\rm nuc}
     """
     if do_print:
-        core.print_out("\n  ==> E10 Electostatics <== \n\n")
+        core.print_out("\n  ==> E10 Electrostatics <== \n\n")
 
-    # ELST
-    Elst10 = 0.0
-    plan_vector_dot = ein.core.compile_plan("", "i", "i")
-    Elst10_tmp = ein.utils.tensor_factory("Elst10_tmp", [1], np.float64, 'numpy')
-    plan_vector_dot.execute(0.0, Elst10_tmp, 1.0, cache["D_A"], cache["V_B"])
-    Elst10 += 2.0 * Elst10_tmp[0]
-    plan_vector_dot.execute(0.0, Elst10_tmp, 1.0, cache["D_B"], cache["V_A"])
-    Elst10 += 2.0 * Elst10_tmp[0]
-    plan_vector_dot.execute(0.0, Elst10_tmp, 1.0, cache["D_B"], cache["J_A"])
-    Elst10 += 4.0 * Elst10_tmp[0]
+    # Eq. 4
+    Elst10 = 2.0 * ein.core.dot(cache["D_A"], cache["V_B"])
+    Elst10 += 2.0 * ein.core.dot(cache["D_B"], cache["V_A"])
+    Elst10 += 4.0 * ein.core.dot(cache["D_B"], cache["J_A"])
     Elst10 += cache["nuclear_repulsion_energy"]
 
     if do_print:
@@ -238,9 +239,9 @@ def exchange(cache, jk, do_print=True):
     nocc_A = cache["Cocc_A"].shape[1]
     nocc_B = cache["Cocc_B"].shape[1]
     SA = ein.utils.tensor_factory("SAB", [cache["Cocc_A"].shape[1], cache["S"].shape[1]], np.float64, 'numpy')
-    plan_matmul_tt.execute(0.0, SA, 1.0, cache["Cocc_A"].T, cache["S"])
     SAB = ein.utils.tensor_factory("SAB", [cache["Cocc_A"].shape[1], cache["Cocc_B"].shape[1]], np.float64, 'numpy')
-    plan_matmul_tt.execute(0.0, SAB, 1.0, SA, cache["Cocc_B"])
+    ein.core.gemm("T", "N", 1.0, cache["Cocc_A"], cache["S"], 0.0, SA)
+    ein.core.gemm("N", "N", 1.0, SA, cache["Cocc_B"], 0.0, SAB)
     num_occ = nocc_A + nocc_B
 
     Sab = core.Matrix(num_occ, num_occ)
@@ -659,13 +660,15 @@ def induction(
     eps_occ_B_np = cache["eps_occ_B"]
     eps_vir_B_np = cache["eps_vir_B"]
     
-    for i in range(unc_x_B_MOA.shape[0]):
+    # Eq. 20
+    for r in range(unc_x_B_MOA.shape[0]):
         for a in range(unc_x_B_MOA.shape[1]):
-            unc_x_B_MOA[i, a] /= (eps_occ_A_np[i] - eps_vir_A_np[a])
+            unc_x_B_MOA[r, a] /= (eps_occ_A_np[r] - eps_vir_A_np[a])
     
-    for i in range(unc_x_A_MOB.shape[0]):
+    # Eq. 20
+    for r in range(unc_x_A_MOB.shape[0]):
         for a in range(unc_x_A_MOB.shape[1]):
-            unc_x_A_MOB[i, a] /= (eps_occ_B_np[i] - eps_vir_B_np[a])
+            unc_x_A_MOB[r, a] /= (eps_occ_B_np[r] - eps_vir_B_np[a])
 
     # Compute uncoupled induction energies using vector dot products
     plan_vector_dot = ein.core.compile_plan("", "ij", "ij")
