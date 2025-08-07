@@ -98,17 +98,17 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points
     # Build object
     core.timer_on("Form FDDS object")
     df_matrix_keys = ["Cocc_A", "Cvir_A", "Cocc_B", "Cvir_B"]
-    fdds_matrix_cache = {key: cache[key] for key in df_matrix_keys}
+    fdds_matrix_cache = {key: core.Matrix.from_array(cache[key]) for key in df_matrix_keys}
 
     df_vector_keys = ["eps_occ_A", "eps_vir_A", "eps_occ_B", "eps_vir_B"]
-    fdds_vector_cache = {key: cache[key] for key in df_vector_keys}
+    fdds_vector_cache = {key: core.Vector.from_array(cache[key]) for key in df_vector_keys}
 
     fdds_obj = core.FDDS_Dispersion(primary, auxiliary, fdds_matrix_cache, fdds_vector_cache, is_hybrid)
     core.timer_off("Form FDDS object")
 
     # Aux Densities
     core.timer_on("Form xc kernel")
-    D = fdds_obj.project_densities([cache["D_A"], cache["D_B"]])
+    D = fdds_obj.project_densities([core.Matrix.from_array(cache["D_A"]), core.Matrix.from_array(cache["D_B"])])
 
     # Temps
     half_Saux = fdds_obj.aux_overlap().clone()

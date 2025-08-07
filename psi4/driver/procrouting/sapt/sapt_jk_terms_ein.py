@@ -282,8 +282,9 @@ def exchange(cache, jk, do_print=True):
 
     # QA: I am getting the right answer, but I do not understand exactly how
     # this maps to equations 11, 12, 13, and 9... Shouldn't jk_C_right_tmp be
-    # (Tmo_AA @ Cocc_A.T) instead of the (Cocc_A @ Tmo_AA)?
-    jk.C_left_add(core.Matrix.from_array(cache["Cocc_A"]))
+    # (Tmo_AA @ Cocc_A.T) instead of the (Cocc_A @ Tmo_AA)? Also, does it
+    # matter if we put Tmo_AA on the left or right of Cocc_A?
+    jk.C_left_add(core.Matrix.from_array(cache["Cocc_A"])) 
     jk_C_right_tmp = ein.utils.tensor_factory("jk_C_right_tmp", [cache["Cocc_A"].shape[0], Tmo_AA.shape[1]], np.float64, 'numpy')
     plan_matmul_tt.execute(0.0, jk_C_right_tmp, 1.0, cache["Cocc_A"], Tmo_AA)
     jk.C_right_add(core.Matrix.from_array(jk_C_right_tmp))
@@ -631,7 +632,7 @@ def induction(
     w_A = V_A.copy()
     ein.core.axpy(2.0, J_A, w_A)
     
-    w_B = V_B.copy() 
+    w_B = V_B.copy()
     ein.core.axpy(2.0, J_B, w_B)
 
     # Transform to MO basis: C_A^T @ w_B @ C_vir_A
@@ -654,7 +655,7 @@ def induction(
     
     # Convert to numpy for element-wise operations, then back to einsums
     eps_occ_A_np = cache["eps_occ_A"]
-    eps_vir_A_np = cache["eps_vir_A"] 
+    eps_vir_A_np = cache["eps_vir_A"]
     eps_occ_B_np = cache["eps_occ_B"]
     eps_vir_B_np = cache["eps_vir_B"]
     

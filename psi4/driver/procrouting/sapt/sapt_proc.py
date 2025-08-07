@@ -26,6 +26,18 @@
 # @END LICENSE
 #
 
+"""
+Questions
+
+1. How can we avoid having to convert to psi4.Matrix for other function calls?
+    - 
+2. jk C_left/C_right quetions
+    - (In exchange) I am getting the right answer, but I do not understand
+      exactly how this maps to equations 11, 12, 13, and 9... Shouldn't
+      jk_C_right_tmp be (Tmo_AA @ Cocc_A.T) instead of the (Cocc_A @ Tmo_AA)?
+      Also, does it matter if we put Tmo_AA on the left or right of Cocc_A?
+"""
+
 import numpy as np
 
 from psi4 import core
