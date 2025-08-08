@@ -121,6 +121,7 @@ def build_sapt_jk_cache(
     # Anything else we might need
     # S corresponds to the overlap matrix, S^{AO}
     cache["S"] = ein.core.RuntimeTensorD(wfn_A.S().clone().np)
+    cache["S"].set_name("S")
 
     # J and K matrices
     jk.C_clear()
@@ -202,6 +203,65 @@ def electrostatics(cache, do_print=True):
     return {"Elst10,r": Elst10}, extern_extern_ie
 
 
+def einsum_chain_gemm(
+    tensors: list[ein.core.RuntimeTensorD],
+    transposes: list[str] = None,
+    prefactors_C: list[float] = None,
+    prefactors_AB: list[float] = None,
+    return_tensors: list[bool] = None,
+):
+    """
+    Computes a chain of einsum matrix multiplications
+
+    Parameters
+    ----------
+    tensors : list[ein.core.RuntimeTensorD]
+        List of tensors to be contracted.
+    transposes : list[str], optional
+        List of transpose operations for each tensor, where "N" means no transpose and "T" means transpose.
+    prefactors_C : list[float], optional
+        List of prefactors for the resulting tensors in the chain.
+    prefactors_AB : list[float], optional
+        List of prefactors for the tensors being multiplied in the chain.
+    return_tensors : list[bool], optional
+        List indicating which intermediate tensors should be returned. If None,
+        only the final tensor is returned. Note that these are only
+        intermediate tensors and final tensor; hence, the length of this list
+        should be one less than the number of tensors.
+    """
+    # initialization "computed_tensors" with the first tensor of the chain
+    computed_tensors = [tensors[0]]
+    N = len(tensors)
+    if transposes is None:
+        transposes = ["N"] * N
+    if prefactors_C is None:
+        prefactors_C = [0.0] * (N - 1)
+    if prefactors_AB is None:
+        prefactors_AB = [1.0] * (N - 1)
+    for i in range(len(tensors) - 1):
+        A = computed_tensors[-1]
+        B = tensors[i + 1]
+        T1, T2 = transposes[i], transposes[i + 1]
+        A_size = A.shape[0]
+        if T1 == "T":
+            A_size = A.shape[1]
+        B_size = B.shape[1]
+        if T1 == "T":
+            B_size = B.shape[0]
+        C = ein.utils.tensor_factory(f"{A.name} @ {B.name}", [A_size, B_size], np.float64, 'einsums')
+        ein.core.gemm(T1, T2, prefactors_AB[i], A, B, prefactors_C[i], C)
+        computed_tensors.append(C)
+    if return_tensors is None:
+        return computed_tensors[-1]
+    returned_tensors = []
+    print(computed_tensors)
+    print(computed_tensors)
+    for i, r in enumerate(return_tensors):
+        if r:
+            returned_tensors.append(computed_tensors[i + 1])
+    return returned_tensors
+
+
 def exchange(cache, jk, do_print=True):
     r"""
     Computes the E10 exchange (S^2 and S^inf) from a build_sapt_jk_cache datacache.
@@ -214,7 +274,7 @@ def exchange(cache, jk, do_print=True):
     """
 
     if do_print:
-        core.print_out("\n  ==> E10 Exchange <== \n\n")
+        core.print_out("\n  ==> E10 Exchange Einsums <== \n\n")
 
     plan_matmul_tt = ein.core.compile_plan("ij", "ik", "kj")
     plan_vector_dot = ein.core.compile_plan("", "ij", "ij")
@@ -238,10 +298,19 @@ def exchange(cache, jk, do_print=True):
     # Build inverse exchange metric
     nocc_A = cache["Cocc_A"].shape[1]
     nocc_B = cache["Cocc_B"].shape[1]
-    SA = ein.utils.tensor_factory("SAB", [cache["Cocc_A"].shape[1], cache["S"].shape[1]], np.float64, 'numpy')
-    SAB = ein.utils.tensor_factory("SAB", [cache["Cocc_A"].shape[1], cache["Cocc_B"].shape[1]], np.float64, 'numpy')
-    ein.core.gemm("T", "N", 1.0, cache["Cocc_A"], cache["S"], 0.0, SA)
-    ein.core.gemm("N", "N", 1.0, SA, cache["Cocc_B"], 0.0, SAB)
+    # SAB = ein.utils.tensor_factory("SAB", [cache["Cocc_A"].shape[1], cache["Cocc_B"].shape[1]], np.float64, 'numpy')
+    # ein.core.gemm("T", "N", 1.0, cache["Cocc_A"], cache["S"], 0.0, SA)
+    # ein.core.gemm("N", "N", 1.0, SA, cache["Cocc_B"], 0.0, SAB)
+    # SA, SAB = einsum_chain_gemm(
+    #     [cache['Cocc_A'], cache['S'], cache['Cocc_B']],
+    #     ['T', 'N', 'N'],
+    #     return_tensors=[True, True],
+    # )
+    SAB = einsum_chain_gemm(
+        [cache['Cocc_A'], cache['S'], cache['Cocc_B']],
+        ['T', 'N', 'N'],
+    )
+
     num_occ = nocc_A + nocc_B
 
     Sab = core.Matrix(num_occ, num_occ)
