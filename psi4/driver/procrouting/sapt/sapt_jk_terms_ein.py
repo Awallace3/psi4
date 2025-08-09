@@ -277,8 +277,10 @@ def exchange(cache, jk, do_print=True):
     if do_print:
         core.print_out("\n  ==> E10 Exchange Einsums <== \n\n")
 
-    plan_matmul_tt = ein.core.compile_plan("ij", "ik", "kj")
+    # Setup vector dot plan for getting final Energy, E
     plan_vector_dot = ein.core.compile_plan("", "ij", "ij")
+    # Reuse the same scalar for the final energy
+    E = ein.utils.tensor_factory("E", [1], np.float64, 'einsums')
 
     # Build potenitals
     h_A = cache["V_A"].copy()
@@ -352,24 +354,12 @@ def exchange(cache, jk, do_print=True):
     # Start S^2
     Exch_s2 = 0.0
 
-    DA_S, DA_S_DB, DA_S_DB_S, DA_S_DB_S_PA = einsum_chain_gemm(
-        [D_A, S, D_B, S, P_A],
-        ['N', 'N', 'N', 'N', 'N'],
-        return_tensors=[True, True, True, True],
-    )
-    E = ein.utils.tensor_factory("E", [1], np.float64, 'numpy')
+    # Save some intermediate tensors to avoid recomputation in the next steps
+    DA_S_DB_S_PA = einsum_chain_gemm([D_A, S, D_B, S, P_A])
     plan_vector_dot.execute(0.0, E, 1.0, w_B, DA_S_DB_S_PA)
     Exch_s2 -= 2.0 * float(E[0])
 
-    DB_S = ein.utils.tensor_factory("DB_S", [D_B.shape[0], S.shape[1]], np.float64, 'numpy')
-    DB_S_DA = ein.utils.tensor_factory("DB_S_DA", [D_B.shape[0], D_A.shape[-1]], np.float64, 'numpy')
-    DB_S_DA_S = ein.utils.tensor_factory("DB_S_DA_S", [D_B.shape[0], S.shape[1]], np.float64, 'numpy')
-    DB_S_DA_S_PB = ein.utils.tensor_factory("DB_S_DA_S_PB", [D_B.shape[0], P_B.shape[0]], np.float64, 'numpy')
-    DB_S, DB_S_DA, DB_S_DA_S, DB_S_DA_S_PB = einsum_chain_gemm(
-        [D_B, S, D_A, S, P_B],
-        ['N', 'N', 'N', 'N', 'N'],
-        return_tensors=[True, True, True, True],
-    )
+    DB_S_DA_S_PB = einsum_chain_gemm([D_B, S, D_A, S, P_B])
     plan_vector_dot.execute(0.0, E, 1.0, w_A, DB_S_DA_S_PB)
     Exch_s2 -= 2.0 * float(E[0])
 
@@ -382,31 +372,22 @@ def exchange(cache, jk, do_print=True):
 
     # Start Sinf
     Exch10 = 0.0
-    DA_KB = ein.utils.tensor_factory("DA_KB", [1], np.float64, 'numpy')
-    plan_vector_dot.execute(0.0, DA_KB, 1.0, D_A, cache["K_B"])
-    Exch10 -= 2.0 * DA_KB[0]
-    TA_hB = ein.utils.tensor_factory("TA_hB", [1], np.float64, 'numpy')
-    plan_vector_dot.execute(0.0, TA_hB, 1.0, T_AA, h_B)
-    Exch10 += 2.0 * TA_hB[0]
-    TB_hA = ein.utils.tensor_factory("TB_hA", [1], np.float64, 'numpy')
-    plan_vector_dot.execute(0.0, TB_hA, 1.0, T_BB, h_A)
-    Exch10 += 2.0 * TB_hA[0]
-    T_hAphB = ein.utils.tensor_factory("T_hAphB", [1], np.float64, 'numpy')
-    plan_vector_dot.execute(0.0, T_hAphB, 1.0, T_AB, h_A + h_B)
-    Exch10 += 2.0 * T_hAphB[0]
-    T_B_JT_ABmKT_AB = ein.utils.tensor_factory("T_B_JT_ABmKT_AB", [1], np.float64, 'numpy')
-    plan_vector_dot.execute(0.0, T_B_JT_ABmKT_AB, 1.0, T_BB, JT_AB - 0.5 * KT_AB)
-    Exch10 += 4.0 * T_B_JT_ABmKT_AB[0]
-    T_A_JT_ABmKT_AB = ein.utils.tensor_factory("T_A_JT_ABmKT_AB", [1], np.float64, 'numpy')
-    plan_vector_dot.execute(0.0, T_A_JT_ABmKT_AB, 1.0, T_AA, JT_AB - 0.5 * KT_AB.T)
-    Exch10 += 4.0 * T_A_JT_ABmKT_AB[0]
-    TB_JTAmKTA = ein.utils.tensor_factory("TB_JTAmKTA", [1], np.float64, 'numpy')
-    plan_vector_dot.execute(0.0, TB_JTAmKTA, 1.0, T_BB, JT_A - 0.5 * KT_A)
-    Exch10 += 4.0 * TB_JTAmKTA[0]
-    TAB_JTABmKTAB = ein.utils.tensor_factory("TAB_JTABmKTAB", [1], np.float64, 'numpy')
-    plan_vector_dot.execute(0.0, TAB_JTABmKTAB, 1.0, T_AB, JT_AB - 0.5 * KT_AB.T)
-    Exch10 += 4.0 * TAB_JTABmKTAB[0]
-    Exch10 = float(Exch10)
+    plan_vector_dot.execute(0.0, E, 1.0, D_A, cache["K_B"])
+    Exch10 -= 2.0 * float(E[0])
+    plan_vector_dot.execute(0.0, E, 1.0, T_AA, h_B)
+    Exch10 += 2.0 * float(E[0])
+    plan_vector_dot.execute(0.0, E, 1.0, T_BB, h_A)
+    Exch10 += 2.0 * float(E[0])
+    plan_vector_dot.execute(0.0, E, 1.0, T_AB, h_A + h_B)
+    Exch10 += 2.0 * float(E[0])
+    plan_vector_dot.execute(0.0, E, 1.0, T_BB, JT_AB - 0.5 * KT_AB)
+    Exch10 += 4.0 * float(E[0])
+    plan_vector_dot.execute(0.0, E, 1.0, T_AA, JT_AB - 0.5 * KT_AB.T)
+    Exch10 += 4.0 * float(E[0])
+    plan_vector_dot.execute(0.0, E, 1.0, T_BB, JT_A - 0.5 * KT_A)
+    Exch10 += 4.0 * float(E[0])
+    plan_vector_dot.execute(0.0, E, 1.0, T_AB, JT_AB - 0.5 * KT_AB.T)
+    Exch10 += 4.0 * float(E[0])
 
     if do_print:
         core.set_variable("Exch10", Exch10)
