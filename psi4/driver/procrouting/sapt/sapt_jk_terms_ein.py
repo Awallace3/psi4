@@ -550,16 +550,14 @@ def induction(
     w_B = V_B.copy()
     ein.core.axpy(2.0, J_B, w_B)
 
-    # Transform to MO basis: C_A^T @ w_B @ C_vir_A
-    w_B_tmp = ein.utils.tensor_factory("w_B_tmp", [cache["Cocc_A"].shape[1], w_B.shape[1]], np.float64, 'numpy')
-    w_B_MOA = ein.utils.tensor_factory("w_B_MOA", [cache["Cocc_A"].shape[1], cache["Cvir_A"].shape[1]], np.float64, 'numpy')
-    plan_matmul_tt.execute(0.0, w_B_tmp, 1.0, cache["Cocc_A"].T, w_B)
-    plan_matmul_tt.execute(0.0, w_B_MOA, 1.0, w_B_tmp, cache["Cvir_A"])
-
-    w_A_tmp = ein.utils.tensor_factory("w_A_tmp", [cache["Cocc_B"].shape[1], w_A.shape[1]], np.float64, 'numpy')
-    w_A_MOB = ein.utils.tensor_factory("w_A_MOB", [cache["Cocc_B"].shape[1], cache["Cvir_B"].shape[1]], np.float64, 'numpy')
-    plan_matmul_tt.execute(0.0, w_A_tmp, 1.0, cache["Cocc_B"].T, w_A)
-    plan_matmul_tt.execute(0.0, w_A_MOB, 1.0, w_A_tmp, cache["Cvir_B"])
+    w_B_MOA = einsum_chain_gemm(
+        [cache['Cocc_A'], w_B, cache['Cvir_A']],
+        ['T', 'N', 'N'],
+    )
+    w_A_MOB = einsum_chain_gemm(
+        [cache['Cocc_B'], w_A, cache['Cvir_B']],
+        ['T', 'N', 'N'],
+    )
 
     # Do uncoupled induction calculations
     core.print_out("   => Uncoupled Induction <= \n\n")
