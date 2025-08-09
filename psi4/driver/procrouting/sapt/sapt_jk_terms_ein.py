@@ -497,97 +497,51 @@ def induction(
     ein.core.axpy(2.0,  einsum_chain_gemm([J_B, D_A, S, D_B, S]), EX_A)
     ein.core.axpy(-1.0, einsum_chain_gemm([K_O, D_B, S]), EX_A)
 
-    # Transform EX_A to MO basis: C_A^T @ EX_A @ C_vir_A
-    EX_A_tmp = ein.utils.tensor_factory("EX_A_tmp", [cache["Cocc_A"].shape[1], EX_A.shape[1]], np.float64, 'numpy')
-    EX_A_MO = ein.utils.tensor_factory("EX_A_MO", [cache["Cocc_A"].shape[1], cache["Cvir_A"].shape[1]], np.float64, 'numpy')
-    plan_matmul_tt.execute(0.0, EX_A_tmp, 1.0, cache["Cocc_A"].T, EX_A)
-    plan_matmul_tt.execute(0.0, EX_A_MO, 1.0, EX_A_tmp, cache["Cvir_A"])
-    # This shows that there is an error in the einsums chain above...
+    EX_A_MO = einsum_chain_gemm(
+        [cache['Cocc_A'], EX_A, cache['Cvir_A']],
+        ['T', 'N', 'N'],
+    )
 
-    # Complete EX_B construction using einsums
+    # Exch-Ind Potential B
     EX_B = K_A.copy()
     EX_B *= -1.0
     ein.core.axpy(-2.0, J_O, EX_B)
     ein.core.axpy(1.0, K_O.T, EX_B)
-    # ISSUE WITH J_P_A...
     ein.core.axpy(2.0, J_P_A, EX_B)
 
-    # Create intermediate tensors for EX_A chain operations
-    S_DA = ein.utils.tensor_factory("S_DA", [S.shape[0], D_A.shape[1]], np.float64, 'numpy')
-    DA_S = ein.utils.tensor_factory("DA_S", [D_A.shape[1], S.shape[0]], np.float64, 'numpy')
-    S_DA_VB = ein.utils.tensor_factory("S_DA_VB", [S.shape[0], V_B.shape[1]], np.float64, 'numpy')
-    S_DA_JB = ein.utils.tensor_factory("S_DA_JB", [S.shape[0], J_B.shape[1]], np.float64, 'numpy') 
-    S_DA_KB = ein.utils.tensor_factory("S_DA_KB", [S.shape[0], K_B.shape[1]], np.float64, 'numpy')
-    S_DA_S = ein.utils.tensor_factory("S_DA_S", [S.shape[0], S.shape[1]], np.float64, 'numpy')
-    S_DA_S_DB = ein.utils.tensor_factory("S_DA_S_DB", [S.shape[0], D_B.shape[1]], np.float64, 'numpy')
-    S_DA_S_DB_VA = ein.utils.tensor_factory("S_DA_S_DB_VA", [S.shape[0], V_A.shape[1]], np.float64, 'numpy')
-    S_DA_S_DB_JA = ein.utils.tensor_factory("S_DA_S_DB_JA", [S.shape[0], J_A.shape[1]], np.float64, 'numpy')
-    S_DA_VB_DA_S = ein.utils.tensor_factory("S_DA_VB_DA_S", [S.shape[0], S.shape[1]], np.float64, 'numpy')
-    S_DA_JB_DA_S = ein.utils.tensor_factory("S_DA_JB_DA_S", [S.shape[0], S.shape[1]], np.float64, 'numpy')
-    S_DA_KO = ein.utils.tensor_factory("S_DA_KO", [S.shape[0], K_O.shape[0]], np.float64, 'numpy')
-    VA_DA_S = ein.utils.tensor_factory("VA_DA_S", [V_A.shape[0], S.shape[1]], np.float64, 'numpy')
-    JA_DA = ein.utils.tensor_factory("JA_DA", [J_A.shape[0], D_A.shape[1]], np.float64, 'numpy')
-    JA_DA_S = ein.utils.tensor_factory("JA_DA_S", [J_A.shape[0], S.shape[1]], np.float64, 'numpy')
-    KA_DA_S = ein.utils.tensor_factory("KA_DA_S", [K_A.shape[0], S.shape[1]], np.float64, 'numpy')
-    VA_DB_S_DA_S = ein.utils.tensor_factory("VA_DB_S_DA_S", [V_A.shape[0], S.shape[1]], np.float64, 'numpy')
-    JA_DB_S_DA_S = ein.utils.tensor_factory("JA_DB_S_DA_S", [J_A.shape[0], S.shape[1]], np.float64, 'numpy')
-    KO_DA = ein.utils.tensor_factory("KO_DA", [K_O.shape[0], D_A.shape[1]], np.float64, 'numpy')
-    KO_DA_S = ein.utils.tensor_factory("KO_DA_S", [K_O.shape[0], S.shape[1]], np.float64, 'numpy')
-    S_DA_VB_DA = ein.utils.tensor_factory("S_DA_VB_DA", [S_DA.shape[0], D_A.shape[1]], np.float64, 'numpy')
-    S_DA_VB_DA_S = ein.utils.tensor_factory("S_DA_VB_DA_S", [S_DA.shape[0], S.shape[1]], np.float64, 'numpy')
-    S_DA_JB_DA = ein.utils.tensor_factory("S_DA_JB_DA", [J_B.shape[0], D_A.shape[1]], np.float64, 'numpy')
-    S_DA_JB_DA_S = ein.utils.tensor_factory("S_DA_JB_DA_S", [J_B.shape[0], S.shape[1]], np.float64, 'numpy')
-    VA_DB_S = ein.utils.tensor_factory("VA_DB_S", [V_A.shape[0], S.shape[1]], np.float64, 'numpy')
-    JA_DB_S = ein.utils.tensor_factory("JA_DB_S", [J_A.shape[0], S.shape[1]], np.float64, 'numpy')
-
-    # Compute all the EX_B chain operations using einsums
-    plan_matmul_tt.execute(0.0, S_DA, 1.0, S, D_A)
-    plan_matmul_tt.execute(0.0, DA_S, 1.0, D_A, S)
-    plan_matmul_tt.execute(0.0, S_DA_VB, 1.0, S_DA, V_B)
-    plan_matmul_tt.execute(0.0, S_DA_JB, 1.0, S_DA, J_B)
-    plan_matmul_tt.execute(0.0, S_DA_KB, 1.0, S_DA, K_B)
-    plan_matmul_tt.execute(0.0, S_DA_S, 1.0, S_DA, S)
-    plan_matmul_tt.execute(0.0, S_DA_S_DB, 1.0, S_DA_S, D_B)
-    plan_matmul_tt.execute(0.0, S_DA_S_DB_VA, 1.0, S_DA_S_DB, V_A)
-    plan_matmul_tt.execute(0.0, S_DA_S_DB_JA, 1.0, S_DA_S_DB, J_A)
-    plan_matmul_tt.execute(0.0, S_DA_VB_DA, 1.0, S_DA_VB, D_A)
-    plan_matmul_tt.execute(0.0, S_DA_VB_DA_S, 1.0, S_DA_VB_DA, S)
-    plan_matmul_tt.execute(0.0, S_DA_JB_DA, 1.0, S_DA_JB, D_A)
-    plan_matmul_tt.execute(0.0, S_DA_JB_DA_S, 1.0, S_DA_JB_DA, S)
-    plan_matmul_tt.execute(0.0, S_DA_KO, 1.0, S_DA, K_O)
-    plan_matmul_tt.execute(0.0, VA_DA_S, 1.0, V_A, DA_S)
-    plan_matmul_tt.execute(0.0, JA_DA, 1.0, J_A, D_A)
-    plan_matmul_tt.execute(0.0, JA_DA_S, 1.0, JA_DA, S)
-    plan_matmul_tt.execute(0.0, KA_DA_S, 1.0, K_A, DA_S)
-    plan_matmul_tt.execute(0.0, VA_DB_S, 1.0, V_A, DB_S)
-    plan_matmul_tt.execute(0.0, VA_DB_S_DA_S, 1.0, VA_DB_S, DA_S)
-    plan_matmul_tt.execute(0.0, JA_DB_S, 1.0, J_A, DB_S)
-    plan_matmul_tt.execute(0.0, JA_DB_S_DA_S, 1.0, JA_DB_S, DA_S)
-    plan_matmul_tt.execute(0.0, KO_DA, 1.0, K_O.T, D_A)
-    plan_matmul_tt.execute(0.0, KO_DA_S, 1.0, KO_DA, S)
+    S_DA, S_DA_VB, S_DA_VB_DA_S = einsum_chain_gemm(
+        [S, D_A, V_B, D_A, S],
+        return_tensors=[True, True, False, True]
+    )
+    S_DA_JB, S_DA_JB_DA_S = einsum_chain_gemm(
+        [S_DA, J_B, D_A, S],
+        return_tensors=[True, False, True]
+    )
+    S_DA_S_DB, S_DA_S_DB_VA = einsum_chain_gemm(
+        [S_DA, S, D_B, V_A],
+        return_tensors=[False, True, True],
+    )
 
     # Bpply all the axpy operations to EX_B
     ein.core.axpy(-1.0, S_DA_VB, EX_B)
     ein.core.axpy(-2.0, S_DA_JB, EX_B)
-    ein.core.axpy(1.0, S_DA_KB, EX_B)
+    ein.core.axpy(1.0, einsum_chain_gemm([S_DA, K_B]), EX_B)
     ein.core.axpy(1.0, S_DA_S_DB_VA, EX_B)
-    ein.core.axpy(2.0, S_DA_S_DB_JA, EX_B)
+    ein.core.axpy(2.0, einsum_chain_gemm([S_DA_S_DB, J_A]), EX_B)
     ein.core.axpy(1.0, S_DA_VB_DA_S, EX_B)
     ein.core.axpy(2.0, S_DA_JB_DA_S, EX_B)
-    ein.core.axpy(-1.0, S_DA_KO, EX_B)
+    ein.core.axpy(-1.0, einsum_chain_gemm([S_DA, K_O]), EX_B)
+    ein.core.axpy(-1.0, einsum_chain_gemm([V_A, D_A, S]), EX_B)
+    ein.core.axpy(-2.0, einsum_chain_gemm([J_A, D_A, S]), EX_B)
+    ein.core.axpy(1.0,  einsum_chain_gemm([K_A, D_A, S]), EX_B)
+    ein.core.axpy(1.0,  einsum_chain_gemm([V_A, D_B, S, D_A, S]), EX_B)
+    ein.core.axpy(2.0,  einsum_chain_gemm([J_A, D_B, S, D_A, S]), EX_B)
+    ein.core.axpy(-1.0, einsum_chain_gemm([K_O, D_A, S], ["T", "N", "N"]), EX_B)
 
-    ein.core.axpy(-1.0, VA_DA_S, EX_B)
-    ein.core.axpy(-2.0, JA_DA_S, EX_B)
-    ein.core.axpy(1.0, KA_DA_S, EX_B)
-    ein.core.axpy(1.0, VA_DB_S_DA_S, EX_B)
-    ein.core.axpy(2.0, JA_DB_S_DA_S, EX_B)
-    ein.core.axpy(-1.0, KO_DA_S, EX_B)
-
-    # Transform EX_B to MO basis: C_B^T @ EX_B @ C_vir_B
-    EX_B_tmp = ein.utils.tensor_factory("EX_B_tmp", [cache["Cocc_B"].shape[1], EX_B.shape[1]], np.float64, 'numpy')
-    EX_B_MO = ein.utils.tensor_factory("EX_B_MO", [cache["Cocc_B"].shape[1], cache["Cvir_B"].shape[1]], np.float64, 'numpy')
-    plan_matmul_tt.execute(0.0, EX_B_tmp, 1.0, cache["Cocc_B"].T, EX_B)
-    plan_matmul_tt.execute(0.0, EX_B_MO, 1.0, EX_B_tmp, cache["Cvir_B"])
+    EX_B_MO = einsum_chain_gemm(
+        [cache['Cocc_B'], EX_B, cache['Cvir_B']],
+        ['T', 'N', 'N'],
+    )
 
     # Build electrostatic potential using einsums
     w_A = V_A.copy()
