@@ -1050,14 +1050,12 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     def apply_precon(x_vec, act_mask):
         if act_mask[0]:
             pA = x_vec[0].copy()
-            # pA.apply_denominator(P_A)
             pA /= P_A
         else:
             pA = False
 
         if act_mask[1]:
             pB = x_vec[1].copy()
-            # pB.apply_denominator(P_B)
             pB /= P_B
         else:
             pB = False
@@ -1094,13 +1092,7 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     )
     core.print_out("   " + ("-" * sep_size) + "\n")
 
-    def sum_of_squares(tensor):
-        plan = ein.core.compile_plan("", "ij", "ij")
-        tensor_sum_of_squares = ein.utils.tensor_factory("", [1], np.float64, 'numpy')
-        plan.execute(0.0, tensor_sum_of_squares, 1.0, tensor, tensor)
-        return tensor_sum_of_squares[0]
-
-    start_resid = [sum_of_squares(rhsA), sum_of_squares(rhsB)]
+    start_resid = [ein.core.dot(rhsA, rhsA), ein.core.dot(rhsB, rhsB)]
 
     # print function
     def pfunc(niter, x_vec, r_vec):
@@ -1110,14 +1102,14 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
             niter = "%5d" % niter
 
         # Compute IndAB
-        valA = (sum_of_squares(r_vec[0]) / start_resid[0]) ** 0.5
+        valA = (ein.core.dot(r_vec[0], r_vec[0]) / start_resid[0]) ** 0.5
         if valA < conv:
             cA = "*"
         else:
             cA = " "
 
         # Compute IndBA
-        valB = (sum_of_squares(r_vec[1]) / start_resid[1]) ** 0.5
+        valB = (ein.core.dot(r_vec[1], r_vec[1]) / start_resid[1]) ** 0.5
         if valB < conv:
             cB = "*"
         else:

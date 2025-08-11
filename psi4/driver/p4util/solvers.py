@@ -280,16 +280,10 @@ def cg_solver_ein(
     z_vec = preconditioner(r_vec, active_mask)
     p_vec = [x.copy() for x in z_vec]
 
-    def sum_of_squares(tensor):
-        plan = ein.core.compile_plan("", "ij", "ij")
-        tensor_sum_of_squares = ein.utils.tensor_factory("", [1], np.float64, 'numpy')
-        plan.execute(0.0, tensor_sum_of_squares, 1.0, tensor, tensor)
-        return tensor_sum_of_squares[0]
-
     # First RMS
-    grad_dot = [sum_of_squares(x) for x in rhs_vec]
+    grad_dot = [ein.core.dot(x, x) for x in rhs_vec]
 
-    resid = [(sum_of_squares(r_vec[x]) / grad_dot[x])**0.5 for x in range(nrhs)]
+    resid = [(ein.core.dot(r_vec[x], r_vec[x]) / grad_dot[x])**0.5 for x in range(nrhs)]
 
     if printer:
         resid = printer(0, x_vec, r_vec)
@@ -322,7 +316,7 @@ def cg_solver_ein(
 
             ein.core.axpy(alpha[x], p_vec[x], x_vec[x])
             ein.core.axpy(-alpha[x], Ap_vec[x], r_vec[x])
-            resid[x] = (sum_of_squares(r_vec[x]) / grad_dot[x])**0.5
+            resid[x] = (ein.core.dot(r_vec[x], r_vec[x]) / grad_dot[x])**0.5
 
         # Print out or compute the resid function
         if printer:
