@@ -302,27 +302,19 @@ def cg_solver_ein(
     alpha = [0.0 for x in range(nrhs)]
     active = np.where(active_mask)[0]
 
-
-    plan_vector_dot = ein.core.compile_plan("", "ij", "ij")
-    def vector_dot(tensor1, tensor2):
-        """Compute a dot product between two `RuntimeTensor` objects."""
-        result = ein.utils.tensor_factory("", [1], np.float64, 'numpy')
-        plan_vector_dot.execute(0.0, result, 1.0, tensor1, tensor2)
-        return result[0]
-
     # CG iterations
     for rot_iter in range(maxiter):
 
         # Build old RZ so we can discard vectors
         for x in active:
-            rz_old[x] = vector_dot(r_vec[x], z_vec[x])
+            rz_old[x] = ein.core.dot(r_vec[x], z_vec[x])
 
         # Build Hx product
         Ap_vec = hx_function(p_vec, active_mask)
 
         # Update x and r
         for x in active:
-            alpha[x] = rz_old[x] / vector_dot(Ap_vec[x], p_vec[x])
+            alpha[x] = rz_old[x] / ein.core.dot(Ap_vec[x], p_vec[x])
             if np.isnan(alpha)[0]:
                 core.print_out("CG: Alpha is NaN for vector %d. Stopping vector." % x)
                 active_mask[x] = False
@@ -354,7 +346,7 @@ def cg_solver_ein(
         # Update p
         z_vec = preconditioner(r_vec, active_mask)
         for x in active:
-            beta = vector_dot(r_vec[x], z_vec[x]) / rz_old[x]
+            beta = ein.core.dot(r_vec[x], z_vec[x]) / rz_old[x]
             p_vec[x] = p_vec[x] * beta
             ein.core.axpy(1.0, z_vec[x], p_vec[x])
 

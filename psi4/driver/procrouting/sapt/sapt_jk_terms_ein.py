@@ -277,11 +277,6 @@ def exchange(cache, jk, do_print=True):
     if do_print:
         core.print_out("\n  ==> E10 Exchange Einsums <== \n\n")
 
-    # Setup vector dot plan for getting final Energy, E
-    plan_vector_dot = ein.core.compile_plan("", "ij", "ij")
-    # Reuse the same scalar for the final energy
-    E = ein.utils.tensor_factory("E", [1], np.float64, 'einsums')
-
     # Build potenitals
     h_A = cache["V_A"].copy()
     print("EINSUMS EXCHANGE")
@@ -356,15 +351,11 @@ def exchange(cache, jk, do_print=True):
 
     # Save some intermediate tensors to avoid recomputation in the next steps
     DA_S_DB_S_PA = einsum_chain_gemm([D_A, S, D_B, S, P_A])
-    plan_vector_dot.execute(0.0, E, 1.0, w_B, DA_S_DB_S_PA)
-    Exch_s2 -= 2.0 * float(E[0])
+    Exch_s2 -= 2.0 * ein.core.dot(w_B, DA_S_DB_S_PA)
 
     DB_S_DA_S_PB = einsum_chain_gemm([D_B, S, D_A, S, P_B])
-    plan_vector_dot.execute(0.0, E, 1.0, w_A, DB_S_DA_S_PB)
-    Exch_s2 -= 2.0 * float(E[0])
-
-    plan_vector_dot.execute(0.0, E, 1.0, Kij, einsum_chain_gemm([P_A, S, D_B]))
-    Exch_s2 -= 2.0 * float(E[0])
+    Exch_s2 -= 2.0 * ein.core.dot(w_A, DB_S_DA_S_PB)
+    Exch_s2 -= 2.0 * ein.core.dot(Kij, einsum_chain_gemm([P_A, S, D_B]))
 
     if do_print:
         core.print_out(print_sapt_var("Exch10(S^2) ", Exch_s2, short=True))
@@ -372,22 +363,14 @@ def exchange(cache, jk, do_print=True):
 
     # Start Sinf
     Exch10 = 0.0
-    plan_vector_dot.execute(0.0, E, 1.0, D_A, cache["K_B"])
-    Exch10 -= 2.0 * float(E[0])
-    plan_vector_dot.execute(0.0, E, 1.0, T_AA, h_B)
-    Exch10 += 2.0 * float(E[0])
-    plan_vector_dot.execute(0.0, E, 1.0, T_BB, h_A)
-    Exch10 += 2.0 * float(E[0])
-    plan_vector_dot.execute(0.0, E, 1.0, T_AB, h_A + h_B)
-    Exch10 += 2.0 * float(E[0])
-    plan_vector_dot.execute(0.0, E, 1.0, T_BB, JT_AB - 0.5 * KT_AB)
-    Exch10 += 4.0 * float(E[0])
-    plan_vector_dot.execute(0.0, E, 1.0, T_AA, JT_AB - 0.5 * KT_AB.T)
-    Exch10 += 4.0 * float(E[0])
-    plan_vector_dot.execute(0.0, E, 1.0, T_BB, JT_A - 0.5 * KT_A)
-    Exch10 += 4.0 * float(E[0])
-    plan_vector_dot.execute(0.0, E, 1.0, T_AB, JT_AB - 0.5 * KT_AB.T)
-    Exch10 += 4.0 * float(E[0])
+    Exch10 -= 2.0 * ein.core.dot(D_A, cache["K_B"])
+    Exch10 += 2.0 * ein.core.dot(T_AA, h_B)
+    Exch10 += 2.0 * ein.core.dot(T_BB, h_A)
+    Exch10 += 2.0 * ein.core.dot(T_AB, h_A + h_B)
+    Exch10 += 4.0 * ein.core.dot(T_BB, JT_AB - 0.5 * KT_AB)
+    Exch10 += 4.0 * ein.core.dot(T_AA, JT_AB - 0.5 * KT_AB.T)
+    Exch10 += 4.0 * ein.core.dot(T_BB, JT_A - 0.5 * KT_A)
+    Exch10 += 4.0 * ein.core.dot(T_AB, JT_AB - 0.5 * KT_AB.T)
 
     if do_print:
         core.set_variable("Exch10", Exch10)
@@ -582,23 +565,11 @@ def induction(
         for a in range(unc_x_A_MOB.shape[1]):
             unc_x_A_MOB[r, a] /= (eps_occ_B_np[r] - eps_vir_B_np[a])
 
-    # Compute uncoupled induction energies using vector dot products
-    plan_vector_dot = ein.core.compile_plan("", "ij", "ij")
-    
-    unc_ind_ab_tensor = ein.utils.tensor_factory("unc_ind_ab", [1], np.float64, 'einsums')
-    unc_ind_ba_tensor = ein.utils.tensor_factory("unc_ind_ba", [1], np.float64, 'einsums')
-    unc_indexch_ab_tensor = ein.utils.tensor_factory("unc_indexch_ab", [1], np.float64, 'einsums')
-    unc_indexch_ba_tensor = ein.utils.tensor_factory("unc_indexch_ba", [1], np.float64, 'einsums')
-    
-    plan_vector_dot.execute(0.0, unc_ind_ab_tensor, 1.0, unc_x_B_MOA, w_B_MOA)
-    plan_vector_dot.execute(0.0, unc_ind_ba_tensor, 1.0, unc_x_A_MOB, w_A_MOB)
-    plan_vector_dot.execute(0.0, unc_indexch_ab_tensor, 1.0, unc_x_B_MOA, EX_A_MO)
-    plan_vector_dot.execute(0.0, unc_indexch_ba_tensor, 1.0, unc_x_A_MOB, EX_B_MO)
-
-    unc_ind_ab = 2.0 * unc_ind_ab_tensor[0]
-    unc_ind_ba = 2.0 * unc_ind_ba_tensor[0]
-    unc_indexch_ab = 2.0 * unc_indexch_ab_tensor[0]
-    unc_indexch_ba = 2.0 * unc_indexch_ba_tensor[0]
+    # Compute uncoupled induction energies according to Eq. 14, 15
+    unc_ind_ab = 2.0 * ein.core.dot(unc_x_B_MOA, w_B_MOA)
+    unc_ind_ba = 2.0 * ein.core.dot(unc_x_A_MOB, w_A_MOB)
+    unc_indexch_ab = 2.0 * ein.core.dot(unc_x_B_MOA, EX_A_MO)
+    unc_indexch_ba = 2.0 * ein.core.dot(unc_x_A_MOB, EX_B_MO)
 
     ret = {}
     ret["Ind20,u (A<-B)"] = unc_ind_ab
@@ -948,15 +919,10 @@ def induction(
         ein.core.axpy(1.0, S_TA_KAB_inf_T_2, EX_BA_inf)
 
         # Compute uncoupled Sinf energies using vector dot products
-        unc_ind_ab_total_tensor_1 = ein.utils.tensor_factory("unc_ind_ab_total_1", [1], np.float64, 'numpy')
-        unc_ind_ab_total_tensor_2 = ein.utils.tensor_factory("unc_ind_ab_total_2", [1], np.float64, 'numpy')
-        unc_ind_ba_total_tensor_1 = ein.utils.tensor_factory("unc_ind_ba_total_1", [1], np.float64, 'numpy')
-        unc_ind_ba_total_tensor_2 = ein.utils.tensor_factory("unc_ind_ba_total_2", [1], np.float64, 'numpy')
-        
-        plan_vector_dot.execute(0.0, unc_ind_ab_total_tensor_1, 1.0, sT_A, EX_AA_inf)
-        plan_vector_dot.execute(0.0, unc_ind_ab_total_tensor_2, 1.0, sT_AB, EX_AB_inf)
-        plan_vector_dot.execute(0.0, unc_ind_ba_total_tensor_1, 1.0, sT_B, EX_BB_inf)
-        plan_vector_dot.execute(0.0, unc_ind_ba_total_tensor_2, 1.0, sT_BA, EX_BA_inf)
+        unc_ind_ab_total_tensor_1 = ein.core.dot(sT_A, EX_AA_inf)
+        unc_ind_ab_total_tensor_2 = ein.core.dot(sT_AB, EX_AB_inf)
+        unc_ind_ba_total_tensor_1 = ein.core.dot(sT_B, EX_BB_inf)
+        unc_ind_ba_total_tensor_2 = ein.core.dot(sT_BA, EX_BA_inf)
 
         unc_ind_ab_total = 2.0 * (unc_ind_ab_total_tensor_1[0] + unc_ind_ab_total_tensor_2[0])
         unc_ind_ba_total = 2.0 * (unc_ind_ba_total_tensor_1[0] + unc_ind_ba_total_tensor_2[0])
@@ -1033,19 +999,8 @@ def induction(
             plan_matmul_tt.execute(0.0, cT_BA_tmp2, 1.0, cT_BA_tmp1, Tmo_AB.T)
             plan_matmul_tt.execute(0.0, cT_BA, 1.0, cT_BA_tmp2.T, cache["Cocc_A"].T)
 
-            # Compute coupled Sinf energies using vector dot products
-            ind_ab_total_tensor_1 = ein.utils.tensor_factory("ind_ab_total_1", [1], np.float64, 'numpy')
-            ind_ab_total_tensor_2 = ein.utils.tensor_factory("ind_ab_total_2", [1], np.float64, 'numpy')
-            ind_ba_total_tensor_1 = ein.utils.tensor_factory("ind_ba_total_1", [1], np.float64, 'numpy')
-            ind_ba_total_tensor_2 = ein.utils.tensor_factory("ind_ba_total_2", [1], np.float64, 'numpy')
-            
-            plan_vector_dot.execute(0.0, ind_ab_total_tensor_1, 1.0, cT_A, EX_AA_inf)
-            plan_vector_dot.execute(0.0, ind_ab_total_tensor_2, 1.0, cT_AB, EX_AB_inf)
-            plan_vector_dot.execute(0.0, ind_ba_total_tensor_1, 1.0, cT_B, EX_BB_inf)
-            plan_vector_dot.execute(0.0, ind_ba_total_tensor_2, 1.0, cT_BA, EX_BA_inf)
-
-            ind_ab_total = 2.0 * (ind_ab_total_tensor_1[0] + ind_ab_total_tensor_2[0])
-            ind_ba_total = 2.0 * (ind_ba_total_tensor_1[0] + ind_ba_total_tensor_2[0])
+            ind_ab_total = 2.0 * (ein.core.dot(cT_A, EX_AA_inf) + ein.core.dot(cT_AB, EX_AB_inf))
+            ind_ba_total = 2.0 * (ein.core.dot(cT_B, EX_BB_inf) + ein.core.dot(cT_BA, EX_BA_inf))
             indexch_ab_inf = ind_ab_total - ind_ab
             indexch_ba_inf = ind_ba_total - ind_ba
 
