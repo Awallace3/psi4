@@ -1231,7 +1231,7 @@ def test_einsum_terms():
     for k, v in Eref_nh.items():  # TEST
         ref = v
         assert compare_values(
-            ref, psi4.variable(k) * 1000, 6, "!hyb, xd=none, !dHF: " + k
+            ref, psi4.variable(k) * 1000, 8, "!hyb, xd=none, !dHF: " + k
         )
 
 

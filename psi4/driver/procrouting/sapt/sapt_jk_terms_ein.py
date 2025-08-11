@@ -585,10 +585,10 @@ def induction(
     # Compute uncoupled induction energies using vector dot products
     plan_vector_dot = ein.core.compile_plan("", "ij", "ij")
     
-    unc_ind_ab_tensor = ein.utils.tensor_factory("unc_ind_ab", [1], np.float64, 'numpy')
-    unc_ind_ba_tensor = ein.utils.tensor_factory("unc_ind_ba", [1], np.float64, 'numpy')
-    unc_indexch_ab_tensor = ein.utils.tensor_factory("unc_indexch_ab", [1], np.float64, 'numpy')
-    unc_indexch_ba_tensor = ein.utils.tensor_factory("unc_indexch_ba", [1], np.float64, 'numpy')
+    unc_ind_ab_tensor = ein.utils.tensor_factory("unc_ind_ab", [1], np.float64, 'einsums')
+    unc_ind_ba_tensor = ein.utils.tensor_factory("unc_ind_ba", [1], np.float64, 'einsums')
+    unc_indexch_ab_tensor = ein.utils.tensor_factory("unc_indexch_ab", [1], np.float64, 'einsums')
+    unc_indexch_ba_tensor = ein.utils.tensor_factory("unc_indexch_ba", [1], np.float64, 'einsums')
     
     plan_vector_dot.execute(0.0, unc_ind_ab_tensor, 1.0, unc_x_B_MOA, w_B_MOA)
     plan_vector_dot.execute(0.0, unc_ind_ba_tensor, 1.0, unc_x_A_MOB, w_A_MOB)
@@ -978,34 +978,14 @@ def induction(
         core.print_out("\n   => Coupled Induction <= \n\n")
 
         cphf_r_convergence = core.get_option("SAPT", "CPHF_R_CONVERGENCE")
-
-        # Convert einsums tensors back to psi4 Matrices for CPHF solver
-        w_B_MOA_matrix = core.Matrix.from_array(w_B_MOA)
-        w_A_MOB_matrix = core.Matrix.from_array(w_A_MOB)
-
         x_B_MOA, x_A_MOB = _sapt_cpscf_solve(
-            cache, jk, w_B_MOA_matrix, w_A_MOB_matrix, 20, cphf_r_convergence, sapt_jk_B=sapt_jk_B
+            cache, jk, w_B_MOA, w_A_MOB, 20, cphf_r_convergence, sapt_jk_B=sapt_jk_B
         )
 
-        # Convert solution vectors back to einsums tensors
-        x_B_MOA_ein = ein.core.RuntimeTensorD(x_B_MOA.np)
-        x_A_MOB_ein = ein.core.RuntimeTensorD(x_A_MOB.np)
-
-        # Compute coupled induction energies
-        ind_ab_tensor = ein.utils.tensor_factory("ind_ab", [1], np.float64, 'numpy')
-        ind_ba_tensor = ein.utils.tensor_factory("ind_ba", [1], np.float64, 'numpy')
-        indexch_ab_tensor = ein.utils.tensor_factory("indexch_ab", [1], np.float64, 'numpy')
-        indexch_ba_tensor = ein.utils.tensor_factory("indexch_ba", [1], np.float64, 'numpy')
-
-        plan_vector_dot.execute(0.0, ind_ab_tensor, 1.0, x_B_MOA_ein, w_B_MOA)
-        plan_vector_dot.execute(0.0, ind_ba_tensor, 1.0, x_A_MOB_ein, w_A_MOB)
-        plan_vector_dot.execute(0.0, indexch_ab_tensor, 1.0, x_B_MOA_ein, EX_A_MO)
-        plan_vector_dot.execute(0.0, indexch_ba_tensor, 1.0, x_A_MOB_ein, EX_B_MO)
-
-        ind_ab = 2.0 * ind_ab_tensor[0]
-        ind_ba = 2.0 * ind_ba_tensor[0]
-        indexch_ab = 2.0 * indexch_ab_tensor[0]
-        indexch_ba = 2.0 * indexch_ba_tensor[0]
+        ind_ab = 2.0 * ein.core.dot(x_B_MOA, w_B_MOA)
+        ind_ba = 2.0 * ein.core.dot(x_A_MOB, w_A_MOB)
+        indexch_ab = 2.0 * ein.core.dot(x_B_MOA, EX_A_MO)
+        indexch_ba = 2.0 * ein.core.dot(x_A_MOB, EX_B_MO)
 
         ret["Ind20,r (A<-B)"] = ind_ab
         ret["Ind20,r (A->B)"] = ind_ba
@@ -1025,31 +1005,31 @@ def induction(
         if Sinf:
             # TODO: need a test for Sinf... highly certain Einsums are wrong here...
             # Compute cT matrices using coupled amplitudes
-            cT_A_tmp1 = ein.utils.tensor_factory("cT_A_tmp1", [cache["Cvir_A"].shape[1], x_B_MOA_ein.shape[0]], np.float64, 'numpy')
+            cT_A_tmp1 = ein.utils.tensor_factory("cT_A_tmp1", [cache["Cvir_A"].shape[1], x_B_MOA.shape[0]], np.float64, 'numpy')
             cT_A_tmp2 = ein.utils.tensor_factory("cT_A_tmp2", [cache["Cvir_A"].shape[1], Tmo_AA.shape[1]], np.float64, 'numpy')
             cT_A = ein.utils.tensor_factory("cT_A", [cache["Cvir_A"].shape[0], cache["Cocc_A"].shape[0]], np.float64, 'numpy')
-            plan_matmul_tt.execute(0.0, cT_A_tmp1, 1.0, cache["Cvir_A"].T, x_B_MOA_ein.T)
+            plan_matmul_tt.execute(0.0, cT_A_tmp1, 1.0, cache["Cvir_A"].T, x_B_MOA.T)
             plan_matmul_tt.execute(0.0, cT_A_tmp2, 1.0, cT_A_tmp1, Tmo_AA)
             plan_matmul_tt.execute(0.0, cT_A, 1.0, cT_A_tmp2.T, cache["Cocc_A"].T)
 
-            cT_B_tmp1 = ein.utils.tensor_factory("cT_B_tmp1", [cache["Cvir_B"].shape[1], x_A_MOB_ein.shape[0]], np.float64, 'numpy')
+            cT_B_tmp1 = ein.utils.tensor_factory("cT_B_tmp1", [cache["Cvir_B"].shape[1], x_A_MOB.shape[0]], np.float64, 'numpy')
             cT_B_tmp2 = ein.utils.tensor_factory("cT_B_tmp2", [cache["Cvir_B"].shape[1], Tmo_BB.shape[1]], np.float64, 'numpy')
             cT_B = ein.utils.tensor_factory("cT_B", [cache["Cvir_B"].shape[0], cache["Cocc_B"].shape[0]], np.float64, 'numpy')
-            plan_matmul_tt.execute(0.0, cT_B_tmp1, 1.0, cache["Cvir_B"].T, x_A_MOB_ein.T)
+            plan_matmul_tt.execute(0.0, cT_B_tmp1, 1.0, cache["Cvir_B"].T, x_A_MOB.T)
             plan_matmul_tt.execute(0.0, cT_B_tmp2, 1.0, cT_B_tmp1, Tmo_BB)
             plan_matmul_tt.execute(0.0, cT_B, 1.0, cT_B_tmp2.T, cache["Cocc_B"].T)
 
-            cT_AB_tmp1 = ein.utils.tensor_factory("cT_AB_tmp1", [cache["Cvir_A"].shape[1], x_B_MOA_ein.shape[0]], np.float64, 'numpy')
+            cT_AB_tmp1 = ein.utils.tensor_factory("cT_AB_tmp1", [cache["Cvir_A"].shape[1], x_B_MOA.shape[0]], np.float64, 'numpy')
             cT_AB_tmp2 = ein.utils.tensor_factory("cT_AB_tmp2", [cache["Cvir_A"].shape[1], Tmo_AB.shape[1]], np.float64, 'numpy')
             cT_AB = ein.utils.tensor_factory("cT_AB", [cache["Cvir_A"].shape[0], cache["Cocc_B"].shape[0]], np.float64, 'numpy')
-            plan_matmul_tt.execute(0.0, cT_AB_tmp1, 1.0, cache["Cvir_A"].T, x_B_MOA_ein.T)
+            plan_matmul_tt.execute(0.0, cT_AB_tmp1, 1.0, cache["Cvir_A"].T, x_B_MOA.T)
             plan_matmul_tt.execute(0.0, cT_AB_tmp2, 1.0, cT_AB_tmp1, Tmo_AB)
             plan_matmul_tt.execute(0.0, cT_AB, 1.0, cT_AB_tmp2.T, cache["Cocc_B"].T)
 
-            cT_BA_tmp1 = ein.utils.tensor_factory("cT_BA_tmp1", [cache["Cvir_B"].shape[1], x_A_MOB_ein.shape[0]], np.float64, 'numpy')
+            cT_BA_tmp1 = ein.utils.tensor_factory("cT_BA_tmp1", [cache["Cvir_B"].shape[1], x_A_MOB.shape[0]], np.float64, 'numpy')
             cT_BA_tmp2 = ein.utils.tensor_factory("cT_BA_tmp2", [cache["Cvir_B"].shape[1], Tmo_AB.shape[0]], np.float64, 'numpy')
             cT_BA = ein.utils.tensor_factory("cT_BA", [cache["Cvir_B"].shape[0], cache["Cocc_A"].shape[0]], np.float64, 'numpy')
-            plan_matmul_tt.execute(0.0, cT_BA_tmp1, 1.0, cache["Cvir_B"].T, x_A_MOB_ein.T)
+            plan_matmul_tt.execute(0.0, cT_BA_tmp1, 1.0, cache["Cvir_B"].T, x_A_MOB.T)
             plan_matmul_tt.execute(0.0, cT_BA_tmp2, 1.0, cT_BA_tmp1, Tmo_AB.T)
             plan_matmul_tt.execute(0.0, cT_BA, 1.0, cT_BA_tmp2.T, cache["Cocc_A"].T)
 
@@ -1094,15 +1074,15 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
         cache["wfn_B"].set_jk(jk)
 
     def setup_P_X(eps_occ, eps_vir, name='P_X'):
-        P_X = ein.utils.tensor_factory(name, [eps_occ.shape[0], eps_vir.shape[0]], np.float64, 'numpy')
+        P_X = ein.utils.tensor_factory(name, [eps_occ.shape[0], eps_vir.shape[0]], np.float64, 'einsums')
 
-        ones_occ = ein.utils.tensor_factory("ones_occ", [eps_occ.shape[0]], np.float64, 'numpy')
-        ones_vir = ein.utils.tensor_factory("ones_vir", [eps_vir.shape[0]], np.float64, 'numpy')
-        ones_occ.fill(1.0)
-        ones_vir.fill(1.0)
+        ones_occ = ein.utils.tensor_factory("ones_occ", [eps_occ.shape[0]], np.float64, 'einsums')
+        ones_vir = ein.utils.tensor_factory("ones_vir", [eps_vir.shape[0]], np.float64, 'einsums')
+        ones_occ.set_all(1.0)
+        ones_vir.set_all(1.0)
         plan_outer = ein.core.compile_plan("ia", "i", "a")
         plan_outer.execute(0.0, P_X, 1.0, eps_occ, ones_vir)
-        eps_vir_2D = ein.utils.tensor_factory("eps_vir_2D", [eps_occ.shape[0], eps_vir.shape[0]], np.float64, 'numpy')
+        eps_vir_2D = ein.utils.tensor_factory("eps_vir_2D", [eps_occ.shape[0], eps_vir.shape[0]], np.float64, 'einsums')
         plan_outer.execute(0.0, eps_vir_2D, 1.0, ones_occ, eps_vir)
         ein.core.axpy(-1.0, eps_vir_2D, P_X)
         return P_X
@@ -1110,40 +1090,39 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     # Make a preconditioner function
     P_A = setup_P_X(cache['eps_occ_A'], cache['eps_vir_A'])
     P_B = setup_P_X(cache['eps_occ_B'], cache['eps_vir_B'])
-    P_A = core.Matrix.from_array(P_A, "P_A")
-    P_B = core.Matrix.from_array(P_B, "P_B")
-
-    print(P_A.np)
 
     # Preconditioner function
     def apply_precon(x_vec, act_mask):
         if act_mask[0]:
-            pA = x_vec[0].clone()
-            pA.apply_denominator(P_A)
+            pA = x_vec[0].copy()
+            # pA.apply_denominator(P_A)
+            pA /= P_A
         else:
             pA = False
 
         if act_mask[1]:
-            pB = x_vec[1].clone()
-            pB.apply_denominator(P_B)
+            pB = x_vec[1].copy()
+            # pB.apply_denominator(P_B)
+            pB /= P_B
         else:
             pB = False
-
         return [pA, pB]
 
     # Hx function
     def hessian_vec(x_vec, act_mask):
+        # TODO: to convert to einsums fully here, would need to re-write
+        # cphf_HX, onel_Hx, and twoel_Hx functions in libscf_solver/uhf.cc
         if act_mask[0]:
-            xA = cache["wfn_A"].cphf_Hx([x_vec[0]])[0]
+            xA = cache["wfn_A"].cphf_Hx([core.Matrix.from_array(x_vec[0])])[0]
         else:
             xA = False
 
         if act_mask[1]:
-            xB = cache["wfn_B"].cphf_Hx([x_vec[1]])[0]
+            xB = cache["wfn_B"].cphf_Hx([core.Matrix.from_array(x_vec[1])])[0]
         else:
             xB = False
 
-        return [xA, xB]
+        return [xA.np, xB.np]
 
     # Manipulate the printing
     sep_size = 51
@@ -1160,7 +1139,13 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     )
     core.print_out("   " + ("-" * sep_size) + "\n")
 
-    start_resid = [rhsA.sum_of_squares(), rhsB.sum_of_squares()]
+    def sum_of_squares(tensor):
+        plan = ein.core.compile_plan("", "ij", "ij")
+        tensor_sum_of_squares = ein.utils.tensor_factory("", [1], np.float64, 'numpy')
+        plan.execute(0.0, tensor_sum_of_squares, 1.0, tensor, tensor)
+        return tensor_sum_of_squares[0]
+
+    start_resid = [sum_of_squares(rhsA), sum_of_squares(rhsB)]
 
     # print function
     def pfunc(niter, x_vec, r_vec):
@@ -1170,14 +1155,14 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
             niter = "%5d" % niter
 
         # Compute IndAB
-        valA = (r_vec[0].sum_of_squares() / start_resid[0]) ** 0.5
+        valA = (sum_of_squares(r_vec[0]) / start_resid[0]) ** 0.5
         if valA < conv:
             cA = "*"
         else:
             cA = " "
 
         # Compute IndBA
-        valB = (r_vec[1].sum_of_squares() / start_resid[1]) ** 0.5
+        valB = (sum_of_squares(r_vec[1]) / start_resid[1]) ** 0.5
         if valB < conv:
             cB = "*"
         else:
@@ -1190,7 +1175,7 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
         return [valA, valB]
 
     # Compute the solver
-    vecs, resid = solvers.cg_solver(
+    vecs, resid = solvers.cg_solver_ein(
         [rhsA, rhsB],
         hessian_vec,
         apply_precon,

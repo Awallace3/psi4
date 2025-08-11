@@ -524,6 +524,7 @@ def induction(
             core.print_out(print_sapt_var(name, ret[name], short=True))
             core.print_out("\n")
 
+    # TODO: Test case where Sinf is needed... Ne-Ne does not change
     # Exch-Ind without S^2
     if Sinf:
         nocc_A = cache["Cocc_A"].shape[1]
@@ -805,9 +806,7 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     # Make a preconditioner function
     print("sapt_cpsch_solve")
     P_A = core.Matrix(cache["eps_occ_A"].shape[0], cache["eps_vir_A"].shape[0])
-    print(cache["eps_occ_A"].np.reshape(-1, 1), cache["eps_vir_A"].np)
     P_A.np[:] = cache["eps_occ_A"].np.reshape(-1, 1) - cache["eps_vir_A"].np
-    print(P_A.np)
 
     P_B = core.Matrix(cache["eps_occ_B"].shape[0], cache["eps_vir_B"].shape[0])
     P_B.np[:] = cache["eps_occ_B"].np.reshape(-1, 1) - cache["eps_vir_B"].np
@@ -825,7 +824,6 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
             pB.apply_denominator(P_B)
         else:
             pB = False
-
         return [pA, pB]
 
     # Hx function
@@ -858,6 +856,7 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     core.print_out("   " + ("-" * sep_size) + "\n")
 
     start_resid = [rhsA.sum_of_squares(), rhsB.sum_of_squares()]
+    print(start_resid)
 
     # print function
     def pfunc(niter, x_vec, r_vec):
