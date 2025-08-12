@@ -244,11 +244,10 @@ def exchange(cache, jk, do_print=True):
     r"""
     Computes the E10 exchange (S^2 and S^inf) from a build_sapt_jk_cache datacache.
 
-    Equation E^{(1)}_{\rm exch}(S^2) = 
+    Equation E^{(1)}_{\rm exch}(S^2) =
         -2(P^{A,occ} S^{AO} P^{B,occ} S^{AO} P^{A,vir}) \cdot \omega^{B}
         -2(P^{B,occ} S^{AO} P^{A,occ} S^{AO} P^{B,vir}) \cdot \omega^{B}
         -2(P^{A,vir} S^{AO} P^{B,occ}) \cdot K[P^{A,occ} S^{AO} P^{B,vir}]
-
     """
 
     if do_print:
@@ -532,21 +531,20 @@ def induction(
     unc_x_B_MOA = w_B_MOA.copy()
     unc_x_A_MOB = w_A_MOB.copy()
     
-    # Convert to numpy for element-wise operations, then back to einsums
-    eps_occ_A_np = cache["eps_occ_A"]
-    eps_vir_A_np = cache["eps_vir_A"]
-    eps_occ_B_np = cache["eps_occ_B"]
-    eps_vir_B_np = cache["eps_vir_B"]
+    eps_occ_A = cache["eps_occ_A"]
+    eps_vir_A = cache["eps_vir_A"]
+    eps_occ_B = cache["eps_occ_B"]
+    eps_vir_B = cache["eps_vir_B"]
     
     # Eq. 20
     for r in range(unc_x_B_MOA.shape[0]):
         for a in range(unc_x_B_MOA.shape[1]):
-            unc_x_B_MOA[r, a] /= (eps_occ_A_np[r] - eps_vir_A_np[a])
+            unc_x_B_MOA[r, a] /= (eps_occ_A[r] - eps_vir_A[a])
     
     # Eq. 20
     for r in range(unc_x_A_MOB.shape[0]):
         for a in range(unc_x_A_MOB.shape[1]):
-            unc_x_A_MOB[r, a] /= (eps_occ_B_np[r] - eps_vir_B_np[a])
+            unc_x_A_MOB[r, a] /= (eps_occ_B[r] - eps_vir_B[a])
 
     # Compute uncoupled induction energies according to Eq. 14, 15
     unc_ind_ab = 2.0 * ein.core.dot(unc_x_B_MOA, w_B_MOA)
