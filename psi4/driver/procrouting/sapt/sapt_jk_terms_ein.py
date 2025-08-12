@@ -80,33 +80,18 @@ def build_sapt_jk_cache(
     cache["eps_occ_B"].set_name("eps_occ_B")
     cache["eps_vir_B"].set_name("eps_vir_B")
 
-    # Build the densities as HF takes an extra "step"
-
-    # Should be fine, but only fills in half the matrix... is it because of the symmetry? How can I fix this to use plan_matmul_tT?
-    # plan_matmul_tT = ein.core.compile_plan("ij", "ik", "jk")
-    plan_matmul_tt = ein.core.compile_plan("ij", "ik", "kj")
-    # D_X corresponds to P^{X,occ}
-    cache["D_A"] = ein.utils.tensor_factory("D_A", [cache["Cocc_A"].shape[0], cache["Cocc_A"].shape[0]], np.float64, 'einsums')
-    cache["D_B"] = ein.utils.tensor_factory("D_B", [cache["Cocc_B"].shape[0], cache["Cocc_B"].shape[0]], np.float64, 'einsums')
-    plan_matmul_tt.execute(0.0, cache['D_A'], 1.0, cache['Cocc_A'], cache['Cocc_A'].T)
-    plan_matmul_tt.execute(0.0, cache['D_B'], 1.0, cache['Cocc_B'], cache['Cocc_B'].T)
-
-    # P_X corresponds to P^{X,vir}
-    cache["P_A"] = ein.utils.tensor_factory("P_A", [cache["Cvir_A"].shape[0], cache["Cvir_A"].shape[0]], np.float64, 'einsums')
-    cache["P_B"] = ein.utils.tensor_factory("P_B", [cache["Cvir_B"].shape[0], cache["Cvir_B"].shape[0]], np.float64, 'einsums')
-    plan_matmul_tt.execute(0.0, cache['P_A'], 1.0, cache['Cvir_A'], cache['Cvir_A'].T)
-    plan_matmul_tt.execute(0.0, cache['P_B'], 1.0, cache['Cvir_B'], cache['Cvir_B'].T)
+    # Build the densities as HF takes an extra "step", Eq. 5
+    cache["D_A"] = einsum_chain_gemm([cache['Cocc_A'], cache['Cocc_A']], ['N', 'T'])
+    cache['D_B'] = einsum_chain_gemm([cache['Cocc_B'], cache['Cocc_B']], ['N', 'T'])
+    # Eq. 7
+    cache["P_A"] = einsum_chain_gemm([cache['Cvir_A'], cache['Cvir_A']], ['N', 'T'])
+    cache['P_B'] = einsum_chain_gemm([cache['Cvir_B'], cache['Cvir_B']], ['N', 'T'])
 
     # Potential ints
     mints = core.MintsHelper(wfn_A.basisset())
-    # cache["V_A"] = ein.core.RuntimeTensorD(mints.ao_potential().np)
-    tmp = mints.ao_potential().np
-    cache["V_A"] = ein.utils.tensor_factory("V_A", [tmp.shape[0], tmp.shape[1]], np.float64, 'numpy')
-    cache["V_A"][:] = tmp[:]
+    cache["V_A"] = ein.core.RuntimeTensorD(mints.ao_potential().np)
     mints = core.MintsHelper(wfn_B.basisset())
-    tmp = mints.ao_potential().np
-    cache["V_B"] = ein.utils.tensor_factory("V_B", [tmp.shape[0], tmp.shape[1]], np.float64, 'numpy')
-    cache["V_B"][:] = tmp[:]
+    cache["V_B"] = ein.core.RuntimeTensorD(mints.ao_potential().np)
 
     # External Potentials need to add to V_A and V_B
     # TODO: update this for einsums adding
@@ -134,16 +119,8 @@ def build_sapt_jk_cache(
     jk.C_left_add(wfn_B.Ca_subset("SO", "OCC"))
     jk.C_right_add(wfn_B.Ca_subset("SO", "OCC"))
 
-    # K_O J/K
-    # C_O_A = core.triplet(cache["D_B"], cache["S"], cache["Cocc_A"], False, False, False)
-    C_O_A = ein.utils.tensor_factory("C_O_A", [cache["D_B"].shape[0], cache["Cocc_A"].shape[1]], np.float64, 'numpy')
-    DB_S = ein.utils.tensor_factory("DB_S", [cache["D_B"].shape[0], cache["S"].shape[1]], np.float64, 'numpy')
-    plan_matmul_tt.execute(0.0, DB_S, 1.0, cache["D_B"], cache["S"])
-    plan_matmul_tt.execute(0.0, C_O_A, 1.0, DB_S, cache["Cocc_A"])
-
-    C_O_A_matrix = core.Matrix.from_array(C_O_A)
-    # Q: How can I convert jk to use RuntimeTensorD?
-    jk.C_left_add(C_O_A_matrix)
+    DB_S_CA = core.Matrix.from_array(einsum_chain_gemm([cache['D_B'], cache['S'], cache['Cocc_A']]))
+    jk.C_left_add(DB_S_CA)
     jk.C_right_add(core.Matrix.from_array(cache["Cocc_A"]))
 
     jk.compute()
@@ -154,7 +131,7 @@ def build_sapt_jk_cache(
     cache["J_B"] = ein.core.RuntimeTensorD(jk.J()[1].clone().np)
     cache["K_B"] = ein.core.RuntimeTensorD(jk.K()[1].clone().np)
     cache["J_O"] = ein.core.RuntimeTensorD(jk.J()[2].clone().np)
-    cache["K_O"] = ein.core.RuntimeTensorD(jk.K()[2].clone().np).T
+    cache["K_O"] = ein.core.RuntimeTensorD(jk.K()[2].clone().np.T)
 
     monA_nr = wfn_A.molecule().nuclear_repulsion_energy()
     monB_nr = wfn_B.molecule().nuclear_repulsion_energy()
@@ -335,6 +312,10 @@ def exchange(cache, jk, do_print=True):
 
     jk.C_left_add(core.Matrix.from_array(cache["Cocc_A"]))
     jk.C_right_add(core.Matrix.from_array(einsum_chain_gemm([P_B, S, cache['Cocc_A']])))
+    # This also works... you can choose to form the density-like matrix either
+    # way..., just remember that the C_right_add has an adjoint (transpose, and switch matmul order)
+    # jk.C_left_add(core.Matrix.from_array(einsum_chain_gemm([D_A, S, cache['Cvir_B']])))
+    # jk.C_right_add(core.Matrix.from_array(cache['Cvir_B']))
     jk.compute()
 
     JT_A, JT_AB, Jij = jk.J()
@@ -526,11 +507,13 @@ def induction(
         ['T', 'N', 'N'],
     )
 
-    # Build electrostatic potential using einsums
+    # Build electrostatic potentials - $\omega_A$ = w_A, Eq. 8
     w_A = V_A.copy()
+    w_A.set_name("w_A")
     ein.core.axpy(2.0, J_A, w_A)
     
     w_B = V_B.copy()
+    w_B.set_name("w_B")
     ein.core.axpy(2.0, J_B, w_B)
 
     w_B_MOA = einsum_chain_gemm(
@@ -1065,11 +1048,15 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     def hessian_vec(x_vec, act_mask):
         # TODO: to convert to einsums fully here, would need to re-write
         # cphf_HX, onel_Hx, and twoel_Hx functions in libscf_solver/uhf.cc
+        print(f"x_vec[0]", x_vec[0])
+        for i in range(len(x_vec) // 2):
+            print(x_vec[0][2 * i])
         if act_mask[0]:
             xA = cache["wfn_A"].cphf_Hx([core.Matrix.from_array(x_vec[0])])[0]
         else:
             xA = False
 
+        print(f"x_vec[1]", x_vec[1])
         if act_mask[1]:
             xB = cache["wfn_B"].cphf_Hx([core.Matrix.from_array(x_vec[1])])[0]
         else:
