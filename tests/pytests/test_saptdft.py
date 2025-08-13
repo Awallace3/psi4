@@ -1225,6 +1225,7 @@ def test_einsum_terms():
             "SAPT_DFT_DO_DHF": False,
             "SAPT_DFT_DO_HYBRID": False,
             "SAPT_DFT_EXCH_DISP_SCALE_SCHEME": "None",
+            "SAPT_DFT_DO_FSAPT": False,
         }
     )
     psi4.energy("sapt(dft)", molecule=mol)
@@ -1234,11 +1235,61 @@ def test_einsum_terms():
             ref, psi4.variable(k) * 1000, 8, "!hyb, xd=none, !dHF: " + k
         )
 
+def test_fsaptdft():
+    """
+    built from sapt-dft1 ctest
+    """
+    Eref_nh = {
+        # mEh
+        "SAPT ELST ENERGY": -0.0033529619489769402,
+        "SAPT EXCH ENERGY": 1.2025482154546578e-05,
+        "SAPT IND ENERGY": -1.2227400973891604e-05,
+        "SAPT DISP ENERGY": -0.005176878264916587,
+        "CURRENT ENERGY": -0.008530042132712874,
+    }  # TEST
+    mol = psi4.geometry("""
+0 1
+C 0.00000000 0.00000000 0.00000000
+H 1.09000000 0.00000000 0.00000000
+H -0.36333333 0.83908239 0.59332085
+H -0.36333333 0.09428973 -1.02332709
+H -0.36333333 -0.93337212 0.43000624
+--
+0 1
+C 6.44536662 -0.26509169 -0.00000000
+H 7.53536662 -0.26509169 -0.00000000
+H 6.08203329 0.57399070 0.59332085
+H 6.08203329 -0.17080196 -1.02332709
+H 6.08203329 -1.19846381 0.43000624
+symmetry c1
+no_reorient
+no_com
+""")
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "sapt_dft_grac_shift_a": 0.203293,
+            "sapt_dft_grac_shift_b": 0.203293,
+            "SAPT_DFT_DO_DHF": False,
+            "SAPT_DFT_DO_HYBRID": False,
+            "SAPT_DFT_EXCH_DISP_SCALE_SCHEME": "None",
+            "SAPT_DFT_DO_FSAPT": True,
+        }
+    )
+    psi4.energy("sapt(dft)", molecule=mol)
+    for k, v in Eref_nh.items():  # TEST
+        ref = v
+        assert compare_values(
+            ref, psi4.variable(k) * 1000, 8, "!hyb, xd=none, !dHF: " + k
+        )
 
 if __name__ == "__main__":
     psi4.set_memory("14 GB")
     psi4.set_num_threads(8)
+    # test_einsum_terms()
     test_einsum_terms()
+    test_fsaptdft()
     # test_sapt_dft_compute_ddft_d4_auto_grac()
     # test_sapt_dft_diskdf()
     # test_qcng_embedded_saptdft()

@@ -41,6 +41,31 @@ import einsums as ein
 
 # Equations come from https://doi.org/10.1063/5.0090688
 
+
+def localization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
+    print("\n  ==> Localizing Orbitals <== \n\n")
+    localization_scheme = core.get_option("SAPT", "SAPT_DFT_LOCAL_ORBITALS")
+    loc = core.Localizer.build(localization_scheme, wfn_A.basisset(), wfn_A.Ca_subset("AO", "OCC"))
+    loc.localize()
+    C_lmo_A = loc.L
+    loc = core.Localizer.build(localization_scheme, wfn_B.basisset(), wfn_B.Ca_subset("AO", "OCC"))
+    loc.localize()
+    C_lmo_B = loc.L
+    # IBOLocalizer
+    minao = core.BasisSet.build(dimer_wfn.molecule(), "BASIS", core.get_global_option("MINAO_BASIS"))
+    dimer_wfn.set_basisset("MINAO", minao)
+    # implement localize() next...
+    # pybind11 location: ./psi4/src/export_wavefunction.cc
+    IBO_loc = core.IBOLocalizer2(
+        dimer_wfn.basisset(),
+        dimer_wfn.get_basisset("MINAO"),
+        dimer_wfn.Ca_subset("AO", "OCC"),
+    )
+    print("IBO Localizer")
+    print(IBO_loc)
+    print(dir(IBO_loc))
+    return
+
 def build_sapt_jk_cache(
     wfn_dimer: core.Wavefunction,
     wfn_A: core.Wavefunction,

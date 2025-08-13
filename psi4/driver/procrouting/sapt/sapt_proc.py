@@ -886,6 +886,9 @@ def sapt_dft(
     cache_ein = sapt_jk_terms_ein.build_sapt_jk_cache(dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials)
     core.timer_off("SAPT(DFT):Build JK")
 
+    if core.get_option("SAPT", "SAPT_DFT_DO_FSAPT") == True:
+        sapt_jk_terms_ein.localization(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
+
     # Electrostatics
     core.timer_on("SAPT(DFT):elst")
     elst, extern_extern_IE = sapt_jk_terms.electrostatics(cache, True)

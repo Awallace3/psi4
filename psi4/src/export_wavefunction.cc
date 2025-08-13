@@ -64,6 +64,7 @@
 #include "psi4/dfep2/dfep2.h"
 
 #include "psi4/fisapt/fisapt.h"
+#include "psi4/fisapt/local2.h"
 
 #include "psi4/libpsio/psio.h"
 #include "psi4/libpsio/psio.hpp"
@@ -482,6 +483,12 @@ void export_wavefunction(py::module& m) {
         .def("fdisp", &fisapt::FISAPT::fdisp, "F-SAPT0 dispersion.")
         .def("raw_plot", &fisapt::FISAPT::raw_plot, "Plot some analysis files.")
         .def("print_trailer", &fisapt::FISAPT::print_trailer, "Print SAPT results.");
+
+    /// IBOLocalizer2 for FISAPT
+    py::class_<fisapt::IBOLocalizer2, std::shared_ptr<fisapt::IBOLocalizer2>>(m, "IBOLocalizer2", "An IBO2 Localizer")
+        .def(py::init<std::shared_ptr<BasisSet>, std::shared_ptr<BasisSet>, std::shared_ptr<Matrix>>())
+        .def("build", &fisapt::IBOLocalizer2::build, "Build the IBO2 localized orbitals.")
+    ;
 
     /// CIWavefunction functions
     void (detci::CIvect::*py_civ_copy)(std::shared_ptr<psi::detci::CIvect>, int, int) = &detci::CIvect::copy;

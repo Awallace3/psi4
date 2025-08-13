@@ -163,3 +163,4 @@ fsapt
 tmp
 pytest_output.*
 profile.txt
+tests/pytests/test_saptdft.log
