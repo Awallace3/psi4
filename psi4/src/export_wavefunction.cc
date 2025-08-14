@@ -488,6 +488,7 @@ void export_wavefunction(py::module& m) {
     py::class_<fisapt::IBOLocalizer2, std::shared_ptr<fisapt::IBOLocalizer2>>(m, "IBOLocalizer2", "An IBO2 Localizer")
         .def(py::init<std::shared_ptr<BasisSet>, std::shared_ptr<BasisSet>, std::shared_ptr<Matrix>>())
         .def("build", &fisapt::IBOLocalizer2::build, "Build the IBO2 localized orbitals.")
+        .def("localize", &fisapt::IBOLocalizer2::localize, "Localize the orbitals.")
     ;
 
     /// CIWavefunction functions

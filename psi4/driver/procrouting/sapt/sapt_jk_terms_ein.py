@@ -52,19 +52,35 @@ def localization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     loc.localize()
     C_lmo_B = loc.L
     # IBOLocalizer
+    N = cache["eps_occ"].dimpi()[0]
+    Focc = core.Matrix(
+        "Focc",
+        cache["eps_occ"].dimpi()[0],
+        N,
+    )
+    Focc_diag = np.diag(Focc.np)
+    Focc_diag = cache["eps_occ"].np
+    ranges = [0, N, N]
     minao = core.BasisSet.build(dimer_wfn.molecule(), "BASIS", core.get_global_option("MINAO_BASIS"))
     dimer_wfn.set_basisset("MINAO", minao)
     # implement localize() next...
     # pybind11 location: ./psi4/src/export_wavefunction.cc
+    print("\n  ==> IBO Localization <== \n\n")
     IBO_loc = core.IBOLocalizer2(
         dimer_wfn.basisset(),
         dimer_wfn.get_basisset("MINAO"),
         dimer_wfn.Ca_subset("AO", "OCC"),
     )
-    print("IBO Localizer")
-    print(IBO_loc)
-    print(dir(IBO_loc))
+    ret = IBO_loc.localize(
+        cache['Cocc'],
+        Focc,
+        ranges,
+    )
+    cache['Locc'] = ret['L']
+    cache['Qocc'] = ret['Q']
+    cache['IAO'] = ret['A']
     return
+
 
 def build_sapt_jk_cache(
     wfn_dimer: core.Wavefunction,
@@ -104,6 +120,16 @@ def build_sapt_jk_cache(
     cache["eps_vir_A"].set_name("eps_vir_A")
     cache["eps_occ_B"].set_name("eps_occ_B")
     cache["eps_vir_B"].set_name("eps_vir_B")
+
+    # localization
+    if core.get_option("SAPT", "SAPT_DFT_LOCAL_ORBITALS") != "None":
+        cache["eps_occ"] = wfn_dimer.epsilon_a_subset("AO", "OCC")
+        cache["eps_vir"] = wfn_dimer.epsilon_a_subset("AO", "VIR")
+        cache["eps_focc"] = wfn_dimer.epsilon_a_subset("AO", "FROZEN_OCC")
+        cache["eps_aocc"] = wfn_dimer.epsilon_a_subset("AO", "ACTIVE_OCC")
+        cache["eps_avir"] = wfn_dimer.epsilon_a_subset("AO", "ACTIVE_VIR")
+        cache["eps_fvir"] = wfn_dimer.epsilon_a_subset("AO", "FROZEN_VIR")
+        cache["Cocc"] = wfn_dimer.Ca_subset("AO", "OCC")
 
     # Build the densities as HF takes an extra "step", Eq. 5
     cache["D_A"] = einsum_chain_gemm([cache['Cocc_A'], cache['Cocc_A']], ['N', 'T'])
