@@ -415,6 +415,8 @@ def run_sapt_dft(name, **kwargs):
     # If we did not compute HF wavefunction, we still need orbital coefficients
         # for IBOLocalizer2
     elif hf_wfn_dimer is None and core.get_option("SAPT", "SAPT_DFT_DO_FSAPT"):
+        # NOTE: this might need to be with functional and not HF when using
+        # DFT... Currently trying to match SAPT(HF), but remember this later!
         dimer_wfn = scf_helper("SCF", molecule=sapt_dimer, banner="SAPT(DFT): Dimer for Localization", **kwargs)
     else:
         dimer_wfn = hf_wfn_dimer
@@ -902,7 +904,7 @@ def sapt_dft(
 
     if core.get_option("SAPT", "SAPT_DFT_DO_FSAPT") == True:
         sapt_jk_terms_ein.localization(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
-        sapt_jk_terms_ein.partition(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
+        cache_ein = sapt_jk_terms_ein.partition(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
 
     # Electrostatics
     core.timer_on("SAPT(DFT):elst")

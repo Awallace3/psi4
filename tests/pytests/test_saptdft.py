@@ -1271,7 +1271,7 @@ no_com
             "scf_type": "df",
             "sapt_dft_grac_shift_a": 0.203293,
             "sapt_dft_grac_shift_b": 0.203293,
-            "SAPT_DFT_DO_DHF": True,
+            "SAPT_DFT_DO_DHF": False,
             "SAPT_DFT_DO_HYBRID": False,
             "SAPT_DFT_EXCH_DISP_SCALE_SCHEME": "None",
             "SAPT_DFT_DO_FSAPT": True,

@@ -58,17 +58,12 @@ def localization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         cache["eps_occ"].dimpi()[0],
         N,
     )
-    Focc_diag = np.diag(Focc.np)
-    Focc_diag = cache["eps_occ"].np
+    for i in range(N):
+        Focc.np[i, i] = cache["eps_occ"].np[i]
     ranges = [0, N, N]
-    print("dimer_wfn CA:", dimer_wfn.Ca_subset("AO", "OCC").np)
-    print("wfn_A CA:", wfn_A.Ca_subset("AO", "OCC").np)
-    print("wfn_A CA:", wfn_A.Ca().np)
     minao = core.BasisSet.build(dimer_wfn.molecule(), "BASIS", core.get_global_option("MINAO_BASIS"))
     dimer_wfn.set_basisset("MINAO", minao)
-    # implement localize() next...
     # pybind11 location: ./psi4/src/export_wavefunction.cc
-    print(dir(dimer_wfn))
     IBO_loc = core.IBOLocalizer2(
         dimer_wfn.basisset(),
         dimer_wfn.get_basisset("MINAO"),
@@ -80,7 +75,6 @@ def localization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Focc,
         ranges,
     )
-    pp(ret)
     cache['Locc'] = ret['L']
     cache['Qocc'] = ret['Q']
     cache['IAO'] = ret['A']
@@ -92,7 +86,7 @@ def partition(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Sizing
     mol = dimer_wfn.molecule()
     natoms = mol.natom()
-    n_Locc = cache['Locc'].shape[0]
+    n_Locc = cache['Locc'].shape[1]
 
 
     # Monomer Atoms
@@ -113,33 +107,29 @@ def partition(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     core.print_out(f"    Monomer A: {len(indA)} atoms\n")
     core.print_out(f"    Monomer B: {len(indB)} atoms\n")
     core.print_out(f"    Monomer C: {len(indC)} atoms\n\n")
+    np.set_printoptions(precision=14, suppress=True)
 
     # Fragment Orbital Charges
-    Locc = cache["Locc"]     # (n_ao x n_occ)
-    Qocc = cache["Qocc"]     # (n_atom x n_occ) orbital populations per atom
+    Locc = cache["Locc"].np     # (n_ao x n_occ)
+    Qocc = cache["Qocc"].np     # (n_atom x n_occ) orbital populations per atom
 
-    C_np = Locc.np
-    Q_np = Qocc.np
-    n_ao, n_occ = C_np.shape
-    print(C_np, Q_np)
+    n_ao, n_occ = Locc.shape
 
-    QF = core.Matrix(3, n_Locc)
-    QF_np = QF.np
-    QF_np.fill(0.0)
-    QF_np[0, :] = Q_np[indA, :].sum(axis=0)
-    QF_np[1, :] = Q_np[indB, :].sum(axis=0)
+    QF = core.Matrix(3, n_Locc).np
+    QF.fill(0.0)
+    QF[0, :] = Qocc[indA, :].sum(axis=0)
+    QF[1, :] = Qocc[indB, :].sum(axis=0)
     if indC.size:
-        QF_np[2, :] = Q_np[indC, :].sum(axis=0)
-    else:
-        QF_np[2, :] = 0.0
+        QF[2, :] = Qocc[indC, :].sum(axis=0)
+    # QF init is in slightly different order than C++...
 
     # --- link identification ---
     link_orbs: List[int] = []
     link_atoms: List[Tuple[int, int]] = []
     link_types: List[str] = []
 
-    def top_two_atoms_for_orb(a: int) -> Tuple[int, int]:
-        A_sorted = np.argsort(Q_np[:, a])[::-1]
+    def top_two_atoms_for_orb(a: int) -> tuple[int, int]:
+        A_sorted = np.argsort(Qocc[:, a])[::-1]
         A1, A2 = int(A_sorted[0]), int(A_sorted[1])
         return (A1, A2) if A1 < A2 else (A2, A1)
 
@@ -147,24 +137,29 @@ def partition(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     if link_sel == "AUTOMATIC":
         delta = float(core.get_option("FISAPT", "FISAPT_CHARGE_COMPLETENESS"))
         for a in range(n_occ):
-            if np.any(QF_np[:, a] > delta):
+            if np.any(QF[:, a] > delta):
                 continue
-            if QF_np[0, a] + QF_np[2, a] > delta:
-                link_orbs.append(a); link_types.append("AC")
-            elif QF_np[1, a] + QF_np[2, a] > delta:
-                link_orbs.append(a); link_types.append("BC")
-            elif QF_np[0, a] + QF_np[1, a] > delta:
-                link_orbs.append(a); link_types.append("AB")
+            if QF[0, a] + QF[2, a] > delta:
+                link_orbs.append(a)
+                link_types.append("AC")
+            elif QF[1, a] + QF[2, a] > delta:
+                link_orbs.append(a)
+                link_types.append("BC")
+            elif QF[0, a] + QF[1, a] > delta:
+                link_orbs.append(a)
+                link_types.append("AB")
             else:
                 raise ValueError("FISAPT: 3c-2e style bond encountered (no single/pair exceeds delta).")
         for a in link_orbs:
             link_atoms.append(top_two_atoms_for_orb(a))
     elif link_sel == "MANUAL":
-        if not opts.manual_links:
-            raise ValueError("FISAPT: MANUAL selection requires opts.manual_links (0-based atom pairs).")
-        S = set(indA.tolist()); T = set(indB.tolist()); U = set(indC.tolist())
-        for (A1, A2) in opts.manual_links:
-            prod = Q_np[A1, :] * Q_np[A2, :]
+        if not core.get_option("FISAPT", "FISAPT_MANUAL_LINKS"):
+            raise ValueError("FISAPT: MANUAL selection requires manual_links (0-based atom pairs).")
+        S = set(indA.tolist())
+        T = set(indB.tolist())
+        U = set(indC.tolist())
+        for (A1, A2) in core.get_option("FISAPT", "FISAPT_MANUAL_LINKS"):
+            prod = Qocc[A1, :] * Qocc[A2, :]
             a = int(np.argmax(prod))
             link_orbs.append(a)
             A1_, A2_ = (A1, A2) if A1 < A2 else (A2, A1)
@@ -179,37 +174,171 @@ def partition(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
                 raise ValueError("FISAPT: manual pair is not AB, AC, or BC.")
     else:
         raise ValueError("FISAPT: Unrecognized FISAPT_LINK_SELECTION.")
-
-        
     link_orbs = np.array(link_orbs, dtype=int)
 
-    # --- Z per fragment (vectors) and originals ---
-    ZA = psi4.core.Vector(nat); ZB = psi4.core.Vector(nat); ZC = psi4.core.Vector(nat)
+    # --- Z per fragment originals ---
+    ZA = core.Vector(natoms)
+    ZB = core.Vector(natoms)
+    ZC = core.Vector(natoms)
     ZA_np, ZB_np, ZC_np = ZA.np, ZB.np, ZC.np
-    ZA_np[:] = 0.0; ZB_np[:] = 0.0; ZC_np[:] = 0.0
+    ZA_np[:] = 0.0
+    ZB_np[:] = 0.0
+    ZC_np[:] = 0.0
 
-    Z_all = np.array([mol.Z(i) for i in range(nat)], dtype=float)
+    Z_all = np.array([mol.Z(i) for i in range(natoms)], dtype=float)
     ZA_np[indA] = Z_all[indA]
     ZB_np[indB] = Z_all[indB]
     if indC.size:
         ZC_np[indC] = Z_all[indC]
 
-    vectors_["ZA"] = ZA; vectors_["ZB"] = ZB; vectors_["ZC"] = ZC
-    vectors_["ZA_orig"] = psi4.core.Vector.from_array(ZA_np.copy())
-    vectors_["ZB_orig"] = psi4.core.Vector.from_array(ZB_np.copy())
-    vectors_["ZC_orig"] = psi4.core.Vector.from_array(ZC_np.copy())
+    cache["ZA"] = ZA
+    cache["ZB"] = ZB
+    cache["ZC"] = ZC
+    cache["ZA_orig"] = core.Vector.from_array(ZA_np.copy())
+    cache["ZB_orig"] = core.Vector.from_array(ZB_np.copy())
+    cache["ZC_orig"] = core.Vector.from_array(ZC_np.copy())
 
     # --- link assignment (C vs AB vs SAO*/SIAO*) ---
-    orbsA: List[int] = []; orbsB: List[int] = []; orbsC: List[int] = []; orbsL: List[int] = []
+    orbsA: List[int] = []
+    orbsB: List[int] = []
+    orbsC: List[int] = []
+    orbsL: List[int] = []
     typesL: List[str] = []
 
-    la = opts.link_assignment.upper()
+    la = core.get_option("FISAPT", "FISAPT_LINK_ASSIGNMENT").upper()
     valid = {"AB", "C", "SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"}
     if la not in valid:
         raise ValueError("FISAPT: FISAPT_LINK_ASSIGNMENT not recognized.")
 
 
-    return
+    # --- link assignment (C vs AB vs SAO*/SIAO*) ---
+    orbsA: List[int] = []
+    orbsB: List[int] = []
+    orbsC: List[int] = []
+    orbsL: List[int] = []
+    typesL: List[str] = []
+
+    la = core.get_option("FISAPT", "FISAPT_LINK_ASSIGNMENT").upper()
+    valid = {"AB", "C", "SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"}
+    if la not in valid:
+        raise ValueError("FISAPT: FISAPT_LINK_ASSIGNMENT not recognized.")
+
+    if la in {"C", "SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"}:
+        for a, (A1, A2), t in zip(link_orbs, link_atoms, link_types):
+            typesL.append(t)
+            if t == "AC":
+                ZA_np[A1] -= 1.0
+                ZC_np[A1] += 1.0
+                orbsC.append(a)
+                orbsL.append(a)
+            elif t == "BC":
+                ZB_np[A1] -= 1.0
+                ZC_np[A1] += 1.0
+                orbsC.append(a)
+                orbsL.append(a)
+            elif t == "AB":
+                ZA_np[A1] -= 1.0
+                ZC_np[A1] += 1.0
+                ZB_np[A2] -= 1.0
+                ZC_np[A2] += 1.0
+                orbsC.append(a)
+                orbsL.append(a)
+    elif la == "AB":
+        for a, (A1, A2), t in zip(link_orbs, link_atoms, link_types):
+            if t == "AC":
+                ZA_np[A1] += 1.0
+                ZC_np[A1] -= 1.0
+                orbsA.append(a)
+            elif t == "BC":
+                ZB_np[A1] += 1.0
+                ZC_np[A1] -= 1.0
+                orbsB.append(a)
+            elif t == "AB":
+                raise ValueError("FISAPT: AB link requires LINK_ASSIGNMENT C in this scheme.")
+
+    # --- electron counts per fragment; enforce closed-shell ---
+    fragment_charges = mol.get_fragment_charges()
+    qA, qB = int(fragment_charges[0]), int(fragment_charges[1])
+    qC = int(fragment_charges[2]) if len(fragment_charges) == 3 else 0
+
+    def i_round(x: float) -> int:
+        # protect against bankers rounding
+        return int(np.floor(x + 0.5))
+
+    ZA2 = i_round(float(ZA_np.sum()))
+    ZB2 = i_round(float(ZB_np.sum()))
+    ZC2 = i_round(float(ZC_np.sum()))
+    EA2, EB2, EC2 = ZA2 - qA, ZB2 - qB, ZC2 - qC
+
+    if EA2 % 2 or EB2 % 2 or EC2 % 2:
+        raise ValueError("FISAPT: fragment charge incompatible with singlet (odd electron count).")
+
+    NA2, NB2, NC2 = EA2 // 2, EB2 // 2, EC2 // 2
+    if (NA2 + NB2 + NC2) != n_occ:
+        raise ValueError("FISAPT: sum of fragment electrons incompatible with total electrons.")
+
+    RA2 = NA2 - len(orbsA)
+    RB2 = NB2 - len(orbsB)
+    RC2 = NC2 - len(orbsC)
+
+    # --- greedy fill using QF weights (C then A then B), excluding taken orbs ---
+    taken = set(orbsA) | set(orbsB) | set(orbsC)
+
+    def take_top(weights: np.ndarray, k: int, taken_set: set) -> list[int]:
+        if k <= 0:
+            return []
+        order = np.argsort(weights)[::-1]
+        picked: List[int] = []
+        for a in order:
+            if int(a) in taken_set:
+                continue
+            picked.append(int(a))
+            taken_set.add(int(a))
+            if len(picked) == k:
+                break
+        return picked
+
+    orbsC += take_top(QF[2, :], RC2, taken)
+    orbsA += take_top(QF[0, :], RA2, taken)
+    orbsB += take_top(QF[1, :], RB2, taken)
+
+    # --- sort & link ordering swap like C++ ---
+    orbsA = np.array(sorted(set(orbsA)), dtype=int)
+    orbsB = np.array(sorted(set(orbsB)), dtype=int)
+    orbsC = np.array(sorted(set(orbsC)), dtype=int)
+    orbsL = np.array(orbsL, dtype=int)
+    if orbsL.size > 1 and orbsL[0] > orbsL[1]:
+        orbsL[[0, 1]] = orbsL[[1, 0]]
+        typesL[0], typesL[1] = typesL[1], typesL[0]
+
+    # --- build LoccA/B/C/L as psi4 Matrices (column extracts) ---
+    def cols(M_np: np.ndarray, idx: np.ndarray) -> core.Matrix:
+        if idx.size == 0:
+            return np.zeros(M_np.shape[0])
+        return core.Matrix.from_array(M_np[:, idx])
+    
+    def extract_columns(cols, A: core.Matrix) -> core.Matrix:
+        cols = np.asarray(cols, dtype=int)
+        if cols.size == 0:
+            return None
+        A2 = A[:, cols]
+        return core.Matrix.from_array(A2)
+
+    cache["LoccA"] = extract_columns(orbsA, Locc)
+    cache["LoccB"] = extract_columns(orbsB, Locc)
+    cache["LoccC"] = extract_columns(orbsC, Locc)
+    cache["LoccL"] = extract_columns(orbsL, Locc)
+
+    cache["QF"] = QF
+    # --- summary numbers (if you want to print like C++ later) ---
+    ZA_int, ZB_int, ZC_int = i_round(ZA_np.sum()), i_round(ZB_np.sum()), i_round(ZC_np.sum())
+    YA, YB, YC = int(2 * orbsA.size), int(2 * orbsB.size), int(2 * orbsC.size)
+
+    core.print_out("   => Partition Summary <= \n\n")
+    core.print_out(f"    Monomer A: {ZA_int - YA:2d} charge, {ZA_int:3d} protons, {YA:3d} electrons, {len(orbsA):3d} docc\n")
+    core.print_out(f"    Monomer B: {ZB_int - YB:2d} charge, {ZB_int:3d} protons, {YB:3d} electrons, {len(orbsB):3d} docc\n")
+    core.print_out(f"    Monomer C: {ZC_int - YC:2d} charge, {ZC_int:3d} protons, {YC:3d} electrons, {len(orbsC):3d} docc\n")
+    return cache
 
 
 def build_sapt_jk_cache(
@@ -253,13 +382,25 @@ def build_sapt_jk_cache(
 
     # localization
     if core.get_option("SAPT", "SAPT_DFT_LOCAL_ORBITALS") != "None":
+        print("Loc Setup...")
+        cache["Cfocc"] = wfn_dimer.Ca_subset("AO", "FROZEN_OCC")
+        cache["eps_all"] = wfn_dimer.epsilon_a_subset("AO", "ALL")
+
+        cache["Call"] = wfn_dimer.Ca_subset("AO", "ALL")
+        cache["Cocc"] = wfn_dimer.Ca_subset("AO", "OCC")
+        cache["Cvir"] = wfn_dimer.Ca_subset("AO", "VIR")
+
         cache["eps_occ"] = wfn_dimer.epsilon_a_subset("AO", "OCC")
         cache["eps_vir"] = wfn_dimer.epsilon_a_subset("AO", "VIR")
+
+        cache["Caocc"] = wfn_dimer.Ca_subset("AO", "ACTIVE_OCC")
+        cache["Cavir"] = wfn_dimer.Ca_subset("AO", "ACTIVE_VIR")
+        cache["Cfvir"] = wfn_dimer.Ca_subset("AO", "FROZEN_VIR")
+
         cache["eps_focc"] = wfn_dimer.epsilon_a_subset("AO", "FROZEN_OCC")
         cache["eps_aocc"] = wfn_dimer.epsilon_a_subset("AO", "ACTIVE_OCC")
         cache["eps_avir"] = wfn_dimer.epsilon_a_subset("AO", "ACTIVE_VIR")
         cache["eps_fvir"] = wfn_dimer.epsilon_a_subset("AO", "FROZEN_VIR")
-        cache["Cocc"] = wfn_dimer.Ca_subset("AO", "OCC")
 
     # Build the densities as HF takes an extra "step", Eq. 5
     cache["D_A"] = einsum_chain_gemm([cache['Cocc_A'], cache['Cocc_A']], ['N', 'T'])
@@ -1227,7 +1368,6 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     def hessian_vec(x_vec, act_mask):
         # TODO: to convert to einsums fully here, would need to re-write
         # cphf_HX, onel_Hx, and twoel_Hx functions in libscf_solver/uhf.cc
-        print(f"x_vec[0]", x_vec[0])
         for i in range(len(x_vec) // 2):
             print(x_vec[0][2 * i])
         if act_mask[0]:
@@ -1235,7 +1375,6 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
         else:
             xA = False
 
-        print(f"x_vec[1]", x_vec[1])
         if act_mask[1]:
             xB = cache["wfn_B"].cphf_Hx([core.Matrix.from_array(x_vec[1])])[0].np
         else:

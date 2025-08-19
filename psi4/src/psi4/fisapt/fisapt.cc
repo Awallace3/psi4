@@ -188,7 +188,6 @@ void FISAPT::partition() {
     auto QF = std::make_shared<Matrix>("QF", 3, na);
     double** QFp = QF->pointer();
     double** Qp = matrices_["Qocc"]->pointer();
-
     for (int ind = 0; ind < indA.size(); ind++) {
         for (int a = 0; a < na; a++) {
             QFp[0][a] += Qp[indA[ind]][a];
@@ -291,7 +290,6 @@ void FISAPT::partition() {
     } else {
         throw PSIEXCEPTION("FISAPT: Unrecognized FISAPT_LINK_SELECTION option.");
     }
-
     outfile->Printf("    Total Link Bonds = %zu\n\n", link_orbs.size());
 
     if (link_orbs.size()) {
@@ -475,6 +473,7 @@ void FISAPT::partition() {
         QBvals.push_back(std::pair<double, int>(QFp[1][a], a));
     }
     std::sort(QBvals.begin(), QBvals.end(), std::greater<std::pair<double, int> >());
+
     for (int ind = 0; ind < RB2; ind++) {
         int a = QBvals[ind].second;
         orbsB.push_back(a);
@@ -509,9 +508,6 @@ void FISAPT::partition() {
     matrices_["LoccC"]->set_name("LoccC");
     matrices_["LoccL"]->set_name("LoccL");
 
-    // matrices_["LoccA"]->print();
-    // matrices_["LoccB"]->print();
-    // matrices_["LoccC"]->print();
 
     // => Summary <= //
 
