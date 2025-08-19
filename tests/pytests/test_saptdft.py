@@ -1271,12 +1271,14 @@ no_com
             "scf_type": "df",
             "sapt_dft_grac_shift_a": 0.203293,
             "sapt_dft_grac_shift_b": 0.203293,
-            "SAPT_DFT_DO_DHF": False,
+            "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
             "SAPT_DFT_EXCH_DISP_SCALE_SCHEME": "None",
             "SAPT_DFT_DO_FSAPT": True,
         }
     )
+    psi4.energy("fisapt0", molecule=mol)
+    print("\n fisapt0 complete")
     psi4.energy("sapt(dft)", molecule=mol)
     for k, v in Eref_nh.items():  # TEST
         ref = v
@@ -1288,7 +1290,7 @@ if __name__ == "__main__":
     psi4.set_memory("14 GB")
     psi4.set_num_threads(8)
     # test_einsum_terms()
-    test_einsum_terms()
+    # test_einsum_terms()
     test_fsaptdft()
     # test_sapt_dft_compute_ddft_d4_auto_grac()
     # test_sapt_dft_diskdf()

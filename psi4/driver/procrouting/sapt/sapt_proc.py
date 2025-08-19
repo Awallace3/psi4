@@ -147,7 +147,7 @@ def run_sapt_dft(name, **kwargs):
             raise ValueError("SAPT(DFT)-D4 must be specified as 'SAPT(DFT)-D4(S)' or 'SAPT(DFT)-D4(I)' through setting SAPT_DFT_D4_TYPE to 'supermolecular' or 'intermolecular'.")
 
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
-    do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
+    do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT");
     do_disp = core.get_option("SAPT", "SAPT_DFT_DO_DISP")
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
@@ -340,16 +340,17 @@ def run_sapt_dft(name, **kwargs):
 
             # Build cache
             hf_cache = sapt_jk_terms.build_sapt_jk_cache(
-               hf_wfn_dimer, hf_wfn_A, hf_wfn_B, sapt_jk, True
+               hf_wfn_dimer, hf_wfn_A, hf_wfn_B, sapt_jk, True, kwargs.get("external_potentials", None)
             )
 
-            hf_cache = sapt_jk_terms_ein.build_sapt_jk_cache(
-               hf_wfn_dimer, hf_wfn_A, hf_wfn_B, sapt_jk, True
+            hf_cache_ein = sapt_jk_terms_ein.build_sapt_jk_cache(
+               hf_wfn_dimer, hf_wfn_A, hf_wfn_B, sapt_jk, True, kwargs.get("external_potentials", None)
             )
 
             # Electrostatics
             core.timer_on("SAPT(HF):elst")
             elst, extern_extern_IE = sapt_jk_terms.electrostatics(hf_cache, True)
+            elst, extern_extern_IE = sapt_jk_terms_ein.electrostatics(hf_cache_ein, True)
             hf_data['extern_extern_IE'] = extern_extern_IE
             hf_data.update(elst)
             core.timer_off("SAPT(HF):elst")
@@ -357,6 +358,7 @@ def run_sapt_dft(name, **kwargs):
             # Exchange
             core.timer_on("SAPT(HF):exch")
             exch = sapt_jk_terms.exchange(hf_cache, sapt_jk, True)
+            exch = sapt_jk_terms_ein.exchange(hf_cache_ein, sapt_jk, True)
             hf_data.update(exch)
             core.timer_off("SAPT(HF):exch")
 
@@ -364,6 +366,14 @@ def run_sapt_dft(name, **kwargs):
             core.timer_on("SAPT(HF):ind")
             ind = sapt_jk_terms.induction(
                 hf_cache,
+                sapt_jk,
+                True,
+                maxiter=core.get_option("SAPT", "MAXITER"),
+                conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
+                Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
+            )
+            ind = sapt_jk_terms_ein.induction(
+                hf_cache_ein,
                 sapt_jk,
                 True,
                 maxiter=core.get_option("SAPT", "MAXITER"),
@@ -399,9 +409,13 @@ def run_sapt_dft(name, **kwargs):
             )
             data["DHF VALUE"] = dhf_value
 
-    if hf_wfn_dimer is None:
+    if hf_wfn_dimer is None and not core.get_option("SAPT", "SAPT_DFT_DO_FSAPT"):
         dimer_wfn = core.Wavefunction.build(
             sapt_dimer, core.get_global_option("BASIS"))
+    # If we did not compute HF wavefunction, we still need orbital coefficients
+        # for IBOLocalizer2
+    elif hf_wfn_dimer is None and core.get_option("SAPT", "SAPT_DFT_DO_FSAPT"):
+        dimer_wfn = scf_helper("SCF", molecule=sapt_dimer, banner="SAPT(DFT): Dimer for Localization", **kwargs)
     else:
         dimer_wfn = hf_wfn_dimer
 
@@ -888,6 +902,7 @@ def sapt_dft(
 
     if core.get_option("SAPT", "SAPT_DFT_DO_FSAPT") == True:
         sapt_jk_terms_ein.localization(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
+        sapt_jk_terms_ein.partition(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
 
     # Electrostatics
     core.timer_on("SAPT(DFT):elst")
