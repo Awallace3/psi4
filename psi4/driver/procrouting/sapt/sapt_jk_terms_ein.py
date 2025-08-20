@@ -365,9 +365,9 @@ def build_sapt_jk_cache(
     cache["Cvir_A"] = ein.core.RuntimeTensorD(wfn_A.Ca_subset("AO", "VIR").np)
     cache['Cvir_A'].set_name("Cvir_A")
 
-    cache["Cocc_B"] =  ein.core.RuntimeTensorD(wfn_B.Ca_subset("AO", "OCC").np)
+    cache["Cocc_B"] = ein.core.RuntimeTensorD(wfn_B.Ca_subset("AO", "OCC").np)
     cache['Cocc_B'].set_name("Cocc_B")
-    cache["Cvir_B"] =  ein.core.RuntimeTensorD(wfn_B.Ca_subset("AO", "VIR").np)
+    cache["Cvir_B"] = ein.core.RuntimeTensorD(wfn_B.Ca_subset("AO", "VIR").np)
     cache['Cvir_B'].set_name("Cvir_B")
 
     cache["eps_occ_A"] = ein.core.RuntimeTensorD(wfn_A.epsilon_a_subset("AO", "OCC").np)
@@ -382,7 +382,6 @@ def build_sapt_jk_cache(
 
     # localization
     if core.get_option("SAPT", "SAPT_DFT_LOCAL_ORBITALS") != "None":
-        print("Loc Setup...")
         cache["Cfocc"] = wfn_dimer.Ca_subset("AO", "FROZEN_OCC")
         cache["eps_all"] = wfn_dimer.epsilon_a_subset("AO", "ALL")
 
