@@ -80,6 +80,62 @@ def localization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     cache['IAO'] = ret['A']
     return
 
+def _split_L_U_blocks(cache, tag: str, link_assignment: str):
+    """
+    Split localized occupied matrices for monomer tag ('A' or 'B'):
+      - Locc0X -> Lfocc0X (core) + Laocc0X (valence)
+      - Uocc0X -> Ufocc0X (core-core) + Uaocc0X (valence-valence)
+      - (optional) LLocc0X augmented with the link orbital column thislinkX
+
+    Assumes matrices_ contains:
+      Caocc0X (n_ao x n_act), Cfocc0X (n_ao x n_core), Cocc0X (n_ao x (n_core+n_act))
+      eps_occ0X in vectors_
+    And that L/U/Q for monomer X have just been written at keys Locc0X/Uocc0X/Qocc0X.
+    """
+    # Dimensions from coefficient blocks (match your C++ rowspi/colspi usage)
+    nn = cache[f"Caocc0{tag}"].np.shape[0]      # rows (AO dimension)
+    nf = cache[f"Cfocc0{tag}"].np.shape[1]      # core occ count
+    na = cache[f"Caocc0{tag}"].np.shape[1]      # valence/active occ count
+    nm = nf + na
+
+    # Grab NumPy views
+    L_np = cache[f"Locc0{tag}"].np              # (nn x nm)
+    U_np = cache[f"Uocc0{tag}"].np             # (nm x nm)
+
+    # Core/valence splits for L (by columns) and U (by 2x2 block)
+    Lf_np = L_np[:, :nf]                            # (nn x nf)
+    La_np = L_np[:, nf:nm]                          # (nn x na)
+    Uf_np = U_np[:nf, :nf]                          # (nf x nf)
+    Ua_np = U_np[nf:nm, nf:nm]                      # (na x na)
+
+    cache[f"Lfocc0{tag}"] = psi4.core.Matrix.from_array(Lf_np)
+    cache[f"Laocc0{tag}"] = psi4.core.Matrix.from_array(La_np)
+    cache[f"Ufocc0{tag}"] = psi4.core.Matrix.from_array(Uf_np)
+    cache[f"Uaocc0{tag}"] = psi4.core.Matrix.from_array(Ua_np)
+
+    cache[f"Locc0{tag}"].set_name(f"Locc0{tag}")
+    cache[f"Lfocc0{tag}"].set_name(f"Lfocc0{tag}")
+    cache[f"Laocc0{tag}"].set_name(f"Laocc0{tag}")
+    cache[f"Uocc0{tag}"].set_name(f"Uocc0{tag}")
+    cache[f"Ufocc0{tag}"].set_name(f"Ufocc0{tag}")
+    cache[f"Uaocc0{tag}"].set_name(f"Uaocc0{tag}")
+    cache[f"Qocc0{tag}"].set_name(f"Qocc0{tag}")
+
+    # Optional: augmented L with the link orbital column
+    if link_assignment in {"SAO0","SAO1","SAO2","SIAO0","SIAO1","SIAO2"}:
+        Laug = psi4.core.Matrix.zeros(nn, nm + 1)
+        Laug_np = Laug.np
+        Laug_np[:, :nm] = L_np  # copy full L
+        # Append the (normalized-to-1/2) link column thislinkX (shape nn x 1)
+        link_col = cache[f"thislink{tag}"].np[:, 0]
+        Laug_np[:, nm] = link_col
+        cache[f"LLocc0{tag}"] = Laug
+        cache[f"LLocc0{tag}"].set_name(f"LLocc0{tag}")
+
+
+def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
+    return
+
 
 def partition(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     core.print_out("\n  ==> Partitioning <== \n\n")
