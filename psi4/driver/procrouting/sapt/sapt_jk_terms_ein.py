@@ -359,6 +359,8 @@ def build_sapt_jk_cache(
     cache["wfn_A"] = wfn_A
     cache["wfn_B"] = wfn_B
 
+    # Connor said using block tensor, but could create tensorView
+    # to assign to memory
     # First grab the orbitals
     cache["Cocc_A"] = ein.core.RuntimeTensorD(wfn_A.Ca_subset("AO", "OCC").np)
     cache['Cocc_A'].set_name("Cocc_A")
