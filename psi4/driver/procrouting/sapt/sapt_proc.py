@@ -94,8 +94,8 @@ def run_sapt_dft(name, **kwargs):
     if not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_B") and grac_compute.upper() != "NONE":
         do_mon_grac_shift_B = True
 
+    d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
     if "-d4" in name.lower():
-        d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
         if d4_type == "supermolecular":
             core.set_local_option("SAPT", "SAPT_DFT_D4_IE", True)
             core.set_local_option("SAPT", "SAPT_DFT_DO_DISP", False)
