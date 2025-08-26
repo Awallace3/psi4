@@ -53,11 +53,7 @@ def localization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # C_lmo_B = loc.L
     # IBOLocalizer
     N = cache["eps_occ"].dimpi()[0]
-    Focc = core.Matrix(
-        "Focc",
-        cache["eps_occ"].dimpi()[0],
-        N,
-    )
+    Focc = core.Matrix("Focc", N, N)
     for i in range(N):
         Focc.np[i, i] = cache["eps_occ"].np[i]
     ranges = [0, N, N]
@@ -134,6 +130,37 @@ def _split_L_U_blocks(cache, tag: str, link_assignment: str):
 
 
 def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
+    link_assignment = core.get_option("FISAPT", "FISAPT_LINK_ASSIGNMENT").upper()
+    core.print_out("  ==> F-SAPT Localization (IBO) <==\n\n")
+    core.print_out("  ==> Local orbitals for Monomer A <==\n\n")
+    mol = dimer_wfn.molecule()
+    molA = mol.extract_subsets([1], [])
+    molB = mol.extract_subsets([2], [])
+    nfocc0A = dimer_wfn.basisset().n_frozen_core(core.get_option("GLOBALS","FREEZE_CORE"), molA)
+    nfocc0B = dimer_wfn.basisset().n_frozen_core(core.get_option("GLOBALS","FREEZE_CORE"), molB)
+    nn = cache["Cocc_A"].shape[0]
+    nf = nfocc0A
+    na = cache["Cocc_A"].shape[1]
+    nm = nf + na
+    ranges = [0, nf, nm]
+    print(ranges)
+    N = cache['eps_occ_A'].shape[0]
+    Focc = core.Matrix("Focc", N, N)
+    for i in range(N):
+        Focc.np[i, i] = cache["eps_occ_A"][i]
+    IBO_loc = core.IBOLocalizer2(
+        dimer_wfn.basisset(),
+        dimer_wfn.get_basisset("MINAO"),
+        dimer_wfn.Ca_subset("AO", "OCC"),
+    )
+    IBO_loc.print_header()
+    ret = IBO_loc.localize(
+        core.Matrix.from_array(cache['Cocc_A']),
+        Focc,
+        ranges,
+    )
+    print(ret)
+    raise Exception("Continue Coding!")
     return
 
 

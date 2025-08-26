@@ -5264,6 +5264,9 @@ void FISAPT::flocalize() {
         int nf = matrices_["Cfocc0A"]->colspi()[0];
         int na = matrices_["Caocc0A"]->colspi()[0];
         int nm = nf + na;
+        outfile->Printf("    Number of frozen core orbitals: %d\n", nf);
+        outfile->Printf("    Number of active occupied orbitals: %d\n", na);
+        outfile->Printf("    Total number of occupied orbitals: %d\n\n", nm);
 
         std::vector<int> ranges;
         ranges.push_back(0);
