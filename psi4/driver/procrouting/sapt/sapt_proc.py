@@ -108,6 +108,7 @@ def run_sapt_dft(name, **kwargs):
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
     do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
     do_disp = core.get_option("SAPT", "SAPT_DFT_DO_DISP")
+    do_induction = core.get_option("SAPT", "SAPT_DFT_DO_IND")
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     do_dft = sapt_dft_functional != "HF"
@@ -342,6 +343,15 @@ def run_sapt_dft(name, **kwargs):
             )
 
             data["Delta HF Correction"] = core.variable("SAPT(DFT) Delta HF")
+            data['SAPT0 Elst10,r'] = hf_data['Elst10,r']
+            data['SAPT0 Exch10'] = hf_data['Exch10']
+            data['SAPT0 Ind20,r'] = hf_data['Ind20,r']
+            data['SAPT0 Exch-Ind20,r'] = hf_data['Exch-Ind20,r']
+
+            data["SAPT0 Ind20,r (A<-B)"] = hf_data["Ind20,r (A<-B)"]
+            data["SAPT0 Exch-Ind20,r (A<-B)"] = hf_data["Exch-Ind20,r (A<-B)"]
+            data["SAPT0 Ind20,r (A->B)"] = hf_data["Ind20,r (A->B)"]
+            data["SAPT0 Exch-Ind20,r (A->B)"] = hf_data["Exch-Ind20,r (A->B)"]
             sapt_jk.finalize()
 
             del hf_wfn_A, hf_wfn_B, sapt_jk
@@ -547,7 +557,8 @@ def run_sapt_dft(name, **kwargs):
         delta_hf=delta_hf,
         external_potentials = kwargs.get("external_potentials", None),
         do_delta_dft=do_delta_dft,
-        do_disp=do_disp
+        do_disp=do_disp,
+        do_induction=do_induction,
     )
 
     # Copy data back into globals
@@ -761,7 +772,8 @@ def sapt_dft(
     delta_hf=False,
     external_potentials=None,
     do_delta_dft=False, 
-    do_disp=True
+    do_disp=True,
+    do_induction=True,
 ):
     """
     The primary SAPT(DFT) algorithm to compute the interaction energy once the wavefunctions have been built.
@@ -857,16 +869,17 @@ def sapt_dft(
 
     # Induction
     core.timer_on("SAPT(DFT):ind")
-    ind = sapt_jk_terms.induction(
-        cache,
-        sapt_jk,
-        True,
-        sapt_jk_B=sapt_jk_B,
-        maxiter=core.get_option("SAPT", "MAXITER"),
-        conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
-        Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
-    )
-    data.update(ind)
+    if do_induction:
+        ind = sapt_jk_terms.induction(
+            cache,
+            sapt_jk,
+            True,
+            sapt_jk_B=sapt_jk_B,
+            maxiter=core.get_option("SAPT", "MAXITER"),
+            conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
+            Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
+        )
+        data.update(ind)
 
     # Set Delta HF for SAPT(HF)
     if delta_hf:
@@ -976,7 +989,7 @@ def sapt_dft(
 
     # Print out final data
     core.print_out("\n")
-    core.print_out(print_sapt_dft_summary(data, "SAPT(DFT)", do_dft=do_dft, do_disp=do_disp, do_delta_dft=do_delta_dft))
+    core.print_out(print_sapt_dft_summary(data, "SAPT(DFT)", do_dft=do_dft, do_disp=do_disp, do_induction=do_induction, do_delta_dft=do_delta_dft))
     return data
 
 

@@ -122,7 +122,7 @@ def print_sapt_hf_summary(data, name, short=False, delta_hf=False):
         return ret
 
 
-def print_sapt_dft_summary(data, name, do_dft=True, short=False, do_disp=True, do_delta_dft=False):
+def print_sapt_dft_summary(data, name, do_dft=True, short=False, do_disp=True, do_induction=True, do_delta_dft=False):
     ret = "   %s Results\n" % name
     ret += "  " + "-" * 105 + "\n"
 
@@ -143,19 +143,32 @@ def print_sapt_dft_summary(data, name, do_dft=True, short=False, do_disp=True, d
     core.set_variable("SAPT EXCH ENERGY", data["Exch10"])
 
     # Induction
-    ind = data["Ind20,r"] + data["Exch-Ind20,r"]
-    ind_ab = data["Ind20,r (A<-B)"] + data["Exch-Ind20,r (A<-B)"]
-    ind_ba = data["Ind20,r (A->B)"] + data["Exch-Ind20,r (A->B)"]
+    print(core.variables())
+    print(data)
+    if do_induction:
+        ind = data["Ind20,r"] + data["Exch-Ind20,r"]
+        ind_ab = data["Ind20,r (A<-B)"] + data["Exch-Ind20,r (A<-B)"]
+        ind_ba = data["Ind20,r (A->B)"] + data["Exch-Ind20,r (A->B)"]
+    else:
+        ind = data["SAPT0 Ind20,r"] + data["SAPT0 Exch-Ind20,r"]
+        ind_ab = data["SAPT0 Ind20,r (A<-B)"] + data["SAPT0 Exch-Ind20,r (A<-B)"]
+        ind_ba = data["SAPT0 Ind20,r (A->B)"] + data["SAPT0 Exch-Ind20,r (A->B)"]
 
     if "Delta HF Correction" in list(data):
         ind += data["Delta HF Correction"]
 
-    ret += print_sapt_var("Induction", ind) + "\n"
-
-    ret += print_sapt_var("  Ind2,r", data["Ind20,r"]) + "\n"
-    ret += print_sapt_var("  Exch-Ind2,r", data["Exch-Ind20,r"]) + "\n"
-    ret += print_sapt_var("  Induction (A<-B)", ind_ab) + "\n"
-    ret += print_sapt_var("  Induction (A->B)", ind_ba) + "\n"
+    if do_induction:
+        ret += print_sapt_var("Induction", ind) + "\n"
+        ret += print_sapt_var("  Ind2,r", data["Ind20,r"]) + "\n"
+        ret += print_sapt_var("  Exch-Ind2,r", data["Exch-Ind20,r"]) + "\n"
+        ret += print_sapt_var("  Induction (A<-B)", ind_ab) + "\n"
+        ret += print_sapt_var("  Induction (A->B)", ind_ba) + "\n"
+    else:
+        ret += print_sapt_var("Induction (SAPT0)", ind) + "\n"
+        ret += print_sapt_var("  Ind2,r", data["SAPT0 Ind20,r"]) + "\n"
+        ret += print_sapt_var("  Exch-Ind2,r", data["SAPT0 Exch-Ind20,r"]) + "\n"
+        ret += print_sapt_var("  Induction (A<-B)", ind_ab) + "\n"
+        ret += print_sapt_var("  Induction (A->B)", ind_ba) + "\n"
 
     if "Delta HF Correction" in list(data):
         ret += print_sapt_var("  delta HF,r (2)", data["Delta HF Correction"]) + "\n"

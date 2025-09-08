@@ -1159,10 +1159,71 @@ def test_charge_field_inputs():
     assert compare_values(e_B, e_b, 7, "e_A==e_a")
 
 
+@pytest.mark.saptdft
+def test_sapt_dft_disable_induction():
+    """
+    Test SAPT(DFT) for disabling SAPT(DFT) induction and using SAPT0 induction
+    """
+    mol_dimer = psi4.geometry(
+        """
+  He -2.930978458   -0.216411437    0.000000000
+  --
+  He  2.552311356    0.210645882    0.000000000
+  units bohr
+"""
+    )
+    dft_functional = "pbe0"
+    psi4.set_options(
+        {
+            "basis": "STO-3G",
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
+            "sapt_dft_grac_shift_a": 0.136,
+            "sapt_dft_grac_shift_b": 0.136,
+            "SAPT_DFT_FUNCTIONAL": dft_functional,
+            "SAPT_DFT_DO_DISP": False,
+            "SAPT_DFT_DO_IND": False,
+        }
+    )
+    psi4.energy("SAPT(DFT)", molecule=mol_dimer)
+
+
+@pytest.mark.saptdft
+def test_sapt_dft_disable_induction_d4():
+    """
+    Test SAPT(DFT) for disabling terms
+    """
+    mol_dimer = psi4.geometry(
+        """
+  He -2.930978458   -0.216411437    0.000000000
+  --
+  He  2.552311356    0.210645882    0.000000000
+  units bohr
+"""
+    )
+    dft_functional = "pbe0"
+    psi4.set_options(
+        {
+            "basis": "STO-3G",
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
+            "sapt_dft_grac_shift_a": 0.136,
+            "sapt_dft_grac_shift_b": 0.136,
+            "SAPT_DFT_FUNCTIONAL": dft_functional,
+            "SAPT_DFT_DO_DISP": False,
+            "SAPT_DFT_DO_IND": False,
+            "SAPT_DFT_D4_IE": True,
+        }
+    )
+    psi4.energy("SAPT(DFT)", molecule=mol_dimer)
+
+
 if __name__ == "__main__":
     psi4.set_memory("14 GB")
     psi4.set_num_threads(8)
-    test_saptdftd4()
+    test_sapt_dft_disable_induction()
+    test_sapt_dft_disable_induction_d4()
+    # test_saptdftd4()
     # test_charge_field_B()
     # test_qcng_embedded_saptdft()
 
