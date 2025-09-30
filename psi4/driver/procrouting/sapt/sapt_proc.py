@@ -910,8 +910,8 @@ def sapt_dft(
 
     # Electrostatics
     core.timer_on("SAPT(DFT):elst")
+    do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")
     elst, extern_extern_IE = sapt_jk_terms.electrostatics(cache, True)
-    print("ELST REG:", elst)
     elst, extern_extern_IE = sapt_jk_terms_ein.electrostatics(cache_ein, True)
     data["extern_extern_IE"] = extern_extern_IE
     print("ELST EIN:", elst)
@@ -1056,10 +1056,11 @@ def sapt_dft(
         core.timer_off("MP2 disp")
         core.timer_off("SAPT(DFT):disp")
 
-    if core.get_option("SAPT", "SAPT_DFT_DO_FSAPT") == True:
+    if do_fsapt:
         core.timer_on("SAPT(DFT): F-SAPT Localization (IBO)")
         sapt_jk_terms_ein.flocalization(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
         core.timer_off("SAPT(DFT): F-SAPT Localization (IBO)")
+        elst, extern_extern_IE = sapt_jk_terms_ein.felst(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
 
     # Print out final data
     core.print_out("\n")

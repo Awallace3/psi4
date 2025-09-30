@@ -160,7 +160,6 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         ranges,
     )
     print(ret)
-    raise Exception("Continue Coding!")
     return
 
 
@@ -584,6 +583,187 @@ def electrostatics(cache, do_print=True):
         core.print_out("\n")
 
     return {"Elst10,r": Elst10}, extern_extern_ie
+
+
+def felst(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
+    r"""
+    Computes the F-SAPT electrostatics partitioning according to FISAPT::felst in C++.
+    Returns the total Elst10,r and stores the breakdown matrix in cache["Elst_AB"].
+    """
+    if do_print:
+        core.print_out("  ==> F-SAPT Electrostatics <==\n\n")
+
+    link_assignment = core.get_option("FISAPT", "FISAPT_LINK_ASSIGNMENT").upper()
+    mol = dimer_wfn.molecule()  # dimer molecule
+    dimer_basis = dimer_wfn.basisset()
+    nA_atoms = mol.natom()
+    nB_atoms = mol.natom()
+
+    # Sizing
+    nn = cache["S"].shape[0]
+    # nA_atoms = len(cache.get("indA", []))
+    # nB_atoms = len(cache.get("indB", []))
+    L0A_np = cache["LoccA"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache.get("LLocc0A", cache["LoccA"]).np
+    L0B_np = cache["LoccB"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache.get("LLocc0B", cache["LoccB"]).np
+    na = L0A_np.shape[1]
+    nb = L0B_np.shape[1]
+
+    # Initialize breakdown matrix (nA_atoms + na + 1, nB_atoms + nb + 1)
+    Elst_AB = np.zeros((nA_atoms + na + 1, nB_atoms + nb + 1))
+
+    # Terms for total
+    Elst10_terms = np.zeros(4)  # [0]: a-B, [1]: A-b, [2]: a-b, [3]: nuc
+
+    # Nuclear-nuclear interactions (A <-> B)
+    ZA_np = cache["ZA"].np
+    ZB_np = cache["ZB"].np
+    for A in range(nA_atoms):
+        for B in range(nB_atoms):
+            if A == B:
+                continue
+            R = mol.xyz(A).distance(mol.xyz(B))
+            if R == 0:
+                continue
+            E = ZA_np[A] * ZB_np[B] / R
+            Elst_AB[A, B] = E
+            Elst10_terms[3] += E
+
+    # External A - atom B interactions
+    if "A" in cache.get("external_potentials", {}):
+        ext_pot_A = cache["external_potentials"]["A"]
+        for B in range(nB_atoms):
+            atom_mol = core.Molecule([core.Atom(ZB_np[B])])
+            atom_mol.set_geometry([mol.xyz(B)])
+            interaction = ext_pot_A.computeNuclearEnergy(atom_mol)
+            Elst_AB[nA_atoms + na, B] = interaction
+            Elst10_terms[3] += interaction
+
+    # External B - atom A interactions
+    if "B" in cache.get("external_potentials", {}):
+        ext_pot_B = cache["external_potentials"]["B"]
+        for A in range(nA_atoms):
+            atom_mol = core.Molecule([core.Atom(ZA_np[A])])
+            atom_mol.set_geometry([mol.xyz(A)])
+            interaction = ext_pot_B.computeNuclearEnergy(atom_mol)
+            Elst_AB[A, nB_atoms + nb] = interaction
+            Elst10_terms[3] += interaction
+
+    print(f"Elst10_terms after nuc-nuc: {Elst10_terms}")
+    # Electron-electron interactions using JK for each orbital b
+    # dfh_ = core.DFHelper(dimer_basis, dimer_wfn.get_basisset("DF_BASIS_SCF"))
+    # # set memory to be dimer_basis by dimer_basis
+    # print(dfh_)
+    # memory = dimer_basis.nbf() ** 2
+    # dfh_.set_memory(core.get_memory() / core.size_of_double(), memory)
+    # dfh_.set_method("DIRECT_iaQ")
+    # dfh_.set_nthreads(nT);
+    # dfh_.initialize();
+    # dfh_.print_header();
+    # dfh_.add_space("a", L0A_np);
+    # dfh_.add_space("b", L0B_np);
+    # dfh_.add_transformation("Aaa", "a", "a");
+    # dfh_.add_transformation("Abb", "b", "b");
+    # dfh_.transform();
+
+
+
+    # return
+    # for b in range(nb):
+    #     # Density for single orbital b: 2 * L0B[:, b] L0B[:, b].T (closed-shell factor)
+    #     Cb = core.Matrix("Cb", nn, 1)
+    #     Cb.np[:, 0] = L0B_np[:, b]
+    #     D_b = core.Matrix("D_b", nn, nn)
+    #     C_DGEMM('N', 'T', nn, nn, 1, 2.0, Cb.pointer()[0], 1, Cb.pointer()[0], 1, 0.0, D_b.pointer()[0], nn)
+    #
+    #     # Compute J from D_b
+    #     jk.C_left_push_back(Cb)
+    #     jk.C_right_push_back(Cb)
+    #     jk.compute()
+    #     J_b = jk.J()[0].np  # J from density of b
+    #
+    #     # For each a, compute 4 * <a | J_b | a> = 4 * L0A[:, a] @ J_b @ L0A[:, a]
+    #     for a in range(na):
+    #         La = L0A_np[:, a]
+    #         E_ab = 4.0 * np.dot(La, np.dot(J_b, La))
+    #         Elst_AB[a + nA_atoms, b + nB_atoms] = E_ab
+    #         Elst10_terms[2] += E_ab
+    #
+    #     # Clear for next b
+    #     jk.C_clear()
+    #
+    # # Nuclear-electron: A <-> b
+    # mints = core.MintsHelper(dimer_basis)
+    # Vtemp = core.Matrix("Vtemp", nn, nn)
+    # for A in range(nA_atoms):
+    #     if ZA_np[A] == 0.0:
+    #         continue
+    #     Vtemp.zero()
+    #     Vint = core.PotentialInt(core.SBasisSet.zero_ao_basis(), dimer_basis, int(ZA_np[A]), [mol.xyz(A)])
+    #     Vint.compute(Vtemp)
+    #     Vbb = core.Matrix("Vbb", nb, nb)
+    #     C_DGEMM('T', 'N', nb, nb, nn, 1.0, L0B_np, nn, Vtemp.pointer()[0], nn, 0.0, Vbb.pointer()[0], nb)
+    #     for b in range(nb):
+    #         E = 2.0 * Vbb[b, b]  # 2 for closed-shell
+    #         Elst_AB[A, b + nB_atoms] = E
+    #         Elst10_terms[1] += E
+    #
+    # # External A - orbitals b
+    # if "A" in cache.get("external_potentials", {}):
+    #     ext_pot_A = cache["external_potentials"]["A"]
+    #     V_ext_A = ext_pot_A.computePotentialMatrix(dimer_basis)
+    #     Vbb_ext = core.Matrix("Vbb_ext", nb, nb)
+    #     C_DGEMM('T', 'N', nb, nb, nn, 1.0, L0B_np, nn, V_ext_A.pointer()[0], nn, 0.0, Vbb_ext.pointer()[0], nb)
+    #     for b in range(nb):
+    #         E = 2.0 * Vbb_ext[b, b]
+    #         Elst_AB[nA_atoms + na, b + nB_atoms] = E
+    #         Elst10_terms[1] += E
+    #
+    # # Electron-nuclear: a <-> B
+    # for B in range(nB_atoms):
+    #     if ZB_np[B] == 0.0:
+    #         continue
+    #     Vtemp.zero()
+    #     Vint = core.PotentialInt(core.SBasisSet.zero_ao_basis(), dimer_basis, int(ZB_np[B]), [mol.xyz(B)])
+    #     Vint.compute(Vtemp)
+    #     Vaa = core.Matrix("Vaa", na, na)
+    #     C_DGEMM('T', 'N', na, na, nn, 1.0, L0A_np, nn, Vtemp.pointer()[0], nn, 0.0, Vaa.pointer()[0], na)
+    #     for a in range(na):
+    #         E = 2.0 * Vaa[a, a]
+    #         Elst_AB[a + nA_atoms, B] = E
+    #         Elst10_terms[0] += E
+    #
+    # # External B - orbitals a
+    # if "B" in cache.get("external_potentials", {}):
+    #     ext_pot_B = cache["external_potentials"]["B"]
+    #     V_ext_B = ext_pot_B.computePotentialMatrix(dimer_basis)
+    #     Vaa_ext = core.Matrix("Vaa_ext", na, na)
+    #     C_DGEMM('T', 'N', na, na, nn, 1.0, L0A_np, nn, V_ext_B.pointer()[0], nn, 0.0, Vaa_ext.pointer()[0], na)
+    #     for a in range(na):
+    #         E = 2.0 * Vaa_ext[a, a]
+    #         Elst_AB[a + nA_atoms, nB_atoms + nb] = E
+    #         Elst10_terms[0] += E
+    #
+    # # Total Elst10
+    # Elst10 = sum(Elst10_terms)
+    #
+    # # Store in cache
+    # cache["Elst_AB"] = core.Matrix.from_array(Elst10_AB)
+    #
+    # if do_print:
+    #     core.print_out(f"    Elst10,r            = {Elst10:18.12f} [Eh]\n")
+    #
+    #     # Print terms if desired
+    #     terms_names = ["a-B", "A-b", "a-b", "nuc"]
+    #     for i, term in enumerate(Elst10_terms):
+    #         core.print_out(f"    Elst10,{terms_names[i]}        = {term:18.12f} [Eh]\n")
+    #
+    #     # External
+    #     if "A" in cache.get("external_potentials", {}) and "B" in cache.get("external_potentials", {}):
+    #         extern = cache["extern_extern_IE"]
+    #         core.print_out(f"    Extern-Extern       = {extern:18.12f} [Eh]\n")
+    #
+    #     core.print_out("\n")
+    # return {"Elst10,r": Elst10}
 
 
 def einsum_chain_gemm(
