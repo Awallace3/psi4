@@ -902,12 +902,6 @@ def sapt_dft(
     cache_ein = sapt_jk_terms_ein.build_sapt_jk_cache(dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials)
     core.timer_off("SAPT(DFT):Build JK")
 
-    if core.get_option("SAPT", "SAPT_DFT_DO_FSAPT") == True:
-        core.timer_on("SAPT(DFT):Localize Orbitals")
-        sapt_jk_terms_ein.localization(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
-        core.timer_off("SAPT(DFT):Localize Orbitals")
-        cache_ein = sapt_jk_terms_ein.partition(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
-
     # Electrostatics
     core.timer_on("SAPT(DFT):elst")
     do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")
@@ -1055,7 +1049,13 @@ def sapt_dft(
         core.timer_off("MP2 disp")
         core.timer_off("SAPT(DFT):disp")
 
+
     if do_fsapt:
+        core.timer_on("SAPT(DFT):Localize Orbitals")
+        sapt_jk_terms_ein.localization(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
+        core.timer_off("SAPT(DFT):Localize Orbitals")
+        cache_ein = sapt_jk_terms_ein.partition(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
+
         core.timer_on("SAPT(DFT): F-SAPT Localization (IBO)")
         sapt_jk_terms_ein.flocalization(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
         core.timer_off("SAPT(DFT): F-SAPT Localization (IBO)")

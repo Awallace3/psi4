@@ -5767,8 +5767,6 @@ void FISAPT::fexch() {
     std::shared_ptr<Matrix> WBar = linalg::triplet(LoccA, W_B, CvirA, true, false, false);
     double** WBarp = WBar->pointer();
     double** WAbsp = WAbs->pointer();
-    W_A->print();
-    W_B->print();
 
     W_A.reset();
     W_B.reset();
@@ -5789,9 +5787,6 @@ void FISAPT::fexch() {
     auto WAba = std::make_shared<Matrix>("WAba", nb, na);
     double** WAbap = WAba->pointer();
 
-    WBab->print();
-    WAba->print();
-
     C_DGEMM('N', 'T', na, nb, nr, 1.0, WBarp[0], nr, Sbrp[0], nr, 0.0, WBabp[0], nb);
     C_DGEMM('N', 'T', nb, na, ns, 1.0, WAbsp[0], ns, Sasp[0], ns, 0.0, WAbap[0], na);
 
@@ -5807,8 +5802,8 @@ void FISAPT::fexch() {
         }
     }
 
-    E_exch1->print();
-    E_exch2->print();
+    // E_exch1->print();
+    // E_exch2->print();
 
     size_t nQ = dfh_->get_naux();
     auto TrQ = std::make_shared<Matrix>("TrQ", nr, nQ);
@@ -5847,7 +5842,7 @@ void FISAPT::fexch() {
         }
     }
 
-    E_exch3->print();
+    // E_exch3->print();
 
     // => Totals <= //
 
@@ -5863,9 +5858,9 @@ void FISAPT::fexch() {
     for (int k = 0; k < Exch10_2_terms.size(); k++) {
         Exch10_2 += Exch10_2_terms[k];
     }
-    for (int k = 0; k < Exch10_2_terms.size(); k++) {
-       outfile->Printf("    Exch10(S^2) (%1d)     = %18.12lf [Eh]\n",k+1,Exch10_2_terms[k]);
-    }
+    // for (int k = 0; k < Exch10_2_terms.size(); k++) {
+    //    outfile->Printf("    Exch10(S^2) (%1d)     = %18.12lf [Eh]\n",k+1,Exch10_2_terms[k]);
+    //}
     // scalars_["Exch10(S^2)"] = Exch10_2;
     outfile->Printf("    Exch10(S^2)         = %18.12lf [Eh]\n", Exch10_2);
     outfile->Printf("\n");

@@ -63,7 +63,8 @@ def localization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     IBO_loc = core.IBOLocalizer2(
         dimer_wfn.basisset(),
         dimer_wfn.get_basisset("MINAO"),
-        dimer_wfn.Ca_subset("AO", "OCC"),
+        # dimer_wfn.Ca_subset("AO", "OCC"),
+        cache['Cocc'],
     )
     IBO_loc.print_header()
     ret = IBO_loc.localize(
@@ -136,8 +137,8 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     mol = dimer_wfn.molecule()
     molA = mol.extract_subsets([1], [])
     molB = mol.extract_subsets([2], [])
-    nfocc0A = dimer_wfn.basisset().n_frozen_core(core.get_option("GLOBALS","FREEZE_CORE"), molA)
-    nfocc0B = dimer_wfn.basisset().n_frozen_core(core.get_option("GLOBALS","FREEZE_CORE"), molB)
+    nfocc0A = dimer_wfn.basisset().n_frozen_core(core.get_option("GLOBALS", "FREEZE_CORE"), molA)
+    nfocc0B = dimer_wfn.basisset().n_frozen_core(core.get_option("GLOBALS", "FREEZE_CORE"), molB)
     nn = cache["Cocc_A"].shape[0]
     nf = nfocc0A
     na = cache["Cocc_A"].shape[1]
@@ -150,8 +151,9 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     IBO_loc = core.IBOLocalizer2(
         dimer_wfn.basisset(),
         dimer_wfn.get_basisset("MINAO"),
-        dimer_wfn.Ca_subset("AO", "OCC"),
+        core.Matrix.from_array(cache['Cocc_A']),
     )
+    print(Focc.np)
     IBO_loc.print_header()
     ret = IBO_loc.localize(
         core.Matrix.from_array(cache['Cocc_A']),
@@ -206,7 +208,8 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     IBO_loc = core.IBOLocalizer2(
         dimer_wfn.basisset(),
         dimer_wfn.get_basisset("MINAO"),
-        dimer_wfn.Ca_subset("AO", "OCC"),
+        # dimer_wfn.Ca_subset("AO", "OCC"),
+        core.Matrix.from_array(cache['Cocc_B']),
     )
     IBO_loc.print_header()
     ret = IBO_loc.localize(
@@ -220,6 +223,8 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Qocc0B = ret["Q"]
     
     cache["Locc0B"] = Locc0B
+    print("FSAPT-Locc0B")
+    print(cache["Locc0B"].np)
     cache["Uocc0B"] = Uocc0B
     cache["Qocc0B"] = Qocc0B
     
@@ -528,6 +533,7 @@ def build_sapt_jk_cache(
     # Connor said using block tensor, but could create tensorView
     # to assign to memory
     # First grab the orbitals
+    # NOTE: scf_A from FISAPT0 and SAPT(DFT) wfn_A have slightly different coefficients
     cache["Cocc_A"] = ein.core.RuntimeTensorD(wfn_A.Ca_subset("AO", "OCC").np)
     cache['Cocc_A'].set_name("Cocc_A")
     cache["Cvir_A"] = ein.core.RuntimeTensorD(wfn_A.Ca_subset("AO", "VIR").np)
@@ -960,32 +966,32 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
     
     W_A = J_A.copy() * 2.0 + V_A
     W_A.set_name("W_A")
-    print(W_A)
     W_B = J_B.copy() * 2.0 + V_B
     W_B.set_name("W_B")
-    print(W_B)
 
     WAbs = einsum_chain_gemm([LoccB, W_A, CvirB], ['T', 'N', 'N'])
     WBar = einsum_chain_gemm([LoccA, W_B, CvirA], ['T', 'N', 'N'])
-    print(WAbs)
-    print(WBar)
+    WAbs.set_name("WAbs")
+    WBar.set_name("WBar")
 
     Sab = einsum_chain_gemm([LoccA, S, LoccB], ['T', 'N', 'N'])
     Sba = einsum_chain_gemm([LoccB, S, LoccA], ['T', 'N', 'N'])
     Sas = einsum_chain_gemm([LoccA, S, CvirB], ['T', 'N', 'N'])
+
+    LoccB.set_name("LoccB")
+    CvirA.set_name("CvirA")
     Sbr = einsum_chain_gemm([LoccB, S, CvirA], ['T', 'N', 'N'])
 
     Sab.set_name("Sab")
-    print(Sab)
+    Sba.set_name("Sba")
+    Sas.set_name("Sas")
+    Sbr.set_name("Sbr")
 
-    WBab = einsum_chain_gemm([WBar, Sbr], ['T', 'N'])
-    WAba = einsum_chain_gemm([WAbs, Sas], ['T', 'N'])
+    WBab = einsum_chain_gemm([WBar, Sbr], ['N', 'T'])
+    WAba = einsum_chain_gemm([WAbs, Sas], ['N', 'T'])
     WBab.set_name("WBab")
     WAba.set_name("WAba")
 
-    print(WAba)
-    print(WBab)
-    
     E_exch1 = np.zeros((na, nb))
     E_exch2 = np.zeros((na, nb))
     
@@ -993,8 +999,6 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
         for b in range(nb):
             E_exch1[a, b] = -2.0 * Sab[a, b] * WBab[a, b]
             E_exch2[a, b] = -2.0 * Sba[b, a] * WAba[b, a]
-    print(f"{E_exch1 = }")
-    print(f"{E_exch2 = }")
     
     nQ = dimer_wfn.get_basisset("DF_BASIS_SCF").nbf()
     TrQ = core.Matrix("TrQ", nr, nQ)
@@ -1041,10 +1045,6 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
     Exch10_2 = sum(Exch10_2_terms)
     
     if do_print:
-        """
-        Exch10(S^2)                       0.00001443 [mEh]
-        Exch10                            0.00001443 [mEh]
-        """
         core.print_out(f"    Exch10(S^2)         = {Exch10_2 * 1000:18.10f} [mEh]\n")
         core.print_out(f"    Exch10(S^2)-true    = {sapt_exch10_s2 * 1000:18.10f} [mEh]\n")
         core.print_out(f"    Exch10-true         = {sapt_exch10 * 1000:18.10f} [mEh]\n")
@@ -1056,7 +1056,7 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
         Exch_AB *= scale
         if do_print:
             core.print_out(f"    Scaling F-SAPT Exch10(S^2) by {scale:11.3E} to match Exch10\n\n")
-        assert scale == 1.0, "Currently should only get scale factor of 1.0"
+        assert abs(scale - 1.0) < 1e-6, "Currently should only get scale factor of 1.0"
     
     cache["Exch_AB"] = core.Matrix.from_array(Exch_AB)
     
