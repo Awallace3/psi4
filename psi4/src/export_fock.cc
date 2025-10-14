@@ -177,6 +177,8 @@ void export_fock(py::module &m) {
         .def("set_MO_core", &DFHelper::set_MO_core)
         .def("get_MO_core", &DFHelper::get_MO_core)
         .def("add_space", &DFHelper::add_space)
+        .def("add_disk_tensor", &DFHelper::add_disk_tensor)
+        .def("write_disk_tensor", &DFHelper::write_disk_tensor, "key"_a, "M"_a, "a1"_a)
         .def("initialize", &DFHelper::initialize)
         .def("print_header", &DFHelper::print_header)
         .def("add_transformation", &DFHelper::add_transformation, "name"_a, "key1"_a, "key2"_a, "order"_a = "Qpq")
