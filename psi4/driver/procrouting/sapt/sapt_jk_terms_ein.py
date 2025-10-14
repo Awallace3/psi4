@@ -888,6 +888,12 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     cache["Elst_AB"] = core.Matrix.from_array(Elst_AB)
     return cache
 
+def fexch(cache, sapt_exch, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
+    """
+    Computes the F-SAPT exchange partitioning according to FISAPT::fexch in C++.
+    """
+    return
+
 
 def einsum_chain_gemm(
     tensors: list[ein.core.RuntimeTensorD],
