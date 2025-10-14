@@ -914,7 +914,6 @@ def sapt_dft(
     elst, extern_extern_IE = sapt_jk_terms.electrostatics(cache, True)
     elst, extern_extern_IE = sapt_jk_terms_ein.electrostatics(cache_ein, True)
     data["extern_extern_IE"] = extern_extern_IE
-    print("ELST EIN:", elst)
     data.update(elst)
     core.timer_off("SAPT(DFT):elst")
 
@@ -1060,7 +1059,8 @@ def sapt_dft(
         core.timer_on("SAPT(DFT): F-SAPT Localization (IBO)")
         sapt_jk_terms_ein.flocalization(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
         core.timer_off("SAPT(DFT): F-SAPT Localization (IBO)")
-        cache_ein = sapt_jk_terms_ein.felst(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
+        # Primary return is stored as cache['Elst_AB']
+        cache_ein = sapt_jk_terms_ein.felst(cache_ein, elst['Elst10,r'] + extern_extern_IE, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
 
     # Print out final data
     core.print_out("\n")
