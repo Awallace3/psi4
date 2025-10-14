@@ -5565,6 +5565,8 @@ void FISAPT::felst() {
     for (size_t a = 0; a < na; a++) {
         dfh_->fill_tensor("Aaa", QaCp[a], {a, a + 1}, {a, a + 1});
     }
+    // pinrt QaC for debugging
+    // QaC->print();
 
     auto QbC = std::make_shared<Matrix>("QbC", nb, nQ);
     double** QbCp = QbC->pointer();
@@ -5581,6 +5583,7 @@ void FISAPT::felst() {
             Ep[a + nA][b + nB] += E;
         }
     }
+    outfile->Printf("Elst10_terms[2] after a-b: %18.12lf [Eh]\n", Elst10_terms[2]);
 
     matrices_["Vlocc0A"] = QaC;
     matrices_["Vlocc0B"] = QbC;
@@ -5601,12 +5604,18 @@ void FISAPT::felst() {
         std::shared_ptr<Matrix> Vbb =
             linalg::triplet(L0B, Vtemp2, L0B, true, false, false);
         double** Vbbp = Vbb->pointer();
+        L0B->print();
+        Vtemp2->print();
+        Vbb->print(); // for debugging
         for (int b = 0; b < nb; b++) {
             double E = 2.0 * Vbbp[b][b];
+            outfile->Printf("A %d b %d E %18.10lf\n", A, b, E); // for debugging
             Elst10_terms[1] += E;
             Ep[A][b + nB] += E;
         }
     }
+    // print Elst10_terms[1] for debugging
+    outfile->Printf("Elst10_terms[1] after A-b: %18.12lf [Eh]\n", Elst10_terms[1]);
 
     // Add Extern-A - Orbital b interaction
     if (reference_->has_potential_variable("A")) {
@@ -5619,6 +5628,7 @@ void FISAPT::felst() {
             Ep[nA + na][b + nB] += E;
         }
     }
+    outfile->Printf("Elst10_terms[1] after Extern A-b: %18.12lf [Eh]\n", Elst10_terms[1]);
 
     // => a <-> B <= //
 
@@ -5636,6 +5646,7 @@ void FISAPT::felst() {
             Ep[a + nA][B] += E;
         }
     }
+    outfile->Printf("Elst10_terms[0] after a-B: %18.12lf [Eh]\n", Elst10_terms[0]);
 
     // Add Extern-B - Orbital a interaction
     if (reference_->has_potential_variable("B")) {
@@ -5648,6 +5659,7 @@ void FISAPT::felst() {
             Ep[a + nA][nB + nb] += E;
         }
     }
+    outfile->Printf("Elst10_terms[0] after ExternB-a: %18.12lf [Eh]\n", Elst10_terms[0]);
 
 
     // Prepare DFHelper object for the next module
@@ -5658,9 +5670,9 @@ void FISAPT::felst() {
     for (int k = 0; k < Elst10_terms.size(); k++) {
         Elst10 += Elst10_terms[k];
     }
-    // for (int k = 0; k < Elst10_terms.size(); k++) {
-    //    outfile->Printf("    Elst10,r (%1d)        = %18.12lf [Eh]\n",k+1,Elst10_terms[k]);
-    //}
+    for (int k = 0; k < Elst10_terms.size(); k++) {
+       outfile->Printf("    Elst10,r (%1d)        = %18.12lf [Eh]\n",k+1,Elst10_terms[k]);
+    }
     // scalars_["Elst10,r"] = Elst10;
     outfile->Printf("    Elst10,r            = %18.12lf [Eh]\n", Elst10);
 

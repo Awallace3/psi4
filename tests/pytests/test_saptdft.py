@@ -1326,6 +1326,7 @@ no_com
             "SAPT_DFT_DO_FSAPT": True,
         }
     )
+    np.set_printoptions(precision=10, suppress=True)
     psi4.energy("fisapt0", molecule=mol)
     print("\n fisapt0 complete")
     psi4.energy("sapt(dft)", molecule=mol)

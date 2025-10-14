@@ -600,11 +600,9 @@ def felst(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     nB_atoms = mol.natom()
 
     # Sizing
-    nn = cache["S"].shape[0]
-    # nA_atoms = len(cache.get("indA", []))
-    # nB_atoms = len(cache.get("indB", []))
-    L0A_np = cache["LoccA"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache.get("LLocc0A", cache["LoccA"]).np
-    L0B_np = cache["LoccB"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache.get("LLocc0B", cache["LoccB"]).np
+    # Implement LLocc0A/B if orbitals from flocalization...
+    L0A_np = cache["LLocc0A"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache["LLocc0A"].np
+    L0B_np = cache["LLocc0B"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache["LLocc0B"].np
     na = L0A_np.shape[1]
     nb = L0B_np.shape[1]
 
@@ -648,6 +646,7 @@ def felst(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             Elst_AB[A, nB_atoms + nb] = interaction
             Elst10_terms[3] += interaction
 
+    np.set_printoptions(precision=11, suppress=True)
     print(f"Elst10_terms after nuc-nuc: {Elst10_terms}")
     
     # => a <-> b (electron-electron interactions via DFHelper) <= //
@@ -657,6 +656,7 @@ def felst(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     # Create DFHelper object
     dfh = core.DFHelper(dimer_basis, aux_basis)
+    # TODO: This memory estimate needs corrected...
     dfh.set_memory(int(core.get_memory() * 0.9 / 8))  # Use 90% of available memory (in doubles)
     dfh.set_method("DIRECT_iaQ")
     dfh.set_nthreads(core.get_num_threads())
@@ -689,9 +689,14 @@ def felst(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     for b in range(nb):
         tensor = dfh.get_tensor("Abb", [b, b + 1], [b, b + 1], [0, nQ])
         QbC[b, :] = tensor.np.flatten()
+
+    # print(f"QaC shape: {QaC.shape}, QbC shape: {QbC.shape}")
+    # print(f"QaC sample: {QaC[0, :]}")
+    # print(f"QbC sample: {QbC[0, :]}")
     
     # Compute electrostatic interaction: Elst10_3 = 4.0 * QaC @ QbC.T
     Elst10_3 = 4.0 * np.dot(QaC, QbC.T)
+    print(f"{Elst10_3 = }")
     
     # Store in breakdown matrix and accumulate total
     for a in range(na):
@@ -711,22 +716,35 @@ def felst(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     # => A <-> b (nuclei A interacting with orbitals b) <= //
     
+    L0B_ein = ein.core.RuntimeTensorD(L0B_np)
+    L0B_ein.set_name("L0B_ein")
+    print(L0B_ein)
+
+    L0A_ein = ein.core.RuntimeTensorD(L0A_np)
+    ext_pot = core.ExternalPotential()
     for A in range(nA_atoms):
         if ZA_np[A] == 0.0:
             continue
         
-        ext_pot = core.ExternalPotential()
+        ext_pot.clear()
         atom_pos = mol.xyz(A)
         ext_pot.addCharge(ZA_np[A], atom_pos[0], atom_pos[1], atom_pos[2])
         
         Vtemp = ext_pot.computePotentialMatrix(dimer_basis)
-        
-        L0B_ein = ein.core.RuntimeTensorD(L0B_np)
         Vtemp_ein = ein.core.RuntimeTensorD(Vtemp.np)
+
+        # first term is correct, but all others are wrong for Vbb... check other terms
+        Vtemp_ein.set_name("Vtemp_ein")
+        # Vtemp_ein is correct; however, L0B_ein is not...
+        print(Vtemp_ein)
+        
         Vbb = einsum_chain_gemm([L0B_ein, Vtemp_ein, L0B_ein], ['T', 'N', 'N'])
+        Vbb.set_name("Vbb")
+        print(Vbb)
         
         for b in range(nb):
             E = 2.0 * Vbb[b, b]
+            print(f"A {A}, b {b}, E {E:.10f}")
             Elst10_terms[1] += E
             Elst_AB[A, b + nB_atoms] += E
     
@@ -735,7 +753,6 @@ def felst(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         ext_pot_A = cache["external_potentials"]["A"]
         Vtemp = ext_pot_A.computePotentialMatrix(dimer_basis)
         
-        L0B_ein = ein.core.RuntimeTensorD(L0B_np)
         Vtemp_ein = ein.core.RuntimeTensorD(Vtemp.np)
         Vbb = einsum_chain_gemm([L0B_ein, Vtemp_ein, L0B_ein], ['T', 'N', 'N'])
         Vbb = core.Matrix.triplet(L0B, Vtemp, L0B, True, False, False)
@@ -752,14 +769,13 @@ def felst(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     for B in range(nB_atoms):
         if ZB_np[B] == 0.0:
             continue
-        
-        ext_pot = core.ExternalPotential()
+
+        ext_pot.clear()
         atom_pos = mol.xyz(B)
         ext_pot.addCharge(ZB_np[B], atom_pos[0], atom_pos[1], atom_pos[2])
         
         Vtemp = ext_pot.computePotentialMatrix(dimer_basis)
         
-        L0A_ein = ein.core.RuntimeTensorD(L0A_np)
         Vtemp_ein = ein.core.RuntimeTensorD(Vtemp.np)
         Vaa = einsum_chain_gemm([L0A_ein, Vtemp_ein, L0A_ein], ['T', 'N', 'N'])
         
@@ -773,7 +789,6 @@ def felst(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         ext_pot_B = cache["external_potentials"]["B"]
         Vtemp = ext_pot_B.computePotentialMatrix(dimer_basis)
         
-        L0A_ein = ein.core.RuntimeTensorD(L0A_np)
         Vtemp_ein = ein.core.RuntimeTensorD(Vtemp.np)
         Vaa = einsum_chain_gemm([L0A_ein, Vtemp_ein, L0A_ein], ['T', 'N', 'N'])
         
@@ -800,7 +815,19 @@ def felst(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Elst_AB[nA_atoms + na, nB_atoms + nb] += ext_ext
         print(f"    Extern-Extern       = {ext_ext:18.12f} [Eh]")
     
+    print(f"Elst10_terms final: {Elst10_terms}")
     print()
+    """
+    FISAPT0 felst:
+    Elst10,r (1)        =    -8.203331412345 [Eh]
+    Elst10,r (2)        =    -8.205470234839 [Eh] # Error
+    Elst10,r (3)        =     8.204279475344 [Eh] # Error
+    Elst10,r (4)        =     8.204519838635 [Eh]
+    Elst10,r            =    -0.000002333204 [Eh]
+
+    SAPT(DFT) felst:
+    Elst10_terms after a-B: [-8.20331126413256 -8.20547975861619  8.20426866950761  8.204519838635]
+    """
     
     # Store breakdown matrix in cache
     cache["Elst_AB"] = core.Matrix.from_array(Elst_AB)
