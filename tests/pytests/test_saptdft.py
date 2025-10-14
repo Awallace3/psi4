@@ -1339,6 +1339,52 @@ no_com
             ref, psi4.variable(k) * 1000, 8, "!hyb, xd=none, !dHF: " + k
         )
 
+@pytest.mark.skip(reason="Not completed fsapt einsums")
+def test_fsaptdft_fsapt0_simple():
+    """
+    built from sapt-dft1 ctest
+    """
+    Eref_nh = {
+        # mEh
+        "SAPT ELST ENERGY": -0.00233320,
+        "SAPT EXCH ENERGY": 0.00001443,
+        "SAPT IND ENERGY": -0.00001103,
+        "SAPT DISP ENERGY": -0.00563062,
+    }  # TEST
+    mol = psi4.geometry("""
+0 1
+He 0.00000000 0.00000000 0.00000000
+--
+0 1
+C 6.44536662 -0.26509169 -0.00000000
+H 7.53536662 -0.26509169 -0.00000000
+H 6.08203329 0.57399070 0.59332085
+H 6.08203329 -0.17080196 -1.02332709
+H 6.08203329 -1.19846381 0.43000624
+symmetry c1
+no_reorient
+no_com
+""")
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "SAPT_DFT_FUNCTIONAL": "HF",
+            "SAPT_DFT_DO_DHF": True,
+            "SAPT_DFT_DO_HYBRID": False,
+            "SAPT_DFT_DO_FSAPT": True,
+        }
+    )
+    np.set_printoptions(precision=10, suppress=True)
+    psi4.energy("fisapt0", molecule=mol)
+    print("\n fisapt0 complete")
+    psi4.energy("sapt(dft)", molecule=mol)
+    for k, v in Eref_nh.items():  # TEST
+        ref = v
+        assert compare_values(
+            ref, psi4.variable(k) * 1000, 8, "!hyb, xd=none, !dHF: " + k
+        )
+
 
 if __name__ == "__main__":
     psi4.set_memory("14 GB")
@@ -1346,7 +1392,8 @@ if __name__ == "__main__":
     # test_einsum_terms()
     # test_einsum_terms()
     # test_fsaptdft()
-    test_fsaptdft_fsapt0()
+    # test_fsaptdft_fsapt0()
+    test_fsaptdft_fsapt0_simple()
     # test_sapt_dft_compute_ddft_d4_auto_grac()
     # test_sapt_dft_diskdf()
     # test_qcng_embedded_saptdft()

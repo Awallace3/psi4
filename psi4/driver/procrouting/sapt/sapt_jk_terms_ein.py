@@ -143,7 +143,6 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     na = cache["Cocc_A"].shape[1]
     nm = nf + na
     ranges = [0, nf, nm]
-    print(ranges)
     N = cache['eps_occ_A'].shape[0]
     Focc = core.Matrix("Focc", N, N)
     for i in range(N):
@@ -889,6 +888,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     cache["Elst_AB"] = core.Matrix.from_array(Elst_AB)
     return cache
 
+
 def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     """
     Computes the F-SAPT exchange partitioning according to FISAPT::fexch in C++.
@@ -960,19 +960,31 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
     
     W_A = J_A.copy() * 2.0 + V_A
     W_A.set_name("W_A")
+    print(W_A)
     W_B = J_B.copy() * 2.0 + V_B
     W_B.set_name("W_B")
+    print(W_B)
 
     WAbs = einsum_chain_gemm([LoccB, W_A, CvirB], ['T', 'N', 'N'])
     WBar = einsum_chain_gemm([LoccA, W_B, CvirA], ['T', 'N', 'N'])
+    print(WAbs)
+    print(WBar)
 
     Sab = einsum_chain_gemm([LoccA, S, LoccB], ['T', 'N', 'N'])
     Sba = einsum_chain_gemm([LoccB, S, LoccA], ['T', 'N', 'N'])
     Sas = einsum_chain_gemm([LoccA, S, CvirB], ['T', 'N', 'N'])
     Sbr = einsum_chain_gemm([LoccB, S, CvirA], ['T', 'N', 'N'])
 
+    Sab.set_name("Sab")
+    print(Sab)
+
     WBab = einsum_chain_gemm([WBar, Sbr], ['T', 'N'])
     WAba = einsum_chain_gemm([WAbs, Sas], ['T', 'N'])
+    WBab.set_name("WBab")
+    WAba.set_name("WAba")
+
+    print(WAba)
+    print(WBab)
     
     E_exch1 = np.zeros((na, nb))
     E_exch2 = np.zeros((na, nb))
@@ -981,6 +993,8 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
         for b in range(nb):
             E_exch1[a, b] = -2.0 * Sab[a, b] * WBab[a, b]
             E_exch2[a, b] = -2.0 * Sba[b, a] * WAba[b, a]
+    print(f"{E_exch1 = }")
+    print(f"{E_exch2 = }")
     
     nQ = dimer_wfn.get_basisset("DF_BASIS_SCF").nbf()
     TrQ = core.Matrix("TrQ", nr, nQ)
@@ -1027,13 +1041,13 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
     Exch10_2 = sum(Exch10_2_terms)
     
     if do_print:
+        """
+        Exch10(S^2)                       0.00001443 [mEh]
+        Exch10                            0.00001443 [mEh]
+        """
         core.print_out(f"    Exch10(S^2)         = {Exch10_2 * 1000:18.10f} [mEh]\n")
-        core.print_out("\n")
-    
-    if abs(Exch10_2 - (sapt_exch10 + sapt_exch10_s2)) > 1.0e-6:
-        core.print_out(f"    WARNING: F-SAPT Exch10(S^2) partition sum = {Exch10_2:18.12f} [Eh]\n")
-        core.print_out(f"             SAPT Exch10(S^2) from exch()    = {sapt_exch:18.12f} [Eh]\n")
-        core.print_out(f"             Difference                      = {Exch10_2 - sapt_exch:18.12f} [Eh]\n")
+        core.print_out(f"    Exch10(S^2)-true    = {sapt_exch10_s2 * 1000:18.10f} [mEh]\n")
+        core.print_out(f"    Exch10-true         = {sapt_exch10 * 1000:18.10f} [mEh]\n")
         core.print_out("\n")
     
     if core.get_option("FISAPT", "FISAPT_FSAPT_EXCH_SCALE"):
@@ -2386,8 +2400,8 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     def hessian_vec(x_vec, act_mask):
         # TODO: to convert to einsums fully here, would need to re-write
         # cphf_HX, onel_Hx, and twoel_Hx functions in libscf_solver/uhf.cc
-        for i in range(len(x_vec) // 2):
-            print(x_vec[0][2 * i])
+        # for i in range(len(x_vec) // 2):
+            # print(x_vec[0][2 * i])
         if act_mask[0]:
             xA = cache["wfn_A"].cphf_Hx([core.Matrix.from_array(x_vec[0])])[0].np
         else:
