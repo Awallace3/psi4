@@ -104,10 +104,10 @@ def _split_L_U_blocks(cache, tag: str, link_assignment: str):
     Uf_np = U_np[:nf, :nf]                          # (nf x nf)
     Ua_np = U_np[nf:nm, nf:nm]                      # (na x na)
 
-    cache[f"Lfocc0{tag}"] = psi4.core.Matrix.from_array(Lf_np)
-    cache[f"Laocc0{tag}"] = psi4.core.Matrix.from_array(La_np)
-    cache[f"Ufocc0{tag}"] = psi4.core.Matrix.from_array(Uf_np)
-    cache[f"Uaocc0{tag}"] = psi4.core.Matrix.from_array(Ua_np)
+    cache[f"Lfocc0{tag}"] = core.Matrix.from_array(Lf_np)
+    cache[f"Laocc0{tag}"] = core.Matrix.from_array(La_np)
+    cache[f"Ufocc0{tag}"] = core.Matrix.from_array(Uf_np)
+    cache[f"Uaocc0{tag}"] = core.Matrix.from_array(Ua_np)
 
     cache[f"Locc0{tag}"].set_name(f"Locc0{tag}")
     cache[f"Lfocc0{tag}"].set_name(f"Lfocc0{tag}")
@@ -119,7 +119,7 @@ def _split_L_U_blocks(cache, tag: str, link_assignment: str):
 
     # Optional: augmented L with the link orbital column
     if link_assignment in {"SAO0","SAO1","SAO2","SIAO0","SIAO1","SIAO2"}:
-        Laug = psi4.core.Matrix.zeros(nn, nm + 1)
+        Laug = core.Matrix.zeros(nn, nm + 1)
         Laug_np = Laug.np
         Laug_np[:, :nm] = L_np  # copy full L
         # Append the (normalized-to-1/2) link column thislinkX (shape nn x 1)
@@ -889,7 +889,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     cache["Elst_AB"] = core.Matrix.from_array(Elst_AB)
     return cache
 
-def fexch(cache, sapt_exch, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
+def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     """
     Computes the F-SAPT exchange partitioning according to FISAPT::fexch in C++.
     Uses the Exch10(S^2) approximation with orbital partitioning.
@@ -1027,20 +1027,22 @@ def fexch(cache, sapt_exch, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Exch10_2 = sum(Exch10_2_terms)
     
     if do_print:
-        core.print_out(f"    Exch10(S^2)         = {Exch10_2:18.12f} [Eh]\n")
+        core.print_out(f"    Exch10(S^2)         = {Exch10_2 * 1000:18.10f} [mEh]\n")
         core.print_out("\n")
     
-    if abs(Exch10_2 - sapt_exch) > 1.0e-6:
+    if abs(Exch10_2 - (sapt_exch10 + sapt_exch10_s2)) > 1.0e-6:
         core.print_out(f"    WARNING: F-SAPT Exch10(S^2) partition sum = {Exch10_2:18.12f} [Eh]\n")
         core.print_out(f"             SAPT Exch10(S^2) from exch()    = {sapt_exch:18.12f} [Eh]\n")
         core.print_out(f"             Difference                      = {Exch10_2 - sapt_exch:18.12f} [Eh]\n")
         core.print_out("\n")
     
     if core.get_option("FISAPT", "FISAPT_FSAPT_EXCH_SCALE"):
-        scale = sapt_exch / Exch10_2
+        # For now, scaling should be 1.0
+        scale = sapt_exch10 / Exch10_2
         Exch_AB *= scale
         if do_print:
             core.print_out(f"    Scaling F-SAPT Exch10(S^2) by {scale:11.3E} to match Exch10\n\n")
+        assert scale == 1.0, "Currently should only get scale factor of 1.0"
     
     cache["Exch_AB"] = core.Matrix.from_array(Exch_AB)
     
@@ -1055,9 +1057,9 @@ def build_ind_pot(vars):
     V_B = vars["V_B"]
     J_B = vars["J_B"]
     
-    W = psi4.core.Matrix.from_array(J_B.np * 2.0 + V_B.np)
+    W = core.Matrix.from_array(J_B.np * 2.0 + V_B.np)
     
-    return psi4.core.triplet(Ca, W, Cr, True, False, False)
+    return core.triplet(Ca, W, Cr, True, False, False)
 
 
 def build_exch_ind_pot_avg(vars):
@@ -1088,85 +1090,85 @@ def build_exch_ind_pot_avg(vars):
     J_P = vars["J_P"]
     J_PYAY = vars["J_PYAY"]
     
-    W = psi4.core.Matrix.from_array(-K_B.np)
+    W = core.Matrix.from_array(-K_B.np)
     
-    T = psi4.core.triplet(S, D_B, J_A, False, False, False)
+    T = core.triplet(S, D_B, J_A, False, False, False)
     W.np[:] += -2.0 * T.np
     
     W.np[:] += K_O.np
     
     W.np[:] += -2.0 * J_O.np
     
-    T = psi4.core.triplet(S, D_B, K_A, False, False, False)
+    T = core.triplet(S, D_B, K_A, False, False, False)
     W.np[:] += T.np
     
-    T = psi4.core.triplet(J_B, D_B, S, False, False, False)
+    T = core.triplet(J_B, D_B, S, False, False, False)
     W.np[:] += -2.0 * T.np
     
-    T = psi4.core.triplet(K_B, D_B, S, False, False, False)
+    T = core.triplet(K_B, D_B, S, False, False, False)
     W.np[:] += T.np
-    T = psi4.core.triplet(K_Y, D_Y, S, False, False, False)
+    T = core.triplet(K_Y, D_Y, S, False, False, False)
     W.np[:] += T.np
     
-    T1 = psi4.core.triplet(S, D_B, J_A, False, False, False)
-    T = psi4.core.triplet(T1, D_B, S, False, False, False)
+    T1 = core.triplet(S, D_B, J_A, False, False, False)
+    T = core.triplet(T1, D_B, S, False, False, False)
     W.np[:] += 2.0 * T.np
-    T1 = psi4.core.triplet(S, D_Y, J_A, False, False, False)
-    T = psi4.core.triplet(T1, D_Y, S, False, False, False)
-    W.np[:] += 2.0 * T.np
-    
-    T1 = psi4.core.triplet(J_B, D_A, S, False, False, False)
-    T = psi4.core.triplet(T1, D_B, S, False, False, False)
+    T1 = core.triplet(S, D_Y, J_A, False, False, False)
+    T = core.triplet(T1, D_Y, S, False, False, False)
     W.np[:] += 2.0 * T.np
     
-    T = psi4.core.triplet(K_O, D_B, S, False, False, False)
+    T1 = core.triplet(J_B, D_A, S, False, False, False)
+    T = core.triplet(T1, D_B, S, False, False, False)
+    W.np[:] += 2.0 * T.np
+    
+    T = core.triplet(K_O, D_B, S, False, False, False)
     W.np[:] += -1.0 * T.np
-    T = psi4.core.triplet(K_AOY, D_Y, S, False, False, False)
+    T = core.triplet(K_AOY, D_Y, S, False, False, False)
     W.np[:] += -1.0 * T.np
     
     W.np[:] += 2.0 * J_P.np
     W.np[:] += 2.0 * J_PYAY.np
     
-    T1 = psi4.core.triplet(S, D_B, S, False, False, False)
-    T = psi4.core.triplet(T1, D_A, J_B, False, False, False)
+    T1 = core.triplet(S, D_B, S, False, False, False)
+    T = core.triplet(T1, D_A, J_B, False, False, False)
     W.np[:] += 2.0 * T.np
     
-    T = psi4.core.triplet(S, D_B, K_O, False, False, True)
+    T = core.triplet(S, D_B, K_O, False, False, True)
     W.np[:] += -1.0 * T.np
-    T = psi4.core.triplet(S, D_Y, K_AOY, False, False, True)
-    W.np[:] += -1.0 * T.np
-    
-    T = psi4.core.triplet(S, D_B, V_A, False, False, False)
+    T = core.triplet(S, D_Y, K_AOY, False, False, True)
     W.np[:] += -1.0 * T.np
     
-    T = psi4.core.triplet(V_B, D_B, S, False, False, False)
+    T = core.triplet(S, D_B, V_A, False, False, False)
     W.np[:] += -1.0 * T.np
     
-    T1 = psi4.core.triplet(S, D_B, V_A, False, False, False)
-    T = psi4.core.triplet(T1, D_B, S, False, False, False)
+    T = core.triplet(V_B, D_B, S, False, False, False)
+    W.np[:] += -1.0 * T.np
+    
+    T1 = core.triplet(S, D_B, V_A, False, False, False)
+    T = core.triplet(T1, D_B, S, False, False, False)
     W.np[:] += T.np
-    T1 = psi4.core.triplet(S, D_Y, V_A, False, False, False)
-    T = psi4.core.triplet(T1, D_Y, S, False, False, False)
+    T1 = core.triplet(S, D_Y, V_A, False, False, False)
+    T = core.triplet(T1, D_Y, S, False, False, False)
     W.np[:] += T.np
     
-    T1 = psi4.core.triplet(V_B, D_A, S, False, False, False)
-    T = psi4.core.triplet(T1, D_B, S, False, False, False)
+    T1 = core.triplet(V_B, D_A, S, False, False, False)
+    T = core.triplet(T1, D_B, S, False, False, False)
     W.np[:] += T.np
     
-    T1 = psi4.core.triplet(S, D_B, S, False, False, False)
-    T = psi4.core.triplet(T1, D_A, V_B, False, False, False)
+    T1 = core.triplet(S, D_B, S, False, False, False)
+    T = core.triplet(T1, D_A, V_B, False, False, False)
     W.np[:] += T.np
     
-    return psi4.core.triplet(Ca, W, Cr, True, False, False)
+    return core.triplet(Ca, W, Cr, True, False, False)
 
 
 def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     if do_print:
-        psi4.core.print_out("  ==> F-SAPT Induction <==\n\n")
+        core.print_out("  ==> F-SAPT Induction <==\n\n")
     
-    ind_resp = psi4.core.get_option("FISAPT", "FISAPT_FSAPT_IND_RESPONSE")
-    ind_scale = psi4.core.get_option("FISAPT", "FISAPT_FSAPT_IND_SCALE")
-    link_assignment = psi4.core.get_option("FISAPT", "FISAPT_LINK_ASSIGNMENT")
+    ind_resp = core.get_option("FISAPT", "FISAPT_FSAPT_IND_RESPONSE")
+    ind_scale = core.get_option("FISAPT", "FISAPT_FSAPT_IND_SCALE")
+    link_assignment = core.get_option("FISAPT", "FISAPT_LINK_ASSIGNMENT")
     
     mol = dimer_wfn.molecule()
     nn = dimer_wfn.basisset().nbf()
@@ -1202,16 +1204,16 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     aux_basis = dimer_wfn.get_basisset("DF_BASIS_SCF")
     nQ = aux_basis.nbf()
     
-    dfh = psi4.core.DFHelper(dimer_wfn.basisset(), aux_basis)
+    dfh = core.DFHelper(dimer_wfn.basisset(), aux_basis)
     dfh.set_memory(int(5e8))
     dfh.set_method("DIRECT")
-    dfh.set_nthreads(psi4.core.get_num_threads())
+    dfh.set_nthreads(core.get_num_threads())
     dfh.initialize()
     
     dfh.add_disk_tensor("WBar", (nB + nb1 + 1, na, nr))
     dfh.add_disk_tensor("WAbs", (nA + na1 + 1, nb, ns))
     
-    mints = psi4.core.MintsHelper(dimer_wfn.basisset())
+    mints = core.MintsHelper(dimer_wfn.basisset())
     
     ZA = cache["ZA"]
     for A_idx in range(nA):
@@ -1219,7 +1221,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Vtemp.set_charge_field([[ZA[A_idx], [mol.x(A_idx), mol.y(A_idx), mol.z(A_idx)]]])
         Vtemp.compute()
         Vtemp_mat = Vtemp.get()
-        Vbs = psi4.core.triplet(Cocc_B, Vtemp_mat, Cvir_B, True, False, False)
+        Vbs = core.triplet(Cocc_B, Vtemp_mat, Cvir_B, True, False, False)
         dfh.write_disk_tensor("WAbs", Vbs, (A_idx, A_idx + 1))
     
     ZB = cache["ZB"]
@@ -1228,7 +1230,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Vtemp.set_charge_field([[ZB[B_idx], [mol.x(B_idx), mol.y(B_idx), mol.z(B_idx)]]])
         Vtemp.compute()
         Vtemp_mat = Vtemp.get()
-        Var = psi4.core.triplet(Cocc_A, Vtemp_mat, Cvir_A, True, False, False)
+        Var = core.triplet(Cocc_A, Vtemp_mat, Cvir_A, True, False, False)
         dfh.write_disk_tensor("WBar", Var, (B_idx, B_idx + 1))
     
     dfh.add_space("a", Cocc_A)
@@ -1244,22 +1246,22 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     RaC = cache["Vlocc0A"]
     RbD = cache["Vlocc0B"]
     
-    TsQ = psi4.core.Matrix(ns, nQ)
-    T1As = psi4.core.Matrix(na1, ns)
+    TsQ = core.Matrix(ns, nQ)
+    T1As = core.Matrix(na1, ns)
     for b_idx in range(nb):
         dfh.fill_tensor("Abs", TsQ, (b_idx, b_idx + 1))
         T1As.gemm(False, True, 2.0, RaC, TsQ, 0.0)
         for a_idx in range(na1):
-            row_view = psi4.core.Matrix.from_array(T1As.np[a_idx:a_idx+1, :])
+            row_view = core.Matrix.from_array(T1As.np[a_idx:a_idx+1, :])
             dfh.write_disk_tensor("WAbs", row_view, (nA + a_idx, nA + a_idx + 1), (b_idx, b_idx + 1))
     
-    TrQ = psi4.core.Matrix(nr, nQ)
-    T1Br = psi4.core.Matrix(nb1, nr)
+    TrQ = core.Matrix(nr, nQ)
+    T1Br = core.Matrix(nb1, nr)
     for a_idx in range(na):
         dfh.fill_tensor("Aar", TrQ, (a_idx, a_idx + 1))
         T1Br.gemm(False, True, 2.0, RbD, TrQ, 0.0)
         for b_idx in range(nb1):
-            row_view = psi4.core.Matrix.from_array(T1Br.np[b_idx:b_idx+1, :])
+            row_view = core.Matrix.from_array(T1Br.np[b_idx:b_idx+1, :])
             dfh.write_disk_tensor("WBar", row_view, (nB + b_idx, nB + b_idx + 1), (a_idx, a_idx + 1))
     
     eap = eps_occ_A
@@ -1282,8 +1284,8 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     J_P_B = cache["J_P_B"]
     
     if link_assignment in ["SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"]:
-        D_X = psi4.core.doublet(cache["thislinkA"], cache["thislinkA"], False, True)
-        D_Y = psi4.core.doublet(cache["thislinkB"], cache["thislinkB"], False, True)
+        D_X = core.doublet(cache["thislinkA"], cache["thislinkA"], False, True)
+        D_Y = core.doublet(cache["thislinkB"], cache["thislinkB"], False, True)
         J_X = cache["JLA"].clone()
         K_X = cache["KLA"].clone()
         J_Y = cache["JLB"].clone()
@@ -1291,7 +1293,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         
         K_AOY = cache["K_AOY"]
         K_XOB = cache["K_XOB"]
-        K_XOB_T = psi4.core.Matrix.from_array(K_XOB.np.T.copy())
+        K_XOB_T = core.Matrix.from_array(K_XOB.np.T.copy())
         J_P_YAY = cache["J_P_YAY"]
         J_P_XBX = cache["J_P_XBX"]
         
@@ -1323,7 +1325,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         wBT = build_ind_pot(mapA)
         uBT = build_exch_ind_pot_avg(mapA)
         
-        K_O_T = psi4.core.Matrix.from_array(K_O.np.T.copy())
+        K_O_T = core.Matrix.from_array(K_O.np.T.copy())
         
         mapB = {
             "Cocc_A": Locc_B,
@@ -1399,15 +1401,15 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Indu_BA = 0.0
     
     if "VB_extern" in cache and dimer_wfn.has_potential_variable("B"):
-        Var = psi4.core.triplet(Cocc_A, cache["VB_extern"], Cvir_A, True, False, False)
+        Var = core.triplet(Cocc_A, cache["VB_extern"], Cvir_A, True, False, False)
         dfh.write_disk_tensor("WBar", Var, (nB + nb1, nB + nb1 + 1))
     else:
-        Var = psi4.core.Matrix(na, nr)
+        Var = core.Matrix(na, nr)
         Var.zero()
         dfh.write_disk_tensor("WBar", Var, (nB + nb1, nB + nb1 + 1))
     
-    wB = psi4.core.Matrix(na, nr)
-    xA = psi4.core.Matrix(na, nr)
+    wB = core.Matrix(na, nr)
+    xA = core.Matrix(na, nr)
     for B_idx in range(nB + nb1 + 1):
         dfh.fill_tensor("WBar", wB, (B_idx, B_idx + 1))
         
@@ -1415,7 +1417,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             for r in range(nr):
                 xA.np[a, r] = wB.np[a, r] / (eap[a] - erp[r])
         
-        x2A = psi4.core.doublet(Uocc_A, xA, True, False)
+        x2A = core.doublet(Uocc_A, xA, True, False)
         x2A_np = x2A.np
         
         for a in range(na):
@@ -1429,15 +1431,15 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             Indu_AB += Jval + Kval
     
     if "VA_extern" in cache and dimer_wfn.has_potential_variable("A"):
-        Vbs = psi4.core.triplet(Cocc_B, cache["VA_extern"], Cvir_B, True, False, False)
+        Vbs = core.triplet(Cocc_B, cache["VA_extern"], Cvir_B, True, False, False)
         dfh.write_disk_tensor("WAbs", Vbs, (nA + na1, nA + na1 + 1))
     else:
-        Vbs = psi4.core.Matrix(nb, ns)
+        Vbs = core.Matrix(nb, ns)
         Vbs.zero()
         dfh.write_disk_tensor("WAbs", Vbs, (nA + na1, nA + na1 + 1))
     
-    wA = psi4.core.Matrix(nb, ns)
-    xB = psi4.core.Matrix(nb, ns)
+    wA = core.Matrix(nb, ns)
+    xB = core.Matrix(nb, ns)
     for A_idx in range(nA + na1 + 1):
         dfh.fill_tensor("WAbs", wA, (A_idx, A_idx + 1))
         
@@ -1445,7 +1447,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             for s in range(ns):
                 xB.np[b, s] = wA.np[b, s] / (ebp[b] - esp[s])
         
-        x2B = psi4.core.doublet(Uocc_B, xB, True, False)
+        x2B = core.doublet(Uocc_B, xB, True, False)
         x2B_np = x2B.np
         
         for b in range(nb):
@@ -1460,15 +1462,15 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     Ind20u = Ind20u_AB + Ind20u_BA
     if do_print:
-        psi4.core.print_out(f"    Ind20,u (A<-B)      = {Ind20u_AB:18.12f} [Eh]\n")
-        psi4.core.print_out(f"    Ind20,u (B<-A)      = {Ind20u_BA:18.12f} [Eh]\n")
-        psi4.core.print_out(f"    Ind20,u             = {Ind20u:18.12f} [Eh]\n")
+        core.print_out(f"    Ind20,u (A<-B)      = {Ind20u_AB:18.12f} [Eh]\n")
+        core.print_out(f"    Ind20,u (B<-A)      = {Ind20u_BA:18.12f} [Eh]\n")
+        core.print_out(f"    Ind20,u             = {Ind20u:18.12f} [Eh]\n")
     
     ExchInd20u = ExchInd20u_AB + ExchInd20u_BA
     if do_print:
-        psi4.core.print_out(f"    Exch-Ind20,u (A<-B) = {ExchInd20u_AB:18.12f} [Eh]\n")
-        psi4.core.print_out(f"    Exch-Ind20,u (B<-A) = {ExchInd20u_BA:18.12f} [Eh]\n")
-        psi4.core.print_out(f"    Exch-Ind20,u        = {ExchInd20u:18.12f} [Eh]\n\n")
+        core.print_out(f"    Exch-Ind20,u (A<-B) = {ExchInd20u_AB:18.12f} [Eh]\n")
+        core.print_out(f"    Exch-Ind20,u (B<-A) = {ExchInd20u_BA:18.12f} [Eh]\n")
+        core.print_out(f"    Exch-Ind20,u        = {ExchInd20u:18.12f} [Eh]\n\n")
     
     Ind = Ind20u + ExchInd20u
     Ind_AB_terms = Indu_AB_terms
@@ -1499,12 +1501,12 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             Ind20uBA_AB[A_idx, b + nB] = Ind20u_BA_terms[A_idx, b]
             ExchInd20uBA_AB[A_idx, b + nB] = ExchInd20u_BA_terms[A_idx, b]
     
-    cache["IndAB_AB"] = psi4.core.Matrix.from_array(IndAB_AB)
-    cache["IndBA_AB"] = psi4.core.Matrix.from_array(IndBA_AB)
-    cache["Ind20u_AB_terms"] = psi4.core.Matrix.from_array(Ind20uAB_AB)
-    cache["ExchInd20u_AB_terms"] = psi4.core.Matrix.from_array(ExchInd20uAB_AB)
-    cache["Ind20u_BA_terms"] = psi4.core.Matrix.from_array(Ind20uBA_AB)
-    cache["ExchInd20u_BA_terms"] = psi4.core.Matrix.from_array(ExchInd20uBA_AB)
+    cache["IndAB_AB"] = core.Matrix.from_array(IndAB_AB)
+    cache["IndBA_AB"] = core.Matrix.from_array(IndBA_AB)
+    cache["Ind20u_AB_terms"] = core.Matrix.from_array(Ind20uAB_AB)
+    cache["ExchInd20u_AB_terms"] = core.Matrix.from_array(ExchInd20uAB_AB)
+    cache["Ind20u_BA_terms"] = core.Matrix.from_array(Ind20uBA_AB)
+    cache["ExchInd20u_BA_terms"] = core.Matrix.from_array(ExchInd20uBA_AB)
     
     dfh.clear_all()
     
