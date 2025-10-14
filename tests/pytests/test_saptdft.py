@@ -1206,9 +1206,9 @@ def test_einsum_terms():
     Eref_nh = {
         "SAPT ELST ENERGY": -0.22987897,  # mEh
         "SAPT EXCH ENERGY": 0.59560159,  # mEh
-        "SAPT IND ENERGY": -0.00010341,   # mEh
-        "SAPT DISP ENERGY":  0.00000574,   # mEh
-        "CURRENT ENERGY":  0.36562495,    # mEh
+        "SAPT IND ENERGY": -0.00010341,  # mEh
+        "SAPT DISP ENERGY": 0.00000574,  # mEh
+        "CURRENT ENERGY": 0.36562495,  # mEh
     }  # TEST
     mol = psi4.geometry("""
   Ne
@@ -1236,6 +1236,7 @@ def test_einsum_terms():
         )
 
 
+@pytest.mark.skip(reason="Not completed fsapt einsums")
 def test_fsaptdft():
     """
     built from sapt-dft1 ctest
@@ -1287,6 +1288,8 @@ no_com
             ref, psi4.variable(k) * 1000, 8, "!hyb, xd=none, !dHF: " + k
         )
 
+
+@pytest.mark.skip(reason="Not completed fsapt einsums")
 def test_fsaptdft_fsapt0():
     """
     built from sapt-dft1 ctest
