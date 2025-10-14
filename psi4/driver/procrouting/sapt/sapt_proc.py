@@ -1060,7 +1060,7 @@ def sapt_dft(
         core.timer_on("SAPT(DFT): F-SAPT Localization (IBO)")
         sapt_jk_terms_ein.flocalization(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
         core.timer_off("SAPT(DFT): F-SAPT Localization (IBO)")
-        elst, extern_extern_IE = sapt_jk_terms_ein.felst(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
+        cache_ein = sapt_jk_terms_ein.felst(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
 
     # Print out final data
     core.print_out("\n")
