@@ -1037,6 +1037,13 @@ def sapt_dft(
         cache_ein = sapt_jk_terms_ein.felst(cache_ein, elst['Elst10,r'] + extern_extern_IE, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
         cache_ein = sapt_jk_terms_ein.fexch(cache_ein, exch["Exch10(S^2)"], exch["Exch10"], dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
         # cache_ein = sapt_jk_terms_ein.find(cache_ein, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
+        core.set_variable("FSAPT_QA", cache_ein["Qocc0A"])
+        core.set_variable("FSAPT_QB", cache_ein["Qocc0B"])
+        core.set_variable("FSAPT_ELST_AB", cache_ein['Elst_AB'])
+        core.set_variable("FSAPT_EXCH_AB", cache_ein['Exch_AB'])
+        core.set_variable("FSAPT_INDAB_AB", np.ones_like(cache_ein['Elst_AB']))
+        core.set_variable("FSAPT_INDBA_AB", np.ones_like(cache_ein['Elst_AB']))
+        core.set_variable("FSAPT_DISP_AB", np.ones_like(cache_ein['Elst_AB']))
 
     # Print out final data
     core.print_out("\n")

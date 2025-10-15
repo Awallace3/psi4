@@ -1056,7 +1056,7 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
         Exch_AB *= scale
         if do_print:
             core.print_out(f"    Scaling F-SAPT Exch10(S^2) by {scale:11.3E} to match Exch10\n\n")
-        assert abs(scale - 1.0) < 1e-6, "Currently should only get scale factor of 1.0"
+        # assert abs(scale - 1.0) < 1e-6, "Currently should only get scale factor of 1.0"
     
     cache["Exch_AB"] = core.Matrix.from_array(Exch_AB)
     

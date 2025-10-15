@@ -6,6 +6,7 @@ from psi4 import core
 import numpy as np
 import qcelemental as qcel
 from pprint import pprint as pp
+from addons import uusing
 
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
 pytestmark = [pytest.mark.psi, pytest.mark.api]
@@ -1339,6 +1340,7 @@ no_com
             ref, psi4.variable(k) * 1000, 8, "!hyb, xd=none, !dHF: " + k
         )
 
+
 @pytest.mark.skip(reason="Not completed fsapt einsums")
 def test_fsaptdft_fsapt0_simple():
     """
@@ -1386,13 +1388,170 @@ no_com
         )
 
 
+@pytest.mark.saptdft
+@uusing("pandas")
+def test_fsaptdft_psivars():
+    """
+    fsapt-psivars: calling fsapt_analysis with psi4 variables after running an
+    fisapt0 calcluation requires the user to pass the molecule object
+    """
+    import pandas as pd
+
+    mol = psi4.geometry(
+        """
+0 1
+C   11.54100       27.68600       13.69600
+H   12.45900       27.15000       13.44600
+C   10.79000       27.96500       12.40600
+H   10.55700       27.01400       11.92400
+H   9.879000       28.51400       12.64300
+H   11.44300       28.56800       11.76200
+H   10.90337       27.06487       14.34224
+H   11.78789       28.62476       14.21347
+--
+0 1
+C   10.60200       24.81800       6.466000
+O   10.95600       23.84000       7.103000
+N   10.17800       25.94300       7.070000
+C   10.09100       26.25600       8.476000
+C   9.372000       27.59000       8.640000
+C   11.44600       26.35600       9.091000
+C   9.333000       25.25000       9.282000
+H   9.874000       26.68900       6.497000
+H   9.908000       28.37100       8.093000
+H   8.364000       27.46400       8.233000
+H   9.317000       27.84600       9.706000
+H   9.807000       24.28200       9.160000
+H   9.371000       25.57400       10.32900
+H   8.328000       25.26700       8.900000
+H   11.28800       26.57600       10.14400
+H   11.97000       27.14900       8.585000
+H   11.93200       25.39300       8.957000
+H   10.61998       24.85900       5.366911
+units angstrom
+
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    psi4.set_options(
+        {
+            "basis": "jun-cc-pvdz",
+            "scf_type": "df",
+            "guess": "sad",
+            "FISAPT_FSAPT_FILEPATH": "none",
+            "SAPT_DFT_FUNCTIONAL": "HF",
+            "SAPT_DFT_DO_DHF": True,
+            "SAPT_DFT_DO_HYBRID": False,
+            "SAPT_DFT_DO_FSAPT": True,
+        }
+    )
+    psi4.energy("sapt(dft)", molecule=mol)
+    from pprint import pprint as pp
+
+    pp(core.variables())
+    keys = ["Enuc", "Eelst", "Eexch", "Eind", "Edisp", "Etot"]
+    Eref = {  # TEST
+        "Enuc": 474.7480822,  # TEST
+        "Eelst": -0.002069850948615226,  # TEST
+        "Eexch": 0.006873900478860527,  # TEST
+        "Eind": -0.0007820179915634428,  # TEST
+        "Edisp": -0.0037376257449601522,  # TEST
+        "Etot": 0.00028440579372170614,  # TEST
+    }  # TEST
+    Epsi = {
+        "Enuc": mol.nuclear_repulsion_energy(),
+        "Eelst": core.variable("SAPT ELST ENERGY"),
+        "Eexch": core.variable("SAPT EXCH ENERGY"),
+        "Eind": core.variable("SAPT IND ENERGY"),
+        "Edisp": core.variable("SAPT DISP ENERGY"),
+        "Etot": core.variable("SAPT TOTAL ENERGY"),
+    }
+
+    for key in keys:
+        compare_values(Eref[key], Epsi[key], 5, key)
+    data = psi4.fsapt_analysis(
+        molecule=mol,
+        fragments_a={
+            "Methyl1_A": [1, 2, 7, 8],
+            "Methyl2_A": [3, 4, 5, 6],
+        },
+        fragments_b={
+            "Peptide_B": [9, 10, 11, 16, 26],
+            "T-Butyl_B": [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
+        },
+    )
+    df = pd.DataFrame(data)
+    print(df)
+    fEnergies = {}
+    fkeys = [
+        "fEelst",
+        "fEexch",
+        "fEindAB",
+        "fEindBA",
+        "fEdisp",
+        "fEedisp",
+        "fEtot",
+    ]
+
+    refInteractions = {
+    "Methyl1_A Peptide_B": {"Elst":  0.463, "Exch":  0.000, "IndAB": -0.010, 
+                            "IndBA":  0.000, "fEDisp": -0.009,'EDisp':0.0, "fEtot":  0.443}, 
+    "Methyl1_A T-Butyl_B": {"Elst": -0.328, "Exch":  0.023, "IndAB":  0.001,
+                            "IndBA":  0.024, "fEDisp": -0.186, 'EDisp':0.0,"fEtot": -0.467}, 
+    "Methyl1_A Link-1":    {"Elst":  0.434, "Exch":  0.000, "IndAB": -0.010,
+                            "IndBA":  0.001, "fEDisp": -0.005,'EDisp':0.0, "fEtot":  0.421}, 
+    "Methyl2_A Peptide_B": {"Elst": -0.827, "Exch":  0.014, "IndAB": -0.041,
+                            "IndBA": -0.001, "fEDisp": -0.040,'EDisp':0.0, "fEtot": -0.895}, 
+    "Methyl2_A T-Butyl_B": {"Elst": -0.611, "Exch":  4.130, "IndAB": -0.217,
+                            "IndBA": -0.143, "fEDisp": -1.812,'EDisp':0.0, "fEtot":  1.347}, 
+    "Methyl2_A Link-1":    {"Elst": -0.770, "Exch":  0.051, "IndAB": -0.066,
+                            "IndBA": -0.004, "fEDisp": -0.035,'EDisp':0.0, "fEtot": -0.823}, 
+    "Link-1 Peptide_B":    {"Elst":  0.257, "Exch": -0.000, "IndAB": -0.015,
+                            "IndBA":  0.000, "fEDisp": -0.008,'EDisp':0.0, "fEtot":  0.235}, 
+    "Link-1 T-Butyl_B":    {"Elst": -0.162, "Exch":  0.097, "IndAB": -0.013,
+                            "IndBA":  0.017, "fEDisp": -0.244,'EDisp':0.0, "fEtot": -0.305}, 
+    "Link-1 Link-1":       {"Elst":  0.245, "Exch": -0.001, "IndAB": -0.016,
+                            "IndBA":  0.001, "fEDisp": -0.006,'EDisp':0.0, "fEtot":  0.223}, 
+    "Methyl1_A All":       {"Elst":  0.569, "Exch":  0.023, "IndAB": -0.020,
+                            "IndBA":  0.025, "fEDisp": -0.201,'EDisp':0.0, "fEtot":  0.397}, 
+    "Methyl2_A All":       {"Elst": -2.208, "Exch":  4.195, "IndAB": -0.324,
+                            "IndBA": -0.147, "fEDisp": -1.887,'EDisp':0.0, "fEtot": -0.371}, 
+    "Link-1 All":          {"Elst":  0.340, "Exch":  0.096, "IndAB": -0.044,
+                            "IndBA":  0.018, "fEDisp": -0.258,'EDisp':0.0, "fEtot":  0.153}, 
+    "All Peptide_B":       {"Elst": -0.107, "Exch":  0.014, "IndAB": -0.066,
+                            "IndBA": -0.000, "fEDisp": -0.057,'EDisp':0.0, "fEtot": -0.217}, 
+    "All T-Butyl_B":       {"Elst": -1.100, "Exch":  4.249, "IndAB": -0.230,
+                            "IndBA": -0.102, "fEDisp": -2.242,'EDisp':0.0, "fEtot":  0.574}, 
+    "All Link-1":          {"Elst": -0.091, "Exch":  0.050, "IndAB": -0.091,
+                            "IndBA": -0.001, "fEDisp": -0.046,'EDisp':0.0, "fEtot": -0.179}, 
+    "All All":             {"Elst": -1.299, "Exch":  4.313, "IndAB": -0.387,
+                            "IndBA": -0.103, "fEDisp": -2.345,'EDisp':0.0, "fEtot":  0.178} 
+    }
+    print(df)
+
+    for key, val in refInteractions.items():
+        frag1, frag2 = key.split()
+        row = df[df["Frag1"] == frag1]
+        row = df[df["Frag2"] == frag2]
+        row = row.iloc[0]
+        print(row)
+        print(f"\nInteraction: {key}")
+        for fkey, ref in val.items():
+            calc = float(row[fkey])
+            print(f"{frag1:10s}, {frag2:10s}: {fkey:6s} {ref:10.6f} {calc:10.6f}")
+            compare_values(ref, calc, 3, f"{key} {fkey}")
+
+
 if __name__ == "__main__":
-    psi4.set_memory("14 GB")
-    psi4.set_num_threads(8)
+    psi4.set_memory("64 GB")
+    psi4.set_num_threads(12)
     # test_einsum_terms()
     # test_einsum_terms()
     # test_fsaptdft()
-    test_fsaptdft_fsapt0()
+    # test_fsaptdft_fsapt0()
+    test_fsaptdft_psivars()
     # test_fsaptdft_fsapt0_simple()
     # test_sapt_dft_compute_ddft_d4_auto_grac()
     # test_sapt_dft_diskdf()
