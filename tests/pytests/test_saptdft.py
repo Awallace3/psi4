@@ -1448,7 +1448,7 @@ no_com
             "SAPT_DFT_DO_FSAPT": True,
         }
     )
-    psi4.energy("fisapt0", molecule=mol)
+    psi4.energy("sapt(dft)", molecule=mol)
     from pprint import pprint as pp
     keys = ["Enuc", "Eelst", "Eexch", "Eind", "Edisp", "Etot"]
     Eref = {
@@ -1480,6 +1480,7 @@ no_com
             "Peptide_B": [9, 10, 11, 16, 26],
             "T-Butyl_B": [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
         },
+        links5050=True,
     )
     df = pd.DataFrame(data)
     print("COMPUTED DF")

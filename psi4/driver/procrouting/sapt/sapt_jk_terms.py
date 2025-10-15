@@ -804,7 +804,6 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
         cache["wfn_B"].set_jk(jk)
 
     # Make a preconditioner function
-    print("sapt_cpsch_solve")
     P_A = core.Matrix(cache["eps_occ_A"].shape[0], cache["eps_vir_A"].shape[0])
     P_A.np[:] = cache["eps_occ_A"].np.reshape(-1, 1) - cache["eps_vir_A"].np
 
@@ -856,7 +855,6 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     core.print_out("   " + ("-" * sep_size) + "\n")
 
     start_resid = [rhsA.sum_of_squares(), rhsB.sum_of_squares()]
-    print(start_resid)
 
     # print function
     def pfunc(niter, x_vec, r_vec):

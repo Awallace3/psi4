@@ -223,8 +223,6 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Qocc0B = ret["Q"]
     
     cache["Locc0B"] = Locc0B
-    print("FSAPT-Locc0B")
-    print(cache["Locc0B"].np)
     cache["Uocc0B"] = Uocc0B
     cache["Qocc0B"] = Qocc0B
     
@@ -690,7 +688,6 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     nB_atoms = mol.natom()
 
     # Sizing
-    # Implement LLocc0A/B if orbitals from flocalization...
     L0A_np = cache["LLocc0A"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache["LLocc0A"].np
     L0B_np = cache["LLocc0B"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache["LLocc0B"].np
     na = L0A_np.shape[1]
@@ -777,7 +774,6 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         tensor = dfh.get_tensor("Abb", [b, b + 1], [b, b + 1], [0, nQ])
         QbC[b, :] = tensor.np.flatten()
 
-    
     # Compute electrostatic interaction: Elst10_3 = 4.0 * QaC @ QbC.T
     Elst10_3 = 4.0 * np.dot(QaC, QbC.T)
     
@@ -795,9 +791,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Clear DFHelper spaces for next use
     dfh.clear_spaces()
     
-    
     # => A <-> b (nuclei A interacting with orbitals b) <= //
-    
     L0B_ein = ein.core.RuntimeTensorD(L0B_np)
     L0B_ein.set_name("L0B_ein")
 
@@ -839,7 +833,6 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             E = 2.0 * Vbb[b, b]
             Elst1_terms[1] += E
             Elst_AB[nA_atoms + na, b + nB_atoms] += E
-    
     
     # => a <-> B (orbitals a interacting with nuclei B) <= //
     
@@ -915,11 +908,7 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
         core.print_out("  ==> F-SAPT Exchange <==\n\n")
     
     mol = dimer_wfn.molecule()
-    dimer_basis = dimer_wfn.basisset()
-    nn = dimer_basis.nbf()
-    nA_atoms = mol.natom()
-    nB_atoms = mol.natom()
-    
+    nA_atoms = nB_atoms = mol.natom()
     na = cache["Locc0A"].shape[1]
     nb = cache["Locc0B"].shape[1]
     nr = cache["Cvir_A"].shape[1]
@@ -2400,8 +2389,6 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     def hessian_vec(x_vec, act_mask):
         # TODO: to convert to einsums fully here, would need to re-write
         # cphf_HX, onel_Hx, and twoel_Hx functions in libscf_solver/uhf.cc
-        # for i in range(len(x_vec) // 2):
-            # print(x_vec[0][2 * i])
         if act_mask[0]:
             xA = cache["wfn_A"].cphf_Hx([core.Matrix.from_array(x_vec[0])])[0].np
         else:
@@ -2431,13 +2418,11 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
 
     start_resid = [ein.core.dot(rhsA, rhsA), ein.core.dot(rhsB, rhsB)]
 
-    # print function
     def pfunc(niter, x_vec, r_vec):
         if niter == 0:
             niter = "Guess"
         else:
             niter = "%5d" % niter
-
         # Compute IndAB
         valA = (ein.core.dot(r_vec[0], r_vec[0]) / start_resid[0]) ** 0.5
         if valA < conv:

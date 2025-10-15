@@ -313,9 +313,9 @@ def run_sapt_dft(name, **kwargs):
             core.print_out("\n")
 
             # Build cache
-            hf_cache = sapt_jk_terms.build_sapt_jk_cache(
-               hf_wfn_dimer, hf_wfn_A, hf_wfn_B, sapt_jk, True, kwargs.get("external_potentials", None)
-            )
+            # hf_cache = sapt_jk_terms.build_sapt_jk_cache(
+            #    hf_wfn_dimer, hf_wfn_A, hf_wfn_B, sapt_jk, True, kwargs.get("external_potentials", None)
+            # )
 
             hf_cache_ein = sapt_jk_terms_ein.build_sapt_jk_cache(
                hf_wfn_dimer, hf_wfn_A, hf_wfn_B, sapt_jk, True, kwargs.get("external_potentials", None)
@@ -323,7 +323,7 @@ def run_sapt_dft(name, **kwargs):
 
             # Electrostatics
             core.timer_on("SAPT(HF):elst")
-            elst, extern_extern_IE = sapt_jk_terms.electrostatics(hf_cache, True)
+            # elst, extern_extern_IE = sapt_jk_terms.electrostatics(hf_cache, True)
             elst, extern_extern_IE = sapt_jk_terms_ein.electrostatics(hf_cache_ein, True)
             hf_data['extern_extern_IE'] = extern_extern_IE
             hf_data.update(elst)
@@ -331,21 +331,21 @@ def run_sapt_dft(name, **kwargs):
 
             # Exchange
             core.timer_on("SAPT(HF):exch")
-            exch = sapt_jk_terms.exchange(hf_cache, sapt_jk, True)
+            # exch = sapt_jk_terms.exchange(hf_cache, sapt_jk, True)
             exch = sapt_jk_terms_ein.exchange(hf_cache_ein, sapt_jk, True)
             hf_data.update(exch)
             core.timer_off("SAPT(HF):exch")
 
             # Induction
             core.timer_on("SAPT(HF):ind")
-            ind = sapt_jk_terms.induction(
-                hf_cache,
-                sapt_jk,
-                True,
-                maxiter=core.get_option("SAPT", "MAXITER"),
-                conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
-                Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
-            )
+            # ind = sapt_jk_terms.induction(
+            #     hf_cache,
+            #     sapt_jk,
+            #     True,
+            #     maxiter=core.get_option("SAPT", "MAXITER"),
+            #     conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
+            #     Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
+            # )
             ind = sapt_jk_terms_ein.induction(
                 hf_cache_ein,
                 sapt_jk,
@@ -879,7 +879,7 @@ def sapt_dft(
     # Electrostatics
     core.timer_on("SAPT(DFT):elst")
     do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")
-    elst, extern_extern_IE = sapt_jk_terms.electrostatics(cache, True)
+    # elst, extern_extern_IE = sapt_jk_terms.electrostatics(cache, True)
     elst, extern_extern_IE = sapt_jk_terms_ein.electrostatics(cache_ein, True)
     data["extern_extern_IE"] = extern_extern_IE
     data.update(elst)
@@ -887,24 +887,23 @@ def sapt_dft(
 
     # Exchange
     core.timer_on("SAPT(DFT):exch")
-    exch = sapt_jk_terms.exchange(cache, sapt_jk, True)
-    print("EXCH REG:", exch)
+    # exch = sapt_jk_terms.exchange(cache, sapt_jk, True)
+    # print("EXCH REG:", exch)
     exch = sapt_jk_terms_ein.exchange(cache_ein, sapt_jk, True)
-    print("EXCH EIN:", exch)
     data.update(exch)
     core.timer_off("SAPT(DFT):exch")
 
     # Induction
     core.timer_on("SAPT(DFT):ind")
-    ind = sapt_jk_terms.induction(
-        cache,
-        sapt_jk,
-        True,
-        sapt_jk_B=sapt_jk_B,
-        maxiter=core.get_option("SAPT", "MAXITER"),
-        conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
-        Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
-    )
+    # ind = sapt_jk_terms.induction(
+    #     cache,
+    #     sapt_jk,
+    #     True,
+    #     sapt_jk_B=sapt_jk_B,
+    #     maxiter=core.get_option("SAPT", "MAXITER"),
+    #     conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
+    #     Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
+    # )
     ind = sapt_jk_terms_ein.induction(
         cache_ein,
         sapt_jk,
@@ -975,7 +974,7 @@ def sapt_dft(
             x_alpha = wfn_B.functional().x_alpha()
             if not is_hybrid:
                 x_alpha = 0.0
-            fdds_disp = sapt_mp2_terms.df_fdds_dispersion(primary_basis, aux_basis, cache, is_hybrid, x_alpha)
+            # fdds_disp = sapt_mp2_terms.df_fdds_dispersion(primary_basis, aux_basis, cache, is_hybrid, x_alpha)
             fdds_disp = sapt_mp2_terms_ein.df_fdds_dispersion(primary_basis, aux_basis, cache_ein, is_hybrid, x_alpha)
             data.update(fdds_disp)
             nfrozen_A = 0
