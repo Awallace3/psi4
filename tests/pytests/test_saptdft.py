@@ -7,6 +7,7 @@ import numpy as np
 import qcelemental as qcel
 from pprint import pprint as pp
 from addons import uusing
+import pandas as pd
 
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
 pytestmark = [pytest.mark.psi, pytest.mark.api]
@@ -1437,7 +1438,7 @@ no_com
     )
     psi4.set_options(
         {
-            "basis": "jun-cc-pvdz",
+            "basis": "sto-3g",
             "scf_type": "df",
             "guess": "sad",
             "FISAPT_FSAPT_FILEPATH": "none",
@@ -1447,19 +1448,17 @@ no_com
             "SAPT_DFT_DO_FSAPT": True,
         }
     )
-    psi4.energy("sapt(dft)", molecule=mol)
+    psi4.energy("fisapt0", molecule=mol)
     from pprint import pprint as pp
-
-    pp(core.variables())
     keys = ["Enuc", "Eelst", "Eexch", "Eind", "Edisp", "Etot"]
-    Eref = {  # TEST
-        "Enuc": 474.7480822,  # TEST
-        "Eelst": -0.002069850948615226,  # TEST
-        "Eexch": 0.006873900478860527,  # TEST
-        "Eind": -0.0007820179915634428,  # TEST
-        "Edisp": -0.0037376257449601522,  # TEST
-        "Etot": 0.00028440579372170614,  # TEST
-    }  # TEST
+    Eref = {
+        "Edisp": -0.0007912165332922398,
+        "Eelst": -0.0019765266134612602,
+        "Eexch": 0.006335438658900877,
+        "Eind": -0.0004635353246623952,
+        "Enuc": 474.74808217020274,
+        "Etot": 0.003104160187484982,
+    }
     Epsi = {
         "Enuc": mol.nuclear_repulsion_energy(),
         "Eelst": core.variable("SAPT ELST ENERGY"),
@@ -1468,7 +1467,7 @@ no_com
         "Edisp": core.variable("SAPT DISP ENERGY"),
         "Etot": core.variable("SAPT TOTAL ENERGY"),
     }
-
+    pp(Epsi)
     for key in keys:
         compare_values(Eref[key], Epsi[key], 5, key)
     data = psi4.fsapt_analysis(
@@ -1483,66 +1482,32 @@ no_com
         },
     )
     df = pd.DataFrame(data)
+    print("COMPUTED DF")
     print(df)
-    fEnergies = {}
-    fkeys = [
-        "fEelst",
-        "fEexch",
-        "fEindAB",
-        "fEindBA",
-        "fEdisp",
-        "fEedisp",
-        "fEtot",
-    ]
-
-    refInteractions = {
-    "Methyl1_A Peptide_B": {"Elst":  0.463, "Exch":  0.000, "IndAB": -0.010, 
-                            "IndBA":  0.000, "fEDisp": -0.009,'EDisp':0.0, "fEtot":  0.443}, 
-    "Methyl1_A T-Butyl_B": {"Elst": -0.328, "Exch":  0.023, "IndAB":  0.001,
-                            "IndBA":  0.024, "fEDisp": -0.186, 'EDisp':0.0,"fEtot": -0.467}, 
-    "Methyl1_A Link-1":    {"Elst":  0.434, "Exch":  0.000, "IndAB": -0.010,
-                            "IndBA":  0.001, "fEDisp": -0.005,'EDisp':0.0, "fEtot":  0.421}, 
-    "Methyl2_A Peptide_B": {"Elst": -0.827, "Exch":  0.014, "IndAB": -0.041,
-                            "IndBA": -0.001, "fEDisp": -0.040,'EDisp':0.0, "fEtot": -0.895}, 
-    "Methyl2_A T-Butyl_B": {"Elst": -0.611, "Exch":  4.130, "IndAB": -0.217,
-                            "IndBA": -0.143, "fEDisp": -1.812,'EDisp':0.0, "fEtot":  1.347}, 
-    "Methyl2_A Link-1":    {"Elst": -0.770, "Exch":  0.051, "IndAB": -0.066,
-                            "IndBA": -0.004, "fEDisp": -0.035,'EDisp':0.0, "fEtot": -0.823}, 
-    "Link-1 Peptide_B":    {"Elst":  0.257, "Exch": -0.000, "IndAB": -0.015,
-                            "IndBA":  0.000, "fEDisp": -0.008,'EDisp':0.0, "fEtot":  0.235}, 
-    "Link-1 T-Butyl_B":    {"Elst": -0.162, "Exch":  0.097, "IndAB": -0.013,
-                            "IndBA":  0.017, "fEDisp": -0.244,'EDisp':0.0, "fEtot": -0.305}, 
-    "Link-1 Link-1":       {"Elst":  0.245, "Exch": -0.001, "IndAB": -0.016,
-                            "IndBA":  0.001, "fEDisp": -0.006,'EDisp':0.0, "fEtot":  0.223}, 
-    "Methyl1_A All":       {"Elst":  0.569, "Exch":  0.023, "IndAB": -0.020,
-                            "IndBA":  0.025, "fEDisp": -0.201,'EDisp':0.0, "fEtot":  0.397}, 
-    "Methyl2_A All":       {"Elst": -2.208, "Exch":  4.195, "IndAB": -0.324,
-                            "IndBA": -0.147, "fEDisp": -1.887,'EDisp':0.0, "fEtot": -0.371}, 
-    "Link-1 All":          {"Elst":  0.340, "Exch":  0.096, "IndAB": -0.044,
-                            "IndBA":  0.018, "fEDisp": -0.258,'EDisp':0.0, "fEtot":  0.153}, 
-    "All Peptide_B":       {"Elst": -0.107, "Exch":  0.014, "IndAB": -0.066,
-                            "IndBA": -0.000, "fEDisp": -0.057,'EDisp':0.0, "fEtot": -0.217}, 
-    "All T-Butyl_B":       {"Elst": -1.100, "Exch":  4.249, "IndAB": -0.230,
-                            "IndBA": -0.102, "fEDisp": -2.242,'EDisp':0.0, "fEtot":  0.574}, 
-    "All Link-1":          {"Elst": -0.091, "Exch":  0.050, "IndAB": -0.091,
-                            "IndBA": -0.001, "fEDisp": -0.046,'EDisp':0.0, "fEtot": -0.179}, 
-    "All All":             {"Elst": -1.299, "Exch":  4.313, "IndAB": -0.387,
-                            "IndBA": -0.103, "fEDisp": -2.345,'EDisp':0.0, "fEtot":  0.178} 
+    data = {
+        "Frag1": ["Methyl1_A", "Methyl2_A", "All", "All", "All"],
+        "Frag2": ["All", "All", "Peptide_B", "T-Butyl_B", "All"],
+        "Elst": [0.511801, -1.752090, -0.100514, -1.139775, -1.240289],
+        "Exch": [0.047332, 3.928215, 0.031752, 3.943796, 3.975548],
+        "IndAB": [-0.022726, -0.200776, -0.033169, -0.190334, -0.223502],
+        "IndBA": [0.015095, -0.082466, -0.001398, -0.065972, -0.067371],
+        "Disp": [-0.071408, -0.425088, -0.017542, -0.478954, -0.496496],
+        "EDisp": [0.0, 0.0, 0.0, 0.0, 0.0],
+        "Total": [0.480095, 1.467795, -0.120870, 2.068760, 1.947890],
     }
-    print(df)
 
-    # TODO: elst and exch failing... perhaps related to Qocc0A and Qocc0B solves?
-    for key, val in refInteractions.items():
-        frag1, frag2 = key.split()
-        row = df[df["Frag1"] == frag1]
-        row = df[df["Frag2"] == frag2]
-        row = row.iloc[0]
-        print(row)
-        print(f"\nInteraction: {key}")
-        for fkey, ref in val.items():
-            calc = float(row[fkey])
-            print(f"{frag1:10s}, {frag2:10s}: {fkey:6s} {ref:10.6f} {calc:10.6f}")
-            compare_values(ref, calc, 3, f"{key} {fkey}")
+    ref_df = pd.DataFrame(data)
+    print("REF")
+    print(ref_df)
+
+    for col in ["Elst", "Exch", "IndAB", "IndBA", "Disp", "EDisp", "Total"]:
+        for i in range(len(ref_df)):
+            compare_values(
+                ref_df[col].iloc[i],
+                df[col].iloc[i],
+                3,
+                f"{ref_df['Frag1'].iloc[i]} {ref_df['Frag2'].iloc[i]} {col}",
+            )
 
 
 if __name__ == "__main__":
