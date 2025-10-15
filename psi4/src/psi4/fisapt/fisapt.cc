@@ -6008,7 +6008,6 @@ void FISAPT::find() {
     double** TsQp = TsQ->pointer();
     double** T1Asp = T1As->pointer();
     for (size_t b = 0; b < nb; b++) {
-        outfile->Printf(" b = %4d, ns = %4d, nQ = %4d \n", b, ns, nQ);
         dfh_->fill_tensor("Abs", TsQ, {b, b + 1});
         C_DGEMM('N', 'T', na1, ns, nQ, 2.0, RaCp[0], nQ, TsQp[0], nQ, 0.0, T1Asp[0], ns);
         for (size_t a = 0; a < na1; a++) {
