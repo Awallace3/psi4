@@ -1174,9 +1174,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     link_assignment = core.get_option("FISAPT", "FISAPT_LINK_ASSIGNMENT")
     
     mol = dimer_wfn.molecule()
-    nn = dimer_wfn.basisset().nbf()
-    nA = mol.natom()
-    nB = mol.natom()
+    nA = nB = mol.natom()
     na = cache["Locc0A"].shape[1]
     nb = cache["Locc0B"].shape[1]
     nr = cache["Cvir_A"].shape[1]
@@ -1216,30 +1214,31 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     dfh.add_disk_tensor("WBar", (nB + nb1 + 1, na, nr))
     dfh.add_disk_tensor("WAbs", (nA + na1 + 1, nb, ns))
     
-    mints = core.MintsHelper(dimer_wfn.basisset())
+    ext_pot = core.ExternalPotential()
+    ZA_np = cache["ZA"].np
+    for A in range(nA):
+        ext_pot.clear()
+        atom_pos = mol.xyz(A)
+        ext_pot.addCharge(ZA_np[A], atom_pos[0], atom_pos[1], atom_pos[2])
+        Vtemp = ext_pot.computePotentialMatrix(dimer_wfn.basisset())
+        Vtemp_ein = ein.core.RuntimeTensorD(Vtemp.np)
+        Vbs = core.Matrix.from_array(einsum_chain_gemm([Cocc_B, Vtemp_ein, Cvir_B], ['T', 'N', 'N']))
+        dfh.write_disk_tensor("WAbs", Vbs, (A, A + 1))
     
-    ZA = cache["ZA"]
-    for A_idx in range(nA):
-        Vtemp = mints.ao_potential()
-        Vtemp.set_charge_field([[ZA[A_idx], [mol.x(A_idx), mol.y(A_idx), mol.z(A_idx)]]])
-        Vtemp.compute()
-        Vtemp_mat = Vtemp.get()
-        Vbs = core.triplet(Cocc_B, Vtemp_mat, Cvir_B, True, False, False)
-        dfh.write_disk_tensor("WAbs", Vbs, (A_idx, A_idx + 1))
+    ZB_np = cache["ZB"].np
+    for B in range(nB):
+        ext_pot.clear()
+        atom_pos = mol.xyz(B)
+        ext_pot.addCharge(ZB_np[B], atom_pos[0], atom_pos[1], atom_pos[2])
+        Vtemp = ext_pot.computePotentialMatrix(dimer_wfn.basisset())
+        Vtemp_ein = ein.core.RuntimeTensorD(Vtemp.np)
+        Var = core.Matrix.from_array(einsum_chain_gemm([Cocc_A, Vtemp_ein, Cvir_A], ['T', 'N', 'N']))
+        dfh.write_disk_tensor("WBar", Var, (B, B + 1))
     
-    ZB = cache["ZB"]
-    for B_idx in range(nB):
-        Vtemp = mints.ao_potential()
-        Vtemp.set_charge_field([[ZB[B_idx], [mol.x(B_idx), mol.y(B_idx), mol.z(B_idx)]]])
-        Vtemp.compute()
-        Vtemp_mat = Vtemp.get()
-        Var = core.triplet(Cocc_A, Vtemp_mat, Cvir_A, True, False, False)
-        dfh.write_disk_tensor("WBar", Var, (B_idx, B_idx + 1))
-    
-    dfh.add_space("a", Cocc_A)
-    dfh.add_space("r", Cvir_A)
-    dfh.add_space("b", Cocc_B)
-    dfh.add_space("s", Cvir_B)
+    dfh.add_space("a", core.Matrix.from_array(Cocc_A))
+    dfh.add_space("r", core.Matrix.from_array(Cvir_A))
+    dfh.add_space("b", core.Matrix.from_array(Cocc_B))
+    dfh.add_space("s", core.Matrix.from_array(Cvir_B))
     
     dfh.add_transformation("Aar", "a", "r")
     dfh.add_transformation("Abs", "b", "s")
@@ -1413,8 +1412,8 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     wB = core.Matrix(na, nr)
     xA = core.Matrix(na, nr)
-    for B_idx in range(nB + nb1 + 1):
-        dfh.fill_tensor("WBar", wB, (B_idx, B_idx + 1))
+    for B in range(nB + nb1 + 1):
+        dfh.fill_tensor("WBar", wB, (B, B + 1))
         
         for a in range(na):
             for r in range(nr):
@@ -1426,11 +1425,11 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         for a in range(na):
             Jval = 2.0 * np.dot(x2A_np[a, :], wBT_np[a, :])
             Kval = 2.0 * np.dot(x2A_np[a, :], uBT_np[a, :])
-            Ind20u_AB_terms[a, B_idx] = Jval
+            Ind20u_AB_terms[a, B] = Jval
             Ind20u_AB += Jval
-            ExchInd20u_AB_terms[a, B_idx] = Kval
+            ExchInd20u_AB_terms[a, B] = Kval
             ExchInd20u_AB += Kval
-            Indu_AB_terms[a, B_idx] = Jval + Kval
+            Indu_AB_terms[a, B] = Jval + Kval
             Indu_AB += Jval + Kval
     
     if "VA_extern" in cache and dimer_wfn.has_potential_variable("A"):
@@ -1443,8 +1442,8 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     wA = core.Matrix(nb, ns)
     xB = core.Matrix(nb, ns)
-    for A_idx in range(nA + na1 + 1):
-        dfh.fill_tensor("WAbs", wA, (A_idx, A_idx + 1))
+    for A in range(nA + na1 + 1):
+        dfh.fill_tensor("WAbs", wA, (A, A + 1))
         
         for b in range(nb):
             for s in range(ns):
@@ -1456,11 +1455,11 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         for b in range(nb):
             Jval = 2.0 * np.dot(x2B_np[b, :], wAT_np[b, :])
             Kval = 2.0 * np.dot(x2B_np[b, :], uAT_np[b, :])
-            Ind20u_BA_terms[A_idx, b] = Jval
+            Ind20u_BA_terms[A, b] = Jval
             Ind20u_BA += Jval
-            ExchInd20u_BA_terms[A_idx, b] = Kval
+            ExchInd20u_BA_terms[A, b] = Kval
             ExchInd20u_BA += Kval
-            Indu_BA_terms[A_idx, b] = Jval + Kval
+            Indu_BA_terms[A, b] = Jval + Kval
             Indu_BA += Jval + Kval
     
     Ind20u = Ind20u_AB + Ind20u_BA
@@ -1493,16 +1492,16 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     ExchInd20uBA_AB = np.zeros((nA + na1 + 1, nB + nb1 + 1))
     
     for a in range(na):
-        for B_idx in range(nB + nb1 + 1):
-            IndAB_AB[a + nA, B_idx] = Ind_AB_terms[a, B_idx]
-            Ind20uAB_AB[a + nA, B_idx] = Ind20u_AB_terms[a, B_idx]
-            ExchInd20uAB_AB[a + nA, B_idx] = ExchInd20u_AB_terms[a, B_idx]
+        for B in range(nB + nb1 + 1):
+            IndAB_AB[a + nA, B] = Ind_AB_terms[a, B]
+            Ind20uAB_AB[a + nA, B] = Ind20u_AB_terms[a, B]
+            ExchInd20uAB_AB[a + nA, B] = ExchInd20u_AB_terms[a, B]
     
-    for A_idx in range(nA + na1 + 1):
+    for A in range(nA + na1 + 1):
         for b in range(nb):
-            IndBA_AB[A_idx, b + nB] = Ind_BA_terms[A_idx, b]
-            Ind20uBA_AB[A_idx, b + nB] = Ind20u_BA_terms[A_idx, b]
-            ExchInd20uBA_AB[A_idx, b + nB] = ExchInd20u_BA_terms[A_idx, b]
+            IndBA_AB[A, b + nB] = Ind_BA_terms[A, b]
+            Ind20uBA_AB[A, b + nB] = Ind20u_BA_terms[A, b]
+            ExchInd20uBA_AB[A, b + nB] = ExchInd20u_BA_terms[A, b]
     
     cache["IndAB_AB"] = core.Matrix.from_array(IndAB_AB)
     cache["IndBA_AB"] = core.Matrix.from_array(IndBA_AB)
