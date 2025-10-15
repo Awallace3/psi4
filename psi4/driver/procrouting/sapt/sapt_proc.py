@@ -1042,8 +1042,8 @@ def sapt_dft(
         core.set_variable("FSAPT_QB", cache_ein["Qocc0B"])
         core.set_variable("FSAPT_ELST_AB", cache_ein['Elst_AB'])
         core.set_variable("FSAPT_EXCH_AB", cache_ein['Exch_AB'])
-        core.set_variable("FSAPT_INDAB_AB", cache_ein['Elst_AB'])
-        core.set_variable("FSAPT_INDBA_AB", cache_ein['Elst_AB'])
+        core.set_variable("FSAPT_INDAB_AB", cache_ein['INDAB_AB'])
+        core.set_variable("FSAPT_INDBA_AB", cache_ein['INDBA_AB'])
         core.set_variable("FSAPT_DISP_AB", np.ones_like(cache_ein['Elst_AB']))
 
     # Print out final data

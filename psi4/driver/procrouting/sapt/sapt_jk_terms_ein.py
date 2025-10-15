@@ -1576,8 +1576,8 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     Indu_AB_terms = core.Matrix("Ind [A<-B] (a x B)", na, nB + nb1 + 1)
     Indu_BA_terms = core.Matrix("Ind [B<-A] (A x b)", nA + na1 + 1, nb)
-    Indu_AB_termsp = Indu_AB_terms.np
-    Indu_BA_termsp = Indu_BA_terms.np
+    Indu_AB_terms_np = Indu_AB_terms.np
+    Indu_BA_terms_np = Indu_BA_terms.np
     
     Indu_AB = 0.0
     Indu_BA = 0.0
@@ -1624,7 +1624,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             #     sIndu_AB_termsp[a, B] = Jval + Kval
             #     sIndu_AB += Jval + Kval
             
-            Indu_AB_termsp[a, B] = Jval + Kval
+            Indu_AB_terms_np[a, B] = Jval + Kval
             Indu_AB += Jval + Kval
     
     if dimer_wfn.has_potential_variable("A"):
@@ -1657,15 +1657,22 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             #     sIndu_BA_termsp[A, b] = Jval + Kval
             #     sIndu_BA += Jval + Kval
             
-            Indu_BA_termsp[A, b] = Jval + Kval
+            Indu_BA_terms_np[A, b] = Jval + Kval
             Indu_BA += Jval + Kval
+
+    IndAB_AB = core.Matrix("IndAB_AB", nA + na1 + 1, nB + nb1 + 1)
+    IndBA_AB = core.Matrix("IndBA_AB", nA + na1 + 1, nB + nb1 + 1)
+
+    # Final assembly might be wrong... backtrace time
+    for a in range(na):
+        for B in range(nB + nb1 + 1):
+            IndAB_AB.np[a + nA, B] = Ind20u_AB_termsp[a, B]
+    for A in range(nA + na1 + 1):
+        for b in range(nb):
+            IndBA_AB.np[A, b + nB] = Ind20u_BA_termsp[A, b]
     
-    cache["Ind20u_AB"] = Ind20u_AB
-    cache["Ind20u_BA"] = Ind20u_BA
-    cache["ExchInd20u_AB"] = ExchInd20u_AB
-    cache["ExchInd20u_BA"] = ExchInd20u_BA
-    cache["Indu_AB"] = Indu_AB
-    cache["Indu_BA"] = Indu_BA
+    cache["INDAB_AB"] = IndAB_AB
+    cache["INDBA_AB"] = IndBA_AB
     
     # if core.get_option("SAPT", "SSAPT0_SCALE"):
     #     cache["sExchInd20u_AB"] = sExchInd20u_AB
@@ -1681,6 +1688,9 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         core.print_out(f"    Ind20,u             = {Ind20u_AB + Ind20u_BA:18.12f} [Eh]\n")
         core.print_out(f"    Exch-Ind20,u        = {ExchInd20u_AB + ExchInd20u_BA:18.12f} [Eh]\n\n")
     
+    # NOT IMPLEMENTED YET
+    # if (ind_resp) {
+    #     outfile->Printf("  COUPLED INDUCTION (You asked for it!):\n\n");
     return cache
 
 
