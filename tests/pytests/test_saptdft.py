@@ -1531,6 +1531,7 @@ no_com
     }
     print(df)
 
+    # TODO: elst and exch failing... perhaps related to Qocc0A and Qocc0B solves?
     for key, val in refInteractions.items():
         frag1, frag2 = key.split()
         row = df[df["Frag1"] == frag1]
