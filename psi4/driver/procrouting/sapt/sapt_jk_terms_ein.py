@@ -1430,8 +1430,8 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     wBT = core.Matrix("wBT", na, nr)
 
     if link_assignment in ["SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"]:
-        D_X = linalg.doublet(cache["thislinkA"], cache["thislinkA"], False, True)
-        D_Y = linalg.doublet(cache["thislinkB"], cache["thislinkB"], False, True)
+        D_X = core.doublet(cache["thislinkA"], cache["thislinkA"], False, True)
+        D_Y = core.doublet(cache["thislinkB"], cache["thislinkB"], False, True)
         J_X = cache["JLA"]
         K_X = cache["KLA"]
         J_Y = cache["JLB"]
@@ -1565,14 +1565,14 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     ExchInd20u_AB = 0.0
     ExchInd20u_BA = 0.0
     
-    sna = snB = snb = snA = 0
-    sExchInd20u_AB_terms = core.Matrix("sExchInd20 [A<-B] (a x B)", sna, snB + snb + 1)
-    sExchInd20u_BA_terms = core.Matrix("sExchInd20 [B<-A] (A x b)", snA + sna + 1, snb)
-    sExchInd20u_AB_termsp = sExchInd20u_AB_terms.np
-    sExchInd20u_BA_termsp = sExchInd20u_BA_terms.np
-    
-    sExchInd20u_AB = 0.0
-    sExchInd20u_BA = 0.0
+    # sna = snB = snb = snA = 0
+    # sExchInd20u_AB_terms = core.Matrix("sExchInd20 [A<-B] (a x B)", sna, snB + snb + 1)
+    # sExchInd20u_BA_terms = core.Matrix("sExchInd20 [B<-A] (A x b)", snA + sna + 1, snb)
+    # sExchInd20u_AB_termsp = sExchInd20u_AB_terms.np
+    # sExchInd20u_BA_termsp = sExchInd20u_BA_terms.np
+    # 
+    # sExchInd20u_AB = 0.0
+    # sExchInd20u_BA = 0.0
     
     Indu_AB_terms = core.Matrix("Ind [A<-B] (a x B)", na, nB + nb1 + 1)
     Indu_BA_terms = core.Matrix("Ind [B<-A] (A x b)", nA + na1 + 1, nb)
@@ -1587,13 +1587,12 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # sIndu_BA_terms = core.Matrix("sInd [B<-A] (A x b)", snA + sna + 1, snb)
     # sIndu_AB_termsp = sIndu_AB_terms.np
     # sIndu_BA_termsp = sIndu_BA_terms.np
-    # 
     # sIndu_AB = 0.0
     # sIndu_BA = 0.0
     
     # TODO: make this work with external potentials
     if dimer_wfn.has_potential_variable("B"):
-        Var = linalg.triplet(Cocc_A, cache["VB_extern"], Cvir_A, True, False, False)
+        Var = core.triplet(Cocc_A, cache["VB_extern"], Cvir_A, True, False, False)
         dfh.write_disk_tensor("WBar", Var, (nB + nb1, nB + nb1 + 1))
     else:
         Var = core.Matrix("zero", na, nr)
@@ -1628,7 +1627,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             Indu_AB += Jval + Kval
     
     if dimer_wfn.has_potential_variable("A"):
-        Vbs = linalg.triplet(Cocc_B, cache["VA_extern"], Cvir_B, True, False, False)
+        Vbs = core.triplet(Cocc_B, cache["VA_extern"], Cvir_B, True, False, False)
         dfh.write_disk_tensor("WAbs", Vbs, (nA + na1, nA + na1 + 1))
     else:
         Vbs = core.Matrix("zero", nb, ns)
@@ -1659,6 +1658,45 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             
             Indu_BA_terms_np[A, b] = Jval + Kval
             Indu_BA += Jval + Kval
+
+    # Induction scaling
+    if ind_scale:
+        dHF = 0.0
+        if scalars.get("HF", 0.0) != 0.0:
+            dHF = (scalars["HF"] - scalars["Elst10,r"] - scalars["Exch10"] - 
+                   scalars["Ind20,r"] - scalars["Exch-Ind20,r"])
+        
+        IndHF = scalars["Ind20,r"] + scalars["Exch-Ind20,r"] + dHF
+        IndSAPT0 = scalars["Ind20,r"] + scalars["Exch-Ind20,r"]
+        
+        Sdelta = IndHF / IndSAPT0
+        
+        # NOTE: if doing ind_resp, logic below needs adjusted
+        SrAB = ((scalars["Ind20,r (A<-B)"] + scalars["Exch-Ind20,r (A<-B)"]) / 
+                (scalars["Ind20,u (A<-B)"] + scalars["Exch-Ind20,u (A<-B)"]))
+        SrBA = ((scalars["Ind20,r (A->B)"] + scalars["Exch-Ind20,r (A->B)"]) / 
+                (scalars["Ind20,u (A->B)"] + scalars["Exch-Ind20,u (A->B)"]))
+        
+        if do_print:
+            core.print_out(f"    Scaling for delta HF        = {Sdelta:11.3E}\n")
+            core.print_out(f"    Scaling for response (A<-B) = {SrAB:11.3E}\n")
+            core.print_out(f"    Scaling for response (A->B) = {SrBA:11.3E}\n")
+            core.print_out(f"    Scaling for total (A<-B)    = {Sdelta * SrAB:11.3E}\n")
+            core.print_out(f"    Scaling for total (A->B)    = {Sdelta * SrBA:11.3E}\n")
+            core.print_out("\n")
+        
+        # Apply scaling to all terms
+        Indu_AB_terms.scale(Sdelta * SrAB)
+        Indu_BA_terms.scale(Sdelta * SrBA)
+        Ind20u_AB_terms.scale(Sdelta * SrAB)
+        ExchInd20u_AB_terms.scale(Sdelta * SrAB)
+        Ind20u_BA_terms.scale(Sdelta * SrBA)
+        ExchInd20u_BA_terms.scale(Sdelta * SrBA)
+        
+        # Apply SSAPT0 scaling if enabled
+        # if "sExch-Ind20,r" in scalars:
+        #     sIndu_AB_terms.scale(sSdelta * sSrAB)
+        #     sIndu_BA_terms.scale(sSdelta * sSrBA)
 
     IndAB_AB = core.Matrix("IndAB_AB", nA + na1 + 1, nB + nb1 + 1)
     IndBA_AB = core.Matrix("IndBA_AB", nA + na1 + 1, nB + nb1 + 1)

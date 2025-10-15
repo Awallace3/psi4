@@ -791,7 +791,7 @@ def collapse_links(order2, frags, Qs, orbital_ws, links5050):
     return vals
 
 
-def print_order2(order2, fragkeys, saptkeys=saptkeys_):
+def print_order2(order2, fragkeys, saptkeys=saptkeys_, print_output=True):
 
     data = {col: [] for col in ["Frag1", "Frag2"] + saptkeys}
     order1A = {}
@@ -826,49 +826,59 @@ def print_order2(order2, fragkeys, saptkeys=saptkeys_):
                 val += 0.0
         order0[saptkey] = val
 
-    print("%-9s %-9s " % ("Frag1", "Frag2"), end="")
-    for saptkey in saptkeys:
-        print("%8s " % (saptkey), end="")
-    print("")
-    for keyA in fragkeys["A"]:
-        for keyB in fragkeys["B"]:
-            print("%-9s %-9s " % (keyA, keyB), end="")
-            for saptkey in saptkeys:
-                if saptkey == "EDisp" and ("Link" in keyA or "Link" in keyB):
-                    print("%8.3f" % 0.0, end="")
-                else:
-                    try:
-                        print("%8.3f " % (order2[saptkey][keyA][keyB]), end="")
-                    except KeyError:
-                        continue
-            print("")
+    if print_output:
+        print("%-9s %-9s " % ("Frag1", "Frag2"), end="")
+        for saptkey in saptkeys:
+            print("%8s " % (saptkey), end="")
+        print("")
+        for keyA in fragkeys["A"]:
+            for keyB in fragkeys["B"]:
+                print("%-9s %-9s " % (keyA, keyB), end="")
+                for saptkey in saptkeys:
+                    if saptkey == "EDisp" and ("Link" in keyA or "Link" in keyB):
+                        print("%8.3f" % 0.0, end="")
+                    else:
+                        try:
+                            print("%8.3f " % (order2[saptkey][keyA][keyB]), end="")
+                        except KeyError:
+                            continue
+                print("")
 
     for keyA in fragkeys["A"]:
-        print("%-9s %-9s " % (keyA, "All"), end="")
+        if print_output:
+            print("%-9s %-9s " % (keyA, "All"), end="")
         data["Frag1"].append(keyA)
         data["Frag2"].append("All")
         for saptkey in saptkeys:
             data[saptkey].append(order1A[saptkey][keyA])
-            print("%8.3f " % (order1A[saptkey][keyA]), end="")
-        print("")
+            if print_output:
+                print("%8.3f " % (order1A[saptkey][keyA]), end="")
+        if print_output:
+            print("")
 
     for keyB in fragkeys["B"]:
         data["Frag1"].append("All")
         data["Frag2"].append(keyB)
-        print("%-9s %-9s " % ("All", keyB), end="")
+        if print_output:
+            print("%-9s %-9s " % ("All", keyB), end="")
         for saptkey in saptkeys:
             data[saptkey].append(order1B[saptkey][keyB])
-            print("%8.3f " % (order1B[saptkey][keyB]), end="")
-        print("")
+            if print_output:
+                print("%8.3f " % (order1B[saptkey][keyB]), end="")
+        if print_output:
+            print("")
 
     data["Frag1"].append("All")
     data["Frag2"].append("All")
-    print("%-9s %-9s " % ("All", "All"), end="")
+    if print_output:
+        print("%-9s %-9s " % ("All", "All"), end="")
     for saptkey in saptkeys:
         data[saptkey].append(order0[saptkey])
-        print("%8.3f " % (order0[saptkey]), end="")
-    print("")
-    print("")
+        if print_output:
+            print("%8.3f " % (order0[saptkey]), end="")
+    if print_output:
+        print("")
+        print("")
     return data
 
 
@@ -1054,7 +1064,7 @@ def compute_fsapt_qcvars(
             range(len(Zs["A"]), len(Zs["A"]) + len(geom_extern_A))
         )
     except KeyError:
-        print("No external potential data for A")
+        # print("No external potential data for A")
         pass
 
     try:
@@ -1082,7 +1092,7 @@ def compute_fsapt_qcvars(
             )
 
     except KeyError:
-        print("No external potential data for B")
+        # print("No external potential data for B")
         pass
 
     # Add external potential data for C
@@ -1095,7 +1105,7 @@ def compute_fsapt_qcvars(
         for c in geom_extern_C:
             geom.append(c)
     except KeyError:
-        print("No external potential data for C")
+        # print("No external potential data for C")
         pass
 
     order2 = extract_order2_fsapt(osapt, total_ws["A"], total_ws["B"], frags)
@@ -1467,8 +1477,10 @@ def run_fsapt_analysis(
     analysis_type: str = "reduced",
     links5050: bool = True,
     dirname: str = "./fsapt",
+    print_output: bool = True,
 ):
-    print("  ==> F-ISAPT: Analysis Start <==\n")
+    if print_output:
+        print("  ==> F-ISAPT: Analysis Start <==\n")
     if atomic_results is None and molecule is None:
         raise Exception(
             "Atomic results or molecule object after running psi4.energy('fisapt0') must be provided."
@@ -1508,12 +1520,13 @@ def run_fsapt_analysis(
     if dirname is None:
         dirname = "."
     if analysis_type == "full":
-        print("  ==> Full Analysis <==\n")
-        print(f"     Links 50-50: {links5050}\n")
+        if print_output:
+            print("  ==> Full Analysis <==\n")
+            print(f"     Links 50-50: {links5050}\n")
         results = compute_fsapt_qcvars(
             geom, Z, monomer_slices, holder, links5050=links5050, dirname=dirname
         )
-        data = print_order2(results["order2"], results["fragkeys"])
+        data = print_order2(results["order2"], results["fragkeys"], print_output=print_output)
         results_tag = "order2"
     elif analysis_type == "reduced":
         print("  ==> Reduced Analysis <==\n")
@@ -1522,7 +1535,7 @@ def run_fsapt_analysis(
             geom, Z, monomer_slices, holder, links5050=links5050, dirname=dirname
         )
         results_tag = "order2r"
-        data = print_order2(results["order2r"], results["fragkeysr"])
+        data = print_order2(results["order2r"], results["fragkeysr"], print_output=print_output)
     else:
         raise Exception("Invalid analysis type. Please specify 'full' or 'reduced'.")
     if pdb_dir is not None:

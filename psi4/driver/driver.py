@@ -2092,6 +2092,7 @@ def fsapt_analysis(
     analysis_type: str = "reduced",
     links5050: bool = True,
     dirname: str = "./fsapt",
+    print_output: bool = True,
 ):
     r"""Runs fsapt.py either through qcvars or on fsapt output files.
 
@@ -2123,6 +2124,7 @@ def fsapt_analysis(
             pdb_dir,
             analysis_type,
             links5050,
+            print_output=print_output
         )
     return results
 

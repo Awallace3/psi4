@@ -1481,6 +1481,7 @@ no_com
             "T-Butyl_B": [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
         },
         links5050=True,
+        print_output=False,
     )
     df = pd.DataFrame(data)
     print("COMPUTED DF")
@@ -1514,11 +1515,13 @@ no_com
 if __name__ == "__main__":
     psi4.set_memory("64 GB")
     psi4.set_num_threads(12)
+
+    # test_fsaptdft_fsapt0()
+    test_fsaptdft_psivars()
+
     # test_einsum_terms()
     # test_einsum_terms()
     # test_fsaptdft()
-    # test_fsaptdft_fsapt0()
-    test_fsaptdft_psivars()
     # test_fsaptdft_fsapt0_simple()
     # test_sapt_dft_compute_ddft_d4_auto_grac()
     # test_sapt_dft_diskdf()
