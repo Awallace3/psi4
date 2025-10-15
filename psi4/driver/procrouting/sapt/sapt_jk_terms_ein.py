@@ -1182,6 +1182,8 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     na1 = na
     nb1 = nb
+    # for the SAOn/SIAOn variants, we sometimes need na1 = na+1 (with link
+    # orbital) and sometimes na (without) - be careful with this!
     if link_assignment in ["SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"]:
         na1 = na + 1
         nb1 = nb + 1
@@ -1206,14 +1208,17 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     nQ = aux_basis.nbf()
     
     dfh = core.DFHelper(dimer_wfn.basisset(), aux_basis)
-    dfh.set_memory(int(5e8))
+    # TODO: This memory estimate needs corrected...
+    dfh.set_memory(int(core.get_memory() * 0.9 / 8))  # Use 90% of available memory (in doubles)
     dfh.set_method("DIRECT")
     dfh.set_nthreads(core.get_num_threads())
     dfh.initialize()
     
+    # ESPs - external potential entries
     dfh.add_disk_tensor("WBar", (nB + nb1 + 1, na, nr))
     dfh.add_disk_tensor("WAbs", (nA + na1 + 1, nb, ns))
     
+    # Nuclear Contribution to ESPs
     ext_pot = core.ExternalPotential()
     ZA_np = cache["ZA"].np
     for A in range(nA):
@@ -1248,277 +1253,33 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     RaC = cache["Vlocc0A"]
     RbD = cache["Vlocc0B"]
     
-    TsQ = core.Matrix(ns, nQ)
-    T1As = core.Matrix(na1, ns)
-    for b_idx in range(nb):
-        dfh.fill_tensor("Abs", TsQ, (b_idx, b_idx + 1))
+    TsQ = core.Matrix("TsQ", ns, nQ)
+    TsQ_np = TsQ.np
+    T1As = core.Matrix("T1As", na1, ns)
+    for B in range(nb):
+        print(f" b = {B:3d} ns = {ns:3d} nQ = {nQ:3d}")
+        # TsQ_np[:, :] = dfh.get_tensor("Abs", [B, B + 1], [0, ns], [0, nQ]).np.reshape(ns, nQ)
+        # Why is this ordering different than in fexch()???
+        TsQ_np[:, :] = dfh.get_tensor("Abs", [0, nQ], [B, B + 1], [0, ns]).np.reshape(ns, nQ)
+        # Can keep as matrix here for single gemm instead of converting to einsums
         T1As.gemm(False, True, 2.0, RaC, TsQ, 0.0)
-        for a_idx in range(na1):
-            row_view = core.Matrix.from_array(T1As.np[a_idx:a_idx+1, :])
-            dfh.write_disk_tensor("WAbs", row_view, (nA + a_idx, nA + a_idx + 1), (b_idx, b_idx + 1))
+        for A in range(na1):
+            row_view = core.Matrix.from_array(T1As.np[A:A+1, :])
+            dfh.write_disk_tensor("WAbs", row_view, (nA + A, nA + A + 1), (B, B + 1))
     
     TrQ = core.Matrix(nr, nQ)
+    TrQ_np = TrQ.np
     T1Br = core.Matrix(nb1, nr)
-    for a_idx in range(na):
-        dfh.fill_tensor("Aar", TrQ, (a_idx, a_idx + 1))
+    for A in range(na):
+        TrQ_np[:, :] = dfh.get_tensor("Aar", [0, nQ], [A, A + 1], [0, nr]).np.reshape(nr, nQ)
         T1Br.gemm(False, True, 2.0, RbD, TrQ, 0.0)
-        for b_idx in range(nb1):
-            row_view = core.Matrix.from_array(T1Br.np[b_idx:b_idx+1, :])
-            dfh.write_disk_tensor("WBar", row_view, (nB + b_idx, nB + b_idx + 1), (a_idx, a_idx + 1))
+        for B in range(nb1):
+            row_view = core.Matrix.from_array(T1Br.np[B:B+1, :])
+            dfh.write_disk_tensor("WBar", row_view, (nB + B, nB + B + 1), (A, A + 1))
     
-    eap = eps_occ_A
-    ebp = eps_occ_B
-    erp = eps_vir_A
-    esp = eps_vir_B
-    
-    S = cache["S"]
-    D_A = cache["D_A"]
-    V_A = cache["V_A"]
-    J_A = cache["J_A"]
-    K_A = cache["K_A"]
-    D_B = cache["D_B"]
-    V_B = cache["V_B"]
-    J_B = cache["J_B"]
-    K_B = cache["K_B"]
-    J_O = cache["J_O"]
-    K_O = cache["K_O"]
-    J_P_A = cache["J_P_A"]
-    J_P_B = cache["J_P_B"]
-    
-    if link_assignment in ["SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"]:
-        D_X = core.doublet(cache["thislinkA"], cache["thislinkA"], False, True)
-        D_Y = core.doublet(cache["thislinkB"], cache["thislinkB"], False, True)
-        J_X = cache["JLA"].clone()
-        K_X = cache["KLA"].clone()
-        J_Y = cache["JLB"].clone()
-        K_Y = cache["KLB"].clone()
-        
-        K_AOY = cache["K_AOY"]
-        K_XOB = cache["K_XOB"]
-        K_XOB_T = core.Matrix.from_array(K_XOB.np.T.copy())
-        J_P_YAY = cache["J_P_YAY"]
-        J_P_XBX = cache["J_P_XBX"]
-        
-        mapA = {
-            "Cocc_A": Locc_A,
-            "Cvir_A": Cvir_A,
-            "S": S,
-            "D_A": D_A,
-            "V_A": V_A,
-            "J_A": J_A,
-            "K_A": K_A,
-            "D_B": D_B,
-            "V_B": V_B,
-            "J_B": J_B,
-            "K_B": K_B,
-            "D_X": D_X,
-            "J_X": J_X,
-            "K_X": K_X,
-            "D_Y": D_Y,
-            "J_Y": J_Y,
-            "K_Y": K_Y,
-            "J_O": J_O,
-            "K_O": K_O,
-            "K_AOY": K_AOY,
-            "J_P": J_P_A,
-            "J_PYAY": J_P_YAY,
-        }
-        
-        wBT = build_ind_pot(mapA)
-        uBT = build_exch_ind_pot_avg(mapA)
-        
-        K_O_T = core.Matrix.from_array(K_O.np.T.copy())
-        
-        mapB = {
-            "Cocc_A": Locc_B,
-            "Cvir_A": Cvir_B,
-            "S": S,
-            "D_A": D_B,
-            "V_A": V_B,
-            "J_A": J_B,
-            "K_A": K_B,
-            "D_B": D_A,
-            "V_B": V_A,
-            "J_B": J_A,
-            "K_B": K_A,
-            "D_X": D_Y,
-            "J_X": J_Y,
-            "K_X": K_Y,
-            "D_Y": D_X,
-            "J_Y": J_X,
-            "K_Y": K_X,
-            "J_O": J_O,
-            "K_O": K_O_T,
-            "K_AOY": K_XOB_T,
-            "J_P": J_P_B,
-            "J_PYAY": J_P_XBX,
-        }
-        
-        wAT = build_ind_pot(mapB)
-        uAT = build_exch_ind_pot_avg(mapB)
-    
-    else:
-        mapA = {
-            "Cocc_A": Locc_A,
-            "Cvir_A": Cvir_A,
-            "Cocc_B": Locc_B,
-            "Cvir_B": Cvir_B,
-            "S": S,
-            "D_A": D_A,
-            "V_A": V_A,
-            "J_A": J_A,
-            "K_A": K_A,
-            "D_B": D_B,
-            "V_B": V_B,
-            "J_B": J_B,
-            "K_B": K_B,
-            "J_O": J_O,
-            "K_O": K_O,
-            "J_P": J_P_A,
-        }
-        
-        raise NotImplementedError("Non-SAO/SIAO link assignments not yet implemented in find()")
-    
-    wBT_np = wBT.np
-    uBT_np = uBT.np
-    wAT_np = wAT.np
-    uAT_np = uAT.np
-    
-    Ind20u_AB_terms = np.zeros((na, nB + nb1 + 1))
-    Ind20u_BA_terms = np.zeros((nA + na1 + 1, nb))
-    
-    Ind20u_AB = 0.0
-    Ind20u_BA = 0.0
-    
-    ExchInd20u_AB_terms = np.zeros((na, nB + nb1 + 1))
-    ExchInd20u_BA_terms = np.zeros((nA + na1 + 1, nb))
-    
-    ExchInd20u_AB = 0.0
-    ExchInd20u_BA = 0.0
-    
-    Indu_AB_terms = np.zeros((na, nB + nb1 + 1))
-    Indu_BA_terms = np.zeros((nA + na1 + 1, nb))
-    
-    Indu_AB = 0.0
-    Indu_BA = 0.0
-    
-    if "VB_extern" in cache and dimer_wfn.has_potential_variable("B"):
-        Var = core.triplet(Cocc_A, cache["VB_extern"], Cvir_A, True, False, False)
-        dfh.write_disk_tensor("WBar", Var, (nB + nb1, nB + nb1 + 1))
-    else:
-        Var = core.Matrix(na, nr)
-        Var.zero()
-        dfh.write_disk_tensor("WBar", Var, (nB + nb1, nB + nb1 + 1))
-    
-    wB = core.Matrix(na, nr)
-    xA = core.Matrix(na, nr)
-    for B in range(nB + nb1 + 1):
-        dfh.fill_tensor("WBar", wB, (B, B + 1))
-        
-        for a in range(na):
-            for r in range(nr):
-                xA.np[a, r] = wB.np[a, r] / (eap[a] - erp[r])
-        
-        x2A = core.doublet(Uocc_A, xA, True, False)
-        x2A_np = x2A.np
-        
-        for a in range(na):
-            Jval = 2.0 * np.dot(x2A_np[a, :], wBT_np[a, :])
-            Kval = 2.0 * np.dot(x2A_np[a, :], uBT_np[a, :])
-            Ind20u_AB_terms[a, B] = Jval
-            Ind20u_AB += Jval
-            ExchInd20u_AB_terms[a, B] = Kval
-            ExchInd20u_AB += Kval
-            Indu_AB_terms[a, B] = Jval + Kval
-            Indu_AB += Jval + Kval
-    
-    if "VA_extern" in cache and dimer_wfn.has_potential_variable("A"):
-        Vbs = core.triplet(Cocc_B, cache["VA_extern"], Cvir_B, True, False, False)
-        dfh.write_disk_tensor("WAbs", Vbs, (nA + na1, nA + na1 + 1))
-    else:
-        Vbs = core.Matrix(nb, ns)
-        Vbs.zero()
-        dfh.write_disk_tensor("WAbs", Vbs, (nA + na1, nA + na1 + 1))
-    
-    wA = core.Matrix(nb, ns)
-    xB = core.Matrix(nb, ns)
-    for A in range(nA + na1 + 1):
-        dfh.fill_tensor("WAbs", wA, (A, A + 1))
-        
-        for b in range(nb):
-            for s in range(ns):
-                xB.np[b, s] = wA.np[b, s] / (ebp[b] - esp[s])
-        
-        x2B = core.doublet(Uocc_B, xB, True, False)
-        x2B_np = x2B.np
-        
-        for b in range(nb):
-            Jval = 2.0 * np.dot(x2B_np[b, :], wAT_np[b, :])
-            Kval = 2.0 * np.dot(x2B_np[b, :], uAT_np[b, :])
-            Ind20u_BA_terms[A, b] = Jval
-            Ind20u_BA += Jval
-            ExchInd20u_BA_terms[A, b] = Kval
-            ExchInd20u_BA += Kval
-            Indu_BA_terms[A, b] = Jval + Kval
-            Indu_BA += Jval + Kval
-    
-    Ind20u = Ind20u_AB + Ind20u_BA
-    if do_print:
-        core.print_out(f"    Ind20,u (A<-B)      = {Ind20u_AB:18.12f} [Eh]\n")
-        core.print_out(f"    Ind20,u (B<-A)      = {Ind20u_BA:18.12f} [Eh]\n")
-        core.print_out(f"    Ind20,u             = {Ind20u:18.12f} [Eh]\n")
-    
-    ExchInd20u = ExchInd20u_AB + ExchInd20u_BA
-    if do_print:
-        core.print_out(f"    Exch-Ind20,u (A<-B) = {ExchInd20u_AB:18.12f} [Eh]\n")
-        core.print_out(f"    Exch-Ind20,u (B<-A) = {ExchInd20u_BA:18.12f} [Eh]\n")
-        core.print_out(f"    Exch-Ind20,u        = {ExchInd20u:18.12f} [Eh]\n\n")
-    
-    Ind = Ind20u + ExchInd20u
-    Ind_AB_terms = Indu_AB_terms
-    Ind_BA_terms = Indu_BA_terms
-    
-    if ind_resp:
-        raise NotImplementedError("Coupled (response) induction not yet implemented in find()")
-    
-    if ind_scale:
-        raise NotImplementedError("Induction scaling not yet implemented in find()")
-    
-    IndAB_AB = np.zeros((nA + na1 + 1, nB + nb1 + 1))
-    IndBA_AB = np.zeros((nA + na1 + 1, nB + nb1 + 1))
-    Ind20uAB_AB = np.zeros((nA + na1 + 1, nB + nb1 + 1))
-    ExchInd20uAB_AB = np.zeros((nA + na1 + 1, nB + nb1 + 1))
-    Ind20uBA_AB = np.zeros((nA + na1 + 1, nB + nb1 + 1))
-    ExchInd20uBA_AB = np.zeros((nA + na1 + 1, nB + nb1 + 1))
-    
-    for a in range(na):
-        for B in range(nB + nb1 + 1):
-            IndAB_AB[a + nA, B] = Ind_AB_terms[a, B]
-            Ind20uAB_AB[a + nA, B] = Ind20u_AB_terms[a, B]
-            ExchInd20uAB_AB[a + nA, B] = ExchInd20u_AB_terms[a, B]
-    
-    for A in range(nA + na1 + 1):
-        for b in range(nb):
-            IndBA_AB[A, b + nB] = Ind_BA_terms[A, b]
-            Ind20uBA_AB[A, b + nB] = Ind20u_BA_terms[A, b]
-            ExchInd20uBA_AB[A, b + nB] = ExchInd20u_BA_terms[A, b]
-    
-    cache["IndAB_AB"] = core.Matrix.from_array(IndAB_AB)
-    cache["IndBA_AB"] = core.Matrix.from_array(IndBA_AB)
-    cache["Ind20u_AB_terms"] = core.Matrix.from_array(Ind20uAB_AB)
-    cache["ExchInd20u_AB_terms"] = core.Matrix.from_array(ExchInd20uAB_AB)
-    cache["Ind20u_BA_terms"] = core.Matrix.from_array(Ind20uBA_AB)
-    cache["ExchInd20u_BA_terms"] = core.Matrix.from_array(ExchInd20uBA_AB)
-    
-    dfh.clear_all()
-    
-    scalars["Ind20,u (A<-B)"] = Ind20u_AB
-    scalars["Ind20,u (B<-A)"] = Ind20u_BA
-    scalars["Ind20,u"] = Ind20u
-    scalars["Exch-Ind20,u (A<-B)"] = ExchInd20u_AB
-    scalars["Exch-Ind20,u (B<-A)"] = ExchInd20u_BA
-    scalars["Exch-Ind20,u"] = ExchInd20u
-    
+    """
+    Continue to implement find() from C++ implementation FISAPT::find()
+    """
     return cache
 
 
