@@ -3,7 +3,7 @@
 #
 # Psi4: an open-source quantum chemistry software package
 #
-# Copyright (c) 2007-2024 The Psi4 Developers.
+# Copyright (c) 2007-2025 The Psi4 Developers.
 #
 # The copyrights for code used from other parties are included in
 # the corresponding files.
@@ -59,32 +59,6 @@ import einsums as ein
 
 # Only export the run_ scripts
 __all__ = ["run_sapt_dft", "sapt_dft", "run_sf_sapt"]
-
-
-def einsum_example():
-    a = 5
-    dtype = np.float64
-    array = "einsums"
-    core.tstart()
-    # tmp_A = np.array([[1., 2., 3.], [4., 5., 6.]], dtype=np.float64)
-    tmp_A = np.array([4., 5., 6.], dtype=np.float64)
-    tmp_B = np.array([1., 2., 3.], dtype=np.float64)
-    print("EINSUM A:", tmp_A)
-    A = ein.core.RuntimeTensorD(tmp_A)
-    B = ein.core.RuntimeTensorD(tmp_B)
-    print("EINSUM A:", A)
-    print("EINSUM B:", B)
-    
-    # A = ein.utils.random_tensor_factory("A", [a], dtype, array)
-    # B = ein.utils.random_tensor_factory("A", [a], dtype, array)
-    shape = [A.size(), B.size()]
-    print("EINSUM SHAPE:", shape)
-    C = ein.utils.tensor_factory("C", shape, dtype, 'numpy')
-
-    plan = ein.core.compile_plan("ij", "i", "j")
-    plan.execute(0.0, C, 1.0, A, B)
-    print("EINSUM C:", C)
-    return
 
 
 def run_sapt_dft(name, **kwargs):

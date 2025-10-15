@@ -161,8 +161,9 @@ GRTAGS
 Pipfile.lock
 fsapt
 tmp
-pytest_output.*
 profile.txt
 tests/pytests/test_saptdft.log
 AGENTS.md
 .opencode
+pytest_output.dat
+pytest_output.log

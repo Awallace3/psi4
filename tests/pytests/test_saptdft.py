@@ -485,7 +485,7 @@ def test_saptdft_auto_grac(
     if gracB is not None:
         psi4.set_options({"SAPT_DFT_GRAC_SHIFT_B": gracB})
     psi4.energy("SAPT(DFT)", molecule=mol_dimer)
-    compare_values(
+    assert compare_values(
         refA,
         psi4.core.variable("SAPT DFT GRAC SHIFT A"),
         8,
