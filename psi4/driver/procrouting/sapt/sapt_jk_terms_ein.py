@@ -1582,13 +1582,14 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Indu_AB = 0.0
     Indu_BA = 0.0
     
-    sIndu_AB_terms = core.Matrix("sInd [A<-B] (a x B)", sna, snB + snb + 1)
-    sIndu_BA_terms = core.Matrix("sInd [B<-A] (A x b)", snA + sna + 1, snb)
-    sIndu_AB_termsp = sIndu_AB_terms.np
-    sIndu_BA_termsp = sIndu_BA_terms.np
-    
-    sIndu_AB = 0.0
-    sIndu_BA = 0.0
+    # Commented out terms are for sSAPT0 scaling... do we really want this?
+    # sIndu_AB_terms = core.Matrix("sInd [A<-B] (a x B)", sna, snB + snb + 1)
+    # sIndu_BA_terms = core.Matrix("sInd [B<-A] (A x b)", snA + sna + 1, snb)
+    # sIndu_AB_termsp = sIndu_AB_terms.np
+    # sIndu_BA_termsp = sIndu_BA_terms.np
+    # 
+    # sIndu_AB = 0.0
+    # sIndu_BA = 0.0
     
     # TODO: make this work with external potentials
     if dimer_wfn.has_potential_variable("B"):
@@ -1635,7 +1636,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         dfh.write_disk_tensor("WAbs", Vbs, (nA + na1, nA + na1 + 1))
     
     for A in range(nA + na1 + 1):
-        wA.np[:, :] = dfh.get_tensor("WBar", [A, A + 1], [0, nb], [0, ns]).np.reshape(nb, ns)
+        wA.np[:, :] = dfh.get_tensor("WAbs", [A, A + 1], [0, nb], [0, ns]).np.reshape(nb, ns)
         for b in range(nb):
             for s in range(ns):
                 xB.np[b, s] = wAT[b, s] / (eps_occ_B[b] - eps_vir_B[s])
