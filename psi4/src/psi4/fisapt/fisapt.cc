@@ -6196,6 +6196,17 @@ void FISAPT::find() {
 
         K_O->transpose_this();
     }
+
+    // Remove prints after debugging
+    wBT->set_name("wBT");
+    uBT->set_name("uBT");
+    wAT->set_name("wAT");
+    uAT->set_name("uAT");
+    wBT->print();
+    uBT->print();
+    wAT->print();
+    uAT->print();
+
     double** wATp = wAT->pointer();
     double** uATp = uAT->pointer();
     double** wBTp = wBT->pointer();

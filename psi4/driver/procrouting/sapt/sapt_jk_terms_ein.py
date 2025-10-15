@@ -1062,7 +1062,6 @@ def build_ind_pot(vars):
     for B due to A.
     """
     w_B = vars['V_B'].copy()
-    w_B.set_name("w_B")
     ein.core.axpy(2.0, vars['J_B'], w_B)
     return einsum_chain_gemm(
         [vars['Cocc_A'], w_B, vars['Cvir_A']],
@@ -1418,7 +1417,6 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     J_P_A = cache["J_P_A"]
     J_P_B = cache["J_P_B"]
 
-
     xA = core.Matrix("xA", na, nr)
     xB = core.Matrix("xB", nb, ns)
     wB = core.Matrix("wB", na, nr)
@@ -1528,26 +1526,21 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         wBT = build_ind_pot(mapA)
         uBT = build_exch_ind_pot_AB(mapA)
         uAT = build_exch_ind_pot_BA(mapA)
-        
-        mapB = {
-            "Cocc_A": Locc_B,
-            "Cvir_A": Cvir_B,
-            "Cocc_B": Locc_A,
-            "Cvir_B": Cvir_A,
-            "S": S,
-            "D_A": D_B,
-            "V_A": V_B,
-            "J_A": J_B,
-            "K_A": K_B,
-            "D_B": D_A,
+        wAT = build_ind_pot({
             "V_B": V_A,
             "J_B": J_A,
-            "K_B": K_A,
-            "J_O": J_O,
-            "K_O": K_O,
-            "J_P": J_P_B,
-        }
-        wAT = build_ind_pot(mapB)
+            "Cocc_A": Locc_B,
+            "Cvir_A": Cvir_B,
+        })
+
+    wBT.set_name("wBT")
+    uBT.set_name("uBT")
+    wAT.set_name("wAT")
+    uAT.set_name("uAT")
+    print(wBT)
+    print(uBT)
+    print(wAT)
+    print(uAT)
 
     Ind20u_AB_terms = core.Matrix("Ind20 [A<-B] (a x B)", na, nB + nb1 + 1)
     Ind20u_BA_terms = core.Matrix("Ind20 [B<-A] (A x b)", nA + na1 + 1, nb)
@@ -1601,7 +1594,6 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     for B in range(nB + nb1 + 1):
         wB.np[:, :] = dfh.get_tensor("WBar", [B, B + 1], [0, na], [0, nr]).np.reshape(na, nr)
-        # dfh.fill_tensor("WBar", wB, (B, B + 1))
         
         for a in range(na):
             for r in range(nr):
@@ -1717,14 +1709,23 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     #     cache["sExchInd20u_BA"] = sExchInd20u_BA
     #     cache["sIndu_AB"] = sIndu_AB
     #     cache["sIndu_BA"] = sIndu_BA
+
+    """
+    Ind20,u (A<-B)      =    -0.000005862 [mEh]
+    Ind20,u (B<-A)      =    -0.000003086 [mEh]
+    Ind20,u             =    -0.000008949 [mEh]
+    Exch-Ind20,u (A<-B) =     0.000000887 [mEh]
+    Exch-Ind20,u (B<-A) =     0.000000291 [mEh]
+    Exch-Ind20,u        =     0.000001178 [mEh]
+    """
     
     if do_print:
-        core.print_out(f"    Ind20,u (A<-B)      = {Ind20u_AB:18.12f} [Eh]\n")
-        core.print_out(f"    Ind20,u (B<-A)      = {Ind20u_BA:18.12f} [Eh]\n")
-        core.print_out(f"    Exch-Ind20,u (A<-B) = {ExchInd20u_AB:18.12f} [Eh]\n")
-        core.print_out(f"    Exch-Ind20,u (B<-A) = {ExchInd20u_BA:18.12f} [Eh]\n")
-        core.print_out(f"    Ind20,u             = {Ind20u_AB + Ind20u_BA:18.12f} [Eh]\n")
-        core.print_out(f"    Exch-Ind20,u        = {ExchInd20u_AB + ExchInd20u_BA:18.12f} [Eh]\n\n")
+        core.print_out(f"    Ind20,u (A<-B)          = {Ind20u_AB*1000:18.8f} [mEh]\n")
+        core.print_out(f"    Ind20,u (B<-A)          = {Ind20u_BA*1000:18.8f} [mEh]\n")
+        core.print_out(f"    Exch-Ind20,u (A<-B)     = {ExchInd20u_AB*1000:18.8f} [mEh]\n")
+        core.print_out(f"    Exch-Ind20,u (B<-A)     = {ExchInd20u_BA*1000:18.8f} [mEh]\n")
+        core.print_out(f"    Ind20,u                 = {Ind20u_AB + Ind20u_BA*1000:18.8f} [mEh]\n")
+        core.print_out(f"    Exch-Ind20,u            = {ExchInd20u_AB + ExchInd20u_BA*1000:18.8f} [mEh]\n\n")
     
     # NOT IMPLEMENTED YET
     # if (ind_resp) {
@@ -1970,113 +1971,153 @@ def induction(
     J_Ot, J_P_B, J_P_A = jk.J()
     K_Ot, K_P_B, K_P_A = jk.K()
 
-    J_Ot = ein.core.RuntimeTensorD(J_Ot.np)
     J_P_B = ein.core.RuntimeTensorD(J_P_B.np)
     J_P_A = ein.core.RuntimeTensorD(J_P_A.np)
-    K_Ot = ein.core.RuntimeTensorD(K_Ot.np)
     K_P_B = ein.core.RuntimeTensorD(K_P_B.np)
     K_P_A = ein.core.RuntimeTensorD(K_P_A.np)
 
-    # Exch-Ind Potential A
-    EX_A = K_B.copy()
-    EX_A *= -1.0
-    ein.core.axpy(-2.0, J_O, EX_A)
-    ein.core.axpy(1.0, K_O, EX_A)
-    ein.core.axpy(2.0, J_P_B, EX_A)
-
-    # Apply all the axpy operations to EX_A
-    S_DB, S_DB_VA, S_DB_VA_DB_S = einsum_chain_gemm(
-        [S, D_B, V_A, D_B, S],
-        return_tensors=[True, True, False, True]
-    )
-    S_DB_JA, S_DB_JA_DB_S = einsum_chain_gemm(
-        [S_DB, J_A, D_B, S],
-        return_tensors=[True, False, True]
-    )
-    S_DB_S_DA, S_DB_S_DA_VB = einsum_chain_gemm(
-        [S_DB, S, D_A, V_B],
-        return_tensors=[False, True, True],
-    )
-    ein.core.axpy(-1.0, S_DB_VA, EX_A)
-    ein.core.axpy(-2.0, S_DB_JA, EX_A)
-    ein.core.axpy(1.0, einsum_chain_gemm([S_DB, K_A]), EX_A)
-    ein.core.axpy(1.0, S_DB_S_DA_VB, EX_A)
-    ein.core.axpy(2.0, einsum_chain_gemm([S_DB_S_DA, J_B]), EX_A)
-    ein.core.axpy(1.0, S_DB_VA_DB_S, EX_A)
-    ein.core.axpy(2.0, S_DB_JA_DB_S, EX_A)
-    ein.core.axpy(-1.0, einsum_chain_gemm([S_DB, K_O], ["N", "T"]), EX_A)
-    ein.core.axpy(-1.0, einsum_chain_gemm([V_B, D_B, S]), EX_A)
-    ein.core.axpy(-2.0, einsum_chain_gemm([J_B, D_B, S]), EX_A)
-    ein.core.axpy(1.0,  einsum_chain_gemm([K_B, D_B, S]), EX_A)
-    ein.core.axpy(1.0,  einsum_chain_gemm([V_B, D_A, S, D_B, S]), EX_A)
-    ein.core.axpy(2.0,  einsum_chain_gemm([J_B, D_A, S, D_B, S]), EX_A)
-    ein.core.axpy(-1.0, einsum_chain_gemm([K_O, D_B, S]), EX_A)
-
-    EX_A_MO = einsum_chain_gemm(
-        [cache['Cocc_A'], EX_A, cache['Cvir_A']],
-        ['T', 'N', 'N'],
-    )
-
-    # Exch-Ind Potential B
-    EX_B = K_A.copy()
-    EX_B *= -1.0
-    ein.core.axpy(-2.0, J_O, EX_B)
-    ein.core.axpy(1.0, K_O.T, EX_B)
-    ein.core.axpy(2.0, J_P_A, EX_B)
+    # Save for later usage in find()
     cache['J_P_A'] = J_P_A
     cache['J_P_B'] = J_P_B
 
-    S_DA, S_DA_VB, S_DA_VB_DA_S = einsum_chain_gemm(
-        [S, D_A, V_B, D_A, S],
-        return_tensors=[True, True, False, True]
-    )
-    S_DA_JB, S_DA_JB_DA_S = einsum_chain_gemm(
-        [S_DA, J_B, D_A, S],
-        return_tensors=[True, False, True]
-    )
-    S_DA_S_DB, S_DA_S_DB_VA = einsum_chain_gemm(
-        [S_DA, S, D_B, V_A],
-        return_tensors=[False, True, True],
-    )
+    # Exch-Ind Potential A
+    # EX_A = K_B.copy()
+    # EX_A *= -1.0
+    # ein.core.axpy(-2.0, J_O, EX_A)
+    # ein.core.axpy(1.0, K_O, EX_A)
+    # ein.core.axpy(2.0, J_P_B, EX_A)
+    #
+    # # Apply all the axpy operations to EX_A
+    # S_DB, S_DB_VA, S_DB_VA_DB_S = einsum_chain_gemm(
+    #     [S, D_B, V_A, D_B, S],
+    #     return_tensors=[True, True, False, True]
+    # )
+    # S_DB_JA, S_DB_JA_DB_S = einsum_chain_gemm(
+    #     [S_DB, J_A, D_B, S],
+    #     return_tensors=[True, False, True]
+    # )
+    # S_DB_S_DA, S_DB_S_DA_VB = einsum_chain_gemm(
+    #     [S_DB, S, D_A, V_B],
+    #     return_tensors=[False, True, True],
+    # )
+    # ein.core.axpy(-1.0, S_DB_VA, EX_A)
+    # ein.core.axpy(-2.0, S_DB_JA, EX_A)
+    # ein.core.axpy(1.0, einsum_chain_gemm([S_DB, K_A]), EX_A)
+    # ein.core.axpy(1.0, S_DB_S_DA_VB, EX_A)
+    # ein.core.axpy(2.0, einsum_chain_gemm([S_DB_S_DA, J_B]), EX_A)
+    # ein.core.axpy(1.0, S_DB_VA_DB_S, EX_A)
+    # ein.core.axpy(2.0, S_DB_JA_DB_S, EX_A)
+    # ein.core.axpy(-1.0, einsum_chain_gemm([S_DB, K_O], ["N", "T"]), EX_A)
+    # ein.core.axpy(-1.0, einsum_chain_gemm([V_B, D_B, S]), EX_A)
+    # ein.core.axpy(-2.0, einsum_chain_gemm([J_B, D_B, S]), EX_A)
+    # ein.core.axpy(1.0,  einsum_chain_gemm([K_B, D_B, S]), EX_A)
+    # ein.core.axpy(1.0,  einsum_chain_gemm([V_B, D_A, S, D_B, S]), EX_A)
+    # ein.core.axpy(2.0,  einsum_chain_gemm([J_B, D_A, S, D_B, S]), EX_A)
+    # ein.core.axpy(-1.0, einsum_chain_gemm([K_O, D_B, S]), EX_A)
+    #
+    # EX_A_MO = einsum_chain_gemm(
+    #     [cache['Cocc_A'], EX_A, cache['Cvir_A']],
+    #     ['T', 'N', 'N'],
+    # )
+    mapA = {
+        "Cocc_A": cache['Cocc_A'],
+        "Cvir_A": cache['Cvir_A'],
+        "Cocc_B": cache['Cocc_B'],
+        "Cvir_B": cache['Cvir_A'],
+        "S": S,
+        "D_A": D_A,
+        "V_A": V_A,
+        "J_A": J_A,
+        "K_A": K_A,
+        "D_B": D_B,
+        "V_B": V_B,
+        "J_B": J_B,
+        "K_B": K_B,
+        "J_O": J_O,
+        "K_O": K_O,
+        "J_P_A": J_P_A,
+        "J_P_B": J_P_B,
+    }
+    EX_A_MO = build_exch_ind_pot_AB(mapA)
+    EX_B_MO = build_exch_ind_pot_BA(mapA)
 
-    # Bpply all the axpy operations to EX_B
-    ein.core.axpy(-1.0, S_DA_VB, EX_B)
-    ein.core.axpy(-2.0, S_DA_JB, EX_B)
-    ein.core.axpy(1.0, einsum_chain_gemm([S_DA, K_B]), EX_B)
-    ein.core.axpy(1.0, S_DA_S_DB_VA, EX_B)
-    ein.core.axpy(2.0, einsum_chain_gemm([S_DA_S_DB, J_A]), EX_B)
-    ein.core.axpy(1.0, S_DA_VB_DA_S, EX_B)
-    ein.core.axpy(2.0, S_DA_JB_DA_S, EX_B)
-    ein.core.axpy(-1.0, einsum_chain_gemm([S_DA, K_O]), EX_B)
-    ein.core.axpy(-1.0, einsum_chain_gemm([V_A, D_A, S]), EX_B)
-    ein.core.axpy(-2.0, einsum_chain_gemm([J_A, D_A, S]), EX_B)
-    ein.core.axpy(1.0,  einsum_chain_gemm([K_A, D_A, S]), EX_B)
-    ein.core.axpy(1.0,  einsum_chain_gemm([V_A, D_B, S, D_A, S]), EX_B)
-    ein.core.axpy(2.0,  einsum_chain_gemm([J_A, D_B, S, D_A, S]), EX_B)
-    ein.core.axpy(-1.0, einsum_chain_gemm([K_O, D_A, S], ["T", "N", "N"]), EX_B)
-
-    EX_B_MO = einsum_chain_gemm(
-        [cache['Cocc_B'], EX_B, cache['Cvir_B']],
-        ['T', 'N', 'N'],
-    )
+    # Exch-Ind Potential B
+    # EX_B = K_A.copy()
+    # EX_B *= -1.0
+    # ein.core.axpy(-2.0, J_O, EX_B)
+    # ein.core.axpy(1.0, K_O.T, EX_B)
+    # ein.core.axpy(2.0, J_P_A, EX_B)
+    # cache['J_P_A'] = J_P_A
+    # cache['J_P_B'] = J_P_B
+    #
+    # S_DA, S_DA_VB, S_DA_VB_DA_S = einsum_chain_gemm(
+    #     [S, D_A, V_B, D_A, S],
+    #     return_tensors=[True, True, False, True]
+    # )
+    # S_DA_JB, S_DA_JB_DA_S = einsum_chain_gemm(
+    #     [S_DA, J_B, D_A, S],
+    #     return_tensors=[True, False, True]
+    # )
+    # S_DA_S_DB, S_DA_S_DB_VA = einsum_chain_gemm(
+    #     [S_DA, S, D_B, V_A],
+    #     return_tensors=[False, True, True],
+    # )
+    #
+    # # Bpply all the axpy operations to EX_B
+    # ein.core.axpy(-1.0, S_DA_VB, EX_B)
+    # ein.core.axpy(-2.0, S_DA_JB, EX_B)
+    # ein.core.axpy(1.0, einsum_chain_gemm([S_DA, K_B]), EX_B)
+    # ein.core.axpy(1.0, S_DA_S_DB_VA, EX_B)
+    # ein.core.axpy(2.0, einsum_chain_gemm([S_DA_S_DB, J_A]), EX_B)
+    # ein.core.axpy(1.0, S_DA_VB_DA_S, EX_B)
+    # ein.core.axpy(2.0, S_DA_JB_DA_S, EX_B)
+    # ein.core.axpy(-1.0, einsum_chain_gemm([S_DA, K_O]), EX_B)
+    # ein.core.axpy(-1.0, einsum_chain_gemm([V_A, D_A, S]), EX_B)
+    # ein.core.axpy(-2.0, einsum_chain_gemm([J_A, D_A, S]), EX_B)
+    # ein.core.axpy(1.0,  einsum_chain_gemm([K_A, D_A, S]), EX_B)
+    # ein.core.axpy(1.0,  einsum_chain_gemm([V_A, D_B, S, D_A, S]), EX_B)
+    # ein.core.axpy(2.0,  einsum_chain_gemm([J_A, D_B, S, D_A, S]), EX_B)
+    # ein.core.axpy(-1.0, einsum_chain_gemm([K_O, D_A, S], ["T", "N", "N"]), EX_B)
+    #
+    # EX_B_MO = einsum_chain_gemm(
+    #     [cache['Cocc_B'], EX_B, cache['Cvir_B']],
+    #     ['T', 'N', 'N'],
+    # )
 
     # Build electrostatic potentials - $\omega_A$ = w_A, Eq. 8
-    w_A = V_A.copy()
-    w_A.set_name("w_A")
-    ein.core.axpy(2.0, J_A, w_A)
-    
-    w_B = V_B.copy()
-    w_B.set_name("w_B")
-    ein.core.axpy(2.0, J_B, w_B)
+    # w_A = V_A.copy()
+    # w_A.set_name("w_A")
+    # ein.core.axpy(2.0, J_A, w_A)
+    # 
+    # w_B = V_B.copy()
+    # w_B.set_name("w_B")
+    # ein.core.axpy(2.0, J_B, w_B)
+    #
+    # w_B_MOA = einsum_chain_gemm(
+    #     [cache['Cocc_A'], w_B, cache['Cvir_A']],
+    #     ['T', 'N', 'N'],
+    # )
+    # w_A_MOB = einsum_chain_gemm(
+    #     [cache['Cocc_B'], w_A, cache['Cvir_B']],
+    #     ['T', 'N', 'N'],
+    # )
 
-    w_B_MOA = einsum_chain_gemm(
-        [cache['Cocc_A'], w_B, cache['Cvir_A']],
-        ['T', 'N', 'N'],
-    )
-    w_A_MOB = einsum_chain_gemm(
-        [cache['Cocc_B'], w_A, cache['Cvir_B']],
-        ['T', 'N', 'N'],
-    )
+    # Build electrostatic potentials - $\omega_A$ = w_A, Eq. 8
+    w_B_MOA = build_ind_pot({
+        "V_B": V_B,
+        "J_B": J_B,
+        "Cocc_A": cache["Cocc_A"],
+        "Cvir_A": cache["Cvir_A"],
+    })
+    w_B_MOA.set_name("w_B_MOA")
+    # Can re-use same function for w_A by swapping A and B labels
+    w_A_MOB = build_ind_pot({
+        "V_B": V_A,
+        "J_B": J_A,
+        "Cocc_A": cache["Cocc_B"],
+        "Cvir_A": cache["Cvir_B"],
+    })
+    w_A_MOB.set_name("w_A_MOB")
 
     # Do uncoupled induction calculations
     core.print_out("   => Uncoupled Induction <= \n\n")
