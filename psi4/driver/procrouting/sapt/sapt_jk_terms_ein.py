@@ -1267,9 +1267,9 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             row_view = core.Matrix.from_array(T1As.np[A:A+1, :])
             dfh.write_disk_tensor("WAbs", row_view, (nA + A, nA + A + 1), (B, B + 1))
     
-    TrQ = core.Matrix(nr, nQ)
+    TrQ = core.Matrix("TrQ", nr, nQ)
     TrQ_np = TrQ.np
-    T1Br = core.Matrix(nb1, nr)
+    T1Br = core.Matrix("T1Br", nb1, nr)
     for A in range(na):
         TrQ_np[:, :] = dfh.get_tensor("Aar", [0, nQ], [A, A + 1], [0, nr]).np.reshape(nr, nQ)
         T1Br.gemm(False, True, 2.0, RbD, TrQ, 0.0)
@@ -1277,6 +1277,31 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             row_view = core.Matrix.from_array(T1Br.np[B:B+1, :])
             dfh.write_disk_tensor("WBar", row_view, (nB + B, nB + B + 1), (A, A + 1))
     
+    # Collect relevant variables
+    S = cache["S"]
+    D_A = cache["D_A"]
+    V_A = cache["V_A"]
+    J_A = cache["J_A"]
+    K_A = cache["K_A"]
+    D_B = cache["D_B"]
+    V_B = cache["V_B"]
+    J_B = cache["J_B"]
+    K_B = cache["K_B"]
+    J_O = cache["J_O"]
+    K_O = cache["K_O"]
+    J_P_A = cache["J_P_A"]
+    J_P_B = cache["J_P_B"]
+
+
+    xA = core.Matrix("xA", na, nr)
+    xB = core.Matrix("xB", nb, ns)
+    wB = core.Matrix("wB", na, nr)
+    wA = core.Matrix("wA", nb, ns)
+
+    uAT = core.Matrix("uAT", nb, ns)
+    wAT = core.Matrix("wAT", nb, ns)
+    uBT = core.Matrix("uBT", na, nr)
+    wBT = core.Matrix("wBT", na, nr)
     """
     Continue to implement find() from C++ implementation FISAPT::find()
     """
@@ -1574,6 +1599,8 @@ def induction(
     ein.core.axpy(-2.0, J_O, EX_B)
     ein.core.axpy(1.0, K_O.T, EX_B)
     ein.core.axpy(2.0, J_P_A, EX_B)
+    cache['J_P_A'] = J_P_A
+    cache['J_P_B'] = J_P_B
 
     S_DA, S_DA_VB, S_DA_VB_DA_S = einsum_chain_gemm(
         [S, D_A, V_B, D_A, S],
