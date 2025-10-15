@@ -1054,15 +1054,140 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
     return cache
 
 
+# TODO: update induction to use this function as well as find()
 def build_ind_pot(vars):
-    Ca = vars["Cocc_A"]
-    Cr = vars["Cvir_A"]
-    V_B = vars["V_B"]
-    J_B = vars["J_B"]
+    """
+    Build the induction potential for monomer A due to monomer B.
+    By changing vars map to have B and A swapped, can get induction potential
+    for B due to A.
+    """
+    w_B = vars['V_B'].copy()
+    w_B.set_name("w_B")
+    ein.core.axpy(2.0, vars['J_B'], w_B)
+    return einsum_chain_gemm(
+        [vars['Cocc_A'], w_B, vars['Cvir_A']],
+        ['T', 'N', 'N'],
+    )
     
-    W = core.Matrix.from_array(J_B.np * 2.0 + V_B.np)
-    
-    return core.triplet(Ca, W, Cr, True, False, False)
+
+def build_exch_ind_pot_AB(vars):
+    """
+    Build the exchange-induction potential for monomer A due to monomer B
+    """
+
+    K_B = vars['K_B']
+    J_O = vars['J_O']
+    K_O = vars['K_O']
+    J_P_B = vars['J_P_B']
+    J_A = vars['J_A']
+    K_A = vars['K_A']
+    J_B = vars['J_B']
+    D_A = vars['D_A']
+    D_B = vars['D_B']
+    S = vars['S']
+    V_B = vars['V_B']
+    V_A = vars['V_A']
+
+    # Exch-Ind Potential A
+    EX_A = K_B.copy()
+    EX_A *= -1.0
+    ein.core.axpy(-2.0, J_O, EX_A)
+    ein.core.axpy(1.0, K_O, EX_A)
+    ein.core.axpy(2.0, J_P_B, EX_A)
+
+    # Apply all the axpy operations to EX_A
+    S_DB, S_DB_VA, S_DB_VA_DB_S = einsum_chain_gemm(
+        [S, D_B, V_A, D_B, S],
+        return_tensors=[True, True, False, True]
+    )
+    S_DB_JA, S_DB_JA_DB_S = einsum_chain_gemm(
+        [S_DB, J_A, D_B, S],
+        return_tensors=[True, False, True]
+    )
+    S_DB_S_DA, S_DB_S_DA_VB = einsum_chain_gemm(
+        [S_DB, S, D_A, V_B],
+        return_tensors=[False, True, True],
+    )
+    ein.core.axpy(-1.0, S_DB_VA, EX_A)
+    ein.core.axpy(-2.0, S_DB_JA, EX_A)
+    ein.core.axpy(1.0, einsum_chain_gemm([S_DB, K_A]), EX_A)
+    ein.core.axpy(1.0, S_DB_S_DA_VB, EX_A)
+    ein.core.axpy(2.0, einsum_chain_gemm([S_DB_S_DA, J_B]), EX_A)
+    ein.core.axpy(1.0, S_DB_VA_DB_S, EX_A)
+    ein.core.axpy(2.0, S_DB_JA_DB_S, EX_A)
+    ein.core.axpy(-1.0, einsum_chain_gemm([S_DB, K_O], ["N", "T"]), EX_A)
+    ein.core.axpy(-1.0, einsum_chain_gemm([V_B, D_B, S]), EX_A)
+    ein.core.axpy(-2.0, einsum_chain_gemm([J_B, D_B, S]), EX_A)
+    ein.core.axpy(1.0,  einsum_chain_gemm([K_B, D_B, S]), EX_A)
+    ein.core.axpy(1.0,  einsum_chain_gemm([V_B, D_A, S, D_B, S]), EX_A)
+    ein.core.axpy(2.0,  einsum_chain_gemm([J_B, D_A, S, D_B, S]), EX_A)
+    ein.core.axpy(-1.0, einsum_chain_gemm([K_O, D_B, S]), EX_A)
+
+    EX_A_MO = einsum_chain_gemm(
+        [vars['Cocc_A'], EX_A, vars['Cvir_A']],
+        ['T', 'N', 'N'],
+    )
+    return EX_A_MO
+
+
+def build_exch_ind_pot_BA(vars):
+    """
+    Build the exchange-induction potential for monomer B due to monomer A
+    """
+
+    K_B = vars['K_B']
+    J_O = vars['J_O']
+    K_O = vars['K_O']
+    J_P_A = vars['J_P_A']
+    J_A = vars['J_A']
+    K_A = vars['K_A']
+    J_B = vars['J_B']
+    D_A = vars['D_A']
+    D_B = vars['D_B']
+    S = vars['S']
+    V_B = vars['V_B']
+    V_A = vars['V_A']
+
+    EX_B = K_A.copy()
+    EX_B *= -1.0
+    ein.core.axpy(-2.0, J_O, EX_B)
+    ein.core.axpy(1.0, K_O.T, EX_B)
+    ein.core.axpy(2.0, J_P_A, EX_B)
+
+    S_DA, S_DA_VB, S_DA_VB_DA_S = einsum_chain_gemm(
+        [S, D_A, V_B, D_A, S],
+        return_tensors=[True, True, False, True]
+    )
+    S_DA_JB, S_DA_JB_DA_S = einsum_chain_gemm(
+        [S_DA, J_B, D_A, S],
+        return_tensors=[True, False, True]
+    )
+    S_DA_S_DB, S_DA_S_DB_VA = einsum_chain_gemm(
+        [S_DA, S, D_B, V_A],
+        return_tensors=[False, True, True],
+    )
+
+    # Bpply all the axpy operations to EX_B
+    ein.core.axpy(-1.0, S_DA_VB, EX_B)
+    ein.core.axpy(-2.0, S_DA_JB, EX_B)
+    ein.core.axpy(1.0, einsum_chain_gemm([S_DA, K_B]), EX_B)
+    ein.core.axpy(1.0, S_DA_S_DB_VA, EX_B)
+    ein.core.axpy(2.0, einsum_chain_gemm([S_DA_S_DB, J_A]), EX_B)
+    ein.core.axpy(1.0, S_DA_VB_DA_S, EX_B)
+    ein.core.axpy(2.0, S_DA_JB_DA_S, EX_B)
+    ein.core.axpy(-1.0, einsum_chain_gemm([S_DA, K_O]), EX_B)
+    ein.core.axpy(-1.0, einsum_chain_gemm([V_A, D_A, S]), EX_B)
+    ein.core.axpy(-2.0, einsum_chain_gemm([J_A, D_A, S]), EX_B)
+    ein.core.axpy(1.0,  einsum_chain_gemm([K_A, D_A, S]), EX_B)
+    ein.core.axpy(1.0,  einsum_chain_gemm([V_A, D_B, S, D_A, S]), EX_B)
+    ein.core.axpy(2.0,  einsum_chain_gemm([J_A, D_B, S, D_A, S]), EX_B)
+    ein.core.axpy(-1.0, einsum_chain_gemm([K_O, D_A, S], ["T", "N", "N"]), EX_B)
+
+    EX_B_MO = einsum_chain_gemm(
+        [vars['Cocc_B'], EX_B, vars['Cvir_B']],
+        ['T', 'N', 'N'],
+    )
+    return EX_B_MO
 
 
 def build_exch_ind_pot_avg(vars):
@@ -1188,8 +1313,10 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         na1 = na + 1
         nb1 = nb + 1
     
-    Locc_A = cache["Locc0A"]
-    Locc_B = cache["Locc0B"]
+    Locc_A = ein.core.RuntimeTensorD(cache["Locc0A"].np)
+    Locc_A.set_name("LoccA")
+    Locc_B = ein.core.RuntimeTensorD(cache["Locc0B"].np)
+    Locc_B.set_name("LoccB")
     
     Uocc_A = cache["Uocc0A"]
     Uocc_B = cache["Uocc0B"]
@@ -1257,9 +1384,8 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     TsQ_np = TsQ.np
     T1As = core.Matrix("T1As", na1, ns)
     for B in range(nb):
-        print(f" b = {B:3d} ns = {ns:3d} nQ = {nQ:3d}")
         # TsQ_np[:, :] = dfh.get_tensor("Abs", [B, B + 1], [0, ns], [0, nQ]).np.reshape(ns, nQ)
-        # Why is this ordering different than in fexch()???
+        # QA: Why is this ordering different than in fexch()???
         TsQ_np[:, :] = dfh.get_tensor("Abs", [0, nQ], [B, B + 1], [0, ns]).np.reshape(ns, nQ)
         # Can keep as matrix here for single gemm instead of converting to einsums
         T1As.gemm(False, True, 2.0, RaC, TsQ, 0.0)
@@ -1302,9 +1428,258 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     wAT = core.Matrix("wAT", nb, ns)
     uBT = core.Matrix("uBT", na, nr)
     wBT = core.Matrix("wBT", na, nr)
-    """
-    Continue to implement find() from C++ implementation FISAPT::find()
-    """
+
+    if link_assignment in ["SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"]:
+        D_X = linalg.doublet(cache["thislinkA"], cache["thislinkA"], False, True)
+        D_Y = linalg.doublet(cache["thislinkB"], cache["thislinkB"], False, True)
+        J_X = cache["JLA"]
+        K_X = cache["KLA"]
+        J_Y = cache["JLB"]
+        K_Y = cache["KLB"]
+        
+        K_AOY = cache["K_AOY"]
+        K_XOB = core.Matrix.from_array(cache["K_XOB"].np.T)
+        J_P_YAY = cache["J_P_YAY"]
+        J_P_XBX = cache["J_P_XBX"]
+        
+        mapA = {
+            "Cocc_A": Locc_A,
+            "Cvir_A": Cvir_A,
+            "S": S,
+            "D_A": D_A,
+            "V_A": V_A,
+            "J_A": J_A,
+            "K_A": K_A,
+            "D_B": D_B,
+            "V_B": V_B,
+            "J_B": J_B,
+            "K_B": K_B,
+            "D_X": D_X,
+            "J_X": J_X,
+            "K_X": K_X,
+            "D_Y": D_Y,
+            "J_Y": J_Y,
+            "K_Y": K_Y,
+            "J_O": J_O,
+            "K_O": K_O,
+            "K_AOY": K_AOY,
+            "J_P": J_P_A,
+            "J_PYAY": J_P_YAY,
+        }
+        
+        raise NotImplementedError("find() not ready yet for link orbitals")
+        wBT = build_ind_pot(mapA)
+        uBT = build_exch_ind_pot_avg(mapA)
+        
+        K_O_np = K_O.np
+        K_O.np[:] = K_O_np.T
+        
+        mapB = {
+            "Cocc_A": Locc_B,
+            "Cvir_A": Cvir_B,
+            "S": S,
+            "D_A": D_B,
+            "V_A": V_B,
+            "J_A": J_B,
+            "K_A": K_B,
+            "D_B": D_A,
+            "V_B": V_A,
+            "J_B": J_A,
+            "K_B": K_A,
+            "D_X": D_Y,
+            "J_X": J_Y,
+            "K_X": K_Y,
+            "D_Y": D_X,
+            "J_Y": J_X,
+            "K_Y": K_X,
+            "J_O": J_O,
+            "K_O": K_O,
+            "K_AOY": K_XOB,
+            "J_P": J_P_B,
+            "J_PYAY": J_P_XBX,
+        }
+        
+        wAT = build_ind_pot(mapB)
+        uAT = build_exch_ind_pot_avg(mapB)
+        
+        K_O.np[:] = K_O_np.T
+    
+    else:
+        mapA = {
+            "Cocc_A": Locc_A,
+            "Cvir_A": Cvir_A,
+            "Cocc_B": Locc_B,
+            "Cvir_B": Cvir_B,
+            "S": S,
+            "D_A": D_A,
+            "V_A": V_A,
+            "J_A": J_A,
+            "K_A": K_A,
+            "D_B": D_B,
+            "V_B": V_B,
+            "J_B": J_B,
+            "K_B": K_B,
+            "J_O": J_O,
+            "K_O": K_O,
+            "J_P_A": J_P_A,
+            "J_P_B": J_P_B,
+        }
+        
+        wBT = build_ind_pot(mapA)
+        uBT = build_exch_ind_pot_AB(mapA)
+        uAT = build_exch_ind_pot_BA(mapA)
+        
+        mapB = {
+            "Cocc_A": Locc_B,
+            "Cvir_A": Cvir_B,
+            "Cocc_B": Locc_A,
+            "Cvir_B": Cvir_A,
+            "S": S,
+            "D_A": D_B,
+            "V_A": V_B,
+            "J_A": J_B,
+            "K_A": K_B,
+            "D_B": D_A,
+            "V_B": V_A,
+            "J_B": J_A,
+            "K_B": K_A,
+            "J_O": J_O,
+            "K_O": K_O,
+            "J_P": J_P_B,
+        }
+        wAT = build_ind_pot(mapB)
+
+    Ind20u_AB_terms = core.Matrix("Ind20 [A<-B] (a x B)", na, nB + nb1 + 1)
+    Ind20u_BA_terms = core.Matrix("Ind20 [B<-A] (A x b)", nA + na1 + 1, nb)
+    Ind20u_AB_termsp = Ind20u_AB_terms.np
+    Ind20u_BA_termsp = Ind20u_BA_terms.np
+    
+    Ind20u_AB = 0.0
+    Ind20u_BA = 0.0
+    
+    ExchInd20u_AB_terms = core.Matrix("ExchInd20 [A<-B] (a x B)", na, nB + nb1 + 1)
+    ExchInd20u_BA_terms = core.Matrix("ExchInd20 [B<-A] (A x b)", nA + na1 + 1, nb)
+    ExchInd20u_AB_termsp = ExchInd20u_AB_terms.np
+    ExchInd20u_BA_termsp = ExchInd20u_BA_terms.np
+    
+    ExchInd20u_AB = 0.0
+    ExchInd20u_BA = 0.0
+    
+    sna = snB = snb = snA = 0
+    sExchInd20u_AB_terms = core.Matrix("sExchInd20 [A<-B] (a x B)", sna, snB + snb + 1)
+    sExchInd20u_BA_terms = core.Matrix("sExchInd20 [B<-A] (A x b)", snA + sna + 1, snb)
+    sExchInd20u_AB_termsp = sExchInd20u_AB_terms.np
+    sExchInd20u_BA_termsp = sExchInd20u_BA_terms.np
+    
+    sExchInd20u_AB = 0.0
+    sExchInd20u_BA = 0.0
+    
+    Indu_AB_terms = core.Matrix("Ind [A<-B] (a x B)", na, nB + nb1 + 1)
+    Indu_BA_terms = core.Matrix("Ind [B<-A] (A x b)", nA + na1 + 1, nb)
+    Indu_AB_termsp = Indu_AB_terms.np
+    Indu_BA_termsp = Indu_BA_terms.np
+    
+    Indu_AB = 0.0
+    Indu_BA = 0.0
+    
+    sIndu_AB_terms = core.Matrix("sInd [A<-B] (a x B)", sna, snB + snb + 1)
+    sIndu_BA_terms = core.Matrix("sInd [B<-A] (A x b)", snA + sna + 1, snb)
+    sIndu_AB_termsp = sIndu_AB_terms.np
+    sIndu_BA_termsp = sIndu_BA_terms.np
+    
+    sIndu_AB = 0.0
+    sIndu_BA = 0.0
+    
+    # TODO: make this work with external potentials
+    if dimer_wfn.has_potential_variable("B"):
+        Var = linalg.triplet(Cocc_A, cache["VB_extern"], Cvir_A, True, False, False)
+        dfh.write_disk_tensor("WBar", Var, (nB + nb1, nB + nb1 + 1))
+    else:
+        Var = core.Matrix("zero", na, nr)
+        Var.zero()
+        dfh.write_disk_tensor("WBar", Var, (nB + nb1, nB + nb1 + 1))
+    
+    for B in range(nB + nb1 + 1):
+        wB.np[:, :] = dfh.get_tensor("WBar", [B, B + 1], [0, na], [0, nr]).np.reshape(na, nr)
+        # dfh.fill_tensor("WBar", wB, (B, B + 1))
+        
+        for a in range(na):
+            for r in range(nr):
+                xA.np[a, r] = wBT[a, r] / (eps_occ_A[a] - eps_vir_A[r])
+        
+        x2A = core.doublet(Uocc_A, xA, True, False)
+        x2Ap = x2A.np
+        
+        for a in range(na):
+            Jval = 2.0 * np.dot(x2Ap[a, :], wBT[a, :])
+            Kval = 2.0 * np.dot(x2Ap[a, :], uBT[a, :])
+            Ind20u_AB_termsp[a, B] = Jval
+            Ind20u_AB += Jval
+            ExchInd20u_AB_termsp[a, B] = Kval
+            ExchInd20u_AB += Kval
+            # if core.get_option("SAPT", "SSAPT0_SCALE"):
+            #     sExchInd20u_AB_termsp[a, B] = Kval
+            #     sExchInd20u_AB += Kval
+            #     sIndu_AB_termsp[a, B] = Jval + Kval
+            #     sIndu_AB += Jval + Kval
+            
+            Indu_AB_termsp[a, B] = Jval + Kval
+            Indu_AB += Jval + Kval
+    
+    if dimer_wfn.has_potential_variable("A"):
+        Vbs = linalg.triplet(Cocc_B, cache["VA_extern"], Cvir_B, True, False, False)
+        dfh.write_disk_tensor("WAbs", Vbs, (nA + na1, nA + na1 + 1))
+    else:
+        Vbs = core.Matrix("zero", nb, ns)
+        Vbs.zero()
+        dfh.write_disk_tensor("WAbs", Vbs, (nA + na1, nA + na1 + 1))
+    
+    for A in range(nA + na1 + 1):
+        wA.np[:, :] = dfh.get_tensor("WBar", [A, A + 1], [0, nb], [0, ns]).np.reshape(nb, ns)
+        for b in range(nb):
+            for s in range(ns):
+                xB.np[b, s] = wAT[b, s] / (eps_occ_B[b] - eps_vir_B[s])
+        
+        x2B = core.doublet(Uocc_B, xB, True, False)
+        x2Bp = x2B.np
+        
+        for b in range(nb):
+            Jval = 2.0 * np.dot(x2Bp[b, :], wAT[b, :])
+            Kval = 2.0 * np.dot(x2Bp[b, :], uAT[b, :])
+            Ind20u_BA_termsp[A, b] = Jval
+            Ind20u_BA += Jval
+            ExchInd20u_BA_termsp[A, b] = Kval
+            ExchInd20u_BA += Kval
+            # if core.get_option("SAPT", "SSAPT0_SCALE"):
+            #     sExchInd20u_BA_termsp[A, b] = Kval
+            #     sExchInd20u_BA += Kval
+            #     sIndu_BA_termsp[A, b] = Jval + Kval
+            #     sIndu_BA += Jval + Kval
+            
+            Indu_BA_termsp[A, b] = Jval + Kval
+            Indu_BA += Jval + Kval
+    
+    cache["Ind20u_AB"] = Ind20u_AB
+    cache["Ind20u_BA"] = Ind20u_BA
+    cache["ExchInd20u_AB"] = ExchInd20u_AB
+    cache["ExchInd20u_BA"] = ExchInd20u_BA
+    cache["Indu_AB"] = Indu_AB
+    cache["Indu_BA"] = Indu_BA
+    
+    # if core.get_option("SAPT", "SSAPT0_SCALE"):
+    #     cache["sExchInd20u_AB"] = sExchInd20u_AB
+    #     cache["sExchInd20u_BA"] = sExchInd20u_BA
+    #     cache["sIndu_AB"] = sIndu_AB
+    #     cache["sIndu_BA"] = sIndu_BA
+    
+    if do_print:
+        core.print_out(f"    Ind20,u (A<-B)      = {Ind20u_AB:18.12f} [Eh]\n")
+        core.print_out(f"    Ind20,u (B<-A)      = {Ind20u_BA:18.12f} [Eh]\n")
+        core.print_out(f"    Exch-Ind20,u (A<-B) = {ExchInd20u_AB:18.12f} [Eh]\n")
+        core.print_out(f"    Exch-Ind20,u (B<-A) = {ExchInd20u_BA:18.12f} [Eh]\n")
+        core.print_out(f"    Ind20,u             = {Ind20u_AB + Ind20u_BA:18.12f} [Eh]\n")
+        core.print_out(f"    Exch-Ind20,u        = {ExchInd20u_AB + ExchInd20u_BA:18.12f} [Eh]\n\n")
+    
     return cache
 
 
