@@ -5962,11 +5962,17 @@ void FISAPT::find() {
     auto Vtemp2 = std::make_shared<Matrix>("Vtemp2", nn, nn);
 
     double* ZAp = vectors_["ZA"]->pointer();
+    Cocc_B->set_name("Cocc_B");
+    Cvir_B->set_name("Cvir_B");
+    Cocc_B->print();
+    Cvir_B->print();
     for (size_t A = 0; A < nA; A++) {
         Vtemp2->zero();
         Vint2->set_charge_field({{ZAp[A], {mol->x(A), mol->y(A), mol->z(A)}}});
         Vint2->compute(Vtemp2);
         std::shared_ptr<Matrix> Vbs = linalg::triplet(Cocc_B, Vtemp2, Cvir_B, true, false, false);
+        Vbs->set_name("Vbs_A");
+        Vbs->print();
         dfh_->write_disk_tensor("WAbs", Vbs, {A, A + 1});
     }
 

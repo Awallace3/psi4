@@ -161,12 +161,12 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         ranges,
     )
     
-    Locc0A = ret["L"]
-    Uocc0A = ret["U"]
+    Locc_A = ret["L"]
+    Uocc_A = ret["U"]
     Qocc0A = ret["Q"]
     
-    cache["Locc0A"] = Locc0A
-    cache["Uocc0A"] = Uocc0A
+    cache["Locc_A"] = Locc_A
+    cache["Uocc_A"] = Uocc_A
     cache["Qocc0A"] = Qocc0A
     
     Lfocc0A = core.Matrix("Lfocc0A", nn, nf)
@@ -174,10 +174,10 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Ufocc0A = core.Matrix("Ufocc0A", nf, nf)
     Uaocc0A = core.Matrix("Uaocc0A", na, na)
     
-    Lfocc0A.np[:, :] = Locc0A.np[:, :nf]
-    Laocc0A.np[:, :] = Locc0A.np[:, nf:nf+na]
-    Ufocc0A.np[:, :] = Uocc0A.np[:nf, :nf]
-    Uaocc0A.np[:, :] = Uocc0A.np[nf:nf+na, nf:nf+na]
+    Lfocc0A.np[:, :] = Locc_A.np[:, :nf]
+    Laocc0A.np[:, :] = Locc_A.np[:, nf:nf+na]
+    Ufocc0A.np[:, :] = Uocc_A.np[:nf, :nf]
+    Uaocc0A.np[:, :] = Uocc_A.np[nf:nf+na, nf:nf+na]
     
     cache["Lfocc0A"] = Lfocc0A
     cache["Laocc0A"] = Laocc0A
@@ -185,12 +185,12 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     cache["Uaocc0A"] = Uaocc0A
     
     if link_assignment in ["SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"]:
-        LLocc0A = core.Matrix("LLocc0A", nn, nm + 1)
-        LLocc0A.np[:, :nm] = Locc0A.np[:, :]
-        LLocc0A.np[:, nm] = cache["thislinkA"].np[:, 0]
-        cache["LLocc0A"] = LLocc0A
+        LLocc_A = core.Matrix("LLocc_A", nn, nm + 1)
+        LLocc_A.np[:, :nm] = Locc_A.np[:, :]
+        LLocc_A.np[:, nm] = cache["thislinkA"].np[:, 0]
+        cache["LLocc_A"] = LLocc_A
     else:
-        cache["LLocc0A"] = Locc0A
+        cache["LLocc_A"] = Locc_A
     
     core.print_out("  ==> Local orbitals for Monomer B <==\n\n")
     
@@ -218,12 +218,12 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         ranges,
     )
     
-    Locc0B = ret["L"]
-    Uocc0B = ret["U"]
+    Locc_B = ret["L"]
+    Uocc_B = ret["U"]
     Qocc0B = ret["Q"]
     
-    cache["Locc0B"] = Locc0B
-    cache["Uocc0B"] = Uocc0B
+    cache["Locc_B"] = Locc_B
+    cache["Uocc_B"] = Uocc_B
     cache["Qocc0B"] = Qocc0B
     
     Lfocc0B = core.Matrix("Lfocc0B", nn, nf)
@@ -231,10 +231,10 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Ufocc0B = core.Matrix("Ufocc0B", nf, nf)
     Uaocc0B = core.Matrix("Uaocc0B", na, na)
     
-    Lfocc0B.np[:, :] = Locc0B.np[:, :nf]
-    Laocc0B.np[:, :] = Locc0B.np[:, nf:nf+na]
-    Ufocc0B.np[:, :] = Uocc0B.np[:nf, :nf]
-    Uaocc0B.np[:, :] = Uocc0B.np[nf:nf+na, nf:nf+na]
+    Lfocc0B.np[:, :] = Locc_B.np[:, :nf]
+    Laocc0B.np[:, :] = Locc_B.np[:, nf:nf+na]
+    Ufocc0B.np[:, :] = Uocc_B.np[:nf, :nf]
+    Uaocc0B.np[:, :] = Uocc_B.np[nf:nf+na, nf:nf+na]
     
     cache["Lfocc0B"] = Lfocc0B
     cache["Laocc0B"] = Laocc0B
@@ -242,12 +242,12 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     cache["Uaocc0B"] = Uaocc0B
     
     if link_assignment in ["SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"]:
-        LLocc0B = core.Matrix("LLocc0B", nn, nm + 1)
-        LLocc0B.np[:, :nm] = Locc0B.np[:, :]
-        LLocc0B.np[:, nm] = cache["thislinkB"].np[:, 0]
-        cache["LLocc0B"] = LLocc0B
+        LLocc_B = core.Matrix("LLocc_B", nn, nm + 1)
+        LLocc_B.np[:, :nm] = Locc_B.np[:, :]
+        LLocc_B.np[:, nm] = cache["thislinkB"].np[:, 0]
+        cache["LLocc_B"] = LLocc_B
     else:
-        cache["LLocc0B"] = Locc0B
+        cache["LLocc_B"] = Locc_B
 
 
 def partition(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
@@ -688,8 +688,8 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     nB_atoms = mol.natom()
 
     # Sizing
-    L0A_np = cache["LLocc0A"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache["LLocc0A"].np
-    L0B_np = cache["LLocc0B"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache["LLocc0B"].np
+    L0A_np = cache["LLocc_A"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache["LLocc_A"].np
+    L0B_np = cache["LLocc_B"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache["LLocc_B"].np
     na = L0A_np.shape[1]
     nb = L0B_np.shape[1]
 
@@ -909,8 +909,8 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
     
     mol = dimer_wfn.molecule()
     nA_atoms = nB_atoms = mol.natom()
-    na = cache["Locc0A"].shape[1]
-    nb = cache["Locc0B"].shape[1]
+    na = cache["Locc_A"].shape[1]
+    nb = cache["Locc_B"].shape[1]
     nr = cache["Cvir_A"].shape[1]
     ns = cache["Cvir_B"].shape[1]
     
@@ -932,9 +932,9 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
     V_B = cache["V_B"]
     J_B = cache["J_B"]
     
-    LoccA = ein.core.RuntimeTensorD(cache["Locc0A"].np)
+    LoccA = ein.core.RuntimeTensorD(cache["Locc_A"].np)
     LoccA.set_name("LoccA")
-    LoccB = ein.core.RuntimeTensorD(cache["Locc0B"].np)
+    LoccB = ein.core.RuntimeTensorD(cache["Locc_B"].np)
     LoccB.set_name("LoccB")
     CvirA = cache["Cvir_A"]
     CvirB = cache["Cvir_B"]
@@ -951,8 +951,6 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
     
     dfh.transform()
 
-    # Convert below to einsums calls
-    
     W_A = J_A.copy() * 2.0 + V_A
     W_A.set_name("W_A")
     W_B = J_B.copy() * 2.0 + V_B
@@ -1293,14 +1291,14 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     if do_print:
         core.print_out("  ==> F-SAPT Induction <==\n\n")
     
-    ind_resp = core.get_option("FISAPT", "FISAPT_FSAPT_IND_RESPONSE")
     ind_scale = core.get_option("FISAPT", "FISAPT_FSAPT_IND_SCALE")
     link_assignment = core.get_option("FISAPT", "FISAPT_LINK_ASSIGNMENT")
     
     mol = dimer_wfn.molecule()
-    nA = nB = mol.natom()
-    na = cache["Locc0A"].shape[1]
-    nb = cache["Locc0B"].shape[1]
+    nA = mol.natom()
+    nB = mol.natom()
+    na = cache["Locc_A"].shape[1]
+    nb = cache["Locc_B"].shape[1]
     nr = cache["Cvir_A"].shape[1]
     ns = cache["Cvir_B"].shape[1]
     
@@ -1312,13 +1310,13 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         na1 = na + 1
         nb1 = nb + 1
     
-    Locc_A = ein.core.RuntimeTensorD(cache["Locc0A"].np)
+    Locc_A = ein.core.RuntimeTensorD(cache["Locc_A"].np)
     Locc_A.set_name("LoccA")
-    Locc_B = ein.core.RuntimeTensorD(cache["Locc0B"].np)
+    Locc_B = ein.core.RuntimeTensorD(cache["Locc_B"].np)
     Locc_B.set_name("LoccB")
     
-    Uocc_A = cache["Uocc0A"]
-    Uocc_B = cache["Uocc0B"]
+    Uocc_A = cache["Uocc_A"]
+    Uocc_B = cache["Uocc_B"]
     
     Cocc_A = cache["Cocc_A"]
     Cocc_B = cache["Cocc_B"]
@@ -1329,7 +1327,22 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     eps_occ_B = cache["eps_occ_B"]
     eps_vir_A = cache["eps_vir_A"]
     eps_vir_B = cache["eps_vir_B"]
-    
+
+    # Collect relevant variables
+    S = cache["S"]
+    D_A = cache["D_A"]
+    V_A = cache["V_A"]
+    J_A = cache["J_A"]
+    K_A = cache["K_A"]
+    D_B = cache["D_B"]
+    V_B = cache["V_B"]
+    J_B = cache["J_B"]
+    K_B = cache["K_B"]
+    J_O = cache["J_O"]
+    K_O = cache["K_O"]
+    J_P_A = cache["J_P_A"]
+    J_P_B = cache["J_P_B"]
+
     aux_basis = dimer_wfn.get_basisset("DF_BASIS_SCF")
     nQ = aux_basis.nbf()
     
@@ -1347,6 +1360,8 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Nuclear Contribution to ESPs
     ext_pot = core.ExternalPotential()
     ZA_np = cache["ZA"].np
+    print(Cocc_B)
+    print(Cvir_B)
     for A in range(nA):
         ext_pot.clear()
         atom_pos = mol.xyz(A)
@@ -1354,6 +1369,9 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Vtemp = ext_pot.computePotentialMatrix(dimer_wfn.basisset())
         Vtemp_ein = ein.core.RuntimeTensorD(Vtemp.np)
         Vbs = core.Matrix.from_array(einsum_chain_gemm([Cocc_B, Vtemp_ein, Cvir_B], ['T', 'N', 'N']))
+        # Vbs_A doesn't agree... Cocc_B and Cvir_B 
+        print("Vbs_A")
+        print(Vbs.np)
         dfh.write_disk_tensor("WAbs", Vbs, (A, A + 1))
     
     ZB_np = cache["ZB"].np
@@ -1380,43 +1398,23 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     RbD = cache["Vlocc0B"]
     
     TsQ = core.Matrix("TsQ", ns, nQ)
-    TsQ_np = TsQ.np
     T1As = core.Matrix("T1As", na1, ns)
     for B in range(nb):
-        # TsQ_np[:, :] = dfh.get_tensor("Abs", [B, B + 1], [0, ns], [0, nQ]).np.reshape(ns, nQ)
-        # QA: Why is this ordering different than in fexch()???
-        TsQ_np[:, :] = dfh.get_tensor("Abs", [0, nQ], [B, B + 1], [0, ns]).np.reshape(ns, nQ)
-        # Can keep as matrix here for single gemm instead of converting to einsums
+        dfh.fill_tensor("Abs", TsQ, [B, B + 1])
         T1As.gemm(False, True, 2.0, RaC, TsQ, 0.0)
         for A in range(na1):
-            row_view = core.Matrix.from_array(T1As.np[A:A+1, :])
+            row_view = core.Matrix.from_array(T1As.np[A: A+1, :])
             dfh.write_disk_tensor("WAbs", row_view, (nA + A, nA + A + 1), (B, B + 1))
     
     TrQ = core.Matrix("TrQ", nr, nQ)
-    TrQ_np = TrQ.np
     T1Br = core.Matrix("T1Br", nb1, nr)
     for A in range(na):
-        TrQ_np[:, :] = dfh.get_tensor("Aar", [0, nQ], [A, A + 1], [0, nr]).np.reshape(nr, nQ)
+        dfh.fill_tensor("Aar", TrQ, [A, A + 1]);
         T1Br.gemm(False, True, 2.0, RbD, TrQ, 0.0)
         for B in range(nb1):
-            row_view = core.Matrix.from_array(T1Br.np[B:B+1, :])
+            row_view = core.Matrix.from_array(T1Br.np[B: B+1, :])
             dfh.write_disk_tensor("WBar", row_view, (nB + B, nB + B + 1), (A, A + 1))
     
-    # Collect relevant variables
-    S = cache["S"]
-    D_A = cache["D_A"]
-    V_A = cache["V_A"]
-    J_A = cache["J_A"]
-    K_A = cache["K_A"]
-    D_B = cache["D_B"]
-    V_B = cache["V_B"]
-    J_B = cache["J_B"]
-    K_B = cache["K_B"]
-    J_O = cache["J_O"]
-    K_O = cache["K_O"]
-    J_P_A = cache["J_P_A"]
-    J_P_B = cache["J_P_B"]
-
     xA = core.Matrix("xA", na, nr)
     xB = core.Matrix("xB", nb, ns)
     wB = core.Matrix("wB", na, nr)
@@ -1604,8 +1602,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         dfh.write_disk_tensor("WBar", Var, (nB + nb1, nB + nb1 + 1))
     
     for B in range(nB + nb1 + 1):
-        wB.np[:, :] = dfh.get_tensor("WBar", [B, B + 1], [0, na], [0, nr]).np.reshape(na, nr)
-        
+        dfh.fill_tensor("WBar", wB, [B, B + 1])
         for a in range(na):
             for r in range(nr):
                 xA.np[a, r] = wBT[a, r] / (eps_occ_A[a] - eps_vir_A[r])
@@ -1639,7 +1636,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         dfh.write_disk_tensor("WAbs", Vbs, (nA + na1, nA + na1 + 1))
     
     for A in range(nA + na1 + 1):
-        wA.np[:, :] = dfh.get_tensor("WAbs", [A, A + 1], [0, nb], [0, ns]).np.reshape(nb, ns)
+        dfh.fill_tensor("WAbs", wA, [A, A + 1])
         for b in range(nb):
             for s in range(ns):
                 xB.np[b, s] = wAT[b, s] / (eps_occ_B[b] - eps_vir_B[s])
@@ -1668,8 +1665,12 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     if do_print:
         core.print_out(f"    Ind20,u (A<-B)          = {Ind20u_AB*1000:18.8f} [mEh]\n")
         core.print_out(f"    Ind20,u (B<-A)          = {Ind20u_BA*1000:18.8f} [mEh]\n")
+        assert abs(scalars['Ind20,u (A<-B)'] - Ind20u_AB) < 1e-8, f"Ind20u_AB mismatch: {1000 * scalars['Ind20,u (A<-B)']:.8f} vs {1000 * Ind20u_AB:.8f}"
+        assert abs(scalars['Ind20,u (A->B)'] - Ind20u_BA) < 1e-8, f"Ind20u_BA mismatch: {1000 * scalars['Ind20,u (A->B)']:.8f} vs {1000 * Ind20u_BA:.8f}"
         core.print_out(f"    Exch-Ind20,u (A<-B)     = {ExchInd20u_AB*1000:18.8f} [mEh]\n")
         core.print_out(f"    Exch-Ind20,u (B<-A)     = {ExchInd20u_BA*1000:18.8f} [mEh]\n")
+        assert abs(scalars['Exch-Ind20,u (A<-B)'] - ExchInd20u_AB) < 1e-8, f"ExchInd20u_AB mismatch: {1000 * scalars['Exch-Ind20,u (A<-B)']:.8f} vs {1000 * ExchInd20u_AB:.8f}"
+        assert abs(scalars['Exch-Ind20,u (A->B)'] - ExchInd20u_BA) < 1e-8, f"ExchInd20u_BA mismatch: {1000 * scalars['Exch-Ind20,u (A->B)']:.8f} vs {1000 * ExchInd20u_BA:.8f}"
         core.print_out(f"    Ind20,u                 = {Ind20u_AB + Ind20u_BA*1000:18.8f} [mEh]\n")
         core.print_out(f"    Exch-Ind20,u            = {ExchInd20u_AB + ExchInd20u_BA*1000:18.8f} [mEh]\n\n")
 
