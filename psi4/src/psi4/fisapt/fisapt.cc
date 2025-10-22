@@ -3300,6 +3300,9 @@ void FISAPT::ind() {
         }
     }
 
+    // V_A->set_name("V_A");
+    // V_A->print();
+
     // ==> Induction <== //
 
     double Ind20u_AB = 2.0 * xuA->vector_dot(wB);
@@ -6196,6 +6199,11 @@ void FISAPT::find() {
 
         K_O->transpose_this();
     }
+    // log the link assignment
+    outfile->Printf("    F-SAPT Induction with link assignment: %s\n\n", link_assignment.c_str());
+
+    // V_A->set_name("V_A");
+    // V_A->print();
 
     // Remove prints after debugging
     wBT->set_name("wBT");
