@@ -536,8 +536,6 @@ def build_sapt_jk_cache(
     cache['Cocc_A'].set_name("Cocc_A")
     cache["Cvir_A"] = ein.core.RuntimeTensorD(wfn_A.Ca_subset("AO", "VIR").np)
     cache['Cvir_A'].set_name("Cvir_A")
-    print(cache['Cocc_A'])
-    print(cache['Cvir_A'])
 
     cache["Cocc_B"] = ein.core.RuntimeTensorD(wfn_B.Ca_subset("AO", "OCC").np)
     cache['Cocc_B'].set_name("Cocc_B")
@@ -1322,7 +1320,6 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     Locc_A = ein.core.RuntimeTensorD(cache["Locc_A"].np)
     Locc_A.set_name("LoccA")
-    print(Locc_A)
     Locc_B = ein.core.RuntimeTensorD(cache["Locc_B"].np)
     Locc_B.set_name("LoccB")
     
@@ -1371,8 +1368,6 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Nuclear Contribution to ESPs
     ext_pot = core.ExternalPotential()
     ZA_np = cache["ZA"].np
-    print(Cocc_B)
-    print(Cvir_B)
     for A in range(nA):
         ext_pot.clear()
         atom_pos = mol.xyz(A)
@@ -1381,8 +1376,6 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Vtemp_ein = ein.core.RuntimeTensorD(Vtemp.np)
         Vbs = core.Matrix.from_array(einsum_chain_gemm([Cocc_B, Vtemp_ein, Cvir_B], ['T', 'N', 'N']))
         # Vbs_A doesn't agree... Cocc_B and Cvir_B 
-        print("Vbs_A")
-        print(Vbs.np)
         dfh.write_disk_tensor("WAbs", Vbs, (A, A + 1))
     
     ZB_np = cache["ZB"].np
@@ -1512,7 +1505,6 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         K_O.np[:] = K_O_np.T
     
     else:
-        print("link assignment =", link_assignment)
         mapA = {
             "S": S,
             "J_O": J_O,
@@ -1562,14 +1554,14 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     J_B.set_name("J_B")
     Cvir_A.set_name("Cvir_A")
     Locc_A.set_name("Locc_A")
-    print(Locc_A)
-    print(Cvir_A)
-    print(J_B)
-    print(V_B)
-    print(wBT)
-    print(uBT)
-    print(wAT)
-    print(uAT)
+    # print(Locc_A)
+    # print(Cvir_A)
+    # print(J_B)
+    # print(V_B)
+    # print(wBT)
+    # print(uBT)
+    # print(wAT)
+    # print(uAT)
 
     Ind20u_AB_terms = core.Matrix("Ind20 [A<-B] (a x B)", na, nB + nb1 + 1)
     Ind20u_BA_terms = core.Matrix("Ind20 [B<-A] (A x b)", nA + na1 + 1, nb)
@@ -1627,7 +1619,8 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         # Uncoupled
         for a in range(na):
             for r in range(nr):
-                xA.np[a, r] = wBT[a, r] / (eps_occ_A[a] - eps_vir_A[r])
+                # fill_tensor wB as (1, na, nr), so we take first index only
+                xA.np[a, r] = wB.np[0, a, r] / (eps_occ_A[a] - eps_vir_A[r])
         
         x2A = core.doublet(Uocc_A, xA, True, False)
         x2Ap = x2A.np
@@ -1635,7 +1628,6 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         for a in range(na):
             Jval = 2.0 * np.dot(x2Ap[a, :], wBT[a, :])
             Kval = 2.0 * np.dot(x2Ap[a, :], uBT[a, :])
-            print(f"    a={a}, B={B}, Jval={Jval:.12f}, Kval={Kval:.12f}")
             Ind20u_AB_termsp[a, B] = Jval
             Ind20u_AB += Jval
             ExchInd20u_AB_termsp[a, B] = Kval
@@ -1662,7 +1654,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         dfh.fill_tensor("WAbs", wA, [A, A + 1])
         for b in range(nb):
             for s in range(ns):
-                xB.np[b, s] = wAT[b, s] / (eps_occ_B[b] - eps_vir_B[s])
+                xB.np[b, s] = wA.np[0, b, s] / (eps_occ_B[b] - eps_vir_B[s])
         
         x2B = core.doublet(Uocc_B, xB, True, False)
         x2Bp = x2B.np
