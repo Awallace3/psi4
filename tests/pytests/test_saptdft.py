@@ -1551,13 +1551,19 @@ no_com
     ref_df = pd.DataFrame(data)
     print("REF")
     print(ref_df)
+    # difference df
+    df_diff = ref_df.copy()
+    df_diff.iloc[:, 2:] = ref_df.iloc[:, 2:] - df.iloc[:, 2:]
+    print("DIFF")
+    print(df_diff)
+    print(df_diff[['Frag1', 'Frag2', 'IndAB']])
 
     for col in ["Elst", "Exch", "IndAB", "IndBA", "Disp", "EDisp", "Total"]:
         for i in range(len(ref_df)):
             compare_values(
                 ref_df[col].iloc[i],
                 df[col].iloc[i],
-                3,
+                4,
                 f"{ref_df['Frag1'].iloc[i]} {ref_df['Frag2'].iloc[i]} {col}",
             )
 
@@ -1567,8 +1573,8 @@ if __name__ == "__main__":
     psi4.set_num_threads(12)
 
     # test_fsaptdft_fsapt0()
-    # test_fsapt0_fsaptdft()
-    test_fsaptdft_psivars()
+    test_fsapt0_fsaptdft()
+    # test_fsaptdft_psivars()
 
     # test_einsum_terms()
     # test_einsum_terms()

@@ -1404,8 +1404,8 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     TsQ = core.Matrix("TsQ", ns, nQ)
     T1As = core.Matrix("T1As", na1, ns)
-    print(f"{na1 = }, {nb1 = }, {ns = }, {nr = }")
-    print(f"{na1 = }, {nb1 = }, {ns = }, {nQ = }")
+    # print(f"{na1 = }, {nb1 = }, {ns = }, {nr = }")
+    # print(f"{na1 = }, {nb1 = }, {ns = }, {nQ = }")
     for B in range(nb):
         # print(f"{TsQ.np.shape =}")
         # TODO: CONTINUE HERE
@@ -1639,10 +1639,10 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         for a in range(na):
             Jval = 2.0 * np.dot(x2Ap[a, :], wBT[a, :])
             Kval = 2.0 * np.dot(x2Ap[a, :], uBT[a, :])
-            Ind20u_AB_termsp[a, B] = Jval
             Ind20u_AB += Jval
             ExchInd20u_AB_termsp[a, B] = Kval
             ExchInd20u_AB += Kval
+            Ind20u_AB_termsp[a, B] = Jval
             # if core.get_option("SAPT", "SSAPT0_SCALE"):
             #     sExchInd20u_AB_termsp[a, B] = Kval
             #     sExchInd20u_AB += Kval
@@ -1663,8 +1663,6 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     for A in range(nA + na1 + 1):
         dfh.fill_tensor("WAbs", wA, [A, A + 1])
-        print(f"{wA.np.shape = }")
-        print(f"{wA.np = }")
         for b in range(nb):
             for s in range(ns):
                 xB.np[b, s] = wA.np[0, b, s] / (eps_occ_B[b] - eps_vir_B[s])
@@ -1743,10 +1741,10 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Final assembly might be wrong... backtrace time
     for a in range(na):
         for B in range(nB + nb1 + 1):
-            IndAB_AB.np[a + nA, B] = Ind20u_AB_termsp[a, B]
+            IndAB_AB.np[a + nA, B] = Ind20u_AB_termsp[a, B] + ExchInd20u_AB_termsp[a, B]
     for A in range(nA + na1 + 1):
         for b in range(nb):
-            IndBA_AB.np[A, b + nB] = Ind20u_BA_termsp[A, b]
+            IndBA_AB.np[A, b + nB] = Ind20u_BA_termsp[A, b] + ExchInd20u_BA_termsp[A, b]
     
     cache["INDAB_AB"] = IndAB_AB
     cache["INDBA_AB"] = IndBA_AB
