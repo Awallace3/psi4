@@ -1354,12 +1354,13 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     aux_basis = dimer_wfn.get_basisset("DF_BASIS_SCF")
     nQ = aux_basis.nbf()
     
-    dfh = core.DFHelper(dimer_wfn.basisset(), aux_basis)
+    # dfh = core.DFHelper(dimer_wfn.basisset(), aux_basis)
     # TODO: This memory estimate needs corrected...
-    dfh.set_memory(int(core.get_memory() * 0.9 / 8))  # Use 90% of available memory (in doubles)
-    dfh.set_method("DIRECT")
-    dfh.set_nthreads(core.get_num_threads())
-    dfh.initialize()
+    # dfh.set_memory(int(core.get_memory() * 0.9 / 8))  # Use 90% of available memory (in doubles)
+    # dfh.set_method("DIRECT")
+    # dfh.set_nthreads(core.get_num_threads())
+    # dfh.initialize()
+    dfh = cache["dfh"]
     
     # ESPs - external potential entries
     dfh.add_disk_tensor("WBar", (nB + nb1 + 1, na, nr))
@@ -1403,21 +1404,15 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     TsQ = core.Matrix("TsQ", ns, nQ)
     T1As = core.Matrix("T1As", na1, ns)
+    print(f"{na1 = }, {nb1 = }, {ns = }, {nr = }")
+    print(f"{na1 = }, {nb1 = }, {ns = }, {nQ = }")
     for B in range(nb):
-        print(f"{TsQ.np.shape =}")
+        # print(f"{TsQ.np.shape =}")
         # TODO: CONTINUE HERE
         # fill_tensor is not working properly with 2D slices yet...
-        dfh.fill_tensor("Abs", TsQ, [B, B + 1])
-        # TODO: see if TsQ being [1, ns, nQ] effects the gemm call
-        print(f"{TsQ.np.shape =}")
-        print(f"{RaC.np.shape =}")
+        # dfh.fill_tensor("Abs", TsQ, [B, B + 1])
+        dfh.fill_tensor("Abs", TsQ, [B, B + 1], [0, ns], [0, nQ])
         TsQ = core.Matrix.from_array(TsQ.np[0, :, :])
-        print(f"{TsQ.np.shape =}")
-        # prints yield...
-        # TsQ.np.shape =(13, 294)
-        # TsQ.np.shape =(1, 5, 13)
-        # RaC.np.shape =(5, 294)
-        # TsQ.np.shape =(5, 13)
         T1As.gemm(False, True, 2.0, RaC, TsQ, 0.0)
         for A in range(na1):
             row_view = core.Matrix.from_array(T1As.np[A: A+1, :])
@@ -1426,7 +1421,10 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     TrQ = core.Matrix("TrQ", nr, nQ)
     T1Br = core.Matrix("T1Br", nb1, nr)
     for A in range(na):
-        dfh.fill_tensor("Aar", TrQ, [A, A + 1]);
+        # dfh.fill_tensor("Abs", TsQ, [B, B + 1], [0, ns], [0, nQ])
+        # TsQ = core.Matrix.from_array(TsQ.np[0, :, :])
+        dfh.fill_tensor("Aar", TrQ, [A, A + 1], [0, nr], [0, nQ])
+        TrQ = core.Matrix.from_array(TrQ.np[0, :, :])
         T1Br.gemm(False, True, 2.0, RbD, TrQ, 0.0)
         for B in range(nb1):
             row_view = core.Matrix.from_array(T1Br.np[B: B+1, :])
@@ -1695,12 +1693,12 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     if do_print:
         core.print_out(f"    Ind20,u (A<-B)          = {Ind20u_AB*1000:18.8f} [mEh]\n")
         core.print_out(f"    Ind20,u (B<-A)          = {Ind20u_BA*1000:18.8f} [mEh]\n")
-        # assert abs(scalars['Ind20,u (A<-B)'] - Ind20u_AB) < 1e-8, f"Ind20u_AB mismatch: {1000 * scalars['Ind20,u (A<-B)']:.8f} vs {1000 * Ind20u_AB:.8f}"
-        # assert abs(scalars['Ind20,u (A->B)'] - Ind20u_BA) < 1e-8, f"Ind20u_BA mismatch: {1000 * scalars['Ind20,u (A->B)']:.8f} vs {1000 * Ind20u_BA:.8f}"
+        assert abs(scalars['Ind20,u (A<-B)'] - Ind20u_AB) < 1e-8, f"Ind20u_AB mismatch: {1000 * scalars['Ind20,u (A<-B)']:.8f} vs {1000 * Ind20u_AB:.8f}"
+        assert abs(scalars['Ind20,u (A->B)'] - Ind20u_BA) < 1e-8, f"Ind20u_BA mismatch: {1000 * scalars['Ind20,u (A->B)']:.8f} vs {1000 * Ind20u_BA:.8f}"
         core.print_out(f"    Exch-Ind20,u (A<-B)     = {ExchInd20u_AB*1000:18.8f} [mEh]\n")
         core.print_out(f"    Exch-Ind20,u (B<-A)     = {ExchInd20u_BA*1000:18.8f} [mEh]\n")
-        # assert abs(scalars['Exch-Ind20,u (A<-B)'] - ExchInd20u_AB) < 1e-8, f"ExchInd20u_AB mismatch: {1000 * scalars['Exch-Ind20,u (A<-B)']:.8f} vs {1000 * ExchInd20u_AB:.8f}"
-        # assert abs(scalars['Exch-Ind20,u (A->B)'] - ExchInd20u_BA) < 1e-8, f"ExchInd20u_BA mismatch: {1000 * scalars['Exch-Ind20,u (A->B)']:.8f} vs {1000 * ExchInd20u_BA:.8f}"
+        assert abs(scalars['Exch-Ind20,u (A<-B)'] - ExchInd20u_AB) < 1e-8, f"ExchInd20u_AB mismatch: {1000 * scalars['Exch-Ind20,u (A<-B)']:.8f} vs {1000 * ExchInd20u_AB:.8f}"
+        assert abs(scalars['Exch-Ind20,u (A->B)'] - ExchInd20u_BA) < 1e-8, f"ExchInd20u_BA mismatch: {1000 * scalars['Exch-Ind20,u (A->B)']:.8f} vs {1000 * ExchInd20u_BA:.8f}"
         core.print_out(f"    Ind20,u                 = {Ind20u_AB + Ind20u_BA*1000:18.8f} [mEh]\n")
         core.print_out(f"    Exch-Ind20,u            = {ExchInd20u_AB + ExchInd20u_BA*1000:18.8f} [mEh]\n\n")
 
