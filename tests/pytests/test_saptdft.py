@@ -1573,8 +1573,8 @@ if __name__ == "__main__":
     psi4.set_num_threads(12)
 
     # test_fsaptdft_fsapt0()
-    test_fsapt0_fsaptdft()
-    # test_fsaptdft_psivars()
+    # test_fsapt0_fsaptdft()
+    test_fsaptdft_psivars()
 
     # test_einsum_terms()
     # test_einsum_terms()

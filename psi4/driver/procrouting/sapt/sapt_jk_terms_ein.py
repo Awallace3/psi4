@@ -1766,6 +1766,392 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     return cache
 
 
+def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
+    """
+    Compute F-SAPT dispersion energy partitioning.
+    
+    This follows the reference implementation in fisapt.cc (lines 6669-7513).
+    The core algorithm:
+    1. Loop over virtual orbital pairs (r, s) on A and B
+    2. Compute DF integrals (ar|bs) for occupied-virtual contractions
+    3. Compute amplitudes: T[a,b] = V[a,b] / (ε_a + ε_b - ε_r - ε_s)
+    4. Transform to localized basis: T2 = U_A^T @ T @ U_B
+    5. Compute Disp20 and Exch-Disp20 contributions
+    6. Partition energies into FSAPT_DISP_AB[a+offset][b+offset]
+    """
+    if do_print:
+        core.print_out("  ==> F-SAPT Dispersion <==\n\n")
+    
+    # Get molecular and orbital information
+    mol = dimer_wfn.molecule()
+    nA = mol.natom()
+    nB = mol.natom()
+    
+    # Get localized occupied orbitals
+    Locc_A = cache["Locc_A"]  # Localized occupied orbitals A
+    Locc_B = cache["Locc_B"]  # Localized occupied orbitals B
+    na = Locc_A.shape[1]  # Number of occupied orbitals on A
+    nb = Locc_B.shape[1]  # Number of occupied orbitals on B
+    
+    # Get virtual orbitals
+    Cvir_A = cache["Cvir_A"]  # Virtual orbitals A
+    Cvir_B = cache["Cvir_B"]  # Virtual orbitals B
+    nr = Cvir_A.shape[1]  # Number of virtual orbitals on A
+    ns = Cvir_B.shape[1]  # Number of virtual orbitals on B
+    
+    # Get orbital energies
+    # We need ACTIVE occupied orbital energies to match canonical active occupied orbitals
+    # Get them directly from wavefunctions (C++ uses eps_aocc0A/B at line 6755-6758)
+    eps_occ_A = wfn_A.epsilon_a_subset("AO", "ACTIVE_OCC").np  # Active occupied orbital energies A
+    eps_vir_A = cache["eps_vir_A"]  # Virtual orbital energies A
+    eps_occ_B = wfn_B.epsilon_a_subset("AO", "ACTIVE_OCC").np  # Active occupied orbital energies B
+    eps_vir_B = cache["eps_vir_B"]  # Virtual orbital energies B
+    
+    # Get localization matrices (U transforms from canonical to localized basis)
+    # Use active-only transformations (excluding frozen core)
+    Uaocc_A = cache["Uaocc0A"]  # Active occupied transformation A (na x na)
+    Uaocc_B = cache["Uaocc0B"]  # Active occupied transformation B (nb x nb)
+    
+    # Get frozen orbital counts
+    nfocc0A = cache["Locc0A"].shape[1] if "Locc0A" in cache else 0
+    nfocc0B = cache["Locc0B"].shape[1] if "Locc0B" in cache else 0
+    nfa = cache["Lfocc0A"].shape[1] if "Lfocc0A" in cache else 0
+    nfb = cache["Lfocc0B"].shape[1] if "Lfocc0B" in cache else 0
+    
+    # Check for link orbitals
+    link_assignment = core.get_option("FISAPT", "FISAPT_LINK_ASSIGNMENT")
+    na1 = na
+    nb1 = nb
+    if link_assignment in ["SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"]:
+        na1 = na + 1
+        nb1 = nb + 1
+    
+    # Initialize dispersion energy partition matrix
+    # Dimensions: (nA nuclei + nfa frozen + na1 active + 1 external) x (nB + nfb + nb1 + 1)
+    Disp_AB = core.Matrix("Disp_AB", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
+    Disp_AB_np = Disp_AB.np
+    
+    # Initialize accumulator matrices for each orbital pair
+    E_disp20 = np.zeros((na, nb))
+    E_exch_disp20 = np.zeros((na, nb))
+    
+    # Get DF helper from cache
+    dfh = cache["dfh"]
+    
+    # Get auxiliary basis size
+    aux_basis = core.BasisSet.build(dimer_wfn.molecule(), "DF_BASIS_SAPT",
+                                     core.get_global_option("DF_BASIS_SAPT"),
+                                     "RIFIT", core.get_global_option("BASIS"))
+    nQ = aux_basis.nbf()
+    
+    # Setup DF spaces for dispersion
+    # We need (ar|bs) integrals: occupied A x virtual A, occupied B x virtual B
+    
+    # Get canonical MO coefficients for active occupied and virtual orbitals
+    # In C++ (line 6751, 6897), Caocc_A = Caocc0A (canonical active occupied)
+    # and Cavir_A (canonical virtual), NOT the localized ones!
+    # We need to get these directly from the monomer wavefunctions
+    Caocc_A = wfn_A.Ca_subset("AO", "ACTIVE_OCC")  # Canonical active occupied A
+    Caocc_B = wfn_B.Ca_subset("AO", "ACTIVE_OCC")  # Canonical active occupied B
+    # Cvir_A/B are already canonical virtual (created in setup)
+    
+    # Get necessary matrices from cache for exchange-dispersion
+    S = cache["S"]  # Overlap matrix
+    D_A = cache["D_A"]  # Density matrix A
+    D_B = cache["D_B"]  # Density matrix B
+    J_A = cache["J_A"]  # Coulomb matrix A
+    J_B = cache["J_B"]  # Coulomb matrix B
+    K_A = cache["K_A"]  # Exchange matrix A
+    K_B = cache["K_B"]  # Exchange matrix B
+    K_O = cache["K_O"]  # Overlap exchange matrix
+    V_A = cache["V_A"]  # Nuclear potential A
+    V_B = cache["V_B"]  # Nuclear potential B
+    P_A = cache["P_A"]  # Virtual density matrix A
+    P_B = cache["P_B"]  # Virtual density matrix B (if needed)
+    
+    # Create auxiliary orbital spaces for exchange-dispersion (C++ lines 6760-6794)
+    # First convert einsums tensors to numpy arrays
+    S_np = np.array(S)
+    D_A_np = np.array(D_A)
+    D_B_np = np.array(D_B)
+    Cvir_A_np = np.array(Cvir_A)
+    Cvir_B_np = np.array(Cvir_B)
+    Caocc_A_np = Caocc_A.np  # These are Psi4 matrices, have .np attribute
+    Caocc_B_np = Caocc_B.np
+    
+    # Cr1 = (D_B @ S - I) @ Cvir_A
+    Cr1_np = -1.0 * np.dot(np.dot(D_B_np, S_np), Cvir_A_np) + Cvir_A_np
+    # Cs1 = (D_A @ S - I) @ Cvir_B
+    Cs1_np = -1.0 * np.dot(np.dot(D_A_np, S_np), Cvir_B_np) + Cvir_B_np
+    # Ca2 = D_B @ S @ Caocc_A
+    Ca2_np = np.dot(np.dot(D_B_np, S_np), Caocc_A_np)
+    # Cb2 = D_A @ S @ Caocc_B
+    Cb2_np = np.dot(np.dot(D_A_np, S_np), Caocc_B_np)
+    
+    # Cr3 = 2 * (D_B @ S - D_A @ S @ D_B @ S) @ Cvir_A
+    Cr3_np = 2.0 * (np.dot(np.dot(D_B_np, S_np), Cvir_A_np) -
+                    np.dot(np.dot(np.dot(np.dot(D_A_np, S_np), D_B_np), S_np), Cvir_A_np))
+    # Cs3 = 2 * (D_A @ S - D_B @ S @ D_A @ S) @ Cvir_B
+    Cs3_np = 2.0 * (np.dot(np.dot(D_A_np, S_np), Cvir_B_np) -
+                    np.dot(np.dot(np.dot(np.dot(D_B_np, S_np), D_A_np), S_np), Cvir_B_np))
+    
+    # Ca4 = -2 * D_A @ S @ D_B @ S @ Caocc_A
+    Ca4_np = -2.0 * np.dot(np.dot(np.dot(np.dot(D_A_np, S_np), D_B_np), S_np), Caocc_A_np)
+    # Cb4 = -2 * D_B @ S @ D_A @ S @ Caocc_B
+    Cb4_np = -2.0 * np.dot(np.dot(np.dot(np.dot(D_B_np, S_np), D_A_np), S_np), Caocc_B_np)
+    
+    # Convert to psi4 matrices
+    Cr1 = core.Matrix.from_array(Cr1_np)
+    Cs1 = core.Matrix.from_array(Cs1_np)
+    Ca2 = core.Matrix.from_array(Ca2_np)
+    Cb2 = core.Matrix.from_array(Cb2_np)
+    Cr3 = core.Matrix.from_array(Cr3_np)
+    Cs3 = core.Matrix.from_array(Cs3_np)
+    Ca4 = core.Matrix.from_array(Ca4_np)
+    Cb4 = core.Matrix.from_array(Cb4_np)
+    
+    # Clear previous spaces and add new ones for dispersion
+    dfh.clear_spaces()
+    dfh.add_space("a", Caocc_A)
+    dfh.add_space("r", core.Matrix.from_array(Cvir_A))
+    dfh.add_space("b", Caocc_B)
+    dfh.add_space("s", core.Matrix.from_array(Cvir_B))
+    # Add auxiliary spaces for exchange-dispersion
+    dfh.add_space("r1", Cr1)
+    dfh.add_space("s1", Cs1)
+    dfh.add_space("a2", Ca2)
+    dfh.add_space("b2", Cb2)
+    dfh.add_space("r3", Cr3)
+    dfh.add_space("s3", Cs3)
+    dfh.add_space("a4", Ca4)
+    dfh.add_space("b4", Cb4)
+    
+    # Add transformations for dispersion (Aar, Abs)
+    dfh.add_transformation("Aar", "r", "a")
+    dfh.add_transformation("Abs", "s", "b")
+    # Add transformations for exchange-dispersion (C++ lines 6935-6942)
+    dfh.add_transformation("Bas", "s1", "a")
+    dfh.add_transformation("Bbr", "r1", "b")
+    dfh.add_transformation("Cas", "s", "a2")
+    dfh.add_transformation("Cbr", "r", "b2")
+    dfh.add_transformation("Dar", "r3", "a")
+    dfh.add_transformation("Dbs", "s3", "b")
+    dfh.add_transformation("Ear", "r", "a4")
+    dfh.add_transformation("Ebs", "s", "b4")
+    
+    # Perform DF integral transformations
+    if do_print:
+        core.print_out("    Computing DF integrals for dispersion...\n")
+    dfh.transform()
+    
+    # Compute AO-based exchange matrices (C++ lines 6795-6870)
+    # These are used in the exchange-dispersion calculation
+    
+    # Get NumPy arrays for matrix operations
+    # Note: Caocc_A, Caocc_B are Psi4 matrices with .np attribute
+    # Note: S_np, D_A_np, D_B_np, Cvir_A_np, Cvir_B_np, Caocc_A_np, Caocc_B_np already created above
+    # Convert remaining einsums tensors to numpy arrays
+    J_A_np = np.array(J_A)
+    J_B_np = np.array(J_B)
+    K_A_np = np.array(K_A)
+    K_B_np = np.array(K_B)
+    K_O_np = np.array(K_O)
+    V_A_np = np.array(V_A)
+    V_B_np = np.array(V_B)
+    P_A_np = np.array(P_A)
+    P_B_np = np.array(P_B)
+    
+    # Qas = Jas + Kas + KOas + JAas + JBas + VBas + VRas
+    # Each term is Caocc_A^T @ (matrix) @ Cvir_B
+    Jas = 2.0 * Caocc_A_np.T @ J_B_np @ Cvir_B_np
+    Kas = -1.0 * Caocc_A_np.T @ K_B_np @ Cvir_B_np
+    KOas = 1.0 * Caocc_A_np.T @ K_O_np @ Cvir_B_np
+    JAas = -2.0 * (Caocc_A_np.T @ J_B_np @ D_A_np @ S_np @ Cvir_B_np)
+    JBas = -2.0 * (Caocc_A_np.T @ S_np @ D_B_np @ J_A_np @ Cvir_B_np)
+    VBas = -1.0 * (Caocc_A_np.T @ S_np @ D_B_np @ V_A_np @ Cvir_B_np)
+    VRas = 1.0 * (Caocc_A_np.T @ V_B_np @ P_A_np @ S_np @ Cvir_B_np)
+    Qas = Jas + Kas + KOas + JAas + JBas + VBas + VRas
+    
+    # Qbr = Jbr + Kbr + KObr + JAbr + JBbr + VAbr + VSbr
+    # Each term is Caocc_B^T @ (matrix) @ Cvir_A
+    Jbr = 2.0 * Caocc_B_np.T @ J_A_np @ Cvir_A_np
+    Kbr = -1.0 * Caocc_B_np.T @ K_A_np @ Cvir_A_np
+    KObr = 1.0 * Caocc_B_np.T @ K_O_np.T @ Cvir_A_np  # Note: K_O is transposed for this one
+    JAbr = -2.0 * (Caocc_B_np.T @ J_A_np @ D_B_np @ S_np @ Cvir_A_np)
+    JBbr = -2.0 * (Caocc_B_np.T @ S_np @ D_A_np @ J_B_np @ Cvir_A_np)
+    VAbr = -1.0 * (Caocc_B_np.T @ S_np @ D_A_np @ V_B_np @ Cvir_A_np)
+    VSbr = 1.0 * (Caocc_B_np.T @ V_A_np @ P_B_np @ S_np @ Cvir_A_np)
+    Qbr = Jbr + Kbr + KObr + JAbr + JBbr + VAbr + VSbr
+    
+    # Qar = Jar + Var (simpler matrices)
+    Jar = 4.0 * Caocc_A_np.T @ J_B_np @ Cvir_A_np
+    Var = 2.0 * Caocc_A_np.T @ V_B_np @ Cvir_A_np
+    Qar = Jar + Var
+    
+    # Qbs = Jbs + Vbs (simpler matrices)
+    Jbs = 4.0 * Caocc_B_np.T @ J_A_np @ Cvir_B_np
+    Vbs = 2.0 * Caocc_B_np.T @ V_A_np @ Cvir_B_np
+    Qbs = Jbs + Vbs
+    
+    # Overlap-density matrices
+    SBar = Caocc_A_np.T @ S_np @ D_B_np @ S_np @ Cvir_A_np
+    SAbs = Caocc_B_np.T @ S_np @ D_A_np @ S_np @ Cvir_B_np
+    
+    # Simple overlap matrices
+    Sas = Caocc_A_np.T @ S_np @ Cvir_B_np
+    Sbr = Caocc_B_np.T @ S_np @ Cvir_A_np
+    
+    # Initialize total dispersion energies
+    Disp20_total = 0.0
+    ExchDisp20_total = 0.0
+    
+    # Working arrays
+    Vab = np.zeros((na, nb))  # (ar|bs) integrals
+    Vab_exch = np.zeros((na, nb))  # Exchange integrals
+    Tab = np.zeros((na, nb))  # Amplitudes
+    T2ab = np.zeros((na, nb))  # Amplitudes in localized basis
+    V2ab = np.zeros((na, nb))  # Integrals in localized basis
+    V2ab_exch = np.zeros((na, nb))  # Exchange integrals in localized basis
+    
+    # Temporary arrays for DF integrals - DFHelper fills 3D arrays
+    AarQ_3d = core.Matrix("AarQ", 1, na * nQ)  # Will hold (a,r,Q) for fixed r
+    BbsQ_3d = core.Matrix("BbsQ", 1, nb * nQ)  # Will hold (b,s,Q) for fixed s
+    # Exchange DF integrals (C++ lines 6935-6942)
+    BasQ_3d = core.Matrix("BasQ", 1, na * nQ)  # Will hold (a,s1,Q) for fixed s
+    BbrQ_3d = core.Matrix("BbrQ", 1, nb * nQ)  # Will hold (b,r1,Q) for fixed r
+    CasQ_3d = core.Matrix("CasQ", 1, na * nQ)  # Will hold (a2,s,Q) for fixed s
+    CbrQ_3d = core.Matrix("CbrQ", 1, nb * nQ)  # Will hold (b2,r,Q) for fixed r
+    DarQ_3d = core.Matrix("DarQ", 1, na * nQ)  # Will hold (a,r3,Q) for fixed r
+    DbsQ_3d = core.Matrix("DbsQ", 1, nb * nQ)  # Will hold (b,s3,Q) for fixed s
+    
+    if do_print:
+        core.print_out("    Computing dispersion amplitudes...\n")
+    
+    # Loop over virtual orbital pairs (r, s)
+    for r in range(nr):
+        core.print_out(f"{r = }")
+        # Get (a,r,Q) integrals for fixed r
+        # fill_tensor returns shape (1, na, nQ) when selecting [0:na], [r:r+1], [0:nQ]
+        dfh.fill_tensor("Aar", AarQ_3d, [0, na], [r, r+1], [0, nQ])
+        AarQ_np = AarQ_3d.np.reshape(1, na, nQ)[0, :, :]  # Extract to (na, nQ)
+        
+        for s in range(ns):
+            core.print_out(f" {s = }")
+            # Get (b,s,Q) integrals for fixed s
+            # TODO Memory issue here...
+            dfh.fill_tensor("Bbs", BbsQ_3d, [0, nb], [s, s+1], [0, nQ])
+            BbsQ_np = BbsQ_3d.np.reshape(1, nb, nQ)[0, :, :]  # Extract to (nb, nQ)
+            print(BbsQ_np)
+            
+            # Contract over Q to get (ar|bs) integrals
+            # Vab[a, b] = sum_Q A[a,r,Q] * B[b,s,Q]
+            Vab[:, :] = np.dot(AarQ_np, BbsQ_np.T)
+            
+            # Compute amplitudes: T[a,b] = V[a,b] / (ε_a + ε_b - ε_r - ε_s)
+            for a in range(na):
+                for b in range(nb):
+                    core.print_out(f" {a = }, {b = }")
+                    denom = eps_occ_A[a] + eps_occ_B[b] - eps_vir_A[r] - eps_vir_B[s]
+                    Tab[a, b] = Vab[a, b] / denom
+            
+            core.print_out("    Transforming to localized basis and accumulating Disp20...")
+            # Transform to localized basis
+            # T2 = U_A^T @ T @ U_B
+            # V2 = U_A^T @ V @ U_B
+            T2ab[:, :] = Uaocc_A.np.T @ Tab @ Uaocc_B.np
+            V2ab[:, :] = Uaocc_A.np.T @ Vab @ Uaocc_B.np
+            
+            # Accumulate Disp20 contribution
+            # E_disp20[a,b] += 4.0 * T2[a,b] * V2[a,b]
+            for a in range(na):
+                for b in range(nb):
+                    core.print_out(f"    {a = }, {b = }")
+                    E_disp20[a, b] += 4.0 * T2ab[a, b] * V2ab[a, b]
+                    Disp20_total += 4.0 * T2ab[a, b] * V2ab[a, b]
+            
+            core.print_out("    Computing exchange-dispersion contributions...")
+            # Compute Exchange-Dispersion20 (C++ lines 7321-7347)
+            # Get exchange DF integrals
+            # Bas(s1,a): modified virtual B × occupied A
+            dfh.fill_tensor("Bas", BasQ_3d, [0, na], [s, s+1], [0, nQ])
+            BasQ_np = BasQ_3d.np.reshape(1, na, nQ)[0, :, :]  # (na, nQ)
+            
+            # Bbr(r1,b): modified virtual A × occupied B  
+            dfh.fill_tensor("Bbr", BbrQ_3d, [0, nb], [r, r+1], [0, nQ])
+            BbrQ_np = BbrQ_3d.np.reshape(1, nb, nQ)[0, :, :]  # (nb, nQ)
+            
+            # Cas(a2,s): overlap-occupied A × virtual B
+            dfh.fill_tensor("Cas", CasQ_3d, [0, na], [s, s+1], [0, nQ])
+            CasQ_np = CasQ_3d.np.reshape(1, na, nQ)[0, :, :]  # (na, nQ)
+            
+            # Cbr(b2,r): overlap-occupied B × virtual A
+            dfh.fill_tensor("Cbr", CbrQ_3d, [0, nb], [r, r+1], [0, nQ])
+            CbrQ_np = CbrQ_3d.np.reshape(1, nb, nQ)[0, :, :]  # (nb, nQ)
+            
+            # Dar(r3,a): double-overlap virtual A × occupied A
+            dfh.fill_tensor("Dar", DarQ_3d, [0, na], [r, r+1], [0, nQ])
+            DarQ_np = DarQ_3d.np.reshape(1, na, nQ)[0, :, :]  # (na, nQ)
+            
+            # Dbs(s3,b): double-overlap virtual B × occupied B
+            dfh.fill_tensor("Dbs", DbsQ_3d, [0, nb], [s, s+1], [0, nQ])
+            DbsQ_np = DbsQ_3d.np.reshape(1, nb, nQ)[0, :, :]  # (nb, nQ)
+            
+            # Initialize exchange integrals to zero
+            Vab_exch[:, :] = 0.0
+            
+            # Contract DF integrals (C++ lines 7324-7326)
+            # Q1-Q3 terms from DF integrals
+            Vab_exch[:, :] += np.dot(BasQ_np, BbrQ_np.T)   # Bas × Bbr^T
+            Vab_exch[:, :] += np.dot(CasQ_np, CbrQ_np.T)   # Cas × Cbr^T  
+            Vab_exch[:, :] += np.dot(AarQ_np, DbsQ_np.T)   # Aar × Dbs^T
+            Vab_exch[:, :] += np.dot(DarQ_np, BbsQ_np.T)   # Dar × Bbs^T
+            
+            core.print_out("    Adding AO-based contributions to exchange integrals...")
+            # Add AO-based contributions (C++ lines 7329-7332)
+            # These use outer products (DGER in C++)
+            # Vab[a,b] += Sas[a,s] * Qbr[b,r]
+            for a in range(na):
+                for b in range(nb):
+                    core.print_out(f"    {a = }, {b = }")
+                    Vab_exch[a, b] += Sas[a, s] * Qbr[b, r]
+                    Vab_exch[a, b] += Qas[a, s] * Sbr[b, r]
+                    Vab_exch[a, b] += Qar[a, r] * SAbs[b, s]
+                    Vab_exch[a, b] += SBar[a, r] * Qbs[b, s]
+            
+            # Transform to localized basis (C++ lines 7334-7335)
+            # V2_exch = U_A^T @ Vab_exch @ U_B
+            V2ab_exch[:, :] = Uaocc_A.np.T @ Vab_exch @ Uaocc_B.np
+            
+            # Accumulate Exch-Disp20 contribution (C++ line 7338)
+            # Note: -2.0 factor because this is exchange (C++ uses -= 2.0)
+            for a in range(na):
+                for b in range(nb):
+                    core.print_out(f"    {a = }, {b = }")
+                    E_exch_disp20[a, b] -= 2.0 * T2ab[a, b] * V2ab_exch[a, b]
+                    ExchDisp20_total -= 2.0 * T2ab[a, b] * V2ab_exch[a, b]
+    
+    # Partition dispersion energies into Disp_AB matrix
+    # Following C++ line 7481: Ep[a + nfa + nA][b + nfb + nB] = E_disp20[a][b] + E_exch_disp20[a][b]
+    for a in range(na):
+        for b in range(nb):
+            Disp_AB_np[a + nfa + nA, b + nfb + nB] = E_disp20[a, b] + E_exch_disp20[a, b]
+    
+    # Store in cache
+    cache["Disp_AB"] = Disp_AB
+    
+    # Print results
+    if do_print:
+        core.print_out(f"    Disp20              = {Disp20_total:18.12f} [Eh]\n")
+        core.print_out(f"    Exch-Disp20         = {ExchDisp20_total:18.12f} [Eh]\n")
+        core.print_out(f"    Disp20 + Exch-Disp20 = {Disp20_total + ExchDisp20_total:18.12f} [Eh]\n")
+    
+    # Store scalars
+    scalars["Disp20"] = Disp20_total
+    scalars["Exch-Disp20"] = ExchDisp20_total
+    
+    return cache
+
+
 def einsum_chain_gemm(
     tensors: list[ein.core.RuntimeTensorD],
     transposes: list[str] = None,

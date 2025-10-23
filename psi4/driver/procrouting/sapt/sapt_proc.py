@@ -1038,13 +1038,11 @@ def sapt_dft(
 
         cache_ein = sapt_jk_terms_ein.find(cache_ein, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
 
-        # Because dispersion is defined differently between SAPT0 
-        # (E_disp20 = -4\sigma_{abrs} |(ar|bs)|^2 / (epsilon_a + epsilon_b)) 
-        # and SAPT(DFT) with FDDS dispersion, we will only implement F-SAPT
-        # for the SAPT0 case. Practically speaking, -D4 dispersion is preferred
-        # for SAPT(DFT) due to computational costs, so that is the only supported
-        # dispersion method for F-SAPT in SAPT(DFT). Hence, FSAPT_DISP_AB will be 
-        # set to zero if SAPT(DFT) is requested with FDDS dispersion with DO_FSAPT.
+        # Compute F-SAPT dispersion
+        # MP2-based dispersion (SAPT0 or SAPT(DFT) with MP2 correction)
+        if do_disp:
+            # Call fdisp0 to compute the dispersion energy partitioning
+            cache_ein = sapt_jk_terms_ein.fdisp0(cache_ein, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
 
         core.set_variable("FSAPT_QA", cache_ein["Qocc0A"])
         core.set_variable("FSAPT_QB", cache_ein["Qocc0B"])
@@ -1052,7 +1050,12 @@ def sapt_dft(
         core.set_variable("FSAPT_EXCH_AB", cache_ein['Exch_AB'])
         core.set_variable("FSAPT_INDAB_AB", cache_ein['INDAB_AB'])
         core.set_variable("FSAPT_INDBA_AB", cache_ein['INDBA_AB'])
-        core.set_variable("FSAPT_DISP_AB", np.zeros_like(cache_ein['Elst_AB']))
+        
+        # Use computed dispersion matrix if available, otherwise zeros
+        if 'Disp_AB' in cache_ein:
+            core.set_variable("FSAPT_DISP_AB", cache_ein['Disp_AB'])
+        else:
+            core.set_variable("FSAPT_DISP_AB", np.zeros_like(cache_ein['Elst_AB']))
 
     # Print out final data
     core.print_out("\n")
