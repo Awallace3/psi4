@@ -77,58 +77,6 @@ def localization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     cache['IAO'] = ret['A']
     return
 
-def _split_L_U_blocks(cache, tag: str, link_assignment: str):
-    """
-    Split localized occupied matrices for monomer tag ('A' or 'B'):
-      - Locc0X -> Lfocc0X (core) + Laocc0X (valence)
-      - Uocc0X -> Ufocc0X (core-core) + Uaocc0X (valence-valence)
-      - (optional) LLocc0X augmented with the link orbital column thislinkX
-
-    Assumes matrices_ contains:
-      Caocc0X (n_ao x n_act), Cfocc0X (n_ao x n_core), Cocc0X (n_ao x (n_core+n_act))
-      eps_occ0X in vectors_
-    And that L/U/Q for monomer X have just been written at keys Locc0X/Uocc0X/Qocc0X.
-    """
-    # Dimensions from coefficient blocks (match your C++ rowspi/colspi usage)
-    nn = cache[f"Caocc0{tag}"].np.shape[0]      # rows (AO dimension)
-    nf = cache[f"Cfocc0{tag}"].np.shape[1]      # core occ count
-    na = cache[f"Caocc0{tag}"].np.shape[1]      # valence/active occ count
-    nm = nf + na
-
-    # Grab NumPy views
-    L_np = cache[f"Locc0{tag}"].np              # (nn x nm)
-    U_np = cache[f"Uocc0{tag}"].np             # (nm x nm)
-
-    # Core/valence splits for L (by columns) and U (by 2x2 block)
-    Lf_np = L_np[:, :nf]                            # (nn x nf)
-    La_np = L_np[:, nf:nm]                          # (nn x na)
-    Uf_np = U_np[:nf, :nf]                          # (nf x nf)
-    Ua_np = U_np[nf:nm, nf:nm]                      # (na x na)
-
-    cache[f"Lfocc0{tag}"] = core.Matrix.from_array(Lf_np)
-    cache[f"Laocc0{tag}"] = core.Matrix.from_array(La_np)
-    cache[f"Ufocc0{tag}"] = core.Matrix.from_array(Uf_np)
-    cache[f"Uaocc0{tag}"] = core.Matrix.from_array(Ua_np)
-
-    cache[f"Locc0{tag}"].set_name(f"Locc0{tag}")
-    cache[f"Lfocc0{tag}"].set_name(f"Lfocc0{tag}")
-    cache[f"Laocc0{tag}"].set_name(f"Laocc0{tag}")
-    cache[f"Uocc0{tag}"].set_name(f"Uocc0{tag}")
-    cache[f"Ufocc0{tag}"].set_name(f"Ufocc0{tag}")
-    cache[f"Uaocc0{tag}"].set_name(f"Uaocc0{tag}")
-    cache[f"Qocc0{tag}"].set_name(f"Qocc0{tag}")
-
-    # Optional: augmented L with the link orbital column
-    if link_assignment in {"SAO0","SAO1","SAO2","SIAO0","SIAO1","SIAO2"}:
-        Laug = core.Matrix.zeros(nn, nm + 1)
-        Laug_np = Laug.np
-        Laug_np[:, :nm] = L_np  # copy full L
-        # Append the (normalized-to-1/2) link column thislinkX (shape nn x 1)
-        link_col = cache[f"thislink{tag}"].np[:, 0]
-        Laug_np[:, nm] = link_col
-        cache[f"LLocc0{tag}"] = Laug
-        cache[f"LLocc0{tag}"].set_name(f"LLocc0{tag}")
-
 
 def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     link_assignment = core.get_option("FISAPT", "FISAPT_LINK_ASSIGNMENT").upper()
@@ -1763,6 +1711,90 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # NOT IMPLEMENTED YET
     # if (ind_resp) {
     #     outfile->Printf("  COUPLED INDUCTION (You asked for it!):\n\n");
+    dfh.clear_all()
+    return cache
+
+def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
+    if do_print:
+        core.print_out("  ==> F-SAPT0 Dispersion <==\n\n")
+    
+    ind_scale = core.get_option("FISAPT", "FISAPT_FSAPT_IND_SCALE")
+    link_assignment = core.get_option("FISAPT", "FISAPT_LINK_ASSIGNMENT")
+    
+    mol = dimer_wfn.molecule()
+    dimer_basis = dimer_wfn.basisset()
+    nA = mol.natom()
+    nB = mol.natom()
+    na = cache["Locc_A"].shape[1]
+    nb = cache["Locc_B"].shape[1]
+    nr = cache["Cvir_A"].shape[1]
+    ns = cache["Cvir_B"].shape[1]
+    nfa = cache["Lfocc0A"].shape[1]
+    nfb = cache["Lfocc0B"].shape[1]
+    
+    na1 = na
+    nb1 = nb
+
+
+    Disp_AB = core.Matrix("Disp_AB", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
+
+    snA = 0
+    snfa = 0
+    sna = 0
+    snB = 0
+    snfb = 0
+    snb = 0
+    # if options_.get_bool("FISAPT", "FISAPT_SSAPT0_SCALE"):
+    #     snA = nA
+    #     snfa = nfa
+    #     sna = na
+    #     snB = nB
+    #     snfb = nfb
+    #     snb = nb
+
+    if link_assignment in ["SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"]:
+        na1 = na + 1
+        nb1 = nb + 1
+    
+    Locc_A = ein.core.RuntimeTensorD(cache["Locc_A"].np)
+    Locc_A.set_name("LoccA")
+    Locc_B = ein.core.RuntimeTensorD(cache["Locc_B"].np)
+    Locc_B.set_name("LoccB")
+    
+    Uocc_A = cache["Uocc_A"]
+    Uocc_B = cache["Uocc_B"]
+    
+    Cocc_A = cache["Cocc_A"]
+    Cocc_B = cache["Cocc_B"]
+    Cvir_A = cache["Cvir_A"]
+    Cvir_B = cache["Cvir_B"]
+    
+    eps_occ_A = cache["eps_occ_A"]
+    eps_occ_B = cache["eps_occ_B"]
+    eps_vir_A = cache["eps_vir_A"]
+    eps_vir_B = cache["eps_vir_B"]
+
+    # Collect relevant variables
+    S = cache["S"]
+    D_A = cache["D_A"]
+    V_A = cache["V_A"]
+    J_A = cache["J_A"]
+    K_A = cache["K_A"]
+    D_B = cache["D_B"]
+    V_B = cache["V_B"]
+    J_B = cache["J_B"]
+    K_B = cache["K_B"]
+    J_O = cache["J_O"]
+    K_O = cache["K_O"]
+    J_P_A = cache["J_P_A"]
+    J_P_B = cache["J_P_B"]
+
+    aux_basis = dimer_wfn.get_basisset("DF_BASIS_SCF")
+    nQ = aux_basis.nbf()
+    
+    aux_basis = dimer_wfn.get_basisset("DF_BASIS_SCF")
+    dfh = core.DFHelper(dimer_basis, aux_basis)
+    raise NotImplementedError("Incomplete fdisp0 implementation")
     return cache
 
 

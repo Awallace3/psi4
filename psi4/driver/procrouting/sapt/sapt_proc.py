@@ -1046,13 +1046,21 @@ def sapt_dft(
         # dispersion method for F-SAPT in SAPT(DFT). Hence, FSAPT_DISP_AB will be 
         # set to zero if SAPT(DFT) is requested with FDDS dispersion with DO_FSAPT.
 
+        if core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
+            core.timer_on("SAPT(DFT): F-SAPT Dispersion")
+            cache_ein = sapt_jk_terms_ein.fdisp0(cache_ein, mp2_disp['Disp20,u'], dimer_wfn, wfn_A, wfn_B, sapt_jk, nfrozen_A, nfrozen_B, True)
+            core.timer_off("SAPT(DFT): F-SAPT Dispersion")
+            core.set_variable("FSAPT_DISP_AB", np.zeros_like(cache_ein['Elst_AB']))
+        # elif "D4", returrn pairwise dispersion energies
+        else:
+            core.set_variable("FSAPT_DISP_AB", np.zeros_like(cache_ein['Elst_AB']))
+
         core.set_variable("FSAPT_QA", cache_ein["Qocc0A"])
         core.set_variable("FSAPT_QB", cache_ein["Qocc0B"])
         core.set_variable("FSAPT_ELST_AB", cache_ein['Elst_AB'])
         core.set_variable("FSAPT_EXCH_AB", cache_ein['Exch_AB'])
         core.set_variable("FSAPT_INDAB_AB", cache_ein['INDAB_AB'])
         core.set_variable("FSAPT_INDBA_AB", cache_ein['INDBA_AB'])
-        core.set_variable("FSAPT_DISP_AB", np.zeros_like(cache_ein['Elst_AB']))
 
     # Print out final data
     core.print_out("\n")
