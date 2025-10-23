@@ -5784,6 +5784,14 @@ void FISAPT::fexch() {
     double** Sbap = Sba->pointer();
     double** Sasp = Sas->pointer();
     double** Sbrp = Sbr->pointer();
+    LoccA->set_name("LoccA");
+    LoccA->print();
+
+    Sas->set_name("Sas");
+    Sbr->set_name("Sbr");
+    Sab->set_name("Sab");
+    Sas->print();
+    Sab->print();
 
     auto WBab = std::make_shared<Matrix>("WBab", na, nb);
     double** WBabp = WBab->pointer();
@@ -6316,6 +6324,7 @@ void FISAPT::find() {
         for (int a = 0; a < na; a++) {
             double Jval = 2.0 * C_DDOT(nr, x2Ap[a], 1, wBTp[a], 1);
             double Kval = 2.0 * C_DDOT(nr, x2Ap[a], 1, uBTp[a], 1);
+            outfile->Printf("    a=%3d, B=%3d, Jval=%18.12lf, Kval=%18.12lf\n", a, B, Jval, Kval);
             Ind20u_AB_termsp[a][B] = Jval;
             Ind20u_AB += Jval;
             ExchInd20u_AB_termsp[a][B] = Kval;
@@ -6366,6 +6375,8 @@ void FISAPT::find() {
         for (int b = 0; b < nb; b++) {
             double Jval = 2.0 * C_DDOT(ns, x2Bp[b], 1, wATp[b], 1);
             double Kval = 2.0 * C_DDOT(ns, x2Bp[b], 1, uATp[b], 1);
+            // print(f"a={a}, B={B}, Jval={Jval}, Kval={Kval}")
+            outfile->Printf("    b=%3d, A=%3d, Jval=%18.12lf, Kval=%18.12lf\n", b, A, Jval, Kval);
             Ind20u_BA_termsp[A][b] = Jval;
             Ind20u_BA += Jval;
             ExchInd20u_BA_termsp[A][b] = Kval;

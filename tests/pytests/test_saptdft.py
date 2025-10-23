@@ -6,7 +6,7 @@ from psi4 import core
 import numpy as np
 import qcelemental as qcel
 from pprint import pprint as pp
-from addons import uusing
+# from addons import uusing
 import pandas as pd
 
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
@@ -1332,6 +1332,56 @@ no_com
         }
     )
     np.set_printoptions(precision=10, suppress=True)
+    psi4.energy("sapt(dft)", molecule=mol)
+    print("\n sapt(dft) complete")
+    psi4.energy("fisapt0", molecule=mol)
+    for k, v in Eref_nh.items():  # TEST
+        ref = v
+        assert compare_values(
+            ref, psi4.variable(k) * 1000, 8, "!hyb, xd=none, !dHF: " + k
+        )
+
+@pytest.mark.skip(reason="Not completed fsapt einsums")
+def test_fsapt0_fsaptdft():
+    """
+    built from sapt-dft1 ctest
+    """
+    Eref_nh = {
+        # mEh
+        "SAPT ELST ENERGY": -0.00233320,
+        "SAPT EXCH ENERGY": 0.00001443,
+        "SAPT IND ENERGY": -0.00001103,
+        "SAPT DISP ENERGY": -0.00563062,
+    }  # TEST
+    mol = psi4.geometry("""
+0 1
+C 0.00000000 0.00000000 0.00000000
+H 1.09000000 0.00000000 0.00000000
+H -0.36333333 0.83908239 0.59332085
+H -0.36333333 0.09428973 -1.02332709
+H -0.36333333 -0.93337212 0.43000624
+--
+0 1
+C 6.44536662 -0.26509169 -0.00000000
+H 7.53536662 -0.26509169 -0.00000000
+H 6.08203329 0.57399070 0.59332085
+H 6.08203329 -0.17080196 -1.02332709
+H 6.08203329 -1.19846381 0.43000624
+symmetry c1
+no_reorient
+no_com
+""")
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "SAPT_DFT_FUNCTIONAL": "HF",
+            "SAPT_DFT_DO_DHF": True,
+            "SAPT_DFT_DO_HYBRID": False,
+            "SAPT_DFT_DO_FSAPT": True,
+        }
+    )
+    np.set_printoptions(precision=10, suppress=True)
     psi4.energy("fisapt0", molecule=mol)
     print("\n fisapt0 complete")
     psi4.energy("sapt(dft)", molecule=mol)
@@ -1390,7 +1440,7 @@ no_com
 
 
 @pytest.mark.saptdft
-@uusing("pandas")
+# @uusing("pandas")
 def test_fsaptdft_psivars():
     """
     fsapt-psivars: calling fsapt_analysis with psi4 variables after running an
