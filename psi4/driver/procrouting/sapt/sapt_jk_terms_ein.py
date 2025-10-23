@@ -940,8 +940,6 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
     CvirB = cache["Cvir_B"]
     CvirA.set_name("CvirA")
     CvirB.set_name("CvirB")
-    print(CvirA)
-    print(CvirB)
     
     dfh = cache["dfh"]
     
@@ -969,9 +967,7 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
     Sba = einsum_chain_gemm([LoccB, S, LoccA], ['T', 'N', 'N'])
     Sas = einsum_chain_gemm([LoccA, S, CvirB], ['T', 'N', 'N'])
     Sas.set_name("Sas")
-    print(Sas)
     Sab.set_name("Sab")
-    print(Sab)
 
     LoccB.set_name("LoccB")
     CvirA.set_name("CvirA")

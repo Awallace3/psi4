@@ -6352,8 +6352,6 @@ void FISAPT::find() {
     for (size_t A = 0; A < nA + na1 + 1; A++) { // add one for extenral potential
         // ESP
         dfh_->fill_tensor("WAbs", wA, {A, A + 1});
-        wA->set_name("wA");
-        wA->print();
 
         // Uncoupled amplitude
         for (int b = 0; b < nb; b++) {
