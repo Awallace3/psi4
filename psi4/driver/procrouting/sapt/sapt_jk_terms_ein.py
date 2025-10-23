@@ -1398,13 +1398,26 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     dfh.transform()
     
-    RaC = cache["Vlocc0A"]
-    RbD = cache["Vlocc0B"]
+    RaC = cache["Vlocc0A"] # na x nQ
+    RbD = cache["Vlocc0B"] # nb x nQ
     
     TsQ = core.Matrix("TsQ", ns, nQ)
     T1As = core.Matrix("T1As", na1, ns)
     for B in range(nb):
+        print(f"{TsQ.np.shape =}")
+        # TODO: CONTINUE HERE
+        # fill_tensor is not working properly with 2D slices yet...
         dfh.fill_tensor("Abs", TsQ, [B, B + 1])
+        # TODO: see if TsQ being [1, ns, nQ] effects the gemm call
+        print(f"{TsQ.np.shape =}")
+        print(f"{RaC.np.shape =}")
+        TsQ = core.Matrix.from_array(TsQ.np[0, :, :])
+        print(f"{TsQ.np.shape =}")
+        # prints yield...
+        # TsQ.np.shape =(13, 294)
+        # TsQ.np.shape =(1, 5, 13)
+        # RaC.np.shape =(5, 294)
+        # TsQ.np.shape =(5, 13)
         T1As.gemm(False, True, 2.0, RaC, TsQ, 0.0)
         for A in range(na1):
             row_view = core.Matrix.from_array(T1As.np[A: A+1, :])
@@ -1652,6 +1665,8 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     for A in range(nA + na1 + 1):
         dfh.fill_tensor("WAbs", wA, [A, A + 1])
+        print(f"{wA.np.shape = }")
+        print(f"{wA.np = }")
         for b in range(nb):
             for s in range(ns):
                 xB.np[b, s] = wA.np[0, b, s] / (eps_occ_B[b] - eps_vir_B[s])

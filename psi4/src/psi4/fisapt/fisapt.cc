@@ -5970,17 +5970,11 @@ void FISAPT::find() {
     auto Vtemp2 = std::make_shared<Matrix>("Vtemp2", nn, nn);
 
     double* ZAp = vectors_["ZA"]->pointer();
-    Cocc_B->set_name("Cocc_B");
-    Cvir_B->set_name("Cvir_B");
-    Cocc_B->print();
-    Cvir_B->print();
     for (size_t A = 0; A < nA; A++) {
         Vtemp2->zero();
         Vint2->set_charge_field({{ZAp[A], {mol->x(A), mol->y(A), mol->z(A)}}});
         Vint2->compute(Vtemp2);
         std::shared_ptr<Matrix> Vbs = linalg::triplet(Cocc_B, Vtemp2, Cvir_B, true, false, false);
-        Vbs->set_name("Vbs_A");
-        Vbs->print();
         dfh_->write_disk_tensor("WAbs", Vbs, {A, A + 1});
     }
 
@@ -6214,20 +6208,20 @@ void FISAPT::find() {
         K_O->transpose_this();
     }
     // log the link assignment
-    outfile->Printf("    F-SAPT Induction with link assignment: %s\n\n", link_assignment.c_str());
+    // outfile->Printf("    F-SAPT Induction with link assignment: %s\n\n", link_assignment.c_str());
 
     // V_A->set_name("V_A");
     // V_A->print();
 
     // Remove prints after debugging
-    wBT->set_name("wBT");
-    uBT->set_name("uBT");
-    wAT->set_name("wAT");
-    uAT->set_name("uAT");
-    wBT->print();
-    uBT->print();
-    wAT->print();
-    uAT->print();
+    // wBT->set_name("wBT");
+    // uBT->set_name("uBT");
+    // wAT->set_name("wAT");
+    // uAT->set_name("uAT");
+    // wBT->print();
+    // uBT->print();
+    // wAT->print();
+    // uAT->print();
 
     double** wATp = wAT->pointer();
     double** uATp = uAT->pointer();
@@ -6324,7 +6318,6 @@ void FISAPT::find() {
         for (int a = 0; a < na; a++) {
             double Jval = 2.0 * C_DDOT(nr, x2Ap[a], 1, wBTp[a], 1);
             double Kval = 2.0 * C_DDOT(nr, x2Ap[a], 1, uBTp[a], 1);
-            outfile->Printf("    a=%3d, B=%3d, Jval=%18.12lf, Kval=%18.12lf\n", a, B, Jval, Kval);
             Ind20u_AB_termsp[a][B] = Jval;
             Ind20u_AB += Jval;
             ExchInd20u_AB_termsp[a][B] = Kval;
@@ -6359,6 +6352,8 @@ void FISAPT::find() {
     for (size_t A = 0; A < nA + na1 + 1; A++) { // add one for extenral potential
         // ESP
         dfh_->fill_tensor("WAbs", wA, {A, A + 1});
+        wA->set_name("wA");
+        wA->print();
 
         // Uncoupled amplitude
         for (int b = 0; b < nb; b++) {
@@ -6375,8 +6370,6 @@ void FISAPT::find() {
         for (int b = 0; b < nb; b++) {
             double Jval = 2.0 * C_DDOT(ns, x2Bp[b], 1, wATp[b], 1);
             double Kval = 2.0 * C_DDOT(ns, x2Bp[b], 1, uATp[b], 1);
-            // print(f"a={a}, B={B}, Jval={Jval}, Kval={Kval}")
-            outfile->Printf("    b=%3d, A=%3d, Jval=%18.12lf, Kval=%18.12lf\n", b, A, Jval, Kval);
             Ind20u_BA_termsp[A][b] = Jval;
             Ind20u_BA += Jval;
             ExchInd20u_BA_termsp[A][b] = Kval;
