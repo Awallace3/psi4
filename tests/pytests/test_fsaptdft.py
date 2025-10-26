@@ -438,12 +438,12 @@ no_com
 
     keys = ["Enuc", "Eelst", "Eexch", "Eind", "Edisp", "Etot"]
     Eref = {
-        "Edisp": -0.0055386007894449255,
+        "Edisp": -0.0027693003947224628,
         "Eelst": -0.0019765266134612602,
         "Eexch": 0.006335438658900877,
         "Eind": -0.0004635353246623952,
         "Enuc": 474.74808217020274,
-        "Etot": -0.0016432242713144921,
+        "Etot": 0.0011260761229532233,
     }
     Epsi = {
         "Enuc": mol.nuclear_repulsion_energy(),
@@ -454,6 +454,7 @@ no_com
         "Etot": core.variable("SAPT TOTAL ENERGY"),
     }
     pp(Epsi)
+    pp(core.variables())
     for key in keys:
         compare_values(Eref[key], Epsi[key], 5, key)
     data = psi4.fsapt_analysis(
@@ -479,9 +480,9 @@ no_com
         "Exch": [0.047332, 3.928215, 0.031752, 3.943796, 3.975548],
         "IndAB": [-0.022726, -0.200776, -0.033169, -0.190334, -0.223502],
         "IndBA": [0.015095, -0.082466, -0.001398, -0.065972, -0.067371],
-        "Disp": [-0.071408, -0.425088, -0.017542, -0.478954, -0.496496],
-        "EDisp": [0.0, 0.0, 0.0, 0.0, 0.0],
-        "Total": [0.480095, 1.467795, -0.120870, 2.068760, 1.947890],
+        "Disp": [0, 0, 0, 0, 0],
+        "EDisp": [-0.147529, -1.590233, -0.031540, -1.706223, -1.737762],
+        "Total": [0.403974, 0.302650, -0.134868, 0.841491, 0.706623],
     }
 
     ref_df = pd.DataFrame(data)
@@ -492,7 +493,7 @@ no_com
     df_diff.iloc[:, 2:] = ref_df.iloc[:, 2:] - df.iloc[:, 2:]
     print("DIFF")
     print(df_diff)
-    print(df_diff[["Frag1", "Frag2", "IndAB"]])
+    print(df_diff[["Frag1", "Frag2", "Disp", "EDisp"]])
 
     for col in ["Elst", "Exch", "IndAB", "IndBA", "Disp", "EDisp", "Total"]:
         for i in range(len(ref_df)):

@@ -519,6 +519,7 @@ def run_sapt_dft(name, **kwargs):
         core.timer_on("SAPT(DFT):D4 Interaction Energy")
         d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
         if d4_type == 'supermolecular':
+            core.print_out("         " + "Supermolecular D4 Interaction Energy E_IE = E_IJ - E_I - E_J".center(58) + "\n")
             params = {
                 "s6": 1.00000000e00,
                 "s8": 1.20417708e00,
@@ -535,13 +536,11 @@ def run_sapt_dft(name, **kwargs):
             data["D4 IE"] = dimer_d4 - monA_d4 - monB_d4
         elif d4_type == 'intermolecular':
             dimer_d4, _ = sapt_dimer.run_dftd4(sapt_dft_functional, property=True)
-            print(type(sapt_dimer))
-            print(monomerA.natom(), monomerB.natom())
             geom, _, _, elez, _ = sapt_dimer.to_arrays()
             elez = np.array(elez, dtype=np.int32)
             monAs = np.array([i for i in range(monomerA.natom()) if monomerA.Z(i) > 0])
             monBs = np.array([i for i in range(monomerB.natom()) if monomerB.Z(i) > 0])
-            data['D4 IE'] = dftd4_c6_intermolecular_dispersion(
+            v = dftd4_c6_intermolecular_dispersion(
                 elez,
                 geom,
                 C6s=core.variable("DFTD4 C6 COEFFICIENTS").np,
@@ -549,6 +548,8 @@ def run_sapt_dft(name, **kwargs):
                 monBs=monBs,
                 params=[1.0, 0.89529649, -0.82043591, 0.03264695]
             )
+            data["D4 IE"] = v['D4 IE']
+            data['FSAPT_EMPIRICAL_DISP'] = v['FSAPT_EMPIRICAL_DISP']
             print('D4 IE:', data['D4 IE'])
         else:
             raise ValueError("SAPT(DFT): d4_type must be 'supermolecular' or 'intermolecular'.")
@@ -717,9 +718,7 @@ def dftd4_c6_intermolecular_dispersion(
 ) -> float:
     s6, s8, a1, a2 = params
     energy = 0.0
-    print(f"{atomic_numbers = }")
-    print(f"{geometry = }")
-
+    pairwise_energies = np.zeros_like(C6s)
     for A in monAs:
         el1 = atomic_numbers[A]
         Q_A = np.sqrt(0.5 * np.sqrt(el1) * r4r2_dftd4[el1 - 1])
@@ -741,8 +740,11 @@ def dftd4_c6_intermolecular_dispersion(
 
             de = -0.5 * C6s[A, B] * edisp
             energy += de
-
-    return 2.0 * energy
+            pairwise_energies[A, B] = de
+    return {
+        "D4 IE": energy,
+        "FSAPT_EMPIRICAL_DISP": pairwise_energies,
+    }
 
 
 def sapt_dft_header(
@@ -1046,6 +1048,8 @@ def sapt_dft(
         # dispersion method for F-SAPT in SAPT(DFT). Hence, FSAPT_DISP_AB will be 
         # set to zero if SAPT(DFT) is requested with FDDS dispersion with DO_FSAPT.
 
+        d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
+        sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
         if core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
             core.timer_on("SAPT(DFT): F-SAPT Dispersion")
             cache_ein = sapt_jk_terms_ein.fdisp0(cache_ein, mp2_disp['Disp20,u'], dimer_wfn, wfn_A, wfn_B, sapt_jk, nfrozen_A, nfrozen_B, True)
@@ -1054,6 +1058,8 @@ def sapt_dft(
         # elif "D4", returrn pairwise dispersion energies
         else:
             core.set_variable("FSAPT_DISP_AB", np.zeros_like(cache_ein['Elst_AB']))
+        if sapt_dft_D4_IE and d4_type == 'intermolecular':
+            core.set_variable("FSAPT_EMPIRICAL_DISP", data['FSAPT_EMPIRICAL_DISP'])
 
         core.set_variable("FSAPT_QA", cache_ein["Qocc0A"])
         core.set_variable("FSAPT_QB", cache_ein["Qocc0B"])
