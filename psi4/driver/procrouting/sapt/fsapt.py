@@ -856,7 +856,14 @@ def print_order2(order2, fragkeys, saptkeys=saptkeys_, print_output=True, frags=
             data["Frag1_indices"].append([x + 1 for x in frags["A"][keyA]])
         else:
             data["Frag1_indices"].append([])
-        data["Frag2_indices"].append([])
+        if frags is not None:
+            all_b_indices = []
+            for key in fragkeys["B"]:
+                if "Link" not in key and key in frags["B"]:
+                    all_b_indices.extend([x + 1 for x in frags["B"][key]])
+            data["Frag2_indices"].append(all_b_indices)
+        else:
+            data["Frag2_indices"].append([])
         for saptkey in saptkeys:
             data[saptkey].append(order1A[saptkey][keyA])
             if print_output:
@@ -867,7 +874,14 @@ def print_order2(order2, fragkeys, saptkeys=saptkeys_, print_output=True, frags=
     for keyB in fragkeys["B"]:
         data["Frag1"].append("All")
         data["Frag2"].append(keyB)
-        data["Frag1_indices"].append([])
+        if frags is not None:
+            all_a_indices = []
+            for key in fragkeys["A"]:
+                if "Link" not in key and key in frags["A"]:
+                    all_a_indices.extend([x + 1 for x in frags["A"][key]])
+            data["Frag1_indices"].append(all_a_indices)
+        else:
+            data["Frag1_indices"].append([])
         if frags is not None and keyB in frags["B"]:
             data["Frag2_indices"].append([x + 1 for x in frags["B"][keyB]])
         else:
@@ -883,8 +897,20 @@ def print_order2(order2, fragkeys, saptkeys=saptkeys_, print_output=True, frags=
 
     data["Frag1"].append("All")
     data["Frag2"].append("All")
-    data["Frag1_indices"].append([])
-    data["Frag2_indices"].append([])
+    if frags is not None:
+        all_a_indices = []
+        for key in fragkeys["A"]:
+            if "Link" not in key and key in frags["A"]:
+                all_a_indices.extend([x + 1 for x in frags["A"][key]])
+        data["Frag1_indices"].append(all_a_indices)
+        all_b_indices = []
+        for key in fragkeys["B"]:
+            if "Link" not in key and key in frags["B"]:
+                all_b_indices.extend([x + 1 for x in frags["B"][key]])
+        data["Frag2_indices"].append(all_b_indices)
+    else:
+        data["Frag1_indices"].append([])
+        data["Frag2_indices"].append([])
     if print_output:
         print("%-9s %-9s " % ("All", "All"), end="")
     for saptkey in saptkeys:
