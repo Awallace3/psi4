@@ -791,9 +791,12 @@ def collapse_links(order2, frags, Qs, orbital_ws, links5050):
     return vals
 
 
-def print_order2(order2, fragkeys, saptkeys=saptkeys_, print_output=True):
-
-    data = {col: [] for col in ["Frag1", "Frag2"] + saptkeys}
+def print_order2(order2, fragkeys, saptkeys=saptkeys_, print_output=True, frags=None):
+    # Added Frag1_indices and Frag2_indices to output data for easier
+    # postprocessing of fragment indices for downstream applications like ML
+    # models
+    # data = {col: [] for col in ["Frag1", "Frag2"] + saptkeys + ["Frag1_indices", "Frag2_indices"]}
+    data = {col: [] for col in ["Frag1", "Frag2", "Frag1_indices", "Frag2_indices"] + saptkeys + []}
     order1A = {}
     order1B = {}
     for saptkey in saptkeys:
@@ -849,6 +852,11 @@ def print_order2(order2, fragkeys, saptkeys=saptkeys_, print_output=True):
             print("%-9s %-9s " % (keyA, "All"), end="")
         data["Frag1"].append(keyA)
         data["Frag2"].append("All")
+        if frags is not None and keyA in frags["A"]:
+            data["Frag1_indices"].append([x + 1 for x in frags["A"][keyA]])
+        else:
+            data["Frag1_indices"].append([])
+        data["Frag2_indices"].append([])
         for saptkey in saptkeys:
             data[saptkey].append(order1A[saptkey][keyA])
             if print_output:
@@ -859,6 +867,11 @@ def print_order2(order2, fragkeys, saptkeys=saptkeys_, print_output=True):
     for keyB in fragkeys["B"]:
         data["Frag1"].append("All")
         data["Frag2"].append(keyB)
+        data["Frag1_indices"].append([])
+        if frags is not None and keyB in frags["B"]:
+            data["Frag2_indices"].append([x + 1 for x in frags["B"][keyB]])
+        else:
+            data["Frag2_indices"].append([])
         if print_output:
             print("%-9s %-9s " % ("All", keyB), end="")
         for saptkey in saptkeys:
@@ -870,6 +883,8 @@ def print_order2(order2, fragkeys, saptkeys=saptkeys_, print_output=True):
 
     data["Frag1"].append("All")
     data["Frag2"].append("All")
+    data["Frag1_indices"].append([])
+    data["Frag2_indices"].append([])
     if print_output:
         print("%-9s %-9s " % ("All", "All"), end="")
     for saptkey in saptkeys:
@@ -1526,7 +1541,7 @@ def run_fsapt_analysis(
         results = compute_fsapt_qcvars(
             geom, Z, monomer_slices, holder, links5050=links5050, dirname=dirname
         )
-        data = print_order2(results["order2"], results["fragkeys"], print_output=print_output)
+        data = print_order2(results["order2"], results["fragkeys"], print_output=print_output, frags=results["frags"])
         results_tag = "order2"
     elif analysis_type == "reduced":
         print("  ==> Reduced Analysis <==\n")
@@ -1535,7 +1550,7 @@ def run_fsapt_analysis(
             geom, Z, monomer_slices, holder, links5050=links5050, dirname=dirname
         )
         results_tag = "order2r"
-        data = print_order2(results["order2r"], results["fragkeysr"], print_output=print_output)
+        data = print_order2(results["order2r"], results["fragkeysr"], print_output=print_output, frags=results["frags"])
     else:
         raise Exception("Invalid analysis type. Please specify 'full' or 'reduced'.")
     if pdb_dir is not None:
@@ -1546,7 +1561,7 @@ def run_fsapt_analysis(
     return data
 
 
-def run_from_output(dirname="./fsapt"):
+def run_from_output(dirname="./fsapt", return_data="reduced_analysis"):
 
     # > Order-2 Analysis < #
 
@@ -1557,19 +1572,19 @@ def run_from_output(dirname="./fsapt"):
     stuff = compute_fsapt(dirname, False)
 
     print("   => Full Analysis <=\n")
-    print_order2(stuff["order2"], stuff["fragkeys"])
+    print_order2(stuff["order2"], stuff["fragkeys"], frags=stuff["frags"])
 
     print("   => Reduced Analysis <=\n")
-    print_order2(stuff["order2r"], stuff["fragkeysr"])
+    print_order2(stuff["order2r"], stuff["fragkeysr"], frags=stuff["frags"])
 
     print("  ==> F-ISAPT: Links 50-50 <==\n")
     stuff = compute_fsapt(dirname, True)
 
     saptkeys_local = list(stuff["order2r"].keys())
     print("   => Full Analysis <=\n")
-    print_order2(stuff["order2"], stuff["fragkeys"], saptkeys=saptkeys_local)
+    data_full_analysis = print_order2(stuff["order2"], stuff["fragkeys"], saptkeys=saptkeys_local, frags=stuff["frags"])
     print("   => Reduced Analysis <=\n")
-    print_order2(stuff["order2r"], stuff["fragkeysr"], saptkeys=saptkeys_local)
+    data_reduced_analsysis = print_order2(stuff["order2r"], stuff["fragkeysr"], saptkeys=saptkeys_local, frags=stuff["frags"])
 
     fh, sys.stdout = sys.stdout, fh
     fh.close()
@@ -1580,7 +1595,12 @@ def run_from_output(dirname="./fsapt"):
     print_order1(
         dirname, stuff["order2r"], pdb, stuff["frags"], saptkeys=saptkeys_local
     )
-    return
+    if return_data == "full_analysis":
+        return data_full_analysis
+    elif return_data == "reduced_analysis":
+        return data_reduced_analsysis
+    else:
+        return
 
 
 if __name__ == "__main__":

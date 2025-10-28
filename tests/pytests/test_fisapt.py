@@ -72,8 +72,15 @@ no_com"""
             "MethylB": [6, 7, 8, 9, 10],
         },
     )
-    fEnergies.pop("Frag1")
-    fEnergies.pop("Frag2")
+    fEnergies = {
+        'Elst': fEnergies['Elst'],
+        'Exch': fEnergies['Exch'],
+        'IndAB': fEnergies['IndAB'],
+        'IndBA': fEnergies['IndBA'],
+        'Disp': fEnergies['Disp'],
+        'EDisp': fEnergies['EDisp'],
+        'Total': fEnergies['Total'],
+    }
     print(fEnergies)
     fEref = {
         "fEelst": -0.002,
@@ -177,8 +184,15 @@ no_com
             "w3": [4, 5, 6],
         },
     )
-    fEnergies.pop("Frag1")
-    fEnergies.pop("Frag2")
+    fEnergies = {
+        'Elst': fEnergies['Elst'],
+        'Exch': fEnergies['Exch'],
+        'IndAB': fEnergies['IndAB'],
+        'IndBA': fEnergies['IndBA'],
+        'Disp': fEnergies['Disp'],
+        'EDisp': fEnergies['EDisp'],
+        'Total': fEnergies['Total'],
+    }
     fEref = {
         "fEelst": -30.867,
         "fEexch": 11.445,
@@ -273,7 +287,18 @@ no_com"""
         "fEtot",
     ]
 
-    Energies = df.iloc[0].values[2:]
+    df_keys = [
+        "Elst",
+        "Exch",
+        "IndAB",
+        "IndBA",
+        "Disp",
+        "EDisp",
+        "Total",
+    ]
+
+    # Get columns from dataframe that match fkeys
+    Energies = df[df_keys].iloc[0].values
 
     for pair in zip(fkeys, Energies):
         fEnergies[pair[0]] = pair[1]
@@ -289,6 +314,7 @@ no_com"""
     }
 
     for key in fkeys:
+        print(fEnergies[key], fEref[key])
         compare_values(fEref[key], fEnergies[key], 2, key)
 
 
@@ -378,7 +404,18 @@ no_com"""
         "fEtot",
     ]
 
-    Energies = df.iloc[0].values[2:]
+    df_keys = [
+        "Elst",
+        "Exch",
+        "IndAB",
+        "IndBA",
+        "Disp",
+        "EDisp",
+        "Total",
+    ]
+
+    # Get columns from dataframe that match fkeys
+    Energies = df[df_keys].iloc[0].values
 
     for pair in zip(fkeys, Energies):
         fEnergies[pair[0]] = pair[1]
@@ -494,6 +531,7 @@ no_com"""
 if __name__ == "__main__":
     # test_fsapt_psivars_dict()
     # test_fsapt_external_potentials()
-    test_fsapt_psivars()
+    # test_fsapt_psivars()
+    test_fsapt_psivars_dict()
     # test_fsapt_AtomicOutput()
     # test_fsapt_output_file()
