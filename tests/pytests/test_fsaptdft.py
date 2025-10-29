@@ -679,31 +679,34 @@ no_reorient
 no_com
 """
     )
+    print("FSAPT(PBE0)-D4(I)")
     psi4.set_options(
         {
             "basis": "aug-cc-pVDZ",
+            # "basis": "sto-3g",
             "scf_type": "df",
             "guess": "sad",
-            "freeze_core": "true",
+            # "freeze_core": "false", # Frozen core not working with localization presently
+            "freeze_core": "true", # Frozen core not working with localization presently
             "FISAPT_FSAPT_FILEPATH": "none",
             "SAPT_DFT_FUNCTIONAL": "PBE0",
+            # "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_FSAPT": True,
             "SAPT_DFT_D4_IE": True,
             "SAPT_DFT_DO_DISP": False,
-            "SAPT_DFT_GRAC_BASIS": "aug-cc-pVTZ",
-            "SAPT_DFT_GRAC_COMPUTE": "SINGLE",
+            # "SAPT_DFT_GRAC_BASIS": "aug-cc-pVTZ",
+            # "SAPT_DFT_GRAC_COMPUTE": "SINGLE",
+            # If known...
+            "SAPT_DFT_GRAC_SHIFT_A": 0.09605298,
+            "SAPT_DFT_GRAC_SHIFT_B": 0.073504,
         }
     )
-    plan = psi4.energy("sapt(dft)", return_plan=True, molecule=mol)
-    atomic_result = psi4.schema_wrapper.run_qcschema(
-        plan.plan(wfn_qcvars_only=False),
-        clean=True,
-        postclean=True,
-    )
-    pp(atomic_result)
+    psi4.energy("sapt(dft)", molecule=mol)
+    # psi4.energy("fisapt0", molecule=mol)
     data = psi4.fsapt_analysis(
         # NOTE: 1-indexed for fragments_a and fragments_b
+        molecule=mol,
         fragments_a={
             "Methyl1_A": [1, 2, 7, 8],
             "Methyl2_A": [3, 4, 5, 6],
@@ -714,7 +717,6 @@ no_com
         },
         links5050=True,
         print_output=False,
-        atomic_results=atomic_result,
     )
     df = pd.DataFrame(data)
     print(df)
@@ -806,8 +808,8 @@ no_com
 
 
 if __name__ == "__main__":
-    psi4.set_memory("64 GB")
-    psi4.set_num_threads(12)
+    psi4.set_memory("220 GB")
+    psi4.set_num_threads(24)
 
     # test_fsaptdft_fsapt0()
     # test_fsapt0_fsaptdft()

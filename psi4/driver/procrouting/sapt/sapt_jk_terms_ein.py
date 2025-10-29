@@ -43,7 +43,7 @@ import einsums as ein
 
 
 def localization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
-    print("\n  ==> Localizing Orbitals <== \n\n")
+    print("\n  ==> Localizing Orbitals 1 <== \n\n")
     # localization_scheme = core.get_option("SAPT", "SAPT_DFT_LOCAL_ORBITALS")
     # loc = core.Localizer.build(localization_scheme, wfn_A.basisset(), wfn_A.Ca_subset("AO", "OCC"))
     # loc.localize()
@@ -52,11 +52,12 @@ def localization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # loc.localize()
     # C_lmo_B = loc.L
     # IBOLocalizer
-    N = cache["eps_occ"].dimpi()[0]
-    Focc = core.Matrix("Focc", N, N)
-    for i in range(N):
+    N_eps_focc = cache["eps_focc"].dimpi()[0]
+    N_eps_occ = cache["eps_occ"].dimpi()[0]
+    Focc = core.Matrix("Focc", N_eps_occ, N_eps_occ)
+    for i in range(N_eps_occ):
         Focc.np[i, i] = cache["eps_occ"].np[i]
-    ranges = [0, N, N]
+    ranges = [0, N_eps_focc, N_eps_occ] # would need corrected for frozen core
     minao = core.BasisSet.build(dimer_wfn.molecule(), "BASIS", core.get_global_option("MINAO_BASIS"))
     dimer_wfn.set_basisset("MINAO", minao)
     # pybind11 location: ./psi4/src/export_wavefunction.cc
@@ -689,7 +690,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Create DFHelper object
     dfh = core.DFHelper(dimer_basis, aux_basis)
     # TODO: This memory estimate needs corrected...
-    dfh.set_memory(int(core.get_memory() * 0.9 / 8))  # Use 90% of available memory (in doubles)
+    dfh.set_memory(int(core.get_memory() * 0.5 / 8))  # Use 90% of available memory (in doubles)
     dfh.set_method("DIRECT_iaQ")
     dfh.set_nthreads(core.get_num_threads())
     dfh.initialize()

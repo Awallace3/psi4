@@ -577,10 +577,10 @@ no_com
     )
     psi4.set_options(
         {
-            "basis": "aug-cc-pVDZ",
+            "basis": "sto-3g",
             "scf_type": "df",
             "guess": "sad",
-            "freeze_core": "true",
+            # "freeze_core": "true",
         }
     )
     plan = psi4.energy("fisapt0", return_plan=True, molecule=mol)
