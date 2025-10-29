@@ -686,8 +686,7 @@ no_com
             # "basis": "sto-3g",
             "scf_type": "df",
             "guess": "sad",
-            # "freeze_core": "false", # Frozen core not working with localization presently
-            "freeze_core": "true", # Frozen core not working with localization presently
+            "freeze_core": "false", # Frozen core not working with localization presently
             "FISAPT_FSAPT_FILEPATH": "none",
             "SAPT_DFT_FUNCTIONAL": "PBE0",
             # "SAPT_DFT_FUNCTIONAL": "HF",
