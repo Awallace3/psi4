@@ -680,6 +680,8 @@ no_com
 """
     )
     print("FSAPT(PBE0)-D4(I)")
+    functional = "HF"
+    functional = "PBE0"
     psi4.set_options(
         {
             "basis": "aug-cc-pVDZ",
@@ -688,12 +690,14 @@ no_com
             "guess": "sad",
             "freeze_core": "false", # Frozen core not working with localization presently
             "FISAPT_FSAPT_FILEPATH": "none",
-            "SAPT_DFT_FUNCTIONAL": "PBE0",
-            # "SAPT_DFT_FUNCTIONAL": "HF",
+            # "SAPT_DFT_FUNCTIONAL": "PBE0",
+            "SAPT_DFT_FUNCTIONAL": functional,
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_FSAPT": True,
             "SAPT_DFT_D4_IE": True,
             "SAPT_DFT_DO_DISP": False,
+            # "SAPT_DFT_D4_TYPE": "SUPERMOLECULAR",
+            "SAPT_DFT_D4_TYPE": "INTERMOLECULAR",
             # "SAPT_DFT_GRAC_BASIS": "aug-cc-pVTZ",
             # "SAPT_DFT_GRAC_COMPUTE": "SINGLE",
             # If known...
@@ -803,7 +807,8 @@ no_com
 """
     )
     df['qcel_molecule'] = [qcel_mol] * len(df)
-    df.to_pickle("fsaptdft_train_simple.pkl")
+    # Save dataframe for future testing
+    df.to_pickle(f"fsapt_{functional}_train_simple.pkl")
 
 
 if __name__ == "__main__":

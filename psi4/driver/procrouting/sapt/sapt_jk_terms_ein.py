@@ -102,7 +102,6 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         dimer_wfn.get_basisset("MINAO"),
         core.Matrix.from_array(cache['Cocc_A']),
     )
-    print(Focc.np)
     IBO_loc.print_header()
     ret = IBO_loc.localize(
         core.Matrix.from_array(cache['Cocc_A']),

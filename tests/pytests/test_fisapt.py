@@ -577,7 +577,8 @@ no_com
     )
     psi4.set_options(
         {
-            "basis": "sto-3g",
+            # "basis": "sto-3g",
+            "basis": "aug-cc-pvdz",
             "scf_type": "df",
             "guess": "sad",
             # "freeze_core": "true",

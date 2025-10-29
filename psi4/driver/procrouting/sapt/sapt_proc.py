@@ -540,13 +540,23 @@ def run_sapt_dft(name, **kwargs):
             elez = np.array(elez, dtype=np.int32)
             monAs = np.array([i for i in range(monomerA.natom()) if monomerA.Z(i) > 0])
             monBs = np.array([i for i in range(monomerB.natom()) if monomerB.Z(i) > 0])
+            if sapt_dft_functional.lower() == "pbe0":
+                # SAPT_DFT_pbe0_adz_3_IE_supra
+                params = [1.0, 0.89529649, -0.82043591, 0.03264695]
+            elif sapt_dft_functional.lower() == "hf":
+                # SAPT0_adz_3_IE_2B_BJ_inter
+                params = [1.0, 0.56063068, 0.65540802, 1.06422537]
+                # sadz (supermolecular damping...)
+                params = [1.0, 0.83055196, 0.70628586, 1.12379695]
+            else:
+                raise ValueError("SAPT(DFT): DFTD4 parameters not available for functional %s" % sapt_dft_functional)
             v = dftd4_c6_intermolecular_dispersion(
                 elez,
                 geom,
                 C6s=core.variable("DFTD4 C6 COEFFICIENTS").np,
                 monAs=monAs,
                 monBs=monBs,
-                params=[1.0, 0.89529649, -0.82043591, 0.03264695]
+                params=params,
             )
             data["D4 IE"] = v['D4 IE']
             data['FSAPT_EMPIRICAL_DISP'] = v['FSAPT_EMPIRICAL_DISP']
