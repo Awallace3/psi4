@@ -636,6 +636,174 @@ no_com
                 f"{ref_df['Frag1'].iloc[i]} {ref_df['Frag2'].iloc[i]} {col}",
             )
 
+@pytest.mark.fsapt
+def test_fsaptdft_indices():
+    # TODO: EDIT THIS TEST TO DROP SAVING DF
+    import pandas as pd
+
+    mol = psi4.geometry(
+        """
+0 1
+C   11.54100       27.68600       13.69600
+H   12.45900       27.15000       13.44600
+C   10.79000       27.96500       12.40600
+H   10.55700       27.01400       11.92400
+H   9.879000       28.51400       12.64300
+H   11.44300       28.56800       11.76200
+H   10.90337       27.06487       14.34224
+H   11.78789       28.62476       14.21347
+--
+0 1
+C   10.60200       24.81800       6.466000
+O   10.95600       23.84000       7.103000
+N   10.17800       25.94300       7.070000
+C   10.09100       26.25600       8.476000
+C   9.372000       27.59000       8.640000
+C   11.44600       26.35600       9.091000
+C   9.333000       25.25000       9.282000
+H   9.874000       26.68900       6.497000
+H   9.908000       28.37100       8.093000
+H   8.364000       27.46400       8.233000
+H   9.317000       27.84600       9.706000
+H   9.807000       24.28200       9.160000
+H   9.371000       25.57400       10.32900
+H   8.328000       25.26700       8.900000
+H   11.28800       26.57600       10.14400
+H   11.97000       27.14900       8.585000
+H   11.93200       25.39300       8.957000
+H   10.61998       24.85900       5.366911
+units angstrom
+
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    psi4.set_options(
+        {
+            "basis": "aug-cc-pVDZ",
+            "scf_type": "df",
+            "guess": "sad",
+            "freeze_core": "true",
+            "FISAPT_FSAPT_FILEPATH": "none",
+            "SAPT_DFT_FUNCTIONAL": "PBE0",
+            "SAPT_DFT_DO_DHF": True,
+            "SAPT_DFT_DO_FSAPT": True,
+            "SAPT_DFT_D4_IE": True,
+            "SAPT_DFT_DO_DISP": False,
+            "SAPT_DFT_GRAC_BASIS": "aug-cc-pVTZ",
+            "SAPT_DFT_GRAC_COMPUTE": "SINGLE",
+        }
+    )
+    plan = psi4.energy("sapt(dft)", return_plan=True, molecule=mol)
+    atomic_result = psi4.schema_wrapper.run_qcschema(
+        plan.plan(wfn_qcvars_only=False),
+        clean=True,
+        postclean=True,
+    )
+    pp(atomic_result)
+    data = psi4.fsapt_analysis(
+        # NOTE: 1-indexed for fragments_a and fragments_b
+        fragments_a={
+            "Methyl1_A": [1, 2, 7, 8],
+            "Methyl2_A": [3, 4, 5, 6],
+        },
+        fragments_b={
+            "Peptide_B": [9, 10, 11, 16, 26],
+            "T-Butyl_B": [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
+        },
+        links5050=True,
+        print_output=False,
+        atomic_results=atomic_result,
+    )
+    df = pd.DataFrame(data)
+    print(df)
+    mol_qcel_dict = mol.to_schema(dtype=2)
+    frag1_indices = df['Frag1_indices'].tolist()
+    frag2_indices = df['Frag2_indices'].tolist()
+    # Using molecule object for all test to ensure right counts from each
+    # fragment are achieved. Note +1 for 1-indexing in fsapt_analysis
+    all_A = [i + 1 for i in mol_qcel_dict['fragments'][0]]
+    expected_frag1_indices = [
+        [1, 2, 7, 8],
+        [3, 4, 5, 6],
+        all_A,
+        all_A,
+        all_A,
+    ]
+    all_B = [j + 1 for j in mol_qcel_dict['fragments'][1]]
+    expected_frag2_indices = [
+        all_B,
+        all_B,
+        [9, 10, 11, 16, 26],
+        [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
+        all_B,
+    ]
+    print(f"{all_A = }")
+    print(f"{all_B = }")
+    for i, indices in enumerate(frag1_indices):
+        # Assert lists are identical
+        e = expected_frag1_indices[i]
+        sorted_frag = sorted(indices)
+        assert sorted_frag == e, f"Frag1 indices do not match for fragment {i}: expected {e}, got {sorted_frag}"
+
+    for i, indices in enumerate(frag2_indices):
+        e = expected_frag2_indices[i]
+        sorted_frag = sorted(indices)
+        assert sorted_frag == e, f"Frag2 indices do not match for fragment {i}: expected {e}, got {sorted_frag}"
+    df["F-Induction"] = df["IndAB"] + df["IndBA"]
+    df.drop(columns=["IndAB", "IndBA"], inplace=True)
+    df = df.rename(
+        columns={
+            "Elst": "F-Electrostatics",
+            "Exch": "F-Exchange",
+            "Disp": "F-Dispersion",
+            "EDisp": "F-EDispersion",
+            "Total": "F-Total",
+        },
+    )
+    import qcelemental as qcel
+    qcel_mol = qcel.models.Molecule.from_data(
+        """
+0 1
+C   11.54100       27.68600       13.69600
+H   12.45900       27.15000       13.44600
+C   10.79000       27.96500       12.40600
+H   10.55700       27.01400       11.92400
+H   9.879000       28.51400       12.64300
+H   11.44300       28.56800       11.76200
+H   10.90337       27.06487       14.34224
+H   11.78789       28.62476       14.21347
+--
+0 1
+C   10.60200       24.81800       6.466000
+O   10.95600       23.84000       7.103000
+N   10.17800       25.94300       7.070000
+C   10.09100       26.25600       8.476000
+C   9.372000       27.59000       8.640000
+C   11.44600       26.35600       9.091000
+C   9.333000       25.25000       9.282000
+H   9.874000       26.68900       6.497000
+H   9.908000       28.37100       8.093000
+H   8.364000       27.46400       8.233000
+H   9.317000       27.84600       9.706000
+H   9.807000       24.28200       9.160000
+H   9.371000       25.57400       10.32900
+H   8.328000       25.26700       8.900000
+H   11.28800       26.57600       10.14400
+H   11.97000       27.14900       8.585000
+H   11.93200       25.39300       8.957000
+H   10.61998       24.85900       5.366911
+units angstrom
+
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    df['qcel_molecule'] = [qcel_mol] * len(df)
+    df.to_pickle("fsaptdft_train_simple.pkl")
+
 
 if __name__ == "__main__":
     psi4.set_memory("64 GB")
@@ -645,4 +813,5 @@ if __name__ == "__main__":
     # test_fsapt0_fsaptdft()
     # test_fsaptdft_psivars()
     # test_fsaptdftd4_psivars()
-    test_fsaptdftd4_psivars_pbe0()
+    # test_fsaptdftd4_psivars_pbe0()
+    test_fsaptdft_indices()

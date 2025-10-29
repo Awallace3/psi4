@@ -532,6 +532,9 @@ no_com"""
 @uusing("pandas")
 @pytest.mark.fsapt
 def test_fsapt_indices():
+    # TODO: EDIT THIS TEST TO DROP SAVING DF
+    psi4.set_memory("50 GB")
+    psi4.set_num_threads(12)
     import pandas as pd
 
     mol = psi4.geometry(
@@ -574,7 +577,7 @@ no_com
     )
     psi4.set_options(
         {
-            "basis": "sto-3g",
+            "basis": "aug-cc-pVDZ",
             "scf_type": "df",
             "guess": "sad",
             "freeze_core": "true",
@@ -601,6 +604,7 @@ no_com
         atomic_results=atomic_result,
     )
     df = pd.DataFrame(data)
+    print(df)
     mol_qcel_dict = mol.to_schema(dtype=2)
     frag1_indices = df['Frag1_indices'].tolist()
     frag2_indices = df['Frag2_indices'].tolist()
@@ -622,6 +626,8 @@ no_com
         [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
         all_B,
     ]
+    print(f"{all_A = }")
+    print(f"{all_B = }")
     for i, indices in enumerate(frag1_indices):
         # Assert lists are identical
         e = expected_frag1_indices[i]
@@ -632,6 +638,58 @@ no_com
         e = expected_frag2_indices[i]
         sorted_frag = sorted(indices)
         assert sorted_frag == e, f"Frag2 indices do not match for fragment {i}: expected {e}, got {sorted_frag}"
+    df["F-Induction"] = df["IndAB"] + df["IndBA"]
+    df.drop(columns=["IndAB", "IndBA"], inplace=True)
+    df = df.rename(
+        columns={
+            "Elst": "F-Electrostatics",
+            "Exch": "F-Exchange",
+            "Disp": "F-Dispersion",
+            "EDisp": "F-EDispersion",
+            "Total": "F-Total",
+        },
+    )
+    import qcelemental as qcel
+    qcel_mol = qcel.models.Molecule.from_data(
+        """
+0 1
+C   11.54100       27.68600       13.69600
+H   12.45900       27.15000       13.44600
+C   10.79000       27.96500       12.40600
+H   10.55700       27.01400       11.92400
+H   9.879000       28.51400       12.64300
+H   11.44300       28.56800       11.76200
+H   10.90337       27.06487       14.34224
+H   11.78789       28.62476       14.21347
+--
+0 1
+C   10.60200       24.81800       6.466000
+O   10.95600       23.84000       7.103000
+N   10.17800       25.94300       7.070000
+C   10.09100       26.25600       8.476000
+C   9.372000       27.59000       8.640000
+C   11.44600       26.35600       9.091000
+C   9.333000       25.25000       9.282000
+H   9.874000       26.68900       6.497000
+H   9.908000       28.37100       8.093000
+H   8.364000       27.46400       8.233000
+H   9.317000       27.84600       9.706000
+H   9.807000       24.28200       9.160000
+H   9.371000       25.57400       10.32900
+H   8.328000       25.26700       8.900000
+H   11.28800       26.57600       10.14400
+H   11.97000       27.14900       8.585000
+H   11.93200       25.39300       8.957000
+H   10.61998       24.85900       5.366911
+units angstrom
+
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    df['qcel_molecule'] = [qcel_mol] * len(df)
+    df.to_pickle("fsapt_train_simple.pkl")
 
 
 if __name__ == "__main__":
