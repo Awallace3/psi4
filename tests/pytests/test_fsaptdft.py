@@ -681,11 +681,11 @@ no_com
     )
     print("FSAPT(PBE0)-D4(I)")
     functional = "HF"
-    functional = "PBE0"
+    # functional = "PBE0"
     psi4.set_options(
         {
-            "basis": "aug-cc-pVDZ",
-            # "basis": "sto-3g",
+            # "basis": "aug-cc-pVDZ",
+            "basis": "sto-3g",
             "scf_type": "df",
             "guess": "sad",
             "freeze_core": "false", # Frozen core not working with localization presently
@@ -712,7 +712,7 @@ no_com
         molecule=mol,
         fragments_a={
             "Methyl1_A": [1, 2, 7, 8],
-            "Methyl2_A": [3, 4, 5, 6],
+            "Methyl2_A": range(3, 7),
         },
         fragments_b={
             "Peptide_B": [9, 10, 11, 16, 26],
@@ -723,6 +723,14 @@ no_com
     )
     df = pd.DataFrame(data)
     print(df)
+    """
+       Frag1      Frag2             Frag1_indices  ... Disp     EDisp     Total
+0  Methyl1_A        All              [1, 2, 7, 8]  ...  0.0 -0.144284  0.407219
+1  Methyl2_A        All              [3, 4, 5, 6]  ...  0.0 -1.358610  0.534274
+2        All  Peptide_B  [1, 2, 7, 8, 3, 4, 5, 6]  ...  0.0 -0.031207 -0.134535
+3        All  T-Butyl_B  [1, 2, 7, 8, 3, 4, 5, 6]  ...  0.0 -1.471686  1.076028
+4        All        All  [1, 2, 7, 8, 3, 4, 5, 6]  ...  0.0 -1.502893  0.941492
+    """
     mol_qcel_dict = mol.to_schema(dtype=2)
     frag1_indices = df['Frag1_indices'].tolist()
     frag2_indices = df['Frag2_indices'].tolist()
