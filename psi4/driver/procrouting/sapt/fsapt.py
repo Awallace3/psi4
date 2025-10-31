@@ -834,10 +834,22 @@ def print_order2(order2, fragkeys, saptkeys=saptkeys_, print_output=True, frags=
         for saptkey in saptkeys:
             print("%8s " % (saptkey), end="")
         print("")
-        for keyA in fragkeys["A"]:
-            for keyB in fragkeys["B"]:
+    for keyA in fragkeys["A"]:
+        for keyB in fragkeys["B"]:
+            data["Frag1"].append(keyA)
+            data["Frag2"].append(keyB)
+            if frags is not None and keyA in frags["A"]:
+                data["Frag1_indices"].append([x + 1 for x in frags["A"][keyA]])
+            else:
+                data["Frag1_indices"].append([])
+            if frags is not None and keyB in frags["B"]:
+                data["Frag2_indices"].append([x + 1 for x in frags["B"][keyB]])
+            else:
+                data["Frag2_indices"].append([])
+            if print_output:
                 print("%-9s %-9s " % (keyA, keyB), end="")
-                for saptkey in saptkeys:
+            for saptkey in saptkeys:
+                if print_output:
                     if saptkey == "EDisp" and ("Link" in keyA or "Link" in keyB):
                         print("%8.3f" % 0.0, end="")
                     else:
@@ -845,6 +857,8 @@ def print_order2(order2, fragkeys, saptkeys=saptkeys_, print_output=True, frags=
                             print("%8.3f " % (order2[saptkey][keyA][keyB]), end="")
                         except KeyError:
                             continue
+                data[saptkey].append(order1B[saptkey][keyB])
+            if print_output:
                 print("")
 
     for keyA in fragkeys["A"]:

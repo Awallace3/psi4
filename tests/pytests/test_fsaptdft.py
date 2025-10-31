@@ -739,6 +739,10 @@ no_com
     all_A = [i + 1 for i in mol_qcel_dict['fragments'][0]]
     expected_frag1_indices = [
         [1, 2, 7, 8],
+        [1, 2, 7, 8],
+        [3, 4, 5, 6],
+        [3, 4, 5, 6],
+        [1, 2, 7, 8],
         [3, 4, 5, 6],
         all_A,
         all_A,
@@ -746,6 +750,10 @@ no_com
     ]
     all_B = [j + 1 for j in mol_qcel_dict['fragments'][1]]
     expected_frag2_indices = [
+        [9, 10, 11, 16, 26],
+        [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
+        [9, 10, 11, 16, 26],
+        [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
         all_B,
         all_B,
         [9, 10, 11, 16, 26],
