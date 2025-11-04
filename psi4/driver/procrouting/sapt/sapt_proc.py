@@ -1069,7 +1069,8 @@ def sapt_dft(
                 cache_ein, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, do_print=True
             )
             core.timer_off("SAPT(DFT): F-SAPT Dispersion")
-            core.set_variable("FSAPT_DISP_AB", np.zeros_like(cache_ein['Elst_AB']))
+            # core.set_variable("FSAPT_DISP_AB", np.zeros_like(cache_ein['Elst_AB']))
+            core.set_variable("FSAPT_DISP_AB", np.zeros_like(cache_ein['DISP_AB']))
         # elif "D4", returrn pairwise dispersion energies
         else:
             core.set_variable("FSAPT_DISP_AB", np.zeros_like(cache_ein['Elst_AB']))

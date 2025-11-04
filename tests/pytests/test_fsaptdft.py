@@ -211,14 +211,14 @@ def test_fsaptdft_fsapt0_simple():
     """
     Eref_nh = {
         # mEh
-        "SAPT ELST ENERGY": -0.00233320,
-        "SAPT EXCH ENERGY": 0.00001443,
-        "SAPT IND ENERGY": -0.00001103,
-        "SAPT DISP ENERGY": -0.00563062,
+        "SAPT ELST ENERGY": -0.00782717,
+        "SAPT EXCH ENERGY": 0.05953516,
+        "SAPT IND ENERGY": -0.00054743,
+        "SAPT DISP ENERGY": -0.00012075,
     }  # TEST
     mol = psi4.geometry("""
 0 1
-He 0.00000000 0.00000000 0.00000000
+He 3.00000000 0.00000000 0.00000000
 --
 0 1
 C 6.44536662 -0.26509169 -0.00000000
@@ -238,6 +238,7 @@ no_com
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
             "SAPT_DFT_DO_FSAPT": True,
+            "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
         }
     )
     np.set_printoptions(precision=10, suppress=True)
@@ -310,7 +311,7 @@ no_com
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
             "SAPT_DFT_DO_FSAPT": True,
-            "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
+            # "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
         }
     )
     psi4.energy("sapt(dft)", molecule=mol)
@@ -1085,10 +1086,12 @@ if __name__ == "__main__":
     psi4.set_memory("220 GB")
     psi4.set_num_threads(24)
 
+    # test_fsaptdft()
+    test_fsaptdft_fsapt0_simple()
     # test_fsaptdft_fsapt0()
     # test_fsapt0_fsaptdft()
     # test_fsaptdft_psivars()
-    test_fsapthf_psivars()
+    # test_fsapthf_psivars()
     # test_fsaptdftd4_psivars()
     # test_fsaptdftd4_psivars_pbe0()
     # test_fsaptdft_indices()

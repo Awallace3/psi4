@@ -1757,6 +1757,7 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     ns = cache["Cvir_B"].shape[1]
     nfa = cache["Lfocc0A"].shape[1]
     nfb = cache["Lfocc0B"].shape[1]
+    nn = cache["Cocc_A"].shape[0]  # number of AO basis functions
     
     na1 = na
     nb1 = nb
@@ -1803,10 +1804,12 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Collect relevant variables
     S = cache["S"]
     D_A = cache["D_A"]
+    P_A = cache["P_A"]
     V_A = cache["V_A"]
     J_A = cache["J_A"]
     K_A = cache["K_A"]
     D_B = cache["D_B"]
+    P_B = cache["P_B"]
     V_B = cache["V_B"]
     J_B = cache["J_B"]
     K_B = cache["K_B"]
@@ -1818,9 +1821,553 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     aux_basis = dimer_wfn.get_basisset("DF_BASIS_SCF")
     nQ = aux_basis.nbf()
     
+    # => Auxiliary C matrices <= //
+    # Cr1 = (I - D_B * S) * Cvir_A  [C++ line 6766-6768]
+    Cr1 = einsum_chain_gemm([D_B, S, Cvir_A], ['N', 'N', 'N'])
+    Cr1_np = np.array(Cr1)
+    Cr1_np *= -1.0
+    Cr1_np += np.array(Cvir_A)
+    
+    # Cs1 = (I - D_A * S) * Cvir_B  [C++ line 6769-6771]
+    Cs1 = einsum_chain_gemm([D_A, S, Cvir_B], ['N', 'N', 'N'])
+    Cs1_np = np.array(Cs1)
+    Cs1_np *= -1.0
+    Cs1_np += np.array(Cvir_B)
+    
+    # Ca2 = D_B * S * Cocc_A  [C++ line 6772]
+    Ca2 = einsum_chain_gemm([D_B, S, Cocc_A], ['N', 'N', 'N'])
+    Ca2_np = np.array(Ca2)
+    
+    # Cb2 = D_A * S * Cocc_B  [C++ line 6773]
+    Cb2 = einsum_chain_gemm([D_A, S, Cocc_B], ['N', 'N', 'N'])
+    Cb2_np = np.array(Cb2)
+    
+    # Cr3 = 2 * (D_B * S * Cvir_A - D_A * S * D_B * S * Cvir_A)  [C++ line 6775-6778]
+    Cr3 = einsum_chain_gemm([D_B, S, Cvir_A], ['N', 'N', 'N'])
+    CrX = einsum_chain_gemm([D_A, S, D_B, S, Cvir_A], ['N', 'N', 'N', 'N', 'N'])
+    Cr3_np = np.array(Cr3)
+    CrX_np = np.array(CrX)
+    Cr3_np -= CrX_np
+    Cr3_np *= 2.0
+    
+    # Cs3 = 2 * (D_A * S * Cvir_B - D_B * S * D_A * S * Cvir_B)  [C++ line 6779-6782]
+    Cs3 = einsum_chain_gemm([D_A, S, Cvir_B], ['N', 'N', 'N'])
+    CsX = einsum_chain_gemm([D_B, S, D_A, S, Cvir_B], ['N', 'N', 'N', 'N', 'N'])
+    Cs3_np = np.array(Cs3)
+    CsX_np = np.array(CsX)
+    Cs3_np -= CsX_np
+    Cs3_np *= 2.0
+    
+    # Ca4 = -2 * D_A * S * D_B * S * Cocc_A  [C++ line 6784-6785]
+    Ca4 = einsum_chain_gemm([D_A, S, D_B, S, Cocc_A], ['N', 'N', 'N', 'N', 'N'])
+    Ca4_np = np.array(Ca4)
+    Ca4_np *= -2.0
+    
+    # Cb4 = -2 * D_B * S * D_A * S * Cocc_B  [C++ line 6786-6787]
+    Cb4 = einsum_chain_gemm([D_B, S, D_A, S, Cocc_B], ['N', 'N', 'N', 'N', 'N'])
+    Cb4_np = np.array(Cb4)
+    Cb4_np *= -2.0
+    
+    # => Auxiliary V matrices <= #  [C++ lines 6789-6872]
+    
+    # Jbr = 2.0 * Cocc_B.T @ J_A @ Cvir_A  [C++ lines 6791-6792]
+    Jbr = einsum_chain_gemm([Cocc_B, J_A, Cvir_A], ['T', 'N', 'N'])
+    Jbr_np = np.array(Jbr)
+    Jbr_np *= 2.0
+    
+    # Kbr = -1.0 * Cocc_B.T @ K_A @ Cvir_A  [C++ lines 6793-6794]
+    Kbr = einsum_chain_gemm([Cocc_B, K_A, Cvir_A], ['T', 'N', 'N'])
+    Kbr_np = np.array(Kbr)
+    Kbr_np *= -1.0
+    
+    # Jas = 2.0 * Cocc_A.T @ J_B @ Cvir_B  [C++ lines 6796-6797]
+    Jas = einsum_chain_gemm([Cocc_A, J_B, Cvir_B], ['T', 'N', 'N'])
+    Jas_np = np.array(Jas)
+    Jas_np *= 2.0
+    
+    # Kas = -1.0 * Cocc_A.T @ K_B @ Cvir_B  [C++ lines 6798-6799]
+    Kas = einsum_chain_gemm([Cocc_A, K_B, Cvir_B], ['T', 'N', 'N'])
+    Kas_np = np.array(Kas)
+    Kas_np *= -1.0
+    
+    # KOas = 1.0 * Cocc_A.T @ K_O @ Cvir_B  [C++ lines 6801-6802]
+    KOas = einsum_chain_gemm([Cocc_A, K_O, Cvir_B], ['T', 'N', 'N'])
+    KOas_np = np.array(KOas)
+    
+    # KObr = 1.0 * Cocc_B.T @ K_O.T @ Cvir_A  [C++ lines 6803-6804]
+    # Note: K_O is transposed (second 'T' in the transpose list)
+    KObr = einsum_chain_gemm([Cocc_B, K_O, Cvir_A], ['T', 'T', 'N'])
+    KObr_np = np.array(KObr)
+    
+    # JBas = -2.0 * (Cocc_A.T @ S @ D_B) @ J_A @ Cvir_B  [C++ lines 6806-6807]
+    temp_JBas = einsum_chain_gemm([Cocc_A, S, D_B], ['T', 'N', 'N'])
+    JBas = einsum_chain_gemm([temp_JBas, J_A, Cvir_B], ['N', 'N', 'N'])
+    JBas_np = np.array(JBas)
+    JBas_np *= -2.0
+    
+    # JAbr = -2.0 * (Cocc_B.T @ S @ D_A) @ J_B @ Cvir_A  [C++ lines 6808-6809]
+    temp_JAbr = einsum_chain_gemm([Cocc_B, S, D_A], ['T', 'N', 'N'])
+    JAbr = einsum_chain_gemm([temp_JAbr, J_B, Cvir_A], ['N', 'N', 'N'])
+    JAbr_np = np.array(JAbr)
+    JAbr_np *= -2.0
+    
+    # Jbs = 4.0 * Cocc_B.T @ J_A @ Cvir_B  [C++ lines 6811-6812]
+    Jbs = einsum_chain_gemm([Cocc_B, J_A, Cvir_B], ['T', 'N', 'N'])
+    Jbs_np = np.array(Jbs)
+    Jbs_np *= 4.0
+    
+    # Jar = 4.0 * Cocc_A.T @ J_B @ Cvir_A  [C++ lines 6813-6814]
+    Jar = einsum_chain_gemm([Cocc_A, J_B, Cvir_A], ['T', 'N', 'N'])
+    Jar_np = np.array(Jar)
+    Jar_np *= 4.0
+    
+    # JAas = -2.0 * (Cocc_A.T @ J_B @ D_A) @ S @ Cvir_B  [C++ lines 6816-6817]
+    temp_JAas = einsum_chain_gemm([Cocc_A, J_B, D_A], ['T', 'N', 'N'])
+    JAas = einsum_chain_gemm([temp_JAas, S, Cvir_B], ['N', 'N', 'N'])
+    JAas_np = np.array(JAas)
+    JAas_np *= -2.0
+    
+    # JBbr = -2.0 * (Cocc_B.T @ J_A @ D_B) @ S @ Cvir_A  [C++ lines 6818-6819]
+    temp_JBbr = einsum_chain_gemm([Cocc_B, J_A, D_B], ['T', 'N', 'N'])
+    JBbr = einsum_chain_gemm([temp_JBbr, S, Cvir_A], ['N', 'N', 'N'])
+    JBbr_np = np.array(JBbr)
+    JBbr_np *= -2.0
+    
+    # Get your signs right Hesselmann!  [C++ line 6821]
+    # Vbs = 2.0 * Cocc_B.T @ V_A @ Cvir_B  [C++ lines 6822-6823]
+    Vbs = einsum_chain_gemm([Cocc_B, V_A, Cvir_B], ['T', 'N', 'N'])
+    Vbs_np = np.array(Vbs)
+    Vbs_np *= 2.0
+    
+    # Var = 2.0 * Cocc_A.T @ V_B @ Cvir_A  [C++ lines 6824-6825]
+    Var = einsum_chain_gemm([Cocc_A, V_B, Cvir_A], ['T', 'N', 'N'])
+    Var_np = np.array(Var)
+    Var_np *= 2.0
+    
+    # VBas = -1.0 * (Cocc_A.T @ S @ D_B) @ V_A @ Cvir_B  [C++ lines 6826-6827]
+    temp_VBas = einsum_chain_gemm([Cocc_A, S, D_B], ['T', 'N', 'N'])
+    VBas = einsum_chain_gemm([temp_VBas, V_A, Cvir_B], ['N', 'N', 'N'])
+    VBas_np = np.array(VBas)
+    VBas_np *= -1.0
+    
+    # VAbr = -1.0 * (Cocc_B.T @ S @ D_A) @ V_B @ Cvir_A  [C++ lines 6828-6829]
+    temp_VAbr = einsum_chain_gemm([Cocc_B, S, D_A], ['T', 'N', 'N'])
+    VAbr = einsum_chain_gemm([temp_VAbr, V_B, Cvir_A], ['N', 'N', 'N'])
+    VAbr_np = np.array(VAbr)
+    VAbr_np *= -1.0
+    
+    # VRas = 1.0 * (Cocc_A.T @ V_B @ P_A) @ S @ Cvir_B  [C++ lines 6830-6831]
+    temp_VRas = einsum_chain_gemm([Cocc_A, V_B, P_A], ['T', 'N', 'N'])
+    VRas = einsum_chain_gemm([temp_VRas, S, Cvir_B], ['N', 'N', 'N'])
+    VRas_np = np.array(VRas)
+    
+    # VSbr = 1.0 * (Cocc_B.T @ V_A @ P_B) @ S @ Cvir_A  [C++ lines 6832-6833]
+    temp_VSbr = einsum_chain_gemm([Cocc_B, V_A, P_B], ['T', 'N', 'N'])
+    VSbr = einsum_chain_gemm([temp_VSbr, S, Cvir_A], ['N', 'N', 'N'])
+    VSbr_np = np.array(VSbr)
+    
+    # Sas = Cocc_A.T @ S @ Cvir_B  [C++ line 6835]
+    Sas = einsum_chain_gemm([Cocc_A, S, Cvir_B], ['T', 'N', 'N'])
+    Sas_np = np.array(Sas)
+    
+    # Sbr = Cocc_B.T @ S @ Cvir_A  [C++ line 6836]
+    Sbr = einsum_chain_gemm([Cocc_B, S, Cvir_A], ['T', 'N', 'N'])
+    Sbr_np = np.array(Sbr)
+    
+    # Qbr = Jbr + Kbr + KObr + JAbr + JBbr + VAbr + VSbr  [C++ lines 6838-6846]
+    Qbr_np = Jbr_np.copy()
+    Qbr_np += Kbr_np
+    Qbr_np += KObr_np
+    Qbr_np += JAbr_np
+    Qbr_np += JBbr_np
+    Qbr_np += VAbr_np
+    Qbr_np += VSbr_np
+    
+    # Qas = Jas + Kas + KOas + JAas + JBas + VBas + VRas  [C++ lines 6848-6856]
+    Qas_np = Jas_np.copy()
+    Qas_np += Kas_np
+    Qas_np += KOas_np
+    Qas_np += JAas_np
+    Qas_np += JBas_np
+    Qas_np += VBas_np
+    Qas_np += VRas_np
+    
+    # SBar = Cocc_A.T @ S @ D_B @ S @ Cvir_A  [C++ line 6858]
+    SBar = einsum_chain_gemm([Cocc_A, S, D_B, S, Cvir_A], ['T', 'N', 'N', 'N', 'N'])
+    SBar_np = np.array(SBar)
+    
+    # SAbs = Cocc_B.T @ S @ D_A @ S @ Cvir_B  [C++ line 6859]
+    SAbs = einsum_chain_gemm([Cocc_B, S, D_A, S, Cvir_B], ['T', 'N', 'N', 'N', 'N'])
+    SAbs_np = np.array(SAbs)
+    
+    # Qar = Jar + Var  [C++ lines 6861-6864]
+    Qar_np = Jar_np.copy()
+    Qar_np += Var_np
+    
+    # Qbs = Jbs + Vbs  [C++ lines 6866-6869]
+    Qbs_np = Jbs_np.copy()
+    Qbs_np += Vbs_np
+    
+    # KXOYas and KXOYbr: placeholder matrices (same shape as Jas/Jbr)  [C++ lines 6871-6872]
+    # These will be filled later during the DF loop
+    KXOYas_np = np.zeros_like(Jas_np)
+    KXOYbr_np = np.zeros_like(Jbr_np)
+    
+    # => Integrals from DFHelper <= #  [C++ lines 6895-6946]
+    
+    # Build list of orbital space matrices for DF transformations  [C++ lines 6897-6909]
+    # Order: Cocc_A, Cvir_A, Cocc_B, Cvir_B, Cr1, Cs1, Ca2, Cb2, Cr3, Cs3, Ca4, Cb4
+    # Convert einsums RuntimeTensorD objects to core.Matrix objects for DFHelper
+    # RuntimeTensorD supports buffer protocol, so np.asarray() can convert to numpy
+    orbital_spaces = [
+        core.Matrix.from_array(np.asarray(Cocc_A)),    # 0: 'a'
+        core.Matrix.from_array(np.asarray(Cvir_A)),    # 1: 'r'
+        core.Matrix.from_array(np.asarray(Cocc_B)),    # 2: 'b'
+        core.Matrix.from_array(np.asarray(Cvir_B)),    # 3: 's'
+        core.Matrix.from_array(np.asarray(Cr1)),       # 4: 'r1'
+        core.Matrix.from_array(np.asarray(Cs1)),       # 5: 's1'
+        core.Matrix.from_array(np.asarray(Ca2)),       # 6: 'a2'
+        core.Matrix.from_array(np.asarray(Cb2)),       # 7: 'b2'
+        core.Matrix.from_array(np.asarray(Cr3)),       # 8: 'r3'
+        core.Matrix.from_array(np.asarray(Cs3)),       # 9: 's3'
+        core.Matrix.from_array(np.asarray(Ca4)),       # 10: 'a4'
+        core.Matrix.from_array(np.asarray(Cb4)),       # 11: 'b4'
+    ]
+    
+    # Calculate total columns for memory allocation  [C++ lines 6911-6915]
+    max_MO = max(mat.shape[1] for mat in orbital_spaces)
+    ncol = sum(mat.shape[1] for mat in orbital_spaces)
+    nrows = orbital_spaces[0].shape[0]  # All should have same number of rows (AO basis)
+    
+    # Initialize DFHelper  [C++ lines 6917-6922]
     aux_basis = dimer_wfn.get_basisset("DF_BASIS_SCF")
     dfh = core.DFHelper(dimer_basis, aux_basis)
-    # raise NotImplementedError("Incomplete fdisp0 implementation")
+    
+    # Set memory: total available minus space needed for orbital matrices
+    # Note: In C++, doubles_ is the total memory budget in doubles
+    # Here we use a reasonable default or get from options if available
+    memory_bytes = core.get_memory()  # in bytes
+    memory_doubles = memory_bytes // 8
+    orbital_memory = nrows * ncol
+    dfh.set_memory(memory_doubles - orbital_memory)
+    
+    dfh.set_method("DIRECT_iaQ")
+    dfh.set_nthreads(core.get_num_threads())
+    dfh.initialize()
+    dfh.print_header()
+    
+    # Add orbital spaces  [C++ lines 6924-6935]
+    dfh.add_space("a", orbital_spaces[0])    # Cocc_A
+    dfh.add_space("r", orbital_spaces[1])    # Cvir_A
+    dfh.add_space("b", orbital_spaces[2])    # Cocc_B
+    dfh.add_space("s", orbital_spaces[3])    # Cvir_B
+    dfh.add_space("r1", orbital_spaces[4])   # Cr1
+    dfh.add_space("s1", orbital_spaces[5])   # Cs1
+    dfh.add_space("a2", orbital_spaces[6])   # Ca2
+    dfh.add_space("b2", orbital_spaces[7])   # Cb2
+    dfh.add_space("r3", orbital_spaces[8])   # Cr3
+    dfh.add_space("s3", orbital_spaces[9])   # Cs3
+    dfh.add_space("a4", orbital_spaces[10])  # Ca4
+    dfh.add_space("b4", orbital_spaces[11])  # Cb4
+    
+    # Add DF transformations  [C++ lines 6937-6946]
+    # Format: (name, left_space, right_space) -> computes (left|right) integrals
+    dfh.add_transformation("Aar", "r", "a")   # (r|a) virtuals_A x occupied_A
+    dfh.add_transformation("Abs", "s", "b")   # (s|b) virtuals_B x occupied_B
+    dfh.add_transformation("Bas", "s1", "a")  # (s1|a) Cs1 x occupied_A
+    dfh.add_transformation("Bbr", "r1", "b")  # (r1|b) Cr1 x occupied_B
+    dfh.add_transformation("Cas", "s", "a2")  # (s|a2) virtuals_B x Ca2
+    dfh.add_transformation("Cbr", "r", "b2")  # (r|b2) virtuals_A x Cb2
+    dfh.add_transformation("Dar", "r3", "a")  # (r3|a) Cr3 x occupied_A
+    dfh.add_transformation("Dbs", "s3", "b")  # (s3|b) Cs3 x occupied_B
+    dfh.add_transformation("Ear", "r", "a4")  # (r|a4) virtuals_A x Ca4
+    dfh.add_transformation("Ebs", "s", "b4")  # (s|b4) virtuals_B x Cb4
+    
+    # TODO: Handle link orbital spaces for parallel/perpendicular coupling (lines 6950-7018)
+    # For now, skip this and proceed with standard dispersion calculation
+    
+    # Perform DF transformations  [C++ line 7020]
+    dfh.transform()
+    
+    # Clear spaces now that transformations are done  [C++ lines 7024-7033]
+    dfh.clear_spaces()
+    
+    # => Memory blocking setup  [C++ lines 7035-7082]
+    
+    # Number of threads (single-threaded in Python)
+    nT = 1
+    
+    # Calculate overhead for work arrays
+    overhead = 0
+    overhead += 5 * nT * na * nb  # Tab, Vab, T2ab, V2ab, Iab work arrays
+    # For link orbitals with parperp, we'd need more, but we're skipping that
+    overhead += 2 * na * ns + 2 * nb * nr + 2 * na * nr + 2 * nb * ns  # S and Q matrices
+    overhead += 2 * na * nb * (nT + 1)  # E_disp20 and E_exch_disp20 thread work and final
+    overhead += 1 * sna * snb * (nT + 1)  # sE_exch_disp20 thread work and final
+    overhead += 1 * (nA + nfa + na) * (nB + nfb + nb)  # Disp_AB
+    overhead += 1 * (snA + snfa + sna) * (snB + snfb + snb)  # sDisp_AB
+    overhead += 12 * nn * nn  # D, V, J, K, P, C matrices for A and B
+    
+    # Available memory for dispersion calculation
+    total_memory = core.get_memory() // 8  # Convert bytes to doubles
+    rem = total_memory - overhead
+    
+    core.print_out(f"    {total_memory} doubles - {overhead} overhead leaves {rem} for dispersion\n")
+    
+    if rem < 0:
+        raise Exception("Too little static memory for fdisp0")
+    
+    # Calculate cost per r or s virtual orbital
+    # Each r needs: Aar, Bbr, Cbr, Dar (each is na x nQ or nb x nQ)
+    cost_r = 2 * na * nQ + 2 * nb * nQ
+    max_r_l = rem // (2 * cost_r)  # Factor of 2 because we hold both r and s slices
+    max_s_l = max_r_l
+    max_r = min(max_r_l, nr)
+    max_s = min(max_s_l, ns)
+    
+    if max_r < 1 or max_s < 1:
+        raise Exception("Too little dynamic memory for fdisp0")
+    
+    nrblocks = (nr + max_r - 1) // max_r  # Ceiling division
+    nsblocks = (ns + max_s - 1) // max_s
+    
+    core.print_out(f"    Processing a single (r,s) pair requires {cost_r * 2} doubles\n")
+    core.print_out(f"    {nr} values of r processed in {nrblocks} blocks of {max_r}\n")
+    core.print_out(f"    {ns} values of s processed in {nsblocks} blocks of {max_s}\n\n")
+    
+    # => Compute Far = Dar + Ear and Fbs = Dbs + Ebs  [C++ lines 7136-7168]
+    # These represent combined D and E DF integrals that will be reused in the main loop
+    
+    # Add disk tensor for Far
+    dfh.add_disk_tensor("Far", (nr, na, nQ))
+    
+    # Loop over r blocks to compute Far = Dar + Ear
+    for rstart in range(0, nr, max_r):
+        nrblock = min(max_r, nr - rstart)
+        
+        # Allocate matrices to hold the tensor slices
+        Dar = core.Matrix("Dar block", nrblock * na, nQ)
+        Ear = core.Matrix("Ear block", nrblock * na, nQ)
+        
+        # Fill Dar and Ear from disk tensors
+        dfh.fill_tensor("Dar", Dar, [rstart, rstart + nrblock], [0, na], [0, nQ])
+        dfh.fill_tensor("Ear", Ear, [rstart, rstart + nrblock], [0, na], [0, nQ])
+        
+        # Compute Far = Dar + Ear (element-wise addition)
+        Dar.np[:, :] += Ear.np[:, :]
+        
+        # Write Far back to disk (Dar now contains Dar + Ear)
+        dfh.write_disk_tensor("Far", Dar, (rstart, rstart + nrblock))
+    
+    # Add disk tensor for Fbs
+    dfh.add_disk_tensor("Fbs", (ns, nb, nQ))
+    
+    # Loop over s blocks to compute Fbs = Dbs + Ebs
+    for sstart in range(0, ns, max_s):
+        nsblock = min(max_s, ns - sstart)
+        
+        # Allocate matrices to hold the tensor slices
+        Dbs = core.Matrix("Dbs block", nsblock * nb, nQ)
+        Ebs = core.Matrix("Ebs block", nsblock * nb, nQ)
+        
+        # Fill Dbs and Ebs from disk tensors
+        dfh.fill_tensor("Dbs", Dbs, [sstart, sstart + nsblock], [0, nb], [0, nQ])
+        dfh.fill_tensor("Ebs", Ebs, [sstart, sstart + nsblock], [0, nb], [0, nQ])
+        
+        # Compute Fbs = Dbs + Ebs (element-wise addition)
+        Dbs.np[:, :] += Ebs.np[:, :]
+        
+        # Write Fbs back to disk (Dbs now contains Dbs + Ebs)
+        dfh.write_disk_tensor("Fbs", Dbs, (sstart, sstart + nsblock))
+    
+    # => Scalar Energy Accumulators [C++ lines 7172-7175]
+    Disp20 = 0.0
+    ExchDisp20 = 0.0
+    sExchDisp20 = 0.0
+    
+    # => Thread-local Energy Matrices [C++ lines 7179-7188]
+    # In Python we use single-threaded execution, so we only need one set of matrices
+    E_disp20_threads = []
+    E_exch_disp20_threads = []
+    for t in range(nT):
+        E_disp20_threads.append(core.Matrix("E_disp20", na, nb))
+        E_exch_disp20_threads.append(core.Matrix("E_exch_disp20", na, nb))
+    
+    # => MO to LO Transformation [C++ lines 7192-7193]
+    Uaocc_A = cache["Uaocc0A"]
+    Uaocc_B = cache["Uaocc0B"]
+    UAp = Uaocc_A.np
+    UBp = Uaocc_B.np
+    
+    # Orbital energies (already numpy arrays)
+    eap = eps_vir_A
+    ebp = eps_vir_B
+    erp = eps_vir_A  # Same as eap for virtual orbitals A
+    esp = eps_vir_B  # Same as ebp for virtual orbitals B
+    
+    # => Work arrays for inner loop
+    Tab = core.Matrix("Tab", na, nb)
+    Vab = core.Matrix("Vab", na, nb)
+    T2ab = core.Matrix("T2ab", na, nb)
+    V2ab = core.Matrix("V2ab", na, nb)
+    Iab = core.Matrix("Iab", na, nb)
+    
+    # => Main r,s loop <= //
+    for rstart in range(0, nr, max_r):
+        nrblock = min(max_r, nr - rstart)
+        
+        # Allocate and fill r-block tensors
+        Aar = core.Matrix("Aar block", nrblock * na, nQ)
+        Far = core.Matrix("Far block", nrblock * na, nQ)
+        Bbr = core.Matrix("Bbr block", nrblock * nb, nQ)
+        Cbr = core.Matrix("Cbr block", nrblock * nb, nQ)
+        
+        dfh.fill_tensor("Aar", Aar, [rstart, rstart + nrblock], [0, na], [0, nQ])
+        dfh.fill_tensor("Far", Far, [rstart, rstart + nrblock], [0, na], [0, nQ])
+        dfh.fill_tensor("Bbr", Bbr, [rstart, rstart + nrblock], [0, nb], [0, nQ])
+        dfh.fill_tensor("Cbr", Cbr, [rstart, rstart + nrblock], [0, nb], [0, nQ])
+        
+        # Get numpy pointers for r-block tensors
+        Aarp = Aar.np
+        Farp = Far.np
+        Bbrp = Bbr.np
+        Cbrp = Cbr.np
+        
+        for sstart in range(0, ns, max_s):
+            nsblock = min(max_s, ns - sstart)
+            
+            # Allocate and fill s-block tensors
+            Abs = core.Matrix("Abs block", nsblock * nb, nQ)
+            Fbs = core.Matrix("Fbs block", nsblock * nb, nQ)
+            Bas = core.Matrix("Bas block", nsblock * na, nQ)
+            Cas = core.Matrix("Cas block", nsblock * na, nQ)
+            
+            dfh.fill_tensor("Abs", Abs, [sstart, sstart + nsblock], [0, nb], [0, nQ])
+            dfh.fill_tensor("Fbs", Fbs, [sstart, sstart + nsblock], [0, nb], [0, nQ])
+            dfh.fill_tensor("Bas", Bas, [sstart, sstart + nsblock], [0, na], [0, nQ])
+            dfh.fill_tensor("Cas", Cas, [sstart, sstart + nsblock], [0, na], [0, nQ])
+            
+            # Get numpy pointers for s-block tensors
+            Absp = Abs.np
+            Fbsp = Fbs.np
+            Basp = Bas.np
+            Casp = Cas.np
+            
+            nrs = nrblock * nsblock
+            
+            # => RS inner loop <= //
+            # Python is single-threaded, so we don't need OpenMP reduction
+            for rs in range(nrs):
+                r = rs // nsblock
+                s = rs % nsblock
+                
+                # Thread index (always 0 in Python)
+                thread = 0
+                
+                # Get pointers to work arrays and energy matrices
+                Tabp = Tab.np
+                Vabp = Vab.np
+                T2abp = T2ab.np
+                V2abp = V2ab.np
+                Iabp = Iab.np
+                E_disp20Tp = E_disp20_threads[thread].np
+                E_exch_disp20Tp = E_exch_disp20_threads[thread].np
+                
+                # => Amplitudes, Disp20 <= //
+                
+                # Vab = Aar[r] @ Abs[s].T
+                # Extract slices for r-th and s-th orbitals
+                # Convert to proper numpy arrays to ensure correct slicing behavior
+                Aar_r = np.asarray(Aarp[r*na:(r+1)*na, :])
+                Abs_s = np.asarray(Absp[s*nb:(s+1)*nb, :])
+                Vabp[:, :] = np.dot(Aar_r, Abs_s.T)
+                
+                # Compute amplitudes Tab[a,b] = Vab[a,b] / (ea + eb - er - es)
+                for a in range(na):
+                    for b in range(nb):
+                        Tabp[a, b] = Vabp[a, b] / (eap[a] + ebp[b] - erp[r + rstart] - esp[s + sstart])
+                
+                # Transform to localized orbital basis
+                # T2ab = UA.T @ Tab @ UB
+                Iabp[:, :] = Tabp @ UBp
+                T2abp[:, :] = UAp.T @ Iabp
+                
+                # V2ab = UA.T @ Vab @ UB
+                Iabp[:, :] = Vabp @ UBp
+                V2abp[:, :] = UAp.T @ Iabp
+                
+                # Accumulate Disp20
+                for a in range(na):
+                    for b in range(nb):
+                        E_disp20Tp[a, b] += 4.0 * T2abp[a, b] * V2abp[a, b]
+                        Disp20 += 4.0 * T2abp[a, b] * V2abp[a, b]
+                
+                # => Exch-Disp20 <= //
+                
+                # > Q1-Q3 < //
+                # Vab = Bas[s] @ Bbr[r].T + Cas[s] @ Cbr[r].T + Aar[r] @ Fbs[s].T + Far[r] @ Abs[s].T
+                # Convert to proper numpy arrays to ensure correct slicing behavior
+                Bas_s = np.asarray(Basp[s*na:(s+1)*na, :])
+                Bbr_r = np.asarray(Bbrp[r*nb:(r+1)*nb, :])
+                Cas_s = np.asarray(Casp[s*na:(s+1)*na, :])
+                Cbr_r = np.asarray(Cbrp[r*nb:(r+1)*nb, :])
+                Far_r = np.asarray(Farp[r*na:(r+1)*na, :])
+                Fbs_s = np.asarray(Fbsp[s*nb:(s+1)*nb, :])
+                
+                Vabp[:, :] = Bas_s @ Bbr_r.T
+                Vabp[:, :] += Cas_s @ Cbr_r.T
+                Vabp[:, :] += Aar_r @ Fbs_s.T
+                Vabp[:, :] += Far_r @ Abs_s.T
+                
+                # > V,J,K < //
+                # Add outer product contributions using DGER equivalent
+                # C_DGER(na, nb, 1.0, &Sasp[0][s + sstart], ns, &Qbrp[0][r + rstart], nr, Vabp[0], nb);
+                Vabp[:, :] += np.outer(Sas_np[:, s + sstart], Qbr_np[:, r + rstart])
+                
+                # C_DGER(na, nb, 1.0, &Qasp[0][s + sstart], ns, &Sbrp[0][r + rstart], nr, Vabp[0], nb);
+                Vabp[:, :] += np.outer(Qas_np[:, s + sstart], Sbr_np[:, r + rstart])
+                
+                # C_DGER(na, nb, 1.0, &Qarp[0][r + rstart], nr, &SAbsp[0][s + sstart], ns, Vabp[0], nb);
+                Vabp[:, :] += np.outer(Qar_np[:, r + rstart], SAbs_np[:, s + sstart])
+                
+                # C_DGER(na, nb, 1.0, &SBarp[0][r + rstart], nr, &Qbsp[0][s + sstart], ns, Vabp[0], nb);
+                Vabp[:, :] += np.outer(SBar_np[:, r + rstart], Qbs_np[:, s + sstart])
+                
+                # Transform to localized orbital basis
+                Iabp[:, :] = Vabp @ UBp
+                V2abp[:, :] = UAp.T @ Iabp
+                
+                # Accumulate ExchDisp20
+                for a in range(na):
+                    for b in range(nb):
+                        E_exch_disp20Tp[a, b] -= 2.0 * T2abp[a, b] * V2abp[a, b]
+                        ExchDisp20 -= 2.0 * T2abp[a, b] * V2abp[a, b]
+    
+    # => Accumulate thread results <= //
+    E_disp20 = core.Matrix("E_disp20", na, nb)
+    E_exch_disp20 = core.Matrix("E_exch_disp20", na, nb)
+    
+    # Single-threaded, so just use the first (and only) thread result
+    E_disp20.copy(E_disp20_threads[0])
+    E_exch_disp20.copy(E_exch_disp20_threads[0])
+    
+    # => Populate cache['E'] matrix <= //
+    # Store energy matrices and scalars
+    cache['E']['DISP20'] = Disp20
+    cache['E']['EXCH-DISP20'] = ExchDisp20
+    cache['E_DISP20'] = E_disp20
+    cache['E_EXCH_DISP20'] = E_exch_disp20
+    Edisp_AB = core.Matrix("E_disp20", na, nb)
+    # add E_disp20 and E_exch_disp20
+    Edisp_AB.np[:, :] = E_disp20.np + E_exch_disp20.np
+    cache['E_DISP_AB'] = Edisp_AB
+
+    
+    # => Output printing <= //
+    core.print_out("    Disp20              = %18.12lf [Eh]\n" % Disp20)
+    core.print_out("    Exch-Disp20         = %18.12lf [Eh]\n" % ExchDisp20)
+    core.print_out("\n")
+    
     return cache
 
 
@@ -1863,7 +2410,9 @@ def einsum_chain_gemm(
         for i in range(len(tensors) - 1):
             A = computed_tensors[-1]
             B = tensors[i + 1]
-            T1, T2 = transposes[i], transposes[i + 1]
+            # For intermediate results (i > 0), always use 'N' for T1 since A is a computed intermediate
+            T1 = transposes[i] if i == 0 else 'N'
+            T2 = transposes[i + 1]
             A_size = A.shape[0]
             if T1 == "T":
                 A_size = A.shape[1]
