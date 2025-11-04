@@ -547,7 +547,7 @@ def run_sapt_dft(name, **kwargs):
                 # SAPT0_adz_3_IE_2B_BJ_inter
                 params = [1.0, 0.56063068, 0.65540802, 1.06422537]
                 # sadz (supermolecular damping...)
-                params = [1.0, 0.83055196, 0.70628586, 1.12379695]
+                # params = [1.0, 0.83055196, 0.70628586, 1.12379695]
             else:
                 raise ValueError("SAPT(DFT): DFTD4 parameters not available for functional %s" % sapt_dft_functional)
             v = dftd4_c6_intermolecular_dispersion(
@@ -1064,13 +1064,16 @@ def sapt_dft(
         sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
         if core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
             core.timer_on("SAPT(DFT): F-SAPT Dispersion")
-            cache_ein = sapt_jk_terms_ein.fdisp0(cache_ein, mp2_disp['Disp20,u'], dimer_wfn, wfn_A, wfn_B, sapt_jk, nfrozen_A, nfrozen_B, True)
+            cache_ein = sapt_jk_terms_ein.fdisp0(
+                # cache_ein, mp2_disp['Disp20,u'], dimer_wfn, wfn_A, wfn_B, sapt_jk, nfrozen_A, nfrozen_B, True
+                cache_ein, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, do_print=True
+            )
             core.timer_off("SAPT(DFT): F-SAPT Dispersion")
             core.set_variable("FSAPT_DISP_AB", np.zeros_like(cache_ein['Elst_AB']))
         # elif "D4", returrn pairwise dispersion energies
         else:
             core.set_variable("FSAPT_DISP_AB", np.zeros_like(cache_ein['Elst_AB']))
-        if sapt_dft_D4_IE and d4_type == 'intermolecular':
+        if sapt_dft_D4_IE:  # and d4_type == 'intermolecular':
             core.set_variable("FSAPT_EMPIRICAL_DISP", data['FSAPT_EMPIRICAL_DISP'])
 
         core.set_variable("FSAPT_QA", cache_ein["Qocc0A"])

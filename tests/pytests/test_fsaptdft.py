@@ -310,6 +310,7 @@ no_com
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
             "SAPT_DFT_DO_FSAPT": True,
+            "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
         }
     )
     psi4.energy("sapt(dft)", molecule=mol)

@@ -1820,7 +1820,7 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     aux_basis = dimer_wfn.get_basisset("DF_BASIS_SCF")
     dfh = core.DFHelper(dimer_basis, aux_basis)
-    raise NotImplementedError("Incomplete fdisp0 implementation")
+    # raise NotImplementedError("Incomplete fdisp0 implementation")
     return cache
 
 
