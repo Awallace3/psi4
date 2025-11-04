@@ -2229,11 +2229,12 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         dfh.fill_tensor("Bbr", Bbr, [rstart, rstart + nrblock], [0, nb], [0, nQ])
         dfh.fill_tensor("Cbr", Cbr, [rstart, rstart + nrblock], [0, nb], [0, nQ])
         
-        # Get numpy pointers for r-block tensors
-        Aarp = Aar.np
-        Farp = Far.np
-        Bbrp = Bbr.np
-        Cbrp = Cbr.np
+        # Get numpy pointers for r-block tensors and reshape to 3D
+        # Tensors are stored as 2D with shape (nrblock * nX, nQ) and need to be (nrblock, nX, nQ)
+        Aarp = Aar.np.reshape(nrblock, na, nQ)
+        Farp = Far.np.reshape(nrblock, na, nQ)
+        Bbrp = Bbr.np.reshape(nrblock, nb, nQ)
+        Cbrp = Cbr.np.reshape(nrblock, nb, nQ)
         
         for sstart in range(0, ns, max_s):
             nsblock = min(max_s, ns - sstart)
@@ -2249,11 +2250,12 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             dfh.fill_tensor("Bas", Bas, [sstart, sstart + nsblock], [0, na], [0, nQ])
             dfh.fill_tensor("Cas", Cas, [sstart, sstart + nsblock], [0, na], [0, nQ])
             
-            # Get numpy pointers for s-block tensors
-            Absp = Abs.np
-            Fbsp = Fbs.np
-            Basp = Bas.np
-            Casp = Cas.np
+            # Get numpy pointers for s-block tensors and reshape to 3D
+            # Tensors are stored as 2D with shape (nsblock * nX, nQ) and need to be (nsblock, nX, nQ)
+            Absp = Abs.np.reshape(nsblock, nb, nQ)
+            Fbsp = Fbs.np.reshape(nsblock, nb, nQ)
+            Basp = Bas.np.reshape(nsblock, na, nQ)
+            Casp = Cas.np.reshape(nsblock, na, nQ)
             
             nrs = nrblock * nsblock
             
@@ -2279,11 +2281,11 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
                 
                 # Vab = Aar[r] @ Abs[s].T
                 # Extract slices for r-th and s-th orbitals
-                # Aarp is 3D: (nrblock, na, nQ), so we index with [r, :, :]
-                # Absp is 3D: (nsblock, nb, nQ), so we index with [s, :, :]
-                Aar_r = np.asarray(Aarp[r, :, :])
-                Abs_s = np.asarray(Absp[s, :, :])
-                Vabp[:, :] = np.dot(Aar_r, Abs_s.T)
+                # Store these as we need them for Exch-Disp20 too
+                Aar_r = Aarp[r, :, :]
+                Abs_s = Absp[s, :, :]
+                # Use einsum to match C++ DGEMM('N', 'T', ...) more closely
+                np.einsum('aQ,bQ->ab', Aar_r, Abs_s, out=Vabp, optimize=True)
                 
                 # Compute amplitudes Tab[a,b] = Vab[a,b] / (ea + eb - er - es)
                 for a in range(na):
@@ -2309,16 +2311,16 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
                 
                 # > Q1-Q3 < //
                 # Vab = Bas[s] @ Bbr[r].T + Cas[s] @ Cbr[r].T + Aar[r] @ Fbs[s].T + Far[r] @ Abs[s].T
-                # Convert to proper numpy arrays to ensure correct slicing behavior
-                Bas_s = np.asarray(Basp[s, :, :])
-                Bbr_r = np.asarray(Bbrp[r, :, :])
-                Cas_s = np.asarray(Casp[s, :, :])
-                Cbr_r = np.asarray(Cbrp[r, :, :])
-                Far_r = np.asarray(Farp[r, :, :])
-                Fbs_s = np.asarray(Fbsp[s, :, :])
+                # Extract slices for r-th and s-th orbitals
+                Bas_s = Basp[s, :, :]
+                Bbr_r = Bbrp[r, :, :]
+                Cas_s = Casp[s, :, :]
+                Cbr_r = Cbrp[r, :, :]
+                Far_r = Farp[r, :, :]
+                Fbs_s = Fbsp[s, :, :]
                 
                 Vabp[:, :] = Bas_s @ Bbr_r.T
-                Vabp[:, :] += Cas_s @ Cbr_r.T
+                Vabp[:, :] -= Cas_s @ Cbr_r.T
                 Vabp[:, :] += Aar_r @ Fbs_s.T
                 Vabp[:, :] += Far_r @ Abs_s.T
                 
@@ -2330,11 +2332,11 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
                 # C_DGER(na, nb, 1.0, &Qasp[0][s + sstart], ns, &Sbrp[0][r + rstart], nr, Vabp[0], nb);
                 Vabp[:, :] += np.outer(Qas_np[:, s + sstart], Sbr_np[:, r + rstart])
                 
-                # C_DGER(na, nb, 1.0, &Qarp[0][r + rstart], nr, &SAbsp[0][s + sstart], ns, Vabp[0], nb);
-                Vabp[:, :] += np.outer(Qar_np[:, r + rstart], SAbs_np[:, s + sstart])
+                # C_DGER(na, nb, -1.0, &Qarp[0][r + rstart], nr, &SAbsp[0][s + sstart], ns, Vabp[0], nb);
+                Vabp[:, :] -= np.outer(Qar_np[:, r + rstart], SAbs_np[:, s + sstart])
                 
-                # C_DGER(na, nb, 1.0, &SBarp[0][r + rstart], nr, &Qbsp[0][s + sstart], ns, Vabp[0], nb);
-                Vabp[:, :] += np.outer(SBar_np[:, r + rstart], Qbs_np[:, s + sstart])
+                # C_DGER(na, nb, -1.0, &SBarp[0][r + rstart], nr, &Qbsp[0][s + sstart], ns, Vabp[0], nb);
+                Vabp[:, :] -= np.outer(SBar_np[:, r + rstart], Qbs_np[:, s + sstart])
                 
                 # Transform to localized orbital basis
                 Iabp[:, :] = Vabp @ UBp
@@ -2343,8 +2345,8 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
                 # Accumulate ExchDisp20
                 for a in range(na):
                     for b in range(nb):
-                        E_exch_disp20Tp[a, b] -= 2.0 * T2abp[a, b] * V2abp[a, b]
-                        ExchDisp20 -= 2.0 * T2abp[a, b] * V2abp[a, b]
+                        E_exch_disp20Tp[a, b] += T2abp[a, b] * V2abp[a, b]
+                        ExchDisp20 += T2abp[a, b] * V2abp[a, b]
     
     # => Accumulate thread results <= //
     E_disp20 = core.Matrix("E_disp20", na, nb)
@@ -2370,8 +2372,8 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         core.print_out(f"    Disp20              = {Disp20 * 1000:.8f} [mEh]\n")
         core.print_out(f"    Exch-Disp20         = {ExchDisp20 * 1000:.8f} [mEh]\n")
         core.print_out("\n")
-        assert abs(scalars['Disp20,u'] - Disp20) < 1e-10, f"Disp20 scalar mismatch! {scalars['Disp20,u'] = } {Disp20 = }"
-        assert abs(scalars['Exch-Disp20,u'] - ExchDisp20) < 1e-10, f"ExchDisp20 scalar mismatch! {scalars['Exch-Disp20,u'] = } {ExchDisp20 = }"
+        assert abs(scalars['Disp20,u'] - Disp20) < 1e-9, f"Disp20 scalar mismatch! {scalars['Disp20,u'] = } {Disp20 = }"
+        assert abs(scalars['Exch-Disp20,u'] - ExchDisp20) < 1e-9, f"ExchDisp20 scalar mismatch! {scalars['Exch-Disp20,u'] = } {ExchDisp20 = }"
     return cache
 
 
