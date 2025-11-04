@@ -1740,6 +1740,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     dfh.clear_all()
     return cache
 
+
 def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     if do_print:
         core.print_out("  ==> F-SAPT0 Dispersion <==\n\n")
@@ -2200,10 +2201,11 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     UBp = Uaocc_B.np
     
     # Orbital energies (already numpy arrays)
-    eap = eps_vir_A
-    ebp = eps_vir_B
-    erp = eps_vir_A  # Same as eap for virtual orbitals A
-    esp = eps_vir_B  # Same as ebp for virtual orbitals B
+    # In the dispersion formula: indices a,b are occupied and r,s are virtual
+    eap = eps_occ_A  # occupied energies for monomer A (index a)
+    ebp = eps_occ_B  # occupied energies for monomer B (index b)
+    erp = eps_vir_A  # virtual energies for monomer A (index r)
+    esp = eps_vir_B  # virtual energies for monomer B (index s)
     
     # => Work arrays for inner loop
     Tab = core.Matrix("Tab", na, nb)
@@ -2352,11 +2354,6 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     E_disp20.copy(E_disp20_threads[0])
     E_exch_disp20.copy(E_exch_disp20_threads[0])
 
-    # => Output printing <= //
-    core.print_out("    Disp20              = %18.12lf [Eh]\n" % Disp20)
-    core.print_out("    Exch-Disp20         = %18.12lf [Eh]\n" % ExchDisp20)
-    core.print_out("\n")
-
     # => Populate cache['E'] matrix <= //
     # Store energy matrices and scalars
     cache['E_DISP20'] = E_disp20
@@ -2365,6 +2362,16 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # add E_disp20 and E_exch_disp20
     Edisp_AB.np[:, :] = E_disp20.np + E_exch_disp20.np
     cache['DISP_AB'] = Edisp_AB
+    # => Output printing <= //
+    # {Elst10*1000:.8f} [mEh]
+
+    pp(scalars)
+    if do_print:
+        core.print_out(f"    Disp20              = {Disp20 * 1000:.8f} [mEh]\n")
+        core.print_out(f"    Exch-Disp20         = {ExchDisp20 * 1000:.8f} [mEh]\n")
+        core.print_out("\n")
+        assert abs(scalars['Disp20,u'] - Disp20) < 1e-10, f"Disp20 scalar mismatch! {scalars['Disp20,u'] = } {Disp20 = }"
+        assert abs(scalars['Exch-Disp20,u'] - ExchDisp20) < 1e-10, f"ExchDisp20 scalar mismatch! {scalars['Exch-Disp20,u'] = } {ExchDisp20 = }"
     return cache
 
 
