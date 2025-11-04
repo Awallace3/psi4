@@ -2277,9 +2277,10 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
                 
                 # Vab = Aar[r] @ Abs[s].T
                 # Extract slices for r-th and s-th orbitals
-                # Convert to proper numpy arrays to ensure correct slicing behavior
-                Aar_r = np.asarray(Aarp[r*na:(r+1)*na, :])
-                Abs_s = np.asarray(Absp[s*nb:(s+1)*nb, :])
+                # Aarp is 3D: (nrblock, na, nQ), so we index with [r, :, :]
+                # Absp is 3D: (nsblock, nb, nQ), so we index with [s, :, :]
+                Aar_r = np.asarray(Aarp[r, :, :])
+                Abs_s = np.asarray(Absp[s, :, :])
                 Vabp[:, :] = np.dot(Aar_r, Abs_s.T)
                 
                 # Compute amplitudes Tab[a,b] = Vab[a,b] / (ea + eb - er - es)
@@ -2307,12 +2308,12 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
                 # > Q1-Q3 < //
                 # Vab = Bas[s] @ Bbr[r].T + Cas[s] @ Cbr[r].T + Aar[r] @ Fbs[s].T + Far[r] @ Abs[s].T
                 # Convert to proper numpy arrays to ensure correct slicing behavior
-                Bas_s = np.asarray(Basp[s*na:(s+1)*na, :])
-                Bbr_r = np.asarray(Bbrp[r*nb:(r+1)*nb, :])
-                Cas_s = np.asarray(Casp[s*na:(s+1)*na, :])
-                Cbr_r = np.asarray(Cbrp[r*nb:(r+1)*nb, :])
-                Far_r = np.asarray(Farp[r*na:(r+1)*na, :])
-                Fbs_s = np.asarray(Fbsp[s*nb:(s+1)*nb, :])
+                Bas_s = np.asarray(Basp[s, :, :])
+                Bbr_r = np.asarray(Bbrp[r, :, :])
+                Cas_s = np.asarray(Casp[s, :, :])
+                Cbr_r = np.asarray(Cbrp[r, :, :])
+                Far_r = np.asarray(Farp[r, :, :])
+                Fbs_s = np.asarray(Fbsp[s, :, :])
                 
                 Vabp[:, :] = Bas_s @ Bbr_r.T
                 Vabp[:, :] += Cas_s @ Cbr_r.T
@@ -2350,24 +2351,20 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Single-threaded, so just use the first (and only) thread result
     E_disp20.copy(E_disp20_threads[0])
     E_exch_disp20.copy(E_exch_disp20_threads[0])
-    
+
+    # => Output printing <= //
+    core.print_out("    Disp20              = %18.12lf [Eh]\n" % Disp20)
+    core.print_out("    Exch-Disp20         = %18.12lf [Eh]\n" % ExchDisp20)
+    core.print_out("\n")
+
     # => Populate cache['E'] matrix <= //
     # Store energy matrices and scalars
-    cache['E']['DISP20'] = Disp20
-    cache['E']['EXCH-DISP20'] = ExchDisp20
     cache['E_DISP20'] = E_disp20
     cache['E_EXCH_DISP20'] = E_exch_disp20
     Edisp_AB = core.Matrix("E_disp20", na, nb)
     # add E_disp20 and E_exch_disp20
     Edisp_AB.np[:, :] = E_disp20.np + E_exch_disp20.np
-    cache['E_DISP_AB'] = Edisp_AB
-
-    
-    # => Output printing <= //
-    core.print_out("    Disp20              = %18.12lf [Eh]\n" % Disp20)
-    core.print_out("    Exch-Disp20         = %18.12lf [Eh]\n" % ExchDisp20)
-    core.print_out("\n")
-    
+    cache['DISP_AB'] = Edisp_AB
     return cache
 
 
