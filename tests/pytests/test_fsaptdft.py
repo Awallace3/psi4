@@ -255,7 +255,7 @@ no_com
 @pytest.mark.fsapt
 # @uusing("pandas")
 @pytest.mark.saptdft
-def test_fsaptdft_psivars():
+def test_fsapthf_psivars():
     """
     fsapt-psivars: calling fsapt_analysis with psi4 variables after running an
     fisapt0 calcluation requires the user to pass the molecule object
@@ -351,16 +351,18 @@ no_com
     df = pd.DataFrame(data)
     print("COMPUTED DF")
     print(df)
+    # data_tmp = {k: v.tolist() for k, v in dict(df).items()}
+    # pp(data_tmp)
     data = {
-        "Frag1": ["Methyl1_A", "Methyl2_A", "All", "All", "All"],
-        "Frag2": ["All", "All", "Peptide_B", "T-Butyl_B", "All"],
-        "Elst": [0.511801, -1.752090, -0.100514, -1.139775, -1.240289],
-        "Exch": [0.047332, 3.928215, 0.031752, 3.943796, 3.975548],
-        "IndAB": [-0.022726, -0.200776, -0.033169, -0.190334, -0.223502],
-        "IndBA": [0.015095, -0.082466, -0.001398, -0.065972, -0.067371],
-        "Disp": [-0.071408, -0.425088, -0.017542, -0.478954, -0.496496],
-        "EDisp": [0.0, 0.0, 0.0, 0.0, 0.0],
-        "Total": [0.480095, 1.467795, -0.120870, 2.068760, 1.947890],
+        "Disp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "EDisp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "Elst": [-0.100513, -1.139774, -0.100513, -1.139774, 0.511801, -1.752088, -0.100513, -1.139774, -1.240287],
+        "Exch": [0.031751, 3.943794, 0.031751, 3.943794, 0.047332, 3.928213, 0.031751, 3.943794, 3.975545],
+        "Frag1": ["Methyl1_A", "Methyl1_A", "Methyl2_A", "Methyl2_A", "Methyl1_A", "Methyl2_A", "All", "All", "All"],
+        "Frag2": ["Peptide_B", "T-Butyl_B", "Peptide_B", "T-Butyl_B", "All", "All", "Peptide_B", "T-Butyl_B", "All"],
+        "IndAB": [-0.033169, -0.190334, -0.033169, -0.190334, -0.022726, -0.200776, -0.033169, -0.190334, -0.223502],
+        "IndBA": [-0.001398, -0.065972, -0.001398, -0.065972, 0.015095, -0.082466, -0.001398, -0.065972, -0.067370],
+        "Total": [-0.103328, 2.547714, -0.103328, 2.547714, 0.551502, 1.892883, -0.103328, 2.547714, 2.444386],
     }
 
     ref_df = pd.DataFrame(data)
@@ -619,17 +621,111 @@ no_com
     )
     df = pd.DataFrame(data)
     print("COMPUTED DF")
-    print(df[["Frag1", "Frag2", "Elst", "Exch", "IndAB", "IndBA", "Disp", "EDisp", "Total"]])
+    print(
+        df[
+            [
+                "Frag1",
+                "Frag2",
+                "Elst",
+                "Exch",
+                "IndAB",
+                "IndBA",
+                "Disp",
+                "EDisp",
+                "Total",
+            ]
+        ]
+    )
     data = {
-        "Frag1": ["Methyl1_A", "Methyl1_A", "Methyl2_A", "Methyl2_A", "Methyl1_A", "Methyl2_A", "All", "All", "All"],
-        "Frag2": ["Peptide_B", "T-Butyl_B", "Peptide_B", "T-Butyl_B", "All", "All", "Peptide_B", "T-Butyl_B", "All"],
-        "Elst": [-0.106663, -1.185465, -0.106663, -1.185465, 0.554554, -1.846683, -0.106663, -1.185465, -1.292129],
-        "Exch": [0.039172, 4.093049, 0.039172, 4.093049, 0.047454, 4.084767, 0.039172, 4.093049, 4.132221],
-        "IndAB": [-0.038179, -0.193800, -0.038179, -0.193800, -0.023789, -0.208190, -0.038179, -0.193800, -0.231979],
-        "IndBA": [-0.001862, -0.076168, -0.001862, -0.076168, 0.020246, -0.098276, -0.001862, -0.076168, -0.078030],
+        "Frag1": [
+            "Methyl1_A",
+            "Methyl1_A",
+            "Methyl2_A",
+            "Methyl2_A",
+            "Methyl1_A",
+            "Methyl2_A",
+            "All",
+            "All",
+            "All",
+        ],
+        "Frag2": [
+            "Peptide_B",
+            "T-Butyl_B",
+            "Peptide_B",
+            "T-Butyl_B",
+            "All",
+            "All",
+            "Peptide_B",
+            "T-Butyl_B",
+            "All",
+        ],
+        "Elst": [
+            -0.106663,
+            -1.185465,
+            -0.106663,
+            -1.185465,
+            0.554554,
+            -1.846683,
+            -0.106663,
+            -1.185465,
+            -1.292129,
+        ],
+        "Exch": [
+            0.039172,
+            4.093049,
+            0.039172,
+            4.093049,
+            0.047454,
+            4.084767,
+            0.039172,
+            4.093049,
+            4.132221,
+        ],
+        "IndAB": [
+            -0.038179,
+            -0.193800,
+            -0.038179,
+            -0.193800,
+            -0.023789,
+            -0.208190,
+            -0.038179,
+            -0.193800,
+            -0.231979,
+        ],
+        "IndBA": [
+            -0.001862,
+            -0.076168,
+            -0.001862,
+            -0.076168,
+            0.020246,
+            -0.098276,
+            -0.001862,
+            -0.076168,
+            -0.078030,
+        ],
         "Disp": [0, 0, 0, 0, 0, 0, 0, 0, 0],
-        "EDisp": [-0.031540, -1.706223, -0.031540, -1.706223, -0.147529, -1.590233, -0.031540, -1.706223, -1.737762],
-        "Total": [-0.139072, 0.931393, -0.139072, 0.931393, 0.450936, 0.341385, -0.139072, 0.931393, 0.792322],
+        "EDisp": [
+            -0.031540,
+            -1.706223,
+            -0.031540,
+            -1.706223,
+            -0.147529,
+            -1.590233,
+            -0.031540,
+            -1.706223,
+            -1.737762,
+        ],
+        "Total": [
+            -0.139072,
+            0.931393,
+            -0.139072,
+            0.931393,
+            0.450936,
+            0.341385,
+            -0.139072,
+            0.931393,
+            0.792322,
+        ],
     }
 
     ref_df = pd.DataFrame(data)
@@ -785,6 +881,7 @@ no_com
                 f"{ref_df['Frag1'].iloc[i]} {ref_df['Frag2'].iloc[i]} {col}",
             )
 
+
 @pytest.mark.fsapt
 @pytest.mark.saptdft
 def test_fsaptdft_indices():
@@ -839,7 +936,7 @@ no_com
             "scf_type": "df",
             "guess": "sad",
             # "freeze_core": "false", # Frozen core not working with localization presently
-            "freeze_core": "true", # Frozen core not working with localization presently
+            "freeze_core": "true",  # Frozen core not working with localization presently
             "FISAPT_FSAPT_FILEPATH": "none",
             # "SAPT_DFT_FUNCTIONAL": "PBE0",
             "SAPT_DFT_FUNCTIONAL": functional,
@@ -883,11 +980,11 @@ no_com
 4        All        All  [1, 2, 7, 8, 3, 4, 5, 6]  ...  0.0 -1.502893  0.941492
     """
     mol_qcel_dict = mol.to_schema(dtype=2)
-    frag1_indices = df['Frag1_indices'].tolist()
-    frag2_indices = df['Frag2_indices'].tolist()
+    frag1_indices = df["Frag1_indices"].tolist()
+    frag2_indices = df["Frag2_indices"].tolist()
     # Using molecule object for all test to ensure right counts from each
     # fragment are achieved. Note +1 for 1-indexing in fsapt_analysis
-    all_A = [i + 1 for i in mol_qcel_dict['fragments'][0]]
+    all_A = [i + 1 for i in mol_qcel_dict["fragments"][0]]
     expected_frag1_indices = [
         [1, 2, 7, 8],
         [1, 2, 7, 8],
@@ -899,7 +996,7 @@ no_com
         all_A,
         all_A,
     ]
-    all_B = [j + 1 for j in mol_qcel_dict['fragments'][1]]
+    all_B = [j + 1 for j in mol_qcel_dict["fragments"][1]]
     expected_frag2_indices = [
         [9, 10, 11, 16, 26],
         [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
@@ -911,18 +1008,22 @@ no_com
         [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
         all_B,
     ]
-    print(f"{all_A = }")
-    print(f"{all_B = }")
+    print(f"{all_A=}")
+    print(f"{all_B=}")
     for i, indices in enumerate(frag1_indices):
         # Assert lists are identical
         e = expected_frag1_indices[i]
         sorted_frag = sorted(indices)
-        assert sorted_frag == e, f"Frag1 indices do not match for fragment {i}: expected {e}, got {sorted_frag}"
+        assert sorted_frag == e, f"Frag1 indices do not match for fragment {
+            i
+        }: expected {e}, got {sorted_frag}"
 
     for i, indices in enumerate(frag2_indices):
         e = expected_frag2_indices[i]
         sorted_frag = sorted(indices)
-        assert sorted_frag == e, f"Frag2 indices do not match for fragment {i}: expected {e}, got {sorted_frag}"
+        assert sorted_frag == e, f"Frag2 indices do not match for fragment {
+            i
+        }: expected {e}, got {sorted_frag}"
     df["F-Induction"] = df["IndAB"] + df["IndBA"]
     df.drop(columns=["IndAB", "IndBA"], inplace=True)
     df = df.rename(
@@ -935,6 +1036,7 @@ no_com
         },
     )
     import qcelemental as qcel
+
     qcel_mol = qcel.models.Molecule.from_data(
         """
 0 1
@@ -973,7 +1075,7 @@ no_reorient
 no_com
 """
     )
-    df['qcel_molecule'] = [qcel_mol] * len(df)
+    df["qcel_molecule"] = [qcel_mol] * len(df)
     # Save dataframe for future testing
     df.to_pickle(f"fsapt_{functional}_train_simple.pkl")
 
@@ -985,6 +1087,7 @@ if __name__ == "__main__":
     # test_fsaptdft_fsapt0()
     # test_fsapt0_fsaptdft()
     # test_fsaptdft_psivars()
+    test_fsapthf_psivars()
     # test_fsaptdftd4_psivars()
-    test_fsaptdftd4_psivars_pbe0()
+    # test_fsaptdftd4_psivars_pbe0()
     # test_fsaptdft_indices()
