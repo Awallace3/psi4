@@ -52,12 +52,21 @@ def localization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # loc.localize()
     # C_lmo_B = loc.L
     # IBOLocalizer
+    
+    # Extract monomers to compute frozen core counts
+    mol = dimer_wfn.molecule()
+    molA = mol.extract_subsets([1], [])
+    molB = mol.extract_subsets([2], [])
+    nfocc0A = dimer_wfn.basisset().n_frozen_core(core.get_option("GLOBALS", "FREEZE_CORE"), molA)
+    nfocc0B = dimer_wfn.basisset().n_frozen_core(core.get_option("GLOBALS", "FREEZE_CORE"), molB)
+    nfocc_dimer = nfocc0A + nfocc0B
+    
     N_eps_focc = cache["eps_focc"].dimpi()[0]
     N_eps_occ = cache["eps_occ"].dimpi()[0]
     Focc = core.Matrix("Focc", N_eps_occ, N_eps_occ)
     for i in range(N_eps_occ):
         Focc.np[i, i] = cache["eps_occ"].np[i]
-    ranges = [0, N_eps_focc, N_eps_occ] # would need corrected for frozen core
+    ranges = [0, nfocc_dimer, N_eps_occ]  # Separate frozen and active orbitals
     minao = core.BasisSet.build(dimer_wfn.molecule(), "BASIS", core.get_global_option("MINAO_BASIS"))
     dimer_wfn.set_basisset("MINAO", minao)
     # pybind11 location: ./psi4/src/export_wavefunction.cc
@@ -76,6 +85,23 @@ def localization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     cache['Locc'] = ret['L']
     cache['Qocc'] = ret['Q']
     cache['IAO'] = ret['A']
+    
+    # Extract frozen and active localized orbitals separately
+    nn = cache['Cocc'].shape[0]  # number of AO basis functions
+    nf = nfocc_dimer
+    na = N_eps_occ - nfocc_dimer  # number of active occupied orbitals
+    
+    if nf > 0:
+        # Store frozen core localized orbitals
+        Lfocc = core.Matrix("Lfocc", nn, nf)
+        Lfocc.np[:, :] = ret['L'].np[:, :nf]
+        cache['Lfocc'] = Lfocc
+    
+    # Store active occupied localized orbitals
+    Laocc = core.Matrix("Laocc", nn, na)
+    Laocc.np[:, :] = ret['L'].np[:, nf:]
+    cache['Laocc'] = Laocc
+    
     return
 
 
@@ -90,8 +116,8 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     nfocc0B = dimer_wfn.basisset().n_frozen_core(core.get_option("GLOBALS", "FREEZE_CORE"), molB)
     nn = cache["Cocc_A"].shape[0]
     nf = nfocc0A
-    na = cache["Cocc_A"].shape[1]
-    nm = nf + na
+    nm = cache["Cocc_A"].shape[1]  # total occupied orbitals (frozen + active)
+    na = nm - nf  # active occupied orbitals only
     ranges = [0, nf, nm]
     N = cache['eps_occ_A'].shape[0]
     Focc = core.Matrix("Focc", N, N)
@@ -144,8 +170,8 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     nn = cache["Cocc_B"].shape[0]
     nf = nfocc0B
-    na = cache["Cocc_B"].shape[1]
-    nm = nf + na
+    nm = cache["Cocc_B"].shape[1]  # total occupied orbitals (frozen + active)
+    na = nm - nf  # active occupied orbitals only
     ranges = [0, nf, nm]
     
     N = cache['eps_occ_B'].shape[0]

@@ -1,0 +1,808 @@
+[2025-11-04 09:34:06.591307818] [einsums] [info    ] [InitLogging.cpp:130/init_logging] logging submodule has been initialized
+[2025-11-04 09:34:06.591343026] [einsums] [info    ] [InitLogging.cpp:131/init_logging] log level: 2 (0=TRACE,1=DEBUG,2=INFO,3=WARN,4=ERROR,5=CRITICAL)
+[2025-11-04 09:34:06.591351803] [einsums] [info    ] [InitRuntime.cpp:100/run] Starting Einsums: v1.1.0-trunk, Git: ef0ce1d2dd
+[2025-11-04 09:34:06.591457617] [einsums] [info    ] [Runtime.cpp:143/init] Runtime::init: initializing...
+[2025-11-04 09:34:06.591464150] [einsums] [info    ] [Runtime.cpp:130/state] Runtime state changed from Invalid to PreStartup
+[2025-11-04 09:34:06.591466655] [einsums] [info    ] [Runtime.cpp:130/state] Runtime state changed from PreStartup to Startup
+[2025-11-04 09:34:06.591486393] [einsums] [info    ] [Runtime.cpp:130/state] Runtime state changed from Startup to Running
+
+Scratch directory: /fastscratch/awallace43/
+[2025-11-04 09:34:07.165299327] [einsums] [info    ] [InitLogging.cpp:130/init_logging] logging submodule has been initialized
+[2025-11-04 09:34:07.165314406] [einsums] [info    ] [InitLogging.cpp:131/init_logging] log level: 2 (0=TRACE,1=DEBUG,2=INFO,3=WARN,4=ERROR,5=CRITICAL)
+[2025-11-04 09:34:07.165320307] [einsums] [info    ] [InitRuntime.cpp:100/run] Starting Einsums: v1.1.0-trunk, Git: ef0ce1d2dd
+[2025-11-04 09:34:07.165423126] [einsums] [info    ] [Runtime.cpp:143/init] Runtime::init: initializing...
+[2025-11-04 09:34:07.165429208] [einsums] [info    ] [Runtime.cpp:130/state] Runtime state changed from Invalid to PreStartup
+[2025-11-04 09:34:07.165431131] [einsums] [info    ] [Runtime.cpp:130/state] Runtime state changed from PreStartup to Startup
+[2025-11-04 09:34:07.165435179] [einsums] [info    ] [Runtime.cpp:130/state] Runtime state changed from Startup to Running
+
+         ---------------------------------------------------------
+                            SAPT(DFT) Procedure                    
+
+                by Daniel G. A. Smith and Austin M. Wallace        
+         ---------------------------------------------------------
+
+Warning! The default value of SAPT_DFT_EXCH_DISP_SCALE_SCHEME has changed from DISP to FIXED. Please be careful comparing results with earlier versions. 
+
+  ==> Algorithm <==
+
+   SAPT DFT Functional               HF
+   Monomer A GRAC Shift        0.096053
+   Monomer B GRAC Shift        0.073504
+   Delta HF                        True
+   JK Algorithm                      DF
+
+   Required computations:
+     HF   (Dimer)
+     HF   (Monomer A)
+     HF   (Monomer B)
+
+   Beginning setup computations
+
+   => Libint2 <=
+
+    Primary   basis highest AM E, G, H:  6, 6, 3
+    Auxiliary basis highest AM E, G, H:  7, 7, 4
+    Onebody   basis highest AM E, G, H:  -, -, -
+    Solid Harmonics ordering:            Gaussian
+
+*** tstart() called on cos-4a16505.cos.gatech.edu
+*** at Tue Nov  4 09:34:07 2025
+
+   => Loading Basis Set <=
+
+    Name: STO-3G
+    Role: ORBITAL
+    Keyword: BASIS
+    atoms 1, 4     entry O          line    81 file /home/awallace43/gits/psi4/build_saptdft_ein/stage/share/psi4/basis/sto-3g.gbs 
+    atoms 2-3, 5-6 entry H          line    19 file /home/awallace43/gits/psi4/build_saptdft_ein/stage/share/psi4/basis/sto-3g.gbs 
+
+
+         ---------------------------------------------------------
+                         SAPT(DFT): delta HF Dimer                 
+         ---------------------------------------------------------
+                                   SCF
+               by Justin Turney, Rob Parrish, Andy Simmonett
+                          and Daniel G. A. Smith
+                              RHF Reference
+                        1 Threads,    500 MiB Core
+         ---------------------------------------------------------
+
+  ==> Geometry <==
+
+    Molecular point group: c1
+    Full point group: Cs
+
+    Geometry (in Angstrom), charge = 0, multiplicity = 1:
+
+       Center              X                  Y                   Z               Mass       
+    ------------   -----------------  -----------------  -----------------  -----------------
+         O           -1.551007000000    -0.114520000000     0.000000000000    15.994914619570
+         H           -1.934259000000     0.762503000000     0.000000000000     1.007825032230
+         H           -0.599677000000     0.040712000000     0.000000000000     1.007825032230
+         O            1.350625000000     0.111469000000     0.000000000000    15.994914619570
+         H            1.680398000000    -0.373741000000    -0.758561000000     1.007825032230
+         H            1.680398000000    -0.373741000000     0.758561000000     1.007825032230
+
+  Running in c1 symmetry.
+
+  Rotational constants: A =      7.15091  B =      0.21415  C =      0.21404 [cm^-1]
+  Rotational constants: A = 214378.98633  B =   6419.94539  C =   6416.86905 [MHz]
+  Nuclear repulsion =   36.662847996863405
+
+  Charge       = 0
+  Multiplicity = 1
+  Electrons    = 20
+  Nalpha       = 10
+  Nbeta        = 10
+
+  ==> Algorithm <==
+
+  SCF Algorithm Type is DF.
+  DIIS enabled.
+  MOM disabled.
+  Fractional occupation disabled.
+  Guess Type is SAD.
+  Energy threshold   = 1.00e-08
+  Density threshold  = 1.00e-08
+  Integral threshold = 1.00e-12
+
+  ==> Primary Basis <==
+
+  Basis Set: STO-3G
+    Blend: STO-3G
+    Number of shells: 10
+    Number of basis functions: 14
+    Number of Cartesian functions: 14
+    Spherical Harmonics?: true
+    Max angular momentum: 1
+
+   => Loading Basis Set <=
+
+    Name: (STO-3G AUX)
+    Role: JKFIT
+    Keyword: DF_BASIS_SCF
+    atoms 1, 4     entry O          line   318 file /home/awallace43/gits/psi4/build_saptdft_ein/stage/share/psi4/basis/def2-universal-jkfit.gbs 
+    atoms 2-3, 5-6 entry H          line    18 file /home/awallace43/gits/psi4/build_saptdft_ein/stage/share/psi4/basis/def2-universal-jkfit.gbs 
+
+  ==> Integral Setup <==
+
+  DFHelper Memory: AOs need 0.001 GiB; user supplied 0.366 GiB. 
+  SCF_SUBTYPE=INCORE selected. In-core MEM_DF algorithm will be used.
+  Using in-core AOs.
+
+  ==> MemDFJK: Density-Fitted J/K Matrices <==
+
+    J tasked:                   Yes
+    K tasked:                   Yes
+    wK tasked:                   No
+    OpenMP threads:               1
+    Memory [MiB]:               375
+    Algorithm:                 Core
+    Schwarz Cutoff:           1E-12
+    Mask sparsity (%):       1.0204
+    Fitting Condition:        1E-10
+
+   => Auxiliary Basis Set <=
+
+  Basis Set: (STO-3G AUX)
+    Blend: DEF2-UNIVERSAL-JKFIT
+    Number of shells: 74
+    Number of basis functions: 226
+    Number of Cartesian functions: 266
+    Spherical Harmonics?: true
+    Max angular momentum: 4
+
+  Minimum eigenvalue in the overlap matrix is 3.3873562647E-01.
+  Reciprocal condition number of the overlap matrix is 1.7048210852E-01.
+    Using symmetric orthogonalization.
+
+  ==> Pre-Iterations <==
+
+  SCF Guess: Superposition of Atomic Densities via on-the-fly atomic UHF (no occupation information).
+
+   -------------------------
+    Irrep   Nso     Nmo    
+   -------------------------
+     A         14      14 
+   -------------------------
+    Total      14      14
+   -------------------------
+
+  ==> Iterations <==
+
+                           Total Energy        Delta E     RMS |[F,P]|
+
+   @DF-RHF iter SAD:  -148.39049874441815   -1.48390e+02   0.00000e+00 
+   @DF-RHF iter   1:  -149.84779167749508   -1.45729e+00   2.69273e-02 DIIS/ADIIS
+   @DF-RHF iter   2:  -149.93307022462318   -8.52785e-02   3.85987e-03 DIIS/ADIIS
+   @DF-RHF iter   3:  -149.93539320255616   -2.32298e-03   9.37148e-04 DIIS/ADIIS
+   @DF-RHF iter   4:  -149.93553585547332   -1.42653e-04   8.12765e-05 DIIS
+   @DF-RHF iter   5:  -149.93553735520311   -1.49973e-06   2.54422e-05 DIIS
+   @DF-RHF iter   6:  -149.93553755844616   -2.03243e-07   5.11752e-06 DIIS
+   @DF-RHF iter   7:  -149.93553756734650   -8.90034e-09   1.04323e-06 DIIS
+   @DF-RHF iter   8:  -149.93553756767255   -3.26054e-10   8.41388e-08 DIIS
+   @DF-RHF iter   9:  -149.93553756767452   -1.96110e-12   1.24378e-08 DIIS
+   @DF-RHF iter  10:  -149.93553756767463   -1.13687e-13   1.79729e-09 DIIS
+  Energy and wave function converged.
+
+
+  ==> Post-Iterations <==
+
+    Orbital Energies [Eh]
+    ---------------------
+
+    Doubly Occupied:                                                      
+
+       1A    -20.271151     2A    -20.199877     3A     -1.293728  
+       4A     -1.235981     5A     -0.640996     6A     -0.593644  
+       7A     -0.482494     8A     -0.434989     9A     -0.399462  
+      10A     -0.360345  
+
+    Virtual:                                                              
+
+      11A      0.572925    12A      0.658167    13A      0.717497  
+      14A      0.792160  
+
+    Final Occupation by Irrep:
+              A 
+    DOCC [    10 ]
+    NA   [    10 ]
+    NB   [    10 ]
+
+  @DF-RHF Final Energy:  -149.93553756767463
+
+   => Energetics <=
+
+    Nuclear Repulsion Energy =             36.6628479968634053
+    One-Electron Energy =                -281.3714349599976003
+    Two-Electron Energy =                  94.7730493954595659
+    Total Energy =                       -149.9355375676746291
+
+Computation Completed
+
+
+Properties will be evaluated at   0.000000,   0.000000,   0.000000 [a0]
+
+Properties computed using the SCF density matrix
+
+
+ Multipole Moments:
+
+ ------------------------------------------------------------------------------------
+     Multipole            Electronic (a.u.)      Nuclear  (a.u.)        Total (a.u.)
+ ------------------------------------------------------------------------------------
+
+ L = 1.  Multiply by 2.5417464519 to convert [e a0] to [Debye]
+ Dipole X            :          2.3548004           -1.4667979            0.8880026
+ Dipole Y            :         -0.0545855            0.0591957            0.0046102
+ Dipole Z            :          0.0000000            0.0000000            0.0000000
+ Magnitude           :                                                    0.8880145
+
+ ------------------------------------------------------------------------------------
+
+*** tstop() called on cos-4a16505.cos.gatech.edu at Tue Nov  4 09:34:07 2025
+Module time:
+	user time   =       0.48 seconds =       0.01 minutes
+	system time =       0.04 seconds =       0.00 minutes
+	total time  =          0 seconds =       0.00 minutes
+Total time:
+	user time   =       0.48 seconds =       0.01 minutes
+	system time =       0.04 seconds =       0.00 minutes
+	total time  =          0 seconds =       0.00 minutes
+   => Libint2 <=
+
+    Primary   basis highest AM E, G, H:  6, 6, 3
+    Auxiliary basis highest AM E, G, H:  7, 7, 4
+    Onebody   basis highest AM E, G, H:  -, -, -
+    Solid Harmonics ordering:            Gaussian
+
+*** tstart() called on cos-4a16505.cos.gatech.edu
+*** at Tue Nov  4 09:34:07 2025
+
+   => Loading Basis Set <=
+
+    Name: STO-3G
+    Role: ORBITAL
+    Keyword: BASIS
+    atoms 1, 4     entry O          line    81 file /home/awallace43/gits/psi4/build_saptdft_ein/stage/share/psi4/basis/sto-3g.gbs 
+    atoms 2-3, 5-6 entry H          line    19 file /home/awallace43/gits/psi4/build_saptdft_ein/stage/share/psi4/basis/sto-3g.gbs 
+
+
+         ---------------------------------------------------------
+                       SAPT(DFT): delta HF Monomer A               
+         ---------------------------------------------------------
+                                   SCF
+               by Justin Turney, Rob Parrish, Andy Simmonett
+                          and Daniel G. A. Smith
+                              RHF Reference
+                        1 Threads,    500 MiB Core
+         ---------------------------------------------------------
+
+  ==> Geometry <==
+
+    Molecular point group: c1
+    Full point group: Cs
+
+    Geometry (in Angstrom), charge = 0, multiplicity = 1:
+
+       Center              X                  Y                   Z               Mass       
+    ------------   -----------------  -----------------  -----------------  -----------------
+         O           -1.551007000000    -0.114520000000     0.000000000000    15.994914619570
+         H           -1.934259000000     0.762503000000     0.000000000000     1.007825032230
+         H           -0.599677000000     0.040712000000     0.000000000000     1.007825032230
+      Gh(O)           1.350625000000     0.111469000000     0.000000000000    15.994914619570
+      Gh(H)           1.680398000000    -0.373741000000    -0.758561000000     1.007825032230
+      Gh(H)           1.680398000000    -0.373741000000     0.758561000000     1.007825032230
+
+  Running in c1 symmetry.
+
+  Rotational constants: A =      7.15091  B =      0.21415  C =      0.21404 [cm^-1]
+  Rotational constants: A = 214378.98633  B =   6419.94539  C =   6416.86905 [MHz]
+  Nuclear repulsion =    9.163830181985562
+
+  Charge       = 0
+  Multiplicity = 1
+  Electrons    = 10
+  Nalpha       = 5
+  Nbeta        = 5
+
+  ==> Algorithm <==
+
+  SCF Algorithm Type is DF.
+  DIIS enabled.
+  MOM disabled.
+  Fractional occupation disabled.
+  Guess Type is SAD.
+  Energy threshold   = 1.00e-08
+  Density threshold  = 1.00e-08
+  Integral threshold = 1.00e-12
+
+  ==> Primary Basis <==
+
+  Basis Set: STO-3G
+    Blend: STO-3G
+    Number of shells: 10
+    Number of basis functions: 14
+    Number of Cartesian functions: 14
+    Spherical Harmonics?: true
+    Max angular momentum: 1
+
+   => Loading Basis Set <=
+
+    Name: (STO-3G AUX)
+    Role: JKFIT
+    Keyword: DF_BASIS_SCF
+    atoms 1, 4     entry O          line   318 file /home/awallace43/gits/psi4/build_saptdft_ein/stage/share/psi4/basis/def2-universal-jkfit.gbs 
+    atoms 2-3, 5-6 entry H          line    18 file /home/awallace43/gits/psi4/build_saptdft_ein/stage/share/psi4/basis/def2-universal-jkfit.gbs 
+
+  Using user-supplied JK object.
+
+Re-using passed JK object instead of rebuilding
+  ==> Integral Setup <==
+
+  Minimum eigenvalue in the overlap matrix is 3.3873562647E-01.
+  Reciprocal condition number of the overlap matrix is 1.7048210852E-01.
+    Using symmetric orthogonalization.
+
+  ==> Pre-Iterations <==
+
+  SCF Guess: Superposition of Atomic Densities via on-the-fly atomic UHF (no occupation information).
+
+   -------------------------
+    Irrep   Nso     Nmo    
+   -------------------------
+     A         14      14 
+   -------------------------
+    Total      14      14
+   -------------------------
+
+  ==> Iterations <==
+
+                           Total Energy        Delta E     RMS |[F,P]|
+
+   @DF-RHF iter SAD:   -74.46364987310115   -7.44636e+01   0.00000e+00 
+   @DF-RHF iter   1:   -74.92391797185607   -4.60268e-01   1.79803e-02 DIIS/ADIIS
+   @DF-RHF iter   2:   -74.96246702526112   -3.85491e-02   2.63215e-03 DIIS/ADIIS
+   @DF-RHF iter   3:   -74.96358236205320   -1.11534e-03   5.80977e-04 DIIS/ADIIS
+   @DF-RHF iter   4:   -74.96362897380793   -4.66118e-05   2.74833e-05 DIIS
+   @DF-RHF iter   5:   -74.96362910347101   -1.29663e-07   5.32080e-06 DIIS
+   @DF-RHF iter   6:   -74.96362911123531   -7.76430e-09   1.16138e-06 DIIS
+   @DF-RHF iter   7:   -74.96362911162599   -3.90685e-10   6.76742e-08 DIIS
+   @DF-RHF iter   8:   -74.96362911162704   -1.05160e-12   1.40487e-08 DIIS
+   @DF-RHF iter   9:   -74.96362911162711   -7.10543e-14   1.24561e-09 DIIS
+  Energy and wave function converged.
+
+
+  ==> Post-Iterations <==
+
+    Orbital Energies [Eh]
+    ---------------------
+
+    Doubly Occupied:                                                      
+
+       1A    -20.243123     2A     -1.267270     3A     -0.616115  
+       4A     -0.453237     5A     -0.391483  
+
+    Virtual:                                                              
+
+       6A      0.484086     7A      0.627370     8A      0.751822  
+       9A      0.980380    10A      1.337647    11A      2.539152  
+      12A      2.931316    13A      3.249364    14A     31.248548  
+
+    Final Occupation by Irrep:
+              A 
+    DOCC [     5 ]
+    NA   [     5 ]
+    NB   [     5 ]
+
+  @DF-RHF Final Energy:   -74.96362911162711
+
+   => Energetics <=
+
+    Nuclear Repulsion Energy =              9.1638301819855617
+    One-Electron Energy =                -122.3124604735970991
+    Two-Electron Energy =                  38.1850011799844182
+    Total Energy =                        -74.9636291116271138
+
+Computation Completed
+
+
+Properties will be evaluated at   0.000000,   0.000000,   0.000000 [a0]
+
+Properties computed using the SCF density matrix
+
+
+ Multipole Moments:
+
+ ------------------------------------------------------------------------------------
+     Multipole            Electronic (a.u.)      Nuclear  (a.u.)        Total (a.u.)
+ ------------------------------------------------------------------------------------
+
+ L = 1.  Multiply by 2.5417464519 to convert [e a0] to [Debye]
+ Dipole X            :         28.5556365          -28.2362726            0.3193638
+ Dipole Y            :          0.8094542           -0.2134351            0.5960191
+ Dipole Z            :          0.0000000            0.0000000            0.0000000
+ Magnitude           :                                                    0.6761893
+
+ ------------------------------------------------------------------------------------
+
+*** tstop() called on cos-4a16505.cos.gatech.edu at Tue Nov  4 09:34:08 2025
+Module time:
+	user time   =       0.40 seconds =       0.01 minutes
+	system time =       0.01 seconds =       0.00 minutes
+	total time  =          1 seconds =       0.02 minutes
+Total time:
+	user time   =       0.90 seconds =       0.02 minutes
+	system time =       0.05 seconds =       0.00 minutes
+	total time  =          1 seconds =       0.02 minutes
+   => Libint2 <=
+
+    Primary   basis highest AM E, G, H:  6, 6, 3
+    Auxiliary basis highest AM E, G, H:  7, 7, 4
+    Onebody   basis highest AM E, G, H:  -, -, -
+    Solid Harmonics ordering:            Gaussian
+
+*** tstart() called on cos-4a16505.cos.gatech.edu
+*** at Tue Nov  4 09:34:08 2025
+
+   => Loading Basis Set <=
+
+    Name: STO-3G
+    Role: ORBITAL
+    Keyword: BASIS
+    atoms 1, 4     entry O          line    81 file /home/awallace43/gits/psi4/build_saptdft_ein/stage/share/psi4/basis/sto-3g.gbs 
+    atoms 2-3, 5-6 entry H          line    19 file /home/awallace43/gits/psi4/build_saptdft_ein/stage/share/psi4/basis/sto-3g.gbs 
+
+
+         ---------------------------------------------------------
+                       SAPT(DFT): delta HF Monomer B               
+         ---------------------------------------------------------
+                                   SCF
+               by Justin Turney, Rob Parrish, Andy Simmonett
+                          and Daniel G. A. Smith
+                              RHF Reference
+                        1 Threads,    500 MiB Core
+         ---------------------------------------------------------
+
+  ==> Geometry <==
+
+    Molecular point group: c1
+    Full point group: Cs
+
+    Geometry (in Angstrom), charge = 0, multiplicity = 1:
+
+       Center              X                  Y                   Z               Mass       
+    ------------   -----------------  -----------------  -----------------  -----------------
+      Gh(O)          -1.551007000000    -0.114520000000     0.000000000000    15.994914619570
+      Gh(H)          -1.934259000000     0.762503000000     0.000000000000     1.007825032230
+      Gh(H)          -0.599677000000     0.040712000000     0.000000000000     1.007825032230
+         O            1.350625000000     0.111469000000     0.000000000000    15.994914619570
+         H            1.680398000000    -0.373741000000    -0.758561000000     1.007825032230
+         H            1.680398000000    -0.373741000000     0.758561000000     1.007825032230
+
+  Running in c1 symmetry.
+
+  Rotational constants: A =      7.15091  B =      0.21415  C =      0.21404 [cm^-1]
+  Rotational constants: A = 214378.98633  B =   6419.94539  C =   6416.86905 [MHz]
+  Nuclear repulsion =    9.178038940979064
+
+  Charge       = 0
+  Multiplicity = 1
+  Electrons    = 10
+  Nalpha       = 5
+  Nbeta        = 5
+
+  ==> Algorithm <==
+
+  SCF Algorithm Type is DF.
+  DIIS enabled.
+  MOM disabled.
+  Fractional occupation disabled.
+  Guess Type is SAD.
+  Energy threshold   = 1.00e-08
+  Density threshold  = 1.00e-08
+  Integral threshold = 1.00e-12
+
+  ==> Primary Basis <==
+
+  Basis Set: STO-3G
+    Blend: STO-3G
+    Number of shells: 10
+    Number of basis functions: 14
+    Number of Cartesian functions: 14
+    Spherical Harmonics?: true
+    Max angular momentum: 1
+
+   => Loading Basis Set <=
+
+    Name: (STO-3G AUX)
+    Role: JKFIT
+    Keyword: DF_BASIS_SCF
+    atoms 1, 4     entry O          line   318 file /home/awallace43/gits/psi4/build_saptdft_ein/stage/share/psi4/basis/def2-universal-jkfit.gbs 
+    atoms 2-3, 5-6 entry H          line    18 file /home/awallace43/gits/psi4/build_saptdft_ein/stage/share/psi4/basis/def2-universal-jkfit.gbs 
+
+  Using user-supplied JK object.
+
+Re-using passed JK object instead of rebuilding
+  ==> Integral Setup <==
+
+  Minimum eigenvalue in the overlap matrix is 3.3873562647E-01.
+  Reciprocal condition number of the overlap matrix is 1.7048210852E-01.
+    Using symmetric orthogonalization.
+
+  ==> Pre-Iterations <==
+
+  SCF Guess: Superposition of Atomic Densities via on-the-fly atomic UHF (no occupation information).
+
+   -------------------------
+    Irrep   Nso     Nmo    
+   -------------------------
+     A         14      14 
+   -------------------------
+    Total      14      14
+   -------------------------
+
+  ==> Iterations <==
+
+                           Total Energy        Delta E     RMS |[F,P]|
+
+   @DF-RHF iter SAD:   -74.46973737978928   -7.44697e+01   0.00000e+00 
+   @DF-RHF iter   1:   -74.87319452441747   -4.03457e-01   2.60184e-02 DIIS/ADIIS
+   @DF-RHF iter   2:   -74.96570755382847   -9.25130e-02   4.57225e-03 DIIS/ADIIS
+   @DF-RHF iter   3:   -74.96949050873697   -3.78295e-03   1.00387e-03 DIIS/ADIIS
+   @DF-RHF iter   4:   -74.96968760461313   -1.97096e-04   9.24213e-05 DIIS
+   @DF-RHF iter   5:   -74.96968894593869   -1.34133e-06   1.64609e-05 DIIS
+   @DF-RHF iter   6:   -74.96968902808840   -8.21497e-08   3.30005e-06 DIIS
+   @DF-RHF iter   7:   -74.96968903101624   -2.92785e-09   2.21631e-07 DIIS
+   @DF-RHF iter   8:   -74.96968903103094   -1.46940e-11   6.30220e-08 DIIS
+   @DF-RHF iter   9:   -74.96968903103235   -1.40687e-12   1.04690e-08 DIIS
+   @DF-RHF iter  10:   -74.96968903103226    8.52651e-14   3.96080e-10 DIIS
+  Energy and wave function converged.
+
+
+  ==> Post-Iterations <==
+
+    Orbital Energies [Eh]
+    ---------------------
+
+    Doubly Occupied:                                                      
+
+       1A    -20.253406     2A     -1.272838     3A     -0.622131  
+       4A     -0.458604     5A     -0.396631  
+
+    Virtual:                                                              
+
+       6A      0.548569     7A      0.603865     8A      0.735232  
+       9A      1.035875    10A      1.381361    11A      2.545777  
+      12A      2.957425    13A      3.296803    14A     31.282750  
+
+    Final Occupation by Irrep:
+              A 
+    DOCC [     5 ]
+    NA   [     5 ]
+    NB   [     5 ]
+
+  @DF-RHF Final Energy:   -74.96968903103226
+
+   => Energetics <=
+
+    Nuclear Repulsion Energy =              9.1780389409790644
+    One-Electron Energy =                -122.2882362744196314
+    Two-Electron Energy =                  38.1405083024082998
+    Total Energy =                        -74.9696890310322601
+
+Computation Completed
+
+
+Properties will be evaluated at   0.000000,   0.000000,   0.000000 [a0]
+
+Properties computed using the SCF density matrix
+
+
+ Multipole Moments:
+
+ ------------------------------------------------------------------------------------
+     Multipole            Electronic (a.u.)      Nuclear  (a.u.)        Total (a.u.)
+ ------------------------------------------------------------------------------------
+
+ L = 1.  Multiply by 2.5417464519 to convert [e a0] to [Debye]
+ Dipole X            :        -26.3379585           26.7694748            0.4315163
+ Dipole Y            :         -0.8406173            0.2726308           -0.5679865
+ Dipole Z            :          0.0000000            0.0000000            0.0000000
+ Magnitude           :                                                    0.7133127
+
+ ------------------------------------------------------------------------------------
+
+*** tstop() called on cos-4a16505.cos.gatech.edu at Tue Nov  4 09:34:08 2025
+Module time:
+	user time   =       0.42 seconds =       0.01 minutes
+	system time =       0.00 seconds =       0.00 minutes
+	total time  =          0 seconds =       0.00 minutes
+Total time:
+	user time   =       1.34 seconds =       0.02 minutes
+	system time =       0.05 seconds =       0.00 minutes
+	total time  =          1 seconds =       0.02 minutes
+
+         ---------------------------------------------------------
+               SAPT(DFT): Intermolecular Interaction Segment       
+
+                   by Daniel G. A. Smith and Rob Parrish           
+         ---------------------------------------------------------
+
+  ==> Algorithm <==
+
+   SAPT DFT Functional               HF
+   Monomer A GRAC Shift        0.096053
+   Monomer B GRAC Shift        0.073504
+   Delta HF                        True
+   JK Algorithm                      DF
+
+  ==> Preparing SAPT Data Cache <== 
+
+  ==> MemDFJK: Density-Fitted J/K Matrices <==
+
+    J tasked:                   Yes
+    K tasked:                   Yes
+    wK tasked:                   No
+    OpenMP threads:               1
+    Memory [MiB]:               375
+    Algorithm:                 Core
+    Schwarz Cutoff:           1E-12
+    Mask sparsity (%):       1.0204
+    Fitting Condition:        1E-10
+
+   => Auxiliary Basis Set <=
+
+  Basis Set: (STO-3G AUX)
+    Blend: DEF2-UNIVERSAL-JKFIT
+    Number of shells: 74
+    Number of basis functions: 226
+    Number of Cartesian functions: 266
+    Spherical Harmonics?: true
+    Max angular momentum: 4
+
+
+  ==> Preparing SAPT Data Cache <== 
+
+  ==> MemDFJK: Density-Fitted J/K Matrices <==
+
+    J tasked:                   Yes
+    K tasked:                   Yes
+    wK tasked:                   No
+    OpenMP threads:               1
+    Memory [MiB]:               375
+    Algorithm:                 Core
+    Schwarz Cutoff:           1E-12
+    Mask sparsity (%):       1.0204
+    Fitting Condition:        1E-10
+
+   => Auxiliary Basis Set <=
+
+  Basis Set: (STO-3G AUX)
+    Blend: DEF2-UNIVERSAL-JKFIT
+    Number of shells: 74
+    Number of basis functions: 226
+    Number of Cartesian functions: 266
+    Spherical Harmonics?: true
+    Max angular momentum: 4
+
+
+  ==> E10 Electrostatics <== 
+
+    Elst10,r                        -13.54867700 [mEh]
+
+  ==> E10 Exchange Einsums <== 
+
+    Exch10(S^2)                      14.02892042 [mEh]
+    Exch10                           14.13502865 [mEh]
+
+  ==> E20 Induction Einsums <== 
+
+   => Uncoupled Induction <= 
+
+    Ind20,u (A<-B)                   -2.16792704 [mEh]
+    Ind20,u (A->B)                   -2.81206379 [mEh]
+    Ind20,u                          -4.97999083 [mEh]
+    Exch-Ind20,u (A<-B)               1.80319163 [mEh]
+    Exch-Ind20,u (A->B)               1.64727271 [mEh]
+    Exch-Ind20,u                      3.45046434 [mEh]
+
+   => Coupled Induction <= 
+
+   ---------------------------------------------------
+              SAPT Coupled Induction Solver           
+   ---------------------------------------------------
+    Maxiter             =          20
+    Convergence         =   1.000E-08
+   ---------------------------------------------------
+     Iter       (A<-B)           (B->A)      Time [s]
+   ---------------------------------------------------
+    Guess    8.451044e-02     2.169894e-01          0
+        1    4.467174e-03     9.044528e-03          0
+        2    6.802905e-04     2.460204e-03          0
+        3    8.603407e-05     3.918342e-04          0
+        4    1.235967e-05     2.308543e-05          0
+        5    2.976266e-06     2.633471e-06          0
+        6    4.313617e-07     4.190526e-07          0
+        7    7.061538e-08     1.249720e-07          0
+        8    8.720163e-09*    1.084869e-08          0
+        9    8.720163e-09*    7.525029e-10*         0
+   ---------------------------------------------------
+
+    Ind20,r (A<-B)                   -2.54250525 [mEh]
+    Ind20,r (A->B)                   -3.69978755 [mEh]
+    Ind20,r                          -6.24229280 [mEh]
+    Exch-Ind20,r (A<-B)               2.11141679 [mEh]
+    Exch-Ind20,r (A->B)               2.16630815 [mEh]
+    Exch-Ind20,r                      4.27772494 [mEh]
+   => Loading Basis Set <=
+
+    Name: CC-PVTZ-MINAO
+    Role: ORBITAL
+    Keyword: BASIS
+    atoms 1, 4     entry O          line   179 file /home/awallace43/gits/psi4/build_saptdft_ein/stage/share/psi4/basis/cc-pvtz-minao.gbs 
+    atoms 2-3, 5-6 entry H          line    20 file /home/awallace43/gits/psi4/build_saptdft_ein/stage/share/psi4/basis/cc-pvtz-minao.gbs 
+
+  ==> IBO Localizer 2 <==
+
+    MinAO Basis = CC-PVTZ-MINAO
+    Use Ghosts  =       FALSE
+    Use Stars   =       FALSE
+    Condition   =   1.000E-07
+    Power       =           4
+    Convergence =   1.000E-12
+    Maxiter     =          50
+
+    @IBO Iter:                   Metric       Gradient
+    @IBO    1:   1.4498837354347063E+00   9.762824E-01
+    @IBO    2:   1.5740158221539582E+00   1.080507E+00
+    @IBO    3:   1.6045180548707236E+00   1.100827E-01
+    @IBO    4:   1.6047135385243774E+00   3.239705E-03
+    @IBO    5:   1.6047136883166400E+00   7.897185E-06
+    @IBO    6:   1.6047136883186179E+00   3.792938E-08
+    @IBO    7:   1.6047136883186179E+00   6.174391E-11
+    @IBO    8:   1.6047136883186177E+00   1.458156E-13
+
+    IBO Localizer 2 converged.
+
+
+  ==> Partitioning <== 
+
+Fragment lookup table:
+
+ #  #
+ Irrep: 1
+      1:    1.000000000000000
+      2:    1.000000000000000
+      3:    1.000000000000000
+      4:    2.000000000000000
+      5:    2.000000000000000
+      6:    2.000000000000000
+
+   => Atomic Partitioning <= 
+
+    Monomer A: 3 atoms
+    Monomer B: 3 atoms
+    Monomer C: 0 atoms
+
+   => Partition Summary <= 
+
+    Monomer A:  0 charge,  10 protons,  10 electrons,   5 docc
+    Monomer B:  0 charge,  10 protons,  10 electrons,   5 docc
+    Monomer C:  0 charge,   0 protons,   0 electrons,   0 docc
+  ==> F-SAPT Localization (IBO) <==
+
+  ==> Local orbitals for Monomer A <==
+
+  ==> IBO Localizer 2 <==
+
+    MinAO Basis = CC-PVTZ-MINAO
+    Use Ghosts  =       FALSE
+    Use Stars   =       FALSE
+    Condition   =   1.000E-07
+    Power       =           4
+    Convergence =   1.000E-12
+    Maxiter     =          50
+
+    @IBO Iter:                   Metric       Gradient
+PID: 3175428 on cos-4a16505.cos.gatech.edu ready for attaching debugger. Once attached set i = 1 and continue
