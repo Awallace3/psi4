@@ -1060,7 +1060,7 @@ def sapt_dft(
         # dispersion method for F-SAPT in SAPT(DFT). Hence, FSAPT_DISP_AB will be 
         # set to zero if SAPT(DFT) is requested with FDDS dispersion with DO_FSAPT.
 
-        d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
+        # d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
         sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
         if core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
             core.timer_on("SAPT(DFT): F-SAPT Dispersion")
@@ -1083,9 +1083,6 @@ def sapt_dft(
         core.set_variable("FSAPT_EXCH_AB", cache_ein['Exch_AB'])
         core.set_variable("FSAPT_INDAB_AB", cache_ein['INDAB_AB'])
         core.set_variable("FSAPT_INDBA_AB", cache_ein['INDBA_AB'])
-
-        print("FSAPT DISP AB:", core.variable("FSAPT_DISP_AB").np.shape)
-        print("FSAPT ELST AB:", core.variable("FSAPT_ELST_AB").np.shape)
     # Print out final data
     core.print_out("\n")
     core.print_out(print_sapt_dft_summary(data, "SAPT(DFT)", do_dft=do_dft, do_disp=do_disp, do_delta_dft=do_delta_dft))

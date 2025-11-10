@@ -1301,8 +1301,8 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Cvir_A = cache["Cvir_A"]
     Cvir_B = cache["Cvir_B"]
 
-    Cvir_A.set_name("Cvir_A")
-    print(Cvir_A)
+    # Cvir_A.set_name("Cvir_A")
+    # print(Cvir_A)
     
     eps_occ_A = cache["eps_occ_A"]
     eps_occ_B = cache["eps_occ_B"]
@@ -1795,8 +1795,8 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Cvir_B = cache["Cvir_B"]
     
 
-    Cvir_A.set_name("Cvir_A")
-    print(Cvir_A)
+    # Cvir_A.set_name("Cvir_A")
+    # print(Cvir_A)
 
     eps_occ_A = cache["eps_occ_A"]
     eps_occ_B = cache["eps_occ_B"]
@@ -2047,18 +2047,18 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # orbital_spaces[10].set_name("Ca4")
     # orbital_spaces[11].set_name("Cb4")
 
-    print("Caocc_A\n", orbital_spaces[0].np)
-    print("Cavir_A\n", orbital_spaces[1].np)
-    print("Caocc_B\n", orbital_spaces[2].np)
-    print("Cavir_B\n", orbital_spaces[3].np)
-    print("Cr1\n", orbital_spaces[4].np)
-    print("Cs1\n", orbital_spaces[5].np)
-    print("Ca2\n", orbital_spaces[6].np)
-    print("Cb2\n", orbital_spaces[7].np)
-    print("Cr3\n", orbital_spaces[8].np)
-    print("Cs3\n", orbital_spaces[9].np)
-    print("Ca4\n", orbital_spaces[10].np)
-    print("Cb4\n", orbital_spaces[11].np)
+    # print("Caocc_A\n", orbital_spaces[0].np)
+    # print("Cavir_A\n", orbital_spaces[1].np)
+    # print("Caocc_B\n", orbital_spaces[2].np)
+    # print("Cavir_B\n", orbital_spaces[3].np)
+    # print("Cr1\n", orbital_spaces[4].np)
+    # print("Cs1\n", orbital_spaces[5].np)
+    # print("Ca2\n", orbital_spaces[6].np)
+    # print("Cb2\n", orbital_spaces[7].np)
+    # print("Cr3\n", orbital_spaces[8].np)
+    # print("Cs3\n", orbital_spaces[9].np)
+    # print("Ca4\n", orbital_spaces[10].np)
+    # print("Cb4\n", orbital_spaces[11].np)
     # orbital_spaces[0].print()
     # orbital_spaces[1].print()
     # orbital_spaces[2].print()
