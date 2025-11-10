@@ -5784,14 +5784,14 @@ void FISAPT::fexch() {
     double** Sbap = Sba->pointer();
     double** Sasp = Sas->pointer();
     double** Sbrp = Sbr->pointer();
-    LoccA->set_name("LoccA");
-    LoccA->print();
+    // LoccA->set_name("LoccA");
+    // LoccA->print();
 
-    Sas->set_name("Sas");
-    Sbr->set_name("Sbr");
-    Sab->set_name("Sab");
-    Sas->print();
-    Sab->print();
+    // Sas->set_name("Sas");
+    // Sbr->set_name("Sbr");
+    // Sab->set_name("Sab");
+    // Sas->print();
+    // Sab->print();
 
     auto WBab = std::make_shared<Matrix>("WBab", na, nb);
     double** WBabp = WBab->pointer();
@@ -6772,10 +6772,21 @@ void FISAPT::fdisp() {
     std::shared_ptr<Matrix> Ca2 = linalg::triplet(D_B, S, Caocc_A);
     std::shared_ptr<Matrix> Cb2 = linalg::triplet(D_A, S, Caocc_B);
 
+    D_B->set_name("D_B");
+    S->set_name("S");
+    Cavir_A->set_name("Cavir_A");
+    D_B->print();
+    S->print();
+    Cavir_A->print();
     std::shared_ptr<Matrix> Cr3 = linalg::triplet(D_B, S, Cavir_A);
+    Cr3->set_name("Cr3");
+    Cr3->print();
     std::shared_ptr<Matrix> CrX = linalg::triplet(linalg::triplet(D_A, S, D_B), S, Cavir_A);
+    CrX->set_name("CrX");
+    CrX->print();
     Cr3->subtract(CrX);
     Cr3->scale(2.0);
+    Cr3->print();
     std::shared_ptr<Matrix> Cs3 = linalg::triplet(D_A, S, Cavir_B);
     std::shared_ptr<Matrix> CsX = linalg::triplet(linalg::triplet(D_B, S, D_A), S, Cavir_B);
     Cs3->subtract(CsX);
@@ -6836,6 +6847,10 @@ void FISAPT::fdisp() {
     std::shared_ptr<Matrix> Sbr = linalg::triplet(Caocc_B, S, Cavir_A, true, false, false);
 
     std::shared_ptr<Matrix> Qbr(Jbr->clone());
+
+    // Jbr->set_name("Jbr");
+    // Jbr->print();
+
     Qbr->zero();
     Qbr->add(Jbr);
     Qbr->add(Kbr);
@@ -6933,6 +6948,33 @@ void FISAPT::fdisp() {
     dfh->add_space("s3", Cs[9]);
     dfh->add_space("a4", Cs[10]);
     dfh->add_space("b4", Cs[11]);
+
+    // print all space Cs
+    Cs[0]->set_name("Caocc_A");
+    Cs[1]->set_name("Cavir_A");
+    Cs[2]->set_name("Caocc_B");
+    Cs[3]->set_name("Cavir_B");
+    Cs[4]->set_name("Cr1");
+    Cs[5]->set_name("Cs1");
+    Cs[6]->set_name("Ca2");
+    Cs[7]->set_name("Cb2");
+    Cs[8]->set_name("Cr3");
+    Cs[9]->set_name("Cs3");
+    Cs[10]->set_name("Ca4");
+    Cs[11]->set_name("Cb4");
+    
+    Cs[0]->print();
+    Cs[1]->print();
+    Cs[2]->print();
+    Cs[3]->print();
+    Cs[4]->print();
+    Cs[5]->print();
+    Cs[6]->print();
+    Cs[7]->print();
+    Cs[8]->print();
+    Cs[9]->print();
+    Cs[10]->print();
+    Cs[11]->print();
 
     dfh->add_transformation("Aar", "r", "a");
     dfh->add_transformation("Abs", "s", "b");

@@ -1763,9 +1763,7 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     na1 = na
     nb1 = nb
 
-
-    Disp_AB = core.Matrix("Disp_AB", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
-
+    # Disp_AB = core.Matrix("Disp_AB", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
     snA = 0
     snfa = 0
     sna = 0
@@ -1824,48 +1822,57 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     # => Auxiliary C matrices <= //
     # Cr1 = (I - D_B * S) * Cvir_A  [C++ line 6766-6768]
-    Cr1 = einsum_chain_gemm([D_B, S, Cvir_A], ['N', 'N', 'N'])
-    Cr1_np = np.array(Cr1)
-    Cr1_np *= -1.0
-    Cr1_np += np.array(Cvir_A)
+    Cr1 = einsum_chain_gemm([D_B, S, Cvir_A])
+    ein.core.axpy(-1.0, Cr1, Cvir_A)
     
     # Cs1 = (I - D_A * S) * Cvir_B  [C++ line 6769-6771]
-    Cs1 = einsum_chain_gemm([D_A, S, Cvir_B], ['N', 'N', 'N'])
-    Cs1_np = np.array(Cs1)
-    Cs1_np *= -1.0
-    Cs1_np += np.array(Cvir_B)
+    Cs1 = einsum_chain_gemm([D_A, S, Cvir_B])
+    ein.core.axpy(-1.0, Cs1, Cvir_B)
     
     # Ca2 = D_B * S * Cocc_A  [C++ line 6772]
-    Ca2 = einsum_chain_gemm([D_B, S, Cocc_A], ['N', 'N', 'N'])
-    Ca2_np = np.array(Ca2)
+    Ca2 = einsum_chain_gemm([D_B, S, Cocc_A])
     
     # Cb2 = D_A * S * Cocc_B  [C++ line 6773]
-    Cb2 = einsum_chain_gemm([D_A, S, Cocc_B], ['N', 'N', 'N'])
-    Cb2_np = np.array(Cb2)
+    Cb2 = einsum_chain_gemm([D_A, S, Cocc_B])
     
     # Cr3 = 2 * (D_B * S * Cvir_A - D_A * S * D_B * S * Cvir_A)  [C++ line 6775-6778]
-    Cr3 = einsum_chain_gemm([D_B, S, Cvir_A], ['N', 'N', 'N'])
-    CrX = einsum_chain_gemm([D_A, S, D_B, S, Cvir_A], ['N', 'N', 'N', 'N', 'N'])
-    Cr3_np = np.array(Cr3)
-    CrX_np = np.array(CrX)
-    Cr3_np -= CrX_np
-    Cr3_np *= 2.0
+
+    # std::shared_ptr<Matrix> Cr3 = linalg::triplet(D_B, S, Cavir_A);
+    # Cr3->set_name("Cr3");
+    # Cr3->print();
+    # std::shared_ptr<Matrix> CrX = linalg::triplet(linalg::triplet(D_A, S, D_B), S, Cavir_A);
+    # CrX->set_name("CrX");
+    # CrX->print();
+    # Cr3->subtract(CrX);
+    # Cr3->scale(2.0);
+    # Cr3->print();
+    print("D_B")
+    print(D_B)
+    print("S")
+    print(S)
+    print("Cvir_A")
+    print(Cvir_A)
+    Cr3 = einsum_chain_gemm([D_B, S, Cvir_A])
+    CrX = einsum_chain_gemm([D_A, S, D_B, S, Cvir_A])
+    print("Cr3\n", Cr3)
+    print("CrX\n", CrX)
+    Cr3 -= CrX
+    Cr3 *= 2.0
+    print("Cr3\n", Cr3)
     
     # Cs3 = 2 * (D_A * S * Cvir_B - D_B * S * D_A * S * Cvir_B)  [C++ line 6779-6782]
-    Cs3 = einsum_chain_gemm([D_A, S, Cvir_B], ['N', 'N', 'N'])
-    CsX = einsum_chain_gemm([D_B, S, D_A, S, Cvir_B], ['N', 'N', 'N', 'N', 'N'])
-    Cs3_np = np.array(Cs3)
-    CsX_np = np.array(CsX)
-    Cs3_np -= CsX_np
-    Cs3_np *= 2.0
+    Cs3 = einsum_chain_gemm([D_A, S, Cvir_B])
+    CsX = einsum_chain_gemm([D_B, S, D_A, S, Cvir_B])
+    Cs3 -= CsX
+    Cs3 *= 2.0
     
     # Ca4 = -2 * D_A * S * D_B * S * Cocc_A  [C++ line 6784-6785]
-    Ca4 = einsum_chain_gemm([D_A, S, D_B, S, Cocc_A], ['N', 'N', 'N', 'N', 'N'])
+    Ca4 = einsum_chain_gemm([D_A, S, D_B, S, Cocc_A])
     Ca4_np = np.array(Ca4)
     Ca4_np *= -2.0
     
     # Cb4 = -2 * D_B * S * D_A * S * Cocc_B  [C++ line 6786-6787]
-    Cb4 = einsum_chain_gemm([D_B, S, D_A, S, Cocc_B], ['N', 'N', 'N', 'N', 'N'])
+    Cb4 = einsum_chain_gemm([D_B, S, D_A, S, Cocc_B])
     Cb4_np = np.array(Cb4)
     Cb4_np *= -2.0
     
@@ -2021,19 +2028,58 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Convert einsums RuntimeTensorD objects to core.Matrix objects for DFHelper
     # RuntimeTensorD supports buffer protocol, so np.asarray() can convert to numpy
     orbital_spaces = [
-        core.Matrix.from_array(np.asarray(Cocc_A)),    # 0: 'a'
-        core.Matrix.from_array(np.asarray(Cvir_A)),    # 1: 'r'
-        core.Matrix.from_array(np.asarray(Cocc_B)),    # 2: 'b'
-        core.Matrix.from_array(np.asarray(Cvir_B)),    # 3: 's'
-        core.Matrix.from_array(np.asarray(Cr1)),       # 4: 'r1'
-        core.Matrix.from_array(np.asarray(Cs1)),       # 5: 's1'
-        core.Matrix.from_array(np.asarray(Ca2)),       # 6: 'a2'
-        core.Matrix.from_array(np.asarray(Cb2)),       # 7: 'b2'
-        core.Matrix.from_array(np.asarray(Cr3)),       # 8: 'r3'
-        core.Matrix.from_array(np.asarray(Cs3)),       # 9: 's3'
-        core.Matrix.from_array(np.asarray(Ca4)),       # 10: 'a4'
-        core.Matrix.from_array(np.asarray(Cb4)),       # 11: 'b4'
+        core.Matrix.from_array(Cocc_A),    # 0: 'a'
+        core.Matrix.from_array(Cvir_A),    # 1: 'r'
+        core.Matrix.from_array(Cocc_B),    # 2: 'b'
+        core.Matrix.from_array(Cvir_B),    # 3: 's'
+        core.Matrix.from_array(Cr1),       # 4: 'r1'
+        core.Matrix.from_array(Cs1),       # 5: 's1'
+        core.Matrix.from_array(Ca2),       # 6: 'a2'
+        core.Matrix.from_array(Cb2),       # 7: 'b2'
+        core.Matrix.from_array(Cr3),       # 8: 'r3'
+        core.Matrix.from_array(Cs3),       # 9: 's3'
+        core.Matrix.from_array(Ca4),       # 10: 'a4'
+        core.Matrix.from_array(Cb4),       # 11: 'b4'
     ]
+
+    # orbital_spaces[0].set_name("Cocc_A")
+    # orbital_spaces[1].set_name("Cvir_A")
+    # orbital_spaces[2].set_name("Cocc_B")
+    # orbital_spaces[3].set_name("Cvir_B")
+    # orbital_spaces[4].set_name("Cr1")
+    # orbital_spaces[5].set_name("Cs1")
+    # orbital_spaces[6].set_name("Ca2")
+    # orbital_spaces[7].set_name("Cb2")
+    # orbital_spaces[8].set_name("Cr3")
+    # orbital_spaces[9].set_name("Cs3")
+    # orbital_spaces[10].set_name("Ca4")
+    # orbital_spaces[11].set_name("Cb4")
+
+    print("Caocc_A\n", orbital_spaces[0].np)
+    print("Cavir_A\n", orbital_spaces[1].np)
+    print("Caocc_B\n", orbital_spaces[2].np)
+    print("Cavir_B\n", orbital_spaces[3].np)
+    print("Cr1\n", orbital_spaces[4].np)
+    print("Cs1\n", orbital_spaces[5].np)
+    print("Ca2\n", orbital_spaces[6].np)
+    print("Cb2\n", orbital_spaces[7].np)
+    print("Cr3\n", orbital_spaces[8].np)
+    print("Cs3\n", orbital_spaces[9].np)
+    print("Ca4\n", orbital_spaces[10].np)
+    print("Cb4\n", orbital_spaces[11].np)
+    # orbital_spaces[0].print()
+    # orbital_spaces[1].print()
+    # orbital_spaces[2].print()
+    # orbital_spaces[3].print()
+    # orbital_spaces[4].print()
+    # orbital_spaces[5].print()
+    # orbital_spaces[6].print()
+    # orbital_spaces[7].print()
+    # orbital_spaces[8].print()
+    # orbital_spaces[9].print()
+    # orbital_spaces[10].print()
+    # orbital_spaces[11].print()
+
     
     # Calculate total columns for memory allocation  [C++ lines 6911-6915]
     max_MO = max(mat.shape[1] for mat in orbital_spaces)
@@ -2360,10 +2406,10 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Store energy matrices and scalars
     cache['E_DISP20'] = E_disp20
     cache['E_EXCH_DISP20'] = E_exch_disp20
-    Edisp_AB = core.Matrix("E_disp20", na, nb)
     # add E_disp20 and E_exch_disp20
-    Edisp_AB.np[:, :] = E_disp20.np + E_exch_disp20.np
-    cache['DISP_AB'] = Edisp_AB
+    Disp_AB = core.Matrix("Disp_AB", na, nb)
+    Disp_AB.np[:, :] = E_disp20.np + E_exch_disp20.np
+    cache['DISP_AB'] = Disp_AB
     # => Output printing <= //
     # {Elst10*1000:.8f} [mEh]
 
