@@ -2224,13 +2224,8 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     ExchDisp20 = 0.0
     # sExchDisp20 = 0.0
     
-    # => Thread-local Energy Matrices [C++ lines 7179-7188]
-    # In Python we use single-threaded execution, so we only need one set of matrices
-    E_disp20_threads = []
-    E_exch_disp20_threads = []
-    for t in range(nT):
-        E_disp20_threads.append(core.Matrix("E_disp20", na, nb))
-        E_exch_disp20_threads.append(core.Matrix("E_exch_disp20", na, nb))
+    E_disp20_comp = core.Matrix("E_disp20", na, nb)
+    E_exch_disp20_comp = core.Matrix("E_exch_disp20", na, nb)
     
     # => MO to LO Transformation [C++ lines 7192-7193]
     Uaocc_A = cache["Uaocc0A"]
@@ -2298,13 +2293,9 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             nrs = nrblock * nsblock
             
             # => RS inner loop <= //
-            # Python is single-threaded, so we don't need OpenMP reduction
             for rs in range(nrs):
                 r = rs // nsblock
                 s = rs % nsblock
-                
-                # Thread index (always 0 in Python)
-                thread = 0
                 
                 # Get pointers to work arrays and energy matrices
                 Tabp = Tab.np
@@ -2312,8 +2303,8 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
                 T2abp = T2ab.np
                 V2abp = V2ab.np
                 Iabp = Iab.np
-                E_disp20Tp = E_disp20_threads[thread].np
-                E_exch_disp20Tp = E_exch_disp20_threads[thread].np
+                E_disp20Tp = E_disp20_comp.np
+                E_exch_disp20Tp = E_exch_disp20_comp.np
                 
                 # => Amplitudes, Disp20 <= //
                 
@@ -2391,12 +2382,12 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     E_exch_disp20 = core.Matrix("E_exch_disp20", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
     
     # Single-threaded, so just use the first (and only) thread result
-    # E_disp20.copy(E_disp20_threads[0])
-    # E_exch_disp20.copy(E_exch_disp20_threads[0])
+    # E_disp20.copy(E_disp20_comp)
+    # E_exch_disp20.copy(E_exch_disp20_comp)
     for a in range(na):
         for b in range(nb):
-            E_disp20.np[a + nfa + nA, b + nfb + nB] = E_disp20_threads[0].np[a, b]
-            E_exch_disp20.np[a + nfa + nA, b + nfb + nB] = E_exch_disp20_threads[0].np[a, b]
+            E_disp20.np[a + nfa + nA, b + nfb + nB] = E_disp20_comp.np[a, b]
+            E_exch_disp20.np[a + nfa + nA, b + nfb + nB] = E_exch_disp20_comp.np[a, b]
 
     # => Populate cache['E'] matrix <= //
     # Store energy matrices and scalars
