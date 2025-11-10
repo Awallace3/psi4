@@ -770,7 +770,6 @@ no_com
         "Etot": core.variable("SAPT TOTAL ENERGY"),
     }
     pp(Epsi)
-    pp(core.variables())
     for key in keys:
         compare_values(Eref[key], Epsi[key], 5, key)
     data = psi4.fsapt_analysis(

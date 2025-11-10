@@ -2358,7 +2358,7 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
                 Fbs_s = Fbsp[s, :, :]
                 
                 Vabp[:, :] = Bas_s @ Bbr_r.T
-                Vabp[:, :] -= Cas_s @ Cbr_r.T
+                Vabp[:, :] += Cas_s @ Cbr_r.T
                 Vabp[:, :] += Aar_r @ Fbs_s.T
                 Vabp[:, :] += Far_r @ Abs_s.T
                 
@@ -2370,11 +2370,11 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
                 # C_DGER(na, nb, 1.0, &Qasp[0][s + sstart], ns, &Sbrp[0][r + rstart], nr, Vabp[0], nb);
                 Vabp[:, :] += np.outer(Qas_np[:, s + sstart], Sbr_np[:, r + rstart])
                 
-                # C_DGER(na, nb, -1.0, &Qarp[0][r + rstart], nr, &SAbsp[0][s + sstart], ns, Vabp[0], nb);
-                Vabp[:, :] -= np.outer(Qar_np[:, r + rstart], SAbs_np[:, s + sstart])
+                # C_DGER(na, nb, 1.0, &Qarp[0][r + rstart], nr, &SAbsp[0][s + sstart], ns, Vabp[0], nb);
+                Vabp[:, :] += np.outer(Qar_np[:, r + rstart], SAbs_np[:, s + sstart])
                 
-                # C_DGER(na, nb, -1.0, &SBarp[0][r + rstart], nr, &Qbsp[0][s + sstart], ns, Vabp[0], nb);
-                Vabp[:, :] -= np.outer(SBar_np[:, r + rstart], Qbs_np[:, s + sstart])
+                # C_DGER(na, nb, 1.0, &SBarp[0][r + rstart], nr, &Qbsp[0][s + sstart], ns, Vabp[0], nb);
+                Vabp[:, :] += np.outer(SBar_np[:, r + rstart], Qbs_np[:, s + sstart])
                 
                 # Transform to localized orbital basis
                 Iabp[:, :] = Vabp @ UBp
@@ -2415,8 +2415,8 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         core.print_out(f"    Disp20              = {Disp20 * 1000:.8f} [mEh]\n")
         core.print_out(f"    Exch-Disp20         = {ExchDisp20 * 1000:.8f} [mEh]\n")
         core.print_out("\n")
-        # assert abs(scalars['Disp20,u'] - Disp20) < 1e-9, f"Disp20 scalar mismatch! {scalars['Disp20,u'] = } {Disp20 = }"
-        # assert abs(scalars['Exch-Disp20,u'] - ExchDisp20) < 1e-9, f"ExchDisp20 scalar mismatch!\nRef: {scalars['Exch-Disp20,u']:.4e}\nAct: {ExchDisp20:.4e}"
+        assert abs(scalars['Disp20,u'] - Disp20) < 1e-6, f"Disp20 scalar mismatch! {scalars['Disp20,u'] = } {Disp20 = }"
+        assert abs(scalars['Exch-Disp20,u'] - ExchDisp20) < 1e-6, f"ExchDisp20 scalar mismatch!\nRef: {scalars['Exch-Disp20,u']:.4e}\nAct: {ExchDisp20:.4e}"
     return cache
 
 
