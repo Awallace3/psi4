@@ -161,3 +161,8 @@ GRTAGS
 Pipfile.lock
 pytest_output.dat
 pytest_output.log
+AGENTS.md
+fsapt/
+profile.txt
+tests/pytests/test_saptdft.log
+
