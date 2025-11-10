@@ -471,6 +471,14 @@ def extract_osapt_data_from_vars():
 
     # For total, only include exact terms
     vals["Total"] = [[0.0 for x in vals["Elst"][0]] for x2 in vals["Elst"]]
+
+    from pprint import pprint as pp
+    pp(vals)
+    for key in vals.keys():
+        print(key, len(vals[key]))
+        # print(vals[key])
+    print(len(vals["Total"]))
+    print(len(vals["Total"][0]))
     for key in ["Elst", "Exch", "IndAB", "IndBA", "Disp"]:
         for k in range(len(vals["Total"])):
             for l in range(len(vals["Total"][0])):
