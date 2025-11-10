@@ -1300,6 +1300,9 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Cocc_B = cache["Cocc_B"]
     Cvir_A = cache["Cvir_A"]
     Cvir_B = cache["Cvir_B"]
+
+    Cvir_A.set_name("Cvir_A")
+    print(Cvir_A)
     
     eps_occ_A = cache["eps_occ_A"]
     eps_occ_B = cache["eps_occ_B"]
@@ -1533,10 +1536,6 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # V_A checks out
     V_B.set_name("V_B")
     J_B.set_name("J_B")
-    Cvir_A.set_name("Cvir_A")
-    Locc_A.set_name("Locc_A")
-    # print(Locc_A)
-    # print(Cvir_A)
     # print(J_B)
     # print(V_B)
     # print(wBT)
@@ -1795,6 +1794,10 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Cvir_A = cache["Cvir_A"]
     Cvir_B = cache["Cvir_B"]
     
+
+    Cvir_A.set_name("Cvir_A")
+    print(Cvir_A)
+
     eps_occ_A = cache["eps_occ_A"]
     eps_occ_B = cache["eps_occ_B"]
     eps_vir_A = cache["eps_vir_A"]
@@ -1823,11 +1826,11 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # => Auxiliary C matrices <= //
     # Cr1 = (I - D_B * S) * Cvir_A  [C++ line 6766-6768]
     Cr1 = einsum_chain_gemm([D_B, S, Cvir_A])
-    ein.core.axpy(-1.0, Cr1, Cvir_A)
+    ein.core.axpy(-1.0, Cvir_A, Cr1)
     
     # Cs1 = (I - D_A * S) * Cvir_B  [C++ line 6769-6771]
     Cs1 = einsum_chain_gemm([D_A, S, Cvir_B])
-    ein.core.axpy(-1.0, Cs1, Cvir_B)
+    ein.core.axpy(-1.0, Cvir_B, Cs1)
     
     # Ca2 = D_B * S * Cocc_A  [C++ line 6772]
     Ca2 = einsum_chain_gemm([D_B, S, Cocc_A])
@@ -1846,19 +1849,10 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Cr3->subtract(CrX);
     # Cr3->scale(2.0);
     # Cr3->print();
-    print("D_B")
-    print(D_B)
-    print("S")
-    print(S)
-    print("Cvir_A")
-    print(Cvir_A)
     Cr3 = einsum_chain_gemm([D_B, S, Cvir_A])
     CrX = einsum_chain_gemm([D_A, S, D_B, S, Cvir_A])
-    print("Cr3\n", Cr3)
-    print("CrX\n", CrX)
     Cr3 -= CrX
     Cr3 *= 2.0
-    print("Cr3\n", Cr3)
     
     # Cs3 = 2 * (D_A * S * Cvir_B - D_B * S * D_A * S * Cvir_B)  [C++ line 6779-6782]
     Cs3 = einsum_chain_gemm([D_A, S, Cvir_B])
@@ -1868,35 +1862,33 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     # Ca4 = -2 * D_A * S * D_B * S * Cocc_A  [C++ line 6784-6785]
     Ca4 = einsum_chain_gemm([D_A, S, D_B, S, Cocc_A])
-    Ca4_np = np.array(Ca4)
-    Ca4_np *= -2.0
+    Ca4 *= -2.0
     
     # Cb4 = -2 * D_B * S * D_A * S * Cocc_B  [C++ line 6786-6787]
     Cb4 = einsum_chain_gemm([D_B, S, D_A, S, Cocc_B])
-    Cb4_np = np.array(Cb4)
-    Cb4_np *= -2.0
+    Cb4 *= -2.0
     
     # => Auxiliary V matrices <= #  [C++ lines 6789-6872]
     
     # Jbr = 2.0 * Cocc_B.T @ J_A @ Cvir_A  [C++ lines 6791-6792]
     Jbr = einsum_chain_gemm([Cocc_B, J_A, Cvir_A], ['T', 'N', 'N'])
+    Jbr *= 2.0
     Jbr_np = np.array(Jbr)
-    Jbr_np *= 2.0
     
     # Kbr = -1.0 * Cocc_B.T @ K_A @ Cvir_A  [C++ lines 6793-6794]
     Kbr = einsum_chain_gemm([Cocc_B, K_A, Cvir_A], ['T', 'N', 'N'])
+    Kbr *= -1.0
     Kbr_np = np.array(Kbr)
-    Kbr_np *= -1.0
     
     # Jas = 2.0 * Cocc_A.T @ J_B @ Cvir_B  [C++ lines 6796-6797]
     Jas = einsum_chain_gemm([Cocc_A, J_B, Cvir_B], ['T', 'N', 'N'])
+    Jas *= 2.0
     Jas_np = np.array(Jas)
-    Jas_np *= 2.0
     
     # Kas = -1.0 * Cocc_A.T @ K_B @ Cvir_B  [C++ lines 6798-6799]
     Kas = einsum_chain_gemm([Cocc_A, K_B, Cvir_B], ['T', 'N', 'N'])
+    Kas *= -1.0
     Kas_np = np.array(Kas)
-    Kas_np *= -1.0
     
     # KOas = 1.0 * Cocc_A.T @ K_O @ Cvir_B  [C++ lines 6801-6802]
     KOas = einsum_chain_gemm([Cocc_A, K_O, Cvir_B], ['T', 'N', 'N'])
@@ -1910,59 +1902,59 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # JBas = -2.0 * (Cocc_A.T @ S @ D_B) @ J_A @ Cvir_B  [C++ lines 6806-6807]
     temp_JBas = einsum_chain_gemm([Cocc_A, S, D_B], ['T', 'N', 'N'])
     JBas = einsum_chain_gemm([temp_JBas, J_A, Cvir_B], ['N', 'N', 'N'])
+    JBas *= -2.0
     JBas_np = np.array(JBas)
-    JBas_np *= -2.0
     
     # JAbr = -2.0 * (Cocc_B.T @ S @ D_A) @ J_B @ Cvir_A  [C++ lines 6808-6809]
     temp_JAbr = einsum_chain_gemm([Cocc_B, S, D_A], ['T', 'N', 'N'])
     JAbr = einsum_chain_gemm([temp_JAbr, J_B, Cvir_A], ['N', 'N', 'N'])
+    JAbr *= -2.0
     JAbr_np = np.array(JAbr)
-    JAbr_np *= -2.0
     
     # Jbs = 4.0 * Cocc_B.T @ J_A @ Cvir_B  [C++ lines 6811-6812]
     Jbs = einsum_chain_gemm([Cocc_B, J_A, Cvir_B], ['T', 'N', 'N'])
+    Jbs *= 4.0
     Jbs_np = np.array(Jbs)
-    Jbs_np *= 4.0
     
     # Jar = 4.0 * Cocc_A.T @ J_B @ Cvir_A  [C++ lines 6813-6814]
     Jar = einsum_chain_gemm([Cocc_A, J_B, Cvir_A], ['T', 'N', 'N'])
+    Jar *= 4.0
     Jar_np = np.array(Jar)
-    Jar_np *= 4.0
     
     # JAas = -2.0 * (Cocc_A.T @ J_B @ D_A) @ S @ Cvir_B  [C++ lines 6816-6817]
     temp_JAas = einsum_chain_gemm([Cocc_A, J_B, D_A], ['T', 'N', 'N'])
     JAas = einsum_chain_gemm([temp_JAas, S, Cvir_B], ['N', 'N', 'N'])
+    JAas *= -2.0
     JAas_np = np.array(JAas)
-    JAas_np *= -2.0
     
     # JBbr = -2.0 * (Cocc_B.T @ J_A @ D_B) @ S @ Cvir_A  [C++ lines 6818-6819]
     temp_JBbr = einsum_chain_gemm([Cocc_B, J_A, D_B], ['T', 'N', 'N'])
     JBbr = einsum_chain_gemm([temp_JBbr, S, Cvir_A], ['N', 'N', 'N'])
+    JBbr *= -2.0
     JBbr_np = np.array(JBbr)
-    JBbr_np *= -2.0
     
     # Get your signs right Hesselmann!  [C++ line 6821]
     # Vbs = 2.0 * Cocc_B.T @ V_A @ Cvir_B  [C++ lines 6822-6823]
     Vbs = einsum_chain_gemm([Cocc_B, V_A, Cvir_B], ['T', 'N', 'N'])
+    Vbs *= 2.0
     Vbs_np = np.array(Vbs)
-    Vbs_np *= 2.0
     
     # Var = 2.0 * Cocc_A.T @ V_B @ Cvir_A  [C++ lines 6824-6825]
     Var = einsum_chain_gemm([Cocc_A, V_B, Cvir_A], ['T', 'N', 'N'])
+    Var *= 2.0
     Var_np = np.array(Var)
-    Var_np *= 2.0
     
     # VBas = -1.0 * (Cocc_A.T @ S @ D_B) @ V_A @ Cvir_B  [C++ lines 6826-6827]
     temp_VBas = einsum_chain_gemm([Cocc_A, S, D_B], ['T', 'N', 'N'])
     VBas = einsum_chain_gemm([temp_VBas, V_A, Cvir_B], ['N', 'N', 'N'])
+    VBas *= -1.0
     VBas_np = np.array(VBas)
-    VBas_np *= -1.0
     
     # VAbr = -1.0 * (Cocc_B.T @ S @ D_A) @ V_B @ Cvir_A  [C++ lines 6828-6829]
     temp_VAbr = einsum_chain_gemm([Cocc_B, S, D_A], ['T', 'N', 'N'])
     VAbr = einsum_chain_gemm([temp_VAbr, V_B, Cvir_A], ['N', 'N', 'N'])
+    VAbr *= -1.0
     VAbr_np = np.array(VAbr)
-    VAbr_np *= -1.0
     
     # VRas = 1.0 * (Cocc_A.T @ V_B @ P_A) @ S @ Cvir_B  [C++ lines 6830-6831]
     temp_VRas = einsum_chain_gemm([Cocc_A, V_B, P_A], ['T', 'N', 'N'])
@@ -2230,7 +2222,7 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # => Scalar Energy Accumulators [C++ lines 7172-7175]
     Disp20 = 0.0
     ExchDisp20 = 0.0
-    sExchDisp20 = 0.0
+    # sExchDisp20 = 0.0
     
     # => Thread-local Energy Matrices [C++ lines 7179-7188]
     # In Python we use single-threaded execution, so we only need one set of matrices
@@ -2419,7 +2411,7 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         core.print_out(f"    Exch-Disp20         = {ExchDisp20 * 1000:.8f} [mEh]\n")
         core.print_out("\n")
         assert abs(scalars['Disp20,u'] - Disp20) < 1e-9, f"Disp20 scalar mismatch! {scalars['Disp20,u'] = } {Disp20 = }"
-        assert abs(scalars['Exch-Disp20,u'] - ExchDisp20) < 1e-9, f"ExchDisp20 scalar mismatch! {scalars['Exch-Disp20,u'] = } {ExchDisp20 = }"
+        assert abs(scalars['Exch-Disp20,u'] - ExchDisp20) < 1e-9, f"ExchDisp20 scalar mismatch!\nRef: {scalars['Exch-Disp20,u']:.4e}\nAct: {ExchDisp20:.4e}"
     return cache
 
 
