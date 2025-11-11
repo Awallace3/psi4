@@ -948,6 +948,38 @@ def sapt_dft(
 
     core.timer_off("SAPT(DFT):ind")
 
+    # Use DFHelper before deleting the JK object for dispersion
+    if do_fsapt:
+        core.timer_on("SAPT(DFT):Localize Orbitals")
+        sapt_jk_terms_ein.localization(cache_ein, dimer_wfn, wfn_A, wfn_B)
+        core.timer_off("SAPT(DFT):Localize Orbitals")
+        core.timer_on("SAPT(DFT):Partition")
+        cache_ein = sapt_jk_terms_ein.partition(cache_ein, dimer_wfn, wfn_A, wfn_B)
+        core.timer_off("SAPT(DFT):Partition")
+
+        core.timer_on("SAPT(DFT): F-SAPT Localization (IBO)")
+        sapt_jk_terms_ein.flocalization(cache_ein, dimer_wfn, wfn_A, wfn_B)
+        core.timer_off("SAPT(DFT): F-SAPT Localization (IBO)")
+        # Primary return is stored as cache['Elst_AB']
+        core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
+        cache_ein = sapt_jk_terms_ein.felst(cache_ein, elst['Elst10,r'] + extern_extern_IE, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
+        core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
+        core.timer_on("SAPT(DFT): F-SAPT Exchange")
+        cache_ein = sapt_jk_terms_ein.fexch(cache_ein, exch["Exch10(S^2)"], exch["Exch10"], dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
+        core.timer_off("SAPT(DFT): F-SAPT Exchange")
+
+        core.timer_on("SAPT(DFT): F-SAPT Induction")
+        cache_ein = sapt_jk_terms_ein.find(cache_ein, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
+        core.timer_off("SAPT(DFT): F-SAPT Induction")
+
+        core.set_variable("FSAPT_QA", cache_ein["Qocc0A"])
+        core.set_variable("FSAPT_QB", cache_ein["Qocc0B"])
+        core.set_variable("FSAPT_ELST_AB", cache_ein['Elst_AB'])
+        core.set_variable("FSAPT_EXCH_AB", cache_ein['Exch_AB'])
+        core.set_variable("FSAPT_INDAB_AB", cache_ein['INDAB_AB'])
+        core.set_variable("FSAPT_INDBA_AB", cache_ein['INDBA_AB'])
+
+
     # Blow away JK object before doing MP2 for memory considerations
     if cleanup_jk:
         sapt_jk.finalize()
@@ -1036,22 +1068,8 @@ def sapt_dft(
         core.timer_off("MP2 disp")
         core.timer_off("SAPT(DFT):disp")
 
-
+    # Now do F-SAPT on dispersion if requested
     if do_fsapt:
-        core.timer_on("SAPT(DFT):Localize Orbitals")
-        sapt_jk_terms_ein.localization(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
-        core.timer_off("SAPT(DFT):Localize Orbitals")
-        cache_ein = sapt_jk_terms_ein.partition(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
-
-        core.timer_on("SAPT(DFT): F-SAPT Localization (IBO)")
-        sapt_jk_terms_ein.flocalization(cache_ein, dimer_wfn, wfn_A, wfn_B, sapt_jk)
-        core.timer_off("SAPT(DFT): F-SAPT Localization (IBO)")
-        # Primary return is stored as cache['Elst_AB']
-        cache_ein = sapt_jk_terms_ein.felst(cache_ein, elst['Elst10,r'] + extern_extern_IE, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
-        cache_ein = sapt_jk_terms_ein.fexch(cache_ein, exch["Exch10(S^2)"], exch["Exch10"], dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
-
-        cache_ein = sapt_jk_terms_ein.find(cache_ein, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
-
         # Because dispersion is defined differently between SAPT0 
         # (E_disp20 = -4\sigma_{abrs} |(ar|bs)|^2 / (epsilon_a + epsilon_b)) 
         # and SAPT(DFT) with FDDS dispersion, we will only implement F-SAPT
@@ -1076,13 +1094,6 @@ def sapt_dft(
             core.set_variable("FSAPT_DISP_AB", np.zeros_like(cache_ein['Elst_AB']))
         if sapt_dft_D4_IE:  # and d4_type == 'intermolecular':
             core.set_variable("FSAPT_EMPIRICAL_DISP", data['FSAPT_EMPIRICAL_DISP'])
-
-        core.set_variable("FSAPT_QA", cache_ein["Qocc0A"])
-        core.set_variable("FSAPT_QB", cache_ein["Qocc0B"])
-        core.set_variable("FSAPT_ELST_AB", cache_ein['Elst_AB'])
-        core.set_variable("FSAPT_EXCH_AB", cache_ein['Exch_AB'])
-        core.set_variable("FSAPT_INDAB_AB", cache_ein['INDAB_AB'])
-        core.set_variable("FSAPT_INDBA_AB", cache_ein['INDBA_AB'])
     # Print out final data
     core.print_out("\n")
     core.print_out(print_sapt_dft_summary(data, "SAPT(DFT)", do_dft=do_dft, do_disp=do_disp, do_delta_dft=do_delta_dft))

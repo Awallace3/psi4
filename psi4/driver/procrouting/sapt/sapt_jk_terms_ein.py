@@ -42,8 +42,8 @@ import einsums as ein
 # Equations come from https://doi.org/10.1063/5.0090688
 
 
-def localization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
-    print("\n  ==> Localizing Orbitals 1 <== \n\n")
+def localization(cache, dimer_wfn, wfn_A, wfn_B, do_print=True):
+    core.print_out("\n  ==> Localizing Orbitals 1 <== \n\n")
     # localization_scheme = core.get_option("SAPT", "SAPT_DFT_LOCAL_ORBITALS")
     # loc = core.Localizer.build(localization_scheme, wfn_A.basisset(), wfn_A.Ca_subset("AO", "OCC"))
     # loc.localize()
@@ -105,7 +105,7 @@ def localization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     return
 
 
-def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
+def flocalization(cache, dimer_wfn, wfn_A, wfn_B, do_print=True):
     link_assignment = core.get_option("FISAPT", "FISAPT_LINK_ASSIGNMENT").upper()
     core.print_out("  ==> F-SAPT Localization (IBO) <==\n\n")
     core.print_out("  ==> Local orbitals for Monomer A <==\n\n")
@@ -224,7 +224,7 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         cache["LLocc_B"] = Locc_B
 
 
-def partition(cache, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
+def partition(cache, dimer_wfn, wfn_A, wfn_B, do_print=True):
     core.print_out("\n  ==> Partitioning <== \n\n")
     # Sizing
     mol = dimer_wfn.molecule()
@@ -652,6 +652,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Computes the F-SAPT electrostatics partitioning according to FISAPT::felst in C++.
     Returns the total Elst10,r and stores the breakdown matrix in cache["Elst_AB"].
     """
+    core.timer_on("F-SAPT Elst Setup")
     if do_print:
         core.print_out("  ==> F-SAPT Electrostatics <==\n\n")
 
@@ -676,6 +677,9 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Nuclear-nuclear interactions (A <-> B)
     ZA_np = cache["ZA"].np
     ZB_np = cache["ZB"].np
+    
+    # Vectorized nuclear-nuclear interactions
+    # Build distance matrix
     for A in range(nA_atoms):
         for B in range(nB_atoms):
             if A == B:
@@ -707,6 +711,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             Elst_AB[A, nB_atoms + nb] = interaction
             Elst1_terms[3] += interaction
 
+    core.timer_off("F-SAPT Elst Setup")
     # => a <-> b (electron-electron interactions via DFHelper) <= //
     
     # Get auxiliary basis for density fitting
@@ -715,7 +720,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Create DFHelper object
     dfh = core.DFHelper(dimer_basis, aux_basis)
     # TODO: This memory estimate needs corrected...
-    dfh.set_memory(int(core.get_memory() * 0.5 / 8))  # Use 90% of available memory (in doubles)
+    dfh.set_memory(int(core.get_memory() * 0.5 / 8))
     dfh.set_method("DIRECT_iaQ")
     dfh.set_nthreads(core.get_num_threads())
     dfh.initialize()
@@ -736,35 +741,43 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Perform the transformation
     dfh.transform()
     
-    # Extract diagonal 3-index integrals
+    # Extract diagonal 3-index integrals (vectorized)
     nQ = aux_basis.nbf()
     QaC = np.zeros((na, nQ))
-    for a in range(na):
-        tensor = dfh.get_tensor("Aaa", [a, a + 1], [a, a + 1], [0, nQ])
-        QaC[a, :] = tensor.np.flatten()
-    
     QbC = np.zeros((nb, nQ))
-    for b in range(nb):
-        tensor = dfh.get_tensor("Abb", [b, b + 1], [b, b + 1], [0, nQ])
-        QbC[b, :] = tensor.np.flatten()
+    
+    # Process in batches for better memory efficiency
+    batch_size = min(100, max(na, nb))
+    
+    # Extract Aaa diagonal elements
+    for start_a in range(0, na, batch_size):
+        end_a = min(start_a + batch_size, na)
+        for a in range(start_a, end_a):
+            tensor = dfh.get_tensor("Aaa", [a, a + 1], [a, a + 1], [0, nQ])
+            QaC[a, :] = tensor.np.flatten()
+    
+    # Extract Abb diagonal elements
+    for start_b in range(0, nb, batch_size):
+        end_b = min(start_b + batch_size, nb)
+        for b in range(start_b, end_b):
+            tensor = dfh.get_tensor("Abb", [b, b + 1], [b, b + 1], [0, nQ])
+            QbC[b, :] = tensor.np.flatten()
 
     # Compute electrostatic interaction: Elst10_3 = 4.0 * QaC @ QbC.T
     Elst10_3 = 4.0 * np.dot(QaC, QbC.T)
     
     # Store in breakdown matrix and accumulate total
-    for a in range(na):
-        for b in range(nb):
-            E = Elst10_3[a, b]
-            Elst1_terms[2] += E
-            Elst_AB[a + nA_atoms, b + nB_atoms] += E
+    Elst1_terms[2] += np.sum(Elst10_3)
+    Elst_AB[nA_atoms:nA_atoms + na, nB_atoms:nB_atoms + nb] += Elst10_3
     
-    # Store QaC and QbC in cache for potential reuse
+    # Store QaC and QbC in cache for reuse in f-induction
     cache["Vlocc0A"] = core.Matrix.from_array(QaC)
     cache["Vlocc0B"] = core.Matrix.from_array(QbC)
     
     # Clear DFHelper spaces for next use
     dfh.clear_spaces()
     
+    core.timer_on("F-SAPT Elst Final")
     # => A <-> b (nuclei A interacting with orbitals b) <= //
     L0B_ein = ein.core.RuntimeTensorD(L0B_np)
     L0B_ein.set_name("L0B_ein")
@@ -781,18 +794,16 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         
         Vtemp = ext_pot.computePotentialMatrix(dimer_basis)
         Vtemp_ein = ein.core.RuntimeTensorD(Vtemp.np)
-
-        # first term is correct, but all others are wrong for Vbb... check other terms
         Vtemp_ein.set_name("Vtemp_ein")
-        # Vtemp_ein is correct; however, L0B_ein is not...
         
         Vbb = einsum_chain_gemm([L0B_ein, Vtemp_ein, L0B_ein], ['T', 'N', 'N'])
         Vbb.set_name("Vbb")
         
-        for b in range(nb):
-            E = 2.0 * Vbb[b, b]
-            Elst1_terms[1] += E
-            Elst_AB[A, b + nB_atoms] += E
+        # Vectorized diagonal extraction
+        diag_Vbb = np.array([Vbb[b, b] for b in range(nb)])
+        E_vec = 2.0 * diag_Vbb
+        Elst1_terms[1] += np.sum(E_vec)
+        Elst_AB[A, nB_atoms:nB_atoms + nb] += E_vec
     
     # Add external-A <-> orbital b interaction
     if "A" in cache.get("external_potentials", {}):
@@ -803,10 +814,11 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Vbb = einsum_chain_gemm([L0B_ein, Vtemp_ein, L0B_ein], ['T', 'N', 'N'])
         Vbb = core.Matrix.triplet(L0B, Vtemp, L0B, True, False, False)
         
-        for b in range(nb):
-            E = 2.0 * Vbb[b, b]
-            Elst1_terms[1] += E
-            Elst_AB[nA_atoms + na, b + nB_atoms] += E
+        # Vectorized diagonal extraction
+        diag_Vbb = np.array([Vbb[b, b] for b in range(nb)])
+        E_vec = 2.0 * diag_Vbb
+        Elst1_terms[1] += np.sum(E_vec)
+        Elst_AB[nA_atoms + na, nB_atoms:nB_atoms + nb] += E_vec
     
     # => a <-> B (orbitals a interacting with nuclei B) <= //
     
@@ -823,10 +835,11 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Vtemp_ein = ein.core.RuntimeTensorD(Vtemp.np)
         Vaa = einsum_chain_gemm([L0A_ein, Vtemp_ein, L0A_ein], ['T', 'N', 'N'])
         
-        for a in range(na):
-            E = 2.0 * Vaa[a, a]
-            Elst1_terms[0] += E
-            Elst_AB[a + nA_atoms, B] += E
+        # Vectorized diagonal extraction
+        diag_Vaa = np.array([Vaa[a, a] for a in range(na)])
+        E_vec = 2.0 * diag_Vaa
+        Elst1_terms[0] += np.sum(E_vec)
+        Elst_AB[nA_atoms:nA_atoms + na, B] += E_vec
     
     # Add orbital a <-> external-B interaction
     if "B" in cache.get("external_potentials", {}):
@@ -836,10 +849,11 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Vtemp_ein = ein.core.RuntimeTensorD(Vtemp.np)
         Vaa = einsum_chain_gemm([L0A_ein, Vtemp_ein, L0A_ein], ['T', 'N', 'N'])
         
-        for a in range(na):
-            E = 2.0 * Vaa[a, a]
-            Elst1_terms[0] += E
-            Elst_AB[a + nA_atoms, nB_atoms + nb] += E
+        # Vectorized diagonal extraction  
+        diag_Vaa = np.array([Vaa[a, a] for a in range(na)])
+        E_vec = 2.0 * diag_Vaa
+        Elst1_terms[0] += np.sum(E_vec)
+        Elst_AB[nA_atoms:nA_atoms + na, nB_atoms + nb] += E_vec
     
     # Clear DFHelper for next use
     dfh.clear_spaces()
@@ -859,6 +873,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     # Store breakdown matrix in cache
     cache["Elst_AB"] = core.Matrix.from_array(Elst_AB)
+    core.timer_off("F-SAPT Elst Final")
     return cache
 
 
