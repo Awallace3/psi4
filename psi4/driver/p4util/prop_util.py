@@ -30,6 +30,7 @@
 import psi4
 
 from . import optproc
+from .exceptions import ValidationError
 
 __all__ = ['free_atom_volumes']
 
@@ -61,17 +62,30 @@ def free_atom_volumes(wfn: psi4.core.Wavefunction, **kwargs):
 
     # the level of theory
     current_en = wfn.scalar_variable('CURRENT ENERGY')
-    total_energies = [k for k, v in wfn.scalar_variables().items() if abs(v - current_en) <= 1e-12]
-    theory = ""
-    for var in total_energies:
-        if 'TOTAL ENERGY' in var:
-            var = var.split()
-            if var[0] == 'SCF':
-                continue
-            elif var[0] == 'DFT':
-                theory = wfn.functional().name()
-            else:
-                theory = var[0]
+    total_keys = [
+        k for k in wfn.scalar_variables().keys() if
+        ('TOTAL ENERGY' in k and 'SCF' not in k)
+    ]
+    if len(total_keys) == 0:
+        raise ValidationError(
+            "No valid method TOTAL ENERGY found in wavefunction scalar variables."
+        )
+    total_energy_diffs = sorted([
+        [abs(wfn.scalar_variable(k) - current_en), k] for k in total_keys],
+        key=lambda x: x[0]
+    )
+    theory = total_energy_diffs[0][1].split()[0]
+    # total_energies = [k for k, v in wfn.scalar_variables().items() if abs(v - current_en) <= 1e-12]
+    # theory = ""
+    # for var in total_energies:
+    #     if 'TOTAL ENERGY' in var:
+    #         var = var.split()
+    #         if var[0] == 'SCF':
+    #             continue
+    #         elif var[0] == 'DFT':
+    #             theory = wfn.functional().name()
+    #         else:
+    #             theory = var[0]
 
     # list of reference number of unpaired electrons.
     # Note that this is not the same as the
