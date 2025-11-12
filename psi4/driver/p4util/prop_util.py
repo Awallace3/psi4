@@ -75,6 +75,8 @@ def free_atom_volumes(wfn: psi4.core.Wavefunction, **kwargs):
         key=lambda x: x[0]
     )
     theory = total_energy_diffs[0][1].split()[0]
+    if theory == 'DFT':
+        theory = wfn.functional().name()
     # total_energies = [k for k, v in wfn.scalar_variables().items() if abs(v - current_en) <= 1e-12]
     # theory = ""
     # for var in total_energies:
