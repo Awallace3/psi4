@@ -1758,7 +1758,8 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
     Options& options = Process::environment.options;
     const int max_iter = options.get_int("MBIS_MAXITER");
     const double conv = options.get_double("MBIS_D_CONVERGENCE");
-    const int debug = options.get_int("DEBUG");
+    // const int debug = options.get_int("DEBUG");
+    const int debug = 1;
     std::shared_ptr<Molecule> mol = basisset_->molecule();
 
     // MBIS grid options
@@ -1863,10 +1864,16 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
             "options).\n\n",
             grid_electrons);
     }
+    // log how many atoms, total_points and num_atoms * total_points
+    outfile->Printf("  Number of atoms: %d\n", num_atoms);
+    outfile->Printf("  Number of grid points: %zu\n", total_points);
+    outfile->Printf("  Total atom-grid point pairs: %zu\n\n", num_atoms * total_points);
 
     // Distances and displacements between grid points and nuclei
     std::vector<double> distances(num_atoms * total_points, 0.0);
     std::vector<std::vector<double>> disps(3, std::vector<double>(num_atoms * total_points, 0.0));
+
+    outfile->Printf(" Allocated vectors\n");
 
 #pragma omp parallel for
     for (int atom = 0; atom < num_atoms; atom++) {
@@ -1880,6 +1887,7 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
     }
 
     // => Setup Proatom Basis Functions <= //
+    outfile->Printf(" Setup Proatom Basis Functions\n");
 
     // mA is the number of shells in an isolated atom
     std::vector<int> mA(num_atoms);
@@ -1898,15 +1906,20 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
                                __LINE__);
         }
     }
+    outfile->Printf(" Setup Proatom Basis Functions Complete\n");
 
     // Atomic shell populations (N) and widths (S) (up to 4 shells per atom), from equations 18 and 19 in Verstraelen et
     // al.
     std::vector<std::vector<double>> Nai(num_atoms, std::vector<double>(4, 0.0));
     std::vector<std::vector<double>> Sai(num_atoms, std::vector<double>(4, 0.0));
 
+    outfile->Printf(" Allocated Nai and Sai\n");
+
     // Next iteration populations and widths
     std::vector<std::vector<double>> Nai_next(num_atoms, std::vector<double>(4, 0.0));
     std::vector<std::vector<double>> Sai_next(num_atoms, std::vector<double>(4, 0.0));
+
+    outfile->Printf(" Allocated Nai_next and Sai_next\n");
 
     // Population and width guesses, from get_mbis_params function
     for (int atom = 0; atom < num_atoms; atom++) {
@@ -1926,13 +1939,16 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
         }
     }
 
+    outfile->Printf(" Promolecular and Proatomic Densities Setup\n");
     // Promolecular and proatomic densities
     std::vector<double> rho_0_points(total_points, 0.0);
     std::vector<double> rho_a_0_points(num_atoms * total_points, 0.0);
+    outfile->Printf(" Allocated rho_0_points and rho_a_0_points\n");
 
     // Next iteration densities
     std::vector<double> rho_0_points_next(total_points, 0.0);
     std::vector<double> rho_a_0_points_next(num_atoms * total_points, 0.0);
+    outfile->Printf(" Allocated rho_0_points_next and rho_a_0_points_next\n");
 
 // Calculate initial proatom and promolecule density at all points
 #pragma omp parallel for
@@ -1947,6 +1963,8 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
             rho_0_points[point] += rho_a_0_points[atom * total_points + point];
         }
     }
+
+    outfile->Printf(" Initial Proatomic and Promolecular Densities Calculated\n");
 
     // => Main Stockholder Loop <= //
 
@@ -2029,6 +2047,7 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
 
     // => Post-Processing <= //
 
+    outfile->Printf(" MBIS CONVERGED\n");
     // Atomic density, as defined in Equation 5 of Verstraelen et al.
     std::vector<double> rho_a(num_atoms * total_points, 0.0);
 
