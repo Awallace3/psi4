@@ -57,7 +57,7 @@ def free_atom_volumes(wfn: psi4.core.Wavefunction, **kwargs):
     # are by definition 1.0
     natom = wfn.molecule().natom()
     if natom == 1:
-        return 0 
+        return 0
     
 
     # the level of theory
