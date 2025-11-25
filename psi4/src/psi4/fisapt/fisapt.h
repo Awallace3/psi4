@@ -171,6 +171,9 @@ class FISAPT {
     std::map<std::string, double>& scalars() { return scalars_; }
     std::map<std::string, std::shared_ptr<Vector>>& vectors() { return vectors_; }
     std::map<std::string, std::shared_ptr<Matrix>>& matrices() { return matrices_; }
+
+   // Method for updating/setting matrices_
+    void set_matrix(std::map<std::string, std::shared_ptr<Matrix>>);
 };
 
 class FISAPTSCF {

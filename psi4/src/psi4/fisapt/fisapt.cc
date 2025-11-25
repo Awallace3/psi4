@@ -8042,6 +8042,16 @@ std::map<std::string, std::shared_ptr<Matrix> > CPHF_FISAPT::product(
     return s;
 }
 
+// method for updating/setting matrices_, if key exists, update it, else create it
+void FISAPT::set_matrix(std::map<std::string, std::shared_ptr<Matrix>> update_matrices) {
+    for (const auto& pair : update_matrices) {
+        const std::string& key = pair.first;
+        const std::shared_ptr<Matrix>& matrix = pair.second;
+        outfile->Printf(" Setting matrix %s\n", key.c_str());
+        matrices_[key] = matrix;
+    }
+}
+
 }  // Namespace fisapt
 
 double sapt_nuclear_external_potential_matrix(

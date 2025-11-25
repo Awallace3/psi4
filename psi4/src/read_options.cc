@@ -1206,7 +1206,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         /*- Which MP2 Exch-Disp module to use? !expert -*/
         options.add_str("SAPT_DFT_MP2_DISP_ALG", "SAPT", "FISAPT SAPT");
         /*- FISAPT localization? -*/
-        options.add_bool("SAPT_DFT_DO_FSAPT", false);
+        options.add_str("SAPT_DFT_DO_FSAPT", "NONE", "NONE SAPTDFT FISAPT");
         /*- FISAPT localization scheme -*/
         options.add_str("SAPT_DFT_LOCAL_ORBITALS", "BOYS", "BOYS PIPEK_MEZEY");
         /*- Interior option to clean up printing !expert -*/

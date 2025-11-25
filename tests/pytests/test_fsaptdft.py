@@ -79,7 +79,7 @@ no_com
             "SAPT_DFT_DO_DHF": False,
             "SAPT_DFT_DO_HYBRID": False,
             "SAPT_DFT_EXCH_DISP_SCALE_SCHEME": "None",
-            "SAPT_DFT_DO_FSAPT": True,
+            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
         }
     )
     psi4.energy("fisapt0", molecule=mol)
@@ -132,7 +132,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": True,
+            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
         }
     )
     np.set_printoptions(precision=10, suppress=True)
@@ -185,7 +185,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": True,
+            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
         }
     )
     np.set_printoptions(precision=10, suppress=True)
@@ -235,7 +235,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": True,
+            "SAPT_DFT_DO_FSAPT": "FISAPT",
         }
     )
     np.set_printoptions(precision=10, suppress=True)
@@ -282,7 +282,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": True,
+            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
             "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
         }
     )
@@ -355,7 +355,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": True,
+            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
             # "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
         }
     )
@@ -560,7 +560,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": True,
+            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
             "SAPT_DFT_D4_IE": True,
             "SAPT_DFT_DO_DISP": False,
         }
@@ -793,7 +793,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": True,
+            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
             "SAPT_DFT_D4_IE": False,
             "SAPT_DFT_DO_DISP": True,
             "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
@@ -1020,7 +1020,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "PBE0",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": True,
+            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
             "SAPT_DFT_D4_IE": True,
             "SAPT_DFT_DO_DISP": False,
             "SAPT_DFT_GRAC_SHIFT_A": 0.11652342,
@@ -1248,7 +1248,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "PBE0",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": True,
+            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
             "SAPT_DFT_D4_IE": True,
             "SAPT_DFT_DO_DISP": False,
             "SAPT_DFT_GRAC_SHIFT_A": 0.11652342,
@@ -1387,7 +1387,7 @@ no_com
             # "SAPT_DFT_FUNCTIONAL": "PBE0",
             "SAPT_DFT_FUNCTIONAL": functional,
             "SAPT_DFT_DO_DHF": True,
-            "SAPT_DFT_DO_FSAPT": True,
+            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
             "SAPT_DFT_D4_IE": True,
             "SAPT_DFT_DO_DISP": False,
             # "SAPT_DFT_D4_TYPE": "SUPERMOLECULAR",

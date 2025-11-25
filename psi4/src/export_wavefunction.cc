@@ -483,7 +483,8 @@ void export_wavefunction(py::module& m) {
         .def("find", &fisapt::FISAPT::find, "F-SAPT0 induction.")
         .def("fdisp", &fisapt::FISAPT::fdisp, "F-SAPT0 dispersion.")
         .def("raw_plot", &fisapt::FISAPT::raw_plot, "Plot some analysis files.")
-        .def("print_trailer", &fisapt::FISAPT::print_trailer, "Print SAPT results.");
+        .def("print_trailer", &fisapt::FISAPT::print_trailer, "Print SAPT results.")
+        .def("set_matrix", &fisapt::FISAPT::set_matrix, "Set internal matrices by dictionary");
 
     /// IBOLocalizer2 for FISAPT
     py::class_<fisapt::IBOLocalizer2, std::shared_ptr<fisapt::IBOLocalizer2>>(m, "IBOLocalizer2", "An IBO2 Localizer")

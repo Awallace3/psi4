@@ -47,7 +47,7 @@ from ...constants import constants
 from ...p4util.exceptions import ValidationError
 from .. import proc_util
 from ..proc import scf_helper, run_scf, _set_external_potentials_to_wavefunction
-from . import sapt_jk_terms, sapt_jk_terms_ein, sapt_mp2_terms, sapt_mp2_terms_ein, sapt_sf_terms
+from . import sapt_jk_terms, sapt_jk_terms_ein, sapt_mp2_terms, sapt_mp2_terms_ein, sapt_sf_terms, saptdft_fisapt
 from .sapt_util import print_sapt_dft_summary, print_sapt_hf_summary, print_sapt_var
 import qcelemental as qcel
 from ...p4util.exceptions import ConvergenceError
@@ -892,7 +892,8 @@ def sapt_dft(
 
     # Electrostatics
     core.timer_on("SAPT(DFT):elst")
-    do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")
+    fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")
+    do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT") != "NONE"
     # elst, extern_extern_IE = sapt_jk_terms.electrostatics(cache, True)
     elst, extern_extern_IE = sapt_jk_terms_ein.electrostatics(cache_ein, True)
     data["extern_extern_IE"] = extern_extern_IE
@@ -949,7 +950,7 @@ def sapt_dft(
     core.timer_off("SAPT(DFT):ind")
 
     # Use DFHelper before deleting the JK object for dispersion
-    if do_fsapt:
+    if do_fsapt and fsapt_type == "SAPTDFT":
         core.timer_on("SAPT(DFT):Localize Orbitals")
         sapt_jk_terms_ein.localization(cache_ein, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT):Localize Orbitals")
@@ -978,6 +979,8 @@ def sapt_dft(
         core.set_variable("FSAPT_EXCH_AB", cache_ein['Exch_AB'])
         core.set_variable("FSAPT_INDAB_AB", cache_ein['INDAB_AB'])
         core.set_variable("FSAPT_INDBA_AB", cache_ein['INDBA_AB'])
+    elif do_fsapt and fsapt_type == "FISAPT":
+        core.print_out("FISAPT not yet implemented for SAPT(DFT). Proceeding without F-SAPT.\n")
 
 
     # Blow away JK object before doing MP2 for memory considerations
@@ -1069,7 +1072,7 @@ def sapt_dft(
         core.timer_off("SAPT(DFT):disp")
 
     # Now do F-SAPT on dispersion if requested
-    if do_fsapt:
+    if do_fsapt and fsapt_type == "SAPTDFT":
         # Because dispersion is defined differently between SAPT0 
         # (E_disp20 = -4\sigma_{abrs} |(ar|bs)|^2 / (epsilon_a + epsilon_b)) 
         # and SAPT(DFT) with FDDS dispersion, we will only implement F-SAPT
@@ -1094,6 +1097,12 @@ def sapt_dft(
             core.set_variable("FSAPT_DISP_AB", np.zeros_like(cache_ein['Elst_AB']))
         if sapt_dft_D4_IE:  # and d4_type == 'intermolecular':
             core.set_variable("FSAPT_EMPIRICAL_DISP", data['FSAPT_EMPIRICAL_DISP'])
+    elif do_fsapt and fsapt_type == "FISAPT":
+        core.print_out("FISAPT not yet implemented for SAPT(DFT). Proceeding without F-SAPT.\n")
+        FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache)
+        print("FISAPT_obj:", FISAPT_obj)
+        print(FISAPT_obj.matrices())
+
     # Print out final data
     core.print_out("\n")
     core.print_out(print_sapt_dft_summary(data, "SAPT(DFT)", do_dft=do_dft, do_disp=do_disp, do_delta_dft=do_delta_dft))
