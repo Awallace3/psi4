@@ -159,12 +159,12 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, do_print=True):
     cache["Uaocc0A"] = Uaocc0A
     
     if link_assignment in ["SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"]:
-        LLocc_A = core.Matrix("LLocc_A", nn, nm + 1)
-        LLocc_A.np[:, :nm] = Locc_A.np[:, :]
-        LLocc_A.np[:, nm] = cache["thislinkA"].np[:, 0]
-        cache["LLocc_A"] = LLocc_A
+        Locc_A = core.Matrix("Locc_A", nn, nm + 1)
+        Locc_A.np[:, :nm] = Locc_A.np[:, :]
+        Locc_A.np[:, nm] = cache["thislinkA"].np[:, 0]
+        cache["Locc_A"] = Locc_A
     else:
-        cache["LLocc_A"] = Locc_A
+        cache["Locc_A"] = Locc_A
     
     core.print_out("  ==> Local orbitals for Monomer B <==\n\n")
     
@@ -216,12 +216,12 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, do_print=True):
     cache["Uaocc0B"] = Uaocc0B
     
     if link_assignment in ["SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"]:
-        LLocc_B = core.Matrix("LLocc_B", nn, nm + 1)
-        LLocc_B.np[:, :nm] = Locc_B.np[:, :]
-        LLocc_B.np[:, nm] = cache["thislinkB"].np[:, 0]
-        cache["LLocc_B"] = LLocc_B
+        Locc_B = core.Matrix("Locc_B", nn, nm + 1)
+        Locc_B.np[:, :nm] = Locc_B.np[:, :]
+        Locc_B.np[:, nm] = cache["thislinkB"].np[:, 0]
+        cache["Locc_B"] = Locc_B
     else:
-        cache["LLocc_B"] = Locc_B
+        cache["Locc_B"] = Locc_B
 
 
 def partition(cache, dimer_wfn, wfn_A, wfn_B, do_print=True):
@@ -663,8 +663,8 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     nB_atoms = mol.natom()
 
     # Sizing
-    L0A_np = cache["LLocc_A"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache["LLocc_A"].np
-    L0B_np = cache["LLocc_B"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache["LLocc_B"].np
+    L0A_np = cache["Locc_A"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache["Locc_A"].np
+    L0B_np = cache["Locc_B"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache["Locc_B"].np
     na = L0A_np.shape[1]
     nb = L0B_np.shape[1]
 

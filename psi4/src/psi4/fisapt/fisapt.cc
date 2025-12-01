@@ -5441,6 +5441,7 @@ void FISAPT::felst() {
     int nn = primary_->nbf();
     int nA = mol->natom();
     int nB = mol->natom();
+    outfile->Printf("  mol setup\n\n");
 
 // Some special considerations for the SAOn/SIAOn variants of ISAPT below
     int na = matrices_["Locc0A"]->colspi()[0];
@@ -5464,6 +5465,7 @@ void FISAPT::felst() {
 
     // => Targets <= //
 
+    outfile->Printf("    Computing F-SAPT Electrostatics Components...\n");
     double Elst10 = 0.0;
     std::vector<double> Elst10_terms;
     Elst10_terms.resize(4);
@@ -8049,6 +8051,16 @@ void FISAPT::set_matrix(std::map<std::string, std::shared_ptr<Matrix>> update_ma
         const std::shared_ptr<Matrix>& matrix = pair.second;
         outfile->Printf(" Setting matrix %s\n", key.c_str());
         matrices_[key] = matrix;
+    }
+}
+
+// method for updating/setting vector_, if key exists, update it, else create it
+void FISAPT::set_vector(std::map<std::string, std::shared_ptr<Vector>> update_vector) {
+    for (const auto& pair : update_vector) {
+        const std::string& key = pair.first;
+        const std::shared_ptr<Vector>& vec = pair.second;
+        outfile->Printf(" Setting vector %s\n", key.c_str());
+        vectors_[key] = vec;
     }
 }
 

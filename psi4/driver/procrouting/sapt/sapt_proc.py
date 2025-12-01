@@ -980,6 +980,19 @@ def sapt_dft(
         core.set_variable("FSAPT_INDAB_AB", cache_ein['INDAB_AB'])
         core.set_variable("FSAPT_INDBA_AB", cache_ein['INDBA_AB'])
     elif do_fsapt and fsapt_type == "FISAPT":
+        core.timer_on("SAPT(DFT):Localize Orbitals")
+        sapt_jk_terms_ein.localization(cache_ein, dimer_wfn, wfn_A, wfn_B)
+        core.timer_off("SAPT(DFT):Localize Orbitals")
+        core.timer_on("SAPT(DFT):Partition")
+        cache_ein = sapt_jk_terms_ein.partition(cache_ein, dimer_wfn, wfn_A, wfn_B)
+        print('partition...')
+        from pprint import pprint as pp
+        pp(cache_ein)
+        core.timer_off("SAPT(DFT):Partition")
+
+        core.timer_on("SAPT(DFT): F-SAPT Localization (IBO)")
+        sapt_jk_terms_ein.flocalization(cache_ein, dimer_wfn, wfn_A, wfn_B)
+        core.timer_off("SAPT(DFT): F-SAPT Localization (IBO)")
         core.print_out("FISAPT not yet implemented for SAPT(DFT). Proceeding without F-SAPT.\n")
 
 
@@ -1099,9 +1112,11 @@ def sapt_dft(
             core.set_variable("FSAPT_EMPIRICAL_DISP", data['FSAPT_EMPIRICAL_DISP'])
     elif do_fsapt and fsapt_type == "FISAPT":
         core.print_out("FISAPT not yet implemented for SAPT(DFT). Proceeding without F-SAPT.\n")
-        FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache)
+        FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache_ein)
         print("FISAPT_obj:", FISAPT_obj)
         print(FISAPT_obj.matrices())
+        FISAPT_obj.felst()
+        FISAPT_obj.fexch()
 
     # Print out final data
     core.print_out("\n")
