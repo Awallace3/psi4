@@ -37,21 +37,28 @@ from ...p4util.exceptions import *
 from .sapt_util import print_sapt_var
 from pprint import pprint as pp
 import einsums as ein
+# Need to import FISAPT to set fdrop, plot, save_fsapt_variables methods
+from . import fisapt_proc
+from pprint import pprint as pp
 
 
-def setup_fisapt_object(wfn, wfn_A, wfn_B, cache):
-    print("CACHE START")
-    pp(cache)
+def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars):
+    # Setup FISAPT object
     basis_set = wfn.basisset()
+    wfn.set_basisset("DF_BASIS_SAPT", basis_set)
+    fisapt = core.FISAPT(wfn)
+    pp(cache)
+
+    # Used to slice arrays later if frozen core is requested
     nfrozen_A = wfn_A.basisset().n_frozen_core(
         core.get_global_option("FREEZE_CORE"), wfn_A.molecule()
     )
     nfrozen_B = wfn_B.basisset().n_frozen_core(
         core.get_global_option("FREEZE_CORE"), wfn_B.molecule()
     )
-    # Build object
+    # Gather SAPT(DFT) cache matrices
     # Map cache keys (from SAPT(DFT) cache) to FISAPT object keys
-    df_matrix_keys = {
+    matrix_keys = {
         "Cocc_A": "Cocc0A",
         "Cvir_A": "Cvir0A",
         "Cocc_B": "Cocc0B",
@@ -60,12 +67,13 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache):
         "Locc_B": "Locc0B",
         "Uocc_A": "Uocc0A",
         "Uocc_B": "Uocc0B",
+        "Qocc0A": "Qocc0A",
+        "Qocc0B": "Qocc0B",
     }
     matrix_cache = {
-        fkey: core.Matrix.from_array(cache[ckey])
-        for ckey, fkey in df_matrix_keys.items()
+        fisapt_key: core.Matrix.from_array(cache[sdft_key])
+        for sdft_key, fisapt_key in matrix_keys.items()
     }
-
     other_keys = [
         "S",
         "D_A",
@@ -88,15 +96,16 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache):
         # matrix_cache[key] = cache[key]
 
     # Map cache keys (from SAPT(DFT) cache) to FISAPT object keys for vectors
-    df_vector_keys = {
+    # Gather SAPT(DFT) cache vectors
+    vector_keys = {
         "eps_occ_A": "eps_occ0A",
         "eps_vir_A": "eps_vir0A",
         "eps_occ_B": "eps_occ0B",
         "eps_vir_B": "eps_vir0B",
     }
     vector_cache = {
-        fkey: core.Vector.from_array(cache[ckey])
-        for ckey, fkey in df_vector_keys.items()
+        fisapt_key: core.Vector.from_array(cache[sdft_key])
+        for sdft_key, fisapt_key in vector_keys.items()
     }
     other_vector_keys = [
         "ZA",
@@ -124,14 +133,26 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache):
         vector_cache["eps_aocc0B"] = core.Vector.from_array(
             np.asarray(vector_cache["eps_aocc0B"])[nfrozen_B:]
         )
-    wfn.set_basisset("DF_BASIS_SAPT", basis_set)
-    fisapt = core.FISAPT(wfn)
-    # return fisapt, matrix_cache, vector_cache
-    pp(fisapt.matrices())
-    pp(matrix_cache)
     fisapt.set_matrix(matrix_cache)
-    print("vector cache:")
-    pp(vector_cache)
     fisapt.set_vector(vector_cache)
-    pp(fisapt.matrices())
+    pp(scalars)
+    scalar_keys = {
+        "Ind20,r (A<-B)": "Ind20,r (A<-B)",
+        "Ind20,r (A->B)": "Ind20,r (B<-A)",
+        "Ind20,u (A<-B)": "Ind20,u (A<-B)",
+        "Ind20,u (A->B)": "Ind20,u (B<-A)",
+        "DHF VALUE": "HF",
+        "Exch10": "Exch10",
+        "Exch10(S^2)": "Exch10(S^2)",
+        "Elst10,r": "Elst10,r",
+        "Ind20,r": "Ind20,r",
+        "Exch-Ind20,r": "Exch-Ind20,r",
+    }
+    scalar_cache = {
+        fisapt_key: scalars[sdft_key] for sdft_key, fisapt_key in scalar_keys.items()
+    }
+    fisapt.set_scalar(scalar_cache)
+    # fisapt.fdrop = fisapt_fdrop
+    # fisapt.plot = fisapt_plot
+    # fisapt.save_fsapt_variables = fisapt_save_fsapt_variables
     return fisapt

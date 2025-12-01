@@ -8062,6 +8062,16 @@ void FISAPT::set_vector(std::map<std::string, std::shared_ptr<Vector>> update_ve
     }
 }
 
+// method for updating/setting scalars_, if key exists, update it, else create it
+void FISAPT::set_scalar(std::map<std::string, double> update_scalars) {
+    for (const auto& pair : update_scalars) {
+        const std::string& key = pair.first;
+        const double& val = pair.second;
+        outfile->Printf(" Setting scalar %s\n", key.c_str());
+        scalars_[key] = val;
+    }
+}
+
 }  // Namespace fisapt
 
 double sapt_nuclear_external_potential_matrix(

@@ -175,6 +175,7 @@ class FISAPT {
    // Method for updating/setting matrices_
     void set_matrix(std::map<std::string, std::shared_ptr<Matrix>>);
     void set_vector(std::map<std::string, std::shared_ptr<Vector>>);
+    void set_scalar(std::map<std::string, double>);
 };
 
 class FISAPTSCF {

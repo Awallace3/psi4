@@ -990,9 +990,7 @@ def sapt_dft(
         core.timer_on("SAPT(DFT): F-SAPT Localization (IBO)")
         sapt_jk_terms_ein.flocalization(cache_ein, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT): F-SAPT Localization (IBO)")
-        FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache_ein)
-        print("FISAPT_obj:", FISAPT_obj)
-        print(FISAPT_obj.matrices())
+        FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache_ein, data)
         FISAPT_obj.felst()
         FISAPT_obj.fexch()
         FISAPT_obj.find()
@@ -1114,12 +1112,8 @@ def sapt_dft(
             core.set_variable("FSAPT_EMPIRICAL_DISP", data['FSAPT_EMPIRICAL_DISP'])
     elif do_fsapt and fsapt_type == "FISAPT":
         core.print_out("FISAPT not yet implemented for SAPT(DFT). Proceeding without F-SAPT.\n")
-        # FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache_ein)
-        # print("FISAPT_obj:", FISAPT_obj)
-        # print(FISAPT_obj.matrices())
-        # FISAPT_obj.felst()
-        # FISAPT_obj.fexch()
-        # FISAPT_obj.find()
+        # FISAPT_obj.fdisp()
+        FISAPT_obj.fdrop(external_potentials)
 
     # Print out final data
     core.print_out("\n")
