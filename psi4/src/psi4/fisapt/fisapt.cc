@@ -5441,7 +5441,6 @@ void FISAPT::felst() {
     int nn = primary_->nbf();
     int nA = mol->natom();
     int nB = mol->natom();
-    outfile->Printf("  mol setup\n\n");
 
 // Some special considerations for the SAOn/SIAOn variants of ISAPT below
     int na = matrices_["Locc0A"]->colspi()[0];
@@ -5465,7 +5464,6 @@ void FISAPT::felst() {
 
     // => Targets <= //
 
-    outfile->Printf("    Computing F-SAPT Electrostatics Components...\n");
     double Elst10 = 0.0;
     std::vector<double> Elst10_terms;
     Elst10_terms.resize(4);

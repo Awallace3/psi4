@@ -50,24 +50,20 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache):
         core.get_global_option("FREEZE_CORE"), wfn_B.molecule()
     )
     # Build object
-    df_matrix_keys = [
-        "Cocc_A",
-        "Cvir_A",
-        "Cocc_B",
-        "Cvir_B",
-        "Locc_A",
-        "Locc_B",
-    ]
-    df_mfisapt_keys = [
-        "Caocc0A",
-        "Cvir0A",
-        "Caocc0B",
-        "Cvir0B",
-        "Locc0A",
-        "Locc0B",
-    ]
+    # Map cache keys (from SAPT(DFT) cache) to FISAPT object keys
+    df_matrix_keys = {
+        "Cocc_A": "Cocc0A",
+        "Cvir_A": "Cvir0A",
+        "Cocc_B": "Cocc0B",
+        "Cvir_B": "Cvir0B",
+        "Locc_A": "Locc0A",
+        "Locc_B": "Locc0B",
+        "Uocc_A": "Uocc0A",
+        "Uocc_B": "Uocc0B",
+    }
     matrix_cache = {
-        fkey: core.Matrix.from_array(cache[ckey]) for ckey, fkey in zip(df_matrix_keys, df_mfisapt_keys)
+        fkey: core.Matrix.from_array(cache[ckey])
+        for ckey, fkey in df_matrix_keys.items()
     }
 
     other_keys = [
@@ -81,22 +77,34 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache):
         "P_B",
         "V_B",
         "J_B",
+        "J_O",
         "K_B",
         "K_O",
+        "J_P_A",
+        "J_P_B",
     ]
     for key in other_keys:
         matrix_cache[key] = core.Matrix.from_array(cache[key])
         # matrix_cache[key] = cache[key]
 
-    df_vector_keys = ["eps_occ_A", "eps_vir_A", "eps_occ_B", "eps_vir_B"]
-    df_vfisapt_keys = ["eps_aocc0A", "eps_vir0A", "eps_aocc0B", "eps_vir0B"]
+    # Map cache keys (from SAPT(DFT) cache) to FISAPT object keys for vectors
+    df_vector_keys = {
+        "eps_occ_A": "eps_occ0A",
+        "eps_vir_A": "eps_vir0A",
+        "eps_occ_B": "eps_occ0B",
+        "eps_vir_B": "eps_vir0B",
+    }
     vector_cache = {
-        fkey: core.Vector.from_array(cache[ckey]) for ckey, fkey in zip(df_vector_keys, df_vfisapt_keys)
+        fkey: core.Vector.from_array(cache[ckey])
+        for ckey, fkey in df_vector_keys.items()
     }
     other_vector_keys = [
-        "ZA", "ZA_orig",
-        "ZB", "ZB_orig",
-        "ZC", "ZC_orig",
+        "ZA",
+        "ZA_orig",
+        "ZB",
+        "ZB_orig",
+        "ZC",
+        "ZC_orig",
     ]
     for key in other_vector_keys:
         vector_cache[key] = core.Vector.from_array(cache[key])
@@ -122,7 +130,7 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache):
     pp(fisapt.matrices())
     pp(matrix_cache)
     fisapt.set_matrix(matrix_cache)
-    print('vector cache:')
+    print("vector cache:")
     pp(vector_cache)
     fisapt.set_vector(vector_cache)
     pp(fisapt.matrices())
