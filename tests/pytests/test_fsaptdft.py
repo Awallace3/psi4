@@ -242,6 +242,9 @@ no_com
     )
     np.set_printoptions(precision=10, suppress=True)
     psi4.energy("sapt(dft)", molecule=mol)
+    print('timer dict')
+    pp(psi4.core.get_timer_dict())
+    psi4.write_timer_csv('timer.csv')
     for k, v in Eref_nh.items():  # TEST
         ref = v
         assert compare_values(

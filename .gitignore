@@ -170,3 +170,4 @@ pytest_output.dat
 pytest_output.log
 exports.sh
 tests/pytests/test_fsaptdft.log
+timer.csv

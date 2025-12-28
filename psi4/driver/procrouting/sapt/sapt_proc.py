@@ -70,6 +70,7 @@ def run_sapt_dft(name, **kwargs):
     )
 
     ein.initialize()
+    core.timer_on("SAPT(DFT) Energy")
     # einsum_example()
 
     # Alter default algorithm
@@ -598,6 +599,7 @@ def run_sapt_dft(name, **kwargs):
     for k, v in data.items():
         core.set_variable(k, v)
 
+    core.timer_off("SAPT(DFT) Energy")
     core.tstop()
 
     optstash.restore()
