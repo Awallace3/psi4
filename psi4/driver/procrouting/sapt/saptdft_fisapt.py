@@ -69,6 +69,14 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars):
         "Uocc_B": "Uocc0B",
         "Qocc0A": "Qocc0A",
         "Qocc0B": "Qocc0B",
+        "Laocc0A": "Laocc0A",
+        "Laocc0B": "Laocc0B",
+        "Lfocc0A": "Lfocc0A",
+        "Lfocc0B": "Lfocc0B",
+        "Uaocc0A": "Uaocc0A",
+        "Uaocc0B": "Uaocc0B",
+        # "Cocc_A": "Caocc0A",
+        # "Cocc_B": "Caocc0B",
     }
     matrix_cache = {
         fisapt_key: core.Matrix.from_array(cache[sdft_key])
@@ -126,12 +134,26 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars):
         vector_cache["eps_aocc0A"] = core.Vector.from_array(
             np.asarray(vector_cache["eps_aocc0A"])[nfrozen_A:]
         )
+    else:
+        matrix_cache["Caocc0A"] = core.Matrix.from_array(
+            np.asarray(matrix_cache["Cocc0A"]).copy()
+        )
+        vector_cache["eps_aocc0A"] = core.Vector.from_array(
+            np.asarray(vector_cache["eps_occ0A"]).copy()
+        )
     if nfrozen_B > 0:
         matrix_cache["Caocc0B"] = core.Matrix.from_array(
             np.asarray(matrix_cache["Caocc0B"])[:, nfrozen_B:]
         )
         vector_cache["eps_aocc0B"] = core.Vector.from_array(
             np.asarray(vector_cache["eps_aocc0B"])[nfrozen_B:]
+        )
+    else:
+        matrix_cache["Caocc0B"] = core.Matrix.from_array(
+            np.asarray(matrix_cache["Cocc0A"]).copy()
+        )
+        vector_cache["eps_aocc0B"] = core.Vector.from_array(
+            np.asarray(vector_cache["eps_occ0B"]).copy()
         )
     fisapt.set_matrix(matrix_cache)
     fisapt.set_vector(vector_cache)

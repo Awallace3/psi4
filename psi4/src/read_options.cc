@@ -1208,7 +1208,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         /*- FISAPT localization? -*/
         options.add_str("SAPT_DFT_DO_FSAPT", "NONE", "NONE SAPTDFT FISAPT");
         /*- FISAPT localization scheme -*/
-        options.add_str("SAPT_DFT_FSAPT_LOCAL_ORBITALS", "IBO", "IBO BOYS PIPEK_MEZEY");
+        // options.add_str("SAPT_DFT_FSAPT_LOCAL_ORBITALS", "IBO", "IBO BOYS PIPEK_MEZEY");
         /*- Interior option to clean up printing !expert -*/
         options.add_bool("SAPT_QUIET", false);
     }

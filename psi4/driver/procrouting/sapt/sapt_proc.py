@@ -991,9 +991,15 @@ def sapt_dft(
         sapt_jk_terms_ein.flocalization(cache_ein, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT): F-SAPT Localization (IBO)")
         FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache_ein, data)
+        core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
         FISAPT_obj.felst()
+        core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
+        core.timer_on("SAPT(DFT): F-SAPT Exchange")
         FISAPT_obj.fexch()
+        core.timer_off("SAPT(DFT): F-SAPT Exchange")
+        core.timer_on("SAPT(DFT): F-SAPT Induction")
         FISAPT_obj.find()
+        core.timer_off("SAPT(DFT): F-SAPT Induction")
 
 
     # Blow away JK object before doing MP2 for memory considerations
@@ -1111,8 +1117,9 @@ def sapt_dft(
         if sapt_dft_D4_IE:  # and d4_type == 'intermolecular':
             core.set_variable("FSAPT_EMPIRICAL_DISP", data['FSAPT_EMPIRICAL_DISP'])
     elif do_fsapt and fsapt_type == "FISAPT":
-        core.print_out("FISAPT not yet implemented for SAPT(DFT). Proceeding without F-SAPT.\n")
-        # FISAPT_obj.fdisp()
+        core.timer_on("SAPT(DFT): F-SAPT Dispersion")
+        FISAPT_obj.fdisp()
+        core.timer_off("SAPT(DFT): F-SAPT Dispersion")
         FISAPT_obj.fdrop(external_potentials)
 
     # Print out final data

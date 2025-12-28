@@ -80,6 +80,7 @@ no_com
             "SAPT_DFT_DO_HYBRID": False,
             "SAPT_DFT_EXCH_DISP_SCALE_SCHEME": "None",
             "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "FISAPT_FSAPT_FILEPATH": "none",
         }
     )
     psi4.energy("fisapt0", molecule=mol)
@@ -236,6 +237,7 @@ no_com
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
             "SAPT_DFT_DO_FSAPT": "FISAPT",
+            "FISAPT_FSAPT_FILEPATH": "none",
         }
     )
     np.set_printoptions(precision=10, suppress=True)

@@ -527,7 +527,7 @@ def build_sapt_jk_cache(
     cache["eps_vir_B"].set_name("eps_vir_B")
 
     # localization
-    if core.get_option("SAPT", "SAPT_DFT_LOCAL_ORBITALS") != "None":
+    if core.get_option("SAPT", "SAPT_DFT_DO_FSAPT"):
         cache["Cfocc"] = wfn_dimer.Ca_subset("AO", "FROZEN_OCC")
         cache["eps_all"] = wfn_dimer.epsilon_a_subset("AO", "ALL")
 
