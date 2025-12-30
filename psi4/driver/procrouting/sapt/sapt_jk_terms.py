@@ -69,6 +69,28 @@ def build_sapt_jk_cache(
     cache["eps_occ_B"] = wfn_B.epsilon_a_subset("AO", "OCC")
     cache["eps_vir_B"] = wfn_B.epsilon_a_subset("AO", "VIR")
 
+    # localization
+    if core.get_option("SAPT", "SAPT_DFT_DO_FSAPT"):
+        cache["Cfocc"] = wfn_dimer.Ca_subset("AO", "FROZEN_OCC")
+        cache["eps_all"] = wfn_dimer.epsilon_a_subset("AO", "ALL")
+
+        cache["Call"] = wfn_dimer.Ca_subset("AO", "ALL")
+        cache["Cocc"] = wfn_dimer.Ca_subset("AO", "OCC")
+        cache["Cvir"] = wfn_dimer.Ca_subset("AO", "VIR")
+
+        cache["eps_occ"] = wfn_dimer.epsilon_a_subset("AO", "OCC")
+        cache["eps_vir"] = wfn_dimer.epsilon_a_subset("AO", "VIR")
+
+        cache["Caocc"] = wfn_dimer.Ca_subset("AO", "ACTIVE_OCC")
+        cache["Cavir"] = wfn_dimer.Ca_subset("AO", "ACTIVE_VIR")
+        cache["Cfvir"] = wfn_dimer.Ca_subset("AO", "FROZEN_VIR")
+
+        cache["eps_focc"] = wfn_dimer.epsilon_a_subset("AO", "FROZEN_OCC")
+        cache["eps_aocc"] = wfn_dimer.epsilon_a_subset("AO", "ACTIVE_OCC")
+        cache["eps_avir"] = wfn_dimer.epsilon_a_subset("AO", "ACTIVE_VIR")
+        cache["eps_fvir"] = wfn_dimer.epsilon_a_subset("AO", "FROZEN_VIR")
+
+
     # Build the densities as HF takes an extra "step"
     cache["D_A"] = core.doublet(cache["Cocc_A"], cache["Cocc_A"], False, True)
     cache["D_B"] = core.doublet(cache["Cocc_B"], cache["Cocc_B"], False, True)

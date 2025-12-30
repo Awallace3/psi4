@@ -898,6 +898,8 @@ no_com
             "SAPT_DFT_D4_IE": False,
             "SAPT_DFT_DO_DISP": True,
             "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
+            # Normally on
+            "SAPT_DFT_USE_EINSUMS": False,
         }
     )
     psi4.energy("sapt(dft)", molecule=mol)

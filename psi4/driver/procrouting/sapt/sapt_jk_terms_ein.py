@@ -122,7 +122,7 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, do_print=True):
     N = cache['eps_occ_A'].shape[0]
     Focc = core.Matrix("Focc", N, N)
     for i in range(N):
-        Focc.np[i, i] = cache["eps_occ_A"][i]
+        Focc.np[i, i] = cache["eps_occ_A"].np[i]
     IBO_loc = core.IBOLocalizer2(
         dimer_wfn.basisset(),
         dimer_wfn.get_basisset("MINAO"),
@@ -177,7 +177,7 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, do_print=True):
     N = cache['eps_occ_B'].shape[0]
     Focc = core.Matrix("Focc", N, N)
     for i in range(N):
-        Focc.np[i, i] = cache["eps_occ_B"][i]
+        Focc.np[i, i] = cache["eps_occ_B"].np[i]
     
     IBO_loc = core.IBOLocalizer2(
         dimer_wfn.basisset(),
@@ -516,15 +516,10 @@ def build_sapt_jk_cache(
     cache["Cvir_B"] = ein.core.RuntimeTensorD(wfn_B.Ca_subset("AO", "VIR").np)
     cache['Cvir_B'].set_name("Cvir_B")
 
-    cache["eps_occ_A"] = ein.core.RuntimeTensorD(wfn_A.epsilon_a_subset("AO", "OCC").np)
-    cache["eps_vir_A"] = ein.core.RuntimeTensorD(wfn_A.epsilon_a_subset("AO", "VIR").np)
-    cache["eps_occ_B"] = ein.core.RuntimeTensorD(wfn_B.epsilon_a_subset("AO", "OCC").np)
-    cache["eps_vir_B"] = ein.core.RuntimeTensorD(wfn_B.epsilon_a_subset("AO", "VIR").np)
-
-    cache["eps_occ_A"].set_name("eps_occ_A")
-    cache["eps_vir_A"].set_name("eps_vir_A")
-    cache["eps_occ_B"].set_name("eps_occ_B")
-    cache["eps_vir_B"].set_name("eps_vir_B")
+    cache["eps_occ_A"] = wfn_A.epsilon_a_subset("AO", "OCC")
+    cache["eps_vir_A"] = wfn_A.epsilon_a_subset("AO", "VIR")
+    cache["eps_occ_B"] = wfn_B.epsilon_a_subset("AO", "OCC")
+    cache["eps_vir_B"] = wfn_B.epsilon_a_subset("AO", "VIR")
 
     # localization
     if core.get_option("SAPT", "SAPT_DFT_DO_FSAPT"):
@@ -929,6 +924,8 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
     CvirB = cache["Cvir_B"]
     CvirA.set_name("CvirA")
     CvirB.set_name("CvirB")
+    # CvirA.name = "CvirA"
+    # CvirB.name = "CvirB"
     
     dfh = cache["dfh"]
     
@@ -1615,7 +1612,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         for a in range(na):
             for r in range(nr):
                 # fill_tensor wB as (1, na, nr), so we take first index only
-                xA.np[a, r] = wB.np[0, a, r] / (eps_occ_A[a] - eps_vir_A[r])
+                xA.np[a, r] = wB.np[0, a, r] / (eps_occ_A.np[a] - eps_vir_A.np[r])
         
         x2A = core.doublet(Uocc_A, xA, True, False)
         x2Ap = x2A.np
@@ -1649,7 +1646,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         dfh.fill_tensor("WAbs", wA, [A, A + 1])
         for b in range(nb):
             for s in range(ns):
-                xB.np[b, s] = wA.np[0, b, s] / (eps_occ_B[b] - eps_vir_B[s])
+                xB.np[b, s] = wA.np[0, b, s] / (eps_occ_B.np[b] - eps_vir_B.np[s])
         
         x2B = core.doublet(Uocc_B, xB, True, False)
         x2Bp = x2B.np
@@ -2329,7 +2326,7 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
                 # Compute amplitudes Tab[a,b] = Vab[a,b] / (ea + eb - er - es)
                 for a in range(na):
                     for b in range(nb):
-                        Tabp[a, b] = Vabp[a, b] / (eap[a] + ebp[b] - erp[r + rstart] - esp[s + sstart])
+                        Tabp[a, b] = Vabp[a, b] / (eap.np[a] + ebp.np[b] - erp.np[r + rstart] - esp.np[s + sstart])
                 
                 # Transform to localized orbital basis
                 # T2ab = UA.T @ Tab @ UB
@@ -2832,12 +2829,12 @@ def induction(
     # Eq. 20
     for r in range(unc_x_B_MOA.shape[0]):
         for a in range(unc_x_B_MOA.shape[1]):
-            unc_x_B_MOA[r, a] /= (eps_occ_A[r] - eps_vir_A[a])
+            unc_x_B_MOA[r, a] /= (eps_occ_A.np[r] - eps_vir_A.np[a])
     
     # Eq. 20
     for r in range(unc_x_A_MOB.shape[0]):
         for a in range(unc_x_A_MOB.shape[1]):
-            unc_x_A_MOB[r, a] /= (eps_occ_B[r] - eps_vir_B[a])
+            unc_x_A_MOB[r, a] /= (eps_occ_B.np[r] - eps_vir_B.np[a])
 
     # Compute uncoupled induction energies according to Eq. 14, 15
     unc_ind_ab = 2.0 * ein.core.dot(unc_x_B_MOA, w_B_MOA)
@@ -3310,9 +3307,9 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
         ones_occ.set_all(1.0)
         ones_vir.set_all(1.0)
         plan_outer = ein.core.compile_plan("ia", "i", "a")
-        plan_outer.execute(0.0, P_X, 1.0, eps_occ, ones_vir)
+        plan_outer.execute(0.0, P_X, 1.0, eps_occ.np, ones_vir)
         eps_vir_2D = ein.utils.tensor_factory("eps_vir_2D", [eps_occ.shape[0], eps_vir.shape[0]], np.float64, 'einsums')
-        plan_outer.execute(0.0, eps_vir_2D, 1.0, ones_occ, eps_vir)
+        plan_outer.execute(0.0, eps_vir_2D, 1.0, ones_occ, eps_vir.np)
         ein.core.axpy(-1.0, eps_vir_2D, P_X)
         return P_X
 
