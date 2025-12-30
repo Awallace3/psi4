@@ -42,9 +42,10 @@ from . import fisapt_proc
 from pprint import pprint as pp
 
 
-def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars):
+def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars, basis_set=None):
     # Setup FISAPT object
-    basis_set = wfn.basisset()
+    if basis_set is None:
+        basis_set = wfn.basisset()
     wfn.set_basisset("DF_BASIS_SAPT", basis_set)
     fisapt = core.FISAPT(wfn)
 

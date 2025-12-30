@@ -150,10 +150,8 @@ no_com
     )
     psi4.core.clean_timers()
     psi4.energy("sapt(dft)", molecule=mol)
-    print("timer dict")
     compute_time_saptdft = psi4.core.get_timer_dict()["SAPT(DFT) Energy"]
     psi4.driver.p4util.write_timer_csv("saptdft_timers.csv")
-    print(compute_time_saptdft)
     psi4.set_options(
         {
             "basis": "sto-3g",

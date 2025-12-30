@@ -1002,6 +1002,16 @@ def sapt_dft(
         core.timer_on("SAPT(DFT): F-SAPT Induction")
         FISAPT_obj.find()
         core.timer_off("SAPT(DFT): F-SAPT Induction")
+        core.timer_on("SAPT(DFT): F-SAPT Dispersion")
+        FISAPT_obj.fdisp()
+        core.timer_off("SAPT(DFT): F-SAPT Dispersion")
+        FISAPT_obj.fdrop(external_potentials)
+        scalars = FISAPT_obj.scalars()
+        print("FISAPT DISP SCALARS:")
+        from pprint import pprint
+        pprint(scalars)
+        data["Exch-Disp20,u"] = scalars["Exch-Disp20"]
+        data["Disp20,u"] = scalars["Disp20"]
 
 
     # Blow away JK object before doing MP2 for memory considerations
@@ -1103,26 +1113,34 @@ def sapt_dft(
         # dispersion method for F-SAPT in SAPT(DFT). Hence, FSAPT_DISP_AB will be 
         # set to zero if SAPT(DFT) is requested with FDDS dispersion with DO_FSAPT.
 
-        # d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
+        if do_disp:
+            core.timer_on("SAPT(DFT): F-SAPT Dispersion")
+            cache_ein = sapt_jk_terms_ein.fdisp0(
+                cache_ein, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, do_print=True
+            )
+            data["Exch-Disp20,u"] = cache_ein["Exch-Disp20,u"]
+            data["Disp20,u"] = cache_ein["Disp20,u"]
+            core.timer_off("SAPT(DFT): F-SAPT Dispersion")
+            core.set_variable("FSAPT_DISP_AB", cache_ein['DISP_AB'])
+
         sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
-        core.timer_on("SAPT(DFT): F-SAPT Dispersion")
-        cache_ein = sapt_jk_terms_ein.fdisp0(
-            cache_ein, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, do_print=True
-        )
-        data["Exch-Disp20,u"] = cache_ein["Exch-Disp20,u"]
-        data["Disp20,u"] = cache_ein["Disp20,u"]
-        core.timer_off("SAPT(DFT): F-SAPT Dispersion")
-        core.set_variable("FSAPT_DISP_AB", cache_ein['DISP_AB'])
+        # d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
         if sapt_dft_D4_IE:  # and d4_type == 'intermolecular':
             core.set_variable("FSAPT_EMPIRICAL_DISP", data['FSAPT_EMPIRICAL_DISP'])
-    elif do_fsapt and fsapt_type == "FISAPT":
+    elif do_fsapt and fsapt_type == "FISAPT" and do_disp:
         core.timer_on("SAPT(DFT): F-SAPT Dispersion")
+        dimer_wfn.set_basisset("DF_BASIS_SAPT", aux_basis)
+        FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache_ein, data, basis_set=aux_basis)
         FISAPT_obj.fdisp()
         core.timer_off("SAPT(DFT): F-SAPT Dispersion")
         FISAPT_obj.fdrop(external_potentials)
         scalars = FISAPT_obj.scalars()
+        print("FISAPT DISP SCALARS:")
+        from pprint import pprint
+        pprint(scalars)
         data["Exch-Disp20,u"] = scalars["Exch-Disp20"]
         data["Disp20,u"] = scalars["Disp20"]
+    # elif do_fsapt and fsapt_type == "FISAPT":
         
     # Print out final data
     core.print_out("\n")
