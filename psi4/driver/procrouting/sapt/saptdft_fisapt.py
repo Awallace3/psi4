@@ -129,10 +129,13 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars, basis_set=None):
     # If frozen core, trim the appropriate matrices and vectors. We can do it with NumPy slicing.
     if nfrozen_A > 0:
         matrix_cache["Caocc0A"] = core.Matrix.from_array(
-            np.asarray(matrix_cache["Caocc0A"])[:, nfrozen_A:]
+            np.asarray(matrix_cache["Cocc0A"])[:, nfrozen_A:]
         )
         vector_cache["eps_aocc0A"] = core.Vector.from_array(
-            np.asarray(vector_cache["eps_aocc0A"])[nfrozen_A:]
+            np.asarray(vector_cache["eps_occ0A"])[nfrozen_A:]
+        )
+        matrix_cache["Uaocc0A"] = core.Matrix.from_array(
+            np.asarray(matrix_cache["Uocc0A"])[:, nfrozen_A:]
         )
     else:
         matrix_cache["Caocc0A"] = core.Matrix.from_array(
@@ -141,19 +144,28 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars, basis_set=None):
         vector_cache["eps_aocc0A"] = core.Vector.from_array(
             np.asarray(vector_cache["eps_occ0A"]).copy()
         )
+        matrix_cache["Uaocc0A"] = core.Matrix.from_array(
+            np.asarray(matrix_cache["Uocc0A"]).copy()
+        )
     if nfrozen_B > 0:
         matrix_cache["Caocc0B"] = core.Matrix.from_array(
-            np.asarray(matrix_cache["Caocc0B"])[:, nfrozen_B:]
+            np.asarray(matrix_cache["Cocc0B"])[:, nfrozen_B:]
         )
         vector_cache["eps_aocc0B"] = core.Vector.from_array(
-            np.asarray(vector_cache["eps_aocc0B"])[nfrozen_B:]
+            np.asarray(vector_cache["eps_occ0B"])[nfrozen_B:]
+        )
+        matrix_cache["Uaocc0B"] = core.Matrix.from_array(
+            np.asarray(matrix_cache["Uocc0B"])[:, nfrozen_B:]
         )
     else:
         matrix_cache["Caocc0B"] = core.Matrix.from_array(
-            np.asarray(matrix_cache["Cocc0A"]).copy()
+            np.asarray(matrix_cache["Cocc0B"]).copy()
         )
         vector_cache["eps_aocc0B"] = core.Vector.from_array(
             np.asarray(vector_cache["eps_occ0B"]).copy()
+        )
+        matrix_cache["Uaocc0B"] = core.Matrix.from_array(
+            np.asarray(matrix_cache["Uocc0B"]).copy()
         )
     fisapt.set_matrix(matrix_cache)
     fisapt.set_vector(vector_cache)

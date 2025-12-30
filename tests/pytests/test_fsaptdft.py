@@ -139,23 +139,6 @@ no_com
         {
             "basis": "sto-3g",
             "scf_type": "df",
-            "SAPT_DFT_FUNCTIONAL": "HF",
-            "SAPT_DFT_DO_DHF": True,
-            "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": "FISAPT",
-            "FISAPT_FSAPT_FILEPATH": "none",
-            # REALLY matters if SAPT_DFT_DO_FSAPT==FISAPT due to reuse of integrals
-            "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
-        }
-    )
-    psi4.core.clean_timers()
-    psi4.energy("sapt(dft)", molecule=mol)
-    compute_time_saptdft = psi4.core.get_timer_dict()["SAPT(DFT) Energy"]
-    psi4.driver.p4util.write_timer_csv("saptdft_timers.csv")
-    psi4.set_options(
-        {
-            "basis": "sto-3g",
-            "scf_type": "df",
             "FISAPT_FSAPT_FILEPATH": "none",
             "FISAPT_DO_FSAPT": True,
             "FISAPT_DO_FSAPT_DISP": True,
@@ -181,6 +164,23 @@ no_com
     psi4.energy("sapt(dft)", molecule=mol)
     compute_time_fisapt = psi4.core.get_timer_dict()["SAPT(DFT) Energy"]
     psi4.driver.p4util.write_timer_csv("saptdft_fi_timers.csv")
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "SAPT_DFT_FUNCTIONAL": "HF",
+            "SAPT_DFT_DO_DHF": True,
+            "SAPT_DFT_DO_HYBRID": False,
+            "SAPT_DFT_DO_FSAPT": "FISAPT",
+            "FISAPT_FSAPT_FILEPATH": "none",
+            # REALLY matters if SAPT_DFT_DO_FSAPT==FISAPT due to reuse of integrals
+            "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
+        }
+    )
+    psi4.core.clean_timers()
+    psi4.energy("sapt(dft)", molecule=mol)
+    compute_time_saptdft = psi4.core.get_timer_dict()["SAPT(DFT) Energy"]
+    psi4.driver.p4util.write_timer_csv("saptdft_timers.csv")
     print(
         f"compute time ein+fi: {compute_time_fisapt['wall_time']:.2f}s\n"
         f"compute_time_einsum: {compute_time_saptdft['wall_time']:.2f}s\n"

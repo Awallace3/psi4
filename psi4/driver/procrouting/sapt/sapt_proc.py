@@ -992,7 +992,10 @@ def sapt_dft(
         core.timer_on("SAPT(DFT): F-SAPT Localization (IBO)")
         sapt_jk_terms_ein.flocalization(cache_ein, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT): F-SAPT Localization (IBO)")
-        FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache_ein, data)
+        # Build auxiliary basis for FISAPT dispersion
+        aux_basis = core.BasisSet.build(dimer_wfn.molecule(), "DF_BASIS_MP2", core.get_option("DFMP2", "DF_BASIS_MP2"),
+                                            "RIFIT", core.get_global_option('BASIS'))
+        FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache_ein, data, aux_basis)
         core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
         FISAPT_obj.felst()
         core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
@@ -1129,8 +1132,6 @@ def sapt_dft(
             core.set_variable("FSAPT_EMPIRICAL_DISP", data['FSAPT_EMPIRICAL_DISP'])
     elif do_fsapt and fsapt_type == "FISAPT" and do_disp:
         core.timer_on("SAPT(DFT): F-SAPT Dispersion")
-        dimer_wfn.set_basisset("DF_BASIS_SAPT", aux_basis)
-        FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache_ein, data, basis_set=aux_basis)
         FISAPT_obj.fdisp()
         core.timer_off("SAPT(DFT): F-SAPT Dispersion")
         FISAPT_obj.fdrop(external_potentials)

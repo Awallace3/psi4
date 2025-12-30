@@ -8047,7 +8047,7 @@ void FISAPT::set_matrix(std::map<std::string, std::shared_ptr<Matrix>> update_ma
     for (const auto& pair : update_matrices) {
         const std::string& key = pair.first;
         const std::shared_ptr<Matrix>& matrix = pair.second;
-        outfile->Printf(" Setting matrix %s\n", key.c_str());
+        // outfile->Printf(" Setting matrix %s\n", key.c_str());
         matrices_[key] = matrix;
     }
 }
@@ -8057,7 +8057,7 @@ void FISAPT::set_vector(std::map<std::string, std::shared_ptr<Vector>> update_ve
     for (const auto& pair : update_vector) {
         const std::string& key = pair.first;
         const std::shared_ptr<Vector>& vec = pair.second;
-        outfile->Printf(" Setting vector %s\n", key.c_str());
+        // outfile->Printf(" Setting vector %s\n", key.c_str());
         vectors_[key] = vec;
     }
 }
@@ -8067,7 +8067,7 @@ void FISAPT::set_scalar(std::map<std::string, double> update_scalars) {
     for (const auto& pair : update_scalars) {
         const std::string& key = pair.first;
         const double& val = pair.second;
-        outfile->Printf(" Setting scalar %s\n", key.c_str());
+        // outfile->Printf(" Setting scalar %s\n", key.c_str());
         scalars_[key] = val;
     }
 }
