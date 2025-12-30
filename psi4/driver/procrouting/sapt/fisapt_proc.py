@@ -45,6 +45,7 @@ def fisapt_compute_energy(self, jk_obj, *, external_potentials=None):
 
     # => Zero-th Order Wavefunction <=
 
+    core.timer_on("FISAPT: Energy")
     core.timer_on("FISAPT: Setup")
     self.localize()
     self.partition()
@@ -132,6 +133,7 @@ def fisapt_compute_energy(self, jk_obj, *, external_potentials=None):
     # => Summary <=
 
     self.print_trailer()
+    core.timer_off("FISAPT: Energy")
 
 
 def fisapt_fdrop(self, external_potentials=None):

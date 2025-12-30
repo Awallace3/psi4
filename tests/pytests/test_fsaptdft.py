@@ -79,8 +79,7 @@ no_com
             "SAPT_DFT_DO_DHF": False,
             "SAPT_DFT_DO_HYBRID": False,
             "SAPT_DFT_EXCH_DISP_SCALE_SCHEME": "None",
-            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
-            "FISAPT_FSAPT_FILEPATH": "none",
+            "SAPT_DFT_DO_FSAPT": True,
         }
     )
     psi4.energy("fisapt0", molecule=mol)
@@ -91,6 +90,94 @@ no_com
         assert compare_values(
             ref, psi4.variable(k) * 1000, 8, "!hyb, xd=none, !dHF: " + k
         )
+
+
+def test_fsaptdft_timer():
+    """
+    built from sapt-dft1 ctest
+    """
+    mol = psi4.geometry(
+        """
+0 1
+C   11.54100       27.68600       13.69600
+H   12.45900       27.15000       13.44600
+C   10.79000       27.96500       12.40600
+H   10.55700       27.01400       11.92400
+H   9.879000       28.51400       12.64300
+H   11.44300       28.56800       11.76200
+H   10.90337       27.06487       14.34224
+H   11.78789       28.62476       14.21347
+--
+0 1
+C   10.60200       24.81800       6.466000
+O   10.95600       23.84000       7.103000
+N   10.17800       25.94300       7.070000
+C   10.09100       26.25600       8.476000
+C   9.372000       27.59000       8.640000
+C   11.44600       26.35600       9.091000
+C   9.333000       25.25000       9.282000
+H   9.874000       26.68900       6.497000
+H   9.908000       28.37100       8.093000
+H   8.364000       27.46400       8.233000
+H   9.317000       27.84600       9.706000
+H   9.807000       24.28200       9.160000
+H   9.371000       25.57400       10.32900
+H   8.328000       25.26700       8.900000
+H   11.28800       26.57600       10.14400
+H   11.97000       27.14900       8.585000
+H   11.93200       25.39300       8.957000
+H   10.61998       24.85900       5.366911
+units angstrom
+
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    np.set_printoptions(precision=10, suppress=True)
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "SAPT_DFT_FUNCTIONAL": "HF",
+            "SAPT_DFT_DO_DHF": True,
+            "SAPT_DFT_DO_HYBRID": False,
+            "SAPT_DFT_DO_FSAPT": "FISAPT",
+            "FISAPT_FSAPT_FILEPATH": "none",
+        }
+    )
+    psi4.core.clean_timers()
+    psi4.energy("fisapt0", molecule=mol)
+    compute_time_fisapt0 = psi4.core.get_timer_dict()["FISAPT: Energy"]
+    psi4.driver.p4util.write_timer_csv('fisapt0_timers.csv')
+    psi4.core.clean_timers()
+    psi4.energy("sapt(dft)", molecule=mol)
+    print("timer dict")
+    compute_time_saptdft = psi4.core.get_timer_dict()["SAPT(DFT) Energy"]
+    psi4.driver.p4util.write_timer_csv('saptdft_timers.csv')
+    print(compute_time_saptdft)
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "SAPT_DFT_FUNCTIONAL": "HF",
+            "SAPT_DFT_DO_DHF": True,
+            "SAPT_DFT_DO_HYBRID": False,
+            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "FISAPT_FSAPT_FILEPATH": "none",
+        }
+    )
+    psi4.core.clean_timers()
+    psi4.energy("sapt(dft)", molecule=mol)
+    print("timer dict")
+    compute_time_ein = psi4.core.get_timer_dict()["SAPT(DFT) Energy"]
+    psi4.driver.p4util.write_timer_csv('saptdft_fi_timers.csv')
+    print(
+        f"compute time einsum: {compute_time_ein['wall_time']:.2f}s, compute"
+        f"time old: {compute_time_saptdft['wall_time']:.2f}s compute"
+        f"time fisapt0: {compute_time_fisapt0['wall_time']:.2f}s"
+    )
+    return
 
 
 @pytest.mark.skip(reason="Not completed fsapt einsums")
@@ -133,7 +220,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "SAPT_DFT_DO_FSAPT": True,
         }
     )
     np.set_printoptions(precision=10, suppress=True)
@@ -186,7 +273,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "SAPT_DFT_DO_FSAPT": True,
         }
     )
     np.set_printoptions(precision=10, suppress=True)
@@ -236,15 +323,11 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": "FISAPT",
-            "FISAPT_FSAPT_FILEPATH": "none",
+            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
         }
     )
     np.set_printoptions(precision=10, suppress=True)
     psi4.energy("sapt(dft)", molecule=mol)
-    print('timer dict')
-    pp(psi4.core.get_timer_dict())
-    psi4.write_timer_csv('timer.csv')
     for k, v in Eref_nh.items():  # TEST
         ref = v
         assert compare_values(
@@ -287,7 +370,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "SAPT_DFT_DO_FSAPT": True,
             "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
         }
     )
@@ -360,7 +443,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "SAPT_DFT_DO_FSAPT": True,
             # "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
         }
     )
@@ -565,7 +648,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "SAPT_DFT_DO_FSAPT": True,
             "SAPT_DFT_D4_IE": True,
             "SAPT_DFT_DO_DISP": False,
         }
@@ -798,7 +881,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "SAPT_DFT_DO_FSAPT": True,
             "SAPT_DFT_D4_IE": False,
             "SAPT_DFT_DO_DISP": True,
             "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
@@ -1025,7 +1108,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "PBE0",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "SAPT_DFT_DO_FSAPT": True,
             "SAPT_DFT_D4_IE": True,
             "SAPT_DFT_DO_DISP": False,
             "SAPT_DFT_GRAC_SHIFT_A": 0.11652342,
@@ -1253,7 +1336,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "PBE0",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "SAPT_DFT_DO_FSAPT": True,
             "SAPT_DFT_D4_IE": True,
             "SAPT_DFT_DO_DISP": False,
             "SAPT_DFT_GRAC_SHIFT_A": 0.11652342,
@@ -1392,7 +1475,7 @@ no_com
             # "SAPT_DFT_FUNCTIONAL": "PBE0",
             "SAPT_DFT_FUNCTIONAL": functional,
             "SAPT_DFT_DO_DHF": True,
-            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "SAPT_DFT_DO_FSAPT": True,
             "SAPT_DFT_D4_IE": True,
             "SAPT_DFT_DO_DISP": False,
             # "SAPT_DFT_D4_TYPE": "SUPERMOLECULAR",
@@ -1532,10 +1615,12 @@ no_com
 
 if __name__ == "__main__":
     psi4.set_memory("220 GB")
-    psi4.set_num_threads(24)
-    test_fsaptdft_simple()
-    # test_fsaptdft_disp0_fisapt0_psivars()
+    # psi4.set_num_threads(24)
+    psi4.set_num_threads(8)
+    test_fsaptdft_timer()
+    # test_fsaptdft_simple()
 
+    # test_fsaptdft_disp0_fisapt0_psivars()
 
     # test_fsaptdft()
     # test_fsaptdft_fsapt0_simple()
