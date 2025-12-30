@@ -1005,16 +1005,6 @@ def sapt_dft(
         core.timer_on("SAPT(DFT): F-SAPT Induction")
         FISAPT_obj.find()
         core.timer_off("SAPT(DFT): F-SAPT Induction")
-        core.timer_on("SAPT(DFT): F-SAPT Dispersion")
-        FISAPT_obj.fdisp()
-        core.timer_off("SAPT(DFT): F-SAPT Dispersion")
-        FISAPT_obj.fdrop(external_potentials)
-        scalars = FISAPT_obj.scalars()
-        print("FISAPT DISP SCALARS:")
-        from pprint import pprint
-        pprint(scalars)
-        data["Exch-Disp20,u"] = scalars["Exch-Disp20"]
-        data["Disp20,u"] = scalars["Disp20"]
 
 
     # Blow away JK object before doing MP2 for memory considerations
@@ -1126,10 +1116,6 @@ def sapt_dft(
             core.timer_off("SAPT(DFT): F-SAPT Dispersion")
             core.set_variable("FSAPT_DISP_AB", cache_ein['DISP_AB'])
 
-        sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
-        # d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
-        if sapt_dft_D4_IE:  # and d4_type == 'intermolecular':
-            core.set_variable("FSAPT_EMPIRICAL_DISP", data['FSAPT_EMPIRICAL_DISP'])
     elif do_fsapt and fsapt_type == "FISAPT" and do_disp:
         core.timer_on("SAPT(DFT): F-SAPT Dispersion")
         FISAPT_obj.fdisp()
@@ -1141,8 +1127,12 @@ def sapt_dft(
         pprint(scalars)
         data["Exch-Disp20,u"] = scalars["Exch-Disp20"]
         data["Disp20,u"] = scalars["Disp20"]
-    # elif do_fsapt and fsapt_type == "FISAPT":
-        
+
+    sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
+    # d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
+    if sapt_dft_D4_IE:  # and d4_type == 'intermolecular':
+        core.set_variable("FSAPT_EMPIRICAL_DISP", data['FSAPT_EMPIRICAL_DISP'])
+
     # Print out final data
     core.print_out("\n")
     core.print_out(print_sapt_dft_summary(data, "SAPT(DFT)", do_dft=do_dft, do_disp=do_disp, do_delta_dft=do_delta_dft))
