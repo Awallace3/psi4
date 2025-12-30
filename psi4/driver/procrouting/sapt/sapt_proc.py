@@ -1059,19 +1059,21 @@ def sapt_dft(
             nfrozen_B = wfn_B.basisset().n_frozen_core(core.get_global_option("FREEZE_CORE"),wfn_B.molecule())
             
         
-        core.timer_on("MP2 disp")
-        if core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
-            mp2_disp = sapt_mp2_terms.df_mp2_fisapt_dispersion(wfn_A, primary_basis, aux_basis, 
-                                                               cache, nfrozen_A, nfrozen_B, do_print=True)
-        else:
-            mp2_disp = sapt_mp2_terms.df_mp2_sapt_dispersion(dimer_wfn,
-                                                             wfn_A,
-                                                             wfn_B,
-                                                             primary_basis,
-                                                             aux_basis,
-                                                             cache,
-                                                             do_print=True)
-        data.update(mp2_disp)
+        if not do_fsapt and core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL") != "HF":
+            core.timer_on("MP2 disp")
+            if core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
+                mp2_disp = sapt_mp2_terms.df_mp2_fisapt_dispersion(wfn_A, primary_basis, aux_basis, 
+                                                                   cache, nfrozen_A, nfrozen_B, do_print=True)
+            else:
+                mp2_disp = sapt_mp2_terms.df_mp2_sapt_dispersion(dimer_wfn,
+                                                                 wfn_A,
+                                                                 wfn_B,
+                                                                 primary_basis,
+                                                                 aux_basis,
+                                                                 cache,
+                                                                 do_print=True)
+            core.timer_off("MP2 disp")
+            data.update(mp2_disp)
 
         # Exchange-dispersion scaling
         if do_dft:
@@ -1089,7 +1091,6 @@ def sapt_dft(
             if exch_disp_scheme != "NONE":
                 core.print_out(print_sapt_var("Est. Exch-Disp20,r", data["Exch-Disp20,r"], short=True) + "\n")
 
-        core.timer_off("MP2 disp")
         core.timer_off("SAPT(DFT):disp")
 
     # Now do F-SAPT on dispersion if requested
@@ -1104,18 +1105,14 @@ def sapt_dft(
 
         # d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
         sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
-        if core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
-            core.timer_on("SAPT(DFT): F-SAPT Dispersion")
-            cache_ein = sapt_jk_terms_ein.fdisp0(
-                # cache_ein, mp2_disp['Disp20,u'], dimer_wfn, wfn_A, wfn_B, sapt_jk, nfrozen_A, nfrozen_B, True
-                cache_ein, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, do_print=True
-            )
-            core.timer_off("SAPT(DFT): F-SAPT Dispersion")
-            # core.set_variable("FSAPT_DISP_AB", np.zeros_like(cache_ein['Elst_AB']))
-            core.set_variable("FSAPT_DISP_AB", cache_ein['DISP_AB'])
-        # elif "D4", returrn pairwise dispersion energies
-        else:
-            core.set_variable("FSAPT_DISP_AB", np.zeros_like(cache_ein['Elst_AB']))
+        core.timer_on("SAPT(DFT): F-SAPT Dispersion")
+        cache_ein = sapt_jk_terms_ein.fdisp0(
+            cache_ein, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, do_print=True
+        )
+        data["Exch-Disp20,u"] = cache_ein["Exch-Disp20,u"]
+        data["Disp20,u"] = cache_ein["Disp20,u"]
+        core.timer_off("SAPT(DFT): F-SAPT Dispersion")
+        core.set_variable("FSAPT_DISP_AB", cache_ein['DISP_AB'])
         if sapt_dft_D4_IE:  # and d4_type == 'intermolecular':
             core.set_variable("FSAPT_EMPIRICAL_DISP", data['FSAPT_EMPIRICAL_DISP'])
     elif do_fsapt and fsapt_type == "FISAPT":
@@ -1123,7 +1120,10 @@ def sapt_dft(
         FISAPT_obj.fdisp()
         core.timer_off("SAPT(DFT): F-SAPT Dispersion")
         FISAPT_obj.fdrop(external_potentials)
-
+        scalars = FISAPT_obj.scalars()
+        data["Exch-Disp20,u"] = scalars["Exch-Disp20"]
+        data["Disp20,u"] = scalars["Disp20"]
+        
     # Print out final data
     core.print_out("\n")
     core.print_out(print_sapt_dft_summary(data, "SAPT(DFT)", do_dft=do_dft, do_disp=do_disp, do_delta_dft=do_delta_dft))

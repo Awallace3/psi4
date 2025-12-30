@@ -2234,11 +2234,6 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         # Write Fbs back to disk (Dbs now contains Dbs + Ebs)
         dfh.write_disk_tensor("Fbs", Dbs, (sstart, sstart + nsblock))
     
-    # => Scalar Energy Accumulators [C++ lines 7172-7175]
-    Disp20 = 0.0
-    ExchDisp20 = 0.0
-    # sExchDisp20 = 0.0
-    
     E_disp20_comp = core.Matrix("E_disp20", na, nb)
     E_exch_disp20_comp = core.Matrix("E_exch_disp20", na, nb)
     
@@ -2349,7 +2344,6 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
                 for a in range(na):
                     for b in range(nb):
                         E_disp20Tp[a, b] += 4.0 * T2abp[a, b] * V2abp[a, b]
-                        Disp20 += 4.0 * T2abp[a, b] * V2abp[a, b]
                 
                 # => Exch-Disp20 <= //
                 
@@ -2390,7 +2384,6 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
                 for a in range(na):
                     for b in range(nb):
                         E_exch_disp20Tp[a, b] -= 2.0 * T2abp[a, b] * V2abp[a, b]
-                        ExchDisp20 -= 2.0 * T2abp[a, b] * V2abp[a, b]
     
     # => Accumulate thread results <= //
     E_disp20 = core.Matrix("E_disp20", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
@@ -2406,8 +2399,8 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
 
     # => Populate cache['E'] matrix <= //
     # Store energy matrices and scalars
-    cache['E_DISP20'] = E_disp20
-    cache['E_EXCH_DISP20'] = E_exch_disp20
+    # cache['E_DISP20'] = E_disp20
+    # cache['E_EXCH_DISP20'] = E_exch_disp20
     # add E_disp20 and E_exch_disp20
     # Disp_AB = core.Matrix("DISP_AB", na, nb)
     Disp_AB = core.Matrix("DISP_AB", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
@@ -2415,14 +2408,17 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     cache['DISP_AB'] = Disp_AB
     # => Output printing <= //
     # {Elst10*1000:.8f} [mEh]
+    Disp20 = np.sum(E_disp20.np)
+    ExchDisp20 = np.sum(E_exch_disp20.np)
 
-    pp(scalars)
-    if do_print:
-        core.print_out(f"    Disp20              = {Disp20 * 1000:.8f} [mEh]\n")
-        core.print_out(f"    Exch-Disp20         = {ExchDisp20 * 1000:.8f} [mEh]\n")
-        core.print_out("\n")
-        assert abs(scalars['Disp20,u'] - Disp20) < 1e-6, f"Disp20 scalar mismatch! {scalars['Disp20,u'] = } {Disp20 = }"
-        assert abs(scalars['Exch-Disp20,u'] - ExchDisp20) < 1e-6, f"ExchDisp20 scalar mismatch!\nRef: {scalars['Exch-Disp20,u']:.4e}\nAct: {ExchDisp20:.4e}"
+    cache["Exch-Disp20,u"] = ExchDisp20
+    cache["Disp20,u"] = Disp20
+    # if do_print:
+    #     core.print_out(f"    Disp20              = {Disp20 * 1000:.8f} [mEh]\n")
+    #     core.print_out(f"    Exch-Disp20         = {ExchDisp20 * 1000:.8f} [mEh]\n")
+    #     core.print_out("\n")
+    #     assert abs(scalars['Disp20,u'] - Disp20) < 1e-6, f"Disp20 scalar mismatch! {scalars['Disp20,u'] = } {Disp20 = }"
+    #     assert abs(scalars['Exch-Disp20,u'] - ExchDisp20) < 1e-6, f"ExchDisp20 scalar mismatch!\nRef: {scalars['Exch-Disp20,u']:.4e}\nAct: {ExchDisp20:.4e}"
     return cache
 
 

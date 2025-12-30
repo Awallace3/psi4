@@ -47,7 +47,6 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars):
     basis_set = wfn.basisset()
     wfn.set_basisset("DF_BASIS_SAPT", basis_set)
     fisapt = core.FISAPT(wfn)
-    pp(cache)
 
     # Used to slice arrays later if frozen core is requested
     nfrozen_A = wfn_A.basisset().n_frozen_core(
@@ -157,7 +156,6 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars):
         )
     fisapt.set_matrix(matrix_cache)
     fisapt.set_vector(vector_cache)
-    pp(scalars)
     scalar_keys = {
         "Ind20,r (A<-B)": "Ind20,r (A<-B)",
         "Ind20,r (A->B)": "Ind20,r (B<-A)",

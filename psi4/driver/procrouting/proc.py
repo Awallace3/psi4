@@ -5114,7 +5114,6 @@ def run_sapt_ct(name, **kwargs):
     core.print_out('    SAPT Charge Transfer          %12.4lf [mEh] %12.4lf [kcal/mol] %12.4lf [kJ/mol]\n\n' %
         tuple(CT * u for u in units))
     core.set_variable("SAPT CT ENERGY", CT)  # P::e SAPT
-
     optstash.restore()
     return dimer_wfn
 
@@ -5124,6 +5123,7 @@ def run_fisapt(name, **kwargs):
 
     """
     optstash = p4util.OptionsState(['SCF_TYPE'], ['SCF', 'SAVE_JK'])
+    core.timer_on("FISAPT")
 
     # Alter default algorithm
     if not core.has_global_option_changed('SCF_TYPE'):
@@ -5189,6 +5189,7 @@ def run_fisapt(name, **kwargs):
     if "-d" in name.lower():
         proc_util.sapt_empirical_dispersion(name, ref_wfn)
 
+    core.timer_off("FISAPT")
     optstash.restore()
     return ref_wfn
 
