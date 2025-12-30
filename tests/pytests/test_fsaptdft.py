@@ -1630,10 +1630,10 @@ if __name__ == "__main__":
     psi4.set_memory("220 GB")
     # psi4.set_num_threads(24)
     psi4.set_num_threads(8)
-    test_fsaptdft_timer()
+    # test_fsaptdft_timer()
     # test_fsaptdft_simple()
 
-    # test_fsaptdft_disp0_fisapt0_psivars()
+    test_fsaptdft_disp0_fisapt0_psivars()
 
     # test_fsaptdft()
     # test_fsaptdft_fsapt0_simple()

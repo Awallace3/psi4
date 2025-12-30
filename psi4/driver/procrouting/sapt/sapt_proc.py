@@ -886,43 +886,37 @@ def sapt_dft(
 
     if data is None:
         data = {}
+    use_einsums = core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS")
 
     # Build SAPT cache
-    cache = sapt_jk_terms.build_sapt_jk_cache(dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials)
-    cache_ein = sapt_jk_terms_ein.build_sapt_jk_cache(dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials)
+    if use_einsums:
+        jk_terms = sapt_jk_terms_ein
+    else:
+        jk_terms = sapt_jk_terms
+    cache = jk_terms.build_sapt_jk_cache(
+        dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials
+    )
     core.timer_off("SAPT(DFT):Build JK")
 
     # Electrostatics
     core.timer_on("SAPT(DFT):elst")
     fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")
     do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT") != "NONE"
-    # elst, extern_extern_IE = sapt_jk_terms.electrostatics(cache, True)
-    elst, extern_extern_IE = sapt_jk_terms_ein.electrostatics(cache_ein, True)
+    elst, extern_extern_IE = jk_terms.electrostatics(cache, True)
     data["extern_extern_IE"] = extern_extern_IE
     data.update(elst)
     core.timer_off("SAPT(DFT):elst")
 
     # Exchange
     core.timer_on("SAPT(DFT):exch")
-    # exch = sapt_jk_terms.exchange(cache, sapt_jk, True)
-    # print("EXCH REG:", exch)
-    exch = sapt_jk_terms_ein.exchange(cache_ein, sapt_jk, True)
+    exch = jk_terms.exchange(cache, sapt_jk, True)
     data.update(exch)
     core.timer_off("SAPT(DFT):exch")
 
     # Induction
     core.timer_on("SAPT(DFT):ind")
-    # ind = sapt_jk_terms.induction(
-    #     cache,
-    #     sapt_jk,
-    #     True,
-    #     sapt_jk_B=sapt_jk_B,
-    #     maxiter=core.get_option("SAPT", "MAXITER"),
-    #     conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
-    #     Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
-    # )
-    ind = sapt_jk_terms_ein.induction(
-        cache_ein,
+    ind = jk_terms.induction(
+        cache,
         sapt_jk,
         True,
         sapt_jk_B=sapt_jk_B,
@@ -954,48 +948,48 @@ def sapt_dft(
     # Use DFHelper before deleting the JK object for dispersion
     if do_fsapt and fsapt_type == "SAPTDFT":
         core.timer_on("SAPT(DFT):Localize Orbitals")
-        sapt_jk_terms_ein.localization(cache_ein, dimer_wfn, wfn_A, wfn_B)
+        sapt_jk_terms_ein.localization(cache, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT):Localize Orbitals")
         core.timer_on("SAPT(DFT):Partition")
-        cache_ein = sapt_jk_terms_ein.partition(cache_ein, dimer_wfn, wfn_A, wfn_B)
+        cache = sapt_jk_terms_ein.partition(cache, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT):Partition")
 
         core.timer_on("SAPT(DFT): F-SAPT Localization (IBO)")
-        sapt_jk_terms_ein.flocalization(cache_ein, dimer_wfn, wfn_A, wfn_B)
+        sapt_jk_terms_ein.flocalization(cache, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT): F-SAPT Localization (IBO)")
         # Primary return is stored as cache['Elst_AB']
         core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
-        cache_ein = sapt_jk_terms_ein.felst(cache_ein, elst['Elst10,r'] + extern_extern_IE, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
+        cache = sapt_jk_terms_ein.felst(cache, elst['Elst10,r'] + extern_extern_IE, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
         core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
         core.timer_on("SAPT(DFT): F-SAPT Exchange")
-        cache_ein = sapt_jk_terms_ein.fexch(cache_ein, exch["Exch10(S^2)"], exch["Exch10"], dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
+        cache = sapt_jk_terms_ein.fexch(cache, exch["Exch10(S^2)"], exch["Exch10"], dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
         core.timer_off("SAPT(DFT): F-SAPT Exchange")
 
         core.timer_on("SAPT(DFT): F-SAPT Induction")
-        cache_ein = sapt_jk_terms_ein.find(cache_ein, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
+        cache = sapt_jk_terms_ein.find(cache, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
         core.timer_off("SAPT(DFT): F-SAPT Induction")
 
-        core.set_variable("FSAPT_QA", cache_ein["Qocc0A"])
-        core.set_variable("FSAPT_QB", cache_ein["Qocc0B"])
-        core.set_variable("FSAPT_ELST_AB", cache_ein['Elst_AB'])
-        core.set_variable("FSAPT_EXCH_AB", cache_ein['Exch_AB'])
-        core.set_variable("FSAPT_INDAB_AB", cache_ein['INDAB_AB'])
-        core.set_variable("FSAPT_INDBA_AB", cache_ein['INDBA_AB'])
+        core.set_variable("FSAPT_QA", cache["Qocc0A"])
+        core.set_variable("FSAPT_QB", cache["Qocc0B"])
+        core.set_variable("FSAPT_ELST_AB", cache['Elst_AB'])
+        core.set_variable("FSAPT_EXCH_AB", cache['Exch_AB'])
+        core.set_variable("FSAPT_INDAB_AB", cache['INDAB_AB'])
+        core.set_variable("FSAPT_INDBA_AB", cache['INDBA_AB'])
     elif do_fsapt and fsapt_type == "FISAPT":
         core.timer_on("SAPT(DFT):Localize Orbitals")
-        sapt_jk_terms_ein.localization(cache_ein, dimer_wfn, wfn_A, wfn_B)
+        sapt_jk_terms_ein.localization(cache, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT):Localize Orbitals")
         core.timer_on("SAPT(DFT):Partition")
-        cache_ein = sapt_jk_terms_ein.partition(cache_ein, dimer_wfn, wfn_A, wfn_B)
+        cache = sapt_jk_terms_ein.partition(cache, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT):Partition")
 
         core.timer_on("SAPT(DFT): F-SAPT Localization (IBO)")
-        sapt_jk_terms_ein.flocalization(cache_ein, dimer_wfn, wfn_A, wfn_B)
+        sapt_jk_terms_ein.flocalization(cache, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT): F-SAPT Localization (IBO)")
         # Build auxiliary basis for FISAPT dispersion
         aux_basis = core.BasisSet.build(dimer_wfn.molecule(), "DF_BASIS_MP2", core.get_option("DFMP2", "DF_BASIS_MP2"),
                                             "RIFIT", core.get_global_option('BASIS'))
-        FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache_ein, data, aux_basis)
+        FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache, data, aux_basis)
         core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
         FISAPT_obj.felst()
         core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
@@ -1048,7 +1042,7 @@ def sapt_dft(
             if not is_hybrid:
                 x_alpha = 0.0
             # fdds_disp = sapt_mp2_terms.df_fdds_dispersion(primary_basis, aux_basis, cache, is_hybrid, x_alpha)
-            fdds_disp = sapt_mp2_terms_ein.df_fdds_dispersion(primary_basis, aux_basis, cache_ein, is_hybrid, x_alpha)
+            fdds_disp = sapt_mp2_terms_ein.df_fdds_dispersion(primary_basis, aux_basis, cache, is_hybrid, x_alpha)
             data.update(fdds_disp)
             nfrozen_A = 0
             nfrozen_B = 0
@@ -1064,16 +1058,17 @@ def sapt_dft(
         
         if not do_fsapt and core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL") != "HF":
             core.timer_on("MP2 disp")
+            cache_tmp = sapt_jk_terms.build_sapt_jk_cache(dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials)
             if core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
                 mp2_disp = sapt_mp2_terms.df_mp2_fisapt_dispersion(wfn_A, primary_basis, aux_basis, 
-                                                                   cache, nfrozen_A, nfrozen_B, do_print=True)
+                                                                   cache_tmp, nfrozen_A, nfrozen_B, do_print=True)
             else:
                 mp2_disp = sapt_mp2_terms.df_mp2_sapt_dispersion(dimer_wfn,
                                                                  wfn_A,
                                                                  wfn_B,
                                                                  primary_basis,
                                                                  aux_basis,
-                                                                 cache,
+                                                                 cache_tmp,
                                                                  do_print=True)
             core.timer_off("MP2 disp")
             data.update(mp2_disp)
@@ -1108,13 +1103,13 @@ def sapt_dft(
 
         if do_disp:
             core.timer_on("SAPT(DFT): F-SAPT Dispersion")
-            cache_ein = sapt_jk_terms_ein.fdisp0(
-                cache_ein, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, do_print=True
+            cache = sapt_jk_terms_ein.fdisp0(
+                cache, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, do_print=True
             )
-            data["Exch-Disp20,u"] = cache_ein["Exch-Disp20,u"]
-            data["Disp20,u"] = cache_ein["Disp20,u"]
+            data["Exch-Disp20,u"] = cache["Exch-Disp20,u"]
+            data["Disp20,u"] = cache["Disp20,u"]
             core.timer_off("SAPT(DFT): F-SAPT Dispersion")
-            core.set_variable("FSAPT_DISP_AB", cache_ein['DISP_AB'])
+            core.set_variable("FSAPT_DISP_AB", cache['DISP_AB'])
 
     elif do_fsapt and fsapt_type == "FISAPT" and do_disp:
         core.timer_on("SAPT(DFT): F-SAPT Dispersion")
