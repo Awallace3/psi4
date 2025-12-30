@@ -148,6 +148,7 @@ no_com
     psi4.energy("fisapt0", molecule=mol)
     compute_time_fisapt0 = psi4.core.get_timer_dict()["FISAPT"]
     psi4.driver.p4util.write_timer_csv("fisapt0_timers.csv")
+    psi4.core.clean()
     psi4.set_options(
         {
             "basis": "sto-3g",
@@ -164,6 +165,7 @@ no_com
     psi4.energy("sapt(dft)", molecule=mol)
     compute_time_fisapt = psi4.core.get_timer_dict()["SAPT(DFT) Energy"]
     psi4.driver.p4util.write_timer_csv("saptdft_fi_timers.csv")
+    psi4.core.clean()
     psi4.set_options(
         {
             "basis": "sto-3g",
