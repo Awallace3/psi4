@@ -447,6 +447,10 @@ def induction(
     J_Ot, J_P_B, J_P_A = jk.J()
     K_Ot, K_P_B, K_P_A = jk.K()
 
+    # Save for later usage in find() (F-SAPT induction)
+    cache['J_P_A'] = J_P_A.clone()
+    cache['J_P_B'] = J_P_B.clone()
+
     # Exch-Ind Potential A
     EX_A = K_B.clone()
     EX_A.scale(-1.0)
