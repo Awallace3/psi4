@@ -2737,8 +2737,8 @@ def exchange(cache, jk, do_print=True):
     num_occ = nocc_A + nocc_B
 
     Sab = core.Matrix(num_occ, num_occ)
-    Sab.np[:nocc_A, nocc_A:] = SAB
-    Sab.np[nocc_A:, :nocc_A] = SAB.T
+    Sab.np[:nocc_A, nocc_A:] = SAB.np
+    Sab.np[nocc_A:, :nocc_A] = SAB.np.T
     Sab.np[np.diag_indices_from(Sab.np)] += 1
     Sab.power(-1.0, 1.0e-14)
     Sab.np[np.diag_indices_from(Sab.np)] -= 1.0
@@ -2761,13 +2761,13 @@ def exchange(cache, jk, do_print=True):
     jk.C_clear()
 
     jk.C_left_add(core.Matrix.from_array(cache["Cocc_A"]))
-    jk.C_right_add(core.Matrix.from_array(chain_gemm_einsums([cache['Cocc_A'], Tmo_AA])))
+    jk.C_right_add(chain_gemm_einsums([cache['Cocc_A'], Tmo_AA]))
 
     jk.C_left_add(core.Matrix.from_array(cache["Cocc_B"]))
-    jk.C_right_add(core.Matrix.from_array(chain_gemm_einsums([cache['Cocc_A'], Tmo_AB])))
+    jk.C_right_add(chain_gemm_einsums([cache['Cocc_A'], Tmo_AB]))
 
     jk.C_left_add(core.Matrix.from_array(cache["Cocc_A"]))
-    jk.C_right_add(core.Matrix.from_array(chain_gemm_einsums([P_B, S, cache['Cocc_A']])))
+    jk.C_right_add(chain_gemm_einsums([P_B, S, cache['Cocc_A']]))
     # This also works... you can choose to form the density-like matrix either
     # way..., just remember that the C_right_add has an adjoint (transpose, and switch matmul order)
     # jk.C_left_add(core.Matrix.from_array(einsum_chain_gemm([D_A, S, cache['Cvir_B']])))
@@ -3034,8 +3034,8 @@ def induction(
     core.print_out("   => Uncoupled Induction <= \n\n")
     
     # Create uncoupled response vectors by element-wise division
-    unc_x_B_MOA = w_B_MOA.copy()
-    unc_x_A_MOB = w_A_MOB.copy()
+    unc_x_B_MOA = w_B_MOA.clone()
+    unc_x_A_MOB = w_A_MOB.clone()
     
     eps_occ_A = cache["eps_occ_A"]
     eps_vir_A = cache["eps_vir_A"]
@@ -3045,18 +3045,18 @@ def induction(
     # Eq. 20
     for r in range(unc_x_B_MOA.shape[0]):
         for a in range(unc_x_B_MOA.shape[1]):
-            unc_x_B_MOA[r, a] /= (eps_occ_A.np[r] - eps_vir_A.np[a])
+            unc_x_B_MOA.np[r, a] /= (eps_occ_A.np[r] - eps_vir_A.np[a])
     
     # Eq. 20
     for r in range(unc_x_A_MOB.shape[0]):
         for a in range(unc_x_A_MOB.shape[1]):
-            unc_x_A_MOB[r, a] /= (eps_occ_B.np[r] - eps_vir_B.np[a])
+            unc_x_A_MOB.np[r, a] /= (eps_occ_B.np[r] - eps_vir_B.np[a])
 
     # Compute uncoupled induction energies according to Eq. 14, 15
-    unc_ind_ab = 2.0 * ein.core.dot(unc_x_B_MOA, w_B_MOA)
-    unc_ind_ba = 2.0 * ein.core.dot(unc_x_A_MOB, w_A_MOB)
-    unc_indexch_ab = 2.0 * ein.core.dot(unc_x_B_MOA, EX_A_MO)
-    unc_indexch_ba = 2.0 * ein.core.dot(unc_x_A_MOB, EX_B_MO)
+    unc_ind_ab = 2.0 * ein.core.dot(unc_x_B_MOA.np, w_B_MOA.np)
+    unc_ind_ba = 2.0 * ein.core.dot(unc_x_A_MOB.np, w_A_MOB.np)
+    unc_indexch_ab = 2.0 * ein.core.dot(unc_x_B_MOA.np, EX_A_MO.np)
+    unc_indexch_ba = 2.0 * ein.core.dot(unc_x_A_MOB.np, EX_B_MO.np)
 
     ret = {}
     ret["Ind20,u (A<-B)"] = unc_ind_ab
@@ -3427,13 +3427,13 @@ def induction(
 
         cphf_r_convergence = core.get_option("SAPT", "CPHF_R_CONVERGENCE")
         x_B_MOA, x_A_MOB = _sapt_cpscf_solve(
-            cache, jk, w_B_MOA, w_A_MOB, 20, cphf_r_convergence, sapt_jk_B=sapt_jk_B
+            cache, jk, w_B_MOA.np, w_A_MOB.np, 20, cphf_r_convergence, sapt_jk_B=sapt_jk_B
         )
 
-        ind_ab = 2.0 * ein.core.dot(x_B_MOA, w_B_MOA)
-        ind_ba = 2.0 * ein.core.dot(x_A_MOB, w_A_MOB)
-        indexch_ab = 2.0 * ein.core.dot(x_B_MOA, EX_A_MO)
-        indexch_ba = 2.0 * ein.core.dot(x_A_MOB, EX_B_MO)
+        ind_ab = 2.0 * ein.core.dot(x_B_MOA, w_B_MOA.np)
+        ind_ba = 2.0 * ein.core.dot(x_A_MOB, w_A_MOB.np)
+        indexch_ab = 2.0 * ein.core.dot(x_B_MOA, EX_A_MO.np)
+        indexch_ba = 2.0 * ein.core.dot(x_A_MOB, EX_B_MO.np)
 
         ret["Ind20,r (A<-B)"] = ind_ab
         ret["Ind20,r (A->B)"] = ind_ba
