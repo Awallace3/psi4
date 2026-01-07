@@ -658,11 +658,11 @@ def build_sapt_jk_cache(
         cache["eps_fvir"] = wfn_dimer.epsilon_a_subset("AO", "FROZEN_VIR")
 
     # Build the densities as HF takes an extra "step", Eq. 5
-    cache["D_A"] = einsum_chain_gemm([cache['Cocc_A'], cache['Cocc_A']], ['N', 'T'])
-    cache['D_B'] = einsum_chain_gemm([cache['Cocc_B'], cache['Cocc_B']], ['N', 'T'])
+    cache["D_A"] = chain_gemm_einsums([cache['Cocc_A'], cache['Cocc_A']], ['N', 'T'])
+    cache['D_B'] = chain_gemm_einsums([cache['Cocc_B'], cache['Cocc_B']], ['N', 'T'])
     # Eq. 7
-    cache["P_A"] = einsum_chain_gemm([cache['Cvir_A'], cache['Cvir_A']], ['N', 'T'])
-    cache['P_B'] = einsum_chain_gemm([cache['Cvir_B'], cache['Cvir_B']], ['N', 'T'])
+    cache["P_A"] = chain_gemm_einsums([cache['Cvir_A'], cache['Cvir_A']], ['N', 'T'])
+    cache['P_B'] = chain_gemm_einsums([cache['Cvir_B'], cache['Cvir_B']], ['N', 'T'])
 
     # Potential ints - store as psi4.core.Matrix
     mints = core.MintsHelper(wfn_A.basisset())
@@ -695,7 +695,7 @@ def build_sapt_jk_cache(
     jk.C_left_add(wfn_B.Ca_subset("SO", "OCC"))
     jk.C_right_add(wfn_B.Ca_subset("SO", "OCC"))
 
-    DB_S_CA = einsum_chain_gemm([cache['D_B'], cache['S'], cache['Cocc_A']])
+    DB_S_CA = chain_gemm_einsums([cache['D_B'], cache['S'], cache['Cocc_A']])
     jk.C_left_add(DB_S_CA)
     jk.C_right_add(cache["Cocc_A"])
 
@@ -908,7 +908,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Vtemp_mat = Vtemp.clone()
         Vtemp_mat.name = "Vtemp_mat"
         
-        Vbb = einsum_chain_gemm([L0B_mat, Vtemp_mat, L0B_mat], ['T', 'N', 'N'])
+        Vbb = chain_gemm_einsums([L0B_mat, Vtemp_mat, L0B_mat], ['T', 'N', 'N'])
         Vbb.name = "Vbb"
         
         # Vectorized diagonal extraction
@@ -923,7 +923,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Vtemp = ext_pot_A.computePotentialMatrix(dimer_basis)
         
         Vtemp_mat = Vtemp.clone()
-        Vbb = einsum_chain_gemm([L0B_mat, Vtemp_mat, L0B_mat], ['T', 'N', 'N'])
+        Vbb = chain_gemm_einsums([L0B_mat, Vtemp_mat, L0B_mat], ['T', 'N', 'N'])
         
         # Vectorized diagonal extraction
         diag_Vbb = np.diag(_to_numpy(Vbb))
@@ -944,7 +944,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Vtemp = ext_pot.computePotentialMatrix(dimer_basis)
         
         Vtemp_mat = Vtemp.clone()
-        Vaa = einsum_chain_gemm([L0A_mat, Vtemp_mat, L0A_mat], ['T', 'N', 'N'])
+        Vaa = chain_gemm_einsums([L0A_mat, Vtemp_mat, L0A_mat], ['T', 'N', 'N'])
         
         # Vectorized diagonal extraction
         diag_Vaa = np.diag(_to_numpy(Vaa))
@@ -958,7 +958,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Vtemp = ext_pot_B.computePotentialMatrix(dimer_basis)
         
         Vtemp_mat = Vtemp.clone()
-        Vaa = einsum_chain_gemm([L0A_mat, Vtemp_mat, L0A_mat], ['T', 'N', 'N'])
+        Vaa = chain_gemm_einsums([L0A_mat, Vtemp_mat, L0A_mat], ['T', 'N', 'N'])
         
         # Vectorized diagonal extraction  
         diag_Vaa = np.diag(_to_numpy(Vaa))
@@ -1062,28 +1062,28 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
     W_B.axpy(2.0, J_B)
     W_B.name = "W_B"
 
-    WAbs = einsum_chain_gemm([LoccB, W_A, CvirB], ['T', 'N', 'N'])
-    WBar = einsum_chain_gemm([LoccA, W_B, CvirA], ['T', 'N', 'N'])
+    WAbs = chain_gemm_einsums([LoccB, W_A, CvirB], ['T', 'N', 'N'])
+    WBar = chain_gemm_einsums([LoccA, W_B, CvirA], ['T', 'N', 'N'])
     WAbs.name = "WAbs"
     WBar.name = "WBar"
 
-    Sab = einsum_chain_gemm([LoccA, S, LoccB], ['T', 'N', 'N'])
-    Sba = einsum_chain_gemm([LoccB, S, LoccA], ['T', 'N', 'N'])
-    Sas = einsum_chain_gemm([LoccA, S, CvirB], ['T', 'N', 'N'])
+    Sab = chain_gemm_einsums([LoccA, S, LoccB], ['T', 'N', 'N'])
+    Sba = chain_gemm_einsums([LoccB, S, LoccA], ['T', 'N', 'N'])
+    Sas = chain_gemm_einsums([LoccA, S, CvirB], ['T', 'N', 'N'])
     Sas.name = "Sas"
     Sab.name = "Sab"
 
     LoccB.name = "LoccB"
     CvirA.name = "CvirA"
-    Sbr = einsum_chain_gemm([LoccB, S, CvirA], ['T', 'N', 'N'])
+    Sbr = chain_gemm_einsums([LoccB, S, CvirA], ['T', 'N', 'N'])
 
     Sab.name = "Sab"
     Sba.name = "Sba"
     Sas.name = "Sas"
     Sbr.name = "Sbr"
 
-    WBab = einsum_chain_gemm([WBar, Sbr], ['N', 'T'])
-    WAba = einsum_chain_gemm([WAbs, Sas], ['N', 'T'])
+    WBab = chain_gemm_einsums([WBar, Sbr], ['N', 'T'])
+    WAba = chain_gemm_einsums([WAbs, Sas], ['N', 'T'])
     WBab.name = "WBab"
     WAba.name = "WAba"
 
@@ -1175,7 +1175,7 @@ def build_ind_pot(vars):
     """
     w_B = vars['V_B'].clone()
     w_B.axpy(2.0, vars['J_B'])
-    return einsum_chain_gemm(
+    return chain_gemm_einsums(
         [vars['Cocc_A'], w_B, vars['Cvir_A']],
         ['T', 'N', 'N'],
     )
@@ -1207,34 +1207,34 @@ def build_exch_ind_pot_AB(vars):
     EX_A.axpy(2.0, J_P_B)
 
     # Apply all the axpy operations to EX_A
-    S_DB, S_DB_VA, S_DB_VA_DB_S = einsum_chain_gemm(
+    S_DB, S_DB_VA, S_DB_VA_DB_S = chain_gemm_einsums(
         [S, D_B, V_A, D_B, S],
         return_tensors=[True, True, False, True]
     )
-    S_DB_JA, S_DB_JA_DB_S = einsum_chain_gemm(
+    S_DB_JA, S_DB_JA_DB_S = chain_gemm_einsums(
         [S_DB, J_A, D_B, S],
         return_tensors=[True, False, True]
     )
-    S_DB_S_DA, S_DB_S_DA_VB = einsum_chain_gemm(
+    S_DB_S_DA, S_DB_S_DA_VB = chain_gemm_einsums(
         [S_DB, S, D_A, V_B],
         return_tensors=[False, True, True],
     )
     EX_A.axpy(-1.0, S_DB_VA)
     EX_A.axpy(-2.0, S_DB_JA)
-    EX_A.axpy(1.0, einsum_chain_gemm([S_DB, K_A]))
+    EX_A.axpy(1.0, chain_gemm_einsums([S_DB, K_A]))
     EX_A.axpy(1.0, S_DB_S_DA_VB)
-    EX_A.axpy(2.0, einsum_chain_gemm([S_DB_S_DA, J_B]))
+    EX_A.axpy(2.0, chain_gemm_einsums([S_DB_S_DA, J_B]))
     EX_A.axpy(1.0, S_DB_VA_DB_S)
     EX_A.axpy(2.0, S_DB_JA_DB_S)
-    EX_A.axpy(-1.0, einsum_chain_gemm([S_DB, K_O], ["N", "T"]))
-    EX_A.axpy(-1.0, einsum_chain_gemm([V_B, D_B, S]))
-    EX_A.axpy(-2.0, einsum_chain_gemm([J_B, D_B, S]))
-    EX_A.axpy(1.0, einsum_chain_gemm([K_B, D_B, S]))
-    EX_A.axpy(1.0, einsum_chain_gemm([V_B, D_A, S, D_B, S]))
-    EX_A.axpy(2.0, einsum_chain_gemm([J_B, D_A, S, D_B, S]))
-    EX_A.axpy(-1.0, einsum_chain_gemm([K_O, D_B, S]))
+    EX_A.axpy(-1.0, chain_gemm_einsums([S_DB, K_O], ["N", "T"]))
+    EX_A.axpy(-1.0, chain_gemm_einsums([V_B, D_B, S]))
+    EX_A.axpy(-2.0, chain_gemm_einsums([J_B, D_B, S]))
+    EX_A.axpy(1.0, chain_gemm_einsums([K_B, D_B, S]))
+    EX_A.axpy(1.0, chain_gemm_einsums([V_B, D_A, S, D_B, S]))
+    EX_A.axpy(2.0, chain_gemm_einsums([J_B, D_A, S, D_B, S]))
+    EX_A.axpy(-1.0, chain_gemm_einsums([K_O, D_B, S]))
 
-    EX_A_MO = einsum_chain_gemm(
+    EX_A_MO = chain_gemm_einsums(
         [vars['Cocc_A'], EX_A, vars['Cvir_A']],
         ['T', 'N', 'N'],
     )
@@ -1265,15 +1265,15 @@ def build_exch_ind_pot_BA(vars):
     EX_B.axpy(1.0, core.Matrix.from_array(_to_numpy(K_O).T))
     EX_B.axpy(2.0, J_P_A)
 
-    S_DA, S_DA_VB, S_DA_VB_DA_S = einsum_chain_gemm(
+    S_DA, S_DA_VB, S_DA_VB_DA_S = chain_gemm_einsums(
         [S, D_A, V_B, D_A, S],
         return_tensors=[True, True, False, True]
     )
-    S_DA_JB, S_DA_JB_DA_S = einsum_chain_gemm(
+    S_DA_JB, S_DA_JB_DA_S = chain_gemm_einsums(
         [S_DA, J_B, D_A, S],
         return_tensors=[True, False, True]
     )
-    S_DA_S_DB, S_DA_S_DB_VA = einsum_chain_gemm(
+    S_DA_S_DB, S_DA_S_DB_VA = chain_gemm_einsums(
         [S_DA, S, D_B, V_A],
         return_tensors=[False, True, True],
     )
@@ -1281,20 +1281,20 @@ def build_exch_ind_pot_BA(vars):
     # Apply all the axpy operations to EX_B
     EX_B.axpy(-1.0, S_DA_VB)
     EX_B.axpy(-2.0, S_DA_JB)
-    EX_B.axpy(1.0, einsum_chain_gemm([S_DA, K_B]))
+    EX_B.axpy(1.0, chain_gemm_einsums([S_DA, K_B]))
     EX_B.axpy(1.0, S_DA_S_DB_VA)
-    EX_B.axpy(2.0, einsum_chain_gemm([S_DA_S_DB, J_A]))
+    EX_B.axpy(2.0, chain_gemm_einsums([S_DA_S_DB, J_A]))
     EX_B.axpy(1.0, S_DA_VB_DA_S)
     EX_B.axpy(2.0, S_DA_JB_DA_S)
-    EX_B.axpy(-1.0, einsum_chain_gemm([S_DA, K_O]))
-    EX_B.axpy(-1.0, einsum_chain_gemm([V_A, D_A, S]))
-    EX_B.axpy(-2.0, einsum_chain_gemm([J_A, D_A, S]))
-    EX_B.axpy(1.0, einsum_chain_gemm([K_A, D_A, S]))
-    EX_B.axpy(1.0, einsum_chain_gemm([V_A, D_B, S, D_A, S]))
-    EX_B.axpy(2.0, einsum_chain_gemm([J_A, D_B, S, D_A, S]))
-    EX_B.axpy(-1.0, einsum_chain_gemm([K_O, D_A, S], ["T", "N", "N"]))
+    EX_B.axpy(-1.0, chain_gemm_einsums([S_DA, K_O]))
+    EX_B.axpy(-1.0, chain_gemm_einsums([V_A, D_A, S]))
+    EX_B.axpy(-2.0, chain_gemm_einsums([J_A, D_A, S]))
+    EX_B.axpy(1.0, chain_gemm_einsums([K_A, D_A, S]))
+    EX_B.axpy(1.0, chain_gemm_einsums([V_A, D_B, S, D_A, S]))
+    EX_B.axpy(2.0, chain_gemm_einsums([J_A, D_B, S, D_A, S]))
+    EX_B.axpy(-1.0, chain_gemm_einsums([K_O, D_A, S], ["T", "N", "N"]))
 
-    EX_B_MO = einsum_chain_gemm(
+    EX_B_MO = chain_gemm_einsums(
         [vars['Cocc_B'], EX_B, vars['Cvir_B']],
         ['T', 'N', 'N'],
     )
@@ -1483,7 +1483,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         atom_pos = mol.xyz(A)
         ext_pot.addCharge(ZA_np[A], atom_pos[0], atom_pos[1], atom_pos[2])
         Vtemp = ext_pot.computePotentialMatrix(dimer_wfn.basisset())
-        Vbs = core.Matrix.from_array(einsum_chain_gemm([Cocc_B, Vtemp, Cvir_B], ['T', 'N', 'N']))
+        Vbs = core.Matrix.from_array(chain_gemm_einsums([Cocc_B, Vtemp, Cvir_B], ['T', 'N', 'N']))
         # Vbs_A doesn't agree... Cocc_B and Cvir_B 
         dfh.write_disk_tensor("WAbs", Vbs, (A, A + 1))
     
@@ -1493,7 +1493,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         atom_pos = mol.xyz(B)
         ext_pot.addCharge(ZB_np[B], atom_pos[0], atom_pos[1], atom_pos[2])
         Vtemp = ext_pot.computePotentialMatrix(dimer_wfn.basisset())
-        Var = core.Matrix.from_array(einsum_chain_gemm([Cocc_A, Vtemp, Cvir_A], ['T', 'N', 'N']))
+        Var = core.Matrix.from_array(chain_gemm_einsums([Cocc_A, Vtemp, Cvir_A], ['T', 'N', 'N']))
         dfh.write_disk_tensor("WBar", Var, (B, B + 1))
     
     dfh.add_space("a", core.Matrix.from_array(Cocc_A))
@@ -1959,18 +1959,18 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     # => Auxiliary C matrices <= //
     # Cr1 = (I - D_B * S) * Cvir_A  [C++ line 6766-6768]
-    Cr1 = einsum_chain_gemm([D_B, S, Cvir_A])
+    Cr1 = chain_gemm_einsums([D_B, S, Cvir_A])
     Cr1.axpy(-1.0, Cvir_A)
     
     # Cs1 = (I - D_A * S) * Cvir_B  [C++ line 6769-6771]
-    Cs1 = einsum_chain_gemm([D_A, S, Cvir_B])
+    Cs1 = chain_gemm_einsums([D_A, S, Cvir_B])
     Cs1.axpy(-1.0, Cvir_B)
     
     # Ca2 = D_B * S * Cocc_A  [C++ line 6772]
-    Ca2 = einsum_chain_gemm([D_B, S, Cocc_A])
+    Ca2 = chain_gemm_einsums([D_B, S, Cocc_A])
     
     # Cb2 = D_A * S * Cocc_B  [C++ line 6773]
-    Cb2 = einsum_chain_gemm([D_A, S, Cocc_B])
+    Cb2 = chain_gemm_einsums([D_A, S, Cocc_B])
     
     # Cr3 = 2 * (D_B * S * Cvir_A - D_A * S * D_B * S * Cvir_A)  [C++ line 6775-6778]
 
@@ -1983,129 +1983,129 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Cr3->subtract(CrX);
     # Cr3->scale(2.0);
     # Cr3->print();
-    Cr3 = einsum_chain_gemm([D_B, S, Cvir_A])
-    CrX = einsum_chain_gemm([D_A, S, D_B, S, Cvir_A])
+    Cr3 = chain_gemm_einsums([D_B, S, Cvir_A])
+    CrX = chain_gemm_einsums([D_A, S, D_B, S, Cvir_A])
     Cr3.subtract(CrX)
     Cr3.scale(2.0)
     
     # Cs3 = 2 * (D_A * S * Cvir_B - D_B * S * D_A * S * Cvir_B)  [C++ line 6779-6782]
-    Cs3 = einsum_chain_gemm([D_A, S, Cvir_B])
-    CsX = einsum_chain_gemm([D_B, S, D_A, S, Cvir_B])
+    Cs3 = chain_gemm_einsums([D_A, S, Cvir_B])
+    CsX = chain_gemm_einsums([D_B, S, D_A, S, Cvir_B])
     Cs3.subtract(CsX)
     Cs3.scale(2.0)
     
     # Ca4 = -2 * D_A * S * D_B * S * Cocc_A  [C++ line 6784-6785]
-    Ca4 = einsum_chain_gemm([D_A, S, D_B, S, Cocc_A])
+    Ca4 = chain_gemm_einsums([D_A, S, D_B, S, Cocc_A])
     Ca4.scale(-2.0)
     
     # Cb4 = -2 * D_B * S * D_A * S * Cocc_B  [C++ line 6786-6787]
-    Cb4 = einsum_chain_gemm([D_B, S, D_A, S, Cocc_B])
+    Cb4 = chain_gemm_einsums([D_B, S, D_A, S, Cocc_B])
     Cb4.scale(-2.0)
     
     # => Auxiliary V matrices <= #  [C++ lines 6789-6872]
     
     # Jbr = 2.0 * Cocc_B.T @ J_A @ Cvir_A  [C++ lines 6791-6792]
-    Jbr = einsum_chain_gemm([Cocc_B, J_A, Cvir_A], ['T', 'N', 'N'])
+    Jbr = chain_gemm_einsums([Cocc_B, J_A, Cvir_A], ['T', 'N', 'N'])
     Jbr.scale(2.0)
     Jbr_np = np.array(Jbr)
     
     # Kbr = -1.0 * Cocc_B.T @ K_A @ Cvir_A  [C++ lines 6793-6794]
-    Kbr = einsum_chain_gemm([Cocc_B, K_A, Cvir_A], ['T', 'N', 'N'])
+    Kbr = chain_gemm_einsums([Cocc_B, K_A, Cvir_A], ['T', 'N', 'N'])
     Kbr.scale(-1.0)
     Kbr_np = np.array(Kbr)
     
     # Jas = 2.0 * Cocc_A.T @ J_B @ Cvir_B  [C++ lines 6796-6797]
-    Jas = einsum_chain_gemm([Cocc_A, J_B, Cvir_B], ['T', 'N', 'N'])
+    Jas = chain_gemm_einsums([Cocc_A, J_B, Cvir_B], ['T', 'N', 'N'])
     Jas.scale(2.0)
     Jas_np = np.array(Jas)
     
     # Kas = -1.0 * Cocc_A.T @ K_B @ Cvir_B  [C++ lines 6798-6799]
-    Kas = einsum_chain_gemm([Cocc_A, K_B, Cvir_B], ['T', 'N', 'N'])
+    Kas = chain_gemm_einsums([Cocc_A, K_B, Cvir_B], ['T', 'N', 'N'])
     Kas.scale(-1.0)
     Kas_np = np.array(Kas)
     
     # KOas = 1.0 * Cocc_A.T @ K_O @ Cvir_B  [C++ lines 6801-6802]
-    KOas = einsum_chain_gemm([Cocc_A, K_O, Cvir_B], ['T', 'N', 'N'])
+    KOas = chain_gemm_einsums([Cocc_A, K_O, Cvir_B], ['T', 'N', 'N'])
     KOas_np = np.array(KOas)
     
     # KObr = 1.0 * Cocc_B.T @ K_O.T @ Cvir_A  [C++ lines 6803-6804]
     # Note: K_O is transposed (second 'T' in the transpose list)
-    KObr = einsum_chain_gemm([Cocc_B, K_O, Cvir_A], ['T', 'T', 'N'])
+    KObr = chain_gemm_einsums([Cocc_B, K_O, Cvir_A], ['T', 'T', 'N'])
     KObr_np = np.array(KObr)
     
     # JBas = -2.0 * (Cocc_A.T @ S @ D_B) @ J_A @ Cvir_B  [C++ lines 6806-6807]
-    temp_JBas = einsum_chain_gemm([Cocc_A, S, D_B], ['T', 'N', 'N'])
-    JBas = einsum_chain_gemm([temp_JBas, J_A, Cvir_B], ['N', 'N', 'N'])
+    temp_JBas = chain_gemm_einsums([Cocc_A, S, D_B], ['T', 'N', 'N'])
+    JBas = chain_gemm_einsums([temp_JBas, J_A, Cvir_B], ['N', 'N', 'N'])
     JBas.scale(-2.0)
     JBas_np = np.array(JBas)
     
     # JAbr = -2.0 * (Cocc_B.T @ S @ D_A) @ J_B @ Cvir_A  [C++ lines 6808-6809]
-    temp_JAbr = einsum_chain_gemm([Cocc_B, S, D_A], ['T', 'N', 'N'])
-    JAbr = einsum_chain_gemm([temp_JAbr, J_B, Cvir_A], ['N', 'N', 'N'])
+    temp_JAbr = chain_gemm_einsums([Cocc_B, S, D_A], ['T', 'N', 'N'])
+    JAbr = chain_gemm_einsums([temp_JAbr, J_B, Cvir_A], ['N', 'N', 'N'])
     JAbr.scale(-2.0)
     JAbr_np = np.array(JAbr)
     
     # Jbs = 4.0 * Cocc_B.T @ J_A @ Cvir_B  [C++ lines 6811-6812]
-    Jbs = einsum_chain_gemm([Cocc_B, J_A, Cvir_B], ['T', 'N', 'N'])
+    Jbs = chain_gemm_einsums([Cocc_B, J_A, Cvir_B], ['T', 'N', 'N'])
     Jbs.scale(4.0)
     Jbs_np = np.array(Jbs)
     
     # Jar = 4.0 * Cocc_A.T @ J_B @ Cvir_A  [C++ lines 6813-6814]
-    Jar = einsum_chain_gemm([Cocc_A, J_B, Cvir_A], ['T', 'N', 'N'])
+    Jar = chain_gemm_einsums([Cocc_A, J_B, Cvir_A], ['T', 'N', 'N'])
     Jar.scale(4.0)
     Jar_np = np.array(Jar)
     
     # JAas = -2.0 * (Cocc_A.T @ J_B @ D_A) @ S @ Cvir_B  [C++ lines 6816-6817]
-    temp_JAas = einsum_chain_gemm([Cocc_A, J_B, D_A], ['T', 'N', 'N'])
-    JAas = einsum_chain_gemm([temp_JAas, S, Cvir_B], ['N', 'N', 'N'])
+    temp_JAas = chain_gemm_einsums([Cocc_A, J_B, D_A], ['T', 'N', 'N'])
+    JAas = chain_gemm_einsums([temp_JAas, S, Cvir_B], ['N', 'N', 'N'])
     JAas.scale(-2.0)
     JAas_np = np.array(JAas)
     
     # JBbr = -2.0 * (Cocc_B.T @ J_A @ D_B) @ S @ Cvir_A  [C++ lines 6818-6819]
-    temp_JBbr = einsum_chain_gemm([Cocc_B, J_A, D_B], ['T', 'N', 'N'])
-    JBbr = einsum_chain_gemm([temp_JBbr, S, Cvir_A], ['N', 'N', 'N'])
+    temp_JBbr = chain_gemm_einsums([Cocc_B, J_A, D_B], ['T', 'N', 'N'])
+    JBbr = chain_gemm_einsums([temp_JBbr, S, Cvir_A], ['N', 'N', 'N'])
     JBbr.scale(-2.0)
     JBbr_np = np.array(JBbr)
     
     # Get your signs right Hesselmann!  [C++ line 6821]
     # Vbs = 2.0 * Cocc_B.T @ V_A @ Cvir_B  [C++ lines 6822-6823]
-    Vbs = einsum_chain_gemm([Cocc_B, V_A, Cvir_B], ['T', 'N', 'N'])
+    Vbs = chain_gemm_einsums([Cocc_B, V_A, Cvir_B], ['T', 'N', 'N'])
     Vbs.scale(2.0)
     Vbs_np = np.array(Vbs)
     
     # Var = 2.0 * Cocc_A.T @ V_B @ Cvir_A  [C++ lines 6824-6825]
-    Var = einsum_chain_gemm([Cocc_A, V_B, Cvir_A], ['T', 'N', 'N'])
+    Var = chain_gemm_einsums([Cocc_A, V_B, Cvir_A], ['T', 'N', 'N'])
     Var.scale(2.0)
     Var_np = np.array(Var)
     
     # VBas = -1.0 * (Cocc_A.T @ S @ D_B) @ V_A @ Cvir_B  [C++ lines 6826-6827]
-    temp_VBas = einsum_chain_gemm([Cocc_A, S, D_B], ['T', 'N', 'N'])
-    VBas = einsum_chain_gemm([temp_VBas, V_A, Cvir_B], ['N', 'N', 'N'])
+    temp_VBas = chain_gemm_einsums([Cocc_A, S, D_B], ['T', 'N', 'N'])
+    VBas = chain_gemm_einsums([temp_VBas, V_A, Cvir_B], ['N', 'N', 'N'])
     VBas.scale(-1.0)
     VBas_np = np.array(VBas)
     
     # VAbr = -1.0 * (Cocc_B.T @ S @ D_A) @ V_B @ Cvir_A  [C++ lines 6828-6829]
-    temp_VAbr = einsum_chain_gemm([Cocc_B, S, D_A], ['T', 'N', 'N'])
-    VAbr = einsum_chain_gemm([temp_VAbr, V_B, Cvir_A], ['N', 'N', 'N'])
+    temp_VAbr = chain_gemm_einsums([Cocc_B, S, D_A], ['T', 'N', 'N'])
+    VAbr = chain_gemm_einsums([temp_VAbr, V_B, Cvir_A], ['N', 'N', 'N'])
     VAbr.scale(-1.0)
     VAbr_np = np.array(VAbr)
     
     # VRas = 1.0 * (Cocc_A.T @ V_B @ P_A) @ S @ Cvir_B  [C++ lines 6830-6831]
-    temp_VRas = einsum_chain_gemm([Cocc_A, V_B, P_A], ['T', 'N', 'N'])
-    VRas = einsum_chain_gemm([temp_VRas, S, Cvir_B], ['N', 'N', 'N'])
+    temp_VRas = chain_gemm_einsums([Cocc_A, V_B, P_A], ['T', 'N', 'N'])
+    VRas = chain_gemm_einsums([temp_VRas, S, Cvir_B], ['N', 'N', 'N'])
     VRas_np = np.array(VRas)
     
     # VSbr = 1.0 * (Cocc_B.T @ V_A @ P_B) @ S @ Cvir_A  [C++ lines 6832-6833]
-    temp_VSbr = einsum_chain_gemm([Cocc_B, V_A, P_B], ['T', 'N', 'N'])
-    VSbr = einsum_chain_gemm([temp_VSbr, S, Cvir_A], ['N', 'N', 'N'])
+    temp_VSbr = chain_gemm_einsums([Cocc_B, V_A, P_B], ['T', 'N', 'N'])
+    VSbr = chain_gemm_einsums([temp_VSbr, S, Cvir_A], ['N', 'N', 'N'])
     VSbr_np = np.array(VSbr)
     
     # Sas = Cocc_A.T @ S @ Cvir_B  [C++ line 6835]
-    Sas = einsum_chain_gemm([Cocc_A, S, Cvir_B], ['T', 'N', 'N'])
+    Sas = chain_gemm_einsums([Cocc_A, S, Cvir_B], ['T', 'N', 'N'])
     Sas_np = np.array(Sas)
     
     # Sbr = Cocc_B.T @ S @ Cvir_A  [C++ line 6836]
-    Sbr = einsum_chain_gemm([Cocc_B, S, Cvir_A], ['T', 'N', 'N'])
+    Sbr = chain_gemm_einsums([Cocc_B, S, Cvir_A], ['T', 'N', 'N'])
     Sbr_np = np.array(Sbr)
     
     # Qbr = Jbr + Kbr + KObr + JAbr + JBbr + VAbr + VSbr  [C++ lines 6838-6846]
@@ -2127,11 +2127,11 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Qas_np += VRas_np
     
     # SBar = Cocc_A.T @ S @ D_B @ S @ Cvir_A  [C++ line 6858]
-    SBar = einsum_chain_gemm([Cocc_A, S, D_B, S, Cvir_A], ['T', 'N', 'N', 'N', 'N'])
+    SBar = chain_gemm_einsums([Cocc_A, S, D_B, S, Cvir_A], ['T', 'N', 'N', 'N', 'N'])
     SBar_np = np.array(SBar)
     
     # SAbs = Cocc_B.T @ S @ D_A @ S @ Cvir_B  [C++ line 6859]
-    SAbs = einsum_chain_gemm([Cocc_B, S, D_A, S, Cvir_B], ['T', 'N', 'N', 'N', 'N'])
+    SAbs = chain_gemm_einsums([Cocc_B, S, D_A, S, Cvir_B], ['T', 'N', 'N', 'N', 'N'])
     SAbs_np = np.array(SAbs)
     
     # Qar = Jar + Var  [C++ lines 6861-6864]
@@ -2541,7 +2541,7 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     return cache
 
 
-def einsum_chain_gemm(
+def chain_gemm_matrix(
     tensors: list,
     transposes: list[str] = None,
     prefactors_C: list[float] = None,
@@ -2626,6 +2626,88 @@ def einsum_chain_gemm(
             returned_tensors.append(_to_matrix(computed_arrays[i + 1]))
     return returned_tensors
 
+def chain_gemm_einsums(
+    tensors: list[ein.core.RuntimeTensorD],
+    transposes: list[str] = None,
+    prefactors_C: list[float] = None,
+    prefactors_AB: list[float] = None,
+    return_tensors: list[bool] = None,
+):
+    """
+    Computes a chain of einsum matrix multiplications
+
+    Parameters
+    ----------
+    tensors : list[ein.core.RuntimeTensorD]
+        List of tensors to be contracted.
+    transposes : list[str], optional
+        List of transpose operations for each tensor, where "N" means no transpose and "T" means transpose.
+    prefactors_C : list[float], optional
+        List of prefactors for the resulting tensors in the chain.
+    prefactors_AB : list[float], optional
+        List of prefactors for the tensors being multiplied in the chain.
+    return_tensors : list[bool], optional
+        List indicating which intermediate tensors should be returned. If None,
+        only the final tensor is returned. Note that these are only
+        intermediate tensors and final tensor; hence, the length of this list
+        should be one less than the number of tensors.
+    """
+    # initialization "computed_tensors" with the first tensor of the chain
+    computed_tensors = [tensors[0]]
+    N = len(tensors)
+    if transposes is None:
+        transposes = ["N"] * N
+    if prefactors_C is None:
+        prefactors_C = [0.0] * (N - 1)
+    if prefactors_AB is None:
+        prefactors_AB = [1.0] * (N - 1)
+    try:
+        for i in range(len(tensors) - 1):
+            # A = computed_tensors[-1]
+            # B = tensors[i + 1]
+            # # For intermediate results (i > 0), always use 'N' for T1 since A is a computed intermediate
+            # T1 = transposes[i] if i == 0 else 'N'
+            # T2 = transposes[i + 1]
+            # A_size = A.shape[0]
+            # if T1 == "T":
+            #     A_size = A.shape[1]
+            # B_size = B.shape[1]
+            # if T2 == "T":
+            #     B_size = B.shape[0]
+            A = computed_tensors[-1]
+            # B = _to_numpy(tensors[i + 1])
+            B = tensors[i + 1]
+            
+            # For intermediate results (i > 0), always use 'N' for T1 since A is a computed intermediate
+            T1 = transposes[i] if i == 0 else 'N'
+            T2 = transposes[i + 1]
+            A_size = A.shape[0]
+            if T1 == "T":
+                A_size = A.shape[1]
+            B_size = B.shape[1]
+            if T2 == "T":
+                B_size = B.shape[0]
+            
+            # Apply transposes
+            A_np = A.np
+            if T1 == "T":
+                A_np = A.np.T
+            B_np = B
+            if T2 == "T":
+                B_np = B.np.T
+            C = ein.utils.tensor_factory(f"{A.name} @ {B.name}", [A_size, B_size], np.float64, 'einsums')
+            ein.core.gemm(T1, T2, prefactors_AB[i], A_np, B_np, prefactors_C[i], C)
+            computed_tensors.append(C)
+    except Exception as e:
+        raise ValueError(f"Error in einsum_chain_gemm: {e}\n{i = }\n{A = }\n{B = }\n{T1 = }\n{T2 = }")
+    if return_tensors is None:
+        return computed_tensors[-1]
+    returned_tensors = []
+    for i, r in enumerate(return_tensors):
+        if r:
+            returned_tensors.append(computed_tensors[i + 1])
+    return returned_tensors
+
 
 def exchange(cache, jk, do_print=True):
     r"""
@@ -2659,7 +2741,7 @@ def exchange(cache, jk, do_print=True):
     # Build inverse exchange metric
     nocc_A = cache["Cocc_A"].shape[1]
     nocc_B = cache["Cocc_B"].shape[1]
-    SAB = einsum_chain_gemm(
+    SAB = chain_gemm_einsums(
         [cache['Cocc_A'], cache['S'], cache['Cocc_B']],
         ['T', 'N', 'N'],
     )
@@ -2677,9 +2759,9 @@ def exchange(cache, jk, do_print=True):
     Tmo_BB = core.Matrix.from_array(Sab.np[nocc_A:, nocc_A:])
     Tmo_AB = core.Matrix.from_array(Sab.np[:nocc_A, nocc_A:])
 
-    T_AA = einsum_chain_gemm([cache['Cocc_A'], Tmo_AA, cache['Cocc_A']], ['N', 'N', 'T'])
-    T_BB = einsum_chain_gemm([cache['Cocc_B'], Tmo_BB, cache['Cocc_B']], ['N', 'N', 'T'])
-    T_AB = einsum_chain_gemm([cache['Cocc_A'], Tmo_AB, cache['Cocc_B']], ['N', 'N', 'T'])
+    T_AA = chain_gemm_einsums([cache['Cocc_A'], Tmo_AA, cache['Cocc_A']], ['N', 'N', 'T'])
+    T_BB = chain_gemm_einsums([cache['Cocc_B'], Tmo_BB, cache['Cocc_B']], ['N', 'N', 'T'])
+    T_AB = chain_gemm_einsums([cache['Cocc_A'], Tmo_AB, cache['Cocc_B']], ['N', 'N', 'T'])
 
     S = cache["S"]
     D_A = cache["D_A"]
@@ -2691,13 +2773,13 @@ def exchange(cache, jk, do_print=True):
     jk.C_clear()
 
     jk.C_left_add(core.Matrix.from_array(cache["Cocc_A"]))
-    jk.C_right_add(core.Matrix.from_array(einsum_chain_gemm([cache['Cocc_A'], Tmo_AA])))
+    jk.C_right_add(core.Matrix.from_array(chain_gemm_einsums([cache['Cocc_A'], Tmo_AA])))
 
     jk.C_left_add(core.Matrix.from_array(cache["Cocc_B"]))
-    jk.C_right_add(core.Matrix.from_array(einsum_chain_gemm([cache['Cocc_A'], Tmo_AB])))
+    jk.C_right_add(core.Matrix.from_array(chain_gemm_einsums([cache['Cocc_A'], Tmo_AB])))
 
     jk.C_left_add(core.Matrix.from_array(cache["Cocc_A"]))
-    jk.C_right_add(core.Matrix.from_array(einsum_chain_gemm([P_B, S, cache['Cocc_A']])))
+    jk.C_right_add(core.Matrix.from_array(chain_gemm_einsums([P_B, S, cache['Cocc_A']])))
     # This also works... you can choose to form the density-like matrix either
     # way..., just remember that the C_right_add has an adjoint (transpose, and switch matmul order)
     # jk.C_left_add(core.Matrix.from_array(einsum_chain_gemm([D_A, S, cache['Cvir_B']])))
@@ -2717,12 +2799,12 @@ def exchange(cache, jk, do_print=True):
     Exch_s2 = 0.0
 
     # Save some intermediate tensors to avoid recomputation in the next steps
-    DA_S_DB_S_PA = einsum_chain_gemm([D_A, S, D_B, S, P_A])
+    DA_S_DB_S_PA = chain_gemm_einsums([D_A, S, D_B, S, P_A])
     Exch_s2 -= 2.0 * matrix_dot(w_B, DA_S_DB_S_PA)
 
-    DB_S_DA_S_PB = einsum_chain_gemm([D_B, S, D_A, S, P_B])
+    DB_S_DA_S_PB = chain_gemm_einsums([D_B, S, D_A, S, P_B])
     Exch_s2 -= 2.0 * matrix_dot(w_A, DB_S_DA_S_PB)
-    Exch_s2 -= 2.0 * matrix_dot(Kij, einsum_chain_gemm([P_A, S, D_B]))
+    Exch_s2 -= 2.0 * matrix_dot(Kij, chain_gemm_einsums([P_A, S, D_B]))
 
     if do_print:
         core.print_out(print_sapt_var("Exch10(S^2) ", Exch_s2, short=True))
@@ -2787,14 +2869,14 @@ def induction(
     # Prepare JK calculations
     jk.C_clear()
     
-    DB_S, DB_S_CA = einsum_chain_gemm([D_B, S, cache["Cocc_A"]], return_tensors=[True, True])
+    DB_S, DB_S_CA = chain_gemm_einsums([D_B, S, cache["Cocc_A"]], return_tensors=[True, True])
     jk.C_left_add(core.Matrix.from_array(DB_S_CA))
     jk.C_right_add(core.Matrix.from_array(cache["Cocc_A"]))
 
-    jk.C_left_add(core.Matrix.from_array(einsum_chain_gemm([DB_S, D_A, S, cache["Cocc_B"]])))
+    jk.C_left_add(core.Matrix.from_array(chain_gemm_einsums([DB_S, D_A, S, cache["Cocc_B"]])))
     jk.C_right_add(core.Matrix.from_array(cache["Cocc_B"]))
 
-    DA_S, DA_S_DB_S_CA = einsum_chain_gemm(
+    DA_S, DA_S_DB_S_CA = chain_gemm_einsums(
                 [D_A, S, D_B, S, cache["Cocc_A"]],
                 return_tensors=[True, False, False, True],
     )
@@ -2823,34 +2905,34 @@ def induction(
     EX_A.axpy(2.0, J_P_B)
 
     # Apply all the axpy operations to EX_A
-    S_DB, S_DB_VA, S_DB_VA_DB_S = einsum_chain_gemm(
+    S_DB, S_DB_VA, S_DB_VA_DB_S = chain_gemm_einsums(
         [S, D_B, V_A, D_B, S],
         return_tensors=[True, True, False, True]
     )
-    S_DB_JA, S_DB_JA_DB_S = einsum_chain_gemm(
+    S_DB_JA, S_DB_JA_DB_S = chain_gemm_einsums(
         [S_DB, J_A, D_B, S],
         return_tensors=[True, False, True]
     )
-    S_DB_S_DA, S_DB_S_DA_VB = einsum_chain_gemm(
+    S_DB_S_DA, S_DB_S_DA_VB = chain_gemm_einsums(
         [S_DB, S, D_A, V_B],
         return_tensors=[False, True, True],
     )
     EX_A.axpy(-1.0, S_DB_VA)
     EX_A.axpy(-2.0, S_DB_JA)
-    EX_A.axpy(1.0, einsum_chain_gemm([S_DB, K_A]))
+    EX_A.axpy(1.0, chain_gemm_einsums([S_DB, K_A]))
     EX_A.axpy(1.0, S_DB_S_DA_VB)
-    EX_A.axpy(2.0, einsum_chain_gemm([S_DB_S_DA, J_B]))
+    EX_A.axpy(2.0, chain_gemm_einsums([S_DB_S_DA, J_B]))
     EX_A.axpy(1.0, S_DB_VA_DB_S)
     EX_A.axpy(2.0, S_DB_JA_DB_S)
-    EX_A.axpy(-1.0, einsum_chain_gemm([S_DB, K_O], ["N", "T"]))
-    EX_A.axpy(-1.0, einsum_chain_gemm([V_B, D_B, S]))
-    EX_A.axpy(-2.0, einsum_chain_gemm([J_B, D_B, S]))
-    EX_A.axpy(1.0,  einsum_chain_gemm([K_B, D_B, S]))
-    EX_A.axpy(1.0,  einsum_chain_gemm([V_B, D_A, S, D_B, S]))
-    EX_A.axpy(2.0,  einsum_chain_gemm([J_B, D_A, S, D_B, S]))
-    EX_A.axpy(-1.0, einsum_chain_gemm([K_O, D_B, S]))
+    EX_A.axpy(-1.0, chain_gemm_einsums([S_DB, K_O], ["N", "T"]))
+    EX_A.axpy(-1.0, chain_gemm_einsums([V_B, D_B, S]))
+    EX_A.axpy(-2.0, chain_gemm_einsums([J_B, D_B, S]))
+    EX_A.axpy(1.0,  chain_gemm_einsums([K_B, D_B, S]))
+    EX_A.axpy(1.0,  chain_gemm_einsums([V_B, D_A, S, D_B, S]))
+    EX_A.axpy(2.0,  chain_gemm_einsums([J_B, D_A, S, D_B, S]))
+    EX_A.axpy(-1.0, chain_gemm_einsums([K_O, D_B, S]))
 
-    EX_A_MO_1 = einsum_chain_gemm(
+    EX_A_MO_1 = chain_gemm_einsums(
         [cache['Cocc_A'], EX_A, cache['Cvir_A']],
         ['T', 'N', 'N'],
     )
@@ -2887,15 +2969,15 @@ def induction(
     cache['J_P_A'] = J_P_A
     cache['J_P_B'] = J_P_B
 
-    S_DA, S_DA_VB, S_DA_VB_DA_S = einsum_chain_gemm(
+    S_DA, S_DA_VB, S_DA_VB_DA_S = chain_gemm_einsums(
         [S, D_A, V_B, D_A, S],
         return_tensors=[True, True, False, True]
     )
-    S_DA_JB, S_DA_JB_DA_S = einsum_chain_gemm(
+    S_DA_JB, S_DA_JB_DA_S = chain_gemm_einsums(
         [S_DA, J_B, D_A, S],
         return_tensors=[True, False, True]
     )
-    S_DA_S_DB, S_DA_S_DB_VA = einsum_chain_gemm(
+    S_DA_S_DB, S_DA_S_DB_VA = chain_gemm_einsums(
         [S_DA, S, D_B, V_A],
         return_tensors=[False, True, True],
     )
@@ -2903,20 +2985,20 @@ def induction(
     # Apply all the axpy operations to EX_B
     EX_B.axpy(-1.0, S_DA_VB)
     EX_B.axpy(-2.0, S_DA_JB)
-    EX_B.axpy(1.0, einsum_chain_gemm([S_DA, K_B]))
+    EX_B.axpy(1.0, chain_gemm_einsums([S_DA, K_B]))
     EX_B.axpy(1.0, S_DA_S_DB_VA)
-    EX_B.axpy(2.0, einsum_chain_gemm([S_DA_S_DB, J_A]))
+    EX_B.axpy(2.0, chain_gemm_einsums([S_DA_S_DB, J_A]))
     EX_B.axpy(1.0, S_DA_VB_DA_S)
     EX_B.axpy(2.0, S_DA_JB_DA_S)
-    EX_B.axpy(-1.0, einsum_chain_gemm([S_DA, K_O]))
-    EX_B.axpy(-1.0, einsum_chain_gemm([V_A, D_A, S]))
-    EX_B.axpy(-2.0, einsum_chain_gemm([J_A, D_A, S]))
-    EX_B.axpy(1.0, einsum_chain_gemm([K_A, D_A, S]))
-    EX_B.axpy(1.0, einsum_chain_gemm([V_A, D_B, S, D_A, S]))
-    EX_B.axpy(2.0, einsum_chain_gemm([J_A, D_B, S, D_A, S]))
-    EX_B.axpy(-1.0, einsum_chain_gemm([K_O, D_A, S], ["T", "N", "N"]))
+    EX_B.axpy(-1.0, chain_gemm_einsums([S_DA, K_O]))
+    EX_B.axpy(-1.0, chain_gemm_einsums([V_A, D_A, S]))
+    EX_B.axpy(-2.0, chain_gemm_einsums([J_A, D_A, S]))
+    EX_B.axpy(1.0, chain_gemm_einsums([K_A, D_A, S]))
+    EX_B.axpy(1.0, chain_gemm_einsums([V_A, D_B, S, D_A, S]))
+    EX_B.axpy(2.0, chain_gemm_einsums([J_A, D_B, S, D_A, S]))
+    EX_B.axpy(-1.0, chain_gemm_einsums([K_O, D_A, S], ["T", "N", "N"]))
 
-    EX_B_MO_1 = einsum_chain_gemm(
+    EX_B_MO_1 = chain_gemm_einsums(
         [cache['Cocc_B'], EX_B, cache['Cvir_B']],
         ['T', 'N', 'N'],
     )
@@ -2932,11 +3014,11 @@ def induction(
     w_B.name = "w_B"
     w_B.axpy(2.0, J_B)
 
-    w_B_MOA_1 = einsum_chain_gemm(
+    w_B_MOA_1 = chain_gemm_einsums(
         [cache['Cocc_A'], w_B, cache['Cvir_A']],
         ['T', 'N', 'N'],
     )
-    w_A_MOB_1 = einsum_chain_gemm(
+    w_A_MOB_1 = chain_gemm_einsums(
         [cache['Cocc_B'], w_A, cache['Cvir_B']],
         ['T', 'N', 'N'],
     )
