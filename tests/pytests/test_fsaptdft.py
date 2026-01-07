@@ -1067,6 +1067,67 @@ no_com
                 4,
                 f"{ref_df['Frag1'].iloc[i]} {ref_df['Frag2'].iloc[i]} {col}",
             )
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "guess": "sad",
+            "FISAPT_FSAPT_FILEPATH": "none",
+            "SAPT_DFT_FUNCTIONAL": "HF",
+            "SAPT_DFT_DO_DHF": True,
+            "SAPT_DFT_DO_HYBRID": False,
+            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "SAPT_DFT_D4_IE": False,
+            "SAPT_DFT_DO_DISP": True,
+            "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
+            # Normally on
+            "SAPT_DFT_USE_EINSUMS": True,
+        }
+    )
+    psi4.energy("sapt(dft)", molecule=mol)
+    keys = ["Enuc", "Eelst", "Eexch", "Eind", "Edisp", "Etot"]
+    Eref = {
+        "Edisp": -0.0007912165332931369,
+        "Eelst": -0.0019765265492708295,
+        "Eexch": 0.006335438658802855,
+        "Eind": -0.0004635353239533062,
+        "Enuc": 474.74808217020274,
+        "Etot": 0.003104160252285582,
+    }
+    Epsi = {
+        "Enuc": mol.nuclear_repulsion_energy(),
+        "Eelst": core.variable("SAPT ELST ENERGY"),
+        "Eexch": core.variable("SAPT EXCH ENERGY"),
+        "Eind": core.variable("SAPT IND ENERGY"),
+        "Edisp": core.variable("SAPT DISP ENERGY"),
+        "Etot": core.variable("SAPT TOTAL ENERGY"),
+    }
+    pp(Epsi)
+    for key in keys:
+        compare_values(Eref[key], Epsi[key], 5, key)
+    data = psi4.fsapt_analysis(
+        molecule=mol,
+        fragments_a={
+            "Methyl1_A": [1, 2, 7, 8],
+            "Methyl2_A": [3, 4, 5, 6],
+        },
+        fragments_b={
+            "Peptide_B": [9, 10, 11, 16, 26],
+            "T-Butyl_B": [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
+        },
+        links5050=True,
+        print_output=False,
+    )
+    df = pd.DataFrame(data)
+    print("COMPUTED DF")
+    for col in ["Elst", "Exch", "IndAB", "IndBA", "Disp", "EDisp", "Total"]:
+        for i in range(len(ref_df)):
+            compare_values(
+                ref_df[col].iloc[i],
+                df[col].iloc[i],
+                4,
+                f"{ref_df['Frag1'].iloc[i]} {ref_df['Frag2'].iloc[i]} {col}",
+            )
 
 
 @pytest.mark.saptdft

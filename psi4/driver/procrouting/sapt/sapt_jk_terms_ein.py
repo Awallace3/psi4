@@ -27,6 +27,7 @@
 #
 
 import time
+from typing import List, Tuple
 
 import numpy as np
 
@@ -2663,21 +2664,9 @@ def chain_gemm_einsums(
         prefactors_AB = [1.0] * (N - 1)
     try:
         for i in range(len(tensors) - 1):
-            # A = computed_tensors[-1]
-            # B = tensors[i + 1]
-            # # For intermediate results (i > 0), always use 'N' for T1 since A is a computed intermediate
-            # T1 = transposes[i] if i == 0 else 'N'
-            # T2 = transposes[i + 1]
-            # A_size = A.shape[0]
-            # if T1 == "T":
-            #     A_size = A.shape[1]
-            # B_size = B.shape[1]
-            # if T2 == "T":
-            #     B_size = B.shape[0]
             A = computed_tensors[-1]
-            # B = _to_numpy(tensors[i + 1])
             B = tensors[i + 1]
-            
+
             # For intermediate results (i > 0), always use 'N' for T1 since A is a computed intermediate
             T1 = transposes[i] if i == 0 else 'N'
             T2 = transposes[i + 1]
@@ -2687,16 +2676,15 @@ def chain_gemm_einsums(
             B_size = B.shape[1]
             if T2 == "T":
                 B_size = B.shape[0]
-            
-            # Apply transposes
+
+            # Get numpy array views for gemm - all inputs should be psi4.core.Matrix
             A_np = A.np
-            if T1 == "T":
-                A_np = A.np.T
-            B_np = B
-            if T2 == "T":
-                B_np = B.np.T
-            C = ein.utils.tensor_factory(f"{A.name} @ {B.name}", [A_size, B_size], np.float64, 'einsums')
-            ein.core.gemm(T1, T2, prefactors_AB[i], A_np, B_np, prefactors_C[i], C)
+            B_np = B.np
+            # Initialize output as psi4.core.Matrix with zeros
+            C = core.Matrix(A_size, B_size)
+            C.zero()
+            # Use ein.core.gemm to write to C.np
+            ein.core.gemm(T1, T2, prefactors_AB[i], A_np, B_np, prefactors_C[i], C.np)
             computed_tensors.append(C)
     except Exception as e:
         raise ValueError(f"Error in einsum_chain_gemm: {e}\n{i = }\n{A = }\n{B = }\n{T1 = }\n{T2 = }")
