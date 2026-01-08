@@ -188,6 +188,7 @@ def fisapt_fdrop(self, external_potentials=None):
     core.set_variable("FSAPT_QA", matrices["Qocc0A"])
     core.set_variable("FSAPT_QB", matrices["Qocc0B"])
     core.set_variable("FSAPT_ELST_AB", matrices["Elst_AB"])
+    core.set_variable("FSAPT_AB_SIZE", np.array(matrices["Elst_AB"].np.shape).reshape(1, -1))
     core.set_variable("FSAPT_EXCH_AB", matrices["Exch_AB"])
     core.set_variable("FSAPT_INDAB_AB", matrices["IndAB_AB"])
     core.set_variable("FSAPT_INDBA_AB", matrices["IndBA_AB"])

@@ -1548,9 +1548,31 @@ def run_fsapt_analysis(
             (0, molecule.fragments_[1][0]),
             (molecule.fragments_[1][0], molecule.fragments_[1][-1] + 1),
         ]
-        qcvars = atomic_results.extras["qcvars"]
-        for key, value in qcvars.items():
-            core.set_variable(key, value)
+        # When running atomic_result directly from psi4, we have the right
+        # shape already for Felst, Fexch, etc... QCFractal flattens them.
+        if "qcvars" in atomic_results.extras:
+            qcvars = atomic_results.extras["qcvars"]
+            for key, value in qcvars.items():
+                if "fsapt" not in key.lower():
+                    continue
+                core.set_variable(key, value)
+        else:
+            qcvars = atomic_results.extras["extra_properties"]
+            # atomic_results back from QCFractal are stored in 1D array, so we
+            # need to reshape them properly. This is (nA_atoms + na + 1,
+            # nB_atoms + nb + 1) where na are from L0A/L0B, so we cannot
+            # directly infer the right shape without knowing some additional
+            # information from the calculation itself. 
+            fsapt_AB_array_shape = np.array(qcvars["fsapt_ab_size"], dtype=np.int32)
+            for key, value in qcvars.items():
+                if "fsapt" not in key.lower() or key.lower() in ["fsapt_ab_size"]:
+                    continue
+                v = np.array(value)
+                if key in ['fsapt_qa', 'fsapt_qb']:
+                    v = v.reshape(len(Z), -1)
+                else:
+                    v = v.reshape(fsapt_AB_array_shape)
+                core.set_variable(key, v)
     else:
         monomer_slices = molecule.get_fragments()
         R, _, _, Z, _ = molecule.to_arrays()

@@ -971,7 +971,9 @@ def sapt_dft(
 
         core.set_variable("FSAPT_QA", cache["Qocc0A"])
         core.set_variable("FSAPT_QB", cache["Qocc0B"])
+
         core.set_variable("FSAPT_ELST_AB", cache['Elst_AB'])
+        core.set_variable("FSAPT_AB_SIZE", np.array(cache["Elst_AB"].np.shape).reshape(1, -1))
         core.set_variable("FSAPT_EXCH_AB", cache['Exch_AB'])
         core.set_variable("FSAPT_INDAB_AB", cache['INDAB_AB'])
         core.set_variable("FSAPT_INDBA_AB", cache['INDBA_AB'])
@@ -983,13 +985,15 @@ def sapt_dft(
         cache = sapt_jk_terms_ein.partition(cache, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT):Partition")
 
-        core.timer_on("SAPT(DFT): F-SAPT Localization (IBO)")
-        sapt_jk_terms_ein.flocalization(cache, dimer_wfn, wfn_A, wfn_B)
-        core.timer_off("SAPT(DFT): F-SAPT Localization (IBO)")
-        # Build auxiliary basis for FISAPT dispersion
+        # Build auxiliary basis for FISAPT
         aux_basis = core.BasisSet.build(dimer_wfn.molecule(), "DF_BASIS_MP2", core.get_option("DFMP2", "DF_BASIS_MP2"),
                                             "RIFIT", core.get_global_option('BASIS'))
-        FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache, data, aux_basis)
+        
+        # Create single FISAPT object with do_flocalize=True to handle IBO localization internally
+        core.timer_on("SAPT(DFT): F-SAPT Setup + Localization (IBO)")
+        FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache, data, aux_basis, do_flocalize=True)
+        core.timer_off("SAPT(DFT): F-SAPT Setup + Localization (IBO)")
+        
         core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
         FISAPT_obj.felst()
         core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
@@ -1117,11 +1121,10 @@ def sapt_dft(
         core.timer_off("SAPT(DFT): F-SAPT Dispersion")
         FISAPT_obj.fdrop(external_potentials)
         scalars = FISAPT_obj.scalars()
-        print("FISAPT DISP SCALARS:")
-        from pprint import pprint
-        pprint(scalars)
         data["Exch-Disp20,u"] = scalars["Exch-Disp20"]
         data["Disp20,u"] = scalars["Disp20"]
+    elif do_fsapt and fsapt_type == "FISAPT":
+        FISAPT_obj.fdrop(external_potentials)
 
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     # d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()

@@ -275,7 +275,11 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, do_print=True):
     cache["Laocc0A"] = Laocc0A
     cache["Ufocc0A"] = Ufocc0A
     cache["Uaocc0A"] = Uaocc0A
-    
+    # Store active occupied orbitals for dispersion (Caocc0A = Cocc_A[:, nf:])
+    Caocc0A = core.Matrix("Caocc0A", nn, na)
+    Caocc0A.np[:, :] = cache["Cocc_A"].np[:, nf:nf+na]
+    cache["Caocc0A"] = Caocc0A
+
     if link_assignment in ["SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"]:
         Locc_A = core.Matrix("Locc_A", nn, nm + 1)
         Locc_A.np[:, :nm] = Locc_A.np[:, :]
@@ -332,7 +336,11 @@ def flocalization(cache, dimer_wfn, wfn_A, wfn_B, do_print=True):
     cache["Laocc0B"] = Laocc0B
     cache["Ufocc0B"] = Ufocc0B
     cache["Uaocc0B"] = Uaocc0B
-    
+    # Store active occupied orbitals for dispersion (Caocc0B = Cocc_B[:, nf:])
+    Caocc0B = core.Matrix("Caocc0B", nn, na)
+    Caocc0B.np[:, :] = cache["Cocc_B"].np[:, nf:nf+na]
+    cache["Caocc0B"] = Caocc0B
+
     if link_assignment in ["SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"]:
         Locc_B = core.Matrix("Locc_B", nn, nm + 1)
         Locc_B.np[:, :nm] = Locc_B.np[:, :]
@@ -1879,19 +1887,21 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     if do_print:
         core.print_out("  ==> F-SAPT0 Dispersion <==\n\n")
     
-    ind_scale = core.get_option("FISAPT", "FISAPT_FSAPT_IND_SCALE")
+    core.timer_on("F-SAPT Disp Setup")
+    # ind_scale = core.get_option("FISAPT", "FISAPT_FSAPT_IND_SCALE")
     link_assignment = core.get_option("FISAPT", "FISAPT_LINK_ASSIGNMENT")
     
     mol = dimer_wfn.molecule()
     dimer_basis = dimer_wfn.basisset()
     nA = mol.natom()
     nB = mol.natom()
-    na = cache["Locc_A"].shape[1]
-    nb = cache["Locc_B"].shape[1]
-    nr = cache["Cvir_A"].shape[1]
-    ns = cache["Cvir_B"].shape[1]
     nfa = cache["Lfocc0A"].shape[1]
     nfb = cache["Lfocc0B"].shape[1]
+    # Use active occupied dimensions (excluding frozen core) to match C++ FISAPT fdisp
+    na = cache["Caocc0A"].shape[1]
+    nb = cache["Caocc0B"].shape[1]
+    nr = cache["Cvir_A"].shape[1]
+    ns = cache["Cvir_B"].shape[1]
     nn = cache["Cocc_A"].shape[0]  # number of AO basis functions
     
     na1 = na
@@ -1924,8 +1934,9 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Uocc_A = cache["Uocc_A"]
     Uocc_B = cache["Uocc_B"]
     
-    Cocc_A = cache["Cocc_A"]
-    Cocc_B = cache["Cocc_B"]
+    # Use active occupied orbitals (excluding frozen core) to match C++ FISAPT fdisp
+    Cocc_A = cache["Caocc0A"]
+    Cocc_B = cache["Caocc0B"]
     Cvir_A = cache["Cvir_A"]
     Cvir_B = cache["Cvir_B"]
     
@@ -1933,8 +1944,10 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Cvir_A.set_name("Cvir_A")
     # print(Cvir_A)
 
-    eps_occ_A = cache["eps_occ_A"]
-    eps_occ_B = cache["eps_occ_B"]
+    # Use only active occupied orbital energies (skip frozen core)
+    # nfa and nfb are already defined at the start of fdisp0
+    eps_occ_A = core.Vector.from_array(cache["eps_occ_A"].np[nfa:])
+    eps_occ_B = core.Vector.from_array(cache["eps_occ_B"].np[nfb:])
     eps_vir_A = cache["eps_vir_A"]
     eps_vir_B = cache["eps_vir_B"]
 
@@ -1950,10 +1963,10 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     V_B = cache["V_B"]
     J_B = cache["J_B"]
     K_B = cache["K_B"]
-    J_O = cache["J_O"]
+    # J_O = cache["J_O"]
     K_O = cache["K_O"]
-    J_P_A = cache["J_P_A"]
-    J_P_B = cache["J_P_B"]
+    # J_P_A = cache["J_P_A"]
+    # J_P_B = cache["J_P_B"]
 
     aux_basis = dimer_wfn.get_basisset("DF_BASIS_SCF")
     nQ = aux_basis.nbf()
@@ -2143,11 +2156,6 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Qbs_np = Jbs_np.copy()
     Qbs_np += Vbs_np
     
-    # KXOYas and KXOYbr: placeholder matrices (same shape as Jas/Jbr)  [C++ lines 6871-6872]
-    # These will be filled later during the DF loop
-    KXOYas_np = np.zeros_like(Jas_np)
-    KXOYbr_np = np.zeros_like(Jbr_np)
-    
     # => Integrals from DFHelper <= #  [C++ lines 6895-6946]
     
     # Build list of orbital space matrices for DF transformations  [C++ lines 6897-6909]
@@ -2209,7 +2217,6 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
 
     
     # Calculate total columns for memory allocation  [C++ lines 6911-6915]
-    max_MO = max(mat.shape[1] for mat in orbital_spaces)
     ncol = sum(mat.shape[1] for mat in orbital_spaces)
     nrows = orbital_spaces[0].shape[0]  # All should have same number of rows (AO basis)
     
@@ -2223,7 +2230,10 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     memory_bytes = core.get_memory()  # in bytes
     memory_doubles = memory_bytes // 8
     orbital_memory = nrows * ncol
+    print(orbital_memory)
     dfh.set_memory(memory_doubles - orbital_memory)
+    # print set memory in GB
+    core.print_out(f"    Setting DFHelper memory to {(memory_doubles - orbital_memory) * 8 / 1e9:.3f} GB\n")
     
     dfh.set_method("DIRECT_iaQ")
     dfh.set_nthreads(core.get_num_threads())
@@ -2389,7 +2399,9 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Fbs = core.Matrix("Fbs block", nsblock * nb, nQ)
     Bas = core.Matrix("Bas block", nsblock * na, nQ)
     Cas = core.Matrix("Cas block", nsblock * na, nQ)
+    core.timer_off("F-SAPT Disp Setup")
             
+    core.timer_on("F-SAPT Disp Compute")
     for rstart in range(0, nr, max_r):
         nrblock = min(max_r, nr - rstart)
         
@@ -2505,6 +2517,7 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
                     for b in range(nb):
                         E_exch_disp20Tp[a, b] -= 2.0 * T2abp[a, b] * V2abp[a, b]
     
+    core.timer_off("F-SAPT Disp Compute")
     # => Accumulate thread results <= //
     E_disp20 = core.Matrix("E_disp20", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
     E_exch_disp20 = core.Matrix("E_exch_disp20", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
