@@ -97,7 +97,7 @@ def matrix_axpy(alpha, X, Y):
     """
     Compute Y = alpha * X + Y in-place.
     
-    Equivalent to ein.core.axpy(alpha, X, Y) or Y.axpy(alpha, X) for 
+    Equivalent to ein.core.axpy(alpha, X, Y) or ein.core.axpy(alpha, X.np, Y.np) for 
     psi4.core.Matrix.
     
     Parameters
@@ -1064,11 +1064,11 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
 
     # W_A = V_A + 2.0 * J_A using core.Matrix operations
     W_A = V_A.clone()
-    W_A.axpy(2.0, J_A)
+    ein.core.axpy(2.0, J_A.np, W_A.np)
     W_A.name = "W_A"
     # W_B = V_B + 2.0 * J_B
     W_B = V_B.clone()
-    W_B.axpy(2.0, J_B)
+    ein.core.axpy(2.0, J_B.np, W_B.np)
     W_B.name = "W_B"
 
     WAbs = chain_gemm_einsums([LoccB, W_A, CvirB], ['T', 'N', 'N'])
@@ -1183,7 +1183,7 @@ def build_ind_pot(vars):
     for B due to A.
     """
     w_B = vars['V_B'].clone()
-    w_B.axpy(2.0, vars['J_B'])
+    ein.core.axpy(2.0, vars['J_B'].np, w_B.np)
     return chain_gemm_einsums(
         [vars['Cocc_A'], w_B, vars['Cvir_A']],
         ['T', 'N', 'N'],
@@ -1211,9 +1211,9 @@ def build_exch_ind_pot_AB(vars):
     # Exch-Ind Potential A
     EX_A = K_B.clone()
     EX_A.scale(-1.0)
-    EX_A.axpy(-2.0, J_O)
-    EX_A.axpy(1.0, K_O)
-    EX_A.axpy(2.0, J_P_B)
+    ein.core.axpy(-2.0, J_O.np, EX_A.np)
+    ein.core.axpy(1.0, K_O.np, EX_A.np)
+    ein.core.axpy(2.0, J_P_B.np, EX_A.np)
 
     # Apply all the axpy operations to EX_A
     S_DB, S_DB_VA, S_DB_VA_DB_S = chain_gemm_einsums(
@@ -1228,20 +1228,20 @@ def build_exch_ind_pot_AB(vars):
         [S_DB, S, D_A, V_B],
         return_tensors=[False, True, True],
     )
-    EX_A.axpy(-1.0, S_DB_VA)
-    EX_A.axpy(-2.0, S_DB_JA)
-    EX_A.axpy(1.0, chain_gemm_einsums([S_DB, K_A]))
-    EX_A.axpy(1.0, S_DB_S_DA_VB)
-    EX_A.axpy(2.0, chain_gemm_einsums([S_DB_S_DA, J_B]))
-    EX_A.axpy(1.0, S_DB_VA_DB_S)
-    EX_A.axpy(2.0, S_DB_JA_DB_S)
-    EX_A.axpy(-1.0, chain_gemm_einsums([S_DB, K_O], ["N", "T"]))
-    EX_A.axpy(-1.0, chain_gemm_einsums([V_B, D_B, S]))
-    EX_A.axpy(-2.0, chain_gemm_einsums([J_B, D_B, S]))
-    EX_A.axpy(1.0, chain_gemm_einsums([K_B, D_B, S]))
-    EX_A.axpy(1.0, chain_gemm_einsums([V_B, D_A, S, D_B, S]))
-    EX_A.axpy(2.0, chain_gemm_einsums([J_B, D_A, S, D_B, S]))
-    EX_A.axpy(-1.0, chain_gemm_einsums([K_O, D_B, S]))
+    ein.core.axpy(-1.0, S_DB_VA.np, EX_A.np)
+    ein.core.axpy(-2.0, S_DB_JA.np, EX_A.np)
+    ein.core.axpy(1.0, chain_gemm_einsums([S_DB, K_A]).np, EX_A.np)
+    ein.core.axpy(1.0, S_DB_S_DA_VB.np, EX_A.np)
+    ein.core.axpy(2.0, chain_gemm_einsums([S_DB_S_DA, J_B]).np, EX_A.np)
+    ein.core.axpy(1.0, S_DB_VA_DB_S.np, EX_A.np)
+    ein.core.axpy(2.0, S_DB_JA_DB_S.np, EX_A.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([S_DB, K_O], ["N", "T"]).np, EX_A.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([V_B, D_B, S]).np, EX_A.np)
+    ein.core.axpy(-2.0, chain_gemm_einsums([J_B, D_B, S]).np, EX_A.np)
+    ein.core.axpy(1.0, chain_gemm_einsums([K_B, D_B, S]).np, EX_A.np)
+    ein.core.axpy(1.0, chain_gemm_einsums([V_B, D_A, S, D_B, S]).np, EX_A.np)
+    ein.core.axpy(2.0, chain_gemm_einsums([J_B, D_A, S, D_B, S]).np, EX_A.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([K_O, D_B, S]).np, EX_A.np)
 
     EX_A_MO = chain_gemm_einsums(
         [vars['Cocc_A'], EX_A, vars['Cvir_A']],
@@ -1270,9 +1270,9 @@ def build_exch_ind_pot_BA(vars):
 
     EX_B = K_A.clone()
     EX_B.scale(-1.0)
-    EX_B.axpy(-2.0, J_O)
-    EX_B.axpy(1.0, core.Matrix.from_array(_to_numpy(K_O).T))
-    EX_B.axpy(2.0, J_P_A)
+    ein.core.axpy(-2.0, J_O.np, EX_B.np)
+    ein.core.axpy(1.0, K_O.np, EX_B.np.T)
+    ein.core.axpy(2.0, J_P_A.np, EX_B.np)
 
     S_DA, S_DA_VB, S_DA_VB_DA_S = chain_gemm_einsums(
         [S, D_A, V_B, D_A, S],
@@ -1288,20 +1288,20 @@ def build_exch_ind_pot_BA(vars):
     )
 
     # Apply all the axpy operations to EX_B
-    EX_B.axpy(-1.0, S_DA_VB)
-    EX_B.axpy(-2.0, S_DA_JB)
-    EX_B.axpy(1.0, chain_gemm_einsums([S_DA, K_B]))
-    EX_B.axpy(1.0, S_DA_S_DB_VA)
-    EX_B.axpy(2.0, chain_gemm_einsums([S_DA_S_DB, J_A]))
-    EX_B.axpy(1.0, S_DA_VB_DA_S)
-    EX_B.axpy(2.0, S_DA_JB_DA_S)
-    EX_B.axpy(-1.0, chain_gemm_einsums([S_DA, K_O]))
-    EX_B.axpy(-1.0, chain_gemm_einsums([V_A, D_A, S]))
-    EX_B.axpy(-2.0, chain_gemm_einsums([J_A, D_A, S]))
-    EX_B.axpy(1.0, chain_gemm_einsums([K_A, D_A, S]))
-    EX_B.axpy(1.0, chain_gemm_einsums([V_A, D_B, S, D_A, S]))
-    EX_B.axpy(2.0, chain_gemm_einsums([J_A, D_B, S, D_A, S]))
-    EX_B.axpy(-1.0, chain_gemm_einsums([K_O, D_A, S], ["T", "N", "N"]))
+    ein.core.axpy(-1.0, S_DA_VB.np, EX_B.np)
+    ein.core.axpy(-2.0, S_DA_JB.np, EX_B.np)
+    ein.core.axpy(1.0, chain_gemm_einsums([S_DA, K_B]).np, EX_B.np)
+    ein.core.axpy(1.0, S_DA_S_DB_VA.np, EX_B.np)
+    ein.core.axpy(2.0, chain_gemm_einsums([S_DA_S_DB, J_A]).np, EX_B.np)
+    ein.core.axpy(1.0, S_DA_VB_DA_S.np, EX_B.np)
+    ein.core.axpy(2.0, S_DA_JB_DA_S.np, EX_B.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([S_DA, K_O]).np, EX_B.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([V_A, D_A, S]).np, EX_B.np)
+    ein.core.axpy(-2.0, chain_gemm_einsums([J_A, D_A, S]).np, EX_B.np)
+    ein.core.axpy(1.0, chain_gemm_einsums([K_A, D_A, S]).np, EX_B.np)
+    ein.core.axpy(1.0, chain_gemm_einsums([V_A, D_B, S, D_A, S]).np, EX_B.np)
+    ein.core.axpy(2.0, chain_gemm_einsums([J_A, D_B, S, D_A, S]).np, EX_B.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([K_O, D_A, S], ["T", "N", "N"]).np, EX_B.np)
 
     EX_B_MO = chain_gemm_einsums(
         [vars['Cocc_B'], EX_B, vars['Cvir_B']],
@@ -1974,11 +1974,11 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # => Auxiliary C matrices <= //
     # Cr1 = (I - D_B * S) * Cvir_A  [C++ line 6766-6768]
     Cr1 = chain_gemm_einsums([D_B, S, Cvir_A])
-    Cr1.axpy(-1.0, Cvir_A)
+    ein.core.axpy(-1.0, Cvir_A.np, Cr1.np)
     
     # Cs1 = (I - D_A * S) * Cvir_B  [C++ line 6769-6771]
     Cs1 = chain_gemm_einsums([D_A, S, Cvir_B])
-    Cs1.axpy(-1.0, Cvir_B)
+    ein.core.axpy(-1.0, Cvir_B.np, Cs1.np)
     
     # Ca2 = D_B * S * Cocc_A  [C++ line 6772]
     Ca2 = chain_gemm_einsums([D_B, S, Cocc_A])
@@ -2722,18 +2722,18 @@ def exchange(cache, jk, do_print=True):
 
     # Build potentials using psi4.core.Matrix operations
     h_A = cache["V_A"].clone()
-    h_A.axpy(2.0, cache["J_A"])
-    h_A.axpy(-1.0, cache["K_A"])
+    ein.core.axpy(2.0, cache["J_A"].np, h_A.np)
+    ein.core.axpy(-1.0, cache["K_A"].np, h_A.np)
 
     h_B = cache["V_B"].clone()
-    h_B.axpy(2.0, cache["J_B"])
-    h_B.axpy(-1.0, cache["K_B"])
+    ein.core.axpy(2.0, cache["J_B"].np, h_B.np)
+    ein.core.axpy(-1.0, cache["K_B"].np, h_B.np)
 
     w_A = cache["V_A"].clone()
-    w_A.axpy(2.0, cache["J_A"])
+    ein.core.axpy(2.0, cache["J_A"].np, w_A.np)
 
     w_B = cache["V_B"].clone()
-    w_B.axpy(2.0, cache["J_B"])
+    ein.core.axpy(2.0, cache["J_B"].np, w_B.np)
 
     # Build inverse exchange metric
     nocc_A = cache["Cocc_A"].shape[1]
@@ -2887,9 +2887,9 @@ def induction(
     # Exch-Ind Potential A
     EX_A = K_B.clone()
     EX_A.scale(-1.0)
-    EX_A.axpy(-2.0, J_O)
-    EX_A.axpy(1.0, K_O)
-    EX_A.axpy(2.0, J_P_B)
+    ein.core.axpy(-2.0, J_O.np, EX_A.np)
+    ein.core.axpy(1.0, K_O.np, EX_A.np)
+    ein.core.axpy(2.0, J_P_B.np, EX_A.np)
 
     # Apply all the axpy operations to EX_A
     S_DB, S_DB_VA, S_DB_VA_DB_S = chain_gemm_einsums(
@@ -2904,20 +2904,20 @@ def induction(
         [S_DB, S, D_A, V_B],
         return_tensors=[False, True, True],
     )
-    EX_A.axpy(-1.0, S_DB_VA)
-    EX_A.axpy(-2.0, S_DB_JA)
-    EX_A.axpy(1.0, chain_gemm_einsums([S_DB, K_A]))
-    EX_A.axpy(1.0, S_DB_S_DA_VB)
-    EX_A.axpy(2.0, chain_gemm_einsums([S_DB_S_DA, J_B]))
-    EX_A.axpy(1.0, S_DB_VA_DB_S)
-    EX_A.axpy(2.0, S_DB_JA_DB_S)
-    EX_A.axpy(-1.0, chain_gemm_einsums([S_DB, K_O], ["N", "T"]))
-    EX_A.axpy(-1.0, chain_gemm_einsums([V_B, D_B, S]))
-    EX_A.axpy(-2.0, chain_gemm_einsums([J_B, D_B, S]))
-    EX_A.axpy(1.0,  chain_gemm_einsums([K_B, D_B, S]))
-    EX_A.axpy(1.0,  chain_gemm_einsums([V_B, D_A, S, D_B, S]))
-    EX_A.axpy(2.0,  chain_gemm_einsums([J_B, D_A, S, D_B, S]))
-    EX_A.axpy(-1.0, chain_gemm_einsums([K_O, D_B, S]))
+    ein.core.axpy(-1.0, S_DB_VA.np, EX_A.np)
+    ein.core.axpy(-2.0, S_DB_JA.np, EX_A.np)
+    ein.core.axpy(1.0, chain_gemm_einsums([S_DB, K_A]).np, EX_A.np)
+    ein.core.axpy(1.0, S_DB_S_DA_VB.np, EX_A.np)
+    ein.core.axpy(2.0, chain_gemm_einsums([S_DB_S_DA, J_B]).np, EX_A.np)
+    ein.core.axpy(1.0, S_DB_VA_DB_S.np, EX_A.np)
+    ein.core.axpy(2.0, S_DB_JA_DB_S.np, EX_A.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([S_DB, K_O], ["N", "T"]).np, EX_A.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([V_B, D_B, S]).np, EX_A.np)
+    ein.core.axpy(-2.0, chain_gemm_einsums([J_B, D_B, S]).np, EX_A.np)
+    ein.core.axpy(1.0,  chain_gemm_einsums([K_B, D_B, S]).np, EX_A.np)
+    ein.core.axpy(1.0,  chain_gemm_einsums([V_B, D_A, S, D_B, S]).np, EX_A.np)
+    ein.core.axpy(2.0,  chain_gemm_einsums([J_B, D_A, S, D_B, S]).np, EX_A.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([K_O, D_B, S]).np, EX_A.np)
 
     EX_A_MO_1 = chain_gemm_einsums(
         [cache['Cocc_A'], EX_A, cache['Cvir_A']],
@@ -2950,9 +2950,9 @@ def induction(
     # Exch-Ind Potential B
     EX_B = K_A.clone()
     EX_B.scale(-1.0)
-    EX_B.axpy(-2.0, J_O)
-    EX_B.axpy(1.0, core.Matrix.from_array(_to_numpy(K_O).T))
-    EX_B.axpy(2.0, J_P_A)
+    ein.core.axpy(-2.0, J_O.np, EX_B.np)
+    ein.core.axpy(1.0, K_O.np, EX_B.np.T)
+    ein.core.axpy(2.0, J_P_A.np, EX_B.np)
     cache['J_P_A'] = J_P_A
     cache['J_P_B'] = J_P_B
 
@@ -2970,20 +2970,20 @@ def induction(
     )
 
     # Apply all the axpy operations to EX_B
-    EX_B.axpy(-1.0, S_DA_VB)
-    EX_B.axpy(-2.0, S_DA_JB)
-    EX_B.axpy(1.0, chain_gemm_einsums([S_DA, K_B]))
-    EX_B.axpy(1.0, S_DA_S_DB_VA)
-    EX_B.axpy(2.0, chain_gemm_einsums([S_DA_S_DB, J_A]))
-    EX_B.axpy(1.0, S_DA_VB_DA_S)
-    EX_B.axpy(2.0, S_DA_JB_DA_S)
-    EX_B.axpy(-1.0, chain_gemm_einsums([S_DA, K_O]))
-    EX_B.axpy(-1.0, chain_gemm_einsums([V_A, D_A, S]))
-    EX_B.axpy(-2.0, chain_gemm_einsums([J_A, D_A, S]))
-    EX_B.axpy(1.0, chain_gemm_einsums([K_A, D_A, S]))
-    EX_B.axpy(1.0, chain_gemm_einsums([V_A, D_B, S, D_A, S]))
-    EX_B.axpy(2.0, chain_gemm_einsums([J_A, D_B, S, D_A, S]))
-    EX_B.axpy(-1.0, chain_gemm_einsums([K_O, D_A, S], ["T", "N", "N"]))
+    ein.core.axpy(-1.0, S_DA_VB.np, EX_B.np)
+    ein.core.axpy(-2.0, S_DA_JB.np, EX_B.np)
+    ein.core.axpy(1.0, chain_gemm_einsums([S_DA, K_B]).np, EX_B.np)
+    ein.core.axpy(1.0, S_DA_S_DB_VA.np, EX_B.np)
+    ein.core.axpy(2.0, chain_gemm_einsums([S_DA_S_DB, J_A]).np, EX_B.np)
+    ein.core.axpy(1.0, S_DA_VB_DA_S.np, EX_B.np)
+    ein.core.axpy(2.0, S_DA_JB_DA_S.np, EX_B.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([S_DA, K_O]).np, EX_B.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([V_A, D_A, S]).np, EX_B.np)
+    ein.core.axpy(-2.0, chain_gemm_einsums([J_A, D_A, S]).np, EX_B.np)
+    ein.core.axpy(1.0, chain_gemm_einsums([K_A, D_A, S]).np, EX_B.np)
+    ein.core.axpy(1.0, chain_gemm_einsums([V_A, D_B, S, D_A, S]).np, EX_B.np)
+    ein.core.axpy(2.0, chain_gemm_einsums([J_A, D_B, S, D_A, S]).np, EX_B.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([K_O, D_A, S], ["T", "N", "N"]).np, EX_B.np)
 
     EX_B_MO_1 = chain_gemm_einsums(
         [cache['Cocc_B'], EX_B, cache['Cvir_B']],
@@ -2995,11 +2995,11 @@ def induction(
     # Build electrostatic potentials - $\omega_A$ = w_A, Eq. 8
     w_A = V_A.clone()
     w_A.name = "w_A"
-    w_A.axpy(2.0, J_A)
+    ein.core.axpy(2.0, J_A.np, w_A.np)
 
     w_B = V_B.clone()
     w_B.name = "w_B"
-    w_B.axpy(2.0, J_B)
+    ein.core.axpy(2.0, J_B.np, w_B.np)
 
     w_B_MOA_1 = chain_gemm_einsums(
         [cache['Cocc_A'], w_B, cache['Cvir_A']],
