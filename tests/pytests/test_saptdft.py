@@ -6,6 +6,7 @@ from psi4 import core
 import numpy as np
 import qcelemental as qcel
 from pprint import pprint as pp
+
 # from addons import uusing
 import pandas as pd
 
@@ -109,7 +110,8 @@ def test_sapt_dft_compute_ddft_d4():
     IND = psi4.core.variable("SAPT IND ENERGY")
     DELTA_HF = psi4.core.variable("SAPT(DFT) DELTA HF")
     DDFT = psi4.core.variable("SAPT(DFT) DELTA DFT")
-    DFT_IE_from_dDFT = (DDFT + ELST + EXCH + IND - DELTA_HF) * hartree_to_kcalmol
+    DFT_IE_from_dDFT = (DDFT + ELST + EXCH + IND -
+                        DELTA_HF) * hartree_to_kcalmol
     assert compare_values(DFT_IE_from_dDFT, DFT_IE, 7, "DFT IE")
     assert compare_values(-4.130018048599092, DFT_IE, 7, "DFT IE")
     print(f"dDFT: {DFT_IE_from_dDFT=}")
@@ -238,7 +240,8 @@ def test_sapt_dft_compute_ddft_d4_diskdf():
     IND = psi4.core.variable("SAPT IND ENERGY")
     DELTA_HF = psi4.core.variable("SAPT(DFT) DELTA HF")
     DDFT = psi4.core.variable("SAPT(DFT) DELTA DFT")
-    DFT_IE_from_dDFT = (DDFT + ELST + EXCH + IND - DELTA_HF) * hartree_to_kcalmol
+    DFT_IE_from_dDFT = (DDFT + ELST + EXCH + IND -
+                        DELTA_HF) * hartree_to_kcalmol
     assert compare_values(DFT_IE_from_dDFT, DFT_IE, 7, "DFT IE")
     assert compare_values(-4.130018048599092, DFT_IE, 7, "DFT IE")
     print(f"dDFT: {DFT_IE_from_dDFT=}")
@@ -361,7 +364,8 @@ def test_sapt_dft_compute_ddft_d4_auto_grac():
     IND = psi4.core.variable("SAPT IND ENERGY")
     DELTA_HF = psi4.core.variable("SAPT(DFT) DELTA HF")
     DDFT = psi4.core.variable("SAPT(DFT) DELTA DFT")
-    DFT_IE_from_dDFT = (DDFT + ELST + EXCH + IND - DELTA_HF) * hartree_to_kcalmol
+    DFT_IE_from_dDFT = (DDFT + ELST + EXCH + IND -
+                        DELTA_HF) * hartree_to_kcalmol
     assert compare_values(DFT_IE_from_dDFT, DFT_IE, 7, "DFT IE")
     assert compare_values(-4.130018048599092, DFT_IE, 7, "DFT IE")
     print(f"dDFT: {DFT_IE_from_dDFT=}")
@@ -634,13 +638,17 @@ no_com
     all_external_potentials = {
         "A": [
             [0.417, np.array([-0.5496, -0.6026, 1.5720]) / psi_bohr2angstroms],
-            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) / psi_bohr2angstroms],
+            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) /
+             psi_bohr2angstroms],
             [0.417, np.array([-1.9361, -0.4028, 2.2769]) / psi_bohr2angstroms],
         ],
         "B": [
-            [0.417, np.array([-2.5628, -0.8269, -1.6696]) / psi_bohr2angstroms],
-            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) / psi_bohr2angstroms],
-            [0.417, np.array([-1.8988, -0.4993, -0.3072]) / psi_bohr2angstroms],
+            [0.417, np.array([-2.5628, -0.8269, -1.6696]) /
+             psi_bohr2angstroms],
+            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) /
+             psi_bohr2angstroms],
+            [0.417, np.array([-1.8988, -0.4993, -0.3072]) /
+             psi_bohr2angstroms],
         ],
         "C": [
             [0.417, np.array([1.1270, 1.5527, -0.1658]) / psi_bohr2angstroms],
@@ -835,13 +843,17 @@ no_com
     all_external_potentials = {
         "A": [
             [0.417, np.array([-0.5496, -0.6026, 1.5720]) / psi_bohr2angstroms],
-            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) / psi_bohr2angstroms],
+            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) /
+             psi_bohr2angstroms],
             [0.417, np.array([-1.9361, -0.4028, 2.2769]) / psi_bohr2angstroms],
         ],
         "B": [
-            [0.417, np.array([-2.5628, -0.8269, -1.6696]) / psi_bohr2angstroms],
-            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) / psi_bohr2angstroms],
-            [0.417, np.array([-1.8988, -0.4993, -0.3072]) / psi_bohr2angstroms],
+            [0.417, np.array([-2.5628, -0.8269, -1.6696]) /
+             psi_bohr2angstroms],
+            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) /
+             psi_bohr2angstroms],
+            [0.417, np.array([-1.8988, -0.4993, -0.3072]) /
+             psi_bohr2angstroms],
         ],
         "C": [
             [0.417, np.array([1.1270, 1.5527, -0.1658]) / psi_bohr2angstroms],
@@ -943,13 +955,17 @@ no_com
     external_potentials = {
         "A": [
             [0.417, np.array([-0.5496, -0.6026, 1.5720]) / psi_bohr2angstroms],
-            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) / psi_bohr2angstroms],
+            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) /
+             psi_bohr2angstroms],
             [0.417, np.array([-1.9361, -0.4028, 2.2769]) / psi_bohr2angstroms],
         ],
         "B": [
-            [0.417, np.array([-2.5628, -0.8269, -1.6696]) / psi_bohr2angstroms],
-            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) / psi_bohr2angstroms],
-            [0.417, np.array([-1.8988, -0.4993, -0.3072]) / psi_bohr2angstroms],
+            [0.417, np.array([-2.5628, -0.8269, -1.6696]) /
+             psi_bohr2angstroms],
+            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) /
+             psi_bohr2angstroms],
+            [0.417, np.array([-1.8988, -0.4993, -0.3072]) /
+             psi_bohr2angstroms],
         ],
         "C": [
             [0.417, np.array([1.1270, 1.5527, -0.1658]) / psi_bohr2angstroms],
@@ -987,7 +1003,8 @@ no_com
         ["Eind", "SAPT IND ENERGY"],
         ["Etot", "SAPT TOTAL ENERGY"],
     ]
-    calculated_fisapt0_energies = {k1: psi4.core.variable(k2) for k1, k2 in key_labels}
+    calculated_fisapt0_energies = {
+        k1: psi4.core.variable(k2) for k1, k2 in key_labels}
     calculated_fisapt0_energies["Enuc"] = mol.nuclear_repulsion_energy()
 
     # Run the SAPT(HF) energy calculation
@@ -997,7 +1014,8 @@ no_com
         molecule=mol,
     )
 
-    calculated_sapthf_energies = {k1: psi4.core.variable(k2) for k1, k2 in key_labels}
+    calculated_sapthf_energies = {
+        k1: psi4.core.variable(k2) for k1, k2 in key_labels}
     calculated_sapthf_energies["Enuc"] = mol.nuclear_repulsion_energy()
 
     print("FISAPT0:")
@@ -1237,56 +1255,23 @@ def test_einsum_terms():
             ref, psi4.variable(k) * 1000, 8, "!hyb, xd=none, !dHF: " + k
         )
 
+
 def test_saptdft_inf():
-    """
-    #! SAPT(DFT) aug-cc-pVDZ interaction energy between Ne and Ar atoms.
-    
-    Eref = {'Exch-Ind20,u (A<-B)':           0.00749283, # TEST
-            'Exch-Ind20,u (A->B)':           0.07674835, # TEST
-            'Exch-Ind20,u':                  0.08424119, # TEST
-            'Exch-Ind20,u (A<-B) (S^inf)':   0.00749701, # TEST
-            'Exch-Ind20,u (A->B) (S^inf)':   0.07677809, # TEST
-            'Exch-Ind20,u (S^inf)':          0.08427511, # TEST
-            'Exch-Ind20,r (A<-B)':           0.00838528, # TEST
-            'Exch-Ind20,r (A->B)':           0.08663184, # TEST
-            'Exch-Ind20,r':                  0.09501712, # TEST
-            'Exch-Ind20,r (A<-B) (S^inf)':   0.00839011, # TEST
-            'Exch-Ind20,r (A->B) (S^inf)':   0.08666563, # TEST
-            'Exch-Ind20,r (S^inf)':          0.09505574} # TEST
-    
-    
-    molecule dimer {
-      Ne
-      --
-      Ar 1 6.5
-      units bohr
-    }
-    
-    set {
-        basis              aug-cc-pvdz
-        scf_type           df
-        DO_IND_EXCH_SINF   True
-    }
-    
-    set SAPT_DFT_FUNCTIONAL HF
-    energy('sapt(dft)', molecule=dimer)
-    
-    for k, v in Eref.items():                                  # TEST
-        compare_values(v / 1000.0, psi4.variable(k), 6, k) # TEST
-    """
     # implement this test
-    Eref = {'Exch-Ind20,u (A<-B)':           0.00749283, # TEST
-            'Exch-Ind20,u (A->B)':           0.07674835, # TEST
-            'Exch-Ind20,u':                  0.08424119, # TEST
-            'Exch-Ind20,u (A<-B) (S^inf)':   0.00749701, # TEST
-            'Exch-Ind20,u (A->B) (S^inf)':   0.07677809, # TEST
-            'Exch-Ind20,u (S^inf)':          0.08427511, # TEST
-            'Exch-Ind20,r (A<-B)':           0.00838528, # TEST
-            'Exch-Ind20,r (A->B)':           0.08663184, # TEST
-            'Exch-Ind20,r':                  0.09501712, # TEST
-            'Exch-Ind20,r (A<-B) (S^inf)':   0.00839011, # TEST
-            'Exch-Ind20,r (A->B) (S^inf)':   0.08666563, # TEST
-            'Exch-Ind20,r (S^inf)':          0.09505574} # TEST
+    Eref = {
+        "Exch-Ind20,u (A<-B)": 0.00749283,  # TEST
+        "Exch-Ind20,u (A->B)": 0.07674835,  # TEST
+        "Exch-Ind20,u": 0.08424119,  # TEST
+        "Exch-Ind20,u (A<-B) (S^inf)": 0.00749701,  # TEST
+        "Exch-Ind20,u (A->B) (S^inf)": 0.07677809,  # TEST
+        "Exch-Ind20,u (S^inf)": 0.08427511,  # TEST
+        "Exch-Ind20,r (A<-B)": 0.00838528,  # TEST
+        "Exch-Ind20,r (A->B)": 0.08663184,  # TEST
+        "Exch-Ind20,r": 0.09501712,  # TEST
+        "Exch-Ind20,r (A<-B) (S^inf)": 0.00839011,  # TEST
+        "Exch-Ind20,r (A->B) (S^inf)": 0.08666563,  # TEST
+        "Exch-Ind20,r (S^inf)": 0.09505574,
+    }  # TEST
     mol = psi4.geometry("""
   Ne
   --
@@ -1307,6 +1292,42 @@ def test_saptdft_inf():
         assert compare_values(
             ref, psi4.variable(k), 6, "sapt(dft) inf exch-ind20: " + k
         )
+    psi4.core.clean()
+    mol = psi4.geometry("""
+0 1
+O -0.064997  0.000000  1.202015
+H  0.817736  0.000000  1.573527
+H  0.070857  0.000000  0.246803
+--
+0 1
+O  0.060546  0.000000 -1.130293
+H -0.408968 -0.760178 -1.479405
+H -0.408968  0.760178 -1.479405
+
+units angstrom
+no_reorient
+symmetry c1
+""")
+    psi4.set_options(
+        {
+            "basis": "jun-cc-pvdz",
+            "df_basis_scf": "aug-cc-pvtz-jkfit",
+            "df_basis_mp2": "aug-cc-pvtz-ri",
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
+            "scf_type": "mem_df",
+            "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
+            "SAPT_DFT_FUNCTIONAL": "HF",
+            "DO_DISP_EXCH_SINF": True,
+        }
+    )
+    psi4.energy("sapt(dft)", molecule=mol)
+    assert compare_values(
+        0.00324766,
+        psi4.variable("sapt exch-disp20(s^inf) energy"),
+        7,
+        "SAPT EXCH-DISP20(S^inf) ENERGY",
+    )
 
 
 if __name__ == "__main__":
