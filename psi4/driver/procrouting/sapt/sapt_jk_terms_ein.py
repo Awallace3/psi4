@@ -2754,7 +2754,6 @@ def exchange(cache, jk, do_print=True):
     # Save some intermediate tensors to avoid recomputation in the next steps
     DA_S_DB_S_PA = chain_gemm_einsums([D_A, S, D_B, S, P_A])
     Exch_s2 -= 2.0 * ein.core.dot(w_B.np, DA_S_DB_S_PA.np)
-    Exch_s2 -= 2.0 * ein.core.dot(w_B.np, DA_S_DB_S_PA.np)
 
     DB_S_DA_S_PB = chain_gemm_einsums([D_B, S, D_A, S, P_B])
     Exch_s2 -= 2.0 * ein.core.dot(w_A.np, DB_S_DA_S_PB.np)
