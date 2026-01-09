@@ -2725,7 +2725,6 @@ def exchange(cache, jk, do_print=True):
 
     # Build potentials using psi4.core.Matrix operations
     h_A = cache["V_A"].clone()
-    print("EINSUMS EXCHANGE")
     h_A.axpy(2.0, cache["J_A"])
     h_A.axpy(-1.0, cache["K_A"])
 
@@ -2789,12 +2788,6 @@ def exchange(cache, jk, do_print=True):
 
     JT_A, JT_AB, Jij = jk.J()
     KT_A, KT_AB, Kij = jk.K()
-    JT_A = JT_A.clone()
-    JT_AB = JT_AB.clone()
-    Jij = Jij.clone()
-    KT_A = KT_A.clone()
-    KT_AB = KT_AB.clone()
-    Kij = Kij.clone()
 
     # Start S^2
     Exch_s2 = 0.0
