@@ -202,14 +202,14 @@ def cg_solver(
 
 
 def cg_solver_ein(
-    rhs_vec: List[ein.core.RuntimeTensor],
+    rhs_vec: List[np.ndarray],
     hx_function: Callable,
     preconditioner: Callable,
-    guess: Optional[List[ein.core.RuntimeTensor]] = None,
+    guess: Optional[List[np.ndarray]] = None,
     printer: Optional[Callable] = None,
     printlvl: int = 1,
     maxiter: int = 20,
-    rcond: float = 1.e-6) -> List[ein.core.RuntimeTensor]:
+    rcond: float = 1.e-6) -> List[np.ndarray]:
     """
     Solves the :math:`Ax = b` linear equations via Conjugate Gradient. The `A` matrix must be a hermitian, positive definite matrix.
 

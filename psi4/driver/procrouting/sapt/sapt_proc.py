@@ -1059,8 +1059,7 @@ def sapt_dft(
             nfrozen_A = wfn_A.basisset().n_frozen_core(core.get_global_option("FREEZE_CORE"),wfn_A.molecule())
             nfrozen_B = wfn_B.basisset().n_frozen_core(core.get_global_option("FREEZE_CORE"),wfn_B.molecule())
             
-        
-        if not do_fsapt and core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL") != "HF":
+        if not do_fsapt:
             core.timer_on("MP2 disp")
             cache_tmp = sapt_jk_terms.build_sapt_jk_cache(dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials)
             if core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":

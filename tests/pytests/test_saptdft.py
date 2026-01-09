@@ -1237,11 +1237,82 @@ def test_einsum_terms():
             ref, psi4.variable(k) * 1000, 8, "!hyb, xd=none, !dHF: " + k
         )
 
+def test_saptdft_inf():
+    """
+    #! SAPT(DFT) aug-cc-pVDZ interaction energy between Ne and Ar atoms.
+    
+    Eref = {'Exch-Ind20,u (A<-B)':           0.00749283, # TEST
+            'Exch-Ind20,u (A->B)':           0.07674835, # TEST
+            'Exch-Ind20,u':                  0.08424119, # TEST
+            'Exch-Ind20,u (A<-B) (S^inf)':   0.00749701, # TEST
+            'Exch-Ind20,u (A->B) (S^inf)':   0.07677809, # TEST
+            'Exch-Ind20,u (S^inf)':          0.08427511, # TEST
+            'Exch-Ind20,r (A<-B)':           0.00838528, # TEST
+            'Exch-Ind20,r (A->B)':           0.08663184, # TEST
+            'Exch-Ind20,r':                  0.09501712, # TEST
+            'Exch-Ind20,r (A<-B) (S^inf)':   0.00839011, # TEST
+            'Exch-Ind20,r (A->B) (S^inf)':   0.08666563, # TEST
+            'Exch-Ind20,r (S^inf)':          0.09505574} # TEST
+    
+    
+    molecule dimer {
+      Ne
+      --
+      Ar 1 6.5
+      units bohr
+    }
+    
+    set {
+        basis              aug-cc-pvdz
+        scf_type           df
+        DO_IND_EXCH_SINF   True
+    }
+    
+    set SAPT_DFT_FUNCTIONAL HF
+    energy('sapt(dft)', molecule=dimer)
+    
+    for k, v in Eref.items():                                  # TEST
+        compare_values(v / 1000.0, psi4.variable(k), 6, k) # TEST
+    """
+    # implement this test
+    Eref = {'Exch-Ind20,u (A<-B)':           0.00749283, # TEST
+            'Exch-Ind20,u (A->B)':           0.07674835, # TEST
+            'Exch-Ind20,u':                  0.08424119, # TEST
+            'Exch-Ind20,u (A<-B) (S^inf)':   0.00749701, # TEST
+            'Exch-Ind20,u (A->B) (S^inf)':   0.07677809, # TEST
+            'Exch-Ind20,u (S^inf)':          0.08427511, # TEST
+            'Exch-Ind20,r (A<-B)':           0.00838528, # TEST
+            'Exch-Ind20,r (A->B)':           0.08663184, # TEST
+            'Exch-Ind20,r':                  0.09501712, # TEST
+            'Exch-Ind20,r (A<-B) (S^inf)':   0.00839011, # TEST
+            'Exch-Ind20,r (A->B) (S^inf)':   0.08666563, # TEST
+            'Exch-Ind20,r (S^inf)':          0.09505574} # TEST
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ar 1 6.5
+  units bohr
+    """)
+    psi4.set_options(
+        {
+            "basis": "aug-cc-pvdz",
+            "scf_type": "df",
+            "DO_IND_EXCH_SINF": True,
+            "SAPT_DFT_FUNCTIONAL": "HF",
+        }
+    )
+    psi4.energy("sapt(dft)", molecule=mol)
+    for k, v in Eref.items():  # TEST
+        ref = v / 1000.0
+        assert compare_values(
+            ref, psi4.variable(k), 6, "sapt(dft) inf exch-ind20: " + k
+        )
+
 
 if __name__ == "__main__":
     psi4.set_memory("64 GB")
     psi4.set_num_threads(12)
-
+    test_saptdft_inf()
     # test_fsaptdft_fsapt0()
     # test_fsapt0_fsaptdft()
     # test_einsum_terms()
