@@ -6212,6 +6212,40 @@ void FISAPT::find() {
 
     // V_A->set_name("V_A");
     // V_A->print();
+    // Locc_B     ->set_name("Cocc_A") ;
+    // Cvir_B     ->set_name("Cvir_A") ;
+    // Locc_A     ->set_name("Cocc_B") ;
+    // Cvir_A     ->set_name("Cvir_B") ;
+    // S          ->set_name("S")      ;
+    // D_B        ->set_name("D_A")    ;
+    // V_B        ->set_name("V_A")    ;
+    // J_B        ->set_name("J_A")    ;
+    // K_B        ->set_name("K_A")    ;
+    // D_A        ->set_name("D_B")    ;
+    // V_A        ->set_name("V_B")    ;
+    // J_A        ->set_name("J_B")    ;
+    // K_A        ->set_name("K_B")    ;
+    // J_O        ->set_name("J_O")    ;
+    // K_O        ->set_name("K_O")    ;
+    // J_P_B      ->set_name("J_P_B")  ;
+    // J_P_A      ->set_name("J_P_A")  ;
+    // Locc_B     ->print()            ;
+    // Cvir_B     ->print()            ;
+    // Locc_A     ->print()            ;
+    // Cvir_A     ->print()            ;
+    // S          ->print()            ;
+    // D_B        ->print()            ;
+    // V_B        ->print()            ;
+    // J_B        ->print()            ;
+    // K_B        ->print()            ;
+    // D_A        ->print()            ;
+    // V_A        ->print()            ;
+    // J_A        ->print()            ;
+    // K_A        ->print()            ;
+    // J_O        ->print()            ;
+    // K_O        ->print()            ;
+    // J_P_B      ->print()            ;
+    // J_P_A      ->print()            ;
 
     // Remove prints after debugging
     // wBT->set_name("wBT");

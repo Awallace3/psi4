@@ -120,22 +120,27 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars, basis_set=None, do_fl
     other_keys = [
         "S",
         "D_A",
-        "P_A",
-        "V_A",
         "J_A",
         "K_A",
+        "V_A",
         "D_B",
-        "P_B",
-        "V_B",
         "J_B",
-        "J_O",
         "K_B",
+        "V_B",
+
         "K_O",
-        "J_P_A",
-        "J_P_B",
+        "J_O",
+        # "J_P_A",
+        # "J_P_B",
+        # fdisp
+        "P_A",
+        "P_B",
     ]
     for key in other_keys:
         matrix_cache[key] = to_matrix(cache[key])
+    # J_P_A and J_P_B have flipped terminology in FISAPT...
+    matrix_cache["J_P_A"] = to_matrix(cache["J_P_B"])
+    matrix_cache["J_P_B"] = to_matrix(cache["J_P_A"])
 
     # Vector keys for eigenvalues
     vector_keys = {
