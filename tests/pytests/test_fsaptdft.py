@@ -1202,12 +1202,14 @@ no_com
 
     print("REF")
     print(ref_df[['Frag1', 'Elst', 'IndAB', 'IndBA', 'Disp', 'Total']])
-
-    # NOTE: The FISAPT path (SAPT_DFT_DO_FSAPT="FISAPT") uses IBO-localized orbitals
-    # which produce different per-fragment induction distributions than the SAPTDFT
-    # path (which uses canonical orbitals). Total energies match, but per-fragment
-    # breakdowns differ. We skip per-fragment comparison for this path.
-    # Total energy comparison is done above via Eref/Epsi.
+    for col in ["Elst", "Exch", "IndAB", "IndBA", "Disp", "EDisp", "Total"]:
+        for i in range(len(ref_df)):
+            compare_values(
+                ref_df[col].iloc[i],
+                df[col].iloc[i],
+                4,
+                f"{ref_df['Frag1'].iloc[i]} {ref_df['Frag2'].iloc[i]} {col}",
+            )
 
 
 @pytest.mark.saptdft

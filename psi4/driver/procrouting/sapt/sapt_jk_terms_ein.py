@@ -1805,11 +1805,11 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         core.print_out(f"    Ind20,u (B<-A)          = {Ind20u_BA*1000:18.8f} [mEh]\n")
         assert abs(scalars['Ind20,u (A<-B)'] - Ind20u_AB) < 1e-8, f"Ind20u_AB mismatch: {1000 * scalars['Ind20,u (A<-B)']:.8f} vs {1000 * Ind20u_AB:.8f}"
         assert abs(scalars['Ind20,u (A->B)'] - Ind20u_BA) < 1e-8, f"Ind20u_BA mismatch: {1000 * scalars['Ind20,u (A->B)']:.8f} vs {1000 * Ind20u_BA:.8f}"
+        core.print_out(f"    Ind20,u                 = {Ind20u_AB + Ind20u_BA*1000:18.8f} [mEh]\n")
         core.print_out(f"    Exch-Ind20,u (A<-B)     = {ExchInd20u_AB*1000:18.8f} [mEh]\n")
         core.print_out(f"    Exch-Ind20,u (B<-A)     = {ExchInd20u_BA*1000:18.8f} [mEh]\n")
         assert abs(scalars['Exch-Ind20,u (A<-B)'] - ExchInd20u_AB) < 1e-8, f"ExchInd20u_AB mismatch: {1000 * scalars['Exch-Ind20,u (A<-B)']:.8f} vs {1000 * ExchInd20u_AB:.8f}"
         assert abs(scalars['Exch-Ind20,u (A->B)'] - ExchInd20u_BA) < 1e-8, f"ExchInd20u_BA mismatch: {1000 * scalars['Exch-Ind20,u (A->B)']:.8f} vs {1000 * ExchInd20u_BA:.8f}"
-        core.print_out(f"    Ind20,u                 = {Ind20u_AB + Ind20u_BA*1000:18.8f} [mEh]\n")
         core.print_out(f"    Exch-Ind20,u            = {ExchInd20u_AB + ExchInd20u_BA*1000:18.8f} [mEh]\n\n")
 
     # Induction scaling
