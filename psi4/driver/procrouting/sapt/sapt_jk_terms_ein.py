@@ -2641,7 +2641,7 @@ def chain_gemm_matrix(
     return returned_tensors
 
 def chain_gemm_einsums(
-    tensors: list[ein.core.RuntimeTensorD],
+    tensors: list[core.Matrix],
     transposes: list[str] = None,
     prefactors_C: list[float] = None,
     prefactors_AB: list[float] = None,
@@ -2652,7 +2652,7 @@ def chain_gemm_einsums(
 
     Parameters
     ----------
-    tensors : list[ein.core.RuntimeTensorD]
+    tensors : list[core.Matrix]
         List of tensors to be contracted.
     transposes : list[str], optional
         List of transpose operations for each tensor, where "N" means no transpose and "T" means transpose.
@@ -2690,14 +2690,11 @@ def chain_gemm_einsums(
             if T2 == "T":
                 B_size = B.shape[0]
 
-            # Get numpy array views for gemm - all inputs should be psi4.core.Matrix
-            A_np = A.np
-            B_np = B.np
             # Initialize output as psi4.core.Matrix with zeros
             C = core.Matrix(A_size, B_size)
             C.zero()
             # Use ein.core.gemm to write to C.np
-            ein.core.gemm(T1, T2, prefactors_AB[i], A_np, B_np, prefactors_C[i], C.np)
+            ein.core.gemm(T1, T2, prefactors_AB[i], A.np, B.np, prefactors_C[i], C.np)
             computed_tensors.append(C)
     except Exception as e:
         raise ValueError(f"Error in einsum_chain_gemm: {e}\n{i = }\n{A = }\n{B = }\n{T1 = }\n{T2 = }")
@@ -2794,11 +2791,12 @@ def exchange(cache, jk, do_print=True):
 
     # Save some intermediate tensors to avoid recomputation in the next steps
     DA_S_DB_S_PA = chain_gemm_einsums([D_A, S, D_B, S, P_A])
-    Exch_s2 -= 2.0 * matrix_dot(w_B, DA_S_DB_S_PA)
+    Exch_s2 -= 2.0 * ein.core.dot(w_B.np, DA_S_DB_S_PA.np)
+    Exch_s2 -= 2.0 * ein.core.dot(w_B.np, DA_S_DB_S_PA.np)
 
     DB_S_DA_S_PB = chain_gemm_einsums([D_B, S, D_A, S, P_B])
-    Exch_s2 -= 2.0 * matrix_dot(w_A, DB_S_DA_S_PB)
-    Exch_s2 -= 2.0 * matrix_dot(Kij, chain_gemm_einsums([P_A, S, D_B]))
+    Exch_s2 -= 2.0 * ein.core.dot(w_A.np, DB_S_DA_S_PB.np)
+    Exch_s2 -= 2.0 * ein.core.dot(Kij.np, chain_gemm_einsums([P_A, S, D_B]).np)
 
     if do_print:
         core.print_out(print_sapt_var("Exch10(S^2) ", Exch_s2, short=True))
@@ -2806,14 +2804,14 @@ def exchange(cache, jk, do_print=True):
 
     # Start Sinf
     Exch10 = 0.0
-    Exch10 -= 2.0 * matrix_dot(D_A, cache["K_B"])
-    Exch10 += 2.0 * matrix_dot(T_AA, h_B)
-    Exch10 += 2.0 * matrix_dot(T_BB, h_A)
-    Exch10 += 2.0 * np.vdot(_to_numpy(T_AB), _to_numpy(h_A) + _to_numpy(h_B))
-    Exch10 += 4.0 * np.vdot(_to_numpy(T_BB), _to_numpy(JT_AB) - 0.5 * _to_numpy(KT_AB))
-    Exch10 += 4.0 * np.vdot(_to_numpy(T_AA), _to_numpy(JT_AB) - 0.5 * _to_numpy(KT_AB).T)
-    Exch10 += 4.0 * np.vdot(_to_numpy(T_BB), _to_numpy(JT_A) - 0.5 * _to_numpy(KT_A))
-    Exch10 += 4.0 * np.vdot(_to_numpy(T_AB), _to_numpy(JT_AB) - 0.5 * _to_numpy(KT_AB).T)
+    Exch10 -= 2.0 * ein.core.dot(D_A.np, cache["K_B"].np)
+    Exch10 += 2.0 * ein.core.dot(T_AA.np, h_B.np)
+    Exch10 += 2.0 * ein.core.dot(T_BB.np, h_A.np)
+    Exch10 += 2.0 * ein.core.dot(T_AB.np, h_A.np + h_B.np)
+    Exch10 += 4.0 * ein.core.dot(T_BB.np, JT_AB.np - 0.5 * KT_AB.np)
+    Exch10 += 4.0 * ein.core.dot(T_AA.np, JT_AB.np - 0.5 * KT_AB.np.T)
+    Exch10 += 4.0 * ein.core.dot(T_BB.np, JT_A.np - 0.5 * KT_A.np)
+    Exch10 += 4.0 * ein.core.dot(T_AB.np, JT_AB.np - 0.5 * KT_AB.np.T)
 
     if do_print:
         core.set_variable("Exch10", Exch10)
@@ -2844,13 +2842,13 @@ def induction(
     S = cache["S"]
 
     D_A = cache["D_A"]
-    V_A = cache["V_A"].clone()
+    V_A = cache["V_A"]
 
     J_A = cache["J_A"]
     K_A = cache["K_A"]
 
     D_B = cache["D_B"]
-    V_B = cache["V_B"].clone()
+    V_B = cache["V_B"]
     J_B = cache["J_B"]
     K_B = cache["K_B"]
 
@@ -2881,11 +2879,6 @@ def induction(
 
     J_Ot, J_P_B, J_P_A = jk.J()
     K_Ot, K_P_B, K_P_A = jk.K()
-
-    J_P_B = J_P_B.clone()
-    J_P_A = J_P_A.clone()
-    K_P_B = K_P_B.clone()
-    K_P_A = K_P_A.clone()
 
     # Save for later usage in find()
     cache['J_P_A'] = J_P_A
