@@ -749,9 +749,9 @@ def electrostatics(cache, do_print=True):
         core.print_out("\n  ==> E10 Electrostatics <== \n\n")
 
     # Eq. 4 - use matrix_dot helper for Frobenius inner product
-    Elst10 = 2.0 * matrix_dot(cache["D_A"], cache["V_B"])
-    Elst10 += 2.0 * matrix_dot(cache["D_B"], cache["V_A"])
-    Elst10 += 4.0 * matrix_dot(cache["D_B"], cache["J_A"])
+    Elst10 = 2.0 * ein.core.dot(cache["D_A"].np, cache["V_B"].np)
+    Elst10 += 2.0 * ein.core.dot(cache["D_B"].np, cache["V_A"].np)
+    Elst10 += 4.0 * ein.core.dot(cache["D_B"].np, cache["J_A"].np)
     Elst10 += cache["nuclear_repulsion_energy"]
 
     if do_print:

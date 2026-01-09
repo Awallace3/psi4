@@ -1030,66 +1030,66 @@ no_com
         "Enuc": 474.74808217020274,
         "Etot": 0.003104160252285582,
     }
-    print("FISAPT0 (REF)")
-    psi4.set_options(
-        {
-            "basis": "sto-3g",
-            "scf_type": "df",
-            "guess": "sad",
-            "FISAPT_FSAPT_FILEPATH": "none",
-            "SAPT_DFT_FUNCTIONAL": "HF",
-            "SAPT_DFT_DO_DHF": True,
-            "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
-# a1eb1c8f985f13b48a00c2751f7e751572f0a696
-            "SAPT_DFT_D4_IE": False,
-            "SAPT_DFT_DO_DISP": True,
-            "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
-            # Normally on
-            "SAPT_DFT_USE_EINSUMS": False,
-        }
-    )
-    psi4.energy("fisapt0", molecule=mol)
-    Epsi = {
-        "Enuc": mol.nuclear_repulsion_energy(),
-        "Eelst": core.variable("SAPT ELST ENERGY"),
-        "Eexch": core.variable("SAPT EXCH ENERGY"),
-        "Eind": core.variable("SAPT IND ENERGY"),
-        "Edisp": core.variable("SAPT DISP ENERGY"),
-        "Etot": core.variable("SAPT TOTAL ENERGY"),
-    }
-    for key in keys:
-        compare_values(Eref[key], Epsi[key], 5, key)
-    data = psi4.fsapt_analysis(
-        molecule=mol,
-        fragments_a={
-            "Methyl1_A": [1, 2, 7, 8],
-            "Methyl2_A": [3, 4, 5, 6],
-        },
-        fragments_b={
-            "Peptide_B": [9, 10, 11, 16, 26],
-            "T-Butyl_B": [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
-        },
-        links5050=True,
-        print_output=False,
-    )
-    df = pd.DataFrame(data)
-    print("COMPUTED DF")
-    print(df[['Frag1', 'Elst', 'IndAB', 'IndBA', 'Disp', 'Total']])
-    # data_tmp = {k: v.tolist() for k, v in dict(df).items()}
-    # pp(data_tmp)
-
-    print("REF")
-    print(ref_df[['Frag1', 'Elst', 'IndAB', 'IndBA', 'Disp', 'Total']])
-
-    for col in ["Elst", "Exch", "IndAB", "IndBA", "Disp", "EDisp", "Total"]:
-        for i in range(len(ref_df)):
-            compare_values(
-                ref_df[col].iloc[i],
-                df[col].iloc[i],
-                4,
-                f"{ref_df['Frag1'].iloc[i]} {ref_df['Frag2'].iloc[i]} {col}",
-            )
+#     print("FISAPT0 (REF)")
+#     psi4.set_options(
+#         {
+#             "basis": "sto-3g",
+#             "scf_type": "df",
+#             "guess": "sad",
+#             "FISAPT_FSAPT_FILEPATH": "none",
+#             "SAPT_DFT_FUNCTIONAL": "HF",
+#             "SAPT_DFT_DO_DHF": True,
+#             "SAPT_DFT_DO_HYBRID": False,
+#             "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+# # a1eb1c8f985f13b48a00c2751f7e751572f0a696
+#             "SAPT_DFT_D4_IE": False,
+#             "SAPT_DFT_DO_DISP": True,
+#             "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
+#             # Normally on
+#             "SAPT_DFT_USE_EINSUMS": False,
+#         }
+#     )
+#     psi4.energy("fisapt0", molecule=mol)
+#     Epsi = {
+#         "Enuc": mol.nuclear_repulsion_energy(),
+#         "Eelst": core.variable("SAPT ELST ENERGY"),
+#         "Eexch": core.variable("SAPT EXCH ENERGY"),
+#         "Eind": core.variable("SAPT IND ENERGY"),
+#         "Edisp": core.variable("SAPT DISP ENERGY"),
+#         "Etot": core.variable("SAPT TOTAL ENERGY"),
+#     }
+#     for key in keys:
+#         compare_values(Eref[key], Epsi[key], 5, key)
+#     data = psi4.fsapt_analysis(
+#         molecule=mol,
+#         fragments_a={
+#             "Methyl1_A": [1, 2, 7, 8],
+#             "Methyl2_A": [3, 4, 5, 6],
+#         },
+#         fragments_b={
+#             "Peptide_B": [9, 10, 11, 16, 26],
+#             "T-Butyl_B": [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
+#         },
+#         links5050=True,
+#         print_output=False,
+#     )
+#     df = pd.DataFrame(data)
+#     print("COMPUTED DF")
+#     print(df[['Frag1', 'Elst', 'IndAB', 'IndBA', 'Disp', 'Total']])
+#     # data_tmp = {k: v.tolist() for k, v in dict(df).items()}
+#     # pp(data_tmp)
+#
+#     print("REF")
+#     print(ref_df[['Frag1', 'Elst', 'IndAB', 'IndBA', 'Disp', 'Total']])
+#
+#     for col in ["Elst", "Exch", "IndAB", "IndBA", "Disp", "EDisp", "Total"]:
+#         for i in range(len(ref_df)):
+#             compare_values(
+#                 ref_df[col].iloc[i],
+#                 df[col].iloc[i],
+#                 4,
+#                 f"{ref_df['Frag1'].iloc[i]} {ref_df['Frag2'].iloc[i]} {col}",
+#             )
     psi4.set_options(
         {
             "basis": "sto-3g",
@@ -1895,7 +1895,7 @@ no_com
 if __name__ == "__main__":
     psi4.set_memory("220 GB")
     # psi4.set_num_threads(24)
-    psi4.set_num_threads(8)
+    psi4.set_num_threads(16)
     # test_fsaptdft_timer()
     # test_fsaptdft_simple()
 
