@@ -88,9 +88,9 @@ def matrix_dot(A, B):
     float
         The scalar dot product.
     """
-    A_np = _to_numpy(A)
-    B_np = _to_numpy(B)
-    return np.vdot(A_np, B_np)
+    A.np = _to_numpy(A)
+    B.np = _to_numpy(B)
+    return np.vdot(A.np, B.np)
 
 
 def matrix_axpy(alpha, X, Y):
@@ -109,13 +109,13 @@ def matrix_axpy(alpha, X, Y):
     Y : psi4.core.Matrix
         Output matrix (modified in-place).
     """
-    X_np = _to_numpy(X)
+    X.np = _to_numpy(X)
     if isinstance(Y, core.Matrix):
-        Y.np[:] += alpha * X_np
+        Y.np[:] += alpha * X.np
     else:
         # For einsums tensors
-        Y_np = _to_numpy(Y)
-        Y_np[:] += alpha * X_np
+        Y.np = _to_numpy(Y)
+        Y.np[:] += alpha * X.np
 
 
 def matrix_copy(A, name=""):
@@ -156,8 +156,8 @@ def matrix_scale(A, alpha):
     if isinstance(A, core.Matrix):
         A.scale(alpha)
     else:
-        A_np = _to_numpy(A)
-        A_np *= alpha
+        A.np = _to_numpy(A)
+        A.np *= alpha
 
 
 def localization(cache, dimer_wfn, wfn_A, wfn_B, do_print=True):
@@ -364,12 +364,12 @@ def partition(cache, dimer_wfn, wfn_A, wfn_B, do_print=True):
     indB = np.arange(*fragments[1], dtype=int)
     indC = np.arange(*fragments[2], dtype=int) if len(fragments) == 3 else np.array([], dtype=int)
     cache["FRAG"] = core.Vector(natoms)
-    frag_np = cache["FRAG"].np
-    frag_np[:] = 0.0
-    frag_np[indA] = 1.0
-    frag_np[indB] = 2.0
+    frag = cache["FRAG"].np
+    frag[:] = 0.0
+    frag[indA] = 1.0
+    frag[indB] = 2.0
     if indC.size:
-        frag_np[indC] = 3.0
+        frag[indC] = 3.0
     core.print_out( "Fragment lookup table:\n")
     cache['FRAG'].print_out()
     core.print_out("   => Atomic Partitioning <= \n\n")
@@ -449,23 +449,22 @@ def partition(cache, dimer_wfn, wfn_A, wfn_B, do_print=True):
     ZA = core.Vector(natoms)
     ZB = core.Vector(natoms)
     ZC = core.Vector(natoms)
-    ZA_np, ZB_np, ZC_np = ZA.np, ZB.np, ZC.np
-    ZA_np[:] = 0.0
-    ZB_np[:] = 0.0
-    ZC_np[:] = 0.0
+    ZA.np[:] = 0.0
+    ZB.np[:] = 0.0
+    ZC.np[:] = 0.0
 
     Z_all = np.array([mol.Z(i) for i in range(natoms)], dtype=float)
-    ZA_np[indA] = Z_all[indA]
-    ZB_np[indB] = Z_all[indB]
+    ZA.np[indA] = Z_all[indA]
+    ZB.np[indB] = Z_all[indB]
     if indC.size:
-        ZC_np[indC] = Z_all[indC]
+        ZC.np[indC] = Z_all[indC]
 
     cache["ZA"] = ZA
     cache["ZB"] = ZB
     cache["ZC"] = ZC
-    cache["ZA_orig"] = core.Vector.from_array(ZA_np.copy())
-    cache["ZB_orig"] = core.Vector.from_array(ZB_np.copy())
-    cache["ZC_orig"] = core.Vector.from_array(ZC_np.copy())
+    cache["ZA_orig"] = core.Vector.from_array(ZA.np.copy())
+    cache["ZB_orig"] = core.Vector.from_array(ZB.np.copy())
+    cache["ZC_orig"] = core.Vector.from_array(ZC.np.copy())
 
     # --- link assignment (C vs AB vs SAO*/SIAO*) ---
     orbsA: List[int] = []
@@ -496,31 +495,31 @@ def partition(cache, dimer_wfn, wfn_A, wfn_B, do_print=True):
         for a, (A1, A2), t in zip(link_orbs, link_atoms, link_types):
             typesL.append(t)
             if t == "AC":
-                ZA_np[A1] -= 1.0
-                ZC_np[A1] += 1.0
+                ZA.np[A1] -= 1.0
+                ZC.np[A1] += 1.0
                 orbsC.append(a)
                 orbsL.append(a)
             elif t == "BC":
-                ZB_np[A1] -= 1.0
-                ZC_np[A1] += 1.0
+                ZB.np[A1] -= 1.0
+                ZC.np[A1] += 1.0
                 orbsC.append(a)
                 orbsL.append(a)
             elif t == "AB":
-                ZA_np[A1] -= 1.0
-                ZC_np[A1] += 1.0
-                ZB_np[A2] -= 1.0
-                ZC_np[A2] += 1.0
+                ZA.np[A1] -= 1.0
+                ZC.np[A1] += 1.0
+                ZB.np[A2] -= 1.0
+                ZC.np[A2] += 1.0
                 orbsC.append(a)
                 orbsL.append(a)
     elif la == "AB":
         for a, (A1, A2), t in zip(link_orbs, link_atoms, link_types):
             if t == "AC":
-                ZA_np[A1] += 1.0
-                ZC_np[A1] -= 1.0
+                ZA.np[A1] += 1.0
+                ZC.np[A1] -= 1.0
                 orbsA.append(a)
             elif t == "BC":
-                ZB_np[A1] += 1.0
-                ZC_np[A1] -= 1.0
+                ZB.np[A1] += 1.0
+                ZC.np[A1] -= 1.0
                 orbsB.append(a)
             elif t == "AB":
                 raise ValueError("FISAPT: AB link requires LINK_ASSIGNMENT C in this scheme.")
@@ -534,9 +533,9 @@ def partition(cache, dimer_wfn, wfn_A, wfn_B, do_print=True):
         # protect against bankers rounding
         return int(np.floor(x + 0.5))
 
-    ZA2 = i_round(float(ZA_np.sum()))
-    ZB2 = i_round(float(ZB_np.sum()))
-    ZC2 = i_round(float(ZC_np.sum()))
+    ZA2 = i_round(float(ZA.np.sum()))
+    ZB2 = i_round(float(ZB.np.sum()))
+    ZC2 = i_round(float(ZC.np.sum()))
     EA2, EB2, EC2 = ZA2 - qA, ZB2 - qB, ZC2 - qC
 
     if EA2 % 2 or EB2 % 2 or EC2 % 2:
@@ -600,7 +599,7 @@ def partition(cache, dimer_wfn, wfn_A, wfn_B, do_print=True):
 
     cache["QF"] = QF
     # --- summary numbers (if you want to print like C++ later) ---
-    ZA_int, ZB_int, ZC_int = i_round(ZA_np.sum()), i_round(ZB_np.sum()), i_round(ZC_np.sum())
+    ZA_int, ZB_int, ZC_int = i_round(ZA.np.sum()), i_round(ZB.np.sum()), i_round(ZC.np.sum())
     YA, YB, YC = int(2 * orbsA.size), int(2 * orbsB.size), int(2 * orbsC.size)
 
     core.print_out("   => Partition Summary <= \n\n")
@@ -717,8 +716,9 @@ def build_sapt_jk_cache(
     cache["K_B"] = jk.K()[1].clone()
     cache["J_O"] = jk.J()[2].clone()
     # K_O needs transpose
-    K_O_np = jk.K()[2].clone().np.T
-    cache["K_O"] = core.Matrix.from_array(K_O_np)
+    K_O = jk.K()[2].clone().transpose() #.np.T
+    # K_O.np = K_O.np.T
+    cache["K_O"] = core.Matrix.from_array(K_O.np)
     cache["K_O"].name = "K_O"
 
     monA_nr = wfn_A.molecule().nuclear_repulsion_energy()
@@ -784,10 +784,10 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     nB_atoms = mol.natom()
 
     # Sizing
-    L0A_np = cache["Locc_A"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache["Locc_A"].np
-    L0B_np = cache["Locc_B"].np if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache["Locc_B"].np
-    na = L0A_np.shape[1]
-    nb = L0B_np.shape[1]
+    L0A = cache["Locc_A"] if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache["Locc_A"]
+    L0B = cache["Locc_B"] if link_assignment not in {"SAO0", "SAO1", "SAO2", "SIAO0", "SIAO1", "SIAO2"} else cache["Locc_B"]
+    na = L0A.np.shape[1]
+    nb = L0B.np.shape[1]
 
     # Initialize breakdown matrix (nA_atoms + na + 1, nB_atoms + nb + 1)
     Elst_AB = np.zeros((nA_atoms + na + 1, nB_atoms + nb + 1))
@@ -796,8 +796,8 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     Elst1_terms = np.zeros(4)  # [0]: a-B, [1]: A-b, [2]: a-b, [3]: nuc
 
     # Nuclear-nuclear interactions (A <-> B)
-    ZA_np = cache["ZA"].np
-    ZB_np = cache["ZB"].np
+    ZA = cache["ZA"]
+    ZB = cache["ZB"]
     
     # Vectorized nuclear-nuclear interactions
     # Build distance matrix
@@ -808,7 +808,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             R = mol.xyz(A).distance(mol.xyz(B))
             if R == 0:
                 continue
-            E = ZA_np[A] * ZB_np[B] / R
+            E = ZA.np[A] * ZB.np[B] / R
             Elst_AB[A, B] = E
             Elst1_terms[3] += E
 
@@ -816,7 +816,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     if "A" in cache.get("external_potentials", {}):
         ext_pot_A = cache["external_potentials"]["A"]
         for B in range(nB_atoms):
-            atom_mol = core.Molecule([core.Atom(ZB_np[B])])
+            atom_mol = core.Molecule([core.Atom(ZB.np[B])])
             atom_mol.set_geometry([mol.xyz(B)])
             interaction = ext_pot_A.computeNuclearEnergy(atom_mol)
             Elst_AB[nA_atoms + na, B] = interaction
@@ -826,7 +826,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     if "B" in cache.get("external_potentials", {}):
         ext_pot_B = cache["external_potentials"]["B"]
         for A in range(nA_atoms):
-            atom_mol = core.Molecule([core.Atom(ZA_np[A])])
+            atom_mol = core.Molecule([core.Atom(ZA.np[A])])
             atom_mol.set_geometry([mol.xyz(A)])
             interaction = ext_pot_B.computeNuclearEnergy(atom_mol)
             Elst_AB[A, nB_atoms + nb] = interaction
@@ -848,8 +848,8 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     dfh.print_header()
     
     # Create Matrix objects from numpy arrays for L0A and L0B
-    L0A = core.Matrix.from_array(L0A_np)
-    L0B = core.Matrix.from_array(L0B_np)
+    L0A = core.Matrix.from_array(L0A.np)
+    L0B = core.Matrix.from_array(L0B.np)
     
     # Add orbital spaces
     dfh.add_space("a", L0A)
@@ -900,18 +900,18 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     core.timer_on("F-SAPT Elst Final")
     # => A <-> b (nuclei A interacting with orbitals b) <= //
-    L0B_mat = core.Matrix.from_array(L0B_np)
+    L0B_mat = core.Matrix.from_array(L0B.np)
     L0B_mat.name = "L0B_mat"
 
-    L0A_mat = core.Matrix.from_array(L0A_np)
+    L0A_mat = core.Matrix.from_array(L0A.np)
     ext_pot = core.ExternalPotential()
     for A in range(nA_atoms):
-        if ZA_np[A] == 0.0:
+        if ZA.np[A] == 0.0:
             continue
         
         ext_pot.clear()
         atom_pos = mol.xyz(A)
-        ext_pot.addCharge(ZA_np[A], atom_pos[0], atom_pos[1], atom_pos[2])
+        ext_pot.addCharge(ZA.np[A], atom_pos[0], atom_pos[1], atom_pos[2])
         
         Vtemp = ext_pot.computePotentialMatrix(dimer_basis)
         Vtemp_mat = Vtemp.clone()
@@ -921,7 +921,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Vbb.name = "Vbb"
         
         # Vectorized diagonal extraction
-        diag_Vbb = np.diag(_to_numpy(Vbb))
+        diag_Vbb = np.diag(Vbb.np)
         E_vec = 2.0 * diag_Vbb
         Elst1_terms[1] += np.sum(E_vec)
         Elst_AB[A, nB_atoms:nB_atoms + nb] += E_vec
@@ -935,7 +935,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Vbb = chain_gemm_einsums([L0B_mat, Vtemp_mat, L0B_mat], ['T', 'N', 'N'])
         
         # Vectorized diagonal extraction
-        diag_Vbb = np.diag(_to_numpy(Vbb))
+        diag_Vbb = np.diag(Vbb.np)
         E_vec = 2.0 * diag_Vbb
         Elst1_terms[1] += np.sum(E_vec)
         Elst_AB[nA_atoms + na, nB_atoms:nB_atoms + nb] += E_vec
@@ -943,12 +943,12 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # => a <-> B (orbitals a interacting with nuclei B) <= //
     
     for B in range(nB_atoms):
-        if ZB_np[B] == 0.0:
+        if ZB.np[B] == 0.0:
             continue
 
         ext_pot.clear()
         atom_pos = mol.xyz(B)
-        ext_pot.addCharge(ZB_np[B], atom_pos[0], atom_pos[1], atom_pos[2])
+        ext_pot.addCharge(ZB.np[B], atom_pos[0], atom_pos[1], atom_pos[2])
         
         Vtemp = ext_pot.computePotentialMatrix(dimer_basis)
         
@@ -956,7 +956,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Vaa = chain_gemm_einsums([L0A_mat, Vtemp_mat, L0A_mat], ['T', 'N', 'N'])
         
         # Vectorized diagonal extraction
-        diag_Vaa = np.diag(_to_numpy(Vaa))
+        diag_Vaa = np.diag(Vaa.np)
         E_vec = 2.0 * diag_Vaa
         Elst1_terms[0] += np.sum(E_vec)
         Elst_AB[nA_atoms:nA_atoms + na, B] += E_vec
@@ -970,7 +970,7 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         Vaa = chain_gemm_einsums([L0A_mat, Vtemp_mat, L0A_mat], ['T', 'N', 'N'])
         
         # Vectorized diagonal extraction  
-        diag_Vaa = np.diag(_to_numpy(Vaa))
+        diag_Vaa = np.diag(Vaa.np)
         E_vec = 2.0 * diag_Vaa
         Elst1_terms[0] += np.sum(E_vec)
         Elst_AB[nA_atoms:nA_atoms + na, nB_atoms + nb] += E_vec
@@ -1099,16 +1099,10 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
     E_exch1 = np.zeros((na, nb))
     E_exch2 = np.zeros((na, nb))
     
-    # Convert to numpy for indexing
-    Sab_np = _to_numpy(Sab)
-    Sba_np = _to_numpy(Sba)
-    WBab_np = _to_numpy(WBab)
-    WAba_np = _to_numpy(WAba)
-    
     for a in range(na):
         for b in range(nb):
-            E_exch1[a, b] = -2.0 * Sab_np[a, b] * WBab_np[a, b]
-            E_exch2[a, b] = -2.0 * Sba_np[b, a] * WAba_np[b, a]
+            E_exch1[a, b] = -2.0 * Sab.np[a, b] * WBab.np[a, b]
+            E_exch2[a, b] = -2.0 * Sba.np[b, a] * WAba.np[b, a]
     
     nQ = dimer_wfn.get_basisset("DF_BASIS_SCF").nbf()
     TrQ = core.Matrix("TrQ", nr, nQ)
@@ -1116,34 +1110,27 @@ def fexch(cache, sapt_exch10_s2, sapt_exch10, dimer_wfn, wfn_A, wfn_B, jk, do_pr
     TbQ = core.Matrix("TbQ", nb, nQ)
     TaQ = core.Matrix("TaQ", na, nQ)
     
-    TrQ_np = TrQ.np
-    TsQ_np = TsQ.np
-    TbQ_np = TbQ.np
-    TaQ_np = TaQ.np
-    Sbr_np = np.array(Sbr)
-    Sas_np = np.array(Sas)
-    
     dfh.add_disk_tensor("Bab", (na, nb, nQ))
     
     for a in range(na):
-        TrQ_np[:, :] = dfh.get_tensor("Aar", [a, a + 1], [0, nr], [0, nQ]).np.reshape(nr, nQ)
-        TbQ_np[:, :] = np.dot(Sbr_np, TrQ_np)
+        TrQ.np[:, :] = dfh.get_tensor("Aar", [a, a + 1], [0, nr], [0, nQ]).np.reshape(nr, nQ)
+        TbQ.np[:, :] = np.dot(Sbr.np, TrQ.np)
         dfh.write_disk_tensor("Bab", TbQ, [a, a + 1])
     
     dfh.add_disk_tensor("Bba", (nb, na, nQ))
     
     for b in range(nb):
-        TsQ_np[:, :] = dfh.get_tensor("Abs", [b, b + 1], [0, ns], [0, nQ]).np.reshape(ns, nQ)
-        TaQ_np[:, :] = np.dot(Sas_np, TsQ_np)
+        TsQ.np[:, :] = dfh.get_tensor("Abs", [b, b + 1], [0, ns], [0, nQ]).np.reshape(ns, nQ)
+        TaQ.np[:, :] = np.dot(Sas.np, TsQ.np)
         dfh.write_disk_tensor("Bba", TaQ, [b, b + 1])
     
     E_exch3 = np.zeros((na, nb))
     
     for a in range(na):
-        TbQ_np[:, :] = dfh.get_tensor("Bab", [a, a + 1], [0, nb], [0, nQ]).np.reshape(nb, nQ)
+        TbQ.np[:, :] = dfh.get_tensor("Bab", [a, a + 1], [0, nb], [0, nQ]).np.reshape(nb, nQ)
         for b in range(nb):
             TaQ_slice = dfh.get_tensor("Bba", [b, b + 1], [a, a + 1], [0, nQ]).np.reshape(nQ)
-            E_exch3[a, b] = -2.0 * np.dot(TbQ_np[b, :], TaQ_slice)
+            E_exch3[a, b] = -2.0 * np.dot(TbQ.np[b, :], TaQ_slice)
     
     for a in range(na):
         for b in range(nb):
@@ -1486,21 +1473,21 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     # Nuclear Contribution to ESPs
     ext_pot = core.ExternalPotential()
-    ZA_np = cache["ZA"].np
+    ZA = cache["ZA"].np
     for A in range(nA):
         ext_pot.clear()
         atom_pos = mol.xyz(A)
-        ext_pot.addCharge(ZA_np[A], atom_pos[0], atom_pos[1], atom_pos[2])
+        ext_pot.addCharge(ZA[A], atom_pos[0], atom_pos[1], atom_pos[2])
         Vtemp = ext_pot.computePotentialMatrix(dimer_wfn.basisset())
         Vbs = core.Matrix.from_array(chain_gemm_einsums([Cocc_B, Vtemp, Cvir_B], ['T', 'N', 'N']))
         # Vbs_A doesn't agree... Cocc_B and Cvir_B 
         dfh.write_disk_tensor("WAbs", Vbs, (A, A + 1))
     
-    ZB_np = cache["ZB"].np
+    ZB = cache["ZB"].np
     for B in range(nB):
         ext_pot.clear()
         atom_pos = mol.xyz(B)
-        ext_pot.addCharge(ZB_np[B], atom_pos[0], atom_pos[1], atom_pos[2])
+        ext_pot.addCharge(ZB[B], atom_pos[0], atom_pos[1], atom_pos[2])
         Vtemp = ext_pot.computePotentialMatrix(dimer_wfn.basisset())
         Var = core.Matrix.from_array(chain_gemm_einsums([Cocc_A, Vtemp, Cvir_A], ['T', 'N', 'N']))
         dfh.write_disk_tensor("WBar", Var, (B, B + 1))
@@ -1598,8 +1585,8 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         wBT = build_ind_pot(mapA)
         uBT = build_exch_ind_pot_avg(mapA)
         
-        K_O_np = K_O.np
-        K_O.np[:] = K_O_np.T
+        K_O.np = K_O.np
+        K_O.np[:] = K_O.np.T
         
         mapB = {
             "Cocc_A": Locc_B,
@@ -1629,7 +1616,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         wAT = build_ind_pot(mapB)
         uAT = build_exch_ind_pot_avg(mapB)
         
-        K_O.np[:] = K_O_np.T
+        K_O.np[:] = K_O.np.T
     
     else:
         mapA = {
@@ -1713,9 +1700,6 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     
     Indu_AB_terms = core.Matrix("Ind [A<-B] (a x B)", na, nB + nb1 + 1)
     Indu_BA_terms = core.Matrix("Ind [B<-A] (A x b)", nA + na1 + 1, nb)
-    Indu_AB_terms_np = Indu_AB_terms.np
-    Indu_BA_terms_np = Indu_BA_terms.np
-    
     Indu_AB = 0.0
     Indu_BA = 0.0
     
@@ -1761,7 +1745,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             #     sIndu_AB_termsp[a, B] = Jval + Kval
             #     sIndu_AB += Jval + Kval
             
-            Indu_AB_terms_np[a, B] = Jval + Kval
+            Indu_AB_terms.np[a, B] = Jval + Kval
             Indu_AB += Jval + Kval
     
     # ==> B <- A Uncoupled <==
@@ -1795,7 +1779,7 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             #     sIndu_BA_termsp[A, b] = Jval + Kval
             #     sIndu_BA += Jval + Kval
             
-            Indu_BA_terms_np[A, b] = Jval + Kval
+            Indu_BA_terms.np[A, b] = Jval + Kval
             Indu_BA += Jval + Kval
 
     
@@ -2021,140 +2005,118 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # Jbr = 2.0 * Cocc_B.T @ J_A @ Cvir_A  [C++ lines 6791-6792]
     Jbr = chain_gemm_einsums([Cocc_B, J_A, Cvir_A], ['T', 'N', 'N'])
     Jbr.scale(2.0)
-    Jbr_np = np.array(Jbr)
     
     # Kbr = -1.0 * Cocc_B.T @ K_A @ Cvir_A  [C++ lines 6793-6794]
     Kbr = chain_gemm_einsums([Cocc_B, K_A, Cvir_A], ['T', 'N', 'N'])
     Kbr.scale(-1.0)
-    Kbr_np = np.array(Kbr)
     
     # Jas = 2.0 * Cocc_A.T @ J_B @ Cvir_B  [C++ lines 6796-6797]
     Jas = chain_gemm_einsums([Cocc_A, J_B, Cvir_B], ['T', 'N', 'N'])
     Jas.scale(2.0)
-    Jas_np = np.array(Jas)
     
     # Kas = -1.0 * Cocc_A.T @ K_B @ Cvir_B  [C++ lines 6798-6799]
     Kas = chain_gemm_einsums([Cocc_A, K_B, Cvir_B], ['T', 'N', 'N'])
     Kas.scale(-1.0)
-    Kas_np = np.array(Kas)
     
     # KOas = 1.0 * Cocc_A.T @ K_O @ Cvir_B  [C++ lines 6801-6802]
     KOas = chain_gemm_einsums([Cocc_A, K_O, Cvir_B], ['T', 'N', 'N'])
-    KOas_np = np.array(KOas)
     
     # KObr = 1.0 * Cocc_B.T @ K_O.T @ Cvir_A  [C++ lines 6803-6804]
     # Note: K_O is transposed (second 'T' in the transpose list)
     KObr = chain_gemm_einsums([Cocc_B, K_O, Cvir_A], ['T', 'T', 'N'])
-    KObr_np = np.array(KObr)
     
     # JBas = -2.0 * (Cocc_A.T @ S @ D_B) @ J_A @ Cvir_B  [C++ lines 6806-6807]
     temp_JBas = chain_gemm_einsums([Cocc_A, S, D_B], ['T', 'N', 'N'])
     JBas = chain_gemm_einsums([temp_JBas, J_A, Cvir_B], ['N', 'N', 'N'])
     JBas.scale(-2.0)
-    JBas_np = np.array(JBas)
     
     # JAbr = -2.0 * (Cocc_B.T @ S @ D_A) @ J_B @ Cvir_A  [C++ lines 6808-6809]
     temp_JAbr = chain_gemm_einsums([Cocc_B, S, D_A], ['T', 'N', 'N'])
     JAbr = chain_gemm_einsums([temp_JAbr, J_B, Cvir_A], ['N', 'N', 'N'])
     JAbr.scale(-2.0)
-    JAbr_np = np.array(JAbr)
     
     # Jbs = 4.0 * Cocc_B.T @ J_A @ Cvir_B  [C++ lines 6811-6812]
     Jbs = chain_gemm_einsums([Cocc_B, J_A, Cvir_B], ['T', 'N', 'N'])
     Jbs.scale(4.0)
-    Jbs_np = np.array(Jbs)
     
     # Jar = 4.0 * Cocc_A.T @ J_B @ Cvir_A  [C++ lines 6813-6814]
     Jar = chain_gemm_einsums([Cocc_A, J_B, Cvir_A], ['T', 'N', 'N'])
     Jar.scale(4.0)
-    Jar_np = np.array(Jar)
     
     # JAas = -2.0 * (Cocc_A.T @ J_B @ D_A) @ S @ Cvir_B  [C++ lines 6816-6817]
     temp_JAas = chain_gemm_einsums([Cocc_A, J_B, D_A], ['T', 'N', 'N'])
     JAas = chain_gemm_einsums([temp_JAas, S, Cvir_B], ['N', 'N', 'N'])
     JAas.scale(-2.0)
-    JAas_np = np.array(JAas)
     
     # JBbr = -2.0 * (Cocc_B.T @ J_A @ D_B) @ S @ Cvir_A  [C++ lines 6818-6819]
     temp_JBbr = chain_gemm_einsums([Cocc_B, J_A, D_B], ['T', 'N', 'N'])
     JBbr = chain_gemm_einsums([temp_JBbr, S, Cvir_A], ['N', 'N', 'N'])
     JBbr.scale(-2.0)
-    JBbr_np = np.array(JBbr)
     
     # Get your signs right Hesselmann!  [C++ line 6821]
     # Vbs = 2.0 * Cocc_B.T @ V_A @ Cvir_B  [C++ lines 6822-6823]
     Vbs = chain_gemm_einsums([Cocc_B, V_A, Cvir_B], ['T', 'N', 'N'])
     Vbs.scale(2.0)
-    Vbs_np = np.array(Vbs)
     
     # Var = 2.0 * Cocc_A.T @ V_B @ Cvir_A  [C++ lines 6824-6825]
     Var = chain_gemm_einsums([Cocc_A, V_B, Cvir_A], ['T', 'N', 'N'])
     Var.scale(2.0)
-    Var_np = np.array(Var)
     
     # VBas = -1.0 * (Cocc_A.T @ S @ D_B) @ V_A @ Cvir_B  [C++ lines 6826-6827]
     temp_VBas = chain_gemm_einsums([Cocc_A, S, D_B], ['T', 'N', 'N'])
     VBas = chain_gemm_einsums([temp_VBas, V_A, Cvir_B], ['N', 'N', 'N'])
     VBas.scale(-1.0)
-    VBas_np = np.array(VBas)
     
     # VAbr = -1.0 * (Cocc_B.T @ S @ D_A) @ V_B @ Cvir_A  [C++ lines 6828-6829]
     temp_VAbr = chain_gemm_einsums([Cocc_B, S, D_A], ['T', 'N', 'N'])
     VAbr = chain_gemm_einsums([temp_VAbr, V_B, Cvir_A], ['N', 'N', 'N'])
     VAbr.scale(-1.0)
-    VAbr_np = np.array(VAbr)
     
     # VRas = 1.0 * (Cocc_A.T @ V_B @ P_A) @ S @ Cvir_B  [C++ lines 6830-6831]
     temp_VRas = chain_gemm_einsums([Cocc_A, V_B, P_A], ['T', 'N', 'N'])
     VRas = chain_gemm_einsums([temp_VRas, S, Cvir_B], ['N', 'N', 'N'])
-    VRas_np = np.array(VRas)
     
     # VSbr = 1.0 * (Cocc_B.T @ V_A @ P_B) @ S @ Cvir_A  [C++ lines 6832-6833]
     temp_VSbr = chain_gemm_einsums([Cocc_B, V_A, P_B], ['T', 'N', 'N'])
     VSbr = chain_gemm_einsums([temp_VSbr, S, Cvir_A], ['N', 'N', 'N'])
-    VSbr_np = np.array(VSbr)
     
     # Sas = Cocc_A.T @ S @ Cvir_B  [C++ line 6835]
     Sas = chain_gemm_einsums([Cocc_A, S, Cvir_B], ['T', 'N', 'N'])
-    Sas_np = np.array(Sas)
     
     # Sbr = Cocc_B.T @ S @ Cvir_A  [C++ line 6836]
     Sbr = chain_gemm_einsums([Cocc_B, S, Cvir_A], ['T', 'N', 'N'])
-    Sbr_np = np.array(Sbr)
     
     # Qbr = Jbr + Kbr + KObr + JAbr + JBbr + VAbr + VSbr  [C++ lines 6838-6846]
-    Qbr_np = Jbr_np.copy()
-    Qbr_np += Kbr_np
-    Qbr_np += KObr_np
-    Qbr_np += JAbr_np
-    Qbr_np += JBbr_np
-    Qbr_np += VAbr_np
-    Qbr_np += VSbr_np
+    Qbr = Jbr.clone()
+    Qbr.add(Kbr)
+    Qbr.add(KObr)
+    Qbr.add(JAbr)
+    Qbr.add(JBbr)
+    Qbr.add(VAbr)
+    Qbr.add(VSbr)
     
     # Qas = Jas + Kas + KOas + JAas + JBas + VBas + VRas  [C++ lines 6848-6856]
-    Qas_np = Jas_np.copy()
-    Qas_np += Kas_np
-    Qas_np += KOas_np
-    Qas_np += JAas_np
-    Qas_np += JBas_np
-    Qas_np += VBas_np
-    Qas_np += VRas_np
+    Qas = Jas.clone()
+    Qas.add(Kas)
+    Qas.add(KOas)
+    Qas.add(JAas)
+    Qas.add(JBas)
+    Qas.add(VBas)
+    Qas.add(VRas)
     
     # SBar = Cocc_A.T @ S @ D_B @ S @ Cvir_A  [C++ line 6858]
     SBar = chain_gemm_einsums([Cocc_A, S, D_B, S, Cvir_A], ['T', 'N', 'N', 'N', 'N'])
-    SBar_np = np.array(SBar)
     
     # SAbs = Cocc_B.T @ S @ D_A @ S @ Cvir_B  [C++ line 6859]
     SAbs = chain_gemm_einsums([Cocc_B, S, D_A, S, Cvir_B], ['T', 'N', 'N', 'N', 'N'])
-    SAbs_np = np.array(SAbs)
     
     # Qar = Jar + Var  [C++ lines 6861-6864]
-    Qar_np = Jar_np.copy()
-    Qar_np += Var_np
+    Qar = Jar.clone()
+    Qar.add(Var)
     
     # Qbs = Jbs + Vbs  [C++ lines 6866-6869]
-    Qbs_np = Jbs_np.copy()
-    Qbs_np += Vbs_np
+    Qbs = Jbs.clone()
+    Qbs.add(Vbs)
     
     # => Integrals from DFHelper <= #  [C++ lines 6895-6946]
     
@@ -2497,16 +2459,16 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
                 # > V,J,K < //
                 # Add outer product contributions using DGER equivalent
                 # C_DGER(na, nb, 1.0, &Sasp[0][s + sstart], ns, &Qbrp[0][r + rstart], nr, Vabp[0], nb);
-                Vabp[:, :] += np.outer(Sas_np[:, s + sstart], Qbr_np[:, r + rstart])
+                Vabp[:, :] += np.outer(Sas.np[:, s + sstart], Qbr.np[:, r + rstart])
                 
                 # C_DGER(na, nb, 1.0, &Qasp[0][s + sstart], ns, &Sbrp[0][r + rstart], nr, Vabp[0], nb);
-                Vabp[:, :] += np.outer(Qas_np[:, s + sstart], Sbr_np[:, r + rstart])
+                Vabp[:, :] += np.outer(Qas.np[:, s + sstart], Sbr.np[:, r + rstart])
                 
                 # C_DGER(na, nb, 1.0, &Qarp[0][r + rstart], nr, &SAbsp[0][s + sstart], ns, Vabp[0], nb);
-                Vabp[:, :] += np.outer(Qar_np[:, r + rstart], SAbs_np[:, s + sstart])
+                Vabp[:, :] += np.outer(Qar.np[:, r + rstart], SAbs.np[:, s + sstart])
                 
                 # C_DGER(na, nb, 1.0, &SBarp[0][r + rstart], nr, &Qbsp[0][s + sstart], ns, Vabp[0], nb);
-                Vabp[:, :] += np.outer(SBar_np[:, r + rstart], Qbs_np[:, s + sstart])
+                Vabp[:, :] += np.outer(SBar.np[:, r + rstart], Qbs.np[:, s + sstart])
                 
                 # Transform to localized orbital basis
                 Iabp[:, :] = Vabp @ UBp
@@ -2601,13 +2563,13 @@ def chain_gemm_matrix(
         prefactors_AB = [1.0] * (N - 1)
     
     # Convert first tensor to numpy array for computation
-    first_np = _to_numpy(tensors[0])
-    computed_arrays = [first_np]
+    first.np = tensors[0]
+    computed_arrays = [first.np]
     
     try:
         for i in range(len(tensors) - 1):
-            A_np = computed_arrays[-1]
-            B_np = _to_numpy(tensors[i + 1])
+            A.np = computed_arrays[-1]
+            B.np = _to_numpy(tensors[i + 1])
             
             # For intermediate results (i > 0), always use 'N' for T1 since A is a computed intermediate
             T1 = transposes[i] if i == 0 else 'N'
@@ -2615,20 +2577,20 @@ def chain_gemm_matrix(
             
             # Apply transposes
             if T1 == "T":
-                A_np = A_np.T
+                A.np = A.np.T
             if T2 == "T":
-                B_np = B_np.T
+                B.np = B.np.T
             
             # Compute C = prefactors_AB * A @ B + prefactors_C * C
             # Since we're creating a new C each time, prefactors_C[i] * C is zero
             # unless we're accumulating into an existing result
-            C_np = prefactors_AB[i] * np.dot(A_np, B_np)
+            C.np = prefactors_AB[i] * np.dot(A.np, B.np)
             # Note: prefactors_C is typically 0.0 for new result, so we ignore it for now
-            # If needed: C_np = prefactors_AB[i] * np.dot(A_np, B_np) + prefactors_C[i] * C_np
+            # If needed: C.np = prefactors_AB[i] * np.dot(A.np, B.np) + prefactors_C[i] * C.np
             
-            computed_arrays.append(C_np)
+            computed_arrays.append(C.np)
     except Exception as e:
-        raise ValueError(f"Error in einsum_chain_gemm: {e}\n{i = }\n{A_np.shape = }\n{B_np.shape = }\n{T1 = }\n{T2 = }")
+        raise ValueError(f"Error in einsum_chain_gemm: {e}\n{i = }\n{A.np.shape = }\n{B.np.shape = }\n{T1 = }\n{T2 = }")
     
     # Convert results back to psi4.core.Matrix
     if return_tensors is None:
