@@ -324,6 +324,7 @@ def _drop(array, filepath):
 
     """
     filename = filepath + os.sep + array.name + ".dat"
+    print("    Writing F-SAPT output file: {}".format(filename))
     with open(filename, "wb") as handle:
         np.savetxt(handle, array.to_array(), fmt="%24.16E", delimiter=" ", newline="\n")
 

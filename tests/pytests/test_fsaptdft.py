@@ -1942,32 +1942,32 @@ no_com
     )
 
     # Run standard FISAPT0
-    # psi4.set_options(
-    #     {
-    #         "basis": "sto-3g",
-    #         "scf_type": "df",
-    #         "guess": "sad",
-    #         "freeze_core": "true",
-    #         "FISAPT_FSAPT_FILEPATH": "tmp",
-    #     }
-    # )
-    # psi4.energy("fisapt0-d4", molecule=mol)
-    #
-    # # Collect FISAPT0 energies
-    # fisapt0_energies = {
-    #     "Enuc": mol.nuclear_repulsion_energy(),
-    #     "Eelst": core.variable("SAPT ELST ENERGY"),
-    #     "Eexch": core.variable("SAPT EXCH ENERGY"),
-    #     "Eind": core.variable("SAPT IND ENERGY"),
-    #     "Edisp": core.variable("SAPT DISP ENERGY"),
-    #     "Etot": core.variable("SAPT TOTAL ENERGY"),
-    # }
-    # print("FISAPT0 energies:")
-    # pp(fisapt0_energies)
-    #
-    # # Clear variables for next calculation
-    # psi4.core.clean()
-    # psi4.core.clean_variables()
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "guess": "sad",
+            "freeze_core": "true",
+            "FISAPT_FSAPT_FILEPATH": "tmp_fisapt",
+        }
+    )
+    psi4.energy("fisapt0-d4", molecule=mol)
+
+    # Collect FISAPT0 energies
+    fisapt0_energies = {
+        "Enuc": mol.nuclear_repulsion_energy(),
+        "Eelst": core.variable("SAPT ELST ENERGY"),
+        "Eexch": core.variable("SAPT EXCH ENERGY"),
+        "Eind": core.variable("SAPT IND ENERGY"),
+        "Edisp": core.variable("SAPT DISP ENERGY"),
+        "Etot": core.variable("SAPT TOTAL ENERGY"),
+    }
+    print("FISAPT0 energies:")
+    pp(fisapt0_energies)
+
+    # Clear variables for next calculation
+    psi4.core.clean()
+    psi4.core.clean_variables()
 
     # Run SAPT(DFT) with FISAPT option (HF functional to match SAPT0)
     psi4.set_options(
@@ -2013,6 +2013,7 @@ no_com
         },
         links5050=True,
         print_output=False,
+        pdb_dir="tmp",
     )
     import pandas as pd
 

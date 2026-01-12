@@ -1617,6 +1617,7 @@ def run_fsapt_analysis(
     if pdb_dir is not None:
         print("  ==> Writing PDB Files <==\n")
         print(f"     {pdb_dir = } \n")
+        print(results["geom"])
         pdb = PDB.from_geom(results["geom"])
         print_order1(dirname, results[results_tag], pdb, results["frags"])
     return data

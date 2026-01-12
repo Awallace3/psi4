@@ -415,12 +415,15 @@ def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars):
         "ZC": to_vector(cache["ZC"]),
         "ZC_orig": to_vector(cache["ZC_orig"]),
     }
+    for key in vector_cache.keys():
+        vector_cache[key].name = key.upper()
     fisapt.set_matrix(matrix_cache)
     fisapt.set_vector(vector_cache)
     fisapt.fdrop()
     # Now drop empirical dispersion if computed
     if core.get_option("SAPT", "SAPT_DFT_D4_IE"):
         pw_disp = cache["FSAPT_EMPIRICAL_DISP"]
+        print(pw_disp)
         pw_disp.name = "Empirical_Disp"
         filepath = core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH")
         core.set_variable("FSAPT_" + pw_disp.name.upper(), pw_disp)

@@ -562,6 +562,7 @@ def run_sapt_dft(name, **kwargs):
             data["D4 IE"] = v['D4 IE']
             data['FSAPT_EMPIRICAL_DISP'] = v['FSAPT_EMPIRICAL_DISP']
             print('D4 IE:', data['D4 IE'])
+            print('D4 FSAPT Empirical Dispersion:', data['FSAPT_EMPIRICAL_DISP'])
         else:
             raise ValueError("SAPT(DFT): d4_type must be 'supermolecular' or 'intermolecular'.")
         core.timer_off("SAPT(DFT):D4 Interaction Energy")
