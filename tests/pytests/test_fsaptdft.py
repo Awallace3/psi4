@@ -160,12 +160,13 @@ no_com
             "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
             # OPTION distringuishing einsum vs fi
             "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "SAPT_DFT_USE_EINSUMS": True,
         }
     )
     psi4.core.clean_timers()
     psi4.energy("sapt(dft)", molecule=mol)
     compute_time_fisapt = psi4.core.get_timer_dict()["SAPT(DFT) Energy"]
-    psi4.driver.p4util.write_timer_csv("saptdft_timers.csv")
+    psi4.driver.p4util.write_timer_csv("saptdft_useEin_timers.csv")
     psi4.core.clean()
     psi4.set_options(
         {
@@ -1895,12 +1896,12 @@ no_com
 if __name__ == "__main__":
     psi4.set_memory("220 GB")
     # psi4.set_num_threads(24)
-    psi4.set_num_threads(16)
-    # test_fsaptdft_timer()
+    # psi4.set_num_threads(8)
+    test_fsaptdft_timer()
     # test_fsaptdft_simple()
 
     # test_fsaptdft_fisapt0()
-    test_fsaptdft_disp0_fisapt0_psivars()
+    # test_fsaptdft_disp0_fisapt0_psivars()
     # test_fsaptdft_fisapt0()
     # test_fsaptdft()
     # test_fsaptdft_fsapt0_simple()
