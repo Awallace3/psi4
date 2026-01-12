@@ -37,15 +37,34 @@ from ...p4util.exceptions import *
 from .sapt_util import print_sapt_var
 from pprint import pprint as pp
 import einsums as ein
+
 # Need to import FISAPT to set fdrop, plot, save_fsapt_variables methods
 from . import fisapt_proc
 from pprint import pprint as pp
 
 
-def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars, basis_set=None, do_flocalize=False):
+def to_matrix(obj):
+    """Convert object to psi4.core.Matrix, handling both numpy arrays and Matrix objects."""
+    if isinstance(obj, core.Matrix):
+        return obj.clone()
+    else:
+        return core.Matrix.from_array(obj)
+
+
+def to_vector(obj):
+    """Convert object to psi4.core.Vector, handling both numpy arrays and Vector objects."""
+    if isinstance(obj, core.Vector):
+        return obj.clone()
+    else:
+        return core.Vector.from_array(obj)
+
+
+def setup_fisapt_object(
+    wfn, wfn_A, wfn_B, cache, scalars, basis_set=None, do_flocalize=False
+):
     """
     Setup FISAPT object for F-SAPT calculations.
-    
+
     Parameters
     ----------
     wfn : psi4.core.Wavefunction
@@ -64,7 +83,7 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars, basis_set=None, do_fl
         If True, call flocalize() to localize monomer orbitals using C++ IBOLocalizer2.
         The localized orbitals will be stored in the FISAPT object's internal matrices.
         Default is False.
-        
+
     Returns
     -------
     psi4.core.FISAPT
@@ -74,12 +93,14 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars, basis_set=None, do_fl
     if basis_set is None:
         basis_set = wfn.basisset()
     wfn.set_basisset("DF_BASIS_SAPT", basis_set)
-    
+
     # Set MINAO basis for IBOLocalizer2 (needed if do_flocalize)
     if do_flocalize:
-        minao = core.BasisSet.build(wfn.molecule(), "BASIS", core.get_global_option("MINAO_BASIS"))
+        minao = core.BasisSet.build(
+            wfn.molecule(), "BASIS", core.get_global_option("MINAO_BASIS")
+        )
         wfn.set_basisset("MINAO", minao)
-    
+
     fisapt = core.FISAPT(wfn)
 
     # Used to slice arrays later if frozen core is requested
@@ -89,21 +110,7 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars, basis_set=None, do_fl
     nfrozen_B = wfn_B.basisset().n_frozen_core(
         core.get_global_option("FREEZE_CORE"), wfn_B.molecule()
     )
-    
-    def to_matrix(obj):
-        """Convert object to psi4.core.Matrix, handling both numpy arrays and Matrix objects."""
-        if isinstance(obj, core.Matrix):
-            return obj.clone()
-        else:
-            return core.Matrix.from_array(obj)
-    
-    def to_vector(obj):
-        """Convert object to psi4.core.Vector, handling both numpy arrays and Vector objects."""
-        if isinstance(obj, core.Vector):
-            return obj.clone()
-        else:
-            return core.Vector.from_array(obj)
-    
+
     # Basic matrix keys always needed from cache
     basic_matrix_keys = {
         "Cocc_A": "Cocc0A",
@@ -111,12 +118,12 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars, basis_set=None, do_fl
         "Cocc_B": "Cocc0B",
         "Cvir_B": "Cvir0B",
     }
-    
+
     matrix_cache = {
         fisapt_key: to_matrix(cache[sdft_key])
         for sdft_key, fisapt_key in basic_matrix_keys.items()
     }
-    
+
     other_keys = [
         "S",
         "D_A",
@@ -127,7 +134,6 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars, basis_set=None, do_fl
         "J_B",
         "K_B",
         "V_B",
-
         "K_O",
         "J_O",
         # "J_P_A",
@@ -167,37 +173,41 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars, basis_set=None, do_fl
     # Set up frozen/active occupied orbitals for flocalize()
     Cocc_A_np = np.asarray(matrix_cache["Cocc0A"])
     Cocc_B_np = np.asarray(matrix_cache["Cocc0B"])
-    
+
     # Monomer A: frozen and active
     if nfrozen_A > 0:
         matrix_cache["Cfocc0A"] = core.Matrix.from_array(Cocc_A_np[:, :nfrozen_A])
         matrix_cache["Caocc0A"] = core.Matrix.from_array(Cocc_A_np[:, nfrozen_A:])
     else:
-        matrix_cache["Cfocc0A"] = core.Matrix.from_array(np.zeros((Cocc_A_np.shape[0], 0)))
+        matrix_cache["Cfocc0A"] = core.Matrix.from_array(
+            np.zeros((Cocc_A_np.shape[0], 0))
+        )
         matrix_cache["Caocc0A"] = core.Matrix.from_array(Cocc_A_np.copy())
-    
+
     # Monomer B: frozen and active
     if nfrozen_B > 0:
         matrix_cache["Cfocc0B"] = core.Matrix.from_array(Cocc_B_np[:, :nfrozen_B])
         matrix_cache["Caocc0B"] = core.Matrix.from_array(Cocc_B_np[:, nfrozen_B:])
     else:
-        matrix_cache["Cfocc0B"] = core.Matrix.from_array(np.zeros((Cocc_B_np.shape[0], 0)))
+        matrix_cache["Cfocc0B"] = core.Matrix.from_array(
+            np.zeros((Cocc_B_np.shape[0], 0))
+        )
         matrix_cache["Caocc0B"] = core.Matrix.from_array(Cocc_B_np.copy())
-    
+
     # Set initial matrices/vectors before flocalize
     fisapt.set_matrix(matrix_cache)
     fisapt.set_vector(vector_cache)
-    
+
     if do_flocalize:
         # Call C++ flocalize() to localize monomer orbitals
         # This populates the FISAPT object's internal matrices with:
         # Locc0A, Locc0B, Uocc0A, Uocc0B, Qocc0A, Qocc0B,
         # Lfocc0A, Lfocc0B, Laocc0A, Laocc0B, Ufocc0A, Ufocc0B, Uaocc0A, Uaocc0B
         fisapt.flocalize()
-        
+
         # Get the localized matrices back from FISAPT object
         matrices = fisapt.matrices()
-        
+
         # Update matrix_cache with localized orbitals for subsequent processing
         matrix_cache["Locc0A"] = matrices["Locc0A"]
         matrix_cache["Locc0B"] = matrices["Locc0B"]
@@ -231,7 +241,7 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars, basis_set=None, do_fl
         }
         for sdft_key, fisapt_key in localized_matrix_keys.items():
             matrix_cache[fisapt_key] = to_matrix(cache[sdft_key])
-        
+
         # Update Uaocc matrices based on frozen core slicing
         if nfrozen_A > 0:
             matrix_cache["Uaocc0A"] = core.Matrix.from_array(
@@ -249,7 +259,7 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars, basis_set=None, do_fl
             matrix_cache["Uaocc0B"] = core.Matrix.from_array(
                 np.asarray(matrix_cache["Uocc0B"]).copy()
             )
-    
+
     # Set eps_aocc vectors
     if nfrozen_A > 0:
         vector_cache["eps_aocc0A"] = core.Vector.from_array(
@@ -267,11 +277,11 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars, basis_set=None, do_fl
         vector_cache["eps_aocc0B"] = core.Vector.from_array(
             np.asarray(vector_cache["eps_occ0B"]).copy()
         )
-    
+
     # Set all matrices and vectors on FISAPT object
     fisapt.set_matrix(matrix_cache)
     fisapt.set_vector(vector_cache)
-    
+
     scalar_keys = {
         "Ind20,r (A<-B)": "Ind20,r (A<-B)",
         "Ind20,r (A->B)": "Ind20,r (B<-A)",
@@ -293,3 +303,126 @@ def setup_fisapt_object(wfn, wfn_A, wfn_B, cache, scalars, basis_set=None, do_fl
     }
     fisapt.set_scalar(scalar_cache)
     return fisapt
+
+
+def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars):
+    """
+    Setup FISAPT object to call fisapt_fdrop for dropping SAPT(DFT) variables.
+
+    Parameters
+    ----------
+    wfn : psi4.core.Wavefunction
+        Dimer wavefunction
+    wfn_A : psi4.core.Wavefunction
+        Monomer A wavefunction
+    wfn_B : psi4.core.Wavefunction
+        Monomer B wavefunction
+    cache : dict
+        SAPT(DFT) cache containing orbital data
+    scalars : dict
+        SAPT energy components dictionary
+    """
+    fisapt = core.FISAPT(wfn)
+    # iterate through cache and scalars to set these labels for fisapt_fdrop:
+    """
+    vectors = self.vectors()
+    matrices = self.matrices()
+
+    matrices["Qocc0A"].name = "QA"
+    matrices["Qocc0B"].name = "QB"
+    matrices["Elst_AB"].name = "Elst"
+    matrices["Exch_AB"].name = "Exch"
+    matrices["IndAB_AB"].name = "IndAB"
+    matrices["IndBA_AB"].name = "IndBA"
+    core.set_variable("FSAPT_QA", matrices["Qocc0A"])
+    core.set_variable("FSAPT_QB", matrices["Qocc0B"])
+    core.set_variable("FSAPT_ELST_AB", matrices["Elst_AB"])
+    core.set_variable("FSAPT_AB_SIZE", np.array(matrices["Elst_AB"].np.shape).reshape(1, -1))
+    core.set_variable("FSAPT_EXCH_AB", matrices["Exch_AB"])
+    core.set_variable("FSAPT_INDAB_AB", matrices["IndAB_AB"])
+    core.set_variable("FSAPT_INDBA_AB", matrices["IndBA_AB"])
+
+    if write_output_files:
+        _drop(vectors["ZA"], filepath)
+        _drop(vectors["ZB"], filepath)
+        _drop(matrices["Qocc0A"], filepath)
+        _drop(matrices["Qocc0B"], filepath)
+        _drop(matrices["Elst_AB"], filepath)
+        _drop(matrices["Exch_AB"], filepath)
+        _drop(matrices["IndAB_AB"], filepath)
+        _drop(matrices["IndBA_AB"], filepath)
+
+    if core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP"):
+        matrices["Disp_AB"].name = "Disp"
+        core.set_variable("FSAPT_DISP_AB", matrices["Disp_AB"])
+        if write_output_files:
+            _drop(matrices["Disp_AB"], filepath)
+
+    if core.get_option("FISAPT", "SSAPT0_SCALE"):
+        # NOTE: do same as above for conditionally writing
+        ssapt_filepath = core.get_option("FISAPT", "FISAPT_FSSAPT_FILEPATH")
+        write_ssapt_files = ssapt_filepath.lower() != "none"
+
+        if write_ssapt_files:
+            os.makedirs(ssapt_filepath, exist_ok=True)
+            core.print_out("    sF-SAPT Data Filepath = {}\n\n".format(ssapt_filepath))
+            geomfile = ssapt_filepath + os.sep + "geom.xyz"
+            with open(geomfile, "w") as fh:
+                fh.write(xyz)
+
+        matrices["sIndAB_AB"].name = "IndAB"
+        matrices["sIndBA_AB"].name = "IndBA"
+        core.set_variable("FSAPT_SINDAB_AB", matrices["sIndAB_AB"])
+        core.set_variable("FSAPT_SINDBA_AB", matrices["sIndBA_AB"])
+
+        if write_ssapt_files:
+            _drop(vectors["ZA"], ssapt_filepath)
+            _drop(vectors["ZB"], ssapt_filepath)
+            _drop(matrices["Qocc0A"], ssapt_filepath)
+            _drop(matrices["Qocc0B"], ssapt_filepath)
+            _drop(matrices["Elst_AB"], ssapt_filepath)
+            _drop(matrices["Exch_AB"], ssapt_filepath)
+            _drop(matrices["sIndAB_AB"], ssapt_filepath)
+            _drop(matrices["sIndBA_AB"], ssapt_filepath)
+
+        if core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP"):
+            matrices["sDisp_AB"].name = "Disp"
+            core.set_variable("FSAPT_SDISP_AB", matrices["sDisp_AB"])
+            if write_ssapt_files:
+                _drop(matrices["sDisp_AB"], ssapt_filepath)
+    """
+    cache_keys = {
+        "Qocc0A": "Qocc0A",
+        "Qocc0B": "Qocc0B",
+        "Elst_AB": "Elst_AB",
+        "Exch_AB": "Exch_AB",
+        "IndAB_AB": "IndAB_AB",
+        "IndBA_AB": "IndBA_AB",
+    }
+    # Set whether to drop dispersion matrix... fisapt has specific option for
+    # this...
+    core.set_local_option("FISAPT", "FISAPT_DO_FSAPT_DISP", core.get_option("SAPT", "SAPT_DFT_DO_DISP"))
+    if core.get_option("SAPT", "SAPT_DFT_DO_DISP"):
+        cache_keys["Disp_AB"] = "Disp_AB"
+    matrix_cache = {
+        fisapt_key: cache[sdft_key] for sdft_key, fisapt_key in cache_keys.items()
+    }
+    vector_cache = {
+        "ZA": to_vector(cache["ZA"]),
+        "ZA_orig": to_vector(cache["ZA_orig"]),
+        "ZB": to_vector(cache["ZB"]),
+        "ZB_orig": to_vector(cache["ZB_orig"]),
+        "ZC": to_vector(cache["ZC"]),
+        "ZC_orig": to_vector(cache["ZC_orig"]),
+    }
+    fisapt.set_matrix(matrix_cache)
+    fisapt.set_vector(vector_cache)
+    fisapt.fdrop()
+    # Now drop empirical dispersion if computed
+    if core.get_option("SAPT", "SAPT_DFT_D4_IE"):
+        pw_disp = cache["FSAPT_EMPIRICAL_DISP"]
+        pw_disp.name = "Empirical_Disp"
+        filepath = core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH")
+        core.set_variable("FSAPT_" + pw_disp.name.upper(), pw_disp)
+        fisapt_proc._drop(pw_disp, filepath)
+    return

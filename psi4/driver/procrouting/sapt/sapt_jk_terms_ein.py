@@ -1842,8 +1842,8 @@ def find(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
         for b in range(nb):
             IndBA_AB.np[A, b + nB] = Ind20u_BA_termsp[A, b] + ExchInd20u_BA_termsp[A, b]
     
-    cache["INDAB_AB"] = IndAB_AB
-    cache["INDBA_AB"] = IndBA_AB
+    cache["IndAB_AB"] = IndAB_AB
+    cache["IndBA_AB"] = IndBA_AB
     
     # if core.get_option("SAPT", "SSAPT0_SCALE"):
     #     cache["sExchInd20u_AB"] = sExchInd20u_AB
@@ -2498,9 +2498,9 @@ def fdisp0(cache, scalars, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
     # cache['E_EXCH_DISP20'] = E_exch_disp20
     # add E_disp20 and E_exch_disp20
     # Disp_AB = core.Matrix("DISP_AB", na, nb)
-    Disp_AB = core.Matrix("DISP_AB", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
+    Disp_AB = core.Matrix("Disp_AB", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
     Disp_AB.np[:, :] = E_disp20.np + E_exch_disp20.np
-    cache['DISP_AB'] = Disp_AB
+    cache['Disp_AB'] = Disp_AB
     # => Output printing <= //
     # {Elst10*1000:.8f} [mEh]
     Disp20 = np.sum(E_disp20.np)

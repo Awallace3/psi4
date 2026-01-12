@@ -28,6 +28,8 @@
 
 #include "fisapt.h"
 
+#include <Einsums/TensorAlgebra/Detail/Index.hpp>
+#include <TensorAlgebra/TensorAlgebra.hpp>
 #include <algorithm>
 #include <ctime>
 #include <functional>
@@ -59,13 +61,21 @@
 
 #include "local2.h"
 
+// Einsums includes
+#include <Einsums/TensorAlgebra.hpp>
+#include <Einsums/Tensor/DiskTensor.hpp>
+
 namespace psi {
 
 namespace fisapt {
 
 // Compute fragment-fragment partitioning of electrostatic contribution
 void FISAPT::felst_einsums() {
-    outfile->Printf("  ==> F-SAPT Electrostatics <==\n\n");
+    using namespace einsums;
+    using namespace einsums::tensor_algebra;
+    using namespace einsums::index;
+
+    outfile->Printf("  ==> F-SAPT Electrostatics (Einsums) <==\n\n");
 
     // => Sizing <= //
 
@@ -209,6 +219,9 @@ void FISAPT::felst_einsums() {
     }
 
     std::shared_ptr<Matrix> Elst10_3 = linalg::doublet(QaC, QbC, false, true);
+    // need to initialize Elst10_3 based on QaC and QbC sizes for einsums compatibility
+    // std::shared_ptr<Matrix> Elst10_3 = std::make_shared<Matrix>("Elst10_3", na, nb);
+    // einsum(Indices{a, b}, Elst10_3.get(), Indices{a, c}, QaC.get(), Indices{b, c}, QbC.get());
     double** Elst10_3p = Elst10_3->pointer();
     for (int a = 0; a < na; a++) {
         for (int b = 0; b < nb; b++) {

@@ -969,15 +969,7 @@ def sapt_dft(
         cache = sapt_jk_terms_ein.find(cache, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
         core.timer_off("SAPT(DFT): F-SAPT Induction")
 
-        core.set_variable("FSAPT_QA", cache["Qocc0A"])
-        core.set_variable("FSAPT_QB", cache["Qocc0B"])
-
-        core.set_variable("FSAPT_ELST_AB", cache['Elst_AB'])
-        core.set_variable("FSAPT_AB_SIZE", np.array(cache["Elst_AB"].np.shape).reshape(1, -1))
-        core.set_variable("FSAPT_EXCH_AB", cache['Exch_AB'])
-        core.set_variable("FSAPT_INDAB_AB", cache['INDAB_AB'])
-        core.set_variable("FSAPT_INDBA_AB", cache['INDBA_AB'])
-    elif do_fsapt and fsapt_type == "FISAPT":
+    elif do_fsapt and fsapt_type == "FISAPT" and not use_einsums:
         core.timer_on("SAPT(DFT):Localize Orbitals")
         sapt_jk_terms_ein.localization(cache, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT):Localize Orbitals")
@@ -996,6 +988,32 @@ def sapt_dft(
         
         core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
         FISAPT_obj.felst()
+        core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
+        core.timer_on("SAPT(DFT): F-SAPT Exchange")
+        FISAPT_obj.fexch()
+        core.timer_off("SAPT(DFT): F-SAPT Exchange")
+        core.timer_on("SAPT(DFT): F-SAPT Induction")
+        FISAPT_obj.find()
+        core.timer_off("SAPT(DFT): F-SAPT Induction")
+    elif do_fsapt and fsapt_type == "FISAPT" and use_einsums:
+        core.timer_on("SAPT(DFT):Localize Orbitals")
+        sapt_jk_terms_ein.localization(cache, dimer_wfn, wfn_A, wfn_B)
+        core.timer_off("SAPT(DFT):Localize Orbitals")
+        core.timer_on("SAPT(DFT):Partition")
+        cache = sapt_jk_terms_ein.partition(cache, dimer_wfn, wfn_A, wfn_B)
+        core.timer_off("SAPT(DFT):Partition")
+
+        # Build auxiliary basis for FISAPT
+        aux_basis = core.BasisSet.build(dimer_wfn.molecule(), "DF_BASIS_MP2", core.get_option("DFMP2", "DF_BASIS_MP2"),
+                                            "RIFIT", core.get_global_option('BASIS'))
+        
+        # Create single FISAPT object with do_flocalize=True to handle IBO localization internally
+        core.timer_on("SAPT(DFT): F-SAPT Setup + Localization (IBO)")
+        FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache, data, aux_basis, do_flocalize=True)
+        core.timer_off("SAPT(DFT): F-SAPT Setup + Localization (IBO)")
+        
+        core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
+        FISAPT_obj.felst_einsums()
         core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
         core.timer_on("SAPT(DFT): F-SAPT Exchange")
         FISAPT_obj.fexch()
@@ -1112,7 +1130,6 @@ def sapt_dft(
             data["Exch-Disp20,u"] = cache["Exch-Disp20,u"]
             data["Disp20,u"] = cache["Disp20,u"]
             core.timer_off("SAPT(DFT): F-SAPT Dispersion")
-            core.set_variable("FSAPT_DISP_AB", cache['DISP_AB'])
 
     elif do_fsapt and fsapt_type == "FISAPT" and do_disp:
         core.timer_on("SAPT(DFT): F-SAPT Dispersion")
@@ -1128,11 +1145,26 @@ def sapt_dft(
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     # d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
     if sapt_dft_D4_IE:  # and d4_type == 'intermolecular':
-        core.set_variable("FSAPT_EMPIRICAL_DISP", data['FSAPT_EMPIRICAL_DISP'])
+        cache["FSAPT_EMPIRICAL_DISP"] = core.Matrix.from_array(data['FSAPT_EMPIRICAL_DISP'])
 
     # Print out final data
     core.print_out("\n")
     core.print_out(print_sapt_dft_summary(data, "SAPT(DFT)", do_dft=do_dft, do_disp=do_disp, do_delta_dft=do_delta_dft))
+
+    # because FISAPT_obj drop sets core variables, avoid setting them twice
+    if core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH") != "NONE":
+        FISAPT_obj = saptdft_fisapt.drop_saptdft_variables(dimer_wfn, wfn_A, wfn_B, cache, data)
+    else:
+        core.set_variable("FSAPT_QA", cache["Qocc0A"])
+        core.set_variable("FSAPT_QB", cache["Qocc0B"])
+        core.set_variable("FSAPT_ELST_AB", cache['Elst_AB'])
+        core.set_variable("FSAPT_AB_SIZE", np.array(cache["Elst_AB"].np.shape).reshape(1, -1))
+        core.set_variable("FSAPT_EXCH_AB", cache['Exch_AB'])
+        core.set_variable("FSAPT_INDAB_AB", cache['IndAB_AB'])
+        core.set_variable("FSAPT_INDBA_AB", cache['IndBA_AB'])
+        core.set_variable("FSAPT_DISP_AB", cache['Disp_AB'])
+        if sapt_dft_D4_IE:  # and d4_type == 'intermolecular':
+            core.set_variable("FSAPT_EMPIRICAL_DISP", data['FSAPT_EMPIRICAL_DISP'])
     return data
 
 
