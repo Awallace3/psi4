@@ -960,7 +960,7 @@ def compute_fsapt_qcvars(
     completeness=0.85,
     dirname=".",
 ):
-    geom = geom.tolist()
+    # geom = geom.tolist()
 
     Zs = {
         "A": Z[monomer_slices[0][0] : monomer_slices[0][1]].tolist(),
@@ -1543,6 +1543,7 @@ def run_fsapt_analysis(
         molecule = atomic_results.molecule
         R = molecule.geometry
         Z = molecule.atomic_numbers
+        Z_el = molecule.atomic_symbols
         geom = np.hstack((Z.reshape(-1, 1), R))
         monomer_slices = [
             (0, molecule.fragments_[1][0]),
@@ -1575,8 +1576,11 @@ def run_fsapt_analysis(
                 core.set_variable(key, v)
     else:
         monomer_slices = molecule.get_fragments()
-        R, _, _, Z, _ = molecule.to_arrays()
-        geom = np.hstack((Z.reshape(-1, 1), R))
+        R, _, Z_el, Z, _ = molecule.to_arrays()
+        # PDB writing later needs Z to be str (element symbols=Z_el)
+        geom = []
+        for i in range(len(Z)):
+            geom.append([str(Z_el[i]), R[i][0], R[i][1], R[i][2]])
 
     if fragments_a is None or fragments_b is None:
         raise Exception(
