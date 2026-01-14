@@ -906,7 +906,11 @@ def print_order2(
                             print("%8.3f " % (order2[saptkey][keyA][keyB]), end="")
                         except KeyError:
                             continue
-                data[saptkey].append(order1B[saptkey][keyB])
+                # Use the actual pairwise energy for the data dictionary
+                try:
+                    data[saptkey].append(order2[saptkey][keyA][keyB])
+                except KeyError:
+                    data[saptkey].append(0.0)
             if print_output:
                 print("")
 
