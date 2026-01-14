@@ -186,6 +186,39 @@ def get_natoms(frags: Dict[str, Dict[str, List[int]]]) -> Dict[str, int]:
     return natoms
 
 
+def compute_closest_contact(
+    geom: List[List],
+    indices_a: List[int],
+    indices_b: List[int],
+) -> float:
+    """Compute the closest contact distance between two sets of atoms.
+
+    Arguments
+    ---------
+    geom : List[List]
+        Geometry as list of [element, x, y, z] for each atom.
+    indices_a : List[int]
+        Atom indices for fragment A (0-indexed).
+    indices_b : List[int]
+        Atom indices for fragment B (0-indexed).
+
+    Returns
+    -------
+    min_dist : float
+        Minimum distance between any atom in fragment A and any atom in
+        fragment B.
+    """
+    min_dist = float('inf')
+    for idx_a in indices_a:
+        xa, ya, za = geom[idx_a][1], geom[idx_a][2], geom[idx_a][3]
+        for idx_b in indices_b:
+            xb, yb, zb = geom[idx_b][1], geom[idx_b][2], geom[idx_b][3]
+            dist = np.sqrt((xa - xb)**2 + (ya - yb)**2 + (za - zb)**2)
+            if dist < min_dist:
+                min_dist = dist
+    return min_dist
+
+
 def read_d3_fragments(dirname: Optional[str] = ".") -> Dict[str, Dict[str, List[int]]]:
     """Creates a dictionary of fragments from fsapt fragment files for post-analysis
 
@@ -790,12 +823,23 @@ def collapse_links(order2, frags, Qs, orbital_ws, links5050):
     return vals
 
 
-def print_order2(order2, fragkeys, saptkeys=saptkeys_, print_output=True, frags=None):
+def print_order2(
+    order2,
+    fragkeys,
+    saptkeys=saptkeys_,
+    print_output=True,
+    frags=None,
+    closest_contacts=None,
+):
     # Added Frag1_indices and Frag2_indices to output data for easier
     # postprocessing of fragment indices for downstream applications like ML
     # models
     # data = {col: [] for col in ["Frag1", "Frag2"] + saptkeys + ["Frag1_indices", "Frag2_indices"]}
-    data = {col: [] for col in ["Frag1", "Frag2", "Frag1_indices", "Frag2_indices"] + saptkeys + []}
+    cols = ["Frag1", "Frag2", "Frag1_indices", "Frag2_indices"]
+    if closest_contacts is not None:
+        cols.append("ClosestContact")
+    cols.extend(saptkeys)
+    data = {col: [] for col in cols}
     order1A = {}
     order1B = {}
     for saptkey in saptkeys:
@@ -845,6 +889,12 @@ def print_order2(order2, fragkeys, saptkeys=saptkeys_, print_output=True, frags=
                 data["Frag2_indices"].append([x + 1 for x in frags["B"][keyB]])
             else:
                 data["Frag2_indices"].append([])
+            # Add closest contact distance for this fragment pair
+            if closest_contacts is not None:
+                try:
+                    data["ClosestContact"].append(closest_contacts[keyA][keyB])
+                except KeyError:
+                    data["ClosestContact"].append(None)
             if print_output:
                 print("%-9s %-9s " % (keyA, keyB), end="")
             for saptkey in saptkeys:
@@ -877,6 +927,17 @@ def print_order2(order2, fragkeys, saptkeys=saptkeys_, print_output=True, frags=
             data["Frag2_indices"].append(all_b_indices)
         else:
             data["Frag2_indices"].append([])
+        # Closest contact for keyA vs All: min over all B fragments
+        if closest_contacts is not None:
+            min_dist = float('inf')
+            if keyA in closest_contacts:
+                for keyB_inner in fragkeys["B"]:
+                    if keyB_inner in closest_contacts[keyA]:
+                        min_dist = min(min_dist, closest_contacts[keyA][keyB_inner])
+            if min_dist == float('inf'):
+                data["ClosestContact"].append(None)
+            else:
+                data["ClosestContact"].append(min_dist)
         for saptkey in saptkeys:
             data[saptkey].append(order1A[saptkey][keyA])
             if print_output:
@@ -899,6 +960,17 @@ def print_order2(order2, fragkeys, saptkeys=saptkeys_, print_output=True, frags=
             data["Frag2_indices"].append([x + 1 for x in frags["B"][keyB]])
         else:
             data["Frag2_indices"].append([])
+        # Closest contact for All vs keyB: min over all A fragments
+        if closest_contacts is not None:
+            min_dist = float('inf')
+            for keyA_inner in fragkeys["A"]:
+                if keyA_inner in closest_contacts:
+                    if keyB in closest_contacts[keyA_inner]:
+                        min_dist = min(min_dist, closest_contacts[keyA_inner][keyB])
+            if min_dist == float('inf'):
+                data["ClosestContact"].append(None)
+            else:
+                data["ClosestContact"].append(min_dist)
         if print_output:
             print("%-9s %-9s " % ("All", keyB), end="")
         for saptkey in saptkeys:
@@ -924,6 +996,20 @@ def print_order2(order2, fragkeys, saptkeys=saptkeys_, print_output=True, frags=
     else:
         data["Frag1_indices"].append([])
         data["Frag2_indices"].append([])
+    # Closest contact for All vs All: global minimum
+    if closest_contacts is not None:
+        min_dist = float('inf')
+        for keyA_inner in fragkeys["A"]:
+            if keyA_inner in closest_contacts:
+                for keyB_inner in fragkeys["B"]:
+                    if keyB_inner in closest_contacts[keyA_inner]:
+                        min_dist = min(
+                            min_dist, closest_contacts[keyA_inner][keyB_inner]
+                        )
+        if min_dist == float('inf'):
+            data["ClosestContact"].append(None)
+        else:
+            data["ClosestContact"].append(min_dist)
     if print_output:
         print("%-9s %-9s " % ("All", "All"), end="")
     for saptkey in saptkeys:
@@ -1106,7 +1192,6 @@ def compute_fsapt_qcvars(
         geom_extern_A = np.hstack(
             (np.zeros((len(geom_extern_A), 1)), geom_extern_A)
         ).tolist()
-        print(f"geom_extern_A: {geom_extern_A}")
         fragkeys["A"].append("Extern-A")
         fragkeysr["A"].append("Extern-A")
         orbital_ws["A"]["Extern-A"] = [0.0 for i in range(len(Qs["A"]))]
@@ -1165,6 +1250,21 @@ def compute_fsapt_qcvars(
     order2 = extract_order2_fsapt(osapt, total_ws["A"], total_ws["B"], frags)
     order2r = collapse_links(order2, frags, Qs, orbital_ws, links5050)
 
+    # Compute closest contact distances for each fragment pair (reduced keys)
+    closest_contacts = {}
+    for keyA in fragkeysr["A"]:
+        closest_contacts[keyA] = {}
+        if keyA not in frags["A"] or "Link" in keyA:
+            continue
+        for keyB in fragkeysr["B"]:
+            if keyB not in frags["B"] or "Link" in keyB:
+                continue
+            indices_a = frags["A"][keyA]
+            indices_b = frags["B"][keyB]
+            closest_contacts[keyA][keyB] = compute_closest_contact(
+                geom, indices_a, indices_b
+            )
+
     stuff = {}
     stuff["order2"] = order2
     stuff["fragkeys"] = fragkeys
@@ -1172,6 +1272,7 @@ def compute_fsapt_qcvars(
     stuff["fragkeysr"] = fragkeysr
     stuff["frags"] = frags
     stuff["geom"] = geom
+    stuff["closest_contacts"] = closest_contacts
     return stuff
 
 
@@ -1356,6 +1457,21 @@ def compute_fsapt(dirname, links5050, completeness=0.85):
     order2 = extract_order2_fsapt(osapt, total_ws["A"], total_ws["B"], frags)
     order2r = collapse_links(order2, frags, Qs, orbital_ws, links5050)
 
+    # Compute closest contact distances for each fragment pair (reduced keys)
+    closest_contacts = {}
+    for keyA in fragkeysr["A"]:
+        closest_contacts[keyA] = {}
+        if keyA not in frags["A"] or "Link" in keyA:
+            continue
+        for keyB in fragkeysr["B"]:
+            if keyB not in frags["B"] or "Link" in keyB:
+                continue
+            indices_a = frags["A"][keyA]
+            indices_b = frags["B"][keyB]
+            closest_contacts[keyA][keyB] = compute_closest_contact(
+                geom, indices_a, indices_b
+            )
+
     stuff = {}
     stuff["order2"] = order2
     stuff["fragkeys"] = fragkeys
@@ -1363,6 +1479,7 @@ def compute_fsapt(dirname, links5050, completeness=0.85):
     stuff["fragkeysr"] = fragkeysr
     stuff["frags"] = frags
     stuff["geom"] = geom
+    stuff["closest_contacts"] = closest_contacts
     return stuff
 
 
@@ -1544,7 +1661,6 @@ def run_fsapt_analysis(
         R = molecule.geometry
         Z = molecule.atomic_numbers
         Z_el = molecule.atomic_symbols
-        geom = np.hstack((Z.reshape(-1, 1), R))
         monomer_slices = [
             (0, molecule.fragments_[1][0]),
             (molecule.fragments_[1][0], molecule.fragments_[1][-1] + 1),
@@ -1578,9 +1694,9 @@ def run_fsapt_analysis(
         monomer_slices = molecule.get_fragments()
         R, _, Z_el, Z, _ = molecule.to_arrays()
         # PDB writing later needs Z to be str (element symbols=Z_el)
-        geom = []
-        for i in range(len(Z)):
-            geom.append([str(Z_el[i]), R[i][0], R[i][1], R[i][2]])
+    geom = []
+    for i in range(len(Z)):
+        geom.append([str(Z_el[i]), R[i][0], R[i][1], R[i][2]])
 
     if fragments_a is None or fragments_b is None:
         raise Exception(
@@ -1606,7 +1722,13 @@ def run_fsapt_analysis(
         results = compute_fsapt_qcvars(
             geom, Z, monomer_slices, holder, links5050=links5050, dirname=dirname
         )
-        data = print_order2(results["order2"], results["fragkeys"], print_output=print_output, frags=results["frags"])
+        data = print_order2(
+            results["order2"],
+            results["fragkeys"],
+            print_output=print_output,
+            frags=results["frags"],
+            closest_contacts=results["closest_contacts"],
+        )
         results_tag = "order2"
     elif analysis_type == "reduced":
         print("  ==> Reduced Analysis <==\n")
@@ -1615,13 +1737,18 @@ def run_fsapt_analysis(
             geom, Z, monomer_slices, holder, links5050=links5050, dirname=dirname
         )
         results_tag = "order2r"
-        data = print_order2(results["order2r"], results["fragkeysr"], print_output=print_output, frags=results["frags"])
+        data = print_order2(
+            results["order2r"],
+            results["fragkeysr"],
+            print_output=print_output,
+            frags=results["frags"],
+            closest_contacts=results["closest_contacts"],
+        )
     else:
         raise Exception("Invalid analysis type. Please specify 'full' or 'reduced'.")
     if pdb_dir is not None:
         print("  ==> Writing PDB Files <==\n")
         print(f"     {pdb_dir = } \n")
-        print(results["geom"])
         pdb = PDB.from_geom(results["geom"])
         print_order1(dirname, results[results_tag], pdb, results["frags"])
     return data
@@ -1630,7 +1757,6 @@ def run_fsapt_analysis(
 def run_from_output(dirname="./fsapt", return_data="reduced_analysis"):
 
     # > Order-2 Analysis < #
-
     fh = open("%s/fsapt.dat" % dirname, "w")
     fh, sys.stdout = sys.stdout, fh
 
@@ -1638,19 +1764,41 @@ def run_from_output(dirname="./fsapt", return_data="reduced_analysis"):
     stuff = compute_fsapt(dirname, False)
 
     print("   => Full Analysis <=\n")
-    print_order2(stuff["order2"], stuff["fragkeys"], frags=stuff["frags"])
+    print_order2(
+        stuff["order2"],
+        stuff["fragkeys"],
+        frags=stuff["frags"],
+        closest_contacts=stuff["closest_contacts"],
+    )
 
     print("   => Reduced Analysis <=\n")
-    print_order2(stuff["order2r"], stuff["fragkeysr"], frags=stuff["frags"])
+    print_order2(
+        stuff["order2r"],
+        stuff["fragkeysr"],
+        frags=stuff["frags"],
+        closest_contacts=stuff["closest_contacts"],
+    )
 
     print("  ==> F-ISAPT: Links 50-50 <==\n")
     stuff = compute_fsapt(dirname, True)
 
     saptkeys_local = list(stuff["order2r"].keys())
     print("   => Full Analysis <=\n")
-    data_full_analysis = print_order2(stuff["order2"], stuff["fragkeys"], saptkeys=saptkeys_local, frags=stuff["frags"])
+    data_full_analysis = print_order2(
+        stuff["order2"],
+        stuff["fragkeys"],
+        saptkeys=saptkeys_local,
+        frags=stuff["frags"],
+        closest_contacts=stuff["closest_contacts"],
+    )
     print("   => Reduced Analysis <=\n")
-    data_reduced_analsysis = print_order2(stuff["order2r"], stuff["fragkeysr"], saptkeys=saptkeys_local, frags=stuff["frags"])
+    data_reduced_analsysis = print_order2(
+        stuff["order2r"],
+        stuff["fragkeysr"],
+        saptkeys=saptkeys_local,
+        frags=stuff["frags"],
+        closest_contacts=stuff["closest_contacts"],
+    )
 
     fh, sys.stdout = sys.stdout, fh
     fh.close()
