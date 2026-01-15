@@ -1474,7 +1474,12 @@ class Molecule(LibmintsMolecule):
                     core.set_variable(k, float(qca))
         if property:
             core.set_variable('DFTD4 C6 COEFFICIENTS', jobrec['extras']['dftd4']['c6 coefficients'])
-            core.set_variable('DFTD4 ATOMIC POLARIZIBILITIES', jobrec['extras']['dftd4']['polarizibilities'].reshape(-1, 1))
+            # NOTE: DFTD4 doesn't provide polarizabilities in the qcvars
+            # anymore? Investigate before accepting these changes...
+            # from pprint import pprint as pp
+            # pp(jobrec['extras']['dftd4'])
+            # Only have c6 coefficients and coordination numbers now...
+            # core.set_variable('DFTD4 ATOMIC POLARIZIBILITIES', jobrec['extras']['dftd4']['polarizibilities'].reshape(-1, 1))
 
         if derint == -1:
             return (float(jobrec['extras']['qcvars']['DISPERSION CORRECTION ENERGY']),
