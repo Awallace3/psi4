@@ -1,0 +1,6 @@
+============================================================================================== short test summary info ==============================================================================================
+FAILED tests/pytests/test_fsaptdft.py::test_fsaptdftd4_psivars - FileNotFoundError: [Errno 2] No such file or directory: 'none/Empirical_Disp.dat'
+FAILED tests/pytests/test_fsaptdft.py::test_fsaptdft_disp0_fisapt0_psivars - KeyError: 'Qocc0A'
+FAILED tests/pytests/test_fsaptdft.py::test_fsaptdftd4_psivars_pbe0 - FileNotFoundError: [Errno 2] No such file or directory: 'none/Empirical_Disp.dat'
+FAILED tests/pytests/test_fsaptdft.py::test_fsaptdftd4_psivars_pbe0_frozen_core - FileNotFoundError: [Errno 2] No such file or directory: 'none/Empirical_Disp.dat'
+FAILED tests/pytests/test_fsaptdft.py::test_fsaptdft_indices - FileNotFoundError: [Errno 2] No such file or directory: 'none/Empirical_Disp.dat'

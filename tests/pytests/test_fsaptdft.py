@@ -522,101 +522,89 @@ no_com
     df = pd.DataFrame(data)
     print("COMPUTED DF")
     print(df[["Frag1", "Frag2", "ClosestContact", "Elst", "IndAB", "IndBA", "Disp", "EDisp", "Total"]])
-    # data_tmp = {k: v.tolist() for k, v in dict(df).items()}
-    # pp(data_tmp)
-    data = {
-        "Disp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        "EDisp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        "Elst": [
-            -0.100513,
-            -1.139774,
-            -0.100513,
-            -1.139774,
-            0.511801,
-            -1.752088,
-            -0.100513,
-            -1.139774,
-            -1.240287,
-        ],
-        "Exch": [
-            0.031751,
-            3.943794,
-            0.031751,
-            3.943794,
-            0.047332,
-            3.928213,
-            0.031751,
-            3.943794,
-            3.975545,
-        ],
-        "Frag1": [
-            "Methyl1_A",
-            "Methyl1_A",
-            "Methyl2_A",
-            "Methyl2_A",
-            "Methyl1_A",
-            "Methyl2_A",
-            "All",
-            "All",
-            "All",
-        ],
-        "Frag2": [
-            "Peptide_B",
-            "T-Butyl_B",
-            "Peptide_B",
-            "T-Butyl_B",
-            "All",
-            "All",
-            "Peptide_B",
-            "T-Butyl_B",
-            "All",
-        ],
-        "IndAB": [
-            -0.033169,
-            -0.190334,
-            -0.033169,
-            -0.190334,
-            -0.022726,
-            -0.200776,
-            -0.033169,
-            -0.190334,
-            -0.223502,
-        ],
-        "IndBA": [
-            -0.001398,
-            -0.065972,
-            -0.001398,
-            -0.065972,
-            0.015095,
-            -0.082466,
-            -0.001398,
-            -0.065972,
-            -0.067370,
-        ],
-        "Total": [
-            -0.103328,
-            2.547714,
-            -0.103328,
-            2.547714,
-            0.551502,
-            1.892883,
-            -0.103328,
-            2.547714,
-            2.444386,
-        ],
-    }
+    data_tmp = {k: v.tolist() for k, v in dict(df).items()}
+    pp(data_tmp)
+    data = { 'Disp': [-0.00399436152159229,
+          -0.06741037189411032,
+          -0.013546524596044364,
+          -0.41148730370035314,
+          -0.07140473341570261,
+          -0.4250338282963975,
+          -0.017540886117636656,
+          -0.47889767559446345,
+          -0.4964385617121001],
+ 'EDisp': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+ 'Elst': [0.7173658712642776,
+          -0.20556512118969295,
+          -0.8178788514412361,
+          -0.9342087754091182,
+          0.5118007500745847,
+          -1.7520876268503542,
+          -0.10051298017695842,
+          -1.1397738965988111,
+          -1.2402868767757695],
+ 'Exch': [0.00013545439373786606,
+          0.0471968221083766,
+          0.03161592765409533,
+          3.896597012155338,
+          0.04733227650211447,
+          3.928212939809433,
+          0.0317513820478332,
+          3.9437938342637144,
+          3.9755452163115477],
+ 'IndAB': [-0.007097098270914404,
+           -0.015628832205804594,
+           -0.026071456661474337,
+           -0.1747049022073196,
+           -0.022725930476719,
+           -0.20077635886879394,
+           -0.03316855493238874,
+           -0.1903337344131242,
+           -0.22350228934551294],
+ 'IndBA': [0.0003539943194493893,
+           0.014741295750793878,
+           -0.0017520923551549333,
+           -0.08071357456909534,
+           0.015095290070243267,
+           -0.08246566692425027,
+           -0.001398098035705544,
+           -0.06597227881830146,
+           -0.067370376854007],
+ 'Frag1': ['Methyl1_A',
+           'Methyl1_A',
+           'Methyl2_A',
+           'Methyl2_A',
+           'Methyl1_A',
+           'Methyl2_A',
+           'All',
+           'All',
+           'All'],
+ 'Frag2': ['Peptide_B',
+           'T-Butyl_B',
+           'Peptide_B',
+           'T-Butyl_B',
+           'All',
+           'All',
+           'Peptide_B',
+           'T-Butyl_B',
+           'All'],
+ 'Total': [0.7067638601845871,
+           -0.22666620743385835,
+           -0.8276329973991707,
+           2.2954824562673153,
+           0.4800976527507288,
+           1.4678494588681446,
+           -0.12086913721458359,
+           2.068816248833457,
+           1.9479471116188734]}
 
     ref_df = pd.DataFrame(data)
+    cols = ["Frag1", "Frag2", "Elst", "Exch", "IndAB", "IndBA", "Disp", "EDisp", "Total"]
+    df = df[cols]
     print("REF")
     print(ref_df)
-    # difference df
-    df_diff = ref_df.copy()
-    df_diff.iloc[:, 2:] = ref_df.iloc[:, 2:] - df.iloc[:, 2:]
-    print("DIFF")
-    print(df_diff)
-    print(df_diff[["Frag1", "Frag2", "IndAB"]])
 
-    for col in ["Elst", "Exch", "IndAB", "IndBA", "Disp", "EDisp", "Total"]:
+    for col in cols:
         for i in range(len(ref_df)):
             compare_values(
                 ref_df[col].iloc[i],
@@ -2141,17 +2129,16 @@ if __name__ == "__main__":
     # test_fsaptdft_simple()
 
     # test_fsaptdft_fisapt0()
-    test_fsaptdft_fisapt0_d4()
+    # test_fsaptdft_fisapt0_d4()
     # test_fsaptdft_disp0_fisapt0_psivars()
     # test_fsaptdft_fisapt0()
     # test_fsaptdft_fisapt0()
     # test_fsaptdft()
     # test_fsaptdft_fsapt0_simple()
-    # test_fsaptdftd4_psivars()
+    test_fsaptdftd4_psivars()
     # test_fsaptdft_fsapt0()
     # test_fsapt0_fsaptdft()
     # test_fsaptdft_psivars()
     # test_fsapthf_psivars()
-    # test_fsaptdftd4_psivars()
     # test_fsaptdftd4_psivars_pbe0()
     # test_fsaptdft_indices()

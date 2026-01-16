@@ -1662,9 +1662,15 @@ def run_fsapt_analysis(
         )
     if atomic_results is not None:
         molecule = atomic_results.molecule
+        print(molecule, dir(molecule))
         R = molecule.geometry
         Z = molecule.atomic_numbers
-        Z_el = molecule.atomic_symbols
+        if hasattr(molecule, "atomic_symbols"):
+            Z_el = molecule.atomic_symbols
+        elif hasattr(molecule, "symbols"):
+            Z_el = molecule.symbols
+        else:
+            raise Exception("Cannot retrieve atomic symbols from molecule object.")
         monomer_slices = [
             (0, molecule.fragments_[1][0]),
             (molecule.fragments_[1][0], molecule.fragments_[1][-1] + 1),
