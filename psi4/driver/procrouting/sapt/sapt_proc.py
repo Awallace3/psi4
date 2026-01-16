@@ -561,8 +561,6 @@ def run_sapt_dft(name, **kwargs):
             )
             data["D4 IE"] = v['D4 IE']
             data['FSAPT_EMPIRICAL_DISP'] = v['FSAPT_EMPIRICAL_DISP']
-            print('D4 IE:', data['D4 IE'])
-            print('D4 FSAPT Empirical Dispersion:', data['FSAPT_EMPIRICAL_DISP'])
         else:
             raise ValueError("SAPT(DFT): d4_type must be 'supermolecular' or 'intermolecular'.")
         core.timer_off("SAPT(DFT):D4 Interaction Energy")
@@ -1140,7 +1138,13 @@ def sapt_dft(
         scalars = FISAPT_obj.scalars()
         data["Exch-Disp20,u"] = scalars["Exch-Disp20"]
         data["Disp20,u"] = scalars["Disp20"]
+        matrices = FISAPT_obj.matrices()
+        for k, v in matrices.items():
+            cache[k] = v
     elif do_fsapt and fsapt_type == "FISAPT":
+        matrices = FISAPT_obj.matrices()
+        for k, v in matrices.items():
+            cache[k] = v
         FISAPT_obj.fdrop(external_potentials)
 
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")

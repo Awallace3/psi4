@@ -324,73 +324,6 @@ def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars):
     """
     fisapt = core.FISAPT(wfn)
     # iterate through cache and scalars to set these labels for fisapt_fdrop:
-    """
-    vectors = self.vectors()
-    matrices = self.matrices()
-
-    matrices["Qocc0A"].name = "QA"
-    matrices["Qocc0B"].name = "QB"
-    matrices["Elst_AB"].name = "Elst"
-    matrices["Exch_AB"].name = "Exch"
-    matrices["IndAB_AB"].name = "IndAB"
-    matrices["IndBA_AB"].name = "IndBA"
-    core.set_variable("FSAPT_QA", matrices["Qocc0A"])
-    core.set_variable("FSAPT_QB", matrices["Qocc0B"])
-    core.set_variable("FSAPT_ELST_AB", matrices["Elst_AB"])
-    core.set_variable("FSAPT_AB_SIZE", np.array(matrices["Elst_AB"].np.shape).reshape(1, -1))
-    core.set_variable("FSAPT_EXCH_AB", matrices["Exch_AB"])
-    core.set_variable("FSAPT_INDAB_AB", matrices["IndAB_AB"])
-    core.set_variable("FSAPT_INDBA_AB", matrices["IndBA_AB"])
-
-    if write_output_files:
-        _drop(vectors["ZA"], filepath)
-        _drop(vectors["ZB"], filepath)
-        _drop(matrices["Qocc0A"], filepath)
-        _drop(matrices["Qocc0B"], filepath)
-        _drop(matrices["Elst_AB"], filepath)
-        _drop(matrices["Exch_AB"], filepath)
-        _drop(matrices["IndAB_AB"], filepath)
-        _drop(matrices["IndBA_AB"], filepath)
-
-    if core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP"):
-        matrices["Disp_AB"].name = "Disp"
-        core.set_variable("FSAPT_DISP_AB", matrices["Disp_AB"])
-        if write_output_files:
-            _drop(matrices["Disp_AB"], filepath)
-
-    if core.get_option("FISAPT", "SSAPT0_SCALE"):
-        # NOTE: do same as above for conditionally writing
-        ssapt_filepath = core.get_option("FISAPT", "FISAPT_FSSAPT_FILEPATH")
-        write_ssapt_files = ssapt_filepath.lower() != "none"
-
-        if write_ssapt_files:
-            os.makedirs(ssapt_filepath, exist_ok=True)
-            core.print_out("    sF-SAPT Data Filepath = {}\n\n".format(ssapt_filepath))
-            geomfile = ssapt_filepath + os.sep + "geom.xyz"
-            with open(geomfile, "w") as fh:
-                fh.write(xyz)
-
-        matrices["sIndAB_AB"].name = "IndAB"
-        matrices["sIndBA_AB"].name = "IndBA"
-        core.set_variable("FSAPT_SINDAB_AB", matrices["sIndAB_AB"])
-        core.set_variable("FSAPT_SINDBA_AB", matrices["sIndBA_AB"])
-
-        if write_ssapt_files:
-            _drop(vectors["ZA"], ssapt_filepath)
-            _drop(vectors["ZB"], ssapt_filepath)
-            _drop(matrices["Qocc0A"], ssapt_filepath)
-            _drop(matrices["Qocc0B"], ssapt_filepath)
-            _drop(matrices["Elst_AB"], ssapt_filepath)
-            _drop(matrices["Exch_AB"], ssapt_filepath)
-            _drop(matrices["sIndAB_AB"], ssapt_filepath)
-            _drop(matrices["sIndBA_AB"], ssapt_filepath)
-
-        if core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP"):
-            matrices["sDisp_AB"].name = "Disp"
-            core.set_variable("FSAPT_SDISP_AB", matrices["sDisp_AB"])
-            if write_ssapt_files:
-                _drop(matrices["sDisp_AB"], ssapt_filepath)
-    """
     cache_keys = {
         "Qocc0A": "Qocc0A",
         "Qocc0B": "Qocc0B",
@@ -426,6 +359,7 @@ def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars):
         print(pw_disp)
         pw_disp.name = "Empirical_Disp"
         filepath = core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH")
+        if filepath.lower() != "none":
+            fisapt_proc._drop(pw_disp, filepath)
         core.set_variable("FSAPT_" + pw_disp.name.upper(), pw_disp)
-        fisapt_proc._drop(pw_disp, filepath)
     return
