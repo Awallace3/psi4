@@ -61,6 +61,91 @@ import einsums as ein
 __all__ = ["run_sapt_dft", "sapt_dft", "run_sf_sapt"]
 
 
+def is_isapt_molecule(molecule: core.Molecule) -> bool:
+    """
+    Check if the molecule has 3 fragments with real atoms in the third fragment.
+    
+    I-SAPT (Intramolecular SAPT) requires:
+    - 3 fragments (A, B, C)
+    - Fragment C has real atoms (not ghosts)
+    
+    Parameters
+    ----------
+    molecule : core.Molecule
+        The molecule to check.
+    
+    Returns
+    -------
+    bool
+        True if this is an I-SAPT case.
+    """
+    nfrag = molecule.nfragments()
+    if nfrag != 3:
+        return False
+    
+    # Check if fragment C has real atoms
+    fragments = molecule.get_fragments()
+    if len(fragments) < 3:
+        return False
+    
+    frag_C_range = fragments[2]
+    for atom_idx in range(frag_C_range[0], frag_C_range[1]):
+        if molecule.Z(atom_idx) > 0:
+            return True
+    
+    return False
+
+
+def prepare_isapt_molecule(
+    sapt_dimer: core.Molecule,
+    clone_molecule: bool = True
+):
+    """
+    Prepare a 3-fragment molecule for I-SAPT calculation.
+    
+    Unlike standard SAPT which ghosts the other fragment, I-SAPT keeps all
+    fragments with their real basis functions since the SCF is done on the
+    dimer (A+B+C) first, then partitioned.
+    
+    Parameters
+    ----------
+    sapt_dimer : core.Molecule
+        The 3-fragment molecule (A--B--C).
+    clone_molecule : bool, optional
+        Whether to clone the molecule (default True).
+    
+    Returns
+    -------
+    Tuple[core.Molecule, core.Molecule, core.Molecule]
+        (sapt_dimer, monomerA_ghost, monomerB_ghost) where monomer molecules
+        have the other monomers ghosted but C remains.
+    """
+    if clone_molecule:
+        sapt_dimer = sapt_dimer.clone()
+    
+    # Set to C1 symmetry
+    if sapt_dimer.schoenflies_symbol() != 'c1':
+        core.print_out('  I-SAPT does not use molecular symmetry, running in C1.\n')
+        sapt_dimer.reset_point_group('c1')
+        sapt_dimer.fix_orientation(True)
+        sapt_dimer.fix_com(True)
+        sapt_dimer.update_geometry()
+    else:
+        sapt_dimer.update_geometry()
+        sapt_dimer.fix_orientation(True)
+        sapt_dimer.fix_com(True)
+    
+    # For I-SAPT, we extract monomers A and B with B/A ghosted but C remains
+    # Fragment 1 = A, Fragment 2 = B, Fragment 3 = C
+    monomerA = sapt_dimer.extract_subsets(1, [2, 3])  # A with B,C ghosted
+    monomerA.set_name('monomerA')
+    
+    monomerB = sapt_dimer.extract_subsets(2, [1, 3])  # B with A,C ghosted
+    monomerB.set_name('monomerB')
+    
+    return sapt_dimer, monomerA, monomerB
+
+
 def run_sapt_dft(name, **kwargs):
     optstash = p4util.OptionsState(
         ["SCF_TYPE"],
@@ -88,9 +173,21 @@ def run_sapt_dft(name, **kwargs):
         )
         sapt_dimer_initial = ref_wfn.molecule()
 
-    sapt_dimer, monomerA, monomerB = proc_util.prepare_sapt_molecule(
-        sapt_dimer_initial, "dimer"
-    )
+    # Check if this is an I-SAPT case (3-fragment molecule with real atoms in C)
+    do_isapt = is_isapt_molecule(sapt_dimer_initial)
+    
+    if do_isapt:
+        # I-SAPT: 3 fragments with real atoms in fragment C
+        core.print_out("\n  ==> I-SAPT Detected <==\n\n")
+        core.print_out("  Molecule has 3 fragments with real atoms in fragment C.\n")
+        core.print_out("  Running Intramolecular SAPT (I-SAPT).\n\n")
+        sapt_dimer, monomerA, monomerB = prepare_isapt_molecule(
+            sapt_dimer_initial, clone_molecule=True
+        )
+    else:
+        sapt_dimer, monomerA, monomerB = proc_util.prepare_sapt_molecule(
+            sapt_dimer_initial, "dimer"
+        )
 
     if getattr(sapt_dimer_initial, "_initial_cartesian", None) is not None:
         sapt_dimer._initial_cartesian = sapt_dimer_initial._initial_cartesian
@@ -127,6 +224,26 @@ def run_sapt_dft(name, **kwargs):
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     do_dft = sapt_dft_functional != "HF"
+
+    # I-SAPT: Handle features differently since monomers A and B are computed
+    # in embedded SCF (not as isolated radicals)
+    do_isapt_delta_hf = False
+    if do_isapt:
+        if do_delta_hf:
+            # For I-SAPT, we use a special delta HF formula:
+            # delta_HF = E_ABC - E_AC - E_BC + E_C
+            # This is computed AFTER the embedded SCF, not from separate monomer calcs
+            do_isapt_delta_hf = True
+            do_delta_hf = False  # Disable standard delta HF path
+            core.print_out("  I-SAPT: Will compute delta HF using 3-fragment formula.\n")
+        if do_delta_dft:
+            core.print_out("  I-SAPT: Delta DFT disabled (not yet implemented for I-SAPT).\n")
+            do_delta_dft = False
+        # GRAC shifts don't apply for I-SAPT since we don't run monomer SCF
+        do_mon_grac_shift_A = False
+        do_mon_grac_shift_B = False
+        mon_a_shift = 0.0
+        mon_b_shift = 0.0
 
     if do_mon_grac_shift_A or do_mon_grac_shift_B:
         monomerA_mon_only_bf = sapt_dimer.extract_subsets(1)
@@ -392,11 +509,62 @@ def run_sapt_dft(name, **kwargs):
     elif hf_wfn_dimer is None and core.get_option("SAPT", "SAPT_DFT_DO_FSAPT"):
         # NOTE: this might need to be with functional and not HF when using
         # DFT... Currently trying to match SAPT(HF), but remember this later!
+        # For I-SAPT, we also need to save the JK object
+        if do_isapt:
+            core.set_global_option("SAVE_JK", True)
+            core.set_local_option("SCF", "SAVE_JK", True)
         dimer_wfn = scf_helper("SCF", molecule=sapt_dimer, banner="SAPT(DFT): Dimer for Localization", **kwargs)
     else:
         dimer_wfn = hf_wfn_dimer
 
-    if do_dft or not do_delta_hf:
+    if do_isapt:
+        # I-SAPT: Don't run separate monomer SCF calculations
+        # Create wavefunctions from dimer wavefunction for use in SAPT terms
+        # We need dimer_wfn to have been computed above with Ca() available
+        need_dimer_scf = False
+        if dimer_wfn is None:
+            need_dimer_scf = True
+        else:
+            try:
+                _ = dimer_wfn.Ca()
+            except RuntimeError:
+                need_dimer_scf = True
+        
+        if need_dimer_scf:
+            # Compute dimer wavefunction if not already done
+            core.print_out("\n  I-SAPT: Computing dimer SCF for orbital localization...\n\n")
+            core.set_local_option("SCF", "SAVE_JK", True)
+            core.set_global_option("SAVE_JK", True)
+            dimer_wfn = scf_helper("SCF", molecule=sapt_dimer, 
+                                   banner="SAPT(DFT): I-SAPT Dimer SCF", **kwargs)
+        
+        # For I-SAPT, we create placeholder wavefunctions from the dimer
+        # The actual orbital partitioning happens in partition() later
+        core.print_out("\n  I-SAPT: Creating monomer wavefunctions from dimer...\n\n")
+        
+        # Create monomer wavefunctions - they share basis with dimer
+        # For I-SAPT, orbitals will be partitioned from dimer by localization
+        # We don't copy Ca here since the localization/partition process will 
+        # assign orbitals to A, B, C and store them in cache
+        wfn_A = core.Wavefunction.build(monomerA, core.get_global_option("BASIS"))
+        wfn_B = core.Wavefunction.build(monomerB, core.get_global_option("BASIS"))
+        
+        # Set placeholder energies (actual values computed via embedded SCF later)
+        data["DFT MONOMERA"] = 0.0
+        data["DFT MONOMERB"] = 0.0
+        
+        # Get JK object from dimer
+        if dimer_wfn.jk() is not None:
+            sapt_jk = dimer_wfn.jk()
+        else:
+            # Build JK if needed
+            sapt_jk = core.JK.build(dimer_wfn.basisset())
+            sapt_jk.initialize()
+        # Note: We don't call wfn_A.set_jk() / wfn_B.set_jk() because they are
+        # plain Wavefunction objects without that method. The sapt_jk object 
+        # is used directly in the SAPT calculations.
+
+    elif (do_dft or not do_delta_hf) and not do_isapt:
 
         # Set the primary functional
         core.set_local_option("SCF", "REFERENCE", "RKS")
@@ -469,9 +637,10 @@ def run_sapt_dft(name, **kwargs):
             kwargs["external_potentials"]["B"] = ext_pot_B
             _set_external_potentials_to_wavefunction(ext_pot_B, wfn_B)
 
-    # Save JK object
-    sapt_jk = wfn_B.jk()
-    wfn_A.set_jk(sapt_jk)
+    # Save JK object (skip for I-SAPT since we already set it)
+    if not do_isapt:
+        sapt_jk = wfn_B.jk()
+        wfn_A.set_jk(sapt_jk)
 
     if do_delta_dft and do_dft:
         optstash2 = p4util.OptionsState(
@@ -579,7 +748,10 @@ def run_sapt_dft(name, **kwargs):
     delta_hf = do_delta_hf and not do_dft
 
     # Call SAPT(DFT)
-    sapt_jk = wfn_B.jk()
+    # For I-SAPT, sapt_jk was already set earlier; for standard SAPT, get from wfn_B
+    if not do_isapt:
+        sapt_jk = wfn_B.jk()
+    # sapt_jk should already be set for I-SAPT from the earlier code block
     sapt_dft(
         dimer_wfn,
         wfn_A,
@@ -591,7 +763,9 @@ def run_sapt_dft(name, **kwargs):
         delta_hf=delta_hf,
         external_potentials = kwargs.get("external_potentials", None),
         do_delta_dft=do_delta_dft,
-        do_disp=do_disp
+        do_disp=do_disp,
+        do_isapt=do_isapt,
+        do_isapt_delta_hf=do_isapt_delta_hf
     )
 
     # Copy data back into globals
@@ -809,7 +983,9 @@ def sapt_dft(
     delta_hf=False,
     external_potentials=None,
     do_delta_dft=False, 
-    do_disp=True
+    do_disp=True,
+    do_isapt=False,
+    do_isapt_delta_hf=False
 ):
     """
     The primary SAPT(DFT) algorithm to compute the interaction energy once the wavefunctions have been built.
@@ -878,9 +1054,11 @@ def sapt_dft(
     sapt_jk.set_do_J(True)
     sapt_jk.set_do_K(True)
 
-    if wfn_A.functional().is_x_lrc():
-        sapt_jk.set_do_wK(True)
-        sapt_jk.set_omega(wfn_A.functional().x_omega())
+    # Check for LRC functional - may not be available for I-SAPT bare wavefunctions
+    if hasattr(wfn_A, 'functional') and wfn_A.functional() is not None:
+        if wfn_A.functional().is_x_lrc():
+            sapt_jk.set_do_wK(True)
+            sapt_jk.set_omega(wfn_A.functional().x_omega())
 
 
     if data is None:
@@ -892,38 +1070,143 @@ def sapt_dft(
         jk_terms = sapt_jk_terms_ein
     else:
         jk_terms = sapt_jk_terms
-    cache = jk_terms.build_sapt_jk_cache(
-        dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials
-    )
-    core.timer_off("SAPT(DFT):Build JK")
+    
+    # For I-SAPT, we need to do localization and partition BEFORE building the main cache,
+    # because wfn_A and wfn_B are bare wavefunctions without orbitals.
+    # The partition step will populate the cache with partitioned orbitals from the dimer.
+    if do_isapt:
+        # Build a minimal cache first - just store wavefunctions and basis info
+        cache = {}
+        cache["wfn_A"] = wfn_A
+        cache["wfn_B"] = wfn_B
+        cache["S"] = wfn_A.S().clone()
+        cache["S"].name = "S"
+        
+        # Store dimer orbitals needed for localization  
+        cache["Cfocc"] = dimer_wfn.Ca_subset("AO", "FROZEN_OCC")
+        cache["eps_all"] = dimer_wfn.epsilon_a_subset("AO", "ALL")
+        cache["Call"] = dimer_wfn.Ca_subset("AO", "ALL")
+        cache["Cocc"] = dimer_wfn.Ca_subset("AO", "OCC")
+        cache["Cvir"] = dimer_wfn.Ca_subset("AO", "VIR")
+        cache["eps_occ"] = dimer_wfn.epsilon_a_subset("AO", "OCC")
+        cache["eps_vir"] = dimer_wfn.epsilon_a_subset("AO", "VIR")
+        cache["Caocc"] = dimer_wfn.Ca_subset("AO", "ACTIVE_OCC")
+        cache["Cavir"] = dimer_wfn.Ca_subset("AO", "ACTIVE_VIR")
+        cache["Cfvir"] = dimer_wfn.Ca_subset("AO", "FROZEN_VIR")
+        cache["eps_focc"] = dimer_wfn.epsilon_a_subset("AO", "FROZEN_OCC")
+        cache["eps_aocc"] = dimer_wfn.epsilon_a_subset("AO", "ACTIVE_OCC")
+        cache["eps_avir"] = dimer_wfn.epsilon_a_subset("AO", "ACTIVE_VIR")
+        cache["eps_fvir"] = dimer_wfn.epsilon_a_subset("AO", "FROZEN_VIR")
+        
+        core.timer_off("SAPT(DFT):Build JK")
+        
+        # For I-SAPT: First do localization and partition to get monomer orbitals
+        core.timer_on("SAPT(DFT):Localize Orbitals")
+        sapt_jk_terms_ein.localization(cache, dimer_wfn, wfn_A, wfn_B)
+        core.timer_off("SAPT(DFT):Localize Orbitals")
+        
+        core.timer_on("SAPT(DFT):Partition")
+        cache = sapt_jk_terms_ein.partition(cache, dimer_wfn, wfn_A, wfn_B)
+        core.timer_off("SAPT(DFT):Partition")
+        
+        # Now build the I-SAPT cache with embedded SCF
+        core.timer_on("SAPT(DFT):I-SAPT Embedded SCF")
+        # For I-SAPT, wfn_A is a bare Wavefunction without functional()
+        if hasattr(wfn_A, 'functional') and wfn_A.functional() is not None:
+            functional = wfn_A.functional().name() if do_dft else None
+        else:
+            functional = None
+        cache = sapt_jk_terms_ein.build_isapt_cache(
+            dimer_wfn, sapt_jk, cache, functional=functional, do_print=True
+        )
+        core.timer_off("SAPT(DFT):I-SAPT Embedded SCF")
+        
+        # Now we can compute SAPT terms with the properly populated cache
+        core.timer_on("SAPT(DFT):elst")
+        fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")
+        do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT") != "NONE"
+        elst, extern_extern_IE = jk_terms.electrostatics(cache, True)
+        data["extern_extern_IE"] = extern_extern_IE
+        data.update(elst)
+        core.timer_off("SAPT(DFT):elst")
+        
+        core.timer_on("SAPT(DFT):exch")
+        # Use I-SAPT specific exchange function with MCBS formula
+        exch = jk_terms.exchange_isapt(cache, sapt_jk, True)
+        data.update(exch)
+        core.timer_off("SAPT(DFT):exch")
+        
+        core.timer_on("SAPT(DFT):ind")
+        ind = jk_terms.induction(
+            cache,
+            sapt_jk,
+            True,
+            sapt_jk_B=sapt_jk_B,
+            maxiter=core.get_option("SAPT", "MAXITER"),
+            conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
+            Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
+        )
+        data.update(ind)
+        core.timer_off("SAPT(DFT):ind")
+        
+        # Compute delta HF for I-SAPT if requested
+        if do_isapt_delta_hf:
+            core.timer_on("SAPT(DFT):delta_HF")
+            # compute_delta_hf_isapt returns E_HF (total HF interaction energy)
+            E_HF = jk_terms.compute_delta_hf_isapt(
+                dimer_wfn, sapt_jk, cache, do_print=True
+            )
+            # Delta HF = E_HF - Elst10,r - Exch10 - Ind20,r - Exch-Ind20,r
+            # This follows the C++ FISAPT implementation
+            delta_hf_value = E_HF - data["Elst10,r"] - data["Exch10"] - data["Ind20,r"] - data["Exch-Ind20,r"]
+            core.print_out(f"    delta HF,r (2) = {delta_hf_value:24.16E} [Eh]\n")
+            core.print_out(f"    delta HF,r (2) = {delta_hf_value * 1000:24.16f} [mEh]\n\n")
+            
+            data["Delta HF,r (2)"] = delta_hf_value
+            # Store for later use in setting psi4 variables and print_sapt_dft_summary
+            data["DHF VALUE"] = E_HF  # Total HF interaction
+            data["Delta HF Correction"] = delta_hf_value
+            core.set_variable("SAPT(DFT) Delta HF", delta_hf_value)
+            core.timer_off("SAPT(DFT):delta_HF")
+    else:
+        # Standard SAPT path
+        cache = jk_terms.build_sapt_jk_cache(
+            dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials
+        )
+        core.timer_off("SAPT(DFT):Build JK")
 
-    # Electrostatics
-    core.timer_on("SAPT(DFT):elst")
+        # Electrostatics
+        core.timer_on("SAPT(DFT):elst")
+        fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")
+        do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT") != "NONE"
+        elst, extern_extern_IE = jk_terms.electrostatics(cache, True)
+        data["extern_extern_IE"] = extern_extern_IE
+        data.update(elst)
+        core.timer_off("SAPT(DFT):elst")
+
+        # Exchange
+        core.timer_on("SAPT(DFT):exch")
+        exch = jk_terms.exchange(cache, sapt_jk, True)
+        data.update(exch)
+        core.timer_off("SAPT(DFT):exch")
+
+        # Induction
+        core.timer_on("SAPT(DFT):ind")
+        ind = jk_terms.induction(
+            cache,
+            sapt_jk,
+            True,
+            sapt_jk_B=sapt_jk_B,
+            maxiter=core.get_option("SAPT", "MAXITER"),
+            conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
+            Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
+        )
+        data.update(ind)
+        core.timer_off("SAPT(DFT):ind")
+
+    # Determine fsapt settings (needed by both paths for later code)
     fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")
     do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT") != "NONE"
-    elst, extern_extern_IE = jk_terms.electrostatics(cache, True)
-    data["extern_extern_IE"] = extern_extern_IE
-    data.update(elst)
-    core.timer_off("SAPT(DFT):elst")
-
-    # Exchange
-    core.timer_on("SAPT(DFT):exch")
-    exch = jk_terms.exchange(cache, sapt_jk, True)
-    data.update(exch)
-    core.timer_off("SAPT(DFT):exch")
-
-    # Induction
-    core.timer_on("SAPT(DFT):ind")
-    ind = jk_terms.induction(
-        cache,
-        sapt_jk,
-        True,
-        sapt_jk_B=sapt_jk_B,
-        maxiter=core.get_option("SAPT", "MAXITER"),
-        conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
-        Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
-    )
-    data.update(ind)
 
     # Set Delta HF for SAPT(HF)
     if delta_hf:
@@ -942,10 +1225,15 @@ def sapt_dft(
         core.set_variable("SAPT(DFT) Delta DFT", sapt_dft_delta)
         data["Delta DFT Correction"] = core.variable("SAPT(DFT) Delta DFT")
 
-    core.timer_off("SAPT(DFT):ind")
-
     # Use DFHelper before deleting the JK object for dispersion
-    if do_fsapt and fsapt_type == "SAPTDFT":
+    # Extract elst values for F-SAPT (needed for both paths)
+    elst = {"Elst10,r": data.get("Elst10,r", 0.0)}
+    extern_extern_IE = data.get("extern_extern_IE", 0.0)
+    exch = {"Exch10(S^2)": data.get("Exch10(S^2)", 0.0), "Exch10": data.get("Exch10", 0.0)}
+    
+    if do_fsapt and fsapt_type == "SAPTDFT" and not do_isapt:
+        # F-SAPT localization and partitioning
+        # Note: F-SAPT is not yet fully implemented for I-SAPT (3 fragments)
         core.timer_on("SAPT(DFT):Localize Orbitals")
         sapt_jk_terms_ein.localization(cache, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT):Localize Orbitals")
@@ -967,8 +1255,14 @@ def sapt_dft(
         core.timer_on("SAPT(DFT): F-SAPT Induction")
         cache = sapt_jk_terms_ein.find(cache, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
         core.timer_off("SAPT(DFT): F-SAPT Induction")
+    elif do_fsapt and do_isapt:
+        # For I-SAPT, F-SAPT partitioning is not yet fully implemented
+        # Skip F-SAPT localization and partitioning for now
+        core.print_out("\n  Note: F-SAPT partitioning is not yet fully implemented for I-SAPT.\n")
+        core.print_out("        Basic SAPT terms have been computed above.\n\n")
 
-    elif do_fsapt and fsapt_type == "FISAPT" and not use_einsums:
+    elif do_fsapt and fsapt_type == "FISAPT" and not use_einsums and not do_isapt:
+        # F-SAPT via C++ FISAPT (not available for I-SAPT)
         core.timer_on("SAPT(DFT):Localize Orbitals")
         sapt_jk_terms_ein.localization(cache, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT):Localize Orbitals")
@@ -994,7 +1288,8 @@ def sapt_dft(
         core.timer_on("SAPT(DFT): F-SAPT Induction")
         FISAPT_obj.find()
         core.timer_off("SAPT(DFT): F-SAPT Induction")
-    elif do_fsapt and fsapt_type == "FISAPT" and use_einsums:
+    elif do_fsapt and fsapt_type == "FISAPT" and use_einsums and not do_isapt:
+        # F-SAPT via C++ FISAPT with einsums (not available for I-SAPT)
         core.timer_on("SAPT(DFT):Localize Orbitals")
         sapt_jk_terms_ein.localization(cache, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT):Localize Orbitals")
@@ -1029,8 +1324,14 @@ def sapt_dft(
     if do_disp:
         # Hybrid xc kernel check
         do_hybrid = core.get_option("SAPT", "SAPT_DFT_DO_HYBRID")
-        is_x_hybrid = wfn_B.functional().is_x_hybrid()
-        is_x_lrc = wfn_B.functional().is_x_lrc()
+        # For I-SAPT, wfn_B may be a bare Wavefunction without functional()
+        if hasattr(wfn_B, 'functional') and wfn_B.functional() is not None:
+            is_x_hybrid = wfn_B.functional().is_x_hybrid()
+            is_x_lrc = wfn_B.functional().is_x_lrc()
+        else:
+            # Default values for bare wavefunctions (e.g., I-SAPT with HF)
+            is_x_hybrid = False
+            is_x_lrc = False
         hybrid_specified = core.has_option_changed("SAPT", "SAPT_DFT_DO_HYBRID")
         if is_x_lrc:
             if do_hybrid:
@@ -1059,7 +1360,11 @@ def sapt_dft(
         if do_dft:
             core.timer_on("FDDS disp")
             core.print_out("\n")
-            x_alpha = wfn_B.functional().x_alpha()
+            # For I-SAPT, wfn_B may be a bare Wavefunction without functional()
+            if hasattr(wfn_B, 'functional') and wfn_B.functional() is not None:
+                x_alpha = wfn_B.functional().x_alpha()
+            else:
+                x_alpha = 0.0  # Default for bare wavefunctions (e.g., I-SAPT with HF)
             if not is_hybrid:
                 x_alpha = 0.0
             # fdds_disp = sapt_mp2_terms.df_fdds_dispersion(primary_basis, aux_basis, cache, is_hybrid, x_alpha)
@@ -1076,10 +1381,33 @@ def sapt_dft(
             nfrozen_A = wfn_A.basisset().n_frozen_core(core.get_global_option("FREEZE_CORE"),wfn_A.molecule())
             nfrozen_B = wfn_B.basisset().n_frozen_core(core.get_global_option("FREEZE_CORE"),wfn_B.molecule())
             
-        if not do_fsapt:
+        # For I-SAPT, we skip F-SAPT dispersion, so we need to run MP2 dispersion
+        # to get Disp20,u and Exch-Disp20,u values
+        if not do_fsapt or do_isapt:
             core.timer_on("MP2 disp")
-            cache_tmp = sapt_jk_terms.build_sapt_jk_cache(dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials)
-            if core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
+            # For I-SAPT, use the already-built cache instead of building a new one
+            # The I-SAPT cache has all the needed keys from build_isapt_cache
+            if do_isapt:
+                cache_tmp = cache
+            else:
+                cache_tmp = sapt_jk_terms.build_sapt_jk_cache(dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials)
+            
+            # For I-SAPT, use the einsums-based MP2 dispersion which uses cache directly
+            # The FISAPT algorithm requires proper monomer wavefunctions which I-SAPT doesn't have
+            # Use df_mp2_sapt_dispersion which calls core.sapt() instead
+            if do_isapt:
+                # For I-SAPT, we need to use the standard SAPT dispersion
+                # But this requires proper monomer wavefunctions with orbitals
+                # TODO: Implement pure Python/einsums dispersion for I-SAPT
+                # For now, skip dispersion and set placeholder values
+                core.print_out("\n  ==> E20 Dispersion (I-SAPT) <== \n\n")
+                core.print_out("  Note: Dispersion calculation for I-SAPT is not yet fully implemented.\n")
+                core.print_out("  Setting Disp20 = 0.0 (placeholder)\n\n")
+                mp2_disp = {
+                    "Exch-Disp20,u": 0.0,
+                    "Disp20,u": 0.0,
+                }
+            elif core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
                 mp2_disp = sapt_mp2_terms.df_mp2_fisapt_dispersion(wfn_A, primary_basis, aux_basis, 
                                                                    cache_tmp, nfrozen_A, nfrozen_B, do_print=True)
             else:
@@ -1112,7 +1440,7 @@ def sapt_dft(
         core.timer_off("SAPT(DFT):disp")
 
     # Now do F-SAPT on dispersion if requested
-    if do_fsapt and fsapt_type == "SAPTDFT":
+    if do_fsapt and fsapt_type == "SAPTDFT" and not do_isapt:
         # Because dispersion is defined differently between SAPT0 
         # (E_disp20 = -4\sigma_{abrs} |(ar|bs)|^2 / (epsilon_a + epsilon_b)) 
         # and SAPT(DFT) with FDDS dispersion, we will only implement F-SAPT
@@ -1130,7 +1458,7 @@ def sapt_dft(
             data["Disp20,u"] = cache["Disp20,u"]
             core.timer_off("SAPT(DFT): F-SAPT Dispersion")
 
-    elif do_fsapt and fsapt_type == "FISAPT" and do_disp:
+    elif do_fsapt and fsapt_type == "FISAPT" and do_disp and not do_isapt:
         core.timer_on("SAPT(DFT): F-SAPT Dispersion")
         FISAPT_obj.fdisp()
         core.timer_off("SAPT(DFT): F-SAPT Dispersion")
@@ -1141,7 +1469,7 @@ def sapt_dft(
         matrices = FISAPT_obj.matrices()
         for k, v in matrices.items():
             cache[k] = v
-    elif do_fsapt and fsapt_type == "FISAPT":
+    elif do_fsapt and fsapt_type == "FISAPT" and not do_isapt:
         matrices = FISAPT_obj.matrices()
         for k, v in matrices.items():
             cache[k] = v
@@ -1157,7 +1485,11 @@ def sapt_dft(
     core.print_out(print_sapt_dft_summary(data, "SAPT(DFT)", do_dft=do_dft, do_disp=do_disp, do_delta_dft=do_delta_dft))
 
     # because FISAPT_obj drop sets core variables, avoid setting them twice
-    if core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH") != "NONE":
+    # For I-SAPT, F-SAPT partitioning is not yet available, skip variable setting
+    if do_isapt:
+        # I-SAPT: skip F-SAPT variable setting since partitioning was not performed
+        pass
+    elif core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH") != "NONE":
         FISAPT_obj = saptdft_fisapt.drop_saptdft_variables(dimer_wfn, wfn_A, wfn_B, cache, data)
     else:
         core.set_variable("FSAPT_QA", cache["Qocc0A"])

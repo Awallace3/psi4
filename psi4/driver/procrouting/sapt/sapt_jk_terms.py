@@ -823,11 +823,16 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     Solve the SAPT CPHF (or CPKS) equations.
     """
 
-    cache["wfn_A"].set_jk(jk)
-    if sapt_jk_B:
-        cache["wfn_B"].set_jk(sapt_jk_B)
-    else:
-        cache["wfn_B"].set_jk(jk)
+    # For I-SAPT, wavefunctions are bare Wavefunction objects without set_jk method
+    # The JK object is already available and passed in, so we only call set_jk
+    # if the method exists (i.e., for regular SAPT with SCF wavefunctions)
+    if hasattr(cache["wfn_A"], 'set_jk'):
+        cache["wfn_A"].set_jk(jk)
+    if hasattr(cache["wfn_B"], 'set_jk'):
+        if sapt_jk_B:
+            cache["wfn_B"].set_jk(sapt_jk_B)
+        else:
+            cache["wfn_B"].set_jk(jk)
 
     # Make a preconditioner function
     P_A = core.Matrix(cache["eps_occ_A"].shape[0], cache["eps_vir_A"].shape[0])
