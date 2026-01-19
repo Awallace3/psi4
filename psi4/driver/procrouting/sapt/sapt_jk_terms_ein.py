@@ -795,10 +795,6 @@ def electrostatics(cache, do_print=True):
     Elst10 = term1 + term2 + term3 + term4
     
     if do_print:
-        core.print_out(f"    DEBUG: D_A·V_B  = {term1/2.0:16.8f} (x2 = {term1:16.8f})\n")
-        core.print_out(f"    DEBUG: D_B·V_A  = {term2/2.0:16.8f} (x2 = {term2:16.8f})\n")
-        core.print_out(f"    DEBUG: D_A·J_B  = {term3/4.0:16.8f} (x4 = {term3:16.8f})\n")
-        core.print_out(f"    DEBUG: E_nuc_AB = {term4:16.8f}\n")
         core.print_out(print_sapt_var("Elst10,r ", Elst10, short=True))
         core.print_out("\n")
 
@@ -3643,20 +3639,30 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
                 xB = False
         else:
             # I-SAPT path - implement CPSCF Hessian directly
-            # H_x = (eps_vir - eps_occ) * x + 4*J(D_x) - K(D_x) - K(D_x).T
+            # For HF:      H*x = (eps_vir - eps_occ)*x + 4*J(D_x) - K(D_x) - K(D_x)^T
+            # For hybrid:  H*x = (eps_vir - eps_occ)*x + 4*J(D_x) - alpha*(K(D_x) + K(D_x)^T) + 4*Vx(D_x)
             # where D_x = C_occ @ x @ C_vir.T
             
+            # Get DFT parameters from cache
+            V_potential = cache.get("V_potential", None)
+            x_alpha = cache.get("x_alpha", 1.0)  # 1.0 for HF, 0.25 for PBE0
+            is_dft = cache.get("is_dft", False)
+            
             def compute_cphf_Hx_direct(x, Cocc, Cvir, eps_occ, eps_vir, jk_obj, is_A):
-                """Direct CPSCF Hessian-vector product.
+                """Direct CPSCF Hessian-vector product for I-SAPT.
                 
                 Implements the CPSCF orbital Hessian for I-SAPT where the wavefunction
                 doesn't have cphf_Hx method.
                 
-                The Hessian-vector product is:
-                H*x = (eps_a - eps_i)*x_ia + Cocc^T @ G(D_x) @ Cvir
+                For HF (x_alpha=1.0):
+                    H*x = (eps_a - eps_i)*x + 4*J(D_x) - K(D_x) - K(D_x)^T
                 
-                where G(D_x) = 4*J(D_x) - K(D_x) - K(D_x)^T
-                and D_x = Cocc @ x @ Cvir^T (the trial density)
+                For hybrid DFT (e.g., PBE0 with x_alpha=0.25):
+                    H*x = (eps_a - eps_i)*x + 4*J(D_x) - alpha*(K(D_x) + K(D_x)^T) + 4*Vx(D_x)
+                
+                where:
+                    D_x = Cocc @ x @ Cvir^T (the trial density perturbation)
+                    Vx(D_x) = XC kernel response (only for DFT)
                 """
                 nocc = Cocc.np.shape[1]
                 nvir = Cvir.np.shape[1]
@@ -3667,44 +3673,11 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
                     for a in range(nvir):
                         hx[i, a] *= (eps_vir.np[a] - eps_occ.np[i])
                 
-                # Two-electron contribution via JK
-                # D_x = Cocc @ x @ Cvir^T is an asymmetric density
-                # JK computes J and K from C_left @ C_right^T
-                # 
-                # For an asymmetric density, we can use:
-                # C_left = Cocc @ chol(x) and C_right = Cvir @ chol(x)^-T
-                # But that requires positive definite x.
-                #
-                # Alternative: use the property that J[D] and K[D] are linear in D,
-                # so we can compute using Cocc as C_left and (x @ Cvir^T)^T = Cvir @ x^T as C_right
-                # Since JK uses D = C_left @ C_right^T = Cocc @ (Cvir @ x^T)^T = Cocc @ x @ Cvir^T
-                # Wait, that's not right either.
-                #
-                # Correct approach: 
-                # D_x = Cocc @ x @ Cvir^T
-                # C_left = Cocc, C_right = (x @ Cvir^T)^T viewed columnwise... no.
-                #
-                # Simplest: D_x = sum_ia x_ia * |i><a| = sum_ia x_ia * Cocc[:,i] @ Cvir[:,a]^T
-                # Use C_left[:,k] = Cocc[:,i_k] * sqrt(|x_{i_k,a_k}|) * sign(x_{i_k,a_k})
-                # C_right[:,k] = Cvir[:,a_k] * sqrt(|x_{i_k,a_k}|)
-                # This works for any x but requires nocc*nvir columns.
-                #
-                # For efficiency, we can use a Cholesky-like decomposition or just
-                # compute with multiple columns.
-                
-                # Build auxiliary matrices for JK
-                # We'll use the fact that for a rank-k matrix D = sum_k c_k @ d_k^T,
-                # J[D] = sum_k J[c_k @ d_k^T] and K[D] = sum_k K[c_k @ d_k^T]
-                #
-                # For D_x = Cocc @ x @ Cvir^T, we can write it as:
-                # D_x = (Cocc @ x) @ Cvir^T = C_mod @ Cvir^T
-                # where C_mod = Cocc @ x (shape: nbf x nvir)
-                #
-                # So C_left = C_mod, C_right = Cvir
-                # JK will compute J[C_mod @ Cvir^T] and K[C_mod @ Cvir^T]
-                
+                # Build D_x = Cocc @ x @ Cvir^T for JK and Vx computations
+                # Using the factorization: D_x = (Cocc @ x) @ Cvir^T = C_mod @ Cvir^T
                 C_mod = core.Matrix.from_array(Cocc.np @ x)  # (nbf, nvir)
                 
+                # Compute J and K via JK object
                 jk_obj.C_clear()
                 jk_obj.C_left_add(C_mod)
                 jk_obj.C_right_add(Cvir)
@@ -3713,16 +3686,42 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
                 J_Dx = jk_obj.J()[0]
                 K_Dx = jk_obj.K()[0]
                 
-                # G(D_x) = 4*J - K - K^T (for closed-shell CPSCF)
+                # Build G(D_x) = 4*J - x_alpha*(K + K^T)
+                # For HF: x_alpha = 1.0, so this is 4*J - K - K^T
+                # For PBE0: x_alpha = 0.25, so this is 4*J - 0.25*(K + K^T)
                 G_Dx = J_Dx.clone()
                 G_Dx.scale(4.0)
-                G_Dx.axpy(-1.0, K_Dx)
-                G_Dx_np = G_Dx.np - K_Dx.np.T  # subtract K^T
+                G_Dx.axpy(-x_alpha, K_Dx)
+                G_Dx_np = G_Dx.np - x_alpha * K_Dx.np.T  # subtract x_alpha * K^T
+                
+                # Add XC kernel contribution for DFT
+                if is_dft and V_potential is not None:
+                    # First, set the ground state density for V_potential
+                    # The XC kernel f_xc is evaluated at the ground state density
+                    if is_A:
+                        D_ground = cache["D_A"]
+                    else:
+                        D_ground = cache["D_B"]
+                    V_potential.set_D([D_ground])
+                    
+                    # D_x in AO basis (non-symmetric response density)
+                    D_x = core.Matrix.from_array(C_mod.np @ Cvir.np.T)
+                    D_x.name = "D_x"
+                    
+                    # Create output matrix for Vx
+                    Vx = core.Matrix("Vx", D_x.rowdim(), D_x.coldim())
+                    
+                    # compute_Vx computes the XC kernel response: Vx = f_xc * rho_x
+                    # where rho_x is the density perturbation from D_x
+                    V_potential.compute_Vx([D_x], [Vx])
+                    
+                    # Add 4*Vx to G (factor of 4 from closed-shell RHF equations)
+                    G_Dx_np += 4.0 * Vx.np
                 
                 # Transform to MO basis: Cocc^T @ G(D_x) @ Cvir
                 hx_2e = Cocc.np.T @ G_Dx_np @ Cvir.np
                 
-                # Add two-electron contribution
+                # Add two-electron (+ XC) contribution
                 hx += hx_2e
                 
                 return hx
@@ -4055,6 +4054,68 @@ def run_isapt_embedded_scf(
     core.print_out(f"    Monomer {monomer} SCF Energy: {scf.energy:24.16E} [Eh]\n\n")
 
 
+def build_isapt_V_potential(
+    functional: str,
+    basisset: core.BasisSet,
+    do_print: bool = True
+) -> core.VBase:
+    """
+    Build a VBase object for DFT XC potential in I-SAPT embedded SCF.
+    
+    This creates the DFT integration grid and V_xc potential needed for
+    computing DFT energy and Fock matrix contributions in embedded SCF.
+    
+    Parameters
+    ----------
+    functional : str
+        DFT functional name (e.g., 'PBE0', 'B3LYP').
+    basisset : core.BasisSet
+        The basis set for the calculation.
+    do_print : bool, optional
+        Whether to print progress (default True).
+    
+    Returns
+    -------
+    core.VBase
+        The V potential object for DFT calculations.
+    """
+    from ..dft import build_superfunctional
+    
+    if do_print:
+        core.print_out(f"  ==> Building DFT V_potential for I-SAPT <==\n\n")
+        core.print_out(f"    Functional: {functional}\n")
+    
+    # Build the superfunctional
+    # restricted=True for closed-shell calculations
+    # npoints controls the grid block size
+    # deriv=1 for first derivatives (needed for SCF)
+    npoints = core.get_option("SCF", "DFT_BLOCK_MAX_POINTS")
+    sup, disp_type = build_superfunctional(functional, restricted=True, npoints=npoints, deriv=1)
+    
+    if do_print:
+        core.print_out(f"    SuperFunctional: {sup.name()}\n")
+        core.print_out(f"    Is hybrid: {sup.is_x_hybrid()}\n")
+        if sup.is_x_hybrid():
+            core.print_out(f"    Exact exchange: {sup.x_alpha():6.2f}\n")
+    
+    # Build the VBase object
+    # "RV" = Restricted V potential (for closed-shell)
+    V_potential = core.VBase.build(basisset, sup, "RV")
+    
+    # Initialize the potential (sets up grid, etc.)
+    V_potential.initialize()
+    
+    # Build collocation cache for efficient evaluation
+    # Use available memory for the cache
+    memory = core.get_memory() // 8  # Convert bytes to doubles
+    V_potential.build_collocation_cache(memory // 4)  # Use 1/4 of available memory
+    
+    if do_print:
+        core.print_out(f"    DFT grid initialized with {V_potential.nblocks()} blocks\n\n")
+    
+    return V_potential
+
+
 def build_isapt_cache(
     dimer_wfn: core.Wavefunction,
     jk: core.JK,
@@ -4131,9 +4192,7 @@ def build_isapt_cache(
     # Get V_potential for DFT (if applicable)
     V_potential = None
     if functional is not None and functional.upper() != 'HF':
-        # TODO: Create V_potential for DFT
-        # This requires setting up the functional and grid
-        pass
+        V_potential = build_isapt_V_potential(functional, basisset, do_print=do_print)
     
     run_isapt_embedded_scf(
         jk=jk,
@@ -4217,6 +4276,20 @@ def build_isapt_cache(
         trace_DB = ein.core.dot(cache["D_B"].np, S.np)
         core.print_out(f"    Tr(D_A @ S) = {trace_DA:12.6f} (should be N_occ_A)\n")
         core.print_out(f"    Tr(D_B @ S) = {trace_DB:12.6f} (should be N_occ_B)\n")
+        
+        # Check orbital orthonormality: C^T @ S @ C should be identity
+        Cocc_A = cache["Cocc_A"]
+        Cocc_B = cache["Cocc_B"]
+        CtSC_A = chain_gemm_einsums([Cocc_A, S, Cocc_A], ['T', 'N', 'N'])
+        CtSC_B = chain_gemm_einsums([Cocc_B, S, Cocc_B], ['T', 'N', 'N'])
+        CtSC_A_np = _to_numpy(CtSC_A)
+        CtSC_B_np = _to_numpy(CtSC_B)
+        core.print_out(f"    Tr(C_A^T @ S @ C_A) = {np.trace(CtSC_A_np):12.6f} (should be N_occ_A)\n")
+        core.print_out(f"    Tr(C_B^T @ S @ C_B) = {np.trace(CtSC_B_np):12.6f} (should be N_occ_B)\n")
+        # Check norm of first orbital
+        core.print_out(f"    (C_A^T @ S @ C_A)[0,0] = {CtSC_A_np[0,0]:12.6f} (should be 1.0)\n")
+        core.print_out(f"    (C_B^T @ S @ C_B)[0,0] = {CtSC_B_np[0,0]:12.6f} (should be 1.0)\n")
+        
         # Trace of V matrices (should be < 0 for nuclear attraction)
         trace_VA = np.trace(cache["V_A"].np)
         trace_VB = np.trace(cache["V_B"].np)
@@ -4227,6 +4300,27 @@ def build_isapt_cache(
         trace_JB = np.trace(cache["J_B"].np)
         core.print_out(f"    Tr(J_A) = {trace_JA:12.6f}\n")
         core.print_out(f"    Tr(J_B) = {trace_JB:12.6f}\n")
+        
+        # Additional debug: raw Tr(D) and orbital norms
+        trace_DA_raw = np.trace(cache["D_A"].np)
+        trace_DB_raw = np.trace(cache["D_B"].np)
+        core.print_out(f"    Tr(D_A) = {trace_DA_raw:12.6f} (raw, depends on basis)\n")
+        core.print_out(f"    Tr(D_B) = {trace_DB_raw:12.6f} (raw, depends on basis)\n")
+        
+        # Check if orbitals are in the correct subspace
+        # For I-SAPT, monomer A orbitals should be mostly on fragment A atoms
+        CA_np = cache["Cocc_A"].np
+        CB_np = cache["Cocc_B"].np
+        core.print_out(f"    |C_A|_F = {np.linalg.norm(CA_np):12.6f}\n")
+        core.print_out(f"    |C_B|_F = {np.linalg.norm(CB_np):12.6f}\n")
+        core.print_out(f"    C_A.shape = {CA_np.shape}\n")
+        core.print_out(f"    C_B.shape = {CB_np.shape}\n")
+        
+        # Print eigenvalue ranges
+        eps_A = cache["eps_occ_A"].np
+        eps_B = cache["eps_occ_B"].np
+        core.print_out(f"    eps_occ_A: min={eps_A.min():10.4f}, max={eps_A.max():10.4f}\n")
+        core.print_out(f"    eps_occ_B: min={eps_B.min():10.4f}, max={eps_B.max():10.4f}\n")
         core.print_out("\n")
     
     # Compute nuclear repulsion between A and B only (for SAPT)
@@ -4271,6 +4365,16 @@ def build_isapt_cache(
     
     cache["extern_extern_IE"] = 0.0
     
+    # Store DFT-related quantities for CPHF
+    # These are needed for the XC kernel contribution in the CPHF Hessian
+    cache["V_potential"] = V_potential
+    cache["is_dft"] = V_potential is not None
+    if V_potential is not None:
+        sup = V_potential.functional()
+        cache["x_alpha"] = sup.x_alpha() if sup.is_x_hybrid() else 0.0
+    else:
+        cache["x_alpha"] = 1.0  # HF: 100% exact exchange
+    
     return cache
 
 
@@ -4295,6 +4399,11 @@ def compute_delta_hf_isapt(
     (D_A, D_B from embedded SCF, D_C from localization) and corresponding
     J/K matrices.
     
+    For DFT I-SAPT, this function runs a separate HF embedded SCF to get
+    HF-consistent densities and J/K matrices for the Delta HF calculation.
+    This matches the standard SAPT(DFT) approach where Delta HF uses HF
+    energies even when SAPT terms use DFT orbitals.
+    
     This follows the C++ FISAPT::dHF() implementation.
     
     Parameters
@@ -4310,6 +4419,7 @@ def compute_delta_hf_isapt(
         - J_C, K_C: Coulomb/exchange from C
         - V_A, V_B, V_C: Nuclear potential matrices
         - ZA, ZB, ZC: Nuclear charges per fragment
+        - is_dft: Whether DFT was used for embedded SCF
     do_print : bool, optional
         Whether to print progress (default True).
     
@@ -4337,15 +4447,95 @@ def compute_delta_hf_isapt(
     V_B = cache["V_B"]
     V_C = cache["V_C"]
     
-    # Get fragment density matrices (from embedded SCF for A, B; from localization for C)
-    D_A = cache["D_A"]  # From embedded SCF
-    D_B = cache["D_B"]  # From embedded SCF
-    J_A = cache["J_A"]  # From embedded SCF
-    J_B = cache["J_B"]  # From embedded SCF
-    K_A = cache["K_A"]  # From embedded SCF
-    K_B = cache["K_B"]  # From embedded SCF
-    J_C = cache["J_C"]  # From localized C orbitals
-    K_C = cache["K_C"]  # From localized C orbitals
+    # Check if DFT was used - if so, run HF embedded SCF for delta HF
+    is_dft = cache.get("is_dft", False)
+    
+    if is_dft:
+        if do_print:
+            core.print_out("    Running HF embedded SCF for Delta HF calculation...\n\n")
+        
+        # Run HF embedded SCF for monomer A
+        scf_options = {
+            'maxiter': core.get_option("SCF", "MAXITER"),
+            'e_convergence': core.get_option("SCF", "E_CONVERGENCE"),
+            'd_convergence': core.get_option("SCF", "D_CONVERGENCE"),
+            'diis_max_vecs': core.get_option("SCF", "DIIS_MAX_VECS"),
+            'print_level': 1 if do_print else 0,
+        }
+        
+        # Create a temporary cache for HF embedded SCF
+        # Copy necessary items from the main cache
+        # Note: run_isapt_embedded_scf expects keys without underscores (LoccA, not Locc_A)
+        hf_cache = {
+            "S": cache["S"],
+            "V_A": cache["V_A"],
+            "V_B": cache["V_B"],
+            "V_C": cache["V_C"],
+            "J_C": cache["J_C"],
+            "K_C": cache["K_C"],
+            "W_C": cache["W_C"],
+            "ZA": cache["ZA"],
+            "ZB": cache["ZB"],
+            "ZC": cache["ZC"],
+            "LoccA": cache.get("LoccA") or cache.get("Locc_A"),
+            "LoccB": cache.get("LoccB") or cache.get("Locc_B"),
+            "LoccC": cache.get("LoccC") or cache.get("Locc_C"),
+            "Cvir": cache["Cvir"],
+        }
+        
+        # Run HF embedded SCF for A
+        run_isapt_embedded_scf(
+            jk=jk,
+            molecule=molecule,
+            basisset=basisset,
+            mints=mints,
+            cache=hf_cache,
+            monomer="A",
+            functional=None,  # HF
+            V_potential=None,
+            options=scf_options
+        )
+        
+        # Run HF embedded SCF for B
+        run_isapt_embedded_scf(
+            jk=jk,
+            molecule=molecule,
+            basisset=basisset,
+            mints=mints,
+            cache=hf_cache,
+            monomer="B",
+            functional=None,  # HF
+            V_potential=None,
+            options=scf_options
+        )
+        
+        # Build HF density matrices
+        D_A_np = chain_gemm_einsums([hf_cache["Cocc0A"], hf_cache["Cocc0A"]], ['N', 'T'])
+        D_B_np = chain_gemm_einsums([hf_cache["Cocc0B"], hf_cache["Cocc0B"]], ['N', 'T'])
+        D_A = core.Matrix.from_array(D_A_np)
+        D_B = core.Matrix.from_array(D_B_np)
+        
+        # Get HF J/K matrices
+        J_A = hf_cache["J0A"]
+        J_B = hf_cache["J0B"]
+        K_A = hf_cache["K0A"]
+        K_B = hf_cache["K0B"]
+        
+        if do_print:
+            core.print_out(f"    HF Embedded SCF: E(A) = {hf_cache['E0_A']:24.16E} [Eh]\n")
+            core.print_out(f"    HF Embedded SCF: E(B) = {hf_cache['E0_B']:24.16E} [Eh]\n\n")
+    else:
+        # Use the existing (HF) embedded SCF results from cache
+        D_A = cache["D_A"]  # From embedded SCF
+        D_B = cache["D_B"]  # From embedded SCF
+        J_A = cache["J_A"]  # From embedded SCF
+        J_B = cache["J_B"]  # From embedded SCF
+        K_A = cache["K_A"]  # From embedded SCF
+        K_B = cache["K_B"]  # From embedded SCF
+    
+    # J_C and K_C are always from localized C orbitals (HF)
+    J_C = cache["J_C"]
+    K_C = cache["K_C"]
     
     # Get C density from localized orbitals
     Locc_C = cache.get("Locc_C") or cache.get("LoccC")

@@ -233,9 +233,13 @@ def run_sapt_dft(name, **kwargs):
             # For I-SAPT, we use a special delta HF formula:
             # delta_HF = E_ABC - E_AC - E_BC + E_C
             # This is computed AFTER the embedded SCF, not from separate monomer calcs
+            # For DFT I-SAPT, we run a SEPARATE HF embedded SCF just for delta HF
+            # (the SAPT terms still use DFT orbitals/densities)
             do_isapt_delta_hf = True
             do_delta_hf = False  # Disable standard delta HF path
             core.print_out("  I-SAPT: Will compute delta HF using 3-fragment formula.\n")
+            if do_dft:
+                core.print_out("          (Will run HF embedded SCF for delta HF calculation.)\n")
         if do_delta_dft:
             core.print_out("  I-SAPT: Delta DFT disabled (not yet implemented for I-SAPT).\n")
             do_delta_dft = False
@@ -1111,11 +1115,10 @@ def sapt_dft(
         
         # Now build the I-SAPT cache with embedded SCF
         core.timer_on("SAPT(DFT):I-SAPT Embedded SCF")
-        # For I-SAPT, wfn_A is a bare Wavefunction without functional()
-        if hasattr(wfn_A, 'functional') and wfn_A.functional() is not None:
-            functional = wfn_A.functional().name() if do_dft else None
-        else:
-            functional = None
+        # For I-SAPT, get the functional from the SAPT options, not from wfn_A
+        # (wfn_A is a bare wavefunction without functional())
+        sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
+        functional = sapt_dft_functional if do_dft else None
         cache = sapt_jk_terms_ein.build_isapt_cache(
             dimer_wfn, sapt_jk, cache, functional=functional, do_print=True
         )
@@ -1255,11 +1258,17 @@ def sapt_dft(
         core.timer_on("SAPT(DFT): F-SAPT Induction")
         cache = sapt_jk_terms_ein.find(cache, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
         core.timer_off("SAPT(DFT): F-SAPT Induction")
-    elif do_fsapt and do_isapt:
-        # For I-SAPT, F-SAPT partitioning is not yet fully implemented
-        # Skip F-SAPT localization and partitioning for now
-        core.print_out("\n  Note: F-SAPT partitioning is not yet fully implemented for I-SAPT.\n")
-        core.print_out("        Basic SAPT terms have been computed above.\n\n")
+    elif do_isapt:
+        # For I-SAPT, we need flocalization for dispersion
+        # This sets up Lfocc0A/B, Caocc0A/B, Uocc_A/B needed by fdisp0
+        core.timer_on("SAPT(DFT): I-SAPT F-Localization (IBO)")
+        sapt_jk_terms_ein.flocalization(cache, dimer_wfn, wfn_A, wfn_B)
+        core.timer_off("SAPT(DFT): I-SAPT F-Localization (IBO)")
+        
+        if do_fsapt:
+            # Full F-SAPT partitioning is not yet implemented for I-SAPT
+            core.print_out("\n  Note: F-SAPT partitioning is not yet fully implemented for I-SAPT.\n")
+            core.print_out("        Basic SAPT terms have been computed above.\n\n")
 
     elif do_fsapt and fsapt_type == "FISAPT" and not use_einsums and not do_isapt:
         # F-SAPT via C++ FISAPT (not available for I-SAPT)
@@ -1396,16 +1405,15 @@ def sapt_dft(
             # The FISAPT algorithm requires proper monomer wavefunctions which I-SAPT doesn't have
             # Use df_mp2_sapt_dispersion which calls core.sapt() instead
             if do_isapt:
-                # For I-SAPT, we need to use the standard SAPT dispersion
-                # But this requires proper monomer wavefunctions with orbitals
-                # TODO: Implement pure Python/einsums dispersion for I-SAPT
-                # For now, skip dispersion and set placeholder values
-                core.print_out("\n  ==> E20 Dispersion (I-SAPT) <== \n\n")
-                core.print_out("  Note: Dispersion calculation for I-SAPT is not yet fully implemented.\n")
-                core.print_out("  Setting Disp20 = 0.0 (placeholder)\n\n")
+                # For I-SAPT, use fdisp0 which computes MP2-like dispersion using
+                # the embedded SCF orbitals from the I-SAPT cache.
+                # flocalization() has already been called to set up the required keys.
+                cache_tmp = sapt_jk_terms_ein.fdisp0(
+                    cache_tmp, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, do_print=True
+                )
                 mp2_disp = {
-                    "Exch-Disp20,u": 0.0,
-                    "Disp20,u": 0.0,
+                    "Exch-Disp20,u": cache_tmp["Exch-Disp20,u"],
+                    "Disp20,u": cache_tmp["Disp20,u"],
                 }
             elif core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
                 mp2_disp = sapt_mp2_terms.df_mp2_fisapt_dispersion(wfn_A, primary_basis, aux_basis, 

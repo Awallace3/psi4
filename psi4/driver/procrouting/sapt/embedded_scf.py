@@ -54,6 +54,7 @@ from typing import Dict, Optional, Tuple, Any
 from psi4 import core
 
 from ...p4util import solvers
+import numpy as np
 
 
 def _get_matrix_dims(M):
@@ -144,9 +145,19 @@ class EmbeddedSCF:
         self.functional = functional
         self.is_dft = functional is not None and functional.upper() != 'HF'
         self.V_potential = V_potential
+        self.x_alpha = 1.0  # Default: 100% HF exchange
         
         if self.is_dft and self.V_potential is None:
-            raise ValueError("V_potential must be provided for DFT calculations")
+            # DFT requested but V_potential not provided - fall back to HF with warning
+            core.print_out(f"\n  Warning: DFT functional '{functional}' requested but V_potential not available.\n")
+            core.print_out("           Falling back to HF for embedded SCF.\n")
+            core.print_out("           (DFT V_potential for I-SAPT embedded SCF not yet implemented)\n\n")
+            self.is_dft = False
+            self.functional = 'HF'
+        elif self.is_dft:
+            # Get the superfunctional and its x_alpha (fraction of HF exchange)
+            sup = self.V_potential.functional()
+            self.x_alpha = sup.x_alpha() if sup.is_x_hybrid() else 0.0
         
         # Parse options
         opts = options or {}
@@ -155,6 +166,24 @@ class EmbeddedSCF:
         self.d_convergence = opts.get('d_convergence', 1e-8)
         self.diis_max_vecs = opts.get('diis_max_vecs', 6)
         self.print_level = opts.get('print_level', 1)
+        self.level_shift = opts.get('level_shift', 0.0)  # Level shift for SCF convergence
+        self.use_mom = opts.get('use_mom', False)  # Maximum Overlap Method for orbital selection
+        self.freeze_orbitals = opts.get('freeze_orbitals', False)  # Don't update orbitals, just compute DFT energy
+        
+        # For DFT with hybrids, we may need level shifting due to small HOMO-LUMO gaps
+        if self.is_dft and self.level_shift == 0.0:
+            self.level_shift = 0.5  # Default level shift for DFT embedded SCF (0.5 Eh = ~13.6 eV)
+        
+        # For DFT, enable MOM by default to prevent orbital swapping
+        if self.is_dft and not self.use_mom:
+            self.use_mom = True
+        
+        # Note: For I-SAPT(DFT), we now always use HF orbitals for the embedded SCF
+        # (DFT SCF in the restricted basis typically fails to converge).
+        # This is handled in build_isapt_cache() by passing functional=None to
+        # run_isapt_embedded_scf(), so this code path is only reached for HF.
+        # The freeze_orbitals option is kept for advanced users who want to test
+        # DFT orbital response or for debugging.
         
         # Results (populated by compute_energy)
         self.converged = False
@@ -189,9 +218,15 @@ class EmbeddedSCF:
             core.print_out(f"    Occupied orbitals:    {nocc:6d}\n")
             core.print_out(f"    Virtual orbitals:     {nvir:6d}\n")
             core.print_out(f"    DFT functional:       {self.functional if self.is_dft else 'HF'}\n")
+            if self.is_dft:
+                core.print_out(f"    HF exchange (alpha):  {self.x_alpha:6.2f}\n")
             core.print_out(f"    Maxiter:              {self.maxiter:6d}\n")
             core.print_out(f"    E convergence:        {self.e_convergence:11.3E}\n")
-            core.print_out(f"    D convergence:        {self.d_convergence:11.3E}\n\n")
+            core.print_out(f"    D convergence:        {self.d_convergence:11.3E}\n")
+            core.print_out(f"    Level shift:          {self.level_shift:11.3f} (is_dft={self.is_dft})\n")
+            core.print_out(f"    Use MOM:              {self.use_mom}\n")
+            core.print_out(f"    Freeze orbitals:      {self.freeze_orbitals}\n")
+            core.print_out(f"\n")
         
         # Build one-electron Hamiltonian: H = T + V
         H = self.T.clone()
@@ -229,16 +264,27 @@ class EmbeddedSCF:
             # Clear JK for next iteration
             self.jk.C_clear()
             
-            # Build Fock matrix: F = H + W + 2*J - K
-            F.copy(H)
-            F.add(self.W)
-            F.axpy(2.0, J)
-            F.axpy(-1.0, K)
+            # Build Fock matrix: F = H + W + 2*J - x_alpha*K (+ V_xc for DFT)
+            # For HF: x_alpha = 1.0 (full HF exchange)
+            # For hybrids like PBE0: x_alpha = 0.25 (partial HF exchange)
+            #
+            # IMPORTANT: compute_V() REPLACES the input matrix with V_xc, it does NOT add!
+            # So we must compute V_xc into a separate matrix and then add it to F.
             
-            # Add V_xc for DFT
+            # For DFT, start with V_xc
             if self.is_dft:
                 self.V_potential.set_D([D])
-                self.V_potential.compute_V([F])
+                self.V_potential.compute_V([F])  # F = V_xc (replaces contents!)
+                F.add(H)                          # F = V_xc + H
+                F.add(self.W)                     # F = V_xc + H + W
+                F.axpy(2.0, J)                    # F = V_xc + H + W + 2J
+                F.axpy(-self.x_alpha, K)          # F = V_xc + H + W + 2J - alpha*K
+            else:
+                # HF: F = H + W + 2J - K
+                F.copy(H)
+                F.add(self.W)
+                F.axpy(2.0, J)
+                F.axpy(-self.x_alpha, K)
             
             # Compute energy: E = E_nuc + tr(D*H) + tr(D*F) + tr(D*W)
             # Note: For HF, this simplifies to E = E_nuc + tr(D*(H+F)) 
@@ -248,13 +294,16 @@ class EmbeddedSCF:
             E_embed = D.vector_dot(self.W)
             
             if self.is_dft:
-                # DFT energy: E = E_nuc + tr(D*H) + tr(D*(J - 0.5*K)) + E_xc + tr(D*W)
-                # But F already includes V_xc, and V_potential has E_xc
+                # DFT energy: E = E_nuc + 2*Tr(D*H) + 2*Tr(D*W) + 2*Tr(D*J) - alpha*Tr(D*K) + E_xc
+                # Note: F already contains V_xc + H + W + 2J - alpha*K, but we compute energy 
+                # explicitly because Tr(D*V_xc) != E_xc for GGAs/hybrids.
                 E_xc = self.V_potential.quadrature_values()["FUNCTIONAL"]
-                # Correct energy formula for DFT with embedding
-                E = self.enuc + E_one + D.vector_dot(J) - 0.5 * D.vector_dot(K) + E_xc + E_embed
+                E_J = D.vector_dot(J)
+                E_K = D.vector_dot(K)
+                E = self.enuc + 2.0*E_one + 2.0*E_embed + 2.0*E_J - self.x_alpha*E_K + E_xc
             else:
                 # HF energy: E = E_nuc + tr(D*H) + tr(D*F) + tr(D*W)
+                # With F = H + W + 2*J - K, this gives the correct RHF energy
                 E = self.enuc + E_one + E_two + E_embed
             
             dE = E - Eold
@@ -280,29 +329,90 @@ class EmbeddedSCF:
                 self.converged = True
                 break
             
+            # For frozen orbitals mode, just run one iteration to get the DFT energy
+            # at the HF orbital geometry (no SCF optimization)
+            if self.freeze_orbitals:
+                self.converged = True
+                if self.print_level > 0:
+                    core.print_out("    (Frozen orbitals mode - single iteration)\n")
+                break
+            
             Eold = E
             
             # DIIS extrapolation
             if diised:
                 F = diis.extrapolate()
             
-            # Diagonalize Fock matrix in restricted basis
-            F_mo = core.triplet(self.X, F, self.X, True, False, False)
-            eps = core.Vector("eps", nmo)
-            U = core.Matrix("U", nmo, nmo)
-            F_mo.diagonalize(U, eps, core.DiagonalizeOrder.Ascending)
-            
-            # Transform back to AO basis
-            C = core.doublet(self.X, U, False, False)
-            
-            # Extract occupied orbitals
-            Cocc_new = core.Matrix("Cocc", nbf, nocc)
-            Cp = C.np
-            Cop = Cocc_new.np
-            for m in range(nbf):
-                for i in range(nocc):
-                    Cop[m, i] = Cp[m, i]
-            Cocc = Cocc_new
+            # Skip orbital update if freeze_orbitals is enabled (DFT@HF approach)
+            if self.freeze_orbitals:
+                # Just use the initial guess orbitals for all iterations
+                # This computes the DFT energy at the HF orbital geometry
+                pass
+            else:
+                # Diagonalize Fock matrix in restricted basis
+                # Apply level shifting: shift virtual orbitals up to prevent orbital swapping
+                # This is done by adding level_shift * P_occ to F in the MO basis, where
+                # P_occ projects onto the current occupied space
+                F_mo = core.triplet(self.X, F, self.X, True, False, False)
+                
+                if self.level_shift > 0.0:
+                    # Level shift in restricted basis:
+                    # Build projector onto current occupied orbitals in the restricted MO basis
+                    # Current Cocc in restricted basis: U_occ = X^T @ S @ Cocc
+                    S_X = core.doublet(self.S, self.X, False, False)  # nbf x nmo
+                    U_occ = core.doublet(S_X, Cocc, True, False)  # nmo x nocc
+                    
+                    # P_occ = U_occ @ U_occ^T (projects onto occupied space in restricted basis)
+                    P_occ = core.doublet(U_occ, U_occ, False, True)  # nmo x nmo
+                    
+                    # P_vir = I - P_occ (projects onto virtual space)
+                    P_vir = core.Matrix("P_vir", nmo, nmo)
+                    P_vir.identity()
+                    P_vir.axpy(-1.0, P_occ)
+                    
+                    # Shift virtual space up: F_mo += level_shift * P_vir
+                    F_mo.axpy(self.level_shift, P_vir)
+                
+                eps = core.Vector("eps", nmo)
+                U = core.Matrix("U", nmo, nmo)
+                F_mo.diagonalize(U, eps, core.DiagonalizeOrder.Ascending)
+                
+                # Transform back to AO basis
+                C = core.doublet(self.X, U, False, False)
+                
+                # Extract occupied orbitals using MOM or Aufbau
+                if self.use_mom:
+                    # Maximum Overlap Method: select orbitals with maximum overlap to previous occupied space
+                    # Compute overlap: O = C^T @ S @ Cocc_old (nmo x nocc)
+                    S_Cocc = core.doublet(self.S, Cocc, False, False)  # nbf x nocc
+                    O = core.doublet(C, S_Cocc, True, False)  # nmo x nocc
+                    O_np = O.np
+                    
+                    # Compute overlap score for each new MO: score[p] = sum_i |O[p,i]|^2
+                    overlap_scores = np.sum(O_np**2, axis=1)  # nmo
+                    
+                    # Select nocc MOs with highest overlap scores
+                    occ_indices = np.argsort(overlap_scores)[::-1][:nocc]
+                    occ_indices = np.sort(occ_indices)  # Sort by index for consistent ordering
+                    
+                    # Debug: print MOM selection for first few iterations
+                    # Extract selected orbitals
+                    Cocc_new = core.Matrix("Cocc", nbf, nocc)
+                    Cp = C.np
+                    Cop = Cocc_new.np
+                    for i_new, i_old in enumerate(occ_indices):
+                        for m in range(nbf):
+                            Cop[m, i_new] = Cp[m, i_old]
+                    Cocc = Cocc_new
+                else:
+                    # Standard Aufbau: take first nocc orbitals (lowest eigenvalues)
+                    Cocc_new = core.Matrix("Cocc", nbf, nocc)
+                    Cp = C.np
+                    Cop = Cocc_new.np
+                    for m in range(nbf):
+                        for i in range(nocc):
+                            Cop[m, i] = Cp[m, i]
+                    Cocc = Cocc_new
         
         if self.print_level > 0:
             core.print_out("\n")
@@ -314,36 +424,71 @@ class EmbeddedSCF:
         
         # Store final results
         self.energy = E
-        self.J = J.clone()
-        self.K = K.clone()
         self.F = F.clone()
         
-        # Get final orbitals from last diagonalization
-        F_mo = core.triplet(self.X, F, self.X, True, False, False)
-        eps = core.Vector("eps", nmo)
-        U = core.Matrix("U", nmo, nmo)
-        F_mo.diagonalize(U, eps, core.DiagonalizeOrder.Ascending)
-        C = core.doublet(self.X, U, False, False)
-        
-        # Split into occupied and virtual
-        self.Cocc = core.Matrix("Cocc", nbf, nocc)
-        self.Cvir = core.Matrix("Cvir", nbf, nvir)
-        self.eps_occ = core.Vector("eps_occ", nocc)
-        self.eps_vir = core.Vector("eps_vir", nvir)
-        
-        Cp = C.np
-        ep = eps.np
-        
-        for m in range(nbf):
+        # Get final orbitals
+        if self.freeze_orbitals:
+            # For frozen orbitals mode, use the initial guess orbitals directly
+            # (don't diagonalize the DFT Fock matrix)
+            self.Cocc = Cocc.clone()
+            self.Cocc.name = "Cocc"
+            
+            # For virtual orbitals, we need to orthogonalize to Cocc and project onto X
+            # The simplest approach: use the virtual part of X
+            # X = [Cocc | Cvir_other | Cvir_original], so skip first nocc columns
+            self.Cvir = core.Matrix("Cvir", nbf, nvir)
+            Xp = self.X.np
+            Cvp = self.Cvir.np
+            for m in range(nbf):
+                for a in range(nvir):
+                    Cvp[m, a] = Xp[m, nocc + a]
+            
+            # Get orbital energies from Fock matrix diagonal in MO basis
+            F_mo = core.triplet(self.X, F, self.X, True, False, False)
+            eps_diag = np.diag(F_mo.np)
+            
+            self.eps_occ = core.Vector("eps_occ", nocc)
+            self.eps_vir = core.Vector("eps_vir", nvir)
             for i in range(nocc):
-                self.Cocc.np[m, i] = Cp[m, i]
+                self.eps_occ.np[i] = eps_diag[i]
             for a in range(nvir):
-                self.Cvir.np[m, a] = Cp[m, nocc + a]
+                self.eps_vir.np[a] = eps_diag[nocc + a]
+        else:
+            # Standard approach: diagonalize Fock matrix to get final orbitals
+            F_mo = core.triplet(self.X, F, self.X, True, False, False)
+            eps = core.Vector("eps", nmo)
+            U = core.Matrix("U", nmo, nmo)
+            F_mo.diagonalize(U, eps, core.DiagonalizeOrder.Ascending)
+            C = core.doublet(self.X, U, False, False)
+            
+            # Split into occupied and virtual
+            self.Cocc = core.Matrix("Cocc", nbf, nocc)
+            self.Cvir = core.Matrix("Cvir", nbf, nvir)
+            self.eps_occ = core.Vector("eps_occ", nocc)
+            self.eps_vir = core.Vector("eps_vir", nvir)
+            
+            Cp = C.np
+            ep = eps.np
+            
+            for m in range(nbf):
+                for i in range(nocc):
+                    self.Cocc.np[m, i] = Cp[m, i]
+                for a in range(nvir):
+                    self.Cvir.np[m, a] = Cp[m, nocc + a]
+            
+            for i in range(nocc):
+                self.eps_occ.np[i] = ep[i]
+            for a in range(nvir):
+                self.eps_vir.np[a] = ep[nocc + a]
         
-        for i in range(nocc):
-            self.eps_occ.np[i] = ep[i]
-        for a in range(nvir):
-            self.eps_vir.np[a] = ep[nocc + a]
+        # Recompute J and K from the FINAL Cocc (important for consistency)
+        # The J and K from the loop may be off by one iteration
+        self.jk.C_left_add(self.Cocc)
+        self.jk.C_right_add(self.Cocc)
+        self.jk.compute()
+        self.J = self.jk.J()[0].clone()
+        self.K = self.jk.K()[0].clone()
+        self.jk.C_clear()
         
         return self.energy
 
