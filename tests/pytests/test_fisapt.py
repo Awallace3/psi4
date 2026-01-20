@@ -744,23 +744,23 @@ def test_isapt_hf():
         ])
 
     psi4.core.set_active_molecule(mol)
-
-    # Set options for SAPT(DFT) with F-SAPT
-    # Use HF first for simplicity
     psi4.set_options({
-        'basis': 'jun-cc-pVDZ',
-        'scf_type': 'disk_df',
-        'guess': 'sad',
-        'freeze_core': True,
-        'fisapt_link_assignment': 'SIAO1',
-        'fisapt_link_ortho': 'fragment',
-        # Enable F-SAPT
-        'fisapt_fsapt_filepath': './fsapt',
-        # SAPT(DFT) options
-        'sapt_dft_functional': 'HF',  # Start with HF for debugging
-        'sapt_dft_do_hybrid': False,
+        "basis": "jun-cc-pvdz",
+        "scf_type": "disk_df",
+        "guess": "sad",
+        "freeze_core": "true",
+        # I-SAPT link partitioning
+        "FISAPT_LINK_ASSIGNMENT": "C",
+        "FISAPT_FSAPT_FILEPATH": "none",
+        # SAPT(DFT) options with HF functional
+        "SAPT_DFT_FUNCTIONAL": "HF",
+        "SAPT_DFT_DO_HYBRID": False,
+        "SAPT_DFT_DO_DHF": True,
+        "SAPT_DFT_USE_EINSUMS": True,
+        "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+        "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
     })
-    e = psi4.energy('sapt(dft)')
+    psi4.energy("sapt(dft)")
 
     # Reference values from C++ FISAPT (in Hartree)
     Eref = {
@@ -820,18 +820,24 @@ def test_isapt_pbe0():
         ])
 
     psi4.core.set_active_molecule(mol)
-    psi4.set_options(
-        {
-            "basis": "jun-cc-pvdz",
-            "scf_type": "df",
-            "guess": "sad",
-            "freeze_core": "true",
-            "FISAPT_LINK_ASSIGNMENT": "C",
-            "FISAPT_FSAPT_FILEPATH": "none",
-            "SAPT_DFT_FUNCTIONAL": "PBE0",
-        }
-    )
-    psi4.energy("fisapt0")
+    psi4.set_options({
+        "basis": "jun-cc-pvdz",
+        "scf_type": "disk_df",
+        "guess": "sad",
+        "freeze_core": "true",
+        # I-SAPT link partitioning
+        "FISAPT_LINK_ASSIGNMENT": "C",
+        "FISAPT_FSAPT_FILEPATH": "none",
+        # SAPT(DFT) options
+        "SAPT_DFT_FUNCTIONAL": "PBE0",
+        "SAPT_DFT_DO_HYBRID": True,
+        "SAPT_DFT_DO_DHF": True,
+        "SAPT_DFT_USE_EINSUMS": True,
+        "SAPT_DFT_GRAC_COMPUTE": "SINGLE",
+        "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+        "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
+    })
+    psi4.energy("sapt(dft)")
 
     # Reference values from Python SAPT(DFT) I-SAPT implementation (in Hartree)
     Eref = {
@@ -862,5 +868,5 @@ if __name__ == "__main__":
     # test_fsapt_output_file()
     # test_fsapt_output_file()
     # test_fsapt_indices()
-    # test_isapt_hf()
+    test_isapt_hf()
     test_isapt_pbe0()
