@@ -131,21 +131,22 @@ no_com
         }
     )
     psi_bohr2angstroms = psi4.constants.bohr2angstroms
+    bohr = psi_bohr2angstroms
     external_potentials = {
         "A": [
-            [0.417, np.array([-0.5496, -0.6026, 1.5720]) / psi_bohr2angstroms],
-            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) / psi_bohr2angstroms],
-            [0.417, np.array([-1.9361, -0.4028, 2.2769]) / psi_bohr2angstroms],
+            [0.417, np.array([-0.5496, -0.6026, 1.5720]) / bohr],
+            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) / bohr],
+            [0.417, np.array([-1.9361, -0.4028, 2.2769]) / bohr],
         ],
         "B": [
-            [0.417, np.array([-2.5628, -0.8269, -1.6696]) / psi_bohr2angstroms],
-            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) / psi_bohr2angstroms],
-            [0.417, np.array([-1.8988, -0.4993, -0.3072]) / psi_bohr2angstroms],
+            [0.417, np.array([-2.5628, -0.8269, -1.6696]) / bohr],
+            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) / bohr],
+            [0.417, np.array([-1.8988, -0.4993, -0.3072]) / bohr],
         ],
         "C": [
-            [0.417, np.array([1.1270, 1.5527, -0.1658]) / psi_bohr2angstroms],
-            [-0.834, np.array([1.9896, 1.0738, -0.1673]) / psi_bohr2angstroms],
-            [0.417, np.array([2.6619, 1.7546, -0.2910]) / psi_bohr2angstroms],
+            [0.417, np.array([1.1270, 1.5527, -0.1658]) / bohr],
+            [-0.834, np.array([1.9896, 1.0738, -0.1673]) / bohr],
+            [0.417, np.array([2.6619, 1.7546, -0.2910]) / bohr],
         ],
     }
     psi4.energy("fisapt0", external_potentials=external_potentials)
@@ -490,7 +491,9 @@ no_com"""
         dirname="./fsapt",
     )
     fEnergies = {}
-    fkeys = ["fEelst", "fEexch", "fEindAB", "fEindBA", "fEdisp", "fEedisp", "fEtot"]
+    fkeys = [
+        "fEelst", "fEexch", "fEindAB", "fEindBA", "fEdisp", "fEedisp", "fEtot"
+    ]
 
     with open("./fsapt/fsapt.dat", "r") as fsapt:
         Energies = [float(x) for x in fsapt.readlines()[-2].split()[2:]]
@@ -857,6 +860,121 @@ def test_isapt_pbe0():
         compare_values(Eref[key], Epsi[key], 4, f"I-SAPT PBE0 {key}")
 
 
+@pytest.mark.fsapt
+def test_fsaptdft_ext_abc_au():
+    """
+    F-SAPT with external potentials using Molecule.from_arrays.
+    Tests external potentials on a 3-water-fragment system.
+    """
+    import os
+    import sys
+    import subprocess
+
+    psi_bohr2angstroms = psi4.constants.bohr2angstroms
+    mol = psi4.core.Molecule.from_arrays(
+        elez=[1, 8, 1, 1, 8, 1, 1, 8, 1],
+        fragment_separators=[3, 6],
+        geom=np.array([
+            0.0290, -1.1199, -1.5243,
+            0.9481, -1.3990, -1.3587,
+            1.4371, -0.5588, -1.3099,
+            1.0088, -1.5240, 0.5086,
+            1.0209, -1.1732, 1.4270,
+            1.5864, -0.3901, 1.3101,
+            -1.0231, 1.6243, -0.8743,
+            -0.5806, 2.0297, -0.1111,
+            -0.9480, 1.5096, 0.6281]) / psi_bohr2angstroms,
+        units="Bohr")
+
+    psi4.core.set_active_molecule(mol)
+
+    bohr = psi_bohr2angstroms
+    external_potentials = {
+        "A": [
+            [0.417, np.array([-0.5496, -0.6026, 1.5720]) / bohr],
+            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) / bohr],
+            [0.417, np.array([-1.9361, -0.4028, 2.2769]) / bohr]],
+        "B": [
+            [0.417, np.array([-2.5628, -0.8269, -1.6696]) / bohr],
+            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) / bohr],
+            [0.417, np.array([-1.8988, -0.4993, -0.3072]) / bohr]],
+        "C": [
+            [0.417, np.array([1.1270, 1.5527, -0.1658]) / bohr],
+            [-0.834, np.array([1.9896, 1.0738, -0.1673]) / bohr],
+            [0.417, np.array([2.6619, 1.7546, -0.2910]) / bohr]],
+    }
+
+    psi4.set_options({
+        "basis": "jun-cc-pvdz",
+        "scf_type": "df",
+        "guess": "sad",
+        "freeze_core": "true",
+
+        "SAPT_DFT_FUNCTIONAL": "HF",
+        "SAPT_DFT_DO_HYBRID": False,
+        "SAPT_DFT_DO_DHF": True,
+        "SAPT_DFT_USE_EINSUMS": True,
+        "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+        "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
+    })
+
+    # psi4.energy('fisapt0', external_potentials=external_potentials)
+    psi4.energy('sapt(dft)', external_potentials=external_potentials)
+
+    keys = ['Enuc', 'Eelst', 'Eexch', 'Eind', 'Edisp', 'Etot']
+
+    Eref = {
+        'Enuc': 74.2330370461897,
+        'Eelst': -0.04919037863747235,
+        'Eexch': 0.018239207303845935,
+        'Eind': -0.007969545823122322,
+        'Edisp': -0.002794948165605119,
+        'Etot': -0.04171566532235386,
+    }
+
+    Epsi = {
+        'Enuc': mol.nuclear_repulsion_energy(),
+        'Eelst': variable("SAPT ELST ENERGY"),
+        'Eexch': variable("SAPT EXCH ENERGY"),
+        'Eind': variable("SAPT IND ENERGY"),
+        'Edisp': variable("SAPT DISP ENERGY"),
+        'Etot': variable("SAPT TOTAL ENERGY"),
+    }
+
+    for key in keys:
+        compare_values(Eref[key], Epsi[key], 6, key)
+
+    os.chdir('fsapt')
+    with open('fA.dat', 'w') as fA:
+        fA.write("w1 1 2 3")
+    with open('fB.dat', 'w') as fB:
+        fB.write("w3 4 5 6")
+    psi4.procrouting.sapt.fsapt.run_from_output(dirname='.')
+    fEnergies = {}
+    fkeys = [
+        'fEelst', 'fEexch', 'fEindAB', 'fEindBA', 'fEdisp', 'fEedisp', 'fEtot'
+    ]
+
+    with open('fsapt.dat', 'r') as fsapt:
+        Energies = [float(x) for x in fsapt.readlines()[-2].split()[2:]]
+
+    for pair in zip(fkeys, Energies):
+        fEnergies[pair[0]] = pair[1]
+
+    fEref = {
+        'fEelst': -30.867,
+        'fEexch': 11.445,
+        'fEindAB': -3.138,
+        'fEindBA': -1.863,
+        'fEdisp': -1.754,
+        'fEedisp': 0.000,
+        'fEtot': -26.177
+    }
+
+    for key in fkeys:
+        compare_values(fEref[key], fEnergies[key], 2, key)
+
+
 if __name__ == "__main__":
     psi4.set_memory("64 GB")
     psi4.set_num_threads(12)
@@ -868,5 +986,8 @@ if __name__ == "__main__":
     # test_fsapt_output_file()
     # test_fsapt_output_file()
     # test_fsapt_indices()
-    test_isapt_hf()
-    test_isapt_pbe0()
+
+    # ISAPT tests
+    # test_isapt_hf()
+    # test_isapt_pbe0()
+    test_fsaptdft_ext_abc_au()
