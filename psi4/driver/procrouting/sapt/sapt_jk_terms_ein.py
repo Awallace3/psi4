@@ -853,22 +853,37 @@ def felst(cache, sapt_elst, dimer_wfn, wfn_A, wfn_B, jk, do_print=True):
             Elst1_terms[3] += E
 
     # External A - atom B interactions
+    # Compute directly: sum over external charges and B nuclei: Z_ext * Z_B / R
     if "A" in cache.get("external_potentials", {}):
         ext_pot_A = cache["external_potentials"]["A"]
+        ext_charges_A = ext_pot_A.getCharges()  # list of (Z, x, y, z) tuples
         for B in range(nB_atoms):
-            atom_mol = core.Molecule([core.Atom(ZB.np[B])])
-            atom_mol.set_geometry([mol.xyz(B)])
-            interaction = ext_pot_A.computeNuclearEnergy(atom_mol)
+            if abs(ZB.np[B]) < 1e-14:
+                continue
+            xB, yB, zB = mol.x(B), mol.y(B), mol.z(B)
+            interaction = 0.0
+            for charge_tuple in ext_charges_A:
+                Z_ext, x_ext, y_ext, z_ext = charge_tuple
+                dx, dy, dz = xB - x_ext, yB - y_ext, zB - z_ext
+                R = np.sqrt(dx*dx + dy*dy + dz*dz)
+                interaction += ZB.np[B] * Z_ext / R
             Elst_AB[nA_atoms + na, B] = interaction
             Elst1_terms[3] += interaction
 
     # External B - atom A interactions
     if "B" in cache.get("external_potentials", {}):
         ext_pot_B = cache["external_potentials"]["B"]
+        ext_charges_B = ext_pot_B.getCharges()  # list of (Z, x, y, z) tuples
         for A in range(nA_atoms):
-            atom_mol = core.Molecule([core.Atom(ZA.np[A])])
-            atom_mol.set_geometry([mol.xyz(A)])
-            interaction = ext_pot_B.computeNuclearEnergy(atom_mol)
+            if abs(ZA.np[A]) < 1e-14:
+                continue
+            xA, yA, zA = mol.x(A), mol.y(A), mol.z(A)
+            interaction = 0.0
+            for charge_tuple in ext_charges_B:
+                Z_ext, x_ext, y_ext, z_ext = charge_tuple
+                dx, dy, dz = xA - x_ext, yA - y_ext, zA - z_ext
+                R = np.sqrt(dx*dx + dy*dy + dz*dz)
+                interaction += ZA.np[A] * Z_ext / R
             Elst_AB[A, nB_atoms + nb] = interaction
             Elst1_terms[3] += interaction
 
@@ -4121,7 +4136,8 @@ def build_isapt_cache(
     jk: core.JK,
     cache: dict,
     functional: str = None,
-    do_print: bool = True
+    do_print: bool = True,
+    external_potentials: dict = None
 ) -> dict:
     """
     Build the I-SAPT cache with embedded SCF wavefunctions for monomers A and B.
@@ -4154,6 +4170,8 @@ def build_isapt_cache(
         DFT functional for embedded SCF. If None, uses HF.
     do_print : bool, optional
         Whether to print progress (default True).
+    external_potentials : dict, optional
+        External potentials for fragments A, B, C.
     
     Returns
     -------
@@ -4176,6 +4194,67 @@ def build_isapt_cache(
     
     # Step 1: Compute nuclear potentials for all fragments
     compute_isapt_fragment_nuclear_potentials(molecule, basisset, cache)
+    
+    # Step 1b: Handle external potentials if provided
+    # This mirrors the logic in build_sapt_jk_cache for external potentials
+    if external_potentials:
+        if do_print:
+            core.print_out("\n  ==> I-SAPT External Potentials <==\n\n")
+        
+        # Store external potentials in cache for electrostatics calculation
+        cache["external_potentials"] = {}
+        
+        # Add external potential contributions to V_A and V_B
+        if external_potentials.get("A") is not None:
+            ext_pot_A = external_potentials["A"]
+            # Build ExternalPotential object if needed
+            if not isinstance(ext_pot_A, core.ExternalPotential):
+                ext_obj_A = core.ExternalPotential()
+                for charge, coords in ext_pot_A:
+                    ext_obj_A.addCharge(charge, coords[0], coords[1], coords[2])
+                cache["external_potentials"]["A"] = ext_obj_A
+            else:
+                cache["external_potentials"]["A"] = ext_pot_A
+            # Compute potential matrix and add to V_A
+            ext_V_A = cache["external_potentials"]["A"].computePotentialMatrix(basisset)
+            cache["V_A"].add(ext_V_A)
+            if do_print:
+                core.print_out("    Added external potential for fragment A\n")
+        
+        if external_potentials.get("B") is not None:
+            ext_pot_B = external_potentials["B"]
+            # Build ExternalPotential object if needed
+            if not isinstance(ext_pot_B, core.ExternalPotential):
+                ext_obj_B = core.ExternalPotential()
+                for charge, coords in ext_pot_B:
+                    ext_obj_B.addCharge(charge, coords[0], coords[1], coords[2])
+                cache["external_potentials"]["B"] = ext_obj_B
+            else:
+                cache["external_potentials"]["B"] = ext_pot_B
+            # Compute potential matrix and add to V_B
+            ext_V_B = cache["external_potentials"]["B"].computePotentialMatrix(basisset)
+            cache["V_B"].add(ext_V_B)
+            if do_print:
+                core.print_out("    Added external potential for fragment B\n")
+        
+        if external_potentials.get("C") is not None:
+            ext_pot_C = external_potentials["C"]
+            # Build ExternalPotential object if needed
+            if not isinstance(ext_pot_C, core.ExternalPotential):
+                ext_obj_C = core.ExternalPotential()
+                for charge, coords in ext_pot_C:
+                    ext_obj_C.addCharge(charge, coords[0], coords[1], coords[2])
+                cache["external_potentials"]["C"] = ext_obj_C
+            else:
+                cache["external_potentials"]["C"] = ext_pot_C
+            # Add to V_C (which contributes to embedding potential W_C)
+            ext_V_C = cache["external_potentials"]["C"].computePotentialMatrix(basisset)
+            cache["V_C"].add(ext_V_C)
+            if do_print:
+                core.print_out("    Added external potential for fragment C\n")
+        
+        if do_print:
+            core.print_out("\n")
     
     # Step 2: Compute J_C, K_C and embedding potential W_C
     compute_isapt_JK_C(jk, cache)
@@ -4363,7 +4442,45 @@ def build_isapt_cache(
     
     jk.C_clear()
     
+    # Handle extern-extern interaction energy
     cache["extern_extern_IE"] = 0.0
+    if cache.get("external_potentials"):
+        ext_pots = cache["external_potentials"]
+        # External potential A interacting with nuclei of B
+        # Compute directly: sum over external charges and B nuclei: Z_ext * Z_B / R
+        if ext_pots.get("A") is not None:
+            ext_charges_A = ext_pots["A"].getCharges()  # list of (Z, x, y, z) tuples
+            for B in range(molecule.natom()):
+                if abs(ZBp[B]) > 1e-14:
+                    xB, yB, zB = molecule.x(B), molecule.y(B), molecule.z(B)
+                    for charge_tuple in ext_charges_A:
+                        Z_ext, x_ext, y_ext, z_ext = charge_tuple
+                        dx, dy, dz = xB - x_ext, yB - y_ext, zB - z_ext
+                        R = np.sqrt(dx*dx + dy*dy + dz*dz)
+                        E_AB += ZBp[B] * Z_ext / R
+        
+        # External potential B interacting with nuclei of A
+        if ext_pots.get("B") is not None:
+            ext_charges_B = ext_pots["B"].getCharges()  # list of (Z, x, y, z) tuples
+            for A in range(molecule.natom()):
+                if abs(ZAp[A]) > 1e-14:
+                    xA, yA, zA = molecule.x(A), molecule.y(A), molecule.z(A)
+                    for charge_tuple in ext_charges_B:
+                        Z_ext, x_ext, y_ext, z_ext = charge_tuple
+                        dx, dy, dz = xA - x_ext, yA - y_ext, zA - z_ext
+                        R = np.sqrt(dx*dx + dy*dy + dz*dz)
+                        E_AB += ZAp[A] * Z_ext / R
+        
+        # External-external interaction between A and B potentials
+        if ext_pots.get("A") is not None and ext_pots.get("B") is not None:
+            cache["extern_extern_IE"] = ext_pots["A"].computeExternExternInteraction(ext_pots["B"])
+            if do_print:
+                core.print_out(f"    Extern-Extern interaction: {cache['extern_extern_IE']:24.16E} [Eh]\n")
+    
+    # Update nuclear repulsion with any external contributions
+    cache["nuclear_repulsion_energy"] = E_AB
+    if do_print and cache.get("external_potentials"):
+        core.print_out(f"    Nuclear repulsion E_AB (with ext): {E_AB:24.16E} [Eh]\n\n")
     
     # Store DFT-related quantities for CPHF
     # These are needed for the XC kernel contribution in the CPHF Hessian

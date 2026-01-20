@@ -1120,7 +1120,8 @@ def sapt_dft(
         sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
         functional = sapt_dft_functional if do_dft else None
         cache = sapt_jk_terms_ein.build_isapt_cache(
-            dimer_wfn, sapt_jk, cache, functional=functional, do_print=True
+            dimer_wfn, sapt_jk, cache, functional=functional, do_print=True,
+            external_potentials=external_potentials
         )
         core.timer_off("SAPT(DFT):I-SAPT Embedded SCF")
         
