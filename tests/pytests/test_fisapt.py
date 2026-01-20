@@ -73,13 +73,13 @@ no_com"""
         },
     )
     fEnergies = {
-        'Elst': fEnergies['Elst'],
-        'Exch': fEnergies['Exch'],
-        'IndAB': fEnergies['IndAB'],
-        'IndBA': fEnergies['IndBA'],
-        'Disp': fEnergies['Disp'],
-        'EDisp': fEnergies['EDisp'],
-        'Total': fEnergies['Total'],
+        "Elst": fEnergies["Elst"],
+        "Exch": fEnergies["Exch"],
+        "IndAB": fEnergies["IndAB"],
+        "IndBA": fEnergies["IndBA"],
+        "Disp": fEnergies["Disp"],
+        "EDisp": fEnergies["EDisp"],
+        "Total": fEnergies["Total"],
     }
     print(fEnergies)
     fEref = {
@@ -134,17 +134,13 @@ no_com
     external_potentials = {
         "A": [
             [0.417, np.array([-0.5496, -0.6026, 1.5720]) / psi_bohr2angstroms],
-            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) /
-             psi_bohr2angstroms],
+            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) / psi_bohr2angstroms],
             [0.417, np.array([-1.9361, -0.4028, 2.2769]) / psi_bohr2angstroms],
         ],
         "B": [
-            [0.417, np.array([-2.5628, -0.8269, -1.6696]) /
-             psi_bohr2angstroms],
-            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) /
-             psi_bohr2angstroms],
-            [0.417, np.array([-1.8988, -0.4993, -0.3072]) /
-             psi_bohr2angstroms],
+            [0.417, np.array([-2.5628, -0.8269, -1.6696]) / psi_bohr2angstroms],
+            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) / psi_bohr2angstroms],
+            [0.417, np.array([-1.8988, -0.4993, -0.3072]) / psi_bohr2angstroms],
         ],
         "C": [
             [0.417, np.array([1.1270, 1.5527, -0.1658]) / psi_bohr2angstroms],
@@ -185,13 +181,13 @@ no_com
         },
     )
     fEnergies = {
-        'Elst': fEnergies['Elst'],
-        'Exch': fEnergies['Exch'],
-        'IndAB': fEnergies['IndAB'],
-        'IndBA': fEnergies['IndBA'],
-        'Disp': fEnergies['Disp'],
-        'EDisp': fEnergies['EDisp'],
-        'Total': fEnergies['Total'],
+        "Elst": fEnergies["Elst"],
+        "Exch": fEnergies["Exch"],
+        "IndAB": fEnergies["IndAB"],
+        "IndBA": fEnergies["IndBA"],
+        "Disp": fEnergies["Disp"],
+        "EDisp": fEnergies["EDisp"],
+        "Total": fEnergies["Total"],
     }
     fEref = {
         "fEelst": -30.867,
@@ -494,8 +490,7 @@ no_com"""
         dirname="./fsapt",
     )
     fEnergies = {}
-    fkeys = ["fEelst", "fEexch", "fEindAB",
-             "fEindBA", "fEdisp", "fEedisp", "fEtot"]
+    fkeys = ["fEelst", "fEexch", "fEindAB", "fEindBA", "fEdisp", "fEedisp", "fEtot"]
 
     with open("./fsapt/fsapt.dat", "r") as fsapt:
         Energies = [float(x) for x in fsapt.readlines()[-2].split()[2:]]
@@ -608,11 +603,11 @@ no_com
     df = pd.DataFrame(data)
     print(df)
     mol_qcel_dict = mol.to_schema(dtype=2)
-    frag1_indices = df['Frag1_indices'].tolist()
-    frag2_indices = df['Frag2_indices'].tolist()
+    frag1_indices = df["Frag1_indices"].tolist()
+    frag2_indices = df["Frag2_indices"].tolist()
     # Using molecule object for all test to ensure right counts from each
     # fragment are achieved. Note +1 for 1-indexing in fsapt_analysis
-    all_A = [i + 1 for i in mol_qcel_dict['fragments'][0]]
+    all_A = [i + 1 for i in mol_qcel_dict["fragments"][0]]
     expected_frag1_indices = [
         [1, 2, 7, 8],
         [1, 2, 7, 8],
@@ -624,7 +619,7 @@ no_com
         all_A,
         all_A,
     ]
-    all_B = [j + 1 for j in mol_qcel_dict['fragments'][1]]
+    all_B = [j + 1 for j in mol_qcel_dict["fragments"][1]]
     expected_frag2_indices = [
         [9, 10, 11, 16, 26],
         [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
@@ -636,18 +631,22 @@ no_com
         [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
         all_B,
     ]
-    print(f"{all_A = }")
-    print(f"{all_B = }")
+    print(f"{all_A=}")
+    print(f"{all_B=}")
     for i, indices in enumerate(frag1_indices):
         # Assert lists are identical
         e = expected_frag1_indices[i]
         sorted_frag = sorted(indices)
-        assert sorted_frag == e, f"Frag1 indices do not match for fragment {i}: expected {e}, got {sorted_frag}"
+        assert sorted_frag == e, f"Frag1 indices do not match for fragment {
+            i
+        }: expected {e}, got {sorted_frag}"
 
     for i, indices in enumerate(frag2_indices):
         e = expected_frag2_indices[i]
         sorted_frag = sorted(indices)
-        assert sorted_frag == e, f"Frag2 indices do not match for fragment {i}: expected {e}, got {sorted_frag}"
+        assert sorted_frag == e, f"Frag2 indices do not match for fragment {
+            i
+        }: expected {e}, got {sorted_frag}"
     df["F-Induction"] = df["IndAB"] + df["IndBA"]
     df.drop(columns=["IndAB", "IndBA"], inplace=True)
     df = df.rename(
@@ -660,6 +659,7 @@ no_com
         },
     )
     import qcelemental as qcel
+
     qcel_mol = qcel.models.Molecule.from_data(
         """
 0 1
@@ -698,11 +698,162 @@ no_reorient
 no_com
 """
     )
-    df['qcel_molecule'] = [qcel_mol] * len(df)
+    df["qcel_molecule"] = [qcel_mol] * len(df)
     df.to_pickle("fsapt_train_simple.pkl")
 
 
+@pytest.mark.fsapt
+def test_isapt_hf():
+    """
+    I-SAPT with HF: 3-fragment system with linker (fragment C).
+    Tests FISAPT_LINK_ASSIGNMENT = "C" option.
+    Reference values from C++ FISAPT implementation.
+    """
+    # 2,4-pentanediol molecule from fisapt-siao1
+    mol = psi4.core.Molecule.from_arrays(
+        elez=[6, 6, 1, 1, 1, 8, 1, 1, 6, 6, 1, 1, 1, 8, 1, 1, 6, 1, 1],
+        fragment_separators=[8, 16],
+        fix_com=True,
+        fix_orientation=True,
+        fix_symmetry='c1',
+        fragment_multiplicities=[2, 2, 1],
+        molecular_charge=0,
+        molecular_multiplicity=1,
+        geom=[
+            2.51268, -0.79503, -0.22006,
+            1.23732, 0.03963, -0.27676,
+            2.46159, -1.62117, -0.94759,
+            2.64341, -1.21642, 0.78902,
+            3.39794, -0.18468, -0.46590,
+            1.26614, 1.11169, 0.70005,
+            2.10603, 1.58188, 0.59592,
+            1.13110, 0.48209, -1.28412,
+
+            -1.26007, 0.07291, 0.27398,
+            -2.53390, -0.75742, 0.20501,
+            -2.48461, -1.59766, 0.91610,
+            -2.65872, -1.16154, -0.81233,
+            -3.41092, -0.13922, 0.44665,
+            -1.38660, 1.11180, -0.71748,
+            -1.17281, 0.53753, 1.27129,
+            -0.70002, 1.76332, -0.50799,
+
+            -0.01090, -0.78649, 0.02607,
+            0.17071, -1.41225, 0.91863,
+            -0.19077, -1.46135, -0.82966
+        ])
+
+    psi4.core.set_active_molecule(mol)
+
+    # Set options for SAPT(DFT) with F-SAPT
+    # Use HF first for simplicity
+    psi4.set_options({
+        'basis': 'jun-cc-pVDZ',
+        'scf_type': 'disk_df',
+        'guess': 'sad',
+        'freeze_core': True,
+        'fisapt_link_assignment': 'SIAO1',
+        'fisapt_link_ortho': 'fragment',
+        # Enable F-SAPT
+        'fisapt_fsapt_filepath': './fsapt',
+        # SAPT(DFT) options
+        'sapt_dft_functional': 'HF',  # Start with HF for debugging
+        'sapt_dft_do_hybrid': False,
+    })
+    e = psi4.energy('sapt(dft)')
+
+    # Reference values from C++ FISAPT (in Hartree)
+    Eref = {
+        "Eelst": 0.0149641,
+        "Eexch": 0.0106947,
+        "Eind": -0.0052829,
+        "Edisp": -0.0048356,
+    }
+    Epsi = {
+        "Eelst": variable("SAPT ELST ENERGY"),
+        "Eexch": variable("SAPT EXCH ENERGY"),
+        "Eind": variable("SAPT IND ENERGY"),
+        "Edisp": variable("SAPT DISP ENERGY"),
+    }
+
+    for key in Eref:
+        compare_values(Eref[key], Epsi[key], 4, f"I-SAPT HF {key}")
+
+
+@pytest.mark.fsapt
+def test_isapt_pbe0():
+    """
+    I-SAPT with PBE0 DFT functional: 3-fragment system with linker.
+    Tests FISAPT_LINK_ASSIGNMENT = "C" with DFT.
+    """
+    mol = psi4.core.Molecule.from_arrays(
+        elez=[6, 6, 1, 1, 1, 8, 1, 1, 6, 6, 1, 1, 1, 8, 1, 1, 6, 1, 1],
+        fragment_separators=[8, 16],
+        fix_com=True,
+        fix_orientation=True,
+        fix_symmetry='c1',
+        fragment_multiplicities=[2, 2, 1],
+        molecular_charge=0,
+        molecular_multiplicity=1,
+        geom=[
+            2.51268, -0.79503, -0.22006,
+            1.23732, 0.03963, -0.27676,
+            2.46159, -1.62117, -0.94759,
+            2.64341, -1.21642, 0.78902,
+            3.39794, -0.18468, -0.46590,
+            1.26614, 1.11169, 0.70005,
+            2.10603, 1.58188, 0.59592,
+            1.13110, 0.48209, -1.28412,
+
+            -1.26007, 0.07291, 0.27398,
+            -2.53390, -0.75742, 0.20501,
+            -2.48461, -1.59766, 0.91610,
+            -2.65872, -1.16154, -0.81233,
+            -3.41092, -0.13922, 0.44665,
+            -1.38660, 1.11180, -0.71748,
+            -1.17281, 0.53753, 1.27129,
+            -0.70002, 1.76332, -0.50799,
+
+            -0.01090, -0.78649, 0.02607,
+            0.17071, -1.41225, 0.91863,
+            -0.19077, -1.46135, -0.82966
+        ])
+
+    psi4.core.set_active_molecule(mol)
+    psi4.set_options(
+        {
+            "basis": "jun-cc-pvdz",
+            "scf_type": "df",
+            "guess": "sad",
+            "freeze_core": "true",
+            "FISAPT_LINK_ASSIGNMENT": "C",
+            "FISAPT_FSAPT_FILEPATH": "none",
+            "SAPT_DFT_FUNCTIONAL": "PBE0",
+        }
+    )
+    psi4.energy("fisapt0")
+
+    # Reference values from Python SAPT(DFT) I-SAPT implementation (in Hartree)
+    Eref = {
+        "Eelst": 0.0120113,
+        "Eexch": 0.0134432,
+        "Eind": -0.0050777,
+        "Edisp": -0.0046298,
+    }
+    Epsi = {
+        "Eelst": variable("SAPT ELST ENERGY"),
+        "Eexch": variable("SAPT EXCH ENERGY"),
+        "Eind": variable("SAPT IND ENERGY"),
+        "Edisp": variable("SAPT DISP ENERGY"),
+    }
+
+    for key in Eref:
+        compare_values(Eref[key], Epsi[key], 4, f"I-SAPT PBE0 {key}")
+
+
 if __name__ == "__main__":
+    psi4.set_memory("64 GB")
+    psi4.set_num_threads(12)
     # test_fsapt_psivars_dict()
     # test_fsapt_external_potentials()
     # test_fsapt_psivars()
@@ -710,4 +861,6 @@ if __name__ == "__main__":
     # test_fsapt_AtomicOutput()
     # test_fsapt_output_file()
     # test_fsapt_output_file()
-    test_fsapt_indices()
+    # test_fsapt_indices()
+    # test_isapt_hf()
+    test_isapt_pbe0()
