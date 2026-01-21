@@ -1158,7 +1158,7 @@ def sapt_dft(
             core.timer_on("SAPT(DFT):delta_HF")
             # compute_delta_hf_isapt returns E_HF (total HF interaction energy)
             E_HF = jk_terms.compute_delta_hf_isapt(
-                dimer_wfn, sapt_jk, cache, do_print=True
+                dimer_wfn, sapt_jk, cache, do_print=True, external_potentials=external_potentials
             )
             # Delta HF = E_HF - Elst10,r - Exch10 - Ind20,r - Exch-Ind20,r
             # This follows the C++ FISAPT implementation

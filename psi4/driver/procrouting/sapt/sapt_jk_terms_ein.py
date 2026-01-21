@@ -4250,6 +4250,9 @@ def build_isapt_cache(
             # Add to V_C (which contributes to embedding potential W_C)
             ext_V_C = cache["external_potentials"]["C"].computePotentialMatrix(basisset)
             cache["V_C"].add(ext_V_C)
+            # Store the external potential C matrix separately (VE in C++ FISAPT)
+            # This is needed for delta HF calculation where VE is added to ALL Hamiltonians
+            cache["VE"] = ext_V_C.clone()
             if do_print:
                 core.print_out("    Added external potential for fragment C\n")
         
@@ -4499,7 +4502,8 @@ def compute_delta_hf_isapt(
     dimer_wfn: core.Wavefunction,
     jk: core.JK,
     cache: dict,
-    do_print: bool = True
+    do_print: bool = True,
+    external_potentials: dict = None,
 ) -> float:
     """
     Compute delta HF for I-SAPT (3-fragment systems).
@@ -4677,6 +4681,17 @@ def compute_delta_hf_isapt(
     J_C_np = J_C.np
     K_C_np = K_C.np
     
+    # Get external potential C matrix (VE in C++ FISAPT)
+    # This is a common external potential that must be added to ALL subsystem Hamiltonians
+    # Following C++ FISAPT::dHF() logic where VE is added to H_AC, H_BC, H_A, H_B, H_C
+    VE = cache.get("VE")
+    if VE is not None:
+        VE_np = VE.np
+        if do_print:
+            core.print_out("    Using external potential C (VE) in delta HF calculation\n")
+    else:
+        VE_np = None
+    
     # Ensure D_C is numpy
     if hasattr(D_C, 'np'):
         D_C_np = D_C.np
@@ -4706,6 +4721,65 @@ def compute_delta_hf_isapt(
                 for fi in range(3):
                     for fj in range(3):
                         E_nuc[fi, fj] += 0.5 * Zi[fi] * Zj[fj] * Rinv
+    
+    # Add external potential-nuclear interactions to E_nuc
+    # Following C++ FISAPT logic in sapt_nuclear_external_potential_matrix()
+    # External potential C (VE) interacts with all fragment nuclei
+    external_potentials = cache.get("external_potentials", {})
+    if external_potentials:
+        # Map external potential label to fragment index
+        pot_to_idx = {"A": 0, "B": 1, "C": 2}
+        
+        for pot_label, ext_pot in external_potentials.items():
+            if ext_pot is None:
+                continue
+            pot_idx = pot_to_idx.get(pot_label)
+            if pot_idx is None:
+                continue
+            
+            # Get charges from external potential
+            # Each charge is a tuple (Z, x, y, z)
+            charges = ext_pot.getCharges()
+            
+            # Compute interaction between external potential and each fragment's nuclei
+            for frag_idx in range(3):  # A=0, B=1, C=2
+                # Get the nuclear charges for this fragment
+                if frag_idx == 0:
+                    Z_frag = ZAp
+                elif frag_idx == 1:
+                    Z_frag = ZBp
+                else:
+                    Z_frag = ZCp
+                
+                # Compute nuclear energy: sum over atoms with Z_frag charges
+                # interacting with the external potential charges
+                E_nuc_extern = 0.0
+                for i in range(natom):
+                    if Z_frag[i] > 1e-10:  # Atom belongs to this fragment
+                        # Get atom coordinates
+                        x_i = molecule.x(i)
+                        y_i = molecule.y(i)
+                        z_i = molecule.z(i)
+                        
+                        # Compute interaction with each charge in external potential
+                        for charge_tuple in charges:
+                            q = charge_tuple[0]   # Charge magnitude
+                            x_c = charge_tuple[1]  # x coordinate
+                            y_c = charge_tuple[2]  # y coordinate
+                            z_c = charge_tuple[3]  # z coordinate
+                            dx = x_i - x_c
+                            dy = y_i - y_c
+                            dz = z_i - z_c
+                            R = np.sqrt(dx*dx + dy*dy + dz*dz)
+                            if R > 1e-10:
+                                E_nuc_extern += Z_frag[i] * q / R
+                
+                # Add to E_nuc matrix (symmetrically like C++)
+                E_nuc[frag_idx, pot_idx] += E_nuc_extern * 0.5
+                E_nuc[pot_idx, frag_idx] += E_nuc_extern * 0.5
+        
+        if do_print:
+            core.print_out("    Updated nuclear repulsion with external potential contributions\n")
     
     # => Dimer ABC HF Energy <= //
     E_ABC = dimer_wfn.energy()
