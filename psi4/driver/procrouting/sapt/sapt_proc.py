@@ -1157,9 +1157,9 @@ def sapt_dft(
     core.print_out(print_sapt_dft_summary(data, "SAPT(DFT)", do_dft=do_dft, do_disp=do_disp, do_delta_dft=do_delta_dft))
 
     # because FISAPT_obj drop sets core variables, avoid setting them twice
-    if core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH") != "NONE":
+    if core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH") != "NONE" and do_fsapt:
         FISAPT_obj = saptdft_fisapt.drop_saptdft_variables(dimer_wfn, wfn_A, wfn_B, cache, data)
-    else:
+    elif do_fsapt:
         core.set_variable("FSAPT_QA", cache["Qocc0A"])
         core.set_variable("FSAPT_QB", cache["Qocc0B"])
         core.set_variable("FSAPT_ELST_AB", cache['Elst_AB'])
