@@ -2040,12 +2040,12 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            # "SAPT_DFT_DO_FSAPT": "FISAPT",
-            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "SAPT_DFT_DO_FSAPT": "FISAPT",
+            # "SAPT_DFT_DO_FSAPT": "SAPTDFT",
             "SAPT_DFT_DO_DISP": False,
             "SAPT_DFT_D4_IE": True,
             "SAPT_DFT_D4_TYPE": "intermolecular",
-            "SAPT_DFT_USE_EINSUMS": False,
+            "SAPT_DFT_USE_EINSUMS": True,
             "FISAPT_FSAPT_FILEPATH": "tmp",
         }
     )
@@ -2182,17 +2182,17 @@ no_com
         {
             "basis": "sto-3g",
             "scf_type": "df",
-            "guess": "sad",
+            "guess": "SAPGAU",
             "freeze_core": "true",
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
             # "SAPT_DFT_DO_FSAPT": "FISAPT",
-            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "SAPT_DFT_DO_FSAPT": "FISAPT",
             "SAPT_DFT_DO_DISP": False,
             "SAPT_DFT_D4_IE": True,
             "SAPT_DFT_D4_TYPE": "intermolecular",
-            "SAPT_DFT_USE_EINSUMS": False,
+            "SAPT_DFT_USE_EINSUMS": True,
             "FISAPT_FSAPT_FILEPATH": "none",
         }
     )
