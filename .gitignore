@@ -172,3 +172,5 @@ exports.sh
 tests/pytests/test_fsaptdft.log
 timer.csv
 *timer*.csv
+fsapt_HF_train_simple.pkl
+fsapt_train_simple.pkl
