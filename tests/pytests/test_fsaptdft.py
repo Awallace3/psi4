@@ -2287,8 +2287,8 @@ if __name__ == "__main__":
     # test_fsaptdft_simple()
 
     # test_fsaptdft_fisapt0()
-    test_fsaptdftd4i()
-    # test_fsaptdft_fisapt0_d4()
+    # test_fsaptdftd4i()
+    test_fsaptdft_fisapt0_d4()
     # test_fsaptdft_fisapt0()
     # test_fsaptdft_fisapt0()
     # test_fsaptdft()

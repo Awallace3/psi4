@@ -128,6 +128,16 @@ def run_sapt_dft(name, **kwargs):
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     do_dft = sapt_dft_functional != "HF"
+    do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT") != "NONE"
+
+    # Because SAPT(DFT) FDDS Dispersion doesn't have FSAPT support, catch this
+    # case when FISAPT is requested with SAPT_DFT_DO_DISP false
+    if do_fsapt and do_disp and sapt_dft_functional != "HF":
+        raise ValidationError(
+            "SAPT(DFT) FISAPT currently requires dispersion calculations."
+            "Please set SAPT_DFT_DO_DISP to False."
+            "If you want -D4(I) Dispersion, set SAPT_DFT_D4_IE True."
+        )
 
     if do_mon_grac_shift_A or do_mon_grac_shift_B:
         monomerA_mon_only_bf = sapt_dimer.extract_subsets(1)
