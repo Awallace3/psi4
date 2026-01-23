@@ -291,13 +291,15 @@ def setup_fisapt_object(
         "Exch-Ind20,r (A->B)": "Exch-Ind20,r (B<-A)",
         "Exch-Ind20,u (A<-B)": "Exch-Ind20,u (A<-B)",
         "Exch-Ind20,u (A->B)": "Exch-Ind20,u (B<-A)",
-        "DHF VALUE": "HF",
         "Exch10": "Exch10",
         "Exch10(S^2)": "Exch10(S^2)",
         "Elst10,r": "Elst10,r",
         "Ind20,r": "Ind20,r",
         "Exch-Ind20,r": "Exch-Ind20,r",
     }
+    # "DHF VALUE": "HF",
+    if core.get_option("SAPT", "SAPT_DFT_DO_DHF"):
+        scalar_keys["DHF VALUE"] = "HF"
     scalar_cache = {
         fisapt_key: scalars[sdft_key] for sdft_key, fisapt_key in scalar_keys.items()
     }
