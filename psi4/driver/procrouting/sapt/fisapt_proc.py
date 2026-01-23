@@ -204,6 +204,9 @@ def fisapt_fdrop(self, external_potentials=None):
         _drop(matrices["IndBA_AB"], filepath)
 
     if core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP"):
+        # In SAPT(DFT) case, you might not do dispersion
+        if "Disp_AB" not in matrices:
+            matrices["Disp_AB"] = core.Matrix.from_array(np.zeros_like(matrices["Elst_AB"]))
         matrices["Disp_AB"].name = "Disp"
         core.set_variable("FSAPT_DISP_AB", matrices["Disp_AB"])
         if write_output_files:

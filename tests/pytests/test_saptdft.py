@@ -6,6 +6,10 @@ from psi4 import core
 import numpy as np
 import qcelemental as qcel
 from pprint import pprint as pp
+# TODO: use logic below to check if einsums is available, then check optoins
+# optionally import einsums
+# psi4.addons()
+# "einsums" in psi4.addons()
 
 # from addons import uusing
 import pandas as pd
@@ -1333,14 +1337,14 @@ symmetry c1
 if __name__ == "__main__":
     psi4.set_memory("64 GB")
     psi4.set_num_threads(12)
-    test_saptdft_inf()
+    # test_saptdft_inf()
     # test_fsaptdft_fsapt0()
     # test_fsapt0_fsaptdft()
     # test_einsum_terms()
     # test_einsum_terms()
     # test_fsaptdft()
     # test_fsaptdft_fsapt0_simple()
-    # test_sapt_dft_compute_ddft_d4_auto_grac()
+    test_sapt_dft_compute_ddft_d4_auto_grac()
     # test_sapt_dft_diskdf()
     # test_qcng_embedded_saptdft()
     # test_fisapt0_sapthf_external_potential()
