@@ -228,7 +228,7 @@ def run_sapt_dft(name, **kwargs):
 
     # Because SAPT(DFT) FDDS Dispersion doesn't have FSAPT support, catch this
     # case when FISAPT is requested with SAPT_DFT_DO_DISP false
-    if do_fsapt and do_disp:
+    if do_fsapt and do_disp and sapt_dft_functional != "HF":
         raise ValidationError(
             "SAPT(DFT) FISAPT currently requires dispersion calculations."
             "Please set SAPT_DFT_DO_DISP to False."

@@ -918,10 +918,43 @@ def test_fsaptdft_ext_abc_au():
         "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
     })
 
-    # psi4.energy('fisapt0', external_potentials=external_potentials)
-    psi4.energy('sapt(dft)', external_potentials=external_potentials)
+    psi4.energy('fisapt0')
+    psi4.energy('sapt(dft)')
 
     keys = ['Enuc', 'Eelst', 'Eexch', 'Eind', 'Edisp', 'Etot']
+
+    # NOTE: SAPT(DFT) external potential logic gets slightly different energies
+    # than FISAPT0. This is likely due to slighly different SCF implementations
+    # between SAPT(DFT) and FISAPT0. The differences are very small (on the
+    # order of 1e-5), so AMW am accepting these as correct for now.
+    Eref = {
+        'Edisp': -0.0028063519613379505,
+        'Eelst': -0.014222339471217538,
+        'Eexch': 0.018823419507723968,
+        'Eind': -0.004547074033665097,
+        'Enuc': 74.2330370461897,
+        'Etot': -0.002752345958496617
+    }
+
+
+    Epsi = {
+        'Enuc': mol.nuclear_repulsion_energy(),
+        'Eelst': variable("SAPT ELST ENERGY"),
+        'Eexch': variable("SAPT EXCH ENERGY"),
+        'Eind': variable("SAPT IND ENERGY"),
+        'Edisp': variable("SAPT DISP ENERGY"),
+        'Etot': variable("SAPT TOTAL ENERGY"),
+    }
+    from pprint import pprint as pp
+    pp(Epsi)
+
+    for key in keys:
+        compare_values(Eref[key], Epsi[key], 4, key)
+
+    # Now external potentials
+
+    # psi4.energy('fisapt0', external_potentials=external_potentials)
+    psi4.energy('sapt(dft)', external_potentials=external_potentials)
 
     # NOTE: SAPT(DFT) external potential logic gets slightly different energies
     # than FISAPT0. This is likely due to slighly different SCF implementations
@@ -945,9 +978,9 @@ def test_fsaptdft_ext_abc_au():
         'Edisp': variable("SAPT DISP ENERGY"),
         'Etot': variable("SAPT TOTAL ENERGY"),
     }
-
     for key in keys:
         compare_values(Eref[key], Epsi[key], 4, key)
+
 
     os.chdir('fsapt')
     with open('fA.dat', 'w') as fA:
@@ -994,5 +1027,5 @@ if __name__ == "__main__":
 
     # ISAPT tests
     # test_isapt_hf()
-    test_isapt_pbe0()
-    # test_fsaptdft_ext_abc_au()
+    # test_isapt_pbe0()
+    test_fsaptdft_ext_abc_au()
