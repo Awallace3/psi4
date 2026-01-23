@@ -4571,7 +4571,79 @@ def compute_delta_hf_isapt(
     # Check if DFT was used - if so, run HF embedded SCF for delta HF
     is_dft = cache.get("is_dft", False)
     
-    if is_dft:
+    # Check if we have external potentials
+    has_ext_pots_param = (external_potentials is not None and 
+                          any(external_potentials.get(k) is not None for k in ['A', 'B', 'C']))
+    has_ext_pots_cache = (cache.get("external_potentials") is not None and
+                          any(cache["external_potentials"].get(k) is not None for k in ['A', 'B', 'C']))
+    has_ext_pots = has_ext_pots_param or has_ext_pots_cache
+    
+    # For delta HF with external potentials:
+    # 
+    # This is a known limitation of Python I-SAPT: the dimer SCF is run WITHOUT
+    # external potentials, so the delta HF correction cannot properly account for
+    # external potential effects.
+    #
+    # The C++ FISAPT runs dimer SCF WITH external potentials, making delta HF
+    # consistent. Until Python I-SAPT is modified to run dimer SCF with ext pots,
+    # we use the same code path as non-ext-pots, which gives E_HF ≈ 0.
+    #
+    # Note: This means delta_HF will be computed relative to SAPT terms that
+    # DO include external potential effects, which may cause some inconsistency.
+    # TODO: Fix by running dimer SCF with external potentials in sapt_proc.py.
+    
+    if has_ext_pots:
+        if do_print:
+            core.print_out("\n    External potentials detected for delta HF calculation.\n")
+            core.print_out("    NOTE: Dimer SCF was computed without external potentials.\n")
+            core.print_out("    Using embedded SCF orbitals with V matrices excluding external potentials.\n\n")
+        
+        # Use embedded SCF results from cache
+        D_A = cache["D_A"]  # From embedded SCF (optimized WITH ext pots in embedding)
+        D_B = cache["D_B"]  # From embedded SCF
+        J_A = cache["J_A"]  # From embedded SCF
+        J_B = cache["J_B"]  # From embedded SCF
+        K_A = cache["K_A"]  # From embedded SCF
+        K_B = cache["K_B"]  # From embedded SCF
+        
+        # J_C and K_C are always from localized C orbitals
+        J_C = cache["J_C"]
+        K_C = cache["K_C"]
+        
+        # Get C density from localized orbitals
+        Locc_C = cache.get("Locc_C") or cache.get("LoccC")
+        if Locc_C is not None and Locc_C.cols() > 0:
+            D_C = chain_gemm_einsums([Locc_C, Locc_C], ['N', 'T'])
+        else:
+            nbf = S.rows()
+            D_C = np.zeros((nbf, nbf))
+        
+        # V matrices from cache already include external potentials
+        # We need to subtract them to be consistent with dimer_wfn.energy()
+        ext_pots = cache.get("external_potentials", {})
+        V_A_np = np.asarray(V_A.np).copy()
+        V_B_np = np.asarray(V_B.np).copy()
+        V_C_np = np.asarray(V_C.np).copy()
+        
+        if ext_pots.get("A") is not None:
+            ext_V_A = ext_pots["A"].computePotentialMatrix(basisset)
+            V_A_np -= np.asarray(ext_V_A.np)
+            if do_print:
+                core.print_out("      Subtracted ext_A from V_A\n")
+        
+        if ext_pots.get("B") is not None:
+            ext_V_B = ext_pots["B"].computePotentialMatrix(basisset)
+            V_B_np -= np.asarray(ext_V_B.np)
+            if do_print:
+                core.print_out("      Subtracted ext_B from V_B\n")
+        
+        if ext_pots.get("C") is not None:
+            ext_V_C = ext_pots["C"].computePotentialMatrix(basisset)
+            V_C_np -= np.asarray(ext_V_C.np)
+            if do_print:
+                core.print_out("      Subtracted ext_C from V_C\n")
+        
+    elif is_dft:
         if do_print:
             core.print_out("    Running HF embedded SCF for Delta HF calculation...\n\n")
         
@@ -4645,6 +4717,24 @@ def compute_delta_hf_isapt(
         if do_print:
             core.print_out(f"    HF Embedded SCF: E(A) = {hf_cache['E0_A']:24.16E} [Eh]\n")
             core.print_out(f"    HF Embedded SCF: E(B) = {hf_cache['E0_B']:24.16E} [Eh]\n\n")
+        
+        # Get J_C and K_C from cache
+        J_C = cache["J_C"]
+        K_C = cache["K_C"]
+        
+        # Get C density from localized orbitals
+        Locc_C = cache.get("Locc_C") or cache.get("LoccC")
+        if Locc_C is not None and Locc_C.cols() > 0:
+            D_C = chain_gemm_einsums([Locc_C, Locc_C], ['N', 'T'])
+        else:
+            nbf = S.rows()
+            D_C = np.zeros((nbf, nbf))
+        
+        # V matrices without external potentials
+        V_A_np = np.asarray(V_A.np)
+        V_B_np = np.asarray(V_B.np)
+        V_C_np = np.asarray(V_C.np)
+        
     else:
         # Use the existing (HF) embedded SCF results from cache
         D_A = cache["D_A"]  # From embedded SCF
@@ -4653,44 +4743,50 @@ def compute_delta_hf_isapt(
         J_B = cache["J_B"]  # From embedded SCF
         K_A = cache["K_A"]  # From embedded SCF
         K_B = cache["K_B"]  # From embedded SCF
-    
-    # J_C and K_C are always from localized C orbitals (HF)
-    J_C = cache["J_C"]
-    K_C = cache["K_C"]
-    
-    # Get C density from localized orbitals
-    Locc_C = cache.get("Locc_C") or cache.get("LoccC")
-    if Locc_C is not None and Locc_C.cols() > 0:
-        D_C = chain_gemm_einsums([Locc_C, Locc_C], ['N', 'T'])
-    else:
-        nbf = S.rows()
-        D_C = np.zeros((nbf, nbf))
+        
+        # J_C and K_C are always from localized C orbitals (HF)
+        J_C = cache["J_C"]
+        K_C = cache["K_C"]
+        
+        # Get C density from localized orbitals
+        Locc_C = cache.get("Locc_C") or cache.get("LoccC")
+        if Locc_C is not None and Locc_C.cols() > 0:
+            D_C = chain_gemm_einsums([Locc_C, Locc_C], ['N', 'T'])
+        else:
+            nbf = S.rows()
+            D_C = np.zeros((nbf, nbf))
+        
+        # V matrices from cache (no external potentials for this case)
+        V_A_np = np.asarray(V_A.np)
+        V_B_np = np.asarray(V_B.np)
+        V_C_np = np.asarray(V_C.np)
     
     # Get numpy arrays
     T_np = T.np
-    V_A_np = V_A.np
-    V_B_np = V_B.np
-    V_C_np = V_C.np
     S_np = S.np
-    D_A_np = D_A.np
-    D_B_np = D_B.np
-    J_A_np = J_A.np
-    J_B_np = J_B.np
-    K_A_np = K_A.np
-    K_B_np = K_B.np
-    J_C_np = J_C.np
-    K_C_np = K_C.np
     
-    # Note: In C++ FISAPT, external potential C (VE) is added to ALL Hamiltonians
-    # (H_AC, H_BC, H_A, H_B, H_C). However, in the Python I-SAPT implementation,
-    # ext_C is already included in V_C (added in build_isapt_cache), so we don't 
-    # need to add VE separately here - it's already part of V_C.
+    # Handle D_A, D_B conversion to numpy
+    if hasattr(D_A, 'np'):
+        D_A_np = np.asarray(D_A.np)
+    else:
+        D_A_np = np.asarray(D_A)
+    if hasattr(D_B, 'np'):
+        D_B_np = np.asarray(D_B.np)
+    else:
+        D_B_np = np.asarray(D_B)
+    
+    J_A_np = np.asarray(J_A.np)
+    J_B_np = np.asarray(J_B.np)
+    K_A_np = np.asarray(K_A.np)
+    K_B_np = np.asarray(K_B.np)
+    J_C_np = np.asarray(J_C.np)
+    K_C_np = np.asarray(K_C.np)
     
     # Ensure D_C is numpy
     if hasattr(D_C, 'np'):
-        D_C_np = D_C.np
+        D_C_np = np.asarray(D_C.np)
     else:
-        D_C_np = D_C
+        D_C_np = np.asarray(D_C)
     
     # Compute nuclear repulsion energies between fragments
     ZAp = cache["ZA"].np
@@ -4716,19 +4812,20 @@ def compute_delta_hf_isapt(
                     for fj in range(3):
                         E_nuc[fi, fj] += 0.5 * Zi[fi] * Zj[fj] * Rinv
     
-    # NOTE: External potential-nuclear interactions are NOT added to E_nuc here
-    # because the I-SAPT dimer_wfn.energy() does NOT include external potential
-    # contributions (the dimer SCF for I-SAPT is run without external potentials
-    # to match how orbitals are localized). External potentials are still captured
-    # through V_A, V_B, V_C matrices which include the external potential contributions.
-    # 
-    # In C++ FISAPT, the dimer SCF IS run with external potentials (added in 
-    # sapt_nuclear_external_potential_matrix before SCF), so E_nuc there correctly
-    # includes external potential-nuclear terms. To match C++, we would need to
-    # re-run the dimer SCF with external potentials or compute E_ABC from scratch.
-    
     # => Dimer ABC HF Energy <= //
+    # 
+    # For I-SAPT with external potentials:
+    # - dimer_wfn.energy() is from dimer SCF WITHOUT ext pots
+    # - V_A, V_B, V_C have been adjusted (ext pots subtracted) for consistency
+    # - E_AC, E_BC, E_C are computed without ext pots for consistency
+    #
+    # For I-SAPT without external potentials:
+    # - Everything is consistent, just use dimer_wfn.energy()
+    
     E_ABC = dimer_wfn.energy()
+    
+    if has_ext_pots and do_print:
+        core.print_out(f"    E_ABC (dimer_wfn) = {E_ABC:24.16E} [Eh]\n")
     
     # => Monomer AC Energy (E_AC(0) in C++ notation) <= //
     # Uses D_A, J_A, K_A from embedded SCF
