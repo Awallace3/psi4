@@ -219,8 +219,7 @@ def run_sapt_dft(name, **kwargs):
             raise ValueError("SAPT(DFT)-D4 must be specified as 'SAPT(DFT)-D4(S)' or 'SAPT(DFT)-D4(I)' through setting SAPT_DFT_D4_TYPE to 'supermolecular' or 'intermolecular'.")
 
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
-    print(f"do_delta_hf: {do_delta_hf}")
-    do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT");
+    do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
     do_disp = core.get_option("SAPT", "SAPT_DFT_DO_DISP")
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
@@ -1129,7 +1128,7 @@ def sapt_dft(
         )
         core.timer_off("SAPT(DFT):I-SAPT Embedded SCF")
         
-        # Now we can compute SAPT terms with the properly populated cache
+        # Electrostatics
         core.timer_on("SAPT(DFT):elst")
         fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")
         do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT") != "NONE"
@@ -1137,13 +1136,14 @@ def sapt_dft(
         data["extern_extern_IE"] = extern_extern_IE
         data.update(elst)
         core.timer_off("SAPT(DFT):elst")
-        
+
+        # Exchange
         core.timer_on("SAPT(DFT):exch")
-        # Use I-SAPT specific exchange function with MCBS formula
-        exch = jk_terms.exchange_isapt(cache, sapt_jk, True)
+        exch = jk_terms.exchange(cache, sapt_jk, True)
         data.update(exch)
         core.timer_off("SAPT(DFT):exch")
-        
+
+        # Induction
         core.timer_on("SAPT(DFT):ind")
         ind = jk_terms.induction(
             cache,
@@ -1239,7 +1239,7 @@ def sapt_dft(
     extern_extern_IE = data.get("extern_extern_IE", 0.0)
     exch = {"Exch10(S^2)": data.get("Exch10(S^2)", 0.0), "Exch10": data.get("Exch10", 0.0)}
     
-    if do_fsapt and fsapt_type == "SAPTDFT" and not do_isapt:
+    if do_fsapt and fsapt_type == "SAPTDFT":
         # F-SAPT localization and partitioning
         # Note: F-SAPT is not yet fully implemented for I-SAPT (3 fragments)
         core.timer_on("SAPT(DFT):Localize Orbitals")
@@ -1263,19 +1263,7 @@ def sapt_dft(
         core.timer_on("SAPT(DFT): F-SAPT Induction")
         cache = sapt_jk_terms_ein.find(cache, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
         core.timer_off("SAPT(DFT): F-SAPT Induction")
-    elif do_isapt:
-        # For I-SAPT, we need flocalization for dispersion
-        # This sets up Lfocc0A/B, Caocc0A/B, Uocc_A/B needed by fdisp0
-        core.timer_on("SAPT(DFT): I-SAPT F-Localization (IBO)")
-        sapt_jk_terms_ein.flocalization(cache, dimer_wfn, wfn_A, wfn_B)
-        core.timer_off("SAPT(DFT): I-SAPT F-Localization (IBO)")
-        
-        if do_fsapt:
-            # Full F-SAPT partitioning is not yet implemented for I-SAPT
-            core.print_out("\n  Note: F-SAPT partitioning is not yet fully implemented for I-SAPT.\n")
-            core.print_out("        Basic SAPT terms have been computed above.\n\n")
-
-    elif do_fsapt and fsapt_type == "FISAPT" and not use_einsums and not do_isapt:
+    elif do_fsapt and fsapt_type == "FISAPT" and not use_einsums:
         # F-SAPT via C++ FISAPT (not available for I-SAPT)
         core.timer_on("SAPT(DFT):Localize Orbitals")
         sapt_jk_terms_ein.localization(cache, dimer_wfn, wfn_A, wfn_B)
@@ -1302,7 +1290,7 @@ def sapt_dft(
         core.timer_on("SAPT(DFT): F-SAPT Induction")
         FISAPT_obj.find()
         core.timer_off("SAPT(DFT): F-SAPT Induction")
-    elif do_fsapt and fsapt_type == "FISAPT" and use_einsums and not do_isapt:
+    elif do_fsapt and fsapt_type == "FISAPT" and use_einsums:
         # F-SAPT via C++ FISAPT with einsums (not available for I-SAPT)
         core.timer_on("SAPT(DFT):Localize Orbitals")
         sapt_jk_terms_ein.localization(cache, dimer_wfn, wfn_A, wfn_B)
@@ -1397,7 +1385,7 @@ def sapt_dft(
             
         # For I-SAPT, we skip F-SAPT dispersion, so we need to run MP2 dispersion
         # to get Disp20,u and Exch-Disp20,u values
-        if not do_fsapt or do_isapt:
+        if not do_fsapt:
             core.timer_on("MP2 disp")
             # For I-SAPT, use the already-built cache instead of building a new one
             # The I-SAPT cache has all the needed keys from build_isapt_cache
@@ -1413,6 +1401,7 @@ def sapt_dft(
                 # For I-SAPT, use fdisp0 which computes MP2-like dispersion using
                 # the embedded SCF orbitals from the I-SAPT cache.
                 # flocalization() has already been called to set up the required keys.
+                core.print_out("NOTE: Using I-SAPT fdisp0 to compute MP2-like dispersion terms.\n\n")
                 cache_tmp = sapt_jk_terms_ein.fdisp0(
                     cache_tmp, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, do_print=True
                 )
@@ -1453,7 +1442,7 @@ def sapt_dft(
         core.timer_off("SAPT(DFT):disp")
 
     # Now do F-SAPT on dispersion if requested
-    if do_fsapt and fsapt_type == "SAPTDFT" and not do_isapt:
+    if do_fsapt and fsapt_type == "SAPTDFT":
         # Because dispersion is defined differently between SAPT0 
         # (E_disp20 = -4\sigma_{abrs} |(ar|bs)|^2 / (epsilon_a + epsilon_b)) 
         # and SAPT(DFT) with FDDS dispersion, we will only implement F-SAPT
@@ -1471,7 +1460,7 @@ def sapt_dft(
             data["Disp20,u"] = cache["Disp20,u"]
             core.timer_off("SAPT(DFT): F-SAPT Dispersion")
 
-    elif do_fsapt and fsapt_type == "FISAPT" and do_disp and not do_isapt:
+    elif do_fsapt and fsapt_type == "FISAPT" and do_disp:
         core.timer_on("SAPT(DFT): F-SAPT Dispersion")
         FISAPT_obj.fdisp()
         core.timer_off("SAPT(DFT): F-SAPT Dispersion")
@@ -1482,7 +1471,7 @@ def sapt_dft(
         matrices = FISAPT_obj.matrices()
         for k, v in matrices.items():
             cache[k] = v
-    elif do_fsapt and fsapt_type == "FISAPT" and not do_isapt:
+    elif do_fsapt and fsapt_type == "FISAPT":
         matrices = FISAPT_obj.matrices()
         for k, v in matrices.items():
             cache[k] = v

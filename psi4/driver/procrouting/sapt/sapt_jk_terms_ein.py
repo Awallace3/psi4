@@ -4681,16 +4681,10 @@ def compute_delta_hf_isapt(
     J_C_np = J_C.np
     K_C_np = K_C.np
     
-    # Get external potential C matrix (VE in C++ FISAPT)
-    # This is a common external potential that must be added to ALL subsystem Hamiltonians
-    # Following C++ FISAPT::dHF() logic where VE is added to H_AC, H_BC, H_A, H_B, H_C
-    VE = cache.get("VE")
-    if VE is not None:
-        VE_np = VE.np
-        if do_print:
-            core.print_out("    Using external potential C (VE) in delta HF calculation\n")
-    else:
-        VE_np = None
+    # Note: In C++ FISAPT, external potential C (VE) is added to ALL Hamiltonians
+    # (H_AC, H_BC, H_A, H_B, H_C). However, in the Python I-SAPT implementation,
+    # ext_C is already included in V_C (added in build_isapt_cache), so we don't 
+    # need to add VE separately here - it's already part of V_C.
     
     # Ensure D_C is numpy
     if hasattr(D_C, 'np'):
@@ -4722,64 +4716,16 @@ def compute_delta_hf_isapt(
                     for fj in range(3):
                         E_nuc[fi, fj] += 0.5 * Zi[fi] * Zj[fj] * Rinv
     
-    # Add external potential-nuclear interactions to E_nuc
-    # Following C++ FISAPT logic in sapt_nuclear_external_potential_matrix()
-    # External potential C (VE) interacts with all fragment nuclei
-    external_potentials = cache.get("external_potentials", {})
-    if external_potentials:
-        # Map external potential label to fragment index
-        pot_to_idx = {"A": 0, "B": 1, "C": 2}
-        
-        for pot_label, ext_pot in external_potentials.items():
-            if ext_pot is None:
-                continue
-            pot_idx = pot_to_idx.get(pot_label)
-            if pot_idx is None:
-                continue
-            
-            # Get charges from external potential
-            # Each charge is a tuple (Z, x, y, z)
-            charges = ext_pot.getCharges()
-            
-            # Compute interaction between external potential and each fragment's nuclei
-            for frag_idx in range(3):  # A=0, B=1, C=2
-                # Get the nuclear charges for this fragment
-                if frag_idx == 0:
-                    Z_frag = ZAp
-                elif frag_idx == 1:
-                    Z_frag = ZBp
-                else:
-                    Z_frag = ZCp
-                
-                # Compute nuclear energy: sum over atoms with Z_frag charges
-                # interacting with the external potential charges
-                E_nuc_extern = 0.0
-                for i in range(natom):
-                    if Z_frag[i] > 1e-10:  # Atom belongs to this fragment
-                        # Get atom coordinates
-                        x_i = molecule.x(i)
-                        y_i = molecule.y(i)
-                        z_i = molecule.z(i)
-                        
-                        # Compute interaction with each charge in external potential
-                        for charge_tuple in charges:
-                            q = charge_tuple[0]   # Charge magnitude
-                            x_c = charge_tuple[1]  # x coordinate
-                            y_c = charge_tuple[2]  # y coordinate
-                            z_c = charge_tuple[3]  # z coordinate
-                            dx = x_i - x_c
-                            dy = y_i - y_c
-                            dz = z_i - z_c
-                            R = np.sqrt(dx*dx + dy*dy + dz*dz)
-                            if R > 1e-10:
-                                E_nuc_extern += Z_frag[i] * q / R
-                
-                # Add to E_nuc matrix (symmetrically like C++)
-                E_nuc[frag_idx, pot_idx] += E_nuc_extern * 0.5
-                E_nuc[pot_idx, frag_idx] += E_nuc_extern * 0.5
-        
-        if do_print:
-            core.print_out("    Updated nuclear repulsion with external potential contributions\n")
+    # NOTE: External potential-nuclear interactions are NOT added to E_nuc here
+    # because the I-SAPT dimer_wfn.energy() does NOT include external potential
+    # contributions (the dimer SCF for I-SAPT is run without external potentials
+    # to match how orbitals are localized). External potentials are still captured
+    # through V_A, V_B, V_C matrices which include the external potential contributions.
+    # 
+    # In C++ FISAPT, the dimer SCF IS run with external potentials (added in 
+    # sapt_nuclear_external_potential_matrix before SCF), so E_nuc there correctly
+    # includes external potential-nuclear terms. To match C++, we would need to
+    # re-run the dimer SCF with external potentials or compute E_ABC from scratch.
     
     # => Dimer ABC HF Energy <= //
     E_ABC = dimer_wfn.energy()

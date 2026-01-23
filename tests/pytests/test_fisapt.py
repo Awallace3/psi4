@@ -761,7 +761,7 @@ def test_isapt_hf():
         "SAPT_DFT_DO_HYBRID": False,
         "SAPT_DFT_DO_DHF": True,
         "SAPT_DFT_USE_EINSUMS": True,
-        "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+        "SAPT_DFT_DO_FSAPT": "FISAPT",
         "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
     })
     psi4.energy("sapt(dft)")
@@ -838,7 +838,7 @@ def test_isapt_pbe0():
         "SAPT_DFT_DO_DHF": True,
         "SAPT_DFT_USE_EINSUMS": True,
         "SAPT_DFT_GRAC_COMPUTE": "SINGLE",
-        "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+        "SAPT_DFT_DO_FSAPT": "FISAPT",
         "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
     })
     psi4.energy("sapt(dft)")
@@ -912,7 +912,7 @@ def test_fsaptdft_ext_abc_au():
         "SAPT_DFT_DO_HYBRID": False,
         "SAPT_DFT_DO_DHF": True,
         "SAPT_DFT_USE_EINSUMS": True,
-        "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+        "SAPT_DFT_DO_FSAPT": "FISAPT",
         "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
     })
 
@@ -991,6 +991,6 @@ if __name__ == "__main__":
     # test_fsapt_indices()
 
     # ISAPT tests
-    # test_isapt_hf()
+    test_isapt_hf()
     # test_isapt_pbe0()
-    test_fsaptdft_ext_abc_au()
+    # test_fsaptdft_ext_abc_au()
