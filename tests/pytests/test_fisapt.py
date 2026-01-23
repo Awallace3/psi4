@@ -836,6 +836,8 @@ def test_isapt_pbe0():
         "SAPT_DFT_FUNCTIONAL": "PBE0",
         "SAPT_DFT_DO_HYBRID": True,
         "SAPT_DFT_DO_DHF": True,
+        "SAPT_DFT_DO_DISP": False,
+        "SAPT_DFT_D4_IE": True,
         "SAPT_DFT_USE_EINSUMS": True,
         "SAPT_DFT_GRAC_COMPUTE": "SINGLE",
         "SAPT_DFT_DO_FSAPT": "FISAPT",
@@ -848,7 +850,7 @@ def test_isapt_pbe0():
         "Eelst": 0.0120113,
         "Eexch": 0.0134432,
         "Eind": -0.0050777,
-        "Edisp": -0.0046298,
+        "Edisp": -0.0056293,
     }
     Epsi = {
         "Eelst": variable("SAPT ELST ENERGY"),
@@ -991,6 +993,6 @@ if __name__ == "__main__":
     # test_fsapt_indices()
 
     # ISAPT tests
-    test_isapt_hf()
-    # test_isapt_pbe0()
+    # test_isapt_hf()
+    test_isapt_pbe0()
     # test_fsaptdft_ext_abc_au()

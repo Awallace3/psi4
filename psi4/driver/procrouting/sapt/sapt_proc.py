@@ -224,6 +224,16 @@ def run_sapt_dft(name, **kwargs):
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     do_dft = sapt_dft_functional != "HF"
+    do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT") != "NONE"
+
+    # Because SAPT(DFT) FDDS Dispersion doesn't have FSAPT support, catch this
+    # case when FISAPT is requested with SAPT_DFT_DO_DISP false
+    if do_fsapt and do_disp:
+        raise ValidationError(
+            "SAPT(DFT) FISAPT currently requires dispersion calculations."
+            "Please set SAPT_DFT_DO_DISP to False."
+            "If you want -D4(I) Dispersion, set SAPT_DFT_D4_IE True."
+        )
 
     # I-SAPT: Handle features differently since monomers A and B are computed
     # in embedded SCF (not as isolated radicals)
@@ -1383,33 +1393,14 @@ def sapt_dft(
             nfrozen_A = wfn_A.basisset().n_frozen_core(core.get_global_option("FREEZE_CORE"),wfn_A.molecule())
             nfrozen_B = wfn_B.basisset().n_frozen_core(core.get_global_option("FREEZE_CORE"),wfn_B.molecule())
             
-        # For I-SAPT, we skip F-SAPT dispersion, so we need to run MP2 dispersion
-        # to get Disp20,u and Exch-Disp20,u values
         if not do_fsapt:
             core.timer_on("MP2 disp")
-            # For I-SAPT, use the already-built cache instead of building a new one
-            # The I-SAPT cache has all the needed keys from build_isapt_cache
             if do_isapt:
                 cache_tmp = cache
             else:
                 cache_tmp = sapt_jk_terms.build_sapt_jk_cache(dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials)
             
-            # For I-SAPT, use the einsums-based MP2 dispersion which uses cache directly
-            # The FISAPT algorithm requires proper monomer wavefunctions which I-SAPT doesn't have
-            # Use df_mp2_sapt_dispersion which calls core.sapt() instead
-            if do_isapt:
-                # For I-SAPT, use fdisp0 which computes MP2-like dispersion using
-                # the embedded SCF orbitals from the I-SAPT cache.
-                # flocalization() has already been called to set up the required keys.
-                core.print_out("NOTE: Using I-SAPT fdisp0 to compute MP2-like dispersion terms.\n\n")
-                cache_tmp = sapt_jk_terms_ein.fdisp0(
-                    cache_tmp, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, do_print=True
-                )
-                mp2_disp = {
-                    "Exch-Disp20,u": cache_tmp["Exch-Disp20,u"],
-                    "Disp20,u": cache_tmp["Disp20,u"],
-                }
-            elif core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
+            if core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
                 mp2_disp = sapt_mp2_terms.df_mp2_fisapt_dispersion(wfn_A, primary_basis, aux_basis, 
                                                                    cache_tmp, nfrozen_A, nfrozen_B, do_print=True)
             else:
@@ -1420,6 +1411,7 @@ def sapt_dft(
                                                                  aux_basis,
                                                                  cache_tmp,
                                                                  do_print=True)
+            print(f"{mp2_disp = }")
             core.timer_off("MP2 disp")
             data.update(mp2_disp)
 
