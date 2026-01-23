@@ -701,7 +701,7 @@ def compute_GRAC_shift(molecule, sapt_dft_grac_convergence_tier, label):
                 molecule=mol_cation,
             )
         except ConvergenceError:
-            if len(options) == 1:
+            if len(grac_options) == 1:
                 raise Exception(
                     "Convergence error in GRAC shift calculation, please try a different convergence tier."
                 )
@@ -718,6 +718,7 @@ def compute_GRAC_shift(molecule, sapt_dft_grac_convergence_tier, label):
         grac = E_cation - E_given + HOMO
         if grac >= 1 or grac <= -1:
             raise Exception(f"The computed GRAC shift ({grac} [E_h]) for {label} exceeds the bounds of -1 < x < 1 and should not be used to approximate the ionization potential.")
+        break
     core.print_out(f" GRAC shift {label}: {grac:.8f}\n")
     core.print_out(f" {E_given = :.8f}, {E_cation = :.8f}, {HOMO = :.8f}\n")
     optstash.restore()
