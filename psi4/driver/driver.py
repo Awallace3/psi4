@@ -2113,7 +2113,7 @@ def fsapt_analysis(
         with open(f"{dirname}/fB.dat", "w") as f:
             for k, v in fragments_b.items():
                 f.write(f"{k} {' '.join([str(i) for i in v])}\n")
-        results = fsapt.run_from_output()
+        results = fsapt.run_from_output(dirname=dirname)
     else:
         print("Running fsapt_analysis through variables")
         results = fsapt.run_fsapt_analysis(
