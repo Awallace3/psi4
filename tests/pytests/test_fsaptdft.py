@@ -2234,6 +2234,8 @@ no_reorient
 no_com
 """
     )
+    # Above test takes a while actually
+    mol = psi4.geometry(_sapt_testing_mols['neutral_water_dimer'])
     psi4.set_options(
         {
             # "basis": "aug-cc-pv(d+d)z",
@@ -2287,8 +2289,8 @@ if __name__ == "__main__":
     # test_fsaptdft_simple()
 
     # test_fsaptdft_fisapt0()
-    # test_fsaptdftd4i()
-    test_fsaptdft_fisapt0_d4()
+    test_fsaptdftd4i()
+    # test_fsaptdft_fisapt0_d4()
     # test_fsaptdft_fisapt0()
     # test_fsaptdft_fisapt0()
     # test_fsaptdft()
