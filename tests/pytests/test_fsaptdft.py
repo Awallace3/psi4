@@ -2279,6 +2279,17 @@ no_com
         }
     )
     psi4.energy("sapt(dft)", molecule=mol)
+    data = psi4.fsapt_analysis(
+        molecule=mol,
+        fragments_a={
+            "water1": [1, 2, 3],
+        },
+        fragments_b={
+            "water2": [4, 5, 6],
+        },
+        links5050=True,
+        print_output=False,
+    )
 
 
 if __name__ == "__main__":

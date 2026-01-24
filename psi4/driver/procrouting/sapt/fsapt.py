@@ -1697,6 +1697,9 @@ def run_fsapt_analysis(
                 v = np.array(value)
                 if key in ['fsapt_qa', 'fsapt_qb']:
                     v = v.reshape(len(Z), -1)
+                elif key in ['fsapt_empirical_disp']:
+                    # need NA * NB from molecule
+                    v = v.reshape(len(Z), len(Z))
                 else:
                     v = v.reshape(fsapt_AB_array_shape)
                 core.set_variable(key, v)
@@ -1704,6 +1707,7 @@ def run_fsapt_analysis(
         monomer_slices = molecule.get_fragments()
         R, _, Z_el, Z, _ = molecule.to_arrays()
         # PDB writing later needs Z to be str (element symbols=Z_el)
+    print("Z_el:", Z_el)
     geom = []
     for i in range(len(Z)):
         geom.append([str(Z_el[i]), R[i][0], R[i][1], R[i][2]])
