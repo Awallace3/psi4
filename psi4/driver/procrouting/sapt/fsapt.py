@@ -241,8 +241,8 @@ def read_d3_fragments(dirname: Optional[str] = ".") -> Dict[str, Dict[str, List[
             fraglines = f.readlines()
 
         # Iterate over lines, save into dict as <fragname>: [list of atom numbers]
-        for l in fraglines:
-            stuff = l.split()
+        for line in fraglines:
+            stuff = line.split()
             # Get number of atoms in each fragment
             fragdict[stuff[0]] = [int(i) for i in stuff[1:]]
 
@@ -474,14 +474,19 @@ def print_fragments(geom, Z, Q, fragkeys, frags, nuclear_ws, orbital_ws, filenam
     fh.close()
 
 
-def extract_osapt_data_from_vars():
+def extract_osapt_data_from_vars(print_output=True):
     """Reads the F-SAPT components
+
+    Parameters
+    ----------
+    print_output : bool
+        Whether to print output messages. Default: True.
 
     Returns
     -------
     vals : Dict[str, np.ndarray]
-        Dictionary of the F-SAPT0 components decomposed to orbital, nuclear, and external
-        potential contributions
+        Dictionary of the F-SAPT0 components decomposed to orbital, nuclear,
+        and external potential contributions
     """
 
     vals = {}
@@ -494,9 +499,11 @@ def extract_osapt_data_from_vars():
         # vals['Disp'] = read_block('%s/Disp.dat'  % filepath, H_to_kcal_)
         vals["Disp"] = core.variable("FSAPT_DISP_AB").to_array() * H_to_kcal_
     except Exception:
-        print(
-            "No exact dispersion present.  Copying & zeroing `Elst.dat`->`Disp.dat`, and proceeding.\n"
-        )
+        if print_output:
+            print(
+                "No exact dispersion present.  Copying & zeroing "
+                "`Elst.dat`->`Disp.dat`, and proceeding.\n"
+            )
         vals["Disp"] = np.zeros_like(np.array(vals["Elst"]))
 
     # Read empirical F-SAPT0-D dispersion data
@@ -510,24 +517,26 @@ def extract_osapt_data_from_vars():
     vals["Total"] = [[0.0 for x in vals["Elst"][0]] for x2 in vals["Elst"]]
     for key in ["Elst", "Exch", "IndAB", "IndBA", "Disp"]:
         for k in range(len(vals["Total"])):
-            for l in range(len(vals["Total"][0])):
-                vals["Total"][k][l] += vals[key][k][l]
+            for idx in range(len(vals["Total"][0])):
+                vals["Total"][k][idx] += vals[key][k][idx]
     return vals
 
 
-def extract_osapt_data(filepath):
+def extract_osapt_data(filepath, print_output=True):
     """Reads the F-SAPT component files
 
     Arguments
     ---------
     filepath : str
         Path to directory containing the F-SAPT energy component files
+    print_output : bool
+        Whether to print output messages. Default: True.
 
     Returns
     -------
     vals : Dict[str, np.ndarray]
-        Dictionary of the F-SAPT0 components decomposed to orbital, nuclear, and external
-        potential contributions
+        Dictionary of the F-SAPT0 components decomposed to orbital, nuclear,
+        and external potential contributions
     """
 
     vals = {}
@@ -539,9 +548,11 @@ def extract_osapt_data(filepath):
     try:
         vals["Disp"] = read_block("%s/Disp.dat" % filepath, H_to_kcal_)
     except FileNotFoundError:
-        print(
-            "No exact dispersion present.  Copying & zeroing `Elst.dat`->`Disp.dat`, and proceeding.\n"
-        )
+        if print_output:
+            print(
+                "No exact dispersion present.  Copying & zeroing "
+                "`Elst.dat`->`Disp.dat`, and proceeding.\n"
+            )
         vals["Disp"] = np.zeros_like(np.array(vals["Elst"]))
 
     # Read empirical F-SAPT0-D dispersion data
@@ -554,8 +565,8 @@ def extract_osapt_data(filepath):
     vals["Total"] = [[0.0 for x in vals["Elst"][0]] for x2 in vals["Elst"]]
     for key in ["Elst", "Exch", "IndAB", "IndBA", "Disp"]:
         for k in range(len(vals["Total"])):
-            for l in range(len(vals["Total"][0])):
-                vals["Total"][k][l] += vals[key][k][l]
+            for idx in range(len(vals["Total"][0])):
+                vals["Total"][k][idx] += vals[key][k][idx]
 
     return vals
 
@@ -1053,6 +1064,7 @@ def compute_fsapt_qcvars(
     links5050=False,
     completeness=0.85,
     dirname=".",
+    print_output=True,
 ):
     # geom = geom.tolist()
 
@@ -1080,18 +1092,22 @@ def compute_fsapt_qcvars(
 
     other_fragment_A = check_fragments(geom, Zs["A"], frags["A"])
     if len(other_fragment_A) > 0:
-        print(
-            "Warning: The following atoms in fragment A do not belong to any user fragment and will be put into 'Other' fragment:",
-            other_fragment_A,
-        )
+        if print_output:
+            print(
+                "Warning: The following atoms in fragment A do not belong to "
+                "any user fragment and will be put into 'Other' fragment:",
+                other_fragment_A,
+            )
         fragkeys["A"].append("Other")
         frags["A"]["Other"] = other_fragment_A
     other_fragment_B = check_fragments(geom, Zs["B"], frags["B"])
     if len(other_fragment_B) > 0:
-        print(
-            "Warning: The following atoms in fragment B do not belong to any user fragment and will be put into 'Other' fragment:",
-            other_fragment_B,
-        )
+        if print_output:
+            print(
+                "Warning: The following atoms in fragment B do not belong to "
+                "any user fragment and will be put into 'Other' fragment:",
+                other_fragment_B,
+            )
         fragkeys["B"].append("Other")
         frags["B"]["Other"] = other_fragment_B
 
@@ -1134,7 +1150,7 @@ def compute_fsapt_qcvars(
     # nuclear_ws['B'], orbital_ws['B'], 'fragB.dat')
 
     # osapt = extract_osapt_data(dirname)
-    osapt = extract_osapt_data_from_vars()
+    osapt = extract_osapt_data_from_vars(print_output=print_output)
 
     # For I-SAPT/SAOn and I-SAPT/SIAOn, we need to add one extra orbital weight
     # for the reassigned link orbital. It belongs
@@ -1151,13 +1167,14 @@ def compute_fsapt_qcvars(
             raise Exception("Invalid syntax of the link_siao.dat file")
         linkAC = fragsiao["A"][0]
         linkBC = fragsiao["B"][0]
-        print(
-            "\n Extra SAOn/SIAOn link orbitals assigned to atoms",
-            linkAC,
-            "and",
-            linkBC,
-            "\n",
-        )
+        if print_output:
+            print(
+                "\n Extra SAOn/SIAOn link orbitals assigned to atoms",
+                linkAC,
+                "and",
+                linkBC,
+                "\n",
+            )
 
         # We add zero entry for all the fragments, making place for the
         # reassigned link orbital
@@ -1298,7 +1315,7 @@ def compute_fsapt_qcvars(
     return stuff
 
 
-def compute_fsapt(dirname, links5050, completeness=0.85):
+def compute_fsapt(dirname, links5050, completeness=0.85, print_output=True):
 
     geom = read_xyz("%s/geom.xyz" % dirname)
 
@@ -1320,18 +1337,22 @@ def compute_fsapt(dirname, links5050, completeness=0.85):
 
     other_fragment_A = check_fragments(geom, Zs["A"], frags["A"])
     if len(other_fragment_A) > 0:
-        print(
-            "Warning: The following atoms in fragment A do not belong to any user fragment and will be put into 'Other' fragment:",
-            other_fragment_A,
-        )
+        if print_output:
+            print(
+                "Warning: The following atoms in fragment A do not belong to "
+                "any user fragment and will be put into 'Other' fragment:",
+                other_fragment_A,
+            )
         fragkeys["A"].append("Other")
         frags["A"]["Other"] = other_fragment_A
     other_fragment_B = check_fragments(geom, Zs["B"], frags["B"])
     if len(other_fragment_B) > 0:
-        print(
-            "Warning: The following atoms in fragment B do not belong to any user fragment and will be put into 'Other' fragment:",
-            other_fragment_B,
-        )
+        if print_output:
+            print(
+                "Warning: The following atoms in fragment B do not belong to "
+                "any user fragment and will be put into 'Other' fragment:",
+                other_fragment_B,
+            )
         fragkeys["B"].append("Other")
         frags["B"]["Other"] = other_fragment_B
 
@@ -1389,28 +1410,33 @@ def compute_fsapt(dirname, links5050, completeness=0.85):
         "%s/fragB.dat" % dirname,
     )
 
-    osapt = extract_osapt_data(dirname)
+    osapt = extract_osapt_data(dirname, print_output=print_output)
 
-    # For I-SAPT/SAOn and I-SAPT/SIAOn, we need to add one extra orbital weight for the reassigned link orbital. It belongs
-    # to the atom of A/B directly connected to the linker C. The user needs to supply a file link_siao.dat that has two lines
+    # For I-SAPT/SAOn and I-SAPT/SIAOn, we need to add one extra orbital
+    # weight for the reassigned link orbital. It belongs to the atom of A/B
+    # directly connected to the linker C. The user needs to supply a file
+    # link_siao.dat that has two lines
     #   A (atomnumber)
     #   B (atomnumber)
-    # to specify the numbers of atoms which are connected to C. We will now check if this file exists and read it.
+    # to specify the numbers of atoms which are connected to C. We will now
+    # check if this file exists and read it.
     if os.path.exists("%s/link_siao.dat" % dirname):
         (fragsiao, keyssiao) = read_fragments("%s/link_siao.dat" % dirname)
         if ("A" not in keyssiao) or ("B" not in keyssiao):
             raise Exception("Invalid syntax of the link_siao.dat file")
         linkAC = fragsiao["A"][0]
         linkBC = fragsiao["B"][0]
-        print(
-            "\n Extra SAOn/SIAOn link orbitals assigned to atoms",
-            linkAC,
-            "and",
-            linkBC,
-            "\n",
-        )
+        if print_output:
+            print(
+                "\n Extra SAOn/SIAOn link orbitals assigned to atoms",
+                linkAC,
+                "and",
+                linkBC,
+                "\n",
+            )
 
-        # We add zero entry for all the fragments, making place for the reassigned link orbital
+        # We add zero entry for all the fragments, making place for the
+        # reassigned link orbital
         for val in total_ws["A"].values():
             val.append(0.0)
 
@@ -1524,10 +1550,10 @@ def compute_fsapt(dirname, links5050, completeness=0.85):
 
 class PDBAtom:
 
-    def __init__(self, I, Z, x, y, z, T=0.0):
+    def __init__(self, atom_idx, Z, x, y, z, T=0.0):
 
         key_key = "HETATM"
-        key_serial = I
+        key_serial = atom_idx
         key_name = Z
         key_altLoc = ""
         key_resName = "001"
@@ -1666,8 +1692,8 @@ def print_order1(
                 val = order2[saptkey][keyA][keyB]
                 for k in frags["A"][keyA]:
                     E[k] += val
-                for l in frags["B"][keyB]:
-                    E[l] += val
+                for idx in frags["B"][keyB]:
+                    E[idx] += val
 
         pdb2 = copy.deepcopy(pdb)
         for A in range(len(pdb.atoms)):
@@ -1694,7 +1720,8 @@ def run_fsapt_analysis(
         )
     if atomic_results is not None:
         molecule = atomic_results.molecule
-        print(molecule, dir(molecule))
+        if print_output:
+            print(molecule, dir(molecule))
         R = molecule.geometry
         Z = molecule.atomic_numbers
         if hasattr(molecule, "atomic_symbols"):
@@ -1765,7 +1792,8 @@ def run_fsapt_analysis(
             print("  ==> Full Analysis <==\n")
             print(f"     Links 50-50: {links5050}\n")
         results = compute_fsapt_qcvars(
-            geom, Z, monomer_slices, holder, links5050=links5050, dirname=dirname
+            geom, Z, monomer_slices, holder, links5050=links5050, dirname=dirname,
+            print_output=print_output
         )
         data = print_order2(
             results["order2"],
@@ -1776,10 +1804,12 @@ def run_fsapt_analysis(
         )
         results_tag = "order2"
     elif analysis_type == "reduced":
-        print("  ==> Reduced Analysis <==\n")
-        print(f"     Links 50-50: {links5050}\n")
+        if print_output:
+            print("  ==> Reduced Analysis <==\n")
+            print(f"     Links 50-50: {links5050}\n")
         results = compute_fsapt_qcvars(
-            geom, Z, monomer_slices, holder, links5050=links5050, dirname=dirname
+            geom, Z, monomer_slices, holder, links5050=links5050, dirname=dirname,
+            print_output=print_output
         )
         results_tag = "order2r"
         data = print_order2(
@@ -1792,8 +1822,9 @@ def run_fsapt_analysis(
     else:
         raise Exception("Invalid analysis type. Please specify 'full' or 'reduced'.")
     if pdb_dir is not None:
-        print("  ==> Writing PDB Files <==\n")
-        print(f"     {pdb_dir = } \n")
+        if print_output:
+            print("  ==> Writing PDB Files <==\n")
+            print(f"     {pdb_dir = } \n")
         pdb = PDB.from_geom(results["geom"])
         print_order1(dirname, results[results_tag], pdb, results["frags"])
     return data
