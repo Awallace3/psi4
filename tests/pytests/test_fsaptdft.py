@@ -1964,13 +1964,9 @@ no_com
         }
     )
     psi4.energy("fisapt0-d4", molecule=mol)
-    with open("tmp_fisapt/fA.dat", "w") as fA:
-        fA.write("MethylA 1 2 3 4 5")
-    with open("tmp_fisapt/fB.dat", "w") as fB:
-        fB.write("MethylB 6 7 8 9 10")
     with open("tmp_fisapt/fA.dat", "w") as fA:  # TEST
         fA.write("Methyl1_A 1 2 7 8\n")  # TEST
-        fA.write("Methyl2_A 3 4 5 6")  # TEST
+        # fA.write("Methyl2_A 3 4 5 6")  # TEST
     with open("tmp_fisapt/fB.dat", "w") as fB:  # TEST
         fB.write("Peptide_B  9 10 11 16 26\n")  # TEST
         fB.write("T-Butyl_B  12 13 14 15 17 18 19 20 21 22 23 24 25")  # TEST
@@ -1990,11 +1986,10 @@ no_com
         },
         links5050=True,
         print_output=False,
-        pdb_dir="tmp",
+        pdb_dir="tmp_fisapt",
     )
     # remove_fisapt files
     import shutil
-
     shutil.rmtree("tmp_fisapt")
     df = pd.DataFrame(data)
     print("COMPUTED DF FISAPT0")
@@ -2067,7 +2062,7 @@ no_com
         fragments_a={
             # "Methyl1_A": [i for i in range(1, 6)],
             "Methyl1_A": [1, 2, 7, 8],
-            "Methyl2_A": [3, 4, 5, 6],
+            # "Methyl2_A": [3, 4, 5, 6],
         },
         fragments_b={
             # "Methyl1_B": [j for j in range(6, 11)],
@@ -2300,7 +2295,8 @@ if __name__ == "__main__":
     # test_fsaptdft_simple()
 
     # test_fsaptdft_fisapt0()
-    test_fsaptdftd4i()
+    # test_fsaptdftd4i()
+    test_fsaptdft_fisapt0_d4()
     # test_fsaptdft_fisapt0_d4()
     # test_fsaptdft_fisapt0()
     # test_fsaptdft_fisapt0()

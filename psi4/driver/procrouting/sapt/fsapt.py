@@ -262,9 +262,9 @@ def collapse_rows(vals):
 
 
 def check_fragments(geom, Zs, frags):
-
     # Uniqueness
     taken = []
+    other_fragment = []
     for key, value in frags.items():
         for index in value:
             if index in taken:
@@ -278,9 +278,13 @@ def check_fragments(geom, Zs, frags):
                 "Atom %d has charge 0.0, should not be in fragments." % (ind + 1)
             )
         elif (ind not in taken) and (Zs[ind] != 0.0):
-            raise Exception(
-                "Atom %d has charge >0.0, should be in fragments." % (ind + 1)
-            )
+            # AMW: instead of erroring out, accumulate the non-important atoms
+            # into a separate fragment
+            other_fragment.append(ind)
+            # raise Exception(
+            #     "Atom %d has charge >0.0, should be in fragments." % (ind + 1)
+            # )
+    return other_fragment
 
 
 def partition_fragments(fragkeys, frags, Z, Q, completeness=0.85):
@@ -1074,8 +1078,22 @@ def compute_fsapt_qcvars(
     frags["A"] = holder["A"][0]
     frags["B"] = holder["B"][0]
 
-    check_fragments(geom, Zs["A"], frags["A"])
-    check_fragments(geom, Zs["B"], frags["B"])
+    other_fragment_A = check_fragments(geom, Zs["A"], frags["A"])
+    if len(other_fragment_A) > 0:
+        print(
+            "Warning: The following atoms in fragment A do not belong to any user fragment and will be put into 'Other' fragment:",
+            other_fragment_A,
+        )
+        fragkeys["A"].append("Other")
+        frags["A"]["Other"] = other_fragment_A
+    other_fragment_B = check_fragments(geom, Zs["B"], frags["B"])
+    if len(other_fragment_B) > 0:
+        print(
+            "Warning: The following atoms in fragment B do not belong to any user fragment and will be put into 'Other' fragment:",
+            other_fragment_B,
+        )
+        fragkeys["B"].append("Other")
+        frags["B"]["Other"] = other_fragment_B
 
     Qs = {}
     Qs["A"] = core.variable("FSAPT_QA").to_array()
@@ -1300,8 +1318,22 @@ def compute_fsapt(dirname, links5050, completeness=0.85):
     frags["A"] = holder["A"][0]
     frags["B"] = holder["B"][0]
 
-    check_fragments(geom, Zs["A"], frags["A"])
-    check_fragments(geom, Zs["B"], frags["B"])
+    other_fragment_A = check_fragments(geom, Zs["A"], frags["A"])
+    if len(other_fragment_A) > 0:
+        print(
+            "Warning: The following atoms in fragment A do not belong to any user fragment and will be put into 'Other' fragment:",
+            other_fragment_A,
+        )
+        fragkeys["A"].append("Other")
+        frags["A"]["Other"] = other_fragment_A
+    other_fragment_B = check_fragments(geom, Zs["B"], frags["B"])
+    if len(other_fragment_B) > 0:
+        print(
+            "Warning: The following atoms in fragment B do not belong to any user fragment and will be put into 'Other' fragment:",
+            other_fragment_B,
+        )
+        fragkeys["B"].append("Other")
+        frags["B"]["Other"] = other_fragment_B
 
     Qs = {}
     Qs["A"] = read_block("%s/QA.dat" % dirname)
@@ -1707,7 +1739,6 @@ def run_fsapt_analysis(
         monomer_slices = molecule.get_fragments()
         R, _, Z_el, Z, _ = molecule.to_arrays()
         # PDB writing later needs Z to be str (element symbols=Z_el)
-    print("Z_el:", Z_el)
     geom = []
     for i in range(len(Z)):
         geom.append([str(Z_el[i]), R[i][0], R[i][1], R[i][2]])
