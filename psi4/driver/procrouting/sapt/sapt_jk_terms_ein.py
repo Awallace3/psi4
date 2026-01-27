@@ -3228,7 +3228,7 @@ def induction(
 
         cphf_r_convergence = core.get_option("SAPT", "CPHF_R_CONVERGENCE")
         x_B_MOA, x_A_MOB = _sapt_cpscf_solve(
-            cache, jk, w_B_MOA.np, w_A_MOB.np, 20, cphf_r_convergence, sapt_jk_B=sapt_jk_B
+            cache, jk, w_B_MOA.np, w_A_MOB.np, maxiter, cphf_r_convergence, sapt_jk_B=sapt_jk_B
         )
         x_B_MOA = core.Matrix.from_array(x_B_MOA)
         x_A_MOB = core.Matrix.from_array(x_A_MOB)
