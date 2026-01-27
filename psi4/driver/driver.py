@@ -2106,7 +2106,8 @@ def fsapt_analysis(
 
     logger.debug('FSAPT ANALYSIS')
     if atomic_results is None and molecule is None:
-        print(f"Running fsapt_analysis through output files with {dirname = }")
+        if print_output:
+            print(f"Running fsapt_analysis through output files with {dirname = }")
         with open(f"{dirname}/fA.dat", "w") as f:
             for k, v in fragments_a.items():
                 f.write(f"{k} {' '.join([str(i) for i in v])}\n")
@@ -2115,7 +2116,8 @@ def fsapt_analysis(
                 f.write(f"{k} {' '.join([str(i) for i in v])}\n")
         results = fsapt.run_from_output(dirname=dirname)
     else:
-        print("Running fsapt_analysis through variables")
+        if print_output:
+            print("Running fsapt_analysis through variables")
         results = fsapt.run_fsapt_analysis(
             fragments_a,
             fragments_b,
