@@ -402,7 +402,7 @@ def induction(
     cache,
     jk,
     do_print=True,
-    maxiter=12,
+    maxiter=50,
     conv=1.0e-8,
     do_response=True,
     Sinf=False,
@@ -740,7 +740,7 @@ def induction(
         cphf_r_convergence = core.get_option("SAPT", "CPHF_R_CONVERGENCE")
 
         x_B_MOA, x_A_MOB = _sapt_cpscf_solve(
-            cache, jk, w_B_MOA, w_A_MOB, 20, cphf_r_convergence, sapt_jk_B=sapt_jk_B
+            cache, jk, w_B_MOA, w_A_MOB, maxiter, cphf_r_convergence, sapt_jk_B=sapt_jk_B
         )
 
         ind_ab = 2.0 * x_B_MOA.vector_dot(w_B_MOA)

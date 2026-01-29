@@ -3505,7 +3505,7 @@ def induction(
 
         cphf_r_convergence = core.get_option("SAPT", "CPHF_R_CONVERGENCE")
         x_B_MOA, x_A_MOB = _sapt_cpscf_solve(
-            cache, jk, w_B_MOA.np, w_A_MOB.np, 20, cphf_r_convergence, sapt_jk_B=sapt_jk_B
+            cache, jk, w_B_MOA.np, w_A_MOB.np, maxiter, cphf_r_convergence, sapt_jk_B=sapt_jk_B
         )
         # Negate the CPSCF solution to match convention (see fisapt.cc lines 3426-3427)
         # The CG solver solves H*x = w, but the correct coupled response is x = -H^{-1}*w
