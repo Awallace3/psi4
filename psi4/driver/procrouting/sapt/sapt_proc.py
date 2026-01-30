@@ -529,7 +529,11 @@ def run_sapt_dft(name, **kwargs):
         if do_isapt:
             core.set_global_option("SAVE_JK", True)
             core.set_local_option("SCF", "SAVE_JK", True)
+            kwargs['external_potentials'] = {}
+            kwargs["external_potentials"]['C'] = construct_external_potential_in_field_C([ext_pot_C, ext_pot_A, ext_pot_B])
         dimer_wfn = scf_helper("SCF", molecule=sapt_dimer, banner="SAPT(DFT): Dimer for Localization", **kwargs)
+        if kwargs.get("external_potentials"):
+            kwargs.pop("external_potentials")
     else:
         dimer_wfn = hf_wfn_dimer
 
@@ -551,7 +555,7 @@ def run_sapt_dft(name, **kwargs):
             core.print_out("\n  I-SAPT: Computing dimer SCF for orbital localization...\n\n")
             core.set_local_option("SCF", "SAVE_JK", True)
             core.set_global_option("SAVE_JK", True)
-            dimer_wfn = scf_helper("SCF", molecule=sapt_dimer, 
+            dimer_wfn = scf_helper("SCF", molecule=sapt_dimer,
                                    banner="SAPT(DFT): I-SAPT Dimer SCF", **kwargs)
         
         # For I-SAPT, we create placeholder wavefunctions from the dimer

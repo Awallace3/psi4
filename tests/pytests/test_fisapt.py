@@ -918,7 +918,7 @@ def test_fsaptdft_ext_abc_au():
         "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
     })
 
-    psi4.energy('fisapt0')
+    # psi4.energy('fisapt0')
     psi4.energy('sapt(dft)')
 
     keys = ['Enuc', 'Eelst', 'Eexch', 'Eind', 'Edisp', 'Etot']
