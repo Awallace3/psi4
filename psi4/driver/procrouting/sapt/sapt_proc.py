@@ -505,7 +505,7 @@ def run_sapt_dft(name, **kwargs):
         monomer_B_molecule = monomerB
 
         core.timer_on("SAPT(DFT):Dimer DFT")
-        run_scf(sapt_dft_functional.lower(), molecule=sapt_dimer)
+        run_scf(sapt_dft_functional.lower(), molecule=sapt_dimer, jk=sapt_jk)
         data["DFT DIMER ENERGY"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT):Dimer DFT")
 
