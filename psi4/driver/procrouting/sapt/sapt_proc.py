@@ -572,7 +572,7 @@ def run_sapt_dft(name, **kwargs):
         monomer_B_molecule = monomerB
 
         core.timer_on("SAPT(DFT):Dimer DFT")
-        run_scf(sapt_dft_functional.lower(), molecule=sapt_dimer)
+        run_scf(sapt_dft_functional.lower(), molecule=sapt_dimer, jk=sapt_jk)
         data["DFT DIMER ENERGY"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT):Dimer DFT")
 
@@ -1329,45 +1329,9 @@ def sapt_dft(
 
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     # d4_type = core.get_option("SAPT", "SAPT_DFT_D4_TYPE").lower()
-    if sapt_dft_D4_IE:  # and d4_type == 'intermolecular':
-        cache["FSAPT_EMPIRICAL_DISP"] = core.Matrix.from_array(
-            data["FSAPT_EMPIRICAL_DISP"]
-        )
+    if do_fsapt and sapt_dft_D4_IE:  # and d4_type == 'intermolecular':
+        cache["FSAPT_EMPIRICAL_DISP"] = core.Matrix.from_array(data['FSAPT_EMPIRICAL_DISP'])
 
-        """
-Traceback (most recent call last):
-  File "/storage/project/r-cs207-0/awallace43/gits/psi4/build_saptdft_ein_fi_option/stage/lib/psi4/driver/
-schema_wrapper.py", line 463, in run_qcschema
-    ret_data = run_json_qcschema(input_model.dict(), clean, False, keep_wfn=keep_wfn)
-  File "/storage/project/r-cs207-0/awallace43/gits/psi4/build_saptdft_ein_fi_option/stage/lib/psi4/driver/
-schema_wrapper.py", line 629, in run_json_qcschema
-    val, wfn = methods_dict_[json_data["driver"]](method, **kwargs)
-               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
-  File "/storage/project/r-cs207-0/awallace43/gits/psi4/build_saptdft_ein_fi_option/stage/lib/psi4/driver/
-driver.py", line 528, in energy
-    wfn = procedures['energy'][lowername](lowername, molecule=molecule, **kwargs)
-  File "/storage/project/r-cs207-0/awallace43/gits/psi4/build_saptdft_ein_fi_option/stage/lib/psi4/driver/
-procrouting/sapt/sapt_proc.py", line 583, in run_sapt_dft
-    sapt_dft(
-    ~~~~~~~~^
-        dimer_wfn,
-        ^^^^^^^^^^
-    ...<9 lines>...
-        do_disp=do_disp
-        ^^^^^^^^^^^^^^^
-    )
-    ^
-  File "/storage/project/r-cs207-0/awallace43/gits/psi4/build_saptdft_ein_fi_option/stage/lib/psi4/driver/
-procrouting/sapt/sapt_proc.py", line 1011, in sapt_dft
-    FISAPT_obj = saptdft_fisapt.setup_fisapt_object(dimer_wfn, wfn_A, wfn_B, cache, data, aux_basis, do_fl
-ocalize=True)
-  File "/storage/project/r-cs207-0/awallace43/gits/psi4/build_saptdft_ein_fi_option/stage/lib/psi4/driver/
-procrouting/sapt/saptdft_fisapt.py", line 302, in setup_fisapt_object
-    fisapt_key: scalars[sdft_key] for sdft_key, fisapt_key in scalar_keys.items()
-                ~~~~~~~^^^^^^^^^^
-KeyError: 'DHF VALUE'
-
-        """
     # Print out final data
     core.print_out("\n")
     core.print_out(

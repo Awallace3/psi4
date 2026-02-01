@@ -73,6 +73,7 @@ def test_sapt_dft_compute_ddft_d4():
             "SAPT_DFT_FUNCTIONAL": dft_functional,
             "SAPT_DFT_DO_DDFT": True,
             "SAPT_DFT_D4_IE": True,
+            "SAPT_DFT_D4_TYPE": "SUPERMOLECULAR",
             "SAPT_DFT_DO_DISP": True,
         }
     )
@@ -1344,7 +1345,8 @@ if __name__ == "__main__":
     # test_einsum_terms()
     # test_fsaptdft()
     # test_fsaptdft_fsapt0_simple()
-    test_sapt_dft_compute_ddft_d4_auto_grac()
+    # test_sapt_dft_compute_ddft_d4_auto_grac()
+    test_sapt_dft_compute_ddft_d4()
     # test_sapt_dft_diskdf()
     # test_qcng_embedded_saptdft()
     # test_fisapt0_sapthf_external_potential()
