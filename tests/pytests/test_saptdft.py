@@ -130,14 +130,18 @@ def test_saptdftd4():
     """
     mol_dimer = psi4.geometry(
         """
-  O -2.930978458   -0.216411437    0.000000000
-  H -3.655219777    1.440921844    0.000000000
-  H -1.133225297    0.076934530    0.000000000
-   --
-  O  2.552311356    0.210645882    0.000000000
-  H  3.175492012   -0.706268134   -1.433472544
-  H  3.175492012   -0.706268134    1.433472544
-  units bohr
+0 1
+--
+0 1
+O     -1.326958230000    -0.105938530000     0.018788150000
+H     -1.931665240000     1.600174320000    -0.021710520000
+H      0.486644280000     0.079598090000     0.009862480000
+--
+0 1
+O      6.188211770000     0.034862840000    -0.003491630000
+H      6.899923470000    -0.793555430000     1.444273630000
+H      6.891689370000    -0.865049260000    -1.412098210000
+units bohr
 """
     )
     dft_functional = "pbe0"
@@ -156,7 +160,7 @@ def test_saptdftd4():
     vars = psi4.core.variables()
     DISP = vars["SAPT DISP ENERGY"]
     # TODO: parameters need to be verified in sapt_proc.py with DFT-D4 manuscript
-    assert compare_values(-0.0041772889, DISP, 8, "DFT-D4 DISP")
+    assert compare_values(-0.000416647650, DISP, 8, "DFT-D4 DISP")
 
     psi4.set_options(
         {
@@ -171,7 +175,7 @@ def test_saptdftd4():
     )
     psi4.energy("SAPT(DFT)-D4")
     DISP = psi4.core.variable("SAPT DISP ENERGY")
-    assert compare_values(-0.0036056912, DISP, 8, "DFT-D4 DISP")
+    assert compare_values(-0.000303920719, DISP, 8, "DFT-D4 DISP")
 
 
 @pytest.mark.saptdft
