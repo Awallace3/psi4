@@ -868,7 +868,7 @@ def dftd4_c6_intermolecular_dispersion(
 
             edisp = s6 * t6 + s8 * rrij * t8
 
-            de = -0.5 * C6s[A, B] * edisp
+            de = -C6s[A, B] * edisp
             energy += de
             pairwise_energies[A, B] = de
     return {

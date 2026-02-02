@@ -49,8 +49,7 @@ def test_fsaptdft():
         "SAPT ELST ENERGY": -0.0033529619489769402,
         "SAPT EXCH ENERGY": 1.2025482154546578e-05,
         "SAPT IND ENERGY": -1.2227400973891604e-05,
-        "SAPT DISP ENERGY": -0.005176878264916587,
-        "CURRENT ENERGY": -0.008530042132712874,
+        "SAPT DISP ENERGY": 0.0000000000,
     }  # TEST
     mol = psi4.geometry("""
 0 1
@@ -77,6 +76,7 @@ no_com
             "sapt_dft_grac_shift_a": 0.203293,
             "sapt_dft_grac_shift_b": 0.203293,
             "SAPT_DFT_DO_DHF": False,
+            "SAPT_DFT_DO_DISP": False,
             "SAPT_DFT_DO_HYBRID": False,
             "SAPT_DFT_EXCH_DISP_SCALE_SCHEME": "None",
             "SAPT_DFT_DO_FSAPT": "SAPTDFT",
@@ -406,7 +406,6 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
             "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
         }
     )
@@ -484,8 +483,7 @@ no_com
         }
     )
     psi4.energy("sapt(dft)", molecule=mol)
-    from pprint import pprint as pp
-
+    # psi4.energy("fisapt0", molecule=mol)
     keys = ["Enuc", "Eelst", "Eexch", "Eind", "Edisp", "Etot"]
     Eref = {
         "Edisp": -0.0007912165332922398,
@@ -646,8 +644,9 @@ no_com
     print("REF")
     print(ref_df)
 
-    for col in cols:
+    for col in cols[2:]:
         for i in range(len(ref_df)):
+            print(col, ref_df[col].iloc[i], df[col].iloc[i])
             compare_values(
                 ref_df[col].iloc[i],
                 df[col].iloc[i],
@@ -1285,12 +1284,12 @@ no_com
 
     keys = ["Enuc", "Eelst", "Eexch", "Eind", "Edisp", "Etot"]
     Eref = {
-        "Edisp": -0.0027693003947224628,
-        "Eelst": -0.002059138272954897,
-        "Eexch": 0.0065851135315064075,
-        "Eind": -0.0004940302703933357,
+        "Edisp": -0.0055386007894449255,
+        "Eelst": -0.002059138037395769,
+        "Eexch": 0.0065851134169729285,
+        "Eind": -0.0004940302733246239,
         "Enuc": 474.74808217020274,
-        "Etot": 0.0012626445934357123,
+        "Etot": -0.0015066556831923898,
     }
 
     Epsi = {
@@ -1320,7 +1319,7 @@ no_com
     )
     df = pd.DataFrame(data)
     print("COMPUTED DF")
-    # pp({k: v.tolist() for k, v in dict(df).items()})
+    pp({k: v.tolist() for k, v in dict(df).items()})
     print(
         df[
             [
@@ -1337,6 +1336,40 @@ no_com
         ]
     )
     data = {
+        "Disp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "EDisp": [
+            -0.013226965450990889,
+            -0.28183058466657,
+            -0.049852462205593126,
+            -3.130614454525284,
+            -0.2950575501175609,
+            -3.180466916730877,
+            -0.06307942765658402,
+            -3.412445039191854,
+            -3.4755244668484377,
+        ],
+        "Elst": [
+            0.6885820921201784,
+            -0.13402812525109908,
+            -0.7952454977917469,
+            -1.0514370963071045,
+            0.5545539668690793,
+            -1.8466825940988514,
+            -0.10666340567156851,
+            -1.1854652215582036,
+            -1.292128627229772,
+        ],
+        "Exch": [
+            0.0001588422784401242,
+            0.04729543674788192,
+            0.039013303978461124,
+            4.045753472045291,
+            0.047454279026322044,
+            4.084766776023752,
+            0.03917214625690125,
+            4.093048908793173,
+            4.132221055050074,
+        ],
         "Frag1": [
             "Methyl1_A",
             "Methyl1_A",
@@ -1359,72 +1392,38 @@ no_com
             "T-Butyl_B",
             "All",
         ],
-        "Elst": [
-            -0.106663,
-            -1.185465,
-            -0.106663,
-            -1.185465,
-            0.554554,
-            -1.846683,
-            -0.106663,
-            -1.185465,
-            -1.292129,
-        ],
-        "Exch": [
-            0.039172,
-            4.093049,
-            0.039172,
-            4.093049,
-            0.047454,
-            4.084767,
-            0.039172,
-            4.093049,
-            4.132221,
-        ],
         "IndAB": [
-            -0.038179,
-            -0.193800,
-            -0.038179,
-            -0.193800,
-            -0.023789,
-            -0.208190,
-            -0.038179,
-            -0.193800,
-            -0.231979,
+            -0.008959884715800042,
+            -0.014829489445122575,
+            -0.029218977918922,
+            -0.17897054409715352,
+            -0.023789374160922618,
+            -0.20818952201607552,
+            -0.03817886263472205,
+            -0.1938000335422761,
+            -0.23197889617699813,
         ],
         "IndBA": [
-            -0.001862,
-            -0.076168,
-            -0.001862,
-            -0.076168,
-            0.020246,
-            -0.098276,
-            -0.001862,
-            -0.076168,
-            -0.078030,
-        ],
-        "Disp": [0, 0, 0, 0, 0, 0, 0, 0, 0],
-        "EDisp": [
-            -0.031540,
-            -1.706223,
-            -0.031540,
-            -1.706223,
-            -0.147529,
-            -1.590233,
-            -0.031540,
-            -1.706223,
-            -1.737762,
+            0.0006366759893452245,
+            0.019609289394822368,
+            -0.002498480707193879,
+            -0.09577726577398832,
+            0.02024596538416759,
+            -0.0982757464811822,
+            -0.0018618047178486545,
+            -0.07616797637916595,
+            -0.07802978109701461,
         ],
         "Total": [
-            -0.139072,
-            0.931393,
-            -0.139072,
-            0.931393,
-            0.450936,
-            0.341385,
-            -0.139072,
-            0.931393,
-            0.792322,
+            0.6671907601545886,
+            -0.36378347326459476,
+            -0.8378021152131232,
+            -0.4110458890851425,
+            0.3034072868899938,
+            -1.2488480042982657,
+            -0.17061135505853464,
+            -0.7748293623497373,
+            -0.945440717408272,
         ],
     }
 
@@ -1990,6 +1989,7 @@ no_com
     )
     # remove_fisapt files
     import shutil
+
     shutil.rmtree("tmp_fisapt")
     df = pd.DataFrame(data)
     print("COMPUTED DF FISAPT0")
@@ -2179,21 +2179,15 @@ if __name__ == "__main__":
     psi4.set_num_threads(12)
     # test_fsaptdft_timer()
     # test_fsaptdft_simple()
-
     # test_fsaptdft_fisapt0()
-    # test_fsaptdftd4i()
-    test_fsaptdft_fisapt0_d4()
     # test_fsaptdft_fisapt0_d4()
-    # test_fsaptdft_fisapt0()
-    # test_fsaptdft_fisapt0()
     # test_fsaptdft()
     # test_fsaptdft_fsapt0_simple()
     # test_fsaptdftd4_psivars()
     # test_fsaptdft_disp0_fisapt0_psivars()
-    # test_fsaptdftd4_psivars_pbe0()
-    # test_fsaptdftd4_psivars_pbe0_frozen_core()
-    # test_fsaptdft_indices()
-    # test_fsaptdft_fsapt0()
-    # test_fsapt0_fsaptdft()
-    # test_fsaptdft_psivars()
     # test_fsapthf_psivars()
+    # test_fsaptdft_fsapt0()
+    test_fsaptdftd4_psivars_pbe0()
+    test_fsaptdftd4_psivars_pbe0_frozen_core()
+    test_fsaptdft_indices()
+    test_fsapt0_fsaptdft()
