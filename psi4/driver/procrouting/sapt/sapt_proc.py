@@ -141,7 +141,6 @@ def run_sapt_dft(name, **kwargs):
             )
 
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
-    print(f"do_delta_hf: {do_delta_hf}")
     do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
     do_disp = core.get_option("SAPT", "SAPT_DFT_DO_DISP")
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
@@ -559,7 +558,6 @@ def run_sapt_dft(name, **kwargs):
         core.set_local_option("SCF", "DFT_GRAC_SHIFT", 0.0)
         # Enable SAVE_JK so JK objects can be reused across calculations
         core.set_local_option("SCF", "SAVE_JK", True)
-        core.IO.set_default_namespace("dimer")
         core.print_out("\n")
         core.print_out(
             "         ---------------------------------------------------------\n"

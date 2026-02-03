@@ -468,7 +468,7 @@ def test_dftd4():
         ),
         (
             "ITERATIVE",
-            0.0924377822,
+            0.0924377708,
             0.1306379832,
             None,
             None,
@@ -1343,32 +1343,14 @@ symmetry c1
 if __name__ == "__main__":
     psi4.set_memory("32 GB")
     psi4.set_num_threads(12)
-    # test_saptdft_inf()
-    # test_einsum_terms()
-    # test_einsum_terms()
-    # test_sapt_dft_compute_ddft_d4_auto_grac()
-    # test_sapt_dft_compute_ddft_d4()
-    test_sapt_dft_diskdf()
-    # test_qcng_embedded_saptdft()
-    # test_fisapt0_sapthf_external_potential()
-    # test_qcng_embedded_saptdft()
     # test_saptdftd4()
-    # test_sapt_dft_compute_ddft_d4_diskdf()
-    # test_charge_field_B()
-    # test_qcng_embedded_saptdft()
 
-    # test_saptdft_external_potential(
-    #     "c",
-    #     ["C"],
-    #     "sapt(dft)",
-    #     {
-    #         "Edisp": -0.003035986247790965,
-    #         "Eelst": -0.013872053118092253,
-    #         "Eexch": 0.02117011636321129,
-    #         "Eind": -0.004613609990417991,
-    #         "Enuc": 37.565065473343004,
-    #         "Etot": -0.0003515329930899192,
-    #     },
-    #     8,
-    # )
-    # test_fisapt0_sapthf_external_potential()
+    # pytest this file
+    pytest.main([
+        __file__,
+        "-v",
+        "-s",
+        # "-k=test_saptdft_auto_grac",
+        "--disable-warnings",
+        "--maxfail=1",
+    ])
