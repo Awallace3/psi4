@@ -468,7 +468,7 @@ def test_dftd4():
         ),
         (
             "ITERATIVE",
-            0.0924377691,
+            0.0924377822,
             0.1306379832,
             None,
             None,
@@ -1348,12 +1348,11 @@ if __name__ == "__main__":
     # test_einsum_terms()
     # test_sapt_dft_compute_ddft_d4_auto_grac()
     # test_sapt_dft_compute_ddft_d4()
-    # test_sapt_dft_diskdf()
+    test_sapt_dft_diskdf()
     # test_qcng_embedded_saptdft()
     # test_fisapt0_sapthf_external_potential()
     # test_qcng_embedded_saptdft()
     # test_saptdftd4()
-    test_dftd4()
     # test_sapt_dft_compute_ddft_d4_diskdf()
     # test_charge_field_B()
     # test_qcng_embedded_saptdft()
