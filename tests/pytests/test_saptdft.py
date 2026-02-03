@@ -1340,7 +1340,7 @@ symmetry c1
 
 
 if __name__ == "__main__":
-    psi4.set_memory("64 GB")
+    psi4.set_memory("32 GB")
     psi4.set_num_threads(12)
     # test_saptdft_inf()
     # test_einsum_terms()
@@ -1351,7 +1351,8 @@ if __name__ == "__main__":
     # test_qcng_embedded_saptdft()
     # test_fisapt0_sapthf_external_potential()
     # test_qcng_embedded_saptdft()
-    test_saptdftd4()
+    # test_saptdftd4()
+    test_sapt_dft_compute_ddft_d4_diskdf()
     # test_charge_field_B()
     # test_qcng_embedded_saptdft()
 
