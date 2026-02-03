@@ -689,6 +689,7 @@ def run_sapt_dft(name, **kwargs):
         data=data,
         print_header=False,
         delta_hf=delta_hf,
+        cleanup_jk=True,
         external_potentials=kwargs.get("external_potentials", None),
         do_delta_dft=do_delta_dft,
         do_disp=do_disp,
@@ -1171,6 +1172,7 @@ def sapt_dft(
 
     # Blow away JK object before doing MP2 for memory considerations
     if cleanup_jk:
+        core.print_out("\n   => Finalizing SAPT JK object to free memory <= \n\n")
         sapt_jk.finalize()
 
     if do_disp:
@@ -1236,15 +1238,12 @@ def sapt_dft(
 
         if not do_fsapt:
             core.timer_on("MP2 disp")
-            cache_tmp = sapt_jk_terms.build_sapt_jk_cache(
-                dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials
-            )
             if core.get_option("SAPT", "SAPT_DFT_MP2_DISP_ALG") == "FISAPT":
                 mp2_disp = sapt_mp2_terms.df_mp2_fisapt_dispersion(
                     wfn_A,
                     primary_basis,
                     aux_basis,
-                    cache_tmp,
+                    cache,
                     nfrozen_A,
                     nfrozen_B,
                     do_print=True,
@@ -1256,7 +1255,7 @@ def sapt_dft(
                     wfn_B,
                     primary_basis,
                     aux_basis,
-                    cache_tmp,
+                    cache,
                     do_print=True,
                 )
             core.timer_off("MP2 disp")
