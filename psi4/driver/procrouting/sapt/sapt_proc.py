@@ -631,6 +631,26 @@ def run_sapt_dft(name, **kwargs):
             monB_d4, _ = monomerB.run_dftd4(dashparam=params, dashlvl="d4bjeeqatm")
             data["D4 MONOMER B"] = monB_d4
             data["D4 IE"] = dimer_d4 - monA_d4 - monB_d4
+        elif d4_type == "gd4_supermolecular":
+            # This uses the default Grimme -D4 parameters for the given
+            # functional with BJ damping and ATM three-body terms. Only use
+            # this option in compbination with another baseline form of
+            # dispersion like the delta_DFT correction:
+            # "SAPT_DFT_DO_DDFT = True"
+            core.print_out(
+                "         "
+                + "Supermolecular GD4(BJ)+ATM Interaction Energy E_IE = E_IJ - E_I - E_J".center(
+                    58
+                )
+                + "\n"
+            )
+            dimer_d4, _ = sapt_dimer.run_dftd4(func=sapt_dft_functional, dashlvl="d4bjeeqatm")
+            data["D4 DIMER"] = dimer_d4
+            monA_d4, _ = monomerA.run_dftd4(func=sapt_dft_functional, dashlvl="d4bjeeqatm")
+            data["D4 MONOMER A"] = monA_d4
+            monB_d4, _ = monomerB.run_dftd4(func=sapt_dft_functional, dashlvl="d4bjeeqatm")
+            data["D4 MONOMER B"] = monB_d4
+            data["D4 IE"] = dimer_d4 - monA_d4 - monB_d4
         elif d4_type == "intermolecular":
             dimer_d4, _ = sapt_dimer.run_dftd4(sapt_dft_functional, property=True)
             geom, _, _, elez, _ = sapt_dimer.to_arrays()

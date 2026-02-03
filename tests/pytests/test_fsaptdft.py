@@ -2183,7 +2183,7 @@ if __name__ == "__main__":
     # test_fsaptdft_fisapt0_d4()
     # test_fsaptdft()
     # test_fsaptdft_fsapt0_simple()
-    # test_fsaptdftd4_psivars()
+    test_fsaptdftd4_psivars()
     # test_fsaptdft_disp0_fisapt0_psivars()
     # test_fsapthf_psivars()
     # test_fsaptdft_fsapt0()

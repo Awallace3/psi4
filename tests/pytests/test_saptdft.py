@@ -426,6 +426,7 @@ def test_dftd4():
             "SAPT_DFT_FUNCTIONAL": "pbe0",
             "SAPT_DFT_DO_DDFT": True,
             "SAPT_DFT_D4_IE": True,
+            "SAPT_DFT_D4_TYPE": "GD4_SUPERMOLECULAR",
             "SAPT_DFT_DO_DISP": False,
         }
     )
@@ -1352,7 +1353,8 @@ if __name__ == "__main__":
     # test_fisapt0_sapthf_external_potential()
     # test_qcng_embedded_saptdft()
     # test_saptdftd4()
-    test_sapt_dft_compute_ddft_d4_diskdf()
+    test_dftd4()
+    # test_sapt_dft_compute_ddft_d4_diskdf()
     # test_charge_field_B()
     # test_qcng_embedded_saptdft()
 
