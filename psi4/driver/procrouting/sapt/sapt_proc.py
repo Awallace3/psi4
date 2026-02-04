@@ -297,7 +297,7 @@ def run_sapt_dft(name, **kwargs):
         core.timer_off("SAPT(DFT):Dimer SCF")
 
         core.timer_on("SAPT(DFT):Monomer A SCF")
-        core.IO.change_file_namespace(97, "dimer", "monomerA")
+        # core.IO.change_file_namespace(97, "dimer", "monomerA")
 
         jk_obj = hf_wfn_dimer.jk()
         if do_ext_potential and (ext_pot_A is not None or ext_pot_C is not None):
@@ -318,7 +318,7 @@ def run_sapt_dft(name, **kwargs):
         core.timer_off("SAPT(DFT):Monomer A SCF")
 
         core.timer_on("SAPT(DFT):Monomer B SCF")
-        core.IO.change_file_namespace(97, "monomerA", "monomerB")
+        # core.IO.change_file_namespace(97, "monomerA", "monomerB")
 
         if do_ext_potential and (ext_pot_B is not None or ext_pot_C is not None):
             kwargs["external_potentials"] = {}
@@ -352,7 +352,7 @@ def run_sapt_dft(name, **kwargs):
             core.set_global_option("SAVE_JK", False)
 
             # Move it back to monomer A
-            core.IO.change_file_namespace(97, "monomerB", "dimer")
+            # core.IO.change_file_namespace(97, "monomerB", "dimer")
 
             core.print_out("\n")
             core.print_out(
@@ -370,18 +370,31 @@ def run_sapt_dft(name, **kwargs):
             )
             core.print_out("\n")
 
-            # Build cache
-            # hf_cache = sapt_jk_terms.build_sapt_jk_cache(
-            #    hf_wfn_dimer, hf_wfn_A, hf_wfn_B, sapt_jk, True, kwargs.get("external_potentials", None)
-            # )
+            # Setup external potentials for hf_cache
+            if do_ext_potential:
+                kwargs["external_potentials"] = {}
+                hf_wfn_dimer.del_potential_variable("C")
+                _set_external_potentials_to_wavefunction(
+                    construct_external_potential_in_field_C([ext_pot_A, ext_pot_B]),
+                    hf_wfn_dimer,
+                )
+                if ext_pot_C is not None:
+                    kwargs["external_potentials"]["C"] = ext_pot_C
+                if ext_pot_A is not None:
+                    kwargs["external_potentials"]["A"] = ext_pot_A
+                    _set_external_potentials_to_wavefunction(ext_pot_A, hf_wfn_A)
+                if ext_pot_B is not None:
+                    kwargs["external_potentials"]["B"] = ext_pot_B
+                    _set_external_potentials_to_wavefunction(ext_pot_B, hf_wfn_B)
 
+            # Build cache
             hf_cache_ein = sapt_jk_terms_ein.build_sapt_jk_cache(
                 hf_wfn_dimer,
                 hf_wfn_A,
                 hf_wfn_B,
                 sapt_jk,
                 True,
-                kwargs.get("external_potentials", None),
+                external_potentials=kwargs.get("external_potentials", None),
             )
 
             # Electrostatics
@@ -470,12 +483,12 @@ def run_sapt_dft(name, **kwargs):
 
         # Compute Monomer A wavefunction
         core.timer_on("SAPT(DFT): Monomer A DFT")
-        core.IO.change_file_namespace(97, "dimer", "monomerA")
+        # core.IO.change_file_namespace(97, "dimer", "monomerA")
 
         if mon_a_shift:
             core.set_global_option("DFT_GRAC_SHIFT", mon_a_shift)
 
-        core.IO.set_default_namespace("monomerA")
+        # core.IO.set_default_namespace("monomerA")
         core.set_global_option("SAVE_JK", True)
         if do_ext_potential and (ext_pot_A is not None or ext_pot_C is not None):
             kwargs["external_potentials"] = {}
@@ -498,13 +511,13 @@ def run_sapt_dft(name, **kwargs):
 
         # Compute Monomer B wavefunction
         core.timer_on("SAPT(DFT): Monomer B DFT")
-        core.IO.change_file_namespace(97, "monomerA", "monomerB")
+        # core.IO.change_file_namespace(97, "monomerA", "monomerB")
 
         if mon_b_shift:
             core.set_global_option("DFT_GRAC_SHIFT", mon_b_shift)
 
         core.set_global_option("SAVE_JK", True)
-        core.IO.set_default_namespace("monomerB")
+        # core.IO.set_default_namespace("monomerB")
         if do_ext_potential and (ext_pot_B is not None or ext_pot_C is not None):
             kwargs["external_potentials"] = {}
             kwargs["external_potentials"]["C"] = (
@@ -719,9 +732,7 @@ def run_sapt_dft(name, **kwargs):
 
     core.timer_off("SAPT(DFT) Energy")
     core.tstop()
-
     optstash.restore()
-
     return dimer_wfn
 
 
