@@ -1257,8 +1257,8 @@ def test_einsum_terms():
             "sapt_dft_grac_shift_b": 0.203293,
             "SAPT_DFT_DO_DHF": False,
             "SAPT_DFT_DO_HYBRID": False,
+            "SAPT_DFT_USE_EINSUMS": True,
             "SAPT_DFT_EXCH_DISP_SCALE_SCHEME": "None",
-            "SAPT_DFT_DO_FSAPT": False,
         }
     )
     psi4.energy("sapt(dft)", molecule=mol)
@@ -1347,15 +1347,16 @@ if __name__ == "__main__":
     psi4.set_memory("32 GB")
     psi4.set_num_threads(12)
     # test_saptdftd4()
+    test_einsum_terms()
 
     # pytest this file
-    pytest.main(
-        [
-            __file__,
-            "-v",
-            "-s",
-            # "-k=test_saptdft_external_potential",
-            "--disable-warnings",
-            # "--maxfail=1",
-        ]
-    )
+    # pytest.main(
+    #     [
+    #         __file__,
+    #         "-v",
+    #         "-s",
+    #         # "-k=test_saptdft_external_potential",
+    #         "--disable-warnings",
+    #         # "--maxfail=1",
+    #     ]
+    # )
