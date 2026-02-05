@@ -7,12 +7,19 @@ import numpy as np
 pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick]
 
 
-# TODO: create test without pandas so it tests
 @pytest.mark.fsapt
 def test_fsapt_psivars_dict():
     """
-    fsapt-psivars: calling fsapt_analysis with psi4 variables after running an
-    fisapt0 calcluation requires the user to pass the molecule object
+    Test F-SAPT analysis using dictionary output format (no pandas required).
+
+    This test verifies that fsapt_analysis correctly returns F-SAPT energy
+    decomposition as a dictionary after running a fisapt0 calculation. The
+    molecule object must be passed to fsapt_analysis when using psi4 variables.
+
+    The test validates:
+    1. Standard SAPT energy components against reference values
+    2. F-SAPT fragment analysis output in dictionary format
+    3. Fragment definitions using 1-indexed atom lists
     """
     mol = psi4.geometry(
         """0 1
@@ -73,13 +80,13 @@ no_com"""
         },
     )
     fEnergies = {
-        'Elst': fEnergies['Elst'],
-        'Exch': fEnergies['Exch'],
-        'IndAB': fEnergies['IndAB'],
-        'IndBA': fEnergies['IndBA'],
-        'Disp': fEnergies['Disp'],
-        'EDisp': fEnergies['EDisp'],
-        'Total': fEnergies['Total'],
+        "Elst": fEnergies["Elst"],
+        "Exch": fEnergies["Exch"],
+        "IndAB": fEnergies["IndAB"],
+        "IndBA": fEnergies["IndBA"],
+        "Disp": fEnergies["Disp"],
+        "EDisp": fEnergies["EDisp"],
+        "Total": fEnergies["Total"],
     }
     print(fEnergies)
     fEref = {
@@ -100,8 +107,17 @@ no_com"""
 @pytest.mark.fsapt
 def test_fsapt_external_potentials():
     """
-    fsapt-psivars: calling fsapt_analysis with psi4 variables after running an
-    fisapt0 calcluation requires the user to pass the molecule object
+    Test F-SAPT analysis with external point charge potentials.
+
+    This test verifies that fisapt0 calculations can incorporate external
+    electrostatic potentials (representing environment effects like solvent
+    or additional molecules) and that the resulting SAPT energy components
+    are correctly computed. The test uses a three-water system where external
+    point charges model water molecules.
+
+    The test validates:
+    1. Standard SAPT energy components (Eelst, Eexch, Eind, Edisp, Etot)
+    2. F-SAPT fragment analysis using dictionary output format
     """
     mol = psi4.geometry(
         """
@@ -134,17 +150,13 @@ no_com
     external_potentials = {
         "A": [
             [0.417, np.array([-0.5496, -0.6026, 1.5720]) / psi_bohr2angstroms],
-            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) /
-             psi_bohr2angstroms],
+            [-0.834, np.array([-1.4545, -0.1932, 1.4677]) / psi_bohr2angstroms],
             [0.417, np.array([-1.9361, -0.4028, 2.2769]) / psi_bohr2angstroms],
         ],
         "B": [
-            [0.417, np.array([-2.5628, -0.8269, -1.6696]) /
-             psi_bohr2angstroms],
-            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) /
-             psi_bohr2angstroms],
-            [0.417, np.array([-1.8988, -0.4993, -0.3072]) /
-             psi_bohr2angstroms],
+            [0.417, np.array([-2.5628, -0.8269, -1.6696]) / psi_bohr2angstroms],
+            [-0.834, np.array([-1.7899, -0.4027, -1.2768]) / psi_bohr2angstroms],
+            [0.417, np.array([-1.8988, -0.4993, -0.3072]) / psi_bohr2angstroms],
         ],
         "C": [
             [0.417, np.array([1.1270, 1.5527, -0.1658]) / psi_bohr2angstroms],
@@ -185,13 +197,13 @@ no_com
         },
     )
     fEnergies = {
-        'Elst': fEnergies['Elst'],
-        'Exch': fEnergies['Exch'],
-        'IndAB': fEnergies['IndAB'],
-        'IndBA': fEnergies['IndBA'],
-        'Disp': fEnergies['Disp'],
-        'EDisp': fEnergies['EDisp'],
-        'Total': fEnergies['Total'],
+        "Elst": fEnergies["Elst"],
+        "Exch": fEnergies["Exch"],
+        "IndAB": fEnergies["IndAB"],
+        "IndBA": fEnergies["IndBA"],
+        "Disp": fEnergies["Disp"],
+        "EDisp": fEnergies["EDisp"],
+        "Total": fEnergies["Total"],
     }
     fEref = {
         "fEelst": -30.867,
@@ -211,8 +223,20 @@ no_com
 @uusing("pandas")
 def test_fsapt_psivars():
     """
-    fsapt-psivars: calling fsapt_analysis with psi4 variables after running an
-    fisapt0 calcluation requires the user to pass the molecule object
+    Test F-SAPT analysis with pandas DataFrame output format.
+
+    This test verifies that fsapt_analysis returns data compatible with pandas
+    DataFrame construction after running a fisapt0 calculation. Uses the same
+    two-methane system as test_fsapt_psivars_dict to validate consistency
+    between output formats, and serves as an example of seemless pandas
+    integration.
+
+    Requires: pandas
+
+    The test validates:
+    1. Standard SAPT energy components against reference values
+    2. F-SAPT energies extracted from DataFrame columns
+    3. DataFrame structure with proper column names
     """
     import pandas as pd
 
@@ -319,13 +343,21 @@ no_com"""
 
 
 @pytest.mark.fsapt
-@uusing("pandas")
 def test_fsapt_AtomicOutput():
     """
-    fsapt-atomicOutput: calling fsapt_analysis with atomic results
-    """
-    import pandas as pd
+    Test F-SAPT analysis using QCSchema AtomicResult output (no pandas).
 
+    This test verifies that fsapt_analysis works with QCSchema AtomicResult
+    objects returned from run_qcschema, using dictionary output format instead
+    of pandas. This approach is useful for integration with QCArchive and
+    other QCSchema-compatible workflows. Note, QCArchive will flatten
+    arrays, so fsapt_ab_size handles reshaping.
+
+    The test validates:
+    1. QCSchema plan generation and execution via run_qcschema
+    2. F-SAPT analysis from atomic_results parameter
+    3. Dictionary output format without pandas dependency
+    """
     mol = psi4.geometry(
         """0 1
 C 0.00000000 0.00000000 0.00000000
@@ -359,30 +391,7 @@ no_com"""
         clean=True,
         postclean=True,
     )
-    # TODO: this needs to work for non-symmetric test cases...
-    # print(atomic_result.extras)
-    # qcvars = atomic_result.extras["qcvars"]
-    # keys = ["Enuc", "Eelst", "Eexch", "Eind", "Edisp", "Etot"]
-    # Eref = {
-    #     "Enuc": 35.07529824960602,
-    #     "Eelst": -3.8035153870907834e-06,
-    #     "Eexch": 1.7912112685446533e-07,
-    #     "Eind": -3.833795151474493e-08,
-    #     "Edisp": -3.288568662589654e-05,
-    #     "Etot": -3.6548418837647605e-05,
-    # }
-    # Epsi = {
-    #     "Enuc": mol.nuclear_repulsion_energy(),
-    #     "Eelst": qcvars["SAPT ELST ENERGY"],
-    #     "Eexch": qcvars["SAPT EXCH ENERGY"],
-    #     "Eind": qcvars["SAPT IND ENERGY"],
-    #     "Edisp": qcvars["SAPT DISP ENERGY"],
-    #     "Etot": qcvars["SAPT0 TOTAL ENERGY"],
-    # }
-    # for key in keys:
-    #     compare_values(Eref[key], Epsi[key], 6, key)
-    print("Analysis")
-    data = psi4.fsapt_analysis(
+    fEnergies = psi4.fsapt_analysis(
         # NOTE: 1-indexed for fragments_a and fragments_b
         fragments_a={
             "MethylA": [1, 2, 3, 4, 5],
@@ -392,35 +401,16 @@ no_com"""
         },
         atomic_results=atomic_result,
     )
-    df = pd.DataFrame(data)
-    print(df)
-    fEnergies = {}
-    fkeys = [
-        "fEelst",
-        "fEexch",
-        "fEindAB",
-        "fEindBA",
-        "fEdisp",
-        "fEedisp",
-        "fEtot",
-    ]
-
-    df_keys = [
-        "Elst",
-        "Exch",
-        "IndAB",
-        "IndBA",
-        "Disp",
-        "EDisp",
-        "Total",
-    ]
-
-    # Get columns from dataframe that match fkeys
-    Energies = df[df_keys].iloc[0].values
-
-    for pair in zip(fkeys, Energies):
-        fEnergies[pair[0]] = pair[1]
-
+    fEnergies = {
+        "Elst": fEnergies["Elst"],
+        "Exch": fEnergies["Exch"],
+        "IndAB": fEnergies["IndAB"],
+        "IndBA": fEnergies["IndBA"],
+        "Disp": fEnergies["Disp"],
+        "EDisp": fEnergies["EDisp"],
+        "Total": fEnergies["Total"],
+    }
+    print(fEnergies)
     fEref = {
         "fEelst": -0.002,
         "fEexch": 0.000,
@@ -431,12 +421,25 @@ no_com"""
         "fEtot": -0.023,
     }
 
-    for key in fkeys:
-        compare_values(fEref[key], fEnergies[key], 2, key)
+    # python iterate over zip dictionary keys and values
+    for key1, key2 in zip(fEref.keys(), fEnergies.keys()):
+        compare_values(fEref[key1], fEnergies[key2][0], 2, key1)
 
 
 @pytest.mark.fsapt
 def test_fsapt_output_file():
+    """
+    Test F-SAPT analysis with file output (writes fsapt.dat).
+
+    This test verifies that fsapt_analysis can write results to a file
+    (fsapt.dat) in the specified directory. This is the traditional F-SAPT
+    output format for post-processing or visualization tools.
+
+    The test validates:
+    1. Standard SAPT energy components against reference values
+    2. File output generation in specified directory
+    3. Parsing of fsapt.dat file format
+    """
     mol = psi4.geometry(
         """0 1
 C 0.00000000 0.00000000 0.00000000
@@ -494,8 +497,7 @@ no_com"""
         dirname="./fsapt",
     )
     fEnergies = {}
-    fkeys = ["fEelst", "fEexch", "fEindAB",
-             "fEindBA", "fEdisp", "fEedisp", "fEtot"]
+    fkeys = ["fEelst", "fEexch", "fEindAB", "fEindBA", "fEdisp", "fEedisp", "fEtot"]
 
     with open("./fsapt/fsapt.dat", "r") as fsapt:
         Energies = [float(x) for x in fsapt.readlines()[-2].split()[2:]]
@@ -530,13 +532,27 @@ no_com"""
         compare_values(fEref[key], fEnergies[key], 2, key)
 
 
-@uusing("pandas")
 @pytest.mark.fsapt
 def test_fsapt_indices():
-    # TODO: EDIT THIS TEST TO DROP SAVING DF
-    psi4.set_memory("50 GB")
+    """
+    Test F-SAPT fragment index tracking in multi-fragment analysis.
+
+    This test verifies that fsapt_analysis correctly tracks and reports
+    which atom indices belong to each fragment pair in the output. Uses
+    a more complex system (ethane + N-methylacetamide) with multiple
+    user-defined fragments to test index bookkeeping.
+
+    The test validates:
+    1. QCSchema plan generation and execution
+    2. Correct fragment index assignment in output dictionary
+    3. Multi-fragment definitions with links5050 option
+    4. DataFrame construction with fragment indices
+    5. Molecules of different sizes
+
+    NOTE: This takes a bit longer to run due to size...
+    """
+    psi4.set_memory("32 GB")
     psi4.set_num_threads(12)
-    import pandas as pd
 
     mol = psi4.geometry(
         """
@@ -605,14 +621,15 @@ no_com
         print_output=False,
         atomic_results=atomic_result,
     )
-    df = pd.DataFrame(data)
-    print(df)
+    from pprint import pprint
+
+    pprint(data)
     mol_qcel_dict = mol.to_schema(dtype=2)
-    frag1_indices = df['Frag1_indices'].tolist()
-    frag2_indices = df['Frag2_indices'].tolist()
+    frag1_indices = data["Frag1_indices"]
+    frag2_indices = data["Frag2_indices"]
     # Using molecule object for all test to ensure right counts from each
     # fragment are achieved. Note +1 for 1-indexing in fsapt_analysis
-    all_A = [i + 1 for i in mol_qcel_dict['fragments'][0]]
+    all_A = [i + 1 for i in mol_qcel_dict["fragments"][0]]
     expected_frag1_indices = [
         [1, 2, 7, 8],
         [1, 2, 7, 8],
@@ -624,7 +641,7 @@ no_com
         all_A,
         all_A,
     ]
-    all_B = [j + 1 for j in mol_qcel_dict['fragments'][1]]
+    all_B = [j + 1 for j in mol_qcel_dict["fragments"][1]]
     expected_frag2_indices = [
         [9, 10, 11, 16, 26],
         [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
@@ -636,70 +653,137 @@ no_com
         [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
         all_B,
     ]
-    print(f"{all_A = }")
-    print(f"{all_B = }")
     for i, indices in enumerate(frag1_indices):
         # Assert lists are identical
         e = expected_frag1_indices[i]
         sorted_frag = sorted(indices)
-        assert sorted_frag == e, f"Frag1 indices do not match for fragment {i}: expected {e}, got {sorted_frag}"
+        assert sorted_frag == e, f"Frag1 indices do not match for fragment {
+            i
+        }: expected {e}, got {sorted_frag}"
 
     for i, indices in enumerate(frag2_indices):
         e = expected_frag2_indices[i]
         sorted_frag = sorted(indices)
-        assert sorted_frag == e, f"Frag2 indices do not match for fragment {i}: expected {e}, got {sorted_frag}"
-    df["F-Induction"] = df["IndAB"] + df["IndBA"]
-    df.drop(columns=["IndAB", "IndBA"], inplace=True)
-    df = df.rename(
-        columns={
-            "Elst": "F-Electrostatics",
-            "Exch": "F-Exchange",
-            "Disp": "F-Dispersion",
-            "EDisp": "F-EDispersion",
-            "Total": "F-Total",
-        },
-    )
-    import qcelemental as qcel
-    qcel_mol = qcel.models.Molecule.from_data(
-        """
-0 1
-C   11.54100       27.68600       13.69600
-H   12.45900       27.15000       13.44600
-C   10.79000       27.96500       12.40600
-H   10.55700       27.01400       11.92400
-H   9.879000       28.51400       12.64300
-H   11.44300       28.56800       11.76200
-H   10.90337       27.06487       14.34224
-H   11.78789       28.62476       14.21347
---
-0 1
-C   10.60200       24.81800       6.466000
-O   10.95600       23.84000       7.103000
-N   10.17800       25.94300       7.070000
-C   10.09100       26.25600       8.476000
-C   9.372000       27.59000       8.640000
-C   11.44600       26.35600       9.091000
-C   9.333000       25.25000       9.282000
-H   9.874000       26.68900       6.497000
-H   9.908000       28.37100       8.093000
-H   8.364000       27.46400       8.233000
-H   9.317000       27.84600       9.706000
-H   9.807000       24.28200       9.160000
-H   9.371000       25.57400       10.32900
-H   8.328000       25.26700       8.900000
-H   11.28800       26.57600       10.14400
-H   11.97000       27.14900       8.585000
-H   11.93200       25.39300       8.957000
-H   10.61998       24.85900       5.366911
-units angstrom
-
-symmetry c1
-no_reorient
-no_com
-"""
-    )
-    df['qcel_molecule'] = [qcel_mol] * len(df)
-    df.to_pickle("fsapt_train_simple.pkl")
+        assert sorted_frag == e, f"Frag2 indices do not match for fragment {
+            i
+        }: expected {e}, got {sorted_frag}"
+    ref_dict = {
+        "ClosestContact": [
+            12.99840199731447,
+            6.708905946098247,
+            9.420620786025163,
+            3.7293279474020324,
+            6.708905946098247,
+            3.7293279474020324,
+            9.420620786025163,
+            3.7293279474020324,
+            3.7293279474020324,
+        ],
+        "Disp": [
+            -0.02014331013167378,
+            -0.372273895991978,
+            -0.0741518363998009,
+            -2.432207594127432,
+            -0.39241720612365183,
+            -2.506359430527233,
+            -0.09429514653147468,
+            -2.80448149011941,
+            -2.898776636650885,
+        ],
+        "EDisp": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "Elst": [
+            0.8664961096130384,
+            -0.12491437414747963,
+            -1.0161642439176575,
+            -1.0168685763655532,
+            0.7415817354655587,
+            -2.0330328202832106,
+            -0.14966813430461912,
+            -1.1417829505130328,
+            -1.291451084817652,
+        ],
+        "Exch": [
+            -0.00016951134321586871,
+            0.06302818590927417,
+            0.04056059018694508,
+            4.214334017378195,
+            0.0628586745660583,
+            4.25489460756514,
+            0.04039107884372921,
+            4.277362203287469,
+            4.317753282131198,
+        ],
+        "Frag1": [
+            "Methyl1_A",
+            "Methyl1_A",
+            "Methyl2_A",
+            "Methyl2_A",
+            "Methyl1_A",
+            "Methyl2_A",
+            "All",
+            "All",
+            "All",
+        ],
+        "Frag2": [
+            "Peptide_B",
+            "T-Butyl_B",
+            "Peptide_B",
+            "T-Butyl_B",
+            "All",
+            "All",
+            "Peptide_B",
+            "T-Butyl_B",
+            "All",
+        ],
+        "IndAB": [
+            -0.027615863638335056,
+            -0.015567880312064623,
+            -0.09781659817652713,
+            -0.26487802957299955,
+            -0.04318374395039968,
+            -0.36269462774952665,
+            -0.12543246181486217,
+            -0.2804459098850642,
+            -0.40587837169992635,
+        ],
+        "IndBA": [
+            0.0011573940269127988,
+            0.03052724256475823,
+            -0.002144092785043809,
+            -0.13667169442200203,
+            0.03168463659167103,
+            -0.13881578720704585,
+            -0.00098669875813101,
+            -0.1061444518572438,
+            -0.10713115061537481,
+        ],
+        "Total": [
+            0.8197248185264883,
+            -0.4192007219755354,
+            -1.1497161810927068,
+            0.3637081228885606,
+            0.4005240965509529,
+            -0.7860080582041462,
+            -0.3299913625662185,
+            -0.05549259908697479,
+            -0.3854839616531933,
+        ],
+    }
+    for key in ['ClosestContact', 'Elst', 'Exch', 'IndAB', 'IndBA', 'Disp', 'EDisp', 'Total']:
+        for i, value in enumerate(data[key]):
+            f1_f2 = f"{data['Frag1'][i]}-{data['Frag2'][i]}"
+            print(
+                f1_f2,
+                ref_dict[key][i],
+                value,
+            )
+            compare_values(
+                ref_dict[key][i],
+                value,
+                6,
+                f"Fragment pair {f1_f2}:{i} for key {key}",
+            )
+    return
 
 
 if __name__ == "__main__":
@@ -711,3 +795,4 @@ if __name__ == "__main__":
     # test_fsapt_output_file()
     # test_fsapt_output_file()
     test_fsapt_indices()
+    # pytest.main([__file__])
