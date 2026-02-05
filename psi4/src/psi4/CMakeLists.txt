@@ -37,6 +37,7 @@ foreach(dir_name
   dmrg
   fisapt
   fnocc
+  fnocc_einsums
   mcscf
   mrcc
   occ

@@ -146,6 +146,7 @@ procedures = {
         'mp4(sdq)'      : proc.run_fnocc,
         'fno-ccsd'      : proc.select_fnoccsd,
         'fno-ccsd(t)'   : proc.select_fnoccsd_t_,
+        'fno-ccsd(t)-ein'   : proc.select_fnoccsd_t_einsums,
         'fno-qcisd'     : proc.run_fnocc,
         'fno-qcisd(t)'  : proc.run_fnocc,
         'fno-mp3'       : proc.run_fnocc,

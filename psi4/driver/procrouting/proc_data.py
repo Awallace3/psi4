@@ -123,6 +123,7 @@ method_governing_type_keywords = {
         "fno-aqcc"     : "cc_type",
         "fno-ccsd"     : "cc_type",
         "fno-ccsd(t)"  : "cc_type",
+        "fno-ccsd(t)-ein"  : "cc_type",
 
         "dlpno-mp2"    : "mp2_type",
 

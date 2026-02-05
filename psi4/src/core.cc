@@ -192,6 +192,9 @@ SharedWavefunction libfock(SharedWavefunction, Options&);
 namespace fnocc {
 SharedWavefunction fnocc(SharedWavefunction, Options&);
 }
+namespace fnocc_einsums {
+SharedWavefunction fnocc_einsums(SharedWavefunction, Options&);
+}
 namespace occwave {
 SharedWavefunction occwave(SharedWavefunction, Options&);
 }
@@ -411,6 +414,11 @@ double py_psi_cctriples(SharedWavefunction ref_wfn) {
 SharedWavefunction py_psi_fnocc(SharedWavefunction ref_wfn) {
     py_psi_prepare_options_for_module("FNOCC");
     return fnocc::fnocc(ref_wfn, Process::environment.options);
+}
+
+SharedWavefunction py_psi_fnocc_einsums(SharedWavefunction ref_wfn) {
+    py_psi_prepare_options_for_module("FNOCC");
+    return fnocc_einsums::fnocc_einsums(ref_wfn, Process::environment.options);
 }
 
 SharedWavefunction py_psi_detci(SharedWavefunction ref_wfn) {
@@ -1397,6 +1405,7 @@ PYBIND11_MODULE(core, core) {
     core.def("detci", py_psi_detci, "ref_wfn"_a, "Runs the determinant-based configuration interaction code.");
     core.def("dmrg", py_psi_dmrg, "ref_wfn"_a, "Runs the CheMPS2 interface DMRG code.");
     core.def("fnocc", py_psi_fnocc, "ref_wfn"_a, "Runs the FNO-CCSD(T)/QCISD(T)/MP4/CEPA energy code");
+    core.def("fnocc_einsums", py_psi_fnocc_einsums, "ref_wfn"_a, "Runs the FNO-CCSD(T)/QCISD(T)/MP4/CEPA energy code");
     core.def("cchbar", py_psi_cchbar, "ref_wfn"_a, "Runs the code to generate the similarity transformed Hamiltonian.");
     core.def("cclambda", py_psi_cclambda, "ref_wfn"_a, "Runs the coupled cluster lambda equations code.");
     core.def("ccdensity", py_psi_ccdensity, "ref_wfn"_a, "Runs the code to compute coupled cluster density matrices.");
