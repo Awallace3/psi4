@@ -26,8 +26,8 @@
  * @END LICENSE
  */
 
-#ifndef __math_test_uhf_h__
-#define __math_test_uhf_h__
+#ifndef PSI4_LIBSCF_SOLVER_UHF_H
+#define PSI4_LIBSCF_SOLVER_UHF_H
 
 #include "psi4/libpsio/psio.hpp"
 #include "psi4/libfock/v.h"
@@ -83,6 +83,8 @@ class UHF : public HF {
     void form_V() override;
     double compute_E() override;
     void finalize() override;
+
+    void openorbital_scf() override;
 
     void damping_update(double) override;
     int soscf_update(double soscf_conv, int soscf_min_iter, int soscf_max_iter, int soscf_print) override;

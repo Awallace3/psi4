@@ -27,14 +27,17 @@ dependencies:
   - optking
   - qcelemental
   - qcengine
+  - qcmanybody>=0.5.1
     # buildtime optional
   - ambit
+  - armadillo                 # req'd with openorbitaloptimizer
   - dkh
   - einsums>=1.0.6
   - fortran-compiler
   - hdf5                      # req'd with einsums; Use 1.14.3 or 1.14.6 (so far) as .4 and .5 not setting HDF5_VERSION.
   - integratorxx
   - libecpint
+  - openorbitaloptimizer
   - pcmsolver
   - range-v3                  # req'd with einsums
   - zlib                      # req'd with einsums
@@ -42,6 +45,7 @@ dependencies:
     # runtime required
   - msgpack-python            # req'd with qcelemental
   - networkx                  # req'd with qcelemental
+  - pydantic>=1.10.17,<3      # req'd with qcelemental; Allow uniform access to Pydantic v1 API.
   - scipy
   - setuptools                # req'd with qcelemental; Needed for qcelemental cmake detection.
     # runtime optional
@@ -59,6 +63,7 @@ dependencies:
   - pylibefp
   - pymdi
   - qcfractal>=0.60,!=0.62
+  - resp
   - toml                      # req'd with dftd4-python
     # test
   - h5py
