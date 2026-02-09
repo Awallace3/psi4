@@ -2269,9 +2269,10 @@ if __name__ == "__main__":
     # test_fsaptdft_fsapt0_simple()
     # test_fsaptdftd4_psivars()
     # test_fsaptdft_disp0_fisapt0_psivars()
-    # test_fsapthf_psivars()
+    test_fsapthf_psivars()
     # test_fsaptdft_fsapt0()
     # test_fsaptdftd4_psivars_pbe0()
+
     # test_fsaptdftd4_psivars_pbe0_frozen_core()
     # test_fsaptdft_indices()
     # test_fsapt0_fsaptdft()
@@ -2279,11 +2280,11 @@ if __name__ == "__main__":
     # test_fsaptdftd4_psivars_pbe0_frozen_core()
     # test_fsaptdft_fisapt0_d4()
     # pytest this file
-    pytest.main([
-        __file__,
-        "-v",
-        "-s",
-        # "-k=test_saptdft_auto_grac",
-        "--disable-warnings",
-        # "--maxfail=1",
-    ])
+    # pytest.main([
+    #     __file__,
+    #     "-v",
+    #     "-s",
+    #     # "-k=test_saptdft_auto_grac",
+    #     "--disable-warnings",
+    #     # "--maxfail=1",
+    # ])
