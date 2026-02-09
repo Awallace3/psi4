@@ -1714,9 +1714,10 @@ def run_fsapt_analysis(
 ):
     if print_output:
         print("  ==> F-ISAPT: Analysis Start <==\n")
+
     if atomic_results is None and molecule is None:
         raise Exception(
-            "Atomic results or molecule object after running psi4.energy('fisapt0') must be provided."
+            "Atomic results, molecule object, or  after running psi4.energy('fisapt0') must be provided."
         )
     if atomic_results is not None:
         molecule = atomic_results.molecule

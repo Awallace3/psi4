@@ -3,6 +3,8 @@ import psi4
 from psi4 import compare_values, variable
 from addons import uusing
 import numpy as np
+import os
+import shutil
 
 pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick]
 
@@ -70,7 +72,6 @@ no_com"""
     for key in keys:
         compare_values(Eref[key], Epsi[key], 6, key)
     fEnergies = psi4.fsapt_analysis(
-        molecule=mol,
         # NOTE: 1-indexed for fragments_a and fragments_b
         fragments_a={
             "MethylA": [1, 2, 3, 4, 5],
@@ -187,7 +188,6 @@ no_com
     for key in keys:
         compare_values(Eref[key], Epsi[key], 6, key)
     fEnergies = psi4.fsapt_analysis(
-        molecule=mol,
         # NOTE: 1-indexed for fragments_a and fragments_b
         fragments_a={
             "w1": [1, 2, 3],
@@ -195,6 +195,7 @@ no_com
         fragments_b={
             "w3": [4, 5, 6],
         },
+        source=mol,
     )
     fEnergies = {
         "Elst": fEnergies["Elst"],
@@ -289,7 +290,6 @@ no_com"""
     for key in keys:
         compare_values(Eref[key], Epsi[key], 6, key)
     data = psi4.fsapt_analysis(
-        molecule=mol,
         # NOTE: 1-indexed for fragments_a and fragments_b
         fragments_a={
             "MethylA": [1, 2, 3, 4, 5],
@@ -297,6 +297,7 @@ no_com"""
         fragments_b={
             "MethylB": [6, 7, 8, 9, 10],
         },
+        source=mol,
     )
     df = pd.DataFrame(data)
     print(df)
@@ -399,31 +400,30 @@ no_com"""
         fragments_b={
             "MethylB": [6, 7, 8, 9, 10],
         },
-        atomic_results=atomic_result,
+        source=atomic_result,
     )
     fEnergies = {
-        "Elst": fEnergies["Elst"],
-        "Exch": fEnergies["Exch"],
-        "IndAB": fEnergies["IndAB"],
-        "IndBA": fEnergies["IndBA"],
-        "Disp": fEnergies["Disp"],
-        "EDisp": fEnergies["EDisp"],
-        "Total": fEnergies["Total"],
+        "Elst": fEnergies["Elst"][0],
+        "Exch": fEnergies["Exch"][0],
+        "IndAB": fEnergies["IndAB"][0],
+        "IndBA": fEnergies["IndBA"][0],
+        "Disp": fEnergies["Disp"][0],
+        "EDisp": fEnergies["EDisp"][0],
+        "Total": fEnergies["Total"][0],
     }
-    print(fEnergies)
     fEref = {
-        "fEelst": -0.002,
-        "fEexch": 0.000,
-        "fEindAB": -0.000,
-        "fEindBA": -0.000,
-        "fEdisp": -0.021,
-        "fEedisp": 0.000,
-        "fEtot": -0.023,
+        "Elst": -0.0023867836548276955,
+        "Exch": 0.00011242419533877543,
+        "IndAB": -1.2055155927787574e-05,
+        "IndBA": -1.1984667714276922e-05,
+        "Disp": -0.020636082319331096,
+        "EDisp": 0.0,
+        "Total": -0.02293448160273215,
     }
 
-    # python iterate over zip dictionary keys and values
-    for key1, key2 in zip(fEref.keys(), fEnergies.keys()):
-        compare_values(fEref[key1], fEnergies[key2][0], 2, key1)
+    # python iterate over dictionary keys
+    for k in fEref.keys():
+        compare_values(fEref[k], fEnergies[k], 2, k)
 
 
 @pytest.mark.fsapt
@@ -458,12 +458,14 @@ symmetry c1
 no_reorient
 no_com"""
     )
+    fsapt_dirname="./fsapt_dir_test_fsapt_output_file"
     psi4.set_options(
         {
             "basis": "jun-cc-pvdz",
             "scf_type": "df",
             "guess": "sad",
             "freeze_core": "true",
+            "FISAPT_FSAPT_FILEPATH": fsapt_dirname,
         }
     )
     psi4.energy("fisapt0")
@@ -494,42 +496,36 @@ no_com"""
         fragments_b={
             "MethylB": [6, 7, 8, 9, 10],
         },
-        dirname="./fsapt",
+        source=fsapt_dirname,
     )
     fEnergies = {}
     fkeys = ["fEelst", "fEexch", "fEindAB", "fEindBA", "fEdisp", "fEedisp", "fEtot"]
 
-    with open("./fsapt/fsapt.dat", "r") as fsapt:
+    with open(f"{fsapt_dirname}/fsapt.dat", "r") as fsapt:
         Energies = [float(x) for x in fsapt.readlines()[-2].split()[2:]]
 
     for pair in zip(fkeys, Energies):
         fEnergies[pair[0]] = pair[1]
+
 
     fEref = {
         "fEelst": -0.002,
         "fEexch": 0.000,
         "fEindAB": -0.000,
         "fEindBA": -0.000,
-        "fEdisp": 0.000,
-        "fEedisp": -0.033,
-        "fEtot": -0.036,
+        "fEdisp": -0.021,
+        "fEedisp": 0.000,
+        "fEtot": -0.023,
     }
 
+    # fsapt.dat only saves up to 3 decimal places, so use looser tolerance here
     for key in fkeys:
-        compare_values(fEref[key], fEnergies[key], 2, key)
-        print(fEnergies)
-        fEref = {
-            "fEelst": -0.002,
-            "fEexch": 0.000,
-            "fEindAB": -0.000,
-            "fEindBA": -0.000,
-            "fEdisp": -0.021,
-            "fEedisp": 0.000,
-            "fEtot": -0.023,
-        }
+        compare_values(fEref[key], fEnergies[key], 3, key)
 
-    for key in fkeys:
-        compare_values(fEref[key], fEnergies[key], 2, key)
+    # cleanup test directory
+    if os.path.exists(fsapt_dirname):
+        shutil.rmtree(fsapt_dirname)
+    return
 
 
 @pytest.mark.fsapt
@@ -594,11 +590,10 @@ no_com
     )
     psi4.set_options(
         {
-            # "basis": "sto-3g",
-            "basis": "aug-cc-pvdz",
+            "basis": "sto-3g",
             "scf_type": "df",
             "guess": "sad",
-            # "freeze_core": "true",
+            "freeze_core": "true",
         }
     )
     plan = psi4.energy("fisapt0", return_plan=True, molecule=mol)
@@ -617,13 +612,10 @@ no_com
             "Peptide_B": [9, 10, 11, 16, 26],
             "T-Butyl_B": [12, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25],
         },
+        source=atomic_result,
         links5050=True,
         print_output=False,
-        atomic_results=atomic_result,
     )
-    from pprint import pprint
-
-    pprint(data)
     mol_qcel_dict = mol.to_schema(dtype=2)
     frag1_indices = data["Frag1_indices"]
     frag2_indices = data["Frag2_indices"]
@@ -657,16 +649,12 @@ no_com
         # Assert lists are identical
         e = expected_frag1_indices[i]
         sorted_frag = sorted(indices)
-        assert sorted_frag == e, f"Frag1 indices do not match for fragment {
-            i
-        }: expected {e}, got {sorted_frag}"
+        assert sorted_frag == e, f"Frag1 indices do not match for fragment {i}: expected {e}, got {sorted_frag}"
 
     for i, indices in enumerate(frag2_indices):
         e = expected_frag2_indices[i]
         sorted_frag = sorted(indices)
-        assert sorted_frag == e, f"Frag2 indices do not match for fragment {
-            i
-        }: expected {e}, got {sorted_frag}"
+        assert sorted_frag == e, f"Frag2 indices do not match for fragment {i}: expected {e}, got {sorted_frag}"
     ref_dict = {
         "ClosestContact": [
             12.99840199731447,
@@ -769,7 +757,16 @@ no_com
             -0.3854839616531933,
         ],
     }
-    for key in ['ClosestContact', 'Elst', 'Exch', 'IndAB', 'IndBA', 'Disp', 'EDisp', 'Total']:
+    for key in [
+        "ClosestContact",
+        "Elst",
+        "Exch",
+        "IndAB",
+        "IndBA",
+        "Disp",
+        "EDisp",
+        "Total",
+    ]:
         for i, value in enumerate(data[key]):
             f1_f2 = f"{data['Frag1'][i]}-{data['Frag2'][i]}"
             print(
@@ -794,5 +791,7 @@ if __name__ == "__main__":
     # test_fsapt_AtomicOutput()
     # test_fsapt_output_file()
     # test_fsapt_output_file()
-    test_fsapt_indices()
-    # pytest.main([__file__])
+    # test_fsapt_indices()
+    # test_fsapt_output_file()
+    # test_fsapt_psivars_dict()
+    pytest.main([__file__])
