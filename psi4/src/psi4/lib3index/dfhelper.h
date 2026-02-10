@@ -409,6 +409,16 @@ class PSI_API DFHelper {
     void prepare_AO_wK_core();
     void prepare_AO_wK();
 
+    // => wK out-of-core support <=
+    // Filenames for left (metric-contracted) and right (raw omega) wK integrals on disk
+    std::string wK_left_filename_;
+    std::string wK_right_filename_;
+    // Out-of-core wK computation: reads integrals from disk in Q-shell blocks
+    void compute_wK_out_of_core(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright,
+                                std::vector<SharedMatrix> wK, size_t max_nocc);
+    // Grab wK AO integrals from a given disk file for a Q-shell block
+    void grab_wK_AO(const std::string& filename, const size_t start, const size_t stop, double* Mp);
+
     void copy_upper_lower_wAO_core_symm(double* Qpq, double* Ppq, size_t begin, size_t end);
 
     // first integral transforms

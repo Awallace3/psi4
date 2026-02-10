@@ -595,6 +595,7 @@ no_com
             "scf_type": "df",
             "guess": "sad",
             "freeze_core": "true",
+            "scf_type": "out_of_core_aoi",
         }
     )
     plan = psi4.energy("fisapt0", return_plan=True, molecule=mol)
@@ -806,7 +807,105 @@ no_com
     return
 
 
+@pytest.mark.fsapt
+def test_fsapt_scfsubtype():
+    """
+    """
+    psi4.set_memory("32 GB")
+    psi4.set_num_threads(12)
+
+    mol = psi4.geometry(
+        """
+0 1
+C   11.54100       27.68600       13.69600
+H   12.45900       27.15000       13.44600
+C   10.79000       27.96500       12.40600
+H   10.55700       27.01400       11.92400
+H   9.879000       28.51400       12.64300
+H   11.44300       28.56800       11.76200
+H   10.90337       27.06487       14.34224
+H   11.78789       28.62476       14.21347
+--
+0 1
+C   10.60200       24.81800       6.466000
+O   10.95600       23.84000       7.103000
+N   10.17800       25.94300       7.070000
+C   10.09100       26.25600       8.476000
+C   9.372000       27.59000       8.640000
+C   11.44600       26.35600       9.091000
+C   9.333000       25.25000       9.282000
+H   9.874000       26.68900       6.497000
+H   9.908000       28.37100       8.093000
+H   8.364000       27.46400       8.233000
+H   9.317000       27.84600       9.706000
+H   9.807000       24.28200       9.160000
+H   9.371000       25.57400       10.32900
+H   8.328000       25.26700       8.900000
+H   11.28800       26.57600       10.14400
+H   11.97000       27.14900       8.585000
+H   11.93200       25.39300       8.957000
+H   10.61998       24.85900       5.366911
+units angstrom
+
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "guess": "sad",
+            "freeze_core": "true",
+            "scf_subtype": "incore",
+        }
+    )
+    psi4.core.clean_timers()
+    psi4.energy("fisapt0", molecule=mol)
+    c_mem_df = psi4.core.get_timer_dict()["FISAPT"]
+    print(f"\nFISAPT timer for mem_df: {c_mem_df}")
+    # psi4.driver.p4util.write_timer_csv("fisapt0_timers.csv")
+    sapt_total_ref = psi4.core.variable("SAPT0 TOTAL ENERGY")
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "guess": "sad",
+            "freeze_core": "true",
+            "scf_subtype": "out_of_core",
+        }
+    )
+    psi4.core.clean_timers()
+    psi4.energy("fisapt0", molecule=mol)
+    c_out_of_core = psi4.core.get_timer_dict()["FISAPT"]
+    print(f"\nFISAPT timer for out_of_core: {c_out_of_core}")
+    # psi4.driver.p4util.write_timer_csv("fisapt0_timers.csv")
+    sapt_total_energy = psi4.core.variable("SAPT0 TOTAL ENERGY")
+    psi4.set_options(
+        {
+            "basis": "aug-cc-pvdz",
+            "scf_type": "df",
+            "guess": "sad",
+            "freeze_core": "true",
+            "scf_subtype": "out_of_core_aio",
+        }
+    )
+    psi4.core.clean_timers()
+    psi4.energy("fisapt0", molecule=mol)
+    c_out_of_core_aio = psi4.core.get_timer_dict()["FISAPT"]
+    print(f"FISAPT timer for mem_df: {c_mem_df}")
+    print(f"FISAPT timer for out_of_core: {c_out_of_core}")
+    print(f"FISAPT timer for out_of_core_aio: {c_out_of_core_aio}")
+    sapt_total_energy_aio = psi4.core.variable("SAPT0 TOTAL ENERGY")
+    assert compare_values(sapt_total_ref, sapt_total_energy, 6, "SAPT0 total energy should be the same for mem_df and out_of_core")
+    assert compare_values(sapt_total_energy, sapt_total_energy_aio, 6, "SAPT0 total energy should be the same for out_of_core and out_of_core_aio")
+    # out_of_core_aio should be closer in speed to INCORE. Currently, the energy is also wrong.
+    return
+
+
 if __name__ == "__main__":
+    test_fsapt_scfsubtype()
     # test_fsapt_psivars_dict()
     # test_fsapt_external_potentials()
     # test_fsapt_psivars()
@@ -817,4 +916,4 @@ if __name__ == "__main__":
     # test_fsapt_indices()
     # test_fsapt_output_file()
     # test_fsapt_psivars_dict()
-    pytest.main([__file__])
+    # pytest.main([__file__])

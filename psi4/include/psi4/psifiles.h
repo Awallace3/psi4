@@ -117,6 +117,7 @@
 #define PSIF_HALFT1              95   /*-  -*/
 
 #define PSIF_DFSCF_BJ            97   /*- B Matrix containing 3-index tensor in AOs with J^-1/2 for use with DF-SCF -*/
+#define PSIF_DFHELPER_WK         98   /*- DFHelper wK integrals for out-of-core range-separated exchange -*/
 
 // The miscellaneous CC information file
 #define PSIF_CC_INFO             100  /*-  -*/

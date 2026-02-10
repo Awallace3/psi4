@@ -79,7 +79,18 @@ DFHelper::DFHelper(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> 
     prepare_blocking();
 }
 
-DFHelper::~DFHelper() { clear_all(); }
+DFHelper::~DFHelper() {
+    // Clean up wK disk files if they exist
+    if (!wK_left_filename_.empty()) {
+        file_streams_.erase(wK_left_filename_);
+        remove(wK_left_filename_.c_str());
+    }
+    if (!wK_right_filename_.empty()) {
+        file_streams_.erase(wK_right_filename_);
+        remove(wK_right_filename_.c_str());
+    }
+    clear_all();
+}
 
 void DFHelper::prepare_blocking() {
     Qshells_ = aux_->nshell();
@@ -199,10 +210,7 @@ void DFHelper::initialize() {
     } else if (!direct_ && !direct_iaQ_) {
         prepare_AO();
         if (do_wK_) {
-            std::stringstream error;
-            error << "DFHelper: not equipped to do wK out of core. \nPlease supply more memory or remove scf_type Mem_DF from the imput file";
-            throw PSIEXCEPTION(error.str().c_str());
-            //prepare_AO_wK();
+            prepare_AO_wK();
         }
     }
 
@@ -249,11 +257,11 @@ void DFHelper::AO_core(bool set_AO_core=true) {
             if (memory_ < required_core_size_) AO_core_ = false;
 
         // .. or forcibly disable AO_core_ if user specifies ...
-        } else if (subalgo_ == "OUT_OF_CORE") {
+        } else if (subalgo_ == "OUT_OF_CORE" || subalgo_ == "OUT_OF_CORE_AIO") {
             AO_core_ = false;
 
             if (print_lvl_ > 0) {
-                outfile->Printf("  SCF_SUBTYPE = OUT_OF_CORE selected. Out-of-core MEM_DF algorithm will be used.\n");
+                outfile->Printf("  SCF_SUBTYPE = %s selected. Out-of-core MEM_DF algorithm will be used.\n", subalgo_.c_str());
             }
         // .. or force AO_core_ if user specifies
         } else if (subalgo_ == "INCORE") {
@@ -267,7 +275,7 @@ void DFHelper::AO_core(bool set_AO_core=true) {
                 }
 	    }
         } else {
-            throw PSIEXCEPTION("Invalid SCF_SUBTYPE option! The choices for SCF_SUBTYPE are AUTO, INCORE, and OUT_OF_CORE.");
+            throw PSIEXCEPTION("Invalid SCF_SUBTYPE option! The choices for SCF_SUBTYPE are AUTO, INCORE, OUT_OF_CORE, and OUT_OF_CORE_AIO.");
         }
 
         if (print_lvl_ > 0) {
@@ -492,24 +500,107 @@ void DFHelper::prepare_AO() {
     }
 }
 void DFHelper::prepare_AO_wK() {
+    // Out-of-core preparation of wK integrals.
+    // Produces two disk files in non-symmetric sparse format (big_skips_/small_skips_):
+    //   wK_left_filename_  : [J^{wmpower_}](A|mn) — metric-contracted regular integrals
+    //   wK_right_filename_ : (A|w|mn) — raw omega-attenuated integrals (no metric contraction)
+    //
+    // These are read back by grab_wK_AO() during compute_wK_out_of_core().
+
     // prepare eris
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
+    std::vector<std::shared_ptr<TwoBodyAOInt>> weri(nthreads_);
+
     eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
+
+    weri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->erf_eri(omega_));
+    if (!(weri.front()->sieve_initialized())) weri.front()->initialize_sieve();
 #pragma omp parallel num_threads(nthreads_)
     {
         int rank = 0;
 #ifdef _OPENMP
         rank = omp_get_thread_num();
 #endif
-        eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
+        if (rank) {
+            eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
+            weri[rank] = std::shared_ptr<TwoBodyAOInt>(weri.front()->clone());
+        }
     }
 
-    // gather blocking info
+    // gather blocking info — non-symmetric (symm=0) for out-of-core
     std::vector<std::pair<size_t, size_t>> psteps;
     std::pair<size_t, size_t> plargest = pshell_blocks_for_AO_build(memory_, 0, psteps);
+
+    // Allocate buffers: pre-contraction (M1p), post-contraction (Fp), and omega buffer (M2p)
+    // plargest.first is the total sparse size for the largest block (with 2x factor built in for non-symm)
+    size_t half_buf = std::get<0>(plargest) / 2;
+    std::unique_ptr<double[]> M1(new double[half_buf]);
+    std::unique_ptr<double[]> F(new double[half_buf]);
+    std::unique_ptr<double[]> M2(new double[half_buf]);
+    double* M1p = M1.get();
+    double* Fp = F.get();
+    double* M2p = M2.get();
+
+    // grab wmpower_ metric (J^{-1})
+    std::unique_ptr<double[]> metric_wm;
+    double* met_wm_p;
+    if (!hold_met_) {
+        metric_wm = std::unique_ptr<double[]>(new double[naux_ * naux_]);
+        met_wm_p = metric_wm.get();
+        std::string filename = return_metfile(wmpower_);
+        get_tensor_(std::get<0>(files_[filename]), met_wm_p, 0, naux_ - 1, 0, naux_ - 1);
+    } else {
+        met_wm_p = metric_prep_core(wmpower_);
+    }
+
+    // prepare disk files for left and right wK integrals
+    wK_left_filename_ = start_filename("dfh.wK_left");
+    wK_right_filename_ = start_filename("dfh.wK_right");
+    std::string op = "ab";
+
+    // Process p-shell blocks
+    for (size_t i = 0; i < psteps.size(); i++) {
+        size_t start = std::get<0>(psteps[i]);
+        size_t stop = std::get<1>(psteps[i]);
+        size_t begin = pshell_aggs_[start];
+        size_t end = pshell_aggs_[stop + 1] - 1;
+        size_t block_size = end - begin + 1;
+        size_t size = big_skips_[end + 1] - big_skips_[begin];
+
+        // Compute regular (A|mn) integrals in non-symmetric sparse format
+        timer_on("DFH: wK AO Construction (left)");
+        compute_sparse_pQq_blocking_p(start, stop, M1p, eri);
+        timer_off("DFH: wK AO Construction (left)");
+
+        // Contract with wmpower_ metric: [J^{wmpower_}](A|mn) → Fp
+        timer_on("DFH: wK AO-Met. Contraction");
+#pragma omp parallel for num_threads(nthreads_) schedule(guided)
+        for (size_t j = 0; j < block_size; j++) {
+            size_t mi = small_skips_[begin + j];
+            size_t skips = big_skips_[begin + j] - big_skips_[begin];
+            C_DGEMM('N', 'N', naux_, mi, naux_, 1.0, met_wm_p, naux_, &M1p[skips], mi, 0.0, &Fp[skips], mi);
+        }
+        timer_off("DFH: wK AO-Met. Contraction");
+
+        // Write left (metric-contracted) integrals to disk
+        put_tensor_AO(wK_left_filename_, Fp, size, 0, op);
+
+        // Compute omega (A|w|mn) integrals in non-symmetric sparse format
+        timer_on("DFH: wK AO Construction (right)");
+        compute_sparse_pQq_blocking_p(start, stop, M2p, weri);
+        timer_off("DFH: wK AO Construction (right)");
+
+        // Write right (raw omega) integrals to disk — no metric contraction
+        put_tensor_AO(wK_right_filename_, M2p, size, 0, op);
+    }
+
+    if (print_lvl_ > 0) {
+        outfile->Printf("  DFHelper: wK integrals written to disk (left: %s, right: %s)\n",
+                        wK_left_filename_.c_str(), wK_right_filename_.c_str());
+    }
 }
 void DFHelper::prepare_AO_core() {
     // get each thread an eri object
@@ -3377,6 +3468,12 @@ void DFHelper::compute_K(std::vector<SharedMatrix> Cleft, std::vector<SharedMatr
 }
 void DFHelper::compute_wK(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright,
                           std::vector<SharedMatrix> wK, size_t max_nocc, bool do_J, bool do_K, bool do_wK) {
+    // Dispatch to out-of-core path if AO integrals are not held in memory
+    if (!AO_core_) {
+        compute_wK_out_of_core(Cleft, Cright, wK, max_nocc);
+        return;
+    }
+
     std::vector<std::pair<size_t, size_t>> Qsteps;
     std::tuple<size_t, size_t> info = Qshell_blocks_for_JK_build(Qsteps, max_nocc, false);
     size_t tots = std::get<0>(info);
@@ -3430,6 +3527,101 @@ void DFHelper::compute_wK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
             first_transform_pQq(nocc, bcount, block_size, wMp, T2p, Crp, C_buffers);
 
             // compute wK
+            C_DGEMM('N', 'T', nbf_, nbf_, nocc * block_size, 1.0, T1p, nocc * block_size, T2p, nocc * block_size, 1.0,
+                    wKp, nbf_);
+        }
+        bcount += block_size;
+    }
+}
+void DFHelper::grab_wK_AO(const std::string& filename, const size_t start, const size_t stop, double* Mp) {
+    // Read a Q-shell block of wK AO integrals from disk.
+    // Layout on disk matches grab_AO: for each p, naux * small_skips[p] values contiguous,
+    // so we can read the Q-slice for each p.
+    size_t begin = Qshell_aggs_[start];
+    size_t end = Qshell_aggs_[stop + 1] - 1;
+    size_t block_size = end - begin + 1;
+
+    for (size_t i = 0, sta = 0; i < nbf_; i++) {
+        size_t size = block_size * small_skips_[i];
+        size_t jump = begin * small_skips_[i];
+        get_tensor_AO(filename, &Mp[sta], size, big_skips_[i] + jump);
+        sta += size;
+    }
+}
+void DFHelper::compute_wK_out_of_core(std::vector<SharedMatrix> Cleft, std::vector<SharedMatrix> Cright,
+                                       std::vector<SharedMatrix> wK, size_t max_nocc) {
+    // Out-of-core wK computation: reads left and right integrals from disk in Q-shell blocks,
+    // half-transforms, and contracts to build wK matrices.
+    // This mirrors compute_wK() but reads from disk instead of in-core arrays.
+
+    std::vector<std::pair<size_t, size_t>> Qsteps;
+    std::tuple<size_t, size_t> info = Qshell_blocks_for_JK_build(Qsteps, max_nocc, false);
+    size_t tots = std::get<0>(info);
+    size_t totsb = std::get<1>(info);
+
+    // Prepare C buffers for half-transformation
+    std::vector<std::vector<double>> C_buffers(nthreads_);
+#pragma omp parallel num_threads(nthreads_)
+    {
+        int rank = 0;
+#ifdef _OPENMP
+        rank = omp_get_thread_num();
+#endif
+        C_buffers[rank] = std::vector<double>(nbf_ * std::max(max_nocc, nbf_));
+    }
+
+    // Allocate temporaries
+    size_t Ktmp_size = (!max_nocc ? totsb * 1 : totsb * max_nocc);
+    Ktmp_size = std::max(Ktmp_size * nbf_, nthreads_ * naux_);
+    auto T1 = std::make_unique<double[]>(Ktmp_size);
+    auto T2 = std::make_unique<double[]>(Ktmp_size);
+    double* T1p = T1.get();
+    double* T2p = T2.get();
+
+    // Allocate AO read buffers for left and right integrals
+    auto M_left = std::make_unique<double[]>(tots);
+    auto M_right = std::make_unique<double[]>(tots);
+    double* M1p = M_left.get();
+    double* wMp = M_right.get();
+
+    // Open streams for reading
+    stream_check(wK_left_filename_, "rb");
+    stream_check(wK_right_filename_, "rb");
+
+    size_t bcount = 0;
+    for (size_t bind = 0; bind < Qsteps.size(); bind++) {
+        size_t start = std::get<0>(Qsteps[bind]);
+        size_t stop = std::get<1>(Qsteps[bind]);
+        size_t begin = Qshell_aggs_[start];
+        size_t end = Qshell_aggs_[stop + 1] - 1;
+        size_t block_size = end - begin + 1;
+
+        // Read left integrals (metric-contracted) from disk
+        timer_on("DFH: wK Grab Left AOs");
+        grab_wK_AO(wK_left_filename_, start, stop, M1p);
+        timer_off("DFH: wK Grab Left AOs");
+
+        // Read right integrals (raw omega) from disk
+        timer_on("DFH: wK Grab Right AOs");
+        grab_wK_AO(wK_right_filename_, start, stop, wMp);
+        timer_off("DFH: wK Grab Right AOs");
+
+        // Half-transform and contract for each density
+        for (size_t i = 0; i < wK.size(); i++) {
+            size_t nocc = Cleft[i]->colspi()[0];
+            if (!nocc) {
+                continue;
+            }
+            double* Clp = Cleft[i]->pointer()[0];
+            double* Crp = Cright[i]->pointer()[0];
+            double* wKp = wK[i]->pointer()[0];
+
+            // half-transform left integrals with Cleft
+            first_transform_pQq(nocc, bcount, block_size, M1p, T1p, Clp, C_buffers);
+            // half-transform right integrals with Cright
+            first_transform_pQq(nocc, bcount, block_size, wMp, T2p, Crp, C_buffers);
+
+            // contract: wK += T1 * T2^T
             C_DGEMM('N', 'T', nbf_, nbf_, nocc * block_size, 1.0, T1p, nocc * block_size, T2p, nocc * block_size, 1.0,
                     wKp, nbf_);
         }
