@@ -287,6 +287,55 @@ void DiskDFJK::print_header() const {
         auxiliary_->print_by_level("outfile", print_);
     }
 }
+
+// => Integral Export Accessor Implementations <= //
+
+const std::vector<std::pair<int, int>>& DiskDFJK::function_pairs() const {
+    if (eri_.empty()) {
+        throw PSIEXCEPTION("DiskDFJK::function_pairs(): ERI engines not initialized. "
+                          "Call initialize() or preiterations() first.");
+    }
+    return eri_.front()->function_pairs();
+}
+
+const std::vector<long int>& DiskDFJK::function_pairs_to_dense() const {
+    if (eri_.empty()) {
+        throw PSIEXCEPTION("DiskDFJK::function_pairs_to_dense(): ERI engines not initialized. "
+                          "Call initialize() or preiterations() first.");
+    }
+    return eri_.front()->function_pairs_to_dense();
+}
+
+bool DiskDFJK::integrals_on_disk() const {
+    // Integrals are on disk if we saved them or are loading them
+    if (df_ints_io_ != "SAVE" && df_ints_io_ != "LOAD") {
+        return false;
+    }
+    
+    // Check if the PSIO file and entry actually exist
+    // Note: We need to check without modifying state (const method)
+    // PSIO doesn't have a const-correct exists() method, so we do a workaround
+    bool exists = false;
+    try {
+        // Try to check if file is open or can be opened
+        if (psio_->open_check(unit_)) {
+            // File is already open, check for entry
+            exists = psio_->tocscan(unit_, "(Q|mn) Integrals") != nullptr;
+        } else {
+            // Try to open and check
+            auto psio_nc = const_cast<PSIO*>(psio_.get());
+            psio_nc->open(unit_, PSIO_OPEN_OLD);
+            exists = psio_->tocscan(unit_, "(Q|mn) Integrals") != nullptr;
+            psio_nc->close(unit_, 1);  // Keep file
+        }
+    } catch (...) {
+        // File doesn't exist or can't be opened
+        exists = false;
+    }
+    
+    return exists;
+}
+
 bool DiskDFJK::is_core() {
     auto do_core = is_core_;
 

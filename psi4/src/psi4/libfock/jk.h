@@ -1043,6 +1043,52 @@ class PSI_API DiskDFJK : public JK {
     * type on output file
     */
     void print_header() const override;
+
+    // => Integral Export Accessors (for DFHelper integration) <= //
+
+    /**
+     * Get the Schwarz-screened function pairs (m,n) with m >= n
+     * These are the significant pairs that survived the screening process.
+     * @return vector of (m,n) pairs where m >= n
+     * @throws if ERI engines not initialized
+     */
+    const std::vector<std::pair<int, int>>& function_pairs() const;
+
+    /**
+     * Get reverse mapping from triangular index to packed index
+     * For triangular index tri_idx = m*(m+1)/2 + n (m >= n):
+     *   - Returns packed index if pair is significant
+     *   - Returns -1 if pair was screened out
+     * @return vector mapping triangular indices to packed indices
+     * @throws if ERI engines not initialized
+     */
+    const std::vector<long int>& function_pairs_to_dense() const;
+
+    /**
+     * Get number of significant function pairs (after Schwarz screening)
+     * @return number of (m,n) pairs with m >= n that survive screening
+     */
+    size_t n_function_pairs() const { return n_function_pairs_; }
+
+    /**
+     * Get the PSIO unit number where integrals are stored
+     * @return PSIO unit number for "(Q|mn) Integrals" entry
+     */
+    size_t integral_unit() const { return unit_; }
+
+    /**
+     * Get the auxiliary basis set used for density fitting
+     * @return shared pointer to auxiliary basis set
+     */
+    std::shared_ptr<BasisSet> auxiliary() const { return auxiliary_; }
+
+    /**
+     * Check if integrals are currently available on disk
+     * Integrals are on disk if df_ints_io is SAVE or LOAD and 
+     * the "(Q|mn) Integrals" entry exists in the PSIO file.
+     * @return true if integrals can be read from disk
+     */
+    bool integrals_on_disk() const;
 };
 /**
  * Class CDJK
