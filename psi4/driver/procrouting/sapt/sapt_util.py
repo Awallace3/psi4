@@ -122,7 +122,7 @@ def print_sapt_hf_summary(data, name, short=False, delta_hf=False):
         return ret
 
 
-def print_sapt_dft_summary(data, name, do_dft=True, short=False, do_disp=True, do_delta_dft=False):
+def print_sapt_dft_summary(data, name, dimer_wfn, do_dft=True, short=False, do_disp=True, do_delta_dft=False):
     ret = "   %s Results\n" % name
     ret += "  " + "-" * 105 + "\n"
 
@@ -134,6 +134,7 @@ def print_sapt_dft_summary(data, name, do_dft=True, short=False, do_disp=True, d
         ret += print_sapt_var("  Elst (extern-extern)", data["extern_extern_IE"]) + "\n"
     ret += "\n"
     core.set_variable("SAPT ELST ENERGY", data["Elst10,r"] + extern_extern_IE)
+    dimer_wfn.set_variable("SAPT ELST ENERGY", data["Elst10,r"])
 
     # Exchange
     ret += print_sapt_var("Exchange", data["Exch10"]) + "\n"
@@ -141,6 +142,7 @@ def print_sapt_dft_summary(data, name, do_dft=True, short=False, do_disp=True, d
     ret += print_sapt_var("  Exch1(S^2)", data["Exch10(S^2)"]) + "\n"
     ret += "\n"
     core.set_variable("SAPT EXCH ENERGY", data["Exch10"])
+    dimer_wfn.set_variable("SAPT EXCH ENERGY", data["Exch10"])
 
     # Induction
     ind = data["Ind20,r"] + data["Exch-Ind20,r"]
@@ -205,6 +207,7 @@ def print_sapt_dft_summary(data, name, do_dft=True, short=False, do_disp=True, d
 
     ret += "\n"
     core.set_variable("SAPT DISP ENERGY", disp)
+    dimer_wfn.set_variable("SAPT DISP ENERGY", disp)
 
     # Total energy
     total = data["Elst10,r"] + extern_extern_IE + data["Exch10"] + ind + disp
@@ -212,6 +215,9 @@ def print_sapt_dft_summary(data, name, do_dft=True, short=False, do_disp=True, d
     core.set_variable("SAPT(DFT) TOTAL ENERGY", total)
     core.set_variable("SAPT TOTAL ENERGY", total)
     core.set_variable("CURRENT ENERGY", total)
+    dimer_wfn.set_variable("SAPT(DFT) TOTAL ENERGY", total)
+    dimer_wfn.set_variable("SAPT TOTAL ENERGY", total)
+    dimer_wfn.set_variable("CURRENT ENERGY", total)
 
     ret += "  " + "-" * 105 + "\n"
     return ret

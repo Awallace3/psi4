@@ -729,6 +729,7 @@ def run_sapt_dft(name, **kwargs):
     # Copy data back into globals
     for k, v in data.items():
         core.set_variable(k, v)
+        dimer_wfn.set_variable(k, v)
 
     core.timer_off("SAPT(DFT) Energy")
     core.tstop()
@@ -1362,11 +1363,7 @@ def sapt_dft(
 
     # Print out final data
     core.print_out("\n")
-    core.print_out(
-        print_sapt_dft_summary(
-            data, "SAPT(DFT)", do_dft=do_dft, do_disp=do_disp, do_delta_dft=do_delta_dft
-        )
-    )
+    core.print_out(print_sapt_dft_summary(data, "SAPT(DFT)", dimer_wfn=dimer_wfn, do_dft=do_dft))
 
     # because FISAPT_obj drop sets core variables, avoid setting them twice
     if core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH") != "NONE" and do_fsapt:
