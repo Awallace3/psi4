@@ -1346,8 +1346,8 @@ symmetry c1
 if __name__ == "__main__":
     psi4.set_memory("32 GB")
     psi4.set_num_threads(12)
-    # test_saptdftd4()
-    test_einsum_terms()
+    test_saptdftd4()
+    # test_einsum_terms()
 
     # pytest this file
     # pytest.main(
