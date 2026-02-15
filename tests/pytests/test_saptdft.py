@@ -123,10 +123,15 @@ def test_sapt_dft_compute_ddft_d4():
 
 @pytest.mark.saptdft
 @pytest.mark.dftd4
-def test_saptdftd4():
-    """
-    Test SAPT(DFT)-D4
-    """
+@pytest.mark.parametrize(
+    "method, d4_type, expected_disp",
+    [
+        ("SAPT(DFT)-D4(I)", "intermolecular", -0.000416647650),
+        ("SAPT(DFT)-D4(S)", "supermolecular", -0.000303920719),
+        ("DFT-D(SAPT)", "gd4_supermolecular", -0.005731715146359108),
+    ],
+)
+def test_saptdft_disp_methods(method, d4_type, expected_disp):
     mol_dimer = psi4.geometry(
         """
 0 1
@@ -152,14 +157,12 @@ units bohr
             "sapt_dft_grac_shift_a": 0.136,
             "sapt_dft_grac_shift_b": 0.136,
             "SAPT_DFT_FUNCTIONAL": dft_functional,
-            "SAPT_DFT_D4_TYPE": "intermolecular",
         }
     )
-    psi4.energy("SAPT(DFT)-D4")
+    psi4.energy(method)
     vars = psi4.core.variables()
     DISP = vars["SAPT DISP ENERGY"]
-    # TODO: parameters need to be verified in sapt_proc.py with DFT-D4 manuscript
-    assert compare_values(-0.000416647650, DISP, 8, "DFT-D4 DISP")
+    assert compare_values(expected_disp, DISP, 8, "DFT-D4 DISP")
 
     psi4.set_options(
         {
@@ -1346,17 +1349,17 @@ symmetry c1
 if __name__ == "__main__":
     psi4.set_memory("32 GB")
     psi4.set_num_threads(12)
-    test_saptdftd4()
+    # test_saptdft_disp_methods()
     # test_einsum_terms()
 
     # pytest this file
-    # pytest.main(
-    #     [
-    #         __file__,
-    #         "-v",
-    #         "-s",
-    #         # "-k=test_saptdft_external_potential",
-    #         "--disable-warnings",
-    #         # "--maxfail=1",
-    #     ]
-    # )
+    pytest.main(
+        [
+            __file__,
+            "-v",
+            "-s",
+            "-k=test_saptdft_disp_methods",
+            "--disable-warnings",
+            # "--maxfail=1",
+        ]
+    )

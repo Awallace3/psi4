@@ -79,6 +79,24 @@ def run_sapt_dft(name, **kwargs):
     ein.initialize()
     core.timer_on("SAPT(DFT) Energy")
     # einsum_example()
+    if name.upper() == "SAPT(DFT)":
+        pass
+    elif "DFT-D" in name.upper():
+        if not core.has_option_changed("SAPT", "SAPT_DFT_DO_DISP"):
+            core.set_local_option("SAPT", "SAPT_DFT_DO_DISP", False)
+        core.set_local_option("SAPT", "SAPT_DFT_D4_IE", True)
+        core.set_local_option("SAPT", "SAPT_DFT_D4_TYPE", "gd4_supermolecular")
+    elif "D4(I)" in name.upper():
+        if not core.has_option_changed("SAPT", "SAPT_DFT_DO_DISP"):
+            core.set_local_option("SAPT", "SAPT_DFT_DO_DISP", False)
+        core.set_local_option("SAPT", "SAPT_DFT_D4_IE", True)
+        core.set_local_option("SAPT", "SAPT_DFT_D4_TYPE", "intermolecular")
+    elif "D4(S)" in name.upper():
+        if not core.has_option_changed("SAPT", "SAPT_DFT_DO_DISP"):
+            core.set_local_option("SAPT", "SAPT_DFT_DO_DISP", False)
+        core.set_local_option("SAPT", "SAPT_DFT_D4_IE", True)
+        core.set_local_option("SAPT", "SAPT_DFT_D4_TYPE", "supermolecular")
+
 
     # Alter default algorithm
     if not core.has_global_option_changed("SCF_TYPE"):
