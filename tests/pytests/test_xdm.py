@@ -1,15 +1,9 @@
 import psi4
 import pytest
 import numpy as np
+
 from pprint import pprint as pp
-
-from psi4 import core
-
-from utils import *
-from addons import using, uusing
-
-pytestmark = [pytest.mark.psi, pytest.mark.api]
-
+# pytestmark = [pytest.mark.psi, pytest.mark.api]
 
 def test_water_water_xdm():
     """Test XDM on water dimer."""
@@ -34,9 +28,11 @@ units angstrom
             "DFT_RADIAL_POINTS": 99,
         }
     )
-    psi4.energy("b3lyp-xdm", molecule=mol, bsse_type='cp')
+    e, wfn = psi4.energy("b3lyp-xdm", molecule=mol, bsse_type='cp', return_wfn=True)
+    print(e)
     qcvars = psi4.core.variables()
     pp(qcvars)
+    pp(wfn.variables())
     return
 
 
