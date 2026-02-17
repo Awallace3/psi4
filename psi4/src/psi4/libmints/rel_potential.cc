@@ -42,6 +42,7 @@ using namespace psi;
 RelPotentialInt::RelPotentialInt(std::vector<SphericalTransform>& st, std::shared_ptr<BasisSet> bs1,
                                  std::shared_ptr<BasisSet> bs2, int deriv)
     : OneBodyAOInt(st, bs1, bs2, deriv) {
+#ifdef LIBINT2_HAS_OPVOP
     if (deriv > 0) {
         throw PSIEXCEPTION("RelPotentialInt: deriv > 0 is not supported.");
     }
@@ -71,13 +72,21 @@ RelPotentialInt::RelPotentialInt(std::vector<SphericalTransform>& st, std::share
 
     buffer_ = nullptr;
     buffers_.resize(nchunk_);
+#else
+    throw PSIEXCEPTION("RelPotentialInt requires Libint2 >= 2.8.1 with opVop operator support. "
+                       "Rebuild Psi4 against a newer Libint2 to use relativistic integrals.");
+#endif
 }
 
 void RelPotentialInt::set_charge_field(const std::vector<std::pair<double, std::array<double, 3>>>& Zxyz) {
+#ifdef LIBINT2_HAS_OPVOP
     engine0_->set_params(Zxyz);
     if (engine1_) engine1_->set_params(Zxyz);
     if (engine2_) engine2_->set_params(Zxyz);
     Zxyz_ = Zxyz;
+#else
+    throw PSIEXCEPTION("RelPotentialInt requires Libint2 >= 2.8.1.");
+#endif
 }
 
 RelPotentialSOInt::RelPotentialSOInt(const std::shared_ptr<OneBodyAOInt>& aoint,

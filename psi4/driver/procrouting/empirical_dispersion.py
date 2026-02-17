@@ -422,3 +422,107 @@ class EmpiricalDispersion():
             wfn.set_variable('DISPERSION CORRECTION HESSIAN', H)
         optstash.restore()
         return core.Matrix.from_array(H)
+
+
+class XDMDispersionFunctor():
+    """Lightweight wrapper for XDM (exchange-hole dipole moment) dispersion correction.
+
+    Unlike other empirical dispersion corrections (D2, D3, D4), XDM requires a
+    converged wavefunction (electron density), so it must be computed post-SCF.
+
+    Attributes
+    ----------
+    engine : str
+        Always 'xdm'.
+    fctldash : str
+        Functional name with -XDM suffix.
+    dashlevel : str
+        Always 'xdm'.
+
+    Parameters
+    ----------
+    functional_name
+        Name of the DFT functional (used for free-atom volume lookup).
+    basis_name
+        Name of the basis set (used for BJ parameter lookup together with functional).
+    a1
+        Explicit a1 BJ damping parameter (overrides lookup).
+    a2_ang
+        Explicit a2 BJ damping parameter in angstrom (overrides lookup).
+
+    """
+    def __init__(self, functional_name: str, basis_name: str = None, a1: float = None, a2_ang: float = None):
+        self.engine = "xdm"
+        self.fctldash = f"{functional_name}-xdm"
+        self.dashlevel = "xdm"
+        self._functional_name = functional_name
+        self._basis_name = basis_name
+        self._a1 = a1
+        self._a2_ang = a2_ang
+
+        if a1 is not None and a2_ang is not None:
+            self.xdm = core.XDMDispersion.build(functional_name, a1, a2_ang)
+        elif basis_name is not None:
+            self.xdm = core.XDMDispersion.build(functional_name, basis_name)
+        else:
+            raise ValidationError("XDM requires a basis name or explicit a1, a2 parameters.")
+
+    def print_out(self):
+        """Format XDM dispersion parameters for output file."""
+        text = []
+        text.append("   => {}: XDM Dispersion <=".format(self.fctldash.upper()))
+        text.append('')
+        text.append('    Exchange-Hole Dipole Moment (XDM) with Becke-Johnson Damping')
+        text.append('    A. D. Becke and E. R. Johnson, J. Chem. Phys. 127, 154108 (2007)')
+        text.append('')
+        text.append("    %6s = %14.6f" % ("a1", self.xdm.a1()))
+        text.append("    %6s = %14.6f [bohr]" % ("a2", self.xdm.a2()))
+        text.append("    NOTE: XDM requires a converged density and is computed post-SCF.")
+        text.append('\n')
+        core.print_out('\n'.join(text))
+
+    def compute_energy(self, molecule: core.Molecule, wfn: core.Wavefunction = None) -> float:
+        """Compute XDM dispersion energy from a converged wavefunction.
+
+        Parameters
+        ----------
+        molecule
+            System (unused for XDM, but kept for API compatibility).
+        wfn
+            Converged wavefunction with density matrix. Required.
+
+        Returns
+        -------
+        float
+            Dispersion energy [Eh].
+
+        """
+        if wfn is None:
+            raise ValidationError("XDM dispersion requires a converged wavefunction (density matrix).")
+
+        ene = self.xdm.compute_energy(wfn)
+        core.set_variable('DISPERSION CORRECTION ENERGY', ene)
+        if self.fctldash:
+            core.set_variable(f"{self.fctldash.upper()} DISPERSION CORRECTION ENERGY", ene)
+        return ene
+
+    def compute_gradient(self, molecule: core.Molecule, wfn: core.Wavefunction = None) -> core.Matrix:
+        """Compute XDM dispersion gradient from a converged wavefunction.
+
+        Parameters
+        ----------
+        molecule
+            System (unused for XDM, but kept for API compatibility).
+        wfn
+            Converged wavefunction with density matrix. Required.
+
+        Returns
+        -------
+        Matrix
+            (nat, 3) dispersion gradient [Eh/a0].
+
+        """
+        if wfn is None:
+            raise ValidationError("XDM dispersion requires a converged wavefunction (density matrix).")
+
+        return self.xdm.compute_gradient(wfn)

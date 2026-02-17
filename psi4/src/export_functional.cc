@@ -41,6 +41,8 @@
 #include "psi4/libfock/cubature.h"
 #include "psi4/libmints/basisset.h"
 #include "psi4/libsapt_solver/fdds_disp.h"
+#include "psi4/libxdm/xdm.h"
+#include "psi4/libmints/wavefunction.h"
 #include "psi4/libqt/qt.h"
 #include "psi4/libpsi4util/process.h"
 
@@ -313,6 +315,24 @@ void export_functional(py::module &m) {
         .def("a1", &Dispersion::get_a1, "docstring")
         .def("a2", &Dispersion::get_a2, "docstring")
         .def("print_out", &Dispersion::py_print, "docstring");
+
+    py::class_<xdm::XDMDispersion, std::shared_ptr<xdm::XDMDispersion>>(m, "XDMDispersion",
+        "XDM (exchange-hole dipole moment) dispersion correction with Becke-Johnson damping.")
+        .def(py::init<double, double, const std::string&>(), "a1"_a, "a2_bohr"_a, "functional_name"_a,
+             "Construct with BJ damping parameters a1 and a2 (in bohr) and functional name.")
+        .def_static("build", py::overload_cast<const std::string&, const std::string&>(&xdm::XDMDispersion::build),
+                    "functional"_a, "basis"_a,
+                    "Build from functional and basis set names, looking up fitted a1/a2 parameters.")
+        .def_static("build", py::overload_cast<const std::string&, double, double>(&xdm::XDMDispersion::build),
+                    "functional"_a, "a1"_a, "a2_angstrom"_a,
+                    "Build from functional name with explicit a1 and a2 (a2 in angstrom).")
+        .def("compute_energy", &xdm::XDMDispersion::compute_energy, "wfn"_a,
+             "Compute XDM dispersion energy from a converged wavefunction.")
+        .def("compute_gradient", &xdm::XDMDispersion::compute_gradient, "wfn"_a,
+             "Compute XDM dispersion gradient (geometry-only, fixed coefficients).")
+        .def("a1", &xdm::XDMDispersion::a1, "Get a1 BJ damping parameter.")
+        .def("a2", &xdm::XDMDispersion::a2, "Get a2 BJ damping parameter (bohr).")
+        .def("functional_name", &xdm::XDMDispersion::functional_name, "Get functional name.");
 
     py::class_<sapt::FDDS_Dispersion, std::shared_ptr<sapt::FDDS_Dispersion>>(m, "FDDS_Dispersion", "docstring")
         .def(py::init<std::shared_ptr<BasisSet>, std::shared_ptr<BasisSet>, std::map<std::string, SharedMatrix>,

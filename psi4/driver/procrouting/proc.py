@@ -1397,7 +1397,24 @@ def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwar
     superfunc, disp_type = dft.build_superfunctional(name, restricted)
 
     if disp_type:
-        if isinstance(name, dict):
+        if disp_type["type"] == "xdm":
+            # XDM dispersion: requires converged wavefunction, computed post-SCF
+            basis_name = core.get_global_option("BASIS")
+            params = disp_type.get("params", {})
+            # Strip -XDM suffix from functional name for BJ parameter lookup
+            func_name = superfunc.name()
+            if func_name.upper().endswith("-XDM"):
+                func_name = func_name[:-4]
+            if "a1" in params and "a2" in params:
+                _disp_functor = empirical_dispersion.XDMDispersionFunctor(
+                    functional_name=func_name,
+                    a1=params["a1"],
+                    a2_ang=params["a2"])
+            else:
+                _disp_functor = empirical_dispersion.XDMDispersionFunctor(
+                    functional_name=func_name,
+                    basis_name=basis_name)
+        elif isinstance(name, dict):
             # user dft_functional={} spec - type for lookup, dict val for param defs,
             #   name & citation discarded so only param matches to existing defs will print labels
             _disp_functor = empirical_dispersion.EmpiricalDispersion(name_hint='',
@@ -1835,7 +1852,8 @@ def scf_helper(name, post_scf=True, **kwargs):
         scf_wfn.basisset().print_detail_out()
 
     # Compute additive correction: dftd3, mp2d, dftd4, etc.
-    if hasattr(scf_wfn, "_disp_functor"):
+    # XDM is computed post-SCF since it needs the converged density.
+    if hasattr(scf_wfn, "_disp_functor") and scf_wfn._disp_functor.engine != 'xdm':
         disp_energy = scf_wfn._disp_functor.compute_energy(scf_wfn.molecule(), scf_wfn)
         scf_wfn.set_variable("-D Energy", disp_energy)
 
@@ -1877,6 +1895,14 @@ def scf_helper(name, post_scf=True, **kwargs):
         scf_wfn.set_jk(jk_obj)
 
     e_scf = scf_wfn.compute_energy()
+
+    # Post-SCF XDM dispersion correction (requires converged density)
+    if hasattr(scf_wfn, "_disp_functor") and scf_wfn._disp_functor.engine == 'xdm':
+        xdm_energy = scf_wfn._disp_functor.compute_energy(scf_wfn.molecule(), scf_wfn)
+        scf_wfn.set_variable("-D Energy", xdm_energy)
+        scf_wfn.set_variable("DISPERSION CORRECTION ENERGY", xdm_energy)
+        e_scf += xdm_energy
+
     for obj in [core, scf_wfn]:
         # set_variable("SCF TOTAL ENERGY")  # P::e SCF
         for pv in ["SCF TOTAL ENERGY", "CURRENT ENERGY", "CURRENT REFERENCE ENERGY"]:

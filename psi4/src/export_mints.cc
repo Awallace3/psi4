@@ -1749,7 +1749,8 @@ void export_mints(py::module& m) {
             .def("get_x4", &LS_THC_Computer::get_x4, "Returns x4 factor from LS-THC factorization")
             .def("get_Z", &LS_THC_Computer::get_Z, "Returns Z factor from LS-THC factorization");
 
-    m.def("libint2_supports", [](const std::string& comp) { return libint2::supports(comp); },
+    // libint2::supports() is only available in libint2 >= 2.8.1
+    m.def("libint2_supports", [](const std::string& /* comp */) { return false; },
        "Whether the linked Libint2 supports a particular ordering or integral type/derivative/AM. Use maximally uniform AM for latter.");
 
     // when L2 is pure cmake

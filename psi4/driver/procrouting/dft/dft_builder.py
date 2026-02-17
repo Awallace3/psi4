@@ -125,6 +125,9 @@ for functional_name in dict_functionals:
     # if the parent functional is already dispersion corrected:
     if "dispersion" in dict_functionals[functional_name]:
         disp = dict_functionals[functional_name]['dispersion']
+        # XDM dispersion is handled natively (not via qcengine dashcoeff), skip dashcoeff logic
+        if disp['type'] == 'xdm':
+            continue
         for formal in functional_aliases:
             # "bless" the original functional dft/*_functionals dispersion definition including aliases
             dashcoeff_supplement[disp['type']]['definitions'][formal] = disp
@@ -235,14 +238,21 @@ def check_consistency(func_dictionary):
     if "dispersion" in func_dictionary:
         disp = func_dictionary["dispersion"]
         # 3b) check dispersion type present and known
-        if "type" not in disp or disp["type"] not in _dispersion_aliases:
+        if "type" not in disp:
             raise ValidationError(
-                f"SCF: Dispersion type ({disp['type']}) should be among ({_dispersion_aliases.keys()})")
+                f"SCF: Dispersion type not specified in functional {name}")
+        # XDM dispersion is handled natively, not through qcengine dashcoeff
+        if disp["type"] == "xdm":
+            pass  # XDM params are looked up at runtime from C++ tables
+        elif disp["type"] not in _dispersion_aliases:
+            raise ValidationError(
+                f"SCF: Dispersion type ({disp['type']}) should be among ({list(_dispersion_aliases.keys()) + ['xdm']})")
     # 3c) check dispersion params complete
-        allowed_params = sorted(dashcoeff[_dispersion_aliases[disp["type"]]]["default"].keys())
-        if "params" not in disp or sorted(disp["params"].keys()) != allowed_params:
-            raise ValidationError(
-                f"SCF: Dispersion params for {name} ({list(disp['params'].keys())}) must include all ({allowed_params})")
+        else:
+            allowed_params = sorted(dashcoeff[_dispersion_aliases[disp["type"]]]["default"].keys())
+            if "params" not in disp or sorted(disp["params"].keys()) != allowed_params:
+                raise ValidationError(
+                    f"SCF: Dispersion params for {name} ({list(disp['params'].keys())}) must include all ({allowed_params})")
     # 3d) check formatting for dispersion citation
         if "citation" in disp:
             cit = disp["citation"]

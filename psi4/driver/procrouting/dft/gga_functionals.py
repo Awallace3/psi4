@@ -375,6 +375,51 @@ funcs.append({
 })
 
 
+# XDM-corrected GGA functionals
+# BJ damping parameters are basis-dependent and looked up at runtime from the C++ table.
+funcs.append({
+    "name": "BLYP-XDM",
+    "x_functionals": {
+        "GGA_X_B88": {}
+    },
+    "c_functionals": {
+        "GGA_C_LYP": {}
+    },
+    "dispersion": {
+        "type": "xdm",
+    },
+    "description": '    BLYP with XDM dispersion correction\n',
+})
+
+funcs.append({
+    "name": "PW86PBE-XDM",
+    "x_functionals": {
+        "GGA_X_PW86": {}
+    },
+    "c_functionals": {
+        "GGA_C_PBE": {}
+    },
+    "dispersion": {
+        "type": "xdm",
+    },
+    "description": '    PW86PBE with XDM dispersion correction\n',
+})
+
+funcs.append({
+    "name": "PBE-XDM",
+    "x_functionals": {
+        "GGA_X_PBE": {}
+    },
+    "c_functionals": {
+        "GGA_C_PBE": {}
+    },
+    "dispersion": {
+        "type": "xdm",
+    },
+    "description": '    PBE with XDM dispersion correction\n',
+})
+
+
 functional_list = {}
 for functional in funcs:
     functional_list[functional["name"].lower()] = functional
