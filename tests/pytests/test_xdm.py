@@ -17,22 +17,24 @@ def test_water_water_xdm():
     psi4.set_memory("32 GB")
     mol = psi4.geometry("""
 0 1
-8   -0.702196054   -0.056060256   0.009942262
-1   -1.022193224   0.846775782   -0.011488714
-1   0.257521062   0.042121496   0.005218999
+O    -1.55100700  -0.11452000   0.00000000
+H    -1.93425900   0.76250300   0.00000000
+H    -0.59967700   0.04071200   0.00000000
 --
 0 1
-8   2.268880784   0.026340101   0.000508029
-1   2.645502399   -0.412039965   0.766632411
-1   2.641145101   -0.449872874   -0.744894473
+O    1.35062500   0.11146900   0.00000000
+H    1.68039800  -0.37374100  -0.75856100
+H    1.68039800  -0.37374100   0.75856100
 units angstrom
     """)
     psi4.set_options(
         {
             "basis": "aug-cc-pvtz",
+            "DFT_SPHERICAL_POINTS": 590,
+            "DFT_RADIAL_POINTS": 99,
         }
     )
-    psi4.energy("pbe0-xdm/aug-cc-pvdz", molecule=mol, bsse_type='cp')
+    psi4.energy("b3lyp-xdm", molecule=mol, bsse_type='cp')
     qcvars = psi4.core.variables()
     pp(qcvars)
     return
