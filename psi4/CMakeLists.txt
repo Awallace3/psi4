@@ -183,7 +183,7 @@ else()
     message(STATUS "Disabled gdma ${gdma_DIR}")
 endif()
 
-find_package(Libint2 2.7.0 CONFIG REQUIRED  # edit in codedeps (was 2.8.1, relaxed for conda libint)
+find_package(Libint2 2.8.1 CONFIG REQUIRED  # edit in codedeps
 #  COMPONENTS
 #    sss
 #    CXX_ho
