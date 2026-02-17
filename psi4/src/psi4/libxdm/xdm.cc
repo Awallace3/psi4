@@ -41,7 +41,6 @@
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
-#include "psi4/libpsi4util/PsiOutStream.h"
 #include "psi4/libpsi4util/exception.h"
 #include "psi4/libqt/qt.h"
 #include "psi4/psi4-dec.h"
@@ -49,7 +48,6 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -71,55 +69,79 @@ struct BJParams {
 static const std::map<std::string, BJParams>& bj_param_table() {
     static const std::map<std::string, BJParams> table = {
         // B3LYP
-        {"b3lyp/6-31+g*", {0.6356, 1.5119}},
-        {"b3lyp/6-311+g(2d,2p)", {0.6535, 1.4499}},
-        {"b3lyp/aug-cc-pvdz", {0.6514, 1.4399}},
+        {"b3lyp/6-31+g*", {0.4515, 2.1357}},
+        {"b3lyp/6-31+g**", {0.4306, 2.2076}},
+        {"b3lyp/6-311+g(2d,2p)", {0.4376, 2.1607}},
+        {"b3lyp/aug-cc-pvdz", {0.6224, 1.7068}},
         {"b3lyp/aug-cc-pvtz", {0.6356, 1.5119}},
-        {"b3lyp/aug-cc-pvqz", {0.6352, 1.5306}},
 
         // PW86PBE
-        {"pw86pbe/6-31+g*", {0.6836, 1.5045}},
-        {"pw86pbe/6-311+g(2d,2p)", {0.7017, 1.4502}},
-        {"pw86pbe/aug-cc-pvdz", {0.6985, 1.4407}},
-        {"pw86pbe/aug-cc-pvtz", {0.6836, 1.5045}},
-        {"pw86pbe/aug-cc-pvqz", {0.6827, 1.5228}},
+        {"pw86pbe/6-31+g*", {0.6336, 1.9148}},
+        {"pw86pbe/6-31+g**", {0.6935, 1.7519}},
+        {"pw86pbe/aug-cc-pvdz", {0.6736, 1.9327}},
+        {"pw86pbe/aug-cc-pvtz", {0.7564, 1.4545}},
 
         // PBE
-        {"pbe/6-31+g*", {0.4492, 2.2834}},
-        {"pbe/6-311+g(2d,2p)", {0.4687, 2.1673}},
-        {"pbe/aug-cc-pvdz", {0.4675, 2.1574}},
-        {"pbe/aug-cc-pvtz", {0.4492, 2.2834}},
-        {"pbe/aug-cc-pvqz", {0.4480, 2.3087}},
+        {"pbe/6-31+g*", {0.2445, 3.2596}},
+        {"pbe/6-31+g**", {0.2746, 3.1857}},
+        {"pbe/aug-cc-pvdz", {0.2061, 3.5486}},
+        {"pbe/aug-cc-pvtz", {0.4492, 2.5517}},
 
         // PBE0
-        {"pbe0/6-31+g*", {0.4186, 2.2648}},
-        {"pbe0/6-311+g(2d,2p)", {0.4378, 2.1442}},
+        {"pbe0/6-31+g*", {0.0845, 3.7940}},
+        {"pbe0/6-31+g**", {0.1163, 3.7191}},
         {"pbe0/aug-cc-pvdz", {0.1389, 3.8310}},
-        {"pbe0/aug-cc-pvtz", {0.4186, 2.2648}},
-        {"pbe0/aug-cc-pvqz", {0.4175, 2.2903}},
+        {"pbe0/aug-cc-pvtz", {0.4186, 2.6791}},
 
         // BLYP
-        {"blyp/6-31+g*", {0.6512, 1.4155}},
-        {"blyp/6-311+g(2d,2p)", {0.6660, 1.3527}},
-        {"blyp/aug-cc-pvdz", {0.6639, 1.3432}},
-        {"blyp/aug-cc-pvtz", {0.6512, 1.4155}},
-        {"blyp/aug-cc-pvqz", {0.6499, 1.4338}},
+        {"blyp/6-31+g*", {0.5942, 1.4555}},
+        {"blyp/6-31+g**", {0.5653, 1.5460}},
+        {"blyp/aug-cc-pvdz", {0.9742, 0.3427}},
+        {"blyp/aug-cc-pvtz", {0.7647, 0.8457}},
 
         // BHAHLYP (BHandHLYP, 50% HF)
-        {"bhahlyp/aug-cc-pvtz", {0.5956, 1.5972}},
-        {"bhandh/aug-cc-pvtz", {0.5956, 1.5972}},
-        {"bhandhlyp/aug-cc-pvtz", {0.5956, 1.5972}},
+        {"bhahlyp/6-31+g*", {0.1483, 3.3435}},
+        {"bhahlyp/6-31+g**", {0.1432, 3.3705}},
+        {"bhandh/aug-cc-pvtz", {0.5610, 1.9894}},
+        {"bhandhlyp/aug-cc-pvtz", {0.5610, 1.9894}},
+        {"bhalfandhalf/aug-cc-pvtz", {0.5610, 1.9894}},
+        {"bhalfandhalf/aug-cc-pvdz", {0.1247, 3.5725}},
 
         // CAM-B3LYP
-        {"cam-b3lyp/aug-cc-pvtz", {0.5929, 1.4933}},
+        {"cam-b3lyp/6-31+g*", {0.2315, 3.2123}},
+        {"cam-b3lyp/6-31+g**", {0.2365, 3.2081}},
+        {"cam-b3lyp/aug-cc-pvdz", {0.1849, 3.5140}},
+        {"cam-b3lyp/aug-cc-pvtz", {0.3248, 2.8607}},
+        {"camb3lyp/aug-cc-pvtz", {0.3248, 2.8607}},
+        {"camb3lyp/aug-cc-pvdz", {0.1849, 3.5140}},
 
         // LC-wPBE
-        {"lc-wpbe/aug-cc-pvtz", {0.3984, 2.2747}},
-        {"lcwpbe/aug-cc-pvtz", {0.3984, 2.2747}},
+        {"lc-wpbe/aug-cc-pvtz", {1.0149, 0.6755}},
+        {"lcwpbe/aug-cc-pvtz", {1.0149, 0.6755}},
+        {"lc-wpbe/6-31+g*", {0.8134, 1.3736}},
+        {"lcwpbe/6-31+g*", {0.8134, 1.3736}},
+        {"lc-wpbe/6-31+g**", {0.8934, 1.1466}},
+        {"lcwpbe/6-31+g**", {0.8934, 1.1466}},
+        {"lcwpbe/aug-cc-pvdz", {1.1800, 0.4179}},
 
-        // B971 (B97-1)
-        {"b971/aug-cc-pvtz", {0.5991, 1.5700}},
-        {"b97-1/aug-cc-pvtz", {0.5991, 1.5700}},
+        // B97-1
+        {"b971/aug-cc-pvtz", {0.1998, 3.5367}},
+        {"b97-1/aug-cc-pvtz", {0.1998, 3.5367}},
+        {"b97-1/6-31+g*", {0.0118, 4.1784}},
+        {"b97-1/6-31+g**", {0.0429, 4.1090}},
+
+        // HF
+        {"hf/aug-cc-pvdz", {0.3698, 2.1961}},
+        {"hf/aug-cc-pvtz", {0.3698, 2.1961}},
+
+        // B86BPBE
+        {"b86bpbe/aug-cc-pvtz", {0.7839, 1.2544}},
+
+        // TPSS
+        {"tpss/aug-cc-pvtz", {0.6612, 1.5111}},
+
+        // HSE06
+        {"hse06/aug-cc-pvtz", {0.3691, 2.8793}},
     };
     return table;
 }
