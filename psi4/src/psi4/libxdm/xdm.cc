@@ -94,7 +94,7 @@ static const std::map<std::string, BJParams>& bj_param_table() {
         // PBE0
         {"pbe0/6-31+g*", {0.4186, 2.2648}},
         {"pbe0/6-311+g(2d,2p)", {0.4378, 2.1442}},
-        {"pbe0/aug-cc-pvdz", {0.4360, 2.1344}},
+        {"pbe0/aug-cc-pvdz", {0.1389, 3.8310}},
         {"pbe0/aug-cc-pvtz", {0.4186, 2.2648}},
         {"pbe0/aug-cc-pvqz", {0.4175, 2.2903}},
 
