@@ -42,6 +42,7 @@
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libpsi4util/exception.h"
+#include "psi4/libpsi4util/process.h"
 #include "psi4/libqt/qt.h"
 #include "psi4/psi4-dec.h"
 
@@ -521,6 +522,16 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
     double e_disp = 0.0;
     double** gp = gradient ? gradient->pointer() : nullptr;
 
+    // Create matrices to store pairwise coefficients
+    auto c6_mat = std::make_shared<Matrix>("XDM C6 Coefficients", natom, natom);
+    auto c8_mat = std::make_shared<Matrix>("XDM C8 Coefficients", natom, natom);
+    auto c10_mat = std::make_shared<Matrix>("XDM C10 Coefficients", natom, natom);
+    auto rc_mat = std::make_shared<Matrix>("XDM Rc Coefficients", natom, natom);
+    double** c6p = c6_mat->pointer();
+    double** c8p = c8_mat->pointer();
+    double** c10p = c10_mat->pointer();
+    double** rcp = rc_mat->pointer();
+
     outfile->Printf("  ==> XDM Pairwise Coefficients <==\n\n");
     outfile->Printf("    %4s %4s %12s %16s %16s %16s %12s %12s\n", "i", "j", "dij", "C6", "C8", "C10", "Rc",
                     "Rvdw");
@@ -553,6 +564,16 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
             // Critical radius and vdW radius (BJ damping)
             double rc = (std::sqrt(c8 / c6) + std::sqrt(std::sqrt(c10 / c6)) + std::sqrt(c10 / c8)) / 3.0;
             double rvdw = a1_ * rc + a2_;
+
+            // Store coefficients in symmetric matrices
+            c6p[i][j] = c6;
+            c6p[j][i] = c6;
+            c8p[i][j] = c8;
+            c8p[j][i] = c8;
+            c10p[i][j] = c10;
+            c10p[j][i] = c10;
+            rcp[i][j] = rc;
+            rcp[j][i] = rc;
 
             double rvdw6 = std::pow(rvdw, 6);
             double rvdw8 = std::pow(rvdw, 8);
@@ -592,6 +613,12 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
                             c10, rc, rvdw);
         }
     }
+
+    // Store coefficient matrices as QC variables
+    Process::environment.arrays["XDM C6 COEFFICIENTS"] = c6_mat;
+    Process::environment.arrays["XDM C8 COEFFICIENTS"] = c8_mat;
+    Process::environment.arrays["XDM C10 COEFFICIENTS"] = c10_mat;
+    Process::environment.arrays["XDM RC COEFFICIENTS"] = rc_mat;
 
     outfile->Printf("\n");
     outfile->Printf("  XDM Dispersion Energy: %20.12f [Eh]\n\n", e_disp);
