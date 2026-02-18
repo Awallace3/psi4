@@ -478,7 +478,7 @@ no_com
             "SAPT_DFT_FUNCTIONAL": "HF",
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "SAPT_DFT_DO_FSAPT": "FISAPT",
             # "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
         }
     )
@@ -2266,10 +2266,10 @@ if __name__ == "__main__":
     # test_fsaptdft_fisapt0()
     # test_fsaptdft_fisapt0_d4()
     # test_fsaptdft()
-    # test_fsaptdft_fsapt0_simple()
+    test_fsaptdft_fsapt0_simple()
     # test_fsaptdftd4_psivars()
     # test_fsaptdft_disp0_fisapt0_psivars()
-    test_fsapthf_psivars()
+    # test_fsapthf_psivars()
     # test_fsaptdft_fsapt0()
     # test_fsaptdftd4_psivars_pbe0()
 
