@@ -695,7 +695,7 @@ void FISAPT::find_einsums() {
         return out;
     };
 
-    auto row_dot_einsum = [&](const double* lhs, const double* rhs, size_t n, const std::string&) {
+    auto row_dot_einsum = [&](const double* lhs, const double* rhs, size_t n) {
         auto lhs_e = TensorView<double, 1>{lhs, Dim<1>{n}};
         auto rhs_e = TensorView<double, 1>{rhs, Dim<1>{n}};
         double dot = 0.0;
@@ -1041,7 +1041,9 @@ void FISAPT::find_einsums() {
     int snb = 0;
     int snA = 0;
 
-    if (options_.get_bool("SSAPT0_SCALE")) {
+    const bool do_scale = options_.get_bool("SSAPT0_SCALE");
+
+    if (do_scale) {
     // This will NOT work with ISAPT(SAOn/SIAOn) and I (Konrad) think that's OK.
         sna = na;
         snB = nB;
@@ -1089,6 +1091,16 @@ void FISAPT::find_einsums() {
         dfh_->write_disk_tensor("WBar", Var, {(size_t) nB + nb1, (size_t) nB + nb1 + 1});
     }
 
+    auto Uocc_A_e = matrix_to_tensor(Uocc_A, "Uocc_A_e");
+    auto x2A = std::make_shared<Matrix>("x2A", Uocc_A->ncol(), nr);
+    auto x2A_e = TensorView<double, 2>{x2A->pointer()[0], Dim<2>{static_cast<size_t>(Uocc_A->ncol()), static_cast<size_t>(nr)}};
+    double** x2Ap = x2A->pointer();
+
+    auto Uocc_B_e = matrix_to_tensor(Uocc_B, "Uocc_B_e");
+    auto x2B = std::make_shared<Matrix>("x2B", Uocc_B->ncol(), ns);
+    auto x2B_e = TensorView<double, 2>{x2B->pointer()[0], Dim<2>{static_cast<size_t>(Uocc_B->ncol()), static_cast<size_t>(ns)}};
+    double** x2Bp = x2B->pointer();
+
     for (size_t B = 0; B < nB + nb1 + 1; B++) { // add one for external potential
         // ESP
         dfh_->fill_tensor("WBar", wB, {B, B + 1});
@@ -1101,22 +1113,18 @@ void FISAPT::find_einsums() {
         }
 
         // Backtransform the amplitude to LO
-        auto Uocc_A_e = matrix_to_tensor(Uocc_A, "Uocc_A_e");
         auto xA_e = matrix_to_tensor(xA, "xA_e");
-        auto x2A = std::make_shared<Matrix>("x2A", Uocc_A->ncol(), xA->ncol());
-        auto x2A_e = TensorView<double, 2>{x2A->pointer()[0], Dim<2>{static_cast<size_t>(Uocc_A->ncol()), static_cast<size_t>(xA->ncol())}};
         einsum(0.0, Indices{i, j}, &x2A_e, 1.0, Indices{k, i}, Uocc_A_e, Indices{k, j}, xA_e);
-        double** x2Ap = x2A->pointer();
 
         // Zip up the Ind20 contributions
         for (int a = 0; a < na; a++) {
-            double Jval = 2.0 * row_dot_einsum(x2Ap[a], wBTp[a], static_cast<size_t>(nr), "Jval_unc_AB");
-            double Kval = 2.0 * row_dot_einsum(x2Ap[a], uBTp[a], static_cast<size_t>(nr), "Kval_unc_AB");
+            double Jval = 2.0 * row_dot_einsum(x2Ap[a], wBTp[a], static_cast<size_t>(nr));
+            double Kval = 2.0 * row_dot_einsum(x2Ap[a], uBTp[a], static_cast<size_t>(nr));
             Ind20u_AB_termsp[a][B] = Jval;
             Ind20u_AB += Jval;
             ExchInd20u_AB_termsp[a][B] = Kval;
             ExchInd20u_AB += Kval;
-            if (options_.get_bool("SSAPT0_SCALE")) {
+            if (do_scale) {
                 sExchInd20u_AB_termsp[a][B] = Kval;
                 sExchInd20u_AB += Kval;
                 sIndu_AB_termsp[a][B] = Jval + Kval;
@@ -1155,22 +1163,18 @@ void FISAPT::find_einsums() {
         }
 
         // Backtransform the amplitude to LO
-        auto Uocc_B_e = matrix_to_tensor(Uocc_B, "Uocc_B_e");
         auto xB_e = matrix_to_tensor(xB, "xB_e");
-        auto x2B = std::make_shared<Matrix>("x2B", Uocc_B->ncol(), xB->ncol());
-        auto x2B_e = TensorView<double, 2>{x2B->pointer()[0], Dim<2>{static_cast<size_t>(Uocc_B->ncol()), static_cast<size_t>(xB->ncol())}};
         einsum(0.0, Indices{i, j}, &x2B_e, 1.0, Indices{k, i}, Uocc_B_e, Indices{k, j}, xB_e);
-        double** x2Bp = x2B->pointer();
 
         // Zip up the Ind20 contributions
         for (int b = 0; b < nb; b++) {
-            double Jval = 2.0 * row_dot_einsum(x2Bp[b], wATp[b], static_cast<size_t>(ns), "Jval_unc_BA");
-            double Kval = 2.0 * row_dot_einsum(x2Bp[b], uATp[b], static_cast<size_t>(ns), "Kval_unc_BA");
+            double Jval = 2.0 * row_dot_einsum(x2Bp[b], wATp[b], static_cast<size_t>(ns));
+            double Kval = 2.0 * row_dot_einsum(x2Bp[b], uATp[b], static_cast<size_t>(ns));
             Ind20u_BA_termsp[A][b] = Jval;
             Ind20u_BA += Jval;
             ExchInd20u_BA_termsp[A][b] = Kval;
             ExchInd20u_BA += Kval;
-            if (options_.get_bool("SSAPT0_SCALE")) {
+            if (do_scale) {
                 sExchInd20u_BA_termsp[A][b] = Kval;
                 sExchInd20u_BA += Kval;
                 sIndu_BA_termsp[A][b] = Jval + Kval;
@@ -1193,7 +1197,7 @@ void FISAPT::find_einsums() {
     outfile->Printf("    Exch-Ind20,u        = %18.12lf [Eh]\n", ExchInd20u);
     outfile->Printf("\n");
     // fflush(outfile);
-    if (options_.get_bool("SSAPT0_SCALE")) {
+    if (do_scale) {
         double sExchInd20u = sExchInd20u_AB + sExchInd20u_BA;
         outfile->Printf("    sExch-Ind20,u (A<-B) = %18.12lf [Eh]\n", sExchInd20u_AB);
         outfile->Printf("    sExch-Ind20,u (B<-A) = %18.12lf [Eh]\n", sExchInd20u_BA);
@@ -1300,17 +1304,13 @@ void FISAPT::find_einsums() {
 
             if (C < nB + nb1 + 1) {
                 // Backtransform the amplitude to LO
-                auto Uocc_A_e = matrix_to_tensor(Uocc_A, "Uocc_A_cpl_e");
                 auto xA_e = matrix_to_tensor(xA, "xA_cpl_e");
-                auto x2A = std::make_shared<Matrix>("x2A", Uocc_A->ncol(), xA->ncol());
-                auto x2A_e = TensorView<double, 2>{x2A->pointer()[0], Dim<2>{static_cast<size_t>(Uocc_A->ncol()), static_cast<size_t>(xA->ncol())}};
                 einsum(0.0, Indices{i, j}, &x2A_e, 1.0, Indices{k, i}, Uocc_A_e, Indices{k, j}, xA_e);
-                double** x2Ap = x2A->pointer();
 
                 // Zip up the Ind20 contributions
                 for (int a = 0; a < na; a++) {
-                    double Jval = 2.0 * row_dot_einsum(x2Ap[a], wBTp[a], static_cast<size_t>(nr), "Jval_cpl_AB");
-                    double Kval = 2.0 * row_dot_einsum(x2Ap[a], uBTp[a], static_cast<size_t>(nr), "Kval_cpl_AB");
+                    double Jval = 2.0 * row_dot_einsum(x2Ap[a], wBTp[a], static_cast<size_t>(nr));
+                    double Kval = 2.0 * row_dot_einsum(x2Ap[a], uBTp[a], static_cast<size_t>(nr));
                     Ind20r_AB_termsp[a][C] = Jval;
                     Ind20r_AB += Jval;
                     ExchInd20r_AB_termsp[a][C] = Kval;
@@ -1322,17 +1322,13 @@ void FISAPT::find_einsums() {
 
             if (C < nA + na1 + 1) {
                 // Backtransform the amplitude to LO
-                auto Uocc_B_e = matrix_to_tensor(Uocc_B, "Uocc_B_cpl_e");
                 auto xB_e = matrix_to_tensor(xB, "xB_cpl_e");
-                auto x2B = std::make_shared<Matrix>("x2B", Uocc_B->ncol(), xB->ncol());
-                auto x2B_e = TensorView<double, 2>{x2B->pointer()[0], Dim<2>{static_cast<size_t>(Uocc_B->ncol()), static_cast<size_t>(xB->ncol())}};
                 einsum(0.0, Indices{i, j}, &x2B_e, 1.0, Indices{k, i}, Uocc_B_e, Indices{k, j}, xB_e);
-                double** x2Bp = x2B->pointer();
 
                 // Zip up the Ind20 contributions
                 for (int b = 0; b < nb; b++) {
-                    double Jval = 2.0 * row_dot_einsum(x2Bp[b], wATp[b], static_cast<size_t>(ns), "Jval_cpl_BA");
-                    double Kval = 2.0 * row_dot_einsum(x2Bp[b], uATp[b], static_cast<size_t>(ns), "Kval_cpl_BA");
+                    double Jval = 2.0 * row_dot_einsum(x2Bp[b], wATp[b], static_cast<size_t>(ns));
+                    double Kval = 2.0 * row_dot_einsum(x2Bp[b], uATp[b], static_cast<size_t>(ns));
                     Ind20r_BA_termsp[C][b] = Jval;
                     Ind20r_BA += Jval;
                     ExchInd20r_BA_termsp[C][b] = Kval;
@@ -2110,28 +2106,28 @@ void FISAPT::fdisp_einsums() {
         einsum(beta, Indices{i, j}, &C_e, alpha, Indices{i, p}, A_e, Indices{j, p}, B_e);
     };
 
-    auto gemm_nn_einsum = [&](double alpha, const double* A, int m, int k, int lda, const double* B, int n, int ldb,
-                              double beta, double* C, int ldc) {
-        auto A_e = ptr_to_tensor2_const(A, m, k, lda);
-        auto B_e = ptr_to_tensor2_const(B, k, n, ldb);
-        auto C_e = ptr_to_tensor2(C, m, n, ldc);
-        einsum(beta, Indices{i, j}, &C_e, alpha, Indices{i, p}, A_e, Indices{p, j}, B_e);
-    };
-
-    auto gemm_tn_einsum = [&](double alpha, const double* A, int m, int k, int lda, const double* B, int n, int ldb,
-                              double beta, double* C, int ldc) {
-        auto A_e = ptr_to_tensor2_const(A, k, m, lda);
-        auto B_e = ptr_to_tensor2_const(B, k, n, ldb);
-        auto C_e = ptr_to_tensor2(C, m, n, ldc);
-        einsum(beta, Indices{i, j}, &C_e, alpha, Indices{p, i}, A_e, Indices{p, j}, B_e);
-    };
-
     auto ger_einsum = [&](double alpha, const double* x, int m, int incx, const double* y, int n, int incy, double* C,
                           int ldc) {
         auto x_e = TensorView<double, 1>{x, Dim<1>{static_cast<size_t>(m)}, Stride<1>{static_cast<size_t>(incx)}};
         auto y_e = TensorView<double, 1>{y, Dim<1>{static_cast<size_t>(n)}, Stride<1>{static_cast<size_t>(incy)}};
         auto C_e = ptr_to_tensor2(C, m, n, ldc);
         einsum(1.0, Indices{i, j}, &C_e, alpha, Indices{i}, x_e, Indices{j}, y_e);
+    };
+
+    auto UB_e = ptr_to_tensor2_const(UBp[0], nb, nb, nb);
+    auto UA_e = ptr_to_tensor2_const(UAp[0], na, na, na);
+
+    auto gemm_nn_with_ub_einsum = [&](double alpha, const double* A, int m, int k, int lda, double beta, double* C,
+                                       int ldc) {
+        auto A_e = ptr_to_tensor2_const(A, m, k, lda);
+        auto C_e = ptr_to_tensor2(C, m, nb, ldc);
+        einsum(beta, Indices{i, j}, &C_e, alpha, Indices{i, p}, A_e, Indices{p, j}, UB_e);
+    };
+
+    auto gemm_tn_with_ua_einsum = [&](double alpha, const double* B, int n, int ldb, double beta, double* C, int ldc) {
+        auto B_e = ptr_to_tensor2_const(B, na, n, ldb);
+        auto C_e = ptr_to_tensor2(C, na, n, ldc);
+        einsum(beta, Indices{i, j}, &C_e, alpha, Indices{p, i}, UA_e, Indices{p, j}, B_e);
     };
 
     // ==> Master Loop <== //
@@ -2242,10 +2238,10 @@ void FISAPT::fdisp_einsums() {
                         }
                     }
  
-                    gemm_nn_einsum(1.0, Tabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb);
-                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, T2abp[0], nb);
-                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb);
-                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb);
+                    gemm_nn_with_ub_einsum(1.0, Tabp[0], na, nb, nb, 0.0, Iabp[0], nb);
+                    gemm_tn_with_ua_einsum(1.0, Iabp[0], nb, nb, 0.0, T2abp[0], nb);
+                    gemm_nn_with_ub_einsum(1.0, Vabp[0], na, nb, nb, 0.0, Iabp[0], nb);
+                    gemm_tn_with_ua_einsum(1.0, Iabp[0], nb, nb, 0.0, V2abp[0], nb);
  
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
@@ -2270,8 +2266,8 @@ void FISAPT::fdisp_einsums() {
                     ger_einsum(1.0, &Qarp[0][r + rstart], na, nr, &SAbsp[0][s + sstart], nb, ns, Vabp[0], nb);
                     ger_einsum(1.0, &SBarp[0][r + rstart], na, nr, &Qbsp[0][s + sstart], nb, ns, Vabp[0], nb);
 
-                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb);
-                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb);
+                    gemm_nn_with_ub_einsum(1.0, Vabp[0], na, nb, nb, 0.0, Iabp[0], nb);
+                    gemm_tn_with_ua_einsum(1.0, Iabp[0], nb, nb, 0.0, V2abp[0], nb);
 
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
@@ -2296,8 +2292,8 @@ void FISAPT::fdisp_einsums() {
                     ger_einsum(1.0, &Sasp[0][s + sstart], na, ns, &KXOYbrp[0][r + rstart], nb, nr, Vabp[0], nb);
                     ger_einsum(1.0, &KXOYasp[0][s + sstart], na, ns, &Sbrp[0][r + rstart], nb, nr, Vabp[0], nb);
 
-                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb);
-                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb);
+                    gemm_nn_with_ub_einsum(1.0, Vabp[0], na, nb, nb, 0.0, Iabp[0], nb);
+                    gemm_tn_with_ua_einsum(1.0, Iabp[0], nb, nb, 0.0, V2abp[0], nb);
 
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
@@ -2358,10 +2354,10 @@ void FISAPT::fdisp_einsums() {
                         }
                     }
 
-                    gemm_nn_einsum(1.0, Tabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb);
-                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, T2abp[0], nb);
-                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb);
-                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb);
+                    gemm_nn_with_ub_einsum(1.0, Tabp[0], na, nb, nb, 0.0, Iabp[0], nb);
+                    gemm_tn_with_ua_einsum(1.0, Iabp[0], nb, nb, 0.0, T2abp[0], nb);
+                    gemm_nn_with_ub_einsum(1.0, Vabp[0], na, nb, nb, 0.0, Iabp[0], nb);
+                    gemm_tn_with_ua_einsum(1.0, Iabp[0], nb, nb, 0.0, V2abp[0], nb);
 
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
@@ -2386,8 +2382,8 @@ void FISAPT::fdisp_einsums() {
                     ger_einsum(1.0, &Qarp[0][r + rstart], na, nr, &SAbsp[0][s + sstart], nb, ns, Vabp[0], nb);
                     ger_einsum(1.0, &SBarp[0][r + rstart], na, nr, &Qbsp[0][s + sstart], nb, ns, Vabp[0], nb);
 
-                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb);
-                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb);
+                    gemm_nn_with_ub_einsum(1.0, Vabp[0], na, nb, nb, 0.0, Iabp[0], nb);
+                    gemm_tn_with_ua_einsum(1.0, Iabp[0], nb, nb, 0.0, V2abp[0], nb);
 
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
