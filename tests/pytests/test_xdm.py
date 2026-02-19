@@ -29,8 +29,9 @@ units angstrom
     qcvars = psi4.core.variables()
     pp(qcvars)
     # set np print options to have commas, no truncation and 12 decimal places
-    np.set_printoptions(precision=12, suppress=True, separator=", ")
     print(qcvars['XDM C6 COEFFICIENTS'].np)
+    wfn_vars = wfn.variables()
+    print(wfn_vars['XDM C6 COEFFICIENTS'].np)
     return
 
 
