@@ -31,6 +31,7 @@
 #include <Einsums/TensorAlgebra/Detail/Index.hpp>
 #include <TensorAlgebra/TensorAlgebra.hpp>
 #include <Einsums/Tensor/Tensor.hpp>
+#include <Einsums/Logging.hpp>
 #include <algorithm>
 #include <ctime>
 #include <functional>
@@ -70,11 +71,25 @@ namespace psi {
 
 namespace fisapt {
 
+namespace {
+
+inline void quiet_einsums_logging_for_fisapt() {
+    static bool configured = false;
+    if (!configured) {
+        einsums::detail::get_einsums_logger().set_level(spdlog::level::warn);
+        configured = true;
+    }
+}
+
+}  // namespace
+
 // Compute fragment-fragment partitioning of electrostatic contribution
 void FISAPT::felst_einsums() {
     using namespace einsums;
     using namespace einsums::tensor_algebra;
     using namespace einsums::index;
+
+    quiet_einsums_logging_for_fisapt();
 
     outfile->Printf("  ==> F-SAPT Electrostatics (Einsums) <==\n\n");
 
@@ -348,6 +363,8 @@ void FISAPT::fexch_einsums() {
     using namespace einsums::tensor_algebra;
     using namespace einsums::index;
 
+    quiet_einsums_logging_for_fisapt();
+
     outfile->Printf("  ==> F-SAPT Exchange (Einsums) <==\n\n");
 
     // => Sizing <= //
@@ -611,6 +628,8 @@ void FISAPT::find_einsums() {
     using namespace einsums;
     using namespace einsums::tensor_algebra;
     using namespace einsums::index;
+
+    quiet_einsums_logging_for_fisapt();
 
     outfile->Printf("  ==> F-SAPT Induction (Einsums) <==\n\n");
 
@@ -1458,6 +1477,8 @@ void FISAPT::fdisp_einsums() {
     using namespace einsums::tensor_algebra;
     using namespace einsums::index;
 
+    quiet_einsums_logging_for_fisapt();
+
     outfile->Printf("  ==> F-SAPT Dispersion (Einsums) <==\n\n");
 
     // => Auxiliary Basis Set <= //
@@ -2065,50 +2086,51 @@ void FISAPT::fdisp_einsums() {
     double** UAp = Uaocc_A->pointer();
     double** UBp = Uaocc_B->pointer();
 
+    const bool do_scale = options_.get_bool("SSAPT0_SCALE");
     double scale = 1.0;
-    if (options_.get_bool("SSAPT0_SCALE")) {
+    if (do_scale) {
         scale = sSAPT0_scale_;
     }
 
-    auto ptr_to_tensor2 = [](double* ptr, int rows, int cols, int ld, const std::string&) {
+    auto ptr_to_tensor2 = [](double* ptr, int rows, int cols, int ld) {
         return TensorView<double, 2>{ptr, Dim<2>{static_cast<size_t>(rows), static_cast<size_t>(cols)},
                                      Stride<2>{static_cast<size_t>(ld), 1}};
     };
 
-    auto ptr_to_tensor2_const = [](const double* ptr, int rows, int cols, int ld, const std::string&) {
+    auto ptr_to_tensor2_const = [](const double* ptr, int rows, int cols, int ld) {
         return TensorView<double, 2>{ptr, Dim<2>{static_cast<size_t>(rows), static_cast<size_t>(cols)},
                                      Stride<2>{static_cast<size_t>(ld), 1}};
     };
 
     auto gemm_nt_einsum = [&](double alpha, const double* A, int m, int k, int lda, const double* B, int n, int ldb,
-                              double beta, double* C, int ldc, const std::string& name) {
-        auto A_e = ptr_to_tensor2_const(A, m, k, lda, name + "_A");
-        auto B_e = ptr_to_tensor2_const(B, n, k, ldb, name + "_B");
-        auto C_e = ptr_to_tensor2(C, m, n, ldc, name + "_C");
+                              double beta, double* C, int ldc) {
+        auto A_e = ptr_to_tensor2_const(A, m, k, lda);
+        auto B_e = ptr_to_tensor2_const(B, n, k, ldb);
+        auto C_e = ptr_to_tensor2(C, m, n, ldc);
         einsum(beta, Indices{i, j}, &C_e, alpha, Indices{i, p}, A_e, Indices{j, p}, B_e);
     };
 
     auto gemm_nn_einsum = [&](double alpha, const double* A, int m, int k, int lda, const double* B, int n, int ldb,
-                              double beta, double* C, int ldc, const std::string& name) {
-        auto A_e = ptr_to_tensor2_const(A, m, k, lda, name + "_A");
-        auto B_e = ptr_to_tensor2_const(B, k, n, ldb, name + "_B");
-        auto C_e = ptr_to_tensor2(C, m, n, ldc, name + "_C");
+                              double beta, double* C, int ldc) {
+        auto A_e = ptr_to_tensor2_const(A, m, k, lda);
+        auto B_e = ptr_to_tensor2_const(B, k, n, ldb);
+        auto C_e = ptr_to_tensor2(C, m, n, ldc);
         einsum(beta, Indices{i, j}, &C_e, alpha, Indices{i, p}, A_e, Indices{p, j}, B_e);
     };
 
     auto gemm_tn_einsum = [&](double alpha, const double* A, int m, int k, int lda, const double* B, int n, int ldb,
-                              double beta, double* C, int ldc, const std::string& name) {
-        auto A_e = ptr_to_tensor2_const(A, k, m, lda, name + "_A");
-        auto B_e = ptr_to_tensor2_const(B, k, n, ldb, name + "_B");
-        auto C_e = ptr_to_tensor2(C, m, n, ldc, name + "_C");
+                              double beta, double* C, int ldc) {
+        auto A_e = ptr_to_tensor2_const(A, k, m, lda);
+        auto B_e = ptr_to_tensor2_const(B, k, n, ldb);
+        auto C_e = ptr_to_tensor2(C, m, n, ldc);
         einsum(beta, Indices{i, j}, &C_e, alpha, Indices{p, i}, A_e, Indices{p, j}, B_e);
     };
 
     auto ger_einsum = [&](double alpha, const double* x, int m, int incx, const double* y, int n, int incy, double* C,
-                          int ldc, const std::string& name) {
+                          int ldc) {
         auto x_e = TensorView<double, 1>{x, Dim<1>{static_cast<size_t>(m)}, Stride<1>{static_cast<size_t>(incx)}};
         auto y_e = TensorView<double, 1>{y, Dim<1>{static_cast<size_t>(n)}, Stride<1>{static_cast<size_t>(incy)}};
-        auto C_e = ptr_to_tensor2(C, m, n, ldc, name + "_C");
+        auto C_e = ptr_to_tensor2(C, m, n, ldc);
         einsum(1.0, Indices{i, j}, &C_e, alpha, Indices{i}, x_e, Indices{j}, y_e);
     };
 
@@ -2213,17 +2235,17 @@ void FISAPT::fdisp_einsums() {
  
                     // => Amplitudes, Disp20 <= //
  
-                    gemm_nt_einsum(1.0, Aarp[(r)*na], na, nQ, nQ, Absp[(s)*nb], nb, nQ, 0.0, Vabp[0], nb, "disp_nt");
+                    gemm_nt_einsum(1.0, Aarp[(r)*na], na, nQ, nQ, Absp[(s)*nb], nb, nQ, 0.0, Vabp[0], nb);
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
                             Tabp[a][b] = Vabp[a][b] / (eap[a] + ebp[b] - erp[r + rstart] - esp[s + sstart]);
                         }
                     }
  
-                    gemm_nn_einsum(1.0, Tabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb, "disp_nn_1");
-                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, T2abp[0], nb, "disp_tn_1");
-                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb, "disp_nn_2");
-                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb, "disp_tn_2");
+                    gemm_nn_einsum(1.0, Tabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb);
+                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, T2abp[0], nb);
+                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb);
+                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb);
  
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
@@ -2236,25 +2258,25 @@ void FISAPT::fdisp_einsums() {
 
                     // > Q1-Q3 < //
 
-                    gemm_nt_einsum(1.0, Basp[(s)*na], na, nQ, nQ, Bbrp[(r)*nb], nb, nQ, 0.0, Vabp[0], nb, "exch_nt_1");
-                    gemm_nt_einsum(1.0, Casp[(s)*na], na, nQ, nQ, Cbrp[(r)*nb], nb, nQ, 1.0, Vabp[0], nb, "exch_nt_2");
-                    gemm_nt_einsum(1.0, Aarp[(r)*na], na, nQ, nQ, Dbsp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb, "exch_nt_3");
-                    gemm_nt_einsum(1.0, Darp[(r)*na], na, nQ, nQ, Absp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb, "exch_nt_4");
+                    gemm_nt_einsum(1.0, Basp[(s)*na], na, nQ, nQ, Bbrp[(r)*nb], nb, nQ, 0.0, Vabp[0], nb);
+                    gemm_nt_einsum(1.0, Casp[(s)*na], na, nQ, nQ, Cbrp[(r)*nb], nb, nQ, 1.0, Vabp[0], nb);
+                    gemm_nt_einsum(1.0, Aarp[(r)*na], na, nQ, nQ, Dbsp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb);
+                    gemm_nt_einsum(1.0, Darp[(r)*na], na, nQ, nQ, Absp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb);
 
                     // > V,J,K < //
 
-                    ger_einsum(1.0, &Sasp[0][s + sstart], na, ns, &Qbrp[0][r + rstart], nb, nr, Vabp[0], nb, "exch_ger_1");
-                    ger_einsum(1.0, &Qasp[0][s + sstart], na, ns, &Sbrp[0][r + rstart], nb, nr, Vabp[0], nb, "exch_ger_2");
-                    ger_einsum(1.0, &Qarp[0][r + rstart], na, nr, &SAbsp[0][s + sstart], nb, ns, Vabp[0], nb, "exch_ger_3");
-                    ger_einsum(1.0, &SBarp[0][r + rstart], na, nr, &Qbsp[0][s + sstart], nb, ns, Vabp[0], nb, "exch_ger_4");
+                    ger_einsum(1.0, &Sasp[0][s + sstart], na, ns, &Qbrp[0][r + rstart], nb, nr, Vabp[0], nb);
+                    ger_einsum(1.0, &Qasp[0][s + sstart], na, ns, &Sbrp[0][r + rstart], nb, nr, Vabp[0], nb);
+                    ger_einsum(1.0, &Qarp[0][r + rstart], na, nr, &SAbsp[0][s + sstart], nb, ns, Vabp[0], nb);
+                    ger_einsum(1.0, &SBarp[0][r + rstart], na, nr, &Qbsp[0][s + sstart], nb, ns, Vabp[0], nb);
 
-                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb, "exch_nn");
-                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb, "exch_tn");
+                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb);
+                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb);
 
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
                             E_exch_disp20Tp[a][b] -= 2.0 * T2abp[a][b] * V2abp[a][b];
-                            if (options_.get_bool("SSAPT0_SCALE"))
+                            if (do_scale)
                                 sE_exch_disp20Tp[a][b] -= scale * 2.0 * T2abp[a][b] * V2abp[a][b];
                             ExchDisp20 -= 2.0 * T2abp[a][b] * V2abp[a][b];
                             sExchDisp20 -= scale * 2.0 * T2abp[a][b] * V2abp[a][b];
@@ -2264,18 +2286,18 @@ void FISAPT::fdisp_einsums() {
                     // now, additional term for parallel/perpendicular spin coupling
                     // > Q1-Q3 < //
 
-                    gemm_nt_einsum(1.0, BYasp[(s)*na], na, nQ, nQ, BXbrp[(r)*nb], nb, nQ, 0.0, Vabp[0], nb, "par_nt_1");
-                    gemm_nt_einsum(1.0, CXasp[(s)*na], na, nQ, nQ, CYbrp[(r)*nb], nb, nQ, 1.0, Vabp[0], nb, "par_nt_2");
-                    gemm_nt_einsum(1.0, Aarp[(r)*na], na, nQ, nQ, DYbsp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb, "par_nt_3");
-                    gemm_nt_einsum(1.0, DXarp[(r)*na], na, nQ, nQ, Absp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb, "par_nt_4");
+                    gemm_nt_einsum(1.0, BYasp[(s)*na], na, nQ, nQ, BXbrp[(r)*nb], nb, nQ, 0.0, Vabp[0], nb);
+                    gemm_nt_einsum(1.0, CXasp[(s)*na], na, nQ, nQ, CYbrp[(r)*nb], nb, nQ, 1.0, Vabp[0], nb);
+                    gemm_nt_einsum(1.0, Aarp[(r)*na], na, nQ, nQ, DYbsp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb);
+                    gemm_nt_einsum(1.0, DXarp[(r)*na], na, nQ, nQ, Absp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb);
 
                     // > V,J,K < //
 
-                    ger_einsum(1.0, &Sasp[0][s + sstart], na, ns, &KXOYbrp[0][r + rstart], nb, nr, Vabp[0], nb, "par_ger_1");
-                    ger_einsum(1.0, &KXOYasp[0][s + sstart], na, ns, &Sbrp[0][r + rstart], nb, nr, Vabp[0], nb, "par_ger_2");
+                    ger_einsum(1.0, &Sasp[0][s + sstart], na, ns, &KXOYbrp[0][r + rstart], nb, nr, Vabp[0], nb);
+                    ger_einsum(1.0, &KXOYasp[0][s + sstart], na, ns, &Sbrp[0][r + rstart], nb, nr, Vabp[0], nb);
 
-                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb, "par_nn");
-                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb, "par_tn");
+                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb);
+                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb);
 
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
@@ -2329,17 +2351,17 @@ void FISAPT::fdisp_einsums() {
 
                     // => Amplitudes, Disp20 <= //
 
-                    gemm_nt_einsum(1.0, Aarp[(r)*na], na, nQ, nQ, Absp[(s)*nb], nb, nQ, 0.0, Vabp[0], nb, "disp2_nt");
+                    gemm_nt_einsum(1.0, Aarp[(r)*na], na, nQ, nQ, Absp[(s)*nb], nb, nQ, 0.0, Vabp[0], nb);
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
                             Tabp[a][b] = Vabp[a][b] / (eap[a] + ebp[b] - erp[r + rstart] - esp[s + sstart]);
                         }
                     }
 
-                    gemm_nn_einsum(1.0, Tabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb, "disp2_nn_1");
-                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, T2abp[0], nb, "disp2_tn_1");
-                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb, "disp2_nn_2");
-                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb, "disp2_tn_2");
+                    gemm_nn_einsum(1.0, Tabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb);
+                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, T2abp[0], nb);
+                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb);
+                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb);
 
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
@@ -2352,25 +2374,25 @@ void FISAPT::fdisp_einsums() {
 
                     // > Q1-Q3 < //
 
-                    gemm_nt_einsum(1.0, Basp[(s)*na], na, nQ, nQ, Bbrp[(r)*nb], nb, nQ, 0.0, Vabp[0], nb, "exch2_nt_1");
-                    gemm_nt_einsum(1.0, Casp[(s)*na], na, nQ, nQ, Cbrp[(r)*nb], nb, nQ, 1.0, Vabp[0], nb, "exch2_nt_2");
-                    gemm_nt_einsum(1.0, Aarp[(r)*na], na, nQ, nQ, Dbsp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb, "exch2_nt_3");
-                    gemm_nt_einsum(1.0, Darp[(r)*na], na, nQ, nQ, Absp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb, "exch2_nt_4");
+                    gemm_nt_einsum(1.0, Basp[(s)*na], na, nQ, nQ, Bbrp[(r)*nb], nb, nQ, 0.0, Vabp[0], nb);
+                    gemm_nt_einsum(1.0, Casp[(s)*na], na, nQ, nQ, Cbrp[(r)*nb], nb, nQ, 1.0, Vabp[0], nb);
+                    gemm_nt_einsum(1.0, Aarp[(r)*na], na, nQ, nQ, Dbsp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb);
+                    gemm_nt_einsum(1.0, Darp[(r)*na], na, nQ, nQ, Absp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb);
 
                     // > V,J,K < //
 
-                    ger_einsum(1.0, &Sasp[0][s + sstart], na, ns, &Qbrp[0][r + rstart], nb, nr, Vabp[0], nb, "exch2_ger_1");
-                    ger_einsum(1.0, &Qasp[0][s + sstart], na, ns, &Sbrp[0][r + rstart], nb, nr, Vabp[0], nb, "exch2_ger_2");
-                    ger_einsum(1.0, &Qarp[0][r + rstart], na, nr, &SAbsp[0][s + sstart], nb, ns, Vabp[0], nb, "exch2_ger_3");
-                    ger_einsum(1.0, &SBarp[0][r + rstart], na, nr, &Qbsp[0][s + sstart], nb, ns, Vabp[0], nb, "exch2_ger_4");
+                    ger_einsum(1.0, &Sasp[0][s + sstart], na, ns, &Qbrp[0][r + rstart], nb, nr, Vabp[0], nb);
+                    ger_einsum(1.0, &Qasp[0][s + sstart], na, ns, &Sbrp[0][r + rstart], nb, nr, Vabp[0], nb);
+                    ger_einsum(1.0, &Qarp[0][r + rstart], na, nr, &SAbsp[0][s + sstart], nb, ns, Vabp[0], nb);
+                    ger_einsum(1.0, &SBarp[0][r + rstart], na, nr, &Qbsp[0][s + sstart], nb, ns, Vabp[0], nb);
 
-                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb, "exch2_nn");
-                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb, "exch2_tn");
+                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb);
+                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb);
 
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
                             E_exch_disp20Tp[a][b] -= 2.0 * T2abp[a][b] * V2abp[a][b];
-                            if (options_.get_bool("SSAPT0_SCALE"))
+                            if (do_scale)
                                 sE_exch_disp20Tp[a][b] -= scale * 2.0 * T2abp[a][b] * V2abp[a][b];
                             ExchDisp20 -= 2.0 * T2abp[a][b] * V2abp[a][b];
                             sExchDisp20 -= scale * 2.0 * T2abp[a][b] * V2abp[a][b];
