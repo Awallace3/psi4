@@ -47,6 +47,7 @@ no_com"""
             "scf_type": "df",
             "guess": "sad",
             "freeze_core": "true",
+            "FISAPT_USE_EINSUMS": True,
             "FISAPT_FSAPT_FILEPATH": "none",
         }
     )
@@ -144,6 +145,7 @@ no_com"""
             "scf_type": "df",
             "guess": "sad",
             "freeze_core": "true",
+            "FISAPT_USE_EINSUMS": True,
             "FISAPT_FSAPT_FILEPATH": "none",
         }
     )

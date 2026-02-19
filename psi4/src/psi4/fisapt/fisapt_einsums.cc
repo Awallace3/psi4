@@ -30,6 +30,7 @@
 
 #include <Einsums/TensorAlgebra/Detail/Index.hpp>
 #include <TensorAlgebra/TensorAlgebra.hpp>
+#include <Einsums/Tensor/Tensor.hpp>
 #include <algorithm>
 #include <ctime>
 #include <functional>
@@ -102,6 +103,13 @@ void FISAPT::felst_einsums() {
         L0A->copy(matrices_["Locc0A"]);
         L0B->copy(matrices_["Locc0B"]);
     }
+
+    auto matrix_to_tensor = [](const std::shared_ptr<Matrix>& M, const std::string&) {
+        return TensorView<double, 2>{M->pointer()[0], Dim<2>{static_cast<size_t>(M->nrow()), static_cast<size_t>(M->ncol())}};
+    };
+
+    auto L0A_e = matrix_to_tensor(L0A, "L0A_e");
+    auto L0B_e = matrix_to_tensor(L0B, "L0B_e");
 // for the SAOn/SIAOn variants, we need to do the same things but with the Locc0A, Locc0B matrices augmented by the link orbital. 
 // The local matrices L0A/L0B hold the correct form, augmented or not, as needed.
 
@@ -218,14 +226,13 @@ void FISAPT::felst_einsums() {
         dfh_->fill_tensor("Abb", QbCp[b], {b, b + 1}, {b, b + 1});
     }
 
-    std::shared_ptr<Matrix> Elst10_3 = linalg::doublet(QaC, QbC, false, true);
-    // need to initialize Elst10_3 based on QaC and QbC sizes for einsums compatibility
-    // std::shared_ptr<Matrix> Elst10_3 = std::make_shared<Matrix>("Elst10_3", na, nb);
-    // einsum(Indices{a, b}, Elst10_3.get(), Indices{a, c}, QaC.get(), Indices{b, c}, QbC.get());
-    double** Elst10_3p = Elst10_3->pointer();
+    auto QaC_e = TensorView<double, 2>{QaC->pointer()[0], Dim<2>{static_cast<size_t>(na), nQ}};
+    auto QbC_e = TensorView<double, 2>{QbC->pointer()[0], Dim<2>{static_cast<size_t>(nb), nQ}};
+    auto Elst10_3_e = create_tensor<double>("Elst10_3_e", static_cast<size_t>(na), static_cast<size_t>(nb));
+    einsum(0.0, Indices{i, j}, &Elst10_3_e, 1.0, Indices{i, k}, QaC_e, Indices{j, k}, QbC_e);
     for (int a = 0; a < na; a++) {
         for (int b = 0; b < nb; b++) {
-            double E = 4.0 * Elst10_3p[a][b];
+            double E = 4.0 * Elst10_3_e(a, b);
             Elst10_terms[2] += E;
             Ep[a + nA][b + nB] += E;
         }
@@ -247,11 +254,13 @@ void FISAPT::felst_einsums() {
         Vtemp2->zero();
         Vint2->set_charge_field({{ZAp[A], {mol->x(A), mol->y(A), mol->z(A)}}});
         Vint2->compute(Vtemp2);
-        std::shared_ptr<Matrix> Vbb =
-            linalg::triplet(L0B, Vtemp2, L0B, true, false, false);
-        double** Vbbp = Vbb->pointer();
+        auto Vtemp2_e = matrix_to_tensor(Vtemp2, "Vtemp2_e");
+        auto Vtemp2L0B_e = create_tensor<double>("Vtemp2L0B_e", static_cast<size_t>(nn), static_cast<size_t>(nb));
+        auto Vbb_e = create_tensor<double>("Vbb_e", static_cast<size_t>(nb), static_cast<size_t>(nb));
+        einsum(0.0, Indices{p, r}, &Vtemp2L0B_e, 1.0, Indices{p, q}, Vtemp2_e, Indices{q, r}, L0B_e);
+        einsum(0.0, Indices{i, j}, &Vbb_e, 1.0, Indices{p, i}, L0B_e, Indices{p, j}, Vtemp2L0B_e);
         for (int b = 0; b < nb; b++) {
-            double E = 2.0 * Vbbp[b][b];
+            double E = 2.0 * Vbb_e(b, b);
             Elst10_terms[1] += E;
             Ep[A][b + nB] += E;
         }
@@ -259,11 +268,13 @@ void FISAPT::felst_einsums() {
 
     // Add Extern-A - Orbital b interaction
     if (reference_->has_potential_variable("A")) {
-        std::shared_ptr<Matrix> Vbb =
-            linalg::triplet(L0B, matrices_["VA_extern"], L0B, true, false, false);
-        double** Vbbp = Vbb->pointer();
+        auto VA_extern_e = matrix_to_tensor(matrices_["VA_extern"], "VA_extern_e");
+        auto VA_externL0B_e = create_tensor<double>("VA_externL0B_e", static_cast<size_t>(nn), static_cast<size_t>(nb));
+        auto Vbb_e = create_tensor<double>("Vbb_extA_e", static_cast<size_t>(nb), static_cast<size_t>(nb));
+        einsum(0.0, Indices{p, r}, &VA_externL0B_e, 1.0, Indices{p, q}, VA_extern_e, Indices{q, r}, L0B_e);
+        einsum(0.0, Indices{i, j}, &Vbb_e, 1.0, Indices{p, i}, L0B_e, Indices{p, j}, VA_externL0B_e);
         for (int b = 0; b < nb; b++) {
-            double E = 2.0 * Vbbp[b][b];
+            double E = 2.0 * Vbb_e(b, b);
             Elst10_terms[1] += E;
             Ep[nA + na][b + nB] += E;
         }
@@ -276,11 +287,13 @@ void FISAPT::felst_einsums() {
         Vtemp2->zero();
         Vint2->set_charge_field({{ZBp[B], {mol->x(B), mol->y(B), mol->z(B)}}});
         Vint2->compute(Vtemp2);
-        std::shared_ptr<Matrix> Vaa =
-            linalg::triplet(L0A, Vtemp2, L0A, true, false, false);
-        double** Vaap = Vaa->pointer();
+        auto Vtemp2_e = matrix_to_tensor(Vtemp2, "Vtemp2A_e");
+        auto Vtemp2L0A_e = create_tensor<double>("Vtemp2L0A_e", static_cast<size_t>(nn), static_cast<size_t>(na));
+        auto Vaa_e = create_tensor<double>("Vaa_e", static_cast<size_t>(na), static_cast<size_t>(na));
+        einsum(0.0, Indices{p, r}, &Vtemp2L0A_e, 1.0, Indices{p, q}, Vtemp2_e, Indices{q, r}, L0A_e);
+        einsum(0.0, Indices{i, j}, &Vaa_e, 1.0, Indices{p, i}, L0A_e, Indices{p, j}, Vtemp2L0A_e);
         for (int a = 0; a < na; a++) {
-            double E = 2.0 * Vaap[a][a];
+            double E = 2.0 * Vaa_e(a, a);
             Elst10_terms[0] += E;
             Ep[a + nA][B] += E;
         }
@@ -288,11 +301,13 @@ void FISAPT::felst_einsums() {
 
     // Add Extern-B - Orbital a interaction
     if (reference_->has_potential_variable("B")) {
-        std::shared_ptr<Matrix> Vaa =
-            linalg::triplet(L0A, matrices_["VB_extern"], L0A, true, false, false);
-        double** Vaap = Vaa->pointer();
+        auto VB_extern_e = matrix_to_tensor(matrices_["VB_extern"], "VB_extern_e");
+        auto VB_externL0A_e = create_tensor<double>("VB_externL0A_e", static_cast<size_t>(nn), static_cast<size_t>(na));
+        auto Vaa_e = create_tensor<double>("Vaa_extB_e", static_cast<size_t>(na), static_cast<size_t>(na));
+        einsum(0.0, Indices{p, r}, &VB_externL0A_e, 1.0, Indices{p, q}, VB_extern_e, Indices{q, r}, L0A_e);
+        einsum(0.0, Indices{i, j}, &Vaa_e, 1.0, Indices{p, i}, L0A_e, Indices{p, j}, VB_externL0A_e);
         for (int a = 0; a < na; a++) {
-            double E = 2.0 * Vaap[a][a];
+            double E = 2.0 * Vaa_e(a, a);
             Elst10_terms[0] += E;
             Ep[a + nA][nB + nb] += E;
         }
@@ -329,7 +344,11 @@ void FISAPT::felst_einsums() {
 
 // Compute fragment-fragment partitioning of exchange contribution
 void FISAPT::fexch_einsums() {
-    outfile->Printf("  ==> F-SAPT Exchange <==\n\n");
+    using namespace einsums;
+    using namespace einsums::tensor_algebra;
+    using namespace einsums::index;
+
+    outfile->Printf("  ==> F-SAPT Exchange (Einsums) <==\n\n");
 
     // => Sizing <= //
 
@@ -374,6 +393,25 @@ void FISAPT::fexch_einsums() {
     std::shared_ptr<Matrix> CvirA = matrices_["Cvir0A"];
     std::shared_ptr<Matrix> CvirB = matrices_["Cvir0B"];
 
+    auto matrix_to_tensor = [](const std::shared_ptr<Matrix>& M, const std::string&) {
+        return TensorView<double, 2>{M->pointer()[0], Dim<2>{static_cast<size_t>(M->nrow()), static_cast<size_t>(M->ncol())}};
+    };
+
+    auto triplet_einsum = [&](const std::shared_ptr<Matrix>& left, const std::shared_ptr<Matrix>& middle,
+                              const std::shared_ptr<Matrix>& right, const std::string& name) {
+        auto left_e = matrix_to_tensor(left, name + "_left");
+        auto middle_e = matrix_to_tensor(middle, name + "_middle");
+        auto right_e = matrix_to_tensor(right, name + "_right");
+
+        auto middle_right_e =
+            create_tensor<double>(name + "_middle_right", static_cast<size_t>(middle->nrow()), static_cast<size_t>(right->ncol()));
+        auto out = std::make_shared<Matrix>(name, left->ncol(), right->ncol());
+        auto out_e = TensorView<double, 2>{out->pointer()[0], Dim<2>{static_cast<size_t>(left->ncol()), static_cast<size_t>(right->ncol())}};
+        einsum(0.0, Indices{p, q}, &middle_right_e, 1.0, Indices{p, u}, middle_e, Indices{u, q}, right_e);
+        einsum(0.0, Indices{i, j}, &out_e, 1.0, Indices{p, i}, left_e, Indices{p, j}, middle_right_e);
+        return out;
+    };
+
     // ==> DF ERI Setup (JKFIT Type, in Full Basis) <== //
 
     int nT = 1;
@@ -412,20 +450,18 @@ void FISAPT::fexch_einsums() {
     W_B->scale(2.0);
     W_B->add(V_B);
 
-    std::shared_ptr<Matrix> WAbs = linalg::triplet(LoccB, W_A, CvirB, true, false, false);
-    std::shared_ptr<Matrix> WBar = linalg::triplet(LoccA, W_B, CvirA, true, false, false);
-    double** WBarp = WBar->pointer();
-    double** WAbsp = WAbs->pointer();
+    std::shared_ptr<Matrix> WAbs = triplet_einsum(LoccB, W_A, CvirB, "WAbs");
+    std::shared_ptr<Matrix> WBar = triplet_einsum(LoccA, W_B, CvirA, "WBar");
 
     W_A.reset();
     W_B.reset();
 
     // ==> Exchange S^2 Computation <== //
 
-    std::shared_ptr<Matrix> Sab = linalg::triplet(LoccA, S, LoccB, true, false, false);
-    std::shared_ptr<Matrix> Sba = linalg::triplet(LoccB, S, LoccA, true, false, false);
-    std::shared_ptr<Matrix> Sas = linalg::triplet(LoccA, S, CvirB, true, false, false);
-    std::shared_ptr<Matrix> Sbr = linalg::triplet(LoccB, S, CvirA, true, false, false);
+    std::shared_ptr<Matrix> Sab = triplet_einsum(LoccA, S, LoccB, "Sab");
+    std::shared_ptr<Matrix> Sba = triplet_einsum(LoccB, S, LoccA, "Sba");
+    std::shared_ptr<Matrix> Sas = triplet_einsum(LoccA, S, CvirB, "Sas");
+    std::shared_ptr<Matrix> Sbr = triplet_einsum(LoccB, S, CvirA, "Sbr");
     double** Sabp = Sab->pointer();
     double** Sbap = Sba->pointer();
     double** Sasp = Sas->pointer();
@@ -444,8 +480,14 @@ void FISAPT::fexch_einsums() {
     auto WAba = std::make_shared<Matrix>("WAba", nb, na);
     double** WAbap = WAba->pointer();
 
-    C_DGEMM('N', 'T', na, nb, nr, 1.0, WBarp[0], nr, Sbrp[0], nr, 0.0, WBabp[0], nb);
-    C_DGEMM('N', 'T', nb, na, ns, 1.0, WAbsp[0], ns, Sasp[0], ns, 0.0, WAbap[0], na);
+    auto WBar_e = matrix_to_tensor(WBar, "WBar_e");
+    auto WAbs_e = matrix_to_tensor(WAbs, "WAbs_e");
+    auto Sbr_e = matrix_to_tensor(Sbr, "Sbr_e");
+    auto Sas_e = matrix_to_tensor(Sas, "Sas_e");
+    auto WBab_e = TensorView<double, 2>{WBab->pointer()[0], Dim<2>{static_cast<size_t>(na), static_cast<size_t>(nb)}};
+    auto WAba_e = TensorView<double, 2>{WAba->pointer()[0], Dim<2>{static_cast<size_t>(nb), static_cast<size_t>(na)}};
+    einsum(0.0, Indices{i, j}, &WBab_e, 1.0, Indices{i, k}, WBar_e, Indices{j, k}, Sbr_e);
+    einsum(0.0, Indices{i, j}, &WAba_e, 1.0, Indices{i, k}, WAbs_e, Indices{j, k}, Sas_e);
 
     auto E_exch1 = std::make_shared<Matrix>("E_exch [a <x- b]", na, nb);
     double** E_exch1p = E_exch1->pointer();
@@ -464,9 +506,7 @@ void FISAPT::fexch_einsums() {
 
     size_t nQ = dfh_->get_naux();
     auto TrQ = std::make_shared<Matrix>("TrQ", nr, nQ);
-    double** TrQp = TrQ->pointer();
     auto TsQ = std::make_shared<Matrix>("TsQ", ns, nQ);
-    double** TsQp = TsQ->pointer();
     auto TbQ = std::make_shared<Matrix>("TbQ", nb, nQ);
     double** TbQp = TbQ->pointer();
     auto TaQ = std::make_shared<Matrix>("TaQ", na, nQ);
@@ -476,7 +516,14 @@ void FISAPT::fexch_einsums() {
 
     for (size_t a = 0; a < na; a++) {
         dfh_->fill_tensor("Aar", TrQ, {a, a + 1});
-        C_DGEMM('N', 'N', nb, nQ, nr, 1.0, Sbrp[0], nr, TrQp[0], nQ, 0.0, TbQp[0], nQ);
+        auto TrQ_e = matrix_to_tensor(TrQ, "TrQ_e");
+        auto TbQ_e = create_tensor<double>("TbQ_e", static_cast<size_t>(nb), nQ);
+        einsum(0.0, Indices{j, q}, &TbQ_e, 1.0, Indices{j, k}, Sbr_e, Indices{k, q}, TrQ_e);
+        for (int b = 0; b < nb; b++) {
+            for (size_t Q = 0; Q < nQ; Q++) {
+                TbQp[b][Q] = TbQ_e(b, Q);
+            }
+        }
         dfh_->write_disk_tensor("Bab", TbQ, {a, a + 1});
     }
 
@@ -484,7 +531,14 @@ void FISAPT::fexch_einsums() {
 
     for (size_t b = 0; b < nb; b++) {
         dfh_->fill_tensor("Abs", TsQ, {b, b + 1});
-        C_DGEMM('N', 'N', na, nQ, ns, 1.0, Sasp[0], ns, TsQp[0], nQ, 0.0, TaQp[0], nQ);
+        auto TsQ_e = matrix_to_tensor(TsQ, "TsQ_e");
+        auto TaQ_e = create_tensor<double>("TaQ_e", static_cast<size_t>(na), nQ);
+        einsum(0.0, Indices{i, q}, &TaQ_e, 1.0, Indices{i, s}, Sas_e, Indices{s, q}, TsQ_e);
+        for (int a = 0; a < na; a++) {
+            for (size_t Q = 0; Q < nQ; Q++) {
+                TaQp[a][Q] = TaQ_e(a, Q);
+            }
+        }
         dfh_->write_disk_tensor("Bba", TaQ, {b, b + 1});
     }
 
@@ -495,7 +549,11 @@ void FISAPT::fexch_einsums() {
         dfh_->fill_tensor("Bab", TbQ, {a, a + 1});
         for (size_t b = 0; b < nb; b++) {
             dfh_->fill_tensor("Bba", TaQ, {b, b + 1}, {a, a + 1});
-            E_exch3p[a][b] -= 2.0 * C_DDOT(nQ, TbQp[b], 1, TaQp[0], 1);
+            auto TbQ_row_e = TensorView<double, 1>{TbQp[b], Dim<1>{nQ}};
+            auto TaQ_row_e = TensorView<double, 1>{TaQp[0], Dim<1>{nQ}};
+            double row_dot = 0.0;
+            einsum(Indices{}, &row_dot, Indices{i}, TbQ_row_e, Indices{i}, TaQ_row_e);
+            E_exch3p[a][b] -= 2.0 * row_dot;
         }
     }
 
@@ -550,7 +608,11 @@ void FISAPT::fexch_einsums() {
 
 // Compute fragment-fragment partitioning of induction contribution
 void FISAPT::find_einsums() {
-    outfile->Printf("  ==> F-SAPT Induction <==\n\n");
+    using namespace einsums;
+    using namespace einsums::tensor_algebra;
+    using namespace einsums::index;
+
+    outfile->Printf("  ==> F-SAPT Induction (Einsums) <==\n\n");
 
     // => Options <= //
 
@@ -595,6 +657,33 @@ void FISAPT::find_einsums() {
     std::shared_ptr<Vector> eps_vir_A = vectors_["eps_vir0A"];
     std::shared_ptr<Vector> eps_vir_B = vectors_["eps_vir0B"];
 
+    auto matrix_to_tensor = [](const std::shared_ptr<Matrix>& M, const std::string&) {
+        return TensorView<double, 2>{M->pointer()[0], Dim<2>{static_cast<size_t>(M->nrow()), static_cast<size_t>(M->ncol())}};
+    };
+
+    auto triplet_einsum = [&](const std::shared_ptr<Matrix>& left, const std::shared_ptr<Matrix>& middle,
+                              const std::shared_ptr<Matrix>& right, const std::string& name) {
+        auto left_e = matrix_to_tensor(left, name + "_left");
+        auto middle_e = matrix_to_tensor(middle, name + "_middle");
+        auto right_e = matrix_to_tensor(right, name + "_right");
+
+        auto middle_right_e =
+            create_tensor<double>(name + "_middle_right", static_cast<size_t>(middle->nrow()), static_cast<size_t>(right->ncol()));
+        auto out = std::make_shared<Matrix>(name, left->ncol(), right->ncol());
+        auto out_e = TensorView<double, 2>{out->pointer()[0], Dim<2>{static_cast<size_t>(left->ncol()), static_cast<size_t>(right->ncol())}};
+        einsum(0.0, Indices{p, q}, &middle_right_e, 1.0, Indices{p, u}, middle_e, Indices{u, q}, right_e);
+        einsum(0.0, Indices{i, j}, &out_e, 1.0, Indices{p, i}, left_e, Indices{p, j}, middle_right_e);
+        return out;
+    };
+
+    auto row_dot_einsum = [&](const double* lhs, const double* rhs, size_t n, const std::string&) {
+        auto lhs_e = TensorView<double, 1>{lhs, Dim<1>{n}};
+        auto rhs_e = TensorView<double, 1>{rhs, Dim<1>{n}};
+        double dot = 0.0;
+        einsum(Indices{}, &dot, Indices{i}, lhs_e, Indices{i}, rhs_e);
+        return dot;
+    };
+
     // => DFHelper = DF + disk tensors <= //
 
     int nT = 1;
@@ -620,7 +709,7 @@ void FISAPT::find_einsums() {
         Vtemp2->zero();
         Vint2->set_charge_field({{ZAp[A], {mol->x(A), mol->y(A), mol->z(A)}}});
         Vint2->compute(Vtemp2);
-        std::shared_ptr<Matrix> Vbs = linalg::triplet(Cocc_B, Vtemp2, Cvir_B, true, false, false);
+        std::shared_ptr<Matrix> Vbs = triplet_einsum(Cocc_B, Vtemp2, Cvir_B, "Vbs");
         dfh_->write_disk_tensor("WAbs", Vbs, {A, A + 1});
     }
 
@@ -629,7 +718,7 @@ void FISAPT::find_einsums() {
         Vtemp2->zero();
         Vint2->set_charge_field({{ZBp[B], {mol->x(B), mol->y(B), mol->z(B)}}});
         Vint2->compute(Vtemp2);
-        std::shared_ptr<Matrix> Var = linalg::triplet(Cocc_A, Vtemp2, Cvir_A, true, false, false);
+        std::shared_ptr<Matrix> Var = triplet_einsum(Cocc_A, Vtemp2, Cvir_A, "Var");
         dfh_->write_disk_tensor("WBar", Var, {B, B + 1});
     }
 
@@ -656,17 +745,18 @@ void FISAPT::find_einsums() {
 
     // => Electronic Part (Massive PITA) <= //
 
-    double** RaCp = matrices_["Vlocc0A"]->pointer();
-    double** RbDp = matrices_["Vlocc0B"]->pointer();
+    auto RaC_e = matrix_to_tensor(matrices_["Vlocc0A"], "RaC_e");
+    auto RbD_e = matrix_to_tensor(matrices_["Vlocc0B"], "RbD_e");
     // for SAOn/SIAOn, the above two matrices contain the link orbital contribution
 
     auto TsQ = std::make_shared<Matrix>("TsQ", ns, nQ);
     auto T1As = std::make_shared<Matrix>("T1As", na1, ns);
-    double** TsQp = TsQ->pointer();
     double** T1Asp = T1As->pointer();
     for (size_t b = 0; b < nb; b++) {
         dfh_->fill_tensor("Abs", TsQ, {b, b + 1});
-        C_DGEMM('N', 'T', na1, ns, nQ, 2.0, RaCp[0], nQ, TsQp[0], nQ, 0.0, T1Asp[0], ns);
+        auto TsQ_e = matrix_to_tensor(TsQ, "TsQ_e");
+        auto T1As_e = TensorView<double, 2>{T1As->pointer()[0], Dim<2>{static_cast<size_t>(na1), static_cast<size_t>(ns)}};
+        einsum(0.0, Indices{i, j}, &T1As_e, 2.0, Indices{i, k}, RaC_e, Indices{j, k}, TsQ_e);
         for (size_t a = 0; a < na1; a++) {
             dfh_->write_disk_tensor("WAbs", T1Asp[a], {nA + a, nA + a + 1}, {b, b + 1});
         }
@@ -674,11 +764,12 @@ void FISAPT::find_einsums() {
 
     auto TrQ = std::make_shared<Matrix>("TrQ", nr, nQ);
     auto T1Br = std::make_shared<Matrix>("T1Br", nb1, nr);
-    double** TrQp = TrQ->pointer();
     double** T1Brp = T1Br->pointer();
     for (size_t a = 0; a < na; a++) {
         dfh_->fill_tensor("Aar", TrQ, {a, a + 1});
-        C_DGEMM('N', 'T', nb1, nr, nQ, 2.0, RbDp[0], nQ, TrQp[0], nQ, 0.0, T1Brp[0], nr);
+        auto TrQ_e = matrix_to_tensor(TrQ, "TrQ_e");
+        auto T1Br_e = TensorView<double, 2>{T1Br->pointer()[0], Dim<2>{static_cast<size_t>(nb1), static_cast<size_t>(nr)}};
+        einsum(0.0, Indices{i, j}, &T1Br_e, 2.0, Indices{i, k}, RbD_e, Indices{j, k}, TrQ_e);
         for (size_t b = 0; b < nb1; b++) {
             dfh_->write_disk_tensor("WBar", T1Brp[b], {nB + b, nB + b + 1}, {a, a + 1});
         }
@@ -969,7 +1060,7 @@ void FISAPT::find_einsums() {
 
     // Add the external potential
     if (reference_->has_potential_variable("B")) {
-        std::shared_ptr<Matrix> Var = linalg::triplet(Cocc_A, matrices_["VB_extern"], Cvir_A, true, false, false);
+        std::shared_ptr<Matrix> Var = triplet_einsum(Cocc_A, matrices_["VB_extern"], Cvir_A, "Var_extB");
         dfh_->write_disk_tensor("WBar", Var, {(size_t) nB + nb1, (size_t) nB + nb1 + 1});
     }
 
@@ -991,13 +1082,17 @@ void FISAPT::find_einsums() {
         }
 
         // Backtransform the amplitude to LO
-        std::shared_ptr<Matrix> x2A = linalg::doublet(Uocc_A, xA, true, false);
+        auto Uocc_A_e = matrix_to_tensor(Uocc_A, "Uocc_A_e");
+        auto xA_e = matrix_to_tensor(xA, "xA_e");
+        auto x2A = std::make_shared<Matrix>("x2A", Uocc_A->ncol(), xA->ncol());
+        auto x2A_e = TensorView<double, 2>{x2A->pointer()[0], Dim<2>{static_cast<size_t>(Uocc_A->ncol()), static_cast<size_t>(xA->ncol())}};
+        einsum(0.0, Indices{i, j}, &x2A_e, 1.0, Indices{k, i}, Uocc_A_e, Indices{k, j}, xA_e);
         double** x2Ap = x2A->pointer();
 
         // Zip up the Ind20 contributions
         for (int a = 0; a < na; a++) {
-            double Jval = 2.0 * C_DDOT(nr, x2Ap[a], 1, wBTp[a], 1);
-            double Kval = 2.0 * C_DDOT(nr, x2Ap[a], 1, uBTp[a], 1);
+            double Jval = 2.0 * row_dot_einsum(x2Ap[a], wBTp[a], static_cast<size_t>(nr), "Jval_unc_AB");
+            double Kval = 2.0 * row_dot_einsum(x2Ap[a], uBTp[a], static_cast<size_t>(nr), "Kval_unc_AB");
             Ind20u_AB_termsp[a][B] = Jval;
             Ind20u_AB += Jval;
             ExchInd20u_AB_termsp[a][B] = Kval;
@@ -1018,7 +1113,7 @@ void FISAPT::find_einsums() {
 
     // Add the external potential
     if (reference_->has_potential_variable("A")) {
-        std::shared_ptr<Matrix> Vbs = linalg::triplet(Cocc_B, matrices_["VA_extern"], Cvir_B, true, false, false);
+        std::shared_ptr<Matrix> Vbs = triplet_einsum(Cocc_B, matrices_["VA_extern"], Cvir_B, "Vbs_extA");
         dfh_->write_disk_tensor("WAbs", Vbs, {(size_t) nA + na1, (size_t) nA + na1 + 1});
     }
 
@@ -1041,13 +1136,17 @@ void FISAPT::find_einsums() {
         }
 
         // Backtransform the amplitude to LO
-        std::shared_ptr<Matrix> x2B = linalg::doublet(Uocc_B, xB, true, false);
+        auto Uocc_B_e = matrix_to_tensor(Uocc_B, "Uocc_B_e");
+        auto xB_e = matrix_to_tensor(xB, "xB_e");
+        auto x2B = std::make_shared<Matrix>("x2B", Uocc_B->ncol(), xB->ncol());
+        auto x2B_e = TensorView<double, 2>{x2B->pointer()[0], Dim<2>{static_cast<size_t>(Uocc_B->ncol()), static_cast<size_t>(xB->ncol())}};
+        einsum(0.0, Indices{i, j}, &x2B_e, 1.0, Indices{k, i}, Uocc_B_e, Indices{k, j}, xB_e);
         double** x2Bp = x2B->pointer();
 
         // Zip up the Ind20 contributions
         for (int b = 0; b < nb; b++) {
-            double Jval = 2.0 * C_DDOT(ns, x2Bp[b], 1, wATp[b], 1);
-            double Kval = 2.0 * C_DDOT(ns, x2Bp[b], 1, uATp[b], 1);
+            double Jval = 2.0 * row_dot_einsum(x2Bp[b], wATp[b], static_cast<size_t>(ns), "Jval_unc_BA");
+            double Kval = 2.0 * row_dot_einsum(x2Bp[b], uATp[b], static_cast<size_t>(ns), "Kval_unc_BA");
             Ind20u_BA_termsp[A][b] = Jval;
             Ind20u_BA += Jval;
             ExchInd20u_BA_termsp[A][b] = Kval;
@@ -1182,13 +1281,17 @@ void FISAPT::find_einsums() {
 
             if (C < nB + nb1 + 1) {
                 // Backtransform the amplitude to LO
-                std::shared_ptr<Matrix> x2A = linalg::doublet(Uocc_A, xA, true, false);
+                auto Uocc_A_e = matrix_to_tensor(Uocc_A, "Uocc_A_cpl_e");
+                auto xA_e = matrix_to_tensor(xA, "xA_cpl_e");
+                auto x2A = std::make_shared<Matrix>("x2A", Uocc_A->ncol(), xA->ncol());
+                auto x2A_e = TensorView<double, 2>{x2A->pointer()[0], Dim<2>{static_cast<size_t>(Uocc_A->ncol()), static_cast<size_t>(xA->ncol())}};
+                einsum(0.0, Indices{i, j}, &x2A_e, 1.0, Indices{k, i}, Uocc_A_e, Indices{k, j}, xA_e);
                 double** x2Ap = x2A->pointer();
 
                 // Zip up the Ind20 contributions
                 for (int a = 0; a < na; a++) {
-                    double Jval = 2.0 * C_DDOT(nr, x2Ap[a], 1, wBTp[a], 1);
-                    double Kval = 2.0 * C_DDOT(nr, x2Ap[a], 1, uBTp[a], 1);
+                    double Jval = 2.0 * row_dot_einsum(x2Ap[a], wBTp[a], static_cast<size_t>(nr), "Jval_cpl_AB");
+                    double Kval = 2.0 * row_dot_einsum(x2Ap[a], uBTp[a], static_cast<size_t>(nr), "Kval_cpl_AB");
                     Ind20r_AB_termsp[a][C] = Jval;
                     Ind20r_AB += Jval;
                     ExchInd20r_AB_termsp[a][C] = Kval;
@@ -1200,13 +1303,17 @@ void FISAPT::find_einsums() {
 
             if (C < nA + na1 + 1) {
                 // Backtransform the amplitude to LO
-                std::shared_ptr<Matrix> x2B = linalg::doublet(Uocc_B, xB, true, false);
+                auto Uocc_B_e = matrix_to_tensor(Uocc_B, "Uocc_B_cpl_e");
+                auto xB_e = matrix_to_tensor(xB, "xB_cpl_e");
+                auto x2B = std::make_shared<Matrix>("x2B", Uocc_B->ncol(), xB->ncol());
+                auto x2B_e = TensorView<double, 2>{x2B->pointer()[0], Dim<2>{static_cast<size_t>(Uocc_B->ncol()), static_cast<size_t>(xB->ncol())}};
+                einsum(0.0, Indices{i, j}, &x2B_e, 1.0, Indices{k, i}, Uocc_B_e, Indices{k, j}, xB_e);
                 double** x2Bp = x2B->pointer();
 
                 // Zip up the Ind20 contributions
                 for (int b = 0; b < nb; b++) {
-                    double Jval = 2.0 * C_DDOT(ns, x2Bp[b], 1, wATp[b], 1);
-                    double Kval = 2.0 * C_DDOT(ns, x2Bp[b], 1, uATp[b], 1);
+                    double Jval = 2.0 * row_dot_einsum(x2Bp[b], wATp[b], static_cast<size_t>(ns), "Jval_cpl_BA");
+                    double Kval = 2.0 * row_dot_einsum(x2Bp[b], uATp[b], static_cast<size_t>(ns), "Kval_cpl_BA");
                     Ind20r_BA_termsp[C][b] = Jval;
                     Ind20r_BA += Jval;
                     ExchInd20r_BA_termsp[C][b] = Kval;
@@ -1347,7 +1454,11 @@ void FISAPT::find_einsums() {
 // Compute fragment-fragment partitioning of dispersion contribution
 // This is also where the modified exchange-dispersion expressions for the SAOn/SIAOn ISAPT algorithms are coded.
 void FISAPT::fdisp_einsums() {
-    outfile->Printf("  ==> F-SAPT Dispersion <==\n\n");
+    using namespace einsums;
+    using namespace einsums::tensor_algebra;
+    using namespace einsums::index;
+
+    outfile->Printf("  ==> F-SAPT Dispersion (Einsums) <==\n\n");
 
     // => Auxiliary Basis Set <= //
 
@@ -1441,79 +1552,130 @@ void FISAPT::fdisp_einsums() {
     std::shared_ptr<Matrix> Uaocc_A = matrices_["Uaocc0A"];
     std::shared_ptr<Matrix> Uaocc_B = matrices_["Uaocc0B"];
 
+    auto matrix_to_tensor = [](const std::shared_ptr<Matrix>& M, const std::string&) {
+        return TensorView<double, 2>{M->pointer()[0], Dim<2>{static_cast<size_t>(M->nrow()), static_cast<size_t>(M->ncol())}};
+    };
+
+    auto triplet_nnn = [&](const std::shared_ptr<Matrix>& left, const std::shared_ptr<Matrix>& middle,
+                           const std::shared_ptr<Matrix>& right, const std::string& name) {
+        auto left_e = matrix_to_tensor(left, name + "_left");
+        auto middle_e = matrix_to_tensor(middle, name + "_middle");
+        auto right_e = matrix_to_tensor(right, name + "_right");
+        auto mr_e = create_tensor<double>(name + "_mr", static_cast<size_t>(middle->nrow()), static_cast<size_t>(right->ncol()));
+        auto out = std::make_shared<Matrix>(name, left->nrow(), right->ncol());
+        auto out_e = TensorView<double, 2>{out->pointer()[0], Dim<2>{static_cast<size_t>(left->nrow()), static_cast<size_t>(right->ncol())}};
+        einsum(0.0, Indices{p, q}, &mr_e, 1.0, Indices{p, u}, middle_e, Indices{u, q}, right_e);
+        einsum(0.0, Indices{i, j}, &out_e, 1.0, Indices{i, p}, left_e, Indices{p, j}, mr_e);
+        return out;
+    };
+
+    auto triplet_tnn = [&](const std::shared_ptr<Matrix>& left, const std::shared_ptr<Matrix>& middle,
+                           const std::shared_ptr<Matrix>& right, const std::string& name) {
+        auto left_e = matrix_to_tensor(left, name + "_left");
+        auto middle_e = matrix_to_tensor(middle, name + "_middle");
+        auto right_e = matrix_to_tensor(right, name + "_right");
+        auto mr_e = create_tensor<double>(name + "_mr", static_cast<size_t>(middle->nrow()), static_cast<size_t>(right->ncol()));
+        auto out = std::make_shared<Matrix>(name, left->ncol(), right->ncol());
+        auto out_e = TensorView<double, 2>{out->pointer()[0], Dim<2>{static_cast<size_t>(left->ncol()), static_cast<size_t>(right->ncol())}};
+        einsum(0.0, Indices{p, q}, &mr_e, 1.0, Indices{p, u}, middle_e, Indices{u, q}, right_e);
+        einsum(0.0, Indices{i, j}, &out_e, 1.0, Indices{p, i}, left_e, Indices{p, j}, mr_e);
+        return out;
+    };
+
+    auto triplet_ttn = [&](const std::shared_ptr<Matrix>& left, const std::shared_ptr<Matrix>& middle,
+                           const std::shared_ptr<Matrix>& right, const std::string& name) {
+        auto left_e = matrix_to_tensor(left, name + "_left");
+        auto middle_e = matrix_to_tensor(middle, name + "_middle");
+        auto right_e = matrix_to_tensor(right, name + "_right");
+        auto mtr_e = create_tensor<double>(name + "_mtr", static_cast<size_t>(middle->ncol()), static_cast<size_t>(right->ncol()));
+        auto out = std::make_shared<Matrix>(name, left->ncol(), right->ncol());
+        auto out_e = TensorView<double, 2>{out->pointer()[0], Dim<2>{static_cast<size_t>(left->ncol()), static_cast<size_t>(right->ncol())}};
+        einsum(0.0, Indices{p, q}, &mtr_e, 1.0, Indices{u, p}, middle_e, Indices{u, q}, right_e);
+        einsum(0.0, Indices{i, j}, &out_e, 1.0, Indices{p, i}, left_e, Indices{p, j}, mtr_e);
+        return out;
+    };
+
     // => Auxiliary C matrices <= //
 
-    std::shared_ptr<Matrix> Cr1 = linalg::triplet(D_B, S, Cavir_A);
+    std::shared_ptr<Matrix> Cr1 = triplet_nnn(D_B, S, Cavir_A, "Cr1");
     Cr1->scale(-1.0);
     Cr1->add(Cavir_A);
-    std::shared_ptr<Matrix> Cs1 = linalg::triplet(D_A, S, Cavir_B);
+    std::shared_ptr<Matrix> Cs1 = triplet_nnn(D_A, S, Cavir_B, "Cs1");
     Cs1->scale(-1.0);
     Cs1->add(Cavir_B);
-    std::shared_ptr<Matrix> Ca2 = linalg::triplet(D_B, S, Caocc_A);
-    std::shared_ptr<Matrix> Cb2 = linalg::triplet(D_A, S, Caocc_B);
+    std::shared_ptr<Matrix> Ca2 = triplet_nnn(D_B, S, Caocc_A, "Ca2");
+    std::shared_ptr<Matrix> Cb2 = triplet_nnn(D_A, S, Caocc_B, "Cb2");
 
-    std::shared_ptr<Matrix> Cr3 = linalg::triplet(D_B, S, Cavir_A);
-    std::shared_ptr<Matrix> CrX = linalg::triplet(linalg::triplet(D_A, S, D_B), S, Cavir_A);
+    std::shared_ptr<Matrix> Cr3 = triplet_nnn(D_B, S, Cavir_A, "Cr3");
+    auto D_AS_DB = triplet_nnn(D_A, S, D_B, "DASDB");
+    std::shared_ptr<Matrix> CrX = triplet_nnn(D_AS_DB, S, Cavir_A, "CrX");
     Cr3->subtract(CrX);
     Cr3->scale(2.0);
-    std::shared_ptr<Matrix> Cs3 = linalg::triplet(D_A, S, Cavir_B);
-    std::shared_ptr<Matrix> CsX = linalg::triplet(linalg::triplet(D_B, S, D_A), S, Cavir_B);
+    std::shared_ptr<Matrix> Cs3 = triplet_nnn(D_A, S, Cavir_B, "Cs3");
+    auto D_BS_DA = triplet_nnn(D_B, S, D_A, "DBSDA");
+    std::shared_ptr<Matrix> CsX = triplet_nnn(D_BS_DA, S, Cavir_B, "CsX");
     Cs3->subtract(CsX);
     Cs3->scale(2.0);
 
-    std::shared_ptr<Matrix> Ca4 = linalg::triplet(linalg::triplet(D_A, S, D_B), S, Caocc_A);
+    std::shared_ptr<Matrix> Ca4 = triplet_nnn(D_AS_DB, S, Caocc_A, "Ca4");
     Ca4->scale(-2.0);
-    std::shared_ptr<Matrix> Cb4 = linalg::triplet(linalg::triplet(D_B, S, D_A), S, Caocc_B);
+    std::shared_ptr<Matrix> Cb4 = triplet_nnn(D_BS_DA, S, Caocc_B, "Cb4");
     Cb4->scale(-2.0);
 
     // => Auxiliary V matrices <= //
 
-    std::shared_ptr<Matrix> Jbr = linalg::triplet(Caocc_B, J_A, Cavir_A, true, false, false);
+    std::shared_ptr<Matrix> Jbr = triplet_tnn(Caocc_B, J_A, Cavir_A, "Jbr");
     Jbr->scale(2.0);
-    std::shared_ptr<Matrix> Kbr = linalg::triplet(Caocc_B, K_A, Cavir_A, true, false, false);
+    std::shared_ptr<Matrix> Kbr = triplet_tnn(Caocc_B, K_A, Cavir_A, "Kbr");
     Kbr->scale(-1.0);
 
-    std::shared_ptr<Matrix> Jas = linalg::triplet(Caocc_A, J_B, Cavir_B, true, false, false);
+    std::shared_ptr<Matrix> Jas = triplet_tnn(Caocc_A, J_B, Cavir_B, "Jas");
     Jas->scale(2.0);
-    std::shared_ptr<Matrix> Kas = linalg::triplet(Caocc_A, K_B, Cavir_B, true, false, false);
+    std::shared_ptr<Matrix> Kas = triplet_tnn(Caocc_A, K_B, Cavir_B, "Kas");
     Kas->scale(-1.0);
 
-    std::shared_ptr<Matrix> KOas = linalg::triplet(Caocc_A, K_O, Cavir_B, true, false, false);
+    std::shared_ptr<Matrix> KOas = triplet_tnn(Caocc_A, K_O, Cavir_B, "KOas");
     KOas->scale(1.0);
-    std::shared_ptr<Matrix> KObr = linalg::triplet(Caocc_B, K_O, Cavir_A, true, true, false);
+    std::shared_ptr<Matrix> KObr = triplet_ttn(Caocc_B, K_O, Cavir_A, "KObr");
     KObr->scale(1.0);
 
-    std::shared_ptr<Matrix> JBas = linalg::triplet(linalg::triplet(Caocc_A, S, D_B, true, false, false), J_A, Cavir_B);
+    auto CaoccA_S_DB = triplet_tnn(Caocc_A, S, D_B, "CaoccA_S_DB");
+    std::shared_ptr<Matrix> JBas = triplet_nnn(CaoccA_S_DB, J_A, Cavir_B, "JBas");
     JBas->scale(-2.0);
-    std::shared_ptr<Matrix> JAbr = linalg::triplet(linalg::triplet(Caocc_B, S, D_A, true, false, false), J_B, Cavir_A);
+    auto CaoccB_S_DA = triplet_tnn(Caocc_B, S, D_A, "CaoccB_S_DA");
+    std::shared_ptr<Matrix> JAbr = triplet_nnn(CaoccB_S_DA, J_B, Cavir_A, "JAbr");
     JAbr->scale(-2.0);
 
-    std::shared_ptr<Matrix> Jbs = linalg::triplet(Caocc_B, J_A, Cavir_B, true, false, false);
+    std::shared_ptr<Matrix> Jbs = triplet_tnn(Caocc_B, J_A, Cavir_B, "Jbs");
     Jbs->scale(4.0);
-    std::shared_ptr<Matrix> Jar = linalg::triplet(Caocc_A, J_B, Cavir_A, true, false, false);
+    std::shared_ptr<Matrix> Jar = triplet_tnn(Caocc_A, J_B, Cavir_A, "Jar");
     Jar->scale(4.0);
 
-    std::shared_ptr<Matrix> JAas = linalg::triplet(linalg::triplet(Caocc_A, J_B, D_A, true, false, false), S, Cavir_B);
+    auto CaoccA_JB_DA = triplet_tnn(Caocc_A, J_B, D_A, "CaoccA_JB_DA");
+    std::shared_ptr<Matrix> JAas = triplet_nnn(CaoccA_JB_DA, S, Cavir_B, "JAas");
     JAas->scale(-2.0);
-    std::shared_ptr<Matrix> JBbr = linalg::triplet(linalg::triplet(Caocc_B, J_A, D_B, true, false, false), S, Cavir_A);
+    auto CaoccB_JA_DB = triplet_tnn(Caocc_B, J_A, D_B, "CaoccB_JA_DB");
+    std::shared_ptr<Matrix> JBbr = triplet_nnn(CaoccB_JA_DB, S, Cavir_A, "JBbr");
     JBbr->scale(-2.0);
 
     // Get your signs right Hesselmann!
-    std::shared_ptr<Matrix> Vbs = linalg::triplet(Caocc_B, V_A, Cavir_B, true, false, false);
+    std::shared_ptr<Matrix> Vbs = triplet_tnn(Caocc_B, V_A, Cavir_B, "Vbs");
     Vbs->scale(2.0);
-    std::shared_ptr<Matrix> Var = linalg::triplet(Caocc_A, V_B, Cavir_A, true, false, false);
+    std::shared_ptr<Matrix> Var = triplet_tnn(Caocc_A, V_B, Cavir_A, "Var");
     Var->scale(2.0);
-    std::shared_ptr<Matrix> VBas = linalg::triplet(linalg::triplet(Caocc_A, S, D_B, true, false, false), V_A, Cavir_B);
+    std::shared_ptr<Matrix> VBas = triplet_nnn(CaoccA_S_DB, V_A, Cavir_B, "VBas");
     VBas->scale(-1.0);
-    std::shared_ptr<Matrix> VAbr = linalg::triplet(linalg::triplet(Caocc_B, S, D_A, true, false, false), V_B, Cavir_A);
+    std::shared_ptr<Matrix> VAbr = triplet_nnn(CaoccB_S_DA, V_B, Cavir_A, "VAbr");
     VAbr->scale(-1.0);
-    std::shared_ptr<Matrix> VRas = linalg::triplet(linalg::triplet(Caocc_A, V_B, P_A, true, false, false), S, Cavir_B);
+    auto CaoccA_VB_PA = triplet_tnn(Caocc_A, V_B, P_A, "CaoccA_VB_PA");
+    std::shared_ptr<Matrix> VRas = triplet_nnn(CaoccA_VB_PA, S, Cavir_B, "VRas");
     VRas->scale(1.0);
-    std::shared_ptr<Matrix> VSbr = linalg::triplet(linalg::triplet(Caocc_B, V_A, P_B, true, false, false), S, Cavir_A);
+    auto CaoccB_VA_PB = triplet_tnn(Caocc_B, V_A, P_B, "CaoccB_VA_PB");
+    std::shared_ptr<Matrix> VSbr = triplet_nnn(CaoccB_VA_PB, S, Cavir_A, "VSbr");
     VSbr->scale(1.0);
 
-    std::shared_ptr<Matrix> Sas = linalg::triplet(Caocc_A, S, Cavir_B, true, false, false);
-    std::shared_ptr<Matrix> Sbr = linalg::triplet(Caocc_B, S, Cavir_A, true, false, false);
+    std::shared_ptr<Matrix> Sas = triplet_tnn(Caocc_A, S, Cavir_B, "Sas");
+    std::shared_ptr<Matrix> Sbr = triplet_tnn(Caocc_B, S, Cavir_A, "Sbr");
 
     std::shared_ptr<Matrix> Qbr(Jbr->clone());
 
@@ -1539,8 +1701,8 @@ void FISAPT::fdisp_einsums() {
     Qas->add(VBas);
     Qas->add(VRas);
 
-    std::shared_ptr<Matrix> SBar = linalg::triplet(linalg::triplet(Caocc_A, S, D_B, true, false, false), S, Cavir_A);
-    std::shared_ptr<Matrix> SAbs = linalg::triplet(linalg::triplet(Caocc_B, S, D_A, true, false, false), S, Cavir_B);
+    std::shared_ptr<Matrix> SBar = triplet_nnn(CaoccA_S_DB, S, Cavir_A, "SBar");
+    std::shared_ptr<Matrix> SAbs = triplet_nnn(CaoccB_S_DA, S, Cavir_B, "SAbs");
 
     std::shared_ptr<Matrix> Qar(Jar->clone());
     Qar->zero();
@@ -1908,6 +2070,48 @@ void FISAPT::fdisp_einsums() {
         scale = sSAPT0_scale_;
     }
 
+    auto ptr_to_tensor2 = [](double* ptr, int rows, int cols, int ld, const std::string&) {
+        return TensorView<double, 2>{ptr, Dim<2>{static_cast<size_t>(rows), static_cast<size_t>(cols)},
+                                     Stride<2>{static_cast<size_t>(ld), 1}};
+    };
+
+    auto ptr_to_tensor2_const = [](const double* ptr, int rows, int cols, int ld, const std::string&) {
+        return TensorView<double, 2>{ptr, Dim<2>{static_cast<size_t>(rows), static_cast<size_t>(cols)},
+                                     Stride<2>{static_cast<size_t>(ld), 1}};
+    };
+
+    auto gemm_nt_einsum = [&](double alpha, const double* A, int m, int k, int lda, const double* B, int n, int ldb,
+                              double beta, double* C, int ldc, const std::string& name) {
+        auto A_e = ptr_to_tensor2_const(A, m, k, lda, name + "_A");
+        auto B_e = ptr_to_tensor2_const(B, n, k, ldb, name + "_B");
+        auto C_e = ptr_to_tensor2(C, m, n, ldc, name + "_C");
+        einsum(beta, Indices{i, j}, &C_e, alpha, Indices{i, p}, A_e, Indices{j, p}, B_e);
+    };
+
+    auto gemm_nn_einsum = [&](double alpha, const double* A, int m, int k, int lda, const double* B, int n, int ldb,
+                              double beta, double* C, int ldc, const std::string& name) {
+        auto A_e = ptr_to_tensor2_const(A, m, k, lda, name + "_A");
+        auto B_e = ptr_to_tensor2_const(B, k, n, ldb, name + "_B");
+        auto C_e = ptr_to_tensor2(C, m, n, ldc, name + "_C");
+        einsum(beta, Indices{i, j}, &C_e, alpha, Indices{i, p}, A_e, Indices{p, j}, B_e);
+    };
+
+    auto gemm_tn_einsum = [&](double alpha, const double* A, int m, int k, int lda, const double* B, int n, int ldb,
+                              double beta, double* C, int ldc, const std::string& name) {
+        auto A_e = ptr_to_tensor2_const(A, k, m, lda, name + "_A");
+        auto B_e = ptr_to_tensor2_const(B, k, n, ldb, name + "_B");
+        auto C_e = ptr_to_tensor2(C, m, n, ldc, name + "_C");
+        einsum(beta, Indices{i, j}, &C_e, alpha, Indices{p, i}, A_e, Indices{p, j}, B_e);
+    };
+
+    auto ger_einsum = [&](double alpha, const double* x, int m, int incx, const double* y, int n, int incy, double* C,
+                          int ldc, const std::string& name) {
+        auto x_e = TensorView<double, 1>{x, Dim<1>{static_cast<size_t>(m)}, Stride<1>{static_cast<size_t>(incx)}};
+        auto y_e = TensorView<double, 1>{y, Dim<1>{static_cast<size_t>(n)}, Stride<1>{static_cast<size_t>(incy)}};
+        auto C_e = ptr_to_tensor2(C, m, n, ldc, name + "_C");
+        einsum(1.0, Indices{i, j}, &C_e, alpha, Indices{i}, x_e, Indices{j}, y_e);
+    };
+
     // ==> Master Loop <== //
 
 // For the SAOn/SIAOn algorithms if parallel and perpendicular spin couplings are requested for E(20)exch-disp, 
@@ -2009,17 +2213,17 @@ void FISAPT::fdisp_einsums() {
  
                     // => Amplitudes, Disp20 <= //
  
-                    C_DGEMM('N', 'T', na, nb, nQ, 1.0, Aarp[(r)*na], nQ, Absp[(s)*nb], nQ, 0.0, Vabp[0], nb);
+                    gemm_nt_einsum(1.0, Aarp[(r)*na], na, nQ, nQ, Absp[(s)*nb], nb, nQ, 0.0, Vabp[0], nb, "disp_nt");
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
                             Tabp[a][b] = Vabp[a][b] / (eap[a] + ebp[b] - erp[r + rstart] - esp[s + sstart]);
                         }
                     }
  
-                    C_DGEMM('N', 'N', na, nb, nb, 1.0, Tabp[0], nb, UBp[0], nb, 0.0, Iabp[0], nb);
-                    C_DGEMM('T', 'N', na, nb, na, 1.0, UAp[0], na, Iabp[0], nb, 0.0, T2abp[0], nb);
-                    C_DGEMM('N', 'N', na, nb, nb, 1.0, Vabp[0], nb, UBp[0], nb, 0.0, Iabp[0], nb);
-                    C_DGEMM('T', 'N', na, nb, na, 1.0, UAp[0], na, Iabp[0], nb, 0.0, V2abp[0], nb);
+                    gemm_nn_einsum(1.0, Tabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb, "disp_nn_1");
+                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, T2abp[0], nb, "disp_tn_1");
+                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb, "disp_nn_2");
+                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb, "disp_tn_2");
  
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
@@ -2032,20 +2236,20 @@ void FISAPT::fdisp_einsums() {
 
                     // > Q1-Q3 < //
 
-                    C_DGEMM('N', 'T', na, nb, nQ, 1.0, Basp[(s)*na], nQ, Bbrp[(r)*nb], nQ, 0.0, Vabp[0], nb);
-                    C_DGEMM('N', 'T', na, nb, nQ, 1.0, Casp[(s)*na], nQ, Cbrp[(r)*nb], nQ, 1.0, Vabp[0], nb);
-                    C_DGEMM('N', 'T', na, nb, nQ, 1.0, Aarp[(r)*na], nQ, Dbsp[(s)*nb], nQ, 1.0, Vabp[0], nb);
-                    C_DGEMM('N', 'T', na, nb, nQ, 1.0, Darp[(r)*na], nQ, Absp[(s)*nb], nQ, 1.0, Vabp[0], nb);
+                    gemm_nt_einsum(1.0, Basp[(s)*na], na, nQ, nQ, Bbrp[(r)*nb], nb, nQ, 0.0, Vabp[0], nb, "exch_nt_1");
+                    gemm_nt_einsum(1.0, Casp[(s)*na], na, nQ, nQ, Cbrp[(r)*nb], nb, nQ, 1.0, Vabp[0], nb, "exch_nt_2");
+                    gemm_nt_einsum(1.0, Aarp[(r)*na], na, nQ, nQ, Dbsp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb, "exch_nt_3");
+                    gemm_nt_einsum(1.0, Darp[(r)*na], na, nQ, nQ, Absp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb, "exch_nt_4");
 
                     // > V,J,K < //
 
-                    C_DGER(na, nb, 1.0, &Sasp[0][s + sstart], ns, &Qbrp[0][r + rstart], nr, Vabp[0], nb);
-                    C_DGER(na, nb, 1.0, &Qasp[0][s + sstart], ns, &Sbrp[0][r + rstart], nr, Vabp[0], nb);
-                    C_DGER(na, nb, 1.0, &Qarp[0][r + rstart], nr, &SAbsp[0][s + sstart], ns, Vabp[0], nb);
-                    C_DGER(na, nb, 1.0, &SBarp[0][r + rstart], nr, &Qbsp[0][s + sstart], ns, Vabp[0], nb);
+                    ger_einsum(1.0, &Sasp[0][s + sstart], na, ns, &Qbrp[0][r + rstart], nb, nr, Vabp[0], nb, "exch_ger_1");
+                    ger_einsum(1.0, &Qasp[0][s + sstart], na, ns, &Sbrp[0][r + rstart], nb, nr, Vabp[0], nb, "exch_ger_2");
+                    ger_einsum(1.0, &Qarp[0][r + rstart], na, nr, &SAbsp[0][s + sstart], nb, ns, Vabp[0], nb, "exch_ger_3");
+                    ger_einsum(1.0, &SBarp[0][r + rstart], na, nr, &Qbsp[0][s + sstart], nb, ns, Vabp[0], nb, "exch_ger_4");
 
-                    C_DGEMM('N', 'N', na, nb, nb, 1.0, Vabp[0], nb, UBp[0], nb, 0.0, Iabp[0], nb);
-                    C_DGEMM('T', 'N', na, nb, na, 1.0, UAp[0], na, Iabp[0], nb, 0.0, V2abp[0], nb);
+                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb, "exch_nn");
+                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb, "exch_tn");
 
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
@@ -2060,18 +2264,18 @@ void FISAPT::fdisp_einsums() {
                     // now, additional term for parallel/perpendicular spin coupling
                     // > Q1-Q3 < //
 
-                    C_DGEMM('N', 'T', na, nb, nQ, 1.0, BYasp[(s)*na], nQ, BXbrp[(r)*nb], nQ, 0.0, Vabp[0], nb);
-                    C_DGEMM('N', 'T', na, nb, nQ, 1.0, CXasp[(s)*na], nQ, CYbrp[(r)*nb], nQ, 1.0, Vabp[0], nb);
-                    C_DGEMM('N', 'T', na, nb, nQ, 1.0, Aarp[(r)*na], nQ, DYbsp[(s)*nb], nQ, 1.0, Vabp[0], nb);
-                    C_DGEMM('N', 'T', na, nb, nQ, 1.0, DXarp[(r)*na], nQ, Absp[(s)*nb], nQ, 1.0, Vabp[0], nb);
+                    gemm_nt_einsum(1.0, BYasp[(s)*na], na, nQ, nQ, BXbrp[(r)*nb], nb, nQ, 0.0, Vabp[0], nb, "par_nt_1");
+                    gemm_nt_einsum(1.0, CXasp[(s)*na], na, nQ, nQ, CYbrp[(r)*nb], nb, nQ, 1.0, Vabp[0], nb, "par_nt_2");
+                    gemm_nt_einsum(1.0, Aarp[(r)*na], na, nQ, nQ, DYbsp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb, "par_nt_3");
+                    gemm_nt_einsum(1.0, DXarp[(r)*na], na, nQ, nQ, Absp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb, "par_nt_4");
 
                     // > V,J,K < //
 
-                    C_DGER(na, nb, 1.0, &Sasp[0][s + sstart], ns, &KXOYbrp[0][r + rstart], nr, Vabp[0], nb);
-                    C_DGER(na, nb, 1.0, &KXOYasp[0][s + sstart], ns, &Sbrp[0][r + rstart], nr, Vabp[0], nb);
+                    ger_einsum(1.0, &Sasp[0][s + sstart], na, ns, &KXOYbrp[0][r + rstart], nb, nr, Vabp[0], nb, "par_ger_1");
+                    ger_einsum(1.0, &KXOYasp[0][s + sstart], na, ns, &Sbrp[0][r + rstart], nb, nr, Vabp[0], nb, "par_ger_2");
 
-                    C_DGEMM('N', 'N', na, nb, nb, 1.0, Vabp[0], nb, UBp[0], nb, 0.0, Iabp[0], nb);
-                    C_DGEMM('T', 'N', na, nb, na, 1.0, UAp[0], na, Iabp[0], nb, 0.0, V2abp[0], nb);
+                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb, "par_nn");
+                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb, "par_tn");
 
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
@@ -2125,17 +2329,17 @@ void FISAPT::fdisp_einsums() {
 
                     // => Amplitudes, Disp20 <= //
 
-                    C_DGEMM('N', 'T', na, nb, nQ, 1.0, Aarp[(r)*na], nQ, Absp[(s)*nb], nQ, 0.0, Vabp[0], nb);
+                    gemm_nt_einsum(1.0, Aarp[(r)*na], na, nQ, nQ, Absp[(s)*nb], nb, nQ, 0.0, Vabp[0], nb, "disp2_nt");
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
                             Tabp[a][b] = Vabp[a][b] / (eap[a] + ebp[b] - erp[r + rstart] - esp[s + sstart]);
                         }
                     }
 
-                    C_DGEMM('N', 'N', na, nb, nb, 1.0, Tabp[0], nb, UBp[0], nb, 0.0, Iabp[0], nb);
-                    C_DGEMM('T', 'N', na, nb, na, 1.0, UAp[0], na, Iabp[0], nb, 0.0, T2abp[0], nb);
-                    C_DGEMM('N', 'N', na, nb, nb, 1.0, Vabp[0], nb, UBp[0], nb, 0.0, Iabp[0], nb);
-                    C_DGEMM('T', 'N', na, nb, na, 1.0, UAp[0], na, Iabp[0], nb, 0.0, V2abp[0], nb);
+                    gemm_nn_einsum(1.0, Tabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb, "disp2_nn_1");
+                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, T2abp[0], nb, "disp2_tn_1");
+                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb, "disp2_nn_2");
+                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb, "disp2_tn_2");
 
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {
@@ -2148,20 +2352,20 @@ void FISAPT::fdisp_einsums() {
 
                     // > Q1-Q3 < //
 
-                    C_DGEMM('N', 'T', na, nb, nQ, 1.0, Basp[(s)*na], nQ, Bbrp[(r)*nb], nQ, 0.0, Vabp[0], nb);
-                    C_DGEMM('N', 'T', na, nb, nQ, 1.0, Casp[(s)*na], nQ, Cbrp[(r)*nb], nQ, 1.0, Vabp[0], nb);
-                    C_DGEMM('N', 'T', na, nb, nQ, 1.0, Aarp[(r)*na], nQ, Dbsp[(s)*nb], nQ, 1.0, Vabp[0], nb);
-                    C_DGEMM('N', 'T', na, nb, nQ, 1.0, Darp[(r)*na], nQ, Absp[(s)*nb], nQ, 1.0, Vabp[0], nb);
+                    gemm_nt_einsum(1.0, Basp[(s)*na], na, nQ, nQ, Bbrp[(r)*nb], nb, nQ, 0.0, Vabp[0], nb, "exch2_nt_1");
+                    gemm_nt_einsum(1.0, Casp[(s)*na], na, nQ, nQ, Cbrp[(r)*nb], nb, nQ, 1.0, Vabp[0], nb, "exch2_nt_2");
+                    gemm_nt_einsum(1.0, Aarp[(r)*na], na, nQ, nQ, Dbsp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb, "exch2_nt_3");
+                    gemm_nt_einsum(1.0, Darp[(r)*na], na, nQ, nQ, Absp[(s)*nb], nb, nQ, 1.0, Vabp[0], nb, "exch2_nt_4");
 
                     // > V,J,K < //
 
-                    C_DGER(na, nb, 1.0, &Sasp[0][s + sstart], ns, &Qbrp[0][r + rstart], nr, Vabp[0], nb);
-                    C_DGER(na, nb, 1.0, &Qasp[0][s + sstart], ns, &Sbrp[0][r + rstart], nr, Vabp[0], nb);
-                    C_DGER(na, nb, 1.0, &Qarp[0][r + rstart], nr, &SAbsp[0][s + sstart], ns, Vabp[0], nb);
-                    C_DGER(na, nb, 1.0, &SBarp[0][r + rstart], nr, &Qbsp[0][s + sstart], ns, Vabp[0], nb);
+                    ger_einsum(1.0, &Sasp[0][s + sstart], na, ns, &Qbrp[0][r + rstart], nb, nr, Vabp[0], nb, "exch2_ger_1");
+                    ger_einsum(1.0, &Qasp[0][s + sstart], na, ns, &Sbrp[0][r + rstart], nb, nr, Vabp[0], nb, "exch2_ger_2");
+                    ger_einsum(1.0, &Qarp[0][r + rstart], na, nr, &SAbsp[0][s + sstart], nb, ns, Vabp[0], nb, "exch2_ger_3");
+                    ger_einsum(1.0, &SBarp[0][r + rstart], na, nr, &Qbsp[0][s + sstart], nb, ns, Vabp[0], nb, "exch2_ger_4");
 
-                    C_DGEMM('N', 'N', na, nb, nb, 1.0, Vabp[0], nb, UBp[0], nb, 0.0, Iabp[0], nb);
-                    C_DGEMM('T', 'N', na, nb, na, 1.0, UAp[0], na, Iabp[0], nb, 0.0, V2abp[0], nb);
+                    gemm_nn_einsum(1.0, Vabp[0], na, nb, nb, UBp[0], nb, nb, 0.0, Iabp[0], nb, "exch2_nn");
+                    gemm_tn_einsum(1.0, UAp[0], na, na, na, Iabp[0], nb, nb, 0.0, V2abp[0], nb, "exch2_tn");
 
                     for (int a = 0; a < na; a++) {
                         for (int b = 0; b < nb; b++) {

@@ -1055,6 +1055,7 @@ def sapt_dft(
     if data is None:
         data = {}
     use_einsums = core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS")
+    use_fisapt_einsums = use_einsums or core.get_option("FISAPT", "FISAPT_USE_EINSUMS")
 
     # Build SAPT cache
     if use_einsums:
@@ -1157,7 +1158,7 @@ def sapt_dft(
         )
         core.timer_off("SAPT(DFT): F-SAPT Induction")
 
-    elif do_fsapt and fsapt_type == "FISAPT" and not use_einsums:
+    elif do_fsapt and fsapt_type == "FISAPT" and not use_fisapt_einsums:
         core.timer_on("SAPT(DFT):Localize Orbitals")
         sapt_jk_terms_ein.localization(cache, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT):Localize Orbitals")
@@ -1190,7 +1191,7 @@ def sapt_dft(
         core.timer_on("SAPT(DFT): F-SAPT Induction")
         FISAPT_obj.find()
         core.timer_off("SAPT(DFT): F-SAPT Induction")
-    elif do_fsapt and fsapt_type == "FISAPT" and use_einsums:
+    elif do_fsapt and fsapt_type == "FISAPT" and use_fisapt_einsums:
         core.timer_on("SAPT(DFT):Localize Orbitals")
         sapt_jk_terms_ein.localization(cache, dimer_wfn, wfn_A, wfn_B)
         core.timer_off("SAPT(DFT):Localize Orbitals")
@@ -1218,10 +1219,10 @@ def sapt_dft(
         FISAPT_obj.felst_einsums()
         core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
         core.timer_on("SAPT(DFT): F-SAPT Exchange")
-        FISAPT_obj.fexch()
+        FISAPT_obj.fexch_einsums()
         core.timer_off("SAPT(DFT): F-SAPT Exchange")
         core.timer_on("SAPT(DFT): F-SAPT Induction")
-        FISAPT_obj.find()
+        FISAPT_obj.find_einsums()
         core.timer_off("SAPT(DFT): F-SAPT Induction")
 
     # Blow away JK object before doing MP2 for memory considerations
@@ -1365,7 +1366,10 @@ def sapt_dft(
 
     elif do_fsapt and fsapt_type == "FISAPT" and do_disp:
         core.timer_on("SAPT(DFT): F-SAPT Dispersion")
-        FISAPT_obj.fdisp()
+        if use_fisapt_einsums:
+            FISAPT_obj.fdisp_einsums()
+        else:
+            FISAPT_obj.fdisp()
         core.timer_off("SAPT(DFT): F-SAPT Dispersion")
         FISAPT_obj.fdrop(external_potentials)
         scalars = FISAPT_obj.scalars()

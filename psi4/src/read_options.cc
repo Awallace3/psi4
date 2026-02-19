@@ -1286,6 +1286,8 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("FISAPT_FSAPT_IND_SCALE", true);
         /*- Do F-SAPT coupled response? (not recommended) -*/
         options.add_bool("FISAPT_FSAPT_IND_RESPONSE", false);
+        /*- Use einsums implementation for F-SAPT terms in ``energy('fisapt0')`` route. -*/
+        options.add_bool("FISAPT_USE_EINSUMS", false);
         /*- Do sSAPT0 exchange-scaling with F-SAPT -*/
         options.add_bool("SSAPT0_SCALE", false);
         /*- Filepath to drop sSAPT0 exchange-scaling F-SAPT data within input file directory -*/

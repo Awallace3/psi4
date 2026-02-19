@@ -87,21 +87,34 @@ def fisapt_compute_energy(self, jk_obj, *, external_potentials=None):
     # => F-SAPT0 <=
 
     if core.get_option("FISAPT", "FISAPT_DO_FSAPT"):
+        use_einsums = core.get_option("FISAPT", "FISAPT_USE_EINSUMS")
         core.timer_on("FISAPT:FSAPT:loc")
         self.flocalize()
         core.timer_off("FISAPT:FSAPT:loc")
         core.timer_on("FISAPT:FSAPT:elst")
-        self.felst()
+        if use_einsums:
+            self.felst_einsums()
+        else:
+            self.felst()
         core.timer_off("FISAPT:FSAPT:elst")
         core.timer_on("FISAPT:FSAPT:exch")
-        self.fexch()
+        if use_einsums:
+            self.fexch_einsums()
+        else:
+            self.fexch()
         core.timer_off("FISAPT:FSAPT:exch")
         core.timer_on("FISAPT:FSAPT:ind")
-        self.find()
+        if use_einsums:
+            self.find_einsums()
+        else:
+            self.find()
         core.timer_off("FISAPT:FSAPT:ind")
         if core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP"):
             core.timer_on("FISAPT:FSAPT:disp")
-            self.fdisp()
+            if use_einsums:
+                self.fdisp_einsums()
+            else:
+                self.fdisp()
             core.timer_off("FISAPT:FSAPT:disp")
         # else:
         #    # Build Empirical Dispersion
