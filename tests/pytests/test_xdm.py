@@ -32,6 +32,7 @@ units angstrom
     print(qcvars['XDM C6 COEFFICIENTS'].np)
     wfn_vars = wfn.variables()
     print(wfn_vars['XDM C6 COEFFICIENTS'].np)
+    pp(wfn_vars)
     return
 
 

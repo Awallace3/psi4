@@ -504,6 +504,12 @@ class XDMDispersionFunctor():
         core.set_variable('DISPERSION CORRECTION ENERGY', ene)
         if self.fctldash:
             core.set_variable(f"{self.fctldash.upper()} DISPERSION CORRECTION ENERGY", ene)
+
+        # Copy XDM coefficient arrays from process environment to wavefunction
+        for var_name in ['XDM C6 COEFFICIENTS', 'XDM C8 COEFFICIENTS', 'XDM C10 COEFFICIENTS', 'XDM RC COEFFICIENTS']:
+            if core.has_array_variable(var_name):
+                wfn.set_array_variable(var_name, core.array_variable(var_name))
+
         return ene
 
     def compute_gradient(self, molecule: core.Molecule, wfn: core.Wavefunction = None) -> core.Matrix:
@@ -525,4 +531,11 @@ class XDMDispersionFunctor():
         if wfn is None:
             raise ValidationError("XDM dispersion requires a converged wavefunction (density matrix).")
 
-        return self.xdm.compute_gradient(wfn)
+        grad = self.xdm.compute_gradient(wfn)
+
+        # Copy XDM coefficient arrays from process environment to wavefunction
+        for var_name in ['XDM C6 COEFFICIENTS', 'XDM C8 COEFFICIENTS', 'XDM C10 COEFFICIENTS', 'XDM RC COEFFICIENTS']:
+            if core.has_array_variable(var_name):
+                wfn.set_array_variable(var_name, core.array_variable(var_name))
+
+        return grad
