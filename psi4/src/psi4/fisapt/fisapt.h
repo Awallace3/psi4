@@ -153,6 +153,15 @@ class FISAPT {
     void find_einsums();
     /// Dispersion - einsums
     void fdisp_einsums();
+    /// SAPT0 electrostatics - einsums
+    void elst_einsums();
+    /// SAPT0 exchange - einsums
+    void exch_einsums();
+    /// SAPT0 induction - einsums
+    void ind_einsums();
+    /// SAPT0 dispersion - einsums
+    void disp_einsums(std::map<std::string, SharedMatrix> matrix_cache,
+                      std::map<std::string, SharedVector> vector_cache, bool do_print);
     /// Output
     //  fdrop() moved py-side
 

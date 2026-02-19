@@ -109,6 +109,104 @@ no_com"""
 
 
 @pytest.mark.fsapt
+def test_fsapt_psivars_dict_water_methyl():
+    """
+    Test F-SAPT analysis using dictionary output format (no pandas required).
+
+    This test verifies that fsapt_analysis correctly returns F-SAPT energy
+    decomposition as a dictionary after running a fisapt0 calculation. The
+    molecule object must be passed to fsapt_analysis when using psi4 variables.
+
+    The test validates:
+    1. Standard SAPT energy components against reference values
+    2. F-SAPT fragment analysis output in dictionary format
+    3. Fragment definitions using 1-indexed atom lists
+    """
+    mol = psi4.geometry(
+        """0 1
+H 0.0290 -1.1199 -1.5243
+O 0.9481 -1.3990 -1.3587
+H 1.4371 -0.5588 -1.3099
+--
+0 1
+C 6.44536662 -0.26509169 -0.00000000
+H 7.53536662 -0.26509169 -0.00000000
+H 6.08203329 0.57399070 0.59332085
+H 6.08203329 -0.17080196 -1.02332709
+H 6.08203329 -1.19846381 0.43000624
+symmetry c1
+no_reorient
+no_com"""
+    )
+    psi4.set_options(
+        {
+            "basis": "jun-cc-pvdz",
+            "scf_type": "df",
+            "guess": "sad",
+            "freeze_core": "true",
+            "FISAPT_FSAPT_FILEPATH": "none",
+        }
+    )
+    # NOTE: wfn used for keeping SAPT data together, but the wavefunction is
+    # just the dimer SCF wavefunction.
+    _, wfn = psi4.energy("fisapt0", return_wfn=True)
+    keys = ["Enuc", "Eelst", "Eexch", "Eind", "Edisp", "Etot"]
+    Eref = {
+        "Edisp": -3.033560992609353e-05,
+        "Eelst": -1.3769179634692819e-05,
+        "Eexch": 1.4141292081071114e-07,
+        "Eind": -4.496643518307695e-06,
+        "Enuc": 31.610615586587073,
+        "Etot": -4.8460020158283334e-05,
+    }
+    Epsi = {
+        "Enuc": mol.nuclear_repulsion_energy(),
+        "Eelst": variable("SAPT ELST ENERGY"),
+        "Eexch": variable("SAPT EXCH ENERGY"),
+        "Eind": variable("SAPT IND ENERGY"),
+        "Edisp": variable("SAPT DISP ENERGY"),
+        "Etot": variable("SAPT0 TOTAL ENERGY"),
+    }
+
+    from pprint import pprint as pp
+
+    for key in keys:
+        assert compare_values(Eref[key], Epsi[key], 6, key)
+    fEnergies = psi4.fsapt_analysis(
+        source=wfn,
+        # NOTE: 1-indexed for fragments_a and fragments_b
+        fragments_a={
+            "water_A": [1, 2, 3],
+        },
+        fragments_b={
+            "MethylB": [4, 5, 6, 7, 8],
+        },
+    )
+    fEnergies = {
+        "Elst": fEnergies["Elst"],
+        "Exch": fEnergies["Exch"],
+        "IndAB": fEnergies["IndAB"],
+        "IndBA": fEnergies["IndBA"],
+        "Disp": fEnergies["Disp"],
+        "EDisp": fEnergies["EDisp"],
+        "Total": fEnergies["Total"],
+    }
+    fEref = {
+        "fElst": -0.008640290705471898,
+        "fExch": 8.873794752327387e-05,
+        "fEindAB": -7.203832524175092e-06,
+        "fEindBA": -0.0028144825754463053,
+        "fEdisp": -0.019035882621443817,
+        "fEDisp": 0.0,
+        "Etot": -0.030409121787215554,
+    }
+
+    # python iterate over zip dictionary keys and values
+    for key1, key2 in zip(fEref.keys(), fEnergies.keys()):
+        assert compare_values(fEref[key1], fEnergies[key2][0], 2, key1)
+
+
+@pytest.mark.fsapt
 def test_fsapt_external_potentials():
     """
     Test F-SAPT analysis with external point charge potentials.
@@ -168,7 +266,9 @@ no_com
             [0.417, np.array([2.6619, 1.7546, -0.2910]) / psi_bohr2angstroms],
         ],
     }
-    _, wfn = psi4.energy("fisapt0", external_potentials=external_potentials, return_wfn=True)
+    _, wfn = psi4.energy(
+        "fisapt0", external_potentials=external_potentials, return_wfn=True
+    )
     print(wfn.variables())
     keys = ["Enuc", "Eelst", "Eexch", "Eind", "Edisp", "Etot"]
     Eref = {
@@ -492,8 +592,11 @@ no_com"""
             [0.417, np.array([2.6619, 1.7546, -0.2910]) / psi_bohr2angstroms],
         ],
     }
-    plan = psi4.energy("fisapt0", return_plan=True, molecule=mol,
-                       external_potentials=external_potentials
+    plan = psi4.energy(
+        "fisapt0",
+        return_plan=True,
+        molecule=mol,
+        external_potentials=external_potentials,
     )
     atomic_result = psi4.schema_wrapper.run_qcschema(
         plan.plan(),
@@ -908,7 +1011,7 @@ def test_fisapt_link_siao():
     using the SIAO1 method produce correct interaction energies for a
     system with multiple fragments and link atoms.
     """
-    
+
     mol = psi4.core.Molecule.from_arrays(
         elez=[6, 6, 1, 1, 1, 8, 1, 1, 6, 6, 1, 1, 1, 8, 1, 1, 6, 1, 1],
         fragment_separators=[8, 16],
@@ -918,15 +1021,65 @@ def test_fisapt_link_siao():
         fragment_multiplicities=[2, 2, 1],
         molecular_charge=0,
         molecular_multiplicity=1,
-        geom=[2.51268, -0.79503, -0.22006, 1.23732, 0.03963, -0.27676,
-              2.46159, -1.62117, -0.94759, 2.64341, -1.21642, 0.78902, 3.39794,
-              -0.18468, -0.46590, 1.26614, 1.11169, 0.70005, 2.10603, 1.58188,
-              0.59592, 1.13110, 0.48209, -1.28412, -1.26007, 0.07291, 0.27398,
-              -2.53390, -0.75742, 0.20501, -2.48461, -1.59766, 0.91610,
-              -2.65872, -1.16154, -0.81233, -3.41092, -0.13922, 0.44665,
-              -1.38660, 1.11180, -0.71748, -1.17281, 0.53753, 1.27129,
-              -0.70002, 1.76332, -0.50799, -0.01090, -0.78649, 0.02607,
-              0.17071, -1.41225, 0.91863, -0.19077, -1.46135, -0.82966],
+        geom=[
+            2.51268,
+            -0.79503,
+            -0.22006,
+            1.23732,
+            0.03963,
+            -0.27676,
+            2.46159,
+            -1.62117,
+            -0.94759,
+            2.64341,
+            -1.21642,
+            0.78902,
+            3.39794,
+            -0.18468,
+            -0.46590,
+            1.26614,
+            1.11169,
+            0.70005,
+            2.10603,
+            1.58188,
+            0.59592,
+            1.13110,
+            0.48209,
+            -1.28412,
+            -1.26007,
+            0.07291,
+            0.27398,
+            -2.53390,
+            -0.75742,
+            0.20501,
+            -2.48461,
+            -1.59766,
+            0.91610,
+            -2.65872,
+            -1.16154,
+            -0.81233,
+            -3.41092,
+            -0.13922,
+            0.44665,
+            -1.38660,
+            1.11180,
+            -0.71748,
+            -1.17281,
+            0.53753,
+            1.27129,
+            -0.70002,
+            1.76332,
+            -0.50799,
+            -0.01090,
+            -0.78649,
+            0.02607,
+            0.17071,
+            -1.41225,
+            0.91863,
+            -0.19077,
+            -1.46135,
+            -0.82966,
+        ],
     )
     psi4.activate(mol)
     psi4.set_options(
@@ -956,12 +1109,12 @@ def test_fisapt_link_siao():
         },
     )
     ref_data = {
-         'Disp': [-0.07730013703756884],
-         'Elst': [11.240080594756975],
-         'Exch': [1.004180374688547],
-         'IndAB': [-0.33791373473933195],
-         'IndBA': [-0.1882806003666028],
-         'Total': [11.640766497303076],
+        "Disp": [-0.07730013703756884],
+        "Elst": [11.240080594756975],
+        "Exch": [1.004180374688547],
+        "IndAB": [-0.33791373473933195],
+        "IndBA": [-0.1882806003666028],
+        "Total": [11.640766497303076],
     }
     for key in ref_data.keys():
         assert compare_values(
@@ -976,13 +1129,14 @@ def test_fisapt_link_siao():
 if __name__ == "__main__":
     # test_fsapt_psivars_dict()
     # test_fsapt_external_potentials()
-    test_fsapt_AtomicOutput_external_potentials()
+    # test_fsapt_AtomicOutput_external_potentials()
     # test_fsapt_AtomicOutput()
     # test_fsapt_psivars()
     # test_fsapt_psivars_dict()
+    test_fsapt_psivars_dict_water_methyl()
     # test_fsapt_AtomicOutput()
     # test_fsapt_output_file()
     # test_fsapt_output_file()
     # test_fsapt_indices()
     # test_fisapt_link_siao()
-    pytest.main([__file__])
+    # pytest.main([__file__])
