@@ -24,15 +24,26 @@ units angstrom
             "DFT_RADIAL_POINTS": 99,
         }
     )
+    e_reg, wfn = psi4.energy("b3lyp", molecule=mol, return_wfn=True)
     e, wfn = psi4.energy("b3lyp-xdm", molecule=mol, return_wfn=True)
     print(e)
     qcvars = psi4.core.variables()
     pp(qcvars)
     # set np print options to have commas, no truncation and 12 decimal places
-    print(qcvars['XDM C6 COEFFICIENTS'].np)
+    print(qcvars["XDM C6 COEFFICIENTS"].np)
     wfn_vars = wfn.variables()
-    print(wfn_vars['XDM C6 COEFFICIENTS'].np)
+    print(wfn_vars["XDM C6 COEFFICIENTS"].np)
+    print(f"Regular DFT energy: {e_reg}")
+    print(f"XDM correction: {e - e_reg}")
     pp(wfn_vars)
+    # check that "DISPERSION CORRECTION ENERGY" is in wfn variables and is equal to e - e_reg
+    assert "DISPERSION CORRECTION ENERGY" in wfn_vars
+    assert np.isclose(wfn_vars["DISPERSION CORRECTION ENERGY"], e - e_reg, atol=1e-6)
+    assert np.isclose(
+        wfn_vars["DFT TOTAL ENERGY"] - wfn_vars["DISPERSION CORRECTION ENERGY"],
+        e_reg,
+        atol=1e-6,
+    )
     return
 
 

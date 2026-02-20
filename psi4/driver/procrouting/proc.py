@@ -1899,7 +1899,7 @@ def scf_helper(name, post_scf=True, **kwargs):
     # Post-SCF XDM dispersion correction (requires converged density)
     if hasattr(scf_wfn, "_disp_functor") and scf_wfn._disp_functor.engine == 'xdm':
         xdm_energy = scf_wfn._disp_functor.compute_energy(scf_wfn.molecule(), scf_wfn)
-        scf_wfn.set_variable("-D Energy", xdm_energy)
+        scf_wfn.set_variable("XDM ENERGY", xdm_energy)
         scf_wfn.set_variable("DISPERSION CORRECTION ENERGY", xdm_energy)
         e_scf += xdm_energy
 
