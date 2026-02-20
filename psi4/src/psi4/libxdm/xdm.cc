@@ -494,6 +494,13 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
                                       SharedMatrix gradient) {
     int natom = mol->natom();
 
+    std::vector<int> real_atoms;
+    real_atoms.reserve(natom);
+    for (int i = 0; i < natom; i++) {
+        if (mol->Z(i) > 0.0) real_atoms.push_back(i);
+    }
+    int nreal = static_cast<int>(real_atoms.size());
+
     // Compute effective atomic polarizabilities
     std::vector<double> atpol(natom, 0.0);
     for (int i = 0; i < natom; i++) {
@@ -521,11 +528,11 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
     double** gp = gradient ? gradient->pointer() : nullptr;
 
     // Create matrices to store pairwise coefficients
-    auto e_disp_pairs = std::make_shared<Matrix>("XDM PAIRWISE ENERGY", natom, natom);
-    auto c6_mat = std::make_shared<Matrix>("XDM C6 Coefficients", natom, natom);
-    auto c8_mat = std::make_shared<Matrix>("XDM C8 Coefficients", natom, natom);
-    auto c10_mat = std::make_shared<Matrix>("XDM C10 Coefficients", natom, natom);
-    auto rc_mat = std::make_shared<Matrix>("XDM Rc Coefficients", natom, natom);
+    auto e_disp_pairs = std::make_shared<Matrix>("XDM PAIRWISE ENERGY", nreal, nreal);
+    auto c6_mat = std::make_shared<Matrix>("XDM C6 Coefficients", nreal, nreal);
+    auto c8_mat = std::make_shared<Matrix>("XDM C8 Coefficients", nreal, nreal);
+    auto c10_mat = std::make_shared<Matrix>("XDM C10 Coefficients", nreal, nreal);
+    auto rc_mat = std::make_shared<Matrix>("XDM Rc Coefficients", nreal, nreal);
     double** c6p = c6_mat->pointer();
     double** c8p = c8_mat->pointer();
     double** c10p = c10_mat->pointer();
@@ -534,12 +541,10 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
     outfile->Printf("  ==> XDM Pairwise Coefficients <==\n\n");
     outfile->Printf("    %4s %4s %12s %16s %16s %16s %12s %12s %12s\n", "i", "j", "dij", "C6", "C8", "C10", "Rc", "Rvdw", "E_disp");
 
-    for (int i = 0; i < natom; i++) {
-        int Zi = static_cast<int>(std::lround(mol->Z(i)));
-        if (Zi < 1) continue;
-        for (int j = i + 1; j < natom; j++) {
-            int Zj = static_cast<int>(std::lround(mol->Z(j)));
-            if (Zj < 1) continue;
+    for (int ii = 0; ii < nreal; ii++) {
+        int i = real_atoms[ii];
+        for (int jj = ii + 1; jj < nreal; jj++) {
+            int j = real_atoms[jj];
 
             // Interatomic distance
             double xij = mol->x(j) - mol->x(i);
@@ -564,14 +569,14 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
             double rvdw = a1_ * rc + a2_;
 
             // Store coefficients in symmetric matrices
-            c6p[i][j] = c6;
-            c6p[j][i] = c6;
-            c8p[i][j] = c8;
-            c8p[j][i] = c8;
-            c10p[i][j] = c10;
-            c10p[j][i] = c10;
-            rcp[i][j] = rc;
-            rcp[j][i] = rc;
+            c6p[ii][jj] = c6;
+            c6p[jj][ii] = c6;
+            c8p[ii][jj] = c8;
+            c8p[jj][ii] = c8;
+            c10p[ii][jj] = c10;
+            c10p[jj][ii] = c10;
+            rcp[ii][jj] = rc;
+            rcp[jj][ii] = rc;
 
             double rvdw6 = std::pow(rvdw, 6);
             double rvdw8 = std::pow(rvdw, 8);
@@ -585,8 +590,8 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
             // Dispersion energy
             e_disp_tmp = c6 / (d6 + rvdw6) + c8 / (d8 + rvdw8) + c10 / (d10 + rvdw10);
             e_disp += e_disp_tmp;
-            e_disp_pairs->set(i, j, e_disp_tmp);
-            e_disp_pairs->set(j, i, e_disp_tmp);
+            e_disp_pairs->set(ii, jj, e_disp_tmp);
+            e_disp_pairs->set(jj, ii, e_disp_tmp);
 
             // Gradient (geometry-only, coefficients treated as constants)
             if (gp) {

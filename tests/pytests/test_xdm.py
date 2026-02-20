@@ -100,14 +100,77 @@ units angstrom
     """)
     psi4.set_options(
         {
+            "basis": "aug-cc-pvtz",
+            "DFT_SPHERICAL_POINTS": 590,
+            "DFT_RADIAL_POINTS": 99,
+        }
+    )
+    e_dimer, wfn_dimer = psi4.energy(
+        "b3lyp-xdm", molecule=dimer, return_wfn=True, bsse_type="cp"
+    )
+    # pp(wfn_dimer.variables())
+    e_dimer, wfn_dimer = psi4.energy(
+        "b3lyp-xdm", molecule=dimer, return_wfn=True, bsse_type="nocp"
+    )
+    return
+
+
+def test_nh3_ghosts():
+    """Test XDM on water dimer."""
+    psi4.set_num_threads(12)
+    psi4.set_memory("32 GB")
+    # nh3_nh3: -2.102, -3.133, -2.953, error: 0.180
+
+    m = psi4.geometry("""0 1
+Gh(N) -1.578718 -0.046611 0.000000
+Gh(H) -2.158621 0.136396 -0.809565
+Gh(H) -2.158621 0.136396 0.809565
+Gh(H) -0.849471 0.658193 0.000000
+--
+0 1
+N 1.578718 0.046611 0.000000
+H 2.158621 -0.136396 -0.809565
+H 0.849471 -0.658193 0.000000
+H 2.158621 -0.136396 0.809565
+
+units angstrom
+    """)
+    psi4.set_options(
+        {
             "basis": "aug-cc-pvdz",
             "DFT_SPHERICAL_POINTS": 590,
             "DFT_RADIAL_POINTS": 99,
         }
     )
-    e_dimer, wfn_dimer = psi4.energy("b3lyp-xdm", molecule=dimer, return_wfn=True, bsse_type="cp")
-    pp(wfn_dimer.variables())
+    e_m, wfn_m = psi4.energy("b3lyp-xdm", molecule=m, return_wfn=True)
+    pp(wfn_m.variables())
+    # shapes of XDM C6 COEFFICIENTS should be (4, 4)
+    print(wfn_m.variables()["XDM C6 COEFFICIENTS"].np)
+    print(wfn_m.variables()["XDM PAIRWISE ENERGY"].np)
+    assert wfn_m.variables()["XDM C6 COEFFICIENTS"].shape == (4, 4)
+    m = psi4.geometry("""0 1
+N 1.578718 0.046611 0.000000
+H 2.158621 -0.136396 -0.809565
+H 0.849471 -0.658193 0.000000
+H 2.158621 -0.136396 0.809565
+
+units angstrom
+    """)
+    psi4.set_options(
+        {
+            "basis": "aug-cc-pvdz",
+            "DFT_SPHERICAL_POINTS": 590,
+            "DFT_RADIAL_POINTS": 99,
+        }
+    )
+    e_m, wfn_m = psi4.energy("b3lyp-xdm", molecule=m, return_wfn=True)
+    pp(wfn_m.variables())
+    # shapes of XDM C6 COEFFICIENTS should be (4, 4)
+    print(wfn_m.variables()["XDM C6 COEFFICIENTS"].np)
+    print(wfn_m.variables()["XDM PAIRWISE ENERGY"].np)
+    assert wfn_m.variables()["XDM C6 COEFFICIENTS"].shape == (4, 4)
     return
+
 
 def test_nh3_nh3_xdm_IE():
     """Test XDM on water dimer."""
@@ -128,7 +191,6 @@ H 0.849471 -0.658193 0.000000
 H 2.158621 -0.136396 0.809565
 units angstrom
     """)
-
 
     dimer = psi4.geometry("""0 1
 N -1.578718 -0.046611 0.000000
@@ -172,4 +234,5 @@ if __name__ == "__main__":
     # pytest.main([__file__, "-x", "-v"])
     # test_water_xdm()
     # test_water_water_xdm_IE()
-    test_nh3_nh3_xdm_IE_energies()
+    # test_nh3_nh3_xdm_IE_energies()
+    test_nh3_ghosts()
