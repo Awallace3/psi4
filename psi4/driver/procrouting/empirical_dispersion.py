@@ -506,7 +506,7 @@ class XDMDispersionFunctor():
             core.set_variable(f"{self.fctldash.upper()} DISPERSION CORRECTION ENERGY", ene)
 
         # Copy XDM coefficient arrays from process environment to wavefunction
-        for var_name in ['XDM C6 COEFFICIENTS', 'XDM C8 COEFFICIENTS', 'XDM C10 COEFFICIENTS', 'XDM RC COEFFICIENTS']:
+        for var_name in ['XDM C6 COEFFICIENTS', 'XDM C8 COEFFICIENTS', 'XDM C10 COEFFICIENTS', 'XDM RC COEFFICIENTS', 'XDM PAIRWISE ENERGY']:
             if core.has_array_variable(var_name):
                 wfn.set_array_variable(var_name, core.array_variable(var_name))
 
@@ -534,7 +534,7 @@ class XDMDispersionFunctor():
         grad = self.xdm.compute_gradient(wfn)
 
         # Copy XDM coefficient arrays from process environment to wavefunction
-        for var_name in ['XDM C6 COEFFICIENTS', 'XDM C8 COEFFICIENTS', 'XDM C10 COEFFICIENTS', 'XDM RC COEFFICIENTS']:
+        for var_name in ['XDM C6 COEFFICIENTS', 'XDM C8 COEFFICIENTS', 'XDM C10 COEFFICIENTS', 'XDM RC COEFFICIENTS', 'XDM PAIRWISE ENERGY']:
             if core.has_array_variable(var_name):
                 wfn.set_array_variable(var_name, core.array_variable(var_name))
 

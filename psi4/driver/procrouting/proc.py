@@ -1400,16 +1400,15 @@ def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwar
         if disp_type["type"] == "xdm":
             # XDM dispersion: requires converged wavefunction, computed post-SCF
             basis_name = core.get_global_option("BASIS")
-            params = disp_type.get("params", {})
             # Strip -XDM suffix from functional name for BJ parameter lookup
             func_name = superfunc.name()
             if func_name.upper().endswith("-XDM"):
                 func_name = func_name[:-4]
-            if "a1" in params and "a2" in params:
+            if modified_disp_params is not None:
                 _disp_functor = empirical_dispersion.XDMDispersionFunctor(
                     functional_name=func_name,
-                    a1=params["a1"],
-                    a2_ang=params["a2"])
+                    a1=modified_disp_params[0],
+                    a2_ang=modified_disp_params[1])
             else:
                 _disp_functor = empirical_dispersion.XDMDispersionFunctor(
                     functional_name=func_name,

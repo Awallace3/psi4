@@ -70,83 +70,83 @@ struct BJParams {
 static const std::map<std::string, BJParams>& bj_param_table() {
     static const std::map<std::string, BJParams> table = {
         // B3LYP
-        {"b3lyp/6-31+g*", {0.4515, 2.1357}},
-        {"b3lyp/6-31+g**", {0.4306, 2.2076}},
-        {"b3lyp/6-311+g(2d,2p)", {0.4376, 2.1607}},
-        {"b3lyp/aug-cc-pvdz", {0.6224, 1.7068}},
-        {"b3lyp/aug-cc-pvtz", {0.6356, 1.5119}},
-        {"b3lyp/cc-pvdz", {0.6224, 1.7068}},
-        {"b3lyp/cc-pvtz", {0.6356, 1.5119}},
+        {"b3lyp/aug-cc-pvtz", {0.538364, 1.737333}},     // MAE: 0.238322 kcal/mol on KB49
+        {"b3lyp/aug-cc-pvdz", {0.531940, 1.733943}},     // MAE: 0.235896 kcal/mol on KB49
+        {"b3lyp/6-31+g*", {0.532946, 1.728012}},         // MAE: 0.264749 kcal/mol on KB49
+        {"b3lyp/6-31+g**", {0.529287, 1.755068}},        // MAE: 0.283291 kcal/mol on KB49
+        {"b3lyp/6-311+g(2d,2p)", {0.534685, 1.744202}},  // MAE: 0.224868 kcal/mol on KB49
+        {"b3lyp/cc-pvdz", {0.501855, 1.747014}},         // MAE: 0.337436 kcal/mol on KB49
+        {"b3lyp/cc-pvtz", {0.527446, 1.755342}},         // MAE: 0.254180 kcal/mol on KB49
 
         // PW86PBE
-        {"pw86pbe/6-31+g*", {0.6336, 1.9148}},
-        {"pw86pbe/6-31+g**", {0.6935, 1.7519}},
-        {"pw86pbe/aug-cc-pvdz", {0.6736, 1.9327}},
-        {"pw86pbe/aug-cc-pvtz", {0.7564, 1.4545}},
+        // {"pw86pbe/6-31+g*", {0.6336, 1.9148}},
+        // {"pw86pbe/6-31+g**", {0.6935, 1.7519}},
+        // {"pw86pbe/aug-cc-pvdz", {0.6736, 1.9327}},
+        // {"pw86pbe/aug-cc-pvtz", {0.7564, 1.4545}},
 
         // PBE
-        {"pbe/6-31+g*", {0.2445, 3.2596}},
-        {"pbe/6-31+g**", {0.2746, 3.1857}},
-        {"pbe/aug-cc-pvdz", {0.2061, 3.5486}},
-        {"pbe/aug-cc-pvtz", {0.4492, 2.5517}},
+        {"pbe/6-31+g*", {0.624282, 1.708864}},      // MAE: 0.410288 kcal/mol on KB49
+        {"pbe/6-31+g**", {0.622354, 1.739073}},     // MAE: 0.426324 kcal/mol on KB49
+        {"pbe/aug-cc-pvdz", {0.631637, 1.703449}},  // MAE: 0.389649 kcal/mol on KB49
+        {"pbe/aug-cc-pvtz", {0.633532, 1.713234}},  // MAE: 0.399806 kcal/mol on KB49
 
         // PBE0
-        {"pbe0/6-31+g*", {0.0845, 3.7940}},
-        {"pbe0/6-31+g**", {0.1163, 3.7191}},
-        {"pbe0/aug-cc-pvdz", {0.1389, 3.8310}},
-        {"pbe0/aug-cc-pvtz", {0.4186, 2.6791}},
-        {"pbe0/cc-pvdz", {0.1389, 3.8310}},
-        {"pbe0/cc-pvtz", {0.4186, 2.6791}},
+        {"pbe0/aug-cc-pvdz", {0.642001, 1.762457}},  // MAE: 0.324542 kcal/mol on KB49
+        {"pbe0/6-31+g*", {0.631070, 1.781078}},      // MAE: 0.329536 kcal/mol on KB49
+        {"pbe0/6-31+g**", {0.626014, 1.820696}},     // MAE: 0.400165 kcal/mol on KB49
+        {"pbe0/aug-cc-pvtz", {0.638793, 1.778718}},  // MAE: 0.343853 kcal/mol on KB49
+        {"pbe0/cc-pvdz", {0.620731, 1.769460}},      // MAE: 0.412649 kcal/mol on KB49
+        {"pbe0/cc-pvtz", {0.625718, 1.806336}},      // MAE: 0.355555 kcal/mol on KB49
 
         // BLYP
-        {"blyp/6-31+g*", {0.5942, 1.4555}},
-        {"blyp/6-31+g**", {0.5653, 1.5460}},
-        {"blyp/aug-cc-pvdz", {0.9742, 0.3427}},
-        {"blyp/aug-cc-pvtz", {0.7647, 0.8457}},
+        {"blyp/6-31+g*", {0.492746, 1.641319}},      // MAE: 0.381780 kcal/mol on KB49
+        {"blyp/6-31+g**", {0.489705, 1.665341}},     // MAE: 0.361765 kcal/mol on KB49
+        {"blyp/aug-cc-pvdz", {0.486914, 1.659594}},  // MAE: 0.330342 kcal/mol on KB49
+        {"blyp/aug-cc-pvtz", {0.494799, 1.655559}},  // MAE: 0.300791 kcal/mol on KB49
 
         // BHAHLYP (BHandHLYP, 50% HF)
-        {"bhahlyp/6-31+g*", {0.1483, 3.3435}},
-        {"bhahlyp/6-31+g**", {0.1432, 3.3705}},
-        {"bhandh/aug-cc-pvtz", {0.5610, 1.9894}},
-        {"bhandhlyp/aug-cc-pvtz", {0.5610, 1.9894}},
-        {"bhalfandhalf/aug-cc-pvtz", {0.5610, 1.9894}},
-        {"bhalfandhalf/aug-cc-pvdz", {0.1247, 3.5725}},
+        // {"bhahlyp/6-31+g*", {0.1483, 3.3435}},
+        // {"bhahlyp/6-31+g**", {0.1432, 3.3705}},
+        // {"bhandh/aug-cc-pvtz", {0.5610, 1.9894}},
+        // {"bhandhlyp/aug-cc-pvtz", {0.5610, 1.9894}},
+        // {"bhalfandhalf/aug-cc-pvtz", {0.5610, 1.9894}},
+        // {"bhalfandhalf/aug-cc-pvdz", {0.1247, 3.5725}},
 
         // CAM-B3LYP
-        {"cam-b3lyp/6-31+g*", {0.2315, 3.2123}},
-        {"cam-b3lyp/6-31+g**", {0.2365, 3.2081}},
-        {"cam-b3lyp/aug-cc-pvdz", {0.1849, 3.5140}},
-        {"cam-b3lyp/aug-cc-pvtz", {0.3248, 2.8607}},
-        {"camb3lyp/aug-cc-pvtz", {0.3248, 2.8607}},
-        {"camb3lyp/aug-cc-pvdz", {0.1849, 3.5140}},
+        // {"cam-b3lyp/6-31+g*", {0.2315, 3.2123}},
+        // {"cam-b3lyp/6-31+g**", {0.2365, 3.2081}},
+        // {"cam-b3lyp/aug-cc-pvdz", {0.1849, 3.5140}},
+        // {"cam-b3lyp/aug-cc-pvtz", {0.3248, 2.8607}},
+        // {"camb3lyp/aug-cc-pvtz", {0.3248, 2.8607}},
+        // {"camb3lyp/aug-cc-pvdz", {0.1849, 3.5140}},
 
         // LC-wPBE
-        {"lc-wpbe/aug-cc-pvtz", {1.0149, 0.6755}},
-        {"lcwpbe/aug-cc-pvtz", {1.0149, 0.6755}},
-        {"lc-wpbe/6-31+g*", {0.8134, 1.3736}},
-        {"lcwpbe/6-31+g*", {0.8134, 1.3736}},
-        {"lc-wpbe/6-31+g**", {0.8934, 1.1466}},
-        {"lcwpbe/6-31+g**", {0.8934, 1.1466}},
-        {"lcwpbe/aug-cc-pvdz", {1.1800, 0.4179}},
+        // {"lc-wpbe/aug-cc-pvtz", {1.0149, 0.6755}},
+        // {"lcwpbe/aug-cc-pvtz", {1.0149, 0.6755}},
+        // {"lc-wpbe/6-31+g*", {0.8134, 1.3736}},
+        // {"lcwpbe/6-31+g*", {0.8134, 1.3736}},
+        // {"lc-wpbe/6-31+g**", {0.8934, 1.1466}},
+        // {"lcwpbe/6-31+g**", {0.8934, 1.1466}},
+        // {"lcwpbe/aug-cc-pvdz", {1.1800, 0.4179}},
 
         // B97-1
-        {"b971/aug-cc-pvtz", {0.1998, 3.5367}},
-        {"b97-1/aug-cc-pvtz", {0.1998, 3.5367}},
-        {"b97-1/6-31+g*", {0.0118, 4.1784}},
-        {"b97-1/6-31+g**", {0.0429, 4.1090}},
+        // {"b971/aug-cc-pvtz", {0.1998, 3.5367}},
+        // {"b97-1/aug-cc-pvtz", {0.1998, 3.5367}},
+        // {"b97-1/6-31+g*", {0.0118, 4.1784}},
+        // {"b97-1/6-31+g**", {0.0429, 4.1090}},
 
         // HF
-        {"hf/aug-cc-pvdz", {0.3698, 2.1961}},
-        {"hf/aug-cc-pvtz", {0.3698, 2.1961}},
+        // {"hf/aug-cc-pvdz", {0.3698, 2.1961}},
+        // {"hf/aug-cc-pvtz", {0.3698, 2.1961}},
 
         // B86BPBE
-        {"b86bpbe/aug-cc-pvtz", {0.7839, 1.2544}},
+        // {"b86bpbe/aug-cc-pvtz", {0.7839, 1.2544}},
 
         // TPSS
-        {"tpss/aug-cc-pvtz", {0.6612, 1.5111}},
+        // {"tpss/aug-cc-pvtz", {0.6612, 1.5111}},
 
         // HSE06
-        {"hse06/aug-cc-pvtz", {0.3691, 2.8793}},
+        // {"hse06/aug-cc-pvtz", {0.3691, 2.8793}},
     };
     return table;
 }
@@ -177,8 +177,7 @@ std::shared_ptr<XDMDispersion> XDMDispersion::build(const std::string& functiona
     return std::make_shared<XDMDispersion>(it->second.a1, a2_bohr, func_lower);
 }
 
-std::shared_ptr<XDMDispersion> XDMDispersion::build(const std::string& functional, double a1,
-                                                     double a2_angstrom) {
+std::shared_ptr<XDMDispersion> XDMDispersion::build(const std::string& functional, double a1, double a2_angstrom) {
     std::string func_lower = functional;
     std::transform(func_lower.begin(), func_lower.end(), func_lower.begin(), ::tolower);
     double a2_bohr = a2_angstrom / BOHR_TO_ANGSTROM;
@@ -259,8 +258,8 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     ProatomDensity proatom;
     std::vector<std::vector<double>> hirshfeld_weights;
     compute_hirshfeld_weights(proatom, natom, atomic_nums.data(),
-                              reinterpret_cast<const double(*)[3]>(atom_coords.data()), npoints_total,
-                              grid->x(), grid->y(), grid->z(), hirshfeld_weights);
+                              reinterpret_cast<const double (*)[3]>(atom_coords.data()), npoints_total, grid->x(),
+                              grid->y(), grid->z(), hirshfeld_weights);
 
     // --- Allocate per-atom accumulators ---
     std::vector<AtomicData> atom_data(natom);
@@ -350,15 +349,13 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
 
             // T0 = D * phi^T  (half-transform)
             double** Tp = T_lapl->pointer();
-            C_DGEMM('N', 'N', npoints, nlocal, nlocal, 1.0, phip[0], coll_funcs, D2p[0], nglobal, 0.0,
-                    Tp[0], nglobal);
+            C_DGEMM('N', 'N', npoints, nlocal, nlocal, 1.0, phip[0], coll_funcs, D2p[0], nglobal, 0.0, Tp[0], nglobal);
 
             // Diagonal Laplacian contribution: 2 * sum_c phi_cc . T0
             std::vector<double> lapl(npoints, 0.0);
             for (int P = 0; P < npoints; P++) {
-                lapl[P] = 2.0 * (C_DDOT(nlocal, phi_xx[P], 1, Tp[P], 1) +
-                                  C_DDOT(nlocal, phi_yy[P], 1, Tp[P], 1) +
-                                  C_DDOT(nlocal, phi_zz[P], 1, Tp[P], 1));
+                lapl[P] = 2.0 * (C_DDOT(nlocal, phi_xx[P], 1, Tp[P], 1) + C_DDOT(nlocal, phi_yy[P], 1, Tp[P], 1) +
+                                 C_DDOT(nlocal, phi_zz[P], 1, Tp[P], 1));
             }
 
             // Add cross terms: 2 * tau_nohalf
@@ -380,13 +377,13 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
                 if (restricted) {
                     // RKS: RHO_A = rho_total, GAMMA_AA = |grad rho_alpha|^2, TAU_A = tau_nohalf_alpha
                     rho_spin = rho_p[P] * 0.5;
-                    grad_sq = gamma_p[P];        // already |grad rho_alpha|^2
-                    tau_nohalf = tau_p[P];       // already tau_nohalf for alpha
+                    grad_sq = gamma_p[P];   // already |grad rho_alpha|^2
+                    tau_nohalf = tau_p[P];  // already tau_nohalf for alpha
                 } else {
                     // UKS: RHO_A = rho_alpha, GAMMA_AA = |grad rho_alpha|^2, TAU_A = 0.5*tau_nohalf
                     rho_spin = rho_p[P];
                     grad_sq = gamma_p[P];
-                    tau_nohalf = 2.0 * tau_p[P]; // convert from half to nohalf convention
+                    tau_nohalf = 2.0 * tau_p[P];  // convert from half to nohalf convention
                 }
 
                 if (rho_spin < 1.0e-15) {
@@ -453,19 +450,18 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
                 double rho_tot = rho_a + rho_b;
 
                 // M1^2: exchange-hole dipole moment squared
-                atom_data[a].mm1 += w * h * (rho_a * (r - r1_a) * (r - r1_a) +
-                                              rho_b * (r - r1_b) * (r - r1_b));
+                atom_data[a].mm1 += w * h * (rho_a * (r - r1_a) * (r - r1_a) + rho_b * (r - r1_b) * (r - r1_b));
 
                 // M2^2: exchange-hole quadrupole moment squared
-                atom_data[a].mm2 += w * h * (rho_a * (r * r - r1_a * r1_a) * (r * r - r1_a * r1_a) +
-                                              rho_b * (r * r - r1_b * r1_b) * (r * r - r1_b * r1_b));
+                atom_data[a].mm2 += w * h *
+                                    (rho_a * (r * r - r1_a * r1_a) * (r * r - r1_a * r1_a) +
+                                     rho_b * (r * r - r1_b * r1_b) * (r * r - r1_b * r1_b));
 
                 // M3^2: exchange-hole octupole moment squared
                 double r3 = r * r * r;
                 double r1a3 = r1_a * r1_a * r1_a;
                 double r1b3 = r1_b * r1_b * r1_b;
-                atom_data[a].mm3 += w * h * (rho_a * (r3 - r1a3) * (r3 - r1a3) +
-                                              rho_b * (r3 - r1b3) * (r3 - r1b3));
+                atom_data[a].mm3 += w * h * (rho_a * (r3 - r1a3) * (r3 - r1a3) + rho_b * (r3 - r1b3) * (r3 - r1b3));
 
                 // Effective atomic volume
                 atom_data[a].vol += w * h * rho_tot * r3;
@@ -480,12 +476,10 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
 
     // Print summary
     outfile->Printf("\n  ==> XDM Atomic Properties <==\n\n");
-    outfile->Printf("    %5s %8s %12s %12s %12s %12s %12s\n", "Atom", "Z", "Charge", "Volume", "M1^2", "M2^2",
-                    "M3^2");
+    outfile->Printf("    %5s %8s %12s %12s %12s %12s %12s\n", "Atom", "Z", "Charge", "Volume", "M1^2", "M2^2", "M3^2");
     for (int a = 0; a < natom; a++) {
-        outfile->Printf("    %5d %8d %12.6f %12.6f %12.6f %12.6f %12.6f\n", a + 1, atomic_nums[a],
-                        atom_data[a].charge, atom_data[a].vol, atom_data[a].mm1, atom_data[a].mm2,
-                        atom_data[a].mm3);
+        outfile->Printf("    %5d %8d %12.6f %12.6f %12.6f %12.6f %12.6f\n", a + 1, atomic_nums[a], atom_data[a].charge,
+                        atom_data[a].vol, atom_data[a].mm1, atom_data[a].mm2, atom_data[a].mm3);
     }
     outfile->Printf("\n");
 
@@ -497,7 +491,7 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
 // ============================================================================
 
 double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::vector<AtomicData>& atoms,
-                                       SharedMatrix gradient) {
+                                      SharedMatrix gradient) {
     int natom = mol->natom();
 
     // Compute effective atomic polarizabilities
@@ -523,10 +517,11 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
     outfile->Printf("\n");
 
     // Compute pairwise dispersion
-    double e_disp = 0.0;
+    double e_disp = 0.0, e_disp_tmp = 0.0;
     double** gp = gradient ? gradient->pointer() : nullptr;
 
     // Create matrices to store pairwise coefficients
+    auto e_disp_pairs = std::make_shared<Matrix>("XDM PAIRWISE ENERGY", natom, natom);
     auto c6_mat = std::make_shared<Matrix>("XDM C6 Coefficients", natom, natom);
     auto c8_mat = std::make_shared<Matrix>("XDM C8 Coefficients", natom, natom);
     auto c10_mat = std::make_shared<Matrix>("XDM C10 Coefficients", natom, natom);
@@ -537,8 +532,7 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
     double** rcp = rc_mat->pointer();
 
     outfile->Printf("  ==> XDM Pairwise Coefficients <==\n\n");
-    outfile->Printf("    %4s %4s %12s %16s %16s %16s %12s %12s\n", "i", "j", "dij", "C6", "C8", "C10", "Rc",
-                    "Rvdw");
+    outfile->Printf("    %4s %4s %12s %16s %16s %16s %12s %12s %12s\n", "i", "j", "dij", "C6", "C8", "C10", "Rc", "Rvdw", "E_disp");
 
     for (int i = 0; i < natom; i++) {
         int Zi = mol->true_atomic_number(i);
@@ -589,7 +583,10 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
             double d10 = d8 * d2;
 
             // Dispersion energy
-            e_disp -= c6 / (d6 + rvdw6) + c8 / (d8 + rvdw8) + c10 / (d10 + rvdw10);
+            e_disp_tmp = c6 / (d6 + rvdw6) + c8 / (d8 + rvdw8) + c10 / (d10 + rvdw10);
+            e_disp += e_disp_tmp;
+            e_disp_pairs->set(i, j, e_disp_tmp);
+            e_disp_pairs->set(j, i, e_disp_tmp);
 
             // Gradient (geometry-only, coefficients treated as constants)
             if (gp) {
@@ -613,8 +610,8 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
                 gp[j][2] += fgrad * zij;
             }
 
-            outfile->Printf("    %4d %4d %12.6f %16.9E %16.9E %16.9E %12.6f %12.6f\n", i + 1, j + 1, d, c6, c8,
-                            c10, rc, rvdw);
+            outfile->Printf("    %4d %4d %12.6f %16.9E %16.9E %16.9E %12.6f %12.6f %12.6f\n", i + 1, j + 1, d, c6, c8, c10, rc,
+                            rvdw, e_disp_tmp);
         }
     }
 
@@ -623,6 +620,7 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
     Process::environment.arrays["XDM C8 COEFFICIENTS"] = c8_mat;
     Process::environment.arrays["XDM C10 COEFFICIENTS"] = c10_mat;
     Process::environment.arrays["XDM RC COEFFICIENTS"] = rc_mat;
+    Process::environment.arrays["XDM PAIRWISE ENERGY"] = e_disp_pairs;
 
     outfile->Printf("\n");
     outfile->Printf("  XDM Dispersion Energy: %20.12f [Eh]\n\n", e_disp);
