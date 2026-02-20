@@ -75,6 +75,8 @@ static const std::map<std::string, BJParams>& bj_param_table() {
         {"b3lyp/6-311+g(2d,2p)", {0.4376, 2.1607}},
         {"b3lyp/aug-cc-pvdz", {0.6224, 1.7068}},
         {"b3lyp/aug-cc-pvtz", {0.6356, 1.5119}},
+        {"b3lyp/cc-pvdz", {0.6224, 1.7068}},
+        {"b3lyp/cc-pvtz", {0.6356, 1.5119}},
 
         // PW86PBE
         {"pw86pbe/6-31+g*", {0.6336, 1.9148}},
@@ -93,6 +95,8 @@ static const std::map<std::string, BJParams>& bj_param_table() {
         {"pbe0/6-31+g**", {0.1163, 3.7191}},
         {"pbe0/aug-cc-pvdz", {0.1389, 3.8310}},
         {"pbe0/aug-cc-pvtz", {0.4186, 2.6791}},
+        {"pbe0/cc-pvdz", {0.1389, 3.8310}},
+        {"pbe0/cc-pvtz", {0.4186, 2.6791}},
 
         // BLYP
         {"blyp/6-31+g*", {0.5942, 1.4555}},
