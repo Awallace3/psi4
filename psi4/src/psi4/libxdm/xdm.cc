@@ -70,8 +70,8 @@ struct BJParams {
 static const std::map<std::string, BJParams>& bj_param_table() {
     static const std::map<std::string, BJParams> table = {
         // B3LYP
-        {"b3lyp/aug-cc-pvtz", {0.538364, 1.737333}},     // MAE: 0.238322 kcal/mol on KB49
-        {"b3lyp/aug-cc-pvdz", {0.531940, 1.733943}},     // MAE: 0.235896 kcal/mol on KB49
+        {"b3lyp/aug-cc-pvtz", {0.6829, 1.3073}},     // MAE: 0.238322 kcal/mol on KB49
+        {"b3lyp/aug-cc-pvdz", {0.6829, 1.3073}},     // MAE: 0.235896 kcal/mol on KB49
         {"b3lyp/6-31+g*", {0.532946, 1.728012}},         // MAE: 0.264749 kcal/mol on KB49
         {"b3lyp/6-31+g**", {0.529287, 1.755068}},        // MAE: 0.283291 kcal/mol on KB49
         {"b3lyp/6-311+g(2d,2p)", {0.534685, 1.744202}},  // MAE: 0.224868 kcal/mol on KB49
@@ -248,7 +248,7 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     std::vector<int> atomic_nums(natom);
     std::vector<std::array<double, 3>> atom_coords(natom);
     for (int a = 0; a < natom; a++) {
-        atomic_nums[a] = mol->true_atomic_number(a);
+        atomic_nums[a] = static_cast<int>(std::lround(mol->Z(a)));
         atom_coords[a][0] = mol->x(a);
         atom_coords[a][1] = mol->y(a);
         atom_coords[a][2] = mol->z(a);
@@ -497,8 +497,8 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
     // Compute effective atomic polarizabilities
     std::vector<double> atpol(natom, 0.0);
     for (int i = 0; i < natom; i++) {
+        if (mol->Z(i) <= 0.0) continue;
         int Z = mol->true_atomic_number(i);
-        if (Z < 1) continue;
 
         double alpha_free = get_free_polarizability(Z);
         double vol_free = get_free_volume(Z, functional_name_);
@@ -512,7 +512,7 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
     outfile->Printf("  ==> XDM Atomic Polarizabilities <==\n\n");
     outfile->Printf("    %5s %8s %16s\n", "Atom", "Z", "Polarizability");
     for (int i = 0; i < natom; i++) {
-        outfile->Printf("    %5d %8d %16.6f\n", i + 1, mol->true_atomic_number(i), atpol[i]);
+        outfile->Printf("    %5d %8d %16.6f\n", i + 1, static_cast<int>(std::lround(mol->Z(i))), atpol[i]);
     }
     outfile->Printf("\n");
 
@@ -535,10 +535,10 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
     outfile->Printf("    %4s %4s %12s %16s %16s %16s %12s %12s %12s\n", "i", "j", "dij", "C6", "C8", "C10", "Rc", "Rvdw", "E_disp");
 
     for (int i = 0; i < natom; i++) {
-        int Zi = mol->true_atomic_number(i);
+        int Zi = static_cast<int>(std::lround(mol->Z(i)));
         if (Zi < 1) continue;
         for (int j = i + 1; j < natom; j++) {
-            int Zj = mol->true_atomic_number(j);
+            int Zj = static_cast<int>(std::lround(mol->Z(j)));
             if (Zj < 1) continue;
 
             // Interatomic distance
