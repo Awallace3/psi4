@@ -69,40 +69,49 @@ struct BJParams {
 
 static const std::map<std::string, BJParams>& bj_param_table() {
     static const std::map<std::string, BJParams> table = {
-        // B3LYP
-        {"b3lyp/aug-cc-pvtz", {0.6829, 1.3073}},     // MAE: 0.238322 kcal/mol on KB49
-        {"b3lyp/aug-cc-pvdz", {0.6829, 1.3073}},     // MAE: 0.235896 kcal/mol on KB49
-        {"b3lyp/6-31+g*", {0.532946, 1.728012}},         // MAE: 0.264749 kcal/mol on KB49
-        {"b3lyp/6-31+g**", {0.529287, 1.755068}},        // MAE: 0.283291 kcal/mol on KB49
-        {"b3lyp/6-311+g(2d,2p)", {0.534685, 1.744202}},  // MAE: 0.224868 kcal/mol on KB49
-        {"b3lyp/cc-pvdz", {0.501855, 1.747014}},         // MAE: 0.337436 kcal/mol on KB49
-        {"b3lyp/cc-pvtz", {0.527446, 1.755342}},         // MAE: 0.254180 kcal/mol on KB49
-
-        // PW86PBE
-        // {"pw86pbe/6-31+g*", {0.6336, 1.9148}},
-        // {"pw86pbe/6-31+g**", {0.6935, 1.7519}},
-        // {"pw86pbe/aug-cc-pvdz", {0.6736, 1.9327}},
-        // {"pw86pbe/aug-cc-pvtz", {0.7564, 1.4545}},
-
-        // PBE
-        {"pbe/6-31+g*", {0.624282, 1.708864}},      // MAE: 0.410288 kcal/mol on KB49
-        {"pbe/6-31+g**", {0.622354, 1.739073}},     // MAE: 0.426324 kcal/mol on KB49
-        {"pbe/aug-cc-pvdz", {0.631637, 1.703449}},  // MAE: 0.389649 kcal/mol on KB49
-        {"pbe/aug-cc-pvtz", {0.633532, 1.713234}},  // MAE: 0.399806 kcal/mol on KB49
+        // B3LYP - /nocp performs a little worse at dz and smaller
+        {"b3lyp/aug-cc-pvtz", {0.538965, 1.707159}},          // MAE: 0.213414 kcal/mol on KB49
+        {"b3lyp/aug-cc-pvtz/nocp", {0.299469, 2.454713}},     // MAE: 0.222407 kcal/mol on KB49
+        {"b3lyp/aug-cc-pvdz", {0.541310, 1.707761}},          // MAE: 0.201706 kcal/mol on KB49
+        {"b3lyp/aug-cc-pvdz/nocp", {0.594163, 1.708002}},     // MAE: 0.259843 kcal/mol on KB49
+        {"b3lyp/6-31+g*", {0.539265, 1.706567}},              // MAE: 0.248165 kcal/mol on KB49
+        {"b3lyp/6-31+g*/nocp", {0.249120, 2.690583}},         // MAE: 0.359967 kcal/mol on KB49
+        {"b3lyp/6-31+g**", {0.544086, 1.707329}},             // MAE: 0.249690 kcal/mol on KB49
+        {"b3lyp/6-31+g**/nocp", {0.226145, 2.762253}},        // MAE: 0.339456 kcal/mol on KB49
+        {"b3lyp/6-311+g(2d,2p)", {0.541432, 1.706280}},       // MAE: 0.196681 kcal/mol on KB49
+        {"b3lyp/6-311+g(2d,2p)/nocp", {0.564665, 1.708375}},  // MAE: 0.254022 kcal/mol on KB49
+        {"b3lyp/cc-pvdz", {0.502835, 1.705159}},              // MAE: 0.294160 kcal/mol on KB49
+        {"b3lyp/cc-pvdz/nocp", {0.200048, 3.125447}},         // MAE: 1.301956 kcal/mol on KB49
+        {"b3lyp/cc-pvtz", {0.533051, 1.708554}},              // MAE: 0.233595 kcal/mol on KB49
+        {"b3lyp/cc-pvtz/nocp", {0.474763, 2.033757}},         // MAE: 0.543178 kcal/mol on KB49
 
         // PBE0
-        {"pbe0/aug-cc-pvdz", {0.642001, 1.762457}},  // MAE: 0.324542 kcal/mol on KB49
-        {"pbe0/6-31+g*", {0.631070, 1.781078}},      // MAE: 0.329536 kcal/mol on KB49
-        {"pbe0/6-31+g**", {0.626014, 1.820696}},     // MAE: 0.400165 kcal/mol on KB49
-        {"pbe0/aug-cc-pvtz", {0.638793, 1.778718}},  // MAE: 0.343853 kcal/mol on KB49
-        {"pbe0/cc-pvdz", {0.620731, 1.769460}},      // MAE: 0.412649 kcal/mol on KB49
-        {"pbe0/cc-pvtz", {0.625718, 1.806336}},      // MAE: 0.355555 kcal/mol on KB49
+        {"pbe0/6-31+g*", {0.665768, 1.708279}},           // MAE: 0.319232 kcal/mol on KB49
+        {"pbe0/6-31+g*/nocp", {0.000000, 3.942401}},      // MAE: 0.489782 kcal/mol on KB49
+        {"pbe0/6-31+g**", {0.672756, 1.709480}},          // MAE: 0.383004 kcal/mol on KB49
+        {"pbe0/6-31+g**/nocp", {0.000000, 3.957889}},     // MAE: 0.495260 kcal/mol on KB49
+        {"pbe0/aug-cc-pvdz", {0.675533, 1.709020}},       // MAE: 0.327751 kcal/mol on KB49
+        {"pbe0/aug-cc-pvdz/nocp", {0.757220, 1.709831}},  // MAE: 0.453216 kcal/mol on KB49
+        {"pbe0/cc-pvdz", {0.648251, 1.707199}},           // MAE: 0.390661 kcal/mol on KB49
+        {"pbe0/cc-pvdz/nocp", {0.000016, 4.226151}},      // MAE: 1.239266 kcal/mol on KB49
+        {"pbe0/cc-pvtz", {0.662432, 1.709395}},           // MAE: 0.352988 kcal/mol on KB49
+        {"pbe0/cc-pvtz/nocp", {0.337012, 2.867459}},      // MAE: 0.622166 kcal/mol on KB49
+
+        // PBE
+        {"pbe/6-31+g*", {0.638224, 1.705838}},           // MAE: 0.419856 kcal/mol on KB49
+        {"pbe/6-31+g*/nocp", {0.699062, 1.710117}},      // MAE: 0.562749 kcal/mol on KB49
+        {"pbe/6-31+g**", {0.644670, 1.707056}},          // MAE: 0.430145 kcal/mol on KB49
+        {"pbe/6-31+g**/nocp", {0.704316, 1.709007}},     // MAE: 0.561644 kcal/mol on KB49
+        {"pbe/aug-cc-pvdz", {0.646009, 1.706796}},       // MAE: 0.392538 kcal/mol on KB49
+        {"pbe/aug-cc-pvdz/nocp", {0.719266, 1.705258}},  // MAE: 0.494140 kcal/mol on KB49
+        {"pbe/aug-cc-pvtz", {0.641172, 1.707118}},       // MAE: 0.402015 kcal/mol on KB49
+        {"pbe/aug-cc-pvtz/nocp", {0.658991, 1.708286}},  // MAE: 0.412740 kcal/mol on KB49
 
         // BLYP
-        {"blyp/6-31+g*", {0.492746, 1.641319}},      // MAE: 0.381780 kcal/mol on KB49
-        {"blyp/6-31+g**", {0.489705, 1.665341}},     // MAE: 0.361765 kcal/mol on KB49
-        {"blyp/aug-cc-pvdz", {0.486914, 1.659594}},  // MAE: 0.330342 kcal/mol on KB49
-        {"blyp/aug-cc-pvtz", {0.494799, 1.655559}},  // MAE: 0.300791 kcal/mol on KB49
+        {"blyp/6-31+g*", {0.492746, 1.641319}},
+        {"blyp/6-31+g**", {0.489705, 1.665341}},
+        {"blyp/aug-cc-pvdz", {0.486914, 1.659594}},
+        {"blyp/aug-cc-pvtz", {0.494799, 1.655559}},
 
         // BHAHLYP (BHandHLYP, 50% HF)
         // {"bhahlyp/6-31+g*", {0.1483, 3.3435}},
@@ -111,6 +120,12 @@ static const std::map<std::string, BJParams>& bj_param_table() {
         // {"bhandhlyp/aug-cc-pvtz", {0.5610, 1.9894}},
         // {"bhalfandhalf/aug-cc-pvtz", {0.5610, 1.9894}},
         // {"bhalfandhalf/aug-cc-pvdz", {0.1247, 3.5725}},
+
+        // PW86PBE
+        // {"pw86pbe/6-31+g*", {0.6336, 1.9148}},
+        // {"pw86pbe/6-31+g**", {0.6935, 1.7519}},
+        // {"pw86pbe/aug-cc-pvdz", {0.6736, 1.9327}},
+        // {"pw86pbe/aug-cc-pvtz", {0.7564, 1.4545}},
 
         // CAM-B3LYP
         // {"cam-b3lyp/6-31+g*", {0.2315, 3.2123}},
@@ -539,7 +554,8 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
     double** rcp = rc_mat->pointer();
 
     outfile->Printf("  ==> XDM Pairwise Coefficients <==\n\n");
-    outfile->Printf("    %4s %4s %12s %16s %16s %16s %12s %12s %12s\n", "i", "j", "dij", "C6", "C8", "C10", "Rc", "Rvdw", "E_disp");
+    outfile->Printf("    %4s %4s %12s %16s %16s %16s %12s %12s %12s\n", "i", "j", "dij", "C6", "C8", "C10", "Rc",
+                    "Rvdw", "E_disp");
 
     for (int ii = 0; ii < nreal; ii++) {
         int i = real_atoms[ii];
@@ -588,7 +604,7 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
             double d10 = d8 * d2;
 
             // Dispersion energy
-            e_disp_tmp = c6 / (d6 + rvdw6) + c8 / (d8 + rvdw8) + c10 / (d10 + rvdw10);
+            e_disp_tmp = -(c6 / (d6 + rvdw6) + c8 / (d8 + rvdw8) + c10 / (d10 + rvdw10));
             e_disp += e_disp_tmp;
             e_disp_pairs->set(ii, jj, e_disp_tmp);
             e_disp_pairs->set(jj, ii, e_disp_tmp);
@@ -615,8 +631,8 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
                 gp[j][2] += fgrad * zij;
             }
 
-            outfile->Printf("    %4d %4d %12.6f %16.9E %16.9E %16.9E %12.6f %12.6f %12.6f\n", i + 1, j + 1, d, c6, c8, c10, rc,
-                            rvdw, e_disp_tmp);
+            outfile->Printf("    %4d %4d %12.6f %16.9E %16.9E %16.9E %12.6f %12.6f %12.6f\n", i + 1, j + 1, d, c6, c8,
+                            c10, rc, rvdw, e_disp_tmp);
         }
     }
 
