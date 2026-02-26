@@ -172,7 +172,7 @@ units angstrom
     return
 
 
-def test_nh3_nh3_xdm_IE():
+def test_nh3_nh3_xdm_unsupported_params():
     """Test XDM on water dimer."""
     psi4.set_num_threads(12)
     psi4.set_memory("32 GB")
@@ -208,25 +208,61 @@ units angstrom
     """)
     psi4.set_options(
         {
-            "basis": "aug-cc-pvdz",
+            "basis": "sto-3g",
             "DFT_SPHERICAL_POINTS": 590,
             "DFT_RADIAL_POINTS": 99,
-            "XDM_DISPERSION_PARAMETERS": [0.0, 5.0],
+            "XDM_DISPERSION_PARAMETERS": [1.0, 5.0],
         }
     )
-    e_monA, wfn_A = psi4.energy("b3lyp-xdm", molecule=monA, return_wfn=True)
-    e_monB, wfn_B = psi4.energy("b3lyp-xdm", molecule=monB, return_wfn=True)
-    pp(wfn_A.variables())
-    pp(wfn_B.variables())
-    e_dimer, wfn_dimer = psi4.energy("b3lyp-xdm", molecule=dimer, return_wfn=True)
-    pp(wfn_dimer.variables())
-    e, wfn = psi4.energy("b3lyp", molecule=dimer, bsse_type="nocp", return_wfn=True)
-    print(e)
-    # in kcal/mol
-    qcvars = psi4.core.variables()
-    pp(qcvars)
-    pp(wfn.variables())
     e, wfn = psi4.energy("b3lyp", molecule=dimer, bsse_type="cp", return_wfn=True)
+    print(e)
+    # Capture output and assert compare_values
+    return
+
+
+def test_nh3_nh3_xdm_IE_CP_NOCP():
+    """Test XDM on water dimer."""
+    psi4.set_num_threads(12)
+    psi4.set_memory("32 GB")
+    monA = psi4.geometry("""0 1
+N -1.578718 -0.046611 0.000000
+H -2.158621 0.136396 -0.809565
+H -2.158621 0.136396 0.809565
+H -0.849471 0.658193 0.000000
+
+units angstrom
+    """)
+    monB = psi4.geometry("""0 1
+N 1.578718 0.046611 0.000000
+H 2.158621 -0.136396 -0.809565
+H 0.849471 -0.658193 0.000000
+H 2.158621 -0.136396 0.809565
+units angstrom
+    """)
+
+    dimer = psi4.geometry("""0 1
+N -1.578718 -0.046611 0.000000
+H -2.158621 0.136396 -0.809565
+H -2.158621 0.136396 0.809565
+H -0.849471 0.658193 0.000000
+--
+0 1
+N 1.578718 0.046611 0.000000
+H 2.158621 -0.136396 -0.809565
+H 0.849471 -0.658193 0.000000
+H 2.158621 -0.136396 0.809565
+
+units angstrom
+    """)
+    psi4.set_options(
+        {
+            "basis": "cc-pvdz",
+            "DFT_SPHERICAL_POINTS": 590,
+            "DFT_RADIAL_POINTS": 99,
+        }
+    )
+    e_nocp, wfn_nocp = psi4.energy("b3lyp", molecule=dimer, bsse_type="nocp", return_wfn=True)
+    e_cp, wfn_cp = psi4.energy("b3lyp", molecule=dimer, bsse_type="cp", return_wfn=True)
     return
 
 
@@ -235,4 +271,5 @@ if __name__ == "__main__":
     # test_water_xdm()
     # test_water_water_xdm_IE()
     # test_nh3_nh3_xdm_IE_energies()
-    test_nh3_ghosts()
+    # test_nh3_ghosts()
+    test_nh3_nh3_xdm_IE_CP_NOCP()

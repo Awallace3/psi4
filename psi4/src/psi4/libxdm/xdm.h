@@ -68,9 +68,6 @@ class PSI_API XDMDispersion {
     /// @param functional_name  DFT functional name (for free-atom volume lookup)
     XDMDispersion(double a1, double a2_bohr, const std::string& functional_name);
 
-    /// Build from functional name and basis set, looking up fitted a1/a2 parameters.
-    static std::shared_ptr<XDMDispersion> build(const std::string& functional, const std::string& basis);
-
     /// Build from functional name with explicit a1 and a2 (a2 in angstrom, converted internally).
     static std::shared_ptr<XDMDispersion> build(const std::string& functional, double a1, double a2_angstrom);
 

@@ -1388,8 +1388,10 @@ def select_mrcc(name, **kwargs):
 
 def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwargs):
 
-    if core.has_option_changed("SCF", "DFT_DISPERSION_PARAMETERS"):
-        modified_disp_params = core.get_option("SCF", "DFT_DISPERSION_PARAMETERS")
+    if core.has_option_changed("SCF", "XDM_DISPERSION_PARAMETERS"):
+        modified_disp_params = core.get_option("SCF", "XDM_DISPERSION_PARAMETERS")
+        if len(modified_disp_params) != 2:
+            raise ValidationError("XDM_DISPERSION_PARAMETERS must contain exactly two values: [a1, a2_angstrom].")
     else:
         modified_disp_params = None
 
@@ -1407,8 +1409,8 @@ def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwar
             if modified_disp_params is not None:
                 _disp_functor = empirical_dispersion.XDMDispersionFunctor(
                     functional_name=func_name,
-                    a1=modified_disp_params[0],
-                    a2_ang=modified_disp_params[1])
+                    a1=float(modified_disp_params[0]),
+                    a2_ang=float(modified_disp_params[1]))
             else:
                 _disp_functor = empirical_dispersion.XDMDispersionFunctor(
                     functional_name=func_name,

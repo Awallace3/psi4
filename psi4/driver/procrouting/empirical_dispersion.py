@@ -37,6 +37,7 @@ from psi4 import core
 
 from .. import p4util
 from ..p4util.exceptions import ValidationError, UpgradeHelper
+from .xdm_params import get_xdm_bj_params
 
 _engine_can_do = collections.OrderedDict([
     # engine order establishes default for each disp
@@ -451,7 +452,8 @@ class XDMDispersionFunctor():
         Explicit a2 BJ damping parameter in angstrom (overrides lookup).
 
     """
-    def __init__(self, functional_name: str, basis_name: str = None, a1: float = None, a2_ang: float = None):
+    def __init__(self, functional_name: str, basis_name: str = None, a1: float = None, a2_ang: float = None,
+                 nocp: bool = False):
         self.engine = "xdm"
         self.fctldash = f"{functional_name}-xdm"
         self.dashlevel = "xdm"
@@ -462,10 +464,21 @@ class XDMDispersionFunctor():
 
         if a1 is not None and a2_ang is not None:
             self.xdm = core.XDMDispersion.build(functional_name, a1, a2_ang)
-        elif basis_name is not None:
-            self.xdm = core.XDMDispersion.build(functional_name, basis_name)
-        else:
+            return
+
+        if basis_name is None:
             raise ValidationError("XDM requires a basis name or explicit a1, a2 parameters.")
+
+        try:
+            fitted_a1, fitted_a2_ang = get_xdm_bj_params(functional_name, basis_name, nocp=nocp)
+        except KeyError:
+            lookup_key = f"{functional_name.lower()}/{basis_name.lower()}"
+            raise ValidationError(
+                "XDMDispersion: No fitted BJ parameters for "
+                f"{lookup_key}. Provide [a1, a2] through XDM_DISPERSION_PARAMETERS."
+            )
+
+        self.xdm = core.XDMDispersion.build(functional_name, fitted_a1, fitted_a2_ang)
 
     def print_out(self):
         """Format XDM dispersion parameters for output file."""

@@ -41,130 +41,19 @@
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
-#include "psi4/libpsi4util/exception.h"
 #include "psi4/libpsi4util/process.h"
 #include "psi4/libqt/qt.h"
 #include "psi4/psi4-dec.h"
 
 #include <algorithm>
 #include <cmath>
-#include <map>
 #include <string>
 #include <vector>
 
 namespace psi {
 namespace xdm {
 
-static constexpr double PI = 3.141592653589793;
 static constexpr double BOHR_TO_ANGSTROM = 0.52917720859;
-
-// ============================================================================
-// BJ parameter lookup table: (functional, basis) -> (a1, a2 in angstrom)
-// From postg reference data (xdm.param).
-// ============================================================================
-struct BJParams {
-    double a1;
-    double a2_ang;
-};
-
-static const std::map<std::string, BJParams>& bj_param_table() {
-    static const std::map<std::string, BJParams> table = {
-        // B3LYP - /nocp performs a little worse at dz and smaller
-        {"b3lyp/aug-cc-pvtz", {0.538965, 1.707159}},          // MAE: 0.213414 kcal/mol on KB49
-        {"b3lyp/aug-cc-pvtz/nocp", {0.299469, 2.454713}},     // MAE: 0.222407 kcal/mol on KB49
-        {"b3lyp/aug-cc-pvdz", {0.541310, 1.707761}},          // MAE: 0.201706 kcal/mol on KB49
-        {"b3lyp/aug-cc-pvdz/nocp", {0.594163, 1.708002}},     // MAE: 0.259843 kcal/mol on KB49
-        {"b3lyp/6-31+g*", {0.539265, 1.706567}},              // MAE: 0.248165 kcal/mol on KB49
-        {"b3lyp/6-31+g*/nocp", {0.249120, 2.690583}},         // MAE: 0.359967 kcal/mol on KB49
-        {"b3lyp/6-31+g**", {0.544086, 1.707329}},             // MAE: 0.249690 kcal/mol on KB49
-        {"b3lyp/6-31+g**/nocp", {0.226145, 2.762253}},        // MAE: 0.339456 kcal/mol on KB49
-        {"b3lyp/6-311+g(2d,2p)", {0.541432, 1.706280}},       // MAE: 0.196681 kcal/mol on KB49
-        {"b3lyp/6-311+g(2d,2p)/nocp", {0.564665, 1.708375}},  // MAE: 0.254022 kcal/mol on KB49
-        {"b3lyp/cc-pvdz", {0.502835, 1.705159}},              // MAE: 0.294160 kcal/mol on KB49
-        {"b3lyp/cc-pvdz/nocp", {0.200048, 3.125447}},         // MAE: 1.301956 kcal/mol on KB49
-        {"b3lyp/cc-pvtz", {0.533051, 1.708554}},              // MAE: 0.233595 kcal/mol on KB49
-        {"b3lyp/cc-pvtz/nocp", {0.474763, 2.033757}},         // MAE: 0.543178 kcal/mol on KB49
-
-        // PBE0
-        {"pbe0/6-31+g*", {0.665768, 1.708279}},           // MAE: 0.319232 kcal/mol on KB49
-        {"pbe0/6-31+g*/nocp", {0.000000, 3.942401}},      // MAE: 0.489782 kcal/mol on KB49
-        {"pbe0/6-31+g**", {0.672756, 1.709480}},          // MAE: 0.383004 kcal/mol on KB49
-        {"pbe0/6-31+g**/nocp", {0.000000, 3.957889}},     // MAE: 0.495260 kcal/mol on KB49
-        {"pbe0/aug-cc-pvdz", {0.675533, 1.709020}},       // MAE: 0.327751 kcal/mol on KB49
-        {"pbe0/aug-cc-pvdz/nocp", {0.757220, 1.709831}},  // MAE: 0.453216 kcal/mol on KB49
-        {"pbe0/cc-pvdz", {0.648251, 1.707199}},           // MAE: 0.390661 kcal/mol on KB49
-        {"pbe0/cc-pvdz/nocp", {0.000016, 4.226151}},      // MAE: 1.239266 kcal/mol on KB49
-        {"pbe0/cc-pvtz", {0.662432, 1.709395}},           // MAE: 0.352988 kcal/mol on KB49
-        {"pbe0/cc-pvtz/nocp", {0.337012, 2.867459}},      // MAE: 0.622166 kcal/mol on KB49
-
-        // PBE
-        {"pbe/6-31+g*", {0.638224, 1.705838}},           // MAE: 0.419856 kcal/mol on KB49
-        {"pbe/6-31+g*/nocp", {0.699062, 1.710117}},      // MAE: 0.562749 kcal/mol on KB49
-        {"pbe/6-31+g**", {0.644670, 1.707056}},          // MAE: 0.430145 kcal/mol on KB49
-        {"pbe/6-31+g**/nocp", {0.704316, 1.709007}},     // MAE: 0.561644 kcal/mol on KB49
-        {"pbe/aug-cc-pvdz", {0.646009, 1.706796}},       // MAE: 0.392538 kcal/mol on KB49
-        {"pbe/aug-cc-pvdz/nocp", {0.719266, 1.705258}},  // MAE: 0.494140 kcal/mol on KB49
-        {"pbe/aug-cc-pvtz", {0.641172, 1.707118}},       // MAE: 0.402015 kcal/mol on KB49
-        {"pbe/aug-cc-pvtz/nocp", {0.658991, 1.708286}},  // MAE: 0.412740 kcal/mol on KB49
-
-        // BLYP
-        {"blyp/6-31+g*", {0.492746, 1.641319}},
-        {"blyp/6-31+g**", {0.489705, 1.665341}},
-        {"blyp/aug-cc-pvdz", {0.486914, 1.659594}},
-        {"blyp/aug-cc-pvtz", {0.494799, 1.655559}},
-
-        // BHAHLYP (BHandHLYP, 50% HF)
-        // {"bhahlyp/6-31+g*", {0.1483, 3.3435}},
-        // {"bhahlyp/6-31+g**", {0.1432, 3.3705}},
-        // {"bhandh/aug-cc-pvtz", {0.5610, 1.9894}},
-        // {"bhandhlyp/aug-cc-pvtz", {0.5610, 1.9894}},
-        // {"bhalfandhalf/aug-cc-pvtz", {0.5610, 1.9894}},
-        // {"bhalfandhalf/aug-cc-pvdz", {0.1247, 3.5725}},
-
-        // PW86PBE
-        // {"pw86pbe/6-31+g*", {0.6336, 1.9148}},
-        // {"pw86pbe/6-31+g**", {0.6935, 1.7519}},
-        // {"pw86pbe/aug-cc-pvdz", {0.6736, 1.9327}},
-        // {"pw86pbe/aug-cc-pvtz", {0.7564, 1.4545}},
-
-        // CAM-B3LYP
-        // {"cam-b3lyp/6-31+g*", {0.2315, 3.2123}},
-        // {"cam-b3lyp/6-31+g**", {0.2365, 3.2081}},
-        // {"cam-b3lyp/aug-cc-pvdz", {0.1849, 3.5140}},
-        // {"cam-b3lyp/aug-cc-pvtz", {0.3248, 2.8607}},
-        // {"camb3lyp/aug-cc-pvtz", {0.3248, 2.8607}},
-        // {"camb3lyp/aug-cc-pvdz", {0.1849, 3.5140}},
-
-        // LC-wPBE
-        // {"lc-wpbe/aug-cc-pvtz", {1.0149, 0.6755}},
-        // {"lcwpbe/aug-cc-pvtz", {1.0149, 0.6755}},
-        // {"lc-wpbe/6-31+g*", {0.8134, 1.3736}},
-        // {"lcwpbe/6-31+g*", {0.8134, 1.3736}},
-        // {"lc-wpbe/6-31+g**", {0.8934, 1.1466}},
-        // {"lcwpbe/6-31+g**", {0.8934, 1.1466}},
-        // {"lcwpbe/aug-cc-pvdz", {1.1800, 0.4179}},
-
-        // B97-1
-        // {"b971/aug-cc-pvtz", {0.1998, 3.5367}},
-        // {"b97-1/aug-cc-pvtz", {0.1998, 3.5367}},
-        // {"b97-1/6-31+g*", {0.0118, 4.1784}},
-        // {"b97-1/6-31+g**", {0.0429, 4.1090}},
-
-        // HF
-        // {"hf/aug-cc-pvdz", {0.3698, 2.1961}},
-        // {"hf/aug-cc-pvtz", {0.3698, 2.1961}},
-
-        // B86BPBE
-        // {"b86bpbe/aug-cc-pvtz", {0.7839, 1.2544}},
-
-        // TPSS
-        // {"tpss/aug-cc-pvtz", {0.6612, 1.5111}},
-
-        // HSE06
-        // {"hse06/aug-cc-pvtz", {0.3691, 2.8793}},
-    };
-    return table;
-}
 
 // ============================================================================
 // Constructor and factory methods
@@ -172,25 +61,6 @@ static const std::map<std::string, BJParams>& bj_param_table() {
 
 XDMDispersion::XDMDispersion(double a1, double a2_bohr, const std::string& functional_name)
     : a1_(a1), a2_(a2_bohr), functional_name_(functional_name) {}
-
-std::shared_ptr<XDMDispersion> XDMDispersion::build(const std::string& functional, const std::string& basis) {
-    // Normalize names to lowercase
-    std::string func_lower = functional;
-    std::string basis_lower = basis;
-    std::transform(func_lower.begin(), func_lower.end(), func_lower.begin(), ::tolower);
-    std::transform(basis_lower.begin(), basis_lower.end(), basis_lower.begin(), ::tolower);
-
-    std::string key = func_lower + "/" + basis_lower;
-    const auto& table = bj_param_table();
-    auto it = table.find(key);
-    if (it == table.end()) {
-        throw PSIEXCEPTION("XDMDispersion::build: No fitted BJ parameters for " + key +
-                           ". Use build(functional, a1, a2) to specify parameters explicitly.");
-    }
-
-    double a2_bohr = it->second.a2_ang / BOHR_TO_ANGSTROM;
-    return std::make_shared<XDMDispersion>(it->second.a1, a2_bohr, func_lower);
-}
 
 std::shared_ptr<XDMDispersion> XDMDispersion::build(const std::string& functional, double a1, double a2_angstrom) {
     std::string func_lower = functional;

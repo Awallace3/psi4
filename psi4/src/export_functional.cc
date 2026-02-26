@@ -320,9 +320,6 @@ void export_functional(py::module &m) {
         "XDM (exchange-hole dipole moment) dispersion correction with Becke-Johnson damping.")
         .def(py::init<double, double, const std::string&>(), "a1"_a, "a2_bohr"_a, "functional_name"_a,
              "Construct with BJ damping parameters a1 and a2 (in bohr) and functional name.")
-        .def_static("build", py::overload_cast<const std::string&, const std::string&>(&xdm::XDMDispersion::build),
-                    "functional"_a, "basis"_a,
-                    "Build from functional and basis set names, looking up fitted a1/a2 parameters.")
         .def_static("build", py::overload_cast<const std::string&, double, double>(&xdm::XDMDispersion::build),
                     "functional"_a, "a1"_a, "a2_angstrom"_a,
                     "Build from functional name with explicit a1 and a2 (a2 in angstrom).")
