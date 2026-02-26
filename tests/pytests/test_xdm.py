@@ -211,7 +211,7 @@ units angstrom
             "basis": "aug-cc-pvdz",
             "DFT_SPHERICAL_POINTS": 590,
             "DFT_RADIAL_POINTS": 99,
-            # "DFT_DISPERSION_PARAMETERS": [0.0, 5.0],
+            "XDM_DISPERSION_PARAMETERS": [0.0, 5.0],
         }
     )
     e_monA, wfn_A = psi4.energy("b3lyp-xdm", molecule=monA, return_wfn=True)
@@ -234,5 +234,5 @@ if __name__ == "__main__":
     # pytest.main([__file__, "-x", "-v"])
     # test_water_xdm()
     # test_water_water_xdm_IE()
-    test_nh3_nh3_xdm_IE_energies()
+    # test_nh3_nh3_xdm_IE_energies()
     test_nh3_ghosts()
