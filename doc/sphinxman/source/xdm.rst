@@ -26,6 +26,15 @@
 .. # @END LICENSE
 .. #
 
+.. note::
+   This section was developed with AI assistance based on the following reference:
+
+   E. R. Johnson, "The Exchange-Hole Dipole Moment Dispersion Model,"
+   in *Non-Covalent Interactions in Quantum Chemistry and Physics*,
+   edited by A. Otero de la Roza and G. A. DiLabio (Elsevier, 2017),
+   pp. 169--194. DOI: `10.1016/B978-0-12-809835-6.00006-2
+   <https://doi.org/10.1016/B978-0-12-809835-6.00006-2>`_.
+
 .. include:: autodoc_abbr_options_c.rst
 
 .. index:: XDM
