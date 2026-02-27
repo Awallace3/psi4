@@ -28,7 +28,7 @@
 
 .. include:: autodoc_abbr_options_c.rst
 
-.. index:: DFTD3, DFTD4, XDM
+.. index:: DFTD3, DFTD4
 .. _`sec:dftd3`:
 
 Interface to DFTD3, DFTD4, and GCP by S. Grimme
