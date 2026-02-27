@@ -1,6 +1,7 @@
 import psi4
 import pytest
 import numpy as np
+from psi4 import compare_values
 
 from pprint import pprint as pp
 # pytestmark = [pytest.mark.psi, pytest.mark.api]
@@ -84,18 +85,16 @@ def test_nh3_nh3_xdm_IE_energies():
     psi4.set_memory("32 GB")
     # nh3_nh3: -2.102, -3.133, -2.953, error: 0.180
 
-    dimer = psi4.geometry("""0 1
-N -1.578718 -0.046611 0.000000
-H -2.158621 0.136396 -0.809565
-H -2.158621 0.136396 0.809565
-H -0.849471 0.658193 0.000000
+    dimer = psi4.geometry("""
+0 1
+O    -1.55100700  -0.11452000   0.00000000
+H    -1.93425900   0.76250300   0.00000000
+H    -0.59967700   0.04071200   0.00000000
 --
 0 1
-N 1.578718 0.046611 0.000000
-H 2.158621 -0.136396 -0.809565
-H 0.849471 -0.658193 0.000000
-H 2.158621 -0.136396 0.809565
-
+O    1.35062500   0.11146900   0.00000000
+H    1.68039800  -0.37374100  -0.75856100
+H    1.68039800  -0.37374100   0.75856100
 units angstrom
     """)
     psi4.set_options(
@@ -122,17 +121,15 @@ def test_nh3_ghosts():
     # nh3_nh3: -2.102, -3.133, -2.953, error: 0.180
 
     m = psi4.geometry("""0 1
-Gh(N) -1.578718 -0.046611 0.000000
-Gh(H) -2.158621 0.136396 -0.809565
-Gh(H) -2.158621 0.136396 0.809565
-Gh(H) -0.849471 0.658193 0.000000
+0 1
+Gh(O)    -1.55100700  -0.11452000   0.00000000
+Gh(H)    -1.93425900   0.76250300   0.00000000
+Gh(H)    -0.59967700   0.04071200   0.00000000
 --
 0 1
-N 1.578718 0.046611 0.000000
-H 2.158621 -0.136396 -0.809565
-H 0.849471 -0.658193 0.000000
-H 2.158621 -0.136396 0.809565
-
+O    1.35062500   0.11146900   0.00000000
+H    1.68039800  -0.37374100  -0.75856100
+H    1.68039800  -0.37374100   0.75856100
 units angstrom
     """)
     psi4.set_options(
@@ -221,25 +218,12 @@ units angstrom
 
 
 def test_nh3_nh3_xdm_IE_CP_NOCP():
-    """Test XDM on water dimer."""
+    """
+    Test XDM on water dimer with and without coutnerpoise correction.
+    These should use different XDM parameters.
+    """
     psi4.set_num_threads(12)
     psi4.set_memory("32 GB")
-    monA = psi4.geometry("""0 1
-N -1.578718 -0.046611 0.000000
-H -2.158621 0.136396 -0.809565
-H -2.158621 0.136396 0.809565
-H -0.849471 0.658193 0.000000
-
-units angstrom
-    """)
-    monB = psi4.geometry("""0 1
-N 1.578718 0.046611 0.000000
-H 2.158621 -0.136396 -0.809565
-H 0.849471 -0.658193 0.000000
-H 2.158621 -0.136396 0.809565
-units angstrom
-    """)
-
     dimer = psi4.geometry("""0 1
 N -1.578718 -0.046611 0.000000
 H -2.158621 0.136396 -0.809565
@@ -254,6 +238,8 @@ H 2.158621 -0.136396 0.809565
 
 units angstrom
     """)
+    ref_e_nocp=-0.008548581085989326
+    ref_e_cp=-0.004677182556861226
     psi4.set_options(
         {
             "basis": "cc-pvdz",
@@ -261,8 +247,11 @@ units angstrom
             "DFT_RADIAL_POINTS": 99,
         }
     )
-    e_nocp, wfn_nocp = psi4.energy("b3lyp", molecule=dimer, bsse_type="nocp", return_wfn=True)
-    e_cp, wfn_cp = psi4.energy("b3lyp", molecule=dimer, bsse_type="cp", return_wfn=True)
+    e_cp, wfn_cp = psi4.energy("b3lyp-xdm", molecule=dimer, bsse_type="cp", return_wfn=True)
+    print(wfn_cp.variables())
+    assert compare_values(e_cp, ref_e_cp, 8, "CP XDM energy")
+    e_nocp, wfn_nocp = psi4.energy("b3lyp-xdm", molecule=dimer, bsse_type="nocp", return_wfn=True)
+    assert compare_values(e_nocp, ref_e_nocp, 8, "No CP XDM energy")
     return
 
 

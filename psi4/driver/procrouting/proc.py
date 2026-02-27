@@ -1397,6 +1397,8 @@ def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwar
 
     # Figure out functional
     superfunc, disp_type = dft.build_superfunctional(name, restricted)
+    xdm_bsse_type = str(kwargs.get("xdm_bsse_type", "")).lower()
+    use_xdm_cp_params = (xdm_bsse_type == "cp")
 
     if disp_type:
         if disp_type["type"] == "xdm":
@@ -1414,7 +1416,8 @@ def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwar
             else:
                 _disp_functor = empirical_dispersion.XDMDispersionFunctor(
                     functional_name=func_name,
-                    basis_name=basis_name)
+                    basis_name=basis_name,
+                    cp=use_xdm_cp_params)
         elif isinstance(name, dict):
             # user dft_functional={} spec - type for lookup, dict val for param defs,
             #   name & citation discarded so only param matches to existing defs will print labels

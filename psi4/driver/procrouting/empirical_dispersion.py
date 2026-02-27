@@ -450,10 +450,12 @@ class XDMDispersionFunctor():
         Explicit a1 BJ damping parameter (overrides lookup).
     a2_ang
         Explicit a2 BJ damping parameter in angstrom (overrides lookup).
+    cp
+        Use CP-fitted XDM damping parameters when looking up by functional/basis.
 
     """
     def __init__(self, functional_name: str, basis_name: str = None, a1: float = None, a2_ang: float = None,
-                 nocp: bool = False):
+                 cp: bool = False):
         self.engine = "xdm"
         self.fctldash = f"{functional_name}-xdm"
         self.dashlevel = "xdm"
@@ -470,7 +472,7 @@ class XDMDispersionFunctor():
             raise ValidationError("XDM requires a basis name or explicit a1, a2 parameters.")
 
         try:
-            fitted_a1, fitted_a2_ang = get_xdm_bj_params(functional_name, basis_name, nocp=nocp)
+            fitted_a1, fitted_a2_ang = get_xdm_bj_params(functional_name, basis_name, cp=cp)
         except KeyError:
             lookup_key = f"{functional_name.lower()}/{basis_name.lower()}"
             raise ValidationError(

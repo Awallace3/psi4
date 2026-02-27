@@ -153,6 +153,14 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
     current_manybody_kwargs = {kw: kwargs.pop(kw) for kw in pertinent_manybody_kwargs if kw in kwargs}
     # explicit: "levels"
 
+    if current_manybody_kwargs.get("bsse_type", None) is not None:
+        bsse_type = current_manybody_kwargs["bsse_type"]
+        if isinstance(bsse_type, str):
+            primary_bsse_type = bsse_type.lower()
+        else:
+            primary_bsse_type = bsse_type[0].lower()
+        keywords["function_kwargs"]["xdm_bsse_type"] = primary_bsse_type
+
     # Build a packet
     packet = {"molecule": molecule, "driver": driver, "method": method, "basis": basis, "keywords": keywords}
 
