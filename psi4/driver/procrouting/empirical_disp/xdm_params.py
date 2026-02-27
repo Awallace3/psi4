@@ -80,7 +80,7 @@ _XDM_BJ_PARAMS_ANGSTROM: Dict[str, Tuple[float, float]] = {
     "hf/cc-pvdz": (0.5217, 1.7061),  # MAPD: 20.51%, MAE: 0.583 kcal/mol
 
     # ---- HSE06 ----
-    "hse06/aug-cc-pvtz": (0.5987, 2.0371),  # MAPD: 10.98%, MAE: 0.425 kcal/mol (48/49 valid)
+    "hse06/aug-cc-pvtz": (0.5886, 2.0647),  # MAPD: 10.85%, MAE: 0.421 kcal/mol
     "hse06/aug-cc-pvdz": (0.4495, 2.7766),  # MAPD: 14.33%, MAE: 0.505 kcal/mol
     "hse06/cc-pvtz": (0.4717, 2.5112),  # MAPD: 19.51%, MAE: 0.701 kcal/mol
     "hse06/cc-pvdz": (0.1149, 3.8501),  # MAPD: 36.89%, MAE: 1.319 kcal/mol
