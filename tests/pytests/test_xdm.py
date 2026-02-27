@@ -55,16 +55,15 @@ units angstrom
 
 
 @pytest.mark.xdm
-def test_nh3_ghosts():
+def test_h2o_ghosts():
     """Ensure XDM pairwise outputs size correctly with and without ghosts.
 
-    Runs a ghost-containing fragment calculation and a normal NH3 monomer, then
-    confirms the XDM C6 matrix shape reflects only real atoms.
+    Runs a ghost-containing fragment calculation and a normal water monomer, then
+    confirms the XDM C6 matrix shape reflects only real atoms. Also confirms
+    the XDM energy matches the reference
     """
-    # psi4.set_num_threads(12)
-    # psi4.set_memory("32 GB")
 
-    m = psi4.geometry("""0 1
+    m = psi4.geometry("""
 0 1
 Gh(O)    -1.55100700  -0.11452000   0.00000000
 Gh(H)    -1.93425900   0.76250300   0.00000000
@@ -78,41 +77,50 @@ units angstrom
     """)
     psi4.set_options(
         {
-            "basis": "aug-cc-pvdz",
+            "basis": "sto-3g",
             "DFT_SPHERICAL_POINTS": 590,
             "DFT_RADIAL_POINTS": 99,
+            "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
         }
     )
     e_m, wfn_m = psi4.energy("b3lyp-xdm", molecule=m, return_wfn=True)
-    # shapes of XDM C6 COEFFICIENTS should be (4, 4)
-    print(wfn_m.variables()["XDM C6 COEFFICIENTS"].np)
-    print(wfn_m.variables()["XDM PAIRWISE ENERGY"].np)
-    assert wfn_m.variables()["XDM C6 COEFFICIENTS"].shape == (4, 4)
-    m = psi4.geometry("""0 1
-N 1.578718 0.046611 0.000000
-H 2.158621 -0.136396 -0.809565
-H 0.849471 -0.658193 0.000000
-H 2.158621 -0.136396 0.809565
+    disp_corr = wfn_m.variables()["DISPERSION CORRECTION ENERGY"]
+    ref_disp_corr = -0.0036307541858282655
+    assert np.isclose(disp_corr, ref_disp_corr, atol=1e-6), (
+        f"Expected dispersion correction {ref_disp_corr}, got {disp_corr}"
+    )
+    # shapes of XDM C6 COEFFICIENTS should be (3, 3)
+    assert wfn_m.variables()["XDM C6 COEFFICIENTS"].shape == (3, 3)
+    m = psi4.geometry("""
+0 1
+O    1.35062500   0.11146900   0.00000000
+H    1.68039800  -0.37374100  -0.75856100
+H    1.68039800  -0.37374100   0.75856100
 
 units angstrom
     """)
     psi4.set_options(
         {
-            "basis": "aug-cc-pvdz",
+            "basis": "sto-3g",
             "DFT_SPHERICAL_POINTS": 590,
             "DFT_RADIAL_POINTS": 99,
+            "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
         }
     )
     e_m, wfn_m = psi4.energy("b3lyp-xdm", molecule=m, return_wfn=True)
-    # shapes of XDM C6 COEFFICIENTS should be (4, 4)
-    assert wfn_m.variables()["XDM C6 COEFFICIENTS"].shape == (4, 4)
+    assert wfn_m.variables()["XDM C6 COEFFICIENTS"].shape == (3, 3)
+    disp_corr = wfn_m.variables()["DISPERSION CORRECTION ENERGY"]
+    ref_disp_corr = -0.0038699050025764892
+    assert np.isclose(disp_corr, ref_disp_corr, atol=1e-6), (
+        f"Expected dispersion correction {ref_disp_corr}, got {disp_corr}"
+    )
     return
 
 
 @pytest.mark.xdm
-def test_nh3_nh3_xdm_IE_CP_NOCP():
+def test_h2o_nh3_xdm_IE_CP_NOCP():
     """
-    Validate NH3 dimer XDM interaction energies for CP and NoCP workflows.
+    Validate H2O-NH3 dimer XDM interaction energies for CP and NoCP workflows.
 
     Confirms counterpoise and non-counterpoise paths reproduce their reference
     energies, exercising distinct XDM damping-parameter selections.
@@ -126,38 +134,35 @@ H -2.158621 0.136396 0.809565
 H -0.849471 0.658193 0.000000
 --
 0 1
-N 1.578718 0.046611 0.000000
-H 2.158621 -0.136396 -0.809565
-H 0.849471 -0.658193 0.000000
-H 2.158621 -0.136396 0.809565
+O    2.35062500   0.11146900   0.00000000
+H    2.68039800  -0.37374100  -0.75856100
+H    2.68039800  -0.37374100   0.75856100
 
 units angstrom
     """)
-    ref_e_nocp = -0.008548581085989326
-    ref_e_cp = -0.004677182556861226
+    ref_e_cp = -0.0006511131014690363
+    ref_e_nocp = -0.0006791849756098145
     psi4.set_options(
         {
-            "basis": "cc-pvdz",
+            "basis": "sto-3g",
             "DFT_SPHERICAL_POINTS": 590,
             "DFT_RADIAL_POINTS": 99,
+            "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
         }
     )
     e_cp, wfn_cp = psi4.energy(
         "b3lyp-xdm", molecule=dimer, bsse_type="cp", return_wfn=True
     )
-    print(wfn_cp.variables())
+    print(e_cp)
     assert compare_values(e_cp, ref_e_cp, 8, "CP XDM energy")
     e_nocp, wfn_nocp = psi4.energy(
         "b3lyp-xdm", molecule=dimer, bsse_type="nocp", return_wfn=True
     )
+    print(e_nocp)
     assert compare_values(e_nocp, ref_e_nocp, 8, "No CP XDM energy")
     return
 
 
 if __name__ == "__main__":
     # pytest.main([__file__, "-x", "-v"])
-    # test_water_xdm()
-    # test_water_water_xdm_IE()
-    # test_nh3_nh3_xdm_IE_energies()
-    # test_nh3_ghosts()
-    test_nh3_nh3_xdm_IE_CP_NOCP()
+    test_h2o_nh3_xdm_IE_CP_NOCP()
