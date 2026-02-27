@@ -376,9 +376,9 @@ funcs.append({
 
 
 # XDM-corrected GGA functionals
-# BJ damping parameters are basis-dependent and looked up at runtime from the C++ table.
 funcs.append({
-    "name": "BLYP-XDM",
+    "name": "BLYP-XDM(KB49)",
+    "alias": ["BLYP-XDM"],
     "x_functionals": {
         "GGA_X_B88": {}
     },
@@ -387,12 +387,16 @@ funcs.append({
     },
     "dispersion": {
         "type": "xdm",
+        "params": {
+            "xdm_model": "kb49",
+        },
     },
     "description": '    BLYP with XDM dispersion correction\n',
 })
 
 funcs.append({
-    "name": "PW86PBE-XDM",
+    "name": "PW86PBE-XDM(KB49)",
+    "alias": ["PW86PBE-XDM"],
     "x_functionals": {
         "GGA_X_PW86": {}
     },
@@ -401,12 +405,16 @@ funcs.append({
     },
     "dispersion": {
         "type": "xdm",
+        "params": {
+            "xdm_model": "kb49",
+        },
     },
     "description": '    PW86PBE with XDM dispersion correction\n',
 })
 
 funcs.append({
-    "name": "PBE-XDM",
+    "name": "PBE-XDM(KB49)",
+    "alias": ["PBE-XDM"],
     "x_functionals": {
         "GGA_X_PBE": {}
     },
@@ -415,6 +423,60 @@ funcs.append({
     },
     "dispersion": {
         "type": "xdm",
+        "params": {
+            "xdm_model": "kb49",
+        },
+    },
+    "description": '    PBE with XDM dispersion correction\n',
+})
+
+funcs.append({
+    "name": "BLYP-XDM(LOS-II)",
+    "x_functionals": {
+        "GGA_X_B88": {}
+    },
+    "c_functionals": {
+        "GGA_C_LYP": {}
+    },
+    "dispersion": {
+        "type": "xdm",
+        "params": {
+            "xdm_model": "los-ii",
+        },
+    },
+    "description": '    BLYP with XDM dispersion correction\n',
+})
+
+funcs.append({
+    "name": "PW86PBE-XDM(LOS-II)",
+    "x_functionals": {
+        "GGA_X_PW86": {}
+    },
+    "c_functionals": {
+        "GGA_C_PBE": {}
+    },
+    "dispersion": {
+        "type": "xdm",
+        "params": {
+            "xdm_model": "los-ii",
+        },
+    },
+    "description": '    PW86PBE with XDM dispersion correction\n',
+})
+
+funcs.append({
+    "name": "PBE-XDM(LOS-II)",
+    "x_functionals": {
+        "GGA_X_PBE": {}
+    },
+    "c_functionals": {
+        "GGA_C_PBE": {}
+    },
+    "dispersion": {
+        "type": "xdm",
+        "params": {
+            "xdm_model": "los-ii",
+        },
     },
     "description": '    PBE with XDM dispersion correction\n',
 })

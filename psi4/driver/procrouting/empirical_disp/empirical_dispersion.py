@@ -27,7 +27,7 @@
 #
 
 import collections
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import qcengine as qcng
@@ -37,7 +37,7 @@ from psi4 import core
 
 from ... import p4util
 from ...p4util.exceptions import ValidationError, UpgradeHelper
-from .xdm_params import get_xdm_bj_params
+from .xdm_params import get_xdm_bj_params, normalize_xdm_model
 
 _engine_can_do = collections.OrderedDict([
     # engine order establishes default for each disp
@@ -436,7 +436,7 @@ class XDMDispersionFunctor():
     engine : str
         Always 'xdm'.
     fctldash : str
-        Functional name with -XDM suffix.
+        Functional name with -XDM(<model>) suffix.
     dashlevel : str
         Always 'xdm'.
 
@@ -452,13 +452,16 @@ class XDMDispersionFunctor():
         Explicit a2 BJ damping parameter in angstrom (overrides lookup).
     cp
         Use CP-fitted XDM damping parameters when looking up by functional/basis.
+    model
+        XDM damping-parameter model label (``kb49`` or ``los-ii``).
 
     """
-    def __init__(self, functional_name: str, basis_name: str = None, a1: float = None, a2_ang: float = None,
-                 cp: bool = False):
+    def __init__(self, functional_name: str, basis_name: Optional[str] = None, a1: Optional[float] = None, a2_ang: Optional[float] = None,
+                 cp: bool = False, model: str = "kb49"):
+        self._xdm_model = normalize_xdm_model(model)
         self.engine = "xdm"
-        self.fctldash = f"{functional_name}-xdm"
-        self.dashlevel = "xdm"
+        self.fctldash = f"{functional_name}-xdm({self._xdm_model})"
+        self.dashlevel = f"xdm({self._xdm_model})"
         self._functional_name = functional_name
         self._basis_name = basis_name
         self._a1 = a1
@@ -472,12 +475,13 @@ class XDMDispersionFunctor():
             raise ValidationError("XDM requires a basis name or explicit a1, a2 parameters.")
 
         try:
-            fitted_a1, fitted_a2_ang = get_xdm_bj_params(functional_name, basis_name, cp=cp)
+            fitted_a1, fitted_a2_ang = get_xdm_bj_params(functional_name, basis_name, cp=cp, model=self._xdm_model)
         except KeyError:
             lookup_key = f"{functional_name.lower()}/{basis_name.lower()}"
             raise ValidationError(
                 "XDMDispersion: No fitted BJ parameters for "
-                f"{lookup_key}. Provide [a1, a2] through XDM_DISPERSION_PARAMETERS."
+                f"{lookup_key} with model {self._xdm_model}. "
+                "Provide [a1, a2] through XDM_DISPERSION_PARAMETERS."
             )
 
         self.xdm = core.XDMDispersion.build(functional_name, fitted_a1, fitted_a2_ang)

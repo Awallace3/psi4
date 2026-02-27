@@ -1410,20 +1410,25 @@ def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwar
         if disp_type["type"] == "xdm":
             # XDM dispersion: requires converged wavefunction, computed post-SCF
             basis_name = core.get_global_option("BASIS")
-            # Strip -XDM suffix from functional name for BJ parameter lookup
+            xdm_model = "kb49"
+            if "params" in disp_type:
+                xdm_model = str(disp_type["params"].get("xdm_model", xdm_model)).lower()
+
+            # Strip -XDM or -XDM(<model>) suffix from functional name for BJ parameter lookup
             func_name = superfunc.name()
-            if func_name.upper().endswith("-XDM"):
-                func_name = func_name[:-4]
+            func_name = re.sub(r"-xdm(?:\([^)]*\))?$", "", func_name, flags=re.IGNORECASE)
             if modified_xdm_params is not None:
                 _disp_functor = empirical_dispersion.XDMDispersionFunctor(
                     functional_name=func_name,
                     a1=float(modified_xdm_params[0]),
-                    a2_ang=float(modified_xdm_params[1]))
+                    a2_ang=float(modified_xdm_params[1]),
+                    model=xdm_model)
             else:
                 _disp_functor = empirical_dispersion.XDMDispersionFunctor(
                     functional_name=func_name,
                     basis_name=basis_name,
-                    cp=use_xdm_cp_params)
+                    cp=use_xdm_cp_params,
+                    model=xdm_model)
         elif isinstance(name, dict):
             # user dft_functional={} spec - type for lookup, dict val for param defs,
             #   name & citation discarded so only param matches to existing defs will print labels

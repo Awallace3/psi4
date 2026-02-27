@@ -146,13 +146,19 @@ funcs.append({"name": "R2SCAN0"        , "xc_functionals": {"HYB_MGGA_XC_R2SCAN0
 funcs.append({"name": "R2SCANh"        , "xc_functionals": {"HYB_MGGA_XC_R2SCANH"       : {}}})
 funcs.append({"name": "R2SCAN50"       , "xc_functionals": {"HYB_MGGA_XC_R2SCAN50"      : {}}})
 # XDM-corrected hybrid functionals
-# BJ damping parameters are basis-dependent and looked up at runtime from the C++ table.
-funcs.append({"name": "B3LYP-XDM"     , "xc_functionals": {"HYB_GGA_XC_B3LYP"          : {}}, "dispersion": {"type": "xdm"}})
-funcs.append({"name": "PBE0-XDM"      , "xc_functionals": {"HYB_GGA_XC_PBEH"           : {}}, "dispersion": {"type": "xdm"}})
-funcs.append({"name": "BHandHLYP-XDM" , "xc_functionals": {"HYB_GGA_XC_BHANDHLYP"      : {}}, "dispersion": {"type": "xdm"}, "alias": ["BHAHLYP-XDM"]})
-funcs.append({"name": "CAM-B3LYP-XDM" , "xc_functionals": {"HYB_GGA_XC_CAM_B3LYP"      : {}}, "dispersion": {"type": "xdm"}})
-funcs.append({"name": "LC-wPBE-XDM"   , "xc_functionals": {"HYB_GGA_XC_LRC_WPBE"       : {}}, "dispersion": {"type": "xdm"}, "alias": ["LRC-WPBE-XDM"]})
-funcs.append({"name": "B97-1-XDM"     , "xc_functionals": {"HYB_GGA_XC_B97_1"          : {}}, "dispersion": {"type": "xdm"}, "alias": ["B971-XDM"]})
+# -XDM aliases map to the KB49 damping set.
+funcs.append({"name": "B3LYP-XDM(KB49)"     , "xc_functionals": {"HYB_GGA_XC_B3LYP"          : {}}, "dispersion": {"type": "xdm", "params": {"xdm_model": "kb49"}}, "alias": ["B3LYP-XDM"]})
+funcs.append({"name": "PBE0-XDM(KB49)"      , "xc_functionals": {"HYB_GGA_XC_PBEH"           : {}}, "dispersion": {"type": "xdm", "params": {"xdm_model": "kb49"}}, "alias": ["PBE0-XDM"]})
+funcs.append({"name": "BHandHLYP-XDM(KB49)" , "xc_functionals": {"HYB_GGA_XC_BHANDHLYP"      : {}}, "dispersion": {"type": "xdm", "params": {"xdm_model": "kb49"}}, "alias": ["BHAHLYP-XDM", "BHandHLYP-XDM"]})
+funcs.append({"name": "CAM-B3LYP-XDM(KB49)" , "xc_functionals": {"HYB_GGA_XC_CAM_B3LYP"      : {}}, "dispersion": {"type": "xdm", "params": {"xdm_model": "kb49"}}, "alias": ["CAM-B3LYP-XDM"]})
+funcs.append({"name": "LC-wPBE-XDM(KB49)"   , "xc_functionals": {"HYB_GGA_XC_LRC_WPBE"       : {}}, "dispersion": {"type": "xdm", "params": {"xdm_model": "kb49"}}, "alias": ["LRC-WPBE-XDM", "LC-wPBE-XDM"]})
+funcs.append({"name": "B97-1-XDM(KB49)"     , "xc_functionals": {"HYB_GGA_XC_B97_1"          : {}}, "dispersion": {"type": "xdm", "params": {"xdm_model": "kb49"}}, "alias": ["B971-XDM", "B97-1-XDM"]})
+funcs.append({"name": "B3LYP-XDM(LOS-II)"   , "xc_functionals": {"HYB_GGA_XC_B3LYP"          : {}}, "dispersion": {"type": "xdm", "params": {"xdm_model": "los-ii"}}})
+funcs.append({"name": "PBE0-XDM(LOS-II)"    , "xc_functionals": {"HYB_GGA_XC_PBEH"           : {}}, "dispersion": {"type": "xdm", "params": {"xdm_model": "los-ii"}}})
+funcs.append({"name": "BHandHLYP-XDM(LOS-II)", "xc_functionals": {"HYB_GGA_XC_BHANDHLYP"     : {}}, "dispersion": {"type": "xdm", "params": {"xdm_model": "los-ii"}}, "alias": ["BHAHLYP-XDM(LOS-II)"]})
+funcs.append({"name": "CAM-B3LYP-XDM(LOS-II)", "xc_functionals": {"HYB_GGA_XC_CAM_B3LYP"     : {}}, "dispersion": {"type": "xdm", "params": {"xdm_model": "los-ii"}}})
+funcs.append({"name": "LC-wPBE-XDM(LOS-II)" , "xc_functionals": {"HYB_GGA_XC_LRC_WPBE"       : {}}, "dispersion": {"type": "xdm", "params": {"xdm_model": "los-ii"}}, "alias": ["LRC-WPBE-XDM(LOS-II)"]})
+funcs.append({"name": "B97-1-XDM(LOS-II)"   , "xc_functionals": {"HYB_GGA_XC_B97_1"          : {}}, "dispersion": {"type": "xdm", "params": {"xdm_model": "los-ii"}}, "alias": ["B971-XDM(LOS-II)"]})
 # yapf: enable
 
 functional_list = {}

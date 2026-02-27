@@ -142,6 +142,17 @@ units angstrom
     """)
     ref_e_cp = -0.0006511131014690363
     ref_e_nocp = -0.0006791849756098145
+    ref_e_nocp_losii = -0.0009743139328008965
+    psi4.set_options(
+        {
+            "basis": "aug-cc-pvdz",
+        }
+    )
+    e_cp_losii, wfn_cp_losii = psi4.energy(
+        "b3lyp-xdm(los-ii)", molecule=dimer, bsse_type="cp", return_wfn=True
+    )
+    print(e_cp_losii)
+    assert compare_values(e_cp_losii, ref_e_nocp_losii, 8, "CP XDM(LoS-II) energy")
     psi4.set_options(
         {
             "basis": "sto-3g",
@@ -163,6 +174,40 @@ units angstrom
     return
 
 
+@pytest.mark.xdm
+def test_xdm_models_and_alias():
+    """Check XDM model aliasing and explicit LOS-II selection.
+
+    Verifies that ``-xdm`` and ``-xdm(kb49)`` are equivalent, and that
+    ``-xdm(los-ii)`` selects a different parameterization.
+    """
+
+    mol = psi4.geometry("""
+0 1
+O    -1.55100700  -0.11452000   0.00000000
+H    -1.93425900   0.76250300   0.00000000
+H    -0.59967700   0.04071200   0.00000000
+units angstrom
+    """)
+    psi4.set_options(
+        {
+            "basis": "aug-cc-pvdz",
+            "DFT_SPHERICAL_POINTS": 590,
+            "DFT_RADIAL_POINTS": 99,
+        }
+    )
+
+    e_alias = psi4.energy("b3lyp-xdm", molecule=mol)
+    e_kb49 = psi4.energy("b3lyp-xdm(kb49)", molecule=mol)
+    e_los_ii = psi4.energy("b3lyp-xdm(los-ii)", molecule=mol)
+
+    # TODO: Update the reference values once parameters are refined.
+    assert compare_values(e_alias, e_kb49, 10, "-XDM alias equals -XDM(KB49)")
+    assert not np.isclose(e_los_ii, e_kb49, rtol=0.0, atol=1.0e-8)
+    return
+
+
 if __name__ == "__main__":
     # pytest.main([__file__, "-x", "-v"])
+    # test_xdm_models_and_alias()
     test_h2o_nh3_xdm_IE_CP_NOCP()
