@@ -58,7 +58,8 @@ from ..p4util.exceptions import (
 
 #from psi4.driver.molutil import *
 from ..qcdb.basislist import corresponding_basis
-from . import dft, empirical_dispersion, mcscf, proc_util, response, solvent
+from . import dft, mcscf, proc_util, response, solvent
+from .empirical_disp import empirical_dispersion
 from .proc_data import method_algorithm_type
 from .roa import run_roa
 
@@ -1388,12 +1389,17 @@ def select_mrcc(name, **kwargs):
 
 def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwargs):
 
+    if core.has_option_changed("SCF", "DFT_DISPERSION_PARAMETERS"):
+        modified_dft_disp_params = core.get_option("SCF", "DFT_DISPERSION_PARAMETERS")
+    else:
+        modified_dft_disp_params = None
+
     if core.has_option_changed("SCF", "XDM_DISPERSION_PARAMETERS"):
-        modified_disp_params = core.get_option("SCF", "XDM_DISPERSION_PARAMETERS")
-        if len(modified_disp_params) != 2:
+        modified_xdm_params = core.get_option("SCF", "XDM_DISPERSION_PARAMETERS")
+        if len(modified_xdm_params) != 2:
             raise ValidationError("XDM_DISPERSION_PARAMETERS must contain exactly two values: [a1, a2_angstrom].")
     else:
-        modified_disp_params = None
+        modified_xdm_params = None
 
     # Figure out functional
     superfunc, disp_type = dft.build_superfunctional(name, restricted)
@@ -1408,11 +1414,11 @@ def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwar
             func_name = superfunc.name()
             if func_name.upper().endswith("-XDM"):
                 func_name = func_name[:-4]
-            if modified_disp_params is not None:
+            if modified_xdm_params is not None:
                 _disp_functor = empirical_dispersion.XDMDispersionFunctor(
                     functional_name=func_name,
-                    a1=float(modified_disp_params[0]),
-                    a2_ang=float(modified_disp_params[1]))
+                    a1=float(modified_xdm_params[0]),
+                    a2_ang=float(modified_xdm_params[1]))
             else:
                 _disp_functor = empirical_dispersion.XDMDispersionFunctor(
                     functional_name=func_name,
@@ -1430,7 +1436,7 @@ def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwar
             # dft/*functionals.py spec - name & type for lookup, option val for param tweaks
             _disp_functor = empirical_dispersion.EmpiricalDispersion(name_hint=superfunc.name(),
                                                                      level_hint=disp_type["type"],
-                                                                     param_tweaks=modified_disp_params,
+                                                                     param_tweaks=modified_dft_disp_params,
                                                                      save_pairwise_disp=save_pairwise_disp,
                                                                      engine=kwargs.get('engine', None))
 
