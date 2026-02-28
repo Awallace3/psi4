@@ -70,6 +70,18 @@ def build_superfunctional(name, restricted, npoints=None, deriv=1):
     elif name.lower() in dft_builder.functionals:
         sup = dft_builder.build_superfunctional_from_dictionary(dft_builder.functionals[name.lower()], npoints, deriv,
                                                                 restricted)
+    # If name ends in -xdm (with optional model suffix), strip it and build
+    # the base functional with XDM dispersion attached.  This allows any
+    # functional to be used with XDM when the user supplies
+    # XDM_DISPERSION_PARAMETERS or when parameters are in xdm_params.py.
+    elif re.match(r'^.+-xdm(?:\(.*\))?$', name.lower()):
+        base_name = re.sub(r'-xdm(?:\(.*\))?$', '', name.lower())
+        if base_name in dft_builder.functionals:
+            base_dict = dict(dft_builder.functionals[base_name])
+            base_dict["dispersion"] = {"type": "xdm", "params": {"xdm_model": "kb49"}}
+            sup = dft_builder.build_superfunctional_from_dictionary(base_dict, npoints, deriv, restricted)
+        else:
+            raise ValidationError("SCF: Functional (%s) not found!" % name)
     else:
         raise ValidationError("SCF: Functional (%s) not found!" % name)
 
