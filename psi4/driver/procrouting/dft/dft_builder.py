@@ -171,6 +171,25 @@ for functional_name in dict_functionals:
                         alias += "-" + nominal_dispersion_level.lower()
                         functionals[alias] = func
 
+# Auto-generate -xdm variants for all base functionals that don't already have one.
+# This allows any functional to be used with XDM dispersion (e.g., hf-xdm, tpss-xdm)
+# when the user supplies XDM_DISPERSION_PARAMETERS, or when parameters are available
+# in the xdm_params.py lookup table.
+_xdm_base_functionals = {}
+for fname, fdict in dict_functionals.items():
+    if "dispersion" not in fdict:
+        _xdm_base_functionals[fname] = fdict
+
+for functional_name, base_dict in _xdm_base_functionals.items():
+    functional_aliases = get_functional_aliases(base_dict)
+    for alias in functional_aliases:
+        xdm_alias = alias + "-xdm"
+        if xdm_alias not in functionals:
+            func = copy.deepcopy(base_dict)
+            func["name"] = base_dict["name"] + "-XDM"
+            func["dispersion"] = {"type": "xdm", "params": {"xdm_model": "kb49"}}
+            functionals[xdm_alias] = func
+
 
 def check_consistency(func_dictionary):
     """
