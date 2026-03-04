@@ -1,6 +1,7 @@
 import psi4
 import pytest
 import numpy as np
+import re
 from psi4 import compare_values
 from pprint import pprint as pp
 
@@ -225,7 +226,14 @@ units angstrom
             "DFT_RADIAL_POINTS": 99,
         }
     )
-    with pytest.raises(Exception):
+    err_msg = (
+        "XDMDispersion: No fitted BJ parameters for hf/sto-3g with model kb49. "
+        "Provide [a1, a2] through XDM_DISPERSION_PARAMETERS."
+    )
+    with pytest.raises(
+        psi4.p4util.ValidationError,
+        match=re.escape(err_msg),
+    ):
         psi4.energy("hf-xdm", molecule=mol)
     psi4.set_options(
         {
@@ -235,10 +243,11 @@ units angstrom
             "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
         }
     )
+    e_ref = -74.96723557871695
     e = psi4.energy("hf-xdm", molecule=mol)
-    assert isinstance(e, (float, np.floating))
-    assert np.isfinite(e)
+    assert compare_values(e, e_ref, 8, "HF-XDM energy with custom parameters")
     return
+
 
 if __name__ == "__main__":
     # pytest.main([__file__, "-x", "-v"])
