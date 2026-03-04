@@ -207,7 +207,40 @@ units angstrom
     return
 
 
+@pytest.mark.xdm
+def test_xdm_unsupported_functional():
+    """Ensure unsupported functionals fail unless parameters are provided."""
+
+    mol = psi4.geometry("""
+0 1
+O    -1.55100700  -0.11452000   0.00000000
+H    -1.93425900   0.76250300   0.00000000
+H    -0.59967700   0.04071200   0.00000000
+units angstrom
+    """)
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "DFT_SPHERICAL_POINTS": 590,
+            "DFT_RADIAL_POINTS": 99,
+        }
+    )
+    with pytest.raises(Exception):
+        psi4.energy("hf-xdm", molecule=mol)
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "DFT_SPHERICAL_POINTS": 590,
+            "DFT_RADIAL_POINTS": 99,
+            "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
+        }
+    )
+    e = psi4.energy("hf-xdm", molecule=mol)
+    assert isinstance(e, (float, np.floating))
+    assert np.isfinite(e)
+    return
+
 if __name__ == "__main__":
     # pytest.main([__file__, "-x", "-v"])
-    # test_xdm_models_and_alias()
-    test_h2o_nh3_xdm_IE_CP_NOCP()
+    # test_h2o_nh3_xdm_IE_CP_NOCP()
+    test_xdm_unsupported_functional()
