@@ -833,3 +833,21 @@ Bibliography
    *J. Chem. Phys.* **152**, 184102 (2020)
    https://doi.org/10.1063/5.0004997
 
+.. [Becke:2005:154104] A. D. Becke and E. R. Johnson,
+   *J. Chem. Phys.* **122**, 154104 (2005).
+
+.. [Becke:2007:154108] A. D. Becke and E. R. Johnson,
+   *J. Chem. Phys.* **127**, 154108 (2007).
+
+.. [Becke:2006:014104] A. D. Becke and E. R. Johnson,
+   *J. Chem. Phys.* **124**, 014104 (2006).
+
+.. [Johnson:2006:174104] E. R. Johnson and A. D. Becke,
+   *J. Chem. Phys.* **124**, 174104 (2006).
+
+.. [Becke:1989:3761] A. D. Becke and M. R. Roussel,
+   *Phys. Rev. A* **39**, 3761 (1989).
+
+.. [Hirshfeld:1977:129] F. L. Hirshfeld,
+   *Theor. Chim. Acta* **44**, 129 (1977).
+

@@ -36,11 +36,19 @@ def print_sapt_var(name, value, short=False, start_spacer="    "):
     Converts the incoming value as hartree to a correctly formatted Psi print format.
     """
 
-    vals = (name, value * 1000, value * constants.hartree2kcalmol, value * constants.hartree2kJmol)
+    vals = (
+        name,
+        value * 1000,
+        value * constants.hartree2kcalmol,
+        value * constants.hartree2kJmol,
+    )
     if short:
         return start_spacer + "%-28s % 15.8f [mEh]" % vals[:2]
     else:
-        return start_spacer + "%-28s % 15.8f [mEh] % 15.8f [kcal/mol] % 15.8f [kJ/mol]" % vals
+        return (
+            start_spacer
+            + "%-28s % 15.8f [mEh] % 15.8f [kcal/mol] % 15.8f [kJ/mol]" % vals
+        )
 
 
 def print_sapt_hf_summary(data, name, short=False, delta_hf=False):
@@ -75,12 +83,14 @@ def print_sapt_hf_summary(data, name, short=False, delta_hf=False):
     core.set_variable("SAPT IND ENERGY", ind)
 
     if delta_hf:
-        total_sapt = (data["Elst10,r"] + data["Exch10"] + ind)
+        total_sapt = data["Elst10,r"] + data["Exch10"] + ind
         sapt_hf_delta = delta_hf - total_sapt
 
         core.set_variable("SAPT(DFT) Delta HF", sapt_hf_delta)
 
-        ret += print_sapt_var("Subtotal SAPT(HF)", total_sapt, start_spacer="    ") + "\n"
+        ret += (
+            print_sapt_var("Subtotal SAPT(HF)", total_sapt, start_spacer="    ") + "\n"
+        )
         ret += print_sapt_var("Total HF", delta_hf, start_spacer="    ") + "\n"
         ret += print_sapt_var("Delta HF", sapt_hf_delta, start_spacer="    ") + "\n"
 
@@ -123,12 +133,14 @@ def print_sapt_hf_summary(data, name, short=False, delta_hf=False):
         return ret
 
 
-def print_sapt_dft_summary(data, name, dimer_wfn, do_dft=True, short=False, do_disp=True, do_delta_dft=False):
+def print_sapt_dft_summary(
+    data, name, dimer_wfn, do_dft=True, short=False, do_disp=True, do_delta_dft=False
+):
     ret = "   %s Results\n" % name
     ret += "  " + "-" * 105 + "\n"
 
     # Elst
-    extern_extern_IE = data.get('extern_extern_IE', 0)
+    extern_extern_IE = data.get("extern_extern_IE", 0)
     ret += print_sapt_var("Electrostatics", data["Elst10,r"] + extern_extern_IE) + "\n"
     ret += print_sapt_var("  Elst1,r", data["Elst10,r"]) + "\n"
     if extern_extern_IE != 0:
@@ -178,7 +190,9 @@ def print_sapt_dft_summary(data, name, dimer_wfn, do_dft=True, short=False, do_d
             ret += print_sapt_var("  Disp2,r", data["Disp20"]) + "\n"
             ret += print_sapt_var("  Disp2,u", data["Disp20,u"]) + "\n"
             if core.get_option("SAPT", "SAPT_DFT_EXCH_DISP_SCALE_SCHEME") != "NONE":
-                ret += print_sapt_var("  Est. Exch-Disp2,r", data["Exch-Disp20,r"]) + "\n"
+                ret += (
+                    print_sapt_var("  Est. Exch-Disp2,r", data["Exch-Disp20,r"]) + "\n"
+                )
             ret += print_sapt_var("  Exch-Disp2,u", data["Exch-Disp20,u"]) + "\n"
         else:
             disp = data["Disp20,u"] + data["Exch-Disp20,u"]
@@ -191,26 +205,44 @@ def print_sapt_dft_summary(data, name, dimer_wfn, do_dft=True, short=False, do_d
         empirical_disp_key = "D4 IE"
     elif "D3 IE" in data:
         empirical_disp_key = "D3 IE"
+    elif "XDM IE" in data:
+        empirical_disp_key = "XDM IE"
+
+    empirical_disp_label = empirical_disp_key
+    if empirical_disp_key in {"D3 IE", "D4 IE"}:
+        empirical_disp_label = f"G{empirical_disp_key}"
 
     if empirical_disp_key and not do_disp and do_delta_dft:
-        disp = data[empirical_disp_key] + data["Delta DFT Correction"] - data['Delta HF Correction']
+        disp = (
+            data[empirical_disp_key]
+            + data["Delta DFT Correction"]
+            - data["Delta HF Correction"]
+        )
         ret += print_sapt_var("Dispersion", disp) + "\n"
         ret += print_sapt_var("  delta DFT,r (2)", data["Delta DFT Correction"]) + "\n"
         subtract_delta_hf_for_total_dispersion = -data["Delta HF Correction"]
-        ret += print_sapt_var("  -delta HF,r (2)", subtract_delta_hf_for_total_dispersion) + "\n"
-        ret += print_sapt_var(f"  G{empirical_disp_key}", data[empirical_disp_key]) + "\n"
+        ret += (
+            print_sapt_var("  -delta HF,r (2)", subtract_delta_hf_for_total_dispersion)
+            + "\n"
+        )
+        ret += (
+            print_sapt_var(f"  {empirical_disp_label}", data[empirical_disp_key]) + "\n"
+        )
     elif empirical_disp_key and not do_disp:
         disp = data[empirical_disp_key]
         ret += print_sapt_var("Dispersion", disp) + "\n"
-        ret += print_sapt_var(f"  G{empirical_disp_key}", data[empirical_disp_key]) + "\n"
+        ret += (
+            print_sapt_var(f"  {empirical_disp_label}", data[empirical_disp_key]) + "\n"
+        )
     if "Delta DFT Correction" in list(data):
         ret += "      ---------------" + "\n"
         ret += print_sapt_var("  delta DFT,r (2)", data["Delta DFT Correction"]) + "\n"
 
     if empirical_disp_key and do_disp:
         ret += "      ---------------" + "\n"
-        ret += print_sapt_var(f"  {empirical_disp_key}", data[empirical_disp_key]) + "\n"
-
+        ret += (
+            print_sapt_var(f"  {empirical_disp_key}", data[empirical_disp_key]) + "\n"
+        )
 
     ret += "\n"
     core.set_variable("SAPT DISP ENERGY", disp)

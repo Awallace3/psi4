@@ -27,6 +27,7 @@
 #
 
 import numpy as np
+import re
 
 from psi4 import core
 
@@ -151,6 +152,7 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
     e_disp_param_name = None
+    do_xdm = False
     supported_functionals_edisp = ["hf", "pbe0", "b3lyp"]
     if "-D4" in name.upper():
         d4_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
@@ -256,6 +258,13 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             )
         # # Re-prepare options after local option changes
         # core.prepare_options_for_module("SAPT")
+    elif "-XDM" in name.upper():
+        core.print_out(r"DFT-XDM(SAPT): $\Delta$-DFT+XDM for dispersion")
+        core.set_global_option("SAPT_DFT_DO_DISP", 0)
+        core.set_global_option("SAPT_DFT_DO_DDFT", 1)
+        core.set_global_option("SAPT_DFT_D_TYPE", "supermolecular")
+        e_disp_param_name = sapt_dft_functional.lower()
+        do_xdm = True
 
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
     do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
@@ -285,7 +294,9 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     core.print_out("         " + "SAPT(DFT) Procedure".center(58) + "\n")
     core.print_out("\n")
     core.print_out(
-        "         " + "by Daniel G. A. Smith, Yi Xie, and Austin M. Wallace".center(58) + "\n"
+        "         "
+        + "by Daniel G. A. Smith, Yi Xie, and Austin M. Wallace".center(58)
+        + "\n"
     )
     core.print_out(
         "         ---------------------------------------------------------\n"
@@ -386,6 +397,9 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
     # Compute dimer wavefunction
     hf_wfn_dimer = None
+    dft_wfn_dimer = None
+    dft_wfn_monomer_a = None
+    dft_wfn_monomer_b = None
     ext_pot_C = external_potentials.get("C")
     if isinstance(ext_pot_C, np.ndarray):
         ext_pot_C = [np.array(x) for x in ext_pot_C]
@@ -634,6 +648,8 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         )
         data["DFT MONOMERB"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT): Monomer B DFT")
+        dft_wfn_monomer_a = wfn_A
+        dft_wfn_monomer_b = wfn_B
         if do_ext_potential:
             kwargs["external_potentials"] = {}
         if ext_pot_C is not None:
@@ -684,17 +700,23 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         monomer_B_molecule = monomerB
 
         core.timer_on("SAPT(DFT):Dimer DFT")
-        run_scf(sapt_dft_functional.lower(), molecule=sapt_dimer, jk=sapt_jk)
+        dft_wfn_dimer = run_scf(
+            sapt_dft_functional.lower(), molecule=sapt_dimer, jk=sapt_jk
+        )
         data["DFT DIMER ENERGY"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT):Dimer DFT")
 
         core.timer_on("SAPT(DFT):Monomer A DFT")
-        run_scf(sapt_dft_functional.lower(), molecule=monomer_A_molecule, jk=sapt_jk)
+        dft_wfn_monomer_a = run_scf(
+            sapt_dft_functional.lower(), molecule=monomer_A_molecule, jk=sapt_jk
+        )
         data["DFT MONOMER A ENERGY"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT):Monomer A DFT")
 
         core.timer_on("SAPT(DFT):Monomer B DFT")
-        run_scf(sapt_dft_functional.lower(), molecule=monomer_B_molecule, jk=sapt_jk)
+        dft_wfn_monomer_b = run_scf(
+            sapt_dft_functional.lower(), molecule=monomer_B_molecule, jk=sapt_jk
+        )
         data["DFT MONOMER B ENERGY"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT):Monomer B DFT")
 
@@ -754,6 +776,34 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             data=data,
         )
         core.timer_off("SAPT(DFT):D3 Interaction Energy")
+    elif do_xdm:
+        core.print_out("\n")
+        core.print_out(
+            "         ---------------------------------------------------------\n"
+        )
+        core.print_out(
+            "         " + "SAPT(DFT): XDM Interaction Energy".center(58) + "\n"
+        )
+        core.print_out("\n")
+        core.timer_on("SAPT(DFT):XDM Interaction Energy")
+        if dft_wfn_dimer is None:
+            raise ValidationError(
+                "SAPT(DFT): DFT-XDM(SAPT) requires DFT dimer and monomer "
+                "wavefunctions for the XDM evaluation."
+            )
+
+        edisp_interaction_energy.sapt_dft_xdm_interaction_energy(
+            sapt_dimer=sapt_dimer,
+            monomerA=monomerA,
+            monomerB=monomerB,
+            dimer_wfn=dft_wfn_dimer,
+            monomerA_wfn=dft_wfn_monomer_a,
+            monomerB_wfn=dft_wfn_monomer_b,
+            xdm_functional_name=_sapt_xdm_base_functional(e_disp_param_name, name),
+            data=data,
+            method_name=name,
+        )
+        core.timer_off("SAPT(DFT):XDM Interaction Energy")
 
     core.set_global_option("SAVE_JK", False)
     core.set_global_option("DFT_GRAC_SHIFT", 0.0)
@@ -1421,13 +1471,11 @@ def sapt_dft(
             cache[k] = v
         FISAPT_obj.fdrop(external_potentials)
 
-    sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
-    sapt_dft_D3_IE = core.get_option("SAPT", "SAPT_DFT_D3_IE")
-    if do_fsapt and (
-        sapt_dft_D4_IE or sapt_dft_D3_IE
-    ):
+    if do_fsapt and "FSAPT_EMPIRICAL_DISP" in data:
         cache["FSAPT_EMPIRICAL_DISP"] = core.Matrix.from_array(
-            data["FSAPT_EMPIRICAL_DISP"]
+            data["FSAPT_EMPIRICAL_DISP"].np
+            if isinstance(data["FSAPT_EMPIRICAL_DISP"], core.Matrix)
+            else data["FSAPT_EMPIRICAL_DISP"]
         )
 
     # Print out final data
@@ -1459,9 +1507,17 @@ def sapt_dft(
         core.set_variable("FSAPT_INDAB_AB", cache["IndAB_AB"])
         core.set_variable("FSAPT_INDBA_AB", cache["IndBA_AB"])
         core.set_variable("FSAPT_DISP_AB", cache["Disp_AB"])
-        if sapt_dft_D4_IE or sapt_dft_D3_IE:
+        if "FSAPT_EMPIRICAL_DISP" in data:
             core.set_variable("FSAPT_EMPIRICAL_DISP", data["FSAPT_EMPIRICAL_DISP"])
     return data
+
+
+def _sapt_xdm_base_functional(functional_name: str | None, method_name: str) -> str:
+    if functional_name is None:
+        raise ValidationError(
+            f"SAPT(DFT): could not determine XDM functional for method '{method_name}'."
+        )
+    return re.sub(r"-xdm(?:\([^)]*\))?$", "", functional_name, flags=re.IGNORECASE)
 
 
 def run_sf_sapt(name: str, **kwargs) -> core.Wavefunction:

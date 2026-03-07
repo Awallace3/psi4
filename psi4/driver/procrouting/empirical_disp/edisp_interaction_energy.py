@@ -27,6 +27,7 @@
 #
 
 import numpy as np
+import re
 
 from psi4 import core
 
@@ -92,11 +93,7 @@ def _sapt_dft_dispersion_interaction_energy(
         modified_disp_params = None
 
     if d_type == "supermolecular":
-        core.print_out(
-            "         "
-            + supermolecular_text.center(58)
-            + "\n\n"
-        )
+        core.print_out("         " + supermolecular_text.center(58) + "\n\n")
         _disp_functor = empirical_dispersion.EmpiricalDispersion(
             name_hint=functional_name,
             level_hint=two_body_level_hint,
@@ -110,7 +107,9 @@ def _sapt_dft_dispersion_interaction_energy(
         data[f"{disp_label} MONOMER A"] = monA_disp
         data[f"{disp_label} MONOMER B"] = monB_disp
         data[f"{disp_label} IE"] = dimer_disp - monA_disp - monB_disp
-        data['FSAPT_EMPIRICAL_DISP'] = dimer_wfn.variable("PAIRWISE DISPERSION CORRECTION ANALYSIS")
+        data["FSAPT_EMPIRICAL_DISP"] = dimer_wfn.variable(
+            "PAIRWISE DISPERSION CORRECTION ANALYSIS"
+        )
         _disp_functor.print_out()
     elif d_type == "intermolecular":
         monAs = np.array([i for i in range(monomerA.natom()) if monomerA.Z(i) > 0])
@@ -123,7 +122,9 @@ def _sapt_dft_dispersion_interaction_energy(
         )
         E_disp = 0.0
         _ = _disp_functor.compute_energy(sapt_dimer, dimer_wfn)
-        pairwise_energies = dimer_wfn.variable("PAIRWISE DISPERSION CORRECTION ANALYSIS").np
+        pairwise_energies = dimer_wfn.variable(
+            "PAIRWISE DISPERSION CORRECTION ANALYSIS"
+        ).np
         FSAPT_EMPIRICAL_DISP = np.zeros_like(pairwise_energies)
         for A in monAs:
             for B in monBs:
@@ -132,7 +133,7 @@ def _sapt_dft_dispersion_interaction_energy(
                 FSAPT_EMPIRICAL_DISP[A, B] = pairwise_energies[A, B]
                 FSAPT_EMPIRICAL_DISP[B, A] = pairwise_energies[A, B]
         data[f"{disp_label} IE"] = E_disp
-        data['FSAPT_EMPIRICAL_DISP'] = FSAPT_EMPIRICAL_DISP
+        data["FSAPT_EMPIRICAL_DISP"] = FSAPT_EMPIRICAL_DISP
         _disp_functor.print_out()
     elif d_type == gd_type:
         # This uses the default Grimme parameters for the given
@@ -140,11 +141,7 @@ def _sapt_dft_dispersion_interaction_energy(
         # this option in compbination with another baseline form of
         # dispersion like the delta_DFT correction:
         # "SAPT_DFT_DO_DDFT = True"
-        core.print_out(
-            "         "
-            + gd_supermolecular_text.center(58)
-            + "\n\n"
-        )
+        core.print_out("         " + gd_supermolecular_text.center(58) + "\n\n")
         _disp_functor = empirical_dispersion.EmpiricalDispersion(
             name_hint=functional_name,
             level_hint=atm_level_hint,
@@ -159,7 +156,9 @@ def _sapt_dft_dispersion_interaction_energy(
         data[f"{disp_label} MONOMER A"] = monA_disp
         data[f"{disp_label} MONOMER B"] = monB_disp
         data[f"{disp_label} IE"] = dimer_disp - monA_disp - monB_disp
-        data['FSAPT_EMPIRICAL_DISP'] = dimer_wfn.variable("PAIRWISE DISPERSION CORRECTION ANALYSIS")
+        data["FSAPT_EMPIRICAL_DISP"] = dimer_wfn.variable(
+            "PAIRWISE DISPERSION CORRECTION ANALYSIS"
+        )
         _disp_functor.print_out()
     else:
         raise ValueError(
@@ -214,8 +213,8 @@ def sapt_dft_d4_interaction_energy(
         gd_type="gd4_supermolecular",
         supermolecular_text="Supermolecular D4 Interaction Energy E_IE = E_IJ - E_I - E_J",
         gd_supermolecular_text="Supermolecular GD4(BJ)+ATM Interaction Energy E_IE = E_IJ - E_I - E_J",
-        two_body_level_hint='d4bj2b',
-        atm_level_hint='d4bjeeqatm',
+        two_body_level_hint="d4bj2b",
+        atm_level_hint="d4bjeeqatm",
     )
 
 
@@ -265,6 +264,73 @@ def sapt_dft_d3_interaction_energy(
         gd_type="gd3_supermolecular",
         supermolecular_text="Supermolecular -D3MBJ Interaction Energy E_IE = E_IJ - E_I - E_J",
         gd_supermolecular_text="Supermolecular GD3(BJ)+ATM Interaction Energy E_IE = E_IJ - E_I - E_J",
-        two_body_level_hint='d3mbj2b',
-        atm_level_hint='d3mbjatm',
+        two_body_level_hint="d3mbj2b",
+        atm_level_hint="d3mbjatm",
     )
+
+
+def sapt_dft_xdm_interaction_energy(
+    sapt_dimer: core.Molecule,
+    monomerA: core.Molecule,
+    monomerB: core.Molecule,
+    dimer_wfn: core.Wavefunction,
+    monomerA_wfn: core.Wavefunction,
+    monomerB_wfn: core.Wavefunction,
+    xdm_functional_name: str,
+    data: dict[str, object],
+    method_name: str = "",
+) -> dict[str, object]:
+    """Compute SAPT(DFT) XDM interaction energy contributions.
+
+    XDM requires converged densities, so this routine evaluates the dimer and
+    monomer XDM energies from their corresponding wavefunctions and stores the
+    intermolecular pairwise dimer matrix for F-SAPT post-processing.
+    """
+
+    if core.has_option_changed("SCF", "XDM_DISPERSION_PARAMETERS"):
+        modified_xdm_params = core.get_option("SCF", "XDM_DISPERSION_PARAMETERS")
+        xdm_functor = empirical_dispersion.XDMDispersionFunctor(
+            functional_name=xdm_functional_name,
+            a1=float(modified_xdm_params[0]),
+            a2_ang=float(modified_xdm_params[1]),
+            model=_extract_xdm_model(method_name),
+        )
+    else:
+        xdm_functor = empirical_dispersion.XDMDispersionFunctor(
+            functional_name=xdm_functional_name,
+            basis_name=core.get_global_option("BASIS"),
+            model=_extract_xdm_model(method_name),
+        )
+
+    core.print_out(
+        "         "
+        + "Supermolecular XDM Interaction Energy E_IE = E_IJ - E_I - E_J".center(58)
+        + "\n\n"
+    )
+
+    dimer_disp = xdm_functor.compute_energy(sapt_dimer, dimer_wfn)
+    monA_disp = xdm_functor.compute_energy(monomerA, monomerA_wfn)
+    monB_disp = xdm_functor.compute_energy(monomerB, monomerB_wfn)
+    data["XDM DIMER"] = dimer_disp
+    data["XDM MONOMER A"] = monA_disp
+    data["XDM MONOMER B"] = monB_disp
+    data["XDM IE"] = dimer_disp - monA_disp - monB_disp
+
+    pairwise_energies = dimer_wfn.variable("XDM PAIRWISE ENERGY").np
+    fsapt_empirical_disp = np.zeros_like(pairwise_energies)
+    monAs = np.array([i for i in range(monomerA.natom()) if monomerA.Z(i) > 0])
+    monBs = np.array([i for i in range(monomerB.natom()) if monomerB.Z(i) > 0])
+    for A in monAs:
+        for B in monBs:
+            fsapt_empirical_disp[A, B] = pairwise_energies[A, B]
+            fsapt_empirical_disp[B, A] = pairwise_energies[A, B]
+    data["FSAPT_EMPIRICAL_DISP"] = core.Matrix.from_array(fsapt_empirical_disp)
+    xdm_functor.print_out()
+    return data
+
+
+def _extract_xdm_model(method_name: str) -> str:
+    match = re.search(r"-XDM\((KB49|LOS-II)\)", method_name, flags=re.IGNORECASE)
+    if match is None:
+        return "kb49"
+    return match.group(1)

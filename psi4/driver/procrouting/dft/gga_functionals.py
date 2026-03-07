@@ -375,6 +375,113 @@ funcs.append({
 })
 
 
+# XDM-corrected GGA functionals
+funcs.append({
+    "name": "BLYP-XDM(KB49)",
+    "alias": ["BLYP-XDM"],
+    "x_functionals": {
+        "GGA_X_B88": {}
+    },
+    "c_functionals": {
+        "GGA_C_LYP": {}
+    },
+    "dispersion": {
+        "type": "xdm",
+        "params": {
+            "xdm_model": "kb49",
+        },
+    },
+    "description": '    BLYP with XDM dispersion correction\n',
+})
+
+funcs.append({
+    "name": "PW86PBE-XDM(KB49)",
+    "alias": ["PW86PBE-XDM"],
+    "x_functionals": {
+        "GGA_X_PW86": {}
+    },
+    "c_functionals": {
+        "GGA_C_PBE": {}
+    },
+    "dispersion": {
+        "type": "xdm",
+        "params": {
+            "xdm_model": "kb49",
+        },
+    },
+    "description": '    PW86PBE with XDM dispersion correction\n',
+})
+
+funcs.append({
+    "name": "PBE-XDM(KB49)",
+    "alias": ["PBE-XDM"],
+    "x_functionals": {
+        "GGA_X_PBE": {}
+    },
+    "c_functionals": {
+        "GGA_C_PBE": {}
+    },
+    "dispersion": {
+        "type": "xdm",
+        "params": {
+            "xdm_model": "kb49",
+        },
+    },
+    "description": '    PBE with XDM dispersion correction\n',
+})
+
+funcs.append({
+    "name": "BLYP-XDM(LOS-II)",
+    "x_functionals": {
+        "GGA_X_B88": {}
+    },
+    "c_functionals": {
+        "GGA_C_LYP": {}
+    },
+    "dispersion": {
+        "type": "xdm",
+        "params": {
+            "xdm_model": "los-ii",
+        },
+    },
+    "description": '    BLYP with XDM dispersion correction\n',
+})
+
+funcs.append({
+    "name": "PW86PBE-XDM(LOS-II)",
+    "x_functionals": {
+        "GGA_X_PW86": {}
+    },
+    "c_functionals": {
+        "GGA_C_PBE": {}
+    },
+    "dispersion": {
+        "type": "xdm",
+        "params": {
+            "xdm_model": "los-ii",
+        },
+    },
+    "description": '    PW86PBE with XDM dispersion correction\n',
+})
+
+funcs.append({
+    "name": "PBE-XDM(LOS-II)",
+    "x_functionals": {
+        "GGA_X_PBE": {}
+    },
+    "c_functionals": {
+        "GGA_C_PBE": {}
+    },
+    "dispersion": {
+        "type": "xdm",
+        "params": {
+            "xdm_model": "los-ii",
+        },
+    },
+    "description": '    PBE with XDM dispersion correction\n',
+})
+
+
 functional_list = {}
 for functional in funcs:
     functional_list[functional["name"].lower()] = functional

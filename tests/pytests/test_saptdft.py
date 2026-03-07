@@ -104,6 +104,65 @@ def test_sapt_dft_compute_ddft_d4():
     print(f"dDFT: {DFT_IE_from_dDFT=}")
 
 
+@pytest.mark.xdm
+def test_dftxdm_sapt():
+    """Check that DFT-XDM(SAPT) reproduces CP DFT+XDM interaction energy."""
+    mol_dimer = psi4.geometry(
+        """
+  O -2.930978458   -0.216411437    0.000000000
+  H -3.655219777    1.440921844    0.000000000
+  H -1.133225297    0.076934530    0.000000000
+   --
+  O  2.552311356    0.210645882    0.000000000
+  H  3.175492012   -0.706268134   -1.433472544
+  H  3.175492012   -0.706268134    1.433472544
+  units bohr
+"""
+    )
+    dft_functional = "pbe0"
+    psi4.set_options(
+        {
+            "basis": "STO-3G",
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
+            "sapt_dft_grac_shift_a": 0.136,
+            "sapt_dft_grac_shift_b": 0.136,
+            "SAPT_DFT_FUNCTIONAL": dft_functional,
+            "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
+        }
+    )
+    dft_xdm_IE = (
+        psi4.energy(dft_functional + "-xdm", bsse_type="CP", molecule=mol_dimer)
+        * hartree_to_kcalmol
+    )
+    sapt_energy = psi4.energy("DFT-XDM(SAPT)") * hartree_to_kcalmol
+    ELST = psi4.core.variable("SAPT ELST ENERGY")
+    EXCH = psi4.core.variable("SAPT EXCH ENERGY")
+    IND = psi4.core.variable("SAPT IND ENERGY")
+    SAPT_TOTAL = psi4.core.variable("SAPT TOTAL ENERGY")
+    DFT_MONA = psi4.core.variable("DFT MONOMER A ENERGY")
+    DFT_MONB = psi4.core.variable("DFT MONOMER B ENERGY")
+    DFT_DIMER = psi4.core.variable("DFT DIMER ENERGY")
+    XDM_IE = psi4.core.variable("XDM IE")
+
+    print(f"{DFT_DIMER=}\n{DFT_MONA=}\n{DFT_MONB=}")
+    print(f"bsse: {dft_xdm_IE=}")
+    print(f"SAPT total: {sapt_energy=}")
+    assert compare_values(-5.550073902591435, dft_xdm_IE, 7, "DFT IE")
+    assert compare_values(dft_xdm_IE, SAPT_TOTAL * hartree_to_kcalmol, 7, "SAPT TOTAL")
+    assert compare_values(dft_xdm_IE, sapt_energy, 7, "Returned Energy")
+
+    # Delta-DFT reconstructs the plain DFT interaction energy.
+    ELST = psi4.core.variable("SAPT ELST ENERGY")
+    EXCH = psi4.core.variable("SAPT EXCH ENERGY")
+    IND = psi4.core.variable("SAPT IND ENERGY")
+    DELTA_HF = psi4.core.variable("SAPT(DFT) DELTA HF")
+    DDFT = psi4.core.variable("SAPT(DFT) DELTA DFT")
+    DFT_IE_from_dDFT = (DDFT + ELST + EXCH + IND - DELTA_HF) * hartree_to_kcalmol
+    DFT_XDM_IE_from_dDFT = DFT_IE_from_dDFT + XDM_IE * hartree_to_kcalmol
+    assert compare_values(dft_xdm_IE, DFT_XDM_IE_from_dDFT, 7, "DFT+XDM IE")
+
+
 @pytest.mark.saptdft
 @pytest.mark.dftd4
 @pytest.mark.parametrize(
@@ -1315,4 +1374,4 @@ if __name__ == "__main__":
     #         # "--maxfail=1",
     #     ]
     # )
-    test_qcng_embedded_saptdft()
+    test_dftxdm_sapt()

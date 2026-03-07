@@ -20,6 +20,7 @@ foreach(dir_name
   libsapt_solver
   libscf_solver
   libtrans
+  libxdm
   )
   add_subdirectory(${dir_name})
 endforeach ()

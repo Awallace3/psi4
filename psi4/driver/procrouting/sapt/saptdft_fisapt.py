@@ -173,7 +173,11 @@ def setup_fisapt_object(
         fragments = mol.get_fragments()
         indA = np.arange(*fragments[0], dtype=int)
         indB = np.arange(*fragments[1], dtype=int)
-        indC = np.arange(*fragments[2], dtype=int) if len(fragments) == 3 else np.array([], dtype=int)
+        indC = (
+            np.arange(*fragments[2], dtype=int)
+            if len(fragments) == 3
+            else np.array([], dtype=int)
+        )
         # --- Z per fragment originals ---
         ZA = core.Vector(natoms)
         ZB = core.Vector(natoms)
@@ -362,7 +366,9 @@ def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars):
     }
     # Set whether to drop dispersion matrix... fisapt has specific option for
     # this...
-    core.set_local_option("FISAPT", "FISAPT_DO_FSAPT_DISP", core.get_option("SAPT", "SAPT_DFT_DO_DISP"))
+    core.set_local_option(
+        "FISAPT", "FISAPT_DO_FSAPT_DISP", core.get_option("SAPT", "SAPT_DFT_DO_DISP")
+    )
     if core.get_option("SAPT", "SAPT_DFT_DO_DISP"):
         cache_keys["Disp_AB"] = "Disp_AB"
     matrix_cache = {
@@ -381,9 +387,9 @@ def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars):
     fisapt.set_matrix(matrix_cache)
     fisapt.set_vector(vector_cache)
     fisapt.fdrop()
-    fisapt.save_variables_to_wfn(wfn, sapt_type='SAPT(DFT)')
+    fisapt.save_variables_to_wfn(wfn, sapt_type="SAPT(DFT)")
     # Now drop empirical dispersion if computed
-    if core.get_option("SAPT", "SAPT_DFT_D4_IE"):
+    if "FSAPT_EMPIRICAL_DISP" in cache:
         pw_disp = cache["FSAPT_EMPIRICAL_DISP"]
         pw_disp.name = "Empirical_Disp"
         filepath = core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH")
