@@ -1517,7 +1517,7 @@ def _sapt_xdm_base_functional(functional_name: str | None, method_name: str) -> 
         raise ValidationError(
             f"SAPT(DFT): could not determine XDM functional for method '{method_name}'."
         )
-    return re.sub(r"-xdm(?:\([^)]*\))?$", "", functional_name, flags=re.IGNORECASE)
+    return re.sub(r"-xdm(?:\([^)]*\))*$", "", functional_name, flags=re.IGNORECASE)
 
 
 def run_sf_sapt(name: str, **kwargs) -> core.Wavefunction:

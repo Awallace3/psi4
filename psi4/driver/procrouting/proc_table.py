@@ -96,6 +96,8 @@ procedures = {
         'dft-d3(sapt)'  : sapt.run_sapt_dft,
         'dft-d4(sapt)'  : sapt.run_sapt_dft,
         'dft-xdm(sapt)'  : sapt.run_sapt_dft,
+        'dft-xdm(sapt)(kb49)'  : sapt.run_sapt_dft,
+        'dft-xdm(sapt)(los-ii)'  : sapt.run_sapt_dft,
         'sapt0'         : proc.run_sapt,
         'ssapt0'        : proc.run_sapt,
         'sapt2'         : proc.run_sapt,

@@ -38,6 +38,21 @@ from ...p4util.exceptions import ValidationError
 from . import dft_builder
 
 
+def _xdm_base_and_model(name):
+    match = re.match(r"^(.+)-xdm(?P<suffix>(?:\([^)]*\))*)$", name.lower())
+    if match is None:
+        raise ValidationError("SCF: Functional (%s) not found!" % name)
+
+    base_name = match.group(1)
+    model = "kb49"
+    for tag in re.findall(r"\(([^)]*)\)", match.group("suffix")):
+        normalized = tag.strip().lower()
+        if normalized in {"kb49", "los-ii"}:
+            model = normalized
+
+    return base_name, model
+
+
 def build_superfunctional(name, restricted, npoints=None, deriv=1):
     if npoints is None:
         npoints = core.get_option("SCF", "DFT_BLOCK_MAX_POINTS")
@@ -75,10 +90,13 @@ def build_superfunctional(name, restricted, npoints=None, deriv=1):
     # functional to be used with XDM when the user supplies
     # XDM_DISPERSION_PARAMETERS or when parameters are in xdm_params.py.
     elif re.match(r'^.+-xdm(?:\(.*\))?$', name.lower()):
-        base_name = re.sub(r'-xdm(?:\(.*\))?$', '', name.lower())
+        base_name, xdm_model = _xdm_base_and_model(name)
         if base_name in dft_builder.functionals:
             base_dict = dict(dft_builder.functionals[base_name])
-            base_dict["dispersion"] = {"type": "xdm", "params": {"xdm_model": "kb49"}}
+            base_dict["dispersion"] = {
+                "type": "xdm",
+                "params": {"xdm_model": xdm_model},
+            }
             sup = dft_builder.build_superfunctional_from_dictionary(base_dict, npoints, deriv, restricted)
         else:
             raise ValidationError("SCF: Functional (%s) not found!" % name)

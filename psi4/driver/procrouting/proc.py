@@ -1416,7 +1416,12 @@ def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwar
 
             # Strip -XDM or -XDM(<model>) suffix from functional name for BJ parameter lookup
             func_name = superfunc.name()
-            func_name = re.sub(r"-xdm(?:\([^)]*\))?$", "", func_name, flags=re.IGNORECASE)
+            func_name = re.sub(
+                r"-xdm(?:\([^)]*\))*$",
+                "",
+                func_name,
+                flags=re.IGNORECASE,
+            )
             if modified_xdm_params is not None:
                 _disp_functor = empirical_dispersion.XDMDispersionFunctor(
                     functional_name=func_name,

@@ -51,8 +51,14 @@ def scf_set_reference_local(name, is_dft=False):
     # Alter reference name if needed
     user_ref = core.get_option('SCF', 'REFERENCE')
 
-    sup = build_superfunctional_from_dictionary(functionals[name], 1, 1, True)[0]
-    if sup.needs_xc() or is_dft:
+    needs_ks_reference = is_dft
+    if name in functionals:
+        sup = build_superfunctional_from_dictionary(functionals[name], 1, 1, True)[0]
+        needs_ks_reference = needs_ks_reference or sup.needs_xc()
+    elif "-xdm" in name.lower():
+        needs_ks_reference = True
+
+    if needs_ks_reference:
         if (user_ref == 'RHF'):
             core.set_local_option('SCF', 'REFERENCE', 'RKS')
         elif (user_ref == 'UHF'):

@@ -4,6 +4,7 @@ import numpy as np
 import re
 from psi4 import compare_values
 from pprint import pprint as pp
+import os
 
 pytestmark = [pytest.mark.psi, pytest.mark.api]
 
@@ -201,10 +202,87 @@ units angstrom
     e_alias = psi4.energy("b3lyp-xdm", molecule=mol)
     e_kb49 = psi4.energy("b3lyp-xdm(kb49)", molecule=mol)
     e_los_ii = psi4.energy("b3lyp-xdm(los-ii)", molecule=mol)
+    print(f"Energy with -XDM alias: {e_alias}")
+    print(f"Energy with -XDM(KB49): {e_kb49}")
+    print(f"Energy with -XDM(LoS-II): {e_los_ii}")
 
     # TODO: Update the reference values once parameters are refined.
     assert compare_values(e_alias, e_kb49, 10, "-XDM alias equals -XDM(KB49)")
     assert not np.isclose(e_los_ii, e_kb49, rtol=0.0, atol=1.0e-8)
+    return
+
+@pytest.mark.xdm
+@pytest.mark.saptdft
+def test_xdm_models_and_alias_sapt():
+    """
+    Verifies that ``dft-xdm(sapt)`` always uses CP-fitted XDM parameters.
+
+    For both ``kb49`` and ``los-ii``, confirms the model tag changes
+    the SAPT(DFT)+XDM result and that printed ``a1`` values match the
+    CP-fitted table entries for b3lyp/aug-cc-pvdz.
+    """
+
+    mol = psi4.geometry("""
+0 1
+H 0.0290 -1.1199 -1.5243
+O 0.9481 -1.3990 -1.3587
+H 1.4371 -0.5588 -1.3099
+--
+H 1.0088 -1.5240 0.5086
+O 1.0209 -1.1732 1.4270
+H 1.5864 -0.3901 1.3101
+symmetry c1
+no_reorient
+no_com
+    """)
+    psi4.set_options(
+        {
+            "basis": "aug-cc-pvdz",
+            "DFT_SPHERICAL_POINTS": 302,
+            "DFT_RADIAL_POINTS": 75,
+            "SAPT_DFT_FUNCTIONAL": "b3lyp",
+            "SAPT_DFT_GRAC_SHIFT_A": 0.1307,
+            "SAPT_DFT_GRAC_SHIFT_B": 0.1307,
+        }
+    )
+    psi4.set_output_file("pytest_output_dftxdm_sapt.dat", False)
+
+    e_los_ii = psi4.energy("dft-xdm(sapt)(los-ii)", molecule=mol)
+    with open("pytest_output_dftxdm_sapt.dat", "r") as handle:
+        output_text = handle.read()
+    os.remove("pytest_output_dftxdm_sapt.dat")
+    os.remove("pytest_output_dftxdm_sapt.log")
+    printed_a1 = [
+        float(match)
+        for match in re.findall(
+            r"\ba1\s*=\s*([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)",
+            output_text,
+        )
+    ]
+
+    print(f"Printed a1 values: {printed_a1}")
+    print(e_los_ii)
+    assert any(np.isclose(val, 0.315041, atol=1.0e-6) for val in printed_a1)
+    ref_e_los_ii = -0.0037769655155166226
+    assert compare_values(e_los_ii, ref_e_los_ii, 8, "SAPT(DFT)+XDM(LoS-II) energy")
+    # remove the output file after the test    import os
+    return
+
+
+def test_xdm_los_ii_cp_b3lyp_augccpvdz_a1():
+    """Check LoS-II CP a1 for b3lyp/aug-cc-pvdz at runtime."""
+
+    from psi4.driver.procrouting.empirical_disp import empirical_dispersion
+
+    xdm_functor = empirical_dispersion.XDMDispersionFunctor(
+        functional_name="b3lyp",
+        basis_name="aug-cc-pvdz",
+        cp=True,
+        model="los-ii",
+    )
+    a1 = xdm_functor.xdm.a1()
+    print(f"a1 = {a1:.6f}")
+    assert compare_values(a1, 0.315041, 8, "LoS-II CP a1 for b3lyp/aug-cc-pvdz")
     return
 
 
@@ -252,4 +330,4 @@ units angstrom
 
 if __name__ == "__main__":
     # pytest.main([__file__, "-x", "-v"])
-    test_h2o_nh3_xdm_IE_CP_NOCP()
+    test_xdm_models_and_alias_sapt()

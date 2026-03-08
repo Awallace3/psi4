@@ -299,6 +299,7 @@ def sapt_dft_xdm_interaction_energy(
         xdm_functor = empirical_dispersion.XDMDispersionFunctor(
             functional_name=xdm_functional_name,
             basis_name=core.get_global_option("BASIS"),
+            cp=True,
             model=_extract_xdm_model(method_name),
         )
 
@@ -330,7 +331,17 @@ def sapt_dft_xdm_interaction_energy(
 
 
 def _extract_xdm_model(method_name: str) -> str:
-    match = re.search(r"-XDM\((KB49|LOS-II)\)", method_name, flags=re.IGNORECASE)
+    match = re.search(
+        r"-xdm(?P<suffix>(?:\([^)]*\))*)",
+        method_name,
+        flags=re.IGNORECASE,
+    )
     if match is None:
         return "kb49"
-    return match.group(1)
+
+    for tag in re.findall(r"\(([^)]*)\)", match.group("suffix")):
+        normalized = tag.strip().lower()
+        if normalized in {"kb49", "los-ii"}:
+            return normalized
+
+    return "kb49"
