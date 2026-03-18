@@ -1693,9 +1693,7 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
 
     // What local XC ansatz are we in?
     int ansatz = functional_->ansatz();
-    if (ansatz >= 2) {
-        throw PSIEXCEPTION("Vx: RKS does not support rotated V builds for MGGA's");
-    }
+    // Meta-GGA (ansatz >= 2) is now supported
 
     auto old_point_deriv = point_workers_[0]->deriv();
     auto old_func_deriv = functional_->deriv();
@@ -1724,6 +1722,7 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
     // Per [R]ank quantities
     std::vector<SharedMatrix> R_Vx_local, R_Dx_local;
     std::vector<std::shared_ptr<Vector>> R_rho_k, R_rho_k_x, R_rho_k_y, R_rho_k_z, R_gamma_k;
+    std::vector<std::shared_ptr<Vector>> R_tau_k;
     for (size_t i = 0; i < num_threads_; i++) {
         R_Vx_local.push_back(std::make_shared<Matrix>("Vx Temp", max_functions, max_functions));
         R_Dx_local.push_back(std::make_shared<Matrix>("Dk Temp", max_functions, max_functions));
@@ -1735,6 +1734,10 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
             R_rho_k_y.push_back(std::make_shared<Vector>("RHO K Y Temp", max_points));
             R_rho_k_z.push_back(std::make_shared<Vector>("Rho K Z Temp", max_points));
             R_gamma_k.push_back(std::make_shared<Vector>("Gamma K Temp", max_points));
+        }
+
+        if (ansatz >= 2) {
+            R_tau_k.push_back(std::make_shared<Vector>("Tau K Temp", max_points));
         }
 
         functional_workers_[i]->set_deriv(2);
@@ -1814,8 +1817,10 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
         }
 
         // Meta
-        // Forget that!
-
+        double* tau_k = nullptr;
+        if (ansatz >= 2) {
+            tau_k = R_tau_k[rank]->pointer();
+        }
         // ==> Compute Vx contribution for each x <==
         for (size_t dindex = 0; dindex < Dx_vec.size(); dindex++) {
             auto Dxp = Dx_vec[dindex]->pointer();
@@ -1858,6 +1863,26 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
                     gamma_k[P] *= 2;
                 }
             }
+
+            // ===> Compute tau_k for meta-GGA <=== //
+            // τk = 0.5 * Σ_i Σ_mn (Dk+Dk^T)_mn ∂ᵢφ_m ∂ᵢφ_n
+            // Reuse Tp as scratch since rho_k and gamma_k are already extracted
+            if (ansatz >= 2) {
+                for (int P = 0; P < npoints; P++) tau_k[P] = 0.0;
+
+                double** phi_w[3] = {phi_x, phi_y, phi_z};
+                for (int i = 0; i < 3; i++) {
+                    // Tp = ∂ᵢφ · (Dk + Dk^T)
+                    C_DGEMM('N', 'N', npoints, nlocal, nlocal, 1.0, phi_w[i][0], coll_funcs,
+                            Dx_localp[0], max_functions, 0.0, Tp[0], max_functions);
+                    C_DGEMM('N', 'T', npoints, nlocal, nlocal, 1.0, phi_w[i][0], coll_funcs,
+                            Dx_localp[0], max_functions, 1.0, Tp[0], max_functions);
+                    // tau_k += 0.5 * ∂ᵢφ · Tp
+                    for (int P = 0; P < npoints; P++) {
+                        tau_k[P] += 0.5 * C_DDOT(nlocal, phi_w[i][P], 1, Tp[P], 1);
+                    }
+                }
+            }
             parallel_timer_off("Derivative Properties", rank);
 
             // ===> LSDA contribution <=== //
@@ -1865,11 +1890,20 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
             // T := 1/2 einsum("p, p, pm, p -> pm", w, ---- f , ρk, φ)
             //                                         ∂ρ^2
             parallel_timer_on("V_XCd", rank);
+            // Meta-GGA pointers for LSDA extension
+            double* v2_rho_tau_p = nullptr;
+            if (ansatz >= 2) {
+                v2_rho_tau_p = vals["V_RHO_A_TAU_A"]->pointer();
+            }
             for (int P = 0; P < npoints; P++) {
                 std::fill(Tp[P], Tp[P] + nlocal, 0.0);
                 // Do a simple screen: ignore contributions where rho is too small.
                 if (rho_a[P] < v2_rho_cutoff_) continue;
                 C_DAXPY(nlocal, 0.5 * v2_rho2[P] * w[P] * rho_k[P], phi[P], 1, Tp[P], 1);
+                // Meta-GGA LSDA extension: + 0.5 * w * v2_rho_tau * tau_k * phi
+                if (ansatz >= 2) {
+                    C_DAXPY(nlocal, 0.5 * v2_rho_tau_p[P] * w[P] * tau_k[P], phi[P], 1, Tp[P], 1);
+                }
             }
 
             // ===> GGA contribution <=== //
@@ -1879,6 +1913,11 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
                 auto v2_gamma_gamma = vals["V_GAMMA_AA_GAMMA_AA"]->pointer();
                 auto v2_rho_gamma = vals["V_RHO_A_GAMMA_AA"]->pointer();
                 double tmp_val = 0.0, v2_val = 0.0;
+                // Meta-GGA pointer for GGA extension
+                double* v2_gamma_tau_p = nullptr;
+                if (ansatz >= 2) {
+                    v2_gamma_tau_p = vals["V_GAMMA_AA_TAU_A"]->pointer();
+                }
 
                 // There are lots of GGA terms.
                 for (int P = 0; P < npoints; P++) {
@@ -1901,6 +1940,10 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
                     
                     // Define Γk terms in 3 intermediate
                     v2_val = (v2_rho_gamma[P] * rho_k[P] + v2_gamma_gamma[P] * gamma_k[P]);
+                    // Meta-GGA GGA extension: add v2_gamma_tau * tau_k
+                    if (ansatz >= 2) {
+                        v2_val += v2_gamma_tau_p[P] * tau_k[P];
+                    }
 
                     //                                      ∂
                     // temp2 = einsum("p, p, xp -> xpσ", w, -- f, ∇ρk)
@@ -1922,6 +1965,29 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
             // ===> Contract Ta and Tb aginst φ, replacing a point index with  an AO index <===
             C_DGEMM('T', 'N', nlocal, nlocal, npoints, 1.0, phi[0], coll_funcs, Tp[0], max_functions, 0.0, Vx_localp[0],
                     max_functions);
+
+
+            // ===> Meta-GGA contribution: τ W-type block <=== //
+            // Vx += Σ_i ∂ᵢφᵀ · [w * v2_tau_val * ∂ᵢφ]
+            // where v2_tau_val = v2_rho_tau * rho_k + v2_gamma_tau * gamma_k + v2_tau_tau * tau_k
+            if (ansatz >= 2) {
+                auto v2_rho_tau = vals["V_RHO_A_TAU_A"]->pointer();
+                auto v2_gamma_tau = vals["V_GAMMA_AA_TAU_A"]->pointer();
+                auto v2_tau_tau = vals["V_TAU_A_TAU_A"]->pointer();
+
+                double** phi_w[3] = {phi_x, phi_y, phi_z};
+                for (int idir = 0; idir < 3; idir++) {
+                    for (int P = 0; P < npoints; P++) {
+                        std::fill(Tp[P], Tp[P] + nlocal, 0.0);
+                        if (rho_a[P] < v2_rho_cutoff_) continue;
+                        double v2_tau_val = v2_rho_tau[P] * rho_k[P] + v2_gamma_tau[P] * gamma_k[P] + v2_tau_tau[P] * tau_k[P];
+                        C_DAXPY(nlocal, w[P] * v2_tau_val, phi_w[idir][P], 1, Tp[P], 1);
+                    }
+                    // Accumulate ∂ᵢφᵀ · T into Vx_local (beta=1.0 to add to existing)
+                    C_DGEMM('T', 'N', nlocal, nlocal, npoints, 1.0, phi_w[idir][0], coll_funcs,
+                            Tp[0], max_functions, 1.0, Vx_localp[0], max_functions);
+                }
+            }
 
             // ===> Add the adjoint to complete the LDA and GGA contributions  <===
             for (int m = 0; m < nlocal; m++) {

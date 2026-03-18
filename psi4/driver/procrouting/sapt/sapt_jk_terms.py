@@ -38,6 +38,21 @@ from .sapt_util import print_sapt_var
 from pprint import pprint as pp
 
 
+def _effective_K(K, wK, x_alpha, x_beta):
+    """
+    Build effective exchange matrix for LC hybrid functionals.
+    K_eff = x_alpha * K + x_beta * wK
+    where K is the full 1/r12 exchange and wK is the erf(omega*r12)/r12 exchange.
+    For non-LRC functionals (x_beta=0), returns K unchanged.
+    """
+    if x_beta == 0.0:
+        return K
+    K_eff = K.clone()
+    K_eff.scale(x_alpha)
+    K_eff.axpy(x_beta, wK)
+    return K_eff
+
+
 def build_sapt_jk_cache(
     wfn_dimer: core.Wavefunction,
     wfn_A: core.Wavefunction,
@@ -135,15 +150,26 @@ def build_sapt_jk_cache(
     jk.compute()
 
     # Clone them as the JK object will overwrite.
+    # For LC hybrid functionals, build effective K = x_alpha*K + x_beta*wK
+    is_lrc = wfn_A.functional().is_x_lrc()
+    x_alpha = wfn_A.functional().x_alpha() if is_lrc else 1.0
+    x_beta = wfn_A.functional().x_beta() if is_lrc else 0.0
+
     cache["J_A"] = jk.J()[0].clone()
-    cache["K_A"] = jk.K()[0].clone()
+    cache["K_A"] = _effective_K(jk.K()[0], jk.wK()[0] if is_lrc else None, x_alpha, x_beta)
 
     cache["J_B"] = jk.J()[1].clone()
-    cache["K_B"] = jk.K()[1].clone()
+    cache["K_B"] = _effective_K(jk.K()[1], jk.wK()[1] if is_lrc else None, x_alpha, x_beta)
 
     cache["J_O"] = jk.J()[2].clone()
-    cache["K_O"] = jk.K()[2].clone()
-    cache["K_O"].transpose_this()
+    K_O = _effective_K(jk.K()[2], jk.wK()[2] if is_lrc else None, x_alpha, x_beta)
+    K_O.transpose_this()
+    cache["K_O"] = K_O
+
+    # Store LRC parameters in cache for downstream use
+    cache["is_x_lrc"] = is_lrc
+    cache["x_alpha"] = x_alpha
+    cache["x_beta"] = x_beta
 
     monA_nr = wfn_A.molecule().nuclear_repulsion_energy()
     monB_nr = wfn_B.molecule().nuclear_repulsion_energy()
@@ -238,15 +264,26 @@ def build_sapt_jk_cache_sums(
     jk.compute()
 
     # Clone them as the JK object will overwrite.
+    # For LC hybrid functionals, build effective K = x_alpha*K + x_beta*wK
+    is_lrc = wfn_A.functional().is_x_lrc()
+    x_alpha = wfn_A.functional().x_alpha() if is_lrc else 1.0
+    x_beta = wfn_A.functional().x_beta() if is_lrc else 0.0
+
     cache["J_A"] = jk.J()[0].clone()
-    cache["K_A"] = jk.K()[0].clone()
+    cache["K_A"] = _effective_K(jk.K()[0], jk.wK()[0] if is_lrc else None, x_alpha, x_beta)
 
     cache["J_B"] = jk.J()[1].clone()
-    cache["K_B"] = jk.K()[1].clone()
+    cache["K_B"] = _effective_K(jk.K()[1], jk.wK()[1] if is_lrc else None, x_alpha, x_beta)
 
     cache["J_O"] = jk.J()[2].clone()
-    cache["K_O"] = jk.K()[2].clone()
-    cache["K_O"].transpose_this()
+    K_O = _effective_K(jk.K()[2], jk.wK()[2] if is_lrc else None, x_alpha, x_beta)
+    K_O.transpose_this()
+    cache["K_O"] = K_O
+
+    # Store LRC parameters in cache for downstream use
+    cache["is_x_lrc"] = is_lrc
+    cache["x_alpha"] = x_alpha
+    cache["x_beta"] = x_beta
 
     monA_nr = wfn_A.molecule().nuclear_repulsion_energy()
     monB_nr = wfn_B.molecule().nuclear_repulsion_energy()
@@ -361,7 +398,13 @@ def exchange(cache, jk, do_print=True):
     jk.compute()
 
     JT_A, JT_AB, Jij = jk.J()
-    KT_A, KT_AB, Kij = jk.K()
+    # For LC hybrid functionals, build effective K = x_alpha*K + x_beta*wK
+    is_lrc = cache.get("is_x_lrc", False)
+    _xa = cache.get("x_alpha", 1.0)
+    _xb = cache.get("x_beta", 0.0)
+    KT_A = _effective_K(jk.K()[0], jk.wK()[0] if is_lrc else None, _xa, _xb)
+    KT_AB = _effective_K(jk.K()[1], jk.wK()[1] if is_lrc else None, _xa, _xb)
+    Kij = _effective_K(jk.K()[2], jk.wK()[2] if is_lrc else None, _xa, _xb)
 
     # Start S^2
     Exch_s2 = 0.0
@@ -445,7 +488,13 @@ def induction(
     jk.compute()
 
     J_Ot, J_P_B, J_P_A = jk.J()
-    K_Ot, K_P_B, K_P_A = jk.K()
+    # For LC hybrid functionals, build effective K = x_alpha*K + x_beta*wK
+    is_lrc = cache.get("is_x_lrc", False)
+    _xa = cache.get("x_alpha", 1.0)
+    _xb = cache.get("x_beta", 0.0)
+    K_Ot = _effective_K(jk.K()[0], jk.wK()[0] if is_lrc else None, _xa, _xb)
+    K_P_B = _effective_K(jk.K()[1], jk.wK()[1] if is_lrc else None, _xa, _xb)
+    K_P_A = _effective_K(jk.K()[2], jk.wK()[2] if is_lrc else None, _xa, _xb)
 
     # Save for later usage in find() (F-SAPT induction)
     cache['J_P_A'] = J_P_A.clone()
@@ -619,7 +668,13 @@ def induction(
         jk.compute()
 
         J_AA_inf, J_BB_inf, J_AB_inf = jk.J()
-        K_AA_inf, K_BB_inf, K_AB_inf = jk.K()
+        # For LC hybrid functionals, build effective K = x_alpha*K + x_beta*wK
+        is_lrc = cache.get("is_x_lrc", False)
+        _xa = cache.get("x_alpha", 1.0)
+        _xb = cache.get("x_beta", 0.0)
+        K_AA_inf = _effective_K(jk.K()[0], jk.wK()[0] if is_lrc else None, _xa, _xb)
+        K_BB_inf = _effective_K(jk.K()[1], jk.wK()[1] if is_lrc else None, _xa, _xb)
+        K_AB_inf = _effective_K(jk.K()[2], jk.wK()[2] if is_lrc else None, _xa, _xb)
 
         # A <- B
         EX_AA_inf = V_B.clone()
@@ -829,6 +884,14 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     else:
         cache["wfn_B"].set_jk(jk)
 
+    # Disable VV10 for CPKS solve — VV10 Vx contribution is not implemented in C++
+    # and the nonlocal correlation kernel is neglected in SAPT(DFT) response.
+    vv10_A = cache["wfn_A"].functional().needs_vv10()
+    vv10_B = cache["wfn_B"].functional().needs_vv10()
+    if vv10_A:
+        cache["wfn_A"].functional().set_do_vv10(False)
+    if vv10_B:
+        cache["wfn_B"].functional().set_do_vv10(False)
     # Make a preconditioner function
     P_A = core.Matrix(cache["eps_occ_A"].shape[0], cache["eps_vir_A"].shape[0])
     P_A.np[:] = cache["eps_occ_A"].np.reshape(-1, 1) - cache["eps_vir_A"].np
@@ -920,5 +983,11 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
         printer=pfunc,
     )
     core.print_out("   " + ("-" * sep_size) + "\n")
+
+    # Re-enable VV10 if it was disabled
+    if vv10_A:
+        cache["wfn_A"].functional().set_do_vv10(True)
+    if vv10_B:
+        cache["wfn_B"].functional().set_do_vv10(True)
 
     return vecs
