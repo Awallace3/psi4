@@ -207,6 +207,8 @@ def print_sapt_dft_summary(
         empirical_disp_key = "D3 IE"
     elif "XDM IE" in data:
         empirical_disp_key = "XDM IE"
+    elif "VV10 IE" in data:
+        empirical_disp_key = "VV10 IE"
 
     empirical_disp_label = empirical_disp_key
     if empirical_disp_key in {"D3 IE", "D4 IE"}:
@@ -243,6 +245,10 @@ def print_sapt_dft_summary(
         ret += (
             print_sapt_var(f"  {empirical_disp_key}", data[empirical_disp_key]) + "\n"
         )
+
+    if empirical_disp_key is not None:
+        core.set_variable(empirical_disp_key, data[empirical_disp_key])
+        dimer_wfn.set_variable(empirical_disp_key, data[empirical_disp_key])
 
     ret += "\n"
     core.set_variable("SAPT DISP ENERGY", disp)

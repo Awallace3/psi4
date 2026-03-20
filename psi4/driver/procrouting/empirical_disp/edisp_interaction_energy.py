@@ -330,6 +330,44 @@ def sapt_dft_xdm_interaction_energy(
     return data
 
 
+def sapt_dft_vv10_interaction_energy(
+    dimer_wfn: core.Wavefunction,
+    monomerA_wfn: core.Wavefunction,
+    monomerB_wfn: core.Wavefunction,
+    data: dict[str, object],
+) -> dict[str, object]:
+    """Compute SAPT(DFT) VV10 nonlocal dispersion interaction energy.
+
+    Extracts the post-SCF ``DFT VV10 ENERGY`` variable from the delta-DFT
+    dimer and monomer wavefunctions and stores the supermolecular interaction
+    energy in ``data["VV10 IE"]``.
+    """
+
+    core.print_out(
+        "         "
+        + "Supermolecular VV10 Interaction Energy E_IE = E_IJ - E_I - E_J".center(58)
+        + "\n\n"
+    )
+
+    dimer_vv10 = dimer_wfn.variable("DFT VV10 ENERGY")
+    monA_vv10 = monomerA_wfn.variable("DFT VV10 ENERGY")
+    monB_vv10 = monomerB_wfn.variable("DFT VV10 ENERGY")
+
+    data["VV10 DIMER"] = dimer_vv10
+    data["VV10 MONOMER A"] = monA_vv10
+    data["VV10 MONOMER B"] = monB_vv10
+    data["VV10 IE"] = dimer_vv10 - monA_vv10 - monB_vv10
+
+    core.print_out(
+        f"    VV10 Dimer       = {dimer_vv10 * 627.5095:16.8f} kcal/mol\n"
+        f"    VV10 Monomer A   = {monA_vv10  * 627.5095:16.8f} kcal/mol\n"
+        f"    VV10 Monomer B   = {monB_vv10  * 627.5095:16.8f} kcal/mol\n"
+        f"    VV10 IE          = {data['VV10 IE'] * 627.5095:16.8f} kcal/mol\n\n"
+    )
+
+    return data
+
+
 def _extract_xdm_model(method_name: str) -> str:
     match = re.search(
         r"-xdm(?P<suffix>(?:\([^)]*\))*)",

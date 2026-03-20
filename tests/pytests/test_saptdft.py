@@ -1490,6 +1490,66 @@ def test_b3lyp_d3_sapt_dft():
     # Total should be attractive for water dimer at this geometry
     assert TOTAL < 0.0, f"TOTAL should be negative for water dimer, got {TOTAL}"
 
+
+@pytest.mark.saptdft
+def test_dft_vv10_sapt():
+    """
+    Test DFT-VV10(SAPT) dispersion: wB97M-V VV10 nonlocal correlation
+    as a supermolecular interaction energy correction in SAPT(DFT).
+
+    The VV10 IE is extracted from the delta-DFT wavefunctions via the
+    "DFT VV10 ENERGY" wavefunction variable and stored as data["VV10 IE"].
+    """
+    mol_dimer = psi4.geometry(
+        """
+  O -2.930978458   -0.216411437    0.000000000
+  H -3.655219777    1.440921844    0.000000000
+  H -1.133225297    0.076934530    0.000000000
+   --
+  O  2.552311356    0.210645882    0.000000000
+  H  3.175492012   -0.706268134   -1.433472544
+  H  3.175492012   -0.706268134    1.433472544
+  units bohr
+"""
+    )
+    psi4.set_options(
+        {
+            "basis": "aug-cc-pvdz",
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
+            "scf_type": "df",
+            "sapt_dft_grac_shift_a": 0.136,
+            "sapt_dft_grac_shift_b": 0.136,
+            "SAPT_DFT_FUNCTIONAL": "wb97m-v",
+        }
+    )
+    psi4.energy("dft-vv10(sapt)")
+    ELST = psi4.core.variable("SAPT ELST ENERGY")
+    EXCH = psi4.core.variable("SAPT EXCH ENERGY")
+    IND = psi4.core.variable("SAPT IND ENERGY")
+    DISP = psi4.core.variable("SAPT DISP ENERGY")
+    TOTAL = psi4.core.variable("SAPT TOTAL ENERGY")
+
+    print(f"\nDFT-VV10(SAPT) wB97M-V Results:")
+    print(f"  ELST  = {ELST * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  EXCH  = {EXCH * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  IND   = {IND * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  DISP  = {DISP * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  TOTAL = {TOTAL * hartree_to_kcalmol:12.8f} kcal/mol")
+
+    # Sanity checks
+    assert ELST < 0.0, f"ELST should be negative for water dimer, got {ELST}"
+    assert EXCH > 0.0, f"EXCH should be positive, got {EXCH}"
+    assert IND < 0.0, f"IND should be negative for water dimer, got {IND}"
+    assert TOTAL < 0.0, f"TOTAL should be negative for water dimer, got {TOTAL}"
+    # The VV10 interaction energy itself (from the delta-DFT wavefunctions)
+    # must be attractive (negative). SAPT DISP ENERGY uses the XDM-style
+    # accounting where delta_HF is removed from IND and folded into DISP, so
+    # SAPT DISP ENERGY can be positive; check VV10 IE directly instead.
+    VV10_IE = psi4.core.variable("VV10 IE")
+    assert VV10_IE < 0.0, f"VV10 IE should be negative for water dimer, got {VV10_IE}"
+
+
 if __name__ == "__main__":
     psi4.set_memory("32 GB")
     psi4.set_num_threads(12)
