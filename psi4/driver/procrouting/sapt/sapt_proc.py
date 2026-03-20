@@ -189,6 +189,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
     e_disp_param_name = None
+    do_vv10 = False
     supported_functionals_edisp = ["hf", "pbe0", "b3lyp"]
 
     # SAPT_DFT_D4_IE and SAPT_DFT_D3_IE control whether to run -D3/-D4.
@@ -301,6 +302,11 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             )
         # # Re-prepare options after local option changes
         # core.prepare_options_for_module("SAPT")
+    elif "-VV10" in name.upper():
+        core.print_out(r"DFT-VV10(SAPT): $\Delta$-DFT+VV10 for dispersion")
+        core.set_global_option("SAPT_DFT_DO_DISP", 0)
+        core.set_global_option("SAPT_DFT_DO_DDFT", 1)
+        do_vv10 = True
 
     do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
     do_disp = core.get_option("SAPT", "SAPT_DFT_DO_DISP")
@@ -937,6 +943,52 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             data=data,
         )
         core.timer_off("SAPT(DFT):D3 Interaction Energy")
+    elif do_vv10:
+        core.print_out("\n")
+        core.print_out(
+            "         ---------------------------------------------------------\n"
+        )
+        core.print_out(
+            "         " + "SAPT(DFT): VV10 Interaction Energy".center(58) + "\n"
+        )
+        core.print_out("\n")
+        core.timer_on("SAPT(DFT):VV10 Interaction Energy")
+        if dft_wfn_dimer is None:
+            raise ValidationError(
+                "SAPT(DFT): DFT-VV10(SAPT) requires delta-DFT wavefunctions "
+                "(set SAPT_DFT_DO_DDFT=True or use DFT-VV10(SAPT) method name)."
+            )
+
+        # VV10 is a nonlocal density functional; its energy changes when the
+        # basis is extended with ghost atoms.  Using bare monomer wavefunctions
+        # (monomer basis) against a dimer wavefunction (full dimer basis) would
+        # produce large BSSE artefacts.  Instead, run CP-corrected monomer SCFs
+        # in the full dimer basis so the supermolecular subtraction is
+        # internally consistent.
+        core.print_out(
+            "         VV10: running CP-corrected monomer SCFs in dimer basis\n\n"
+        )
+        core.timer_on("SAPT(DFT):VV10 Monomer A CP")
+        monomerA_cp = sapt_dimer.extract_subsets(1, 2)
+        dft_wfn_monomerA_cp = run_scf(
+            sapt_dft_functional.lower(), molecule=monomerA_cp, jk=sapt_jk
+        )
+        core.timer_off("SAPT(DFT):VV10 Monomer A CP")
+
+        core.timer_on("SAPT(DFT):VV10 Monomer B CP")
+        monomerB_cp = sapt_dimer.extract_subsets(2, 1)
+        dft_wfn_monomerB_cp = run_scf(
+            sapt_dft_functional.lower(), molecule=monomerB_cp, jk=sapt_jk
+        )
+        core.timer_off("SAPT(DFT):VV10 Monomer B CP")
+
+        edisp_interaction_energy.sapt_dft_vv10_interaction_energy(
+            dimer_wfn=dft_wfn_dimer,
+            monomerA_wfn=dft_wfn_monomerA_cp,
+            monomerB_wfn=dft_wfn_monomerB_cp,
+            data=data,
+        )
+        core.timer_off("SAPT(DFT):VV10 Interaction Energy")
 
     core.set_global_option("SAVE_JK", False)
     core.set_global_option("DFT_GRAC_SHIFT", 0.0)
