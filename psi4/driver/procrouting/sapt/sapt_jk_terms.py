@@ -46,7 +46,7 @@ def _effective_K(K, wK, x_alpha, x_beta):
     For non-LRC functionals (x_beta=0), returns K unchanged.
     """
     if x_beta == 0.0:
-        return K
+        return K.clone()
     K_eff = K.clone()
     K_eff.scale(x_alpha)
     K_eff.axpy(x_beta, wK)
