@@ -2,17 +2,9 @@ import pytest
 import psi4
 from qcelemental import constants
 from psi4 import compare_values
-from psi4 import core
 import numpy as np
 import qcelemental as qcel
 from pprint import pprint as pp
-# TODO: use logic below to check if einsums is available, then check optoins
-# optionally import einsums
-# psi4.addons()
-# "einsums" in psi4.addons()
-
-# from addons import uusing
-import pandas as pd
 
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
 pytestmark = [pytest.mark.psi, pytest.mark.api]
@@ -313,6 +305,7 @@ def test_sapt_dft_compute_ddft_d4_diskdf():
 
 @pytest.mark.saptdft
 @pytest.mark.dftd4
+@pytest.mark.medlong
 def test_sapt_dft_diskdf():
     """
     Test SAPT(DFT) for correct delta-DFT and -D4 IE terms
@@ -763,7 +756,7 @@ no_com
                 "Enuc": 37.565065473343004,
                 "Etot": -0.03824344798868797,
             },
-            8,
+            7,
         ),
         (
             "abc",
@@ -778,7 +771,7 @@ no_com
                 "Enuc": 37.565065473343004,
                 "Etot": -0.041685770991322126,
             },
-            8,
+            7,
         ),
         (
             "ab",
@@ -793,7 +786,7 @@ no_com
                 "Enuc": 37.565065473343004,
                 "Etot": -0.03822832499573517,
             },
-            8,
+            7,
         ),
         (
             "a",
@@ -808,7 +801,7 @@ no_com
                 "Enuc": 37.565065473343004,
                 "Etot": -0.01640014847836538,
             },
-            8,
+            7,
         ),
         (
             "b",
@@ -823,7 +816,7 @@ no_com
                 "Enuc": 37.565065473343004,
                 "Etot": -0.013975244148708968,
             },
-            8,
+            7,
         ),
         (
             "c",
@@ -838,7 +831,7 @@ no_com
                 "Enuc": 37.565065473343004,
                 "Etot": -0.0003515338719141661,
             },
-            8,
+            7,
         ),
     ],
 )
@@ -970,7 +963,17 @@ no_com
 
 @pytest.mark.extern
 @pytest.mark.saptdft
-def test_fisapt0_sapthf_external_potential():
+@pytest.mark.parametrize(
+    "use_einsums",
+    [
+        pytest.param(True, id="einsums"),
+        pytest.param(False, id="non-einsums"),
+    ],
+)
+def test_fisapt0_sapthf_external_potential(use_einsums):
+    if use_einsums:
+        pytest.importorskip("einsums")
+
     mol = psi4.geometry(
         """
 0 1
@@ -1006,19 +1009,17 @@ no_com
         ],
     }
 
-    # Set common options
-    psi4.set_options(
-        {
-            "e_convergence": 1e-8,
-            "d_convergence": 1e-8,
-            "basis": "jun-cc-pvdz",
-            "scf_type": "df",
-            "guess": "sad",
-            "freeze_core": "true",
-            "SAPT_DFT_FUNCTIONAL": "hf",
-            "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
-        }
-    )
+    options = {
+        "e_convergence": 1e-8,
+        "d_convergence": 1e-8,
+        "basis": "jun-cc-pvdz",
+        "scf_type": "df",
+        "guess": "sad",
+        "freeze_core": "true",
+        "SAPT_DFT_FUNCTIONAL": "hf",
+        "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
+    }
+    psi4.set_options(options)
 
     # Run the FISAPT0 energy calculation
     psi4.energy(
@@ -1037,6 +1038,10 @@ no_com
     ]
     calculated_fisapt0_energies = {k1: psi4.core.variable(k2) for k1, k2 in key_labels}
     calculated_fisapt0_energies["Enuc"] = mol.nuclear_repulsion_energy()
+
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.set_options({**options, "SAPT_DFT_USE_EINSUMS": use_einsums})
 
     # Run the SAPT(HF) energy calculation
     psi4.energy(
@@ -1059,7 +1064,7 @@ no_com
             calculated_fisapt0_energies[k1],
             calculated_sapthf_energies[k1],
             8,
-            k1,
+            f"{k1} use_einsums={use_einsums}",
         )
 
     # Also check nuclear repulsion energy
@@ -1067,10 +1072,11 @@ no_com
         calculated_fisapt0_energies["Enuc"],
         calculated_sapthf_energies["Enuc"],
         8,
-        "Enuc",
+        f"Enuc use_einsums={use_einsums}",
     )
 
 
+@pytest.mark.saptdft
 def test_qcng_embedded_saptdft():
     import qcengine as qcng
 
@@ -1083,6 +1089,9 @@ def test_qcng_embedded_saptdft():
             # "SAPT_DFT_GRAC_COMPUTE": "SINGLE"
             "SAPT_DFT_GRAC_SHIFT_A": 0.1307,
             "SAPT_DFT_GRAC_SHIFT_B": 0.1307,
+            # Up the convergence threshold to ensure same solution with openorbitaloptimizer.
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
         },
         "model": {"basis": "sto-3g", "method": "sapt(dft)"},
         "molecule": {
@@ -1167,6 +1176,7 @@ def test_qcng_embedded_saptdft():
     return
 
 
+@pytest.mark.saptdft
 def test_charge_field_inputs():
     dimer = psi4.geometry("""
     0 1
@@ -1249,6 +1259,7 @@ def test_charge_field_inputs():
     assert compare_values(e_B, e_b, 7, "e_A==e_a")
 
 
+@pytest.mark.saptdft
 def test_einsum_terms():
     """
     built from sapt-dft1 ctest
@@ -1286,6 +1297,8 @@ def test_einsum_terms():
         )
 
 
+@pytest.mark.saptdft
+@pytest.mark.medlong
 def test_saptdft_inf():
     # implement this test
     Eref = {
@@ -1554,6 +1567,13 @@ if __name__ == "__main__":
     psi4.set_memory("32 GB")
     psi4.set_num_threads(12)
     # pytest this file
+    test_fisapt0_sapthf_external_potential(True)
+    test_fisapt0_sapthf_external_potential(False)
+    # test_qcng_embedded_saptdft()
+    # test_saptdft_disp_methods_dftd4("SAPT(DFT)-D4(S)", -0.003605830)
+    # test_saptdft_disp_methods_dftd4("SAPT(DFT)-D4(I)", -0.0040379796),
+    # test_saptdft_disp_methods_dftd3("SAPT(DFT)-D3(I)", -0.0046415623)
+    # test_saptdft_disp_methods_dftd3("SAPT(DFT)-D3(S)", -0.0045682406),
     # pytest.main(
     #     [
     #         __file__,

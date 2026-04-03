@@ -574,6 +574,16 @@ where ``(i)`` denotes an intermolecular pairwise dispersion treatment and
 parameters. Currently support only exists for setting the `SAPT_DFT_FUNCTIONAL`
 equal to HF, PBE0, or B3LYP for these methods.
 
+When a semi-empirical variant is used, the total SAPT(DFT) decomposition is
+still reported through standard SAPT variables (electrostatics, exchange,
+induction, dispersion, and total), and the corresponding -D3/-D4 interaction
+energy contribution is included in the printed SAPT(DFT) summary and stored in
+the dispersion QCVariable.
+
+
+Approximate SAPT Decomposition of DFT-D Methods
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 ``dft-d3(sapt)`` and ``dft-d4(sapt)`` enable the :math:`\Delta`-DFT correction
 together with -D3BJATM/-D4BJATM dispersion using Grimme damping function
 parameters as a way to decompose a supermolecular DFT-D3/-D4 interaction energy
@@ -585,11 +595,29 @@ These DFT-D3/-D4 methods save additional scalar quantities such as ``DFT DIMER
 ENERGY``, ``DFT MONOMER A ENERGY``, ``DFT MONOMER B ENERGY``, and ``SAPT(DFT)
 DELTA DFT``.
 
-When a semi-empirical variant is used, the total SAPT(DFT) decomposition is
-still reported through standard SAPT variables (electrostatics, exchange,
-induction, dispersion, and total), and the corresponding -D3/-D4 interaction
-energy contribution is included in the printed SAPT(DFT) summary and stored in
-the dispersion QCVariable.
+The stored scalar ``SAPT(DFT) DELTA DFT`` corresponds to the supermolecular DFT
+correction
+
+.. math::
+
+   \delta_{DFT}^{(2)} = E_{int}^{DFT} - \left(E_{elst,DFT}^{(1)} + E_{exch,DFT}^{(1)} + E_{ind,resp,DFT}^{(2)} + E_{exch-ind,resp,DFT}^{(2)}\right)
+
+and the reported component total for ``dft-d3(sapt)`` and ``dft-d4(sapt)`` is
+
+.. math::
+
+   \begin{aligned}
+   E_{int}^{DFT-D} &= E_{elst} + E_{exch} + E_{ind} + E_{disp} \\
+                   &= \left(E_{elst,DFT}^{(1)} + E_{exch,DFT}^{(1)} + E_{ind,resp,DFT}^{(2)} + E_{exch-ind,resp,DFT}^{(2)} + \delta_{HF}^{(2)}\right) \\
+                   &\quad + \left(\delta_{DFT}^{(2)} - \delta_{HF}^{(2)} + E_{int}^{D}\right)
+   \end{aligned}
+
+where :math:`E_{int}^{D}` is the corresponding -D3/-D4 interaction energy. The
+:math:`\Delta`-HF term is subtracted from the :math:`\Delta`-DFT term to avoid
+double counting of induction effects present in both of these terms. Overall,
+Psi4 keeps the SAPT-like electrostatics, exchange, and induction terms, then
+assigns the remaining supermolecular DFT-D correction to dispersion so that the
+summed components reproduce the supermolecular DFT-D interaction energy. 
 
 
 Basic Keywords for SAPT(DFT) 
@@ -1061,8 +1089,19 @@ function parameter adjustments with respect to basis set, the parameters are
 quite transferable at least between cc-pVDZ to aug-cc-pVTZ (see Fig S1 and S2
 from [Wallace:2024:114115]_ for more information). However, recommended usage
 is with the following levels of theory: SAPT0-D3/jun-cc-pVDZ,
-SAPT0-D3/aug-cc-pVDZ, and SAPT0-D4/aug-cc-pVDZ. A simple water dimer
-computation using SAPT0-D may look like::
+SAPT0-D3/aug-cc-pVDZ, and SAPT0-D4/aug-cc-pVDZ.
+
+.. warning:: Since March 2026, the default SAPT0-D4 treatment has changed from
+   the supermolecular ``sapt0-d4(s)`` variant to the intermolecular
+   ``sapt0-d4(i)`` variant because the supermolecular -D4 model can show
+   unphysical long-range behavior. To reproduce the former default explicitly,
+   pass ``(s)`` after the -D4 method, for example ``energy('sapt0-d4(s)')`` or
+   ``energy('sapt0-d4bjeeqtwo(s)')``. More information on the differences
+   between the supermolecular and intermolecular -D4 models can be found in
+   [Wallace:2024:114115]_, or above in the section ``SAPT(DFT)-D3 and
+   SAPT(DFT)-D4 variants``.
+
+A simple water dimer computation using SAPT0-D may look like::
 
     molecule water_dimer {
          0 1

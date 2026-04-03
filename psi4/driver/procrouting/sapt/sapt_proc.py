@@ -155,6 +155,8 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     do_xdm = False
     do_vv10 = False
     supported_functionals_edisp = ["hf", "pbe0", "b3lyp"]
+    core.set_global_option("SAPT_DFT_D4_IE", 0)
+    core.set_global_option("SAPT_DFT_D3_IE", 0)
     if "-D4" in name.upper():
         d4_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
         if "-D4(S)" in name.upper():
@@ -278,7 +280,7 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     sapt_dft_D3_IE = core.get_option("SAPT", "SAPT_DFT_D3_IE")
     do_dft = sapt_dft_functional != "HF"
-    do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT") != "NONE"
+    do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() != "NONE"
 
     # Because SAPT(DFT) FDDS Dispersion doesn't have FSAPT support, catch this
     # case when FISAPT is requested with SAPT_DFT_DO_DISP false
@@ -566,7 +568,12 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
             core.print_out("\n")
             core.print_out(
-                print_sapt_hf_summary(hf_data, "SAPT(HF)", delta_hf=dhf_value)
+                print_sapt_hf_summary(
+                    hf_data,
+                    "SAPT(HF)",
+                    dimer_wfn=hf_wfn_dimer,
+                    delta_hf=dhf_value,
+                )
             )
 
             data["Delta HF Correction"] = core.variable("SAPT(DFT) Delta HF")
@@ -982,6 +989,7 @@ def compute_GRAC_shift(
     grac_options = sapt_dft_grac_convergence_tier_options[
         sapt_dft_grac_convergence_tier
     ]
+    grac = None
     for options in grac_options:
         for key, val in options.items():
             core.set_local_option("SCF", key, val)
@@ -1046,10 +1054,14 @@ def compute_GRAC_shift(
         E_cation = wfn_cation.energy()
         grac = E_cation - E_given + HOMO
         if grac >= 1 or grac <= -1:
-            raise Exception(
+            raise ValueError(
                 f"The computed GRAC shift ({grac} [E_h]) for {label} exceeds the bounds of -1 < x < 1 and should not be used to approximate the ionization potential."
             )
         break
+    if grac is None:
+        raise ValueError(
+            "Failed to converge the input monomer or its cation for computing the GRAC shift for Monomer" + label
+        )
     core.print_out(f" GRAC shift {label}: {grac:.8f}\n")
     core.print_out(f" {E_given = :.8f}, {E_cation = :.8f}, {HOMO = :.8f}\n")
     optstash.restore()
@@ -1249,7 +1261,7 @@ def sapt_dft(
     # Electrostatics
     core.timer_on("SAPT(DFT):elst")
     fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")
-    do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT") != "NONE"
+    do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() != "NONE"
     elst, extern_extern_IE = jk_terms.electrostatics(cache, True)
     data["extern_extern_IE"] = extern_extern_IE
     data.update(elst)
@@ -1366,6 +1378,9 @@ def sapt_dft(
         core.timer_on("SAPT(DFT): F-SAPT Induction")
         FISAPT_obj.find()
         core.timer_off("SAPT(DFT): F-SAPT Induction")
+        matrices = FISAPT_obj.matrices()
+        for k, v in matrices.items():
+            cache[k] = v
 
     # Blow away JK object before doing MP2 for memory considerations
     if cleanup_jk:
@@ -1544,23 +1559,33 @@ def sapt_dft(
     )
 
     # because FISAPT_obj drop sets core variables, avoid setting them twice
-    if core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH") != "NONE" and do_fsapt:
+    if core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH").upper() != "NONE" and do_fsapt:
         FISAPT_obj = saptdft_fisapt.drop_saptdft_variables(
             dimer_wfn, wfn_A, wfn_B, cache, data
         )
     elif do_fsapt:
-        core.set_variable("FSAPT_QA", cache["Qocc0A"])
-        core.set_variable("FSAPT_QB", cache["Qocc0B"])
-        core.set_variable("FSAPT_ELST_AB", cache["Elst_AB"])
-        core.set_variable(
+        def _set_fsapt_var(label, value):
+            core.set_variable(label, value)
+            dimer_wfn.set_variable(label, value)
+
+        _set_fsapt_var("FSAPT_QA", cache["Qocc0A"])
+        _set_fsapt_var("FSAPT_QB", cache["Qocc0B"])
+        _set_fsapt_var("FSAPT_ELST_AB", cache["Elst_AB"])
+        _set_fsapt_var(
             "FSAPT_AB_SIZE", np.array(cache["Elst_AB"].np.shape).reshape(1, -1)
         )
-        core.set_variable("FSAPT_EXCH_AB", cache["Exch_AB"])
-        core.set_variable("FSAPT_INDAB_AB", cache["IndAB_AB"])
-        core.set_variable("FSAPT_INDBA_AB", cache["IndBA_AB"])
-        core.set_variable("FSAPT_DISP_AB", cache["Disp_AB"])
-        if "FSAPT_EMPIRICAL_DISP" in data:
-            core.set_variable("FSAPT_EMPIRICAL_DISP", data["FSAPT_EMPIRICAL_DISP"])
+        _set_fsapt_var("FSAPT_EXCH_AB", cache["Exch_AB"])
+        _set_fsapt_var("FSAPT_INDAB_AB", cache["IndAB_AB"])
+        _set_fsapt_var("FSAPT_INDBA_AB", cache["IndBA_AB"])
+        sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
+        sapt_dft_D3_IE = core.get_option("SAPT", "SAPT_DFT_D3_IE")
+        if sapt_dft_D4_IE or sapt_dft_D3_IE:
+            disp_ab = cache["Elst_AB"].clone()
+            disp_ab.zero()
+            _set_fsapt_var("FSAPT_DISP_AB", disp_ab)
+            _set_fsapt_var("FSAPT_EMPIRICAL_DISP", cache["FSAPT_EMPIRICAL_DISP"])
+        else:
+            _set_fsapt_var("FSAPT_DISP_AB", cache["Disp_AB"])
     return data
 
 
