@@ -1,5 +1,9 @@
-cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.19...4.0)
 cmake_policy(SET CMP0094 NEW)
+if (POLICY CMP0167)
+    # L2 not prepared for BoostConfig instead of FindBoost
+    cmake_policy(SET CMP0167 OLD)
+endif ()
 project(psi4-core
         LANGUAGES C CXX)
 # no Fortran in psi4-core proper, but language needs to be declared
@@ -15,6 +19,9 @@ if (NOT MSVC)
 endif()
 
 list(APPEND CMAKE_MODULE_PATH ${PSI4_ROOT}/cmake)
+
+# set globally here as each psi4/src/psi4/* needs it
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 include(psi4OptionsTools)
 include(TestRestrict)
@@ -57,8 +64,8 @@ else()
 endif()
 
 #  <<  Pybind11 & Python  >>
-find_package(Python 3.8 COMPONENTS Interpreter Development NumPy REQUIRED)
-find_package(pybind11 2.6.2 CONFIG REQUIRED)
+find_package(Python 3.10 COMPONENTS Interpreter Development NumPy REQUIRED)
+find_package( pybind11 2.6.2 CONFIG REQUIRED)  # edit in codedeps (fix spacing when even lower bound)
 message(STATUS "${Cyan}Using pybind11${ColourReset}: ${pybind11_INCLUDE_DIR} (version ${pybind11_VERSION} for Py${Python_VERSION} and ${CMAKE_CXX_STANDARD})")
 message(STATUS "${Cyan}Using Python ${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}${ColourReset}: ${Python_EXECUTABLE}")
 
@@ -71,7 +78,7 @@ else()
 endif()
 
 if(${ENABLE_ambit})
-    find_package(ambit 0.6 CONFIG REQUIRED)
+    find_package(ambit 0.6 CONFIG REQUIRED)  # edit in codedeps
     get_property(_loc TARGET ambit::ambit PROPERTY LOCATION)
     list(APPEND _addons ${_loc})
     message(STATUS "${Cyan}Using ambit${ColourReset}: ${_loc} (version ${ambit_VERSION})")
@@ -80,7 +87,7 @@ else()
 endif ()
 
 if(${ENABLE_CheMPS2})
-    find_package(CheMPS2 1.8.7 CONFIG REQUIRED)
+    find_package(CheMPS2 1.8.7 CONFIG REQUIRED)  # edit in codedeps
     get_property(_loc TARGET CheMPS2::chemps2 PROPERTY LOCATION)
     list(APPEND _addons ${_loc})
     message(STATUS "${Cyan}Using CheMPS2${ColourReset}: ${_loc} (version ${CheMPS2_VERSION})")
@@ -89,7 +96,7 @@ else()
 endif ()
 
 if(${ENABLE_dkh})
-    find_package(dkh 1.2 CONFIG REQUIRED)
+    find_package(dkh 1.2 CONFIG REQUIRED)  # edit in codedeps
     get_property(_loc TARGET dkh::dkh PROPERTY LOCATION)
     list(APPEND _addons ${_loc})
     message(STATUS "${Cyan}Using dkh${ColourReset}: ${_loc} (version ${dkh_VERSION})")
@@ -97,8 +104,17 @@ else()
     message(STATUS "Disabled dkh ${dkh_DIR}")
 endif()
 
+if(${ENABLE_IntegratorXX})
+    find_package(IntegratorXX CONFIG REQUIRED)  # edit in codedeps
+    get_property(_loc TARGET IntegratorXX::IntegratorXX PROPERTY LOCATION)
+    list(APPEND _addons ${_loc})
+    message(STATUS "${Cyan}Using IntegratorXX${ColourReset}: ${_loc} (version ${IntegratorXX_VERSION})")
+else()
+    message(STATUS "Disabled IntegratorXX")
+endif()
+
 if(${ENABLE_ecpint})
-    find_package(ecpint 1.0.7 CONFIG REQUIRED)
+    find_package(ecpint 1.0.7 CONFIG REQUIRED)  # edit in codedeps
     get_property(_loc TARGET ECPINT::ecpint PROPERTY LOCATION)
     list(APPEND _addons ${_loc})
     message(STATUS "${Cyan}Using ecpint${ColourReset}: ${_loc} (version ${ecpint_VERSION})")
@@ -110,12 +126,11 @@ if(${ENABLE_libefp})
     # neither libefp nor pylibefp actually needed c-side; runtime detection would
     #   do just as well. included for completeness and so pylibefp_PYMOD can be
     #   hard-loaded into PYTHONPATH. also incl for finding efp frag files below.
-    find_package(libefp 1.5.0 CONFIG REQUIRED COMPONENTS shallow)
+    find_package(libefp 1.5.0 COMPONENTS shallow CONFIG REQUIRED)
     get_property(_loc TARGET libefp::efp PROPERTY LOCATION)
     list(APPEND _addons ${_loc})
     message(STATUS "${Cyan}Using libefp${ColourReset}: ${_loc} (version ${libefp_VERSION})")
 
-    #find_package(pylibefp 0.6.1 CONFIG REQUIRED)
     #get_property(_loc TARGET pylibefp::core PROPERTY LOCATION)
     include(FindPythonModule)
     find_python_module(pylibefp QUIET REQUIRED)
@@ -126,69 +141,67 @@ else()
 endif()
 
 if(${ENABLE_Einsums})
-    find_package(Einsums 0.3 CONFIG REQUIRED)
-    get_property(_loc TARGET Einsums::einsums PROPERTY LOCATION)
+    find_package(Einsums 1.1.2 CONFIG REQUIRED)  # edit in codedeps
+    get_property(_loc TARGET Einsums::Einsums PROPERTY LOCATION)
     list(APPEND _addons ${_loc})
     message(STATUS "${Cyan}Using Einsums${ColourReset}: ${_loc} (version ${Einsums_VERSION})")
 else()
     message(STATUS "Disabled Einsums ${Einsums_DIR}")
 endif ()
 
-if(${ENABLE_erd})
-    find_package(erd 3.0.6 CONFIG REQUIRED)
-    get_property(_loc TARGET erd::erd PROPERTY LOCATION)
-    list(APPEND _addons ${_loc})
-    message(STATUS "${Cyan}Using erd${ColourReset}: ${_loc} (version ${erd_VERSION})")
-else()
-    message(STATUS "Disabled erd ${erd_DIR}")
-endif()
-
-find_package(gau2grid 2.0 CONFIG REQUIRED)
+find_package(gau2grid 2.0.7 CONFIG REQUIRED)  # edit in codedeps
 get_property(_loc TARGET gau2grid::gg PROPERTY LOCATION)
 list(APPEND _addons ${_loc})
 message(STATUS "${Cyan}Using gau2grid${ColourReset}: ${_loc} (version ${gau2grid_VERSION})")
+
+if(${ENABLE_gauxc})
+    if(NOT "${gauxc_DIR}" STREQUAL "")
+        if("${IntegratorXX_DIR}" STREQUAL "")
+            set(IntegratorXX_DIR ${gauxc_DIR}/../IntegratorXX)
+        endif()
+        set(ExchCXX_DIR ${gauxc_DIR}/../ExchCXX)
+    endif()
+
+    get_property(BLAS_LIBRARIES TARGET tgt::lapk PROPERTY INTERFACE_LINK_LIBRARIES)
+
+    find_package(gauxc CONFIG REQUIRED COMPONENTS IntegratorXX ExchCXX)  # edit in codedeps
+    get_property(_loc TARGET gauxc::gauxc PROPERTY LOCATION)
+    list(APPEND _addons ${_loc})
+    message(STATUS "${Cyan}Using gauxc${ColourReset}: ${_loc} (version ${gauxc_VERSION})")
+else()
+    message(STATUS "Disabled GauXC ${gauxc_DIR}")
+endif()
 
 if(${ENABLE_gdma})
     # neither gdma nor pygdma actually needed c-side; runtime detection would
     #   do just as well. included for completeness and so gdma_PYMOD can be
     #   hard-loaded into PYTHONPATH.
-    find_package(gdma 2.3.3 CONFIG REQUIRED COMPONENTS Python)
+    find_package(gdma 2.3.3 COMPONENTS Python CONFIG REQUIRED)  # edit in codedeps
     get_property(_loc TARGET gdma::pygdma PROPERTY LOCATION)
     message(STATUS "${Cyan}Found gdma${ColourReset}: ${_loc} (version ${gdma_VERSION})")
 else()
     message(STATUS "Disabled gdma ${gdma_DIR}")
 endif()
 
-if(${ENABLE_Libint1t})
-find_package(Libint 1.2.0 CONFIG REQUIRED COMPONENTS ${MAX_AM_ERI})
-get_property(_loc TARGET Libint::int PROPERTY LOCATION)
-list(APPEND _addons ${_loc})
-message(STATUS "${Cyan}Using Libint ${Libint_MAX_AM_ERI}${ColourReset}: ${_loc} (version ${Libint_VERSION})")
-endif()
-
-find_package(
-  Libint2
-  2.7.2
-  CONFIG
-  REQUIRED
-  COMPONENTS
-    sss
-    CXX_ho
-    impure_sh
-    "eri_c4_d0_l${MAX_AM_ERI}" eri_c3_d0_l4 eri_c2_d0_l4 onebody_d0_l4
-     eri_c4_d1_l2              eri_c3_d1_l3 eri_c2_d1_l3 onebody_d1_l3
-                                                         onebody_d2_l3
-  OPTIONAL_COMPONENTS
-     eri_c4_d2_l2              eri_c3_d2_l3 eri_c2_d2_l3
+find_package(Libint2 2.8.1 CONFIG REQUIRED  # edit in codedeps
+#  COMPONENTS
+#    sss
+#    CXX_ho
+#    impure_sh
+#    "eri_c4_d0_l${MAX_AM_ERI}" eri_c3_d0_l4 eri_c2_d0_l4 onebody_d0_l4
+#     eri_c4_d1_l2              eri_c3_d1_l3 eri_c2_d1_l3 onebody_d1_l3
+#                                                         onebody_d2_l3
+#  OPTIONAL_COMPONENTS
+#     eri_c4_d2_l2              eri_c3_d2_l3 eri_c2_d2_l3
   )
 get_property(_loc TARGET Libint2::int2 PROPERTY LOCATION)
-get_property(Libint2_VERSION_ver TARGET Libint2::int2 PROPERTY Libint2_VERSION)
-get_property(Libint2_MAX_AM_ERI TARGET Libint2::int2 PROPERTY Libint2_MAX_AM_ERI)
+# defer until upstream provides full-dress targets get_property(Libint2_VERSION TARGET Libint2::int2 PROPERTY Libint2_VERSION)
+# defer until upstream provides full-dress targets get_property(Libint2_MAX_AM_ERI TARGET Libint2::int2 PROPERTY Libint2_MAX_AM_ERI)
 list(APPEND _addons ${_loc})
 message(STATUS "${Cyan}Using Libint2 ${Libint2_MAX_AM_ERI}${ColourReset}: ${_loc} (version ${Libint2_VERSION})")
 
 if(${ENABLE_mdi})
-    find_package(mdi 1.2.3 CONFIG REQUIRED)
+    find_package(mdi 1.2.3 CONFIG REQUIRED)  # edit in codedeps
     get_property(_loc TARGET mdi::mdi PROPERTY LOCATION)
     list(APPEND _addons ${_loc})
     message(STATUS "${Cyan}Using mdi${ColourReset}: ${_loc} (version ${mdi_VERSION})")
@@ -196,8 +209,17 @@ else()
     message(STATUS "Disabled MDI ${mdi_DIR}")
 endif ()
 
+if(${ENABLE_OpenOrbitalOptimizer})
+    find_package(OpenOrbitalOptimizer 0.2 CONFIG REQUIRED)
+    get_property(_loc TARGET OpenOrbitalOptimizer::OpenOrbitalOptimizer PROPERTY LOCATION)
+    list(APPEND _addons ${_loc})
+    message(STATUS "${Cyan}Using OpenOrbitalOptimizer${ColourReset}: ${_loc} (version ${OpenOrbitalOptimizer_VERSION})")
+else()
+    message(STATUS "Disabled OpenOrbitalOptimizer ${OpenOrbitalOptimizer_DIR}")
+endif ()
+
 if(${ENABLE_PCMSolver})
-    find_package(PCMSolver 1.2.1 CONFIG REQUIRED)
+    find_package(PCMSolver 1.2.3 CONFIG REQUIRED)  # edit in codedeps
     get_property(_loc TARGET PCMSolver::pcm PROPERTY LOCATION)
     list(APPEND _addons ${_loc})
     message(STATUS "${Cyan}Using PCMSolver${ColourReset}: ${_loc} (version ${PCMSolver_VERSION})")
@@ -206,7 +228,7 @@ else()
 endif ()
 
 if(${ENABLE_simint})
-    find_package(simint 0.7 CONFIG REQUIRED COMPONENTS am${MAX_AM_ERI} der0)
+    find_package(simint 0.7 COMPONENTS am${MAX_AM_ERI} der0 CONFIG REQUIRED)  # edit in codedeps
     get_property(_loc TARGET simint::simint PROPERTY LOCATION)
     list(APPEND _addons ${_loc})
     message(STATUS "${Cyan}Using simint ${simint_MAXAM}${ColourReset}: ${_loc} (version ${simint_VERSION}; vectorization ${simint_VECTOR})")
@@ -215,7 +237,7 @@ else()
 endif()
 
 if(${ENABLE_BrianQC})
-    find_package(BrianQC 1.1 CONFIG REQUIRED)
+    find_package(BrianQC 1.1 CONFIG REQUIRED)  # edit in codedeps
     get_property(_loc TARGET BrianQC::static_wrapper PROPERTY LOCATION)
     list(APPEND _addons ${_loc})
     message(STATUS "${Cyan}Using BrianQC${ColourReset}: ${BrianQC_DIR}")
@@ -223,7 +245,10 @@ else()
     message(STATUS "Disabled BrianQC ${BrianQC_DIR}")
 endif()
 
-find_package(Libxc 6.0.0 CONFIG REQUIRED COMPONENTS C)
+find_package(Libxc 7.0.0 COMPONENTS C CONFIG QUIET)  # edit in codedeps
+if(NOT ${Libxc_FOUND})
+    find_package( Libxc 6.1.0 COMPONENTS C CONFIG REQUIRED)
+endif()
 get_property(_loc TARGET Libxc::xc PROPERTY LOCATION)
 list(APPEND _addons ${_loc})
 message(STATUS "${Cyan}Using Libxc${ColourReset}: ${_loc} (version ${Libxc_VERSION})")
@@ -233,6 +258,16 @@ if(APPLE)
 elseif(UNIX)
     set(PRE_LIBRARY_OPTION -Wl,--whole-archive)
     set(POST_LIBRARY_OPTION -Wl,--no-whole-archive)
+endif()
+
+# add -pedantic-errors flag here, if FORCE_PEDANTIC is enabled 
+if(${FORCE_PEDANTIC})
+  if(MSVC)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /permissive-")
+  else()
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pedantic-errors")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pedantic-errors")
+  endif()
 endif()
 
 # <<<  Build  >>>
@@ -245,6 +280,7 @@ if(MSVC)
       _CRT_NONSTDC_NO_DEPRECATE
       _CRT_NONSTDC_NO_WARNINGS
       _CRT_SECURE_NO_WARNINGS
+      _ALLOW_COMPILER_AND_STL_VERSION_MISMATCH
       )
     # Set the exception handling model
     add_compile_options("/EHsc")
@@ -330,6 +366,7 @@ install(
 install(
   DIRECTORY
     ../tests/pytests/test_fchk_writer
+    ../tests/pytests/test_gauxc_writer
     ../tests/pytests/test_molden_writer
     ../tests/pytests/test_psi4_qcschema
   DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR}/psi4/tests/
@@ -371,7 +408,11 @@ install(DIRECTORY share/psi4/
         DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/psi4
         MESSAGE_NEVER
         PATTERN "*.bin" EXCLUDE
-        PATTERN "*.pyc" EXCLUDE)
+        PATTERN "*.pyc" EXCLUDE
+        PATTERN "fsapt.py" EXCLUDE
+    )
+
+
 
 install(FILES share/psi4/quadratures/1_x/R_avail${_endian_ext}.bin
         RENAME quadratures/1_x/R_avail.bin
@@ -383,6 +424,11 @@ install(FILES share/psi4/quadratures/1_x/error${_endian_ext}.bin
 
 install(DIRECTORY include/psi4/
         DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/psi4)
+
+# install(FILES ${CMAKE_SOURCE_DIR}/driver/procrouting/sapt/fsapt.py 
+install(FILES driver/procrouting/sapt/fsapt.py 
+    DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/psi4/fsapt
+)
 
     # <<<  install external's share/ to psi4 share/  >>>
 
@@ -427,3 +473,4 @@ configure_package_config_file(
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${psi4_INSTALL_CMAKEDIR}/psi4Config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/${psi4_INSTALL_CMAKEDIR}/psi4ConfigVersion.cmake
         DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKECONFIG_INSTALL_DIR})
+

@@ -3,7 +3,7 @@
 #
 # Psi4: an open-source quantum chemistry software package
 #
-# Copyright (c) 2007-2023 The Psi4 Developers.
+# Copyright (c) 2007-2025 The Psi4 Developers.
 #
 # The copyrights for code used from other parties are included in
 # the corresponding files.
@@ -44,8 +44,8 @@ cmake_install_datadir = r"@CMAKE_INSTALL_DATADIR@".replace("\\", "/")
 cmake_install_libdir = r"@CMAKE_INSTALL_LIBDIR@".replace("\\", "/")
 pymod_install_libdir = r"@PYMOD_INSTALL_LIBDIR@".lstrip("/")
 full_pymod = (prefix / cmake_install_libdir / pymod_install_libdir / "psi4").resolve()
-full_data = prefix / cmake_install_datadir / "psi4"
-full_bin = prefix / cmake_install_bindir
+full_data = (prefix / cmake_install_datadir / "psi4").resolve()
+full_bin = (prefix / cmake_install_bindir).resolve()
 rel_data = os.path.relpath(full_data, start=full_pymod)
 rel_bin = os.path.relpath(full_bin, start=full_pymod)
 
@@ -97,12 +97,11 @@ core.set_num_threads(1, quiet=True)
 
 # Load driver and outfile paraphernalia
 from .driver import *
-from .header import print_header
+from .header import print_header, citation_formatter
 from .metadata import __version__, version_formatter
 
 # A few extraneous functions
 from .extras import get_input_directory, addons, test, set_output_file
-from psi4.core import get_variable  # kill off in 1.4
 from psi4.core import variable, set_variable
 
 # Python portions of compiled-in Add-Ons

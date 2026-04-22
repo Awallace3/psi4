@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2025 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -34,6 +34,7 @@
 #include <cstdlib>
 #include "psi4/libqt/qt.h"
 #include "dpd.h"
+#include "psi4/libpsi4util/exception.h"
 
 namespace psi {
 
@@ -72,8 +73,6 @@ int DPD::buf4_mat_irrep_rd(dpdbuf4 *Buf, int irrep) {
     int p, q, r, s;             /* orbital indices */
     int filepq, filers, filesr; /* Input dpdfile row and column indices */
     int rowtot, coltot;         /* dpdbuf row and column dimensions */
-    int b_perm_pq, b_perm_rs, b_peq, b_res;
-    int f_perm_pq, f_perm_rs, f_peq, f_res;
     int pq_permute, permute;
     double value;
     long int size;
@@ -88,14 +87,16 @@ int DPD::buf4_mat_irrep_rd(dpdbuf4 *Buf, int irrep) {
     coltot = Buf->params->coltot[irrep ^ all_buf_irrep];
     size = ((long)rowtot) * ((long)coltot);
 
-    b_perm_pq = Buf->params->perm_pq;
-    b_perm_rs = Buf->params->perm_rs;
-    f_perm_pq = Buf->file.params->perm_pq;
-    f_perm_rs = Buf->file.params->perm_rs;
-    b_peq = Buf->params->peq;
-    b_res = Buf->params->res;
-    f_peq = Buf->file.params->peq;
-    f_res = Buf->file.params->res;
+    const auto& b_perm_pq = Buf->params->perm_pq;
+    const auto& b_perm_rs = Buf->params->perm_rs;
+    const auto& f_perm_pq = Buf->file.params->perm_pq;
+    const auto& f_perm_rs = Buf->file.params->perm_rs;
+    const auto& b_peq = Buf->params->peq;
+    const auto& b_res = Buf->params->res;
+    const auto& f_peq = Buf->file.params->peq;
+    const auto& f_res = Buf->file.params->res;
+
+    const auto& AllPolicy = dpdparams4::DiagPolicy::All;
 
     if ((b_perm_pq == f_perm_pq) && (b_perm_rs == f_perm_rs) && (b_peq == f_peq) && (b_res == f_res)) {
         if (Buf->anti)
@@ -103,60 +104,60 @@ int DPD::buf4_mat_irrep_rd(dpdbuf4 *Buf, int irrep) {
         else
             method = 12;
     } else if ((b_perm_pq != f_perm_pq) && (b_perm_rs == f_perm_rs) && (b_res == f_res)) {
-        if (f_perm_pq && !b_perm_pq) {
+        if (b_perm_pq == AllPolicy) {
             if (Buf->anti) {
                 printf("\n\tUnpack pq and antisymmetrize?\n");
-                exit(PSI_RETURN_FAILURE);
+                throw PSIEXCEPTION("Unpack pq and antisymmetrize?");
             }
             method = 21;
-        } else if (!f_perm_pq && b_perm_pq) {
+        } else if (f_perm_pq == AllPolicy) {
             if (Buf->anti)
                 method = 22;
             else
                 method = 23;
         } else {
             printf("\n\tInvalid second-level method!\n");
-            exit(PSI_RETURN_FAILURE);
+            throw PSIEXCEPTION("Invalid second-level method!");
         }
     } else if ((b_perm_pq == f_perm_pq) && (b_perm_rs != f_perm_rs) && (b_peq == f_peq)) {
-        if (f_perm_rs && !b_perm_rs) {
+        if (b_perm_rs == AllPolicy) {
             if (Buf->anti) {
                 printf("\n\tUnpack rs and antisymmetrize?\n");
-                exit(PSI_RETURN_FAILURE);
+                throw PSIEXCEPTION("Unpack rs and antisymmetrize?");
             }
             method = 31;
-        } else if (!f_perm_rs && b_perm_rs) {
+        } else if (f_perm_rs == AllPolicy) {
             if (Buf->anti)
                 method = 32;
             else
                 method = 33;
         } else {
             printf("\n\tInvalid third-level method!\n");
-            exit(PSI_RETURN_FAILURE);
+            throw PSIEXCEPTION("Invalid third-level method!");
         }
     } else if ((b_perm_pq != f_perm_pq) && (b_perm_rs != f_perm_rs)) {
-        if (f_perm_pq && !b_perm_pq) {
-            if (f_perm_rs && !b_perm_rs) {
+        if (b_perm_pq == AllPolicy) {
+            if (b_perm_rs == AllPolicy) {
                 if (Buf->anti) {
                     printf("\n\tUnpack pq and rs and antisymmetrize?\n");
-                    exit(PSI_RETURN_FAILURE);
+                    throw PSIEXCEPTION("Unpack pq and rs and antisymmetrize?");
                 } else
                     method = 41;
-            } else if (!f_perm_rs && b_perm_rs) {
+            } else if (f_perm_rs == AllPolicy) {
                 if (Buf->anti) {
                     printf("\n\tUnpack pq and antisymmetrize?\n");
-                    exit(PSI_RETURN_FAILURE);
+                    throw PSIEXCEPTION("Unpack pq and antisymmetrize?");
                 } else
                     method = 42;
             }
-        } else if (!f_perm_pq && b_perm_pq) {
-            if (f_perm_rs && !b_perm_rs) {
+        } else if (f_perm_pq == AllPolicy) {
+            if (b_perm_rs == AllPolicy) {
                 if (Buf->anti) {
                     printf("\n\tUnpack rs and antisymmetrize?\n");
-                    exit(PSI_RETURN_FAILURE);
+                    throw PSIEXCEPTION("Unpack rs and antisymmetrize?");
                 } else
                     method = 43;
-            } else if (!f_perm_rs && b_perm_rs) {
+            } else if (f_perm_rs == AllPolicy) {
                 if (Buf->anti)
                     method = 44;
                 else
@@ -164,11 +165,11 @@ int DPD::buf4_mat_irrep_rd(dpdbuf4 *Buf, int irrep) {
             }
         } else {
             printf("\n\tInvalid fourth-level method!\n");
-            exit(PSI_RETURN_FAILURE);
+            throw PSIEXCEPTION("Invalid fourth-level method!");
         }
     } else {
         printf("\n\tInvalid method in dpd_buf_mat_irrep_rd!\n");
-        exit(PSI_RETURN_FAILURE);
+        throw PSIEXCEPTION("Invalid method in dpd_buf_mat_irrep_rd!");
     }
 
     switch (method) {
@@ -261,7 +262,7 @@ int DPD::buf4_mat_irrep_rd(dpdbuf4 *Buf, int irrep) {
                 filerow = Buf->file.incore ? filepq : 0;
 
                 /* Set the permutation operator's value */
-                permute = ((p < q) && (f_perm_pq < 0) ? -1 : 1);
+                permute = ((p < q) && (f_perm_pq == dpdparams4::DiagPolicy::AntiSymm) ? -1 : 1);
 
                 /* Fill the buffer */
                 if (filepq >= 0)
@@ -400,7 +401,7 @@ int DPD::buf4_mat_irrep_rd(dpdbuf4 *Buf, int irrep) {
                     filers = Buf->file.params->colidx[r][s];
 
                     /* rs permutation operator */
-                    permute = ((r < s) && (f_perm_rs < 0) ? -1 : 1);
+                    permute = ((r < s) && (f_perm_rs == dpdparams4::DiagPolicy::AntiSymm) ? -1 : 1);
 
                     /* Is this fast enough? */
                     value = ((filers < 0) ? 0 : Buf->file.matrix[irrep][filerow][filers]);
@@ -518,7 +519,7 @@ int DPD::buf4_mat_irrep_rd(dpdbuf4 *Buf, int irrep) {
                 filerow = Buf->file.incore ? filepq : 0;
 
                 /* Set the value of the pq permutation operator */
-                pq_permute = ((p < q) && (f_perm_pq < 0) ? -1 : 1);
+                pq_permute = ((p < q) && (f_perm_pq == dpdparams4::DiagPolicy::AntiSymm) ? -1 : 1);
 
                 /* Fill the buffer */
                 if (filepq >= 0)
@@ -533,7 +534,7 @@ int DPD::buf4_mat_irrep_rd(dpdbuf4 *Buf, int irrep) {
                     filers = Buf->file.params->colidx[r][s];
 
                     /* Set the value of the pqrs permutation operator */
-                    permute = ((r < s) && (f_perm_rs < 0) ? -1 : 1) * pq_permute;
+                    permute = ((r < s) && (f_perm_rs == dpdparams4::DiagPolicy::AntiSymm) ? -1 : 1) * pq_permute;
 
                     value = 0;
 
@@ -553,12 +554,12 @@ int DPD::buf4_mat_irrep_rd(dpdbuf4 *Buf, int irrep) {
             break;
         case 42: /* Pack pq; unpack rs */
             printf("\n\tHaven't programmed method 42 yet!\n");
-            exit(PSI_RETURN_FAILURE);
+            throw PSIEXCEPTION("Haven't programmed method 42 yet!");
 
             break;
         case 43: /* Unpack pq; pack rs */
             printf("\n\tHaven't programmed method 43 yet!\n");
-            exit(PSI_RETURN_FAILURE);
+            throw PSIEXCEPTION("Haven't programmed method 43 yet!");
 
             break;
         case 44: /* Pack pq; pack rs; antisymmetrize */
@@ -633,7 +634,7 @@ int DPD::buf4_mat_irrep_rd(dpdbuf4 *Buf, int irrep) {
 
                     if (filers < 0) {
                         printf("\n\tNegative colidx in method 44?\n");
-                        exit(PSI_RETURN_FAILURE);
+                        throw PSIEXCEPTION("Negative colidx in method 44?");
                     }
 
                     value = Buf->file.matrix[irrep][filerow][filers];
@@ -653,7 +654,7 @@ int DPD::buf4_mat_irrep_rd(dpdbuf4 *Buf, int irrep) {
             break;
         default: /* Error trapping */
             printf("\n\tInvalid switch case in dpd_buf_mat_irrep_rd!\n");
-            exit(PSI_RETURN_FAILURE);
+            throw PSIEXCEPTION("Invalid switch case in dpd_buf_mat_irrep_rd!");
             break;
     }
 

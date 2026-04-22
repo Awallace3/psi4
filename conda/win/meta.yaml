@@ -14,12 +14,12 @@ requirements:
     - networkx
     - numpy
     - python={{ PY_VER }}
-    - qcelemental=0.27.1
-    - qcengine=0.29.0
+    - qcelemental=0.28.0
+    - qcengine=0.30.0
     - msgpack-python
     - optking
     - gau2grid
-    - libint 2.7.3dev1
+    - libint
     - libxc-c
     - scipy
 
@@ -52,6 +52,7 @@ build:
 test:
   requires:
     - pytest-xdist
+    - pytest<8
     - dftd3-python
     - gcp-correction
   commands:

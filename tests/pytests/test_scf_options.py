@@ -38,6 +38,9 @@ def test_guess_mix_for_broken_symmetry(inp):
     psi4.set_options({"reference": "uhf", "e_convergence": 12, "basis": "cc-pvdz"})
     psi4.set_options(inp.get("options", {}))
 
+    if psi4.core.get_option("scf", "orbital_optimizer_package") != "INTERNAL":
+        psi4.set_options({"e_convergence": 9, "d_convergence": 5e-9})
+
     thisSCF = psi4.energy("scf")
     psi4.set_options(inp.get("late_options", {}))
     psi4.set_options({"guess_mix": True})
@@ -47,7 +50,7 @@ def test_guess_mix_for_broken_symmetry(inp):
         refENuc, h2.nuclear_repulsion_energy(), 10, "Nuclear repulsion energy"
     )
     assert compare_values(refSCF, thisSCF, 10, "Reference energy")
-    assert compare_values(refBSSCF, thisBSSCF, 10, "Reference broken-symmetry energy")
+    assert psi4.compare_values(refBSSCF, thisBSSCF, 10, "Reference broken-symmetry energy")
 
 
 @pytest.mark.parametrize("ref", ["rhf", "uhf", "rohf"])
@@ -67,31 +70,31 @@ def test_guess_mix_for_broken_symmetry(inp):
 def test_scf_guess(inp, ref):
     vals = {
         "rhf": {
-            "core": -85.33505416384983,
-            "gwh": -92.48691177199250,
-            "sad": -99.63941801281894,
-            "sadno": -99.77439003262768,
-            "huckel": -99.82915309755559,
-            "modhuckel": -99.80751245771735,
-            "sap": -99.97316521623380,
+            "core": -85.33505416385,
+            "gwh": -92.48691177199,
+            "sad": -100.28117660005705,
+            "sadno": -99.60935769112,
+            "huckel": -99.82044374140,
+            "modhuckel": -99.79629341034,
+            "sap": -99.97316521623,
         },
         "uhf": {
-            "core": -88.99202896495355,
-            "gwh": -94.35585144644561,
-            "sad": -99.63941801281894,
-            "sadno": -99.11882081641045,
-            "huckel": -99.20374047108815,
-            "modhuckel": -99.17689049002892,
-            "sap": -99.50144270485751,
+            "core": -88.99202896495,
+            "gwh": -94.35585144645,
+            "sad": -100.28117660005705,
+            "sadno": -98.79741688423,
+            "huckel": -99.12283156385,
+            "modhuckel": -99.09435147809,
+            "sap": -99.50144270486,
         },
         "rohf": {
-            "core": -88.99202896495353,
-            "gwh": -94.35585144644557,
-            "sad": -99.63941801281894,
-            "sadno": -99.11882081641042,
-            "huckel": -99.20374047108817,
-            "modhuckel": -99.17689049002892,
-            "sap": -99.50144270485754,
+            "core": -88.99202896495,
+            "gwh": -94.35585144645,
+            "sad": -100.28117660005705,
+            "sadno": -98.79741688423,
+            "huckel": -99.12283156385,
+            "modhuckel": -99.09435147809,
+            "sap": -99.50144270486,
         },
     }
     ref_final = {
@@ -133,9 +136,11 @@ def test_scf_guess(inp, ref):
     assert compare_values(
         ref_final[ref], psi4.variable("SCF TOTAL ENERGY"), 6, "FINAL SCF ENERGY"
     )
-    assert compare_values(
+    if psi4.core.get_option("scf", "orbital_optimizer_package") == "INTERNAL":
+      # until pyooo and SCF TOTAL ENERGIES filled out
+      assert compare_values(
         vals[ref][inp["options"]["guess"]],
         psi4.variable("SCF TOTAL ENERGIES")[0],
         6,
         "INITIAL ITERATION",
-    )
+      )

@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2025 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -39,22 +39,12 @@
 
 #include <libint2/engine.h>
 
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
-
-#define VDEBUG 1
-
-;
 using namespace psi;
 
-// Initialize potential_recur_ to +1 basis set angular momentum
 PotentialInt::PotentialInt(std::vector<SphericalTransform> &st, std::shared_ptr<BasisSet> bs1,
                            std::shared_ptr<BasisSet> bs2, int deriv)
     : OneBodyAOInt(st, bs1, bs2, deriv) {
-    if (bs1 != bs2) {
-        outfile->Printf("*********************************************************************************************************************\n");
-        outfile->Printf("When computing potential integrals with different bra and ket basis, the atom definition is taken from the bra basis.\n");
-        outfile->Printf("*********************************************************************************************************************\n");
-    }
+    // When computing potential integrals with different bra and ket basis, the atom definition is taken from the bra basis.
 
     int max_am = std::max(basis1()->max_am(), basis2()->max_am());
     int max_nprim = std::max(basis1()->max_nprimitive(), basis2()->max_nprimitive());

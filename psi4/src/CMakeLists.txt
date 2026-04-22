@@ -1,3 +1,5 @@
+set_property(GLOBAL PROPERTY JOB_POOLS one_job=1 two_jobs=2 four_jobs=4)
+
 ### >> Create core target, so we may link modules to it directly <<
 ### >> This allow to propagate dependencies upwards sanely
 add_library(core SHARED core.cc)
@@ -114,7 +116,7 @@ if(TARGET ECPINT::ecpint)
     )
 endif()
 
-if(TARGET Einsums::einsums)
+if(TARGET Einsums::Einsums)
   target_compile_definitions(core
     PRIVATE
       USING_Einsums
@@ -133,6 +135,20 @@ if(TARGET BrianQC::static_wrapper)
   target_link_libraries(core
     PRIVATE
       BrianQC::static_wrapper
+    )
+endif()
+
+if(TARGET IntegratorXX::IntegratorXX)
+  target_link_libraries(core
+    PRIVATE
+      IntegratorXX::IntegratorXX
+    )
+endif()
+
+if(TARGET OpenOrbitalOptimizer::OpenOrbitalOptimizer)
+  target_link_libraries(core
+    PRIVATE
+      OpenOrbitalOptimizer::OpenOrbitalOptimizer
     )
 endif()
 

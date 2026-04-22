@@ -26,6 +26,12 @@ if(TARGET ECPINT::ecpint)
     )
 endif()
 
+if(TARGET gauxc::gauxc)
+  target_include_directories(scf_solver
+    PUBLIC
+      $<TARGET_PROPERTY:gauxc::gauxc,INTERFACE_INCLUDE_DIRECTORIES>
+    )
+endif()
 
 if(TARGET BrianQC::static_wrapper)
   target_compile_definitions(scf_solver
@@ -38,3 +44,13 @@ if(TARGET BrianQC::static_wrapper)
     )
 endif()
 
+if(TARGET OpenOrbitalOptimizer::OpenOrbitalOptimizer)
+  target_compile_definitions(scf_solver
+    PUBLIC
+      USING_OpenOrbitalOptimizer
+    )
+  target_link_libraries(scf_solver
+    PUBLIC
+      OpenOrbitalOptimizer::OpenOrbitalOptimizer
+    )
+endif()

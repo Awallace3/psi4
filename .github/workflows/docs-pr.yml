@@ -23,14 +23,14 @@ jobs:
     # fetch-depth: 0 gets git history so Psi4 version computable
     - name: Checkout
       if: ${{ github.repository == 'psi4/psi4' }}
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         fetch-depth: 0
         path: code
 
     - name: Checkout psi4/psi4docs Repo
       if: ${{ github.repository == 'psi4/psi4' }}
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         repository: psi4/psi4docs
         path: docs
@@ -58,16 +58,21 @@ jobs:
 
     - name: Create Conda Environment
       if: ${{ github.repository == 'psi4/psi4' }}
-      uses: conda-incubator/setup-miniconda@v2
+      uses: conda-incubator/setup-miniconda@v3
       with:
-        miniforge-variant: Mambaforge
-        use-mamba: true
         activate-environment: p4docs
         add-pip-as-python-dependency: true
         auto-activate-base: false
         channels: conda-forge
         environment-file: env_p4docs.yaml
         show-channel-urls: true
+        conda-remove-defaults: true
+
+    - name: Special Config - QCManyBody Dep
+      if: false
+      run: |
+        conda remove qcmanybody --force
+        python -m pip install git+https://github.com/loriab/QCManyBody.git@qcsk_v1v2_rearr --no-deps
 
     - name: Environment Information
       if: ${{ github.repository == 'psi4/psi4' }}
@@ -114,7 +119,7 @@ jobs:
 
     - name: Archive Docs Tarball
       if: (success() || failure()) && ${{ github.repository == 'psi4/psi4' }}
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: sphinxman-html
         path: |

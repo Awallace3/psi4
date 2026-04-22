@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2025 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -51,6 +51,7 @@ class Options;
 class PSIO;
 class DFHelper;
 class DFTGrid;
+class PetiteList;
 
 namespace pk {
 class PKManager;
@@ -403,7 +404,7 @@ class PSI_API JK {
      * @param cutoff ceiling of magnitude of elements to be
      *        ignored if possible
      */
-    void set_cutoff(double cutoff) { cutoff_ = cutoff; }
+    virtual void set_cutoff(double cutoff) { cutoff_ = cutoff; }
     double get_cutoff() const { return cutoff_; }
     /**
      * @param do_csam whether to perform CSAM screening instead of
@@ -1186,6 +1187,7 @@ class PSI_API MemDFJK : public JK {
     void set_omega_alpha(double alpha) override;
     void set_omega_beta(double beta) override;
     void set_wcombine(bool wcombine) override;
+    void set_cutoff(double cutoff) override; 
 
     /**
      * Returns the DFHelper object
@@ -1287,8 +1289,8 @@ class PSI_API CompositeJK : public JK {
     void clear_D_prev() { D_prev_.clear();}
 
     // => Knobs <= //
-    std::string name() override { return "CompositeJK"; }
-
+    std::string name() override { return j_algo_->name() + "+" + k_algo_->name(); }
+ 
     /**
     * Set to do K tasks
     * @param do_K do K matrices or not,
@@ -1298,10 +1300,16 @@ class PSI_API CompositeJK : public JK {
 
     /**
     * Knobs for getting and setting current COSX grid for this SCF iteration, if COSX is used
-    * throws by default, if COSX is not used
+    * throws if COSX is not used
     */
-    void set_COSX_grid(std::string current_grid) { return k_algo_->set_COSX_grid(current_grid); }
-    std::string get_COSX_grid() { return k_algo_->get_COSX_grid(); }
+    void set_COSX_grid(std::string current_grid);
+    std::string get_COSX_grid();
+
+    /**
+    * Get maximum AM for GauXC used for snLinK, if GauXC support is enabled
+    * Throws if GauXC is not installed or if snLinK is not being used
+    */
+    int get_snLinK_max_am();
 
     /**
     * Print header information regarding JK

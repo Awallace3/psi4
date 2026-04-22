@@ -1,12 +1,12 @@
 list(APPEND sources
   local.cc
   x2cint.cc
+  zora.cc
   orbitalspace.cc
   maketab.cc
   oeprop.cc
   writer.cc
   transform.cc
-  sieve.cc
   multipolesymmetry.cc
   shellrotation.cc
   deriv.cc
@@ -43,9 +43,9 @@ list(APPEND sources
   pointgrp.cc
   rep.cc
   cdsalclist.cc
-  erd_eri.cc
   angularmomentum.cc
   orthog.cc
+  thc_eri.cc
   )
 
 # l2intf is a listing of all the files that include libint2's boys.h include (which is included in L2's engine.h).  they must
@@ -68,6 +68,7 @@ onebody.cc
 overlap.cc
 potential.cc
 potentialint.cc
+potential_erf.cc
 quadrupole.cc
 rel_potential.cc
 tracelessquadrupole.cc
@@ -91,19 +92,24 @@ target_compile_definitions(mints
     psi4_SHGSHELL_ORDERING=${psi4_SHGSHELL_ORDERING}
   )
 
+# limit to avoid OOM errors with Ninja parallelism
+# * finer control than `CMAKE_BUILD_PARALLEL_LEVEL=1 cmake --build`
+cmake_host_system_information(RESULT _memfree QUERY AVAILABLE_PHYSICAL_MEMORY)
+cmake_host_system_information(RESULT _numcore QUERY NUMBER_OF_PHYSICAL_CORES)
+math(EXPR _memrat "${_memfree} / ${_numcore}")
+message("AVAILABLE_PHYSICAL_MEMORY ${_memfree} / NUMBER_OF_PHYSICAL_CORES ${_numcore} = ${_memrat}")
+if(_numcore LESS 5)
+    set_property(TARGET l2intf PROPERTY JOB_POOL_COMPILE two_jobs)
+else()
+    set_property(TARGET l2intf PROPERTY JOB_POOL_COMPILE four_jobs)
+endif()
+
 # Always linked-to external projects
 target_link_libraries(mints
   PUBLIC
     Libint2::cxx
   )
 # Conditionally linked-to external projects
-if(TARGET Libint::libint)
-  target_link_libraries(mints
-    PUBLIC
-      Libint::libint
-    )
-endif()
-
 if(TARGET ECPINT::ecpint)
   target_sources(mints
     PRIVATE
@@ -157,13 +163,6 @@ if(TARGET PCMSolver::pcm)
     )
 endif()
 
-if(TARGET erd::erd)
-  target_link_libraries(mints
-    PUBLIC
-      erd::erd
-    )
-endif()
-
 if(TARGET BrianQC::static_wrapper)
   target_compile_definitions(mints
     PUBLIC
@@ -172,5 +171,12 @@ if(TARGET BrianQC::static_wrapper)
   target_include_directories(mints
     PUBLIC
       $<TARGET_PROPERTY:BrianQC::static_wrapper,INTERFACE_INCLUDE_DIRECTORIES>
+    )
+endif()
+
+if(TARGET OpenOrbitalOptimizer::OpenOrbitalOptimizer)
+  target_compile_definitions(mints
+    PUBLIC
+      USING_OpenOrbitalOptimizer
     )
 endif()

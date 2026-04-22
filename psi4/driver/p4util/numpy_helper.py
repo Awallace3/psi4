@@ -3,7 +3,7 @@
 #
 # Psi4: an open-source quantum chemistry software package
 #
-# Copyright (c) 2007-2023 The Psi4 Developers.
+# Copyright (c) 2007-2025 The Psi4 Developers.
 #
 # The copyrights for code used from other parties are included in
 # the corresponding files.
@@ -429,8 +429,7 @@ def _np_read(
     filename: str,
     prefix: str = "",
 ) -> Union[core.Matrix, core.Vector]:
-    """Reads the data from a NumPy compressed or uncompressed file using
-    :func:`numpy.load`.
+    """Reads the data from a NumPy compressed or uncompressed file using :func:`numpy.load`.
 
     Parameters
     ----------
@@ -500,7 +499,11 @@ def _to_serial(self: Union[core.Matrix, core.Vector]) -> Dict[str, Any]:
 
     for view in self.nph:
         json_data["shape"].append(view.shape)
-        json_data["data"].append(view.tostring())
+        try:
+            json_data["data"].append(view.tobytes())
+        except AttributeError:
+            # numpy v1
+            json_data["data"].append(view.tostring())
 
     if len(json_data["shape"][0]) == 1:
         json_data["type"] = "vector"
@@ -542,8 +545,7 @@ def _from_serial(self, json_data: Dict[str, Any]) -> Union[core.Matrix, core.Vec
 
 
 def _chain_dot(*args, **kwargs) -> core.Matrix:
-    """Chains dot products together from a series of Psi4 Matrix classes.
-    Uses :func:`~psi4.core.doublet`.
+    """Chains dot products together from a series of Psi4 Matrix classes. Uses :func:`~psi4.core.doublet`.
 
     Parameters
     ----------
@@ -637,8 +639,7 @@ def _dimension_from_list(
     name="New Dimension",
 ) -> core.Dimension:
     """
-    Builds a Dimension object from a Python list or tuple. If a
-    :class:`~psi4.core.Dimension` object is passed, a copy will be returned.
+    Builds a Dimension object from a Python list or tuple. If a :class:`~psi4.core.Dimension` object is passed, a copy will be returned.
 
     Parameters
     ----------
@@ -697,13 +698,13 @@ core.Dimension.__iter__ = _dimension_iter
 # General functions for NumPy array manipulation
 def block_diagonal_array(*args: List[np.ndarray]) -> np.ndarray:
     """
-    Convert square NumPy array to a single block diagonal array.
-    Mimic of SciPy's :func:`scipy.linalg.block_diag`.
+    Convert square NumPy array to a single block diagonal array. Mimic of SciPy's :func:`scipy.linalg.block_diag`.
 
     Parameters
     ----------
     args
         Arbitrary number of square arrays.
+
     """
 
     # Validate the input matrices.

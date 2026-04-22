@@ -3,7 +3,7 @@
 #
 # Psi4: an open-source quantum chemistry software package
 #
-# Copyright (c) 2007-2023 The Psi4 Developers.
+# Copyright (c) 2007-2025 The Psi4 Developers.
 #
 # The copyrights for code used from other parties are included in
 # the corresponding files.
@@ -26,6 +26,7 @@
 # @END LICENSE
 #
 
+import sys
 import time
 
 import numpy as np
@@ -148,6 +149,15 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points
     if is_hybrid:
         R_A = fdds_obj.R_A().to_array()
         R_B = fdds_obj.R_B().to_array()
+        # `pinv` below can throw `numpy.linalg.LinAlgError: "SVD did not converge"`, so sanitize arrays
+        # zero_tol = 1e-20
+        # R_A[np.abs(R_A) < zero_tol] = 0
+        # R_B[np.abs(R_B) < zero_tol] = 0
+        R_A = np.nan_to_num(R_A)
+        R_B = np.nan_to_num(R_B)
+        # with np.printoptions(threshold=sys.maxsize):
+        #     print("R_A SANITIZED", R_A)
+        #     print("R_B SANITIZED", R_B)
         Rtinv_A = np.linalg.pinv(R_A, rcond=1.e-13).transpose()
         Rtinv_B = np.linalg.pinv(R_B, rcond=1.e-13).transpose()
 
@@ -249,7 +259,7 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points
     return {"Disp20,FDDS (unc)": Disp20_uc, "Disp20": Disp20_c}
 
 
-def df_mp2_fisapt_dispersion(wfn, primary, auxiliary, cache, do_print=True):
+def df_mp2_fisapt_dispersion(wfn, primary, auxiliary, cache, nfrozen_A, nfrozen_B, do_print=True):
 
     if do_print:
         core.print_out("\n  ==> E20 Dispersion (MP2) <== \n\n")
@@ -268,6 +278,14 @@ def df_mp2_fisapt_dispersion(wfn, primary, auxiliary, cache, do_print=True):
     df_vector_keys = ["eps_occ_A", "eps_vir_A", "eps_occ_B", "eps_vir_B"]
     df_vfisapt_keys = ["eps_aocc0A", "eps_vir0A", "eps_aocc0B", "eps_vir0B"]
     vector_cache = {fkey: cache[ckey] for ckey, fkey in zip(df_vector_keys, df_vfisapt_keys)}
+
+    # If frozen core, trim the appropriate matrices and vectors. We can do it with NumPy slicing.
+    if nfrozen_A > 0:
+        matrix_cache["Caocc0A"] = core.Matrix.from_array(np.asarray(matrix_cache["Caocc0A"])[:,nfrozen_A:])
+        vector_cache["eps_aocc0A"] = core.Vector.from_array(np.asarray(vector_cache["eps_aocc0A"])[nfrozen_A:])
+    if nfrozen_B > 0:
+        matrix_cache["Caocc0B"] = core.Matrix.from_array(np.asarray(matrix_cache["Caocc0B"])[:,nfrozen_B:])
+        vector_cache["eps_aocc0B"] = core.Vector.from_array(np.asarray(vector_cache["eps_aocc0B"])[nfrozen_B:])
 
     wfn.set_basisset("DF_BASIS_SAPT", auxiliary)
     fisapt = core.FISAPT(wfn)

@@ -43,7 +43,9 @@ foreach(dir_name
   psimrcc
   sapt
   scfgrad
+  f12
   dummy_einsums
+  dummy_integratorxx
   )
   add_subdirectory(${dir_name})
 endforeach ()

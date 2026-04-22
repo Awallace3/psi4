@@ -3,7 +3,7 @@
 .. #
 .. # Psi4: an open-source quantum chemistry software package
 .. #
-.. # Copyright (c) 2007-2023 The Psi4 Developers.
+.. # Copyright (c) 2007-2025 The Psi4 Developers.
 .. #
 .. # The copyrights for code used from other parties are included in
 .. # the corresponding files.
@@ -208,7 +208,7 @@ that software for |PSIfour| and any notes and warnings pertaining to it.
 
 See :source:`codedeps.yaml` for a structured listing and history of dependencies.
 
-* :ref:`C++ and C Compilers <cmake:cxx>` (C++17 compliant)
+* :ref:`C++ and C Compilers <cmake:cxx>` (C++20 compliant)
 
 * :ref:`Optimized BLAS and LAPACK libraries <cmake:lapack>` (preferably NOT one supplied by a standard
   Linux distribution)
@@ -240,6 +240,8 @@ build system will automatically download and build.
 * QCEngine |w---w| `[what is QCEngine?] <https://molssi.github.io/QCEngine/>`_ (March 2019; added by v1.4)
 
 * optking |w---w| `[what is optking] <https://optking.readthedocs.io/en/latest/>`_ (runtime dependency, required at build-time) 
+
+* QCManyBody |w---w| `[what is QCManyBody?] <https://molssi.github.io/QCManyBody/>`_ (August 2025; added by v1.10; runtime dependency, required at build-time)
 
 Additionally, there are runtime-only dependencies:
 
@@ -303,8 +305,6 @@ are available pre-built from conda.
   * HDF5 https://support.hdfgroup.org/HDF5/
   * zlib http://www.zlib.net/
 
-.. * :ref:`erd <cmake:erd>` |w---w| :ref:`[what is this?] <sec:erd>` `[min version] <https://github.com/psi4/psi4/blob/master/external/upstream/erd/CMakeLists.txt#L2>`_
-
 ..  * :ref:`Fortran Compiler <cmake:fortran>`
 
 * :ref:`ecpint <cmake:ecpint>` |w---w| :ref:`[what is ecpint?] <sec:ecpint>` :source:`[ecpint min version] <external/upstream/ecpint/CMakeLists.txt/#L2>`
@@ -324,17 +324,19 @@ are available pre-built from conda.
 
 * :ref:`simint <cmake:simint>` |w---w| :ref:`[what is simint?] <sec:simint>` :source:`[simint min version] <external/upstream/simint/CMakeLists.txt#L2>`
 
+* :ref:`OpenOrbitalOptimizer <cmake:ooo>` |w---w| `[what is OpenOrbitalOptimizer?] <sec:ooo>` (August 2025; added by v1.10)
+
 Additionally, there are runtime-loaded capabilities:
 
 * :ref:`PylibEFP & libefp <cmake:libefp>` |w---w| :ref:`[what is LibEFP?] <sec:libefp>` :source:`[LibEFP min version] <external/upstream/libefp/CMakeLists.txt#L1>`
 
 * cfour |w---w| :ref:`[what is CFOUR?] <sec:cfour>`
 
-* dftd3 |w---w| :ref:`[what is DFTD3?] <sec:dftd3>`
+* dftd3 |w---w| :ref:`[what is DFTD3?] <sec:dftd3>` (Jun 2025; removed by v1.10)
 
 * simple-dftd3 |w---w| :ref:`[what is DFTD3?] <sec:dftd3>` (Nov 2022; added by v1.7) preferred alternative to dftd3 https://github.com/dftd3/simple-dftd3
 
-* gcp |w---w| :ref:`[what is gCP?] <sec:gcp>`
+* gcp |w---w| :ref:`[what is gCP?] <sec:gcp>` (Jun 2025; removed by v1.10)
 
 * mctc-gcp |w---w| :ref:`[what is gCP?] <sec:gcp>` (Nov 2022; added by v1.7) preferred alternative to gcp https://github.com/grimme-lab/gcp
 
@@ -761,7 +763,7 @@ Run |PSIfour|. ::
     He
     }
     energy('hf/cc-pvdz')
-    compare_values(-2.85518839, get_variable('current energy'), 5, 'SCF E')
+    compare_values(-2.85518839, variable('current energy'), 5, 'SCF E')
     >>> psi4 sample.in
     SCF E.............................................................PASSED
 
@@ -836,7 +838,7 @@ Run |PSIfour|. ::
     He
     """)
     psi4.energy('hf/cc-pvdz')
-    psi4.compare_values(-2.85518839, psi4.core.get_variable('current energy'), 5, 'SCF E')
+    psi4.compare_values(-2.85518839, psi4.core.variable('current energy'), 5, 'SCF E')
     >>> python sample.py
     SCF E.............................................................PASSED
 
@@ -896,7 +898,7 @@ Run |PSIfour| as executable. ::
     He
     }
     energy('hf/cc-pvdz')
-    compare_values(-2.85518839, get_variable('current energy'), 5, 'SCF E')
+    compare_values(-2.85518839, variable('current energy'), 5, 'SCF E')
     >>> psi4 sample.in
     SCF E.............................................................PASSED
 
@@ -908,7 +910,7 @@ Run |PSIfour| as executable. ::
     He
     """)
     psi4.energy('hf/cc-pvdz')
-    psi4.compare_values(-2.85518839, psi4.core.get_variable('current energy'), 5, 'SCF E')
+    psi4.compare_values(-2.85518839, psi4.core.variable('current energy'), 5, 'SCF E')
     >>> python sample.py
     SCF E.............................................................PASSED
 
@@ -1073,13 +1075,12 @@ On Mac, the following work nicely.
   * Apple Clang: ``clang``, ``clang++``
   * Intel: ``icc``, ``icpc``
 
-|PSIfour| requires *full* C++11 compliance, meaning, most importantly, GCC
->= 4.9. This compliance is checked for at build-time with file
+|PSIfour| requires *full* C++20 compliance.
+This compliance is checked for at build-time with file
 :source:`cmake/custom_cxxstandard.cmake`, so either consult that file or
 try a test build to ensure your compiler is approved. Note that Intel
 compilers on Linux also rely on GCC, so both ``icpc`` and ``gcc`` versions are checked.
-Intel OneAPI Classic compilers work fine. OneAPI beta compilers build but have
-been only minimally tested.
+Intel OneAPI Classic compilers work fine, as do OneAPI Clang ``icpx`` compilers.
 
 * :ref:`faq:modgcc`
 
@@ -1223,7 +1224,7 @@ How to configure Fortran compilers for building Psi4
 * Downstream Dependencies
 
   * |PSIfour| (\ |dr| optional) Fortran Compiler
-  * erd, dkh, gdma, PCMSolver |dr| Fortran Compiler
+  * dkh, gdma, PCMSolver |dr| Fortran Compiler
 
 **CMake Variables**
 
@@ -1796,7 +1797,6 @@ to run correctly); ``FAILED`` in red is bad. ::
     test_addons.py::test_dftd3 PASSED
     test_addons.py::test_libefp PASSED
     test_addons.py::test_pcmsolver PASSED
-    test_addons.py::test_erd PASSED
     test_addons.py::test_simint PASSED
     test_addons.py::test_json PASSED
     test_addons.py::test_cfour SKIPPED

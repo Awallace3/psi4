@@ -53,12 +53,12 @@ if(PERL_FOUND AND SPHINX_FOUND AND SPHINX_STUFF_FOUND)
     # Static-doc reST files
     set(STATICDOC abbr_accents.rst adc.rst adcc.rst appendices.rst basissets.rst
     basissets_byelement.rst bibliography.rst cbs.rst cbs_eqn.rst ddx.rst
-    nbody.rst customizing.rst db.rst detci.rst dfmp2.rst dlpnomp2.rst
+    nbody.rst customizing.rst db.rst detci.rst dfmp2.rst dlpnocc.rst dlpnomp2.rst
     diatomic.rst documentation.rst energy.rst external.rst fchk.rst
     freq.rst gdma.rst glossary_psivariables.rst index.rst intercalls.rst
     interfacing.rst introduction.rst methods.rst notes_c.rst notes_py.rst
     oeprop.rst opt.rst optking.rst plugins.rst prog_corelibs.rst prop.rst
-    psithonfunc.rst psithoninput.rst quickaddalias.rst
+    psithonfunc.rst psithoninput.rst quickaddalias.rst mp2f12.rst
     basissets_tables.rst quickadddatabase.rst sapt.rst sowreap.rst
     testsuite.rst tutorial.rst dft_byfunctional.rst scf.rst mrcc.rst
     psimrcc.rst cc.rst dft.rst fnocc.rst optionshandling.rst
@@ -68,7 +68,7 @@ if(PERL_FOUND AND SPHINX_FOUND AND SPHINX_STUFF_FOUND)
     cfour_table_grad.rst libefp.rst cppe.rst conda.rst pcmsolver.rst thermo.rst
     chemps2.rst fisapt.rst plugin_v2rdm_casscf.rst psi4api.rst
     manage_addon.rst numpy.rst build_planning.rst build_faq.rst
-    build_obtaining.rst libint.rst erd.rst simint.rst gcp.rst
+    build_obtaining.rst libint.rst simint.rst gcp.rst
     index_tutorials.rst prog_faq.rst manage_index.rst manage_git.rst
     prog_style_c.rst prog_blas.rst add_tests.rst plugin_snsmp2.rst dftnl.rst
     libxc.rst gau2grid.rst prog_conduct.rst prog_intro.rst prog_newcode.rst
@@ -77,7 +77,7 @@ if(PERL_FOUND AND SPHINX_FOUND AND SPHINX_STUFF_FOUND)
     prog_debug_profile.rst manage_release.rst plugin_psi4fockci.rst
     brianqc.rst tdscf.rst prog_integrals.rst prog_tour.rst mcscf.rst
     code_style.rst nitpick-exceptions external_apis.rst ecpint.rst
-    capabilities.rst
+    capabilities.rst variables.rst ooo.rst
     )
 
     # * compute relative path btwn top_srcdir and objdir/doc/sphinxman
@@ -489,7 +489,7 @@ if(PERL_FOUND AND SPHINX_FOUND AND SPHINX_STUFF_FOUND)
     #   * removing autodocs alleviates dependencies
     #   * thar will be warnings galore for unresolved links
     add_custom_command(
-        TARGET sphinxmini
+        TARGET sphinxmini POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E remove ${CCBD}/source/autodoc*
         COMMAND ${CMAKE_COMMAND} -E remove_directory ${CCBD}/source/autodir_options_c
         COMMAND ${CMAKE_COMMAND} -E remove_directory ${CCBD}/source/autodir_psivariables

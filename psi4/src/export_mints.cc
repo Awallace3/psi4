@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2025 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -56,6 +56,7 @@
 #include "psi4/libmints/eri.h"
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/3coverlap.h"
+#include "psi4/libmints/potential_erf.h"
 #include "psi4/libmints/oeprop.h"
 #include "psi4/libmints/nabla.h"
 #include "psi4/libmints/electrostatic.h"
@@ -71,7 +72,7 @@
 #include "psi4/libmints/quadrupole.h"
 #include "psi4/libmints/dipole.h"
 #include "psi4/libmints/overlap.h"
-#include "psi4/libmints/sieve.h"
+#include "psi4/libmints/thc_eri.h"
 #include "psi4/libpsi4util/libpsi4util.h"
 #include <string>
 
@@ -87,7 +88,7 @@ using namespace pybind11::literals;
  * @param forced_puream Force puream or not
  **/
 std::shared_ptr<BasisSet> construct_basisset_from_pydict(const std::shared_ptr<Molecule>& mol, py::dict& pybs,
-                                                         const int forced_puream) {
+                                                         const int forced_puream, bool skip_ghost_ecps = true) {
     std::string key = pybs["key"].cast<std::string>();
     std::string name = pybs["name"].cast<std::string>();
     std::string label = pybs["blend"].cast<std::string>();
@@ -153,6 +154,17 @@ std::shared_ptr<BasisSet> construct_basisset_from_pydict(const std::shared_ptr<M
             std::string atomlabel = atominfo[0].cast<std::string>();
             std::string hash = atominfo[1].cast<std::string>();
             int ncore = atominfo[2].cast<int>();
+            bool addecpforatom = true;
+            // We do NOT want to load ECPs when atom is GHOST!
+            //
+            // The atom loop always goes over all atoms in a geometry,
+            // also for SAD guess, when the 'mol' object contains only one atom.
+            // In such case loop index 'atom' goes beyond the scope of atoms list in the 'mol' object.
+            // Therefore, calling 'mol->Z(atom)' in such case raises an error and the program crashes.
+            if (skip_ghost_ecps and !(mol->Z(atom) > 0)) {
+                // We should be here only when it is not SAD and it is GHOST
+                addecpforatom = false;
+            }
             for (int atomshells = 3; atomshells < py::len(atominfo); ++atomshells) {
                 // Each shell entry has p primitives that look like
                 // [ angmom, [ [ e1, c1, r1 ], [ e2, c2, r2 ], ...., [ ep, cp, rp ] ] ]
@@ -168,10 +180,14 @@ std::shared_ptr<BasisSet> construct_basisset_from_pydict(const std::shared_ptr<M
                     coefficients.push_back(primitiveinfo[1].cast<double>());
                     ns.push_back(primitiveinfo[2].cast<int>());
                 }
-                vec_shellinfo.push_back(ShellInfo(am, coefficients, exponents, ns));
+                if (addecpforatom) {
+                    vec_shellinfo.push_back(ShellInfo(am, coefficients, exponents, ns));
+                }
             }
             basis_atom_ncore[name][atomlabel] = ncore;
-            basis_atom_ecpshell[name][atomlabel] = vec_shellinfo;
+            if (addecpforatom) {
+                basis_atom_ecpshell[name][atomlabel] = vec_shellinfo;
+            }
             totalncore += ncore;
         }
     }
@@ -507,7 +523,6 @@ void export_mints(py::module& m) {
     typedef SharedMatrix (Matrix::*get_block_shared)(const Slice&, const Slice&) const;
 
     py::enum_<Matrix::SaveType>(m, "SaveType", "The layout of the matrix for saving")
-        .value("Full", Matrix::SaveType::Full)
         .value("SubBlocks", Matrix::SaveType::SubBlocks)
         .value("LowerTriangle", Matrix::SaveType::LowerTriangle)
         .export_values();
@@ -967,10 +982,12 @@ void export_mints(py::module& m) {
              "Gets the multiplicity of each fragment")
         .def("atom_at_position", &Molecule::atom_at_position1,
              "Returns the index of the atom inside *tol* radius around *coord*. Returns -1 for no atoms, "
-             "throws an exception if more than one is found.", "coord"_a, "tol"_a)
+             "throws an exception if more than one is found.",
+             "coord"_a, "tol"_a)
         .def("atom_at_position", &Molecule::atom_at_position3,
              "Returns the index of the atom inside *tol* radius around *coord*. Returns -1 for no atoms, "
-             "throws an exception if more than one is found.", "coord"_a, "tol"_a)
+             "throws an exception if more than one is found.",
+             "coord"_a, "tol"_a)
         .def("print_out", &Molecule::print, "Prints the molecule in Cartesians in input units to output file")
         .def("print_out_in_bohr", &Molecule::print_in_bohr, "Prints the molecule in Cartesians in Bohr to output file")
         .def("print_out_in_angstrom", &Molecule::print_in_angstrom,
@@ -1125,6 +1142,7 @@ void export_mints(py::module& m) {
                                "The character symbol for the angular momentum of the given contraction")
         .def_property_readonly("AMCHAR", py::cpp_function(&GaussianShell::AMCHAR),
                                "The upper-case character symbol for the angular momentum of the given contraction")
+        .def("coord", &GaussianShell::coord, "Returns ith coordinate this shell is on.") 
         .def_property_readonly("ncenter", py::cpp_function(&GaussianShell::ncenter),
                                "Returns atom number this shell is on")
         .def_property("function_index", py::cpp_function(&GaussianShell::function_index),
@@ -1232,7 +1250,8 @@ void export_mints(py::module& m) {
         .def("max_function_per_shell", &BasisSet::max_function_per_shell,
              "The max number of basis functions in a shell")
         .def("max_nprimitive", &BasisSet::max_nprimitive, "The max number of primitives in a shell")
-        .def_static("construct_from_pydict", &construct_basisset_from_pydict, "docstring")
+        .def_static("construct_from_pydict", &construct_basisset_from_pydict, "docstring",
+                    py::arg("mol"), py::arg("pybs"), py::arg("forced_puream"), py::arg("skip_ghost_ecps")=true)
         .def("compute_phi", [](BasisSet& basis, double x, double y, double z) {
             auto phi_ao = new std::vector<double>(basis.nbf());
             auto capsule = py::capsule(phi_ao, [](void *phi_ao) { delete reinterpret_cast<std::vector<double>*>(phi_ao); });
@@ -1310,19 +1329,6 @@ void export_mints(py::module& m) {
 
     py::class_<Libint2ERI, std::unique_ptr<Libint2ERI>>(m, "ERI", pyTwoBodyAOInt,
                                                         "Computes normal two electron repulsion integrals");
-#ifdef ENABLE_Libint1t
-    py::class_<F12, std::shared_ptr<F12>>(m, "F12", pyTwoBodyAOInt, "Computes F12 electron repulsion integrals");
-    py::class_<F12G12, std::shared_ptr<F12G12>>(m, "F12G12", pyTwoBodyAOInt,
-                                                "Computes F12G12 electron repulsion integrals");
-    py::class_<F12Squared, std::shared_ptr<F12Squared>>(m, "F12Squared", pyTwoBodyAOInt,
-                                                        "Computes F12 Squared electron repulsion integrals");
-    py::class_<F12DoubleCommutator, std::shared_ptr<F12DoubleCommutator>>(
-        m, "F12DoubleCommutator", pyTwoBodyAOInt, "Computes F12 Double Commutator electron repulsion integrals");
-    py::class_<ErfERI, std::shared_ptr<ErfERI>>(m, "ErfERI", pyTwoBodyAOInt,
-                                                "Computes ERF electron repulsion integrals");
-    py::class_<ErfComplementERI, std::shared_ptr<ErfComplementERI>>(
-        m, "ErfComplementERI", pyTwoBodyAOInt, "Computes ERF complement electron repulsion integrals");
-#endif  // ENABLE_Libint1t
 
     py::class_<AOShellCombinationsIterator, std::shared_ptr<AOShellCombinationsIterator>>(m,
                                                                                           "AOShellCombinationsIterator")
@@ -1511,6 +1517,10 @@ void export_mints(py::module& m) {
         .def("electrostatic_potential_value", &MintsHelper::electrostatic_potential_value,
              "Electrostatic potential values at given sites with associated charge, specified as an (n_sites, 4) matrix.",
              "charges"_a, "coords"_a, "D"_a)
+        .def("ao_potential_erf", &MintsHelper::ao_potential_erf, "AO Erf-attenuated Coulomb potential on a given point",
+        "origin"_a = std::vector<double>{0, 0, 0}, "omega"_a = 0.0, "deriv"_a = 0)
+        .def("ao_potential_erf_complement", &MintsHelper::ao_potential_erf_complement, "AO Erfc-attenuated Coulomb potential on a given point",
+        "origin"_a = std::vector<double>{0, 0, 0}, "omega"_a = 0.0, "deriv"_a = 0)
 
         // Two-electron AO
         .def("ao_eri", normal_eri_factory(&MintsHelper::ao_eri), "AO ERI integrals", "factory"_a = nullptr)
@@ -1554,8 +1564,8 @@ void export_mints(py::module& m) {
 
         // Contracted gradient terms
         .def("dipole_grad", &MintsHelper::dipole_grad, "First nuclear derivative dipole integrals")
-        .def("multipole_grad", &MintsHelper::multipole_grad, "First nuclear derivative multipole integrals",
-             "D"_a, "order"_a, "origin"_a)
+        .def("multipole_grad", &MintsHelper::multipole_grad, "First nuclear derivative multipole integrals", "D"_a,
+             "order"_a, "origin"_a)
         .def("overlap_grad", &MintsHelper::overlap_grad, "First nuclear derivative overlap integrals")
         .def("kinetic_grad", &MintsHelper::kinetic_grad, "First nuclear derivative kinetic integrals")
         .def("potential_grad", &MintsHelper::potential_grad, "First nuclear derivative potential integrals")
@@ -1640,17 +1650,20 @@ void export_mints(py::module& m) {
         .def("getCharges", &ExternalPotential::getCharges, "Get the vector of charge tuples")
         .def("appendCharges", &ExternalPotential::appendCharges,
              "Append a vector of charge tuples to a current ExternalPotential")
-        .def("addBasis", &ExternalPotential::addBasis, "Add a basis of S auxiliary functions iwth Df coefficients",
+        .def("addBasis", &ExternalPotential::addBasis, "Add a basis of S auxiliary functions with DF coefficients",
              "basis"_a, "coefs"_a)
+        .def("setMatrix", &ExternalPotential::setMatrix, "Add a one-electron potential matrix", "V"_a)
         .def("gradient_on_charges", &ExternalPotential::gradient_on_charges, "Get the gradient on the embedded charges")
         .def("clear", &ExternalPotential::clear, "Reset the field to zero (eliminates all entries)")
         .def("computePotentialMatrix", &ExternalPotential::computePotentialMatrix,
              "Compute the external potential matrix in the given basis set", "basis"_a)
+        .def("computePotentialGradients", &ExternalPotential::computePotentialGradients,
+             "Compute the gradients due to the external potential in the given basis set for the given density matrix", "basis"_a, "D"_a)
         .def("computeNuclearEnergy", &ExternalPotential::computeNuclearEnergy,
              "Compute the contribution to the nuclear repulsion energy for the given molecule")
         .def("computeExternExternInteraction", &ExternalPotential::computeExternExternInteraction,
              "Compute the interaction between this potential and other external potential")
-        .def("print_out", &ExternalPotential::py_print, "Print python print helper to the outfile");
+        .def("print_out", &ExternalPotential::py_print, "Print object summary to the outfile");
 
     typedef std::shared_ptr<Localizer> (*localizer_with_type)(const std::string&, std::shared_ptr<BasisSet>,
                                                               std::shared_ptr<Matrix>);
@@ -1677,12 +1690,6 @@ void export_mints(py::module& m) {
         .def("SCF_Dtot", &FCHKWriter::SCF_Dtot, py::return_value_policy::reference_internal)
         .def("set_postscf_density_label", &FCHKWriter::set_postscf_density_label,
              "Set base label for post-SCF density, e.g. ' CC Density'.", "label"_a);
-
-    py::class_<MoldenWriter, std::shared_ptr<MoldenWriter>>(m, "MoldenWriter",
-                                                            "Writes wavefunction information in molden format")
-        .def(py::init<std::shared_ptr<Wavefunction>>())
-        .def("write", &MoldenWriter::write, "Writes wavefunction information in molden format", "filename"_a, "Ca"_a,
-             "Cb"_a, "Ea"_a, "Eb"_a, "OccA"_a, "OccB"_a, "dovirtual"_a);
 
     py::class_<MOWriter, std::shared_ptr<MOWriter>>(m, "MOWriter", "Writes the MOs")
         .def(py::init<std::shared_ptr<Wavefunction>>())
@@ -1717,16 +1724,39 @@ void export_mints(py::module& m) {
              from the high order group can be reduced to.")
         .def("group", &CorrelationTable::gamma, "Returns the higher order point group");
 
-    py::class_<ERISieve, std::shared_ptr<ERISieve>>(m, "ERISieve", "docstring")
-        .def(py::init<std::shared_ptr<BasisSet>, double, bool>())
-        .def("shell_significant", &ERISieve::shell_significant);
-
     m.def("test_matrix_dpd_interface", &psi::test_matrix_dpd_interface);
 
     m.def("_libint2_configuration", []() { return libint2::configuration_accessor(); },
         "Returns string with codes detailing the integral classes, angular momenta, and ordering \
         characteristics of the linked Libint2. Prefer the processed libint2_configuration function.");
 
-    m.def("_libint2_solid_harmonics_ordering", []() { return int(libint2::solid_harmonics_ordering()); },
-        "Libint2 SH setting");
+    m.def("libint2_solid_harmonics_ordering", []() {
+            const std::string SHOrderingsList[] = {"null", "Standard", "Gaussian"};
+            std::string sho = SHOrderingsList[int(libint2::solid_harmonics_ordering())];
+            return sho;
+        },
+        "The solid harmonics setting of Libint2 currently active for Psi4");
+
+    py::class_<LS_THC_Computer, std::shared_ptr<LS_THC_Computer>>(m, "LS_THC_Computer",
+            "Computer class for grid-based tensor hypercontraction (THC) of two-electron integrals (Parrish 2012)")
+            .def(py::init([] (std::shared_ptr<Molecule> mol, std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary) {
+                    return new LS_THC_Computer(mol, primary, auxiliary, Process::environment.options); 
+                    }))
+            .def("compute_thc_factorization", &LS_THC_Computer::compute_thc_factorization, "Compute the THC (x1, x2, Z, x3, x4) factors through grid based LS-THC")
+            .def("get_x1", &LS_THC_Computer::get_x1, "Returns x1 factor from LS-THC factorization")
+            .def("get_x2", &LS_THC_Computer::get_x2, "Returns x2 factor from LS-THC factorization")
+            .def("get_x3", &LS_THC_Computer::get_x3, "Returns x3 factor from LS-THC factorization")
+            .def("get_x4", &LS_THC_Computer::get_x4, "Returns x4 factor from LS-THC factorization")
+            .def("get_Z", &LS_THC_Computer::get_Z, "Returns Z factor from LS-THC factorization");
+
+    m.def("libint2_supports", [](const std::string& comp) { return libint2::supports(comp); },
+       "Whether the linked Libint2 supports a particular ordering or integral type/derivative/AM. Use maximally uniform AM for latter.");
+
+    // when L2 is pure cmake
+    // m.def("libint2_citation", []() {
+    //        const std::string cit = "    Version " + libint2::libint_version_string(true) + "\n    " +
+    //            "Edward F. Valeev, http://libint.valeyev.net/" + " (" + libint2::libint_reference_doi() + ")";
+    //        return cit;
+    //    },
+    //    "Citation blurb for Libint2");
 }

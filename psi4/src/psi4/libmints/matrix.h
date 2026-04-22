@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2025 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -36,6 +36,24 @@
 
 #include "dimension.h"
 
+#include <eigen3/Eigen/Core>
+#ifdef USING_OpenOrbitalOptimizer
+#ifdef USING_LAPACK_MKL
+#include <mkl.h>
+#define ARMA_USE_MKL
+#define ARMA_USE_MKL_TYPES
+#endif
+#define ARMA_DONT_USE_FORTRAN_HIDDEN_ARGS
+#define ARMA_DONT_USE_WRAPPER
+#include <armadillo>
+#else
+// Forward declaration
+namespace arma {
+  class mat;
+}
+#endif
+
+
 namespace psi {
 
 struct dpdfile2;
@@ -49,6 +67,7 @@ class Dimension;
 class Molecule;
 class Vector3;
 class Matrix;
+
 using SharedMatrix = std::shared_ptr<Matrix>;
 
 enum diagonalize_order { evals_only_ascending = 0, ascending = 1, evals_only_descending = 2, descending = 3 };
@@ -272,6 +291,14 @@ class PSI_API Matrix : public std::enable_shared_from_this<Matrix> {
     void copy(const Matrix* cp);
     /** @} */
 
+    /// returns an Eigen::Map object to the underlying matrix data buffer
+    Eigen::Map<Eigen::MatrixXd> eigen_map();
+    std::vector<Eigen::Map<Eigen::MatrixXd>> eigen_maps();
+    /// Returns an Armadillo matrix
+    arma::mat to_armadillo_matrix(int h=0);
+    /// Copies data from an Armadillo matrix
+    void from_armadillo_matrix(const arma::mat & m, int h=0);
+
     /**
     ** For a matrix of 3D vectors (ncol==3), rotate a set of points around an
     ** arbitrary axis.  Vectors are the rows of the matrix.
@@ -287,11 +314,7 @@ class PSI_API Matrix : public std::enable_shared_from_this<Matrix> {
     /// Copies data to the row specified. Assumes data is of correct length.
     void copy_to_row(int h, int row, double const* const data);
 
-    enum SaveType { Full
-    PSI_DEPRECATED(
-        "Using `Matrix::SaveType::Full` instead of `Matrix::SaveType::SubBlocks` is deprecated, "
-        "and as soon as 1.5 it will stop working"),
-    SubBlocks, LowerTriangle, ThreeIndexLowerTriangle };
+    enum SaveType { SubBlocks, LowerTriangle, ThreeIndexLowerTriangle };
 
     /**
      * @{
@@ -692,6 +715,9 @@ class PSI_API Matrix : public std::enable_shared_from_this<Matrix> {
     /// In place transposition
     void transpose_this();
 
+    /// Reshape the dimensions of a matrix (without affecting the underlying data), only for the case nirrep = 1
+    void reshape(const uint64_t nrow, const uint64_t ncol);
+
     /// Adds a matrix to this
     void add(const Matrix* const);
     /// Adds a matrix to this
@@ -960,7 +986,7 @@ class PSI_API Matrix : public std::enable_shared_from_this<Matrix> {
      * This is the block version of the algorithm, calling Level 3
      * BLAS (dpstrf).
      */
-    void pivoted_cholesky(double tol, std::vector<std::vector<int>>& pivot);
+    void pivoted_cholesky(double tol, std::vector<std::vector<int>>& pivot, bool upper=false);
 
     /*! Computes the inverse of a real symmetric positive definite
      *  matrix A using the Cholesky factorization A = L*L**T

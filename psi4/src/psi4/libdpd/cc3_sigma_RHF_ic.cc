@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2025 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -44,6 +44,7 @@
 #include "dpd.h"
 #include "psi4/psi4-dec.h"
 #include "psi4/libpsi4util/PsiOutStream.h"
+#include "psi4/libpsi4util/exception.h"
 // MKL Header
 #ifdef USING_LAPACK_MKL
 #include <mkl.h>
@@ -67,7 +68,7 @@ void cc3_sigma_RHF_ic_thread(thread_data &);
 
 void DPD::cc3_sigma_RHF_ic(dpdbuf4 *CIjAb, dpdbuf4 *WAbEi, dpdbuf4 *WMbIj, int do_singles, dpdbuf4 *Dints,
                            dpdfile2 *SIA, int do_doubles, dpdfile2 *FME, dpdbuf4 *WmAEf, dpdbuf4 *WMnIe, dpdbuf4 *SIjAb,
-                           int *occpi, int *occ_off, int *virtpi, int *vir_off, double omega, std::string out,
+                           Dimension const& occpi, int *occ_off, Dimension const& virtpi, int *vir_off, double omega, std::string out,
                            int nthreads, int newtrips) {
     std::shared_ptr<psi::PsiOutStream> printer = (out == "outfile" ? outfile : std::make_shared<PsiOutStream>(out));
     int h, nirreps, thread, nijk, *ijk_part;
@@ -117,7 +118,7 @@ void DPD::cc3_sigma_RHF_ic(dpdbuf4 *CIjAb, dpdbuf4 *WAbEi, dpdbuf4 *WMbIj, int d
     GS = SIjAb->file.my_irrep;
     if (GS != (GX3 ^ GW)) {
         outfile->Printf("problem with irreps in cc3_sigma_RHF()\n");
-        exit(1);
+        throw PSIEXCEPTION("problem with irreps in cc3_sigma_RHF()");
     }
 
     if (do_singles) {
@@ -316,7 +317,7 @@ void cc3_sigma_RHF_ic_thread(thread_data &data) {
     dpdfile2 *SIA, SIA_local;
     char lbl[32];
 
-    int do_singles, do_doubles, *occpi, *occ_off, *virtpi, *vir_off;
+    int do_singles, do_doubles, *occ_off, *vir_off;
     int Gi, Gj, Gk, thr_id, first_ijk, last_ijk;
     double omega;
     dpdfile2 *FME, *fIJ, *fAB;
@@ -336,9 +337,9 @@ void cc3_sigma_RHF_ic_thread(thread_data &data) {
     FME = data.FME;
     WmAEf = data.WmAEf;
     WMnIe = data.WMnIe;
-    occpi = data.occpi;
+    const auto& occpi = data.occpi;
+    const auto& virtpi = data.virtpi;
     occ_off = data.occ_off;
-    virtpi = data.virtpi;
     vir_off = data.vir_off;
     omega = data.omega;
     fIJ = data.fIJ;

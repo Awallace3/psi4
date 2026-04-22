@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2025 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -1129,8 +1129,7 @@ SharedMatrix Wavefunction::basis_projection(SharedMatrix C_A, Dimension noccpi, 
         double *work = init_array(lwork);
         int stat = C_DSYEV('v', 'u', nocc, T[0], nocc, eigval, work, lwork);
         if (stat != 0) {
-            outfile->Printf("C_DSYEV failed\n");
-            exit(PSI_RETURN_FAILURE);
+            throw std::runtime_error("C_DSYEV failed\n");
         }
         delete[] work;
 
@@ -1363,13 +1362,6 @@ std::map<std::string, double> Wavefunction::scalar_variables() { return variable
 std::map<std::string, SharedMatrix> Wavefunction::array_variables() { return arrays_; }
 
 std::map<std::string, std::shared_ptr<ExternalPotential>> Wavefunction::potential_variables() { return potentials_; }
-
-double Wavefunction::get_variable(const std::string &key) { return scalar_variable(key); }
-SharedMatrix Wavefunction::get_array(const std::string &key) { return array_variable(key); }
-void Wavefunction::set_variable(const std::string &key, double val) { return set_scalar_variable(key, val); }
-void Wavefunction::set_array(const std::string &key, SharedMatrix val) { set_array_variable(key, val); }
-std::map<std::string, double> Wavefunction::variables() { return scalar_variables(); }
-std::map<std::string, SharedMatrix> Wavefunction::arrays() { return array_variables(); }
 
 void Wavefunction::set_PCM(const std::shared_ptr<PCM> &pcm) {
     PCM_ = pcm;

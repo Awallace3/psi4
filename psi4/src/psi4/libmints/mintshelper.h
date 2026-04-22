@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2025 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -106,6 +106,8 @@ class PSI_API MintsHelper {
     /// Returns true if an integral type is already computed and cached
     bool are_ints_cached(const std::string& label, bool include_perturbation);
 
+    /// Computes ZORA kinetic integrals
+    void compute_so_zora_ints(bool include_perturbations = true);
     /// Computes X2C overlap, kinetic, and potential integrals
     void compute_so_x2c_ints(bool include_perturbations = true);
     /// Add dipole perturbation to the potential integrals
@@ -249,6 +251,11 @@ class PSI_API MintsHelper {
     SharedMatrix ao_3coverlap(std::shared_ptr<BasisSet> bs1, std::shared_ptr<BasisSet> bs2,
                               std::shared_ptr<BasisSet> bs3);
 
+    /// Erf-attenuated Coulomb potential on origin
+    SharedMatrix ao_potential_erf(const std::vector<double> &origin, double omega = 0.0, int deriv = 0);
+    /// Erfc-attenuated Coulomb potential on origin
+    SharedMatrix ao_potential_erf_complement(const std::vector<double> &origin, double omega = 0.0, int deriv = 0);
+
     /// Symmetric MO ERI Integrals, (ov|ov) type  (Full matrix, N^5, not recommended for large systems)
     /// Pass C_ C_ for (aa|aa) type, Cocc_, Cocc_ for (oo|oo) type, or Cvir_, Cvir_ for (vv|vv) type
     SharedMatrix mo_eri(SharedMatrix Cocc, SharedMatrix Cvir);
@@ -373,6 +380,8 @@ class PSI_API MintsHelper {
     // Computes the electric dipole derivatives
     SharedMatrix dipole_grad(SharedMatrix D);
     SharedMatrix multipole_grad(SharedMatrix D, int order, const std::vector<double>& origin = {0.0, 0.0, 0.0});
+    // Computes the gradient due to an embedding potential
+    SharedMatrix embpot_grad(SharedMatrix D);
     // Computes the gradient due to external dipole perturbation
     SharedMatrix perturb_grad(SharedMatrix D);
     // Computes the gradient due to ECPs in the basis set

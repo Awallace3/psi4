@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2025 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -98,7 +98,12 @@ CCManyBody::~CCManyBody() {
 void CCManyBody::generate_integrals() {
     // CCSort reads the one and two electron integrals
     // and creates the Fock matrices
-    std::make_shared<CCSort>(wfn_, out_of_core_sort);
+
+    // We need to assign this to a variable. If we don't, then the make_shared function
+    // will create a pr-value, which may be destroyed at any point. Any assumptions about its
+    // lifetime is undefined behavior. By assigning it to a variable, we create an l-value, whose
+    // lifetime is guaranteed until the end of scope.
+    [[maybe_unused]] auto sort = std::make_shared<CCSort>(wfn_, out_of_core_sort);
     //   wfn_->blas()->show_storage();
     wfn_->blas()->compute_storage_strategy();
     //   wfn_->blas()->show_storage();
@@ -266,7 +271,7 @@ void CCManyBody::compute_reference_energy() {
     // Compute the zeroth-order energy for the unique references
     for (int n = 0; n < wfn_->moinfo()->get_nunique(); n++) {
         int unique_n = wfn_->moinfo()->get_ref_number(n, UniqueRefs);
-        double ref_energy = wfn_->moinfo()->get_nuclear_energy() + wfn_->moinfo()->get_fzcore_energy();
+        double ref_energy = wfn_->moinfo()->get_nuc_E() + wfn_->moinfo()->get_fzcore_energy();
         // Grab reference n and the list of occupied orbitals
         auto aocc = wfn_->moinfo()->get_aocc(n, UniqueRefs);
         auto bocc = wfn_->moinfo()->get_bocc(n, UniqueRefs);

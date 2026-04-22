@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2023 The Psi4 Developers.
+ * Copyright (c) 2007-2025 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -36,6 +36,7 @@
 #include "psi4/libqt/qt.h"
 #include "dpd.h"
 #include "psi4/libpsi4util/PsiOutStream.h"
+#include "psi4/libpsi4util/exception.h"
 
 namespace psi {
 
@@ -63,7 +64,6 @@ int DPD::contract424(dpdbuf4 *X, dpdfile2 *Y, dpdbuf4 *Z, int sum_X, int sum_Y, 
     int rking = 0, symlink;
     int Xtrans, Ytrans;
     int *numlinks, *numrows, *numcols;
-    int incore;
     long int core, memoryd, core_total, rowtot, coltot, maxrows;
     int xcount, zcount, scount, Ysym;
     int rowx, rowz, colx, colz;
@@ -80,7 +80,7 @@ int DPD::contract424(dpdbuf4 *X, dpdfile2 *Y, dpdbuf4 *Z, int sum_X, int sum_Y, 
     GZ = Z->file.my_irrep;
 
     memoryd = dpd_main.memory;
-    incore = 1; /* default */
+    bool incore = true; /* default */
 
     file2_mat_init(Y);
     file2_mat_rd(Y);
@@ -95,7 +95,7 @@ int DPD::contract424(dpdbuf4 *X, dpdfile2 *Y, dpdbuf4 *Z, int sum_X, int sum_Y, 
         symlink = GY;
     } else {
         outfile->Printf("Junk Y index %d\n", sum_Y);
-        exit(PSI_RETURN_FAILURE);
+        throw PSIEXCEPTION("Junk Y index " + std::to_string(sum_Y));
     }
 
     if ((sum_X == 1) || (sum_X == 2)) trans4_init(&Xt, X);
@@ -116,7 +116,7 @@ int DPD::contract424(dpdbuf4 *X, dpdfile2 *Y, dpdbuf4 *Z, int sum_X, int sum_Y, 
 #endif
 
     for (hxbuf = 0; hxbuf < nirreps; hxbuf++) {
-        incore = 1; /* default */
+        incore = true; /* default */
 
         if (sum_X < 2) {
             if (!Ztrans)
@@ -145,11 +145,11 @@ int DPD::contract424(dpdbuf4 *X, dpdfile2 *Y, dpdbuf4 *Z, int sum_X, int sum_Y, 
         rowtot = X->params->rowtot[hxbuf];
         for (; rowtot > maxrows; rowtot -= maxrows) {
             if (core_total > (core_total + maxrows * coltot))
-                incore = 0;
+                incore = false;
             else
                 core_total += maxrows * coltot;
         }
-        if (core_total > (core_total + rowtot * coltot)) incore = 0;
+        if (core_total > (core_total + rowtot * coltot)) incore = false;
         core_total += rowtot * coltot;
 
         if (sum_X == 1 || sum_X == 2) core_total *= 2; /* we need room to transpose the X buffer */
@@ -167,17 +167,17 @@ int DPD::contract424(dpdbuf4 *X, dpdfile2 *Y, dpdbuf4 *Z, int sum_X, int sum_Y, 
         rowtot = Z->params->rowtot[hzbuf];
         for (; rowtot > maxrows; rowtot -= maxrows) {
             if (core_total > (core_total + maxrows * coltot))
-                incore = 0;
+                incore = false;
             else
                 core_total += maxrows * coltot;
         }
-        if (core_total > (core_total + rowtot * coltot)) incore = 0;
+        if (core_total > (core_total + rowtot * coltot)) incore = false;
         core_total += rowtot * coltot;
 
-        if (core_total > memoryd) incore = 0;
+        if (core_total > memoryd) incore = false;
 
         /* Force incore for all but a "normal" 424 contraction for now */
-        if (Ztrans || sum_X == 0 || sum_X == 1 || sum_X == 2) incore = 1;
+        if (Ztrans || sum_X == 0 || sum_X == 1 || sum_X == 2) incore = true;
 
         if (incore) {
             /*       dpd_buf4_scm(Z, beta); */
