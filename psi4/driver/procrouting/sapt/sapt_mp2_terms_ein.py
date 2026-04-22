@@ -85,7 +85,8 @@ def _compute_fxc(PQrho, half_Saux, halfp_Saux, x_alpha, rho_thresh=1.e-8):
     return core.triplet(halfp_Saux, tmp, halfp_Saux, False, False, False)
 
 
-def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points=10, leg_lambda=0.3, do_print=True):
+def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, x_beta=0.0, is_lrc=False, omega=0.0,
+                       leg_points=10, leg_lambda=0.3, do_print=True):
 
     rho_thresh = core.get_option("SAPT", "SAPT_FDDS_V2_RHO_CUTOFF")
     if do_print:
@@ -103,7 +104,7 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points
     df_vector_keys = ["eps_occ_A", "eps_vir_A", "eps_occ_B", "eps_vir_B"]
     fdds_vector_cache = {key: core.Vector.from_array(cache[key]) for key in df_vector_keys}
 
-    fdds_obj = core.FDDS_Dispersion(primary, auxiliary, fdds_matrix_cache, fdds_vector_cache, is_hybrid)
+    fdds_obj = core.FDDS_Dispersion(primary, auxiliary, fdds_matrix_cache, fdds_vector_cache, is_hybrid, is_lrc, omega)
     core.timer_off("Form FDDS object")
 
     # Aux Densities
@@ -158,13 +159,13 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points
 
         # Monomer A
         if is_hybrid:
-            aux_dict = fdds_obj.form_aux_matrices("A", omega)
+            aux_dict = fdds_obj.form_aux_matrices("A", omega, x_alpha, x_beta)
             aux_dict = {k: v.to_array() for k, v in aux_dict.items()}
             X_A_uc = aux_dict["amp"].copy()
-            X_A = X_A_uc - x_alpha * aux_dict["K2L"]
+            X_A = X_A_uc - aux_dict["K2L"]
 
             # K matrices
-            K_A = -x_alpha * aux_dict["K1LD"] - x_alpha * aux_dict["K2LD"] + x_alpha * x_alpha * aux_dict["K21L"]
+            K_A = -aux_dict["K1LD"] - aux_dict["K2LD"] + aux_dict["K21L"]
             KRS_A = K_A.dot(Rtinv_A).dot(metric)
         else:
             X_A = fdds_obj.form_unc_amplitude("A", omega)
@@ -186,13 +187,13 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points
 
         # Monomer B
         if is_hybrid:
-            aux_dict = fdds_obj.form_aux_matrices("B", omega)
+            aux_dict = fdds_obj.form_aux_matrices("B", omega, x_alpha, x_beta)
             aux_dict = {k: v.to_array() for k, v in aux_dict.items()}
             X_B_uc = aux_dict["amp"].copy()
-            X_B = X_B_uc - x_alpha * aux_dict["K2L"]
+            X_B = X_B_uc - aux_dict["K2L"]
 
             # K matrices
-            K_B = -x_alpha * aux_dict["K1LD"] - x_alpha * aux_dict["K2LD"] + x_alpha * x_alpha * aux_dict["K21L"]
+            K_B = -aux_dict["K1LD"] - aux_dict["K2LD"] + aux_dict["K21L"]
             KRS_B = K_B.dot(Rtinv_B).dot(metric)
         else:
             X_B = fdds_obj.form_unc_amplitude("B", omega)

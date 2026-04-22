@@ -315,7 +315,7 @@ void DFHelper::prepare_sparsity() {
     size_t screen_threads = (nthreads_ == 1 ? 1 : 2);  // TODO: Replace screen_threads with nthreads_?
     auto rifactory = std::make_shared<IntegralFactory>(primary_, primary_, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(screen_threads);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    eri[0] = std::shared_ptr<TwoBodyAOInt>(use_omega_eri_ ? rifactory->erf_eri(omega_) : rifactory->eri());
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
 #pragma omp parallel num_threads(screen_threads) if (nbf_ > 1000)
     {
@@ -424,7 +424,7 @@ void DFHelper::prepare_AO() {
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    eri[0] = std::shared_ptr<TwoBodyAOInt>(use_omega_eri_ ? rifactory->erf_eri(omega_) : rifactory->eri());
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
     for(int rank = 1; rank < nthreads_; rank++) {
         eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
@@ -496,7 +496,7 @@ void DFHelper::prepare_AO_wK() {
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    eri[0] = std::shared_ptr<TwoBodyAOInt>(use_omega_eri_ ? rifactory->erf_eri(omega_) : rifactory->eri());
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
 #pragma omp parallel num_threads(nthreads_)
     {
@@ -516,7 +516,7 @@ void DFHelper::prepare_AO_core() {
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    eri[0] = std::shared_ptr<TwoBodyAOInt>(use_omega_eri_ ? rifactory->erf_eri(omega_) : rifactory->eri());
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
 #pragma omp parallel num_threads(nthreads_)
     {
@@ -593,7 +593,7 @@ void DFHelper::prepare_AO_wK_core() {
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> weri(nthreads_);
 
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    eri[0] = std::shared_ptr<TwoBodyAOInt>(use_omega_eri_ ? rifactory->erf_eri(omega_) : rifactory->eri());
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
 
     weri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->erf_eri(omega_));

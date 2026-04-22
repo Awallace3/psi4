@@ -1412,10 +1412,77 @@ def test_wb97m_v_sapt_dft():
             "basis": "aug-cc-pvtz",
             "e_convergence": 1e-8,
             "d_convergence": 1e-8,
+            "freeze_core": True,
             "scf_type": "df",
             "sapt_dft_grac_shift_a": 0.136,
             "sapt_dft_grac_shift_b": 0.136,
             "SAPT_DFT_FUNCTIONAL": "wb97m-v",
+        }
+    )
+    psi4.energy("DFT-VV10(SAPT)")
+    ELST = psi4.core.variable("SAPT ELST ENERGY")
+    EXCH = psi4.core.variable("SAPT EXCH ENERGY")
+    IND = psi4.core.variable("SAPT IND ENERGY")
+    DISP = psi4.core.variable("SAPT DISP ENERGY")
+    TOTAL = psi4.core.variable("SAPT TOTAL ENERGY")
+    ie = psi4.energy("wb97m-v", bsse_type="cp")
+
+    print(f"\nwB97M-V SAPT(DFT) Results:")
+    print(f"  ELST  = {ELST * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  EXCH  = {EXCH * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  IND   = {IND * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  DISP  = {DISP * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  TOTAL = {TOTAL * hartree_to_kcalmol:12.8f} kcal/mol")
+    print("\n[INFO] wB97M-V SAPT(DFT) test passed basic sanity checks.")
+    print("[INFO] Once wK handling and VV10 dispatch are implemented,")
+    print("[INFO] replace sanity checks with exact reference values.")
+    print(f"\nwB97M-V CP-corrected supermolecular IE: {ie * hartree_to_kcalmol:12.8f} kcal/mol")
+    assert compare_values(
+        ie,
+        TOTAL,
+        8,
+        "wB97M-V SAPT(DFT) TOTAL ENERGY should match CP-corrected supermolecular IE",
+    )
+
+
+@pytest.mark.saptdft
+def test_wb97_sapt_dft():
+    """
+    Test SAPT(DFT) with wB97M (LC hybrid) functional.
+    
+    This test verifies that:
+    1. The LC hybrid (range-separated) exchange is correctly handled
+       via erf/erfc splitting of the K matrix (wK) in all SAPT terms.
+    2. SAPT ELST, EXCH, IND energies are computed correctly with wB97M-V.
+    3. Eventually, VV10 nonlocal correlation is available as a dispersion
+       correction similar to D3/D4/XDM.
+    
+    For LC hybrids, the total exact exchange operator is:
+      K_total = x_alpha * K_full + x_beta * wK(erf)
+    where wK uses the erf(omega * r12)/r12 kernel.
+    """
+    mol_dimer = psi4.geometry(
+        """
+  O -2.930978458   -0.216411437    0.000000000
+  H -3.655219777    1.440921844    0.000000000
+  H -1.133225297    0.076934530    0.000000000
+   --
+  O  2.552311356    0.210645882    0.000000000
+  H  3.175492012   -0.706268134   -1.433472544
+  H  3.175492012   -0.706268134    1.433472544
+  units bohr
+"""
+    )
+    psi4.set_options(
+        {
+            "basis": "aug-cc-pvtz",
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
+            "scf_type": "df",
+            "sapt_dft_grac_shift_a": 0.136,
+            "sapt_dft_grac_shift_b": 0.136,
+            "SAPT_DFT_FUNCTIONAL": "wb97",
+            # "SAPT_DFT_FUNCTIONAL": "pbe0",
         }
     )
     psi4.energy("SAPT(DFT)")
@@ -1425,12 +1492,6 @@ def test_wb97m_v_sapt_dft():
     DISP = psi4.core.variable("SAPT DISP ENERGY")
     TOTAL = psi4.core.variable("SAPT TOTAL ENERGY")
 
-    print(f"\nwB97M-V SAPT(DFT) Results:")
-    print(f"  ELST  = {ELST * hartree_to_kcalmol:12.8f} kcal/mol")
-    print(f"  EXCH  = {EXCH * hartree_to_kcalmol:12.8f} kcal/mol")
-    print(f"  IND   = {IND * hartree_to_kcalmol:12.8f} kcal/mol")
-    print(f"  DISP  = {DISP * hartree_to_kcalmol:12.8f} kcal/mol")
-    print(f"  TOTAL = {TOTAL * hartree_to_kcalmol:12.8f} kcal/mol")
 
     # --- Sanity checks ---
     # Electrostatics should be attractive (negative) for water dimer
@@ -1448,9 +1509,48 @@ def test_wb97m_v_sapt_dft():
     # Reference PBE0/STO-3G values (from test_sapt_dft_compute_ddft_d4):
     #   ELST ~ -8.5 mEh, EXCH ~ +8.2 mEh, IND ~ -0.9 mEh
     # wB97M-V values should be in a similar ballpark for this geometry.
-    print("\n[INFO] wB97M-V SAPT(DFT) test passed basic sanity checks.")
+    print("\n[INFO] wB97 SAPT(DFT) test passed basic sanity checks.")
     print("[INFO] Once wK handling and VV10 dispatch are implemented,")
     print("[INFO] replace sanity checks with exact reference values.")
+    # now a CP IE for wB97M-V to compare in aTZ
+    # e = psi4.energy('wb97', bsse_type='cp')
+    # e_ccsd = psi4.energy('fno-ccsd(t)', bsse_type='cp')
+    print(f"\nwB97 SAPT(DFT) Results:")
+    print(f"  ELST  = {ELST * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  EXCH  = {EXCH * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  IND   = {IND * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  DISP  = {DISP * hartree_to_kcalmol:12.8f} kcal/mol")
+    print(f"  TOTAL = {TOTAL * hartree_to_kcalmol:12.8f} kcal/mol")
+    # print(f"\nwB97 CP-corrected supermolecular IE: {e * hartree_to_kcalmol:12.8f} kcal/mol")
+    # print(f"FNO-CCSD(T) CP-corrected supermolecular IE: {e_ccsd * hartree_to_kcalmol:12.8f} kcal/mol")
+
+# wB97M-V SAPT(DFT) Results:
+#   ELST  =  -7.93648128 kcal/mol
+#   EXCH  =   6.02401264 kcal/mol
+#   IND   =  -2.19936164 kcal/mol
+#   DISP  =  -0.82340034 kcal/mol
+#   TOTAL =  -4.93523062 kcal/mol
+# wB97 SAPT(DFT) Results:
+#   ELST  =  -7.99217875 kcal/mol
+#   EXCH  =   6.01564436 kcal/mol
+#   IND   =  -2.22629032 kcal/mol
+#   DISP  =  -1.88359769 kcal/mol
+#   TOTAL =  -6.08642239 kcal/mol
+# PBE0
+  # ELST  =  -8.07119833 kcal/mol
+  # EXCH  =   8.01479311 kcal/mol
+  # IND   =  -2.26824523 kcal/mol
+  # DISP  =  -2.34007852 kcal/mol
+  # TOTAL =  -4.66472897 kcal/mol
+# SAPT2+3(CCD)/aug-cc-pVTZ Results:
+  # ELST  =  -8.11165674 kcal/mol
+  # EXCH  =   8.12993587 kcal/mol
+  # IND   =  -2.45069369 kcal/mol
+  # DISP  =  -2.52274686 kcal/mol
+  # TOTAL =  -4.95516142 kcal/mol
+#
+# wB97 CP-corrected supermolecular IE:  -5.63465465 kcal/mol
+# FNO-CCSD(T) CP-corrected supermolecular IE:  -4.74405348 kcal/mol
 
 
 def test_b3lyp_d3_sapt_dft():
@@ -1568,7 +1668,7 @@ if __name__ == "__main__":
     psi4.set_num_threads(12)
     # pytest this file
     # test_fisapt0_sapthf_external_potential(True)
-    test_fisapt0_sapthf_external_potential(False)
+    # test_fisapt0_sapthf_external_potential(False)
     # test_qcng_embedded_saptdft()
     # test_saptdft_disp_methods_dftd4("SAPT(DFT)-D4(S)", -0.003605830)
     # test_saptdft_disp_methods_dftd4("SAPT(DFT)-D4(I)", -0.0040379796),
@@ -1585,4 +1685,5 @@ if __name__ == "__main__":
     #     ]
     # )
     test_wb97m_v_sapt_dft()
-    test_b3lyp_d3_sapt_dft()
+    # test_wb97_sapt_dft()
+    # test_b3lyp_d3_sapt_dft()

@@ -184,6 +184,14 @@ class PSI_API DFHelper {
     double get_omega() { return omega_; }
 
     ///
+    /// Use erf(omega r12)/r12 integrals in the generic AO->MO transform path.
+    /// This is separate from the JK-style do_wK machinery and is intended for
+    /// tensor builds that need pure long-range exchange intermediates.
+    ///
+    void set_use_omega_eri(bool use_omega_eri) { use_omega_eri_ = use_omega_eri; }
+    bool get_use_omega_eri() { return use_omega_eri_; }
+
+    ///
     /// sets the coefficient for (pq|rs) integrals
     /// @param omega double indicating coefficient for eri
     ///
@@ -361,6 +369,7 @@ class PSI_API DFHelper {
     std::pair<size_t, size_t> info_;
     bool ordered_ = false;
     bool do_wK_ = false;
+    bool use_omega_eri_ = false;
     bool wcombine_ = false;
     double omega_;
     double omega_alpha_;

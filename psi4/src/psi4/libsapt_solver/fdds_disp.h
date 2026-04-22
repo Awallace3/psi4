@@ -56,18 +56,25 @@ class FDDS_Dispersion {
     // Auxiliary overlap matrix
     SharedMatrix aux_overlap_;
 
-    // DFHelper object
-    std::shared_ptr<DFHelper> dfh_;
+     // DFHelper object
+     std::shared_ptr<DFHelper> dfh_;
+     std::shared_ptr<DFHelper> dfh_w_;
 
     // Cache map
     std::map<std::string, SharedMatrix> matrix_cache_;
     std::map<std::string, SharedVector> vector_cache_;
 
-    // Is hybrid functional? 
-    bool is_hybrid_;
+     // Is hybrid functional? 
+     bool is_hybrid_;
+     bool is_lrc_;
+     double omega_;
 
-    // QR factorization result
-    SharedMatrix R_A_, R_B_;
+     // QR factorization result
+     SharedMatrix R_A_, R_B_;
+
+     SharedMatrix QR_impl(std::shared_ptr<DFHelper> dfh, std::string monomer);
+     void form_X_impl(std::shared_ptr<DFHelper> exch_dfh, std::shared_ptr<DFHelper> prod_dfh, std::string monomer);
+     void form_Y_impl(std::shared_ptr<DFHelper> exch_dfh, std::shared_ptr<DFHelper> prod_dfh, std::string monomer);
 
    public:
     /**
@@ -78,9 +85,9 @@ class FDDS_Dispersion {
      * "Cvir_B", "eps_occ_B", "eps_vir_B" quantities
      * @param is_hybrid Flag of hybrid functional
      */
-    FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
-                    std::map<std::string, SharedMatrix> matrix_cache, std::map<std::string, SharedVector> vector_cache,
-                    bool is_hybrid);
+     FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
+                     std::map<std::string, SharedMatrix> matrix_cache, std::map<std::string, SharedVector> vector_cache,
+                     bool is_hybrid, bool is_lrc = false, double omega = 0.0);
 
     ~FDDS_Dispersion();
 
@@ -110,7 +117,8 @@ class FDDS_Dispersion {
      * @return ret["K2L"]  K2(lambda) = (P|ar) Lar (ar|X-Y|Q)
      * @return ret["K21L"]  K21(lambda) = (P|X-Y|ar) Lar (ar|X+Y|Q)
      */
-    std::map<std::string, SharedMatrix> form_aux_matrices(std::string monomer, double omega);
+     std::map<std::string, SharedMatrix> form_aux_matrices(std::string monomer, double omega, double x_alpha = 1.0,
+                                                           double x_beta = 0.0);
 
     /**
      * Returns the metric matrix

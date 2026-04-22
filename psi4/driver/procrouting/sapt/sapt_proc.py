@@ -36,6 +36,7 @@ from ...constants import constants
 from ...p4util.exceptions import ValidationError
 from ..empirical_disp import edisp_interaction_energy
 from .. import proc_util
+from ..dft import build_superfunctional
 from ..proc import scf_helper, run_scf, _set_external_potentials_to_wavefunction
 from . import (
     sapt_jk_terms,
@@ -151,6 +152,8 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         do_mon_grac_shift_B = True
 
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
+    sapt_sup = build_superfunctional(sapt_dft_functional.lower(), True, npoints=1, deriv=1)[0]
+    functional_needs_vv10 = sapt_sup.needs_vv10()
     e_disp_param_name = None
     do_xdm = False
     do_vv10 = False
@@ -273,6 +276,13 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         core.set_global_option("SAPT_DFT_DO_DISP", 0)
         core.set_global_option("SAPT_DFT_DO_DDFT", 1)
         do_vv10 = True
+
+    if functional_needs_vv10 and "-VV10" not in name.upper():
+        raise ValidationError(
+            "SAPT(DFT): functionals with an intrinsic VV10 term (for example, wb97m-v) "
+            "are not supported through plain SAPT(DFT) because VV10 conflicts with the "
+            "natural FDDS dispersion model. Use DFT-VV10(SAPT) instead."
+        )
 
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
     do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
@@ -1393,22 +1403,10 @@ def sapt_dft(
         is_x_hybrid = wfn_B.functional().is_x_hybrid()
         is_x_lrc = wfn_B.functional().is_x_lrc()
         hybrid_specified = core.has_option_changed("SAPT", "SAPT_DFT_DO_HYBRID")
-        if is_x_lrc:
-            if do_hybrid:
-                if hybrid_specified:
-                    raise ValidationError(
-                        "SAPT(DFT): Hybrid xc kernel not yet implemented for range-separated funtionals."
-                    )
-                else:
-                    core.print_out(
-                        "Warning: Hybrid xc kernel not yet implemented for range-separated funtionals; hybrid kernel capability is turned off.\n"
-                    )
-            is_hybrid = False
+        if do_hybrid:
+            is_hybrid = is_x_hybrid
         else:
-            if do_hybrid:
-                is_hybrid = is_x_hybrid
-            else:
-                is_hybrid = False
+            is_hybrid = False
 
         # Dispersion
         core.timer_on("SAPT(DFT):disp")
@@ -1426,10 +1424,13 @@ def sapt_dft(
             core.timer_on("FDDS disp")
             core.print_out("\n")
             x_alpha = wfn_B.functional().x_alpha()
+            x_beta = wfn_B.functional().x_beta() if is_x_lrc else 0.0
+            omega = wfn_B.functional().x_omega() if is_x_lrc else 0.0
             if not is_hybrid:
                 x_alpha = 0.0
+                x_beta = 0.0
             fdds_disp = sapt_mp2.df_fdds_dispersion(
-                primary_basis, aux_basis, cache, is_hybrid, x_alpha
+                primary_basis, aux_basis, cache, is_hybrid, x_alpha, x_beta, is_x_lrc, omega
             )
             data.update(fdds_disp)
             nfrozen_A = 0
