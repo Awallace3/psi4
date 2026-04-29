@@ -110,14 +110,16 @@ def test_dftxdm_sapt():
     """Check that DFT-XDM(SAPT) reproduces CP DFT+XDM interaction energy."""
     mol_dimer = psi4.geometry(
         """
-  O -2.930978458   -0.216411437    0.000000000
-  H -3.655219777    1.440921844    0.000000000
-  H -1.133225297    0.076934530    0.000000000
+  O -2.930978458   -0.216411437    100.000000000
+  H -3.655219777    1.440921844    100.000000000
+  H -1.133225297    0.076934530    100.000000000
    --
-  O  2.552311356    0.210645882    0.000000000
-  H  3.175492012   -0.706268134   -1.433472544
-  H  3.175492012   -0.706268134    1.433472544
+  O  2.552311356    0.210645882    100.000000000
+  H  3.175492012   -0.706268134     98.566527456
+  H  3.175492012   -0.706268134    101.433472544
   units bohr
+  no_com
+  no_reorient
 """
     )
     dft_functional = "pbe0"
@@ -163,6 +165,26 @@ def test_dftxdm_sapt():
     DFT_XDM_IE_from_dDFT = DFT_IE_from_dDFT + XDM_IE * hartree_to_kcalmol
     assert compare_values(dft_xdm_IE, DFT_XDM_IE_from_dDFT, 7, "DFT+XDM IE")
 
+    mol_dimer = psi4.geometry(
+        """
+  O -2.930978458   -0.216411437    0.000000000
+  H -3.655219777    1.440921844    0.000000000
+  H -1.133225297    0.076934530    0.000000000
+   --
+  O  2.552311356    0.210645882    0.000000000
+  H  3.175492012   -0.706268134   -1.433472544
+  H  3.175492012   -0.706268134    1.433472544
+  units bohr
+  no_com
+  no_reorient
+"""
+    )
+    dft_xdm_IE_shifted = (
+        psi4.energy(dft_functional + "-xdm", bsse_type="CP", molecule=mol_dimer)
+        * hartree_to_kcalmol
+    )
+    assert compare_values(dft_xdm_IE, dft_xdm_IE_shifted, 7, "DFT IE with shifted geometry")
+
 @pytest.mark.xdm
 def test_dftxdm_sapt_benzene():
     """Check that DFT-XDM(SAPT) reproduces CP DFT+XDM interaction energy."""
@@ -206,14 +228,23 @@ no_reorient
     dft_functional = "b3lyp"
     psi4.set_options(
         {
-            "basis": "aug-cc-pvdz",
             "e_convergence": 1e-8,
             "d_convergence": 1e-8,
             "sapt_dft_grac_shift_a": 0.08032160,
             "sapt_dft_grac_shift_b": 0.08032160,
-            # "SAPT_DFT_GRAC_COMPUTE": "ITERATIVE",
             "SAPT_DFT_FUNCTIONAL": dft_functional,
-            'XDM_DISPERSION_PARAMETERS': [0.7259, 1.314],
+            "basis": "sto-3g",
+            # "basis": "aug-cc-pv(d+d)z",
+            "scf_type": "df",
+            "mp2_type": "df",
+            "guess": "sad",
+            "freeze_core": "true",
+            "SAPT_DFT_DO_FSAPT": "NONE",
+            "SAPT_DFT_USE_EINSUMS": True,
+            "FISAPT_FSAPT_FILEPATH": "none",
+            "MAXITER": 500,
+            # 'XDM_DISPERSION_PARAMETERS': [0.3150, 2.3598],
+            'XDM_DISPERSION_PARAMETERS': [0.5068, 1.8242],
         }
     )
     sapt0 = psi4.energy("sapt0") * hartree_to_kjmol
@@ -261,6 +292,32 @@ SAPT_TOTAL=-1.9417862014641745
 XDM_IE=-2.0591187901021026
 sapt0_disp=-0.2445684260007358
 sapt0_total=-0.08242858102515352
+
+# aug-cc-pv(d+d)z results with XDM_DISPERSION_PARAMETERS = [0.3150, 2.3598]
+DFT_DIMER=-1219669.212318104
+DFT_MONA=-609834.6648337845
+DFT_MONB=-609834.6648169012
+DISP =-1.0145696586369477
+ELST=0.10846764107231525
+EXCH=9.918770505339391e-05
+IND=-0.0018451861549733343
+SAPT_TOTAL=-0.9078480160145525
+XDM_IE=-1.0251805977873318
+sapt0_disp=-0.24422011919524503
+sapt0_total=-0.0820802713094364
+
+# aug-cc-pv(d+d)z results with XDM_DISPERSION_PARAMETERS = [0.5068, 1.8242]
+DFT_DIMER=-1219669.2123180965
+DFT_MONA=-609834.6648337862
+DFT_MONB=-609834.6648169057
+DISP =-1.9364051307725165
+ELST=0.10846764234087544
+EXCH=9.91877042652029e-05
+IND=-0.0018451862666320235
+SAPT_TOTAL=-1.829683486994008
+XDM_IE=-1.9470160824970857
+sapt0_disp=-0.2442201191952042
+sapt0_total=-0.08208026951848707
 """
 
 
