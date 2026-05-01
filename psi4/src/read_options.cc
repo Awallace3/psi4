@@ -1930,6 +1930,10 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add("DFT_DISPERSION_PARAMETERS", new ArrayType());
         /*- Parameters defining the XDM Becke-Johnson [a1, a2] damping function parameters -*/
         options.add("XDM_DISPERSION_PARAMETERS", new ArrayType());
+        /*- Restrict XDM counterpoise post-processing to non-ghost atoms only.
+        When ``FALSE`` (default), ghost atoms retain Hirshfeld/XDM properties so
+        long-range counterpoise dimers preserve the full-system XDM treatment. -*/
+        options.add_bool("XDM_CP_ONLY_REAL_ATOMS", false);
         /*- Parameters defining the -NL/-V dispersion correction. First b, then C -*/
         options.add("NL_DISPERSION_PARAMETERS", new ArrayType());
         /*- Parameters defining the XDM [a1, a2] Becke-Johnson damping function -*/

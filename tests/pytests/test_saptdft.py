@@ -319,7 +319,84 @@ XDM_IE=-1.9470160824970857
 sapt0_disp=-0.2442201191952042
 sapt0_total=-0.08208026951848707
 """
+@pytest.mark.xdm
+def test_dftxdm_benzene():
+    """Check that DFT-XDM(SAPT) reproduces CP DFT+XDM interaction energy."""
+    # 5.51 sep, 2mer-0+37
+    mol_dimer = psi4.geometry(
+        """
+0 1
+--
+0 1
+H                     2.762292050000    -5.112510410000     3.125888580000
+H                    -1.066931810000   -11.097280610000    -2.948295900000
+H                    -2.584935580000    -6.714620220000    -2.795154380000
+H                     4.280295810000    -9.495170800000     2.972747070000
+H                    -0.613066840000    -3.651030240000     0.247085470000
+H                     2.308427070000   -12.558760780000    -0.069492790000
+C                     1.922990970000    -6.399538630000     1.793943470000
+C                    -0.227630740000    -9.810252400000    -1.616350790000
+C                    -1.075310860000    -7.309180970000    -1.532702060000
+C                     2.770671090000    -8.900610050000     1.710294740000
+C                     0.000000000000    -5.625185550000     0.177592680000
+C                     1.695360230000   -10.584605470000     0.000000000000
+--
+0 1
+H                   -11.202784020000    -5.112510410000    -9.743146330000
+H                   -15.032007880000   -11.097280610000   -15.817330810000
+H                   -16.550011650000    -6.714620220000   -15.664189300000
+H                    -9.684780250000    -9.495170800000    -9.896287850000
+H                   -14.578142910000    -3.651030240000   -12.621949440000
+H                   -11.656648990000   -12.558760780000   -12.938527700000
+C                   -12.042085090000    -6.399538630000   -11.075091450000
+C                   -14.192706810000    -9.810252400000   -14.485385700000
+C                   -15.040386920000    -7.309180970000   -14.401736970000
+C                   -11.194404980000    -8.900610050000   -11.158740170000
+C                   -13.965076070000    -5.625185550000   -12.691442230000
+C                   -12.269715830000   -10.584605470000   -12.869034910000
+units bohr
+no_com
+no_reorient
+"""
+    )
+    dft_functional = "b3lyp"
+    psi4.set_options(
+        {
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
+            "sapt_dft_grac_shift_a": 0.08032160,
+            "sapt_dft_grac_shift_b": 0.08032160,
+            "SAPT_DFT_FUNCTIONAL": dft_functional,
+            "basis": "sto-3g",
+            # "basis": "aug-cc-pv(d+d)z",
+            "scf_type": "df",
+            "mp2_type": "df",
+            "guess": "sad",
+            "freeze_core": "true",
+            "SAPT_DFT_DO_FSAPT": "NONE",
+            "SAPT_DFT_USE_EINSUMS": True,
+            "FISAPT_FSAPT_FILEPATH": "none",
+            "MAXITER": 500,
+            # 'XDM_DISPERSION_PARAMETERS': [0.3150, 2.3598],
+            'XDM_DISPERSION_PARAMETERS': [0.5068, 1.8242],
+        }
+    )
+    sapt_energy = psi4.energy("DFT-XDM(SAPT)") * hartree_to_kjmol
+    ELST = psi4.core.variable("SAPT ELST ENERGY") * hartree_to_kjmol
+    EXCH = psi4.core.variable("SAPT EXCH ENERGY") * hartree_to_kjmol
+    IND = psi4.core.variable("SAPT IND ENERGY") * hartree_to_kjmol
+    DISP = psi4.core.variable("SAPT DISP ENERGY") * hartree_to_kjmol
+    SAPT_TOTAL = psi4.core.variable("SAPT TOTAL ENERGY") * hartree_to_kjmol
+    DFT_MONA = psi4.core.variable("DFT MONOMER A ENERGY") * hartree_to_kjmol
+    DFT_MONB = psi4.core.variable("DFT MONOMER B ENERGY") * hartree_to_kjmol
+    DFT_DIMER = psi4.core.variable("DFT DIMER ENERGY") * hartree_to_kjmol
+    XDM_IE = psi4.core.variable("XDM IE") * hartree_to_kjmol
 
+    print(f"{DFT_DIMER=}\n{DFT_MONA=}\n{DFT_MONB=}")
+    print(f"{DISP =}\n{ELST=}\n{EXCH=}\n{IND=}\n{SAPT_TOTAL=}")
+    print(f"{XDM_IE=}")
+
+    print(f"{sapt0_disp=}\n{sapt0_total=}")
 
 
 @pytest.mark.saptdft

@@ -95,7 +95,8 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     auto mol = wfn->molecule();
     auto primary = wfn->basisset();
     auto& options = wfn->options();
-    int natom = mol->natom();
+    bool only_real_atoms = options.get_bool("XDM_CP_ONLY_REAL_ATOMS");
+    int natom = mol->nallatom();
     bool restricted = wfn->same_a_b_dens();
 
     // Get density matrices in AO basis (wfn stores them in SO basis)
@@ -129,20 +130,28 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     // --- Precompute Hirshfeld weights for all grid points ---
     int npoints_total = grid->npoints();
 
-    // Collect atom data
-    std::vector<int> atomic_nums(natom);
-    std::vector<std::array<double, 3>> atom_coords(natom);
+    // Collect atom data for the atoms participating in XDM post-processing.
+    std::vector<int> xdm_atoms;
+    // xdm_atoms.reserve(natom);
     for (int a = 0; a < natom; a++) {
-        atomic_nums[a] = static_cast<int>(std::lround(mol->Z(a)));
-        atom_coords[a][0] = mol->x(a);
-        atom_coords[a][1] = mol->y(a);
-        atom_coords[a][2] = mol->z(a);
+        if (only_real_atoms && mol->fZ(a) <= 0.0) continue;
+        xdm_atoms.push_back(a);
+    }
+
+    std::vector<int> atomic_nums(xdm_atoms.size());
+    std::vector<std::array<double, 3>> atom_coords(xdm_atoms.size());
+    for (size_t a = 0; a < xdm_atoms.size(); a++) {
+        int atom = xdm_atoms[a];
+        atomic_nums[a] = mol->ftrue_atomic_number(atom);
+        atom_coords[a][0] = mol->fx(atom);
+        atom_coords[a][1] = mol->fy(atom);
+        atom_coords[a][2] = mol->fz(atom);
     }
 
     // Compute Hirshfeld weights over all grid points
     ProatomDensity proatom;
     std::vector<std::vector<double>> hirshfeld_weights;
-    compute_hirshfeld_weights(proatom, natom, atomic_nums.data(),
+    compute_hirshfeld_weights(proatom, static_cast<int>(xdm_atoms.size()), atomic_nums.data(),
                               reinterpret_cast<const double (*)[3]>(atom_coords.data()), npoints_total, grid->x(),
                               grid->y(), grid->z(), hirshfeld_weights);
 
@@ -310,8 +319,8 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
         }
 
         // --- Integrate XDM moments using Hirshfeld weights ---
-        for (int a = 0; a < natom; a++) {
-            if (atomic_nums[a] < 1) continue;
+        for (size_t a = 0; a < xdm_atoms.size(); a++) {
+            int atom = xdm_atoms[a];
 
             double ax = atom_coords[a][0];
             double ay = atom_coords[a][1];
@@ -335,24 +344,25 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
                 double rho_tot = rho_a + rho_b;
 
                 // M1^2: exchange-hole dipole moment squared
-                atom_data[a].mm1 += w * h * (rho_a * (r - r1_a) * (r - r1_a) + rho_b * (r - r1_b) * (r - r1_b));
+                atom_data[atom].mm1 += w * h * (rho_a * (r - r1_a) * (r - r1_a) + rho_b * (r - r1_b) * (r - r1_b));
 
                 // M2^2: exchange-hole quadrupole moment squared
-                atom_data[a].mm2 += w * h *
-                                    (rho_a * (r * r - r1_a * r1_a) * (r * r - r1_a * r1_a) +
-                                     rho_b * (r * r - r1_b * r1_b) * (r * r - r1_b * r1_b));
+                atom_data[atom].mm2 += w * h *
+                                       (rho_a * (r * r - r1_a * r1_a) * (r * r - r1_a * r1_a) +
+                                        rho_b * (r * r - r1_b * r1_b) * (r * r - r1_b * r1_b));
 
                 // M3^2: exchange-hole octupole moment squared
                 double r3 = r * r * r;
                 double r1a3 = r1_a * r1_a * r1_a;
                 double r1b3 = r1_b * r1_b * r1_b;
-                atom_data[a].mm3 += w * h * (rho_a * (r3 - r1a3) * (r3 - r1a3) + rho_b * (r3 - r1b3) * (r3 - r1b3));
+                atom_data[atom].mm3 += w * h *
+                                       (rho_a * (r3 - r1a3) * (r3 - r1a3) + rho_b * (r3 - r1b3) * (r3 - r1b3));
 
                 // Effective atomic volume
-                atom_data[a].vol += w * h * rho_tot * r3;
+                atom_data[atom].vol += w * h * rho_tot * r3;
 
                 // Integrated charge
-                atom_data[a].charge += w * h * rho_tot;
+                atom_data[atom].charge += w * h * rho_tot;
             }
         }
 
@@ -363,8 +373,8 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     outfile->Printf("\n  ==> XDM Atomic Properties <==\n\n");
     outfile->Printf("    %5s %8s %12s %12s %12s %12s %12s\n", "Atom", "Z", "Charge", "Volume", "M1^2", "M2^2", "M3^2");
     for (int a = 0; a < natom; a++) {
-        outfile->Printf("    %5d %8d %12.6f %12.6f %12.6f %12.6f %12.6f\n", a + 1, atomic_nums[a], atom_data[a].charge,
-                        atom_data[a].vol, atom_data[a].mm1, atom_data[a].mm2, atom_data[a].mm3);
+        outfile->Printf("    %5d %8d %12.6f %12.6f %12.6f %12.6f %12.6f\n", a + 1, mol->ftrue_atomic_number(a), atom_data[a].charge,
+                         atom_data[a].vol, atom_data[a].mm1, atom_data[a].mm2, atom_data[a].mm3);
     }
     outfile->Printf("\n");
 
@@ -372,25 +382,31 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
 }
 
 // ============================================================================
-// Pairwise BJ-damped dispersion energy and gradient
+// Pairwise Becke-Johnson (BJ)-damped dispersion energy and gradient
 // ============================================================================
 
 double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::vector<AtomicData>& atoms,
                                       SharedMatrix gradient) {
-    int natom = mol->natom();
-
-    std::vector<int> real_atoms;
-    real_atoms.reserve(natom);
-    for (int i = 0; i < natom; i++) {
-        if (mol->Z(i) > 0.0) real_atoms.push_back(i);
+    int natom = mol->nallatom();
+    bool only_real_atoms = Process::environment.options.get_bool("XDM_CP_ONLY_REAL_ATOMS");
+    std::vector<int> full_to_real_atom(natom, -1);
+    for (int i = 0, ireal = 0; i < natom; i++) {
+        if (mol->fZ(i) > 0.0) full_to_real_atom[i] = ireal++;
     }
-    int nreal = static_cast<int>(real_atoms.size());
+
+    std::vector<int> active_atoms;
+    active_atoms.reserve(natom);
+    for (int i = 0; i < natom; i++) {
+        if (only_real_atoms && mol->fZ(i) <= 0.0) continue;
+        active_atoms.push_back(i);
+    }
+    int nactive = static_cast<int>(active_atoms.size());
 
     // Compute effective atomic polarizabilities
     std::vector<double> atpol(natom, 0.0);
     for (int i = 0; i < natom; i++) {
-        if (mol->Z(i) <= 0.0) continue;
-        int Z = mol->true_atomic_number(i);
+        if (mol->ftrue_atomic_number(i) < 1) continue;
+        int Z = mol->ftrue_atomic_number(i);
 
         double alpha_free = get_free_polarizability(Z);
         double vol_free = get_free_volume(Z, functional_name_);
@@ -404,7 +420,7 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
     outfile->Printf("  ==> XDM Atomic Polarizabilities <==\n\n");
     outfile->Printf("    %5s %8s %16s\n", "Atom", "Z", "Polarizability");
     for (int i = 0; i < natom; i++) {
-        outfile->Printf("    %5d %8d %16.6f\n", i + 1, static_cast<int>(std::lround(mol->Z(i))), atpol[i]);
+        outfile->Printf("    %5d %8d %16.6f\n", i + 1, mol->ftrue_atomic_number(i), atpol[i]);
     }
     outfile->Printf("\n");
 
@@ -413,11 +429,11 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
     double** gp = gradient ? gradient->pointer() : nullptr;
 
     // Create matrices to store pairwise coefficients
-    auto e_disp_pairs = std::make_shared<Matrix>("XDM PAIRWISE ENERGY", nreal, nreal);
-    auto c6_mat = std::make_shared<Matrix>("XDM C6 Coefficients", nreal, nreal);
-    auto c8_mat = std::make_shared<Matrix>("XDM C8 Coefficients", nreal, nreal);
-    auto c10_mat = std::make_shared<Matrix>("XDM C10 Coefficients", nreal, nreal);
-    auto rc_mat = std::make_shared<Matrix>("XDM Rc Coefficients", nreal, nreal);
+    auto e_disp_pairs = std::make_shared<Matrix>("XDM PAIRWISE ENERGY", nactive, nactive);
+    auto c6_mat = std::make_shared<Matrix>("XDM C6 Coefficients", nactive, nactive);
+    auto c8_mat = std::make_shared<Matrix>("XDM C8 Coefficients", nactive, nactive);
+    auto c10_mat = std::make_shared<Matrix>("XDM C10 Coefficients", nactive, nactive);
+    auto rc_mat = std::make_shared<Matrix>("XDM Rc Coefficients", nactive, nactive);
     double** c6p = c6_mat->pointer();
     double** c8p = c8_mat->pointer();
     double** c10p = c10_mat->pointer();
@@ -427,15 +443,15 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
     outfile->Printf("    %4s %4s %12s %16s %16s %16s %12s %12s %12s\n", "i", "j", "dij", "C6", "C8", "C10", "Rc",
                     "Rvdw", "E_disp");
 
-    for (int ii = 0; ii < nreal; ii++) {
-        int i = real_atoms[ii];
-        for (int jj = ii + 1; jj < nreal; jj++) {
-            int j = real_atoms[jj];
+    for (int ii = 0; ii < nactive; ii++) {
+        int i = active_atoms[ii];
+        for (int jj = ii + 1; jj < nactive; jj++) {
+            int j = active_atoms[jj];
 
             // Interatomic distance
-            double xij = mol->x(j) - mol->x(i);
-            double yij = mol->y(j) - mol->y(i);
-            double zij = mol->z(j) - mol->z(i);
+            double xij = mol->fx(j) - mol->fx(i);
+            double yij = mol->fy(j) - mol->fy(i);
+            double zij = mol->fz(j) - mol->fz(i);
             double d = std::sqrt(xij * xij + yij * yij + zij * zij);
 
             if (d < 1.0e-10) continue;
@@ -450,9 +466,18 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
             double c10 = 2.0 * fac * (atoms[i].mm1 * atoms[j].mm3 + atoms[i].mm3 * atoms[j].mm1) +
                          4.2 * fac * atoms[i].mm2 * atoms[j].mm2;
 
-            // Critical radius and vdW radius (BJ damping)
-            double rc = (std::sqrt(c8 / c6) + std::sqrt(std::sqrt(c10 / c6)) + std::sqrt(c10 / c8)) / 3.0;
-            double rvdw = a1_ * rc + a2_;
+            // Vanishing long-range coefficients should contribute zero energy
+            // rather than producing undefined BJ damping radii.
+            double rc = 0.0;
+            double rvdw = a2_;
+            if (c6 > 1.0e-30 && c8 > 1.0e-30 && c10 > 1.0e-30) {
+                rc = (std::sqrt(c8 / c6) + std::sqrt(std::sqrt(c10 / c6)) + std::sqrt(c10 / c8)) / 3.0;
+                rvdw = a1_ * rc + a2_;
+            } else {
+                c6 = 0.0;
+                c8 = 0.0;
+                c10 = 0.0;
+            }
 
             // Store coefficients in symmetric matrices
             c6p[ii][jj] = c6;
@@ -493,12 +518,18 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
                 // Wait: gradient = dE/dR_i. E = -Cn/(d^n + rvdw^n)
                 // dE/dx_i = n*Cn*d^(n-2)/(d^n+rvdw^n)^2 * (x_i - x_j)
                 // = -fgrad * xij (since xij = xj - xi)
-                gp[i][0] -= fgrad * xij;
-                gp[i][1] -= fgrad * yij;
-                gp[i][2] -= fgrad * zij;
-                gp[j][0] += fgrad * xij;
-                gp[j][1] += fgrad * yij;
-                gp[j][2] += fgrad * zij;
+                int ireal = full_to_real_atom[i];
+                int jreal = full_to_real_atom[j];
+                if (ireal >= 0) {
+                    gp[ireal][0] -= fgrad * xij;
+                    gp[ireal][1] -= fgrad * yij;
+                    gp[ireal][2] -= fgrad * zij;
+                }
+                if (jreal >= 0) {
+                    gp[jreal][0] += fgrad * xij;
+                    gp[jreal][1] += fgrad * yij;
+                    gp[jreal][2] += fgrad * zij;
+                }
             }
 
             outfile->Printf("    %4d %4d %12.6f %16.9E %16.9E %16.9E %12.6f %12.6f %12.6f\n", i + 1, j + 1, d, c6, c8,

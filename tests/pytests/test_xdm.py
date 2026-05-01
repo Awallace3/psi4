@@ -5,6 +5,7 @@ import re
 from psi4 import compare_values
 from pprint import pprint as pp
 import os
+import qcelemental as qcel
 
 pytestmark = [pytest.mark.psi, pytest.mark.api]
 
@@ -58,11 +59,11 @@ units angstrom
 
 @pytest.mark.xdm
 def test_h2o_ghosts():
-    """Ensure XDM pairwise outputs size correctly with and without ghosts.
+    """Ensure XDM ghost atoms are included by default and can be excluded.
 
     Runs a ghost-containing fragment calculation and a normal water monomer, then
-    confirms the XDM C6 matrix shape reflects only real atoms. Also confirms
-    the XDM energy matches the reference
+    confirms the default XDM post-processing includes ghost atoms while the
+    opt-in compatibility switch restores the legacy real-atom-only behavior.
     """
 
     m = psi4.geometry("""
@@ -83,16 +84,39 @@ units angstrom
             "DFT_SPHERICAL_POINTS": 590,
             "DFT_RADIAL_POINTS": 99,
             "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
+            "XDM_CP_ONLY_REAL_ATOMS": False,
         }
     )
     e_m, wfn_m = psi4.energy("b3lyp-xdm", molecule=m, return_wfn=True)
     disp_corr = wfn_m.variables()["DISPERSION CORRECTION ENERGY"]
-    ref_disp_corr = -0.0036307541858282655
+    ref_disp_corr = -0.003978192236193462
     assert np.isclose(disp_corr, ref_disp_corr, atol=1e-6), (
         f"Expected dispersion correction {ref_disp_corr}, got {disp_corr}"
     )
-    # shapes of XDM C6 COEFFICIENTS should be (3, 3)
+    print(wfn_m.variables()["XDM C6 COEFFICIENTS"].shape)
+    assert wfn_m.variables()["XDM C6 COEFFICIENTS"].shape == (6, 6)
+    assert wfn_m.variables()["XDM C8 COEFFICIENTS"].shape == (6, 6)
+    assert wfn_m.variables()["XDM C10 COEFFICIENTS"].shape == (6, 6)
+
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "DFT_SPHERICAL_POINTS": 590,
+            "DFT_RADIAL_POINTS": 99,
+            "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
+            "XDM_CP_ONLY_REAL_ATOMS": True,
+        }
+    )
+    _, wfn_m = psi4.energy("b3lyp-xdm", molecule=m, return_wfn=True)
+    disp_corr = wfn_m.variables()["DISPERSION CORRECTION ENERGY"]
     assert wfn_m.variables()["XDM C6 COEFFICIENTS"].shape == (3, 3)
+    assert wfn_m.variables()["XDM C8 COEFFICIENTS"].shape == (3, 3)
+    assert wfn_m.variables()["XDM C10 COEFFICIENTS"].shape == (3, 3)
+    ref_disp_corr = -0.003792789966032576
+    assert np.isclose(disp_corr, ref_disp_corr, atol=1e-6), (
+        f"Expected dispersion correction {ref_disp_corr}, got {disp_corr}"
+    )
+
     m = psi4.geometry("""
 0 1
 O    1.35062500   0.11146900   0.00000000
@@ -107,12 +131,13 @@ units angstrom
             "DFT_SPHERICAL_POINTS": 590,
             "DFT_RADIAL_POINTS": 99,
             "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
+            "XDM_CP_ONLY_REAL_ATOMS": False,
         }
     )
     e_m, wfn_m = psi4.energy("b3lyp-xdm", molecule=m, return_wfn=True)
     assert wfn_m.variables()["XDM C6 COEFFICIENTS"].shape == (3, 3)
     disp_corr = wfn_m.variables()["DISPERSION CORRECTION ENERGY"]
-    ref_disp_corr = -0.0038699050025764892
+    ref_disp_corr = -0.0038699045298711673
     assert np.isclose(disp_corr, ref_disp_corr, atol=1e-6), (
         f"Expected dispersion correction {ref_disp_corr}, got {disp_corr}"
     )
@@ -210,6 +235,7 @@ units angstrom
     assert compare_values(e_alias, e_kb49, 10, "-XDM alias equals -XDM(KB49)")
     assert not np.isclose(e_los_ii, e_kb49, rtol=0.0, atol=1.0e-8)
     return
+
 
 @pytest.mark.xdm
 @pytest.mark.saptdft
@@ -327,7 +353,233 @@ units angstrom
     return
 
 
+@pytest.mark.xdm
+def test_xdm_long_range_water():
+    mol_dimer = psi4.geometry(
+        """
+0 1
+Gh(O)    -1.55100700  -0.11452000   5.00000000
+Gh(H)    -1.93425900   0.76250300   5.00000000
+Gh(H)    -0.59967700   0.04071200   5.00000000
+--
+0 1
+O    1.35062500   0.11146900   0.00000000
+H    1.68039800  -0.37374100  -0.75856100
+H    1.68039800  -0.37374100   0.75856100
+units angstrom
+        """
+    )
+    psi4.set_options(
+        {
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
+            "basis": "sto-3g",
+            # "basis": "aug-cc-pvdz",
+            "scf_type": "df",
+            "mp2_type": "df",
+            "guess": "sad",
+            "freeze_core": "true",
+            "MAXITER": 500,
+            "XDM_DISPERSION_PARAMETERS": [0.5068, 1.8242],
+            "XDM_CP_ONLY_REAL_ATOMS": False,
+        }
+    )
+    psi4.energy("b3lyp-xdm", molecule=mol_dimer)
+    psi4.set_options({"XDM_CP_ONLY_REAL_ATOMS": True})
+    psi4.energy("b3lyp-xdm", molecule=mol_dimer)
+    return
+
+
+@pytest.mark.xdm
+def test_xdm_long_range():
+#             Min. Sep. (A)  xdm total  d3 total  sapt0 total   ref
+# entry_name                                                       
+# 2mer-0+37            5.51      -0.91     -0.14        -0.08 -0.09
+    """
+0 1
+--
+0 1
+H                     2.762292050000    -5.112510410000     3.125888580000
+H                    -1.066931810000   -11.097280610000    -2.948295900000
+H                    -2.584935580000    -6.714620220000    -2.795154380000
+H                     4.280295810000    -9.495170800000     2.972747070000
+H                    -0.613066840000    -3.651030240000     0.247085470000
+H                     2.308427070000   -12.558760780000    -0.069492790000
+C                     1.922990970000    -6.399538630000     1.793943470000
+C                    -0.227630740000    -9.810252400000    -1.616350790000
+C                    -1.075310860000    -7.309180970000    -1.532702060000
+C                     2.770671090000    -8.900610050000     1.710294740000
+C                     0.000000000000    -5.625185550000     0.177592680000
+C                     1.695360230000   -10.584605470000     0.000000000000
+--
+0 1
+H                   -11.202784020000    -5.112510410000    -9.743146330000
+H                   -15.032007880000   -11.097280610000   -15.817330810000
+H                   -16.550011650000    -6.714620220000   -15.664189300000
+H                    -9.684780250000    -9.495170800000    -9.896287850000
+H                   -14.578142910000    -3.651030240000   -12.621949440000
+H                   -11.656648990000   -12.558760780000   -12.938527700000
+C                   -12.042085090000    -6.399538630000   -11.075091450000
+C                   -14.192706810000    -9.810252400000   -14.485385700000
+C                   -15.040386920000    -7.309180970000   -14.401736970000
+C                   -11.194404980000    -8.900610050000   -11.158740170000
+C                   -13.965076070000    -5.625185550000   -12.691442230000
+C                   -12.269715830000   -10.584605470000   -12.869034910000
+units bohr
+no_com
+no_reorient
+
+"""
+#             Min. Sep. (A)  xdm total  d3 total  sapt0 total   ref
+# entry_name                                                       
+# 2mer-0+37            5.51      -0.91     -0.14        -0.08 -0.09
+    """
+0 1
+--
+0 1
+H                     2.762292050000    -5.112510410000     3.125888580000
+H                    -1.066931810000   -11.097280610000    -2.948295900000
+H                    -2.584935580000    -6.714620220000    -2.795154380000
+H                     4.280295810000    -9.495170800000     2.972747070000
+H                    -0.613066840000    -3.651030240000     0.247085470000
+H                     2.308427070000   -12.558760780000    -0.069492790000
+C                     1.922990970000    -6.399538630000     1.793943470000
+C                    -0.227630740000    -9.810252400000    -1.616350790000
+C                    -1.075310860000    -7.309180970000    -1.532702060000
+C                     2.770671090000    -8.900610050000     1.710294740000
+C                     0.000000000000    -5.625185550000     0.177592680000
+C                     1.695360230000   -10.584605470000     0.000000000000
+--
+0 1
+H                   -11.202784020000    -5.112510410000    -9.743146330000
+H                   -15.032007880000   -11.097280610000   -15.817330810000
+H                   -16.550011650000    -6.714620220000   -15.664189300000
+H                    -9.684780250000    -9.495170800000    -9.896287850000
+H                   -14.578142910000    -3.651030240000   -12.621949440000
+H                   -11.656648990000   -12.558760780000   -12.938527700000
+C                   -12.042085090000    -6.399538630000   -11.075091450000
+C                   -14.192706810000    -9.810252400000   -14.485385700000
+C                   -15.040386920000    -7.309180970000   -14.401736970000
+C                   -11.194404980000    -8.900610050000   -11.158740170000
+C                   -13.965076070000    -5.625185550000   -12.691442230000
+C                   -12.269715830000   -10.584605470000   -12.869034910000
+units bohr
+no_com
+no_reorient
+
+"""
+#             Min. Sep. (A)  xdm total  d3 total  sapt0 total   ref
+# entry_name                                                       
+# 2mer-0+1             2.54      -6.07     -6.05        -6.81 -6.00
+    """
+0 1
+--
+0 1
+H                     2.762292050000    -5.112510410000     3.125888580000
+H                    -1.066931810000   -11.097280610000    -2.948295900000
+H                    -2.584935580000    -6.714620220000    -2.795154380000
+H                     4.280295810000    -9.495170800000     2.972747070000
+H                    -0.613066840000    -3.651030240000     0.247085470000
+H                     2.308427070000   -12.558760780000    -0.069492790000
+C                     1.922990970000    -6.399538630000     1.793943470000
+C                    -0.227630740000    -9.810252400000    -1.616350790000
+C                    -1.075310860000    -7.309180970000    -1.532702060000
+C                     2.770671090000    -8.900610050000     1.710294740000
+C                     0.000000000000    -5.625185550000     0.177592680000
+C                     1.695360230000   -10.584605470000     0.000000000000
+--
+0 1
+H                    -8.049469850000     3.788099640000     3.125888580000
+H                    -4.220245990000    -2.196670560000    -2.948295900000
+H                    -2.702242220000     2.185989830000    -2.795154380000
+H                    -9.567473610000    -0.594560750000     2.972747070000
+H                    -4.674110960000     5.249579810000     0.247085470000
+H                    -7.595604870000    -3.658150730000    -0.069492790000
+C                    -7.210168770000     2.501071420000     1.793943470000
+C                    -5.059547060000    -0.909642350000    -1.616350790000
+C                    -4.211866940000     1.591429080000    -1.532702060000
+C                    -8.057848890000     0.000000000000     1.710294740000
+C                    -5.287177800000     3.275424500000     0.177592680000
+C                    -6.982538030000    -1.683995420000     0.000000000000
+units bohr
+no_com
+no_reorient
+
+"""
+    mol_dimer = psi4.geometry(
+#             Min. Sep. (A)  xdm total  d3 total  sapt0 total   ref
+# entry_name                                                       
+# 2mer-0+37            5.51      -0.91     -0.14        -0.08 -0.09
+        """
+0 1
+--
+0 1
+H                     2.762292050000    -5.112510410000     3.125888580000
+H                    -1.066931810000   -11.097280610000    -2.948295900000
+H                    -2.584935580000    -6.714620220000    -2.795154380000
+H                     4.280295810000    -9.495170800000     2.972747070000
+H                    -0.613066840000    -3.651030240000     0.247085470000
+H                     2.308427070000   -12.558760780000    -0.069492790000
+C                     1.922990970000    -6.399538630000     1.793943470000
+C                    -0.227630740000    -9.810252400000    -1.616350790000
+C                    -1.075310860000    -7.309180970000    -1.532702060000
+C                     2.770671090000    -8.900610050000     1.710294740000
+C                     0.000000000000    -5.625185550000     0.177592680000
+C                     1.695360230000   -10.584605470000     0.000000000000
+--
+0 1
+H                   -11.202784020000    -5.112510410000    -9.743146330000
+H                   -15.032007880000   -11.097280610000   -15.817330810000
+H                   -16.550011650000    -6.714620220000   -15.664189300000
+H                    -9.684780250000    -9.495170800000    -9.896287850000
+H                   -14.578142910000    -3.651030240000   -12.621949440000
+H                   -11.656648990000   -12.558760780000   -12.938527700000
+C                   -12.042085090000    -6.399538630000   -11.075091450000
+C                   -14.192706810000    -9.810252400000   -14.485385700000
+C                   -15.040386920000    -7.309180970000   -14.401736970000
+C                   -11.194404980000    -8.900610050000   -11.158740170000
+C                   -13.965076070000    -5.625185550000   -12.691442230000
+C                   -12.269715830000   -10.584605470000   -12.869034910000
+units bohr
+no_com
+no_reorient
+        """
+    )
+    psi4.set_options(
+        {
+            "e_convergence": 1e-8,
+            "d_convergence": 1e-8,
+            # "basis": "sto-3g",
+            "basis": "aug-cc-pvdz",
+            "scf_type": "df",
+            "mp2_type": "df",
+            "guess": "sad",
+            "freeze_core": "true",
+            "MAXITER": 500,
+            "XDM_DISPERSION_PARAMETERS": [0.7259, 1.3140],
+            "XDM_CP_ONLY_REAL_ATOMS": False,
+        }
+    )
+    ha_to_kjmol = qcel.constants.conversion_factor("hartree", "kJ/mol")
+    e_ie_cp_ghost = psi4.energy("b3lyp-xdm", molecule=mol_dimer, bsse_type="cp") * ha_to_kjmol
+    print(f"IE CP g: {e_ie_cp_ghost:.2f} kJ/mol")
+
+    psi4.set_options({"XDM_CP_ONLY_REAL_ATOMS": True})
+
+    e_ie_cp = psi4.energy("b3lyp-xdm", molecule=mol_dimer, bsse_type="cp") * ha_to_kjmol
+    print(f"IE CP  : {e_ie_cp:.2f} kJ/mol")
+    e_ie_no_cp = psi4.energy("b3lyp-xdm", molecule=mol_dimer, bsse_type="nocp") * ha_to_kjmol
+    print(f"IE CP g: {e_ie_cp_ghost:.2f} kJ/mol")
+    print(f"IE CP  : {e_ie_cp:.2f} kJ/mol")
+    print(f"IE NOCP: {e_ie_no_cp:.2f} kJ/mol")
+    # Interaction energy with XDM: -5.84 kJ/mol
+    # Interaction energy without CP: -9.82 kJ/mol
+    return
+
 
 if __name__ == "__main__":
     # pytest.main([__file__, "-x", "-v"])
-    test_xdm_models_and_alias_sapt()
+    # test_h2o_ghosts()
+    # test_xdm_models_and_alias_sapt()
+    # test_xdm_long_range_water()
+    test_xdm_long_range()
