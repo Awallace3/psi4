@@ -1,0 +1,3 @@
+2026-05-29:22:56:28,443 INFO     [psi4.driver.task_planner:259] PLANNING Atomic:  keywords={'D_CONVERGENCE': 1e-10, 'E_CONVERGENCE': 1e-10, 'FREEZE_CORE': 'TRUE', 'SAPT_DFT_FUNCTIONAL': 'HF', 'SAPT_DFT_MP2_DISP_ALG': 'FISAPT', 'SCF_TYPE': 'DF', 'function_kwargs': {'external_potentials': {'A': [array([[-0.595585,  0.      ,  0.      , -8.      ]]), None]}}}
+2026-05-29:22:56:28,446 INFO     [psi4.driver.driver:531] Compute energy(): method=sapt(dft), basis=jun-cc-pvdz, molecule=Trimer_0_2_5, nre=45.31468531468531
+2026-05-29:22:56:29,436 INFO     [psi4.driver.driver:534] Return energy(): 0.00017506165095498654

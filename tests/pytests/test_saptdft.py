@@ -1341,16 +1341,16 @@ if __name__ == "__main__":
     psi4.set_memory("32 GB")
     psi4.set_num_threads(12)
     # pytest this file
-    # test_fisapt0_sapthf_external_potential(True)
-    test_saptdft_auto_grac(
-            "ITERATIVE",
-            0.2303073898,
-            0.19830016,
-            None,
-            None,
-            "hydroxide",
-            None,
-        )
+    test_fisapt0_sapthf_external_potential(True)
+    # test_saptdft_auto_grac(
+    #         "ITERATIVE",
+    #         0.2303073898,
+    #         0.19830016,
+    #         None,
+    #         None,
+    #         "hydroxide",
+    #         None,
+    #     )
     # test_sapt_dft_compute_ddft_d4_auto_grac()
     # test_fisapt0_sapthf_external_potential(False)
     # test_qcng_embedded_saptdft()

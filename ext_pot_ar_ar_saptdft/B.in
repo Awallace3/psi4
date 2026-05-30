@@ -1,0 +1,28 @@
+memory 8 GB
+
+molecule Trimer_0_2_5 {  
+Ar 0 0 0  
+--  
+Ar 0 0 7.15  
+units = au  
+no_com  
+no_reorient  
+}  
+
+chargefield_point = np.array([
+-0.595585, 0, 0, -8,  
+]).reshape(-1, 4)  
+
+set {
+  basis jun-cc-pvdz  
+  e_convergence 8  
+  d_convergence 8  
+  scf_type df 
+  freeze_core true  
+  SAPT_DFT_MP2_DISP_ALG FISAPT  
+  SAPT_DFT_FUNCTIONAL pbe0  
+  SAPT_DFT_GRAC_COMPUTE SINGLE
+  MAXITER 500
+}  
+
+energy('sapt(dft)', external_potentials={"B": [chargefield_point, None]})
