@@ -3,7 +3,7 @@
 #
 # Psi4: an open-source quantum chemistry software package
 #
-# Copyright (c) 2007-2025 The Psi4 Developers.
+# Copyright (c) 2007-2026 The Psi4 Developers.
 #
 # The copyrights for code used from other parties are included in
 # the corresponding files.
@@ -51,12 +51,13 @@ __all__ = [
 
 import math
 import os
+import pathlib
 import re
 import uuid
 import warnings
+import functools
 from collections import Counter
 from itertools import product
-from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -68,6 +69,16 @@ from psi4 import core, extras
 from .. import qcdb
 from . import optproc
 from .exceptions import TestComparisonError, UpgradeHelper, ValidationError
+
+def _deprecate_method(cls, name, message):
+    original = getattr(cls, name)
+
+    @functools.wraps(original)
+    def wrapper(self, *args, **kwargs):
+        warnings.warn(message, category=FutureWarning, stacklevel=2)
+        return original(self, *args, **kwargs)
+
+    setattr(cls, name, wrapper)
 
 ## Python basis helps
 
@@ -246,7 +257,7 @@ core.Wavefunction.get_scratch_filename = _core_wavefunction_get_scratch_filename
 
 
 @staticmethod
-def _core_wavefunction_from_file(wfn_data: Union[str, Dict, Path]) -> core.Wavefunction:
+def _core_wavefunction_from_file(wfn_data: Union[str, Dict, "pathlib.Path"]) -> core.Wavefunction:
     r"""Build Wavefunction from data laid out like
     :meth:`~psi4.core.Wavefunction.to_file`.
 
@@ -618,6 +629,14 @@ def set_module_options(module: str, options_dict: Dict[str, Any]) -> None:
     for k, v, in options_dict.items():
         core.set_local_option(module.upper(), k.upper(), v)
 
+_deprecate_method(
+    core.Options, "set_read_globals",
+    "The Python export of Options.set_read_globals is deprecated due to disuse and because it is slightly hazardous. Unless someone speaks up, 1.12 will be the last release to have it."
+)
+_deprecate_method(
+    core.Options, "read_globals",
+    "The Python export of Options.read_globals is deprecated due to disuse and to better hide C++ implementation details. Unless someone speaks up, 1.12 will be the last release to have it."
+)
 
 ## OEProp helpers
 
@@ -1060,7 +1079,7 @@ def plump_qcvar(
     elif "GRADIENT" in key.upper():
         reshaper = (-1, 3)
     elif "HESSIAN" in key.upper():
-        ndof = int(math.sqrt(len(tgt)))
+        ndof = int(math.sqrt(tgt.size))
         reshaper = (ndof, ndof)
     else:
         raise ValidationError(f'Uncertain how to reshape array: {key}')
@@ -1614,5 +1633,3 @@ def _core_triplet(A, B, C, transA, transB, transC):
 # removed in v1.10 to reduce API footprint. deprecated 1.4 and no-op since 1.9
 core.Matrix.doublet = staticmethod(_core_doublet)
 core.Matrix.triplet = staticmethod(_core_triplet)
-
-
