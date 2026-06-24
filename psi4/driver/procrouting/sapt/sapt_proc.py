@@ -562,6 +562,13 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             # set for fisapt_obj.drop for saptdft_fisapt.py::setup_fisapt_object
             data["DHF VALUE"] = dhf_value
 
+            # Preserve SAPT(HF) component values before sapt_dft() overwrites
+            # them with DFT-level values under the same key names.
+            _hf_total_keys = {"HF DIMER", "HF MONOMER A", "HF MONOMER B", "extern_extern_IE"}
+            for _k, _v in hf_data.items():
+                if _k not in _hf_total_keys:
+                    data[f"SAPT(HF) {_k}"] = _v
+
             core.print_out("\n")
             core.print_out(
                 print_sapt_hf_summary(

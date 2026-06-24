@@ -52,14 +52,14 @@ def print_sapt_hf_summary(data, name, dimer_wfn, short=False, delta_hf=False):
     ret += print_sapt_var("Electrostatics", data["Elst10,r"]) + "\n"
     ret += print_sapt_var("  Elst10,r", data["Elst10,r"]) + "\n"
     ret += "\n"
-    core.set_variable("SAPT ELST ENERGY", data["Elst10,r"])
+    core.set_variable("SAPT(HF) ELST ENERGY", data["Elst10,r"])
 
     # Exchange
     ret += print_sapt_var("Exchange", data["Exch10"]) + "\n"
     ret += print_sapt_var("  Exch10", data["Exch10"]) + "\n"
     ret += print_sapt_var("  Exch10(S^2)", data["Exch10(S^2)"]) + "\n"
     ret += "\n"
-    core.set_variable("SAPT EXCH ENERGY", data["Exch10"])
+    core.set_variable("SAPT(HF) EXCH ENERGY", data["Exch10"])
 
     # Induction (no dHF)
     ind = data["Ind20,r"] + data["Exch-Ind20,r"]
@@ -72,7 +72,7 @@ def print_sapt_hf_summary(data, name, dimer_wfn, short=False, delta_hf=False):
     ret += print_sapt_var("  Induction (A<-B) (no dHF)", ind_ab) + "\n"
     ret += print_sapt_var("  Induction (A->B) (no dHF)", ind_ba) + "\n"
     ret += "\n"
-    core.set_variable("SAPT IND ENERGY", ind)
+    core.set_variable("SAPT(HF) IND ENERGY", ind)
 
     if delta_hf:
         total_sapt = (data["Elst10,r"] + data["Exch10"] + ind)
