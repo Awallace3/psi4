@@ -26,6 +26,10 @@
 # @END LICENSE
 #
 
+import json
+import os
+from pathlib import Path
+
 import numpy as np
 
 from psi4 import core
@@ -59,6 +63,189 @@ except ImportError:
 
 # Only export the run_ scripts
 __all__ = ["run_sapt_dft", "sapt_dft", "run_sf_sapt"]
+
+
+_SAPTDFT_CHECKPOINT_STAGES = [
+    "grac_monomer_a",
+    "grac_monomer_b",
+    "hf_dimer_scf",
+    "hf_monomer_a_scf",
+    "hf_monomer_b_scf",
+    "hf_sapt_jk",
+    "hf_sapt_elst",
+    "hf_sapt_exch",
+    "hf_sapt_ind",
+    "dimer_localization_scf",
+    "monomer_a_dft_scf",
+    "monomer_b_dft_scf",
+    "delta_dft_dimer_scf",
+    "delta_dft_monomer_a_scf",
+    "delta_dft_monomer_b_scf",
+    "delta_dft",
+    "build_jk",
+    "elst",
+    "exch",
+    "ind",
+    "fsapt_setup",
+    "fsapt_elst",
+    "fsapt_exch",
+    "fsapt_ind",
+    "disp",
+    "fsapt_disp",
+    "fsapt_final",
+    "final",
+]
+
+
+class _SAPTDFTCheckpoint:
+    """Small SAPT(DFT) wavefunction/data checkpoint manager."""
+
+    _wfn_files = {
+        "dimer_wfn": "dimer",
+        "wfn_A": "wfn_A",
+        "wfn_B": "wfn_B",
+        "hf_wfn_dimer": "hf_dimer",
+        "hf_wfn_A": "hf_A",
+        "hf_wfn_B": "hf_B",
+    }
+
+    def __init__(self):
+        cp_dir = os.environ.get("PSI4_CHECKPOINT_DIR", "")
+        self.active = bool(cp_dir)
+        self.path = Path(cp_dir) if self.active else None
+        self.manifest = self.path / "saptdft_state.json" if self.active else None
+        self.stage = None
+        self.data = {}
+        self.wfns = {}
+        self.recompute_required = False
+        if self.active:
+            self.path.mkdir(parents=True, exist_ok=True)
+
+    def _idx(self, stage):
+        try:
+            return _SAPTDFT_CHECKPOINT_STAGES.index(stage)
+        except ValueError:
+            return -1
+
+    def reached(self, stage):
+        return self.active and self.stage is not None and self._idx(self.stage) >= self._idx(stage) >= 0
+
+    def _jsonable_data(self, data):
+        clean = {}
+        for key, val in (data or {}).items():
+            if isinstance(val, np.generic):
+                val = val.item()
+            if isinstance(val, (str, bool, int, float)) or val is None:
+                clean[str(key)] = val
+        return clean
+
+    def load(self):
+        if not self.active or not self.manifest.exists():
+            return {}
+        try:
+            with self.manifest.open() as handle:
+                state = json.load(handle)
+            self.stage = state.get("stage")
+            self.data = state.get("data", {}) or {}
+            wfn_state = state.get("wfns", {}) or {}
+            for key, stem in self._wfn_files.items():
+                if not wfn_state.get(key):
+                    continue
+                file_path = self.path / f"{stem}.npy"
+                if not file_path.exists():
+                    raise ValidationError(f"SAPT(DFT) checkpoint manifest references missing wavefunction file {file_path}")
+                self.wfns[key] = core.Wavefunction.from_file(str(file_path))
+            # Wavefunction.from_file reconstructs base Wavefunction objects in current Psi4;
+            # SAPT induction needs SCF subclass methods like set_jk/cphf_Hx. If those are
+            # absent, keep the checkpoint as a completed-stop marker but recompute the
+            # volatile SCF objects rather than using invalid deserialized objects.
+            if any(k in self.wfns and not hasattr(self.wfns[k], "set_jk") for k in ("wfn_A", "wfn_B", "hf_wfn_A", "hf_wfn_B")):
+                self.recompute_required = True
+            core.print_out(f"\n  SAPT(DFT) checkpoint: loaded stage {self.stage} from {self.path}\n")
+        except ValidationError:
+            raise
+        except Exception as exc:
+            core.print_out(f"\n  SAPT(DFT) checkpoint: ignoring incompatible checkpoint in {self.path}: {exc}\n")
+            self.stage = None
+            self.data = {}
+            self.wfns = {}
+        return {"stage": self.stage, "data": self.data, **self.wfns}
+
+    def save(self, stage, dimer_wfn=None, wfn_A=None, wfn_B=None, hf_wfn_dimer=None, hf_wfn_A=None, hf_wfn_B=None, data=None):
+        if not self.active:
+            return
+        # Do not regress the recorded restart level when an earlier prerequisite
+        # (for example the JK/cache rebuild) is regenerated during restart.
+        manifest_stage = stage
+        if self.stage is not None and self._idx(self.stage) > self._idx(stage):
+            manifest_stage = self.stage
+        wfns = {
+            "dimer_wfn": dimer_wfn,
+            "wfn_A": wfn_A,
+            "wfn_B": wfn_B,
+            "hf_wfn_dimer": hf_wfn_dimer,
+            "hf_wfn_A": hf_wfn_A,
+            "hf_wfn_B": hf_wfn_B,
+        }
+        existing = {}
+        if self.manifest.exists():
+            try:
+                with self.manifest.open() as handle:
+                    existing = (json.load(handle).get("wfns", {}) or {})
+            except Exception:
+                existing = {}
+        wfn_manifest = dict(existing)
+        for key, wfn in wfns.items():
+            if wfn is None:
+                continue
+            wfn.to_file(str(self.path / self._wfn_files[key]))
+            wfn_manifest[key] = True
+            self.wfns[key] = wfn
+        self.stage = manifest_stage
+        self.data = self._jsonable_data(data)
+        state = {"stage": manifest_stage, "data": self.data, "wfns": wfn_manifest}
+        tmp = self.manifest.with_suffix(".json.tmp")
+        with tmp.open("w") as handle:
+            json.dump(state, handle, indent=2, sort_keys=True)
+        os.replace(tmp, self.manifest)
+        core.print_out(f"\n  SAPT(DFT) checkpoint: saved stage {manifest_stage} to {self.path}\n")
+        self.maybe_stop(stage)
+
+    def maybe_stop(self, stage):
+        if self.active and os.environ.get("PSI4_CHECKPOINT_STOP_AFTER") == stage:
+            raise RuntimeError(f"SAPT(DFT) checkpoint stop after {stage}")
+
+
+def _saptdft_wfn_jk(wfn):
+    """Return a wavefunction JK object when present; deserialized base Wavefunctions do not retain one."""
+    try:
+        jk_getter = getattr(wfn, "jk")
+    except AttributeError:
+        return None
+    try:
+        return jk_getter()
+    except Exception:
+        return None
+
+
+def _saptdft_functional_value(wfn, method, default):
+    """Return an HF/DFT functional property, with safe defaults for deserialized base Wavefunctions."""
+    try:
+        functional = wfn.functional()
+        attr = getattr(functional, method)
+        return attr() if callable(attr) else attr
+    except Exception:
+        return default
+
+
+def _saptdft_checkpoint_cache_arrays(wfn, cache, keys):
+    """Attach selected Matrix cache entries to a wfn before serialization."""
+    if wfn is None:
+        return
+    for key in keys:
+        value = cache.get(key)
+        if isinstance(value, core.Matrix):
+            wfn.set_variable(f"SAPTDFT CHECKPOINT {key}", value)
 
 
 def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
@@ -330,32 +517,62 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         core.print_out("       DFT (Monomer B: No Asymptotic Correction)\n")
 
     core.print_out("\n")
-    core.print_out("   Beginning setup computations\n")
 
-    if do_mon_grac_shift_A:
-        core.print_out("     GRAC (Monomer A)\n")
-        mon_a_shift = compute_GRAC_shift(
-            monomerA_mon_only_bf,
-            grac_compute,
-            "Monomer A",
-        )
-    if do_mon_grac_shift_B:
-        core.print_out("     GRAC (Monomer B)\n")
-        mon_b_shift = compute_GRAC_shift(
-            monomerB_mon_only_bf,
-            grac_compute,
-            "Monomer B",
-        )
-
-    core.set_variable("SAPT DFT GRAC SHIFT A", mon_a_shift)  # P::e SAPT
-    core.set_variable("SAPT DFT GRAC SHIFT B", mon_b_shift)  # P::e SAPT
-    core.print_out("\n")
     do_ext_potential = kwargs.get("external_potentials")
     external_potentials = kwargs.pop("external_potentials", {})
     # Ensure that external potential label is case-insentive
     external_potentials = {k.upper(): v for k, v in external_potentials.items()}
     if do_ext_potential:
         kwargs["external_potentials"] = {}
+
+    checkpoint = _SAPTDFTCheckpoint()
+    if checkpoint.active and do_ext_potential:
+        raise ValidationError("SAPT(DFT) checkpointing is not supported with external_potentials.")
+    checkpoint_state = checkpoint.load()
+    if checkpoint.recompute_required:
+        core.print_out("\n  SAPT(DFT) checkpoint: serialized SCF wavefunctions lack JK/CPHF methods; recomputing volatile SCF objects.\n")
+        checkpoint.stage = None
+        checkpoint.data = {}
+        checkpoint.wfns = {}
+        checkpoint_state = {}
+    data.update(checkpoint_state.get("data", {}))
+    dimer_wfn = checkpoint_state.get("dimer_wfn")
+    wfn_A = checkpoint_state.get("wfn_A")
+    wfn_B = checkpoint_state.get("wfn_B")
+    hf_wfn_dimer = checkpoint_state.get("hf_wfn_dimer")
+    hf_wfn_A = checkpoint_state.get("hf_wfn_A")
+    hf_wfn_B = checkpoint_state.get("hf_wfn_B")
+
+    core.print_out("   Beginning setup computations\n")
+
+    if do_mon_grac_shift_A:
+        core.print_out("     GRAC (Monomer A)\n")
+        if checkpoint.reached("grac_monomer_a"):
+            mon_a_shift = data["SAPT DFT GRAC SHIFT A"]
+        else:
+            mon_a_shift = compute_GRAC_shift(
+                monomerA_mon_only_bf,
+                grac_compute,
+                "Monomer A",
+            )
+            data["SAPT DFT GRAC SHIFT A"] = mon_a_shift
+            checkpoint.save("grac_monomer_a", data=data)
+    if do_mon_grac_shift_B:
+        core.print_out("     GRAC (Monomer B)\n")
+        if checkpoint.reached("grac_monomer_b"):
+            mon_b_shift = data["SAPT DFT GRAC SHIFT B"]
+        else:
+            mon_b_shift = compute_GRAC_shift(
+                monomerB_mon_only_bf,
+                grac_compute,
+                "Monomer B",
+            )
+            data["SAPT DFT GRAC SHIFT B"] = mon_b_shift
+            checkpoint.save("grac_monomer_b", data=data)
+
+    core.set_variable("SAPT DFT GRAC SHIFT A", mon_a_shift)  # P::e SAPT
+    core.set_variable("SAPT DFT GRAC SHIFT B", mon_b_shift)  # P::e SAPT
+    core.print_out("\n")
 
     def construct_external_potential_in_field_C(arrays):
         output = []
@@ -391,7 +608,6 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     core.set_global_option("DF_INTS_IO", "SAVE")
 
     # Compute dimer wavefunction
-    hf_wfn_dimer = None
 
     # Need to collect external potentials (if exist) to properly set on each
     # SCF correctly. To use scf_helper for SAPT external potentials, we have to
@@ -410,56 +626,67 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         hf_data = {}
 
         core.set_local_option("SCF", "SAVE_JK", True)
-        if do_ext_potential:
-            kwargs["external_potentials"]["C"] = (
-                construct_external_potential_in_field_C(
-                    [ext_pot_C, ext_pot_A, ext_pot_B]
+        if not checkpoint.reached("hf_dimer_scf"):
+            if do_ext_potential:
+                kwargs["external_potentials"]["C"] = (
+                    construct_external_potential_in_field_C(
+                        [ext_pot_C, ext_pot_A, ext_pot_B]
+                    )
                 )
+            hf_wfn_dimer = scf_helper(
+                "SCF", molecule=sapt_dimer, banner="SAPT(DFT): delta HF Dimer", **kwargs
             )
-        hf_wfn_dimer = scf_helper(
-            "SCF", molecule=sapt_dimer, banner="SAPT(DFT): delta HF Dimer", **kwargs
-        )
-        if do_ext_potential:
-            kwargs.pop("external_potentials")
-        hf_data["HF DIMER"] = core.variable("CURRENT ENERGY")
+            if do_ext_potential:
+                kwargs.pop("external_potentials")
+            data["HF DIMER"] = core.variable("CURRENT ENERGY")
+            checkpoint.save("hf_dimer_scf", hf_wfn_dimer=hf_wfn_dimer, data=data)
+        hf_data["HF DIMER"] = data["HF DIMER"]
         core.timer_off("SAPT(DFT):Dimer SCF")
 
         core.timer_on("SAPT(DFT):Monomer A SCF")
 
-        jk_obj = hf_wfn_dimer.jk()
-        if do_ext_potential and (ext_pot_A is not None or ext_pot_C is not None):
-            kwargs["external_potentials"] = {}
-            kwargs["external_potentials"]["C"] = (
-                construct_external_potential_in_field_C([ext_pot_C, ext_pot_A])
+        jk_obj = None if checkpoint.reached("hf_dimer_scf") else _saptdft_wfn_jk(hf_wfn_dimer)
+        if not checkpoint.reached("hf_monomer_a_scf"):
+            if jk_obj is None:
+                jk_obj = _saptdft_wfn_jk(hf_wfn_dimer)
+            if do_ext_potential and (ext_pot_A is not None or ext_pot_C is not None):
+                kwargs["external_potentials"] = {}
+                kwargs["external_potentials"]["C"] = (
+                    construct_external_potential_in_field_C([ext_pot_C, ext_pot_A])
+                )
+            hf_wfn_A = scf_helper(
+                "SCF",
+                molecule=monomerA,
+                banner="SAPT(DFT): delta HF Monomer A",
+                jk=jk_obj,
+                **kwargs,
             )
-        hf_wfn_A = scf_helper(
-            "SCF",
-            molecule=monomerA,
-            banner="SAPT(DFT): delta HF Monomer A",
-            jk=jk_obj,
-            **kwargs,
-        )
-        if do_ext_potential and kwargs.get("external_potentials"):
-            kwargs.pop("external_potentials")
-        hf_data["HF MONOMER A"] = core.variable("CURRENT ENERGY")
+            if do_ext_potential and kwargs.get("external_potentials"):
+                kwargs.pop("external_potentials")
+            data["HF MONOMER A"] = core.variable("CURRENT ENERGY")
+            checkpoint.save("hf_monomer_a_scf", hf_wfn_dimer=hf_wfn_dimer, hf_wfn_A=hf_wfn_A, data=data)
+        hf_data["HF MONOMER A"] = data["HF MONOMER A"]
         core.timer_off("SAPT(DFT):Monomer A SCF")
 
         core.timer_on("SAPT(DFT):Monomer B SCF")
         # core.IO.change_file_namespace(97, "monomerA", "monomerB")
 
-        if do_ext_potential and (ext_pot_B is not None or ext_pot_C is not None):
-            kwargs["external_potentials"] = {}
-            kwargs["external_potentials"]["C"] = (
-                construct_external_potential_in_field_C([ext_pot_C, ext_pot_B])
+        if not checkpoint.reached("hf_monomer_b_scf"):
+            if do_ext_potential and (ext_pot_B is not None or ext_pot_C is not None):
+                kwargs["external_potentials"] = {}
+                kwargs["external_potentials"]["C"] = (
+                    construct_external_potential_in_field_C([ext_pot_C, ext_pot_B])
+                )
+            hf_wfn_B = scf_helper(
+                "SCF",
+                molecule=monomerB,
+                banner="SAPT(DFT): delta HF Monomer B",
+                jk=jk_obj,
+                **kwargs,
             )
-        hf_wfn_B = scf_helper(
-            "SCF",
-            molecule=monomerB,
-            banner="SAPT(DFT): delta HF Monomer B",
-            jk=jk_obj,
-            **kwargs,
-        )
-        hf_data["HF MONOMER B"] = core.variable("CURRENT ENERGY")
+            data["HF MONOMER B"] = core.variable("CURRENT ENERGY")
+            checkpoint.save("hf_monomer_b_scf", hf_wfn_dimer=hf_wfn_dimer, hf_wfn_A=hf_wfn_A, hf_wfn_B=hf_wfn_B, data=data)
+        hf_data["HF MONOMER B"] = data["HF MONOMER B"]
         core.set_global_option("SAVE_JK", False)
         core.timer_off("SAPT(DFT):Monomer B SCF")
 
@@ -476,8 +703,9 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
         if do_dft:  # For SAPT(HF) do the JK terms in sapt_dft()
             # Grab JK object and set to A (so we do not save many JK objects)
-            sapt_jk = hf_wfn_B.jk()
-            hf_wfn_A.set_jk(sapt_jk)
+            sapt_jk = _saptdft_wfn_jk(hf_wfn_B)
+            if sapt_jk is not None and hasattr(hf_wfn_A, "set_jk"):
+                hf_wfn_A.set_jk(sapt_jk)
             core.set_global_option("SAVE_JK", False)
 
             # Move it back to monomer A
@@ -516,41 +744,65 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     kwargs["external_potentials"]["B"] = ext_pot_B
                     _set_external_potentials_to_wavefunction(ext_pot_B, hf_wfn_B)
 
-            # Build cache
-            hf_cache_ein = jk_terms.build_sapt_jk_cache(
-                hf_wfn_dimer,
-                hf_wfn_A,
-                hf_wfn_B,
-                sapt_jk,
-                True,
-                external_potentials=kwargs.get("external_potentials", None),
-            )
+            if not checkpoint.reached("hf_sapt_ind"):
+                if sapt_jk is None:
+                    sapt_jk = core.JK.build(hf_wfn_dimer.basisset())
+                    sapt_jk.set_do_J(True)
+                    sapt_jk.set_do_K(True)
+                    sapt_jk.initialize()
+                # Build cache. JK/cache objects are deliberately regenerated on restart.
+                hf_cache_ein = jk_terms.build_sapt_jk_cache(
+                    hf_wfn_dimer,
+                    hf_wfn_A,
+                    hf_wfn_B,
+                    sapt_jk,
+                    True,
+                    external_potentials=kwargs.get("external_potentials", None),
+                )
+                checkpoint.save("hf_sapt_jk", hf_wfn_dimer=hf_wfn_dimer, hf_wfn_A=hf_wfn_A, hf_wfn_B=hf_wfn_B, data=data)
 
-            # Electrostatics
-            core.timer_on("SAPT(HF):elst")
-            elst, extern_extern_IE = jk_terms.electrostatics(hf_cache_ein, True)
-            hf_data["extern_extern_IE"] = extern_extern_IE
-            hf_data.update(elst)
-            core.timer_off("SAPT(HF):elst")
+                # Electrostatics
+                core.timer_on("SAPT(HF):elst")
+                if not checkpoint.reached("hf_sapt_elst"):
+                    elst, extern_extern_IE = jk_terms.electrostatics(hf_cache_ein, True)
+                    hf_data["extern_extern_IE"] = extern_extern_IE
+                    hf_data.update(elst)
+                    data.update(hf_data)
+                    checkpoint.save("hf_sapt_elst", hf_wfn_dimer=hf_wfn_dimer, hf_wfn_A=hf_wfn_A, hf_wfn_B=hf_wfn_B, data=data)
+                else:
+                    hf_data.update(data)
+                core.timer_off("SAPT(HF):elst")
 
-            # Exchange
-            core.timer_on("SAPT(HF):exch")
-            exch = jk_terms.exchange(hf_cache_ein, sapt_jk, True)
-            hf_data.update(exch)
-            core.timer_off("SAPT(HF):exch")
+                # Exchange
+                core.timer_on("SAPT(HF):exch")
+                if not checkpoint.reached("hf_sapt_exch"):
+                    exch = jk_terms.exchange(hf_cache_ein, sapt_jk, True)
+                    hf_data.update(exch)
+                    data.update(hf_data)
+                    checkpoint.save("hf_sapt_exch", hf_wfn_dimer=hf_wfn_dimer, hf_wfn_A=hf_wfn_A, hf_wfn_B=hf_wfn_B, data=data)
+                else:
+                    hf_data.update(data)
+                core.timer_off("SAPT(HF):exch")
 
-            # Induction
-            core.timer_on("SAPT(HF):ind")
-            ind = jk_terms.induction(
-                hf_cache_ein,
-                sapt_jk,
-                True,
-                maxiter=core.get_option("SAPT", "MAXITER"),
-                conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
-                Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
-            )
-            hf_data.update(ind)
-            core.timer_off("SAPT(HF):ind")
+                # Induction
+                core.timer_on("SAPT(HF):ind")
+                if not checkpoint.reached("hf_sapt_ind"):
+                    ind = jk_terms.induction(
+                        hf_cache_ein,
+                        sapt_jk,
+                        True,
+                        maxiter=core.get_option("SAPT", "MAXITER"),
+                        conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
+                        Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
+                    )
+                    hf_data.update(ind)
+                    data.update(hf_data)
+                    checkpoint.save("hf_sapt_ind", hf_wfn_dimer=hf_wfn_dimer, hf_wfn_A=hf_wfn_A, hf_wfn_B=hf_wfn_B, data=data)
+                else:
+                    hf_data.update(data)
+                core.timer_off("SAPT(HF):ind")
+            else:
+                hf_data.update(data)
 
             # Keep the SAPT(HF) component subtotal available for F-SAPT
             # induction scaling. The SAPT(DFT) component values overwrite
@@ -573,7 +825,9 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             )
 
             data["Delta HF Correction"] = core.variable("SAPT(DFT) Delta HF")
-            sapt_jk.finalize()
+            checkpoint.save("hf_sapt_ind", hf_wfn_dimer=hf_wfn_dimer, hf_wfn_A=hf_wfn_A, hf_wfn_B=hf_wfn_B, data=data)
+            if sapt_jk is not None:
+                sapt_jk.finalize()
 
             del hf_wfn_A, hf_wfn_B, sapt_jk
 
@@ -588,16 +842,20 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             data["DHF VALUE"] = dhf_value
 
     if hf_wfn_dimer is None and not core.get_option("SAPT", "SAPT_DFT_DO_FSAPT"):
-        dimer_wfn = core.Wavefunction.build(sapt_dimer, core.get_global_option("BASIS"))
+        if dimer_wfn is None:
+            dimer_wfn = core.Wavefunction.build(sapt_dimer, core.get_global_option("BASIS"))
+            checkpoint.save("dimer_localization_scf", dimer_wfn=dimer_wfn, data=data)
     # If we did not compute HF wavefunction, we still need orbital coefficients
     # for IBOLocalizer2
     elif hf_wfn_dimer is None and core.get_option("SAPT", "SAPT_DFT_DO_FSAPT"):
-        dimer_wfn = scf_helper(
-            "SCF",
-            molecule=sapt_dimer,
-            banner="SAPT(DFT): Dimer for Localization",
-            **kwargs,
-        )
+        if not checkpoint.reached("dimer_localization_scf"):
+            dimer_wfn = scf_helper(
+                "SCF",
+                molecule=sapt_dimer,
+                banner="SAPT(DFT): Dimer for Localization",
+                **kwargs,
+            )
+            checkpoint.save("dimer_localization_scf", dimer_wfn=dimer_wfn, data=data)
     else:
         dimer_wfn = hf_wfn_dimer
 
@@ -611,24 +869,26 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             core.set_global_option("DFT_GRAC_SHIFT", mon_a_shift)
 
         core.set_global_option("SAVE_JK", True)
-        if do_ext_potential and (ext_pot_A is not None or ext_pot_C is not None):
-            kwargs["external_potentials"] = {}
-            kwargs["external_potentials"]["C"] = (
-                construct_external_potential_in_field_C([ext_pot_C, ext_pot_A])
-            )
-        elif do_ext_potential:
-            kwargs["external_potentials"] = {}
+        if not checkpoint.reached("monomer_a_dft_scf"):
+            if do_ext_potential and (ext_pot_A is not None or ext_pot_C is not None):
+                kwargs["external_potentials"] = {}
+                kwargs["external_potentials"]["C"] = (
+                    construct_external_potential_in_field_C([ext_pot_C, ext_pot_A])
+                )
+            elif do_ext_potential:
+                kwargs["external_potentials"] = {}
 
-        wfn_A = scf_helper(
-            sapt_dft_functional,
-            post_scf=False,
-            molecule=monomerA,
-            banner="SAPT(DFT): DFT Monomer A",
-            **kwargs,
-        )
-        if do_ext_potential and kwargs.get("external_potentials"):
-            kwargs.pop("external_potentials")
-        data["DFT MONOMERA"] = core.variable("CURRENT ENERGY")
+            wfn_A = scf_helper(
+                sapt_dft_functional,
+                post_scf=False,
+                molecule=monomerA,
+                banner="SAPT(DFT): DFT Monomer A",
+                **kwargs,
+            )
+            if do_ext_potential and kwargs.get("external_potentials"):
+                kwargs.pop("external_potentials")
+            data["DFT MONOMERA"] = core.variable("CURRENT ENERGY")
+            checkpoint.save("monomer_a_dft_scf", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, hf_wfn_dimer=hf_wfn_dimer, data=data)
 
         core.set_global_option("DFT_GRAC_SHIFT", 0.0)
         core.timer_off("SAPT(DFT): Monomer A DFT")
@@ -640,20 +900,23 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             core.set_global_option("DFT_GRAC_SHIFT", mon_b_shift)
 
         core.set_global_option("SAVE_JK", True)
-        if do_ext_potential and (ext_pot_B is not None or ext_pot_C is not None):
-            kwargs["external_potentials"] = {}
-            kwargs["external_potentials"]["C"] = (
-                construct_external_potential_in_field_C([ext_pot_C, ext_pot_B])
+        if not checkpoint.reached("monomer_b_dft_scf"):
+            if do_ext_potential and (ext_pot_B is not None or ext_pot_C is not None):
+                kwargs["external_potentials"] = {}
+                kwargs["external_potentials"]["C"] = (
+                    construct_external_potential_in_field_C([ext_pot_C, ext_pot_B])
+                )
+            monomer_jk = _saptdft_wfn_jk(wfn_A)
+            wfn_B = scf_helper(
+                sapt_dft_functional,
+                post_scf=False,
+                molecule=monomerB,
+                banner="SAPT(DFT): DFT Monomer B",
+                jk=monomer_jk,
+                **kwargs,
             )
-        wfn_B = scf_helper(
-            sapt_dft_functional,
-            post_scf=False,
-            molecule=monomerB,
-            banner="SAPT(DFT): DFT Monomer B",
-            jk=wfn_A.jk(),
-            **kwargs,
-        )
-        data["DFT MONOMERB"] = core.variable("CURRENT ENERGY")
+            data["DFT MONOMERB"] = core.variable("CURRENT ENERGY")
+            checkpoint.save("monomer_b_dft_scf", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, hf_wfn_dimer=hf_wfn_dimer, data=data)
         core.timer_off("SAPT(DFT): Monomer B DFT")
         if do_ext_potential:
             kwargs["external_potentials"] = {}
@@ -680,9 +943,10 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             kwargs["external_potentials"]["B"] = ext_pot_B
             _set_external_potentials_to_wavefunction(ext_pot_B, wfn_B)
 
-    # Save JK object
-    sapt_jk = wfn_B.jk()
-    wfn_A.set_jk(sapt_jk)
+    # Save JK object when available; serialized Wavefunctions do not retain JK objects.
+    sapt_jk = _saptdft_wfn_jk(wfn_B)
+    if sapt_jk is not None and hasattr(wfn_A, "set_jk"):
+        wfn_A.set_jk(sapt_jk)
 
     if do_delta_dft and do_dft:
         optstash2 = p4util.OptionsState(
@@ -705,28 +969,37 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         monomer_A_molecule = monomerA
         monomer_B_molecule = monomerB
 
-        core.timer_on("SAPT(DFT):Dimer DFT")
-        run_scf(sapt_dft_functional.lower(), molecule=sapt_dimer, jk=sapt_jk)
-        data["DFT DIMER ENERGY"] = core.variable("CURRENT ENERGY")
-        core.timer_off("SAPT(DFT):Dimer DFT")
+        if not checkpoint.reached("delta_dft"):
+            core.timer_on("SAPT(DFT):Dimer DFT")
+            if not checkpoint.reached("delta_dft_dimer_scf"):
+                run_scf(sapt_dft_functional.lower(), molecule=sapt_dimer, jk=sapt_jk)
+                data["DFT DIMER ENERGY"] = core.variable("CURRENT ENERGY")
+                checkpoint.save("delta_dft_dimer_scf", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, hf_wfn_dimer=hf_wfn_dimer, data=data)
+            core.timer_off("SAPT(DFT):Dimer DFT")
 
-        core.timer_on("SAPT(DFT):Monomer A DFT")
-        run_scf(sapt_dft_functional.lower(), molecule=monomer_A_molecule, jk=sapt_jk)
-        data["DFT MONOMER A ENERGY"] = core.variable("CURRENT ENERGY")
-        core.timer_off("SAPT(DFT):Monomer A DFT")
+            core.timer_on("SAPT(DFT):Monomer A DFT")
+            if not checkpoint.reached("delta_dft_monomer_a_scf"):
+                run_scf(sapt_dft_functional.lower(), molecule=monomer_A_molecule, jk=sapt_jk)
+                data["DFT MONOMER A ENERGY"] = core.variable("CURRENT ENERGY")
+                checkpoint.save("delta_dft_monomer_a_scf", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, hf_wfn_dimer=hf_wfn_dimer, data=data)
+            core.timer_off("SAPT(DFT):Monomer A DFT")
 
-        core.timer_on("SAPT(DFT):Monomer B DFT")
-        run_scf(sapt_dft_functional.lower(), molecule=monomer_B_molecule, jk=sapt_jk)
-        data["DFT MONOMER B ENERGY"] = core.variable("CURRENT ENERGY")
-        core.timer_off("SAPT(DFT):Monomer B DFT")
+            core.timer_on("SAPT(DFT):Monomer B DFT")
+            if not checkpoint.reached("delta_dft_monomer_b_scf"):
+                run_scf(sapt_dft_functional.lower(), molecule=monomer_B_molecule, jk=sapt_jk)
+                data["DFT MONOMER B ENERGY"] = core.variable("CURRENT ENERGY")
+                checkpoint.save("delta_dft_monomer_b_scf", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, hf_wfn_dimer=hf_wfn_dimer, data=data)
+            core.timer_off("SAPT(DFT):Monomer B DFT")
+
+            data["DFT IE"] = (
+                data["DFT DIMER ENERGY"]
+                - data["DFT MONOMER A ENERGY"]
+                - data["DFT MONOMER B ENERGY"]
+            )
+            checkpoint.save("delta_dft", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, hf_wfn_dimer=hf_wfn_dimer, data=data)
 
         core.timer_off("SAPT(DFT):delta DFT")
         core.print_out("\n")
-        data["DFT IE"] = (
-            data["DFT DIMER ENERGY"]
-            - data["DFT MONOMER A ENERGY"]
-            - data["DFT MONOMER B ENERGY"]
-        )
         optstash2.restore()
     elif do_delta_dft and not do_dft:
         raise ValueError(
@@ -746,15 +1019,17 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         core.timer_on("SAPT(DFT):D4 Interaction Energy")
         d4_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
 
-        edisp_interaction_energy.sapt_dft_d4_interaction_energy(
-            sapt_dimer=sapt_dimer,
-            monomerA=monomerA,
-            monomerB=monomerB,
-            dimer_wfn=dimer_wfn,
-            dftd4_functional_name=e_disp_param_name,
-            d4_type=d4_type,
-            data=data,
-        )
+        if not checkpoint.reached("d4"):
+            edisp_interaction_energy.sapt_dft_d4_interaction_energy(
+                sapt_dimer=sapt_dimer,
+                monomerA=monomerA,
+                monomerB=monomerB,
+                dimer_wfn=dimer_wfn,
+                dftd4_functional_name=e_disp_param_name,
+                d4_type=d4_type,
+                data=data,
+            )
+            checkpoint.save("d4", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, hf_wfn_dimer=hf_wfn_dimer, data=data)
         core.timer_off("SAPT(DFT):D4 Interaction Energy")
     elif sapt_dft_D3_IE:
         core.print_out("\n")
@@ -768,15 +1043,17 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         core.timer_on("SAPT(DFT):D3 Interaction Energy")
         d3_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
 
-        edisp_interaction_energy.sapt_dft_d3_interaction_energy(
-            sapt_dimer=sapt_dimer,
-            monomerA=monomerA,
-            monomerB=monomerB,
-            dimer_wfn=dimer_wfn,
-            dftd3_functional_name=e_disp_param_name,
-            d3_type=d3_type,
-            data=data,
-        )
+        if not checkpoint.reached("d3"):
+            edisp_interaction_energy.sapt_dft_d3_interaction_energy(
+                sapt_dimer=sapt_dimer,
+                monomerA=monomerA,
+                monomerB=monomerB,
+                dimer_wfn=dimer_wfn,
+                dftd3_functional_name=e_disp_param_name,
+                d3_type=d3_type,
+                data=data,
+            )
+            checkpoint.save("d3", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, hf_wfn_dimer=hf_wfn_dimer, data=data)
         core.timer_off("SAPT(DFT):D3 Interaction Energy")
 
     core.set_global_option("SAVE_JK", False)
@@ -792,7 +1069,7 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     delta_hf = do_delta_hf and not do_dft
 
     # Call SAPT(DFT)
-    sapt_jk = wfn_B.jk()
+    sapt_jk = _saptdft_wfn_jk(wfn_B)
     sapt_dft(
         dimer_wfn,
         wfn_A,
@@ -806,6 +1083,7 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         external_potentials=kwargs.get("external_potentials", None),
         do_delta_dft=do_delta_dft,
         do_disp=do_disp,
+        checkpoint=checkpoint,
     )
 
     # Copy data back into globals
@@ -816,6 +1094,7 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     core.timer_off("SAPT(DFT) Energy")
     core.tstop()
     optstash.restore()
+    checkpoint.save("final", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, hf_wfn_dimer=hf_wfn_dimer, data=data)
     return dimer_wfn
 
 
@@ -1054,6 +1333,7 @@ def sapt_dft(
     external_potentials: dict | None = None,
     do_delta_dft: bool = False,
     do_disp: bool = True,
+    checkpoint: _SAPTDFTCheckpoint | None = None,
 ) -> dict:
     """Compute the SAPT(DFT) interaction energy components.
 
@@ -1115,6 +1395,9 @@ def sapt_dft(
     >>> data = psi4.procrouting.sapt.sapt_dft(wfnD, wfnA, wfnB)
     """
 
+    if checkpoint is None:
+        checkpoint = _SAPTDFTCheckpoint()
+
     # Handle the input options
     core.timer_on("SAPT(DFT):Build JK")
     if print_header:
@@ -1125,21 +1408,23 @@ def sapt_dft(
         sapt_jk = core.JK.build(dimer_wfn.basisset())
         sapt_jk.set_do_J(True)
         sapt_jk.set_do_K(True)
-        if wfn_A.functional().is_x_lrc():
+        wfn_A_is_lrc = _saptdft_functional_value(wfn_A, "is_x_lrc", False)
+        wfn_A_omega = _saptdft_functional_value(wfn_A, "x_omega", 0.0)
+        wfn_B_is_lrc = _saptdft_functional_value(wfn_B, "is_x_lrc", False)
+        wfn_B_omega = _saptdft_functional_value(wfn_B, "x_omega", 0.0)
+        if wfn_A_is_lrc:
             sapt_jk.set_do_wK(True)
-            sapt_jk.set_omega(wfn_A.functional().x_omega())
+            sapt_jk.set_omega(wfn_A_omega)
         sapt_jk.initialize()
         sapt_jk.print_header()
-        if wfn_B.functional().is_x_lrc() and (
-            wfn_A.functional().x_omega() != wfn_B.functional().x_omega()
-        ):
+        if wfn_B_is_lrc and (wfn_A_omega != wfn_B_omega):
             core.print_out("   => Monomer B: Building SAPT JK object <= \n\n")
             core.print_out("      Reason: MonomerA Omega != MonomerB Omega\n\n")
             sapt_jk_B = core.JK.build(dimer_wfn.basisset())
             sapt_jk_B.set_do_J(True)
             sapt_jk_B.set_do_K(True)
             sapt_jk_B.set_do_wK(True)
-            sapt_jk_B.set_omega(wfn_B.functional().x_omega())
+            sapt_jk_B.set_omega(wfn_B_omega)
             sapt_jk_B.initialize()
             sapt_jk_B.print_header()
 
@@ -1149,9 +1434,9 @@ def sapt_dft(
     sapt_jk.set_do_J(True)
     sapt_jk.set_do_K(True)
 
-    if wfn_A.functional().is_x_lrc():
+    if _saptdft_functional_value(wfn_A, "is_x_lrc", False):
         sapt_jk.set_do_wK(True)
-        sapt_jk.set_omega(wfn_A.functional().x_omega())
+        sapt_jk.set_omega(_saptdft_functional_value(wfn_A, "x_omega", 0.0))
 
     if data is None:
         data = {}
@@ -1170,35 +1455,47 @@ def sapt_dft(
     cache = jk_terms.build_sapt_jk_cache(
         dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials
     )
+    checkpoint.save("build_jk", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, data=data)
     core.timer_off("SAPT(DFT):Build JK")
 
     # Electrostatics
     core.timer_on("SAPT(DFT):elst")
     fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")
     do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() != "NONE"
-    elst, extern_extern_IE = jk_terms.electrostatics(cache, True)
-    data["extern_extern_IE"] = extern_extern_IE
-    data.update(elst)
+    if not checkpoint.reached("elst"):
+        elst, extern_extern_IE = jk_terms.electrostatics(cache, True)
+        data["extern_extern_IE"] = extern_extern_IE
+        data.update(elst)
+        checkpoint.save("elst", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, data=data)
+    else:
+        elst = {"Elst10,r": data["Elst10,r"]}
+        extern_extern_IE = data.get("extern_extern_IE", 0.0)
     core.timer_off("SAPT(DFT):elst")
 
     # Exchange
     core.timer_on("SAPT(DFT):exch")
-    exch = jk_terms.exchange(cache, sapt_jk, True)
-    data.update(exch)
+    if not checkpoint.reached("exch"):
+        exch = jk_terms.exchange(cache, sapt_jk, True)
+        data.update(exch)
+        checkpoint.save("exch", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, data=data)
+    else:
+        exch = {"Exch10": data["Exch10"], "Exch10(S^2)": data.get("Exch10(S^2)", data["Exch10"])}
     core.timer_off("SAPT(DFT):exch")
 
     # Induction
     core.timer_on("SAPT(DFT):ind")
-    ind = jk_terms.induction(
-        cache,
-        sapt_jk,
-        True,
-        sapt_jk_B=sapt_jk_B,
-        maxiter=core.get_option("SAPT", "MAXITER"),
-        conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
-        Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
-    )
-    data.update(ind)
+    if not checkpoint.reached("ind"):
+        ind = jk_terms.induction(
+            cache,
+            sapt_jk,
+            True,
+            sapt_jk_B=sapt_jk_B,
+            maxiter=core.get_option("SAPT", "MAXITER"),
+            conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
+            Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
+        )
+        data.update(ind)
+        checkpoint.save("ind", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, data=data)
 
     # Delta HF is computed in the SAPT(HF) segment above. Do not recompute it
     # from the SAPT(DFT) component subtotal here, as that changes the meaning
@@ -1233,6 +1530,7 @@ def sapt_dft(
 
         core.timer_on("SAPT(DFT): F-SAPT Localization (IBO)")
         jk_terms.flocalization(cache, dimer_wfn)
+        checkpoint.save("fsapt_setup", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, data=data)
         core.timer_off("SAPT(DFT): F-SAPT Localization (IBO)")
         # Primary return is stored as cache['Elst_AB']
         core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
@@ -1245,6 +1543,8 @@ def sapt_dft(
             sapt_jk,
             True,
         )
+        _saptdft_checkpoint_cache_arrays(dimer_wfn, cache, ["Elst_AB"])
+        checkpoint.save("fsapt_elst", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, data=data)
         core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
         core.timer_on("SAPT(DFT): F-SAPT Exchange")
         cache = jk_terms.fexch(
@@ -1257,10 +1557,14 @@ def sapt_dft(
             sapt_jk,
             True,
         )
+        _saptdft_checkpoint_cache_arrays(dimer_wfn, cache, ["Elst_AB", "Exch_AB"])
+        checkpoint.save("fsapt_exch", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, data=data)
         core.timer_off("SAPT(DFT): F-SAPT Exchange")
 
         core.timer_on("SAPT(DFT): F-SAPT Induction")
         cache = jk_terms.find(cache, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
+        _saptdft_checkpoint_cache_arrays(dimer_wfn, cache, ["Elst_AB", "Exch_AB", "IndAB_AB", "IndBA_AB"])
+        checkpoint.save("fsapt_ind", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, data=data)
         core.timer_off("SAPT(DFT): F-SAPT Induction")
 
     elif do_fsapt:
@@ -1283,16 +1587,32 @@ def sapt_dft(
         FISAPT_obj = saptdft_fisapt.setup_fisapt_object(
             dimer_wfn, wfn_A, wfn_B, cache, data, aux_basis, do_flocalize=True
         )
+        checkpoint.save("fsapt_setup", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, data=data)
         core.timer_off("SAPT(DFT): F-SAPT Setup + Localization (IBO)")
 
         core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
         FISAPT_obj.felst()
+        matrices = FISAPT_obj.matrices()
+        for k, v in matrices.items():
+            cache[k] = v
+        _saptdft_checkpoint_cache_arrays(dimer_wfn, cache, ["Elst_AB"])
+        checkpoint.save("fsapt_elst", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, data=data)
         core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
         core.timer_on("SAPT(DFT): F-SAPT Exchange")
         FISAPT_obj.fexch()
+        matrices = FISAPT_obj.matrices()
+        for k, v in matrices.items():
+            cache[k] = v
+        _saptdft_checkpoint_cache_arrays(dimer_wfn, cache, ["Elst_AB", "Exch_AB"])
+        checkpoint.save("fsapt_exch", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, data=data)
         core.timer_off("SAPT(DFT): F-SAPT Exchange")
         core.timer_on("SAPT(DFT): F-SAPT Induction")
         FISAPT_obj.find()
+        matrices = FISAPT_obj.matrices()
+        for k, v in matrices.items():
+            cache[k] = v
+        _saptdft_checkpoint_cache_arrays(dimer_wfn, cache, ["Elst_AB", "Exch_AB", "IndAB_AB", "IndBA_AB"])
+        checkpoint.save("fsapt_ind", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, data=data)
         core.timer_off("SAPT(DFT): F-SAPT Induction")
         matrices = FISAPT_obj.matrices()
         for k, v in matrices.items():
@@ -1303,11 +1623,11 @@ def sapt_dft(
         core.print_out("\n   => Finalizing SAPT JK object to free memory <= \n\n")
         sapt_jk.finalize()
 
-    if do_disp:
+    if do_disp and not checkpoint.reached("disp"):
         # Hybrid xc kernel check
         do_hybrid = core.get_option("SAPT", "SAPT_DFT_DO_HYBRID")
-        is_x_hybrid = wfn_B.functional().is_x_hybrid()
-        is_x_lrc = wfn_B.functional().is_x_lrc()
+        is_x_hybrid = _saptdft_functional_value(wfn_B, "is_x_hybrid", False)
+        is_x_lrc = _saptdft_functional_value(wfn_B, "is_x_lrc", False)
         hybrid_specified = core.has_option_changed("SAPT", "SAPT_DFT_DO_HYBRID")
         if is_x_lrc:
             if do_hybrid:
@@ -1341,7 +1661,7 @@ def sapt_dft(
         if do_dft:
             core.timer_on("FDDS disp")
             core.print_out("\n")
-            x_alpha = wfn_B.functional().x_alpha()
+            x_alpha = _saptdft_functional_value(wfn_B, "x_alpha", 0.0)
             if not is_hybrid:
                 x_alpha = 0.0
             fdds_disp = sapt_mp2.df_fdds_dispersion(
@@ -1415,6 +1735,7 @@ def sapt_dft(
                     + "\n"
                 )
 
+        checkpoint.save("disp", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, data=data)
         core.timer_off("SAPT(DFT):disp")
 
     # Now do F-SAPT on dispersion if requested
@@ -1435,6 +1756,8 @@ def sapt_dft(
             )
             data["Exch-Disp20,u"] = cache["Exch-Disp20,u"]
             data["Disp20,u"] = cache["Disp20,u"]
+            _saptdft_checkpoint_cache_arrays(dimer_wfn, cache, ["Disp_AB"])
+            checkpoint.save("fsapt_disp", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, data=data)
             core.timer_off("SAPT(DFT): F-SAPT Dispersion")
 
     elif do_fsapt and do_disp:
@@ -1448,6 +1771,8 @@ def sapt_dft(
         matrices = FISAPT_obj.matrices()
         for k, v in matrices.items():
             cache[k] = v
+        _saptdft_checkpoint_cache_arrays(dimer_wfn, cache, ["Disp_AB"])
+        checkpoint.save("fsapt_disp", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, data=data)
     elif do_fsapt and fsapt_type == "FISAPT":
         matrices = FISAPT_obj.matrices()
         for k, v in matrices.items():
@@ -1502,6 +1827,7 @@ def sapt_dft(
             _set_fsapt_var("FSAPT_EMPIRICAL_DISP", cache["FSAPT_EMPIRICAL_DISP"])
         else:
             _set_fsapt_var("FSAPT_DISP_AB", cache["Disp_AB"])
+        checkpoint.save("fsapt_final", dimer_wfn=dimer_wfn, wfn_A=wfn_A, wfn_B=wfn_B, data=data)
     return data
 
 

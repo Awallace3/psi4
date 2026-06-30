@@ -1119,3 +1119,185 @@ if __name__ == "__main__":
         "--disable-warnings",
         # "--maxfail=1",
     ])
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@pytest.mark.quick
+@pytest.mark.parametrize("stop_stage", [
+    "hf_dimer_scf",
+    "hf_monomer_a_scf",
+    "hf_monomer_b_scf",
+    "build_jk",
+    "elst",
+    "exch",
+    "ind",
+    "disp",
+    "final",
+])
+def test_saptdft_checkpoint_restart_levels(tmp_path, monkeypatch, stop_stage):
+    """Exercise SAPT(DFT) checkpoint stop/restart for the small HF/FISAPT0 path."""
+
+    def ne_dimer():
+        return psi4.geometry(
+            """
+0 1
+Ne 0.0 0.0 0.0
+--
+0 1
+Ne 0.0 0.0 3.2
+units angstrom
+symmetry c1
+no_reorient
+no_com
+            """
+        )
+
+    def setup_options():
+        psi4.set_options(
+            {
+                "basis": "sto-3g",
+                "scf_type": "df",
+                "reference": "rhf",
+                "scf__reference": "rhf",
+                "SAPT_DFT_FUNCTIONAL": "HF",
+                "SAPT_DFT_DO_DHF": True,
+                "SAPT_DFT_DO_DDFT": False,
+                "SAPT_DFT_DO_DISP": True,
+                "SAPT_DFT_DO_FSAPT": "NONE",
+                "SAPT_DFT_DO_HYBRID": False,
+                "SAPT_DFT_USE_EINSUMS": True,
+                "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
+                "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
+            }
+        )
+
+    def clean():
+        psi4.core.clean()
+        psi4.core.clean_variables()
+        psi4.core.clean_timers()
+
+    compare_vars = [
+        "SAPT ELST ENERGY",
+        "SAPT EXCH ENERGY",
+        "SAPT IND ENERGY",
+        "SAPT DISP ENERGY",
+        "SAPT TOTAL ENERGY",
+    ]
+
+    monkeypatch.delenv("PSI4_CHECKPOINT_DIR", raising=False)
+    monkeypatch.delenv("PSI4_CHECKPOINT_STOP_AFTER", raising=False)
+    clean()
+    setup_options()
+    psi4.energy("sapt(dft)", molecule=ne_dimer())
+    ref = {var: psi4.core.variable(var) for var in compare_vars if psi4.core.has_variable(var)}
+
+    checkpoint_dir = tmp_path / stop_stage
+    monkeypatch.setenv("PSI4_CHECKPOINT_DIR", str(checkpoint_dir))
+    monkeypatch.setenv("PSI4_CHECKPOINT_STOP_AFTER", stop_stage)
+    clean()
+    setup_options()
+    with pytest.raises(RuntimeError, match=f"SAPT\\(DFT\\) checkpoint stop after {stop_stage}"):
+        psi4.energy("sapt(dft)", molecule=ne_dimer())
+    assert (checkpoint_dir / "saptdft_state.json").exists()
+
+    monkeypatch.delenv("PSI4_CHECKPOINT_STOP_AFTER", raising=False)
+    clean()
+    setup_options()
+    psi4.energy("sapt(dft)", molecule=ne_dimer())
+    for var, expected in ref.items():
+        assert compare_values(expected, psi4.core.variable(var), 8, var)
+    clean()
+
+
+@pytest.mark.saptdft
+@pytest.mark.quick
+@pytest.mark.parametrize(
+    "stop_stage, option_updates",
+    [
+        ("hf_sapt_elst", {"SAPT_DFT_FUNCTIONAL": "PBE0", "SAPT_DFT_GRAC_SHIFT_A": 0.0, "SAPT_DFT_GRAC_SHIFT_B": 0.0, "SAPT_DFT_DO_DDFT": True}),
+        ("hf_sapt_exch", {"SAPT_DFT_FUNCTIONAL": "PBE0", "SAPT_DFT_GRAC_SHIFT_A": 0.0, "SAPT_DFT_GRAC_SHIFT_B": 0.0, "SAPT_DFT_DO_DDFT": True}),
+        ("hf_sapt_ind", {"SAPT_DFT_FUNCTIONAL": "PBE0", "SAPT_DFT_GRAC_SHIFT_A": 0.0, "SAPT_DFT_GRAC_SHIFT_B": 0.0, "SAPT_DFT_DO_DDFT": True}),
+        ("delta_dft_dimer_scf", {"SAPT_DFT_FUNCTIONAL": "PBE0", "SAPT_DFT_GRAC_SHIFT_A": 0.0, "SAPT_DFT_GRAC_SHIFT_B": 0.0, "SAPT_DFT_DO_DDFT": True}),
+        ("delta_dft_monomer_a_scf", {"SAPT_DFT_FUNCTIONAL": "PBE0", "SAPT_DFT_GRAC_SHIFT_A": 0.0, "SAPT_DFT_GRAC_SHIFT_B": 0.0, "SAPT_DFT_DO_DDFT": True}),
+        ("delta_dft_monomer_b_scf", {"SAPT_DFT_FUNCTIONAL": "PBE0", "SAPT_DFT_GRAC_SHIFT_A": 0.0, "SAPT_DFT_GRAC_SHIFT_B": 0.0, "SAPT_DFT_DO_DDFT": True}),
+        ("delta_dft", {"SAPT_DFT_FUNCTIONAL": "PBE0", "SAPT_DFT_GRAC_SHIFT_A": 0.0, "SAPT_DFT_GRAC_SHIFT_B": 0.0, "SAPT_DFT_DO_DDFT": True}),
+        ("grac_monomer_a", {"SAPT_DFT_FUNCTIONAL": "PBE0", "SAPT_DFT_DO_DHF": False, "SAPT_DFT_GRAC_COMPUTE": "SINGLE"}),
+        ("grac_monomer_b", {"SAPT_DFT_FUNCTIONAL": "PBE0", "SAPT_DFT_DO_DHF": False, "SAPT_DFT_GRAC_COMPUTE": "SINGLE"}),
+        ("fsapt_elst", {"SAPT_DFT_DO_FSAPT": "SAPTDFT"}),
+        ("fsapt_exch", {"SAPT_DFT_DO_FSAPT": "SAPTDFT"}),
+        ("fsapt_ind", {"SAPT_DFT_DO_FSAPT": "SAPTDFT"}),
+    ],
+)
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_extended_levels(tmp_path, monkeypatch, stop_stage, option_updates):
+    """Exercise checkpoint stops for SAPT0, delta-DFT, GRAC, and F-SAPT sub-stages."""
+
+    def ne_dimer():
+        return psi4.geometry(
+            """
+0 1
+Ne 0.0 0.0 0.0
+--
+0 1
+Ne 0.0 0.0 3.2
+units angstrom
+symmetry c1
+no_reorient
+no_com
+            """
+        )
+
+    def setup_options():
+        opts = {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "reference": "rhf",
+            "scf__reference": "rhf",
+            "SAPT_DFT_FUNCTIONAL": "HF",
+            "SAPT_DFT_DO_DHF": True,
+            "SAPT_DFT_DO_DDFT": False,
+            "SAPT_DFT_DO_DISP": False,
+            "SAPT_DFT_DO_FSAPT": "NONE",
+            "SAPT_DFT_DO_HYBRID": False,
+            "SAPT_DFT_USE_EINSUMS": True,
+            "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
+        }
+        opts.update(option_updates)
+        psi4.set_options(opts)
+
+    def clean():
+        psi4.core.clean()
+        psi4.core.clean_variables()
+        psi4.core.clean_timers()
+
+    compare_vars = [
+        "SAPT ELST ENERGY",
+        "SAPT EXCH ENERGY",
+        "SAPT IND ENERGY",
+        "SAPT TOTAL ENERGY",
+    ]
+
+    monkeypatch.delenv("PSI4_CHECKPOINT_DIR", raising=False)
+    monkeypatch.delenv("PSI4_CHECKPOINT_STOP_AFTER", raising=False)
+    clean()
+    setup_options()
+    psi4.energy("sapt(dft)", molecule=ne_dimer())
+    ref = {var: psi4.core.variable(var) for var in compare_vars if psi4.core.has_variable(var)}
+
+    checkpoint_dir = tmp_path / stop_stage
+    monkeypatch.setenv("PSI4_CHECKPOINT_DIR", str(checkpoint_dir))
+    monkeypatch.setenv("PSI4_CHECKPOINT_STOP_AFTER", stop_stage)
+    clean()
+    setup_options()
+    with pytest.raises(RuntimeError, match=f"SAPT\\(DFT\\) checkpoint stop after {stop_stage}"):
+        psi4.energy("sapt(dft)", molecule=ne_dimer())
+    assert (checkpoint_dir / "saptdft_state.json").exists()
+
+    monkeypatch.delenv("PSI4_CHECKPOINT_STOP_AFTER", raising=False)
+    clean()
+    setup_options()
+    psi4.energy("sapt(dft)", molecule=ne_dimer())
+    for var, expected in ref.items():
+        assert compare_values(expected, psi4.core.variable(var), 8, var)
+    clean()
