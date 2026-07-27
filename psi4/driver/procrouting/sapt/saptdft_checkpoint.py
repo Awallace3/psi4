@@ -60,7 +60,7 @@ SAPTDFT_STAGE_DEFINITION_VERSION = 1
 SAPTDFT_SCF_SNAPSHOT_VERSION = 1
 SAPTDFT_MANIFEST_FILENAME = "saptdft_state.json"
 SAPTDFT_LOCK_FILENAME = "saptdft_state.lock"
-_ALLOWED_ARTIFACT_KINDS = {"array", "scf_snapshot"}
+_ALLOWED_ARTIFACT_KINDS = {"array", "scf_snapshot", "wavefunction"}
 _SCF_SNAPSHOT_METADATA_KEY = "scf_snapshot"
 _SCF_SNAPSHOT_DIMENSION_KEYS = (
     "doccpi",
@@ -76,6 +76,25 @@ _SCF_SNAPSHOT_FACTORY_BASIS_KEYS = ("DF_BASIS_SCF", "BASIS_RELATIVISTIC", "SAPGA
 _SCF_SNAPSHOT_REQUIRED_FIELDS = {
     "matrix": ("Ca", "Cb", "Da", "Db", "Fa", "Fb"),
     "vector": ("epsilon_a", "epsilon_b"),
+}
+_SCF_SNAPSHOT_SERIALIZED_SECTIONS = {
+    "molecule": Mapping,
+    "matrix": Mapping,
+    "vector": Mapping,
+    "dimension": Mapping,
+    "int": Mapping,
+    "string": Mapping,
+    "boolean": Mapping,
+    "float": Mapping,
+    "floatvar": Mapping,
+    "matrixarr": Mapping,
+    _SCF_SNAPSHOT_METADATA_KEY: Mapping,
+}
+_SCF_SNAPSHOT_REQUIRED_SECTION_KEYS = {
+    "string": ("basisname",),
+    "boolean": ("basispuream",),
+    "dimension": _SCF_SNAPSHOT_DIMENSION_KEYS,
+    _SCF_SNAPSHOT_METADATA_KEY: ("basis", "dimensions", "functional", "method", "molecule", "reference", "required_fields", "version"),
 }
 _SCF_SNAPSHOT_REQUIRED_FLOATVARS = {
     "RHF": ("CURRENT ENERGY", "CURRENT REFERENCE ENERGY", "SCF TOTAL ENERGY", "HF TOTAL ENERGY"),
@@ -448,7 +467,18 @@ class SAPTDFTCheckpoint:
         with artifact_path.open("rb") as handle:
             return np.load(handle, allow_pickle=False)
 
-    def commit_stage(self, stage, *, scalars=None, arrays=None, wavefunctions=None):
+    def restore_scf_snapshot(self, name: str) -> dict[str, Any]:
+        artifact = self._manifest["artifacts"].get(name)
+        if artifact is None:
+            raise ValidationError(f"SAPT(DFT) checkpoint SCF snapshot artifact {name} is not available in {self.path}.")
+        if artifact.get("kind") != "scf_snapshot":
+            raise ValidationError(f"SAPT(DFT) checkpoint artifact {name} is not an SCF snapshot artifact.")
+        artifact_path = self._validate_artifact(name, artifact)
+        snapshot_data = _load_scf_snapshot_data(artifact_path)
+        _prevalidate_scf_snapshot_structure(snapshot_data)
+        return snapshot_data
+
+    def commit_stage(self, stage, *, scalars=None, arrays=None, wavefunctions=None, scf_snapshots=None):
         self._require_known_stage(stage)
         missing_dependencies = [dependency for dependency in SAPTDFT_STAGE_DEFINITIONS[stage].dependencies if not self._stage_is_complete(dependency)]
         if missing_dependencies:
@@ -466,6 +496,9 @@ class SAPTDFTCheckpoint:
             artifact_names.append(name)
         for name, wavefunction in (wavefunctions or {}).items():
             next_manifest["artifacts"][name] = self._write_wavefunction_artifact(name, wavefunction)
+            artifact_names.append(name)
+        for name, snapshot_input in (scf_snapshots or {}).items():
+            next_manifest["artifacts"][name] = self._write_scf_snapshot_artifact(name, snapshot_input)
             artifact_names.append(name)
 
         next_manifest["completed_stages"][stage] = {
@@ -660,6 +693,41 @@ class SAPTDFTCheckpoint:
         sha256, size = _file_digest_and_size(tmp_path)
         final_path = self.path / f"{base_name}.npy"
         os.replace(tmp_path, final_path)
+        return {"kind": "wavefunction", "path": final_path.name, "sha256": sha256, "size": size}
+
+    def _write_scf_snapshot_artifact(self, name: str, snapshot_input: Any) -> dict[str, Any]:
+        if isinstance(snapshot_input, Mapping) and "wavefunction" in snapshot_input:
+            wavefunction = snapshot_input.get("wavefunction")
+            reference = snapshot_input.get("reference")
+            method = snapshot_input.get("method")
+            if wavefunction is None or reference is None or method is None:
+                raise ValidationError(
+                    f"SAPT(DFT) checkpoint SCF snapshot artifact {name} requires wavefunction, reference, and method."
+                )
+            snapshot_data = capture_scf_snapshot(wavefunction, reference=reference, method=method)
+        elif isinstance(snapshot_input, Mapping):
+            snapshot_data = dict(snapshot_input)
+            metadata = snapshot_data.get(_SCF_SNAPSHOT_METADATA_KEY)
+            if not isinstance(metadata, Mapping):
+                raise ValidationError(
+                    f"SAPT(DFT) checkpoint SCF snapshot artifact {name} must include scf_snapshot metadata."
+                )
+        else:
+            raise ValidationError(
+                f"SAPT(DFT) checkpoint SCF snapshot artifact {name} must be a snapshot mapping or a mapping with wavefunction/reference/method."
+            )
+
+        _prevalidate_scf_snapshot_structure(snapshot_data)
+
+        suffix = f"{_safe_artifact_stem(name)}--{uuid.uuid4().hex}.npy"
+        tmp_path = self.path / f".{suffix}.tmp"
+        with tmp_path.open("wb") as handle:
+            np.save(handle, snapshot_data, allow_pickle=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        sha256, size = _file_digest_and_size(tmp_path)
+        final_path = self.path / suffix
+        os.replace(tmp_path, final_path)
         return {"kind": "scf_snapshot", "path": final_path.name, "sha256": sha256, "size": size}
 
     def _write_manifest_atomic(self, manifest: Mapping[str, Any]) -> None:
@@ -719,6 +787,32 @@ def _load_scf_snapshot_data(snapshot: Any) -> dict[str, Any]:
         raise ValidationError(f"SCF snapshot {snapshot!r} must deserialize to a mapping.")
 
     return dict(loaded)
+
+
+def _prevalidate_scf_snapshot_structure(snapshot_data: Mapping[str, Any]) -> None:
+    if not isinstance(snapshot_data, Mapping):
+        raise ValidationError("SCF snapshot must be a mapping.")
+
+    for section_name, section_type in _SCF_SNAPSHOT_SERIALIZED_SECTIONS.items():
+        section = snapshot_data.get(section_name)
+        if not isinstance(section, section_type):
+            raise ValidationError(
+                f"SCF snapshot top-level section {section_name} is missing or has invalid type {type(section).__name__}."
+            )
+
+    for section_name, required_keys in _SCF_SNAPSHOT_REQUIRED_SECTION_KEYS.items():
+        section = snapshot_data[section_name]
+        for key in required_keys:
+            if key not in section:
+                raise ValidationError(f"SCF snapshot section {section_name} is missing required key {key}.")
+
+
+def _deserialize_scf_snapshot(snapshot_data: Mapping[str, Any]) -> core.Wavefunction:
+    try:
+        loaded = core.Wavefunction.from_file(snapshot_data)
+    except Exception as exc:
+        raise ValidationError(f"SCF snapshot deserialization failed: {exc}") from exc
+    return loaded
 
 
 def _validate_scf_snapshot_required_fields(snapshot_data: Mapping[str, Any], required_fields: Mapping[str, Sequence[str]]) -> None:
@@ -836,19 +930,51 @@ def _validate_scf_snapshot_metadata(snapshot_data: Mapping[str, Any], loaded: co
     return dict(metadata)
 
 
+def _initialize_rehydrated_scf_state(target: core.HF) -> None:
+    target.form_H()
+    target.form_Shalf()
+    target.form_initial_F()
+    target.form_initial_C()
+    target.form_D()
+
+
+def _copy_rehydrated_matrix_fields(target: core.HF, source: core.Wavefunction) -> None:
+    for field_name in _SCF_SNAPSHOT_REQUIRED_FIELDS["matrix"]:
+        target_matrix = getattr(target, field_name)()
+        source_matrix = getattr(source, field_name)()
+        if target_matrix is None or source_matrix is None:
+            raise ValidationError(f"SCF snapshot matrix field {field_name} is not available for rehydration.")
+        target_matrix.copy(source_matrix)
+
+
+def _copy_rehydrated_vector_fields(target: core.HF, source: core.Wavefunction) -> None:
+    for field_name in _SCF_SNAPSHOT_REQUIRED_FIELDS["vector"]:
+        target_vector = getattr(target, field_name)()
+        source_vector = getattr(source, field_name)()
+        if target_vector is None or source_vector is None:
+            raise ValidationError(f"SCF snapshot vector field {field_name} is not available for rehydration.")
+        target_vector.copy(source_vector)
+
+
+def _copy_rehydrated_qcvariables(target: core.HF, source: core.Wavefunction) -> None:
+    for key, value in source.variables().items():
+        if target.has_variable(key):
+            target.del_variable(key)
+        target.set_variable(key, value)
+
+
 def rehydrate_scf_wavefunction(snapshot, *, method: str, reference: str) -> core.HF:
     snapshot_data = _load_scf_snapshot_data(snapshot)
-    loaded = core.Wavefunction.from_file(snapshot_data)
+    _prevalidate_scf_snapshot_structure(snapshot_data)
+    loaded = _deserialize_scf_snapshot(snapshot_data)
     metadata = _validate_scf_snapshot_metadata(snapshot_data, loaded, method=method, reference=reference)
 
     from ..proc import scf_wavefunction_factory
 
     fresh_base = core.Wavefunction.build(loaded.molecule(), loaded.basisset())
     rehydrated = scf_wavefunction_factory(method, fresh_base, _normalize_scf_reference(reference))
+    _initialize_rehydrated_scf_state(rehydrated)
     factory_basissets = _capture_factory_basissets(rehydrated)
-    rehydrated.deep_copy(loaded)
-    for key, basis in factory_basissets.items():
-        rehydrated.set_basisset(key, basis)
 
     if rehydrated.functional().name() != metadata.get("functional"):
         raise ValidationError(
@@ -860,7 +986,14 @@ def rehydrate_scf_wavefunction(snapshot, *, method: str, reference: str) -> core
         if getattr(rehydrated, key)().to_tuple() != expected_dimension:
             raise ValidationError(f"SCF snapshot rehydrated dimensions mismatch for {key}.")
 
+    _copy_rehydrated_matrix_fields(rehydrated, loaded)
+    _copy_rehydrated_vector_fields(rehydrated, loaded)
+    _copy_rehydrated_qcvariables(rehydrated, loaded)
     rehydrated.set_energy(loaded.energy())
+
+    for key, basis in factory_basissets.items():
+        rehydrated.set_basisset(key, basis)
+
     return rehydrated
 
 

@@ -1563,7 +1563,7 @@ def test_saptdft_checkpoint_store_wavefunction_artifact_smoke(
     reopened.open()
     assert reopened.is_complete("grac_monomer_a")
     artifact = reopened._manifest["artifacts"]["dimer_wfn"]
-    assert artifact["kind"] == "scf_snapshot"
+    assert artifact["kind"] == "wavefunction"
     artifact_path = reopened._validate_artifact("dimer_wfn", artifact)
     restored_wfn = core.Wavefunction.from_file(str(artifact_path))
     compare_values(wfn.energy(), restored_wfn.energy(), 10, "checkpoint wavefunction energy")
@@ -1634,27 +1634,7 @@ def _guard_scf_rehydrate(monkeypatch):
         monkeypatch.setattr(core.HF, attr, boom)
 
 
-@pytest.mark.saptdft
-@pytest.mark.fsapt
-@pytest.mark.parametrize(
-    "method, reference, expected_variable",
-    [("hf", "RHF", "HF TOTAL ENERGY"), ("svwn", "RKS", "DFT TOTAL ENERGY")],
-)
-def test_saptdft_checkpoint_rehydrate_roundtrip_rhf_and_rks(
-    tmp_path, monkeypatch, method, reference, expected_variable
-):
-    checkpoint_mod = _saptdft_checkpoint_module()
-    _, wfn = _build_scf_snapshot_case(method, reference)
-    snapshot = checkpoint_mod.capture_scf_snapshot(wfn, reference=reference, method=method)
-    snapshot_path = tmp_path / f"{reference.lower()}_snapshot.npy"
-    np.save(snapshot_path, snapshot, allow_pickle=True)
-    loaded = core.Wavefunction.from_file(snapshot_path)
-    _guard_scf_rehydrate(monkeypatch)
-
-    restored = checkpoint_mod.rehydrate_scf_wavefunction(
-        snapshot_path, method=method, reference=reference
-    )
-
+def _assert_rehydrated_matches_loaded(restored, loaded, wfn, snapshot, expected_variable, reference):
     assert type(restored) is type(wfn)
     assert restored.functional().name() == wfn.functional().name()
     assert restored.energy() == loaded.energy()
@@ -1696,6 +1676,80 @@ def test_saptdft_checkpoint_rehydrate_roundtrip_rhf_and_rks(
     hx = restored.cphf_Hx([trial])
     assert len(hx) == 1
     np.testing.assert_array_equal(hx[0].np, np.zeros_like(trial.np))
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@pytest.mark.parametrize(
+    "method, reference, expected_variable",
+    [("hf", "RHF", "HF TOTAL ENERGY"), ("svwn", "RKS", "DFT TOTAL ENERGY")],
+)
+def test_saptdft_checkpoint_rehydrate_roundtrip_rhf_and_rks(
+    tmp_path, monkeypatch, method, reference, expected_variable
+):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    _, wfn = _build_scf_snapshot_case(method, reference)
+    snapshot = checkpoint_mod.capture_scf_snapshot(wfn, reference=reference, method=method)
+    snapshot_path = tmp_path / f"{reference.lower()}_snapshot.npy"
+    np.save(snapshot_path, snapshot, allow_pickle=True)
+    loaded = core.Wavefunction.from_file(snapshot_path)
+    _guard_scf_rehydrate(monkeypatch)
+
+    restored = checkpoint_mod.rehydrate_scf_wavefunction(
+        snapshot_path, method=method, reference=reference
+    )
+
+    _assert_rehydrated_matches_loaded(
+        restored, loaded, wfn, snapshot, expected_variable, reference
+    )
+    core.clean_options()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_store_scf_snapshot_roundtrip(
+    tmp_path, monkeypatch, saptdft_checkpoint_identity_fixture
+):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    molecule, function_kwargs, atomic_input = saptdft_checkpoint_identity_fixture
+    identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+        atomic_input=atomic_input,
+    )
+
+    _, wfn = _build_scf_snapshot_case("hf", "RHF")
+    checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
+    checkpoint.open()
+    checkpoint.commit_stage(
+        "grac_monomer_a",
+        scf_snapshots={
+            "dimer_scf": {
+                "wavefunction": wfn,
+                "reference": "RHF",
+                "method": "hf",
+            }
+        },
+    )
+    checkpoint.close()
+
+    reopened = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
+    reopened.open()
+    artifact = reopened._manifest["artifacts"]["dimer_scf"]
+    assert artifact["kind"] == "scf_snapshot"
+    snapshot = reopened.restore_scf_snapshot("dimer_scf")
+    artifact_path = reopened._validate_artifact("dimer_scf", artifact)
+    loaded = core.Wavefunction.from_file(str(artifact_path))
+    _guard_scf_rehydrate(monkeypatch)
+    restored = checkpoint_mod.rehydrate_scf_wavefunction(
+        snapshot, method="hf", reference="RHF"
+    )
+
+    _assert_rehydrated_matches_loaded(
+        restored, loaded, wfn, snapshot, "HF TOTAL ENERGY", "RHF"
+    )
+    reopened.close()
     core.clean_options()
 
 
@@ -1731,6 +1785,52 @@ def test_saptdft_checkpoint_rehydrate_validates_snapshot_metadata(
     mutator(snapshot)
 
     with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match=expected_message):
+        checkpoint_mod.rehydrate_scf_wavefunction(snapshot, method="hf", reference="RHF")
+    core.clean_options()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@pytest.mark.parametrize(
+    "mutator, expected_message",
+    [
+        (lambda snapshot: snapshot.__delitem__("matrix"), "top-level section matrix"),
+        (lambda snapshot: snapshot.__setitem__("matrix", []), "top-level section matrix"),
+        (lambda snapshot: snapshot["string"].__delitem__("basisname"), "section string"),
+        (lambda snapshot: snapshot["scf_snapshot"].__delitem__("reference"), "section scf_snapshot"),
+    ],
+)
+def test_saptdft_checkpoint_rehydrate_prevalidates_malformed_structure(
+    monkeypatch, mutator, expected_message
+):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    _, wfn = _build_scf_snapshot_case("hf", "RHF")
+    snapshot = checkpoint_mod.capture_scf_snapshot(wfn, reference="RHF", method="hf")
+    mutator(snapshot)
+
+    def should_not_deserialize(_snapshot):
+        raise AssertionError("from_file should not be reached for malformed structure")
+
+    monkeypatch.setattr(core.Wavefunction, "from_file", should_not_deserialize)
+    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match=expected_message):
+        checkpoint_mod.rehydrate_scf_wavefunction(snapshot, method="hf", reference="RHF")
+    core.clean_options()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_rehydrate_translates_deserialization_failure(monkeypatch):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    _, wfn = _build_scf_snapshot_case("hf", "RHF")
+    snapshot = checkpoint_mod.capture_scf_snapshot(wfn, reference="RHF", method="hf")
+
+    def boom(_snapshot):
+        raise RuntimeError("bad payload")
+
+    monkeypatch.setattr(core.Wavefunction, "from_file", boom)
+    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match="deserialization failed"):
         checkpoint_mod.rehydrate_scf_wavefunction(snapshot, method="hf", reference="RHF")
     core.clean_options()
 
