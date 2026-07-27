@@ -1270,6 +1270,47 @@ def test_saptdft_checkpoint_identity_excludes_runtime_controls(
 
 @pytest.mark.saptdft
 @pytest.mark.fsapt
+def test_saptdft_checkpoint_identity_selected_backend(
+    saptdft_checkpoint_identity_fixture,
+):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    molecule, function_kwargs, _ = saptdft_checkpoint_identity_fixture
+
+    psi4.set_options({"sapt_dft_use_einsums": False})
+    numpy_identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+        atomic_input=_saptdft_checkpoint_identity_inputs(
+            molecule, function_kwargs=function_kwargs
+        ),
+    )
+
+    psi4.set_options({"sapt_dft_use_einsums": True})
+    selected_identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+        atomic_input=_saptdft_checkpoint_identity_inputs(
+            molecule, function_kwargs=function_kwargs
+        ),
+    )
+
+    expected_selected_backend = (
+        "einsums" if checkpoint_mod._optional_module_version("einsums") else "numpy"
+    )
+    assert numpy_identity["execution_fingerprint"]["selected_backend"] == "numpy"
+    assert selected_identity["execution_fingerprint"]["selected_backend"] == expected_selected_backend
+    assert "dftd3_version" not in selected_identity["execution_fingerprint"]
+    assert "dftd4_version" not in selected_identity["execution_fingerprint"]
+    if expected_selected_backend == "einsums":
+        assert "einsums_version" in selected_identity["execution_fingerprint"]
+    else:
+        assert "einsums_version" not in selected_identity["execution_fingerprint"]
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
 def test_saptdft_checkpoint_store_manifest_schema(
     tmp_path, saptdft_checkpoint_identity_fixture
 ):
@@ -1369,6 +1410,46 @@ def test_saptdft_checkpoint_store_rejects_checksum_failure(
 
 @pytest.mark.saptdft
 @pytest.mark.fsapt
+def test_saptdft_checkpoint_store_rejects_artifact_path_escape(
+    tmp_path, saptdft_checkpoint_identity_fixture
+):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    molecule, function_kwargs, atomic_input = saptdft_checkpoint_identity_fixture
+    identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+        atomic_input=atomic_input,
+    )
+    checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
+    checkpoint.open()
+    checkpoint.commit_stage(
+        "grac_monomer_a",
+        arrays={"Elst_AB": np.arange(4.0).reshape(2, 2)},
+    )
+    checkpoint.close()
+
+    outside_path = tmp_path.parent / "outside.npy"
+    with outside_path.open("wb") as handle:
+        np.save(handle, np.arange(2.0), allow_pickle=False)
+    sha256, size = checkpoint_mod._file_digest_and_size(outside_path)
+
+    manifest_path = tmp_path / "saptdft_state.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["artifacts"]["Elst_AB"]["path"] = "../outside.npy"
+    manifest["artifacts"]["Elst_AB"]["sha256"] = sha256
+    manifest["artifacts"]["Elst_AB"]["size"] = size
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+
+    with pytest.raises(
+        psi4.driver.p4util.exceptions.ValidationError,
+        match="checkpoint directory",
+    ):
+        checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity).open()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
 def test_saptdft_checkpoint_store_rejects_unknown_stage(
     tmp_path, saptdft_checkpoint_identity_fixture
 ):
@@ -1417,6 +1498,38 @@ def test_saptdft_checkpoint_store_artifact_first_interruption(
     reopened = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
     reopened.open()
     assert not reopened.is_complete("grac_monomer_a")
+    reopened.close()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_store_wavefunction_artifact_smoke(
+    tmp_path, saptdft_checkpoint_identity_fixture
+):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    molecule, function_kwargs, atomic_input = saptdft_checkpoint_identity_fixture
+    identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+        atomic_input=atomic_input,
+    )
+
+    _, wfn = psi4.energy("hf", molecule=molecule, return_wfn=True)
+
+    checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
+    checkpoint.open()
+    checkpoint.commit_stage("grac_monomer_a", wavefunctions={"dimer_wfn": wfn})
+    checkpoint.close()
+
+    reopened = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
+    reopened.open()
+    assert reopened.is_complete("grac_monomer_a")
+    artifact = reopened._manifest["artifacts"]["dimer_wfn"]
+    assert artifact["kind"] == "scf_snapshot"
+    artifact_path = reopened._validate_artifact("dimer_wfn", artifact)
+    restored_wfn = core.Wavefunction.from_file(str(artifact_path))
+    compare_values(wfn.energy(), restored_wfn.energy(), 10, "checkpoint wavefunction energy")
     reopened.close()
 
 

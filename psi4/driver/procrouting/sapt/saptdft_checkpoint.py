@@ -40,6 +40,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 import numpy as np
 import qcelemental as qcel
 
+from psi4 import core
 from psi4.metadata import __version__, __version_long
 
 from ... import p4util
@@ -229,8 +230,33 @@ def _optional_module_version(name: str) -> Optional[str]:
     return getattr(module, "__version__", None) or "present"
 
 
-def _build_execution_fingerprint() -> dict[str, Any]:
-    return {
+def _select_saptdft_backend() -> str:
+    use_einsums = core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS")
+    einsums_version = _optional_module_version("einsums")
+    if einsums_version is not None and use_einsums:
+        return "einsums"
+    return "numpy"
+
+
+
+def _selected_addon_versions(canonical_input: Mapping[str, Any]) -> dict[str, Any]:
+    method = str(
+        canonical_input.get("specification", {})
+        .get("model", {})
+        .get("method", "")
+    ).lower()
+    addon_versions = {}
+    if "-d3" in method or "dft-d3" in method:
+        addon_versions["dftd3_version"] = _optional_module_version("dftd3")
+    if "-d4" in method or "dft-d4" in method:
+        addon_versions["dftd4_version"] = _optional_module_version("dftd4")
+    return addon_versions
+
+
+
+def _build_execution_fingerprint(canonical_input: Mapping[str, Any]) -> dict[str, Any]:
+    selected_backend = _select_saptdft_backend()
+    fingerprint = {
         "checkpoint_schema_version": SAPTDFT_CHECKPOINT_SCHEMA_VERSION,
         "stage_definition_version": SAPTDFT_STAGE_DEFINITION_VERSION,
         "psi4_version": __version__,
@@ -238,12 +264,13 @@ def _build_execution_fingerprint() -> dict[str, Any]:
         "qcelemental_version": qcel.__version__,
         "qcengine_version": _optional_module_version("qcengine"),
         "qcschema_model": "AtomicInput_v2",
-        "selected_backend": "einsums" if _optional_module_version("einsums") else "numpy",
-        "einsums_version": _optional_module_version("einsums"),
+        "selected_backend": selected_backend,
         "numpy_version": np.__version__,
-        "dftd3_version": _optional_module_version("dftd3"),
-        "dftd4_version": _optional_module_version("dftd4"),
     }
+    if selected_backend == "einsums":
+        fingerprint["einsums_version"] = _optional_module_version("einsums")
+    fingerprint.update(_selected_addon_versions(canonical_input))
+    return fingerprint
 
 
 def _coerce_atomic_input_dict(atomic_input: Any) -> dict[str, Any]:
@@ -309,7 +336,7 @@ def build_saptdft_job_identity(
             function_kwargs=function_kwargs,
         )
     canonical_input = _canonicalize_atomic_input(atomic_input, name=name)
-    execution_fingerprint = _build_execution_fingerprint()
+    execution_fingerprint = _build_execution_fingerprint(canonical_input)
     sha256 = hashlib.sha256(
         _json_dumps(
             {
@@ -535,7 +562,7 @@ class SAPTDFTCheckpoint:
         relpath = artifact.get("path")
         if not isinstance(relpath, str) or not relpath:
             raise ValidationError(f"SAPT(DFT) checkpoint artifact {name} in {self.manifest_path} is missing a valid path.")
-        artifact_path = self.path / relpath
+        artifact_path = self._resolve_artifact_path(name, relpath)
         if not artifact_path.exists():
             raise ValidationError(f"SAPT(DFT) checkpoint artifact {name} is missing: {artifact_path}")
         sha256, size = _file_digest_and_size(artifact_path)
@@ -543,6 +570,26 @@ class SAPTDFTCheckpoint:
             raise ValidationError(f"SAPT(DFT) checkpoint artifact {name} in {artifact_path} failed checksum validation.")
         if size != artifact.get("size"):
             raise ValidationError(f"SAPT(DFT) checkpoint artifact {name} in {artifact_path} failed size validation.")
+        return artifact_path
+
+    def _resolve_artifact_path(self, name: str, relpath: str) -> Path:
+        artifact_relpath = Path(relpath)
+        if artifact_relpath.is_absolute():
+            raise ValidationError(
+                f"SAPT(DFT) checkpoint artifact {name} in {self.manifest_path} must stay inside the checkpoint directory; absolute path {relpath!r} is not allowed."
+            )
+        if ".." in artifact_relpath.parts:
+            raise ValidationError(
+                f"SAPT(DFT) checkpoint artifact {name} in {self.manifest_path} must stay inside the checkpoint directory; traversal path {relpath!r} is not allowed."
+            )
+        base_path = self.path.resolve()
+        artifact_path = (self.path / artifact_relpath).resolve(strict=False)
+        try:
+            artifact_path.relative_to(base_path)
+        except ValueError as exc:
+            raise ValidationError(
+                f"SAPT(DFT) checkpoint artifact {name} in {self.manifest_path} resolves outside the checkpoint directory: {relpath!r}."
+            ) from exc
         return artifact_path
 
     def _normalize_scalars(self, scalars: Mapping[str, Any]) -> Dict[str, Any]:
