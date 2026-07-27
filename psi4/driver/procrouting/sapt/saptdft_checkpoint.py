@@ -130,32 +130,32 @@ class StageDefinition:
 SAPTDFT_STAGE_DEFINITIONS: dict[str, StageDefinition] = {
     "grac_monomer_a": StageDefinition(),
     "grac_monomer_b": StageDefinition(),
-    "hf_dimer_scf": StageDefinition(dependencies=("grac_monomer_a", "grac_monomer_b")),
+    "hf_dimer_scf": StageDefinition(),
     "hf_monomer_a_scf": StageDefinition(dependencies=("hf_dimer_scf",)),
     "hf_monomer_b_scf": StageDefinition(dependencies=("hf_monomer_a_scf",)),
     "hf_sapt_elst": StageDefinition(dependencies=("hf_monomer_b_scf",)),
     "hf_sapt_exch": StageDefinition(dependencies=("hf_sapt_elst",)),
     "hf_sapt_ind": StageDefinition(dependencies=("hf_sapt_exch",)),
-    "dimer_localization_scf": StageDefinition(dependencies=("hf_monomer_b_scf",)),
-    "monomer_a_dft_scf": StageDefinition(dependencies=("dimer_localization_scf",)),
+    "dimer_localization_scf": StageDefinition(),
+    "monomer_a_dft_scf": StageDefinition(),
     "monomer_b_dft_scf": StageDefinition(dependencies=("monomer_a_dft_scf",)),
     "delta_dft_dimer_scf": StageDefinition(dependencies=("monomer_b_dft_scf",)),
     "delta_dft_monomer_a_scf": StageDefinition(dependencies=("delta_dft_dimer_scf",)),
     "delta_dft_monomer_b_scf": StageDefinition(dependencies=("delta_dft_monomer_a_scf",)),
     "delta_dft": StageDefinition(dependencies=("delta_dft_monomer_b_scf",)),
-    "elst": StageDefinition(dependencies=("monomer_b_dft_scf",)),
+    "elst": StageDefinition(),
     "exch": StageDefinition(dependencies=("elst",)),
     "ind": StageDefinition(dependencies=("exch",)),
     "disp": StageDefinition(dependencies=("ind",)),
-    "d3": StageDefinition(dependencies=("disp",)),
-    "d4": StageDefinition(dependencies=("disp",)),
-    "fsapt_setup": StageDefinition(dependencies=("monomer_b_dft_scf",)),
+    "d3": StageDefinition(),
+    "d4": StageDefinition(),
+    "fsapt_setup": StageDefinition(),
     "fsapt_elst": StageDefinition(dependencies=("fsapt_setup",)),
     "fsapt_exch": StageDefinition(dependencies=("fsapt_elst",)),
     "fsapt_ind": StageDefinition(dependencies=("fsapt_exch",)),
     "fsapt_disp": StageDefinition(dependencies=("fsapt_ind",)),
     "fsapt_final": StageDefinition(dependencies=("fsapt_disp",)),
-    "final": StageDefinition(dependencies=("disp",)),
+    "final": StageDefinition(dependencies=("ind",)),
 }
 
 
@@ -963,7 +963,13 @@ def _copy_rehydrated_qcvariables(target: core.HF, source: core.Wavefunction) -> 
         target.set_variable(key, value)
 
 
-def rehydrate_scf_wavefunction(snapshot, *, method: str, reference: str) -> core.HF:
+def rehydrate_scf_wavefunction(
+    snapshot,
+    *,
+    method: str,
+    reference: str,
+    molecule: core.Molecule | None = None,
+) -> core.HF:
     snapshot_data = _load_scf_snapshot_data(snapshot)
     _prevalidate_scf_snapshot_structure(snapshot_data)
     loaded = _deserialize_scf_snapshot(snapshot_data)
@@ -971,7 +977,18 @@ def rehydrate_scf_wavefunction(snapshot, *, method: str, reference: str) -> core
 
     from ..proc import scf_wavefunction_factory
 
-    fresh_base = core.Wavefunction.build(loaded.molecule(), loaded.basisset())
+    if molecule is not None:
+        supplied_molecule = _normalize_jsonable(molecule.to_dict())
+        molecule_difference = _first_difference(_normalize_jsonable(metadata.get("molecule")), supplied_molecule)
+        if molecule_difference:
+            raise ValidationError(
+                f"SCF snapshot supplied molecule does not match snapshot identity: {molecule_difference}"
+            )
+        fresh_molecule = molecule
+    else:
+        fresh_molecule = loaded.molecule()
+
+    fresh_base = core.Wavefunction.build(fresh_molecule, loaded.basisset())
     rehydrated = scf_wavefunction_factory(method, fresh_base, _normalize_scf_reference(reference))
     _initialize_rehydrated_scf_state(rehydrated)
     factory_basissets = _capture_factory_basissets(rehydrated)
@@ -990,6 +1007,10 @@ def rehydrate_scf_wavefunction(snapshot, *, method: str, reference: str) -> core
     _copy_rehydrated_vector_fields(rehydrated, loaded)
     _copy_rehydrated_qcvariables(rehydrated, loaded)
     rehydrated.set_energy(loaded.energy())
+
+    vpot = rehydrated.V_potential()
+    if vpot is not None:
+        vpot.set_D([rehydrated.Da()])
 
     for key, basis in factory_basissets.items():
         rehydrated.set_basisset(key, basis)

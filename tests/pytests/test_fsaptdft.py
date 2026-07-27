@@ -1670,8 +1670,6 @@ def _assert_rehydrated_matches_loaded(restored, loaded, wfn, snapshot, expected_
     jk = core.JK.build(restored.basisset(), restored.get_basisset("DF_BASIS_SCF"))
     jk.initialize()
     restored.set_jk(jk)
-    if reference == "RKS":
-        restored.form_V()
     trial = core.Matrix("trial", restored.doccpi(), restored.nmopi() - restored.doccpi())
     hx = restored.cphf_Hx([trial])
     assert len(hx) == 1
@@ -1893,6 +1891,166 @@ no_com
 
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "safe" in completed.stdout
+
+
+def _saptdft_prepared_checkpoint_monomers():
+    from psi4.driver.procrouting import proc_util
+
+    dimer = psi4.geometry(
+        """
+0 1
+Ne 0 0 0
+--
+0 1
+Ne 0 0 3.0
+units angstrom
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    return proc_util.prepare_sapt_molecule(dimer, "dimer")
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_rehydrate_preserves_prepared_molecule_subset_nre(monkeypatch):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    _configure_scf_snapshot_options("RKS")
+    _, monomerA, _ = _saptdft_prepared_checkpoint_monomers()
+    _, wfn = psi4.energy("svwn", molecule=monomerA, return_wfn=True)
+    snapshot = checkpoint_mod.capture_scf_snapshot(wfn, reference="RKS", method="svwn")
+    loaded = core.Wavefunction.from_file(snapshot)
+    _guard_scf_rehydrate(monkeypatch)
+
+    restored = checkpoint_mod.rehydrate_scf_wavefunction(
+        snapshot, method="svwn", reference="RKS", molecule=monomerA
+    )
+
+    assert loaded.molecule().extract_subsets([1, 2]).nuclear_repulsion_energy() == 0.0
+    compare_values(
+        wfn.molecule().extract_subsets([1, 2]).nuclear_repulsion_energy(),
+        restored.molecule().extract_subsets([1, 2]).nuclear_repulsion_energy(),
+        12,
+        "prepared molecule subset nuclear repulsion",
+    )
+    core.clean_options()
+
+
+
+def _run_fsaptdft_checkpoint_worker(*, checkpoint_dir, mode, stop_after=None, guard_jk=False, forbid_banners=None):
+    worker = os.path.join(os.path.dirname(__file__), "fsaptdft_checkpoint_worker.py")
+    command = [sys.executable, worker, mode, str(checkpoint_dir)]
+    if stop_after is not None:
+        command.extend(["--stop-after", stop_after])
+    if guard_jk:
+        command.append("--guard-jk")
+    for banner in forbid_banners or []:
+        command.extend(["--forbid-banner", banner])
+    completed = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=dict(os.environ),
+    )
+    output_lines = [line for line in completed.stdout.splitlines() if line.strip()]
+    payload = json.loads(output_lines[-1])
+    return completed, payload
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_stage_dependencies():
+    checkpoint_mod = _saptdft_checkpoint_module()
+    from psi4.driver.procrouting.sapt import sapt_proc as sapt_proc_mod
+
+    assert not hasattr(sapt_proc_mod, "_SAPTDFT_CHECKPOINT_STAGES")
+    for stage in ["elst", "exch", "ind", "disp", "delta_dft", "d3", "d4", "final"]:
+        assert stage in checkpoint_mod.SAPTDFT_STAGE_DEFINITIONS
+    assert "build_jk" not in checkpoint_mod.SAPTDFT_STAGE_DEFINITIONS
+    assert "hf_sapt_jk" not in checkpoint_mod.SAPTDFT_STAGE_DEFINITIONS
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_d3_d4():
+    checkpoint_mod = _saptdft_checkpoint_module()
+    assert "d3" in checkpoint_mod.SAPTDFT_STAGE_DEFINITIONS
+    assert "d4" in checkpoint_mod.SAPTDFT_STAGE_DEFINITIONS
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@pytest.mark.parametrize(
+    "stop_stage, forbidden_banners",
+    [
+        (
+            "monomer_a_dft_scf",
+            [
+                "SAPT(DFT): delta HF Dimer",
+                "SAPT(DFT): delta HF Monomer A",
+                "SAPT(DFT): delta HF Monomer B",
+                "SAPT(DFT): DFT Monomer A",
+            ],
+        ),
+        (
+            "monomer_b_dft_scf",
+            [
+                "SAPT(DFT): delta HF Dimer",
+                "SAPT(DFT): delta HF Monomer A",
+                "SAPT(DFT): delta HF Monomer B",
+                "SAPT(DFT): DFT Monomer A",
+                "SAPT(DFT): DFT Monomer B",
+            ],
+        ),
+    ],
+)
+def test_saptdft_checkpoint_restart_skips_scf(tmp_path, stop_stage, forbidden_banners):
+    _, reference = _run_fsaptdft_checkpoint_worker(checkpoint_dir="", mode="reference")
+    assert reference["status"] == "ok"
+
+    checkpoint_dir = tmp_path / stop_stage
+    stopped_proc, stopped = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="stop",
+        stop_after=stop_stage,
+    )
+    assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
+    assert stopped["status"] == "stopped"
+    assert stop_stage in stopped["completed_stages"]
+
+    restarted_proc, restarted = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="restart_with_guards",
+        forbid_banners=forbidden_banners,
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "ok"
+    compare_values(reference["elst10_r"], restarted["elst10_r"], 8, "checkpoint restart electrostatics")
+    compare_values(reference["sapt_total_energy"], restarted["sapt_total_energy"], 8, "checkpoint restart energy")
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_final_restart_returns_before_scf_and_jk(tmp_path):
+    checkpoint_dir = tmp_path / "final"
+    stopped_proc, stopped = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="stop",
+        stop_after="final",
+    )
+    assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
+    assert stopped["status"] == "stopped"
+    assert "final" in stopped["completed_stages"]
+
+    restarted_proc, restarted = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="restart_with_guards",
+        guard_jk=True,
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "ok"
 
 
 if __name__ == "__main__":
