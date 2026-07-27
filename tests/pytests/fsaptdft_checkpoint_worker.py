@@ -5,7 +5,7 @@ from pathlib import Path
 
 import psi4
 from psi4 import core
-from psi4.driver.procrouting import proc
+from psi4.driver.procrouting import proc, proc_util
 from psi4.driver.procrouting.sapt import sapt_proc
 
 
@@ -28,59 +28,52 @@ def _safe_variable(name):
         return None
 
 
-def _configure():
+def _molecule_signature(molecule):
+    payload = molecule.to_schema(dtype=2)
+    return json.dumps(payload, sort_keys=True)
+
+
+def _configure(scenario, name):
     core.clean()
     core.clean_options()
     psi4.set_memory("1 GiB")
     psi4.set_num_threads(1)
     core.set_output_file("/dev/null", False)
     mol = psi4.geometry(GEOMETRY)
-    psi4.set_options(
-        {
-            "basis": "sto-3g",
-            "freeze_core": False,
-            "guess": "sad",
-            "orbital_optimizer_package": "internal",
-            "sapt_dft_do_hybrid": False,
-            "sapt_dft_grac_shift_a": 0.0,
-            "sapt_dft_grac_shift_b": 0.0,
-            "sapt_dft_use_einsums": False,
-            "scf_type": "df",
-            "sapt_dft_do_ddft": True,
-            "sapt_dft_do_dhf": True,
-            "sapt_dft_do_disp": False,
-            "sapt_dft_do_fsapt": "none",
-            "sapt_dft_functional": "svwn",
-        }
-    )
-    return mol
-
-
-def _install_scf_guards(*, guard_jk: bool, forbidden_banners):
-    def boom(*args, **kwargs):
-        raise AssertionError("SCF convergence entry point called during checkpoint restart")
-
-    if forbidden_banners:
-        forbidden = set(forbidden_banners)
-        original_proc_scf_helper = proc.scf_helper
-
-        def guarded_scf_helper(*args, **kwargs):
-            if kwargs.get("banner") in forbidden:
-                raise AssertionError(f"Forbidden SCF helper replayed during checkpoint restart: {kwargs.get('banner')}")
-            return original_proc_scf_helper(*args, **kwargs)
-
-        proc.scf_helper = guarded_scf_helper
-        sapt_proc.scf_helper = guarded_scf_helper
-    else:
-        proc.scf_helper = boom
-        proc.run_scf = boom
-        sapt_proc.scf_helper = boom
-        sapt_proc.run_scf = boom
-        for attr in ["compute_energy", "guess", "diis"]:
-            setattr(core.HF, attr, boom)
-    if guard_jk:
-        core.JK.build = boom
-        sapt_proc._saptdft_prepare_restored_scf = boom
+    options = {
+        "basis": "sto-3g",
+        "freeze_core": False,
+        "guess": "sad",
+        "orbital_optimizer_package": "internal",
+        "sapt_dft_do_hybrid": False,
+        "sapt_dft_grac_shift_a": 0.0,
+        "sapt_dft_grac_shift_b": 0.0,
+        "sapt_dft_use_einsums": False,
+        "scf_type": "df",
+        "sapt_dft_do_ddft": True,
+        "sapt_dft_do_dhf": True,
+        "sapt_dft_do_disp": False,
+        "sapt_dft_do_fsapt": "none",
+        "sapt_dft_functional": "svwn",
+    }
+    if "-d3" in name.lower() or "-d4" in name.lower():
+        options["sapt_dft_functional"] = "pbe0"
+    if scenario == "localization":
+        options.update(
+            {
+                "sapt_dft_do_dhf": False,
+                "sapt_dft_do_ddft": False,
+                "sapt_dft_do_fsapt": "FISAPT",
+                "fisapt_fsapt_filepath": "none",
+            }
+        )
+    psi4.set_options(options)
+    sapt_dimer, monomer_a, monomer_b = proc_util.prepare_sapt_molecule(mol, "dimer")
+    return mol, {
+        "dimer": _molecule_signature(sapt_dimer),
+        "monomer_a": _molecule_signature(monomer_a),
+        "monomer_b": _molecule_signature(monomer_b),
+    }
 
 
 def _manifest_summary(checkpoint_dir: str):
@@ -97,20 +90,114 @@ def _manifest_summary(checkpoint_dir: str):
     }
 
 
+def _install_scf_guards(*, checkpoint_dir: str, guard_jk: bool, forbidden_banners, molecule_signatures):
+    manifest = _manifest_summary(checkpoint_dir)
+    completed_stages = set(manifest["completed_stages"] if manifest is not None else [])
+    current_stage = {"name": None}
+    run_scf_counts = {"dimer": 0, "monomer_a": 0, "monomer_b": 0}
+
+    banner_stage_map = {
+        "SAPT(DFT): delta HF Dimer": "hf_dimer_scf",
+        "SAPT(DFT): delta HF Monomer A": "hf_monomer_a_scf",
+        "SAPT(DFT): delta HF Monomer B": "hf_monomer_b_scf",
+        "SAPT(DFT): Dimer for Localization": "dimer_localization_scf",
+        "SAPT(DFT): DFT Monomer A": "monomer_a_dft_scf",
+        "SAPT(DFT): DFT Monomer B": "monomer_b_dft_scf",
+    }
+
+    def boom(message):
+        raise AssertionError(message)
+
+    def _classify_run_scf_stage(molecule):
+        signature = _molecule_signature(molecule)
+        if signature == molecule_signatures["dimer"]:
+            run_scf_counts["dimer"] += 1
+            return "delta_dft_dimer_scf"
+        if signature == molecule_signatures["monomer_a"]:
+            run_scf_counts["monomer_a"] += 1
+            return "delta_dft_monomer_a_scf"
+        if signature == molecule_signatures["monomer_b"]:
+            run_scf_counts["monomer_b"] += 1
+            return "delta_dft_monomer_b_scf"
+        boom("Unclassified run_scf molecule encountered during checkpoint restart")
+
+    original_proc_scf_helper = proc.scf_helper
+    original_proc_run_scf = proc.run_scf
+
+    forbidden_banner_set = set(forbidden_banners)
+
+    def guarded_scf_helper(*args, **kwargs):
+        banner = kwargs.get("banner")
+        stage = banner_stage_map.get(banner)
+        restore_stage = current_stage["name"]
+        if stage is None and banner is None and restore_stage is not None:
+            stage = restore_stage
+        if stage is None:
+            boom(f"Unclassified scf_helper banner encountered during checkpoint restart: {banner!r}")
+        if banner in forbidden_banner_set or stage in completed_stages:
+            boom(f"SCF helper replayed completed checkpoint stage {stage}: {banner}")
+        current_stage["name"] = stage
+        try:
+            return original_proc_scf_helper(*args, **kwargs)
+        finally:
+            current_stage["name"] = restore_stage
+
+    def guarded_run_scf(*args, **kwargs):
+        molecule = kwargs.get("molecule")
+        if molecule is None:
+            boom("run_scf called without molecule during checkpoint restart")
+        stage = _classify_run_scf_stage(molecule)
+        if stage in completed_stages:
+            boom(f"run_scf replayed completed checkpoint stage {stage}")
+        current_stage["name"] = stage
+        try:
+            return original_proc_run_scf(*args, **kwargs)
+        finally:
+            current_stage["name"] = None
+
+    proc.scf_helper = guarded_scf_helper
+    proc.run_scf = guarded_run_scf
+    sapt_proc.scf_helper = guarded_scf_helper
+    sapt_proc.run_scf = guarded_run_scf
+
+    for attr in ["compute_energy", "guess", "diis"]:
+        original = getattr(core.HF, attr)
+
+        def guarded(self, *args, _original=original, _attr=attr, **kwargs):
+            stage = current_stage["name"]
+            if stage in completed_stages:
+                boom(f"core.HF.{_attr} replayed completed checkpoint stage {stage}")
+            return _original(self, *args, **kwargs)
+
+        setattr(core.HF, attr, guarded)
+
+    if guard_jk:
+        def guarded_jk_build(*args, **kwargs):
+            boom("JK.build called during guarded final checkpoint restart")
+        core.JK.build = guarded_jk_build
+        sapt_proc._saptdft_prepare_restored_scf = guarded_jk_build
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["reference", "stop", "restart", "restart_with_guards"])
     parser.add_argument("checkpoint_dir")
     parser.add_argument("--stop-after")
     parser.add_argument("--name", default="sapt(dft)")
+    parser.add_argument("--scenario", default="default", choices=["default", "localization"])
     parser.add_argument("--guard-jk", action="store_true")
     parser.add_argument("--forbid-banner", action="append", default=[])
     args = parser.parse_args()
 
+    mol, molecule_signatures = _configure(args.scenario, args.name)
     if args.mode == "restart_with_guards":
-        _install_scf_guards(guard_jk=args.guard_jk, forbidden_banners=args.forbid_banner)
+        _install_scf_guards(
+            checkpoint_dir=args.checkpoint_dir,
+            guard_jk=args.guard_jk,
+            forbidden_banners=args.forbid_banner,
+            molecule_signatures=molecule_signatures,
+        )
 
-    mol = _configure()
     kwargs = {"molecule": mol}
     if args.checkpoint_dir:
         kwargs["checkpoint_dir"] = args.checkpoint_dir
@@ -122,12 +209,13 @@ def main():
         "checkpoint_dir": args.checkpoint_dir,
         "stop_after": args.stop_after,
         "name": args.name,
+        "scenario": args.scenario,
     }
     try:
         psi4.energy(args.name, **kwargs)
         summary["status"] = "ok"
     except RuntimeError as exc:
-        if args.mode == "stop" and str(exc) == f"SAPT(DFT) checkpoint stop after {args.stop_after}":
+        if args.stop_after and str(exc) == f"SAPT(DFT) checkpoint stop after {args.stop_after}":
             summary["status"] = "stopped"
             summary["message"] = str(exc)
         else:

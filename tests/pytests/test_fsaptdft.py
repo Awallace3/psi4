@@ -1938,9 +1938,18 @@ def test_saptdft_checkpoint_rehydrate_preserves_prepared_molecule_subset_nre(mon
 
 
 
-def _run_fsaptdft_checkpoint_worker(*, checkpoint_dir, mode, stop_after=None, guard_jk=False, forbid_banners=None):
+def _run_fsaptdft_checkpoint_worker(
+    *,
+    checkpoint_dir,
+    mode,
+    stop_after=None,
+    name="sapt(dft)",
+    scenario="default",
+    guard_jk=False,
+    forbid_banners=None,
+):
     worker = os.path.join(os.path.dirname(__file__), "fsaptdft_checkpoint_worker.py")
-    command = [sys.executable, worker, mode, str(checkpoint_dir)]
+    command = [sys.executable, worker, mode, str(checkpoint_dir), "--name", name, "--scenario", scenario]
     if stop_after is not None:
         command.extend(["--stop-after", stop_after])
     if guard_jk:
@@ -1959,6 +1968,157 @@ def _run_fsaptdft_checkpoint_worker(*, checkpoint_dir, mode, stop_after=None, gu
     return completed, payload
 
 
+_TASK3_DEFAULT_STOP_STAGE_SETS = {
+    "hf_dimer_scf": ["hf_dimer_scf"],
+    "hf_monomer_a_scf": ["hf_dimer_scf", "hf_monomer_a_scf"],
+    "hf_monomer_b_scf": ["hf_dimer_scf", "hf_monomer_a_scf", "hf_monomer_b_scf"],
+    "monomer_a_dft_scf": [
+        "hf_dimer_scf",
+        "hf_monomer_a_scf",
+        "hf_monomer_b_scf",
+        "hf_sapt_elst",
+        "hf_sapt_exch",
+        "hf_sapt_ind",
+        "monomer_a_dft_scf",
+    ],
+    "monomer_b_dft_scf": [
+        "hf_dimer_scf",
+        "hf_monomer_a_scf",
+        "hf_monomer_b_scf",
+        "hf_sapt_elst",
+        "hf_sapt_exch",
+        "hf_sapt_ind",
+        "monomer_a_dft_scf",
+        "monomer_b_dft_scf",
+    ],
+    "delta_dft_dimer_scf": [
+        "hf_dimer_scf",
+        "hf_monomer_a_scf",
+        "hf_monomer_b_scf",
+        "hf_sapt_elst",
+        "hf_sapt_exch",
+        "hf_sapt_ind",
+        "monomer_a_dft_scf",
+        "monomer_b_dft_scf",
+        "delta_dft_dimer_scf",
+    ],
+    "delta_dft_monomer_a_scf": [
+        "hf_dimer_scf",
+        "hf_monomer_a_scf",
+        "hf_monomer_b_scf",
+        "hf_sapt_elst",
+        "hf_sapt_exch",
+        "hf_sapt_ind",
+        "monomer_a_dft_scf",
+        "monomer_b_dft_scf",
+        "delta_dft_dimer_scf",
+        "delta_dft_monomer_a_scf",
+    ],
+    "delta_dft_monomer_b_scf": [
+        "hf_dimer_scf",
+        "hf_monomer_a_scf",
+        "hf_monomer_b_scf",
+        "hf_sapt_elst",
+        "hf_sapt_exch",
+        "hf_sapt_ind",
+        "monomer_a_dft_scf",
+        "monomer_b_dft_scf",
+        "delta_dft_dimer_scf",
+        "delta_dft_monomer_a_scf",
+        "delta_dft_monomer_b_scf",
+    ],
+}
+
+
+_TASK3_DEFAULT_FORBIDDEN_BANNERS = {
+    "hf_dimer_scf": ["SAPT(DFT): delta HF Dimer"],
+    "hf_monomer_a_scf": ["SAPT(DFT): delta HF Dimer", "SAPT(DFT): delta HF Monomer A"],
+    "hf_monomer_b_scf": [
+        "SAPT(DFT): delta HF Dimer",
+        "SAPT(DFT): delta HF Monomer A",
+        "SAPT(DFT): delta HF Monomer B",
+    ],
+    "monomer_a_dft_scf": [
+        "SAPT(DFT): delta HF Dimer",
+        "SAPT(DFT): delta HF Monomer A",
+        "SAPT(DFT): delta HF Monomer B",
+        "SAPT(DFT): DFT Monomer A",
+    ],
+    "monomer_b_dft_scf": [
+        "SAPT(DFT): delta HF Dimer",
+        "SAPT(DFT): delta HF Monomer A",
+        "SAPT(DFT): delta HF Monomer B",
+        "SAPT(DFT): DFT Monomer A",
+        "SAPT(DFT): DFT Monomer B",
+    ],
+    "delta_dft_dimer_scf": [
+        "SAPT(DFT): delta HF Dimer",
+        "SAPT(DFT): delta HF Monomer A",
+        "SAPT(DFT): delta HF Monomer B",
+        "SAPT(DFT): DFT Monomer A",
+        "SAPT(DFT): DFT Monomer B",
+    ],
+    "delta_dft_monomer_a_scf": [
+        "SAPT(DFT): delta HF Dimer",
+        "SAPT(DFT): delta HF Monomer A",
+        "SAPT(DFT): delta HF Monomer B",
+        "SAPT(DFT): DFT Monomer A",
+        "SAPT(DFT): DFT Monomer B",
+    ],
+    "delta_dft_monomer_b_scf": [
+        "SAPT(DFT): delta HF Dimer",
+        "SAPT(DFT): delta HF Monomer A",
+        "SAPT(DFT): delta HF Monomer B",
+        "SAPT(DFT): DFT Monomer A",
+        "SAPT(DFT): DFT Monomer B",
+    ],
+}
+
+
+def _task3_test_options(overrides=None):
+    options = {
+        "basis": "sto-3g",
+        "scf_type": "df",
+        "guess": "sad",
+        "freeze_core": False,
+        "orbital_optimizer_package": "internal",
+        "sapt_dft_functional": "svwn",
+        "sapt_dft_do_dhf": True,
+        "sapt_dft_do_ddft": True,
+        "sapt_dft_do_disp": False,
+        "sapt_dft_do_fsapt": "none",
+        "sapt_dft_do_hybrid": False,
+        "sapt_dft_grac_shift_a": 0.0,
+        "sapt_dft_grac_shift_b": 0.0,
+        "sapt_dft_use_einsums": False,
+    }
+    options.update(overrides or {})
+    return options
+
+
+def _build_task3_checkpoint_identity(checkpoint_mod, *, name="sapt(dft)", options=None):
+    core.clean_options()
+    psi4.set_options(_task3_test_options(options))
+    molecule = _saptdft_checkpoint_molecule()
+    function_kwargs = {"checkpoint_dir": "identity-dir", "checkpoint_stop_after": "final"}
+    atomic_input = _saptdft_checkpoint_identity_inputs(molecule, function_kwargs=function_kwargs)
+    identity = checkpoint_mod.build_saptdft_job_identity(
+        name=name,
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+        atomic_input=atomic_input,
+    )
+    return molecule, identity
+
+
+def _assert_checkpoint_stop_result(stopped, *, expected_stages, stop_stage):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    assert stopped["completed_stages"] == sorted(expected_stages)
+    assert stopped["manifest"]["completed_stages"][stop_stage]["dependencies"] == list(
+        checkpoint_mod.selected_stage_dependencies(stopped["manifest"]["job_identity"], stop_stage)
+    )
+
+
 @pytest.mark.saptdft
 @pytest.mark.fsapt
 def test_saptdft_checkpoint_stage_dependencies():
@@ -1974,39 +2134,73 @@ def test_saptdft_checkpoint_stage_dependencies():
 
 @pytest.mark.saptdft
 @pytest.mark.fsapt
-def test_saptdft_checkpoint_d3_d4():
+def test_saptdft_checkpoint_stage_dependencies_selected_default_path(tmp_path):
     checkpoint_mod = _saptdft_checkpoint_module()
-    assert "d3" in checkpoint_mod.SAPTDFT_STAGE_DEFINITIONS
-    assert "d4" in checkpoint_mod.SAPTDFT_STAGE_DEFINITIONS
+    _, identity = _build_task3_checkpoint_identity(checkpoint_mod)
+    checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
+    checkpoint.open()
+    checkpoint.commit_stage("hf_dimer_scf")
+    checkpoint.commit_stage("hf_monomer_a_scf")
+    checkpoint.commit_stage("hf_monomer_b_scf")
+    checkpoint.commit_stage("hf_sapt_elst")
+    checkpoint.commit_stage("hf_sapt_exch")
+    checkpoint.commit_stage("hf_sapt_ind")
+    checkpoint.commit_stage("monomer_a_dft_scf")
+    checkpoint.commit_stage("monomer_b_dft_scf")
+    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match="delta_dft"):
+        checkpoint.commit_stage("elst")
+    checkpoint.close()
 
 
 @pytest.mark.saptdft
 @pytest.mark.fsapt
-@pytest.mark.parametrize(
-    "stop_stage, forbidden_banners",
-    [
-        (
-            "monomer_a_dft_scf",
-            [
-                "SAPT(DFT): delta HF Dimer",
-                "SAPT(DFT): delta HF Monomer A",
-                "SAPT(DFT): delta HF Monomer B",
-                "SAPT(DFT): DFT Monomer A",
-            ],
-        ),
-        (
-            "monomer_b_dft_scf",
-            [
-                "SAPT(DFT): delta HF Dimer",
-                "SAPT(DFT): delta HF Monomer A",
-                "SAPT(DFT): delta HF Monomer B",
-                "SAPT(DFT): DFT Monomer A",
-                "SAPT(DFT): DFT Monomer B",
-            ],
-        ),
-    ],
-)
-def test_saptdft_checkpoint_restart_skips_scf(tmp_path, stop_stage, forbidden_banners):
+def test_saptdft_checkpoint_stage_dependencies_selected_localization_path(tmp_path):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    _, identity = _build_task3_checkpoint_identity(
+        checkpoint_mod,
+        options={"sapt_dft_do_dhf": False, "sapt_dft_do_ddft": False, "sapt_dft_do_fsapt": "fisapt"},
+    )
+    checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
+    checkpoint.open()
+    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match="dimer_localization_scf"):
+        checkpoint.commit_stage("monomer_a_dft_scf")
+    checkpoint.close()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_stage_dependencies_selected_d3_path(tmp_path):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    _, identity = _build_task3_checkpoint_identity(
+        checkpoint_mod,
+        name="sapt(dft)-d3(s)",
+        options={"sapt_dft_do_ddft": False, "sapt_dft_do_disp": False, "sapt_dft_d3_ie": True},
+    )
+    checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
+    checkpoint.open()
+    for stage in [
+        "hf_dimer_scf",
+        "hf_monomer_a_scf",
+        "hf_monomer_b_scf",
+        "hf_sapt_elst",
+        "hf_sapt_exch",
+        "hf_sapt_ind",
+        "monomer_a_dft_scf",
+        "monomer_b_dft_scf",
+        "elst",
+        "exch",
+        "ind",
+    ]:
+        checkpoint.commit_stage(stage)
+    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match="d3"):
+        checkpoint.commit_stage("final")
+    checkpoint.close()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@pytest.mark.parametrize("stop_stage", list(_TASK3_DEFAULT_STOP_STAGE_SETS))
+def test_saptdft_checkpoint_restart_skips_scf(tmp_path, stop_stage):
     _, reference = _run_fsaptdft_checkpoint_worker(checkpoint_dir="", mode="reference")
     assert reference["status"] == "ok"
 
@@ -2018,22 +2212,164 @@ def test_saptdft_checkpoint_restart_skips_scf(tmp_path, stop_stage, forbidden_ba
     )
     assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
     assert stopped["status"] == "stopped"
-    assert stop_stage in stopped["completed_stages"]
+    _assert_checkpoint_stop_result(
+        stopped,
+        expected_stages=_TASK3_DEFAULT_STOP_STAGE_SETS[stop_stage],
+        stop_stage=stop_stage,
+    )
 
     restarted_proc, restarted = _run_fsaptdft_checkpoint_worker(
         checkpoint_dir=checkpoint_dir,
         mode="restart_with_guards",
-        forbid_banners=forbidden_banners,
+        forbid_banners=_TASK3_DEFAULT_FORBIDDEN_BANNERS[stop_stage],
     )
     assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
     assert restarted["status"] == "ok"
-    compare_values(reference["elst10_r"], restarted["elst10_r"], 8, "checkpoint restart electrostatics")
-    compare_values(reference["sapt_total_energy"], restarted["sapt_total_energy"], 8, "checkpoint restart energy")
+    compare_values(reference["elst10_r"], restarted["elst10_r"], 8, f"checkpoint restart electrostatics {stop_stage}")
+    compare_values(reference["sapt_total_energy"], restarted["sapt_total_energy"], 8, f"checkpoint restart energy {stop_stage}")
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_restart_skips_localization_scf(tmp_path):
+    _, reference = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=tmp_path / "localization-reference",
+        mode="stop",
+        stop_after="monomer_a_dft_scf",
+        scenario="localization",
+    )
+    assert reference["status"] == "stopped"
+
+    checkpoint_dir = tmp_path / "dimer_localization_scf"
+    stopped_proc, stopped = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="stop",
+        stop_after="dimer_localization_scf",
+        scenario="localization",
+    )
+    assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
+    assert stopped["status"] == "stopped"
+    _assert_checkpoint_stop_result(
+        stopped,
+        expected_stages=["dimer_localization_scf"],
+        stop_stage="dimer_localization_scf",
+    )
+
+    restarted_proc, restarted = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="restart_with_guards",
+        scenario="localization",
+        stop_after="monomer_a_dft_scf",
+        forbid_banners=["SAPT(DFT): Dimer for Localization"],
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "stopped"
+    _assert_checkpoint_stop_result(
+        restarted,
+        expected_stages=["dimer_localization_scf", "monomer_a_dft_scf"],
+        stop_stage="monomer_a_dft_scf",
+    )
+    compare_values(reference["current_energy"], restarted["current_energy"], 8, "checkpoint restart localization monomer energy")
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@uusing("dftd4")
+@pytest.mark.dftd4
+def test_saptdft_checkpoint_d4(tmp_path):
+    expected_stages = [
+        "hf_dimer_scf",
+        "hf_monomer_a_scf",
+        "hf_monomer_b_scf",
+        "hf_sapt_elst",
+        "hf_sapt_exch",
+        "hf_sapt_ind",
+        "monomer_a_dft_scf",
+        "monomer_b_dft_scf",
+        "d4",
+    ]
+    _, reference = _run_fsaptdft_checkpoint_worker(checkpoint_dir="", mode="reference", name="sapt(dft)-d4(s)")
+    assert reference["status"] == "ok"
+
+    checkpoint_dir = tmp_path / "d4"
+    stopped_proc, stopped = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="stop",
+        stop_after="d4",
+        name="sapt(dft)-d4(s)",
+    )
+    assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
+    assert stopped["status"] == "stopped"
+    _assert_checkpoint_stop_result(stopped, expected_stages=expected_stages, stop_stage="d4")
+
+    restarted_proc, restarted = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="restart_with_guards",
+        name="sapt(dft)-d4(s)",
+        forbid_banners=[
+            "SAPT(DFT): delta HF Dimer",
+            "SAPT(DFT): delta HF Monomer A",
+            "SAPT(DFT): delta HF Monomer B",
+            "SAPT(DFT): DFT Monomer A",
+            "SAPT(DFT): DFT Monomer B",
+        ],
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "ok"
+    compare_values(reference["sapt_total_energy"], restarted["sapt_total_energy"], 8, "checkpoint restart d4 energy")
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@uusing("s-dftd3")
+@pytest.mark.dftd3
+def test_saptdft_checkpoint_d3(tmp_path):
+    expected_stages = [
+        "hf_dimer_scf",
+        "hf_monomer_a_scf",
+        "hf_monomer_b_scf",
+        "hf_sapt_elst",
+        "hf_sapt_exch",
+        "hf_sapt_ind",
+        "monomer_a_dft_scf",
+        "monomer_b_dft_scf",
+        "d3",
+    ]
+    _, reference = _run_fsaptdft_checkpoint_worker(checkpoint_dir="", mode="reference", name="sapt(dft)-d3(s)")
+    assert reference["status"] == "ok"
+
+    checkpoint_dir = tmp_path / "d3"
+    stopped_proc, stopped = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="stop",
+        stop_after="d3",
+        name="sapt(dft)-d3(s)",
+    )
+    assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
+    assert stopped["status"] == "stopped"
+    _assert_checkpoint_stop_result(stopped, expected_stages=expected_stages, stop_stage="d3")
+
+    restarted_proc, restarted = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="restart_with_guards",
+        name="sapt(dft)-d3(s)",
+        forbid_banners=[
+            "SAPT(DFT): delta HF Dimer",
+            "SAPT(DFT): delta HF Monomer A",
+            "SAPT(DFT): delta HF Monomer B",
+            "SAPT(DFT): DFT Monomer A",
+            "SAPT(DFT): DFT Monomer B",
+        ],
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "ok"
+    compare_values(reference["sapt_total_energy"], restarted["sapt_total_energy"], 8, "checkpoint restart d3 energy")
 
 
 @pytest.mark.saptdft
 @pytest.mark.fsapt
 def test_saptdft_checkpoint_final_restart_returns_before_scf_and_jk(tmp_path):
+    _, reference = _run_fsaptdft_checkpoint_worker(checkpoint_dir="", mode="reference")
     checkpoint_dir = tmp_path / "final"
     stopped_proc, stopped = _run_fsaptdft_checkpoint_worker(
         checkpoint_dir=checkpoint_dir,
@@ -2042,7 +2378,28 @@ def test_saptdft_checkpoint_final_restart_returns_before_scf_and_jk(tmp_path):
     )
     assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
     assert stopped["status"] == "stopped"
-    assert "final" in stopped["completed_stages"]
+    _assert_checkpoint_stop_result(
+        stopped,
+        expected_stages=[
+            "hf_dimer_scf",
+            "hf_monomer_a_scf",
+            "hf_monomer_b_scf",
+            "hf_sapt_elst",
+            "hf_sapt_exch",
+            "hf_sapt_ind",
+            "monomer_a_dft_scf",
+            "monomer_b_dft_scf",
+            "delta_dft_dimer_scf",
+            "delta_dft_monomer_a_scf",
+            "delta_dft_monomer_b_scf",
+            "delta_dft",
+            "elst",
+            "exch",
+            "ind",
+            "final",
+        ],
+        stop_stage="final",
+    )
 
     restarted_proc, restarted = _run_fsaptdft_checkpoint_worker(
         checkpoint_dir=checkpoint_dir,
@@ -2051,6 +2408,34 @@ def test_saptdft_checkpoint_final_restart_returns_before_scf_and_jk(tmp_path):
     )
     assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
     assert restarted["status"] == "ok"
+    compare_values(reference["sapt_total_energy"], restarted["sapt_total_energy"], 8, "final restart energy")
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_unexpected_exception_closes_lock_same_process(tmp_path, monkeypatch):
+    from psi4.driver.procrouting import proc
+    from psi4.driver.procrouting.sapt import sapt_proc as sapt_proc_mod
+
+    mol = _saptdft_checkpoint_molecule()
+    psi4.set_options(_task3_test_options())
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("checkpoint crash probe")
+
+    with monkeypatch.context() as ctx:
+        ctx.setattr(proc, "scf_helper", boom)
+        ctx.setattr(sapt_proc_mod, "scf_helper", boom)
+        with pytest.raises(RuntimeError, match="checkpoint crash probe"):
+            psi4.energy("sapt(dft)", molecule=mol, checkpoint_dir=str(tmp_path))
+
+    stopped_proc, stopped = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=tmp_path,
+        mode="stop",
+        stop_after="hf_dimer_scf",
+    )
+    assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
+    assert stopped["status"] == "stopped"
 
 
 if __name__ == "__main__":

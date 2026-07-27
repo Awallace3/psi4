@@ -186,6 +186,131 @@ def _validate_stage_definitions() -> None:
 _validate_stage_definitions()
 
 
+def _option_is_enabled(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().upper() not in {"", "0", "FALSE", "OFF", "NO", "NONE"}
+    return bool(value)
+
+
+def _identity_keywords(identity: Mapping[str, Any]) -> dict[str, Any]:
+    specification = identity.get("canonical_input", {}).get("specification", {})
+    keywords = specification.get("keywords", {})
+    if not isinstance(keywords, Mapping):
+        return {}
+    return {str(key).lower(): value for key, value in keywords.items()}
+
+
+def _selected_stage_options(identity: Mapping[str, Any]) -> dict[str, Any]:
+    keywords = _identity_keywords(identity)
+    functional = str(keywords.get("sapt_dft_functional", "")).upper()
+    do_dft = functional != "HF"
+    do_delta_hf = _option_is_enabled(keywords.get("sapt_dft_do_dhf", False))
+    do_delta_dft = do_dft and _option_is_enabled(keywords.get("sapt_dft_do_ddft", False))
+    do_disp = _option_is_enabled(keywords.get("sapt_dft_do_disp", True))
+    do_d3 = _option_is_enabled(keywords.get("sapt_dft_d3_ie", False))
+    do_d4 = _option_is_enabled(keywords.get("sapt_dft_d4_ie", False))
+    fsapt_mode = str(keywords.get("sapt_dft_do_fsapt", "none")).upper()
+    do_fsapt = fsapt_mode != "NONE"
+    do_grac = do_dft and str(keywords.get("sapt_dft_grac_compute", "none")).upper() != "NONE"
+    localization_path = do_fsapt and not do_delta_hf
+    return {
+        "do_dft": do_dft,
+        "do_delta_hf": do_delta_hf,
+        "do_delta_dft": do_delta_dft,
+        "do_disp": do_disp,
+        "do_d3": do_d3,
+        "do_d4": do_d4,
+        "do_fsapt": do_fsapt,
+        "fsapt_mode": fsapt_mode,
+        "do_grac": do_grac,
+        "localization_path": localization_path,
+    }
+
+
+def selected_stage_dependencies(identity: Mapping[str, Any], stage: str) -> tuple[str, ...]:
+    options = _selected_stage_options(identity)
+    grac_dependencies = ("grac_monomer_a", "grac_monomer_b") if options["do_grac"] else ()
+
+    if stage == "hf_dimer_scf":
+        return grac_dependencies
+    if stage == "hf_monomer_a_scf":
+        return ("hf_dimer_scf",)
+    if stage == "hf_monomer_b_scf":
+        return ("hf_monomer_a_scf",)
+    if stage == "hf_sapt_elst":
+        return ("hf_monomer_b_scf",)
+    if stage == "hf_sapt_exch":
+        return ("hf_sapt_elst",)
+    if stage == "hf_sapt_ind":
+        return ("hf_sapt_exch",)
+    if stage == "dimer_localization_scf":
+        return grac_dependencies if options["localization_path"] else ()
+    if stage == "monomer_a_dft_scf":
+        if options["localization_path"]:
+            return ("dimer_localization_scf",)
+        return grac_dependencies
+    if stage == "monomer_b_dft_scf":
+        return ("monomer_a_dft_scf",)
+    if stage == "delta_dft_dimer_scf":
+        return ("monomer_b_dft_scf",)
+    if stage == "delta_dft_monomer_a_scf":
+        return ("delta_dft_dimer_scf",)
+    if stage == "delta_dft_monomer_b_scf":
+        return ("delta_dft_monomer_a_scf",)
+    if stage == "delta_dft":
+        return ("delta_dft_monomer_b_scf",)
+    if stage == "elst":
+        if options["do_delta_dft"]:
+            return ("delta_dft",)
+        if options["do_dft"]:
+            return ("monomer_b_dft_scf",)
+        return ("hf_monomer_b_scf",)
+    if stage == "exch":
+        return ("elst",)
+    if stage == "ind":
+        return ("exch",)
+    if stage == "disp":
+        return ("ind",)
+    if stage == "d3":
+        if options["do_delta_dft"]:
+            return ("delta_dft",)
+        if options["do_dft"]:
+            return ("monomer_b_dft_scf",)
+        return ("hf_monomer_b_scf",)
+    if stage == "d4":
+        if options["do_delta_dft"]:
+            return ("delta_dft",)
+        if options["do_dft"]:
+            return ("monomer_b_dft_scf",)
+        return ("hf_monomer_b_scf",)
+    if stage == "fsapt_setup":
+        return ("ind",)
+    if stage == "fsapt_elst":
+        return ("fsapt_setup",)
+    if stage == "fsapt_exch":
+        return ("fsapt_elst",)
+    if stage == "fsapt_ind":
+        return ("fsapt_exch",)
+    if stage == "fsapt_disp":
+        return ("fsapt_ind",)
+    if stage == "fsapt_final":
+        return ("fsapt_disp",) if options["do_disp"] else ("fsapt_ind",)
+    if stage == "final":
+        final_dependencies = []
+        if options["do_fsapt"]:
+            final_dependencies.append("fsapt_final")
+        else:
+            final_dependencies.append("ind")
+        if options["do_d4"]:
+            final_dependencies.append("d4")
+        elif options["do_d3"]:
+            final_dependencies.append("d3")
+        elif options["do_disp"]:
+            final_dependencies.append("disp")
+        return tuple(final_dependencies)
+    return SAPTDFT_STAGE_DEFINITIONS[stage].dependencies
+
+
 def _json_dumps(data: Any) -> str:
     return json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
@@ -478,9 +603,14 @@ class SAPTDFTCheckpoint:
         _prevalidate_scf_snapshot_structure(snapshot_data)
         return snapshot_data
 
+    def _stage_dependencies(self, stage: str) -> tuple[str, ...]:
+        self._require_known_stage(stage)
+        return selected_stage_dependencies(self.identity, stage)
+
     def commit_stage(self, stage, *, scalars=None, arrays=None, wavefunctions=None, scf_snapshots=None):
         self._require_known_stage(stage)
-        missing_dependencies = [dependency for dependency in SAPTDFT_STAGE_DEFINITIONS[stage].dependencies if not self._stage_is_complete(dependency)]
+        stage_dependencies = self._stage_dependencies(stage)
+        missing_dependencies = [dependency for dependency in stage_dependencies if not self._stage_is_complete(dependency)]
         if missing_dependencies:
             raise ValidationError(
                 f"SAPT(DFT) checkpoint stage {stage} in {self.path} is missing completed dependencies {missing_dependencies}."
@@ -503,7 +633,7 @@ class SAPTDFTCheckpoint:
 
         next_manifest["completed_stages"][stage] = {
             "artifacts": sorted(artifact_names),
-            "dependencies": list(SAPTDFT_STAGE_DEFINITIONS[stage].dependencies),
+            "dependencies": list(stage_dependencies),
             "scalars": sorted(stage_scalars),
             "version": SAPTDFT_STAGE_DEFINITION_VERSION,
         }
@@ -518,7 +648,7 @@ class SAPTDFTCheckpoint:
         entry = self._manifest["completed_stages"].get(stage)
         if entry is None:
             return False
-        for dependency in SAPTDFT_STAGE_DEFINITIONS[stage].dependencies:
+        for dependency in self._stage_dependencies(stage):
             if not self._stage_is_complete(dependency):
                 return False
         for scalar_name in entry.get("scalars", []):
@@ -596,15 +726,16 @@ class SAPTDFTCheckpoint:
             entry_dependencies = tuple(entry.get("dependencies", []))
             for dependency in entry_dependencies:
                 self._require_known_stage(dependency)
-            if entry_dependencies != SAPTDFT_STAGE_DEFINITIONS[stage].dependencies:
+            expected_dependencies = selected_stage_dependencies(self.identity, stage)
+            if entry_dependencies != expected_dependencies:
                 raise ValidationError(
-                    f"SAPT(DFT) checkpoint stage {stage} in {self.manifest_path} has dependency metadata {entry_dependencies} but expected {SAPTDFT_STAGE_DEFINITIONS[stage].dependencies}."
+                    f"SAPT(DFT) checkpoint stage {stage} in {self.manifest_path} has dependency metadata {entry_dependencies} but expected {expected_dependencies}."
                 )
             if entry.get("version") != SAPTDFT_STAGE_DEFINITION_VERSION:
                 raise ValidationError(
                     f"SAPT(DFT) checkpoint stage {stage} in {self.manifest_path} has unsupported definition version {entry.get('version')}."
                 )
-            missing_dependencies = [dependency for dependency in SAPTDFT_STAGE_DEFINITIONS[stage].dependencies if dependency not in manifest["completed_stages"]]
+            missing_dependencies = [dependency for dependency in expected_dependencies if dependency not in manifest["completed_stages"]]
             if missing_dependencies:
                 raise ValidationError(
                     f"SAPT(DFT) checkpoint stage {stage} in {self.manifest_path} is missing dependencies {missing_dependencies}."
