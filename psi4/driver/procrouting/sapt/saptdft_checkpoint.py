@@ -230,10 +230,20 @@ def _optional_module_version(name: str) -> Optional[str]:
     return getattr(module, "__version__", None) or "present"
 
 
+def _saptdft_einsums_bundle_available() -> bool:
+    try:
+        importlib.import_module("einsums")
+        importlib.import_module("psi4.driver.procrouting.sapt.sapt_jk_terms_ein")
+        importlib.import_module("psi4.driver.procrouting.sapt.sapt_mp2_terms_ein")
+    except ImportError:
+        return False
+    return True
+
+
+
 def _select_saptdft_backend() -> str:
     use_einsums = core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS")
-    einsums_version = _optional_module_version("einsums")
-    if einsums_version is not None and use_einsums:
+    if use_einsums and _saptdft_einsums_bundle_available():
         return "einsums"
     return "numpy"
 

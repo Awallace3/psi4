@@ -1,6 +1,7 @@
 import json
 import os
 from pprint import pprint as pp
+import types
 
 import numpy as np
 import psi4
@@ -1297,7 +1298,7 @@ def test_saptdft_checkpoint_identity_selected_backend(
     )
 
     expected_selected_backend = (
-        "einsums" if checkpoint_mod._optional_module_version("einsums") else "numpy"
+        "einsums" if checkpoint_mod._saptdft_einsums_bundle_available() else "numpy"
     )
     assert numpy_identity["execution_fingerprint"]["selected_backend"] == "numpy"
     assert selected_identity["execution_fingerprint"]["selected_backend"] == expected_selected_backend
@@ -1307,6 +1308,39 @@ def test_saptdft_checkpoint_identity_selected_backend(
         assert "einsums_version" in selected_identity["execution_fingerprint"]
     else:
         assert "einsums_version" not in selected_identity["execution_fingerprint"]
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_identity_einsums_helper_unavailable_uses_numpy(
+    monkeypatch, saptdft_checkpoint_identity_fixture
+):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    molecule, function_kwargs, _ = saptdft_checkpoint_identity_fixture
+    original_import_module = checkpoint_mod.importlib.import_module
+
+    def fake_import_module(name):
+        if name == "einsums":
+            return types.SimpleNamespace(__version__="test-einsums")
+        if name == "psi4.driver.procrouting.sapt.sapt_jk_terms_ein":
+            raise ImportError("missing SAPT einsums helper")
+        return original_import_module(name)
+
+    monkeypatch.setattr(checkpoint_mod.importlib, "import_module", fake_import_module)
+    psi4.set_options({"sapt_dft_use_einsums": True})
+
+    identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+        atomic_input=_saptdft_checkpoint_identity_inputs(
+            molecule, function_kwargs=function_kwargs
+        ),
+    )
+
+    assert checkpoint_mod._saptdft_einsums_bundle_available() is False
+    assert identity["execution_fingerprint"]["selected_backend"] == "numpy"
+    assert "einsums_version" not in identity["execution_fingerprint"]
 
 
 @pytest.mark.saptdft
