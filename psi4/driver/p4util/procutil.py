@@ -42,6 +42,7 @@ __all__ = [
     "prepare_options_for_modules",
     "prepare_options_for_set_options",
     "provenance_stamp",
+    "qcmodel_to_jsonable",
     "state_to_atomicinput",
 ]
 
@@ -566,6 +567,15 @@ def prepare_options_for_set_options() -> Dict[str, Any]:
             # Restore current module
             psi_options.set_current_module(current_module)
     return flat_options
+
+
+def qcmodel_to_jsonable(model: Any) -> Any:
+    """Serialize a Pydantic/QCSchema model to plain JSON-compatible Python data."""
+    if hasattr(model, "model_dump"):
+        return model.model_dump(mode="json")
+    if hasattr(model, "dict"):
+        return model.dict()
+    return model
 
 
 def state_to_atomicinput(
