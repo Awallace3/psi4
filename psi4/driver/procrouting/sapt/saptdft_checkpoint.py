@@ -53,10 +53,12 @@ __all__ = [
     "build_saptdft_job_identity",
     "capture_scf_snapshot",
     "rehydrate_scf_wavefunction",
+    "selected_stage_dependencies",
+    "selected_stages",
 ]
 
 SAPTDFT_CHECKPOINT_SCHEMA_VERSION = 1
-SAPTDFT_STAGE_DEFINITION_VERSION = 1
+SAPTDFT_STAGE_DEFINITION_VERSION = 2
 SAPTDFT_SCF_SNAPSHOT_VERSION = 1
 SAPTDFT_MANIFEST_FILENAME = "saptdft_state.json"
 SAPTDFT_LOCK_FILENAME = "saptdft_state.lock"
@@ -200,8 +202,27 @@ def _identity_keywords(identity: Mapping[str, Any]) -> dict[str, Any]:
     return {str(key).lower(): value for key, value in keywords.items()}
 
 
+def _identity_method(identity: Mapping[str, Any]) -> str:
+    canonical_input = identity.get("canonical_input", {})
+    if not isinstance(canonical_input, Mapping):
+        return ""
+
+    specification = canonical_input.get("specification", {})
+    if isinstance(specification, Mapping):
+        model = specification.get("model", {})
+        if isinstance(model, Mapping) and model.get("method") is not None:
+            return str(model.get("method")).lower()
+
+    model = canonical_input.get("model", {})
+    if isinstance(model, Mapping) and model.get("method") is not None:
+        return str(model.get("method")).lower()
+
+    return ""
+
+
 def _selected_stage_options(identity: Mapping[str, Any]) -> dict[str, Any]:
     keywords = _identity_keywords(identity)
+    method = _identity_method(identity)
     functional = str(keywords.get("sapt_dft_functional", "")).upper()
     do_dft = functional != "HF"
     do_delta_hf = _option_is_enabled(keywords.get("sapt_dft_do_dhf", False))
@@ -209,6 +230,17 @@ def _selected_stage_options(identity: Mapping[str, Any]) -> dict[str, Any]:
     do_disp = _option_is_enabled(keywords.get("sapt_dft_do_disp", True))
     do_d3 = _option_is_enabled(keywords.get("sapt_dft_d3_ie", False))
     do_d4 = _option_is_enabled(keywords.get("sapt_dft_d4_ie", False))
+    method_upper = method.upper()
+    if "-D4" in method_upper:
+        do_d4 = True
+        do_d3 = False
+        do_disp = False
+        do_delta_dft = do_dft and ("DFT-D4" in method_upper)
+    elif "-D3" in method_upper:
+        do_d3 = True
+        do_d4 = False
+        do_disp = False
+        do_delta_dft = do_dft and ("DFT-D3" in method_upper)
     fsapt_mode = str(keywords.get("sapt_dft_do_fsapt", "none")).upper()
     do_fsapt = fsapt_mode != "NONE"
     do_grac = do_dft and str(keywords.get("sapt_dft_grac_compute", "none")).upper() != "NONE"
@@ -224,7 +256,55 @@ def _selected_stage_options(identity: Mapping[str, Any]) -> dict[str, Any]:
         "fsapt_mode": fsapt_mode,
         "do_grac": do_grac,
         "localization_path": localization_path,
+        "method": method,
     }
+
+
+def selected_stages(identity: Mapping[str, Any]) -> tuple[str, ...]:
+    options = _selected_stage_options(identity)
+    stages = []
+
+    if options["do_grac"]:
+        stages.extend(["grac_monomer_a", "grac_monomer_b"])
+
+    if options["do_delta_hf"]:
+        stages.extend(["hf_dimer_scf", "hf_monomer_a_scf", "hf_monomer_b_scf"])
+        if options["do_dft"]:
+            stages.extend(["hf_sapt_elst", "hf_sapt_exch", "hf_sapt_ind"])
+
+    if options["localization_path"]:
+        stages.append("dimer_localization_scf")
+
+    if options["do_dft"] or not options["do_delta_hf"]:
+        stages.extend(["monomer_a_dft_scf", "monomer_b_dft_scf"])
+
+    if options["do_delta_dft"]:
+        stages.extend(
+            [
+                "delta_dft_dimer_scf",
+                "delta_dft_monomer_a_scf",
+                "delta_dft_monomer_b_scf",
+                "delta_dft",
+            ]
+        )
+
+    stages.extend(["elst", "exch", "ind"])
+
+    if options["do_disp"]:
+        stages.append("disp")
+    if options["do_d3"]:
+        stages.append("d3")
+    if options["do_d4"]:
+        stages.append("d4")
+
+    if options["do_fsapt"]:
+        stages.extend(["fsapt_setup", "fsapt_elst", "fsapt_exch", "fsapt_ind"])
+        if options["do_disp"]:
+            stages.append("fsapt_disp")
+        stages.append("fsapt_final")
+
+    stages.append("final")
+    return tuple(stages)
 
 
 def selected_stage_dependencies(identity: Mapping[str, Any], stage: str) -> tuple[str, ...]:
@@ -262,7 +342,7 @@ def selected_stage_dependencies(identity: Mapping[str, Any], stage: str) -> tupl
     if stage == "elst":
         if options["do_delta_dft"]:
             return ("delta_dft",)
-        if options["do_dft"]:
+        if options["do_dft"] or not options["do_delta_hf"]:
             return ("monomer_b_dft_scf",)
         return ("hf_monomer_b_scf",)
     if stage == "exch":
@@ -274,13 +354,13 @@ def selected_stage_dependencies(identity: Mapping[str, Any], stage: str) -> tupl
     if stage == "d3":
         if options["do_delta_dft"]:
             return ("delta_dft",)
-        if options["do_dft"]:
+        if options["do_dft"] or not options["do_delta_hf"]:
             return ("monomer_b_dft_scf",)
         return ("hf_monomer_b_scf",)
     if stage == "d4":
         if options["do_delta_dft"]:
             return ("delta_dft",)
-        if options["do_dft"]:
+        if options["do_dft"] or not options["do_delta_hf"]:
             return ("monomer_b_dft_scf",)
         return ("hf_monomer_b_scf",)
     if stage == "fsapt_setup":
@@ -603,12 +683,21 @@ class SAPTDFTCheckpoint:
         _prevalidate_scf_snapshot_structure(snapshot_data)
         return snapshot_data
 
+    def _selected_stages(self) -> tuple[str, ...]:
+        return selected_stages(self.identity)
+
+    def _require_selected_stage(self, stage: str) -> None:
+        if stage not in self._selected_stages():
+            raise ValidationError(f"SAPT(DFT) checkpoint stage {stage} is not selected for identity at {self.path}.")
+
     def _stage_dependencies(self, stage: str) -> tuple[str, ...]:
         self._require_known_stage(stage)
+        self._require_selected_stage(stage)
         return selected_stage_dependencies(self.identity, stage)
 
     def commit_stage(self, stage, *, scalars=None, arrays=None, wavefunctions=None, scf_snapshots=None):
         self._require_known_stage(stage)
+        self._require_selected_stage(stage)
         stage_dependencies = self._stage_dependencies(stage)
         missing_dependencies = [dependency for dependency in stage_dependencies if not self._stage_is_complete(dependency)]
         if missing_dependencies:
@@ -719,8 +808,13 @@ class SAPTDFTCheckpoint:
         if job_identity.get("sha256") != self.identity.get("sha256"):
             raise ValidationError(f"SAPT(DFT) checkpoint digest mismatch for {self.path}.")
 
+        selected = set(self._selected_stages())
         for stage, entry in manifest["completed_stages"].items():
             self._require_known_stage(stage)
+            if stage not in selected:
+                raise ValidationError(
+                    f"SAPT(DFT) checkpoint stage {stage} in {self.manifest_path} is not selected for this identity."
+                )
             if not isinstance(entry, Mapping):
                 raise ValidationError(f"SAPT(DFT) checkpoint stage entry {stage} in {self.manifest_path} must be a mapping.")
             entry_dependencies = tuple(entry.get("dependencies", []))

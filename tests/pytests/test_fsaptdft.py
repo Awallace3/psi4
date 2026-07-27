@@ -1152,11 +1152,11 @@ def _configure_saptdft_checkpoint_identity_options():
     )
 
 
-def _saptdft_checkpoint_identity_inputs(molecule, function_kwargs=None):
+def _saptdft_checkpoint_identity_inputs(molecule, function_kwargs=None, method="sapt(dft)"):
     atomic_input = psi4.driver.p4util.state_to_atomicinput(
         dtype=2,
         driver="energy",
-        method="sapt(dft)",
+        method=method,
         molecule=molecule,
         function_kwargs=function_kwargs,
     )
@@ -1362,7 +1362,7 @@ def test_saptdft_checkpoint_store_manifest_schema(
     checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
     checkpoint.open()
     checkpoint.commit_stage(
-        "grac_monomer_a",
+        "hf_dimer_scf",
         scalars={"SAPT ELST ENERGY": -0.125},
         arrays={"Elst_AB": np.arange(4.0).reshape(2, 2)},
     )
@@ -1377,8 +1377,8 @@ def test_saptdft_checkpoint_store_manifest_schema(
     manifest = json.loads((tmp_path / "saptdft_state.json").read_text())
     assert manifest["schema_version"] == 1
     assert manifest["job_identity"]["sha256"] == identity["sha256"]
-    assert manifest["completed_stages"]["grac_monomer_a"]["artifacts"] == ["Elst_AB"]
-    assert manifest["completed_stages"]["grac_monomer_a"]["scalars"] == ["SAPT ELST ENERGY"]
+    assert manifest["completed_stages"]["hf_dimer_scf"]["artifacts"] == ["Elst_AB"]
+    assert manifest["completed_stages"]["hf_dimer_scf"]["scalars"] == ["SAPT ELST ENERGY"]
     assert manifest["artifacts"]["Elst_AB"]["kind"] == "array"
     assert manifest["artifacts"]["Elst_AB"]["path"].endswith(".npy")
     assert manifest["artifacts"]["Elst_AB"]["size"] > 0
@@ -1399,7 +1399,7 @@ def test_saptdft_checkpoint_store_rejects_changed_geometry(
     )
     checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
     checkpoint.open()
-    checkpoint.commit_stage("grac_monomer_a", scalars={"SAPT ELST ENERGY": -0.125})
+    checkpoint.commit_stage("hf_dimer_scf", scalars={"SAPT ELST ENERGY": -0.125})
     checkpoint.close()
 
     other_molecule = _saptdft_checkpoint_molecule(distance=3.4)
@@ -1432,7 +1432,7 @@ def test_saptdft_checkpoint_store_rejects_checksum_failure(
     checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
     checkpoint.open()
     checkpoint.commit_stage(
-        "grac_monomer_a",
+        "hf_dimer_scf",
         arrays={"Elst_AB": np.arange(9.0).reshape(3, 3)},
     )
     checkpoint.close()
@@ -1461,7 +1461,7 @@ def test_saptdft_checkpoint_store_rejects_artifact_path_escape(
     checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
     checkpoint.open()
     checkpoint.commit_stage(
-        "grac_monomer_a",
+        "hf_dimer_scf",
         arrays={"Elst_AB": np.arange(4.0).reshape(2, 2)},
     )
     checkpoint.close()
@@ -1526,7 +1526,7 @@ def test_saptdft_checkpoint_store_artifact_first_interruption(
 
     monkeypatch.setattr(checkpoint, "_write_manifest_atomic", boom)
     with pytest.raises(RuntimeError, match="manifest boom"):
-        checkpoint.commit_stage("grac_monomer_a", arrays={"Elst_AB": np.arange(4.0)})
+        checkpoint.commit_stage("hf_dimer_scf", arrays={"Elst_AB": np.arange(4.0)})
     checkpoint.close()
 
     assert not (tmp_path / "saptdft_state.json").exists()
@@ -1534,7 +1534,7 @@ def test_saptdft_checkpoint_store_artifact_first_interruption(
 
     reopened = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
     reopened.open()
-    assert not reopened.is_complete("grac_monomer_a")
+    assert not reopened.is_complete("hf_dimer_scf")
     reopened.close()
 
 
@@ -1556,12 +1556,12 @@ def test_saptdft_checkpoint_store_wavefunction_artifact_smoke(
 
     checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
     checkpoint.open()
-    checkpoint.commit_stage("grac_monomer_a", wavefunctions={"dimer_wfn": wfn})
+    checkpoint.commit_stage("hf_dimer_scf", wavefunctions={"dimer_wfn": wfn})
     checkpoint.close()
 
     reopened = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
     reopened.open()
-    assert reopened.is_complete("grac_monomer_a")
+    assert reopened.is_complete("hf_dimer_scf")
     artifact = reopened._manifest["artifacts"]["dimer_wfn"]
     assert artifact["kind"] == "wavefunction"
     artifact_path = reopened._validate_artifact("dimer_wfn", artifact)
@@ -1721,7 +1721,7 @@ def test_saptdft_checkpoint_store_scf_snapshot_roundtrip(
     checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
     checkpoint.open()
     checkpoint.commit_stage(
-        "grac_monomer_a",
+        "hf_dimer_scf",
         scf_snapshots={
             "dimer_scf": {
                 "wavefunction": wfn,
@@ -2101,7 +2101,11 @@ def _build_task3_checkpoint_identity(checkpoint_mod, *, name="sapt(dft)", option
     psi4.set_options(_task3_test_options(options))
     molecule = _saptdft_checkpoint_molecule()
     function_kwargs = {"checkpoint_dir": "identity-dir", "checkpoint_stop_after": "final"}
-    atomic_input = _saptdft_checkpoint_identity_inputs(molecule, function_kwargs=function_kwargs)
+    atomic_input = _saptdft_checkpoint_identity_inputs(
+        molecule,
+        function_kwargs=function_kwargs,
+        method=name,
+    )
     identity = checkpoint_mod.build_saptdft_job_identity(
         name=name,
         molecule=molecule,
@@ -2134,48 +2138,191 @@ def test_saptdft_checkpoint_stage_dependencies():
 
 @pytest.mark.saptdft
 @pytest.mark.fsapt
-def test_saptdft_checkpoint_stage_dependencies_selected_default_path(tmp_path):
+@pytest.mark.parametrize(
+    ("name", "options", "expected_present", "expected_absent"),
+    [
+        pytest.param(
+            "sapt(dft)",
+            None,
+            [
+                "hf_dimer_scf",
+                "hf_sapt_ind",
+                "monomer_b_dft_scf",
+                "delta_dft",
+                "elst",
+                "ind",
+                "final",
+            ],
+            ["dimer_localization_scf", "disp", "d3", "d4", "fsapt_setup"],
+            id="default",
+        ),
+        pytest.param(
+            "sapt(dft)",
+            {"sapt_dft_do_ddft": False},
+            ["hf_dimer_scf", "hf_sapt_ind", "monomer_b_dft_scf", "elst", "ind", "final"],
+            ["delta_dft_dimer_scf", "delta_dft_monomer_a_scf", "delta_dft_monomer_b_scf", "delta_dft"],
+            id="no-ddft",
+        ),
+        pytest.param(
+            "sapt(dft)",
+            {"sapt_dft_do_dhf": False, "sapt_dft_do_ddft": False, "sapt_dft_do_fsapt": "fisapt"},
+            [
+                "dimer_localization_scf",
+                "monomer_b_dft_scf",
+                "elst",
+                "ind",
+                "fsapt_setup",
+                "fsapt_ind",
+                "fsapt_final",
+                "final",
+            ],
+            ["hf_dimer_scf", "hf_sapt_elst", "delta_dft", "disp", "d3", "d4", "fsapt_disp"],
+            id="localization",
+        ),
+        pytest.param(
+            "sapt(dft)",
+            {"sapt_dft_functional": "hf", "sapt_dft_do_ddft": False},
+            ["hf_dimer_scf", "hf_monomer_b_scf", "elst", "ind", "final"],
+            ["hf_sapt_elst", "monomer_a_dft_scf", "delta_dft", "disp", "fsapt_setup"],
+            id="hf-do-dhf",
+        ),
+        pytest.param(
+            "sapt(dft)",
+            {"sapt_dft_do_ddft": False, "sapt_dft_do_disp": True},
+            ["hf_dimer_scf", "monomer_b_dft_scf", "elst", "ind", "disp", "final"],
+            ["delta_dft", "d3", "d4", "fsapt_setup"],
+            id="disp",
+        ),
+        pytest.param(
+            "sapt(dft)-d3(s)",
+            {"sapt_dft_functional": "pbe0"},
+            ["hf_dimer_scf", "monomer_b_dft_scf", "elst", "ind", "d3", "final"],
+            ["delta_dft", "disp", "d4", "fsapt_setup"],
+            id="d3-method-selected",
+        ),
+        pytest.param(
+            "sapt(dft)-d4(s)",
+            {"sapt_dft_functional": "pbe0"},
+            ["hf_dimer_scf", "monomer_b_dft_scf", "elst", "ind", "d4", "final"],
+            ["delta_dft", "disp", "d3", "fsapt_setup"],
+            id="d4-method-selected",
+        ),
+        pytest.param(
+            "sapt(dft)",
+            {
+                "sapt_dft_functional": "hf",
+                "sapt_dft_do_dhf": False,
+                "sapt_dft_do_ddft": False,
+                "sapt_dft_do_disp": True,
+                "sapt_dft_do_fsapt": "fisapt",
+            },
+            [
+                "dimer_localization_scf",
+                "monomer_b_dft_scf",
+                "elst",
+                "ind",
+                "disp",
+                "fsapt_setup",
+                "fsapt_disp",
+                "fsapt_final",
+                "final",
+            ],
+            ["hf_dimer_scf", "hf_sapt_ind", "delta_dft", "d3", "d4"],
+            id="fsapt-disp-conditional",
+        ),
+    ],
+)
+def test_saptdft_checkpoint_selected_stages(tmp_path, name, options, expected_present, expected_absent):
     checkpoint_mod = _saptdft_checkpoint_module()
-    _, identity = _build_task3_checkpoint_identity(checkpoint_mod)
-    checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
+    _, identity = _build_task3_checkpoint_identity(checkpoint_mod, name=name, options=options)
+    selected = checkpoint_mod.selected_stages(identity)
+
+    for stage in expected_present:
+        assert stage in selected
+    for stage in expected_absent:
+        assert stage not in selected
+
+    checkpoint_dir = tmp_path / name.replace("(", "_").replace(")", "_").replace("-", "_")
+    checkpoint = checkpoint_mod.SAPTDFTCheckpoint(checkpoint_dir, identity)
     checkpoint.open()
-    checkpoint.commit_stage("hf_dimer_scf")
-    checkpoint.commit_stage("hf_monomer_a_scf")
-    checkpoint.commit_stage("hf_monomer_b_scf")
-    checkpoint.commit_stage("hf_sapt_elst")
-    checkpoint.commit_stage("hf_sapt_exch")
-    checkpoint.commit_stage("hf_sapt_ind")
-    checkpoint.commit_stage("monomer_a_dft_scf")
-    checkpoint.commit_stage("monomer_b_dft_scf")
-    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match="delta_dft"):
-        checkpoint.commit_stage("elst")
+    for stage in selected:
+        checkpoint.commit_stage(stage)
     checkpoint.close()
+
+    reopened = checkpoint_mod.SAPTDFTCheckpoint(checkpoint_dir, identity)
+    reopened.open()
+    assert set(reopened._manifest["completed_stages"]) == set(selected)
+    reopened.close()
 
 
 @pytest.mark.saptdft
 @pytest.mark.fsapt
-def test_saptdft_checkpoint_stage_dependencies_selected_localization_path(tmp_path):
+@pytest.mark.parametrize(
+    ("name", "options", "offpath_stages"),
+    [
+        pytest.param("sapt(dft)", None, ["dimer_localization_scf", "d3", "d4"], id="default-rejects-localization-and-d3d4"),
+        pytest.param(
+            "sapt(dft)",
+            {"sapt_dft_do_ddft": False},
+            ["delta_dft_dimer_scf", "delta_dft_monomer_a_scf", "delta_dft_monomer_b_scf", "delta_dft"],
+            id="no-ddft-rejects-delta",
+        ),
+        pytest.param(
+            "sapt(dft)",
+            None,
+            ["fsapt_setup", "fsapt_elst", "fsapt_exch", "fsapt_ind", "fsapt_disp", "fsapt_final"],
+            id="non-fsapt-rejects-fsapt",
+        ),
+    ],
+)
+def test_saptdft_checkpoint_rejects_offpath_stages(tmp_path, name, options, offpath_stages):
     checkpoint_mod = _saptdft_checkpoint_module()
-    _, identity = _build_task3_checkpoint_identity(
-        checkpoint_mod,
-        options={"sapt_dft_do_dhf": False, "sapt_dft_do_ddft": False, "sapt_dft_do_fsapt": "fisapt"},
-    )
-    checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
-    checkpoint.open()
-    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match="dimer_localization_scf"):
-        checkpoint.commit_stage("monomer_a_dft_scf")
-    checkpoint.close()
+    _, identity = _build_task3_checkpoint_identity(checkpoint_mod, name=name, options=options)
+
+    commit_checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path / "commit", identity)
+    commit_checkpoint.open()
+    for stage in offpath_stages:
+        with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match=stage):
+            commit_checkpoint.commit_stage(stage)
+    commit_checkpoint.close()
+
+    for index, stage in enumerate(offpath_stages):
+        checkpoint_dir = tmp_path / f"manifest-{index}"
+        checkpoint_dir.mkdir()
+        manifest = {
+            "schema_version": checkpoint_mod.SAPTDFT_CHECKPOINT_SCHEMA_VERSION,
+            "job_identity": identity,
+            "completed_stages": {
+                stage: {
+                    "artifacts": [],
+                    "dependencies": [],
+                    "scalars": [],
+                    "version": checkpoint_mod.SAPTDFT_STAGE_DEFINITION_VERSION,
+                }
+            },
+            "scalars": {},
+            "artifacts": {},
+        }
+        (checkpoint_dir / checkpoint_mod.SAPTDFT_MANIFEST_FILENAME).write_text(json.dumps(manifest))
+        with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match=stage):
+            checkpoint_mod.SAPTDFTCheckpoint(checkpoint_dir, identity).open()
 
 
 @pytest.mark.saptdft
 @pytest.mark.fsapt
-def test_saptdft_checkpoint_stage_dependencies_selected_d3_path(tmp_path):
+@pytest.mark.parametrize(
+    ("name", "options", "dispersion_stage"),
+    [
+        pytest.param("sapt(dft)-d3(s)", {"sapt_dft_functional": "pbe0"}, "d3", id="d3"),
+        pytest.param("sapt(dft)-d4(s)", {"sapt_dft_functional": "pbe0"}, "d4", id="d4"),
+    ],
+)
+def test_saptdft_checkpoint_stage_dependencies_selected_method_dispersion_path(tmp_path, name, options, dispersion_stage):
     checkpoint_mod = _saptdft_checkpoint_module()
-    _, identity = _build_task3_checkpoint_identity(
-        checkpoint_mod,
-        name="sapt(dft)-d3(s)",
-        options={"sapt_dft_do_ddft": False, "sapt_dft_do_disp": False, "sapt_dft_d3_ie": True},
-    )
+    _, identity = _build_task3_checkpoint_identity(checkpoint_mod, name=name, options=options)
+    assert dispersion_stage in checkpoint_mod.selected_stages(identity)
+    assert checkpoint_mod.selected_stage_dependencies(identity, "final") == ("ind", dispersion_stage)
+
     checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
     checkpoint.open()
     for stage in [
@@ -2192,7 +2339,7 @@ def test_saptdft_checkpoint_stage_dependencies_selected_d3_path(tmp_path):
         "ind",
     ]:
         checkpoint.commit_stage(stage)
-    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match="d3"):
+    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match=dispersion_stage):
         checkpoint.commit_stage("final")
     checkpoint.close()
 
