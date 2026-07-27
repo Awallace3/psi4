@@ -51,13 +51,36 @@ __all__ = [
     "SAPTDFT_STAGE_DEFINITIONS",
     "StageDefinition",
     "build_saptdft_job_identity",
+    "capture_scf_snapshot",
+    "rehydrate_scf_wavefunction",
 ]
 
 SAPTDFT_CHECKPOINT_SCHEMA_VERSION = 1
 SAPTDFT_STAGE_DEFINITION_VERSION = 1
+SAPTDFT_SCF_SNAPSHOT_VERSION = 1
 SAPTDFT_MANIFEST_FILENAME = "saptdft_state.json"
 SAPTDFT_LOCK_FILENAME = "saptdft_state.lock"
 _ALLOWED_ARTIFACT_KINDS = {"array", "scf_snapshot"}
+_SCF_SNAPSHOT_METADATA_KEY = "scf_snapshot"
+_SCF_SNAPSHOT_DIMENSION_KEYS = (
+    "doccpi",
+    "frzcpi",
+    "frzvpi",
+    "nalphapi",
+    "nbetapi",
+    "nmopi",
+    "nsopi",
+    "soccpi",
+)
+_SCF_SNAPSHOT_FACTORY_BASIS_KEYS = ("DF_BASIS_SCF", "BASIS_RELATIVISTIC", "SAPGAU")
+_SCF_SNAPSHOT_REQUIRED_FIELDS = {
+    "matrix": ("Ca", "Cb", "Da", "Db", "Fa", "Fb"),
+    "vector": ("epsilon_a", "epsilon_b"),
+}
+_SCF_SNAPSHOT_REQUIRED_FLOATVARS = {
+    "RHF": ("CURRENT ENERGY", "CURRENT REFERENCE ENERGY", "SCF TOTAL ENERGY", "HF TOTAL ENERGY"),
+    "RKS": ("CURRENT ENERGY", "CURRENT REFERENCE ENERGY", "SCF TOTAL ENERGY", "DFT TOTAL ENERGY"),
+}
 _RUNTIME_CONTROL_KEYS = {
     "checkpoint_dir",
     "checkpoint_directory",
@@ -661,6 +684,184 @@ def _file_digest_and_size(path: Path) -> tuple[str, int]:
             digest.update(chunk)
             size += len(chunk)
     return digest.hexdigest(), size
+
+
+def _normalize_scf_reference(reference: str) -> str:
+    normalized = str(reference).upper()
+    if normalized not in _SCF_SNAPSHOT_REQUIRED_FLOATVARS:
+        raise ValidationError(f"SCF snapshot support is currently limited to RHF and RKS, not {reference!r}.")
+    return normalized
+
+
+def _expected_scf_snapshot_required_fields(reference: str) -> dict[str, list[str]]:
+    normalized = _normalize_scf_reference(reference)
+    return {
+        "matrix": list(_SCF_SNAPSHOT_REQUIRED_FIELDS["matrix"]),
+        "vector": list(_SCF_SNAPSHOT_REQUIRED_FIELDS["vector"]),
+        "floatvar": list(_SCF_SNAPSHOT_REQUIRED_FLOATVARS[normalized]),
+    }
+
+
+def _load_scf_snapshot_data(snapshot: Any) -> dict[str, Any]:
+    if isinstance(snapshot, Mapping):
+        return dict(snapshot)
+
+    snapshot_path = os.fspath(snapshot)
+    if isinstance(snapshot_path, str) and not snapshot_path.endswith(".npy"):
+        snapshot_path = snapshot_path + ".npy"
+
+    try:
+        loaded = np.load(snapshot_path, allow_pickle=True).item()
+    except Exception as exc:
+        raise ValidationError(f"SCF snapshot {snapshot!r} could not be loaded: {exc}") from exc
+
+    if not isinstance(loaded, Mapping):
+        raise ValidationError(f"SCF snapshot {snapshot!r} must deserialize to a mapping.")
+
+    return dict(loaded)
+
+
+def _validate_scf_snapshot_required_fields(snapshot_data: Mapping[str, Any], required_fields: Mapping[str, Sequence[str]]) -> None:
+    for section_name, field_names in required_fields.items():
+        section = snapshot_data.get(section_name)
+        if not isinstance(section, Mapping):
+            raise ValidationError(f"SCF snapshot is missing required {section_name} section.")
+        for field_name in field_names:
+            if field_name not in section or section[field_name] is None:
+                raise ValidationError(f"SCF snapshot is missing required {section_name} field {field_name}.")
+
+
+def _maybe_get_basisset(wfn: core.Wavefunction, key: str):
+    try:
+        return wfn.get_basisset(key)
+    except RuntimeError:
+        return None
+
+
+def _capture_factory_basissets(wfn: core.Wavefunction) -> dict[str, Any]:
+    basissets = {}
+    for key in _SCF_SNAPSHOT_FACTORY_BASIS_KEYS:
+        if (basis := _maybe_get_basisset(wfn, key)) is not None:
+            basissets[key] = basis
+    return basissets
+
+
+def capture_scf_snapshot(wfn, *, reference: str, method: str) -> dict[str, object]:
+    normalized_reference = _normalize_scf_reference(reference)
+    snapshot = wfn.to_file()
+    required_fields = _expected_scf_snapshot_required_fields(normalized_reference)
+    _validate_scf_snapshot_required_fields(snapshot, required_fields)
+    snapshot[_SCF_SNAPSHOT_METADATA_KEY] = {
+        "basis": {
+            "name": snapshot["string"]["basisname"],
+            "puream": snapshot["boolean"]["basispuream"],
+        },
+        "dimensions": {key: list(snapshot["dimension"][key]) for key in _SCF_SNAPSHOT_DIMENSION_KEYS},
+        "functional": wfn.functional().name(),
+        "method": str(method).lower(),
+        "molecule": _normalize_jsonable(snapshot["molecule"]),
+        "reference": normalized_reference,
+        "required_fields": required_fields,
+        "version": SAPTDFT_SCF_SNAPSHOT_VERSION,
+    }
+    return snapshot
+
+
+def _validate_scf_snapshot_metadata(snapshot_data: Mapping[str, Any], loaded: core.Wavefunction, *, method: str, reference: str) -> dict[str, Any]:
+    metadata = snapshot_data.get(_SCF_SNAPSHOT_METADATA_KEY)
+    if not isinstance(metadata, Mapping):
+        raise ValidationError("SCF snapshot metadata is missing.")
+
+    if metadata.get("version") != SAPTDFT_SCF_SNAPSHOT_VERSION:
+        raise ValidationError(f"SCF snapshot has unsupported version {metadata.get('version')}.")
+
+    normalized_reference = _normalize_scf_reference(reference)
+    if str(metadata.get("reference", "")).upper() != normalized_reference:
+        raise ValidationError(
+            f"SCF snapshot reference mismatch: expected {normalized_reference}, got {metadata.get('reference')!r}."
+        )
+
+    normalized_method = str(method).lower()
+    if str(metadata.get("method", "")).lower() != normalized_method:
+        raise ValidationError(f"SCF snapshot method mismatch: expected {normalized_method!r}.")
+
+    expected_required_fields = _expected_scf_snapshot_required_fields(normalized_reference)
+    metadata_required_fields = metadata.get("required_fields")
+    if not isinstance(metadata_required_fields, Mapping):
+        raise ValidationError("SCF snapshot required field metadata is missing.")
+    if _first_difference(_normalize_jsonable(metadata_required_fields), _normalize_jsonable(expected_required_fields)):
+        raise ValidationError("SCF snapshot required field metadata does not match the expected schema.")
+    _validate_scf_snapshot_required_fields(snapshot_data, expected_required_fields)
+
+    expected_molecule = _normalize_jsonable(snapshot_data.get("molecule"))
+    metadata_molecule = _normalize_jsonable(metadata.get("molecule"))
+    molecule_difference = _first_difference(metadata_molecule, expected_molecule)
+    if molecule_difference:
+        raise ValidationError(f"SCF snapshot molecule metadata mismatch: {molecule_difference}")
+    loaded_molecule = _normalize_jsonable(loaded.molecule().to_dict())
+    molecule_difference = _first_difference(metadata_molecule, loaded_molecule)
+    if molecule_difference:
+        raise ValidationError(f"SCF snapshot molecule does not match the deserialized wavefunction: {molecule_difference}")
+
+    metadata_basis = metadata.get("basis")
+    if not isinstance(metadata_basis, Mapping):
+        raise ValidationError("SCF snapshot basis metadata is missing.")
+    expected_basis = {
+        "name": snapshot_data.get("string", {}).get("basisname"),
+        "puream": snapshot_data.get("boolean", {}).get("basispuream"),
+    }
+    basis_difference = _first_difference(_normalize_jsonable(metadata_basis), _normalize_jsonable(expected_basis))
+    if basis_difference:
+        raise ValidationError(f"SCF snapshot basis metadata mismatch: {basis_difference}")
+    if loaded.basisset().name() != metadata_basis.get("name"):
+        raise ValidationError(
+            f"SCF snapshot basis mismatch: expected {metadata_basis.get('name')!r}, got {loaded.basisset().name()!r}."
+        )
+    if loaded.basisset().has_puream() != metadata_basis.get("puream"):
+        raise ValidationError("SCF snapshot basis puream metadata mismatch.")
+
+    metadata_dimensions = metadata.get("dimensions")
+    if not isinstance(metadata_dimensions, Mapping):
+        raise ValidationError("SCF snapshot dimensions metadata is missing.")
+    expected_dimensions = snapshot_data.get("dimension")
+    if not isinstance(expected_dimensions, Mapping):
+        raise ValidationError("SCF snapshot dimension section is missing.")
+    for key in _SCF_SNAPSHOT_DIMENSION_KEYS:
+        expected_dimension = list(expected_dimensions.get(key) or [])
+        if list(metadata_dimensions.get(key) or []) != expected_dimension:
+            raise ValidationError(f"SCF snapshot dimensions mismatch for {key}.")
+        if list(getattr(loaded, key)().to_tuple()) != expected_dimension:
+            raise ValidationError(f"SCF snapshot deserialized dimensions mismatch for {key}.")
+
+    return dict(metadata)
+
+
+def rehydrate_scf_wavefunction(snapshot, *, method: str, reference: str) -> core.HF:
+    snapshot_data = _load_scf_snapshot_data(snapshot)
+    loaded = core.Wavefunction.from_file(snapshot_data)
+    metadata = _validate_scf_snapshot_metadata(snapshot_data, loaded, method=method, reference=reference)
+
+    from ..proc import scf_wavefunction_factory
+
+    fresh_base = core.Wavefunction.build(loaded.molecule(), loaded.basisset())
+    rehydrated = scf_wavefunction_factory(method, fresh_base, _normalize_scf_reference(reference))
+    factory_basissets = _capture_factory_basissets(rehydrated)
+    rehydrated.deep_copy(loaded)
+    for key, basis in factory_basissets.items():
+        rehydrated.set_basisset(key, basis)
+
+    if rehydrated.functional().name() != metadata.get("functional"):
+        raise ValidationError(
+            f"SCF snapshot functional mismatch: expected {metadata.get('functional')!r}, got {rehydrated.functional().name()!r}."
+        )
+
+    for key in _SCF_SNAPSHOT_DIMENSION_KEYS:
+        expected_dimension = tuple(snapshot_data["dimension"][key])
+        if getattr(rehydrated, key)().to_tuple() != expected_dimension:
+            raise ValidationError(f"SCF snapshot rehydrated dimensions mismatch for {key}.")
+
+    rehydrated.set_energy(loaded.energy())
+    return rehydrated
 
 
 def _pid_exists(pid: int) -> bool:

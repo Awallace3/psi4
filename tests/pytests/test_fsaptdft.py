@@ -1,6 +1,9 @@
 import json
 import os
 from pprint import pprint as pp
+import subprocess
+import sys
+import textwrap
 import types
 
 import numpy as np
@@ -1590,6 +1593,206 @@ def test_saptdft_checkpoint_lock_contention(
 
     second.open()
     second.close()
+
+
+def _configure_scf_snapshot_options(reference):
+    core.clean_options()
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "reference": reference.lower(),
+        }
+    )
+
+
+def _scf_snapshot_molecule():
+    return psi4.geometry(
+        """
+0 1
+H
+H 1 0.74
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+
+
+def _build_scf_snapshot_case(method, reference):
+    _configure_scf_snapshot_options(reference)
+    molecule = _scf_snapshot_molecule()
+    _, wfn = psi4.energy(method, molecule=molecule, return_wfn=True)
+    return molecule, wfn
+
+
+def _guard_scf_rehydrate(monkeypatch):
+    def boom(*args, **kwargs):
+        raise AssertionError("SCF convergence entry point called during checkpoint rehydration")
+
+    for attr in ["compute_energy", "guess", "diis"]:
+        monkeypatch.setattr(core.HF, attr, boom)
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@pytest.mark.parametrize(
+    "method, reference, expected_variable",
+    [("hf", "RHF", "HF TOTAL ENERGY"), ("svwn", "RKS", "DFT TOTAL ENERGY")],
+)
+def test_saptdft_checkpoint_rehydrate_roundtrip_rhf_and_rks(
+    tmp_path, monkeypatch, method, reference, expected_variable
+):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    _, wfn = _build_scf_snapshot_case(method, reference)
+    snapshot = checkpoint_mod.capture_scf_snapshot(wfn, reference=reference, method=method)
+    snapshot_path = tmp_path / f"{reference.lower()}_snapshot.npy"
+    np.save(snapshot_path, snapshot, allow_pickle=True)
+    loaded = core.Wavefunction.from_file(snapshot_path)
+    _guard_scf_rehydrate(monkeypatch)
+
+    restored = checkpoint_mod.rehydrate_scf_wavefunction(
+        snapshot_path, method=method, reference=reference
+    )
+
+    assert type(restored) is type(wfn)
+    assert restored.functional().name() == wfn.functional().name()
+    assert restored.energy() == loaded.energy()
+    assert restored.has_variable(expected_variable)
+
+    for matrix_name in ["Ca", "Cb", "Da", "Db", "Fa", "Fb"]:
+        np.testing.assert_array_equal(
+            getattr(restored, matrix_name)().np, getattr(loaded, matrix_name)().np
+        )
+
+    for vector_name in ["epsilon_a", "epsilon_b"]:
+        np.testing.assert_array_equal(
+            getattr(restored, vector_name)().np, getattr(loaded, vector_name)().np
+        )
+
+    for dimension_name in [
+        "doccpi",
+        "frzcpi",
+        "frzvpi",
+        "nalphapi",
+        "nbetapi",
+        "nmopi",
+        "nsopi",
+        "soccpi",
+    ]:
+        assert getattr(restored, dimension_name)().to_tuple() == getattr(
+            loaded, dimension_name
+        )().to_tuple()
+
+    for variable_name in snapshot["scf_snapshot"]["required_fields"]["floatvar"]:
+        assert restored.variable(variable_name) == loaded.variable(variable_name)
+
+    jk = core.JK.build(restored.basisset(), restored.get_basisset("DF_BASIS_SCF"))
+    jk.initialize()
+    restored.set_jk(jk)
+    if reference == "RKS":
+        restored.form_V()
+    trial = core.Matrix("trial", restored.doccpi(), restored.nmopi() - restored.doccpi())
+    hx = restored.cphf_Hx([trial])
+    assert len(hx) == 1
+    np.testing.assert_array_equal(hx[0].np, np.zeros_like(trial.np))
+    core.clean_options()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@pytest.mark.parametrize(
+    "mutator, expected_message",
+    [
+        (lambda snapshot: snapshot["scf_snapshot"].__setitem__("version", 999), "version"),
+        (
+            lambda snapshot: snapshot["scf_snapshot"]["molecule"]["geom"].__setitem__(0, 9.99),
+            "molecule",
+        ),
+        (
+            lambda snapshot: snapshot["scf_snapshot"]["basis"].__setitem__("name", "cc-pvdz"),
+            "basis",
+        ),
+        (lambda snapshot: snapshot["scf_snapshot"].__setitem__("reference", "RKS"), "reference"),
+        (lambda snapshot: snapshot["scf_snapshot"].__setitem__("functional", "bogus"), "functional"),
+        (
+            lambda snapshot: snapshot["scf_snapshot"]["dimensions"].__setitem__("doccpi", [0]),
+            "dimensions",
+        ),
+        (lambda snapshot: snapshot["matrix"].__setitem__("Ca", None), "required"),
+    ],
+)
+def test_saptdft_checkpoint_rehydrate_validates_snapshot_metadata(
+    mutator, expected_message
+):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    _, wfn = _build_scf_snapshot_case("hf", "RHF")
+    snapshot = checkpoint_mod.capture_scf_snapshot(wfn, reference="RHF", method="hf")
+    mutator(snapshot)
+
+    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match=expected_message):
+        checkpoint_mod.rehydrate_scf_wavefunction(snapshot, method="hf", reference="RHF")
+    core.clean_options()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_rehydrate_never_uses_unsafe_direct_wrap(tmp_path):
+    geometry = """
+0 1
+H
+H 1 0.74
+symmetry c1
+no_reorient
+no_com
+"""
+    script = textwrap.dedent(
+        f"""
+        import numpy as np
+        import psi4
+        from psi4 import core
+        from psi4.driver.procrouting import proc
+        from psi4.driver.procrouting.sapt import saptdft_checkpoint as checkpoint_mod
+
+        core.clean_options()
+        psi4.set_options({{"basis": "sto-3g", "scf_type": "df", "reference": "rhf"}})
+        molecule = psi4.geometry({geometry!r})
+        _, wfn = psi4.energy("hf", molecule=molecule, return_wfn=True)
+        snapshot = checkpoint_mod.capture_scf_snapshot(wfn, reference="RHF", method="hf")
+        snapshot_path = r"{tmp_path / 'unsafe_regression.npy'}"
+        np.save(snapshot_path, snapshot, allow_pickle=True)
+
+        original_build = core.Wavefunction.build
+        def tagged_build(*args, **kwargs):
+            fresh = original_build(*args, **kwargs)
+            fresh._rehydrate_fresh = True
+            return fresh
+        core.Wavefunction.build = tagged_build
+
+        original_factory = proc.scf_wavefunction_factory
+        def guarded_factory(name, ref_wfn, reference, **kwargs):
+            if not getattr(ref_wfn, "_rehydrate_fresh", False):
+                raise RuntimeError("unsafe direct wrap")
+            return original_factory(name, ref_wfn, reference, **kwargs)
+        proc.scf_wavefunction_factory = guarded_factory
+
+        restored = checkpoint_mod.rehydrate_scf_wavefunction(
+            snapshot_path, method="hf", reference="RHF"
+        )
+        assert restored.energy() == wfn.energy()
+        print("safe")
+        """
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=dict(os.environ),
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "safe" in completed.stdout
 
 
 if __name__ == "__main__":
