@@ -161,17 +161,23 @@ def _saptdft_restore_wavefunction_artifact(checkpoint, name):
     return core.Wavefunction.from_file(str(artifact_path))
 
 
+def _saptdft_scf_jk_memory() -> int:
+    return int((core.get_memory() / 8) * core.get_global_option("SCF_MEM_SAFETY_FACTOR"))
+
+
+
+def _saptdft_initialize_wavefunction_jk(wfn):
+    from ..scf_proc import scf_iterator
+
+    scf_iterator.initialize_jk(wfn, _saptdft_scf_jk_memory())
+    return wfn
+
+
+
 def _saptdft_prepare_restored_scf(wfn, *, reference):
     if hasattr(wfn, "set_jk") and _saptdft_wfn_jk(wfn) is None:
-        aux_basis = None
         try:
-            aux_basis = wfn.get_basisset("DF_BASIS_SCF")
-        except Exception:
-            aux_basis = None
-        try:
-            jk = core.JK.build(wfn.basisset(), aux_basis) if aux_basis is not None else core.JK.build(wfn.basisset())
-            jk.initialize()
-            wfn.set_jk(jk)
+            _saptdft_initialize_wavefunction_jk(wfn)
         except Exception as exc:
             raise ValidationError("SAPT(DFT) checkpoint could not rebuild the restored SCF JK object.") from exc
 
@@ -586,7 +592,12 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         if checkpoint is not None and do_ext_potential:
             checkpoint.close()
             raise ValidationError("SAPT(DFT) checkpointing is not supported with external_potentials.")
-        data.update(_saptdft_checkpoint_scalars(checkpoint))
+        checkpoint_scalars = _saptdft_checkpoint_scalars(checkpoint)
+        data.update(checkpoint_scalars)
+        if "Delta HF Correction" in checkpoint_scalars:
+            core.set_variable("SAPT(DFT) Delta HF", checkpoint_scalars["Delta HF Correction"])
+        if "Delta DFT Correction" in checkpoint_scalars:
+            core.set_variable("SAPT(DFT) Delta DFT", checkpoint_scalars["Delta DFT Correction"])
         dimer_wfn = None
         wfn_A = None
         wfn_B = None
@@ -977,7 +988,7 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     )
                 )
 
-                if core.has_variable("SAPT(DFT) Delta HF"):
+                if "Delta HF Correction" not in data and core.has_variable("SAPT(DFT) Delta HF"):
                     data["Delta HF Correction"] = core.variable("SAPT(DFT) Delta HF")
                 if sapt_jk is not None:
                     sapt_jk.finalize()
@@ -1160,7 +1171,12 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
         # Save JK object when available; serialized Wavefunctions do not retain JK objects.
         sapt_jk = _saptdft_wfn_jk(wfn_B)
-        if do_delta_dft and do_dft and not _saptdft_stage_complete(checkpoint, "delta_dft") and sapt_jk is None:
+        pending_sapt_stage = _saptdft_pending_computation_stage(checkpoint, do_disp=do_disp, do_fsapt=do_fsapt)
+        needs_restored_sapt_jk = do_dft and sapt_jk is None and (
+            (do_delta_dft and not _saptdft_stage_complete(checkpoint, "delta_dft"))
+            or pending_sapt_stage not in {None, "fsapt_final"}
+        )
+        if needs_restored_sapt_jk:
             _saptdft_prepare_restored_scf(wfn_B, reference=monomer_reference)
             sapt_jk = _saptdft_wfn_jk(wfn_B)
         if sapt_jk is not None and hasattr(wfn_A, "set_jk"):

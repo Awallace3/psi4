@@ -18,6 +18,26 @@ hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
 pytestmark = [pytest.mark.psi, pytest.mark.api]
 
 
+def _saptdft_default_qcschema_protocols():
+    return {
+        "schema_name": "qcschema_atomic_protocols",
+        "error_correction": {"default_policy": True, "policies": None},
+        "native_files": "none",
+        "stdout": True,
+        "wavefunction": "none",
+    }
+
+
+
+def _saptdft_runtime_only_qcschema_extras():
+    return {
+        "current_qcvars_only": False,
+        "extra_infiles": {},
+        "wfn_qcvars_only": False,
+    }
+
+
+
 def _run_saptdft_checkpoint_worker(
     *,
     checkpoint_dir,
@@ -26,6 +46,8 @@ def _run_saptdft_checkpoint_worker(
     name="sapt(dft)",
     scenario="default",
     guard_jk=False,
+    qcschema_protocols=None,
+    qcschema_extras=None,
 ):
     worker = os.path.join(os.path.dirname(__file__), "fsaptdft_checkpoint_worker.py")
     command = [sys.executable, worker, mode, str(checkpoint_dir), "--name", name, "--scenario", scenario]
@@ -33,6 +55,10 @@ def _run_saptdft_checkpoint_worker(
         command.extend(["--stop-after", stop_after])
     if guard_jk:
         command.append("--guard-jk")
+    if qcschema_protocols is not None:
+        command.extend(["--qcschema-protocols-json", json.dumps(qcschema_protocols)])
+    if qcschema_extras is not None:
+        command.extend(["--qcschema-extras-json", json.dumps(qcschema_extras)])
     completed = subprocess.run(
         command,
         check=False,
@@ -1089,6 +1115,52 @@ def test_qcschema_checkpoint_identity_restarts_with_direct_api(tmp_path):
     assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
     assert restarted["status"] == "ok"
     compare_values(qcschema["sapt_total_energy"], restarted["sapt_total_energy"], 8, "QCSchema/direct checkpoint identity")
+
+
+@pytest.mark.saptdft
+def test_qcschema_checkpoint_identity_ignores_default_protocols_and_runtime_extras(tmp_path):
+    checkpoint_dir = tmp_path / "qcschema-default-protocols"
+    qcschema_proc, qcschema = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="qcschema",
+        qcschema_protocols=_saptdft_default_qcschema_protocols(),
+        qcschema_extras=_saptdft_runtime_only_qcschema_extras(),
+    )
+    assert qcschema_proc.returncode == 0, qcschema_proc.stderr or qcschema_proc.stdout
+    assert qcschema["status"] == "ok"
+
+    restarted_proc, restarted = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="restart_with_guards",
+        guard_jk=True,
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "ok"
+    compare_values(qcschema["sapt_total_energy"], restarted["sapt_total_energy"], 8, "QCSchema default protocols/extras identity")
+
+
+@pytest.mark.saptdft
+def test_qcschema_checkpoint_identity_rejects_nondefault_protocol_and_extra_mismatch(tmp_path):
+    checkpoint_dir = tmp_path / "qcschema-protocol-extra-mismatch"
+    qcschema_proc, qcschema = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="qcschema",
+        qcschema_protocols={"stdout": False},
+        qcschema_extras={"user_tag": "alpha"},
+    )
+    assert qcschema_proc.returncode == 0, qcschema_proc.stderr or qcschema_proc.stdout
+    assert qcschema["status"] == "ok"
+
+    restarted_proc, restarted = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="qcschema_restart_with_guards",
+        qcschema_protocols={"stdout": False},
+        qcschema_extras={"user_tag": "beta"},
+    )
+    assert restarted_proc.returncode != 0
+    assert restarted["status"] == "error"
+    assert restarted["error_type"] in {"FailedOperation", "ValidationError"}
+    assert "extras.user_tag" in restarted["error"] or "protocols.stdout" in restarted["error"]
 
 
 @pytest.mark.saptdft

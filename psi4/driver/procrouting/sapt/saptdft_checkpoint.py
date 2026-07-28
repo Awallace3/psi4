@@ -143,6 +143,15 @@ _MOLECULE_IDENTITY_FIELDS = (
     "symbols",
 )
 
+_QCSCHEMA_PROTOCOL_DEFAULTS = {
+    "error_correction": {"default_policy": True, "policies": None},
+    "native_files": "none",
+    "stdout": True,
+    "wavefunction": "none",
+}
+_QCSCHEMA_PROTOCOL_NOISE_KEYS = {"schema_name", "schema_version"}
+_QCSCHEMA_RUNTIME_EXTRA_KEYS = {"current_qcvars_only", "extra_infiles", "wfn_qcvars_only"}
+
 
 @dataclass(frozen=True)
 class StageDefinition:
@@ -700,6 +709,38 @@ def _canonicalize_identity_keywords(keywords: Mapping[str, Any]) -> dict[str, An
 
 
 
+def _canonicalize_identity_protocols(protocols: Mapping[str, Any]) -> dict[str, Any]:
+    normalized_protocols = _normalize_identity_jsonable(_normalize_jsonable(protocols))
+    if not isinstance(normalized_protocols, Mapping):
+        return {}
+
+    defaults = _normalize_identity_jsonable(_QCSCHEMA_PROTOCOL_DEFAULTS)
+    canonical = {}
+    for key, value in normalized_protocols.items():
+        key_str = str(key)
+        if key_str.lower() in _QCSCHEMA_PROTOCOL_NOISE_KEYS:
+            continue
+        if key_str in defaults and _first_difference(value, defaults[key_str]) is None:
+            continue
+        canonical[key_str] = value
+    return canonical
+
+
+
+def _canonicalize_identity_extras(extras: Mapping[str, Any]) -> dict[str, Any]:
+    normalized_extras = _normalize_identity_jsonable(_normalize_jsonable(extras))
+    if not isinstance(normalized_extras, Mapping):
+        return {}
+
+    canonical = {}
+    for key, value in normalized_extras.items():
+        if str(key).lower() in _QCSCHEMA_RUNTIME_EXTRA_KEYS:
+            continue
+        canonical[str(key)] = value
+    return canonical
+
+
+
 def _canonicalize_atomic_input(atomic_input: Any, *, name: str) -> dict[str, Any]:
     coerced = _coerce_atomic_input_dict(atomic_input)
     specification = dict(coerced.get("specification") or {})
@@ -715,8 +756,8 @@ def _canonicalize_atomic_input(atomic_input: Any, *, name: str) -> dict[str, Any
                 "basis": _normalize_jsonable(model.get("basis"), lower_strings=True),
             },
             "keywords": _canonicalize_identity_keywords(specification.get("keywords") or {}),
-            "protocols": {},
-            "extras": {},
+            "protocols": _canonicalize_identity_protocols(specification.get("protocols") or {}),
+            "extras": _canonicalize_identity_extras(specification.get("extras") or {}),
         },
     }
     return canonical
@@ -732,6 +773,10 @@ def _merge_identity_atomic_inputs(resolved_atomic_input: Any, provided_atomic_in
     provided_model = dict(provided_specification.get("model") or {})
     resolved_keywords = dict(resolved_specification.get("keywords") or {})
     provided_keywords = dict(provided_specification.get("keywords") or {})
+    resolved_protocols = dict(resolved_specification.get("protocols") or {})
+    provided_protocols = dict(provided_specification.get("protocols") or {})
+    resolved_extras = dict(resolved_specification.get("extras") or {})
+    provided_extras = dict(provided_specification.get("extras") or {})
 
     return {
         "molecule": resolved.get("molecule"),
@@ -742,8 +787,8 @@ def _merge_identity_atomic_inputs(resolved_atomic_input: Any, provided_atomic_in
                 "basis": resolved_model.get("basis") or provided_model.get("basis"),
             },
             "keywords": {**provided_keywords, **resolved_keywords},
-            "protocols": {},
-            "extras": {},
+            "protocols": {**resolved_protocols, **provided_protocols},
+            "extras": {**resolved_extras, **provided_extras},
         },
     }
 

@@ -1196,12 +1196,34 @@ def _saptdft_raw_qcschema_molecule():
 
 
 
+def _saptdft_default_qcschema_protocols():
+    return {
+        "schema_name": "qcschema_atomic_protocols",
+        "error_correction": {"default_policy": True, "policies": None},
+        "native_files": "none",
+        "stdout": True,
+        "wavefunction": "none",
+    }
+
+
+
+def _saptdft_runtime_only_qcschema_extras():
+    return {
+        "current_qcvars_only": False,
+        "extra_infiles": {},
+        "wfn_qcvars_only": False,
+    }
+
+
+
 def _saptdft_minimal_qcschema_input(
     molecule,
     *,
     function_kwargs=None,
     method="sapt(dft)",
     keyword_overrides=None,
+    protocols=None,
+    extras=None,
 ):
     keywords = {k.lower(): v for k, v in psi4.driver.p4util.prepare_options_for_set_options().items()}
     basis = keywords.pop("basis", core.get_global_option("BASIS"))
@@ -1216,8 +1238,8 @@ def _saptdft_minimal_qcschema_input(
             "driver": "energy",
             "model": {"method": method, "basis": basis},
             "keywords": keywords,
-            "protocols": {},
-            "extras": {},
+            "protocols": dict(protocols or {}),
+            "extras": dict(extras or {}),
         },
     }
 
@@ -1329,6 +1351,102 @@ def test_saptdft_checkpoint_identity_matches_equivalent_qcschema_and_default_omi
     assert "orbital_optimizer_package" not in direct_identity["canonical_input"]["specification"]["keywords"]
     assert direct_identity["canonical_input"]["specification"]["protocols"] == {}
     assert direct_identity["canonical_input"]["specification"]["extras"] == {}
+    core.clean_options()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_identity_matches_qcschema_default_protocols_and_runtime_extras():
+    checkpoint_mod = _saptdft_checkpoint_module()
+    core.clean_options()
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "sapt_dft_functional": "hf",
+            "sapt_dft_do_dhf": True,
+            "sapt_dft_do_hybrid": False,
+            "sapt_dft_do_disp": False,
+            "sapt_dft_do_fsapt": "none",
+            "sapt_dft_use_einsums": False,
+        }
+    )
+    molecule = _saptdft_checkpoint_molecule()
+    function_kwargs = {"checkpoint_dir": "first-dir", "output": "first.out"}
+
+    direct_identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+    )
+    qcschema_identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+        atomic_input=_saptdft_minimal_qcschema_input(
+            molecule,
+            function_kwargs=function_kwargs,
+            protocols=_saptdft_default_qcschema_protocols(),
+            extras=_saptdft_runtime_only_qcschema_extras(),
+        ),
+    )
+
+    assert direct_identity == qcschema_identity
+    assert direct_identity["canonical_input"]["specification"]["protocols"] == {}
+    assert direct_identity["canonical_input"]["specification"]["extras"] == {}
+    core.clean_options()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@pytest.mark.parametrize(
+    ("protocols", "extras", "expected_message"),
+    [
+        pytest.param({"stdout": False}, None, r"specification\.protocols", id="protocols"),
+        pytest.param(None, {"user_tag": "alpha"}, r"specification\.extras", id="extras"),
+    ],
+)
+def test_saptdft_checkpoint_mismatch_reports_qcschema_protocols_and_extras(
+    tmp_path, protocols, extras, expected_message
+):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    core.clean_options()
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "sapt_dft_functional": "hf",
+            "sapt_dft_do_dhf": True,
+            "sapt_dft_do_hybrid": False,
+            "sapt_dft_do_disp": False,
+            "sapt_dft_do_fsapt": "none",
+            "sapt_dft_use_einsums": False,
+        }
+    )
+    molecule = _saptdft_checkpoint_molecule()
+    function_kwargs = {"checkpoint_dir": "first-dir", "output": "first.out"}
+
+    identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+        atomic_input=_saptdft_minimal_qcschema_input(
+            molecule,
+            function_kwargs=function_kwargs,
+            protocols=protocols,
+            extras=extras,
+        ),
+    )
+    checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
+    checkpoint.open()
+    checkpoint.commit_stage("hf_dimer_scf")
+    checkpoint.close()
+
+    mismatched_identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+    )
+    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match=expected_message):
+        checkpoint_mod.SAPTDFTCheckpoint(tmp_path, mismatched_identity).open()
     core.clean_options()
 
 
@@ -2283,9 +2401,12 @@ def _run_fsaptdft_checkpoint_worker(
     scenario="default",
     guard_jk=False,
     count_jk_builds=False,
+    capture_jk_settings=False,
     capture_fsapt=False,
     forbid_banners=None,
     forbid_fsapt_stages=None,
+    qcschema_protocols=None,
+    qcschema_extras=None,
 ):
     worker = os.path.join(os.path.dirname(__file__), "fsaptdft_checkpoint_worker.py")
     command = [sys.executable, worker, mode, str(checkpoint_dir), "--name", name, "--scenario", scenario]
@@ -2295,8 +2416,14 @@ def _run_fsaptdft_checkpoint_worker(
         command.append("--guard-jk")
     if count_jk_builds:
         command.append("--count-jk-builds")
+    if capture_jk_settings:
+        command.append("--capture-jk-settings")
     if capture_fsapt:
         command.append("--capture-fsapt")
+    if qcschema_protocols is not None:
+        command.extend(["--qcschema-protocols-json", json.dumps(qcschema_protocols)])
+    if qcschema_extras is not None:
+        command.extend(["--qcschema-extras-json", json.dumps(qcschema_extras)])
     for banner in forbid_banners or []:
         command.extend(["--forbid-banner", banner])
     for stage in forbid_fsapt_stages or []:
@@ -2332,6 +2459,24 @@ def _checkpoint_snapshot_artifact_payloads(checkpoint_dir, manifest):
     return payloads
 
 
+
+def _checkpoint_array_artifact_payloads(checkpoint_dir, manifest):
+    payloads = {}
+    base = Path(checkpoint_dir)
+    for name, artifact in manifest["artifacts"].items():
+        if artifact.get("kind") == "array":
+            payloads[name] = np.load(base / artifact["path"], allow_pickle=False)
+    return payloads
+
+
+
+def _checkpoint_wavefunction_artifact_payload(checkpoint_dir, manifest, name="dimer_wfn"):
+    artifact = manifest["artifacts"][name]
+    assert artifact["kind"] == "wavefunction"
+    return np.load(Path(checkpoint_dir) / artifact["path"], allow_pickle=True).item()
+
+
+
 def _walk_mapping_keys(value):
     if isinstance(value, dict):
         for key, item in value.items():
@@ -2342,12 +2487,52 @@ def _walk_mapping_keys(value):
             yield from _walk_mapping_keys(item)
 
 
+def _assert_checkpoint_wavefunction_payload_has_no_live_jk(checkpoint_dir, manifest, name="dimer_wfn"):
+    payload = _checkpoint_wavefunction_artifact_payload(checkpoint_dir, manifest, name=name)
+    assert set(payload) == {
+        "molecule",
+        "matrix",
+        "vector",
+        "dimension",
+        "int",
+        "string",
+        "boolean",
+        "float",
+        "floatvar",
+        "matrixarr",
+    }
+    for section in payload.values():
+        assert isinstance(section, dict)
+
+    def walk(value, path=""):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                key_path = f"{path}.{key}" if path else str(key)
+                if "jk" in str(key).lower():
+                    assert not hasattr(item, "initialize"), key_path
+                    assert not isinstance(item, core.JK), key_path
+                walk(item, key_path)
+        elif isinstance(value, np.ndarray):
+            return
+        elif isinstance(value, (list, tuple)):
+            for index, item in enumerate(value):
+                walk(item, f"{path}[{index}]")
+        else:
+            assert isinstance(value, (np.generic, str, bool, int, float, type(None))), path
+
+    walk(payload)
+    return payload
+
+
+
 def _assert_checkpoint_has_no_jk_artifacts(checkpoint_dir):
     manifest = _checkpoint_manifest(checkpoint_dir)
     assert manifest["artifacts"]
     assert all("jk" not in str(name).lower() for name in manifest["artifacts"])
     for payload in _checkpoint_snapshot_artifact_payloads(checkpoint_dir, manifest):
         assert all("jk" not in key.lower() for key in _walk_mapping_keys(payload))
+    if "dimer_wfn" in manifest["artifacts"]:
+        _assert_checkpoint_wavefunction_payload_has_no_live_jk(checkpoint_dir, manifest)
     return manifest
 
 
@@ -2428,6 +2613,35 @@ def _assert_fsapt_restart_matches_reference(reference, restarted, label):
     compare_values(reference["sapt_total_energy"], restarted["sapt_total_energy"], 8, f"{label} total energy")
     compare_values(reference["saptdft_total_energy"], restarted["saptdft_total_energy"], 8, f"{label} saptdft total")
     _assert_fsapt_variables_match(reference, restarted)
+
+
+
+def _assert_scalar_qcvars_match(reference, restarted, label):
+    assert set(reference["qcvars"]) == set(restarted["qcvars"])
+    for key, ref_value in reference["qcvars"].items():
+        restarted_value = restarted["qcvars"][key]
+        if isinstance(ref_value, bool):
+            assert restarted_value is ref_value, f"{label} qcvar {key}"
+        else:
+            compare_values(ref_value, restarted_value, 8, f"{label} qcvar {key}")
+
+
+
+def _assert_array_artifacts_match(reference_dir, comparison_dir, artifact_names):
+    reference_manifest = _checkpoint_manifest(reference_dir)
+    comparison_manifest = _checkpoint_manifest(comparison_dir)
+    reference_arrays = _checkpoint_array_artifact_payloads(reference_dir, reference_manifest)
+    comparison_arrays = _checkpoint_array_artifact_payloads(comparison_dir, comparison_manifest)
+    assert set(artifact_names).issubset(reference_arrays)
+    assert set(artifact_names).issubset(comparison_arrays)
+    for name in artifact_names:
+        np.testing.assert_allclose(
+            comparison_arrays[name],
+            reference_arrays[name],
+            atol=1.0e-10,
+            rtol=1.0e-10,
+            err_msg=name,
+        )
 
 
 _TASK3_DEFAULT_STOP_STAGE_SETS = {
@@ -2536,6 +2750,182 @@ _TASK3_DEFAULT_FORBIDDEN_BANNERS = {
     ],
 }
 
+_TASK3_DEFAULT_FINAL_STAGES = [
+    "hf_dimer_scf",
+    "hf_monomer_a_scf",
+    "hf_monomer_b_scf",
+    "hf_sapt_elst",
+    "hf_sapt_exch",
+    "hf_sapt_ind",
+    "monomer_a_dft_scf",
+    "monomer_b_dft_scf",
+    "delta_dft_dimer_scf",
+    "delta_dft_monomer_a_scf",
+    "delta_dft_monomer_b_scf",
+    "delta_dft",
+    "elst",
+    "exch",
+    "ind",
+    "final",
+]
+
+_TASK3_DEFAULT_PERSISTENT_STAGE_CASES = [
+    pytest.param(
+        "saptdft_checkpoint_reference_default",
+        "default",
+        "hf_sapt_elst",
+        ["hf_dimer_scf", "hf_monomer_a_scf", "hf_monomer_b_scf", "hf_sapt_elst"],
+        [],
+        id="hf-sapt-elst",
+    ),
+    pytest.param(
+        "saptdft_checkpoint_reference_default",
+        "default",
+        "hf_sapt_exch",
+        ["hf_dimer_scf", "hf_monomer_a_scf", "hf_monomer_b_scf", "hf_sapt_elst", "hf_sapt_exch"],
+        [],
+        id="hf-sapt-exch",
+    ),
+    pytest.param(
+        "saptdft_checkpoint_reference_default",
+        "default",
+        "hf_sapt_ind",
+        ["hf_dimer_scf", "hf_monomer_a_scf", "hf_monomer_b_scf", "hf_sapt_elst", "hf_sapt_exch", "hf_sapt_ind"],
+        [],
+        id="hf-sapt-ind",
+    ),
+    pytest.param(
+        "saptdft_checkpoint_reference_default",
+        "default",
+        "delta_dft",
+        [
+            "hf_dimer_scf",
+            "hf_monomer_a_scf",
+            "hf_monomer_b_scf",
+            "hf_sapt_elst",
+            "hf_sapt_exch",
+            "hf_sapt_ind",
+            "monomer_a_dft_scf",
+            "monomer_b_dft_scf",
+            "delta_dft_dimer_scf",
+            "delta_dft_monomer_a_scf",
+            "delta_dft_monomer_b_scf",
+            "delta_dft",
+        ],
+        [],
+        id="delta-dft",
+    ),
+    pytest.param(
+        "saptdft_checkpoint_reference_default",
+        "default",
+        "elst",
+        [
+            "hf_dimer_scf",
+            "hf_monomer_a_scf",
+            "hf_monomer_b_scf",
+            "hf_sapt_elst",
+            "hf_sapt_exch",
+            "hf_sapt_ind",
+            "monomer_a_dft_scf",
+            "monomer_b_dft_scf",
+            "delta_dft_dimer_scf",
+            "delta_dft_monomer_a_scf",
+            "delta_dft_monomer_b_scf",
+            "delta_dft",
+            "elst",
+        ],
+        [],
+        id="elst",
+    ),
+    pytest.param(
+        "saptdft_checkpoint_reference_default",
+        "default",
+        "exch",
+        [
+            "hf_dimer_scf",
+            "hf_monomer_a_scf",
+            "hf_monomer_b_scf",
+            "hf_sapt_elst",
+            "hf_sapt_exch",
+            "hf_sapt_ind",
+            "monomer_a_dft_scf",
+            "monomer_b_dft_scf",
+            "delta_dft_dimer_scf",
+            "delta_dft_monomer_a_scf",
+            "delta_dft_monomer_b_scf",
+            "delta_dft",
+            "elst",
+            "exch",
+        ],
+        ["exch.J_P_A", "exch.J_P_B"],
+        id="exch",
+    ),
+    pytest.param(
+        "saptdft_checkpoint_reference_default",
+        "default",
+        "ind",
+        [
+            "hf_dimer_scf",
+            "hf_monomer_a_scf",
+            "hf_monomer_b_scf",
+            "hf_sapt_elst",
+            "hf_sapt_exch",
+            "hf_sapt_ind",
+            "monomer_a_dft_scf",
+            "monomer_b_dft_scf",
+            "delta_dft_dimer_scf",
+            "delta_dft_monomer_a_scf",
+            "delta_dft_monomer_b_scf",
+            "delta_dft",
+            "elst",
+            "exch",
+            "ind",
+        ],
+        ["exch.J_P_A", "exch.J_P_B"],
+        id="ind",
+    ),
+    pytest.param(
+        "saptdft_checkpoint_reference_disp",
+        "disp",
+        "disp",
+        [
+            "hf_dimer_scf",
+            "hf_monomer_a_scf",
+            "hf_monomer_b_scf",
+            "hf_sapt_elst",
+            "hf_sapt_exch",
+            "hf_sapt_ind",
+            "monomer_a_dft_scf",
+            "monomer_b_dft_scf",
+            "elst",
+            "exch",
+            "ind",
+            "disp",
+        ],
+        ["exch.J_P_A", "exch.J_P_B"],
+        id="disp",
+    ),
+]
+
+_TASK3_SCENARIO_FINAL_STAGES = {
+    "default": _TASK3_DEFAULT_FINAL_STAGES,
+    "disp": [
+        "hf_dimer_scf",
+        "hf_monomer_a_scf",
+        "hf_monomer_b_scf",
+        "hf_sapt_elst",
+        "hf_sapt_exch",
+        "hf_sapt_ind",
+        "monomer_a_dft_scf",
+        "monomer_b_dft_scf",
+        "elst",
+        "exch",
+        "ind",
+        "disp",
+        "final",
+    ],
+}
+
 
 def _task3_test_options(overrides=None):
     options = {
@@ -2583,6 +2973,39 @@ def _assert_checkpoint_stop_result(stopped, *, expected_stages, stop_stage):
     assert stopped["manifest"]["completed_stages"][stop_stage]["dependencies"] == list(
         checkpoint_mod.selected_stage_dependencies(stopped["manifest"]["job_identity"], stop_stage)
     )
+
+
+@pytest.fixture(scope="module")
+def saptdft_checkpoint_reference_default(tmp_path_factory):
+    checkpoint_dir = tmp_path_factory.mktemp("saptdft-default-reference")
+    proc, payload = _run_fsaptdft_checkpoint_worker(checkpoint_dir=checkpoint_dir, mode="reference")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert payload["status"] == "ok"
+    return checkpoint_dir, payload
+
+
+@pytest.fixture(scope="module")
+def saptdft_checkpoint_reference_disp(tmp_path_factory):
+    checkpoint_dir = tmp_path_factory.mktemp("saptdft-disp-reference")
+    proc, payload = _run_fsaptdft_checkpoint_worker(checkpoint_dir=checkpoint_dir, mode="reference", scenario="disp")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert payload["status"] == "ok"
+    return checkpoint_dir, payload
+
+
+@pytest.fixture(scope="module")
+def saptdft_checkpoint_reference_lrc(tmp_path_factory):
+    checkpoint_dir = tmp_path_factory.mktemp("saptdft-lrc-reference")
+    proc, payload = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="reference",
+        scenario="lrc",
+        count_jk_builds=True,
+        capture_jk_settings=True,
+    )
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert payload["status"] == "ok"
+    return checkpoint_dir, payload
 
 
 @pytest.mark.saptdft
@@ -2879,6 +3302,125 @@ def test_saptdft_checkpoint_restart_skips_localization_scf(tmp_path):
         stop_stage="monomer_a_dft_scf",
     )
     compare_values(reference["current_energy"], restarted["current_energy"], 8, "checkpoint restart localization monomer energy")
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@pytest.mark.parametrize(
+    ("reference_fixture", "scenario", "stop_stage", "expected_stages", "array_artifacts"),
+    _TASK3_DEFAULT_PERSISTENT_STAGE_CASES,
+)
+def test_saptdft_checkpoint_persistent_stage_restart_matches_reference(
+    tmp_path,
+    request,
+    reference_fixture,
+    scenario,
+    stop_stage,
+    expected_stages,
+    array_artifacts,
+):
+    reference_dir, reference = request.getfixturevalue(reference_fixture)
+
+    checkpoint_dir = tmp_path / f"{scenario}-{stop_stage}"
+    stopped_proc, stopped = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="stop",
+        stop_after=stop_stage,
+        scenario=scenario,
+    )
+    assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
+    assert stopped["status"] == "stopped"
+    _assert_checkpoint_stop_result(stopped, expected_stages=expected_stages, stop_stage=stop_stage)
+
+    restarted_proc, restarted = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="restart_with_guards",
+        scenario=scenario,
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "ok"
+    assert restarted["guarded_call_sentinel"] is None
+    assert restarted["completed_stages"] == sorted(_TASK3_SCENARIO_FINAL_STAGES[scenario])
+    _assert_scalar_qcvars_match(reference, restarted, f"{scenario} {stop_stage}")
+    if array_artifacts:
+        _assert_array_artifacts_match(reference_dir, checkpoint_dir, array_artifacts)
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_lrc_restart_rebuilds_functional_jk(tmp_path, saptdft_checkpoint_reference_lrc):
+    reference_dir, reference = saptdft_checkpoint_reference_lrc
+    checkpoint_dir = tmp_path / "lrc-monomer-b"
+
+    stopped_proc, stopped = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="stop",
+        stop_after="monomer_b_dft_scf",
+        scenario="lrc",
+    )
+    assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
+    assert stopped["status"] == "stopped"
+    _assert_checkpoint_stop_result(
+        stopped,
+        expected_stages=_TASK3_DEFAULT_STOP_STAGE_SETS["monomer_b_dft_scf"],
+        stop_stage="monomer_b_dft_scf",
+    )
+
+    restarted_proc, restarted = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="restart_with_guards",
+        scenario="lrc",
+        count_jk_builds=True,
+        capture_jk_settings=True,
+        forbid_banners=_TASK3_DEFAULT_FORBIDDEN_BANNERS["monomer_b_dft_scf"],
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "ok"
+    assert restarted["jk_build_count"] == 1
+    built_jk_states = [state for state in restarted["jk_builds"] if state.get("built")]
+    assert len(built_jk_states) == 1
+    jk_state = built_jk_states[0]
+    assert jk_state["context"] == "restore:wb97x"
+    assert jk_state["orbital_basis"] == "STO-3G"
+    assert jk_state["aux_basis"] not in (None, "")
+    assert jk_state["do_K"] is True
+    assert jk_state["do_wK"] is True
+    assert jk_state["initialized"] is True
+    assert jk_state["memory"] > 0
+    compare_values(0.3, jk_state["omega"], 8, "LRC restored JK omega")
+    compare_values(0.157706, jk_state["omega_alpha"], 6, "LRC restored JK omega alpha")
+    compare_values(0.842294, jk_state["omega_beta"], 6, "LRC restored JK omega beta")
+    compare_values(reference["current_energy"], restarted["current_energy"], 8, "lrc restart current energy")
+    compare_values(reference["sapt_total_energy"], restarted["sapt_total_energy"], 8, "lrc restart total energy")
+    _assert_checkpoint_has_no_jk_artifacts(checkpoint_dir)
+    _assert_array_artifacts_match(reference_dir, checkpoint_dir, ["exch.J_P_A", "exch.J_P_B"])
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_lrc_final_restart_returns_before_jk(tmp_path, saptdft_checkpoint_reference_lrc):
+    _, reference = saptdft_checkpoint_reference_lrc
+    checkpoint_dir = tmp_path / "lrc-final"
+    stopped_proc, stopped = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="stop",
+        stop_after="final",
+        scenario="lrc",
+    )
+    assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
+    assert stopped["status"] == "stopped"
+    _assert_checkpoint_has_no_jk_artifacts(checkpoint_dir)
+
+    restarted_proc, restarted = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="restart_with_guards",
+        scenario="lrc",
+        guard_jk=True,
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "ok"
+    compare_values(reference["current_energy"], restarted["current_energy"], 8, "lrc final restart current energy")
+    compare_values(reference["sapt_total_energy"], restarted["sapt_total_energy"], 8, "lrc final restart total energy")
 
 
 @pytest.mark.saptdft
@@ -3228,6 +3770,9 @@ def test_saptdft_checkpoint_final_restart_returns_before_scf_and_jk(tmp_path):
         ],
         stop_stage="final",
     )
+
+    manifest = _assert_checkpoint_has_no_jk_artifacts(checkpoint_dir)
+    assert manifest["artifacts"]["dimer_wfn"]["kind"] == "wavefunction"
 
     restarted_proc, restarted = _run_fsaptdft_checkpoint_worker(
         checkpoint_dir=checkpoint_dir,
