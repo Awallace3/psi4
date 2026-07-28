@@ -2016,6 +2016,65 @@ def _assert_checkpoint_has_no_jk_artifacts(checkpoint_dir):
     return manifest
 
 
+_FSAPT_BASE_ARTIFACT_KINDS = {
+    "dimer_localization_scf": "scf_snapshot",
+    "monomer_a_dft_scf": "scf_snapshot",
+    "monomer_b_dft_scf": "scf_snapshot",
+    "exch.J_P_A": "array",
+    "exch.J_P_B": "array",
+}
+
+_FSAPT_STAGE_ARTIFACT_KINDS = {
+    "fsapt_setup": {
+        "fsapt_setup.Caocc0A": "array",
+        "fsapt_setup.Caocc0B": "array",
+        "fsapt_setup.Laocc0A": "array",
+        "fsapt_setup.Laocc0B": "array",
+        "fsapt_setup.Lfocc0A": "array",
+        "fsapt_setup.Lfocc0B": "array",
+        "fsapt_setup.Locc_A": "array",
+        "fsapt_setup.Locc_B": "array",
+        "fsapt_setup.Qocc0A": "array",
+        "fsapt_setup.Qocc0B": "array",
+        "fsapt_setup.Uaocc0A": "array",
+        "fsapt_setup.Uaocc0B": "array",
+        "fsapt_setup.Uocc_A": "array",
+        "fsapt_setup.Uocc_B": "array",
+        "fsapt_setup.ZA": "array",
+        "fsapt_setup.ZA_orig": "array",
+        "fsapt_setup.ZB": "array",
+        "fsapt_setup.ZB_orig": "array",
+        "fsapt_setup.ZC": "array",
+        "fsapt_setup.ZC_orig": "array",
+    },
+    "fsapt_elst": {
+        "fsapt_elst.Elst_AB": "array",
+        "fsapt_elst.Vlocc0A": "array",
+        "fsapt_elst.Vlocc0B": "array",
+    },
+    "fsapt_exch": {"fsapt_exch.Exch_AB": "array"},
+    "fsapt_ind": {
+        "fsapt_ind.IndAB_AB": "array",
+        "fsapt_ind.IndBA_AB": "array",
+    },
+    "fsapt_disp": {"fsapt_disp.Disp_AB": "array"},
+}
+
+
+def _fsapt_expected_artifact_kinds(*completed_fsapt_stages):
+    expected = dict(_FSAPT_BASE_ARTIFACT_KINDS)
+    for stage in completed_fsapt_stages:
+        expected.update(_FSAPT_STAGE_ARTIFACT_KINDS[stage])
+    return expected
+
+
+def _assert_checkpoint_artifacts_exact(checkpoint_dir, expected_artifact_kinds):
+    manifest = _assert_checkpoint_has_no_jk_artifacts(checkpoint_dir)
+    observed = {name: artifact["kind"] for name, artifact in manifest["artifacts"].items()}
+    assert observed == expected_artifact_kinds
+    return manifest
+
+
 def _assert_fsapt_variables_match(reference, restarted):
     assert set(reference["fsapt_variables"]) == set(restarted["fsapt_variables"])
     for label, ref_value in reference["fsapt_variables"].items():
@@ -2027,6 +2086,13 @@ def _assert_fsapt_variables_match(reference, restarted):
             rtol=1.0e-10,
             err_msg=label,
         )
+
+
+def _assert_fsapt_restart_matches_reference(reference, restarted, label):
+    compare_values(reference["current_energy"], restarted["current_energy"], 8, f"{label} current energy")
+    compare_values(reference["sapt_total_energy"], restarted["sapt_total_energy"], 8, f"{label} total energy")
+    compare_values(reference["saptdft_total_energy"], restarted["saptdft_total_energy"], 8, f"{label} saptdft total")
+    _assert_fsapt_variables_match(reference, restarted)
 
 
 _TASK3_DEFAULT_STOP_STAGE_SETS = {
@@ -2607,14 +2673,10 @@ def test_saptdft_checkpoint_fsapt_einsums_restart_reuses_artifacts_and_lazy_jk(t
     assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
     assert stopped["status"] == "stopped"
     _assert_checkpoint_stop_result(stopped, expected_stages=expected_stages, stop_stage="fsapt_exch")
-    manifest = _assert_checkpoint_has_no_jk_artifacts(checkpoint_dir)
-    for artifact_name in [
-        "fsapt_setup.Qocc0A",
-        "fsapt_setup.Qocc0B",
-        "fsapt_elst.Elst_AB",
-        "fsapt_exch.Exch_AB",
-    ]:
-        assert artifact_name in manifest["artifacts"]
+    _assert_checkpoint_artifacts_exact(
+        checkpoint_dir,
+        _fsapt_expected_artifact_kinds("fsapt_setup", "fsapt_elst", "fsapt_exch"),
+    )
 
     restarted_proc, restarted = _run_fsaptdft_checkpoint_worker(
         checkpoint_dir=checkpoint_dir,
@@ -2632,37 +2694,53 @@ def test_saptdft_checkpoint_fsapt_einsums_restart_reuses_artifacts_and_lazy_jk(t
     assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
     assert restarted["status"] == "ok"
     assert restarted["jk_build_count"] == 1
-    compare_values(reference["sapt_total_energy"], restarted["sapt_total_energy"], 8, "einsums fsapt restart energy")
-    _assert_fsapt_variables_match(reference, restarted)
+    _assert_fsapt_restart_matches_reference(reference, restarted, "einsums fsapt exch restart")
 
 
 @pytest.mark.saptdft
 @pytest.mark.fsapt
-def test_saptdft_checkpoint_fsapt_fisapt_final_restart_reuses_artifacts(tmp_path):
+@pytest.mark.skipif(not _saptdft_checkpoint_einsums_available(), reason="einsums bundle unavailable")
+def test_saptdft_checkpoint_fsapt_einsums_ind_restart_continues_to_disp(tmp_path):
+    expected_stages = [
+        "dimer_localization_scf",
+        "monomer_a_dft_scf",
+        "monomer_b_dft_scf",
+        "elst",
+        "exch",
+        "ind",
+        "fsapt_setup",
+        "fsapt_elst",
+        "fsapt_exch",
+        "fsapt_ind",
+    ]
     _, reference = _run_fsaptdft_checkpoint_worker(
         checkpoint_dir="",
         mode="reference",
-        scenario="fsapt_fisapt",
+        scenario="fsapt_einsums",
         capture_fsapt=True,
     )
     assert reference["status"] == "ok"
 
-    checkpoint_dir = tmp_path / "fsapt-fisapt"
+    checkpoint_dir = tmp_path / "fsapt-einsums-ind"
     stopped_proc, stopped = _run_fsaptdft_checkpoint_worker(
         checkpoint_dir=checkpoint_dir,
         mode="stop",
-        stop_after="fsapt_final",
-        scenario="fsapt_fisapt",
+        stop_after="fsapt_ind",
+        scenario="fsapt_einsums",
     )
     assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
     assert stopped["status"] == "stopped"
-    _assert_checkpoint_has_no_jk_artifacts(checkpoint_dir)
+    _assert_checkpoint_stop_result(stopped, expected_stages=expected_stages, stop_stage="fsapt_ind")
+    _assert_checkpoint_artifacts_exact(
+        checkpoint_dir,
+        _fsapt_expected_artifact_kinds("fsapt_setup", "fsapt_elst", "fsapt_exch", "fsapt_ind"),
+    )
 
     restarted_proc, restarted = _run_fsaptdft_checkpoint_worker(
         checkpoint_dir=checkpoint_dir,
         mode="restart_with_guards",
-        scenario="fsapt_fisapt",
-        guard_jk=True,
+        scenario="fsapt_einsums",
+        count_jk_builds=True,
         capture_fsapt=True,
         forbid_banners=[
             "SAPT(DFT): Dimer for Localization",
@@ -2673,16 +2751,81 @@ def test_saptdft_checkpoint_fsapt_fisapt_final_restart_reuses_artifacts(tmp_path
     )
     assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
     assert restarted["status"] == "ok"
-    compare_values(reference["sapt_total_energy"], restarted["sapt_total_energy"], 8, "fisapt final restart energy")
-    _assert_fsapt_variables_match(reference, restarted)
+    assert restarted["jk_build_count"] == 1
+    _assert_fsapt_restart_matches_reference(reference, restarted, "einsums fsapt ind restart")
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_fsapt_fisapt_ind_restart_continues_to_disp(tmp_path):
+    expected_stages = [
+        "dimer_localization_scf",
+        "monomer_a_dft_scf",
+        "monomer_b_dft_scf",
+        "elst",
+        "exch",
+        "ind",
+        "fsapt_setup",
+        "fsapt_elst",
+        "fsapt_exch",
+        "fsapt_ind",
+    ]
+    _, reference = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir="",
+        mode="reference",
+        scenario="fsapt_fisapt",
+        capture_fsapt=True,
+    )
+    assert reference["status"] == "ok"
+
+    checkpoint_dir = tmp_path / "fsapt-fisapt-ind"
+    stopped_proc, stopped = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="stop",
+        stop_after="fsapt_ind",
+        scenario="fsapt_fisapt",
+    )
+    assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
+    assert stopped["status"] == "stopped"
+    _assert_checkpoint_stop_result(stopped, expected_stages=expected_stages, stop_stage="fsapt_ind")
+    _assert_checkpoint_artifacts_exact(
+        checkpoint_dir,
+        _fsapt_expected_artifact_kinds("fsapt_setup", "fsapt_elst", "fsapt_exch", "fsapt_ind"),
+    )
+
+    restarted_proc, restarted = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="restart_with_guards",
+        scenario="fsapt_fisapt",
+        count_jk_builds=True,
+        capture_fsapt=True,
+        forbid_banners=[
+            "SAPT(DFT): Dimer for Localization",
+            "SAPT(DFT): DFT Monomer A",
+            "SAPT(DFT): DFT Monomer B",
+        ],
+        forbid_fsapt_stages=["setup", "elst", "exch", "ind"],
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "ok"
+    assert restarted["jk_build_count"] == 1
+    _assert_fsapt_restart_matches_reference(reference, restarted, "fisapt fsapt ind restart")
 
 
 @pytest.mark.saptdft
 @pytest.mark.fsapt
 @pytest.mark.parametrize("scenario", ["fsapt_fisapt", "fsapt_einsums"])
-def test_saptdft_checkpoint_fsapt_final_restart_builds_no_jk(tmp_path, scenario):
+def test_saptdft_checkpoint_fsapt_final_restart_reuses_dispersion_without_jk(tmp_path, scenario):
     if scenario == "fsapt_einsums" and not _saptdft_checkpoint_einsums_available():
         pytest.skip("einsums bundle unavailable")
+
+    _, reference = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir="",
+        mode="reference",
+        scenario=scenario,
+        capture_fsapt=True,
+    )
+    assert reference["status"] == "ok"
 
     checkpoint_dir = tmp_path / f"{scenario}-final"
     stopped_proc, stopped = _run_fsaptdft_checkpoint_worker(
@@ -2693,7 +2836,10 @@ def test_saptdft_checkpoint_fsapt_final_restart_builds_no_jk(tmp_path, scenario)
     )
     assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
     assert stopped["status"] == "stopped"
-    _assert_checkpoint_has_no_jk_artifacts(checkpoint_dir)
+    _assert_checkpoint_artifacts_exact(
+        checkpoint_dir,
+        _fsapt_expected_artifact_kinds("fsapt_setup", "fsapt_elst", "fsapt_exch", "fsapt_ind", "fsapt_disp"),
+    )
 
     restarted_proc, restarted = _run_fsaptdft_checkpoint_worker(
         checkpoint_dir=checkpoint_dir,
@@ -2706,10 +2852,11 @@ def test_saptdft_checkpoint_fsapt_final_restart_builds_no_jk(tmp_path, scenario)
             "SAPT(DFT): DFT Monomer A",
             "SAPT(DFT): DFT Monomer B",
         ],
-        forbid_fsapt_stages=["setup", "elst", "exch", "ind"],
+        forbid_fsapt_stages=["setup", "elst", "exch", "ind", "disp"],
     )
     assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
     assert restarted["status"] == "ok"
+    _assert_fsapt_restart_matches_reference(reference, restarted, f"{scenario} fsapt final restart")
 
 
 @pytest.mark.saptdft
