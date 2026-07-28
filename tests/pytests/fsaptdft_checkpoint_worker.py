@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import psi4
+import qcelemental as qcel
 from psi4 import core
 from psi4.driver.procrouting import proc, proc_util
 from psi4.driver.procrouting.sapt import sapt_proc
@@ -19,6 +20,14 @@ units angstrom
 symmetry c1
 no_reorient
 no_com
+"""
+
+RAW_IDENTITY_GEOMETRY = """0 1
+He 1.25 -0.40 0.30
+--
+0 1
+Ne 3.10 1.70 2.80
+units angstrom
 """
 
 
@@ -48,13 +57,33 @@ def _molecule_signature(molecule):
     return json.dumps(payload, sort_keys=True)
 
 
+def _raw_identity_qcschema_molecule():
+    geometry_angstrom = np.array(
+        [
+            [1.25, -0.40, 0.30],
+            [3.10, 1.70, 2.80],
+        ]
+    )
+    return {
+        "symbols": ["He", "Ne"],
+        "geometry": (geometry_angstrom / qcel.constants.bohr2angstroms).ravel().tolist(),
+        "molecular_charge": 0,
+        "molecular_multiplicity": 1,
+        "fragments": [[0], [1]],
+        "fragment_charges": [0, 0],
+        "fragment_multiplicities": [1, 1],
+    }
+
+
+
 def _configure(scenario, name):
     core.clean()
     core.clean_options()
     psi4.set_memory("1 GiB")
     psi4.set_num_threads(1)
     core.set_output_file("/dev/null", False)
-    mol = psi4.geometry(GEOMETRY)
+    geometry = RAW_IDENTITY_GEOMETRY if scenario == "raw_identity" else GEOMETRY
+    mol = psi4.geometry(geometry)
     options = {
         "basis": "sto-3g",
         "freeze_core": False,
@@ -129,7 +158,7 @@ def _manifest_summary(checkpoint_dir: str):
     }
 
 
-def _build_qcschema_input(mol, *, name, checkpoint_dir):
+def _build_qcschema_input(mol, *, name, checkpoint_dir, scenario):
     keywords = {k.lower(): v for k, v in psi4.driver.p4util.prepare_options_for_set_options().items()}
     basis = keywords.pop("basis", core.get_global_option("BASIS"))
     function_kwargs = {}
@@ -137,10 +166,11 @@ def _build_qcschema_input(mol, *, name, checkpoint_dir):
         function_kwargs["checkpoint_dir"] = str(checkpoint_dir)
     if function_kwargs:
         keywords["function_kwargs"] = function_kwargs
+    molecule = _raw_identity_qcschema_molecule() if scenario == "raw_identity" else mol.to_schema(dtype=3)
     return {
         "schema_name": "qcschema_atomic_input",
         "schema_version": 2,
-        "molecule": mol.to_schema(dtype=3),
+        "molecule": molecule,
         "specification": {
             "driver": "energy",
             "model": {"method": name, "basis": basis},
@@ -151,11 +181,15 @@ def _build_qcschema_input(mol, *, name, checkpoint_dir):
     }
 
 
-def _install_scf_guards(*, checkpoint_dir: str, guard_jk: bool, forbidden_banners, molecule_signatures):
+def _install_scf_guards(*, summary, checkpoint_dir: str, guard_jk: bool, forbidden_banners, molecule_signatures):
     manifest = _manifest_summary(checkpoint_dir)
     completed_stages = set(manifest["completed_stages"] if manifest is not None else [])
     current_stage = {"name": None}
     run_scf_counts = {"dimer": 0, "monomer_a": 0, "monomer_b": 0}
+    summary.setdefault("scf_helper_call_count", 0)
+    summary.setdefault("run_scf_call_count", 0)
+    summary.setdefault("guarded_call_count", 0)
+    summary.setdefault("guarded_call_sentinel", None)
 
     banner_stage_map = {
         "SAPT(DFT): delta HF Dimer": "hf_dimer_scf",
@@ -167,6 +201,7 @@ def _install_scf_guards(*, checkpoint_dir: str, guard_jk: bool, forbidden_banner
     }
 
     def boom(message):
+        summary["guarded_call_sentinel"] = message
         raise AssertionError(message)
 
     def _classify_run_scf_stage(molecule):
@@ -188,6 +223,8 @@ def _install_scf_guards(*, checkpoint_dir: str, guard_jk: bool, forbidden_banner
     forbidden_banner_set = set(forbidden_banners)
 
     def guarded_scf_helper(*args, **kwargs):
+        summary["scf_helper_call_count"] += 1
+        summary["guarded_call_count"] += 1
         banner = kwargs.get("banner")
         stage = banner_stage_map.get(banner)
         restore_stage = current_stage["name"]
@@ -204,6 +241,8 @@ def _install_scf_guards(*, checkpoint_dir: str, guard_jk: bool, forbidden_banner
             current_stage["name"] = restore_stage
 
     def guarded_run_scf(*args, **kwargs):
+        summary["run_scf_call_count"] += 1
+        summary["guarded_call_count"] += 1
         molecule = kwargs.get("molecule")
         if molecule is None:
             boom("run_scf called without molecule during checkpoint restart")
@@ -225,6 +264,7 @@ def _install_scf_guards(*, checkpoint_dir: str, guard_jk: bool, forbidden_banner
         original = getattr(core.HF, attr)
 
         def guarded(self, *args, _original=original, _attr=attr, **kwargs):
+            summary["guarded_call_count"] += 1
             stage = current_stage["name"]
             if stage in completed_stages:
                 boom(f"core.HF.{_attr} replayed completed checkpoint stage {stage}")
@@ -234,6 +274,7 @@ def _install_scf_guards(*, checkpoint_dir: str, guard_jk: bool, forbidden_banner
 
     if guard_jk:
         def guarded_jk_build(*args, **kwargs):
+            summary["guarded_call_count"] += 1
             boom("JK.build called during guarded final checkpoint restart")
         core.JK.build = guarded_jk_build
         sapt_proc._saptdft_prepare_restored_scf = guarded_jk_build
@@ -307,14 +348,14 @@ def _capture_fsapt_variables(summary):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["reference", "stop", "restart", "restart_with_guards", "qcschema"])
+    parser.add_argument("mode", choices=["reference", "stop", "restart", "restart_with_guards", "qcschema", "qcschema_restart_with_guards"])
     parser.add_argument("checkpoint_dir")
     parser.add_argument("--stop-after")
     parser.add_argument("--name", default="sapt(dft)")
     parser.add_argument(
         "--scenario",
         default="default",
-        choices=["default", "localization", "fsapt_einsums", "fsapt_fisapt"],
+        choices=["default", "localization", "fsapt_einsums", "fsapt_fisapt", "raw_identity"],
     )
     parser.add_argument("--guard-jk", action="store_true")
     parser.add_argument("--count-jk-builds", action="store_true")
@@ -332,8 +373,9 @@ def main():
         "scenario": args.scenario,
     }
 
-    if args.mode == "restart_with_guards":
+    if args.mode in {"restart_with_guards", "qcschema_restart_with_guards"}:
         _install_scf_guards(
+            summary=summary,
             checkpoint_dir=args.checkpoint_dir,
             guard_jk=args.guard_jk,
             forbidden_banners=args.forbid_banner,
@@ -351,9 +393,14 @@ def main():
         kwargs["checkpoint_stop_after"] = args.stop_after
 
     try:
-        if args.mode == "qcschema":
+        if args.mode in {"qcschema", "qcschema_restart_with_guards"}:
             result = psi4.schema_wrapper.run_qcschema(
-                _build_qcschema_input(mol, name=args.name, checkpoint_dir=args.checkpoint_dir)
+                _build_qcschema_input(
+                    mol,
+                    name=args.name,
+                    checkpoint_dir=args.checkpoint_dir,
+                    scenario=args.scenario,
+                )
             )
             if getattr(result, "success", False):
                 summary["status"] = "ok"

@@ -13,6 +13,7 @@ import pytest
 from addons import uusing
 from psi4 import compare_values
 from psi4 import core
+import qcelemental as qcel
 from qcelemental import constants
 
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
@@ -1164,6 +1165,37 @@ def _saptdft_checkpoint_identity_inputs(molecule, function_kwargs=None, method="
     return atomic_input
 
 
+def _saptdft_raw_qcschema_geometry():
+    return """
+0 1
+He 1.25 -0.40 0.30
+--
+0 1
+Ne 3.10 1.70 2.80
+units angstrom
+"""
+
+
+
+def _saptdft_raw_qcschema_molecule():
+    geometry_angstrom = np.array(
+        [
+            [1.25, -0.40, 0.30],
+            [3.10, 1.70, 2.80],
+        ]
+    )
+    return {
+        "symbols": ["He", "Ne"],
+        "geometry": (geometry_angstrom / qcel.constants.bohr2angstroms).ravel().tolist(),
+        "molecular_charge": 0,
+        "molecular_multiplicity": 1,
+        "fragments": [[0], [1]],
+        "fragment_charges": [0, 0],
+        "fragment_multiplicities": [1, 1],
+    }
+
+
+
 def _saptdft_minimal_qcschema_input(
     molecule,
     *,
@@ -1177,7 +1209,7 @@ def _saptdft_minimal_qcschema_input(
         keywords["function_kwargs"] = dict(function_kwargs)
     keywords.update(keyword_overrides or {})
     return {
-        "schema_name": "qcschema_input",
+        "schema_name": "qcschema_atomic_input",
         "schema_version": 2,
         "molecule": molecule.to_schema(dtype=3),
         "specification": {
@@ -1207,6 +1239,54 @@ def saptdft_checkpoint_identity_fixture():
         molecule, function_kwargs=function_kwargs
     )
     yield molecule, function_kwargs, atomic_input
+    core.clean_options()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_identity_prefers_resolved_molecule_over_raw_qcschema_source():
+    checkpoint_mod = _saptdft_checkpoint_module()
+    core.clean_options()
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "sapt_dft_functional": "hf",
+            "sapt_dft_do_dhf": True,
+            "sapt_dft_do_hybrid": False,
+            "sapt_dft_do_disp": False,
+            "sapt_dft_do_fsapt": "none",
+            "sapt_dft_use_einsums": False,
+        }
+    )
+    molecule = psi4.geometry(_saptdft_raw_qcschema_geometry())
+    molecule.update_geometry()
+    function_kwargs = {"checkpoint_dir": "raw-dir", "output": "raw.out"}
+
+    direct_identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+    )
+    qcschema_identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+        atomic_input={
+            "schema_name": "qcschema_atomic_input",
+            "schema_version": 2,
+            "molecule": _saptdft_raw_qcschema_molecule(),
+            "specification": {
+                "driver": "energy",
+                "model": {"method": "sapt(dft)", "basis": "sto-3g"},
+                "keywords": {"function_kwargs": dict(function_kwargs)},
+                "protocols": {},
+                "extras": {},
+            },
+        },
+    )
+
+    assert direct_identity == qcschema_identity
+    assert direct_identity["canonical_input"]["molecule"]["geometry"] != _saptdft_raw_qcschema_molecule()["geometry"]
     core.clean_options()
 
 
@@ -1987,6 +2067,41 @@ def test_saptdft_checkpoint_rehydrate_prevalidates_malformed_structure(
     with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match=expected_message):
         checkpoint_mod.rehydrate_scf_wavefunction(snapshot, method="hf", reference="RHF")
     core.clean_options()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_corruption_fresh_process_never_recomputes(tmp_path):
+    checkpoint_dir = tmp_path / "corrupt-guarded-restart"
+    stopped_proc, stopped = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="stop",
+        stop_after="hf_dimer_scf",
+    )
+    assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
+    assert stopped["status"] == "stopped"
+
+    manifest = _checkpoint_manifest(checkpoint_dir)
+    artifact = manifest["artifacts"]["hf_dimer_scf"]
+    artifact_path = checkpoint_dir / artifact["path"]
+    artifact_path.write_bytes(artifact_path.read_bytes()[:128])
+
+    restarted_proc, restarted = _run_fsaptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="restart_with_guards",
+        guard_jk=True,
+        count_jk_builds=True,
+        forbid_banners=["SAPT(DFT): delta HF Dimer"],
+    )
+    assert restarted_proc.returncode != 0
+    assert restarted["status"] == "error"
+    assert restarted["error_type"] == "ValidationError"
+    assert "checksum" in restarted["error"] or "size validation" in restarted["error"]
+    assert restarted["jk_build_count"] == 0
+    assert restarted["scf_helper_call_count"] == 0
+    assert restarted["run_scf_call_count"] == 0
+    assert restarted["guarded_call_count"] == 0
+    assert restarted.get("guarded_call_sentinel") is None
 
 
 @pytest.mark.saptdft

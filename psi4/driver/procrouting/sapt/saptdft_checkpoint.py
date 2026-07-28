@@ -660,8 +660,13 @@ def _normalize_identity_jsonable(value: Any) -> Any:
         return [_normalize_identity_jsonable(item) for item in value]
     if isinstance(value, list):
         return [_normalize_identity_jsonable(item) for item in value]
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
+    if isinstance(value, float):
+        if abs(value) < 1.0e-14:
+            return 0.0
+        rounded = round(value, 12)
+        if rounded.is_integer():
+            return int(rounded)
+        return rounded
     return value
 
 
@@ -729,7 +734,7 @@ def _merge_identity_atomic_inputs(resolved_atomic_input: Any, provided_atomic_in
     provided_keywords = dict(provided_specification.get("keywords") or {})
 
     return {
-        "molecule": provided.get("molecule") if provided.get("molecule") is not None else resolved.get("molecule"),
+        "molecule": resolved.get("molecule"),
         "specification": {
             "driver": resolved_specification.get("driver") or provided_specification.get("driver"),
             "model": {

@@ -6,6 +6,7 @@ import sys
 
 import pytest
 import psi4
+from psi4.driver import schema_wrapper
 from qcelemental import constants
 from psi4 import compare_values
 import numpy as np
@@ -21,12 +22,15 @@ def _run_saptdft_checkpoint_worker(
     *,
     checkpoint_dir,
     mode,
+    stop_after=None,
     name="sapt(dft)",
     scenario="default",
     guard_jk=False,
 ):
     worker = os.path.join(os.path.dirname(__file__), "fsaptdft_checkpoint_worker.py")
     command = [sys.executable, worker, mode, str(checkpoint_dir), "--name", name, "--scenario", scenario]
+    if stop_after is not None:
+        command.extend(["--stop-after", stop_after])
     if guard_jk:
         command.append("--guard-jk")
     completed = subprocess.run(
@@ -1085,6 +1089,90 @@ def test_qcschema_checkpoint_identity_restarts_with_direct_api(tmp_path):
     assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
     assert restarted["status"] == "ok"
     compare_values(qcschema["sapt_total_energy"], restarted["sapt_total_energy"], 8, "QCSchema/direct checkpoint identity")
+
+
+@pytest.mark.saptdft
+def test_qcschema_raw_molecule_checkpoint_restarts_with_direct_api(tmp_path):
+    checkpoint_dir = tmp_path / "qcschema-raw-final"
+    qcschema_proc, qcschema = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="qcschema",
+        scenario="raw_identity",
+    )
+    assert qcschema_proc.returncode == 0, qcschema_proc.stderr or qcschema_proc.stdout
+    assert qcschema["status"] == "ok"
+
+    restarted_proc, restarted = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="restart_with_guards",
+        scenario="raw_identity",
+        guard_jk=True,
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "ok"
+    assert restarted["guarded_call_count"] == 0
+    compare_values(qcschema["sapt_total_energy"], restarted["sapt_total_energy"], 8, "raw QCSchema/direct checkpoint identity")
+
+
+@pytest.mark.saptdft
+def test_direct_checkpoint_restarts_with_raw_qcschema_input(tmp_path):
+    checkpoint_dir = tmp_path / "direct-raw-qcschema-final"
+    stopped_proc, stopped = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="stop",
+        stop_after="final",
+        scenario="raw_identity",
+    )
+    assert stopped_proc.returncode == 0, stopped_proc.stderr or stopped_proc.stdout
+    assert stopped["status"] == "stopped"
+
+    restarted_proc, restarted = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="qcschema_restart_with_guards",
+        scenario="raw_identity",
+        guard_jk=True,
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "ok"
+    assert restarted["guarded_call_count"] == 0
+    compare_values(stopped["sapt_total_energy"], restarted["sapt_total_energy"], 8, "direct/raw-QCSchema checkpoint identity")
+
+
+@pytest.mark.saptdft
+def test_run_qcschema_does_not_inject_private_checkpoint_identity_for_hf(monkeypatch):
+    seen = {}
+    original_energy = schema_wrapper.methods_dict_["energy"]
+
+    def wrapped_energy(method, **kwargs):
+        seen["has_private_handoff"] = psi4.driver.p4util.SAPTDFT_IDENTITY_ATOMIC_INPUT_KEY in kwargs
+        return original_energy(method, **kwargs)
+
+    monkeypatch.setitem(schema_wrapper.methods_dict_, "energy", wrapped_energy)
+    ret = psi4.schema_wrapper.run_qcschema(
+        {
+            "schema_name": "qcschema_atomic_input",
+            "schema_version": 2,
+            "molecule": {
+                "symbols": ["He", "He"],
+                "geometry": [0.0, 0.0, 0.0, 0.0, 0.0, 2.5],
+                "molecular_charge": 0,
+                "molecular_multiplicity": 1,
+                "fragments": [[0, 1]],
+                "fragment_charges": [0],
+                "fragment_multiplicities": [1],
+            },
+            "specification": {
+                "driver": "energy",
+                "model": {"method": "hf", "basis": "sto-3g"},
+                "keywords": {},
+                "protocols": {},
+                "extras": {},
+            },
+        }
+    )
+
+    assert ret.success
+    assert seen["has_private_handoff"] is False
 
 
 @pytest.mark.saptdft
