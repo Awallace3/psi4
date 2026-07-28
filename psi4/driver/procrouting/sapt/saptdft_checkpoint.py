@@ -188,6 +188,87 @@ def _validate_stage_definitions() -> None:
 _validate_stage_definitions()
 
 
+@dataclass(frozen=True)
+class FSAPTArtifactSpec:
+    cache_key: str
+    artifact_name: str
+    value_type: str
+
+
+_FSAPT_SETUP_ARTIFACT_SPECS: tuple[FSAPTArtifactSpec, ...] = (
+    FSAPTArtifactSpec("Qocc0A", "fsapt_setup.Qocc0A", "matrix"),
+    FSAPTArtifactSpec("Qocc0B", "fsapt_setup.Qocc0B", "matrix"),
+    FSAPTArtifactSpec("Locc_A", "fsapt_setup.Locc_A", "matrix"),
+    FSAPTArtifactSpec("Locc_B", "fsapt_setup.Locc_B", "matrix"),
+    FSAPTArtifactSpec("Uocc_A", "fsapt_setup.Uocc_A", "matrix"),
+    FSAPTArtifactSpec("Uocc_B", "fsapt_setup.Uocc_B", "matrix"),
+    FSAPTArtifactSpec("Lfocc0A", "fsapt_setup.Lfocc0A", "matrix"),
+    FSAPTArtifactSpec("Lfocc0B", "fsapt_setup.Lfocc0B", "matrix"),
+    FSAPTArtifactSpec("Laocc0A", "fsapt_setup.Laocc0A", "matrix"),
+    FSAPTArtifactSpec("Laocc0B", "fsapt_setup.Laocc0B", "matrix"),
+    FSAPTArtifactSpec("Uaocc0A", "fsapt_setup.Uaocc0A", "matrix"),
+    FSAPTArtifactSpec("Uaocc0B", "fsapt_setup.Uaocc0B", "matrix"),
+    FSAPTArtifactSpec("Caocc0A", "fsapt_setup.Caocc0A", "matrix"),
+    FSAPTArtifactSpec("Caocc0B", "fsapt_setup.Caocc0B", "matrix"),
+    FSAPTArtifactSpec("ZA", "fsapt_setup.ZA", "vector"),
+    FSAPTArtifactSpec("ZA_orig", "fsapt_setup.ZA_orig", "vector"),
+    FSAPTArtifactSpec("ZB", "fsapt_setup.ZB", "vector"),
+    FSAPTArtifactSpec("ZB_orig", "fsapt_setup.ZB_orig", "vector"),
+    FSAPTArtifactSpec("ZC", "fsapt_setup.ZC", "vector"),
+    FSAPTArtifactSpec("ZC_orig", "fsapt_setup.ZC_orig", "vector"),
+)
+_FSAPT_STAGE_ARTIFACT_SPECS: dict[str, tuple[FSAPTArtifactSpec, ...]] = {
+    "fsapt_setup": _FSAPT_SETUP_ARTIFACT_SPECS,
+    "fsapt_elst": (
+        FSAPTArtifactSpec("Elst_AB", "fsapt_elst.Elst_AB", "matrix"),
+        FSAPTArtifactSpec("Vlocc0A", "fsapt_elst.Vlocc0A", "matrix"),
+        FSAPTArtifactSpec("Vlocc0B", "fsapt_elst.Vlocc0B", "matrix"),
+    ),
+    "fsapt_exch": (FSAPTArtifactSpec("Exch_AB", "fsapt_exch.Exch_AB", "matrix"),),
+    "fsapt_ind": (
+        FSAPTArtifactSpec("IndAB_AB", "fsapt_ind.IndAB_AB", "matrix"),
+        FSAPTArtifactSpec("IndBA_AB", "fsapt_ind.IndBA_AB", "matrix"),
+        FSAPTArtifactSpec("Disp_AB", "fsapt_ind.Disp_AB", "matrix"),
+    ),
+    "fsapt_disp": (FSAPTArtifactSpec("Disp_AB", "fsapt_disp.Disp_AB", "matrix"),),
+}
+
+
+def _fsapt_stage_artifact_specs(stage: str) -> tuple[FSAPTArtifactSpec, ...]:
+    return _FSAPT_STAGE_ARTIFACT_SPECS.get(stage, ())
+
+
+def _fsapt_payload_array(value: Any) -> np.ndarray:
+    if hasattr(value, "np"):
+        return np.asarray(value.np)
+    return np.asarray(value)
+
+
+def fsapt_stage_arrays(stage: str, cache: Mapping[str, Any]) -> dict[str, np.ndarray]:
+    arrays = {}
+    for spec in _fsapt_stage_artifact_specs(stage):
+        if spec.cache_key in cache:
+            arrays[spec.artifact_name] = _fsapt_payload_array(cache[spec.cache_key])
+    return arrays
+
+
+def restore_fsapt_stage_cache(stage: str, checkpoint, cache: dict[str, Any]) -> dict[str, Any]:
+    for spec in _fsapt_stage_artifact_specs(stage):
+        artifact = checkpoint._manifest["artifacts"].get(spec.artifact_name)
+        if artifact is None:
+            continue
+        array = checkpoint.restore_array(spec.artifact_name)
+        if spec.value_type == "matrix":
+            restored = core.Matrix.from_array(array)
+        elif spec.value_type == "vector":
+            restored = core.Vector.from_array(np.asarray(array).reshape(-1))
+        else:
+            raise ValidationError(f"Unsupported F-SAPT checkpoint payload type {spec.value_type!r} for {spec.cache_key}.")
+        restored.name = spec.cache_key
+        cache[spec.cache_key] = restored
+    return cache
+
+
 def _option_is_enabled(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().upper() not in {"", "0", "FALSE", "OFF", "NO", "NONE"}
@@ -653,6 +734,15 @@ class SAPTDFTCheckpoint:
     def is_complete(self, stage):
         self._require_known_stage(stage)
         return self._stage_is_complete(stage)
+
+    def next_unfinished_stage(self, stages: Optional[Sequence[str]] = None) -> Optional[str]:
+        stage_order = tuple(stages) if stages is not None else self._selected_stages()
+        for stage in stage_order:
+            self._require_known_stage(stage)
+            self._require_selected_stage(stage)
+            if not self._stage_is_complete(stage):
+                return stage
+        return None
 
     def restore_scalars(self, keys: Sequence[str]):
         restored = {}

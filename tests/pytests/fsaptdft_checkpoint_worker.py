@@ -3,6 +3,7 @@ import json
 import traceback
 from pathlib import Path
 
+import numpy as np
 import psi4
 from psi4 import core
 from psi4.driver.procrouting import proc, proc_util
@@ -26,6 +27,20 @@ def _safe_variable(name):
         return core.variable(name)
     except Exception:
         return None
+
+
+def _serialize_value(value):
+    if value is None:
+        return None
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if hasattr(value, "np"):
+        return np.asarray(value.np).tolist()
+    if isinstance(value, (str, bool, int, float)):
+        return value
+    return str(value)
 
 
 def _molecule_signature(molecule):
@@ -55,6 +70,7 @@ def _configure(scenario, name):
         "sapt_dft_do_disp": False,
         "sapt_dft_do_fsapt": "none",
         "sapt_dft_functional": "svwn",
+        "fisapt_fsapt_filepath": "none",
     }
     if "-d3" in name.lower() or "-d4" in name.lower():
         options["sapt_dft_functional"] = "pbe0"
@@ -64,7 +80,30 @@ def _configure(scenario, name):
                 "sapt_dft_do_dhf": False,
                 "sapt_dft_do_ddft": False,
                 "sapt_dft_do_fsapt": "FISAPT",
-                "fisapt_fsapt_filepath": "none",
+            }
+        )
+    elif scenario == "fsapt_einsums":
+        options.update(
+            {
+                "sapt_dft_do_dhf": False,
+                "sapt_dft_do_ddft": False,
+                "sapt_dft_do_disp": True,
+                "sapt_dft_do_fsapt": "SAPTDFT",
+                "sapt_dft_functional": "HF",
+                "sapt_dft_mp2_disp_alg": "FISAPT",
+                "sapt_dft_use_einsums": True,
+            }
+        )
+    elif scenario == "fsapt_fisapt":
+        options.update(
+            {
+                "sapt_dft_do_dhf": False,
+                "sapt_dft_do_ddft": False,
+                "sapt_dft_do_disp": True,
+                "sapt_dft_do_fsapt": "FISAPT",
+                "sapt_dft_functional": "HF",
+                "sapt_dft_mp2_disp_alg": "FISAPT",
+                "sapt_dft_use_einsums": False,
             }
         )
     psi4.set_options(options)
@@ -178,32 +217,91 @@ def _install_scf_guards(*, checkpoint_dir: str, guard_jk: bool, forbidden_banner
         sapt_proc._saptdft_prepare_restored_scf = guarded_jk_build
 
 
+def _install_jk_counter(summary):
+    summary["jk_build_count"] = 0
+    original_jk_build = core.JK.build
+
+    def counted_jk_build(*args, **kwargs):
+        summary["jk_build_count"] += 1
+        return original_jk_build(*args, **kwargs)
+
+    core.JK.build = counted_jk_build
+
+
+def _install_fsapt_guards(forbid_stages):
+    if not forbid_stages:
+        return
+
+    forbid_stages = set(forbid_stages)
+
+    from psi4.driver.procrouting.sapt import saptdft_fisapt, sapt_jk_terms_ein
+
+    def boom(label):
+        raise AssertionError(f"F-SAPT routine replayed completed checkpoint stage {label}")
+
+    if "setup" in forbid_stages:
+        original_setup = saptdft_fisapt.setup_fisapt_object
+
+        def guarded_setup(*args, **kwargs):
+            if kwargs.get("do_flocalize", False):
+                boom("fsapt_setup")
+            return original_setup(*args, **kwargs)
+
+        saptdft_fisapt.setup_fisapt_object = guarded_setup
+        sapt_jk_terms_ein.localization = lambda *args, **kwargs: boom("fsapt_setup")
+        sapt_jk_terms_ein.partition = lambda *args, **kwargs: boom("fsapt_setup")
+        sapt_jk_terms_ein.flocalization = lambda *args, **kwargs: boom("fsapt_setup")
+
+    if "elst" in forbid_stages:
+        sapt_jk_terms_ein.felst = lambda *args, **kwargs: boom("fsapt_elst")
+        core.FISAPT.felst = lambda self, *args, **kwargs: boom("fsapt_elst")
+    if "exch" in forbid_stages:
+        sapt_jk_terms_ein.fexch = lambda *args, **kwargs: boom("fsapt_exch")
+        core.FISAPT.fexch = lambda self, *args, **kwargs: boom("fsapt_exch")
+    if "ind" in forbid_stages:
+        sapt_jk_terms_ein.find = lambda *args, **kwargs: boom("fsapt_ind")
+        core.FISAPT.find = lambda self, *args, **kwargs: boom("fsapt_ind")
+    if "disp" in forbid_stages:
+        sapt_jk_terms_ein.fdisp0 = lambda *args, **kwargs: boom("fsapt_disp")
+        core.FISAPT.fdisp = lambda self, *args, **kwargs: boom("fsapt_disp")
+
+
+def _capture_fsapt_variables(summary):
+    labels = [
+        "FSAPT_QA",
+        "FSAPT_QB",
+        "FSAPT_ELST_AB",
+        "FSAPT_EXCH_AB",
+        "FSAPT_INDAB_AB",
+        "FSAPT_INDBA_AB",
+        "FSAPT_DISP_AB",
+        "FSAPT_EMPIRICAL_DISP",
+        "FSAPT_AB_SIZE",
+    ]
+    summary["fsapt_variables"] = {
+        label: _serialize_value(_safe_variable(label)) for label in labels if _safe_variable(label) is not None
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["reference", "stop", "restart", "restart_with_guards"])
     parser.add_argument("checkpoint_dir")
     parser.add_argument("--stop-after")
     parser.add_argument("--name", default="sapt(dft)")
-    parser.add_argument("--scenario", default="default", choices=["default", "localization"])
+    parser.add_argument(
+        "--scenario",
+        default="default",
+        choices=["default", "localization", "fsapt_einsums", "fsapt_fisapt"],
+    )
     parser.add_argument("--guard-jk", action="store_true")
+    parser.add_argument("--count-jk-builds", action="store_true")
+    parser.add_argument("--capture-fsapt", action="store_true")
     parser.add_argument("--forbid-banner", action="append", default=[])
+    parser.add_argument("--forbid-fsapt-stage", action="append", default=[])
     args = parser.parse_args()
 
     mol, molecule_signatures = _configure(args.scenario, args.name)
-    if args.mode == "restart_with_guards":
-        _install_scf_guards(
-            checkpoint_dir=args.checkpoint_dir,
-            guard_jk=args.guard_jk,
-            forbidden_banners=args.forbid_banner,
-            molecule_signatures=molecule_signatures,
-        )
-
-    kwargs = {"molecule": mol}
-    if args.checkpoint_dir:
-        kwargs["checkpoint_dir"] = args.checkpoint_dir
-    if args.stop_after:
-        kwargs["checkpoint_stop_after"] = args.stop_after
-
     summary = {
         "mode": args.mode,
         "checkpoint_dir": args.checkpoint_dir,
@@ -211,6 +309,25 @@ def main():
         "name": args.name,
         "scenario": args.scenario,
     }
+
+    if args.mode == "restart_with_guards":
+        _install_scf_guards(
+            checkpoint_dir=args.checkpoint_dir,
+            guard_jk=args.guard_jk,
+            forbidden_banners=args.forbid_banner,
+            molecule_signatures=molecule_signatures,
+        )
+    if args.count_jk_builds:
+        _install_jk_counter(summary)
+    if args.forbid_fsapt_stage:
+        _install_fsapt_guards(args.forbid_fsapt_stage)
+
+    kwargs = {"molecule": mol}
+    if args.checkpoint_dir:
+        kwargs["checkpoint_dir"] = args.checkpoint_dir
+    if args.stop_after:
+        kwargs["checkpoint_stop_after"] = args.stop_after
+
     try:
         psi4.energy(args.name, **kwargs)
         summary["status"] = "ok"
@@ -234,6 +351,9 @@ def main():
     summary["saptdft_total_energy"] = _safe_variable("SAPT(DFT) TOTAL ENERGY")
     summary["elst10_r"] = _safe_variable("Elst10,r")
     summary["energy"] = summary["sapt_total_energy"]
+
+    if args.capture_fsapt:
+        _capture_fsapt_variables(summary)
 
     manifest = _manifest_summary(args.checkpoint_dir)
     if manifest is not None:

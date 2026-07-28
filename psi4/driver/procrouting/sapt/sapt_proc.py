@@ -48,7 +48,9 @@ from . import (
 from .saptdft_checkpoint import (
     SAPTDFTCheckpoint,
     build_saptdft_job_identity,
+    fsapt_stage_arrays,
     rehydrate_scf_wavefunction,
+    restore_fsapt_stage_cache,
 )
 from .sapt_util import print_sapt_dft_summary, print_sapt_hf_summary, print_sapt_var
 import qcelemental as qcel
@@ -190,6 +192,72 @@ def _saptdft_restore_scf_stage(
     return wfn
 
 
+def _saptdft_next_unfinished_stage(checkpoint, stages=None):
+    if checkpoint is None:
+        return None
+    return checkpoint.next_unfinished_stage(stages=stages)
+
+
+def _saptdft_restore_completed_fsapt_cache(checkpoint, cache, stages):
+    if checkpoint is None:
+        return cache
+    for stage in stages:
+        if checkpoint.is_complete(stage):
+            restore_fsapt_stage_cache(stage, checkpoint, cache)
+    return cache
+
+
+def _saptdft_cache_fisapt_localization_aliases(cache):
+    aliases = {
+        "Locc0A": "Locc_A",
+        "Locc0B": "Locc_B",
+        "Uocc0A": "Uocc_A",
+        "Uocc0B": "Uocc_B",
+    }
+    for source_key, target_key in aliases.items():
+        if source_key in cache and target_key not in cache:
+            cache[target_key] = cache[source_key]
+    return cache
+
+
+def _saptdft_exchange_payload_arrays(cache):
+    arrays = {}
+    for key in ("J_P_A", "J_P_B"):
+        if key in cache:
+            arrays[f"exch.{key}"] = cache[key]
+    return arrays
+
+
+def _saptdft_rebuild_einsums_fsapt_elst_cache(cache, dimer_wfn):
+    if "dfh" in cache or "Locc_A" not in cache or "Locc_B" not in cache:
+        return cache
+    aux_basis = dimer_wfn.get_basisset("DF_BASIS_SCF")
+    dfh = core.DFHelper(dimer_wfn.basisset(), aux_basis)
+    dfh.set_memory(core.get_memory() // 8)
+    dfh.set_method("DIRECT_iaQ")
+    dfh.set_nthreads(core.get_num_threads())
+    dfh.initialize()
+    dfh.add_space("a", core.Matrix.from_array(cache["Locc_A"].np))
+    dfh.add_space("b", core.Matrix.from_array(cache["Locc_B"].np))
+    dfh.add_transformation("Aaa", "a", "a")
+    dfh.add_transformation("Abb", "b", "b")
+    dfh.transform()
+    dfh.clear_spaces()
+    cache["dfh"] = dfh
+    return cache
+
+
+def _saptdft_restore_exchange_payload_arrays(checkpoint, cache):
+    if checkpoint is None or not checkpoint.is_complete("exch"):
+        return cache
+    for key in ("J_P_A", "J_P_B"):
+        artifact_name = f"exch.{key}"
+        if key in cache or artifact_name not in checkpoint._manifest["artifacts"]:
+            continue
+        cache[key] = core.Matrix.from_array(checkpoint.restore_array(artifact_name))
+    return cache
+
+
 def _saptdft_wfn_jk(wfn):
     """Return a wavefunction JK object when present; deserialized base Wavefunctions do not retain one."""
     try:
@@ -210,6 +278,20 @@ def _saptdft_functional_value(wfn, method, default):
         return attr() if callable(attr) else attr
     except Exception:
         return default
+
+
+def _saptdft_pending_computation_stage(checkpoint, *, do_disp, do_fsapt):
+    if checkpoint is None:
+        return "elst"
+    stage_order = ["elst", "exch", "ind"]
+    if do_disp:
+        stage_order.append("disp")
+    if do_fsapt:
+        stage_order.extend(["fsapt_setup", "fsapt_elst", "fsapt_exch", "fsapt_ind"])
+        if do_disp:
+            stage_order.append("fsapt_disp")
+        stage_order.append("fsapt_final")
+    return _saptdft_next_unfinished_stage(checkpoint, stages=stage_order)
 
 
 def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
@@ -617,7 +699,6 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     method="hf",
                     reference="RHF",
                     molecule=sapt_dimer,
-                    prepare=True,
                 )
             else:
                 if do_ext_potential:
@@ -651,6 +732,9 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             core.timer_on("SAPT(DFT):Monomer A SCF")
 
             jk_obj = _saptdft_wfn_jk(hf_wfn_dimer)
+            if not _saptdft_stage_complete(checkpoint, "hf_monomer_a_scf") and jk_obj is None:
+                _saptdft_prepare_restored_scf(hf_wfn_dimer, reference="RHF")
+                jk_obj = _saptdft_wfn_jk(hf_wfn_dimer)
             if _saptdft_stage_complete(checkpoint, "hf_monomer_a_scf"):
                 hf_wfn_A = _saptdft_restore_scf_stage(
                     checkpoint,
@@ -658,7 +742,6 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     method="hf",
                     reference="RHF",
                     molecule=monomerA,
-                    prepare=True,
                 )
             else:
                 if do_ext_potential and (ext_pot_A is not None or ext_pot_C is not None):
@@ -702,7 +785,6 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     method="hf",
                     reference="RHF",
                     molecule=monomerB,
-                    prepare=True,
                 )
             else:
                 if do_ext_potential and (ext_pot_B is not None or ext_pot_C is not None):
@@ -710,6 +792,9 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     kwargs["external_potentials"]["C"] = (
                         construct_external_potential_in_field_C([ext_pot_C, ext_pot_B])
                     )
+                if jk_obj is None:
+                    _saptdft_prepare_restored_scf(hf_wfn_dimer, reference="RHF")
+                    jk_obj = _saptdft_wfn_jk(hf_wfn_dimer)
                 hf_wfn_B = scf_helper(
                     "SCF",
                     molecule=monomerB,
@@ -954,7 +1039,6 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     method=sapt_dft_functional.lower(),
                     reference=monomer_reference,
                     molecule=monomerA,
-                    prepare=True,
                 )
             else:
                 if do_ext_potential and (ext_pot_A is not None or ext_pot_C is not None):
@@ -1006,7 +1090,6 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     method=sapt_dft_functional.lower(),
                     reference=monomer_reference,
                     molecule=monomerB,
-                    prepare=True,
                 )
             else:
                 if do_ext_potential and (ext_pot_B is not None or ext_pot_C is not None):
@@ -1015,6 +1098,9 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                         construct_external_potential_in_field_C([ext_pot_C, ext_pot_B])
                     )
                 monomer_jk = _saptdft_wfn_jk(wfn_A)
+                if monomer_jk is None:
+                    _saptdft_prepare_restored_scf(wfn_A, reference=monomer_reference)
+                    monomer_jk = _saptdft_wfn_jk(wfn_A)
                 wfn_B = scf_helper(
                     sapt_dft_functional,
                     post_scf=False,
@@ -1065,6 +1151,9 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
         # Save JK object when available; serialized Wavefunctions do not retain JK objects.
         sapt_jk = _saptdft_wfn_jk(wfn_B)
+        if do_delta_dft and do_dft and not _saptdft_stage_complete(checkpoint, "delta_dft") and sapt_jk is None:
+            _saptdft_prepare_restored_scf(wfn_B, reference=monomer_reference)
+            sapt_jk = _saptdft_wfn_jk(wfn_B)
         if sapt_jk is not None and hasattr(wfn_A, "set_jk"):
             wfn_A.set_jk(sapt_jk)
 
@@ -1279,6 +1368,7 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             do_delta_dft=do_delta_dft,
             do_disp=do_disp,
             checkpoint=checkpoint,
+            checkpoint_stop_after=checkpoint_stop_after,
         )
 
         data["SAPT(DFT) TOTAL ENERGY"] = core.variable("SAPT(DFT) TOTAL ENERGY")
@@ -1544,6 +1634,7 @@ def sapt_dft(
     do_delta_dft: bool = False,
     do_disp: bool = True,
     checkpoint: SAPTDFTCheckpoint | None = None,
+    checkpoint_stop_after: str | None = None,
 ) -> dict:
     """Compute the SAPT(DFT) interaction energy components.
 
@@ -1606,50 +1697,26 @@ def sapt_dft(
     """
 
     # Handle the input options
-    core.timer_on("SAPT(DFT):Build JK")
     if print_header:
         sapt_dft_header()
 
-    if sapt_jk is None:
-        core.print_out("\n   => Building SAPT JK object <= \n\n")
-        sapt_jk = core.JK.build(dimer_wfn.basisset())
-        sapt_jk.set_do_J(True)
-        sapt_jk.set_do_K(True)
-        wfn_A_is_lrc = _saptdft_functional_value(wfn_A, "is_x_lrc", False)
-        wfn_A_omega = _saptdft_functional_value(wfn_A, "x_omega", 0.0)
-        wfn_B_is_lrc = _saptdft_functional_value(wfn_B, "is_x_lrc", False)
-        wfn_B_omega = _saptdft_functional_value(wfn_B, "x_omega", 0.0)
-        if wfn_A_is_lrc:
-            sapt_jk.set_do_wK(True)
-            sapt_jk.set_omega(wfn_A_omega)
-        sapt_jk.initialize()
-        sapt_jk.print_header()
-        if wfn_B_is_lrc and (wfn_A_omega != wfn_B_omega):
-            core.print_out("   => Monomer B: Building SAPT JK object <= \n\n")
-            core.print_out("      Reason: MonomerA Omega != MonomerB Omega\n\n")
-            sapt_jk_B = core.JK.build(dimer_wfn.basisset())
-            sapt_jk_B.set_do_J(True)
-            sapt_jk_B.set_do_K(True)
-            sapt_jk_B.set_do_wK(True)
-            sapt_jk_B.set_omega(wfn_B_omega)
-            sapt_jk_B.initialize()
-            sapt_jk_B.print_header()
-
-    else:
-        sapt_jk.set_do_K(True)
-
-    sapt_jk.set_do_J(True)
-    sapt_jk.set_do_K(True)
-
-    if _saptdft_functional_value(wfn_A, "is_x_lrc", False):
-        sapt_jk.set_do_wK(True)
-        sapt_jk.set_omega(_saptdft_functional_value(wfn_A, "x_omega", 0.0))
-
     if data is None:
         data = {}
+    fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")
+    do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() != "NONE"
+    pending_stage = _saptdft_pending_computation_stage(checkpoint, do_disp=do_disp, do_fsapt=do_fsapt)
+    pending_fsapt_stage = None
+    if do_fsapt:
+        fsapt_stage_order = ["fsapt_setup", "fsapt_elst", "fsapt_exch", "fsapt_ind"]
+        if do_disp:
+            fsapt_stage_order.append("fsapt_disp")
+        fsapt_stage_order.append("fsapt_final")
+        pending_fsapt_stage = fsapt_stage_order[0] if checkpoint is None else _saptdft_next_unfinished_stage(
+            checkpoint, stages=fsapt_stage_order
+        )
     use_einsums = core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS")
 
-    # Build SAPT cache
+    # Build SAPT cache only when a remaining computational stage still needs it.
     if einsums_available and use_einsums:
         jk_terms = sapt_jk_terms_ein
         sapt_mp2 = sapt_mp2_terms_ein
@@ -1659,20 +1726,56 @@ def sapt_dft(
         use_einsums = False
         jk_terms = sapt_jk_terms
         sapt_mp2 = sapt_mp2_terms
-    cache = jk_terms.build_sapt_jk_cache(
-        dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials
-    )
-    core.timer_off("SAPT(DFT):Build JK")
+
+    cache = {}
+    if pending_stage is not None and pending_stage != "fsapt_final":
+        core.timer_on("SAPT(DFT):Build JK")
+        if sapt_jk is None:
+            core.print_out("\n   => Building SAPT JK object <= \n\n")
+            sapt_jk = core.JK.build(dimer_wfn.basisset())
+            sapt_jk.set_do_J(True)
+            sapt_jk.set_do_K(True)
+            wfn_A_is_lrc = _saptdft_functional_value(wfn_A, "is_x_lrc", False)
+            wfn_A_omega = _saptdft_functional_value(wfn_A, "x_omega", 0.0)
+            wfn_B_is_lrc = _saptdft_functional_value(wfn_B, "is_x_lrc", False)
+            wfn_B_omega = _saptdft_functional_value(wfn_B, "x_omega", 0.0)
+            if wfn_A_is_lrc:
+                sapt_jk.set_do_wK(True)
+                sapt_jk.set_omega(wfn_A_omega)
+            sapt_jk.initialize()
+            sapt_jk.print_header()
+            if wfn_B_is_lrc and (wfn_A_omega != wfn_B_omega):
+                core.print_out("   => Monomer B: Building SAPT JK object <= \n\n")
+                core.print_out("      Reason: MonomerA Omega != MonomerB Omega\n\n")
+                sapt_jk_B = core.JK.build(dimer_wfn.basisset())
+                sapt_jk_B.set_do_J(True)
+                sapt_jk_B.set_do_K(True)
+                sapt_jk_B.set_do_wK(True)
+                sapt_jk_B.set_omega(wfn_B_omega)
+                sapt_jk_B.initialize()
+                sapt_jk_B.print_header()
+        else:
+            sapt_jk.set_do_K(True)
+
+        sapt_jk.set_do_J(True)
+        sapt_jk.set_do_K(True)
+
+        if _saptdft_functional_value(wfn_A, "is_x_lrc", False):
+            sapt_jk.set_do_wK(True)
+            sapt_jk.set_omega(_saptdft_functional_value(wfn_A, "x_omega", 0.0))
+
+        cache = jk_terms.build_sapt_jk_cache(
+            dimer_wfn, wfn_A, wfn_B, sapt_jk, True, external_potentials
+        )
+        core.timer_off("SAPT(DFT):Build JK")
 
     # Electrostatics
     core.timer_on("SAPT(DFT):elst")
-    fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")
-    do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() != "NONE"
     if not _saptdft_stage_complete(checkpoint, "elst"):
         elst, extern_extern_IE = jk_terms.electrostatics(cache, True)
         data["extern_extern_IE"] = extern_extern_IE
         data.update(elst)
-        _saptdft_commit_stage(checkpoint, "elst", scalars=data)
+        _saptdft_commit_stage(checkpoint, "elst", stop_after=checkpoint_stop_after, scalars=data)
     else:
         elst = {"Elst10,r": data["Elst10,r"]}
         extern_extern_IE = data.get("extern_extern_IE", 0.0)
@@ -1683,9 +1786,16 @@ def sapt_dft(
     if not _saptdft_stage_complete(checkpoint, "exch"):
         exch = jk_terms.exchange(cache, sapt_jk, True)
         data.update(exch)
-        _saptdft_commit_stage(checkpoint, "exch", scalars=data)
+        _saptdft_commit_stage(
+            checkpoint,
+            "exch",
+            stop_after=checkpoint_stop_after,
+            scalars=data,
+            arrays=_saptdft_exchange_payload_arrays(cache),
+        )
     else:
         exch = {"Exch10": data["Exch10"], "Exch10(S^2)": data.get("Exch10(S^2)", data["Exch10"])}
+    _saptdft_restore_exchange_payload_arrays(checkpoint, cache)
     core.timer_off("SAPT(DFT):exch")
 
     # Induction
@@ -1701,7 +1811,14 @@ def sapt_dft(
             Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
         )
         data.update(ind)
-        _saptdft_commit_stage(checkpoint, "ind", scalars=data)
+        _saptdft_commit_stage(
+            checkpoint,
+            "ind",
+            stop_after=checkpoint_stop_after,
+            scalars=data,
+            arrays=_saptdft_exchange_payload_arrays(cache),
+        )
+    _saptdft_restore_exchange_payload_arrays(checkpoint, cache)
 
     # Delta HF is computed in the SAPT(HF) segment above. Do not recompute it
     # from the SAPT(DFT) component subtotal here, as that changes the meaning
@@ -1725,52 +1842,90 @@ def sapt_dft(
 
     core.timer_off("SAPT(DFT):ind")
 
+    _saptdft_restore_completed_fsapt_cache(
+        checkpoint,
+        cache,
+        ("fsapt_setup", "fsapt_elst", "fsapt_exch", "fsapt_ind", "fsapt_disp"),
+    )
+    if do_fsapt and fsapt_type == "SAPTDFT" and use_einsums and _saptdft_stage_complete(checkpoint, "fsapt_elst"):
+        _saptdft_rebuild_einsums_fsapt_elst_cache(cache, dimer_wfn)
+
     # Use DFHelper before deleting the JK object for dispersion
-    if do_fsapt and fsapt_type == "SAPTDFT" and use_einsums:
-        core.timer_on("SAPT(DFT):Localize Orbitals")
-        jk_terms.localization(cache, dimer_wfn)
-        core.timer_off("SAPT(DFT):Localize Orbitals")
-        core.timer_on("SAPT(DFT):Partition")
-        cache = jk_terms.partition(cache, dimer_wfn)
-        core.timer_off("SAPT(DFT):Partition")
+    FISAPT_obj = None
+    if do_fsapt and fsapt_type == "SAPTDFT" and use_einsums and pending_fsapt_stage not in {None, "fsapt_final"}:
+        if not _saptdft_stage_complete(checkpoint, "fsapt_setup"):
+            core.timer_on("SAPT(DFT):Localize Orbitals")
+            jk_terms.localization(cache, dimer_wfn)
+            core.timer_off("SAPT(DFT):Localize Orbitals")
+            core.timer_on("SAPT(DFT):Partition")
+            cache = jk_terms.partition(cache, dimer_wfn)
+            core.timer_off("SAPT(DFT):Partition")
 
-        core.timer_on("SAPT(DFT): F-SAPT Localization (IBO)")
-        jk_terms.flocalization(cache, dimer_wfn)
-        _saptdft_commit_stage(checkpoint, "fsapt_setup", scalars=data)
-        core.timer_off("SAPT(DFT): F-SAPT Localization (IBO)")
-        # Primary return is stored as cache['Elst_AB']
-        core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
-        cache = jk_terms.felst(
-            cache,
-            elst["Elst10,r"] + extern_extern_IE,
-            dimer_wfn,
-            wfn_A,
-            wfn_B,
-            sapt_jk,
-            True,
-        )
-        _saptdft_commit_stage(checkpoint, "fsapt_elst", scalars=data)
-        core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
-        core.timer_on("SAPT(DFT): F-SAPT Exchange")
-        cache = jk_terms.fexch(
-            cache,
-            exch["Exch10(S^2)"],
-            exch["Exch10"],
-            dimer_wfn,
-            wfn_A,
-            wfn_B,
-            sapt_jk,
-            True,
-        )
-        _saptdft_commit_stage(checkpoint, "fsapt_exch", scalars=data)
-        core.timer_off("SAPT(DFT): F-SAPT Exchange")
+            core.timer_on("SAPT(DFT): F-SAPT Localization (IBO)")
+            jk_terms.flocalization(cache, dimer_wfn)
+            _saptdft_commit_stage(
+                checkpoint,
+                "fsapt_setup",
+                stop_after=checkpoint_stop_after,
+                scalars=data,
+                arrays=fsapt_stage_arrays("fsapt_setup", cache),
+            )
+            core.timer_off("SAPT(DFT): F-SAPT Localization (IBO)")
 
-        core.timer_on("SAPT(DFT): F-SAPT Induction")
-        cache = jk_terms.find(cache, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
-        _saptdft_commit_stage(checkpoint, "fsapt_ind", scalars=data)
-        core.timer_off("SAPT(DFT): F-SAPT Induction")
+        if not _saptdft_stage_complete(checkpoint, "fsapt_elst"):
+            core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
+            cache = jk_terms.felst(
+                cache,
+                elst["Elst10,r"] + extern_extern_IE,
+                dimer_wfn,
+                wfn_A,
+                wfn_B,
+                sapt_jk,
+                True,
+            )
+            _saptdft_commit_stage(
+                checkpoint,
+                "fsapt_elst",
+                stop_after=checkpoint_stop_after,
+                scalars=data,
+                arrays=fsapt_stage_arrays("fsapt_elst", cache),
+            )
+            core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
 
-    elif do_fsapt:
+        if not _saptdft_stage_complete(checkpoint, "fsapt_exch"):
+            core.timer_on("SAPT(DFT): F-SAPT Exchange")
+            cache = jk_terms.fexch(
+                cache,
+                exch["Exch10(S^2)"],
+                exch["Exch10"],
+                dimer_wfn,
+                wfn_A,
+                wfn_B,
+                sapt_jk,
+                True,
+            )
+            _saptdft_commit_stage(
+                checkpoint,
+                "fsapt_exch",
+                stop_after=checkpoint_stop_after,
+                scalars=data,
+                arrays=fsapt_stage_arrays("fsapt_exch", cache),
+            )
+            core.timer_off("SAPT(DFT): F-SAPT Exchange")
+
+        if not _saptdft_stage_complete(checkpoint, "fsapt_ind"):
+            core.timer_on("SAPT(DFT): F-SAPT Induction")
+            cache = jk_terms.find(cache, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, True)
+            _saptdft_commit_stage(
+                checkpoint,
+                "fsapt_ind",
+                stop_after=checkpoint_stop_after,
+                scalars=data,
+                arrays=fsapt_stage_arrays("fsapt_ind", cache),
+            )
+            core.timer_off("SAPT(DFT): F-SAPT Induction")
+
+    elif do_fsapt and pending_fsapt_stage not in {None, "fsapt_final"}:
         if fsapt_type == "SAPTDFT":
             core.print_out(
                 "\n  => Einsums is not available, switching to using FISAPT0 object for FSAPT <= \n\n"
@@ -1785,43 +1940,81 @@ def sapt_dft(
             core.get_global_option("BASIS"),
         )
 
-        # Create single FISAPT object with do_flocalize=True to handle IBO localization internally.
-        core.timer_on("SAPT(DFT): F-SAPT Setup + Localization (IBO)")
+        do_flocalize = not _saptdft_stage_complete(checkpoint, "fsapt_setup")
+        if do_flocalize:
+            core.timer_on("SAPT(DFT): F-SAPT Setup + Localization (IBO)")
         FISAPT_obj = saptdft_fisapt.setup_fisapt_object(
-            dimer_wfn, wfn_A, wfn_B, cache, data, aux_basis, do_flocalize=True
+            dimer_wfn, wfn_A, wfn_B, cache, data, aux_basis, do_flocalize=do_flocalize
         )
-        _saptdft_commit_stage(checkpoint, "fsapt_setup", scalars=data)
-        core.timer_off("SAPT(DFT): F-SAPT Setup + Localization (IBO)")
+        if do_flocalize:
+            for k, v in FISAPT_obj.matrices().items():
+                cache[k] = v
+            _saptdft_cache_fisapt_localization_aliases(cache)
+            _saptdft_commit_stage(
+                checkpoint,
+                "fsapt_setup",
+                stop_after=checkpoint_stop_after,
+                scalars=data,
+                arrays=fsapt_stage_arrays("fsapt_setup", cache),
+            )
+            core.timer_off("SAPT(DFT): F-SAPT Setup + Localization (IBO)")
 
-        core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
-        FISAPT_obj.felst()
-        matrices = FISAPT_obj.matrices()
-        for k, v in matrices.items():
-            cache[k] = v
-        _saptdft_commit_stage(checkpoint, "fsapt_elst", scalars=data)
-        core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
-        core.timer_on("SAPT(DFT): F-SAPT Exchange")
-        FISAPT_obj.fexch()
-        matrices = FISAPT_obj.matrices()
-        for k, v in matrices.items():
-            cache[k] = v
-        _saptdft_commit_stage(checkpoint, "fsapt_exch", scalars=data)
-        core.timer_off("SAPT(DFT): F-SAPT Exchange")
-        core.timer_on("SAPT(DFT): F-SAPT Induction")
-        FISAPT_obj.find()
-        matrices = FISAPT_obj.matrices()
-        for k, v in matrices.items():
-            cache[k] = v
-        _saptdft_commit_stage(checkpoint, "fsapt_ind", scalars=data)
-        core.timer_off("SAPT(DFT): F-SAPT Induction")
-        matrices = FISAPT_obj.matrices()
-        for k, v in matrices.items():
-            cache[k] = v
+        if not _saptdft_stage_complete(checkpoint, "fsapt_elst"):
+            core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
+            FISAPT_obj.felst()
+            matrices = FISAPT_obj.matrices()
+            for k, v in matrices.items():
+                cache[k] = v
+            _saptdft_commit_stage(
+                checkpoint,
+                "fsapt_elst",
+                stop_after=checkpoint_stop_after,
+                scalars=data,
+                arrays=fsapt_stage_arrays("fsapt_elst", cache),
+            )
+            core.timer_off("SAPT(DFT): F-SAPT Electrostatics")
+
+        if not _saptdft_stage_complete(checkpoint, "fsapt_exch"):
+            core.timer_on("SAPT(DFT): F-SAPT Exchange")
+            FISAPT_obj.fexch()
+            matrices = FISAPT_obj.matrices()
+            for k, v in matrices.items():
+                cache[k] = v
+            _saptdft_commit_stage(
+                checkpoint,
+                "fsapt_exch",
+                stop_after=checkpoint_stop_after,
+                scalars=data,
+                arrays=fsapt_stage_arrays("fsapt_exch", cache),
+            )
+            core.timer_off("SAPT(DFT): F-SAPT Exchange")
+
+        if not _saptdft_stage_complete(checkpoint, "fsapt_ind"):
+            core.timer_on("SAPT(DFT): F-SAPT Induction")
+            FISAPT_obj.find()
+            matrices = FISAPT_obj.matrices()
+            for k, v in matrices.items():
+                cache[k] = v
+            _saptdft_commit_stage(
+                checkpoint,
+                "fsapt_ind",
+                stop_after=checkpoint_stop_after,
+                scalars=data,
+                arrays=fsapt_stage_arrays("fsapt_ind", cache),
+            )
+            core.timer_off("SAPT(DFT): F-SAPT Induction")
+        if FISAPT_obj is not None:
+            matrices = FISAPT_obj.matrices()
+            for k, v in matrices.items():
+                cache[k] = v
+            _saptdft_cache_fisapt_localization_aliases(cache)
 
     # Blow away JK object before doing MP2 for memory considerations
-    if cleanup_jk:
+    if cleanup_jk and sapt_jk is not None:
         core.print_out("\n   => Finalizing SAPT JK object to free memory <= \n\n")
         sapt_jk.finalize()
+        if sapt_jk_B is not None:
+            sapt_jk_B.finalize()
 
     if do_disp and not _saptdft_stage_complete(checkpoint, "disp"):
         # Hybrid xc kernel check
@@ -1935,7 +2128,7 @@ def sapt_dft(
                     + "\n"
                 )
 
-        _saptdft_commit_stage(checkpoint, "disp", scalars=data)
+        _saptdft_commit_stage(checkpoint, "disp", stop_after=checkpoint_stop_after, scalars=data)
         core.timer_off("SAPT(DFT):disp")
 
     # Now do F-SAPT on dispersion if requested
@@ -1949,29 +2142,42 @@ def sapt_dft(
         # FSAPT_DISP_AB will be set to zero if SAPT(DFT) is requested with FDDS
         # dispersion with DO_FSAPT.
 
-        if do_disp:
+        if do_disp and not _saptdft_stage_complete(checkpoint, "fsapt_disp"):
             core.timer_on("SAPT(DFT): F-SAPT Dispersion")
             cache = jk_terms.fdisp0(
                 cache, data, dimer_wfn, wfn_A, wfn_B, sapt_jk, do_print=True
             )
             data["Exch-Disp20,u"] = cache["Exch-Disp20,u"]
             data["Disp20,u"] = cache["Disp20,u"]
-            _saptdft_commit_stage(checkpoint, "fsapt_disp", scalars=data)
+            _saptdft_commit_stage(
+                checkpoint,
+                "fsapt_disp",
+                stop_after=checkpoint_stop_after,
+                scalars=data,
+                arrays=fsapt_stage_arrays("fsapt_disp", cache),
+            )
             core.timer_off("SAPT(DFT): F-SAPT Dispersion")
 
     elif do_fsapt and do_disp:
-        core.timer_on("SAPT(DFT): F-SAPT Dispersion")
-        FISAPT_obj.fdisp()
-        core.timer_off("SAPT(DFT): F-SAPT Dispersion")
-        FISAPT_obj.fdrop(external_potentials)
-        scalars = FISAPT_obj.scalars()
-        data["Exch-Disp20,u"] = scalars["Exch-Disp20"]
-        data["Disp20,u"] = scalars["Disp20"]
-        matrices = FISAPT_obj.matrices()
-        for k, v in matrices.items():
-            cache[k] = v
-        _saptdft_commit_stage(checkpoint, "fsapt_disp", scalars=data)
-    elif do_fsapt and fsapt_type == "FISAPT":
+        if not _saptdft_stage_complete(checkpoint, "fsapt_disp"):
+            core.timer_on("SAPT(DFT): F-SAPT Dispersion")
+            FISAPT_obj.fdisp()
+            core.timer_off("SAPT(DFT): F-SAPT Dispersion")
+            FISAPT_obj.fdrop(external_potentials)
+            scalars = FISAPT_obj.scalars()
+            data["Exch-Disp20,u"] = scalars["Exch-Disp20"]
+            data["Disp20,u"] = scalars["Disp20"]
+            matrices = FISAPT_obj.matrices()
+            for k, v in matrices.items():
+                cache[k] = v
+            _saptdft_commit_stage(
+                checkpoint,
+                "fsapt_disp",
+                stop_after=checkpoint_stop_after,
+                scalars=data,
+                arrays=fsapt_stage_arrays("fsapt_disp", cache),
+            )
+    elif do_fsapt and fsapt_type == "FISAPT" and FISAPT_obj is not None:
         matrices = FISAPT_obj.matrices()
         for k, v in matrices.items():
             cache[k] = v
@@ -2024,8 +2230,14 @@ def sapt_dft(
             _set_fsapt_var("FSAPT_DISP_AB", disp_ab)
             _set_fsapt_var("FSAPT_EMPIRICAL_DISP", cache["FSAPT_EMPIRICAL_DISP"])
         else:
-            _set_fsapt_var("FSAPT_DISP_AB", cache["Disp_AB"])
-        _saptdft_commit_stage(checkpoint, "fsapt_final", scalars=data)
+            disp_ab = cache.get("Disp_AB")
+            if disp_ab is None:
+                disp_ab = cache["Elst_AB"].clone()
+                disp_ab.zero()
+                cache["Disp_AB"] = disp_ab
+            _set_fsapt_var("FSAPT_DISP_AB", disp_ab)
+        if not _saptdft_stage_complete(checkpoint, "fsapt_final"):
+            _saptdft_commit_stage(checkpoint, "fsapt_final", stop_after=checkpoint_stop_after, scalars=data)
     return data
 
 
