@@ -562,7 +562,13 @@ def run_qcschema(
         keep_wfn = input_model.specification.protocols.wavefunction != 'none'
 
         # qcschema should be copied
-        ret_data = run_json_qcschema(input_model.model_dump(), clean, False, keep_wfn=keep_wfn)
+        ret_data = run_json_qcschema(
+            input_model.model_dump(),
+            clean,
+            False,
+            keep_wfn=keep_wfn,
+            identity_atomic_input=input_model,
+        )
         ret_data["native_files"]["input"] = json.dumps(json.loads(input_model.model_dump_json()), indent=1)
 
         exit_printing(start_time=start_time, success=True)
@@ -605,7 +611,14 @@ def run_json(json_data: Dict[str, Any], clean: bool = True) -> Dict[str, Any]:
     raise p4util.UpgradeHelper("psi4.schema_wrapper.run_json", "psi4.schema_wrapper.run_qcschema", 1.11, f" Replace the function and update the schema layout.")
 
 
-def run_json_qcschema(json_data, clean, json_serialization, keep_wfn=False):
+def run_json_qcschema(
+    json_data,
+    clean,
+    json_serialization,
+    keep_wfn=False,
+    *,
+    identity_atomic_input=None,
+):
     """
     An implementation of the QC JSON Schema (molssi-qc-schema.readthedocs.io/en/latest/index.html#) implementation in Psi4.
 
@@ -668,6 +681,8 @@ def run_json_qcschema(json_data, clean, json_serialization, keep_wfn=False):
     spec_data = json_data["specification"]
 
     kwargs = spec_data["keywords"].pop("function_kwargs", {})
+    if identity_atomic_input is not None:
+        kwargs[p4util.SAPTDFT_IDENTITY_ATOMIC_INPUT_KEY] = identity_atomic_input
     p4util.set_options(spec_data["keywords"])
 
     # Setup the computation

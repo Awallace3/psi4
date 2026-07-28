@@ -129,6 +129,28 @@ def _manifest_summary(checkpoint_dir: str):
     }
 
 
+def _build_qcschema_input(mol, *, name, checkpoint_dir):
+    keywords = {k.lower(): v for k, v in psi4.driver.p4util.prepare_options_for_set_options().items()}
+    basis = keywords.pop("basis", core.get_global_option("BASIS"))
+    function_kwargs = {}
+    if checkpoint_dir:
+        function_kwargs["checkpoint_dir"] = str(checkpoint_dir)
+    if function_kwargs:
+        keywords["function_kwargs"] = function_kwargs
+    return {
+        "schema_name": "qcschema_atomic_input",
+        "schema_version": 2,
+        "molecule": mol.to_schema(dtype=3),
+        "specification": {
+            "driver": "energy",
+            "model": {"method": name, "basis": basis},
+            "keywords": keywords,
+            "protocols": {},
+            "extras": {},
+        },
+    }
+
+
 def _install_scf_guards(*, checkpoint_dir: str, guard_jk: bool, forbidden_banners, molecule_signatures):
     manifest = _manifest_summary(checkpoint_dir)
     completed_stages = set(manifest["completed_stages"] if manifest is not None else [])
@@ -285,7 +307,7 @@ def _capture_fsapt_variables(summary):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["reference", "stop", "restart", "restart_with_guards"])
+    parser.add_argument("mode", choices=["reference", "stop", "restart", "restart_with_guards", "qcschema"])
     parser.add_argument("checkpoint_dir")
     parser.add_argument("--stop-after")
     parser.add_argument("--name", default="sapt(dft)")
@@ -329,8 +351,23 @@ def main():
         kwargs["checkpoint_stop_after"] = args.stop_after
 
     try:
-        psi4.energy(args.name, **kwargs)
-        summary["status"] = "ok"
+        if args.mode == "qcschema":
+            result = psi4.schema_wrapper.run_qcschema(
+                _build_qcschema_input(mol, name=args.name, checkpoint_dir=args.checkpoint_dir)
+            )
+            if getattr(result, "success", False):
+                summary["status"] = "ok"
+                summary["qcschema_success"] = True
+                summary["sapt_total_energy"] = result.extras["qcvars"].get("SAPT TOTAL ENERGY")
+                summary["current_energy"] = result.extras["qcvars"].get("CURRENT ENERGY")
+                summary["energy"] = summary["sapt_total_energy"]
+            else:
+                summary["status"] = "error"
+                summary["error_type"] = type(result).__name__
+                summary["error"] = result.error.error_message
+        else:
+            psi4.energy(args.name, **kwargs)
+            summary["status"] = "ok"
     except RuntimeError as exc:
         if args.stop_after and str(exc) == f"SAPT(DFT) checkpoint stop after {args.stop_after}":
             summary["status"] = "stopped"
@@ -346,11 +383,11 @@ def main():
         summary["error"] = str(exc)
         summary["traceback"] = traceback.format_exc()
 
-    summary["current_energy"] = _safe_variable("CURRENT ENERGY")
-    summary["sapt_total_energy"] = _safe_variable("SAPT TOTAL ENERGY")
-    summary["saptdft_total_energy"] = _safe_variable("SAPT(DFT) TOTAL ENERGY")
-    summary["elst10_r"] = _safe_variable("Elst10,r")
-    summary["energy"] = summary["sapt_total_energy"]
+    summary["current_energy"] = summary.get("current_energy", _safe_variable("CURRENT ENERGY"))
+    summary["sapt_total_energy"] = summary.get("sapt_total_energy", _safe_variable("SAPT TOTAL ENERGY"))
+    summary["saptdft_total_energy"] = summary.get("saptdft_total_energy", _safe_variable("SAPT(DFT) TOTAL ENERGY"))
+    summary["elst10_r"] = summary.get("elst10_r", _safe_variable("Elst10,r"))
+    summary["energy"] = summary.get("energy", summary["sapt_total_energy"])
 
     if args.capture_fsapt:
         _capture_fsapt_variables(summary)

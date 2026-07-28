@@ -1,3 +1,9 @@
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
 import pytest
 import psi4
 from qcelemental import constants
@@ -9,6 +15,32 @@ from addons import uusing
 
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
 pytestmark = [pytest.mark.psi, pytest.mark.api]
+
+
+def _run_saptdft_checkpoint_worker(
+    *,
+    checkpoint_dir,
+    mode,
+    name="sapt(dft)",
+    scenario="default",
+    guard_jk=False,
+):
+    worker = os.path.join(os.path.dirname(__file__), "fsaptdft_checkpoint_worker.py")
+    command = [sys.executable, worker, mode, str(checkpoint_dir), "--name", name, "--scenario", scenario]
+    if guard_jk:
+        command.append("--guard-jk")
+    completed = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=dict(os.environ),
+    )
+    output_lines = [line for line in completed.stdout.splitlines() if line.strip()]
+    if not output_lines:
+        raise AssertionError(completed.stderr or completed.stdout or "fsaptdft checkpoint worker produced no output")
+    return completed, json.loads(output_lines[-1])
+
 
 _sapt_testing_mols = {
     "neutral_water_dimer": """
@@ -1032,6 +1064,65 @@ no_com
         8,
         f"Enuc use_einsums={use_einsums}",
     )
+
+
+@pytest.mark.saptdft
+def test_qcschema_checkpoint_identity_restarts_with_direct_api(tmp_path):
+    checkpoint_dir = tmp_path / "qcschema-final"
+    qcschema_proc, qcschema = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="qcschema",
+    )
+    assert qcschema_proc.returncode == 0, qcschema_proc.stderr or qcschema_proc.stdout
+    assert qcschema["status"] == "ok"
+    assert Path(checkpoint_dir, "saptdft_state.json").exists()
+
+    restarted_proc, restarted = _run_saptdft_checkpoint_worker(
+        checkpoint_dir=checkpoint_dir,
+        mode="restart_with_guards",
+        guard_jk=True,
+    )
+    assert restarted_proc.returncode == 0, restarted_proc.stderr or restarted_proc.stdout
+    assert restarted["status"] == "ok"
+    compare_values(qcschema["sapt_total_energy"], restarted["sapt_total_energy"], 8, "QCSchema/direct checkpoint identity")
+
+
+@pytest.mark.saptdft
+def test_saptdft_checkpoint_rejects_external_potentials(tmp_path):
+    mol = psi4.geometry(
+        """
+0 1
+Ne 0.0 0.0 0.0
+--
+0 1
+Ne 0.0 0.0 3.0
+units angstrom
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    chargefield = np.array([[0.5, 0.0, 0.0, 4.0]])
+    chargefield[:, 1:] /= qcel.constants.bohr2angstroms
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "sapt_dft_functional": "hf",
+            "sapt_dft_do_disp": False,
+            "sapt_dft_do_fsapt": "none",
+            "sapt_dft_use_einsums": False,
+        }
+    )
+
+    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match="external_potentials"):
+        psi4.energy(
+            "sapt(dft)",
+            molecule=mol,
+            checkpoint_dir=str(tmp_path),
+            external_potentials={"A": chargefield},
+        )
+
+    assert not (tmp_path / "saptdft_state.lock").exists()
 
 
 @pytest.mark.saptdft

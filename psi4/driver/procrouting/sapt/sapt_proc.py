@@ -87,16 +87,18 @@ def _saptdft_checkpoint_controls(kwargs):
     return (str(checkpoint_dir) if checkpoint_dir else "", str(checkpoint_stop_after) if checkpoint_stop_after else None)
 
 
-def _saptdft_open_checkpoint(name, molecule, function_kwargs, checkpoint_dir):
+def _saptdft_open_checkpoint(name, molecule, function_kwargs, checkpoint_dir, *, atomic_input=None):
     if not checkpoint_dir:
         return None
     identity_kwargs = dict(function_kwargs)
     identity_kwargs.pop("molecule", None)
     identity_kwargs.pop("ref_wfn", None)
+    identity_kwargs.pop(p4util.SAPTDFT_IDENTITY_ATOMIC_INPUT_KEY, None)
     identity = build_saptdft_job_identity(
         name=name,
         molecule=molecule,
         function_kwargs=identity_kwargs,
+        atomic_input=atomic_input,
     )
     return SAPTDFTCheckpoint(Path(checkpoint_dir), identity).open()
 
@@ -564,6 +566,7 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
     core.print_out("\n")
 
+    identity_atomic_input = kwargs.pop(p4util.SAPTDFT_IDENTITY_ATOMIC_INPUT_KEY, None)
     checkpoint_dir, checkpoint_stop_after = _saptdft_checkpoint_controls(kwargs)
     do_ext_potential = kwargs.get("external_potentials")
     external_potentials = kwargs.pop("external_potentials", {})
@@ -572,7 +575,13 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     if do_ext_potential:
         kwargs["external_potentials"] = {}
 
-    checkpoint = _saptdft_open_checkpoint(name, sapt_dimer_initial, kwargs, checkpoint_dir)
+    checkpoint = _saptdft_open_checkpoint(
+        name,
+        sapt_dimer_initial,
+        kwargs,
+        checkpoint_dir,
+        atomic_input=identity_atomic_input,
+    )
     try:
         if checkpoint is not None and do_ext_potential:
             checkpoint.close()

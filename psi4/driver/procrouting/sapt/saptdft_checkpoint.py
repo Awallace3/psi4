@@ -102,6 +102,8 @@ _SCF_SNAPSHOT_REQUIRED_FLOATVARS = {
     "RHF": ("CURRENT ENERGY", "CURRENT REFERENCE ENERGY", "SCF TOTAL ENERGY", "HF TOTAL ENERGY"),
     "RKS": ("CURRENT ENERGY", "CURRENT REFERENCE ENERGY", "SCF TOTAL ENERGY", "DFT TOTAL ENERGY"),
 }
+_IDENTITY_ATOMIC_INPUT_KEY = "_saptdft_checkpoint_atomic_input"
+
 _RUNTIME_CONTROL_KEYS = {
     "checkpoint_dir",
     "checkpoint_directory",
@@ -113,6 +115,7 @@ _RUNTIME_CONTROL_KEYS = {
     "output",
     "output_file",
     "print",
+    _IDENTITY_ATOMIC_INPUT_KEY,
     "psi4_checkpoint_dir",
     "psi4_checkpoint_stop_after",
     "threads",
@@ -121,6 +124,24 @@ _RUNTIME_CONTROL_KEYS = {
     "verbose",
     "verbosity",
 }
+
+_MOLECULE_IDENTITY_FIELDS = (
+    "atom_labels",
+    "atomic_numbers",
+    "fix_com",
+    "fix_orientation",
+    "fix_symmetry",
+    "fragment_charges",
+    "fragment_multiplicities",
+    "fragments",
+    "geometry",
+    "mass_numbers",
+    "masses",
+    "molecular_charge",
+    "molecular_multiplicity",
+    "real",
+    "symbols",
+)
 
 
 @dataclass(frozen=True)
@@ -304,9 +325,9 @@ def _identity_method(identity: Mapping[str, Any]) -> str:
 def _selected_stage_options(identity: Mapping[str, Any]) -> dict[str, Any]:
     keywords = _identity_keywords(identity)
     method = _identity_method(identity)
-    functional = str(keywords.get("sapt_dft_functional", "")).upper()
+    functional = str(keywords.get("sapt_dft_functional", "pbe0")).upper()
     do_dft = functional != "HF"
-    do_delta_hf = _option_is_enabled(keywords.get("sapt_dft_do_dhf", False))
+    do_delta_hf = _option_is_enabled(keywords.get("sapt_dft_do_dhf", True))
     do_delta_dft = do_dft and _option_is_enabled(keywords.get("sapt_dft_do_ddft", False))
     do_disp = _option_is_enabled(keywords.get("sapt_dft_do_disp", True))
     do_d3 = _option_is_enabled(keywords.get("sapt_dft_d3_ie", False))
@@ -631,31 +652,95 @@ def _coerce_atomic_input_dict(atomic_input: Any) -> dict[str, Any]:
     return {"molecule": molecule, "specification": specification}
 
 
+def _normalize_identity_jsonable(value: Any) -> Any:
+    value = _normalize_scalar(value)
+    if isinstance(value, Mapping):
+        return {str(key): _normalize_identity_jsonable(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_normalize_identity_jsonable(item) for item in value]
+    if isinstance(value, list):
+        return [_normalize_identity_jsonable(item) for item in value]
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def _canonicalize_molecule(molecule: Any) -> Any:
+    normalized = _normalize_identity_jsonable(_normalize_jsonable(molecule))
+    if not isinstance(normalized, Mapping):
+        return normalized
+    return {key: normalized[key] for key in _MOLECULE_IDENTITY_FIELDS if key in normalized}
+
+
+def _canonicalize_identity_keywords(keywords: Mapping[str, Any]) -> dict[str, Any]:
+    stripped_keywords = _strip_runtime_controls(keywords)
+    if not isinstance(stripped_keywords, Mapping):
+        return {}
+
+    normalized_keywords = _normalize_jsonable(
+        stripped_keywords,
+        lower_dict_keys=True,
+        lower_strings=True,
+    )
+    keyword_defaults = _normalize_jsonable(
+        p4util.saptdft_identity_defaults_for_keys(normalized_keywords.keys()),
+        lower_dict_keys=True,
+        lower_strings=True,
+    )
+    return {
+        key: value
+        for key, value in normalized_keywords.items()
+        if key not in keyword_defaults or value != keyword_defaults[key]
+    }
+
+
+
 def _canonicalize_atomic_input(atomic_input: Any, *, name: str) -> dict[str, Any]:
     coerced = _coerce_atomic_input_dict(atomic_input)
     specification = dict(coerced.get("specification") or {})
     model = dict(specification.get("model") or {})
-    keywords = dict(specification.get("keywords") or {})
     canonical = {
         "schema_name": "qcschema_input",
         "schema_version": 2,
-        "molecule": _normalize_jsonable(coerced.get("molecule")),
+        "molecule": _canonicalize_molecule(coerced.get("molecule")),
         "specification": {
             "driver": str(specification.get("driver") or "energy").lower(),
             "model": {
                 "method": str(model.get("method") or name).lower(),
                 "basis": _normalize_jsonable(model.get("basis"), lower_strings=True),
             },
-            "keywords": _normalize_jsonable(
-                _strip_runtime_controls(keywords),
-                lower_dict_keys=True,
-                lower_strings=True,
-            ),
-            "protocols": _normalize_jsonable(specification.get("protocols") or {}),
-            "extras": _normalize_jsonable(specification.get("extras") or {}),
+            "keywords": _canonicalize_identity_keywords(specification.get("keywords") or {}),
+            "protocols": {},
+            "extras": {},
         },
     }
     return canonical
+
+
+def _merge_identity_atomic_inputs(resolved_atomic_input: Any, provided_atomic_input: Any) -> dict[str, Any]:
+    resolved = _coerce_atomic_input_dict(resolved_atomic_input)
+    provided = _coerce_atomic_input_dict(provided_atomic_input)
+
+    resolved_specification = dict(resolved.get("specification") or {})
+    provided_specification = dict(provided.get("specification") or {})
+    resolved_model = dict(resolved_specification.get("model") or {})
+    provided_model = dict(provided_specification.get("model") or {})
+    resolved_keywords = dict(resolved_specification.get("keywords") or {})
+    provided_keywords = dict(provided_specification.get("keywords") or {})
+
+    return {
+        "molecule": provided.get("molecule") if provided.get("molecule") is not None else resolved.get("molecule"),
+        "specification": {
+            "driver": resolved_specification.get("driver") or provided_specification.get("driver"),
+            "model": {
+                "method": resolved_model.get("method") or provided_model.get("method"),
+                "basis": resolved_model.get("basis") or provided_model.get("basis"),
+            },
+            "keywords": {**provided_keywords, **resolved_keywords},
+            "protocols": {},
+            "extras": {},
+        },
+    }
 
 
 def build_saptdft_job_identity(
@@ -665,14 +750,17 @@ def build_saptdft_job_identity(
     function_kwargs: Optional[dict[str, Any]] = None,
     atomic_input: Any = None,
 ) -> dict[str, Any]:
+    resolved_atomic_input = p4util.state_to_atomicinput(
+        dtype=2,
+        driver="energy",
+        method=name,
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+    )
     if atomic_input is None:
-        atomic_input = p4util.state_to_atomicinput(
-            dtype=2,
-            driver="energy",
-            method=name,
-            molecule=molecule,
-            function_kwargs=function_kwargs,
-        )
+        atomic_input = resolved_atomic_input
+    else:
+        atomic_input = _merge_identity_atomic_inputs(resolved_atomic_input, atomic_input)
     canonical_input = _canonicalize_atomic_input(atomic_input, name=name)
     execution_fingerprint = _build_execution_fingerprint(canonical_input)
     sha256 = hashlib.sha256(

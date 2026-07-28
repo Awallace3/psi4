@@ -1164,6 +1164,32 @@ def _saptdft_checkpoint_identity_inputs(molecule, function_kwargs=None, method="
     return atomic_input
 
 
+def _saptdft_minimal_qcschema_input(
+    molecule,
+    *,
+    function_kwargs=None,
+    method="sapt(dft)",
+    keyword_overrides=None,
+):
+    keywords = {k.lower(): v for k, v in psi4.driver.p4util.prepare_options_for_set_options().items()}
+    basis = keywords.pop("basis", core.get_global_option("BASIS"))
+    if function_kwargs is not None:
+        keywords["function_kwargs"] = dict(function_kwargs)
+    keywords.update(keyword_overrides or {})
+    return {
+        "schema_name": "qcschema_input",
+        "schema_version": 2,
+        "molecule": molecule.to_schema(dtype=3),
+        "specification": {
+            "driver": "energy",
+            "model": {"method": method, "basis": basis},
+            "keywords": keywords,
+            "protocols": {},
+            "extras": {},
+        },
+    }
+
+
 @pytest.fixture
 def saptdft_checkpoint_identity_fixture():
     _configure_saptdft_checkpoint_identity_options()
@@ -1181,6 +1207,48 @@ def saptdft_checkpoint_identity_fixture():
         molecule, function_kwargs=function_kwargs
     )
     yield molecule, function_kwargs, atomic_input
+    core.clean_options()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_identity_matches_equivalent_qcschema_and_default_omissions():
+    checkpoint_mod = _saptdft_checkpoint_module()
+    core.clean_options()
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "sapt_dft_functional": "hf",
+            "sapt_dft_do_dhf": True,
+            "sapt_dft_do_hybrid": False,
+            "sapt_dft_do_disp": False,
+            "sapt_dft_do_fsapt": "none",
+            "sapt_dft_use_einsums": False,
+        }
+    )
+    molecule = _saptdft_checkpoint_molecule()
+    function_kwargs = {"checkpoint_dir": "first-dir", "output": "first.out"}
+
+    direct_identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+    )
+    qcschema_identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+        atomic_input=_saptdft_minimal_qcschema_input(
+            molecule,
+            function_kwargs=function_kwargs,
+            keyword_overrides={"orbital_optimizer_package": "internal"},
+        ),
+    )
+
+    assert direct_identity == qcschema_identity
+    assert "orbital_optimizer_package" not in direct_identity["canonical_input"]["specification"]["keywords"]
+    assert direct_identity["canonical_input"]["specification"]["protocols"] == {}
+    assert direct_identity["canonical_input"]["specification"]["extras"] == {}
     core.clean_options()
 
 
@@ -1387,6 +1455,45 @@ def test_saptdft_checkpoint_store_manifest_schema(
 
 @pytest.mark.saptdft
 @pytest.mark.fsapt
+@pytest.mark.parametrize(
+    "mutator, expected_message",
+    [
+        (lambda identity: identity["canonical_input"]["molecule"].__setitem__("fragments", [[0, 1]]), "fragments"),
+        (lambda identity: identity["canonical_input"]["molecule"].__setitem__("molecular_charge", 1), "molecular_charge"),
+        (lambda identity: identity["canonical_input"]["molecule"].__setitem__("molecular_multiplicity", 3), "molecular_multiplicity"),
+        (lambda identity: identity["canonical_input"]["specification"]["model"].__setitem__("method", "sapt(dft)-d3(s)"), "method"),
+        (lambda identity: identity["canonical_input"]["specification"]["model"].__setitem__("basis", "cc-pvdz"), "basis"),
+        (lambda identity: identity["canonical_input"]["specification"]["keywords"].__setitem__("sapt_dft_functional", "pbe0"), "sapt_dft_functional"),
+        (lambda identity: identity["execution_fingerprint"].__setitem__("selected_backend", "numpy"), "selected_backend"),
+        (lambda identity: identity["execution_fingerprint"].__setitem__("psi4_version", "0.0-test"), "psi4_version"),
+    ],
+)
+def test_saptdft_checkpoint_mismatch_rejects_identity_mismatches(
+    tmp_path, saptdft_checkpoint_identity_fixture, mutator, expected_message
+):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    molecule, function_kwargs, atomic_input = saptdft_checkpoint_identity_fixture
+    identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+        atomic_input=atomic_input,
+    )
+    checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
+    checkpoint.open()
+    checkpoint.commit_stage("hf_dimer_scf", scalars={"SAPT ELST ENERGY": -0.125})
+    checkpoint.close()
+
+    mismatched_identity = json.loads(json.dumps(identity))
+    mutator(mismatched_identity)
+    mismatched_identity["sha256"] = "0" * 64
+
+    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match=expected_message):
+        checkpoint_mod.SAPTDFTCheckpoint(tmp_path, mismatched_identity).open()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
 def test_saptdft_checkpoint_store_rejects_changed_geometry(
     tmp_path, saptdft_checkpoint_identity_fixture
 ):
@@ -1443,6 +1550,70 @@ def test_saptdft_checkpoint_store_rejects_checksum_failure(
     artifact_path.write_bytes(b"corrupt")
 
     with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match="checksum"):
+        checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity).open()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_corruption_rejects_truncated_artifact(
+    tmp_path, saptdft_checkpoint_identity_fixture
+):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    molecule, function_kwargs, atomic_input = saptdft_checkpoint_identity_fixture
+    identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+        atomic_input=atomic_input,
+    )
+    checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
+    checkpoint.open()
+    checkpoint.commit_stage(
+        "hf_dimer_scf",
+        arrays={"Elst_AB": np.arange(16.0).reshape(4, 4)},
+    )
+    checkpoint.close()
+
+    manifest_path = tmp_path / "saptdft_state.json"
+    manifest = json.loads(manifest_path.read_text())
+    artifact_path = tmp_path / manifest["artifacts"]["Elst_AB"]["path"]
+    original_size = manifest["artifacts"]["Elst_AB"]["size"]
+    truncated_bytes = artifact_path.read_bytes()[: max(1, original_size // 2)]
+    artifact_path.write_bytes(truncated_bytes)
+    sha256, size = checkpoint_mod._file_digest_and_size(artifact_path)
+    manifest["artifacts"]["Elst_AB"]["sha256"] = sha256
+    manifest["artifacts"]["Elst_AB"]["size"] = original_size
+    assert size != original_size
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+
+    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match="size validation"):
+        checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity).open()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_corruption_rejects_unsupported_manifest_schema_version(
+    tmp_path, saptdft_checkpoint_identity_fixture
+):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    molecule, function_kwargs, atomic_input = saptdft_checkpoint_identity_fixture
+    identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+        atomic_input=atomic_input,
+    )
+    checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
+    checkpoint.open()
+    checkpoint.commit_stage("hf_dimer_scf", scalars={"SAPT ELST ENERGY": -0.125})
+    checkpoint.close()
+
+    manifest_path = tmp_path / "saptdft_state.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["schema_version"] = 999
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+
+    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match="schema version"):
         checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity).open()
 
 
@@ -1816,6 +1987,55 @@ def test_saptdft_checkpoint_rehydrate_prevalidates_malformed_structure(
     with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match=expected_message):
         checkpoint_mod.rehydrate_scf_wavefunction(snapshot, method="hf", reference="RHF")
     core.clean_options()
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_checkpoint_corruption_rejects_unsupported_snapshot_version_from_checkpoint(
+    tmp_path, saptdft_checkpoint_identity_fixture
+):
+    checkpoint_mod = _saptdft_checkpoint_module()
+    molecule, function_kwargs, atomic_input = saptdft_checkpoint_identity_fixture
+    identity = checkpoint_mod.build_saptdft_job_identity(
+        name="sapt(dft)",
+        molecule=molecule,
+        function_kwargs=function_kwargs,
+        atomic_input=atomic_input,
+    )
+
+    _, wfn = _build_scf_snapshot_case("hf", "RHF")
+    checkpoint = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
+    checkpoint.open()
+    checkpoint.commit_stage(
+        "hf_dimer_scf",
+        scf_snapshots={
+            "dimer_scf": {
+                "wavefunction": wfn,
+                "reference": "RHF",
+                "method": "hf",
+            }
+        },
+    )
+    checkpoint.close()
+
+    manifest = _checkpoint_manifest(tmp_path)
+    artifact = manifest["artifacts"]["dimer_scf"]
+    artifact_path = Path(tmp_path) / artifact["path"]
+    payload = np.load(artifact_path, allow_pickle=True).item()
+    payload["scf_snapshot"]["version"] = 999
+    with artifact_path.open("wb") as handle:
+        np.save(handle, payload, allow_pickle=True)
+    sha256, size = checkpoint_mod._file_digest_and_size(artifact_path)
+    artifact["sha256"] = sha256
+    artifact["size"] = size
+    (Path(tmp_path) / "saptdft_state.json").write_text(json.dumps(manifest, indent=2, sort_keys=True))
+
+    reopened = checkpoint_mod.SAPTDFTCheckpoint(tmp_path, identity)
+    reopened.open()
+    snapshot = reopened.restore_scf_snapshot("dimer_scf")
+    with pytest.raises(psi4.driver.p4util.exceptions.ValidationError, match="version"):
+        checkpoint_mod.rehydrate_scf_wavefunction(snapshot, method="hf", reference="RHF")
+    reopened.close()
 
 
 @pytest.mark.saptdft

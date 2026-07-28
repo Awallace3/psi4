@@ -43,6 +43,8 @@ __all__ = [
     "prepare_options_for_set_options",
     "provenance_stamp",
     "qcmodel_to_jsonable",
+    "saptdft_identity_defaults_for_keys",
+    "SAPTDFT_IDENTITY_ATOMIC_INPUT_KEY",
     "state_to_atomicinput",
 ]
 
@@ -63,6 +65,9 @@ from psi4.metadata import __version__
 
 from . import p4regex
 from .exceptions import ValidationError
+
+SAPTDFT_IDENTITY_ATOMIC_INPUT_KEY = "_saptdft_checkpoint_atomic_input"
+_SAPTDFT_OPTION_DEFAULT_MISSING = object()
 
 if TYPE_CHECKING:
     import qcelemental
@@ -578,6 +583,46 @@ def qcmodel_to_jsonable(model: Any) -> Any:
     return model
 
 
+def _flat_option_value_from_key(key: str) -> Any:
+    upper_key = str(key).upper()
+
+    if "__" in upper_key:
+        module, option = upper_key.split("__", 1)
+        if not core.option_exists_in_module(module, option):
+            return _SAPTDFT_OPTION_DEFAULT_MISSING
+        return core.get_option(module, option)
+
+    if upper_key in core.get_global_option_list():
+        return core.get_global_option(upper_key)
+
+    candidate_values = []
+    for module in _modules:
+        if core.option_exists_in_module(module, upper_key):
+            candidate_values.append(core.get_option(module, upper_key))
+
+    if not candidate_values:
+        return _SAPTDFT_OPTION_DEFAULT_MISSING
+
+    first_value = candidate_values[0]
+    if any(value != first_value for value in candidate_values[1:]):
+        return _SAPTDFT_OPTION_DEFAULT_MISSING
+
+    return first_value
+
+
+def saptdft_identity_defaults_for_keys(keys: Iterable[str]) -> Dict[str, Any]:
+    """Return clean-options defaults for flat keyword names used in SAPT(DFT) checkpoint identity canonicalization."""
+    normalized_keys = [str(key) for key in keys]
+    defaults = {}
+    with hold_options_state():
+        core.clean_options()
+        for key in normalized_keys:
+            value = _flat_option_value_from_key(key)
+            if value is not _SAPTDFT_OPTION_DEFAULT_MISSING:
+                defaults[key.lower()] = qcmodel_to_jsonable(value)
+    return defaults
+
+
 def state_to_atomicinput(
     *,
     dtype: int = 1,
@@ -618,7 +663,7 @@ def state_to_atomicinput(
 
     keywords = {k.lower(): v for k, v in prepare_options_for_set_options().items()}
     if function_kwargs is not None:
-        keywords["function_kwargs"] = function_kwargs
+        keywords["function_kwargs"] = dict(function_kwargs)
 
     kw_basis = keywords.pop("basis", None)
     basis = basis or kw_basis
