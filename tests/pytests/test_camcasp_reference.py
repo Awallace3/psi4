@@ -609,7 +609,7 @@ def test_rejects_malformed_hydrogen_axis_rule():
     try:
         build_local_frames(CANONICAL_GEOMETRY, axes)
     except ReferenceFormatError as exc:
-        assert "missing axis rules for H1" in str(exc)
+        assert "invalid axes line" in str(exc)
     else:
         raise AssertionError("malformed H1 axis rule was accepted")
 
@@ -633,3 +633,16 @@ def test_rejects_zero_projection_hydrogen_axis_rule():
         assert "axis direction has zero length" in str(exc)
     else:
         raise AssertionError("zero-projection H1 axis rule was accepted")
+
+
+def test_rejects_additional_malformed_hydrogen_axis_rule():
+    axes = CANONICAL_AXES.replace(
+        "End\n",
+        "  H1  z global Y x from H2 to H1\nEnd\n",
+    )
+    try:
+        build_local_frames(CANONICAL_GEOMETRY, axes)
+    except ReferenceFormatError as exc:
+        assert "invalid axes line" in str(exc)
+    else:
+        raise AssertionError("additional malformed H1 axis rule was accepted")

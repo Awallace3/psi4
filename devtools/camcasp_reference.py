@@ -136,7 +136,14 @@ def build_local_frames(
     for line in axes_text.splitlines():
         match = rule.match(line)
         if not match:
-            continue
+            stripped = line.strip()
+            if (
+                not stripped
+                or stripped in {"Axes", "End"}
+                or stripped.startswith(("!", "#"))
+            ):
+                continue
+            raise ReferenceFormatError(f"invalid axes line: {stripped}")
         site, origin, target = match.groups()
         if site not in geometry or origin not in geometry or target not in geometry:
             raise ReferenceFormatError(f"unknown site in axis rule: {line.strip()}")
