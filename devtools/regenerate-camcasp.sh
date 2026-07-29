@@ -37,6 +37,23 @@ fail() {
     return 1
 }
 
+write_sha256_record() {
+    local input="$1"
+    local output="$2"
+    local label="$3"
+    local digest
+    local temp="$output.tmp.$$"
+    digest="$(sha256sum "$input")"
+    digest="${digest%% *}"
+    printf '%s  %s\n' "$digest" "$label" >"$temp"
+    mv -f "$temp" "$output"
+}
+
+checksum_log() {
+    local log="$1"
+    write_sha256_record "$log" "$log.sha256" "$(basename "$log")"
+}
+
 run_logged() {
     local stage="$1"
     local log="$2"
@@ -47,6 +64,7 @@ run_logged() {
     "$@" >"$log" 2>&1
     local rc=$?
     set -e
+    checksum_log "$log"
     if (( rc != 0 )); then
         printf '[%s] failed with exit status %d; retained log: %s\n' \
             "$stage" "$rc" "$log" >&2
@@ -107,10 +125,12 @@ install_camcasp_program() {
     [[ -f "$archive" ]] || fail "missing CamCASP archive: $archive"
     gzip -t "$archive"
     mkdir -p "$exe_dir" "$CAMCASP/bin"
-    if [[ ! -x "$target" ]]; then
-        gzip -dc "$archive" >"$temp"
-        chmod 0755 "$temp"
+    gzip -dc "$archive" >"$temp"
+    chmod 0755 "$temp"
+    if [[ ! -x "$target" ]] || ! cmp -s "$temp" "$target"; then
         mv -f "$temp" "$target"
+    else
+        rm -f "$temp"
     fi
     ln -sfn "../x86-64/gfortran/exe/$program" "$CAMCASP/bin/$program"
     require_executable "$program" "$target"
@@ -140,11 +160,44 @@ provision_camcasp() {
 smoke_orient() {
     local exe="$1"
     local log="$2"
-    printf 'UNITS BOHR\nFINISH\n' |
-        run_logged orient-smoke "$log" "$exe"
-    if grep -Eiq 'fatal|segmentation fault|cannot open shared object|error stop' "$log"; then
-        fail "Orient smoke test reported an error: $log"
+    local rc
+    if printf 'UNITS BOHR\nFINISH\n' |
+        run_logged orient-smoke "$log" "$exe"; then
+        :
+    else
+        rc=$?
+        fail "Orient smoke test failed with exit status $rc; build with 'make OPENGL=no'; retained log: $log"
     fi
+    if grep -Eiq 'fatal|segmentation fault|cannot open shared object|error stop' "$log"; then
+        fail "Orient smoke test reported an error; build with 'make OPENGL=no'; retained log: $log"
+    fi
+}
+
+verify_orient_checkout() {
+    local checkout="$1"
+    local candidate="$2"
+    local expected="x86-64/gfortran/exe/orient-5.0.11-ng"
+
+    [[ "$(git -C "$checkout" rev-parse HEAD)" == "$ORIENT_REF" ]] ||
+        fail "Orient checkout is not pinned to $ORIENT_REF"
+    git -C "$checkout" diff --quiet ||
+        fail "Orient checkout is not clean: $checkout"
+    git -C "$checkout" diff --cached --quiet ||
+        fail "Orient checkout is not clean: $checkout"
+    [[ "$(realpath -m "$candidate")" == "$(realpath -m "$checkout/$expected")" ]] ||
+        fail "unexpected Orient artifact: $candidate"
+    git -C "$checkout" ls-files --error-unmatch "$expected" >/dev/null 2>&1 ||
+        fail "expected tracked Orient artifact is missing: $expected"
+}
+
+record_orient_executable() {
+    local candidate="$1"
+    local log="$REFERENCE_ROOT/logs/orient-executable.log"
+    mkdir -p "$REFERENCE_ROOT/logs"
+    printf 'selected executable: %s\n' "$candidate" >"$log"
+    checksum_log "$log"
+    write_sha256_record "$candidate" \
+        "$REFERENCE_ROOT/logs/orient-executable.sha256" orient
 }
 
 provision_orient() {
@@ -160,15 +213,23 @@ provision_orient() {
         fi
         git -C "$checkout" fetch --tags origin
         git -C "$checkout" checkout --detach "$ORIENT_REF"
-        [[ "$(git -C "$checkout" rev-parse HEAD)" == "$ORIENT_REF" ]] ||
-            fail "Orient checkout is not pinned to $ORIENT_REF"
         candidate="$checkout/x86-64/gfortran/exe/orient-5.0.11-ng"
+        verify_orient_checkout "$checkout" "$candidate"
     fi
 
     require_executable ORIENT_EXE "$candidate"
-    if command -v ldd >/dev/null && ! ldd "$candidate" \
-        >"$REFERENCE_ROOT/logs/orient-ldd.log" 2>&1; then
-        fail "Orient binary is incompatible; build with 'make OPENGL=no'; see orient-ldd.log"
+    record_orient_executable "$candidate"
+    if command -v ldd >/dev/null; then
+        local ldd_log="$REFERENCE_ROOT/logs/orient-ldd.log"
+        local ldd_rc
+        set +e
+        ldd "$candidate" >"$ldd_log" 2>&1
+        ldd_rc=$?
+        set -e
+        checksum_log "$ldd_log"
+        if (( ldd_rc != 0 )); then
+            fail "Orient binary is incompatible; build with 'make OPENGL=no'; retained log: $ldd_log"
+        fi
     fi
 
     ORIENT_BIN_DIR="$REFERENCE_ROOT/tools/orient/bin"
@@ -184,7 +245,9 @@ write_psi4_wrapper() {
     cat >"$wrapper" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-if (( \${3:-1} > 1 )); then
+if [[ "\${1:-}" == "--version" ]]; then
+    exec "$PSI4_EXE" --version
+elif (( \${3:-1} > 1 )); then
     exec "$PSI4_EXE" -n "\$3" "\$1" "\$2"
 else
     exec "$PSI4_EXE" "\$1" "\$2"
@@ -192,7 +255,7 @@ fi
 EOF
     chmod 0755 "$wrapper"
     run_logged psi4-version "$REFERENCE_ROOT/logs/psi4-version.log" \
-        "$PSI4_EXE" --version
+        "$wrapper" --version
 }
 
 on_exit() {
