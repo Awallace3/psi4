@@ -51,6 +51,153 @@ class FrequencyBlock:
     atoms: dict[str, SphericalModel]
 
 
+Vector3 = tuple[float, float, float]
+Matrix3 = tuple[Vector3, Vector3, Vector3]
+
+
+def _dot(left: Vector3, right: Vector3) -> float:
+    return sum(a * b for a, b in zip(left, right))
+
+
+def _norm(vector: Vector3) -> float:
+    return math.sqrt(_dot(vector, vector))
+
+
+def _normalize(vector: Vector3) -> Vector3:
+    length = _norm(vector)
+    if length <= 1.0e-14:
+        raise ReferenceFormatError("axis direction has zero length")
+    return tuple(value / length for value in vector)  # type: ignore[return-value]
+
+
+def _cross(left: Vector3, right: Vector3) -> Vector3:
+    return (
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    )
+
+
+def _transpose(matrix: Matrix3) -> Matrix3:
+    return tuple(zip(*matrix))  # type: ignore[return-value]
+
+
+def _matmul(left: Matrix3, right: Matrix3) -> Matrix3:
+    right_t = _transpose(right)
+    return tuple(
+        tuple(_dot(row, column) for column in right_t)
+        for row in left
+    )  # type: ignore[return-value]
+
+
+def _determinant(matrix: Matrix3) -> float:
+    a, b, c = matrix
+    return (
+        a[0] * (b[1] * c[2] - b[2] * c[1])
+        - a[1] * (b[0] * c[2] - b[2] * c[0])
+        + a[2] * (b[0] * c[1] - b[1] * c[0])
+    )
+
+
+def validate_rotation_matrix(rotation: Matrix3, tolerance: float = 1.0e-10) -> None:
+    product = _matmul(rotation, _transpose(rotation))
+    for row in range(3):
+        for column in range(3):
+            expected = 1.0 if row == column else 0.0
+            if abs(product[row][column] - expected) > tolerance:
+                raise ReferenceFormatError("local frame is not orthonormal")
+    determinant = _determinant(rotation)
+    if determinant < 0.0:
+        raise ReferenceFormatError("local frame is left-handed")
+    if abs(determinant - 1.0) > tolerance:
+        raise ReferenceFormatError(
+            f"local frame determinant is {determinant}, expected +1"
+        )
+
+
+def build_local_frames(
+    geometry: Mapping[str, Vector3],
+    axes_text: str,
+) -> dict[str, Matrix3]:
+    frames: dict[str, Matrix3] = {
+        label: ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        for label in geometry
+    }
+    rule = re.compile(
+        r"^\s*(\S+)\s+z\s+global\s+Z\s+x\s+from\s+(\S+)\s+to\s+(\S+)\s*$",
+        re.IGNORECASE,
+    )
+    for line in axes_text.splitlines():
+        match = rule.match(line)
+        if not match:
+            continue
+        site, origin, target = match.groups()
+        if site not in geometry or origin not in geometry or target not in geometry:
+            raise ReferenceFormatError(f"unknown site in axis rule: {line.strip()}")
+        local_z = (0.0, 0.0, 1.0)
+        direction = tuple(
+            geometry[target][index] - geometry[origin][index]
+            for index in range(3)
+        )
+        projected = tuple(
+            direction[index] - _dot(direction, local_z) * local_z[index]
+            for index in range(3)
+        )
+        local_x = _normalize(projected)  # type: ignore[arg-type]
+        local_y = _normalize(_cross(local_z, local_x))
+        rotation = tuple(zip(local_x, local_y, local_z))  # type: ignore[assignment]
+        validate_rotation_matrix(rotation)
+        frames[site] = rotation
+
+    if set(frames) != set(geometry):
+        raise ReferenceFormatError("frame labels do not match geometry labels")
+    return frames
+
+
+# CamCASP real spherical dipoles: 10 -> z, 11c -> x, 11s -> y.
+CARTESIAN_TO_SPHERICAL_DIPOLE = ("11c", "11s", "10")
+
+
+def _validate_symmetric(
+    matrix: Matrix3,
+    context: str,
+    tolerance: float = 1.0e-8,
+) -> None:
+    for row in range(3):
+        for column in range(3):
+            if abs(matrix[row][column] - matrix[column][row]) > tolerance:
+                raise ReferenceFormatError(f"{context} is not symmetric")
+
+
+def dipole_local_cartesian(model: SphericalModel) -> Matrix3:
+    index = {
+        label: model.components.index(label)
+        for label in CARTESIAN_TO_SPHERICAL_DIPOLE
+    }
+    result = tuple(
+        tuple(
+            model.matrix[index[left]][index[right]]
+            for right in CARTESIAN_TO_SPHERICAL_DIPOLE
+        )
+        for left in CARTESIAN_TO_SPHERICAL_DIPOLE
+    )
+    _validate_symmetric(result, "local Cartesian dipole tensor")
+    return result  # type: ignore[return-value]
+
+
+def rotate_tensor(local: Matrix3, rotation: Matrix3) -> Matrix3:
+    validate_rotation_matrix(rotation)
+    global_tensor = _matmul(_matmul(rotation, local), _transpose(rotation))
+    _validate_symmetric(global_tensor, "global Cartesian dipole tensor")
+    for row in global_tensor:
+        for value in row:
+            if not math.isfinite(value):
+                raise ReferenceFormatError(
+                    "global Cartesian tensor contains non-finite value"
+                )
+    return global_tensor
+
+
 FREQ2_RE = re.compile(
     r"\bFREQ2\s+([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EDed][-+]?\d+)?)"
 )

@@ -475,3 +475,70 @@ def test_rejects_extra_atom_block(tmp_path):
         assert "frequency 000 unexpected content after atom H2" in str(exc)
     else:
         raise AssertionError("extra atom block was accepted")
+
+
+from devtools.camcasp_reference import (  # noqa: E402
+    build_local_frames,
+    dipole_local_cartesian,
+    rotate_tensor,
+    validate_rotation_matrix,
+)
+
+
+CANONICAL_GEOMETRY = {
+    "O": (0.0, 0.0, 0.0),
+    "H1": (-1.4536519600, 0.0, -1.1216873200),
+    "H2": (1.4536519600, 0.0, -1.1216873200),
+}
+CANONICAL_AXES = """\
+Axes
+  H1  z global Z x from H2 to H1
+  H2  z global Z x from H1 to H2
+End
+"""
+
+
+def test_canonical_frames_are_right_handed():
+    frames = build_local_frames(CANONICAL_GEOMETRY, CANONICAL_AXES)
+    assert frames["O"] == ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    assert frames["H1"] == ((-1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, 1.0))
+    assert frames["H2"] == ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    for frame in frames.values():
+        validate_rotation_matrix(frame)
+
+
+def test_rejects_left_handed_frame():
+    try:
+        validate_rotation_matrix(
+            ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, -1.0))
+        )
+    except ReferenceFormatError as exc:
+        assert "left-handed" in str(exc)
+    else:
+        raise AssertionError("left-handed frame was accepted")
+
+
+def test_dipole_mapping_and_hydrogen_c2_signs():
+    matrix = [[0.0] * 16 for _ in range(16)]
+    indices = {label: COMPONENTS_L3.index(label) for label in ("10", "11c", "11s")}
+    matrix[indices["10"]][indices["10"]] = 1.6
+    matrix[indices["11c"]][indices["11c"]] = 1.3
+    matrix[indices["11s"]][indices["11s"]] = 1.2
+    matrix[indices["10"]][indices["11c"]] = -0.25
+    matrix[indices["11c"]][indices["10"]] = -0.25
+    model = type("Model", (), {
+        "components": COMPONENTS_L3,
+        "matrix": tuple(tuple(row) for row in matrix),
+    })()
+
+    local = dipole_local_cartesian(model)
+    assert local == ((1.3, 0.0, -0.25), (0.0, 1.2, 0.0), (-0.25, 0.0, 1.6))
+
+    frames = build_local_frames(CANONICAL_GEOMETRY, CANONICAL_AXES)
+    h1 = rotate_tensor(local, frames["H1"])
+    h2 = rotate_tensor(local, frames["H2"])
+    assert h1[0][2] == 0.25
+    assert h2[0][2] == -0.25
+    assert h1[0][0] == h2[0][0]
+    assert h1[1][1] == h2[1][1]
+    assert h1[2][2] == h2[2][2]
