@@ -243,7 +243,7 @@ def _float(text: str, context: str) -> float:
 
 
 CN_ORDERS = ("C6", "C8", "C10", "C12")
-PAIR_HEADER_RE = re.compile(r"^\s*(\S+)\s+(\S+)\s+(C6\b.*)$", re.IGNORECASE)
+PAIR_HEADER_RE = re.compile(r"^\s*(\S+)\s+(\S+)\s+(C\d+\b.*)$", re.IGNORECASE)
 
 
 def parse_isotropic_cn(
@@ -261,11 +261,14 @@ def parse_isotropic_cn(
             index += 1
             continue
         left_type, right_type, columns_text = header.groups()
-        columns = columns_text.upper().split()
-        if "C12" not in columns:
-            raise ReferenceFormatError(f"{path}: missing required C12 column")
-        column_index = {name: columns.index(name) for name in CN_ORDERS}
         pair_key = tuple(sorted((left_type, right_type)))
+        columns = columns_text.upper().split()
+        for order in CN_ORDERS:
+            if order not in columns:
+                raise ReferenceFormatError(
+                    f"{path}: {pair_key} missing required {order} column"
+                )
+        column_index = {name: columns.index(name) for name in CN_ORDERS}
         if pair_key in by_types:
             raise ReferenceFormatError(f"{path}: duplicate pair block {pair_key}")
         index += 1
@@ -279,6 +282,12 @@ def parse_isotropic_cn(
                         f"{path}: duplicate 00 00 0 row for {pair_key}"
                     )
                 numeric = fields[3:]
+                required_width = max(column_index.values()) + 1
+                if len(numeric) < required_width:
+                    raise ReferenceFormatError(
+                        f"{path}: {pair_key} 00 00 0 row requires "
+                        f"{required_width} numeric values, found {len(numeric)}"
+                    )
                 isotropic = {
                     order: _float(
                         numeric[column_index[order]],

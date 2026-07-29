@@ -722,3 +722,109 @@ def test_rejects_casimir_output_without_c12(tmp_path):
         assert "missing required C12 column" in str(exc)
     else:
         raise AssertionError("C10-only output was accepted")
+
+
+def assert_rejects_isotropic_cn(tmp_path, name, text, expected):
+    source = tmp_path / name
+    source.write_text(text)
+    try:
+        parse_isotropic_cn(
+            source,
+            ("O", "H1", "H2"),
+            {"O": "O", "H1": "H", "H2": "H"},
+        )
+    except ReferenceFormatError as exc:
+        assert str(source) in str(exc)
+        assert expected in str(exc)
+    else:
+        raise AssertionError(f"invalid isotropic Cn input was accepted: {name}")
+
+
+def test_rejects_isotropic_cn_missing_type_pair(tmp_path):
+    missing_hh = CASIMIR_C12.replace(
+        "  H  H      C6 C7 C8 C9 C10 C11 C12\n"
+        "    00 00 0 1.0 0.0 10.0 0.0 100.0 0.0 1000.0\n"
+        "  End\n",
+        "",
+    )
+    assert_rejects_isotropic_cn(
+        tmp_path,
+        "missing-HH.pot",
+        missing_hh,
+        "missing atom-type pairs [('H', 'H')]",
+    )
+
+
+def test_rejects_isotropic_cn_reversed_duplicate_pair(tmp_path):
+    reversed_oh = CASIMIR_C12 + (
+        "  O  H      C6 C7 C8 C9 C10 C11 C12\n"
+        "    00 00 0 9.0 0.0 90.0 0.0 900.0 0.0 9000.0\n"
+        "  End\n"
+    )
+    assert_rejects_isotropic_cn(
+        tmp_path,
+        "duplicate-OH.pot",
+        reversed_oh,
+        "duplicate pair block ('H', 'O')",
+    )
+
+
+def test_rejects_isotropic_cn_missing_isotropic_row(tmp_path):
+    missing_row = CASIMIR_C12.replace(
+        "    00 00 0 20.0 0.0 200.0 0.0 2000.0 0.0 20000.0",
+        "    10 00 0 20.0 0.0 200.0 0.0 2000.0 0.0 20000.0",
+        1,
+    )
+    assert_rejects_isotropic_cn(
+        tmp_path,
+        "missing-isotropic.pot",
+        missing_row,
+        "missing 00 00 0 row for ('O', 'O')",
+    )
+
+
+def test_rejects_isotropic_cn_duplicate_isotropic_row(tmp_path):
+    row = "    00 00 0 20.0 0.0 200.0 0.0 2000.0 0.0 20000.0\n"
+    duplicate_row = CASIMIR_C12.replace(row, row + row, 1)
+    assert_rejects_isotropic_cn(
+        tmp_path,
+        "duplicate-isotropic.pot",
+        duplicate_row,
+        "duplicate 00 00 0 row for ('O', 'O')",
+    )
+
+
+def test_rejects_isotropic_cn_nonfinite_values(tmp_path):
+    for value in ("nan", "inf"):
+        nonfinite = CASIMIR_C12.replace("20.0", value, 1)
+        assert_rejects_isotropic_cn(
+            tmp_path,
+            f"nonfinite-{value}.pot",
+            nonfinite,
+            "('O', 'O') C6: non-finite value",
+        )
+
+
+def test_rejects_isotropic_cn_missing_required_header_columns(tmp_path):
+    for order in ("C8", "C10", "C6"):
+        incomplete = CASIMIR_C12.replace(
+            "C6 C7 C8 C9 C10 C11 C12",
+            "C6 C7 C8 C9 C10 C11 C12".replace(f"{order} ", "", 1),
+            1,
+        )
+        assert_rejects_isotropic_cn(
+            tmp_path,
+            f"missing-{order}.pot",
+            incomplete,
+            f"missing required {order} column",
+        )
+
+
+def test_rejects_isotropic_cn_truncated_numeric_row(tmp_path):
+    truncated = CASIMIR_C12.replace(" 0.0 20000.0", "", 1)
+    assert_rejects_isotropic_cn(
+        tmp_path,
+        "truncated-isotropic.pot",
+        truncated,
+        "('O', 'O') 00 00 0 row requires 7 numeric values, found 5",
+    )
