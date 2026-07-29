@@ -329,11 +329,206 @@ def parse_isotropic_cn(
     return matrices
 
 
-def _require_text(text: str, pattern: str, context: str) -> None:
-    if re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE) is None:
+def _active_lines(text: str) -> list[tuple[int, str]]:
+    active = []
+    for line_number, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("!", "#")):
+            continue
+        active.append((line_number, stripped))
+    return active
+
+
+def _require_exact_directive(
+    observed: list[str], expected: str, context: str, name: str
+) -> None:
+    if not observed:
+        raise ReferenceFormatError(f"{context}: missing active {name} directive")
+    if len(observed) != 1:
         raise ReferenceFormatError(
-            f"{context}: missing required pattern {pattern!r}"
+            f"{context}: active {name} directive occurs {len(observed)} times"
         )
+    if observed[0].casefold() != expected.casefold():
+        raise ReferenceFormatError(
+            f"{context}: conflicting {name} directive {observed[0]!r}; "
+            f"expected {expected!r}"
+        )
+
+
+def _validate_clt_protocol(text: str) -> None:
+    expected = {
+        "basis": "Basis aVTZ",
+        "scfcode": "SCFcode psi4",
+        "method": "Method DFT",
+        "functional": "Functional PBE0",
+        "kernel": "Kernel ALDA+CHF",
+        "options": "Options Tests",
+        "localization": "Localization",
+    }
+    observed = {name: [] for name in expected}
+    section = None
+    properties_sections = 0
+    for line_number, line in _active_lines(text):
+        normalized = " ".join(line.split())
+        lower = normalized.casefold()
+        if lower == "end":
+            section = None
+            continue
+        if lower.startswith("run-type "):
+            section = lower
+            if lower == "run-type properties":
+                properties_sections += 1
+            continue
+        if section is None and (lower == "global" or lower.startswith("molecule ")):
+            section = lower
+            continue
+        if lower == "finish":
+            section = None
+            continue
+        fields = normalized.split()
+        key = fields[0].casefold()
+        if len(fields) >= 2 and key == "no" and fields[1].casefold() == "localization":
+            raise ReferenceFormatError(
+                f"H2O.clt:{line_number}: conflicting Localization directive {line!r}"
+            )
+        if key not in observed:
+            continue
+        if section != "run-type properties":
+            raise ReferenceFormatError(
+                f"H2O.clt:{line_number}: {fields[0]} directive is outside "
+                "Run-type properties"
+            )
+        observed[key].append(normalized)
+    if properties_sections != 1:
+        raise ReferenceFormatError(
+            "H2O.clt: expected exactly one active Run-type properties section"
+        )
+    for name, directive in expected.items():
+        _require_exact_directive(
+            observed[name], directive, "H2O.clt", directive.split()[0]
+        )
+
+
+def _parse_cks_blocks(text: str) -> list[tuple[str, list[str]]]:
+    blocks: list[tuple[str, list[str]]] = []
+    block_name = None
+    block_lines: list[str] = []
+    for _line_number, line in _active_lines(text):
+        normalized = " ".join(line.split())
+        lower = normalized.casefold()
+        if lower.startswith(("set ", "begin ")):
+            if block_name is not None:
+                raise ReferenceFormatError(
+                    f"H2O.cks: nested section {normalized!r} in {block_name!r}"
+                )
+            block_name = lower
+            block_lines = []
+        elif lower == "end":
+            if block_name is not None:
+                blocks.append((block_name, block_lines))
+                block_name = None
+                block_lines = []
+        elif block_name is not None:
+            block_lines.append(normalized)
+    if block_name is not None:
+        raise ReferenceFormatError(f"H2O.cks: unterminated section {block_name!r}")
+    return blocks
+
+
+def _validate_cks_protocol(text: str) -> None:
+    blocks = _parse_cks_blocks(text)
+    quad_blocks = [lines for name, lines in blocks if name == "set quad"]
+    if len(quad_blocks) != 1:
+        raise ReferenceFormatError(
+            "H2O.cks: expected exactly one active SET QUAD section"
+        )
+    quad_lines = quad_blocks[0]
+    for key, expected in (("type", "Type Gauss-Legendre"), ("beta", "Beta 0.5")):
+        observed = [
+            line for line in quad_lines if line.split()[0].casefold() == key
+        ]
+        _require_exact_directive(
+            observed, expected, "H2O.cks SET QUAD", expected.split()[0]
+        )
+
+    polar_blocks = [
+        lines for name, lines in blocks if name == "begin polarizability"
+    ]
+    orient_blocks = [
+        lines
+        for lines in polar_blocks
+        if any(line.casefold().startswith("print pols for") for line in lines)
+    ]
+    if len(orient_blocks) != 1:
+        raise ReferenceFormatError(
+            "H2O.cks: expected exactly one Polarizability section with "
+            "an active Print pols for directive"
+        )
+    orient_lines = orient_blocks[0]
+    for key, expected in (("quad", "Quad 10"), ("rank", "Rank 4")):
+        observed = [line for line in orient_lines if line.split()[0].casefold() == key]
+        _require_exact_directive(
+            observed, expected, "H2O.cks Polarizability", expected.split()[0]
+        )
+    prints = [
+        line for line in orient_lines if line.casefold().startswith("print pols for")
+    ]
+    _require_exact_directive(
+        prints,
+        "Print pols for Orient",
+        "H2O.cks Polarizability",
+        "Print pols for Orient",
+    )
+
+
+def _report_value(line: str, label_pattern: str) -> str | None:
+    match = re.match(
+        rf"{label_pattern}\s*(?:=|:)?\s*(\S+)\s*$", line, flags=re.IGNORECASE
+    )
+    return None if match is None else match.group(1)
+
+
+def _require_report_value(
+    lines: Sequence[str], label_pattern: str, expected: str, name: str
+) -> None:
+    candidates = [
+        value
+        for line in lines
+        if (value := _report_value(line, label_pattern)) is not None
+    ]
+    if len(candidates) != 1:
+        raise ReferenceFormatError(
+            f"cluster output: expected exactly one active {name} report, "
+            f"found {len(candidates)}"
+        )
+    if candidates[0].casefold() != expected.casefold():
+        raise ReferenceFormatError(
+            f"cluster output: conflicting {name} value {candidates[0]!r}; "
+            f"expected {expected!r}"
+        )
+
+
+def _validate_cluster_report(text: str) -> None:
+    lines = [line for _number, line in _active_lines(text)]
+    _require_report_value(lines, r"AC\s+options\s*:\s*type", "GRAC", "AC options")
+    _require_report_value(lines, r"functional", "PBE0", "functional")
+    _require_report_value(lines, r"kernel", "ALDA+CHF", "kernel")
+
+
+def _validate_psi4_orientation(text: str) -> None:
+    lines = [" ".join(line.split()) for _number, line in _active_lines(text)]
+    symmetry = [line for line in lines if line.split()[0].casefold() == "symmetry"]
+    _require_exact_directive(
+        symmetry, "symmetry c1", "generated Psi4 input", "symmetry"
+    )
+    for canonical, contradictory in (("no_com", "com"), ("no_reorient", "reorient")):
+        observed = [line for line in lines if line.split()[0].casefold() == canonical]
+        if any(line.split()[0].casefold() == contradictory for line in lines):
+            raise ReferenceFormatError(
+                "generated Psi4 input: contradictory "
+                f"{contradictory} and {canonical} controls"
+            )
+        _require_exact_directive(observed, canonical, "generated Psi4 input", canonical)
 
 
 def validate_generated_protocol(
@@ -342,58 +537,95 @@ def validate_generated_protocol(
     cluster_log_text: str,
     psi4_input_text: str,
 ) -> None:
-    for pattern in (
-        r"\bBasis\s+aVTZ\b",
-        r"\bSCFcode\s+psi4\b",
-        r"\bMethod\s+DFT\b",
-        r"\bFunctional\s+PBE0\b",
-        r"\bKernel\s+ALDA\+CHF\b",
-        r"\bOptions\s+Tests\b",
-        r"\bLocalization\b",
-    ):
-        _require_text(clt_text, pattern, "H2O.clt")
-    for pattern in (
-        r"Type\s+Gauss-Legendre",
-        r"Beta\s+0\.5\b",
-        r"Quad\s+10\b",
-        r"Rank\s+4\b",
-        r"Print\s+pols\s+for\s+Orient",
-    ):
-        _require_text(cks_text, pattern, "H2O.cks")
-    for pattern in (
-        r"AC options:\s*type\s*=\s*GRAC",
-        r"functional\s+PBE0",
-        r"kernel\s*=\s*ALDA\+CHF",
-    ):
-        _require_text(cluster_log_text, pattern, "cluster output")
-    for pattern in (r"symmetry\s+c1", r"\bno_com\b", r"\bno_reorient\b"):
-        _require_text(psi4_input_text, pattern, "generated Psi4 input")
+    _validate_clt_protocol(clt_text)
+    _validate_cks_protocol(cks_text)
+    _validate_cluster_report(cluster_log_text)
+    _validate_psi4_orientation(psi4_input_text)
+
+
+def _require_terminal_finished(path: Path) -> None:
+    lines = [
+        line.strip()
+        for line in path.read_text(errors="replace").splitlines()
+        if line.strip()
+    ]
+    completions = [line for line in lines if line.casefold() == "finished"]
+    if len(completions) != 1 or not lines or lines[-1].casefold() != "finished":
+        raise ReferenceFormatError(
+            f"{path}: requires one unambiguous terminal Finished completion"
+        )
+
+
+def _normalized_individual_pol(path: Path, expected_index: int) -> tuple[str, ...]:
+    normalized = []
+    for line in path.read_text(errors="replace").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        index_match = INDEX_RE.match(line)
+        if index_match:
+            if normalized or int(index_match.group(1)) != expected_index:
+                raise ReferenceFormatError(
+                    f"{path}: unexpected frequency index {index_match.group(1)}"
+                )
+            continue
+        if stripped.startswith(("#", "!")):
+            continue
+        normalized.append(" ".join(stripped.split()))
+    return tuple(normalized)
+
+
+def _combined_pol_sections(path: Path) -> dict[int, tuple[str, ...]]:
+    sections: dict[int, list[str]] = {}
+    current = None
+    for line in path.read_text(errors="replace").splitlines():
+        match = INDEX_RE.match(line)
+        if match:
+            current = int(match.group(1))
+            sections[current] = []
+            continue
+        stripped = line.strip()
+        if current is None or not stripped or stripped.startswith(("#", "!")):
+            continue
+        sections[current].append(" ".join(stripped.split()))
+    return {index: tuple(content) for index, content in sections.items()}
+
+
+STAGE_ERROR_MARKER_RE = re.compile(
+    r"segmentation\s+fault|fatal(?:\s+error)?|error\s+stop|"
+    r"pfit[._ -]?error|orient[._ -]?error|traceback|truncat(?:ed|ion)|"
+    r"unexpected\s+(?:end|eof)|premature\s+(?:end|eof)",
+    flags=re.IGNORECASE,
+)
 
 
 def validate_stage_artifacts(work_dir: Path, job: str) -> dict[str, Path]:
     work_dir = Path(work_dir)
-    required: list[Path] = []
-    for index in range(11):
-        required.extend(
-            (
-                work_dir / f"{job}_L3_{index:03d}.out",
-                work_dir / f"{job}_ref_wt4_L3_{index:03d}.out",
-                work_dir / f"{job}_ref_wt4_L3_{index:03d}.pol",
-            )
-        )
-    required.extend(
-        (
-            work_dir / f"{job}_ref_wt4_L3_0f10.pol",
-            work_dir / f"{job}_ref_wt4_L3_casimir.out",
-            work_dir / f"{job}_ref_wt4_L3_C12.pot",
-            work_dir / f"{job}.pdef",
-        )
-    )
+    orient_outputs = [
+        work_dir / f"{job}_L3_{index:03d}.out" for index in range(11)
+    ]
+    pfit_outputs = [
+        work_dir / f"{job}_ref_wt4_L3_{index:03d}.out" for index in range(11)
+    ]
+    pfit_pols = [
+        work_dir / f"{job}_ref_wt4_L3_{index:03d}.pol" for index in range(11)
+    ]
+    combined = work_dir / f"{job}_ref_wt4_L3_0f10.pol"
+    casimir_output = work_dir / f"{job}_ref_wt4_L3_casimir.out"
+    casimir_pot = work_dir / f"{job}_ref_wt4_L3_C12.pot"
+    pdef = work_dir / f"{job}.pdef"
+    required = [
+        *orient_outputs,
+        *pfit_outputs,
+        *pfit_pols,
+        combined,
+        casimir_output,
+        casimir_pot,
+        pdef,
+    ]
     for path in required:
         if not path.is_file() or path.stat().st_size == 0:
-            raise ReferenceFormatError(
-                f"missing or empty stage artifact: {path}"
-            )
+            raise ReferenceFormatError(f"missing or empty stage artifact: {path}")
 
     cardinalities = (
         (f"{job}_L3_[0-9][0-9][0-9].out", 11, "ORIENT"),
@@ -408,14 +640,33 @@ def validate_stage_artifacts(work_dir: Path, job: str) -> dict[str, Path]:
                 f"found {len(observed)}"
             )
 
-    for path in work_dir.glob("*.out"):
-        text = path.read_text(errors="replace")
-        if re.search(
-            r"segmentation fault|fatal error|error stop|pfit_error|orient\.error",
-            text,
-            flags=re.IGNORECASE,
-        ):
-            raise ReferenceFormatError(f"error marker in stage output: {path}")
+    for path in (*orient_outputs, *pfit_outputs):
+        _require_terminal_finished(path)
+
+    relevant_suffixes = {".out", ".pol", ".pot", ".pdef"}
+    for path in work_dir.rglob("*"):
+        if path.is_file() and path.suffix.casefold() in relevant_suffixes:
+            if STAGE_ERROR_MARKER_RE.search(path.read_text(errors="replace")):
+                raise ReferenceFormatError(
+                    f"fatal or truncation marker in stage artifact: {path}"
+                )
+
+    parse_refined_polarizabilities(combined, ACCEPTED_ATOM_LABELS, limit=3)
+    combined_sections = _combined_pol_sections(combined)
+    if set(combined_sections) != set(range(11)):
+        raise ReferenceFormatError(f"{combined}: incomplete indexed frequency blocks")
+    for index, path in enumerate(pfit_pols):
+        individual = _normalized_individual_pol(path, index)
+        if not individual or individual != combined_sections[index]:
+            raise ReferenceFormatError(
+                f"{path}: content does not match combined # INDEX {index:03d} block"
+            )
+
+    parse_isotropic_cn(
+        casimir_pot,
+        ACCEPTED_ATOM_LABELS,
+        {"O": "O", "H1": "H", "H2": "H"},
+    )
     return {path.name: path for path in required}
 
 

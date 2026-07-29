@@ -1262,7 +1262,7 @@ from devtools.camcasp_reference import (  # noqa: E402
 )
 
 
-def test_generated_protocol_requires_explicit_canonical_settings():
+def canonical_generated_protocol_texts():
     clt = """\
 Run-type properties
   Basis aVTZ
@@ -1287,23 +1287,97 @@ END
 """
     cluster_log = "AC options: type = GRAC\nfunctional PBE0\nkernel = ALDA+CHF\n"
     psi4_input = "symmetry c1\nno_com\nno_reorient\n"
-    validate_generated_protocol(clt, cks, cluster_log, psi4_input)
+    return clt, cks, cluster_log, psi4_input
+
+
+def test_generated_protocol_requires_explicit_canonical_settings():
+    validate_generated_protocol(*canonical_generated_protocol_texts())
+
+
+def _assert_protocol_rejected(texts, expected):
+    try:
+        validate_generated_protocol(*texts)
+    except ReferenceFormatError as exc:
+        assert expected.lower() in str(exc).lower()
+    else:
+        raise AssertionError("invalid generated protocol was accepted")
+
+
+def test_generated_protocol_ignores_comment_only_settings():
+    texts = list(canonical_generated_protocol_texts())
+    texts[0] = texts[0].replace("  Basis aVTZ", "  ! Basis aVTZ")
+    _assert_protocol_rejected(texts, "Basis")
+
+
+def test_generated_protocol_rejects_duplicate_active_setting():
+    texts = list(canonical_generated_protocol_texts())
+    texts[0] = texts[0].replace("  Basis aVTZ", "  Basis aVTZ\n  Basis aVTZ")
+    _assert_protocol_rejected(texts, "Basis")
+
+
+def test_generated_protocol_rejects_conflicting_active_settings():
+    mutations = (
+        (0, "Basis aVTZ", "Basis aDZ", "Basis"),
+        (0, "SCFcode psi4", "SCFcode dalton", "SCFcode"),
+        (0, "Method DFT", "Method HF", "Method"),
+        (0, "Functional PBE0", "Functional PBE", "Functional"),
+        (0, "Kernel ALDA+CHF", "Kernel ALDA", "Kernel"),
+        (0, "Options Tests", "Options Production", "Options"),
+        (0, "Localization", "No Localization", "Localization"),
+        (1, "Type Gauss-Legendre", "Type Euler-Maclaurin", "Type"),
+        (1, "Beta 0.5", "Beta 0.7", "Beta"),
+        (1, "Quad 10", "Quad 9", "Quad"),
+        (1, "Rank 4", "Rank 3", "Rank"),
+        (1, "Print pols for Orient", "Print pols for Molpro", "Print"),
+        (2, "type = GRAC", "type = LB94", "AC options"),
+        (2, "functional PBE0", "functional PBE", "functional"),
+        (2, "kernel = ALDA+CHF", "kernel = ALDA", "kernel"),
+        (3, "symmetry c1", "symmetry c2v", "symmetry"),
+        (3, "no_com", "com", "no_com"),
+        (3, "no_reorient", "reorient", "no_reorient"),
+    )
+    for text_index, old, new, expected in mutations:
+        texts = list(canonical_generated_protocol_texts())
+        texts[text_index] = texts[text_index].replace(old, new)
+        _assert_protocol_rejected(texts, expected)
+
+
+def _refined_block_text(combined_text, index):
+    marker = f"# INDEX {index:03d}\n"
+    block = combined_text.split(marker, 1)[1]
+    if index < 10:
+        block = block.split(f"# INDEX {index + 1:03d}\n", 1)[0]
+    return block.strip() + "\n"
 
 
 def populate_stage_artifacts(work, job="H2O"):
+    combined = make_l3_refined_text()
     for index in range(11):
-        for name in (
-            f"{job}_L3_{index:03d}.out",
-            f"{job}_ref_wt4_L3_{index:03d}.out",
-            f"{job}_ref_wt4_L3_{index:03d}.pol",
-        ):
-            (work / name).write_text("Finished\n")
-    (work / f"{job}_ref_wt4_L3_0f10.pol").write_text("complete\n")
+        (work / f"{job}_L3_{index:03d}.out").write_text(
+            "ORIENT localization output\nFinished\n"
+        )
+        (work / f"{job}_ref_wt4_L3_{index:03d}.out").write_text(
+            "PFIT refinement output\nFinished\n"
+        )
+        (work / f"{job}_ref_wt4_L3_{index:03d}.pol").write_text(
+            _refined_block_text(combined, index)
+        )
+    (work / f"{job}_ref_wt4_L3_0f10.pol").write_text(combined)
     (work / f"{job}_ref_wt4_L3_casimir.out").write_text(
         "Dispersion coefficients\n"
     )
-    (work / f"{job}_ref_wt4_L3_C12.pot").write_text("C12\n")
-    (work / f"{job}.pdef").write_text("Polarizabilities\nEnd\n")
+    (work / f"{job}_ref_wt4_L3_C12.pot").write_text(CASIMIR_C12)
+    (work / f"{job}.pdef").write_text(
+        "Polarizabilities\n  H1 H1 10 10 = H1_A\n"
+        "  H2 H2 COPY H1 H1\nEnd\n"
+    )
+
+
+def test_stage_validation_accepts_completed_parseable_artifacts(tmp_path):
+    populate_stage_artifacts(tmp_path)
+    artifacts = validate_stage_artifacts(tmp_path, "H2O")
+    assert len(artifacts) == 37
+    assert "H2O_ref_wt4_L3_C12.pot" in artifacts
 
 
 def test_stage_validation_rejects_missing_orient_block(tmp_path):
@@ -1337,6 +1411,70 @@ def test_stage_validation_rejects_missing_c12(tmp_path):
         assert "C12" in str(exc)
     else:
         raise AssertionError("missing C12 output was accepted")
+
+
+def test_stage_validation_rejects_truncated_orient_completion(tmp_path):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_L3_004.out"
+    path.write_text("ORIENT produced nonempty output without completion\n")
+    try:
+        validate_stage_artifacts(tmp_path, "H2O")
+    except ReferenceFormatError as exc:
+        assert path.name in str(exc)
+        assert "Finished" in str(exc)
+    else:
+        raise AssertionError("truncated ORIENT output was accepted")
+
+
+def test_stage_validation_rejects_ambiguous_finished_completion(tmp_path):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_L3_002.out"
+    path.write_text("Finished\nmore output\nFinished\n")
+    try:
+        validate_stage_artifacts(tmp_path, "H2O")
+    except ReferenceFormatError as exc:
+        assert path.name in str(exc)
+        assert "unambiguous" in str(exc)
+    else:
+        raise AssertionError("ambiguous ORIENT completion was accepted")
+
+
+def test_stage_validation_rejects_truncated_pfit_completion(tmp_path):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_ref_wt4_L3_009.out"
+    path.write_text("PFIT produced nonempty output without completion\n")
+    try:
+        validate_stage_artifacts(tmp_path, "H2O")
+    except ReferenceFormatError as exc:
+        assert path.name in str(exc)
+        assert "Finished" in str(exc)
+    else:
+        raise AssertionError("truncated PFIT output was accepted")
+
+
+def test_stage_validation_rejects_malformed_individual_pfit_pol(tmp_path):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_ref_wt4_L3_006.pol"
+    path.write_text("nonempty unrelated polarizability output\n")
+    try:
+        validate_stage_artifacts(tmp_path, "H2O")
+    except ReferenceFormatError as exc:
+        assert path.name in str(exc)
+    else:
+        raise AssertionError("unrelated PFIT polarizability was accepted")
+
+
+def test_stage_validation_rejects_fatal_marker_outside_out(tmp_path):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O.pdef"
+    path.write_text(path.read_text() + "FATAL ERROR model truncated\n")
+    try:
+        validate_stage_artifacts(tmp_path, "H2O")
+    except ReferenceFormatError as exc:
+        assert path.name in str(exc)
+        assert "marker" in str(exc)
+    else:
+        raise AssertionError("fatal pdef marker was accepted")
 
 
 def make_canonical_nl4_frequency_text():
@@ -1460,9 +1598,8 @@ orient </dev/null
 pfit </dev/null
 casimir </dev/null
 for index in $(seq -w 0 10); do
-    printf 'Finished\n' >"H2O_L3_0${index}.out"
-    printf 'Finished\n' >"H2O_ref_wt4_L3_0${index}.out"
-    printf 'Finished\n' >"H2O_ref_wt4_L3_0${index}.pol"
+    printf 'ORIENT output\nFinished\n' >"H2O_L3_0${index}.out"
+    printf 'PFIT output\nFinished\n' >"H2O_ref_wt4_L3_0${index}.out"
 done
 cat >H2O.pdef <<'EOF'
 Polarizabilities
@@ -1475,6 +1612,14 @@ cat >H2O_ref_wt4_L3_0f10.pol <<'EOF'
 """
         + make_l3_refined_text()
         + """EOF
+awk '
+/^# INDEX [0-9][0-9][0-9]$/ {
+    tag = $3
+    output = "H2O_ref_wt4_L3_" tag ".pol"
+    next
+}
+output != "" { print > output }
+' H2O_ref_wt4_L3_0f10.pol
 cat >H2O_ref_wt4_L3_casimir.out <<'EOF'
 Dispersion coefficients
 EOF
@@ -1500,6 +1645,11 @@ cat >H2O_ref_wt4_L3_C12.pot <<'EOF'
         check=True,
     )
 
+    (reference / "work").mkdir(parents=True)
+    (reference / "atomic-polarizabilities.json").write_text("stale json\n")
+    (reference / "atomic-polarizabilities.json.sha256").write_text("stale digest\n")
+    (reference / "work" / "manifest.json").write_text("stale manifest\n")
+
     command = f'''source "{SCRIPT}"
 REFERENCE_ROOT="$1"
 CAMCASP="$2"
@@ -1522,6 +1672,8 @@ review_rc=$?
 set -e
 [[ "$review_rc" -eq 78 ]]
 [[ ! -e "$REFERENCE_ROOT/atomic-polarizabilities.json" ]]
+[[ ! -e "$REFERENCE_ROOT/atomic-polarizabilities.json.sha256" ]]
+[[ ! -e "$REFERENCE_ROOT/work/manifest.json" ]]
 export CAMCASP_PDEF_SHA256="$(awk '{{print $1}}' "$REFERENCE_ROOT/work/H2O/H2O.pdef.sha256")"
 require_reviewed_pdef
 write_manifest
@@ -1548,9 +1700,70 @@ build_reference_json
     assert (reference / "logs" / "camcasp.log.sha256").is_file()
     assert (reference / "logs" / "localize-refine-dispersion.log.sha256").is_file()
     assert (reference / "atomic-polarizabilities.json.sha256").is_file()
+    job_dir = reference / "work" / "H2O"
+    for representative in (
+        job_dir / "OUT" / "H2O.p2p",
+        job_dir / "OUT" / "H2O_NL4_fmtB.pol",
+        job_dir / "H2O.ornt",
+        job_dir / "H2O.cks",
+        job_dir / "H2O_A.in",
+        job_dir / "H2O_ref_wt4_L3_010.pol",
+    ):
+        assert representative.with_name(representative.name + ".sha256").is_file()
+    retained = [
+        path
+        for path in job_dir.rglob("*")
+        if path.is_file() and not path.name.endswith(".sha256")
+    ]
+    assert retained
+    assert not [
+        path
+        for path in retained
+        if not path.with_name(path.name + ".sha256").is_file()
+    ]
     assert set(document["tools"]["camcasp"]["executables"]) == {
         "camcasp", "cluster", "process", "pfit", "casimir"
     }
+
+
+def test_clean_room_removes_stale_publication_before_unapproved_gate(tmp_path):
+    reference = tmp_path / "reference"
+    for directory in ("inputs", "work/H2O", "scratch", "logs", "tools"):
+        (reference / directory).mkdir(parents=True, exist_ok=True)
+    (reference / "atomic-polarizabilities.json").write_text("stale json\n")
+    (reference / "atomic-polarizabilities.json.sha256").write_text("stale digest\n")
+    (reference / "work" / "manifest.json").write_text("stale manifest\n")
+    (reference / "inputs" / "stale.clt").write_text("stale\n")
+    (reference / "logs" / "stale.log").write_text("stale\n")
+    (reference / "scratch" / "stale.tmp").write_text("stale\n")
+    (reference / "tools" / "preserved").write_text("tool\n")
+    command = f'''source "{SCRIPT}"
+REFERENCE_ROOT="$1"
+prepare_layout
+mkdir -p "$REFERENCE_ROOT/work/H2O"
+cat >"$REFERENCE_ROOT/work/H2O/H2O.pdef" <<'EOF'
+Polarizabilities
+  H1 H1 10 10 = H1_A
+  H2 H2 COPY H1 H1
+End
+EOF
+CAMCASP_PDEF_SHA256={'0' * 64} require_reviewed_pdef
+'''
+    result = subprocess.run(
+        ["bash", "-c", command, "clean-room", str(reference)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 78
+    assert not (reference / "atomic-polarizabilities.json").exists()
+    assert not (reference / "atomic-polarizabilities.json.sha256").exists()
+    assert not (reference / "work" / "manifest.json").exists()
+    assert not (reference / "inputs" / "stale.clt").exists()
+    assert not (reference / "logs" / "stale.log").exists()
+    assert not (reference / "scratch" / "stale.tmp").exists()
+    assert (reference / "tools" / "preserved").read_text() == "tool\n"
 
 
 def test_install_pfit_preserves_compressed_archive(tmp_path):

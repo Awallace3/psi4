@@ -276,6 +276,14 @@ EOF
 prepare_layout() {
     CURRENT_STAGE="layout"
     require_safe_generated_path "$REFERENCE_ROOT"
+    rm -f \
+        "$REFERENCE_ROOT/atomic-polarizabilities.json" \
+        "$REFERENCE_ROOT/atomic-polarizabilities.json.sha256"
+    rm -rf \
+        "$REFERENCE_ROOT/inputs" \
+        "$REFERENCE_ROOT/work" \
+        "$REFERENCE_ROOT/scratch" \
+        "$REFERENCE_ROOT/logs"
     mkdir -p \
         "$REFERENCE_ROOT/inputs" \
         "$REFERENCE_ROOT/work" \
@@ -400,6 +408,17 @@ attest_generated_protocol() {
         --psi4-input "${PSI4_INPUT_FILES[0]}"
 }
 
+checksum_job_files() {
+    CURRENT_STAGE="checksum-artifacts"
+    local job_dir="$1"
+    local artifact
+    while IFS= read -r -d '' artifact; do
+        write_sha256_record "$artifact" "$artifact.sha256" "${artifact#"$job_dir"/}"
+    done < <(
+        find "$job_dir" -type f ! -name '*.sha256' -print0 | sort -z
+    )
+}
+
 run_localize() {
     CURRENT_STAGE="localize-refine-dispersion"
     local job_dir="$REFERENCE_ROOT/work/H2O"
@@ -426,19 +445,7 @@ run_localize() {
         python -P "$REPO_ROOT/devtools/camcasp_reference.py" \
         validate-artifacts --work-dir "$job_dir" --job H2O
 
-    local artifact
-    while IFS= read -r artifact; do
-        write_sha256_record "$artifact" "$artifact.sha256" "$(basename "$artifact")"
-    done < <(
-        find "$job_dir" -maxdepth 1 -type f \
-            \( -name 'H2O_L3_???.out' \
-            -o -name 'H2O_ref_wt4_L3_???.out' \
-            -o -name 'H2O_ref_wt4_L3_???.pol' \
-            -o -name 'H2O_ref_wt4_L3_0f10.pol' \
-            -o -name 'H2O_ref_wt4_L3_casimir.out' \
-            -o -name 'H2O_ref_wt4_L3_C12.pot' \
-            -o -name 'H2O.pdef' \) -print | sort
-    )
+    checksum_job_files "$job_dir"
 }
 
 validate_hydrogen_model() {
