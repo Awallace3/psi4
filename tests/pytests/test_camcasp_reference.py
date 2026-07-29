@@ -431,3 +431,47 @@ def test_rejects_nonfinite_l3_value(tmp_path):
         assert "non-finite" in str(exc)
     else:
         raise AssertionError("non-finite L3 value was accepted")
+
+
+def assert_rejects_atom_labels(tmp_path, atom_labels):
+    source = tmp_path / "invalid-atom-labels.pol"
+    source.write_text(make_l3_refined_text())
+    try:
+        parse_refined_polarizabilities(source, atom_labels, limit=3)
+    except ReferenceFormatError as exc:
+        assert "accepted model requires atom labels ('O', 'H1', 'H2')" in str(exc)
+    else:
+        raise AssertionError(f"invalid atom labels were accepted: {atom_labels!r}")
+
+
+def test_rejects_reordered_caller_atom_labels(tmp_path):
+    assert_rejects_atom_labels(tmp_path, ("H1", "O", "H2"))
+
+
+def test_rejects_missing_caller_atom_label(tmp_path):
+    assert_rejects_atom_labels(tmp_path, ("O", "H1"))
+
+
+def test_rejects_duplicate_caller_atom_labels(tmp_path):
+    assert_rejects_atom_labels(tmp_path, ("O", "H1", "H1"))
+
+
+def test_rejects_unrelated_caller_atom_label(tmp_path):
+    assert_rejects_atom_labels(tmp_path, ("O", "H1", "X"))
+
+
+def test_rejects_extra_atom_block(tmp_path):
+    source = tmp_path / "extra-atom.pol"
+    lines = make_l3_refined_text().splitlines()
+    next_index = lines.index("# INDEX 001")
+    lines[next_index:next_index] = [
+        "X X",
+        *(" ".join(["0.0"] * 16) for _ in range(16)),
+    ]
+    source.write_text("\n".join(lines) + "\n")
+    try:
+        parse_refined_polarizabilities(source, ("O", "H1", "H2"), limit=3)
+    except ReferenceFormatError as exc:
+        assert "frequency 000 unexpected content after atom H2" in str(exc)
+    else:
+        raise AssertionError("extra atom block was accepted")

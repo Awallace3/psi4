@@ -97,6 +97,7 @@ def parse_frequencies(path: Path) -> list[FrequencyPoint]:
 
 INDEX_RE = re.compile(r"^\s*#\s*INDEX\s+(\d{3})\s*$")
 ATOM_RE = re.compile(r"^\s*(\S+)\s+\1\s*$")
+ACCEPTED_ATOM_LABELS = ("O", "H1", "H2")
 
 
 def parse_refined_polarizabilities(
@@ -106,15 +107,33 @@ def parse_refined_polarizabilities(
 ) -> list[FrequencyBlock]:
     if limit != 3:
         raise ReferenceFormatError(f"accepted model requires limit 3, got {limit}")
+    provided_atom_labels = tuple(atom_labels)
+    if provided_atom_labels != ACCEPTED_ATOM_LABELS:
+        raise ReferenceFormatError(
+            f"accepted model requires atom labels {ACCEPTED_ATOM_LABELS!r}, "
+            f"got {provided_atom_labels!r}"
+        )
     lines = path.read_text().splitlines()
     blocks: list[FrequencyBlock] = []
     position = 0
 
     while position < len(lines):
+        while position < len(lines) and (
+            not lines[position].strip()
+            or (
+                lines[position].lstrip().startswith("#")
+                and not INDEX_RE.match(lines[position])
+            )
+        ):
+            position += 1
+        if position >= len(lines):
+            break
         match = INDEX_RE.match(lines[position])
         if not match:
-            position += 1
-            continue
+            raise ReferenceFormatError(
+                f"{path}: expected frequency index, found "
+                f"{lines[position].strip()!r}"
+            )
         index = int(match.group(1))
         if index != len(blocks):
             raise ReferenceFormatError(
@@ -123,7 +142,7 @@ def parse_refined_polarizabilities(
         position += 1
         atoms: dict[str, SphericalModel] = {}
 
-        for expected_atom in atom_labels:
+        for expected_atom in ACCEPTED_ATOM_LABELS:
             while position < len(lines) and not lines[position].strip():
                 position += 1
             if position >= len(lines) or lines[position].split() != [
@@ -162,6 +181,14 @@ def parse_refined_polarizabilities(
                 position += 1
             atoms[expected_atom] = SphericalModel(COMPONENTS_L3, tuple(matrix))
         blocks.append(FrequencyBlock(index, atoms))
+
+        while position < len(lines) and not INDEX_RE.match(lines[position]):
+            if lines[position].strip() and not lines[position].lstrip().startswith("#"):
+                raise ReferenceFormatError(
+                    f"{path}: frequency {index:03d} unexpected content after atom "
+                    f"H2: {lines[position].strip()!r}"
+                )
+            position += 1
 
     if len(blocks) != 11:
         raise ReferenceFormatError(
