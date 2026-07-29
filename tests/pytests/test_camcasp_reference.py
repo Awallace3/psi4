@@ -646,3 +646,29 @@ def test_rejects_additional_malformed_hydrogen_axis_rule():
         assert "invalid axes line" in str(exc)
     else:
         raise AssertionError("additional malformed H1 axis rule was accepted")
+
+
+def test_allows_hash_rule_shaped_comment():
+    axes = CANONICAL_AXES.replace(
+        "End\n",
+        "  # z global Z x from H2 to H1\nEnd\n",
+    )
+    frames = build_local_frames(CANONICAL_GEOMETRY, axes)
+    assert frames["H1"] == (
+        (-1.0, 0.0, 0.0),
+        (0.0, -1.0, 0.0),
+        (0.0, 0.0, 1.0),
+    )
+
+
+def test_allows_bang_rule_shaped_comment():
+    axes = CANONICAL_AXES.replace(
+        "End\n",
+        "  ! z global Z x from H1 to H2\nEnd\n",
+    )
+    frames = build_local_frames(CANONICAL_GEOMETRY, axes)
+    assert frames["H2"] == (
+        (1.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0),
+        (0.0, 0.0, 1.0),
+    )
