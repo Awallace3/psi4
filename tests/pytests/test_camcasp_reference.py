@@ -343,3 +343,91 @@ def test_verify_orient_checkout_rejects_untracked_candidate(tmp_path):
     )
     assert result.returncode != 0
     assert "expected tracked Orient artifact" in result.stderr
+
+
+import math
+import sys
+
+sys.path.insert(0, str(ROOT))
+from devtools.camcasp_reference import (  # noqa: E402
+    COMPONENTS_L3,
+    ReferenceFormatError,
+    parse_frequencies,
+    parse_refined_polarizabilities,
+)
+
+
+def make_nl4_frequency_text():
+    squared = [0.0] + [-(0.01 * index) ** 2 for index in range(1, 11)]
+    lines = []
+    for value in squared:
+        for left, right in (("O", "O"), ("O", "H1"), ("H1", "O")):
+            lines.append(
+                "POL  SITE-LABELS  "
+                f"{left}  {right}  SITE-INDICES  1  1  "
+                f"RANK  0 : 4  BY  0 : 4  FREQ2 {value:.16E} CARTSPHER S"
+            )
+    return "\n".join(lines) + "\n"
+
+
+def make_l3_refined_text():
+    blocks = []
+    for frequency_index in range(11):
+        blocks.append(f"# INDEX {frequency_index:03d}")
+        for atom_index, label in enumerate(("O", "H1", "H2")):
+            blocks.append(f"{label} {label}")
+            for row in range(16):
+                values = [
+                    frequency_index + atom_index + row / 100.0 + column / 10000.0
+                    for column in range(16)
+                ]
+                blocks.append(" ".join(f"{value:.8f}" for value in values))
+    return "\n".join(blocks) + "\n"
+
+
+def test_parse_static_plus_ten_frequencies(tmp_path):
+    source = tmp_path / "H2O_NL4_fmtB.pol"
+    source.write_text(make_nl4_frequency_text())
+    points = parse_frequencies(source)
+    assert [point.index for point in points] == list(range(11))
+    assert points[0].omega == 0.0
+    assert [point.omega for point in points[1:]] == [
+        index / 100.0 for index in range(1, 11)
+    ]
+    assert all(points[index].omega < points[index + 1].omega for index in range(10))
+
+
+def test_parse_complete_l3_model(tmp_path):
+    source = tmp_path / "H2O_ref_wt4_L3_0f10.pol"
+    source.write_text(make_l3_refined_text())
+    blocks = parse_refined_polarizabilities(source, ("O", "H1", "H2"), limit=3)
+    assert len(blocks) == 11
+    assert COMPONENTS_L3 == (
+        "00", "10", "11c", "11s", "20", "21c", "21s", "22c", "22s",
+        "30", "31c", "31s", "32c", "32s", "33c", "33s",
+    )
+    assert tuple(blocks[0].atoms) == ("O", "H1", "H2")
+    assert len(blocks[10].atoms["H2"].matrix) == 16
+    assert all(len(row) == 16 for row in blocks[10].atoms["H2"].matrix)
+
+
+def test_rejects_incomplete_l3_model(tmp_path):
+    source = tmp_path / "truncated.pol"
+    source.write_text(make_l3_refined_text().rsplit("\n", 8)[0] + "\n")
+    try:
+        parse_refined_polarizabilities(source, ("O", "H1", "H2"), limit=3)
+    except ReferenceFormatError as exc:
+        assert "frequency 010 atom H2 requires 16 rows" in str(exc)
+    else:
+        raise AssertionError("truncated L3 model was accepted")
+
+
+def test_rejects_nonfinite_l3_value(tmp_path):
+    source = tmp_path / "nonfinite.pol"
+    source.write_text(make_l3_refined_text().replace("0.00000000", "nan", 1))
+    try:
+        parse_refined_polarizabilities(source, ("O", "H1", "H2"), limit=3)
+    except ReferenceFormatError as exc:
+        assert "non-finite" in str(exc)
+    else:
+        raise AssertionError("non-finite L3 value was accepted")
