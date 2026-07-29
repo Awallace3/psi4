@@ -242,6 +242,84 @@ def _float(text: str, context: str) -> float:
     return value
 
 
+CN_ORDERS = ("C6", "C8", "C10", "C12")
+PAIR_HEADER_RE = re.compile(r"^\s*(\S+)\s+(\S+)\s+(C6\b.*)$", re.IGNORECASE)
+
+
+def parse_isotropic_cn(
+    path: Path,
+    atom_labels: Sequence[str],
+    atom_types: Mapping[str, str],
+) -> dict[str, tuple[tuple[float, ...], ...]]:
+    lines = path.read_text().splitlines()
+    by_types: dict[tuple[str, str], dict[str, float]] = {}
+    index = 0
+
+    while index < len(lines):
+        header = PAIR_HEADER_RE.match(lines[index])
+        if not header:
+            index += 1
+            continue
+        left_type, right_type, columns_text = header.groups()
+        columns = columns_text.upper().split()
+        if "C12" not in columns:
+            raise ReferenceFormatError(f"{path}: missing required C12 column")
+        column_index = {name: columns.index(name) for name in CN_ORDERS}
+        pair_key = tuple(sorted((left_type, right_type)))
+        if pair_key in by_types:
+            raise ReferenceFormatError(f"{path}: duplicate pair block {pair_key}")
+        index += 1
+        isotropic = None
+
+        while index < len(lines) and lines[index].strip().lower() != "end":
+            fields = lines[index].split()
+            if len(fields) >= 3 and fields[:3] == ["00", "00", "0"]:
+                if isotropic is not None:
+                    raise ReferenceFormatError(
+                        f"{path}: duplicate 00 00 0 row for {pair_key}"
+                    )
+                numeric = fields[3:]
+                isotropic = {
+                    order: _float(
+                        numeric[column_index[order]],
+                        f"{path}: {pair_key} {order}",
+                    )
+                    for order in CN_ORDERS
+                }
+            index += 1
+        if isotropic is None:
+            raise ReferenceFormatError(f"{path}: missing 00 00 0 row for {pair_key}")
+        by_types[pair_key] = isotropic
+        index += 1
+
+    required_pairs = {
+        tuple(sorted((atom_types[left], atom_types[right])))
+        for left in atom_labels
+        for right in atom_labels
+    }
+    missing = required_pairs - set(by_types)
+    if missing:
+        raise ReferenceFormatError(f"{path}: missing atom-type pairs {sorted(missing)}")
+
+    matrices = {}
+    for order in CN_ORDERS:
+        matrix = tuple(
+            tuple(
+                by_types[tuple(sorted((atom_types[left], atom_types[right])))][order]
+                for right in atom_labels
+            )
+            for left in atom_labels
+        )
+        for row in range(len(atom_labels)):
+            for column in range(len(atom_labels)):
+                if not math.isfinite(matrix[row][column]):
+                    raise ReferenceFormatError(f"{path}: non-finite {order} value")
+                if abs(matrix[row][column] - matrix[column][row]) > 1.0e-8:
+                    raise ReferenceFormatError(f"{path}: {order} matrix is not symmetric")
+        matrices[order] = matrix
+    return matrices
+
+
 def parse_frequencies(path: Path) -> list[FrequencyPoint]:
     unique: list[tuple[str, float]] = []
     for match in FREQ2_RE.finditer(path.read_text()):

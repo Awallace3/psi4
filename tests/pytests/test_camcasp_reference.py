@@ -672,3 +672,53 @@ def test_allows_bang_rule_shaped_comment():
         (0.0, 1.0, 0.0),
         (0.0, 0.0, 1.0),
     )
+
+
+from devtools.camcasp_reference import parse_isotropic_cn  # noqa: E402
+
+
+CASIMIR_C12 = """\
+  O  O      C6 C7 C8 C9 C10 C11 C12
+    00 00 0 20.0 0.0 200.0 0.0 2000.0 0.0 20000.0
+  End
+  H  O      C6 C7 C8 C9 C10 C11 C12
+    00 00 0 4.0 0.0 40.0 0.0 400.0 0.0 4000.0
+  End
+  H  H      C6 C7 C8 C9 C10 C11 C12
+    00 00 0 1.0 0.0 10.0 0.0 100.0 0.0 1000.0
+  End
+"""
+
+
+def test_parse_all_isotropic_cn_matrices(tmp_path):
+    source = tmp_path / "H2O_ref_wt4_L3_C12.pot"
+    source.write_text(CASIMIR_C12)
+    matrices = parse_isotropic_cn(
+        source,
+        ("O", "H1", "H2"),
+        {"O": "O", "H1": "H", "H2": "H"},
+    )
+    assert tuple(matrices) == ("C6", "C8", "C10", "C12")
+    assert matrices["C6"] == (
+        (20.0, 4.0, 4.0),
+        (4.0, 1.0, 1.0),
+        (4.0, 1.0, 1.0),
+    )
+    assert matrices["C12"][0][0] == 20000.0
+    assert matrices["C12"][1][0] == 4000.0
+    assert matrices["C12"][2][2] == 1000.0
+
+
+def test_rejects_casimir_output_without_c12(tmp_path):
+    source = tmp_path / "C10-only.pot"
+    source.write_text(CASIMIR_C12.replace(" C11 C12", "").replace(" 0.0 20000.0", "").replace(" 0.0 4000.0", "").replace(" 0.0 1000.0", ""))
+    try:
+        parse_isotropic_cn(
+            source,
+            ("O", "H1", "H2"),
+            {"O": "O", "H1": "H", "H2": "H"},
+        )
+    except ReferenceFormatError as exc:
+        assert "missing required C12 column" in str(exc)
+    else:
+        raise AssertionError("C10-only output was accepted")
