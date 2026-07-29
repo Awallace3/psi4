@@ -303,6 +303,26 @@ def test_verify_orient_checkout_rejects_dirty_checkout(tmp_path):
     assert "Orient checkout is not clean" in result.stderr
 
 
+def test_verify_orient_checkout_rejects_unrelated_untracked_file(tmp_path):
+    checkout = tmp_path / "orient"
+    commit = _make_git_checkout(checkout, tracked_candidate=True)
+    (checkout / "unrelated.tmp").write_text("untracked\n")
+    candidate = checkout / "x86-64" / "gfortran" / "exe" / "orient-5.0.11-ng"
+    command = (
+        f'source "{SCRIPT}"; '
+        'ORIENT_REF="$1"; verify_orient_checkout "$2" "$3"'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "orient-git", commit, str(checkout), str(candidate)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "Orient checkout is not clean" in result.stderr
+
+
 def test_verify_orient_checkout_rejects_untracked_candidate(tmp_path):
     checkout = tmp_path / "orient"
     commit = _make_git_checkout(checkout, tracked_candidate=False)

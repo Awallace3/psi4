@@ -177,17 +177,18 @@ verify_orient_checkout() {
     local checkout="$1"
     local candidate="$2"
     local expected="x86-64/gfortran/exe/orient-5.0.11-ng"
+    local status
 
     [[ "$(git -C "$checkout" rev-parse HEAD)" == "$ORIENT_REF" ]] ||
         fail "Orient checkout is not pinned to $ORIENT_REF"
-    git -C "$checkout" diff --quiet ||
-        fail "Orient checkout is not clean: $checkout"
-    git -C "$checkout" diff --cached --quiet ||
-        fail "Orient checkout is not clean: $checkout"
     [[ "$(realpath -m "$candidate")" == "$(realpath -m "$checkout/$expected")" ]] ||
         fail "unexpected Orient artifact: $candidate"
     git -C "$checkout" ls-files --error-unmatch "$expected" >/dev/null 2>&1 ||
         fail "expected tracked Orient artifact is missing: $expected"
+    status="$(git -C "$checkout" status --porcelain --untracked-files=all)" ||
+        fail "could not inspect Orient checkout status: $checkout"
+    [[ -z "$status" ]] ||
+        fail "Orient checkout is not clean: $checkout"
 }
 
 record_orient_executable() {
