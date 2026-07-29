@@ -505,6 +505,24 @@ EXPECTED_FREQUENCY_GRID = {
     "scale_au": 0.5,
 }
 
+CANONICAL_FREQUENCIES = (
+    0.0,
+    0.0066096015960872435,
+    0.036174811998630957,
+    0.095447363690348272,
+    0.1976442118453127,
+    0.3704172128053672,
+    0.6749146404580301,
+    1.264899172436498,
+    2.619244684547324,
+    6.910885950408292,
+    37.82376235021415,
+)
+# Accommodates only the final-decimal roundoff in CamCASP's emitted FREQ2 text.
+FREQUENCY_REL_TOLERANCE = 2.0e-14
+FREQUENCY_ABS_TOLERANCE = 2.0e-15
+CAMCASP_EXECUTABLE_NAMES = ("camcasp", "cluster", "process", "pfit", "casimir")
+
 EXPECTED_MODEL = {
     "nonlocal_rank": 4,
     "localization_method": "LW",
@@ -681,9 +699,6 @@ def _validate_checksum_entry(
 
 
 def _validate_executable(value: object, context: str) -> None:
-    if isinstance(value, str):
-        _require_string(value, context)
-        return
     _validate_checksum_entry(value, context, require_path=True)
 
 
@@ -694,40 +709,37 @@ def _validate_tools(value: object) -> None:
         tools["camcasp"],
         ("version", "commit", "executables"),
         "tools.camcasp",
-        optional=("sha256",),
     )
     _require_string(camcasp["version"], "tools.camcasp.version")
     _validate_commit(camcasp["commit"], "tools.camcasp.commit")
-    executables = _as_mapping(camcasp["executables"], "tools.camcasp.executables")
-    for name, executable in executables.items():
-        _validate_executable(executable, f"tools.camcasp.executables.{name}")
-    if "sha256" in camcasp:
-        _validate_sha256(camcasp["sha256"], "tools.camcasp.sha256")
+    executables = _require_fields(
+        camcasp["executables"],
+        CAMCASP_EXECUTABLE_NAMES,
+        "tools.camcasp.executables",
+    )
+    for name in CAMCASP_EXECUTABLE_NAMES:
+        _validate_executable(
+            executables[name], f"tools.camcasp.executables.{name}"
+        )
 
     orient = _require_fields(
         tools["orient"],
         ("version", "commit", "executable"),
         "tools.orient",
-        optional=("sha256",),
     )
     _require_string(orient["version"], "tools.orient.version")
     _validate_commit(orient["commit"], "tools.orient.commit")
     _validate_executable(orient["executable"], "tools.orient.executable")
-    if "sha256" in orient:
-        _validate_sha256(orient["sha256"], "tools.orient.sha256")
 
     psi4 = _require_fields(
         tools["psi4"],
         ("version", "commit", "dirty", "executable"),
         "tools.psi4",
-        optional=("sha256",),
     )
     _require_string(psi4["version"], "tools.psi4.version")
     _validate_commit(psi4["commit"], "tools.psi4.commit")
     _require_bool(psi4["dirty"], "tools.psi4.dirty")
     _validate_executable(psi4["executable"], "tools.psi4.executable")
-    if "sha256" in psi4:
-        _validate_sha256(psi4["sha256"], "tools.psi4.sha256")
 
 
 def _validate_protocol(value: object) -> None:
@@ -821,6 +833,18 @@ def _validate_frequencies(value: object) -> list[float]:
         raise ReferenceFormatError(
             "frequencies must be static zero plus ten increasing values"
         )
+    if any(
+        not math.isclose(
+            value,
+            expected,
+            rel_tol=FREQUENCY_REL_TOLERANCE,
+            abs_tol=FREQUENCY_ABS_TOLERANCE,
+        )
+        for value, expected in zip(values, CANONICAL_FREQUENCIES)
+    ):
+        raise ReferenceFormatError(
+            "frequencies do not match the canonical Gauss-Legendre Beta=0.5 grid"
+        )
     for index, source_value in enumerate(squared_raw):
         source_text = _require_string(
             source_value, f"frequencies.squared_source_values[{index}]"
@@ -836,8 +860,8 @@ def _validate_frequencies(value: object) -> list[float]:
         if not math.isclose(
             squared,
             -(values[index] ** 2),
-            rel_tol=1.0e-10,
-            abs_tol=1.0e-14,
+            rel_tol=FREQUENCY_REL_TOLERANCE,
+            abs_tol=FREQUENCY_ABS_TOLERANCE,
         ):
             raise ReferenceFormatError(
                 f"frequencies.squared_source_values[{index}] does not match omega"

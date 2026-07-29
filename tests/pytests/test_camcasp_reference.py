@@ -839,6 +839,39 @@ from devtools.camcasp_reference import (  # noqa: E402
 )
 
 
+APPROVED_FREQUENCIES = (
+    0.0,
+    0.0066096015960872435,
+    0.036174811998630957,
+    0.095447363690348272,
+    0.1976442118453127,
+    0.3704172128053672,
+    0.6749146404580301,
+    1.264899172436498,
+    2.619244684547324,
+    6.910885950408292,
+    37.82376235021415,
+)
+APPROVED_SQUARED_SOURCE_VALUES = (
+    "0.0",
+    "-4.3686833258999033E-005",
+    "-1.3086170231362943E-003",
+    "-9.1101992354376132E-003",
+    "-3.9063234475954833E-002",
+    "-0.1372089115424966",
+    "-0.4555097719045920",
+    "-1.599969916430539",
+    "-6.860442717529413",
+    "-47.76034461955072",
+    "-1430.636998325477",
+)
+CAMCASP_EXECUTABLE_NAMES = ("camcasp", "cluster", "process", "pfit", "casimir")
+
+
+def _executable_record(name, digest_character):
+    return {"path": f"/opt/{name}", "sha256": digest_character * 64}
+
+
 def complete_document():
     identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
     tensor = [[1.0, 0.0, 0.0], [0.0, 1.1, 0.0], [0.0, 0.0, 1.2]]
@@ -857,10 +890,10 @@ def complete_document():
     frequency_blocks = [
         {
             "index": index,
-            "omega": 0.0 if index == 0 else index / 100.0,
+            "omega": omega,
             "atoms": {"O": atom, "H1": atom, "H2": atom},
         }
-        for index in range(11)
+        for index, omega in enumerate(APPROVED_FREQUENCIES)
     ]
     matrix = [[1.0, 0.5, 0.5], [0.5, 0.2, 0.2], [0.5, 0.2, 0.2]]
     return {
@@ -875,18 +908,21 @@ def complete_document():
             "camcasp": {
                 "version": "7.2.2 patch 003",
                 "commit": "b4744425233a61786052832e1db4f109959c1ce9",
-                "executables": {},
+                "executables": {
+                    name: _executable_record(name, str(index + 1))
+                    for index, name in enumerate(CAMCASP_EXECUTABLE_NAMES)
+                },
             },
             "orient": {
                 "version": "5.0.11-ng",
                 "commit": "d8d861098c8f548e2cf230c387c8431d9418650a",
-                "executable": "/opt/orient",
+                "executable": _executable_record("orient", "6"),
             },
             "psi4": {
                 "version": "1.11a1.dev31",
                 "commit": "c" * 40,
                 "dirty": True,
-                "executable": "/opt/psi4",
+                "executable": _executable_record("psi4", "7"),
             },
         },
         "scientific_protocol": {
@@ -933,9 +969,8 @@ def complete_document():
         },
         "frequencies": {
             "units": "hartree",
-            "values": [0.0] + [index / 100.0 for index in range(1, 11)],
-            "squared_source_values": ["0.0"]
-            + [f"-{(index / 100.0) ** 2:.8f}" for index in range(1, 11)],
+            "values": list(APPROVED_FREQUENCIES),
+            "squared_source_values": list(APPROVED_SQUARED_SOURCE_VALUES),
         },
         "polarizabilities": {
             "units": "atomic units",
@@ -1102,8 +1137,88 @@ def test_validator_rejects_invalid_provenance_checksums():
     _assert_document_rejected(document, "sources.refined_pol.sha256")
 
     document = complete_document()
-    document["tools"]["orient"]["sha256"] = "short"
-    _assert_document_rejected(document, "tools.orient.sha256")
+    document["tools"]["orient"]["executable"]["sha256"] = "short"
+    _assert_document_rejected(document, "tools.orient.executable.sha256")
+
+
+def test_validator_rejects_bare_tool_executable_paths():
+    mutations = (
+        ("orient", None),
+        ("psi4", None),
+        ("camcasp", "camcasp"),
+    )
+    for tool, executable_name in mutations:
+        document = complete_document()
+        if executable_name is None:
+            document["tools"][tool]["executable"] = f"/opt/{tool}"
+            expected = f"tools.{tool}.executable"
+        else:
+            document["tools"][tool]["executables"][executable_name] = (
+                f"/opt/{executable_name}"
+            )
+            expected = f"tools.{tool}.executables.{executable_name}"
+        _assert_document_rejected(document, expected)
+
+
+def test_validator_rejects_missing_tool_executable_checksums():
+    mutations = (
+        ("orient", None),
+        ("psi4", None),
+        ("camcasp", "pfit"),
+    )
+    for tool, executable_name in mutations:
+        document = complete_document()
+        if executable_name is None:
+            del document["tools"][tool]["executable"]["sha256"]
+            expected = f"tools.{tool}.executable"
+        else:
+            del document["tools"][tool]["executables"][executable_name]["sha256"]
+            expected = f"tools.{tool}.executables.{executable_name}"
+        _assert_document_rejected(document, expected)
+
+
+def test_validator_rejects_invalid_tool_executable_checksums():
+    mutations = (
+        ("orient", None),
+        ("psi4", None),
+        ("camcasp", "casimir"),
+    )
+    for tool, executable_name in mutations:
+        document = complete_document()
+        if executable_name is None:
+            document["tools"][tool]["executable"]["sha256"] = "invalid"
+            expected = f"tools.{tool}.executable.sha256"
+        else:
+            document["tools"][tool]["executables"][executable_name][
+                "sha256"
+            ] = "invalid"
+            expected = f"tools.{tool}.executables.{executable_name}.sha256"
+        _assert_document_rejected(document, expected)
+
+
+def test_validator_rejects_empty_or_incomplete_camcasp_executables():
+    document = complete_document()
+    document["tools"]["camcasp"]["executables"].clear()
+    _assert_document_rejected(document, "camcasp")
+
+    for executable_name in CAMCASP_EXECUTABLE_NAMES:
+        document = complete_document()
+        del document["tools"]["camcasp"]["executables"][executable_name]
+        _assert_document_rejected(document, executable_name)
+
+
+def test_validator_rejects_internally_consistent_noncanonical_grid():
+    document = complete_document()
+    noncanonical = [0.0] + [index / 100.0 for index in range(1, 11)]
+    document["frequencies"]["values"] = noncanonical
+    document["frequencies"]["squared_source_values"] = ["0.0"] + [
+        f"-{omega ** 2:.8f}" for omega in noncanonical[1:]
+    ]
+    for block, omega in zip(
+        document["polarizabilities"]["frequency_blocks"], noncanonical
+    ):
+        block["omega"] = omega
+    _assert_document_rejected(document, "canonical Gauss-Legendre")
 
 
 def test_atomic_json_validation_failure_preserves_existing_file(tmp_path):
