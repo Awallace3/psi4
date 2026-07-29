@@ -458,3 +458,622 @@ def parse_refined_polarizabilities(
             f"{path}: expected 11 refined blocks, found {len(blocks)}"
         )
     return blocks
+
+
+REQUIRED_TOP_LEVEL = (
+    "schema_version",
+    "generated_at_utc",
+    "generator",
+    "repository",
+    "tools",
+    "scientific_protocol",
+    "frequencies",
+    "polarizabilities",
+    "dispersion",
+    "inputs",
+    "sources",
+)
+
+CANONICAL_ATOMS = (
+    {"label": "O", "element": "O", "xyz": [0.0, 0.0, 0.0]},
+    {
+        "label": "H1",
+        "element": "H",
+        "xyz": [-1.4536519600, 0.0, -1.1216873200],
+    },
+    {
+        "label": "H2",
+        "element": "H",
+        "xyz": [1.4536519600, 0.0, -1.1216873200],
+    },
+)
+
+EXPECTED_ELECTRONIC_STRUCTURE = {
+    "method": "PBE0",
+    "basis": "aug-cc-pVTZ",
+    "camcasp_basis": "aVTZ",
+    "asymptotic_correction": "Psi4 GRAC",
+    "ionization_potential_ev": 12.62063,
+    "homo_hartree": -0.3989,
+    "kernel": "ALDA+CHF",
+    "grid": "Options Tests",
+}
+
+EXPECTED_FREQUENCY_GRID = {
+    "kind": "Gauss-Legendre",
+    "nonzero_count": 10,
+    "scale_au": 0.5,
+}
+
+EXPECTED_MODEL = {
+    "nonlocal_rank": 4,
+    "localization_method": "LW",
+    "localization_limit": 3,
+    "wsm_limit": 3,
+    "hydrogen_limit": 3,
+    "pfit_weight": 4,
+    "pfit_weight_coefficient": 0.001,
+    "pfit_cutoff": 0.0001,
+}
+
+EXPECTED_DISPERSION_UNITS = {
+    "C6": "hartree * bohr^6",
+    "C8": "hartree * bohr^8",
+    "C10": "hartree * bohr^10",
+    "C12": "hartree * bohr^12",
+}
+
+SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
+UTC_TIMESTAMP_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\Z"
+)
+
+
+def _as_mapping(value: object, context: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise ReferenceFormatError(f"{context} must be an object")
+    if any(not isinstance(key, str) for key in value):
+        raise ReferenceFormatError(f"{context} keys must be strings")
+    return value
+
+
+def _as_sequence(value: object, context: str) -> Sequence[object]:
+    if not isinstance(value, (list, tuple)):
+        raise ReferenceFormatError(f"{context} must be an array")
+    return value
+
+
+def _require(mapping: Mapping[str, object], key: str, context: str) -> object:
+    if key not in mapping:
+        raise ReferenceFormatError(f"{context}: missing required field {key}")
+    return mapping[key]
+
+
+def _require_fields(
+    value: object,
+    required: Sequence[str],
+    context: str,
+    optional: Sequence[str] = (),
+) -> Mapping[str, object]:
+    mapping = _as_mapping(value, context)
+    for key in required:
+        _require(mapping, key, context)
+    unexpected = set(mapping) - set(required) - set(optional)
+    if unexpected:
+        raise ReferenceFormatError(
+            f"{context}: unexpected field {sorted(unexpected)[0]}"
+        )
+    return mapping
+
+
+def _require_string(value: object, context: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ReferenceFormatError(f"{context} must be a non-empty string")
+    return value
+
+
+def _require_bool(value: object, context: str) -> bool:
+    if type(value) is not bool:
+        raise ReferenceFormatError(f"{context} must be a boolean")
+    return value
+
+
+def _require_number(value: object, context: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ReferenceFormatError(f"{context} must be a number")
+    try:
+        converted = float(value)
+    except OverflowError as exc:
+        raise ReferenceFormatError(
+            f"{context} contains an out-of-range number"
+        ) from exc
+    if not math.isfinite(converted):
+        raise ReferenceFormatError(f"{context} contains a non-finite number")
+    return converted
+
+
+def _validate_finite_numbers(value: object, context: str) -> None:
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return
+    if isinstance(value, int):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ReferenceFormatError(f"{context} contains a non-finite number")
+        return
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            _validate_finite_numbers(child, f"{context}.{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            _validate_finite_numbers(child, f"{context}[{index}]")
+
+
+def _validate_sha256(value: object, context: str) -> None:
+    if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
+        raise ReferenceFormatError(f"{context} is invalid")
+
+
+def _validate_commit(value: object, context: str) -> None:
+    if not isinstance(value, str) or not COMMIT_RE.fullmatch(value):
+        raise ReferenceFormatError(f"{context} is invalid")
+
+
+def _validate_expected_object(
+    value: object,
+    expected: Mapping[str, object],
+    context: str,
+) -> Mapping[str, object]:
+    mapping = _require_fields(value, tuple(expected), context)
+    for key, expected_value in expected.items():
+        if mapping[key] != expected_value or type(mapping[key]) is not type(expected_value):
+            raise ReferenceFormatError(
+                f"{context}.{key} must be {expected_value!r}"
+            )
+    return mapping
+
+
+def _validated_matrix(
+    value: object,
+    size: int,
+    context: str,
+) -> tuple[tuple[float, ...], ...]:
+    rows = _as_sequence(value, context)
+    if len(rows) != size:
+        raise ReferenceFormatError(f"{context} must be {size}x{size}")
+    result = []
+    for row_index, row_value in enumerate(rows):
+        row = _as_sequence(row_value, f"{context}[{row_index}]")
+        if len(row) != size:
+            raise ReferenceFormatError(f"{context} must be {size}x{size}")
+        result.append(
+            tuple(
+                _require_number(candidate, f"{context}[{row_index}][{column}]")
+                for column, candidate in enumerate(row)
+            )
+        )
+    return tuple(result)
+
+
+def _validate_matrix_symmetric(
+    matrix: Sequence[Sequence[float]],
+    context: str,
+    tolerance: float = 1.0e-8,
+) -> None:
+    for row in range(len(matrix)):
+        for column in range(row):
+            if abs(matrix[row][column] - matrix[column][row]) > tolerance:
+                raise ReferenceFormatError(f"{context} is not symmetric")
+
+
+def _validate_checksum_entry(
+    value: object,
+    context: str,
+    require_path: bool,
+) -> None:
+    required = ("path", "sha256") if require_path else ("sha256",)
+    entry = _require_fields(value, required, context)
+    if require_path:
+        _require_string(entry["path"], f"{context}.path")
+    _validate_sha256(entry["sha256"], f"{context}.sha256")
+
+
+def _validate_executable(value: object, context: str) -> None:
+    if isinstance(value, str):
+        _require_string(value, context)
+        return
+    _validate_checksum_entry(value, context, require_path=True)
+
+
+def _validate_tools(value: object) -> None:
+    tools = _require_fields(value, ("camcasp", "orient", "psi4"), "tools")
+
+    camcasp = _require_fields(
+        tools["camcasp"],
+        ("version", "commit", "executables"),
+        "tools.camcasp",
+        optional=("sha256",),
+    )
+    _require_string(camcasp["version"], "tools.camcasp.version")
+    _validate_commit(camcasp["commit"], "tools.camcasp.commit")
+    executables = _as_mapping(camcasp["executables"], "tools.camcasp.executables")
+    for name, executable in executables.items():
+        _validate_executable(executable, f"tools.camcasp.executables.{name}")
+    if "sha256" in camcasp:
+        _validate_sha256(camcasp["sha256"], "tools.camcasp.sha256")
+
+    orient = _require_fields(
+        tools["orient"],
+        ("version", "commit", "executable"),
+        "tools.orient",
+        optional=("sha256",),
+    )
+    _require_string(orient["version"], "tools.orient.version")
+    _validate_commit(orient["commit"], "tools.orient.commit")
+    _validate_executable(orient["executable"], "tools.orient.executable")
+    if "sha256" in orient:
+        _validate_sha256(orient["sha256"], "tools.orient.sha256")
+
+    psi4 = _require_fields(
+        tools["psi4"],
+        ("version", "commit", "dirty", "executable"),
+        "tools.psi4",
+        optional=("sha256",),
+    )
+    _require_string(psi4["version"], "tools.psi4.version")
+    _validate_commit(psi4["commit"], "tools.psi4.commit")
+    _require_bool(psi4["dirty"], "tools.psi4.dirty")
+    _validate_executable(psi4["executable"], "tools.psi4.executable")
+    if "sha256" in psi4:
+        _validate_sha256(psi4["sha256"], "tools.psi4.sha256")
+
+
+def _validate_protocol(value: object) -> None:
+    protocol = _require_fields(
+        value,
+        ("geometry", "electronic_structure", "frequency_grid", "model"),
+        "scientific_protocol",
+    )
+    geometry = _require_fields(
+        protocol["geometry"],
+        ("units", "charge", "multiplicity", "atom_order", "atoms", "orientation"),
+        "scientific_protocol.geometry",
+    )
+    if geometry["units"] != "bohr":
+        raise ReferenceFormatError("scientific_protocol.geometry.units must be 'bohr'")
+    if type(geometry["charge"]) is not int or geometry["charge"] != 0:
+        raise ReferenceFormatError("scientific_protocol.geometry.charge must be 0")
+    if type(geometry["multiplicity"]) is not int or geometry["multiplicity"] != 1:
+        raise ReferenceFormatError("scientific_protocol.geometry.multiplicity must be 1")
+    if geometry["atom_order"] != ["O", "H1", "H2"]:
+        raise ReferenceFormatError(
+            "scientific_protocol.geometry.atom_order must be O,H1,H2"
+        )
+    atoms = _as_sequence(
+        geometry["atoms"], "scientific_protocol.geometry.atoms"
+    )
+    if len(atoms) != len(CANONICAL_ATOMS):
+        raise ReferenceFormatError(
+            "scientific_protocol.geometry.atoms must be the canonical O,H1,H2 geometry"
+        )
+    for index, expected_atom in enumerate(CANONICAL_ATOMS):
+        atom_context = f"scientific_protocol.geometry.atoms[{index}]"
+        atom = _require_fields(atoms[index], ("label", "element", "xyz"), atom_context)
+        if atom["label"] != expected_atom["label"] or atom["element"] != expected_atom["element"]:
+            raise ReferenceFormatError(
+                "scientific_protocol.geometry.atoms must be the canonical O,H1,H2 geometry"
+            )
+        coordinates = _as_sequence(atom["xyz"], f"{atom_context}.xyz")
+        if len(coordinates) != 3:
+            raise ReferenceFormatError(f"{atom_context}.xyz must contain three coordinates")
+        observed_xyz = [
+            _require_number(coordinate, f"{atom_context}.xyz[{axis}]")
+            for axis, coordinate in enumerate(coordinates)
+        ]
+        if observed_xyz != expected_atom["xyz"]:
+            raise ReferenceFormatError(
+                "scientific_protocol.geometry.atoms must be the canonical O,H1,H2 geometry"
+            )
+    if geometry["orientation"] != ["symmetry c1", "no_com", "no_reorient"]:
+        raise ReferenceFormatError(
+            "scientific_protocol.geometry.orientation does not match the approved protocol"
+        )
+
+    _validate_expected_object(
+        protocol["electronic_structure"],
+        EXPECTED_ELECTRONIC_STRUCTURE,
+        "scientific_protocol.electronic_structure",
+    )
+    _validate_expected_object(
+        protocol["frequency_grid"],
+        EXPECTED_FREQUENCY_GRID,
+        "scientific_protocol.frequency_grid",
+    )
+    _validate_expected_object(
+        protocol["model"], EXPECTED_MODEL, "scientific_protocol.model"
+    )
+
+
+def _validate_frequencies(value: object) -> list[float]:
+    frequencies = _require_fields(
+        value,
+        ("units", "values", "squared_source_values"),
+        "frequencies",
+    )
+    if frequencies["units"] != "hartree":
+        raise ReferenceFormatError("frequencies.units must be 'hartree'")
+    values_raw = _as_sequence(frequencies["values"], "frequencies.values")
+    squared_raw = _as_sequence(
+        frequencies["squared_source_values"],
+        "frequencies.squared_source_values",
+    )
+    if len(values_raw) != 11 or len(squared_raw) != 11:
+        raise ReferenceFormatError("frequencies must contain eleven hartree values")
+    values = [
+        _require_number(candidate, f"frequencies.values[{index}]")
+        for index, candidate in enumerate(values_raw)
+    ]
+    if values[0] != 0.0 or any(
+        values[index] >= values[index + 1] for index in range(10)
+    ):
+        raise ReferenceFormatError(
+            "frequencies must be static zero plus ten increasing values"
+        )
+    for index, source_value in enumerate(squared_raw):
+        source_text = _require_string(
+            source_value, f"frequencies.squared_source_values[{index}]"
+        )
+        squared = _float(
+            source_text, f"frequencies.squared_source_values[{index}]"
+        )
+        if index == 0:
+            if squared != 0.0:
+                raise ReferenceFormatError("static squared source frequency must be zero")
+        elif squared >= 0.0:
+            raise ReferenceFormatError("dynamic squared source frequencies must be negative")
+        if not math.isclose(
+            squared,
+            -(values[index] ** 2),
+            rel_tol=1.0e-10,
+            abs_tol=1.0e-14,
+        ):
+            raise ReferenceFormatError(
+                f"frequencies.squared_source_values[{index}] does not match omega"
+            )
+    return values
+
+
+def _validate_polarizabilities(value: object, frequencies: Sequence[float]) -> None:
+    polar = _require_fields(
+        value,
+        ("units", "spherical_frame", "cartesian_frame", "frequency_blocks"),
+        "polarizabilities",
+    )
+    expected_metadata = {
+        "units": "atomic units",
+        "spherical_frame": "atom-local real spherical",
+        "cartesian_frame": "global Cartesian",
+    }
+    for key, expected in expected_metadata.items():
+        if polar[key] != expected:
+            raise ReferenceFormatError(f"polarizabilities.{key} must be {expected!r}")
+
+    blocks = _as_sequence(
+        polar["frequency_blocks"], "polarizabilities.frequency_blocks"
+    )
+    if len(blocks) != 11:
+        raise ReferenceFormatError(
+            "polarizabilities requires eleven frequency_blocks"
+        )
+    for expected_index, block_value in enumerate(blocks):
+        block_context = f"polarizabilities.frequency_blocks[{expected_index}]"
+        block = _require_fields(
+            block_value, ("index", "omega", "atoms"), block_context
+        )
+        if type(block["index"]) is not int or block["index"] != expected_index:
+            raise ReferenceFormatError(
+                "polarizability blocks are not frequency-major"
+            )
+        omega = _require_number(block["omega"], f"{block_context}.omega")
+        if not math.isclose(omega, frequencies[expected_index], abs_tol=1.0e-14):
+            raise ReferenceFormatError(
+                f"{block_context}.omega does not match frequencies.values"
+            )
+        atoms = _as_mapping(block["atoms"], f"{block_context}.atoms")
+        if tuple(atoms) != ACCEPTED_ATOM_LABELS:
+            raise ReferenceFormatError(
+                "polarizability atom order must be O,H1,H2"
+            )
+        for label in ACCEPTED_ATOM_LABELS:
+            atom_context = f"{block_context}.atoms.{label}"
+            atom = _require_fields(
+                atoms[label],
+                (
+                    "spherical",
+                    "local_cartesian",
+                    "local_to_global",
+                    "global_cartesian",
+                ),
+                atom_context,
+            )
+            spherical = _require_fields(
+                atom["spherical"],
+                ("components", "matrix"),
+                f"{atom_context}.spherical",
+            )
+            if spherical["components"] != list(COMPONENTS_L3):
+                raise ReferenceFormatError(
+                    f"{label}: incomplete L3 component ordering"
+                )
+            _validated_matrix(
+                spherical["matrix"], 16, f"{atom_context}.spherical.matrix"
+            )
+            local = _validated_matrix(
+                atom["local_cartesian"], 3, f"{atom_context}.local_cartesian"
+            )
+            rotation = _validated_matrix(
+                atom["local_to_global"], 3, f"{atom_context}.local_to_global"
+            )
+            global_tensor = _validated_matrix(
+                atom["global_cartesian"], 3, f"{atom_context}.global_cartesian"
+            )
+            validate_rotation_matrix(rotation)  # type: ignore[arg-type]
+            _validate_matrix_symmetric(local, f"{atom_context}.local_cartesian")
+            _validate_matrix_symmetric(
+                global_tensor, f"{atom_context}.global_cartesian"
+            )
+            expected_global = _matmul(
+                _matmul(rotation, local), _transpose(rotation)  # type: ignore[arg-type]
+            )
+            for row in range(3):
+                for column in range(3):
+                    if abs(expected_global[row][column] - global_tensor[row][column]) > 1.0e-8:
+                        raise ReferenceFormatError(
+                            f"{atom_context}.global_cartesian is inconsistent with its local frame"
+                        )
+
+
+def _validate_dispersion(value: object) -> None:
+    dispersion = _require_fields(
+        value,
+        ("component", "atom_order", "units", "matrices"),
+        "dispersion",
+    )
+    if dispersion["component"] != "00 00 0":
+        raise ReferenceFormatError("dispersion component must be 00 00 0")
+    if dispersion["atom_order"] != ["O", "H1", "H2"]:
+        raise ReferenceFormatError("dispersion atom order must be O,H1,H2")
+    _validate_expected_object(
+        dispersion["units"], EXPECTED_DISPERSION_UNITS, "dispersion.units"
+    )
+    matrices = _require_fields(
+        dispersion["matrices"], CN_ORDERS, "dispersion.matrices"
+    )
+    for order in CN_ORDERS:
+        matrix = _validated_matrix(matrices[order], 3, f"dispersion.matrices.{order}")
+        _validate_matrix_symmetric(matrix, f"{order} matrix")
+
+
+def validate_reference_document(document: Mapping[str, object]) -> None:
+    root = _require_fields(document, REQUIRED_TOP_LEVEL, "document")
+    _validate_finite_numbers(root, "document")
+    if type(root["schema_version"]) is not int or root["schema_version"] != 1:
+        raise ReferenceFormatError("schema_version must be 1")
+
+    generated_at = root["generated_at_utc"]
+    if not isinstance(generated_at, str) or not UTC_TIMESTAMP_RE.fullmatch(generated_at):
+        raise ReferenceFormatError("generated_at_utc must be an RFC 3339 UTC timestamp")
+    try:
+        datetime.fromisoformat(generated_at[:-1] + "+00:00")
+    except ValueError as exc:
+        raise ReferenceFormatError(
+            "generated_at_utc must be an RFC 3339 UTC timestamp"
+        ) from exc
+
+    generator = _require_fields(
+        root["generator"], ("path", "sha256"), "generator"
+    )
+    _require_string(generator["path"], "generator.path")
+    _validate_sha256(generator["sha256"], "generator.sha256")
+
+    repository = _require_fields(
+        root["repository"], ("commit", "dirty"), "repository"
+    )
+    _validate_commit(repository["commit"], "repository.commit")
+    _require_bool(repository["dirty"], "repository.dirty")
+
+    _validate_tools(root["tools"])
+    _validate_protocol(root["scientific_protocol"])
+    frequencies = _validate_frequencies(root["frequencies"])
+    _validate_polarizabilities(root["polarizabilities"], frequencies)
+    _validate_dispersion(root["dispersion"])
+
+    inputs = _as_mapping(root["inputs"], "inputs")
+    if not inputs:
+        raise ReferenceFormatError("inputs must not be empty")
+    for name, entry in inputs.items():
+        _validate_checksum_entry(entry, f"inputs.{name}", require_path=False)
+
+    sources = _as_mapping(root["sources"], "sources")
+    if not sources:
+        raise ReferenceFormatError("sources must not be empty")
+    for name, entry in sources.items():
+        _validate_checksum_entry(entry, f"sources.{name}", require_path=True)
+
+
+def write_atomic_json(path: Path, document: Mapping[str, object]) -> None:
+    validate_reference_document(document)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+        text=True,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(
+                document,
+                handle,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+                ensure_ascii=False,
+            )
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, path)
+    finally:
+        if os.path.exists(temporary_name):
+            os.unlink(temporary_name)
+
+
+def _python_array(name: str, values: object) -> str:
+    rendered = json.dumps(values, indent=4, allow_nan=False, ensure_ascii=False)
+    return f"{name} = np.array({rendered}, dtype=float)\n"
+
+
+def render_python_literals(document: Mapping[str, object]) -> str:
+    validate_reference_document(document)
+    polar = _as_mapping(document["polarizabilities"], "polarizabilities")
+    blocks = _as_sequence(
+        polar["frequency_blocks"], "polarizabilities.frequency_blocks"
+    )
+    packed = []
+    for block_value in blocks:
+        block = _as_mapping(block_value, "polarizability block")
+        atoms = _as_mapping(block["atoms"], "polarizability atoms")
+        for label in ACCEPTED_ATOM_LABELS:
+            atom = _as_mapping(atoms[label], f"polarizability atom {label}")
+            tensor = _as_sequence(atom["global_cartesian"], "global_cartesian")
+            packed.append(
+                [
+                    tensor[0][0],
+                    tensor[0][1],
+                    tensor[0][2],
+                    tensor[1][1],
+                    tensor[1][2],
+                    tensor[2][2],
+                ]
+            )
+    frequencies = _as_mapping(document["frequencies"], "frequencies")
+    dispersion = _as_mapping(document["dispersion"], "dispersion")
+    matrices = _as_mapping(dispersion["matrices"], "dispersion.matrices")
+    output = [
+        "# Generated by: bash devtools/regenerate-camcasp.sh\n",
+        _python_array(
+            "REFERENCE_FREQUENCIES",
+            [[value] for value in frequencies["values"]],
+        ),
+        _python_array("REFERENCE_STATIC_ATOMIC_POLARIZABILITIES", packed[:3]),
+        _python_array("REFERENCE_DYNAMIC_ATOMIC_POLARIZABILITIES", packed),
+    ]
+    for order in CN_ORDERS:
+        output.append(
+            _python_array(f"REFERENCE_ATOMIC_{order}", matrices[order])
+        )
+    return "\n".join(output)

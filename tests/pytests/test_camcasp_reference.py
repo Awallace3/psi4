@@ -828,3 +828,313 @@ def test_rejects_isotropic_cn_truncated_numeric_row(tmp_path):
         truncated,
         "('O', 'O') 00 00 0 row requires 7 numeric values, found 5",
     )
+
+
+import json
+
+from devtools.camcasp_reference import (  # noqa: E402
+    render_python_literals,
+    validate_reference_document,
+    write_atomic_json,
+)
+
+
+def complete_document():
+    identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    tensor = [[1.0, 0.0, 0.0], [0.0, 1.1, 0.0], [0.0, 0.0, 1.2]]
+    atom = {
+        "spherical": {
+            "components": list(COMPONENTS_L3),
+            "matrix": [
+                [float(row == column) for column in range(16)]
+                for row in range(16)
+            ],
+        },
+        "local_cartesian": tensor,
+        "local_to_global": identity,
+        "global_cartesian": tensor,
+    }
+    frequency_blocks = [
+        {
+            "index": index,
+            "omega": 0.0 if index == 0 else index / 100.0,
+            "atoms": {"O": atom, "H1": atom, "H2": atom},
+        }
+        for index in range(11)
+    ]
+    matrix = [[1.0, 0.5, 0.5], [0.5, 0.2, 0.2], [0.5, 0.2, 0.2]]
+    return {
+        "schema_version": 1,
+        "generated_at_utc": "2026-07-29T12:00:00Z",
+        "generator": {
+            "path": "devtools/regenerate-camcasp.sh",
+            "sha256": "a" * 64,
+        },
+        "repository": {"commit": "b" * 40, "dirty": False},
+        "tools": {
+            "camcasp": {
+                "version": "7.2.2 patch 003",
+                "commit": "b4744425233a61786052832e1db4f109959c1ce9",
+                "executables": {},
+            },
+            "orient": {
+                "version": "5.0.11-ng",
+                "commit": "d8d861098c8f548e2cf230c387c8431d9418650a",
+                "executable": "/opt/orient",
+            },
+            "psi4": {
+                "version": "1.11a1.dev31",
+                "commit": "c" * 40,
+                "dirty": True,
+                "executable": "/opt/psi4",
+            },
+        },
+        "scientific_protocol": {
+            "geometry": {
+                "units": "bohr",
+                "charge": 0,
+                "multiplicity": 1,
+                "atom_order": ["O", "H1", "H2"],
+                "atoms": [
+                    {
+                        "label": label,
+                        "element": "O" if label == "O" else "H",
+                        "xyz": list(CANONICAL_GEOMETRY[label]),
+                    }
+                    for label in ("O", "H1", "H2")
+                ],
+                "orientation": ["symmetry c1", "no_com", "no_reorient"],
+            },
+            "electronic_structure": {
+                "method": "PBE0",
+                "basis": "aug-cc-pVTZ",
+                "camcasp_basis": "aVTZ",
+                "asymptotic_correction": "Psi4 GRAC",
+                "ionization_potential_ev": 12.62063,
+                "homo_hartree": -0.3989,
+                "kernel": "ALDA+CHF",
+                "grid": "Options Tests",
+            },
+            "frequency_grid": {
+                "kind": "Gauss-Legendre",
+                "nonzero_count": 10,
+                "scale_au": 0.5,
+            },
+            "model": {
+                "nonlocal_rank": 4,
+                "localization_method": "LW",
+                "localization_limit": 3,
+                "wsm_limit": 3,
+                "hydrogen_limit": 3,
+                "pfit_weight": 4,
+                "pfit_weight_coefficient": 0.001,
+                "pfit_cutoff": 0.0001,
+            },
+        },
+        "frequencies": {
+            "units": "hartree",
+            "values": [0.0] + [index / 100.0 for index in range(1, 11)],
+            "squared_source_values": ["0.0"]
+            + [f"-{(index / 100.0) ** 2:.8f}" for index in range(1, 11)],
+        },
+        "polarizabilities": {
+            "units": "atomic units",
+            "spherical_frame": "atom-local real spherical",
+            "cartesian_frame": "global Cartesian",
+            "frequency_blocks": frequency_blocks,
+        },
+        "dispersion": {
+            "component": "00 00 0",
+            "atom_order": ["O", "H1", "H2"],
+            "units": {
+                "C6": "hartree * bohr^6",
+                "C8": "hartree * bohr^8",
+                "C10": "hartree * bohr^10",
+                "C12": "hartree * bohr^12",
+            },
+            "matrices": {
+                "C6": matrix,
+                "C8": matrix,
+                "C10": matrix,
+                "C12": matrix,
+            },
+        },
+        "inputs": {
+            "H2O.clt": {"sha256": "d" * 64},
+            "H2O.axes": {"sha256": "e" * 64},
+        },
+        "sources": {
+            "refined_pol": {"path": "/work/refined.pol", "sha256": "f" * 64}
+        },
+    }
+
+
+def test_validate_complete_schema():
+    validate_reference_document(complete_document())
+
+
+def test_validator_rejects_each_required_top_level_field():
+    for key in (
+        "schema_version",
+        "generated_at_utc",
+        "generator",
+        "repository",
+        "tools",
+        "scientific_protocol",
+        "frequencies",
+        "polarizabilities",
+        "dispersion",
+        "inputs",
+        "sources",
+    ):
+        document = complete_document()
+        del document[key]
+        try:
+            validate_reference_document(document)
+        except ReferenceFormatError as exc:
+            assert key in str(exc)
+        else:
+            raise AssertionError(f"missing required field {key} was accepted")
+
+
+def test_atomic_json_round_trip(tmp_path):
+    output = tmp_path / "atomic-polarizabilities.json"
+    document = complete_document()
+    write_atomic_json(output, document)
+    assert json.loads(output.read_text()) == document
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_literal_output_is_deterministic():
+    first = render_python_literals(complete_document())
+    second = render_python_literals(complete_document())
+    assert first == second
+    assert "REFERENCE_FREQUENCIES = np.array([" in first
+    assert "REFERENCE_ATOMIC_C12 = np.array([" in first
+
+
+def _assert_document_rejected(document, expected):
+    try:
+        validate_reference_document(document)
+    except ReferenceFormatError as exc:
+        assert expected in str(exc)
+    else:
+        raise AssertionError(f"invalid document was accepted: {expected}")
+
+
+def test_validator_rejects_nonfinite_numbers_recursively():
+    mutations = (
+        (
+            lambda document: document["scientific_protocol"]["geometry"]["atoms"][
+                0
+            ]["xyz"].__setitem__(0, math.nan),
+            "non-finite",
+        ),
+        (
+            lambda document: document["polarizabilities"]["frequency_blocks"][0][
+                "atoms"
+            ]["O"]["spherical"]["matrix"][0].__setitem__(0, math.inf),
+            "non-finite",
+        ),
+        (
+            lambda document: document["dispersion"]["matrices"]["C12"][
+                0
+            ].__setitem__(0, -math.inf),
+            "non-finite",
+        ),
+    )
+    for mutate, expected in mutations:
+        document = complete_document()
+        mutate(document)
+        _assert_document_rejected(document, expected)
+
+
+def test_validator_rejects_noncanonical_protocol_and_atom_invariants():
+    document = complete_document()
+    document["scientific_protocol"]["frequency_grid"]["scale_au"] = 0.6
+    _assert_document_rejected(document, "frequency_grid.scale_au")
+
+    document = complete_document()
+    document["scientific_protocol"]["geometry"]["atoms"][1]["element"] = "O"
+    _assert_document_rejected(document, "geometry.atoms")
+
+    document = complete_document()
+    atoms = document["polarizabilities"]["frequency_blocks"][0]["atoms"]
+    atoms["H3"] = atoms.pop("H2")
+    _assert_document_rejected(document, "atom order")
+
+
+def test_validator_rejects_incomplete_tensors_and_inconsistent_frames():
+    document = complete_document()
+    document["polarizabilities"]["frequency_blocks"][0]["atoms"]["O"]["spherical"]["matrix"].pop()
+    _assert_document_rejected(document, "16x16")
+
+    document = complete_document()
+    document["polarizabilities"]["frequency_blocks"][0]["atoms"]["H1"]["local_to_global"][0][0] = -1.0
+    _assert_document_rejected(document, "left-handed")
+
+    document = complete_document()
+    document["polarizabilities"]["frequency_blocks"][0]["atoms"]["O"]["global_cartesian"][0][1] = 0.1
+    _assert_document_rejected(document, "not symmetric")
+
+
+def test_validator_rejects_frequency_and_dispersion_invariants():
+    document = complete_document()
+    document["polarizabilities"]["frequency_blocks"][4]["omega"] = 0.041
+    _assert_document_rejected(document, "omega")
+
+    document = complete_document()
+    del document["dispersion"]["matrices"]["C12"]
+    _assert_document_rejected(document, "C12")
+
+    document = complete_document()
+    document["dispersion"]["matrices"]["C8"][0][1] = 9.0
+    _assert_document_rejected(document, "not symmetric")
+
+
+def test_validator_rejects_invalid_provenance_checksums():
+    document = complete_document()
+    document["generator"]["sha256"] = "not-a-digest"
+    _assert_document_rejected(document, "generator.sha256")
+
+    document = complete_document()
+    document["sources"]["refined_pol"]["sha256"] = "F" * 64
+    _assert_document_rejected(document, "sources.refined_pol.sha256")
+
+    document = complete_document()
+    document["tools"]["orient"]["sha256"] = "short"
+    _assert_document_rejected(document, "tools.orient.sha256")
+
+
+def test_atomic_json_validation_failure_preserves_existing_file(tmp_path):
+    output = tmp_path / "atomic-polarizabilities.json"
+    output.write_text("stale reference\n")
+    document = complete_document()
+    document["schema_version"] = 2
+    _assert_document_rejected(document, "schema_version")
+    try:
+        write_atomic_json(output, document)
+    except ReferenceFormatError:
+        pass
+    else:
+        raise AssertionError("invalid document was written")
+    assert output.read_text() == "stale reference\n"
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_atomic_json_replace_failure_preserves_existing_file(tmp_path, monkeypatch):
+    output = tmp_path / "atomic-polarizabilities.json"
+    output.write_text("stale reference\n")
+
+    def fail_replace(source, destination):
+        raise OSError("replacement failed")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    try:
+        write_atomic_json(output, complete_document())
+    except OSError as exc:
+        assert "replacement failed" in str(exc)
+    else:
+        raise AssertionError("replacement failure did not propagate")
+    assert output.read_text() == "stale reference\n"
+    assert not list(tmp_path.glob("*.tmp"))
