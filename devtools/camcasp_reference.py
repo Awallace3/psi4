@@ -100,6 +100,10 @@ def _determinant(matrix: Matrix3) -> float:
 
 
 def validate_rotation_matrix(rotation: Matrix3, tolerance: float = 1.0e-10) -> None:
+    for row in rotation:
+        for value in row:
+            if not math.isfinite(value):
+                raise ReferenceFormatError("local frame contains non-finite value")
     product = _matmul(rotation, _transpose(rotation))
     for row in range(3):
         for column in range(3):
@@ -127,6 +131,8 @@ def build_local_frames(
         r"^\s*(\S+)\s+z\s+global\s+Z\s+x\s+from\s+(\S+)\s+to\s+(\S+)\s*$",
         re.IGNORECASE,
     )
+    required_sites = ("H1", "H2")
+    parsed_sites: set[str] = set()
     for line in axes_text.splitlines():
         match = rule.match(line)
         if not match:
@@ -134,6 +140,12 @@ def build_local_frames(
         site, origin, target = match.groups()
         if site not in geometry or origin not in geometry or target not in geometry:
             raise ReferenceFormatError(f"unknown site in axis rule: {line.strip()}")
+        if site not in required_sites:
+            raise ReferenceFormatError(
+                f"axis rule must define H1 or H2, found {site}"
+            )
+        if site in parsed_sites:
+            raise ReferenceFormatError(f"duplicate axis rule for {site}")
         local_z = (0.0, 0.0, 1.0)
         direction = tuple(
             geometry[target][index] - geometry[origin][index]
@@ -148,9 +160,13 @@ def build_local_frames(
         rotation = tuple(zip(local_x, local_y, local_z))  # type: ignore[assignment]
         validate_rotation_matrix(rotation)
         frames[site] = rotation
+        parsed_sites.add(site)
 
-    if set(frames) != set(geometry):
-        raise ReferenceFormatError("frame labels do not match geometry labels")
+    missing_sites = [site for site in required_sites if site not in parsed_sites]
+    if missing_sites:
+        raise ReferenceFormatError(
+            f"missing axis rules for {', '.join(missing_sites)}"
+        )
     return frames
 
 
@@ -181,6 +197,12 @@ def dipole_local_cartesian(model: SphericalModel) -> Matrix3:
         )
         for left in CARTESIAN_TO_SPHERICAL_DIPOLE
     )
+    for row in result:
+        for value in row:
+            if not math.isfinite(value):
+                raise ReferenceFormatError(
+                    "local Cartesian dipole tensor contains non-finite value"
+                )
     _validate_symmetric(result, "local Cartesian dipole tensor")
     return result  # type: ignore[return-value]
 

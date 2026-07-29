@@ -542,3 +542,94 @@ def test_dipole_mapping_and_hydrogen_c2_signs():
     assert h1[0][0] == h2[0][0]
     assert h1[1][1] == h2[1][1]
     assert h1[2][2] == h2[2][2]
+
+
+def _dipole_model_with_diagonal_value(value):
+    matrix = [[0.0] * 16 for _ in range(16)]
+    index = COMPONENTS_L3.index("11c")
+    matrix[index][index] = value
+    return type("Model", (), {
+        "components": COMPONENTS_L3,
+        "matrix": tuple(tuple(row) for row in matrix),
+    })()
+
+
+def test_rejects_nan_local_dipole_value():
+    try:
+        dipole_local_cartesian(_dipole_model_with_diagonal_value(math.nan))
+    except ReferenceFormatError as exc:
+        assert "non-finite" in str(exc)
+    else:
+        raise AssertionError("NaN local dipole value was accepted")
+
+
+def test_rejects_infinite_local_dipole_value():
+    try:
+        dipole_local_cartesian(_dipole_model_with_diagonal_value(math.inf))
+    except ReferenceFormatError as exc:
+        assert "non-finite" in str(exc)
+    else:
+        raise AssertionError("infinite local dipole value was accepted")
+
+
+def test_rejects_nan_frame_entry():
+    try:
+        validate_rotation_matrix(
+            ((math.nan, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        )
+    except ReferenceFormatError as exc:
+        assert "non-finite" in str(exc)
+    else:
+        raise AssertionError("NaN frame entry was accepted")
+
+
+def test_rejects_infinite_frame_entry():
+    try:
+        validate_rotation_matrix(
+            ((math.inf, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        )
+    except ReferenceFormatError as exc:
+        assert "non-finite" in str(exc)
+    else:
+        raise AssertionError("infinite frame entry was accepted")
+
+
+def test_rejects_missing_hydrogen_axis_rule():
+    axes = CANONICAL_AXES.replace("  H1  z global Z x from H2 to H1\n", "")
+    try:
+        build_local_frames(CANONICAL_GEOMETRY, axes)
+    except ReferenceFormatError as exc:
+        assert "missing axis rules for H1" in str(exc)
+    else:
+        raise AssertionError("missing H1 axis rule was accepted")
+
+
+def test_rejects_malformed_hydrogen_axis_rule():
+    axes = CANONICAL_AXES.replace("H1  z global Z", "H1  z global Y")
+    try:
+        build_local_frames(CANONICAL_GEOMETRY, axes)
+    except ReferenceFormatError as exc:
+        assert "missing axis rules for H1" in str(exc)
+    else:
+        raise AssertionError("malformed H1 axis rule was accepted")
+
+
+def test_rejects_duplicate_hydrogen_axis_rule():
+    rule = "  H1  z global Z x from H2 to H1\n"
+    axes = CANONICAL_AXES.replace(rule, rule + rule)
+    try:
+        build_local_frames(CANONICAL_GEOMETRY, axes)
+    except ReferenceFormatError as exc:
+        assert "duplicate axis rule for H1" in str(exc)
+    else:
+        raise AssertionError("duplicate H1 axis rule was accepted")
+
+
+def test_rejects_zero_projection_hydrogen_axis_rule():
+    axes = CANONICAL_AXES.replace("from H2 to H1", "from H1 to H1")
+    try:
+        build_local_frames(CANONICAL_GEOMETRY, axes)
+    except ReferenceFormatError as exc:
+        assert "axis direction has zero length" in str(exc)
+    else:
+        raise AssertionError("zero-projection H1 axis rule was accepted")
