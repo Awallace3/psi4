@@ -329,6 +329,96 @@ def parse_isotropic_cn(
     return matrices
 
 
+def _require_text(text: str, pattern: str, context: str) -> None:
+    if re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE) is None:
+        raise ReferenceFormatError(
+            f"{context}: missing required pattern {pattern!r}"
+        )
+
+
+def validate_generated_protocol(
+    clt_text: str,
+    cks_text: str,
+    cluster_log_text: str,
+    psi4_input_text: str,
+) -> None:
+    for pattern in (
+        r"\bBasis\s+aVTZ\b",
+        r"\bSCFcode\s+psi4\b",
+        r"\bMethod\s+DFT\b",
+        r"\bFunctional\s+PBE0\b",
+        r"\bKernel\s+ALDA\+CHF\b",
+        r"\bOptions\s+Tests\b",
+        r"\bLocalization\b",
+    ):
+        _require_text(clt_text, pattern, "H2O.clt")
+    for pattern in (
+        r"Type\s+Gauss-Legendre",
+        r"Beta\s+0\.5\b",
+        r"Quad\s+10\b",
+        r"Rank\s+4\b",
+        r"Print\s+pols\s+for\s+Orient",
+    ):
+        _require_text(cks_text, pattern, "H2O.cks")
+    for pattern in (
+        r"AC options:\s*type\s*=\s*GRAC",
+        r"functional\s+PBE0",
+        r"kernel\s*=\s*ALDA\+CHF",
+    ):
+        _require_text(cluster_log_text, pattern, "cluster output")
+    for pattern in (r"symmetry\s+c1", r"\bno_com\b", r"\bno_reorient\b"):
+        _require_text(psi4_input_text, pattern, "generated Psi4 input")
+
+
+def validate_stage_artifacts(work_dir: Path, job: str) -> dict[str, Path]:
+    work_dir = Path(work_dir)
+    required: list[Path] = []
+    for index in range(11):
+        required.extend(
+            (
+                work_dir / f"{job}_L3_{index:03d}.out",
+                work_dir / f"{job}_ref_wt4_L3_{index:03d}.out",
+                work_dir / f"{job}_ref_wt4_L3_{index:03d}.pol",
+            )
+        )
+    required.extend(
+        (
+            work_dir / f"{job}_ref_wt4_L3_0f10.pol",
+            work_dir / f"{job}_ref_wt4_L3_casimir.out",
+            work_dir / f"{job}_ref_wt4_L3_C12.pot",
+            work_dir / f"{job}.pdef",
+        )
+    )
+    for path in required:
+        if not path.is_file() or path.stat().st_size == 0:
+            raise ReferenceFormatError(
+                f"missing or empty stage artifact: {path}"
+            )
+
+    cardinalities = (
+        (f"{job}_L3_[0-9][0-9][0-9].out", 11, "ORIENT"),
+        (f"{job}_ref_wt4_L3_[0-9][0-9][0-9].out", 11, "PFIT output"),
+        (f"{job}_ref_wt4_L3_[0-9][0-9][0-9].pol", 11, "PFIT polarizability"),
+    )
+    for pattern, expected, context in cardinalities:
+        observed = list(work_dir.glob(pattern))
+        if len(observed) != expected:
+            raise ReferenceFormatError(
+                f"expected exactly {expected} {context} artifacts, "
+                f"found {len(observed)}"
+            )
+
+    for path in work_dir.glob("*.out"):
+        text = path.read_text(errors="replace")
+        if re.search(
+            r"segmentation fault|fatal error|error stop|pfit_error|orient\.error",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            raise ReferenceFormatError(f"error marker in stage output: {path}")
+    return {path.name: path for path in required}
+
+
 def parse_frequencies(path: Path) -> list[FrequencyPoint]:
     unique: list[tuple[str, float]] = []
     for match in FREQ2_RE.finditer(path.read_text()):
@@ -1043,7 +1133,7 @@ def write_atomic_json(path: Path, document: Mapping[str, object]) -> None:
                 document,
                 handle,
                 indent=2,
-                sort_keys=True,
+                sort_keys=False,
                 allow_nan=False,
                 ensure_ascii=False,
             )
@@ -1054,6 +1144,103 @@ def write_atomic_json(path: Path, document: Mapping[str, object]) -> None:
     finally:
         if os.path.exists(temporary_name):
             os.unlink(temporary_name)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def build_reference_document(
+    *,
+    frequency_path: Path,
+    refined_path: Path,
+    casimir_path: Path,
+    axes_path: Path,
+    metadata: Mapping[str, object],
+) -> dict[str, object]:
+    document = json.loads(json.dumps(metadata, allow_nan=False))
+    frequencies = parse_frequencies(Path(frequency_path))
+    models = parse_refined_polarizabilities(
+        Path(refined_path), ACCEPTED_ATOM_LABELS, limit=3
+    )
+    geometry = {
+        atom["label"]: tuple(atom["xyz"])
+        for atom in CANONICAL_ATOMS
+    }
+    frames = build_local_frames(geometry, Path(axes_path).read_text())
+    cn = parse_isotropic_cn(
+        Path(casimir_path),
+        ACCEPTED_ATOM_LABELS,
+        {"O": "O", "H1": "H", "H2": "H"},
+    )
+
+    frequency_blocks = []
+    for point, block in zip(frequencies, models):
+        atoms = {}
+        for label in ACCEPTED_ATOM_LABELS:
+            spherical = block.atoms[label]
+            local = dipole_local_cartesian(spherical)
+            global_tensor = rotate_tensor(local, frames[label])
+            atoms[label] = {
+                "spherical": {
+                    "components": list(spherical.components),
+                    "matrix": [list(row) for row in spherical.matrix],
+                },
+                "local_cartesian": [list(row) for row in local],
+                "local_to_global": [list(row) for row in frames[label]],
+                "global_cartesian": [list(row) for row in global_tensor],
+            }
+        frequency_blocks.append(
+            {"index": point.index, "omega": point.omega, "atoms": atoms}
+        )
+
+    document["frequencies"] = {
+        "units": "hartree",
+        "values": [point.omega for point in frequencies],
+        "squared_source_values": [
+            point.squared_source_text for point in frequencies
+        ],
+    }
+    polar = _as_mapping(document.get("polarizabilities"), "polarizabilities")
+    document["polarizabilities"] = {
+        **polar,
+        "frequency_blocks": frequency_blocks,
+    }
+    dispersion = _as_mapping(document.get("dispersion"), "dispersion")
+    document["dispersion"] = {
+        **dispersion,
+        "matrices": {
+            order: [list(row) for row in cn[order]] for order in CN_ORDERS
+        },
+    }
+    sources = dict(_as_mapping(document.get("sources"), "sources"))
+    sources.update(
+        {
+            "nonlocal_pol": {
+                "path": str(Path(frequency_path).resolve()),
+                "sha256": _sha256(Path(frequency_path)),
+            },
+            "refined_pol": {
+                "path": str(Path(refined_path).resolve()),
+                "sha256": _sha256(Path(refined_path)),
+            },
+            "casimir_pot": {
+                "path": str(Path(casimir_path).resolve()),
+                "sha256": _sha256(Path(casimir_path)),
+            },
+            "axes": {
+                "path": str(Path(axes_path).resolve()),
+                "sha256": _sha256(Path(axes_path)),
+            },
+        }
+    )
+    document["sources"] = sources
+    validate_reference_document(document)
+    return document
 
 
 def _python_array(name: str, values: object) -> str:
@@ -1101,3 +1288,76 @@ def render_python_literals(document: Mapping[str, object]) -> str:
             _python_array(f"REFERENCE_ATOMIC_{order}", matrices[order])
         )
     return "\n".join(output)
+
+
+def _load_json(path: Path) -> Mapping[str, object]:
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ReferenceFormatError(f"could not load JSON {path}: {exc}") from exc
+    return _as_mapping(value, str(path))
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Validate and build the canonical CamCASP reference document."
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    validate = subparsers.add_parser("validate")
+    validate.add_argument("file", type=Path)
+
+    artifacts = subparsers.add_parser("validate-artifacts")
+    artifacts.add_argument("--work-dir", type=Path, required=True)
+    artifacts.add_argument("--job", required=True)
+
+    attest = subparsers.add_parser("attest-protocol")
+    attest.add_argument("--clt", type=Path, required=True)
+    attest.add_argument("--cks", type=Path, required=True)
+    attest.add_argument("--cluster-log", type=Path, required=True)
+    attest.add_argument("--psi4-input", type=Path, required=True)
+
+    build = subparsers.add_parser("build")
+    build.add_argument("--manifest", type=Path, required=True)
+    build.add_argument("--frequency-file", type=Path, required=True)
+    build.add_argument("--refined-file", type=Path, required=True)
+    build.add_argument("--casimir-file", type=Path, required=True)
+    build.add_argument("--axes-file", type=Path, required=True)
+    build.add_argument("--output", type=Path, required=True)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    arguments = _build_parser().parse_args(argv)
+    try:
+        if arguments.command == "validate":
+            validate_reference_document(_load_json(arguments.file))
+        elif arguments.command == "validate-artifacts":
+            validate_stage_artifacts(arguments.work_dir, arguments.job)
+        elif arguments.command == "attest-protocol":
+            validate_generated_protocol(
+                arguments.clt.read_text(),
+                arguments.cks.read_text(),
+                arguments.cluster_log.read_text(errors="replace"),
+                arguments.psi4_input.read_text(),
+            )
+        elif arguments.command == "build":
+            document = build_reference_document(
+                frequency_path=arguments.frequency_file,
+                refined_path=arguments.refined_file,
+                casimir_path=arguments.casimir_file,
+                axes_path=arguments.axes_file,
+                metadata=_load_json(arguments.manifest),
+            )
+            write_atomic_json(arguments.output, document)
+            print(render_python_literals(document), end="")
+        else:  # pragma: no cover - argparse enforces the command set
+            raise AssertionError(arguments.command)
+    except (OSError, ReferenceFormatError) as exc:
+        print(f"camcasp-reference: {exc}", file=os.sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

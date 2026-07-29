@@ -378,7 +378,7 @@ def make_l3_refined_text():
             blocks.append(f"{label} {label}")
             for row in range(16):
                 values = [
-                    frequency_index + atom_index + row / 100.0 + column / 10000.0
+                    frequency_index + atom_index + (row + column) / 100.0
                     for column in range(16)
                 ]
                 blocks.append(" ".join(f"{value:.8f}" for value in values))
@@ -1253,3 +1253,326 @@ def test_atomic_json_replace_failure_preserves_existing_file(tmp_path, monkeypat
         raise AssertionError("replacement failure did not propagate")
     assert output.read_text() == "stale reference\n"
     assert not list(tmp_path.glob("*.tmp"))
+
+
+from devtools.camcasp_reference import (  # noqa: E402
+    build_reference_document,
+    validate_generated_protocol,
+    validate_stage_artifacts,
+)
+
+
+def test_generated_protocol_requires_explicit_canonical_settings():
+    clt = """\
+Run-type properties
+  Basis aVTZ
+  SCFcode psi4
+  Method DFT
+  Functional PBE0
+  Kernel ALDA+CHF
+  Options Tests
+  Localization
+End
+"""
+    cks = """\
+SET QUAD
+  Type Gauss-Legendre
+  Beta 0.5
+END
+BEGIN Polarizability
+  Quad 10
+  Rank 4
+  Print pols for Orient
+END
+"""
+    cluster_log = "AC options: type = GRAC\nfunctional PBE0\nkernel = ALDA+CHF\n"
+    psi4_input = "symmetry c1\nno_com\nno_reorient\n"
+    validate_generated_protocol(clt, cks, cluster_log, psi4_input)
+
+
+def populate_stage_artifacts(work, job="H2O"):
+    for index in range(11):
+        for name in (
+            f"{job}_L3_{index:03d}.out",
+            f"{job}_ref_wt4_L3_{index:03d}.out",
+            f"{job}_ref_wt4_L3_{index:03d}.pol",
+        ):
+            (work / name).write_text("Finished\n")
+    (work / f"{job}_ref_wt4_L3_0f10.pol").write_text("complete\n")
+    (work / f"{job}_ref_wt4_L3_casimir.out").write_text(
+        "Dispersion coefficients\n"
+    )
+    (work / f"{job}_ref_wt4_L3_C12.pot").write_text("C12\n")
+    (work / f"{job}.pdef").write_text("Polarizabilities\nEnd\n")
+
+
+def test_stage_validation_rejects_missing_orient_block(tmp_path):
+    populate_stage_artifacts(tmp_path)
+    (tmp_path / "H2O_L3_007.out").unlink()
+    try:
+        validate_stage_artifacts(tmp_path, "H2O")
+    except ReferenceFormatError as exc:
+        assert "H2O_L3_007.out" in str(exc)
+    else:
+        raise AssertionError("missing ORIENT block was accepted")
+
+
+def test_stage_validation_rejects_missing_pfit_block(tmp_path):
+    populate_stage_artifacts(tmp_path)
+    (tmp_path / "H2O_ref_wt4_L3_010.pol").unlink()
+    try:
+        validate_stage_artifacts(tmp_path, "H2O")
+    except ReferenceFormatError as exc:
+        assert "H2O_ref_wt4_L3_010.pol" in str(exc)
+    else:
+        raise AssertionError("missing PFIT block was accepted")
+
+
+def test_stage_validation_rejects_missing_c12(tmp_path):
+    populate_stage_artifacts(tmp_path)
+    (tmp_path / "H2O_ref_wt4_L3_C12.pot").unlink()
+    try:
+        validate_stage_artifacts(tmp_path, "H2O")
+    except ReferenceFormatError as exc:
+        assert "C12" in str(exc)
+    else:
+        raise AssertionError("missing C12 output was accepted")
+
+
+def make_canonical_nl4_frequency_text():
+    lines = []
+    for value in APPROVED_SQUARED_SOURCE_VALUES:
+        lines.append(
+            "POL SITE-LABELS O O SITE-INDICES 1 1 RANK 0 : 4 BY 0 : 4 "
+            f"FREQ2 {value} CARTSPHER S"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def test_builder_combines_all_required_properties(tmp_path):
+    nl4 = tmp_path / "NL4_fmtB.pol"
+    refined = tmp_path / "H2O_ref_wt4_L3_0f10.pol"
+    pot = tmp_path / "H2O_ref_wt4_L3_C12.pot"
+    axes = tmp_path / "H2O.axes"
+    nl4.write_text(make_canonical_nl4_frequency_text())
+    refined.write_text(make_l3_refined_text())
+    pot.write_text(CASIMIR_C12)
+    axes.write_text(CANONICAL_AXES)
+
+    metadata = complete_document()
+    document = build_reference_document(
+        frequency_path=nl4,
+        refined_path=refined,
+        casimir_path=pot,
+        axes_path=axes,
+        metadata=metadata,
+    )
+    validate_reference_document(document)
+    assert len(document["polarizabilities"]["frequency_blocks"]) == 11
+    assert tuple(document["dispersion"]["matrices"]) == (
+        "C6", "C8", "C10", "C12"
+    )
+
+
+def _write_executable(path, text):
+    path.write_text(text)
+    path.chmod(0o755)
+
+
+def test_dependency_free_stubbed_pipeline_requires_approval_before_json(tmp_path):
+    reference = tmp_path / "reference"
+    camcasp = tmp_path / "camcasp-bin"
+    bin_dir = camcasp / "bin"
+    bin_dir.mkdir(parents=True)
+    calls = tmp_path / "calls.log"
+
+    psi4 = tmp_path / "psi4"
+    orient = tmp_path / "orient"
+    _write_executable(
+        psi4,
+        "#!/usr/bin/env bash\n"
+        "echo psi4 >>\"$STUB_CALLS\"\n"
+        "echo 'stub Psi4 1.0'\n",
+    )
+    for name in ("orient", "pfit", "casimir"):
+        executable = orient if name == "orient" else bin_dir / name
+        _write_executable(
+            executable,
+            f"#!/usr/bin/env bash\necho {name} >>\"$STUB_CALLS\"\n",
+        )
+    for name in ("camcasp", "cluster", "process"):
+        _write_executable(
+            bin_dir / name,
+            f"#!/usr/bin/env bash\necho {name} >>\"$STUB_CALLS\"\n",
+        )
+
+    runcamcasp = bin_dir / "runcamcasp.py"
+    _write_executable(
+        runcamcasp,
+        """#!/usr/bin/env bash
+set -euo pipefail
+echo camcasp >>"$STUB_CALLS"
+"$PSI4_EXE" --stub-stage >/dev/null
+job_dir=""
+while (( $# )); do
+    if [[ "$1" == "--directory" ]]; then job_dir="$2"; shift 2; else shift; fi
+done
+mkdir -p "$job_dir/OUT"
+printf 'generated\n' >"$job_dir/H2O.ornt"
+printf 'generated\n' >"$job_dir/H2O.prss"
+printf 'generated\n' >"$job_dir/H2O_casimir.prss"
+printf 'generated\n' >"$job_dir/H2O.sites"
+cat >"$job_dir/H2O.cks" <<'EOF'
+SET QUAD
+ Type Gauss-Legendre
+ Beta 0.5
+END
+BEGIN Polarizability
+ Quad 10
+ Rank 4
+ Print pols for Orient
+END
+EOF
+cat >"$job_dir/H2O.clt.clout" <<'EOF'
+AC options: type = GRAC
+functional PBE0
+kernel = ALDA+CHF
+EOF
+cat >"$job_dir/H2O_A.in" <<'EOF'
+symmetry c1
+no_com
+no_reorient
+EOF
+cat >"$job_dir/OUT/H2O_NL4_fmtB.pol" <<'EOF'
+"""
+        + make_canonical_nl4_frequency_text()
+        + """EOF
+printf 'point to point\n' >"$job_dir/OUT/H2O.p2p"
+""",
+    )
+
+    localize = bin_dir / "localize.py"
+    _write_executable(
+        localize,
+        """#!/usr/bin/env bash
+set -euo pipefail
+orient </dev/null
+pfit </dev/null
+casimir </dev/null
+for index in $(seq -w 0 10); do
+    printf 'Finished\n' >"H2O_L3_0${index}.out"
+    printf 'Finished\n' >"H2O_ref_wt4_L3_0${index}.out"
+    printf 'Finished\n' >"H2O_ref_wt4_L3_0${index}.pol"
+done
+cat >H2O.pdef <<'EOF'
+Polarizabilities
+  O O 10 10 = O_10_10_A
+  H1 H1 10 10 = H1_10_10_A
+  H2 H2 COPY H1 H1
+End
+EOF
+cat >H2O_ref_wt4_L3_0f10.pol <<'EOF'
+"""
+        + make_l3_refined_text()
+        + """EOF
+cat >H2O_ref_wt4_L3_casimir.out <<'EOF'
+Dispersion coefficients
+EOF
+cat >H2O_ref_wt4_L3_C12.pot <<'EOF'
+"""
+        + CASIMIR_C12
+        + """EOF
+""",
+    )
+    (camcasp / "VERSION").write_text("CamCASP VERSION 7.2.2 patch 003\n")
+    subprocess.run(["git", "init", "-q", str(camcasp)], check=True)
+    subprocess.run(
+        ["git", "-C", str(camcasp), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(camcasp), "config", "user.name", "Test"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(camcasp), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(camcasp), "commit", "-qm", "stub tools"],
+        check=True,
+    )
+
+    command = f'''source "{SCRIPT}"
+REFERENCE_ROOT="$1"
+CAMCASP="$2"
+PSI4_EXE="$3"
+ORIENT_EXE="$4"
+ORIENT_REF=d8d861098c8f548e2cf230c387c8431d9418650a
+PATH="$(dirname "$ORIENT_EXE"):$CAMCASP/bin:$PATH"
+export PSI4_EXE STUB_CALLS="$5"
+prepare_layout
+export SCRATCH="$REFERENCE_ROOT/scratch/camcasp"
+write_inputs
+mkdir -p "$REFERENCE_ROOT/logs"
+"$PSI4_EXE" --version >"$REFERENCE_ROOT/logs/psi4-version.log"
+run_camcasp
+attest_generated_protocol
+run_localize
+set +e
+require_reviewed_pdef
+review_rc=$?
+set -e
+[[ "$review_rc" -eq 78 ]]
+[[ ! -e "$REFERENCE_ROOT/atomic-polarizabilities.json" ]]
+export CAMCASP_PDEF_SHA256="$(awk '{{print $1}}' "$REFERENCE_ROOT/work/H2O/H2O.pdef.sha256")"
+require_reviewed_pdef
+write_manifest
+build_reference_json
+'''
+    result = subprocess.run(
+        [
+            "bash", "-c", command, "stub-pipeline", str(reference),
+            str(camcasp), str(psi4), str(orient), str(calls),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    document = json.loads(
+        (reference / "atomic-polarizabilities.json").read_text()
+    )
+    validate_reference_document(document)
+    assert calls.read_text().splitlines() == [
+        "psi4", "camcasp", "psi4", "orient", "pfit", "casimir"
+    ]
+    assert (reference / "logs" / "camcasp.log.sha256").is_file()
+    assert (reference / "logs" / "localize-refine-dispersion.log.sha256").is_file()
+    assert (reference / "atomic-polarizabilities.json.sha256").is_file()
+    assert set(document["tools"]["camcasp"]["executables"]) == {
+        "camcasp", "cluster", "process", "pfit", "casimir"
+    }
+
+
+def test_install_pfit_preserves_compressed_archive(tmp_path):
+    camcasp = tmp_path / "camcasp-bin"
+    archive_dir = camcasp / "x86-64" / "gfortran"
+    archive_dir.mkdir(parents=True)
+    (camcasp / "bin").mkdir()
+    archive = archive_dir / "pfit.gz"
+    payload = b"#!/usr/bin/env bash\necho pfit\n"
+    with gzip.open(archive, "wb") as handle:
+        handle.write(payload)
+    result = subprocess.run(
+        [
+            "bash", "-c",
+            f'source "{SCRIPT}"; CAMCASP="$1"; install_camcasp_program pfit',
+            "pfit-install", str(camcasp),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert archive.read_bytes().startswith(b"\x1f\x8b")
+    assert (archive_dir / "exe" / "pfit").read_bytes() == payload

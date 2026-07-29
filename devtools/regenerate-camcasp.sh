@@ -96,6 +96,20 @@ require_executable() {
         fail "$name is not executable: $path"
 }
 
+parse_arguments() {
+    CURRENT_STAGE="arguments"
+    MODE="full"
+    if (( $# > 1 )); then
+        fail "expected at most one argument"
+        return
+    fi
+    case "${1:-}" in
+        "") ;;
+        --preflight-only) MODE="preflight" ;;
+        *) fail "unknown argument: $1" ;;
+    esac
+}
+
 preflight() {
     CURRENT_STAGE="preflight"
     PSI4_EXE="${PSI4_EXE:-$REPO_ROOT/build_camcasp/stage/bin/psi4}"
@@ -259,6 +273,347 @@ EOF
         "$wrapper" --version
 }
 
+prepare_layout() {
+    CURRENT_STAGE="layout"
+    require_safe_generated_path "$REFERENCE_ROOT"
+    mkdir -p \
+        "$REFERENCE_ROOT/inputs" \
+        "$REFERENCE_ROOT/work" \
+        "$REFERENCE_ROOT/scratch/camcasp" \
+        "$REFERENCE_ROOT/scratch/psi4" \
+        "$REFERENCE_ROOT/logs" \
+        "$REFERENCE_ROOT/tools"
+}
+
+export_reference_environment() {
+    CURRENT_STAGE="environment"
+    export CAMCASP
+    export ARCH=x86-64
+    export PATH="$ORIENT_BIN_DIR:$CAMCASP/bin:$PATH"
+    export PSIPATH="$CAMCASP/basis/psi4:$CAMCASP/basis/psi4/for-psi4-lib"
+    export SCRATCH="$REFERENCE_ROOT/scratch/camcasp"
+    export PSI_SCRATCH="$REFERENCE_ROOT/scratch/psi4"
+    mkdir -p "$SCRATCH" "$PSI_SCRATCH"
+}
+
+write_inputs() {
+    CURRENT_STAGE="inputs"
+    cat >"$REFERENCE_ROOT/inputs/H2O.clt" <<'EOF'
+! Canonical CamCASP/Psi4 H2O atomic-polarizability reference.
+Global
+  Units Bohr Degrees
+  Overwrite Yes
+End
+
+Molecule H2O
+  I.P.  12.62063 eV
+  HOMO -0.3989
+  O   8.0    0.0000000000    0.0000000000    0.0000000000  Type O
+  H1  1.0   -1.4536519600    0.0000000000   -1.1216873200  Type H
+  H2  1.0    1.4536519600    0.0000000000   -1.1216873200  Type H
+End
+
+Run-type properties
+  Molecule H2O
+  Basis aVTZ
+  SCFcode psi4
+  Method DFT
+  Functional PBE0
+  Kernel ALDA+CHF
+  Options Tests
+  Localization
+  Orient file
+  Process file
+  Sites file
+End
+
+Finish
+EOF
+
+    cat >"$REFERENCE_ROOT/inputs/H2O.axes" <<'EOF'
+Axes
+  H1  z global Z x from H2 to H1
+  H2  z global Z x from H1 to H2
+End
+EOF
+    write_sha256_record "$REFERENCE_ROOT/inputs/H2O.clt" \
+        "$REFERENCE_ROOT/inputs/H2O.clt.sha256" H2O.clt
+    write_sha256_record "$REFERENCE_ROOT/inputs/H2O.axes" \
+        "$REFERENCE_ROOT/inputs/H2O.axes.sha256" H2O.axes
+}
+
+declare -ag NL4_FILES=()
+declare -ag P2P_FILES=()
+declare -ag PSI4_INPUT_FILES=()
+
+run_camcasp() {
+    CURRENT_STAGE="camcasp"
+    local job_dir="$REFERENCE_ROOT/work/H2O"
+    require_safe_generated_path "$job_dir"
+    rm -rf "$job_dir"
+    run_logged camcasp "$REFERENCE_ROOT/logs/camcasp.log" \
+        "$CAMCASP/bin/runcamcasp.py" H2O \
+        --clt "$REFERENCE_ROOT/inputs/H2O.clt" \
+        --directory "$job_dir" \
+        --ifexists delete \
+        --scfcode psi4 \
+        --queue none \
+        --scratch "$SCRATCH" \
+        --cores "${CAMCASP_REFERENCE_CORES:-1}" \
+        --debug
+    cp "$REFERENCE_ROOT/inputs/H2O.axes" "$job_dir/H2O.axes"
+
+    local generated
+    for generated in H2O.cks H2O.clt.clout H2O.ornt H2O.prss \
+        H2O_casimir.prss H2O.sites; do
+        [[ -s "$job_dir/$generated" ]] || fail "missing generated $generated"
+    done
+
+    mapfile -t NL4_FILES < <(
+        find "$job_dir/OUT" -maxdepth 1 -type f -name '*NL4*pol' -print | sort
+    )
+    mapfile -t P2P_FILES < <(
+        find "$job_dir/OUT" -maxdepth 1 -type f -name '*.p2p' -print | sort
+    )
+    mapfile -t PSI4_INPUT_FILES < <(
+        find "$job_dir" -maxdepth 2 -type f \
+            \( -name 'H2O_A.in' -o -name 'H2O_A.dat' \) -print | sort
+    )
+    (( ${#NL4_FILES[@]} == 1 )) ||
+        fail "expected exactly one NL4 polarizability file, found ${#NL4_FILES[@]}"
+    (( ${#P2P_FILES[@]} == 1 )) ||
+        fail "expected exactly one p2p file, found ${#P2P_FILES[@]}"
+    (( ${#PSI4_INPUT_FILES[@]} == 1 )) ||
+        fail "expected exactly one generated Psi4 input, found ${#PSI4_INPUT_FILES[@]}"
+}
+
+attest_generated_protocol() {
+    CURRENT_STAGE="attest-protocol"
+    local job_dir="$REFERENCE_ROOT/work/H2O"
+    (( ${#PSI4_INPUT_FILES[@]} == 1 )) ||
+        fail "generated Psi4 input cardinality was not established"
+    run_logged attest-protocol "$REFERENCE_ROOT/logs/attest-protocol.log" \
+        python -P "$REPO_ROOT/devtools/camcasp_reference.py" attest-protocol \
+        --clt "$REFERENCE_ROOT/inputs/H2O.clt" \
+        --cks "$job_dir/H2O.cks" \
+        --cluster-log "$job_dir/H2O.clt.clout" \
+        --psi4-input "${PSI4_INPUT_FILES[0]}"
+}
+
+run_localize() {
+    CURRENT_STAGE="localize-refine-dispersion"
+    local job_dir="$REFERENCE_ROOT/work/H2O"
+    (( ${#NL4_FILES[@]} == 1 )) || fail "NL4 artifact cardinality is not one"
+    (
+        cd "$job_dir"
+        run_logged localize-refine-dispersion \
+            "$REFERENCE_ROOT/logs/localize-refine-dispersion.log" \
+            "$CAMCASP/bin/localize.py" H2O \
+                --axes H2O.axes \
+                --polfile "${NL4_FILES[0]}" \
+                --format NEW \
+                --limit "$LOCALIZATION_LIMIT" \
+                --wsmlimit "$WSM_LIMIT" \
+                --hlimit "$HYDROGEN_LIMIT" \
+                --loc LW \
+                --weight "$PFIT_WEIGHT" \
+                --weightcoeff "$PFIT_WEIGHT_COEFF" \
+                --cutoff "$PFIT_CUTOFF" \
+                --force loc refine disp \
+                --debug
+    )
+    run_logged validate-artifacts "$REFERENCE_ROOT/logs/validate-artifacts.log" \
+        python -P "$REPO_ROOT/devtools/camcasp_reference.py" \
+        validate-artifacts --work-dir "$job_dir" --job H2O
+
+    local artifact
+    while IFS= read -r artifact; do
+        write_sha256_record "$artifact" "$artifact.sha256" "$(basename "$artifact")"
+    done < <(
+        find "$job_dir" -maxdepth 1 -type f \
+            \( -name 'H2O_L3_???.out' \
+            -o -name 'H2O_ref_wt4_L3_???.out' \
+            -o -name 'H2O_ref_wt4_L3_???.pol' \
+            -o -name 'H2O_ref_wt4_L3_0f10.pol' \
+            -o -name 'H2O_ref_wt4_L3_casimir.out' \
+            -o -name 'H2O_ref_wt4_L3_C12.pot' \
+            -o -name 'H2O.pdef' \) -print | sort
+    )
+}
+
+validate_hydrogen_model() {
+    local pdef="$1"
+    grep -Eiq '^\s*H1\s+H1\s+' "$pdef" ||
+        fail "generated model has no H1 parameter definitions: $pdef"
+    grep -Eiq '^\s*H2\s+H2\s+COPY\s+H1\s+H1\s*$' "$pdef" ||
+        fail "generated model lacks the required H2 COPY H1 edit: $pdef"
+}
+
+require_reviewed_pdef() {
+    CURRENT_STAGE="review-pdef"
+    local pdef="$REFERENCE_ROOT/work/H2O/H2O.pdef"
+    local checksum_file="$REFERENCE_ROOT/work/H2O/H2O.pdef.sha256"
+    local digest
+    [[ -s "$pdef" ]] || fail "missing generated model: $pdef"
+    validate_hydrogen_model "$pdef"
+    digest="$(sha256sum "$pdef")"
+    digest="${digest%% *}"
+    printf '%s  %s\n' "$digest" "$pdef" >"$checksum_file"
+
+    if [[ "${CAMCASP_PDEF_SHA256:-}" != "$digest" ]]; then
+        cat >&2 <<EOF
+[review-pdef] generated L3 model requires scientific review.
+Inspect:
+  $pdef
+  $REFERENCE_ROOT/logs/localize-refine-dispersion.log
+Verify O/H site types, H1/H2 COPY constraints, L3 entries on every atom,
+weight 4, weight coefficient 0.001, and cutoff 0.0001.
+Recorded checksum:
+  $digest
+After review, rerun with CAMCASP_PDEF_SHA256 set to that exact digest.
+No reference JSON has been written.
+EOF
+        return 78
+    fi
+}
+
+write_manifest() {
+    CURRENT_STAGE="manifest"
+    local job_dir="$REFERENCE_ROOT/work/H2O"
+    local manifest="$REFERENCE_ROOT/work/manifest.json"
+    local temp="$manifest.tmp.$$"
+    (( ${#NL4_FILES[@]} == 1 && ${#PSI4_INPUT_FILES[@]} == 1 )) ||
+        fail "source artifact cardinalities are incomplete"
+    run_logged write-manifest "$REFERENCE_ROOT/logs/write-manifest.log" \
+        python -P - "$REPO_ROOT" "$SCRIPT_PATH" "$CAMCASP" "$ORIENT_REF" \
+        "$ORIENT_EXE" "$PSI4_EXE" "$REFERENCE_ROOT" \
+        "${PSI4_INPUT_FILES[0]}" "$temp" <<'PY'
+import hashlib
+import json
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+(repo, generator, camcasp, orient_commit, orient_exe, psi4_exe,
+ reference, psi4_input, output) = map(Path, sys.argv[1:])
+orient_commit = str(orient_commit)
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def record(path):
+    path = path.resolve()
+    return {"path": str(path), "sha256": sha(path)}
+
+def git(*args):
+    return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+
+job = reference / "work" / "H2O"
+inputs_dir = reference / "inputs"
+programs = ("camcasp", "cluster", "process", "pfit", "casimir")
+repo_status = git("status", "--porcelain", "--untracked-files=no")
+psi_version = (reference / "logs" / "psi4-version.log").read_text().strip()
+document = {
+    "schema_version": 1,
+    "generated_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    "generator": {"path": str(generator.relative_to(repo)), "sha256": sha(generator)},
+    "repository": {"commit": git("rev-parse", "HEAD"), "dirty": bool(repo_status)},
+    "tools": {
+        "camcasp": {
+            "version": (camcasp / "VERSION").read_text().strip(),
+            "commit": subprocess.check_output(
+                ["git", "-C", str(camcasp), "rev-parse", "HEAD"], text=True
+            ).strip(),
+            "executables": {
+                name: record(camcasp / "bin" / name) for name in programs
+            },
+        },
+        "orient": {
+            "version": "5.0.11-ng",
+            "commit": orient_commit,
+            "executable": record(orient_exe),
+        },
+        "psi4": {
+            "version": psi_version,
+            "commit": git("rev-parse", "HEAD"),
+            "dirty": bool(repo_status),
+            "executable": record(psi4_exe),
+        },
+    },
+    "scientific_protocol": {
+        "geometry": {
+            "units": "bohr", "charge": 0, "multiplicity": 1,
+            "atom_order": ["O", "H1", "H2"],
+            "atoms": [
+                {"label": "O", "element": "O", "xyz": [0.0, 0.0, 0.0]},
+                {"label": "H1", "element": "H", "xyz": [-1.45365196, 0.0, -1.12168732]},
+                {"label": "H2", "element": "H", "xyz": [1.45365196, 0.0, -1.12168732]},
+            ],
+            "orientation": ["symmetry c1", "no_com", "no_reorient"],
+        },
+        "electronic_structure": {
+            "method": "PBE0", "basis": "aug-cc-pVTZ", "camcasp_basis": "aVTZ",
+            "asymptotic_correction": "Psi4 GRAC", "ionization_potential_ev": 12.62063,
+            "homo_hartree": -0.3989, "kernel": "ALDA+CHF", "grid": "Options Tests",
+        },
+        "frequency_grid": {"kind": "Gauss-Legendre", "nonzero_count": 10, "scale_au": 0.5},
+        "model": {
+            "nonlocal_rank": 4, "localization_method": "LW", "localization_limit": 3,
+            "wsm_limit": 3, "hydrogen_limit": 3, "pfit_weight": 4,
+            "pfit_weight_coefficient": 0.001, "pfit_cutoff": 0.0001,
+        },
+    },
+    "frequencies": {"units": "hartree", "values": [], "squared_source_values": []},
+    "polarizabilities": {
+        "units": "atomic units", "spherical_frame": "atom-local real spherical",
+        "cartesian_frame": "global Cartesian", "frequency_blocks": [],
+    },
+    "dispersion": {
+        "component": "00 00 0", "atom_order": ["O", "H1", "H2"],
+        "units": {
+            "C6": "hartree * bohr^6", "C8": "hartree * bohr^8",
+            "C10": "hartree * bohr^10", "C12": "hartree * bohr^12",
+        },
+        "matrices": {},
+    },
+    "inputs": {
+        "H2O.clt": {"sha256": sha(inputs_dir / "H2O.clt")},
+        "H2O.axes": {"sha256": sha(inputs_dir / "H2O.axes")},
+    },
+    "sources": {
+        "cks": record(job / "H2O.cks"),
+        "cluster_output": record(job / "H2O.clt.clout"),
+        "psi4_input": record(psi4_input),
+        "pdef": record(job / "H2O.pdef"),
+    },
+}
+with output.open("w", encoding="utf-8", newline="\n") as handle:
+    json.dump(document, handle, indent=2, sort_keys=True, allow_nan=False)
+    handle.write("\n")
+PY
+    mv -f "$temp" "$manifest"
+    write_sha256_record "$manifest" "$manifest.sha256" manifest.json
+}
+
+build_reference_json() {
+    CURRENT_STAGE="build-reference"
+    local job_dir="$REFERENCE_ROOT/work/H2O"
+    (( ${#NL4_FILES[@]} == 1 )) || fail "NL4 artifact cardinality is not one"
+    run_logged build-reference "$REFERENCE_ROOT/logs/build-reference.log" \
+        python -P "$REPO_ROOT/devtools/camcasp_reference.py" build \
+        --manifest "$REFERENCE_ROOT/work/manifest.json" \
+        --frequency-file "${NL4_FILES[0]}" \
+        --refined-file "$job_dir/H2O_ref_wt4_L3_0f10.pol" \
+        --casimir-file "$job_dir/H2O_ref_wt4_L3_C12.pot" \
+        --axes-file "$REFERENCE_ROOT/inputs/H2O.axes" \
+        --output "$REFERENCE_ROOT/atomic-polarizabilities.json"
+    cat "$REFERENCE_ROOT/logs/build-reference.log"
+    write_sha256_record "$REFERENCE_ROOT/atomic-polarizabilities.json" \
+        "$REFERENCE_ROOT/atomic-polarizabilities.json.sha256" \
+        atomic-polarizabilities.json
+}
+
 on_exit() {
     local rc=$?
     if (( rc != 0 )); then
@@ -269,32 +624,26 @@ on_exit() {
 
 main() {
     trap on_exit EXIT
-
-    MODE="full"
-    case "${1:-}" in
-        "") ;;
-        --preflight-only) MODE="preflight" ;;
-        *) CURRENT_STAGE="arguments"; fail "unknown argument: $1" ;;
-    esac
-
+    parse_arguments "$@"
     preflight
-    printf 'CamCASP reference root: %s\n' "$REFERENCE_ROOT"
     if [[ "$MODE" == "preflight" ]]; then
-        return
+        printf 'Preflight passed for %s\n' "$PSI4_EXE"
+        return 0
     fi
 
-    mkdir -p "$REFERENCE_ROOT/logs"
-    provision_camcasp
+    printf 'CamCASP reference root: %s\n' "$REFERENCE_ROOT"
+    prepare_layout
     provision_orient
+    provision_camcasp
     write_psi4_wrapper
-
-    export CAMCASP
-    export ARCH=x86-64
-    export PATH="$ORIENT_BIN_DIR:$CAMCASP/bin:$PATH"
-    export PSIPATH="$CAMCASP/basis/psi4:$CAMCASP/basis/psi4/for-psi4-lib"
-    export SCRATCH="$REFERENCE_ROOT/scratch/camcasp"
-    export PSI_SCRATCH="$REFERENCE_ROOT/scratch/psi4"
-    mkdir -p "$SCRATCH" "$PSI_SCRATCH"
+    export_reference_environment
+    write_inputs
+    run_camcasp
+    attest_generated_protocol
+    run_localize
+    require_reviewed_pdef
+    write_manifest
+    build_reference_json
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
