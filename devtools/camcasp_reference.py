@@ -244,7 +244,6 @@ FREQ2_FIELD_RE = re.compile(r"\bFREQ2\s+(\S+)")
 # digits and a signed two-digit Fortran exponent.
 FREQ2_TOKEN_RE = re.compile(r"[-+]?0\.\d{7}[ED][+-]\d{2}\Z")
 # High-precision signed squared values from the approved Gauss-Legendre grid.
-# Printed NL4 tokens attest these values only through their own decimal ULP.
 CANONICAL_SQUARED_FREQUENCY_TEXT = (
     "0",
     "-4.3686833258999033E-005",
@@ -274,29 +273,23 @@ def _parse_freq2_decimal(raw: str, context: str) -> Decimal:
     return value
 
 
-def _freq2_rounding_interval(raw: str, context: str) -> tuple[Decimal, Decimal]:
-    value = _parse_freq2_decimal(raw, context)
-    decimal_ulp = Decimal(1).scaleb(value.as_tuple().exponent)
-    half_ulp = decimal_ulp / 2
-    return value - half_ulp, value + half_ulp
-
-
-def _freq2_interval_contains(raw: str, expected: Decimal, context: str) -> bool:
-    lower, upper = _freq2_rounding_interval(raw, context)
-    return lower <= expected <= upper
-
-
 def _validate_freq2_token(raw: str, index: int, context: str) -> Decimal:
     value = _parse_freq2_decimal(raw, context)
     if index == 0:
         if not value.is_zero() or value.is_signed():
             raise ReferenceFormatError(f"{context}: static zero FREQ2 must be exact")
-    elif value.is_zero() or value >= 0:
+        return value
+    if value.is_zero() or value >= 0:
         raise ReferenceFormatError(f"{context}: dynamic FREQ2 must be negative")
+
     canonical = Decimal(CANONICAL_SQUARED_FREQUENCY_TEXT[index])
-    if not _freq2_interval_contains(raw, canonical, context):
+    # For nonzero Decimal x, x.adjusted() is floor(log10(abs(x))).  Keeping
+    # abs(value - canonical) <= 10 ** (x.adjusted() - 4) accepts ordinary
+    # CamCASP decimal formatting while failing closed on a materially different grid.
+    tolerance = Decimal(1).scaleb(canonical.copy_abs().adjusted() - 4)
+    if abs(value - canonical) > tolerance:
         raise ReferenceFormatError(
-            f"{context}: canonical squared frequency is outside printed rounding interval"
+            f"{context}: canonical squared frequency is outside absolute tolerance"
         )
     return value
 

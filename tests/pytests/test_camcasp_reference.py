@@ -1341,18 +1341,18 @@ def test_parse_static_plus_ten_frequencies(tmp_path):
 @pytest.mark.parametrize(
     ("mode", "expected"),
     (
-        ("neighbor", "rounding interval"),
+        ("neighbor", "absolute tolerance"),
         ("coarse", "Fortran scientific"),
-        ("reordered", "rounding interval"),
+        ("reordered", "absolute tolerance"),
         ("positive", "negative"),
-        ("almost", "rounding interval"),
+        ("almost", "absolute tolerance"),
         ("negative-zero", "static zero"),
     ),
 )
 def test_frequency_parser_rejects_noncanonical_printed_grid(tmp_path, mode, expected):
     values = list(REAL_PRINTED_FREQ2_VALUES)
     if mode == "neighbor":
-        values[1] = "-0.4368684E-04"
+        values[1] = "-0.4368784E-04"
     elif mode == "coarse":
         values[1] = "-0.4E-04"
     elif mode == "reordered":
@@ -1360,7 +1360,7 @@ def test_frequency_parser_rejects_noncanonical_printed_grid(tmp_path, mode, expe
     elif mode == "positive":
         values[1] = values[1][1:]
     elif mode == "almost":
-        values[1] = "-0.4368682E-04"
+        values[1] = "-0.4368583E-04"
     else:
         values[0] = "-0.0000000E+00"
     source = tmp_path / "invalid-NL4.pol"
@@ -1381,17 +1381,33 @@ def test_frequency_parser_rejects_non_fortran_decimal_tokens(tmp_path, token):
         parse_frequencies(source)
 
 
-def test_frequency_rounding_interval_boundaries_are_decimal_exact():
-    token = "-0.4368683E-04"
-    lower, upper = camcasp_reference._freq2_rounding_interval(token, "test")
-    assert camcasp_reference._freq2_interval_contains(token, lower, "test")
-    assert camcasp_reference._freq2_interval_contains(token, upper, "test")
-    assert not camcasp_reference._freq2_interval_contains(
-        token, lower - Decimal("1E-30"), "test"
-    )
-    assert not camcasp_reference._freq2_interval_contains(
-        token, upper + Decimal("1E-30"), "test"
-    )
+def test_frequency_token_within_canonical_place_tolerance_is_accepted():
+    token = Decimal("-0.4368783E-04")
+    canonical = Decimal(camcasp_reference.CANONICAL_SQUARED_FREQUENCY_TEXT[1])
+    assert abs(token - canonical) <= Decimal("1E-9")
+    assert camcasp_reference._validate_freq2_token(
+        "-0.4368783E-04", 1, "test"
+    ) == token
+
+
+def test_frequency_token_just_outside_canonical_place_tolerance_is_rejected():
+    token = Decimal("-0.4368784E-04")
+    canonical = Decimal(camcasp_reference.CANONICAL_SQUARED_FREQUENCY_TEXT[1])
+    assert abs(token - canonical) > Decimal("1E-9")
+    with pytest.raises(ReferenceFormatError, match="canonical squared frequency"):
+        camcasp_reference._validate_freq2_token("-0.4368784E-04", 1, "test")
+
+
+@pytest.mark.parametrize(
+    ("token", "index", "expected"),
+    (
+        ("-0.0000000E+00", 0, "static zero"),
+        ("0.4368683E-04", 1, "negative"),
+    ),
+)
+def test_frequency_tolerance_keeps_zero_and_sign_strict(token, index, expected):
+    with pytest.raises(ReferenceFormatError, match=expected):
+        camcasp_reference._validate_freq2_token(token, index, "test")
 
 
 def test_parse_complete_l3_model(tmp_path):
@@ -2290,8 +2306,8 @@ def test_validator_rejects_frequency_and_dispersion_invariants():
     _assert_document_rejected(document, "omega")
 
     document = complete_document()
-    document["frequencies"]["squared_source_values"][1] = "-0.4368684E-04"
-    _assert_document_rejected(document, "rounding interval")
+    document["frequencies"]["squared_source_values"][1] = "-0.4368784E-04"
+    _assert_document_rejected(document, "absolute tolerance")
 
     document = complete_document()
     del document["dispersion"]["matrices"]["C12"]
