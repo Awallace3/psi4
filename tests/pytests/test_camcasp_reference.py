@@ -2571,6 +2571,20 @@ def test_stage_validation_rejects_nonhorizontal_completion_tail(
 
 
 @pytest.mark.parametrize("role", ("ORIENT", "PFIT"))
+def test_stage_validation_deliberately_rejects_crlf_globally(tmp_path, role):
+    populate_stage_artifacts(tmp_path)
+    if role == "ORIENT":
+        path = tmp_path / "H2O_L3_008.out"
+        completion = b"Finished at 11:27:54 on 30 Jul 2026 "
+    else:
+        path = tmp_path / "H2O_ref_wt4_L3_008.out"
+        completion = b"Finished"
+    path.write_bytes(role.encode() + b" output\r\n" + completion + b"\r\n")
+    with pytest.raises(ReferenceFormatError, match="non-LF line separator"):
+        validate_stage_artifacts(tmp_path, "H2O")
+
+
+@pytest.mark.parametrize("role", ("ORIENT", "PFIT"))
 def test_stage_validation_rejects_bare_cr_completion_record(tmp_path, role):
     populate_stage_artifacts(tmp_path)
     if role == "ORIENT":
@@ -2597,8 +2611,26 @@ def test_stage_validation_rejects_bare_cr_completion_record(tmp_path, role):
             f"{ORIENT_FINISHED}\n",
         ),
         (
+            "ORIENT",
+            f"ORIENT output\n\u00a0Finished at 11:27:54 on 30 Jul 2026\n"
+            f"{ORIENT_FINISHED}\n",
+        ),
+        (
+            "ORIENT",
+            f"ORIENT output\n\u2003Finished at 11:27:54 on 30 Jul 2026\n"
+            f"{ORIENT_FINISHED}\n",
+        ),
+        (
             "PFIT",
             f"PFIT output\n{ORIENT_FINISHED}\nFinished\n",
+        ),
+        (
+            "PFIT",
+            "PFIT output\n\u00a0Finished\nFinished \t\n",
+        ),
+        (
+            "PFIT",
+            "PFIT output\n\u2003Finished\nFinished \t\n",
         ),
     ),
 )

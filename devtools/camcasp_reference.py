@@ -1293,9 +1293,11 @@ def _require_terminal_finished(path: Path, kind: str) -> None:
         expected = r"Finished[ \t]*"
     else:  # pragma: no cover - internal callers use the two fixed output roles
         raise AssertionError(kind)
+    # Broad Unicode stripping is only for ambiguity detection. Accepted records
+    # remain normalized solely by the ASCII-horizontal rstrip above.
     completion_like = [
         index for index, line in enumerate(lines)
-        if line.lstrip(" \t").casefold().startswith("finished")
+        if line.lstrip().casefold().startswith("finished")
     ]
     if (
         len(recognized) != 1
