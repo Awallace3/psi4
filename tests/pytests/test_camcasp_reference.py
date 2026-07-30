@@ -583,6 +583,88 @@ def test_psi4_wrapper_invokes_resolved_symlink_target(tmp_path):
     ]
 
 
+def test_psi4_wrapper_writes_byte_identical_executed_input_evidence(tmp_path):
+    reference = tmp_path / "reference"
+    evidence_dir = reference / "work" / "H2O"
+    evidence_dir.mkdir(parents=True)
+    camcasp = tmp_path / "camcasp"
+    (camcasp / "bin").mkdir(parents=True)
+    fake = tmp_path / "psi4"
+    received = tmp_path / "received.in"
+    _write_executable(
+        fake,
+        "#!/usr/bin/env bash\n"
+        "[[ \"${1:-}\" == --version ]] && exit 0\n"
+        "[[ \"${1:-}\" == -n ]] && shift 2\n"
+        "cp \"$1\" \"$WRAPPER_RECEIVED\"\n",
+    )
+    scratch = tmp_path / "scratch.in"
+    scratch.write_bytes(b"molecule {\n  no_reorient\n  no_com\n  O 0 0 0\n}\n")
+    command = (
+        f'source "{SCRIPT}"; CAMCASP="$1"; REFERENCE_ROOT="$2"; '
+        'PSI4_EXE="$3"; write_psi4_wrapper; '
+        'CAMCASP_PSI4_EVIDENCE_DIR="$4" '
+        '"$CAMCASP/bin/psi4.sh" "$5" evidence.out 2'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "wrapper-evidence", str(camcasp),
+         str(reference), str(fake), str(evidence_dir), str(scratch)],
+        cwd=ROOT,
+        env={**os.environ, "WRAPPER_RECEIVED": str(received)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    evidence = evidence_dir / "H2O_A.executed.in"
+    assert evidence.read_bytes() == scratch.read_bytes() == received.read_bytes()
+    assert evidence.read_text().count("symmetry c1") == 1
+
+
+@pytest.mark.parametrize("invalid_kind", ("empty", "relative", "outside", "missing"))
+def test_psi4_wrapper_rejects_invalid_evidence_directory(tmp_path, invalid_kind):
+    reference = tmp_path / "reference"
+    (reference / "work").mkdir(parents=True)
+    camcasp = tmp_path / "camcasp"
+    (camcasp / "bin").mkdir(parents=True)
+    calls = tmp_path / "calls"
+    fake = tmp_path / "psi4"
+    _write_executable(
+        fake,
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>\"$WRAPPER_CALLS\"\n",
+    )
+    scratch = tmp_path / "scratch.in"
+    scratch.write_text("molecule {\n  no_reorient\n  no_com\n  O 0 0 0\n}\n")
+    if invalid_kind == "empty":
+        evidence_dir = ""
+    elif invalid_kind == "relative":
+        evidence_dir = "relative-evidence"
+    elif invalid_kind == "outside":
+        evidence_dir = str(tmp_path / "outside")
+        Path(evidence_dir).mkdir()
+    else:
+        evidence_dir = str(reference / "work" / "missing")
+    command = (
+        f'source "{SCRIPT}"; CAMCASP="$1"; REFERENCE_ROOT="$2"; '
+        'PSI4_EXE="$3"; write_psi4_wrapper; '
+        'export CAMCASP_PSI4_EVIDENCE_DIR="$4"; '
+        '"$CAMCASP/bin/psi4.sh" "$5" evidence.out'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "wrapper-invalid-evidence", str(camcasp),
+         str(reference), str(fake), evidence_dir, str(scratch)],
+        cwd=ROOT,
+        env={**os.environ, "WRAPPER_CALLS": str(calls)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "evidence" in result.stderr.lower()
+    assert calls.read_text().splitlines() == ["--version"]
+    assert not list((reference / "work").rglob("H2O_A.executed.in"))
+
+
 @pytest.mark.parametrize(
     "symmetry_lines",
     (
@@ -916,6 +998,10 @@ def _make_psi4_checkout(path):
         "if [[ \"${1:-}\" == --version ]]; then echo 'stub Psi4 1.0'; exit 0; fi\n"
         "if [[ \"${1:-}\" == -n ]]; then shift 2; fi\n"
         "input=\"$1\"; output=\"$2\"\n"
+        "if [[ -n \"${STUB_PSI4_RECEIVED_INPUT:-}\" ]]; then\n"
+        "  cp \"$input\" \"$STUB_PSI4_RECEIVED_INPUT\"\n"
+        "  realpath -e -- \"$input\" >\"$STUB_PSI4_RECEIVED_PATH\"\n"
+        "fi\n"
         "[[ \"$(grep -Eic '^[[:space:]]*symmetry[[:space:]]+c1[[:space:]]*$' \"$input\")\" == 1 ]]\n"
         "grep -Eiq '^[[:space:]]*basis[[:space:]]+aug-cc-pvtz[[:space:]]*$' \"$input\"\n"
         "grep -Fq \"energy('PBE0'\" \"$input\"\n"
@@ -2106,7 +2192,8 @@ END
 """
     camcasp_log = """\
 AC options: type = GRAC
-Basis: aug-cc-pvtz
+basis = aug-cc-pvtz
+basis type = None
 Run-type: properties
 SCFcode: psi4
 """
@@ -2187,7 +2274,7 @@ def test_generated_protocol_rejects_conflicting_active_settings():
         (1, "Rank 4", "Rank 3", "Rank"),
         (1, "Print pols for Orient", "Print pols for Molpro", "Print"),
         (2, "type = GRAC", "type = LB94", "AC options"),
-        (2, "Basis: aug-cc-pvtz", "Basis: cc-pvdz", "basis"),
+        (2, "basis = aug-cc-pvtz", "basis = cc-pvdz", "basis"),
         (2, "Run-type: properties", "Run-type: energy", "Run-type"),
         (2, "SCFcode: psi4", "SCFcode: dalton", "SCFcode"),
         (3, "basis aug-cc-pvtz", "basis cc-pvdz", "basis"),
@@ -2214,6 +2301,12 @@ def test_protocol_rejects_duplicate_or_comment_only_grac_report(mode):
             "AC options: type = GRAC", "! AC options: type = GRAC"
         )
     _assert_protocol_rejected(texts, "AC options")
+
+
+def test_protocol_rejects_duplicate_conflicting_actual_basis_report():
+    texts = list(canonical_generated_protocol_texts())
+    texts[2] += "basis = cc-pvdz\n"
+    _assert_protocol_rejected(texts, "basis")
 
 
 @pytest.mark.parametrize(
@@ -2550,6 +2643,7 @@ def test_discover_camcasp_artifacts_requires_unique_psi4_output(tmp_path, mode):
     (output / "H2O_NL4_fmtB.pol").write_text("B\n")
     (output / "H2O.p2p").write_text("p2p\n")
     (job / "H2O_A.in").write_text("input\n")
+    (job / "H2O_A.executed.in").write_text("executed input\n")
     if mode == "duplicate":
         nested = job / "nested"
         nested.mkdir()
@@ -2569,6 +2663,42 @@ def test_discover_camcasp_artifacts_requires_unique_psi4_output(tmp_path, mode):
     assert "Psi4 output" in result.stderr
 
 
+@pytest.mark.parametrize("mode", ("missing", "duplicate", "empty"))
+def test_discover_camcasp_artifacts_requires_unique_executed_input_evidence(
+    tmp_path, mode
+):
+    job = tmp_path / mode / "H2O"
+    output = job / "OUT"
+    output.mkdir(parents=True)
+    (output / "H2O_NL4_fmtA.pol").write_text("A\n")
+    (output / "H2O_NL4_fmtB.pol").write_text("B\n")
+    (output / "H2O.p2p").write_text("p2p\n")
+    (job / "H2O_A.in").write_text("generated input\n")
+    (job / "H2O_A.out").write_text("output\n")
+    if mode == "duplicate":
+        nested = job / "nested"
+        nested.mkdir()
+        (job / "H2O_A.executed.in").write_text("executed input\n")
+        (nested / "H2O_A.executed.in").write_text("executed input\n")
+    elif mode == "empty":
+        (job / "H2O_A.executed.in").write_text("")
+    publication = tmp_path / mode / "manifest.json"
+    command = (
+        f'source "{SCRIPT}"; discover_camcasp_artifacts "$1"; : >"$2"'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "discover-executed-input", str(job),
+         str(publication)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "executed Psi4 input" in result.stderr
+    assert not publication.exists()
+
+
 def test_dependency_free_stubbed_pipeline_requires_approval_before_json(tmp_path):
     reference = tmp_path / "reference"
     camcasp = tmp_path / "camcasp-bin"
@@ -2578,6 +2708,8 @@ def test_dependency_free_stubbed_pipeline_requires_approval_before_json(tmp_path
     runcamcasp_invocation = tmp_path / "runcamcasp-invocation.log"
     absolute_clt_evidence = tmp_path / "absolute-clt-evidence.log"
     localize_polfile = tmp_path / "localize-polfile.log"
+    psi4_received_input = tmp_path / "psi4-received.in"
+    psi4_received_path = tmp_path / "psi4-received-path.log"
 
     psi4_source = tmp_path / "psi4-source"
     psi4, psi4_commit = _make_psi4_checkout(psi4_source)
@@ -2628,7 +2760,7 @@ while (( $# )); do
     esac
 done
 [[ "$verbosity" == 1 ]] || exit 98
-printf 'basis type = aug-cc-pvtz\nruntype = properties\nscfcode = psi4\nAC options: type = GRAC, join = TANH, p1 = 0.0, p2 = 0.0\n'
+printf 'basis = aug-cc-pvtz\nbasis type = None\nruntype = properties\nscfcode = psi4\nAC options: type = GRAC, join = TANH, p1 = 0.0, p2 = 0.0\n'
 [[ -n "$clt_file" && -f "$clt_file" ]] || exit 95
 printf 'cwd=%s\nclt=%s\n' "$(pwd -P)" "$clt_file" >"$STUB_RUNCAMCASP_INVOCATION"
 mkdir -p "$job_dir/OUT"
@@ -2686,7 +2818,9 @@ set {
 energy, wfn = energy('PBE0', return_wfn=True)
 EOF
 echo camcasp >>"$STUB_CALLS"
-"$CAMCASP/bin/psi4.sh" H2O_A.in H2O_A.out
+mkdir -p "$SCRATCH/psi4-execution"
+cp H2O_A.in "$SCRATCH/psi4-execution/H2O_A.in"
+"$CAMCASP/bin/psi4.sh" "$SCRATCH/psi4-execution/H2O_A.in" H2O_A.out
 printf 'format A polarizability\n' >OUT/H2O_NL4_fmtA.pol
 cat >OUT/H2O_NL4_fmtB.pol <<'EOF'
 """
@@ -2795,6 +2929,8 @@ ORIENT_REF="$5"
 export STUB_CALLS="$6"
 export STUB_RUNCAMCASP_INVOCATION="$8"
 export STUB_LOCALIZE_POLFILE="${{10}}"
+export STUB_PSI4_RECEIVED_INPUT="${{11}}"
+export STUB_PSI4_RECEIVED_PATH="${{12}}"
 preflight
 bind_orient_checkout "$ORIENT_EXE"
 export PSI4_EXE
@@ -2851,7 +2987,8 @@ build_reference_json
             str(camcasp), str(psi4_source), str(orient_source),
             orient_commit, str(calls), camcasp_commit,
             str(runcamcasp_invocation), str(absolute_clt_evidence),
-            str(localize_polfile),
+            str(localize_polfile), str(psi4_received_input),
+            str(psi4_received_path),
         ],
         cwd=ROOT,
         text=True,
@@ -2901,7 +3038,8 @@ build_reference_json
     camcasp_log = reference / "logs" / "camcasp.log"
     assert camcasp_log.with_name("camcasp.log.sha256").is_file()
     assert camcasp_log.read_text().count("AC options: type = GRAC") == 1
-    assert "basis type = aug-cc-pvtz" in camcasp_log.read_text()
+    assert "basis = aug-cc-pvtz" in camcasp_log.read_text()
+    assert "basis type = None" in camcasp_log.read_text()
     assert "runtype = properties" in camcasp_log.read_text()
     assert "scfcode = psi4" in camcasp_log.read_text()
     assert "AC options" not in (reference / "work" / "H2O" / "H2O.clt.clout").read_text()
@@ -2915,6 +3053,7 @@ build_reference_json
         job_dir / "H2O.ornt",
         job_dir / "H2O.cks",
         job_dir / "H2O_A.in",
+        job_dir / "H2O_A.executed.in",
         job_dir / "H2O_A.out",
         job_dir / "H2O_ref_wt4_L3_010.pol",
     ):
@@ -2964,17 +3103,32 @@ build_reference_json
         "path": str(p2p.resolve()),
         "sha256": hashlib.sha256(p2p.read_bytes()).hexdigest(),
     }
-    psi4_input = job_dir / "H2O_A.in"
+    generated_input = job_dir / "H2O_A.in"
+    executed_input = job_dir / "H2O_A.executed.in"
     psi4_output = job_dir / "H2O_A.out"
-    assert psi4_input.read_text().count("symmetry c1") == 1
-    assert "no_com" in psi4_input.read_text()
-    assert "no_reorient" in psi4_input.read_text()
+    assert "symmetry" not in generated_input.read_text().lower()
+    assert executed_input.read_text().count("symmetry c1") == 1
+    assert "basis aug-cc-pvtz" in executed_input.read_text()
+    assert "energy('PBE0'" in executed_input.read_text()
+    assert "no_com" in executed_input.read_text()
+    assert "no_reorient" in executed_input.read_text()
+    assert psi4_received_input.read_bytes() == executed_input.read_bytes()
+    assert psi4_received_path.read_text().strip() == str(
+        (reference / "scratch" / "camcasp" / "psi4-execution" / "H2O_A.in").resolve()
+    )
     assert "Running in c1 symmetry." in psi4_output.read_text()
     assert "=> Composite Functional: PBE0 <=" in psi4_output.read_text()
-    assert document["sources"]["psi4_input"] == {
-        "path": str(psi4_input.resolve()),
-        "sha256": hashlib.sha256(psi4_input.read_bytes()).hexdigest(),
+    generated_record = {
+        "path": str(generated_input.resolve()),
+        "sha256": hashlib.sha256(generated_input.read_bytes()).hexdigest(),
     }
+    executed_record = {
+        "path": str(executed_input.resolve()),
+        "sha256": hashlib.sha256(executed_input.read_bytes()).hexdigest(),
+    }
+    assert document["sources"]["psi4_generated_input"] == generated_record
+    assert document["sources"]["psi4_executed_input"] == executed_record
+    assert document["sources"]["psi4_input"] == executed_record
     assert document["sources"]["psi4_output"] == {
         "path": str(psi4_output.resolve()),
         "sha256": hashlib.sha256(psi4_output.read_bytes()).hexdigest(),

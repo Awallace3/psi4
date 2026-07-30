@@ -562,7 +562,7 @@ def _require_report_value(
 def _validate_camcasp_report(text: str) -> None:
     lines = [line for _number, line in _active_lines(text)]
     _require_report_value(lines, r"AC\s+options\s*:\s*type", "GRAC", "AC options")
-    _require_report_value(lines, r"Basis(?:\s+type)?", "aug-cc-pvtz", "basis")
+    _require_report_value(lines, r"Basis\s*=", "aug-cc-pvtz", "basis")
     _require_report_value(lines, r"Run[-\s]*type", "properties", "run-type")
     _require_report_value(lines, r"SCF[-\s]*code", "psi4", "scfcode")
 

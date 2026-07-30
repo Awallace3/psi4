@@ -590,7 +590,12 @@ input="\${1:-}"
 output="\${2:-}"
 [[ -n "\$input" && -n "\$output" ]] || { echo "psi4.sh requires input and output paths" >&2; exit 64; }
 resolved_input="\$(realpath -e -- "\$input")" || { echo "psi4.sh input does not exist: \$input" >&2; exit 66; }
-python -P - "\$resolved_input" <<'PY'
+if [[ -v CAMCASP_PSI4_EVIDENCE_DIR && -z "\$CAMCASP_PSI4_EVIDENCE_DIR" ]]; then
+    echo "psi4.sh evidence directory is empty" >&2
+    exit 65
+fi
+evidence_dir="\${CAMCASP_PSI4_EVIDENCE_DIR:-}"
+python -P - "\$resolved_input" "\$evidence_dir" "$REFERENCE_ROOT" <<'PY'
 import os
 import re
 import stat
@@ -599,6 +604,8 @@ import tempfile
 from pathlib import Path
 
 path = Path(sys.argv[1])
+evidence_text = sys.argv[2]
+reference_root = Path(sys.argv[3]).resolve(strict=True)
 lines = path.read_text().splitlines(keepends=True)
 starts = []
 for index, line in enumerate(lines):
@@ -645,6 +652,54 @@ if not symmetries:
         except FileNotFoundError:
             pass
         raise
+
+if evidence_text:
+    evidence_raw = Path(evidence_text)
+    if not evidence_raw.is_absolute():
+        raise SystemExit("psi4.sh evidence directory must be absolute")
+    try:
+        evidence_dir = evidence_raw.resolve(strict=True)
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise SystemExit(f"psi4.sh evidence directory is invalid: {evidence_raw}") from exc
+    if not evidence_dir.is_dir():
+        raise SystemExit(f"psi4.sh evidence path is not a directory: {evidence_dir}")
+    if Path(os.path.abspath(evidence_raw)) != evidence_dir:
+        raise SystemExit("psi4.sh evidence directory must not traverse symlinks")
+    safe_root = (reference_root / "work").resolve(strict=True)
+    try:
+        evidence_dir.relative_to(safe_root)
+    except ValueError as exc:
+        raise SystemExit(
+            f"psi4.sh evidence directory must be inside {safe_root}"
+        ) from exc
+    evidence = evidence_dir / "H2O_A.executed.in"
+    if evidence == path:
+        raise SystemExit("psi4.sh evidence path must differ from executed input")
+    payload = path.read_bytes()
+    mode = stat.S_IMODE(path.stat().st_mode)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{evidence.name}.", suffix=".tmp", dir=evidence_dir
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary_name, mode)
+        os.replace(temporary_name, evidence)
+        directory_descriptor = os.open(evidence_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except BaseException:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+        raise
+    if evidence.read_bytes() != path.read_bytes():
+        raise SystemExit("psi4.sh executed-input evidence differs from resolved input")
 PY
 if (( \${3:-1} > 1 )); then
     exec "$PSI4_EXE" -n "\$3" "\$resolved_input" "\$output"
@@ -908,6 +963,7 @@ declare -ag NL4_FORMAT_A_FILES=()
 declare -ag NL4_FILES=()
 declare -ag P2P_FILES=()
 declare -ag PSI4_INPUT_FILES=()
+declare -ag PSI4_EXECUTED_INPUT_FILES=()
 declare -ag PSI4_OUTPUT_FILES=()
 
 discover_camcasp_artifacts() {
@@ -928,6 +984,9 @@ discover_camcasp_artifacts() {
     mapfile -t PSI4_INPUT_FILES < <(
         find "$job_dir" -maxdepth 2 -type f \
             \( -name 'H2O_A.in' -o -name 'H2O_A.dat' \) -print | sort
+    )
+    mapfile -t PSI4_EXECUTED_INPUT_FILES < <(
+        find "$job_dir" -maxdepth 2 -type f -name 'H2O_A.executed.in' -print | sort
     )
     mapfile -t PSI4_OUTPUT_FILES < <(
         find "$job_dir" -maxdepth 2 -type f -name 'H2O_A.out' -print | sort
@@ -960,6 +1019,18 @@ discover_camcasp_artifacts() {
         fail "expected exactly one generated Psi4 input, found ${#PSI4_INPUT_FILES[@]}"
         return
     }
+    [[ -s "${PSI4_INPUT_FILES[0]}" ]] || {
+        fail "generated Psi4 input is empty: ${PSI4_INPUT_FILES[0]}"
+        return
+    }
+    (( ${#PSI4_EXECUTED_INPUT_FILES[@]} == 1 )) || {
+        fail "expected exactly one executed Psi4 input, found ${#PSI4_EXECUTED_INPUT_FILES[@]}"
+        return
+    }
+    [[ -s "${PSI4_EXECUTED_INPUT_FILES[0]}" ]] || {
+        fail "executed Psi4 input is empty: ${PSI4_EXECUTED_INPUT_FILES[0]}"
+        return
+    }
     (( ${#PSI4_OUTPUT_FILES[@]} == 1 )) || {
         fail "expected exactly one generated Psi4 output, found ${#PSI4_OUTPUT_FILES[@]}"
         return
@@ -978,6 +1049,7 @@ run_camcasp() {
     rm -rf "$job_dir"
     (
         cd "$inputs_dir"
+        export CAMCASP_PSI4_EVIDENCE_DIR="$job_dir"
         run_logged camcasp "$REFERENCE_ROOT/logs/camcasp.log" \
             "$CAMCASP/bin/runcamcasp.py" H2O \
             --clt H2O.clt \
@@ -1008,14 +1080,16 @@ run_camcasp() {
 attest_generated_protocol() {
     CURRENT_STAGE="attest-protocol"
     local job_dir="$REFERENCE_ROOT/work/H2O"
-    (( ${#PSI4_INPUT_FILES[@]} == 1 && ${#PSI4_OUTPUT_FILES[@]} == 1 )) ||
-        fail "generated Psi4 input/output cardinality was not established"
+    (( ${#PSI4_INPUT_FILES[@]} == 1 &&
+       ${#PSI4_EXECUTED_INPUT_FILES[@]} == 1 &&
+       ${#PSI4_OUTPUT_FILES[@]} == 1 )) ||
+        fail "generated/executed Psi4 input and output cardinality was not established"
     run_logged attest-protocol "$REFERENCE_ROOT/logs/attest-protocol.log" \
         python -P "$REPO_ROOT/devtools/camcasp_reference.py" attest-protocol \
         --clt "$REFERENCE_ROOT/inputs/H2O.clt" \
         --cks "$job_dir/H2O.cks" \
         --camcasp-log "$REFERENCE_ROOT/logs/camcasp.log" \
-        --psi4-input "${PSI4_INPUT_FILES[0]}" \
+        --psi4-input "${PSI4_EXECUTED_INPUT_FILES[0]}" \
         --psi4-output "${PSI4_OUTPUT_FILES[0]}"
 }
 
@@ -1102,6 +1176,7 @@ write_manifest() {
     local temp="$manifest.tmp.$$"
     (( ${#NL4_FORMAT_A_FILES[@]} == 1 && ${#NL4_FILES[@]} == 1 &&
        ${#P2P_FILES[@]} == 1 && ${#PSI4_INPUT_FILES[@]} == 1 &&
+       ${#PSI4_EXECUTED_INPUT_FILES[@]} == 1 &&
        ${#PSI4_OUTPUT_FILES[@]} == 1 )) ||
         fail "source artifact cardinalities are incomplete"
     verify_orient_checkout "$ORIENT_SOURCE_ROOT" "$ORIENT_EXE" without-products || return
@@ -1113,8 +1188,9 @@ write_manifest() {
         python -P - "$REPO_ROOT" "$SCRIPT_PATH" "$CAMCASP_SOURCE_ROOT" "$CAMCASP" \
         "$ORIENT_SOURCE_ROOT" "$ORIENT_EXE" \
         "$PSI4_SOURCE_ROOT" "$PSI4_EXE" "$REFERENCE_ROOT" \
-        "${PSI4_INPUT_FILES[0]}" "${PSI4_OUTPUT_FILES[0]}" \
-        "${P2P_FILES[0]}" "${NL4_FORMAT_A_FILES[0]}" "$temp" <<'PY'
+        "${PSI4_INPUT_FILES[0]}" "${PSI4_EXECUTED_INPUT_FILES[0]}" \
+        "${PSI4_OUTPUT_FILES[0]}" "${P2P_FILES[0]}" \
+        "${NL4_FORMAT_A_FILES[0]}" "$temp" <<'PY'
 import hashlib
 import json
 import re
@@ -1124,8 +1200,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 (repo, generator, camcasp_source, camcasp, orient_source, orient_exe,
- psi4_source, psi4_exe, reference, psi4_input, psi4_output, p2p,
- nl4_format_a, output) = map(
+ psi4_source, psi4_exe, reference, psi4_generated_input,
+ psi4_executed_input, psi4_output, p2p, nl4_format_a, output) = map(
     Path, sys.argv[1:]
 )
 
@@ -1228,7 +1304,9 @@ document = {
     "sources": {
         "cks": record(job / "H2O.cks"),
         "cluster_output": record(job / "H2O.clt.clout"),
-        "psi4_input": record(psi4_input),
+        "psi4_generated_input": record(psi4_generated_input),
+        "psi4_executed_input": record(psi4_executed_input),
+        "psi4_input": record(psi4_executed_input),
         "psi4_output": record(psi4_output),
         "p2p": record(p2p),
         "nonlocal_pol_format_a": record(nl4_format_a),
