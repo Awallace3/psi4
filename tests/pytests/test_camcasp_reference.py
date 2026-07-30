@@ -2366,11 +2366,14 @@ def _refined_block_text(combined_text, index):
     return block.strip() + "\n"
 
 
+ORIENT_FINISHED = "Finished at 11:27:54 on 30 Jul 2026"
+
+
 def populate_stage_artifacts(work, job="H2O"):
     combined = make_l3_refined_text()
     for index in range(11):
         (work / f"{job}_L3_{index:03d}.out").write_text(
-            "ORIENT localization output\nFinished\n"
+            f"ORIENT localization output\n{ORIENT_FINISHED}\n"
         )
         (work / f"{job}_ref_wt4_L3_{index:03d}.out").write_text(
             "PFIT refinement output\nFinished\n"
@@ -2455,6 +2458,69 @@ def test_stage_validation_rejects_ambiguous_finished_completion(tmp_path):
         raise AssertionError("ambiguous ORIENT completion was accepted")
 
 
+def test_stage_validation_accepts_blank_tail_after_canonical_orient_completion(tmp_path):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_L3_003.out"
+    path.write_text(f"ORIENT output\n{ORIENT_FINISHED}\n\n  \n")
+    validate_stage_artifacts(tmp_path, "H2O")
+
+
+@pytest.mark.parametrize(
+    "trailer",
+    (
+        "Finished",
+        "finished at 11:27:54 on 30 Jul 2026",
+        "Finished At 11:27:54 on 30 Jul 2026",
+        "Finished at 1:27:54 on 30 Jul 2026",
+        "Finished at 11:27:5 on 30 Jul 2026",
+        "Finished at 24:27:54 on 30 Jul 2026",
+        "Finished at 11:60:54 on 30 Jul 2026",
+        "Finished at 11:27:60 on 30 Jul 2026",
+        "Finished at 11:27:54 on 3 Jul 2026",
+        "Finished at 11:27:54 on 30 July 2026",
+        "Finished at 11:27:54 on 30 jul 2026",
+        "Finished at 11:27:54 on 30 Jul 26",
+        "Finished at 11:27:54 on 31 Feb 2026",
+        "Finished at 11:27:54 on 30 Jul 2026 extra",
+        "Finished at 11:27:54 on 30 Jul 2026 ",
+        "message Finished at 11:27:54 on 30 Jul 2026",
+        " Finished at 11:27:54 on 30 Jul 2026",
+    ),
+)
+def test_stage_validation_rejects_noncanonical_orient_completion(tmp_path, trailer):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_L3_005.out"
+    path.write_text(f"ORIENT output\n{trailer}\n")
+    with pytest.raises(ReferenceFormatError, match="ORIENT.*Finished at"):
+        validate_stage_artifacts(tmp_path, "H2O")
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        f"ORIENT output\n{ORIENT_FINISHED}\nmore output\n",
+        f"ORIENT output\n{ORIENT_FINISHED}\n{ORIENT_FINISHED}\n",
+        f"ORIENT output\nFinished at 10:00:00 on 29 Jul 2026\n{ORIENT_FINISHED}\n",
+    ),
+)
+def test_stage_validation_rejects_nonterminal_or_duplicate_orient_completion(
+    tmp_path, text
+):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_L3_006.out"
+    path.write_text(text)
+    with pytest.raises(ReferenceFormatError, match="unambiguous terminal ORIENT"):
+        validate_stage_artifacts(tmp_path, "H2O")
+
+
+def test_stage_validation_rejects_fatal_orient_output_with_valid_completion(tmp_path):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_L3_008.out"
+    path.write_text(f"FATAL ERROR in ORIENT\n{ORIENT_FINISHED}\n")
+    with pytest.raises(ReferenceFormatError, match="fatal or truncation marker"):
+        validate_stage_artifacts(tmp_path, "H2O")
+
+
 def test_stage_validation_rejects_truncated_pfit_completion(tmp_path):
     populate_stage_artifacts(tmp_path)
     path = tmp_path / "H2O_ref_wt4_L3_009.out"
@@ -2466,6 +2532,35 @@ def test_stage_validation_rejects_truncated_pfit_completion(tmp_path):
         assert "Finished" in str(exc)
     else:
         raise AssertionError("truncated PFIT output was accepted")
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        f"PFIT output\n{ORIENT_FINISHED}\n",
+        "PFIT output\nfinished\n",
+        "PFIT output\nFinished extra\n",
+        "PFIT output\nFinished \n",
+        "PFIT output\nmessage Finished\n",
+        "PFIT output\n Finished\n",
+        "PFIT output\nFinished\nmore output\n",
+        "PFIT output\nFinished\nFinished\n",
+    ),
+)
+def test_stage_validation_rejects_noncanonical_pfit_completion(tmp_path, text):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_ref_wt4_L3_003.out"
+    path.write_text(text)
+    with pytest.raises(ReferenceFormatError, match="unambiguous terminal PFIT.*Finished"):
+        validate_stage_artifacts(tmp_path, "H2O")
+
+
+def test_stage_validation_rejects_fatal_pfit_output_with_valid_completion(tmp_path):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_ref_wt4_L3_004.out"
+    path.write_text("PFIT output\nFATAL ERROR\nFinished\n")
+    with pytest.raises(ReferenceFormatError, match="fatal or truncation marker"):
+        validate_stage_artifacts(tmp_path, "H2O")
 
 
 def test_stage_validation_rejects_malformed_individual_pfit_pol(tmp_path):
@@ -3958,7 +4053,7 @@ PY
 process <H2O_casimir.temp >H2O_ref_wt4_L3_casimir.data
 casimir </dev/null
 for index in $(seq -w 0 10); do
-    printf 'ORIENT output\nFinished\n' >"H2O_L3_0${index}.out"
+    printf 'ORIENT output\nFinished at 11:27:54 on 30 Jul 2026\n' >"H2O_L3_0${index}.out"
     printf 'PFIT output\nFinished\n' >"H2O_ref_wt4_L3_0${index}.out"
 done
 cat >H2O.pdef <<'EOF'

@@ -1230,16 +1230,64 @@ def validate_casimir_evidence(work_dir: Path, runtime: Path) -> None:
             )
 
 
-def _require_terminal_finished(path: Path) -> None:
+ORIENT_FINISHED_RE = re.compile(
+    r"Finished at (?P<hour>[01][0-9]|2[0-3]):(?P<minute>[0-5][0-9]):"
+    r"(?P<second>[0-5][0-9]) on (?P<day>0[1-9]|[12][0-9]|3[01]) "
+    r"(?P<month>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+    r"(?P<year>[0-9]{4})"
+)
+ORIENT_MONTHS = {
+    month: index for index, month in enumerate(
+        ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"),
+        start=1,
+    )
+}
+
+
+def _is_canonical_orient_finished(line: str) -> bool:
+    match = ORIENT_FINISHED_RE.fullmatch(line)
+    if match is None:
+        return False
+    try:
+        datetime(
+            int(match.group("year")),
+            ORIENT_MONTHS[match.group("month")],
+            int(match.group("day")),
+            int(match.group("hour")),
+            int(match.group("minute")),
+            int(match.group("second")),
+        )
+    except ValueError:
+        return False
+    return True
+
+
+def _require_terminal_finished(path: Path, kind: str) -> None:
     lines = [
-        line.strip()
+        line
         for line in path.read_text(errors="replace").splitlines()
         if line.strip()
     ]
-    completions = [line for line in lines if line.casefold() == "finished"]
-    if len(completions) != 1 or not lines or lines[-1].casefold() != "finished":
+    if kind == "ORIENT":
+        recognized = [line for line in lines if _is_canonical_orient_finished(line)]
+        expected = "Finished at HH:MM:SS on DD Mon YYYY"
+    elif kind == "PFIT":
+        recognized = [line for line in lines if line == "Finished"]
+        expected = "Finished"
+    else:  # pragma: no cover - internal callers use the two fixed output roles
+        raise AssertionError(kind)
+    completion_like = [
+        line for line in lines if line.lstrip().casefold().startswith("finished")
+    ]
+    if (
+        len(recognized) != 1
+        or completion_like != recognized
+        or lines[-1] != recognized[0]
+    ):
         raise ReferenceFormatError(
-            f"{path}: requires one unambiguous terminal Finished completion"
+            f"{path}: requires one unambiguous terminal {kind} completion "
+            f"matching {expected!r}"
         )
 
 
@@ -1366,8 +1414,10 @@ def validate_stage_artifacts(work_dir: Path, job: str) -> dict[str, Path]:
                 f"found {len(observed)}"
             )
 
-    for path in (*orient_outputs, *pfit_outputs):
-        _require_terminal_finished(path)
+    for path in orient_outputs:
+        _require_terminal_finished(path, "ORIENT")
+    for path in pfit_outputs:
+        _require_terminal_finished(path, "PFIT")
 
     relevant_suffixes = {".out", ".pol", ".pot", ".pdef"}
     for path in work_dir.rglob("*"):
