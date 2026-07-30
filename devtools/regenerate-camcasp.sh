@@ -74,11 +74,11 @@ run_logged() {
 
 require_safe_generated_path() {
     local candidate
-    local camcasp_root="${CAMCASP:-$REPO_ROOT/camcasp-bin}"
+    local camcasp_source="${CAMCASP_SOURCE_ROOT:-${CAMCASP:-$REPO_ROOT/camcasp-bin}}"
     candidate="$(realpath -m "$1")"
-    camcasp_root="$(realpath -m "$camcasp_root")"
+    camcasp_source="$(realpath -m "$camcasp_source")"
     case "$candidate" in
-        /|"$HOME"|"$REPO_ROOT"|"$camcasp_root"|"$REPO_ROOT/orient")
+        /|"$HOME"|"$REPO_ROOT"|"$camcasp_source"|"$REPO_ROOT/orient")
             fail "refusing unsafe generated path: $candidate"
             ;;
         "$REFERENCE_ROOT"|"$REFERENCE_ROOT"/*)
@@ -143,11 +143,12 @@ preflight() {
     PSI4_SOURCE_ROOT="${PSI4_SOURCE_ROOT:-$REPO_ROOT}"
     PSI4_SOURCE_ROOT="$(realpath -m "$PSI4_SOURCE_ROOT")"
     PSI4_EXE="${PSI4_EXE:-$PSI4_SOURCE_ROOT/build_camcasp/stage/bin/psi4}"
-    CAMCASP="${CAMCASP:-$REPO_ROOT/camcasp-bin}"
+    CAMCASP_SOURCE_ROOT="${CAMCASP_SOURCE_ROOT:-${CAMCASP:-$REPO_ROOT/camcasp-bin}}"
     ORIENT_REF="${ORIENT_REF:-d8d861098c8f548e2cf230c387c8431d9418650a}"
 
     PSI4_EXE="$(realpath -m "$PSI4_EXE")"
-    CAMCASP="$(realpath -m "$CAMCASP")"
+    CAMCASP_SOURCE_ROOT="$(realpath -m "$CAMCASP_SOURCE_ROOT")"
+    CAMCASP="$(realpath -m "$REFERENCE_ROOT/tools/camcasp-runtime")"
     require_executable PSI4_EXE "$PSI4_EXE"
     verify_psi4_source_root "$PSI4_SOURCE_ROOT" "$PSI4_EXE" || return
     if [[ -n "${ORIENT_EXE:-}" ]]; then
@@ -184,25 +185,166 @@ install_camcasp_program() {
     require_executable "$program" "$target"
 }
 
+verify_camcasp_source() {
+    local source_root="$(realpath -m "$1")"
+    local checkout status marker="$source_root/bin/no_psi4"
+    checkout="$(git -C "$source_root" rev-parse --show-toplevel 2>/dev/null)" || {
+        fail "CamCASP source root is not a Git checkout: $source_root"
+        return
+    }
+    [[ "$(realpath -m "$checkout")" == "$source_root" ]] || {
+        fail "CamCASP source root is not the checkout root: $source_root"
+        return
+    }
+    [[ "$(git -C "$source_root" rev-parse HEAD)" == "$CAMCASP_COMMIT" ]] || {
+        fail "CamCASP checkout is not pinned to $CAMCASP_COMMIT"
+        return
+    }
+    grep -Eq "$CAMCASP_VERSION_PATTERN" "$source_root/VERSION" || {
+        fail "unexpected CamCASP version in $source_root/VERSION"
+        return
+    }
+    status="$(git -C "$source_root" status --porcelain --untracked-files=all)" || {
+        fail "could not inspect CamCASP source checkout: $source_root"
+        return
+    }
+    [[ -z "$status" ]] || {
+        fail "CamCASP source checkout is not clean: $source_root"
+        return
+    }
+    git -C "$source_root" ls-files --error-unmatch bin/no_psi4 \
+        >/dev/null 2>&1 || {
+        fail "CamCASP source requires tracked empty bin/no_psi4"
+        return
+    }
+    [[ -f "$marker" && ! -s "$marker" ]] || {
+        fail "CamCASP source requires tracked empty bin/no_psi4"
+        return
+    }
+    [[ "$(git -C "$source_root" cat-file -s HEAD:bin/no_psi4)" == 0 ]] || {
+        fail "CamCASP source requires tracked empty bin/no_psi4"
+        return
+    }
+}
+
+extract_and_verify_camcasp_archive() {
+    local source_root="$1" commit="$2" archive="$3" target="$4"
+    local archived_commit
+    archived_commit="$(git get-tar-commit-id <"$archive")" || {
+        fail "could not read CamCASP archive commit"
+        return
+    }
+    [[ "$archived_commit" == "$commit" ]] || {
+        fail "CamCASP archive commit mismatch: $archived_commit"
+        return
+    }
+    mkdir -p "$target"
+    tar -xf "$archive" -C "$target" || {
+        fail "could not extract CamCASP source archive"
+        return
+    }
+    git --git-dir="$source_root/.git" --work-tree="$target" \
+        diff --exit-code "$commit" -- || {
+        fail "CamCASP runtime extraction differs from pinned archive"
+        return
+    }
+    printf 'source=%s\ncommit=%s\nruntime=%s\n' \
+        "$source_root" "$commit" "$target"
+}
+
+verify_camcasp_runtime() {
+    local expected="$(realpath -m "$REFERENCE_ROOT/tools/camcasp-runtime")"
+    [[ "$(realpath -m "$CAMCASP")" == "$expected" ]] || {
+        fail "unexpected CamCASP runtime path: $CAMCASP"
+        return
+    }
+    [[ "$(realpath -m "$CAMCASP_SOURCE_ROOT")" != "$expected" ]] || {
+        fail "CamCASP source and runtime must be distinct"
+        return
+    }
+    [[ -f "$CAMCASP/VERSION" ]] || {
+        fail "missing CamCASP runtime VERSION"
+        return
+    }
+    cmp -s "$CAMCASP_SOURCE_ROOT/VERSION" "$CAMCASP/VERSION" || {
+        fail "CamCASP runtime VERSION differs from source"
+        return
+    }
+    [[ ! -e "$CAMCASP/bin/no_psi4" ]] || {
+        fail "CamCASP runtime sentinel unexpectedly exists: $CAMCASP/bin/no_psi4"
+        return
+    }
+    [[ ! -e "$CAMCASP/.git" ]] || {
+        fail "CamCASP runtime unexpectedly contains Git metadata"
+        return
+    }
+}
+
+materialize_camcasp_runtime() {
+    CURRENT_STAGE="camcasp-materialize"
+    local archive="$REFERENCE_ROOT/logs/camcasp-source.tar"
+    local runtime_temp="$REFERENCE_ROOT/tools/.camcasp-runtime.tmp.$$"
+    local source_marker="$CAMCASP_SOURCE_ROOT/bin/no_psi4"
+    local runtime_marker="$runtime_temp/bin/no_psi4"
+    require_safe_generated_path "$CAMCASP" || return
+    [[ "$CAMCASP" == "$(realpath -m "$REFERENCE_ROOT/tools/camcasp-runtime")" ]] || {
+        fail "refusing noncanonical CamCASP runtime: $CAMCASP"
+        return
+    }
+    rm -rf "$CAMCASP" "$runtime_temp"
+    mkdir -p "$REFERENCE_ROOT/logs" "$REFERENCE_ROOT/tools"
+    run_logged camcasp-archive "$REFERENCE_ROOT/logs/camcasp-archive.log" \
+        git -C "$CAMCASP_SOURCE_ROOT" archive --format=tar \
+            --output="$archive" "$CAMCASP_COMMIT" || return
+    write_sha256_record "$archive" "$archive.sha256" camcasp-source.tar
+    if ! run_logged camcasp-materialize \
+        "$REFERENCE_ROOT/logs/camcasp-materialization.log" \
+        extract_and_verify_camcasp_archive "$CAMCASP_SOURCE_ROOT" \
+            "$CAMCASP_COMMIT" "$archive" "$runtime_temp"; then
+        rm -rf "$runtime_temp"
+        return 1
+    fi
+    [[ -f "$runtime_marker" && ! -s "$runtime_marker" ]] || {
+        rm -rf "$runtime_temp"
+        fail "archived CamCASP runtime lacks attested empty bin/no_psi4"
+        return
+    }
+    cmp -s "$source_marker" "$runtime_marker" || {
+        rm -rf "$runtime_temp"
+        fail "runtime bin/no_psi4 differs from pinned source marker"
+        return
+    }
+    rm -f "$runtime_marker"
+    [[ ! -e "$runtime_marker" ]] || {
+        rm -rf "$runtime_temp"
+        fail "runtime sentinel unexpectedly survived removal"
+        return
+    }
+    mv "$runtime_temp" "$CAMCASP"
+    verify_camcasp_runtime || return
+    write_sha256_record "$source_marker" \
+        "$REFERENCE_ROOT/logs/camcasp-source-no_psi4.sha256" \
+        camcasp-source/bin/no_psi4
+}
+
 provision_camcasp() {
     CURRENT_STAGE="provision-camcasp"
-    if [[ ! -d "$CAMCASP/.git" ]]; then
-        [[ "$CAMCASP" == "$REPO_ROOT/camcasp-bin" ]] ||
-            fail "CAMCASP override must already be a Git checkout: $CAMCASP"
-        git clone --no-checkout "$CAMCASP_URL" "$CAMCASP"
-        git -C "$CAMCASP" fetch --depth 1 origin "$CAMCASP_COMMIT"
-        git -C "$CAMCASP" checkout --detach "$CAMCASP_COMMIT"
+    if [[ ! -d "$CAMCASP_SOURCE_ROOT/.git" ]]; then
+        [[ "$CAMCASP_SOURCE_ROOT" == "$REPO_ROOT/camcasp-bin" ]] || {
+            fail "CAMCASP source override must already be a Git checkout: $CAMCASP_SOURCE_ROOT"
+            return
+        }
+        git clone --no-checkout "$CAMCASP_URL" "$CAMCASP_SOURCE_ROOT"
+        git -C "$CAMCASP_SOURCE_ROOT" fetch --depth 1 origin "$CAMCASP_COMMIT"
+        git -C "$CAMCASP_SOURCE_ROOT" checkout --detach "$CAMCASP_COMMIT"
     fi
-    [[ "$(git -C "$CAMCASP" rev-parse HEAD)" == "$CAMCASP_COMMIT" ]] ||
-        fail "CamCASP checkout is not pinned to $CAMCASP_COMMIT"
-    grep -Eq '7\.2\.2|VERSION 7\.2\.2' "$CAMCASP/VERSION" ||
-        fail "unexpected CamCASP version in $CAMCASP/VERSION"
-    git -C "$CAMCASP" diff --quiet
-    git -C "$CAMCASP" diff --cached --quiet
+    verify_camcasp_source "$CAMCASP_SOURCE_ROOT" || return
+    materialize_camcasp_runtime || return
     local program
     for program in "${CAMCASP_PROGRAMS[@]}"; do
-        install_camcasp_program "$program"
+        install_camcasp_program "$program" || return
     done
+    verify_camcasp_runtime
 }
 
 smoke_orient() {
@@ -435,6 +577,10 @@ else
 fi
 EOF
     chmod 0755 "$wrapper"
+    mkdir -p "$REFERENCE_ROOT/logs"
+    write_sha256_record "$wrapper" \
+        "$REFERENCE_ROOT/logs/camcasp-psi4-wrapper.sha256" \
+        camcasp-runtime/bin/psi4.sh
     run_logged psi4-version "$REFERENCE_ROOT/logs/psi4-version.log" \
         "$wrapper" --version
 }
@@ -661,8 +807,10 @@ write_manifest() {
     verify_orient_checkout "$ORIENT_SOURCE_ROOT" "$ORIENT_EXE" without-products || return
     validate_current_orient_products "$ORIENT_SOURCE_ROOT" manifest || return
     verify_psi4_source_root "$PSI4_SOURCE_ROOT" "$PSI4_EXE" || return
+    verify_camcasp_source "$CAMCASP_SOURCE_ROOT" || return
+    verify_camcasp_runtime || return
     run_logged write-manifest "$REFERENCE_ROOT/logs/write-manifest.log" \
-        python -P - "$REPO_ROOT" "$SCRIPT_PATH" "$CAMCASP" \
+        python -P - "$REPO_ROOT" "$SCRIPT_PATH" "$CAMCASP_SOURCE_ROOT" "$CAMCASP" \
         "$ORIENT_SOURCE_ROOT" "$ORIENT_EXE" \
         "$PSI4_SOURCE_ROOT" "$PSI4_EXE" "$REFERENCE_ROOT" \
         "${PSI4_INPUT_FILES[0]}" "${P2P_FILES[0]}" "$temp" <<'PY'
@@ -674,7 +822,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-(repo, generator, camcasp, orient_source, orient_exe,
+(repo, generator, camcasp_source, camcasp, orient_source, orient_exe,
  psi4_source, psi4_exe, reference, psi4_input, p2p, output) = map(
     Path, sys.argv[1:]
 )
@@ -717,10 +865,8 @@ document = {
     },
     "tools": {
         "camcasp": {
-            "version": (camcasp / "VERSION").read_text().strip(),
-            "commit": subprocess.check_output(
-                ["git", "-C", str(camcasp), "rev-parse", "HEAD"], text=True
-            ).strip(),
+            "version": (camcasp_source / "VERSION").read_text().strip(),
+            "commit": git_at(camcasp_source, "rev-parse", "HEAD"),
             "executables": {
                 name: record(camcasp / "bin" / name) for name in programs
             },
@@ -783,6 +929,12 @@ document = {
         "psi4_input": record(psi4_input),
         "p2p": record(p2p),
         "pdef": record(job / "H2O.pdef"),
+        "camcasp_no_psi4": record(camcasp_source / "bin" / "no_psi4"),
+        "camcasp_psi4_wrapper": record(camcasp / "bin" / "psi4.sh"),
+        "camcasp_archive": record(reference / "logs" / "camcasp-source.tar"),
+        "camcasp_materialization_log": record(
+            reference / "logs" / "camcasp-materialization.log"
+        ),
     },
 }
 with output.open("w", encoding="utf-8", newline="\n") as handle:

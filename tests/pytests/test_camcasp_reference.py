@@ -94,6 +94,134 @@ def test_install_camcasp_program_preserves_archive(tmp_path):
     assert (camcasp / "bin" / "camcasp").resolve() == installed.resolve()
 
 
+def _make_camcasp_source_checkout(path, sentinel=b""):
+    (path / "bin").mkdir(parents=True)
+    (path / "VERSION").write_text("CamCASP VERSION 7.2.2 patch 003\n")
+    if sentinel is not None:
+        (path / "bin" / "no_psi4").write_bytes(sentinel)
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.name", "Test"], check=True
+    )
+    subprocess.run(["git", "-C", str(path), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "commit", "-qm", "stub CamCASP"],
+        check=True,
+    )
+    return subprocess.check_output(
+        ["git", "-C", str(path), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+
+@pytest.mark.parametrize("sentinel", (None, b"not empty\n"))
+def test_verify_camcasp_source_rejects_missing_or_nonempty_sentinel(
+    tmp_path, sentinel
+):
+    source = tmp_path / "camcasp-source"
+    commit = _make_camcasp_source_checkout(source, sentinel)
+    result = subprocess.run(
+        [
+            "bash", "-c",
+            f'source "{SCRIPT}"; CAMCASP_COMMIT="$1"; '
+            'verify_camcasp_source "$2"',
+            "camcasp-sentinel", commit, str(source),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "tracked empty bin/no_psi4" in result.stderr
+
+
+@pytest.mark.parametrize("failure_kind", ("archive", "materialize"))
+def test_camcasp_runtime_materialization_failure_is_fail_closed(
+    tmp_path, failure_kind
+):
+    source = tmp_path / "camcasp-source"
+    commit = _make_camcasp_source_checkout(source)
+    reference = tmp_path / "reference"
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    real_git = subprocess.check_output(["bash", "-c", "command -v git"], text=True).strip()
+    real_tar = subprocess.check_output(["bash", "-c", "command -v tar"], text=True).strip()
+    git_wrapper = fake_bin / "git"
+    git_wrapper.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$FAILURE_KIND\" == archive && \" $* \" == *\" archive \"* ]]; then exit 88; fi\n"
+        f'exec "{real_git}" "$@"\n'
+    )
+    git_wrapper.chmod(0o755)
+    tar_wrapper = fake_bin / "tar"
+    tar_wrapper.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$FAILURE_KIND\" == materialize ]]; then exit 89; fi\n"
+        f'exec "{real_tar}" "$@"\n'
+    )
+    tar_wrapper.chmod(0o755)
+    command = (
+        f'source "{SCRIPT}"; '
+        'REFERENCE_ROOT="$1"; CAMCASP_SOURCE_ROOT="$2"; '
+        'CAMCASP_COMMIT="$3"; CAMCASP="$REFERENCE_ROOT/tools/camcasp-runtime"; '
+        'verify_camcasp_source "$CAMCASP_SOURCE_ROOT"; '
+        'materialize_camcasp_runtime'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "camcasp-materialize", str(reference), str(source), commit],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAILURE_KIND": failure_kind,
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert not (reference / "tools" / "camcasp-runtime").exists()
+    failure_log = (
+        reference / "logs" /
+        ("camcasp-archive.log" if failure_kind == "archive" else "camcasp-materialization.log")
+    )
+    assert failure_log.is_file()
+    assert failure_log.with_name(failure_log.name + ".sha256").is_file()
+    assert subprocess.check_output(
+        [real_git, "-C", str(source), "status", "--porcelain", "--untracked-files=all"],
+        text=True,
+    ) == ""
+
+
+def test_verify_camcasp_runtime_rejects_surviving_sentinel(tmp_path):
+    source = tmp_path / "camcasp-source"
+    commit = _make_camcasp_source_checkout(source)
+    reference = tmp_path / "reference"
+    runtime = reference / "tools" / "camcasp-runtime"
+    command = (
+        f'source "{SCRIPT}"; '
+        'REFERENCE_ROOT="$1"; CAMCASP_SOURCE_ROOT="$2"; '
+        'CAMCASP_COMMIT="$3"; CAMCASP="$4"; '
+        'verify_camcasp_source "$CAMCASP_SOURCE_ROOT"; '
+        'materialize_camcasp_runtime; : >"$CAMCASP/bin/no_psi4"; '
+        'verify_camcasp_runtime'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "camcasp-runtime", str(reference), str(source), commit, str(runtime)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "runtime sentinel unexpectedly exists" in result.stderr
+    assert (source / "bin" / "no_psi4").read_bytes() == b""
+
+
 def test_safe_path_rejects_repository_root():
     command = (
         f'source "{SCRIPT}"; '
@@ -2028,6 +2156,8 @@ def test_dependency_free_stubbed_pipeline_requires_approval_before_json(tmp_path
         runcamcasp,
         """#!/usr/bin/env bash
 set -euo pipefail
+[[ ! -e "$CAMCASP/bin/no_psi4" ]] || exit 91
+[[ "$0" == "$CAMCASP/bin/runcamcasp.py" ]] || exit 92
 echo camcasp >>"$STUB_CALLS"
 "$PSI4_EXE" --stub-stage >/dev/null
 job_dir=""
@@ -2073,6 +2203,7 @@ printf 'point to point\n' >"$job_dir/OUT/H2O.p2p"
         localize,
         """#!/usr/bin/env bash
 set -euo pipefail
+[[ "$0" == "$CAMCASP/bin/localize.py" ]] || exit 93
 orient </dev/null
 pfit </dev/null
 casimir </dev/null
@@ -2111,6 +2242,12 @@ cat >H2O_ref_wt4_L3_C12.pot <<'EOF'
 """,
     )
     (camcasp / "VERSION").write_text("CamCASP VERSION 7.2.2 patch 003\n")
+    (bin_dir / "no_psi4").write_bytes(b"")
+    archive_dir = camcasp / "x86-64" / "gfortran"
+    archive_dir.mkdir(parents=True)
+    for name in ("camcasp", "cluster", "process", "pfit", "casimir"):
+        with gzip.open(archive_dir / f"{name}.gz", "wb") as handle:
+            handle.write((bin_dir / name).read_bytes())
     subprocess.run(["git", "init", "-q", str(camcasp)], check=True)
     subprocess.run(
         ["git", "-C", str(camcasp), "config", "user.email", "test@example.com"],
@@ -2125,15 +2262,25 @@ cat >H2O_ref_wt4_L3_C12.pot <<'EOF'
         ["git", "-C", str(camcasp), "commit", "-qm", "stub tools"],
         check=True,
     )
+    camcasp_commit = subprocess.check_output(
+        ["git", "-C", str(camcasp), "rev-parse", "HEAD"], text=True
+    ).strip()
+    source_sentinel_digest = hashlib.sha256(
+        (bin_dir / "no_psi4").read_bytes()
+    ).hexdigest()
 
     (reference / "work").mkdir(parents=True)
     (reference / "atomic-polarizabilities.json").write_text("stale json\n")
     (reference / "atomic-polarizabilities.json.sha256").write_text("stale digest\n")
     (reference / "work" / "manifest.json").write_text("stale manifest\n")
+    stale_runtime = reference / "tools" / "camcasp-runtime"
+    stale_runtime.mkdir(parents=True)
+    (stale_runtime / "stale-product").write_text("stale\n")
 
     command = f'''source "{SCRIPT}"
 REFERENCE_ROOT="$1"
 CAMCASP="$2"
+CAMCASP_COMMIT="$7"
 PSI4_SOURCE_ROOT="$3"
 PSI4_EXE="$PSI4_SOURCE_ROOT/build_camcasp/stage/bin/psi4"
 ORIENT_EXE="$4/x86-64/gfortran/exe/orient-5.0.10-ng"
@@ -2146,11 +2293,10 @@ prepare_layout
 ORIENT_BIN_DIR="$REFERENCE_ROOT/tools/orient/bin"
 mkdir -p "$ORIENT_BIN_DIR"
 ln -s "$ORIENT_EXE" "$ORIENT_BIN_DIR/orient"
-PATH="$ORIENT_BIN_DIR:$CAMCASP/bin:$PATH"
-export SCRATCH="$REFERENCE_ROOT/scratch/camcasp"
+provision_camcasp
+write_psi4_wrapper
+export_reference_environment
 write_inputs
-mkdir -p "$REFERENCE_ROOT/logs"
-"$PSI4_EXE" --version >"$REFERENCE_ROOT/logs/psi4-version.log"
 run_camcasp
 attest_generated_protocol
 run_localize
@@ -2171,7 +2317,7 @@ build_reference_json
         [
             "bash", "-c", command, "stub-pipeline", str(reference),
             str(camcasp), str(psi4_source), str(orient_source),
-            orient_commit, str(calls),
+            orient_commit, str(calls), camcasp_commit,
         ],
         cwd=ROOT,
         text=True,
@@ -2183,6 +2329,25 @@ build_reference_json
         (reference / "atomic-polarizabilities.json").read_text()
     )
     validate_reference_document(document)
+    runtime = reference / "tools" / "camcasp-runtime"
+    source_sentinel = bin_dir / "no_psi4"
+    assert source_sentinel.is_file()
+    assert hashlib.sha256(source_sentinel.read_bytes()).hexdigest() == source_sentinel_digest
+    assert subprocess.check_output(
+        ["git", "-C", str(camcasp), "ls-files", "--error-unmatch", "bin/no_psi4"],
+        text=True,
+    ).strip() == "bin/no_psi4"
+    assert subprocess.check_output(
+        ["git", "-C", str(camcasp), "status", "--porcelain", "--untracked-files=all"],
+        text=True,
+    ) == ""
+    assert not (runtime / "bin" / "no_psi4").exists()
+    assert not (runtime / "stale-product").exists()
+    assert (runtime / "bin" / "psi4.sh").is_file()
+    for name in ("camcasp", "cluster", "process", "pfit", "casimir"):
+        assert (runtime / "x86-64" / "gfortran" / f"{name}.gz").read_bytes().startswith(
+            b"\x1f\x8b"
+        )
     assert calls.read_text().splitlines() == [
         "psi4", "camcasp", "psi4", "orient", "pfit", "casimir"
     ]
@@ -2213,6 +2378,19 @@ build_reference_json
     assert set(document["tools"]["camcasp"]["executables"]) == {
         "camcasp", "cluster", "process", "pfit", "casimir"
     }
+    assert document["tools"]["camcasp"]["commit"] == camcasp_commit
+    assert all(
+        record["path"].startswith(str(runtime.resolve()) + os.sep)
+        for record in document["tools"]["camcasp"]["executables"].values()
+    )
+    assert document["sources"]["camcasp_no_psi4"]["path"] == str(
+        source_sentinel.resolve()
+    )
+    assert document["sources"]["camcasp_psi4_wrapper"]["path"] == str(
+        (runtime / "bin" / "psi4.sh").resolve()
+    )
+    assert (reference / "logs" / "camcasp-source.tar.sha256").is_file()
+    assert (reference / "logs" / "camcasp-materialization.log.sha256").is_file()
     assert document["inputs"]["H2O.clt"]["path"] == str(
         (reference / "inputs" / "H2O.clt").resolve()
     )
