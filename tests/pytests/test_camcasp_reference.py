@@ -2366,7 +2366,7 @@ def _refined_block_text(combined_text, index):
     return block.strip() + "\n"
 
 
-ORIENT_FINISHED = "Finished at 11:27:54 on 30 Jul 2026"
+ORIENT_FINISHED = "Finished at 11:27:54 on 30 Jul 2026 "
 
 
 def populate_stage_artifacts(work, job="H2O"):
@@ -2458,6 +2458,28 @@ def test_stage_validation_rejects_ambiguous_finished_completion(tmp_path):
         raise AssertionError("ambiguous ORIENT completion was accepted")
 
 
+@pytest.mark.parametrize("suffix", ("", " ", "\t", " \t\t"))
+def test_stage_validation_accepts_only_horizontal_orient_completion_tail(
+    tmp_path, suffix
+):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_L3_001.out"
+    path.write_text(
+        "ORIENT output\nFinished at 11:27:54 on 30 Jul 2026" + suffix + "\n"
+    )
+    validate_stage_artifacts(tmp_path, "H2O")
+
+
+@pytest.mark.parametrize("suffix", ("", " ", "\t", " \t\t"))
+def test_stage_validation_accepts_only_horizontal_pfit_completion_tail(
+    tmp_path, suffix
+):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_ref_wt4_L3_001.out"
+    path.write_text("PFIT output\nFinished" + suffix + "\n")
+    validate_stage_artifacts(tmp_path, "H2O")
+
+
 def test_stage_validation_accepts_blank_tail_after_canonical_orient_completion(tmp_path):
     populate_stage_artifacts(tmp_path)
     path = tmp_path / "H2O_L3_003.out"
@@ -2482,7 +2504,6 @@ def test_stage_validation_accepts_blank_tail_after_canonical_orient_completion(t
         "Finished at 11:27:54 on 30 Jul 26",
         "Finished at 11:27:54 on 31 Feb 2026",
         "Finished at 11:27:54 on 30 Jul 2026 extra",
-        "Finished at 11:27:54 on 30 Jul 2026 ",
         "message Finished at 11:27:54 on 30 Jul 2026",
         " Finished at 11:27:54 on 30 Jul 2026",
     ),
@@ -2513,6 +2534,87 @@ def test_stage_validation_rejects_nonterminal_or_duplicate_orient_completion(
         validate_stage_artifacts(tmp_path, "H2O")
 
 
+@pytest.mark.parametrize(
+    ("role", "suffix"),
+    (
+        ("ORIENT", "\u00a0"),
+        ("ORIENT", "\u2003"),
+        ("ORIENT", "\v"),
+        ("ORIENT", "\f"),
+        ("ORIENT", "\u0085"),
+        ("ORIENT", "\u2028"),
+        ("ORIENT", "\u2029"),
+        ("ORIENT", "\r"),
+        ("PFIT", "\u00a0"),
+        ("PFIT", "\u2003"),
+        ("PFIT", "\v"),
+        ("PFIT", "\f"),
+        ("PFIT", "\u0085"),
+        ("PFIT", "\u2028"),
+        ("PFIT", "\u2029"),
+        ("PFIT", "\r"),
+    ),
+)
+def test_stage_validation_rejects_nonhorizontal_completion_tail(
+    tmp_path, role, suffix
+):
+    populate_stage_artifacts(tmp_path)
+    if role == "ORIENT":
+        path = tmp_path / "H2O_L3_007.out"
+        completion = "Finished at 11:27:54 on 30 Jul 2026"
+    else:
+        path = tmp_path / "H2O_ref_wt4_L3_007.out"
+        completion = "Finished"
+    path.write_text(f"{role} output\n{completion}{suffix}\n")
+    with pytest.raises(ReferenceFormatError, match=f"terminal {role} completion"):
+        validate_stage_artifacts(tmp_path, "H2O")
+
+
+@pytest.mark.parametrize("role", ("ORIENT", "PFIT"))
+def test_stage_validation_rejects_bare_cr_completion_record(tmp_path, role):
+    populate_stage_artifacts(tmp_path)
+    if role == "ORIENT":
+        path = tmp_path / "H2O_L3_008.out"
+        completion = b"Finished at 11:27:54 on 30 Jul 2026 "
+    else:
+        path = tmp_path / "H2O_ref_wt4_L3_008.out"
+        completion = b"Finished"
+    path.write_bytes(role.encode() + b" output\n" + completion + b"\r")
+    with pytest.raises(ReferenceFormatError, match=f"terminal {role} completion"):
+        validate_stage_artifacts(tmp_path, "H2O")
+
+
+@pytest.mark.parametrize(
+    ("role", "text"),
+    (
+        (
+            "ORIENT",
+            f"ORIENT output\nFinished\n{ORIENT_FINISHED}\n",
+        ),
+        (
+            "ORIENT",
+            f"ORIENT output\nFinished at 11:27:54 on 30 Jul 2026 extra\n"
+            f"{ORIENT_FINISHED}\n",
+        ),
+        (
+            "PFIT",
+            f"PFIT output\n{ORIENT_FINISHED}\nFinished\n",
+        ),
+    ),
+)
+def test_stage_validation_rejects_competing_malformed_completion_lines(
+    tmp_path, role, text
+):
+    populate_stage_artifacts(tmp_path)
+    path = (
+        tmp_path / "H2O_L3_009.out" if role == "ORIENT"
+        else tmp_path / "H2O_ref_wt4_L3_009.out"
+    )
+    path.write_text(text)
+    with pytest.raises(ReferenceFormatError, match=f"terminal {role} completion"):
+        validate_stage_artifacts(tmp_path, "H2O")
+
+
 def test_stage_validation_rejects_fatal_orient_output_with_valid_completion(tmp_path):
     populate_stage_artifacts(tmp_path)
     path = tmp_path / "H2O_L3_008.out"
@@ -2540,7 +2642,6 @@ def test_stage_validation_rejects_truncated_pfit_completion(tmp_path):
         f"PFIT output\n{ORIENT_FINISHED}\n",
         "PFIT output\nfinished\n",
         "PFIT output\nFinished extra\n",
-        "PFIT output\nFinished \n",
         "PFIT output\nmessage Finished\n",
         "PFIT output\n Finished\n",
         "PFIT output\nFinished\nmore output\n",
@@ -4053,7 +4154,7 @@ PY
 process <H2O_casimir.temp >H2O_ref_wt4_L3_casimir.data
 casimir </dev/null
 for index in $(seq -w 0 10); do
-    printf 'ORIENT output\nFinished at 11:27:54 on 30 Jul 2026\n' >"H2O_L3_0${index}.out"
+    printf 'ORIENT output\nFinished at 11:27:54 on 30 Jul 2026 \n' >"H2O_L3_0${index}.out"
     printf 'PFIT output\nFinished\n' >"H2O_ref_wt4_L3_0${index}.out"
 done
 cat >H2O.pdef <<'EOF'

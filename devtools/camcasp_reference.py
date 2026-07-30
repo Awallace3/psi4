@@ -1263,27 +1263,44 @@ def _is_canonical_orient_finished(line: str) -> bool:
     return True
 
 
+NON_LF_LINE_SEPARATORS = (
+    "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"
+)
+
+
 def _require_terminal_finished(path: Path, kind: str) -> None:
+    with path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+        text = handle.read()
+    if any(separator in text for separator in NON_LF_LINE_SEPARATORS):
+        raise ReferenceFormatError(
+            f"{path}: requires one unambiguous terminal {kind} completion; "
+            "output contains a non-LF line separator"
+        )
     lines = [
-        line
-        for line in path.read_text(errors="replace").splitlines()
-        if line.strip()
+        line for line in text.splitlines() if line.strip(" \t")
     ]
+    normalized = [line.rstrip(" \t") for line in lines]
     if kind == "ORIENT":
-        recognized = [line for line in lines if _is_canonical_orient_finished(line)]
-        expected = "Finished at HH:MM:SS on DD Mon YYYY"
+        recognized = [
+            index for index, line in enumerate(normalized)
+            if _is_canonical_orient_finished(line)
+        ]
+        expected = r"Finished at HH:MM:SS on DD Mon YYYY[ \t]*"
     elif kind == "PFIT":
-        recognized = [line for line in lines if line == "Finished"]
-        expected = "Finished"
+        recognized = [
+            index for index, line in enumerate(normalized) if line == "Finished"
+        ]
+        expected = r"Finished[ \t]*"
     else:  # pragma: no cover - internal callers use the two fixed output roles
         raise AssertionError(kind)
     completion_like = [
-        line for line in lines if line.lstrip().casefold().startswith("finished")
+        index for index, line in enumerate(lines)
+        if line.lstrip(" \t").casefold().startswith("finished")
     ]
     if (
         len(recognized) != 1
         or completion_like != recognized
-        or lines[-1] != recognized[0]
+        or recognized[0] != len(lines) - 1
     ):
         raise ReferenceFormatError(
             f"{path}: requires one unambiguous terminal {kind} completion "
