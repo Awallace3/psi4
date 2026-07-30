@@ -773,6 +773,16 @@ def current_payload():
     if sentinel.read_bytes() != b"":
         raise ValueError("source sentinel is not empty")
     runtime_sentinel = runtime / "bin" / "no_psi4"
+    realcg_dir = runtime / "data" / "realcg"
+    if realcg_dir.is_symlink() or not realcg_dir.is_dir():
+        raise ValueError(f"invalid realcg directory: {realcg_dir}")
+    realcg_files = {}
+    for entry in sorted(realcg_dir.iterdir(), key=lambda path: path.name):
+        if entry.is_symlink() or not entry.is_file():
+            raise ValueError(f"unexpected non-regular realcg entry: {entry}")
+        realcg_files[entry.name] = record(entry)
+    if not realcg_files:
+        raise ValueError("realcg directory is empty")
     archives = {}
     executables = {}
     symlinks = {}
@@ -809,6 +819,7 @@ def current_payload():
         },
         "runtime_version": record(runtime / "VERSION"),
         "psi4_wrapper": record(runtime / "bin" / "psi4.sh"),
+        "realcg_files": realcg_files,
         "archives": archives,
         "executables": executables,
         "bin_symlinks": symlinks,
@@ -1104,15 +1115,57 @@ checksum_job_files() {
     )
 }
 
+derive_short_camcasp_path() {
+    local job_dir="$1"
+    local runtime="$2"
+    python -P - "$job_dir" "$runtime" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+work = Path(sys.argv[1]).resolve(strict=True)
+runtime = Path(sys.argv[2]).resolve(strict=True)
+relative = os.path.relpath(runtime, work)
+if Path(relative).is_absolute() or not relative:
+    raise SystemExit("short CamCASP path is not relative")
+if any(character.isspace() for character in relative):
+    raise SystemExit("short CamCASP path contains whitespace or newline")
+if (work / relative).resolve(strict=True) != runtime:
+    raise SystemExit("short CamCASP path does not resolve to sealed runtime")
+realcg = runtime / "data" / "realcg"
+if realcg.is_symlink() or not realcg.is_dir():
+    raise SystemExit(f"invalid sealed realcg directory: {realcg}")
+entries = sorted(realcg.iterdir(), key=lambda path: path.name)
+if not entries:
+    raise SystemExit("sealed realcg directory is empty")
+for entry in entries:
+    if entry.is_symlink() or not entry.is_file():
+        raise SystemExit(f"unexpected non-regular realcg entry: {entry}")
+    record = f"{relative}/data/realcg/{entry.name}"
+    if len(record) > 80:
+        raise SystemExit(
+            f"short CamCASP path exceeds CASIMIR 80-character record for {entry.name}: {record!r}"
+        )
+print(relative)
+PY
+}
+
 run_localize() {
     CURRENT_STAGE="localize-refine-dispersion"
     local job_dir="$REFERENCE_ROOT/work/H2O"
+    local absolute_camcasp="$CAMCASP"
+    local short_camcasp
     (( ${#NL4_FILES[@]} == 1 )) || fail "NL4 artifact cardinality is not one"
+    short_camcasp="$(derive_short_camcasp_path "$job_dir" "$absolute_camcasp")" || {
+        fail "could not derive a CASIMIR-safe relative CamCASP path"
+        return
+    }
     (
         cd "$job_dir"
+        export CAMCASP="$short_camcasp"
         run_logged localize-refine-dispersion \
             "$REFERENCE_ROOT/logs/localize-refine-dispersion.log" \
-            "$CAMCASP/bin/localize.py" H2O \
+            "$absolute_camcasp/bin/localize.py" H2O \
                 --axes H2O.axes \
                 --polfile "${NL4_FILES[0]}" \
                 --format NEW \
@@ -1126,6 +1179,9 @@ run_localize() {
                 --force loc refine disp \
                 --debug
     )
+    run_logged validate-casimir "$REFERENCE_ROOT/logs/validate-casimir.log" \
+        python -P "$REPO_ROOT/devtools/camcasp_reference.py" \
+        validate-casimir --work-dir "$job_dir" --runtime "$absolute_camcasp"
     run_logged validate-artifacts "$REFERENCE_ROOT/logs/validate-artifacts.log" \
         python -P "$REPO_ROOT/devtools/camcasp_reference.py" \
         validate-artifacts --work-dir "$job_dir" --job H2O
@@ -1304,6 +1360,9 @@ document = {
     "sources": {
         "cks": record(job / "H2O.cks"),
         "cluster_output": record(job / "H2O.clt.clout"),
+        "casimir_process_template": record(job / "H2O_casimir.prss"),
+        "casimir_process_input": record(job / "H2O_casimir.temp"),
+        "casimir_input": record(job / "H2O_ref_wt4_L3_casimir.data"),
         "psi4_generated_input": record(psi4_generated_input),
         "psi4_executed_input": record(psi4_executed_input),
         "psi4_input": record(psi4_executed_input),

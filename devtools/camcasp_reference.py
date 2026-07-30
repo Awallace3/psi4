@@ -643,6 +643,123 @@ def validate_generated_protocol(
     _validate_psi4_output(psi4_output_text)
 
 
+def _regular_realcg_files(runtime: Path) -> tuple[Path, list[Path]]:
+    realcg = runtime.resolve(strict=True) / "data" / "realcg"
+    if realcg.is_symlink() or not realcg.is_dir():
+        raise ReferenceFormatError(f"CASIMIR realcg directory is invalid: {realcg}")
+    files = []
+    for entry in sorted(realcg.iterdir(), key=lambda path: path.name):
+        if entry.is_symlink() or not entry.is_file():
+            raise ReferenceFormatError(
+                f"CASIMIR realcg directory contains non-regular entry: {entry}"
+            )
+        files.append(entry)
+    if not files:
+        raise ReferenceFormatError(f"CASIMIR realcg directory is empty: {realcg}")
+    return realcg, files
+
+
+def _require_casimir_evidence_file(
+    work_dir: Path, pattern: str, expected_name: str
+) -> Path:
+    candidates = sorted(work_dir.glob(pattern))
+    if len(candidates) != 1:
+        raise ReferenceFormatError(
+            f"CASIMIR evidence: expected exactly one {pattern}, found {len(candidates)}"
+        )
+    path = candidates[0]
+    if path.name != expected_name or path.is_symlink() or not path.is_file():
+        raise ReferenceFormatError(
+            f"CASIMIR evidence: expected regular {expected_name}, found {path.name}"
+        )
+    if path.stat().st_size == 0:
+        raise ReferenceFormatError(f"CASIMIR evidence is empty: {path}")
+    return path
+
+
+def _require_exact_casimir_control(lines: Sequence[str], expected: str) -> None:
+    key = expected.split()[0]
+    observed = [line for line in lines if line.split()[0] == key]
+    if len(observed) != 1:
+        raise ReferenceFormatError(
+            f"CASIMIR data: expected exactly one active {key} control"
+        )
+    if observed[0] != expected:
+        raise ReferenceFormatError(
+            f"CASIMIR data: conflicting {key} control {observed[0]!r}; "
+            f"expected {expected!r}"
+        )
+
+
+def validate_casimir_evidence(work_dir: Path, runtime: Path) -> None:
+    work_dir = work_dir.resolve(strict=True)
+    process_path = _require_casimir_evidence_file(
+        work_dir, "*_casimir.prss", "H2O_casimir.prss"
+    )
+    temp_path = _require_casimir_evidence_file(
+        work_dir, "*_casimir.temp", "H2O_casimir.temp"
+    )
+    data_path = _require_casimir_evidence_file(
+        work_dir, "*_casimir.data", "H2O_ref_wt4_L3_casimir.data"
+    )
+    for path in (process_path, temp_path):
+        lines = [" ".join(line.split()) for _number, line in _active_lines(path.read_text())]
+        frequencies = [
+            line for line in lines if line.startswith("Frequencies ")
+        ]
+        if frequencies != ["Frequencies STATIC + 10"]:
+            raise ReferenceFormatError(
+                f"CASIMIR evidence {path.name}: expected exactly one active "
+                "Frequencies STATIC + 10 control"
+            )
+
+    lines = [
+        " ".join(line.split())
+        for _number, line in _active_lines(data_path.read_text(errors="replace"))
+    ]
+    for expected in (
+        "Frequencies 0.5 10",
+        "Skip 0",
+        "Dispersion 12 H2O",
+    ):
+        _require_exact_casimir_control(lines, expected)
+
+    cgdir_lines = [line for line in lines if line.split()[0].casefold() == "cgdir"]
+    if len(cgdir_lines) != 1:
+        raise ReferenceFormatError(
+            "CASIMIR data: expected exactly one active CGdir control"
+        )
+    fields = cgdir_lines[0].split()
+    if len(fields) != 2 or fields[0] != "CGdir":
+        raise ReferenceFormatError(f"CASIMIR data: malformed CGdir control {cgdir_lines[0]!r}")
+    cgdir = fields[1]
+    if Path(cgdir).is_absolute():
+        raise ReferenceFormatError("CASIMIR data: CGdir must be relative")
+    if any(character.isspace() for character in cgdir):
+        raise ReferenceFormatError("CASIMIR data: CGdir contains whitespace")
+
+    realcg, realcg_files = _regular_realcg_files(runtime)
+    expected_cgdir = os.path.relpath(realcg, work_dir)
+    if cgdir != expected_cgdir:
+        raise ReferenceFormatError(
+            f"CASIMIR data: CGdir {cgdir!r} is not canonical {expected_cgdir!r}"
+        )
+    try:
+        resolved_cgdir = (work_dir / cgdir).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ReferenceFormatError(f"CASIMIR data: CGdir does not resolve: {cgdir}") from exc
+    if resolved_cgdir != realcg:
+        raise ReferenceFormatError(
+            f"CASIMIR data: CGdir resolves to {resolved_cgdir}, expected {realcg}"
+        )
+    for table in realcg_files:
+        record = f"{cgdir}/{table.name}"
+        if len(record) > 80:
+            raise ReferenceFormatError(
+                f"CASIMIR CGdir exceeds 80-character record for {table.name}: {record!r}"
+            )
+
+
 def _require_terminal_finished(path: Path) -> None:
     lines = [
         line.strip()
@@ -1713,6 +1830,10 @@ def _build_parser() -> argparse.ArgumentParser:
     attest.add_argument("--psi4-input", type=Path, required=True)
     attest.add_argument("--psi4-output", type=Path, required=True)
 
+    casimir = subparsers.add_parser("validate-casimir")
+    casimir.add_argument("--work-dir", type=Path, required=True)
+    casimir.add_argument("--runtime", type=Path, required=True)
+
     build = subparsers.add_parser("build")
     build.add_argument("--manifest", type=Path, required=True)
     build.add_argument("--frequency-file", type=Path, required=True)
@@ -1738,6 +1859,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 arguments.psi4_input.read_text(),
                 arguments.psi4_output.read_text(errors="replace"),
             )
+        elif arguments.command == "validate-casimir":
+            validate_casimir_evidence(arguments.work_dir, arguments.runtime)
         elif arguments.command == "build":
             document = build_reference_document(
                 frequency_path=arguments.frequency_file,
