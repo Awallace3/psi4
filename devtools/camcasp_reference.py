@@ -372,7 +372,6 @@ def _validate_clt_protocol(text: str) -> None:
         "functional": "Functional PBE0",
         "kernel": "Kernel ALDA+CHF",
         "options": "Options Tests",
-        "localization": "Localization",
     }
     observed = {name: [] for name in expected}
     section = None
@@ -396,9 +395,20 @@ def _validate_clt_protocol(text: str) -> None:
             continue
         fields = normalized.split()
         key = fields[0].casefold()
-        if len(fields) >= 2 and key == "no" and fields[1].casefold() == "localization":
+        is_localization = key == "localization" or (
+            len(fields) >= 2
+            and key == "no"
+            and fields[1].casefold() == "localization"
+        )
+        if is_localization:
+            if section != "run-type properties":
+                raise ReferenceFormatError(
+                    f"H2O.clt:{line_number}: Localization directive is outside "
+                    "Run-type properties"
+                )
             raise ReferenceFormatError(
-                f"H2O.clt:{line_number}: conflicting Localization directive {line!r}"
+                f"H2O.clt:{line_number}: active Localization is unsupported "
+                "during canonical calculation generation"
             )
         if key not in observed:
             continue

@@ -1947,7 +1947,6 @@ Run-type properties
   Functional PBE0
   Kernel ALDA+CHF
   Options Tests
-  Localization
 End
 """
     cks = """\
@@ -1985,6 +1984,22 @@ def test_generated_protocol_ignores_comment_only_settings():
     _assert_protocol_rejected(texts, "Basis")
 
 
+@pytest.mark.parametrize("directive", ("Localization", "No Localization"))
+def test_generated_protocol_rejects_active_localization(directive):
+    texts = list(canonical_generated_protocol_texts())
+    texts[0] = texts[0].replace("  Options Tests", f"  Options Tests\n  {directive}")
+    _assert_protocol_rejected(texts, "Localization")
+
+
+def test_generated_protocol_allows_commented_localization():
+    texts = list(canonical_generated_protocol_texts())
+    texts[0] = texts[0].replace(
+        "  Options Tests",
+        "  Options Tests\n  ! Localization\n  # No Localization",
+    )
+    validate_generated_protocol(*texts)
+
+
 def test_generated_protocol_rejects_duplicate_active_setting():
     texts = list(canonical_generated_protocol_texts())
     texts[0] = texts[0].replace("  Basis aVTZ", "  Basis aVTZ\n  Basis aVTZ")
@@ -1999,7 +2014,6 @@ def test_generated_protocol_rejects_conflicting_active_settings():
         (0, "Functional PBE0", "Functional PBE", "Functional"),
         (0, "Kernel ALDA+CHF", "Kernel ALDA", "Kernel"),
         (0, "Options Tests", "Options Production", "Options"),
-        (0, "Localization", "No Localization", "Localization"),
         (1, "Type Gauss-Legendre", "Type Euler-Maclaurin", "Type"),
         (1, "Beta 0.5", "Beta 0.7", "Beta"),
         (1, "Quad 10", "Quad 9", "Quad"),
@@ -2309,6 +2323,9 @@ mkdir -p "$job_dir/OUT"
 cp "$clt_file" "$job_dir/H2O.clt"
 cd "$job_dir"
 cat "$clt_file" >/dev/null
+if grep -Eiq '^[[:space:]]*(no[[:space:]]+)?localization[[:space:]]*$' H2O.clt; then
+    exit 97
+fi
 cat >"$clt_file.clout" <<'EOF'
 AC options: type = GRAC
 functional PBE0

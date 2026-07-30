@@ -823,7 +823,6 @@ Run-type properties
   Functional PBE0
   Kernel ALDA+CHF
   Options Tests
-  Localization
   Orient file
   Process file
   Sites file
