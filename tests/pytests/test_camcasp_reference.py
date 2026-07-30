@@ -2724,15 +2724,32 @@ def _write_casimir_evidence(work, runtime, *, cgdir=None, data_extra=""):
     _write_realcg_tables(runtime)
     relative_realcg = os.path.relpath(runtime / "data" / "realcg", work)
     cgdir = relative_realcg if cgdir is None else cgdir
-    process_text = (
+    absolute_runtime = str(runtime.resolve())
+    process_prefix = (
         "TITLE PROCESS file to write the CASIMIR input\n"
+        "Set Global-data\n"
+        "  CamCASP {camcasp}\n"
+        "  Units BOHR DEGREE\n"
+        "End\n"
         "Read local pols for H2O\n"
+        "  Use ascii file {PREFIX}_0f10.pol\n"
+        "  Maximum rank {LIMIT}\n"
+        "  Limit rank to {HLIMIT} for sites H1 H2\n"
         "  Frequencies STATIC + 10\n"
         "End\nFinish\n"
         "! retained comment after terminal Finish\n\n"
     )
+    generated_text = process_prefix.format(
+        camcasp=absolute_runtime, PREFIX="{PREFIX}", LIMIT="{LIMIT}", HLIMIT="{HLIMIT}"
+    )
+    process_text = process_prefix.format(
+        camcasp=os.path.relpath(runtime, work),
+        PREFIX="{PREFIX}", LIMIT="{LIMIT}", HLIMIT="{HLIMIT}",
+    )
+    temp_text = process_text.format(PREFIX="H2O_ref_wt4_L3", LIMIT=3, HLIMIT=3)
+    (work / "H2O_casimir.generated.prss").write_text(generated_text)
     (work / "H2O_casimir.prss").write_text(process_text)
-    (work / "H2O_casimir.temp").write_text(process_text)
+    (work / "H2O_casimir.temp").write_text(temp_text)
     (work / "H2O_ref_wt4_L3_casimir.data").write_text(
         "Title H2O ... H2O\n"
         "Frequencies 0.5 10\n"
@@ -2744,6 +2761,209 @@ def _write_casimir_evidence(work, runtime, *, cgdir=None, data_extra=""):
         "# retained comment after terminal Finish\n\n"
     )
     return relative_realcg
+
+
+def _run_patch_casimir_template(work, runtime):
+    return subprocess.run(
+        [
+            "python", "-P", str(ROOT / "devtools" / "camcasp_reference.py"),
+            "patch-casimir-template", "--work-dir", str(work),
+            "--runtime", str(runtime),
+            "--relative-runtime", os.path.relpath(runtime, work),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_patch_casimir_template_preserves_generated_bytes_and_patches_atomically(tmp_path):
+    work = tmp_path / "reference" / "work" / "H2O"
+    runtime = tmp_path / "reference" / "tools" / "camcasp-runtime"
+    relative = _write_casimir_evidence(work, runtime)
+    generated = work / "H2O_casimir.generated.prss"
+    template = work / "H2O_casimir.prss"
+    original = generated.read_bytes()
+    generated.unlink()
+    template.write_bytes(original)
+
+    result = _run_patch_casimir_template(work, runtime)
+
+    assert result.returncode == 0, result.stderr
+    assert generated.read_bytes() == original
+    expected = original.replace(
+        f"CamCASP {runtime.resolve()}".encode(),
+        f"CamCASP {os.path.relpath(runtime, work)}".encode(),
+    )
+    assert template.read_bytes() == expected
+    directive = f"CamCASP {relative.rsplit('/data/realcg', 1)[0]}".encode()
+    assert template.read_bytes().count(directive) == 1
+    assert not list(work.glob("*.tmp"))
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ("missing", "duplicate", "wrong", "commented", "outside", "early-finish", "symlink"),
+)
+def test_patch_casimir_template_fails_closed_on_unsafe_generated_input(tmp_path, mode):
+    work = tmp_path / "reference" / "work" / "H2O"
+    runtime = tmp_path / "reference" / "tools" / "camcasp-runtime"
+    _write_casimir_evidence(work, runtime)
+    generated = work / "H2O_casimir.generated.prss"
+    template = work / "H2O_casimir.prss"
+    generated.unlink()
+    original = (work / "H2O_casimir.prss").read_text().replace(
+        f"CamCASP {os.path.relpath(runtime, work)}", f"CamCASP {runtime.resolve()}"
+    )
+    if mode == "missing":
+        original = original.replace(f"  CamCASP {runtime.resolve()}\n", "")
+    elif mode == "duplicate":
+        original = original.replace(
+            f"  CamCASP {runtime.resolve()}\n",
+            f"  CamCASP {runtime.resolve()}\n  CamCASP {runtime.resolve()}\n",
+        )
+    elif mode == "wrong":
+        original = original.replace(str(runtime.resolve()), str((tmp_path / "wrong").resolve()))
+    elif mode == "commented":
+        original = original.replace("  CamCASP ", "! CamCASP ")
+    elif mode == "outside":
+        original = original.replace(f"  CamCASP {runtime.resolve()}\n", "")
+        original = original.replace(
+            "End\nRead local", f"End\nCamCASP {runtime.resolve()}\nRead local", 1
+        )
+    elif mode == "early-finish":
+        original = original.replace("Finish\n", "Finish\nUnexpected active tail\n")
+    template.write_text(original)
+    if mode == "symlink":
+        target = work / "untrusted.prss"
+        target.write_text(original)
+        template.unlink()
+        template.symlink_to(target)
+    publication = tmp_path / "manifest.json"
+
+    result = _run_patch_casimir_template(work, runtime)
+    if result.returncode == 0:
+        publication.write_text("published\n")
+
+    assert result.returncode != 0
+    assert not publication.exists()
+    assert not generated.exists()
+
+
+@pytest.mark.parametrize("role", ("generated", "template", "temp"))
+@pytest.mark.parametrize("mode", ("missing", "duplicate", "wrong", "commented"))
+def test_casimir_evidence_rejects_invalid_camcasp_directive(tmp_path, role, mode):
+    work = tmp_path / "reference" / "work" / "H2O"
+    runtime = tmp_path / "reference" / "tools" / "camcasp-runtime"
+    _write_casimir_evidence(work, runtime)
+    paths = {
+        "generated": work / "H2O_casimir.generated.prss",
+        "template": work / "H2O_casimir.prss",
+        "temp": work / "H2O_casimir.temp",
+    }
+    path = paths[role]
+    expected = str(runtime.resolve()) if role == "generated" else os.path.relpath(runtime, work)
+    text = path.read_text()
+    line = f"  CamCASP {expected}\n"
+    if mode == "missing":
+        text = text.replace(line, "")
+    elif mode == "duplicate":
+        text = text.replace(line, line + line)
+    elif mode == "wrong":
+        text = text.replace(expected, "/wrong/absolute" if role == "generated" else "../wrong")
+    else:
+        text = text.replace(line, "! CamCASP " + expected + "\n")
+    path.write_text(text)
+    publication = tmp_path / "manifest.json"
+    result = subprocess.run(
+        [
+            "python", "-P", str(ROOT / "devtools" / "camcasp_reference.py"),
+            "validate-casimir", "--work-dir", str(work), "--runtime", str(runtime),
+        ],
+        cwd=ROOT, text=True, capture_output=True, check=False,
+    )
+    if result.returncode == 0:
+        publication.write_text("published\n")
+    assert result.returncode != 0
+    assert "CamCASP" in result.stderr
+    assert not publication.exists()
+
+
+@pytest.mark.parametrize(
+    ("role", "expected"),
+    (("template", "byte-correspond"), ("temp", "exact expanded")),
+)
+def test_casimir_evidence_requires_exact_generated_template_and_temp_relations(
+    tmp_path, role, expected
+):
+    work = tmp_path / "reference" / "work" / "H2O"
+    runtime = tmp_path / "reference" / "tools" / "camcasp-runtime"
+    _write_casimir_evidence(work, runtime)
+    path = work / ("H2O_casimir.prss" if role == "template" else "H2O_casimir.temp")
+    path.write_text(path.read_text().replace("TITLE PROCESS", "TITLE CHANGED"))
+    result = subprocess.run(
+        [
+            "python", "-P", str(ROOT / "devtools" / "camcasp_reference.py"),
+            "validate-casimir", "--work-dir", str(work), "--runtime", str(runtime),
+        ], cwd=ROOT, text=True, capture_output=True, check=False,
+    )
+    assert result.returncode != 0
+    assert expected in result.stderr
+
+
+def test_patch_casimir_template_rejects_ambiguous_generated_destination_symlink(tmp_path):
+    work = tmp_path / "reference" / "work" / "H2O"
+    runtime = tmp_path / "reference" / "tools" / "camcasp-runtime"
+    _write_casimir_evidence(work, runtime)
+    generated = work / "H2O_casimir.generated.prss"
+    template = work / "H2O_casimir.prss"
+    original = generated.read_bytes()
+    generated.unlink()
+    template.write_bytes(original)
+    target = work / "untrusted-generated.prss"
+    target.write_text("untrusted\n")
+    generated.symlink_to(target)
+
+    result = _run_patch_casimir_template(work, runtime)
+
+    assert result.returncode != 0
+    assert generated.is_symlink()
+    assert target.read_text() == "untrusted\n"
+    assert template.read_bytes() == original
+
+
+@pytest.mark.parametrize("role", ("generated", "template", "temp", "data"))
+@pytest.mark.parametrize("mode", ("missing", "empty", "duplicate"))
+def test_discover_casimir_artifacts_requires_four_unique_nonempty_roles(tmp_path, role, mode):
+    job = tmp_path / "H2O"
+    job.mkdir()
+    names = {
+        "generated": "H2O_casimir.generated.prss",
+        "template": "H2O_casimir.prss",
+        "temp": "H2O_casimir.temp",
+        "data": "H2O_ref_wt4_L3_casimir.data",
+    }
+    for name in names.values():
+        (job / name).write_text("evidence\n")
+    path = job / names[role]
+    if mode == "missing":
+        path.unlink()
+    elif mode == "empty":
+        path.write_text("")
+    else:
+        nested = job / "nested"
+        nested.mkdir()
+        (nested / names[role]).write_text("duplicate\n")
+    publication = tmp_path / "manifest.json"
+    result = subprocess.run(
+        ["bash", "-c", f'source "{SCRIPT}"; discover_casimir_artifacts "$1"; : >"$2"',
+         "discover-casimir", str(job), str(publication)],
+        cwd=ROOT, text=True, capture_output=True, check=False,
+    )
+    assert result.returncode != 0
+    assert "CASIMIR" in result.stderr
+    assert not publication.exists()
 
 
 @pytest.mark.parametrize(
@@ -2831,7 +3051,10 @@ def test_casimir_evidence_accepts_one_terminal_finish_with_trailing_comments(tmp
 
 @pytest.mark.parametrize(
     "filename",
-    ("H2O_casimir.prss", "H2O_casimir.temp", "H2O_ref_wt4_L3_casimir.data"),
+    (
+        "H2O_casimir.generated.prss", "H2O_casimir.prss",
+        "H2O_casimir.temp", "H2O_ref_wt4_L3_casimir.data",
+    ),
 )
 @pytest.mark.parametrize("mode", ("missing", "duplicate"))
 def test_casimir_evidence_requires_exactly_one_active_terminal_finish(
@@ -3032,11 +3255,29 @@ def test_dependency_free_stubbed_pipeline_requires_approval_before_json(tmp_path
             executable,
             f"#!/usr/bin/env bash\necho {name} >>\"$STUB_CALLS\"\n",
         )
-    for name in ("camcasp", "cluster", "process"):
+    for name in ("camcasp", "cluster"):
         _write_executable(
             bin_dir / name,
             f"#!/usr/bin/env bash\necho {name} >>\"$STUB_CALLS\"\n",
         )
+    _write_executable(
+        bin_dir / "process",
+        """#!/usr/bin/env bash
+set -euo pipefail
+input="$(cat)"
+mapfile -t paths < <(printf '%s\n' "$input" | awk '$1 == "CamCASP" {print $2}')
+[[ "${#paths[@]}" -eq 1 && "${paths[0]}" == "$CAMCASP" ]] || exit 87
+echo process >>"$STUB_CALLS"
+cat <<EOF
+Title H2O ... H2O
+Frequencies 0.5 10
+Skip 0
+CGdir ${paths[0]}/data/realcg
+Dispersion 12 H2O
+Finish
+EOF
+""",
+    )
 
     runcamcasp = bin_dir / "runcamcasp.py"
     _write_executable(
@@ -3075,9 +3316,16 @@ if [[ ! -f "$job_dir/H2O.clt.clout" ]]; then
 fi
 printf 'generated\n' >H2O.ornt
 printf 'generated\n' >H2O.prss
-cat >H2O_casimir.prss <<'EOF'
+cat >H2O_casimir.prss <<EOF
 TITLE PROCESS file to write the CASIMIR input
+Set Global-data
+  CamCASP $CAMCASP
+  Units BOHR DEGREE
+End
 Read local pols for H2O
+  Use ascii file {PREFIX}_0f10.pol
+  Maximum rank {LIMIT}
+  Limit rank to {HLIMIT} for sites H1 H2
   Frequencies STATIC + 10
 End
 Finish
@@ -3152,24 +3400,19 @@ for ((index = 0; index < ${#args[@]}; index++)); do
 done
 [[ "$polfile" == *_NL4_fmtB.pol ]] || exit 94
 printf '%s\n' "$polfile" >"$STUB_LOCALIZE_POLFILE"
+grep -Fqx "  CamCASP $CAMCASP" H2O_casimir.prss || exit 86
+[[ "$(grep -Ec '^[[:space:]]*CamCASP[[:space:]]+' H2O_casimir.prss)" -eq 1 ]] || exit 85
 orient </dev/null
 pfit </dev/null
+python -P - <<'PY'
+from pathlib import Path
+source = Path("H2O_casimir.prss").read_text()
+Path("H2O_casimir.temp").write_text(
+    source.format(PREFIX="H2O_ref_wt4_L3", LIMIT=3, HLIMIT=3)
+)
+PY
+process <H2O_casimir.temp >H2O_ref_wt4_L3_casimir.data
 casimir </dev/null
-cat >H2O_casimir.temp <<'EOF'
-TITLE PROCESS file to write the CASIMIR input
-Read local pols for H2O
-  Frequencies STATIC + 10
-End
-Finish
-EOF
-cat >H2O_ref_wt4_L3_casimir.data <<EOF
-Title H2O ... H2O
-Frequencies 0.5 10
-Skip 0
-CGdir $CAMCASP/data/realcg
-Dispersion 12 H2O
-Finish
-EOF
 for index in $(seq -w 0 10); do
     printf 'ORIENT output\nFinished\n' >"H2O_L3_0${index}.out"
     printf 'PFIT output\nFinished\n' >"H2O_ref_wt4_L3_0${index}.out"
@@ -3347,7 +3590,7 @@ build_reference_json
             b"\x1f\x8b"
         )
     assert calls.read_text().splitlines() == [
-        "psi4", "camcasp", "psi4", "orient", "pfit", "casimir"
+        "psi4", "camcasp", "psi4", "orient", "pfit", "process", "casimir"
     ]
     selected_format_b = reference / "work" / "H2O" / "OUT" / "H2O_NL4_fmtB.pol"
     assert localize_polfile.read_text().strip() == str(selected_format_b)
@@ -3383,6 +3626,7 @@ build_reference_json
         job_dir / "OUT" / "H2O_NL4_fmtB.pol",
         job_dir / "H2O.ornt",
         job_dir / "H2O.cks",
+        job_dir / "H2O_casimir.generated.prss",
         job_dir / "H2O_casimir.prss",
         job_dir / "H2O_casimir.temp",
         job_dir / "H2O_ref_wt4_L3_casimir.data",
@@ -3473,9 +3717,16 @@ build_reference_json
         "path": str(psi4_output.resolve()),
         "sha256": hashlib.sha256(psi4_output.read_bytes()).hexdigest(),
     }
+    casimir_process_generated = job_dir / "H2O_casimir.generated.prss"
     casimir_process_template = job_dir / "H2O_casimir.prss"
     casimir_process_input = job_dir / "H2O_casimir.temp"
     casimir_data = job_dir / "H2O_ref_wt4_L3_casimir.data"
+    assert f"CamCASP {runtime.resolve()}" in casimir_process_generated.read_text()
+    assert "CamCASP ../../tools/camcasp-runtime" in casimir_process_template.read_text()
+    assert "CamCASP ../../tools/camcasp-runtime" in casimir_process_input.read_text()
+    assert casimir_process_input.read_text() == casimir_process_template.read_text().format(
+        PREFIX="H2O_ref_wt4_L3", LIMIT=3, HLIMIT=3
+    )
     assert "stale" not in casimir_process_input.read_text()
     assert "stale" not in casimir_data.read_text()
     assert "CGdir ../../tools/camcasp-runtime/data/realcg" in casimir_data.read_text()
@@ -3483,6 +3734,7 @@ build_reference_json
     assert "Skip 0" in casimir_data.read_text()
     assert "Dispersion 12 H2O" in casimir_data.read_text()
     for source_name, source_path in (
+        ("casimir_process_generated", casimir_process_generated),
         ("casimir_process_template", casimir_process_template),
         ("casimir_process_input", casimir_process_input),
         ("casimir_input", casimir_data),

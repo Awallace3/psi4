@@ -976,6 +976,10 @@ declare -ag P2P_FILES=()
 declare -ag PSI4_INPUT_FILES=()
 declare -ag PSI4_EXECUTED_INPUT_FILES=()
 declare -ag PSI4_OUTPUT_FILES=()
+declare -ag CASIMIR_PROCESS_GENERATED_FILES=()
+declare -ag CASIMIR_PROCESS_TEMPLATE_FILES=()
+declare -ag CASIMIR_PROCESS_INPUT_FILES=()
+declare -ag CASIMIR_INPUT_FILES=()
 
 discover_camcasp_artifacts() {
     local job_dir="$1"
@@ -1050,6 +1054,49 @@ discover_camcasp_artifacts() {
         fail "generated Psi4 output is empty: ${PSI4_OUTPUT_FILES[0]}"
         return
     }
+}
+
+discover_casimir_artifacts() {
+    local job_dir="$1"
+    mapfile -t CASIMIR_PROCESS_GENERATED_FILES < <(
+        find "$job_dir" -maxdepth 2 -type f -name 'H2O_casimir.generated.prss' -print | sort
+    )
+    mapfile -t CASIMIR_PROCESS_TEMPLATE_FILES < <(
+        find "$job_dir" -maxdepth 2 -type f -name 'H2O_casimir.prss' -print | sort
+    )
+    mapfile -t CASIMIR_PROCESS_INPUT_FILES < <(
+        find "$job_dir" -maxdepth 2 -type f -name 'H2O_casimir.temp' -print | sort
+    )
+    mapfile -t CASIMIR_INPUT_FILES < <(
+        find "$job_dir" -maxdepth 2 -type f -name 'H2O_ref_wt4_L3_casimir.data' -print | sort
+    )
+    (( ${#CASIMIR_PROCESS_GENERATED_FILES[@]} == 1 )) || {
+        fail "CASIMIR generated process evidence cardinality is not one"
+        return
+    }
+    (( ${#CASIMIR_PROCESS_TEMPLATE_FILES[@]} == 1 )) || {
+        fail "CASIMIR executed process template cardinality is not one"
+        return
+    }
+    (( ${#CASIMIR_PROCESS_INPUT_FILES[@]} == 1 )) || {
+        fail "CASIMIR expanded process input cardinality is not one"
+        return
+    }
+    (( ${#CASIMIR_INPUT_FILES[@]} == 1 )) || {
+        fail "CASIMIR final input cardinality is not one"
+        return
+    }
+    local evidence
+    for evidence in \
+        "${CASIMIR_PROCESS_GENERATED_FILES[0]}" \
+        "${CASIMIR_PROCESS_TEMPLATE_FILES[0]}" \
+        "${CASIMIR_PROCESS_INPUT_FILES[0]}" \
+        "${CASIMIR_INPUT_FILES[0]}"; do
+        [[ -s "$evidence" ]] || {
+            fail "CASIMIR evidence is empty: $evidence"
+            return
+        }
+    done
 }
 
 run_camcasp() {
@@ -1174,6 +1221,11 @@ run_localize() {
         fail "could not derive a CASIMIR-safe relative CamCASP path"
         return
     }
+    run_logged patch-casimir-template \
+        "$REFERENCE_ROOT/logs/patch-casimir-template.log" \
+        python -P "$REPO_ROOT/devtools/camcasp_reference.py" \
+        patch-casimir-template --work-dir "$job_dir" \
+        --runtime "$absolute_camcasp" --relative-runtime "$short_camcasp"
     (
         cd "$job_dir"
         export CAMCASP="$short_camcasp"
@@ -1193,6 +1245,7 @@ run_localize() {
                 --force loc refine disp \
                 --debug
     )
+    discover_casimir_artifacts "$job_dir" || return
     run_logged validate-casimir "$REFERENCE_ROOT/logs/validate-casimir.log" \
         python -P "$REPO_ROOT/devtools/camcasp_reference.py" \
         validate-casimir --work-dir "$job_dir" --runtime "$absolute_camcasp"
@@ -1247,7 +1300,11 @@ write_manifest() {
     (( ${#NL4_FORMAT_A_FILES[@]} == 1 && ${#NL4_FILES[@]} == 1 &&
        ${#P2P_FILES[@]} == 1 && ${#PSI4_INPUT_FILES[@]} == 1 &&
        ${#PSI4_EXECUTED_INPUT_FILES[@]} == 1 &&
-       ${#PSI4_OUTPUT_FILES[@]} == 1 )) ||
+       ${#PSI4_OUTPUT_FILES[@]} == 1 &&
+       ${#CASIMIR_PROCESS_GENERATED_FILES[@]} == 1 &&
+       ${#CASIMIR_PROCESS_TEMPLATE_FILES[@]} == 1 &&
+       ${#CASIMIR_PROCESS_INPUT_FILES[@]} == 1 &&
+       ${#CASIMIR_INPUT_FILES[@]} == 1 )) ||
         fail "source artifact cardinalities are incomplete"
     verify_orient_checkout "$ORIENT_SOURCE_ROOT" "$ORIENT_EXE" without-products || return
     validate_current_orient_products "$ORIENT_SOURCE_ROOT" manifest || return
@@ -1374,6 +1431,7 @@ document = {
     "sources": {
         "cks": record(job / "H2O.cks"),
         "cluster_output": record(job / "H2O.clt.clout"),
+        "casimir_process_generated": record(job / "H2O_casimir.generated.prss"),
         "casimir_process_template": record(job / "H2O_casimir.prss"),
         "casimir_process_input": record(job / "H2O_casimir.temp"),
         "casimir_input": record(job / "H2O_ref_wt4_L3_casimir.data"),

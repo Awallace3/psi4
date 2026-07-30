@@ -707,6 +707,160 @@ def _require_ascii(value: str, context: str) -> None:
         raise ReferenceFormatError(f"{context} must contain only ASCII characters") from exc
 
 
+def _casimir_camcasp_directive(path: Path) -> tuple[int, str]:
+    text = path.read_text(encoding="utf-8")
+    raw_lines = text.splitlines(keepends=True)
+    active = [
+        (index, " ".join(line.strip().split()))
+        for index, line in enumerate(raw_lines)
+        if line.strip() and not line.lstrip().startswith(("!", "#"))
+    ]
+    finishes = [
+        position for position, (_index, line) in enumerate(active)
+        if line.casefold() == "finish"
+    ]
+    if len(finishes) != 1 or finishes[0] != len(active) - 1:
+        raise ReferenceFormatError(
+            f"CASIMIR evidence {path.name}: requires exactly one active terminal Finish"
+        )
+    before_finish = active[:finishes[0]]
+    blocks = [
+        position for position, (_index, line) in enumerate(before_finish)
+        if line == "Set Global-data"
+    ]
+    if len(blocks) != 1:
+        raise ReferenceFormatError(
+            f"CASIMIR evidence {path.name}: expected one canonical Set Global-data block"
+        )
+    block_start = blocks[0]
+    block_ends = [
+        position for position in range(block_start + 1, len(before_finish))
+        if before_finish[position][1].casefold() == "end"
+    ]
+    if not block_ends:
+        raise ReferenceFormatError(
+            f"CASIMIR evidence {path.name}: unterminated Set Global-data block"
+        )
+    block_end = block_ends[0]
+    directives = [
+        (position, index, line)
+        for position, (index, line) in enumerate(before_finish)
+        if line.split()[0].casefold() == "camcasp"
+    ]
+    if len(directives) != 1:
+        raise ReferenceFormatError(
+            f"CASIMIR evidence {path.name}: expected exactly one active CamCASP directive"
+        )
+    position, line_index, directive = directives[0]
+    fields = directive.split()
+    if len(fields) != 2 or fields[0] != "CamCASP":
+        raise ReferenceFormatError(
+            f"CASIMIR evidence {path.name}: malformed CamCASP directive {directive!r}"
+        )
+    if not block_start < position < block_end:
+        raise ReferenceFormatError(
+            f"CASIMIR evidence {path.name}: CamCASP directive is outside Set Global-data"
+        )
+    return line_index, fields[1]
+
+
+def _replace_camcasp_directive(data: bytes, line_index: int, value: str) -> bytes:
+    lines = data.splitlines(keepends=True)
+    line = lines[line_index]
+    ending = b"\n" if line.endswith(b"\n") else b""
+    content = line[:-1] if ending else line
+    if content.endswith(b"\r"):
+        content = content[:-1]
+        ending = b"\r\n"
+    indentation = content[:len(content) - len(content.lstrip())]
+    lines[line_index] = indentation + b"CamCASP " + value.encode("ascii") + ending
+    return b"".join(lines)
+
+
+def _validate_camcasp_directive(
+    path: Path, runtime: Path, expected: str, *, require_absolute: bool
+) -> int:
+    line_index, observed = _casimir_camcasp_directive(path)
+    _require_ascii(observed, f"CASIMIR evidence {path.name} CamCASP path")
+    if Path(observed).is_absolute() != require_absolute:
+        kind = "absolute" if require_absolute else "relative"
+        raise ReferenceFormatError(
+            f"CASIMIR evidence {path.name}: CamCASP path must be {kind}"
+        )
+    if observed != expected:
+        raise ReferenceFormatError(
+            f"CASIMIR evidence {path.name}: CamCASP {observed!r} is not canonical {expected!r}"
+        )
+    try:
+        resolved = (path.parent / observed).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ReferenceFormatError(
+            f"CASIMIR evidence {path.name}: CamCASP path does not resolve"
+        ) from exc
+    if resolved != runtime:
+        raise ReferenceFormatError(
+            f"CASIMIR evidence {path.name}: CamCASP resolves to {resolved}, expected {runtime}"
+        )
+    return line_index
+
+
+def _atomic_write_bytes(path: Path, data: bytes, mode: int) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    try:
+        os.fchmod(descriptor, mode)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if os.path.exists(temporary_name):
+            os.unlink(temporary_name)
+
+
+def patch_casimir_template(work_dir: Path, runtime: Path, relative_runtime: str) -> None:
+    if work_dir.is_symlink() or runtime.is_symlink():
+        raise ReferenceFormatError("CASIMIR template paths must not be symlinks")
+    work_dir = work_dir.resolve(strict=True)
+    runtime = runtime.resolve(strict=True)
+    expected_relative = os.path.relpath(runtime, work_dir)
+    if relative_runtime != expected_relative or Path(relative_runtime).is_absolute():
+        raise ReferenceFormatError(
+            f"CASIMIR template relative runtime is not canonical {expected_relative!r}"
+        )
+    _require_ascii(relative_runtime, "CASIMIR template relative runtime")
+    source = _require_casimir_evidence_file(
+        work_dir, "*_casimir.prss", "H2O_casimir.prss"
+    )
+    generated = work_dir / "H2O_casimir.generated.prss"
+    if generated.exists() or generated.is_symlink():
+        raise ReferenceFormatError(f"CASIMIR generated evidence already exists: {generated}")
+    source_bytes = source.read_bytes()
+    line_index = _validate_camcasp_directive(
+        source, runtime, str(runtime), require_absolute=True
+    )
+    patched_bytes = _replace_camcasp_directive(
+        source_bytes, line_index, relative_runtime
+    )
+    mode = source.stat().st_mode & 0o777
+    _atomic_write_bytes(generated, source_bytes, mode)
+    if generated.is_symlink() or generated.read_bytes() != source_bytes:
+        raise ReferenceFormatError("CASIMIR generated evidence preservation failed")
+    _atomic_write_bytes(source, patched_bytes, mode)
+    if generated.read_bytes() != source_bytes or source.read_bytes() != patched_bytes:
+        raise ReferenceFormatError("CASIMIR template atomic patch verification failed")
+    _validate_camcasp_directive(
+        source, runtime, relative_runtime, require_absolute=False
+    )
+
+
 def _require_exact_casimir_control(lines: Sequence[str], expected: str) -> None:
     key = expected.split()[0]
     observed = [line for line in lines if line.split()[0] == key]
@@ -722,7 +876,13 @@ def _require_exact_casimir_control(lines: Sequence[str], expected: str) -> None:
 
 
 def validate_casimir_evidence(work_dir: Path, runtime: Path) -> None:
+    if work_dir.is_symlink() or runtime.is_symlink():
+        raise ReferenceFormatError("CASIMIR evidence paths must not be symlinks")
     work_dir = work_dir.resolve(strict=True)
+    runtime = runtime.resolve(strict=True)
+    generated_path = _require_casimir_evidence_file(
+        work_dir, "*_casimir.generated.prss", "H2O_casimir.generated.prss"
+    )
     process_path = _require_casimir_evidence_file(
         work_dir, "*_casimir.prss", "H2O_casimir.prss"
     )
@@ -732,6 +892,36 @@ def validate_casimir_evidence(work_dir: Path, runtime: Path) -> None:
     data_path = _require_casimir_evidence_file(
         work_dir, "*_casimir.data", "H2O_ref_wt4_L3_casimir.data"
     )
+    relative_runtime = os.path.relpath(runtime, work_dir)
+    generated_line = _validate_camcasp_directive(
+        generated_path, runtime, str(runtime), require_absolute=True
+    )
+    _validate_camcasp_directive(
+        process_path, runtime, relative_runtime, require_absolute=False
+    )
+    _validate_camcasp_directive(
+        temp_path, runtime, relative_runtime, require_absolute=False
+    )
+    expected_process = _replace_camcasp_directive(
+        generated_path.read_bytes(), generated_line, relative_runtime
+    )
+    if process_path.read_bytes() != expected_process:
+        raise ReferenceFormatError(
+            "CASIMIR process template does not byte-correspond to generated evidence "
+            "modulo the CamCASP directive"
+        )
+    try:
+        expected_temp = process_path.read_text(encoding="utf-8").format(
+            PREFIX="H2O_ref_wt4_L3", LIMIT=3, HLIMIT=3
+        ).encode("utf-8")
+    except (KeyError, ValueError) as exc:
+        raise ReferenceFormatError(
+            "CASIMIR process template has malformed expansion fields"
+        ) from exc
+    if temp_path.read_bytes() != expected_temp:
+        raise ReferenceFormatError(
+            "CASIMIR temp input is not the exact expanded process template"
+        )
     for path in (process_path, temp_path):
         lines = _casimir_lines_before_finish(path)
         frequencies = [line for line in lines if line.startswith("Frequencies ")]
@@ -1860,6 +2050,11 @@ def _build_parser() -> argparse.ArgumentParser:
     attest.add_argument("--psi4-input", type=Path, required=True)
     attest.add_argument("--psi4-output", type=Path, required=True)
 
+    casimir_patch = subparsers.add_parser("patch-casimir-template")
+    casimir_patch.add_argument("--work-dir", type=Path, required=True)
+    casimir_patch.add_argument("--runtime", type=Path, required=True)
+    casimir_patch.add_argument("--relative-runtime", required=True)
+
     casimir = subparsers.add_parser("validate-casimir")
     casimir.add_argument("--work-dir", type=Path, required=True)
     casimir.add_argument("--runtime", type=Path, required=True)
@@ -1888,6 +2083,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 arguments.camcasp_log.read_text(errors="replace"),
                 arguments.psi4_input.read_text(),
                 arguments.psi4_output.read_text(errors="replace"),
+            )
+        elif arguments.command == "patch-casimir-template":
+            patch_casimir_template(
+                arguments.work_dir, arguments.runtime, arguments.relative_runtime
             )
         elif arguments.command == "validate-casimir":
             validate_casimir_evidence(arguments.work_dir, arguments.runtime)
