@@ -56,8 +56,9 @@ class SphericalModel:
 class FrequencyBlock:
     index: int
     atoms: dict[str, SphericalModel]
-    # Real PFIT resets this header field to the exact zero sentinel for every
-    # independently fitted frequency; semantic identity is carried by # INDEX.
+    # Refined PFIT uses lexical `INDEX 0 FREQSQ 0.0000000` sentinels.
+    # They do not encode omega: association to the canonical grid is exclusively
+    # the order of outer `# INDEX 000` through `010` records.
     frequency_squared: float | None = None
 
 
@@ -1833,6 +1834,15 @@ def parse_refined_polarizabilities(
     atom_labels: Sequence[str],
     limit: int,
 ) -> list[FrequencyBlock]:
+    """Parse refined PFIT blocks without inventing physical frequency metadata.
+
+    Real inner ALPHA records contain only the lexical sentinels
+    ``INDEX 0 FREQSQ 0.0000000``. Their association to the canonical eleven-point
+    grid is exclusively the ordered outer ``# INDEX 000`` through ``010`` record.
+    Exact individual/combined section comparison separately proves that PFIT's
+    emitted order was preserved; the refined payload has no independent physical-
+    frequency encoding and FREQSQ is not claimed to equal omega squared.
+    """
     if limit != 3:
         raise ReferenceFormatError(f"accepted model requires limit 3, got {limit}")
     provided_atom_labels = tuple(atom_labels)
@@ -2501,6 +2511,32 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _bind_frequency_blocks(
+    frequencies: Sequence[FrequencyPoint],
+    models: Sequence[FrequencyBlock],
+) -> tuple[tuple[FrequencyPoint, FrequencyBlock], ...]:
+    """Join only complete, positionally canonical frequency and PFIT sequences.
+
+    This is an order/provenance binding, not an FREQSQ-to-omega relationship: real
+    PFIT FREQSQ fields are lexical zero sentinels with no physical-frequency value.
+    """
+    if len(frequencies) != 11 or len(models) != 11:
+        raise ReferenceFormatError(
+            "construction requires exactly eleven frequency and PFIT blocks"
+        )
+    bound = tuple(zip(frequencies, models))
+    for expected_index, (point, block) in enumerate(bound):
+        if point.index != expected_index or block.index != expected_index:
+            raise ReferenceFormatError(
+                "PFIT outer frequency indices do not match the canonical grid order"
+            )
+        if block.frequency_squared is not None and block.frequency_squared != 0.0:
+            raise ReferenceFormatError(
+                f"PFIT block {expected_index:03d} does not use its zero FREQSQ sentinel"
+            )
+    return bound
+
+
 def build_reference_document(
     *,
     frequency_path: Path,
@@ -2514,6 +2550,7 @@ def build_reference_document(
     models = parse_refined_polarizabilities(
         Path(refined_path), ACCEPTED_ATOM_LABELS, limit=3
     )
+    bound_blocks = _bind_frequency_blocks(frequencies, models)
     geometry = {
         atom["label"]: tuple(atom["xyz"])
         for atom in CANONICAL_ATOMS
@@ -2525,18 +2562,8 @@ def build_reference_document(
         {"O": "O", "H1": "H", "H2": "H"},
     )
 
-    for expected_index, (point, block) in enumerate(zip(frequencies, models)):
-        if point.index != expected_index or block.index != expected_index:
-            raise ReferenceFormatError(
-                "PFIT outer frequency indices do not match the canonical grid order"
-            )
-        if block.frequency_squared is not None and block.frequency_squared != 0.0:
-            raise ReferenceFormatError(
-                f"PFIT block {expected_index:03d} does not use its zero FREQSQ sentinel"
-            )
-
     frequency_blocks = []
-    for point, block in zip(frequencies, models):
+    for point, block in bound_blocks:
         atoms = {}
         for label in ACCEPTED_ATOM_LABELS:
             spherical = block.atoms[label]

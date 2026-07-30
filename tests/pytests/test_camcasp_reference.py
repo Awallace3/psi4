@@ -3014,6 +3014,34 @@ def make_canonical_nl4_frequency_text():
     return "\n".join(lines) + "\n"
 
 
+def _construction_join_inputs():
+    frequencies = [
+        camcasp_reference.FrequencyPoint(index, "0.0", 0.0, float(index))
+        for index in range(11)
+    ]
+    models = [
+        camcasp_reference.FrequencyBlock(index, {}, 0.0)
+        for index in range(11)
+    ]
+    return frequencies, models
+
+
+@pytest.mark.parametrize("mode", ("missing", "duplicate", "reordered"))
+def test_construction_join_rejects_incomplete_or_noncanonical_outer_indices(mode):
+    frequencies, models = _construction_join_inputs()
+    if mode == "missing":
+        models.pop(4)
+        expected = "exactly eleven"
+    elif mode == "duplicate":
+        models[4] = camcasp_reference.FrequencyBlock(3, {}, 0.0)
+        expected = "canonical grid order"
+    else:
+        models[4], models[5] = models[5], models[4]
+        expected = "canonical grid order"
+    with pytest.raises(ReferenceFormatError, match=expected):
+        camcasp_reference._bind_frequency_blocks(frequencies, models)
+
+
 def test_builder_combines_all_required_properties(tmp_path):
     nl4 = tmp_path / "NL4_fmtB.pol"
     refined = tmp_path / "H2O_ref_wt4_L3_0f10.pol"
