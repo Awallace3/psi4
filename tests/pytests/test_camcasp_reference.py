@@ -367,6 +367,7 @@ def test_provision_orient_builds_derived_version_serially(tmp_path):
     assert (reference / "logs" / "orient-executable.sha256").read_text().startswith(
         hashlib.sha256(candidate.read_bytes()).hexdigest()
     )
+    assert not list((reference / "logs").glob(".orient-products.*"))
 
 
 def test_preflight_rejects_malformed_orient_version(tmp_path):
@@ -416,6 +417,7 @@ def test_provision_orient_rejects_missing_build_product(tmp_path):
     assert result.returncode != 0
     assert "missing built Orient artifact" in result.stderr
     assert (reference / "logs" / "orient-build.log.sha256").is_file()
+    assert not list((reference / "logs").glob(".orient-products.*"))
 
 
 def test_provision_orient_rejects_unexpected_ignored_product(tmp_path):
@@ -444,6 +446,54 @@ def test_provision_orient_rejects_unexpected_ignored_product(tmp_path):
     assert "unexpected untracked/ignored Orient product" in result.stderr
     assert "stale.cache" in result.stderr
     assert not (reference / "logs" / "orient-build.log").exists()
+    assert not list((reference / "logs").glob(".orient-products.*"))
+
+
+@pytest.mark.parametrize("inventory_kind", ("ordinary", "ignored"))
+def test_provision_orient_inventory_failure_is_fail_closed(
+    tmp_path, inventory_kind
+):
+    checkout = tmp_path / f"orient-{inventory_kind}"
+    commit, candidate, _ = _make_pinned_orient_checkout(checkout)
+    candidate.write_bytes(Path("/bin/true").read_bytes())
+    candidate.chmod(0o755)
+    original_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    reference = tmp_path / f"reference-{inventory_kind}"
+    fake_bin = tmp_path / f"fake-bin-{inventory_kind}"
+    fake_bin.mkdir()
+    real_git = subprocess.check_output(["bash", "-c", "command -v git"], text=True).strip()
+    git_wrapper = fake_bin / "git"
+    git_wrapper.write_text(
+        "#!/usr/bin/env bash\n"
+        "args=\" $* \"\n"
+        "if [[ \"$FAIL_INVENTORY\" == ordinary && \"$args\" == *\" ls-files --others --exclude-standard -z \"* ]]; then exit 86; fi\n"
+        "if [[ \"$FAIL_INVENTORY\" == ignored && \"$args\" == *\" ls-files --others --ignored --exclude-standard -z \"* ]]; then exit 87; fi\n"
+        f'exec "{real_git}" "$@"\n'
+    )
+    git_wrapper.chmod(0o755)
+    command = (
+        f'source "{SCRIPT}"; '
+        'REFERENCE_ROOT="$1"; ORIENT_REF="$2"; ORIENT_EXE="$3"; '
+        'provision_orient'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "orient-inventory", str(reference), commit, str(candidate)],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAIL_INVENTORY": inventory_kind,
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert f"Orient {inventory_kind} product inventory failed" in result.stderr
+    assert candidate.exists()
+    assert hashlib.sha256(candidate.read_bytes()).hexdigest() == original_digest
+    assert not (reference / "logs" / "orient-build.log").exists()
+    assert not list((reference / "logs").glob(".orient-products.*"))
 
 
 def test_provision_orient_rejects_wrong_version_build_product(tmp_path):
@@ -469,6 +519,7 @@ def test_provision_orient_rejects_wrong_version_build_product(tmp_path):
     assert "orient-5.0.99-ng" in result.stderr
     assert not candidate.exists()
     assert (reference / "logs" / "orient-build.log.sha256").is_file()
+    assert not list((reference / "logs").glob(".orient-products.*"))
 
 
 def _make_psi4_checkout(path):

@@ -243,14 +243,28 @@ read_orient_version() {
     ORIENT_RELATIVE_EXE="x86-64/gfortran/exe/orient-$ORIENT_VERSION"
 }
 
-orient_product_inventory() {
+materialize_orient_product_inventory() {
     local checkout="$1"
-    git -C "$checkout" ls-files --others --exclude-standard -z
-    git -C "$checkout" ls-files --others --ignored --exclude-standard -z
+    local snapshot="$2"
+    : >"$snapshot" || {
+        fail "could not create Orient product inventory: $snapshot"
+        return
+    }
+    if ! git -C "$checkout" ls-files --others --exclude-standard -z >"$snapshot"; then
+        rm -f "$snapshot"
+        fail "Orient ordinary product inventory failed: $checkout"
+        return
+    fi
+    if ! git -C "$checkout" ls-files --others --ignored \
+        --exclude-standard -z >>"$snapshot"; then
+        rm -f "$snapshot"
+        fail "Orient ignored product inventory failed: $checkout"
+        return
+    fi
 }
 
-validate_orient_products() {
-    local checkout="$1"
+validate_orient_product_snapshot() {
+    local snapshot="$1"
     local path
     while IFS= read -r -d '' path; do
         case "$path" in
@@ -262,12 +276,44 @@ validate_orient_products() {
                 fi
                 ;;
         esac
-    done < <(orient_product_inventory "$checkout")
+    done <"$snapshot"
 }
+
+prepare_orient_products() (
+    local checkout="$1"
+    local snapshot
+    mkdir -p "$REFERENCE_ROOT/logs"
+    snapshot="$(mktemp "$REFERENCE_ROOT/logs/.orient-products.pre.XXXXXX")" || {
+        fail "could not allocate pre-build Orient product inventory"
+        return
+    }
+    trap 'rm -f "$snapshot"' EXIT
+    materialize_orient_product_inventory "$checkout" "$snapshot" || return
+    validate_orient_product_snapshot "$snapshot" || return
+    local path
+    while IFS= read -r -d '' path; do
+        rm -f "$checkout/$path"
+    done <"$snapshot"
+)
+
+validate_current_orient_products() (
+    local checkout="$1"
+    local label="$2"
+    local snapshot
+    mkdir -p "$REFERENCE_ROOT/logs"
+    snapshot="$(mktemp "$REFERENCE_ROOT/logs/.orient-products.$label.XXXXXX")" || {
+        fail "could not allocate $label Orient product inventory"
+        return
+    }
+    trap 'rm -f "$snapshot"' EXIT
+    materialize_orient_product_inventory "$checkout" "$snapshot" || return
+    validate_orient_product_snapshot "$snapshot"
+)
 
 verify_orient_checkout() {
     local checkout="$1"
     local candidate="$2"
+    local product_check="${3:-with-products}"
 
     [[ "$(git -C "$checkout" rev-parse HEAD)" == "$ORIENT_REF" ]] || {
         fail "Orient checkout is not pinned to $ORIENT_REF"
@@ -286,16 +332,9 @@ verify_orient_checkout() {
         fail "unexpected Orient artifact: $candidate"
         return
     }
-    validate_orient_products "$checkout" || return
-}
-
-remove_untracked_orient_products() {
-    local checkout="$1"
-    local path
-    validate_orient_products "$checkout" || return
-    while IFS= read -r -d '' path; do
-        rm -f "$checkout/$path"
-    done < <(orient_product_inventory "$checkout")
+    if [[ "$product_check" == "with-products" ]]; then
+        validate_current_orient_products "$checkout" verify || return
+    fi
 }
 
 record_orient_executable() {
@@ -310,13 +349,14 @@ record_orient_executable() {
 
 bind_orient_checkout() {
     local candidate checkout
+    local product_check="${2:-with-products}"
     candidate="$(realpath -m "$1")"
     checkout="$(git -C "$(dirname "$candidate")" rev-parse --show-toplevel 2>/dev/null)" || {
         fail "Orient override must be inside a Git checkout: $candidate"
         return
     }
     checkout="$(realpath -m "$checkout")"
-    verify_orient_checkout "$checkout" "$candidate" || return
+    verify_orient_checkout "$checkout" "$candidate" "$product_check" || return
     ORIENT_SOURCE_ROOT="$checkout"
 }
 
@@ -337,13 +377,13 @@ provision_orient() {
         candidate="$checkout/$ORIENT_RELATIVE_EXE"
     fi
 
-    bind_orient_checkout "$candidate" || return
+    bind_orient_checkout "$candidate" without-products || return
     if git -C "$ORIENT_SOURCE_ROOT" ls-files --error-unmatch \
         "$ORIENT_RELATIVE_EXE" >/dev/null 2>&1; then
         fail "derived Orient build artifact must not be tracked: $ORIENT_RELATIVE_EXE"
         return
     fi
-    remove_untracked_orient_products "$ORIENT_SOURCE_ROOT" || return
+    prepare_orient_products "$ORIENT_SOURCE_ROOT" || return
     target="orient-$ORIENT_VERSION"
     (
         cd "$ORIENT_SOURCE_ROOT/x86-64/gfortran/exe"
@@ -352,7 +392,8 @@ provision_orient() {
                 -f "$ORIENT_SOURCE_ROOT/Makefile" \
                 OPENGL=no BASE="$ORIENT_SOURCE_ROOT" "$target"
     )
-    verify_orient_checkout "$ORIENT_SOURCE_ROOT" "$candidate" || return
+    verify_orient_checkout "$ORIENT_SOURCE_ROOT" "$candidate" without-products || return
+    validate_current_orient_products "$ORIENT_SOURCE_ROOT" post || return
     [[ -f "$candidate" && -x "$candidate" ]] || {
         fail "missing built Orient artifact: $candidate"
         return
@@ -617,7 +658,8 @@ write_manifest() {
     (( ${#NL4_FILES[@]} == 1 && ${#P2P_FILES[@]} == 1 &&
        ${#PSI4_INPUT_FILES[@]} == 1 )) ||
         fail "source artifact cardinalities are incomplete"
-    verify_orient_checkout "$ORIENT_SOURCE_ROOT" "$ORIENT_EXE" || return
+    verify_orient_checkout "$ORIENT_SOURCE_ROOT" "$ORIENT_EXE" without-products || return
+    validate_current_orient_products "$ORIENT_SOURCE_ROOT" manifest || return
     verify_psi4_source_root "$PSI4_SOURCE_ROOT" "$PSI4_EXE" || return
     run_logged write-manifest "$REFERENCE_ROOT/logs/write-manifest.log" \
         python -P - "$REPO_ROOT" "$SCRIPT_PATH" "$CAMCASP" \
