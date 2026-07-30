@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+import devtools.camcasp_reference as camcasp_reference
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "devtools" / "regenerate-camcasp.sh"
 
@@ -2803,6 +2805,151 @@ def test_patch_casimir_template_preserves_generated_bytes_and_patches_atomically
 
 
 @pytest.mark.parametrize(
+    "directive_prefix", (b"\tCamCASP\t\t", b"   CamCASP   ")
+)
+def test_patch_casimir_template_replaces_only_runtime_token_bytes(
+    tmp_path, directive_prefix
+):
+    work = tmp_path / "reference" / "work" / "H2O"
+    runtime = tmp_path / "reference" / "tools" / "camcasp-runtime"
+    _write_casimir_evidence(work, runtime)
+    generated = work / "H2O_casimir.generated.prss"
+    template = work / "H2O_casimir.prss"
+    original = generated.read_bytes()
+    old_line = b"  CamCASP " + os.fsencode(runtime.resolve())
+    changed = original.replace(old_line, directive_prefix + os.fsencode(runtime.resolve()))
+    generated.unlink()
+    template.write_bytes(changed)
+
+    result = _run_patch_casimir_template(work, runtime)
+
+    assert result.returncode == 0, result.stderr
+    relative = os.fsencode(os.path.relpath(runtime, work))
+    expected = changed.replace(os.fsencode(runtime.resolve()), relative)
+    assert generated.read_bytes() == changed
+    assert template.read_bytes() == expected
+    start = changed.index(os.fsencode(runtime.resolve()))
+    assert changed[:start] == expected[:start]
+    assert changed[start + len(os.fsencode(runtime.resolve())):] == expected[start + len(relative):]
+
+
+def test_casimir_correspondence_uses_exact_token_offsets_with_flexible_spacing(tmp_path):
+    work = tmp_path / "reference" / "work" / "H2O"
+    runtime = tmp_path / "reference" / "tools" / "camcasp-runtime"
+    _write_casimir_evidence(work, runtime)
+    generated = work / "H2O_casimir.generated.prss"
+    template = work / "H2O_casimir.prss"
+    temp = work / "H2O_casimir.temp"
+    absolute = os.fsencode(runtime.resolve())
+    relative = os.fsencode(os.path.relpath(runtime, work))
+    generated_data = generated.read_bytes().replace(
+        b"  CamCASP " + absolute, b"\tCamCASP\t\t" + absolute
+    )
+    template_data = generated_data.replace(absolute, relative)
+    generated.write_bytes(generated_data)
+    template.write_bytes(template_data)
+    temp.write_bytes(
+        template_data.decode("ascii").format(
+            PREFIX="H2O_ref_wt4_L3", LIMIT=3, HLIMIT=3
+        ).encode("ascii")
+    )
+
+    result = subprocess.run(
+        [
+            "python", "-P", str(ROOT / "devtools" / "camcasp_reference.py"),
+            "validate-casimir", "--work-dir", str(work), "--runtime", str(runtime),
+        ], cwd=ROOT, text=True, capture_output=True, check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "mode", ("crlf", "bare-cr", "non-ascii", "unicode-separator", "no-final-lf", "trailing-space")
+)
+def test_patch_casimir_template_rejects_noncanonical_byte_stream(tmp_path, mode):
+    work = tmp_path / "reference" / "work" / "H2O"
+    runtime = tmp_path / "reference" / "tools" / "camcasp-runtime"
+    _write_casimir_evidence(work, runtime)
+    generated = work / "H2O_casimir.generated.prss"
+    template = work / "H2O_casimir.prss"
+    data = generated.read_bytes()
+    generated.unlink()
+    if mode == "crlf":
+        data = data.replace(b"\n", b"\r\n")
+    elif mode == "bare-cr":
+        data = data.replace(b"TITLE PROCESS", b"TITLE\rPROCESS")
+    elif mode == "non-ascii":
+        data = data.replace(b"TITLE", "TÍTLE".encode())
+    elif mode == "unicode-separator":
+        data = data.replace(
+            b"TITLE PROCESS", b"TITLE" + "\u2028".encode() + b"PROCESS"
+        )
+    elif mode == "no-final-lf":
+        data = data.rstrip(b"\n")
+    else:
+        data = data.replace(
+            os.fsencode(runtime.resolve()) + b"\n",
+            os.fsencode(runtime.resolve()) + b" \n",
+        )
+    template.write_bytes(data)
+
+    result = _run_patch_casimir_template(work, runtime)
+
+    assert result.returncode != 0
+    assert not generated.exists()
+    assert template.read_bytes() == data
+
+
+@pytest.mark.parametrize(
+    "mode",
+    (
+        "nested-set", "nested-molecule", "nested-read", "nested-write",
+        "nested-global", "unmatched-end", "unbalanced", "duplicate-global-case",
+        "noncanonical-global-case", "directive-outside",
+    ),
+)
+def test_patch_casimir_template_rejects_malformed_top_level_structure(tmp_path, mode):
+    work = tmp_path / "reference" / "work" / "H2O"
+    runtime = tmp_path / "reference" / "tools" / "camcasp-runtime"
+    _write_casimir_evidence(work, runtime)
+    generated = work / "H2O_casimir.generated.prss"
+    template = work / "H2O_casimir.prss"
+    data = generated.read_bytes()
+    generated.unlink()
+    directive = b"  CamCASP " + os.fsencode(runtime.resolve()) + b"\n"
+    if mode.startswith("nested-"):
+        opener = {
+            "nested-set": b"Set Other",
+            "nested-molecule": b"Molecule Other",
+            "nested-read": b"Read nested block",
+            "nested-write": b"Write",
+            "nested-global": b"sET gLOBAL-DATA",
+        }[mode]
+        data = data.replace(directive, b"  " + opener + b"\n" + directive + b"  End\n")
+    elif mode == "unmatched-end":
+        data = b"End\n" + data
+    elif mode == "unbalanced":
+        data = data.replace(b"  Units BOHR DEGREE\nEnd\n", b"  Units BOHR DEGREE\n")
+    elif mode == "duplicate-global-case":
+        block = b"sET gLOBAL-DATA\n  Units BOHR DEGREE\nEnd\n"
+        data = data.replace(b"Set Global-data\n", block + b"Set Global-data\n")
+    elif mode == "noncanonical-global-case":
+        data = data.replace(b"Set Global-data", b"sET gLOBAL-DATA")
+    else:
+        data = data.replace(directive, b"").replace(
+            b"End\nRead local", b"End\n" + directive + b"Read local", 1
+        )
+    template.write_bytes(data)
+
+    result = _run_patch_casimir_template(work, runtime)
+
+    assert result.returncode != 0
+    assert not generated.exists()
+    assert template.read_bytes() == data
+
+
+@pytest.mark.parametrize(
     "mode",
     ("missing", "duplicate", "wrong", "commented", "outside", "early-finish", "symlink"),
 )
@@ -2931,6 +3078,129 @@ def test_patch_casimir_template_rejects_ambiguous_generated_destination_symlink(
     assert generated.is_symlink()
     assert target.read_text() == "untrusted\n"
     assert template.read_bytes() == original
+
+
+def _direct_patch_fixture(tmp_path):
+    work = tmp_path / "reference" / "work" / "H2O"
+    runtime = tmp_path / "reference" / "tools" / "camcasp-runtime"
+    _write_casimir_evidence(work, runtime)
+    generated = work / "H2O_casimir.generated.prss"
+    source = work / "H2O_casimir.prss"
+    original = generated.read_bytes()
+    generated.unlink()
+    source.write_bytes(original)
+    return work, runtime, source, generated, original
+
+
+@pytest.mark.parametrize(
+    "fault",
+    (
+        "generated-write", "generated-fsync", "source-write",
+        "source-fsync", "source-replace", "source-directory-fsync",
+    ),
+)
+def test_patch_casimir_template_has_defined_failure_terminal_states(tmp_path, fault):
+    work, runtime, source, generated, original = _direct_patch_fixture(tmp_path)
+
+    class FaultIO(camcasp_reference._CasimirTemplateIO):
+        phase = ""
+        write_calls = {"generated": 0, "source": 0}
+
+        def open_exclusive(self, path, mode):
+            self.phase = "generated"
+            return super().open_exclusive(path, mode)
+
+        def mkstemp(self, path):
+            self.phase = "source"
+            return super().mkstemp(path)
+
+        def write(self, descriptor, data):
+            if fault == f"{self.phase}-write":
+                if self.write_calls[self.phase] == 0:
+                    self.write_calls[self.phase] += 1
+                    return super().write(descriptor, data[:17])
+                raise OSError("injected write failure")
+            return super().write(descriptor, data)
+
+        def fsync(self, descriptor):
+            if fault == f"{self.phase}-fsync":
+                raise OSError("injected fsync failure")
+            return super().fsync(descriptor)
+
+        def replace(self, source_path, destination_path):
+            if fault == "source-replace":
+                raise OSError("injected replace failure")
+            return super().replace(source_path, destination_path)
+
+        def fsync_directory(self, path):
+            if fault == "source-directory-fsync":
+                raise OSError("injected directory fsync failure")
+            return super().fsync_directory(path)
+
+    relative = os.path.relpath(runtime, work)
+    with pytest.raises(OSError, match="injected"):
+        camcasp_reference.patch_casimir_template(
+            work, runtime, relative, _io=FaultIO()
+        )
+
+    assert not list(work.glob(".*.tmp"))
+    if fault.startswith("generated-"):
+        assert not generated.exists()
+        assert source.read_bytes() == original
+    elif fault == "source-directory-fsync":
+        assert generated.read_bytes() == original
+        assert source.read_bytes() == original.replace(
+            os.fsencode(runtime.resolve()), os.fsencode(relative)
+        )
+    else:
+        assert generated.read_bytes() == original
+        assert source.read_bytes() == original
+
+
+def test_patch_casimir_template_write_loops_accept_short_writes(tmp_path):
+    work, runtime, source, generated, original = _direct_patch_fixture(tmp_path)
+
+    class ShortWriteIO(camcasp_reference._CasimirTemplateIO):
+        def write(self, descriptor, data):
+            return super().write(descriptor, data[:11])
+
+    relative = os.path.relpath(runtime, work)
+    camcasp_reference.patch_casimir_template(
+        work, runtime, relative, _io=ShortWriteIO()
+    )
+
+    assert generated.read_bytes() == original
+    assert source.read_bytes() == original.replace(
+        os.fsencode(runtime.resolve()), os.fsencode(relative)
+    )
+
+
+def test_patch_casimir_template_rejects_preexisting_regular_generated_evidence(tmp_path):
+    work, runtime, source, generated, original = _direct_patch_fixture(tmp_path)
+    generated.write_bytes(b"preexisting evidence\n")
+
+    result = _run_patch_casimir_template(work, runtime)
+
+    assert result.returncode != 0
+    assert generated.read_bytes() == b"preexisting evidence\n"
+    assert source.read_bytes() == original
+
+
+def test_patch_casimir_template_exclusive_create_defeats_concurrent_creator(tmp_path):
+    work, runtime, source, generated, original = _direct_patch_fixture(tmp_path)
+
+    class ConcurrentIO(camcasp_reference._CasimirTemplateIO):
+        def open_exclusive(self, path, mode):
+            path.write_bytes(b"concurrent evidence\n")
+            return super().open_exclusive(path, mode)
+
+    with pytest.raises(FileExistsError):
+        camcasp_reference.patch_casimir_template(
+            work, runtime, os.path.relpath(runtime, work), _io=ConcurrentIO()
+        )
+
+    assert generated.read_bytes() == b"concurrent evidence\n"
+    assert source.read_bytes() == original
 
 
 @pytest.mark.parametrize("role", ("generated", "template", "temp", "data"))
