@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import fcntl
 import hashlib
 import json
 import math
 import os
 import re
+import stat
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -716,8 +718,10 @@ class _ParsedCasimirTemplate:
     active_before_finish: tuple[str, ...]
 
 
-def _parse_casimir_template(path: Path) -> _ParsedCasimirTemplate:
-    data = path.read_bytes()
+def _parse_casimir_template(
+    path: Path, data: bytes | None = None
+) -> _ParsedCasimirTemplate:
+    data = path.read_bytes() if data is None else data
     if not data.endswith(b"\n"):
         raise ReferenceFormatError(
             f"CASIMIR evidence {path.name}: template requires a final LF"
@@ -838,9 +842,14 @@ def _replace_camcasp_token(parsed: _ParsedCasimirTemplate, value: str) -> bytes:
 
 
 def _validate_camcasp_directive(
-    path: Path, runtime: Path, expected: str, *, require_absolute: bool
+    path: Path,
+    runtime: Path,
+    expected: str,
+    *,
+    require_absolute: bool,
+    data: bytes | None = None,
 ) -> _ParsedCasimirTemplate:
-    parsed = _parse_casimir_template(path)
+    parsed = _parse_casimir_template(path, data)
     observed = parsed.token
     if Path(observed).is_absolute() != require_absolute:
         kind = "absolute" if require_absolute else "relative"
@@ -865,9 +874,6 @@ def _validate_camcasp_directive(
 
 
 class _CasimirTemplateIO:
-    def open_exclusive(self, path: Path, mode: int) -> int:
-        return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
-
     def mkstemp(self, path: Path) -> tuple[int, str]:
         return tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
 
@@ -883,21 +889,47 @@ class _CasimirTemplateIO:
     def close(self, descriptor: int) -> None:
         os.close(descriptor)
 
+    def link(self, source: str, destination: Path) -> None:
+        os.link(source, destination, follow_symlinks=False)
+
     def replace(self, source: str, destination: Path) -> None:
         os.replace(source, destination)
 
     def unlink(self, path: str | Path) -> None:
         os.unlink(path)
 
-    def lexists(self, path: str | Path) -> bool:
-        return os.path.lexists(path)
-
     def fsync_directory(self, path: Path) -> None:
-        descriptor = os.open(path, os.O_RDONLY)
+        descriptor: int | None = os.open(path, os.O_RDONLY)
         try:
-            os.fsync(descriptor)
+            self.fsync(descriptor)
         finally:
-            os.close(descriptor)
+            closing = descriptor
+            descriptor = None
+            self.close(closing)
+
+    def lstat(self, path: Path) -> os.stat_result:
+        return path.lstat()
+
+    def read_bytes(self, path: Path) -> bytes:
+        return path.read_bytes()
+
+    def open_lock(self, path: Path) -> int:
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor: int | None = os.open(path, flags, 0o600)
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            closing = descriptor
+            descriptor = None
+            self.close(closing)
+            raise ReferenceFormatError(f"CASIMIR lock is not regular: {path}")
+        return descriptor
+
+    def lock(self, descriptor: int) -> None:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def unlock(self, descriptor: int) -> None:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
 
 
 def _write_all(descriptor: int, data: bytes, io: _CasimirTemplateIO) -> None:
@@ -909,32 +941,74 @@ def _write_all(descriptor: int, data: bytes, io: _CasimirTemplateIO) -> None:
         offset += written
 
 
-def _write_generated_exclusive(
+def _stage_and_publish_generated(
     path: Path, data: bytes, mode: int, io: _CasimirTemplateIO
 ) -> None:
     descriptor: int | None = None
-    created = False
+    temporary_name: str | None = None
     try:
-        descriptor = io.open_exclusive(path, mode)
-        created = True
-        io.fchmod(descriptor, mode)
+        descriptor, temporary_name = io.mkstemp(path)
         _write_all(descriptor, data, io)
+        io.fchmod(descriptor, mode)
         io.fsync(descriptor)
-        io.close(descriptor)
+        closing = descriptor
         descriptor = None
-    except BaseException:
+        io.close(closing)
+        io.link(temporary_name, path)
+        io.fsync_directory(path.parent)
+    finally:
         if descriptor is not None:
+            closing = descriptor
+            descriptor = None
             try:
-                io.close(descriptor)
+                io.close(closing)
             except OSError:
                 pass
-        if created and io.lexists(path):
-            io.unlink(path)
-        raise
+        if temporary_name is not None and os.path.lexists(temporary_name):
+            io.unlink(temporary_name)
+
+
+@dataclass(frozen=True)
+class _SourceSnapshot:
+    metadata: tuple[int, int, int, int, int]
+    data: bytes
+
+
+def _source_metadata(info: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns)
+
+
+def _capture_source_snapshot(path: Path, io: _CasimirTemplateIO) -> _SourceSnapshot:
+    before = io.lstat(path)
+    if not stat.S_ISREG(before.st_mode):
+        raise ReferenceFormatError(f"CASIMIR source is not regular: {path}")
+    data = io.read_bytes(path)
+    after = io.lstat(path)
+    if _source_metadata(before) != _source_metadata(after) or len(data) != after.st_size:
+        raise ReferenceFormatError(f"CASIMIR source changed while being read: {path}")
+    return _SourceSnapshot(_source_metadata(after), data)
+
+
+def _require_unchanged_source(
+    path: Path, snapshot: _SourceSnapshot, io: _CasimirTemplateIO
+) -> None:
+    before = io.lstat(path)
+    data = io.read_bytes(path)
+    after = io.lstat(path)
+    if (
+        _source_metadata(before) != snapshot.metadata
+        or _source_metadata(after) != snapshot.metadata
+        or data != snapshot.data
+    ):
+        raise ReferenceFormatError(f"CASIMIR source changed before atomic replace: {path}")
 
 
 def _patch_source_atomic(
-    path: Path, data: bytes, mode: int, io: _CasimirTemplateIO
+    path: Path,
+    data: bytes,
+    mode: int,
+    snapshot: _SourceSnapshot,
+    io: _CasimirTemplateIO,
 ) -> None:
     descriptor: int | None = None
     temporary_name: str | None = None
@@ -943,18 +1017,22 @@ def _patch_source_atomic(
         io.fchmod(descriptor, mode)
         _write_all(descriptor, data, io)
         io.fsync(descriptor)
-        io.close(descriptor)
+        closing = descriptor
         descriptor = None
+        io.close(closing)
+        _require_unchanged_source(path, snapshot, io)
         io.replace(temporary_name, path)
         temporary_name = None
         io.fsync_directory(path.parent)
     finally:
         if descriptor is not None:
+            closing = descriptor
+            descriptor = None
             try:
-                io.close(descriptor)
+                io.close(closing)
             except OSError:
                 pass
-        if temporary_name is not None and io.lexists(temporary_name):
+        if temporary_name is not None and os.path.lexists(temporary_name):
             io.unlink(temporary_name)
 
 
@@ -975,28 +1053,60 @@ def patch_casimir_template(
             f"CASIMIR template relative runtime is not canonical {expected_relative!r}"
         )
     _require_ascii(relative_runtime, "CASIMIR template relative runtime")
-    source = _require_casimir_evidence_file(
-        work_dir, "*_casimir.prss", "H2O_casimir.prss"
-    )
-    generated = work_dir / "H2O_casimir.generated.prss"
-    if generated.exists() or generated.is_symlink():
-        raise ReferenceFormatError(f"CASIMIR generated evidence already exists: {generated}")
-    parsed_source = _validate_camcasp_directive(
-        source, runtime, str(runtime), require_absolute=True
-    )
-    source_bytes = parsed_source.data
-    patched_bytes = _replace_camcasp_token(parsed_source, relative_runtime)
-    mode = source.stat().st_mode & 0o777
     io = _CasimirTemplateIO() if _io is None else _io
-    _write_generated_exclusive(generated, source_bytes, mode, io)
-    if generated.is_symlink() or generated.read_bytes() != source_bytes:
-        raise ReferenceFormatError("CASIMIR generated evidence preservation failed")
-    _patch_source_atomic(source, patched_bytes, mode, io)
-    if generated.read_bytes() != source_bytes or source.read_bytes() != patched_bytes:
-        raise ReferenceFormatError("CASIMIR template atomic patch verification failed")
-    _validate_camcasp_directive(
-        source, runtime, relative_runtime, require_absolute=False
-    )
+    # This is cooperative serialization; noncooperating writers are outside the threat model.
+    # Keep the persistent lock outside the job tree so artifact checksums ignore it deliberately.
+    lock_path = work_dir.parent / ".H2O_casimir.template.lock"
+    lock_descriptor: int | None = io.open_lock(lock_path)
+    locked = False
+    try:
+        io.lock(lock_descriptor)
+        locked = True
+        source = _require_casimir_evidence_file(
+            work_dir, "*_casimir.prss", "H2O_casimir.prss"
+        )
+        generated = work_dir / "H2O_casimir.generated.prss"
+        if generated.exists() or generated.is_symlink():
+            raise ReferenceFormatError(
+                f"CASIMIR generated evidence already exists: {generated}"
+            )
+        snapshot = _capture_source_snapshot(source, io)
+        parsed_source = _validate_camcasp_directive(
+            source,
+            runtime,
+            str(runtime),
+            require_absolute=True,
+            data=snapshot.data,
+        )
+        source_bytes = parsed_source.data
+        patched_bytes = _replace_camcasp_token(parsed_source, relative_runtime)
+        mode = snapshot.metadata[2] & 0o777
+        _stage_and_publish_generated(generated, source_bytes, mode, io)
+        generated_bytes = io.read_bytes(generated)
+        if generated.is_symlink() or generated_bytes != source_bytes:
+            raise ReferenceFormatError("CASIMIR generated evidence preservation failed")
+        _patch_source_atomic(source, patched_bytes, mode, snapshot, io)
+        generated_bytes = io.read_bytes(generated)
+        source_after = io.read_bytes(source)
+        if generated_bytes != source_bytes or source_after != patched_bytes:
+            raise ReferenceFormatError("CASIMIR template atomic patch verification failed")
+        _validate_camcasp_directive(
+            source,
+            runtime,
+            relative_runtime,
+            require_absolute=False,
+            data=source_after,
+        )
+    finally:
+        try:
+            if locked:
+                io.unlock(lock_descriptor)
+        finally:
+            locked = False
+            if lock_descriptor is not None:
+                closing = lock_descriptor
+                lock_descriptor = None
+                io.close(closing)
 
 
 def _require_exact_casimir_control(lines: Sequence[str], expected: str) -> None:
