@@ -4,6 +4,7 @@ IFS=$'\n\t'
 export LC_ALL=C
 export LANG=C
 export TZ=UTC
+export PYTHONDONTWRITEBYTECODE=1
 
 LOCALIZATION_LIMIT=3
 WSM_LIMIT=3
@@ -138,6 +139,17 @@ verify_psi4_source_root() {
     }
 }
 
+validate_camcasp_root_separation() {
+    CAMCASP_SOURCE_ROOT="$(realpath -m "$CAMCASP_SOURCE_ROOT")"
+    CAMCASP="$(realpath -m "$CAMCASP")"
+    if [[ "$CAMCASP_SOURCE_ROOT" == "$CAMCASP" ||
+          "$CAMCASP_SOURCE_ROOT" == "$CAMCASP"/* ||
+          "$CAMCASP" == "$CAMCASP_SOURCE_ROOT"/* ]]; then
+        fail "CamCASP source and runtime must not contain one another: source=$CAMCASP_SOURCE_ROOT runtime=$CAMCASP"
+        return
+    fi
+}
+
 preflight() {
     CURRENT_STAGE="preflight"
     PSI4_SOURCE_ROOT="${PSI4_SOURCE_ROOT:-$REPO_ROOT}"
@@ -149,6 +161,7 @@ preflight() {
     PSI4_EXE="$(realpath -m "$PSI4_EXE")"
     CAMCASP_SOURCE_ROOT="$(realpath -m "$CAMCASP_SOURCE_ROOT")"
     CAMCASP="$(realpath -m "$REFERENCE_ROOT/tools/camcasp-runtime")"
+    validate_camcasp_root_separation || return
     require_executable PSI4_EXE "$PSI4_EXE"
     verify_psi4_source_root "$PSI4_SOURCE_ROOT" "$PSI4_EXE" || return
     if [[ -n "${ORIENT_EXE:-}" ]]; then
@@ -282,6 +295,7 @@ verify_camcasp_runtime() {
 
 materialize_camcasp_runtime() {
     CURRENT_STAGE="camcasp-materialize"
+    validate_camcasp_root_separation || return
     local archive="$REFERENCE_ROOT/logs/camcasp-source.tar"
     local runtime_temp="$REFERENCE_ROOT/tools/.camcasp-runtime.tmp.$$"
     local source_marker="$CAMCASP_SOURCE_ROOT/bin/no_psi4"
@@ -329,6 +343,7 @@ materialize_camcasp_runtime() {
 
 provision_camcasp() {
     CURRENT_STAGE="provision-camcasp"
+    validate_camcasp_root_separation || return
     if [[ ! -d "$CAMCASP_SOURCE_ROOT/.git" ]]; then
         [[ "$CAMCASP_SOURCE_ROOT" == "$REPO_ROOT/camcasp-bin" ]] || {
             fail "CAMCASP source override must already be a Git checkout: $CAMCASP_SOURCE_ROOT"
@@ -585,6 +600,173 @@ EOF
         "$wrapper" --version
 }
 
+camcasp_runtime_attestation_payload() {
+    local action="$1"
+    local attestation="$REFERENCE_ROOT/logs/camcasp-runtime-attestation.json"
+    python -P - "$action" "$CAMCASP_SOURCE_ROOT" "$CAMCASP" \
+        "$REFERENCE_ROOT/logs/camcasp-source.tar" "$CAMCASP_COMMIT" \
+        "$attestation" <<'PY'
+import gzip
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+(action, source_text, runtime_text, archive_text, expected_commit, output_text) = sys.argv[1:]
+source = Path(source_text).resolve()
+runtime = Path(runtime_text).resolve()
+archive = Path(archive_text).resolve()
+output = Path(output_text)
+programs = ("camcasp", "cluster", "process", "pfit", "casimir")
+
+
+def digest_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def record(path):
+    path = Path(path)
+    if not path.is_file():
+        raise ValueError(f"missing file: {path}")
+    return {"path": str(path.resolve()), "sha256": digest_bytes(path.read_bytes())}
+
+
+def archive_commit(path):
+    result = subprocess.run(
+        ["git", "get-tar-commit-id"],
+        input=path.read_bytes(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise ValueError("could not revalidate git archive embedded commit")
+    return result.stdout.decode().strip()
+
+
+def current_payload():
+    embedded_commit = archive_commit(archive)
+    if embedded_commit != expected_commit:
+        raise ValueError(
+            f"git archive embedded commit {embedded_commit!r} != {expected_commit!r}"
+        )
+    sentinel = source / "bin" / "no_psi4"
+    source_sentinel = record(sentinel)
+    if sentinel.read_bytes() != b"":
+        raise ValueError("source sentinel is not empty")
+    runtime_sentinel = runtime / "bin" / "no_psi4"
+    archives = {}
+    executables = {}
+    symlinks = {}
+    for name in programs:
+        compressed = runtime / "x86-64" / "gfortran" / f"{name}.gz"
+        executable = runtime / "x86-64" / "gfortran" / "exe" / name
+        archive_record = record(compressed)
+        executable_record = record(executable)
+        with gzip.open(compressed, "rb") as handle:
+            decompressed = handle.read()
+        decompressed_digest = digest_bytes(decompressed)
+        if decompressed_digest != executable_record["sha256"]:
+            raise ValueError(f"{name} executable differs from preserved archive")
+        archive_record["decompressed_sha256"] = decompressed_digest
+        archives[name] = archive_record
+        executables[name] = executable_record
+        link = runtime / "bin" / name
+        if not link.is_symlink():
+            raise ValueError(f"missing bin symlink: {link}")
+        symlinks[name] = {
+            "path": str(link.absolute()),
+            "target": os.readlink(link),
+        }
+    return {
+        "schema_version": 1,
+        "git_archive": {
+            **record(archive),
+            "embedded_commit": embedded_commit,
+        },
+        "source_sentinel": source_sentinel,
+        "runtime_sentinel": {
+            "path": str(runtime_sentinel.absolute()),
+            "absent": not runtime_sentinel.exists() and not runtime_sentinel.is_symlink(),
+        },
+        "runtime_version": record(runtime / "VERSION"),
+        "psi4_wrapper": record(runtime / "bin" / "psi4.sh"),
+        "archives": archives,
+        "executables": executables,
+        "bin_symlinks": symlinks,
+        "drivers": {
+            name: record(runtime / "bin" / name)
+            for name in ("runcamcasp.py", "localize.py")
+        },
+    }
+
+
+try:
+    current = current_payload()
+    if not current["runtime_sentinel"]["absent"]:
+        raise ValueError("runtime sentinel unexpectedly exists")
+    if action == "write":
+        output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = output.with_name(output.name + f".tmp.{os.getpid()}")
+        temporary.write_text(
+            json.dumps(current, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, output)
+    elif action == "verify":
+        recorded = json.loads(output.read_text(encoding="utf-8"))
+        if recorded != current:
+            raise ValueError("recorded install-time state differs from current runtime")
+    else:
+        raise ValueError(f"unknown attestation action: {action}")
+except Exception as exc:
+    print(f"runtime attestation mismatch: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
+write_camcasp_runtime_attestation() {
+    CURRENT_STAGE="camcasp-runtime-attestation"
+    verify_camcasp_source "$CAMCASP_SOURCE_ROOT" || return
+    verify_camcasp_runtime || return
+    camcasp_runtime_attestation_payload write || {
+        fail "could not create CamCASP runtime attestation"
+        return
+    }
+    write_sha256_record \
+        "$REFERENCE_ROOT/logs/camcasp-runtime-attestation.json" \
+        "$REFERENCE_ROOT/logs/camcasp-runtime-attestation.json.sha256" \
+        camcasp-runtime-attestation.json
+}
+
+verify_camcasp_runtime_attestation() {
+    CURRENT_STAGE="camcasp-runtime-attestation"
+    local attestation="$REFERENCE_ROOT/logs/camcasp-runtime-attestation.json"
+    local checksum="$attestation.sha256"
+    local expected actual
+    [[ -f "$attestation" && -f "$checksum" ]] || {
+        fail "runtime attestation mismatch: attestation or checksum is missing"
+        return
+    }
+    expected="$(awk 'NR == 1 {print $1}' "$checksum")"
+    actual="$(sha256sum "$attestation")"
+    actual="${actual%% *}"
+    [[ "$expected" =~ ^[0-9a-f]{64}$ && "$actual" == "$expected" ]] || {
+        fail "runtime attestation mismatch: attestation checksum changed"
+        return
+    }
+    verify_camcasp_runtime || {
+        fail "runtime attestation mismatch: runtime invariants changed"
+        return
+    }
+    camcasp_runtime_attestation_payload verify || {
+        fail "runtime attestation mismatch: sealed runtime changed"
+        return
+    }
+}
+
 prepare_layout() {
     CURRENT_STAGE="layout"
     require_safe_generated_path "$REFERENCE_ROOT"
@@ -808,7 +990,7 @@ write_manifest() {
     validate_current_orient_products "$ORIENT_SOURCE_ROOT" manifest || return
     verify_psi4_source_root "$PSI4_SOURCE_ROOT" "$PSI4_EXE" || return
     verify_camcasp_source "$CAMCASP_SOURCE_ROOT" || return
-    verify_camcasp_runtime || return
+    verify_camcasp_runtime_attestation || return
     run_logged write-manifest "$REFERENCE_ROOT/logs/write-manifest.log" \
         python -P - "$REPO_ROOT" "$SCRIPT_PATH" "$CAMCASP_SOURCE_ROOT" "$CAMCASP" \
         "$ORIENT_SOURCE_ROOT" "$ORIENT_EXE" \
@@ -935,6 +1117,9 @@ document = {
         "camcasp_materialization_log": record(
             reference / "logs" / "camcasp-materialization.log"
         ),
+        "camcasp_runtime_attestation": record(
+            reference / "logs" / "camcasp-runtime-attestation.json"
+        ),
     },
 }
 with output.open("w", encoding="utf-8", newline="\n") as handle:
@@ -985,8 +1170,10 @@ main() {
     provision_orient
     provision_camcasp
     write_psi4_wrapper
+    write_camcasp_runtime_attestation
     export_reference_environment
     write_inputs
+    verify_camcasp_runtime_attestation
     run_camcasp
     attest_generated_protocol
     run_localize

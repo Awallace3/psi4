@@ -117,6 +117,38 @@ def _make_camcasp_source_checkout(path, sentinel=b""):
     ).strip()
 
 
+def _make_attestable_camcasp_source(path, *, ignore_reference=False):
+    bin_dir = path / "bin"
+    archive_dir = path / "x86-64" / "gfortran"
+    bin_dir.mkdir(parents=True)
+    archive_dir.mkdir(parents=True)
+    (path / "VERSION").write_text("CamCASP VERSION 7.2.2 patch 003\n")
+    (bin_dir / "no_psi4").write_bytes(b"")
+    for driver in ("runcamcasp.py", "localize.py"):
+        _write_executable(bin_dir / driver, "#!/usr/bin/env bash\nexit 0\n")
+    for name in ("camcasp", "cluster", "process", "pfit", "casimir"):
+        with gzip.open(archive_dir / f"{name}.gz", "wb") as handle:
+            handle.write(f"#!/usr/bin/env bash\necho {name}\n".encode())
+    if ignore_reference:
+        (path / ".gitignore").write_text("reference/\n")
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.name", "Test"], check=True
+    )
+    subprocess.run(["git", "-C", str(path), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "commit", "-qm", "attestable CamCASP"],
+        check=True,
+    )
+    return subprocess.check_output(
+        ["git", "-C", str(path), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+
 @pytest.mark.parametrize("sentinel", (None, b"not empty\n"))
 def test_verify_camcasp_source_rejects_missing_or_nonempty_sentinel(
     tmp_path, sentinel
@@ -220,6 +252,103 @@ def test_verify_camcasp_runtime_rejects_surviving_sentinel(tmp_path):
     assert result.returncode != 0
     assert "runtime sentinel unexpectedly exists" in result.stderr
     assert (source / "bin" / "no_psi4").read_bytes() == b""
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("executable", "wrapper", "driver", "archive", "symlink", "sentinel"),
+)
+def test_camcasp_runtime_attestation_rejects_post_install_mutation(
+    tmp_path, mutation
+):
+    source = tmp_path / "camcasp-source"
+    commit = _make_attestable_camcasp_source(source)
+    reference = tmp_path / "reference"
+    psi4 = tmp_path / "psi4"
+    _write_executable(psi4, "#!/usr/bin/env bash\necho 'Psi4 stub'\n")
+    command = f'''source "{SCRIPT}"
+REFERENCE_ROOT="$1"
+CAMCASP_SOURCE_ROOT="$2"
+CAMCASP_COMMIT="$3"
+CAMCASP="$REFERENCE_ROOT/tools/camcasp-runtime"
+PSI4_EXE="$4"
+provision_camcasp
+write_psi4_wrapper
+write_camcasp_runtime_attestation
+case "$5" in
+  executable) printf mutation >>"$CAMCASP/x86-64/gfortran/exe/camcasp" ;;
+  wrapper) printf mutation >>"$CAMCASP/bin/psi4.sh" ;;
+  driver) printf mutation >>"$CAMCASP/bin/runcamcasp.py" ;;
+  archive) printf mutation >>"$CAMCASP/x86-64/gfortran/camcasp.gz" ;;
+  symlink) ln -sfn ../localize.py "$CAMCASP/bin/camcasp" ;;
+  sentinel) : >"$CAMCASP/bin/no_psi4" ;;
+esac
+verify_camcasp_runtime_attestation
+: >"$REFERENCE_ROOT/work/manifest.json"
+: >"$REFERENCE_ROOT/atomic-polarizabilities.json"
+'''
+    result = subprocess.run(
+        [
+            "bash", "-c", command, "runtime-mutation", str(reference),
+            str(source), commit, str(psi4), mutation,
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "runtime attestation mismatch" in result.stderr
+    assert not (reference / "work" / "manifest.json").exists()
+    assert not (reference / "atomic-polarizabilities.json").exists()
+
+
+@pytest.mark.parametrize("relationship", ("source-inside-runtime", "runtime-inside-source"))
+def test_camcasp_runtime_rejects_ancestor_roots_before_mutation(
+    tmp_path, relationship
+):
+    if relationship == "source-inside-runtime":
+        reference = tmp_path / "reference"
+        runtime = reference / "tools" / "camcasp-runtime"
+        source = runtime / "source"
+        commit = _make_attestable_camcasp_source(source)
+    else:
+        source = tmp_path / "source"
+        commit = _make_attestable_camcasp_source(source, ignore_reference=True)
+        reference = source / "reference"
+        runtime = reference / "tools" / "camcasp-runtime"
+    sentinel = source / "bin" / "no_psi4"
+    sentinel_digest = hashlib.sha256(sentinel.read_bytes()).hexdigest()
+    status_before = subprocess.check_output(
+        ["git", "-C", str(source), "status", "--porcelain", "--untracked-files=all"],
+        text=True,
+    )
+    command = (
+        f'source "{SCRIPT}"; REFERENCE_ROOT="$1"; '
+        'CAMCASP_SOURCE_ROOT="$2"; CAMCASP_COMMIT="$3"; CAMCASP="$4"; '
+        'materialize_camcasp_runtime'
+    )
+    result = subprocess.run(
+        [
+            "bash", "-c", command, "runtime-roots", str(reference),
+            str(source), commit, str(runtime),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "must not contain one another" in result.stderr
+    assert sentinel.is_file()
+    assert hashlib.sha256(sentinel.read_bytes()).hexdigest() == sentinel_digest
+    assert subprocess.check_output(
+        ["git", "-C", str(source), "status", "--porcelain", "--untracked-files=all"],
+        text=True,
+    ) == status_before
+    if relationship == "runtime-inside-source":
+        assert not runtime.exists()
+    assert not (reference / "logs" / "camcasp-source.tar").exists()
 
 
 def test_safe_path_rejects_repository_root():
@@ -2295,8 +2424,10 @@ mkdir -p "$ORIENT_BIN_DIR"
 ln -s "$ORIENT_EXE" "$ORIENT_BIN_DIR/orient"
 provision_camcasp
 write_psi4_wrapper
+write_camcasp_runtime_attestation
 export_reference_environment
 write_inputs
+verify_camcasp_runtime_attestation
 run_camcasp
 attest_generated_protocol
 run_localize
@@ -2391,6 +2522,13 @@ build_reference_json
     )
     assert (reference / "logs" / "camcasp-source.tar.sha256").is_file()
     assert (reference / "logs" / "camcasp-materialization.log.sha256").is_file()
+    attestation = reference / "logs" / "camcasp-runtime-attestation.json"
+    assert attestation.is_file()
+    assert attestation.with_name(attestation.name + ".sha256").is_file()
+    assert document["sources"]["camcasp_runtime_attestation"] == {
+        "path": str(attestation.resolve()),
+        "sha256": hashlib.sha256(attestation.read_bytes()).hexdigest(),
+    }
     assert document["inputs"]["H2O.clt"]["path"] == str(
         (reference / "inputs" / "H2O.clt").resolve()
     )
