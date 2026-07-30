@@ -677,6 +677,36 @@ def _require_casimir_evidence_file(
     return path
 
 
+def _casimir_lines_before_finish(path: Path) -> list[str]:
+    active = [
+        (line_number, " ".join(line.split()))
+        for line_number, line in _active_lines(path.read_text(errors="replace"))
+    ]
+    finishes = [
+        index for index, (_line_number, line) in enumerate(active)
+        if line.casefold() == "finish"
+    ]
+    if len(finishes) != 1:
+        raise ReferenceFormatError(
+            f"CASIMIR evidence {path.name}: expected exactly one active Finish"
+        )
+    finish_index = finishes[0]
+    if finish_index != len(active) - 1:
+        line_number = active[finish_index][0]
+        raise ReferenceFormatError(
+            f"CASIMIR evidence {path.name}:{line_number}: terminal Finish "
+            "has active content after it"
+        )
+    return [line for _line_number, line in active[:finish_index]]
+
+
+def _require_ascii(value: str, context: str) -> None:
+    try:
+        value.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ReferenceFormatError(f"{context} must contain only ASCII characters") from exc
+
+
 def _require_exact_casimir_control(lines: Sequence[str], expected: str) -> None:
     key = expected.split()[0]
     observed = [line for line in lines if line.split()[0] == key]
@@ -703,20 +733,15 @@ def validate_casimir_evidence(work_dir: Path, runtime: Path) -> None:
         work_dir, "*_casimir.data", "H2O_ref_wt4_L3_casimir.data"
     )
     for path in (process_path, temp_path):
-        lines = [" ".join(line.split()) for _number, line in _active_lines(path.read_text())]
-        frequencies = [
-            line for line in lines if line.startswith("Frequencies ")
-        ]
+        lines = _casimir_lines_before_finish(path)
+        frequencies = [line for line in lines if line.startswith("Frequencies ")]
         if frequencies != ["Frequencies STATIC + 10"]:
             raise ReferenceFormatError(
                 f"CASIMIR evidence {path.name}: expected exactly one active "
                 "Frequencies STATIC + 10 control"
             )
 
-    lines = [
-        " ".join(line.split())
-        for _number, line in _active_lines(data_path.read_text(errors="replace"))
-    ]
+    lines = _casimir_lines_before_finish(data_path)
     for expected in (
         "Frequencies 0.5 10",
         "Skip 0",
@@ -737,6 +762,9 @@ def validate_casimir_evidence(work_dir: Path, runtime: Path) -> None:
         raise ReferenceFormatError("CASIMIR data: CGdir must be relative")
     if any(character.isspace() for character in cgdir):
         raise ReferenceFormatError("CASIMIR data: CGdir contains whitespace")
+    _require_ascii(cgdir, "CASIMIR data CGdir")
+    for component in Path(cgdir).parts:
+        _require_ascii(component, "CASIMIR data CGdir path component")
 
     realcg, realcg_files = _regular_realcg_files(runtime)
     expected_cgdir = os.path.relpath(realcg, work_dir)
@@ -753,10 +781,12 @@ def validate_casimir_evidence(work_dir: Path, runtime: Path) -> None:
             f"CASIMIR data: CGdir resolves to {resolved_cgdir}, expected {realcg}"
         )
     for table in realcg_files:
+        _require_ascii(table.name, "CASIMIR realcg table name")
         record = f"{cgdir}/{table.name}"
-        if len(record) > 80:
+        _require_ascii(record, "CASIMIR CGdir/table record")
+        if len(os.fsencode(record)) > 80:
             raise ReferenceFormatError(
-                f"CASIMIR CGdir exceeds 80-character record for {table.name}: {record!r}"
+                f"CASIMIR CGdir exceeds 80-byte record for {table.name}: {record!r}"
             )
 
 

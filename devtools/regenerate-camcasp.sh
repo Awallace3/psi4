@@ -1130,6 +1130,12 @@ if Path(relative).is_absolute() or not relative:
     raise SystemExit("short CamCASP path is not relative")
 if any(character.isspace() for character in relative):
     raise SystemExit("short CamCASP path contains whitespace or newline")
+try:
+    relative.encode("ascii")
+    for component in Path(relative).parts:
+        component.encode("ascii")
+except UnicodeEncodeError as exc:
+    raise SystemExit("short CamCASP path components must be ASCII") from exc
 if (work / relative).resolve(strict=True) != runtime:
     raise SystemExit("short CamCASP path does not resolve to sealed runtime")
 realcg = runtime / "data" / "realcg"
@@ -1141,10 +1147,18 @@ if not entries:
 for entry in entries:
     if entry.is_symlink() or not entry.is_file():
         raise SystemExit(f"unexpected non-regular realcg entry: {entry}")
+    try:
+        entry.name.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise SystemExit(f"realcg table name must be ASCII: {entry.name!r}") from exc
     record = f"{relative}/data/realcg/{entry.name}"
-    if len(record) > 80:
+    try:
+        record.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise SystemExit(f"CASIMIR CGdir/table record must be ASCII: {record!r}") from exc
+    if len(os.fsencode(record)) > 80:
         raise SystemExit(
-            f"short CamCASP path exceeds CASIMIR 80-character record for {entry.name}: {record!r}"
+            f"short CamCASP path exceeds CASIMIR 80-byte record for {entry.name}: {record!r}"
         )
 print(relative)
 PY
