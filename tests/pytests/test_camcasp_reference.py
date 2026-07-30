@@ -1,3 +1,4 @@
+import copy
 import fcntl
 import gzip
 import hashlib
@@ -1272,9 +1273,22 @@ def make_l3_refined_text():
 
 
 def make_real_l3_refined_text():
+    """Exact real PFIT structure; values are deterministic synthetic payload."""
     lines = [
         "#  Localisation settings for H2O",
+        "#  Axes file:       H2O.axes",
         "#  Pol file format: NEW",
+        "#  Limit:           3",
+        "#  WSM-Limit:       3",
+        "#  H-Limit:         3",
+        "#  Isotropic?:      False",
+        "#  Model file:      H2O.pdef",
+        "#  Pol Cutoff:      0.0001",
+        "#  Loc algorithm:   LW",
+        "#  Weight:          4",
+        "#  Weight coeff:    0.001",
+        "#  SVD threshold:   0.0",
+        "#  NoRefine?:       False",
         "# ",
         "",
     ]
@@ -1283,14 +1297,16 @@ def make_real_l3_refined_text():
         for atom_index, label in enumerate(("O", "H1", "H2")):
             lines.append(
                 f"ALPHA  H2O  SITE-NAMES  {label}  {label}  "
-                f"RANK 1 TO 3 INDEX   0 FREQSQ       {frequency_index / 100:.7f}"
+                "RANK 1 TO 3 INDEX   0 FREQSQ       0.0000000"
             )
             for row in range(15):
                 values = [
                     frequency_index + atom_index + (row + column) / 100.0
                     for column in range(15)
                 ]
-                lines.append(" ".join(f"{value:.12f}" for value in values))
+                lines.append(
+                    "      " + "      ".join(f"{value:.12f}" for value in values)
+                )
         lines.extend((" ENDFILE", ""))
     return "\n".join(lines) + "\n"
 
@@ -1328,6 +1344,7 @@ def test_parse_authoritative_real_l3_model_and_dipole_mapping(tmp_path):
     assert len(blocks) == 11
     assert tuple(blocks[0].atoms) == ("O", "H1", "H2")
     assert blocks[0].atoms["O"].components == COMPONENTS_L3[1:]
+    assert all(block.frequency_squared == 0.0 for block in blocks)
     assert len(blocks[10].atoms["H2"].matrix) == 15
     assert all(len(row) == 15 for row in blocks[10].atoms["H2"].matrix)
     assert dipole_local_cartesian(blocks[0].atoms["O"]) == (
@@ -1344,7 +1361,7 @@ def test_parse_authoritative_real_l3_model_and_dipole_mapping(tmp_path):
         ("RANK 1 TO 3", "RANK 0 TO 3", "RANK 1 TO 3"),
         ("INDEX   0", "INDEX   1", "header INDEX 0"),
         ("SITE-NAMES  O  O", "SITE-NAMES  O  H1", "SITE-NAMES O O"),
-        ("FREQSQ       0.0000000", "FREQSQ       -0.1000000", "nonnegative"),
+        ("FREQSQ       0.0000000", "FREQSQ       -0.1000000", "exactly 0.0000000"),
         ("FREQSQ       0.0000000", "FREQSQ       nan", "header"),
         ("FREQSQ       0.0000000", "FREQSQ       0_0", "header"),
     ),
@@ -1356,12 +1373,12 @@ def test_real_l3_rejects_invalid_header_contract(tmp_path, old, new, expected):
         parse_refined_polarizabilities(source, ("O", "H1", "H2"), limit=3)
 
 
-def test_real_l3_requires_matching_freqsq_across_atom_headers(tmp_path):
+@pytest.mark.parametrize("replacement", ("0.1000000", "0E0", "-0.0000000"))
+def test_real_pfit_requires_observed_zero_freqsq_sentinel(tmp_path, replacement):
     source = tmp_path / "invalid-real-freqsq.pol"
     text = make_real_l3_refined_text()
-    h1 = "ALPHA  H2O  SITE-NAMES  H1  H1  RANK 1 TO 3 INDEX   0 FREQSQ       0.0000000"
-    source.write_text(text.replace(h1, h1.replace("0.0000000", "0.1000000"), 1))
-    with pytest.raises(ReferenceFormatError, match="FREQSQ does not match"):
+    source.write_text(text.replace("FREQSQ       0.0000000", f"FREQSQ       {replacement}", 1))
+    with pytest.raises(ReferenceFormatError, match="FREQSQ must be exactly 0.0000000"):
         parse_refined_polarizabilities(source, ("O", "H1", "H2"), limit=3)
 
 
@@ -1387,7 +1404,9 @@ def test_real_l3_requires_exact_atom_headers_in_order(tmp_path, mode):
 def test_real_l3_requires_exact_finite_15_by_15_matrix(tmp_path, mode):
     source = tmp_path / "invalid-real-matrix.pol"
     text = make_real_l3_refined_text()
-    row = " ".join(f"{column / 100:.12f}" for column in range(15))
+    row = "      " + "      ".join(
+        f"{column / 100:.12f}" for column in range(15)
+    )
     fields = row.split()
     if mode == "incomplete":
         replacement = " ".join(fields[:-1])
@@ -1409,7 +1428,9 @@ def test_real_l3_requires_strict_endfile_and_block_boundaries(tmp_path, mode):
     if mode == "missing":
         text = text.replace(" ENDFILE\n", "", 1)
     elif mode == "early":
-        first_row = " ".join(f"{column / 100:.12f}" for column in range(15))
+        first_row = "      " + "      ".join(
+            f"{column / 100:.12f}" for column in range(15)
+        )
         text = text.replace(first_row + "\n", " ENDFILE\n" + first_row + "\n", 1)
     elif mode == "trailing":
         text = text.replace(" ENDFILE\n", " ENDFILE\nunexpected payload\n", 1)
@@ -1913,26 +1934,31 @@ def _executable_record(name, digest_character):
     return {"path": f"/opt/{name}", "sha256": digest_character * 64}
 
 
+def _spherical_tensor(components, tensor):
+    matrix = [[0.0 for _ in components] for _ in components]
+    dipoles = ("11c", "11s", "10")
+    for row, left in enumerate(dipoles):
+        for column, right in enumerate(dipoles):
+            matrix[components.index(left)][components.index(right)] = tensor[row][column]
+    return {"components": list(components), "matrix": matrix}
+
+
 def complete_document():
     identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
     tensor = [[1.0, 0.0, 0.0], [0.0, 1.1, 0.0], [0.0, 0.0, 1.2]]
     atom = {
-        "spherical": {
-            "components": list(COMPONENTS_L3),
-            "matrix": [
-                [float(row == column) for column in range(16)]
-                for row in range(16)
-            ],
-        },
-        "local_cartesian": tensor,
-        "local_to_global": identity,
-        "global_cartesian": tensor,
+        "spherical": _spherical_tensor(COMPONENTS_L3, tensor),
+        "local_cartesian": [row[:] for row in tensor],
+        "local_to_global": [row[:] for row in identity],
+        "global_cartesian": [row[:] for row in tensor],
     }
     frequency_blocks = [
         {
             "index": index,
             "omega": omega,
-            "atoms": {"O": atom, "H1": atom, "H2": atom},
+            "atoms": {
+                label: copy.deepcopy(atom) for label in ("O", "H1", "H2")
+            },
         }
         for index, omega in enumerate(APPROVED_FREQUENCIES)
     ]
@@ -2138,6 +2164,51 @@ def test_validator_rejects_noncanonical_protocol_and_atom_invariants():
     atoms = document["polarizabilities"]["frequency_blocks"][0]["atoms"]
     atoms["H3"] = atoms.pop("H2")
     _assert_document_rejected(document, "atom order")
+
+
+def test_validator_accepts_consistent_real_and_legacy_spherical_layouts():
+    validate_reference_document(complete_document())
+
+    document = complete_document()
+    for block in document["polarizabilities"]["frequency_blocks"]:
+        for atom in block["atoms"].values():
+            atom["spherical"] = _spherical_tensor(
+                COMPONENTS_L3[1:], atom["local_cartesian"]
+            )
+    validate_reference_document(document)
+
+
+def test_validator_rejects_mixed_spherical_layout_across_model():
+    document = complete_document()
+    atoms = document["polarizabilities"]["frequency_blocks"][7]["atoms"]
+    original = atoms["H2"]
+    atoms["H2"] = {
+        **original,
+        "spherical": _spherical_tensor(
+            COMPONENTS_L3[1:], original["local_cartesian"]
+        ),
+    }
+    _assert_document_rejected(document, "mixed spherical component layout")
+
+
+def test_validator_binds_local_cartesian_to_named_spherical_dipoles():
+    document = complete_document()
+    atom = document["polarizabilities"]["frequency_blocks"][3]["atoms"]["H1"]
+    atom["local_cartesian"][0][2] = 1.0e-6
+    atom["local_cartesian"][2][0] = 1.0e-6
+    atom["global_cartesian"][0][2] = 1.0e-6
+    atom["global_cartesian"][2][0] = 1.0e-6
+    _assert_document_rejected(document, "does not match named spherical dipoles")
+
+
+def test_validator_uses_11c_11s_10_label_mapping_for_local_cartesian():
+    document = complete_document()
+    tensor = [[1.0, 0.2, 0.3], [0.2, 1.1, 0.4], [0.3, 0.4, 1.2]]
+    atom = document["polarizabilities"]["frequency_blocks"][0]["atoms"]["O"]
+    atom["spherical"] = _spherical_tensor(COMPONENTS_L3, tensor)
+    atom["local_cartesian"] = tensor
+    atom["global_cartesian"] = tensor
+    validate_reference_document(document)
 
 
 def test_validator_rejects_incomplete_tensors_and_inconsistent_frames():

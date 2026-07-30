@@ -56,6 +56,9 @@ class SphericalModel:
 class FrequencyBlock:
     index: int
     atoms: dict[str, SphericalModel]
+    # Real PFIT resets this header field to the exact zero sentinel for every
+    # independently fitted frequency; semantic identity is carried by # INDEX.
+    frequency_squared: float | None = None
 
 
 Vector3 = tuple[float, float, float]
@@ -1585,10 +1588,10 @@ def _parse_real_alpha_header(
             f"{path}: frequency {frequency_index:03d} atom {expected_atom} "
             "has non-finite FREQSQ header"
         )
-    if frequency_squared < 0.0:
+    if fields[12] != "0.0000000":
         raise ReferenceFormatError(
             f"{path}: frequency {frequency_index:03d} atom {expected_atom} "
-            "FREQSQ must be nonnegative"
+            "PFIT FREQSQ must be exactly 0.0000000"
         )
     return frequency_squared
 
@@ -1652,7 +1655,12 @@ def _parse_real_alpha_section(
             f"found {found!r}"
         )
     canonical.append("ENDFILE")
-    return FrequencyBlock(frequency_index, atoms), tuple(canonical), position + 1
+    assert expected_frequency_squared is not None
+    return (
+        FrequencyBlock(frequency_index, atoms, expected_frequency_squared),
+        tuple(canonical),
+        position + 1,
+    )
 
 
 def _parse_real_combined_refined(
@@ -1915,6 +1923,10 @@ CANONICAL_FREQUENCIES = (
 # Accommodates only the final-decimal roundoff in CamCASP's emitted FREQ2 text.
 FREQUENCY_REL_TOLERANCE = 2.0e-14
 FREQUENCY_ABS_TOLERANCE = 2.0e-15
+# JSON serialization preserves these parsed floats; this tolerance permits only
+# insignificant roundoff when independently recomputing the named dipole view.
+POLARIZABILITY_REL_TOLERANCE = 1.0e-12
+POLARIZABILITY_ABS_TOLERANCE = 1.0e-12
 CAMCASP_EXECUTABLE_NAMES = ("camcasp", "cluster", "process", "pfit", "casimir")
 
 EXPECTED_MODEL = {
@@ -2285,6 +2297,7 @@ def _validate_polarizabilities(value: object, frequencies: Sequence[float]) -> N
         raise ReferenceFormatError(
             "polarizabilities requires eleven frequency_blocks"
         )
+    model_components: tuple[str, ...] | None = None
     for expected_index, block_value in enumerate(blocks):
         block_context = f"polarizabilities.frequency_blocks[{expected_index}]"
         block = _require_fields(
@@ -2322,15 +2335,25 @@ def _validate_polarizabilities(value: object, frequencies: Sequence[float]) -> N
                 f"{atom_context}.spherical",
             )
             accepted_components = (
-                list(REAL_REFINED_COMPONENTS_L3), list(COMPONENTS_L3)
+                REAL_REFINED_COMPONENTS_L3, COMPONENTS_L3
             )
-            if spherical["components"] not in accepted_components:
+            components_raw = _as_sequence(
+                spherical["components"], f"{atom_context}.spherical.components"
+            )
+            components = tuple(components_raw)
+            if components not in accepted_components:
                 raise ReferenceFormatError(
                     f"{label}: incomplete L3 component ordering"
                 )
-            _validated_matrix(
+            if model_components is None:
+                model_components = components
+            elif components != model_components:
+                raise ReferenceFormatError(
+                    "polarizabilities has mixed spherical component layout"
+                )
+            spherical_matrix = _validated_matrix(
                 spherical["matrix"],
-                len(spherical["components"]),
+                len(components),
                 f"{atom_context}.spherical.matrix",
             )
             local = _validated_matrix(
@@ -2342,6 +2365,21 @@ def _validate_polarizabilities(value: object, frequencies: Sequence[float]) -> N
             global_tensor = _validated_matrix(
                 atom["global_cartesian"], 3, f"{atom_context}.global_cartesian"
             )
+            expected_local = dipole_local_cartesian(
+                SphericalModel(components, spherical_matrix)
+            )
+            for row in range(3):
+                for column in range(3):
+                    if not math.isclose(
+                        local[row][column],
+                        expected_local[row][column],
+                        rel_tol=POLARIZABILITY_REL_TOLERANCE,
+                        abs_tol=POLARIZABILITY_ABS_TOLERANCE,
+                    ):
+                        raise ReferenceFormatError(
+                            f"{atom_context}.local_cartesian does not match "
+                            "named spherical dipoles 11c,11s,10"
+                        )
             validate_rotation_matrix(rotation)  # type: ignore[arg-type]
             _validate_matrix_symmetric(local, f"{atom_context}.local_cartesian")
             _validate_matrix_symmetric(
@@ -2486,6 +2524,16 @@ def build_reference_document(
         ACCEPTED_ATOM_LABELS,
         {"O": "O", "H1": "H", "H2": "H"},
     )
+
+    for expected_index, (point, block) in enumerate(zip(frequencies, models)):
+        if point.index != expected_index or block.index != expected_index:
+            raise ReferenceFormatError(
+                "PFIT outer frequency indices do not match the canonical grid order"
+            )
+        if block.frequency_squared is not None and block.frequency_squared != 0.0:
+            raise ReferenceFormatError(
+                f"PFIT block {expected_index:03d} does not use its zero FREQSQ sentinel"
+            )
 
     frequency_blocks = []
     for point, block in zip(frequencies, models):
