@@ -1086,9 +1086,8 @@ def _validate_checksum_entry(
     require_path: bool,
 ) -> None:
     required = ("path", "sha256") if require_path else ("sha256",)
-    optional = () if require_path else ("path",)
-    entry = _require_fields(value, required, context, optional=optional)
-    if "path" in entry:
+    entry = _require_fields(value, required, context)
+    if require_path:
         _require_string(entry["path"], f"{context}.path")
     _validate_sha256(entry["sha256"], f"{context}.sha256")
 
@@ -1413,7 +1412,7 @@ def validate_reference_document(document: Mapping[str, object]) -> None:
     if not inputs:
         raise ReferenceFormatError("inputs must not be empty")
     for name, entry in inputs.items():
-        _validate_checksum_entry(entry, f"inputs.{name}", require_path=False)
+        _validate_checksum_entry(entry, f"inputs.{name}", require_path=True)
 
     sources = _as_mapping(root["sources"], "sources")
     if not sources:

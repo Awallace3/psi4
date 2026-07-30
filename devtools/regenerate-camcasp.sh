@@ -110,15 +110,46 @@ parse_arguments() {
     esac
 }
 
+verify_psi4_source_root() {
+    local source_root candidate expected checkout status
+    source_root="$(realpath -m "$1")"
+    candidate="$(realpath -m "$2")"
+    expected="$source_root/build_camcasp/stage/bin/psi4"
+
+    [[ "$candidate" == "$expected" ]] || {
+        fail "unexpected Psi4 executable: $candidate; expected $expected"
+        return
+    }
+    checkout="$(git -C "$source_root" rev-parse --show-toplevel 2>/dev/null)" || {
+        fail "Psi4 source root is not a Git checkout: $source_root"
+        return
+    }
+    [[ "$(realpath -m "$checkout")" == "$source_root" ]] || {
+        fail "Psi4 source root is not the checkout root: $source_root"
+        return
+    }
+    status="$(git -C "$source_root" status --porcelain --untracked-files=all)" || {
+        fail "could not inspect Psi4 source checkout status: $source_root"
+        return
+    }
+    [[ -z "$status" ]] || {
+        fail "Psi4 source checkout is not clean: $source_root"
+        return
+    }
+}
+
 preflight() {
     CURRENT_STAGE="preflight"
-    PSI4_EXE="${PSI4_EXE:-$REPO_ROOT/build_camcasp/stage/bin/psi4}"
+    PSI4_SOURCE_ROOT="${PSI4_SOURCE_ROOT:-$REPO_ROOT}"
+    PSI4_SOURCE_ROOT="$(realpath -m "$PSI4_SOURCE_ROOT")"
+    PSI4_EXE="${PSI4_EXE:-$PSI4_SOURCE_ROOT/build_camcasp/stage/bin/psi4}"
     CAMCASP="${CAMCASP:-$REPO_ROOT/camcasp-bin}"
     ORIENT_REF="${ORIENT_REF:-d8d861098c8f548e2cf230c387c8431d9418650a}"
 
     PSI4_EXE="$(realpath -m "$PSI4_EXE")"
     CAMCASP="$(realpath -m "$CAMCASP")"
     require_executable PSI4_EXE "$PSI4_EXE"
+    verify_psi4_source_root "$PSI4_SOURCE_ROOT" "$PSI4_EXE" || return
 
     [[ "$LOCALIZATION_LIMIT" -eq 3 ]]
     [[ "$WSM_LIMIT" -eq 3 && "$WSM_LIMIT" -le "$LOCALIZATION_LIMIT" ]]
@@ -193,16 +224,26 @@ verify_orient_checkout() {
     local expected="x86-64/gfortran/exe/orient-5.0.11-ng"
     local status
 
-    [[ "$(git -C "$checkout" rev-parse HEAD)" == "$ORIENT_REF" ]] ||
+    [[ "$(git -C "$checkout" rev-parse HEAD)" == "$ORIENT_REF" ]] || {
         fail "Orient checkout is not pinned to $ORIENT_REF"
-    [[ "$(realpath -m "$candidate")" == "$(realpath -m "$checkout/$expected")" ]] ||
+        return
+    }
+    [[ "$(realpath -m "$candidate")" == "$(realpath -m "$checkout/$expected")" ]] || {
         fail "unexpected Orient artifact: $candidate"
-    git -C "$checkout" ls-files --error-unmatch "$expected" >/dev/null 2>&1 ||
+        return
+    }
+    git -C "$checkout" ls-files --error-unmatch "$expected" >/dev/null 2>&1 || {
         fail "expected tracked Orient artifact is missing: $expected"
-    status="$(git -C "$checkout" status --porcelain --untracked-files=all)" ||
+        return
+    }
+    status="$(git -C "$checkout" status --porcelain --untracked-files=all)" || {
         fail "could not inspect Orient checkout status: $checkout"
-    [[ -z "$status" ]] ||
+        return
+    }
+    [[ -z "$status" ]] || {
         fail "Orient checkout is not clean: $checkout"
+        return
+    }
 }
 
 record_orient_executable() {
@@ -213,6 +254,18 @@ record_orient_executable() {
     checksum_log "$log"
     write_sha256_record "$candidate" \
         "$REFERENCE_ROOT/logs/orient-executable.sha256" orient
+}
+
+bind_orient_checkout() {
+    local candidate checkout
+    candidate="$(realpath -m "$1")"
+    checkout="$(git -C "$(dirname "$candidate")" rev-parse --show-toplevel 2>/dev/null)" || {
+        fail "Orient override must be inside a Git checkout: $candidate"
+        return
+    }
+    checkout="$(realpath -m "$checkout")"
+    verify_orient_checkout "$checkout" "$candidate" || return
+    ORIENT_SOURCE_ROOT="$checkout"
 }
 
 provision_orient() {
@@ -229,9 +282,9 @@ provision_orient() {
         git -C "$checkout" fetch --tags origin
         git -C "$checkout" checkout --detach "$ORIENT_REF"
         candidate="$checkout/x86-64/gfortran/exe/orient-5.0.11-ng"
-        verify_orient_checkout "$checkout" "$candidate"
     fi
 
+    bind_orient_checkout "$candidate" || return
     require_executable ORIENT_EXE "$candidate"
     record_orient_executable "$candidate"
     if command -v ldd >/dev/null; then
@@ -489,12 +542,16 @@ write_manifest() {
     local job_dir="$REFERENCE_ROOT/work/H2O"
     local manifest="$REFERENCE_ROOT/work/manifest.json"
     local temp="$manifest.tmp.$$"
-    (( ${#NL4_FILES[@]} == 1 && ${#PSI4_INPUT_FILES[@]} == 1 )) ||
+    (( ${#NL4_FILES[@]} == 1 && ${#P2P_FILES[@]} == 1 &&
+       ${#PSI4_INPUT_FILES[@]} == 1 )) ||
         fail "source artifact cardinalities are incomplete"
+    verify_orient_checkout "$ORIENT_SOURCE_ROOT" "$ORIENT_EXE" || return
+    verify_psi4_source_root "$PSI4_SOURCE_ROOT" "$PSI4_EXE" || return
     run_logged write-manifest "$REFERENCE_ROOT/logs/write-manifest.log" \
-        python -P - "$REPO_ROOT" "$SCRIPT_PATH" "$CAMCASP" "$ORIENT_REF" \
-        "$ORIENT_EXE" "$PSI4_EXE" "$REFERENCE_ROOT" \
-        "${PSI4_INPUT_FILES[0]}" "$temp" <<'PY'
+        python -P - "$REPO_ROOT" "$SCRIPT_PATH" "$CAMCASP" \
+        "$ORIENT_SOURCE_ROOT" "$ORIENT_EXE" \
+        "$PSI4_SOURCE_ROOT" "$PSI4_EXE" "$REFERENCE_ROOT" \
+        "${PSI4_INPUT_FILES[0]}" "${P2P_FILES[0]}" "$temp" <<'PY'
 import hashlib
 import json
 import subprocess
@@ -502,9 +559,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-(repo, generator, camcasp, orient_commit, orient_exe, psi4_exe,
- reference, psi4_input, output) = map(Path, sys.argv[1:])
-orient_commit = str(orient_commit)
+(repo, generator, camcasp, orient_source, orient_exe,
+ psi4_source, psi4_exe, reference, psi4_input, p2p, output) = map(
+    Path, sys.argv[1:]
+)
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -513,19 +571,23 @@ def record(path):
     path = path.resolve()
     return {"path": str(path), "sha256": sha(path)}
 
-def git(*args):
-    return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+def git_at(root, *args):
+    return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
 
 job = reference / "work" / "H2O"
 inputs_dir = reference / "inputs"
 programs = ("camcasp", "cluster", "process", "pfit", "casimir")
-repo_status = git("status", "--porcelain", "--untracked-files=no")
+repo_status = git_at(repo, "status", "--porcelain", "--untracked-files=no")
+psi_status = git_at(psi4_source, "status", "--porcelain", "--untracked-files=all")
 psi_version = (reference / "logs" / "psi4-version.log").read_text().strip()
 document = {
     "schema_version": 1,
     "generated_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     "generator": {"path": str(generator.relative_to(repo)), "sha256": sha(generator)},
-    "repository": {"commit": git("rev-parse", "HEAD"), "dirty": bool(repo_status)},
+    "repository": {
+        "commit": git_at(repo, "rev-parse", "HEAD"),
+        "dirty": bool(repo_status),
+    },
     "tools": {
         "camcasp": {
             "version": (camcasp / "VERSION").read_text().strip(),
@@ -538,13 +600,13 @@ document = {
         },
         "orient": {
             "version": "5.0.11-ng",
-            "commit": orient_commit,
+            "commit": git_at(orient_source, "rev-parse", "HEAD"),
             "executable": record(orient_exe),
         },
         "psi4": {
             "version": psi_version,
-            "commit": git("rev-parse", "HEAD"),
-            "dirty": bool(repo_status),
+            "commit": git_at(psi4_source, "rev-parse", "HEAD"),
+            "dirty": bool(psi_status),
             "executable": record(psi4_exe),
         },
     },
@@ -592,6 +654,7 @@ document = {
         "cks": record(job / "H2O.cks"),
         "cluster_output": record(job / "H2O.clt.clout"),
         "psi4_input": record(psi4_input),
+        "p2p": record(p2p),
         "pdef": record(job / "H2O.pdef"),
     },
 }

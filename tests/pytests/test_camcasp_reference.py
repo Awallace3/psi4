@@ -4,8 +4,20 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "devtools" / "regenerate-camcasp.sh"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def set_up_overall():
+    """Override Psi4's parent fixture for this dependency-free tooling module."""
+
+
+@pytest.fixture(autouse=True)
+def set_up():
+    """Keep the pure tooling tests independent of a staged Psi4 build."""
 
 
 def test_regeneration_script_is_trackable():
@@ -233,7 +245,9 @@ def test_psi4_wrapper_smoke_and_forwards_serial_and_parallel(tmp_path):
     assert version_log.with_name("psi4-version.log.sha256").is_file()
 
 
-def _make_git_checkout(path, tracked_candidate):
+def _make_git_checkout(
+    path, tracked_candidate, candidate_text="#!/usr/bin/env bash\n"
+):
     subprocess.run(["git", "init", "-q", str(path)], check=True)
     subprocess.run(
         ["git", "-C", str(path), "config", "user.email", "test@example.com"],
@@ -246,13 +260,40 @@ def _make_git_checkout(path, tracked_candidate):
     if tracked_candidate:
         candidate = path / "x86-64" / "gfortran" / "exe" / "orient-5.0.11-ng"
         candidate.parent.mkdir(parents=True)
-        candidate.write_text("#!/usr/bin/env bash\n")
+        candidate.write_text(candidate_text)
         candidate.chmod(0o755)
     subprocess.run(["git", "-C", str(path), "add", "."], check=True)
     subprocess.run(["git", "-C", str(path), "commit", "-qm", "fixture"], check=True)
     return subprocess.check_output(
         ["git", "-C", str(path), "rev-parse", "HEAD"], text=True
     ).strip()
+
+
+def _make_psi4_checkout(path):
+    psi4 = path / "build_camcasp" / "stage" / "bin" / "psi4"
+    psi4.parent.mkdir(parents=True)
+    psi4.write_text(
+        "#!/usr/bin/env bash\n"
+        "echo psi4 >>\"$STUB_CALLS\"\n"
+        "echo 'stub Psi4 1.0'\n"
+    )
+    psi4.chmod(0o755)
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.name", "Test"], check=True
+    )
+    subprocess.run(["git", "-C", str(path), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "commit", "-qm", "stub Psi4"], check=True
+    )
+    commit = subprocess.check_output(
+        ["git", "-C", str(path), "rev-parse", "HEAD"], text=True
+    ).strip()
+    return psi4, commit
 
 
 def test_record_orient_executable_writes_observed_digest(tmp_path):
@@ -345,6 +386,98 @@ def test_verify_orient_checkout_rejects_untracked_candidate(tmp_path):
     assert "expected tracked Orient artifact" in result.stderr
 
 
+def test_verify_orient_checkout_rejects_wrong_location(tmp_path):
+    checkout = tmp_path / "orient"
+    commit = _make_git_checkout(checkout, tracked_candidate=True)
+    candidate = checkout / "README"
+    candidate.chmod(0o755)
+    command = (
+        f'source "{SCRIPT}"; '
+        'ORIENT_REF="$1"; verify_orient_checkout "$2" "$3"'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "orient-location", commit, str(checkout), str(candidate)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "unexpected Orient artifact" in result.stderr
+
+
+def test_verify_orient_checkout_rejects_mismatched_commit(tmp_path):
+    checkout = tmp_path / "orient"
+    _make_git_checkout(checkout, tracked_candidate=True)
+    candidate = checkout / "x86-64" / "gfortran" / "exe" / "orient-5.0.11-ng"
+    command = (
+        f'source "{SCRIPT}"; '
+        'ORIENT_REF="$1"; verify_orient_checkout "$2" "$3"'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "orient-commit", "0" * 40, str(checkout), str(candidate)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "Orient checkout is not pinned" in result.stderr
+
+
+def test_provision_orient_rejects_override_outside_git(tmp_path):
+    candidate = tmp_path / "orient-5.0.11-ng"
+    candidate.write_text("#!/usr/bin/env bash\n")
+    candidate.chmod(0o755)
+    command = (
+        f'source "{SCRIPT}"; '
+        'REFERENCE_ROOT="$1"; ORIENT_EXE="$2"; provision_orient'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "orient-override", str(tmp_path / "ref"), str(candidate)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "Orient override must be inside a Git checkout" in result.stderr
+
+
+def test_verify_psi4_source_rejects_wrong_executable_location(tmp_path):
+    source = tmp_path / "psi4-source"
+    expected, _ = _make_psi4_checkout(source)
+    candidate = source / "psi4"
+    candidate.write_bytes(expected.read_bytes())
+    candidate.chmod(0o755)
+    command = f'source "{SCRIPT}"; verify_psi4_source_root "$1" "$2"'
+    result = subprocess.run(
+        ["bash", "-c", command, "psi4-location", str(source), str(candidate)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "unexpected Psi4 executable" in result.stderr
+
+
+def test_verify_psi4_source_rejects_dirty_checkout(tmp_path):
+    source = tmp_path / "psi4-source"
+    candidate, _ = _make_psi4_checkout(source)
+    (source / "dirty.txt").write_text("untracked\n")
+    command = f'source "{SCRIPT}"; verify_psi4_source_root "$1" "$2"'
+    result = subprocess.run(
+        ["bash", "-c", command, "psi4-dirty", str(source), str(candidate)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "Psi4 source checkout is not clean" in result.stderr
+
+
 import math
 import sys
 
@@ -355,6 +488,10 @@ from devtools.camcasp_reference import (  # noqa: E402
     parse_frequencies,
     parse_refined_polarizabilities,
 )
+
+
+def test_pure_tooling_suite_does_not_import_psi4():
+    assert "psi4" not in sys.modules
 
 
 def make_nl4_frequency_text():
@@ -1012,8 +1149,8 @@ def complete_document():
             },
         },
         "inputs": {
-            "H2O.clt": {"sha256": "d" * 64},
-            "H2O.axes": {"sha256": "e" * 64},
+            "H2O.clt": {"path": "/inputs/H2O.clt", "sha256": "d" * 64},
+            "H2O.axes": {"path": "/inputs/H2O.axes", "sha256": "e" * 64},
         },
         "sources": {
             "refined_pol": {"path": "/work/refined.pol", "sha256": "f" * 64}
@@ -1156,6 +1293,18 @@ def test_validator_rejects_invalid_provenance_checksums():
     document = complete_document()
     document["tools"]["orient"]["executable"]["sha256"] = "short"
     _assert_document_rejected(document, "tools.orient.executable.sha256")
+
+
+def test_validator_rejects_missing_input_path():
+    document = complete_document()
+    del document["inputs"]["H2O.clt"]["path"]
+    _assert_document_rejected(document, "inputs.H2O.clt")
+
+
+def test_validator_rejects_invalid_input_path():
+    document = complete_document()
+    document["inputs"]["H2O.axes"]["path"] = 7
+    _assert_document_rejected(document, "inputs.H2O.axes.path")
 
 
 def test_validator_rejects_bare_tool_executable_paths():
@@ -1596,16 +1745,26 @@ def test_dependency_free_stubbed_pipeline_requires_approval_before_json(tmp_path
     bin_dir.mkdir(parents=True)
     calls = tmp_path / "calls.log"
 
-    psi4 = tmp_path / "psi4"
-    orient = tmp_path / "orient"
-    _write_executable(
-        psi4,
-        "#!/usr/bin/env bash\n"
-        "echo psi4 >>\"$STUB_CALLS\"\n"
-        "echo 'stub Psi4 1.0'\n",
+    psi4_source = tmp_path / "psi4-source"
+    psi4, psi4_commit = _make_psi4_checkout(psi4_source)
+    orient_source = tmp_path / "orient-source"
+    orient_commit = _make_git_checkout(
+        orient_source,
+        tracked_candidate=True,
+        candidate_text=(
+            "#!/usr/bin/env bash\n"
+            "echo orient >>\"$STUB_CALLS\"\n"
+        ),
     )
-    for name in ("orient", "pfit", "casimir"):
-        executable = orient if name == "orient" else bin_dir / name
+    orient = (
+        orient_source
+        / "x86-64"
+        / "gfortran"
+        / "exe"
+        / "orient-5.0.11-ng"
+    )
+    for name in ("pfit", "casimir"):
+        executable = bin_dir / name
         _write_executable(
             executable,
             f"#!/usr/bin/env bash\necho {name} >>\"$STUB_CALLS\"\n",
@@ -1727,12 +1886,19 @@ cat >H2O_ref_wt4_L3_C12.pot <<'EOF'
     command = f'''source "{SCRIPT}"
 REFERENCE_ROOT="$1"
 CAMCASP="$2"
-PSI4_EXE="$3"
-ORIENT_EXE="$4"
-ORIENT_REF=d8d861098c8f548e2cf230c387c8431d9418650a
-PATH="$(dirname "$ORIENT_EXE"):$CAMCASP/bin:$PATH"
-export PSI4_EXE STUB_CALLS="$5"
+PSI4_SOURCE_ROOT="$3"
+PSI4_EXE="$PSI4_SOURCE_ROOT/build_camcasp/stage/bin/psi4"
+ORIENT_EXE="$4/x86-64/gfortran/exe/orient-5.0.11-ng"
+ORIENT_REF="$5"
+export STUB_CALLS="$6"
+preflight
+bind_orient_checkout "$ORIENT_EXE"
+export PSI4_EXE
 prepare_layout
+ORIENT_BIN_DIR="$REFERENCE_ROOT/tools/orient/bin"
+mkdir -p "$ORIENT_BIN_DIR"
+ln -s "$ORIENT_EXE" "$ORIENT_BIN_DIR/orient"
+PATH="$ORIENT_BIN_DIR:$CAMCASP/bin:$PATH"
 export SCRATCH="$REFERENCE_ROOT/scratch/camcasp"
 write_inputs
 mkdir -p "$REFERENCE_ROOT/logs"
@@ -1756,7 +1922,8 @@ build_reference_json
     result = subprocess.run(
         [
             "bash", "-c", command, "stub-pipeline", str(reference),
-            str(camcasp), str(psi4), str(orient), str(calls),
+            str(camcasp), str(psi4_source), str(orient_source),
+            orient_commit, str(calls),
         ],
         cwd=ROOT,
         text=True,
@@ -1804,6 +1971,22 @@ build_reference_json
     assert document["inputs"]["H2O.axes"]["path"] == str(
         (reference / "inputs" / "H2O.axes").resolve()
     )
+    p2p = job_dir / "OUT" / "H2O.p2p"
+    assert document["sources"]["p2p"] == {
+        "path": str(p2p.resolve()),
+        "sha256": hashlib.sha256(p2p.read_bytes()).hexdigest(),
+    }
+    assert document["tools"]["orient"]["commit"] == orient_commit
+    assert document["tools"]["orient"]["executable"] == {
+        "path": str(orient.resolve()),
+        "sha256": hashlib.sha256(orient.read_bytes()).hexdigest(),
+    }
+    assert document["tools"]["psi4"]["commit"] == psi4_commit
+    assert document["tools"]["psi4"]["dirty"] is False
+    assert document["tools"]["psi4"]["executable"] == {
+        "path": str(psi4.resolve()),
+        "sha256": hashlib.sha256(psi4.read_bytes()).hexdigest(),
+    }
 
 
 def test_clean_room_removes_stale_publication_before_unapproved_gate(tmp_path):
