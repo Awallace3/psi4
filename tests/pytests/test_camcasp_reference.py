@@ -1229,6 +1229,7 @@ def test_verify_psi4_source_rejects_dirty_checkout(tmp_path):
 
 import math
 import sys
+from decimal import Decimal
 
 sys.path.insert(0, str(ROOT))
 from devtools.camcasp_reference import (  # noqa: E402
@@ -1243,15 +1244,29 @@ def test_pure_tooling_suite_does_not_import_psi4():
     assert "psi4" not in sys.modules
 
 
-def make_nl4_frequency_text():
-    squared = [0.0] + [-(0.01 * index) ** 2 for index in range(1, 11)]
+REAL_PRINTED_FREQ2_VALUES = (
+    "0.0000000E+00",
+    "-0.4368683E-04",
+    "-0.1308617E-02",
+    "-0.9110199E-02",
+    "-0.3906323E-01",
+    "-0.1372089E+00",
+    "-0.4555098E+00",
+    "-0.1599970E+01",
+    "-0.6860443E+01",
+    "-0.4776034E+02",
+    "-0.1430637E+04",
+)
+
+
+def make_nl4_frequency_text(values=REAL_PRINTED_FREQ2_VALUES):
     lines = []
-    for value in squared:
+    for value in values:
         for left, right in (("O", "O"), ("O", "H1"), ("H1", "O")):
             lines.append(
                 "POL  SITE-LABELS  "
                 f"{left}  {right}  SITE-INDICES  1  1  "
-                f"RANK  0 : 4  BY  0 : 4  FREQ2 {value:.16E} CARTSPHER S"
+                f"RANK  0 : 4  BY  0 : 4  FREQ2 {value} CARTSPHER S"
             )
     return "\n".join(lines) + "\n"
 
@@ -1316,11 +1331,67 @@ def test_parse_static_plus_ten_frequencies(tmp_path):
     source.write_text(make_nl4_frequency_text())
     points = parse_frequencies(source)
     assert [point.index for point in points] == list(range(11))
-    assert points[0].omega == 0.0
-    assert [point.omega for point in points[1:]] == [
-        index / 100.0 for index in range(1, 11)
-    ]
+    assert [point.squared_source_text for point in points] == list(
+        REAL_PRINTED_FREQ2_VALUES
+    )
+    assert [point.omega for point in points] == list(APPROVED_FREQUENCIES)
     assert all(points[index].omega < points[index + 1].omega for index in range(10))
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    (
+        ("neighbor", "rounding interval"),
+        ("coarse", "Fortran scientific"),
+        ("reordered", "rounding interval"),
+        ("positive", "negative"),
+        ("almost", "rounding interval"),
+        ("negative-zero", "static zero"),
+    ),
+)
+def test_frequency_parser_rejects_noncanonical_printed_grid(tmp_path, mode, expected):
+    values = list(REAL_PRINTED_FREQ2_VALUES)
+    if mode == "neighbor":
+        values[1] = "-0.4368684E-04"
+    elif mode == "coarse":
+        values[1] = "-0.4E-04"
+    elif mode == "reordered":
+        values[1], values[2] = values[2], values[1]
+    elif mode == "positive":
+        values[1] = values[1][1:]
+    elif mode == "almost":
+        values[1] = "-0.4368682E-04"
+    else:
+        values[0] = "-0.0000000E+00"
+    source = tmp_path / "invalid-NL4.pol"
+    source.write_text(make_nl4_frequency_text(values))
+    with pytest.raises(ReferenceFormatError, match=expected):
+        parse_frequencies(source)
+
+
+@pytest.mark.parametrize(
+    "token", ("nan", "inf", "0_0000000E+00", "0.0000000E+0", "0.0000000")
+)
+def test_frequency_parser_rejects_non_fortran_decimal_tokens(tmp_path, token):
+    values = list(REAL_PRINTED_FREQ2_VALUES)
+    values[0] = token
+    source = tmp_path / "malformed-NL4.pol"
+    source.write_text(make_nl4_frequency_text(values))
+    with pytest.raises(ReferenceFormatError, match="Fortran scientific"):
+        parse_frequencies(source)
+
+
+def test_frequency_rounding_interval_boundaries_are_decimal_exact():
+    token = "-0.4368683E-04"
+    lower, upper = camcasp_reference._freq2_rounding_interval(token, "test")
+    assert camcasp_reference._freq2_interval_contains(token, lower, "test")
+    assert camcasp_reference._freq2_interval_contains(token, upper, "test")
+    assert not camcasp_reference._freq2_interval_contains(
+        token, lower - Decimal("1E-30"), "test"
+    )
+    assert not camcasp_reference._freq2_interval_contains(
+        token, upper + Decimal("1E-30"), "test"
+    )
 
 
 def test_parse_complete_l3_model(tmp_path):
@@ -1914,19 +1985,7 @@ APPROVED_FREQUENCIES = (
     6.910885950408292,
     37.82376235021415,
 )
-APPROVED_SQUARED_SOURCE_VALUES = (
-    "0.0",
-    "-4.3686833258999033E-005",
-    "-1.3086170231362943E-003",
-    "-9.1101992354376132E-003",
-    "-3.9063234475954833E-002",
-    "-0.1372089115424966",
-    "-0.4555097719045920",
-    "-1.599969916430539",
-    "-6.860442717529413",
-    "-47.76034461955072",
-    "-1430.636998325477",
-)
+APPROVED_SQUARED_SOURCE_VALUES = REAL_PRINTED_FREQ2_VALUES
 CAMCASP_EXECUTABLE_NAMES = ("camcasp", "cluster", "process", "pfit", "casimir")
 
 
@@ -2229,6 +2288,10 @@ def test_validator_rejects_frequency_and_dispersion_invariants():
     document = complete_document()
     document["polarizabilities"]["frequency_blocks"][4]["omega"] = 0.041
     _assert_document_rejected(document, "omega")
+
+    document = complete_document()
+    document["frequencies"]["squared_source_values"][1] = "-0.4368684E-04"
+    _assert_document_rejected(document, "rounding interval")
 
     document = complete_document()
     del document["dispersion"]["matrices"]["C12"]
@@ -3061,6 +3124,11 @@ def test_builder_combines_all_required_properties(tmp_path):
         metadata=metadata,
     )
     validate_reference_document(document)
+    assert document["frequencies"] == {
+        "units": "hartree",
+        "values": list(APPROVED_FREQUENCIES),
+        "squared_source_values": list(REAL_PRINTED_FREQ2_VALUES),
+    }
     assert len(document["polarizabilities"]["frequency_blocks"]) == 11
     assert tuple(document["dispersion"]["matrices"]) == (
         "C6", "C8", "C10", "C12"

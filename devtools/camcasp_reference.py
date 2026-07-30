@@ -12,6 +12,7 @@ import re
 import stat
 import tempfile
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -238,9 +239,66 @@ def rotate_tensor(local: Matrix3, rotation: Matrix3) -> Matrix3:
     return global_tensor
 
 
-FREQ2_RE = re.compile(
-    r"\bFREQ2\s+([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EDed][-+]?\d+)?)"
+FREQ2_FIELD_RE = re.compile(r"\bFREQ2\s+(\S+)")
+# CamCASP's NL4 formatter emits a zero-leading mantissa with seven fractional
+# digits and a signed two-digit Fortran exponent.
+FREQ2_TOKEN_RE = re.compile(r"[-+]?0\.\d{7}[ED][+-]\d{2}\Z")
+# High-precision signed squared values from the approved Gauss-Legendre grid.
+# Printed NL4 tokens attest these values only through their own decimal ULP.
+CANONICAL_SQUARED_FREQUENCY_TEXT = (
+    "0",
+    "-4.3686833258999033E-005",
+    "-1.3086170231362943E-003",
+    "-9.1101992354376132E-003",
+    "-3.9063234475954833E-002",
+    "-0.1372089115424966",
+    "-0.4555097719045920",
+    "-1.599969916430539",
+    "-6.860442717529413",
+    "-47.76034461955072",
+    "-1430.636998325477",
 )
+
+
+def _parse_freq2_decimal(raw: str, context: str) -> Decimal:
+    if FREQ2_TOKEN_RE.fullmatch(raw) is None:
+        raise ReferenceFormatError(
+            f"{context}: FREQ2 must use CamCASP Fortran scientific format"
+        )
+    try:
+        value = Decimal(raw.replace("D", "E"))
+    except InvalidOperation as exc:  # Defensive: the lexical grammar is narrower.
+        raise ReferenceFormatError(f"{context}: invalid FREQ2 decimal") from exc
+    if not value.is_finite():
+        raise ReferenceFormatError(f"{context}: non-finite FREQ2 decimal")
+    return value
+
+
+def _freq2_rounding_interval(raw: str, context: str) -> tuple[Decimal, Decimal]:
+    value = _parse_freq2_decimal(raw, context)
+    decimal_ulp = Decimal(1).scaleb(value.as_tuple().exponent)
+    half_ulp = decimal_ulp / 2
+    return value - half_ulp, value + half_ulp
+
+
+def _freq2_interval_contains(raw: str, expected: Decimal, context: str) -> bool:
+    lower, upper = _freq2_rounding_interval(raw, context)
+    return lower <= expected <= upper
+
+
+def _validate_freq2_token(raw: str, index: int, context: str) -> Decimal:
+    value = _parse_freq2_decimal(raw, context)
+    if index == 0:
+        if not value.is_zero() or value.is_signed():
+            raise ReferenceFormatError(f"{context}: static zero FREQ2 must be exact")
+    elif value.is_zero() or value >= 0:
+        raise ReferenceFormatError(f"{context}: dynamic FREQ2 must be negative")
+    canonical = Decimal(CANONICAL_SQUARED_FREQUENCY_TEXT[index])
+    if not _freq2_interval_contains(raw, canonical, context):
+        raise ReferenceFormatError(
+            f"{context}: canonical squared frequency is outside printed rounding interval"
+        )
+    return value
 
 
 def _float(text: str, context: str) -> float:
@@ -1495,30 +1553,35 @@ def validate_stage_artifacts(work_dir: Path, job: str) -> dict[str, Path]:
 
 
 def parse_frequencies(path: Path) -> list[FrequencyPoint]:
-    unique: list[tuple[str, float]] = []
-    for match in FREQ2_RE.finditer(path.read_text()):
+    unique: list[tuple[str, Decimal]] = []
+    for match in FREQ2_FIELD_RE.finditer(path.read_text()):
         raw = match.group(1)
-        value = _float(raw, f"{path}: FREQ2")
+        value = _parse_freq2_decimal(raw, f"{path}: FREQ2")
         if not unique or value != unique[-1][1]:
             unique.append((raw, value))
+        elif raw != unique[-1][0]:
+            raise ReferenceFormatError(
+                f"{path}: inconsistent FREQ2 formatting within frequency block"
+            )
 
     if len(unique) != 11:
         raise ReferenceFormatError(
             f"{path}: expected 11 unique frequency blocks, found {len(unique)}"
         )
-    if unique[0][1] != 0.0:
-        raise ReferenceFormatError(f"{path}: first frequency is not static zero")
 
     points = []
-    for index, (raw, squared) in enumerate(unique):
-        if index and squared >= 0.0:
-            raise ReferenceFormatError(
-                f"{path}: dynamic FREQ2 at index {index} is not negative"
+    for index, (raw, squared_decimal) in enumerate(unique):
+        _validate_freq2_token(raw, index, f"{path}: FREQ2 index {index}")
+        points.append(
+            FrequencyPoint(
+                index,
+                raw,
+                float(squared_decimal),
+                CANONICAL_FREQUENCIES[index],
             )
-        omega = 0.0 if index == 0 else math.sqrt(-squared)
-        points.append(FrequencyPoint(index, raw, squared, omega))
+        )
 
-    if any(points[index].omega >= points[index + 1].omega for index in range(10)):
+    if any(-unique[index][1] >= -unique[index + 1][1] for index in range(10)):
         raise ReferenceFormatError(f"{path}: imaginary frequencies are not increasing")
     return points
 
@@ -1930,9 +1993,6 @@ CANONICAL_FREQUENCIES = (
     6.910885950408292,
     37.82376235021415,
 )
-# Accommodates only the final-decimal roundoff in CamCASP's emitted FREQ2 text.
-FREQUENCY_REL_TOLERANCE = 2.0e-14
-FREQUENCY_ABS_TOLERANCE = 2.0e-15
 # JSON serialization preserves these parsed floats; this tolerance permits only
 # insignificant roundoff when independently recomputing the named dipole view.
 POLARIZABILITY_REL_TOLERANCE = 1.0e-12
@@ -2249,15 +2309,7 @@ def _validate_frequencies(value: object) -> list[float]:
         raise ReferenceFormatError(
             "frequencies must be static zero plus ten increasing values"
         )
-    if any(
-        not math.isclose(
-            value,
-            expected,
-            rel_tol=FREQUENCY_REL_TOLERANCE,
-            abs_tol=FREQUENCY_ABS_TOLERANCE,
-        )
-        for value, expected in zip(values, CANONICAL_FREQUENCIES)
-    ):
+    if tuple(values) != CANONICAL_FREQUENCIES:
         raise ReferenceFormatError(
             "frequencies do not match the canonical Gauss-Legendre Beta=0.5 grid"
         )
@@ -2265,23 +2317,11 @@ def _validate_frequencies(value: object) -> list[float]:
         source_text = _require_string(
             source_value, f"frequencies.squared_source_values[{index}]"
         )
-        squared = _float(
-            source_text, f"frequencies.squared_source_values[{index}]"
+        _validate_freq2_token(
+            source_text,
+            index,
+            f"frequencies.squared_source_values[{index}]",
         )
-        if index == 0:
-            if squared != 0.0:
-                raise ReferenceFormatError("static squared source frequency must be zero")
-        elif squared >= 0.0:
-            raise ReferenceFormatError("dynamic squared source frequencies must be negative")
-        if not math.isclose(
-            squared,
-            -(values[index] ** 2),
-            rel_tol=FREQUENCY_REL_TOLERANCE,
-            abs_tol=FREQUENCY_ABS_TOLERANCE,
-        ):
-            raise ReferenceFormatError(
-                f"frequencies.squared_source_values[{index}] does not match omega"
-            )
     return values
 
 
@@ -2582,6 +2622,8 @@ def build_reference_document(
             {"index": point.index, "omega": point.omega, "atoms": atoms}
         )
 
+    # Preserve both sides of the attestation: canonical high-precision omega
+    # values and the exact rounded FREQ2 tokens printed by CamCASP.
     document["frequencies"] = {
         "units": "hartree",
         "values": [point.omega for point in frequencies],
