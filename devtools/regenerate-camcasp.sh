@@ -843,9 +843,59 @@ EOF
         "$REFERENCE_ROOT/inputs/H2O.axes.sha256" H2O.axes
 }
 
+declare -ag NL4_FORMAT_A_FILES=()
 declare -ag NL4_FILES=()
 declare -ag P2P_FILES=()
 declare -ag PSI4_INPUT_FILES=()
+
+discover_camcasp_artifacts() {
+    local job_dir="$1"
+    local -a all_nl4_files=()
+    mapfile -t all_nl4_files < <(
+        find "$job_dir/OUT" -maxdepth 1 -type f -name '*NL4*.pol' -print | sort
+    )
+    mapfile -t NL4_FORMAT_A_FILES < <(
+        find "$job_dir/OUT" -maxdepth 1 -type f -name '*NL4_fmtA.pol' -print | sort
+    )
+    mapfile -t NL4_FILES < <(
+        find "$job_dir/OUT" -maxdepth 1 -type f -name '*NL4_fmtB.pol' -print | sort
+    )
+    mapfile -t P2P_FILES < <(
+        find "$job_dir/OUT" -maxdepth 1 -type f -name '*.p2p' -print | sort
+    )
+    mapfile -t PSI4_INPUT_FILES < <(
+        find "$job_dir" -maxdepth 2 -type f \
+            \( -name 'H2O_A.in' -o -name 'H2O_A.dat' \) -print | sort
+    )
+    (( ${#NL4_FORMAT_A_FILES[@]} == 1 )) || {
+        fail "expected exactly one NL4 format-A polarizability file, found ${#NL4_FORMAT_A_FILES[@]}"
+        return
+    }
+    (( ${#NL4_FILES[@]} == 1 )) || {
+        fail "expected exactly one NL4 format-B polarizability file, found ${#NL4_FILES[@]}"
+        return
+    }
+    (( ${#all_nl4_files[@]} == 2 )) || {
+        fail "expected exactly two total NL4 polarizability files, found ${#all_nl4_files[@]}"
+        return
+    }
+    [[ -s "${NL4_FORMAT_A_FILES[0]}" ]] || {
+        fail "NL4 format-A polarizability file is empty: ${NL4_FORMAT_A_FILES[0]}"
+        return
+    }
+    [[ -s "${NL4_FILES[0]}" ]] || {
+        fail "NL4 format-B polarizability file is empty: ${NL4_FILES[0]}"
+        return
+    }
+    (( ${#P2P_FILES[@]} == 1 )) || {
+        fail "expected exactly one p2p file, found ${#P2P_FILES[@]}"
+        return
+    }
+    (( ${#PSI4_INPUT_FILES[@]} == 1 )) || {
+        fail "expected exactly one generated Psi4 input, found ${#PSI4_INPUT_FILES[@]}"
+        return
+    }
+}
 
 run_camcasp() {
     CURRENT_STAGE="camcasp"
@@ -878,22 +928,7 @@ run_camcasp() {
         [[ -s "$job_dir/$generated" ]] || fail "missing generated $generated"
     done
 
-    mapfile -t NL4_FILES < <(
-        find "$job_dir/OUT" -maxdepth 1 -type f -name '*NL4*pol' -print | sort
-    )
-    mapfile -t P2P_FILES < <(
-        find "$job_dir/OUT" -maxdepth 1 -type f -name '*.p2p' -print | sort
-    )
-    mapfile -t PSI4_INPUT_FILES < <(
-        find "$job_dir" -maxdepth 2 -type f \
-            \( -name 'H2O_A.in' -o -name 'H2O_A.dat' \) -print | sort
-    )
-    (( ${#NL4_FILES[@]} == 1 )) ||
-        fail "expected exactly one NL4 polarizability file, found ${#NL4_FILES[@]}"
-    (( ${#P2P_FILES[@]} == 1 )) ||
-        fail "expected exactly one p2p file, found ${#P2P_FILES[@]}"
-    (( ${#PSI4_INPUT_FILES[@]} == 1 )) ||
-        fail "expected exactly one generated Psi4 input, found ${#PSI4_INPUT_FILES[@]}"
+    discover_camcasp_artifacts "$job_dir" || return
 }
 
 attest_generated_protocol() {
@@ -990,8 +1025,8 @@ write_manifest() {
     local job_dir="$REFERENCE_ROOT/work/H2O"
     local manifest="$REFERENCE_ROOT/work/manifest.json"
     local temp="$manifest.tmp.$$"
-    (( ${#NL4_FILES[@]} == 1 && ${#P2P_FILES[@]} == 1 &&
-       ${#PSI4_INPUT_FILES[@]} == 1 )) ||
+    (( ${#NL4_FORMAT_A_FILES[@]} == 1 && ${#NL4_FILES[@]} == 1 &&
+       ${#P2P_FILES[@]} == 1 && ${#PSI4_INPUT_FILES[@]} == 1 )) ||
         fail "source artifact cardinalities are incomplete"
     verify_orient_checkout "$ORIENT_SOURCE_ROOT" "$ORIENT_EXE" without-products || return
     validate_current_orient_products "$ORIENT_SOURCE_ROOT" manifest || return
@@ -1002,7 +1037,8 @@ write_manifest() {
         python -P - "$REPO_ROOT" "$SCRIPT_PATH" "$CAMCASP_SOURCE_ROOT" "$CAMCASP" \
         "$ORIENT_SOURCE_ROOT" "$ORIENT_EXE" \
         "$PSI4_SOURCE_ROOT" "$PSI4_EXE" "$REFERENCE_ROOT" \
-        "${PSI4_INPUT_FILES[0]}" "${P2P_FILES[0]}" "$temp" <<'PY'
+        "${PSI4_INPUT_FILES[0]}" "${P2P_FILES[0]}" \
+        "${NL4_FORMAT_A_FILES[0]}" "$temp" <<'PY'
 import hashlib
 import json
 import re
@@ -1012,7 +1048,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 (repo, generator, camcasp_source, camcasp, orient_source, orient_exe,
- psi4_source, psi4_exe, reference, psi4_input, p2p, output) = map(
+ psi4_source, psi4_exe, reference, psi4_input, p2p, nl4_format_a, output) = map(
     Path, sys.argv[1:]
 )
 
@@ -1117,6 +1153,7 @@ document = {
         "cluster_output": record(job / "H2O.clt.clout"),
         "psi4_input": record(psi4_input),
         "p2p": record(p2p),
+        "nonlocal_pol_format_a": record(nl4_format_a),
         "pdef": record(job / "H2O.pdef"),
         "camcasp_no_psi4": record(camcasp_source / "bin" / "no_psi4"),
         "camcasp_psi4_wrapper": record(camcasp / "bin" / "psi4.sh"),

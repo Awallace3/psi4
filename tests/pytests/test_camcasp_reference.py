@@ -2262,6 +2262,75 @@ def _write_executable(path, text):
     path.chmod(0o755)
 
 
+@pytest.mark.parametrize(
+    ("case", "names", "expected"),
+    (
+        ("missing-a", ("H2O_NL4_fmtB.pol",), "format-A"),
+        (
+            "duplicate-a",
+            ("H2O_NL4_fmtA.pol", "other_NL4_fmtA.pol", "H2O_NL4_fmtB.pol"),
+            "format-A",
+        ),
+        ("missing-b", ("H2O_NL4_fmtA.pol",), "format-B"),
+        (
+            "duplicate-b",
+            ("H2O_NL4_fmtA.pol", "H2O_NL4_fmtB.pol", "other_NL4_fmtB.pol"),
+            "format-B",
+        ),
+        (
+            "unexpected-third",
+            ("H2O_NL4_fmtA.pol", "H2O_NL4_fmtB.pol", "H2O_NL4_extra.pol"),
+            "exactly two total NL4",
+        ),
+    ),
+)
+def test_discover_camcasp_artifacts_rejects_invalid_nl4_sets(
+    tmp_path, case, names, expected
+):
+    job = tmp_path / case / "H2O"
+    output = job / "OUT"
+    output.mkdir(parents=True)
+    for name in names:
+        (output / name).write_text(f"{name}\n")
+    (output / "H2O.p2p").write_text("p2p\n")
+    (job / "H2O_A.in").write_text("psi4 input\n")
+    command = (
+        f'source "{SCRIPT}"; discover_camcasp_artifacts "$1"'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "discover-nl4", str(job)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert expected.lower() in result.stderr.lower()
+
+
+@pytest.mark.parametrize("empty_format", ("A", "B"))
+def test_discover_camcasp_artifacts_rejects_empty_nl4(tmp_path, empty_format):
+    job = tmp_path / f"empty-{empty_format}" / "H2O"
+    output = job / "OUT"
+    output.mkdir(parents=True)
+    for format_name in ("A", "B"):
+        path = output / f"H2O_NL4_fmt{format_name}.pol"
+        path.write_text("" if format_name == empty_format else "nonempty\n")
+    (output / "H2O.p2p").write_text("p2p\n")
+    (job / "H2O_A.in").write_text("psi4 input\n")
+    command = f'source "{SCRIPT}"; discover_camcasp_artifacts "$1"'
+    result = subprocess.run(
+        ["bash", "-c", command, "discover-empty-nl4", str(job)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert f"format-{empty_format}" in result.stderr
+    assert "empty" in result.stderr
+
+
 def test_dependency_free_stubbed_pipeline_requires_approval_before_json(tmp_path):
     reference = tmp_path / "reference"
     camcasp = tmp_path / "camcasp-bin"
@@ -2270,6 +2339,7 @@ def test_dependency_free_stubbed_pipeline_requires_approval_before_json(tmp_path
     calls = tmp_path / "calls.log"
     runcamcasp_invocation = tmp_path / "runcamcasp-invocation.log"
     absolute_clt_evidence = tmp_path / "absolute-clt-evidence.log"
+    localize_polfile = tmp_path / "localize-polfile.log"
 
     psi4_source = tmp_path / "psi4-source"
     psi4, psi4_commit = _make_psi4_checkout(psi4_source)
@@ -2356,6 +2426,7 @@ no_reorient
 EOF
 echo camcasp >>"$STUB_CALLS"
 "$PSI4_EXE" --stub-stage >/dev/null
+printf 'format A polarizability\n' >OUT/H2O_NL4_fmtA.pol
 cat >OUT/H2O_NL4_fmtB.pol <<'EOF'
 """
         + make_canonical_nl4_frequency_text()
@@ -2370,6 +2441,15 @@ printf 'point to point\n' >OUT/H2O.p2p
         """#!/usr/bin/env bash
 set -euo pipefail
 [[ "$0" == "$CAMCASP/bin/localize.py" ]] || exit 93
+polfile=""
+args=("$@")
+for ((index = 0; index < ${#args[@]}; index++)); do
+    if [[ "${args[index]}" == --polfile ]]; then
+        polfile="${args[index + 1]}"
+    fi
+done
+[[ "$polfile" == *_NL4_fmtB.pol ]] || exit 94
+printf '%s\n' "$polfile" >"$STUB_LOCALIZE_POLFILE"
 orient </dev/null
 pfit </dev/null
 casimir </dev/null
@@ -2453,6 +2533,7 @@ ORIENT_EXE="$4/x86-64/gfortran/exe/orient-5.0.10-ng"
 ORIENT_REF="$5"
 export STUB_CALLS="$6"
 export STUB_RUNCAMCASP_INVOCATION="$8"
+export STUB_LOCALIZE_POLFILE="${{10}}"
 preflight
 bind_orient_checkout "$ORIENT_EXE"
 export PSI4_EXE
@@ -2508,6 +2589,7 @@ build_reference_json
             str(camcasp), str(psi4_source), str(orient_source),
             orient_commit, str(calls), camcasp_commit,
             str(runcamcasp_invocation), str(absolute_clt_evidence),
+            str(localize_polfile),
         ],
         cwd=ROOT,
         text=True,
@@ -2541,6 +2623,8 @@ build_reference_json
     assert calls.read_text().splitlines() == [
         "psi4", "camcasp", "psi4", "orient", "pfit", "casimir"
     ]
+    selected_format_b = reference / "work" / "H2O" / "OUT" / "H2O_NL4_fmtB.pol"
+    assert localize_polfile.read_text().strip() == str(selected_format_b)
     assert absolute_clt_evidence.read_text().splitlines() == [
         "rc=96",
         "input_clout=yes",
@@ -2558,6 +2642,7 @@ build_reference_json
     job_dir = reference / "work" / "H2O"
     for representative in (
         job_dir / "OUT" / "H2O.p2p",
+        job_dir / "OUT" / "H2O_NL4_fmtA.pol",
         job_dir / "OUT" / "H2O_NL4_fmtB.pol",
         job_dir / "H2O.ornt",
         job_dir / "H2O.cks",
@@ -2609,6 +2694,16 @@ build_reference_json
     assert document["sources"]["p2p"] == {
         "path": str(p2p.resolve()),
         "sha256": hashlib.sha256(p2p.read_bytes()).hexdigest(),
+    }
+    format_a = job_dir / "OUT" / "H2O_NL4_fmtA.pol"
+    format_b = job_dir / "OUT" / "H2O_NL4_fmtB.pol"
+    assert document["sources"]["nonlocal_pol_format_a"] == {
+        "path": str(format_a.resolve()),
+        "sha256": hashlib.sha256(format_a.read_bytes()).hexdigest(),
+    }
+    assert document["sources"]["nonlocal_pol"] == {
+        "path": str(format_b.resolve()),
+        "sha256": hashlib.sha256(format_b.read_bytes()).hexdigest(),
     }
     assert document["tools"]["orient"]["version"] == "5.0.10-ng"
     assert document["tools"]["orient"]["commit"] == orient_commit
