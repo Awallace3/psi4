@@ -1086,8 +1086,9 @@ def _validate_checksum_entry(
     require_path: bool,
 ) -> None:
     required = ("path", "sha256") if require_path else ("sha256",)
-    entry = _require_fields(value, required, context)
-    if require_path:
+    optional = () if require_path else ("path",)
+    entry = _require_fields(value, required, context, optional=optional)
+    if "path" in entry:
         _require_string(entry["path"], f"{context}.path")
     _validate_sha256(entry["sha256"], f"{context}.sha256")
 

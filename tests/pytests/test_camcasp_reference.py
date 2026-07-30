@@ -1798,6 +1798,12 @@ build_reference_json
     assert set(document["tools"]["camcasp"]["executables"]) == {
         "camcasp", "cluster", "process", "pfit", "casimir"
     }
+    assert document["inputs"]["H2O.clt"]["path"] == str(
+        (reference / "inputs" / "H2O.clt").resolve()
+    )
+    assert document["inputs"]["H2O.axes"]["path"] == str(
+        (reference / "inputs" / "H2O.axes").resolve()
+    )
 
 
 def test_clean_room_removes_stale_publication_before_unapproved_gate(tmp_path):

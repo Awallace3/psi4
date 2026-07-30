@@ -585,8 +585,8 @@ document = {
         "matrices": {},
     },
     "inputs": {
-        "H2O.clt": {"sha256": sha(inputs_dir / "H2O.clt")},
-        "H2O.axes": {"sha256": sha(inputs_dir / "H2O.axes")},
+        "H2O.clt": record(inputs_dir / "H2O.clt"),
+        "H2O.axes": record(inputs_dir / "H2O.axes"),
     },
     "sources": {
         "cks": record(job / "H2O.cks"),
