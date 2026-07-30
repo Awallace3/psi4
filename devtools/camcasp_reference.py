@@ -275,6 +275,11 @@ def parse_isotropic_cn(
         isotropic = None
 
         while index < len(lines) and lines[index].strip().lower() != "end":
+            if PAIR_HEADER_RE.match(lines[index]):
+                raise ReferenceFormatError(
+                    f"{path}: pair block {pair_key} missing explicit End "
+                    "terminator before the next pair block"
+                )
             fields = lines[index].split()
             if len(fields) >= 3 and fields[:3] == ["00", "00", "0"]:
                 if isotropic is not None:
@@ -296,6 +301,10 @@ def parse_isotropic_cn(
                     for order in CN_ORDERS
                 }
             index += 1
+        if index >= len(lines):
+            raise ReferenceFormatError(
+                f"{path}: pair block {pair_key} missing explicit End terminator"
+            )
         if isotropic is None:
             raise ReferenceFormatError(f"{path}: missing 00 00 0 row for {pair_key}")
         by_types[pair_key] = isotropic
@@ -591,6 +600,45 @@ def _combined_pol_sections(path: Path) -> dict[int, tuple[str, ...]]:
     return {index: tuple(content) for index, content in sections.items()}
 
 
+@dataclass(frozen=True)
+class _InlineTextArtifact:
+    label: str
+    text: str
+
+    def read_text(self) -> str:
+        return self.text
+
+    def __str__(self) -> str:
+        return self.label
+
+
+CASIMIR_DISPERSION_MARKER_RE = re.compile(
+    r"^\s*Dispersion\s+coefficients\b.*$", flags=re.IGNORECASE | re.MULTILINE
+)
+
+
+def _parse_casimir_output(
+    path: Path,
+) -> dict[str, tuple[tuple[float, ...], ...]]:
+    text = path.read_text(errors="replace")
+    markers = list(CASIMIR_DISPERSION_MARKER_RE.finditer(text))
+    if len(markers) != 1:
+        raise ReferenceFormatError(
+            f"{path}: expected exactly one Dispersion coefficients marker, "
+            f"found {len(markers)}"
+        )
+    body = text[markers[0].end():]
+    if not body.strip():
+        raise ReferenceFormatError(
+            f"{path}: Dispersion coefficients marker has no following body"
+        )
+    return parse_isotropic_cn(
+        _InlineTextArtifact(f"{path} body", body),  # type: ignore[arg-type]
+        ACCEPTED_ATOM_LABELS,
+        {"O": "O", "H1": "H", "H2": "H"},
+    )
+
+
 STAGE_ERROR_MARKER_RE = re.compile(
     r"segmentation\s+fault|fatal(?:\s+error)?|error\s+stop|"
     r"pfit[._ -]?error|orient[._ -]?error|traceback|truncat(?:ed|ion)|"
@@ -662,11 +710,16 @@ def validate_stage_artifacts(work_dir: Path, job: str) -> dict[str, Path]:
                 f"{path}: content does not match combined # INDEX {index:03d} block"
             )
 
-    parse_isotropic_cn(
+    potential_cn = parse_isotropic_cn(
         casimir_pot,
         ACCEPTED_ATOM_LABELS,
         {"O": "O", "H1": "H", "H2": "H"},
     )
+    output_cn = _parse_casimir_output(casimir_output)
+    if output_cn != potential_cn:
+        raise ReferenceFormatError(
+            f"{casimir_output}: parsed dispersion body does not match {casimir_pot}"
+        )
     return {path.name: path for path in required}
 
 

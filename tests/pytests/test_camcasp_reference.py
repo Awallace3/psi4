@@ -709,6 +709,23 @@ def test_parse_all_isotropic_cn_matrices(tmp_path):
     assert matrices["C12"][2][2] == 1000.0
 
 
+def test_rejects_isotropic_cn_final_block_without_end(tmp_path):
+    source = tmp_path / "missing-final-end.pot"
+    source.write_text(CASIMIR_C12.rsplit("  End\n", 1)[0] + "\n")
+    try:
+        parse_isotropic_cn(
+            source,
+            ("O", "H1", "H2"),
+            {"O": "O", "H1": "H", "H2": "H"},
+        )
+    except ReferenceFormatError as exc:
+        assert str(source) in str(exc)
+        assert "End" in str(exc)
+        assert "('H', 'H')" in str(exc)
+    else:
+        raise AssertionError("final CASIMIR block without End was accepted")
+
+
 def test_rejects_casimir_output_without_c12(tmp_path):
     source = tmp_path / "C10-only.pot"
     source.write_text(CASIMIR_C12.replace(" C11 C12", "").replace(" 0.0 20000.0", "").replace(" 0.0 4000.0", "").replace(" 0.0 1000.0", ""))
@@ -1364,7 +1381,7 @@ def populate_stage_artifacts(work, job="H2O"):
         )
     (work / f"{job}_ref_wt4_L3_0f10.pol").write_text(combined)
     (work / f"{job}_ref_wt4_L3_casimir.out").write_text(
-        "Dispersion coefficients\n"
+        "Dispersion coefficients\n" + CASIMIR_C12
     )
     (work / f"{job}_ref_wt4_L3_C12.pot").write_text(CASIMIR_C12)
     (work / f"{job}.pdef").write_text(
@@ -1462,6 +1479,61 @@ def test_stage_validation_rejects_malformed_individual_pfit_pol(tmp_path):
         assert path.name in str(exc)
     else:
         raise AssertionError("unrelated PFIT polarizability was accepted")
+
+
+def test_stage_validation_rejects_marker_only_casimir_output(tmp_path):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_ref_wt4_L3_casimir.out"
+    path.write_text("Dispersion coefficients\n")
+    try:
+        validate_stage_artifacts(tmp_path, "H2O")
+    except ReferenceFormatError as exc:
+        assert path.name in str(exc)
+        assert "body" in str(exc)
+    else:
+        raise AssertionError("marker-only CASIMIR output was accepted")
+
+
+def test_stage_validation_rejects_junk_casimir_body(tmp_path):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_ref_wt4_L3_casimir.out"
+    path.write_text("Dispersion coefficients\nnonempty junk\n")
+    try:
+        validate_stage_artifacts(tmp_path, "H2O")
+    except ReferenceFormatError as exc:
+        assert path.name in str(exc)
+        assert "missing atom-type pairs" in str(exc)
+    else:
+        raise AssertionError("junk CASIMIR body was accepted")
+
+
+def test_stage_validation_rejects_casimir_output_without_final_end(tmp_path):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_ref_wt4_L3_casimir.out"
+    body = CASIMIR_C12.rsplit("  End\n", 1)[0] + "\n"
+    path.write_text("Dispersion coefficients\n" + body)
+    try:
+        validate_stage_artifacts(tmp_path, "H2O")
+    except ReferenceFormatError as exc:
+        assert path.name in str(exc)
+        assert "End" in str(exc)
+    else:
+        raise AssertionError("unterminated CASIMIR output body was accepted")
+
+
+def test_stage_validation_rejects_casimir_output_potential_mismatch(tmp_path):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_ref_wt4_L3_casimir.out"
+    path.write_text(
+        "Dispersion coefficients\n" + CASIMIR_C12.replace("20.0", "21.0", 1)
+    )
+    try:
+        validate_stage_artifacts(tmp_path, "H2O")
+    except ReferenceFormatError as exc:
+        assert path.name in str(exc)
+        assert "does not match" in str(exc)
+    else:
+        raise AssertionError("mismatched CASIMIR output and potential were accepted")
 
 
 def test_stage_validation_rejects_fatal_marker_outside_out(tmp_path):
@@ -1622,7 +1694,9 @@ output != "" { print > output }
 ' H2O_ref_wt4_L3_0f10.pol
 cat >H2O_ref_wt4_L3_casimir.out <<'EOF'
 Dispersion coefficients
-EOF
+"""
+        + CASIMIR_C12
+        + """EOF
 cat >H2O_ref_wt4_L3_C12.pot <<'EOF'
 """
         + CASIMIR_C12
