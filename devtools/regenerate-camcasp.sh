@@ -616,8 +616,8 @@ if not ends:
 end = ends[0]
 symmetries = []
 for index, line in enumerate(lines):
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#"):
+    stripped = line.split("#", 1)[0].strip()
+    if not stripped:
         continue
     match = re.match(r"^symmetry\s+(\S+)\s*$", stripped, re.IGNORECASE)
     if match:
@@ -647,9 +647,9 @@ if not symmetries:
         raise
 PY
 if (( \${3:-1} > 1 )); then
-    exec "$PSI4_EXE" -n "\$3" "\$input" "\$output"
+    exec "$PSI4_EXE" -n "\$3" "\$resolved_input" "\$output"
 else
-    exec "$PSI4_EXE" "\$input" "\$output"
+    exec "$PSI4_EXE" "\$resolved_input" "\$output"
 fi
 EOF
     chmod 0755 "$wrapper"

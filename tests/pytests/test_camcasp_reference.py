@@ -507,23 +507,28 @@ def test_psi4_wrapper_smoke_and_forwards_serial_and_parallel(tmp_path):
         assert "no_reorient" in text
     assert arguments.read_text().splitlines() == [
         "--version",
-        "serial.in serial.out",
-        "-n 4 parallel.in parallel.out",
+        f"{(tmp_path / 'serial.in').resolve()} serial.out",
+        f"-n 4 {(tmp_path / 'parallel.in').resolve()} parallel.out",
     ]
     version_log = reference_root / "logs" / "psi4-version.log"
     assert "fake-psi4" in version_log.read_text()
     assert version_log.with_name("psi4-version.log.sha256").is_file()
 
 
-def test_psi4_wrapper_existing_c1_is_idempotent(tmp_path):
+@pytest.mark.parametrize(
+    "symmetry_directive", ("symmetry c1", "symmetry c1 # already canonical")
+)
+def test_psi4_wrapper_existing_c1_is_idempotent(tmp_path, symmetry_directive):
     camcasp = tmp_path / "camcasp"
     (camcasp / "bin").mkdir(parents=True)
     fake = tmp_path / "psi4"
     _write_executable(fake, "#!/usr/bin/env bash\nexit 0\n")
     input_file = tmp_path / "input.in"
-    input_file.write_text(
-        "molecule {\n  symmetry c1\n  no_reorient\n  no_com\n  O 0 0 0\n}\n"
+    original = (
+        f"molecule {{\n  {symmetry_directive}\n"
+        "  no_reorient\n  no_com\n  O 0 0 0\n}\n"
     )
+    input_file.write_text(original)
     command = (
         f'source "{SCRIPT}"; CAMCASP="$1"; REFERENCE_ROOT="$2"; '
         'PSI4_EXE="$3"; write_psi4_wrapper; '
@@ -539,11 +544,53 @@ def test_psi4_wrapper_existing_c1_is_idempotent(tmp_path):
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert input_file.read_text().count("symmetry c1") == 1
+    assert input_file.read_text() == original
+
+
+def test_psi4_wrapper_invokes_resolved_symlink_target(tmp_path):
+    camcasp = tmp_path / "camcasp"
+    (camcasp / "bin").mkdir(parents=True)
+    fake = tmp_path / "psi4"
+    calls = tmp_path / "calls"
+    _write_executable(
+        fake,
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>\"$WRAPPER_CALLS\"\n",
+    )
+    target = tmp_path / "target.in"
+    target.write_text("molecule {\n  no_reorient\n  no_com\n  O 0 0 0\n}\n")
+    symlink = tmp_path / "input-link.in"
+    symlink.symlink_to(target)
+    command = (
+        f'source "{SCRIPT}"; CAMCASP="$1"; REFERENCE_ROOT="$2"; '
+        'PSI4_EXE="$3"; write_psi4_wrapper; '
+        '"$CAMCASP/bin/psi4.sh" "$4" linked.out 3'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "wrapper-symlink", str(camcasp),
+         str(tmp_path / "reference"), str(fake), str(symlink)],
+        cwd=ROOT,
+        env={**os.environ, "WRAPPER_CALLS": str(calls)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert symlink.is_symlink()
+    assert target.read_text().count("symmetry c1") == 1
+    assert calls.read_text().splitlines() == [
+        "--version",
+        f"-n 3 {target.resolve()} linked.out",
+    ]
 
 
 @pytest.mark.parametrize(
-    "symmetry_lines", ("  symmetry c2v\n", "  symmetry c1\n  symmetry c1\n")
+    "symmetry_lines",
+    (
+        "  symmetry c2v\n",
+        "  symmetry c2v # conflicts with canonical protocol\n",
+        "  symmetry c1\n  symmetry c1\n",
+        "  symmetry c1 # first\n  symmetry c2v # second\n",
+    ),
 )
 def test_psi4_wrapper_rejects_conflicting_or_duplicate_symmetry(
     tmp_path, symmetry_lines
@@ -872,7 +919,7 @@ def _make_psi4_checkout(path):
         "[[ \"$(grep -Eic '^[[:space:]]*symmetry[[:space:]]+c1[[:space:]]*$' \"$input\")\" == 1 ]]\n"
         "grep -Eiq '^[[:space:]]*basis[[:space:]]+aug-cc-pvtz[[:space:]]*$' \"$input\"\n"
         "grep -Fq \"energy('PBE0'\" \"$input\"\n"
-        "printf 'Running in c1 symmetry.\\nMethod: PBE0\\n' >\"$output\"\n"
+        "printf 'Running in c1 symmetry.\\n=> Composite Functional: PBE0 <=\\n' >\"$output\"\n"
     )
     psi4.chmod(0o755)
     subprocess.run(["git", "init", "-q", str(path)], check=True)
@@ -2075,7 +2122,10 @@ set {
 }
 energy, wfn = energy('PBE0', return_wfn=True)
 """
-    psi4_output = "Running in c1 symmetry.\nMethod: PBE0\n"
+    psi4_output = (
+        "Running in c1 symmetry.\n"
+        "    => Composite Functional: PBE0 <=\n"
+    )
     return clt, cks, camcasp_log, psi4_input, psi4_output
 
 
@@ -2146,7 +2196,7 @@ def test_generated_protocol_rejects_conflicting_active_settings():
         (3, "no_com", "com", "no_com"),
         (3, "no_reorient", "reorient", "no_reorient"),
         (4, "c1 symmetry", "c2v symmetry", "symmetry"),
-        (4, "Method: PBE0", "Method: PBE", "PBE0"),
+        (4, "Composite Functional: PBE0", "Composite Functional: PBE", "PBE0"),
     )
     for text_index, old, new, expected in mutations:
         texts = list(canonical_generated_protocol_texts())
@@ -2164,6 +2214,19 @@ def test_protocol_rejects_duplicate_or_comment_only_grac_report(mode):
             "AC options: type = GRAC", "! AC options: type = GRAC"
         )
     _assert_protocol_rejected(texts, "AC options")
+
+
+@pytest.mark.parametrize("mode", ("duplicate", "comment-only", "unrelated-token"))
+def test_protocol_requires_one_active_composite_functional_report(mode):
+    texts = list(canonical_generated_protocol_texts())
+    report = "    => Composite Functional: PBE0 <="
+    if mode == "duplicate":
+        texts[4] += report + "\n"
+    elif mode == "comment-only":
+        texts[4] = texts[4].replace(report, "# " + report)
+    else:
+        texts[4] = texts[4].replace(report, "Unrelated PBE0 token")
+    _assert_protocol_rejected(texts, "Composite Functional")
 
 
 def _refined_block_text(combined_text, index):
@@ -2894,7 +2957,7 @@ build_reference_json
     assert "no_com" in psi4_input.read_text()
     assert "no_reorient" in psi4_input.read_text()
     assert "Running in c1 symmetry." in psi4_output.read_text()
-    assert "PBE0" in psi4_output.read_text()
+    assert "=> Composite Functional: PBE0 <=" in psi4_output.read_text()
     assert document["sources"]["psi4_input"] == {
         "path": str(psi4_input.resolve()),
         "sha256": hashlib.sha256(psi4_input.read_bytes()).hexdigest(),

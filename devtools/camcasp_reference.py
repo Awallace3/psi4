@@ -612,8 +612,21 @@ def _validate_psi4_output(text: str) -> None:
         raise ReferenceFormatError(
             f"Psi4 output: conflicting symmetry {symmetries[0]!r}; expected 'c1'"
         )
-    if not any(re.search(r"\bPBE0\b", line, re.IGNORECASE) for line in lines):
-        raise ReferenceFormatError("Psi4 output: missing PBE0 method report")
+    functionals = []
+    for line in lines:
+        match = re.fullmatch(r"=> Composite Functional: (\S+) <=", line)
+        if match:
+            functionals.append(match.group(1))
+    if len(functionals) != 1:
+        raise ReferenceFormatError(
+            "Psi4 output: expected exactly one active Composite Functional report, "
+            f"found {len(functionals)}"
+        )
+    if functionals[0].casefold() != "pbe0":
+        raise ReferenceFormatError(
+            "Psi4 output: conflicting Composite Functional "
+            f"{functionals[0]!r}; expected 'PBE0'"
+        )
 
 
 def validate_generated_protocol(
