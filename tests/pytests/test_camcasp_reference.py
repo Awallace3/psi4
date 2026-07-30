@@ -271,7 +271,8 @@ def _make_git_checkout(
 
 
 def _make_pinned_orient_checkout(
-    path, *, malformed_version=False, produce_candidate=True
+    path, *, malformed_version=False, produce_candidate=True,
+    produce_wrong_version=False,
 ):
     exe_dir = path / "x86-64" / "gfortran" / "exe"
     exe_dir.mkdir(parents=True)
@@ -287,17 +288,19 @@ def _make_pinned_orient_checkout(
     old.write_text("tracked old binary\n")
     (path / "bin" / "orient").symlink_to(old)
     (exe_dir / ".gitignore").write_text(
-        "*.o\n*.mod\norient\norient-5.0.10-ng\n"
+        "*.o\n*.mod\n*.cache\norient\norient-5.0.10-ng\n"
     )
-    recipe = (
-        "\tcp /bin/true $@\n"
-        if produce_candidate
-        else "\t@echo intentionally omitted product\n"
-    )
+    if produce_wrong_version:
+        recipe = "\tcp /bin/true orient-5.0.99-ng\n"
+    elif produce_candidate:
+        recipe = "\tcp /bin/true $@\n"
+    else:
+        recipe = "\t@echo intentionally omitted product\n"
     (path / "Makefile").write_text(
         ".PHONY: FORCE\n"
         "orient-5.0.10-ng: FORCE\n"
-        "\t@case \"$(MAKEFLAGS)\" in *-j*|*--jobs*) echo parallel build forbidden; exit 91;; esac\n"
+        "\t@case \"$(MAKEFLAGS)\" in *jobserver*|*-j8*|*--jobs=8*) echo inherited parallel build; exit 91;; esac\n"
+        "\t@case \" $(MAKEFLAGS) \" in *\" -j1 \"*) :;; *) echo serial -j1 missing; exit 92;; esac\n"
         "\t@test \"$(OPENGL)\" = no\n"
         f"\t@test \"$(BASE)\" = \"{path}\"\n"
         "\t@echo OPENGL=$(OPENGL)\n"
@@ -336,6 +339,7 @@ def test_provision_orient_builds_derived_version_serially(tmp_path):
     result = subprocess.run(
         ["bash", "-c", command, "orient-build", str(reference), commit, str(candidate)],
         cwd=ROOT,
+        env={**os.environ, "MAKEFLAGS": "-j8", "MFLAGS": "-j8"},
         text=True,
         capture_output=True,
         check=False,
@@ -352,7 +356,9 @@ def test_provision_orient_builds_derived_version_serially(tmp_path):
     build_text = build_log.read_text()
     assert "OPENGL=no" in build_text
     assert f"BASE={checkout}" in build_text
-    assert "-j" not in build_text and "--jobs" not in build_text
+    assert "-j1" in build_text
+    assert "-j8" not in build_text
+    assert "jobserver" not in build_text
     for log_name in (
         "orient-build.log", "orient-ldd.log", "orient-smoke.log",
         "orient-executable.log",
@@ -409,6 +415,59 @@ def test_provision_orient_rejects_missing_build_product(tmp_path):
     )
     assert result.returncode != 0
     assert "missing built Orient artifact" in result.stderr
+    assert (reference / "logs" / "orient-build.log.sha256").is_file()
+
+
+def test_provision_orient_rejects_unexpected_ignored_product(tmp_path):
+    checkout = tmp_path / "orient"
+    commit, candidate, _ = _make_pinned_orient_checkout(checkout)
+    unexpected = candidate.parent / "stale.cache"
+    unexpected.write_text("ignored stale product\n")
+    assert subprocess.run(
+        ["git", "-C", str(checkout), "check-ignore", "-q", str(unexpected)],
+        check=False,
+    ).returncode == 0
+    reference = tmp_path / "reference"
+    command = (
+        f'source "{SCRIPT}"; '
+        'REFERENCE_ROOT="$1"; ORIENT_REF="$2"; ORIENT_EXE="$3"; '
+        'provision_orient'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "orient-ignored", str(reference), commit, str(candidate)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "unexpected untracked/ignored Orient product" in result.stderr
+    assert "stale.cache" in result.stderr
+    assert not (reference / "logs" / "orient-build.log").exists()
+
+
+def test_provision_orient_rejects_wrong_version_build_product(tmp_path):
+    checkout = tmp_path / "orient"
+    commit, candidate, _ = _make_pinned_orient_checkout(
+        checkout, produce_candidate=False, produce_wrong_version=True
+    )
+    reference = tmp_path / "reference"
+    command = (
+        f'source "{SCRIPT}"; '
+        'REFERENCE_ROOT="$1"; ORIENT_REF="$2"; ORIENT_EXE="$3"; '
+        'provision_orient'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "orient-wrong-version", str(reference), commit, str(candidate)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "unexpected untracked/ignored Orient product" in result.stderr
+    assert "orient-5.0.99-ng" in result.stderr
+    assert not candidate.exists()
     assert (reference / "logs" / "orient-build.log.sha256").is_file()
 
 
@@ -504,7 +563,7 @@ def test_verify_orient_checkout_rejects_unrelated_untracked_file(tmp_path):
         check=False,
     )
     assert result.returncode != 0
-    assert "unexpected untracked Orient source artifact" in result.stderr
+    assert "unexpected untracked/ignored Orient product" in result.stderr
 
 
 def test_verify_orient_checkout_rejects_older_tracked_binary(tmp_path):

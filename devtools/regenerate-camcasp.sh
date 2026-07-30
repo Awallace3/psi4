@@ -243,10 +243,31 @@ read_orient_version() {
     ORIENT_RELATIVE_EXE="x86-64/gfortran/exe/orient-$ORIENT_VERSION"
 }
 
+orient_product_inventory() {
+    local checkout="$1"
+    git -C "$checkout" ls-files --others --exclude-standard -z
+    git -C "$checkout" ls-files --others --ignored --exclude-standard -z
+}
+
+validate_orient_products() {
+    local checkout="$1"
+    local path
+    while IFS= read -r -d '' path; do
+        case "$path" in
+            src/version.f90|"$ORIENT_RELATIVE_EXE") ;;
+            *)
+                if [[ ! "$path" =~ ^x86-64/gfortran/exe/[^/]+\.(o|mod)$ ]]; then
+                    fail "unexpected untracked/ignored Orient product: $path"
+                    return
+                fi
+                ;;
+        esac
+    done < <(orient_product_inventory "$checkout")
+}
+
 verify_orient_checkout() {
     local checkout="$1"
     local candidate="$2"
-    local status entry state path
 
     [[ "$(git -C "$checkout" rev-parse HEAD)" == "$ORIENT_REF" ]] || {
         fail "Orient checkout is not pinned to $ORIENT_REF"
@@ -265,44 +286,16 @@ verify_orient_checkout() {
         fail "unexpected Orient artifact: $candidate"
         return
     }
-    status="$(git -C "$checkout" status --porcelain --untracked-files=all)" || {
-        fail "could not inspect Orient checkout status: $checkout"
-        return
-    }
-    while IFS= read -r entry; do
-        [[ -z "$entry" ]] && continue
-        state="${entry:0:2}"
-        path="${entry:3}"
-        if [[ "$state" != "??" ]]; then
-            fail "Orient tracked source checkout is not clean: $checkout"
-            return
-        fi
-        case "$path" in
-            "$ORIENT_RELATIVE_EXE"|x86-64/gfortran/exe/orient|*.o|*.mod) ;;
-            *)
-                fail "unexpected untracked Orient source artifact: $path"
-                return
-                ;;
-        esac
-    done <<<"$status"
+    validate_orient_products "$checkout" || return
 }
 
 remove_untracked_orient_products() {
     local checkout="$1"
-    local candidate="$2"
-    local exe_dir="$checkout/x86-64/gfortran/exe"
-    local path relative
+    local path
+    validate_orient_products "$checkout" || return
     while IFS= read -r -d '' path; do
-        relative="${path#"$checkout"/}"
-        if ! git -C "$checkout" ls-files --error-unmatch "$relative" >/dev/null 2>&1; then
-            rm -f "$path"
-        fi
-    done < <(
-        find "$exe_dir" -maxdepth 1 \
-            \( -type f -o -type l \) \
-            \( -name '*.o' -o -name '*.mod' -o -name orient \
-               -o -path "$candidate" \) -print0
-    )
+        rm -f "$checkout/$path"
+    done < <(orient_product_inventory "$checkout")
 }
 
 record_orient_executable() {
@@ -350,19 +343,20 @@ provision_orient() {
         fail "derived Orient build artifact must not be tracked: $ORIENT_RELATIVE_EXE"
         return
     fi
-    remove_untracked_orient_products "$ORIENT_SOURCE_ROOT" "$candidate"
+    remove_untracked_orient_products "$ORIENT_SOURCE_ROOT" || return
     target="orient-$ORIENT_VERSION"
     (
         cd "$ORIENT_SOURCE_ROOT/x86-64/gfortran/exe"
         run_logged orient-build "$REFERENCE_ROOT/logs/orient-build.log" \
-            make -f "$ORIENT_SOURCE_ROOT/Makefile" \
+            env -u MAKEFLAGS -u MFLAGS make -j1 \
+                -f "$ORIENT_SOURCE_ROOT/Makefile" \
                 OPENGL=no BASE="$ORIENT_SOURCE_ROOT" "$target"
     )
+    verify_orient_checkout "$ORIENT_SOURCE_ROOT" "$candidate" || return
     [[ -f "$candidate" && -x "$candidate" ]] || {
         fail "missing built Orient artifact: $candidate"
         return
     }
-    verify_orient_checkout "$ORIENT_SOURCE_ROOT" "$candidate" || return
     require_executable ORIENT_EXE "$candidate"
     record_orient_executable "$candidate"
     if command -v ldd >/dev/null; then
