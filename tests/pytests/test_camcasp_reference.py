@@ -1256,6 +1256,7 @@ def make_nl4_frequency_text():
 
 
 def make_l3_refined_text():
+    """Legacy synthetic 16x16 fixture retained for parser compatibility tests."""
     blocks = []
     for frequency_index in range(11):
         blocks.append(f"# INDEX {frequency_index:03d}")
@@ -1268,6 +1269,30 @@ def make_l3_refined_text():
                 ]
                 blocks.append(" ".join(f"{value:.8f}" for value in values))
     return "\n".join(blocks) + "\n"
+
+
+def make_real_l3_refined_text():
+    lines = [
+        "#  Localisation settings for H2O",
+        "#  Pol file format: NEW",
+        "# ",
+        "",
+    ]
+    for frequency_index in range(11):
+        lines.append(f"# INDEX {frequency_index:03d}")
+        for atom_index, label in enumerate(("O", "H1", "H2")):
+            lines.append(
+                f"ALPHA  H2O  SITE-NAMES  {label}  {label}  "
+                f"RANK 1 TO 3 INDEX   0 FREQSQ       {frequency_index / 100:.7f}"
+            )
+            for row in range(15):
+                values = [
+                    frequency_index + atom_index + (row + column) / 100.0
+                    for column in range(15)
+                ]
+                lines.append(" ".join(f"{value:.12f}" for value in values))
+        lines.extend((" ENDFILE", ""))
+    return "\n".join(lines) + "\n"
 
 
 def test_parse_static_plus_ten_frequencies(tmp_path):
@@ -1294,6 +1319,120 @@ def test_parse_complete_l3_model(tmp_path):
     assert tuple(blocks[0].atoms) == ("O", "H1", "H2")
     assert len(blocks[10].atoms["H2"].matrix) == 16
     assert all(len(row) == 16 for row in blocks[10].atoms["H2"].matrix)
+
+
+def test_parse_authoritative_real_l3_model_and_dipole_mapping(tmp_path):
+    source = tmp_path / "H2O_ref_wt4_L3_0f10.pol"
+    source.write_text(make_real_l3_refined_text())
+    blocks = parse_refined_polarizabilities(source, ("O", "H1", "H2"), limit=3)
+    assert len(blocks) == 11
+    assert tuple(blocks[0].atoms) == ("O", "H1", "H2")
+    assert blocks[0].atoms["O"].components == COMPONENTS_L3[1:]
+    assert len(blocks[10].atoms["H2"].matrix) == 15
+    assert all(len(row) == 15 for row in blocks[10].atoms["H2"].matrix)
+    assert dipole_local_cartesian(blocks[0].atoms["O"]) == (
+        (0.02, 0.03, 0.01),
+        (0.03, 0.04, 0.02),
+        (0.01, 0.02, 0.0),
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected"),
+    (
+        ("ALPHA  H2O", "ALPHA  NH3", "job H2O"),
+        ("RANK 1 TO 3", "RANK 0 TO 3", "RANK 1 TO 3"),
+        ("INDEX   0", "INDEX   1", "header INDEX 0"),
+        ("SITE-NAMES  O  O", "SITE-NAMES  O  H1", "SITE-NAMES O O"),
+        ("FREQSQ       0.0000000", "FREQSQ       -0.1000000", "nonnegative"),
+        ("FREQSQ       0.0000000", "FREQSQ       nan", "header"),
+        ("FREQSQ       0.0000000", "FREQSQ       0_0", "header"),
+    ),
+)
+def test_real_l3_rejects_invalid_header_contract(tmp_path, old, new, expected):
+    source = tmp_path / "invalid-real-header.pol"
+    source.write_text(make_real_l3_refined_text().replace(old, new, 1))
+    with pytest.raises(ReferenceFormatError, match=expected):
+        parse_refined_polarizabilities(source, ("O", "H1", "H2"), limit=3)
+
+
+def test_real_l3_requires_matching_freqsq_across_atom_headers(tmp_path):
+    source = tmp_path / "invalid-real-freqsq.pol"
+    text = make_real_l3_refined_text()
+    h1 = "ALPHA  H2O  SITE-NAMES  H1  H1  RANK 1 TO 3 INDEX   0 FREQSQ       0.0000000"
+    source.write_text(text.replace(h1, h1.replace("0.0000000", "0.1000000"), 1))
+    with pytest.raises(ReferenceFormatError, match="FREQSQ does not match"):
+        parse_refined_polarizabilities(source, ("O", "H1", "H2"), limit=3)
+
+
+@pytest.mark.parametrize("mode", ("missing", "duplicate", "reordered", "mixed"))
+def test_real_l3_requires_exact_atom_headers_in_order(tmp_path, mode):
+    source = tmp_path / "invalid-real-atoms.pol"
+    text = make_real_l3_refined_text()
+    h1 = "ALPHA  H2O  SITE-NAMES  H1  H1  RANK 1 TO 3 INDEX   0 FREQSQ       0.0000000"
+    if mode == "missing":
+        text = text.replace(h1 + "\n", "", 1)
+    elif mode == "duplicate":
+        text = text.replace(h1, h1.replace("H1  H1", "O  O"), 1)
+    elif mode == "reordered":
+        text = text.replace(h1, h1.replace("H1  H1", "H2  H2"), 1)
+    else:
+        text = text.replace(h1, "H1 H1", 1)
+    source.write_text(text)
+    with pytest.raises(ReferenceFormatError, match="expected ALPHA header for H1"):
+        parse_refined_polarizabilities(source, ("O", "H1", "H2"), limit=3)
+
+
+@pytest.mark.parametrize("mode", ("incomplete", "extra", "malformed", "nonfinite"))
+def test_real_l3_requires_exact_finite_15_by_15_matrix(tmp_path, mode):
+    source = tmp_path / "invalid-real-matrix.pol"
+    text = make_real_l3_refined_text()
+    row = " ".join(f"{column / 100:.12f}" for column in range(15))
+    fields = row.split()
+    if mode == "incomplete":
+        replacement = " ".join(fields[:-1])
+    elif mode == "extra":
+        replacement = row + " 1.0"
+    elif mode == "malformed":
+        replacement = row.replace(fields[3], "not-a-number", 1)
+    else:
+        replacement = row.replace(fields[3], "nan", 1)
+    source.write_text(text.replace(row, replacement, 1))
+    with pytest.raises(ReferenceFormatError, match="row 0"):
+        parse_refined_polarizabilities(source, ("O", "H1", "H2"), limit=3)
+
+
+@pytest.mark.parametrize("mode", ("missing", "early", "trailing", "comment"))
+def test_real_l3_requires_strict_endfile_and_block_boundaries(tmp_path, mode):
+    source = tmp_path / "invalid-real-endfile.pol"
+    text = make_real_l3_refined_text()
+    if mode == "missing":
+        text = text.replace(" ENDFILE\n", "", 1)
+    elif mode == "early":
+        first_row = " ".join(f"{column / 100:.12f}" for column in range(15))
+        text = text.replace(first_row + "\n", " ENDFILE\n" + first_row + "\n", 1)
+    elif mode == "trailing":
+        text = text.replace(" ENDFILE\n", " ENDFILE\nunexpected payload\n", 1)
+    else:
+        text = text.replace("\n# INDEX 001", "\n# unexpected inter-block comment\n# INDEX 001", 1)
+    source.write_text(text)
+    with pytest.raises(ReferenceFormatError, match="ENDFILE|unexpected|row"):
+        parse_refined_polarizabilities(source, ("O", "H1", "H2"), limit=3)
+
+
+@pytest.mark.parametrize("mode", ("missing", "duplicate", "wrong"))
+def test_real_l3_requires_exact_index_sequence(tmp_path, mode):
+    source = tmp_path / "invalid-real-index.pol"
+    text = make_real_l3_refined_text()
+    if mode == "missing":
+        text = text.replace("# INDEX 001\n", "", 1)
+    elif mode == "duplicate":
+        text = text.replace("# INDEX 001", "# INDEX 000", 1)
+    else:
+        text = text.replace("# INDEX 001", "# INDEX 009", 1)
+    source.write_text(text)
+    with pytest.raises(ReferenceFormatError, match="frequency index 001"):
+        parse_refined_polarizabilities(source, ("O", "H1", "H2"), limit=3)
 
 
 def test_rejects_incomplete_l3_model(tmp_path):
@@ -2370,7 +2509,7 @@ ORIENT_FINISHED = "Finished at 11:27:54 on 30 Jul 2026 "
 
 
 def populate_stage_artifacts(work, job="H2O"):
-    combined = make_l3_refined_text()
+    combined = make_real_l3_refined_text()
     for index in range(11):
         (work / f"{job}_L3_{index:03d}.out").write_text(
             f"ORIENT localization output\n{ORIENT_FINISHED}\n"
@@ -2708,6 +2847,24 @@ def test_stage_validation_rejects_malformed_individual_pfit_pol(tmp_path):
         raise AssertionError("unrelated PFIT polarizability was accepted")
 
 
+@pytest.mark.parametrize("mode", ("header-index", "value", "comment", "index-marker"))
+def test_stage_validation_rejects_noncorresponding_real_individual_pol(tmp_path, mode):
+    populate_stage_artifacts(tmp_path)
+    path = tmp_path / "H2O_ref_wt4_L3_002.pol"
+    text = path.read_text()
+    if mode == "header-index":
+        text = text.replace("INDEX   0", "INDEX   1", 1)
+    elif mode == "value":
+        text = text.replace("2.000000000000", "2.125000000000", 1)
+    elif mode == "comment":
+        text = "# unexpected individual comment\n" + text
+    else:
+        text = "# INDEX 002\n" + text
+    path.write_text(text)
+    with pytest.raises(ReferenceFormatError, match="INDEX 0|does not match|ALPHA"):
+        validate_stage_artifacts(tmp_path, "H2O")
+
+
 def test_stage_validation_rejects_marker_only_casimir_output(tmp_path):
     populate_stage_artifacts(tmp_path)
     path = tmp_path / "H2O_ref_wt4_L3_casimir.out"
@@ -2792,7 +2949,7 @@ def test_builder_combines_all_required_properties(tmp_path):
     pot = tmp_path / "H2O_ref_wt4_L3_C12.pot"
     axes = tmp_path / "H2O.axes"
     nl4.write_text(make_canonical_nl4_frequency_text())
-    refined.write_text(make_l3_refined_text())
+    refined.write_text(make_real_l3_refined_text())
     pot.write_text(CASIMIR_C12)
     axes.write_text(CANONICAL_AXES)
 
@@ -4198,7 +4355,7 @@ End
 EOF
 cat >H2O_ref_wt4_L3_0f10.pol <<'EOF'
 """
-        + make_l3_refined_text()
+        + make_real_l3_refined_text()
         + """EOF
 awk '
 /^# INDEX [0-9][0-9][0-9]$/ {

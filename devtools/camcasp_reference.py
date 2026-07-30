@@ -27,6 +27,11 @@ COMPONENTS_L3 = tuple(
     for rank in range(4)
     for component in COMPONENTS_BY_RANK[rank]
 )
+REAL_REFINED_COMPONENTS_L3 = tuple(
+    component
+    for rank in range(1, 4)
+    for component in COMPONENTS_BY_RANK[rank]
+)
 
 
 class ReferenceFormatError(ValueError):
@@ -1311,6 +1316,9 @@ def _require_terminal_finished(path: Path, kind: str) -> None:
 
 
 def _normalized_individual_pol(path: Path, expected_index: int) -> tuple[str, ...]:
+    individual_lines = path.read_text().splitlines()
+    if any(line.split()[:1] == ["ALPHA"] for line in individual_lines):
+        return _parse_real_individual_section(path, expected_index)
     normalized = []
     for line in path.read_text(errors="replace").splitlines():
         stripped = line.strip()
@@ -1330,6 +1338,18 @@ def _normalized_individual_pol(path: Path, expected_index: int) -> tuple[str, ..
 
 
 def _combined_pol_sections(path: Path) -> dict[int, tuple[str, ...]]:
+    lines = path.read_text().splitlines()
+    first_index = next(
+        (position for position, line in enumerate(lines) if INDEX_RE.match(line)),
+        None,
+    )
+    if (
+        first_index is not None
+        and first_index + 1 < len(lines)
+        and lines[first_index + 1].split()[:1] == ["ALPHA"]
+    ):
+        _blocks, sections = _parse_real_combined_refined(path, lines)
+        return sections
     sections: dict[int, list[str]] = {}
     current = None
     for line in path.read_text(errors="replace").splitlines():
@@ -1502,9 +1522,208 @@ def parse_frequencies(path: Path) -> list[FrequencyPoint]:
 INDEX_RE = re.compile(r"^\s*#\s*INDEX\s+(\d{3})\s*$")
 ATOM_RE = re.compile(r"^\s*(\S+)\s+\1\s*$")
 ACCEPTED_ATOM_LABELS = ("O", "H1", "H2")
+REAL_DECIMAL_RE = re.compile(
+    r"[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[EDed][-+]?[0-9]+)?"
+)
 
 
-def parse_refined_polarizabilities(
+def _real_decimal(text: str, context: str) -> float:
+    if REAL_DECIMAL_RE.fullmatch(text) is None:
+        raise ReferenceFormatError(f"{context}: malformed decimal {text!r}")
+    return _float(text, context)
+
+
+def _parse_real_alpha_header(
+    path: Path, line: str, frequency_index: int, expected_atom: str
+) -> float:
+    fields = line.split()
+    if not fields or fields[0] != "ALPHA":
+        raise ReferenceFormatError(
+            f"{path}: frequency {frequency_index:03d} expected ALPHA header "
+            f"for {expected_atom}"
+        )
+    if len(fields) < 2 or fields[1] != "H2O":
+        raise ReferenceFormatError(
+            f"{path}: frequency {frequency_index:03d} ALPHA header requires job H2O"
+        )
+    if (
+        len(fields) < 5
+        or fields[2] != "SITE-NAMES"
+        or fields[3:5] != [expected_atom, expected_atom]
+    ):
+        raise ReferenceFormatError(
+            f"{path}: frequency {frequency_index:03d} expected ALPHA header for "
+            f"{expected_atom} with SITE-NAMES {expected_atom} {expected_atom}"
+        )
+    if len(fields) < 9 or fields[5:9] != ["RANK", "1", "TO", "3"]:
+        raise ReferenceFormatError(
+            f"{path}: frequency {frequency_index:03d} atom {expected_atom} "
+            "header requires RANK 1 TO 3"
+        )
+    if len(fields) < 11 or fields[9:11] != ["INDEX", "0"]:
+        raise ReferenceFormatError(
+            f"{path}: frequency {frequency_index:03d} atom {expected_atom} "
+            "header INDEX 0 is required"
+        )
+    if len(fields) != 13 or fields[11] != "FREQSQ":
+        raise ReferenceFormatError(
+            f"{path}: frequency {frequency_index:03d} atom {expected_atom} "
+            "has malformed FREQSQ header"
+        )
+    try:
+        frequency_squared = _real_decimal(
+            fields[12],
+            f"{path}: frequency {frequency_index:03d} atom {expected_atom} FREQSQ",
+        )
+    except ReferenceFormatError as exc:
+        raise ReferenceFormatError(
+            f"{path}: frequency {frequency_index:03d} atom {expected_atom} "
+            "has malformed FREQSQ header"
+        ) from exc
+    if not math.isfinite(frequency_squared):
+        raise ReferenceFormatError(
+            f"{path}: frequency {frequency_index:03d} atom {expected_atom} "
+            "has non-finite FREQSQ header"
+        )
+    if frequency_squared < 0.0:
+        raise ReferenceFormatError(
+            f"{path}: frequency {frequency_index:03d} atom {expected_atom} "
+            "FREQSQ must be nonnegative"
+        )
+    return frequency_squared
+
+
+def _parse_real_alpha_section(
+    path: Path, lines: Sequence[str], position: int, frequency_index: int
+) -> tuple[FrequencyBlock, tuple[str, ...], int]:
+    atoms: dict[str, SphericalModel] = {}
+    canonical: list[str] = []
+    expected_frequency_squared: float | None = None
+    for expected_atom in ACCEPTED_ATOM_LABELS:
+        if position >= len(lines):
+            raise ReferenceFormatError(
+                f"{path}: frequency {frequency_index:03d} expected ALPHA header "
+                f"for {expected_atom}"
+            )
+        frequency_squared = _parse_real_alpha_header(
+            path, lines[position], frequency_index, expected_atom
+        )
+        if expected_frequency_squared is None:
+            expected_frequency_squared = frequency_squared
+        elif frequency_squared != expected_frequency_squared:
+            raise ReferenceFormatError(
+                f"{path}: frequency {frequency_index:03d} atom {expected_atom} "
+                "FREQSQ does not match the block"
+            )
+        canonical.append(" ".join(lines[position].split()))
+        position += 1
+        matrix = []
+        for row_index in range(15):
+            if position >= len(lines):
+                raise ReferenceFormatError(
+                    f"{path}: frequency {frequency_index:03d} atom {expected_atom} "
+                    f"row {row_index} requires 15 values"
+                )
+            fields = lines[position].split()
+            if len(fields) != 15:
+                raise ReferenceFormatError(
+                    f"{path}: frequency {frequency_index:03d} atom {expected_atom} "
+                    f"row {row_index} requires 15 values, found {len(fields)}"
+                )
+            matrix.append(
+                tuple(
+                    _real_decimal(
+                        field,
+                        f"{path}: frequency {frequency_index:03d} atom "
+                        f"{expected_atom} row {row_index}",
+                    )
+                    for field in fields
+                )
+            )
+            canonical.append(" ".join(fields))
+            position += 1
+        atoms[expected_atom] = SphericalModel(
+            REAL_REFINED_COMPONENTS_L3, tuple(matrix)
+        )
+    if position >= len(lines) or lines[position].split() != ["ENDFILE"]:
+        found = "<end>" if position >= len(lines) else lines[position].strip()
+        raise ReferenceFormatError(
+            f"{path}: frequency {frequency_index:03d} requires terminal ENDFILE, "
+            f"found {found!r}"
+        )
+    canonical.append("ENDFILE")
+    return FrequencyBlock(frequency_index, atoms), tuple(canonical), position + 1
+
+
+def _parse_real_combined_refined(
+    path: Path, lines: Sequence[str] | None = None
+) -> tuple[list[FrequencyBlock], dict[int, tuple[str, ...]]]:
+    lines = path.read_text().splitlines() if lines is None else list(lines)
+    position = 0
+    while position < len(lines) and (
+        not lines[position].strip()
+        or (
+            lines[position].lstrip().startswith("#")
+            and not INDEX_RE.match(lines[position])
+        )
+    ):
+        position += 1
+    blocks = []
+    sections = {}
+    for expected_index in range(11):
+        while position < len(lines) and not lines[position].strip():
+            position += 1
+        expected_marker = f"# INDEX {expected_index:03d}"
+        if position >= len(lines) or lines[position] != expected_marker:
+            found = "<end>" if position >= len(lines) else lines[position].strip()
+            if (
+                position < len(lines)
+                and not INDEX_RE.match(lines[position])
+                and lines[position].split()[:1] != ["ALPHA"]
+            ):
+                raise ReferenceFormatError(
+                    f"{path}: frequency {expected_index - 1:03d} has unexpected "
+                    f"payload after ENDFILE: {found!r}"
+                )
+            raise ReferenceFormatError(
+                f"{path}: expected frequency index {expected_index:03d}, "
+                f"found {found!r}"
+            )
+        position += 1
+        block, section, position = _parse_real_alpha_section(
+            path, lines, position, expected_index
+        )
+        blocks.append(block)
+        sections[expected_index] = section
+        while position < len(lines) and not lines[position].strip():
+            position += 1
+    if position != len(lines):
+        raise ReferenceFormatError(
+            f"{path}: unexpected trailing payload {lines[position].strip()!r}"
+        )
+    return blocks, sections
+
+
+def _parse_real_individual_section(
+    path: Path, expected_index: int
+) -> tuple[str, ...]:
+    lines = path.read_text().splitlines()
+    position = 0
+    while position < len(lines) and not lines[position].strip():
+        position += 1
+    _block, section, position = _parse_real_alpha_section(
+        path, lines, position, expected_index
+    )
+    while position < len(lines) and not lines[position].strip():
+        position += 1
+    if position != len(lines):
+        raise ReferenceFormatError(
+            f"{path}: unexpected trailing payload {lines[position].strip()!r}"
+        )
+    return section
+
+
+def _parse_synthetic_refined_polarizabilities(
     path: Path,
     atom_labels: Sequence[str],
     limit: int,
@@ -1599,6 +1818,40 @@ def parse_refined_polarizabilities(
             f"{path}: expected 11 refined blocks, found {len(blocks)}"
         )
     return blocks
+
+
+def parse_refined_polarizabilities(
+    path: Path,
+    atom_labels: Sequence[str],
+    limit: int,
+) -> list[FrequencyBlock]:
+    if limit != 3:
+        raise ReferenceFormatError(f"accepted model requires limit 3, got {limit}")
+    provided_atom_labels = tuple(atom_labels)
+    if provided_atom_labels != ACCEPTED_ATOM_LABELS:
+        raise ReferenceFormatError(
+            f"accepted model requires atom labels {ACCEPTED_ATOM_LABELS!r}, "
+            f"got {provided_atom_labels!r}"
+        )
+    lines = path.read_text().splitlines()
+    position = 0
+    while position < len(lines) and (
+        not lines[position].strip()
+        or (
+            lines[position].lstrip().startswith("#")
+            and not INDEX_RE.match(lines[position])
+        )
+    ):
+        position += 1
+    if (
+        position < len(lines)
+        and INDEX_RE.match(lines[position])
+        and position + 1 < len(lines)
+        and lines[position + 1].split()[:1] == ["ALPHA"]
+    ):
+        blocks, _sections = _parse_real_combined_refined(path, lines)
+        return blocks
+    return _parse_synthetic_refined_polarizabilities(path, atom_labels, limit)
 
 
 REQUIRED_TOP_LEVEL = (
@@ -2068,12 +2321,17 @@ def _validate_polarizabilities(value: object, frequencies: Sequence[float]) -> N
                 ("components", "matrix"),
                 f"{atom_context}.spherical",
             )
-            if spherical["components"] != list(COMPONENTS_L3):
+            accepted_components = (
+                list(REAL_REFINED_COMPONENTS_L3), list(COMPONENTS_L3)
+            )
+            if spherical["components"] not in accepted_components:
                 raise ReferenceFormatError(
                     f"{label}: incomplete L3 component ordering"
                 )
             _validated_matrix(
-                spherical["matrix"], 16, f"{atom_context}.spherical.matrix"
+                spherical["matrix"],
+                len(spherical["components"]),
+                f"{atom_context}.spherical.matrix",
             )
             local = _validated_matrix(
                 atom["local_cartesian"], 3, f"{atom_context}.local_cartesian"
