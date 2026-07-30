@@ -117,15 +117,20 @@ def _make_camcasp_source_checkout(path, sentinel=b""):
     ).strip()
 
 
-def _make_attestable_camcasp_source(path, *, ignore_reference=False):
+def _make_attestable_camcasp_source(
+    path, *, ignore_reference=False, runcamcasp_text=None
+):
     bin_dir = path / "bin"
     archive_dir = path / "x86-64" / "gfortran"
     bin_dir.mkdir(parents=True)
     archive_dir.mkdir(parents=True)
     (path / "VERSION").write_text("CamCASP VERSION 7.2.2 patch 003\n")
     (bin_dir / "no_psi4").write_bytes(b"")
-    for driver in ("runcamcasp.py", "localize.py"):
-        _write_executable(bin_dir / driver, "#!/usr/bin/env bash\nexit 0\n")
+    _write_executable(
+        bin_dir / "runcamcasp.py",
+        runcamcasp_text or "#!/usr/bin/env bash\nexit 0\n",
+    )
+    _write_executable(bin_dir / "localize.py", "#!/usr/bin/env bash\nexit 0\n")
     for name in ("camcasp", "cluster", "process", "pfit", "casimir"):
         with gzip.open(archive_dir / f"{name}.gz", "wb") as handle:
             handle.write(f"#!/usr/bin/env bash\necho {name}\n".encode())
@@ -2249,6 +2254,8 @@ def test_dependency_free_stubbed_pipeline_requires_approval_before_json(tmp_path
     bin_dir = camcasp / "bin"
     bin_dir.mkdir(parents=True)
     calls = tmp_path / "calls.log"
+    runcamcasp_invocation = tmp_path / "runcamcasp-invocation.log"
+    absolute_clt_evidence = tmp_path / "absolute-clt-evidence.log"
 
     psi4_source = tmp_path / "psi4-source"
     psi4, psi4_commit = _make_psi4_checkout(psi4_source)
@@ -2287,18 +2294,34 @@ def test_dependency_free_stubbed_pipeline_requires_approval_before_json(tmp_path
 set -euo pipefail
 [[ ! -e "$CAMCASP/bin/no_psi4" ]] || exit 91
 [[ "$0" == "$CAMCASP/bin/runcamcasp.py" ]] || exit 92
-echo camcasp >>"$STUB_CALLS"
-"$PSI4_EXE" --stub-stage >/dev/null
 job_dir=""
+clt_file=""
 while (( $# )); do
-    if [[ "$1" == "--directory" ]]; then job_dir="$2"; shift 2; else shift; fi
+    case "$1" in
+        --directory) job_dir="$2"; shift 2 ;;
+        --clt) clt_file="$2"; shift 2 ;;
+        *) shift ;;
+    esac
 done
+[[ -n "$clt_file" && -f "$clt_file" ]] || exit 95
+printf 'cwd=%s\nclt=%s\n' "$(pwd -P)" "$clt_file" >"$STUB_RUNCAMCASP_INVOCATION"
 mkdir -p "$job_dir/OUT"
-printf 'generated\n' >"$job_dir/H2O.ornt"
-printf 'generated\n' >"$job_dir/H2O.prss"
-printf 'generated\n' >"$job_dir/H2O_casimir.prss"
-printf 'generated\n' >"$job_dir/H2O.sites"
-cat >"$job_dir/H2O.cks" <<'EOF'
+cp "$clt_file" "$job_dir/H2O.clt"
+cd "$job_dir"
+cat "$clt_file" >/dev/null
+cat >"$clt_file.clout" <<'EOF'
+AC options: type = GRAC
+functional PBE0
+kernel = ALDA+CHF
+EOF
+if [[ ! -f "$job_dir/H2O.clt.clout" ]]; then
+    cat H2O_A.in >/dev/null 2>&1 || exit 96
+fi
+printf 'generated\n' >H2O.ornt
+printf 'generated\n' >H2O.prss
+printf 'generated\n' >H2O_casimir.prss
+printf 'generated\n' >H2O.sites
+cat >H2O.cks <<'EOF'
 SET QUAD
  Type Gauss-Legendre
  Beta 0.5
@@ -2309,21 +2332,18 @@ BEGIN Polarizability
  Print pols for Orient
 END
 EOF
-cat >"$job_dir/H2O.clt.clout" <<'EOF'
-AC options: type = GRAC
-functional PBE0
-kernel = ALDA+CHF
-EOF
-cat >"$job_dir/H2O_A.in" <<'EOF'
+cat >H2O_A.in <<'EOF'
 symmetry c1
 no_com
 no_reorient
 EOF
-cat >"$job_dir/OUT/H2O_NL4_fmtB.pol" <<'EOF'
+echo camcasp >>"$STUB_CALLS"
+"$PSI4_EXE" --stub-stage >/dev/null
+cat >OUT/H2O_NL4_fmtB.pol <<'EOF'
 """
         + make_canonical_nl4_frequency_text()
         + """EOF
-printf 'point to point\n' >"$job_dir/OUT/H2O.p2p"
+printf 'point to point\n' >OUT/H2O.p2p
 """,
     )
 
@@ -2415,6 +2435,7 @@ PSI4_EXE="$PSI4_SOURCE_ROOT/build_camcasp/stage/bin/psi4"
 ORIENT_EXE="$4/x86-64/gfortran/exe/orient-5.0.10-ng"
 ORIENT_REF="$5"
 export STUB_CALLS="$6"
+export STUB_RUNCAMCASP_INVOCATION="$8"
 preflight
 bind_orient_checkout "$ORIENT_EXE"
 export PSI4_EXE
@@ -2427,6 +2448,26 @@ write_psi4_wrapper
 write_camcasp_runtime_attestation
 export_reference_environment
 write_inputs
+absolute_job="$REFERENCE_ROOT/work/absolute-clt-probe"
+set +e
+(
+    cd "$REFERENCE_ROOT/inputs"
+    "$CAMCASP/bin/runcamcasp.py" H2O \
+        --clt "$REFERENCE_ROOT/inputs/H2O.clt" \
+        --directory "$absolute_job"
+)
+absolute_rc=$?
+set -e
+[[ "$absolute_rc" -eq 96 ]]
+[[ -s "$REFERENCE_ROOT/inputs/H2O.clt.clout" ]]
+[[ ! -e "$absolute_job/H2O.clt.clout" ]]
+[[ ! -e "$absolute_job/H2O.cks" ]]
+[[ ! -e "$absolute_job/H2O_A.in" ]]
+[[ ! -e "$absolute_job/H2O_A.dat" ]]
+printf 'rc=%s\ninput_clout=yes\njob_cks=no\njob_psi4_inputs=no\n' \
+    "$absolute_rc" >"$9"
+rm -f "$REFERENCE_ROOT/inputs/H2O.clt.clout"
+rm -rf "$absolute_job"
 verify_camcasp_runtime_attestation
 run_camcasp
 attest_generated_protocol
@@ -2449,6 +2490,7 @@ build_reference_json
             "bash", "-c", command, "stub-pipeline", str(reference),
             str(camcasp), str(psi4_source), str(orient_source),
             orient_commit, str(calls), camcasp_commit,
+            str(runcamcasp_invocation), str(absolute_clt_evidence),
         ],
         cwd=ROOT,
         text=True,
@@ -2482,6 +2524,17 @@ build_reference_json
     assert calls.read_text().splitlines() == [
         "psi4", "camcasp", "psi4", "orient", "pfit", "casimir"
     ]
+    assert absolute_clt_evidence.read_text().splitlines() == [
+        "rc=96",
+        "input_clout=yes",
+        "job_cks=no",
+        "job_psi4_inputs=no",
+    ]
+    assert runcamcasp_invocation.read_text().splitlines() == [
+        f"cwd={(reference / 'inputs').resolve()}",
+        "clt=H2O.clt",
+    ]
+    assert not (reference / "inputs" / "H2O.clt.clout").exists()
     assert (reference / "logs" / "camcasp.log.sha256").is_file()
     assert (reference / "logs" / "localize-refine-dispersion.log.sha256").is_file()
     assert (reference / "atomic-polarizabilities.json.sha256").is_file()
@@ -2552,6 +2605,99 @@ build_reference_json
         "path": str(psi4.resolve()),
         "sha256": hashlib.sha256(psi4.read_bytes()).hexdigest(),
     }
+
+
+def test_run_camcasp_rejects_input_directory_clout(tmp_path):
+    reference = tmp_path / "reference"
+    inputs = reference / "inputs"
+    runtime_bin = reference / "tools" / "camcasp-runtime" / "bin"
+    inputs.mkdir(parents=True)
+    runtime_bin.mkdir(parents=True)
+    (inputs / "H2O.clt").write_text("Finish\n")
+    (inputs / "H2O.axes").write_text("Axes\nEnd\n")
+    runner = runtime_bin / "runcamcasp.py"
+    _write_executable(
+        runner,
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "[[ \"$(pwd -P)\" == \"$EXPECTED_INPUTS\" ]]\n"
+        "[[ \" $* \" == *\" --clt H2O.clt \"* ]]\n"
+        ": >H2O.clt.clout\n",
+    )
+    command = (
+        f'source "{SCRIPT}"; REFERENCE_ROOT="$1"; CAMCASP="$2"; '
+        'SCRATCH="$REFERENCE_ROOT/scratch/camcasp"; run_camcasp'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "stray-clout", str(reference), str(runtime_bin.parent)],
+        cwd=ROOT,
+        env={**os.environ, "EXPECTED_INPUTS": str(inputs.resolve())},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "unexpected input-directory CamCASP output" in result.stderr
+    assert (inputs / "H2O.clt.clout").is_file()
+    assert (reference / "logs" / "camcasp.log").is_file()
+    assert (reference / "logs" / "camcasp.log.sha256").is_file()
+
+
+def test_run_camcasp_subshell_preserves_distinctive_failure(tmp_path):
+    source = tmp_path / "camcasp-source"
+    commit = _make_attestable_camcasp_source(
+        source,
+        runcamcasp_text=(
+            "#!/usr/bin/env bash\n"
+            "echo distinctive-runcamcasp-failure\n"
+            "exit 73\n"
+        ),
+    )
+    reference = tmp_path / "reference"
+    inputs = reference / "inputs"
+    inputs.mkdir(parents=True)
+    (inputs / "H2O.clt").write_text("Finish\n")
+    (inputs / "H2O.axes").write_text("Axes\nEnd\n")
+    psi4 = tmp_path / "psi4"
+    _write_executable(psi4, "#!/usr/bin/env bash\necho 'Psi4 stub'\n")
+    command = f'''source "{SCRIPT}"
+REFERENCE_ROOT="$1"
+CAMCASP_SOURCE_ROOT="$2"
+CAMCASP_COMMIT="$3"
+CAMCASP="$REFERENCE_ROOT/tools/camcasp-runtime"
+PSI4_EXE="$4"
+SCRATCH="$REFERENCE_ROOT/scratch/camcasp"
+provision_camcasp
+write_psi4_wrapper
+write_camcasp_runtime_attestation
+verify_camcasp_runtime_attestation
+set +e
+run_camcasp
+rc=$?
+set -e
+exit "$rc"
+'''
+    result = subprocess.run(
+        [
+            "bash", "-c", command, "runcamcasp-failure", str(reference),
+            str(source), commit, str(psi4),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 73
+    log = reference / "logs" / "camcasp.log"
+    checksum = log.with_name(log.name + ".sha256")
+    assert "distinctive-runcamcasp-failure" in log.read_text()
+    assert checksum.is_file()
+    assert checksum.read_text().split()[0] == hashlib.sha256(log.read_bytes()).hexdigest()
+    job = reference / "work" / "H2O"
+    assert not (job / "H2O.clt.clout").exists()
+    assert not (job / "H2O.cks").exists()
+    assert not (job / "H2O_A.in").exists()
+    assert not (job / "H2O_A.dat").exists()
 
 
 def test_clean_room_removes_stale_publication_before_unapproved_gate(tmp_path):

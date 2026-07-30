@@ -851,19 +851,27 @@ declare -ag PSI4_INPUT_FILES=()
 run_camcasp() {
     CURRENT_STAGE="camcasp"
     local job_dir="$REFERENCE_ROOT/work/H2O"
+    local inputs_dir="$REFERENCE_ROOT/inputs"
     require_safe_generated_path "$job_dir"
     rm -rf "$job_dir"
-    run_logged camcasp "$REFERENCE_ROOT/logs/camcasp.log" \
-        "$CAMCASP/bin/runcamcasp.py" H2O \
-        --clt "$REFERENCE_ROOT/inputs/H2O.clt" \
-        --directory "$job_dir" \
-        --ifexists delete \
-        --scfcode psi4 \
-        --queue none \
-        --scratch "$SCRATCH" \
-        --cores "${CAMCASP_REFERENCE_CORES:-1}" \
-        --debug
-    cp "$REFERENCE_ROOT/inputs/H2O.axes" "$job_dir/H2O.axes"
+    (
+        cd "$inputs_dir"
+        run_logged camcasp "$REFERENCE_ROOT/logs/camcasp.log" \
+            "$CAMCASP/bin/runcamcasp.py" H2O \
+            --clt H2O.clt \
+            --directory "$job_dir" \
+            --ifexists delete \
+            --scfcode psi4 \
+            --queue none \
+            --scratch "$SCRATCH" \
+            --cores "${CAMCASP_REFERENCE_CORES:-1}" \
+            --debug
+    ) || return
+    [[ ! -e "$inputs_dir/H2O.clt.clout" ]] || {
+        fail "unexpected input-directory CamCASP output: $inputs_dir/H2O.clt.clout"
+        return
+    }
+    cp "$inputs_dir/H2O.axes" "$job_dir/H2O.axes"
 
     local generated
     for generated in H2O.cks H2O.clt.clout H2O.ornt H2O.prss \
