@@ -257,8 +257,9 @@ def _make_git_checkout(
         ["git", "-C", str(path), "config", "user.name", "Test"], check=True
     )
     (path / "README").write_text("orient\n")
+    (path / "VERSION").write_text("VERSION := 5.0\nPATCHLEVEL := 10\n")
     if tracked_candidate:
-        candidate = path / "x86-64" / "gfortran" / "exe" / "orient-5.0.11-ng"
+        candidate = path / "x86-64" / "gfortran" / "exe" / "orient-5.0.10-ng"
         candidate.parent.mkdir(parents=True)
         candidate.write_text(candidate_text)
         candidate.chmod(0o755)
@@ -267,6 +268,148 @@ def _make_git_checkout(
     return subprocess.check_output(
         ["git", "-C", str(path), "rev-parse", "HEAD"], text=True
     ).strip()
+
+
+def _make_pinned_orient_checkout(
+    path, *, malformed_version=False, produce_candidate=True
+):
+    exe_dir = path / "x86-64" / "gfortran" / "exe"
+    exe_dir.mkdir(parents=True)
+    version_text = (
+        "VERSION := malformed\nPATCHLEVEL := 10\n"
+        if malformed_version
+        else "VERSION := 5.0\nPATCHLEVEL := 10\n"
+    )
+    (path / "VERSION").write_text(version_text)
+    (path / "README").write_text("pinned Orient source\n")
+    (path / "bin").mkdir()
+    old = exe_dir / "orient-5.0.09-ng"
+    old.write_text("tracked old binary\n")
+    (path / "bin" / "orient").symlink_to(old)
+    (exe_dir / ".gitignore").write_text(
+        "*.o\n*.mod\norient\norient-5.0.10-ng\n"
+    )
+    recipe = (
+        "\tcp /bin/true $@\n"
+        if produce_candidate
+        else "\t@echo intentionally omitted product\n"
+    )
+    (path / "Makefile").write_text(
+        ".PHONY: FORCE\n"
+        "orient-5.0.10-ng: FORCE\n"
+        "\t@case \"$(MAKEFLAGS)\" in *-j*|*--jobs*) echo parallel build forbidden; exit 91;; esac\n"
+        "\t@test \"$(OPENGL)\" = no\n"
+        f"\t@test \"$(BASE)\" = \"{path}\"\n"
+        "\t@echo OPENGL=$(OPENGL)\n"
+        "\t@echo BASE=$(BASE)\n"
+        "\t@echo MAKEFLAGS=$(MAKEFLAGS)\n"
+        + recipe
+    )
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.name", "Test"], check=True
+    )
+    subprocess.run(["git", "-C", str(path), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "commit", "-qm", "pinned fixture"], check=True
+    )
+    commit = subprocess.check_output(
+        ["git", "-C", str(path), "rev-parse", "HEAD"], text=True
+    ).strip()
+    return commit, exe_dir / "orient-5.0.10-ng", old
+
+
+def test_provision_orient_builds_derived_version_serially(tmp_path):
+    checkout = tmp_path / "orient"
+    commit, candidate, old = _make_pinned_orient_checkout(checkout)
+    old_digest = hashlib.sha256(old.read_bytes()).hexdigest()
+    reference = tmp_path / "reference"
+    command = (
+        f'source "{SCRIPT}"; '
+        'REFERENCE_ROOT="$1"; ORIENT_REF="$2"; ORIENT_EXE="$3"; '
+        'provision_orient'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "orient-build", str(reference), commit, str(candidate)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert candidate.is_file() and os.access(candidate, os.X_OK)
+    assert hashlib.sha256(old.read_bytes()).hexdigest() == old_digest
+    subprocess.run(["git", "-C", str(checkout), "diff", "--exit-code"], check=True)
+    subprocess.run(
+        ["git", "-C", str(checkout), "diff", "--cached", "--exit-code"],
+        check=True,
+    )
+    build_log = reference / "logs" / "orient-build.log"
+    build_text = build_log.read_text()
+    assert "OPENGL=no" in build_text
+    assert f"BASE={checkout}" in build_text
+    assert "-j" not in build_text and "--jobs" not in build_text
+    for log_name in (
+        "orient-build.log", "orient-ldd.log", "orient-smoke.log",
+        "orient-executable.log",
+    ):
+        assert (reference / "logs" / f"{log_name}.sha256").is_file()
+    assert (reference / "logs" / "orient-executable.sha256").read_text().startswith(
+        hashlib.sha256(candidate.read_bytes()).hexdigest()
+    )
+
+
+def test_preflight_rejects_malformed_orient_version(tmp_path):
+    checkout = tmp_path / "orient"
+    commit, candidate, _ = _make_pinned_orient_checkout(
+        checkout, malformed_version=True
+    )
+    psi4_source = tmp_path / "psi4-source"
+    psi4, _ = _make_psi4_checkout(psi4_source)
+    command = (
+        f'source "{SCRIPT}"; '
+        'PSI4_SOURCE_ROOT="$1"; PSI4_EXE="$2"; '
+        'ORIENT_REF="$3"; ORIENT_EXE="$4"; preflight'
+    )
+    result = subprocess.run(
+        [
+            "bash", "-c", command, "orient-version", str(psi4_source),
+            str(psi4), commit, str(candidate),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "malformed Orient VERSION" in result.stderr
+
+
+def test_provision_orient_rejects_missing_build_product(tmp_path):
+    checkout = tmp_path / "orient"
+    commit, candidate, _ = _make_pinned_orient_checkout(
+        checkout, produce_candidate=False
+    )
+    reference = tmp_path / "reference"
+    command = (
+        f'source "{SCRIPT}"; '
+        'REFERENCE_ROOT="$1"; ORIENT_REF="$2"; ORIENT_EXE="$3"; '
+        'provision_orient'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "orient-product", str(reference), commit, str(candidate)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "missing built Orient artifact" in result.stderr
+    assert (reference / "logs" / "orient-build.log.sha256").is_file()
 
 
 def _make_psi4_checkout(path):
@@ -328,7 +471,7 @@ def test_verify_orient_checkout_rejects_dirty_checkout(tmp_path):
     checkout = tmp_path / "orient"
     commit = _make_git_checkout(checkout, tracked_candidate=True)
     (checkout / "README").write_text("dirty\n")
-    candidate = checkout / "x86-64" / "gfortran" / "exe" / "orient-5.0.11-ng"
+    candidate = checkout / "x86-64" / "gfortran" / "exe" / "orient-5.0.10-ng"
     command = (
         f'source "{SCRIPT}"; '
         'ORIENT_REF="$1"; verify_orient_checkout "$2" "$3"'
@@ -341,14 +484,14 @@ def test_verify_orient_checkout_rejects_dirty_checkout(tmp_path):
         check=False,
     )
     assert result.returncode != 0
-    assert "Orient checkout is not clean" in result.stderr
+    assert "Orient tracked source checkout is not clean" in result.stderr
 
 
 def test_verify_orient_checkout_rejects_unrelated_untracked_file(tmp_path):
     checkout = tmp_path / "orient"
     commit = _make_git_checkout(checkout, tracked_candidate=True)
     (checkout / "unrelated.tmp").write_text("untracked\n")
-    candidate = checkout / "x86-64" / "gfortran" / "exe" / "orient-5.0.11-ng"
+    candidate = checkout / "x86-64" / "gfortran" / "exe" / "orient-5.0.10-ng"
     command = (
         f'source "{SCRIPT}"; '
         'ORIENT_REF="$1"; verify_orient_checkout "$2" "$3"'
@@ -361,16 +504,12 @@ def test_verify_orient_checkout_rejects_unrelated_untracked_file(tmp_path):
         check=False,
     )
     assert result.returncode != 0
-    assert "Orient checkout is not clean" in result.stderr
+    assert "unexpected untracked Orient source artifact" in result.stderr
 
 
-def test_verify_orient_checkout_rejects_untracked_candidate(tmp_path):
+def test_verify_orient_checkout_rejects_older_tracked_binary(tmp_path):
     checkout = tmp_path / "orient"
-    commit = _make_git_checkout(checkout, tracked_candidate=False)
-    candidate = checkout / "x86-64" / "gfortran" / "exe" / "orient-5.0.11-ng"
-    candidate.parent.mkdir(parents=True)
-    candidate.write_text("#!/usr/bin/env bash\n")
-    candidate.chmod(0o755)
+    commit, _, candidate = _make_pinned_orient_checkout(checkout)
     command = (
         f'source "{SCRIPT}"; '
         'ORIENT_REF="$1"; verify_orient_checkout "$2" "$3"'
@@ -383,14 +522,13 @@ def test_verify_orient_checkout_rejects_untracked_candidate(tmp_path):
         check=False,
     )
     assert result.returncode != 0
-    assert "expected tracked Orient artifact" in result.stderr
+    assert "unexpected Orient artifact" in result.stderr
 
 
 def test_verify_orient_checkout_rejects_wrong_location(tmp_path):
     checkout = tmp_path / "orient"
     commit = _make_git_checkout(checkout, tracked_candidate=True)
     candidate = checkout / "README"
-    candidate.chmod(0o755)
     command = (
         f'source "{SCRIPT}"; '
         'ORIENT_REF="$1"; verify_orient_checkout "$2" "$3"'
@@ -409,7 +547,7 @@ def test_verify_orient_checkout_rejects_wrong_location(tmp_path):
 def test_verify_orient_checkout_rejects_mismatched_commit(tmp_path):
     checkout = tmp_path / "orient"
     _make_git_checkout(checkout, tracked_candidate=True)
-    candidate = checkout / "x86-64" / "gfortran" / "exe" / "orient-5.0.11-ng"
+    candidate = checkout / "x86-64" / "gfortran" / "exe" / "orient-5.0.10-ng"
     command = (
         f'source "{SCRIPT}"; '
         'ORIENT_REF="$1"; verify_orient_checkout "$2" "$3"'
@@ -426,7 +564,7 @@ def test_verify_orient_checkout_rejects_mismatched_commit(tmp_path):
 
 
 def test_provision_orient_rejects_override_outside_git(tmp_path):
-    candidate = tmp_path / "orient-5.0.11-ng"
+    candidate = tmp_path / "orient-5.0.10-ng"
     candidate.write_text("#!/usr/bin/env bash\n")
     candidate.chmod(0o755)
     command = (
@@ -1068,7 +1206,7 @@ def complete_document():
                 },
             },
             "orient": {
-                "version": "5.0.11-ng",
+                "version": "5.0.10-ng",
                 "commit": "d8d861098c8f548e2cf230c387c8431d9418650a",
                 "executable": _executable_record("orient", "6"),
             },
@@ -1761,7 +1899,7 @@ def test_dependency_free_stubbed_pipeline_requires_approval_before_json(tmp_path
         / "x86-64"
         / "gfortran"
         / "exe"
-        / "orient-5.0.11-ng"
+        / "orient-5.0.10-ng"
     )
     for name in ("pfit", "casimir"):
         executable = bin_dir / name
@@ -1888,7 +2026,7 @@ REFERENCE_ROOT="$1"
 CAMCASP="$2"
 PSI4_SOURCE_ROOT="$3"
 PSI4_EXE="$PSI4_SOURCE_ROOT/build_camcasp/stage/bin/psi4"
-ORIENT_EXE="$4/x86-64/gfortran/exe/orient-5.0.11-ng"
+ORIENT_EXE="$4/x86-64/gfortran/exe/orient-5.0.10-ng"
 ORIENT_REF="$5"
 export STUB_CALLS="$6"
 preflight
@@ -1976,6 +2114,7 @@ build_reference_json
         "path": str(p2p.resolve()),
         "sha256": hashlib.sha256(p2p.read_bytes()).hexdigest(),
     }
+    assert document["tools"]["orient"]["version"] == "5.0.10-ng"
     assert document["tools"]["orient"]["commit"] == orient_commit
     assert document["tools"]["orient"]["executable"] == {
         "path": str(orient.resolve()),

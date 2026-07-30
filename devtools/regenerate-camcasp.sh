@@ -150,6 +150,9 @@ preflight() {
     CAMCASP="$(realpath -m "$CAMCASP")"
     require_executable PSI4_EXE "$PSI4_EXE"
     verify_psi4_source_root "$PSI4_SOURCE_ROOT" "$PSI4_EXE" || return
+    if [[ -n "${ORIENT_EXE:-}" ]]; then
+        bind_orient_checkout "$ORIENT_EXE" || return
+    fi
 
     [[ "$LOCALIZATION_LIMIT" -eq 3 ]]
     [[ "$WSM_LIMIT" -eq 3 && "$WSM_LIMIT" -le "$LOCALIZATION_LIMIT" ]]
@@ -218,32 +221,88 @@ smoke_orient() {
     fi
 }
 
+read_orient_version() {
+    local checkout="$1"
+    local version_file="$checkout/VERSION"
+    local -a versions=() patchlevels=()
+    [[ -f "$version_file" ]] || {
+        fail "missing Orient VERSION: $version_file"
+        return
+    }
+    mapfile -t versions < <(
+        sed -nE 's/^[[:space:]]*VERSION[[:space:]]*(:=|=)?[[:space:]]*([0-9]+\.[0-9]+)[[:space:]]*$/\2/p' "$version_file"
+    )
+    mapfile -t patchlevels < <(
+        sed -nE 's/^[[:space:]]*PATCHLEVEL[[:space:]]*(:=|=)?[[:space:]]*([0-9]+)[[:space:]]*$/\2/p' "$version_file"
+    )
+    if (( ${#versions[@]} != 1 || ${#patchlevels[@]} != 1 )); then
+        fail "malformed Orient VERSION: $version_file"
+        return
+    fi
+    ORIENT_VERSION="${versions[0]}.${patchlevels[0]}-ng"
+    ORIENT_RELATIVE_EXE="x86-64/gfortran/exe/orient-$ORIENT_VERSION"
+}
+
 verify_orient_checkout() {
     local checkout="$1"
     local candidate="$2"
-    local expected="x86-64/gfortran/exe/orient-5.0.11-ng"
-    local status
+    local status entry state path
 
     [[ "$(git -C "$checkout" rev-parse HEAD)" == "$ORIENT_REF" ]] || {
         fail "Orient checkout is not pinned to $ORIENT_REF"
         return
     }
-    [[ "$(realpath -m "$candidate")" == "$(realpath -m "$checkout/$expected")" ]] || {
-        fail "unexpected Orient artifact: $candidate"
+    git -C "$checkout" diff --quiet || {
+        fail "Orient tracked source checkout is not clean: $checkout"
         return
     }
-    git -C "$checkout" ls-files --error-unmatch "$expected" >/dev/null 2>&1 || {
-        fail "expected tracked Orient artifact is missing: $expected"
+    git -C "$checkout" diff --cached --quiet || {
+        fail "Orient tracked source checkout index is not clean: $checkout"
+        return
+    }
+    read_orient_version "$checkout" || return
+    [[ "$(realpath -m "$candidate")" == "$(realpath -m "$checkout/$ORIENT_RELATIVE_EXE")" ]] || {
+        fail "unexpected Orient artifact: $candidate"
         return
     }
     status="$(git -C "$checkout" status --porcelain --untracked-files=all)" || {
         fail "could not inspect Orient checkout status: $checkout"
         return
     }
-    [[ -z "$status" ]] || {
-        fail "Orient checkout is not clean: $checkout"
-        return
-    }
+    while IFS= read -r entry; do
+        [[ -z "$entry" ]] && continue
+        state="${entry:0:2}"
+        path="${entry:3}"
+        if [[ "$state" != "??" ]]; then
+            fail "Orient tracked source checkout is not clean: $checkout"
+            return
+        fi
+        case "$path" in
+            "$ORIENT_RELATIVE_EXE"|x86-64/gfortran/exe/orient|*.o|*.mod) ;;
+            *)
+                fail "unexpected untracked Orient source artifact: $path"
+                return
+                ;;
+        esac
+    done <<<"$status"
+}
+
+remove_untracked_orient_products() {
+    local checkout="$1"
+    local candidate="$2"
+    local exe_dir="$checkout/x86-64/gfortran/exe"
+    local path relative
+    while IFS= read -r -d '' path; do
+        relative="${path#"$checkout"/}"
+        if ! git -C "$checkout" ls-files --error-unmatch "$relative" >/dev/null 2>&1; then
+            rm -f "$path"
+        fi
+    done < <(
+        find "$exe_dir" -maxdepth 1 \
+            \( -type f -o -type l \) \
+            \( -name '*.o' -o -name '*.mod' -o -name orient \
+               -o -path "$candidate" \) -print0
+    )
 }
 
 record_orient_executable() {
@@ -271,7 +330,7 @@ bind_orient_checkout() {
 provision_orient() {
     CURRENT_STAGE="provision-orient"
     local checkout="$REPO_ROOT/orient"
-    local candidate
+    local candidate target
 
     if [[ -n "${ORIENT_EXE:-}" ]]; then
         candidate="$(realpath -m "$ORIENT_EXE")"
@@ -281,10 +340,29 @@ provision_orient() {
         fi
         git -C "$checkout" fetch --tags origin
         git -C "$checkout" checkout --detach "$ORIENT_REF"
-        candidate="$checkout/x86-64/gfortran/exe/orient-5.0.11-ng"
+        read_orient_version "$checkout" || return
+        candidate="$checkout/$ORIENT_RELATIVE_EXE"
     fi
 
     bind_orient_checkout "$candidate" || return
+    if git -C "$ORIENT_SOURCE_ROOT" ls-files --error-unmatch \
+        "$ORIENT_RELATIVE_EXE" >/dev/null 2>&1; then
+        fail "derived Orient build artifact must not be tracked: $ORIENT_RELATIVE_EXE"
+        return
+    fi
+    remove_untracked_orient_products "$ORIENT_SOURCE_ROOT" "$candidate"
+    target="orient-$ORIENT_VERSION"
+    (
+        cd "$ORIENT_SOURCE_ROOT/x86-64/gfortran/exe"
+        run_logged orient-build "$REFERENCE_ROOT/logs/orient-build.log" \
+            make -f "$ORIENT_SOURCE_ROOT/Makefile" \
+                OPENGL=no BASE="$ORIENT_SOURCE_ROOT" "$target"
+    )
+    [[ -f "$candidate" && -x "$candidate" ]] || {
+        fail "missing built Orient artifact: $candidate"
+        return
+    }
+    verify_orient_checkout "$ORIENT_SOURCE_ROOT" "$candidate" || return
     require_executable ORIENT_EXE "$candidate"
     record_orient_executable "$candidate"
     if command -v ldd >/dev/null; then
@@ -554,6 +632,7 @@ write_manifest() {
         "${PSI4_INPUT_FILES[0]}" "${P2P_FILES[0]}" "$temp" <<'PY'
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -573,6 +652,18 @@ def record(path):
 
 def git_at(root, *args):
     return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+
+def orient_version(root):
+    text = (root / "VERSION").read_text()
+    version = re.findall(
+        r"^\s*VERSION\s*(?::=|=)?\s*([0-9]+\.[0-9]+)\s*$", text, re.MULTILINE
+    )
+    patch = re.findall(
+        r"^\s*PATCHLEVEL\s*(?::=|=)?\s*([0-9]+)\s*$", text, re.MULTILINE
+    )
+    if len(version) != 1 or len(patch) != 1:
+        raise ValueError(f"malformed Orient VERSION: {root / 'VERSION'}")
+    return f"{version[0]}.{patch[0]}-ng"
 
 job = reference / "work" / "H2O"
 inputs_dir = reference / "inputs"
@@ -599,7 +690,7 @@ document = {
             },
         },
         "orient": {
-            "version": "5.0.11-ng",
+            "version": orient_version(orient_source),
             "commit": git_at(orient_source, "rev-parse", "HEAD"),
             "executable": record(orient_exe),
         },
