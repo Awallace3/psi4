@@ -585,10 +585,71 @@ write_psi4_wrapper() {
 set -euo pipefail
 if [[ "\${1:-}" == "--version" ]]; then
     exec "$PSI4_EXE" --version
-elif (( \${3:-1} > 1 )); then
-    exec "$PSI4_EXE" -n "\$3" "\$1" "\$2"
+fi
+input="\${1:-}"
+output="\${2:-}"
+[[ -n "\$input" && -n "\$output" ]] || { echo "psi4.sh requires input and output paths" >&2; exit 64; }
+resolved_input="\$(realpath -e -- "\$input")" || { echo "psi4.sh input does not exist: \$input" >&2; exit 66; }
+python -P - "\$resolved_input" <<'PY'
+import os
+import re
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+lines = path.read_text().splitlines(keepends=True)
+starts = []
+for index, line in enumerate(lines):
+    stripped = line.strip()
+    if not stripped.startswith("#") and re.match(
+        r"^molecule(?:\s+\S+)?\s*\{\s*$", stripped, re.IGNORECASE
+    ):
+        starts.append(index)
+if len(starts) != 1:
+    raise SystemExit(f"psi4.sh requires exactly one molecule block, found {len(starts)}")
+start = starts[0]
+ends = [index for index in range(start + 1, len(lines)) if lines[index].strip() == "}"]
+if not ends:
+    raise SystemExit("psi4.sh molecule block is unterminated")
+end = ends[0]
+symmetries = []
+for index, line in enumerate(lines):
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        continue
+    match = re.match(r"^symmetry\s+(\S+)\s*$", stripped, re.IGNORECASE)
+    if match:
+        symmetries.append((index, match.group(1)))
+if len(symmetries) > 1:
+    raise SystemExit("psi4.sh rejects duplicate symmetry directives")
+if symmetries and symmetries[0][1].casefold() != "c1":
+    raise SystemExit(f"psi4.sh rejects conflicting symmetry {symmetries[0][1]!r}")
+if symmetries and not (start < symmetries[0][0] < end):
+    raise SystemExit("psi4.sh rejects symmetry outside the molecule block")
+if not symmetries:
+    lines.insert(start + 1, "  symmetry c1\n")
+    mode = stat.S_IMODE(path.stat().st_mode)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
+            handle.writelines(lines)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary_name, mode)
+        os.replace(temporary_name, path)
+    except BaseException:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+        raise
+PY
+if (( \${3:-1} > 1 )); then
+    exec "$PSI4_EXE" -n "\$3" "\$input" "\$output"
 else
-    exec "$PSI4_EXE" "\$1" "\$2"
+    exec "$PSI4_EXE" "\$input" "\$output"
 fi
 EOF
     chmod 0755 "$wrapper"
@@ -847,6 +908,7 @@ declare -ag NL4_FORMAT_A_FILES=()
 declare -ag NL4_FILES=()
 declare -ag P2P_FILES=()
 declare -ag PSI4_INPUT_FILES=()
+declare -ag PSI4_OUTPUT_FILES=()
 
 discover_camcasp_artifacts() {
     local job_dir="$1"
@@ -866,6 +928,9 @@ discover_camcasp_artifacts() {
     mapfile -t PSI4_INPUT_FILES < <(
         find "$job_dir" -maxdepth 2 -type f \
             \( -name 'H2O_A.in' -o -name 'H2O_A.dat' \) -print | sort
+    )
+    mapfile -t PSI4_OUTPUT_FILES < <(
+        find "$job_dir" -maxdepth 2 -type f -name 'H2O_A.out' -print | sort
     )
     (( ${#NL4_FORMAT_A_FILES[@]} == 1 )) || {
         fail "expected exactly one NL4 format-A polarizability file, found ${#NL4_FORMAT_A_FILES[@]}"
@@ -895,6 +960,14 @@ discover_camcasp_artifacts() {
         fail "expected exactly one generated Psi4 input, found ${#PSI4_INPUT_FILES[@]}"
         return
     }
+    (( ${#PSI4_OUTPUT_FILES[@]} == 1 )) || {
+        fail "expected exactly one generated Psi4 output, found ${#PSI4_OUTPUT_FILES[@]}"
+        return
+    }
+    [[ -s "${PSI4_OUTPUT_FILES[0]}" ]] || {
+        fail "generated Psi4 output is empty: ${PSI4_OUTPUT_FILES[0]}"
+        return
+    }
 }
 
 run_camcasp() {
@@ -914,6 +987,7 @@ run_camcasp() {
             --queue none \
             --scratch "$SCRATCH" \
             --cores "${CAMCASP_REFERENCE_CORES:-1}" \
+            --verbosity 1 \
             --debug
     ) || return
     [[ ! -e "$inputs_dir/H2O.clt.clout" ]] || {
@@ -934,14 +1008,15 @@ run_camcasp() {
 attest_generated_protocol() {
     CURRENT_STAGE="attest-protocol"
     local job_dir="$REFERENCE_ROOT/work/H2O"
-    (( ${#PSI4_INPUT_FILES[@]} == 1 )) ||
-        fail "generated Psi4 input cardinality was not established"
+    (( ${#PSI4_INPUT_FILES[@]} == 1 && ${#PSI4_OUTPUT_FILES[@]} == 1 )) ||
+        fail "generated Psi4 input/output cardinality was not established"
     run_logged attest-protocol "$REFERENCE_ROOT/logs/attest-protocol.log" \
         python -P "$REPO_ROOT/devtools/camcasp_reference.py" attest-protocol \
         --clt "$REFERENCE_ROOT/inputs/H2O.clt" \
         --cks "$job_dir/H2O.cks" \
-        --cluster-log "$job_dir/H2O.clt.clout" \
-        --psi4-input "${PSI4_INPUT_FILES[0]}"
+        --camcasp-log "$REFERENCE_ROOT/logs/camcasp.log" \
+        --psi4-input "${PSI4_INPUT_FILES[0]}" \
+        --psi4-output "${PSI4_OUTPUT_FILES[0]}"
 }
 
 checksum_job_files() {
@@ -1026,7 +1101,8 @@ write_manifest() {
     local manifest="$REFERENCE_ROOT/work/manifest.json"
     local temp="$manifest.tmp.$$"
     (( ${#NL4_FORMAT_A_FILES[@]} == 1 && ${#NL4_FILES[@]} == 1 &&
-       ${#P2P_FILES[@]} == 1 && ${#PSI4_INPUT_FILES[@]} == 1 )) ||
+       ${#P2P_FILES[@]} == 1 && ${#PSI4_INPUT_FILES[@]} == 1 &&
+       ${#PSI4_OUTPUT_FILES[@]} == 1 )) ||
         fail "source artifact cardinalities are incomplete"
     verify_orient_checkout "$ORIENT_SOURCE_ROOT" "$ORIENT_EXE" without-products || return
     validate_current_orient_products "$ORIENT_SOURCE_ROOT" manifest || return
@@ -1037,8 +1113,8 @@ write_manifest() {
         python -P - "$REPO_ROOT" "$SCRIPT_PATH" "$CAMCASP_SOURCE_ROOT" "$CAMCASP" \
         "$ORIENT_SOURCE_ROOT" "$ORIENT_EXE" \
         "$PSI4_SOURCE_ROOT" "$PSI4_EXE" "$REFERENCE_ROOT" \
-        "${PSI4_INPUT_FILES[0]}" "${P2P_FILES[0]}" \
-        "${NL4_FORMAT_A_FILES[0]}" "$temp" <<'PY'
+        "${PSI4_INPUT_FILES[0]}" "${PSI4_OUTPUT_FILES[0]}" \
+        "${P2P_FILES[0]}" "${NL4_FORMAT_A_FILES[0]}" "$temp" <<'PY'
 import hashlib
 import json
 import re
@@ -1048,7 +1124,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 (repo, generator, camcasp_source, camcasp, orient_source, orient_exe,
- psi4_source, psi4_exe, reference, psi4_input, p2p, nl4_format_a, output) = map(
+ psi4_source, psi4_exe, reference, psi4_input, psi4_output, p2p,
+ nl4_format_a, output) = map(
     Path, sys.argv[1:]
 )
 
@@ -1152,6 +1229,7 @@ document = {
         "cks": record(job / "H2O.cks"),
         "cluster_output": record(job / "H2O.clt.clout"),
         "psi4_input": record(psi4_input),
+        "psi4_output": record(psi4_output),
         "p2p": record(p2p),
         "nonlocal_pol_format_a": record(nl4_format_a),
         "pdef": record(job / "H2O.pdef"),

@@ -473,6 +473,9 @@ def test_psi4_wrapper_smoke_and_forwards_serial_and_parallel(tmp_path):
         "echo fake-psi4\n"
     )
     fake_psi4.chmod(0o755)
+    molecule = "molecule {\n  no_reorient\n  no_com\n  O 0 0 0\n}\n"
+    (tmp_path / "serial.in").write_text(molecule)
+    (tmp_path / "parallel.in").write_text(molecule)
     command = (
         f'source "{SCRIPT}"; '
         'CAMCASP="$1"; REFERENCE_ROOT="$2"; PSI4_EXE="$3"; '
@@ -490,13 +493,18 @@ def test_psi4_wrapper_smoke_and_forwards_serial_and_parallel(tmp_path):
             str(reference_root),
             str(fake_psi4),
         ],
-        cwd=ROOT,
+        cwd=tmp_path,
         env={**os.environ, "FAKE_ARGS_LOG": str(arguments)},
         text=True,
         capture_output=True,
         check=False,
     )
     assert result.returncode == 0, result.stderr
+    for name in ("serial.in", "parallel.in"):
+        text = (tmp_path / name).read_text()
+        assert text.count("symmetry c1") == 1
+        assert "no_com" in text
+        assert "no_reorient" in text
     assert arguments.read_text().splitlines() == [
         "--version",
         "serial.in serial.out",
@@ -505,6 +513,73 @@ def test_psi4_wrapper_smoke_and_forwards_serial_and_parallel(tmp_path):
     version_log = reference_root / "logs" / "psi4-version.log"
     assert "fake-psi4" in version_log.read_text()
     assert version_log.with_name("psi4-version.log.sha256").is_file()
+
+
+def test_psi4_wrapper_existing_c1_is_idempotent(tmp_path):
+    camcasp = tmp_path / "camcasp"
+    (camcasp / "bin").mkdir(parents=True)
+    fake = tmp_path / "psi4"
+    _write_executable(fake, "#!/usr/bin/env bash\nexit 0\n")
+    input_file = tmp_path / "input.in"
+    input_file.write_text(
+        "molecule {\n  symmetry c1\n  no_reorient\n  no_com\n  O 0 0 0\n}\n"
+    )
+    command = (
+        f'source "{SCRIPT}"; CAMCASP="$1"; REFERENCE_ROOT="$2"; '
+        'PSI4_EXE="$3"; write_psi4_wrapper; '
+        '"$CAMCASP/bin/psi4.sh" "$4" output.out; '
+        '"$CAMCASP/bin/psi4.sh" "$4" output.out'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "wrapper-idempotent", str(camcasp),
+         str(tmp_path / "reference"), str(fake), str(input_file)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert input_file.read_text().count("symmetry c1") == 1
+
+
+@pytest.mark.parametrize(
+    "symmetry_lines", ("  symmetry c2v\n", "  symmetry c1\n  symmetry c1\n")
+)
+def test_psi4_wrapper_rejects_conflicting_or_duplicate_symmetry(
+    tmp_path, symmetry_lines
+):
+    camcasp = tmp_path / "camcasp"
+    (camcasp / "bin").mkdir(parents=True)
+    fake = tmp_path / "psi4"
+    calls = tmp_path / "calls"
+    _write_executable(
+        fake,
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>\"$WRAPPER_CALLS\"\n",
+    )
+    input_file = tmp_path / "input.in"
+    original = (
+        "molecule {\n" + symmetry_lines
+        + "  no_reorient\n  no_com\n  O 0 0 0\n}\n"
+    )
+    input_file.write_text(original)
+    command = (
+        f'source "{SCRIPT}"; CAMCASP="$1"; REFERENCE_ROOT="$2"; '
+        'PSI4_EXE="$3"; write_psi4_wrapper; '
+        '"$CAMCASP/bin/psi4.sh" "$4" output.out'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "wrapper-reject", str(camcasp),
+         str(tmp_path / "reference"), str(fake), str(input_file)],
+        cwd=ROOT,
+        env={**os.environ, "WRAPPER_CALLS": str(calls)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "symmetry" in result.stderr.lower()
+    assert input_file.read_text() == original
+    assert calls.read_text().splitlines() == ["--version"]
 
 
 def _make_git_checkout(
@@ -789,8 +864,15 @@ def _make_psi4_checkout(path):
     psi4.parent.mkdir(parents=True)
     psi4.write_text(
         "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
         "echo psi4 >>\"$STUB_CALLS\"\n"
-        "echo 'stub Psi4 1.0'\n"
+        "if [[ \"${1:-}\" == --version ]]; then echo 'stub Psi4 1.0'; exit 0; fi\n"
+        "if [[ \"${1:-}\" == -n ]]; then shift 2; fi\n"
+        "input=\"$1\"; output=\"$2\"\n"
+        "[[ \"$(grep -Eic '^[[:space:]]*symmetry[[:space:]]+c1[[:space:]]*$' \"$input\")\" == 1 ]]\n"
+        "grep -Eiq '^[[:space:]]*basis[[:space:]]+aug-cc-pvtz[[:space:]]*$' \"$input\"\n"
+        "grep -Fq \"energy('PBE0'\" \"$input\"\n"
+        "printf 'Running in c1 symmetry.\\nMethod: PBE0\\n' >\"$output\"\n"
     )
     psi4.chmod(0o755)
     subprocess.run(["git", "init", "-q", str(path)], check=True)
@@ -1950,9 +2032,24 @@ Run-type properties
 End
 """
     cks = """\
+SET Global_data
+  XC-func PBE0
+END
 SET QUAD
   Type Gauss-Legendre
   Beta 0.5
+END
+SET NEW-PROP
+  Kernel ALDA
+END
+SET PROPAGATOR
+  Type CKS
+END
+SET NEW-PROP
+  Kernel ALDA
+END
+SET PROPAGATOR
+  Type CKS
 END
 BEGIN Polarizability
   Quad 10
@@ -1960,9 +2057,26 @@ BEGIN Polarizability
   Print pols for Orient
 END
 """
-    cluster_log = "AC options: type = GRAC\nfunctional PBE0\nkernel = ALDA+CHF\n"
-    psi4_input = "symmetry c1\nno_com\nno_reorient\n"
-    return clt, cks, cluster_log, psi4_input
+    camcasp_log = """\
+AC options: type = GRAC
+Basis: aug-cc-pvtz
+Run-type: properties
+SCFcode: psi4
+"""
+    psi4_input = """\
+molecule {
+  symmetry c1
+  no_com
+  no_reorient
+  O 0 0 0
+}
+set {
+  basis aug-cc-pvtz
+}
+energy, wfn = energy('PBE0', return_wfn=True)
+"""
+    psi4_output = "Running in c1 symmetry.\nMethod: PBE0\n"
+    return clt, cks, camcasp_log, psi4_input, psi4_output
 
 
 def test_generated_protocol_requires_explicit_canonical_settings():
@@ -2014,22 +2128,42 @@ def test_generated_protocol_rejects_conflicting_active_settings():
         (0, "Functional PBE0", "Functional PBE", "Functional"),
         (0, "Kernel ALDA+CHF", "Kernel ALDA", "Kernel"),
         (0, "Options Tests", "Options Production", "Options"),
+        (1, "XC-func PBE0", "XC-func PBE", "XC-func"),
         (1, "Type Gauss-Legendre", "Type Euler-Maclaurin", "Type"),
         (1, "Beta 0.5", "Beta 0.7", "Beta"),
+        (1, "Kernel ALDA", "Kernel CHF", "Kernel"),
+        (1, "Type CKS", "Type CHF", "PROPAGATOR"),
         (1, "Quad 10", "Quad 9", "Quad"),
         (1, "Rank 4", "Rank 3", "Rank"),
         (1, "Print pols for Orient", "Print pols for Molpro", "Print"),
         (2, "type = GRAC", "type = LB94", "AC options"),
-        (2, "functional PBE0", "functional PBE", "functional"),
-        (2, "kernel = ALDA+CHF", "kernel = ALDA", "kernel"),
+        (2, "Basis: aug-cc-pvtz", "Basis: cc-pvdz", "basis"),
+        (2, "Run-type: properties", "Run-type: energy", "Run-type"),
+        (2, "SCFcode: psi4", "SCFcode: dalton", "SCFcode"),
+        (3, "basis aug-cc-pvtz", "basis cc-pvdz", "basis"),
+        (3, "energy('PBE0'", "energy('PBE'", "energy"),
         (3, "symmetry c1", "symmetry c2v", "symmetry"),
         (3, "no_com", "com", "no_com"),
         (3, "no_reorient", "reorient", "no_reorient"),
+        (4, "c1 symmetry", "c2v symmetry", "symmetry"),
+        (4, "Method: PBE0", "Method: PBE", "PBE0"),
     )
     for text_index, old, new, expected in mutations:
         texts = list(canonical_generated_protocol_texts())
         texts[text_index] = texts[text_index].replace(old, new)
         _assert_protocol_rejected(texts, expected)
+
+
+@pytest.mark.parametrize("mode", ("duplicate", "comment-only"))
+def test_protocol_rejects_duplicate_or_comment_only_grac_report(mode):
+    texts = list(canonical_generated_protocol_texts())
+    if mode == "duplicate":
+        texts[2] += "AC options: type = GRAC\n"
+    else:
+        texts[2] = texts[2].replace(
+            "AC options: type = GRAC", "! AC options: type = GRAC"
+        )
+    _assert_protocol_rejected(texts, "AC options")
 
 
 def _refined_block_text(combined_text, index):
@@ -2331,6 +2465,34 @@ def test_discover_camcasp_artifacts_rejects_empty_nl4(tmp_path, empty_format):
     assert "empty" in result.stderr
 
 
+@pytest.mark.parametrize("mode", ("missing", "duplicate", "empty"))
+def test_discover_camcasp_artifacts_requires_unique_psi4_output(tmp_path, mode):
+    job = tmp_path / mode / "H2O"
+    output = job / "OUT"
+    output.mkdir(parents=True)
+    (output / "H2O_NL4_fmtA.pol").write_text("A\n")
+    (output / "H2O_NL4_fmtB.pol").write_text("B\n")
+    (output / "H2O.p2p").write_text("p2p\n")
+    (job / "H2O_A.in").write_text("input\n")
+    if mode == "duplicate":
+        nested = job / "nested"
+        nested.mkdir()
+        (job / "H2O_A.out").write_text("output\n")
+        (nested / "H2O_A.out").write_text("output\n")
+    elif mode == "empty":
+        (job / "H2O_A.out").write_text("")
+    command = f'source "{SCRIPT}"; discover_camcasp_artifacts "$1"'
+    result = subprocess.run(
+        ["bash", "-c", command, "discover-psi4-output", str(job)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "Psi4 output" in result.stderr
+
+
 def test_dependency_free_stubbed_pipeline_requires_approval_before_json(tmp_path):
     reference = tmp_path / "reference"
     camcasp = tmp_path / "camcasp-bin"
@@ -2380,13 +2542,17 @@ set -euo pipefail
 [[ "$0" == "$CAMCASP/bin/runcamcasp.py" ]] || exit 92
 job_dir=""
 clt_file=""
+verbosity=""
 while (( $# )); do
     case "$1" in
         --directory) job_dir="$2"; shift 2 ;;
         --clt) clt_file="$2"; shift 2 ;;
+        --verbosity) verbosity="$2"; shift 2 ;;
         *) shift ;;
     esac
 done
+[[ "$verbosity" == 1 ]] || exit 98
+printf 'basis type = aug-cc-pvtz\nruntype = properties\nscfcode = psi4\nAC options: type = GRAC, join = TANH, p1 = 0.0, p2 = 0.0\n'
 [[ -n "$clt_file" && -f "$clt_file" ]] || exit 95
 printf 'cwd=%s\nclt=%s\n' "$(pwd -P)" "$clt_file" >"$STUB_RUNCAMCASP_INVOCATION"
 mkdir -p "$job_dir/OUT"
@@ -2397,9 +2563,7 @@ if grep -Eiq '^[[:space:]]*(no[[:space:]]+)?localization[[:space:]]*$' H2O.clt; 
     exit 97
 fi
 cat >"$clt_file.clout" <<'EOF'
-AC options: type = GRAC
-functional PBE0
-kernel = ALDA+CHF
+CLUSTER completed canonical H2O setup
 EOF
 if [[ ! -f "$job_dir/H2O.clt.clout" ]]; then
     cat H2O_A.in >/dev/null 2>&1 || exit 96
@@ -2409,9 +2573,24 @@ printf 'generated\n' >H2O.prss
 printf 'generated\n' >H2O_casimir.prss
 printf 'generated\n' >H2O.sites
 cat >H2O.cks <<'EOF'
+SET Global_data
+ XC-func PBE0
+END
 SET QUAD
  Type Gauss-Legendre
  Beta 0.5
+END
+SET NEW-PROP
+ Kernel ALDA
+END
+SET PROPAGATOR
+ Type CKS
+END
+SET NEW-PROP
+ Kernel ALDA
+END
+SET PROPAGATOR
+ Type CKS
 END
 BEGIN Polarizability
  Quad 10
@@ -2420,12 +2599,18 @@ BEGIN Polarizability
 END
 EOF
 cat >H2O_A.in <<'EOF'
-symmetry c1
-no_com
-no_reorient
+molecule {
+  no_reorient
+  no_com
+  O 0 0 0
+}
+set {
+  basis aug-cc-pvtz
+}
+energy, wfn = energy('PBE0', return_wfn=True)
 EOF
 echo camcasp >>"$STUB_CALLS"
-"$PSI4_EXE" --stub-stage >/dev/null
+"$CAMCASP/bin/psi4.sh" H2O_A.in H2O_A.out
 printf 'format A polarizability\n' >OUT/H2O_NL4_fmtA.pol
 cat >OUT/H2O_NL4_fmtB.pol <<'EOF'
 """
@@ -2552,7 +2737,8 @@ set +e
     cd "$REFERENCE_ROOT/inputs"
     "$CAMCASP/bin/runcamcasp.py" H2O \
         --clt "$REFERENCE_ROOT/inputs/H2O.clt" \
-        --directory "$absolute_job"
+        --directory "$absolute_job" \
+        --verbosity 1
 )
 absolute_rc=$?
 set -e
@@ -2636,7 +2822,13 @@ build_reference_json
         "clt=H2O.clt",
     ]
     assert not (reference / "inputs" / "H2O.clt.clout").exists()
-    assert (reference / "logs" / "camcasp.log.sha256").is_file()
+    camcasp_log = reference / "logs" / "camcasp.log"
+    assert camcasp_log.with_name("camcasp.log.sha256").is_file()
+    assert camcasp_log.read_text().count("AC options: type = GRAC") == 1
+    assert "basis type = aug-cc-pvtz" in camcasp_log.read_text()
+    assert "runtype = properties" in camcasp_log.read_text()
+    assert "scfcode = psi4" in camcasp_log.read_text()
+    assert "AC options" not in (reference / "work" / "H2O" / "H2O.clt.clout").read_text()
     assert (reference / "logs" / "localize-refine-dispersion.log.sha256").is_file()
     assert (reference / "atomic-polarizabilities.json.sha256").is_file()
     job_dir = reference / "work" / "H2O"
@@ -2647,6 +2839,7 @@ build_reference_json
         job_dir / "H2O.ornt",
         job_dir / "H2O.cks",
         job_dir / "H2O_A.in",
+        job_dir / "H2O_A.out",
         job_dir / "H2O_ref_wt4_L3_010.pol",
     ):
         assert representative.with_name(representative.name + ".sha256").is_file()
@@ -2694,6 +2887,26 @@ build_reference_json
     assert document["sources"]["p2p"] == {
         "path": str(p2p.resolve()),
         "sha256": hashlib.sha256(p2p.read_bytes()).hexdigest(),
+    }
+    psi4_input = job_dir / "H2O_A.in"
+    psi4_output = job_dir / "H2O_A.out"
+    assert psi4_input.read_text().count("symmetry c1") == 1
+    assert "no_com" in psi4_input.read_text()
+    assert "no_reorient" in psi4_input.read_text()
+    assert "Running in c1 symmetry." in psi4_output.read_text()
+    assert "PBE0" in psi4_output.read_text()
+    assert document["sources"]["psi4_input"] == {
+        "path": str(psi4_input.resolve()),
+        "sha256": hashlib.sha256(psi4_input.read_bytes()).hexdigest(),
+    }
+    assert document["sources"]["psi4_output"] == {
+        "path": str(psi4_output.resolve()),
+        "sha256": hashlib.sha256(psi4_output.read_bytes()).hexdigest(),
+    }
+    cluster_output = job_dir / "H2O.clt.clout"
+    assert document["sources"]["cluster_output"] == {
+        "path": str(cluster_output.resolve()),
+        "sha256": hashlib.sha256(cluster_output.read_bytes()).hexdigest(),
     }
     format_a = job_dir / "OUT" / "H2O_NL4_fmtA.pol"
     format_b = job_dir / "OUT" / "H2O_NL4_fmtB.pol"

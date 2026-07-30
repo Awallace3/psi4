@@ -456,6 +456,17 @@ def _parse_cks_blocks(text: str) -> list[tuple[str, list[str]]]:
 
 def _validate_cks_protocol(text: str) -> None:
     blocks = _parse_cks_blocks(text)
+    global_blocks = [lines for name, lines in blocks if name == "set global_data"]
+    if len(global_blocks) != 1:
+        raise ReferenceFormatError(
+            "H2O.cks: expected exactly one active SET Global_data section"
+        )
+    xc_lines = [
+        line for line in global_blocks[0] if line.casefold().startswith("xc-func ")
+    ]
+    _require_exact_directive(
+        xc_lines, "XC-func PBE0", "H2O.cks SET Global_data", "XC-func"
+    )
     quad_blocks = [lines for name, lines in blocks if name == "set quad"]
     if len(quad_blocks) != 1:
         raise ReferenceFormatError(
@@ -470,6 +481,26 @@ def _validate_cks_protocol(text: str) -> None:
             observed, expected, "H2O.cks SET QUAD", expected.split()[0]
         )
 
+    kernel_blocks = [lines for name, lines in blocks if name == "set new-prop"]
+    if len(kernel_blocks) != 2:
+        raise ReferenceFormatError(
+            "H2O.cks: expected exactly two active SET NEW-PROP sections"
+        )
+    for index, lines in enumerate(kernel_blocks, 1):
+        kernels = [line for line in lines if line.split()[0].casefold() == "kernel"]
+        _require_exact_directive(
+            kernels, "Kernel ALDA", f"H2O.cks NEW-PROP {index}", "Kernel"
+        )
+    propagator_blocks = [lines for name, lines in blocks if name == "set propagator"]
+    if len(propagator_blocks) != 2:
+        raise ReferenceFormatError(
+            "H2O.cks: expected exactly two active SET PROPAGATOR sections"
+        )
+    for index, lines in enumerate(propagator_blocks, 1):
+        types = [line for line in lines if line.split()[0].casefold() == "type"]
+        _require_exact_directive(
+            types, "Type CKS", f"H2O.cks PROPAGATOR {index}", "Type"
+        )
     polar_blocks = [
         lines for name, lines in blocks if name == "begin polarizability"
     ]
@@ -502,7 +533,9 @@ def _validate_cks_protocol(text: str) -> None:
 
 def _report_value(line: str, label_pattern: str) -> str | None:
     match = re.match(
-        rf"{label_pattern}\s*(?:=|:)?\s*(\S+)\s*$", line, flags=re.IGNORECASE
+        rf"{label_pattern}\s*(?:=|:)?\s*([^\s,]+)(?:\s*,.*)?\s*$",
+        line,
+        flags=re.IGNORECASE,
     )
     return None if match is None else match.group(1)
 
@@ -511,55 +544,90 @@ def _require_report_value(
     lines: Sequence[str], label_pattern: str, expected: str, name: str
 ) -> None:
     candidates = [
-        value
-        for line in lines
+        value for line in lines
         if (value := _report_value(line, label_pattern)) is not None
     ]
     if len(candidates) != 1:
         raise ReferenceFormatError(
-            f"cluster output: expected exactly one active {name} report, "
+            f"CamCASP log: expected exactly one active {name} report, "
             f"found {len(candidates)}"
         )
     if candidates[0].casefold() != expected.casefold():
         raise ReferenceFormatError(
-            f"cluster output: conflicting {name} value {candidates[0]!r}; "
+            f"CamCASP log: conflicting {name} value {candidates[0]!r}; "
             f"expected {expected!r}"
         )
 
 
-def _validate_cluster_report(text: str) -> None:
+def _validate_camcasp_report(text: str) -> None:
     lines = [line for _number, line in _active_lines(text)]
     _require_report_value(lines, r"AC\s+options\s*:\s*type", "GRAC", "AC options")
-    _require_report_value(lines, r"functional", "PBE0", "functional")
-    _require_report_value(lines, r"kernel", "ALDA+CHF", "kernel")
+    _require_report_value(lines, r"Basis(?:\s+type)?", "aug-cc-pvtz", "basis")
+    _require_report_value(lines, r"Run[-\s]*type", "properties", "run-type")
+    _require_report_value(lines, r"SCF[-\s]*code", "psi4", "scfcode")
 
 
 def _validate_psi4_orientation(text: str) -> None:
     lines = [" ".join(line.split()) for _number, line in _active_lines(text)]
+    molecule_headers = [
+        line for line in lines
+        if re.match(r"^molecule(?:\s+\S+)?\s*\{$", line, re.IGNORECASE)
+    ]
+    if len(molecule_headers) != 1:
+        raise ReferenceFormatError("generated Psi4 input: expected exactly one molecule block")
     symmetry = [line for line in lines if line.split()[0].casefold() == "symmetry"]
-    _require_exact_directive(
-        symmetry, "symmetry c1", "generated Psi4 input", "symmetry"
-    )
+    _require_exact_directive(symmetry, "symmetry c1", "generated Psi4 input", "symmetry")
     for canonical, contradictory in (("no_com", "com"), ("no_reorient", "reorient")):
         observed = [line for line in lines if line.split()[0].casefold() == canonical]
         if any(line.split()[0].casefold() == contradictory for line in lines):
             raise ReferenceFormatError(
-                "generated Psi4 input: contradictory "
-                f"{contradictory} and {canonical} controls"
+                "generated Psi4 input: contradictory " f"{contradictory} and {canonical} controls"
             )
         _require_exact_directive(observed, canonical, "generated Psi4 input", canonical)
+    basis = [line for line in lines if line.split()[0].casefold() == "basis"]
+    _require_exact_directive(basis, "basis aug-cc-pvtz", "generated Psi4 input", "basis")
+    energy_methods = []
+    for line in lines:
+        match = re.search(r"\benergy\s*\(\s*['\"]([^'\"]+)['\"]", line, re.IGNORECASE)
+        if match:
+            energy_methods.append(match.group(1))
+    if len(energy_methods) != 1:
+        raise ReferenceFormatError("generated Psi4 input: expected exactly one active energy call")
+    if energy_methods[0].casefold() != "pbe0":
+        raise ReferenceFormatError(
+            f"generated Psi4 input: conflicting energy method {energy_methods[0]!r}; expected 'PBE0'"
+        )
+
+
+def _validate_psi4_output(text: str) -> None:
+    lines = [" ".join(line.split()) for _number, line in _active_lines(text)]
+    symmetries = []
+    for line in lines:
+        match = re.search(r"\bRunning in\s+(\S+)\s+symmetry\.?$", line, re.IGNORECASE)
+        if match:
+            symmetries.append(match.group(1).rstrip("."))
+    if len(symmetries) != 1:
+        raise ReferenceFormatError("Psi4 output: expected exactly one running-symmetry report")
+    if symmetries[0].casefold() != "c1":
+        raise ReferenceFormatError(
+            f"Psi4 output: conflicting symmetry {symmetries[0]!r}; expected 'c1'"
+        )
+    if not any(re.search(r"\bPBE0\b", line, re.IGNORECASE) for line in lines):
+        raise ReferenceFormatError("Psi4 output: missing PBE0 method report")
 
 
 def validate_generated_protocol(
     clt_text: str,
     cks_text: str,
-    cluster_log_text: str,
+    camcasp_log_text: str,
     psi4_input_text: str,
+    psi4_output_text: str,
 ) -> None:
     _validate_clt_protocol(clt_text)
     _validate_cks_protocol(cks_text)
-    _validate_cluster_report(cluster_log_text)
+    _validate_camcasp_report(camcasp_log_text)
     _validate_psi4_orientation(psi4_input_text)
+    _validate_psi4_output(psi4_output_text)
 
 
 def _require_terminal_finished(path: Path) -> None:
@@ -1628,8 +1696,9 @@ def _build_parser() -> argparse.ArgumentParser:
     attest = subparsers.add_parser("attest-protocol")
     attest.add_argument("--clt", type=Path, required=True)
     attest.add_argument("--cks", type=Path, required=True)
-    attest.add_argument("--cluster-log", type=Path, required=True)
+    attest.add_argument("--camcasp-log", type=Path, required=True)
     attest.add_argument("--psi4-input", type=Path, required=True)
+    attest.add_argument("--psi4-output", type=Path, required=True)
 
     build = subparsers.add_parser("build")
     build.add_argument("--manifest", type=Path, required=True)
@@ -1652,8 +1721,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             validate_generated_protocol(
                 arguments.clt.read_text(),
                 arguments.cks.read_text(),
-                arguments.cluster_log.read_text(errors="replace"),
+                arguments.camcasp_log.read_text(errors="replace"),
                 arguments.psi4_input.read_text(),
+                arguments.psi4_output.read_text(errors="replace"),
             )
         elif arguments.command == "build":
             document = build_reference_document(
