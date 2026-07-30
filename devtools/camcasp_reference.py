@@ -622,7 +622,7 @@ def _validate_psi4_output(text: str) -> None:
             "Psi4 output: expected exactly one active Composite Functional report, "
             f"found {len(functionals)}"
         )
-    if functionals[0].casefold() != "pbe0":
+    if functionals[0] != "PBE0":
         raise ReferenceFormatError(
             "Psi4 output: conflicting Composite Functional "
             f"{functionals[0]!r}; expected 'PBE0'"

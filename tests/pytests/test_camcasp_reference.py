@@ -2216,16 +2216,29 @@ def test_protocol_rejects_duplicate_or_comment_only_grac_report(mode):
     _assert_protocol_rejected(texts, "AC options")
 
 
-@pytest.mark.parametrize("mode", ("duplicate", "comment-only", "unrelated-token"))
+@pytest.mark.parametrize(
+    "mode", ("duplicate", "conflicting", "comment-only", "unrelated-token")
+)
 def test_protocol_requires_one_active_composite_functional_report(mode):
     texts = list(canonical_generated_protocol_texts())
     report = "    => Composite Functional: PBE0 <="
     if mode == "duplicate":
         texts[4] += report + "\n"
+    elif mode == "conflicting":
+        texts[4] += "    => Composite Functional: PBE <=\n"
     elif mode == "comment-only":
         texts[4] = texts[4].replace(report, "# " + report)
     else:
         texts[4] = texts[4].replace(report, "Unrelated PBE0 token")
+    _assert_protocol_rejected(texts, "Composite Functional")
+
+
+@pytest.mark.parametrize("functional", ("pbe0", "Pbe0"))
+def test_protocol_requires_exact_pbe0_functional_case(functional):
+    texts = list(canonical_generated_protocol_texts())
+    texts[4] = texts[4].replace(
+        "Composite Functional: PBE0", f"Composite Functional: {functional}"
+    )
     _assert_protocol_rejected(texts, "Composite Functional")
 
 
