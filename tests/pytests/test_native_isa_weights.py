@@ -134,6 +134,18 @@ def test_overlap_uses_dedicated_inner_rule_plus_analytic_tail_and_refines():
     assert errors[2] < 2.0e-13
 
 
+def test_overlap_first_activation_handles_old_raw_and_new_fitted_tail():
+    join = 1.5
+    nodes = [0.0, 0.3, 0.7, 1.1, join, 2.0, 3.0]
+    logs = [-radius for radius in nodes]
+    result = psi4.core._atomic_polarizability_test_isa_overlap(
+        nodes, logs, 0.0, 0.0,
+        nodes, logs, 1.0, 0.0,
+        join, 32,
+    )
+    assert result["overlap_residual"] < 2.0e-10
+
+
 def test_far_field_distinct_analytic_tails_do_not_collapse_to_equal_floor():
     probabilities = psi4.core._atomic_polarizability_test_isa_tail_probabilities(
         [0.0, 0.0], [1.0, 1.002], [1000.0, 1000.0]

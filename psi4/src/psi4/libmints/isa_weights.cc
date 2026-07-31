@@ -318,40 +318,61 @@ long double exponential_overlap_tail(double log_amplitude, double exponent, doub
            std::exp(static_cast<long double>(log_amplitude) - beta * r0) * polynomial;
 }
 
-double normalized_overlap(const Profile& first, const Profile& second, const Quadrature& radial,
-                          std::size_t inner_integration_points) {
-    long double cross = 0.0L, norm_first = 0.0L, norm_second = 0.0L;
-    const bool first_tail = first.has_tail;
-    const bool second_tail = second.has_tail;
-    if (first_tail != second_tail)
-        throw PSIEXCEPTION("ISA: overlap comparison requires either two fitted tails or neither");
-    const bool analytic_tail = first_tail && second_tail;
-    if (analytic_tail && first.tail_join != second.tail_join)
-        throw PSIEXCEPTION("ISA: overlap comparison tail joins are inconsistent");
-
-    // Once tails are active, the inner overlap is a dedicated Gauss-Legendre
-    // integral on [0, r0]. Never filter the mapped [0, infinity) rule: doing so
-    // introduces a moving discontinuity as its nodes cross r0 under refinement.
-    const Quadrature inner = analytic_tail
-                                 ? gauss_legendre(inner_integration_points, 0.0, first.tail_join)
-                                 : radial;
-    const std::size_t begin = analytic_tail ? 0 : 1;  // mapped radial carries an explicit zero-weight origin
-    for (std::size_t i = begin; i < inner.nodes.size(); ++i) {
-        const long double radius = inner.nodes[i];
-        const long double measure = 4.0L * static_cast<long double>(kPi) * radius * radius * inner.weights[i];
-        const long double a = std::exp(static_cast<long double>(first.eval(inner.nodes[i])));
-        const long double b = std::exp(static_cast<long double>(second.eval(inner.nodes[i])));
-        cross += measure * a * b;
-        norm_first += measure * a * a;
-        norm_second += measure * b * b;
+double normalized_overlap(const Profile& first_input, const Profile& second_input,
+                          const Quadrature& radial, double radial_scale, double default_tail_join,
+                          std::size_t inner_integration_points, bool complete_missing_tails) {
+    Profile first = first_input;
+    Profile second = second_input;
+    if (complete_missing_tails) {
+        // At first tail activation the old profile is still raw while the new
+        // profile has a fitted tail. Fit a comparison-only tail to the old
+        // profile so both functions have their own continuous piecewise form.
+        if (!first.has_tail) fit_tail(first, radial, radial_scale, default_tail_join);
+        if (!second.has_tail) fit_tail(second, radial, radial_scale, default_tail_join);
     }
-    if (analytic_tail) {
+    const bool analytic_tail = first.has_tail && second.has_tail;
+    long double cross = 0.0L, norm_first = 0.0L, norm_second = 0.0L;
+    if (!analytic_tail) {
+        // Before activation, both profiles are raw and use the complete mapped
+        // rule. Canonical convergence cannot be declared until tails activate.
+        for (std::size_t i = 1; i < radial.nodes.size(); ++i) {
+            const long double radius = radial.nodes[i];
+            const long double measure = 4.0L * static_cast<long double>(kPi) * radius * radius * radial.weights[i];
+            const long double a = std::exp(static_cast<long double>(first.eval(radial.nodes[i])));
+            const long double b = std::exp(static_cast<long double>(second.eval(radial.nodes[i])));
+            cross += measure * a * b;
+            norm_first += measure * a * a;
+            norm_second += measure * b * b;
+        }
+    } else {
+        // Integrate every inner piece on its exact interval. This handles equal
+        // or distinct join radii and mixed old/new tail status without ever
+        // filtering a quadrature constructed for [0, infinity).
+        std::vector<double> boundaries{0.0, first.tail_join, second.tail_join};
+        std::sort(boundaries.begin(), boundaries.end());
+        boundaries.erase(std::unique(boundaries.begin(), boundaries.end()), boundaries.end());
+        for (std::size_t interval = 0; interval + 1 < boundaries.size(); ++interval) {
+            if (boundaries[interval + 1] <= boundaries[interval]) continue;
+            const auto inner = gauss_legendre(inner_integration_points, boundaries[interval],
+                                              boundaries[interval + 1]);
+            for (std::size_t i = 0; i < inner.nodes.size(); ++i) {
+                const long double radius = inner.nodes[i];
+                const long double measure =
+                    4.0L * static_cast<long double>(kPi) * radius * radius * inner.weights[i];
+                const long double a = std::exp(static_cast<long double>(first.eval(inner.nodes[i])));
+                const long double b = std::exp(static_cast<long double>(second.eval(inner.nodes[i])));
+                cross += measure * a * b;
+                norm_first += measure * a * a;
+                norm_second += measure * b * b;
+            }
+        }
+        const double outer_join = boundaries.back();
         cross += exponential_overlap_tail(first.tail_log_amplitude + second.tail_log_amplitude,
-                                           first.tail_alpha + second.tail_alpha, first.tail_join);
+                                           first.tail_alpha + second.tail_alpha, outer_join);
         norm_first += exponential_overlap_tail(2.0 * first.tail_log_amplitude,
-                                                2.0 * first.tail_alpha, first.tail_join);
+                                                2.0 * first.tail_alpha, outer_join);
         norm_second += exponential_overlap_tail(2.0 * second.tail_log_amplitude,
-                                                 2.0 * second.tail_alpha, second.tail_join);
+                                                 2.0 * second.tail_alpha, outer_join);
     }
     if (!(cross > 0.0L) || !(norm_first > 0.0L) || !(norm_second > 0.0L))
         throw PSIEXCEPTION("ISA: normalized radial overlap is undefined");
@@ -539,7 +560,8 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
         for (std::size_t site = 0; site < nsite; ++site)
             provisional_residual = std::max(
                 provisional_residual,
-                normalized_overlap(profiles[site], updated[site], radial[site], options.radial_points()));
+                normalized_overlap(profiles[site], updated[site], radial[site], scales[site], joins[site],
+                                   options.radial_points(), false));
         tail_active = tail_active || iteration + 1 >= options.tail_activation_iteration() ||
                       provisional_residual <= options.tail_activation_convergence();
         if (tail_active) {
@@ -564,10 +586,9 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
 
         diagnostics.max_overlap_residual = 0.0;
         for (std::size_t site = 0; site < nsite; ++site) {
-            const double residual = profiles[site].has_tail != updated[site].has_tail
-                                        ? 1.0
-                                        : normalized_overlap(profiles[site], updated[site], radial[site],
-                                                             options.radial_points());
+            const double residual = normalized_overlap(
+                profiles[site], updated[site], radial[site], scales[site], joins[site],
+                options.radial_points(), tail_active);
             diagnostics.max_overlap_residual = std::max(diagnostics.max_overlap_residual, residual);
         }
 
@@ -1031,17 +1052,18 @@ ISAOverlapTestResult test_isa_overlap(
     double second_tail_alpha, double second_tail_log_amplitude,
     double tail_join, std::size_t integration_points) {
     Profile first(first_nodes, first_logs);
-    first.has_tail = true;
+    first.has_tail = first_tail_alpha > 0.0;
     first.tail_join = tail_join;
     first.tail_alpha = first_tail_alpha;
     first.tail_log_amplitude = first_tail_log_amplitude;
     Profile second(second_nodes, second_logs);
-    second.has_tail = true;
+    second.has_tail = second_tail_alpha > 0.0;
     second.tail_join = tail_join;
     second.tail_alpha = second_tail_alpha;
     second.tail_log_amplitude = second_tail_log_amplitude;
     const auto unused_mapped_rule = mapped_radial(std::max<std::size_t>(4, integration_points), 1.0);
-    return {normalized_overlap(first, second, unused_mapped_rule, integration_points)};
+    return {normalized_overlap(first, second, unused_mapped_rule, 1.0, tail_join,
+                               integration_points, true)};
 }
 
 std::vector<double> test_isa_tail_probabilities(const std::vector<double>& tail_log_amplitudes,
