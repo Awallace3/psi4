@@ -161,6 +161,107 @@ def test_tensor_algebra_rejects_asymmetry_and_nonfinite_values():
         )
 
 
+def _working_l3_matrix():
+    return [[0.0] * 16 for _ in range(16)]
+
+
+def _lw_localize(positions, values, bonds, tolerance=1.0e-9):
+    return psi4.core._atomic_polarizability_localize_lw(
+        _matrix(positions), [_matrix(block) for block in values], bonds, tolerance
+    )
+
+
+def test_lw_graph_operator_is_symmetric_with_one_null_mode_for_connected_chain():
+    operator, pseudoinverse, eigenvalues = psi4.core._atomic_polarizability_lw_graph_math(
+        3, [(0, 1), (1, 2)]
+    )
+    assert [operator.get(i, j) for i in range(3) for j in range(3)] == [
+        -1.0, 1.0, 0.0, 1.0, -2.0, 1.0, 0.0, 1.0, -1.0
+    ]
+    assert all(operator.get(i, j) == operator.get(j, i) for i in range(3) for j in range(3))
+    assert all(sum(operator.get(i, j) for j in range(3)) == 0.0 for i in range(3))
+    assert sum(abs(value) < 1.0e-12 for value in eigenvalues) == 1
+    assert [
+        sum(operator.get(i, k) * pseudoinverse.get(k, j) for k in range(3))
+        for i in range(3) for j in range(3)
+    ] == pytest.approx([
+        2 / 3, -1 / 3, -1 / 3, -1 / 3, 2 / 3, -1 / 3, -1 / 3, -1 / 3, 2 / 3
+    ], abs=1.0e-12)
+
+
+def test_lw_rank3_translation_matches_arbitrary_displacement_fixtures():
+    displacement = [0.2, -0.3, 0.4]
+    expected_scalar = [
+        2.0, 0.8, 0.4, -0.6, 0.19, 0.277128129211, -0.415692193817,
+        -0.0866025403784, -0.207846096908, -0.028, 0.124923976882,
+        -0.187385965323, -0.0774596669241, -0.185903200618,
+        -0.0727323861839, -0.0142302494708,
+    ]
+    assert psi4.core._atomic_polarizability_translate_l3(
+        [2.0] + [0.0] * 15, displacement
+    ) == pytest.approx(expected_scalar, abs=5.0e-12)
+    expected_dense = [
+        0.1, 0.24, 0.32, 0.37, 0.7295, 0.890984535672, 0.852420471066,
+        1.10743901834, 0.872287187079, 1.88348457268, 2.29457302188,
+        1.30348504869, 3.00906108622, 2.04427885923, 2.75223325142,
+        1.30215605855,
+    ]
+    assert psi4.core._atomic_polarizability_translate_l3(
+        [0.1 * value for value in range(1, 17)], displacement
+    ) == pytest.approx(expected_dense, abs=5.0e-11)
+
+
+def test_lw_two_site_charge_flow_localizes_to_full_rank3_fixture():
+    values = [_working_l3_matrix() for _ in range(4)]
+    values[0][0][0], values[1][0][0] = -2.0, 2.0
+    values[2][0][0], values[3][0][0] = 2.0, -2.0
+    result = _lw_localize([[0.0, 0.0, 0.0], [0.2, -0.3, 0.4]], values, [(0, 1)])
+    local = result["local"]
+    assert len(local) == 2
+    assert local[0].shape == (15, 15)
+    assert local[0].get(0, 0) == pytest.approx(-0.16, abs=1.0e-11)
+    assert local[0].get(0, 1) == pytest.approx(-0.08, abs=1.0e-11)
+    assert local[0].get(0, 2) == pytest.approx(0.12, abs=1.0e-11)
+    assert local[0].get(0, 3) == pytest.approx(-0.038, abs=1.0e-11)
+    assert local[1].get(0, 3) == pytest.approx(0.038, abs=1.0e-11)
+    assert local[0].get(14, 14) == pytest.approx(-0.000050625, abs=1.0e-12)
+    assert local[1].get(14, 14) == pytest.approx(-0.000050625, abs=1.0e-12)
+    assert max(result["residuals"]) < 1.0e-10
+
+
+def test_lw_three_site_preserves_sum_reciprocity_and_transfers_only_on_bonds():
+    positions = [[0.0, 0.0, 0.0], [0.7, -0.2, 0.1], [1.1, 0.4, -0.3]]
+    graph_operator = [[-1.0, 1.0, 0.0], [1.0, -2.0, 1.0], [0.0, 1.0, -1.0]]
+    values = [_working_l3_matrix() for _ in range(9)]
+    for a in range(3):
+        for b in range(3):
+            values[3 * a + b][0][0] = 1.7 * graph_operator[a][b]
+    result = _lw_localize(positions, values, [(0, 1), (1, 2)], 2.0e-9)
+    assert max(result["residuals"]) < 2.0e-9
+    assert all(
+        (first, second) in {(0, 1), (1, 2)}
+        for first, second, _mu, _nu, _site, _amount in result["transfers"]
+    )
+    for matrix in result["local"]:
+        assert all(
+            matrix.get(row, column) == pytest.approx(matrix.get(column, row), abs=2.0e-9)
+            for row in range(15) for column in range(15)
+        )
+
+
+def test_lw_rejects_disconnected_graph_and_postcondition_residual():
+    with pytest.raises(RuntimeError, match=r"connected bond graph"):
+        _lw_localize(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+            [_working_l3_matrix() for _ in range(9)], [(0, 1)]
+        )
+    values = [_working_l3_matrix() for _ in range(4)]
+    values[0][0][0], values[1][0][0] = -2.0 + 1.0e-5, 2.0
+    values[2][0][0], values[3][0][0] = 2.0, -2.0
+    with pytest.raises(RuntimeError, match=r"residual tolerance"):
+        _lw_localize([[0.0, 0.0, 0.0], [0.2, -0.3, 0.4]], values, [(0, 1)], 1.0e-9)
+
+
 def test_atomic_polarizabilities_api_is_registered():
     assert "ATOMIC_POLARIZABILITIES" in psi4.core.OEProp.valid_methods
     assert psi4.core.get_global_option("ATOMIC_POLARIZABILITY_N_FREQUENCIES") == 10

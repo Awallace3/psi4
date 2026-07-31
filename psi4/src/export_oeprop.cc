@@ -65,6 +65,70 @@ void export_oeprop(py::module &m) {
               return std::make_shared<Matrix>(rotate_tensor(local, local_to_global));
           });
     m.def("_atomic_polarizability_pack_symmetric_tensor", &pack_symmetric_tensor);
+    m.def("_atomic_polarizability_lw_graph_math",
+          [](std::size_t site_count, const std::vector<std::array<std::size_t, 2>>& bonds) {
+              BondGraph graph{site_count, bonds};
+              auto operator_matrix = std::make_shared<Matrix>(lw_graph_operator(graph));
+              auto inverse_and_values = lw_graph_pseudoinverse(graph);
+              auto pseudoinverse = std::make_shared<Matrix>(std::move(inverse_and_values.first));
+              return py::make_tuple(operator_matrix, pseudoinverse, inverse_and_values.second);
+          });
+    m.def("_atomic_polarizability_translate_l3", &translate_l3_multipoles);
+    m.def("_atomic_polarizability_localize_lw",
+          [](const Matrix& positions, const std::vector<std::shared_ptr<Matrix>>& block_matrices,
+             const std::vector<std::array<std::size_t, 2>>& bonds, double residual_tolerance) {
+              if (positions.nirrep() != 1 || positions.ncol() != 3) {
+                  throw PSIEXCEPTION("localize_lw: positions must be an N by 3 matrix");
+              }
+              SitePairResponse response;
+              response.positions.resize(positions.nrow());
+              for (std::size_t site = 0; site < response.positions.size(); ++site) {
+                  for (std::size_t axis = 0; axis < 3; ++axis) {
+                      response.positions[site][axis] = positions(site, axis);
+                  }
+              }
+              if (block_matrices.size() != response.positions.size() * response.positions.size()) {
+                  throw PSIEXCEPTION("localize_lw: expected one 16 by 16 block for every ordered site pair");
+              }
+              response.blocks.resize(block_matrices.size());
+              for (std::size_t block = 0; block < block_matrices.size(); ++block) {
+                  if (!block_matrices[block] || block_matrices[block]->nirrep() != 1 ||
+                      block_matrices[block]->nrow() != 16 || block_matrices[block]->ncol() != 16) {
+                      throw PSIEXCEPTION("localize_lw: expected 16 by 16 rank-0-through-rank-3 blocks");
+                  }
+                  for (std::size_t row = 0; row < 16; ++row) {
+                      for (std::size_t column = 0; column < 16; ++column) {
+                          response.blocks[block][row][column] = (*block_matrices[block])(row, column);
+                      }
+                  }
+              }
+              const auto localized =
+                  localize_lw(response, BondGraph{response.positions.size(), bonds}, residual_tolerance);
+              py::dict result;
+              py::list local;
+              for (const auto& block : localized.local) {
+                  auto matrix = std::make_shared<Matrix>(15, 15);
+                  for (std::size_t row = 0; row < 15; ++row) {
+                      for (std::size_t column = 0; column < 15; ++column) {
+                          (*matrix)(row, column) = block[row][column];
+                      }
+                  }
+                  local.append(matrix);
+              }
+              py::list transfers;
+              for (const auto& transfer : localized.transfers) {
+                  transfers.append(py::make_tuple(
+                      transfer.first, transfer.second, transfer.first_component,
+                      transfer.second_component, transfer.fixed_site, transfer.amount));
+              }
+              result["local"] = local;
+              result["transfers"] = transfers;
+              result["residuals"] = py::make_tuple(
+                  localized.residuals.off_site, localized.residuals.charge_sum,
+                  localized.residuals.reciprocity, localized.residuals.molecular_sum,
+                  localized.residuals.local_charge);
+              return result;
+          });
 
     py::class_<AtomicPolarizabilityCalculator>(m, "AtomicPolarizabilityCalculator",
                                                "Native atomic-polarizability pipeline entry point")

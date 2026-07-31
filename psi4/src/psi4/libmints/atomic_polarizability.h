@@ -18,7 +18,9 @@
 #define PSI4_SRC_PSI4_LIBMINTS_ATOMIC_POLARIZABILITY_H
 
 #include <array>
+#include <cstddef>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "psi4/psi4-dec.h"
@@ -36,6 +38,54 @@ struct PSI_API FrequencyGrid {
 
 /** Complete rank-3 real-spherical response matrix (3 + 5 + 7 components). */
 using L3Matrix = std::array<std::array<double, 15>, 15>;
+
+/** Rank-0-through-rank-3 real-spherical workspace (1 + 3 + 5 + 7 components). */
+using L3WorkingVector = std::array<double, 16>;
+using L3WorkingMatrix = std::array<std::array<double, 16>, 16>;
+using SitePosition = std::array<double, 3>;
+
+/** Dense site-pair response; blocks use row-major (response site, potential site) order. */
+struct PSI_API SitePairResponse {
+    std::vector<SitePosition> positions;
+    std::vector<L3WorkingMatrix> blocks;
+};
+
+/** Unweighted undirected graph over the polarizable sites. */
+struct PSI_API BondGraph {
+    std::size_t site_count;
+    std::vector<std::array<std::size_t, 2>> bonds;
+};
+
+struct PSI_API BondTransfer {
+    std::size_t first;
+    std::size_t second;
+    std::size_t first_component;
+    std::size_t second_component;
+    std::size_t fixed_site;
+    double amount;
+};
+
+struct PSI_API LocalizationResiduals {
+    double off_site;
+    double charge_sum;
+    double reciprocity;
+    double molecular_sum;
+    double local_charge;
+};
+
+/** Fully localized rank-1-through-rank-3 response and deterministic diagnostics. */
+struct PSI_API LocalizedResponse {
+    std::vector<L3Matrix> local;
+    std::vector<BondTransfer> transfers;
+    LocalizationResiduals residuals;
+};
+
+PSI_API Matrix lw_graph_operator(const BondGraph& graph);
+PSI_API std::pair<Matrix, std::vector<double>> lw_graph_pseudoinverse(const BondGraph& graph);
+PSI_API L3WorkingVector translate_l3_multipoles(const L3WorkingVector& source,
+                                                 const SitePosition& source_minus_target);
+PSI_API LocalizedResponse localize_lw(const SitePairResponse& response, const BondGraph& graph,
+                                      double residual_tolerance);
 
 /** Build the required static plus ten-point imaginary-frequency grid. */
 PSI_API FrequencyGrid make_casimir_grid(unsigned int nonzero_count, double scale);
