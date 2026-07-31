@@ -321,26 +321,28 @@ def test_actual_effective_grac_state_mismatches_reject(grac_states, overrides, m
         )
 
 
-def test_sealed_ground_component_parameter_mismatch_rejects(grac_states, monkeypatch):
+def test_post_finalize_mutation_cannot_rewrite_sealed_functional_provenance(grac_states, monkeypatch):
     grac, precursor, cation, _ = grac_states
     original_finalize = psi4.core.HF.finalize_energy
 
     def finalize_with_test_local_tweak(self):
         energy = original_finalize(self)
-        # PBE0 is represented by one combined LibXC XC component, stored in
-        # the correlation container rather than in x_functionals().
+        # Native finalize has already captured the functional provenance. PBE0
+        # stores its combined LibXC XC component in the correlation container.
         self.functional().c_functionals()[0].set_tweak({"_beta": 0.3})
         return energy
 
     monkeypatch.setattr(psi4.core.HF, "finalize_energy", finalize_with_test_local_tweak)
     psi4.set_options({"reference": "uhf", "basis": "sto-3g", "dft_grac_shift": 0.0})
     try:
-        _, tweaked_cation = psi4.energy("pbe0", molecule=cation.molecule(), return_wfn=True)
+        _, mutated_cation = psi4.energy("pbe0", molecule=cation.molecule(), return_wfn=True)
     finally:
         monkeypatch.setattr(psi4.core.HF, "finalize_energy", original_finalize)
         psi4.set_options({"reference": "rhf"})
-    with pytest.raises(RuntimeError, match=r"same unshifted ground-state functional"):
-        psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, tweaked_cation)
+    # The post-capture tweak cannot alter the sealed functional record, so the
+    # factory reaches the fixed-shift check and rejects the recomputed energy.
+    with pytest.raises(RuntimeError, match=r"actual applied GRAC shift must equal IP plus HOMO energy"):
+        psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, mutated_cation)
 
 
 def test_wrong_cation_calculation_rejects(grac_states):
