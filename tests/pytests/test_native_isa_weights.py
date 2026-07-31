@@ -499,6 +499,7 @@ def test_restricted_c1_canonical_direct_jk_is_option_independent_and_nonmutating
     assert result["algorithm"] == "DIRECT_JK_CANONICAL_NONSYMMETRIC"
     assert result["batch_size"] == 1
     assert result["jk_threads"] == 1
+    assert result["integral_engine_thread_count"] == 1
     assert result["screening"] == "NONE"
     assert result["integral_cutoff"] == pytest.approx(1.0e-15)
     assert result["incfock"] is False
@@ -511,7 +512,15 @@ def test_restricted_c1_canonical_direct_jk_is_option_independent_and_nonmutating
     )
 
 
-def test_restricted_c1_production_source_forbids_in_core_eri_routes():
+def test_direct_jk_standard_integral_backend_selector_preserves_default_behavior():
+    selector = psi4.core._direct_jk_uses_brian_backend
+    assert selector(False, False) is False
+    assert selector(True, False) is True
+    assert selector(False, True) is False
+    assert selector(True, True) is False
+
+
+def test_restricted_c1_production_source_forbids_in_core_eri_routes_and_enables_standard_backend():
     source = (
         Path(__file__).resolve().parents[2]
         / "psi4/src/psi4/libmints/atomic_polarizability.cc"
@@ -521,6 +530,7 @@ def test_restricted_c1_production_source_forbids_in_core_eri_routes():
     )[0]
     assert "mo_eri" not in constructor
     assert "ao_eri" not in constructor
+    assert "jk->set_standard_integral_backend_only(true);" in constructor
 
 
 def test_restricted_c1_aug_cc_pvtz_estimator_reports_supported_water_envelope():

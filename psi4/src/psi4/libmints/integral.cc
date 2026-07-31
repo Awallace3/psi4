@@ -66,7 +66,10 @@ IntegralFactory::IntegralFactory(std::shared_ptr<BasisSet> bs1, std::shared_ptr<
 IntegralFactory::IntegralFactory(std::shared_ptr<BasisSet> bs1, std::shared_ptr<BasisSet> bs2,
                                  std::shared_ptr<BasisSet> bs3, std::shared_ptr<BasisSet> bs4,
                                  Options& options)
-    : options_(&options) {
+    : has_isolated_options_(true),
+      isolated_screening_threshold_(options.get_double("INTS_TOLERANCE")),
+      isolated_screening_type_(options.get_str("SCREENING")),
+      isolated_integral_package_(options.get_str("INTEGRAL_PACKAGE")) {
     set_basis(bs1, bs2, bs3, bs4);
 }
 
@@ -83,18 +86,18 @@ std::shared_ptr<BasisSet> IntegralFactory::basis3() const { return bs3_; }
 std::shared_ptr<BasisSet> IntegralFactory::basis4() const { return bs4_; }
 
 double IntegralFactory::screening_threshold() const {
-    return options_ ? options_->get_double("INTS_TOLERANCE")
-                    : Process::environment.options.get_double("INTS_TOLERANCE");
+    return has_isolated_options_ ? isolated_screening_threshold_
+                                 : Process::environment.options.get_double("INTS_TOLERANCE");
 }
 
 std::string IntegralFactory::screening_type() const {
-    return options_ ? options_->get_str("SCREENING")
-                    : Process::environment.options.get_str("SCREENING");
+    return has_isolated_options_ ? isolated_screening_type_
+                                 : Process::environment.options.get_str("SCREENING");
 }
 
 std::string IntegralFactory::integral_package() const {
-    return options_ ? options_->get_str("INTEGRAL_PACKAGE")
-                    : Process::environment.options.get_str("INTEGRAL_PACKAGE");
+    return has_isolated_options_ ? isolated_integral_package_
+                                 : Process::environment.options.get_str("INTEGRAL_PACKAGE");
 }
 
 void IntegralFactory::set_basis(std::shared_ptr<BasisSet> bs1, std::shared_ptr<BasisSet> bs2,

@@ -379,6 +379,7 @@ void export_oeprop(py::module &m) {
               result["algorithm"] = primitives.jk_plan.algorithm;
               result["batch_size"] = primitives.jk_plan.batch_size;
               result["jk_threads"] = primitives.jk_plan.jk_threads;
+              result["integral_engine_thread_count"] = primitives.integral_engine_thread_count;
               result["screening"] = primitives.jk_plan.screening;
               result["integral_cutoff"] = primitives.jk_plan.integral_cutoff;
               result["incfock"] = primitives.jk_plan.incfock;

@@ -1018,6 +1018,7 @@ detail::RestrictedC1Primitives construct_restricted_c1_primitives_impl(
     canonical_options.add_str("INTEGRAL_PACKAGE", "LIBINT2", "LIBINT2");
     auto mutable_basis = std::const_pointer_cast<BasisSet>(basis);
     auto jk = std::make_shared<DirectJK>(mutable_basis, canonical_options);
+    jk->set_standard_integral_backend_only(true);
     jk->set_cutoff(jk_plan.integral_cutoff);
     jk->set_csam(false);
     jk->set_df_ints_num_threads(static_cast<int>(jk_plan.jk_threads));
@@ -1071,6 +1072,7 @@ detail::RestrictedC1Primitives construct_restricted_c1_primitives_impl(
         left.clear();
         right.clear();
     }
+    result.integral_engine_thread_count = jk->integral_engine_thread_count();
     jk->finalize();
     require_restricted_hessian_primitive(*result.coulomb, nov, "Coulomb J");
     require_restricted_hessian_primitive(*result.exchange_direct, nov, "K_direct");

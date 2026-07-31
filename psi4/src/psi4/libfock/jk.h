@@ -57,6 +57,13 @@ namespace pk {
 class PKManager;
 }
 
+namespace detail {
+/** Pure backend selector used by DirectJK and its BrianQC-independent tests. */
+constexpr bool direct_jk_uses_brian_backend(bool brian_enabled, bool standard_integral_backend_only) noexcept {
+    return brian_enabled && !standard_integral_backend_only;
+}
+}  // namespace detail
+
 // => BASE CLASS <= //
 
 /**
@@ -725,6 +732,10 @@ class PSI_API DirectJK : public JK {
    protected:
     /// Number of threads for DF integrals TODO: DF_INTS_NUM_THREADS
     int df_ints_num_threads_;
+    /// Bypass the optional BrianQC path and use the standard integral-engine path.
+    bool standard_integral_backend_only_{};
+    /// Integral-engine thread count observed during the most recent compute.
+    std::size_t integral_engine_thread_count_{};
     /// ERI Sieve
     std::shared_ptr<TwoBodyAOInt> eri_;
 
@@ -811,8 +822,17 @@ class PSI_API DirectJK : public JK {
      */
     void set_df_ints_num_threads(int val) { df_ints_num_threads_ = val; }
 
+    /**
+     * Select only DirectJK's standard integral-engine path, bypassing BrianQC.
+     * Disabled by default to preserve existing DirectJK backend selection.
+     */
+    void set_standard_integral_backend_only(bool val) { standard_integral_backend_only_ = val; }
+
     // => Accessors <= //
     bool do_incfock_iter() { return do_incfock_iter_; }
+    bool standard_integral_backend_only() const { return standard_integral_backend_only_; }
+    /** Number of integral-engine threads actually used by the most recent compute (zero before compute). */
+    std::size_t integral_engine_thread_count() const { return integral_engine_thread_count_; }
 
     /**
     * Print header information regarding JK

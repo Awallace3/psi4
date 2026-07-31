@@ -350,6 +350,7 @@ struct RestrictedC1Primitives {
     SharedMatrix exchange_direct;
     SharedMatrix exchange_transpose;
     RestrictedC1JKPlan jk_plan;
+    std::size_t integral_engine_thread_count{};
 };
 
 /** Construct primitives from the immutable orbitals and retained basis of one frozen context. */

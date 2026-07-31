@@ -405,14 +405,23 @@ class PSI_API IntegralFactory {
     /// Provides ability to transform from sphericals (d=0, f=1, g=2)
     std::vector<ISphericalTransform> ispherical_transforms_;
 
-    // Optional isolated configuration. The default preserves legacy process-
-    // option behavior; callers needing option independence supply this registry.
-    Options* options_{};
+    // Optional isolated configuration snapshot. The default preserves legacy
+    // process-option behavior; the Options overload copies the controls needed
+    // by two-body engines so neither the factory nor its engines borrow the
+    // registry's lifetime.
+    bool has_isolated_options_{};
+    double isolated_screening_threshold_{};
+    std::string isolated_screening_type_;
+    std::string isolated_integral_package_;
 
    public:
     /** Initialize IntegralFactory object given a BasisSet for each center. */
     IntegralFactory(std::shared_ptr<BasisSet> bs1, std::shared_ptr<BasisSet> bs2, std::shared_ptr<BasisSet> bs3,
                     std::shared_ptr<BasisSet> bs4);
+    /**
+     * Initialize with a snapshot of the two-body integral controls in options.
+     * The registry need not outlive this factory or engines created from it.
+     */
     IntegralFactory(std::shared_ptr<BasisSet> bs1, std::shared_ptr<BasisSet> bs2, std::shared_ptr<BasisSet> bs3,
                     std::shared_ptr<BasisSet> bs4, Options& options);
     /** Initialize IntegralFactory object given a BasisSet for two centers. Becomes (bs1 bs1 | bs1 bs1). */
