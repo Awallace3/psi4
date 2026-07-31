@@ -64,43 +64,85 @@ class PSI_API ResponseKernel {
     const double alda_kernel_;
 };
 
+/** DFT grid settings that determine the quadrature used by a wavefunction. */
+struct PSI_API DFTGridIdentity {
+    int spherical_points;
+    int radial_points;
+    int block_max_points;
+    int block_min_points;
+    double bs_radius_alpha;
+    double basis_tolerance;
+    double weights_tolerance;
+    double density_tolerance;
+    double pruning_alpha;
+    double block_max_radius;
+    bool remove_distant_points;
+    std::string grid_name;
+    std::string radial_scheme;
+    std::string spherical_scheme;
+    std::string nuclear_scheme;
+    std::string pruning_scheme;
+    std::string block_scheme;
+    std::string fingerprint;
+
+    bool operator==(const DFTGridIdentity& other) const;
+};
+
+/** Canonical structured snapshot derived from a concrete Wavefunction. */
+struct PSI_API WavefunctionIdentity {
+    std::vector<double> nuclear_charges;
+    std::vector<SitePosition> geometry;
+    int molecular_charge;
+    int multiplicity;
+    std::string basis_name;
+    std::size_t basis_nbf;
+    std::size_t basis_nao;
+    std::size_t basis_nshell;
+    std::size_t basis_necp_shell;
+    bool basis_has_puream;
+    std::string basis_fingerprint;
+    std::string method;
+    std::string reference;
+    std::string functional;
+    std::string functional_fingerprint;
+    DFTGridIdentity grid;
+
+    static WavefunctionIdentity from_wavefunction(const std::shared_ptr<Wavefunction>& wfn);
+    void validate() const;
+    bool operator==(const WavefunctionIdentity& other) const;
+    bool operator!=(const WavefunctionIdentity& other) const { return !(*this == other); }
+};
+
 /** Immutable attestation of the neutral/cation calculations used to construct a GRAC state. */
 class PSI_API GRACProvenance {
    public:
-    GRACProvenance(double neutral_energy, double cation_energy, double homo_energy,
-                   double ionization_potential, double shift, std::string method_fingerprint,
-                   std::string functional_fingerprint, std::string basis_fingerprint,
-                   std::string grid_fingerprint);
+    GRACProvenance(WavefunctionIdentity identity, double neutral_energy, double cation_energy,
+                   double homo_energy, double ionization_potential, double shift);
 
+    const WavefunctionIdentity& identity() const { return identity_; }
     double neutral_energy() const { return neutral_energy_; }
     double cation_energy() const { return cation_energy_; }
     double homo_energy() const { return homo_energy_; }
     double ionization_potential() const { return ionization_potential_; }
     double shift() const { return shift_; }
-    const std::string& method_fingerprint() const { return method_fingerprint_; }
-    const std::string& functional_fingerprint() const { return functional_fingerprint_; }
-    const std::string& basis_fingerprint() const { return basis_fingerprint_; }
-    const std::string& grid_fingerprint() const { return grid_fingerprint_; }
 
    private:
+    const WavefunctionIdentity identity_;
     const double neutral_energy_;
     const double cation_energy_;
     const double homo_energy_;
     const double ionization_potential_;
     const double shift_;
-    const std::string method_fingerprint_;
-    const std::string functional_fingerprint_;
-    const std::string basis_fingerprint_;
-    const std::string grid_fingerprint_;
 };
 
 /** Immutable, caller-supplied ISA grid and point-major stockholder partition data. */
 class PSI_API ISAWeights {
    public:
-    ISAWeights(std::size_t point_count, std::size_t grid_dimension, std::size_t site_count,
-               std::vector<double> points, std::vector<double> quadrature_weights,
-               std::vector<double> partition_weights);
+    ISAWeights(WavefunctionIdentity identity, std::size_t point_count, std::size_t grid_dimension,
+               std::size_t site_count, std::vector<double> points,
+               std::vector<double> quadrature_weights, std::vector<double> partition_weights);
 
+    const WavefunctionIdentity& identity() const { return identity_; }
     std::size_t point_count() const { return point_count_; }
     std::size_t grid_dimension() const { return grid_dimension_; }
     std::size_t site_count() const { return site_count_; }
@@ -109,6 +151,7 @@ class PSI_API ISAWeights {
     const std::vector<double>& partition_weights() const { return partition_weights_; }
 
    private:
+    const WavefunctionIdentity identity_;
     const std::size_t point_count_;
     const std::size_t grid_dimension_;
     const std::size_t site_count_;
@@ -123,10 +166,15 @@ class PSI_API ISAPolResponseProvider {
     ISAPolResponseProvider(std::shared_ptr<Wavefunction> wfn, ResponseKernel kernel,
                            GRACProvenance grac, ISAWeights isa_weights);
 
+    /** Validate current identity/grid shape and report the required response cardinality. */
+    std::size_t expected_response_count(const FrequencyGrid& frequencies) const;
     std::vector<SitePairResponse> compute_isapol_response(const FrequencyGrid& frequencies) const;
 
    private:
+    void validate_current_wavefunction_identity() const;
+
     const std::shared_ptr<Wavefunction> wfn_;
+    const WavefunctionIdentity identity_snapshot_;
     const ResponseKernel kernel_;
     const GRACProvenance grac_;
     const ISAWeights isa_weights_;

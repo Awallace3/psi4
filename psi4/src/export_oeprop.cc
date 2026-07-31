@@ -39,6 +39,30 @@ using namespace psi;
 namespace py = pybind11;
 using namespace pybind11::literals;
 
+namespace {
+
+WavefunctionIdentity response_test_identity(const std::shared_ptr<Wavefunction>& wfn,
+                                            const std::string& blank_field = "") {
+    auto identity = WavefunctionIdentity::from_wavefunction(wfn);
+    if (blank_field.empty()) return identity;
+    if (blank_field == "basis_name") identity.basis_name.clear();
+    else if (blank_field == "basis_fingerprint") identity.basis_fingerprint.clear();
+    else if (blank_field == "reference") identity.reference.clear();
+    else if (blank_field == "method") identity.method.clear();
+    else if (blank_field == "functional") identity.functional.clear();
+    else if (blank_field == "functional_fingerprint") identity.functional_fingerprint.clear();
+    else if (blank_field == "grid_fingerprint") identity.grid.fingerprint.clear();
+    else if (blank_field == "grid_radial_scheme") identity.grid.radial_scheme.clear();
+    else if (blank_field == "grid_spherical_scheme") identity.grid.spherical_scheme.clear();
+    else if (blank_field == "grid_nuclear_scheme") identity.grid.nuclear_scheme.clear();
+    else if (blank_field == "grid_pruning_scheme") identity.grid.pruning_scheme.clear();
+    else if (blank_field == "grid_block_scheme") identity.grid.block_scheme.clear();
+    else throw PSIEXCEPTION("response prerequisite test seam: unknown identity field");
+    return identity;
+}
+
+}  // namespace
+
 void export_oeprop(py::module &m) {
     // Underscored pure-math seams keep protocol tests on the native implementation
     // without expanding the supported public API.
@@ -48,27 +72,32 @@ void export_oeprop(py::module &m) {
     });
     m.def(
         "_atomic_polarizability_validate_response_prerequisites",
-        [](double chf_exchange, double alda_kernel, double neutral_energy, double cation_energy,
-           double homo_energy, double ionization_potential, double grac_shift,
-           const std::string& method_fingerprint, const std::string& functional_fingerprint,
-           const std::string& basis_fingerprint, const std::string& grid_fingerprint,
-           std::size_t point_count, std::size_t grid_dimension, std::size_t site_count,
-           std::vector<double> points, std::vector<double> quadrature_weights,
-           std::vector<double> partition_weights) {
+        [](const std::shared_ptr<Wavefunction>& identity_wfn, double chf_exchange,
+           double alda_kernel, double neutral_energy, double cation_energy, double homo_energy,
+           double ionization_potential, double grac_shift, std::size_t point_count,
+           std::size_t grid_dimension, std::size_t site_count, std::vector<double> points,
+           std::vector<double> quadrature_weights, std::vector<double> partition_weights,
+           const std::string& blank_identity_field) {
+            auto identity = response_test_identity(identity_wfn, blank_identity_field);
             const ResponseKernel kernel(chf_exchange, alda_kernel);
-            const GRACProvenance grac(neutral_energy, cation_energy, homo_energy,
-                                      ionization_potential, grac_shift, method_fingerprint,
-                                      functional_fingerprint, basis_fingerprint, grid_fingerprint);
-            const ISAWeights isa(point_count, grid_dimension, site_count, std::move(points),
-                                 std::move(quadrature_weights), std::move(partition_weights));
+            const GRACProvenance grac(identity, neutral_energy, cation_energy, homo_energy,
+                                      ionization_potential, grac_shift);
+            const ISAWeights isa(std::move(identity), point_count, grid_dimension, site_count,
+                                 std::move(points), std::move(quadrature_weights),
+                                 std::move(partition_weights));
+            const auto& snapshot = grac.identity();
             py::dict result;
             result["kernel"] = py::make_tuple(kernel.chf_exchange(), kernel.alda_kernel());
             result["grac"] = py::make_tuple(grac.neutral_energy(), grac.cation_energy(),
                                             grac.homo_energy(), grac.ionization_potential(),
                                             grac.shift());
-            result["fingerprints"] =
-                py::make_tuple(grac.method_fingerprint(), grac.functional_fingerprint(),
-                               grac.basis_fingerprint(), grac.grid_fingerprint());
+            result["molecule"] = py::make_tuple(snapshot.geometry.size(), snapshot.molecular_charge,
+                                                snapshot.multiplicity);
+            result["basis_dimensions"] = py::make_tuple(
+                snapshot.basis_nbf, snapshot.basis_nao, snapshot.basis_nshell);
+            result["electronic_identity"] =
+                py::make_tuple(snapshot.method, snapshot.reference, snapshot.functional);
+            result["grid_fingerprint"] = snapshot.grid.fingerprint;
             result["isa_dimensions"] =
                 py::make_tuple(isa.point_count(), isa.grid_dimension(), isa.site_count());
             result["isa_data_sizes"] =
@@ -76,11 +105,46 @@ void export_oeprop(py::module &m) {
                                isa.partition_weights().size());
             return result;
         },
-        "chf_exchange"_a, "alda_kernel"_a, "neutral_energy"_a, "cation_energy"_a,
-        "homo_energy"_a, "ionization_potential"_a, "grac_shift"_a,
-        "method_fingerprint"_a, "functional_fingerprint"_a, "basis_fingerprint"_a,
-        "grid_fingerprint"_a, "point_count"_a, "grid_dimension"_a, "site_count"_a,
-        "points"_a, "quadrature_weights"_a, "partition_weights"_a);
+        "identity_wfn"_a, "chf_exchange"_a, "alda_kernel"_a, "neutral_energy"_a,
+        "cation_energy"_a, "homo_energy"_a, "ionization_potential"_a, "grac_shift"_a,
+        "point_count"_a, "grid_dimension"_a, "site_count"_a, "points"_a,
+        "quadrature_weights"_a, "partition_weights"_a, "blank_identity_field"_a = "");
+
+    py::class_<ISAPolResponseProvider, std::shared_ptr<ISAPolResponseProvider>>(
+        m, "_AtomicPolarizabilityTestResponseProvider")
+        .def(py::init([](std::shared_ptr<Wavefunction> wfn,
+                         const std::shared_ptr<Wavefunction>& grac_identity_wfn,
+                         const std::shared_ptr<Wavefunction>& isa_identity_wfn, double chf_exchange,
+                         double alda_kernel, double neutral_energy, double cation_energy,
+                         double homo_energy, double ionization_potential, double grac_shift,
+                         std::size_t point_count, std::size_t grid_dimension, std::size_t site_count,
+                         std::vector<double> points, std::vector<double> quadrature_weights,
+                         std::vector<double> partition_weights) {
+                 const ResponseKernel kernel(chf_exchange, alda_kernel);
+                 const GRACProvenance grac(response_test_identity(grac_identity_wfn), neutral_energy,
+                                           cation_energy, homo_energy, ionization_potential, grac_shift);
+                 const ISAWeights isa(response_test_identity(isa_identity_wfn), point_count,
+                                      grid_dimension, site_count, std::move(points),
+                                      std::move(quadrature_weights), std::move(partition_weights));
+                 return std::make_shared<ISAPolResponseProvider>(
+                     std::move(wfn), kernel, grac, isa);
+             }),
+             "wfn"_a, "grac_identity_wfn"_a, "isa_identity_wfn"_a, "chf_exchange"_a,
+             "alda_kernel"_a, "neutral_energy"_a, "cation_energy"_a, "homo_energy"_a,
+             "ionization_potential"_a, "grac_shift"_a, "point_count"_a,
+             "grid_dimension"_a, "site_count"_a, "points"_a, "quadrature_weights"_a,
+             "partition_weights"_a)
+        .def("expected_response_count",
+             [](const ISAPolResponseProvider& provider, std::vector<double> frequencies,
+                std::vector<double> weights) {
+                 return provider.expected_response_count(
+                     FrequencyGrid{std::move(frequencies), std::move(weights)});
+             })
+        .def("compute", [](const ISAPolResponseProvider& provider, std::vector<double> frequencies,
+                           std::vector<double> weights) {
+            return provider.compute_isapol_response(
+                FrequencyGrid{std::move(frequencies), std::move(weights)});
+        });
     m.def("_atomic_polarizability_local_spherical_dipole_to_cartesian",
           [](const Matrix& spherical) {
               if (spherical.nirrep() != 1 || spherical.nrow() != 15 || spherical.ncol() != 15) {
