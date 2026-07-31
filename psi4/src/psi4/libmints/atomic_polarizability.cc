@@ -30,9 +30,9 @@
 #include "psi4/libfunctional/LibXCfunctional.h"
 #include "psi4/libfunctional/functional.h"
 #include "psi4/libfunctional/superfunctional.h"
+#include "psi4/libfock/jk.h"
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/matrix.h"
-#include "psi4/libmints/mintshelper.h"
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
@@ -40,6 +40,7 @@
 #include "psi4/libscf_solver/rhf.h"
 #include "psi4/libscf_solver/uhf.h"
 #include "psi4/libpsi4util/exception.h"
+#include "psi4/libpsi4util/process.h"
 #include "psi4/libqt/qt.h"
 
 namespace psi {
@@ -797,6 +798,63 @@ void FrozenResponseContext::verify_basis_unchanged() const {
 }
 
 namespace {
+std::size_t checked_c1_product(std::size_t first, std::size_t second, const std::string& prefix) {
+    if (first != 0 && second > std::numeric_limits<std::size_t>::max() / first)
+        throw PSIEXCEPTION(prefix + "allocation size overflow");
+    return first * second;
+}
+
+std::size_t checked_c1_sum(std::size_t first, std::size_t second, const std::string& prefix) {
+    if (second > std::numeric_limits<std::size_t>::max() - first)
+        throw PSIEXCEPTION(prefix + "allocation size overflow");
+    return first + second;
+}
+}  // namespace
+
+namespace detail {
+RestrictedC1JKPlan plan_restricted_c1_jk(std::size_t nbf, std::size_t nocc,
+                                         std::size_t nvir, std::size_t memory_bytes) {
+    const std::string prefix = "restricted C1 transition primitives: ";
+    if (nbf == 0 || nocc == 0 || nvir == 0)
+        throw PSIEXCEPTION(prefix + "memory estimate requires nonzero orbital dimensions");
+    const auto nov = checked_c1_product(nocc, nvir, prefix);
+    if (nov > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw PSIEXCEPTION(prefix + "transition-space dimension exceeds native matrix limits");
+
+    // Retained dense primitives: J, K_direct, and K_transpose. Metadata and
+    // occupied/virtual coefficient copies are included in the fixed storage.
+    const auto retained_elements = checked_c1_product(checked_c1_product(3, nov, prefix), nov, prefix);
+    const auto retained_bytes = checked_c1_product(retained_elements, sizeof(double), prefix);
+    const auto metadata_bytes = checked_c1_product(nov, 2 * sizeof(std::size_t) + sizeof(double), prefix);
+    const auto orbital_count = checked_c1_sum(nocc, nvir, prefix);
+    const auto coefficient_elements = checked_c1_product(nbf, orbital_count, prefix);
+    const auto coefficient_bytes = checked_c1_product(coefficient_elements, sizeof(double), prefix);
+    const auto fixed_bytes = checked_c1_sum(
+        checked_c1_sum(retained_bytes, metadata_bytes, prefix), coefficient_bytes, prefix);
+
+    // For each vector entry JK retains nonsymmetric left/right columns plus
+    // AO D/J/K matrices. Three projected result blocks are conservatively
+    // counted until the whole batch has been consumed.
+    const auto ao_square = checked_c1_product(nbf, nbf, prefix);
+    auto per_entry_elements = checked_c1_product(3, ao_square, prefix);
+    per_entry_elements = checked_c1_sum(per_entry_elements, checked_c1_product(2, nbf, prefix), prefix);
+    per_entry_elements = checked_c1_sum(per_entry_elements, checked_c1_product(3, nov, prefix), prefix);
+    const auto per_entry_bytes = checked_c1_product(per_entry_elements, sizeof(double), prefix);
+    if (fixed_bytes >= memory_bytes || per_entry_bytes > memory_bytes - fixed_bytes)
+        throw PSIEXCEPTION(prefix + "estimated direct-JK storage exceeds configured memory (" +
+                           std::to_string(checked_c1_sum(fixed_bytes, per_entry_bytes, prefix)) +
+                           " bytes required, " + std::to_string(memory_bytes) + " bytes available)");
+    const auto affordable = (memory_bytes - fixed_bytes) / per_entry_bytes;
+    const auto batch_size = std::min<std::size_t>({nov, 32, affordable});
+    if (batch_size == 0)
+        throw PSIEXCEPTION(prefix + "configured memory cannot hold one direct-JK transition batch");
+    const auto estimated_bytes = checked_c1_sum(
+        fixed_bytes, checked_c1_product(batch_size, per_entry_bytes, prefix), prefix);
+    return {nbf, nocc, nvir, nov, batch_size, estimated_bytes, "DIRECT_JK_NONSYMMETRIC"};
+}
+}  // namespace detail
+
+namespace {
 detail::RestrictedC1Primitives construct_restricted_c1_primitives_impl(
     const std::shared_ptr<const FrozenResponseContext>& context, const Matrix& Ca, const Matrix& Cb,
     const Vector& epsilon_a, const Vector& epsilon_b, const Vector& occupation_a,
@@ -856,8 +914,12 @@ detail::RestrictedC1Primitives construct_restricted_c1_primitives_impl(
         nocc * nvir > static_cast<std::size_t>(std::numeric_limits<int>::max()))
         throw PSIEXCEPTION(prefix + "transition-space dimension exceeds native matrix limits");
     const std::size_t nov = nocc * nvir;
+    // Fail before allocating any dense transition primitive or AO JK batch.
+    const auto jk_plan = detail::plan_restricted_c1_jk(
+        static_cast<std::size_t>(nbf), nocc, nvir, Process::environment.get_memory());
 
     detail::RestrictedC1Primitives result;
+    result.jk_plan = jk_plan;
     result.transitions.reserve(nov);
     result.orbital_gaps.reserve(nov);
     // The transition order is explicit: occupied orbital first, virtual orbital second.
@@ -879,30 +941,70 @@ detail::RestrictedC1Primitives construct_restricted_c1_primitives_impl(
         for (std::size_t a = 0; a < nvir; ++a) (*Cv)(mu, a) = Ca(mu, virtuals[a]);
     }
 
-    // Direct four-index transforms avoid one JK build per transition. These
-    // in-core transforms prioritize correctness for the reviewed small-basis path.
-    MintsHelper mints(std::const_pointer_cast<BasisSet>(basis));
-    const auto iajb = mints.mo_eri(Co, Cv, Co, Cv);               // (ia|jb)
-    const auto ijab = mints.mo_eri(Co, Co, Cv, Cv);               // (ij|ab)
-    const auto ajbi = mints.mo_eri(Cv, Co, Cv, Co);               // (aj|bi)
     result.coulomb = std::make_shared<Matrix>(nov, nov);
     result.exchange_direct = std::make_shared<Matrix>(nov, nov);
     result.exchange_transpose = std::make_shared<Matrix>(nov, nov);
-    for (std::size_t i = 0; i < nocc; ++i) {
-        for (std::size_t a = 0; a < nvir; ++a) {
-            const std::size_t row = i * nvir + a;
-            for (std::size_t j = 0; j < nocc; ++j) {
-                for (std::size_t b = 0; b < nvir; ++b) {
-                    const std::size_t column = j * nvir + b;
-                    (*result.coulomb)(row, column) = (*iajb)(row, column);
-                    (*result.exchange_direct)(row, column) =
-                        (*ijab)(i * nocc + j, a * nvir + b);
-                    (*result.exchange_transpose)(row, column) =
-                        (*ajbi)(a * nocc + j, b * nocc + i);
+
+    // Always use the native exact shell-direct algorithm. In particular, do not
+    // inherit an SCF_TYPE=DF approximation or mutate the frozen/global options.
+    // JK defines D_ls=C_left_li C_right_si, J_mn=(mn|ls)D_ls, and
+    // K_mn=(ml|ns)D_ls. Thus C_left=C_j and C_right=C_b yields
+    // Co^T J Cv=(ia|jb), Co^T K Cv=(ij|ab), and
+    // Cv^T K Co=(aj|ib)=(aj|bi).
+    auto mutable_basis = std::const_pointer_cast<BasisSet>(basis);
+    auto jk = JK::build_JK(mutable_basis, nullptr, Process::environment.options, "DIRECT");
+    jk->set_do_J(true);
+    jk->set_do_K(true);
+    jk->set_do_wK(false);
+    jk->set_memory(std::max<std::size_t>(1, Process::environment.get_memory() / sizeof(double)));
+    jk->set_print(0);
+    jk->initialize();
+
+    auto& left = jk->C_left();
+    auto& right = jk->C_right();
+    for (std::size_t start = 0; start < nov; start += jk_plan.batch_size) {
+        const auto count = std::min(jk_plan.batch_size, nov - start);
+        left.clear();
+        right.clear();
+        left.reserve(count);
+        right.reserve(count);
+        for (std::size_t entry = 0; entry < count; ++entry) {
+            const auto source = start + entry;
+            const auto j = source / nvir;
+            const auto b = source % nvir;
+            auto Cj = std::make_shared<Matrix>(nbf, 1);
+            auto Cb_source = std::make_shared<Matrix>(nbf, 1);
+            for (int mu = 0; mu < nbf; ++mu) {
+                (*Cj)(mu, 0) = (*Co)(mu, j);
+                (*Cb_source)(mu, 0) = (*Cv)(mu, b);
+            }
+            left.push_back(std::move(Cj));
+            right.push_back(std::move(Cb_source));
+        }
+        jk->compute();
+        const auto& J = jk->J();
+        const auto& K = jk->K();
+        if (J.size() != count || K.size() != count)
+            throw PSIEXCEPTION(prefix + "direct-JK result cardinality is inconsistent");
+        for (std::size_t entry = 0; entry < count; ++entry) {
+            const auto source = start + entry;
+            const auto J_ov = linalg::triplet(Co, J[entry], Cv, true, false, false);
+            const auto Kd_ov = linalg::triplet(Co, K[entry], Cv, true, false, false);
+            const auto Kt_vo = linalg::triplet(Cv, K[entry], Co, true, false, false);
+            for (std::size_t i = 0; i < nocc; ++i) {
+                for (std::size_t a = 0; a < nvir; ++a) {
+                    const auto row = i * nvir + a;
+                    (*result.coulomb)(row, source) = (*J_ov)(i, a);
+                    (*result.exchange_direct)(row, source) = (*Kd_ov)(i, a);
+                    (*result.exchange_transpose)(row, source) = (*Kt_vo)(a, i);
                 }
             }
         }
+        // JK vector interfaces are explicitly renewed on every bounded chunk.
+        left.clear();
+        right.clear();
     }
+    jk->finalize();
     require_restricted_hessian_primitive(*result.coulomb, nov, "Coulomb J");
     require_restricted_hessian_primitive(*result.exchange_direct, nov, "K_direct");
     require_restricted_hessian_primitive(*result.exchange_transpose, nov, "K_transpose");

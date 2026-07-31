@@ -300,6 +300,21 @@ class PSI_API FrozenResponseContext {
 };
 
 namespace detail {
+/** Overflow-checked storage plan for exact nonsymmetric direct-JK contractions. */
+struct RestrictedC1JKPlan {
+    std::size_t nbf{};
+    std::size_t nocc{};
+    std::size_t nvir{};
+    std::size_t nov{};
+    std::size_t batch_size{};
+    std::size_t estimated_bytes{};
+    std::string algorithm;
+};
+
+/** Plan the bounded direct-JK batches and reject storage beyond memory_bytes. */
+RestrictedC1JKPlan plan_restricted_c1_jk(std::size_t nbf, std::size_t nocc,
+                                         std::size_t nvir, std::size_t memory_bytes);
+
 /** Native C1 restricted transition-space ERI primitives; ALDA is intentionally absent. */
 struct RestrictedC1Primitives {
     std::vector<std::pair<std::size_t, std::size_t>> transitions;
@@ -307,6 +322,7 @@ struct RestrictedC1Primitives {
     SharedMatrix coulomb;
     SharedMatrix exchange_direct;
     SharedMatrix exchange_transpose;
+    RestrictedC1JKPlan jk_plan;
 };
 
 /** Construct primitives from the immutable orbitals and retained basis of one frozen context. */

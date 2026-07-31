@@ -376,6 +376,12 @@ void export_oeprop(py::module &m) {
                   *primitives.exchange_transpose, *zero_alda, ResponseKernel(0.25, 0.75));
               py::dict result;
               result["transition_order"] = "(i,a) occupied-major/virtual-minor";
+              result["algorithm"] = primitives.jk_plan.algorithm;
+              result["batch_size"] = primitives.jk_plan.batch_size;
+              result["estimated_bytes"] = primitives.jk_plan.estimated_bytes;
+              result["nbf"] = primitives.jk_plan.nbf;
+              result["nocc"] = primitives.jk_plan.nocc;
+              result["nvir"] = primitives.jk_plan.nvir;
               result["transitions"] = primitives.transitions;
               result["orbital_gaps"] = primitives.orbital_gaps;
               result["coulomb"] = primitives.coulomb;
@@ -386,6 +392,20 @@ void export_oeprop(py::module &m) {
               return result;
           },
           "context"_a, "test_overrides"_a = py::dict());
+    m.def("_atomic_polarizability_estimate_restricted_c1_jk",
+          [](std::size_t nbf, std::size_t nocc, std::size_t nvir, std::size_t memory_bytes) {
+              const auto plan = detail::plan_restricted_c1_jk(nbf, nocc, nvir, memory_bytes);
+              py::dict result;
+              result["algorithm"] = plan.algorithm;
+              result["nbf"] = plan.nbf;
+              result["nocc"] = plan.nocc;
+              result["nvir"] = plan.nvir;
+              result["nov"] = plan.nov;
+              result["batch_size"] = plan.batch_size;
+              result["estimated_bytes"] = plan.estimated_bytes;
+              return result;
+          },
+          "nbf"_a, "nocc"_a, "nvir"_a, "memory_bytes"_a);
     py::class_<ISAPolResponseProvider, std::shared_ptr<ISAPolResponseProvider>>(
         m, "_AtomicPolarizabilityTestResponseProvider")
         .def("expected_response_count",

@@ -1,4 +1,5 @@
 import math
+from pathlib import Path
 import re
 
 import numpy as np
@@ -321,6 +322,7 @@ def _restricted_c1_primitives(context, **test_overrides):
 
 
 def _independent_transition_eri_oracle(wfn, orbital_order=None):
+    """Tiny-basis oracle independent of the native blocked-JK contractions."""
     coefficients = np.asarray(wfn.Ca())
     energies = np.asarray(wfn.epsilon_a()).ravel()
     occupations = np.asarray(wfn.occupation_a()).ravel()
@@ -330,26 +332,25 @@ def _independent_transition_eri_oracle(wfn, orbital_order=None):
         occupations = occupations[orbital_order]
     occupied = [index for index, value in enumerate(occupations) if value == 1.0]
     virtual = [index for index, value in enumerate(occupations) if value == 0.0]
-    co = psi4.core.Matrix.from_array(coefficients[:, occupied])
-    cv = psi4.core.Matrix.from_array(coefficients[:, virtual])
-    mints = psi4.core.MintsHelper(wfn.basisset())
-    iajb = np.asarray(mints.mo_eri(co, cv, co, cv).to_array())
-    ijab = np.asarray(mints.mo_eri(co, co, cv, cv).to_array())
-    ajbi = np.asarray(mints.mo_eri(cv, co, cv, co).to_array())
+    co = coefficients[:, occupied]
+    cv = coefficients[:, virtual]
+
+    # ao_eri is intentionally confined to this seven-function STO-3G oracle.
+    # Derive each four-index quantity directly rather than sharing a native MO
+    # transform or transition flattening with production.
+    ao_eri = np.asarray(psi4.core.MintsHelper(wfn.basisset()).ao_eri())
+    iajb = np.einsum("mi,na,lj,sb,mnls->iajb", co, cv, co, cv, ao_eri, optimize=True)
+    ijab = np.einsum("mi,nj,la,sb,mnls->ijab", co, co, cv, cv, ao_eri, optimize=True)
+    ajbi = np.einsum("ma,nj,lb,si,mnls->ajbi", cv, co, cv, co, ao_eri, optimize=True)
     transitions = [(i, a) for i in occupied for a in virtual]
-    nov = len(transitions)
-    coulomb = np.empty((nov, nov))
-    exchange_direct = np.empty((nov, nov))
-    exchange_transpose = np.empty((nov, nov))
-    for row, (i, a) in enumerate(transitions):
-        local_i, local_a = occupied.index(i), virtual.index(a)
-        for column, (j, b) in enumerate(transitions):
-            local_j, local_b = occupied.index(j), virtual.index(b)
-            coulomb[row, column] = iajb[local_i, local_a, local_j, local_b]
-            exchange_direct[row, column] = ijab[local_i, local_j, local_a, local_b]
-            exchange_transpose[row, column] = ajbi[local_a, local_j, local_b, local_i]
     gaps = np.array([energies[a] - energies[i] for i, a in transitions])
-    return transitions, gaps, coulomb, exchange_direct, exchange_transpose
+    return (
+        transitions,
+        gaps,
+        iajb.reshape(len(transitions), len(transitions)),
+        ijab.transpose(0, 2, 1, 3).reshape(len(transitions), len(transitions)),
+        ajbi.transpose(3, 0, 1, 2).reshape(len(transitions), len(transitions)),
+    )
 
 
 @pytest.mark.scf
@@ -364,6 +365,9 @@ def test_restricted_c1_primitives_match_independent_mints_oracle_and_zero_alda_h
 
     assert [tuple(pair) for pair in result["transitions"]] == transitions
     assert result["transition_order"] == "(i,a) occupied-major/virtual-minor"
+    assert result["algorithm"] == "DIRECT_JK_NONSYMMETRIC"
+    assert 1 <= result["batch_size"] <= len(transitions)
+    assert result["estimated_bytes"] > 3 * len(transitions) ** 2 * 8
     assert result["orbital_gaps"] == pytest.approx(gaps, abs=2.0e-13)
     for name, expected in (
         ("coulomb", coulomb),
@@ -418,6 +422,17 @@ def test_restricted_c1_transition_order_tracks_an_orbital_permutation(frozen_h2o
         ({"epsilon_a": [-20, -1, -0.8, -0.6, -0.5, -21, 1],
           "epsilon_b": [-20, -1, -0.8, -0.6, -0.5, -21, 1]}, r"gaps.*positive"),
         ({"beta_orbital_delta": 1.0e-3}, r"Ca and Cb"),
+        ({"beta_orbital_delta": float("nan")}, r"coefficients.*finite"),
+        ({"epsilon_a": [float("nan"), -1, -0.8, -0.6, -0.5, 0.5, 1],
+          "epsilon_b": [float("nan"), -1, -0.8, -0.6, -0.5, 0.5, 1]}, r"energies.*finite"),
+        ({"epsilon_a": [-20, -1, -0.8, -0.6, -0.5, 0.5, 1],
+          "epsilon_b": [-20.1, -1, -0.8, -0.6, -0.5, 0.5, 1]}, r"energies.*match"),
+        ({"occupation_a": [float("nan"), 1, 1, 1, 1, 0, 0],
+          "occupation_b": [float("nan"), 1, 1, 1, 1, 0, 0]}, r"integer occupations"),
+        ({"occupation_a": [0, 0, 0, 0, 0, 0, 0],
+          "occupation_b": [0, 0, 0, 0, 0, 0, 0]}, r"occupied and one virtual"),
+        ({"occupation_a": [1, 1, 1, 1, 1, 1, 1],
+          "occupation_b": [1, 1, 1, 1, 1, 1, 1]}, r"occupied and one virtual"),
     ],
 )
 def test_restricted_c1_primitives_fail_closed_for_unsupported_orbital_states(
@@ -426,3 +441,73 @@ def test_restricted_c1_primitives_fail_closed_for_unsupported_orbital_states(
     context, _, _ = frozen_h2o_context
     with pytest.raises(RuntimeError, match=message):
         _restricted_c1_primitives(context, **overrides)
+
+
+@pytest.mark.scf
+def test_restricted_c1_override_seam_rejects_malformed_inputs(frozen_h2o_context):
+    context, _, _ = frozen_h2o_context
+    malformed = (
+        ({"unknown": 1}, r"unknown test override"),
+        ({"orbital_order": [0, 1]}, r"wrong dimension"),
+        ({"orbital_order": [0, 1, 2, 3, 4, 5, 5]}, r"must be a permutation"),
+        ({"epsilon_a": [0.0]}, r"wrong dimension"),
+    )
+    for overrides, message in malformed:
+        with pytest.raises((RuntimeError, TypeError), match=message):
+            _restricted_c1_primitives(context, **overrides)
+
+
+@pytest.mark.scf
+def test_restricted_c1_uses_exact_direct_jk_when_scf_type_is_df(frozen_h2o_context):
+    context, _, _ = frozen_h2o_context
+    psi4.set_options({"scf_type": "df"})
+    try:
+        result = _restricted_c1_primitives(context)
+    finally:
+        psi4.set_options({"scf_type": "pk"})
+    assert result["algorithm"] == "DIRECT_JK_NONSYMMETRIC"
+
+
+def test_restricted_c1_production_source_forbids_in_core_eri_routes():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "psi4/src/psi4/libmints/atomic_polarizability.cc"
+    ).read_text()
+    constructor = source.split("construct_restricted_c1_primitives_impl", 1)[1].split(
+        "RestrictedC1Primitives construct_restricted_c1_primitives(", 1
+    )[0]
+    assert "mo_eri" not in constructor
+    assert "ao_eri" not in constructor
+
+
+def test_restricted_c1_aug_cc_pvtz_scaling_estimator_avoids_ao_nbf4():
+    molecule = psi4.geometry(
+        """
+        0 1
+        O 0.0 0.0 0.0
+        H 0.0 1.4 1.1
+        H 0.0 -1.4 1.1
+        symmetry c1
+        units bohr
+        """
+    )
+    basis = psi4.core.BasisSet.build(molecule, "ORBITAL", "aug-cc-pvtz")
+    nbf = basis.nbf()
+    nocc = 5
+    nvir = nbf - nocc
+    diagnostics = psi4.core._atomic_polarizability_estimate_restricted_c1_jk(
+        nbf, nocc, nvir, psi4.get_memory()
+    )
+    assert diagnostics["algorithm"] == "DIRECT_JK_NONSYMMETRIC"
+    assert diagnostics["nbf"] == nbf
+    assert diagnostics["nov"] == nocc * nvir
+    assert 1 <= diagnostics["batch_size"] <= 32
+    assert diagnostics["estimated_bytes"] < 8 * nbf**4
+
+
+def test_restricted_c1_estimator_fails_closed_for_memory_and_overflow():
+    estimator = psi4.core._atomic_polarizability_estimate_restricted_c1_jk
+    with pytest.raises(RuntimeError, match=r"exceeds configured memory"):
+        estimator(100, 5, 95, 1024)
+    with pytest.raises(RuntimeError, match=r"overflow|dimension exceeds"):
+        estimator(2**63, 2**63, 2, 2**64 - 1)
