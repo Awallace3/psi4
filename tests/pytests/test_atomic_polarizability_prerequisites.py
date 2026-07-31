@@ -9,228 +9,190 @@ pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.mints, pytest.mark.s
 
 
 @pytest.fixture(scope="module")
-def response_wavefunctions():
+def grac_states():
     psi4.core.be_quiet()
-    psi4.set_options({"basis": "sto-3g", "scf_type": "pk"})
-
-    primary = psi4.geometry(
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "pk",
+            "reference": "rhf",
+            "dft_spherical_points": 50,
+            "dft_radial_points": 12,
+            "dft_grac_shift": 0.0,
+        }
+    )
+    neutral = psi4.geometry(
         """
+        0 1
         H 0.0 0.0 0.0
         H 0.0 0.0 0.7
         symmetry c1
         units angstrom
         """
     )
-    _, primary_wfn = psi4.energy("pbe0", molecule=primary, return_wfn=True)
+    _, precursor = psi4.energy("pbe0", molecule=neutral, return_wfn=True)
 
-    other = psi4.geometry(
+    cation = psi4.geometry(
         """
-        He 0.0 0.0 0.0
+        1 2
+        H 0.0 0.0 0.0
+        H 0.0 0.0 0.7
         symmetry c1
+        units angstrom
         """
     )
-    _, other_wfn = psi4.energy("pbe0", molecule=other, return_wfn=True)
-    return primary_wfn, other_wfn
+    psi4.set_options({"reference": "uhf", "dft_grac_shift": 0.0})
+    _, cation_wfn = psi4.energy("pbe0", molecule=cation, return_wfn=True)
+
+    homo = max(precursor.epsilon_a_subset("SO", "OCC").to_array().ravel())
+    shift = cation_wfn.energy() - precursor.energy() + homo
+    psi4.set_options({"reference": "rhf", "dft_grac_shift": shift})
+    _, grac = psi4.energy("pbe0", molecule=neutral, return_wfn=True)
+    psi4.set_options({"dft_grac_shift": 0.0})
+    return grac, precursor, cation_wfn, shift
 
 
-def _valid_prerequisites(identity_wfn, **changes):
-    values = {
-        "identity_wfn": identity_wfn,
-        "chf_exchange": 0.25,
-        "alda_kernel": 0.75,
-        "neutral_energy": -75.0,
-        "cation_energy": -74.4,
-        "homo_energy": -0.3,
-        "ionization_potential": 0.6,
-        "grac_shift": 0.3,
-        "point_count": 2,
-        "grid_dimension": 3,
-        "site_count": 2,
-        "points": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-        "quadrature_weights": [0.4, 0.6],
-        "partition_weights": [0.2, 0.8, 0.7, 0.3],
-        "blank_identity_field": "",
-    }
-    values.update(changes)
-    return values
+def _context(states):
+    grac, precursor, cation, _ = states
+    return psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, cation)
 
 
-def _validate(identity_wfn, **changes):
-    return psi4.core._atomic_polarizability_validate_response_prerequisites(
-        **_valid_prerequisites(identity_wfn, **changes)
-    )
+def test_response_kernel_is_exact_and_rejects_nextafter_neighbors():
+    assert psi4.core._atomic_polarizability_validate_response_kernel(0.25, 0.75) == pytest.approx((0.25, 0.75))
+    for chf, alda, message in (
+        (math.nextafter(0.25, 0.0), 0.75, "CHF exchange coefficient.*0.25"),
+        (math.nextafter(0.25, 1.0), 0.75, "CHF exchange coefficient.*0.25"),
+        (0.25, math.nextafter(0.75, 0.0), "ALDA coefficient.*0.75"),
+        (0.25, math.nextafter(0.75, 1.0), "ALDA coefficient.*0.75"),
+    ):
+        with pytest.raises(RuntimeError, match=message):
+            psi4.core._atomic_polarizability_validate_response_kernel(chf, alda)
 
 
-def _provider(wfn, identity_wfn, isa_identity_wfn=None, **changes):
-    args = _valid_prerequisites(identity_wfn, **changes)
-    args.pop("identity_wfn")
-    args.pop("blank_identity_field")
-    return psi4.core._AtomicPolarizabilityTestResponseProvider(
-        wfn,
-        identity_wfn,
-        identity_wfn if isa_identity_wfn is None else isa_identity_wfn,
-        **args,
-    )
+def test_actual_grac_context_is_verified_and_frozen(grac_states):
+    grac, precursor, cation, shift = grac_states
+    context = _context(grac_states)
+    summary = context.summary()
+
+    assert summary["reference"] == "RKS"
+    assert summary["functional"] == "PBE0"
+    assert summary["needs_grac"] is True
+    assert summary["applied_shift"] == pytest.approx(shift, abs=1.0e-12)
+    assert summary["derived_shift"] == pytest.approx(shift, abs=1.0e-12)
+    assert summary["grac_x_functional"] == "XC_GGA_X_LB"
+    assert summary["grac_c_functional"] == "XC_LDA_C_VWN"
+    assert isinstance(summary["grac_x_parameters"], dict)
+    assert isinstance(summary["grac_c_parameters"], dict)
+    assert summary["neutral_precursor_energy"] == pytest.approx(precursor.energy())
+    assert summary["cation_energy"] == pytest.approx(cation.energy())
+    assert summary["site_count"] == 2
+    assert summary["grid_point_count"] > 0
+    assert summary["single_thread_immutable"] is True
 
 
-def test_response_prerequisites_accept_exact_consistent_actual_identity(response_wavefunctions):
-    wfn, _ = response_wavefunctions
-    result = _validate(wfn)
+def test_ordinary_pbe0_rejects_even_when_calculation_metadata_is_available(grac_states):
+    _, precursor, cation, _ = grac_states
+    with pytest.raises(RuntimeError, match=r"needs_grac|actual GRAC"):
+        psi4.core._atomic_polarizability_make_frozen_response_context(precursor, precursor, cation)
 
-    assert result["kernel"] == pytest.approx((0.25, 0.75))
-    assert result["grac"] == pytest.approx((-75.0, -74.4, -0.3, 0.6, 0.3))
-    assert result["molecule"] == (2, 0, 1)
-    assert result["basis_dimensions"] == (2, 2, 2)
-    assert result["electronic_identity"] == ("scf/RHF", "RHF", "PBE0")
-    assert result["grid_fingerprint"]
-    assert result["isa_dimensions"] == (2, 3, 2)
-    assert result["isa_data_sizes"] == (6, 2, 4)
+
+def test_wrong_applied_shift_rejects_actual_grac(grac_states):
+    grac, precursor, cation, _ = grac_states
+    functional = grac.functional()
+    old_shift = functional.grac_shift()
+    functional.set_lock(False)
+    functional.set_grac_shift(old_shift + 1.0e-4)
+    functional.set_lock(True)
+    try:
+        with pytest.raises(RuntimeError, match=r"applied GRAC shift.*IP.*HOMO"):
+            psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, cation)
+    finally:
+        functional.set_lock(False)
+        functional.set_grac_shift(old_shift)
+        functional.set_lock(True)
+
+
+@pytest.mark.parametrize("mutation", ["x_identity", "c_identity"])
+def test_wrong_grac_component_identity_rejects(grac_states, mutation):
+    grac, precursor, cation, _ = grac_states
+    token = psi4.core._atomic_polarizability_mutate_grac_component_for_test(grac, mutation)
+    try:
+        with pytest.raises(RuntimeError, match=r"GRAC.*(functional identity|parameter map)"):
+            psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, cation)
+    finally:
+        psi4.core._atomic_polarizability_restore_grac_component_for_test(grac, mutation, token)
+
+
+def test_wrong_cation_calculation_rejects(grac_states):
+    grac, precursor, _, _ = grac_states
+    with pytest.raises(RuntimeError, match=r"cation.*(charge|electron|identity)"):
+        psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, precursor)
+
+
+def test_factory_rejects_an_actual_scf_state_not_marked_converged(grac_states):
+    grac, precursor, cation, _ = grac_states
+    precursor._set_response_state_converged(False)
+    try:
+        with pytest.raises(RuntimeError, match=r"neutral precursor.*not converged"):
+            psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, cation)
+    finally:
+        precursor._set_response_state_converged(True)
+
+
+def test_frozen_context_is_unaffected_by_later_source_orbital_and_density_mutation(grac_states):
+    grac, _, _, _ = grac_states
+    context = _context(grac_states)
+    before = context.state_checksum()
+    ca = grac.Ca()
+    da = grac.Da()
+    old_ca = ca.get(0, 0)
+    old_da = da.get(0, 0)
+    ca.set(0, 0, old_ca + 0.125)
+    da.set(0, 0, old_da + 0.25)
+    try:
+        assert context.state_checksum() == pytest.approx(before, rel=0.0, abs=0.0)
+        provider = psi4.core._atomic_polarizability_make_test_response_provider(context, context)
+        assert provider.expected_response_count([0.0, 0.5], [0.0, 1.0]) == 2
+    finally:
+        ca.set(0, 0, old_ca)
+        da.set(0, 0, old_da)
+
+
+def test_isa_weights_are_structurally_bound_to_one_context(grac_states):
+    first = _context(grac_states)
+    second = _context(grac_states)
+    with pytest.raises(RuntimeError, match=r"ISA weights.*frozen response context"):
+        psi4.core._atomic_polarizability_make_test_response_provider(first, second)
 
 
 @pytest.mark.parametrize(
-    "coefficient, value, message",
+    "frequencies, weights, message",
     [
-        ("chf_exchange", math.nextafter(0.25, 0.0), "CHF exchange coefficient.*0.25"),
-        ("chf_exchange", math.nextafter(0.25, 1.0), "CHF exchange coefficient.*0.25"),
-        ("alda_kernel", math.nextafter(0.75, 0.0), "ALDA coefficient.*0.75"),
-        ("alda_kernel", math.nextafter(0.75, 1.0), "ALDA coefficient.*0.75"),
+        ([], [], "at least one"),
+        ([0.0], [], "dimensions"),
+        ([math.nan], [0.0], "finite"),
+        ([-math.ulp(1.0)], [0.0], "nonnegative"),
+        ([math.ulp(1.0)], [0.0], "start.*zero"),
+        ([0.0], [math.ulp(1.0)], "static.*weight.*zero"),
+        ([0.0, 0.0], [0.0, 1.0], "strictly increasing"),
+        ([0.0, -math.ulp(1.0)], [0.0, 1.0], "positive"),
+        ([0.0, math.inf], [0.0, 1.0], "finite"),
+        ([0.0, 0.5], [0.0, 0.0], "nonzero.*weight.*positive"),
+        ([0.0, 0.5], [0.0, -math.ulp(1.0)], "nonzero.*weight.*positive"),
+        ([0.0, 0.5], [0.0, math.inf], "finite"),
     ],
 )
-def test_response_kernel_rejects_every_nonexact_nextafter(response_wavefunctions, coefficient, value, message):
-    wfn, _ = response_wavefunctions
+def test_frequency_grid_rejects_every_invalid_branch(grac_states, frequencies, weights, message):
+    context = _context(grac_states)
+    provider = psi4.core._atomic_polarizability_make_test_response_provider(context, context)
     with pytest.raises(RuntimeError, match=message):
-        _validate(wfn, **{coefficient: value})
+        provider.expected_response_count(frequencies, weights)
 
 
-@pytest.mark.parametrize(
-    "field",
-    [
-        "basis_name",
-        "basis_fingerprint",
-        "reference",
-        "method",
-        "functional",
-        "functional_fingerprint",
-        "grid_fingerprint",
-        "grid_radial_scheme",
-        "grid_spherical_scheme",
-        "grid_nuclear_scheme",
-        "grid_pruning_scheme",
-        "grid_block_scheme",
-    ],
-)
-def test_wavefunction_identity_rejects_every_blank_required_field(response_wavefunctions, field):
-    wfn, _ = response_wavefunctions
-    with pytest.raises(RuntimeError, match=r"WavefunctionIdentity.*required"):
-        _validate(wfn, blank_identity_field=field)
-
-
-@pytest.mark.parametrize(
-    "changes, message",
-    [
-        ({"neutral_energy": math.inf}, "GRAC.*finite"),
-        ({"cation_energy": math.nan}, "GRAC.*finite"),
-        ({"homo_energy": -math.inf}, "GRAC.*finite"),
-        ({"ionization_potential": math.inf}, "GRAC.*finite"),
-        ({"grac_shift": math.nan}, "GRAC.*finite"),
-        ({"cation_energy": -75.0, "ionization_potential": 0.0, "grac_shift": -0.3}, "cation energy.*neutral"),
-        ({"ionization_potential": 0.0}, "ionization potential.*positive"),
-        ({"homo_energy": 0.0, "grac_shift": 0.6}, "HOMO.*negative"),
-        ({"homo_energy": -0.7, "grac_shift": -0.1}, "GRAC shift.*nonnegative"),
-        ({"ionization_potential": 0.7, "grac_shift": 0.4}, "ionization potential.*cation.*neutral"),
-        ({"grac_shift": 0.2}, "GRAC shift.*ionization potential.*HOMO"),
-    ],
-)
-def test_grac_rejects_nonphysical_or_inconsistent_metadata(response_wavefunctions, changes, message):
-    wfn, _ = response_wavefunctions
-    with pytest.raises(RuntimeError, match=message):
-        _validate(wfn, **changes)
-
-
-@pytest.mark.parametrize(
-    "changes, message",
-    [
-        ({"point_count": 0, "points": [], "quadrature_weights": [], "partition_weights": []}, "ISA.*point count"),
-        ({"points": [0.0] * 5}, "ISA.*point coordinates.*dimensions"),
-        ({"quadrature_weights": [1.0]}, "ISA.*quadrature weights.*dimensions"),
-        ({"partition_weights": [0.5] * 3}, "ISA.*partition weights.*dimensions"),
-        ({"grid_dimension": 0, "points": []}, "ISA.*grid dimension.*3"),
-        ({"site_count": 0, "partition_weights": []}, "ISA.*site count"),
-        ({"partition_weights": [0.2, 0.7, 0.7, 0.3]}, "ISA.*partition unity"),
-        ({"points": [0.0, 0.0, math.nan, 1.0, 0.0, 0.0]}, "ISA.*finite"),
-        ({"quadrature_weights": [0.4, math.inf]}, "ISA.*finite"),
-        ({"quadrature_weights": [0.4, 0.0]}, "quadrature weights must be positive"),
-        ({"quadrature_weights": [0.4, -0.6]}, "quadrature weights must be positive"),
-        ({"partition_weights": [0.2, 0.8, -0.1, 1.1]}, "partition weights must be nonnegative"),
-        ({"partition_weights": [0.2, 0.8, math.nan, math.nan]}, "ISA.*finite"),
-    ],
-)
-def test_isa_rejects_invalid_dimensions_or_weights(response_wavefunctions, changes, message):
-    wfn, _ = response_wavefunctions
-    with pytest.raises(RuntimeError, match=message):
-        _validate(wfn, **changes)
-
-
-def test_isa_accepts_zero_partition_elements(response_wavefunctions):
-    wfn, _ = response_wavefunctions
-    result = _validate(wfn, partition_weights=[0.0, 1.0, 1.0, 0.0])
-    assert result["isa_data_sizes"] == (6, 2, 4)
-
-
-def test_provider_rejects_null_and_cross_identity(response_wavefunctions):
-    wfn, other_wfn = response_wavefunctions
-    with pytest.raises(RuntimeError, match=r"Provider.*wavefunction is null"):
-        _provider(None, wfn)
-    with pytest.raises(RuntimeError, match=r"GRAC.*wavefunction identity"):
-        _provider(wfn, other_wfn, isa_identity_wfn=wfn)
-    with pytest.raises(RuntimeError, match=r"ISA.*wavefunction identity"):
-        _provider(wfn, wfn, isa_identity_wfn=other_wfn)
-
-
-def test_provider_revalidates_snapshot_and_frequency_cardinality(response_wavefunctions):
-    wfn, _ = response_wavefunctions
-    provider = _provider(wfn, wfn)
-    assert provider.expected_response_count([0.0, 0.5], [0.0, 1.0]) == 2
-    with pytest.raises(RuntimeError, match=r"frequency.*dimensions"):
-        provider.expected_response_count([0.0, 0.5], [0.0])
+def test_frequency_grid_accepts_exact_boundaries_and_never_fakes_response(grac_states):
+    context = _context(grac_states)
+    provider = psi4.core._atomic_polarizability_make_test_response_provider(context, context)
+    smallest = math.nextafter(0.0, 1.0)
+    assert provider.expected_response_count([0.0, smallest], [0.0, smallest]) == 2
     with pytest.raises(RuntimeError, match=r"not implemented.*no response"):
-        provider.compute([0.0, 0.5], [0.0, 1.0])
-
-    old_name = wfn.name()
-    wfn.set_name(old_name + "-MUTATED")
-    try:
-        with pytest.raises(RuntimeError, match=r"wavefunction identity changed.*provider construction"):
-            provider.expected_response_count([0.0], [0.0])
-        with pytest.raises(RuntimeError, match=r"wavefunction identity changed.*provider construction"):
-            provider.compute([0.0], [0.0])
-    finally:
-        wfn.set_name(old_name)
-
-    provider = _provider(wfn, wfn)
-    functional = wfn.functional()
-    old_functional_name = functional.name()
-    functional.set_name(old_functional_name + "-MUTATED")
-    try:
-        with pytest.raises(RuntimeError, match=r"wavefunction identity changed.*provider construction"):
-            provider.expected_response_count([0.0], [0.0])
-    finally:
-        functional.set_name(old_functional_name)
-
-
-def test_calculator_names_missing_grac_and_isa_without_publishing_arrays(response_wavefunctions):
-    wfn, _ = response_wavefunctions
-    calculator = psi4.core.AtomicPolarizabilityCalculator(wfn)
-    with pytest.raises(RuntimeError, match=r"missing GRAC provenance.*ISA weights"):
-        calculator.compute()
-
-    public_arrays = (
-        "ATOMIC POLARIZABILITIES",
-        "ATOMIC DYNAMIC POLARIZABILITIES",
-        "ATOMIC POLARIZABILITY FREQUENCIES",
-        "ATOMIC C6",
-        "ATOMIC C8",
-        "ATOMIC C10",
-        "ATOMIC C12",
-    )
-    assert all(not wfn.has_array_variable(name) for name in public_arrays)
-    assert all(not psi4.core.has_array_variable(name) for name in public_arrays)
+        provider.compute([0.0, smallest], [0.0, smallest])

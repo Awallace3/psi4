@@ -305,8 +305,10 @@ class HF : public Wavefunction {
 
     /// The DFT Functional object (or null if it has been deleted)
     std::shared_ptr<SuperFunctional> functional() const { return functional_; }
-    std::string functional_identity() const override;
-    std::string functional_fingerprint() const override;
+    /// Narrow const access used only while freezing a verified response context.
+    std::shared_ptr<const SuperFunctional> response_functional() const { return functional_; }
+    bool response_state_converged() const { return converged_; }
+    void set_response_state_converged(bool value) { converged_ = value; }
 
     /// The DFT Potential object (or null if it has been deleted)
     /// This needs to be virtual so that subclasses can enforce their

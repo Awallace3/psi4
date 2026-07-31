@@ -304,6 +304,20 @@ std::map<std::string, double> LibXCFunctional::query_libxc(const std::string& fu
 
     return params;
 }
+std::map<std::string, double> LibXCFunctional::effective_parameter_map() const {
+    std::map<std::string, double> result;
+    const int npars = xc_func_info_get_n_ext_params(xc_functional_.get()->info);
+    for (int parameter = 0; parameter < npars; ++parameter) {
+        const auto* info = const_cast<xc_func_info_type*>(xc_functional_->info);
+        const std::string name = xc_func_info_get_ext_params_name(info, parameter);
+        const auto tweaked = user_tweakers_.find(name);
+        result[name] = tweaked == user_tweakers_.end()
+                           ? xc_func_info_get_ext_params_default_value(info, parameter)
+                           : tweaked->second;
+    }
+    return result;
+}
+
 void LibXCFunctional::set_tweak(std::map<std::string, double> values, bool quiet) {
     int npars = xc_func_info_get_n_ext_params(xc_functional_.get()->info);
     if (npars == 0) {

@@ -28,40 +28,20 @@
 
 #include "psi4/pybind11.h"
 
+#include "psi4/libfunctional/LibXCfunctional.h"
+#include "psi4/libfunctional/functional.h"
+#include "psi4/libfunctional/superfunctional.h"
 #include "psi4/libmints/oeprop.h"
 #include "psi4/libmints/atomic_polarizability.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
+#include "psi4/libscf_solver/hf.h"
 #include "psi4/libpsi4util/exception.h"
 
 using namespace psi;
 namespace py = pybind11;
 using namespace pybind11::literals;
-
-namespace {
-
-WavefunctionIdentity response_test_identity(const std::shared_ptr<Wavefunction>& wfn,
-                                            const std::string& blank_field = "") {
-    auto identity = WavefunctionIdentity::from_wavefunction(wfn);
-    if (blank_field.empty()) return identity;
-    if (blank_field == "basis_name") identity.basis_name.clear();
-    else if (blank_field == "basis_fingerprint") identity.basis_fingerprint.clear();
-    else if (blank_field == "reference") identity.reference.clear();
-    else if (blank_field == "method") identity.method.clear();
-    else if (blank_field == "functional") identity.functional.clear();
-    else if (blank_field == "functional_fingerprint") identity.functional_fingerprint.clear();
-    else if (blank_field == "grid_fingerprint") identity.grid.fingerprint.clear();
-    else if (blank_field == "grid_radial_scheme") identity.grid.radial_scheme.clear();
-    else if (blank_field == "grid_spherical_scheme") identity.grid.spherical_scheme.clear();
-    else if (blank_field == "grid_nuclear_scheme") identity.grid.nuclear_scheme.clear();
-    else if (blank_field == "grid_pruning_scheme") identity.grid.pruning_scheme.clear();
-    else if (blank_field == "grid_block_scheme") identity.grid.block_scheme.clear();
-    else throw PSIEXCEPTION("response prerequisite test seam: unknown identity field");
-    return identity;
-}
-
-}  // namespace
 
 void export_oeprop(py::module &m) {
     // Underscored pure-math seams keep protocol tests on the native implementation
@@ -70,81 +50,102 @@ void export_oeprop(py::module &m) {
         const auto grid = make_casimir_grid(nonzero_count, scale);
         return py::make_tuple(grid.frequencies, grid.weights);
     });
-    m.def(
-        "_atomic_polarizability_validate_response_prerequisites",
-        [](const std::shared_ptr<Wavefunction>& identity_wfn, double chf_exchange,
-           double alda_kernel, double neutral_energy, double cation_energy, double homo_energy,
-           double ionization_potential, double grac_shift, std::size_t point_count,
-           std::size_t grid_dimension, std::size_t site_count, std::vector<double> points,
-           std::vector<double> quadrature_weights, std::vector<double> partition_weights,
-           const std::string& blank_identity_field) {
-            auto identity = response_test_identity(identity_wfn, blank_identity_field);
-            const ResponseKernel kernel(chf_exchange, alda_kernel);
-            const GRACProvenance grac(identity, neutral_energy, cation_energy, homo_energy,
-                                      ionization_potential, grac_shift);
-            const ISAWeights isa(std::move(identity), point_count, grid_dimension, site_count,
-                                 std::move(points), std::move(quadrature_weights),
-                                 std::move(partition_weights));
-            const auto& snapshot = grac.identity();
+    m.def("_atomic_polarizability_validate_response_kernel", [](double chf_exchange, double alda_kernel) {
+        const ResponseKernel kernel(chf_exchange, alda_kernel);
+        return py::make_tuple(kernel.chf_exchange(), kernel.alda_kernel());
+    });
+    py::class_<FrozenResponseContext, std::shared_ptr<FrozenResponseContext>>(
+        m, "_AtomicPolarizabilityFrozenResponseContext")
+        .def("summary", [](const FrozenResponseContext& context) {
             py::dict result;
-            result["kernel"] = py::make_tuple(kernel.chf_exchange(), kernel.alda_kernel());
-            result["grac"] = py::make_tuple(grac.neutral_energy(), grac.cation_energy(),
-                                            grac.homo_energy(), grac.ionization_potential(),
-                                            grac.shift());
-            result["molecule"] = py::make_tuple(snapshot.geometry.size(), snapshot.molecular_charge,
-                                                snapshot.multiplicity);
-            result["basis_dimensions"] = py::make_tuple(
-                snapshot.basis_nbf, snapshot.basis_nao, snapshot.basis_nshell);
-            result["electronic_identity"] =
-                py::make_tuple(snapshot.method, snapshot.reference, snapshot.functional);
-            result["grid_fingerprint"] = snapshot.grid.fingerprint;
-            result["isa_dimensions"] =
-                py::make_tuple(isa.point_count(), isa.grid_dimension(), isa.site_count());
-            result["isa_data_sizes"] =
-                py::make_tuple(isa.points().size(), isa.quadrature_weights().size(),
-                               isa.partition_weights().size());
+            const auto& grac = context.grac();
+            const auto& functional = context.functional();
+            result["reference"] = "RKS";
+            result["functional"] = context.functional_name();
+            result["needs_grac"] = functional->needs_grac();
+            result["applied_shift"] = grac.applied_shift;
+            result["derived_shift"] = grac.ionization_potential + grac.homo_energy;
+            result["grac_x_functional"] = context.grac_x_name();
+            result["grac_c_functional"] = context.grac_c_name();
+            const auto grac_x = std::dynamic_pointer_cast<const LibXCFunctional>(functional->grac_x_functional());
+            const auto grac_c = std::dynamic_pointer_cast<const LibXCFunctional>(functional->grac_c_functional());
+            result["grac_x_parameters"] = grac_x->effective_parameter_map();
+            result["grac_c_parameters"] = grac_c->effective_parameter_map();
+            result["neutral_precursor_energy"] = grac.neutral_precursor_energy;
+            result["cation_energy"] = grac.cation_energy;
+            result["site_count"] = context.sites().size();
+            result["grid_point_count"] = context.grid_point_count();
+            result["single_thread_immutable"] = true;
             return result;
-        },
-        "identity_wfn"_a, "chf_exchange"_a, "alda_kernel"_a, "neutral_energy"_a,
-        "cation_energy"_a, "homo_energy"_a, "ionization_potential"_a, "grac_shift"_a,
-        "point_count"_a, "grid_dimension"_a, "site_count"_a, "points"_a,
-        "quadrature_weights"_a, "partition_weights"_a, "blank_identity_field"_a = "");
-
+        })
+        .def("state_checksum", [](const FrozenResponseContext& context) {
+            const auto matrix_sum_squares = [](const std::shared_ptr<const Matrix>& matrix) {
+                double result = 0.0;
+                for (int h = 0; h < matrix->nirrep(); ++h)
+                    for (int row = 0; row < matrix->rowspi()[h]; ++row)
+                        for (int column = 0; column < matrix->colspi()[h]; ++column) {
+                            const double value = matrix->get(h, row, column);
+                            result += value * value;
+                        }
+                return result;
+            };
+            const auto vector_sum_squares = [](const std::shared_ptr<const Vector>& vector) {
+                double result = 0.0;
+                for (int h = 0; h < vector->nirrep(); ++h)
+                    for (int element = 0; element < vector->dim(h); ++element) {
+                        const double value = vector->get(h, element);
+                        result += value * value;
+                    }
+                return result;
+            };
+            return std::vector<double>{matrix_sum_squares(context.Ca()), matrix_sum_squares(context.Cb()),
+                                       vector_sum_squares(context.epsilon_a()), vector_sum_squares(context.epsilon_b()),
+                                       vector_sum_squares(context.occupation_a()), vector_sum_squares(context.occupation_b()),
+                                       matrix_sum_squares(context.Da()), matrix_sum_squares(context.Db()), context.energy()};
+        });
     py::class_<ISAPolResponseProvider, std::shared_ptr<ISAPolResponseProvider>>(
         m, "_AtomicPolarizabilityTestResponseProvider")
-        .def(py::init([](std::shared_ptr<Wavefunction> wfn,
-                         const std::shared_ptr<Wavefunction>& grac_identity_wfn,
-                         const std::shared_ptr<Wavefunction>& isa_identity_wfn, double chf_exchange,
-                         double alda_kernel, double neutral_energy, double cation_energy,
-                         double homo_energy, double ionization_potential, double grac_shift,
-                         std::size_t point_count, std::size_t grid_dimension, std::size_t site_count,
-                         std::vector<double> points, std::vector<double> quadrature_weights,
-                         std::vector<double> partition_weights) {
-                 const ResponseKernel kernel(chf_exchange, alda_kernel);
-                 const GRACProvenance grac(response_test_identity(grac_identity_wfn), neutral_energy,
-                                           cation_energy, homo_energy, ionization_potential, grac_shift);
-                 const ISAWeights isa(response_test_identity(isa_identity_wfn), point_count,
-                                      grid_dimension, site_count, std::move(points),
-                                      std::move(quadrature_weights), std::move(partition_weights));
-                 return std::make_shared<ISAPolResponseProvider>(
-                     std::move(wfn), kernel, grac, isa);
-             }),
-             "wfn"_a, "grac_identity_wfn"_a, "isa_identity_wfn"_a, "chf_exchange"_a,
-             "alda_kernel"_a, "neutral_energy"_a, "cation_energy"_a, "homo_energy"_a,
-             "ionization_potential"_a, "grac_shift"_a, "point_count"_a,
-             "grid_dimension"_a, "site_count"_a, "points"_a, "quadrature_weights"_a,
-             "partition_weights"_a)
         .def("expected_response_count",
              [](const ISAPolResponseProvider& provider, std::vector<double> frequencies,
                 std::vector<double> weights) {
-                 return provider.expected_response_count(
-                     FrequencyGrid{std::move(frequencies), std::move(weights)});
+                 return provider.expected_response_count(FrequencyGrid{std::move(frequencies), std::move(weights)});
              })
         .def("compute", [](const ISAPolResponseProvider& provider, std::vector<double> frequencies,
                            std::vector<double> weights) {
-            return provider.compute_isapol_response(
-                FrequencyGrid{std::move(frequencies), std::move(weights)});
+            return provider.compute_isapol_response(FrequencyGrid{std::move(frequencies), std::move(weights)});
         });
+    m.def("_atomic_polarizability_make_frozen_response_context", &FrozenResponseContext::create,
+          "grac_wfn"_a, "neutral_precursor_wfn"_a, "cation_wfn"_a);
+    m.def("_atomic_polarizability_make_test_response_provider",
+          [](const std::shared_ptr<FrozenResponseContext>& context,
+             const std::shared_ptr<FrozenResponseContext>& isa_context) {
+              const auto count = isa_context->grid_point_count() * isa_context->sites().size();
+              std::vector<double> weights(count, 1.0 / static_cast<double>(isa_context->sites().size()));
+              auto isa = ISAWeights::create(isa_context, std::move(weights));
+              return std::make_shared<ISAPolResponseProvider>(context, ResponseKernel(0.25, 0.75), std::move(isa));
+          }, "context"_a, "isa_context"_a);
+    m.def("_atomic_polarizability_mutate_grac_component_for_test",
+          [](const std::shared_ptr<Wavefunction>& wfn, const std::string& mutation) {
+              const auto hf = std::dynamic_pointer_cast<scf::HF>(wfn);
+              if (!hf || !hf->functional()) throw PSIEXCEPTION("GRAC mutation seam requires scf::HF");
+              auto functional = hf->functional();
+              auto component = mutation == "x_identity" ? functional->grac_x_functional() :
+                               mutation == "c_identity" ? functional->grac_c_functional() : nullptr;
+              if (!component) throw PSIEXCEPTION("GRAC mutation seam received an unknown component");
+              const auto old_name = component->name();
+              component->set_name(old_name + "-MUTATED");
+              return old_name;
+          }, "wfn"_a, "mutation"_a);
+    m.def("_atomic_polarizability_restore_grac_component_for_test",
+          [](const std::shared_ptr<Wavefunction>& wfn, const std::string& mutation, const std::string& old_name) {
+              const auto hf = std::dynamic_pointer_cast<scf::HF>(wfn);
+              if (!hf || !hf->functional()) throw PSIEXCEPTION("GRAC mutation seam requires scf::HF");
+              auto functional = hf->functional();
+              auto component = mutation == "x_identity" ? functional->grac_x_functional() :
+                               mutation == "c_identity" ? functional->grac_c_functional() : nullptr;
+              if (!component) throw PSIEXCEPTION("GRAC mutation seam received an unknown component");
+              component->set_name(old_name);
+          }, "wfn"_a, "mutation"_a, "old_name"_a);
     m.def("_atomic_polarizability_local_spherical_dipole_to_cartesian",
           [](const Matrix& spherical) {
               if (spherical.nirrep() != 1 || spherical.nrow() != 15 || spherical.ncol() != 15) {

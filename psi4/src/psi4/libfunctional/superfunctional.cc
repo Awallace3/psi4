@@ -158,7 +158,7 @@ std::shared_ptr<SuperFunctional> SuperFunctional::build_polarized() {
 
     return sup;
 }
-std::shared_ptr<SuperFunctional> SuperFunctional::build_worker() {
+std::shared_ptr<SuperFunctional> SuperFunctional::build_worker() const {
     // Build the superfunctional
     auto sup = std::make_shared<SuperFunctional>();
 
@@ -190,6 +190,22 @@ std::shared_ptr<SuperFunctional> SuperFunctional::build_worker() {
     }
     sup->allocate();
 
+    return sup;
+}
+std::shared_ptr<SuperFunctional> SuperFunctional::build_response_copy() const {
+    auto sup = build_worker();
+    sup->name_ = name_;
+    sup->description_ = description_;
+    sup->citation_ = citation_;
+    sup->xclib_description_ = xclib_description_;
+    sup->x_omega_ = x_omega_;
+    sup->c_omega_ = c_omega_;
+    sup->x_alpha_ = x_alpha_;
+    sup->x_beta_ = x_beta_;
+    sup->c_alpha_ = c_alpha_;
+    sup->c_ss_alpha_ = c_ss_alpha_;
+    sup->c_os_alpha_ = c_os_alpha_;
+    sup->density_tolerance_ = density_tolerance_;
     return sup;
 }
 void SuperFunctional::print(std::string out, int level) const {

@@ -81,6 +81,7 @@ def scf_compute_energy(self):
     else:
         self.initialize()
     self.iteration_energies = []
+    self._set_response_state_converged(False)
 
     try:
         self.iterations()
@@ -94,6 +95,7 @@ def scf_compute_energy(self):
         else:
             core.print_out("  Energy and/or wave function did not converge, but proceeding anyway.\n\n")
     else:
+        self._set_response_state_converged(True)
         core.print_out("  Energy and wave function converged.\n\n")
 
     scf_energy = self.finalize_energy()

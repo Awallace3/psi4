@@ -633,10 +633,6 @@ class PSI_API Wavefunction : public std::enable_shared_from_this<Wavefunction> {
     /// Returns the wavefunction name
     const std::string& name() const { return name_; }
 
-    /// Returns the actual ground-state functional identity when the wavefunction owns one.
-    virtual std::string functional_identity() const { return {}; }
-    virtual std::string functional_fingerprint() const { return {}; }
-
     /// Set the module name (e.g. "OCC", "CCENERGY", "CCT3")
     void set_module(const std::string& module) { module_ = module; }
 

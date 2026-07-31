@@ -97,34 +97,9 @@ HF::HF(SharedWavefunction ref_wfn, std::shared_ptr<SuperFunctional> func, Option
 
 HF::~HF() {}
 
-std::string HF::functional_identity() const { return functional_ ? functional_->name() : std::string{}; }
-
-std::string HF::functional_fingerprint() const {
-    if (!functional_) return {};
-    std::ostringstream out;
-    out << std::hexfloat << functional_->name().size() << ':' << functional_->name() << '|'
-        << functional_->x_omega() << '|' << functional_->c_omega() << '|' << functional_->x_alpha()
-        << '|' << functional_->x_beta() << '|' << functional_->c_alpha() << '|'
-        << functional_->c_ss_alpha() << '|' << functional_->c_os_alpha() << '|' << functional_->vv10_b()
-        << '|' << functional_->vv10_c() << '|' << functional_->grac_shift() << '|'
-        << functional_->grac_alpha() << '|' << functional_->grac_beta() << '|'
-        << functional_->density_tolerance() << '|' << functional_->needs_xc() << '|'
-        << functional_->needs_vv10() << '|' << functional_->needs_grac();
-    for (const auto& component : functional_->x_functionals()) {
-        out << "|X:" << component->name().size() << ':' << component->name() << ':' << component->alpha()
-            << ':' << component->omega() << ':' << component->lsda_cutoff() << ':'
-            << component->meta_cutoff() << ':' << component->density_cutoff();
-    }
-    for (const auto& component : functional_->c_functionals()) {
-        out << "|C:" << component->name().size() << ':' << component->name() << ':' << component->alpha()
-            << ':' << component->omega() << ':' << component->lsda_cutoff() << ':'
-            << component->meta_cutoff() << ':' << component->density_cutoff();
-    }
-    return out.str();
-}
-
 void HF::common_init() {
     attempt_number_ = 1;
+    converged_ = false;
     reset_occ_ = false;
     sad_ = false;
     module_ = "scf";

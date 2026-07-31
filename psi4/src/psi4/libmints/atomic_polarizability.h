@@ -29,6 +29,11 @@
 
 namespace psi {
 
+class BasisSet;
+class Matrix;
+class Molecule;
+class SuperFunctional;
+class Vector;
 class Wavefunction;
 
 /** Imaginary-frequency points and transformed Gauss-Legendre weights. */
@@ -60,124 +65,129 @@ class PSI_API ResponseKernel {
     double alda_kernel() const { return alda_kernel_; }
 
    private:
-    const double chf_exchange_;
-    const double alda_kernel_;
+    double chf_exchange_;
+    double alda_kernel_;
 };
 
-/** DFT grid settings that determine the quadrature used by a wavefunction. */
-struct PSI_API DFTGridIdentity {
-    int spherical_points;
-    int radial_points;
-    int block_max_points;
-    int block_min_points;
-    double bs_radius_alpha;
-    double basis_tolerance;
-    double weights_tolerance;
-    double density_tolerance;
-    double pruning_alpha;
-    double block_max_radius;
-    bool remove_distant_points;
-    std::string grid_name;
-    std::string radial_scheme;
-    std::string spherical_scheme;
-    std::string nuclear_scheme;
-    std::string pruning_scheme;
-    std::string block_scheme;
-    std::string fingerprint;
-
-    bool operator==(const DFTGridIdentity& other) const;
+/** Exact ordered effective DFT-grid state retained by a frozen response context. */
+struct PSI_API FrozenGridBlock {
+    std::size_t point_offset{};
+    std::size_t point_count{};
+    std::vector<int> functions_local_to_global;
 };
 
-/** Canonical structured snapshot derived from a concrete Wavefunction. */
-struct PSI_API WavefunctionIdentity {
-    std::vector<double> nuclear_charges;
-    std::vector<SitePosition> geometry;
-    int molecular_charge;
-    int multiplicity;
-    std::string basis_name;
-    std::size_t basis_nbf;
-    std::size_t basis_nao;
-    std::size_t basis_nshell;
-    std::size_t basis_necp_shell;
-    bool basis_has_puream;
-    std::string basis_fingerprint;
-    std::string method;
-    std::string reference;
-    std::string functional;
-    std::string functional_fingerprint;
-    DFTGridIdentity grid;
-
-    static WavefunctionIdentity from_wavefunction(const std::shared_ptr<Wavefunction>& wfn);
-    void validate() const;
-    bool operator==(const WavefunctionIdentity& other) const;
-    bool operator!=(const WavefunctionIdentity& other) const { return !(*this == other); }
+/** Verified GRAC provenance from actual converged neutral, precursor, and cation SCFs. */
+struct PSI_API GRACProvenance {
+    double neutral_precursor_energy{};
+    double cation_energy{};
+    double homo_energy{};
+    double ionization_potential{};
+    double applied_shift{};
+    std::string cation_reference;
+    int cation_charge{};
+    int cation_multiplicity{};
 };
 
-/** Immutable attestation of the neutral/cation calculations used to construct a GRAC state. */
-class PSI_API GRACProvenance {
+/**
+ * Immutable, single-thread response state detached from all mutable source wavefunctions.
+ * The factory is the only construction path and validates restricted converged RKS plus
+ * the actual applied GRAC state before cloning response-bearing electronic data.
+ */
+class PSI_API FrozenResponseContext {
    public:
-    GRACProvenance(WavefunctionIdentity identity, double neutral_energy, double cation_energy,
-                   double homo_energy, double ionization_potential, double shift);
+    static std::shared_ptr<FrozenResponseContext> create(
+        const std::shared_ptr<Wavefunction>& grac_wfn,
+        const std::shared_ptr<Wavefunction>& neutral_precursor_wfn,
+        const std::shared_ptr<Wavefunction>& cation_wfn);
 
-    const WavefunctionIdentity& identity() const { return identity_; }
-    double neutral_energy() const { return neutral_energy_; }
-    double cation_energy() const { return cation_energy_; }
-    double homo_energy() const { return homo_energy_; }
-    double ionization_potential() const { return ionization_potential_; }
-    double shift() const { return shift_; }
+    const std::shared_ptr<const Matrix>& Ca() const { return Ca_; }
+    const std::shared_ptr<const Matrix>& Cb() const { return Cb_; }
+    const std::shared_ptr<const Vector>& epsilon_a() const { return epsilon_a_; }
+    const std::shared_ptr<const Vector>& epsilon_b() const { return epsilon_b_; }
+    const std::shared_ptr<const Vector>& occupation_a() const { return occupation_a_; }
+    const std::shared_ptr<const Vector>& occupation_b() const { return occupation_b_; }
+    const std::shared_ptr<const Matrix>& Da() const { return Da_; }
+    const std::shared_ptr<const Matrix>& Db() const { return Db_; }
+    double energy() const { return energy_; }
+    const std::shared_ptr<const Molecule>& molecule() const { return molecule_; }
+    const std::shared_ptr<const BasisSet>& basis() const { return basis_; }
+    const std::shared_ptr<const SuperFunctional>& functional() const { return functional_; }
+    const std::vector<SitePosition>& sites() const { return sites_; }
+    const std::vector<double>& grid_points() const { return grid_points_; }
+    const std::vector<double>& grid_weights() const { return grid_weights_; }
+    const std::vector<FrozenGridBlock>& grid_blocks() const { return grid_blocks_; }
+    const GRACProvenance& grac() const { return grac_; }
+    const std::string& functional_name() const { return functional_name_; }
+    const std::string& grac_x_name() const { return grac_x_name_; }
+    const std::string& grac_c_name() const { return grac_c_name_; }
+    std::size_t grid_point_count() const { return grid_weights_.size(); }
 
    private:
-    const WavefunctionIdentity identity_;
-    const double neutral_energy_;
-    const double cation_energy_;
-    const double homo_energy_;
-    const double ionization_potential_;
-    const double shift_;
+    FrozenResponseContext(SharedMatrix Ca, SharedMatrix Cb, SharedVector epsilon_a,
+                          SharedVector epsilon_b, SharedVector occupation_a,
+                          SharedVector occupation_b, SharedMatrix Da, SharedMatrix Db,
+                          double energy, std::shared_ptr<const Molecule> molecule,
+                          std::shared_ptr<const BasisSet> basis,
+                          std::shared_ptr<const SuperFunctional> functional,
+                          std::vector<SitePosition> sites, std::vector<double> grid_points,
+                          std::vector<double> grid_weights, std::vector<FrozenGridBlock> grid_blocks,
+                          GRACProvenance grac, std::string functional_name,
+                          std::string grac_x_name, std::string grac_c_name);
+
+    std::shared_ptr<const Matrix> Ca_;
+    std::shared_ptr<const Matrix> Cb_;
+    std::shared_ptr<const Vector> epsilon_a_;
+    std::shared_ptr<const Vector> epsilon_b_;
+    std::shared_ptr<const Vector> occupation_a_;
+    std::shared_ptr<const Vector> occupation_b_;
+    std::shared_ptr<const Matrix> Da_;
+    std::shared_ptr<const Matrix> Db_;
+    double energy_{};
+    std::shared_ptr<const Molecule> molecule_;
+    std::shared_ptr<const BasisSet> basis_;
+    std::shared_ptr<const SuperFunctional> functional_;
+    std::vector<SitePosition> sites_;
+    std::vector<double> grid_points_;
+    std::vector<double> grid_weights_;
+    std::vector<FrozenGridBlock> grid_blocks_;
+    GRACProvenance grac_{};
+    std::string functional_name_;
+    std::string grac_x_name_;
+    std::string grac_c_name_;
 };
 
-/** Immutable, caller-supplied ISA grid and point-major stockholder partition data. */
+/** Actual ISA data structurally bound to one exact frozen context and its ordered grid/sites. */
 class PSI_API ISAWeights {
    public:
-    ISAWeights(WavefunctionIdentity identity, std::size_t point_count, std::size_t grid_dimension,
-               std::size_t site_count, std::vector<double> points,
-               std::vector<double> quadrature_weights, std::vector<double> partition_weights);
+    static ISAWeights create(std::shared_ptr<const FrozenResponseContext> context,
+                             std::vector<double> partition_weights);
 
-    const WavefunctionIdentity& identity() const { return identity_; }
-    std::size_t point_count() const { return point_count_; }
-    std::size_t grid_dimension() const { return grid_dimension_; }
-    std::size_t site_count() const { return site_count_; }
-    const std::vector<double>& points() const { return points_; }
-    const std::vector<double>& quadrature_weights() const { return quadrature_weights_; }
+    std::size_t point_count() const;
+    std::size_t site_count() const;
     const std::vector<double>& partition_weights() const { return partition_weights_; }
 
    private:
-    const WavefunctionIdentity identity_;
-    const std::size_t point_count_;
-    const std::size_t grid_dimension_;
-    const std::size_t site_count_;
-    const std::vector<double> points_;
-    const std::vector<double> quadrature_weights_;
-    const std::vector<double> partition_weights_;
+    friend class ISAPolResponseProvider;
+    ISAWeights(std::shared_ptr<const FrozenResponseContext> context,
+               std::vector<double> partition_weights);
+
+    std::shared_ptr<const FrozenResponseContext> context_;
+    std::vector<double> partition_weights_;
 };
 
-/** Production response interface; one complete response is returned per frequency-grid point. */
+/** Production response interface; no mutable Wavefunction is retained or revalidated. */
 class PSI_API ISAPolResponseProvider {
    public:
-    ISAPolResponseProvider(std::shared_ptr<Wavefunction> wfn, ResponseKernel kernel,
-                           GRACProvenance grac, ISAWeights isa_weights);
+    ISAPolResponseProvider(std::shared_ptr<const FrozenResponseContext> context,
+                           ResponseKernel kernel, ISAWeights isa_weights);
 
-    /** Validate current identity/grid shape and report the required response cardinality. */
     std::size_t expected_response_count(const FrequencyGrid& frequencies) const;
     std::vector<SitePairResponse> compute_isapol_response(const FrequencyGrid& frequencies) const;
 
    private:
-    void validate_current_wavefunction_identity() const;
-
-    const std::shared_ptr<Wavefunction> wfn_;
-    const WavefunctionIdentity identity_snapshot_;
-    const ResponseKernel kernel_;
-    const GRACProvenance grac_;
-    const ISAWeights isa_weights_;
+    std::shared_ptr<const FrozenResponseContext> context_;
+    ResponseKernel kernel_;
+    ISAWeights isa_weights_;
 };
 
 /** Unweighted undirected graph over the polarizable sites. */

@@ -340,6 +340,8 @@ void export_wavefunction(py::module& m) {
         .def("cphf_solve", &scf::HF::cphf_solve, "x_vec"_a, "conv_tol"_a, "max_iter"_a, "print_lvl"_a = 2,
              "Solves the CPHF equations for a given set of x vectors.")
         .def("cphf_converged", &scf::HF::cphf_converged, "Adds occupied guess alpha orbitals.")
+        .def("_set_response_state_converged", &scf::HF::set_response_state_converged,
+             "Internal SCF-driver convergence state tracking.")
         .def("guess_Ca", &scf::HF::guess_Ca, "Sets the guess Alpha Orbital Matrix")
         .def("guess_Cb", &scf::HF::guess_Cb, "Sets the guess Beta Orbital Matrix")
         .def_property("reset_occ_", &scf::HF::reset_occ, &scf::HF::set_reset_occ,

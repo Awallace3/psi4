@@ -86,6 +86,8 @@ class LibXCFunctional : public Functional {
     void set_density_cutoff(double cut) override;
     void set_omega(double omega);
     void set_tweak(std::map<std::string, double>, bool);
+    /// Complete effective LibXC external-parameter map, including defaults.
+    std::map<std::string, double> effective_parameter_map() const;
     std::vector<std::tuple<std::string, int, double>> get_mix_data();
 
     // Make queries to libxc

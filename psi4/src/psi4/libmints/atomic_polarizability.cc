@@ -27,13 +27,18 @@
 #include <string>
 #include <utility>
 
+#include "psi4/libfock/cubature.h"
+#include "psi4/libfock/v.h"
+#include "psi4/libfunctional/LibXCfunctional.h"
+#include "psi4/libfunctional/functional.h"
+#include "psi4/libfunctional/superfunctional.h"
 #include "psi4/libmints/basisset.h"
-#include "psi4/libmints/gshell.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
-#include "psi4/liboptions/liboptions.h"
+#include "psi4/libscf_solver/hf.h"
+#include "psi4/libscf_solver/rhf.h"
 #include "psi4/libpsi4util/exception.h"
 
 namespace psi {
@@ -445,310 +450,281 @@ LocalizationResiduals localization_residuals(const SitePairResponse& before, con
 
 namespace {
 
-bool has_content(const std::string& value) {
-    return value.find_first_not_of(" \t\r\n") != std::string::npos;
+constexpr const char* kProtocolGRACX = "XC_GGA_X_LB";
+constexpr const char* kProtocolGRACC = "XC_LDA_C_VWN";
+
+bool close_enough(double first, double second) {
+    const double scale = std::max({1.0, std::abs(first), std::abs(second)});
+    return std::abs(first - second) <= kValidationTolerance * scale;
 }
 
-std::string make_basis_fingerprint(const BasisSet& basis) {
-    std::ostringstream out;
-    out << std::hexfloat << basis.name().size() << ':' << basis.name() << '|' << basis.nbf() << '|'
-        << basis.nao() << '|' << basis.nshell() << '|' << basis.n_ecp_shell() << '|'
-        << basis.has_puream();
-    for (int shell_index = 0; shell_index < basis.nshell(); ++shell_index) {
-        const auto& shell = basis.shell(shell_index);
-        out << "|S:" << shell.ncenter() << ':' << shell.am() << ':' << shell.is_pure() << ':'
-            << shell.nprimitive();
-        for (int primitive = 0; primitive < shell.nprimitive(); ++primitive) {
-            out << ':' << shell.exp(primitive) << ':' << shell.original_coef(primitive);
+std::shared_ptr<scf::HF> require_converged_scf(const std::shared_ptr<Wavefunction>& wfn,
+                                               const char* role) {
+    const auto hf = std::dynamic_pointer_cast<scf::HF>(wfn);
+    if (!hf) throw PSIEXCEPTION(std::string("FrozenResponseContext: ") + role + " must be an scf::HF state");
+    if (!hf->response_state_converged()) {
+        throw PSIEXCEPTION(std::string("FrozenResponseContext: ") + role + " SCF state is not converged");
+    }
+    if (!std::isfinite(hf->energy()) || !hf->Ca() || !hf->Cb() || !hf->Da() || !hf->Db() ||
+        !hf->epsilon_a() || !hf->epsilon_b()) {
+        throw PSIEXCEPTION(std::string("FrozenResponseContext: ") + role +
+                           " converged electronic state is incomplete");
+    }
+    return hf;
+}
+
+bool same_nuclei_and_geometry(const Molecule& first, const Molecule& second) {
+    if (first.natom() != second.natom()) return false;
+    for (int atom = 0; atom < first.natom(); ++atom) {
+        if (first.Z(atom) != second.Z(atom) || first.x(atom) != second.x(atom) ||
+            first.y(atom) != second.y(atom) || first.z(atom) != second.z(atom)) return false;
+    }
+    return true;
+}
+
+bool same_functional_components(const SuperFunctional& first, const SuperFunctional& second) {
+    const auto same = [](const auto& left, const auto& right) {
+        if (left.size() != right.size()) return false;
+        for (std::size_t i = 0; i < left.size(); ++i) {
+            if (!left[i] || !right[i] || left[i]->name() != right[i]->name() ||
+                left[i]->parameters() != right[i]->parameters() || left[i]->alpha() != right[i]->alpha() ||
+                left[i]->omega() != right[i]->omega()) return false;
+        }
+        return true;
+    };
+    return first.name() == second.name() && first.x_alpha() == second.x_alpha() &&
+           first.x_beta() == second.x_beta() && first.x_omega() == second.x_omega() &&
+           first.c_alpha() == second.c_alpha() && first.c_omega() == second.c_omega() &&
+           same(first.x_functionals(), second.x_functionals()) &&
+           same(first.c_functionals(), second.c_functionals());
+}
+
+double occupied_homo(const scf::HF& hf) {
+    const auto occupation = hf.occupation_a();
+    const auto epsilon = hf.epsilon_a();
+    double homo = -std::numeric_limits<double>::infinity();
+    for (int h = 0; h < occupation->nirrep(); ++h) {
+        for (int orbital = 0; orbital < occupation->dim(h); ++orbital) {
+            if (occupation->get(h, orbital) > 0.0) homo = std::max(homo, epsilon->get(h, orbital));
         }
     }
-    for (int shell_index = 0; shell_index < basis.n_ecp_shell(); ++shell_index) {
-        const auto& shell = basis.ecp_shell(shell_index);
-        out << "|E:" << shell.ncenter() << ':' << shell.am() << ':' << shell.nprimitive();
-        for (int primitive = 0; primitive < shell.nprimitive(); ++primitive) {
-            out << ':' << shell.exp(primitive) << ':' << shell.original_coef(primitive) << ':'
-                << shell.nval(primitive);
-        }
-    }
-    return out.str();
-}
-
-std::string make_grid_fingerprint(const DFTGridIdentity& grid) {
-    std::ostringstream out;
-    out << std::hexfloat << grid.spherical_points << '|' << grid.radial_points << '|'
-        << grid.block_max_points << '|' << grid.block_min_points << '|' << grid.bs_radius_alpha << '|'
-        << grid.basis_tolerance << '|' << grid.weights_tolerance << '|' << grid.density_tolerance << '|'
-        << grid.pruning_alpha << '|' << grid.block_max_radius << '|' << grid.remove_distant_points << '|'
-        << grid.grid_name.size() << ':' << grid.grid_name << '|' << grid.radial_scheme.size() << ':'
-        << grid.radial_scheme << '|' << grid.spherical_scheme.size() << ':' << grid.spherical_scheme << '|'
-        << grid.nuclear_scheme.size() << ':' << grid.nuclear_scheme << '|' << grid.pruning_scheme.size()
-        << ':' << grid.pruning_scheme << '|' << grid.block_scheme.size() << ':' << grid.block_scheme;
-    return out.str();
-}
-
-WavefunctionIdentity provider_identity(const std::shared_ptr<Wavefunction>& wfn) {
-    if (!wfn) throw PSIEXCEPTION("ISAPolResponseProvider: wavefunction is null");
-    return WavefunctionIdentity::from_wavefunction(wfn);
+    if (!std::isfinite(homo)) throw PSIEXCEPTION("FrozenResponseContext: neutral precursor has no finite occupied HOMO");
+    return homo;
 }
 
 }  // namespace
 
-bool DFTGridIdentity::operator==(const DFTGridIdentity& other) const {
-    return spherical_points == other.spherical_points && radial_points == other.radial_points &&
-           block_max_points == other.block_max_points && block_min_points == other.block_min_points &&
-           bs_radius_alpha == other.bs_radius_alpha && basis_tolerance == other.basis_tolerance &&
-           weights_tolerance == other.weights_tolerance && density_tolerance == other.density_tolerance &&
-           pruning_alpha == other.pruning_alpha && block_max_radius == other.block_max_radius &&
-           remove_distant_points == other.remove_distant_points && grid_name == other.grid_name &&
-           radial_scheme == other.radial_scheme && spherical_scheme == other.spherical_scheme &&
-           nuclear_scheme == other.nuclear_scheme && pruning_scheme == other.pruning_scheme &&
-           block_scheme == other.block_scheme && fingerprint == other.fingerprint;
-}
-
-WavefunctionIdentity WavefunctionIdentity::from_wavefunction(const std::shared_ptr<Wavefunction>& wfn) {
-    if (!wfn) throw PSIEXCEPTION("WavefunctionIdentity: wavefunction is null");
-    const auto molecule = wfn->molecule();
-    const auto basis = wfn->basisset();
-    if (!molecule || !basis) {
-        throw PSIEXCEPTION("WavefunctionIdentity: wavefunction must own a molecule and orbital basis");
-    }
-
-    WavefunctionIdentity identity;
-    identity.nuclear_charges.reserve(molecule->natom());
-    identity.geometry.reserve(molecule->natom());
-    for (int atom = 0; atom < molecule->natom(); ++atom) {
-        identity.nuclear_charges.push_back(molecule->Z(atom));
-        identity.geometry.push_back({molecule->x(atom), molecule->y(atom), molecule->z(atom)});
-    }
-    identity.molecular_charge = molecule->molecular_charge();
-    identity.multiplicity = molecule->multiplicity();
-    identity.basis_name = basis->name();
-    identity.basis_nbf = basis->nbf();
-    identity.basis_nao = basis->nao();
-    identity.basis_nshell = basis->nshell();
-    identity.basis_necp_shell = basis->n_ecp_shell();
-    identity.basis_has_puream = basis->has_puream();
-    identity.basis_fingerprint = make_basis_fingerprint(*basis);
-    identity.method = wfn->module() + "/" + wfn->name();
-    identity.reference = wfn->options().get_str("REFERENCE");
-    identity.functional = wfn->functional_identity();
-    identity.functional_fingerprint = wfn->functional_fingerprint();
-
-    auto& options = wfn->options();
-    auto& grid = identity.grid;
-    grid.spherical_points = options.get_int("DFT_SPHERICAL_POINTS");
-    grid.radial_points = options.get_int("DFT_RADIAL_POINTS");
-    grid.block_max_points = options.get_int("DFT_BLOCK_MAX_POINTS");
-    grid.block_min_points = options.get_int("DFT_BLOCK_MIN_POINTS");
-    grid.bs_radius_alpha = options.get_double("DFT_BS_RADIUS_ALPHA");
-    grid.basis_tolerance = options.get_double("DFT_BASIS_TOLERANCE");
-    grid.weights_tolerance = options.get_double("DFT_WEIGHTS_TOLERANCE");
-    grid.density_tolerance = options.get_double("DFT_DENSITY_TOLERANCE");
-    grid.pruning_alpha = options.get_double("DFT_PRUNING_ALPHA");
-    grid.block_max_radius = options.get_double("DFT_BLOCK_MAX_RADIUS");
-    grid.remove_distant_points = options.get_bool("DFT_REMOVE_DISTANT_POINTS");
-    grid.grid_name = options.get_str("DFT_GRID_NAME");
-    grid.radial_scheme = options.get_str("DFT_RADIAL_SCHEME");
-    grid.spherical_scheme = options.get_str("DFT_SPHERICAL_SCHEME");
-    grid.nuclear_scheme = options.get_str("DFT_NUCLEAR_SCHEME");
-    grid.pruning_scheme = options.get_str("DFT_PRUNING_SCHEME");
-    grid.block_scheme = options.get_str("DFT_BLOCK_SCHEME");
-    grid.fingerprint = make_grid_fingerprint(grid);
-    identity.validate();
-    return identity;
-}
-
-void WavefunctionIdentity::validate() const {
-    if (nuclear_charges.empty() || nuclear_charges.size() != geometry.size() || multiplicity <= 0) {
-        throw PSIEXCEPTION("WavefunctionIdentity: molecular dimensions and multiplicity are invalid");
-    }
-    for (std::size_t site = 0; site < nuclear_charges.size(); ++site) {
-        if (!std::isfinite(nuclear_charges[site]) || nuclear_charges[site] < 0.0 ||
-            !std::all_of(geometry[site].begin(), geometry[site].end(),
-                         [](double value) { return std::isfinite(value); })) {
-            throw PSIEXCEPTION("WavefunctionIdentity: geometry and nuclear charges must be finite");
-        }
-    }
-    const auto slash = method.find('/');
-    if (!has_content(basis_name) || !has_content(basis_fingerprint) || !has_content(method) ||
-        slash == std::string::npos || slash == 0 || slash + 1 == method.size() || !has_content(reference) ||
-        !has_content(functional) || !has_content(functional_fingerprint) ||
-        !has_content(grid.radial_scheme) ||
-        !has_content(grid.spherical_scheme) || !has_content(grid.nuclear_scheme) ||
-        !has_content(grid.pruning_scheme) || !has_content(grid.block_scheme) ||
-        !has_content(grid.fingerprint)) {
-        throw PSIEXCEPTION(
-            "WavefunctionIdentity: all basis, method, functional, and grid identity fields are required");
-    }
-    if (basis_nbf == 0 || basis_nao == 0 || basis_nshell == 0 || grid.spherical_points <= 0 ||
-        grid.radial_points <= 0 || grid.block_max_points <= 0 || grid.block_min_points <= 0) {
-        throw PSIEXCEPTION("WavefunctionIdentity: basis and grid dimensions must be positive");
-    }
-    const std::array<double, 6> grid_values{grid.bs_radius_alpha, grid.basis_tolerance,
-                                            grid.weights_tolerance, grid.density_tolerance,
-                                            grid.pruning_alpha, grid.block_max_radius};
-    if (!std::all_of(grid_values.begin(), grid_values.end(),
-                     [](double value) { return std::isfinite(value); })) {
-        throw PSIEXCEPTION("WavefunctionIdentity: grid settings must be finite");
-    }
-}
-
-bool WavefunctionIdentity::operator==(const WavefunctionIdentity& other) const {
-    return nuclear_charges == other.nuclear_charges && geometry == other.geometry &&
-           molecular_charge == other.molecular_charge && multiplicity == other.multiplicity &&
-           basis_name == other.basis_name && basis_nbf == other.basis_nbf && basis_nao == other.basis_nao &&
-           basis_nshell == other.basis_nshell && basis_necp_shell == other.basis_necp_shell &&
-           basis_has_puream == other.basis_has_puream && basis_fingerprint == other.basis_fingerprint &&
-           method == other.method && reference == other.reference && functional == other.functional &&
-           functional_fingerprint == other.functional_fingerprint && grid == other.grid;
-}
-
 ResponseKernel::ResponseKernel(double chf_exchange, double alda_kernel)
     : chf_exchange_(chf_exchange), alda_kernel_(alda_kernel) {
-    if (!std::isfinite(chf_exchange_) || chf_exchange_ != 0.25) {
+    if (!std::isfinite(chf_exchange_) || chf_exchange_ != 0.25)
         throw PSIEXCEPTION("ResponseKernel: CHF exchange coefficient must be exactly 0.25");
-    }
-    if (!std::isfinite(alda_kernel_) || alda_kernel_ != 0.75) {
+    if (!std::isfinite(alda_kernel_) || alda_kernel_ != 0.75)
         throw PSIEXCEPTION("ResponseKernel: ALDA coefficient must be exactly 0.75");
-    }
 }
 
-GRACProvenance::GRACProvenance(WavefunctionIdentity identity, double neutral_energy,
-                               double cation_energy, double homo_energy, double ionization_potential,
-                               double shift)
-    : identity_(std::move(identity)),
-      neutral_energy_(neutral_energy),
-      cation_energy_(cation_energy),
-      homo_energy_(homo_energy),
-      ionization_potential_(ionization_potential),
-      shift_(shift) {
-    identity_.validate();
-    const std::array<double, 5> values{
-        neutral_energy_, cation_energy_, homo_energy_, ionization_potential_, shift_};
-    if (!std::all_of(values.begin(), values.end(), [](double value) { return std::isfinite(value); })) {
-        throw PSIEXCEPTION("GRACProvenance: all energy metadata must be finite");
+FrozenResponseContext::FrozenResponseContext(
+    SharedMatrix Ca, SharedMatrix Cb, SharedVector epsilon_a, SharedVector epsilon_b,
+    SharedVector occupation_a, SharedVector occupation_b, SharedMatrix Da, SharedMatrix Db,
+    double energy, std::shared_ptr<const Molecule> molecule, std::shared_ptr<const BasisSet> basis,
+    std::shared_ptr<const SuperFunctional> functional, std::vector<SitePosition> sites,
+    std::vector<double> grid_points, std::vector<double> grid_weights,
+    std::vector<FrozenGridBlock> grid_blocks, GRACProvenance grac, std::string functional_name,
+    std::string grac_x_name, std::string grac_c_name)
+    : Ca_(std::move(Ca)), Cb_(std::move(Cb)), epsilon_a_(std::move(epsilon_a)),
+      epsilon_b_(std::move(epsilon_b)), occupation_a_(std::move(occupation_a)),
+      occupation_b_(std::move(occupation_b)), Da_(std::move(Da)), Db_(std::move(Db)), energy_(energy),
+      molecule_(std::move(molecule)), basis_(std::move(basis)), functional_(std::move(functional)),
+      sites_(std::move(sites)), grid_points_(std::move(grid_points)), grid_weights_(std::move(grid_weights)),
+      grid_blocks_(std::move(grid_blocks)), grac_(std::move(grac)),
+      functional_name_(std::move(functional_name)), grac_x_name_(std::move(grac_x_name)),
+      grac_c_name_(std::move(grac_c_name)) {}
+
+std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
+    const std::shared_ptr<Wavefunction>& grac_wfn,
+    const std::shared_ptr<Wavefunction>& neutral_precursor_wfn,
+    const std::shared_ptr<Wavefunction>& cation_wfn) {
+    const auto grac_hf = require_converged_scf(grac_wfn, "GRAC neutral");
+    const auto precursor_hf = require_converged_scf(neutral_precursor_wfn, "neutral precursor");
+    const auto cation_hf = require_converged_scf(cation_wfn, "cation");
+    const auto grac_rhf = std::dynamic_pointer_cast<scf::RHF>(grac_hf);
+    const auto precursor_rhf = std::dynamic_pointer_cast<scf::RHF>(precursor_hf);
+    if (!grac_rhf || !precursor_rhf || !grac_hf->same_a_b_orbs() || !grac_hf->same_a_b_dens()) {
+        throw PSIEXCEPTION("FrozenResponseContext: only restricted scf::HF/RKS neutral states are supported");
     }
-    if (!(cation_energy_ > neutral_energy_)) {
-        throw PSIEXCEPTION("GRACProvenance: cation energy must be greater than neutral energy");
+    const auto functional = grac_hf->response_functional();
+    const auto precursor_functional = precursor_hf->response_functional();
+    const auto potential = grac_rhf->V_potential();
+    if (!functional || !precursor_functional || !functional->needs_xc() || !potential ||
+        !potential->grac_initialized() || !functional->needs_grac()) {
+        throw PSIEXCEPTION("FrozenResponseContext: neutral must contain an actual applied GRAC RKS state with needs_grac");
     }
-    if (!(ionization_potential_ > 0.0)) {
-        throw PSIEXCEPTION("GRACProvenance: ionization potential must be positive");
+    if (precursor_functional->needs_grac() || !same_functional_components(*functional, *precursor_functional)) {
+        throw PSIEXCEPTION("FrozenResponseContext: neutral precursor must be the same unshifted ground-state functional");
     }
-    if (!(homo_energy_ < 0.0)) {
-        throw PSIEXCEPTION("GRACProvenance: HOMO energy must be negative");
+    const auto grac_x = functional->grac_x_functional();
+    const auto grac_c = functional->grac_c_functional();
+    const LibXCFunctional expected_x(kProtocolGRACX, true);
+    const LibXCFunctional expected_c(kProtocolGRACC, true);
+    const auto actual_x = std::dynamic_pointer_cast<const LibXCFunctional>(grac_x);
+    const auto actual_c = std::dynamic_pointer_cast<const LibXCFunctional>(grac_c);
+    if (!actual_x || !actual_c || actual_x->name() != kProtocolGRACX || actual_c->name() != kProtocolGRACC) {
+        throw PSIEXCEPTION("FrozenResponseContext: GRAC functional identity does not match the intended X/C components");
     }
-    if (shift_ < 0.0) {
-        throw PSIEXCEPTION("GRACProvenance: GRAC shift must be nonnegative");
+    if (actual_x->effective_parameter_map() != expected_x.effective_parameter_map() ||
+        actual_c->effective_parameter_map() != expected_c.effective_parameter_map()) {
+        throw PSIEXCEPTION("FrozenResponseContext: GRAC functional parameter map does not match the intended full map");
+    }
+    if (grac_x->alpha() != 1.0 - functional->x_alpha() || grac_c->alpha() != 1.0) {
+        throw PSIEXCEPTION("FrozenResponseContext: GRAC functional parameter map has inconsistent component scaling");
     }
 
-    const double derived_ionization_potential = cation_energy_ - neutral_energy_;
-    const double derived_shift = ionization_potential_ + homo_energy_;
-    if (!std::isfinite(derived_ionization_potential) || !std::isfinite(derived_shift)) {
-        throw PSIEXCEPTION("GRACProvenance: derived ionization potential and shift must be finite");
+    const auto grac_molecule = grac_hf->molecule();
+    const auto precursor_molecule = precursor_hf->molecule();
+    const auto cation_molecule = cation_hf->molecule();
+    if (!grac_molecule || !precursor_molecule || !cation_molecule ||
+        !same_nuclei_and_geometry(*grac_molecule, *precursor_molecule) ||
+        !same_nuclei_and_geometry(*grac_molecule, *cation_molecule) ||
+        grac_molecule->molecular_charge() != precursor_molecule->molecular_charge() ||
+        cation_molecule->molecular_charge() != grac_molecule->molecular_charge() + 1 ||
+        cation_hf->nalpha() + cation_hf->nbeta() != grac_hf->nalpha() + grac_hf->nbeta() - 1) {
+        throw PSIEXCEPTION("FrozenResponseContext: cation calculation charge/electron identity is inconsistent");
     }
-    const auto consistent = [](double supplied, double derived) {
-        const double scale = std::max({1.0, std::abs(supplied), std::abs(derived)});
-        return std::abs(supplied - derived) <= kValidationTolerance * scale;
-    };
-    if (!consistent(ionization_potential_, derived_ionization_potential)) {
-        throw PSIEXCEPTION(
-            "GRACProvenance: ionization potential must equal cation energy minus neutral energy");
+    if (grac_hf->basisset()->name() != precursor_hf->basisset()->name() ||
+        grac_hf->basisset()->name() != cation_hf->basisset()->name() ||
+        grac_hf->basisset()->nbf() != precursor_hf->basisset()->nbf() ||
+        grac_hf->basisset()->nbf() != cation_hf->basisset()->nbf()) {
+        throw PSIEXCEPTION("FrozenResponseContext: precursor/cation basis identity is inconsistent");
     }
-    if (!consistent(shift_, derived_shift)) {
-        throw PSIEXCEPTION("GRACProvenance: GRAC shift must equal ionization potential plus HOMO energy");
+    if (!cation_hf->response_functional() ||
+        !same_functional_components(*precursor_functional, *cation_hf->response_functional())) {
+        throw PSIEXCEPTION("FrozenResponseContext: cation functional identity is inconsistent");
     }
+
+    const double homo = occupied_homo(*precursor_hf);
+    const double ip = cation_hf->energy() - precursor_hf->energy();
+    const double derived_shift = ip + homo;
+    const double applied_shift = functional->grac_shift();
+    if (!std::isfinite(ip) || ip <= 0.0 || !std::isfinite(derived_shift) || derived_shift < 0.0 ||
+        !close_enough(applied_shift, derived_shift)) {
+        throw PSIEXCEPTION("FrozenResponseContext: actual applied GRAC shift must equal IP plus HOMO energy");
+    }
+
+    const auto grid = potential->response_grid();
+    if (!grid || grid->npoints() <= 0 || grid->blocks().empty())
+        throw PSIEXCEPTION("FrozenResponseContext: actual effective RKS grid is unavailable");
+    std::vector<double> grid_points;
+    std::vector<double> grid_weights;
+    std::vector<FrozenGridBlock> grid_blocks;
+    grid_points.reserve(static_cast<std::size_t>(grid->npoints()) * 3);
+    grid_weights.reserve(static_cast<std::size_t>(grid->npoints()));
+    std::size_t offset = 0;
+    for (const auto& block : grid->blocks()) {
+        if (!block || block->npoints() == 0) throw PSIEXCEPTION("FrozenResponseContext: effective grid contains an empty block");
+        grid_blocks.push_back({offset, block->npoints(), block->functions_local_to_global()});
+        for (std::size_t point = 0; point < block->npoints(); ++point) {
+            const std::array<double, 4> values{block->x()[point], block->y()[point], block->z()[point], block->w()[point]};
+            if (!std::all_of(values.begin(), values.end(), [](double value) { return std::isfinite(value); }))
+                throw PSIEXCEPTION("FrozenResponseContext: effective grid contains nonfinite data");
+            grid_points.insert(grid_points.end(), values.begin(), values.begin() + 3);
+            grid_weights.push_back(values[3]);
+        }
+        offset += block->npoints();
+    }
+    if (offset != static_cast<std::size_t>(grid->npoints()))
+        throw PSIEXCEPTION("FrozenResponseContext: effective grid block cardinality is inconsistent");
+
+    std::vector<SitePosition> sites;
+    sites.reserve(grac_molecule->natom());
+    for (int atom = 0; atom < grac_molecule->natom(); ++atom)
+        sites.push_back({grac_molecule->x(atom), grac_molecule->y(atom), grac_molecule->z(atom)});
+    GRACProvenance provenance{precursor_hf->energy(), cation_hf->energy(), homo, ip, applied_shift,
+                              cation_hf->same_a_b_orbs() ? "RHF" : "UHF",
+                              cation_molecule->molecular_charge(), cation_molecule->multiplicity()};
+    auto molecule_copy = std::make_shared<Molecule>(grac_molecule->clone());
+    auto functional_copy = functional->build_response_copy();
+    return std::shared_ptr<FrozenResponseContext>(new FrozenResponseContext(
+        grac_hf->Ca()->clone(), grac_hf->Cb()->clone(),
+        std::make_shared<Vector>(grac_hf->epsilon_a()->clone()),
+        std::make_shared<Vector>(grac_hf->epsilon_b()->clone()),
+        std::make_shared<Vector>(grac_hf->occupation_a()->clone()),
+        std::make_shared<Vector>(grac_hf->occupation_b()->clone()),
+        grac_hf->Da()->clone(), grac_hf->Db()->clone(), grac_hf->energy(), std::move(molecule_copy),
+        grac_hf->basisset(), std::move(functional_copy), std::move(sites), std::move(grid_points),
+        std::move(grid_weights), std::move(grid_blocks), std::move(provenance), functional->name(),
+        grac_x->name(), grac_c->name()));
 }
 
-ISAWeights::ISAWeights(WavefunctionIdentity identity, std::size_t point_count,
-                       std::size_t grid_dimension, std::size_t site_count, std::vector<double> points,
-                       std::vector<double> quadrature_weights, std::vector<double> partition_weights)
-    : identity_(std::move(identity)),
-      point_count_(point_count),
-      grid_dimension_(grid_dimension),
-      site_count_(site_count),
-      points_(std::move(points)),
-      quadrature_weights_(std::move(quadrature_weights)),
-      partition_weights_(std::move(partition_weights)) {
-    identity_.validate();
-    if (point_count_ == 0) throw PSIEXCEPTION("ISAWeights: point count must be positive");
-    if (grid_dimension_ != 3) throw PSIEXCEPTION("ISAWeights: grid dimension must be exactly 3");
-    if (site_count_ == 0) throw PSIEXCEPTION("ISAWeights: site count must be positive");
-    if (point_count_ > std::numeric_limits<std::size_t>::max() / grid_dimension_ ||
-        points_.size() != point_count_ * grid_dimension_) {
-        throw PSIEXCEPTION("ISAWeights: point coordinates do not match declared dimensions");
-    }
-    if (quadrature_weights_.size() != point_count_) {
-        throw PSIEXCEPTION("ISAWeights: quadrature weights do not match declared dimensions");
-    }
-    if (point_count_ > std::numeric_limits<std::size_t>::max() / site_count_ ||
-        partition_weights_.size() != point_count_ * site_count_) {
-        throw PSIEXCEPTION("ISAWeights: partition weights do not match declared dimensions");
-    }
-    if (!std::all_of(points_.begin(), points_.end(), [](double value) { return std::isfinite(value); }) ||
-        !std::all_of(quadrature_weights_.begin(), quadrature_weights_.end(),
-                     [](double value) { return std::isfinite(value) && value > 0.0; }) ||
-        !std::all_of(partition_weights_.begin(), partition_weights_.end(),
-                     [](double value) { return std::isfinite(value) && value >= 0.0; })) {
-        throw PSIEXCEPTION(
-            "ISAWeights: coordinates and weights must be finite; quadrature weights must be positive "
-            "and partition weights must be nonnegative");
-    }
-    for (std::size_t point = 0; point < point_count_; ++point) {
+ISAWeights::ISAWeights(std::shared_ptr<const FrozenResponseContext> context,
+                       std::vector<double> partition_weights)
+    : context_(std::move(context)), partition_weights_(std::move(partition_weights)) {}
+
+ISAWeights ISAWeights::create(std::shared_ptr<const FrozenResponseContext> context,
+                              std::vector<double> partition_weights) {
+    if (!context) throw PSIEXCEPTION("ISAWeights: frozen response context is null");
+    const auto point_count = context->grid_point_count();
+    const auto site_count = context->sites().size();
+    if (point_count == 0 || site_count == 0 || point_count > std::numeric_limits<std::size_t>::max() / site_count ||
+        partition_weights.size() != point_count * site_count)
+        throw PSIEXCEPTION("ISAWeights: partition weights do not match the frozen ordered grid/sites");
+    for (std::size_t point = 0; point < point_count; ++point) {
         double sum = 0.0;
-        for (std::size_t site = 0; site < site_count_; ++site) {
-            sum += partition_weights_[point * site_count_ + site];
+        for (std::size_t site = 0; site < site_count; ++site) {
+            const double value = partition_weights[point * site_count + site];
+            if (!std::isfinite(value) || value < 0.0)
+                throw PSIEXCEPTION("ISAWeights: partition weights must be finite and nonnegative");
+            sum += value;
         }
-        if (!std::isfinite(sum) || std::abs(sum - 1.0) > kValidationTolerance) {
-            throw PSIEXCEPTION("ISAWeights: partition unity failed at a grid point");
-        }
+        if (!std::isfinite(sum) || std::abs(sum - 1.0) > kValidationTolerance)
+            throw PSIEXCEPTION("ISAWeights: partition unity failed on the frozen ordered grid");
     }
+    return ISAWeights(std::move(context), std::move(partition_weights));
 }
 
-ISAPolResponseProvider::ISAPolResponseProvider(std::shared_ptr<Wavefunction> wfn, ResponseKernel kernel,
-                                               GRACProvenance grac, ISAWeights isa_weights)
-    : wfn_(std::move(wfn)),
-      identity_snapshot_(provider_identity(wfn_)),
-      kernel_(std::move(kernel)),
-      grac_(std::move(grac)),
-      isa_weights_(std::move(isa_weights)) {
-    if (grac_.identity() != identity_snapshot_) {
-        throw PSIEXCEPTION("ISAPolResponseProvider: GRAC provenance wavefunction identity mismatch");
-    }
-    if (isa_weights_.identity() != identity_snapshot_) {
-        throw PSIEXCEPTION("ISAPolResponseProvider: ISA weights wavefunction identity mismatch");
-    }
-}
+std::size_t ISAWeights::point_count() const { return context_->grid_point_count(); }
+std::size_t ISAWeights::site_count() const { return context_->sites().size(); }
 
-void ISAPolResponseProvider::validate_current_wavefunction_identity() const {
-    if (WavefunctionIdentity::from_wavefunction(wfn_) != identity_snapshot_) {
-        throw PSIEXCEPTION(
-            "ISAPolResponseProvider: wavefunction identity changed since provider construction");
-    }
+ISAPolResponseProvider::ISAPolResponseProvider(std::shared_ptr<const FrozenResponseContext> context,
+                                               ResponseKernel kernel, ISAWeights isa_weights)
+    : context_(std::move(context)), kernel_(std::move(kernel)), isa_weights_(std::move(isa_weights)) {
+    if (!context_) throw PSIEXCEPTION("ISAPolResponseProvider: frozen response context is null");
+    if (isa_weights_.context_.get() != context_.get())
+        throw PSIEXCEPTION("ISAPolResponseProvider: ISA weights belong to a different frozen response context");
 }
 
 std::size_t ISAPolResponseProvider::expected_response_count(const FrequencyGrid& frequencies) const {
-    validate_current_wavefunction_identity();
-    if (frequencies.frequencies.empty() || frequencies.frequencies.size() != frequencies.weights.size()) {
+    if (frequencies.frequencies.empty())
+        throw PSIEXCEPTION("ISAPolResponseProvider: frequency grid requires at least one point");
+    if (frequencies.frequencies.size() != frequencies.weights.size())
         throw PSIEXCEPTION("ISAPolResponseProvider: frequency grid has inconsistent dimensions");
-    }
-    for (std::size_t point = 0; point < frequencies.frequencies.size(); ++point) {
+    const double static_frequency = frequencies.frequencies.front();
+    const double static_weight = frequencies.weights.front();
+    if (!std::isfinite(static_frequency) || !std::isfinite(static_weight))
+        throw PSIEXCEPTION("ISAPolResponseProvider: frequency grid values must be finite");
+    if (static_frequency < 0.0)
+        throw PSIEXCEPTION("ISAPolResponseProvider: static frequency must be nonnegative");
+    if (static_frequency != 0.0)
+        throw PSIEXCEPTION("ISAPolResponseProvider: frequency grid must start at exactly zero");
+    if (static_weight != 0.0)
+        throw PSIEXCEPTION("ISAPolResponseProvider: static frequency weight must be exactly zero");
+    for (std::size_t point = 1; point < frequencies.frequencies.size(); ++point) {
         const double frequency = frequencies.frequencies[point];
         const double weight = frequencies.weights[point];
-        if (!std::isfinite(frequency) || frequency < 0.0 || !std::isfinite(weight) || weight < 0.0 ||
-            (point > 0 && frequency <= frequencies.frequencies[point - 1])) {
-            throw PSIEXCEPTION(
-                "ISAPolResponseProvider: frequency grid must be finite, nonnegative, and increasing");
-        }
+        if (!std::isfinite(frequency) || !std::isfinite(weight))
+            throw PSIEXCEPTION("ISAPolResponseProvider: frequency grid values must be finite");
+        if (frequency < 0.0)
+            throw PSIEXCEPTION("ISAPolResponseProvider: every nonstatic frequency must be positive");
+        if (frequency <= frequencies.frequencies[point - 1])
+            throw PSIEXCEPTION("ISAPolResponseProvider: frequencies must be strictly increasing");
+        if (weight <= 0.0)
+            throw PSIEXCEPTION("ISAPolResponseProvider: every nonzero-frequency weight must be positive");
     }
     return frequencies.frequencies.size();
 }
 
 std::vector<SitePairResponse> ISAPolResponseProvider::compute_isapol_response(
     const FrequencyGrid& frequencies) const {
-    const auto response_count = expected_response_count(frequencies);
-    (void)response_count;
-    throw PSIEXCEPTION(
-        "ISAPolResponseProvider: native point-response execution is not implemented; no response was published");
+    (void)expected_response_count(frequencies);
+    throw PSIEXCEPTION("ISAPolResponseProvider: native point-response execution is not implemented; no response was published");
 }
 
 Matrix lw_graph_operator(const BondGraph& graph) { return to_psi_matrix(make_graph_operator(graph)); }
