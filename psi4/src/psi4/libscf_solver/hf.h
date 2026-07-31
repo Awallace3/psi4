@@ -194,8 +194,16 @@ class HF : public Wavefunction {
     double response_previous_iteration_energy_;
     double response_last_energy_change_;
     double response_last_density_norm_;
+    std::size_t response_native_iteration_id_;
+    std::size_t response_last_observed_iteration_id_;
+    std::size_t response_distinct_iterations_observed_;
     std::shared_ptr<const ResponseSCFProvenance> response_provenance_;
 
+    void reset_response_provenance_tracking();
+    void mark_response_compute_failed();
+    void begin_response_iteration();
+    void record_response_iteration_state();
+    bool capture_response_provenance_if_converged();
     std::shared_ptr<const ResponseSCFProvenance> capture_response_provenance() const;
 
     /// Nuclear repulsion energy
@@ -411,10 +419,6 @@ class HF : public Wavefunction {
     std::shared_ptr<const SuperFunctional> response_functional() const { return functional_; }
     bool response_state_sealed() const { return response_state_sealed_; }
     const std::shared_ptr<const ResponseSCFProvenance>& response_provenance() const { return response_provenance_; }
-    void reset_response_provenance_tracking();
-    void invalidate_response_provenance();
-    void record_response_iteration_state();
-    bool capture_response_provenance_if_converged();
 
     /// The DFT Potential object (or null if it has been deleted)
     /// This needs to be virtual so that subclasses can enforce their

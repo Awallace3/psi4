@@ -54,59 +54,42 @@ from ..solvent.efp import get_qm_atoms_opts, modify_Fock_induced, modify_Fock_pe
 
 
 def scf_compute_energy(self):
-    """Run SCF and let C++ verify/capture response provenance after finalization."""
-    # Revocation is harmless and clears every earlier seal/metric before any new compute work.
-    self._reset_response_provenance_tracking()
-    try:
-        if core.get_option('SCF', 'DF_SCF_GUESS') and (core.get_global_option('SCF_TYPE') == 'DIRECT'):
-            # speed up DIRECT algorithm (recomputes full (non-DF) integrals
-            #   each iter) by first converging via fast DF iterations, then
-            #   fully converging in fewer slow DIRECT iterations. aka Andy trick 2.0
-            core.print_out("  Starting with a DF guess...\n\n")
-            with p4util.OptionsStateCM(['SCF_TYPE']):
-                core.set_global_option('SCF_TYPE', 'DF')
-                self.initialize()
-                try:
-                    self.iterations()
-                except SCFConvergenceError:
-                    self.finalize()
-                    raise SCFConvergenceError("""SCF DF preiterations""", self.iteration_, self, 0, 0)
-            core.print_out("\n  DF guess converged.\n\n")
-
-            # reset the DIIS & JK objects in prep for DIRECT
-            if self.initialized_diis_manager_:
-                self.diis_manager_.reset_subspace()
-            self.initialize_jk(self.memory_jk_)
-        else:
+    """Initialize, iterate, and finalize an SCF calculation."""
+    if core.get_option('SCF', 'DF_SCF_GUESS') and (core.get_global_option('SCF_TYPE') == 'DIRECT'):
+        # speed up DIRECT algorithm (recomputes full (non-DF) integrals
+        #   each iter) by first converging via fast DF iterations, then
+        #   fully converging in fewer slow DIRECT iterations. aka Andy trick 2.0
+        core.print_out("  Starting with a DF guess...\n\n")
+        with p4util.OptionsStateCM(['SCF_TYPE']):
+            core.set_global_option('SCF_TYPE', 'DF')
             self.initialize()
-        self.iteration_energies = []
+            try:
+                self.iterations()
+            except SCFConvergenceError:
+                self.finalize()
+                raise SCFConvergenceError("""SCF DF preiterations""", self.iteration_, self, 0, 0)
+        core.print_out("\n  DF guess converged.\n\n")
 
-        try:
-            self.iterations()
-        except SCFConvergenceError as e:
-            # Preserve legacy tolerated-nonconvergence semantics while making the
-            # response record permanently ineligible for this compute attempt.
-            self._invalidate_response_provenance()
-            if core.get_option("SCF", "FAIL_ON_MAXITER"):
-                core.print_out("  Failed to converge.\n")
-                raise e
-            else:
-                core.print_out("  Energy and/or wave function did not converge, but proceeding anyway.\n\n")
-        else:
-            core.print_out("  Energy and wave function converged.\n\n")
+        # reset the DIIS & JK objects in prep for DIRECT
+        if self.initialized_diis_manager_:
+            self.diis_manager_.reset_subspace()
+        self.initialize_jk(self.memory_jk_)
+    else:
+        self.initialize()
+    self.iteration_energies = []
 
-        self._response_stability_exhausted = False
-        scf_energy = self.finalize_energy()
-        if self._response_stability_exhausted:
-            self._invalidate_response_provenance()
+    try:
+        self.iterations()
+    except SCFConvergenceError as e:
+        if core.get_option("SCF", "FAIL_ON_MAXITER"):
+            core.print_out("  Failed to converge.\n")
+            raise e
         else:
-            # No caller success bit is accepted: C++ rechecks its recorded metrics,
-            # thresholds, final-grid state, native finalization, and complete structure.
-            self._capture_response_provenance_if_converged()
-        return scf_energy
-    except BaseException:
-        self._invalidate_response_provenance()
-        raise
+            core.print_out("  Energy and/or wave function did not converge, but proceeding anyway.\n\n")
+    else:
+        core.print_out("  Energy and wave function converged.\n\n")
+
+    return self.finalize_energy()
 
 
 def _build_jk(wfn, memory):
@@ -541,10 +524,6 @@ def scf_iterate(self, e_conv=None, d_conv=None):
                     self.reset_occupation()
                     self.find_occupation()
 
-        # Record the current energy/residual and actual COSX grid in C++; no
-        # caller-provided success bit or final-grid token participates in capture.
-        self._record_response_iteration_state()
-
         # Form new density matrix
         core.timer_on("HF: Form D")
         self.form_D()
@@ -688,7 +667,6 @@ def scf_finalize_energy(self):
             follow = self.stability_analysis()
 
         if follow and self.attempt_number_ > core.get_option('SCF', 'MAX_ATTEMPTS'):
-            self._response_stability_exhausted = True
             core.print_out("    There's still a negative eigenvalue. Try modifying FOLLOW_STEP_SCALE\n")
             core.print_out("    or increasing MAX_ATTEMPTS (not available for PK integrals).\n")
 

@@ -205,10 +205,13 @@ void HF::reset_response_provenance_tracking() {
     response_previous_iteration_energy_ = std::numeric_limits<double>::quiet_NaN();
     response_last_energy_change_ = std::numeric_limits<double>::quiet_NaN();
     response_last_density_norm_ = std::numeric_limits<double>::quiet_NaN();
+    response_native_iteration_id_ = 0;
+    response_last_observed_iteration_id_ = 0;
+    response_distinct_iterations_observed_ = 0;
     response_provenance_.reset();
 }
 
-void HF::invalidate_response_provenance() {
+void HF::mark_response_compute_failed() {
     response_state_sealed_ = false;
     response_iteration_metrics_valid_ = false;
     response_finalize_completed_ = false;
@@ -220,7 +223,28 @@ void HF::invalidate_response_provenance() {
     response_provenance_.reset();
 }
 
+void HF::begin_response_iteration() {
+    // This hook is reached only after a reference-specific save of the current
+    // density. Its counter is independent of the Python-visible iteration label.
+    response_state_sealed_ = false;
+    response_iteration_metrics_valid_ = false;
+    response_finalize_completed_ = false;
+    response_last_iteration_final_grid_ = false;
+    response_provenance_.reset();
+    if (response_native_iteration_id_ == std::numeric_limits<std::size_t>::max()) {
+        mark_response_compute_failed();
+        return;
+    }
+    ++response_native_iteration_id_;
+}
+
 void HF::record_response_iteration_state() {
+    // A reference-specific density update is the successful end of the native
+    // work observed here. Repeated density/compute calls in one native iteration
+    // cannot manufacture a second convergence observation.
+    if (response_compute_failed_ || response_native_iteration_id_ == 0 ||
+        response_last_observed_iteration_id_ == response_native_iteration_id_) return;
+
     response_iteration_metrics_valid_ = false;
     response_last_iteration_final_grid_ = false;
     try {
@@ -230,6 +254,8 @@ void HF::record_response_iteration_state() {
         const double current_energy = energy_it->second;
         const double previous_energy = response_previous_iteration_energy_;
         response_previous_iteration_energy_ = current_energy;
+        response_last_observed_iteration_id_ = response_native_iteration_id_;
+        ++response_distinct_iterations_observed_;
         if (!std::isfinite(previous_energy)) return;
 
         const auto gradient_a = form_FDSmSDF(Fa(), Da());
@@ -254,8 +280,7 @@ void HF::record_response_iteration_state() {
         response_last_iteration_final_grid_ = final_grid;
         response_iteration_metrics_valid_ = std::isfinite(response_last_energy_change_) && std::isfinite(density_norm);
     } catch (...) {
-        response_iteration_metrics_valid_ = false;
-        response_last_iteration_final_grid_ = false;
+        mark_response_compute_failed();
     }
 }
 
@@ -266,6 +291,8 @@ bool HF::capture_response_provenance_if_converged() {
     response_state_sealed_ = false;
     response_provenance_.reset();
     if (response_compute_failed_ || !response_finalize_completed_ || !response_iteration_metrics_valid_ ||
+        response_distinct_iterations_observed_ < 2 || response_native_iteration_id_ == 0 ||
+        response_last_observed_iteration_id_ != response_native_iteration_id_ ||
         !response_last_iteration_final_grid_ || !std::isfinite(response_e_convergence_) ||
         !std::isfinite(response_d_convergence_) || response_e_convergence_ <= 0.0 || response_d_convergence_ <= 0.0 ||
         !(std::abs(response_last_energy_change_) < response_e_convergence_) ||
@@ -628,30 +655,39 @@ void HF::initialize_gtfock_jk() {
 }
 
 void HF::finalize() {
-    // Reaching the native finalizer is necessary, but not sufficient, for response provenance.
-    // Capture later also verifies the last independently recorded convergence metrics and grid.
-    response_finalize_completed_ = true;
+    // Reaching the native finalizer is necessary, but not sufficient. The seal
+    // requires distinct native iteration observations, the start-of-run
+    // thresholds, convergence metrics, and the observed final COSX grid.
+    try {
+        // Clean memory off, handle diis closeout, etc
 
-    // Clean memory off, handle diis closeout, etc
+        // This will be the only one
+        if (!options_.get_bool("SAVE_JK")) {
+            jk_.reset();
+        }
 
-    // This will be the only one
-    if (!options_.get_bool("SAVE_JK")) {
-        jk_.reset();
+        // Clean up after DIIS
+        if (initialized_diis_manager_) diis_manager_.attr("delete_diis_file")();
+        diis_manager_ = py::none();
+        initialized_diis_manager_ = false;
+
+        // Figure out how many frozen virtual and frozen core per irrep
+        compute_fcpi();
+        compute_fvpi();
+        energy_ = energies_["Total Energy"];
+
+        // Sphalf_.reset();
+        X_.reset();
+        T_.reset();
+
+        // Capture is the final successful native lifecycle transition. No
+        // public finalizer call can bypass the independently observed facts.
+        response_finalize_completed_ = true;
+        capture_response_provenance_if_converged();
+    } catch (...) {
+        mark_response_compute_failed();
+        throw;
     }
-
-    // Clean up after DIIS
-    if (initialized_diis_manager_) diis_manager_.attr("delete_diis_file")();
-    diis_manager_ = py::none();
-    initialized_diis_manager_ = false;
-
-    // Figure out how many frozen virtual and frozen core per irrep
-    compute_fcpi();
-    compute_fvpi();
-    energy_ = energies_["Total Energy"];
-
-    // Sphalf_.reset();
-    X_.reset();
-    T_.reset();
 }
 
 void HF::set_jk(std::shared_ptr<JK> jk) {
@@ -1251,6 +1287,10 @@ void HF::compute_sapgau_guess() {
 }
 
 void HF::guess() {
+    // Native guess construction is the start of a new SCF lifecycle. Snapshot
+    // convergence thresholds here and revoke every record from an earlier run.
+    reset_response_provenance_tracking();
+
     // don't save guess energy as "the" energy because we need to avoid
     // a false positive test for convergence on the first iteration (that
     // was happening before in tests/scf-guess-read before I removed

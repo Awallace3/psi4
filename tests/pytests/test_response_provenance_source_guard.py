@@ -10,31 +10,44 @@ def _text(relative):
     return (ROOT / relative).read_text()
 
 
-def test_python_scf_callback_records_facts_and_captures_after_finalize():
+def test_python_scf_callback_has_no_response_lifecycle_authority():
     source = _text("psi4/driver/procrouting/scf_proc/scf_iterator.py")
     body = source[source.index("def scf_compute_energy"):source.index("def _build_jk")]
-    assert "_response_provenance_scope" not in body
-    assert "provenance.success" not in body
-    assert body.index("_reset_response_provenance_tracking") < body.index("self.initialize()")
-    assert body.index("self.finalize_energy()") < body.index("_capture_response_provenance_if_converged")
-    assert "_invalidate_response_provenance" in body
+    for lifecycle_name in (
+        "_response_provenance_scope",
+        "_reset_response_provenance_tracking",
+        "_mark_response_compute_failed",
+        "_invalidate_response_provenance",
+        "_record_response_iteration_state",
+        "_capture_response_provenance_if_converged",
+    ):
+        assert lifecycle_name not in source
+    assert "self.initialize()" in body
+    assert "self.iterations()" in body
+    assert "self.finalize_energy()" in body
 
 
-def test_cpp_capture_has_no_caller_controlled_seal_capability():
+def test_cpp_lifecycle_is_native_only_and_capture_occurs_in_finalize():
     header = _text("psi4/src/psi4/libscf_solver/hf.h")
     implementation = _text("psi4/src/psi4/libscf_solver/hf.cc")
     exports = _text("psi4/src/export_wavefunction.cc")
-    assert "HFResponseProvenanceScope" not in header
-    assert "HFResponseProvenanceScope" not in implementation
-    assert "_HFResponseProvenanceScope" not in exports
-    assert "response_provenance_scope" not in exports
-    assert "capture_response_provenance_if_converged()" in implementation
-    assert 'def("_capture_response_provenance_if_converged"' in exports
-    assert "set_response_state_converged" not in header
-    assert "_set_response_state_converged" not in exports
+    for binding in (
+        "_reset_response_provenance_tracking",
+        "_mark_response_compute_failed",
+        "_invalidate_response_provenance",
+        "_record_response_iteration_state",
+        "_capture_response_provenance_if_converged",
+    ):
+        assert f'def("{binding}"' not in exports
+    protected = header[header.index("class HF"):header.index("public:", header.index("class HF"))]
+    assert "begin_response_iteration();" in protected
+    assert "record_response_iteration_state();" in protected
+    assert "capture_response_provenance_if_converged();" in protected
+    finalizer = implementation[implementation.index("void HF::finalize()"):implementation.index("void HF::set_jk")]
+    assert "capture_response_provenance_if_converged();" in finalizer
 
 
-def test_capture_checks_internal_metrics_thresholds_and_finalization():
+def test_capture_checks_native_iteration_metrics_thresholds_and_finalization():
     implementation = _text("psi4/src/psi4/libscf_solver/hf.cc")
     for fact in (
         "response_iteration_metrics_valid_",
@@ -46,15 +59,26 @@ def test_capture_checks_internal_metrics_thresholds_and_finalization():
         "response_last_energy_change_",
         "response_last_density_norm_",
         "response_last_iteration_final_grid_",
+        "response_native_iteration_id_",
+        "response_last_observed_iteration_id_",
+        "response_distinct_iterations_observed_ < 2",
     ):
         assert fact in implementation
+    guess_start = implementation.index("void HF::guess()")
+    assert guess_start < implementation.index("reset_response_provenance_tracking();", guess_start)
 
 
-def test_cosx_final_grid_is_observed_before_finite_break():
+def test_cosx_final_grid_is_observed_by_native_density_lifecycle():
     driver = _text("psi4/driver/procrouting/scf_proc/scf_iterator.py")
+    implementation = _text("psi4/src/psi4/libscf_solver/hf.cc")
     options = _text("psi4/src/read_options.cc")
     loop = driver[driver.index("# SCF iterations!"):driver.index("if self.iteration_ >= core.get_option('SCF', 'MAXITER')")]
-    assert loop.index("self._record_response_iteration_state()") < loop.index("scf_iter_post_screening += 1")
+    assert "_record_response_iteration_state" not in driver
+    for reference in ("rhf.cc", "uhf.cc", "rohf.cc", "cuhf.cc"):
+        native = _text(f"psi4/src/psi4/libscf_solver/{reference}")
+        assert "begin_response_iteration();" in native
+        assert "record_response_iteration_state();" in native
+    assert 'composite_jk->get_COSX_grid() == "Final"' in implementation
     assert 'self.jk().set_COSX_grid("Final")' in loop
     assert "scf_maxiter_post_screening == 0" in loop
     assert "scf_maxiter_post_screening > 0" in loop

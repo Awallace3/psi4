@@ -148,6 +148,7 @@ void RHF::finalize() {
 
 void RHF::save_density_and_energy() {
     Dold_->copy(Da_);  // Save previous density
+    begin_response_iteration();
 }
 
 void forPermutation(int depth, std::vector<int>& array, std::vector<int>& indices, int curDepth,
@@ -277,24 +278,30 @@ void RHF::form_C(double shift) {
 }
 
 void RHF::form_D() {
-    Da_->zero();
+    record_response_iteration_state();
+    try {
+        Da_->zero();
 
-    for (int h = 0; h < nirrep_; ++h) {
-        int nso = nsopi_[h];
-        int nmo = nmopi_[h];
-        int na = nalphapi_[h];
+        for (int h = 0; h < nirrep_; ++h) {
+            int nso = nsopi_[h];
+            int nmo = nmopi_[h];
+            int na = nalphapi_[h];
 
-        if (nso == 0 || nmo == 0) continue;
+            if (nso == 0 || nmo == 0) continue;
 
-        auto Ca = Ca_->pointer(h);
-        auto D = Da_->pointer(h);
+            auto Ca = Ca_->pointer(h);
+            auto D = Da_->pointer(h);
 
-        C_DGEMM('N', 'T', nso, nso, na, 1.0, Ca[0], nmo, Ca[0], nmo, 0.0, D[0], nso);
-    }
+            C_DGEMM('N', 'T', nso, nso, na, 1.0, Ca[0], nmo, Ca[0], nmo, 0.0, D[0], nso);
+        }
 
-    if (debug_) {
-        outfile->Printf("in RHF::form_D:\n");
-        Da_->print();
+        if (debug_) {
+            outfile->Printf("in RHF::form_D:\n");
+            Da_->print();
+        }
+    } catch (...) {
+        mark_response_compute_failed();
+        throw;
     }
 }
 

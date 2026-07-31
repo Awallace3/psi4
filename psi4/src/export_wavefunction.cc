@@ -340,14 +340,6 @@ void export_wavefunction(py::module& m) {
         .def("cphf_solve", &scf::HF::cphf_solve, "x_vec"_a, "conv_tol"_a, "max_iter"_a, "print_lvl"_a = 2,
              "Solves the CPHF equations for a given set of x vectors.")
         .def("cphf_converged", &scf::HF::cphf_converged, "Adds occupied guess alpha orbitals.")
-        .def("_reset_response_provenance_tracking", &scf::HF::reset_response_provenance_tracking,
-             "Internal revocation/reset at the start of an SCF compute.")
-        .def("_invalidate_response_provenance", &scf::HF::invalidate_response_provenance,
-             "Internal fail-closed revocation after an SCF compute failure.")
-        .def("_record_response_iteration_state", &scf::HF::record_response_iteration_state,
-             "Record independently computed current SCF metrics and actual grid state.")
-        .def("_capture_response_provenance_if_converged", &scf::HF::capture_response_provenance_if_converged,
-             "Verify current convergence/finalization facts and capture response provenance if eligible.")
         .def("guess_Ca", &scf::HF::guess_Ca, "Sets the guess Alpha Orbital Matrix")
         .def("guess_Cb", &scf::HF::guess_Cb, "Sets the guess Beta Orbital Matrix")
         .def_property("reset_occ_", &scf::HF::reset_occ, &scf::HF::set_reset_occ,

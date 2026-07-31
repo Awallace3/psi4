@@ -59,12 +59,19 @@ def _context(states):
     return psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, cation)
 
 
-def test_hf_has_only_fact_checking_response_provenance_capture():
+def test_hf_response_provenance_lifecycle_is_native_only():
     assert not hasattr(psi4.core, "_HFResponseProvenanceScope")
-    assert not hasattr(psi4.core.HF, "_response_provenance_scope")
-    assert not hasattr(psi4.core.HF, "_set_response_state_converged")
-    assert not hasattr(psi4.core.HF, "_seal_response_provenance")
-    assert hasattr(psi4.core.HF, "_capture_response_provenance_if_converged")
+    for lifecycle_name in (
+        "_response_provenance_scope",
+        "_set_response_state_converged",
+        "_seal_response_provenance",
+        "_reset_response_provenance_tracking",
+        "_mark_response_compute_failed",
+        "_invalidate_response_provenance",
+        "_record_response_iteration_state",
+        "_capture_response_provenance_if_converged",
+    ):
+        assert not hasattr(psi4.core.HF, lifecycle_name)
 
 
 def test_old_scope_success_exit_forge_sequence_is_impossible(grac_states):
@@ -75,9 +82,8 @@ def test_old_scope_success_exit_forge_sequence_is_impossible(grac_states):
         scope.__exit__(None, None, None)
 
 
-def test_capture_on_genuinely_finalized_converged_state_is_harmless(grac_states):
+def test_genuine_finalized_scfs_are_sealed_by_native_finalize(grac_states):
     grac, precursor, cation, _ = grac_states
-    assert grac._capture_response_provenance_if_converged() is True
     psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, cation)
 
 
@@ -160,7 +166,6 @@ def test_seal_occurs_only_after_successful_finalize_energy(grac_states, monkeypa
     observed_unsealed = []
 
     def observing_finalize(self):
-        assert self._capture_response_provenance_if_converged() is False
         with pytest.raises(RuntimeError, match=r"provenance seal"):
             psi4.core._atomic_polarizability_make_frozen_response_context(self, precursor, cation)
         observed_unsealed.append(True)
@@ -177,8 +182,10 @@ def test_seal_occurs_only_after_successful_finalize_energy(grac_states, monkeypa
     psi4.core._atomic_polarizability_make_frozen_response_context(finalized, precursor, cation)
 
 
-def test_tolerated_unconverged_scf_cannot_capture_provenance(grac_states):
-    _, precursor, _, shift = grac_states
+def test_unconverged_state_cannot_be_forged_after_failure(grac_states):
+    _, precursor, cation, shift = grac_states
+    old_e_convergence = psi4.core.get_option("SCF", "E_CONVERGENCE")
+    old_d_convergence = psi4.core.get_option("SCF", "D_CONVERGENCE")
     psi4.set_options(
         {
             "reference": "rhf",
@@ -188,41 +195,43 @@ def test_tolerated_unconverged_scf_cannot_capture_provenance(grac_states):
             "fail_on_maxiter": False,
         }
     )
+    replacement_jk = None
     try:
         _, unconverged = psi4.energy("pbe0", molecule=precursor.molecule(), return_wfn=True)
-        assert unconverged._capture_response_provenance_if_converged() is False
+
+        # The old reset/fail/record/capture forge surface no longer exists.
+        for lifecycle_name in (
+            "_reset_response_provenance_tracking",
+            "_mark_response_compute_failed",
+            "_invalidate_response_provenance",
+            "_record_response_iteration_state",
+            "_capture_response_provenance_if_converged",
+        ):
+            assert not hasattr(unconverged, lifecycle_name)
+
+        # Later option loosening, JK replacement, duplicate finalization, and a
+        # direct public finalizer cannot manufacture distinct native iterations.
+        psi4.set_options({"e_convergence": 1.0, "d_convergence": 1.0})
+        replacement_jk = psi4.core.JK.build(unconverged.basisset())
+        replacement_jk.initialize()
+        unconverged.set_jk(replacement_jk)
+        unconverged.finalize()
+        with pytest.raises(RuntimeError, match=r"provenance seal"):
+            psi4.core._atomic_polarizability_make_frozen_response_context(
+                unconverged, precursor, cation
+            )
     finally:
+        if replacement_jk is not None:
+            replacement_jk.finalize()
         psi4.set_options(
             {
                 "dft_grac_shift": 0.0,
+                "e_convergence": old_e_convergence,
+                "d_convergence": old_d_convergence,
                 "maxiter": 100,
                 "fail_on_maxiter": True,
             }
         )
-
-
-def test_finalize_exception_leaves_provenance_unsealed(grac_states, monkeypatch):
-    _, precursor, cation, shift = grac_states
-    original_finalize = psi4.core.HF.finalize_energy
-    failed = []
-
-    def failing_finalize(self):
-        original_finalize(self)
-        failed.append(self)
-        raise RuntimeError("test-local finalize failure")
-
-    monkeypatch.setattr(psi4.core.HF, "finalize_energy", failing_finalize)
-    psi4.set_options({"reference": "rhf", "basis": "sto-3g", "dft_grac_shift": shift})
-    try:
-        with pytest.raises(RuntimeError, match="test-local finalize failure"):
-            psi4.energy("pbe0", molecule=precursor.molecule())
-    finally:
-        monkeypatch.setattr(psi4.core.HF, "finalize_energy", original_finalize)
-        psi4.set_options({"dft_grac_shift": 0.0})
-    assert failed
-    assert failed[0]._capture_response_provenance_if_converged() is False
-    with pytest.raises(RuntimeError, match=r"provenance seal"):
-        psi4.core._atomic_polarizability_make_frozen_response_context(failed[0], precursor, cation)
 
 
 def test_ordinary_pbe0_rejects_even_when_calculation_metadata_is_available(grac_states):
@@ -355,7 +364,6 @@ def test_wrong_cation_multiplicity_real_scf_fails_closed_before_protocol_validat
     psi4.set_options({"reference": "uhf", "basis": "sto-3g", "dft_grac_shift": 0.0})
     try:
         _, quartet_wfn = psi4.energy("pbe0", molecule=quartet, return_wfn=True)
-        assert quartet_wfn._capture_response_provenance_if_converged() is False
         with pytest.raises(RuntimeError, match=r"no finalized provenance seal"):
             psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, quartet_wfn)
     finally:
@@ -367,7 +375,6 @@ def test_complete_basis_mismatch_real_scf_fails_closed_before_protocol_validatio
     psi4.set_options({"reference": "uhf", "basis": "3-21g", "dft_grac_shift": 0.0})
     try:
         _, wrong_basis_cation = psi4.energy("pbe0", molecule=cation.molecule(), return_wfn=True)
-        assert wrong_basis_cation._capture_response_provenance_if_converged() is False
         with pytest.raises(RuntimeError, match=r"no finalized provenance seal"):
             psi4.core._atomic_polarizability_make_frozen_response_context(
                 grac, precursor, wrong_basis_cation
