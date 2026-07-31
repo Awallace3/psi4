@@ -63,6 +63,13 @@ IntegralFactory::IntegralFactory(std::shared_ptr<BasisSet> bs1, std::shared_ptr<
     set_basis(bs1, bs2, bs3, bs4);
 }
 
+IntegralFactory::IntegralFactory(std::shared_ptr<BasisSet> bs1, std::shared_ptr<BasisSet> bs2,
+                                 std::shared_ptr<BasisSet> bs3, std::shared_ptr<BasisSet> bs4,
+                                 Options& options)
+    : options_(&options) {
+    set_basis(bs1, bs2, bs3, bs4);
+}
+
 IntegralFactory::IntegralFactory(std::shared_ptr<BasisSet> bs1) { set_basis(bs1, bs1, bs1, bs1); }
 
 IntegralFactory::~IntegralFactory() {}
@@ -74,6 +81,21 @@ std::shared_ptr<BasisSet> IntegralFactory::basis2() const { return bs2_; }
 std::shared_ptr<BasisSet> IntegralFactory::basis3() const { return bs3_; }
 
 std::shared_ptr<BasisSet> IntegralFactory::basis4() const { return bs4_; }
+
+double IntegralFactory::screening_threshold() const {
+    return options_ ? options_->get_double("INTS_TOLERANCE")
+                    : Process::environment.options.get_double("INTS_TOLERANCE");
+}
+
+std::string IntegralFactory::screening_type() const {
+    return options_ ? options_->get_str("SCREENING")
+                    : Process::environment.options.get_str("SCREENING");
+}
+
+std::string IntegralFactory::integral_package() const {
+    return options_ ? options_->get_str("INTEGRAL_PACKAGE")
+                    : Process::environment.options.get_str("INTEGRAL_PACKAGE");
+}
 
 void IntegralFactory::set_basis(std::shared_ptr<BasisSet> bs1, std::shared_ptr<BasisSet> bs2,
                                 std::shared_ptr<BasisSet> bs3, std::shared_ptr<BasisSet> bs4) {
@@ -210,8 +232,8 @@ std::unique_ptr<OneBodyAOInt> IntegralFactory::electric_field(int deriv) {
 }
 
 std::unique_ptr<TwoBodyAOInt> IntegralFactory::eri(int deriv, bool use_shell_pairs, bool needs_exchange) {
-    auto integral_package = Process::environment.options.get_str("INTEGRAL_PACKAGE");
-    auto threshold = Process::environment.options.get_double("INTS_TOLERANCE");
+    auto integral_package = this->integral_package();
+    auto threshold = screening_threshold();
 
 #ifdef USING_simint
     if (deriv == 0 && integral_package == "SIMINT") return  std::make_unique<SimintERI>(this, deriv, use_shell_pairs, needs_exchange);
@@ -226,23 +248,23 @@ std::unique_ptr<TwoBodyAOInt> IntegralFactory::eri(int deriv, bool use_shell_pai
 }
 
 std::unique_ptr<TwoBodyAOInt> IntegralFactory::erf_eri(double omega, int deriv, bool use_shell_pairs, bool needs_exchange) {
-    auto integral_package = Process::environment.options.get_str("INTEGRAL_PACKAGE");
-    auto threshold = Process::environment.options.get_double("INTS_TOLERANCE");
+    auto integral_package = this->integral_package();
+    auto threshold = screening_threshold();
     if (integral_package == "LIBINT2")
         return std::make_unique<Libint2ErfERI>(omega, this, threshold, deriv, use_shell_pairs, needs_exchange);
     throw PSIEXCEPTION("No ERI object to return.");
 }
 
 std::unique_ptr<TwoBodyAOInt> IntegralFactory::erf_complement_eri(double omega, int deriv, bool use_shell_pairs, bool needs_exchange) {
-    auto integral_package = Process::environment.options.get_str("INTEGRAL_PACKAGE");
-    auto threshold = Process::environment.options.get_double("INTS_TOLERANCE");
+    auto integral_package = this->integral_package();
+    auto threshold = screening_threshold();
     if (integral_package == "LIBINT2")
         return std::make_unique<Libint2ErfComplementERI>(omega, this, threshold, deriv, use_shell_pairs, needs_exchange);
     throw PSIEXCEPTION("No ERI object to return.");
 }
 
 std::unique_ptr<TwoBodyAOInt> IntegralFactory::yukawa_eri(double zeta, int deriv, bool use_shell_pairs, bool needs_exchange) {
-    auto threshold = Process::environment.options.get_double("INTS_TOLERANCE");
+    auto threshold = screening_threshold();
     return std::make_unique<Libint2YukawaERI>(zeta, this, threshold, deriv, use_shell_pairs, needs_exchange);
 }
 

@@ -365,8 +365,8 @@ def test_restricted_c1_primitives_match_independent_mints_oracle_and_zero_alda_h
 
     assert [tuple(pair) for pair in result["transitions"]] == transitions
     assert result["transition_order"] == "(i,a) occupied-major/virtual-minor"
-    assert result["algorithm"] == "DIRECT_JK_NONSYMMETRIC"
-    assert 1 <= result["batch_size"] <= len(transitions)
+    assert result["algorithm"] == "DIRECT_JK_CANONICAL_NONSYMMETRIC"
+    assert result["batch_size"] == 1
     assert result["estimated_bytes"] > 3 * len(transitions) ** 2 * 8
     assert result["orbital_gaps"] == pytest.approx(gaps, abs=2.0e-13)
     for name, expected in (
@@ -458,14 +458,57 @@ def test_restricted_c1_override_seam_rejects_malformed_inputs(frozen_h2o_context
 
 
 @pytest.mark.scf
-def test_restricted_c1_uses_exact_direct_jk_when_scf_type_is_df(frozen_h2o_context):
-    context, _, _ = frozen_h2o_context
-    psi4.set_options({"scf_type": "df"})
+def test_restricted_c1_canonical_direct_jk_is_option_independent_and_nonmutating(
+    frozen_h2o_context,
+):
+    context, _, grac = frozen_h2o_context
+    _, _, coulomb, exchange_direct, exchange_transpose = (
+        _independent_transition_eri_oracle(grac)
+    )
+    option_names = (
+        "SCREENING",
+        "INTS_TOLERANCE",
+        "INCFOCK",
+        "INCFOCK_FULL_FOCK_EVERY",
+        "SCF_TYPE",
+        "DF_INTS_NUM_THREADS",
+    )
+    before = {name: psi4.core.get_option("SCF", name) for name in option_names}
+    old_threads = psi4.get_num_threads()
+    psi4.set_options(
+        {
+            "screening": "density",
+            "ints_tolerance": 1.0e-2,
+            "incfock": True,
+            "incfock_full_fock_every": 1,
+            "scf_type": "df",
+            "df_ints_num_threads": 3,
+        }
+    )
+    psi4.set_num_threads(2)
+    perturbed = {name: psi4.core.get_option("SCF", name) for name in option_names}
     try:
         result = _restricted_c1_primitives(context)
+        after = {name: psi4.core.get_option("SCF", name) for name in option_names}
+        assert after == perturbed
+        assert psi4.get_num_threads() == 2
     finally:
-        psi4.set_options({"scf_type": "pk"})
-    assert result["algorithm"] == "DIRECT_JK_NONSYMMETRIC"
+        psi4.set_options({name.lower(): value for name, value in before.items()})
+        psi4.set_num_threads(old_threads)
+
+    assert result["algorithm"] == "DIRECT_JK_CANONICAL_NONSYMMETRIC"
+    assert result["batch_size"] == 1
+    assert result["jk_threads"] == 1
+    assert result["screening"] == "NONE"
+    assert result["integral_cutoff"] == pytest.approx(1.0e-15)
+    assert result["incfock"] is False
+    assert np.asarray(result["coulomb"]) == pytest.approx(coulomb, abs=2.0e-12)
+    assert np.asarray(result["exchange_direct"]) == pytest.approx(
+        exchange_direct, abs=2.0e-12
+    )
+    assert np.asarray(result["exchange_transpose"]) == pytest.approx(
+        exchange_transpose, abs=2.0e-12
+    )
 
 
 def test_restricted_c1_production_source_forbids_in_core_eri_routes():
@@ -480,7 +523,7 @@ def test_restricted_c1_production_source_forbids_in_core_eri_routes():
     assert "ao_eri" not in constructor
 
 
-def test_restricted_c1_aug_cc_pvtz_scaling_estimator_avoids_ao_nbf4():
+def test_restricted_c1_aug_cc_pvtz_estimator_reports_supported_water_envelope():
     molecule = psi4.geometry(
         """
         0 1
@@ -498,16 +541,45 @@ def test_restricted_c1_aug_cc_pvtz_scaling_estimator_avoids_ao_nbf4():
     diagnostics = psi4.core._atomic_polarizability_estimate_restricted_c1_jk(
         nbf, nocc, nvir, psi4.get_memory()
     )
-    assert diagnostics["algorithm"] == "DIRECT_JK_NONSYMMETRIC"
+    assert diagnostics["algorithm"] == "DIRECT_JK_CANONICAL_NONSYMMETRIC"
     assert diagnostics["nbf"] == nbf
     assert diagnostics["nov"] == nocc * nvir
-    assert 1 <= diagnostics["batch_size"] <= 32
-    assert diagnostics["estimated_bytes"] < 8 * nbf**4
+    assert diagnostics["batch_size"] == 1
+    assert diagnostics["jk_threads"] == 1
+    assert diagnostics["max_supported_nov"] == 512
+    assert diagnostics["reserved_memory_bytes"] == psi4.get_memory() // 2
+    assert diagnostics["retained_payload_bytes"] == 3 * (nocc * nvir) ** 2 * 8
+    assert diagnostics["jk_ao_bytes"] == 3 * nbf**2 * 8
+    assert diagnostics["direct_jk_scratch_bytes"] == 10 * nbf**2 * 8
+    assert diagnostics["projection_bytes"] > 3 * (nocc * nvir) * 8
+    assert diagnostics["estimated_bytes"] == sum(
+        diagnostics[name]
+        for name in (
+            "retained_payload_bytes",
+            "metadata_bytes",
+            "coefficient_bytes",
+            "matrix_overhead_bytes",
+            "jk_coefficient_bytes",
+            "jk_ao_bytes",
+            "direct_jk_scratch_bytes",
+            "integral_engine_allowance_bytes",
+            "projection_bytes",
+        )
+    )
+    # This is a component-accounting diagnostic, not an observed peak-memory test.
+    # DirectJK exposes no supported peak estimator; only retained payload is a hard gate.
+    assert diagnostics["memory_semantics"] == "RETAINED_PAYLOAD_HARD_GATE_WORKSPACE_ADVISORY"
 
 
-def test_restricted_c1_estimator_fails_closed_for_memory_and_overflow():
+def test_restricted_c1_estimator_one_entry_memory_boundary_and_envelope_fail_closed():
     estimator = psi4.core._atomic_polarizability_estimate_restricted_c1_jk
-    with pytest.raises(RuntimeError, match=r"exceeds configured memory"):
-        estimator(100, 5, 95, 1024)
+    baseline = estimator(7, 1, 2, 2**20)
+    retained = baseline["retained_payload_bytes"]
+    passing = estimator(7, 1, 2, 2 * retained)
+    assert passing["reserved_memory_bytes"] == retained
+    with pytest.raises(RuntimeError, match=r"retained.*reserved memory"):
+        estimator(7, 1, 2, 2 * retained - 1)
+    with pytest.raises(RuntimeError, match=r"supported transition envelope"):
+        estimator(110, 5, 103, 2**40)
     with pytest.raises(RuntimeError, match=r"overflow|dimension exceeds"):
         estimator(2**63, 2**63, 2, 2**64 - 1)

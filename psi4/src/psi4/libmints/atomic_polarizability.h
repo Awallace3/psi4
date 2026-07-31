@@ -300,18 +300,45 @@ class PSI_API FrozenResponseContext {
 };
 
 namespace detail {
-/** Overflow-checked storage plan for exact nonsymmetric direct-JK contractions. */
+/**
+ * Overflow-checked storage diagnostics for canonical nonsymmetric DirectJK.
+ *
+ * This intentionally supported envelope is canonical closed-shell water-sized
+ * response spaces (at most 512 occupied-virtual transitions, covering water/
+ * aug-cc-pVTZ). Three retained dense nov-by-nov matrices impose an unavoidable
+ * 24*nov^2-byte payload. DirectJK has no supported peak-memory estimator, so
+ * only that retained payload is hard-gated against half the configured process
+ * memory; workspace components are conservative protocol diagnostics, not a
+ * claim that JK obeys set_memory or a process peak-memory guarantee.
+ */
 struct RestrictedC1JKPlan {
     std::size_t nbf{};
     std::size_t nocc{};
     std::size_t nvir{};
     std::size_t nov{};
     std::size_t batch_size{};
+    std::size_t jk_threads{};
+    std::size_t max_supported_nov{};
+    std::size_t configured_memory_bytes{};
+    std::size_t reserved_memory_bytes{};
+    std::size_t retained_payload_bytes{};
+    std::size_t metadata_bytes{};
+    std::size_t coefficient_bytes{};
+    std::size_t matrix_overhead_bytes{};
+    std::size_t jk_coefficient_bytes{};
+    std::size_t jk_ao_bytes{};
+    std::size_t direct_jk_scratch_bytes{};
+    std::size_t integral_engine_allowance_bytes{};
+    std::size_t projection_bytes{};
     std::size_t estimated_bytes{};
+    double integral_cutoff{};
+    bool incfock{};
+    std::string screening;
+    std::string memory_semantics;
     std::string algorithm;
 };
 
-/** Plan the bounded direct-JK batches and reject storage beyond memory_bytes. */
+/** Plan batch-one DirectJK and reject payload beyond the reserved/envelope limits. */
 RestrictedC1JKPlan plan_restricted_c1_jk(std::size_t nbf, std::size_t nocc,
                                          std::size_t nvir, std::size_t memory_bytes);
 

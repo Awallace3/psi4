@@ -36,6 +36,7 @@
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
+#include "psi4/liboptions/liboptions.h"
 #include "psi4/libscf_solver/hf.h"
 #include "psi4/libscf_solver/rhf.h"
 #include "psi4/libscf_solver/uhf.h"
@@ -815,42 +816,93 @@ namespace detail {
 RestrictedC1JKPlan plan_restricted_c1_jk(std::size_t nbf, std::size_t nocc,
                                          std::size_t nvir, std::size_t memory_bytes) {
     const std::string prefix = "restricted C1 transition primitives: ";
+    constexpr std::size_t max_supported_nov = 512;
+    constexpr double integral_cutoff = 1.0e-15;
     if (nbf == 0 || nocc == 0 || nvir == 0)
         throw PSIEXCEPTION(prefix + "memory estimate requires nonzero orbital dimensions");
     const auto nov = checked_c1_product(nocc, nvir, prefix);
     if (nov > static_cast<std::size_t>(std::numeric_limits<int>::max()))
         throw PSIEXCEPTION(prefix + "transition-space dimension exceeds native matrix limits");
+    if (nov > max_supported_nov)
+        throw PSIEXCEPTION(prefix + "supported transition envelope is at most " +
+                           std::to_string(max_supported_nov) + " occupied-virtual pairs");
 
-    // Retained dense primitives: J, K_direct, and K_transpose. Metadata and
-    // occupied/virtual coefficient copies are included in the fixed storage.
+    // Reserve at most half of configured process memory because the frozen
+    // context and wavefunction remain live. Only the unavoidable retained
+    // payload is a hard gate: DirectJK exposes no supported peak estimator.
+    const auto reserved_memory_bytes = memory_bytes / 2;
     const auto retained_elements = checked_c1_product(checked_c1_product(3, nov, prefix), nov, prefix);
-    const auto retained_bytes = checked_c1_product(retained_elements, sizeof(double), prefix);
+    const auto retained_payload_bytes = checked_c1_product(retained_elements, sizeof(double), prefix);
+    if (retained_payload_bytes > reserved_memory_bytes)
+        throw PSIEXCEPTION(prefix + "retained dense transition payload exceeds reserved memory (" +
+                           std::to_string(retained_payload_bytes) + " bytes required, " +
+                           std::to_string(reserved_memory_bytes) + " bytes reserved)");
+
+    // Batch and integral threads are fixed at one. The following components
+    // deliberately expose the storage model used for protocol diagnostics.
+    // The integral-engine term allows eight nbf^2 arrays plus one nbf vector;
+    // it is advisory because the integral backend provides no allocation API.
+    const auto ao_square = checked_c1_product(nbf, nbf, prefix);
     const auto metadata_bytes = checked_c1_product(nov, 2 * sizeof(std::size_t) + sizeof(double), prefix);
     const auto orbital_count = checked_c1_sum(nocc, nvir, prefix);
-    const auto coefficient_elements = checked_c1_product(nbf, orbital_count, prefix);
-    const auto coefficient_bytes = checked_c1_product(coefficient_elements, sizeof(double), prefix);
-    const auto fixed_bytes = checked_c1_sum(
-        checked_c1_sum(retained_bytes, metadata_bytes, prefix), coefficient_bytes, prefix);
+    const auto coefficient_bytes = checked_c1_product(
+        checked_c1_product(nbf, orbital_count, prefix), sizeof(double), prefix);
+    const auto row_pointer_count = checked_c1_sum(checked_c1_product(8, nbf, prefix),
+                                                  checked_c1_product(3, nov, prefix), prefix);
+    const auto matrix_overhead_bytes = checked_c1_sum(
+        checked_c1_product(16, sizeof(Matrix), prefix),
+        checked_c1_product(row_pointer_count, sizeof(double*), prefix), prefix);
+    const auto jk_coefficient_bytes = checked_c1_product(
+        checked_c1_product(2, nbf, prefix), sizeof(double), prefix);
+    const auto jk_ao_bytes = checked_c1_product(
+        checked_c1_product(3, ao_square, prefix), sizeof(double), prefix);
+    // DirectJK.cc allocates 2*max_task^2 J and 8*max_task^2 K scratch for a
+    // nonsymmetric density. max_task <= nbf gives this conservative term.
+    const auto direct_jk_scratch_bytes = checked_c1_product(
+        checked_c1_product(10, ao_square, prefix), sizeof(double), prefix);
+    const auto integral_engine_elements = checked_c1_sum(
+        checked_c1_product(8, ao_square, prefix), nbf, prefix);
+    const auto integral_engine_allowance_bytes = checked_c1_product(
+        integral_engine_elements, sizeof(double), prefix);
+    // Three projected nov outputs coexist; one triplet intermediate is bounded
+    // by nbf*max(nocc,nvir) for the fixed one-entry pass.
+    auto projection_elements = checked_c1_product(3, nov, prefix);
+    projection_elements = checked_c1_sum(
+        projection_elements, checked_c1_product(nbf, std::max(nocc, nvir), prefix), prefix);
+    const auto projection_bytes = checked_c1_product(projection_elements, sizeof(double), prefix);
 
-    // For each vector entry JK retains nonsymmetric left/right columns plus
-    // AO D/J/K matrices. Three projected result blocks are conservatively
-    // counted until the whole batch has been consumed.
-    const auto ao_square = checked_c1_product(nbf, nbf, prefix);
-    auto per_entry_elements = checked_c1_product(3, ao_square, prefix);
-    per_entry_elements = checked_c1_sum(per_entry_elements, checked_c1_product(2, nbf, prefix), prefix);
-    per_entry_elements = checked_c1_sum(per_entry_elements, checked_c1_product(3, nov, prefix), prefix);
-    const auto per_entry_bytes = checked_c1_product(per_entry_elements, sizeof(double), prefix);
-    if (fixed_bytes >= memory_bytes || per_entry_bytes > memory_bytes - fixed_bytes)
-        throw PSIEXCEPTION(prefix + "estimated direct-JK storage exceeds configured memory (" +
-                           std::to_string(checked_c1_sum(fixed_bytes, per_entry_bytes, prefix)) +
-                           " bytes required, " + std::to_string(memory_bytes) + " bytes available)");
-    const auto affordable = (memory_bytes - fixed_bytes) / per_entry_bytes;
-    const auto batch_size = std::min<std::size_t>({nov, 32, affordable});
-    if (batch_size == 0)
-        throw PSIEXCEPTION(prefix + "configured memory cannot hold one direct-JK transition batch");
-    const auto estimated_bytes = checked_c1_sum(
-        fixed_bytes, checked_c1_product(batch_size, per_entry_bytes, prefix), prefix);
-    return {nbf, nocc, nvir, nov, batch_size, estimated_bytes, "DIRECT_JK_NONSYMMETRIC"};
+    std::size_t estimated_bytes = retained_payload_bytes;
+    for (const auto component : {metadata_bytes, coefficient_bytes, matrix_overhead_bytes,
+                                 jk_coefficient_bytes, jk_ao_bytes, direct_jk_scratch_bytes,
+                                 integral_engine_allowance_bytes, projection_bytes})
+        estimated_bytes = checked_c1_sum(estimated_bytes, component, prefix);
+
+    RestrictedC1JKPlan plan;
+    plan.nbf = nbf;
+    plan.nocc = nocc;
+    plan.nvir = nvir;
+    plan.nov = nov;
+    plan.batch_size = 1;
+    plan.jk_threads = 1;
+    plan.max_supported_nov = max_supported_nov;
+    plan.configured_memory_bytes = memory_bytes;
+    plan.reserved_memory_bytes = reserved_memory_bytes;
+    plan.retained_payload_bytes = retained_payload_bytes;
+    plan.metadata_bytes = metadata_bytes;
+    plan.coefficient_bytes = coefficient_bytes;
+    plan.matrix_overhead_bytes = matrix_overhead_bytes;
+    plan.jk_coefficient_bytes = jk_coefficient_bytes;
+    plan.jk_ao_bytes = jk_ao_bytes;
+    plan.direct_jk_scratch_bytes = direct_jk_scratch_bytes;
+    plan.integral_engine_allowance_bytes = integral_engine_allowance_bytes;
+    plan.projection_bytes = projection_bytes;
+    plan.estimated_bytes = estimated_bytes;
+    plan.integral_cutoff = integral_cutoff;
+    plan.incfock = false;
+    plan.screening = "NONE";
+    plan.memory_semantics = "RETAINED_PAYLOAD_HARD_GATE_WORKSPACE_ADVISORY";
+    plan.algorithm = "DIRECT_JK_CANONICAL_NONSYMMETRIC";
+    return plan;
 }
 }  // namespace detail
 
@@ -945,18 +997,33 @@ detail::RestrictedC1Primitives construct_restricted_c1_primitives_impl(
     result.exchange_direct = std::make_shared<Matrix>(nov, nov);
     result.exchange_transpose = std::make_shared<Matrix>(nov, nov);
 
-    // Always use the native exact shell-direct algorithm. In particular, do not
-    // inherit an SCF_TYPE=DF approximation or mutate the frozen/global options.
+    // Use a fresh local Options registry, not a shallow copy of or reference to
+    // Process options. SCREENING=NONE is a supported DirectJK value and disables
+    // shell-quartet screening; the pinned 1e-15 integral-engine threshold is a
+    // numeric protocol setting, not a claim of mathematical exactness. INCFOCK
+    // is disabled and both batching and integral OpenMP execution are fixed at
+    // one for deterministic storage and results. Caller options are never read
+    // or mutated by this JK/integral factory path.
+    //
     // JK defines D_ls=C_left_li C_right_si, J_mn=(mn|ls)D_ls, and
     // K_mn=(ml|ns)D_ls. Thus C_left=C_j and C_right=C_b yields
     // Co^T J Cv=(ia|jb), Co^T K Cv=(ij|ab), and
     // Cv^T K Co=(aj|ib)=(aj|bi).
+    Options canonical_options;
+    canonical_options.set_current_module("SCF");
+    canonical_options.add_str("SCREENING", jk_plan.screening, "SCHWARZ CSAM DENSITY NONE");
+    canonical_options.add_double("INTS_TOLERANCE", jk_plan.integral_cutoff);
+    canonical_options.add_bool("INCFOCK", jk_plan.incfock);
+    canonical_options.add_int("INCFOCK_FULL_FOCK_EVERY", 1);
+    canonical_options.add_str("INTEGRAL_PACKAGE", "LIBINT2", "LIBINT2");
     auto mutable_basis = std::const_pointer_cast<BasisSet>(basis);
-    auto jk = JK::build_JK(mutable_basis, nullptr, Process::environment.options, "DIRECT");
+    auto jk = std::make_shared<DirectJK>(mutable_basis, canonical_options);
+    jk->set_cutoff(jk_plan.integral_cutoff);
+    jk->set_csam(false);
+    jk->set_df_ints_num_threads(static_cast<int>(jk_plan.jk_threads));
     jk->set_do_J(true);
     jk->set_do_K(true);
     jk->set_do_wK(false);
-    jk->set_memory(std::max<std::size_t>(1, Process::environment.get_memory() / sizeof(double)));
     jk->set_print(0);
     jk->initialize();
 

@@ -378,6 +378,10 @@ void export_oeprop(py::module &m) {
               result["transition_order"] = "(i,a) occupied-major/virtual-minor";
               result["algorithm"] = primitives.jk_plan.algorithm;
               result["batch_size"] = primitives.jk_plan.batch_size;
+              result["jk_threads"] = primitives.jk_plan.jk_threads;
+              result["screening"] = primitives.jk_plan.screening;
+              result["integral_cutoff"] = primitives.jk_plan.integral_cutoff;
+              result["incfock"] = primitives.jk_plan.incfock;
               result["estimated_bytes"] = primitives.jk_plan.estimated_bytes;
               result["nbf"] = primitives.jk_plan.nbf;
               result["nocc"] = primitives.jk_plan.nocc;
@@ -402,7 +406,24 @@ void export_oeprop(py::module &m) {
               result["nvir"] = plan.nvir;
               result["nov"] = plan.nov;
               result["batch_size"] = plan.batch_size;
+              result["jk_threads"] = plan.jk_threads;
+              result["max_supported_nov"] = plan.max_supported_nov;
+              result["configured_memory_bytes"] = plan.configured_memory_bytes;
+              result["reserved_memory_bytes"] = plan.reserved_memory_bytes;
+              result["retained_payload_bytes"] = plan.retained_payload_bytes;
+              result["metadata_bytes"] = plan.metadata_bytes;
+              result["coefficient_bytes"] = plan.coefficient_bytes;
+              result["matrix_overhead_bytes"] = plan.matrix_overhead_bytes;
+              result["jk_coefficient_bytes"] = plan.jk_coefficient_bytes;
+              result["jk_ao_bytes"] = plan.jk_ao_bytes;
+              result["direct_jk_scratch_bytes"] = plan.direct_jk_scratch_bytes;
+              result["integral_engine_allowance_bytes"] = plan.integral_engine_allowance_bytes;
+              result["projection_bytes"] = plan.projection_bytes;
               result["estimated_bytes"] = plan.estimated_bytes;
+              result["integral_cutoff"] = plan.integral_cutoff;
+              result["incfock"] = plan.incfock;
+              result["screening"] = plan.screening;
+              result["memory_semantics"] = plan.memory_semantics;
               return result;
           },
           "nbf"_a, "nocc"_a, "nvir"_a, "memory_bytes"_a);

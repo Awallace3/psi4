@@ -347,7 +347,9 @@ void DirectJK::compute_JK() {
         zero();
     }
 
-    auto factory = std::make_shared<IntegralFactory>(primary_, primary_, primary_, primary_);
+    // Bind integral construction to this DirectJK's Options registry. This is
+    // essential for callers that provide an isolated canonical configuration.
+    auto factory = std::make_shared<IntegralFactory>(primary_, primary_, primary_, primary_, options_);
     
     // Passed in as a dummy when J (and/or K) is not built
     std::vector<SharedMatrix> temp;
