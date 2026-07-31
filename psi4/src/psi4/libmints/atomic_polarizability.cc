@@ -39,6 +39,7 @@
 #include "psi4/libscf_solver/rhf.h"
 #include "psi4/libscf_solver/uhf.h"
 #include "psi4/libpsi4util/exception.h"
+#include "psi4/libqt/qt.h"
 
 namespace psi {
 namespace {
@@ -66,6 +67,32 @@ void require_finite_symmetric(const Matrix& matrix, const char* context) {
             const double scale = std::max({1.0, std::abs(matrix(row, column)), std::abs(matrix(column, row))});
             if (std::abs(matrix(row, column) - matrix(column, row)) > kValidationTolerance * scale) {
                 throw PSIEXCEPTION(std::string(context) + ": expected a finite symmetric tensor");
+            }
+        }
+    }
+}
+
+void require_dense_response_operator(const Matrix& matrix, const char* name) {
+    if (matrix.nirrep() != 1 || matrix.nrow() == 0 || matrix.nrow() != matrix.ncol()) {
+        throw PSIEXCEPTION(std::string("dense restricted response: ") + name +
+                           " must be a nonempty square matrix");
+    }
+    for (int row = 0; row < matrix.nrow(); ++row) {
+        for (int column = 0; column < matrix.ncol(); ++column) {
+            if (!std::isfinite(matrix(row, column))) {
+                throw PSIEXCEPTION(std::string("dense restricted response: ") + name +
+                                   " must contain only finite values");
+            }
+        }
+    }
+    for (int row = 0; row < matrix.nrow(); ++row) {
+        for (int column = row + 1; column < matrix.ncol(); ++column) {
+            const double scale = std::max({1.0, std::abs(matrix(row, column)),
+                                           std::abs(matrix(column, row))});
+            if (std::abs(matrix(row, column) - matrix(column, row)) >
+                kValidationTolerance * scale) {
+                throw PSIEXCEPTION(std::string("dense restricted response: ") + name +
+                                   " must be symmetric");
             }
         }
     }
@@ -520,6 +547,113 @@ void detail::validate_vertical_protocol(bool cation_state_valid, bool complete_b
     if (!complete_basis_valid) {
         throw PSIEXCEPTION("FrozenResponseContext: precursor/cation complete basis structure is inconsistent");
     }
+}
+
+detail::DenseRestrictedResponse detail::solve_dense_restricted_response(
+    const Matrix& H1, const Matrix& H2, double omega, const Matrix& rhs) {
+    require_dense_response_operator(H1, "H1");
+    require_dense_response_operator(H2, "H2");
+    if (H2.nrow() != H1.nrow())
+        throw PSIEXCEPTION("dense restricted response: H1 and H2 must have the same dimension");
+    if (!std::isfinite(omega))
+        throw PSIEXCEPTION("dense restricted response: omega must be finite and nonnegative");
+    if (omega < 0.0)
+        throw PSIEXCEPTION("dense restricted response: omega must be nonnegative");
+    if (rhs.nirrep() != 1 || rhs.nrow() != H1.nrow() || rhs.ncol() == 0)
+        throw PSIEXCEPTION("dense restricted response: RHS dimensions must be n by one-or-more columns");
+    for (int row = 0; row < rhs.nrow(); ++row)
+        for (int column = 0; column < rhs.ncol(); ++column)
+            if (!std::isfinite(rhs(row, column)))
+                throw PSIEXCEPTION("dense restricted response: RHS must contain only finite values");
+
+    const int transition_count = H1.nrow();
+    if (omega != 0.0 && transition_count > std::numeric_limits<int>::max() / 2)
+        throw PSIEXCEPTION("dense restricted response: doubled dimension exceeds LAPACK limits");
+    const int order = omega == 0.0 ? transition_count : 2 * transition_count;
+    const int rhs_count = rhs.ncol();
+    const auto dimension = static_cast<std::size_t>(order);
+    const auto column_count = static_cast<std::size_t>(rhs_count);
+    if (dimension > std::numeric_limits<std::size_t>::max() / dimension ||
+        dimension > std::numeric_limits<std::size_t>::max() / column_count)
+        throw PSIEXCEPTION("dense restricted response: allocation size overflow");
+
+    // Column-major LAPACK storage. At exactly zero frequency the decoupled
+    // H2 equation is omitted, making this precisely the H1 P = rhs solve.
+    std::vector<double> coefficients(dimension * dimension, 0.0);
+    for (int row = 0; row < transition_count; ++row) {
+        for (int column = 0; column < transition_count; ++column) {
+            coefficients[row + static_cast<std::size_t>(column) * dimension] = H1(row, column);
+            if (omega != 0.0)
+                coefficients[row + transition_count +
+                             static_cast<std::size_t>(column + transition_count) * dimension] = H2(row, column);
+        }
+        if (omega != 0.0) {
+            coefficients[row + static_cast<std::size_t>(row + transition_count) * dimension] = omega;
+            coefficients[row + transition_count + static_cast<std::size_t>(row) * dimension] = -omega;
+        }
+    }
+    const auto original_coefficients = coefficients;
+    std::vector<double> lapack_rhs(dimension * column_count, 0.0);
+    for (int column = 0; column < rhs_count; ++column)
+        for (int row = 0; row < transition_count; ++row)
+            lapack_rhs[row + static_cast<std::size_t>(column) * dimension] = rhs(row, column);
+    const auto original_rhs = lapack_rhs;
+
+    std::vector<double> solution(dimension * column_count, 0.0);
+    std::vector<double> factors(dimension * dimension, 0.0);
+    std::vector<int> pivots(dimension, 0), integer_work(dimension, 0);
+    std::vector<double> row_scale(dimension, 0.0), column_scale(dimension, 0.0);
+    std::vector<double> forward_error(column_count, 0.0), backward_error(column_count, 0.0);
+    std::vector<double> work(4 * dimension, 0.0);
+    double reciprocal_condition = 0.0;
+    const int info = C_DGESVX('N', 'N', order, rhs_count, coefficients.data(), order,
+                              factors.data(), order, pivots.data(), 'N', row_scale.data(),
+                              column_scale.data(), lapack_rhs.data(), order, solution.data(), order,
+                              &reciprocal_condition, forward_error.data(), backward_error.data(),
+                              work.data(), integer_work.data());
+    if (info != 0)
+        throw PSIEXCEPTION("dense restricted response: LAPACK reported singular or invalid equations; info=" +
+                           std::to_string(info));
+    const double condition_cutoff = std::numeric_limits<double>::epsilon() * std::max(1, order);
+    if (!std::isfinite(reciprocal_condition) || reciprocal_condition <= condition_cutoff)
+        throw PSIEXCEPTION("dense restricted response: reciprocal condition estimate is too small");
+    for (int column = 0; column < rhs_count; ++column)
+        if (!std::isfinite(forward_error[column]) || !std::isfinite(backward_error[column]))
+            throw PSIEXCEPTION("dense restricted response: LAPACK returned nonfinite error diagnostics");
+
+    const double residual_factor = 512.0 * std::numeric_limits<double>::epsilon() * std::max(1, order);
+    for (int column = 0; column < rhs_count; ++column) {
+        for (int row = 0; row < order; ++row) {
+            const auto rhs_index = row + static_cast<std::size_t>(column) * dimension;
+            double product = 0.0;
+            double scale = std::abs(original_rhs[rhs_index]);
+            for (int inner = 0; inner < order; ++inner) {
+                const double a = original_coefficients[row + static_cast<std::size_t>(inner) * dimension];
+                const double x = solution[inner + static_cast<std::size_t>(column) * dimension];
+                product += a * x;
+                scale += std::abs(a) * std::abs(x);
+            }
+            const double residual = product - original_rhs[rhs_index];
+            if (!std::isfinite(product) || !std::isfinite(scale) || !std::isfinite(residual) ||
+                std::abs(residual) > residual_factor * std::max(1.0, scale))
+                throw PSIEXCEPTION("dense restricted response: solution residual validation failed");
+        }
+    }
+
+    auto P = std::make_shared<Matrix>(transition_count, rhs_count);
+    auto Q = std::make_shared<Matrix>(transition_count, rhs_count);
+    for (int column = 0; column < rhs_count; ++column) {
+        for (int row = 0; row < transition_count; ++row) {
+            const double p = solution[row + static_cast<std::size_t>(column) * dimension];
+            const double q = omega == 0.0 ? 0.0 :
+                solution[row + transition_count + static_cast<std::size_t>(column) * dimension];
+            if (!std::isfinite(p) || !std::isfinite(q))
+                throw PSIEXCEPTION("dense restricted response: solution amplitudes are not finite");
+            (*P)(row, column) = p;
+            (*Q)(row, column) = q;
+        }
+    }
+    return {std::move(P), std::move(Q), reciprocal_condition};
 }
 
 ResponseKernel::ResponseKernel(double chf_exchange, double alda_kernel)

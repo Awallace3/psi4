@@ -60,6 +60,24 @@ struct PSI_API SitePairResponse {
 namespace detail {
 /** Pure internal validation of cation-state and complete-basis vertical-protocol facts. */
 void validate_vertical_protocol(bool cation_state_valid, bool complete_basis_valid);
+
+/** Pure dense restricted-response amplitudes and LAPACK reciprocal-condition diagnostic. */
+struct PSI_API DenseRestrictedResponse {
+    SharedMatrix P;
+    SharedMatrix Q;
+    double reciprocal_condition{};
+};
+
+/**
+ * Solve the amplitude algebra using the native convention H1 = A + B, H2 = A - B:
+ *   [[H1, omega I], [-omega I, H2]] [P, Q]^T = [rhs, 0]^T.
+ *
+ * The RHS convention is deliberately the positive rhs shown above. P and Q are
+ * algebraic amplitudes only; this function assigns no polarizability sign or factor.
+ * At exactly zero frequency only H1 P = rhs is solved and Q is exactly zero.
+ */
+DenseRestrictedResponse solve_dense_restricted_response(const Matrix& H1, const Matrix& H2,
+                                                         double omega, const Matrix& rhs);
 }  // namespace detail
 
 /** Explicit, deterministic controls for the native real-space ISA fixed point. */

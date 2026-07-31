@@ -59,6 +59,118 @@ def _as_packed_rows(matrix):
     return [matrix.get(row, column) for row in range(3) for column in range(3)]
 
 
+def _solve_restricted_response(h1, h2, omega, rhs):
+    return psi4.core._atomic_polarizability_solve_restricted_response(
+        _matrix(h1), _matrix(h2), omega, _matrix(rhs)
+    )
+
+
+def _response_matrix_values(matrix):
+    rows, columns = matrix.shape
+    return [[matrix.get(row, column) for column in range(columns)] for row in range(rows)]
+
+
+def test_restricted_response_one_transition_matches_imaginary_frequency_algebra():
+    delta = 2.5
+    omega = 0.7
+    source = 1.2
+    result = _solve_restricted_response([[delta]], [[delta]], omega, [[source]])
+
+    expected_p = delta * source / (delta * delta + omega * omega)
+    expected_q = omega * source / (delta * delta + omega * omega)
+    assert result["P"].get(0, 0) == pytest.approx(expected_p, abs=1.0e-14)
+    assert result["Q"].get(0, 0) == pytest.approx(expected_q, abs=1.0e-14)
+    assert 0.0 < result["reciprocal_condition"] <= 1.0
+
+
+def test_restricted_response_static_reduces_exactly_to_h1_solve():
+    result = _solve_restricted_response(
+        [[4.0, 1.0], [1.0, 3.0]],
+        [[0.0, 0.0], [0.0, 0.0]],
+        0.0,
+        [[1.0], [2.0]],
+    )
+    _assert_matrix_close(
+        _response_matrix_values(result["P"]), [[1.0 / 11.0], [7.0 / 11.0]], 1.0e-15
+    )
+    assert _response_matrix_values(result["Q"]) == [[0.0], [0.0]]
+
+
+def test_restricted_response_two_transition_diagonal_matches_componentwise_algebra():
+    deltas = [1.5, 4.0]
+    omega = 0.8
+    source = [[2.0], [-3.0]]
+    result = _solve_restricted_response(
+        [[deltas[0], 0.0], [0.0, deltas[1]]],
+        [[deltas[0], 0.0], [0.0, deltas[1]]],
+        omega,
+        source,
+    )
+    expected_p = [[deltas[row] * source[row][0] / (deltas[row] ** 2 + omega**2)]
+                  for row in range(2)]
+    expected_q = [[omega * source[row][0] / (deltas[row] ** 2 + omega**2)]
+                  for row in range(2)]
+    _assert_matrix_close(_response_matrix_values(result["P"]), expected_p, 1.0e-13)
+    _assert_matrix_close(_response_matrix_values(result["Q"]), expected_q, 1.0e-13)
+
+
+def test_restricted_response_supports_multiple_rhs_without_cross_column_mixing():
+    result = _solve_restricted_response(
+        [[2.0, 0.0], [0.0, 3.0]],
+        [[2.0, 0.0], [0.0, 3.0]],
+        0.5,
+        [[1.0, 4.0, -2.0], [3.0, -1.0, 5.0]],
+    )
+    expected_p = [
+        [2.0 * value / (2.0**2 + 0.5**2) for value in [1.0, 4.0, -2.0]],
+        [3.0 * value / (3.0**2 + 0.5**2) for value in [3.0, -1.0, 5.0]],
+    ]
+    _assert_matrix_close(_response_matrix_values(result["P"]), expected_p, 1.0e-13)
+    assert result["P"].shape == (2, 3)
+    assert result["Q"].shape == (2, 3)
+
+
+def test_restricted_response_amplitude_contraction_is_reciprocal():
+    h1 = [[3.0, 0.4], [0.4, 2.0]]
+    h2 = [[2.5, -0.2], [-0.2, 1.7]]
+    sources = [[1.0, -0.3], [0.2, 0.8]]
+    p = _response_matrix_values(_solve_restricted_response(h1, h2, 0.6, sources)["P"])
+    first_second = sum(sources[row][0] * p[row][1] for row in range(2))
+    second_first = sum(sources[row][1] * p[row][0] for row in range(2))
+    assert first_second == pytest.approx(second_first, abs=2.0e-14)
+
+
+@pytest.mark.parametrize(
+    "h1,h2,omega,rhs,message",
+    [
+        ([[1.0, 0.0]], [[1.0]], 0.0, [[1.0]], r"H1.*square"),
+        ([[1.0, 0.0], [0.0, 1.0]], [[1.0]], 0.0, [[1.0], [2.0]], r"same dimension"),
+        ([[1.0, 1.0e-4], [0.0, 1.0]], [[1.0, 0.0], [0.0, 1.0]], 0.0,
+         [[1.0], [2.0]], r"H1.*symmetric"),
+        ([[1.0]], [[math.nan]], 0.0, [[1.0]], r"H2.*finite"),
+        ([[1.0]], [[1.0]], -math.ulp(1.0), [[1.0]], r"omega.*nonnegative"),
+        ([[1.0]], [[1.0]], math.inf, [[1.0]], r"omega.*finite"),
+        ([[1.0, 0.0], [0.0, 1.0]], [[1.0, 0.0], [0.0, 1.0]], 0.0,
+         [[1.0]], r"RHS.*dimensions"),
+        ([[1.0]], [[1.0]], 0.0, [[math.nan]], r"RHS.*finite"),
+    ],
+)
+def test_restricted_response_rejects_invalid_inputs(h1, h2, omega, rhs, message):
+    with pytest.raises(RuntimeError, match=message):
+        _solve_restricted_response(h1, h2, omega, rhs)
+
+
+@pytest.mark.parametrize("small", [0.0, 1.0e-20])
+def test_restricted_response_rejects_singular_or_numerically_singular_systems(small):
+    with pytest.raises(RuntimeError, match=r"singular|condition"):
+        _solve_restricted_response(
+            [[1.0, 0.0], [0.0, small]],
+            [[1.0, 0.0], [0.0, 1.0]],
+            0.0,
+            [[1.0], [1.0]],
+        )
+
+
 def test_casimir_frequency_grid_matches_reviewed_eleven_point_protocol_exactly():
     frequencies, weights = psi4.core._atomic_polarizability_make_casimir_grid(10, 0.5)
     assert tuple(frequencies) == _REVIEWED_FREQUENCIES

@@ -116,6 +116,16 @@ void export_oeprop(py::module &m) {
         const auto grid = make_casimir_grid(nonzero_count, scale);
         return py::make_tuple(grid.frequencies, grid.weights);
     });
+    m.def("_atomic_polarizability_solve_restricted_response",
+          [](const Matrix& H1, const Matrix& H2, double omega, const Matrix& rhs) {
+              const auto result = detail::solve_dense_restricted_response(H1, H2, omega, rhs);
+              py::dict values;
+              values["P"] = result.P;
+              values["Q"] = result.Q;
+              values["reciprocal_condition"] = result.reciprocal_condition;
+              return values;
+          },
+          "H1"_a, "H2"_a, "omega"_a, "rhs"_a);
     m.def("_atomic_polarizability_validate_response_kernel", [](double chf_exchange, double alda_kernel) {
         const ResponseKernel kernel(chf_exchange, alda_kernel);
         return py::make_tuple(kernel.chf_exchange(), kernel.alda_kernel());
