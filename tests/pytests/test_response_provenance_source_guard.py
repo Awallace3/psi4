@@ -81,8 +81,8 @@ def test_seal_records_complete_functional_basis_and_ordered_grid_state():
         assert field in basis
     assert "same_ground_state" in factory
     assert "GRAC master/worker effective state" in factory
-    assert 'cation_seal.reference != "UKS"' in factory
-    assert "structural_snapshot() != *grac_seal.basis" in factory
+    assert 'cation_seal.reference == "UKS"' in factory
+    assert "structural_snapshot() == *grac_seal.basis" in factory
     assert "verify_basis_unchanged" in factory
     assert "V_potential()" not in factory[factory.index("FrozenResponseContext::create"):factory.index("ISAWeights::ISAWeights")]
 
@@ -97,3 +97,14 @@ def test_production_test_mutator_exports_are_absent():
     exports = _text("psi4/src/export_oeprop.cc")
     assert "_atomic_polarizability_mutate_grac_component_for_test" not in exports
     assert "_atomic_polarizability_restore_grac_component_for_test" not in exports
+
+
+def test_vertical_protocol_test_seam_is_pure_and_read_only():
+    exports = _text("psi4/src/export_oeprop.cc")
+    factory = _text("psi4/src/psi4/libmints/atomic_polarizability.cc")
+    start = exports.index('m.def("_atomic_polarizability_validate_vertical_protocol"')
+    seam = exports[start:exports.index("m.def(", start + 6)]
+    assert "[](bool cation_state_valid, bool complete_basis_valid)" in seam
+    assert "detail::validate_vertical_protocol" in seam
+    assert "Wavefunction" not in seam
+    assert factory.count("detail::validate_vertical_protocol") == 3

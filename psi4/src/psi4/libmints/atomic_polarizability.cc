@@ -513,6 +513,15 @@ bool same_nuclei_and_geometry(const Molecule& first, const Molecule& second) {
 
 }  // namespace
 
+void detail::validate_vertical_protocol(bool cation_state_valid, bool complete_basis_valid) {
+    if (!cation_state_valid) {
+        throw PSIEXCEPTION("FrozenResponseContext: vertical cation must be a charge +1 doublet UKS state");
+    }
+    if (!complete_basis_valid) {
+        throw PSIEXCEPTION("FrozenResponseContext: precursor/cation complete basis structure is inconsistent");
+    }
+}
+
 ResponseKernel::ResponseKernel(double chf_exchange, double alda_kernel)
     : chf_exchange_(chf_exchange), alda_kernel_(alda_kernel) {
     if (!std::isfinite(chf_exchange_) || chf_exchange_ != 0.25)
@@ -565,11 +574,13 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
         !precursor_seal.functional.unpolarized) {
         throw PSIEXCEPTION("FrozenResponseContext: neutral and precursor must be neutral restricted singlet RKS states");
     }
-    if (!cation_uhf || cation_seal.reference != "UKS" || cation_seal.charge != 1 ||
-        cation_seal.multiplicity != 2 || cation_seal.nalpha != cation_seal.nbeta + 1 ||
-        cation_seal.functional.unpolarized) {
-        throw PSIEXCEPTION("FrozenResponseContext: vertical cation must be a charge +1 doublet UKS state");
-    }
+    const bool cation_state_valid = cation_uhf && cation_seal.reference == "UKS" &&
+                                    cation_seal.charge == 1 && cation_seal.multiplicity == 2 &&
+                                    cation_seal.nalpha == cation_seal.nbeta + 1 &&
+                                    !cation_seal.functional.unpolarized;
+    // Validate this fact here and the basis fact at its existing point below so
+    // factory failure ordering remains unchanged.
+    detail::validate_vertical_protocol(cation_state_valid, true);
     const auto functional = grac_seal.sealed_functional;
     const auto precursor_functional = precursor_seal.sealed_functional;
     if (!functional || !precursor_functional || !functional->needs_xc() ||
@@ -626,12 +637,12 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
         cation_seal.nalpha + cation_seal.nbeta != grac_seal.nalpha + grac_seal.nbeta - 1) {
         throw PSIEXCEPTION("FrozenResponseContext: cation calculation geometry/electron identity is inconsistent");
     }
-    if (!grac_seal.basis || !precursor_seal.basis || !cation_seal.basis ||
-        !same_vertical_basis_structure(*grac_seal.basis, *precursor_seal.basis) ||
-        !same_vertical_basis_structure(*grac_seal.basis, *cation_seal.basis) ||
-        grac_hf->basisset()->structural_snapshot() != *grac_seal.basis) {
-        throw PSIEXCEPTION("FrozenResponseContext: precursor/cation complete basis structure is inconsistent");
-    }
+    const bool complete_basis_valid =
+        grac_seal.basis && precursor_seal.basis && cation_seal.basis &&
+        same_vertical_basis_structure(*grac_seal.basis, *precursor_seal.basis) &&
+        same_vertical_basis_structure(*grac_seal.basis, *cation_seal.basis) &&
+        grac_hf->basisset()->structural_snapshot() == *grac_seal.basis;
+    detail::validate_vertical_protocol(true, complete_basis_valid);
     if (!cation_seal.sealed_functional ||
         !precursor_seal.functional.same_ground_state(cation_seal.functional) ||
         cation_seal.functional.needs_grac) {

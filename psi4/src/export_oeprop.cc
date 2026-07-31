@@ -54,6 +54,11 @@ void export_oeprop(py::module &m) {
         const ResponseKernel kernel(chf_exchange, alda_kernel);
         return py::make_tuple(kernel.chf_exchange(), kernel.alda_kernel());
     });
+    m.def("_atomic_polarizability_validate_vertical_protocol",
+          [](bool cation_state_valid, bool complete_basis_valid) {
+              detail::validate_vertical_protocol(cation_state_valid, complete_basis_valid);
+          },
+          "cation_state_valid"_a, "complete_basis_valid"_a);
     py::class_<FrozenResponseContext, std::shared_ptr<FrozenResponseContext>>(
         m, "_AtomicPolarizabilityFrozenResponseContext")
         .def("summary", [](const FrozenResponseContext& context) {

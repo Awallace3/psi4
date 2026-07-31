@@ -340,7 +340,7 @@ def test_wrong_cation_calculation_rejects(grac_states):
         psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, precursor)
 
 
-def test_wrong_cation_multiplicity_rejects(grac_states):
+def test_wrong_cation_multiplicity_real_scf_fails_closed_before_protocol_validation(grac_states):
     grac, precursor, _, _ = grac_states
     quartet = psi4.geometry(
         """
@@ -355,21 +355,34 @@ def test_wrong_cation_multiplicity_rejects(grac_states):
     psi4.set_options({"reference": "uhf", "basis": "sto-3g", "dft_grac_shift": 0.0})
     try:
         _, quartet_wfn = psi4.energy("pbe0", molecule=quartet, return_wfn=True)
-        with pytest.raises(RuntimeError, match=r"doublet UKS"):
+        assert quartet_wfn._capture_response_provenance_if_converged() is False
+        with pytest.raises(RuntimeError, match=r"no finalized provenance seal"):
             psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, quartet_wfn)
     finally:
         psi4.set_options({"reference": "rhf"})
 
 
-def test_complete_basis_structure_mismatch_rejects(grac_states):
+def test_complete_basis_mismatch_real_scf_fails_closed_before_protocol_validation(grac_states):
     grac, precursor, cation, _ = grac_states
     psi4.set_options({"reference": "uhf", "basis": "3-21g", "dft_grac_shift": 0.0})
     try:
         _, wrong_basis_cation = psi4.energy("pbe0", molecule=cation.molecule(), return_wfn=True)
-        with pytest.raises(RuntimeError, match=r"complete basis structure"):
-            psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, wrong_basis_cation)
+        assert wrong_basis_cation._capture_response_provenance_if_converged() is False
+        with pytest.raises(RuntimeError, match=r"no finalized provenance seal"):
+            psi4.core._atomic_polarizability_make_frozen_response_context(
+                grac, precursor, wrong_basis_cation
+            )
     finally:
         psi4.set_options({"reference": "rhf", "basis": "sto-3g"})
+
+
+def test_pure_vertical_protocol_validator_rejects_downstream_branches():
+    validator = psi4.core._atomic_polarizability_validate_vertical_protocol
+    assert validator(True, True) is None
+    with pytest.raises(RuntimeError, match=r"charge \+1 doublet UKS"):
+        validator(False, True)
+    with pytest.raises(RuntimeError, match=r"complete basis structure"):
+        validator(True, False)
 
 
 def test_frozen_context_is_unaffected_by_later_source_orbital_and_density_mutation(grac_states):

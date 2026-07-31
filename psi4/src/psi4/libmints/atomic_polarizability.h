@@ -57,6 +57,11 @@ struct PSI_API SitePairResponse {
     std::vector<L3WorkingMatrix> blocks;
 };
 
+namespace detail {
+/** Pure internal validation of cation-state and complete-basis vertical-protocol facts. */
+void validate_vertical_protocol(bool cation_state_valid, bool complete_basis_valid);
+}  // namespace detail
+
 /** Immutable protocol response-kernel selection, independent of the ground-state functional. */
 class PSI_API ResponseKernel {
    public:
