@@ -30,14 +30,25 @@ AtomicPolarizabilityCalculator::AtomicPolarizabilityCalculator(std::shared_ptr<W
     }
 }
 
-void AtomicPolarizabilityCalculator::compute() {
-    // Output arrays must not be allocated or published until every native response
-    // prerequisite has been validated. The response provider is added in a later stage.
-    if (!wfn_->molecule() || !wfn_->basisset() || !wfn_->Ca() || !wfn_->Da() || !wfn_->epsilon_a()) {
+void AtomicPolarizabilityCalculator::validate_wavefunction_prerequisites() const {
+    bool has_orbital_response_data = false;
+    try {
+        has_orbital_response_data =
+            wfn_->molecule() && wfn_->basisset() && wfn_->Ca() && wfn_->Da() && wfn_->epsilon_a();
+    } catch (const PsiException&) {
+        // Some Wavefunction accessors reject incomplete, safely constructed wavefunctions.
+    }
+
+    if (!has_orbital_response_data) {
         throw PSIEXCEPTION(
             "AtomicPolarizabilityCalculator: unsupported wavefunction is missing required orbital response data");
     }
+}
 
+void AtomicPolarizabilityCalculator::compute() {
+    // Output arrays must not be allocated or published until every native response
+    // prerequisite has been validated. The response provider is added in a later stage.
+    validate_wavefunction_prerequisites();
     throw PSIEXCEPTION("AtomicPolarizabilityCalculator: required native response data are unavailable");
 }
 

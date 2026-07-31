@@ -801,6 +801,9 @@ void OEProp::compute() {
         outfile->Printf("\nProperties computed using the %s density matrix\n\n", title_.c_str());
     }
 
+    // Atomic polarizabilities fail closed before any other task can publish output.
+    if (tasks_.count("ATOMIC_POLARIZABILITIES")) compute_atomic_polarizabilities();
+
     // Search for multipole strings, which are handled separately
     std::set<std::string>::const_iterator iter = tasks_.begin();
     std::regex mpoles("^MULTIPOLE(?:S)?\\s*\\((\\d+)\\)$");
@@ -815,7 +818,6 @@ void OEProp::compute() {
         }
     }
     // print_header();  // Not by default, happens too often -CDS
-    if (tasks_.count("ATOMIC_POLARIZABILITIES")) compute_atomic_polarizabilities();
     if (tasks_.count("ESP_AT_NUCLEI")) compute_esp_at_nuclei();
     if (tasks_.count("QUADRUPOLE")) compute_multipoles(2, false);
     else if (tasks_.count("DIPOLE")) compute_multipoles(1, false);

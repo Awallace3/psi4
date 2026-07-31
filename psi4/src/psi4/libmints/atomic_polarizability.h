@@ -35,6 +35,8 @@ class PSI_API AtomicPolarizabilityCalculator {
     void compute();
 
    private:
+    void validate_wavefunction_prerequisites() const;
+
     std::shared_ptr<Wavefunction> wfn_;
 };
 

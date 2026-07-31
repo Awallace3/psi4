@@ -29,6 +29,7 @@
 #include "psi4/pybind11.h"
 
 #include "psi4/libmints/oeprop.h"
+#include "psi4/libmints/atomic_polarizability.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
@@ -38,6 +39,12 @@ namespace py = pybind11;
 using namespace pybind11::literals;
 
 void export_oeprop(py::module &m) {
+    py::class_<AtomicPolarizabilityCalculator>(m, "AtomicPolarizabilityCalculator",
+                                               "Native atomic-polarizability pipeline entry point")
+        .def(py::init<std::shared_ptr<Wavefunction>>())
+        .def("compute", &AtomicPolarizabilityCalculator::compute,
+             "Validate prerequisites and compute native atomic polarizabilities.");
+
     py::class_<Prop, std::shared_ptr<Prop> >(m, "Prop", "docstring");
 
     py::class_<ESPPropCalc, std::shared_ptr<ESPPropCalc>, Prop>(
