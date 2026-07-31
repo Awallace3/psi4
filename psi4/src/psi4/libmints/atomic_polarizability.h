@@ -123,10 +123,11 @@ struct PSI_API ISADiagnostics {
     double max_unity_residual{};
     double total_charge_residual{};
     std::size_t tail_fit_failures{};
+    std::size_t tail_failure_reused_profiles{};
     std::size_t underflow_fallbacks{};
     std::vector<double> atomic_populations;
     ISAGridProfile grid_profile;
-    std::vector<double> radial_nodes;
+    std::vector<std::vector<double>> radial_nodes;
     std::vector<std::vector<double>> log_profiles;
     std::vector<double> tail_join_radii;
     std::vector<double> tail_alphas;
@@ -280,19 +281,42 @@ struct PSI_API SyntheticISAResult {
 struct PSI_API ISAProfileTestResult {
     std::vector<double> log_values;
     double tail_alpha{};
+    double tail_log_amplitude{};
+    double tail_charge{};
     double join_log_left{};
     double join_log_right{};
+};
+struct PSI_API GaussianFixedPointTestResult {
+    std::vector<double> weights;
+    double max_profile_relative_error{};
+};
+struct PSI_API ISAOverlapTestResult {
+    double overlap_residual{};
 };
 SyntheticISAResult compute_synthetic_isa(const std::vector<SitePosition>& sites,
                                          const std::vector<SitePosition>& output_points,
                                          const std::vector<double>& output_weights,
                                          const std::vector<int>& atomic_numbers,
                                          const std::vector<SyntheticGaussianDensity>& terms,
-                                         const ISAOptions& options);
+                                         const ISAOptions& options,
+                                         std::size_t inject_tail_fit_failure_iteration = 0);
 ISAProfileTestResult test_isa_profile(const std::vector<double>& nodes,
                                       const std::vector<double>& log_values,
                                       const std::vector<double>& queries,
                                       double tail_join, double tail_charge);
+GaussianFixedPointTestResult test_isa_gaussian_fixed_point(
+    const std::vector<SitePosition>& sites, const std::vector<SitePosition>& output_points,
+    const std::vector<SyntheticGaussianDensity>& terms, std::size_t radial_points,
+    std::size_t angular_polar_points, std::size_t angular_azimuthal_points);
+ISAOverlapTestResult test_isa_overlap(
+    const std::vector<double>& first_nodes, const std::vector<double>& first_logs,
+    double first_tail_alpha, double first_tail_log_amplitude,
+    const std::vector<double>& second_nodes, const std::vector<double>& second_logs,
+    double second_tail_alpha, double second_tail_log_amplitude,
+    double tail_join, std::size_t integration_points);
+std::vector<double> test_isa_tail_probabilities(const std::vector<double>& tail_log_amplitudes,
+                                                const std::vector<double>& tail_alphas,
+                                                const std::vector<double>& distances);
 }  // namespace detail
 
 /** Production response interface; no mutable Wavefunction is retained or revalidated. */

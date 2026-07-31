@@ -189,7 +189,12 @@ struct Profile {
 
     Profile() = default;
     Profile(std::vector<double> radial_nodes, std::vector<double> log_values)
-        : nodes(std::move(radial_nodes)), logs(std::move(log_values)), slopes(pchip_slopes(nodes, logs)) {}
+        : nodes(std::move(radial_nodes)), logs(std::move(log_values)) {
+        // Only sampled profile storage is floored. Analytical Gaussian and tail
+        // evaluations remain unbounded in log space for correct far-field ratios.
+        for (double& value : logs) value = std::max(kLogFloor, value);
+        slopes = pchip_slopes(nodes, logs);
+    }
 
     static Profile initial(const std::vector<double>& nodes, double alpha) {
         std::vector<double> logs(nodes.size());
@@ -228,7 +233,7 @@ struct Profile {
         else if (gaussian) value = gaussian_log_norm - gaussian_alpha * radius * radius;
         else value = pchip(radius);
         if (!std::isfinite(value)) throw PSIEXCEPTION("ISA: radial log profile is not finite");
-        return std::max(kLogFloor, value);
+        return value;
     }
 };
 
@@ -313,16 +318,29 @@ long double exponential_overlap_tail(double log_amplitude, double exponent, doub
            std::exp(static_cast<long double>(log_amplitude) - beta * r0) * polynomial;
 }
 
-double normalized_overlap(const Profile& first, const Profile& second, const Quadrature& radial) {
+double normalized_overlap(const Profile& first, const Profile& second, const Quadrature& radial,
+                          std::size_t inner_integration_points) {
     long double cross = 0.0L, norm_first = 0.0L, norm_second = 0.0L;
-    const bool analytic_tail = first.has_tail && second.has_tail && first.tail_join == second.tail_join;
-    const double integration_limit = analytic_tail ? first.tail_join : std::numeric_limits<double>::infinity();
-    for (std::size_t i = 1; i < radial.nodes.size(); ++i) {
-        if (radial.nodes[i] > integration_limit) continue;
-        const long double radius = radial.nodes[i];
-        const long double measure = 4.0L * static_cast<long double>(kPi) * radius * radius * radial.weights[i];
-        const long double a = std::exp(static_cast<long double>(first.eval(radial.nodes[i])));
-        const long double b = std::exp(static_cast<long double>(second.eval(radial.nodes[i])));
+    const bool first_tail = first.has_tail;
+    const bool second_tail = second.has_tail;
+    if (first_tail != second_tail)
+        throw PSIEXCEPTION("ISA: overlap comparison requires either two fitted tails or neither");
+    const bool analytic_tail = first_tail && second_tail;
+    if (analytic_tail && first.tail_join != second.tail_join)
+        throw PSIEXCEPTION("ISA: overlap comparison tail joins are inconsistent");
+
+    // Once tails are active, the inner overlap is a dedicated Gauss-Legendre
+    // integral on [0, r0]. Never filter the mapped [0, infinity) rule: doing so
+    // introduces a moving discontinuity as its nodes cross r0 under refinement.
+    const Quadrature inner = analytic_tail
+                                 ? gauss_legendre(inner_integration_points, 0.0, first.tail_join)
+                                 : radial;
+    const std::size_t begin = analytic_tail ? 0 : 1;  // mapped radial carries an explicit zero-weight origin
+    for (std::size_t i = begin; i < inner.nodes.size(); ++i) {
+        const long double radius = inner.nodes[i];
+        const long double measure = 4.0L * static_cast<long double>(kPi) * radius * radius * inner.weights[i];
+        const long double a = std::exp(static_cast<long double>(first.eval(inner.nodes[i])));
+        const long double b = std::exp(static_cast<long double>(second.eval(inner.nodes[i])));
         cross += measure * a * b;
         norm_first += measure * a * a;
         norm_second += measure * b * b;
@@ -377,9 +395,12 @@ void validate_inputs(const std::vector<SitePosition>& sites, const std::vector<S
             if (distance(sites[i], sites[j]) < kCoincidentTolerance)
                 throw PSIEXCEPTION("ISA: coincident stockholder sites are not uniquely partitionable");
     }
-    for (std::size_t i = 0; i < points.size(); ++i)
+    for (std::size_t i = 0; i < points.size(); ++i) {
         if (!finite_site(points[i]) || !std::isfinite(weights[i]))
             throw PSIEXCEPTION("ISA: output grid points/weights must be finite");
+        if (weights[i] < 0.0)
+            throw PSIEXCEPTION("ISA: output grid integration weights must be nonnegative");
+    }
 }
 
 void clamp_density(std::vector<double>& density) {
@@ -404,7 +425,8 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
                  const std::vector<double>& output_weights, const std::vector<int>& atomic_numbers,
                  const std::vector<double>& supplied_output_density,
                  const std::function<double(const SitePosition&)>& density_evaluator,
-                 const ISAOptions& options, double formal_electron_count, bool enforce_electron_count) {
+                 const ISAOptions& options, double formal_electron_count, bool enforce_electron_count,
+                 std::size_t inject_tail_fit_failure_iteration = 0) {
     validate_inputs(sites, output_points, output_weights, atomic_numbers);
     std::vector<double> output_density = supplied_output_density;
     if (output_density.size() != output_points.size()) throw PSIEXCEPTION("ISA: output density cardinality is invalid");
@@ -515,21 +537,24 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
 
         double provisional_residual = 0.0;
         for (std::size_t site = 0; site < nsite; ++site)
-            provisional_residual = std::max(provisional_residual,
-                                            normalized_overlap(profiles[site], updated[site], radial[site]));
+            provisional_residual = std::max(
+                provisional_residual,
+                normalized_overlap(profiles[site], updated[site], radial[site], options.radial_points()));
         tail_active = tail_active || iteration + 1 >= options.tail_activation_iteration() ||
                       provisional_residual <= options.tail_activation_convergence();
         if (tail_active) {
             for (std::size_t site = 0; site < nsite; ++site) {
                 try {
+                    if (inject_tail_fit_failure_iteration == iteration + 1)
+                        throw PSIEXCEPTION("ISA test injection: tail fit failure");
                     fit_tail(updated[site], radial[site], scales[site], joins[site]);
                 } catch (const std::exception&) {
                     ++diagnostics.tail_fit_failures;
                     if (profiles[site].has_tail) {
-                        updated[site].has_tail = true;
-                        updated[site].tail_join = profiles[site].tail_join;
-                        updated[site].tail_alpha = profiles[site].tail_alpha;
-                        updated[site].tail_log_amplitude = profiles[site].tail_log_amplitude;
+                        // Retain the complete prior profile. Combining a new
+                        // inner profile with an old tail is discontinuous at r0.
+                        updated[site] = profiles[site];
+                        ++diagnostics.tail_failure_reused_profiles;
                     } else {
                         throw PSIEXCEPTION("ISA: no valid exponential tail was available by activation");
                     }
@@ -538,9 +563,13 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
         }
 
         diagnostics.max_overlap_residual = 0.0;
-        for (std::size_t site = 0; site < nsite; ++site)
-            diagnostics.max_overlap_residual = std::max(
-                diagnostics.max_overlap_residual, normalized_overlap(profiles[site], updated[site], radial[site]));
+        for (std::size_t site = 0; site < nsite; ++site) {
+            const double residual = profiles[site].has_tail != updated[site].has_tail
+                                        ? 1.0
+                                        : normalized_overlap(profiles[site], updated[site], radial[site],
+                                                             options.radial_points());
+            diagnostics.max_overlap_residual = std::max(diagnostics.max_overlap_residual, residual);
+        }
 
         std::vector<double> current_weights(output_points.size() * nsite);
         std::vector<double> populations(nsite, 0.0);
@@ -617,7 +646,7 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
                                 std::max(1.0, std::abs(electron_sum.sum)) * output_points.size();
     if (std::abs(result.diagnostics.total_charge_residual) > charge_bound)
         throw PSIEXCEPTION("ISA: integrated stockholder population conservation failed");
-    result.diagnostics.radial_nodes = radial.front().nodes;
+    for (const auto& rule : radial) result.diagnostics.radial_nodes.push_back(rule.nodes);
     for (const auto& profile : profiles) {
         result.diagnostics.log_profiles.push_back(profile.logs);
         result.diagnostics.tail_join_radii.push_back(profile.has_tail ? profile.tail_join : 0.0);
@@ -662,23 +691,132 @@ std::vector<double> ao_density(const FrozenResponseContext& context,
     return density;
 }
 
-std::string context_digest(const FrozenResponseContext& context, const ISAOptions& options) {
-    std::uint64_t hash = 1469598103934665603ULL;
-    const auto add = [&hash](const void* data, std::size_t size) {
-        const auto* bytes = static_cast<const unsigned char*>(data);
+struct DigestBuilder {
+    std::uint64_t hash{1469598103934665603ULL};
+
+    void bytes(const void* data, std::size_t size) {
+        const auto* values = static_cast<const unsigned char*>(data);
         for (std::size_t i = 0; i < size; ++i) {
-            hash ^= bytes[i];
+            hash ^= values[i];
             hash *= 1099511628211ULL;
         }
-    };
-    for (const auto& site : context.sites()) add(site.data(), site.size() * sizeof(double));
-    add(context.grid_points().data(), context.grid_points().size() * sizeof(double));
-    add(context.grid_weights().data(), context.grid_weights().size() * sizeof(double));
-    const std::size_t option_values[] = {options.radial_points(), options.angular_polar_points(),
-                                         options.angular_azimuthal_points(), options.max_iterations()};
-    add(option_values, sizeof(option_values));
+    }
+    template <typename T>
+    void scalar(const T& value) {
+        bytes(&value, sizeof(T));
+    }
+    void boolean(bool value) { scalar(static_cast<unsigned char>(value ? 1 : 0)); }
+    void string(const std::string& value) {
+        scalar(static_cast<std::uint64_t>(value.size()));
+        bytes(value.data(), value.size());
+    }
+    template <typename T>
+    void vector(const std::vector<T>& values) {
+        scalar(static_cast<std::uint64_t>(values.size()));
+        for (const auto& value : values) scalar(value);
+    }
+    void shell(const BasisShellSnapshot& value) {
+        scalar(value.shell_type);
+        scalar(value.angular_momentum);
+        scalar(value.puream);
+        scalar(value.center);
+        scalar(value.start);
+        scalar(value.nfunction);
+        scalar(value.ncartesian);
+        vector(value.coordinates);
+        vector(value.exponents);
+        vector(value.coefficients);
+        vector(value.original_coefficients);
+        vector(value.erd_coefficients);
+        vector(value.radial_powers);
+    }
+    void basis(const BasisSetStructuralSnapshot& value) {
+        string(value.name);
+        string(value.key);
+        string(value.target);
+        scalar(static_cast<std::uint64_t>(value.shells.size()));
+        for (const auto& item : value.shells) shell(item);
+        scalar(static_cast<std::uint64_t>(value.ecp_shells.size()));
+        for (const auto& item : value.ecp_shells) shell(item);
+        scalar(static_cast<std::uint64_t>(value.core_electrons.size()));
+        for (const auto& item : value.core_electrons) {
+            string(item.first);
+            scalar(item.second);
+        }
+        vector(value.scalar_state);
+        boolean(value.puream);
+        vector(value.n_prim_per_shell);
+        vector(value.shell_first_ao);
+        vector(value.shell_first_exponent);
+        vector(value.shell_first_basis_function);
+        vector(value.shell_center);
+        vector(value.ecp_shell_center);
+        vector(value.function_to_shell);
+        vector(value.ao_to_shell);
+        vector(value.function_center);
+        vector(value.center_to_nshell);
+        vector(value.center_to_shell);
+        vector(value.center_to_ecp_nshell);
+        vector(value.center_to_ecp_shell);
+        vector(value.unique_exponents);
+        vector(value.unique_coefficients);
+        vector(value.unique_original_coefficients);
+        vector(value.unique_ecp_exponents);
+        vector(value.unique_ecp_coefficients);
+        vector(value.unique_ecp_radial_powers);
+        vector(value.erd_coefficients);
+        vector(value.centers);
+    }
+    void matrix(const Matrix& value) {
+        scalar(value.nirrep());
+        for (int h = 0; h < value.nirrep(); ++h) {
+            scalar(value.rowspi()[h]);
+            scalar(value.colspi()[h]);
+            for (int row = 0; row < value.rowspi()[h]; ++row)
+                for (int column = 0; column < value.colspi()[h]; ++column)
+                    scalar(value.get(h, row, column));
+        }
+    }
+};
+
+std::string context_digest(const FrozenResponseContext& context, const ISAOptions& options) {
+    DigestBuilder digest;
+    digest.string("native-real-space-isa-context-v2");
+    digest.scalar(static_cast<std::uint64_t>(context.sites().size()));
+    for (const auto& site : context.sites())
+        for (double coordinate : site) digest.scalar(coordinate);
+    digest.vector(context.grid_points());
+    digest.vector(context.grid_weights());
+    digest.scalar(static_cast<std::uint64_t>(context.grid_blocks().size()));
+    for (const auto& block : context.grid_blocks()) {
+        digest.scalar(static_cast<std::uint64_t>(block.point_offset));
+        digest.scalar(static_cast<std::uint64_t>(block.point_count));
+        digest.vector(block.functions_local_to_global);
+    }
+    digest.matrix(*context.Da());
+    digest.matrix(*context.Db());
+    digest.basis(context.basis()->structural_snapshot());
+    digest.string("Slater-1964-bohr-v1");
+    digest.scalar(context.molecule()->molecular_charge());
+    digest.scalar(context.molecule()->natom());
+    for (int atom = 0; atom < context.molecule()->natom(); ++atom) {
+        const int atomic_number = static_cast<int>(context.molecule()->Z(atom));
+        digest.scalar(atomic_number);
+        digest.scalar(slater_radius(atomic_number));
+    }
+    digest.scalar(static_cast<std::uint64_t>(options.radial_points()));
+    digest.scalar(static_cast<std::uint64_t>(options.angular_polar_points()));
+    digest.scalar(static_cast<std::uint64_t>(options.angular_azimuthal_points()));
+    digest.scalar(static_cast<std::uint64_t>(options.max_iterations()));
+    digest.scalar(options.convergence());
+    digest.scalar(options.mix_fraction());
+    digest.scalar(options.initial_alpha());
+    digest.scalar(options.tail_join_factor());
+    digest.scalar(static_cast<std::uint64_t>(options.tail_activation_iteration()));
+    digest.scalar(options.tail_activation_convergence());
+    digest.scalar(options.electron_count_tolerance());
     std::ostringstream stream;
-    stream << std::hex << std::setw(16) << std::setfill('0') << hash;
+    stream << std::hex << std::setw(16) << std::setfill('0') << digest.hash;
     return stream.str();
 }
 
@@ -777,7 +915,8 @@ SyntheticISAResult compute_synthetic_isa(const std::vector<SitePosition>& sites,
                                          const std::vector<double>& output_weights,
                                          const std::vector<int>& atomic_numbers,
                                          const std::vector<SyntheticGaussianDensity>& terms,
-                                         const ISAOptions& options) {
+                                         const ISAOptions& options,
+                                         std::size_t inject_tail_fit_failure_iteration) {
     if (terms.empty()) throw PSIEXCEPTION("ISA synthetic fixture: at least one Gaussian density term is required");
     const auto evaluator = [&terms](const SitePosition& point) {
         KahanSum density;
@@ -795,7 +934,7 @@ SyntheticISAResult compute_synthetic_isa(const std::vector<SitePosition>& sites,
     KahanSum count;
     for (std::size_t point = 0; point < density.size(); ++point) count.add(output_weights[point] * density[point]);
     auto core = solve(sites, output_points, output_weights, atomic_numbers, density, evaluator,
-                      options, count.sum, false);
+                      options, count.sum, false, inject_tail_fit_failure_iteration);
     return {sites.size(), std::move(core.weights), std::move(core.diagnostics)};
 }
 
@@ -811,10 +950,124 @@ ISAProfileTestResult test_isa_profile(const std::vector<double>& nodes,
     profile.has_tail = true;
     ISAProfileTestResult result;
     result.tail_alpha = profile.tail_alpha;
+    result.tail_log_amplitude = profile.tail_log_amplitude;
+    result.tail_charge = tail_charge_for_alpha(std::exp(join_log), tail_join, profile.tail_alpha);
     result.join_log_left = profile.pchip(tail_join);
     result.join_log_right = profile.tail_log_amplitude - profile.tail_alpha * tail_join;
     for (double query : queries) result.log_values.push_back(profile.eval(query));
     return result;
+}
+
+GaussianFixedPointTestResult test_isa_gaussian_fixed_point(
+    const std::vector<SitePosition>& sites, const std::vector<SitePosition>& output_points,
+    const std::vector<SyntheticGaussianDensity>& terms, std::size_t radial_points,
+    std::size_t angular_polar_points, std::size_t angular_azimuthal_points) {
+    if (sites.empty() || terms.size() != sites.size())
+        throw PSIEXCEPTION("ISA Gaussian fixed-point fixture: terms must match sites");
+    const auto angular = product_spherical_grid(angular_polar_points, angular_azimuthal_points);
+    std::vector<Quadrature> radial;
+    std::vector<Profile> profiles;
+    for (std::size_t site = 0; site < sites.size(); ++site) {
+        const auto& term = terms[site];
+        if (!finite_site(term.center) || distance(term.center, sites[site]) != 0.0 ||
+            !std::isfinite(term.coefficient) || term.coefficient <= 0.0 ||
+            !std::isfinite(term.exponent) || term.exponent <= 0.0)
+            throw PSIEXCEPTION("ISA Gaussian fixed-point fixture: each positive Gaussian must be site-centred");
+        radial.push_back(mapped_radial(radial_points, slater_radius(1)));
+        std::vector<double> logs(radial.back().nodes.size());
+        for (std::size_t r = 0; r < logs.size(); ++r)
+            logs[r] = std::log(term.coefficient) - term.exponent * radial.back().nodes[r] * radial.back().nodes[r];
+        Profile profile(radial.back().nodes, std::move(logs));
+        profile.gaussian = true;
+        profile.gaussian_alpha = term.exponent;
+        profile.gaussian_log_norm = std::log(term.coefficient);
+        profiles.push_back(std::move(profile));
+    }
+    const auto density = [&terms](const SitePosition& point) {
+        KahanSum value;
+        for (const auto& term : terms) {
+            const double radius = distance(point, term.center);
+            value.add(term.coefficient * std::exp(-term.exponent * radius * radius));
+        }
+        return value.sum;
+    };
+
+    GaussianFixedPointTestResult result;
+    for (const auto& point : output_points) {
+        const auto p = probabilities(point, sites, profiles);
+        result.weights.insert(result.weights.end(), p.begin(), p.end());
+    }
+    for (std::size_t site = 0; site < sites.size(); ++site) {
+        for (std::size_t r = 0; r < radial[site].nodes.size(); ++r) {
+            const double radius = radial[site].nodes[r];
+            const double expected_log = std::log(terms[site].coefficient) - terms[site].exponent * radius * radius;
+            if (expected_log < -600.0) continue;
+            KahanSum average;
+            if (r == 0) {
+                const auto p = probabilities(sites[site], sites, profiles);
+                average.add(density(sites[site]) * p[site]);
+            } else {
+                for (std::size_t q = 0; q < angular.directions.size(); ++q) {
+                    const auto& direction = angular.directions[q];
+                    SitePosition point{sites[site][0] + radius * direction[0],
+                                       sites[site][1] + radius * direction[1],
+                                       sites[site][2] + radius * direction[2]};
+                    const auto p = probabilities(point, sites, profiles);
+                    average.add(angular.weights[q] * density(point) * p[site]);
+                }
+            }
+            const double expected = std::exp(expected_log);
+            result.max_profile_relative_error = std::max(
+                result.max_profile_relative_error, std::abs(average.sum - expected) / expected);
+        }
+    }
+    return result;
+}
+
+ISAOverlapTestResult test_isa_overlap(
+    const std::vector<double>& first_nodes, const std::vector<double>& first_logs,
+    double first_tail_alpha, double first_tail_log_amplitude,
+    const std::vector<double>& second_nodes, const std::vector<double>& second_logs,
+    double second_tail_alpha, double second_tail_log_amplitude,
+    double tail_join, std::size_t integration_points) {
+    Profile first(first_nodes, first_logs);
+    first.has_tail = true;
+    first.tail_join = tail_join;
+    first.tail_alpha = first_tail_alpha;
+    first.tail_log_amplitude = first_tail_log_amplitude;
+    Profile second(second_nodes, second_logs);
+    second.has_tail = true;
+    second.tail_join = tail_join;
+    second.tail_alpha = second_tail_alpha;
+    second.tail_log_amplitude = second_tail_log_amplitude;
+    const auto unused_mapped_rule = mapped_radial(std::max<std::size_t>(4, integration_points), 1.0);
+    return {normalized_overlap(first, second, unused_mapped_rule, integration_points)};
+}
+
+std::vector<double> test_isa_tail_probabilities(const std::vector<double>& tail_log_amplitudes,
+                                                const std::vector<double>& tail_alphas,
+                                                const std::vector<double>& distances) {
+    if (tail_log_amplitudes.empty() || tail_log_amplitudes.size() != tail_alphas.size() ||
+        tail_log_amplitudes.size() != distances.size())
+        throw PSIEXCEPTION("ISA tail probability fixture: dimensions are inconsistent");
+    std::vector<double> scaled(distances.size());
+    double maximum = -std::numeric_limits<double>::infinity();
+    for (std::size_t site = 0; site < distances.size(); ++site) {
+        Profile profile({0.0, 1.0}, {0.0, -1.0});
+        profile.has_tail = true;
+        profile.tail_join = 0.0;
+        profile.tail_alpha = tail_alphas[site];
+        profile.tail_log_amplitude = tail_log_amplitudes[site];
+        scaled[site] = profile.eval(distances[site]);
+        maximum = std::max(maximum, scaled[site]);
+    }
+    KahanSum denominator;
+    for (double& value : scaled) {
+        value = std::exp(value - maximum);
+        denominator.add(value);
+    }
+    for (double& value : scaled) value /= denominator.sum;
+    return scaled;
 }
 
 }  // namespace detail

@@ -90,6 +90,7 @@ void export_oeprop(py::module &m) {
         result["max_unity_residual"] = diagnostics.max_unity_residual;
         result["total_charge_residual"] = diagnostics.total_charge_residual;
         result["tail_fit_failures"] = diagnostics.tail_fit_failures;
+        result["tail_failure_reused_profiles"] = diagnostics.tail_failure_reused_profiles;
         result["underflow_fallbacks"] = diagnostics.underflow_fallbacks;
         result["atomic_populations"] = diagnostics.atomic_populations;
         result["grid_profile"] = std::move(grid);
@@ -133,8 +134,17 @@ void export_oeprop(py::module &m) {
               terms.reserve(gaussian_terms.size());
               for (const auto& term : gaussian_terms)
                   terms.push_back({{term[0], term[1], term[2]}, term[3], term[4]});
+              py::dict isa_option_values;
+              for (const auto& entry : option_values) isa_option_values[entry.first] = entry.second;
+              std::size_t inject_tail_fit_failure_iteration = 0;
+              if (isa_option_values.contains("inject_tail_fit_failure_iteration")) {
+                  inject_tail_fit_failure_iteration =
+                      isa_option_values["inject_tail_fit_failure_iteration"].cast<std::size_t>();
+                  isa_option_values.attr("pop")("inject_tail_fit_failure_iteration");
+              }
               const auto result = detail::compute_synthetic_isa(
-                  sites, points, weights, atomic_numbers, terms, isa_options_from_dict(option_values));
+                  sites, points, weights, atomic_numbers, terms,
+                  isa_options_from_dict(isa_option_values), inject_tail_fit_failure_iteration);
               return isa_result_dict(result.site_count, result.weights, result.diagnostics);
           },
           "sites"_a, "points"_a, "weights"_a, "atomic_numbers"_a,
@@ -146,10 +156,42 @@ void export_oeprop(py::module &m) {
               py::dict values;
               values["log_values"] = result.log_values;
               values["tail_alpha"] = result.tail_alpha;
+              values["tail_log_amplitude"] = result.tail_log_amplitude;
+              values["tail_charge"] = result.tail_charge;
               values["join_log_left"] = result.join_log_left;
               values["join_log_right"] = result.join_log_right;
               return values;
           });
+    m.def("_atomic_polarizability_test_isa_gaussian_fixed_point",
+          [](const std::vector<SitePosition>& sites, const std::vector<SitePosition>& points,
+             const std::vector<std::array<double, 5>>& gaussian_terms, std::size_t radial_points,
+             std::size_t angular_polar_points, std::size_t angular_azimuthal_points) {
+              std::vector<detail::SyntheticGaussianDensity> terms;
+              terms.reserve(gaussian_terms.size());
+              for (const auto& term : gaussian_terms)
+                  terms.push_back({{term[0], term[1], term[2]}, term[3], term[4]});
+              const auto result = detail::test_isa_gaussian_fixed_point(
+                  sites, points, terms, radial_points, angular_polar_points, angular_azimuthal_points);
+              py::dict values;
+              values["weights"] = result.weights;
+              values["max_profile_relative_error"] = result.max_profile_relative_error;
+              return values;
+          });
+    m.def("_atomic_polarizability_test_isa_overlap",
+          [](const std::vector<double>& first_nodes, const std::vector<double>& first_logs,
+             double first_tail_alpha, double first_tail_log_amplitude,
+             const std::vector<double>& second_nodes, const std::vector<double>& second_logs,
+             double second_tail_alpha, double second_tail_log_amplitude,
+             double tail_join, std::size_t integration_points) {
+              const auto result = detail::test_isa_overlap(
+                  first_nodes, first_logs, first_tail_alpha, first_tail_log_amplitude,
+                  second_nodes, second_logs, second_tail_alpha, second_tail_log_amplitude,
+                  tail_join, integration_points);
+              py::dict values;
+              values["overlap_residual"] = result.overlap_residual;
+              return values;
+          });
+    m.def("_atomic_polarizability_test_isa_tail_probabilities", &detail::test_isa_tail_probabilities);
     py::class_<FrozenResponseContext, std::shared_ptr<FrozenResponseContext>>(
         m, "_AtomicPolarizabilityFrozenResponseContext")
         .def("summary", [](const FrozenResponseContext& context) {
