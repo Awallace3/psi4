@@ -159,6 +159,11 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     describing the origin about which one-electron properties are computed. -*/
     options.add("PROPERTIES_ORIGIN", new ArrayType());
 
+    /*- Number of nonzero imaginary frequencies in the native atomic-polarizability pipeline. -*/
+    options.add_int("ATOMIC_POLARIZABILITY_N_FREQUENCIES", 10);
+    /*- Scale in atomic units for the native atomic-polarizability frequency grid. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_FREQUENCY_SCALE", 0.5);
+
     /*- Psi4 dies if energy does not converge. !expert -*/
     options.add_bool("DIE_IF_NOT_CONVERGED", true);
     /*- Integral package to use. If compiled with Simint support, change this option to use them; LibInt2 is used

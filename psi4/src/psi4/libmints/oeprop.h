@@ -357,6 +357,8 @@ class PSI_API OEProp {
     void print_header();
 
     // Compute routines
+    /// Compute atomic polarizabilities and dispersion coefficients
+    void compute_atomic_polarizabilities();
     /// Compute arbitrary-order multipoles up to (and including) l=order
     void compute_multipoles(int order, bool transition = false);
     /// Compute mo extents

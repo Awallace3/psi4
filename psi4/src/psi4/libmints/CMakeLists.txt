@@ -1,4 +1,5 @@
 list(APPEND sources
+  atomic_polarizability.cc
   local.cc
   x2cint.cc
   zora.cc

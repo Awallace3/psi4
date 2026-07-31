@@ -38,6 +38,7 @@
 #include "psi4/libciomr/libciomr.h"
 #include "psi4/libqt/qt.h"
 #include "psi4/libmints/oeprop.h"
+#include "psi4/libmints/atomic_polarizability.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/onebody.h"
@@ -814,6 +815,7 @@ void OEProp::compute() {
         }
     }
     // print_header();  // Not by default, happens too often -CDS
+    if (tasks_.count("ATOMIC_POLARIZABILITIES")) compute_atomic_polarizabilities();
     if (tasks_.count("ESP_AT_NUCLEI")) compute_esp_at_nuclei();
     if (tasks_.count("QUADRUPOLE")) compute_multipoles(2, false);
     else if (tasks_.count("DIPOLE")) compute_multipoles(1, false);
@@ -829,6 +831,11 @@ void OEProp::compute() {
     if (tasks_.count("NO_OCCUPATIONS")) compute_no_occupations();
     if (tasks_.count("GRID_FIELD")) compute_field_over_grid();
     if (tasks_.count("GRID_ESP")) compute_esp_over_grid();
+}
+
+void OEProp::compute_atomic_polarizabilities() {
+    AtomicPolarizabilityCalculator calculator(wfn_);
+    calculator.compute();
 }
 
 void OEProp::compute_multipoles(int order, bool transition) {
