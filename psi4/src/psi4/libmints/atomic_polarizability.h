@@ -78,12 +78,17 @@ struct PSI_API LocalizedResponse {
     std::vector<L3Matrix> local;
     std::vector<BondTransfer> transfers;
     LocalizationResiduals residuals;
+    /** Deterministic diagnostics consumed only by the underscored math-test seam. */
+    std::vector<L3WorkingMatrix> refined_pairs;
+    std::vector<std::array<std::size_t, 2>> omitted_component_pairs;
+    std::size_t omitted_transfer_count;
 };
 
 PSI_API Matrix lw_graph_operator(const BondGraph& graph);
 PSI_API std::pair<Matrix, std::vector<double>> lw_graph_pseudoinverse(const BondGraph& graph);
 PSI_API L3WorkingVector translate_l3_multipoles(const L3WorkingVector& source,
                                                  const SitePosition& source_minus_target);
+/** Localize independently within every graph component; reject component-inconsistent flow. */
 PSI_API LocalizedResponse localize_lw(const SitePairResponse& response, const BondGraph& graph,
                                       double residual_tolerance);
 

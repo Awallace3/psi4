@@ -115,6 +115,16 @@ void export_oeprop(py::module &m) {
                   }
                   local.append(matrix);
               }
+              py::list refined;
+              for (const auto& block : localized.refined_pairs) {
+                  auto matrix = std::make_shared<Matrix>(16, 16);
+                  for (std::size_t row = 0; row < 16; ++row) {
+                      for (std::size_t column = 0; column < 16; ++column) {
+                          (*matrix)(row, column) = block[row][column];
+                      }
+                  }
+                  refined.append(matrix);
+              }
               py::list transfers;
               for (const auto& transfer : localized.transfers) {
                   transfers.append(py::make_tuple(
@@ -122,7 +132,10 @@ void export_oeprop(py::module &m) {
                       transfer.second_component, transfer.fixed_site, transfer.amount));
               }
               result["local"] = local;
+              result["refined"] = refined;
               result["transfers"] = transfers;
+              result["omitted_component_pairs"] = localized.omitted_component_pairs;
+              result["omitted_transfer_count"] = localized.omitted_transfer_count;
               result["residuals"] = py::make_tuple(
                   localized.residuals.off_site, localized.residuals.charge_sum,
                   localized.residuals.reciprocity, localized.residuals.molecular_sum,

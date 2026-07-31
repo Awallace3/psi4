@@ -26,6 +26,7 @@
 #include <utility>
 
 #include "psi4/libmints/matrix.h"
+#include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libpsi4util/exception.h"
 
@@ -95,7 +96,8 @@ using DenseMatrix = std::vector<std::vector<double>>;
 using Complex = std::complex<double>;
 using ComplexVector = std::array<Complex, 16>;
 constexpr double kGraphEigenvalueCutoff = 1.0e-4;
-constexpr double kJacobiTolerance = 1.0e-14;
+constexpr double kElementTransferThreshold = 1.0e-7;
+constexpr double kLinearAlgebraTolerance = 1.0e-10;
 
 std::size_t real_cosine_index(unsigned int rank, unsigned int order) { return rank * rank + 2 * order - 1; }
 std::size_t real_sine_index(unsigned int rank, unsigned int order) { return rank * rank + 2 * order; }
@@ -111,10 +113,26 @@ double binomial(unsigned int n, unsigned int k) {
     return result;
 }
 
+void require_finite(double value, const char* context) {
+    if (!std::isfinite(value)) throw PSIEXCEPTION(std::string(context) + ": derived value is not finite");
+}
+
+void require_finite(const Complex& value, const char* context) {
+    require_finite(value.real(), context);
+    require_finite(value.imag(), context);
+}
+
+double finite_absolute(double value, const char* context) {
+    require_finite(value, context);
+    const double result = std::abs(value);
+    require_finite(result, context);
+    return result;
+}
+
 L3WorkingVector regular_harmonics(const SitePosition& d) {
     const double x = d[0], y = d[1], z = d[2];
     const double rho2 = x * x + y * y + z * z;
-    return {
+    L3WorkingVector result{
         1.0, z, x, y,
         (3.0 * z * z - rho2) / 2.0, std::sqrt(3.0) * x * z, std::sqrt(3.0) * y * z,
         std::sqrt(3.0) * (x * x - y * y) / 2.0, std::sqrt(3.0) * x * y,
@@ -125,6 +143,8 @@ L3WorkingVector regular_harmonics(const SitePosition& d) {
         std::sqrt(10.0) * x * (x * x - 3.0 * y * y) / 4.0,
         std::sqrt(10.0) * y * (3.0 * x * x - y * y) / 4.0,
     };
+    for (double value : result) require_finite(value, "regular_harmonics");
+    return result;
 }
 
 ComplexVector real_to_complex(const L3WorkingVector& real) {
@@ -142,6 +162,7 @@ ComplexVector real_to_complex(const L3WorkingVector& real) {
                 inverse_root2 * Complex(cosine, -sine);
         }
     }
+    for (const auto& value : result) require_finite(value, "real_to_complex");
     return result;
 }
 
@@ -157,6 +178,7 @@ L3WorkingVector complex_to_real(const ComplexVector& values) {
             result[real_sine_index(rank, order)] = phase * root2 * positive.imag();
         }
     }
+    for (double value : result) require_finite(value, "complex_to_real");
     return result;
 }
 
@@ -188,76 +210,151 @@ DenseMatrix make_graph_operator(const BondGraph& graph) {
     return result;
 }
 
-bool graph_is_connected(const DenseMatrix& graph_operator) {
+std::vector<std::vector<std::size_t>> graph_components(const DenseMatrix& graph_operator) {
+    std::vector<std::vector<std::size_t>> components;
     std::vector<bool> visited(graph_operator.size(), false);
-    std::queue<std::size_t> pending;
-    visited[0] = true;
-    pending.push(0);
-    while (!pending.empty()) {
-        const auto current = pending.front();
-        pending.pop();
-        for (std::size_t next = 0; next < graph_operator.size(); ++next) {
-            if (next != current && graph_operator[current][next] != 0.0 && !visited[next]) {
-                visited[next] = true;
-                pending.push(next);
-            }
-        }
-    }
-    return std::all_of(visited.begin(), visited.end(), [](bool value) { return value; });
-}
-
-std::pair<std::vector<double>, DenseMatrix> symmetric_eigendecomposition(DenseMatrix matrix) {
-    const std::size_t count = matrix.size();
-    DenseMatrix vectors(count, std::vector<double>(count, 0.0));
-    for (std::size_t i = 0; i < count; ++i) vectors[i][i] = 1.0;
-    for (std::size_t iteration = 0; iteration < std::max<std::size_t>(1, 100 * count * count); ++iteration) {
-        std::size_t p = 0, q = 0;
-        double largest = 0.0;
-        for (std::size_t i = 0; i < count; ++i) {
-            for (std::size_t j = i + 1; j < count; ++j) {
-                if (std::abs(matrix[i][j]) > largest) {
-                    largest = std::abs(matrix[i][j]);
-                    p = i;
-                    q = j;
+    for (std::size_t root = 0; root < graph_operator.size(); ++root) {
+        if (visited[root]) continue;
+        components.emplace_back();
+        std::queue<std::size_t> pending;
+        visited[root] = true;
+        pending.push(root);
+        while (!pending.empty()) {
+            const auto current = pending.front();
+            pending.pop();
+            components.back().push_back(current);
+            for (std::size_t next = 0; next < graph_operator.size(); ++next) {
+                if (next != current && graph_operator[current][next] != 0.0 && !visited[next]) {
+                    visited[next] = true;
+                    pending.push(next);
                 }
             }
         }
-        if (largest <= kJacobiTolerance) break;
-        const double angle = 0.5 * std::atan2(2.0 * matrix[p][q], matrix[q][q] - matrix[p][p]);
-        const double cosine = std::cos(angle), sine = std::sin(angle);
-        const double app = matrix[p][p], aqq = matrix[q][q], apq = matrix[p][q];
-        matrix[p][p] = cosine * cosine * app - 2.0 * sine * cosine * apq + sine * sine * aqq;
-        matrix[q][q] = sine * sine * app + 2.0 * sine * cosine * apq + cosine * cosine * aqq;
-        matrix[p][q] = matrix[q][p] = 0.0;
-        for (std::size_t k = 0; k < count; ++k) {
-            if (k == p || k == q) continue;
-            const double akp = matrix[k][p], akq = matrix[k][q];
-            matrix[k][p] = matrix[p][k] = cosine * akp - sine * akq;
-            matrix[k][q] = matrix[q][k] = sine * akp + cosine * akq;
-        }
-        for (std::size_t k = 0; k < count; ++k) {
-            const double vkp = vectors[k][p], vkq = vectors[k][q];
-            vectors[k][p] = cosine * vkp - sine * vkq;
-            vectors[k][q] = sine * vkp + cosine * vkq;
+    }
+    return components;
+}
+
+DenseMatrix dense_multiply(const DenseMatrix& first, const DenseMatrix& second) {
+    DenseMatrix result(first.size(), std::vector<double>(second[0].size(), 0.0));
+    for (std::size_t row = 0; row < first.size(); ++row) {
+        for (std::size_t column = 0; column < second[0].size(); ++column) {
+            for (std::size_t k = 0; k < second.size(); ++k) {
+                const double term = first[row][k] * second[k][column];
+                require_finite(term, "graph linear algebra product");
+                result[row][column] += term;
+                require_finite(result[row][column], "graph linear algebra accumulation");
+            }
         }
     }
-    std::vector<double> eigenvalues(count);
-    for (std::size_t i = 0; i < count; ++i) eigenvalues[i] = matrix[i][i];
-    return {eigenvalues, vectors};
+    return result;
+}
+
+DenseMatrix dense_transpose(const DenseMatrix& matrix) {
+    DenseMatrix result(matrix[0].size(), std::vector<double>(matrix.size(), 0.0));
+    for (std::size_t row = 0; row < matrix.size(); ++row) {
+        for (std::size_t column = 0; column < matrix[row].size(); ++column) {
+            result[column][row] = matrix[row][column];
+        }
+    }
+    return result;
+}
+
+double dense_max_difference(const DenseMatrix& first, const DenseMatrix& second, const char* context) {
+    double result = 0.0;
+    for (std::size_t row = 0; row < first.size(); ++row) {
+        for (std::size_t column = 0; column < first[row].size(); ++column) {
+            const double difference = first[row][column] - second[row][column];
+            result = std::max(result, finite_absolute(difference, context));
+        }
+    }
+    return result;
 }
 
 DenseMatrix graph_pseudoinverse(const DenseMatrix& graph_operator, std::vector<double>* eigenvalues_out) {
-    const auto decomposition = symmetric_eigendecomposition(graph_operator);
-    const auto& eigenvalues = decomposition.first;
-    const auto& vectors = decomposition.second;
+    const auto components = graph_components(graph_operator);
     DenseMatrix result(graph_operator.size(), std::vector<double>(graph_operator.size(), 0.0));
-    for (std::size_t mode = 0; mode < eigenvalues.size(); ++mode) {
-        if (std::abs(eigenvalues[mode]) < kGraphEigenvalueCutoff) continue;
-        for (std::size_t row = 0; row < result.size(); ++row)
-            for (std::size_t column = 0; column < result.size(); ++column)
-                result[row][column] += vectors[row][mode] * vectors[column][mode] / eigenvalues[mode];
+    std::vector<double> all_eigenvalues;
+    for (const auto& component : components) {
+        const std::size_t count = component.size();
+        Matrix block(count, count);
+        for (std::size_t row = 0; row < count; ++row) {
+            for (std::size_t column = 0; column < count; ++column) {
+                block(row, column) = graph_operator[component[row]][component[column]];
+            }
+        }
+        Matrix eigenvectors(count, count);
+        Vector eigenvalues(count);
+        block.diagonalize(eigenvectors, eigenvalues, ascending);
+        const double validation_tolerance = kLinearAlgebraTolerance * std::max<std::size_t>(1, count);
+        for (std::size_t mode = 0; mode < count; ++mode) {
+            const double eigenvalue = eigenvalues(mode);
+            require_finite(eigenvalue, "graph eigenvalue");
+            all_eigenvalues.push_back(eigenvalue);
+            double norm = 0.0;
+            for (std::size_t row = 0; row < count; ++row) {
+                require_finite(eigenvectors(row, mode), "graph eigenvector");
+                norm += eigenvectors(row, mode) * eigenvectors(row, mode);
+            }
+            require_finite(norm, "graph eigenvector norm");
+            if (std::abs(norm - 1.0) > validation_tolerance) {
+                throw PSIEXCEPTION("localize_lw: graph eigensolver returned non-orthonormal vectors");
+            }
+            for (std::size_t other = 0; other < mode; ++other) {
+                double dot = 0.0;
+                for (std::size_t row = 0; row < count; ++row) {
+                    dot += eigenvectors(row, mode) * eigenvectors(row, other);
+                }
+                require_finite(dot, "graph eigenvector orthogonality");
+                if (std::abs(dot) > validation_tolerance) {
+                    throw PSIEXCEPTION("localize_lw: graph eigensolver returned non-orthogonal vectors");
+                }
+            }
+            for (std::size_t row = 0; row < count; ++row) {
+                double residual = -eigenvalue * eigenvectors(row, mode);
+                for (std::size_t column = 0; column < count; ++column) {
+                    residual += graph_operator[component[row]][component[column]] *
+                                eigenvectors(column, mode);
+                }
+                if (finite_absolute(residual, "graph eigen residual") > validation_tolerance) {
+                    throw PSIEXCEPTION("localize_lw: graph eigensolver residual exceeds tolerance");
+                }
+            }
+            if (std::abs(eigenvalue) < kGraphEigenvalueCutoff) continue;
+            for (std::size_t row = 0; row < count; ++row) {
+                for (std::size_t column = 0; column < count; ++column) {
+                    const double contribution = eigenvectors(row, mode) * eigenvectors(column, mode) / eigenvalue;
+                    require_finite(contribution, "graph pseudoinverse contribution");
+                    result[component[row]][component[column]] += contribution;
+                    require_finite(result[component[row]][component[column]],
+                                   "graph pseudoinverse accumulation");
+                }
+            }
+        }
     }
-    if (eigenvalues_out) *eigenvalues_out = eigenvalues;
+
+    const double validation_tolerance =
+        kLinearAlgebraTolerance * std::max<std::size_t>(1, graph_operator.size());
+    for (std::size_t row = 0; row < result.size(); ++row) {
+        for (std::size_t column = 0; column < result.size(); ++column) {
+            require_finite(result[row][column], "graph pseudoinverse");
+            if (std::abs(result[row][column] - result[column][row]) > validation_tolerance) {
+                throw PSIEXCEPTION("localize_lw: graph pseudoinverse is not symmetric");
+            }
+        }
+    }
+    const auto operator_inverse = dense_multiply(graph_operator, result);
+    const auto inverse_operator = dense_multiply(result, graph_operator);
+    if (dense_max_difference(dense_multiply(operator_inverse, graph_operator), graph_operator,
+                             "graph Moore-Penrose residual") > validation_tolerance ||
+        dense_max_difference(dense_multiply(inverse_operator, result), result,
+                             "graph Moore-Penrose residual") > validation_tolerance ||
+        dense_max_difference(operator_inverse, dense_transpose(operator_inverse),
+                             "graph projector symmetry") > validation_tolerance ||
+        dense_max_difference(inverse_operator, dense_transpose(inverse_operator),
+                             "graph projector symmetry") > validation_tolerance) {
+        throw PSIEXCEPTION("localize_lw: graph pseudoinverse failed Moore-Penrose validation");
+    }
+    if (eigenvalues_out) *eigenvalues_out = std::move(all_eigenvalues);
     return result;
 }
 
@@ -277,9 +374,13 @@ L3WorkingMatrix molecular_response(const SitePairResponse& response) {
         const auto& block = response.blocks[a * count + b];
         for (std::size_t row = 0; row < 16; ++row) for (std::size_t column = 0; column < 16; ++column)
             for (std::size_t local_row = 0; local_row < 16; ++local_row)
-                for (std::size_t local_column = 0; local_column < 16; ++local_column)
-                    result[row][column] += translations[a][row][local_row] * block[local_row][local_column] *
-                                           translations[b][column][local_column];
+                for (std::size_t local_column = 0; local_column < 16; ++local_column) {
+                    const double term = translations[a][row][local_row] * block[local_row][local_column] *
+                                        translations[b][column][local_column];
+                    require_finite(term, "molecular response product");
+                    result[row][column] += term;
+                    require_finite(result[row][column], "molecular response accumulation");
+                }
     }
     return result;
 }
@@ -287,7 +388,8 @@ L3WorkingMatrix molecular_response(const SitePairResponse& response) {
 double matrix_max_difference(const L3WorkingMatrix& first, const L3WorkingMatrix& second) {
     double result = 0.0;
     for (std::size_t row = 0; row < 16; ++row) for (std::size_t column = 0; column < 16; ++column)
-        result = std::max(result, std::abs(first[row][column] - second[row][column]));
+        result = std::max(result, finite_absolute(first[row][column] - second[row][column],
+                                                   "molecular response residual"));
     return result;
 }
 
@@ -297,23 +399,35 @@ LocalizationResiduals localization_residuals(const SitePairResponse& before, con
     for (std::size_t a = 0; a < count; ++a) {
         const auto& local = after.blocks[a * count + a];
         for (std::size_t component = 0; component < 16; ++component) {
-            residuals.local_charge = std::max(residuals.local_charge,
-                std::max(std::abs(local[0][component]), std::abs(local[component][0])));
+            residuals.local_charge = std::max(
+                residuals.local_charge,
+                std::max(finite_absolute(local[0][component], "local charge residual"),
+                         finite_absolute(local[component][0], "local charge residual")));
             double first_sum = 0.0, second_sum = 0.0;
             for (std::size_t b = 0; b < count; ++b) {
                 first_sum += after.blocks[a * count + b][component][0];
                 second_sum += after.blocks[b * count + a][0][component];
+                require_finite(first_sum, "charge sum residual");
+                require_finite(second_sum, "charge sum residual");
             }
-            residuals.charge_sum = std::max(residuals.charge_sum,
-                                             std::max(std::abs(first_sum), std::abs(second_sum)));
+            residuals.charge_sum = std::max(
+                residuals.charge_sum,
+                std::max(finite_absolute(first_sum, "charge sum residual"),
+                         finite_absolute(second_sum, "charge sum residual")));
         }
         for (std::size_t b = 0; b < count; ++b) {
             const auto& block = after.blocks[a * count + b];
             const auto& reciprocal = after.blocks[b * count + a];
             for (std::size_t row = 0; row < 16; ++row) for (std::size_t column = 0; column < 16; ++column) {
-                if (a != b) residuals.off_site = std::max(residuals.off_site, std::abs(block[row][column]));
-                residuals.reciprocity = std::max(residuals.reciprocity,
-                                                  std::abs(block[row][column] - reciprocal[column][row]));
+                if (a != b) {
+                    residuals.off_site = std::max(
+                        residuals.off_site,
+                        finite_absolute(block[row][column], "off-site residual"));
+                }
+                residuals.reciprocity = std::max(
+                    residuals.reciprocity,
+                    finite_absolute(block[row][column] - reciprocal[column][row],
+                                    "reciprocity residual"));
             }
         }
     }
@@ -364,8 +478,12 @@ L3WorkingVector translate_l3_multipoles(const L3WorkingVector& source,
                     const double coefficient = std::sqrt(
                         binomial(target_rank - target_order, static_cast<unsigned int>(lower_first)) *
                         binomial(target_rank + target_order, static_cast<unsigned int>(lower_second)));
-                    value += coefficient * complex_source[complex_index(source_rank, source_order)] *
-                             harmonics[complex_index(difference_rank, difference_order)];
+                    const Complex term = coefficient *
+                                         complex_source[complex_index(source_rank, source_order)] *
+                                         harmonics[complex_index(difference_rank, difference_order)];
+                    require_finite(term, "translate_l3_multipoles product");
+                    value += term;
+                    require_finite(value, "translate_l3_multipoles accumulation");
                 }
             }
             translated[complex_index(target_rank, target_order)] = value;
@@ -397,9 +515,7 @@ LocalizedResponse localize_lw(const SitePairResponse& response, const BondGraph&
     }
 
     const auto graph_operator = make_graph_operator(graph);
-    if (!graph_is_connected(graph_operator)) {
-        throw PSIEXCEPTION("localize_lw: expected a connected bond graph");
-    }
+    const auto components = graph_components(graph_operator);
     const auto pseudoinverse = graph_pseudoinverse(graph_operator, nullptr);
 
     double input_reciprocity = 0.0;
@@ -407,10 +523,11 @@ LocalizedResponse localize_lw(const SitePairResponse& response, const BondGraph&
         for (std::size_t b = 0; b < count; ++b) {
             for (std::size_t row = 0; row < 16; ++row) {
                 for (std::size_t column = 0; column < 16; ++column) {
-                    input_reciprocity =
-                        std::max(input_reciprocity,
-                                 std::abs(response.blocks[a * count + b][row][column] -
-                                          response.blocks[b * count + a][column][row]));
+                    input_reciprocity = std::max(
+                        input_reciprocity,
+                        finite_absolute(response.blocks[a * count + b][row][column] -
+                                            response.blocks[b * count + a][column][row],
+                                        "input reciprocity"));
                 }
             }
         }
@@ -428,6 +545,7 @@ LocalizedResponse localize_lw(const SitePairResponse& response, const BondGraph&
         SitePosition displacement{};
         for (std::size_t axis = 0; axis < 3; ++axis) {
             displacement[axis] = response.positions[bond[0]][axis] - response.positions[bond[1]][axis];
+            require_finite(displacement[axis], "bond displacement");
         }
         positive_translations.push_back(translation_matrix(displacement));
         for (double& value : displacement) value = -value;
@@ -439,9 +557,23 @@ LocalizedResponse localize_lw(const SitePairResponse& response, const BondGraph&
         std::size_t fixed_site;
         double amount;
     };
-    LocalizedResponse result;
+    LocalizedResponse result{};
     for (std::size_t first_component = 0; first_component < 16; ++first_component) {
         for (std::size_t second_component = first_component; second_component < 16; ++second_component) {
+            double largest_candidate = 0.0;
+            for (std::size_t a = 0; a < count; ++a) {
+                for (std::size_t b = 0; b < count; ++b) {
+                    if (a == b) continue;
+                    largest_candidate = std::max(
+                        largest_candidate,
+                        finite_absolute(refined.blocks[a * count + b][first_component][second_component],
+                                        "candidate pair magnitude"));
+                }
+            }
+            if (largest_candidate < kElementTransferThreshold) {
+                result.omitted_component_pairs.push_back({first_component, second_component});
+                continue;
+            }
             std::vector<PendingTransfer> pending;
             const double symmetry_factor = first_component == second_component ? 0.5 : 1.0;
             for (std::size_t fixed_site = 0; fixed_site < count; ++fixed_site) {
@@ -451,14 +583,37 @@ LocalizedResponse localize_lw(const SitePairResponse& response, const BondGraph&
                     if (site == fixed_site) continue;
                     unwanted[site] = symmetry_factor *
                                      refined.blocks[site * count + fixed_site][first_component][second_component];
+                    require_finite(unwanted[site], "balanced unwanted response");
                     offsite_sum += unwanted[site];
+                    require_finite(offsite_sum, "balanced unwanted response sum");
                 }
                 unwanted[fixed_site] = -offsite_sum;
+                require_finite(unwanted[fixed_site], "balanced unwanted response diagonal");
+                for (const auto& component : components) {
+                    double component_sum = 0.0;
+                    double component_scale = 1.0;
+                    for (std::size_t site : component) {
+                        component_sum += unwanted[site];
+                        require_finite(component_sum, "component unwanted response sum");
+                        component_scale = std::max(
+                            component_scale,
+                            finite_absolute(unwanted[site], "component unwanted response scale"));
+                    }
+                    const double component_tolerance = kLinearAlgebraTolerance * component_scale;
+                    require_finite(component_tolerance, "component unwanted response tolerance");
+                    if (std::abs(component_sum) > component_tolerance) {
+                        throw PSIEXCEPTION(
+                            "localize_lw: graph component unwanted response does not have zero sum");
+                    }
+                }
 
                 std::vector<double> potential(count, 0.0);
                 for (std::size_t row = 0; row < count; ++row) {
                     for (std::size_t column = 0; column < count; ++column) {
-                        potential[row] += pseudoinverse[row][column] * unwanted[column];
+                        const double term = pseudoinverse[row][column] * unwanted[column];
+                        require_finite(term, "graph potential product");
+                        potential[row] += term;
+                        require_finite(potential[row], "graph potential accumulation");
                     }
                 }
                 double range_residual = 0.0;
@@ -466,8 +621,11 @@ LocalizedResponse localize_lw(const SitePairResponse& response, const BondGraph&
                     double projected = 0.0;
                     for (std::size_t column = 0; column < count; ++column) {
                         projected += graph_operator[row][column] * potential[column];
+                        require_finite(projected, "graph range projection");
                     }
-                    range_residual = std::max(range_residual, std::abs(projected - unwanted[row]));
+                    range_residual = std::max(
+                        range_residual,
+                        finite_absolute(projected - unwanted[row], "graph solve residual"));
                 }
                 if (range_residual > residual_tolerance) {
                     throw PSIEXCEPTION("localize_lw: graph solve exceeds residual tolerance");
@@ -475,7 +633,12 @@ LocalizedResponse localize_lw(const SitePairResponse& response, const BondGraph&
                 for (std::size_t edge = 0; edge < graph.bonds.size(); ++edge) {
                     const auto& bond = graph.bonds[edge];
                     const double amount = 0.5 * (potential[bond[1]] - potential[bond[0]]);
-                    if (amount != 0.0) pending.push_back({edge, fixed_site, amount});
+                    require_finite(amount, "bond transfer amount");
+                    if (std::abs(amount) <= kElementTransferThreshold) {
+                        ++result.omitted_transfer_count;
+                    } else {
+                        pending.push_back({edge, fixed_site, amount});
+                    }
                 }
             }
 
@@ -490,23 +653,44 @@ LocalizedResponse localize_lw(const SitePairResponse& response, const BondGraph&
                                             negative_translations[transfer.edge][target][first_component];
                     const double at_second = (target == first_component ? 1.0 : 0.0) +
                                              positive_translations[transfer.edge][target][first_component];
-                    refined.blocks[first * count + fixed][target][second_component] -= amount * at_first;
-                    refined.blocks[second * count + fixed][target][second_component] += amount * at_second;
-                    refined.blocks[fixed * count + first][second_component][target] -= amount * at_first;
-                    refined.blocks[fixed * count + second][second_component][target] += amount * at_second;
+                    require_finite(at_first, "translated transfer coefficient");
+                    require_finite(at_second, "translated transfer coefficient");
+                    const double first_update = amount * at_first;
+                    const double second_update = amount * at_second;
+                    require_finite(first_update, "translated bond update");
+                    require_finite(second_update, "translated bond update");
+                    auto& first_column = refined.blocks[first * count + fixed][target][second_component];
+                    auto& second_column = refined.blocks[second * count + fixed][target][second_component];
+                    auto& first_row = refined.blocks[fixed * count + first][second_component][target];
+                    auto& second_row = refined.blocks[fixed * count + second][second_component][target];
+                    first_column -= first_update;
+                    second_column += second_update;
+                    first_row -= first_update;
+                    second_row += second_update;
+                    require_finite(first_column, "refined first-index update");
+                    require_finite(second_column, "refined first-index update");
+                    require_finite(first_row, "refined reciprocal update");
+                    require_finite(second_row, "refined reciprocal update");
                 }
+                const double canonical_amount = first <= second ? amount : -amount;
                 result.transfers.push_back(
                     {std::min(first, second), std::max(first, second), first_component,
-                     second_component, fixed, amount});
+                     second_component, fixed, canonical_amount});
             }
         }
     }
 
     result.residuals = localization_residuals(response, refined);
-    const double maximum_residual =
-        std::max({result.residuals.off_site, result.residuals.charge_sum,
-                  result.residuals.reciprocity, result.residuals.molecular_sum,
-                  result.residuals.local_charge});
+    const std::array<double, 5> residual_values{
+        result.residuals.off_site, result.residuals.charge_sum,
+        result.residuals.reciprocity, result.residuals.molecular_sum,
+        result.residuals.local_charge,
+    };
+    double maximum_residual = 0.0;
+    for (double residual : residual_values) {
+        require_finite(residual, "localization residual candidate");
+        maximum_residual = std::max(maximum_residual, residual);
+    }
     if (maximum_residual > residual_tolerance) {
         std::ostringstream message;
         message << "localize_lw: postcondition exceeds residual tolerance (off-site="
@@ -517,6 +701,7 @@ LocalizedResponse localize_lw(const SitePairResponse& response, const BondGraph&
         throw PSIEXCEPTION(message.str());
     }
 
+    result.refined_pairs = refined.blocks;
     result.local.resize(count);
     for (std::size_t site = 0; site < count; ++site) {
         const auto& working = refined.blocks[site * count + site];

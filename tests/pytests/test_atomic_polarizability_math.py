@@ -249,17 +249,205 @@ def test_lw_three_site_preserves_sum_reciprocity_and_transfers_only_on_bonds():
         )
 
 
-def test_lw_rejects_disconnected_graph_and_postcondition_residual():
-    with pytest.raises(RuntimeError, match=r"connected bond graph"):
-        _lw_localize(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
-            [_working_l3_matrix() for _ in range(9)], [(0, 1)]
-        )
+def test_lw_rejects_postcondition_residual():
     values = [_working_l3_matrix() for _ in range(4)]
     values[0][0][0], values[1][0][0] = -2.0 + 1.0e-5, 2.0
     values[2][0][0], values[3][0][0] = 2.0, -2.0
     with pytest.raises(RuntimeError, match=r"residual tolerance"):
         _lw_localize([[0.0, 0.0, 0.0], [0.2, -0.3, 0.4]], values, [(0, 1)], 1.0e-9)
+
+
+def _matrix_values(matrix):
+    rows, columns = matrix.shape
+    return [[matrix.get(row, column) for column in range(columns)] for row in range(rows)]
+
+
+def _matmul(first, second):
+    return [
+        [sum(first[row][k] * second[k][column] for k in range(len(second)))
+         for column in range(len(second[0]))]
+        for row in range(len(first))
+    ]
+
+
+def _transpose(matrix):
+    return [list(column) for column in zip(*matrix)]
+
+
+def _assert_matrix_close(actual, expected, tolerance):
+    assert len(actual) == len(expected)
+    assert all(actual[row] == pytest.approx(expected[row], abs=tolerance)
+               for row in range(len(expected)))
+
+
+def _regular_harmonics(displacement):
+    x, y, z = displacement
+    rho2 = x * x + y * y + z * z
+    return [
+        1.0, z, x, y,
+        (3 * z * z - rho2) / 2, math.sqrt(3) * x * z, math.sqrt(3) * y * z,
+        math.sqrt(3) * (x * x - y * y) / 2, math.sqrt(3) * x * y,
+        (5 * z**3 - 3 * z * rho2) / 2,
+        math.sqrt(3 / 8) * x * (5 * z * z - rho2),
+        math.sqrt(3 / 8) * y * (5 * z * z - rho2),
+        math.sqrt(15) * z * (x * x - y * y) / 2, math.sqrt(15) * x * y * z,
+        math.sqrt(10) * x * (x * x - 3 * y * y) / 4,
+        math.sqrt(10) * y * (3 * x * x - y * y) / 4,
+    ]
+
+
+def _translation_matrix(displacement):
+    columns = []
+    for source in range(16):
+        unit = [0.0] * 16
+        unit[source] = 1.0
+        columns.append(psi4.core._atomic_polarizability_translate_l3(unit, displacement))
+    return [list(row) for row in zip(*columns)]
+
+
+def _common_origin_response(positions, blocks, origin):
+    translations = [
+        _translation_matrix([coordinate - shift for coordinate, shift in zip(position, origin)])
+        for position in positions
+    ]
+    result = [[0.0] * 16 for _ in range(16)]
+    count = len(positions)
+    for a in range(count):
+        for b in range(count):
+            contribution = _matmul(_matmul(translations[a], blocks[a * count + b]),
+                                   _transpose(translations[b]))
+            for row in range(16):
+                for column in range(16):
+                    result[row][column] += contribution[row][column]
+    return result
+
+
+def _assert_refined_invariants(result, positions, original, tolerance):
+    refined = [_matrix_values(block) for block in result["refined"]]
+    count = len(positions)
+    assert max(abs(refined[a * count + b][row][column])
+               for a in range(count) for b in range(count) if a != b
+               for row in range(16) for column in range(16)) <= tolerance
+    assert max(abs(refined[a * count + b][row][column] -
+                   refined[b * count + a][column][row])
+               for a in range(count) for b in range(count)
+               for row in range(16) for column in range(16)) <= tolerance
+    assert max(abs(sum(refined[a * count + b][component][0] for b in range(count)))
+               for a in range(count) for component in range(16)) <= tolerance
+    assert max(abs(sum(refined[b * count + a][0][component] for b in range(count)))
+               for a in range(count) for component in range(16)) <= tolerance
+    for origin in ([0.3, -0.2, 0.5], [-0.4, 0.6, -0.1]):
+        before = _common_origin_response(positions, original, origin)
+        after = _common_origin_response(positions, refined, origin)
+        assert max(abs(before[row][column] - after[row][column])
+                   for row in range(16) for column in range(16)) <= tolerance
+
+
+def test_lw_refined_workspace_matches_full_two_site_oracle_and_reversed_edge():
+    positions = [[0.0, 0.0, 0.0], [0.2, -0.3, 0.4]]
+    values = [_working_l3_matrix() for _ in range(4)]
+    values[0][0][0], values[1][0][0] = -2.0, 2.0
+    values[2][0][0], values[3][0][0] = 2.0, -2.0
+    tail = _regular_harmonics(positions[1])[1:]
+    negative_tail = [(-1 if rank in (1, 3) else 1) * value
+                     for rank, value in zip([1] * 3 + [2] * 5 + [3] * 7, tail)]
+    expected = [
+        [[-left * right for right in tail] for left in tail],
+        [[-left * right for right in negative_tail] for left in negative_tail],
+    ]
+    for bonds in ([(0, 1)], [(1, 0)]):
+        result = _lw_localize(positions, values, bonds)
+        for site in range(2):
+            _assert_matrix_close(_matrix_values(result["local"][site]), expected[site], 2.0e-11)
+        _assert_refined_invariants(result, positions, values, 2.0e-10)
+
+
+def test_lw_noncharge_seed_has_independent_reciprocity_sum_and_origin_oracles():
+    positions = [[0.1, -0.2, 0.3], [0.8, 0.1, -0.4]]
+    values = [_working_l3_matrix() for _ in range(4)]
+    values[1][1][2] = 0.35
+    values[2][2][1] = 0.35
+    result = _lw_localize(positions, values, [(1, 0)], 1.0e-8)
+    _assert_refined_invariants(result, positions, values, 2.0e-9)
+
+
+def test_lw_disconnected_components_accept_zero_and_reject_inconsistent_flow():
+    positions = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [3.0, 0.0, 0.0]]
+    zero = [_working_l3_matrix() for _ in range(9)]
+    result = _lw_localize(positions, zero, [(0, 1)])
+    assert len(result["local"]) == 3
+    assert sum(abs(value) < 1.0e-12 for value in
+               psi4.core._atomic_polarizability_lw_graph_math(3, [(0, 1)])[2]) == 2
+
+    component_positions = [[0.0, 0.0, 0.0], [0.4, 0.1, -0.2],
+                           [2.0, -0.3, 0.2], [2.2, 0.5, 0.4]]
+    component_values = [_working_l3_matrix() for _ in range(16)]
+    for first, second, scale in ((0, 1, 1.2), (2, 3, 0.8)):
+        component_values[4 * first + first][0][0] = -scale
+        component_values[4 * first + second][0][0] = scale
+        component_values[4 * second + first][0][0] = scale
+        component_values[4 * second + second][0][0] = -scale
+    component_result = _lw_localize(
+        component_positions, component_values, [(0, 1), (2, 3)], 3.0e-7
+    )
+    _assert_refined_invariants(
+        component_result, component_positions, component_values, 3.0e-7
+    )
+
+    inconsistent = [_working_l3_matrix() for _ in range(9)]
+    inconsistent[2][1][1] = 1.0
+    inconsistent[6][1][1] = 1.0
+    with pytest.raises(RuntimeError, match=r"component.*zero sum|graph solve"):
+        _lw_localize(positions, inconsistent, [(0, 1)])
+
+
+def test_lw_historical_omission_threshold_boundaries_and_diagnostics():
+    def localize_with_amplitude(amplitude):
+        values = [_working_l3_matrix() for _ in range(4)]
+        values[1][1][1] = amplitude
+        values[2][1][1] = amplitude
+        return _lw_localize([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], values, [(0, 1)], 1.0e-5)
+
+    candidate_below = localize_with_amplitude(math.nextafter(1.0e-7, 0.0))
+    candidate_equal = localize_with_amplitude(1.0e-7)
+    transfer_equal = localize_with_amplitude(4.0e-7)
+    transfer_above = localize_with_amplitude(4.1e-7)
+    assert (1, 1) in map(tuple, candidate_below["omitted_component_pairs"])
+    assert (1, 1) not in map(tuple, candidate_equal["omitted_component_pairs"])
+    assert candidate_equal["omitted_transfer_count"] > candidate_below["omitted_transfer_count"]
+    assert not any(transfer[2:4] == (1, 1) for transfer in candidate_equal["transfers"])
+    assert not any(transfer[2:4] == (1, 1) for transfer in transfer_equal["transfers"])
+    assert any(transfer[2:4] == (1, 1) for transfer in transfer_above["transfers"])
+    assert transfer_above["refined"][1].get(1, 1) == pytest.approx(0.0, abs=1.0e-12)
+
+
+def test_lw_finite_inputs_that_overflow_derived_math_fail_closed():
+    zero = [_working_l3_matrix() for _ in range(4)]
+    with pytest.raises(RuntimeError, match=r"finite|overflow"):
+        _lw_localize([[0.0, 0.0, 0.0], [1.0e308, 0.0, 0.0]], zero, [(0, 1)])
+
+    large = [_working_l3_matrix() for _ in range(4)]
+    large[1][0][0] = 1.0e308
+    large[2][0][0] = 1.0e308
+    large[0][0][0] = -1.0e308
+    large[3][0][0] = -1.0e308
+    with pytest.raises(RuntimeError, match=r"finite|overflow"):
+        _lw_localize([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]], large, [(0, 1)], 1.0e300)
+
+
+def test_lw_lapack_pseudoinverse_identities_on_realistic_chain():
+    count = 24
+    bonds = [(site, site + 1) for site in range(count - 1)]
+    operator, pseudoinverse, eigenvalues = psi4.core._atomic_polarizability_lw_graph_math(count, bonds)
+    b = _matrix_values(operator)
+    inverse = _matrix_values(pseudoinverse)
+    projector = _matmul(b, inverse)
+    assert sum(abs(value) < 1.0e-10 for value in eigenvalues) == 1
+    assert max(abs(inverse[i][j] - inverse[j][i]) for i in range(count) for j in range(count)) < 1.0e-11
+    _assert_matrix_close(_matmul(_matmul(b, inverse), b), b, 2.0e-10)
+    _assert_matrix_close(_matmul(_matmul(inverse, b), inverse), inverse, 2.0e-10)
+    _assert_matrix_close(projector, _transpose(projector), 2.0e-10)
+    _assert_matrix_close(_matmul(projector, projector), projector, 2.0e-10)
 
 
 def test_atomic_polarizabilities_api_is_registered():
