@@ -299,6 +299,27 @@ class PSI_API FrozenResponseContext {
     std::string grac_c_name_;
 };
 
+namespace detail {
+/** Native C1 restricted transition-space ERI primitives; ALDA is intentionally absent. */
+struct RestrictedC1Primitives {
+    std::vector<std::pair<std::size_t, std::size_t>> transitions;
+    std::vector<double> orbital_gaps;
+    SharedMatrix coulomb;
+    SharedMatrix exchange_direct;
+    SharedMatrix exchange_transpose;
+};
+
+/** Construct primitives from the immutable orbitals and retained basis of one frozen context. */
+RestrictedC1Primitives construct_restricted_c1_primitives(
+    const std::shared_ptr<const FrozenResponseContext>& context);
+
+/** Context-bound test path for exercising validation with derived orbital-state variants. */
+RestrictedC1Primitives construct_restricted_c1_primitives_test_only(
+    const std::shared_ptr<const FrozenResponseContext>& context, const Matrix& Ca, const Matrix& Cb,
+    const Vector& epsilon_a, const Vector& epsilon_b, const Vector& occupation_a,
+    const Vector& occupation_b);
+}  // namespace detail
+
 /** Actual ISA data structurally bound to one exact frozen context and its ordered grid/sites. */
 class PSI_API ISAWeights {
    public:

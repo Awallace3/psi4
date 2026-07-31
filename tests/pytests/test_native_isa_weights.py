@@ -271,12 +271,12 @@ def frozen_h2o_context():
     overlap = np.asarray(psi4.core.MintsHelper(grac.basisset()).ao_overlap())
     frozen_density = np.asarray(grac.Da()) + np.asarray(grac.Db())
     formal_from_density = float(np.einsum("ij,ji->", frozen_density, overlap))
-    return context, formal_from_density
+    return context, formal_from_density, grac
 
 
 @pytest.mark.scf
 def test_real_frozen_grac_h2o_coarse_grid_invariants_and_formal_count(frozen_h2o_context):
-    context, formal_from_density = frozen_h2o_context
+    context, formal_from_density, _ = frozen_h2o_context
     options = {"radial_points": 36, "angular_polar_points": 12, "angular_azimuthal_points": 16}
     result = psi4.core._atomic_polarizability_compute_isa_weights(context, options)
     rows = _rows(result)
@@ -302,7 +302,7 @@ def test_real_frozen_grac_h2o_coarse_grid_invariants_and_formal_count(frozen_h2o
 
 @pytest.mark.scf
 def test_real_frozen_grac_h2o_digest_is_complete_deterministic_and_option_sensitive(frozen_h2o_context):
-    context, _ = frozen_h2o_context
+    context, _, _ = frozen_h2o_context
     options = {"radial_points": 30, "angular_polar_points": 10, "angular_azimuthal_points": 12}
     first = psi4.core._atomic_polarizability_compute_isa_weights(context, options)
     second = psi4.core._atomic_polarizability_compute_isa_weights(context, options)
@@ -312,3 +312,117 @@ def test_real_frozen_grac_h2o_digest_is_complete_deterministic_and_option_sensit
     assert second["weights"] == first["weights"]
     assert second["diagnostics"]["context_digest"] == first["diagnostics"]["context_digest"]
     assert changed["diagnostics"]["context_digest"] != first["diagnostics"]["context_digest"]
+
+
+def _restricted_c1_primitives(context, **test_overrides):
+    return psi4.core._atomic_polarizability_test_restricted_c1_primitives(
+        context, test_overrides
+    )
+
+
+def _independent_transition_eri_oracle(wfn, orbital_order=None):
+    coefficients = np.asarray(wfn.Ca())
+    energies = np.asarray(wfn.epsilon_a()).ravel()
+    occupations = np.asarray(wfn.occupation_a()).ravel()
+    if orbital_order is not None:
+        coefficients = coefficients[:, orbital_order]
+        energies = energies[orbital_order]
+        occupations = occupations[orbital_order]
+    occupied = [index for index, value in enumerate(occupations) if value == 1.0]
+    virtual = [index for index, value in enumerate(occupations) if value == 0.0]
+    co = psi4.core.Matrix.from_array(coefficients[:, occupied])
+    cv = psi4.core.Matrix.from_array(coefficients[:, virtual])
+    mints = psi4.core.MintsHelper(wfn.basisset())
+    iajb = np.asarray(mints.mo_eri(co, cv, co, cv).to_array())
+    ijab = np.asarray(mints.mo_eri(co, co, cv, cv).to_array())
+    ajbi = np.asarray(mints.mo_eri(cv, co, cv, co).to_array())
+    transitions = [(i, a) for i in occupied for a in virtual]
+    nov = len(transitions)
+    coulomb = np.empty((nov, nov))
+    exchange_direct = np.empty((nov, nov))
+    exchange_transpose = np.empty((nov, nov))
+    for row, (i, a) in enumerate(transitions):
+        local_i, local_a = occupied.index(i), virtual.index(a)
+        for column, (j, b) in enumerate(transitions):
+            local_j, local_b = occupied.index(j), virtual.index(b)
+            coulomb[row, column] = iajb[local_i, local_a, local_j, local_b]
+            exchange_direct[row, column] = ijab[local_i, local_j, local_a, local_b]
+            exchange_transpose[row, column] = ajbi[local_a, local_j, local_b, local_i]
+    gaps = np.array([energies[a] - energies[i] for i, a in transitions])
+    return transitions, gaps, coulomb, exchange_direct, exchange_transpose
+
+
+@pytest.mark.scf
+def test_restricted_c1_primitives_match_independent_mints_oracle_and_zero_alda_hessian(
+    frozen_h2o_context,
+):
+    context, _, grac = frozen_h2o_context
+    result = _restricted_c1_primitives(context)
+    transitions, gaps, coulomb, exchange_direct, exchange_transpose = (
+        _independent_transition_eri_oracle(grac)
+    )
+
+    assert [tuple(pair) for pair in result["transitions"]] == transitions
+    assert result["transition_order"] == "(i,a) occupied-major/virtual-minor"
+    assert result["orbital_gaps"] == pytest.approx(gaps, abs=2.0e-13)
+    for name, expected in (
+        ("coulomb", coulomb),
+        ("exchange_direct", exchange_direct),
+        ("exchange_transpose", exchange_transpose),
+    ):
+        actual = np.asarray(result[name])
+        assert actual.shape == (len(transitions), len(transitions))
+        assert np.all(np.isfinite(actual))
+        assert actual == pytest.approx(actual.T, abs=2.0e-12)
+        assert actual == pytest.approx(expected, abs=2.0e-12)
+
+    # C2a formula with ALDA deliberately zero: this oracle does not call the
+    # native assembler and keeps all three ERI primitives visibly distinct.
+    diagonal = np.diag(gaps)
+    expected_h1 = diagonal + 4.0 * coulomb - 0.25 * (
+        exchange_direct + exchange_transpose
+    )
+    expected_h2 = diagonal - 0.25 * exchange_direct + 0.25 * exchange_transpose
+    assert np.asarray(result["H1_zero_alda"]) == pytest.approx(expected_h1, abs=3.0e-12)
+    assert np.asarray(result["H2_zero_alda"]) == pytest.approx(expected_h2, abs=3.0e-12)
+    assert "alda" not in result
+
+
+@pytest.mark.scf
+def test_restricted_c1_transition_order_tracks_an_orbital_permutation(frozen_h2o_context):
+    context, _, grac = frozen_h2o_context
+    # Move one virtual ahead of the occupied set and one occupied behind it,
+    # while also swapping the two virtual sources. The output order must still
+    # be occupied-major/virtual-minor in the permuted context view.
+    permutation = [5, 1, 2, 3, 4, 0, 6]
+    result = _restricted_c1_primitives(context, orbital_order=permutation)
+    expected = _independent_transition_eri_oracle(grac, permutation)
+    transitions, gaps, coulomb, exchange_direct, exchange_transpose = expected
+    assert [tuple(pair) for pair in result["transitions"]] == transitions
+    assert result["orbital_gaps"] == pytest.approx(gaps, abs=2.0e-13)
+    assert np.asarray(result["coulomb"]) == pytest.approx(coulomb, abs=2.0e-12)
+    assert np.asarray(result["exchange_direct"]) == pytest.approx(exchange_direct, abs=2.0e-12)
+    assert np.asarray(result["exchange_transpose"]) == pytest.approx(
+        exchange_transpose, abs=2.0e-12
+    )
+
+
+@pytest.mark.scf
+@pytest.mark.parametrize(
+    "overrides,message",
+    [
+        ({"occupation_a": [0.5, 1, 1, 1, 1, 0, 0],
+          "occupation_b": [0.5, 1, 1, 1, 1, 0, 0]}, r"integer occupations"),
+        ({"occupation_a": [1, 1, 1, 1, 1, 0, 0],
+          "occupation_b": [1, 1, 1, 1, 0, 0, 0]}, r"closed-shell.*occupations"),
+        ({"epsilon_a": [-20, -1, -0.8, -0.6, -0.5, -21, 1],
+          "epsilon_b": [-20, -1, -0.8, -0.6, -0.5, -21, 1]}, r"gaps.*positive"),
+        ({"beta_orbital_delta": 1.0e-3}, r"Ca and Cb"),
+    ],
+)
+def test_restricted_c1_primitives_fail_closed_for_unsupported_orbital_states(
+    frozen_h2o_context, overrides, message
+):
+    context, _, _ = frozen_h2o_context
+    with pytest.raises(RuntimeError, match=message):
+        _restricted_c1_primitives(context, **overrides)

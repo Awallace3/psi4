@@ -32,6 +32,7 @@
 #include "psi4/libfunctional/superfunctional.h"
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/matrix.h"
+#include "psi4/libmints/mintshelper.h"
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
@@ -794,6 +795,140 @@ void FrozenResponseContext::verify_basis_unchanged() const {
     if (!basis_ || !basis_snapshot_ || basis_->structural_snapshot() != *basis_snapshot_)
         throw PSIEXCEPTION("FrozenResponseContext: retained basis changed after provenance sealing");
 }
+
+namespace {
+detail::RestrictedC1Primitives construct_restricted_c1_primitives_impl(
+    const std::shared_ptr<const FrozenResponseContext>& context, const Matrix& Ca, const Matrix& Cb,
+    const Vector& epsilon_a, const Vector& epsilon_b, const Vector& occupation_a,
+    const Vector& occupation_b) {
+    const std::string prefix = "restricted C1 transition primitives: ";
+    if (!context) throw PSIEXCEPTION(prefix + "frozen response context is null");
+    context->verify_basis_unchanged();
+    const auto& basis = context->basis();
+    if (!basis) throw PSIEXCEPTION(prefix + "retained orbital basis is unavailable");
+    const int nbf = basis->nbf();
+    if (Ca.nirrep() != 1 || Cb.nirrep() != 1 || epsilon_a.nirrep() != 1 ||
+        epsilon_b.nirrep() != 1 || occupation_a.nirrep() != 1 || occupation_b.nirrep() != 1)
+        throw PSIEXCEPTION(prefix + "only C1 orbital states are supported");
+    if (nbf <= 0 || Ca.nrow() != nbf || Cb.nrow() != nbf || Ca.ncol() == 0 ||
+        Cb.ncol() != Ca.ncol())
+        throw PSIEXCEPTION(prefix + "orbital coefficient dimensions must match the retained basis");
+    const int nmo = Ca.ncol();
+    if (epsilon_a.dim(0) != nmo || epsilon_b.dim(0) != nmo ||
+        occupation_a.dim(0) != nmo || occupation_b.dim(0) != nmo)
+        throw PSIEXCEPTION(prefix + "orbital energy and occupation dimensions are inconsistent");
+
+    for (int mu = 0; mu < nbf; ++mu) {
+        for (int orbital = 0; orbital < nmo; ++orbital) {
+            const double alpha = Ca(mu, orbital);
+            const double beta = Cb(mu, orbital);
+            if (!std::isfinite(alpha) || !std::isfinite(beta))
+                throw PSIEXCEPTION(prefix + "orbital coefficients must be finite");
+            if (alpha != beta)
+                throw PSIEXCEPTION(prefix + "restricted Ca and Cb orbitals must match exactly");
+        }
+    }
+
+    std::vector<int> occupied, virtuals;
+    occupied.reserve(nmo);
+    virtuals.reserve(nmo);
+    for (int orbital = 0; orbital < nmo; ++orbital) {
+        const double energy_a = epsilon_a.get(0, orbital);
+        const double energy_b = epsilon_b.get(0, orbital);
+        const double occ_a = occupation_a.get(0, orbital);
+        const double occ_b = occupation_b.get(0, orbital);
+        if (!std::isfinite(energy_a) || !std::isfinite(energy_b))
+            throw PSIEXCEPTION(prefix + "orbital energies must be finite");
+        if (energy_a != energy_b)
+            throw PSIEXCEPTION(prefix + "restricted alpha and beta orbital energies must match exactly");
+        if (!std::isfinite(occ_a) || !std::isfinite(occ_b) ||
+            (occ_a != 0.0 && occ_a != 1.0) || (occ_b != 0.0 && occ_b != 1.0))
+            throw PSIEXCEPTION(prefix + "closed-shell C1 requires integer occupations of zero or one");
+        if (occ_a != occ_b)
+            throw PSIEXCEPTION(prefix + "closed-shell alpha and beta occupations must match");
+        (occ_a == 1.0 ? occupied : virtuals).push_back(orbital);
+    }
+    if (occupied.empty() || virtuals.empty())
+        throw PSIEXCEPTION(prefix + "at least one occupied and one virtual orbital are required");
+    const std::size_t nocc = occupied.size();
+    const std::size_t nvir = virtuals.size();
+    if (nocc > std::numeric_limits<std::size_t>::max() / nvir ||
+        nocc * nvir > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw PSIEXCEPTION(prefix + "transition-space dimension exceeds native matrix limits");
+    const std::size_t nov = nocc * nvir;
+
+    detail::RestrictedC1Primitives result;
+    result.transitions.reserve(nov);
+    result.orbital_gaps.reserve(nov);
+    // The transition order is explicit: occupied orbital first, virtual orbital second.
+    // Both source-index lists are ascending, hence (i,a) occupied-major/virtual-minor.
+    for (int i : occupied) {
+        for (int a : virtuals) {
+            const double gap = epsilon_a.get(0, a) - epsilon_a.get(0, i);
+            if (!std::isfinite(gap) || !(gap > 0.0))
+                throw PSIEXCEPTION(prefix + "all occupied-virtual orbital gaps must be finite and positive");
+            result.transitions.emplace_back(i, a);
+            result.orbital_gaps.push_back(gap);
+        }
+    }
+
+    auto Co = std::make_shared<Matrix>(nbf, static_cast<int>(nocc));
+    auto Cv = std::make_shared<Matrix>(nbf, static_cast<int>(nvir));
+    for (int mu = 0; mu < nbf; ++mu) {
+        for (std::size_t i = 0; i < nocc; ++i) (*Co)(mu, i) = Ca(mu, occupied[i]);
+        for (std::size_t a = 0; a < nvir; ++a) (*Cv)(mu, a) = Ca(mu, virtuals[a]);
+    }
+
+    // Direct four-index transforms avoid one JK build per transition. These
+    // in-core transforms prioritize correctness for the reviewed small-basis path.
+    MintsHelper mints(std::const_pointer_cast<BasisSet>(basis));
+    const auto iajb = mints.mo_eri(Co, Cv, Co, Cv);               // (ia|jb)
+    const auto ijab = mints.mo_eri(Co, Co, Cv, Cv);               // (ij|ab)
+    const auto ajbi = mints.mo_eri(Cv, Co, Cv, Co);               // (aj|bi)
+    result.coulomb = std::make_shared<Matrix>(nov, nov);
+    result.exchange_direct = std::make_shared<Matrix>(nov, nov);
+    result.exchange_transpose = std::make_shared<Matrix>(nov, nov);
+    for (std::size_t i = 0; i < nocc; ++i) {
+        for (std::size_t a = 0; a < nvir; ++a) {
+            const std::size_t row = i * nvir + a;
+            for (std::size_t j = 0; j < nocc; ++j) {
+                for (std::size_t b = 0; b < nvir; ++b) {
+                    const std::size_t column = j * nvir + b;
+                    (*result.coulomb)(row, column) = (*iajb)(row, column);
+                    (*result.exchange_direct)(row, column) =
+                        (*ijab)(i * nocc + j, a * nvir + b);
+                    (*result.exchange_transpose)(row, column) =
+                        (*ajbi)(a * nocc + j, b * nocc + i);
+                }
+            }
+        }
+    }
+    require_restricted_hessian_primitive(*result.coulomb, nov, "Coulomb J");
+    require_restricted_hessian_primitive(*result.exchange_direct, nov, "K_direct");
+    require_restricted_hessian_primitive(*result.exchange_transpose, nov, "K_transpose");
+    context->verify_basis_unchanged();
+    return result;
+}
+}  // namespace
+
+namespace detail {
+RestrictedC1Primitives construct_restricted_c1_primitives(
+    const std::shared_ptr<const FrozenResponseContext>& context) {
+    if (!context)
+        throw PSIEXCEPTION("restricted C1 transition primitives: frozen response context is null");
+    return construct_restricted_c1_primitives_impl(
+        context, *context->Ca(), *context->Cb(), *context->epsilon_a(), *context->epsilon_b(),
+        *context->occupation_a(), *context->occupation_b());
+}
+
+RestrictedC1Primitives construct_restricted_c1_primitives_test_only(
+    const std::shared_ptr<const FrozenResponseContext>& context, const Matrix& Ca, const Matrix& Cb,
+    const Vector& epsilon_a, const Vector& epsilon_b, const Vector& occupation_a,
+    const Vector& occupation_b) {
+    return construct_restricted_c1_primitives_impl(
+        context, Ca, Cb, epsilon_a, epsilon_b, occupation_a, occupation_b);
+}
+}  // namespace detail
 
 std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
     const std::shared_ptr<Wavefunction>& grac_wfn,

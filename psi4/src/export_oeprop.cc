@@ -28,6 +28,8 @@
 
 #include "psi4/pybind11.h"
 
+#include <algorithm>
+
 #include "psi4/libfunctional/LibXCfunctional.h"
 #include "psi4/libfunctional/functional.h"
 #include "psi4/libfunctional/superfunctional.h"
@@ -293,6 +295,97 @@ void export_oeprop(py::module &m) {
                                        vector_sum_squares(context.occupation_a()), vector_sum_squares(context.occupation_b()),
                                        matrix_sum_squares(context.Da()), matrix_sum_squares(context.Db()), context.energy()};
         });
+    m.def("_atomic_polarizability_test_restricted_c1_primitives",
+          [](const std::shared_ptr<FrozenResponseContext>& context, const py::dict& overrides) {
+              if (!context) throw PSIEXCEPTION("restricted C1 transition primitives: frozen response context is null");
+              const std::vector<std::string> allowed{
+                  "orbital_order", "epsilon_a", "epsilon_b", "occupation_a", "occupation_b",
+                  "beta_orbital_delta"};
+              for (const auto& item : overrides) {
+                  const auto key = py::cast<std::string>(item.first);
+                  if (std::find(allowed.begin(), allowed.end(), key) == allowed.end())
+                      throw PSIEXCEPTION("restricted C1 transition primitives: unknown test override " + key);
+              }
+              auto Ca = context->Ca()->clone();
+              auto Cb = context->Cb()->clone();
+              auto epsilon_a = std::make_shared<Vector>(context->epsilon_a()->clone());
+              auto epsilon_b = std::make_shared<Vector>(context->epsilon_b()->clone());
+              auto occupation_a = std::make_shared<Vector>(context->occupation_a()->clone());
+              auto occupation_b = std::make_shared<Vector>(context->occupation_b()->clone());
+              const int nbf = Ca->nrow();
+              const int nmo = Ca->ncol();
+              if (overrides.contains("orbital_order")) {
+                  const auto order = py::cast<std::vector<int>>(overrides["orbital_order"]);
+                  std::vector<bool> seen(nmo, false);
+                  if (order.size() != static_cast<std::size_t>(nmo))
+                      throw PSIEXCEPTION("restricted C1 transition primitives: orbital permutation has wrong dimension");
+                  for (int source : order) {
+                      if (source < 0 || source >= nmo || seen[source])
+                          throw PSIEXCEPTION("restricted C1 transition primitives: orbital order must be a permutation");
+                      seen[source] = true;
+                  }
+                  auto permuted_Ca = std::make_shared<Matrix>(nbf, nmo);
+                  auto permuted_Cb = std::make_shared<Matrix>(nbf, nmo);
+                  auto permuted_epsilon_a = std::make_shared<Vector>("permuted epsilon a", nmo);
+                  auto permuted_epsilon_b = std::make_shared<Vector>("permuted epsilon b", nmo);
+                  auto permuted_occupation_a = std::make_shared<Vector>("permuted occupation a", nmo);
+                  auto permuted_occupation_b = std::make_shared<Vector>("permuted occupation b", nmo);
+                  for (int target = 0; target < nmo; ++target) {
+                      const int source = order[target];
+                      for (int mu = 0; mu < nbf; ++mu) {
+                          (*permuted_Ca)(mu, target) = (*Ca)(mu, source);
+                          (*permuted_Cb)(mu, target) = (*Cb)(mu, source);
+                      }
+                      permuted_epsilon_a->set(0, target, epsilon_a->get(0, source));
+                      permuted_epsilon_b->set(0, target, epsilon_b->get(0, source));
+                      permuted_occupation_a->set(0, target, occupation_a->get(0, source));
+                      permuted_occupation_b->set(0, target, occupation_b->get(0, source));
+                  }
+                  Ca = std::move(permuted_Ca);
+                  Cb = std::move(permuted_Cb);
+                  epsilon_a = std::move(permuted_epsilon_a);
+                  epsilon_b = std::move(permuted_epsilon_b);
+                  occupation_a = std::move(permuted_occupation_a);
+                  occupation_b = std::move(permuted_occupation_b);
+              }
+              const auto replace_vector = [nmo, &overrides](const char* key,
+                                                             const std::shared_ptr<Vector>& target) {
+                  if (!overrides.contains(key)) return;
+                  const auto values = py::cast<std::vector<double>>(overrides[key]);
+                  if (values.size() != static_cast<std::size_t>(nmo))
+                      throw PSIEXCEPTION(std::string("restricted C1 transition primitives: ") + key +
+                                         " override has wrong dimension");
+                  for (int orbital = 0; orbital < nmo; ++orbital)
+                      target->set(0, orbital, values[orbital]);
+              };
+              replace_vector("epsilon_a", epsilon_a);
+              replace_vector("epsilon_b", epsilon_b);
+              replace_vector("occupation_a", occupation_a);
+              replace_vector("occupation_b", occupation_b);
+              if (overrides.contains("beta_orbital_delta"))
+                  (*Cb)(0, 0) += py::cast<double>(overrides["beta_orbital_delta"]);
+
+              const auto primitives = overrides.empty()
+                  ? detail::construct_restricted_c1_primitives(context)
+                  : detail::construct_restricted_c1_primitives_test_only(
+                        context, *Ca, *Cb, *epsilon_a, *epsilon_b, *occupation_a, *occupation_b);
+              auto zero_alda = std::make_shared<Matrix>(primitives.orbital_gaps.size(),
+                                                        primitives.orbital_gaps.size());
+              const auto hessian = detail::assemble_restricted_singlet_hessian(
+                  primitives.orbital_gaps, *primitives.coulomb, *primitives.exchange_direct,
+                  *primitives.exchange_transpose, *zero_alda, ResponseKernel(0.25, 0.75));
+              py::dict result;
+              result["transition_order"] = "(i,a) occupied-major/virtual-minor";
+              result["transitions"] = primitives.transitions;
+              result["orbital_gaps"] = primitives.orbital_gaps;
+              result["coulomb"] = primitives.coulomb;
+              result["exchange_direct"] = primitives.exchange_direct;
+              result["exchange_transpose"] = primitives.exchange_transpose;
+              result["H1_zero_alda"] = hessian.H1;
+              result["H2_zero_alda"] = hessian.H2;
+              return result;
+          },
+          "context"_a, "test_overrides"_a = py::dict());
     py::class_<ISAPolResponseProvider, std::shared_ptr<ISAPolResponseProvider>>(
         m, "_AtomicPolarizabilityTestResponseProvider")
         .def("expected_response_count",
