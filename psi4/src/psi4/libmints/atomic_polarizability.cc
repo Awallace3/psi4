@@ -453,6 +453,39 @@ namespace {
 
 constexpr const char* kProtocolGRACX = "XC_GGA_X_LB";
 constexpr const char* kProtocolGRACC = "XC_LDA_C_VWN";
+// Molecule coordinates are stored in Bohr. This absolute tolerance admits only
+// serialization/orientation roundoff from independently built vertical states.
+constexpr double kGeometryToleranceBohr = 1.0e-12;
+
+bool same_coordinate_bohr(double first, double second) {
+    return std::abs(first - second) <= kGeometryToleranceBohr;
+}
+
+bool same_coordinate_vector(const std::vector<double>& first, const std::vector<double>& second) {
+    return first.size() == second.size() &&
+           std::equal(first.begin(), first.end(), second.begin(), same_coordinate_bohr);
+}
+
+bool same_vertical_basis_structure(const BasisSetStructuralSnapshot& first,
+                                   const BasisSetStructuralSnapshot& second) {
+    if (first.shells.size() != second.shells.size() ||
+        first.ecp_shells.size() != second.ecp_shells.size() ||
+        !same_coordinate_vector(first.centers, second.centers)) return false;
+
+    auto coordinate_adjusted = second;
+    coordinate_adjusted.centers = first.centers;
+    for (std::size_t shell = 0; shell < first.shells.size(); ++shell) {
+        if (!same_coordinate_vector(first.shells[shell].coordinates,
+                                    second.shells[shell].coordinates)) return false;
+        coordinate_adjusted.shells[shell].coordinates = first.shells[shell].coordinates;
+    }
+    for (std::size_t shell = 0; shell < first.ecp_shells.size(); ++shell) {
+        if (!same_coordinate_vector(first.ecp_shells[shell].coordinates,
+                                    second.ecp_shells[shell].coordinates)) return false;
+        coordinate_adjusted.ecp_shells[shell].coordinates = first.ecp_shells[shell].coordinates;
+    }
+    return first == coordinate_adjusted;
+}
 
 bool close_enough(double first, double second) {
     const double scale = std::max({1.0, std::abs(first), std::abs(second)});
@@ -472,8 +505,10 @@ std::shared_ptr<scf::HF> require_converged_scf(const std::shared_ptr<Wavefunctio
 bool same_nuclei_and_geometry(const Molecule& first, const Molecule& second) {
     if (first.natom() != second.natom()) return false;
     for (int atom = 0; atom < first.natom(); ++atom) {
-        if (first.Z(atom) != second.Z(atom) || first.x(atom) != second.x(atom) ||
-            first.y(atom) != second.y(atom) || first.z(atom) != second.z(atom)) return false;
+        if (first.Z(atom) != second.Z(atom) ||
+            !same_coordinate_bohr(first.x(atom), second.x(atom)) ||
+            !same_coordinate_bohr(first.y(atom), second.y(atom)) ||
+            !same_coordinate_bohr(first.z(atom), second.z(atom))) return false;
     }
     return true;
 }
@@ -595,7 +630,8 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
         throw PSIEXCEPTION("FrozenResponseContext: cation calculation geometry/electron identity is inconsistent");
     }
     if (!grac_seal.basis || !precursor_seal.basis || !cation_seal.basis ||
-        *grac_seal.basis != *precursor_seal.basis || *grac_seal.basis != *cation_seal.basis ||
+        !same_vertical_basis_structure(*grac_seal.basis, *precursor_seal.basis) ||
+        !same_vertical_basis_structure(*grac_seal.basis, *cation_seal.basis) ||
         grac_hf->basisset()->structural_snapshot() != *grac_seal.basis) {
         throw PSIEXCEPTION("FrozenResponseContext: precursor/cation complete basis structure is inconsistent");
     }

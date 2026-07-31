@@ -78,6 +78,19 @@ def test_response_kernel_is_exact_and_rejects_nextafter_neighbors():
 
 def test_actual_grac_context_is_verified_and_frozen(grac_states):
     grac, precursor, cation, shift = grac_states
+    grac_molecule = grac.molecule()
+    cation_molecule = cation.molecule()
+    coordinate_pairs = [
+        (getattr(grac_molecule, axis)(atom), getattr(cation_molecule, axis)(atom))
+        for atom in range(grac_molecule.natom())
+        for axis in "xyz"
+    ]
+    differences = [abs(first - second) for first, second in coordinate_pairs]
+    molecular_scale_ulp = max(math.ulp(value) for pair in coordinate_pairs for value in pair)
+    assert 0.0 < max(differences) <= molecular_scale_ulp
+
+    # The neutral and cation were parsed independently; their sub-molecular-ULP
+    # Bohr-coordinate roundoff must not invalidate a vertical-state context.
     context = _context(grac_states)
     summary = context.summary()
 
@@ -99,6 +112,29 @@ def test_actual_grac_context_is_verified_and_frozen(grac_states):
     assert summary["site_count"] == 3
     assert summary["grid_point_count"] > 0
     assert summary["single_thread_no_basis_mutation_contract"] is True
+
+
+def test_material_cation_geometry_change_rejects(grac_states):
+    grac, precursor, _, _ = grac_states
+    displaced_cation = psi4.geometry(
+        """
+        1 2
+        O  0.000000  0.000000  0.000000
+        H  0.000000  0.757170  0.586260
+        H  0.000000 -0.757160  0.586260
+        symmetry c1
+        units angstrom
+        """
+    )
+    psi4.set_options({"reference": "uhf", "basis": "sto-3g", "dft_grac_shift": 0.0})
+    try:
+        _, displaced_wfn = psi4.energy("pbe0", molecule=displaced_cation, return_wfn=True)
+        with pytest.raises(RuntimeError, match=r"geometry/electron identity"):
+            psi4.core._atomic_polarizability_make_frozen_response_context(
+                grac, precursor, displaced_wfn
+            )
+    finally:
+        psi4.set_options({"reference": "rhf"})
 
 
 def test_seal_occurs_only_after_successful_finalize_energy(grac_states, monkeypatch):
@@ -220,7 +256,9 @@ def test_sealed_ground_component_parameter_mismatch_rejects(grac_states, monkeyp
 
     def finalize_with_test_local_tweak(self):
         energy = original_finalize(self)
-        self.functional().x_functionals()[0].set_tweak({"_kappa": 0.9, "_mu": 0.2195149727645171})
+        # PBE0 is represented by one combined LibXC XC component, stored in
+        # the correlation container rather than in x_functionals().
+        self.functional().c_functionals()[0].set_tweak({"_beta": 0.3})
         return energy
 
     monkeypatch.setattr(psi4.core.HF, "finalize_energy", finalize_with_test_local_tweak)
