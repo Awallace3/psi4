@@ -44,6 +44,71 @@ namespace py = pybind11;
 using namespace pybind11::literals;
 
 void export_oeprop(py::module &m) {
+    const auto isa_options_from_dict = [](const py::dict& values) {
+        for (const auto& entry : values) {
+            const auto key = py::cast<std::string>(entry.first);
+            if (key != "radial_points" && key != "angular_polar_points" &&
+                key != "angular_azimuthal_points" && key != "max_iterations" &&
+                key != "convergence" && key != "mix_fraction" && key != "initial_alpha" &&
+                key != "tail_join_factor" && key != "tail_activation_iteration" &&
+                key != "tail_activation_convergence" && key != "electron_count_tolerance")
+                throw PSIEXCEPTION("ISAOptions: unknown option '" + key + "'");
+        }
+        const auto size_value = [&values](const char* key, std::size_t fallback) {
+            return values.contains(key) ? values[key].cast<std::size_t>() : fallback;
+        };
+        const auto double_value = [&values](const char* key, double fallback) {
+            return values.contains(key) ? values[key].cast<double>() : fallback;
+        };
+        return ISAOptions(size_value("radial_points", 100), size_value("angular_polar_points", 18),
+                          size_value("angular_azimuthal_points", 24), size_value("max_iterations", 120),
+                          double_value("convergence", 1.0e-9), double_value("mix_fraction", 1.0),
+                          double_value("initial_alpha", 1.0), double_value("tail_join_factor", 1.5),
+                          size_value("tail_activation_iteration", 20),
+                          double_value("tail_activation_convergence", 1.0e-6),
+                          double_value("electron_count_tolerance", 0.1));
+    };
+    const auto isa_diagnostics_dict = [](const ISADiagnostics& diagnostics) {
+        py::dict grid;
+        grid["radial_points"] = diagnostics.grid_profile.radial_points;
+        grid["angular_points"] = diagnostics.grid_profile.angular_points;
+        grid["shell_point_count"] = diagnostics.grid_profile.shell_point_count;
+        grid["angular_rule"] = diagnostics.grid_profile.angular_rule;
+        grid["radial_rule"] = diagnostics.grid_profile.radial_rule;
+        grid["radius_table"] = diagnostics.grid_profile.radius_table;
+        grid["atom_scales"] = diagnostics.grid_profile.atom_scales;
+        py::dict result;
+        result["electron_count"] = diagnostics.electron_count;
+        result["formal_electron_count"] = diagnostics.formal_electron_count;
+        result["electron_count_absolute_error"] = diagnostics.electron_count_absolute_error;
+        result["electron_count_relative_error"] = diagnostics.electron_count_relative_error;
+        result["iterations"] = diagnostics.iterations;
+        result["converged"] = diagnostics.converged;
+        result["max_overlap_residual"] = diagnostics.max_overlap_residual;
+        result["max_population_change"] = diagnostics.max_population_change;
+        result["max_weight_change"] = diagnostics.max_weight_change;
+        result["max_unity_residual"] = diagnostics.max_unity_residual;
+        result["total_charge_residual"] = diagnostics.total_charge_residual;
+        result["tail_fit_failures"] = diagnostics.tail_fit_failures;
+        result["underflow_fallbacks"] = diagnostics.underflow_fallbacks;
+        result["atomic_populations"] = diagnostics.atomic_populations;
+        result["grid_profile"] = std::move(grid);
+        result["radial_nodes"] = diagnostics.radial_nodes;
+        result["log_profiles"] = diagnostics.log_profiles;
+        result["tail_join_radii"] = diagnostics.tail_join_radii;
+        result["tail_alphas"] = diagnostics.tail_alphas;
+        result["context_digest"] = diagnostics.context_digest;
+        return result;
+    };
+    const auto isa_result_dict = [isa_diagnostics_dict](std::size_t site_count,
+                                                         const std::vector<double>& weights,
+                                                         const ISADiagnostics& diagnostics) {
+        py::dict result;
+        result["site_count"] = site_count;
+        result["weights"] = weights;
+        result["diagnostics"] = isa_diagnostics_dict(diagnostics);
+        return result;
+    };
     // Underscored pure-math seams keep protocol tests on the native implementation
     // without expanding the supported public API.
     m.def("_atomic_polarizability_make_casimir_grid", [](unsigned int nonzero_count, double scale) {
@@ -59,6 +124,32 @@ void export_oeprop(py::module &m) {
               detail::validate_vertical_protocol(cation_state_valid, complete_basis_valid);
           },
           "cation_state_valid"_a, "complete_basis_valid"_a);
+    m.def("_atomic_polarizability_test_isa",
+          [isa_options_from_dict, isa_result_dict](
+              const std::vector<SitePosition>& sites, const std::vector<SitePosition>& points,
+              const std::vector<double>& weights, const std::vector<int>& atomic_numbers,
+              const std::vector<std::array<double, 5>>& gaussian_terms, const py::dict& option_values) {
+              std::vector<detail::SyntheticGaussianDensity> terms;
+              terms.reserve(gaussian_terms.size());
+              for (const auto& term : gaussian_terms)
+                  terms.push_back({{term[0], term[1], term[2]}, term[3], term[4]});
+              const auto result = detail::compute_synthetic_isa(
+                  sites, points, weights, atomic_numbers, terms, isa_options_from_dict(option_values));
+              return isa_result_dict(result.site_count, result.weights, result.diagnostics);
+          },
+          "sites"_a, "points"_a, "weights"_a, "atomic_numbers"_a,
+          "gaussian_terms"_a, "options"_a = py::dict());
+    m.def("_atomic_polarizability_test_isa_profile",
+          [](const std::vector<double>& nodes, const std::vector<double>& log_values,
+             const std::vector<double>& queries, double tail_join, double tail_charge) {
+              const auto result = detail::test_isa_profile(nodes, log_values, queries, tail_join, tail_charge);
+              py::dict values;
+              values["log_values"] = result.log_values;
+              values["tail_alpha"] = result.tail_alpha;
+              values["join_log_left"] = result.join_log_left;
+              values["join_log_right"] = result.join_log_right;
+              return values;
+          });
     py::class_<FrozenResponseContext, std::shared_ptr<FrozenResponseContext>>(
         m, "_AtomicPolarizabilityFrozenResponseContext")
         .def("summary", [](const FrozenResponseContext& context) {
@@ -132,12 +223,19 @@ void export_oeprop(py::module &m) {
         });
     m.def("_atomic_polarizability_make_frozen_response_context", &FrozenResponseContext::create,
           "grac_wfn"_a, "neutral_precursor_wfn"_a, "cation_wfn"_a);
+    m.def("_atomic_polarizability_compute_isa_weights",
+          [isa_options_from_dict, isa_result_dict](const std::shared_ptr<FrozenResponseContext>& context,
+                                                     const py::dict& option_values) {
+              const auto result = compute_isa_weights(context, isa_options_from_dict(option_values));
+              return isa_result_dict(result.site_count(), result.partition_weights(), result.diagnostics());
+          },
+          "context"_a, "options"_a = py::dict());
     m.def("_atomic_polarizability_make_test_response_provider",
           [](const std::shared_ptr<FrozenResponseContext>& context,
              const std::shared_ptr<FrozenResponseContext>& isa_context) {
               const auto count = isa_context->grid_point_count() * isa_context->sites().size();
               std::vector<double> weights(count, 1.0 / static_cast<double>(isa_context->sites().size()));
-              auto isa = ISAWeights::create(isa_context, std::move(weights));
+              auto isa = ISAWeights::create_test_only(isa_context, std::move(weights));
               return std::make_shared<ISAPolResponseProvider>(context, ResponseKernel(0.25, 0.75), std::move(isa));
           }, "context"_a, "isa_context"_a);
     m.def("_atomic_polarizability_local_spherical_dipole_to_cartesian",

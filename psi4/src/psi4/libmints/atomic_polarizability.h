@@ -62,6 +62,77 @@ namespace detail {
 void validate_vertical_protocol(bool cation_state_valid, bool complete_basis_valid);
 }  // namespace detail
 
+/** Explicit, deterministic controls for the native real-space ISA fixed point. */
+class PSI_API ISAOptions {
+   public:
+    ISAOptions(std::size_t radial_points = 100, std::size_t angular_polar_points = 18,
+               std::size_t angular_azimuthal_points = 24, std::size_t max_iterations = 120,
+               double convergence = 1.0e-9, double mix_fraction = 1.0,
+               double initial_alpha = 1.0, double tail_join_factor = 1.5,
+               std::size_t tail_activation_iteration = 20,
+               double tail_activation_convergence = 1.0e-6,
+               double electron_count_tolerance = 0.1);
+
+    std::size_t radial_points() const { return radial_points_; }
+    std::size_t angular_polar_points() const { return angular_polar_points_; }
+    std::size_t angular_azimuthal_points() const { return angular_azimuthal_points_; }
+    std::size_t max_iterations() const { return max_iterations_; }
+    double convergence() const { return convergence_; }
+    double mix_fraction() const { return mix_fraction_; }
+    double initial_alpha() const { return initial_alpha_; }
+    double tail_join_factor() const { return tail_join_factor_; }
+    std::size_t tail_activation_iteration() const { return tail_activation_iteration_; }
+    double tail_activation_convergence() const { return tail_activation_convergence_; }
+    double electron_count_tolerance() const { return electron_count_tolerance_; }
+
+   private:
+    std::size_t radial_points_;
+    std::size_t angular_polar_points_;
+    std::size_t angular_azimuthal_points_;
+    std::size_t max_iterations_;
+    double convergence_;
+    double mix_fraction_;
+    double initial_alpha_;
+    double tail_join_factor_;
+    std::size_t tail_activation_iteration_;
+    double tail_activation_convergence_;
+    double electron_count_tolerance_;
+};
+
+struct PSI_API ISAGridProfile {
+    std::size_t radial_points{};
+    std::size_t angular_points{};
+    std::size_t shell_point_count{};
+    std::string angular_rule;
+    std::string radial_rule;
+    std::string radius_table;
+    std::vector<double> atom_scales;
+};
+
+/** Deterministic diagnostics for a successfully converged native ISA partition. */
+struct PSI_API ISADiagnostics {
+    double electron_count{};
+    double formal_electron_count{};
+    double electron_count_absolute_error{};
+    double electron_count_relative_error{};
+    std::size_t iterations{};
+    bool converged{};
+    double max_overlap_residual{};
+    double max_population_change{};
+    double max_weight_change{};
+    double max_unity_residual{};
+    double total_charge_residual{};
+    std::size_t tail_fit_failures{};
+    std::size_t underflow_fallbacks{};
+    std::vector<double> atomic_populations;
+    ISAGridProfile grid_profile;
+    std::vector<double> radial_nodes;
+    std::vector<std::vector<double>> log_profiles;
+    std::vector<double> tail_join_radii;
+    std::vector<double> tail_alphas;
+    std::string context_digest;
+};
+
 /** Immutable protocol response-kernel selection, independent of the ground-state functional. */
 class PSI_API ResponseKernel {
    public:
@@ -171,21 +242,58 @@ class PSI_API FrozenResponseContext {
 /** Actual ISA data structurally bound to one exact frozen context and its ordered grid/sites. */
 class PSI_API ISAWeights {
    public:
-    static ISAWeights create(std::shared_ptr<const FrozenResponseContext> context,
-                             std::vector<double> partition_weights);
+    /** Existing arbitrary-array seam, deliberately named and restricted to tests. */
+    static ISAWeights create_test_only(std::shared_ptr<const FrozenResponseContext> context,
+                                       std::vector<double> partition_weights);
 
     std::size_t point_count() const;
     std::size_t site_count() const;
     const std::vector<double>& partition_weights() const { return partition_weights_; }
+    const ISADiagnostics& diagnostics() const { return diagnostics_; }
 
    private:
     friend class ISAPolResponseProvider;
+    friend ISAWeights compute_isa_weights(std::shared_ptr<const FrozenResponseContext>, const ISAOptions&);
     ISAWeights(std::shared_ptr<const FrozenResponseContext> context,
-               std::vector<double> partition_weights);
+               std::vector<double> partition_weights, ISADiagnostics diagnostics);
 
     std::shared_ptr<const FrozenResponseContext> context_;
     std::vector<double> partition_weights_;
+    ISADiagnostics diagnostics_;
 };
+
+/** Compute native real-space ISA probabilities on the exact sealed response grid. */
+PSI_API ISAWeights compute_isa_weights(std::shared_ptr<const FrozenResponseContext> context,
+                                       const ISAOptions& options = ISAOptions());
+
+namespace detail {
+struct PSI_API SyntheticGaussianDensity {
+    SitePosition center;
+    double coefficient{};
+    double exponent{};
+};
+struct PSI_API SyntheticISAResult {
+    std::size_t site_count{};
+    std::vector<double> weights;
+    ISADiagnostics diagnostics;
+};
+struct PSI_API ISAProfileTestResult {
+    std::vector<double> log_values;
+    double tail_alpha{};
+    double join_log_left{};
+    double join_log_right{};
+};
+SyntheticISAResult compute_synthetic_isa(const std::vector<SitePosition>& sites,
+                                         const std::vector<SitePosition>& output_points,
+                                         const std::vector<double>& output_weights,
+                                         const std::vector<int>& atomic_numbers,
+                                         const std::vector<SyntheticGaussianDensity>& terms,
+                                         const ISAOptions& options);
+ISAProfileTestResult test_isa_profile(const std::vector<double>& nodes,
+                                      const std::vector<double>& log_values,
+                                      const std::vector<double>& queries,
+                                      double tail_join, double tail_charge);
+}  // namespace detail
 
 /** Production response interface; no mutable Wavefunction is retained or revalidated. */
 class PSI_API ISAPolResponseProvider {

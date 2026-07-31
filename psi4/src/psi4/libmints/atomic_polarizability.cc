@@ -693,11 +693,12 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
 }
 
 ISAWeights::ISAWeights(std::shared_ptr<const FrozenResponseContext> context,
-                       std::vector<double> partition_weights)
-    : context_(std::move(context)), partition_weights_(std::move(partition_weights)) {}
+                       std::vector<double> partition_weights, ISADiagnostics diagnostics)
+    : context_(std::move(context)), partition_weights_(std::move(partition_weights)),
+      diagnostics_(std::move(diagnostics)) {}
 
-ISAWeights ISAWeights::create(std::shared_ptr<const FrozenResponseContext> context,
-                              std::vector<double> partition_weights) {
+ISAWeights ISAWeights::create_test_only(std::shared_ptr<const FrozenResponseContext> context,
+                                        std::vector<double> partition_weights) {
     if (!context) throw PSIEXCEPTION("ISAWeights: frozen response context is null");
     const auto point_count = context->grid_point_count();
     const auto site_count = context->sites().size();
@@ -715,7 +716,7 @@ ISAWeights ISAWeights::create(std::shared_ptr<const FrozenResponseContext> conte
         if (!std::isfinite(sum) || std::abs(sum - 1.0) > kValidationTolerance)
             throw PSIEXCEPTION("ISAWeights: partition unity failed on the frozen ordered grid");
     }
-    return ISAWeights(std::move(context), std::move(partition_weights));
+    return ISAWeights(std::move(context), std::move(partition_weights), ISADiagnostics{});
 }
 
 std::size_t ISAWeights::point_count() const { return context_->grid_point_count(); }

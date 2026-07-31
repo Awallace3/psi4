@@ -1,5 +1,6 @@
 list(APPEND sources
   atomic_polarizability.cc
+  isa_weights.cc
   local.cc
   x2cint.cc
   zora.cc
