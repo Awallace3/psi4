@@ -46,6 +46,41 @@ void export_oeprop(py::module &m) {
         const auto grid = make_casimir_grid(nonzero_count, scale);
         return py::make_tuple(grid.frequencies, grid.weights);
     });
+    m.def(
+        "_atomic_polarizability_validate_response_prerequisites",
+        [](double chf_exchange, double alda_kernel, double neutral_energy, double cation_energy,
+           double homo_energy, double ionization_potential, double grac_shift,
+           const std::string& method_fingerprint, const std::string& functional_fingerprint,
+           const std::string& basis_fingerprint, const std::string& grid_fingerprint,
+           std::size_t point_count, std::size_t grid_dimension, std::size_t site_count,
+           std::vector<double> points, std::vector<double> quadrature_weights,
+           std::vector<double> partition_weights) {
+            const ResponseKernel kernel(chf_exchange, alda_kernel);
+            const GRACProvenance grac(neutral_energy, cation_energy, homo_energy,
+                                      ionization_potential, grac_shift, method_fingerprint,
+                                      functional_fingerprint, basis_fingerprint, grid_fingerprint);
+            const ISAWeights isa(point_count, grid_dimension, site_count, std::move(points),
+                                 std::move(quadrature_weights), std::move(partition_weights));
+            py::dict result;
+            result["kernel"] = py::make_tuple(kernel.chf_exchange(), kernel.alda_kernel());
+            result["grac"] = py::make_tuple(grac.neutral_energy(), grac.cation_energy(),
+                                            grac.homo_energy(), grac.ionization_potential(),
+                                            grac.shift());
+            result["fingerprints"] =
+                py::make_tuple(grac.method_fingerprint(), grac.functional_fingerprint(),
+                               grac.basis_fingerprint(), grac.grid_fingerprint());
+            result["isa_dimensions"] =
+                py::make_tuple(isa.point_count(), isa.grid_dimension(), isa.site_count());
+            result["isa_data_sizes"] =
+                py::make_tuple(isa.points().size(), isa.quadrature_weights().size(),
+                               isa.partition_weights().size());
+            return result;
+        },
+        "chf_exchange"_a, "alda_kernel"_a, "neutral_energy"_a, "cation_energy"_a,
+        "homo_energy"_a, "ionization_potential"_a, "grac_shift"_a,
+        "method_fingerprint"_a, "functional_fingerprint"_a, "basis_fingerprint"_a,
+        "grid_fingerprint"_a, "point_count"_a, "grid_dimension"_a, "site_count"_a,
+        "points"_a, "quadrature_weights"_a, "partition_weights"_a);
     m.def("_atomic_polarizability_local_spherical_dipole_to_cartesian",
           [](const Matrix& spherical) {
               if (spherical.nirrep() != 1 || spherical.nrow() != 15 || spherical.ncol() != 15) {

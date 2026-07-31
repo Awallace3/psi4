@@ -20,6 +20,7 @@
 #include <array>
 #include <cmath>
 #include <complex>
+#include <limits>
 #include <queue>
 #include <sstream>
 #include <string>
@@ -437,6 +438,118 @@ LocalizationResiduals localization_residuals(const SitePairResponse& before, con
 
 }  // namespace
 
+ResponseKernel::ResponseKernel(double chf_exchange, double alda_kernel)
+    : chf_exchange_(chf_exchange), alda_kernel_(alda_kernel) {
+    if (!std::isfinite(chf_exchange_) || chf_exchange_ != 0.25) {
+        throw PSIEXCEPTION("ResponseKernel: CHF exchange coefficient must be exactly 0.25");
+    }
+    if (!std::isfinite(alda_kernel_) || alda_kernel_ != 0.75) {
+        throw PSIEXCEPTION("ResponseKernel: ALDA coefficient must be exactly 0.75");
+    }
+}
+
+GRACProvenance::GRACProvenance(double neutral_energy, double cation_energy, double homo_energy,
+                               double ionization_potential, double shift, std::string method_fingerprint,
+                               std::string functional_fingerprint, std::string basis_fingerprint,
+                               std::string grid_fingerprint)
+    : neutral_energy_(neutral_energy),
+      cation_energy_(cation_energy),
+      homo_energy_(homo_energy),
+      ionization_potential_(ionization_potential),
+      shift_(shift),
+      method_fingerprint_(std::move(method_fingerprint)),
+      functional_fingerprint_(std::move(functional_fingerprint)),
+      basis_fingerprint_(std::move(basis_fingerprint)),
+      grid_fingerprint_(std::move(grid_fingerprint)) {
+    const std::array<double, 5> values{
+        neutral_energy_, cation_energy_, homo_energy_, ionization_potential_, shift_};
+    if (!std::all_of(values.begin(), values.end(), [](double value) { return std::isfinite(value); })) {
+        throw PSIEXCEPTION("GRACProvenance: all energy metadata must be finite");
+    }
+    const auto has_content = [](const std::string& fingerprint) {
+        return fingerprint.find_first_not_of(" \t\r\n") != std::string::npos;
+    };
+    if (!has_content(method_fingerprint_) || !has_content(functional_fingerprint_) ||
+        !has_content(basis_fingerprint_) || !has_content(grid_fingerprint_)) {
+        throw PSIEXCEPTION("GRACProvenance: method, functional, basis, and grid fingerprints are required");
+    }
+
+    const double derived_ionization_potential = cation_energy_ - neutral_energy_;
+    const double derived_shift = ionization_potential_ + homo_energy_;
+    if (!std::isfinite(derived_ionization_potential) || !std::isfinite(derived_shift)) {
+        throw PSIEXCEPTION("GRACProvenance: derived ionization potential and shift must be finite");
+    }
+    const auto consistent = [](double supplied, double derived) {
+        const double scale = std::max({1.0, std::abs(supplied), std::abs(derived)});
+        return std::abs(supplied - derived) <= kValidationTolerance * scale;
+    };
+    if (!consistent(ionization_potential_, derived_ionization_potential)) {
+        throw PSIEXCEPTION(
+            "GRACProvenance: ionization potential must equal cation energy minus neutral energy");
+    }
+    if (!consistent(shift_, derived_shift)) {
+        throw PSIEXCEPTION("GRACProvenance: GRAC shift must equal ionization potential plus HOMO energy");
+    }
+}
+
+ISAWeights::ISAWeights(std::size_t point_count, std::size_t grid_dimension, std::size_t site_count,
+                       std::vector<double> points, std::vector<double> quadrature_weights,
+                       std::vector<double> partition_weights)
+    : point_count_(point_count),
+      grid_dimension_(grid_dimension),
+      site_count_(site_count),
+      points_(std::move(points)),
+      quadrature_weights_(std::move(quadrature_weights)),
+      partition_weights_(std::move(partition_weights)) {
+    if (point_count_ == 0) throw PSIEXCEPTION("ISAWeights: point count must be positive");
+    if (grid_dimension_ != 3) throw PSIEXCEPTION("ISAWeights: grid dimension must be exactly 3");
+    if (site_count_ == 0) throw PSIEXCEPTION("ISAWeights: site count must be positive");
+    if (point_count_ > std::numeric_limits<std::size_t>::max() / grid_dimension_ ||
+        points_.size() != point_count_ * grid_dimension_) {
+        throw PSIEXCEPTION("ISAWeights: point coordinates do not match declared dimensions");
+    }
+    if (quadrature_weights_.size() != point_count_) {
+        throw PSIEXCEPTION("ISAWeights: quadrature weights do not match declared dimensions");
+    }
+    if (point_count_ > std::numeric_limits<std::size_t>::max() / site_count_ ||
+        partition_weights_.size() != point_count_ * site_count_) {
+        throw PSIEXCEPTION("ISAWeights: partition weights do not match declared dimensions");
+    }
+    if (!std::all_of(points_.begin(), points_.end(), [](double value) { return std::isfinite(value); }) ||
+        !std::all_of(quadrature_weights_.begin(), quadrature_weights_.end(),
+                     [](double value) { return std::isfinite(value) && value > 0.0; }) ||
+        !std::all_of(partition_weights_.begin(), partition_weights_.end(),
+                     [](double value) { return std::isfinite(value) && value >= 0.0; })) {
+        throw PSIEXCEPTION(
+            "ISAWeights: coordinates and weights must be finite; quadrature weights must be positive "
+            "and partition weights must be nonnegative");
+    }
+    for (std::size_t point = 0; point < point_count_; ++point) {
+        double sum = 0.0;
+        for (std::size_t site = 0; site < site_count_; ++site) {
+            sum += partition_weights_[point * site_count_ + site];
+        }
+        if (!std::isfinite(sum) || std::abs(sum - 1.0) > kValidationTolerance) {
+            throw PSIEXCEPTION("ISAWeights: partition unity failed at a grid point");
+        }
+    }
+}
+
+ISAPolResponseProvider::ISAPolResponseProvider(std::shared_ptr<Wavefunction> wfn, ResponseKernel kernel,
+                                               GRACProvenance grac, ISAWeights isa_weights)
+    : wfn_(std::move(wfn)),
+      kernel_(std::move(kernel)),
+      grac_(std::move(grac)),
+      isa_weights_(std::move(isa_weights)) {
+    if (!wfn_) throw PSIEXCEPTION("ISAPolResponseProvider: wavefunction is null");
+}
+
+std::vector<SitePairResponse> ISAPolResponseProvider::compute_isapol_response(
+    const FrequencyGrid&) const {
+    throw PSIEXCEPTION(
+        "ISAPolResponseProvider: native point-response execution is not implemented; no response was published");
+}
+
 Matrix lw_graph_operator(const BondGraph& graph) { return to_psi_matrix(make_graph_operator(graph)); }
 
 std::pair<Matrix, std::vector<double>> lw_graph_pseudoinverse(const BondGraph& graph) {
@@ -844,7 +957,9 @@ void AtomicPolarizabilityCalculator::compute() {
     // Output arrays must not be allocated or published until every native response
     // prerequisite has been validated. The response provider is added in a later stage.
     validate_wavefunction_prerequisites();
-    throw PSIEXCEPTION("AtomicPolarizabilityCalculator: required native response data are unavailable");
+    throw PSIEXCEPTION(
+        "AtomicPolarizabilityCalculator: required native response data are unavailable: missing GRAC "
+        "provenance and ISA weights");
 }
 
 }  // namespace psi

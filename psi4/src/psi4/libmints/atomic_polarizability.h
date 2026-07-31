@@ -20,6 +20,7 @@
 #include <array>
 #include <cstddef>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -48,6 +49,87 @@ using SitePosition = std::array<double, 3>;
 struct PSI_API SitePairResponse {
     std::vector<SitePosition> positions;
     std::vector<L3WorkingMatrix> blocks;
+};
+
+/** Immutable protocol response-kernel selection, independent of the ground-state functional. */
+class PSI_API ResponseKernel {
+   public:
+    ResponseKernel(double chf_exchange, double alda_kernel);
+
+    double chf_exchange() const { return chf_exchange_; }
+    double alda_kernel() const { return alda_kernel_; }
+
+   private:
+    const double chf_exchange_;
+    const double alda_kernel_;
+};
+
+/** Immutable attestation of the neutral/cation calculations used to construct a GRAC state. */
+class PSI_API GRACProvenance {
+   public:
+    GRACProvenance(double neutral_energy, double cation_energy, double homo_energy,
+                   double ionization_potential, double shift, std::string method_fingerprint,
+                   std::string functional_fingerprint, std::string basis_fingerprint,
+                   std::string grid_fingerprint);
+
+    double neutral_energy() const { return neutral_energy_; }
+    double cation_energy() const { return cation_energy_; }
+    double homo_energy() const { return homo_energy_; }
+    double ionization_potential() const { return ionization_potential_; }
+    double shift() const { return shift_; }
+    const std::string& method_fingerprint() const { return method_fingerprint_; }
+    const std::string& functional_fingerprint() const { return functional_fingerprint_; }
+    const std::string& basis_fingerprint() const { return basis_fingerprint_; }
+    const std::string& grid_fingerprint() const { return grid_fingerprint_; }
+
+   private:
+    const double neutral_energy_;
+    const double cation_energy_;
+    const double homo_energy_;
+    const double ionization_potential_;
+    const double shift_;
+    const std::string method_fingerprint_;
+    const std::string functional_fingerprint_;
+    const std::string basis_fingerprint_;
+    const std::string grid_fingerprint_;
+};
+
+/** Immutable, caller-supplied ISA grid and point-major stockholder partition data. */
+class PSI_API ISAWeights {
+   public:
+    ISAWeights(std::size_t point_count, std::size_t grid_dimension, std::size_t site_count,
+               std::vector<double> points, std::vector<double> quadrature_weights,
+               std::vector<double> partition_weights);
+
+    std::size_t point_count() const { return point_count_; }
+    std::size_t grid_dimension() const { return grid_dimension_; }
+    std::size_t site_count() const { return site_count_; }
+    const std::vector<double>& points() const { return points_; }
+    const std::vector<double>& quadrature_weights() const { return quadrature_weights_; }
+    const std::vector<double>& partition_weights() const { return partition_weights_; }
+
+   private:
+    const std::size_t point_count_;
+    const std::size_t grid_dimension_;
+    const std::size_t site_count_;
+    const std::vector<double> points_;
+    const std::vector<double> quadrature_weights_;
+    const std::vector<double> partition_weights_;
+};
+
+/** Production response interface; one complete response is returned per frequency-grid point. */
+class PSI_API ISAPolResponseProvider {
+   public:
+    ISAPolResponseProvider(std::shared_ptr<Wavefunction> wfn, ResponseKernel kernel,
+                           GRACProvenance grac, ISAWeights isa_weights);
+
+    std::vector<SitePairResponse> compute_isapol_response(const FrequencyGrid& frequencies) const;
+
+   private:
+    const std::shared_ptr<Wavefunction> wfn_;
+    const ResponseKernel kernel_;
+    const GRACProvenance grac_;
+    const ISAWeights isa_weights_;
 };
 
 /** Unweighted undirected graph over the polarizable sites. */
