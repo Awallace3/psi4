@@ -54,10 +54,10 @@ from ..solvent.efp import get_qm_atoms_opts, modify_Fock_induced, modify_Fock_pe
 
 
 def scf_compute_energy(self):
-    """Run and finalize SCF inside a C++-owned response-provenance scope."""
-    # Scope construction clears any earlier seal before initialization or DF preiterations.
-    # Exception unwinding and every path without success() leave the state unsealed.
-    with self._response_provenance_scope() as provenance:
+    """Run SCF and let C++ verify/capture response provenance after finalization."""
+    # Revocation is harmless and clears every earlier seal/metric before any new compute work.
+    self._reset_response_provenance_tracking()
+    try:
         if core.get_option('SCF', 'DF_SCF_GUESS') and (core.get_global_option('SCF_TYPE') == 'DIRECT'):
             # speed up DIRECT algorithm (recomputes full (non-DF) integrals
             #   each iter) by first converging via fast DF iterations, then
@@ -80,26 +80,33 @@ def scf_compute_energy(self):
         else:
             self.initialize()
         self.iteration_energies = []
-        primary_converged = False
 
         try:
             self.iterations()
         except SCFConvergenceError as e:
+            # Preserve legacy tolerated-nonconvergence semantics while making the
+            # response record permanently ineligible for this compute attempt.
+            self._invalidate_response_provenance()
             if core.get_option("SCF", "FAIL_ON_MAXITER"):
                 core.print_out("  Failed to converge.\n")
                 raise e
             else:
                 core.print_out("  Energy and/or wave function did not converge, but proceeding anyway.\n\n")
         else:
-            primary_converged = True
             core.print_out("  Energy and wave function converged.\n\n")
 
         self._response_stability_exhausted = False
         scf_energy = self.finalize_energy()
-        if primary_converged and not self._response_stability_exhausted:
-            # The C++ scope snapshots and seals only from __exit__ after this successful boundary.
-            provenance.success()
+        if self._response_stability_exhausted:
+            self._invalidate_response_provenance()
+        else:
+            # No caller success bit is accepted: C++ rechecks its recorded metrics,
+            # thresholds, final-grid state, native finalization, and complete structure.
+            self._capture_response_provenance_if_converged()
         return scf_energy
+    except BaseException:
+        self._invalidate_response_provenance()
+        raise
 
 
 def _build_jk(wfn, memory):
@@ -533,6 +540,10 @@ def scf_iterate(self, e_conv=None, d_conv=None):
                 if (self.iteration_ == 0) and self.reset_occ_:
                     self.reset_occupation()
                     self.find_occupation()
+
+        # Record the current energy/residual and actual COSX grid in C++; no
+        # caller-provided success bit or final-grid token participates in capture.
+        self._record_response_iteration_state()
 
         # Form new density matrix
         core.timer_on("HF: Form D")

@@ -104,6 +104,12 @@ struct PSI_API ResponseFunctionalState {
     bool same_ground_state(const ResponseFunctionalState& other) const;
 };
 
+struct PSI_API ResponseGridBlockState {
+    std::size_t offset{};
+    std::size_t point_count{};
+    std::vector<int> functions_local_to_global;
+};
+
 struct PSI_API ResponseSCFProvenance {
     ResponseFunctionalState functional;
     std::vector<ResponseFunctionalState> functional_workers;
@@ -118,6 +124,10 @@ struct PSI_API ResponseSCFProvenance {
     std::shared_ptr<const Vector> occupation_b;
     std::shared_ptr<const Matrix> Da;
     std::shared_ptr<const Matrix> Db;
+    std::vector<double> grid_points;
+    std::vector<double> grid_weights;
+    std::vector<ResponseGridBlockState> grid_blocks;
+    bool potential_grac_initialized{};
     double energy{};
     double occupied_homo{};
     int charge{};
@@ -126,8 +136,6 @@ struct PSI_API ResponseSCFProvenance {
     int nbeta{};
     std::string reference;
 };
-
-class HFResponseProvenanceScope;
 
 class HF : public Wavefunction {
    protected:
@@ -175,14 +183,20 @@ class HF : public Wavefunction {
     /// Legacy native SCF convergence bookkeeping (not response provenance).
     bool converged_;
 
-    /// C++-owned provenance seal and generation for one complete Python SCF callback.
+    /// C++-verified convergence/finalization facts and their frozen response record.
     bool response_state_sealed_;
-    std::size_t response_scope_generation_;
+    bool response_iteration_metrics_valid_;
+    bool response_finalize_completed_;
+    bool response_compute_failed_;
+    bool response_last_iteration_final_grid_;
+    double response_e_convergence_;
+    double response_d_convergence_;
+    double response_previous_iteration_energy_;
+    double response_last_energy_change_;
+    double response_last_density_norm_;
     std::shared_ptr<const ResponseSCFProvenance> response_provenance_;
 
-    void close_response_provenance_scope(std::size_t generation, bool successful);
     std::shared_ptr<const ResponseSCFProvenance> capture_response_provenance() const;
-    friend class HFResponseProvenanceScope;
 
     /// Nuclear repulsion energy
     double nuclearrep_;
@@ -397,7 +411,10 @@ class HF : public Wavefunction {
     std::shared_ptr<const SuperFunctional> response_functional() const { return functional_; }
     bool response_state_sealed() const { return response_state_sealed_; }
     const std::shared_ptr<const ResponseSCFProvenance>& response_provenance() const { return response_provenance_; }
-    std::shared_ptr<HFResponseProvenanceScope> response_provenance_scope();
+    void reset_response_provenance_tracking();
+    void invalidate_response_provenance();
+    void record_response_iteration_state();
+    bool capture_response_provenance_if_converged();
 
     /// The DFT Potential object (or null if it has been deleted)
     /// This needs to be virtual so that subclasses can enforce their
@@ -532,26 +549,6 @@ class HF : public Wavefunction {
     }
     void clear_external_cpscf_perturbations() { external_cpscf_perturbations_.clear(); }
     void compute_fvpi();
-};
-
-/** Ephemeral capability for one active Python SCF compute callback. */
-class PSI_API HFResponseProvenanceScope {
-   public:
-    ~HFResponseProvenanceScope();
-    HFResponseProvenanceScope(const HFResponseProvenanceScope&) = delete;
-    HFResponseProvenanceScope& operator=(const HFResponseProvenanceScope&) = delete;
-
-    void success();
-    void close(bool no_exception);
-
-   private:
-    friend class HF;
-    HFResponseProvenanceScope(std::shared_ptr<HF> owner, std::size_t generation);
-
-    std::shared_ptr<HF> owner_;
-    std::size_t generation_{};
-    bool active_{true};
-    bool success_requested_{false};
 };
 }  // namespace scf
 }  // namespace psi

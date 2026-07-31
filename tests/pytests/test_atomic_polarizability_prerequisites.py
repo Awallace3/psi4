@@ -59,9 +59,26 @@ def _context(states):
     return psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, cation)
 
 
-def test_hf_has_no_callable_response_provenance_setter():
+def test_hf_has_only_fact_checking_response_provenance_capture():
+    assert not hasattr(psi4.core, "_HFResponseProvenanceScope")
+    assert not hasattr(psi4.core.HF, "_response_provenance_scope")
     assert not hasattr(psi4.core.HF, "_set_response_state_converged")
     assert not hasattr(psi4.core.HF, "_seal_response_provenance")
+    assert hasattr(psi4.core.HF, "_capture_response_provenance_if_converged")
+
+
+def test_old_scope_success_exit_forge_sequence_is_impossible(grac_states):
+    grac, _, _, _ = grac_states
+    with pytest.raises(AttributeError):
+        scope = grac._response_provenance_scope()
+        scope.success()
+        scope.__exit__(None, None, None)
+
+
+def test_capture_on_genuinely_finalized_converged_state_is_harmless(grac_states):
+    grac, precursor, cation, _ = grac_states
+    assert grac._capture_response_provenance_if_converged() is True
+    psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, cation)
 
 
 def test_response_kernel_is_exact_and_rejects_nextafter_neighbors():
@@ -143,6 +160,7 @@ def test_seal_occurs_only_after_successful_finalize_energy(grac_states, monkeypa
     observed_unsealed = []
 
     def observing_finalize(self):
+        assert self._capture_response_provenance_if_converged() is False
         with pytest.raises(RuntimeError, match=r"provenance seal"):
             psi4.core._atomic_polarizability_make_frozen_response_context(self, precursor, cation)
         observed_unsealed.append(True)
@@ -157,6 +175,30 @@ def test_seal_occurs_only_after_successful_finalize_energy(grac_states, monkeypa
         psi4.set_options({"dft_grac_shift": 0.0})
     assert observed_unsealed
     psi4.core._atomic_polarizability_make_frozen_response_context(finalized, precursor, cation)
+
+
+def test_tolerated_unconverged_scf_cannot_capture_provenance(grac_states):
+    _, precursor, _, shift = grac_states
+    psi4.set_options(
+        {
+            "reference": "rhf",
+            "basis": "sto-3g",
+            "dft_grac_shift": shift,
+            "maxiter": 1,
+            "fail_on_maxiter": False,
+        }
+    )
+    try:
+        _, unconverged = psi4.energy("pbe0", molecule=precursor.molecule(), return_wfn=True)
+        assert unconverged._capture_response_provenance_if_converged() is False
+    finally:
+        psi4.set_options(
+            {
+                "dft_grac_shift": 0.0,
+                "maxiter": 100,
+                "fail_on_maxiter": True,
+            }
+        )
 
 
 def test_finalize_exception_leaves_provenance_unsealed(grac_states, monkeypatch):
@@ -178,6 +220,7 @@ def test_finalize_exception_leaves_provenance_unsealed(grac_states, monkeypatch)
         monkeypatch.setattr(psi4.core.HF, "finalize_energy", original_finalize)
         psi4.set_options({"dft_grac_shift": 0.0})
     assert failed
+    assert failed[0]._capture_response_provenance_if_converged() is False
     with pytest.raises(RuntimeError, match=r"provenance seal"):
         psi4.core._atomic_polarizability_make_frozen_response_context(failed[0], precursor, cation)
 
@@ -186,6 +229,25 @@ def test_ordinary_pbe0_rejects_even_when_calculation_metadata_is_available(grac_
     _, precursor, cation, _ = grac_states
     with pytest.raises(RuntimeError, match=r"needs_grac|actual GRAC"):
         psi4.core._atomic_polarizability_make_frozen_response_context(precursor, precursor, cation)
+
+
+def test_post_seal_vbase_reinitialize_cannot_replace_frozen_grid(grac_states):
+    grac, _, _, _ = grac_states
+    before = _context(grac_states)
+    before_summary = before.summary()
+    before_grid = before.grid_snapshot()
+    potential = grac.V_potential()
+    try:
+        potential.finalize()
+        psi4.set_options({"dft_radial_points": 13})
+        potential.initialize()
+        after = _context(grac_states)
+        assert after.summary() == before_summary
+        assert after.grid_snapshot() == before_grid
+    finally:
+        potential.finalize()
+        psi4.set_options({"dft_radial_points": 12})
+        potential.initialize()
 
 
 def test_factory_uses_sealed_shift_and_energies_not_later_mutable_values(grac_states):

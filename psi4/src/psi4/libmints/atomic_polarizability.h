@@ -90,9 +90,10 @@ struct PSI_API GRACProvenance {
 };
 
 /**
- * Frozen single-thread response state with cloned electronic/functional/molecular data.
+ * Frozen single-thread response state with cloned electronic/functional/molecular/grid data.
  * The orbital BasisSet is deliberately retained by const alias under an explicit no-mutation
- * contract; its complete value snapshot is checked immediately before any response path.
+ * contract and rechecked before future use. Production compute must resolve exclusive ownership
+ * across check/use; this alias is not a current response-success claim.
  */
 class PSI_API FrozenResponseContext {
    public:

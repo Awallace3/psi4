@@ -319,16 +319,6 @@ void export_wavefunction(py::module& m) {
         .def("PCM_enabled", &Wavefunction::PCM_enabled, "Whether running a PCM calculation")
         .def("get_density", [](Wavefunction& wfn, std::string name) {return wfn.density_map_[name] ;}, "Experimental!");
 
-    py::class_<scf::HFResponseProvenanceScope, std::shared_ptr<scf::HFResponseProvenanceScope>>(
-        m, "_HFResponseProvenanceScope")
-        .def("__enter__", [](const std::shared_ptr<scf::HFResponseProvenanceScope>& scope) { return scope; })
-        .def("success", &scf::HFResponseProvenanceScope::success)
-        .def("__exit__", [](scf::HFResponseProvenanceScope& scope, const py::object& exception_type,
-                             const py::object&, const py::object&) {
-            scope.close(exception_type.is_none());
-            return false;
-        });
-
     py::class_<scf::HF, std::shared_ptr<scf::HF>, Wavefunction>(m, "HF", "docstring")
         .def("compute_fvpi", &scf::HF::compute_fvpi, "Update number of frozen virtuals")
         .def("form_C", &scf::HF::form_C, "Forms the Orbital Matrices from the current Fock Matrices.", "shift"_a = 0.0)
@@ -350,8 +340,14 @@ void export_wavefunction(py::module& m) {
         .def("cphf_solve", &scf::HF::cphf_solve, "x_vec"_a, "conv_tol"_a, "max_iter"_a, "print_lvl"_a = 2,
              "Solves the CPHF equations for a given set of x vectors.")
         .def("cphf_converged", &scf::HF::cphf_converged, "Adds occupied guess alpha orbitals.")
-        .def("_response_provenance_scope", &scf::HF::response_provenance_scope,
-             "Internal C++-owned scope for one complete Python SCF callback.")
+        .def("_reset_response_provenance_tracking", &scf::HF::reset_response_provenance_tracking,
+             "Internal revocation/reset at the start of an SCF compute.")
+        .def("_invalidate_response_provenance", &scf::HF::invalidate_response_provenance,
+             "Internal fail-closed revocation after an SCF compute failure.")
+        .def("_record_response_iteration_state", &scf::HF::record_response_iteration_state,
+             "Record independently computed current SCF metrics and actual grid state.")
+        .def("_capture_response_provenance_if_converged", &scf::HF::capture_response_provenance_if_converged,
+             "Verify current convergence/finalization facts and capture response provenance if eligible.")
         .def("guess_Ca", &scf::HF::guess_Ca, "Sets the guess Alpha Orbital Matrix")
         .def("guess_Cb", &scf::HF::guess_Cb, "Sets the guess Beta Orbital Matrix")
         .def_property("reset_occ_", &scf::HF::reset_occ, &scf::HF::set_reset_occ,

@@ -82,6 +82,13 @@ void export_oeprop(py::module &m) {
             result["basis_detached"] = false;
             return result;
         })
+        .def("grid_snapshot", [](const FrozenResponseContext& context) {
+            py::list blocks;
+            for (const auto& block : context.grid_blocks())
+                blocks.append(py::make_tuple(block.point_offset, block.point_count,
+                                             block.functions_local_to_global));
+            return py::make_tuple(context.grid_points(), context.grid_weights(), blocks);
+        })
         .def("state_checksum", [](const FrozenResponseContext& context) {
             const auto matrix_sum_squares = [](const std::shared_ptr<const Matrix>& matrix) {
                 double result = 0.0;

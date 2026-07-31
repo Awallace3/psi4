@@ -27,8 +27,6 @@
 #include <string>
 #include <utility>
 
-#include "psi4/libfock/cubature.h"
-#include "psi4/libfock/v.h"
 #include "psi4/libfunctional/LibXCfunctional.h"
 #include "psi4/libfunctional/functional.h"
 #include "psi4/libfunctional/superfunctional.h"
@@ -574,9 +572,8 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
     }
     const auto functional = grac_seal.sealed_functional;
     const auto precursor_functional = precursor_seal.sealed_functional;
-    const auto potential = grac_rhf->V_potential();
-    if (!functional || !precursor_functional || !functional->needs_xc() || !potential ||
-        !potential->grac_initialized() || !grac_seal.functional.needs_grac) {
+    if (!functional || !precursor_functional || !functional->needs_xc() ||
+        !grac_seal.potential_grac_initialized || !grac_seal.functional.needs_grac) {
         throw PSIEXCEPTION("FrozenResponseContext: neutral must contain an actual applied GRAC RKS state with needs_grac");
     }
     if (precursor_seal.functional.needs_grac ||
@@ -650,29 +647,20 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
         throw PSIEXCEPTION("FrozenResponseContext: actual applied GRAC shift must equal IP plus HOMO energy");
     }
 
-    const auto grid = potential->response_grid();
-    if (!grid || grid->npoints() <= 0 || grid->blocks().empty())
-        throw PSIEXCEPTION("FrozenResponseContext: actual effective RKS grid is unavailable");
-    std::vector<double> grid_points;
-    std::vector<double> grid_weights;
+    if (grac_seal.grid_weights.empty() || grac_seal.grid_points.size() != grac_seal.grid_weights.size() * 3 ||
+        grac_seal.grid_blocks.empty())
+        throw PSIEXCEPTION("FrozenResponseContext: sealed exact ordered RKS grid is unavailable");
     std::vector<FrozenGridBlock> grid_blocks;
-    grid_points.reserve(static_cast<std::size_t>(grid->npoints()) * 3);
-    grid_weights.reserve(static_cast<std::size_t>(grid->npoints()));
-    std::size_t offset = 0;
-    for (const auto& block : grid->blocks()) {
-        if (!block || block->npoints() == 0) throw PSIEXCEPTION("FrozenResponseContext: effective grid contains an empty block");
-        grid_blocks.push_back({offset, block->npoints(), block->functions_local_to_global()});
-        for (std::size_t point = 0; point < block->npoints(); ++point) {
-            const std::array<double, 4> values{block->x()[point], block->y()[point], block->z()[point], block->w()[point]};
-            if (!std::all_of(values.begin(), values.end(), [](double value) { return std::isfinite(value); }))
-                throw PSIEXCEPTION("FrozenResponseContext: effective grid contains nonfinite data");
-            grid_points.insert(grid_points.end(), values.begin(), values.begin() + 3);
-            grid_weights.push_back(values[3]);
-        }
-        offset += block->npoints();
+    grid_blocks.reserve(grac_seal.grid_blocks.size());
+    std::size_t grid_offset = 0;
+    for (const auto& block : grac_seal.grid_blocks) {
+        if (block.offset != grid_offset || block.point_count == 0)
+            throw PSIEXCEPTION("FrozenResponseContext: sealed RKS grid block ordering is inconsistent");
+        grid_blocks.push_back({block.offset, block.point_count, block.functions_local_to_global});
+        grid_offset += block.point_count;
     }
-    if (offset != static_cast<std::size_t>(grid->npoints()))
-        throw PSIEXCEPTION("FrozenResponseContext: effective grid block cardinality is inconsistent");
+    if (grid_offset != grac_seal.grid_weights.size())
+        throw PSIEXCEPTION("FrozenResponseContext: sealed RKS grid block cardinality is inconsistent");
 
     std::vector<SitePosition> sites;
     sites.reserve(grac_molecule->natom());
@@ -688,8 +676,8 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
         std::make_shared<Vector>(grac_seal.occupation_a->clone()),
         std::make_shared<Vector>(grac_seal.occupation_b->clone()),
         grac_seal.Da->clone(), grac_seal.Db->clone(), grac_seal.energy, std::move(molecule_copy),
-        grac_hf->basisset(), grac_seal.basis, functional, std::move(sites), std::move(grid_points),
-        std::move(grid_weights), std::move(grid_blocks), std::move(provenance), grac_seal.functional.name,
+        grac_hf->basisset(), grac_seal.basis, functional, std::move(sites), grac_seal.grid_points,
+        grac_seal.grid_weights, std::move(grid_blocks), std::move(provenance), grac_seal.functional.name,
         kProtocolGRACX, kProtocolGRACC));
 }
 

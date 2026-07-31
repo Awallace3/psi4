@@ -27,6 +27,7 @@
  */
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -49,6 +50,7 @@
 #include "psi4/libpsio/psio.h"
 #include "psi4/libiwl/iwl.hpp"
 #include "psi4/libqt/qt.h"
+#include "psi4/libfock/cubature.h"
 #include "psi4/libfock/jk.h"
 #include "psi4/libfock/v.h"
 #include "psi4/libfunctional/functional.h"
@@ -192,43 +194,90 @@ HF::HF(SharedWavefunction ref_wfn, std::shared_ptr<SuperFunctional> func, Option
 
 HF::~HF() {}
 
-HFResponseProvenanceScope::HFResponseProvenanceScope(std::shared_ptr<HF> owner, std::size_t generation)
-    : owner_(std::move(owner)), generation_(generation) {}
-
-HFResponseProvenanceScope::~HFResponseProvenanceScope() {
-    if (active_ && owner_) owner_->close_response_provenance_scope(generation_, false);
+void HF::reset_response_provenance_tracking() {
+    response_state_sealed_ = false;
+    response_iteration_metrics_valid_ = false;
+    response_finalize_completed_ = false;
+    response_compute_failed_ = false;
+    response_last_iteration_final_grid_ = false;
+    response_e_convergence_ = options_.get_double("E_CONVERGENCE");
+    response_d_convergence_ = options_.get_double("D_CONVERGENCE");
+    response_previous_iteration_energy_ = std::numeric_limits<double>::quiet_NaN();
+    response_last_energy_change_ = std::numeric_limits<double>::quiet_NaN();
+    response_last_density_norm_ = std::numeric_limits<double>::quiet_NaN();
+    response_provenance_.reset();
 }
 
-void HFResponseProvenanceScope::success() {
-    if (!active_) throw PSIEXCEPTION("SCF response provenance capability is no longer active");
-    success_requested_ = true;
+void HF::invalidate_response_provenance() {
+    response_state_sealed_ = false;
+    response_iteration_metrics_valid_ = false;
+    response_finalize_completed_ = false;
+    response_compute_failed_ = true;
+    response_last_iteration_final_grid_ = false;
+    response_previous_iteration_energy_ = std::numeric_limits<double>::quiet_NaN();
+    response_last_energy_change_ = std::numeric_limits<double>::quiet_NaN();
+    response_last_density_norm_ = std::numeric_limits<double>::quiet_NaN();
+    response_provenance_.reset();
 }
 
-void HFResponseProvenanceScope::close(bool no_exception) {
-    if (!active_) return;
-    active_ = false;
-    if (owner_) owner_->close_response_provenance_scope(generation_, no_exception && success_requested_);
-    owner_.reset();
+void HF::record_response_iteration_state() {
+    response_iteration_metrics_valid_ = false;
+    response_last_iteration_final_grid_ = false;
+    try {
+        const auto energy_it = energies_.find("Total Energy");
+        if (energy_it == energies_.end() || !std::isfinite(energy_it->second) || !X_ || !S_ || !Fa() || !Da()) return;
+
+        const double current_energy = energy_it->second;
+        const double previous_energy = response_previous_iteration_energy_;
+        response_previous_iteration_energy_ = current_energy;
+        if (!std::isfinite(previous_energy)) return;
+
+        const auto gradient_a = form_FDSmSDF(Fa(), Da());
+        double density_norm = options_.get_bool("DIIS_RMS_ERROR") ? gradient_a->rms() : gradient_a->absmax();
+        if (!same_a_b_dens()) {
+            if (!Fb() || !Db()) return;
+            const auto gradient_b = form_FDSmSDF(Fb(), Db());
+            if (options_.get_bool("DIIS_RMS_ERROR")) {
+                density_norm = std::sqrt(0.5 * (density_norm * density_norm + gradient_b->rms() * gradient_b->rms()));
+            } else {
+                density_norm = std::max(density_norm, gradient_b->absmax());
+            }
+        }
+
+        bool final_grid = true;
+        if (scf_type_.find("COSX") != std::string::npos) {
+            const auto composite_jk = std::dynamic_pointer_cast<CompositeJK>(jk_);
+            final_grid = composite_jk && composite_jk->get_COSX_grid() == "Final";
+        }
+        response_last_energy_change_ = current_energy - previous_energy;
+        response_last_density_norm_ = density_norm;
+        response_last_iteration_final_grid_ = final_grid;
+        response_iteration_metrics_valid_ = std::isfinite(response_last_energy_change_) && std::isfinite(density_norm);
+    } catch (...) {
+        response_iteration_metrics_valid_ = false;
+        response_last_iteration_final_grid_ = false;
+    }
 }
 
-std::shared_ptr<HFResponseProvenanceScope> HF::response_provenance_scope() {
+bool HF::capture_response_provenance_if_converged() {
+    // Repeated calls on an already captured state are deliberately idempotent: later
+    // potential/grid option mutation cannot move the single successful boundary.
+    if (response_state_sealed_ && response_provenance_) return true;
     response_state_sealed_ = false;
     response_provenance_.reset();
-    ++response_scope_generation_;
-    auto self = std::dynamic_pointer_cast<HF>(shared_from_this());
-    if (!self) throw PSIEXCEPTION("SCF response provenance scope requires shared HF ownership");
-    return std::shared_ptr<HFResponseProvenanceScope>(
-        new HFResponseProvenanceScope(std::move(self), response_scope_generation_));
-}
-
-void HF::close_response_provenance_scope(std::size_t generation, bool successful) {
-    if (generation != response_scope_generation_) return;
-    response_state_sealed_ = false;
-    response_provenance_.reset();
-    if (!successful) return;
-    auto captured = capture_response_provenance();
-    response_provenance_ = std::move(captured);
-    response_state_sealed_ = true;
+    if (response_compute_failed_ || !response_finalize_completed_ || !response_iteration_metrics_valid_ ||
+        !response_last_iteration_final_grid_ || !std::isfinite(response_e_convergence_) ||
+        !std::isfinite(response_d_convergence_) || response_e_convergence_ <= 0.0 || response_d_convergence_ <= 0.0 ||
+        !(std::abs(response_last_energy_change_) < response_e_convergence_) ||
+        !(response_last_density_norm_ < response_d_convergence_)) return false;
+    try {
+        response_provenance_ = capture_response_provenance();
+        response_state_sealed_ = static_cast<bool>(response_provenance_);
+    } catch (...) {
+        response_provenance_.reset();
+        response_state_sealed_ = false;
+    }
+    return response_state_sealed_;
 }
 
 std::shared_ptr<const ResponseSCFProvenance> HF::capture_response_provenance() const {
@@ -237,13 +286,37 @@ std::shared_ptr<const ResponseSCFProvenance> HF::capture_response_provenance() c
         throw PSIEXCEPTION("SCF response provenance: finalized electronic state is incomplete");
     auto result = std::make_shared<ResponseSCFProvenance>();
     result->functional = capture_functional_state(functional_);
-    if (functional_->needs_grac()) {
+    if (functional_->needs_xc()) {
         const auto potential = V_potential();
-        if (!potential) throw PSIEXCEPTION("SCF response provenance: GRAC potential is unavailable");
-        for (const auto& worker : potential->response_functional_workers())
-            result->functional_workers.push_back(capture_functional_state(worker));
-        if (result->functional_workers.empty())
-            throw PSIEXCEPTION("SCF response provenance: GRAC functional workers are unavailable");
+        if (!potential) throw PSIEXCEPTION("SCF response provenance: DFT potential is unavailable");
+        result->potential_grac_initialized = potential->grac_initialized();
+        if (functional_->needs_grac()) {
+            for (const auto& worker : potential->response_functional_workers())
+                result->functional_workers.push_back(capture_functional_state(worker));
+            if (result->functional_workers.empty())
+                throw PSIEXCEPTION("SCF response provenance: GRAC functional workers are unavailable");
+        }
+        const auto grid = potential->response_grid();
+        if (!grid || grid->npoints() <= 0 || grid->blocks().empty())
+            throw PSIEXCEPTION("SCF response provenance: exact ordered DFT response grid is unavailable");
+        result->grid_points.reserve(static_cast<std::size_t>(grid->npoints()) * 3);
+        result->grid_weights.reserve(static_cast<std::size_t>(grid->npoints()));
+        std::size_t offset = 0;
+        for (const auto& block : grid->blocks()) {
+            if (!block || block->npoints() == 0)
+                throw PSIEXCEPTION("SCF response provenance: DFT response grid contains an empty block");
+            result->grid_blocks.push_back({offset, block->npoints(), block->functions_local_to_global()});
+            for (std::size_t point = 0; point < block->npoints(); ++point) {
+                const std::array<double, 4> values{block->x()[point], block->y()[point], block->z()[point], block->w()[point]};
+                if (!std::all_of(values.begin(), values.end(), [](double value) { return std::isfinite(value); }))
+                    throw PSIEXCEPTION("SCF response provenance: DFT response grid contains nonfinite data");
+                result->grid_points.insert(result->grid_points.end(), values.begin(), values.begin() + 3);
+                result->grid_weights.push_back(values[3]);
+            }
+            offset += block->npoints();
+        }
+        if (offset != static_cast<std::size_t>(grid->npoints()))
+            throw PSIEXCEPTION("SCF response provenance: DFT response grid block cardinality is inconsistent");
     }
     result->sealed_functional = functional_->build_response_copy();
     result->basis = std::make_shared<BasisSetStructuralSnapshot>(basisset()->structural_snapshot());
@@ -276,9 +349,7 @@ std::shared_ptr<const ResponseSCFProvenance> HF::capture_response_provenance() c
 void HF::common_init() {
     attempt_number_ = 1;
     converged_ = false;
-    response_state_sealed_ = false;
-    response_scope_generation_ = 0;
-    response_provenance_.reset();
+    reset_response_provenance_tracking();
     reset_occ_ = false;
     sad_ = false;
     module_ = "scf";
@@ -557,6 +628,10 @@ void HF::initialize_gtfock_jk() {
 }
 
 void HF::finalize() {
+    // Reaching the native finalizer is necessary, but not sufficient, for response provenance.
+    // Capture later also verifies the last independently recorded convergence metrics and grid.
+    response_finalize_completed_ = true;
+
     // Clean memory off, handle diis closeout, etc
 
     // This will be the only one
