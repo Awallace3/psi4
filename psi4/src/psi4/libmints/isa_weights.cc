@@ -447,7 +447,8 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
                  const std::vector<double>& supplied_output_density,
                  const std::function<double(const SitePosition&)>& density_evaluator,
                  const ISAOptions& options, double formal_electron_count, bool enforce_electron_count,
-                 std::size_t inject_tail_fit_failure_iteration = 0) {
+                 std::size_t inject_tail_fit_failure_iteration = 0,
+                 std::size_t test_min_iterations = 0) {
     validate_inputs(sites, output_points, output_weights, atomic_numbers);
     std::vector<double> output_density = supplied_output_density;
     if (output_density.size() != output_points.size()) throw PSIEXCEPTION("ISA: output density cardinality is invalid");
@@ -613,12 +614,18 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
         previous_output_weights = std::move(current_weights);
         profiles = std::move(updated);
         diagnostics.iterations = iteration + 1;
-        if (diagnostics.max_overlap_residual <= options.convergence()) {
+        if (diagnostics.max_overlap_residual <= options.convergence() &&
+            iteration + 1 >= test_min_iterations) {
             diagnostics.converged = true;
             break;
         }
     }
-    if (!diagnostics.converged) throw PSIEXCEPTION("ISA: real-space stockholder iteration did not converge");
+    if (!diagnostics.converged) {
+        std::ostringstream message;
+        message << "ISA: real-space stockholder iteration did not converge; max overlap residual = "
+                << std::setprecision(17) << diagnostics.max_overlap_residual;
+        throw PSIEXCEPTION(message.str());
+    }
 
     CoreResult result;
     result.weights.resize(output_points.size() * nsite);
@@ -937,7 +944,8 @@ SyntheticISAResult compute_synthetic_isa(const std::vector<SitePosition>& sites,
                                          const std::vector<int>& atomic_numbers,
                                          const std::vector<SyntheticGaussianDensity>& terms,
                                          const ISAOptions& options,
-                                         std::size_t inject_tail_fit_failure_iteration) {
+                                         std::size_t inject_tail_fit_failure_iteration,
+                                         std::size_t test_min_iterations) {
     if (terms.empty()) throw PSIEXCEPTION("ISA synthetic fixture: at least one Gaussian density term is required");
     const auto evaluator = [&terms](const SitePosition& point) {
         KahanSum density;
@@ -955,7 +963,7 @@ SyntheticISAResult compute_synthetic_isa(const std::vector<SitePosition>& sites,
     KahanSum count;
     for (std::size_t point = 0; point < density.size(); ++point) count.add(output_weights[point] * density[point]);
     auto core = solve(sites, output_points, output_weights, atomic_numbers, density, evaluator,
-                      options, count.sum, false, inject_tail_fit_failure_iteration);
+                      options, count.sum, false, inject_tail_fit_failure_iteration, test_min_iterations);
     return {sites.size(), std::move(core.weights), std::move(core.diagnostics)};
 }
 

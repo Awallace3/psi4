@@ -137,14 +137,20 @@ void export_oeprop(py::module &m) {
               py::dict isa_option_values;
               for (const auto& entry : option_values) isa_option_values[entry.first] = entry.second;
               std::size_t inject_tail_fit_failure_iteration = 0;
+              std::size_t test_min_iterations = 0;
               if (isa_option_values.contains("inject_tail_fit_failure_iteration")) {
                   inject_tail_fit_failure_iteration =
                       isa_option_values["inject_tail_fit_failure_iteration"].cast<std::size_t>();
                   isa_option_values.attr("pop")("inject_tail_fit_failure_iteration");
               }
+              if (isa_option_values.contains("test_min_iterations")) {
+                  test_min_iterations = isa_option_values["test_min_iterations"].cast<std::size_t>();
+                  isa_option_values.attr("pop")("test_min_iterations");
+              }
               const auto result = detail::compute_synthetic_isa(
                   sites, points, weights, atomic_numbers, terms,
-                  isa_options_from_dict(isa_option_values), inject_tail_fit_failure_iteration);
+                  isa_options_from_dict(isa_option_values), inject_tail_fit_failure_iteration,
+                  test_min_iterations);
               return isa_result_dict(result.site_count, result.weights, result.diagnostics);
           },
           "sites"_a, "points"_a, "weights"_a, "atomic_numbers"_a,

@@ -299,7 +299,8 @@ SyntheticISAResult compute_synthetic_isa(const std::vector<SitePosition>& sites,
                                          const std::vector<int>& atomic_numbers,
                                          const std::vector<SyntheticGaussianDensity>& terms,
                                          const ISAOptions& options,
-                                         std::size_t inject_tail_fit_failure_iteration = 0);
+                                         std::size_t inject_tail_fit_failure_iteration = 0,
+                                         std::size_t test_min_iterations = 0);
 ISAProfileTestResult test_isa_profile(const std::vector<double>& nodes,
                                       const std::vector<double>& log_values,
                                       const std::vector<double>& queries,

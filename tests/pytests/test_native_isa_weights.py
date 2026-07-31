@@ -1,4 +1,5 @@
 import math
+import re
 
 import numpy as np
 import pytest
@@ -178,7 +179,12 @@ def test_tail_fit_failure_reuses_complete_previous_profile_or_fails_closed():
     common = {"radial_points": 32, "angular_polar_points": 8, "angular_azimuthal_points": 12}
     with pytest.raises(RuntimeError, match=r"no valid exponential tail"):
         _synthetic(sites, points, terms, inject_tail_fit_failure_iteration=1, **common)
-    retained = _synthetic(sites, points, terms, inject_tail_fit_failure_iteration=2, **common)
+    retained = _synthetic(
+        sites, points, terms,
+        inject_tail_fit_failure_iteration=2,
+        test_min_iterations=3,
+        **common,
+    )
     assert retained["diagnostics"]["tail_fit_failures"] == len(sites)
     assert retained["diagnostics"]["tail_failure_reused_profiles"] == len(sites)
     assert retained["diagnostics"]["converged"] is True
@@ -186,16 +192,24 @@ def test_tail_fit_failure_reuses_complete_previous_profile_or_fails_closed():
 
 
 def test_solver_fails_closed_for_nonconvergence_nonfinite_density_and_negative_weights():
-    sites = [[-0.5, 0.0, 0.0], [0.5, 0.0, 0.0]]
-    points = [[0.0, 0.0, 0.0]]
-    terms = [[-0.5, 0.0, 0.0, 1.0, 1.0], [0.5, 0.0, 0.0, 1.0, 1.0]]
-    with pytest.raises(RuntimeError, match=r"did not converge"):
+    sites = [[-0.6, 0.0, 0.0], [0.7, 0.1, 0.0]]
+    points = [[-0.9, 0.2, 0.0], [0.1, -0.3, 0.2], [1.1, 0.0, -0.1]]
+    terms = [[-0.6, 0.0, 0.0, 1.4, 0.7], [0.7, 0.1, 0.0, 0.5, 1.6]]
+    with pytest.raises(RuntimeError, match=r"did not converge") as failure:
         _synthetic(sites, points, terms, max_iterations=1, convergence=1.0e-16)
+    residual = re.search(r"max overlap residual = ([0-9.eE+-]+)", str(failure.value))
+    assert residual is not None
+    assert float(residual.group(1)) > 1.0e-16
+
+    guard_points = [[0.0, 0.0, 0.0]]
     bad = [[0.0, 0.0, 0.0, float("nan"), 1.0]]
     with pytest.raises(RuntimeError, match=r"finite|density"):
-        _synthetic([[0.0, 0.0, 0.0]], points, bad)
+        _synthetic([[0.0, 0.0, 0.0]], guard_points, bad)
     with pytest.raises(RuntimeError, match=r"integration weights.*nonnegative"):
-        _synthetic([[0.0, 0.0, 0.0]], points, [[0.0, 0.0, 0.0, 1.0, 1.0]], weights=[-1.0])
+        _synthetic(
+            [[0.0, 0.0, 0.0]], guard_points,
+            [[0.0, 0.0, 0.0, 1.0, 1.0]], weights=[-1.0]
+        )
 
 
 @pytest.fixture(scope="module")
