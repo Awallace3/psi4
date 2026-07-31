@@ -88,6 +88,9 @@ class LibXCFunctional : public Functional {
     void set_tweak(std::map<std::string, double>, bool);
     /// Complete effective LibXC external-parameter map, including defaults.
     std::map<std::string, double> effective_parameter_map() const;
+    /// Immutable identity of the initialized LibXC object (C++ provenance only).
+    int libxc_id() const { return func_id_; }
+    std::string libxc_canonical_name() const;
     std::vector<std::tuple<std::string, int, double>> get_mix_data();
 
     // Make queries to libxc

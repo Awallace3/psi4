@@ -29,6 +29,10 @@
 #ifndef HF_H
 #define HF_H
 
+#include <cstddef>
+#include <map>
+#include <memory>
+#include <string>
 #include <vector>
 #include <functional>
 #include "psi4/libmints/wavefunction.h"
@@ -46,9 +50,84 @@ class PCM;
 class SuperFunctional;
 class VBase;
 class BasisSet;
+struct BasisSetStructuralSnapshot;
 class DIISManager;
 class PSIO;
 namespace scf {
+
+struct PSI_API ResponseFunctionalComponentState {
+    int libxc_id{-1};
+    std::string libxc_canonical_name;
+    std::map<std::string, double> effective_parameters;
+    double alpha{};
+    double omega{};
+    double lsda_cutoff{};
+    double meta_cutoff{};
+    double density_cutoff{};
+    bool gga{};
+    bool meta{};
+    bool lrc{};
+    bool unpolarized{};
+
+    bool operator==(const ResponseFunctionalComponentState& other) const;
+};
+
+struct PSI_API ResponseFunctionalState {
+    std::string name;
+    std::vector<ResponseFunctionalComponentState> x_components;
+    std::vector<ResponseFunctionalComponentState> c_components;
+    ResponseFunctionalComponentState grac_x;
+    ResponseFunctionalComponentState grac_c;
+    double x_alpha{};
+    double x_beta{};
+    double x_omega{};
+    double c_alpha{};
+    double c_ss_alpha{};
+    double c_os_alpha{};
+    double c_omega{};
+    double vv10_b{};
+    double vv10_c{};
+    double vv10_beta{};
+    double density_tolerance{};
+    double grac_shift{};
+    double grac_alpha{};
+    double grac_beta{};
+    int max_points{};
+    int deriv{};
+    bool needs_vv10{};
+    bool needs_grac{};
+    bool libxc_functional{};
+    bool gga{};
+    bool meta{};
+    bool unpolarized{};
+
+    bool same_ground_state(const ResponseFunctionalState& other) const;
+};
+
+struct PSI_API ResponseSCFProvenance {
+    ResponseFunctionalState functional;
+    std::vector<ResponseFunctionalState> functional_workers;
+    std::shared_ptr<const SuperFunctional> sealed_functional;
+    std::shared_ptr<const BasisSetStructuralSnapshot> basis;
+    std::shared_ptr<const Molecule> sealed_molecule;
+    std::shared_ptr<const Matrix> Ca;
+    std::shared_ptr<const Matrix> Cb;
+    std::shared_ptr<const Vector> epsilon_a;
+    std::shared_ptr<const Vector> epsilon_b;
+    std::shared_ptr<const Vector> occupation_a;
+    std::shared_ptr<const Vector> occupation_b;
+    std::shared_ptr<const Matrix> Da;
+    std::shared_ptr<const Matrix> Db;
+    double energy{};
+    double occupied_homo{};
+    int charge{};
+    int multiplicity{};
+    int nalpha{};
+    int nbeta{};
+    std::string reference;
+};
+
+class HFResponseProvenanceScope;
 
 class HF : public Wavefunction {
    protected:
@@ -93,8 +172,17 @@ class HF : public Wavefunction {
     /// Current Iteration
     int iteration_;
 
-    /// Did the SCF converge?
+    /// Legacy native SCF convergence bookkeeping (not response provenance).
     bool converged_;
+
+    /// C++-owned provenance seal and generation for one complete Python SCF callback.
+    bool response_state_sealed_;
+    std::size_t response_scope_generation_;
+    std::shared_ptr<const ResponseSCFProvenance> response_provenance_;
+
+    void close_response_provenance_scope(std::size_t generation, bool successful);
+    std::shared_ptr<const ResponseSCFProvenance> capture_response_provenance() const;
+    friend class HFResponseProvenanceScope;
 
     /// Nuclear repulsion energy
     double nuclearrep_;
@@ -307,8 +395,9 @@ class HF : public Wavefunction {
     std::shared_ptr<SuperFunctional> functional() const { return functional_; }
     /// Narrow const access used only while freezing a verified response context.
     std::shared_ptr<const SuperFunctional> response_functional() const { return functional_; }
-    bool response_state_converged() const { return converged_; }
-    void set_response_state_converged(bool value) { converged_ = value; }
+    bool response_state_sealed() const { return response_state_sealed_; }
+    const std::shared_ptr<const ResponseSCFProvenance>& response_provenance() const { return response_provenance_; }
+    std::shared_ptr<HFResponseProvenanceScope> response_provenance_scope();
 
     /// The DFT Potential object (or null if it has been deleted)
     /// This needs to be virtual so that subclasses can enforce their
@@ -443,6 +532,26 @@ class HF : public Wavefunction {
     }
     void clear_external_cpscf_perturbations() { external_cpscf_perturbations_.clear(); }
     void compute_fvpi();
+};
+
+/** Ephemeral capability for one active Python SCF compute callback. */
+class PSI_API HFResponseProvenanceScope {
+   public:
+    ~HFResponseProvenanceScope();
+    HFResponseProvenanceScope(const HFResponseProvenanceScope&) = delete;
+    HFResponseProvenanceScope& operator=(const HFResponseProvenanceScope&) = delete;
+
+    void success();
+    void close(bool no_exception);
+
+   private:
+    friend class HF;
+    HFResponseProvenanceScope(std::shared_ptr<HF> owner, std::size_t generation);
+
+    std::shared_ptr<HF> owner_;
+    std::size_t generation_{};
+    bool active_{true};
+    bool success_requested_{false};
 };
 }  // namespace scf
 }  // namespace psi

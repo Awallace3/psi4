@@ -267,6 +267,7 @@ class SuperFunctional {
     double c_os_alpha() const { return c_os_alpha_; }
     double vv10_b() const { return vv10_b_; }
     double vv10_c() const { return vv10_c_; }
+    double vv10_beta() const { return vv10_beta_; }
     double grac_shift() const { return grac_shift_; }
     double grac_alpha() const { return grac_alpha_; }
     double grac_beta() const { return grac_beta_; }

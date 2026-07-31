@@ -39,6 +39,7 @@
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libscf_solver/hf.h"
 #include "psi4/libscf_solver/rhf.h"
+#include "psi4/libscf_solver/uhf.h"
 #include "psi4/libpsi4util/exception.h"
 
 namespace psi {
@@ -462,13 +463,8 @@ std::shared_ptr<scf::HF> require_converged_scf(const std::shared_ptr<Wavefunctio
                                                const char* role) {
     const auto hf = std::dynamic_pointer_cast<scf::HF>(wfn);
     if (!hf) throw PSIEXCEPTION(std::string("FrozenResponseContext: ") + role + " must be an scf::HF state");
-    if (!hf->response_state_converged()) {
-        throw PSIEXCEPTION(std::string("FrozenResponseContext: ") + role + " SCF state is not converged");
-    }
-    if (!std::isfinite(hf->energy()) || !hf->Ca() || !hf->Cb() || !hf->Da() || !hf->Db() ||
-        !hf->epsilon_a() || !hf->epsilon_b()) {
-        throw PSIEXCEPTION(std::string("FrozenResponseContext: ") + role +
-                           " converged electronic state is incomplete");
+    if (!hf->response_state_sealed() || !hf->response_provenance()) {
+        throw PSIEXCEPTION(std::string("FrozenResponseContext: ") + role + " SCF state has no finalized provenance seal");
     }
     return hf;
 }
@@ -480,36 +476,6 @@ bool same_nuclei_and_geometry(const Molecule& first, const Molecule& second) {
             first.y(atom) != second.y(atom) || first.z(atom) != second.z(atom)) return false;
     }
     return true;
-}
-
-bool same_functional_components(const SuperFunctional& first, const SuperFunctional& second) {
-    const auto same = [](const auto& left, const auto& right) {
-        if (left.size() != right.size()) return false;
-        for (std::size_t i = 0; i < left.size(); ++i) {
-            if (!left[i] || !right[i] || left[i]->name() != right[i]->name() ||
-                left[i]->parameters() != right[i]->parameters() || left[i]->alpha() != right[i]->alpha() ||
-                left[i]->omega() != right[i]->omega()) return false;
-        }
-        return true;
-    };
-    return first.name() == second.name() && first.x_alpha() == second.x_alpha() &&
-           first.x_beta() == second.x_beta() && first.x_omega() == second.x_omega() &&
-           first.c_alpha() == second.c_alpha() && first.c_omega() == second.c_omega() &&
-           same(first.x_functionals(), second.x_functionals()) &&
-           same(first.c_functionals(), second.c_functionals());
-}
-
-double occupied_homo(const scf::HF& hf) {
-    const auto occupation = hf.occupation_a();
-    const auto epsilon = hf.epsilon_a();
-    double homo = -std::numeric_limits<double>::infinity();
-    for (int h = 0; h < occupation->nirrep(); ++h) {
-        for (int orbital = 0; orbital < occupation->dim(h); ++orbital) {
-            if (occupation->get(h, orbital) > 0.0) homo = std::max(homo, epsilon->get(h, orbital));
-        }
-    }
-    if (!std::isfinite(homo)) throw PSIEXCEPTION("FrozenResponseContext: neutral precursor has no finite occupied HOMO");
-    return homo;
 }
 
 }  // namespace
@@ -526,6 +492,7 @@ FrozenResponseContext::FrozenResponseContext(
     SharedMatrix Ca, SharedMatrix Cb, SharedVector epsilon_a, SharedVector epsilon_b,
     SharedVector occupation_a, SharedVector occupation_b, SharedMatrix Da, SharedMatrix Db,
     double energy, std::shared_ptr<const Molecule> molecule, std::shared_ptr<const BasisSet> basis,
+    std::shared_ptr<const BasisSetStructuralSnapshot> basis_snapshot,
     std::shared_ptr<const SuperFunctional> functional, std::vector<SitePosition> sites,
     std::vector<double> grid_points, std::vector<double> grid_weights,
     std::vector<FrozenGridBlock> grid_blocks, GRACProvenance grac, std::string functional_name,
@@ -533,11 +500,17 @@ FrozenResponseContext::FrozenResponseContext(
     : Ca_(std::move(Ca)), Cb_(std::move(Cb)), epsilon_a_(std::move(epsilon_a)),
       epsilon_b_(std::move(epsilon_b)), occupation_a_(std::move(occupation_a)),
       occupation_b_(std::move(occupation_b)), Da_(std::move(Da)), Db_(std::move(Db)), energy_(energy),
-      molecule_(std::move(molecule)), basis_(std::move(basis)), functional_(std::move(functional)),
+      molecule_(std::move(molecule)), basis_(std::move(basis)), basis_snapshot_(std::move(basis_snapshot)),
+      functional_(std::move(functional)),
       sites_(std::move(sites)), grid_points_(std::move(grid_points)), grid_weights_(std::move(grid_weights)),
       grid_blocks_(std::move(grid_blocks)), grac_(std::move(grac)),
       functional_name_(std::move(functional_name)), grac_x_name_(std::move(grac_x_name)),
       grac_c_name_(std::move(grac_c_name)) {}
+
+void FrozenResponseContext::verify_basis_unchanged() const {
+    if (!basis_ || !basis_snapshot_ || basis_->structural_snapshot() != *basis_snapshot_)
+        throw PSIEXCEPTION("FrozenResponseContext: retained basis changed after provenance sealing");
+}
 
 std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
     const std::shared_ptr<Wavefunction>& grac_wfn,
@@ -548,62 +521,94 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
     const auto cation_hf = require_converged_scf(cation_wfn, "cation");
     const auto grac_rhf = std::dynamic_pointer_cast<scf::RHF>(grac_hf);
     const auto precursor_rhf = std::dynamic_pointer_cast<scf::RHF>(precursor_hf);
-    if (!grac_rhf || !precursor_rhf || !grac_hf->same_a_b_orbs() || !grac_hf->same_a_b_dens()) {
-        throw PSIEXCEPTION("FrozenResponseContext: only restricted scf::HF/RKS neutral states are supported");
+    const auto cation_uhf = std::dynamic_pointer_cast<scf::UHF>(cation_hf);
+    const auto& grac_seal = *grac_hf->response_provenance();
+    const auto& precursor_seal = *precursor_hf->response_provenance();
+    const auto& cation_seal = *cation_hf->response_provenance();
+    if (!grac_rhf || !precursor_rhf || grac_seal.reference != "RKS" || precursor_seal.reference != "RKS" ||
+        grac_seal.charge != 0 || precursor_seal.charge != 0 || grac_seal.multiplicity != 1 ||
+        precursor_seal.multiplicity != 1 || grac_seal.nalpha != grac_seal.nbeta ||
+        precursor_seal.nalpha != precursor_seal.nbeta || !grac_seal.functional.unpolarized ||
+        !precursor_seal.functional.unpolarized) {
+        throw PSIEXCEPTION("FrozenResponseContext: neutral and precursor must be neutral restricted singlet RKS states");
     }
-    const auto functional = grac_hf->response_functional();
-    const auto precursor_functional = precursor_hf->response_functional();
+    if (!cation_uhf || cation_seal.reference != "UKS" || cation_seal.charge != 1 ||
+        cation_seal.multiplicity != 2 || cation_seal.nalpha != cation_seal.nbeta + 1 ||
+        cation_seal.functional.unpolarized) {
+        throw PSIEXCEPTION("FrozenResponseContext: vertical cation must be a charge +1 doublet UKS state");
+    }
+    const auto functional = grac_seal.sealed_functional;
+    const auto precursor_functional = precursor_seal.sealed_functional;
     const auto potential = grac_rhf->V_potential();
     if (!functional || !precursor_functional || !functional->needs_xc() || !potential ||
-        !potential->grac_initialized() || !functional->needs_grac()) {
+        !potential->grac_initialized() || !grac_seal.functional.needs_grac) {
         throw PSIEXCEPTION("FrozenResponseContext: neutral must contain an actual applied GRAC RKS state with needs_grac");
     }
-    if (precursor_functional->needs_grac() || !same_functional_components(*functional, *precursor_functional)) {
+    if (precursor_seal.functional.needs_grac ||
+        !grac_seal.functional.same_ground_state(precursor_seal.functional)) {
         throw PSIEXCEPTION("FrozenResponseContext: neutral precursor must be the same unshifted ground-state functional");
     }
-    const auto grac_x = functional->grac_x_functional();
-    const auto grac_c = functional->grac_c_functional();
     const LibXCFunctional expected_x(kProtocolGRACX, true);
     const LibXCFunctional expected_c(kProtocolGRACC, true);
-    const auto actual_x = std::dynamic_pointer_cast<const LibXCFunctional>(grac_x);
-    const auto actual_c = std::dynamic_pointer_cast<const LibXCFunctional>(grac_c);
-    if (!actual_x || !actual_c || actual_x->name() != kProtocolGRACX || actual_c->name() != kProtocolGRACC) {
-        throw PSIEXCEPTION("FrozenResponseContext: GRAC functional identity does not match the intended X/C components");
+    const auto& actual_x = grac_seal.functional.grac_x;
+    const auto& actual_c = grac_seal.functional.grac_c;
+    if (actual_x.libxc_id != expected_x.libxc_id() || actual_c.libxc_id != expected_c.libxc_id() ||
+        actual_x.libxc_canonical_name != expected_x.libxc_canonical_name() ||
+        actual_c.libxc_canonical_name != expected_c.libxc_canonical_name()) {
+        throw PSIEXCEPTION("FrozenResponseContext: GRAC immutable LibXC identity does not match the intended X/C components");
     }
-    if (actual_x->effective_parameter_map() != expected_x.effective_parameter_map() ||
-        actual_c->effective_parameter_map() != expected_c.effective_parameter_map()) {
+    if (actual_x.effective_parameters != expected_x.effective_parameter_map() ||
+        actual_c.effective_parameters != expected_c.effective_parameter_map()) {
         throw PSIEXCEPTION("FrozenResponseContext: GRAC functional parameter map does not match the intended full map");
     }
-    if (grac_x->alpha() != 1.0 - functional->x_alpha() || grac_c->alpha() != 1.0) {
-        throw PSIEXCEPTION("FrozenResponseContext: GRAC functional parameter map has inconsistent component scaling");
+    const auto same_component_settings = [](const scf::ResponseFunctionalComponentState& actual,
+                                            const LibXCFunctional& expected) {
+        return actual.omega == expected.omega() && actual.lsda_cutoff == expected.lsda_cutoff() &&
+               actual.meta_cutoff == expected.meta_cutoff() &&
+               actual.density_cutoff == expected.density_cutoff() && actual.gga == expected.is_gga() &&
+               actual.meta == expected.is_meta() && actual.lrc == expected.is_lrc() &&
+               actual.unpolarized == expected.is_unpolarized();
+    };
+    if (actual_x.alpha != 1.0 - grac_seal.functional.x_alpha || actual_c.alpha != 1.0 ||
+        !same_component_settings(actual_x, expected_x) || !same_component_settings(actual_c, expected_c) ||
+        grac_seal.functional.grac_alpha != 0.5 || grac_seal.functional.grac_beta != 40.0) {
+        throw PSIEXCEPTION("FrozenResponseContext: GRAC alpha/beta, cutoff, polarization, or scaling is inconsistent");
+    }
+    if (grac_seal.functional_workers.empty())
+        throw PSIEXCEPTION("FrozenResponseContext: GRAC worker functional provenance is unavailable");
+    for (const auto& worker : grac_seal.functional_workers) {
+        if (!worker.needs_grac || worker.grac_shift != grac_seal.functional.grac_shift ||
+            worker.grac_alpha != grac_seal.functional.grac_alpha ||
+            worker.grac_beta != grac_seal.functional.grac_beta || !(worker.grac_x == actual_x) ||
+            !(worker.grac_c == actual_c)) {
+            throw PSIEXCEPTION("FrozenResponseContext: GRAC master/worker effective state is inconsistent");
+        }
     }
 
-    const auto grac_molecule = grac_hf->molecule();
-    const auto precursor_molecule = precursor_hf->molecule();
-    const auto cation_molecule = cation_hf->molecule();
+    const auto grac_molecule = grac_seal.sealed_molecule;
+    const auto precursor_molecule = precursor_seal.sealed_molecule;
+    const auto cation_molecule = cation_seal.sealed_molecule;
     if (!grac_molecule || !precursor_molecule || !cation_molecule ||
         !same_nuclei_and_geometry(*grac_molecule, *precursor_molecule) ||
         !same_nuclei_and_geometry(*grac_molecule, *cation_molecule) ||
-        grac_molecule->molecular_charge() != precursor_molecule->molecular_charge() ||
-        cation_molecule->molecular_charge() != grac_molecule->molecular_charge() + 1 ||
-        cation_hf->nalpha() + cation_hf->nbeta() != grac_hf->nalpha() + grac_hf->nbeta() - 1) {
-        throw PSIEXCEPTION("FrozenResponseContext: cation calculation charge/electron identity is inconsistent");
+        cation_seal.nalpha + cation_seal.nbeta != grac_seal.nalpha + grac_seal.nbeta - 1) {
+        throw PSIEXCEPTION("FrozenResponseContext: cation calculation geometry/electron identity is inconsistent");
     }
-    if (grac_hf->basisset()->name() != precursor_hf->basisset()->name() ||
-        grac_hf->basisset()->name() != cation_hf->basisset()->name() ||
-        grac_hf->basisset()->nbf() != precursor_hf->basisset()->nbf() ||
-        grac_hf->basisset()->nbf() != cation_hf->basisset()->nbf()) {
-        throw PSIEXCEPTION("FrozenResponseContext: precursor/cation basis identity is inconsistent");
+    if (!grac_seal.basis || !precursor_seal.basis || !cation_seal.basis ||
+        *grac_seal.basis != *precursor_seal.basis || *grac_seal.basis != *cation_seal.basis ||
+        grac_hf->basisset()->structural_snapshot() != *grac_seal.basis) {
+        throw PSIEXCEPTION("FrozenResponseContext: precursor/cation complete basis structure is inconsistent");
     }
-    if (!cation_hf->response_functional() ||
-        !same_functional_components(*precursor_functional, *cation_hf->response_functional())) {
-        throw PSIEXCEPTION("FrozenResponseContext: cation functional identity is inconsistent");
+    if (!cation_seal.sealed_functional ||
+        !precursor_seal.functional.same_ground_state(cation_seal.functional) ||
+        cation_seal.functional.needs_grac) {
+        throw PSIEXCEPTION("FrozenResponseContext: cation must use the same unshifted ground-state functional");
     }
 
-    const double homo = occupied_homo(*precursor_hf);
-    const double ip = cation_hf->energy() - precursor_hf->energy();
+    const double homo = precursor_seal.occupied_homo;
+    const double ip = cation_seal.energy - precursor_seal.energy;
     const double derived_shift = ip + homo;
-    const double applied_shift = functional->grac_shift();
+    const double applied_shift = grac_seal.functional.grac_shift;
     if (!std::isfinite(ip) || ip <= 0.0 || !std::isfinite(derived_shift) || derived_shift < 0.0 ||
         !close_enough(applied_shift, derived_shift)) {
         throw PSIEXCEPTION("FrozenResponseContext: actual applied GRAC shift must equal IP plus HOMO energy");
@@ -637,21 +642,19 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
     sites.reserve(grac_molecule->natom());
     for (int atom = 0; atom < grac_molecule->natom(); ++atom)
         sites.push_back({grac_molecule->x(atom), grac_molecule->y(atom), grac_molecule->z(atom)});
-    GRACProvenance provenance{precursor_hf->energy(), cation_hf->energy(), homo, ip, applied_shift,
-                              cation_hf->same_a_b_orbs() ? "RHF" : "UHF",
-                              cation_molecule->molecular_charge(), cation_molecule->multiplicity()};
+    GRACProvenance provenance{precursor_seal.energy, cation_seal.energy, homo, ip, applied_shift,
+                              cation_seal.reference, cation_seal.charge, cation_seal.multiplicity};
     auto molecule_copy = std::make_shared<Molecule>(grac_molecule->clone());
-    auto functional_copy = functional->build_response_copy();
     return std::shared_ptr<FrozenResponseContext>(new FrozenResponseContext(
-        grac_hf->Ca()->clone(), grac_hf->Cb()->clone(),
-        std::make_shared<Vector>(grac_hf->epsilon_a()->clone()),
-        std::make_shared<Vector>(grac_hf->epsilon_b()->clone()),
-        std::make_shared<Vector>(grac_hf->occupation_a()->clone()),
-        std::make_shared<Vector>(grac_hf->occupation_b()->clone()),
-        grac_hf->Da()->clone(), grac_hf->Db()->clone(), grac_hf->energy(), std::move(molecule_copy),
-        grac_hf->basisset(), std::move(functional_copy), std::move(sites), std::move(grid_points),
-        std::move(grid_weights), std::move(grid_blocks), std::move(provenance), functional->name(),
-        grac_x->name(), grac_c->name()));
+        grac_seal.Ca->clone(), grac_seal.Cb->clone(),
+        std::make_shared<Vector>(grac_seal.epsilon_a->clone()),
+        std::make_shared<Vector>(grac_seal.epsilon_b->clone()),
+        std::make_shared<Vector>(grac_seal.occupation_a->clone()),
+        std::make_shared<Vector>(grac_seal.occupation_b->clone()),
+        grac_seal.Da->clone(), grac_seal.Db->clone(), grac_seal.energy, std::move(molecule_copy),
+        grac_hf->basisset(), grac_seal.basis, functional, std::move(sites), std::move(grid_points),
+        std::move(grid_weights), std::move(grid_blocks), std::move(provenance), grac_seal.functional.name,
+        kProtocolGRACX, kProtocolGRACC));
 }
 
 ISAWeights::ISAWeights(std::shared_ptr<const FrozenResponseContext> context,
@@ -692,6 +695,7 @@ ISAPolResponseProvider::ISAPolResponseProvider(std::shared_ptr<const FrozenRespo
 }
 
 std::size_t ISAPolResponseProvider::expected_response_count(const FrequencyGrid& frequencies) const {
+    context_->verify_basis_unchanged();
     if (frequencies.frequencies.empty())
         throw PSIEXCEPTION("ISAPolResponseProvider: frequency grid requires at least one point");
     if (frequencies.frequencies.size() != frequencies.weights.size())

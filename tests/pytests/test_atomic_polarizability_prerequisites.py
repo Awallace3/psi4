@@ -24,8 +24,9 @@ def grac_states():
     neutral = psi4.geometry(
         """
         0 1
-        H 0.0 0.0 0.0
-        H 0.0 0.0 0.7
+        O  0.000000  0.000000  0.000000
+        H  0.000000  0.757160  0.586260
+        H  0.000000 -0.757160  0.586260
         symmetry c1
         units angstrom
         """
@@ -35,8 +36,9 @@ def grac_states():
     cation = psi4.geometry(
         """
         1 2
-        H 0.0 0.0 0.0
-        H 0.0 0.0 0.7
+        O  0.000000  0.000000  0.000000
+        H  0.000000  0.757160  0.586260
+        H  0.000000 -0.757160  0.586260
         symmetry c1
         units angstrom
         """
@@ -55,6 +57,11 @@ def grac_states():
 def _context(states):
     grac, precursor, cation, _ = states
     return psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, cation)
+
+
+def test_hf_has_no_callable_response_provenance_setter():
+    assert not hasattr(psi4.core.HF, "_set_response_state_converged")
+    assert not hasattr(psi4.core.HF, "_seal_response_provenance")
 
 
 def test_response_kernel_is_exact_and_rejects_nextafter_neighbors():
@@ -85,9 +92,58 @@ def test_actual_grac_context_is_verified_and_frozen(grac_states):
     assert isinstance(summary["grac_c_parameters"], dict)
     assert summary["neutral_precursor_energy"] == pytest.approx(precursor.energy())
     assert summary["cation_energy"] == pytest.approx(cation.energy())
-    assert summary["site_count"] == 2
+    assert summary["grac_alpha"] == pytest.approx(0.5)
+    assert summary["grac_beta"] == pytest.approx(40.0)
+    assert summary["cation_reference"] == "UKS"
+    assert summary["basis_detached"] is False
+    assert summary["site_count"] == 3
     assert summary["grid_point_count"] > 0
-    assert summary["single_thread_immutable"] is True
+    assert summary["single_thread_no_basis_mutation_contract"] is True
+
+
+def test_seal_occurs_only_after_successful_finalize_energy(grac_states, monkeypatch):
+    _, precursor, cation, shift = grac_states
+    original_finalize = psi4.core.HF.finalize_energy
+    observed_unsealed = []
+
+    def observing_finalize(self):
+        with pytest.raises(RuntimeError, match=r"provenance seal"):
+            psi4.core._atomic_polarizability_make_frozen_response_context(self, precursor, cation)
+        observed_unsealed.append(True)
+        return original_finalize(self)
+
+    monkeypatch.setattr(psi4.core.HF, "finalize_energy", observing_finalize)
+    psi4.set_options({"reference": "rhf", "basis": "sto-3g", "dft_grac_shift": shift})
+    try:
+        _, finalized = psi4.energy("pbe0", molecule=precursor.molecule(), return_wfn=True)
+    finally:
+        monkeypatch.setattr(psi4.core.HF, "finalize_energy", original_finalize)
+        psi4.set_options({"dft_grac_shift": 0.0})
+    assert observed_unsealed
+    psi4.core._atomic_polarizability_make_frozen_response_context(finalized, precursor, cation)
+
+
+def test_finalize_exception_leaves_provenance_unsealed(grac_states, monkeypatch):
+    _, precursor, cation, shift = grac_states
+    original_finalize = psi4.core.HF.finalize_energy
+    failed = []
+
+    def failing_finalize(self):
+        original_finalize(self)
+        failed.append(self)
+        raise RuntimeError("test-local finalize failure")
+
+    monkeypatch.setattr(psi4.core.HF, "finalize_energy", failing_finalize)
+    psi4.set_options({"reference": "rhf", "basis": "sto-3g", "dft_grac_shift": shift})
+    try:
+        with pytest.raises(RuntimeError, match="test-local finalize failure"):
+            psi4.energy("pbe0", molecule=precursor.molecule())
+    finally:
+        monkeypatch.setattr(psi4.core.HF, "finalize_energy", original_finalize)
+        psi4.set_options({"dft_grac_shift": 0.0})
+    assert failed
+    with pytest.raises(RuntimeError, match=r"provenance seal"):
+        psi4.core._atomic_polarizability_make_frozen_response_context(failed[0], precursor, cation)
 
 
 def test_ordinary_pbe0_rejects_even_when_calculation_metadata_is_available(grac_states):
@@ -96,47 +152,124 @@ def test_ordinary_pbe0_rejects_even_when_calculation_metadata_is_available(grac_
         psi4.core._atomic_polarizability_make_frozen_response_context(precursor, precursor, cation)
 
 
-def test_wrong_applied_shift_rejects_actual_grac(grac_states):
-    grac, precursor, cation, _ = grac_states
+def test_factory_uses_sealed_shift_and_energies_not_later_mutable_values(grac_states):
+    grac, precursor, cation, shift = grac_states
     functional = grac.functional()
     old_shift = functional.grac_shift()
+    old_precursor_energy = precursor.energy()
     functional.set_lock(False)
     functional.set_grac_shift(old_shift + 1.0e-4)
     functional.set_lock(True)
+    precursor.set_energy(old_precursor_energy + 0.25)
     try:
-        with pytest.raises(RuntimeError, match=r"applied GRAC shift.*IP.*HOMO"):
-            psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, cation)
+        summary = psi4.core._atomic_polarizability_make_frozen_response_context(
+            grac, precursor, cation
+        ).summary()
+        assert summary["applied_shift"] == pytest.approx(shift)
+        assert summary["neutral_precursor_energy"] == pytest.approx(old_precursor_energy)
     finally:
         functional.set_lock(False)
         functional.set_grac_shift(old_shift)
         functional.set_lock(True)
+        precursor.set_energy(old_precursor_energy)
 
 
-@pytest.mark.parametrize("mutation", ["x_identity", "c_identity"])
-def test_wrong_grac_component_identity_rejects(grac_states, mutation):
-    grac, precursor, cation, _ = grac_states
-    token = psi4.core._atomic_polarizability_mutate_grac_component_for_test(grac, mutation)
+def test_no_production_grac_component_test_mutators_exist():
+    assert not hasattr(psi4.core, "_atomic_polarizability_mutate_grac_component_for_test")
+    assert not hasattr(psi4.core, "_atomic_polarizability_restore_grac_component_for_test")
+
+
+@pytest.mark.parametrize(
+    "overrides, message",
+    [
+        ({"dft_grac_alpha": 0.6}, r"GRAC alpha/beta"),
+        ({"dft_grac_beta": 39.0}, r"GRAC alpha/beta"),
+        ({"dft_grac_x_func": "XC_GGA_X_PBE"}, r"GRAC immutable LibXC identity"),
+    ],
+)
+def test_actual_effective_grac_state_mismatches_reject(grac_states, overrides, message):
+    _, precursor, cation, shift = grac_states
+    options = {
+        "reference": "rhf",
+        "basis": "sto-3g",
+        "dft_grac_shift": shift,
+        "dft_grac_alpha": 0.5,
+        "dft_grac_beta": 40.0,
+        "dft_grac_x_func": "XC_GGA_X_LB",
+    }
+    options.update(overrides)
+    psi4.set_options(options)
     try:
-        with pytest.raises(RuntimeError, match=r"GRAC.*(functional identity|parameter map)"):
-            psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, cation)
+        _, mismatched = psi4.energy("pbe0", molecule=precursor.molecule(), return_wfn=True)
+        with pytest.raises(RuntimeError, match=message):
+            psi4.core._atomic_polarizability_make_frozen_response_context(mismatched, precursor, cation)
     finally:
-        psi4.core._atomic_polarizability_restore_grac_component_for_test(grac, mutation, token)
+        psi4.set_options(
+            {
+                "dft_grac_shift": 0.0,
+                "dft_grac_alpha": 0.5,
+                "dft_grac_beta": 40.0,
+                "dft_grac_x_func": "XC_GGA_X_LB",
+            }
+        )
+
+
+def test_sealed_ground_component_parameter_mismatch_rejects(grac_states, monkeypatch):
+    grac, precursor, cation, _ = grac_states
+    original_finalize = psi4.core.HF.finalize_energy
+
+    def finalize_with_test_local_tweak(self):
+        energy = original_finalize(self)
+        self.functional().x_functionals()[0].set_tweak({"_kappa": 0.9, "_mu": 0.2195149727645171})
+        return energy
+
+    monkeypatch.setattr(psi4.core.HF, "finalize_energy", finalize_with_test_local_tweak)
+    psi4.set_options({"reference": "uhf", "basis": "sto-3g", "dft_grac_shift": 0.0})
+    try:
+        _, tweaked_cation = psi4.energy("pbe0", molecule=cation.molecule(), return_wfn=True)
+    finally:
+        monkeypatch.setattr(psi4.core.HF, "finalize_energy", original_finalize)
+        psi4.set_options({"reference": "rhf"})
+    with pytest.raises(RuntimeError, match=r"same unshifted ground-state functional"):
+        psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, tweaked_cation)
 
 
 def test_wrong_cation_calculation_rejects(grac_states):
     grac, precursor, _, _ = grac_states
-    with pytest.raises(RuntimeError, match=r"cation.*(charge|electron|identity)"):
+    with pytest.raises(RuntimeError, match=r"cation.*(charge|doublet|UKS|identity)"):
         psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, precursor)
 
 
-def test_factory_rejects_an_actual_scf_state_not_marked_converged(grac_states):
-    grac, precursor, cation, _ = grac_states
-    precursor._set_response_state_converged(False)
+def test_wrong_cation_multiplicity_rejects(grac_states):
+    grac, precursor, _, _ = grac_states
+    quartet = psi4.geometry(
+        """
+        1 4
+        O  0.000000  0.000000  0.000000
+        H  0.000000  0.757160  0.586260
+        H  0.000000 -0.757160  0.586260
+        symmetry c1
+        units angstrom
+        """
+    )
+    psi4.set_options({"reference": "uhf", "basis": "sto-3g", "dft_grac_shift": 0.0})
     try:
-        with pytest.raises(RuntimeError, match=r"neutral precursor.*not converged"):
-            psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, cation)
+        _, quartet_wfn = psi4.energy("pbe0", molecule=quartet, return_wfn=True)
+        with pytest.raises(RuntimeError, match=r"doublet UKS"):
+            psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, quartet_wfn)
     finally:
-        precursor._set_response_state_converged(True)
+        psi4.set_options({"reference": "rhf"})
+
+
+def test_complete_basis_structure_mismatch_rejects(grac_states):
+    grac, precursor, cation, _ = grac_states
+    psi4.set_options({"reference": "uhf", "basis": "3-21g", "dft_grac_shift": 0.0})
+    try:
+        _, wrong_basis_cation = psi4.energy("pbe0", molecule=cation.molecule(), return_wfn=True)
+        with pytest.raises(RuntimeError, match=r"complete basis structure"):
+            psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, wrong_basis_cation)
+    finally:
+        psi4.set_options({"reference": "rhf", "basis": "sto-3g"})
 
 
 def test_frozen_context_is_unaffected_by_later_source_orbital_and_density_mutation(grac_states):

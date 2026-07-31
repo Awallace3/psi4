@@ -66,6 +66,93 @@ bool BasisSet::initialized_shared_ = false;
 
 std::vector<Vector3> BasisSet::exp_ao[LIBINT_MAX_AM];
 
+bool BasisShellSnapshot::operator==(const BasisShellSnapshot& other) const {
+    return shell_type == other.shell_type && angular_momentum == other.angular_momentum &&
+           puream == other.puream && center == other.center && start == other.start &&
+           nfunction == other.nfunction && ncartesian == other.ncartesian &&
+           coordinates == other.coordinates && exponents == other.exponents &&
+           coefficients == other.coefficients && original_coefficients == other.original_coefficients &&
+           erd_coefficients == other.erd_coefficients && radial_powers == other.radial_powers;
+}
+
+bool BasisSetStructuralSnapshot::operator==(const BasisSetStructuralSnapshot& other) const {
+    return name == other.name && key == other.key && target == other.target && shells == other.shells &&
+           ecp_shells == other.ecp_shells && core_electrons == other.core_electrons &&
+           scalar_state == other.scalar_state && puream == other.puream &&
+           n_prim_per_shell == other.n_prim_per_shell && shell_first_ao == other.shell_first_ao &&
+           shell_first_exponent == other.shell_first_exponent &&
+           shell_first_basis_function == other.shell_first_basis_function && shell_center == other.shell_center &&
+           ecp_shell_center == other.ecp_shell_center && function_to_shell == other.function_to_shell &&
+           ao_to_shell == other.ao_to_shell && function_center == other.function_center &&
+           center_to_nshell == other.center_to_nshell && center_to_shell == other.center_to_shell &&
+           center_to_ecp_nshell == other.center_to_ecp_nshell &&
+           center_to_ecp_shell == other.center_to_ecp_shell && unique_exponents == other.unique_exponents &&
+           unique_coefficients == other.unique_coefficients &&
+           unique_original_coefficients == other.unique_original_coefficients &&
+           unique_ecp_exponents == other.unique_ecp_exponents &&
+           unique_ecp_coefficients == other.unique_ecp_coefficients &&
+           unique_ecp_radial_powers == other.unique_ecp_radial_powers &&
+           erd_coefficients == other.erd_coefficients && centers == other.centers;
+}
+
+BasisSetStructuralSnapshot BasisSet::structural_snapshot() const {
+    const auto capture_shell = [](const GaussianShell& shell, bool ecp) {
+        BasisShellSnapshot result;
+        result.shell_type = static_cast<int>(shell.shell_type());
+        result.angular_momentum = shell.am();
+        result.puream = shell.is_pure() ? 1 : 0;
+        result.center = shell.ncenter();
+        result.start = shell.start();
+        result.nfunction = shell.nfunction();
+        result.ncartesian = shell.ncartesian();
+        result.coordinates = {shell.coord(0), shell.coord(1), shell.coord(2)};
+        for (int primitive = 0; primitive < shell.nprimitive(); ++primitive) {
+            result.exponents.push_back(shell.exp(primitive));
+            result.coefficients.push_back(shell.coef(primitive));
+            if (ecp) {
+                result.radial_powers.push_back(shell.nval(primitive));
+            } else {
+                result.original_coefficients.push_back(shell.original_coef(primitive));
+                result.erd_coefficients.push_back(shell.erd_coef(primitive));
+            }
+        }
+        return result;
+    };
+
+    BasisSetStructuralSnapshot result;
+    result.name = name_;
+    result.key = key_;
+    result.target = target_;
+    result.core_electrons = ncore_;
+    result.scalar_state = {nao_, nbf_, n_uprimitive_, n_ecp_uprimitive_, n_shells_, n_ecp_shells_,
+                           nprimitive_, n_ecp_primitive_, max_am_, max_ecp_am_, max_nprimitive_};
+    result.puream = puream_;
+    for (const auto& shell : shells_) result.shells.push_back(capture_shell(shell, false));
+    for (const auto& shell : ecp_shells_) result.ecp_shells.push_back(capture_shell(shell, true));
+    result.n_prim_per_shell = n_prim_per_shell_;
+    result.shell_first_ao = shell_first_ao_;
+    result.shell_first_exponent = shell_first_exponent_;
+    result.shell_first_basis_function = shell_first_basis_function_;
+    result.shell_center = shell_center_;
+    result.ecp_shell_center = ecp_shell_center_;
+    result.function_to_shell = function_to_shell_;
+    result.ao_to_shell = ao_to_shell_;
+    result.function_center = function_center_;
+    result.center_to_nshell = center_to_nshell_;
+    result.center_to_shell = center_to_shell_;
+    result.center_to_ecp_nshell = center_to_ecp_nshell_;
+    result.center_to_ecp_shell = center_to_ecp_shell_;
+    result.unique_exponents = uexponents_;
+    result.unique_coefficients = ucoefficients_;
+    result.unique_original_coefficients = uoriginal_coefficients_;
+    result.unique_ecp_exponents = uecpexponents_;
+    result.unique_ecp_coefficients = uecpcoefficients_;
+    result.unique_ecp_radial_powers = uecpns_;
+    result.erd_coefficients = uerd_coefficients_;
+    result.centers = xyz_;
+    return result;
+}
+
 namespace {
 bool has_ending(std::string const &fullString, std::string const &ending) {
     if (fullString.length() >= ending.length()) {

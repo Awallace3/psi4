@@ -71,11 +71,15 @@ void export_oeprop(py::module &m) {
             const auto grac_c = std::dynamic_pointer_cast<const LibXCFunctional>(functional->grac_c_functional());
             result["grac_x_parameters"] = grac_x->effective_parameter_map();
             result["grac_c_parameters"] = grac_c->effective_parameter_map();
+            result["grac_alpha"] = functional->grac_alpha();
+            result["grac_beta"] = functional->grac_beta();
+            result["cation_reference"] = grac.cation_reference;
             result["neutral_precursor_energy"] = grac.neutral_precursor_energy;
             result["cation_energy"] = grac.cation_energy;
             result["site_count"] = context.sites().size();
             result["grid_point_count"] = context.grid_point_count();
-            result["single_thread_immutable"] = true;
+            result["single_thread_no_basis_mutation_contract"] = true;
+            result["basis_detached"] = false;
             return result;
         })
         .def("state_checksum", [](const FrozenResponseContext& context) {
@@ -124,28 +128,6 @@ void export_oeprop(py::module &m) {
               auto isa = ISAWeights::create(isa_context, std::move(weights));
               return std::make_shared<ISAPolResponseProvider>(context, ResponseKernel(0.25, 0.75), std::move(isa));
           }, "context"_a, "isa_context"_a);
-    m.def("_atomic_polarizability_mutate_grac_component_for_test",
-          [](const std::shared_ptr<Wavefunction>& wfn, const std::string& mutation) {
-              const auto hf = std::dynamic_pointer_cast<scf::HF>(wfn);
-              if (!hf || !hf->functional()) throw PSIEXCEPTION("GRAC mutation seam requires scf::HF");
-              auto functional = hf->functional();
-              auto component = mutation == "x_identity" ? functional->grac_x_functional() :
-                               mutation == "c_identity" ? functional->grac_c_functional() : nullptr;
-              if (!component) throw PSIEXCEPTION("GRAC mutation seam received an unknown component");
-              const auto old_name = component->name();
-              component->set_name(old_name + "-MUTATED");
-              return old_name;
-          }, "wfn"_a, "mutation"_a);
-    m.def("_atomic_polarizability_restore_grac_component_for_test",
-          [](const std::shared_ptr<Wavefunction>& wfn, const std::string& mutation, const std::string& old_name) {
-              const auto hf = std::dynamic_pointer_cast<scf::HF>(wfn);
-              if (!hf || !hf->functional()) throw PSIEXCEPTION("GRAC mutation seam requires scf::HF");
-              auto functional = hf->functional();
-              auto component = mutation == "x_identity" ? functional->grac_x_functional() :
-                               mutation == "c_identity" ? functional->grac_c_functional() : nullptr;
-              if (!component) throw PSIEXCEPTION("GRAC mutation seam received an unknown component");
-              component->set_name(old_name);
-          }, "wfn"_a, "mutation"_a, "old_name"_a);
     m.def("_atomic_polarizability_local_spherical_dipole_to_cartesian",
           [](const Matrix& spherical) {
               if (spherical.nirrep() != 1 || spherical.nrow() != 15 || spherical.ncol() != 15) {

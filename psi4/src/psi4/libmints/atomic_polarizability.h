@@ -30,6 +30,7 @@
 namespace psi {
 
 class BasisSet;
+struct BasisSetStructuralSnapshot;
 class Matrix;
 class Molecule;
 class SuperFunctional;
@@ -89,9 +90,9 @@ struct PSI_API GRACProvenance {
 };
 
 /**
- * Immutable, single-thread response state detached from all mutable source wavefunctions.
- * The factory is the only construction path and validates restricted converged RKS plus
- * the actual applied GRAC state before cloning response-bearing electronic data.
+ * Frozen single-thread response state with cloned electronic/functional/molecular data.
+ * The orbital BasisSet is deliberately retained by const alias under an explicit no-mutation
+ * contract; its complete value snapshot is checked immediately before any response path.
  */
 class PSI_API FrozenResponseContext {
    public:
@@ -121,6 +122,8 @@ class PSI_API FrozenResponseContext {
     const std::string& grac_x_name() const { return grac_x_name_; }
     const std::string& grac_c_name() const { return grac_c_name_; }
     std::size_t grid_point_count() const { return grid_weights_.size(); }
+    /** Enforce the documented single-thread/no-mutation contract for the retained basis alias. */
+    void verify_basis_unchanged() const;
 
    private:
     FrozenResponseContext(SharedMatrix Ca, SharedMatrix Cb, SharedVector epsilon_a,
@@ -128,6 +131,7 @@ class PSI_API FrozenResponseContext {
                           SharedVector occupation_b, SharedMatrix Da, SharedMatrix Db,
                           double energy, std::shared_ptr<const Molecule> molecule,
                           std::shared_ptr<const BasisSet> basis,
+                          std::shared_ptr<const BasisSetStructuralSnapshot> basis_snapshot,
                           std::shared_ptr<const SuperFunctional> functional,
                           std::vector<SitePosition> sites, std::vector<double> grid_points,
                           std::vector<double> grid_weights, std::vector<FrozenGridBlock> grid_blocks,
@@ -144,7 +148,9 @@ class PSI_API FrozenResponseContext {
     std::shared_ptr<const Matrix> Db_;
     double energy_{};
     std::shared_ptr<const Molecule> molecule_;
+    // Deliberate alias: safe only under the single-thread/no-mutation contract checked before response.
     std::shared_ptr<const BasisSet> basis_;
+    std::shared_ptr<const BasisSetStructuralSnapshot> basis_snapshot_;
     std::shared_ptr<const SuperFunctional> functional_;
     std::vector<SitePosition> sites_;
     std::vector<double> grid_points_;

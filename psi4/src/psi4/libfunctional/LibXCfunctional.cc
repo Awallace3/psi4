@@ -304,6 +304,12 @@ std::map<std::string, double> LibXCFunctional::query_libxc(const std::string& fu
 
     return params;
 }
+std::string LibXCFunctional::libxc_canonical_name() const {
+    const char* canonical = xc_functional_get_name(func_id_);
+    if (!canonical) throw PSIEXCEPTION("LibXCFunctional: initialized functional has no canonical name");
+    return canonical;
+}
+
 std::map<std::string, double> LibXCFunctional::effective_parameter_map() const {
     std::map<std::string, double> result;
     const int npars = xc_func_info_get_n_ext_params(xc_functional_.get()->info);
