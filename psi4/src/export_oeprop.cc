@@ -42,10 +42,10 @@ using namespace pybind11::literals;
 void export_oeprop(py::module &m) {
     // Underscored pure-math seams keep protocol tests on the native implementation
     // without expanding the supported public API.
-    m.def("_atomic_polarizability_make_casimir_grid",
-          [](unsigned int nonzero_count, double scale) {
-              return make_casimir_grid(nonzero_count, scale).frequencies;
-          });
+    m.def("_atomic_polarizability_make_casimir_grid", [](unsigned int nonzero_count, double scale) {
+        const auto grid = make_casimir_grid(nonzero_count, scale);
+        return py::make_tuple(grid.frequencies, grid.weights);
+    });
     m.def("_atomic_polarizability_local_spherical_dipole_to_cartesian",
           [](const Matrix& spherical) {
               if (spherical.nirrep() != 1 || spherical.nrow() != 15 || spherical.ncol() != 15) {

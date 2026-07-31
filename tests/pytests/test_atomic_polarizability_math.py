@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,20 @@ _REVIEWED_FREQUENCIES = (
     37.82376235021415,
 )
 
+_REVIEWED_WEIGHTS = (
+    0.0,
+    0.01711141976082999,
+    0.04296478632573829,
+    0.07767872676394183,
+    0.13105411733467387,
+    0.22389687302154546,
+    0.4079488542407823,
+    0.8387305806393448,
+    2.131641821338567,
+    8.208052005690483,
+    97.92092081488428,
+)
+
 
 def _matrix(values):
     matrix = psi4.core.Matrix(len(values), len(values[0]))
@@ -44,9 +59,16 @@ def _as_packed_rows(matrix):
     return [matrix.get(row, column) for row in range(3) for column in range(3)]
 
 
-def test_casimir_frequency_grid_matches_reviewed_eleven_point_protocol():
-    frequencies = psi4.core._atomic_polarizability_make_casimir_grid(10, 0.5)
-    assert frequencies == pytest.approx(_REVIEWED_FREQUENCIES, rel=2.0e-15, abs=0.0)
+def test_casimir_frequency_grid_matches_reviewed_eleven_point_protocol_exactly():
+    frequencies, weights = psi4.core._atomic_polarizability_make_casimir_grid(10, 0.5)
+    assert tuple(frequencies) == _REVIEWED_FREQUENCIES
+    assert tuple(weights) == _REVIEWED_WEIGHTS
+
+
+def test_casimir_frequency_grid_scales_frequencies_and_weights():
+    frequencies, weights = psi4.core._atomic_polarizability_make_casimir_grid(10, 0.25)
+    assert tuple(frequencies) == tuple(value * 0.5 for value in _REVIEWED_FREQUENCIES)
+    assert tuple(weights) == tuple(value * 0.5 for value in _REVIEWED_WEIGHTS)
 
 
 @pytest.mark.parametrize("nonzero_count", [0, 9, 11])
@@ -69,6 +91,13 @@ def test_casimir_frequency_grid_requires_ten_nonzero_points(nonzero_count):
 def test_casimir_frequency_grid_rejects_invalid_scale(scale):
     with pytest.raises(RuntimeError, match=r"finite and positive"):
         psi4.core._atomic_polarizability_make_casimir_grid(10, scale)
+
+
+def test_casimir_frequency_grid_rejects_weight_overflow():
+    weight_overflow_scale = float.fromhex("0x1.fffffffffffffp+1023") / 100.0
+    assert math.isfinite(weight_overflow_scale * (_REVIEWED_FREQUENCIES[-1] / 0.5))
+    with pytest.raises(RuntimeError, match=r"finite and positive at every grid point"):
+        psi4.core._atomic_polarizability_make_casimir_grid(10, weight_overflow_scale)
 
 
 def test_local_spherical_dipole_maps_10_11c_11s_to_z_x_y():
