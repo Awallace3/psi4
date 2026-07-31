@@ -62,11 +62,27 @@ namespace detail {
 void validate_vertical_protocol(bool cation_state_valid, bool complete_basis_valid);
 
 /** Pure dense restricted-response amplitudes and LAPACK reciprocal-condition diagnostic. */
-struct PSI_API DenseRestrictedResponse {
+struct DenseRestrictedResponse {
     SharedMatrix P;
     SharedMatrix Q;
     double reciprocal_condition{};
 };
+
+/**
+ * Enforce the dense solve's scientific-quality budget: RCOND and reciprocal
+ * pivot growth >= 1e-12, FERR <= 1e-8, and BERR and independently recomputed
+ * scale-aware residual <= 1e-11. All diagnostics must be finite.
+ *
+ * The forward-error limit leaves four decimal orders beneath downstream 1e-4
+ * parity; the backward/residual limits leave seven. The RCOND and pivot-growth
+ * floors reject condition amplification or LU growth beyond 1e12, where the
+ * LAPACK error estimates themselves cease to be a dependable fail-closed gate.
+ */
+void validate_dense_response_diagnostics(double reciprocal_condition,
+                                         double reciprocal_pivot_growth,
+                                         const std::vector<double>& forward_error,
+                                         const std::vector<double>& backward_error,
+                                         const std::vector<double>& scaled_residual);
 
 /**
  * Solve the amplitude algebra using the native convention H1 = A + B, H2 = A - B:

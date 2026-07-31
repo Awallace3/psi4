@@ -126,6 +126,16 @@ void export_oeprop(py::module &m) {
               return values;
           },
           "H1"_a, "H2"_a, "omega"_a, "rhs"_a);
+    m.def("_atomic_polarizability_validate_response_diagnostics",
+          [](double reciprocal_condition, double reciprocal_pivot_growth,
+             const std::vector<double>& forward_error, const std::vector<double>& backward_error,
+             const std::vector<double>& scaled_residual) {
+              detail::validate_dense_response_diagnostics(
+                  reciprocal_condition, reciprocal_pivot_growth, forward_error, backward_error,
+                  scaled_residual);
+          },
+          "reciprocal_condition"_a, "reciprocal_pivot_growth"_a, "forward_error"_a,
+          "backward_error"_a, "scaled_residual"_a);
     m.def("_atomic_polarizability_validate_response_kernel", [](double chf_exchange, double alda_kernel) {
         const ResponseKernel kernel(chf_exchange, alda_kernel);
         return py::make_tuple(kernel.chf_exchange(), kernel.alda_kernel());

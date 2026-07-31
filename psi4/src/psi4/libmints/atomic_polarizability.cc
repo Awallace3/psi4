@@ -46,6 +46,11 @@ namespace {
 
 constexpr std::size_t kTensorDimension = 3;
 constexpr double kValidationTolerance = 1.0e-10;
+constexpr double kDenseMinimumReciprocalCondition = 1.0e-12;
+constexpr double kDenseMinimumReciprocalPivotGrowth = 1.0e-12;
+constexpr double kDenseMaximumForwardError = 1.0e-8;
+constexpr double kDenseMaximumBackwardError = 1.0e-11;
+constexpr double kDenseMaximumScaledResidual = 1.0e-11;
 
 void require_three_by_three(const Matrix& matrix, const char* context) {
     if (matrix.nirrep() != 1 || matrix.nrow() != kTensorDimension || matrix.ncol() != kTensorDimension) {
@@ -549,6 +554,38 @@ void detail::validate_vertical_protocol(bool cation_state_valid, bool complete_b
     }
 }
 
+void detail::validate_dense_response_diagnostics(
+    double reciprocal_condition, double reciprocal_pivot_growth,
+    const std::vector<double>& forward_error, const std::vector<double>& backward_error,
+    const std::vector<double>& scaled_residual) {
+    if (forward_error.empty() || backward_error.size() != forward_error.size() ||
+        scaled_residual.size() != forward_error.size()) {
+        throw PSIEXCEPTION("dense restricted response: diagnostic cardinalities are inconsistent");
+    }
+    if (!std::isfinite(reciprocal_condition) ||
+        reciprocal_condition < kDenseMinimumReciprocalCondition) {
+        throw PSIEXCEPTION("dense restricted response: reciprocal condition estimate is below 1e-12");
+    }
+    if (!std::isfinite(reciprocal_pivot_growth) ||
+        reciprocal_pivot_growth < kDenseMinimumReciprocalPivotGrowth) {
+        throw PSIEXCEPTION("dense restricted response: reciprocal pivot growth is below 1e-12");
+    }
+    for (std::size_t column = 0; column < forward_error.size(); ++column) {
+        if (!std::isfinite(forward_error[column]) || forward_error[column] < 0.0 ||
+            forward_error[column] > kDenseMaximumForwardError) {
+            throw PSIEXCEPTION("dense restricted response: forward error estimate exceeds 1e-8");
+        }
+        if (!std::isfinite(backward_error[column]) || backward_error[column] < 0.0 ||
+            backward_error[column] > kDenseMaximumBackwardError) {
+            throw PSIEXCEPTION("dense restricted response: backward error estimate exceeds 1e-11");
+        }
+        if (!std::isfinite(scaled_residual[column]) || scaled_residual[column] < 0.0 ||
+            scaled_residual[column] > kDenseMaximumScaledResidual) {
+            throw PSIEXCEPTION("dense restricted response: recomputed scaled residual exceeds 1e-11");
+        }
+    }
+}
+
 detail::DenseRestrictedResponse detail::solve_dense_restricted_response(
     const Matrix& H1, const Matrix& H2, double omega, const Matrix& rhs) {
     require_dense_response_operator(H1, "H1");
@@ -614,14 +651,8 @@ detail::DenseRestrictedResponse detail::solve_dense_restricted_response(
     if (info != 0)
         throw PSIEXCEPTION("dense restricted response: LAPACK reported singular or invalid equations; info=" +
                            std::to_string(info));
-    const double condition_cutoff = std::numeric_limits<double>::epsilon() * std::max(1, order);
-    if (!std::isfinite(reciprocal_condition) || reciprocal_condition <= condition_cutoff)
-        throw PSIEXCEPTION("dense restricted response: reciprocal condition estimate is too small");
-    for (int column = 0; column < rhs_count; ++column)
-        if (!std::isfinite(forward_error[column]) || !std::isfinite(backward_error[column]))
-            throw PSIEXCEPTION("dense restricted response: LAPACK returned nonfinite error diagnostics");
 
-    const double residual_factor = 512.0 * std::numeric_limits<double>::epsilon() * std::max(1, order);
+    std::vector<double> scaled_residual(column_count, 0.0);
     for (int column = 0; column < rhs_count; ++column) {
         for (int row = 0; row < order; ++row) {
             const auto rhs_index = row + static_cast<std::size_t>(column) * dimension;
@@ -634,11 +665,17 @@ detail::DenseRestrictedResponse detail::solve_dense_restricted_response(
                 scale += std::abs(a) * std::abs(x);
             }
             const double residual = product - original_rhs[rhs_index];
-            if (!std::isfinite(product) || !std::isfinite(scale) || !std::isfinite(residual) ||
-                std::abs(residual) > residual_factor * std::max(1.0, scale))
-                throw PSIEXCEPTION("dense restricted response: solution residual validation failed");
+            double relative_residual = std::numeric_limits<double>::infinity();
+            if (std::isfinite(product) && std::isfinite(scale) && std::isfinite(residual)) {
+                relative_residual = scale == 0.0 ? 0.0 : std::abs(residual) / scale;
+            }
+            scaled_residual[column] = std::max(scaled_residual[column], relative_residual);
         }
     }
+    // With FACT='N', DGESVX does not equilibrate: WORK(1) is norm(A)/norm(U)
+    // for the original doubled operator, so no conversion from scaled units is needed.
+    detail::validate_dense_response_diagnostics(reciprocal_condition, work[0], forward_error,
+                                                backward_error, scaled_residual);
 
     auto P = std::make_shared<Matrix>(transition_count, rhs_count);
     auto Q = std::make_shared<Matrix>(transition_count, rhs_count);

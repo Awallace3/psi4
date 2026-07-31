@@ -1,6 +1,7 @@
 import math
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 import psi4
@@ -130,6 +131,31 @@ def test_restricted_response_supports_multiple_rhs_without_cross_column_mixing()
     assert result["Q"].shape == (2, 3)
 
 
+def test_restricted_response_distinct_noncommuting_blocks_match_full_numpy_oracle():
+    h1 = np.array([[3.0, 0.7], [0.7, 1.8]])
+    h2 = np.array([[2.1, -0.4], [-0.4, 3.2]])
+    omega = 0.65
+    rhs = np.array([[1.0, -0.3, 2.4], [0.2, 1.7, -0.8]])
+    assert not np.allclose(h1 @ h2, h2 @ h1)
+
+    doubled = np.block([[h1, omega * np.eye(2)], [-omega * np.eye(2), h2]])
+    doubled_rhs = np.vstack((rhs, np.zeros_like(rhs)))
+    oracle = np.linalg.solve(doubled, doubled_rhs)
+    result = _solve_restricted_response(h1.tolist(), h2.tolist(), omega, rhs.tolist())
+    p = np.array(_response_matrix_values(result["P"]))
+    q = np.array(_response_matrix_values(result["Q"]))
+
+    assert p == pytest.approx(oracle[:2], abs=2.0e-14)
+    assert q == pytest.approx(oracle[2:], abs=2.0e-14)
+    assert np.max(np.abs(h1 @ p + omega * q - rhs)) < 2.0e-14
+    assert np.max(np.abs(-omega * p + h2 @ q)) < 2.0e-14
+
+    wrong_h2_oracle = np.linalg.solve(
+        np.block([[h1, omega * np.eye(2)], [-omega * np.eye(2), h1]]), doubled_rhs
+    )
+    assert np.max(np.abs(oracle - wrong_h2_oracle)) > 1.0e-2
+
+
 def test_restricted_response_amplitude_contraction_is_reciprocal():
     h1 = [[3.0, 0.4], [0.4, 2.0]]
     h2 = [[2.5, -0.2], [-0.2, 1.7]]
@@ -169,6 +195,46 @@ def test_restricted_response_rejects_singular_or_numerically_singular_systems(sm
             0.0,
             [[1.0], [1.0]],
         )
+
+
+def test_restricted_response_rejects_finite_frequency_singular_doubled_system():
+    with pytest.raises(RuntimeError, match=r"singular|condition"):
+        _solve_restricted_response([[1.0]], [[-1.0]], 1.0, [[1.0]])
+
+
+def _validate_response_diagnostics(rcond=1.0, pivot=1.0, ferr=(0.0,), berr=(0.0,), residual=(0.0,)):
+    return psi4.core._atomic_polarizability_validate_response_diagnostics(
+        rcond, pivot, list(ferr), list(berr), list(residual)
+    )
+
+
+def test_restricted_response_diagnostic_budget_accepts_exact_boundaries():
+    assert _validate_response_diagnostics(
+        rcond=1.0e-12, pivot=1.0e-12, ferr=(1.0e-8,), berr=(1.0e-11,), residual=(1.0e-11,)
+    ) is None
+
+
+@pytest.mark.parametrize(
+    "kwargs,message",
+    [
+        ({"rcond": math.nextafter(1.0e-12, 0.0)}, r"reciprocal condition"),
+        ({"pivot": math.nextafter(1.0e-12, 0.0)}, r"pivot growth"),
+        ({"ferr": (math.nextafter(1.0e-8, math.inf),)}, r"forward error"),
+        ({"berr": (math.nextafter(1.0e-11, math.inf),)}, r"backward error"),
+        ({"residual": (math.nextafter(1.0e-11, math.inf),)}, r"residual"),
+        ({"rcond": math.nan}, r"reciprocal condition"),
+        ({"pivot": math.inf}, r"pivot growth"),
+        ({"ferr": (math.nan,)}, r"forward error"),
+        ({"berr": (math.inf,)}, r"backward error"),
+        ({"residual": (math.nan,)}, r"residual"),
+        ({"ferr": (-math.ulp(0.0),)}, r"forward error"),
+        ({"berr": (-math.ulp(0.0),)}, r"backward error"),
+        ({"residual": (-math.ulp(0.0),)}, r"residual"),
+    ],
+)
+def test_restricted_response_diagnostic_budget_rejects_threshold_neighbors_and_nonfinite(kwargs, message):
+    with pytest.raises(RuntimeError, match=message):
+        _validate_response_diagnostics(**kwargs)
 
 
 def test_casimir_frequency_grid_matches_reviewed_eleven_point_protocol_exactly():
