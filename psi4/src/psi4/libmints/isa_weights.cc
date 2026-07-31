@@ -565,6 +565,7 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
                                    options.radial_points(), false));
         tail_active = tail_active || iteration + 1 >= options.tail_activation_iteration() ||
                       provisional_residual <= options.tail_activation_convergence();
+        bool tail_fit_failed_this_iteration = false;
         if (tail_active) {
             for (std::size_t site = 0; site < nsite; ++site) {
                 try {
@@ -572,6 +573,7 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
                         throw PSIEXCEPTION("ISA test injection: tail fit failure");
                     fit_tail(updated[site], radial[site], scales[site], joins[site]);
                 } catch (const std::exception&) {
+                    tail_fit_failed_this_iteration = true;
                     ++diagnostics.tail_fit_failures;
                     if (profiles[site].has_tail) {
                         // Retain the complete prior profile. Combining a new
@@ -614,7 +616,8 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
         previous_output_weights = std::move(current_weights);
         profiles = std::move(updated);
         diagnostics.iterations = iteration + 1;
-        if (diagnostics.max_overlap_residual <= options.convergence() &&
+        if (!tail_fit_failed_this_iteration &&
+            diagnostics.max_overlap_residual <= options.convergence() &&
             iteration + 1 >= test_min_iterations) {
             diagnostics.converged = true;
             break;

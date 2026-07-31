@@ -173,22 +173,34 @@ def test_tail_fit_is_stable_under_radial_refinement():
 
 
 def test_tail_fit_failure_reuses_complete_previous_profile_or_fails_closed():
-    sites = [[-0.5, 0.0, 0.0], [0.5, 0.0, 0.0]]
-    points = [[-0.8, 0.1, 0.0], [0.0, 0.0, 0.0], [0.8, -0.1, 0.0]]
-    terms = [[-0.5, 0.0, 0.0, 1.0, 1.0], [0.5, 0.0, 0.0, 1.0, 1.0]]
-    common = {"radial_points": 32, "angular_polar_points": 8, "angular_azimuthal_points": 12}
+    sites = [[-0.6, 0.0, 0.0], [0.7, 0.1, 0.0]]
+    points = [[-0.9, 0.2, 0.0], [0.1, -0.3, 0.2], [1.1, 0.0, -0.1]]
+    terms = [[-0.6, 0.0, 0.0, 1.4, 0.7], [0.7, 0.1, 0.0, 0.5, 1.6]]
+    common = {
+        "radial_points": 32,
+        "angular_polar_points": 8,
+        "angular_azimuthal_points": 12,
+        "tail_activation_iteration": 1,
+    }
     with pytest.raises(RuntimeError, match=r"no valid exponential tail"):
         _synthetic(sites, points, terms, inject_tail_fit_failure_iteration=1, **common)
     retained = _synthetic(
         sites, points, terms,
         inject_tail_fit_failure_iteration=2,
-        test_min_iterations=3,
         **common,
     )
     assert retained["diagnostics"]["tail_fit_failures"] == len(sites)
     assert retained["diagnostics"]["tail_failure_reused_profiles"] == len(sites)
+    assert retained["diagnostics"]["iterations"] > 2
     assert retained["diagnostics"]["converged"] is True
     assert all(math.isfinite(value) for profile in retained["diagnostics"]["log_profiles"] for value in profile)
+    with pytest.raises(RuntimeError, match=r"did not converge"):
+        _synthetic(
+            sites, points, terms,
+            inject_tail_fit_failure_iteration=2,
+            max_iterations=2,
+            **common,
+        )
 
 
 def test_solver_fails_closed_for_nonconvergence_nonfinite_density_and_negative_weights():
