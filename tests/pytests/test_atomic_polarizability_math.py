@@ -66,9 +66,129 @@ def _solve_restricted_response(h1, h2, omega, rhs):
     )
 
 
+def _assemble_restricted_hessian(gaps, coulomb, exchange_direct, exchange_transpose, alda,
+                                  chf_exchange=0.25, alda_coefficient=0.75):
+    return psi4.core._atomic_polarizability_assemble_restricted_hessian(
+        gaps,
+        _matrix(coulomb),
+        _matrix(exchange_direct),
+        _matrix(exchange_transpose),
+        _matrix(alda),
+        chf_exchange,
+        alda_coefficient,
+    )
+
+
 def _response_matrix_values(matrix):
     rows, columns = matrix.shape
     return [[matrix.get(row, column) for column in range(columns)] for row in range(rows)]
+
+
+def test_restricted_hessian_one_transition_matches_literal_native_formula():
+    result = _assemble_restricted_hessian([2.0], [[3.0]], [[5.0]], [[7.0]], [[11.0]])
+
+    # Independent rational arithmetic:
+    # H1 = 2 + 4*3 - (1/4)*(5+7) + 4*(3/4)*11 = 44
+    # H2 = 2 - (1/4)*5 + (1/4)*7 = 5/2
+    assert _response_matrix_values(result["H1"]) == [[44.0]]
+    assert _response_matrix_values(result["H2"]) == [[2.5]]
+
+
+def test_restricted_hessian_two_transition_matches_elementwise_rational_oracle():
+    result = _assemble_restricted_hessian(
+        [2.0, 3.0],
+        [[1.0, 2.0], [2.0, 4.0]],
+        [[5.0, 6.0], [6.0, 7.0]],
+        [[9.0, 11.0], [11.0, 14.0]],
+        [[11.0, 12.0], [12.0, 13.0]],
+    )
+
+    # Literal values keep every primitive distinct and do not reuse production algebra.
+    assert _response_matrix_values(result["H1"]) == [[35.5, 39.75], [39.75, 52.75]]
+    assert _response_matrix_values(result["H2"]) == [[3.0, 1.25], [1.25, 4.75]]
+    assert all(result[name].get(i, j) == result[name].get(j, i)
+               for name in ("H1", "H2") for i in range(2) for j in range(2))
+
+
+def test_restricted_hessian_oracle_detects_every_omitted_or_swapped_component():
+    inputs = {
+        "gaps": [2.0, 3.0],
+        "coulomb": [[1.0, 2.0], [2.0, 4.0]],
+        "exchange_direct": [[5.0, 6.0], [6.0, 7.0]],
+        "exchange_transpose": [[9.0, 11.0], [11.0, 14.0]],
+        "alda": [[11.0, 12.0], [12.0, 13.0]],
+    }
+    expected = (
+        [[35.5, 39.75], [39.75, 52.75]],
+        [[3.0, 1.25], [1.25, 4.75]],
+    )
+    zero = [[0.0, 0.0], [0.0, 0.0]]
+    mutations = [
+        {"gaps": [1.0, 1.0]},
+        {"coulomb": zero},
+        {"exchange_direct": zero},
+        {"exchange_transpose": zero},
+        {"alda": zero},
+        {"coulomb": inputs["alda"], "alda": inputs["coulomb"]},
+        {"exchange_direct": inputs["exchange_transpose"],
+         "exchange_transpose": inputs["exchange_direct"]},
+    ]
+    for mutation in mutations:
+        candidate = {**inputs, **mutation}
+        result = _assemble_restricted_hessian(**candidate)
+        actual = (_response_matrix_values(result["H1"]), _response_matrix_values(result["H2"]))
+        assert actual != expected
+
+
+@pytest.mark.parametrize(
+    "gaps,coulomb,exchange_direct,exchange_transpose,alda,message",
+    [
+        ([], [[1.0]], [[1.0]], [[1.0]], [[1.0]], r"orbital gaps.*nonempty"),
+        ([0.0], [[1.0]], [[1.0]], [[1.0]], [[1.0]], r"orbital gaps.*positive"),
+        ([-1.0], [[1.0]], [[1.0]], [[1.0]], [[1.0]], r"orbital gaps.*positive"),
+        ([math.nan], [[1.0]], [[1.0]], [[1.0]], [[1.0]], r"orbital gaps.*finite"),
+        ([1.0, 2.0], [[1.0]], [[1.0, 0.0], [0.0, 1.0]],
+         [[1.0, 0.0], [0.0, 1.0]], [[1.0, 0.0], [0.0, 1.0]], r"Coulomb.*dimension"),
+        ([1.0, 2.0], [[1.0, 0.0], [0.0, 1.0]], [[1.0]],
+         [[1.0, 0.0], [0.0, 1.0]], [[1.0, 0.0], [0.0, 1.0]], r"K_direct.*dimension"),
+        ([1.0, 2.0], [[1.0, 0.0], [0.0, 1.0]],
+         [[1.0, 0.0], [0.0, 1.0]], [[1.0]],
+         [[1.0, 0.0], [0.0, 1.0]], r"K_transpose.*dimension"),
+        ([1.0, 2.0], [[1.0, 0.0], [0.0, 1.0]],
+         [[1.0, 0.0], [0.0, 1.0]], [[1.0, 0.0], [0.0, 1.0]], [[1.0]],
+         r"full ALDA.*dimension"),
+        ([1.0, 2.0], [[1.0, 0.1], [0.0, 1.0]],
+         [[1.0, 0.0], [0.0, 1.0]], [[1.0, 0.0], [0.0, 1.0]],
+         [[1.0, 0.0], [0.0, 1.0]], r"Coulomb.*symmetric"),
+        ([1.0], [[1.0]], [[math.inf]], [[1.0]], [[1.0]], r"K_direct.*finite"),
+        ([1.0, 2.0], [[1.0, 0.0], [0.0, 1.0]],
+         [[1.0, 0.0], [0.0, 1.0]], [[1.0, 1.0e-4], [0.0, 1.0]],
+         [[1.0, 0.0], [0.0, 1.0]], r"K_transpose.*symmetric"),
+        ([1.0], [[1.0]], [[1.0]], [[1.0]], [[math.nan]], r"full ALDA.*finite"),
+    ],
+)
+def test_restricted_hessian_rejects_invalid_primitives(
+    gaps, coulomb, exchange_direct, exchange_transpose, alda, message
+):
+    with pytest.raises(RuntimeError, match=message):
+        _assemble_restricted_hessian(gaps, coulomb, exchange_direct, exchange_transpose, alda)
+
+
+def test_restricted_hessian_requires_exact_response_kernel_and_no_ground_functional():
+    unit = [[1.0]]
+    with pytest.raises(RuntimeError, match=r"CHF exchange.*exactly 0.25"):
+        _assemble_restricted_hessian(
+            [1.0], unit, unit, unit, unit, math.nextafter(0.25, math.inf), 0.75
+        )
+    with pytest.raises(RuntimeError, match=r"ALDA coefficient.*exactly 0.75"):
+        _assemble_restricted_hessian(
+            [1.0], unit, unit, unit, unit, 0.25, math.nextafter(0.75, 0.0)
+        )
+    with pytest.raises(TypeError):
+        psi4.core._atomic_polarizability_assemble_restricted_hessian(
+            [1.0], _matrix(unit), _matrix(unit), _matrix(unit), _matrix(unit), 0.25, 0.75,
+            ground_functional="must not be accepted",
+        )
 
 
 def test_restricted_response_one_transition_matches_imaginary_frequency_algebra():

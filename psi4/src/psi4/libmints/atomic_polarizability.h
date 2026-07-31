@@ -181,6 +181,31 @@ class PSI_API ResponseKernel {
     double alda_kernel_;
 };
 
+namespace detail {
+/** Pure internal/test-only restricted-singlet H1=A+B and H2=A-B carrier. */
+struct RestrictedSingletHessian {
+    SharedMatrix H1;
+    SharedMatrix H2;
+};
+
+/**
+ * Assemble restricted-singlet response Hessians in the supplied nov transition order.
+ * The primitive indexing follows driver/procrouting/response/scf_products.py:
+ *   J[ia,jb] = (ia|jb), K_direct[ia,jb] = (ij|ab), and
+ *   K_transpose[ia,jb] = (aj|bi).
+ *
+ * K_transpose names the alternate native exchange contraction, not the ordinary
+ * matrix transpose of K_direct. Each transition-space primitive is independently
+ * required to be finite and symmetric; it is never silently symmetrized.
+ * full_alda is the complete exchange-plus-correlation ALDA kernel. Constructing
+ * that primitive from the physical LibXC grid is deliberately deferred to C2b.
+ */
+RestrictedSingletHessian assemble_restricted_singlet_hessian(
+    const std::vector<double>& orbital_gaps, const Matrix& coulomb,
+    const Matrix& exchange_direct, const Matrix& exchange_transpose,
+    const Matrix& full_alda, const ResponseKernel& kernel);
+}  // namespace detail
+
 /** Exact ordered effective DFT-grid state retained by a frozen response context. */
 struct PSI_API FrozenGridBlock {
     std::size_t point_offset{};

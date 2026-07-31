@@ -126,6 +126,21 @@ void export_oeprop(py::module &m) {
               return values;
           },
           "H1"_a, "H2"_a, "omega"_a, "rhs"_a);
+    m.def("_atomic_polarizability_assemble_restricted_hessian",
+          [](const std::vector<double>& orbital_gaps, const Matrix& coulomb,
+             const Matrix& exchange_direct, const Matrix& exchange_transpose,
+             const Matrix& full_alda, double chf_exchange, double alda_coefficient) {
+              const ResponseKernel kernel(chf_exchange, alda_coefficient);
+              const auto result = detail::assemble_restricted_singlet_hessian(
+                  orbital_gaps, coulomb, exchange_direct, exchange_transpose, full_alda, kernel);
+              py::dict values;
+              values["H1"] = result.H1;
+              values["H2"] = result.H2;
+              return values;
+          },
+          "orbital_gaps"_a, "coulomb"_a, "exchange_direct"_a,
+          "exchange_transpose"_a, "full_alda"_a, "chf_exchange"_a,
+          "alda_coefficient"_a);
     m.def("_atomic_polarizability_validate_response_diagnostics",
           [](double reciprocal_condition, double reciprocal_pivot_growth,
              const std::vector<double>& forward_error, const std::vector<double>& backward_error,

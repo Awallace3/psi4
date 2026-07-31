@@ -103,6 +103,30 @@ void require_dense_response_operator(const Matrix& matrix, const char* name) {
     }
 }
 
+void require_restricted_hessian_primitive(const Matrix& matrix, std::size_t transition_count,
+                                          const char* name) {
+    const std::string prefix = "restricted singlet Hessian: ";
+    if (matrix.nirrep() != 1 || matrix.nrow() != transition_count ||
+        matrix.ncol() != transition_count) {
+        throw PSIEXCEPTION(prefix + name + " dimensions must match the orbital gaps");
+    }
+    for (int row = 0; row < matrix.nrow(); ++row) {
+        for (int column = 0; column < matrix.ncol(); ++column) {
+            if (!std::isfinite(matrix(row, column)))
+                throw PSIEXCEPTION(prefix + name + " must contain only finite values");
+        }
+    }
+    for (int row = 0; row < matrix.nrow(); ++row) {
+        for (int column = row + 1; column < matrix.ncol(); ++column) {
+            const double scale = std::max({1.0, std::abs(matrix(row, column)),
+                                           std::abs(matrix(column, row))});
+            if (std::abs(matrix(row, column) - matrix(column, row)) >
+                kValidationTolerance * scale)
+                throw PSIEXCEPTION(prefix + name + " must be symmetric");
+        }
+    }
+}
+
 void require_rotation(const Matrix& rotation) {
     require_three_by_three(rotation, "rotate_tensor rotation");
     for (std::size_t row = 0; row < kTensorDimension; ++row) {
@@ -700,6 +724,52 @@ ResponseKernel::ResponseKernel(double chf_exchange, double alda_kernel)
     if (!std::isfinite(alda_kernel_) || alda_kernel_ != 0.75)
         throw PSIEXCEPTION("ResponseKernel: ALDA coefficient must be exactly 0.75");
 }
+
+namespace detail {
+RestrictedSingletHessian assemble_restricted_singlet_hessian(
+    const std::vector<double>& orbital_gaps, const Matrix& coulomb,
+    const Matrix& exchange_direct, const Matrix& exchange_transpose,
+    const Matrix& full_alda, const ResponseKernel& kernel) {
+    if (orbital_gaps.empty())
+        throw PSIEXCEPTION("restricted singlet Hessian: orbital gaps must be nonempty");
+    for (double gap : orbital_gaps) {
+        if (!std::isfinite(gap))
+            throw PSIEXCEPTION("restricted singlet Hessian: orbital gaps must be finite");
+        if (!(gap > 0.0))
+            throw PSIEXCEPTION("restricted singlet Hessian: orbital gaps must be positive");
+    }
+    const auto transition_count = orbital_gaps.size();
+    require_restricted_hessian_primitive(coulomb, transition_count, "Coulomb J");
+    require_restricted_hessian_primitive(exchange_direct, transition_count, "K_direct");
+    require_restricted_hessian_primitive(exchange_transpose, transition_count, "K_transpose");
+    require_restricted_hessian_primitive(full_alda, transition_count, "full ALDA kernel");
+
+    const double a = kernel.chf_exchange();
+    const double b = kernel.alda_kernel();
+    auto H1 = std::make_shared<Matrix>(transition_count, transition_count);
+    auto H2 = std::make_shared<Matrix>(transition_count, transition_count);
+    for (std::size_t row = 0; row < transition_count; ++row) {
+        for (std::size_t column = 0; column < transition_count; ++column) {
+            const double gap = row == column ? orbital_gaps[row] : 0.0;
+            const double h1 = gap + 4.0 * coulomb(row, column) -
+                              a * (exchange_direct(row, column) +
+                                   exchange_transpose(row, column)) +
+                              4.0 * b * full_alda(row, column);
+            const double h2 = gap - a * exchange_direct(row, column) +
+                              a * exchange_transpose(row, column);
+            if (!std::isfinite(h1) || !std::isfinite(h2))
+                throw PSIEXCEPTION("restricted singlet Hessian: assembled values must be finite");
+            (*H1)(row, column) = h1;
+            (*H2)(row, column) = h2;
+        }
+    }
+    // The formulas preserve symmetry because each distinctly indexed transition
+    // primitive was independently required to be symmetric above.
+    require_dense_response_operator(*H1, "assembled H1");
+    require_dense_response_operator(*H2, "assembled H2");
+    return {std::move(H1), std::move(H2)};
+}
+}  // namespace detail
 
 FrozenResponseContext::FrozenResponseContext(
     SharedMatrix Ca, SharedMatrix Cb, SharedVector epsilon_a, SharedVector epsilon_b,
