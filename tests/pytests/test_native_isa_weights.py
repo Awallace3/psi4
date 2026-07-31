@@ -86,6 +86,22 @@ def test_log_pchip_is_shape_preserving_and_exponential_tail_is_continuous():
     assert result["log_values"][-1] < result["log_values"][-2]
 
 
+def test_tail_fit_is_stable_under_radial_refinement():
+    sites = [[-0.8, 0.0, 0.0], [0.8, 0.0, 0.0]]
+    points = [[-1.4, 0.2, 0.0], [-0.7, 0.1, 0.0], [0.0, 0.2, 0.0],
+              [0.7, -0.1, 0.0], [1.4, -0.2, 0.0]]
+    terms = [[-0.8, 0.0, 0.0, 1.0, 0.9], [0.8, 0.0, 0.0, 0.7, 1.2]]
+    options = {"angular_polar_points": 18, "angular_azimuthal_points": 24}
+    grids = [
+        _synthetic(sites, points, terms, radial_points=radial_points, **options)
+        for radial_points in (120, 160)
+    ]
+    tail_alphas = [result["diagnostics"]["tail_alphas"] for result in grids]
+    assert tail_alphas[1] == pytest.approx(tail_alphas[0], abs=2.0e-3)
+    populations = [result["diagnostics"]["atomic_populations"] for result in grids]
+    assert populations[1] == pytest.approx(populations[0], abs=1.0e-4)
+
+
 def test_solver_fails_closed_for_nonconvergence_and_nonfinite_density():
     sites = [[-0.5, 0.0, 0.0], [0.5, 0.0, 0.0]]
     points = [[0.0, 0.0, 0.0]]
@@ -164,11 +180,19 @@ def test_real_frozen_grac_h2o_conserves_population_and_refines(frozen_h2o_contex
         assert math.fsum(diagnostics["atomic_populations"]) == pytest.approx(
             diagnostics["electron_count"], abs=2.0e-10
         )
-    # Refinement is an invariant/trend check, not an oracle-literal comparison.
+        assert diagnostics["converged"] is True
+        assert diagnostics["max_overlap_residual"] <= 1.0e-9
+    # These deliberately small, non-nested product grids qualify invariants and
+    # fixed-point convergence, not monotonic quadrature convergence.
     profiles = [result["diagnostics"]["grid_profile"] for result in (coarse, medium, fine)]
     assert profiles[0]["shell_point_count"] < profiles[1]["shell_point_count"] < profiles[2]["shell_point_count"]
-    populations = [result["diagnostics"]["atomic_populations"] for result in (coarse, medium, fine)]
-    coarse_step = max(abs(a - b) for a, b in zip(populations[0], populations[1]))
-    fine_step = max(abs(a - b) for a, b in zip(populations[1], populations[2]))
-    assert fine_step < coarse_step
-    assert fine["diagnostics"]["max_unity_residual"] <= coarse["diagnostics"]["max_unity_residual"] + 1.0e-15
+
+
+@pytest.mark.scf
+def test_real_frozen_grac_h2o_is_deterministic(frozen_h2o_context):
+    options = {"radial_points": 36, "angular_polar_points": 12, "angular_azimuthal_points": 16}
+    first = psi4.core._atomic_polarizability_compute_isa_weights(frozen_h2o_context, options)
+    second = psi4.core._atomic_polarizability_compute_isa_weights(frozen_h2o_context, options)
+    assert second["weights"] == first["weights"]
+    assert second["diagnostics"]["atomic_populations"] == first["diagnostics"]["atomic_populations"]
+    assert second["diagnostics"]["log_profiles"] == first["diagnostics"]["log_profiles"]

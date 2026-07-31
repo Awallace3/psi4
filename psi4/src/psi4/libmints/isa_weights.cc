@@ -261,15 +261,19 @@ double solve_tail_alpha(double value_at_join, double join, double charge) {
     return alpha;
 }
 
-void fit_tail(Profile& profile, const Quadrature& radial, double join) {
+void fit_tail(Profile& profile, const Quadrature& radial, double scale, double join) {
     const double log_value = profile.pchip(join);
     const double value = std::exp(log_value);
+    // Integrate on [join, infinity) directly.  Filtering a quadrature built for
+    // [0, infinity) introduces a moving step at join and makes the fitted tail
+    // charge oscillate strongly as the radial point count changes.
+    const auto tail_radial = mapped_radial(radial.nodes.size() - 1, scale);
     long double charge = 0.0L;
-    for (std::size_t i = 1; i < radial.nodes.size(); ++i) {
-        if (radial.nodes[i] <= join) continue;
-        const long double radius = radial.nodes[i];
-        charge += 4.0L * static_cast<long double>(kPi) * radius * radius * radial.weights[i] *
-                  std::exp(static_cast<long double>(profile.pchip(radial.nodes[i])));
+    for (std::size_t i = 1; i < tail_radial.nodes.size(); ++i) {
+        const double radius_double = join + tail_radial.nodes[i];
+        const long double radius = radius_double;
+        charge += 4.0L * static_cast<long double>(kPi) * radius * radius * tail_radial.weights[i] *
+                  std::exp(static_cast<long double>(profile.pchip(radius_double)));
     }
     const double charge_double = static_cast<double>(charge);
     const double alpha = solve_tail_alpha(value, join, charge_double);
@@ -518,7 +522,7 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
         if (tail_active) {
             for (std::size_t site = 0; site < nsite; ++site) {
                 try {
-                    fit_tail(updated[site], radial[site], joins[site]);
+                    fit_tail(updated[site], radial[site], scales[site], joins[site]);
                 } catch (const std::exception&) {
                     ++diagnostics.tail_fit_failures;
                     if (profiles[site].has_tail) {
