@@ -342,7 +342,7 @@ struct RestrictedC1JKPlan {
 RestrictedC1JKPlan plan_restricted_c1_jk(std::size_t nbf, std::size_t nocc,
                                          std::size_t nvir, std::size_t memory_bytes);
 
-/** Native C1 restricted transition-space ERI primitives; ALDA is intentionally absent. */
+/** Native C1 restricted transition-space ERI primitives; ALDA is constructed separately. */
 struct RestrictedC1Primitives {
     std::vector<std::pair<std::size_t, std::size_t>> transitions;
     std::vector<double> orbital_gaps;
@@ -362,6 +362,41 @@ RestrictedC1Primitives construct_restricted_c1_primitives_test_only(
     const std::shared_ptr<const FrozenResponseContext>& context, const Matrix& Ca, const Matrix& Cb,
     const Vector& epsilon_a, const Vector& epsilon_b, const Vector& occupation_a,
     const Vector& occupation_b);
+
+struct RestrictedALDADiagnostics {
+    std::string exchange_component;
+    std::string correlation_component;
+    int exchange_libxc_id{};
+    int correlation_libxc_id{};
+    double exchange_coefficient{};
+    double correlation_coefficient{};
+    int derivative_order{};
+    double density_floor{};
+    std::size_t point_count{};
+    std::string restricted_normalization;
+};
+
+/** Full exchange-plus-correlation ALDA primitive on the exact sealed ordered grid. */
+struct RestrictedALDAPrimitive {
+    std::vector<std::pair<std::size_t, std::size_t>> transitions;
+    SharedMatrix full_alda;
+    RestrictedALDADiagnostics diagnostics;
+    std::vector<double> densities;
+    std::vector<double> fxc;
+    std::vector<double> transition_values;
+};
+
+RestrictedALDAPrimitive construct_restricted_alda_kernel(
+    const std::shared_ptr<const FrozenResponseContext>& context);
+SharedMatrix contract_restricted_alda_test_only(
+    const std::vector<double>& weights, const Matrix& transition_values,
+    const std::vector<double>& densities, const std::vector<double>& fxc,
+    double density_floor);
+std::pair<std::vector<double>, RestrictedALDADiagnostics> evaluate_restricted_alda_fxc_test_only(
+    const std::vector<double>& densities, bool include_correlation);
+void validate_restricted_alda_grid_test_only(std::size_t nbf, std::size_t point_count,
+                                             const std::vector<double>& weights,
+                                             const std::vector<FrozenGridBlock>& blocks);
 }  // namespace detail
 
 /** Actual ISA data structurally bound to one exact frozen context and its ordered grid/sites. */

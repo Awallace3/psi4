@@ -593,3 +593,120 @@ def test_restricted_c1_estimator_one_entry_memory_boundary_and_envelope_fail_clo
         estimator(110, 5, 103, 2**40)
     with pytest.raises(RuntimeError, match=r"overflow|dimension exceeds"):
         estimator(2**63, 2**63, 2, 2**64 - 1)
+
+
+def test_restricted_alda_one_point_permutation_and_failure_oracles():
+    contract = psi4.core._atomic_polarizability_test_contract_restricted_alda
+    t = np.array([[2.0, -3.0]])
+    actual = np.asarray(contract([0.25], psi4.core.Matrix.from_array(t), [0.7], [5.0]))
+    assert actual == pytest.approx(1.25 * np.outer(t[0], t[0]), abs=1.0e-15)
+    assert actual == pytest.approx(actual.T, abs=0.0)
+
+    weights = np.array([0.2, 0.4, 0.1])
+    values = np.array([[1.0, 2.0], [-0.5, 0.7], [3.0, -1.0]])
+    rho = np.array([0.3, 0.8, 1.2])
+    fxc = np.array([2.0, -0.4, 0.9])
+    reference = np.asarray(contract(weights, psi4.core.Matrix.from_array(values), rho, fxc))
+    order = [2, 0, 1]
+    permuted = np.asarray(contract(weights[order], psi4.core.Matrix.from_array(values[order]),
+                                   rho[order], fxc[order]))
+    assert permuted == pytest.approx(reference, abs=2.0e-15)
+    for w, v, d, f, message in (
+        ([-1.0], [[1.0]], [0.5], [1.0], r"weights.*nonnegative"),
+        ([1.0], [[1.0]], [0.0], [1.0], r"density.*below"),
+        ([1.0], [[1.0]], [0.5], [float("nan")], r"LibXC kernel.*finite"),
+        ([1.0], [[float("inf")]], [0.5], [1.0], r"transition values.*finite"),
+    ):
+        with pytest.raises(RuntimeError, match=message):
+            contract(w, psi4.core.Matrix.from_array(np.asarray(v)), d, f)
+
+    validate = psi4.core._atomic_polarizability_test_validate_restricted_alda_grid
+    validate(3, 3, [0.1, 0.2, 0.3], [0, 2], [2, 1], [[2, 0], [1]])
+    for arguments, message in (
+        ((3, 3, [0.1, 0.2, 0.3], [0, 1], [2, 1], [[0], [1]]), r"offset"),
+        ((3, 3, [0.1, 0.2, 0.3], [0], [3], [[0, 0]]), r"function map"),
+        ((3, 3, [0.1, -0.2, 0.3], [0], [3], [[0]]), r"weights.*nonnegative"),
+    ):
+        with pytest.raises(RuntimeError, match=message):
+            validate(*arguments)
+
+
+def test_restricted_alda_exact_dedicated_components_and_exchange_distinction():
+    evaluate = psi4.core._atomic_polarizability_test_restricted_alda_fxc
+    full = evaluate([0.05, 0.4, 1.7], True)
+    exchange = evaluate([0.05, 0.4, 1.7], False)
+    diagnostics = full["diagnostics"]
+    assert diagnostics["exchange_component"] == "XC_LDA_X"
+    assert diagnostics["correlation_component"] == "XC_LDA_C_VWN"
+    assert diagnostics["exchange_coefficient"] == 1.0
+    assert diagnostics["correlation_coefficient"] == 1.0
+    assert diagnostics["exchange_libxc_id"] > 0
+    assert diagnostics["correlation_libxc_id"] > 0
+    assert diagnostics["derivative_order"] == 2
+    assert "Da+Db" in diagnostics["restricted_normalization"]
+    assert "4*b once" in diagnostics["restricted_normalization"]
+    assert not np.allclose(full["fxc"], exchange["fxc"], rtol=1.0e-12, atol=1.0e-12)
+    assert exchange["diagnostics"]["correlation_component"] == ""
+    with pytest.raises(RuntimeError, match=r"density.*below"):
+        evaluate([0.0], True)
+
+
+@pytest.mark.scf
+def test_real_restricted_alda_independent_libxc_contraction_and_c2a_solver(frozen_h2o_context):
+    context, _, _ = frozen_h2o_context
+    before = context.state_checksum()
+    result = psi4.core._atomic_polarizability_test_restricted_alda_kernel(context)
+    assert context.state_checksum() == before
+    transitions = [tuple(pair) for pair in result["transitions"]]
+    nov = len(transitions)
+    kernel = np.asarray(result["full_alda"])
+    transition_values = np.asarray(result["transition_values"]).reshape(-1, nov)
+    weights = np.asarray(context.grid_snapshot()[1])
+
+    # Independent Python LibXC setup and NumPy contraction; neither production helper is reused.
+    functional = psi4.core.SuperFunctional.blank()
+    x = psi4.core.LibXCFunctional("XC_LDA_X", True)
+    c = psi4.core.LibXCFunctional("XC_LDA_C_VWN", True)
+    x.set_alpha(1.0)
+    c.set_alpha(1.0)
+    functional.add_x_functional(x)
+    functional.add_c_functional(c)
+    functional.set_density_tolerance(1.0e-300)
+    functional.set_max_points(len(result["densities"]))
+    functional.set_deriv(2)
+    functional.allocate()
+    independent = functional.compute_functional(
+        {"RHO_A": psi4.core.Vector.from_array(np.asarray(result["densities"]))}, -1, True)
+    independent_fxc = np.asarray(independent["V_RHO_A_RHO_A"])
+    expected = np.einsum("p,pi,p,pj->ij", weights, transition_values, independent_fxc,
+                         transition_values, optimize=True)
+    assert np.all(np.isfinite(kernel))
+    assert kernel == pytest.approx(kernel.T, abs=2.0e-13)
+    assert kernel == pytest.approx(expected, abs=3.0e-12)
+    assert result["fxc"] == pytest.approx(independent_fxc, abs=2.0e-13)
+
+    c1 = _restricted_c1_primitives(context)
+    assembled = psi4.core._atomic_polarizability_assemble_restricted_hessian(
+        c1["orbital_gaps"], c1["coulomb"], c1["exchange_direct"],
+        c1["exchange_transpose"], result["full_alda"], 0.25, 0.75)
+    expected_h1 = (np.diag(c1["orbital_gaps"]) + 4.0 * np.asarray(c1["coulomb"])
+                   - 0.25 * (np.asarray(c1["exchange_direct"])
+                             + np.asarray(c1["exchange_transpose"]))
+                   + 4.0 * 0.75 * kernel)
+    assert np.asarray(assembled["H1"]) == pytest.approx(expected_h1, abs=5.0e-12)
+    rhs = psi4.core.Matrix.from_array(np.ones((nov, 1)) * 1.0e-3)
+    for omega in (0.0, 0.2):
+        response = psi4.core._atomic_polarizability_solve_restricted_response(
+            assembled["H1"], assembled["H2"], omega, rhs)
+        assert np.all(np.isfinite(np.asarray(response["P"])))
+        assert np.all(np.isfinite(np.asarray(response["Q"])))
+
+
+def test_restricted_alda_source_guard_no_ground_response_functional():
+    source = (Path(__file__).resolve().parents[2]
+              / "psi4/src/psi4/libmints/atomic_polarizability.cc").read_text()
+    region = source[source.index("RestrictedALDAPrimitive construct_restricted_alda_kernel"):
+                    source.index("std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create")]
+    assert "context->functional" not in region
+    assert "V_potential" not in region
+    assert "PBE0" not in region.upper()

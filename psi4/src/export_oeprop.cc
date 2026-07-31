@@ -397,6 +397,60 @@ void export_oeprop(py::module &m) {
               return result;
           },
           "context"_a, "test_overrides"_a = py::dict());
+    const auto alda_diagnostics_dict = [](const detail::RestrictedALDADiagnostics& diagnostics) {
+        py::dict values;
+        values["exchange_component"] = diagnostics.exchange_component;
+        values["correlation_component"] = diagnostics.correlation_component;
+        values["exchange_libxc_id"] = diagnostics.exchange_libxc_id;
+        values["correlation_libxc_id"] = diagnostics.correlation_libxc_id;
+        values["exchange_coefficient"] = diagnostics.exchange_coefficient;
+        values["correlation_coefficient"] = diagnostics.correlation_coefficient;
+        values["derivative_order"] = diagnostics.derivative_order;
+        values["density_floor"] = diagnostics.density_floor;
+        values["point_count"] = diagnostics.point_count;
+        values["restricted_normalization"] = diagnostics.restricted_normalization;
+        return values;
+    };
+    m.def("_atomic_polarizability_test_contract_restricted_alda",
+          [](const std::vector<double>& weights, const Matrix& transition_values,
+             const std::vector<double>& densities, const std::vector<double>& fxc,
+             double density_floor) {
+              return detail::contract_restricted_alda_test_only(
+                  weights, transition_values, densities, fxc, density_floor);
+          }, "weights"_a, "transition_values"_a, "densities"_a, "fxc"_a,
+          "density_floor"_a = 1.0e-20);
+    m.def("_atomic_polarizability_test_validate_restricted_alda_grid",
+          [](std::size_t nbf, std::size_t point_count, const std::vector<double>& weights,
+             const std::vector<std::size_t>& offsets, const std::vector<std::size_t>& counts,
+             const std::vector<std::vector<int>>& maps) {
+              if (offsets.size() != counts.size() || offsets.size() != maps.size())
+                  throw PSIEXCEPTION("restricted ALDA kernel: malformed sealed block metadata");
+              std::vector<FrozenGridBlock> blocks;
+              for (std::size_t block = 0; block < offsets.size(); ++block)
+                  blocks.push_back({offsets[block], counts[block], maps[block]});
+              detail::validate_restricted_alda_grid_test_only(nbf, point_count, weights, blocks);
+          }, "nbf"_a, "point_count"_a, "weights"_a, "offsets"_a, "counts"_a, "maps"_a);
+    m.def("_atomic_polarizability_test_restricted_alda_fxc",
+          [alda_diagnostics_dict](const std::vector<double>& densities, bool include_correlation) {
+              const auto result = detail::evaluate_restricted_alda_fxc_test_only(densities, include_correlation);
+              py::dict values;
+              values["fxc"] = result.first;
+              values["diagnostics"] = alda_diagnostics_dict(result.second);
+              return values;
+          }, "densities"_a, "include_correlation"_a = true);
+    m.def("_atomic_polarizability_test_restricted_alda_kernel",
+          [alda_diagnostics_dict](const std::shared_ptr<FrozenResponseContext>& context) {
+              const auto result = detail::construct_restricted_alda_kernel(context);
+              py::dict values;
+              values["transition_order"] = "(i,a) occupied-major/virtual-minor";
+              values["transitions"] = result.transitions;
+              values["full_alda"] = result.full_alda;
+              values["densities"] = result.densities;
+              values["fxc"] = result.fxc;
+              values["transition_values"] = result.transition_values;
+              values["diagnostics"] = alda_diagnostics_dict(result.diagnostics);
+              return values;
+          }, "context"_a);
     m.def("_atomic_polarizability_estimate_restricted_c1_jk",
           [](std::size_t nbf, std::size_t nocc, std::size_t nvir, std::size_t memory_bytes) {
               const auto plan = detail::plan_restricted_c1_jk(nbf, nocc, nvir, memory_bytes);
