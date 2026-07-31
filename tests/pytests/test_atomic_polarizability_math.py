@@ -17,6 +17,120 @@ _PUBLIC_ARRAYS = (
     "ATOMIC C12",
 )
 
+_REVIEWED_FREQUENCIES = (
+    0.0,
+    0.0066096015960872435,
+    0.03617481199863096,
+    0.09544736369034827,
+    0.1976442118453127,
+    0.3704172128053672,
+    0.6749146404580301,
+    1.264899172436498,
+    2.619244684547324,
+    6.910885950408292,
+    37.82376235021415,
+)
+
+
+def _matrix(values):
+    matrix = psi4.core.Matrix(len(values), len(values[0]))
+    for row, entries in enumerate(values):
+        for column, value in enumerate(entries):
+            matrix.set(row, column, value)
+    return matrix
+
+
+def _as_packed_rows(matrix):
+    return [matrix.get(row, column) for row in range(3) for column in range(3)]
+
+
+def test_casimir_frequency_grid_matches_reviewed_eleven_point_protocol():
+    frequencies = psi4.core._atomic_polarizability_make_casimir_grid(10, 0.5)
+    assert frequencies == pytest.approx(_REVIEWED_FREQUENCIES, rel=2.0e-15, abs=0.0)
+
+
+@pytest.mark.parametrize("nonzero_count", [0, 9, 11])
+def test_casimir_frequency_grid_requires_ten_nonzero_points(nonzero_count):
+    with pytest.raises(RuntimeError, match=r"exactly ten nonzero"):
+        psi4.core._atomic_polarizability_make_casimir_grid(nonzero_count, 0.5)
+
+
+@pytest.mark.parametrize(
+    "scale",
+    [
+        0.0,
+        -0.5,
+        float("inf"),
+        float("nan"),
+        float.fromhex("0x1.fffffffffffffp+1023"),
+        float.fromhex("0x0.0000000000001p-1022"),
+    ],
+)
+def test_casimir_frequency_grid_rejects_invalid_scale(scale):
+    with pytest.raises(RuntimeError, match=r"finite and positive"):
+        psi4.core._atomic_polarizability_make_casimir_grid(10, scale)
+
+
+def test_local_spherical_dipole_maps_10_11c_11s_to_z_x_y():
+    spherical = [[0.0] * 15 for _ in range(15)]
+    dipole_block = (
+        (1.0, 2.0, 3.0),
+        (2.0, 4.0, 5.0),
+        (3.0, 5.0, 6.0),
+    )
+    for row in range(3):
+        for column in range(3):
+            spherical[row][column] = dipole_block[row][column]
+
+    cartesian = psi4.core._atomic_polarizability_local_spherical_dipole_to_cartesian(_matrix(spherical))
+    assert _as_packed_rows(cartesian) == pytest.approx(
+        [4.0, 5.0, 2.0, 5.0, 6.0, 3.0, 2.0, 3.0, 1.0]
+    )
+
+
+def test_rotate_tensor_applies_global_r_local_rt_with_right_handed_frame():
+    local = _matrix([[2.0, 0.5, 0.0], [0.5, 3.0, 0.0], [0.0, 0.0, 4.0]])
+    rotation = _matrix([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+
+    rotated = psi4.core._atomic_polarizability_rotate_tensor(local, rotation)
+    assert _as_packed_rows(rotated) == pytest.approx(
+        [3.0, -0.5, 0.0, -0.5, 2.0, 0.0, 0.0, 0.0, 4.0]
+    )
+
+
+@pytest.mark.parametrize(
+    "rotation",
+    [
+        [[2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        [[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+    ],
+)
+def test_rotate_tensor_rejects_invalid_frames(rotation):
+    with pytest.raises(RuntimeError, match=r"orthonormal right-handed"):
+        psi4.core._atomic_polarizability_rotate_tensor(
+            _matrix([[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 3.0]]),
+            _matrix(rotation),
+        )
+
+
+def test_pack_symmetric_tensor_uses_xx_xy_xz_yy_yz_zz_order():
+    tensor = _matrix([[1.0, 2.0, 3.0], [2.0, 4.0, 5.0], [3.0, 5.0, 6.0]])
+    assert psi4.core._atomic_polarizability_pack_symmetric_tensor(tensor) == pytest.approx(
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    )
+
+
+def test_tensor_algebra_rejects_asymmetry_and_nonfinite_values():
+    asymmetric = _matrix([[1.0, 2.0, 0.0], [2.1, 3.0, 0.0], [0.0, 0.0, 4.0]])
+    with pytest.raises(RuntimeError, match=r"finite symmetric"):
+        psi4.core._atomic_polarizability_pack_symmetric_tensor(asymmetric)
+
+    nonfinite = _matrix([[1.0, 0.0, 0.0], [0.0, float("nan"), 0.0], [0.0, 0.0, 1.0]])
+    with pytest.raises(RuntimeError, match=r"finite symmetric"):
+        psi4.core._atomic_polarizability_rotate_tensor(
+            nonfinite, _matrix([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        )
+
 
 def test_atomic_polarizabilities_api_is_registered():
     assert "ATOMIC_POLARIZABILITIES" in psi4.core.OEProp.valid_methods

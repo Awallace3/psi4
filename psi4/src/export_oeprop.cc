@@ -33,12 +33,39 @@
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
+#include "psi4/libpsi4util/exception.h"
 
 using namespace psi;
 namespace py = pybind11;
 using namespace pybind11::literals;
 
 void export_oeprop(py::module &m) {
+    // Underscored pure-math seams keep protocol tests on the native implementation
+    // without expanding the supported public API.
+    m.def("_atomic_polarizability_make_casimir_grid",
+          [](unsigned int nonzero_count, double scale) {
+              return make_casimir_grid(nonzero_count, scale).frequencies;
+          });
+    m.def("_atomic_polarizability_local_spherical_dipole_to_cartesian",
+          [](const Matrix& spherical) {
+              if (spherical.nirrep() != 1 || spherical.nrow() != 15 || spherical.ncol() != 15) {
+                  throw PSIEXCEPTION(
+                      "local_spherical_dipole_to_cartesian: expected a 15 by 15 rank-3 matrix");
+              }
+              L3Matrix values{};
+              for (std::size_t row = 0; row < values.size(); ++row) {
+                  for (std::size_t column = 0; column < values[row].size(); ++column) {
+                      values[row][column] = spherical(row, column);
+                  }
+              }
+              return std::make_shared<Matrix>(local_spherical_dipole_to_cartesian(values));
+          });
+    m.def("_atomic_polarizability_rotate_tensor",
+          [](const Matrix& local, const Matrix& local_to_global) {
+              return std::make_shared<Matrix>(rotate_tensor(local, local_to_global));
+          });
+    m.def("_atomic_polarizability_pack_symmetric_tensor", &pack_symmetric_tensor);
+
     py::class_<AtomicPolarizabilityCalculator>(m, "AtomicPolarizabilityCalculator",
                                                "Native atomic-polarizability pipeline entry point")
         .def(py::init<std::shared_ptr<Wavefunction>>())
