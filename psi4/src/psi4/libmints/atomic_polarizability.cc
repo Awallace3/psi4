@@ -1522,7 +1522,6 @@ RestrictedALDAPrimitive construct_restricted_alda_kernel(
     const std::shared_ptr<const FrozenResponseContext>& context, bool retain_test_diagnostics) {
     const std::string prefix = "restricted ALDA kernel: ";
     if (!context) throw PSIEXCEPTION(prefix + "frozen response context is null");
-    context->verify_basis_unchanged();
     const auto basis_const = context->basis();
     if (!basis_const) throw PSIEXCEPTION(prefix + "retained basis is unavailable");
     const auto basis = std::const_pointer_cast<BasisSet>(basis_const);
@@ -1545,6 +1544,9 @@ RestrictedALDAPrimitive construct_restricted_alda_kernel(
         static_cast<std::size_t>(nbf), counts.first, counts.second, npoints,
         context->grid_blocks(), Process::environment.get_memory(), retain_test_diagnostics,
         context->functional_density_tolerance());
+    // Structural snapshot construction is basis-sized, so it follows the
+    // resource gate but still precedes duplicate validation and scientific work.
+    context->verify_basis_unchanged();
     // The copied/sorted per-block duplicate scratch is bounded by the gated
     // validation_scratch_bytes; no nbf-sized seen vector is used.
     validate_restricted_alda_duplicate_maps(context->grid_blocks());
