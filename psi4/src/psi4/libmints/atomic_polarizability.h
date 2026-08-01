@@ -259,6 +259,7 @@ class PSI_API FrozenResponseContext {
     const std::string& functional_name() const { return functional_name_; }
     const std::string& grac_x_name() const { return grac_x_name_; }
     const std::string& grac_c_name() const { return grac_c_name_; }
+    double functional_density_tolerance() const { return functional_density_tolerance_; }
     std::size_t grid_point_count() const { return grid_weights_.size(); }
     /** Enforce the documented single-thread/no-mutation contract for the retained basis alias. */
     void verify_basis_unchanged() const;
@@ -274,7 +275,8 @@ class PSI_API FrozenResponseContext {
                           std::vector<SitePosition> sites, std::vector<double> grid_points,
                           std::vector<double> grid_weights, std::vector<FrozenGridBlock> grid_blocks,
                           GRACProvenance grac, std::string functional_name,
-                          std::string grac_x_name, std::string grac_c_name);
+                          std::string grac_x_name, std::string grac_c_name,
+                          double functional_density_tolerance);
 
     std::shared_ptr<const Matrix> Ca_;
     std::shared_ptr<const Matrix> Cb_;
@@ -298,6 +300,7 @@ class PSI_API FrozenResponseContext {
     std::string functional_name_;
     std::string grac_x_name_;
     std::string grac_c_name_;
+    double functional_density_tolerance_{};
 };
 
 namespace detail {
@@ -377,14 +380,26 @@ struct RestrictedALDAPlan {
     std::size_t retained_payload_bytes{};
     std::size_t block_transition_bytes{};
     std::size_t block_weighted_transition_bytes{};
+    std::size_t block_mo_scratch_bytes{};
     std::size_t collocation_bytes{};
+    std::size_t block_coordinate_weight_bytes{};
+    std::size_t block_density_kernel_bytes{};
+    std::size_t functional_workspace_bytes{};
     std::size_t point_scratch_bytes{};
+    std::size_t metadata_bytes{};
+    std::size_t conservative_overhead_bytes{};
     std::size_t diagnostics_payload_bytes{};
     std::size_t estimated_bytes{};
+    std::size_t density_work_terms{};
+    std::size_t mo_transition_work_terms{};
+    std::size_t ao_collocation_work_terms{};
+    std::size_t libxc_work_terms{};
+    std::size_t dgemm_work_terms{};
     std::size_t work_terms{};
     std::size_t max_work_terms{};
     double density_cutoff{};
     bool retain_test_diagnostics{};
+    std::string density_cutoff_source;
     std::string algorithm;
     std::string memory_semantics;
 };
@@ -402,6 +417,7 @@ struct RestrictedALDADiagnostics {
     double correlation_coefficient{};
     int derivative_order{};
     double density_cutoff{};
+    std::string density_cutoff_source;
     std::size_t point_count{};
     std::string restricted_normalization;
     RestrictedALDAPlan plan;
@@ -420,9 +436,10 @@ struct RestrictedALDAPrimitive {
 
 RestrictedALDAPlan plan_restricted_alda(std::size_t nbf, std::size_t nocc,
                                         std::size_t nvir, std::size_t point_count,
-                                        std::size_t max_block_points,
+                                        const std::vector<FrozenGridBlock>& blocks,
                                         std::size_t memory_bytes,
-                                        bool retain_test_diagnostics);
+                                        bool retain_test_diagnostics,
+                                        double density_cutoff);
 RestrictedALDAPrimitive construct_restricted_alda_kernel(
     const std::shared_ptr<const FrozenResponseContext>& context,
     bool retain_test_diagnostics = false);
@@ -431,7 +448,8 @@ SharedMatrix contract_restricted_alda_test_only(
     const std::vector<double>& densities, const std::vector<double>& fxc,
     double density_cutoff);
 std::pair<std::vector<double>, RestrictedALDADiagnostics> evaluate_restricted_alda_fxc_test_only(
-    const std::vector<double>& densities, bool include_correlation);
+    const std::vector<double>& densities, bool include_correlation,
+    double density_cutoff);
 void validate_restricted_alda_grid_test_only(std::size_t nbf, std::size_t point_count,
                                              const std::vector<double>& weights,
                                              const std::vector<FrozenGridBlock>& blocks);
@@ -440,7 +458,7 @@ struct RestrictedALDACollocationTestResult {
     std::size_t nbf{};
     std::vector<double> ao_values;
 };
-RestrictedALDACollocationTestResult collocate_restricted_alda_ao_test_only(
+RestrictedALDACollocationTestResult collocate_restricted_alda_ao_target_test_only(
     const std::shared_ptr<const FrozenResponseContext>& context);
 }  // namespace detail
 

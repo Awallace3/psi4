@@ -812,7 +812,7 @@ struct DigestBuilder {
 
 std::string context_digest(const FrozenResponseContext& context, const ISAOptions& options) {
     DigestBuilder digest;
-    digest.string("native-real-space-isa-context-v2");
+    digest.string("native-real-space-isa-context-v3");
     digest.scalar(static_cast<std::uint64_t>(context.sites().size()));
     for (const auto& site : context.sites())
         for (double coordinate : site) digest.scalar(coordinate);
@@ -826,6 +826,7 @@ std::string context_digest(const FrozenResponseContext& context, const ISAOption
     }
     digest.matrix(*context.Da());
     digest.matrix(*context.Db());
+    digest.scalar(context.functional_density_tolerance());
     digest.basis(context.basis()->structural_snapshot());
     digest.string("Slater-1964-bohr-v1");
     digest.scalar(context.molecule()->molecular_charge());

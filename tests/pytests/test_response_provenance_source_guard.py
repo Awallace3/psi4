@@ -90,6 +90,7 @@ def test_seal_records_complete_functional_basis_and_ordered_grid_state():
     hf = _text("psi4/src/psi4/libscf_solver/hf.h")
     basis = _text("psi4/src/psi4/libmints/basisset.h")
     factory = _text("psi4/src/psi4/libmints/atomic_polarizability.cc")
+    isa = _text("psi4/src/psi4/libmints/isa_weights.cc")
     for field in (
         "libxc_id", "libxc_canonical_name", "effective_parameters", "x_alpha", "x_beta",
         "c_ss_alpha", "c_os_alpha", "vv10_beta", "density_tolerance", "grac_shift",
@@ -108,6 +109,9 @@ def test_seal_records_complete_functional_basis_and_ordered_grid_state():
     assert 'cation_seal.reference == "UKS"' in factory
     assert "structural_snapshot() == *grac_seal.basis" in factory
     assert "verify_basis_unchanged" in factory
+    assert "functional_density_tolerance" in factory
+    assert 'digest.string("native-real-space-isa-context-v3")' in isa
+    assert "digest.scalar(context.functional_density_tolerance())" in isa
     assert "V_potential()" not in factory[factory.index("FrozenResponseContext::create"):factory.index("ISAWeights::ISAWeights")]
 
 

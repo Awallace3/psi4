@@ -597,9 +597,9 @@ def test_restricted_c1_estimator_one_entry_memory_boundary_and_envelope_fail_clo
 
 def test_restricted_alda_one_point_permutation_cutoff_and_failure_oracles():
     contract = psi4.core._atomic_polarizability_test_contract_restricted_alda
-    cutoff = 1.0e-12
+    cutoff = 1.0e-4
     t = np.array([[2.0, -3.0]])
-    actual = np.asarray(contract([0.25], psi4.core.Matrix.from_array(t), [0.7], [5.0]))
+    actual = np.asarray(contract([0.25], psi4.core.Matrix.from_array(t), [0.7], [5.0], cutoff))
     assert actual == pytest.approx(1.25 * np.outer(t[0], t[0]), abs=1.0e-15)
     assert actual == pytest.approx(actual.T, abs=0.0)
 
@@ -607,19 +607,21 @@ def test_restricted_alda_one_point_permutation_cutoff_and_failure_oracles():
     values = np.array([[1.0, 2.0], [-0.5, 0.7], [3.0, -1.0]])
     rho = np.array([0.3, 0.8, 1.2])
     fxc = np.array([2.0, -0.4, 0.9])
-    reference = np.asarray(contract(weights, psi4.core.Matrix.from_array(values), rho, fxc))
+    reference = np.asarray(contract(weights, psi4.core.Matrix.from_array(values), rho, fxc, cutoff))
     order = [2, 0, 1]
     permuted = np.asarray(contract(weights[order], psi4.core.Matrix.from_array(values[order]),
-                                   rho[order], fxc[order]))
+                                   rho[order], fxc[order], cutoff))
     assert permuted == pytest.approx(reference, abs=2.0e-15)
 
-    threshold_rho = [cutoff * 0.5, cutoff, cutoff * 1.5, -1.0e-16, cutoff * 2.0]
+    below = np.nextafter(cutoff, -math.inf)
+    above = np.nextafter(cutoff, math.inf)
+    threshold_rho = [below, cutoff, above, -1.0e-16, cutoff * 2.0]
     threshold_weights = [1.0, 1.0, 1.0, 1.0, 0.0]
     threshold_t = psi4.core.Matrix.from_array(np.ones((5, 1)))
-    threshold_fxc = [float("nan"), float("nan"), 7.0, float("nan"), float("nan")]
+    threshold_fxc = [float("nan"), 5.0, 7.0, float("nan"), float("nan")]
     threshold = np.asarray(contract(threshold_weights, threshold_t, threshold_rho,
                                     threshold_fxc, cutoff))
-    assert threshold == pytest.approx(np.array([[7.0]]), abs=0.0)
+    assert threshold == pytest.approx(np.array([[12.0]]), abs=0.0)
 
     for w, v, d, f, message in (
         ([-1.0], [[1.0]], [0.5], [1.0], r"weights.*nonnegative"),
@@ -628,7 +630,7 @@ def test_restricted_alda_one_point_permutation_cutoff_and_failure_oracles():
         ([1.0], [[float("inf")]], [0.5], [1.0], r"transition values.*finite"),
     ):
         with pytest.raises(RuntimeError, match=message):
-            contract(w, psi4.core.Matrix.from_array(np.asarray(v)), d, f)
+            contract(w, psi4.core.Matrix.from_array(np.asarray(v)), d, f, cutoff)
 
     validate = psi4.core._atomic_polarizability_test_validate_restricted_alda_grid
     validate(3, 3, [0.1, 0.2, 0.3], [0, 2], [2, 1], [[2, 0], [1]])
@@ -643,34 +645,90 @@ def test_restricted_alda_one_point_permutation_cutoff_and_failure_oracles():
 
 def test_restricted_alda_plan_envelope_work_and_diagnostics_memory_gates():
     estimate = psi4.core._atomic_polarizability_estimate_restricted_alda
-    production = estimate(100, 5, 20, 50000, 256, 2**30, False)
-    diagnostics = estimate(100, 5, 20, 50000, 256, 2**30, True)
+    block_points = [256] * 195 + [80]
+    block_maps = [100] * len(block_points)
+    plan_cutoff = 2.5e-9
+    production = estimate(100, 5, 20, block_points, block_maps, 2**30, False, plan_cutoff)
+    diagnostics = estimate(100, 5, 20, block_points, block_maps, 2**30, True, plan_cutoff)
     assert production["nov"] == 100
+    assert production["point_count"] == 50000
+    assert production["density_work_terms"] == 50000 * 100**2
+    assert production["mo_transition_work_terms"] == 50000 * (100 * 100 + 100)
+    assert production["ao_collocation_work_terms"] == 50000 * 100
+    assert production["libxc_work_terms"] == 50000
+    assert production["dgemm_work_terms"] == 50000 * 100**2
+    assert production["work_terms"] == sum(
+        production[name] for name in (
+            "density_work_terms", "mo_transition_work_terms",
+            "ao_collocation_work_terms", "libxc_work_terms", "dgemm_work_terms"))
     assert production["max_supported_nov"] == 512
     assert production["retained_payload_bytes"] == 100 * 100 * 8
     assert production["diagnostics_payload_bytes"] == 0
     assert diagnostics["diagnostics_payload_bytes"] == 50000 * (100 + 2) * 8
     assert diagnostics["estimated_bytes"] > production["estimated_bytes"]
     assert production["algorithm"] == "SEALED_BLOCK_DGEMM"
-    assert production["density_cutoff"] == pytest.approx(1.0e-12)
+    assert production["memory_semantics"] == "CONSERVATIVE_SIMULTANEOUS_LIVE_RESERVATION"
+    assert production["conservative_overhead_bytes"] >= 2**20
+    assert production["point_scratch_bytes"] == sum(
+        production[name] for name in (
+            "block_coordinate_weight_bytes", "block_density_kernel_bytes",
+            "functional_workspace_bytes"))
+    assert production["block_mo_scratch_bytes"] > 0
+    assert production["metadata_bytes"] > 0
+    assert production["density_cutoff"] == pytest.approx(plan_cutoff)
     with pytest.raises(RuntimeError, match=r"supported transition envelope"):
-        estimate(100, 5, 103, 100, 10, 2**40, False)
+        estimate(100, 5, 103, [100], [10], 2**40, False, plan_cutoff)
     with pytest.raises(RuntimeError, match=r"work bound"):
-        estimate(100, 5, 100, 10**9, 10, 2**40, False)
+        estimate(100, 5, 100, [10**9], [10], 2**40, False, plan_cutoff)
     with pytest.raises(RuntimeError, match=r"reserved memory"):
-        estimate(100, 5, 20, 50000, 256, 1000, False)
+        estimate(100, 5, 20, block_points, block_maps, 1000, False, plan_cutoff)
     with pytest.raises(RuntimeError, match=r"diagnostic.*reserved memory"):
-        estimate(100, 5, 20, 50000, 256, production["estimated_bytes"] * 2, True)
+        estimate(100, 5, 20, block_points, block_maps,
+                 production["estimated_bytes"] * 2, True, plan_cutoff)
     with pytest.raises(RuntimeError, match=r"overflow|integer limits"):
-        estimate(2**63, 2**63, 2, 10, 10, 2**64 - 1, False)
+        estimate(2**63, 2**63, 2, [10], [10], 2**64 - 1, False, plan_cutoff)
+    with pytest.raises(RuntimeError, match=r"block metadata"):
+        estimate(100, 5, 20, [10, 20], [10], 2**30, False, plan_cutoff)
+
+    # Exact checked total-work boundary for nbf=1, nocc=nvir=1: seven terms/point.
+    max_points = production["max_work_terms"] // 7
+    int_max = 2**31 - 1
+    boundary_blocks = [int_max] * (max_points // int_max)
+    if max_points % int_max:
+        boundary_blocks.append(max_points % int_max)
+    boundary_maps = [1] * len(boundary_blocks)
+    boundary = estimate(1, 1, 1, boundary_blocks, boundary_maps,
+                        2**64 - 1, False, plan_cutoff)
+    assert boundary["work_terms"] == 7 * max_points
+    over_blocks = list(boundary_blocks)
+    over_blocks[-1] += 1
+    with pytest.raises(RuntimeError, match=r"work bound"):
+        estimate(1, 1, 1, over_blocks, boundary_maps,
+                 2**64 - 1, False, plan_cutoff)
+
+    water = psi4.geometry("""
+        0 1
+        O 0.0 0.0 0.0
+        H 0.0 1.4 1.1
+        H 0.0 -1.4 1.1
+        symmetry c1
+        units bohr
+    """)
+    water_basis = psi4.core.BasisSet.build(water, "ORBITAL", "aug-cc-pvtz")
+    canonical_points = [256] * 292 + [248]
+    canonical_maps = [water_basis.nbf()] * len(canonical_points)
+    canonical = estimate(water_basis.nbf(), 5, water_basis.nbf() - 5,
+                         canonical_points, canonical_maps, 2**40, False, plan_cutoff)
+    assert canonical["nov"] <= 512
+    assert canonical["work_terms"] < canonical["max_work_terms"]
 
 
-def _independent_vwn_potential(rho):
+def _independent_vwn_potential(rho, density_cutoff):
     functional = psi4.core.SuperFunctional.blank()
     correlation = psi4.core.LibXCFunctional("XC_LDA_C_VWN", True)
     correlation.set_alpha(1.0)
     functional.add_c_functional(correlation)
-    functional.set_density_tolerance(1.0e-12)
+    functional.set_density_tolerance(density_cutoff)
     functional.set_max_points(len(rho))
     functional.set_deriv(1)
     functional.allocate()
@@ -679,18 +737,19 @@ def _independent_vwn_potential(rho):
     return np.asarray(values["V_RHO_A"])
 
 
-def _finite_difference_vwn_fxc(rho, relative_step):
+def _finite_difference_vwn_fxc(rho, relative_step, density_cutoff):
     rho = np.asarray(rho)
     step = relative_step * rho
-    return (_independent_vwn_potential(rho + step)
-            - _independent_vwn_potential(rho - step)) / (2.0 * step)
+    return (_independent_vwn_potential(rho + step, density_cutoff)
+            - _independent_vwn_potential(rho - step, density_cutoff)) / (2.0 * step)
 
 
 def test_restricted_alda_components_match_analytic_x_and_refined_vwn_potential_difference():
     evaluate = psi4.core._atomic_polarizability_test_restricted_alda_fxc
     rho = np.array([0.02, 0.08, 0.3, 1.1, 3.0])
-    full = evaluate(rho, True)
-    exchange = evaluate(rho, False)
+    cutoff = 1.0e-8
+    full = evaluate(rho, True, cutoff)
+    exchange = evaluate(rho, False, cutoff)
     diagnostics = full["diagnostics"]
     assert diagnostics["exchange_component"] == "XC_LDA_X"
     assert diagnostics["correlation_component"] == "XC_LDA_C_VWN"
@@ -703,38 +762,73 @@ def test_restricted_alda_components_match_analytic_x_and_refined_vwn_potential_d
     assert diagnostics["exchange_effective_parameters"] == {}
     assert diagnostics["correlation_effective_parameters"] == {}
     assert diagnostics["derivative_order"] == 2
-    assert diagnostics["density_cutoff"] == pytest.approx(1.0e-12)
+    assert diagnostics["density_cutoff"] == pytest.approx(cutoff)
     assert "Da+Db" in diagnostics["restricted_normalization"]
     assert "4*b once" in diagnostics["restricted_normalization"]
 
     expected_x = -(1.0 / 3.0) * (3.0 / np.pi) ** (1.0 / 3.0) * rho ** (-2.0 / 3.0)
     assert exchange["fxc"] == pytest.approx(expected_x, rel=3.0e-13, abs=3.0e-13)
     actual_correlation = np.asarray(full["fxc"]) - np.asarray(exchange["fxc"])
-    coarse = _finite_difference_vwn_fxc(rho, 2.0e-4)
-    fine = _finite_difference_vwn_fxc(rho, 1.0e-4)
+    coarse = _finite_difference_vwn_fxc(rho, 2.0e-4, cutoff)
+    fine = _finite_difference_vwn_fxc(rho, 1.0e-4, cutoff)
     assert np.max(np.abs(fine - actual_correlation)) < np.max(np.abs(coarse - actual_correlation))
     assert actual_correlation == pytest.approx(fine, rel=2.0e-7, abs=2.0e-9)
     assert exchange["diagnostics"]["correlation_component"] == ""
 
-    cutoff_values = evaluate([5.0e-13, 1.0e-12, 1.1e-12, -1.0e-16], True)
-    assert cutoff_values["fxc"][:2] == [0.0, 0.0]
+    below = np.nextafter(cutoff, -math.inf)
+    above = np.nextafter(cutoff, math.inf)
+    cutoff_values = evaluate([below, cutoff, above, -1.0e-16], True, cutoff)
+    assert cutoff_values["fxc"][0] == 0.0
+    assert math.isfinite(cutoff_values["fxc"][1])
     assert math.isfinite(cutoff_values["fxc"][2])
     assert cutoff_values["fxc"][3] == 0.0
+    assert evaluate([-1.0e-16], True, 0.0)["fxc"] == [0.0]
+    with pytest.raises(RuntimeError, match=r"zero density.*zero cutoff"):
+        evaluate([0.0], True, 0.0)
+
+
+def _direct_sto3g_ao_values(basis, coordinates):
+    """Independent contracted-Gaussian evaluator for the s/p-only STO-3G fixture."""
+    coordinates = np.asarray(coordinates).reshape(-1, 3)
+    phi = np.zeros((len(coordinates), basis.nbf()))
+    for shell_index in range(basis.nshell()):
+        shell = basis.shell(shell_index)
+        angular_momentum = shell.am
+        assert angular_momentum in (0, 1)
+        assert shell.nfunction == (1 if angular_momentum == 0 else 3)
+        center = np.array([shell.coord(axis) for axis in range(3)])
+        displacement = coordinates - center
+        radius_squared = np.einsum("pi,pi->p", displacement, displacement)
+        radial = sum(shell.coef(primitive) * np.exp(-shell.exp(primitive) * radius_squared)
+                     for primitive in range(shell.nprimitive))
+        first = shell.function_index
+        if angular_momentum == 0:
+            phi[:, first] = radial
+        else:
+            # Psi4 is configured for Gaussian spherical ordering: p(z),p(x),p(y).
+            # Cartesian CCA ordering remains p(x),p(y),p(z).
+            components = displacement[:, [2, 0, 1]] if shell.is_pure() else displacement
+            phi[:, first:first + 3] = components * radial[:, None]
+    return phi
 
 
 def _independent_real_grid_rho_and_transitions(context, grac):
-    collocation = psi4.core._atomic_polarizability_test_restricted_alda_ao_collocation(context)
     points, _, blocks = context.grid_snapshot()
-    npoints = len(points) // 3
-    nbf = grac.basisset().nbf()
-    phi = np.asarray(collocation["ao_values"]).reshape(npoints, nbf)
+    coordinates = np.asarray(points).reshape(-1, 3)
+    phi = _direct_sto3g_ao_values(grac.basisset(), coordinates)
+    # The native collocation seam is only a parity target; it is not used below.
+    target = psi4.core._atomic_polarizability_test_restricted_alda_ao_collocation_target(context)
+    native_phi = np.asarray(target["ao_values"]).reshape(phi.shape)
+    selected_points = [0, len(phi) // 3, 2 * len(phi) // 3, len(phi) - 1]
+    assert native_phi[selected_points] == pytest.approx(phi[selected_points], abs=3.0e-14)
+
     density = np.asarray(grac.Da()) + np.asarray(grac.Db())
     coefficients = np.asarray(grac.Ca())
     occupations = np.asarray(grac.occupation_a()).ravel()
     transitions = [(i, a) for i, oi in enumerate(occupations) if oi == 1.0
                    for a, oa in enumerate(occupations) if oa == 0.0]
-    rho = np.zeros(npoints)
-    transition_values = np.zeros((npoints, len(transitions)))
+    rho = np.zeros(len(phi))
+    transition_values = np.zeros((len(phi), len(transitions)))
     for offset, count, function_map in blocks:
         p = slice(offset, offset + count)
         fmap = np.asarray(function_map, dtype=int)
@@ -763,11 +857,16 @@ def test_real_restricted_alda_streamed_kernel_independent_collocation_and_c2a_so
     assert [tuple(pair) for pair in result["transitions"]] == transitions
     weights = np.asarray(context.grid_snapshot()[1])
     cutoff = result["diagnostics"]["density_cutoff"]
-    active = rho > cutoff
+    summary = context.summary()
+    assert result["diagnostics"]["density_cutoff_source"] == "FROZEN_FUNCTIONAL_DENSITY_TOLERANCE"
+    assert cutoff == summary["functional_density_tolerance"]
+    assert cutoff == grac.V_potential().functional().density_tolerance()
+    active = rho >= cutoff
     independent_fxc = np.zeros_like(rho)
     active_rho = rho[active]
     expected_x = -(1.0 / 3.0) * (3.0 / np.pi) ** (1.0 / 3.0) * active_rho ** (-2.0 / 3.0)
-    independent_fxc[active] = expected_x + _finite_difference_vwn_fxc(active_rho, 1.0e-4)
+    independent_fxc[active] = expected_x + _finite_difference_vwn_fxc(
+        active_rho, 1.0e-4, cutoff)
     expected = np.einsum("p,pi,p,pj->ij", weights, transition_values, independent_fxc,
                          transition_values, optimize=True)
     kernel = np.asarray(result["full_alda"])
@@ -779,6 +878,10 @@ def test_real_restricted_alda_streamed_kernel_independent_collocation_and_c2a_so
     assert len(retained["densities"]) == len(weights)
     assert len(retained["fxc"]) == len(weights)
     assert len(retained["transition_values"]) == len(weights) * len(transitions)
+    selected = [0, len(rho) // 3, 2 * len(rho) // 3, len(rho) - 1]
+    assert np.asarray(retained["densities"])[selected] == pytest.approx(rho[selected], abs=3.0e-13)
+    retained_t = np.asarray(retained["transition_values"]).reshape(transition_values.shape)
+    assert retained_t[selected] == pytest.approx(transition_values[selected], abs=3.0e-13)
     assert np.asarray(retained["full_alda"]) == pytest.approx(kernel, abs=2.0e-12)
 
     c1 = _restricted_c1_primitives(context)
@@ -804,7 +907,7 @@ def test_restricted_alda_source_guard_covers_component_factory_and_production():
     header = (root / "psi4/src/psi4/libmints/atomic_polarizability.h").read_text()
     region = source[source.index("build_restricted_alda_functional"):
                     source.index("std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create")]
-    assert "context->functional" not in region
+    assert "context->functional()" not in region
     assert "V_potential" not in region
     assert "PBE0" not in region.upper()
     assert "Matrix transition_values(npoints" not in region
@@ -812,3 +915,4 @@ def test_restricted_alda_source_guard_covers_component_factory_and_production():
     assert "bool retain_test_diagnostics = false" in header
     assert 'constexpr const char* kALDAX = "XC_LDA_X";' in source
     assert 'constexpr const char* kALDAC = "XC_LDA_C_VWN";' in source
+    assert '"FROZEN_FUNCTIONAL_DENSITY_TOLERANCE"' in source

@@ -413,6 +413,15 @@ def test_frozen_context_is_unaffected_by_later_source_orbital_and_density_mutati
         da.set(0, 0, old_da)
 
 
+def test_frozen_context_attests_final_functional_density_tolerance(grac_states):
+    grac, precursor, _, _ = grac_states
+    context = _context(grac_states)
+    expected = grac.V_potential().functional().density_tolerance()
+    assert math.isfinite(expected) and expected >= 0.0
+    assert context.summary()["functional_density_tolerance"] == expected
+    assert expected == precursor.V_potential().functional().density_tolerance()
+
+
 def test_isa_weights_are_structurally_bound_to_one_context(grac_states):
     first = _context(grac_states)
     second = _context(grac_states)
