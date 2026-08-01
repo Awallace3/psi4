@@ -503,6 +503,36 @@ struct TransitionMultipoleProjector {
         const std::shared_ptr<const FrozenResponseContext>& context,
         const ISAWeights& isa_weights);
 };
+
+/** Resource-gated plan for the pure C3b site-pair response contraction. */
+struct SitePairResponseContractionPlan {
+    std::size_t site_count{};
+    std::size_t transition_count{};
+    std::size_t component_count{};
+    std::size_t output_bytes{};
+    std::size_t scratch_bytes{};
+    std::size_t estimated_bytes{};
+    std::size_t work_terms{};
+    std::size_t max_work_terms{};
+    std::size_t max_site_count{};
+    std::string algorithm;
+};
+
+/** Ordered alpha[(response site,t),(source site,u)] in unchanged ISA component order. */
+struct SitePairResponseContraction {
+    SharedMatrix values;
+    SitePairResponseContractionPlan plan;
+    double restricted_factor{};
+    double response_map_symmetry_residual{};
+    double reciprocity_residual{};
+};
+
+SitePairResponseContractionPlan plan_site_pair_response_contraction(
+    std::size_t site_count, std::size_t transition_count, std::size_t memory_bytes);
+
+/** Pure C3b evaluator: alpha[A,B](t,u) = 4 B[A,t,:] G B[B,u,:]^T. */
+SitePairResponseContraction contract_site_pair_response(
+    std::size_t site_count, const Matrix& projection, const Matrix& response_map);
 }  // namespace detail
 
 /** Actual ISA data structurally bound to one exact frozen context and its ordered grid/sites. */

@@ -569,6 +569,52 @@ void export_oeprop(py::module &m) {
               return values;
           }, "point_count"_a, "site_count"_a, "transition_count"_a,
           "max_block_points"_a, "nbf"_a, "nmo"_a, "memory_bytes"_a);
+    m.def("_atomic_polarizability_test_contract_site_pair_response",
+          [](std::size_t site_count, const Matrix& projection,
+             const Matrix& response_map) {
+              const auto contraction = detail::contract_site_pair_response(
+                  site_count, projection, response_map);
+              py::dict plan;
+              plan["algorithm"] = contraction.plan.algorithm;
+              plan["site_count"] = contraction.plan.site_count;
+              plan["transition_count"] = contraction.plan.transition_count;
+              plan["component_count"] = contraction.plan.component_count;
+              plan["output_bytes"] = contraction.plan.output_bytes;
+              plan["scratch_bytes"] = contraction.plan.scratch_bytes;
+              plan["estimated_bytes"] = contraction.plan.estimated_bytes;
+              plan["work_terms"] = contraction.plan.work_terms;
+              plan["max_work_terms"] = contraction.plan.max_work_terms;
+              plan["max_site_count"] = contraction.plan.max_site_count;
+              py::dict result;
+              result["values"] = contraction.values;
+              result["site_count"] = contraction.plan.site_count;
+              result["transition_count"] = contraction.plan.transition_count;
+              result["restricted_factor"] = contraction.restricted_factor;
+              result["component_order"] =
+                  "00;10,11c,11s;20,21c,21s,22c,22s;30,31c,31s,32c,32s,33c,33s";
+              result["block_order"] =
+                  "row=(response_site,ISA_component); column=(source_site,ISA_component)";
+              result["response_map_symmetry_policy"] =
+                  "AVERAGE_WITHIN_ABSOLUTE_AND_RELATIVE_ROUNDOFF_TOLERANCE";
+              result["response_map_symmetry_absolute_tolerance"] = 1.0e-12;
+              result["response_map_symmetry_relative_tolerance"] = 1.0e-12;
+              result["response_map_symmetry_residual"] =
+                  contraction.response_map_symmetry_residual;
+              result["reciprocity_residual"] = contraction.reciprocity_residual;
+              result["plan"] = std::move(plan);
+              return result;
+          }, "site_count"_a, "projection"_a, "response_map"_a);
+    m.def("_atomic_polarizability_estimate_site_pair_response_contraction",
+          [](std::size_t site_count, std::size_t transition_count,
+             std::size_t memory_bytes) {
+              const auto plan = detail::plan_site_pair_response_contraction(
+                  site_count, transition_count, memory_bytes);
+              py::dict values;
+              values["algorithm"] = plan.algorithm;
+              values["estimated_bytes"] = plan.estimated_bytes;
+              values["work_terms"] = plan.work_terms;
+              return values;
+          }, "site_count"_a, "transition_count"_a, "memory_bytes"_a);
     m.def("_atomic_polarizability_estimate_restricted_alda",
           [alda_plan_dict](std::size_t nbf, std::size_t nocc, std::size_t nvir,
                            const std::vector<std::size_t>& block_point_counts,

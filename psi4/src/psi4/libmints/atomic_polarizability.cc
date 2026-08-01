@@ -1814,6 +1814,154 @@ TransitionMultipoleProjection project_transition_multipoles(
     result.plan = plan;
     return result;
 }
+
+SitePairResponseContractionPlan plan_site_pair_response_contraction(
+    std::size_t site_count, std::size_t transition_count, std::size_t memory_bytes) {
+    const std::string prefix = "site-pair response contraction: ";
+    constexpr std::size_t max_sites = 64;
+    constexpr std::size_t max_transitions = 512;
+    constexpr std::size_t max_work = 64ULL * 1024ULL * 1024ULL * 1024ULL;
+    constexpr std::size_t overhead = 1024ULL * 1024ULL;
+    if (site_count == 0) throw PSIEXCEPTION(prefix + "site count must be nonzero");
+    if (transition_count == 0)
+        throw PSIEXCEPTION(prefix + "transition count must be nonzero");
+    const auto component_count = checked_c1_product(site_count, 16, prefix);
+    const auto output_elements = checked_c1_product(component_count, component_count, prefix);
+    const auto projected_response_elements =
+        checked_c1_product(component_count, transition_count, prefix);
+    const auto response_map_elements =
+        checked_c1_product(transition_count, transition_count, prefix);
+    const auto scratch_elements =
+        checked_c1_sum(projected_response_elements, response_map_elements, prefix);
+    const auto output_bytes = checked_c1_product(output_elements, sizeof(double), prefix);
+    const auto scratch_bytes = checked_c1_product(scratch_elements, sizeof(double), prefix);
+    auto estimated_bytes = checked_c1_sum(output_bytes, scratch_bytes, prefix);
+    estimated_bytes = checked_c1_sum(estimated_bytes, overhead, prefix);
+    const auto first_work =
+        checked_c1_product(projected_response_elements, transition_count, prefix);
+    const auto second_work = checked_c1_product(output_elements, transition_count, prefix);
+    const auto work_terms = checked_c1_sum(first_work, second_work, prefix);
+    if (site_count > max_sites)
+        throw PSIEXCEPTION(prefix + "site count exceeds the supported canonical-molecule envelope");
+    if (transition_count > max_transitions)
+        throw PSIEXCEPTION(prefix + "transition count exceeds the supported response envelope");
+    if (component_count > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        transition_count > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw PSIEXCEPTION(prefix + "dimensions exceed native matrix limits");
+    if (work_terms > max_work) throw PSIEXCEPTION(prefix + "work bound exceeded");
+    if (estimated_bytes > memory_bytes / 2)
+        throw PSIEXCEPTION(prefix + "conservative simultaneous storage exceeds reserved memory");
+    SitePairResponseContractionPlan plan;
+    plan.site_count = site_count;
+    plan.transition_count = transition_count;
+    plan.component_count = component_count;
+    plan.output_bytes = output_bytes;
+    plan.scratch_bytes = scratch_bytes;
+    plan.estimated_bytes = estimated_bytes;
+    plan.work_terms = work_terms;
+    plan.max_work_terms = max_work;
+    plan.max_site_count = max_sites;
+    plan.algorithm = "SYMMETRIC_SITE_COMPONENT_OUTER_PRODUCT";
+    return plan;
+}
+
+SitePairResponseContraction contract_site_pair_response(
+    std::size_t site_count, const Matrix& projection, const Matrix& response_map) {
+    const std::string prefix = "site-pair response contraction: ";
+    constexpr double restricted_factor = 4.0;
+    constexpr double symmetry_absolute_tolerance = 1.0e-12;
+    constexpr double symmetry_relative_tolerance = 1.0e-12;
+    if (site_count == 0) throw PSIEXCEPTION(prefix + "site count must be nonzero");
+    if (projection.nirrep() != 1 || projection.nrow() <= 0 || projection.ncol() <= 0 ||
+        response_map.nirrep() != 1)
+        throw PSIEXCEPTION(prefix + "input dimensions are inconsistent");
+    const auto transition_count = static_cast<std::size_t>(projection.ncol());
+    const auto plan = plan_site_pair_response_contraction(
+        site_count, transition_count, Process::environment.get_memory());
+    if (static_cast<std::size_t>(projection.nrow()) != plan.component_count ||
+        response_map.nrow() != response_map.ncol())
+        throw PSIEXCEPTION(prefix +
+                           (response_map.nrow() != response_map.ncol()
+                                ? "response map must be a nonempty square matrix"
+                                : "projection dimensions do not match the site count"));
+    if (response_map.nrow() != projection.ncol())
+        throw PSIEXCEPTION(prefix + "response-map and projection dimensions are inconsistent");
+
+    for (int row = 0; row < projection.nrow(); ++row)
+        for (int transition = 0; transition < projection.ncol(); ++transition)
+            if (!std::isfinite(projection(row, transition)))
+                throw PSIEXCEPTION(prefix + "projection must contain only finite values");
+    double symmetry_residual = 0.0;
+    auto symmetric_response_map = std::make_shared<Matrix>(response_map.nrow(), response_map.ncol());
+    for (int row = 0; row < response_map.nrow(); ++row) {
+        if (!std::isfinite(response_map(row, row)))
+            throw PSIEXCEPTION(prefix + "response map must contain only finite values");
+        (*symmetric_response_map)(row, row) = response_map(row, row);
+        for (int column = row + 1; column < response_map.ncol(); ++column) {
+            const double upper = response_map(row, column);
+            const double lower = response_map(column, row);
+            if (!std::isfinite(upper) || !std::isfinite(lower))
+                throw PSIEXCEPTION(prefix + "response map must contain only finite values");
+            const double residual = std::abs(upper - lower);
+            symmetry_residual = std::max(symmetry_residual, residual);
+            const double scale = std::max(std::abs(upper), std::abs(lower));
+            if (residual > symmetry_absolute_tolerance + symmetry_relative_tolerance * scale)
+                throw PSIEXCEPTION(prefix + "response map must be symmetric within roundoff tolerance");
+            const double value = 0.5 * (upper + lower);
+            if (!std::isfinite(value))
+                throw PSIEXCEPTION(prefix + "response-map roundoff averaging overflowed");
+            (*symmetric_response_map)(row, column) = value;
+            (*symmetric_response_map)(column, row) = value;
+        }
+    }
+
+    Matrix projected_response(plan.component_count, transition_count);
+    for (std::size_t component = 0; component < plan.component_count; ++component) {
+        for (std::size_t column = 0; column < transition_count; ++column) {
+            double value = 0.0;
+            for (std::size_t transition = 0; transition < transition_count; ++transition) {
+                const double term = projection(component, transition) *
+                                    (*symmetric_response_map)(transition, column);
+                if (!std::isfinite(term))
+                    throw PSIEXCEPTION(prefix + "projection-response product overflowed");
+                value += term;
+                if (!std::isfinite(value))
+                    throw PSIEXCEPTION(prefix + "projection-response accumulation overflowed");
+            }
+            projected_response(component, column) = value;
+        }
+    }
+    auto values = std::make_shared<Matrix>(plan.component_count, plan.component_count);
+    double reciprocity_residual = 0.0;
+    for (std::size_t row = 0; row < plan.component_count; ++row) {
+        for (std::size_t column = row; column < plan.component_count; ++column) {
+            double value = 0.0;
+            for (std::size_t transition = 0; transition < transition_count; ++transition) {
+                const double term = restricted_factor * projected_response(row, transition) *
+                                    projection(column, transition);
+                if (!std::isfinite(term))
+                    throw PSIEXCEPTION(prefix + "response-matrix product overflowed");
+                value += term;
+                if (!std::isfinite(value))
+                    throw PSIEXCEPTION(prefix + "response-matrix result is nonfinite");
+            }
+            (*values)(row, column) = value;
+            (*values)(column, row) = value;
+        }
+    }
+    for (std::size_t row = 0; row < plan.component_count; ++row)
+        for (std::size_t column = row + 1; column < plan.component_count; ++column)
+            reciprocity_residual = std::max(
+                reciprocity_residual, std::abs((*values)(row, column) - (*values)(column, row)));
+
+    SitePairResponseContraction result;
+    result.values = std::move(values);
+    result.plan = plan;
+    result.restricted_factor = restricted_factor;
+    result.response_map_symmetry_residual = symmetry_residual;
+    result.reciprocity_residual = reciprocity_residual;
+    return result;
+}
 }  // namespace detail
 
 std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
