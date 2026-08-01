@@ -586,6 +586,30 @@ SitePairResponseContraction contract_site_pair_response(
 ResponseMapSymmetryDiagnostics validate_response_map_symmetry_test_only(
     const Matrix& response_map, const Matrix& conjugate_map,
     const std::vector<double>& forward_error);
+
+/** Up-front simultaneous-live storage gate for physical C4 provider wiring. */
+struct ISAPolResponsePlan {
+    std::size_t frequency_count{};
+    std::size_t site_count{};
+    std::size_t transition_count{};
+    std::size_t component_count{};
+    std::size_t configured_memory_bytes{};
+    std::size_t reserved_memory_bytes{};
+    std::size_t retained_output_bytes{};
+    std::size_t retained_primitive_bytes{};
+    std::size_t retained_projection_bytes{};
+    std::size_t identity_hessian_bytes{};
+    std::size_t dense_solve_peak_bytes{};
+    std::size_t contraction_peak_bytes{};
+    std::size_t estimated_bytes{};
+    std::string algorithm;
+    std::string memory_semantics;
+};
+
+ISAPolResponsePlan plan_isapol_response_provider(
+    std::size_t frequency_count, std::size_t site_count,
+    std::size_t transition_count, bool has_dynamic_frequency,
+    std::size_t memory_bytes);
 }  // namespace detail
 
 /** Actual ISA data structurally bound to one exact frozen context and its ordered grid/sites. */

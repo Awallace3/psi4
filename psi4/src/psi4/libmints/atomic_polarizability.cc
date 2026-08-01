@@ -1841,6 +1841,92 @@ TransitionMultipoleProjection project_transition_multipoles(
     return result;
 }
 
+ISAPolResponsePlan plan_isapol_response_provider(
+    std::size_t frequency_count, std::size_t site_count,
+    std::size_t transition_count, bool has_dynamic_frequency,
+    std::size_t memory_bytes) {
+    const std::string prefix = "ISAPolResponseProvider: ";
+    if (frequency_count == 0 || site_count == 0 || transition_count == 0)
+        throw PSIEXCEPTION(prefix + "resource-plan dimensions must be nonzero");
+
+    // Reuse C3b's cardinality/work envelope before estimating the aggregate.
+    (void)plan_site_pair_response_contraction(
+        site_count, transition_count, memory_bytes);
+    const auto component_count = checked_c1_product(site_count, 16, prefix);
+    const auto transition_square = checked_c1_product(
+        transition_count, transition_count, prefix);
+    const auto component_square = checked_c1_product(
+        component_count, component_count, prefix);
+    const auto response_block_bytes = checked_c1_product(
+        component_square, sizeof(double), prefix);
+    const auto response_position_bytes = checked_c1_product(
+        checked_c1_product(site_count, 3, prefix), sizeof(double), prefix);
+    const auto retained_output_bytes = checked_c1_product(
+        frequency_count,
+        checked_c1_sum(response_block_bytes, response_position_bytes, prefix), prefix);
+    const auto transition_matrix_bytes = checked_c1_product(
+        transition_square, sizeof(double), prefix);
+    const auto retained_primitive_bytes = checked_c1_product(
+        4, transition_matrix_bytes, prefix);  // J, two K maps, and full ALDA
+    const auto identity_hessian_bytes = checked_c1_product(
+        3, transition_matrix_bytes, prefix);  // H1, H2, and the identity RHS
+    const auto retained_projection_bytes = checked_c1_product(
+        checked_c1_product(component_count, transition_count, prefix),
+        sizeof(double), prefix);
+
+    // solve_dense_restricted_response simultaneously retains at most twenty
+    // nov-by-nov double payloads for a doubled dynamic solve (eight for static):
+    // coefficient copies/factors, RHS copies/solution, and detached P/Q.
+    const auto dense_matrix_count = has_dynamic_frequency ? 20 : 8;
+    auto dense_solve_peak_bytes = checked_c1_product(
+        dense_matrix_count, transition_matrix_bytes, prefix);
+    dense_solve_peak_bytes = checked_c1_sum(
+        dense_solve_peak_bytes,
+        checked_c1_product(
+            checked_c1_product(16, transition_count, prefix), sizeof(double), prefix), prefix);
+
+    // During contraction, P/Q, the detached and averaged maps, B*G, and one
+    // complete contraction output coexist with all already retained outputs.
+    auto contraction_peak_bytes = checked_c1_product(
+        4, transition_matrix_bytes, prefix);
+    contraction_peak_bytes = checked_c1_sum(
+        contraction_peak_bytes, retained_projection_bytes, prefix);
+    contraction_peak_bytes = checked_c1_sum(
+        contraction_peak_bytes, response_block_bytes, prefix);
+
+    std::size_t estimated_bytes = retained_output_bytes;
+    for (const auto bytes : {retained_primitive_bytes, retained_projection_bytes,
+                             identity_hessian_bytes})
+        estimated_bytes = checked_c1_sum(estimated_bytes, bytes, prefix);
+    estimated_bytes = checked_c1_sum(
+        estimated_bytes, std::max(dense_solve_peak_bytes, contraction_peak_bytes), prefix);
+    constexpr std::size_t metadata_and_allocator_allowance = 1024ULL * 1024ULL;
+    estimated_bytes = checked_c1_sum(
+        estimated_bytes, metadata_and_allocator_allowance, prefix);
+    const auto reserved_memory_bytes = memory_bytes / 2;
+    if (estimated_bytes > reserved_memory_bytes)
+        throw PSIEXCEPTION(prefix +
+                           "simultaneous retained outputs/identity/Hessians and solve workspace exceed reserved memory");
+
+    ISAPolResponsePlan plan;
+    plan.frequency_count = frequency_count;
+    plan.site_count = site_count;
+    plan.transition_count = transition_count;
+    plan.component_count = component_count;
+    plan.configured_memory_bytes = memory_bytes;
+    plan.reserved_memory_bytes = reserved_memory_bytes;
+    plan.retained_output_bytes = retained_output_bytes;
+    plan.retained_primitive_bytes = retained_primitive_bytes;
+    plan.retained_projection_bytes = retained_projection_bytes;
+    plan.identity_hessian_bytes = identity_hessian_bytes;
+    plan.dense_solve_peak_bytes = dense_solve_peak_bytes;
+    plan.contraction_peak_bytes = contraction_peak_bytes;
+    plan.estimated_bytes = estimated_bytes;
+    plan.algorithm = "C1_ALDA_ISA_DENSE_FREQUENCY_MAJOR";
+    plan.memory_semantics = "CONSERVATIVE_SIMULTANEOUS_LIVE_RESERVATION";
+    return plan;
+}
+
 SitePairResponseContractionPlan plan_site_pair_response_contraction(
     std::size_t site_count, std::size_t transition_count, std::size_t memory_bytes) {
     const std::string prefix = "site-pair response contraction: ";
@@ -2412,8 +2498,94 @@ std::size_t ISAPolResponseProvider::expected_response_count(const FrequencyGrid&
 
 std::vector<SitePairResponse> ISAPolResponseProvider::compute_isapol_response(
     const FrequencyGrid& frequencies) const {
-    (void)expected_response_count(frequencies);
-    throw PSIEXCEPTION("ISAPolResponseProvider: native point-response execution is not implemented; no response was published");
+    const std::string prefix = "ISAPolResponseProvider: ";
+    const auto frequency_count = expected_response_count(frequencies);
+    if (kernel_.chf_exchange() != 0.25 || kernel_.alda_kernel() != 0.75)
+        throw PSIEXCEPTION(prefix + "response-kernel metadata is inconsistent");
+    if (isa_weights_.context_.get() != context_.get())
+        throw PSIEXCEPTION(prefix + "ISA weights belong to a different frozen response context");
+    const auto site_count = context_->sites().size();
+    if (site_count == 0 || isa_weights_.site_count() != site_count ||
+        isa_weights_.point_count() != context_->grid_point_count())
+        throw PSIEXCEPTION(prefix + "ISA dimensions do not match the frozen response context");
+    context_->verify_basis_unchanged();
+
+    // The four reviewed physical primitives are each constructed exactly once.
+    const auto c1 = detail::construct_restricted_c1_primitives(context_);
+    const auto transition_count = c1.transitions.size();
+    if (transition_count == 0 || c1.orbital_gaps.size() != transition_count)
+        throw PSIEXCEPTION(prefix + "restricted C1 transition metadata is inconsistent");
+    const bool has_dynamic_frequency = frequency_count > 1;
+    const auto provider_plan = detail::plan_isapol_response_provider(
+        frequency_count, site_count, transition_count, has_dynamic_frequency,
+        Process::environment.get_memory());
+
+    const auto alda = detail::construct_restricted_alda_kernel(context_, false);
+    if (alda.transitions != c1.transitions || !alda.full_alda ||
+        alda.full_alda->nirrep() != 1 ||
+        static_cast<std::size_t>(alda.full_alda->nrow()) != transition_count ||
+        alda.full_alda->ncol() != alda.full_alda->nrow())
+        throw PSIEXCEPTION(prefix +
+                           "restricted C1 and full ALDA transition ordering/dimensions differ");
+    const auto hessian = detail::assemble_restricted_singlet_hessian(
+        c1.orbital_gaps, *c1.coulomb, *c1.exchange_direct,
+        *c1.exchange_transpose, *alda.full_alda, kernel_);
+
+    const auto projection = project_transition_multipoles(context_, isa_weights_);
+    if (projection.transitions != c1.transitions || !projection.values ||
+        projection.values->nirrep() != 1 ||
+        static_cast<std::size_t>(projection.values->nrow()) != provider_plan.component_count ||
+        static_cast<std::size_t>(projection.values->ncol()) != transition_count)
+        throw PSIEXCEPTION(prefix +
+                           "ISA projection transition ordering/dimensions differ from the response Hessian");
+
+    Matrix identity(static_cast<int>(transition_count),
+                    static_cast<int>(transition_count));
+    for (std::size_t transition = 0; transition < transition_count; ++transition)
+        identity(transition, transition) = 1.0;
+
+    // Results remain function-local until every solve, contraction, conversion,
+    // and final basis check has succeeded: an exception publishes no prefix.
+    std::vector<SitePairResponse> complete;
+    complete.reserve(frequency_count);
+    for (double omega : frequencies.frequencies) {
+        const auto response = detail::solve_dense_restricted_response(
+            *hessian.H1, *hessian.H2, omega, identity);
+        const auto contracted = detail::contract_site_pair_response(
+            site_count, *projection.values, response);
+        if (!contracted.values || contracted.values->nirrep() != 1 ||
+            static_cast<std::size_t>(contracted.values->nrow()) !=
+                provider_plan.component_count ||
+            contracted.values->ncol() != contracted.values->nrow())
+            throw PSIEXCEPTION(prefix + "site-pair contraction dimensions are inconsistent");
+
+        SitePairResponse result;
+        result.positions = context_->sites();
+        result.blocks.resize(checked_c1_product(site_count, site_count, prefix));
+        for (std::size_t response_site = 0; response_site < site_count;
+             ++response_site) {
+            for (std::size_t source_site = 0; source_site < site_count;
+                 ++source_site) {
+                auto& block = result.blocks[response_site * site_count + source_site];
+                for (std::size_t response_component = 0; response_component < 16;
+                     ++response_component) {
+                    for (std::size_t source_component = 0; source_component < 16;
+                         ++source_component) {
+                        const double value = (*contracted.values)(
+                            response_site * 16 + response_component,
+                            source_site * 16 + source_component);
+                        if (!std::isfinite(value))
+                            throw PSIEXCEPTION(prefix +
+                                               "site-pair response contains a nonfinite value");
+                        block[response_component][source_component] = value;
+                    }
+                }
+            }
+        }
+        complete.push_back(std::move(result));
+    }
+    context_->verify_basis_unchanged();
+    return complete;
 }
 
 Matrix lw_graph_operator(const BondGraph& graph) { return to_psi_matrix(make_graph_operator(graph)); }

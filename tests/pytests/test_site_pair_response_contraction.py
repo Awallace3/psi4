@@ -342,6 +342,21 @@ def test_mutating_exported_response_matrices_cannot_change_later_contraction():
     assert np.max(np.abs(np.asarray(second["Q"]))) < 1.0
 
 
+def test_provider_plan_accounts_for_all_retained_outputs_and_dynamic_solve_peak():
+    estimate = psi4.core._atomic_polarizability_estimate_isapol_response_provider
+    plan = estimate(2, 3, 5, True, 1 << 30)
+    nov_square_bytes = 5 * 5 * 8
+    assert plan["component_count"] == 48
+    assert plan["retained_output_bytes"] == 2 * (48 * 48 * 8 + 3 * 3 * 8)
+    assert plan["retained_primitive_bytes"] == 4 * nov_square_bytes
+    assert plan["identity_hessian_bytes"] == 3 * nov_square_bytes
+    assert plan["retained_projection_bytes"] == 48 * 5 * 8
+    assert plan["dense_solve_peak_bytes"] == 20 * nov_square_bytes + 16 * 5 * 8
+    assert plan["memory_semantics"] == "CONSERVATIVE_SIMULTANEOUS_LIVE_RESERVATION"
+    with pytest.raises(RuntimeError, match="retained outputs/identity/Hessians"):
+        estimate(2, 3, 5, True, 2 * (plan["estimated_bytes"] - 1))
+
+
 def test_plan_exact_incremental_allocation_arithmetic_and_success_boundary():
     estimate = psi4.core._atomic_polarizability_estimate_site_pair_response_contraction
 

@@ -80,3 +80,29 @@ def source_violations(text):
         violations.append(f"forbidden external term: {match.group().lower()}")
 
     return violations
+
+
+def test_provider_uses_only_the_reviewed_native_response_route():
+    source = (
+        __import__("pathlib").Path(__file__).parents[2]
+        / "psi4/src/psi4/libmints/atomic_polarizability.cc"
+    ).read_text()
+    body_start = source.index(
+        "std::vector<SitePairResponse> ISAPolResponseProvider::compute_isapol_response"
+    )
+    body_end = source.index("\nMatrix lw_graph_operator", body_start)
+    body = _without_cpp_comments(source[body_start:body_end])
+
+    for required in (
+        "construct_restricted_c1_primitives",
+        "construct_restricted_alda_kernel",
+        "assemble_restricted_singlet_hessian",
+        "project_transition_multipoles",
+        "solve_dense_restricted_response",
+        "contract_site_pair_response",
+    ):
+        assert body.count(required) == 1
+    assert "native point-response execution is not implemented" not in body
+    assert "ao_multipole_potential" not in body
+    assert "ExternalPotential" not in body
+    assert source_violations(body) == []

@@ -675,6 +675,32 @@ void export_oeprop(py::module &m) {
               values["work_terms"] = plan.work_terms;
               return values;
           }, "site_count"_a, "transition_count"_a, "memory_bytes"_a);
+    m.def("_atomic_polarizability_estimate_isapol_response_provider",
+          [](std::size_t frequency_count, std::size_t site_count,
+             std::size_t transition_count, bool has_dynamic_frequency,
+             std::size_t memory_bytes) {
+              const auto plan = detail::plan_isapol_response_provider(
+                  frequency_count, site_count, transition_count,
+                  has_dynamic_frequency, memory_bytes);
+              py::dict values;
+              values["algorithm"] = plan.algorithm;
+              values["memory_semantics"] = plan.memory_semantics;
+              values["frequency_count"] = plan.frequency_count;
+              values["site_count"] = plan.site_count;
+              values["transition_count"] = plan.transition_count;
+              values["component_count"] = plan.component_count;
+              values["configured_memory_bytes"] = plan.configured_memory_bytes;
+              values["reserved_memory_bytes"] = plan.reserved_memory_bytes;
+              values["retained_output_bytes"] = plan.retained_output_bytes;
+              values["retained_primitive_bytes"] = plan.retained_primitive_bytes;
+              values["retained_projection_bytes"] = plan.retained_projection_bytes;
+              values["identity_hessian_bytes"] = plan.identity_hessian_bytes;
+              values["dense_solve_peak_bytes"] = plan.dense_solve_peak_bytes;
+              values["contraction_peak_bytes"] = plan.contraction_peak_bytes;
+              values["estimated_bytes"] = plan.estimated_bytes;
+              return values;
+          }, "frequency_count"_a, "site_count"_a, "transition_count"_a,
+          "has_dynamic_frequency"_a, "memory_bytes"_a);
     m.def("_atomic_polarizability_estimate_restricted_alda",
           [alda_plan_dict](std::size_t nbf, std::size_t nocc, std::size_t nvir,
                            const std::vector<std::size_t>& block_point_counts,
@@ -732,6 +758,34 @@ void export_oeprop(py::module &m) {
               return result;
           },
           "nbf"_a, "nocc"_a, "nvir"_a, "memory_bytes"_a);
+    const auto site_pair_response_list =
+        [](const std::vector<SitePairResponse>& responses) {
+            py::list output;
+            for (const auto& response : responses) {
+                auto positions = std::make_shared<Matrix>(response.positions.size(), 3);
+                for (std::size_t site = 0; site < response.positions.size(); ++site)
+                    for (std::size_t axis = 0; axis < 3; ++axis)
+                        (*positions)(site, axis) = response.positions[site][axis];
+                py::list blocks;
+                for (const auto& block : response.blocks) {
+                    auto values = std::make_shared<Matrix>(16, 16);
+                    for (std::size_t row = 0; row < 16; ++row)
+                        for (std::size_t column = 0; column < 16; ++column)
+                            (*values)(row, column) = block[row][column];
+                    blocks.append(values);
+                }
+                py::dict item;
+                item["positions"] = positions;
+                item["blocks"] = std::move(blocks);
+                item["chf_exchange_coefficient"] = 0.25;
+                item["alda_kernel_coefficient"] = 0.75;
+                item["restricted_factor"] = 4.0;
+                item["component_order"] =
+                    "00;10,11c,11s;20,21c,21s,22c,22s;30,31c,31s,32c,32s,33c,33s";
+                output.append(std::move(item));
+            }
+            return output;
+        };
     py::class_<ISAPolResponseProvider, std::shared_ptr<ISAPolResponseProvider>>(
         m, "_AtomicPolarizabilityTestResponseProvider")
         .def("expected_response_count",
@@ -739,9 +793,11 @@ void export_oeprop(py::module &m) {
                 std::vector<double> weights) {
                  return provider.expected_response_count(FrequencyGrid{std::move(frequencies), std::move(weights)});
              })
-        .def("compute", [](const ISAPolResponseProvider& provider, std::vector<double> frequencies,
-                           std::vector<double> weights) {
-            return provider.compute_isapol_response(FrequencyGrid{std::move(frequencies), std::move(weights)});
+        .def("compute", [site_pair_response_list](const ISAPolResponseProvider& provider,
+                                                   std::vector<double> frequencies,
+                                                   std::vector<double> weights) {
+            return site_pair_response_list(provider.compute_isapol_response(
+                FrequencyGrid{std::move(frequencies), std::move(weights)}));
         });
     m.def("_atomic_polarizability_make_frozen_response_context", &FrozenResponseContext::create,
           "grac_wfn"_a, "neutral_precursor_wfn"_a, "cation_wfn"_a);
@@ -760,6 +816,13 @@ void export_oeprop(py::module &m) {
               auto isa = ISAWeights::create_test_only(isa_context, std::move(weights));
               return std::make_shared<ISAPolResponseProvider>(context, ResponseKernel(0.25, 0.75), std::move(isa));
           }, "context"_a, "isa_context"_a);
+    m.def("_atomic_polarizability_make_native_response_provider",
+          [isa_options_from_dict](const std::shared_ptr<FrozenResponseContext>& context,
+                                  const py::dict& option_values) {
+              auto isa = compute_isa_weights(context, isa_options_from_dict(option_values));
+              return std::make_shared<ISAPolResponseProvider>(
+                  context, ResponseKernel(0.25, 0.75), std::move(isa));
+          }, "context"_a, "options"_a = py::dict());
     m.def("_atomic_polarizability_local_spherical_dipole_to_cartesian",
           [](const Matrix& spherical) {
               if (spherical.nirrep() != 1 || spherical.nrow() != 15 || spherical.ncol() != 15) {

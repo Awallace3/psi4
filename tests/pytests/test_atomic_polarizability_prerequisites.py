@@ -476,10 +476,16 @@ def test_frequency_grid_rejects_every_invalid_branch(grac_states, frequencies, w
         provider.expected_response_count(frequencies, weights)
 
 
-def test_frequency_grid_accepts_exact_boundaries_and_never_fakes_response(grac_states):
+def test_frequency_grid_accepts_exact_boundaries_and_computes_only_complete_response(grac_states):
     context = _context(grac_states)
     provider = psi4.core._atomic_polarizability_make_test_response_provider(context, context)
     smallest = math.nextafter(0.0, 1.0)
     assert provider.expected_response_count([0.0, smallest], [0.0, smallest]) == 2
-    with pytest.raises(RuntimeError, match=r"not implemented.*no response"):
-        provider.compute([0.0, smallest], [0.0, smallest])
+    responses = provider.compute([0.0, 0.3], [0.0, 1.0])
+    assert len(responses) == 2
+    for response in responses:
+        assert response["positions"].shape == (3, 3)
+        assert len(response["blocks"]) == 9
+        assert response["chf_exchange_coefficient"] == 0.25
+        assert response["alda_kernel_coefficient"] == 0.75
+        assert response["restricted_factor"] == 4.0

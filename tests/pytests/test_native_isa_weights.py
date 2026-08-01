@@ -318,6 +318,103 @@ def test_real_frozen_grac_h2o_digest_is_complete_deterministic_and_option_sensit
     assert changed["diagnostics"]["context_digest"] != first["diagnostics"]["context_digest"]
 
 
+@pytest.mark.scf
+def test_native_provider_wires_reviewed_physical_chain_frequency_major(frozen_h2o_context):
+    context, _, grac = frozen_h2o_context
+    options = {"radial_points": 30, "angular_polar_points": 10, "angular_azimuthal_points": 12}
+    isa = psi4.core._atomic_polarizability_compute_isa_weights(context, options)
+    provider = psi4.core._atomic_polarizability_make_native_response_provider(context, options)
+    frequencies = [0.0, 0.3]
+    responses = provider.compute(frequencies, [0.0, 1.0])
+
+    assert len(responses) == 2
+    assert all(np.asarray(item["positions"]).shape == (3, 3) for item in responses)
+    assert all(len(item["blocks"]) == 9 for item in responses)
+    assert all(item["chf_exchange_coefficient"] == 0.25 for item in responses)
+    assert all(item["alda_kernel_coefficient"] == 0.75 for item in responses)
+    assert all(item["restricted_factor"] == 4.0 for item in responses)
+
+    # Independent wiring oracle: invoke each already-reviewed underscored C1,
+    # C2b, C3a, Hessian, dense-solve, and C3b seam explicitly.
+    c1 = psi4.core._atomic_polarizability_test_restricted_c1_primitives(context, {})
+    alda = psi4.core._atomic_polarizability_test_restricted_alda_kernel(context, False)
+    assert c1["transitions"] == alda["transitions"]
+    assembled = psi4.core._atomic_polarizability_assemble_restricted_hessian(
+        c1["orbital_gaps"], c1["coulomb"], c1["exchange_direct"],
+        c1["exchange_transpose"], alda["full_alda"], 0.25, 0.75
+    )
+    projection = psi4.core._atomic_polarizability_test_project_transition_multipoles_context(
+        context, context, isa["weights"]
+    )
+    assert projection["transitions"] == c1["transitions"]
+
+    explicit = []
+    for omega in frequencies:
+        solved = psi4.core._atomic_polarizability_test_solve_and_contract_site_pair_response(
+            3, projection["values"], assembled["H1"], assembled["H2"], omega
+        )
+        assert solved["reciprocal_condition"] >= 1.0e-12
+        assert solved["reciprocal_pivot_growth"] >= 1.0e-12
+        assert solved["max_forward_error"] <= 1.0e-8
+        assert solved["max_backward_error"] <= 1.0e-11
+        assert solved["max_scaled_residual"] <= 1.0e-11
+        explicit.append(np.asarray(solved["values"]))
+
+    for response, expected in zip(responses, explicit):
+        blocks = np.asarray([np.asarray(block) for block in response["blocks"]]).reshape(3, 3, 16, 16)
+        actual = blocks.transpose(0, 2, 1, 3).reshape(48, 48)
+        assert np.isfinite(actual).all()
+        np.testing.assert_allclose(actual, expected, rtol=2.0e-12, atol=2.0e-12)
+        np.testing.assert_allclose(actual, actual.T, rtol=0.0, atol=1.0e-13)
+        charge_rows = np.arange(0, 48, 16)
+        noncharge = np.setdiff1d(np.arange(48), charge_rows)
+        assert np.max(np.abs(actual[np.ix_(charge_rows, noncharge)])) > 1.0e-8
+
+    def translation(position):
+        columns = []
+        for component in range(16):
+            unit = [0.0] * 16
+            unit[component] = 1.0
+            columns.append(psi4.core._atomic_polarizability_translate_l3(unit, position))
+        return np.asarray(columns).T
+
+    positions = np.asarray(responses[0]["positions"])
+    translations = [translation(position) for position in positions]
+    molecular = []
+    for response, expected in zip(responses, explicit):
+        blocks = np.asarray([np.asarray(block) for block in response["blocks"]]).reshape(3, 3, 16, 16)
+        provider_sum = sum(
+            translations[a] @ blocks[a, b] @ translations[b].T
+            for a in range(3) for b in range(3)
+        )
+        expected_blocks = expected.reshape(3, 16, 3, 16).transpose(0, 2, 1, 3)
+        explicit_sum = sum(
+            translations[a] @ expected_blocks[a, b] @ translations[b].T
+            for a in range(3) for b in range(3)
+        )
+        np.testing.assert_allclose(provider_sum, explicit_sum, rtol=2.0e-12, atol=2.0e-12)
+        molecular.append(provider_sum)
+    static_dipole = molecular[0][1:4, 1:4]
+    assert np.isfinite(static_dipole).all()
+    assert np.linalg.eigvalsh(0.5 * (static_dipole + static_dipole.T)).min() > 0.0
+
+    # Independent molecular dipole target from analytic AO dipole integrals,
+    # transformed to the same ordered occupied-virtual basis and dense solve.
+    ca = np.asarray(grac.Ca())
+    ao_dipoles = [np.asarray(value) for value in psi4.core.MintsHelper(grac.basisset()).ao_dipole()]
+    direct_projection = np.zeros((16, len(c1["transitions"])))
+    for transition, (occupied, virtual) in enumerate(c1["transitions"]):
+        cartesian = [ca[:, occupied] @ value @ ca[:, virtual] for value in ao_dipoles]
+        direct_projection[1:4, transition] = [cartesian[2], cartesian[0], cartesian[1]]
+    direct = psi4.core._atomic_polarizability_test_solve_and_contract_site_pair_response(
+        1, psi4.core.Matrix.from_array(direct_projection), assembled["H1"], assembled["H2"], 0.0
+    )
+    direct_dipole = np.asarray(direct["values"])[1:4, 1:4]
+    # The deliberately coarse 12x50 sealed DFT grid limits this quadrature-vs-
+    # analytic-integral check; the smallest symmetry component differs by 2.1%.
+    np.testing.assert_allclose(static_dipole, direct_dipole, rtol=2.5e-2, atol=2.0e-5)
+
+
 def _restricted_c1_primitives(context, **test_overrides):
     return psi4.core._atomic_polarizability_test_restricted_c1_primitives(
         context, test_overrides
