@@ -1863,74 +1863,102 @@ SitePairResponseContractionPlan plan_site_pair_response_contraction(
     plan.max_work_terms = max_work;
     plan.max_site_count = max_sites;
     plan.algorithm = "SYMMETRIC_SITE_COMPONENT_OUTER_PRODUCT";
-    plan.memory_semantics = "INCREMENTAL_NUMERIC_PAYLOAD_CALLER_B_AND_G_EXCLUDED";
+    plan.memory_semantics =
+        "INCREMENTAL_NUMERIC_PAYLOAD_CALLER_B_AND_DENSE_RESPONSE_EXCLUDED";
     return plan;
 }
 
-SitePairResponseContraction contract_site_pair_response(
-    std::size_t site_count, const Matrix& projection, const Matrix& response_map,
-    double response_map_forward_error_bound) {
+namespace {
+ResponseMapSymmetryDiagnostics analyze_response_map(
+    const DenseRestrictedResponse& response) {
     const std::string prefix = "site-pair response contraction: ";
-    constexpr double restricted_factor = 4.0;
-    if (site_count == 0) throw PSIEXCEPTION(prefix + "site count must be nonzero");
-    if (!std::isfinite(response_map_forward_error_bound) ||
-        response_map_forward_error_bound < 0.0 ||
-        response_map_forward_error_bound > kDenseMaximumForwardError)
-        throw PSIEXCEPTION(prefix +
-                           "response-map forward error bound must be finite, nonnegative, and at most 1e-8");
-    if (projection.nirrep() != 1 || projection.nrow() <= 0 || projection.ncol() <= 0 ||
-        response_map.nirrep() != 1)
-        throw PSIEXCEPTION(prefix + "input dimensions are inconsistent");
-    const auto transition_count = static_cast<std::size_t>(projection.ncol());
-    const auto plan = plan_site_pair_response_contraction(
-        site_count, transition_count, Process::environment.get_memory());
-    if (static_cast<std::size_t>(projection.nrow()) != plan.component_count ||
-        response_map.nrow() != response_map.ncol())
-        throw PSIEXCEPTION(prefix +
-                           (response_map.nrow() != response_map.ncol()
-                                ? "response map must be a nonempty square matrix"
-                                : "projection dimensions do not match the site count"));
-    if (response_map.nrow() != projection.ncol())
-        throw PSIEXCEPTION(prefix + "response-map and projection dimensions are inconsistent");
+    if (!response.P || !response.Q)
+        throw PSIEXCEPTION(prefix + "dense response carrier is incomplete");
+    const auto& response_map = *response.P;
+    const auto& conjugate_map = *response.Q;
+    if (response_map.nirrep() != 1 || response_map.nrow() <= 0 ||
+        response_map.nrow() != response_map.ncol() || conjugate_map.nirrep() != 1 ||
+        conjugate_map.nrow() != response_map.nrow() ||
+        conjugate_map.ncol() != response_map.ncol())
+        throw PSIEXCEPTION(prefix + "dense response carrier dimensions are inconsistent");
+    validate_dense_response_diagnostics(
+        response.reciprocal_condition, response.reciprocal_pivot_growth,
+        {response.max_forward_error}, {response.max_backward_error},
+        {response.max_scaled_residual});
 
-    for (int row = 0; row < projection.nrow(); ++row)
-        for (int transition = 0; transition < projection.ncol(); ++transition)
-            if (!std::isfinite(projection(row, transition)))
-                throw PSIEXCEPTION(prefix + "projection must contain only finite values");
-    double response_map_scale = 0.0;
+    // DGESVX FERR applies to each full doubled solution column [P;Q]. Its
+    // infinity-norm envelope therefore includes both maps. A separate unit-floor
+    // machine scale prevents exact or tiny maps from eliminating arithmetic noise.
+    double solution_scale = 0.0;
     for (int row = 0; row < response_map.nrow(); ++row) {
         for (int column = 0; column < response_map.ncol(); ++column) {
-            const double value = response_map(row, column);
-            if (!std::isfinite(value))
-                throw PSIEXCEPTION(prefix + "response map must contain only finite values");
-            response_map_scale = std::max(response_map_scale, std::abs(value));
+            const double p = response_map(row, column);
+            const double q = conjugate_map(row, column);
+            if (!std::isfinite(p) || !std::isfinite(q))
+                throw PSIEXCEPTION(prefix + "dense response maps must contain only finite values");
+            solution_scale = std::max({solution_scale, std::abs(p), std::abs(q)});
         }
     }
-    // FERR bounds each solved response-map entry relative to the map scale. The
-    // antisymmetric difference contains two independently bounded entries, hence
-    // 2*FERR*scale. The other term permits only dimension-scaled arithmetic noise
-    // when the caller supplies an exact (zero-error-bound) map.
+    const double dimension = static_cast<double>(response_map.nrow());
+    const double machine_scale = std::max(1.0, solution_scale);
     const double machine_antisymmetry =
-        64.0 * std::numeric_limits<double>::epsilon() * response_map_scale * transition_count;
+        64.0 * std::numeric_limits<double>::epsilon() * machine_scale * dimension;
+    // Two independently FERR-bounded P entries form each antisymmetric difference.
     const double solver_antisymmetry =
-        2.0 * response_map_forward_error_bound * response_map_scale;
+        2.0 * response.max_forward_error * solution_scale;
     const double allowed_antisymmetry = std::max(machine_antisymmetry, solver_antisymmetry);
     if (!std::isfinite(allowed_antisymmetry))
         throw PSIEXCEPTION(prefix + "derived response-map symmetry bound overflowed");
-
     double symmetry_residual = 0.0;
-    auto symmetric_response_map = std::make_shared<Matrix>(response_map.nrow(), response_map.ncol());
     for (int row = 0; row < response_map.nrow(); ++row) {
-        (*symmetric_response_map)(row, row) = response_map(row, row);
         for (int column = row + 1; column < response_map.ncol(); ++column) {
-            const double upper = response_map(row, column);
-            const double lower = response_map(column, row);
-            const double residual = std::abs(upper - lower);
+            const double residual =
+                std::abs(response_map(row, column) - response_map(column, row));
             symmetry_residual = std::max(symmetry_residual, residual);
             if (!std::isfinite(residual) || residual > allowed_antisymmetry)
                 throw PSIEXCEPTION(prefix +
                                    "response map must be symmetric within its derived solver-error bound");
-            const double value = 0.5 * (upper + lower);
+        }
+    }
+    return {solution_scale, allowed_antisymmetry, symmetry_residual};
+}
+}  // namespace
+
+ResponseMapSymmetryDiagnostics validate_response_map_symmetry_test_only(
+    const Matrix& response_map, const Matrix& conjugate_map,
+    double response_map_forward_error_bound) {
+    DenseRestrictedResponse synthetic{response_map.clone(), conjugate_map.clone(), 1.0, 1.0,
+                                      response_map_forward_error_bound, 0.0, 0.0};
+    return analyze_response_map(synthetic);
+}
+
+SitePairResponseContraction contract_site_pair_response(
+    std::size_t site_count, const Matrix& projection,
+    const DenseRestrictedResponse& response) {
+    const std::string prefix = "site-pair response contraction: ";
+    constexpr double restricted_factor = 4.0;
+    if (site_count == 0) throw PSIEXCEPTION(prefix + "site count must be nonzero");
+    if (projection.nirrep() != 1 || projection.nrow() <= 0 || projection.ncol() <= 0)
+        throw PSIEXCEPTION(prefix + "input dimensions are inconsistent");
+    const auto symmetry = analyze_response_map(response);
+    const auto& response_map = *response.P;
+    const auto transition_count = static_cast<std::size_t>(projection.ncol());
+    const auto plan = plan_site_pair_response_contraction(
+        site_count, transition_count, Process::environment.get_memory());
+    if (static_cast<std::size_t>(projection.nrow()) != plan.component_count)
+        throw PSIEXCEPTION(prefix + "projection dimensions do not match the site count");
+    if (response_map.nrow() != projection.ncol())
+        throw PSIEXCEPTION(prefix + "response-map and projection dimensions are inconsistent");
+    for (int row = 0; row < projection.nrow(); ++row)
+        for (int transition = 0; transition < projection.ncol(); ++transition)
+            if (!std::isfinite(projection(row, transition)))
+                throw PSIEXCEPTION(prefix + "projection must contain only finite values");
+
+    auto symmetric_response_map = std::make_shared<Matrix>(response_map.nrow(), response_map.ncol());
+    for (int row = 0; row < response_map.nrow(); ++row) {
+        (*symmetric_response_map)(row, row) = response_map(row, row);
+        for (int column = row + 1; column < response_map.ncol(); ++column) {
+            const double value = 0.5 * (response_map(row, column) + response_map(column, row));
             if (!std::isfinite(value))
                 throw PSIEXCEPTION(prefix + "response-map roundoff averaging overflowed");
             (*symmetric_response_map)(row, column) = value;
@@ -1976,9 +2004,10 @@ SitePairResponseContraction contract_site_pair_response(
     result.values = std::move(values);
     result.plan = plan;
     result.restricted_factor = restricted_factor;
-    result.response_map_forward_error_bound = response_map_forward_error_bound;
-    result.response_map_allowed_antisymmetry = allowed_antisymmetry;
-    result.response_map_symmetry_residual = symmetry_residual;
+    result.response_map_forward_error_bound = response.max_forward_error;
+    result.response_map_solution_scale = symmetry.solution_scale;
+    result.response_map_allowed_antisymmetry = symmetry.allowed_antisymmetry;
+    result.response_map_symmetry_residual = symmetry.symmetry_residual;
     result.reciprocity_enforced = true;
     return result;
 }

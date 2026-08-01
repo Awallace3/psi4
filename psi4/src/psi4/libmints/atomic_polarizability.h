@@ -520,7 +520,7 @@ struct SitePairResponseContractionPlan {
     std::size_t max_work_terms{};
     std::size_t max_site_count{};
     std::string algorithm;
-    /** Incremental numeric payload only; caller-owned B and G are excluded. */
+    /** Incremental numeric payload only; caller-owned B and dense response are excluded. */
     std::string memory_semantics;
 };
 
@@ -530,6 +530,7 @@ struct SitePairResponseContraction {
     SitePairResponseContractionPlan plan;
     double restricted_factor{};
     double response_map_forward_error_bound{};
+    double response_map_solution_scale{};
     double response_map_allowed_antisymmetry{};
     double response_map_symmetry_residual{};
     bool reciprocity_enforced{};
@@ -538,13 +539,25 @@ struct SitePairResponseContraction {
 SitePairResponseContractionPlan plan_site_pair_response_contraction(
     std::size_t site_count, std::size_t transition_count, std::size_t memory_bytes);
 
+/** Pure response-map symmetry diagnostics shared by production and a test-only validator. */
+struct ResponseMapSymmetryDiagnostics {
+    double solution_scale{};
+    double allowed_antisymmetry{};
+    double symmetry_residual{};
+};
+
 /**
  * Pure C3b evaluator: alpha[A,B](t,u) = 4 B[A,t,:] G B[B,u,:]^T.
- * The explicit response-map bound is the validated dense solve's maximum FERR;
- * zero requests a machine-roundoff-only gate for caller-supplied exact maps.
+ * G and its validated solve diagnostics are inseparable in response; its maximum
+ * FERR bounds averaging of solver roundoff before reciprocity is enforced.
  */
 SitePairResponseContraction contract_site_pair_response(
-    std::size_t site_count, const Matrix& projection, const Matrix& response_map,
+    std::size_t site_count, const Matrix& projection,
+    const DenseRestrictedResponse& response);
+
+/** Pure synthetic diagnostics seam; it does not construct or contract a response. */
+ResponseMapSymmetryDiagnostics validate_response_map_symmetry_test_only(
+    const Matrix& response_map, const Matrix& conjugate_map,
     double response_map_forward_error_bound);
 }  // namespace detail
 

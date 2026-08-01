@@ -573,44 +573,93 @@ void export_oeprop(py::module &m) {
               return values;
           }, "point_count"_a, "site_count"_a, "transition_count"_a,
           "max_block_points"_a, "nbf"_a, "nmo"_a, "memory_bytes"_a);
+    const auto site_pair_contraction_result_dict =
+        [](const detail::SitePairResponseContraction& contraction) {
+            py::dict plan;
+            plan["algorithm"] = contraction.plan.algorithm;
+            plan["memory_semantics"] = contraction.plan.memory_semantics;
+            plan["site_count"] = contraction.plan.site_count;
+            plan["transition_count"] = contraction.plan.transition_count;
+            plan["component_count"] = contraction.plan.component_count;
+            plan["output_bytes"] = contraction.plan.output_bytes;
+            plan["scratch_bytes"] = contraction.plan.scratch_bytes;
+            plan["estimated_bytes"] = contraction.plan.estimated_bytes;
+            plan["work_terms"] = contraction.plan.work_terms;
+            plan["max_work_terms"] = contraction.plan.max_work_terms;
+            plan["max_site_count"] = contraction.plan.max_site_count;
+            py::dict result;
+            result["values"] = contraction.values;
+            result["site_count"] = contraction.plan.site_count;
+            result["transition_count"] = contraction.plan.transition_count;
+            result["restricted_factor"] = contraction.restricted_factor;
+            result["component_order"] =
+                "00;10,11c,11s;20,21c,21s,22c,22s;30,31c,31s,32c,32s,33c,33s";
+            result["block_order"] =
+                "row=(response_site,ISA_component); column=(source_site,ISA_component)";
+            result["response_map_symmetry_policy"] =
+                "AVERAGE_WITHIN_SOLVER_FORWARD_ERROR_BOUND";
+            result["response_map_forward_error_bound"] =
+                contraction.response_map_forward_error_bound;
+            result["response_map_solution_scale"] = contraction.response_map_solution_scale;
+            result["response_map_allowed_antisymmetry"] =
+                contraction.response_map_allowed_antisymmetry;
+            result["response_map_symmetry_residual"] =
+                contraction.response_map_symmetry_residual;
+            result["reciprocity_enforced"] = contraction.reciprocity_enforced;
+            result["plan"] = std::move(plan);
+            return result;
+        };
     m.def("_atomic_polarizability_test_contract_site_pair_response",
-          [](std::size_t site_count, const Matrix& projection,
-             const Matrix& response_map, double response_map_forward_error_bound) {
-              const auto contraction = detail::contract_site_pair_response(
-                  site_count, projection, response_map, response_map_forward_error_bound);
-              py::dict plan;
-              plan["algorithm"] = contraction.plan.algorithm;
-              plan["memory_semantics"] = contraction.plan.memory_semantics;
-              plan["site_count"] = contraction.plan.site_count;
-              plan["transition_count"] = contraction.plan.transition_count;
-              plan["component_count"] = contraction.plan.component_count;
-              plan["output_bytes"] = contraction.plan.output_bytes;
-              plan["scratch_bytes"] = contraction.plan.scratch_bytes;
-              plan["estimated_bytes"] = contraction.plan.estimated_bytes;
-              plan["work_terms"] = contraction.plan.work_terms;
-              plan["max_work_terms"] = contraction.plan.max_work_terms;
-              plan["max_site_count"] = contraction.plan.max_site_count;
-              py::dict result;
-              result["values"] = contraction.values;
-              result["site_count"] = contraction.plan.site_count;
-              result["transition_count"] = contraction.plan.transition_count;
-              result["restricted_factor"] = contraction.restricted_factor;
-              result["component_order"] =
-                  "00;10,11c,11s;20,21c,21s,22c,22s;30,31c,31s,32c,32s,33c,33s";
-              result["block_order"] =
-                  "row=(response_site,ISA_component); column=(source_site,ISA_component)";
-              result["response_map_symmetry_policy"] =
-                  "AVERAGE_WITHIN_SOLVER_FORWARD_ERROR_BOUND";
-              result["response_map_forward_error_bound"] =
-                  contraction.response_map_forward_error_bound;
-              result["response_map_allowed_antisymmetry"] =
-                  contraction.response_map_allowed_antisymmetry;
-              result["response_map_symmetry_residual"] =
-                  contraction.response_map_symmetry_residual;
-              result["reciprocity_enforced"] = contraction.reciprocity_enforced;
-              result["plan"] = std::move(plan);
+          [site_pair_contraction_result_dict](std::size_t site_count,
+                                               const Matrix& projection,
+                                               const Matrix& response_map) {
+              if (response_map.nirrep() != 1 || response_map.nrow() <= 0 ||
+                  response_map.nrow() != response_map.ncol())
+                  throw PSIEXCEPTION(
+                      "site-pair response contraction: exact test response map must be nonempty and square");
+              for (int row = 0; row < response_map.nrow(); ++row)
+                  for (int column = row + 1; column < response_map.ncol(); ++column)
+                      if (response_map(row, column) != response_map(column, row))
+                          throw PSIEXCEPTION(
+                              "site-pair response contraction: test response map must be exactly symmetric");
+              auto q = std::make_shared<Matrix>(response_map.nrow(), response_map.ncol());
+              detail::DenseRestrictedResponse response{
+                  response_map.clone(), std::move(q), 1.0, 1.0, 0.0, 0.0, 0.0};
+              return site_pair_contraction_result_dict(
+                  detail::contract_site_pair_response(site_count, projection, response));
+          }, "site_count"_a, "projection"_a, "response_map"_a);
+    m.def("_atomic_polarizability_test_solve_and_contract_site_pair_response",
+          [site_pair_contraction_result_dict](std::size_t site_count,
+                                               const Matrix& projection,
+                                               const Matrix& H1, const Matrix& H2,
+                                               double omega) {
+              Matrix identity(H1.nrow(), H1.nrow());
+              for (int row = 0; row < H1.nrow(); ++row) identity(row, row) = 1.0;
+              const auto response = detail::solve_dense_restricted_response(
+                  H1, H2, omega, identity);
+              auto result = site_pair_contraction_result_dict(
+                  detail::contract_site_pair_response(site_count, projection, response));
+              result["P"] = response.P;
+              result["Q"] = response.Q;
+              result["reciprocal_condition"] = response.reciprocal_condition;
+              result["reciprocal_pivot_growth"] = response.reciprocal_pivot_growth;
+              result["max_forward_error"] = response.max_forward_error;
+              result["max_backward_error"] = response.max_backward_error;
+              result["max_scaled_residual"] = response.max_scaled_residual;
               return result;
-          }, "site_count"_a, "projection"_a, "response_map"_a,
+          }, "site_count"_a, "projection"_a, "H1"_a, "H2"_a, "omega"_a);
+    m.def("_atomic_polarizability_test_validate_response_map_symmetry",
+          [](const Matrix& response_map, const Matrix& conjugate_map,
+             double response_map_forward_error_bound) {
+              const auto diagnostics = detail::validate_response_map_symmetry_test_only(
+                  response_map, conjugate_map, response_map_forward_error_bound);
+              py::dict result;
+              result["response_map_forward_error_bound"] = response_map_forward_error_bound;
+              result["response_map_solution_scale"] = diagnostics.solution_scale;
+              result["response_map_allowed_antisymmetry"] = diagnostics.allowed_antisymmetry;
+              result["response_map_symmetry_residual"] = diagnostics.symmetry_residual;
+              return result;
+          }, "response_map"_a, "conjugate_map"_a,
           "response_map_forward_error_bound"_a);
     m.def("_atomic_polarizability_estimate_site_pair_response_contraction",
           [](std::size_t site_count, std::size_t transition_count,
