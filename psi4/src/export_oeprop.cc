@@ -119,6 +119,117 @@ void export_oeprop(py::module &m) {
         const auto grid = make_casimir_grid(nonzero_count, scale);
         return py::make_tuple(grid.frequencies, grid.weights);
     });
+    m.def("_atomic_polarizability_test_irregular_harmonics",
+          &detail::irregular_harmonics_test_only, "point"_a, "site"_a);
+    m.def("_atomic_polarizability_plan_wsm_refinement",
+          [](std::size_t point_count, std::size_t site_count, std::size_t memory_bytes) {
+              const auto plan = detail::plan_wsm_refinement(point_count, site_count, memory_bytes);
+              py::dict values;
+              values["point_count"] = plan.point_count;
+              values["pair_rows"] = plan.pair_rows;
+              values["site_count"] = plan.site_count;
+              values["variable_count"] = plan.variable_count;
+              values["irregular_elements"] = plan.irregular_elements;
+              values["design_elements"] = plan.design_elements;
+              values["design_bytes"] = plan.design_bytes;
+              values["estimated_bytes"] = plan.estimated_bytes;
+              values["configured_memory_bytes"] = plan.configured_memory_bytes;
+              values["reserved_memory_bytes"] = plan.reserved_memory_bytes;
+              values["algorithm"] = plan.algorithm;
+              values["memory_semantics"] = plan.memory_semantics;
+              return values;
+          },
+          "point_count"_a, "site_count"_a, "memory_bytes"_a);
+    m.def("_atomic_polarizability_test_refine_wsm",
+          [](const Matrix& point_matrix, const std::vector<double>& frequencies,
+             const std::vector<SharedMatrix>& responses, const Matrix& site_matrix,
+             const std::vector<SharedMatrix>& localized_matrices,
+             const std::vector<bool>& active_variables, const SharedMatrix& equality,
+             const std::vector<double>& equality_targets, const py::dict& option_values) {
+              if (point_matrix.nirrep() != 1 || point_matrix.ncol() != 3 || point_matrix.nrow() <= 0 ||
+                  site_matrix.nirrep() != 1 || site_matrix.ncol() != 3 || site_matrix.nrow() <= 0)
+                  throw PSIEXCEPTION("WSM refinement: points and sites must be nonempty N by 3 matrices");
+              std::vector<SitePosition> points(static_cast<std::size_t>(point_matrix.nrow()));
+              std::vector<SitePosition> sites(static_cast<std::size_t>(site_matrix.nrow()));
+              for (std::size_t point = 0; point < points.size(); ++point)
+                  for (std::size_t axis = 0; axis < 3; ++axis)
+                      points[point][axis] = point_matrix(point, axis);
+              for (std::size_t site = 0; site < sites.size(); ++site)
+                  for (std::size_t axis = 0; axis < 3; ++axis)
+                      sites[site][axis] = site_matrix(site, axis);
+              if (localized_matrices.size() != sites.size())
+                  throw PSIEXCEPTION("WSM refinement: expected one localized 15 by 15 tensor per site");
+              std::vector<L3Matrix> localized(sites.size());
+              for (std::size_t site = 0; site < sites.size(); ++site) {
+                  if (!localized_matrices[site] || localized_matrices[site]->nirrep() != 1 ||
+                      localized_matrices[site]->nrow() != 15 || localized_matrices[site]->ncol() != 15)
+                      throw PSIEXCEPTION("WSM refinement: expected one localized 15 by 15 tensor per site");
+                  for (std::size_t row = 0; row < 15; ++row)
+                      for (std::size_t column = 0; column < 15; ++column)
+                          localized[site][row][column] = (*localized_matrices[site])(row, column);
+              }
+              RefinementOptions options;
+              for (const auto& entry : option_values) {
+                  const auto key = py::cast<std::string>(entry.first);
+                  if (key == "wsm_rank") options.wsm_rank = entry.second.cast<unsigned int>();
+                  else if (key == "hydrogen_rank") options.hydrogen_rank = entry.second.cast<unsigned int>();
+                  else if (key == "weight_type") options.weight_type = entry.second.cast<unsigned int>();
+                  else if (key == "weight_coefficient") options.weight_coefficient = entry.second.cast<double>();
+                  else if (key == "cutoff") options.cutoff = entry.second.cast<double>();
+                  else if (key == "maximum_condition_number")
+                      options.maximum_condition_number = entry.second.cast<double>();
+                  else throw PSIEXCEPTION("WSM refinement: unknown policy option '" + key + "'");
+              }
+              PDefConstraints constraints{active_variables, equality, equality_targets};
+              const auto models = detail::refine_wsm_test_only(
+                  points, frequencies, responses, sites, localized, constraints, options);
+              py::list result;
+              for (const auto& model : models) {
+                  py::dict values;
+                  values["frequency"] = model.frequency;
+                  values["positions"] = model.positions;
+                  py::list tensors;
+                  for (const auto& tensor : model.tensors) {
+                      auto matrix = std::make_shared<Matrix>(15, 15);
+                      for (std::size_t row = 0; row < 15; ++row)
+                          for (std::size_t column = 0; column < 15; ++column)
+                              (*matrix)(row, column) = tensor[row][column];
+                      tensors.append(std::move(matrix));
+                  }
+                  values["tensors"] = std::move(tensors);
+                  values["solution"] = model.diagnostics.solution;
+                  values["kept_variables"] = model.diagnostics.kept_variables;
+                  values["pruned_variables"] = model.diagnostics.pruned_variables;
+                  values["point_count"] = model.diagnostics.point_count;
+                  values["pair_rows"] = model.diagnostics.pair_rows;
+                  values["variable_count"] = model.diagnostics.variable_count;
+                  values["active_variable_count"] = model.diagnostics.active_variable_count;
+                  values["anchor_variable_count"] = model.diagnostics.anchor_variable_count;
+                  values["condition_number"] = model.diagnostics.condition_number;
+                  values["weighted_residual_norm"] = model.diagnostics.weighted_residual_norm;
+                  values["anchor_residual_norm"] = model.diagnostics.anchor_residual_norm;
+                  values["constraint_residual_norm"] = model.diagnostics.constraint_residual_norm;
+                  values["objective_residual_norm"] = model.diagnostics.objective_residual_norm;
+                  values["max_point_residual"] = model.diagnostics.max_point_residual;
+                  values["max_output_asymmetry"] = model.diagnostics.max_output_asymmetry;
+                  values["row_weight_source"] = model.diagnostics.row_weight_source;
+                  py::dict policy;
+                  policy["wsm_rank"] = options.wsm_rank;
+                  policy["hydrogen_rank"] = options.hydrogen_rank;
+                  policy["weight_type"] = options.weight_type;
+                  policy["weight_coefficient"] = options.weight_coefficient;
+                  policy["cutoff"] = options.cutoff;
+                  policy["weight_type_definition"] =
+                      "inherited protocol: anchor only site-local diagonal dipole components to LocalizedResponse.local";
+                  policy["external_oracle_parity_claimed"] = false;
+                  values["policy"] = std::move(policy);
+                  result.append(std::move(values));
+              }
+              return result;
+          },
+          "points"_a, "frequencies"_a, "responses"_a, "sites"_a,
+          "localized"_a, "active_variables"_a, "equality"_a,
+          "equality_targets"_a, "options"_a = py::dict());
     m.def("_atomic_polarizability_test_constrained_least_squares",
           [](const Matrix& design, const std::vector<double>& observations,
              const std::vector<double>& row_weights, double lambda,

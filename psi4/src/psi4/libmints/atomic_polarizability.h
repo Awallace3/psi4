@@ -949,6 +949,8 @@ struct PSI_API LocalizationResiduals {
 
 /** Fully localized rank-1-through-rank-3 response and deterministic diagnostics. */
 struct PSI_API LocalizedResponse {
+    /** Ordered physical sites inherited from the localized site-pair response. */
+    std::vector<SitePosition> positions;
     std::vector<L3Matrix> local;
     std::vector<BondTransfer> transfers;
     LocalizationResiduals residuals;
@@ -957,6 +959,97 @@ struct PSI_API LocalizedResponse {
     std::vector<std::array<std::size_t, 2>> omitted_component_pairs;
     std::size_t omitted_transfer_count;
 };
+
+/** Full site-major upper-triangle variable policy and optional equality Cx=d. */
+struct PSI_API RefinementConstraints {
+    /** Empty means all 120 variables per site are active; false fixes a variable to zero. */
+    std::vector<bool> active_variables;
+    SharedMatrix equality;
+    std::vector<double> equality_targets;
+};
+
+/** The parsed polarizability-definition constraints used by WSM refinement. */
+using PDefConstraints = RefinementConstraints;
+
+/** Exact reviewed physical WSM policy; only the condition gate is caller-tunable. */
+struct PSI_API RefinementOptions {
+    unsigned int wsm_rank{3};
+    unsigned int hydrogen_rank{3};
+    unsigned int weight_type{4};
+    double weight_coefficient{0.001};
+    double cutoff{1.0e-4};
+    double maximum_condition_number{1.0e12};
+};
+
+/** Up-front dense-design resource accounting. */
+struct PSI_API WSMRefinementPlan {
+    std::size_t point_count{};
+    std::size_t pair_rows{};
+    std::size_t site_count{};
+    std::size_t variable_count{};
+    std::size_t irregular_elements{};
+    std::size_t design_elements{};
+    std::size_t design_bytes{};
+    std::size_t estimated_bytes{};
+    std::size_t configured_memory_bytes{};
+    std::size_t reserved_memory_bytes{};
+    std::string algorithm;
+    std::string memory_semantics;
+};
+
+/** Auditable result metadata for one physical WSM fit. */
+struct PSI_API RefinementDiagnostics {
+    std::size_t point_count{};
+    std::size_t pair_rows{};
+    std::size_t variable_count{};
+    std::size_t active_variable_count{};
+    std::size_t anchor_variable_count{};
+    std::vector<double> solution;
+    std::vector<std::size_t> kept_variables;
+    std::vector<std::size_t> pruned_variables;
+    double condition_number{};
+    double weighted_residual_norm{};
+    double anchor_residual_norm{};
+    double constraint_residual_norm{};
+    double objective_residual_norm{};
+    double max_point_residual{};
+    double max_output_asymmetry{};
+    std::string row_weight_source;
+    WSMRefinementPlan plan;
+};
+
+/** Symmetric site-local L3 model at one physical response frequency. */
+struct PSI_API RefinedL3Model {
+    double frequency{};
+    std::vector<SitePosition> positions;
+    std::vector<L3Matrix> tensors;
+    RefinementDiagnostics diagnostics;
+};
+
+/** Refine exactly one frequency; the PointResponseData carrier must contain one response. */
+PSI_API RefinedL3Model refine_wsm(const LocalizedResponse& localized,
+                                  const PointResponseData& point_response,
+                                  const PDefConstraints& constraints = PDefConstraints(),
+                                  const RefinementOptions& options = RefinementOptions());
+
+/** Frequency-major wrapper; localized responses and point responses must have equal counts. */
+PSI_API std::vector<RefinedL3Model> refine_wsm(
+    const std::vector<LocalizedResponse>& localized,
+    const PointResponseData& point_response,
+    const PDefConstraints& constraints = PDefConstraints(),
+    const RefinementOptions& options = RefinementOptions());
+
+namespace detail {
+WSMRefinementPlan plan_wsm_refinement(std::size_t point_count, std::size_t site_count,
+                                      std::size_t memory_bytes);
+L3WorkingVector irregular_harmonics_test_only(const SitePosition& point,
+                                               const SitePosition& site);
+std::vector<RefinedL3Model> refine_wsm_test_only(
+    const std::vector<SitePosition>& points, const std::vector<double>& frequencies,
+    const std::vector<SharedMatrix>& responses, const std::vector<SitePosition>& sites,
+    const std::vector<L3Matrix>& localized, const PDefConstraints& constraints,
+    const RefinementOptions& options);
+}  // namespace detail
 
 PSI_API Matrix lw_graph_operator(const BondGraph& graph);
 PSI_API std::pair<Matrix, std::vector<double>> lw_graph_pseudoinverse(const BondGraph& graph);
