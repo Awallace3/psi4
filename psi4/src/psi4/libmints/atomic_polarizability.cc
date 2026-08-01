@@ -21,6 +21,7 @@
 #include <cmath>
 #include <complex>
 #include <iomanip>
+#include <initializer_list>
 #include <limits>
 #include <queue>
 #include <sstream>
@@ -1843,18 +1844,53 @@ TransitionMultipoleProjection project_transition_multipoles(
 
 ISAPolResponsePlan plan_isapol_response_provider(
     std::size_t frequency_count, std::size_t site_count,
-    std::size_t transition_count, bool has_dynamic_frequency,
-    std::size_t memory_bytes) {
+    std::size_t nbf, std::size_t nocc, std::size_t nvir,
+    std::size_t point_count, const std::vector<FrozenGridBlock>& blocks,
+    bool has_dynamic_frequency, std::size_t memory_bytes,
+    double density_cutoff) {
     const std::string prefix = "ISAPolResponseProvider: ";
-    if (frequency_count == 0 || site_count == 0 || transition_count == 0)
+    if (frequency_count == 0 || site_count == 0 || nbf == 0 || nocc == 0 ||
+        nvir == 0 || point_count == 0 || blocks.empty())
         throw PSIEXCEPTION(prefix + "resource-plan dimensions must be nonzero");
+    const auto transition_count = checked_c1_product(nocc, nvir, prefix);
+    const auto nmo = checked_c1_sum(nocc, nvir, prefix);
+    std::size_t covered_points = 0;
+    std::size_t max_block_points = 0;
+    for (const auto& block : blocks) {
+        covered_points = checked_c1_sum(covered_points, block.point_count, prefix);
+        max_block_points = std::max(max_block_points, block.point_count);
+    }
+    if (covered_points != point_count)
+        throw PSIEXCEPTION(prefix + "resource-plan blocks do not cover the sealed point count");
 
-    // Reuse C3b's cardinality/work envelope before estimating the aggregate.
-    (void)plan_site_pair_response_contraction(
+    // Pure stage planners run before any physical stage output is constructed.
+    // DirectJK's backend workspace is necessarily advisory, but its estimate is
+    // still included in the aggregate C1 peak. All known retained allocations
+    // below are hard-gated against the documented half-memory reservation.
+    const auto c1_plan = plan_restricted_c1_jk(nbf, nocc, nvir, memory_bytes);
+    const auto alda_plan = plan_restricted_alda(
+        nbf, nocc, nvir, point_count, blocks, memory_bytes, false, density_cutoff);
+    const auto projection_plan = plan_transition_multipole_projection(
+        point_count, site_count, transition_count, max_block_points,
+        nbf, nmo, memory_bytes);
+    const auto contraction_plan = plan_site_pair_response_contraction(
         site_count, transition_count, memory_bytes);
+
     const auto component_count = checked_c1_product(site_count, 16, prefix);
     const auto transition_square = checked_c1_product(
         transition_count, transition_count, prefix);
+    const auto transition_matrix_bytes = checked_c1_product(
+        transition_square, sizeof(double), prefix);
+    const auto retained_c1_bytes = checked_c1_product(
+        3, transition_matrix_bytes, prefix);
+    const auto retained_alda_bytes = transition_matrix_bytes;
+    const auto hessian_bytes = checked_c1_product(
+        2, transition_matrix_bytes, prefix);
+    const auto identity_bytes = transition_matrix_bytes;
+    const auto retained_projection_bytes = projection_plan.output_bytes;
+    const auto response_carrier_bytes = checked_c1_product(
+        2, transition_matrix_bytes, prefix);
+
     const auto component_square = checked_c1_product(
         component_count, component_count, prefix);
     const auto response_block_bytes = checked_c1_product(
@@ -1864,20 +1900,12 @@ ISAPolResponsePlan plan_isapol_response_provider(
     const auto retained_output_bytes = checked_c1_product(
         frequency_count,
         checked_c1_sum(response_block_bytes, response_position_bytes, prefix), prefix);
-    const auto transition_matrix_bytes = checked_c1_product(
-        transition_square, sizeof(double), prefix);
-    const auto retained_primitive_bytes = checked_c1_product(
-        4, transition_matrix_bytes, prefix);  // J, two K maps, and full ALDA
-    const auto identity_hessian_bytes = checked_c1_product(
-        3, transition_matrix_bytes, prefix);  // H1, H2, and the identity RHS
-    const auto retained_projection_bytes = checked_c1_product(
-        checked_c1_product(component_count, transition_count, prefix),
-        sizeof(double), prefix);
 
-    // solve_dense_restricted_response simultaneously retains at most twenty
-    // nov-by-nov double payloads for a doubled dynamic solve (eight for static):
-    // coefficient copies/factors, RHS copies/solution, and detached P/Q.
-    const auto dense_matrix_count = has_dynamic_frequency ? 20 : 8;
+    // solve_dense_restricted_response retains at most twenty nov-square double
+    // payloads for a doubled dynamic solve (eight for static), plus its bounded
+    // diagnostic/scaling vectors. P/Q are part of this peak; only their two-map
+    // carrier remains live when contraction starts.
+    const std::size_t dense_matrix_count = has_dynamic_frequency ? 20 : 8;
     auto dense_solve_peak_bytes = checked_c1_product(
         dense_matrix_count, transition_matrix_bytes, prefix);
     dense_solve_peak_bytes = checked_c1_sum(
@@ -1885,45 +1913,80 @@ ISAPolResponsePlan plan_isapol_response_provider(
         checked_c1_product(
             checked_c1_product(16, transition_count, prefix), sizeof(double), prefix), prefix);
 
-    // During contraction, P/Q, the detached and averaged maps, B*G, and one
-    // complete contraction output coexist with all already retained outputs.
-    auto contraction_peak_bytes = checked_c1_product(
-        4, transition_matrix_bytes, prefix);
-    contraction_peak_bytes = checked_c1_sum(
-        contraction_peak_bytes, retained_projection_bytes, prefix);
-    contraction_peak_bytes = checked_c1_sum(
-        contraction_peak_bytes, response_block_bytes, prefix);
+    // C1 carries (i,a) and gaps; ALDA and projection each carry their own
+    // ordered (i,a) vector. This is deliberately conservative even where an
+    // individual stage planner already includes some of this metadata.
+    const auto transition_metadata_entries = checked_c1_product(
+        transition_count, 6 * sizeof(std::size_t) + sizeof(double), prefix);
+    const auto transition_metadata_bytes = transition_metadata_entries;
+    constexpr std::size_t conservative_overhead_bytes = 1024ULL * 1024ULL;
+    const auto persistent_metadata_bytes = checked_c1_sum(
+        transition_metadata_bytes, conservative_overhead_bytes, prefix);
 
-    std::size_t estimated_bytes = retained_output_bytes;
-    for (const auto bytes : {retained_primitive_bytes, retained_projection_bytes,
-                             identity_hessian_bytes})
-        estimated_bytes = checked_c1_sum(estimated_bytes, bytes, prefix);
-    estimated_bytes = checked_c1_sum(
-        estimated_bytes, std::max(dense_solve_peak_bytes, contraction_peak_bytes), prefix);
-    constexpr std::size_t metadata_and_allocator_allowance = 1024ULL * 1024ULL;
-    estimated_bytes = checked_c1_sum(
-        estimated_bytes, metadata_and_allocator_allowance, prefix);
+    const auto add_stage = [&prefix](std::initializer_list<std::size_t> terms) {
+        std::size_t value = 0;
+        for (const auto term : terms) value = checked_c1_sum(value, term, prefix);
+        return value;
+    };
+    const auto c1_stage_peak_bytes = c1_plan.estimated_bytes;
+    const auto alda_stage_peak_bytes = add_stage(
+        {retained_c1_bytes, alda_plan.estimated_bytes, persistent_metadata_bytes});
+    const auto projection_stage_peak_bytes = add_stage(
+        {retained_c1_bytes, retained_alda_bytes, hessian_bytes,
+         projection_plan.estimated_bytes, persistent_metadata_bytes});
+    const auto common_solve_retained = add_stage(
+        {retained_c1_bytes, retained_alda_bytes, hessian_bytes,
+         retained_projection_bytes, identity_bytes, retained_output_bytes,
+         persistent_metadata_bytes});
+    const auto dense_solve_stage_peak_bytes = checked_c1_sum(
+        common_solve_retained, dense_solve_peak_bytes, prefix);
+    const auto contraction_stage_peak_bytes = add_stage(
+        {common_solve_retained, response_carrier_bytes,
+         contraction_plan.estimated_bytes});
+    const auto estimated_bytes = std::max(
+        {c1_stage_peak_bytes, alda_stage_peak_bytes,
+         projection_stage_peak_bytes, dense_solve_stage_peak_bytes,
+         contraction_stage_peak_bytes});
     const auto reserved_memory_bytes = memory_bytes / 2;
     if (estimated_bytes > reserved_memory_bytes)
         throw PSIEXCEPTION(prefix +
-                           "simultaneous retained outputs/identity/Hessians and solve workspace exceed reserved memory");
+                           "aggregate stage peak exceeds the half-memory reservation");
 
     ISAPolResponsePlan plan;
     plan.frequency_count = frequency_count;
     plan.site_count = site_count;
+    plan.nbf = nbf;
+    plan.nocc = nocc;
+    plan.nvir = nvir;
     plan.transition_count = transition_count;
+    plan.point_count = point_count;
+    plan.max_block_points = max_block_points;
     plan.component_count = component_count;
     plan.configured_memory_bytes = memory_bytes;
     plan.reserved_memory_bytes = reserved_memory_bytes;
-    plan.retained_output_bytes = retained_output_bytes;
-    plan.retained_primitive_bytes = retained_primitive_bytes;
+    plan.c1_plan_estimated_bytes = c1_plan.estimated_bytes;
+    plan.alda_plan_estimated_bytes = alda_plan.estimated_bytes;
+    plan.projection_plan_estimated_bytes = projection_plan.estimated_bytes;
+    plan.contraction_plan_estimated_bytes = contraction_plan.estimated_bytes;
+    plan.retained_c1_bytes = retained_c1_bytes;
+    plan.retained_alda_bytes = retained_alda_bytes;
+    plan.hessian_bytes = hessian_bytes;
     plan.retained_projection_bytes = retained_projection_bytes;
-    plan.identity_hessian_bytes = identity_hessian_bytes;
+    plan.identity_bytes = identity_bytes;
+    plan.retained_output_bytes = retained_output_bytes;
     plan.dense_solve_peak_bytes = dense_solve_peak_bytes;
-    plan.contraction_peak_bytes = contraction_peak_bytes;
+    plan.response_carrier_bytes = response_carrier_bytes;
+    plan.transition_metadata_bytes = transition_metadata_bytes;
+    plan.conservative_overhead_bytes = conservative_overhead_bytes;
+    plan.c1_stage_peak_bytes = c1_stage_peak_bytes;
+    plan.alda_stage_peak_bytes = alda_stage_peak_bytes;
+    plan.projection_stage_peak_bytes = projection_stage_peak_bytes;
+    plan.dense_solve_stage_peak_bytes = dense_solve_stage_peak_bytes;
+    plan.contraction_stage_peak_bytes = contraction_stage_peak_bytes;
     plan.estimated_bytes = estimated_bytes;
-    plan.algorithm = "C1_ALDA_ISA_DENSE_FREQUENCY_MAJOR";
-    plan.memory_semantics = "CONSERVATIVE_SIMULTANEOUS_LIVE_RESERVATION";
+    plan.algorithm = "UPFRONT_C1_ALDA_ISA_DENSE_STAGE_MAX";
+    plan.memory_semantics =
+        "KNOWN_STORAGE_HARD_GATE_DIRECT_JK_WORKSPACE_ADVISORY";
     return plan;
 }
 
@@ -2457,6 +2520,88 @@ detail::TransitionMultipoleProjection project_transition_multipoles(
     return detail::TransitionMultipoleProjector::project(context, isa_weights);
 }
 
+namespace {
+struct ISAPolResponsePreflight {
+    std::size_t nbf{};
+    std::size_t nocc{};
+    std::size_t nvir{};
+    std::size_t nov{};
+    std::size_t nmo{};
+    std::size_t point_count{};
+    std::size_t max_block_points{};
+};
+
+// Allocation-light C4 context preflight. It reads sealed arrays with checked
+// loops and creates no transition vector, dense matrix, grid block, or output.
+ISAPolResponsePreflight preflight_isapol_response_provider(
+    const std::shared_ptr<const FrozenResponseContext>& context) {
+    const std::string prefix = "ISAPolResponseProvider: ";
+    if (!context || !context->basis())
+        throw PSIEXCEPTION(prefix + "frozen response context/basis is unavailable");
+    context->verify_basis_unchanged();
+    const int nbf_int = context->basis()->nbf();
+    if (nbf_int <= 0)
+        throw PSIEXCEPTION(prefix + "retained basis is empty");
+    const auto nbf = static_cast<std::size_t>(nbf_int);
+    const auto counts = validate_restricted_alda_orbitals(*context);
+    const auto nov = checked_c1_product(counts.first, counts.second, prefix);
+    const auto nmo = checked_c1_sum(counts.first, counts.second, prefix);
+    if (context->Ca()->ncol() <= 0 ||
+        static_cast<std::size_t>(context->Ca()->ncol()) != nmo ||
+        context->epsilon_a()->nirrep() != 1 || context->epsilon_b()->nirrep() != 1 ||
+        context->epsilon_a()->dim(0) != context->Ca()->ncol() ||
+        context->epsilon_b()->dim(0) != context->Ca()->ncol())
+        throw PSIEXCEPTION(prefix + "orbital energy dimensions are inconsistent");
+    for (std::size_t orbital = 0; orbital < nmo; ++orbital) {
+        const double alpha = context->epsilon_a()->get(0, orbital);
+        const double beta = context->epsilon_b()->get(0, orbital);
+        if (!std::isfinite(alpha) || alpha != beta)
+            throw PSIEXCEPTION(prefix +
+                               "restricted orbital energies must be finite and identical");
+    }
+    for (std::size_t occupied = 0; occupied < nmo; ++occupied) {
+        if (context->occupation_a()->get(0, occupied) != 1.0) continue;
+        for (std::size_t virtual_orbital = 0; virtual_orbital < nmo;
+             ++virtual_orbital) {
+            if (context->occupation_a()->get(0, virtual_orbital) != 0.0) continue;
+            const double gap = context->epsilon_a()->get(0, virtual_orbital) -
+                               context->epsilon_a()->get(0, occupied);
+            if (!std::isfinite(gap) || !(gap > 0.0))
+                throw PSIEXCEPTION(prefix +
+                                   "occupied-virtual gaps must be finite and positive");
+        }
+    }
+    if (context->Da()->nirrep() != 1 || context->Db()->nirrep() != 1 ||
+        context->Da()->nrow() != nbf_int || context->Da()->ncol() != nbf_int ||
+        context->Db()->nrow() != nbf_int || context->Db()->ncol() != nbf_int)
+        throw PSIEXCEPTION(prefix +
+                           "frozen density dimensions do not match the retained basis");
+    if (!std::isfinite(context->functional_density_tolerance()) ||
+        !(context->functional_density_tolerance() > 0.0))
+        throw PSIEXCEPTION(prefix + "functional density tolerance is invalid");
+
+    const auto point_count = context->grid_point_count();
+    if (point_count == 0 ||
+        point_count > std::numeric_limits<std::size_t>::max() / 3 ||
+        context->grid_points().size() != 3 * point_count)
+        throw PSIEXCEPTION(prefix + "sealed grid dimensions are inconsistent");
+    preflight_restricted_alda_grid(
+        nbf, point_count, context->grid_weights(), context->grid_blocks());
+    for (double coordinate : context->grid_points())
+        if (!std::isfinite(coordinate))
+            throw PSIEXCEPTION(prefix + "sealed coordinates must be finite");
+    for (const auto& site : context->sites())
+        for (double coordinate : site)
+            if (!std::isfinite(coordinate))
+                throw PSIEXCEPTION(prefix + "site coordinates must be finite");
+    std::size_t max_block_points = 0;
+    for (const auto& block : context->grid_blocks())
+        max_block_points = std::max(max_block_points, block.point_count);
+    return {nbf, counts.first, counts.second, nov, nmo,
+            point_count, max_block_points};
+}
+}  // namespace
+
 ISAPolResponseProvider::ISAPolResponseProvider(std::shared_ptr<const FrozenResponseContext> context,
                                                ResponseKernel kernel, ISAWeights isa_weights)
     : context_(std::move(context)), kernel_(std::move(kernel)), isa_weights_(std::move(isa_weights)) {
@@ -2505,20 +2650,52 @@ std::vector<SitePairResponse> ISAPolResponseProvider::compute_isapol_response(
     if (isa_weights_.context_.get() != context_.get())
         throw PSIEXCEPTION(prefix + "ISA weights belong to a different frozen response context");
     const auto site_count = context_->sites().size();
+    const auto point_count = context_->grid_point_count();
     if (site_count == 0 || isa_weights_.site_count() != site_count ||
-        isa_weights_.point_count() != context_->grid_point_count())
+        isa_weights_.point_count() != point_count)
         throw PSIEXCEPTION(prefix + "ISA dimensions do not match the frozen response context");
-    context_->verify_basis_unchanged();
+    const auto isa_element_count = checked_c1_product(
+        point_count, site_count, prefix);
+    if (isa_weights_.partition_weights_.size() != isa_element_count)
+        throw PSIEXCEPTION(prefix + "ISA partition dimensions are inconsistent");
+    for (std::size_t point = 0; point < point_count; ++point) {
+        double unity = 0.0;
+        for (std::size_t site = 0; site < site_count; ++site) {
+            const double value =
+                isa_weights_.partition_weights_[point * site_count + site];
+            if (!std::isfinite(value) || value < 0.0)
+                throw PSIEXCEPTION(prefix +
+                                   "ISA partition must be finite and nonnegative");
+            unity += value;
+        }
+        if (!std::isfinite(unity) ||
+            std::abs(unity - 1.0) > kValidationTolerance)
+            throw PSIEXCEPTION(prefix + "pointwise ISA partition unity failed");
+    }
+
+    // Allocation-light validation and all pure resource planners precede C1's
+    // transition vectors, dense primitives, or DirectJK construction.
+    const auto preflight = preflight_isapol_response_provider(context_);
+    const bool has_dynamic_frequency = frequency_count > 1;
+    const auto provider_plan = detail::plan_isapol_response_provider(
+        frequency_count, site_count, preflight.nbf, preflight.nocc,
+        preflight.nvir, preflight.point_count, context_->grid_blocks(),
+        has_dynamic_frequency, Process::environment.get_memory(),
+        context_->functional_density_tolerance());
+    if (provider_plan.frequency_count != frequency_count ||
+        provider_plan.site_count != site_count ||
+        provider_plan.transition_count != preflight.nov ||
+        provider_plan.point_count != preflight.point_count ||
+        provider_plan.max_block_points != preflight.max_block_points ||
+        checked_c1_sum(preflight.nocc, preflight.nvir, prefix) != preflight.nmo)
+        throw PSIEXCEPTION(prefix + "preflight and aggregate resource plan differ");
 
     // The four reviewed physical primitives are each constructed exactly once.
     const auto c1 = detail::construct_restricted_c1_primitives(context_);
     const auto transition_count = c1.transitions.size();
-    if (transition_count == 0 || c1.orbital_gaps.size() != transition_count)
+    if (transition_count != provider_plan.transition_count ||
+        c1.orbital_gaps.size() != transition_count)
         throw PSIEXCEPTION(prefix + "restricted C1 transition metadata is inconsistent");
-    const bool has_dynamic_frequency = frequency_count > 1;
-    const auto provider_plan = detail::plan_isapol_response_provider(
-        frequency_count, site_count, transition_count, has_dynamic_frequency,
-        Process::environment.get_memory());
 
     const auto alda = detail::construct_restricted_alda_kernel(context_, false);
     if (alda.transitions != c1.transitions || !alda.full_alda ||

@@ -342,19 +342,63 @@ def test_mutating_exported_response_matrices_cannot_change_later_contraction():
     assert np.max(np.abs(np.asarray(second["Q"]))) < 1.0
 
 
-def test_provider_plan_accounts_for_all_retained_outputs_and_dynamic_solve_peak():
+def test_provider_plan_is_upfront_stagewise_and_combined_budget_is_hard_gated():
     estimate = psi4.core._atomic_polarizability_estimate_isapol_response_provider
-    plan = estimate(2, 3, 5, True, 1 << 30)
-    nov_square_bytes = 5 * 5 * 8
+    args = (2, 3, 7, 5, 2, [60, 40], [7, 6], True)
+    plan = estimate(*args, 1 << 30, 1.0e-12)
+    nov = 10
+    nov_square_bytes = nov * nov * 8
+    assert plan["nbf"] == 7
+    assert plan["nocc"] == 5
+    assert plan["nvir"] == 2
+    assert plan["transition_count"] == nov
+    assert plan["point_count"] == 100
+    assert plan["max_block_points"] == 60
     assert plan["component_count"] == 48
+    assert plan["retained_c1_bytes"] == 3 * nov_square_bytes
+    assert plan["retained_alda_bytes"] == nov_square_bytes
+    assert plan["hessian_bytes"] == 2 * nov_square_bytes
+    assert plan["identity_bytes"] == nov_square_bytes
+    assert plan["retained_projection_bytes"] == 48 * nov * 8
     assert plan["retained_output_bytes"] == 2 * (48 * 48 * 8 + 3 * 3 * 8)
-    assert plan["retained_primitive_bytes"] == 4 * nov_square_bytes
-    assert plan["identity_hessian_bytes"] == 3 * nov_square_bytes
-    assert plan["retained_projection_bytes"] == 48 * 5 * 8
-    assert plan["dense_solve_peak_bytes"] == 20 * nov_square_bytes + 16 * 5 * 8
-    assert plan["memory_semantics"] == "CONSERVATIVE_SIMULTANEOUS_LIVE_RESERVATION"
-    with pytest.raises(RuntimeError, match="retained outputs/identity/Hessians"):
-        estimate(2, 3, 5, True, 2 * (plan["estimated_bytes"] - 1))
+    assert plan["dense_solve_peak_bytes"] == 20 * nov_square_bytes + 16 * nov * 8
+    assert plan["c1_stage_peak_bytes"] == plan["c1_plan_estimated_bytes"]
+    provider_metadata = (
+        plan["transition_metadata_bytes"] + plan["conservative_overhead_bytes"]
+    )
+    assert plan["alda_stage_peak_bytes"] == (
+        plan["retained_c1_bytes"] + plan["alda_plan_estimated_bytes"]
+        + provider_metadata
+    )
+    assert plan["projection_stage_peak_bytes"] == (
+        plan["retained_c1_bytes"] + plan["retained_alda_bytes"]
+        + plan["hessian_bytes"] + plan["projection_plan_estimated_bytes"]
+        + provider_metadata
+    )
+    assert plan["dense_solve_stage_peak_bytes"] > plan["dense_solve_peak_bytes"]
+    assert plan["contraction_stage_peak_bytes"] > plan["contraction_plan_estimated_bytes"]
+    assert plan["estimated_bytes"] == max(
+        plan["c1_stage_peak_bytes"], plan["alda_stage_peak_bytes"],
+        plan["projection_stage_peak_bytes"], plan["dense_solve_stage_peak_bytes"],
+        plan["contraction_stage_peak_bytes"],
+    )
+    assert plan["memory_semantics"] == (
+        "KNOWN_STORAGE_HARD_GATE_DIRECT_JK_WORKSPACE_ADVISORY"
+    )
+
+    # Every isolated stage estimate fits this exact half-memory budget, while
+    # the simultaneous retained-stage aggregate misses it by one byte.
+    exact_memory = 2 * plan["estimated_bytes"]
+    exact = estimate(*args, exact_memory, 1.0e-12)
+    assert exact["reserved_memory_bytes"] == plan["estimated_bytes"]
+    for key in (
+        "c1_plan_estimated_bytes", "alda_plan_estimated_bytes",
+        "projection_plan_estimated_bytes", "contraction_plan_estimated_bytes",
+        "dense_solve_peak_bytes",
+    ):
+        assert exact[key] < exact["reserved_memory_bytes"]
+    with pytest.raises(RuntimeError, match="aggregate stage peak"):
+        estimate(*args, exact_memory - 2, 1.0e-12)
 
 
 def test_plan_exact_incremental_allocation_arithmetic_and_success_boundary():

@@ -677,30 +677,79 @@ void export_oeprop(py::module &m) {
           }, "site_count"_a, "transition_count"_a, "memory_bytes"_a);
     m.def("_atomic_polarizability_estimate_isapol_response_provider",
           [](std::size_t frequency_count, std::size_t site_count,
-             std::size_t transition_count, bool has_dynamic_frequency,
-             std::size_t memory_bytes) {
+             std::size_t nbf, std::size_t nocc, std::size_t nvir,
+             const std::vector<std::size_t>& block_point_counts,
+             const std::vector<std::size_t>& block_map_sizes,
+             bool has_dynamic_frequency, std::size_t memory_bytes,
+             double density_cutoff) {
+              if (block_point_counts.empty() ||
+                  block_point_counts.size() != block_map_sizes.size())
+                  throw PSIEXCEPTION(
+                      "ISAPolResponseProvider: inconsistent block metadata arrays");
+              std::vector<FrozenGridBlock> blocks;
+              blocks.reserve(block_point_counts.size());
+              std::size_t point_count = 0;
+              for (std::size_t block = 0; block < block_point_counts.size(); ++block) {
+                  if (block_map_sizes[block] == 0 || block_map_sizes[block] > nbf)
+                      throw PSIEXCEPTION(
+                          "ISAPolResponseProvider: block map size exceeds basis dimension");
+                  if (block_point_counts[block] == 0 ||
+                      block_point_counts[block] >
+                          std::numeric_limits<std::size_t>::max() - point_count)
+                      throw PSIEXCEPTION(
+                          "ISAPolResponseProvider: block point count is invalid");
+                  std::vector<int> map(block_map_sizes[block]);
+                  blocks.push_back(
+                      {point_count, block_point_counts[block], std::move(map)});
+                  point_count += block_point_counts[block];
+              }
               const auto plan = detail::plan_isapol_response_provider(
-                  frequency_count, site_count, transition_count,
-                  has_dynamic_frequency, memory_bytes);
+                  frequency_count, site_count, nbf, nocc, nvir, point_count,
+                  blocks, has_dynamic_frequency, memory_bytes, density_cutoff);
               py::dict values;
               values["algorithm"] = plan.algorithm;
               values["memory_semantics"] = plan.memory_semantics;
               values["frequency_count"] = plan.frequency_count;
               values["site_count"] = plan.site_count;
+              values["nbf"] = plan.nbf;
+              values["nocc"] = plan.nocc;
+              values["nvir"] = plan.nvir;
               values["transition_count"] = plan.transition_count;
+              values["point_count"] = plan.point_count;
+              values["max_block_points"] = plan.max_block_points;
               values["component_count"] = plan.component_count;
               values["configured_memory_bytes"] = plan.configured_memory_bytes;
               values["reserved_memory_bytes"] = plan.reserved_memory_bytes;
-              values["retained_output_bytes"] = plan.retained_output_bytes;
-              values["retained_primitive_bytes"] = plan.retained_primitive_bytes;
+              values["c1_plan_estimated_bytes"] = plan.c1_plan_estimated_bytes;
+              values["alda_plan_estimated_bytes"] = plan.alda_plan_estimated_bytes;
+              values["projection_plan_estimated_bytes"] =
+                  plan.projection_plan_estimated_bytes;
+              values["contraction_plan_estimated_bytes"] =
+                  plan.contraction_plan_estimated_bytes;
+              values["retained_c1_bytes"] = plan.retained_c1_bytes;
+              values["retained_alda_bytes"] = plan.retained_alda_bytes;
+              values["hessian_bytes"] = plan.hessian_bytes;
               values["retained_projection_bytes"] = plan.retained_projection_bytes;
-              values["identity_hessian_bytes"] = plan.identity_hessian_bytes;
+              values["identity_bytes"] = plan.identity_bytes;
+              values["retained_output_bytes"] = plan.retained_output_bytes;
               values["dense_solve_peak_bytes"] = plan.dense_solve_peak_bytes;
-              values["contraction_peak_bytes"] = plan.contraction_peak_bytes;
+              values["response_carrier_bytes"] = plan.response_carrier_bytes;
+              values["transition_metadata_bytes"] = plan.transition_metadata_bytes;
+              values["conservative_overhead_bytes"] =
+                  plan.conservative_overhead_bytes;
+              values["c1_stage_peak_bytes"] = plan.c1_stage_peak_bytes;
+              values["alda_stage_peak_bytes"] = plan.alda_stage_peak_bytes;
+              values["projection_stage_peak_bytes"] =
+                  plan.projection_stage_peak_bytes;
+              values["dense_solve_stage_peak_bytes"] =
+                  plan.dense_solve_stage_peak_bytes;
+              values["contraction_stage_peak_bytes"] =
+                  plan.contraction_stage_peak_bytes;
               values["estimated_bytes"] = plan.estimated_bytes;
               return values;
-          }, "frequency_count"_a, "site_count"_a, "transition_count"_a,
-          "has_dynamic_frequency"_a, "memory_bytes"_a);
+          }, "frequency_count"_a, "site_count"_a, "nbf"_a, "nocc"_a,
+          "nvir"_a, "block_point_counts"_a, "block_map_sizes"_a,
+          "has_dynamic_frequency"_a, "memory_bytes"_a, "density_cutoff"_a);
     m.def("_atomic_polarizability_estimate_restricted_alda",
           [alda_plan_dict](std::size_t nbf, std::size_t nocc, std::size_t nvir,
                            const std::vector<std::size_t>& block_point_counts,

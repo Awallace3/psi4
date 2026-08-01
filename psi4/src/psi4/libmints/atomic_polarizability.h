@@ -587,20 +587,38 @@ ResponseMapSymmetryDiagnostics validate_response_map_symmetry_test_only(
     const Matrix& response_map, const Matrix& conjugate_map,
     const std::vector<double>& forward_error);
 
-/** Up-front simultaneous-live storage gate for physical C4 provider wiring. */
+/** Up-front stagewise simultaneous-live storage gate for physical C4 wiring. */
 struct ISAPolResponsePlan {
     std::size_t frequency_count{};
     std::size_t site_count{};
+    std::size_t nbf{};
+    std::size_t nocc{};
+    std::size_t nvir{};
     std::size_t transition_count{};
+    std::size_t point_count{};
+    std::size_t max_block_points{};
     std::size_t component_count{};
     std::size_t configured_memory_bytes{};
     std::size_t reserved_memory_bytes{};
-    std::size_t retained_output_bytes{};
-    std::size_t retained_primitive_bytes{};
+    std::size_t c1_plan_estimated_bytes{};
+    std::size_t alda_plan_estimated_bytes{};
+    std::size_t projection_plan_estimated_bytes{};
+    std::size_t contraction_plan_estimated_bytes{};
+    std::size_t retained_c1_bytes{};
+    std::size_t retained_alda_bytes{};
+    std::size_t hessian_bytes{};
     std::size_t retained_projection_bytes{};
-    std::size_t identity_hessian_bytes{};
+    std::size_t identity_bytes{};
+    std::size_t retained_output_bytes{};
     std::size_t dense_solve_peak_bytes{};
-    std::size_t contraction_peak_bytes{};
+    std::size_t response_carrier_bytes{};
+    std::size_t transition_metadata_bytes{};
+    std::size_t conservative_overhead_bytes{};
+    std::size_t c1_stage_peak_bytes{};
+    std::size_t alda_stage_peak_bytes{};
+    std::size_t projection_stage_peak_bytes{};
+    std::size_t dense_solve_stage_peak_bytes{};
+    std::size_t contraction_stage_peak_bytes{};
     std::size_t estimated_bytes{};
     std::string algorithm;
     std::string memory_semantics;
@@ -608,8 +626,10 @@ struct ISAPolResponsePlan {
 
 ISAPolResponsePlan plan_isapol_response_provider(
     std::size_t frequency_count, std::size_t site_count,
-    std::size_t transition_count, bool has_dynamic_frequency,
-    std::size_t memory_bytes);
+    std::size_t nbf, std::size_t nocc, std::size_t nvir,
+    std::size_t point_count, const std::vector<FrozenGridBlock>& blocks,
+    bool has_dynamic_frequency, std::size_t memory_bytes,
+    double density_cutoff);
 }  // namespace detail
 
 /** Actual ISA data structurally bound to one exact frozen context and its ordered grid/sites. */

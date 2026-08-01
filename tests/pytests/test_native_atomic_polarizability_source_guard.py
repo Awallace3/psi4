@@ -94,6 +94,8 @@ def test_provider_uses_only_the_reviewed_native_response_route():
     body = _without_cpp_comments(source[body_start:body_end])
 
     for required in (
+        "preflight_isapol_response_provider",
+        "plan_isapol_response_provider",
         "construct_restricted_c1_primitives",
         "construct_restricted_alda_kernel",
         "assemble_restricted_singlet_hessian",
@@ -102,6 +104,22 @@ def test_provider_uses_only_the_reviewed_native_response_route():
         "contract_site_pair_response",
     ):
         assert body.count(required) == 1
+    assert body.index("preflight_isapol_response_provider") < body.index(
+        "plan_isapol_response_provider"
+    ) < body.index("construct_restricted_c1_primitives")
+    plan_start = source.index("ISAPolResponsePlan plan_isapol_response_provider")
+    plan_end = source.index(
+        "SitePairResponseContractionPlan plan_site_pair_response_contraction",
+        plan_start,
+    )
+    plan_body = _without_cpp_comments(source[plan_start:plan_end])
+    for planner in (
+        "plan_restricted_c1_jk",
+        "plan_restricted_alda",
+        "plan_transition_multipole_projection",
+        "plan_site_pair_response_contraction",
+    ):
+        assert plan_body.count(planner) == 1
     assert "native point-response execution is not implemented" not in body
     assert "ao_multipole_potential" not in body
     assert "ExternalPotential" not in body
