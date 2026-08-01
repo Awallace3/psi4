@@ -595,8 +595,9 @@ def test_restricted_c1_estimator_one_entry_memory_boundary_and_envelope_fail_clo
         estimator(2**63, 2**63, 2, 2**64 - 1)
 
 
-def test_restricted_alda_one_point_permutation_and_failure_oracles():
+def test_restricted_alda_one_point_permutation_cutoff_and_failure_oracles():
     contract = psi4.core._atomic_polarizability_test_contract_restricted_alda
+    cutoff = 1.0e-12
     t = np.array([[2.0, -3.0]])
     actual = np.asarray(contract([0.25], psi4.core.Matrix.from_array(t), [0.7], [5.0]))
     assert actual == pytest.approx(1.25 * np.outer(t[0], t[0]), abs=1.0e-15)
@@ -611,9 +612,18 @@ def test_restricted_alda_one_point_permutation_and_failure_oracles():
     permuted = np.asarray(contract(weights[order], psi4.core.Matrix.from_array(values[order]),
                                    rho[order], fxc[order]))
     assert permuted == pytest.approx(reference, abs=2.0e-15)
+
+    threshold_rho = [cutoff * 0.5, cutoff, cutoff * 1.5, -1.0e-16, cutoff * 2.0]
+    threshold_weights = [1.0, 1.0, 1.0, 1.0, 0.0]
+    threshold_t = psi4.core.Matrix.from_array(np.ones((5, 1)))
+    threshold_fxc = [float("nan"), float("nan"), 7.0, float("nan"), float("nan")]
+    threshold = np.asarray(contract(threshold_weights, threshold_t, threshold_rho,
+                                    threshold_fxc, cutoff))
+    assert threshold == pytest.approx(np.array([[7.0]]), abs=0.0)
+
     for w, v, d, f, message in (
         ([-1.0], [[1.0]], [0.5], [1.0], r"weights.*nonnegative"),
-        ([1.0], [[1.0]], [0.0], [1.0], r"density.*below"),
+        ([1.0], [[1.0]], [float("nan")], [1.0], r"density.*finite"),
         ([1.0], [[1.0]], [0.5], [float("nan")], r"LibXC kernel.*finite"),
         ([1.0], [[float("inf")]], [0.5], [1.0], r"transition values.*finite"),
     ):
@@ -631,59 +641,145 @@ def test_restricted_alda_one_point_permutation_and_failure_oracles():
             validate(*arguments)
 
 
-def test_restricted_alda_exact_dedicated_components_and_exchange_distinction():
+def test_restricted_alda_plan_envelope_work_and_diagnostics_memory_gates():
+    estimate = psi4.core._atomic_polarizability_estimate_restricted_alda
+    production = estimate(100, 5, 20, 50000, 256, 2**30, False)
+    diagnostics = estimate(100, 5, 20, 50000, 256, 2**30, True)
+    assert production["nov"] == 100
+    assert production["max_supported_nov"] == 512
+    assert production["retained_payload_bytes"] == 100 * 100 * 8
+    assert production["diagnostics_payload_bytes"] == 0
+    assert diagnostics["diagnostics_payload_bytes"] == 50000 * (100 + 2) * 8
+    assert diagnostics["estimated_bytes"] > production["estimated_bytes"]
+    assert production["algorithm"] == "SEALED_BLOCK_DGEMM"
+    assert production["density_cutoff"] == pytest.approx(1.0e-12)
+    with pytest.raises(RuntimeError, match=r"supported transition envelope"):
+        estimate(100, 5, 103, 100, 10, 2**40, False)
+    with pytest.raises(RuntimeError, match=r"work bound"):
+        estimate(100, 5, 100, 10**9, 10, 2**40, False)
+    with pytest.raises(RuntimeError, match=r"reserved memory"):
+        estimate(100, 5, 20, 50000, 256, 1000, False)
+    with pytest.raises(RuntimeError, match=r"diagnostic.*reserved memory"):
+        estimate(100, 5, 20, 50000, 256, production["estimated_bytes"] * 2, True)
+    with pytest.raises(RuntimeError, match=r"overflow|integer limits"):
+        estimate(2**63, 2**63, 2, 10, 10, 2**64 - 1, False)
+
+
+def _independent_vwn_potential(rho):
+    functional = psi4.core.SuperFunctional.blank()
+    correlation = psi4.core.LibXCFunctional("XC_LDA_C_VWN", True)
+    correlation.set_alpha(1.0)
+    functional.add_c_functional(correlation)
+    functional.set_density_tolerance(1.0e-12)
+    functional.set_max_points(len(rho))
+    functional.set_deriv(1)
+    functional.allocate()
+    values = functional.compute_functional(
+        {"RHO_A": psi4.core.Vector.from_array(np.asarray(rho))}, -1, True)
+    return np.asarray(values["V_RHO_A"])
+
+
+def _finite_difference_vwn_fxc(rho, relative_step):
+    rho = np.asarray(rho)
+    step = relative_step * rho
+    return (_independent_vwn_potential(rho + step)
+            - _independent_vwn_potential(rho - step)) / (2.0 * step)
+
+
+def test_restricted_alda_components_match_analytic_x_and_refined_vwn_potential_difference():
     evaluate = psi4.core._atomic_polarizability_test_restricted_alda_fxc
-    full = evaluate([0.05, 0.4, 1.7], True)
-    exchange = evaluate([0.05, 0.4, 1.7], False)
+    rho = np.array([0.02, 0.08, 0.3, 1.1, 3.0])
+    full = evaluate(rho, True)
+    exchange = evaluate(rho, False)
     diagnostics = full["diagnostics"]
     assert diagnostics["exchange_component"] == "XC_LDA_X"
     assert diagnostics["correlation_component"] == "XC_LDA_C_VWN"
     assert diagnostics["exchange_coefficient"] == 1.0
     assert diagnostics["correlation_coefficient"] == 1.0
-    assert diagnostics["exchange_libxc_id"] > 0
-    assert diagnostics["correlation_libxc_id"] > 0
+    assert diagnostics["exchange_libxc_id"] == 1
+    assert diagnostics["correlation_libxc_id"] == 7
+    assert diagnostics["exchange_libxc_canonical_name"] == "lda_x"
+    assert diagnostics["correlation_libxc_canonical_name"] == "lda_c_vwn"
+    assert diagnostics["exchange_effective_parameters"] == {}
+    assert diagnostics["correlation_effective_parameters"] == {}
     assert diagnostics["derivative_order"] == 2
+    assert diagnostics["density_cutoff"] == pytest.approx(1.0e-12)
     assert "Da+Db" in diagnostics["restricted_normalization"]
     assert "4*b once" in diagnostics["restricted_normalization"]
-    assert not np.allclose(full["fxc"], exchange["fxc"], rtol=1.0e-12, atol=1.0e-12)
+
+    expected_x = -(1.0 / 3.0) * (3.0 / np.pi) ** (1.0 / 3.0) * rho ** (-2.0 / 3.0)
+    assert exchange["fxc"] == pytest.approx(expected_x, rel=3.0e-13, abs=3.0e-13)
+    actual_correlation = np.asarray(full["fxc"]) - np.asarray(exchange["fxc"])
+    coarse = _finite_difference_vwn_fxc(rho, 2.0e-4)
+    fine = _finite_difference_vwn_fxc(rho, 1.0e-4)
+    assert np.max(np.abs(fine - actual_correlation)) < np.max(np.abs(coarse - actual_correlation))
+    assert actual_correlation == pytest.approx(fine, rel=2.0e-7, abs=2.0e-9)
     assert exchange["diagnostics"]["correlation_component"] == ""
-    with pytest.raises(RuntimeError, match=r"density.*below"):
-        evaluate([0.0], True)
+
+    cutoff_values = evaluate([5.0e-13, 1.0e-12, 1.1e-12, -1.0e-16], True)
+    assert cutoff_values["fxc"][:2] == [0.0, 0.0]
+    assert math.isfinite(cutoff_values["fxc"][2])
+    assert cutoff_values["fxc"][3] == 0.0
+
+
+def _independent_real_grid_rho_and_transitions(context, grac):
+    collocation = psi4.core._atomic_polarizability_test_restricted_alda_ao_collocation(context)
+    points, _, blocks = context.grid_snapshot()
+    npoints = len(points) // 3
+    nbf = grac.basisset().nbf()
+    phi = np.asarray(collocation["ao_values"]).reshape(npoints, nbf)
+    density = np.asarray(grac.Da()) + np.asarray(grac.Db())
+    coefficients = np.asarray(grac.Ca())
+    occupations = np.asarray(grac.occupation_a()).ravel()
+    transitions = [(i, a) for i, oi in enumerate(occupations) if oi == 1.0
+                   for a, oa in enumerate(occupations) if oa == 0.0]
+    rho = np.zeros(npoints)
+    transition_values = np.zeros((npoints, len(transitions)))
+    for offset, count, function_map in blocks:
+        p = slice(offset, offset + count)
+        fmap = np.asarray(function_map, dtype=int)
+        local_phi = phi[p][:, fmap]
+        local_density = density[np.ix_(fmap, fmap)]
+        rho[p] = np.einsum("pm,mn,pn->p", local_phi, local_density, local_phi,
+                           optimize=True)
+        orbitals = local_phi @ coefficients[fmap]
+        transition_values[p] = np.column_stack(
+            [orbitals[:, i] * orbitals[:, a] for i, a in transitions])
+    return transitions, rho, transition_values
 
 
 @pytest.mark.scf
-def test_real_restricted_alda_independent_libxc_contraction_and_c2a_solver(frozen_h2o_context):
-    context, _, _ = frozen_h2o_context
+def test_real_restricted_alda_streamed_kernel_independent_collocation_and_c2a_solver(
+    frozen_h2o_context,
+):
+    context, _, grac = frozen_h2o_context
     before = context.state_checksum()
     result = psi4.core._atomic_polarizability_test_restricted_alda_kernel(context)
     assert context.state_checksum() == before
-    transitions = [tuple(pair) for pair in result["transitions"]]
-    nov = len(transitions)
-    kernel = np.asarray(result["full_alda"])
-    transition_values = np.asarray(result["transition_values"]).reshape(-1, nov)
+    assert result["densities"] == []
+    assert result["fxc"] == []
+    assert result["transition_values"] == []
+    transitions, rho, transition_values = _independent_real_grid_rho_and_transitions(context, grac)
+    assert [tuple(pair) for pair in result["transitions"]] == transitions
     weights = np.asarray(context.grid_snapshot()[1])
-
-    # Independent Python LibXC setup and NumPy contraction; neither production helper is reused.
-    functional = psi4.core.SuperFunctional.blank()
-    x = psi4.core.LibXCFunctional("XC_LDA_X", True)
-    c = psi4.core.LibXCFunctional("XC_LDA_C_VWN", True)
-    x.set_alpha(1.0)
-    c.set_alpha(1.0)
-    functional.add_x_functional(x)
-    functional.add_c_functional(c)
-    functional.set_density_tolerance(1.0e-300)
-    functional.set_max_points(len(result["densities"]))
-    functional.set_deriv(2)
-    functional.allocate()
-    independent = functional.compute_functional(
-        {"RHO_A": psi4.core.Vector.from_array(np.asarray(result["densities"]))}, -1, True)
-    independent_fxc = np.asarray(independent["V_RHO_A_RHO_A"])
+    cutoff = result["diagnostics"]["density_cutoff"]
+    active = rho > cutoff
+    independent_fxc = np.zeros_like(rho)
+    active_rho = rho[active]
+    expected_x = -(1.0 / 3.0) * (3.0 / np.pi) ** (1.0 / 3.0) * active_rho ** (-2.0 / 3.0)
+    independent_fxc[active] = expected_x + _finite_difference_vwn_fxc(active_rho, 1.0e-4)
     expected = np.einsum("p,pi,p,pj->ij", weights, transition_values, independent_fxc,
                          transition_values, optimize=True)
+    kernel = np.asarray(result["full_alda"])
     assert np.all(np.isfinite(kernel))
     assert kernel == pytest.approx(kernel.T, abs=2.0e-13)
-    assert kernel == pytest.approx(expected, abs=3.0e-12)
-    assert result["fxc"] == pytest.approx(independent_fxc, abs=2.0e-13)
+    assert kernel == pytest.approx(expected, rel=2.0e-7, abs=2.0e-9)
+
+    retained = psi4.core._atomic_polarizability_test_restricted_alda_kernel(context, True)
+    assert len(retained["densities"]) == len(weights)
+    assert len(retained["fxc"]) == len(weights)
+    assert len(retained["transition_values"]) == len(weights) * len(transitions)
+    assert np.asarray(retained["full_alda"]) == pytest.approx(kernel, abs=2.0e-12)
 
     c1 = _restricted_c1_primitives(context)
     assembled = psi4.core._atomic_polarizability_assemble_restricted_hessian(
@@ -694,7 +790,7 @@ def test_real_restricted_alda_independent_libxc_contraction_and_c2a_solver(froze
                              + np.asarray(c1["exchange_transpose"]))
                    + 4.0 * 0.75 * kernel)
     assert np.asarray(assembled["H1"]) == pytest.approx(expected_h1, abs=5.0e-12)
-    rhs = psi4.core.Matrix.from_array(np.ones((nov, 1)) * 1.0e-3)
+    rhs = psi4.core.Matrix.from_array(np.ones((len(transitions), 1)) * 1.0e-3)
     for omega in (0.0, 0.2):
         response = psi4.core._atomic_polarizability_solve_restricted_response(
             assembled["H1"], assembled["H2"], omega, rhs)
@@ -702,11 +798,17 @@ def test_real_restricted_alda_independent_libxc_contraction_and_c2a_solver(froze
         assert np.all(np.isfinite(np.asarray(response["Q"])))
 
 
-def test_restricted_alda_source_guard_no_ground_response_functional():
-    source = (Path(__file__).resolve().parents[2]
-              / "psi4/src/psi4/libmints/atomic_polarizability.cc").read_text()
-    region = source[source.index("RestrictedALDAPrimitive construct_restricted_alda_kernel"):
+def test_restricted_alda_source_guard_covers_component_factory_and_production():
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "psi4/src/psi4/libmints/atomic_polarizability.cc").read_text()
+    header = (root / "psi4/src/psi4/libmints/atomic_polarizability.h").read_text()
+    region = source[source.index("build_restricted_alda_functional"):
                     source.index("std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create")]
     assert "context->functional" not in region
     assert "V_potential" not in region
     assert "PBE0" not in region.upper()
+    assert "Matrix transition_values(npoints" not in region
+    assert "C_DGEMM('T', 'N'" in region
+    assert "bool retain_test_diagnostics = false" in header
+    assert 'constexpr const char* kALDAX = "XC_LDA_X";' in source
+    assert 'constexpr const char* kALDAC = "XC_LDA_C_VWN";' in source

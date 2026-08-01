@@ -19,6 +19,7 @@
 
 #include <array>
 #include <cstddef>
+#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -197,8 +198,8 @@ struct RestrictedSingletHessian {
  * K_transpose names the alternate native exchange contraction, not the ordinary
  * matrix transpose of K_direct. Each transition-space primitive is independently
  * required to be finite and symmetric; it is never silently symmetrized.
- * full_alda is the complete exchange-plus-correlation ALDA kernel. Constructing
- * that primitive from the physical LibXC grid is deliberately deferred to C2b.
+ * full_alda is the complete exchange-plus-correlation ALDA kernel constructed
+ * separately from the frozen physical grid by the restricted C2b primitive.
  */
 RestrictedSingletHessian assemble_restricted_singlet_hessian(
     const std::vector<double>& orbital_gaps, const Matrix& coulomb,
@@ -363,17 +364,47 @@ RestrictedC1Primitives construct_restricted_c1_primitives_test_only(
     const Vector& epsilon_a, const Vector& epsilon_b, const Vector& occupation_a,
     const Vector& occupation_b);
 
+struct RestrictedALDAPlan {
+    std::size_t nbf{};
+    std::size_t nocc{};
+    std::size_t nvir{};
+    std::size_t nov{};
+    std::size_t point_count{};
+    std::size_t max_block_points{};
+    std::size_t max_supported_nov{};
+    std::size_t configured_memory_bytes{};
+    std::size_t reserved_memory_bytes{};
+    std::size_t retained_payload_bytes{};
+    std::size_t block_transition_bytes{};
+    std::size_t block_weighted_transition_bytes{};
+    std::size_t collocation_bytes{};
+    std::size_t point_scratch_bytes{};
+    std::size_t diagnostics_payload_bytes{};
+    std::size_t estimated_bytes{};
+    std::size_t work_terms{};
+    std::size_t max_work_terms{};
+    double density_cutoff{};
+    bool retain_test_diagnostics{};
+    std::string algorithm;
+    std::string memory_semantics;
+};
+
 struct RestrictedALDADiagnostics {
     std::string exchange_component;
     std::string correlation_component;
     int exchange_libxc_id{};
     int correlation_libxc_id{};
+    std::string exchange_libxc_canonical_name;
+    std::string correlation_libxc_canonical_name;
+    std::map<std::string, double> exchange_effective_parameters;
+    std::map<std::string, double> correlation_effective_parameters;
     double exchange_coefficient{};
     double correlation_coefficient{};
     int derivative_order{};
-    double density_floor{};
+    double density_cutoff{};
     std::size_t point_count{};
     std::string restricted_normalization;
+    RestrictedALDAPlan plan;
 };
 
 /** Full exchange-plus-correlation ALDA primitive on the exact sealed ordered grid. */
@@ -381,22 +412,36 @@ struct RestrictedALDAPrimitive {
     std::vector<std::pair<std::size_t, std::size_t>> transitions;
     SharedMatrix full_alda;
     RestrictedALDADiagnostics diagnostics;
+    /** Populated only by the explicitly memory-gated test diagnostics mode. */
     std::vector<double> densities;
     std::vector<double> fxc;
     std::vector<double> transition_values;
 };
 
+RestrictedALDAPlan plan_restricted_alda(std::size_t nbf, std::size_t nocc,
+                                        std::size_t nvir, std::size_t point_count,
+                                        std::size_t max_block_points,
+                                        std::size_t memory_bytes,
+                                        bool retain_test_diagnostics);
 RestrictedALDAPrimitive construct_restricted_alda_kernel(
-    const std::shared_ptr<const FrozenResponseContext>& context);
+    const std::shared_ptr<const FrozenResponseContext>& context,
+    bool retain_test_diagnostics = false);
 SharedMatrix contract_restricted_alda_test_only(
     const std::vector<double>& weights, const Matrix& transition_values,
     const std::vector<double>& densities, const std::vector<double>& fxc,
-    double density_floor);
+    double density_cutoff);
 std::pair<std::vector<double>, RestrictedALDADiagnostics> evaluate_restricted_alda_fxc_test_only(
     const std::vector<double>& densities, bool include_correlation);
 void validate_restricted_alda_grid_test_only(std::size_t nbf, std::size_t point_count,
                                              const std::vector<double>& weights,
                                              const std::vector<FrozenGridBlock>& blocks);
+struct RestrictedALDACollocationTestResult {
+    std::size_t point_count{};
+    std::size_t nbf{};
+    std::vector<double> ao_values;
+};
+RestrictedALDACollocationTestResult collocate_restricted_alda_ao_test_only(
+    const std::shared_ptr<const FrozenResponseContext>& context);
 }  // namespace detail
 
 /** Actual ISA data structurally bound to one exact frozen context and its ordered grid/sites. */

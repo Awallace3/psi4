@@ -397,28 +397,59 @@ void export_oeprop(py::module &m) {
               return result;
           },
           "context"_a, "test_overrides"_a = py::dict());
-    const auto alda_diagnostics_dict = [](const detail::RestrictedALDADiagnostics& diagnostics) {
+    const auto alda_plan_dict = [](const detail::RestrictedALDAPlan& plan) {
+        py::dict values;
+        values["algorithm"] = plan.algorithm;
+        values["memory_semantics"] = plan.memory_semantics;
+        values["nbf"] = plan.nbf;
+        values["nocc"] = plan.nocc;
+        values["nvir"] = plan.nvir;
+        values["nov"] = plan.nov;
+        values["point_count"] = plan.point_count;
+        values["max_block_points"] = plan.max_block_points;
+        values["max_supported_nov"] = plan.max_supported_nov;
+        values["configured_memory_bytes"] = plan.configured_memory_bytes;
+        values["reserved_memory_bytes"] = plan.reserved_memory_bytes;
+        values["retained_payload_bytes"] = plan.retained_payload_bytes;
+        values["block_transition_bytes"] = plan.block_transition_bytes;
+        values["block_weighted_transition_bytes"] = plan.block_weighted_transition_bytes;
+        values["collocation_bytes"] = plan.collocation_bytes;
+        values["point_scratch_bytes"] = plan.point_scratch_bytes;
+        values["diagnostics_payload_bytes"] = plan.diagnostics_payload_bytes;
+        values["estimated_bytes"] = plan.estimated_bytes;
+        values["work_terms"] = plan.work_terms;
+        values["max_work_terms"] = plan.max_work_terms;
+        values["density_cutoff"] = plan.density_cutoff;
+        values["retain_test_diagnostics"] = plan.retain_test_diagnostics;
+        return values;
+    };
+    const auto alda_diagnostics_dict = [alda_plan_dict](const detail::RestrictedALDADiagnostics& diagnostics) {
         py::dict values;
         values["exchange_component"] = diagnostics.exchange_component;
         values["correlation_component"] = diagnostics.correlation_component;
         values["exchange_libxc_id"] = diagnostics.exchange_libxc_id;
         values["correlation_libxc_id"] = diagnostics.correlation_libxc_id;
+        values["exchange_libxc_canonical_name"] = diagnostics.exchange_libxc_canonical_name;
+        values["correlation_libxc_canonical_name"] = diagnostics.correlation_libxc_canonical_name;
+        values["exchange_effective_parameters"] = diagnostics.exchange_effective_parameters;
+        values["correlation_effective_parameters"] = diagnostics.correlation_effective_parameters;
         values["exchange_coefficient"] = diagnostics.exchange_coefficient;
         values["correlation_coefficient"] = diagnostics.correlation_coefficient;
         values["derivative_order"] = diagnostics.derivative_order;
-        values["density_floor"] = diagnostics.density_floor;
+        values["density_cutoff"] = diagnostics.density_cutoff;
         values["point_count"] = diagnostics.point_count;
         values["restricted_normalization"] = diagnostics.restricted_normalization;
+        values["plan"] = alda_plan_dict(diagnostics.plan);
         return values;
     };
     m.def("_atomic_polarizability_test_contract_restricted_alda",
           [](const std::vector<double>& weights, const Matrix& transition_values,
              const std::vector<double>& densities, const std::vector<double>& fxc,
-             double density_floor) {
+             double density_cutoff) {
               return detail::contract_restricted_alda_test_only(
-                  weights, transition_values, densities, fxc, density_floor);
+                  weights, transition_values, densities, fxc, density_cutoff);
           }, "weights"_a, "transition_values"_a, "densities"_a, "fxc"_a,
-          "density_floor"_a = 1.0e-20);
+          "density_cutoff"_a = 1.0e-12);
     m.def("_atomic_polarizability_test_validate_restricted_alda_grid",
           [](std::size_t nbf, std::size_t point_count, const std::vector<double>& weights,
              const std::vector<std::size_t>& offsets, const std::vector<std::size_t>& counts,
@@ -439,8 +470,9 @@ void export_oeprop(py::module &m) {
               return values;
           }, "densities"_a, "include_correlation"_a = true);
     m.def("_atomic_polarizability_test_restricted_alda_kernel",
-          [alda_diagnostics_dict](const std::shared_ptr<FrozenResponseContext>& context) {
-              const auto result = detail::construct_restricted_alda_kernel(context);
+          [alda_diagnostics_dict](const std::shared_ptr<FrozenResponseContext>& context,
+                                  bool retain_test_diagnostics) {
+              const auto result = detail::construct_restricted_alda_kernel(context, retain_test_diagnostics);
               py::dict values;
               values["transition_order"] = "(i,a) occupied-major/virtual-minor";
               values["transitions"] = result.transitions;
@@ -450,7 +482,26 @@ void export_oeprop(py::module &m) {
               values["transition_values"] = result.transition_values;
               values["diagnostics"] = alda_diagnostics_dict(result.diagnostics);
               return values;
+          }, "context"_a, "retain_test_diagnostics"_a = false);
+    m.def("_atomic_polarizability_test_restricted_alda_ao_collocation",
+          [](const std::shared_ptr<FrozenResponseContext>& context) {
+              const auto result = detail::collocate_restricted_alda_ao_test_only(context);
+              py::dict values;
+              values["point_count"] = result.point_count;
+              values["nbf"] = result.nbf;
+              values["ao_values"] = result.ao_values;
+              return values;
           }, "context"_a);
+    m.def("_atomic_polarizability_estimate_restricted_alda",
+          [alda_plan_dict](std::size_t nbf, std::size_t nocc, std::size_t nvir,
+                           std::size_t point_count, std::size_t max_block_points,
+                           std::size_t memory_bytes, bool retain_test_diagnostics) {
+              return alda_plan_dict(detail::plan_restricted_alda(
+                  nbf, nocc, nvir, point_count, max_block_points,
+                  memory_bytes, retain_test_diagnostics));
+          }, "nbf"_a, "nocc"_a, "nvir"_a, "point_count"_a,
+          "max_block_points"_a, "memory_bytes"_a,
+          "retain_test_diagnostics"_a = false);
     m.def("_atomic_polarizability_estimate_restricted_c1_jk",
           [](std::size_t nbf, std::size_t nocc, std::size_t nvir, std::size_t memory_bytes) {
               const auto plan = detail::plan_restricted_c1_jk(nbf, nocc, nvir, memory_bytes);
