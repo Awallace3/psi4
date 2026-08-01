@@ -333,7 +333,96 @@ class PSI_API FrozenResponseContext {
     double functional_density_tolerance_{};
 };
 
+/** Up-front storage and integral-work gate for caller-supplied point response. */
+struct PSI_API PointResponsePlan {
+    std::size_t frequency_count{};
+    std::size_t nbf{};
+    std::size_t nocc{};
+    std::size_t nvir{};
+    std::size_t transition_count{};
+    std::size_t point_count{};
+    std::size_t max_point_count{};
+    std::size_t configured_memory_bytes{};
+    std::size_t reserved_memory_bytes{};
+    std::size_t ao_matrix_bytes{};
+    std::size_t transition_potential_bytes{};
+    std::size_t output_bytes{};
+    std::size_t dense_solve_peak_bytes{};
+    std::size_t scratch_bytes{};
+    std::size_t estimated_bytes{};
+    std::size_t integral_work_terms{};
+    std::string algorithm;
+    std::string memory_semantics;
+};
+
+/** Per-frequency dense-solve and reciprocity diagnostics for point response. */
+struct PSI_API PointResponseDiagnostics {
+    double frequency{};
+    double reciprocal_condition{};
+    double reciprocal_pivot_growth{};
+    std::vector<double> forward_error;
+    std::vector<double> backward_error;
+    std::vector<double> scaled_residual;
+    std::vector<double> solution_column_scales;
+    double allowed_antisymmetry{};
+    double symmetry_residual{};
+    double max_normalized_antisymmetry{};
+    bool reciprocity_enforced{};
+};
+
+/**
+ * Immutable, frequency-major external-point response carrier. Matrix access is
+ * clone-only so amplitudes/results cannot be mutated through an exported alias.
+ */
+class PSI_API PointResponseData {
+   public:
+    PointResponseData(const PointResponseData&) = default;
+    PointResponseData& operator=(const PointResponseData&) = default;
+
+    const std::vector<SitePosition>& points() const { return points_; }
+    std::size_t frequency_count() const { return responses_.size(); }
+    SharedMatrix response_clone(std::size_t frequency) const;
+    std::vector<SharedMatrix> response_clones() const;
+    /** Underscored binding support only; not part of the production data model. */
+    SharedMatrix transition_potentials_clone_test_only() const;
+    const std::vector<PointResponseDiagnostics>& diagnostics() const { return diagnostics_; }
+    const PointResponsePlan& plan() const { return plan_; }
+
+   private:
+    friend PointResponseData evaluate_point_response(
+        const std::shared_ptr<const FrozenResponseContext>&, const Matrix&, const Matrix&,
+        const std::vector<double>&, const std::vector<SitePosition>&, double);
+    PointResponseData(std::vector<SitePosition> points,
+                      std::vector<SharedMatrix> responses,
+                      std::vector<PointResponseDiagnostics> diagnostics,
+                      PointResponsePlan plan, SharedMatrix transition_potentials);
+
+    std::vector<SitePosition> points_;
+    std::vector<SharedMatrix> responses_;
+    SharedMatrix transition_potentials_test_only_;
+    std::vector<PointResponseDiagnostics> diagnostics_;
+    PointResponsePlan plan_;
+};
+
+/**
+ * Evaluate Pi(g,h;omega)=4 sum_ia v(g,ia) P(ia,h) at caller-supplied points.
+ * The native electronic AO multipole-potential sign is retained in v; because
+ * the response is bilinear in v, a global potential-sign convention cancels.
+ * No points are generated or refined. Exact duplicate points are rejected;
+ * minimum_site_distance_bohr=0 deliberately permits evaluation at nuclei.
+ */
+PSI_API PointResponseData evaluate_point_response(
+    const std::shared_ptr<const FrozenResponseContext>& context,
+    const Matrix& H1, const Matrix& H2, const std::vector<double>& frequencies,
+    const std::vector<SitePosition>& points,
+    double minimum_site_distance_bohr = 0.0);
+
 namespace detail {
+PointResponsePlan plan_point_response(
+    std::size_t frequency_count, std::size_t nbf, std::size_t nocc,
+    std::size_t nvir, std::size_t point_count, bool has_dynamic_frequency,
+    std::size_t memory_bytes);
+
 /**
  * Overflow-checked storage diagnostics for canonical nonsymmetric DirectJK.
  *

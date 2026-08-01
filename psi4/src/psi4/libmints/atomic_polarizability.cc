@@ -36,6 +36,7 @@
 #include "psi4/libfock/points.h"
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/matrix.h"
+#include "psi4/libmints/mintshelper.h"
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
@@ -842,6 +843,89 @@ std::size_t checked_c1_sum(std::size_t first, std::size_t second, const std::str
 }  // namespace
 
 namespace detail {
+PointResponsePlan plan_point_response(
+    std::size_t frequency_count, std::size_t nbf, std::size_t nocc,
+    std::size_t nvir, std::size_t point_count, bool has_dynamic_frequency,
+    std::size_t memory_bytes) {
+    const std::string prefix = "point response: ";
+    constexpr std::size_t max_point_count = 500;
+    constexpr std::size_t max_transition_count = 512;
+    if (frequency_count == 0)
+        throw PSIEXCEPTION(prefix + "frequency list requires at least one value");
+    if (nbf == 0 || nocc == 0 || nvir == 0)
+        throw PSIEXCEPTION(prefix + "resource estimate requires nonzero orbital dimensions");
+    if (point_count == 0)
+        throw PSIEXCEPTION(prefix + "requires at least one point");
+    if (point_count > max_point_count)
+        throw PSIEXCEPTION(prefix + "point count exceeds the canonical 500-point envelope");
+    const auto nov = checked_c1_product(nocc, nvir, prefix);
+    if (nov > max_transition_count)
+        throw PSIEXCEPTION(prefix + "transition count exceeds the canonical 512-transition envelope");
+    if (nbf > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        nov > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        point_count > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw PSIEXCEPTION(prefix + "dimensions exceed native matrix limits");
+
+    const auto reserved_memory_bytes = memory_bytes / 2;
+    const auto bytes = [&prefix](std::size_t count) {
+        return checked_c1_product(count, sizeof(double), prefix);
+    };
+    const auto ao_matrix_bytes = bytes(checked_c1_product(nbf, nbf, prefix));
+    const auto transition_potential_bytes = bytes(
+        checked_c1_product(nov, point_count, prefix));
+    const auto point_square = checked_c1_product(point_count, point_count, prefix);
+    const auto output_bytes = bytes(checked_c1_product(
+        frequency_count, point_square, prefix));
+
+    const auto order = checked_c1_product(has_dynamic_frequency ? 2 : 1, nov, prefix);
+    const auto order_square = checked_c1_product(order, order, prefix);
+    const auto order_rhs = checked_c1_product(order, point_count, prefix);
+    auto dense_solve_peak_bytes = bytes(checked_c1_product(3, order_square, prefix));
+    dense_solve_peak_bytes = checked_c1_sum(
+        dense_solve_peak_bytes, bytes(checked_c1_product(3, order_rhs, prefix)), prefix);
+    dense_solve_peak_bytes = checked_c1_sum(
+        dense_solve_peak_bytes,
+        bytes(checked_c1_product(2, checked_c1_product(nov, point_count, prefix), prefix)),
+        prefix);
+    dense_solve_peak_bytes = checked_c1_sum(
+        dense_solve_peak_bytes,
+        bytes(checked_c1_sum(checked_c1_product(12, order, prefix),
+                             checked_c1_product(4, point_count, prefix), prefix)), prefix);
+
+    const auto operator_bytes = bytes(checked_c1_product(
+        2, checked_c1_product(nov, nov, prefix), prefix));
+    const auto scratch_bytes = checked_c1_sum(
+        bytes(point_square), operator_bytes, prefix);
+    auto estimated_bytes = checked_c1_sum(output_bytes, transition_potential_bytes, prefix);
+    estimated_bytes = checked_c1_sum(estimated_bytes, ao_matrix_bytes, prefix);
+    estimated_bytes = checked_c1_sum(estimated_bytes, dense_solve_peak_bytes, prefix);
+    estimated_bytes = checked_c1_sum(estimated_bytes, scratch_bytes, prefix);
+    if (estimated_bytes > reserved_memory_bytes)
+        throw PSIEXCEPTION(prefix + "estimated storage exceeds reserved memory");
+
+    PointResponsePlan plan;
+    plan.frequency_count = frequency_count;
+    plan.nbf = nbf;
+    plan.nocc = nocc;
+    plan.nvir = nvir;
+    plan.transition_count = nov;
+    plan.point_count = point_count;
+    plan.max_point_count = max_point_count;
+    plan.configured_memory_bytes = memory_bytes;
+    plan.reserved_memory_bytes = reserved_memory_bytes;
+    plan.ao_matrix_bytes = ao_matrix_bytes;
+    plan.transition_potential_bytes = transition_potential_bytes;
+    plan.output_bytes = output_bytes;
+    plan.dense_solve_peak_bytes = dense_solve_peak_bytes;
+    plan.scratch_bytes = scratch_bytes;
+    plan.estimated_bytes = estimated_bytes;
+    plan.integral_work_terms = checked_c1_product(point_count,
+                                                   checked_c1_product(nbf, nbf, prefix), prefix);
+    plan.algorithm = "CALLER_POINTS_NATIVE_ORDER0_AO_POTENTIAL_DENSE_RESPONSE";
+    plan.memory_semantics = "SIMULTANEOUS_LIVE_STORAGE_HARD_GATE_HALF_PROCESS_MEMORY";
+    return plan;
+}
+
 RestrictedC1JKPlan plan_restricted_c1_jk(std::size_t nbf, std::size_t nocc,
                                          std::size_t nvir, std::size_t memory_bytes) {
     const std::string prefix = "restricted C1 transition primitives: ";
@@ -3119,6 +3203,216 @@ std::vector<SitePairResponse> ISAPolResponseProvider::compute_isapol_response(
     }
     context_->verify_basis_unchanged();
     return complete;
+}
+
+PointResponseData::PointResponseData(
+    std::vector<SitePosition> points, std::vector<SharedMatrix> responses,
+    std::vector<PointResponseDiagnostics> diagnostics, PointResponsePlan plan,
+    SharedMatrix transition_potentials)
+    : points_(std::move(points)),
+      responses_(std::move(responses)),
+      transition_potentials_test_only_(std::move(transition_potentials)),
+      diagnostics_(std::move(diagnostics)),
+      plan_(std::move(plan)) {}
+
+SharedMatrix PointResponseData::response_clone(std::size_t frequency) const {
+    if (frequency >= responses_.size())
+        throw PSIEXCEPTION("point response: frequency index is out of range");
+    return responses_[frequency]->clone();
+}
+
+std::vector<SharedMatrix> PointResponseData::response_clones() const {
+    std::vector<SharedMatrix> clones;
+    clones.reserve(responses_.size());
+    for (const auto& response : responses_) clones.push_back(response->clone());
+    return clones;
+}
+
+SharedMatrix PointResponseData::transition_potentials_clone_test_only() const {
+    if (!transition_potentials_test_only_)
+        throw PSIEXCEPTION("point response: test transition potentials are unavailable");
+    return transition_potentials_test_only_->clone();
+}
+
+PointResponseData evaluate_point_response(
+    const std::shared_ptr<const FrozenResponseContext>& context,
+    const Matrix& H1, const Matrix& H2, const std::vector<double>& frequencies,
+    const std::vector<SitePosition>& points, double minimum_site_distance_bohr) {
+    const std::string prefix = "point response: ";
+    if (!context || !context->basis())
+        throw PSIEXCEPTION(prefix + "frozen response context/basis is unavailable");
+    context->verify_basis_unchanged();
+    if (frequencies.empty())
+        throw PSIEXCEPTION(prefix + "frequency list requires at least one value");
+    bool has_dynamic_frequency = false;
+    for (double frequency : frequencies) {
+        if (!std::isfinite(frequency))
+            throw PSIEXCEPTION(prefix + "frequencies must be finite and nonnegative");
+        if (frequency < 0.0)
+            throw PSIEXCEPTION(prefix + "frequencies must be nonnegative");
+        has_dynamic_frequency = has_dynamic_frequency || frequency != 0.0;
+    }
+    if (points.empty()) throw PSIEXCEPTION(prefix + "requires at least one point");
+    for (const auto& point : points)
+        for (double coordinate : point)
+            if (!std::isfinite(coordinate))
+                throw PSIEXCEPTION(prefix + "point coordinates must be finite");
+    if (!std::isfinite(minimum_site_distance_bohr) || minimum_site_distance_bohr < 0.0)
+        throw PSIEXCEPTION(prefix + "minimum site distance must be finite and nonnegative");
+
+    const int nbf_int = context->basis()->nbf();
+    if (nbf_int <= 0) throw PSIEXCEPTION(prefix + "retained basis is empty");
+    const auto nbf = static_cast<std::size_t>(nbf_int);
+    const auto counts = validate_restricted_alda_orbitals(*context);
+    const auto nov = checked_c1_product(counts.first, counts.second, prefix);
+    require_dense_response_operator(H1, "H1");
+    require_dense_response_operator(H2, "H2");
+    if (H1.nrow() != H2.nrow() || static_cast<std::size_t>(H1.nrow()) != nov)
+        throw PSIEXCEPTION(prefix + "response operator dimension does not match occupied-virtual transitions");
+
+    // The complete storage/integral envelope is rejected before duplicate
+    // scratch, AO matrices, transition vectors, solve storage, or outputs exist.
+    const auto plan = detail::plan_point_response(
+        frequencies.size(), nbf, counts.first, counts.second, points.size(),
+        has_dynamic_frequency, Process::environment.get_memory());
+
+    for (std::size_t first = 0; first < points.size(); ++first) {
+        for (std::size_t second = first + 1; second < points.size(); ++second) {
+            if (points[first] == points[second])
+                throw PSIEXCEPTION(prefix + "caller-supplied points must be distinct");
+        }
+        if (minimum_site_distance_bohr > 0.0) {
+            for (const auto& site : context->sites()) {
+                double distance_squared = 0.0;
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    const double displacement = points[first][axis] - site[axis];
+                    distance_squared += displacement * displacement;
+                }
+                if (distance_squared < minimum_site_distance_bohr * minimum_site_distance_bohr)
+                    throw PSIEXCEPTION(prefix + "point violates the requested minimum site distance");
+            }
+        }
+    }
+
+    const auto transitions = make_restricted_alda_transitions(*context, nov);
+    if (transitions.size() != nov)
+        throw PSIEXCEPTION(prefix + "occupied-major transition metadata are inconsistent");
+    auto transition_potentials = std::make_shared<Matrix>(
+        static_cast<int>(nov), static_cast<int>(points.size()));
+    // MintsHelper aliases the already sealed basis only to construct native
+    // one-electron integral engines; no basis mutation is performed.
+    MintsHelper mints(std::const_pointer_cast<BasisSet>(context->basis()));
+    const auto& coefficients = *context->Ca();
+    for (std::size_t point_index = 0; point_index < points.size(); ++point_index) {
+        const auto potentials = mints.ao_multipole_potential(0, {
+            points[point_index][0], points[point_index][1], points[point_index][2]});
+        if (potentials.size() != 1 || !potentials[0] || potentials[0]->nirrep() != 1 ||
+            potentials[0]->nrow() != nbf_int || potentials[0]->ncol() != nbf_int)
+            throw PSIEXCEPTION(prefix + "native order-zero AO potential dimensions are inconsistent");
+        const auto& ao_potential = *potentials[0];
+        for (std::size_t transition = 0; transition < nov; ++transition) {
+            const auto occupied = transitions[transition].first;
+            const auto virtual_orbital = transitions[transition].second;
+            double value = 0.0;
+            for (std::size_t mu = 0; mu < nbf; ++mu) {
+                for (std::size_t nu = 0; nu < nbf; ++nu) {
+                    const double integral = ao_potential(mu, nu);
+                    if (!std::isfinite(integral))
+                        throw PSIEXCEPTION(prefix + "native order-zero AO potential is nonfinite");
+                    value += coefficients(mu, occupied) * integral *
+                             coefficients(nu, virtual_orbital);
+                }
+            }
+            if (!std::isfinite(value))
+                throw PSIEXCEPTION(prefix + "MO transition potential is nonfinite");
+            (*transition_potentials)(transition, point_index) = value;
+        }
+    }
+
+    std::vector<SharedMatrix> complete_responses;
+    std::vector<PointResponseDiagnostics> complete_diagnostics;
+    complete_responses.reserve(frequencies.size());
+    complete_diagnostics.reserve(frequencies.size());
+    for (double frequency : frequencies) {
+        const auto solved = detail::solve_dense_restricted_response(
+            H1, H2, frequency, *transition_potentials);
+        const auto amplitudes = solved.P_clone();
+        auto raw = std::make_shared<Matrix>(static_cast<int>(points.size()),
+                                            static_cast<int>(points.size()));
+        for (std::size_t response_point = 0; response_point < points.size(); ++response_point) {
+            for (std::size_t source_point = 0; source_point < points.size(); ++source_point) {
+                double value = 0.0;
+                for (std::size_t transition = 0; transition < nov; ++transition)
+                    value += (*transition_potentials)(transition, response_point) *
+                             (*amplitudes)(transition, source_point);
+                value *= 4.0;
+                if (!std::isfinite(value))
+                    throw PSIEXCEPTION(prefix + "contracted response is nonfinite");
+                (*raw)(response_point, source_point) = value;
+            }
+        }
+
+        double allowed_antisymmetry = 0.0;
+        double symmetry_residual = 0.0;
+        double max_normalized_antisymmetry = 0.0;
+        for (std::size_t first = 0; first < points.size(); ++first) {
+            double first_l1 = 0.0;
+            for (std::size_t transition = 0; transition < nov; ++transition)
+                first_l1 += std::abs((*transition_potentials)(transition, first));
+            for (std::size_t second = first + 1; second < points.size(); ++second) {
+                double second_l1 = 0.0;
+                for (std::size_t transition = 0; transition < nov; ++transition)
+                    second_l1 += std::abs((*transition_potentials)(transition, second));
+                const double scale = std::max(
+                    {1.0, std::abs((*raw)(first, second)), std::abs((*raw)(second, first))});
+                const double allowed =
+                    4.0 * (first_l1 * solved.forward_error()[second] *
+                               solved.solution_column_scales()[second] +
+                           second_l1 * solved.forward_error()[first] *
+                               solved.solution_column_scales()[first]) +
+                    128.0 * std::numeric_limits<double>::epsilon() * scale *
+                        std::max<std::size_t>(1, nov);
+                const double residual = std::abs(
+                    (*raw)(first, second) - (*raw)(second, first));
+                if (!std::isfinite(allowed) || residual > allowed)
+                    throw PSIEXCEPTION(prefix + "point response failed the solver-derived symmetry policy");
+                allowed_antisymmetry = std::max(allowed_antisymmetry, allowed);
+                symmetry_residual = std::max(symmetry_residual, residual);
+                max_normalized_antisymmetry = std::max(
+                    max_normalized_antisymmetry, allowed == 0.0 ? 0.0 : residual / allowed);
+            }
+        }
+
+        auto symmetric = std::make_shared<Matrix>(static_cast<int>(points.size()),
+                                                  static_cast<int>(points.size()));
+        for (std::size_t row = 0; row < points.size(); ++row) {
+            (*symmetric)(row, row) = (*raw)(row, row);
+            for (std::size_t column = row + 1; column < points.size(); ++column) {
+                const double average = 0.5 * ((*raw)(row, column) + (*raw)(column, row));
+                (*symmetric)(row, column) = average;
+                (*symmetric)(column, row) = average;
+            }
+        }
+
+        PointResponseDiagnostics diagnostic;
+        diagnostic.frequency = frequency;
+        diagnostic.reciprocal_condition = solved.reciprocal_condition();
+        diagnostic.reciprocal_pivot_growth = solved.reciprocal_pivot_growth();
+        diagnostic.forward_error = solved.forward_error();
+        diagnostic.backward_error = solved.backward_error();
+        diagnostic.scaled_residual = solved.scaled_residual();
+        diagnostic.solution_column_scales = solved.solution_column_scales();
+        diagnostic.allowed_antisymmetry = allowed_antisymmetry;
+        diagnostic.symmetry_residual = symmetry_residual;
+        diagnostic.max_normalized_antisymmetry = max_normalized_antisymmetry;
+        diagnostic.reciprocity_enforced = true;
+        complete_responses.push_back(std::move(symmetric));
+        complete_diagnostics.push_back(std::move(diagnostic));
+    }
+    context->verify_basis_unchanged();
+    return PointResponseData(points, std::move(complete_responses),
+                             std::move(complete_diagnostics), plan,
+                             std::move(transition_potentials));
 }
 
 Matrix lw_graph_operator(const BondGraph& graph) { return to_psi_matrix(make_graph_operator(graph)); }

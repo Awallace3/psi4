@@ -199,6 +199,101 @@ void export_oeprop(py::module &m) {
               return values;
           },
           "H1"_a, "H2"_a, "omega"_a, "rhs"_a);
+    const auto point_response_plan_dict = [](const PointResponsePlan& plan) {
+        py::dict values;
+        values["frequency_count"] = plan.frequency_count;
+        values["nbf"] = plan.nbf;
+        values["nocc"] = plan.nocc;
+        values["nvir"] = plan.nvir;
+        values["transition_count"] = plan.transition_count;
+        values["point_count"] = plan.point_count;
+        values["max_point_count"] = plan.max_point_count;
+        values["configured_memory_bytes"] = plan.configured_memory_bytes;
+        values["reserved_memory_bytes"] = plan.reserved_memory_bytes;
+        values["ao_matrix_bytes"] = plan.ao_matrix_bytes;
+        values["transition_potential_bytes"] = plan.transition_potential_bytes;
+        values["output_bytes"] = plan.output_bytes;
+        values["dense_solve_peak_bytes"] = plan.dense_solve_peak_bytes;
+        values["scratch_bytes"] = plan.scratch_bytes;
+        values["estimated_bytes"] = plan.estimated_bytes;
+        values["integral_work_terms"] = plan.integral_work_terms;
+        values["algorithm"] = plan.algorithm;
+        values["memory_semantics"] = plan.memory_semantics;
+        return values;
+    };
+    m.def("_atomic_polarizability_estimate_point_response",
+          [point_response_plan_dict](std::size_t frequency_count, std::size_t nbf,
+                                     std::size_t nocc, std::size_t nvir,
+                                     std::size_t point_count, bool has_dynamic_frequency,
+                                     std::size_t memory_bytes) {
+              return point_response_plan_dict(detail::plan_point_response(
+                  frequency_count, nbf, nocc, nvir, point_count,
+                  has_dynamic_frequency, memory_bytes));
+          },
+          "frequency_count"_a, "nbf"_a, "nocc"_a, "nvir"_a,
+          "point_count"_a, "has_dynamic_frequency"_a, "memory_bytes"_a);
+    m.def("_atomic_polarizability_test_evaluate_point_response",
+          [point_response_plan_dict](
+              const std::shared_ptr<FrozenResponseContext>& context,
+              const std::vector<SitePosition>& points,
+              const std::vector<double>& frequencies, const Matrix& H1,
+              const Matrix& H2, const py::dict& options) {
+              const std::vector<std::string> allowed{"minimum_site_distance_bohr"};
+              for (const auto& item : options) {
+                  const auto key = py::cast<std::string>(item.first);
+                  if (std::find(allowed.begin(), allowed.end(), key) == allowed.end())
+                      throw PSIEXCEPTION("point response: unknown option " + key);
+              }
+              const double minimum_site_distance = options.contains("minimum_site_distance_bohr")
+                  ? py::cast<double>(options["minimum_site_distance_bohr"])
+                  : 0.0;
+              const auto data = evaluate_point_response(
+                  context, H1, H2, frequencies, points, minimum_site_distance);
+              py::dict result;
+              result["points"] = data.points();
+              result["frequencies"] = frequencies;
+              result["responses"] = data.response_clones();
+              const auto stored = data.transition_potentials_clone_test_only();
+              auto point_major = std::make_shared<Matrix>(stored->ncol(), stored->nrow());
+              for (int point = 0; point < stored->ncol(); ++point)
+                  for (int transition = 0; transition < stored->nrow(); ++transition)
+                      (*point_major)(point, transition) = (*stored)(transition, point);
+              result["transition_potentials"] = std::move(point_major);
+              result["potential_convention"] =
+                  "native electronic AO multipole-potential sign; the sign cancels in the bilinear response";
+              result["transition_order"] = "(i,a) occupied-major/virtual-minor";
+              result["frequency_order"] = "frequency-major";
+              py::list diagnostics;
+              for (const auto& diagnostic : data.diagnostics()) {
+                  py::dict values;
+                  values["frequency"] = diagnostic.frequency;
+                  values["reciprocal_condition"] = diagnostic.reciprocal_condition;
+                  values["reciprocal_pivot_growth"] = diagnostic.reciprocal_pivot_growth;
+                  values["forward_error"] = diagnostic.forward_error;
+                  values["backward_error"] = diagnostic.backward_error;
+                  values["scaled_residual"] = diagnostic.scaled_residual;
+                  values["solution_column_scales"] = diagnostic.solution_column_scales;
+                  values["max_forward_error"] = *std::max_element(
+                      diagnostic.forward_error.begin(), diagnostic.forward_error.end());
+                  values["max_backward_error"] = *std::max_element(
+                      diagnostic.backward_error.begin(), diagnostic.backward_error.end());
+                  values["max_scaled_residual"] = *std::max_element(
+                      diagnostic.scaled_residual.begin(), diagnostic.scaled_residual.end());
+                  values["allowed_antisymmetry"] = diagnostic.allowed_antisymmetry;
+                  values["symmetry_residual"] = diagnostic.symmetry_residual;
+                  values["max_normalized_antisymmetry"] =
+                      diagnostic.max_normalized_antisymmetry;
+                  values["symmetry_policy"] =
+                      "AVERAGE_WITHIN_SOLVER_DERIVED_CONTRACTION_ERROR_BOUND";
+                  values["reciprocity_enforced"] = diagnostic.reciprocity_enforced;
+                  diagnostics.append(std::move(values));
+              }
+              result["diagnostics"] = std::move(diagnostics);
+              result["plan"] = point_response_plan_dict(data.plan());
+              return result;
+          },
+          "context"_a, "points"_a, "frequencies"_a, "H1"_a, "H2"_a,
+          "options"_a = py::dict());
     m.def("_atomic_polarizability_assemble_restricted_hessian",
           [](const std::vector<double>& orbital_gaps, const Matrix& coulomb,
              const Matrix& exchange_direct, const Matrix& exchange_transpose,
