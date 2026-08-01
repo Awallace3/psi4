@@ -18,6 +18,7 @@ def grac_states():
             "reference": "rhf",
             "dft_spherical_points": 50,
             "dft_radial_points": 12,
+            "dft_density_tolerance": 1.0e-12,
             "dft_grac_shift": 0.0,
         }
     )
@@ -43,12 +44,14 @@ def grac_states():
         units angstrom
         """
     )
-    psi4.set_options({"reference": "uhf", "dft_grac_shift": 0.0})
+    psi4.set_options({"reference": "uhf", "dft_density_tolerance": 1.0e-12,
+                      "dft_grac_shift": 0.0})
     _, cation_wfn = psi4.energy("pbe0", molecule=cation, return_wfn=True)
 
     homo = max(precursor.epsilon_a_subset("SO", "OCC").to_array().ravel())
     shift = cation_wfn.energy() - precursor.energy() + homo
-    psi4.set_options({"reference": "rhf", "dft_grac_shift": shift})
+    psi4.set_options({"reference": "rhf", "dft_density_tolerance": 1.0e-12,
+                      "dft_grac_shift": shift})
     _, grac = psi4.energy("pbe0", molecule=neutral, return_wfn=True)
     psi4.set_options({"dft_grac_shift": 0.0})
     return grac, precursor, cation_wfn, shift
@@ -85,6 +88,19 @@ def test_old_scope_success_exit_forge_sequence_is_impossible(grac_states):
 def test_genuine_finalized_scfs_are_sealed_by_native_finalize(grac_states):
     grac, precursor, cation, _ = grac_states
     psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, cation)
+
+
+def test_zero_functional_density_tolerance_cannot_create_response_seal(grac_states):
+    grac, precursor, cation, _ = grac_states
+    psi4.set_options({"reference": "uhf", "basis": "sto-3g",
+                      "dft_density_tolerance": 0.0, "dft_grac_shift": 0.0})
+    try:
+        _, zero_cutoff = psi4.energy("pbe0", molecule=cation.molecule(), return_wfn=True)
+        with pytest.raises(RuntimeError, match=r"cation SCF state has no finalized provenance seal"):
+            psi4.core._atomic_polarizability_make_frozen_response_context(
+                grac, precursor, zero_cutoff)
+    finally:
+        psi4.set_options({"reference": "rhf", "dft_density_tolerance": 1.0e-12})
 
 
 def test_response_kernel_is_exact_and_rejects_nextafter_neighbors():
@@ -149,7 +165,8 @@ def test_material_cation_geometry_change_rejects(grac_states):
         units angstrom
         """
     )
-    psi4.set_options({"reference": "uhf", "basis": "sto-3g", "dft_grac_shift": 0.0})
+    psi4.set_options({"reference": "uhf", "basis": "sto-3g",
+                      "dft_density_tolerance": 1.0e-12, "dft_grac_shift": 0.0})
     try:
         _, displaced_wfn = psi4.energy("pbe0", molecule=displaced_cation, return_wfn=True)
         with pytest.raises(RuntimeError, match=r"geometry/electron identity"):
@@ -172,7 +189,8 @@ def test_seal_occurs_only_after_successful_finalize_energy(grac_states, monkeypa
         return original_finalize(self)
 
     monkeypatch.setattr(psi4.core.HF, "finalize_energy", observing_finalize)
-    psi4.set_options({"reference": "rhf", "basis": "sto-3g", "dft_grac_shift": shift})
+    psi4.set_options({"reference": "rhf", "basis": "sto-3g",
+                      "dft_density_tolerance": 1.0e-12, "dft_grac_shift": shift})
     try:
         _, finalized = psi4.energy("pbe0", molecule=precursor.molecule(), return_wfn=True)
     finally:
@@ -191,6 +209,7 @@ def test_unconverged_state_cannot_be_forged_after_failure(grac_states):
             "reference": "rhf",
             "basis": "sto-3g",
             "dft_grac_shift": shift,
+            "dft_density_tolerance": 1.0e-12,
             "maxiter": 1,
             "fail_on_maxiter": False,
         }
@@ -300,6 +319,7 @@ def test_actual_effective_grac_state_mismatches_reject(grac_states, overrides, m
         "reference": "rhf",
         "basis": "sto-3g",
         "dft_grac_shift": shift,
+        "dft_density_tolerance": 1.0e-12,
         "dft_grac_alpha": 0.5,
         "dft_grac_beta": 40.0,
         "dft_grac_x_func": "XC_GGA_X_LB",
@@ -333,7 +353,8 @@ def test_post_finalize_mutation_cannot_rewrite_sealed_functional_provenance(grac
         return energy
 
     monkeypatch.setattr(psi4.core.HF, "finalize_energy", finalize_with_test_local_tweak)
-    psi4.set_options({"reference": "uhf", "basis": "sto-3g", "dft_grac_shift": 0.0})
+    psi4.set_options({"reference": "uhf", "basis": "sto-3g",
+                      "dft_density_tolerance": 1.0e-12, "dft_grac_shift": 0.0})
     try:
         _, mutated_cation = psi4.energy("pbe0", molecule=cation.molecule(), return_wfn=True)
     finally:
@@ -363,7 +384,8 @@ def test_wrong_cation_multiplicity_real_scf_fails_closed_before_protocol_validat
         units angstrom
         """
     )
-    psi4.set_options({"reference": "uhf", "basis": "sto-3g", "dft_grac_shift": 0.0})
+    psi4.set_options({"reference": "uhf", "basis": "sto-3g",
+                      "dft_density_tolerance": 1.0e-12, "dft_grac_shift": 0.0})
     try:
         _, quartet_wfn = psi4.energy("pbe0", molecule=quartet, return_wfn=True)
         with pytest.raises(RuntimeError, match=r"no finalized provenance seal"):
@@ -374,7 +396,8 @@ def test_wrong_cation_multiplicity_real_scf_fails_closed_before_protocol_validat
 
 def test_complete_basis_mismatch_real_scf_fails_closed_before_protocol_validation(grac_states):
     grac, precursor, cation, _ = grac_states
-    psi4.set_options({"reference": "uhf", "basis": "3-21g", "dft_grac_shift": 0.0})
+    psi4.set_options({"reference": "uhf", "basis": "3-21g",
+                      "dft_density_tolerance": 1.0e-12, "dft_grac_shift": 0.0})
     try:
         _, wrong_basis_cation = psi4.energy("pbe0", molecule=cation.molecule(), return_wfn=True)
         with pytest.raises(RuntimeError, match=r"no finalized provenance seal"):
@@ -417,7 +440,7 @@ def test_frozen_context_attests_final_functional_density_tolerance(grac_states):
     grac, precursor, _, _ = grac_states
     context = _context(grac_states)
     expected = grac.V_potential().functional().density_tolerance()
-    assert math.isfinite(expected) and expected >= 0.0
+    assert math.isfinite(expected) and expected > 0.0
     assert context.summary()["functional_density_tolerance"] == expected
     assert expected == precursor.V_potential().functional().density_tolerance()
 

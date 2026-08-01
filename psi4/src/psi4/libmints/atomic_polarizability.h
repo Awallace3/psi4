@@ -387,6 +387,7 @@ struct RestrictedALDAPlan {
     std::size_t functional_workspace_bytes{};
     std::size_t point_scratch_bytes{};
     std::size_t metadata_bytes{};
+    std::size_t validation_scratch_bytes{};
     std::size_t conservative_overhead_bytes{};
     std::size_t diagnostics_payload_bytes{};
     std::size_t estimated_bytes{};
@@ -453,6 +454,7 @@ std::pair<std::vector<double>, RestrictedALDADiagnostics> evaluate_restricted_al
 void validate_restricted_alda_grid_test_only(std::size_t nbf, std::size_t point_count,
                                              const std::vector<double>& weights,
                                              const std::vector<FrozenGridBlock>& blocks);
+std::size_t validate_restricted_alda_work_bound_test_only(std::size_t work_terms);
 struct RestrictedALDACollocationTestResult {
     std::size_t point_count{};
     std::size_t nbf{};

@@ -88,9 +88,11 @@ def test_cosx_final_grid_is_observed_by_native_density_lifecycle():
 
 def test_seal_records_complete_functional_basis_and_ordered_grid_state():
     hf = _text("psi4/src/psi4/libscf_solver/hf.h")
+    hf_source = _text("psi4/src/psi4/libscf_solver/hf.cc")
     basis = _text("psi4/src/psi4/libmints/basisset.h")
     factory = _text("psi4/src/psi4/libmints/atomic_polarizability.cc")
     isa = _text("psi4/src/psi4/libmints/isa_weights.cc")
+    superfunctional = _text("psi4/src/psi4/libfunctional/superfunctional.cc")
     for field in (
         "libxc_id", "libxc_canonical_name", "effective_parameters", "x_alpha", "x_beta",
         "c_ss_alpha", "c_os_alpha", "vv10_beta", "density_tolerance", "grac_shift",
@@ -110,6 +112,11 @@ def test_seal_records_complete_functional_basis_and_ordered_grid_state():
     assert "structural_snapshot() == *grac_seal.basis" in factory
     assert "verify_basis_unchanged" in factory
     assert "functional_density_tolerance" in factory
+    assert "functional density tolerance must be finite and positive" in hf_source
+    assert "!(functional_density_tolerance > 0.0)" in factory
+    worker_region = superfunctional[superfunctional.index("SuperFunctional::build_worker"):
+                                    superfunctional.index("SuperFunctional::print")]
+    assert worker_region.count("set_density_tolerance(density_tolerance_)") == 2
     assert 'digest.string("native-real-space-isa-context-v3")' in isa
     assert "digest.scalar(context.functional_density_tolerance())" in isa
     assert "V_potential()" not in factory[factory.index("FrozenResponseContext::create"):factory.index("ISAWeights::ISAWeights")]

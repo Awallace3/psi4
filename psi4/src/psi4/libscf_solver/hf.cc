@@ -149,6 +149,9 @@ ResponseFunctionalComponentState capture_functional_component(const std::shared_
 
 ResponseFunctionalState capture_functional_state(const std::shared_ptr<const SuperFunctional>& functional) {
     if (!functional) throw PSIEXCEPTION("SCF response provenance: superfunctional is null");
+    if (functional->needs_xc() &&
+        (!std::isfinite(functional->density_tolerance()) || !(functional->density_tolerance() > 0.0)))
+        throw PSIEXCEPTION("SCF response provenance: DFT functional density tolerance must be finite and positive");
     ResponseFunctionalState result;
     result.name = functional->name();
     for (const auto& component : functional->x_functionals())

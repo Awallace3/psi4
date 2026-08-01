@@ -174,6 +174,9 @@ std::shared_ptr<SuperFunctional> SuperFunctional::build_worker() const {
     sup->deriv_ = deriv_;
     sup->max_points_ = max_points_;
     sup->libxc_xc_func_ = libxc_xc_func_;
+    // Frozen response provenance requires the effective positive master cutoff
+    // to survive every worker/copy boundary, including component thresholds.
+    sup->set_density_tolerance(density_tolerance_);
     if (needs_vv10_) {
         sup->needs_vv10_ = true;
         sup->vv10_b_ = vv10_b_;
@@ -205,7 +208,7 @@ std::shared_ptr<SuperFunctional> SuperFunctional::build_response_copy() const {
     sup->c_alpha_ = c_alpha_;
     sup->c_ss_alpha_ = c_ss_alpha_;
     sup->c_os_alpha_ = c_os_alpha_;
-    sup->density_tolerance_ = density_tolerance_;
+    sup->set_density_tolerance(density_tolerance_);
     return sup;
 }
 void SuperFunctional::print(std::string out, int level) const {

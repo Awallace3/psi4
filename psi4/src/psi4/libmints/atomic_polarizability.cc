@@ -1132,8 +1132,8 @@ build_restricted_alda_functional(std::size_t max_points, bool include_correlatio
                                   double density_cutoff) {
     if (max_points == 0 || max_points > static_cast<std::size_t>(std::numeric_limits<int>::max()))
         throw PSIEXCEPTION("restricted ALDA kernel: invalid functional point capacity");
-    if (!std::isfinite(density_cutoff) || density_cutoff < 0.0)
-        throw PSIEXCEPTION("restricted ALDA kernel: frozen functional density tolerance is invalid");
+    if (!std::isfinite(density_cutoff) || !(density_cutoff > 0.0))
+        throw PSIEXCEPTION("restricted ALDA kernel: frozen functional density tolerance must be finite and positive");
     auto exchange = std::make_shared<LibXCFunctional>(kALDAX, true);
     auto correlation = std::make_shared<LibXCFunctional>(kALDAC, true);
     exchange->set_alpha(1.0);
@@ -1143,6 +1143,14 @@ build_restricted_alda_functional(std::size_t max_points, bool include_correlatio
     functional->add_x_functional(exchange);
     if (include_correlation) functional->add_c_functional(correlation);
     functional->set_density_tolerance(density_cutoff);
+    // RV skips total rho < cutoff, while LibXC suppresses each unpolarized spin
+    // channel at <= its internal threshold. Preserve the exact positive frozen
+    // tolerance on the dedicated SuperFunctional, but set only the component
+    // implementation threshold just below cutoff/2 so total rho == cutoff is
+    // evaluated at exactly rho. Production still explicitly skips rho < cutoff.
+    const double libxc_threshold = std::nextafter(0.5 * density_cutoff, 0.0);
+    exchange->set_density_cutoff(libxc_threshold);
+    correlation->set_density_cutoff(libxc_threshold);
     functional->set_max_points(static_cast<int>(max_points));
     functional->set_deriv(2);
     functional->allocate();
@@ -1168,14 +1176,16 @@ build_restricted_alda_functional(std::size_t max_points, bool include_correlatio
     return {std::move(functional), std::move(diagnostics)};
 }
 
+void require_restricted_alda_work_bound(std::size_t work_terms) {
+    if (work_terms > kRestrictedALDAMaxWorkTerms)
+        throw PSIEXCEPTION("restricted ALDA kernel: canonical-water total work bound exceeded");
+}
+
 double restricted_alda_policy_density(double density, double cutoff) {
     if (!std::isfinite(density))
         throw PSIEXCEPTION("restricted ALDA kernel: density must be finite");
-    if (cutoff == 0.0) {
-        if (density == 0.0)
-            throw PSIEXCEPTION("restricted ALDA kernel: zero density at zero cutoff cannot be evaluated safely");
-        if (density < 0.0) return std::numeric_limits<double>::min();
-    }
+    if (!std::isfinite(cutoff) || !(cutoff > 0.0))
+        throw PSIEXCEPTION("restricted ALDA kernel: density cutoff must be finite and positive");
     return density < cutoff ? cutoff : density;
 }
 
@@ -1220,35 +1230,47 @@ std::vector<std::pair<std::size_t, std::size_t>> make_restricted_alda_transition
     return transitions;
 }
 
-void validate_restricted_alda_grid(std::size_t nbf, std::size_t point_count,
-                                   const std::vector<double>& weights,
-                                   const std::vector<FrozenGridBlock>& blocks) {
-    const std::string prefix = "restricted ALDA kernel: ";
+// Allocation-free production preflight: only existing sealed storage is read.
+// Duplicate detection is deliberately deferred until after the resource gate.
+void preflight_restricted_alda_grid(std::size_t nbf, std::size_t point_count,
+                                    const std::vector<double>& weights,
+                                    const std::vector<FrozenGridBlock>& blocks) {
     if (nbf == 0 || point_count == 0 || weights.size() != point_count || blocks.empty())
-        throw PSIEXCEPTION(prefix + "sealed grid dimensions are inconsistent");
+        throw PSIEXCEPTION("restricted ALDA kernel: sealed grid dimensions are inconsistent");
     std::size_t expected_offset = 0;
-    std::vector<std::size_t> seen_generation(nbf, std::numeric_limits<std::size_t>::max());
-    std::size_t generation = 0;
     for (const auto& block : blocks) {
         if (block.point_offset != expected_offset || block.point_count == 0 ||
             expected_offset > point_count || block.point_count > point_count - expected_offset)
-            throw PSIEXCEPTION(prefix + "malformed sealed block offsets");
-        for (int function : block.functions_local_to_global) {
-            if (function < 0 || static_cast<std::size_t>(function) >= nbf ||
-                seen_generation[function] == generation)
-                throw PSIEXCEPTION(prefix + "malformed sealed local-to-global function map");
-            seen_generation[function] = generation;
-        }
-        ++generation;
-        if (block.functions_local_to_global.empty())
-            throw PSIEXCEPTION(prefix + "sealed block function map is empty");
+            throw PSIEXCEPTION("restricted ALDA kernel: malformed sealed block offsets");
+        if (block.functions_local_to_global.empty() || block.functions_local_to_global.size() > nbf)
+            throw PSIEXCEPTION("restricted ALDA kernel: sealed block function map is empty or oversized");
+        for (int function : block.functions_local_to_global)
+            if (function < 0 || static_cast<std::size_t>(function) >= nbf)
+                throw PSIEXCEPTION("restricted ALDA kernel: malformed sealed local-to-global function map");
         expected_offset += block.point_count;
     }
     if (expected_offset != point_count)
-        throw PSIEXCEPTION(prefix + "sealed block cardinality is inconsistent");
+        throw PSIEXCEPTION("restricted ALDA kernel: sealed block cardinality is inconsistent");
     for (double weight : weights)
         if (!std::isfinite(weight) || weight < 0.0)
-            throw PSIEXCEPTION(prefix + "sealed weights must be finite and nonnegative");
+            throw PSIEXCEPTION("restricted ALDA kernel: sealed weights must be finite and nonnegative");
+}
+
+// Called only after planning has reserved max(map size) * sizeof(int).
+void validate_restricted_alda_duplicate_maps(const std::vector<FrozenGridBlock>& blocks) {
+    for (const auto& block : blocks) {
+        auto ordered = block.functions_local_to_global;
+        std::sort(ordered.begin(), ordered.end());
+        if (std::adjacent_find(ordered.begin(), ordered.end()) != ordered.end())
+            throw PSIEXCEPTION("restricted ALDA kernel: malformed sealed local-to-global function map");
+    }
+}
+
+void validate_restricted_alda_grid(std::size_t nbf, std::size_t point_count,
+                                   const std::vector<double>& weights,
+                                   const std::vector<FrozenGridBlock>& blocks) {
+    preflight_restricted_alda_grid(nbf, point_count, weights, blocks);
+    validate_restricted_alda_duplicate_maps(blocks);
 }
 
 std::shared_ptr<CompleteBlockOPoints> make_complete_alda_block(
@@ -1281,8 +1303,8 @@ SharedMatrix contract_restricted_alda(const std::vector<double>& weights,
                                       const std::vector<double>& fxc,
                                       double density_cutoff) {
     const std::string prefix = "restricted ALDA contraction: ";
-    if (!std::isfinite(density_cutoff) || density_cutoff < 0.0)
-        throw PSIEXCEPTION(prefix + "density cutoff must be finite and nonnegative");
+    if (!std::isfinite(density_cutoff) || !(density_cutoff > 0.0))
+        throw PSIEXCEPTION(prefix + "density cutoff must be finite and positive");
     if (transition_values.nirrep() != 1 || transition_values.nrow() != weights.size() ||
         transition_values.ncol() == 0 || densities.size() != weights.size() || fxc.size() != weights.size())
         throw PSIEXCEPTION(prefix + "point arrays have inconsistent dimensions");
@@ -1326,8 +1348,8 @@ RestrictedALDAPlan plan_restricted_alda(std::size_t nbf, std::size_t nocc,
     const std::string prefix = "restricted ALDA kernel: ";
     if (nbf == 0 || nocc == 0 || nvir == 0 || point_count == 0 || blocks.empty())
         throw PSIEXCEPTION(prefix + "plan dimensions/block metadata must be nonzero");
-    if (!std::isfinite(density_cutoff) || density_cutoff < 0.0)
-        throw PSIEXCEPTION(prefix + "frozen functional density tolerance is invalid");
+    if (!std::isfinite(density_cutoff) || !(density_cutoff > 0.0))
+        throw PSIEXCEPTION(prefix + "frozen functional density tolerance must be finite and positive");
     if (nbf > static_cast<std::size_t>(std::numeric_limits<int>::max()))
         throw PSIEXCEPTION(prefix + "plan dimensions exceed native integer limits");
     const auto nmo = checked_c1_sum(nocc, nvir, prefix);
@@ -1341,7 +1363,7 @@ RestrictedALDAPlan plan_restricted_alda(std::size_t nbf, std::size_t nocc,
                            std::to_string(kRestrictedALDAMaxNOV) + " occupied-virtual pairs");
     const auto nov_square = checked_c1_product(nov, nov, prefix);
 
-    std::size_t covered_points = 0, max_block_points = 0, total_map_entries = 0;
+    std::size_t covered_points = 0, max_block_points = 0, max_map_entries = 0, total_map_entries = 0;
     std::size_t density_work = 0, mo_transition_work = 0, ao_work = 0, libxc_work = 0, dgemm_work = 0;
     for (const auto& block : blocks) {
         const auto points = block.point_count;
@@ -1352,6 +1374,7 @@ RestrictedALDAPlan plan_restricted_alda(std::size_t nbf, std::size_t nocc,
         covered_points = checked_c1_sum(covered_points, points, prefix);
         total_map_entries = checked_c1_sum(total_map_entries, map_size, prefix);
         max_block_points = std::max(max_block_points, points);
+        max_map_entries = std::max(max_map_entries, map_size);
         density_work = checked_c1_sum(
             density_work, checked_c1_product(points, checked_c1_product(map_size, map_size, prefix), prefix), prefix);
         const auto mo_bound = std::max(nmo, nov);
@@ -1369,8 +1392,7 @@ RestrictedALDAPlan plan_restricted_alda(std::size_t nbf, std::size_t nocc,
     std::size_t work_terms = 0;
     for (const auto value : {density_work, mo_transition_work, ao_work, libxc_work, dgemm_work})
         work_terms = checked_c1_sum(work_terms, value, prefix);
-    if (work_terms > kRestrictedALDAMaxWorkTerms)
-        throw PSIEXCEPTION(prefix + "canonical-water total work bound exceeded");
+    require_restricted_alda_work_bound(work_terms);
 
     const auto retained = checked_c1_product(nov_square, sizeof(double), prefix);
     const auto block_transition = checked_c1_product(
@@ -1396,13 +1418,14 @@ RestrictedALDAPlan plan_restricted_alda(std::size_t nbf, std::size_t nocc,
         metadata, checked_c1_product(checked_c1_product(2, nov, prefix), sizeof(std::size_t), prefix), prefix);
     metadata = checked_c1_sum(
         metadata, checked_c1_product(blocks.size(), sizeof(FrozenGridBlock), prefix), prefix);
+    const auto validation_scratch = checked_c1_product(max_map_entries, sizeof(int), prefix);
     // Fixed reserve for Matrix/Vector objects, LibXC/SuperFunctional state,
     // BasisExtents engines, maps, and allocator bookkeeping not modeled above.
     constexpr std::size_t conservative_overhead = 1024ULL * 1024ULL;
     std::size_t streaming = retained;
     for (const auto value : {block_transition, block_transition, block_mo, collocation,
                              coordinate_weight, density_kernel, functional_workspace,
-                             metadata, conservative_overhead})
+                             metadata, validation_scratch, conservative_overhead})
         streaming = checked_c1_sum(streaming, value, prefix);
     const auto reserved = memory_bytes / 2;
     if (streaming > reserved)
@@ -1435,6 +1458,7 @@ RestrictedALDAPlan plan_restricted_alda(std::size_t nbf, std::size_t nocc,
     plan.functional_workspace_bytes = functional_workspace;
     plan.point_scratch_bytes = point_scratch;
     plan.metadata_bytes = metadata;
+    plan.validation_scratch_bytes = validation_scratch;
     plan.conservative_overhead_bytes = conservative_overhead;
     plan.diagnostics_payload_bytes = diagnostic;
     plan.estimated_bytes = checked_c1_sum(streaming, diagnostic, prefix);
@@ -1457,6 +1481,11 @@ void validate_restricted_alda_grid_test_only(std::size_t nbf, std::size_t point_
                                              const std::vector<double>& weights,
                                              const std::vector<FrozenGridBlock>& blocks) {
     validate_restricted_alda_grid(nbf, point_count, weights, blocks);
+}
+
+std::size_t validate_restricted_alda_work_bound_test_only(std::size_t work_terms) {
+    require_restricted_alda_work_bound(work_terms);
+    return work_terms;
 }
 
 std::pair<std::vector<double>, RestrictedALDADiagnostics> evaluate_restricted_alda_fxc_test_only(
@@ -1507,8 +1536,8 @@ RestrictedALDAPrimitive construct_restricted_alda_kernel(
     if (npoints == 0 || npoints > std::numeric_limits<std::size_t>::max() / 3 ||
         context->grid_points().size() != 3 * npoints)
         throw PSIEXCEPTION(prefix + "sealed grid dimensions are inconsistent");
-    validate_restricted_alda_grid(static_cast<std::size_t>(nbf), npoints,
-                                  context->grid_weights(), context->grid_blocks());
+    preflight_restricted_alda_grid(static_cast<std::size_t>(nbf), npoints,
+                                   context->grid_weights(), context->grid_blocks());
     for (double coordinate : context->grid_points())
         if (!std::isfinite(coordinate)) throw PSIEXCEPTION(prefix + "sealed coordinates must be finite");
     // Hard gates precede every dense output, block-transition, or diagnostic allocation.
@@ -1516,6 +1545,9 @@ RestrictedALDAPrimitive construct_restricted_alda_kernel(
         static_cast<std::size_t>(nbf), counts.first, counts.second, npoints,
         context->grid_blocks(), Process::environment.get_memory(), retain_test_diagnostics,
         context->functional_density_tolerance());
+    // The copied/sorted per-block duplicate scratch is bounded by the gated
+    // validation_scratch_bytes; no nbf-sized seen vector is used.
+    validate_restricted_alda_duplicate_maps(context->grid_blocks());
     const auto max_block_points = plan.max_block_points;
     auto transitions = make_restricted_alda_transitions(*context, plan.nov);
     auto built = build_restricted_alda_functional(max_block_points, true, plan.density_cutoff);
@@ -1696,7 +1728,7 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
         throw PSIEXCEPTION("FrozenResponseContext: neutral precursor must be the same unshifted ground-state functional");
     }
     const double functional_density_tolerance = grac_seal.functional.density_tolerance;
-    if (!std::isfinite(functional_density_tolerance) || functional_density_tolerance < 0.0 ||
+    if (!std::isfinite(functional_density_tolerance) || !(functional_density_tolerance > 0.0) ||
         functional->density_tolerance() != functional_density_tolerance ||
         precursor_functional->density_tolerance() != functional_density_tolerance) {
         throw PSIEXCEPTION("FrozenResponseContext: functional density tolerance provenance is invalid");

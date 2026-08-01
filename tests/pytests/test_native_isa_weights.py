@@ -235,6 +235,7 @@ def frozen_h2o_context():
             "reference": "rhf",
             "dft_spherical_points": 50,
             "dft_radial_points": 12,
+            "dft_density_tolerance": 1.0e-12,
             "dft_grac_shift": 0.0,
         }
     )
@@ -259,11 +260,13 @@ def frozen_h2o_context():
         units angstrom
         """
     )
-    psi4.set_options({"reference": "uhf", "dft_grac_shift": 0.0})
+    psi4.set_options({"reference": "uhf", "dft_density_tolerance": 1.0e-12,
+                      "dft_grac_shift": 0.0})
     _, cation_wfn = psi4.energy("pbe0", molecule=cation, return_wfn=True)
     homo = max(precursor.epsilon_a_subset("SO", "OCC").to_array().ravel())
     shift = cation_wfn.energy() - precursor.energy() + homo
-    psi4.set_options({"reference": "rhf", "dft_grac_shift": shift})
+    psi4.set_options({"reference": "rhf", "dft_density_tolerance": 1.0e-12,
+                      "dft_grac_shift": shift})
     _, grac = psi4.energy("pbe0", molecule=neutral, return_wfn=True)
     psi4.set_options({"dft_grac_shift": 0.0})
     context = psi4.core._atomic_polarizability_make_frozen_response_context(
@@ -623,6 +626,9 @@ def test_restricted_alda_one_point_permutation_cutoff_and_failure_oracles():
                                     threshold_fxc, cutoff))
     assert threshold == pytest.approx(np.array([[12.0]]), abs=0.0)
 
+    with pytest.raises(RuntimeError, match=r"cutoff.*positive"):
+        contract([1.0], psi4.core.Matrix.from_array(np.ones((1, 1))), [0.5], [1.0], 0.0)
+
     for w, v, d, f, message in (
         ([-1.0], [[1.0]], [0.5], [1.0], r"weights.*nonnegative"),
         ([1.0], [[1.0]], [float("nan")], [1.0], r"density.*finite"),
@@ -675,6 +681,7 @@ def test_restricted_alda_plan_envelope_work_and_diagnostics_memory_gates():
             "functional_workspace_bytes"))
     assert production["block_mo_scratch_bytes"] > 0
     assert production["metadata_bytes"] > 0
+    assert production["validation_scratch_bytes"] == 100 * np.dtype(np.int32).itemsize
     assert production["density_cutoff"] == pytest.approx(plan_cutoff)
     with pytest.raises(RuntimeError, match=r"supported transition envelope"):
         estimate(100, 5, 103, [100], [10], 2**40, False, plan_cutoff)
@@ -689,8 +696,16 @@ def test_restricted_alda_plan_envelope_work_and_diagnostics_memory_gates():
         estimate(2**63, 2**63, 2, [10], [10], 2**64 - 1, False, plan_cutoff)
     with pytest.raises(RuntimeError, match=r"block metadata"):
         estimate(100, 5, 20, [10, 20], [10], 2**30, False, plan_cutoff)
+    with pytest.raises(RuntimeError, match=r"tolerance.*positive"):
+        estimate(100, 5, 20, [10], [10], 2**30, False, 0.0)
 
-    # Exact checked total-work boundary for nbf=1, nocc=nvir=1: seven terms/point.
+    validate_work = psi4.core._atomic_polarizability_test_validate_restricted_alda_work_bound
+    assert validate_work(production["max_work_terms"]) == production["max_work_terms"]
+    with pytest.raises(RuntimeError, match=r"work bound"):
+        validate_work(production["max_work_terms"] + 1)
+
+    # Dimension-derived work remains checked near the cap even though seven
+    # terms/point cannot represent every integer work count.
     max_points = production["max_work_terms"] // 7
     int_max = 2**31 - 1
     boundary_blocks = [int_max] * (max_points // int_max)
@@ -779,12 +794,15 @@ def test_restricted_alda_components_match_analytic_x_and_refined_vwn_potential_d
     above = np.nextafter(cutoff, math.inf)
     cutoff_values = evaluate([below, cutoff, above, -1.0e-16], True, cutoff)
     assert cutoff_values["fxc"][0] == 0.0
-    assert math.isfinite(cutoff_values["fxc"][1])
+    equality_x = -(1.0 / 3.0) * (3.0 / np.pi) ** (1.0 / 3.0) * cutoff ** (-2.0 / 3.0)
+    equality_vwn = _finite_difference_vwn_fxc(np.array([cutoff]), 1.0e-4, cutoff / 10.0)[0]
+    assert cutoff_values["fxc"][1] != 0.0
+    assert cutoff_values["fxc"][1] == pytest.approx(equality_x + equality_vwn,
+                                                       rel=2.0e-7, abs=2.0e-9)
     assert math.isfinite(cutoff_values["fxc"][2])
     assert cutoff_values["fxc"][3] == 0.0
-    assert evaluate([-1.0e-16], True, 0.0)["fxc"] == [0.0]
-    with pytest.raises(RuntimeError, match=r"zero density.*zero cutoff"):
-        evaluate([0.0], True, 0.0)
+    with pytest.raises(RuntimeError, match=r"tolerance.*positive"):
+        evaluate([cutoff], True, 0.0)
 
 
 def _direct_sto3g_ao_values(basis, coordinates):
@@ -916,3 +934,8 @@ def test_restricted_alda_source_guard_covers_component_factory_and_production():
     assert 'constexpr const char* kALDAX = "XC_LDA_X";' in source
     assert 'constexpr const char* kALDAC = "XC_LDA_C_VWN";' in source
     assert '"FROZEN_FUNCTIONAL_DENSITY_TOLERANCE"' in source
+    production = source[source.index("RestrictedALDAPrimitive construct_restricted_alda_kernel"):
+                        source.index("RestrictedALDACollocationTestResult")]
+    assert production.index("preflight_restricted_alda_grid") < production.index("plan_restricted_alda")
+    assert production.index("plan_restricted_alda") < production.index("validate_restricted_alda_duplicate_maps")
+    assert "seen_generation" not in source

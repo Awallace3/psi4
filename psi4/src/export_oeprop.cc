@@ -423,6 +423,7 @@ void export_oeprop(py::module &m) {
         values["functional_workspace_bytes"] = plan.functional_workspace_bytes;
         values["point_scratch_bytes"] = plan.point_scratch_bytes;
         values["metadata_bytes"] = plan.metadata_bytes;
+        values["validation_scratch_bytes"] = plan.validation_scratch_bytes;
         values["conservative_overhead_bytes"] = plan.conservative_overhead_bytes;
         values["diagnostics_payload_bytes"] = plan.diagnostics_payload_bytes;
         values["estimated_bytes"] = plan.estimated_bytes;
@@ -510,6 +511,8 @@ void export_oeprop(py::module &m) {
               values["ao_values"] = result.ao_values;
               return values;
           }, "context"_a);
+    m.def("_atomic_polarizability_test_validate_restricted_alda_work_bound",
+          &detail::validate_restricted_alda_work_bound_test_only, "work_terms"_a);
     m.def("_atomic_polarizability_estimate_restricted_alda",
           [alda_plan_dict](std::size_t nbf, std::size_t nocc, std::size_t nvir,
                            const std::vector<std::size_t>& block_point_counts,
