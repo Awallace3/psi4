@@ -90,7 +90,7 @@ def test_provider_uses_only_the_reviewed_native_response_route():
     body_start = source.index(
         "std::vector<SitePairResponse> ISAPolResponseProvider::compute_isapol_response"
     )
-    body_end = source.index("\nMatrix lw_graph_operator", body_start)
+    body_end = source.index("\nPointResponseData evaluate_point_response", body_start)
     body = _without_cpp_comments(source[body_start:body_end])
 
     for required in (
