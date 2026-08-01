@@ -85,23 +85,39 @@ def test_equality_constraint_copies_h2_parameters_exactly():
     assert result["constraint_rank"] == 1
     assert result["free_dimension"] == 1
     assert result["constraint_residual_norm"] < 2.0e-14
+    assert result["allocation_plan"] == {
+        "constraint_rows": 1,
+        "constraint_columns": 2,
+        "constraint_u_elements": 1,
+        "constraint_vt_elements": 4,
+        "fit_rows": 4,
+        "fit_columns": 1,
+        "fit_u_elements": 4,
+        "fit_vt_elements": 1,
+    }
 
 
-def test_dipole_only_anchor_penalty_changes_only_masked_variable_and_reports_policy_metadata():
+def test_dipole_only_anchor_penalty_changes_only_masked_variable_and_reports_actual_inputs():
     result = _solve(
         [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         [2.0, 2.0, 2.0],
+        weights=[4.0, 2.0, 0.5],
         anchor=[0.0, 1.0, 0.0],
         reference=[9.0, 0.0, -4.0],
         penalty=0.001,
     )
 
-    assert result["solution"] == pytest.approx([2.0, 2.0 / 1.001, 2.0], abs=3.0e-14)
+    assert result["solution"] == pytest.approx([2.0, 8.0 / 4.001, 2.0], abs=3.0e-14)
     assert result["anchor_residual_norm"] == pytest.approx(abs(result["solution"][1]), rel=2.0e-14)
-    assert result["options_metadata"] == {
-        "reference_anchor_coefficient": 0.001,
-        "reference_point_weight": 4.0,
+    assert result["input_metadata"] == {
+        "lambda": 0.001,
+        "row_weight_min": 0.5,
+        "row_weight_max": 4.0,
+        "row_weight_source": "caller_explicit",
     }
+    assert "reference_anchor_coefficient" not in result
+    assert "reference_point_weight" not in result
+    assert "options_metadata" not in result
 
 
 def test_cutoff_is_strictly_below_and_preserves_full_to_reduced_mapping():
@@ -131,13 +147,31 @@ def test_underdetermined_and_rank_deficient_objectives_are_rejected():
         _solve([[1.0, 2.0], [2.0, 4.0]], [1.0, 2.0])
 
 
-def test_condition_threshold_accepts_and_rejects_on_explicit_sides():
-    accepted = _solve(
-        [[1.0, 0.0], [0.0, 0.1]], [1.0, 0.1], maximum_condition_number=10.0 * (1.0 + 1.0e-12)
-    )
-    assert accepted["condition_number"] == pytest.approx(10.0, rel=2.0e-14)
+def test_condition_threshold_equality_and_adjacent_floats_have_exact_semantics():
+    arguments = ([[1.0, 0.0], [0.0, 0.1]], [1.0, 0.1])
+    measured = _solve(*arguments, maximum_condition_number=11.0)["condition_number"]
+    assert measured == pytest.approx(10.0, rel=2.0e-14)
+    assert _solve(*arguments, maximum_condition_number=measured)["condition_number"] == measured
+    assert _solve(
+        *arguments, maximum_condition_number=np.nextafter(measured, np.inf)
+    )["condition_number"] == measured
     with pytest.raises(Exception, match="condition number"):
-        _solve([[1.0, 0.0], [0.0, 0.1]], [1.0, 0.1], maximum_condition_number=9.999)
+        _solve(*arguments, maximum_condition_number=np.nextafter(measured, 0.0))
+
+
+def test_rank_cutoff_equality_and_adjacent_floats_are_deterministic():
+    arguments = ([[1.0, 0.0], [0.0, 1.0e-12]], [1.0, 1.0e-12])
+    with pytest.raises(Exception, match="rank deficient"):
+        _solve(*arguments, column_cutoff=0.0, rank_tolerance=1.0e-12,
+               maximum_condition_number=2.0e12)
+    accepted = _solve(*arguments, column_cutoff=0.0,
+                      rank_tolerance=np.nextafter(1.0e-12, 0.0),
+                      maximum_condition_number=2.0e12)
+    assert accepted["rank"] == 2
+    with pytest.raises(Exception, match="rank deficient"):
+        _solve(*arguments, column_cutoff=0.0,
+               rank_tolerance=np.nextafter(1.0e-12, np.inf),
+               maximum_condition_number=2.0e12)
 
 
 def test_zero_weight_rows_are_ignored_without_changing_solution():
@@ -194,13 +228,88 @@ def test_dependent_or_inconsistent_constraints_are_rejected_as_ambiguous():
                constraints=[[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], targets=[0.0, 0.0, 1.0])
 
 
-def test_source_uses_svd_without_normal_equation_solve():
+def test_combined_anchor_and_constraints_match_independent_numpy_kkt_oracle():
+    a = np.array([[2.0, -1.0, 0.5], [0.0, 3.0, 1.0], [1.0, 1.0, -2.0], [4.0, 0.5, 1.0]])
+    b = np.array([1.2, -0.7, 2.1, 0.3])
+    weights = np.array([2.0, 0.5, 3.0, 1.25])
+    diagonal = np.array([1.0, 0.0, 2.0])
+    reference = np.array([0.4, 8.0, -0.2])
+    penalty = 0.35
+    constraints = np.array([[1.0, -1.0, 0.0], [0.0, 1.0, 1.0]])
+    targets = np.array([0.25, -0.1])
+
+    augmented = np.vstack((weights[:, None] * a, np.sqrt(penalty) * np.diag(diagonal)))
+    augmented_target = np.concatenate((weights * b, np.sqrt(penalty) * diagonal * reference))
+    kkt = np.block([
+        [augmented.T @ augmented, constraints.T],
+        [constraints, np.zeros((len(targets), len(targets)))],
+    ])
+    rhs = np.concatenate((augmented.T @ augmented_target, targets))
+    expected = np.linalg.solve(kkt, rhs)[: a.shape[1]]
+
+    result = _solve(a.tolist(), b.tolist(), weights=weights.tolist(), anchor=diagonal.tolist(),
+                    reference=reference.tolist(), penalty=penalty,
+                    constraints=constraints.tolist(), targets=targets.tolist())
+    assert result["solution"] == pytest.approx(expected, rel=4.0e-13, abs=4.0e-13)
+
+
+def test_constraint_row_permutation_covariance():
+    constraints = np.array([[1.0, -1.0, 0.0], [0.0, 1.0, 1.0]])
+    targets = np.array([0.5, -0.25])
+    arguments = ([[2.0, 0.0, 1.0], [0.0, 3.0, -1.0], [1.0, 1.0, 2.0]], [1.0, 2.0, -1.0])
+    first = _solve(*arguments, constraints=constraints.tolist(), targets=targets.tolist())
+    order = [1, 0]
+    second = _solve(*arguments, constraints=constraints[order].tolist(), targets=targets[order].tolist())
+    assert second["solution"] == pytest.approx(first["solution"], abs=4.0e-13)
+
+
+def test_pruned_column_is_fixed_to_zero_before_constraint_elimination():
+    result = _solve(
+        [[0.5e-4, 0.0], [0.0, 1.0]], [7.0, 3.0],
+        constraints=[[1.0, 1.0]], targets=[2.0],
+    )
+    assert result["pruned_columns"] == [0]
+    assert result["solution"] == pytest.approx([0.0, 2.0], abs=2.0e-14)
+    assert result["constraint_residual_norm"] < 2.0e-14
+
+
+def test_large_tall_problem_uses_economy_allocation_plan():
+    rows = 20000
+    grid = np.linspace(-1.0, 1.0, rows)
+    a = np.column_stack((np.ones(rows), grid, grid * grid))
+    expected = np.array([0.75, -1.25, 2.5])
+    result = _solve(a.tolist(), (a @ expected).tolist(), column_cutoff=0.0)
+
+    assert result["solution"] == pytest.approx(expected, rel=2.0e-12, abs=2.0e-12)
+    plan = result["allocation_plan"]
+    assert plan["fit_rows"] == rows + 3
+    assert plan["fit_columns"] == 3
+    assert plan["fit_u_elements"] == (rows + 3) * 3
+    assert plan["fit_vt_elements"] == 9
+    assert plan["fit_u_elements"] < (rows + 3) ** 2
+
+
+def test_source_uses_only_allowlisted_economy_svd_without_normal_equations():
     source = (Path(__file__).parents[2] / "psi4/src/psi4/libmints/atomic_polarizability.cc").read_text()
-    start = source.index("ConstrainedLeastSquaresResult solve_constrained_least_squares")
+    start = source.index("struct LeastSquaresSVD")
     end = source.index("\n}  // namespace detail", start)
     body = source[start:end]
-    assert "C_DGESDD" in body
-    assert "C_DGESV(" not in body
-    assert "C_DPOSV(" not in body
-    assert re.search(r"(?:A|design)T[A-Za-z_]*\s*[*x]", body) is None
-    assert "normal_equation" not in body
+    lapack_calls = set(re.findall(r"C_(D[A-Z0-9]+)\s*\(", body))
+    assert lapack_calls == {"DGESVD", "DGESDD"}
+    for forbidden in (
+        "C_DGESV(", "C_DPOSV(", "C_DGETRF(", "C_DGETRI(",
+        "invert(", "inverse(", "normal_equation", "normal equation", "AtA", "gram_matrix",
+    ):
+        assert forbidden not in body
+    assert re.search(r"\brows\s*\*\s*rows\b", body) is None
+    assert re.search(r"(?:design|matrix|a)\s*\.?(?:transpose|T)\s*\([^)]*\)\s*[*@]", body,
+                     re.IGNORECASE) is None
+    assert re.search(r"(?:transpose|T)\s*\([^)]*\)\s*[*@]\s*(?:design|matrix|a)", body,
+                     re.IGNORECASE) is None
+    cpp_sources = source + (
+        Path(__file__).parents[2] / "psi4/src/export_oeprop.cc"
+    ).read_text() + (
+        Path(__file__).parents[2] / "psi4/src/psi4/libmints/atomic_polarizability.h"
+    ).read_text()
+    assert "reference_anchor_coefficient" not in cpp_sources
+    assert "reference_point_weight" not in cpp_sources

@@ -2219,6 +2219,129 @@ SitePairResponseContraction contract_site_pair_response(
     return result;
 }
 
+struct LeastSquaresSVD {
+    std::size_t rows{};
+    std::size_t columns{};
+    std::size_t economy_rank{};
+    std::vector<double> u;
+    std::vector<double> singular_values;
+    std::vector<double> vt;
+};
+
+std::size_t checked_lsq_elements(std::size_t first, std::size_t second, const char* name) {
+    if (second != 0 && first > std::numeric_limits<std::size_t>::max() / second)
+        throw PSIEXCEPTION(std::string("constrained least squares: ") + name + " allocation overflow");
+    return first * second;
+}
+
+void require_lapack_dimensions(std::size_t rows, std::size_t columns) {
+    if (rows == 0 || columns == 0 ||
+        rows > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        columns > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw PSIEXCEPTION("constrained least squares: invalid LAPACK SVD dimensions");
+}
+
+std::vector<double> lsq_column_major(const std::vector<double>& row_major,
+                                     std::size_t rows, std::size_t columns) {
+    const auto elements = checked_lsq_elements(rows, columns, "SVD input");
+    if (row_major.size() != elements)
+        throw PSIEXCEPTION("constrained least squares: internal SVD input dimension mismatch");
+    std::vector<double> result(elements);
+    for (std::size_t row = 0; row < rows; ++row)
+        for (std::size_t column = 0; column < columns; ++column)
+            result[column * rows + row] = row_major[row * columns + column];
+    return result;
+}
+
+/** Economy U plus full right singular vectors for equality null-space elimination. */
+LeastSquaresSVD constraint_null_space_svd(const std::vector<double>& row_major,
+                                           std::size_t rows, std::size_t columns) {
+    require_lapack_dimensions(rows, columns);
+    LeastSquaresSVD result;
+    result.rows = rows;
+    result.columns = columns;
+    result.economy_rank = std::min(rows, columns);
+    const auto u_elements = checked_lsq_elements(rows, result.economy_rank, "constraint U");
+    const auto vt_elements = checked_lsq_elements(columns, columns, "constraint VT");
+    auto values = lsq_column_major(row_major, rows, columns);
+    std::vector<double> column_major_u(u_elements);
+    std::vector<double> column_major_vt(vt_elements);
+    result.singular_values.resize(result.economy_rank);
+    double workspace_query = 0.0;
+    const int m = static_cast<int>(rows);
+    const int n = static_cast<int>(columns);
+    int info = C_DGESVD('S', 'A', m, n, values.data(), m, result.singular_values.data(),
+                        column_major_u.data(), m, column_major_vt.data(), n,
+                        &workspace_query, -1);
+    if (info != 0 || !std::isfinite(workspace_query) || workspace_query < 1.0 ||
+        workspace_query > static_cast<double>(std::numeric_limits<int>::max()))
+        throw PSIEXCEPTION("constrained least squares: constraint SVD workspace query failed");
+    const int workspace_size = static_cast<int>(std::ceil(workspace_query));
+    std::vector<double> workspace(static_cast<std::size_t>(workspace_size));
+    info = C_DGESVD('S', 'A', m, n, values.data(), m, result.singular_values.data(),
+                    column_major_u.data(), m, column_major_vt.data(), n,
+                    workspace.data(), workspace_size);
+    if (info != 0) throw PSIEXCEPTION("constrained least squares: constraint SVD failed to converge");
+    result.u.resize(u_elements);
+    result.vt.resize(vt_elements);
+    for (std::size_t row = 0; row < rows; ++row)
+        for (std::size_t column = 0; column < result.economy_rank; ++column)
+            result.u[row * result.economy_rank + column] = column_major_u[column * rows + row];
+    for (std::size_t row = 0; row < columns; ++row)
+        for (std::size_t column = 0; column < columns; ++column)
+            result.vt[row * columns + column] = column_major_vt[column * columns + row];
+    for (double value : result.singular_values)
+        if (!std::isfinite(value))
+            throw PSIEXCEPTION("constrained least squares: constraint SVD produced nonfinite diagnostics");
+    return result;
+}
+
+/** Economy divide-and-conquer SVD for the tall reduced augmented fit. */
+LeastSquaresSVD reduced_fit_svd(const std::vector<double>& row_major,
+                                std::size_t rows, std::size_t columns) {
+    require_lapack_dimensions(rows, columns);
+    LeastSquaresSVD result;
+    result.rows = rows;
+    result.columns = columns;
+    result.economy_rank = std::min(rows, columns);
+    const auto u_elements = checked_lsq_elements(rows, result.economy_rank, "fit U");
+    const auto vt_elements = checked_lsq_elements(result.economy_rank, columns, "fit VT");
+    const auto iwork_elements = checked_lsq_elements(8, result.economy_rank, "fit integer workspace");
+    auto values = lsq_column_major(row_major, rows, columns);
+    std::vector<double> column_major_u(u_elements);
+    std::vector<double> column_major_vt(vt_elements);
+    std::vector<int> integer_workspace(iwork_elements);
+    result.singular_values.resize(result.economy_rank);
+    double workspace_query = 0.0;
+    const int m = static_cast<int>(rows);
+    const int n = static_cast<int>(columns);
+    const int ldvt = static_cast<int>(result.economy_rank);
+    int info = C_DGESDD('S', m, n, values.data(), m, result.singular_values.data(),
+                        column_major_u.data(), m, column_major_vt.data(), ldvt,
+                        &workspace_query, -1, integer_workspace.data());
+    if (info != 0 || !std::isfinite(workspace_query) || workspace_query < 1.0 ||
+        workspace_query > static_cast<double>(std::numeric_limits<int>::max()))
+        throw PSIEXCEPTION("constrained least squares: fit SVD workspace query failed");
+    const int workspace_size = static_cast<int>(std::ceil(workspace_query));
+    std::vector<double> workspace(static_cast<std::size_t>(workspace_size));
+    info = C_DGESDD('S', m, n, values.data(), m, result.singular_values.data(),
+                    column_major_u.data(), m, column_major_vt.data(), ldvt,
+                    workspace.data(), workspace_size, integer_workspace.data());
+    if (info != 0) throw PSIEXCEPTION("constrained least squares: fit SVD failed to converge");
+    result.u.resize(u_elements);
+    result.vt.resize(vt_elements);
+    for (std::size_t row = 0; row < rows; ++row)
+        for (std::size_t column = 0; column < result.economy_rank; ++column)
+            result.u[row * result.economy_rank + column] = column_major_u[column * rows + row];
+    for (std::size_t row = 0; row < result.economy_rank; ++row)
+        for (std::size_t column = 0; column < columns; ++column)
+            result.vt[row * columns + column] = column_major_vt[column * result.economy_rank + row];
+    for (double value : result.singular_values)
+        if (!std::isfinite(value))
+            throw PSIEXCEPTION("constrained least squares: fit SVD produced nonfinite diagnostics");
+    return result;
+}
+
 ConstrainedLeastSquaresResult solve_constrained_least_squares(
     const Matrix& design, const std::vector<double>& observations,
     const std::vector<double>& row_weights, double lambda,
@@ -2244,10 +2367,6 @@ ConstrainedLeastSquaresResult solve_constrained_least_squares(
         !std::isfinite(options.rank_tolerance) || options.rank_tolerance <= 0.0 ||
         options.rank_tolerance >= 1.0)
         throw PSIEXCEPTION(prefix + "cutoff and numerical thresholds are invalid");
-    if (!std::isfinite(options.reference_anchor_coefficient) || options.reference_anchor_coefficient < 0.0 ||
-        !std::isfinite(options.reference_point_weight) || options.reference_point_weight < 0.0)
-        throw PSIEXCEPTION(prefix + "reference policy metadata must be finite and nonnegative");
-
     const auto require_finite = [&prefix](double value, const char* name) {
         if (!std::isfinite(value)) throw PSIEXCEPTION(prefix + name + " must contain only finite values");
     };
@@ -2272,7 +2391,11 @@ ConstrainedLeastSquaresResult solve_constrained_least_squares(
     }
 
     ConstrainedLeastSquaresResult pending;
-    pending.options = options;
+    pending.lambda = lambda;
+    const auto weight_bounds = std::minmax_element(row_weights.begin(), row_weights.end());
+    pending.row_weight_min = *weight_bounds.first;
+    pending.row_weight_max = *weight_bounds.second;
+    pending.row_weight_source = "caller_explicit";
     pending.full_to_reduced.assign(column_count, -1);
     pending.column_weighted_norms.assign(column_count, 0.0);
     for (std::size_t column = 0; column < column_count; ++column) {
@@ -2292,55 +2415,6 @@ ConstrainedLeastSquaresResult solve_constrained_least_squares(
     }
     const std::size_t reduced_count = pending.kept_columns.size();
 
-    struct SVD {
-        std::vector<double> u;
-        std::vector<double> singular_values;
-        std::vector<double> vt;
-    };
-    const auto direct_svd = [&prefix](std::vector<double> values, std::size_t rows,
-                                      std::size_t columns) {
-        SVD result;
-        result.u.resize(rows * rows);
-        result.singular_values.resize(std::min(rows, columns));
-        result.vt.resize(columns * columns);
-        if (rows == 0 || columns == 0) return result;
-        if (rows > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
-            columns > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-            throw PSIEXCEPTION(prefix + "matrix dimensions exceed LAPACK integer range");
-        const int m = static_cast<int>(rows);
-        const int n = static_cast<int>(columns);
-        std::vector<double> column_major_values(rows * columns);
-        for (std::size_t row = 0; row < rows; ++row)
-            for (std::size_t column = 0; column < columns; ++column)
-                column_major_values[column * rows + row] = values[row * columns + column];
-        std::vector<double> column_major_u(rows * rows);
-        std::vector<double> column_major_vt(columns * columns);
-        std::vector<int> integer_workspace(8 * std::min(rows, columns));
-        double workspace_query = 0.0;
-        int info = C_DGESDD('A', m, n, column_major_values.data(), m,
-                            result.singular_values.data(), column_major_u.data(), m,
-                            column_major_vt.data(), n, &workspace_query, -1,
-                            integer_workspace.data());
-        if (info != 0 || !std::isfinite(workspace_query) || workspace_query < 1.0 ||
-            workspace_query > static_cast<double>(std::numeric_limits<int>::max()))
-            throw PSIEXCEPTION(prefix + "SVD workspace query failed");
-        const int workspace_size = static_cast<int>(std::ceil(workspace_query));
-        std::vector<double> workspace(static_cast<std::size_t>(workspace_size));
-        info = C_DGESDD('A', m, n, column_major_values.data(), m,
-                        result.singular_values.data(), column_major_u.data(), m,
-                        column_major_vt.data(), n, workspace.data(), workspace_size,
-                        integer_workspace.data());
-        if (info != 0) throw PSIEXCEPTION(prefix + "SVD failed to converge");
-        for (std::size_t row = 0; row < rows; ++row)
-            for (std::size_t column = 0; column < rows; ++column)
-                result.u[row * rows + column] = column_major_u[column * rows + row];
-        for (std::size_t row = 0; row < columns; ++row)
-            for (std::size_t column = 0; column < columns; ++column)
-                result.vt[row * columns + column] = column_major_vt[column * columns + row];
-        for (double value : result.singular_values)
-            if (!std::isfinite(value)) throw PSIEXCEPTION(prefix + "SVD produced nonfinite diagnostics");
-        return result;
-    };
     const auto numerical_rank = [&options](const std::vector<double>& singular_values) {
         if (singular_values.empty() || singular_values.front() == 0.0) return std::size_t{0};
         const double threshold = options.rank_tolerance * singular_values.front();
@@ -2367,12 +2441,18 @@ ConstrainedLeastSquaresResult solve_constrained_least_squares(
             for (std::size_t column = 0; column < reduced_count; ++column)
                 reduced_constraints[row * reduced_count + column] =
                     constraints(row, pending.kept_columns[column]);
-        const auto constraint_svd = direct_svd(reduced_constraints, constraint_count, reduced_count);
+        const auto constraint_svd = constraint_null_space_svd(
+            reduced_constraints, constraint_count, reduced_count);
+        pending.allocation_plan.constraint_rows = constraint_count;
+        pending.allocation_plan.constraint_columns = reduced_count;
+        pending.allocation_plan.constraint_u_elements = constraint_svd.u.size();
+        pending.allocation_plan.constraint_vt_elements = constraint_svd.vt.size();
         constraint_rank = numerical_rank(constraint_svd.singular_values);
         for (std::size_t mode = 0; mode < constraint_rank; ++mode) {
             double projection = 0.0;
             for (std::size_t row = 0; row < constraint_count; ++row)
-                projection += constraint_svd.u[row * constraint_count + mode] * constraint_targets[row];
+                projection += constraint_svd.u[row * constraint_svd.economy_rank + mode] *
+                              constraint_targets[row];
             projection /= constraint_svd.singular_values[mode];
             for (std::size_t column = 0; column < reduced_count; ++column)
                 particular[column] += constraint_svd.vt[mode * reduced_count + column] * projection;
@@ -2433,7 +2513,12 @@ ConstrainedLeastSquaresResult solve_constrained_least_squares(
             if (!std::isfinite(value)) throw PSIEXCEPTION(prefix + "augmented design overflowed");
         for (double value : reduced_target)
             if (!std::isfinite(value)) throw PSIEXCEPTION(prefix + "augmented target overflowed");
-        const auto fit_svd = direct_svd(reduced_design, augmented_rows, pending.free_dimension);
+        const auto fit_svd = reduced_fit_svd(
+            reduced_design, augmented_rows, pending.free_dimension);
+        pending.allocation_plan.fit_rows = augmented_rows;
+        pending.allocation_plan.fit_columns = pending.free_dimension;
+        pending.allocation_plan.fit_u_elements = fit_svd.u.size();
+        pending.allocation_plan.fit_vt_elements = fit_svd.vt.size();
         pending.singular_values = fit_svd.singular_values;
         pending.rank = numerical_rank(pending.singular_values);
         if (pending.rank != pending.free_dimension)
@@ -2447,7 +2532,7 @@ ConstrainedLeastSquaresResult solve_constrained_least_squares(
         for (std::size_t mode = 0; mode < pending.free_dimension; ++mode) {
             double projection = 0.0;
             for (std::size_t row = 0; row < augmented_rows; ++row)
-                projection += fit_svd.u[row * augmented_rows + mode] * reduced_target[row];
+                projection += fit_svd.u[row * fit_svd.economy_rank + mode] * reduced_target[row];
             projection /= pending.singular_values[mode];
             for (std::size_t column = 0; column < pending.free_dimension; ++column)
                 free_solution[column] += fit_svd.vt[mode * pending.free_dimension + column] * projection;

@@ -136,19 +136,26 @@ void export_oeprop(py::module &m) {
                       options.maximum_condition_number = entry.second.cast<double>();
                   else if (key == "rank_tolerance")
                       options.rank_tolerance = entry.second.cast<double>();
-                  else if (key == "reference_anchor_coefficient")
-                      options.reference_anchor_coefficient = entry.second.cast<double>();
-                  else if (key == "reference_point_weight")
-                      options.reference_point_weight = entry.second.cast<double>();
                   else
                       throw PSIEXCEPTION("constrained least squares: unknown option '" + key + "'");
               }
               const auto result = detail::solve_constrained_least_squares(
                   design, observations, row_weights, lambda, diagonal_anchor, reference,
                   constraints, constraint_targets, options);
-              py::dict metadata;
-              metadata["reference_anchor_coefficient"] = result.options.reference_anchor_coefficient;
-              metadata["reference_point_weight"] = result.options.reference_point_weight;
+              py::dict input_metadata;
+              input_metadata["lambda"] = result.lambda;
+              input_metadata["row_weight_min"] = result.row_weight_min;
+              input_metadata["row_weight_max"] = result.row_weight_max;
+              input_metadata["row_weight_source"] = result.row_weight_source;
+              py::dict allocation_plan;
+              allocation_plan["constraint_rows"] = result.allocation_plan.constraint_rows;
+              allocation_plan["constraint_columns"] = result.allocation_plan.constraint_columns;
+              allocation_plan["constraint_u_elements"] = result.allocation_plan.constraint_u_elements;
+              allocation_plan["constraint_vt_elements"] = result.allocation_plan.constraint_vt_elements;
+              allocation_plan["fit_rows"] = result.allocation_plan.fit_rows;
+              allocation_plan["fit_columns"] = result.allocation_plan.fit_columns;
+              allocation_plan["fit_u_elements"] = result.allocation_plan.fit_u_elements;
+              allocation_plan["fit_vt_elements"] = result.allocation_plan.fit_vt_elements;
               py::dict values;
               values["solution"] = result.solution;
               values["kept_columns"] = result.kept_columns;
@@ -164,7 +171,8 @@ void export_oeprop(py::module &m) {
               values["anchor_residual_norm"] = result.anchor_residual_norm;
               values["constraint_residual_norm"] = result.constraint_residual_norm;
               values["objective_residual_norm"] = result.objective_residual_norm;
-              values["options_metadata"] = std::move(metadata);
+              values["input_metadata"] = std::move(input_metadata);
+              values["allocation_plan"] = std::move(allocation_plan);
               return values;
           },
           "design"_a, "observations"_a, "row_weights"_a, "lambda"_a,

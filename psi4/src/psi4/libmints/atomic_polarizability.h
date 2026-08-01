@@ -637,9 +637,18 @@ struct ConstrainedLeastSquaresOptions {
     bool prune_below_cutoff{true};
     double maximum_condition_number{1.0e12};
     double rank_tolerance{1.0e-12};
-    /** Reference PFIT metadata; the pure solver consumes diagonal_anchor explicitly. */
-    double reference_anchor_coefficient{0.001};
-    double reference_point_weight{4.0};
+};
+
+/** Auditable economy-SVD allocation counts, in scalar elements. */
+struct ConstrainedLeastSquaresAllocationPlan {
+    std::size_t constraint_rows{};
+    std::size_t constraint_columns{};
+    std::size_t constraint_u_elements{};
+    std::size_t constraint_vt_elements{};
+    std::size_t fit_rows{};
+    std::size_t fit_columns{};
+    std::size_t fit_u_elements{};
+    std::size_t fit_vt_elements{};
 };
 
 /** Complete solution and diagnostics; constructed only after every gate succeeds. */
@@ -658,7 +667,11 @@ struct ConstrainedLeastSquaresResult {
     double anchor_residual_norm{};
     double constraint_residual_norm{};
     double objective_residual_norm{};
-    ConstrainedLeastSquaresOptions options;
+    double lambda{};
+    double row_weight_min{};
+    double row_weight_max{};
+    std::string row_weight_source;
+    ConstrainedLeastSquaresAllocationPlan allocation_plan;
 };
 
 /**
