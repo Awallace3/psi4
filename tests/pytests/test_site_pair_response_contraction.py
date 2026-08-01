@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -304,6 +306,40 @@ def test_symmetry_validator_rejects_mismatched_or_nonfinite_per_rhs_data():
 def test_no_python_binding_can_fabricate_or_mutate_a_production_response_carrier():
     assert not hasattr(psi4.core, "DenseRestrictedResponse")
     assert not hasattr(psi4.core, "_atomic_polarizability_test_contract_site_pair_response")
+    header = (
+        Path(__file__).resolve().parents[2]
+        / "psi4/src/psi4/libmints/atomic_polarizability.h"
+    ).read_text()
+    assert "const Matrix& P()" not in header
+    assert "const Matrix& Q()" not in header
+    assert "SharedMatrix P_clone() const" in header
+    assert "SharedMatrix Q_clone() const" in header
+    implementation = (
+        Path(__file__).resolve().parents[2]
+        / "psi4/src/psi4/libmints/atomic_polarizability.cc"
+    ).read_text()
+    contraction_start = implementation.index(
+        "SitePairResponseContraction contract_site_pair_response"
+    )
+    contraction = implementation[contraction_start:]
+    assert contraction.index("plan_site_pair_response_contraction") < contraction.index(
+        "response.P_clone()"
+    )
+
+
+def test_mutating_exported_response_matrices_cannot_change_later_contraction():
+    projection = np.arange(32, dtype=float).reshape(16, 2) / 17.0
+    h1 = np.array([[2.0, 0.1], [0.1, 1.7]])
+    h2 = np.array([[1.4, -0.2], [-0.2, 2.1]])
+    first_values, first = _solve_and_contract(projection, h1, h2, 0.3)
+
+    np.asarray(first["P"])[:] = 1.0e6
+    np.asarray(first["Q"])[:] = -1.0e6
+    second_values, second = _solve_and_contract(projection, h1, h2, 0.3)
+
+    np.testing.assert_array_equal(second_values, first_values)
+    assert np.max(np.abs(np.asarray(second["P"]))) < 1.0
+    assert np.max(np.abs(np.asarray(second["Q"]))) < 1.0
 
 
 def test_plan_exact_incremental_allocation_arithmetic_and_success_boundary():
@@ -312,7 +348,7 @@ def test_plan_exact_incremental_allocation_arithmetic_and_success_boundary():
     small = estimate(2, 3, 1 << 30)
     assert small["component_count"] == 32
     assert small["output_bytes"] == 32 * 32 * 8
-    assert small["scratch_bytes"] == (32 * 3 + 3 * 3) * 8
+    assert small["scratch_bytes"] == (32 * 3 + 2 * 3 * 3) * 8
     assert small["estimated_bytes"] == small["output_bytes"] + small["scratch_bytes"]
     assert small["work_terms"] == 32 * 3 * 3 + 32 * 32 * 3
     assert small["memory_semantics"] == (
@@ -326,8 +362,8 @@ def test_plan_exact_incremental_allocation_arithmetic_and_success_boundary():
     boundary = estimate(64, 512, (1 << 64) - 1)
     assert boundary["component_count"] == 1024
     assert boundary["output_bytes"] == 1024 * 1024 * 8
-    assert boundary["scratch_bytes"] == (1024 * 512 + 512 * 512) * 8
-    assert boundary["estimated_bytes"] == 14 * 1024 * 1024
+    assert boundary["scratch_bytes"] == (1024 * 512 + 2 * 512 * 512) * 8
+    assert boundary["estimated_bytes"] == 16 * 1024 * 1024
     assert boundary["work_terms"] == 805306368
 
 

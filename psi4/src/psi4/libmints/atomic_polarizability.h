@@ -69,8 +69,9 @@ class DenseRestrictedResponse {
     DenseRestrictedResponse(const DenseRestrictedResponse&) = default;
     DenseRestrictedResponse& operator=(const DenseRestrictedResponse&) = default;
 
-    const Matrix& P() const { return *P_; }
-    const Matrix& Q() const { return *Q_; }
+    SharedMatrix P_clone() const;
+    SharedMatrix Q_clone() const;
+    std::size_t transition_count() const;
     double reciprocal_condition() const { return reciprocal_condition_; }
     double reciprocal_pivot_growth() const { return reciprocal_pivot_growth_; }
     const std::vector<double>& forward_error() const { return forward_error_; }

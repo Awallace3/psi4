@@ -123,8 +123,8 @@ void export_oeprop(py::module &m) {
           [](const Matrix& H1, const Matrix& H2, double omega, const Matrix& rhs) {
               const auto result = detail::solve_dense_restricted_response(H1, H2, omega, rhs);
               py::dict values;
-              values["P"] = result.P().clone();
-              values["Q"] = result.Q().clone();
+              values["P"] = result.P_clone();
+              values["Q"] = result.Q_clone();
               values["reciprocal_condition"] = result.reciprocal_condition();
               values["reciprocal_pivot_growth"] = result.reciprocal_pivot_growth();
               values["forward_error"] = result.forward_error();
@@ -629,8 +629,8 @@ void export_oeprop(py::module &m) {
                   H1, H2, omega, identity);
               auto result = site_pair_contraction_result_dict(
                   detail::contract_site_pair_response(site_count, projection, response));
-              result["P"] = response.P().clone();
-              result["Q"] = response.Q().clone();
+              result["P"] = response.P_clone();
+              result["Q"] = response.Q_clone();
               result["reciprocal_condition"] = response.reciprocal_condition();
               result["reciprocal_pivot_growth"] = response.reciprocal_pivot_growth();
               result["forward_error"] = response.forward_error();

@@ -629,6 +629,12 @@ detail::DenseRestrictedResponse::DenseRestrictedResponse(
       scaled_residual_(std::move(scaled_residual)),
       solution_column_scales_(std::move(solution_column_scales)) {}
 
+SharedMatrix detail::DenseRestrictedResponse::P_clone() const { return P_->clone(); }
+SharedMatrix detail::DenseRestrictedResponse::Q_clone() const { return Q_->clone(); }
+std::size_t detail::DenseRestrictedResponse::transition_count() const {
+    return static_cast<std::size_t>(P_->nrow());
+}
+
 detail::DenseRestrictedResponse detail::solve_dense_restricted_response(
     const Matrix& H1, const Matrix& H2, double omega, const Matrix& rhs) {
     require_dense_response_operator(H1, "H1");
@@ -1850,8 +1856,10 @@ SitePairResponseContractionPlan plan_site_pair_response_contraction(
         checked_c1_product(component_count, transition_count, prefix);
     const auto response_map_elements =
         checked_c1_product(transition_count, transition_count, prefix);
+    const auto response_map_scratch_elements =
+        checked_c1_product(2, response_map_elements, prefix);
     const auto scratch_elements =
-        checked_c1_sum(projected_response_elements, response_map_elements, prefix);
+        checked_c1_sum(projected_response_elements, response_map_scratch_elements, prefix);
     const auto output_bytes = checked_c1_product(output_elements, sizeof(double), prefix);
     const auto scratch_bytes = checked_c1_product(scratch_elements, sizeof(double), prefix);
     const auto estimated_bytes = checked_c1_sum(output_bytes, scratch_bytes, prefix);
@@ -1953,16 +1961,16 @@ ResponseMapSymmetryDiagnostics analyze_response_map_data(
 }
 
 ResponseMapSymmetryDiagnostics analyze_response_map(
-    const DenseRestrictedResponse& response) {
+    const DenseRestrictedResponse& response, const Matrix& response_map) {
     const std::string prefix = "site-pair response contraction: ";
     validate_dense_response_diagnostics(
         response.reciprocal_condition(), response.reciprocal_pivot_growth(),
         response.forward_error(), response.backward_error(), response.scaled_residual());
-    const auto computed_scales = response_solution_column_scales(
-        response.P(), response.Q(), prefix);
-    if (computed_scales != response.solution_column_scales())
-        throw PSIEXCEPTION(prefix + "stored response-map solution scales are inconsistent");
-    return analyze_response_map_data(response.P(), response.forward_error(),
+    if (response_map.nirrep() != 1 || response_map.nrow() <= 0 ||
+        response_map.nrow() != response_map.ncol() ||
+        static_cast<std::size_t>(response_map.nrow()) != response.transition_count())
+        throw PSIEXCEPTION(prefix + "dense response carrier dimensions are inconsistent");
+    return analyze_response_map_data(response_map, response.forward_error(),
                                      response.solution_column_scales(), prefix);
 }
 }  // namespace
@@ -1985,20 +1993,22 @@ SitePairResponseContraction contract_site_pair_response(
     if (site_count == 0) throw PSIEXCEPTION(prefix + "site count must be nonzero");
     if (projection.nirrep() != 1 || projection.nrow() <= 0 || projection.ncol() <= 0)
         throw PSIEXCEPTION(prefix + "input dimensions are inconsistent");
-    const auto symmetry = analyze_response_map(response);
-    const auto& response_map = response.P();
     const auto transition_count = static_cast<std::size_t>(projection.ncol());
     const auto plan = plan_site_pair_response_contraction(
         site_count, transition_count, Process::environment.get_memory());
     if (static_cast<std::size_t>(projection.nrow()) != plan.component_count)
         throw PSIEXCEPTION(prefix + "projection dimensions do not match the site count");
-    if (response_map.nrow() != projection.ncol())
+    if (response.transition_count() != transition_count)
         throw PSIEXCEPTION(prefix + "response-map and projection dimensions are inconsistent");
     for (int row = 0; row < projection.nrow(); ++row)
         for (int transition = 0; transition < projection.ncol(); ++transition)
             if (!std::isfinite(projection(row, transition)))
                 throw PSIEXCEPTION(prefix + "projection must contain only finite values");
 
+    // Resource planning and caller projection checks precede the detached P copy.
+    auto response_map_copy = response.P_clone();
+    const auto& response_map = *response_map_copy;
+    const auto symmetry = analyze_response_map(response, response_map);
     auto symmetric_response_map = std::make_shared<Matrix>(response_map.nrow(), response_map.ncol());
     for (int row = 0; row < response_map.nrow(); ++row) {
         (*symmetric_response_map)(row, row) = response_map(row, row);
