@@ -208,12 +208,23 @@ void export_oeprop(py::module &m) {
         values["transition_count"] = plan.transition_count;
         values["point_count"] = plan.point_count;
         values["max_point_count"] = plan.max_point_count;
+        values["max_frequency_count"] = plan.max_frequency_count;
         values["configured_memory_bytes"] = plan.configured_memory_bytes;
         values["reserved_memory_bytes"] = plan.reserved_memory_bytes;
         values["ao_matrix_bytes"] = plan.ao_matrix_bytes;
         values["transition_potential_bytes"] = plan.transition_potential_bytes;
         values["output_bytes"] = plan.output_bytes;
         values["output_clone_bytes"] = plan.output_clone_bytes;
+        values["retained_frequency_bytes"] = plan.retained_frequency_bytes;
+        values["retained_points_bytes"] = plan.retained_points_bytes;
+        values["native_diagnostic_record_bytes"] = plan.native_diagnostic_record_bytes;
+        values["native_diagnostics_bytes"] = plan.native_diagnostics_bytes;
+        values["container_overhead_bytes"] = plan.container_overhead_bytes;
+        values["retained_metadata_bytes"] = plan.retained_metadata_bytes;
+        values["python_scalar_diagnostic_overhead_bytes"] =
+            plan.python_scalar_diagnostic_overhead_bytes;
+        values["python_metadata_overhead_bytes"] = plan.python_metadata_overhead_bytes;
+        values["python_export_overhead_bytes"] = plan.python_export_overhead_bytes;
         values["dense_solve_peak_bytes"] = plan.dense_solve_peak_bytes;
         values["scratch_bytes"] = plan.scratch_bytes;
         values["c1_plan_estimated_bytes"] = plan.c1_plan_estimated_bytes;
@@ -280,16 +291,10 @@ void export_oeprop(py::module &m) {
                 values["frequency"] = diagnostic.frequency;
                 values["reciprocal_condition"] = diagnostic.reciprocal_condition;
                 values["reciprocal_pivot_growth"] = diagnostic.reciprocal_pivot_growth;
-                values["forward_error"] = diagnostic.forward_error;
-                values["backward_error"] = diagnostic.backward_error;
-                values["scaled_residual"] = diagnostic.scaled_residual;
-                values["solution_column_scales"] = diagnostic.solution_column_scales;
-                values["max_forward_error"] = *std::max_element(
-                    diagnostic.forward_error.begin(), diagnostic.forward_error.end());
-                values["max_backward_error"] = *std::max_element(
-                    diagnostic.backward_error.begin(), diagnostic.backward_error.end());
-                values["max_scaled_residual"] = *std::max_element(
-                    diagnostic.scaled_residual.begin(), diagnostic.scaled_residual.end());
+                values["max_forward_error"] = diagnostic.max_forward_error;
+                values["max_backward_error"] = diagnostic.max_backward_error;
+                values["max_scaled_residual"] = diagnostic.max_scaled_residual;
+                values["max_solution_scale"] = diagnostic.max_solution_scale;
                 values["allowed_antisymmetry"] = diagnostic.allowed_antisymmetry;
                 values["symmetry_residual"] = diagnostic.symmetry_residual;
                 values["max_normalized_antisymmetry"] =

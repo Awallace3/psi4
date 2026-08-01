@@ -849,9 +849,13 @@ PointResponsePlan plan_point_response(
     std::size_t memory_bytes) {
     const std::string prefix = "point response: ";
     constexpr std::size_t max_point_count = 500;
+    constexpr std::size_t max_frequency_count = 64;
     constexpr std::size_t max_transition_count = 512;
     if (frequency_count == 0)
         throw PSIEXCEPTION(prefix + "frequency list requires at least one value");
+    if (frequency_count > max_frequency_count)
+        throw PSIEXCEPTION(prefix +
+                           "frequency count exceeds the canonical 64-frequency envelope");
     if (nbf == 0 || nocc == 0 || nvir == 0)
         throw PSIEXCEPTION(prefix + "resource estimate requires nonzero orbital dimensions");
     if (point_count == 0)
@@ -879,6 +883,75 @@ PointResponsePlan plan_point_response(
     // The underscored Python carrier export clones every response matrix while
     // the immutable carrier remains live, so reserve a second full payload.
     const auto output_clone_bytes = output_bytes;
+    const auto retained_frequency_bytes = bytes(frequency_count);
+    const auto retained_points_bytes = checked_c1_product(
+        point_count, sizeof(SitePosition), prefix);
+    const auto native_diagnostic_record_bytes = sizeof(PointResponseDiagnostics);
+    const auto native_diagnostics_bytes = checked_c1_product(
+        frequency_count, native_diagnostic_record_bytes, prefix);
+
+    // Native vector/shared-pointer/Matrix objects and their row-pointer arrays
+    // are retained alongside the numeric payloads. Count carrier and Python
+    // response clones plus carrier/clone/transpose transition matrices.
+    auto container_overhead_bytes = checked_c1_sum(
+        sizeof(std::vector<double>), sizeof(std::vector<SitePosition>), prefix);
+    container_overhead_bytes = checked_c1_sum(
+        container_overhead_bytes,
+        checked_c1_product(2, sizeof(std::vector<SharedMatrix>), prefix), prefix);
+    container_overhead_bytes = checked_c1_sum(
+        container_overhead_bytes,
+        sizeof(std::vector<PointResponseDiagnostics>), prefix);
+    const auto response_matrix_objects = checked_c1_product(
+        checked_c1_product(2, frequency_count, prefix),
+        sizeof(SharedMatrix) + sizeof(Matrix), prefix);
+    const auto transition_matrix_objects = checked_c1_product(
+        3, sizeof(SharedMatrix) + sizeof(Matrix), prefix);
+    const auto transient_matrix_objects = checked_c1_product(
+        4, sizeof(SharedMatrix) + sizeof(Matrix), prefix);
+    const auto response_row_pointers = checked_c1_product(
+        checked_c1_product(checked_c1_product(2, frequency_count, prefix),
+                           point_count, prefix), sizeof(double*), prefix);
+    const auto transition_row_pointers = checked_c1_product(
+        checked_c1_sum(checked_c1_product(2, nov, prefix), point_count, prefix),
+        sizeof(double*), prefix);
+    const auto transient_row_pointers = checked_c1_product(
+        checked_c1_sum(checked_c1_product(3, nov, prefix), point_count, prefix),
+        sizeof(double*), prefix);
+    container_overhead_bytes = checked_c1_sum(
+        container_overhead_bytes, response_matrix_objects, prefix);
+    container_overhead_bytes = checked_c1_sum(
+        container_overhead_bytes, transition_matrix_objects, prefix);
+    container_overhead_bytes = checked_c1_sum(
+        container_overhead_bytes, transient_matrix_objects, prefix);
+    container_overhead_bytes = checked_c1_sum(
+        container_overhead_bytes, response_row_pointers, prefix);
+    container_overhead_bytes = checked_c1_sum(
+        container_overhead_bytes, transition_row_pointers, prefix);
+    container_overhead_bytes = checked_c1_sum(
+        container_overhead_bytes, transient_row_pointers, prefix);
+    auto retained_metadata_bytes = checked_c1_sum(
+        retained_frequency_bytes, retained_points_bytes, prefix);
+    retained_metadata_bytes = checked_c1_sum(
+        retained_metadata_bytes, native_diagnostics_bytes, prefix);
+    retained_metadata_bytes = checked_c1_sum(
+        retained_metadata_bytes, container_overhead_bytes, prefix);
+
+    constexpr std::size_t python_scalar_diagnostic_bytes_per_frequency = 512;
+    constexpr std::size_t python_fixed_metadata_bytes = 1024;
+    constexpr std::size_t python_frequency_object_bytes = 32;
+    constexpr std::size_t python_point_object_bytes = 128;
+    const auto python_scalar_diagnostic_overhead_bytes = checked_c1_product(
+        frequency_count, python_scalar_diagnostic_bytes_per_frequency, prefix);
+    auto python_metadata_overhead_bytes = checked_c1_sum(
+        python_fixed_metadata_bytes,
+        checked_c1_product(frequency_count, python_frequency_object_bytes, prefix),
+        prefix);
+    python_metadata_overhead_bytes = checked_c1_sum(
+        python_metadata_overhead_bytes,
+        checked_c1_product(point_count, python_point_object_bytes, prefix), prefix);
+    const auto python_export_overhead_bytes = checked_c1_sum(
+        python_scalar_diagnostic_overhead_bytes,
+        python_metadata_overhead_bytes, prefix);
 
     const auto order = checked_c1_product(has_dynamic_frequency ? 2 : 1, nov, prefix);
     const auto order_square = checked_c1_product(order, order, prefix);
@@ -904,6 +977,10 @@ PointResponsePlan plan_point_response(
     estimated_bytes = checked_c1_sum(estimated_bytes, dense_solve_peak_bytes, prefix);
     estimated_bytes = checked_c1_sum(estimated_bytes, scratch_bytes, prefix);
     estimated_bytes = checked_c1_sum(estimated_bytes, operator_bytes, prefix);
+    estimated_bytes = checked_c1_sum(
+        estimated_bytes, retained_metadata_bytes, prefix);
+    estimated_bytes = checked_c1_sum(
+        estimated_bytes, python_export_overhead_bytes, prefix);
     if (estimated_bytes > reserved_memory_bytes)
         throw PSIEXCEPTION(prefix + "estimated storage exceeds reserved memory");
 
@@ -915,12 +992,23 @@ PointResponsePlan plan_point_response(
     plan.transition_count = nov;
     plan.point_count = point_count;
     plan.max_point_count = max_point_count;
+    plan.max_frequency_count = max_frequency_count;
     plan.configured_memory_bytes = memory_bytes;
     plan.reserved_memory_bytes = reserved_memory_bytes;
     plan.ao_matrix_bytes = ao_matrix_bytes;
     plan.transition_potential_bytes = transition_potential_bytes;
     plan.output_bytes = output_bytes;
     plan.output_clone_bytes = output_clone_bytes;
+    plan.retained_frequency_bytes = retained_frequency_bytes;
+    plan.retained_points_bytes = retained_points_bytes;
+    plan.native_diagnostic_record_bytes = native_diagnostic_record_bytes;
+    plan.native_diagnostics_bytes = native_diagnostics_bytes;
+    plan.container_overhead_bytes = container_overhead_bytes;
+    plan.retained_metadata_bytes = retained_metadata_bytes;
+    plan.python_scalar_diagnostic_overhead_bytes =
+        python_scalar_diagnostic_overhead_bytes;
+    plan.python_metadata_overhead_bytes = python_metadata_overhead_bytes;
+    plan.python_export_overhead_bytes = python_export_overhead_bytes;
     plan.dense_solve_peak_bytes = dense_solve_peak_bytes;
     plan.scratch_bytes = scratch_bytes;
     plan.hessian_bytes = operator_bytes;
@@ -928,7 +1016,8 @@ PointResponsePlan plan_point_response(
     plan.integral_work_terms = checked_c1_product(point_count,
                                                    checked_c1_product(nbf, nbf, prefix), prefix);
     plan.algorithm = "CALLER_POINTS_NATIVE_ORDER0_AO_POTENTIAL_DENSE_RESPONSE";
-    plan.memory_semantics = "SIMULTANEOUS_LIVE_STORAGE_HARD_GATE_HALF_PROCESS_MEMORY_PYTHON_CLONES_INCLUDED";
+    plan.memory_semantics =
+        "SIMULTANEOUS_LIVE_STORAGE_HARD_GATE_HALF_PROCESS_MEMORY_PYTHON_CLONES_SCALAR_DIAGNOSTICS_FREQ64";
     return plan;
 }
 
@@ -978,18 +1067,19 @@ PointResponsePlan plan_point_response_provider(
     const auto alda_stage_peak_bytes = add_stage(
         {retained_c1_bytes, alda_plan.estimated_bytes, persistent});
     const auto point_potential_stage_peak_bytes = add_stage(
-        {retained_operator, point_plan.ao_matrix_bytes,
-         point_plan.transition_potential_bytes});
+        {retained_operator, point_plan.retained_metadata_bytes,
+         point_plan.ao_matrix_bytes, point_plan.transition_potential_bytes});
     const auto dense_solve_stage_peak_bytes = add_stage(
-        {retained_operator, point_plan.transition_potential_bytes,
-         point_plan.output_bytes, point_plan.dense_solve_peak_bytes,
-         point_plan.scratch_bytes});
+        {retained_operator, point_plan.retained_metadata_bytes,
+         point_plan.transition_potential_bytes, point_plan.output_bytes,
+         point_plan.dense_solve_peak_bytes, point_plan.scratch_bytes});
     // The underscored export retains the carrier transition matrix while a
     // clone and its point-major transpose are both live.
     const auto output_clone_stage_peak_bytes = add_stage(
-        {retained_operator,
+        {retained_operator, point_plan.retained_metadata_bytes,
          checked_c1_product(3, point_plan.transition_potential_bytes, prefix),
-         point_plan.output_bytes, point_plan.output_clone_bytes});
+         point_plan.output_bytes, point_plan.output_clone_bytes,
+         point_plan.python_export_overhead_bytes});
     const auto estimated_bytes = std::max(
         {c1_stage_peak_bytes, alda_stage_peak_bytes,
          point_potential_stage_peak_bytes, dense_solve_stage_peak_bytes,
@@ -1017,7 +1107,7 @@ PointResponsePlan plan_point_response_provider(
     plan.estimated_bytes = estimated_bytes;
     plan.algorithm = "CANONICAL_C1_ALDA_HESSIAN_CALLER_POINTS_ORDER0_DENSE_RESPONSE";
     plan.memory_semantics =
-        "KNOWN_STORAGE_HARD_GATE_DIRECT_JK_WORKSPACE_ADVISORY_PYTHON_CLONES_INCLUDED";
+        "KNOWN_STORAGE_HARD_GATE_DIRECT_JK_WORKSPACE_ADVISORY_PYTHON_CLONES_SCALAR_DIAGNOSTICS_FREQ64";
     return plan;
 }
 
@@ -3319,8 +3409,22 @@ PointResponseData::PointResponseData(
         plan_.point_count != points_.size())
         throw PSIEXCEPTION("PointResponseData: carrier dimensions are inconsistent");
     for (std::size_t index = 0; index < frequencies_.size(); ++index) {
+        const auto& diagnostic = diagnostics_[index];
         if (!std::isfinite(frequencies_[index]) ||
-            diagnostics_[index].frequency != frequencies_[index] ||
+            diagnostic.frequency != frequencies_[index] ||
+            !std::isfinite(diagnostic.reciprocal_condition) ||
+            !std::isfinite(diagnostic.reciprocal_pivot_growth) ||
+            !std::isfinite(diagnostic.max_forward_error) ||
+            !std::isfinite(diagnostic.max_backward_error) ||
+            !std::isfinite(diagnostic.max_scaled_residual) ||
+            !std::isfinite(diagnostic.max_solution_scale) ||
+            !std::isfinite(diagnostic.allowed_antisymmetry) ||
+            !std::isfinite(diagnostic.symmetry_residual) ||
+            !std::isfinite(diagnostic.max_normalized_antisymmetry) ||
+            diagnostic.max_forward_error < 0.0 ||
+            diagnostic.max_backward_error < 0.0 ||
+            diagnostic.max_scaled_residual < 0.0 ||
+            diagnostic.max_solution_scale < 0.0 ||
             !responses_[index] || responses_[index]->nirrep() != 1 ||
             static_cast<std::size_t>(responses_[index]->nrow()) != points_.size() ||
             responses_[index]->ncol() != responses_[index]->nrow())
@@ -3538,10 +3642,15 @@ PointResponseData evaluate_point_response_with_operator(
         diagnostic.frequency = frequency;
         diagnostic.reciprocal_condition = solved.reciprocal_condition();
         diagnostic.reciprocal_pivot_growth = solved.reciprocal_pivot_growth();
-        diagnostic.forward_error = solved.forward_error();
-        diagnostic.backward_error = solved.backward_error();
-        diagnostic.scaled_residual = solved.scaled_residual();
-        diagnostic.solution_column_scales = solved.solution_column_scales();
+        diagnostic.max_forward_error = *std::max_element(
+            solved.forward_error().begin(), solved.forward_error().end());
+        diagnostic.max_backward_error = *std::max_element(
+            solved.backward_error().begin(), solved.backward_error().end());
+        diagnostic.max_scaled_residual = *std::max_element(
+            solved.scaled_residual().begin(), solved.scaled_residual().end());
+        diagnostic.max_solution_scale = *std::max_element(
+            solved.solution_column_scales().begin(),
+            solved.solution_column_scales().end());
         diagnostic.allowed_antisymmetry = allowed_antisymmetry;
         diagnostic.symmetry_residual = symmetry_residual;
         diagnostic.max_normalized_antisymmetry = max_normalized_antisymmetry;

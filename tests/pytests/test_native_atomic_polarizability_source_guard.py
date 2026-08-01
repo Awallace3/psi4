@@ -149,3 +149,17 @@ def test_point_response_uses_only_canonical_native_construction_and_order_zero_p
     ):
         assert required in body
     assert source_violations(body) == []
+
+    header = (
+        __import__("pathlib").Path(__file__).parents[2]
+        / "psi4/src/psi4/libmints/atomic_polarizability.h"
+    ).read_text()
+    diagnostics_start = header.index("struct PSI_API PointResponseDiagnostics")
+    diagnostics_end = header.index("namespace detail", diagnostics_start)
+    diagnostics = header[diagnostics_start:diagnostics_end]
+    assert "std::vector" not in diagnostics
+    for scalar in (
+        "max_forward_error", "max_backward_error", "max_scaled_residual",
+        "max_solution_scale",
+    ):
+        assert scalar in diagnostics

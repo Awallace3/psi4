@@ -342,12 +342,22 @@ struct PSI_API PointResponsePlan {
     std::size_t transition_count{};
     std::size_t point_count{};
     std::size_t max_point_count{};
+    std::size_t max_frequency_count{};
     std::size_t configured_memory_bytes{};
     std::size_t reserved_memory_bytes{};
     std::size_t ao_matrix_bytes{};
     std::size_t transition_potential_bytes{};
     std::size_t output_bytes{};
     std::size_t output_clone_bytes{};
+    std::size_t retained_frequency_bytes{};
+    std::size_t retained_points_bytes{};
+    std::size_t native_diagnostic_record_bytes{};
+    std::size_t native_diagnostics_bytes{};
+    std::size_t container_overhead_bytes{};
+    std::size_t retained_metadata_bytes{};
+    std::size_t python_scalar_diagnostic_overhead_bytes{};
+    std::size_t python_metadata_overhead_bytes{};
+    std::size_t python_export_overhead_bytes{};
     std::size_t dense_solve_peak_bytes{};
     std::size_t scratch_bytes{};
     std::size_t c1_plan_estimated_bytes{};
@@ -368,15 +378,18 @@ struct PSI_API PointResponsePlan {
     std::string memory_semantics;
 };
 
-/** Per-frequency dense-solve and reciprocity diagnostics for point response. */
+/**
+ * Per-frequency scalar dense-solve and reciprocity summaries. Per-RHS vectors
+ * remain transient in DenseRestrictedResponse and are never retained here.
+ */
 struct PSI_API PointResponseDiagnostics {
     double frequency{};
     double reciprocal_condition{};
     double reciprocal_pivot_growth{};
-    std::vector<double> forward_error;
-    std::vector<double> backward_error;
-    std::vector<double> scaled_residual;
-    std::vector<double> solution_column_scales;
+    double max_forward_error{};
+    double max_backward_error{};
+    double max_scaled_residual{};
+    double max_solution_scale{};
     double allowed_antisymmetry{};
     double symmetry_residual{};
     double max_normalized_antisymmetry{};

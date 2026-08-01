@@ -138,6 +138,13 @@ def test_canonical_one_two_point_static_dynamic_shapes_and_metadata(h2o_point_re
         np.testing.assert_array_equal(matrix, matrix.T)
         assert diagnostic["reciprocity_enforced"] is True
         assert diagnostic["max_scaled_residual"] <= 1.0e-11
+        assert diagnostic["max_forward_error"] <= 1.0e-8
+        assert diagnostic["max_solution_scale"] >= 0.0
+        for transient_vector in (
+            "forward_error", "backward_error", "scaled_residual",
+            "solution_column_scales",
+        ):
+            assert transient_vector not in diagnostic
 
 
 def test_multi_transition_potential_matches_independent_external_potential_layout(
@@ -303,8 +310,41 @@ def test_resource_plan_accounts_for_canonical_stages_and_python_output_clones(
     estimate = psi4.core._atomic_polarizability_estimate_point_response
     standalone = estimate(2, 7, 5, 2, 500, True, 1 << 30)
     assert standalone["output_clone_bytes"] == standalone["output_bytes"]
+    assert standalone["retained_frequency_bytes"] == 2 * 8
+    assert standalone["retained_points_bytes"] == 500 * 3 * 8
+    assert standalone["native_diagnostics_bytes"] == (
+        2 * standalone["native_diagnostic_record_bytes"]
+    )
     with pytest.raises(RuntimeError, match="reserved memory"):
         estimate(2, 7, 5, 2, 500, True, standalone["estimated_bytes"] * 2 - 2)
+
+    # With one point and one transition, the retained scalar diagnostics and
+    # Python scalar-object budget dominate the numeric response payload.
+    diagnostic_plan = estimate(64, 1, 1, 1, 1, True, 1 << 30)
+    assert diagnostic_plan["max_frequency_count"] == 64
+    assert diagnostic_plan["retained_frequency_bytes"] == 64 * 8
+    assert diagnostic_plan["retained_points_bytes"] == 3 * 8
+    assert diagnostic_plan["native_diagnostics_bytes"] == (
+        64 * diagnostic_plan["native_diagnostic_record_bytes"]
+    )
+    assert diagnostic_plan["python_scalar_diagnostic_overhead_bytes"] == 64 * 512
+    assert diagnostic_plan["python_metadata_overhead_bytes"] == 1024 + 64 * 32 + 128
+    assert diagnostic_plan["python_export_overhead_bytes"] == (
+        diagnostic_plan["python_scalar_diagnostic_overhead_bytes"]
+        + diagnostic_plan["python_metadata_overhead_bytes"]
+    )
+    assert diagnostic_plan["retained_metadata_bytes"] == (
+        diagnostic_plan["retained_frequency_bytes"]
+        + diagnostic_plan["retained_points_bytes"]
+        + diagnostic_plan["native_diagnostics_bytes"]
+        + diagnostic_plan["container_overhead_bytes"]
+    )
+    assert diagnostic_plan["retained_metadata_bytes"] > 2 * diagnostic_plan["output_bytes"]
+    estimate(64, 1, 1, 1, 1, True, diagnostic_plan["estimated_bytes"] * 2)
+    with pytest.raises(RuntimeError, match="reserved memory"):
+        estimate(64, 1, 1, 1, 1, True, diagnostic_plan["estimated_bytes"] * 2 - 2)
+    with pytest.raises(RuntimeError, match="64"):
+        estimate(65, 1, 1, 1, 1, True, 1 << 30)
 
     result = _canonical(h2o_point_response_case, [[0.0, 0.0, 2.0]], [0.0, 0.2])
     plan = result["plan"]
@@ -324,7 +364,7 @@ def test_resource_plan_accounts_for_canonical_stages_and_python_output_clones(
         plan["output_clone_stage_peak_bytes"],
     )
     assert plan["memory_semantics"] == (
-        "KNOWN_STORAGE_HARD_GATE_DIRECT_JK_WORKSPACE_ADVISORY_PYTHON_CLONES_INCLUDED"
+        "KNOWN_STORAGE_HARD_GATE_DIRECT_JK_WORKSPACE_ADVISORY_PYTHON_CLONES_SCALAR_DIAGNOSTICS_FREQ64"
     )
 
 
