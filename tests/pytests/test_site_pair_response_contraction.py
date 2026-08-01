@@ -7,11 +7,9 @@ import psi4
 pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.mints]
 
 _COMPONENT_ORDER = "00;10,11c,11s;20,21c,21s,22c,22s;30,31c,31s,32c,32s,33c,33s"
-_SYMMETRY_ABSOLUTE_TOLERANCE = 1.0e-10
-_SYMMETRY_RELATIVE_TOLERANCE = 1.0e-10
 
 
-def _contract(projection, response_map, site_count=None):
+def _contract(projection, response_map, site_count=None, forward_error_bound=0.0):
     projection = np.asarray(projection, dtype=float)
     if site_count is None:
         site_count = projection.shape[0] // 16
@@ -19,6 +17,7 @@ def _contract(projection, response_map, site_count=None):
         site_count,
         psi4.core.Matrix.from_array(projection),
         psi4.core.Matrix.from_array(np.asarray(response_map, dtype=float)),
+        forward_error_bound,
     )
     return np.asarray(result["values"]), result
 
@@ -168,26 +167,38 @@ def test_dense_solver_identity_rhs_response_map_passes_symmetry_gate(omega):
     raw_asymmetry = np.max(np.abs(response_map - response_map.T))
     projection = np.arange(48, dtype=float).reshape(16, 3) / 17.0
 
-    actual, meta = _contract(projection, response_map)
-
-    assert raw_asymmetry <= (
-        _SYMMETRY_ABSOLUTE_TOLERANCE
-        + _SYMMETRY_RELATIVE_TOLERANCE * np.max(np.abs(response_map))
+    forward_error_bound = solved["max_forward_error"]
+    actual, meta = _contract(
+        projection, response_map, forward_error_bound=forward_error_bound
     )
+
+    scale = np.max(np.abs(response_map))
+    expected_bound = max(
+        64.0 * np.finfo(float).eps * scale * response_map.shape[0],
+        2.0 * forward_error_bound * scale,
+    )
+    assert raw_asymmetry <= expected_bound
+    assert meta["response_map_forward_error_bound"] == forward_error_bound
+    assert meta["response_map_allowed_antisymmetry"] == pytest.approx(expected_bound, rel=2.0e-15)
     assert meta["response_map_symmetry_residual"] == pytest.approx(raw_asymmetry, abs=0.0)
+    assert solved["max_backward_error"] <= 1.0e-11
+    assert solved["max_scaled_residual"] <= 1.0e-11
+    assert solved["reciprocal_pivot_growth"] >= 1.0e-12
     assert np.all(np.isfinite(actual))
 
 
 def test_near_symmetric_roundoff_policy_uses_independently_symmetrized_numpy_oracle():
     projection = np.arange(32, dtype=float).reshape(16, 2) / 17.0
+    forward_error_bound = 2.0e-11
     response_map = np.array([[1.0, 0.25 + 2.0e-11], [0.25, 0.8]])
     symmetric_response_map = (response_map + response_map.T) / 2.0
 
-    actual, meta = _contract(projection, response_map)
+    actual, meta = _contract(
+        projection, response_map, forward_error_bound=forward_error_bound
+    )
 
-    assert meta["response_map_symmetry_policy"] == "AVERAGE_WITHIN_DENSE_SOLVER_RESIDUAL_TOLERANCE"
-    assert meta["response_map_symmetry_absolute_tolerance"] == _SYMMETRY_ABSOLUTE_TOLERANCE
-    assert meta["response_map_symmetry_relative_tolerance"] == _SYMMETRY_RELATIVE_TOLERANCE
+    assert meta["response_map_symmetry_policy"] == "AVERAGE_WITHIN_SOLVER_FORWARD_ERROR_BOUND"
+    assert meta["response_map_forward_error_bound"] == forward_error_bound
     assert meta["response_map_symmetry_residual"] == pytest.approx(2.0e-11, rel=2.0e-6)
     assert actual == pytest.approx(
         4.0 * projection @ symmetric_response_map @ projection.T, abs=2.0e-13
@@ -196,28 +207,42 @@ def test_near_symmetric_roundoff_policy_uses_independently_symmetrized_numpy_ora
 
 
 @pytest.mark.parametrize(
-    "scale,residual_factor,accepted",
+    "forward_error_bound,residual_factor,accepted",
     [
-        pytest.param(0.0, 0.99, True, id="below-absolute-boundary"),
-        pytest.param(0.0, 1.01, False, id="above-absolute-boundary"),
-        pytest.param(1.0e6, 0.99, True, id="below-relative-boundary"),
-        pytest.param(1.0e6, 1.01, False, id="above-relative-boundary"),
+        pytest.param(0.0, 0.9, True, id="below-machine-roundoff-bound"),
+        pytest.param(0.0, 1.1, False, id="above-machine-roundoff-bound"),
+        pytest.param(1.0e-9, 0.99, True, id="below-forward-error-bound"),
+        pytest.param(1.0e-9, 1.01, False, id="above-forward-error-bound"),
     ],
 )
-def test_symmetry_gate_absolute_and_relative_boundaries(scale, residual_factor, accepted):
+def test_symmetry_gate_derived_boundaries(forward_error_bound, residual_factor, accepted):
     projection = np.ones((16, 2))
-    boundary = _SYMMETRY_ABSOLUTE_TOLERANCE + _SYMMETRY_RELATIVE_TOLERANCE * scale
-    response_map = np.array([[2.0, scale], [scale + residual_factor * boundary, 3.0]])
+    scale = 3.0
+    dimension = 2
+    boundary = max(
+        64.0 * np.finfo(float).eps * scale * dimension,
+        2.0 * forward_error_bound * scale,
+    )
+    response_map = np.array([[2.0, 0.25], [0.25 + residual_factor * boundary, scale]])
 
     if accepted:
-        actual, meta = _contract(projection, response_map)
+        actual, meta = _contract(
+            projection, response_map, forward_error_bound=forward_error_bound
+        )
         assert np.all(np.isfinite(actual))
+        assert meta["response_map_allowed_antisymmetry"] == pytest.approx(boundary, rel=2.0e-15)
         assert meta["response_map_symmetry_residual"] == pytest.approx(
-            residual_factor * boundary, rel=2.0e-6, abs=1.0e-16
+            residual_factor * boundary, rel=2.0e-3, abs=1.0e-17
         )
     else:
         with pytest.raises(RuntimeError, match="symmetric"):
-            _contract(projection, response_map)
+            _contract(projection, response_map, forward_error_bound=forward_error_bound)
+
+
+@pytest.mark.parametrize("forward_error_bound", [-1.0, np.nan, np.inf, 1.0001e-8])
+def test_response_map_forward_error_bound_is_fail_closed(forward_error_bound):
+    with pytest.raises(RuntimeError, match="forward error bound"):
+        _contract(np.ones((16, 1)), [[1.0]], forward_error_bound=forward_error_bound)
 
 
 def test_plan_exact_incremental_allocation_arithmetic_and_success_boundary():
@@ -227,15 +252,19 @@ def test_plan_exact_incremental_allocation_arithmetic_and_success_boundary():
     assert small["component_count"] == 32
     assert small["output_bytes"] == 32 * 32 * 8
     assert small["scratch_bytes"] == (32 * 3 + 3 * 3) * 8
-    assert small["estimated_bytes"] == 1024 * 1024 + small["output_bytes"] + small["scratch_bytes"]
+    assert small["estimated_bytes"] == small["output_bytes"] + small["scratch_bytes"]
     assert small["work_terms"] == 32 * 3 * 3 + 32 * 32 * 3
-    assert small["memory_semantics"] == "INCREMENTAL_INTERNAL_ALLOCATIONS_CALLER_B_AND_G_EXCLUDED"
+    assert small["memory_semantics"] == "INCREMENTAL_NUMERIC_PAYLOAD_CALLER_B_AND_G_EXCLUDED"
+    exact = estimate(2, 3, small["estimated_bytes"])
+    assert exact["estimated_bytes"] == small["estimated_bytes"]
+    with pytest.raises(RuntimeError, match="memory"):
+        estimate(2, 3, small["estimated_bytes"] - 1)
 
     boundary = estimate(64, 512, (1 << 64) - 1)
     assert boundary["component_count"] == 1024
     assert boundary["output_bytes"] == 1024 * 1024 * 8
     assert boundary["scratch_bytes"] == (1024 * 512 + 512 * 512) * 8
-    assert boundary["estimated_bytes"] == 15 * 1024 * 1024
+    assert boundary["estimated_bytes"] == 14 * 1024 * 1024
     assert boundary["work_terms"] == 805306368
 
 

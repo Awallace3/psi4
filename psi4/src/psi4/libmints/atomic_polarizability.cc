@@ -719,7 +719,10 @@ detail::DenseRestrictedResponse detail::solve_dense_restricted_response(
             (*Q)(row, column) = q;
         }
     }
-    return {std::move(P), std::move(Q), reciprocal_condition};
+    return {std::move(P), std::move(Q), reciprocal_condition, work[0],
+            *std::max_element(forward_error.begin(), forward_error.end()),
+            *std::max_element(backward_error.begin(), backward_error.end()),
+            *std::max_element(scaled_residual.begin(), scaled_residual.end())};
 }
 
 ResponseKernel::ResponseKernel(double chf_exchange, double alda_kernel)
@@ -1821,7 +1824,6 @@ SitePairResponseContractionPlan plan_site_pair_response_contraction(
     constexpr std::size_t max_sites = 64;
     constexpr std::size_t max_transitions = 512;
     constexpr std::size_t max_work = 64ULL * 1024ULL * 1024ULL * 1024ULL;
-    constexpr std::size_t overhead = 1024ULL * 1024ULL;
     if (site_count == 0) throw PSIEXCEPTION(prefix + "site count must be nonzero");
     if (transition_count == 0)
         throw PSIEXCEPTION(prefix + "transition count must be nonzero");
@@ -1835,8 +1837,7 @@ SitePairResponseContractionPlan plan_site_pair_response_contraction(
         checked_c1_sum(projected_response_elements, response_map_elements, prefix);
     const auto output_bytes = checked_c1_product(output_elements, sizeof(double), prefix);
     const auto scratch_bytes = checked_c1_product(scratch_elements, sizeof(double), prefix);
-    auto estimated_bytes = checked_c1_sum(output_bytes, scratch_bytes, prefix);
-    estimated_bytes = checked_c1_sum(estimated_bytes, overhead, prefix);
+    const auto estimated_bytes = checked_c1_sum(output_bytes, scratch_bytes, prefix);
     const auto first_work =
         checked_c1_product(projected_response_elements, transition_count, prefix);
     const auto second_work = checked_c1_product(output_elements, transition_count, prefix);
@@ -1849,8 +1850,8 @@ SitePairResponseContractionPlan plan_site_pair_response_contraction(
         transition_count > static_cast<std::size_t>(std::numeric_limits<int>::max()))
         throw PSIEXCEPTION(prefix + "dimensions exceed native matrix limits");
     if (work_terms > max_work) throw PSIEXCEPTION(prefix + "work bound exceeded");
-    if (estimated_bytes > memory_bytes / 2)
-        throw PSIEXCEPTION(prefix + "conservative simultaneous storage exceeds reserved memory");
+    if (estimated_bytes > memory_bytes)
+        throw PSIEXCEPTION(prefix + "incremental numeric payload exceeds available memory");
     SitePairResponseContractionPlan plan;
     plan.site_count = site_count;
     plan.transition_count = transition_count;
@@ -1862,20 +1863,21 @@ SitePairResponseContractionPlan plan_site_pair_response_contraction(
     plan.max_work_terms = max_work;
     plan.max_site_count = max_sites;
     plan.algorithm = "SYMMETRIC_SITE_COMPONENT_OUTER_PRODUCT";
-    plan.memory_semantics = "INCREMENTAL_INTERNAL_ALLOCATIONS_CALLER_B_AND_G_EXCLUDED";
+    plan.memory_semantics = "INCREMENTAL_NUMERIC_PAYLOAD_CALLER_B_AND_G_EXCLUDED";
     return plan;
 }
 
 SitePairResponseContraction contract_site_pair_response(
-    std::size_t site_count, const Matrix& projection, const Matrix& response_map) {
+    std::size_t site_count, const Matrix& projection, const Matrix& response_map,
+    double response_map_forward_error_bound) {
     const std::string prefix = "site-pair response contraction: ";
     constexpr double restricted_factor = 4.0;
-    // The dense solver accepts backward and independently scaled residuals through
-    // 1e-11. A one-decade envelope accommodates the corresponding inverse-map
-    // asymmetry while remaining a fail-closed roundoff gate.
-    constexpr double symmetry_absolute_tolerance = 1.0e-10;
-    constexpr double symmetry_relative_tolerance = 1.0e-10;
     if (site_count == 0) throw PSIEXCEPTION(prefix + "site count must be nonzero");
+    if (!std::isfinite(response_map_forward_error_bound) ||
+        response_map_forward_error_bound < 0.0 ||
+        response_map_forward_error_bound > kDenseMaximumForwardError)
+        throw PSIEXCEPTION(prefix +
+                           "response-map forward error bound must be finite, nonnegative, and at most 1e-8");
     if (projection.nirrep() != 1 || projection.nrow() <= 0 || projection.ncol() <= 0 ||
         response_map.nirrep() != 1)
         throw PSIEXCEPTION(prefix + "input dimensions are inconsistent");
@@ -1895,22 +1897,39 @@ SitePairResponseContraction contract_site_pair_response(
         for (int transition = 0; transition < projection.ncol(); ++transition)
             if (!std::isfinite(projection(row, transition)))
                 throw PSIEXCEPTION(prefix + "projection must contain only finite values");
+    double response_map_scale = 0.0;
+    for (int row = 0; row < response_map.nrow(); ++row) {
+        for (int column = 0; column < response_map.ncol(); ++column) {
+            const double value = response_map(row, column);
+            if (!std::isfinite(value))
+                throw PSIEXCEPTION(prefix + "response map must contain only finite values");
+            response_map_scale = std::max(response_map_scale, std::abs(value));
+        }
+    }
+    // FERR bounds each solved response-map entry relative to the map scale. The
+    // antisymmetric difference contains two independently bounded entries, hence
+    // 2*FERR*scale. The other term permits only dimension-scaled arithmetic noise
+    // when the caller supplies an exact (zero-error-bound) map.
+    const double machine_antisymmetry =
+        64.0 * std::numeric_limits<double>::epsilon() * response_map_scale * transition_count;
+    const double solver_antisymmetry =
+        2.0 * response_map_forward_error_bound * response_map_scale;
+    const double allowed_antisymmetry = std::max(machine_antisymmetry, solver_antisymmetry);
+    if (!std::isfinite(allowed_antisymmetry))
+        throw PSIEXCEPTION(prefix + "derived response-map symmetry bound overflowed");
+
     double symmetry_residual = 0.0;
     auto symmetric_response_map = std::make_shared<Matrix>(response_map.nrow(), response_map.ncol());
     for (int row = 0; row < response_map.nrow(); ++row) {
-        if (!std::isfinite(response_map(row, row)))
-            throw PSIEXCEPTION(prefix + "response map must contain only finite values");
         (*symmetric_response_map)(row, row) = response_map(row, row);
         for (int column = row + 1; column < response_map.ncol(); ++column) {
             const double upper = response_map(row, column);
             const double lower = response_map(column, row);
-            if (!std::isfinite(upper) || !std::isfinite(lower))
-                throw PSIEXCEPTION(prefix + "response map must contain only finite values");
             const double residual = std::abs(upper - lower);
             symmetry_residual = std::max(symmetry_residual, residual);
-            const double scale = std::max(std::abs(upper), std::abs(lower));
-            if (residual > symmetry_absolute_tolerance + symmetry_relative_tolerance * scale)
-                throw PSIEXCEPTION(prefix + "response map must be symmetric within roundoff tolerance");
+            if (!std::isfinite(residual) || residual > allowed_antisymmetry)
+                throw PSIEXCEPTION(prefix +
+                                   "response map must be symmetric within its derived solver-error bound");
             const double value = 0.5 * (upper + lower);
             if (!std::isfinite(value))
                 throw PSIEXCEPTION(prefix + "response-map roundoff averaging overflowed");
@@ -1957,8 +1976,8 @@ SitePairResponseContraction contract_site_pair_response(
     result.values = std::move(values);
     result.plan = plan;
     result.restricted_factor = restricted_factor;
-    result.response_map_symmetry_absolute_tolerance = symmetry_absolute_tolerance;
-    result.response_map_symmetry_relative_tolerance = symmetry_relative_tolerance;
+    result.response_map_forward_error_bound = response_map_forward_error_bound;
+    result.response_map_allowed_antisymmetry = allowed_antisymmetry;
     result.response_map_symmetry_residual = symmetry_residual;
     result.reciprocity_enforced = true;
     return result;

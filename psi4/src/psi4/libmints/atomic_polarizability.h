@@ -63,11 +63,15 @@ namespace detail {
 /** Pure internal validation of cation-state and complete-basis vertical-protocol facts. */
 void validate_vertical_protocol(bool cation_state_valid, bool complete_basis_valid);
 
-/** Pure dense restricted-response amplitudes and LAPACK reciprocal-condition diagnostic. */
+/** Pure dense restricted-response amplitudes and retained LAPACK quality diagnostics. */
 struct DenseRestrictedResponse {
     SharedMatrix P;
     SharedMatrix Q;
     double reciprocal_condition{};
+    double reciprocal_pivot_growth{};
+    double max_forward_error{};
+    double max_backward_error{};
+    double max_scaled_residual{};
 };
 
 /**
@@ -516,7 +520,7 @@ struct SitePairResponseContractionPlan {
     std::size_t max_work_terms{};
     std::size_t max_site_count{};
     std::string algorithm;
-    /** Incremental internal allocations only; caller-owned B and G are excluded. */
+    /** Incremental numeric payload only; caller-owned B and G are excluded. */
     std::string memory_semantics;
 };
 
@@ -525,8 +529,8 @@ struct SitePairResponseContraction {
     SharedMatrix values;
     SitePairResponseContractionPlan plan;
     double restricted_factor{};
-    double response_map_symmetry_absolute_tolerance{};
-    double response_map_symmetry_relative_tolerance{};
+    double response_map_forward_error_bound{};
+    double response_map_allowed_antisymmetry{};
     double response_map_symmetry_residual{};
     bool reciprocity_enforced{};
 };
@@ -534,9 +538,14 @@ struct SitePairResponseContraction {
 SitePairResponseContractionPlan plan_site_pair_response_contraction(
     std::size_t site_count, std::size_t transition_count, std::size_t memory_bytes);
 
-/** Pure C3b evaluator: alpha[A,B](t,u) = 4 B[A,t,:] G B[B,u,:]^T. */
+/**
+ * Pure C3b evaluator: alpha[A,B](t,u) = 4 B[A,t,:] G B[B,u,:]^T.
+ * The explicit response-map bound is the validated dense solve's maximum FERR;
+ * zero requests a machine-roundoff-only gate for caller-supplied exact maps.
+ */
 SitePairResponseContraction contract_site_pair_response(
-    std::size_t site_count, const Matrix& projection, const Matrix& response_map);
+    std::size_t site_count, const Matrix& projection, const Matrix& response_map,
+    double response_map_forward_error_bound);
 }  // namespace detail
 
 /** Actual ISA data structurally bound to one exact frozen context and its ordered grid/sites. */
