@@ -63,15 +63,39 @@ namespace detail {
 /** Pure internal validation of cation-state and complete-basis vertical-protocol facts. */
 void validate_vertical_protocol(bool cation_state_valid, bool complete_basis_valid);
 
-/** Pure dense restricted-response amplitudes and retained LAPACK quality diagnostics. */
-struct DenseRestrictedResponse {
-    SharedMatrix P;
-    SharedMatrix Q;
-    double reciprocal_condition{};
-    double reciprocal_pivot_growth{};
-    double max_forward_error{};
-    double max_backward_error{};
-    double max_scaled_residual{};
+/** Immutable dense amplitudes inseparably bound to their per-RHS solve diagnostics. */
+class DenseRestrictedResponse {
+   public:
+    DenseRestrictedResponse(const DenseRestrictedResponse&) = default;
+    DenseRestrictedResponse& operator=(const DenseRestrictedResponse&) = default;
+
+    const Matrix& P() const { return *P_; }
+    const Matrix& Q() const { return *Q_; }
+    double reciprocal_condition() const { return reciprocal_condition_; }
+    double reciprocal_pivot_growth() const { return reciprocal_pivot_growth_; }
+    const std::vector<double>& forward_error() const { return forward_error_; }
+    const std::vector<double>& backward_error() const { return backward_error_; }
+    const std::vector<double>& scaled_residual() const { return scaled_residual_; }
+    const std::vector<double>& solution_column_scales() const { return solution_column_scales_; }
+
+   private:
+    friend DenseRestrictedResponse solve_dense_restricted_response(
+        const Matrix&, const Matrix&, double, const Matrix&);
+    DenseRestrictedResponse(SharedMatrix P, SharedMatrix Q, double reciprocal_condition,
+                            double reciprocal_pivot_growth,
+                            std::vector<double> forward_error,
+                            std::vector<double> backward_error,
+                            std::vector<double> scaled_residual,
+                            std::vector<double> solution_column_scales);
+
+    SharedMatrix P_;
+    SharedMatrix Q_;
+    double reciprocal_condition_{};
+    double reciprocal_pivot_growth_{};
+    std::vector<double> forward_error_;
+    std::vector<double> backward_error_;
+    std::vector<double> scaled_residual_;
+    std::vector<double> solution_column_scales_;
 };
 
 /**
@@ -533,6 +557,7 @@ struct SitePairResponseContraction {
     double response_map_solution_scale{};
     double response_map_allowed_antisymmetry{};
     double response_map_symmetry_residual{};
+    double response_map_max_normalized_antisymmetry{};
     bool reciprocity_enforced{};
 };
 
@@ -544,6 +569,7 @@ struct ResponseMapSymmetryDiagnostics {
     double solution_scale{};
     double allowed_antisymmetry{};
     double symmetry_residual{};
+    double max_normalized_antisymmetry{};
 };
 
 /**
@@ -558,7 +584,7 @@ SitePairResponseContraction contract_site_pair_response(
 /** Pure synthetic diagnostics seam; it does not construct or contract a response. */
 ResponseMapSymmetryDiagnostics validate_response_map_symmetry_test_only(
     const Matrix& response_map, const Matrix& conjugate_map,
-    double response_map_forward_error_bound);
+    const std::vector<double>& forward_error);
 }  // namespace detail
 
 /** Actual ISA data structurally bound to one exact frozen context and its ordered grid/sites. */

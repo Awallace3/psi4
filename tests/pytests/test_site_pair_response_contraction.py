@@ -10,15 +10,11 @@ _COMPONENT_ORDER = "00;10,11c,11s;20,21c,21s,22c,22s;30,31c,31s,32c,32s,33c,33s"
 
 
 def _contract(projection, response_map, site_count=None):
-    projection = np.asarray(projection, dtype=float)
-    if site_count is None:
-        site_count = projection.shape[0] // 16
-    result = psi4.core._atomic_polarizability_test_contract_site_pair_response(
-        site_count,
-        psi4.core.Matrix.from_array(projection),
-        psi4.core.Matrix.from_array(np.asarray(response_map, dtype=float)),
-    )
-    return np.asarray(result["values"]), result
+    """Acquire the immutable production carrier from a static identity-RHS solve."""
+    response_map = np.asarray(response_map, dtype=float)
+    h1 = np.linalg.inv(response_map)
+    h2 = np.eye(response_map.shape[0])
+    return _solve_and_contract(projection, h1, h2, 0.0, site_count)
 
 
 def _solve_and_contract(projection, h1, h2, omega, site_count=None):
@@ -35,11 +31,11 @@ def _solve_and_contract(projection, h1, h2, omega, site_count=None):
     return np.asarray(result["values"]), result
 
 
-def _validate_symmetry(response_map, q_map, forward_error_bound):
+def _validate_symmetry(response_map, q_map, forward_errors):
     return psi4.core._atomic_polarizability_test_validate_response_map_symmetry(
         psi4.core.Matrix.from_array(np.asarray(response_map, dtype=float)),
         psi4.core.Matrix.from_array(np.asarray(q_map, dtype=float)),
-        forward_error_bound,
+        np.atleast_1d(forward_errors).tolist(),
     )
 
 
@@ -144,12 +140,8 @@ def test_site_permutation_covariance_and_component_order_untouched():
 @pytest.mark.parametrize(
     "response_map",
     [
-        pytest.param(np.diag([1.0 / 2.0, 1.0 / 5.0]), id="supplied-static-analytic-G"),
-        pytest.param(
-            np.diag([2.0 / (4.0 + 0.75**2), 5.0 / (25.0 + 0.75**2)]),
-            id="supplied-finite-frequency-analytic-G",
-        ),
-        pytest.param(np.zeros((2, 2)), id="supplied-zero-G"),
+        pytest.param(np.linalg.inv([[2.0, 0.1], [0.1, 5.0]]), id="supplied-static-SPD-G-1"),
+        pytest.param(np.linalg.inv([[4.25, -0.2], [-0.2, 7.5]]), id="supplied-static-SPD-G-2"),
     ],
 )
 def test_supplied_analytic_response_maps(response_map):
@@ -158,21 +150,26 @@ def test_supplied_analytic_response_maps(response_map):
     assert actual == pytest.approx(4.0 * projection @ response_map @ projection.T, abs=2.0e-15)
 
 
+def test_zero_projection_gives_zero_response_matrix_through_solved_carrier():
+    actual, _ = _contract(np.zeros((16, 2)), np.linalg.inv([[2.0, 0.1], [0.1, 5.0]]))
+    np.testing.assert_array_equal(actual, np.zeros((16, 16)))
+
+
 @pytest.mark.parametrize(
-    "projection,response_map,site_count,message",
+    "projection,h1,h2,site_count,message",
     [
-        (np.ones((16, 1)), np.ones((1, 1)), 0, "site count"),
-        (np.ones((16, 1)), np.ones((1, 1)), 2, "dimensions"),
-        (np.ones((16, 2)), np.ones((1, 1)), 1, "dimensions"),
-        (np.ones((16, 1)), np.ones((1, 2)), 1, "square"),
-        (np.full((16, 1), np.nan), np.ones((1, 1)), 1, "finite"),
-        (np.ones((16, 1)), np.full((1, 1), np.inf), 1, "finite"),
-        (np.ones((16, 2)), np.array([[1.0, 1.0e-4], [0.0, 1.0]]), 1, "symmetric"),
+        (np.ones((16, 1)), [[1.0]], [[1.0]], 0, "site count"),
+        (np.ones((16, 1)), [[1.0]], [[1.0]], 2, "dimensions"),
+        (np.ones((16, 2)), [[1.0]], [[1.0]], 1, "dimensions"),
+        (np.ones((16, 1)), [[1.0, 0.0]], [[1.0]], 1, "square"),
+        (np.full((16, 1), np.nan), [[1.0]], [[1.0]], 1, "finite"),
+        (np.ones((16, 1)), [[np.inf]], [[1.0]], 1, "finite"),
+        (np.ones((16, 2)), [[1.0, 1.0e-4], [0.0, 1.0]], np.eye(2), 1, "symmetric"),
     ],
 )
-def test_malformed_nonfinite_and_asymmetric_inputs_fail(projection, response_map, site_count, message):
+def test_malformed_nonfinite_and_asymmetric_inputs_fail(projection, h1, h2, site_count, message):
     with pytest.raises(RuntimeError, match=message):
-        _contract(projection, response_map, site_count)
+        _solve_and_contract(projection, h1, h2, 0.0, site_count)
 
 
 @pytest.mark.parametrize("omega", [0.0, 0.7])
@@ -186,16 +183,23 @@ def test_dense_solver_identity_rhs_response_map_passes_symmetry_gate(omega):
     response_map = np.asarray(meta["P"])
     q_map = np.asarray(meta["Q"])
     raw_asymmetry = np.max(np.abs(response_map - response_map.T))
-    forward_error_bound = meta["max_forward_error"]
-    solution_scale = max(np.max(np.abs(response_map)), np.max(np.abs(q_map)))
-    expected_bound = max(
-        64.0 * np.finfo(float).eps * max(1.0, solution_scale) * response_map.shape[0],
-        2.0 * forward_error_bound * solution_scale,
-    )
+    forward_errors = np.asarray(meta["forward_error"])
+    column_scales = np.asarray(meta["solution_column_scales"])
+    pair_bounds = [
+        forward_errors[j] * column_scales[j]
+        + forward_errors[i] * column_scales[i]
+        + 64.0 * np.finfo(float).eps * max(1.0, column_scales[i], column_scales[j]) * response_map.shape[0]
+        for i in range(response_map.shape[0]) for j in range(i + 1, response_map.shape[0])
+    ]
+    expected_bound = max(pair_bounds)
     assert raw_asymmetry <= expected_bound
-    assert meta["response_map_forward_error_bound"] == forward_error_bound
+    assert meta["response_map_forward_error_bound"] == max(forward_errors)
     assert meta["response_map_allowed_antisymmetry"] == pytest.approx(expected_bound, rel=2.0e-15)
     assert meta["response_map_symmetry_residual"] == pytest.approx(raw_asymmetry, abs=0.0)
+    assert len(meta["forward_error"]) == response_map.shape[0]
+    assert len(meta["backward_error"]) == response_map.shape[0]
+    assert len(meta["scaled_residual"]) == response_map.shape[0]
+    assert len(meta["solution_column_scales"]) == response_map.shape[0]
     assert meta["max_backward_error"] <= 1.0e-11
     assert meta["max_scaled_residual"] <= 1.0e-11
     assert meta["reciprocal_pivot_growth"] >= 1.0e-12
@@ -210,14 +214,18 @@ def test_nonzero_solver_symmetry_bound_uses_full_solution_when_q_dominates_p():
     actual, meta = _solve_and_contract(projection, h1, h2, 0.01)
     p_map = np.asarray(meta["P"])
     q_map = np.asarray(meta["Q"])
-    full_scale = max(np.max(np.abs(p_map)), np.max(np.abs(q_map)))
+    column_scales = np.maximum(np.max(np.abs(p_map), axis=0), np.max(np.abs(q_map), axis=0))
+    forward_errors = np.asarray(meta["forward_error"])
+    full_scale = max(column_scales)
     p_only_scale = max(1.0, np.max(np.abs(p_map)))
-    expected = max(
-        64.0 * np.finfo(float).eps * full_scale * 2,
-        2.0 * meta["max_forward_error"] * full_scale,
+    expected = (
+        forward_errors[0] * column_scales[0]
+        + forward_errors[1] * column_scales[1]
+        + 64.0 * np.finfo(float).eps * max(1.0, *column_scales) * 2
     )
 
     assert np.max(np.abs(q_map)) > 1.0e4 * np.max(np.abs(p_map))
+    assert meta["solution_column_scales"] == pytest.approx(column_scales, rel=2.0e-15)
     assert meta["response_map_solution_scale"] == pytest.approx(full_scale, rel=2.0e-15)
     assert meta["response_map_allowed_antisymmetry"] == pytest.approx(expected, rel=2.0e-15)
     assert meta["response_map_allowed_antisymmetry"] > (
@@ -232,7 +240,9 @@ def test_near_symmetric_roundoff_policy_uses_independently_symmetrized_numpy_ora
     response_map = np.array([[1.0, 0.25 + 2.0e-11], [0.25, 0.8]])
     symmetric_response_map = (response_map + response_map.T) / 2.0
 
-    validation = _validate_symmetry(response_map, np.zeros_like(response_map), forward_error_bound)
+    validation = _validate_symmetry(
+        response_map, np.zeros_like(response_map), [forward_error_bound] * 2
+    )
     actual, meta = _contract(projection, symmetric_response_map)
 
     assert validation["response_map_forward_error_bound"] == forward_error_bound
@@ -255,22 +265,27 @@ def test_near_symmetric_roundoff_policy_uses_independently_symmetrized_numpy_ora
 def test_symmetry_gate_derived_boundaries(forward_error_bound, residual_factor, accepted):
     scale = 3.0
     dimension = 2
-    boundary = max(
-        64.0 * np.finfo(float).eps * scale * dimension,
-        2.0 * forward_error_bound * scale,
+    forward_errors = [0.5 * forward_error_bound, forward_error_bound]
+    boundary = (
+        forward_errors[0] * 2.0
+        + forward_errors[1] * scale
+        + 64.0 * np.finfo(float).eps * scale * dimension
     )
     response_map = np.array([[2.0, 0.25], [0.25 + residual_factor * boundary, scale]])
     q_map = np.zeros_like(response_map)
 
     if accepted:
-        validation = _validate_symmetry(response_map, q_map, forward_error_bound)
+        validation = _validate_symmetry(response_map, q_map, forward_errors)
         assert validation["response_map_allowed_antisymmetry"] == pytest.approx(boundary, rel=2.0e-15)
         assert validation["response_map_symmetry_residual"] == pytest.approx(
             residual_factor * boundary, rel=2.0e-3, abs=1.0e-17
         )
+        assert validation["response_map_max_normalized_antisymmetry"] == pytest.approx(
+            residual_factor, rel=2.0e-3, abs=1.0e-4
+        )
     else:
         with pytest.raises(RuntimeError, match="symmetric"):
-            _validate_symmetry(response_map, q_map, forward_error_bound)
+            _validate_symmetry(response_map, q_map, forward_errors)
 
 
 @pytest.mark.parametrize("forward_error_bound", [-1.0, np.nan, np.inf, 1.0001e-8])
@@ -279,20 +294,16 @@ def test_response_map_forward_error_bound_is_fail_closed(forward_error_bound):
         _validate_symmetry([[1.0]], [[0.0]], forward_error_bound)
 
 
-def test_exact_map_contraction_seam_rejects_even_roundoff_asymmetry():
-    near_symmetric = np.array([[1.0, 0.25 + 1.0e-15], [0.25, 0.8]])
-    with pytest.raises(RuntimeError, match="exactly symmetric"):
-        _contract(np.ones((16, 2)), near_symmetric)
+def test_symmetry_validator_rejects_mismatched_or_nonfinite_per_rhs_data():
+    with pytest.raises(RuntimeError, match="cardinalit"):
+        _validate_symmetry(np.eye(2), np.zeros((2, 2)), [0.0])
+    with pytest.raises(RuntimeError, match="finite"):
+        _validate_symmetry(np.eye(2), [[0.0, np.nan], [0.0, 0.0]], [0.0, 0.0])
 
 
-def test_production_contraction_seam_has_no_forgeable_diagnostics_argument():
+def test_no_python_binding_can_fabricate_or_mutate_a_production_response_carrier():
     assert not hasattr(psi4.core, "DenseRestrictedResponse")
-    projection = psi4.core.Matrix.from_array(np.ones((16, 1)))
-    response_map = psi4.core.Matrix.from_array(np.ones((1, 1)))
-    with pytest.raises(TypeError):
-        psi4.core._atomic_polarizability_test_contract_site_pair_response(
-            1, projection, response_map, 1.0e-9
-        )
+    assert not hasattr(psi4.core, "_atomic_polarizability_test_contract_site_pair_response")
 
 
 def test_plan_exact_incremental_allocation_arithmetic_and_success_boundary():

@@ -123,13 +123,20 @@ void export_oeprop(py::module &m) {
           [](const Matrix& H1, const Matrix& H2, double omega, const Matrix& rhs) {
               const auto result = detail::solve_dense_restricted_response(H1, H2, omega, rhs);
               py::dict values;
-              values["P"] = result.P;
-              values["Q"] = result.Q;
-              values["reciprocal_condition"] = result.reciprocal_condition;
-              values["reciprocal_pivot_growth"] = result.reciprocal_pivot_growth;
-              values["max_forward_error"] = result.max_forward_error;
-              values["max_backward_error"] = result.max_backward_error;
-              values["max_scaled_residual"] = result.max_scaled_residual;
+              values["P"] = result.P().clone();
+              values["Q"] = result.Q().clone();
+              values["reciprocal_condition"] = result.reciprocal_condition();
+              values["reciprocal_pivot_growth"] = result.reciprocal_pivot_growth();
+              values["forward_error"] = result.forward_error();
+              values["backward_error"] = result.backward_error();
+              values["scaled_residual"] = result.scaled_residual();
+              values["solution_column_scales"] = result.solution_column_scales();
+              values["max_forward_error"] = *std::max_element(
+                  result.forward_error().begin(), result.forward_error().end());
+              values["max_backward_error"] = *std::max_element(
+                  result.backward_error().begin(), result.backward_error().end());
+              values["max_scaled_residual"] = *std::max_element(
+                  result.scaled_residual().begin(), result.scaled_residual().end());
               return values;
           },
           "H1"_a, "H2"_a, "omega"_a, "rhs"_a);
@@ -605,29 +612,12 @@ void export_oeprop(py::module &m) {
                 contraction.response_map_allowed_antisymmetry;
             result["response_map_symmetry_residual"] =
                 contraction.response_map_symmetry_residual;
+            result["response_map_max_normalized_antisymmetry"] =
+                contraction.response_map_max_normalized_antisymmetry;
             result["reciprocity_enforced"] = contraction.reciprocity_enforced;
             result["plan"] = std::move(plan);
             return result;
         };
-    m.def("_atomic_polarizability_test_contract_site_pair_response",
-          [site_pair_contraction_result_dict](std::size_t site_count,
-                                               const Matrix& projection,
-                                               const Matrix& response_map) {
-              if (response_map.nirrep() != 1 || response_map.nrow() <= 0 ||
-                  response_map.nrow() != response_map.ncol())
-                  throw PSIEXCEPTION(
-                      "site-pair response contraction: exact test response map must be nonempty and square");
-              for (int row = 0; row < response_map.nrow(); ++row)
-                  for (int column = row + 1; column < response_map.ncol(); ++column)
-                      if (response_map(row, column) != response_map(column, row))
-                          throw PSIEXCEPTION(
-                              "site-pair response contraction: test response map must be exactly symmetric");
-              auto q = std::make_shared<Matrix>(response_map.nrow(), response_map.ncol());
-              detail::DenseRestrictedResponse response{
-                  response_map.clone(), std::move(q), 1.0, 1.0, 0.0, 0.0, 0.0};
-              return site_pair_contraction_result_dict(
-                  detail::contract_site_pair_response(site_count, projection, response));
-          }, "site_count"_a, "projection"_a, "response_map"_a);
     m.def("_atomic_polarizability_test_solve_and_contract_site_pair_response",
           [site_pair_contraction_result_dict](std::size_t site_count,
                                                const Matrix& projection,
@@ -639,28 +629,37 @@ void export_oeprop(py::module &m) {
                   H1, H2, omega, identity);
               auto result = site_pair_contraction_result_dict(
                   detail::contract_site_pair_response(site_count, projection, response));
-              result["P"] = response.P;
-              result["Q"] = response.Q;
-              result["reciprocal_condition"] = response.reciprocal_condition;
-              result["reciprocal_pivot_growth"] = response.reciprocal_pivot_growth;
-              result["max_forward_error"] = response.max_forward_error;
-              result["max_backward_error"] = response.max_backward_error;
-              result["max_scaled_residual"] = response.max_scaled_residual;
+              result["P"] = response.P().clone();
+              result["Q"] = response.Q().clone();
+              result["reciprocal_condition"] = response.reciprocal_condition();
+              result["reciprocal_pivot_growth"] = response.reciprocal_pivot_growth();
+              result["forward_error"] = response.forward_error();
+              result["backward_error"] = response.backward_error();
+              result["scaled_residual"] = response.scaled_residual();
+              result["solution_column_scales"] = response.solution_column_scales();
+              result["max_forward_error"] = *std::max_element(
+                  response.forward_error().begin(), response.forward_error().end());
+              result["max_backward_error"] = *std::max_element(
+                  response.backward_error().begin(), response.backward_error().end());
+              result["max_scaled_residual"] = *std::max_element(
+                  response.scaled_residual().begin(), response.scaled_residual().end());
               return result;
           }, "site_count"_a, "projection"_a, "H1"_a, "H2"_a, "omega"_a);
     m.def("_atomic_polarizability_test_validate_response_map_symmetry",
           [](const Matrix& response_map, const Matrix& conjugate_map,
-             double response_map_forward_error_bound) {
+             const std::vector<double>& forward_error) {
               const auto diagnostics = detail::validate_response_map_symmetry_test_only(
-                  response_map, conjugate_map, response_map_forward_error_bound);
+                  response_map, conjugate_map, forward_error);
               py::dict result;
-              result["response_map_forward_error_bound"] = response_map_forward_error_bound;
+              result["response_map_forward_error_bound"] =
+                  *std::max_element(forward_error.begin(), forward_error.end());
               result["response_map_solution_scale"] = diagnostics.solution_scale;
               result["response_map_allowed_antisymmetry"] = diagnostics.allowed_antisymmetry;
               result["response_map_symmetry_residual"] = diagnostics.symmetry_residual;
+              result["response_map_max_normalized_antisymmetry"] =
+                  diagnostics.max_normalized_antisymmetry;
               return result;
-          }, "response_map"_a, "conjugate_map"_a,
-          "response_map_forward_error_bound"_a);
+          }, "response_map"_a, "conjugate_map"_a, "forward_error"_a);
     m.def("_atomic_polarizability_estimate_site_pair_response_contraction",
           [](std::size_t site_count, std::size_t transition_count,
              std::size_t memory_bytes) {
