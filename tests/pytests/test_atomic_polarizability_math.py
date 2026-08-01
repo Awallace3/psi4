@@ -463,10 +463,15 @@ def _working_l3_matrix():
     return [[0.0] * 16 for _ in range(16)]
 
 
-def _lw_localize(positions, values, bonds, tolerance=1.0e-9):
+def _lw_localize(positions, values, bonds, tolerance=1.0e-9, frequency=0.0):
     return psi4.core._atomic_polarizability_localize_lw(
-        _matrix(positions), [_matrix(block) for block in values], bonds, tolerance
+        _matrix(positions), [_matrix(block) for block in values], frequency, bonds, tolerance
     )
+
+
+def test_lw_localization_requires_explicit_finite_frequency_identity():
+    with pytest.raises(Exception, match="frequency must be finite"):
+        _lw_localize([[0.0, 0.0, 0.0]], [_working_l3_matrix()], [], frequency=float("nan"))
 
 
 def test_lw_graph_operator_is_symmetric_with_one_null_mode_for_connected_chain():

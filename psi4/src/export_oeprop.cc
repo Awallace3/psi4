@@ -122,16 +122,25 @@ void export_oeprop(py::module &m) {
     m.def("_atomic_polarizability_test_irregular_harmonics",
           &detail::irregular_harmonics_test_only, "point"_a, "site"_a);
     m.def("_atomic_polarizability_plan_wsm_refinement",
-          [](std::size_t point_count, std::size_t site_count, std::size_t memory_bytes) {
-              const auto plan = detail::plan_wsm_refinement(point_count, site_count, memory_bytes);
+          [](std::size_t point_count, std::size_t site_count,
+             std::size_t active_variable_count, std::size_t constraint_rows,
+             std::size_t memory_bytes) {
+              const auto plan = detail::plan_wsm_refinement(
+                  point_count, site_count, active_variable_count, constraint_rows, memory_bytes);
               py::dict values;
               values["point_count"] = plan.point_count;
               values["pair_rows"] = plan.pair_rows;
               values["site_count"] = plan.site_count;
               values["variable_count"] = plan.variable_count;
+              values["active_variable_count"] = plan.active_variable_count;
+              values["constraint_rows"] = plan.constraint_rows;
               values["irregular_elements"] = plan.irregular_elements;
+              values["response_clone_bytes"] = plan.response_clone_bytes;
               values["design_elements"] = plan.design_elements;
               values["design_bytes"] = plan.design_bytes;
+              values["constraint_matrix_bytes"] = plan.constraint_matrix_bytes;
+              values["constraint_svd_peak_bytes"] = plan.constraint_svd_peak_bytes;
+              values["fit_svd_peak_bytes"] = plan.fit_svd_peak_bytes;
               values["estimated_bytes"] = plan.estimated_bytes;
               values["configured_memory_bytes"] = plan.configured_memory_bytes;
               values["reserved_memory_bytes"] = plan.reserved_memory_bytes;
@@ -139,11 +148,13 @@ void export_oeprop(py::module &m) {
               values["memory_semantics"] = plan.memory_semantics;
               return values;
           },
-          "point_count"_a, "site_count"_a, "memory_bytes"_a);
+          "point_count"_a, "site_count"_a, "active_variable_count"_a,
+          "constraint_rows"_a, "memory_bytes"_a);
     m.def("_atomic_polarizability_test_refine_wsm",
           [](const Matrix& point_matrix, const std::vector<double>& frequencies,
              const std::vector<SharedMatrix>& responses, const Matrix& site_matrix,
              const std::vector<SharedMatrix>& localized_matrices,
+             const std::vector<double>& localized_frequencies,
              const std::vector<bool>& active_variables, const SharedMatrix& equality,
              const std::vector<double>& equality_targets, const py::dict& option_values) {
               if (point_matrix.nirrep() != 1 || point_matrix.ncol() != 3 || point_matrix.nrow() <= 0 ||
@@ -157,16 +168,19 @@ void export_oeprop(py::module &m) {
               for (std::size_t site = 0; site < sites.size(); ++site)
                   for (std::size_t axis = 0; axis < 3; ++axis)
                       sites[site][axis] = site_matrix(site, axis);
-              if (localized_matrices.size() != sites.size())
-                  throw PSIEXCEPTION("WSM refinement: expected one localized 15 by 15 tensor per site");
-              std::vector<L3Matrix> localized(sites.size());
-              for (std::size_t site = 0; site < sites.size(); ++site) {
-                  if (!localized_matrices[site] || localized_matrices[site]->nirrep() != 1 ||
-                      localized_matrices[site]->nrow() != 15 || localized_matrices[site]->ncol() != 15)
-                      throw PSIEXCEPTION("WSM refinement: expected one localized 15 by 15 tensor per site");
-                  for (std::size_t row = 0; row < 15; ++row)
-                      for (std::size_t column = 0; column < 15; ++column)
-                          localized[site][row][column] = (*localized_matrices[site])(row, column);
+              if (localized_matrices.size() != frequencies.size() * sites.size())
+                  throw PSIEXCEPTION("WSM refinement: expected one frequency-major localized 15 by 15 tensor per site");
+              std::vector<std::vector<L3Matrix>> localized(
+                  frequencies.size(), std::vector<L3Matrix>(sites.size()));
+              for (std::size_t frequency = 0; frequency < frequencies.size(); ++frequency) {
+                  for (std::size_t site = 0; site < sites.size(); ++site) {
+                      const auto& matrix = localized_matrices[frequency * sites.size() + site];
+                      if (!matrix || matrix->nirrep() != 1 || matrix->nrow() != 15 || matrix->ncol() != 15)
+                          throw PSIEXCEPTION("WSM refinement: expected frequency-major localized 15 by 15 tensors");
+                      for (std::size_t row = 0; row < 15; ++row)
+                          for (std::size_t column = 0; column < 15; ++column)
+                              localized[frequency][site][row][column] = (*matrix)(row, column);
+                  }
               }
               RefinementOptions options;
               for (const auto& entry : option_values) {
@@ -182,7 +196,8 @@ void export_oeprop(py::module &m) {
               }
               PDefConstraints constraints{active_variables, equality, equality_targets};
               const auto models = detail::refine_wsm_test_only(
-                  points, frequencies, responses, sites, localized, constraints, options);
+                  points, frequencies, responses, sites, localized, localized_frequencies,
+                  constraints, options);
               py::list result;
               for (const auto& model : models) {
                   py::dict values;
@@ -228,7 +243,7 @@ void export_oeprop(py::module &m) {
               return result;
           },
           "points"_a, "frequencies"_a, "responses"_a, "sites"_a,
-          "localized"_a, "active_variables"_a, "equality"_a,
+          "localized"_a, "localized_frequencies"_a, "active_variables"_a, "equality"_a,
           "equality_targets"_a, "options"_a = py::dict());
     m.def("_atomic_polarizability_test_constrained_least_squares",
           [](const Matrix& design, const std::vector<double>& observations,
@@ -1213,11 +1228,13 @@ void export_oeprop(py::module &m) {
     m.def("_atomic_polarizability_translate_l3", &translate_l3_multipoles);
     m.def("_atomic_polarizability_localize_lw",
           [](const Matrix& positions, const std::vector<std::shared_ptr<Matrix>>& block_matrices,
-             const std::vector<std::array<std::size_t, 2>>& bonds, double residual_tolerance) {
+             double frequency, const std::vector<std::array<std::size_t, 2>>& bonds,
+             double residual_tolerance) {
               if (positions.nirrep() != 1 || positions.ncol() != 3) {
                   throw PSIEXCEPTION("localize_lw: positions must be an N by 3 matrix");
               }
               SitePairResponse response;
+              response.frequency = frequency;
               response.positions.resize(positions.nrow());
               for (std::size_t site = 0; site < response.positions.size(); ++site) {
                   for (std::size_t axis = 0; axis < 3; ++axis) {
@@ -1268,6 +1285,7 @@ void export_oeprop(py::module &m) {
                       transfer.first, transfer.second, transfer.first_component,
                       transfer.second_component, transfer.fixed_site, transfer.amount));
               }
+              result["frequency"] = localized.frequency;
               result["local"] = local;
               result["refined"] = refined;
               result["transfers"] = transfers;

@@ -55,6 +55,7 @@ using SitePosition = std::array<double, 3>;
 
 /** Dense site-pair response; blocks use row-major (first ISA FDDS response coordinate, second ISA FDDS potential coordinate) order. */
 struct PSI_API SitePairResponse {
+    double frequency;
     std::vector<SitePosition> positions;
     std::vector<L3WorkingMatrix> blocks;
 };
@@ -949,6 +950,8 @@ struct PSI_API LocalizationResiduals {
 
 /** Fully localized rank-1-through-rank-3 response and deterministic diagnostics. */
 struct PSI_API LocalizedResponse {
+    /** Exact physical frequency inherited from the site-pair response. */
+    double frequency;
     /** Ordered physical sites inherited from the localized site-pair response. */
     std::vector<SitePosition> positions;
     std::vector<L3Matrix> local;
@@ -987,9 +990,15 @@ struct PSI_API WSMRefinementPlan {
     std::size_t pair_rows{};
     std::size_t site_count{};
     std::size_t variable_count{};
+    std::size_t active_variable_count{};
+    std::size_t constraint_rows{};
     std::size_t irregular_elements{};
+    std::size_t response_clone_bytes{};
     std::size_t design_elements{};
     std::size_t design_bytes{};
+    std::size_t constraint_matrix_bytes{};
+    std::size_t constraint_svd_peak_bytes{};
+    std::size_t fit_svd_peak_bytes{};
     std::size_t estimated_bytes{};
     std::size_t configured_memory_bytes{};
     std::size_t reserved_memory_bytes{};
@@ -1041,14 +1050,17 @@ PSI_API std::vector<RefinedL3Model> refine_wsm(
 
 namespace detail {
 WSMRefinementPlan plan_wsm_refinement(std::size_t point_count, std::size_t site_count,
+                                      std::size_t active_variable_count,
+                                      std::size_t constraint_rows,
                                       std::size_t memory_bytes);
 L3WorkingVector irregular_harmonics_test_only(const SitePosition& point,
                                                const SitePosition& site);
 std::vector<RefinedL3Model> refine_wsm_test_only(
     const std::vector<SitePosition>& points, const std::vector<double>& frequencies,
     const std::vector<SharedMatrix>& responses, const std::vector<SitePosition>& sites,
-    const std::vector<L3Matrix>& localized, const PDefConstraints& constraints,
-    const RefinementOptions& options);
+    const std::vector<std::vector<L3Matrix>>& localized,
+    const std::vector<double>& localized_frequencies,
+    const PDefConstraints& constraints, const RefinementOptions& options);
 }  // namespace detail
 
 PSI_API Matrix lw_graph_operator(const BondGraph& graph);

@@ -75,8 +75,9 @@ def _response(points, sites, tensors):
     return result
 
 
-def _refine(points, sites, response, *, localized=None, active=None,
-            equality=None, targets=None, frequencies=(0.,), options=None):
+def _refine(points, sites, response, *, localized=None, localized_frequency_major=None,
+            active=None, equality=None, targets=None, frequencies=(0.,),
+            localized_frequencies=None, options=None):
     nvar = 120 * len(sites)
     if localized is None:
         localized = [np.zeros((15, 15)) for _ in sites]
@@ -87,9 +88,15 @@ def _refine(points, sites, response, *, localized=None, active=None,
     if targets is None:
         targets = []
     matrices = response if isinstance(response, (list, tuple)) else [response]
+    if localized_frequencies is None:
+        localized_frequencies = frequencies
+    if localized_frequency_major is None:
+        localized_frequency_major = [localized for _ in frequencies]
+    flat_localized = [matrix for frequency_blocks in localized_frequency_major
+                      for matrix in frequency_blocks]
     return psi4.core._atomic_polarizability_test_refine_wsm(
         _matrix(points), list(frequencies), [_matrix(x) for x in matrices],
-        _matrix(sites), [_matrix(x) for x in localized], list(active),
+        _matrix(sites), [_matrix(x) for x in flat_localized], list(localized_frequencies), list(active),
         _matrix(equality, nvar), list(targets), {} if options is None else options,
     )
 
@@ -176,10 +183,12 @@ def test_noisy_weight4_dipole_diagonal_anchor_is_applied_and_reported():
     result = _refine(points, sites, noisy, localized=[reference], active=active)[0]
     design = _design(points, sites, active)
     obs = noisy[np.triu_indices(len(points))]
-    augmented = np.vstack((design, np.sqrt(.001)*np.eye(3)))
-    target = np.r_[obs, np.sqrt(.001)*np.diag(reference)[:3]]
+    pair_weights = np.array([1. if g == h else np.sqrt(2.)
+                             for g in range(len(points)) for h in range(g, len(points))])
+    augmented = np.vstack((pair_weights[:, None]*design, np.sqrt(.001)*np.eye(3)))
+    target = np.r_[pair_weights*obs, np.sqrt(.001)*np.diag(reference)[:3]]
     oracle = np.linalg.lstsq(augmented, target, rcond=1e-12)[0]
-    unanchored = np.linalg.lstsq(design, obs, rcond=1e-12)[0]
+    unanchored = np.linalg.lstsq(pair_weights[:, None]*design, pair_weights*obs, rcond=1e-12)[0]
     fitted = np.asarray(result["solution"])[active]
     assert fitted == pytest.approx(oracle, abs=2e-11)
     assert np.linalg.norm(fitted-unanchored) > 1e-8
@@ -191,7 +200,7 @@ def test_noisy_weight4_dipole_diagonal_anchor_is_applied_and_reported():
         "external_oracle_parity_claimed": False,
     }
     assert result["anchor_variable_count"] == 3
-    assert result["row_weight_source"] == "unit_point_pair_rows"
+    assert result["row_weight_source"] == "full_symmetric_frobenius"
 
 
 def test_h2_copy_equality_active_zeros_cutoff_and_kkt_oracle():
@@ -210,14 +219,24 @@ def test_h2_copy_equality_active_zeros_cutoff_and_kkt_oracle():
                      equality=equality, targets=[0.])[0]
     design = _design(points, sites, active)
     observations = response[np.triu_indices(len(points))]
-    hessian = design.T @ design + .001*np.eye(2)
+    pair_weights = np.array([1. if g == h else np.sqrt(2.)
+                             for g in range(len(points)) for h in range(g, len(points))])
+    weighted_design = pair_weights[:, None]*design
+    weighted_observations = pair_weights*observations
+    hessian = weighted_design.T @ weighted_design + .001*np.eye(2)
     kkt = np.block([[hessian, np.array([[1.], [-1.]])],
                     [np.array([[1., -1.]]), np.zeros((1, 1))]])
-    oracle = np.linalg.solve(kkt, np.r_[design.T @ observations, 0.])[:2]
+    oracle = np.linalg.solve(kkt, np.r_[weighted_design.T @ weighted_observations, 0.])[:2]
     assert np.asarray(result["solution"])[active] == pytest.approx(oracle, abs=3e-12)
     assert result["solution"][first] == pytest.approx(result["solution"][second], abs=2e-13)
     assert result["constraint_residual_norm"] < 2e-13
     assert np.count_nonzero(np.asarray(result["solution"])[~active]) == 0
+
+    inactive_nan = equality.copy()
+    inactive_nan[0, 5] = np.nan
+    with pytest.raises(Exception, match="finite"):
+        _refine(points, sites, response, active=active,
+                equality=inactive_nan, targets=[0.])
 
     cutoff_points = np.asarray(points) * 1.5
     cutoff_response = _response(cutoff_points, sites, tensors)
@@ -238,11 +257,19 @@ def test_point_site_permutation_covariance_and_frequency_major_wrapper():
         tensor = np.zeros((15, 15)); tensor[site, site] = 1.1 + site
         tensors.append(tensor); active[site*120 + _upper_index(site, site)] = True
     response = _response(points, sites, tensors)
+    scaled_tensors = [1.3*tensor for tensor in tensors]
+    frequency_anchors = [tensors, scaled_tensors]
     original = _refine(points, sites, [response, 1.3*response],
-                       localized=tensors, active=active, frequencies=[0., .7])
+                       localized=tensors, localized_frequency_major=frequency_anchors,
+                       active=active, frequencies=[0., .7])
+    with pytest.raises(Exception, match="frequencies do not align"):
+        _refine(points, sites, [response, 1.3*response], localized=tensors,
+                localized_frequency_major=frequency_anchors[::-1], active=active,
+                frequencies=[0., .7], localized_frequencies=[.7, 0.])
     order = rng.permutation(len(points))
     permuted = _refine(points[order], sites, [response[np.ix_(order, order)], 1.3*response[np.ix_(order, order)]],
-                       localized=tensors, active=active, frequencies=[0., .7])
+                       localized=tensors, localized_frequency_major=frequency_anchors,
+                       active=active, frequencies=[0., .7])
     assert [item["frequency"] for item in original] == [0., .7]
     assert np.asarray(permuted[0]["tensors"]) == pytest.approx(np.asarray(original[0]["tensors"]), abs=2e-11)
 
@@ -283,17 +310,30 @@ def test_fail_closed_singular_near_site_nonfinite_frequency_mismatch_and_policy(
 
 
 def test_resource_envelope_and_half_memory_gate_precede_dense_allocation():
-    plan = psi4.core._atomic_polarizability_plan_wsm_refinement(500, 3, 1 << 40)
+    plan = psi4.core._atomic_polarizability_plan_wsm_refinement(500, 3, 360, 0, 1 << 40)
     assert plan["pair_rows"] == 500*501//2
     assert plan["variable_count"] == 360
     assert plan["design_bytes"] == plan["pair_rows"]*360*8
     assert plan["design_bytes"] > 360_000_000
     with pytest.raises(Exception, match="reserved memory"):
-        psi4.core._atomic_polarizability_plan_wsm_refinement(500, 3, plan["design_bytes"]*2-1)
+        psi4.core._atomic_polarizability_plan_wsm_refinement(500, 3, 360, 0, plan["estimated_bytes"]*2-1)
     with pytest.raises(Exception, match="point envelope"):
-        psi4.core._atomic_polarizability_plan_wsm_refinement(501, 1, 1 << 40)
+        psi4.core._atomic_polarizability_plan_wsm_refinement(501, 1, 120, 0, 1 << 40)
     with pytest.raises(Exception, match="variable envelope"):
-        psi4.core._atomic_polarizability_plan_wsm_refinement(10, 4, 1 << 40)
+        psi4.core._atomic_polarizability_plan_wsm_refinement(10, 4, 480, 0, 1 << 40)
+
+    constrained = psi4.core._atomic_polarizability_plan_wsm_refinement(
+        2, 3, 360, 360, 1 << 40)
+    assert constrained["constraint_matrix_bytes"] == 360*360*8
+    assert constrained["constraint_svd_peak_bytes"] >= constrained["fit_svd_peak_bytes"]
+    exact_memory = 2*constrained["estimated_bytes"]
+    assert psi4.core._atomic_polarizability_plan_wsm_refinement(
+        2, 3, 360, 360, exact_memory)["reserved_memory_bytes"] == constrained["estimated_bytes"]
+    with pytest.raises(Exception, match="reserved memory"):
+        psi4.core._atomic_polarizability_plan_wsm_refinement(
+            2, 3, 360, 360, exact_memory-1)
+    with pytest.raises(Exception, match="constraint rows"):
+        psi4.core._atomic_polarizability_plan_wsm_refinement(2, 3, 360, 361, 1 << 40)
 
 
 def test_source_guard_no_normal_equations_generator_or_external_executable():

@@ -3363,6 +3363,7 @@ std::vector<SitePairResponse> ISAPolResponseProvider::compute_isapol_response(
             throw PSIEXCEPTION(prefix + "site-pair contraction dimensions are inconsistent");
 
         SitePairResponse result;
+        result.frequency = omega;
         result.positions = context_->sites();
         result.blocks.resize(checked_c1_product(site_count, site_count, prefix));
         for (std::size_t response_site = 0; response_site < site_count;
@@ -3802,9 +3803,10 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
     const std::size_t site_count = localized.local.size();
     if (site_count == 0 || localized.positions.size() != site_count)
         throw PSIEXCEPTION(prefix + "localized tensors and physical site positions are inconsistent");
-    const auto plan = detail::plan_wsm_refinement(
-        points.size(), site_count, Process::environment.get_memory());
-    const std::size_t full_variable_count = plan.variable_count;
+    const auto full_variable_count = checked_c1_product(
+        site_count, kWSMVariablesPerSite, prefix);
+    if (full_variable_count > kWSMMaximumVariables)
+        throw PSIEXCEPTION(prefix + "variable envelope is at most 360 (three sites)");
     if (!constraints.active_variables.empty() &&
         constraints.active_variables.size() != full_variable_count)
         throw PSIEXCEPTION(prefix + "active-variable mask must contain 120 entries per site");
@@ -3815,6 +3817,44 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
     for (std::size_t variable = 0; variable < full_variable_count; ++variable)
         if (active[variable]) active_to_full.push_back(variable);
     if (active_to_full.empty()) throw PSIEXCEPTION(prefix + "at least one variable must be active");
+
+    std::size_t input_constraint_rows = 0;
+    if (constraints.equality) {
+        if (constraints.equality->nirrep() != 1 ||
+            static_cast<std::size_t>(constraints.equality->ncol()) != full_variable_count ||
+            constraints.equality_targets.size() != static_cast<std::size_t>(constraints.equality->nrow()))
+            throw PSIEXCEPTION(prefix + "equality constraints must be C(rows, 120*sites) and d(rows)");
+        input_constraint_rows = static_cast<std::size_t>(constraints.equality->nrow());
+        if (input_constraint_rows > full_variable_count)
+            throw PSIEXCEPTION(prefix + "equality constraint rows exceed the variable envelope");
+    } else if (!constraints.equality_targets.empty()) {
+        throw PSIEXCEPTION(prefix + "equality targets require an equality matrix");
+    }
+    std::size_t effective_constraint_rows = 0;
+    for (std::size_t row = 0; row < input_constraint_rows; ++row) {
+        if (!std::isfinite(constraints.equality_targets[row]))
+            throw PSIEXCEPTION(prefix + "equality constraints must be finite");
+        bool active_nonzero = false;
+        for (std::size_t variable = 0; variable < full_variable_count; ++variable) {
+            const double value = (*constraints.equality)(row, variable);
+            if (!std::isfinite(value))
+                throw PSIEXCEPTION(prefix + "equality constraints must be finite");
+            active_nonzero = active_nonzero || (active[variable] && value != 0.0);
+        }
+        if (active_nonzero) ++effective_constraint_rows;
+        else if (constraints.equality_targets[row] != 0.0)
+            throw PSIEXCEPTION(prefix + "equality constraints are inconsistent with inactive zero variables");
+    }
+    if (effective_constraint_rows > active_to_full.size())
+        throw PSIEXCEPTION(prefix + "effective equality constraints exceed active variables");
+
+    const double localized_frequency = localized.frequency;
+    const double point_frequency = point_response.frequencies()[frequency_index];
+    const double frequency_tolerance = 16.0 * std::numeric_limits<double>::epsilon() *
+        std::max({1.0, std::abs(localized_frequency), std::abs(point_frequency)});
+    if (!std::isfinite(localized_frequency) ||
+        std::abs(localized_frequency - point_frequency) > frequency_tolerance)
+        throw PSIEXCEPTION(prefix + "localized and point-response frequencies do not align");
 
     for (const auto& block : localized.local) {
         for (std::size_t row = 0; row < kWSMComponents; ++row) {
@@ -3829,7 +3869,10 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
         }
     }
 
-    // The full-envelope resource gate above deliberately precedes all dense allocations.
+    const auto plan = detail::plan_wsm_refinement(
+        points.size(), site_count, active_to_full.size(), effective_constraint_rows,
+        Process::environment.get_memory());
+    // All dimensional, numeric, frequency, and resource gates precede dense allocations.
     std::vector<L3WorkingVector> irregular(points.size() * site_count);
     for (std::size_t point = 0; point < points.size(); ++point)
         for (std::size_t site = 0; site < site_count; ++site)
@@ -3877,6 +3920,7 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
     for (std::size_t first_point = 0; first_point < points.size(); ++first_point) {
         for (std::size_t second_point = first_point; second_point < points.size(); ++second_point, ++pair) {
             observations[pair] = (*response)(first_point, second_point);
+            if (first_point != second_point) row_weights[pair] = std::sqrt(2.0);
             for (std::size_t variable = 0; variable < identities.size(); ++variable) {
                 const auto identity = identities[variable];
                 const auto& first_irregular = irregular[first_point * site_count + identity.site];
@@ -3905,29 +3949,13 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
         }
     }
 
-    std::size_t input_constraint_rows = 0;
-    if (constraints.equality) {
-        if (constraints.equality->nirrep() != 1 ||
-            static_cast<std::size_t>(constraints.equality->ncol()) != full_variable_count ||
-            constraints.equality_targets.size() != static_cast<std::size_t>(constraints.equality->nrow()))
-            throw PSIEXCEPTION(prefix + "equality constraints must be C(rows, 120*sites) and d(rows)");
-        input_constraint_rows = static_cast<std::size_t>(constraints.equality->nrow());
-    } else if (!constraints.equality_targets.empty()) {
-        throw PSIEXCEPTION(prefix + "equality targets require an equality matrix");
-    }
     std::vector<std::size_t> effective_rows;
+    effective_rows.reserve(effective_constraint_rows);
     for (std::size_t row = 0; row < input_constraint_rows; ++row) {
-        if (!std::isfinite(constraints.equality_targets[row]))
-            throw PSIEXCEPTION(prefix + "equality constraints must be finite");
-        bool nonzero = false;
-        for (std::size_t variable = 0; variable < active_to_full.size(); ++variable) {
-            const double value = (*constraints.equality)(row, active_to_full[variable]);
-            if (!std::isfinite(value)) throw PSIEXCEPTION(prefix + "equality constraints must be finite");
-            nonzero = nonzero || value != 0.0;
-        }
-        if (nonzero) effective_rows.push_back(row);
-        else if (constraints.equality_targets[row] != 0.0)
-            throw PSIEXCEPTION(prefix + "equality constraints are inconsistent with inactive zero variables");
+        bool active_nonzero = false;
+        for (const auto variable : active_to_full)
+            active_nonzero = active_nonzero || (*constraints.equality)(row, variable) != 0.0;
+        if (active_nonzero) effective_rows.push_back(row);
     }
     Matrix reduced_constraints(static_cast<int>(effective_rows.size()),
                                static_cast<int>(active_to_full.size()));
@@ -3968,7 +3996,7 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
     pending.diagnostics.anchor_residual_norm = solved.anchor_residual_norm;
     pending.diagnostics.constraint_residual_norm = solved.constraint_residual_norm;
     pending.diagnostics.objective_residual_norm = solved.objective_residual_norm;
-    pending.diagnostics.row_weight_source = "unit_point_pair_rows";
+    pending.diagnostics.row_weight_source = "full_symmetric_frobenius";
     pending.diagnostics.plan = plan;
     for (std::size_t site = 0; site < site_count; ++site) {
         for (std::size_t first = 0; first < kWSMComponents; ++first) {
@@ -3999,6 +4027,8 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
 namespace detail {
 
 WSMRefinementPlan plan_wsm_refinement(std::size_t point_count, std::size_t site_count,
+                                      std::size_t active_variable_count,
+                                      std::size_t constraint_rows,
                                       std::size_t memory_bytes) {
     const std::string prefix = "WSM refinement plan: ";
     if (point_count == 0 || point_count > kWSMMaximumPoints)
@@ -4007,34 +4037,84 @@ WSMRefinementPlan plan_wsm_refinement(std::size_t point_count, std::size_t site_
     const auto variable_count = checked_c1_product(site_count, kWSMVariablesPerSite, prefix);
     if (variable_count > kWSMMaximumVariables)
         throw PSIEXCEPTION(prefix + "variable envelope is at most 360 (three sites)");
+    if (active_variable_count == 0 || active_variable_count > variable_count)
+        throw PSIEXCEPTION(prefix + "active-variable count is outside the variable envelope");
+    if (constraint_rows > active_variable_count)
+        throw PSIEXCEPTION(prefix + "constraint rows exceed active variables");
     const auto adjacent = checked_c1_sum(point_count, 1, prefix);
     const auto doubled_pairs = checked_c1_product(point_count, adjacent, prefix);
     const auto pair_rows = doubled_pairs / 2;
-    const auto design_elements = checked_c1_product(pair_rows, variable_count, prefix);
-    const auto design_bytes = checked_c1_product(design_elements, sizeof(double), prefix);
+    const auto design_elements = checked_c1_product(pair_rows, active_variable_count, prefix);
     const auto irregular_elements = checked_c1_product(
         checked_c1_product(point_count, site_count, prefix), std::size_t{16}, prefix);
-    const auto irregular_bytes = checked_c1_product(irregular_elements, sizeof(double), prefix);
-    // Matrix storage, reduced row-major fit, LAPACK column-major copy, and economy U
-    // can coexist in the reviewed direct-SVD core. This remains O(rows*variables).
-    const auto svd_live_bytes = checked_c1_product(design_bytes, std::size_t{4}, prefix);
-    const auto estimated_bytes = checked_c1_sum(svd_live_bytes, irregular_bytes, prefix);
+    const auto response_elements = checked_c1_product(point_count, point_count, prefix);
+    const auto constraint_elements = checked_c1_product(constraint_rows, active_variable_count, prefix);
+    const auto square_variables = checked_c1_product(active_variable_count, active_variable_count, prefix);
+    const auto bytes = [&prefix](std::size_t elements) {
+        return checked_c1_product(elements, sizeof(double), prefix);
+    };
+    const auto base_elements = checked_c1_sum(
+        checked_c1_sum(design_elements, irregular_elements, prefix), response_elements, prefix);
+
+    std::size_t constraint_peak_elements = base_elements;
+    if (constraint_rows != 0) {
+        const auto three_constraint_matrices = checked_c1_product(constraint_elements, std::size_t{3}, prefix);
+        const auto two_u = checked_c1_product(constraint_elements, std::size_t{2}, prefix);
+        const auto two_vt = checked_c1_product(square_variables, std::size_t{2}, prefix);
+        const auto three_min_plus_max = checked_c1_sum(
+            checked_c1_product(constraint_rows, std::size_t{3}, prefix), active_variable_count, prefix);
+        const auto five_min = checked_c1_product(constraint_rows, std::size_t{5}, prefix);
+        const auto workspace = std::max(three_min_plus_max, five_min);
+        constraint_peak_elements = checked_c1_sum(
+            constraint_peak_elements,
+            checked_c1_sum(three_constraint_matrices,
+                checked_c1_sum(two_u, checked_c1_sum(two_vt,
+                    checked_c1_sum(workspace, constraint_rows, prefix), prefix), prefix), prefix), prefix);
+    }
+
+    const auto free_variable_count = active_variable_count - constraint_rows;
+    const auto augmented_rows = checked_c1_sum(pair_rows, active_variable_count, prefix);
+    const auto augmented_elements = checked_c1_product(augmented_rows, free_variable_count, prefix);
+    const auto square_free = checked_c1_product(free_variable_count, free_variable_count, prefix);
+    std::size_t fit_peak_elements = base_elements;
+    std::size_t fit_integer_workspace_bytes = 0;
+    if (free_variable_count != 0) {
+        const auto four_augmented = checked_c1_product(augmented_elements, std::size_t{4}, prefix);
+        const auto fit_workspace = checked_c1_sum(
+            checked_c1_product(square_free, std::size_t{4}, prefix),
+            checked_c1_product(free_variable_count, std::size_t{7}, prefix), prefix);
+        fit_peak_elements = checked_c1_sum(
+            base_elements, checked_c1_sum(four_augmented,
+                checked_c1_sum(checked_c1_product(square_free, std::size_t{2}, prefix),
+                               fit_workspace, prefix), prefix), prefix);
+        fit_integer_workspace_bytes = checked_c1_product(
+            checked_c1_product(free_variable_count, std::size_t{8}, prefix), sizeof(int), prefix);
+    }
+    const auto fit_peak_bytes = checked_c1_sum(bytes(fit_peak_elements), fit_integer_workspace_bytes, prefix);
+    const auto constraint_peak_bytes = bytes(constraint_peak_elements);
+    const auto estimated_bytes = std::max(fit_peak_bytes, constraint_peak_bytes);
     const auto reserved = memory_bytes / 2;
     if (estimated_bytes > reserved)
-        throw PSIEXCEPTION(prefix + "dense economy-SVD design exceeds half the reserved memory");
+        throw PSIEXCEPTION(prefix + "dense economy-SVD design/constraint storage exceeds half the reserved memory");
     WSMRefinementPlan plan;
     plan.point_count = point_count;
     plan.pair_rows = pair_rows;
     plan.site_count = site_count;
     plan.variable_count = variable_count;
+    plan.active_variable_count = active_variable_count;
+    plan.constraint_rows = constraint_rows;
     plan.irregular_elements = irregular_elements;
+    plan.response_clone_bytes = bytes(response_elements);
     plan.design_elements = design_elements;
-    plan.design_bytes = design_bytes;
+    plan.design_bytes = bytes(design_elements);
+    plan.constraint_matrix_bytes = bytes(constraint_elements);
+    plan.constraint_svd_peak_bytes = constraint_peak_bytes;
+    plan.fit_svd_peak_bytes = fit_peak_bytes;
     plan.estimated_bytes = estimated_bytes;
     plan.configured_memory_bytes = memory_bytes;
     plan.reserved_memory_bytes = reserved;
     plan.algorithm = "upper-point-pairs/site-major-upper-triangle/direct-economy-SVD";
-    plan.memory_semantics = "four tall O(pair_rows*variables) arrays plus irregular harmonics; hard-gated at half configured memory";
+    plan.memory_semantics = "hard half-memory gate over response clone, design, reduced constraint matrix, constraint DGESVD copies/U/VT/workspace, and reduced-fit DGESDD copies/economy-U/VT/workspace";
     return plan;
 }
 
@@ -4046,10 +4126,12 @@ L3WorkingVector irregular_harmonics_test_only(const SitePosition& point,
 std::vector<RefinedL3Model> refine_wsm_test_only(
     const std::vector<SitePosition>& points, const std::vector<double>& frequencies,
     const std::vector<SharedMatrix>& responses, const std::vector<SitePosition>& sites,
-    const std::vector<L3Matrix>& localized, const PDefConstraints& constraints,
-    const RefinementOptions& options) {
-    if (frequencies.size() != responses.size())
-        throw PSIEXCEPTION("WSM refinement: frequency-major responses and frequencies must have equal counts");
+    const std::vector<std::vector<L3Matrix>>& localized,
+    const std::vector<double>& localized_frequencies,
+    const PDefConstraints& constraints, const RefinementOptions& options) {
+    if (frequencies.size() != responses.size() || frequencies.size() != localized.size() ||
+        frequencies.size() != localized_frequencies.size())
+        throw PSIEXCEPTION("WSM refinement: frequency-major responses, localized responses, and frequencies must have equal counts");
     std::vector<PointResponseDiagnostics> diagnostics(frequencies.size());
     for (std::size_t index = 0; index < frequencies.size(); ++index) {
         diagnostics[index].frequency = frequencies[index];
@@ -4062,13 +4144,15 @@ std::vector<RefinedL3Model> refine_wsm_test_only(
     carrier_plan.point_count = points.size();
     auto carrier = PointResponseBuilder::create(
         points, frequencies, responses, std::move(diagnostics), std::move(carrier_plan), nullptr);
-    LocalizedResponse one_localized{};
-    one_localized.positions = sites;
-    one_localized.local = localized;
+    std::vector<LocalizedResponse> localized_responses(frequencies.size());
+    for (std::size_t index = 0; index < frequencies.size(); ++index) {
+        localized_responses[index].frequency = localized_frequencies[index];
+        localized_responses[index].positions = sites;
+        localized_responses[index].local = localized[index];
+    }
     if (frequencies.size() == 1)
-        return {refine_wsm(one_localized, carrier, constraints, options)};
-    return refine_wsm(std::vector<LocalizedResponse>(frequencies.size(), one_localized),
-                      carrier, constraints, options);
+        return {refine_wsm(localized_responses.front(), carrier, constraints, options)};
+    return refine_wsm(localized_responses, carrier, constraints, options);
 }
 
 }  // namespace detail
@@ -4154,6 +4238,8 @@ L3WorkingVector translate_l3_multipoles(const L3WorkingVector& source,
 
 LocalizedResponse localize_lw(const SitePairResponse& response, const BondGraph& graph,
                               double residual_tolerance) {
+    if (!std::isfinite(response.frequency))
+        throw PSIEXCEPTION("localize_lw: response frequency must be finite");
     if (!std::isfinite(residual_tolerance) || residual_tolerance <= 0.0) {
         throw PSIEXCEPTION("localize_lw: residual tolerance must be finite and positive");
     }
@@ -4218,6 +4304,7 @@ LocalizedResponse localize_lw(const SitePairResponse& response, const BondGraph&
         double amount;
     };
     LocalizedResponse result{};
+    result.frequency = response.frequency;
     result.positions = response.positions;
     for (std::size_t first_component = 0; first_component < 16; ++first_component) {
         for (std::size_t second_component = first_component; second_component < 16; ++second_component) {
