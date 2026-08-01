@@ -119,6 +119,57 @@ void export_oeprop(py::module &m) {
         const auto grid = make_casimir_grid(nonzero_count, scale);
         return py::make_tuple(grid.frequencies, grid.weights);
     });
+    m.def("_atomic_polarizability_test_constrained_least_squares",
+          [](const Matrix& design, const std::vector<double>& observations,
+             const std::vector<double>& row_weights, double lambda,
+             const std::vector<double>& diagonal_anchor, const std::vector<double>& reference,
+             const Matrix& constraints, const std::vector<double>& constraint_targets,
+             const py::dict& option_values) {
+              detail::ConstrainedLeastSquaresOptions options;
+              for (const auto& entry : option_values) {
+                  const auto key = py::cast<std::string>(entry.first);
+                  if (key == "column_cutoff")
+                      options.column_cutoff = entry.second.cast<double>();
+                  else if (key == "prune_below_cutoff")
+                      options.prune_below_cutoff = entry.second.cast<bool>();
+                  else if (key == "maximum_condition_number")
+                      options.maximum_condition_number = entry.second.cast<double>();
+                  else if (key == "rank_tolerance")
+                      options.rank_tolerance = entry.second.cast<double>();
+                  else if (key == "reference_anchor_coefficient")
+                      options.reference_anchor_coefficient = entry.second.cast<double>();
+                  else if (key == "reference_point_weight")
+                      options.reference_point_weight = entry.second.cast<double>();
+                  else
+                      throw PSIEXCEPTION("constrained least squares: unknown option '" + key + "'");
+              }
+              const auto result = detail::solve_constrained_least_squares(
+                  design, observations, row_weights, lambda, diagonal_anchor, reference,
+                  constraints, constraint_targets, options);
+              py::dict metadata;
+              metadata["reference_anchor_coefficient"] = result.options.reference_anchor_coefficient;
+              metadata["reference_point_weight"] = result.options.reference_point_weight;
+              py::dict values;
+              values["solution"] = result.solution;
+              values["kept_columns"] = result.kept_columns;
+              values["pruned_columns"] = result.pruned_columns;
+              values["full_to_reduced"] = result.full_to_reduced;
+              values["column_weighted_norms"] = result.column_weighted_norms;
+              values["singular_values"] = result.singular_values;
+              values["rank"] = result.rank;
+              values["constraint_rank"] = result.constraint_rank;
+              values["free_dimension"] = result.free_dimension;
+              values["condition_number"] = result.condition_number;
+              values["weighted_residual_norm"] = result.weighted_residual_norm;
+              values["anchor_residual_norm"] = result.anchor_residual_norm;
+              values["constraint_residual_norm"] = result.constraint_residual_norm;
+              values["objective_residual_norm"] = result.objective_residual_norm;
+              values["options_metadata"] = std::move(metadata);
+              return values;
+          },
+          "design"_a, "observations"_a, "row_weights"_a, "lambda"_a,
+          "diagonal_anchor"_a, "reference"_a, "constraints"_a,
+          "constraint_targets"_a, "options"_a = py::dict());
     m.def("_atomic_polarizability_solve_restricted_response",
           [](const Matrix& H1, const Matrix& H2, double omega, const Matrix& rhs) {
               const auto result = detail::solve_dense_restricted_response(H1, H2, omega, rhs);

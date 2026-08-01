@@ -2218,6 +2218,277 @@ SitePairResponseContraction contract_site_pair_response(
     result.reciprocity_enforced = true;
     return result;
 }
+
+ConstrainedLeastSquaresResult solve_constrained_least_squares(
+    const Matrix& design, const std::vector<double>& observations,
+    const std::vector<double>& row_weights, double lambda,
+    const std::vector<double>& diagonal_anchor, const std::vector<double>& reference,
+    const Matrix& constraints, const std::vector<double>& constraint_targets,
+    const ConstrainedLeastSquaresOptions& options) {
+    const std::string prefix = "constrained least squares: ";
+    if (design.nirrep() != 1 || design.nrow() <= 0 || design.ncol() <= 0)
+        throw PSIEXCEPTION(prefix + "design must be a nonempty dense matrix");
+    const std::size_t row_count = static_cast<std::size_t>(design.nrow());
+    const std::size_t column_count = static_cast<std::size_t>(design.ncol());
+    if (observations.size() != row_count || row_weights.size() != row_count)
+        throw PSIEXCEPTION(prefix + "observation and row-weight dimensions must match design rows");
+    if (diagonal_anchor.size() != column_count || reference.size() != column_count)
+        throw PSIEXCEPTION(prefix + "anchor and reference dimensions must match design columns");
+    if (constraints.nirrep() != 1 || static_cast<std::size_t>(constraints.ncol()) != column_count ||
+        constraint_targets.size() != static_cast<std::size_t>(constraints.nrow()))
+        throw PSIEXCEPTION(prefix + "constraint dimensions must be C(rows, design columns) and d(rows)");
+    if (!std::isfinite(lambda) || lambda < 0.0)
+        throw PSIEXCEPTION(prefix + "lambda must be finite and nonnegative");
+    if (!std::isfinite(options.column_cutoff) || options.column_cutoff < 0.0 ||
+        !std::isfinite(options.maximum_condition_number) || options.maximum_condition_number < 1.0 ||
+        !std::isfinite(options.rank_tolerance) || options.rank_tolerance <= 0.0 ||
+        options.rank_tolerance >= 1.0)
+        throw PSIEXCEPTION(prefix + "cutoff and numerical thresholds are invalid");
+    if (!std::isfinite(options.reference_anchor_coefficient) || options.reference_anchor_coefficient < 0.0 ||
+        !std::isfinite(options.reference_point_weight) || options.reference_point_weight < 0.0)
+        throw PSIEXCEPTION(prefix + "reference policy metadata must be finite and nonnegative");
+
+    const auto require_finite = [&prefix](double value, const char* name) {
+        if (!std::isfinite(value)) throw PSIEXCEPTION(prefix + name + " must contain only finite values");
+    };
+    for (std::size_t row = 0; row < row_count; ++row) {
+        require_finite(observations[row], "observations");
+        require_finite(row_weights[row], "row weights");
+        if (row_weights[row] < 0.0) throw PSIEXCEPTION(prefix + "row weights must be nonnegative");
+        for (std::size_t column = 0; column < column_count; ++column)
+            require_finite(design(row, column), "design");
+    }
+    for (std::size_t column = 0; column < column_count; ++column) {
+        require_finite(diagonal_anchor[column], "diagonal anchor");
+        require_finite(reference[column], "reference");
+        if (diagonal_anchor[column] < 0.0)
+            throw PSIEXCEPTION(prefix + "diagonal anchor weights must be nonnegative");
+    }
+    const std::size_t constraint_count = static_cast<std::size_t>(constraints.nrow());
+    for (std::size_t row = 0; row < constraint_count; ++row) {
+        require_finite(constraint_targets[row], "constraint targets");
+        for (std::size_t column = 0; column < column_count; ++column)
+            require_finite(constraints(row, column), "constraints");
+    }
+
+    ConstrainedLeastSquaresResult pending;
+    pending.options = options;
+    pending.full_to_reduced.assign(column_count, -1);
+    pending.column_weighted_norms.assign(column_count, 0.0);
+    for (std::size_t column = 0; column < column_count; ++column) {
+        double norm = 0.0;
+        for (std::size_t row = 0; row < row_count; ++row)
+            norm = std::hypot(norm, row_weights[row] * design(row, column));
+        if (!std::isfinite(norm)) throw PSIEXCEPTION(prefix + "weighted column norm overflowed");
+        pending.column_weighted_norms[column] = norm;
+        if (norm < options.column_cutoff) {
+            if (!options.prune_below_cutoff)
+                throw PSIEXCEPTION(prefix + "column " + std::to_string(column) + " is below cutoff");
+            pending.pruned_columns.push_back(column);
+        } else {
+            pending.full_to_reduced[column] = static_cast<int>(pending.kept_columns.size());
+            pending.kept_columns.push_back(column);
+        }
+    }
+    const std::size_t reduced_count = pending.kept_columns.size();
+
+    struct SVD {
+        std::vector<double> u;
+        std::vector<double> singular_values;
+        std::vector<double> vt;
+    };
+    const auto direct_svd = [&prefix](std::vector<double> values, std::size_t rows,
+                                      std::size_t columns) {
+        SVD result;
+        result.u.resize(rows * rows);
+        result.singular_values.resize(std::min(rows, columns));
+        result.vt.resize(columns * columns);
+        if (rows == 0 || columns == 0) return result;
+        if (rows > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+            columns > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+            throw PSIEXCEPTION(prefix + "matrix dimensions exceed LAPACK integer range");
+        const int m = static_cast<int>(rows);
+        const int n = static_cast<int>(columns);
+        std::vector<double> column_major_values(rows * columns);
+        for (std::size_t row = 0; row < rows; ++row)
+            for (std::size_t column = 0; column < columns; ++column)
+                column_major_values[column * rows + row] = values[row * columns + column];
+        std::vector<double> column_major_u(rows * rows);
+        std::vector<double> column_major_vt(columns * columns);
+        std::vector<int> integer_workspace(8 * std::min(rows, columns));
+        double workspace_query = 0.0;
+        int info = C_DGESDD('A', m, n, column_major_values.data(), m,
+                            result.singular_values.data(), column_major_u.data(), m,
+                            column_major_vt.data(), n, &workspace_query, -1,
+                            integer_workspace.data());
+        if (info != 0 || !std::isfinite(workspace_query) || workspace_query < 1.0 ||
+            workspace_query > static_cast<double>(std::numeric_limits<int>::max()))
+            throw PSIEXCEPTION(prefix + "SVD workspace query failed");
+        const int workspace_size = static_cast<int>(std::ceil(workspace_query));
+        std::vector<double> workspace(static_cast<std::size_t>(workspace_size));
+        info = C_DGESDD('A', m, n, column_major_values.data(), m,
+                        result.singular_values.data(), column_major_u.data(), m,
+                        column_major_vt.data(), n, workspace.data(), workspace_size,
+                        integer_workspace.data());
+        if (info != 0) throw PSIEXCEPTION(prefix + "SVD failed to converge");
+        for (std::size_t row = 0; row < rows; ++row)
+            for (std::size_t column = 0; column < rows; ++column)
+                result.u[row * rows + column] = column_major_u[column * rows + row];
+        for (std::size_t row = 0; row < columns; ++row)
+            for (std::size_t column = 0; column < columns; ++column)
+                result.vt[row * columns + column] = column_major_vt[column * columns + row];
+        for (double value : result.singular_values)
+            if (!std::isfinite(value)) throw PSIEXCEPTION(prefix + "SVD produced nonfinite diagnostics");
+        return result;
+    };
+    const auto numerical_rank = [&options](const std::vector<double>& singular_values) {
+        if (singular_values.empty() || singular_values.front() == 0.0) return std::size_t{0};
+        const double threshold = options.rank_tolerance * singular_values.front();
+        return static_cast<std::size_t>(std::count_if(
+            singular_values.begin(), singular_values.end(),
+            [threshold](double value) { return value > threshold; }));
+    };
+
+    std::vector<double> particular(reduced_count, 0.0);
+    std::vector<double> null_space(reduced_count * reduced_count, 0.0);
+    std::size_t constraint_rank = 0;
+    if (constraint_count == 0) {
+        for (std::size_t column = 0; column < reduced_count; ++column)
+            null_space[column * reduced_count + column] = 1.0;
+    } else if (reduced_count == 0) {
+        double residual = 0.0;
+        for (double target : constraint_targets) residual = std::hypot(residual, target);
+        if (residual > options.rank_tolerance)
+            throw PSIEXCEPTION(prefix + "constraints are inconsistent after cutoff pruning");
+        throw PSIEXCEPTION(prefix + "constraints are ambiguous after cutoff pruning");
+    } else {
+        std::vector<double> reduced_constraints(constraint_count * reduced_count);
+        for (std::size_t row = 0; row < constraint_count; ++row)
+            for (std::size_t column = 0; column < reduced_count; ++column)
+                reduced_constraints[row * reduced_count + column] =
+                    constraints(row, pending.kept_columns[column]);
+        const auto constraint_svd = direct_svd(reduced_constraints, constraint_count, reduced_count);
+        constraint_rank = numerical_rank(constraint_svd.singular_values);
+        for (std::size_t mode = 0; mode < constraint_rank; ++mode) {
+            double projection = 0.0;
+            for (std::size_t row = 0; row < constraint_count; ++row)
+                projection += constraint_svd.u[row * constraint_count + mode] * constraint_targets[row];
+            projection /= constraint_svd.singular_values[mode];
+            for (std::size_t column = 0; column < reduced_count; ++column)
+                particular[column] += constraint_svd.vt[mode * reduced_count + column] * projection;
+        }
+        double residual = 0.0;
+        double target_norm = 0.0;
+        for (std::size_t row = 0; row < constraint_count; ++row) {
+            double value = -constraint_targets[row];
+            for (std::size_t column = 0; column < reduced_count; ++column)
+                value += reduced_constraints[row * reduced_count + column] * particular[column];
+            residual = std::hypot(residual, value);
+            target_norm = std::hypot(target_norm, constraint_targets[row]);
+        }
+        const double feasibility_tolerance = options.rank_tolerance *
+            static_cast<double>(std::max(constraint_count, reduced_count)) * (1.0 + target_norm);
+        if (!std::isfinite(residual) || residual > feasibility_tolerance)
+            throw PSIEXCEPTION(prefix + "constraints are inconsistent");
+        if (constraint_rank < constraint_count)
+            throw PSIEXCEPTION(prefix + "constraints are ambiguous (linearly dependent)");
+        const std::size_t free_count = reduced_count - constraint_rank;
+        null_space.assign(reduced_count * free_count, 0.0);
+        for (std::size_t mode = 0; mode < free_count; ++mode)
+            for (std::size_t column = 0; column < reduced_count; ++column)
+                null_space[column * free_count + mode] =
+                    constraint_svd.vt[(constraint_rank + mode) * reduced_count + column];
+    }
+
+    pending.constraint_rank = constraint_rank;
+    pending.free_dimension = reduced_count - constraint_rank;
+    std::vector<double> reduced_solution = particular;
+    if (pending.free_dimension > 0) {
+        const std::size_t augmented_rows = row_count + reduced_count;
+        std::vector<double> reduced_design(augmented_rows * pending.free_dimension, 0.0);
+        std::vector<double> reduced_target(augmented_rows, 0.0);
+        for (std::size_t row = 0; row < row_count; ++row) {
+            double offset = observations[row];
+            for (std::size_t column = 0; column < reduced_count; ++column)
+                offset -= design(row, pending.kept_columns[column]) * particular[column];
+            reduced_target[row] = row_weights[row] * offset;
+            for (std::size_t mode = 0; mode < pending.free_dimension; ++mode) {
+                double value = 0.0;
+                for (std::size_t column = 0; column < reduced_count; ++column)
+                    value += design(row, pending.kept_columns[column]) *
+                             null_space[column * pending.free_dimension + mode];
+                reduced_design[row * pending.free_dimension + mode] = row_weights[row] * value;
+            }
+        }
+        const double penalty_scale = std::sqrt(lambda);
+        for (std::size_t anchor_row = 0; anchor_row < reduced_count; ++anchor_row) {
+            const std::size_t full_column = pending.kept_columns[anchor_row];
+            const double scale = penalty_scale * diagonal_anchor[full_column];
+            reduced_target[(row_count + anchor_row)] = scale * (reference[full_column] - particular[anchor_row]);
+            for (std::size_t mode = 0; mode < pending.free_dimension; ++mode)
+                reduced_design[(row_count + anchor_row) * pending.free_dimension + mode] =
+                    scale * null_space[anchor_row * pending.free_dimension + mode];
+        }
+        for (double value : reduced_design)
+            if (!std::isfinite(value)) throw PSIEXCEPTION(prefix + "augmented design overflowed");
+        for (double value : reduced_target)
+            if (!std::isfinite(value)) throw PSIEXCEPTION(prefix + "augmented target overflowed");
+        const auto fit_svd = direct_svd(reduced_design, augmented_rows, pending.free_dimension);
+        pending.singular_values = fit_svd.singular_values;
+        pending.rank = numerical_rank(pending.singular_values);
+        if (pending.rank != pending.free_dimension)
+            throw PSIEXCEPTION(prefix + "reduced objective is rank deficient");
+        pending.condition_number = pending.singular_values.front() /
+                                   pending.singular_values[pending.free_dimension - 1];
+        if (!std::isfinite(pending.condition_number) ||
+            pending.condition_number > options.maximum_condition_number)
+            throw PSIEXCEPTION(prefix + "condition number exceeds explicit threshold");
+        std::vector<double> free_solution(pending.free_dimension, 0.0);
+        for (std::size_t mode = 0; mode < pending.free_dimension; ++mode) {
+            double projection = 0.0;
+            for (std::size_t row = 0; row < augmented_rows; ++row)
+                projection += fit_svd.u[row * augmented_rows + mode] * reduced_target[row];
+            projection /= pending.singular_values[mode];
+            for (std::size_t column = 0; column < pending.free_dimension; ++column)
+                free_solution[column] += fit_svd.vt[mode * pending.free_dimension + column] * projection;
+        }
+        for (std::size_t column = 0; column < reduced_count; ++column)
+            for (std::size_t mode = 0; mode < pending.free_dimension; ++mode)
+                reduced_solution[column] += null_space[column * pending.free_dimension + mode] * free_solution[mode];
+    } else {
+        pending.rank = 0;
+        pending.condition_number = 1.0;
+    }
+
+    pending.solution.assign(column_count, 0.0);
+    for (std::size_t column = 0; column < reduced_count; ++column)
+        pending.solution[pending.kept_columns[column]] = reduced_solution[column];
+    for (double value : pending.solution)
+        if (!std::isfinite(value)) throw PSIEXCEPTION(prefix + "solution is nonfinite");
+    for (std::size_t row = 0; row < row_count; ++row) {
+        double residual = -observations[row];
+        for (std::size_t column = 0; column < column_count; ++column)
+            residual += design(row, column) * pending.solution[column];
+        pending.weighted_residual_norm = std::hypot(
+            pending.weighted_residual_norm, row_weights[row] * residual);
+    }
+    for (std::size_t column = 0; column < column_count; ++column)
+        pending.anchor_residual_norm = std::hypot(
+            pending.anchor_residual_norm,
+            diagonal_anchor[column] * (pending.solution[column] - reference[column]));
+    for (std::size_t row = 0; row < constraint_count; ++row) {
+        double residual = -constraint_targets[row];
+        for (std::size_t column = 0; column < column_count; ++column)
+            residual += constraints(row, column) * pending.solution[column];
+        pending.constraint_residual_norm = std::hypot(pending.constraint_residual_norm, residual);
+    }
+    pending.objective_residual_norm = std::hypot(
+        pending.weighted_residual_norm, std::sqrt(lambda) * pending.anchor_residual_norm);
+    if (!std::isfinite(pending.weighted_residual_norm) || !std::isfinite(pending.anchor_residual_norm) ||
+        !std::isfinite(pending.constraint_residual_norm) || !std::isfinite(pending.objective_residual_norm))
+        throw PSIEXCEPTION(prefix + "residual diagnostics are nonfinite");
+    return pending;
+}
 }  // namespace detail
 
 std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(

@@ -630,6 +630,48 @@ ISAPolResponsePlan plan_isapol_response_provider(
     std::size_t point_count, const std::vector<FrozenGridBlock>& blocks,
     bool has_dynamic_frequency, std::size_t memory_bytes,
     double density_cutoff);
+
+/** Policy and deterministic numerical gates for the pure refinement solve. */
+struct ConstrainedLeastSquaresOptions {
+    double column_cutoff{1.0e-4};
+    bool prune_below_cutoff{true};
+    double maximum_condition_number{1.0e12};
+    double rank_tolerance{1.0e-12};
+    /** Reference PFIT metadata; the pure solver consumes diagonal_anchor explicitly. */
+    double reference_anchor_coefficient{0.001};
+    double reference_point_weight{4.0};
+};
+
+/** Complete solution and diagnostics; constructed only after every gate succeeds. */
+struct ConstrainedLeastSquaresResult {
+    std::vector<double> solution;
+    std::vector<std::size_t> kept_columns;
+    std::vector<std::size_t> pruned_columns;
+    std::vector<int> full_to_reduced;
+    std::vector<double> column_weighted_norms;
+    std::vector<double> singular_values;
+    std::size_t rank{};
+    std::size_t constraint_rank{};
+    std::size_t free_dimension{};
+    double condition_number{};
+    double weighted_residual_norm{};
+    double anchor_residual_norm{};
+    double constraint_residual_norm{};
+    double objective_residual_norm{};
+    ConstrainedLeastSquaresOptions options;
+};
+
+/**
+ * Solve min ||W(Ax-b)||^2 + lambda ||D(x-x0)||^2 subject to Cx=d.
+ * W is supplied as row_weights and D as diagonal_anchor. No normal equations
+ * are formed; equality elimination and the reduced fit both use direct SVDs.
+ */
+ConstrainedLeastSquaresResult solve_constrained_least_squares(
+    const Matrix& design, const std::vector<double>& observations,
+    const std::vector<double>& row_weights, double lambda,
+    const std::vector<double>& diagonal_anchor, const std::vector<double>& reference,
+    const Matrix& constraints, const std::vector<double>& constraint_targets,
+    const ConstrainedLeastSquaresOptions& options);
 }  // namespace detail
 
 /** Actual ISA data structurally bound to one exact frozen context and its ordered grid/sites. */
