@@ -576,6 +576,7 @@ void export_oeprop(py::module &m) {
                   site_count, projection, response_map);
               py::dict plan;
               plan["algorithm"] = contraction.plan.algorithm;
+              plan["memory_semantics"] = contraction.plan.memory_semantics;
               plan["site_count"] = contraction.plan.site_count;
               plan["transition_count"] = contraction.plan.transition_count;
               plan["component_count"] = contraction.plan.component_count;
@@ -595,12 +596,14 @@ void export_oeprop(py::module &m) {
               result["block_order"] =
                   "row=(response_site,ISA_component); column=(source_site,ISA_component)";
               result["response_map_symmetry_policy"] =
-                  "AVERAGE_WITHIN_ABSOLUTE_AND_RELATIVE_ROUNDOFF_TOLERANCE";
-              result["response_map_symmetry_absolute_tolerance"] = 1.0e-12;
-              result["response_map_symmetry_relative_tolerance"] = 1.0e-12;
+                  "AVERAGE_WITHIN_DENSE_SOLVER_RESIDUAL_TOLERANCE";
+              result["response_map_symmetry_absolute_tolerance"] =
+                  contraction.response_map_symmetry_absolute_tolerance;
+              result["response_map_symmetry_relative_tolerance"] =
+                  contraction.response_map_symmetry_relative_tolerance;
               result["response_map_symmetry_residual"] =
                   contraction.response_map_symmetry_residual;
-              result["reciprocity_residual"] = contraction.reciprocity_residual;
+              result["reciprocity_enforced"] = contraction.reciprocity_enforced;
               result["plan"] = std::move(plan);
               return result;
           }, "site_count"_a, "projection"_a, "response_map"_a);
@@ -611,6 +614,10 @@ void export_oeprop(py::module &m) {
                   site_count, transition_count, memory_bytes);
               py::dict values;
               values["algorithm"] = plan.algorithm;
+              values["memory_semantics"] = plan.memory_semantics;
+              values["component_count"] = plan.component_count;
+              values["output_bytes"] = plan.output_bytes;
+              values["scratch_bytes"] = plan.scratch_bytes;
               values["estimated_bytes"] = plan.estimated_bytes;
               values["work_terms"] = plan.work_terms;
               return values;

@@ -1862,6 +1862,7 @@ SitePairResponseContractionPlan plan_site_pair_response_contraction(
     plan.max_work_terms = max_work;
     plan.max_site_count = max_sites;
     plan.algorithm = "SYMMETRIC_SITE_COMPONENT_OUTER_PRODUCT";
+    plan.memory_semantics = "INCREMENTAL_INTERNAL_ALLOCATIONS_CALLER_B_AND_G_EXCLUDED";
     return plan;
 }
 
@@ -1869,8 +1870,11 @@ SitePairResponseContraction contract_site_pair_response(
     std::size_t site_count, const Matrix& projection, const Matrix& response_map) {
     const std::string prefix = "site-pair response contraction: ";
     constexpr double restricted_factor = 4.0;
-    constexpr double symmetry_absolute_tolerance = 1.0e-12;
-    constexpr double symmetry_relative_tolerance = 1.0e-12;
+    // The dense solver accepts backward and independently scaled residuals through
+    // 1e-11. A one-decade envelope accommodates the corresponding inverse-map
+    // asymmetry while remaining a fail-closed roundoff gate.
+    constexpr double symmetry_absolute_tolerance = 1.0e-10;
+    constexpr double symmetry_relative_tolerance = 1.0e-10;
     if (site_count == 0) throw PSIEXCEPTION(prefix + "site count must be nonzero");
     if (projection.nirrep() != 1 || projection.nrow() <= 0 || projection.ncol() <= 0 ||
         response_map.nirrep() != 1)
@@ -1932,7 +1936,6 @@ SitePairResponseContraction contract_site_pair_response(
         }
     }
     auto values = std::make_shared<Matrix>(plan.component_count, plan.component_count);
-    double reciprocity_residual = 0.0;
     for (std::size_t row = 0; row < plan.component_count; ++row) {
         for (std::size_t column = row; column < plan.component_count; ++column) {
             double value = 0.0;
@@ -1949,17 +1952,15 @@ SitePairResponseContraction contract_site_pair_response(
             (*values)(column, row) = value;
         }
     }
-    for (std::size_t row = 0; row < plan.component_count; ++row)
-        for (std::size_t column = row + 1; column < plan.component_count; ++column)
-            reciprocity_residual = std::max(
-                reciprocity_residual, std::abs((*values)(row, column) - (*values)(column, row)));
 
     SitePairResponseContraction result;
     result.values = std::move(values);
     result.plan = plan;
     result.restricted_factor = restricted_factor;
+    result.response_map_symmetry_absolute_tolerance = symmetry_absolute_tolerance;
+    result.response_map_symmetry_relative_tolerance = symmetry_relative_tolerance;
     result.response_map_symmetry_residual = symmetry_residual;
-    result.reciprocity_residual = reciprocity_residual;
+    result.reciprocity_enforced = true;
     return result;
 }
 }  // namespace detail

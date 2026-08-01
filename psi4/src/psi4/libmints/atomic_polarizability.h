@@ -516,6 +516,8 @@ struct SitePairResponseContractionPlan {
     std::size_t max_work_terms{};
     std::size_t max_site_count{};
     std::string algorithm;
+    /** Incremental internal allocations only; caller-owned B and G are excluded. */
+    std::string memory_semantics;
 };
 
 /** Ordered alpha[(response site,t),(source site,u)] in unchanged ISA component order. */
@@ -523,8 +525,10 @@ struct SitePairResponseContraction {
     SharedMatrix values;
     SitePairResponseContractionPlan plan;
     double restricted_factor{};
+    double response_map_symmetry_absolute_tolerance{};
+    double response_map_symmetry_relative_tolerance{};
     double response_map_symmetry_residual{};
-    double reciprocity_residual{};
+    bool reciprocity_enforced{};
 };
 
 SitePairResponseContractionPlan plan_site_pair_response_contraction(
