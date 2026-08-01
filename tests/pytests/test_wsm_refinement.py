@@ -315,6 +315,10 @@ def test_resource_envelope_and_half_memory_gate_precede_dense_allocation():
     assert plan["variable_count"] == 360
     assert plan["design_bytes"] == plan["pair_rows"]*360*8
     assert plan["design_bytes"] > 360_000_000
+    assert plan["null_space_elements"] == 360*360
+    assert plan["null_space_bytes"] == 360*360*8
+    assert plan["workspace_elements"] == 64*(360*360 + plan["pair_rows"] + 360)
+    assert plan["workspace_bytes"] == plan["workspace_elements"]*8
     with pytest.raises(Exception, match="reserved memory"):
         psi4.core._atomic_polarizability_plan_wsm_refinement(500, 3, 360, 0, plan["estimated_bytes"]*2-1)
     with pytest.raises(Exception, match="point envelope"):
@@ -325,6 +329,7 @@ def test_resource_envelope_and_half_memory_gate_precede_dense_allocation():
     constrained = psi4.core._atomic_polarizability_plan_wsm_refinement(
         2, 3, 360, 360, 1 << 40)
     assert constrained["constraint_matrix_bytes"] == 360*360*8
+    assert constrained["workspace_elements"] == 64*(360*360 + 360*360 + 3 + 360)
     assert constrained["constraint_svd_peak_bytes"] >= constrained["fit_svd_peak_bytes"]
     exact_memory = 2*constrained["estimated_bytes"]
     assert psi4.core._atomic_polarizability_plan_wsm_refinement(

@@ -2510,6 +2510,19 @@ void require_lapack_dimensions(std::size_t rows, std::size_t columns) {
         throw PSIEXCEPTION("constrained least squares: invalid LAPACK SVD dimensions");
 }
 
+int validated_lapack_workspace(double query, std::size_t maximum_elements,
+                               const char* context) {
+    if (!std::isfinite(query) || query < 1.0 ||
+        query > static_cast<double>(std::numeric_limits<int>::max()))
+        throw PSIEXCEPTION(std::string("constrained least squares: ") + context +
+                           " workspace query failed");
+    const auto rounded = static_cast<std::size_t>(std::ceil(query));
+    if (rounded > maximum_elements)
+        throw PSIEXCEPTION(std::string("constrained least squares: ") + context +
+                           " workspace exceeds the explicit allocation cap");
+    return static_cast<int>(rounded);
+}
+
 std::vector<double> lsq_column_major(const std::vector<double>& row_major,
                                      std::size_t rows, std::size_t columns) {
     const auto elements = checked_lsq_elements(rows, columns, "SVD input");
@@ -2524,7 +2537,8 @@ std::vector<double> lsq_column_major(const std::vector<double>& row_major,
 
 /** Economy U plus full right singular vectors for equality null-space elimination. */
 LeastSquaresSVD constraint_null_space_svd(const std::vector<double>& row_major,
-                                           std::size_t rows, std::size_t columns) {
+                                           std::size_t rows, std::size_t columns,
+                                           std::size_t maximum_workspace_elements) {
     require_lapack_dimensions(rows, columns);
     LeastSquaresSVD result;
     result.rows = rows;
@@ -2542,10 +2556,10 @@ LeastSquaresSVD constraint_null_space_svd(const std::vector<double>& row_major,
     int info = C_DGESVD('S', 'A', m, n, values.data(), m, result.singular_values.data(),
                         column_major_u.data(), m, column_major_vt.data(), n,
                         &workspace_query, -1);
-    if (info != 0 || !std::isfinite(workspace_query) || workspace_query < 1.0 ||
-        workspace_query > static_cast<double>(std::numeric_limits<int>::max()))
+    if (info != 0)
         throw PSIEXCEPTION("constrained least squares: constraint SVD workspace query failed");
-    const int workspace_size = static_cast<int>(std::ceil(workspace_query));
+    const int workspace_size = validated_lapack_workspace(
+        workspace_query, maximum_workspace_elements, "constraint SVD");
     std::vector<double> workspace(static_cast<std::size_t>(workspace_size));
     info = C_DGESVD('S', 'A', m, n, values.data(), m, result.singular_values.data(),
                     column_major_u.data(), m, column_major_vt.data(), n,
@@ -2567,7 +2581,8 @@ LeastSquaresSVD constraint_null_space_svd(const std::vector<double>& row_major,
 
 /** Economy divide-and-conquer SVD for the tall reduced augmented fit. */
 LeastSquaresSVD reduced_fit_svd(const std::vector<double>& row_major,
-                                std::size_t rows, std::size_t columns) {
+                                std::size_t rows, std::size_t columns,
+                                std::size_t maximum_workspace_elements) {
     require_lapack_dimensions(rows, columns);
     LeastSquaresSVD result;
     result.rows = rows;
@@ -2588,10 +2603,10 @@ LeastSquaresSVD reduced_fit_svd(const std::vector<double>& row_major,
     int info = C_DGESDD('S', m, n, values.data(), m, result.singular_values.data(),
                         column_major_u.data(), m, column_major_vt.data(), ldvt,
                         &workspace_query, -1, integer_workspace.data());
-    if (info != 0 || !std::isfinite(workspace_query) || workspace_query < 1.0 ||
-        workspace_query > static_cast<double>(std::numeric_limits<int>::max()))
+    if (info != 0)
         throw PSIEXCEPTION("constrained least squares: fit SVD workspace query failed");
-    const int workspace_size = static_cast<int>(std::ceil(workspace_query));
+    const int workspace_size = validated_lapack_workspace(
+        workspace_query, maximum_workspace_elements, "fit SVD");
     std::vector<double> workspace(static_cast<std::size_t>(workspace_size));
     info = C_DGESDD('S', m, n, values.data(), m, result.singular_values.data(),
                     column_major_u.data(), m, column_major_vt.data(), ldvt,
@@ -2711,7 +2726,8 @@ ConstrainedLeastSquaresResult solve_constrained_least_squares(
                 reduced_constraints[row * reduced_count + column] =
                     constraints(row, pending.kept_columns[column]);
         const auto constraint_svd = constraint_null_space_svd(
-            reduced_constraints, constraint_count, reduced_count);
+            reduced_constraints, constraint_count, reduced_count,
+            options.maximum_workspace_elements);
         pending.allocation_plan.constraint_rows = constraint_count;
         pending.allocation_plan.constraint_columns = reduced_count;
         pending.allocation_plan.constraint_u_elements = constraint_svd.u.size();
@@ -2783,7 +2799,8 @@ ConstrainedLeastSquaresResult solve_constrained_least_squares(
         for (double value : reduced_target)
             if (!std::isfinite(value)) throw PSIEXCEPTION(prefix + "augmented target overflowed");
         const auto fit_svd = reduced_fit_svd(
-            reduced_design, augmented_rows, pending.free_dimension);
+            reduced_design, augmented_rows, pending.free_dimension,
+            options.maximum_workspace_elements);
         pending.allocation_plan.fit_rows = augmented_rows;
         pending.allocation_plan.fit_columns = pending.free_dimension;
         pending.allocation_plan.fit_u_elements = fit_svd.u.size();
@@ -3971,6 +3988,7 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
     solve_options.column_cutoff = options.cutoff;
     solve_options.prune_below_cutoff = true;
     solve_options.maximum_condition_number = options.maximum_condition_number;
+    solve_options.maximum_workspace_elements = plan.workspace_elements;
     const auto solved = detail::solve_constrained_least_squares(
         design, observations, row_weights, options.weight_coefficient, anchor, reference,
         reduced_constraints, reduced_targets, solve_options);
@@ -4055,38 +4073,41 @@ WSMRefinementPlan plan_wsm_refinement(std::size_t point_count, std::size_t site_
     };
     const auto base_elements = checked_c1_sum(
         checked_c1_sum(design_elements, irregular_elements, prefix), response_elements, prefix);
+    const auto null_space_elements = square_variables;
+    const auto solver_base_elements = checked_c1_sum(base_elements, null_space_elements, prefix);
+    // DGESVD and DGESDD work arrays are sequential, so one enforceable cap is live.
+    // 64 times all quadratic/constraint/row drivers is deliberately above documented
+    // LAPACK minima while remaining overflow-checked and charged to the peak.
+    const auto workspace_drivers = checked_c1_sum(
+        square_variables, checked_c1_sum(constraint_elements,
+            checked_c1_sum(pair_rows, active_variable_count, prefix), prefix), prefix);
+    const auto workspace_elements = checked_c1_product(
+        workspace_drivers, std::size_t{64}, prefix);
 
-    std::size_t constraint_peak_elements = base_elements;
+    std::size_t constraint_peak_elements = solver_base_elements;
     if (constraint_rows != 0) {
         const auto three_constraint_matrices = checked_c1_product(constraint_elements, std::size_t{3}, prefix);
         const auto two_u = checked_c1_product(constraint_elements, std::size_t{2}, prefix);
         const auto two_vt = checked_c1_product(square_variables, std::size_t{2}, prefix);
-        const auto three_min_plus_max = checked_c1_sum(
-            checked_c1_product(constraint_rows, std::size_t{3}, prefix), active_variable_count, prefix);
-        const auto five_min = checked_c1_product(constraint_rows, std::size_t{5}, prefix);
-        const auto workspace = std::max(three_min_plus_max, five_min);
         constraint_peak_elements = checked_c1_sum(
             constraint_peak_elements,
             checked_c1_sum(three_constraint_matrices,
                 checked_c1_sum(two_u, checked_c1_sum(two_vt,
-                    checked_c1_sum(workspace, constraint_rows, prefix), prefix), prefix), prefix), prefix);
+                    checked_c1_sum(workspace_elements, constraint_rows, prefix), prefix), prefix), prefix), prefix);
     }
 
     const auto free_variable_count = active_variable_count - constraint_rows;
     const auto augmented_rows = checked_c1_sum(pair_rows, active_variable_count, prefix);
     const auto augmented_elements = checked_c1_product(augmented_rows, free_variable_count, prefix);
     const auto square_free = checked_c1_product(free_variable_count, free_variable_count, prefix);
-    std::size_t fit_peak_elements = base_elements;
+    std::size_t fit_peak_elements = solver_base_elements;
     std::size_t fit_integer_workspace_bytes = 0;
     if (free_variable_count != 0) {
         const auto four_augmented = checked_c1_product(augmented_elements, std::size_t{4}, prefix);
-        const auto fit_workspace = checked_c1_sum(
-            checked_c1_product(square_free, std::size_t{4}, prefix),
-            checked_c1_product(free_variable_count, std::size_t{7}, prefix), prefix);
         fit_peak_elements = checked_c1_sum(
-            base_elements, checked_c1_sum(four_augmented,
+            solver_base_elements, checked_c1_sum(four_augmented,
                 checked_c1_sum(checked_c1_product(square_free, std::size_t{2}, prefix),
-                               fit_workspace, prefix), prefix), prefix);
+                               workspace_elements, prefix), prefix), prefix);
         fit_integer_workspace_bytes = checked_c1_product(
             checked_c1_product(free_variable_count, std::size_t{8}, prefix), sizeof(int), prefix);
     }
@@ -4108,13 +4129,17 @@ WSMRefinementPlan plan_wsm_refinement(std::size_t point_count, std::size_t site_
     plan.design_elements = design_elements;
     plan.design_bytes = bytes(design_elements);
     plan.constraint_matrix_bytes = bytes(constraint_elements);
+    plan.null_space_elements = null_space_elements;
+    plan.null_space_bytes = bytes(null_space_elements);
+    plan.workspace_elements = workspace_elements;
+    plan.workspace_bytes = bytes(workspace_elements);
     plan.constraint_svd_peak_bytes = constraint_peak_bytes;
     plan.fit_svd_peak_bytes = fit_peak_bytes;
     plan.estimated_bytes = estimated_bytes;
     plan.configured_memory_bytes = memory_bytes;
     plan.reserved_memory_bytes = reserved;
     plan.algorithm = "upper-point-pairs/site-major-upper-triangle/direct-economy-SVD";
-    plan.memory_semantics = "hard half-memory gate over response clone, design, reduced constraint matrix, constraint DGESVD copies/U/VT/workspace, and reduced-fit DGESDD copies/economy-U/VT/workspace";
+    plan.memory_semantics = "hard half-memory gate over response clone, design, explicit active^2 null space, reduced constraint matrix, and one enforceable sequential LAPACK workspace cap with DGESVD/DGESDD copies/U/VT";
     return plan;
 }
 

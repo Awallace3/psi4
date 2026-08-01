@@ -289,6 +289,12 @@ def test_large_tall_problem_uses_economy_allocation_plan():
     assert plan["fit_u_elements"] < (rows + 3) ** 2
 
 
+def test_explicit_workspace_cap_rejects_queried_lwork_before_allocation():
+    with pytest.raises(Exception, match="workspace exceeds the explicit allocation cap"):
+        _solve([[1.0, 0.0], [0.0, 1.0]], [1.0, 2.0],
+               maximum_workspace_elements=1)
+
+
 def test_source_uses_only_allowlisted_economy_svd_without_normal_equations():
     source = (Path(__file__).parents[2] / "psi4/src/psi4/libmints/atomic_polarizability.cc").read_text()
     start = source.index("struct LeastSquaresSVD")

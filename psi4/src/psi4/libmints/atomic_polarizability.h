@@ -20,6 +20,7 @@
 #include <array>
 #include <cstddef>
 #include <map>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -774,6 +775,7 @@ struct ConstrainedLeastSquaresOptions {
     bool prune_below_cutoff{true};
     double maximum_condition_number{1.0e12};
     double rank_tolerance{1.0e-12};
+    std::size_t maximum_workspace_elements{std::numeric_limits<std::size_t>::max()};
 };
 
 /** Auditable economy-SVD allocation counts, in scalar elements. */
@@ -997,6 +999,10 @@ struct PSI_API WSMRefinementPlan {
     std::size_t design_elements{};
     std::size_t design_bytes{};
     std::size_t constraint_matrix_bytes{};
+    std::size_t null_space_elements{};
+    std::size_t null_space_bytes{};
+    std::size_t workspace_elements{};
+    std::size_t workspace_bytes{};
     std::size_t constraint_svd_peak_bytes{};
     std::size_t fit_svd_peak_bytes{};
     std::size_t estimated_bytes{};

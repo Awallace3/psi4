@@ -139,6 +139,10 @@ void export_oeprop(py::module &m) {
               values["design_elements"] = plan.design_elements;
               values["design_bytes"] = plan.design_bytes;
               values["constraint_matrix_bytes"] = plan.constraint_matrix_bytes;
+              values["null_space_elements"] = plan.null_space_elements;
+              values["null_space_bytes"] = plan.null_space_bytes;
+              values["workspace_elements"] = plan.workspace_elements;
+              values["workspace_bytes"] = plan.workspace_bytes;
               values["constraint_svd_peak_bytes"] = plan.constraint_svd_peak_bytes;
               values["fit_svd_peak_bytes"] = plan.fit_svd_peak_bytes;
               values["estimated_bytes"] = plan.estimated_bytes;
@@ -262,6 +266,8 @@ void export_oeprop(py::module &m) {
                       options.maximum_condition_number = entry.second.cast<double>();
                   else if (key == "rank_tolerance")
                       options.rank_tolerance = entry.second.cast<double>();
+                  else if (key == "maximum_workspace_elements")
+                      options.maximum_workspace_elements = entry.second.cast<std::size_t>();
                   else
                       throw PSIEXCEPTION("constrained least squares: unknown option '" + key + "'");
               }
