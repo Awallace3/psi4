@@ -1690,6 +1690,130 @@ RestrictedALDACollocationTestResult collocate_restricted_alda_ao_target_test_onl
     context->verify_basis_unchanged();
     return result;
 }
+
+TransitionMultipoleProjectionPlan plan_transition_multipole_projection(
+    std::size_t point_count, std::size_t site_count, std::size_t transition_count,
+    std::size_t max_block_points, std::size_t nbf, std::size_t nmo,
+    std::size_t memory_bytes) {
+    const std::string prefix = "transition multipole projection: ";
+    constexpr std::size_t max_sites = 64;
+    constexpr std::size_t max_transitions = 512;
+    constexpr std::size_t max_work = 64ULL * 1024ULL * 1024ULL * 1024ULL;
+    constexpr std::size_t overhead = 1024ULL * 1024ULL;
+    if (point_count == 0 || site_count == 0 || transition_count == 0 ||
+        max_block_points == 0 || max_block_points > point_count)
+        throw PSIEXCEPTION(prefix + "dimensions must be nonzero and block-bounded");
+    if ((nbf == 0) != (nmo == 0))
+        throw PSIEXCEPTION(prefix + "basis/orbital planning dimensions are inconsistent");
+    if (site_count > max_sites)
+        throw PSIEXCEPTION(prefix + "site count exceeds the supported canonical-molecule envelope");
+    if (transition_count > max_transitions)
+        throw PSIEXCEPTION(prefix + "transition count exceeds the supported response envelope");
+    if (transition_count > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        checked_c1_product(site_count, 16, prefix) >
+            static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw PSIEXCEPTION(prefix + "dimensions exceed native matrix limits");
+    const auto output_elements = checked_c1_product(
+        checked_c1_product(site_count, 16, prefix), transition_count, prefix);
+    const auto output_bytes = checked_c1_product(output_elements, sizeof(double), prefix);
+    auto block_elements = checked_c1_product(max_block_points, transition_count, prefix);
+    if (nbf != 0) {
+        block_elements = checked_c1_sum(
+            block_elements, checked_c1_product(max_block_points, nmo, prefix), prefix);
+        block_elements = checked_c1_sum(
+            block_elements,
+            checked_c1_product(checked_c1_product(2, max_block_points, prefix), nbf, prefix),
+            prefix);
+    }
+    const auto block_scratch_bytes = checked_c1_product(block_elements, sizeof(double), prefix);
+    auto estimated = checked_c1_sum(output_bytes, block_scratch_bytes, prefix);
+    estimated = checked_c1_sum(estimated, overhead, prefix);
+    const auto work = checked_c1_product(
+        checked_c1_product(checked_c1_product(point_count, site_count, prefix), 16, prefix),
+        transition_count, prefix);
+    if (work > max_work) throw PSIEXCEPTION(prefix + "work bound exceeded");
+    if (estimated > memory_bytes / 2)
+        throw PSIEXCEPTION(prefix + "conservative simultaneous storage exceeds reserved memory");
+    TransitionMultipoleProjectionPlan plan;
+    plan.point_count = point_count;
+    plan.site_count = site_count;
+    plan.transition_count = transition_count;
+    plan.max_block_points = max_block_points;
+    plan.output_bytes = output_bytes;
+    plan.block_scratch_bytes = block_scratch_bytes;
+    plan.estimated_bytes = estimated;
+    plan.work_terms = work;
+    plan.max_work_terms = max_work;
+    plan.max_site_count = max_sites;
+    plan.algorithm = nbf == 0 ? "PURE_POINT_STREAM" : "SEALED_BLOCK_TAU_STREAM";
+    return plan;
+}
+
+TransitionMultipoleProjection project_transition_multipoles(
+    const std::vector<SitePosition>& points, const std::vector<double>& weights,
+    const std::vector<double>& partition, const std::vector<SitePosition>& sites,
+    const Matrix& transition_values) {
+    const std::string prefix = "transition multipole projection: ";
+    const auto npoints = points.size();
+    const auto nsites = sites.size();
+    if (npoints == 0 || nsites == 0 || weights.size() != npoints ||
+        npoints > std::numeric_limits<std::size_t>::max() / nsites ||
+        partition.size() != npoints * nsites || transition_values.nirrep() != 1 ||
+        transition_values.nrow() != npoints || transition_values.ncol() == 0)
+        throw PSIEXCEPTION(prefix + "input dimensions are inconsistent");
+    const auto nov = static_cast<std::size_t>(transition_values.ncol());
+    const auto plan = plan_transition_multipole_projection(
+        npoints, nsites, nov, npoints, 0, 0, Process::environment.get_memory());
+    for (const auto& point : points)
+        for (double coordinate : point)
+            if (!std::isfinite(coordinate)) throw PSIEXCEPTION(prefix + "points must be finite");
+    for (const auto& site : sites)
+        for (double coordinate : site)
+            if (!std::isfinite(coordinate)) throw PSIEXCEPTION(prefix + "sites must be finite");
+    for (std::size_t point = 0; point < npoints; ++point) {
+        if (!std::isfinite(weights[point]) || weights[point] < 0.0)
+            throw PSIEXCEPTION(prefix + "quadrature weights must be finite and nonnegative");
+        double unity = 0.0;
+        for (std::size_t site = 0; site < nsites; ++site) {
+            const double value = partition[point * nsites + site];
+            if (!std::isfinite(value) || value < 0.0)
+                throw PSIEXCEPTION(prefix + "partition must be finite and nonnegative");
+            unity += value;
+        }
+        if (!std::isfinite(unity) || std::abs(unity - 1.0) > kValidationTolerance)
+            throw PSIEXCEPTION(prefix + "pointwise partition unity failed");
+        for (std::size_t transition = 0; transition < nov; ++transition)
+            if (!std::isfinite(transition_values(point, transition)))
+                throw PSIEXCEPTION(prefix + "transition values must be finite");
+    }
+    auto values = std::make_shared<Matrix>(nsites * 16, nov);
+    for (std::size_t point = 0; point < npoints; ++point) {
+        for (std::size_t site = 0; site < nsites; ++site) {
+            const double factor = weights[point] * partition[point * nsites + site];
+            if (!std::isfinite(factor)) throw PSIEXCEPTION(prefix + "weight contraction overflowed");
+            const SitePosition displacement{
+                points[point][0] - sites[site][0], points[point][1] - sites[site][1],
+                points[point][2] - sites[site][2]};
+            const auto harmonics = regular_harmonics(displacement);
+            for (std::size_t component = 0; component < 16; ++component) {
+                const auto row = site * 16 + component;
+                for (std::size_t transition = 0; transition < nov; ++transition) {
+                    const double increment = factor * harmonics[component] *
+                                             transition_values(point, transition);
+                    if (!std::isfinite(increment))
+                        throw PSIEXCEPTION(prefix + "multipole contraction overflowed");
+                    (*values)(row, transition) += increment;
+                    if (!std::isfinite((*values)(row, transition)))
+                        throw PSIEXCEPTION(prefix + "multipole accumulation overflowed");
+                }
+            }
+        }
+    }
+    TransitionMultipoleProjection result;
+    result.values = std::move(values);
+    result.plan = plan;
+    return result;
+}
 }  // namespace detail
 
 std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
@@ -1867,6 +1991,130 @@ ISAWeights ISAWeights::create_test_only(std::shared_ptr<const FrozenResponseCont
 
 std::size_t ISAWeights::point_count() const { return context_->grid_point_count(); }
 std::size_t ISAWeights::site_count() const { return context_->sites().size(); }
+
+namespace detail {
+TransitionMultipoleProjection TransitionMultipoleProjector::project(
+    const std::shared_ptr<const FrozenResponseContext>& context,
+    const ISAWeights& isa_weights) {
+    const std::string prefix = "transition multipole projection: ";
+    if (!context) throw PSIEXCEPTION(prefix + "frozen response context is null");
+    if (isa_weights.context_.get() != context.get())
+        throw PSIEXCEPTION(prefix + "ISA weights must belong to the same frozen response context");
+    const auto basis_const = context->basis();
+    if (!basis_const) throw PSIEXCEPTION(prefix + "retained basis is unavailable");
+    const int nbf_int = basis_const->nbf();
+    if (nbf_int <= 0) throw PSIEXCEPTION(prefix + "retained basis is empty");
+    const auto nbf = static_cast<std::size_t>(nbf_int);
+    const auto counts = validate_restricted_alda_orbitals(*context);
+    const auto npoints = context->grid_point_count();
+    const auto nsites = context->sites().size();
+    if (npoints == 0 || nsites == 0 ||
+        npoints > std::numeric_limits<std::size_t>::max() / 3 ||
+        context->grid_points().size() != 3 * npoints)
+        throw PSIEXCEPTION(prefix + "sealed grid/site dimensions are inconsistent");
+    if (npoints > std::numeric_limits<std::size_t>::max() / nsites ||
+        isa_weights.partition_weights_.size() != npoints * nsites)
+        throw PSIEXCEPTION(prefix + "ISA partition dimensions are inconsistent");
+    preflight_restricted_alda_grid(nbf, npoints, context->grid_weights(), context->grid_blocks());
+    std::size_t max_block_points = 0;
+    for (const auto& block : context->grid_blocks())
+        max_block_points = std::max(max_block_points, block.point_count);
+    const auto nov = checked_c1_product(counts.first, counts.second, prefix);
+    const auto plan = plan_transition_multipole_projection(
+        npoints, nsites, nov, max_block_points, nbf,
+        static_cast<std::size_t>(context->Ca()->ncol()), Process::environment.get_memory());
+    context->verify_basis_unchanged();
+    validate_restricted_alda_duplicate_maps(context->grid_blocks());
+    for (double coordinate : context->grid_points())
+        if (!std::isfinite(coordinate))
+            throw PSIEXCEPTION(prefix + "sealed coordinates must be finite");
+    for (const auto& site : context->sites())
+        for (double coordinate : site)
+            if (!std::isfinite(coordinate)) throw PSIEXCEPTION(prefix + "sites must be finite");
+    for (std::size_t point = 0; point < npoints; ++point) {
+        double unity = 0.0;
+        for (std::size_t site = 0; site < nsites; ++site) {
+            const double value = isa_weights.partition_weights_[point * nsites + site];
+            if (!std::isfinite(value) || value < 0.0)
+                throw PSIEXCEPTION(prefix + "ISA partition must be finite and nonnegative");
+            unity += value;
+        }
+        if (!std::isfinite(unity) || std::abs(unity - 1.0) > kValidationTolerance)
+            throw PSIEXCEPTION(prefix + "pointwise ISA partition unity failed");
+    }
+
+    const auto basis = std::const_pointer_cast<BasisSet>(basis_const);
+    auto transitions = make_restricted_alda_transitions(*context, nov);
+    auto values = std::make_shared<Matrix>(nsites * 16, nov);
+    auto extents = std::make_shared<BasisExtents>(basis, 1.0e-12);
+    BasisFunctions collocation(basis, static_cast<int>(max_block_points), nbf_int);
+    const auto& Ca = *context->Ca();
+    for (const auto& sealed : context->grid_blocks()) {
+        auto block = make_complete_alda_block(*context, sealed, extents, basis);
+        collocation.compute_functions(block);
+        const auto phi = collocation.basis_value("PHI");
+        Matrix orbital_values(sealed.point_count, Ca.ncol());
+        Matrix block_tau(sealed.point_count, nov);
+        for (std::size_t local_point = 0; local_point < sealed.point_count; ++local_point) {
+            for (int orbital = 0; orbital < Ca.ncol(); ++orbital) {
+                double value = 0.0;
+                for (int mu : sealed.functions_local_to_global)
+                    value += (*phi)(local_point, mu) * Ca(mu, orbital);
+                if (!std::isfinite(value))
+                    throw PSIEXCEPTION(prefix + "orbital collocation is nonfinite");
+                orbital_values(local_point, orbital) = value;
+            }
+            for (std::size_t transition = 0; transition < nov; ++transition) {
+                const double value = orbital_values(local_point, transitions[transition].first) *
+                                     orbital_values(local_point, transitions[transition].second);
+                if (!std::isfinite(value))
+                    throw PSIEXCEPTION(prefix + "transition collocation is nonfinite");
+                block_tau(local_point, transition) = value;
+            }
+        }
+        for (std::size_t local_point = 0; local_point < sealed.point_count; ++local_point) {
+            const auto point = sealed.point_offset + local_point;
+            const SitePosition position{context->grid_points()[3 * point],
+                                        context->grid_points()[3 * point + 1],
+                                        context->grid_points()[3 * point + 2]};
+            for (std::size_t site = 0; site < nsites; ++site) {
+                const double factor = context->grid_weights()[point] *
+                    isa_weights.partition_weights_[point * nsites + site];
+                if (!std::isfinite(factor))
+                    throw PSIEXCEPTION(prefix + "weight contraction overflowed");
+                const SitePosition displacement{position[0] - context->sites()[site][0],
+                                                position[1] - context->sites()[site][1],
+                                                position[2] - context->sites()[site][2]};
+                const auto harmonics = regular_harmonics(displacement);
+                for (std::size_t component = 0; component < 16; ++component) {
+                    const auto row = site * 16 + component;
+                    for (std::size_t transition = 0; transition < nov; ++transition) {
+                        const double increment = factor * harmonics[component] *
+                                                 block_tau(local_point, transition);
+                        if (!std::isfinite(increment))
+                            throw PSIEXCEPTION(prefix + "multipole contraction overflowed");
+                        (*values)(row, transition) += increment;
+                        if (!std::isfinite((*values)(row, transition)))
+                            throw PSIEXCEPTION(prefix + "multipole accumulation overflowed");
+                    }
+                }
+            }
+        }
+    }
+    TransitionMultipoleProjection result;
+    result.transitions = std::move(transitions);
+    result.values = std::move(values);
+    result.plan = plan;
+    context->verify_basis_unchanged();
+    return result;
+}
+}  // namespace detail
+
+detail::TransitionMultipoleProjection project_transition_multipoles(
+    const std::shared_ptr<const FrozenResponseContext>& context,
+    const ISAWeights& isa_weights) {
+    return detail::TransitionMultipoleProjector::project(context, isa_weights);
+}
 
 ISAPolResponseProvider::ISAPolResponseProvider(std::shared_ptr<const FrozenResponseContext> context,
                                                ResponseKernel kernel, ISAWeights isa_weights)

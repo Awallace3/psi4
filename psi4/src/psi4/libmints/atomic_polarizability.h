@@ -37,6 +37,7 @@ class Molecule;
 class SuperFunctional;
 class Vector;
 class Wavefunction;
+class ISAWeights;
 
 /** Imaginary-frequency points and transformed Gauss-Legendre weights. */
 struct PSI_API FrequencyGrid {
@@ -52,7 +53,7 @@ using L3WorkingVector = std::array<double, 16>;
 using L3WorkingMatrix = std::array<std::array<double, 16>, 16>;
 using SitePosition = std::array<double, 3>;
 
-/** Dense site-pair response; blocks use row-major (response site, potential site) order. */
+/** Dense site-pair response; blocks use row-major (first ISA FDDS response coordinate, second ISA FDDS potential coordinate) order. */
 struct PSI_API SitePairResponse {
     std::vector<SitePosition> positions;
     std::vector<L3WorkingMatrix> blocks;
@@ -462,6 +463,46 @@ struct RestrictedALDACollocationTestResult {
 };
 RestrictedALDACollocationTestResult collocate_restricted_alda_ao_target_test_only(
     const std::shared_ptr<const FrozenResponseContext>& context);
+
+/** Resource-gated C3a projection plan; production streams tau one sealed block at a time. */
+struct TransitionMultipoleProjectionPlan {
+    std::size_t point_count{};
+    std::size_t site_count{};
+    std::size_t transition_count{};
+    std::size_t max_block_points{};
+    std::size_t output_bytes{};
+    std::size_t block_scratch_bytes{};
+    std::size_t estimated_bytes{};
+    std::size_t work_terms{};
+    std::size_t max_work_terms{};
+    std::size_t max_site_count{};
+    std::string algorithm;
+};
+
+/** Site-major B[A,t,k], with t in 00;10,11c,11s;...;33c,33s order. */
+struct TransitionMultipoleProjection {
+    std::vector<std::pair<std::size_t, std::size_t>> transitions;
+    SharedMatrix values;
+    TransitionMultipoleProjectionPlan plan;
+};
+
+TransitionMultipoleProjectionPlan plan_transition_multipole_projection(
+    std::size_t point_count, std::size_t site_count, std::size_t transition_count,
+    std::size_t max_block_points, std::size_t nbf, std::size_t nmo,
+    std::size_t memory_bytes);
+
+/** Pure C3a equation evaluator over caller-supplied tau[p,k]. */
+TransitionMultipoleProjection project_transition_multipoles(
+    const std::vector<SitePosition>& points, const std::vector<double>& weights,
+    const std::vector<double>& partition, const std::vector<SitePosition>& sites,
+    const Matrix& transition_values);
+
+/** Internal friend carrier enforcing ISA/context identity before production projection. */
+struct TransitionMultipoleProjector {
+    static TransitionMultipoleProjection project(
+        const std::shared_ptr<const FrozenResponseContext>& context,
+        const ISAWeights& isa_weights);
+};
 }  // namespace detail
 
 /** Actual ISA data structurally bound to one exact frozen context and its ordered grid/sites. */
@@ -478,6 +519,7 @@ class PSI_API ISAWeights {
 
    private:
     friend class ISAPolResponseProvider;
+    friend struct detail::TransitionMultipoleProjector;
     friend ISAWeights compute_isa_weights(std::shared_ptr<const FrozenResponseContext>, const ISAOptions&);
     ISAWeights(std::shared_ptr<const FrozenResponseContext> context,
                std::vector<double> partition_weights, ISADiagnostics diagnostics);
@@ -490,6 +532,11 @@ class PSI_API ISAWeights {
 /** Compute native real-space ISA probabilities on the exact sealed response grid. */
 PSI_API ISAWeights compute_isa_weights(std::shared_ptr<const FrozenResponseContext> context,
                                        const ISAOptions& options = ISAOptions());
+
+/** Production C3a projection bound to the exact ISA context/grid; tau is block-streamed. */
+PSI_API detail::TransitionMultipoleProjection project_transition_multipoles(
+    const std::shared_ptr<const FrozenResponseContext>& context,
+    const ISAWeights& isa_weights);
 
 namespace detail {
 struct PSI_API SyntheticGaussianDensity {

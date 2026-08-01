@@ -513,6 +513,62 @@ void export_oeprop(py::module &m) {
           }, "context"_a);
     m.def("_atomic_polarizability_test_validate_restricted_alda_work_bound",
           &detail::validate_restricted_alda_work_bound_test_only, "work_terms"_a);
+    const auto projection_result_dict = [](const detail::TransitionMultipoleProjection& projection) {
+        py::dict plan;
+        plan["algorithm"] = projection.plan.algorithm;
+        plan["point_count"] = projection.plan.point_count;
+        plan["site_count"] = projection.plan.site_count;
+        plan["transition_count"] = projection.plan.transition_count;
+        plan["max_block_points"] = projection.plan.max_block_points;
+        plan["output_bytes"] = projection.plan.output_bytes;
+        plan["block_scratch_bytes"] = projection.plan.block_scratch_bytes;
+        plan["estimated_bytes"] = projection.plan.estimated_bytes;
+        plan["work_terms"] = projection.plan.work_terms;
+        plan["max_work_terms"] = projection.plan.max_work_terms;
+        plan["max_site_count"] = projection.plan.max_site_count;
+        py::dict result;
+        result["component_order"] =
+            "00;10,11c,11s;20,21c,21s,22c,22s;30,31c,31s,32c,32s,33c,33s";
+        result["transition_order"] = "(i,a) occupied-major/virtual-minor";
+        result["transitions"] = projection.transitions;
+        result["values"] = projection.values;
+        result["plan"] = std::move(plan);
+        return result;
+    };
+    m.def("_atomic_polarizability_test_project_transition_multipoles",
+          [projection_result_dict](const std::vector<SitePosition>& points,
+                                   const std::vector<double>& weights,
+                                   const std::vector<double>& partition,
+                                   const std::vector<SitePosition>& sites,
+                                   const Matrix& transition_values) {
+              return projection_result_dict(detail::project_transition_multipoles(
+                  points, weights, partition, sites, transition_values));
+          }, "points"_a, "weights"_a, "partition"_a, "sites"_a,
+          "transition_values"_a);
+    m.def("_atomic_polarizability_test_project_transition_multipoles_context",
+          [projection_result_dict](const std::shared_ptr<FrozenResponseContext>& context,
+                                   const std::shared_ptr<FrozenResponseContext>& isa_context,
+                                   std::vector<double> partition) {
+              if (!isa_context)
+                  throw PSIEXCEPTION(
+                      "transition multipole projection: ISA weights must belong to the same frozen response context");
+              auto isa = ISAWeights::create_test_only(isa_context, std::move(partition));
+              return projection_result_dict(project_transition_multipoles(context, isa));
+          }, "context"_a, "isa_context"_a, "partition"_a);
+    m.def("_atomic_polarizability_estimate_transition_multipole_projection",
+          [](std::size_t point_count, std::size_t site_count,
+             std::size_t transition_count, std::size_t max_block_points,
+             std::size_t nbf, std::size_t nmo, std::size_t memory_bytes) {
+              const auto plan = detail::plan_transition_multipole_projection(
+                  point_count, site_count, transition_count, max_block_points,
+                  nbf, nmo, memory_bytes);
+              py::dict values;
+              values["algorithm"] = plan.algorithm;
+              values["estimated_bytes"] = plan.estimated_bytes;
+              values["work_terms"] = plan.work_terms;
+              return values;
+          }, "point_count"_a, "site_count"_a, "transition_count"_a,
+          "max_block_points"_a, "nbf"_a, "nmo"_a, "memory_bytes"_a);
     m.def("_atomic_polarizability_estimate_restricted_alda",
           [alda_plan_dict](std::size_t nbf, std::size_t nocc, std::size_t nvir,
                            const std::vector<std::size_t>& block_point_counts,
