@@ -876,6 +876,9 @@ PointResponsePlan plan_point_response(
     const auto point_square = checked_c1_product(point_count, point_count, prefix);
     const auto output_bytes = bytes(checked_c1_product(
         frequency_count, point_square, prefix));
+    // The underscored Python carrier export clones every response matrix while
+    // the immutable carrier remains live, so reserve a second full payload.
+    const auto output_clone_bytes = output_bytes;
 
     const auto order = checked_c1_product(has_dynamic_frequency ? 2 : 1, nov, prefix);
     const auto order_square = checked_c1_product(order, order, prefix);
@@ -894,12 +897,13 @@ PointResponsePlan plan_point_response(
 
     const auto operator_bytes = bytes(checked_c1_product(
         2, checked_c1_product(nov, nov, prefix), prefix));
-    const auto scratch_bytes = checked_c1_sum(
-        bytes(point_square), operator_bytes, prefix);
-    auto estimated_bytes = checked_c1_sum(output_bytes, transition_potential_bytes, prefix);
+    const auto scratch_bytes = bytes(point_square);
+    auto estimated_bytes = checked_c1_sum(output_bytes, output_clone_bytes, prefix);
+    estimated_bytes = checked_c1_sum(estimated_bytes, transition_potential_bytes, prefix);
     estimated_bytes = checked_c1_sum(estimated_bytes, ao_matrix_bytes, prefix);
     estimated_bytes = checked_c1_sum(estimated_bytes, dense_solve_peak_bytes, prefix);
     estimated_bytes = checked_c1_sum(estimated_bytes, scratch_bytes, prefix);
+    estimated_bytes = checked_c1_sum(estimated_bytes, operator_bytes, prefix);
     if (estimated_bytes > reserved_memory_bytes)
         throw PSIEXCEPTION(prefix + "estimated storage exceeds reserved memory");
 
@@ -916,13 +920,104 @@ PointResponsePlan plan_point_response(
     plan.ao_matrix_bytes = ao_matrix_bytes;
     plan.transition_potential_bytes = transition_potential_bytes;
     plan.output_bytes = output_bytes;
+    plan.output_clone_bytes = output_clone_bytes;
     plan.dense_solve_peak_bytes = dense_solve_peak_bytes;
     plan.scratch_bytes = scratch_bytes;
+    plan.hessian_bytes = operator_bytes;
     plan.estimated_bytes = estimated_bytes;
     plan.integral_work_terms = checked_c1_product(point_count,
                                                    checked_c1_product(nbf, nbf, prefix), prefix);
     plan.algorithm = "CALLER_POINTS_NATIVE_ORDER0_AO_POTENTIAL_DENSE_RESPONSE";
-    plan.memory_semantics = "SIMULTANEOUS_LIVE_STORAGE_HARD_GATE_HALF_PROCESS_MEMORY";
+    plan.memory_semantics = "SIMULTANEOUS_LIVE_STORAGE_HARD_GATE_HALF_PROCESS_MEMORY_PYTHON_CLONES_INCLUDED";
+    return plan;
+}
+
+PointResponsePlan plan_point_response_provider(
+    std::size_t frequency_count, std::size_t nbf, std::size_t nocc,
+    std::size_t nvir, std::size_t point_count,
+    const std::vector<FrozenGridBlock>& blocks, bool has_dynamic_frequency,
+    std::size_t memory_bytes, double density_cutoff) {
+    const std::string prefix = "point response: ";
+    // Acquire overflow-checked point-stage components without applying the
+    // standalone all-live gate; the aggregate stage peaks below are the sole
+    // production point-response memory claim.
+    const auto point_plan = plan_point_response(
+        frequency_count, nbf, nocc, nvir, point_count,
+        has_dynamic_frequency, std::numeric_limits<std::size_t>::max());
+    if (blocks.empty())
+        throw PSIEXCEPTION(prefix + "canonical ALDA grid blocks are unavailable");
+    std::size_t grid_point_count = 0;
+    for (const auto& block : blocks)
+        grid_point_count = checked_c1_sum(grid_point_count, block.point_count, prefix);
+    if (grid_point_count == 0)
+        throw PSIEXCEPTION(prefix + "canonical ALDA grid is empty");
+
+    const auto c1_plan = plan_restricted_c1_jk(nbf, nocc, nvir, memory_bytes);
+    const auto alda_plan = plan_restricted_alda(
+        nbf, nocc, nvir, grid_point_count, blocks, memory_bytes, false,
+        density_cutoff);
+    const auto nov = point_plan.transition_count;
+    const auto matrix_bytes = checked_c1_product(
+        checked_c1_product(nov, nov, prefix), sizeof(double), prefix);
+    const auto retained_c1_bytes = checked_c1_product(3, matrix_bytes, prefix);
+    const auto retained_alda_bytes = matrix_bytes;
+    const auto hessian_bytes = checked_c1_product(2, matrix_bytes, prefix);
+    const auto transition_metadata_bytes = checked_c1_product(
+        nov, 5 * sizeof(std::size_t) + sizeof(double), prefix);
+    constexpr std::size_t conservative_overhead_bytes = 1024ULL * 1024ULL;
+    const auto persistent = checked_c1_sum(
+        transition_metadata_bytes, conservative_overhead_bytes, prefix);
+    const auto add_stage = [&prefix](std::initializer_list<std::size_t> terms) {
+        std::size_t value = 0;
+        for (const auto term : terms) value = checked_c1_sum(value, term, prefix);
+        return value;
+    };
+    const auto retained_operator = add_stage(
+        {retained_c1_bytes, retained_alda_bytes, hessian_bytes, persistent});
+    const auto c1_stage_peak_bytes = c1_plan.estimated_bytes;
+    const auto alda_stage_peak_bytes = add_stage(
+        {retained_c1_bytes, alda_plan.estimated_bytes, persistent});
+    const auto point_potential_stage_peak_bytes = add_stage(
+        {retained_operator, point_plan.ao_matrix_bytes,
+         point_plan.transition_potential_bytes});
+    const auto dense_solve_stage_peak_bytes = add_stage(
+        {retained_operator, point_plan.transition_potential_bytes,
+         point_plan.output_bytes, point_plan.dense_solve_peak_bytes,
+         point_plan.scratch_bytes});
+    // The underscored export retains the carrier transition matrix while a
+    // clone and its point-major transpose are both live.
+    const auto output_clone_stage_peak_bytes = add_stage(
+        {retained_operator,
+         checked_c1_product(3, point_plan.transition_potential_bytes, prefix),
+         point_plan.output_bytes, point_plan.output_clone_bytes});
+    const auto estimated_bytes = std::max(
+        {c1_stage_peak_bytes, alda_stage_peak_bytes,
+         point_potential_stage_peak_bytes, dense_solve_stage_peak_bytes,
+         output_clone_stage_peak_bytes});
+    const auto reserved_memory_bytes = memory_bytes / 2;
+    if (estimated_bytes > reserved_memory_bytes)
+        throw PSIEXCEPTION(prefix +
+                           "aggregate stage peak exceeds the half-memory reservation");
+
+    auto plan = point_plan;
+    plan.configured_memory_bytes = memory_bytes;
+    plan.reserved_memory_bytes = reserved_memory_bytes;
+    plan.c1_plan_estimated_bytes = c1_plan.estimated_bytes;
+    plan.alda_plan_estimated_bytes = alda_plan.estimated_bytes;
+    plan.retained_c1_bytes = retained_c1_bytes;
+    plan.retained_alda_bytes = retained_alda_bytes;
+    plan.hessian_bytes = hessian_bytes;
+    plan.transition_metadata_bytes = transition_metadata_bytes;
+    plan.conservative_overhead_bytes = conservative_overhead_bytes;
+    plan.c1_stage_peak_bytes = c1_stage_peak_bytes;
+    plan.alda_stage_peak_bytes = alda_stage_peak_bytes;
+    plan.point_potential_stage_peak_bytes = point_potential_stage_peak_bytes;
+    plan.dense_solve_stage_peak_bytes = dense_solve_stage_peak_bytes;
+    plan.output_clone_stage_peak_bytes = output_clone_stage_peak_bytes;
+    plan.estimated_bytes = estimated_bytes;
+    plan.algorithm = "CANONICAL_C1_ALDA_HESSIAN_CALLER_POINTS_ORDER0_DENSE_RESPONSE";
+    plan.memory_semantics =
+        "KNOWN_STORAGE_HARD_GATE_DIRECT_JK_WORKSPACE_ADVISORY_PYTHON_CLONES_INCLUDED";
     return plan;
 }
 
@@ -2974,11 +3069,12 @@ struct ISAPolResponsePreflight {
 // Allocation-light C4 context preflight. It reads sealed arrays with checked
 // loops and creates no transition vector, dense matrix, grid block, or output.
 ISAPolResponsePreflight preflight_isapol_response_provider(
-    const std::shared_ptr<const FrozenResponseContext>& context) {
+    const std::shared_ptr<const FrozenResponseContext>& context,
+    bool verify_basis_snapshot = true) {
     const std::string prefix = "ISAPolResponseProvider: ";
     if (!context || !context->basis())
         throw PSIEXCEPTION(prefix + "frozen response context/basis is unavailable");
-    context->verify_basis_unchanged();
+    if (verify_basis_snapshot) context->verify_basis_unchanged();
     const int nbf_int = context->basis()->nbf();
     if (nbf_int <= 0)
         throw PSIEXCEPTION(prefix + "retained basis is empty");
@@ -3206,14 +3302,46 @@ std::vector<SitePairResponse> ISAPolResponseProvider::compute_isapol_response(
 }
 
 PointResponseData::PointResponseData(
-    std::vector<SitePosition> points, std::vector<SharedMatrix> responses,
+    std::vector<SitePosition> points, std::vector<double> frequencies,
+    std::vector<SharedMatrix> responses,
     std::vector<PointResponseDiagnostics> diagnostics, PointResponsePlan plan,
     SharedMatrix transition_potentials)
     : points_(std::move(points)),
+      frequencies_(std::move(frequencies)),
       responses_(std::move(responses)),
       transition_potentials_test_only_(std::move(transition_potentials)),
       diagnostics_(std::move(diagnostics)),
-      plan_(std::move(plan)) {}
+      plan_(std::move(plan)) {
+    if (points_.empty() || frequencies_.empty() ||
+        responses_.size() != frequencies_.size() ||
+        diagnostics_.size() != frequencies_.size() ||
+        plan_.frequency_count != frequencies_.size() ||
+        plan_.point_count != points_.size())
+        throw PSIEXCEPTION("PointResponseData: carrier dimensions are inconsistent");
+    for (std::size_t index = 0; index < frequencies_.size(); ++index) {
+        if (!std::isfinite(frequencies_[index]) ||
+            diagnostics_[index].frequency != frequencies_[index] ||
+            !responses_[index] || responses_[index]->nirrep() != 1 ||
+            static_cast<std::size_t>(responses_[index]->nrow()) != points_.size() ||
+            responses_[index]->ncol() != responses_[index]->nrow())
+            throw PSIEXCEPTION("PointResponseData: frequency-major payload is inconsistent");
+    }
+}
+
+namespace detail {
+struct PointResponseBuilder {
+    static PointResponseData create(
+        std::vector<SitePosition> points, std::vector<double> frequencies,
+        std::vector<SharedMatrix> responses,
+        std::vector<PointResponseDiagnostics> diagnostics, PointResponsePlan plan,
+        SharedMatrix transition_potentials) {
+        return PointResponseData(
+            std::move(points), std::move(frequencies), std::move(responses),
+            std::move(diagnostics), std::move(plan),
+            std::move(transition_potentials));
+    }
+};
+}  // namespace detail
 
 SharedMatrix PointResponseData::response_clone(std::size_t frequency) const {
     if (frequency >= responses_.size())
@@ -3234,14 +3362,15 @@ SharedMatrix PointResponseData::transition_potentials_clone_test_only() const {
     return transition_potentials_test_only_->clone();
 }
 
-PointResponseData evaluate_point_response(
+namespace {
+bool preflight_point_response_request(
     const std::shared_ptr<const FrozenResponseContext>& context,
-    const Matrix& H1, const Matrix& H2, const std::vector<double>& frequencies,
-    const std::vector<SitePosition>& points, double minimum_site_distance_bohr) {
+    const std::vector<double>& frequencies,
+    const std::vector<SitePosition>& points,
+    double minimum_site_distance_bohr) {
     const std::string prefix = "point response: ";
     if (!context || !context->basis())
         throw PSIEXCEPTION(prefix + "frozen response context/basis is unavailable");
-    context->verify_basis_unchanged();
     if (frequencies.empty())
         throw PSIEXCEPTION(prefix + "frequency list requires at least one value");
     bool has_dynamic_frequency = false;
@@ -3257,46 +3386,57 @@ PointResponseData evaluate_point_response(
         for (double coordinate : point)
             if (!std::isfinite(coordinate))
                 throw PSIEXCEPTION(prefix + "point coordinates must be finite");
-    if (!std::isfinite(minimum_site_distance_bohr) || minimum_site_distance_bohr < 0.0)
-        throw PSIEXCEPTION(prefix + "minimum site distance must be finite and nonnegative");
+    if (!std::isfinite(minimum_site_distance_bohr) ||
+        minimum_site_distance_bohr < 0.0)
+        throw PSIEXCEPTION(prefix +
+                           "minimum site distance must be finite and nonnegative");
+    return has_dynamic_frequency;
+}
 
-    const int nbf_int = context->basis()->nbf();
-    if (nbf_int <= 0) throw PSIEXCEPTION(prefix + "retained basis is empty");
-    const auto nbf = static_cast<std::size_t>(nbf_int);
-    const auto counts = validate_restricted_alda_orbitals(*context);
-    const auto nov = checked_c1_product(counts.first, counts.second, prefix);
-    require_dense_response_operator(H1, "H1");
-    require_dense_response_operator(H2, "H2");
-    if (H1.nrow() != H2.nrow() || static_cast<std::size_t>(H1.nrow()) != nov)
-        throw PSIEXCEPTION(prefix + "response operator dimension does not match occupied-virtual transitions");
-
-    // The complete storage/integral envelope is rejected before duplicate
-    // scratch, AO matrices, transition vectors, solve storage, or outputs exist.
-    const auto plan = detail::plan_point_response(
-        frequencies.size(), nbf, counts.first, counts.second, points.size(),
-        has_dynamic_frequency, Process::environment.get_memory());
-
+void validate_point_response_locations(
+    const FrozenResponseContext& context,
+    const std::vector<SitePosition>& points,
+    double minimum_site_distance_bohr) {
+    const std::string prefix = "point response: ";
     for (std::size_t first = 0; first < points.size(); ++first) {
-        for (std::size_t second = first + 1; second < points.size(); ++second) {
+        for (std::size_t second = first + 1; second < points.size(); ++second)
             if (points[first] == points[second])
-                throw PSIEXCEPTION(prefix + "caller-supplied points must be distinct");
-        }
+                throw PSIEXCEPTION(prefix +
+                                   "caller-supplied points must be distinct");
         if (minimum_site_distance_bohr > 0.0) {
-            for (const auto& site : context->sites()) {
+            for (const auto& site : context.sites()) {
                 double distance_squared = 0.0;
                 for (std::size_t axis = 0; axis < 3; ++axis) {
                     const double displacement = points[first][axis] - site[axis];
                     distance_squared += displacement * displacement;
                 }
-                if (distance_squared < minimum_site_distance_bohr * minimum_site_distance_bohr)
-                    throw PSIEXCEPTION(prefix + "point violates the requested minimum site distance");
+                if (distance_squared <
+                    minimum_site_distance_bohr * minimum_site_distance_bohr)
+                    throw PSIEXCEPTION(prefix +
+                                       "point violates the requested minimum site distance");
             }
         }
     }
+}
 
-    const auto transitions = make_restricted_alda_transitions(*context, nov);
+PointResponseData evaluate_point_response_with_operator(
+    const std::shared_ptr<const FrozenResponseContext>& context,
+    const Matrix& H1, const Matrix& H2, const std::vector<double>& frequencies,
+    const std::vector<SitePosition>& points,
+    const std::vector<std::pair<std::size_t, std::size_t>>& transitions,
+    const PointResponsePlan& plan) {
+    const std::string prefix = "point response: ";
+    const auto nbf = plan.nbf;
+    const auto nov = plan.transition_count;
+    const int nbf_int = static_cast<int>(nbf);
+    require_dense_response_operator(H1, "H1");
+    require_dense_response_operator(H2, "H2");
+    if (H1.nrow() != H2.nrow() || static_cast<std::size_t>(H1.nrow()) != nov)
+        throw PSIEXCEPTION(prefix +
+                           "response operator dimension does not match occupied-virtual transitions");
     if (transitions.size() != nov)
-        throw PSIEXCEPTION(prefix + "occupied-major transition metadata are inconsistent");
+        throw PSIEXCEPTION(prefix +
+                           "occupied-major transition metadata are inconsistent");
     auto transition_potentials = std::make_shared<Matrix>(
         static_cast<int>(nov), static_cast<int>(points.size()));
     // MintsHelper aliases the already sealed basis only to construct native
@@ -3410,9 +3550,90 @@ PointResponseData evaluate_point_response(
         complete_diagnostics.push_back(std::move(diagnostic));
     }
     context->verify_basis_unchanged();
-    return PointResponseData(points, std::move(complete_responses),
-                             std::move(complete_diagnostics), plan,
-                             std::move(transition_potentials));
+    return detail::PointResponseBuilder::create(
+        points, frequencies, std::move(complete_responses),
+        std::move(complete_diagnostics), plan,
+        std::move(transition_potentials));
+}
+}  // namespace
+
+PointResponseData detail::evaluate_raw_point_response_test_only(
+    const std::shared_ptr<const FrozenResponseContext>& context,
+    const Matrix& H1, const Matrix& H2, const std::vector<double>& frequencies,
+    const std::vector<SitePosition>& points,
+    const std::vector<std::size_t>& transition_permutation,
+    double minimum_site_distance_bohr) {
+    const std::string prefix = "test-only raw point response: ";
+    const bool has_dynamic_frequency = preflight_point_response_request(
+        context, frequencies, points, minimum_site_distance_bohr);
+    const auto preflight = preflight_isapol_response_provider(context, false);
+    const auto plan = plan_point_response(
+        frequencies.size(), preflight.nbf, preflight.nocc, preflight.nvir,
+        points.size(), has_dynamic_frequency,
+        Process::environment.get_memory());
+    context->verify_basis_unchanged();
+    validate_point_response_locations(
+        *context, points, minimum_site_distance_bohr);
+
+    auto transitions = make_restricted_alda_transitions(*context, preflight.nov);
+    if (!transition_permutation.empty()) {
+        if (transition_permutation.size() != transitions.size())
+            throw PSIEXCEPTION(prefix +
+                               "transition permutation has the wrong dimension");
+        std::vector<bool> seen(transitions.size(), false);
+        std::vector<std::pair<std::size_t, std::size_t>> permuted;
+        permuted.reserve(transitions.size());
+        for (const auto source : transition_permutation) {
+            if (source >= transitions.size() || seen[source])
+                throw PSIEXCEPTION(prefix +
+                                   "transition order must be a permutation");
+            seen[source] = true;
+            permuted.push_back(transitions[source]);
+        }
+        transitions = std::move(permuted);
+    }
+    return evaluate_point_response_with_operator(
+        context, H1, H2, frequencies, points, transitions, plan);
+}
+
+PointResponseData evaluate_point_response(
+    const std::shared_ptr<const FrozenResponseContext>& context,
+    const ResponseKernel& kernel, const std::vector<double>& frequencies,
+    const std::vector<SitePosition>& points,
+    double minimum_site_distance_bohr) {
+    const std::string prefix = "point response: ";
+    const bool has_dynamic_frequency = preflight_point_response_request(
+        context, frequencies, points, minimum_site_distance_bohr);
+
+    // Allocation-light context inspection and every aggregate stage estimate
+    // precede snapshot verification and all canonical physical construction.
+    const auto preflight = preflight_isapol_response_provider(context, false);
+    const auto plan = detail::plan_point_response_provider(
+        frequencies.size(), preflight.nbf, preflight.nocc, preflight.nvir,
+        points.size(), context->grid_blocks(), has_dynamic_frequency,
+        Process::environment.get_memory(),
+        context->functional_density_tolerance());
+    context->verify_basis_unchanged();
+    validate_point_response_locations(
+        *context, points, minimum_site_distance_bohr);
+
+    const auto c1 = detail::construct_restricted_c1_primitives(context);
+    const auto alda = detail::construct_restricted_alda_kernel(context, false);
+    if (c1.transitions != alda.transitions ||
+        c1.transitions.size() != plan.transition_count ||
+        c1.orbital_gaps.size() != c1.transitions.size() || !alda.full_alda ||
+        alda.full_alda->nirrep() != 1 ||
+        static_cast<std::size_t>(alda.full_alda->nrow()) !=
+            c1.transitions.size() ||
+        alda.full_alda->ncol() != alda.full_alda->nrow())
+        throw PSIEXCEPTION(prefix +
+                           "canonical C1 and full-ALDA transition identities differ");
+    const auto hessian = detail::assemble_restricted_singlet_hessian(
+        c1.orbital_gaps, *c1.coulomb, *c1.exchange_direct,
+        *c1.exchange_transpose, *alda.full_alda, kernel);
+    return evaluate_point_response_with_operator(
+        context, *hessian.H1, *hessian.H2, frequencies, points,
+        c1.transitions, plan);
 }
 
 Matrix lw_graph_operator(const BondGraph& graph) { return to_psi_matrix(make_graph_operator(graph)); }

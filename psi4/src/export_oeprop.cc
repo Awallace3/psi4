@@ -213,8 +213,21 @@ void export_oeprop(py::module &m) {
         values["ao_matrix_bytes"] = plan.ao_matrix_bytes;
         values["transition_potential_bytes"] = plan.transition_potential_bytes;
         values["output_bytes"] = plan.output_bytes;
+        values["output_clone_bytes"] = plan.output_clone_bytes;
         values["dense_solve_peak_bytes"] = plan.dense_solve_peak_bytes;
         values["scratch_bytes"] = plan.scratch_bytes;
+        values["c1_plan_estimated_bytes"] = plan.c1_plan_estimated_bytes;
+        values["alda_plan_estimated_bytes"] = plan.alda_plan_estimated_bytes;
+        values["retained_c1_bytes"] = plan.retained_c1_bytes;
+        values["retained_alda_bytes"] = plan.retained_alda_bytes;
+        values["hessian_bytes"] = plan.hessian_bytes;
+        values["transition_metadata_bytes"] = plan.transition_metadata_bytes;
+        values["conservative_overhead_bytes"] = plan.conservative_overhead_bytes;
+        values["c1_stage_peak_bytes"] = plan.c1_stage_peak_bytes;
+        values["alda_stage_peak_bytes"] = plan.alda_stage_peak_bytes;
+        values["point_potential_stage_peak_bytes"] = plan.point_potential_stage_peak_bytes;
+        values["dense_solve_stage_peak_bytes"] = plan.dense_solve_stage_peak_bytes;
+        values["output_clone_stage_peak_bytes"] = plan.output_clone_stage_peak_bytes;
         values["estimated_bytes"] = plan.estimated_bytes;
         values["integral_work_terms"] = plan.integral_work_terms;
         values["algorithm"] = plan.algorithm;
@@ -232,67 +245,95 @@ void export_oeprop(py::module &m) {
           },
           "frequency_count"_a, "nbf"_a, "nocc"_a, "nvir"_a,
           "point_count"_a, "has_dynamic_frequency"_a, "memory_bytes"_a);
-    m.def("_atomic_polarizability_test_evaluate_point_response",
-          [point_response_plan_dict](
+    const auto point_response_minimum_distance = [](const py::dict& options) {
+        const std::vector<std::string> allowed{"minimum_site_distance_bohr"};
+        for (const auto& item : options) {
+            const auto key = py::cast<std::string>(item.first);
+            if (std::find(allowed.begin(), allowed.end(), key) == allowed.end())
+                throw PSIEXCEPTION("point response: unknown option " + key);
+        }
+        return options.contains("minimum_site_distance_bohr")
+            ? py::cast<double>(options["minimum_site_distance_bohr"])
+            : 0.0;
+    };
+    const auto point_response_result_dict =
+        [point_response_plan_dict](const PointResponseData& data,
+                                   const std::string& operator_provenance) {
+            py::dict result;
+            result["points"] = data.points();
+            result["frequencies"] = data.frequencies();
+            result["responses"] = data.response_clones();
+            const auto stored = data.transition_potentials_clone_test_only();
+            auto point_major = std::make_shared<Matrix>(stored->ncol(), stored->nrow());
+            for (int point = 0; point < stored->ncol(); ++point)
+                for (int transition = 0; transition < stored->nrow(); ++transition)
+                    (*point_major)(point, transition) = (*stored)(transition, point);
+            result["transition_potentials"] = std::move(point_major);
+            result["potential_convention"] =
+                "native electronic AO multipole-potential sign; the sign cancels in the bilinear response";
+            result["transition_order"] = "(i,a) occupied-major/virtual-minor";
+            result["frequency_order"] = "frequency-major";
+            result["operator_provenance"] = operator_provenance;
+            py::list diagnostics;
+            for (const auto& diagnostic : data.diagnostics()) {
+                py::dict values;
+                values["frequency"] = diagnostic.frequency;
+                values["reciprocal_condition"] = diagnostic.reciprocal_condition;
+                values["reciprocal_pivot_growth"] = diagnostic.reciprocal_pivot_growth;
+                values["forward_error"] = diagnostic.forward_error;
+                values["backward_error"] = diagnostic.backward_error;
+                values["scaled_residual"] = diagnostic.scaled_residual;
+                values["solution_column_scales"] = diagnostic.solution_column_scales;
+                values["max_forward_error"] = *std::max_element(
+                    diagnostic.forward_error.begin(), diagnostic.forward_error.end());
+                values["max_backward_error"] = *std::max_element(
+                    diagnostic.backward_error.begin(), diagnostic.backward_error.end());
+                values["max_scaled_residual"] = *std::max_element(
+                    diagnostic.scaled_residual.begin(), diagnostic.scaled_residual.end());
+                values["allowed_antisymmetry"] = diagnostic.allowed_antisymmetry;
+                values["symmetry_residual"] = diagnostic.symmetry_residual;
+                values["max_normalized_antisymmetry"] =
+                    diagnostic.max_normalized_antisymmetry;
+                values["symmetry_policy"] =
+                    "AVERAGE_WITHIN_SOLVER_DERIVED_CONTRACTION_ERROR_BOUND";
+                values["reciprocity_enforced"] = diagnostic.reciprocity_enforced;
+                diagnostics.append(std::move(values));
+            }
+            result["diagnostics"] = std::move(diagnostics);
+            result["plan"] = point_response_plan_dict(data.plan());
+            return result;
+        };
+    m.def("_atomic_polarizability_evaluate_point_response",
+          [point_response_minimum_distance, point_response_result_dict](
+              const std::shared_ptr<FrozenResponseContext>& context,
+              double chf_exchange, double alda_kernel,
+              const std::vector<SitePosition>& points,
+              const std::vector<double>& frequencies, const py::dict& options) {
+              const ResponseKernel kernel(chf_exchange, alda_kernel);
+              const auto data = evaluate_point_response(
+                  context, kernel, frequencies, points,
+                  point_response_minimum_distance(options));
+              return point_response_result_dict(
+                  data, "CANONICAL_C1_PLUS_FULL_ALDA");
+          },
+          "context"_a, "chf_exchange"_a, "alda_kernel"_a, "points"_a,
+          "frequencies"_a, "options"_a = py::dict());
+    m.def("_test_only_raw_point_response",
+          [point_response_minimum_distance, point_response_result_dict](
               const std::shared_ptr<FrozenResponseContext>& context,
               const std::vector<SitePosition>& points,
               const std::vector<double>& frequencies, const Matrix& H1,
-              const Matrix& H2, const py::dict& options) {
-              const std::vector<std::string> allowed{"minimum_site_distance_bohr"};
-              for (const auto& item : options) {
-                  const auto key = py::cast<std::string>(item.first);
-                  if (std::find(allowed.begin(), allowed.end(), key) == allowed.end())
-                      throw PSIEXCEPTION("point response: unknown option " + key);
-              }
-              const double minimum_site_distance = options.contains("minimum_site_distance_bohr")
-                  ? py::cast<double>(options["minimum_site_distance_bohr"])
-                  : 0.0;
-              const auto data = evaluate_point_response(
-                  context, H1, H2, frequencies, points, minimum_site_distance);
-              py::dict result;
-              result["points"] = data.points();
-              result["frequencies"] = frequencies;
-              result["responses"] = data.response_clones();
-              const auto stored = data.transition_potentials_clone_test_only();
-              auto point_major = std::make_shared<Matrix>(stored->ncol(), stored->nrow());
-              for (int point = 0; point < stored->ncol(); ++point)
-                  for (int transition = 0; transition < stored->nrow(); ++transition)
-                      (*point_major)(point, transition) = (*stored)(transition, point);
-              result["transition_potentials"] = std::move(point_major);
-              result["potential_convention"] =
-                  "native electronic AO multipole-potential sign; the sign cancels in the bilinear response";
-              result["transition_order"] = "(i,a) occupied-major/virtual-minor";
-              result["frequency_order"] = "frequency-major";
-              py::list diagnostics;
-              for (const auto& diagnostic : data.diagnostics()) {
-                  py::dict values;
-                  values["frequency"] = diagnostic.frequency;
-                  values["reciprocal_condition"] = diagnostic.reciprocal_condition;
-                  values["reciprocal_pivot_growth"] = diagnostic.reciprocal_pivot_growth;
-                  values["forward_error"] = diagnostic.forward_error;
-                  values["backward_error"] = diagnostic.backward_error;
-                  values["scaled_residual"] = diagnostic.scaled_residual;
-                  values["solution_column_scales"] = diagnostic.solution_column_scales;
-                  values["max_forward_error"] = *std::max_element(
-                      diagnostic.forward_error.begin(), diagnostic.forward_error.end());
-                  values["max_backward_error"] = *std::max_element(
-                      diagnostic.backward_error.begin(), diagnostic.backward_error.end());
-                  values["max_scaled_residual"] = *std::max_element(
-                      diagnostic.scaled_residual.begin(), diagnostic.scaled_residual.end());
-                  values["allowed_antisymmetry"] = diagnostic.allowed_antisymmetry;
-                  values["symmetry_residual"] = diagnostic.symmetry_residual;
-                  values["max_normalized_antisymmetry"] =
-                      diagnostic.max_normalized_antisymmetry;
-                  values["symmetry_policy"] =
-                      "AVERAGE_WITHIN_SOLVER_DERIVED_CONTRACTION_ERROR_BOUND";
-                  values["reciprocity_enforced"] = diagnostic.reciprocity_enforced;
-                  diagnostics.append(std::move(values));
-              }
-              result["diagnostics"] = std::move(diagnostics);
-              result["plan"] = point_response_plan_dict(data.plan());
-              return result;
+              const Matrix& H2,
+              const std::vector<std::size_t>& transition_permutation,
+              const py::dict& options) {
+              const auto data = detail::evaluate_raw_point_response_test_only(
+                  context, H1, H2, frequencies, points, transition_permutation,
+                  point_response_minimum_distance(options));
+              return point_response_result_dict(
+                  data, "TEST_ONLY_UNPROVENANCED_RAW_H1_H2");
           },
           "context"_a, "points"_a, "frequencies"_a, "H1"_a, "H2"_a,
+          "transition_permutation"_a = std::vector<std::size_t>{},
           "options"_a = py::dict());
     m.def("_atomic_polarizability_assemble_restricted_hessian",
           [](const std::vector<double>& orbital_gaps, const Matrix& coulomb,

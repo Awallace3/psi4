@@ -347,8 +347,21 @@ struct PSI_API PointResponsePlan {
     std::size_t ao_matrix_bytes{};
     std::size_t transition_potential_bytes{};
     std::size_t output_bytes{};
+    std::size_t output_clone_bytes{};
     std::size_t dense_solve_peak_bytes{};
     std::size_t scratch_bytes{};
+    std::size_t c1_plan_estimated_bytes{};
+    std::size_t alda_plan_estimated_bytes{};
+    std::size_t retained_c1_bytes{};
+    std::size_t retained_alda_bytes{};
+    std::size_t hessian_bytes{};
+    std::size_t transition_metadata_bytes{};
+    std::size_t conservative_overhead_bytes{};
+    std::size_t c1_stage_peak_bytes{};
+    std::size_t alda_stage_peak_bytes{};
+    std::size_t point_potential_stage_peak_bytes{};
+    std::size_t dense_solve_stage_peak_bytes{};
+    std::size_t output_clone_stage_peak_bytes{};
     std::size_t estimated_bytes{};
     std::size_t integral_work_terms{};
     std::string algorithm;
@@ -370,6 +383,10 @@ struct PSI_API PointResponseDiagnostics {
     bool reciprocity_enforced{};
 };
 
+namespace detail {
+struct PointResponseBuilder;
+}
+
 /**
  * Immutable, frequency-major external-point response carrier. Matrix access is
  * clone-only so amplitudes/results cannot be mutated through an exported alias.
@@ -380,7 +397,8 @@ class PSI_API PointResponseData {
     PointResponseData& operator=(const PointResponseData&) = default;
 
     const std::vector<SitePosition>& points() const { return points_; }
-    std::size_t frequency_count() const { return responses_.size(); }
+    const std::vector<double>& frequencies() const { return frequencies_; }
+    std::size_t frequency_count() const { return frequencies_.size(); }
     SharedMatrix response_clone(std::size_t frequency) const;
     std::vector<SharedMatrix> response_clones() const;
     /** Underscored binding support only; not part of the production data model. */
@@ -389,15 +407,15 @@ class PSI_API PointResponseData {
     const PointResponsePlan& plan() const { return plan_; }
 
    private:
-    friend PointResponseData evaluate_point_response(
-        const std::shared_ptr<const FrozenResponseContext>&, const Matrix&, const Matrix&,
-        const std::vector<double>&, const std::vector<SitePosition>&, double);
+    friend struct detail::PointResponseBuilder;
     PointResponseData(std::vector<SitePosition> points,
+                      std::vector<double> frequencies,
                       std::vector<SharedMatrix> responses,
                       std::vector<PointResponseDiagnostics> diagnostics,
                       PointResponsePlan plan, SharedMatrix transition_potentials);
 
     std::vector<SitePosition> points_;
+    std::vector<double> frequencies_;
     std::vector<SharedMatrix> responses_;
     SharedMatrix transition_potentials_test_only_;
     std::vector<PointResponseDiagnostics> diagnostics_;
@@ -406,6 +424,8 @@ class PSI_API PointResponseData {
 
 /**
  * Evaluate Pi(g,h;omega)=4 sum_ia v(g,ia) P(ia,h) at caller-supplied points.
+ * C1, full ALDA, and H1/H2 are constructed internally in the canonical
+ * occupied-major transition order from the frozen context and reviewed kernel.
  * The native electronic AO multipole-potential sign is retained in v; because
  * the response is bilinear in v, a global potential-sign convention cancels.
  * No points are generated or refined. Exact duplicate points are rejected;
@@ -413,11 +433,25 @@ class PSI_API PointResponseData {
  */
 PSI_API PointResponseData evaluate_point_response(
     const std::shared_ptr<const FrozenResponseContext>& context,
-    const Matrix& H1, const Matrix& H2, const std::vector<double>& frequencies,
+    const ResponseKernel& kernel, const std::vector<double>& frequencies,
     const std::vector<SitePosition>& points,
     double minimum_site_distance_bohr = 0.0);
 
 namespace detail {
+PointResponsePlan plan_point_response_provider(
+    std::size_t frequency_count, std::size_t nbf, std::size_t nocc,
+    std::size_t nvir, std::size_t point_count,
+    const std::vector<FrozenGridBlock>& blocks, bool has_dynamic_frequency,
+    std::size_t memory_bytes, double density_cutoff);
+/** Explicitly unprovenanced raw-operator seam; production must not call this. */
+PointResponseData evaluate_raw_point_response_test_only(
+    const std::shared_ptr<const FrozenResponseContext>& context,
+    const Matrix& H1, const Matrix& H2, const std::vector<double>& frequencies,
+    const std::vector<SitePosition>& points,
+    const std::vector<std::size_t>& transition_permutation,
+    double minimum_site_distance_bohr = 0.0);
+
+/* Standalone incremental point-stage planner used by the aggregate planner. */
 PointResponsePlan plan_point_response(
     std::size_t frequency_count, std::size_t nbf, std::size_t nocc,
     std::size_t nvir, std::size_t point_count, bool has_dynamic_frequency,

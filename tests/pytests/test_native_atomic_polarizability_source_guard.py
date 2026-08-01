@@ -90,7 +90,7 @@ def test_provider_uses_only_the_reviewed_native_response_route():
     body_start = source.index(
         "std::vector<SitePairResponse> ISAPolResponseProvider::compute_isapol_response"
     )
-    body_end = source.index("\nPointResponseData evaluate_point_response", body_start)
+    body_end = source.index("\nPointResponseData::PointResponseData", body_start)
     body = _without_cpp_comments(source[body_start:body_end])
 
     for required in (
@@ -123,4 +123,29 @@ def test_provider_uses_only_the_reviewed_native_response_route():
     assert "native point-response execution is not implemented" not in body
     assert "ao_multipole_potential" not in body
     assert "ExternalPotential" not in body
+    assert source_violations(body) == []
+
+
+def test_point_response_uses_only_canonical_native_construction_and_order_zero_potential():
+    source = (
+        __import__("pathlib").Path(__file__).parents[2]
+        / "psi4/src/psi4/libmints/atomic_polarizability.cc"
+    ).read_text()
+    body_start = source.index("PointResponseData::PointResponseData")
+    body_end = source.index("\nMatrix lw_graph_operator", body_start)
+    body = _without_cpp_comments(source[body_start:body_end])
+
+    assert body.count("ao_multipole_potential(0,") == 1
+    assert "ao_multipoles" not in body
+    assert "ExternalPotential" not in body
+    assert "compute_isa" not in body.lower()
+    assert "generate" not in body.lower()
+    for required in (
+        "plan_point_response_provider",
+        "construct_restricted_c1_primitives",
+        "construct_restricted_alda_kernel",
+        "assemble_restricted_singlet_hessian",
+        "solve_dense_restricted_response",
+    ):
+        assert required in body
     assert source_violations(body) == []
