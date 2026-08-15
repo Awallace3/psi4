@@ -3811,23 +3811,6 @@ def test_saptdft_checkpoint_unexpected_exception_closes_lock_same_process(tmp_pa
     assert stopped["status"] == "stopped"
 
 
-if __name__ == "__main__":
-    psi4.set_memory("220 GB")
-    # psi4.set_num_threads(24)
-    psi4.set_num_threads(12)
-    # test_fsaptdft_timer()
-    # test_fsaptdftd4_psivars_pbe0_frozen_core()
-    # test_fsapthf_disp0_fisapt0_psivars()
-    pytest.main([
-        __file__,
-        "-v",
-        "-s",
-        "-k=test_saptdft_auto_grac",
-        "--disable-warnings",
-        # "--maxfail=1",
-    ])
-
-
 @pytest.mark.saptdft
 @pytest.mark.fsapt
 @pytest.mark.quick
@@ -3835,7 +3818,6 @@ if __name__ == "__main__":
     "hf_dimer_scf",
     "hf_monomer_a_scf",
     "hf_monomer_b_scf",
-    "build_jk",
     "elst",
     "exch",
     "ind",
@@ -3843,7 +3825,12 @@ if __name__ == "__main__":
     "final",
 ])
 def test_saptdft_checkpoint_restart_levels(tmp_path, monkeypatch, stop_stage):
-    """Exercise SAPT(DFT) checkpoint stop/restart for the small HF/FISAPT0 path."""
+    """Exercise SAPT(DFT) checkpoint stop/restart for the small HF/FISAPT0 path.
+
+    There is no ``build_jk`` stage: the JK object and SAPT cache are cheap
+    relative to an SCF and are deliberately rebuilt on every restart, so
+    ``elst`` is the first stage worth stopping at after the monomer SCFs.
+    """
 
     def ne_dimer():
         return psi4.geometry(
@@ -3883,6 +3870,10 @@ no_com
         psi4.core.clean()
         psi4.core.clean_variables()
         psi4.core.clean_timers()
+        # SAPT(DFT) sets local SCF options as a side effect; without resetting them
+        # the next in-process run would present a different job identity than the
+        # checkpoint it is restarting from.
+        psi4.core.clean_options()
 
     compare_vars = [
         "SAPT ELST ENERGY",
@@ -3977,6 +3968,10 @@ no_com
         psi4.core.clean()
         psi4.core.clean_variables()
         psi4.core.clean_timers()
+        # SAPT(DFT) sets local SCF options as a side effect; without resetting them
+        # the next in-process run would present a different job identity than the
+        # checkpoint it is restarting from.
+        psi4.core.clean_options()
 
     compare_vars = [
         "SAPT ELST ENERGY",
@@ -4008,3 +4003,20 @@ no_com
     for var, expected in ref.items():
         assert compare_values(expected, psi4.core.variable(var), 8, var)
     clean()
+
+
+if __name__ == "__main__":
+    psi4.set_memory("220 GB")
+    # psi4.set_num_threads(24)
+    psi4.set_num_threads(12)
+    # test_fsaptdft_timer()
+    # test_fsaptdftd4_psivars_pbe0_frozen_core()
+    # test_fsapthf_disp0_fisapt0_psivars()
+    pytest.main([
+        __file__,
+        "-v",
+        "-s",
+        "-k=checkpoint",
+        "--disable-warnings",
+        # "--maxfail=1",
+    ])

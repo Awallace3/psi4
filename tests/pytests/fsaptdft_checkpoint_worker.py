@@ -8,7 +8,7 @@ import psi4
 import qcelemental as qcel
 from psi4 import core
 from psi4.driver.procrouting import proc, proc_util
-from psi4.driver.procrouting.sapt import sapt_proc
+from psi4.driver.procrouting.sapt import sapt_proc, saptdft_checkpoint
 
 
 GEOMETRY = """0 1
@@ -284,8 +284,8 @@ def _install_restart_guards(
     original_proc_run_scf = proc.run_scf
     original_timer_on = core.timer_on
     original_timer_off = core.timer_off
-    original_prepare_restored_scf = sapt_proc._saptdft_prepare_restored_scf
-    original_commit_stage = sapt_proc._saptdft_commit_stage
+    original_prepare_restored_scf = saptdft_checkpoint.prepare_restored_scf
+    original_commit_stage = saptdft_checkpoint.CheckpointSession.commit
     forbidden_banner_set = set(forbidden_banners)
     timer_context_stack = []
 
@@ -353,10 +353,10 @@ def _install_restart_guards(
         finally:
             _restore_context(previous_context)
 
-    def guarded_commit_stage(checkpoint, stage, *args, **kwargs):
+    def guarded_commit_stage(session, stage, *args, **kwargs):
         if stage == "delta_dft":
             _guard_completed_stage(stage, "delta_dft commit")
-        return original_commit_stage(checkpoint, stage, *args, **kwargs)
+        return original_commit_stage(session, stage, *args, **kwargs)
 
     proc.scf_helper = guarded_scf_helper
     proc.run_scf = guarded_run_scf
@@ -364,8 +364,9 @@ def _install_restart_guards(
     sapt_proc.run_scf = guarded_run_scf
     core.timer_on = guarded_timer_on
     core.timer_off = guarded_timer_off
-    sapt_proc._saptdft_prepare_restored_scf = guarded_prepare_restored_scf
-    sapt_proc._saptdft_commit_stage = guarded_commit_stage
+    saptdft_checkpoint.prepare_restored_scf = guarded_prepare_restored_scf
+    sapt_proc.prepare_restored_scf = guarded_prepare_restored_scf
+    saptdft_checkpoint.CheckpointSession.commit = guarded_commit_stage
 
     for attr in ["compute_energy", "guess", "diis"]:
         original = getattr(core.HF, attr)

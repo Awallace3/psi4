@@ -47,14 +47,19 @@ from ... import p4util
 from ...p4util.exceptions import ValidationError
 
 __all__ = [
+    "CheckpointSession",
+    "CheckpointStop",
     "SAPTDFTCheckpoint",
     "SAPTDFT_STAGE_DEFINITIONS",
     "StageDefinition",
     "build_saptdft_job_identity",
     "capture_scf_snapshot",
+    "functional_value",
+    "prepare_restored_scf",
     "rehydrate_scf_wavefunction",
     "selected_stage_dependencies",
     "selected_stages",
+    "wfn_jk",
 ]
 
 SAPTDFT_CHECKPOINT_SCHEMA_VERSION = 1
@@ -220,6 +225,8 @@ _validate_stage_definitions()
 
 @dataclass(frozen=True)
 class FSAPTArtifactSpec:
+    """One entry of a stage's array payload: where it lives in ``cache`` and on disk."""
+
     cache_key: str
     artifact_name: str
     value_type: str
@@ -247,7 +254,15 @@ _FSAPT_SETUP_ARTIFACT_SPECS: tuple[FSAPTArtifactSpec, ...] = (
     FSAPTArtifactSpec("ZC", "fsapt_setup.ZC", "vector"),
     FSAPTArtifactSpec("ZC_orig", "fsapt_setup.ZC_orig", "vector"),
 )
-_FSAPT_STAGE_ARTIFACT_SPECS: dict[str, tuple[FSAPTArtifactSpec, ...]] = {
+# Coulomb payloads that ``jk_terms.exchange`` leaves in the cache and that F-SAPT
+# induction needs again; they are refreshed by both the exch and ind commits.
+_SAPT_JK_ARTIFACT_SPECS: tuple[FSAPTArtifactSpec, ...] = (
+    FSAPTArtifactSpec("J_P_A", "exch.J_P_A", "matrix"),
+    FSAPTArtifactSpec("J_P_B", "exch.J_P_B", "matrix"),
+)
+_STAGE_ARTIFACT_SPECS: dict[str, tuple[FSAPTArtifactSpec, ...]] = {
+    "exch": _SAPT_JK_ARTIFACT_SPECS,
+    "ind": _SAPT_JK_ARTIFACT_SPECS,
     "fsapt_setup": _FSAPT_SETUP_ARTIFACT_SPECS,
     "fsapt_elst": (
         FSAPTArtifactSpec("Elst_AB", "fsapt_elst.Elst_AB", "matrix"),
@@ -264,8 +279,8 @@ _FSAPT_STAGE_ARTIFACT_SPECS: dict[str, tuple[FSAPTArtifactSpec, ...]] = {
 }
 
 
-def _fsapt_stage_artifact_specs(stage: str) -> tuple[FSAPTArtifactSpec, ...]:
-    return _FSAPT_STAGE_ARTIFACT_SPECS.get(stage, ())
+def _stage_artifact_specs(stage: str) -> tuple[FSAPTArtifactSpec, ...]:
+    return _STAGE_ARTIFACT_SPECS.get(stage, ())
 
 
 def _fsapt_payload_array(value: Any) -> np.ndarray:
@@ -274,16 +289,20 @@ def _fsapt_payload_array(value: Any) -> np.ndarray:
     return np.asarray(value)
 
 
-def fsapt_stage_arrays(stage: str, cache: Mapping[str, Any]) -> dict[str, np.ndarray]:
+def stage_arrays(stage: str, cache: Mapping[str, Any]) -> dict[str, np.ndarray]:
+    """Array payload a stage should persist, harvested from the live SAPT cache."""
     arrays = {}
-    for spec in _fsapt_stage_artifact_specs(stage):
+    for spec in _stage_artifact_specs(stage):
         if spec.cache_key in cache:
             arrays[spec.artifact_name] = _fsapt_payload_array(cache[spec.cache_key])
     return arrays
 
 
-def restore_fsapt_stage_cache(stage: str, checkpoint, cache: dict[str, Any]) -> dict[str, Any]:
-    for spec in _fsapt_stage_artifact_specs(stage):
+def restore_stage_cache(stage: str, checkpoint, cache: dict[str, Any], *, only_missing: bool = False) -> dict[str, Any]:
+    """Reinstate a stage's array payload into ``cache`` from an open checkpoint."""
+    for spec in _stage_artifact_specs(stage):
+        if only_missing and spec.cache_key in cache:
+            continue
         artifact = checkpoint._manifest["artifacts"].get(spec.artifact_name)
         if artifact is None:
             continue
@@ -355,7 +374,11 @@ def _selected_stage_options(identity: Mapping[str, Any]) -> dict[str, Any]:
     fsapt_mode = str(keywords.get("sapt_dft_do_fsapt", "none")).upper()
     do_fsapt = fsapt_mode != "NONE"
     do_grac = do_dft and str(keywords.get("sapt_dft_grac_compute", "none")).upper() != "NONE"
-    localization_path = do_fsapt and not do_delta_hf
+    # Without delta-HF there is no dimer SCF yet, so ``run_sapt_dft`` runs the
+    # "Dimer for Localization" SCF to get dimer orbitals. It does so regardless of
+    # SAPT_DFT_DO_FSAPT, because ``build_sapt_jk_cache`` reads dimer orbitals on
+    # every path, so this stage tracks ``do_delta_hf`` alone.
+    localization_path = not do_delta_hf
     return {
         "do_dft": do_dft,
         "do_delta_hf": do_delta_hf,
@@ -1479,3 +1502,285 @@ def _pid_exists(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# Accessors tolerant of rehydrated wavefunctions
+#
+# A wavefunction read back from a checkpoint is a plain ``core.Wavefunction``
+# until it is rebuilt through the SCF factory: it carries no JK object and no
+# functional. These accessors let the SAPT(DFT) flow ask for both without
+# caring whether the wavefunction was just computed or just restored.
+# ---------------------------------------------------------------------------
+
+
+def wfn_jk(wfn):
+    """Return a wavefunction's JK object, or None when it does not have one."""
+    try:
+        jk_getter = getattr(wfn, "jk")
+    except AttributeError:
+        return None
+    try:
+        return jk_getter()
+    except Exception:
+        return None
+
+
+def functional_value(wfn, method: str, default):
+    """Return an HF/DFT functional property, falling back to ``default``."""
+    try:
+        functional = wfn.functional()
+        attr = getattr(functional, method)
+        return attr() if callable(attr) else attr
+    except Exception:
+        return default
+
+
+def prepare_restored_scf(wfn):
+    """Give a restored SCF wavefunction the JK object later SAPT stages expect."""
+    if not hasattr(wfn, "set_jk") or wfn_jk(wfn) is not None:
+        return wfn
+    from ..scf_proc import scf_iterator
+
+    jk_memory = int((core.get_memory() / 8) * core.get_global_option("SCF_MEM_SAFETY_FACTOR"))
+    try:
+        scf_iterator.initialize_jk(wfn, jk_memory)
+    except Exception as exc:
+        raise ValidationError("SAPT(DFT) checkpoint could not rebuild the restored SCF JK object.") from exc
+    return wfn
+
+
+def _jsonable_scalars(data: Optional[Mapping[str, Any]]) -> dict[str, Any]:
+    """Keep only the JSON-representable entries of a SAPT ``data`` dict."""
+    clean = {}
+    for key, value in (data or {}).items():
+        if isinstance(value, np.generic):
+            value = value.item()
+        if isinstance(value, (str, bool, int, float)) or value is None:
+            clean[str(key)] = value
+    return clean
+
+
+class CheckpointStop(RuntimeError):
+    """Raised to unwind SAPT(DFT) once the requested ``stop_after`` stage is stored."""
+
+
+class CheckpointSession:
+    """Stage bookkeeping for SAPT(DFT), kept out of the SAPT(DFT) flow itself.
+
+    A session always exists -- :meth:`disabled` when the user did not ask for
+    checkpointing -- so the driver never branches on ``checkpoint is None`` nor
+    threads a ``stop_after`` argument through every call. It also holds the
+    mutable ``data`` and ``cache`` dicts the driver is filling in, so a stage
+    boils down to::
+
+        if session.pending("elst"):
+            ...
+            session.commit("elst")
+
+    :meth:`commit` snapshots the JSON-representable part of ``data`` and the
+    array payload registered for that stage, then raises :class:`CheckpointStop`
+    if the stage is the requested stopping point.
+    """
+
+    def __init__(self, checkpoint: Optional[SAPTDFTCheckpoint] = None, *, stop_after=None, data=None, cache=None):
+        self.checkpoint = checkpoint
+        self.stop_after = stop_after or None
+        self.data = {} if data is None else data
+        self.cache = {} if cache is None else cache
+
+    # -- construction -------------------------------------------------------
+
+    @classmethod
+    def disabled(cls, **kwargs) -> "CheckpointSession":
+        return cls(None, **kwargs)
+
+    @classmethod
+    def start(
+        cls,
+        name: str,
+        molecule,
+        function_kwargs: Mapping[str, Any],
+        *,
+        directory,
+        stop_after=None,
+        atomic_input=None,
+        data=None,
+    ) -> "CheckpointSession":
+        """Open the checkpoint at ``directory``, or return a disabled session if unset."""
+        if not directory:
+            return cls.disabled(stop_after=stop_after, data=data)
+        identity_kwargs = {
+            key: value
+            for key, value in function_kwargs.items()
+            if key not in ("molecule", "ref_wfn", _IDENTITY_ATOMIC_INPUT_KEY)
+        }
+        identity = build_saptdft_job_identity(
+            name=name,
+            molecule=molecule,
+            function_kwargs=identity_kwargs,
+            atomic_input=atomic_input,
+        )
+        checkpoint = SAPTDFTCheckpoint(Path(directory), identity).open()
+        return cls(checkpoint, stop_after=stop_after, data=data)
+
+    @staticmethod
+    def controls(kwargs: dict) -> tuple[str, Optional[str]]:
+        """Pop the checkpoint directory and stop stage out of driver kwargs.
+
+        Environment variables ``PSI4_CHECKPOINT_DIR`` and
+        ``PSI4_CHECKPOINT_STOP_AFTER`` are the fallback, so a job can be
+        checkpointed without editing the input file.
+        """
+        directory = kwargs.pop("checkpoint_dir", kwargs.pop("checkpoint_directory", None))
+        if directory is None:
+            directory = kwargs.pop("psi4_checkpoint_dir", None)
+        if directory is None:
+            directory = os.environ.get("PSI4_CHECKPOINT_DIR", "")
+
+        stop_after = kwargs.pop("checkpoint_stop_after", kwargs.pop("psi4_checkpoint_stop_after", None))
+        if stop_after is None:
+            stop_after = os.environ.get("PSI4_CHECKPOINT_STOP_AFTER", "")
+
+        return str(directory) if directory else "", str(stop_after) if stop_after else None
+
+    def bind(self, *, data=None, cache=None) -> "CheckpointSession":
+        """Point the session at the ``data``/``cache`` dicts the caller is filling in."""
+        if data is not None:
+            self.data = data
+        if cache is not None:
+            self.cache = cache
+        return self
+
+    # -- lifetime -----------------------------------------------------------
+
+    @property
+    def enabled(self) -> bool:
+        return self.checkpoint is not None
+
+    def close(self) -> None:
+        if self.checkpoint is not None:
+            self.checkpoint.close()
+
+    def __enter__(self) -> "CheckpointSession":
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.close()
+
+    # -- stage queries ------------------------------------------------------
+
+    def done(self, stage: str) -> bool:
+        """True when ``stage`` was already completed by an earlier run."""
+        return self.checkpoint is not None and self.checkpoint.is_complete(stage)
+
+    def pending(self, stage: str) -> bool:
+        """True when ``stage`` still has to run."""
+        return not self.done(stage)
+
+    def next_stage(self, stages: Sequence[str]) -> Optional[str]:
+        """First stage of ``stages`` that still has to run, or None if all are done."""
+        if self.checkpoint is None:
+            return stages[0] if stages else None
+        return self.checkpoint.next_unfinished_stage(stages=stages)
+
+    def restored_scalars(self) -> dict[str, Any]:
+        """Scalars stored by previously completed stages."""
+        if self.checkpoint is None:
+            return {}
+        return dict(self.checkpoint._manifest.get("scalars", {}))
+
+    # -- storing ------------------------------------------------------------
+
+    def commit(self, stage: str, *, scalars=None, arrays=None, wavefunctions=None, scf_snapshots=None) -> None:
+        """Record ``stage`` as complete, then stop the job if it is ``stop_after``.
+
+        ``scalars`` defaults to the bound ``data`` dict and ``arrays`` to the
+        payload this stage registers in :data:`_STAGE_ARTIFACT_SPECS`, so most
+        call sites need nothing but the stage name.
+        """
+        if self.checkpoint is None:
+            return
+        self.checkpoint.commit_stage(
+            stage,
+            scalars=_jsonable_scalars(self.data if scalars is None else scalars),
+            arrays=stage_arrays(stage, self.cache) if arrays is None else arrays,
+            wavefunctions=wavefunctions,
+            scf_snapshots=scf_snapshots,
+        )
+        if self.stop_after == stage:
+            self.close()
+            raise CheckpointStop(f"SAPT(DFT) checkpoint stop after {stage}")
+
+    def commit_scf(self, stage: str, wfn, *, method: str, reference: str, scalars=None) -> None:
+        """Record ``stage`` as complete, storing ``wfn`` as a restartable SCF snapshot.
+
+        An SCF stage owns only its own energy, so ``scalars`` is empty rather than
+        the whole ``data`` dict when the caller has nothing to file under it.
+        """
+        self.commit(
+            stage,
+            scalars=scalars or {},
+            scf_snapshots={stage: {"wavefunction": wfn, "reference": reference, "method": method}},
+        )
+
+    # -- restoring ----------------------------------------------------------
+
+    def scf_stage(
+        self,
+        stage: str,
+        compute,
+        *,
+        method: str,
+        reference: str,
+        molecule=None,
+        energy_key: Optional[str] = None,
+    ):
+        """Return ``stage``'s SCF wavefunction, restoring it or running ``compute()``.
+
+        On a fresh run ``compute()`` is called, the energy it left in ``CURRENT
+        ENERGY`` is filed under ``energy_key``, and the wavefunction is stored.
+        On a restart the snapshot is rehydrated instead and ``compute`` is never
+        called -- which is the whole point of the checkpoint.
+        """
+        if self.done(stage):
+            return self.restore_scf(stage, method=method, reference=reference, molecule=molecule)
+        wfn = compute()
+        scalars = None
+        if energy_key is not None:
+            self.data[energy_key] = core.variable("CURRENT ENERGY")
+            scalars = {energy_key: self.data[energy_key]}
+        self.commit_scf(stage, wfn, method=method, reference=reference, scalars=scalars)
+        return wfn
+
+    def restore_scf(self, stage: str, *, method: str, reference: str, molecule=None):
+        """Rehydrate the SCF wavefunction snapshot stored by ``stage``.
+
+        The result has no JK object; callers that need one pass it through
+        :func:`prepare_restored_scf`, which is expensive and therefore deferred
+        until something actually asks.
+        """
+        snapshot = self.checkpoint.restore_scf_snapshot(stage)
+        return rehydrate_scf_wavefunction(snapshot, method=method, reference=reference, molecule=molecule)
+
+    def restore_wavefunction(self, name: str):
+        """Load a full serialized wavefunction artifact (used for the final result)."""
+        artifact = self.checkpoint._manifest["artifacts"].get(name)
+        if artifact is None:
+            raise ValidationError(
+                f"SAPT(DFT) checkpoint wavefunction artifact {name} is not available in {self.checkpoint.path}."
+            )
+        if artifact.get("kind") != "wavefunction":
+            raise ValidationError(
+                f"SAPT(DFT) checkpoint artifact {name} in {self.checkpoint.path} is not a wavefunction artifact."
+            )
+        return core.Wavefunction.from_file(str(self.checkpoint._validate_artifact(name, artifact)))
+
+    def restore_cache(self, cache: dict, stages: Iterable[str], *, only_missing: bool = False) -> dict:
+        """Reinstate the array payloads of whichever ``stages`` already completed."""
+        if self.checkpoint is None:
+            return cache
+        for stage in stages:
+            if self.checkpoint.is_complete(stage):
+                restore_stage_cache(stage, self.checkpoint, cache, only_missing=only_missing)
+        return cache
