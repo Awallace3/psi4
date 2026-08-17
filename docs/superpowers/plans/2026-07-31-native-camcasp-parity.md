@@ -32,6 +32,65 @@
 - `tests/pytests/test_atomic_polarizabilities.py`: fixed H2O parity tests with hard-coded literals only.
 - `tests/pytests/test_atomic_polarizability_math.py`: cheap native-math fixtures/invariants independent of SCF and external tools.
 
+## Implementation status (2026-08-17)
+
+Checkbox state in the task sections below was never maintained during implementation. This
+section is the authoritative record; it is evidence-backed and supersedes the checkboxes.
+
+| Task | State | Evidence |
+| ---- | ----- | -------- |
+| 1. Plumbing | **done** | `valid_methods` accepts `ATOMIC_POLARIZABILITIES` (`python_helpers.py:744`); OEProp dispatch at `oeprop.cc:805`; calculator skeleton fails closed. |
+| 2. Frequency/tensor algebra | **done, oracle-verified** | Grid matches reviewed frequencies to `7.1e-15`; `(10,11c,11s) -> (z,x,y)` and `R alpha R^T` reproduce the reviewed tensors exactly (`0.0`). |
+| 3. LW localization | **done** | Conserves the molecular sum on real SCF data to `4.5e-8` (dipole) / `5.7e-7` (full L3) at all eleven frequencies. |
+| 4. ISA-Pol response | **done** | Full composed chain verified in `test_native_atomic_polarizability_source_guard.py:96-126`; recovered molecular response diagonal to `7e-15`. |
+| 5. WSM refinement | **done, but under-determined without constraints** | Runs, conserves the isotropic sum to `3e-4`. Anisotropy is NOT pinned down: see the gaps below. |
+| 6. Dispersion recoupling | **done, oracle-verified** | All four coefficients within `2.5e-7` relative of the reviewed CASIMIR values; see below. |
+| 7. End-to-end publication | **partial** | Literals extracted and committed. Stage chaining and publication of the seven variables not yet written; 0 of 7 currently published. |
+| 8. Oracle acceptance | **partial** | Frequencies and C6–C12 accepted. The full aug-cc-pVTZ/GRAC protocol has never been run. |
+
+Test suite for this feature: **306 passing**, 0 failing.
+
+### Task 6 acceptance record
+
+`compute_dispersion` was fed the reviewed L3 models directly, isolating it from the
+response/localization/refinement stages, and compared against the reviewed CASIMIR
+coefficients under the plan tolerances (`rtol=1e-4, atol=1e-5`):
+
+| coefficient | max abs dev | max rel dev | pair-symmetric |
+| ----------- | ----------- | ----------- | -------------- |
+| `C6`  | `4.2e-06` | `2.5e-07` | exact |
+| `C8`  | `4.1e-05` | `2.0e-07` | exact |
+| `C10` | `2.7e-04` | `1.1e-07` | exact |
+| `C12` | `9.0e-03` | `2.0e-07` | exact |
+
+Residuals are consistent with the six/seven-figure rounding of the reviewed literals. See
+[the recoupling spec](../specs/2026-08-17-isotropic-dispersion-recoupling.md).
+
+### Remaining work, in dependency order
+
+The blockers are missing *connective tissue*, not broken stage numerics. Stages 2–6 each
+hold their own invariants on real data.
+
+1. **PDef active-variable constraints** — derived and specified
+   ([spec](../specs/2026-08-17-pdef-constraint-derivation.md)). Without the mask the L3 fit
+   invents dipole anisotropy: a real run gave hydrogen `alpha_yz = +/-5.34` (eigenvalues
+   `[-4.51, -0.011, +6.19]`) against a reviewed value of exactly `0`. **This is the largest
+   known obstacle to polarizability parity.**
+2. **WSM fit-point generation** — absent entirely; `evaluate_point_response` documents
+   "No points are generated or refined." Must be deterministic and point-group faithful.
+3. **Bond-graph derivation** — absent; `localize_lw` requires a caller-supplied graph.
+4. **GRAC three-SCF orchestration** — `FrozenResponseContext::create` needs GRAC, neutral
+   precursor, and cation wavefunctions, but `AtomicPolarizabilityCalculator` holds a single
+   `wfn_`. Largest architectural hole.
+5. **Stage chaining and publication** — `compute()` is still an unconditional throw and no
+   `set_array_variable` call exists anywhere.
+6. **Options plumbing** — only two options exist; ISA grid, localization tolerance, fit
+   points, bond graph, and PDef policy all need entries.
+7. **Grid quality must be pinned.** The existing SCF test fixtures
+   (`dft_spherical_points 50 / radial 12`, ISA `30/10/12`) are far too coarse for the
+   `1e-4` gate — `localize_lw` rejects them above `1e-2`. Production quality measured at
+   `302/50` with ISA `60/18/24`. Do not mistake the fixtures for the parity protocol.
+
 ### Task 1: Native representation and public plumbing
 
 **Files:** create atomic header/source and math test; modify CMake, OEProp header/source, options, Python allowlist.
