@@ -1,4 +1,4 @@
-"""Derived PDef site-symmetry constraints, without SCF or external oracles.
+"""Derived PDef site-symmetry constraints and covalent bond graphs, without SCF or oracles.
 
 Characters are re-derived here numerically from the exported irregular-harmonic
 evaluator, so the production integer parity table is never mirrored in the tests.
@@ -34,6 +34,12 @@ def _variable(site, t, u):
 def _derive(molecule, site_axes=None):
     axes = [] if site_axes is None else [_matrix(frame) for frame in site_axes]
     return psi4.core._atomic_polarizability_derive_pdef_constraints(molecule, axes)
+
+
+def _bond_graph(molecule, scale=None):
+    if scale is None:
+        return psi4.core._atomic_polarizability_derive_bond_graph(molecule)
+    return psi4.core._atomic_polarizability_derive_bond_graph(molecule, scale)
 
 
 def _numeric_characters(signs):
@@ -386,7 +392,141 @@ def test_derived_constraints_are_accepted_by_the_wsm_refinement_gates():
     assert plan["constraint_rows"] == derived["equality_row_count"]
 
 
-def test_symmetry_derivation_stays_inside_the_native_source_guard():
+# --------------------------------------------------------------------------------------
+# Covalent bond-graph derivation
+# --------------------------------------------------------------------------------------
+
+
+def test_derived_water_bond_graph_connects_oxygen_to_both_hydrogens_only():
+    graph = _bond_graph(_water())
+
+    assert graph["site_count"] == 3
+    assert [tuple(bond) for bond in graph["bonds"]] == [(0, 1), (0, 2)]
+    assert graph["component_count"] == 1
+    assert graph["radius_table"] == "Slater-1964-bohr-v1"
+    assert graph["covalent_scale"] == pytest.approx(1.3)
+    assert len(graph["bond_distances"]) == len(graph["bonds"]) == len(graph["bond_thresholds"])
+    assert all(
+        distance <= threshold
+        for distance, threshold in zip(graph["bond_distances"], graph["bond_thresholds"])
+    )
+
+
+def test_derived_bond_graph_of_carbon_dioxide_and_methane_matches_chemical_connectivity():
+    carbon_dioxide = _bond_graph(
+        psi4.geometry("O 0 0 1.16\nC 0 0 0\nO 0 0 -1.16\nunits angstrom")
+    )
+    assert [tuple(bond) for bond in carbon_dioxide["bonds"]] == [(0, 1), (1, 2)]
+
+    methane = _bond_graph(
+        psi4.geometry(
+            """
+            C  0.000000  0.000000  0.000000
+            H  0.629118  0.629118  0.629118
+            H -0.629118 -0.629118  0.629118
+            H -0.629118  0.629118 -0.629118
+            H  0.629118 -0.629118 -0.629118
+            units angstrom
+            """
+        )
+    )
+    assert [tuple(bond) for bond in methane["bonds"]] == [(0, 1), (0, 2), (0, 3), (0, 4)]
+    assert methane["component_count"] == 1
+
+
+def test_derived_bond_graph_is_deterministic_sorted_and_frame_independent():
+    molecule = _water()
+    repeated = [_bond_graph(molecule)["bonds"] for _ in range(3)]
+    assert repeated[0] == repeated[1] == repeated[2]
+    bonds = [tuple(bond) for bond in repeated[0]]
+    assert all(first < second for first, second in bonds)
+    assert bonds == sorted(bonds)
+
+    rotated = np.asarray(molecule.geometry().to_array()) @ _rotation([0.4, 0.5, -0.77], 1.21).T
+    displaced = rotated + np.array([3.1, -2.2, 0.9])
+    moved = _bond_graph(_explicit_molecule(list(zip(("O", "H", "H"), displaced))))
+    assert [tuple(bond) for bond in moved["bonds"]] == bonds
+    assert moved["bond_distances"] == pytest.approx(
+        _bond_graph(molecule)["bond_distances"], abs=1.0e-12
+    )
+
+
+def test_derived_bond_graph_fails_closed_on_a_disconnected_geometry():
+    dimer = psi4.geometry(
+        """
+        O 0.000000 0.000000 0.117300
+        H 0.000000 0.757200 -0.469200
+        H 0.000000 -0.757200 -0.469200
+        --
+        O 12.000000 0.000000 0.117300
+        H 12.000000 0.757200 -0.469200
+        H 12.000000 -0.757200 -0.469200
+        units angstrom
+        """
+    )
+    with pytest.raises(RuntimeError, match=r"disconnected.*2 components"):
+        _bond_graph(dimer)
+
+
+def test_derived_bond_graph_accepts_a_single_site_and_rejects_invalid_scales():
+    lone = _bond_graph(psi4.geometry("He 0 0 0\nunits angstrom"))
+    assert lone["site_count"] == 1
+    assert lone["bonds"] == []
+    assert lone["component_count"] == 1
+
+    molecule = _water()
+    with pytest.raises(RuntimeError, match=r"scale must be finite and positive"):
+        _bond_graph(molecule, 0.0)
+    with pytest.raises(RuntimeError, match=r"scale must be finite and positive"):
+        _bond_graph(molecule, float("nan"))
+    with pytest.raises(RuntimeError, match=r"disconnected"):
+        _bond_graph(molecule, 0.5)
+
+
+def test_bond_scale_separates_covalent_bonds_from_the_tightest_nonbonded_contact():
+    molecule = _water()
+    generous = _bond_graph(molecule, 2.5)
+    assert [tuple(bond) for bond in generous["bonds"]] == [(0, 1), (0, 2), (1, 2)]
+
+    default = _bond_graph(molecule)
+    distances = np.asarray(molecule.distance_matrix().to_array())
+    radii = np.asarray(default["radii"], dtype=float)
+    bonded = max(distances[i, j] / (radii[i] + radii[j]) for i, j in [(0, 1), (0, 2)])
+    nonbonded = distances[1, 2] / (radii[1] + radii[2])
+    assert bonded < default["covalent_scale"] < nonbonded
+
+
+def test_derived_bond_graph_yields_a_connected_lw_graph_laplacian():
+    graph = _bond_graph(_water())
+    operator, pseudoinverse, eigenvalues = psi4.core._atomic_polarizability_lw_graph_math(
+        graph["site_count"], [list(bond) for bond in graph["bonds"]]
+    )
+    values = np.asarray(eigenvalues, dtype=float)
+
+    assert np.count_nonzero(np.abs(values) < 1.0e-10) == 1
+    laplacian = np.asarray(operator.to_array())
+    assert laplacian == pytest.approx(laplacian.T, abs=1.0e-14)
+    assert laplacian.sum(axis=1) == pytest.approx(np.zeros(graph["site_count"]), abs=1.0e-13)
+    del pseudoinverse
+
+
+def test_pure_site_seam_reproduces_the_molecular_bond_graph():
+    molecule = _water()
+    positions = np.asarray(molecule.geometry().to_array())
+    numbers = [int(molecule.true_atomic_number(index)) for index in range(molecule.natom())]
+    seam = psi4.core._atomic_polarizability_derive_bond_graph_from_sites(
+        _matrix(positions), numbers, 1.3
+    )
+
+    assert seam["bonds"] == _bond_graph(molecule)["bonds"]
+    assert seam["radii"] == pytest.approx(_bond_graph(molecule)["radii"], abs=0.0)
+    with pytest.raises(RuntimeError, match=r"radius table"):
+        psi4.core._atomic_polarizability_derive_bond_graph_from_sites(
+            _matrix(positions), [1, 1, 0], 1.3
+        )
+
+
+def test_symmetry_and_bond_derivations_stay_inside_the_native_source_guard():
     from test_native_atomic_polarizability_source_guard import source_violations
 
     repo_root = next(
@@ -397,6 +537,7 @@ def test_symmetry_derivation_stays_inside_the_native_source_guard():
     sources = (
         repo_root / "psi4/src/psi4/libmints/atomic_polarizability.cc",
         repo_root / "psi4/src/psi4/libmints/atomic_polarizability.h",
+        repo_root / "psi4/src/psi4/libmints/isa_weights.cc",
         repo_root / "psi4/src/export_oeprop.cc",
     )
     violations = []
@@ -405,7 +546,8 @@ def test_symmetry_derivation_stays_inside_the_native_source_guard():
     assert violations == []
 
     text = (repo_root / "psi4/src/psi4/libmints/atomic_polarizability.cc").read_text()
-    assert "derive_pdef_constraints" in text
+    assert "slater_radius" in text, "the bond graph must reuse the existing libmints radius table"
+    assert "derive_pdef_constraints" in text and "derive_bond_graph" in text
     # Nothing dispatches on an element name or a fixed atom index, so no molecule is special.
     for literal in ("label(", "flabel(", "symbol()", "Element_to_Z"):
         assert literal not in text

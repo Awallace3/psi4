@@ -4403,6 +4403,35 @@ void classify_components(const std::vector<std::array<int, 3>>& operation_signs,
                 record.active_pairs.push_back({first, second});
 }
 
+/** Label the connected components of an undirected site graph in deterministic order. */
+std::pair<std::size_t, std::vector<std::size_t>> label_graph_components(const BondGraph& graph) {
+    std::vector<std::vector<std::size_t>> neighbors(graph.site_count);
+    for (const auto& bond : graph.bonds) {
+        neighbors[bond[0]].push_back(bond[1]);
+        neighbors[bond[1]].push_back(bond[0]);
+    }
+    const std::size_t unlabeled = graph.site_count;
+    std::vector<std::size_t> labels(graph.site_count, unlabeled);
+    std::size_t count = 0;
+    for (std::size_t seed = 0; seed < graph.site_count; ++seed) {
+        if (labels[seed] != unlabeled) continue;
+        std::queue<std::size_t> pending;
+        pending.push(seed);
+        labels[seed] = count;
+        while (!pending.empty()) {
+            const std::size_t site = pending.front();
+            pending.pop();
+            for (const auto neighbor : neighbors[site]) {
+                if (labels[neighbor] != unlabeled) continue;
+                labels[neighbor] = count;
+                pending.push(neighbor);
+            }
+        }
+        ++count;
+    }
+    return {count, std::move(labels)};
+}
+
 }  // namespace
 
 PDefDerivation derive_pdef_constraints(const Molecule& molecule,
@@ -4554,6 +4583,87 @@ PDefDerivation derive_pdef_constraints(const Molecule& molecule,
     if (row != equality_rows)
         throw PSIEXCEPTION(prefix + "equality row accounting is inconsistent");
     return derivation;
+}
+
+namespace detail {
+
+BondGraphDerivation derive_bond_graph(const std::vector<SitePosition>& sites,
+                                     const std::vector<int>& atomic_numbers,
+                                     double covalent_scale) {
+    const std::string prefix = "Bond graph: ";
+    if (sites.empty()) throw PSIEXCEPTION(prefix + "at least one site is required");
+    if (atomic_numbers.size() != sites.size())
+        throw PSIEXCEPTION(prefix + "atomic numbers do not match sites");
+    if (!std::isfinite(covalent_scale) || covalent_scale <= 0.0)
+        throw PSIEXCEPTION(prefix + "covalent scale must be finite and positive");
+
+    BondGraphDerivation derivation;
+    derivation.covalent_scale = covalent_scale;
+    derivation.radius_table = "Slater-1964-bohr-v1";
+    derivation.radii.resize(sites.size());
+    for (std::size_t site = 0; site < sites.size(); ++site) {
+        for (std::size_t axis = 0; axis < 3; ++axis)
+            if (!std::isfinite(sites[site][axis]))
+                throw PSIEXCEPTION(prefix + "site coordinates must be finite");
+        derivation.radii[site] = slater_radius(atomic_numbers[site]);
+    }
+
+    // The complete-graph upper triangle bounds every allocation below up front.
+    const std::size_t maximum_bonds = sites.size() * (sites.size() - 1) / 2;
+    derivation.graph.site_count = sites.size();
+    derivation.graph.bonds.reserve(maximum_bonds);
+    derivation.bond_distances.reserve(maximum_bonds);
+    derivation.bond_thresholds.reserve(maximum_bonds);
+    for (std::size_t first = 0; first < sites.size(); ++first) {
+        for (std::size_t second = first + 1; second < sites.size(); ++second) {
+            double separation_squared = 0.0;
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                const double delta = sites[first][axis] - sites[second][axis];
+                separation_squared += delta * delta;
+            }
+            const double separation = std::sqrt(separation_squared);
+            if (!std::isfinite(separation) || separation <= kValidationTolerance)
+                throw PSIEXCEPTION(prefix + "sites must be distinct");
+            const double threshold =
+                covalent_scale * (derivation.radii[first] + derivation.radii[second]);
+            if (!std::isfinite(threshold))
+                throw PSIEXCEPTION(prefix + "bond threshold is nonfinite");
+            if (separation > threshold) continue;
+            derivation.graph.bonds.push_back({first, second});
+            derivation.bond_distances.push_back(separation);
+            derivation.bond_thresholds.push_back(threshold);
+        }
+    }
+
+    auto components = label_graph_components(derivation.graph);
+    derivation.component_count = components.first;
+    derivation.component_labels = std::move(components.second);
+    if (derivation.component_count != 1) {
+        std::ostringstream message;
+        message << prefix << "the derived covalent graph is disconnected with "
+                << derivation.component_count << " components at scale " << covalent_scale
+                << "; LW localization requires one connected component";
+        throw PSIEXCEPTION(message.str());
+    }
+    return derivation;
+}
+
+}  // namespace detail
+
+BondGraphDerivation derive_bond_graph(const Molecule& molecule, double covalent_scale) {
+    const std::string prefix = "Bond graph: ";
+    const int atom_count = molecule.natom();
+    if (atom_count <= 0) throw PSIEXCEPTION(prefix + "at least one site is required");
+    const std::size_t site_count = static_cast<std::size_t>(atom_count);
+    std::vector<SitePosition> sites(site_count);
+    std::vector<int> atomic_numbers(site_count);
+    for (std::size_t site = 0; site < site_count; ++site) {
+        const int atom = static_cast<int>(site);
+        for (std::size_t axis = 0; axis < 3; ++axis)
+            sites[site][axis] = molecule.xyz(atom, static_cast<int>(axis));
+        atomic_numbers[site] = molecule.true_atomic_number(atom);
+    }
+    return detail::derive_bond_graph(sites, atomic_numbers, covalent_scale);
 }
 
 Matrix lw_graph_operator(const BondGraph& graph) { return to_psi_matrix(make_graph_operator(graph)); }

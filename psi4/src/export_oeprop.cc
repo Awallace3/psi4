@@ -1345,6 +1345,45 @@ void export_oeprop(py::module &m) {
               return result;
           },
           "molecule"_a, "site_axes"_a = std::vector<SharedMatrix>());
+    m.def("_atomic_polarizability_derive_bond_graph",
+          [](const Molecule& molecule, double covalent_scale) {
+              const auto derived = derive_bond_graph(molecule, covalent_scale);
+              py::dict result;
+              result["site_count"] = derived.graph.site_count;
+              result["bonds"] = derived.graph.bonds;
+              result["covalent_scale"] = derived.covalent_scale;
+              result["radius_table"] = derived.radius_table;
+              result["radii"] = derived.radii;
+              result["bond_distances"] = derived.bond_distances;
+              result["bond_thresholds"] = derived.bond_thresholds;
+              result["component_count"] = derived.component_count;
+              result["component_labels"] = derived.component_labels;
+              return result;
+          },
+          "molecule"_a, "covalent_scale"_a = kCovalentBondScale);
+    m.def("_atomic_polarizability_derive_bond_graph_from_sites",
+          [](const Matrix& site_matrix, const std::vector<int>& atomic_numbers,
+             double covalent_scale) {
+              if (site_matrix.nirrep() != 1 || site_matrix.ncol() != 3 || site_matrix.nrow() <= 0)
+                  throw PSIEXCEPTION("Bond graph: sites must be a nonempty N by 3 matrix");
+              std::vector<SitePosition> sites(static_cast<std::size_t>(site_matrix.nrow()));
+              for (std::size_t site = 0; site < sites.size(); ++site)
+                  for (std::size_t axis = 0; axis < 3; ++axis)
+                      sites[site][axis] = site_matrix(site, axis);
+              const auto derived = detail::derive_bond_graph(sites, atomic_numbers, covalent_scale);
+              py::dict result;
+              result["site_count"] = derived.graph.site_count;
+              result["bonds"] = derived.graph.bonds;
+              result["covalent_scale"] = derived.covalent_scale;
+              result["radius_table"] = derived.radius_table;
+              result["radii"] = derived.radii;
+              result["bond_distances"] = derived.bond_distances;
+              result["bond_thresholds"] = derived.bond_thresholds;
+              result["component_count"] = derived.component_count;
+              result["component_labels"] = derived.component_labels;
+              return result;
+          },
+          "sites"_a, "atomic_numbers"_a, "covalent_scale"_a = kCovalentBondScale);
 
     py::class_<AtomicPolarizabilityCalculator>(m, "AtomicPolarizabilityCalculator",
                                                "Native atomic-polarizability pipeline entry point")

@@ -1037,6 +1037,54 @@ struct PSI_API PDefDerivation {
 PSI_API PDefDerivation derive_pdef_constraints(const Molecule& molecule,
                                               const std::vector<SiteAxes>& site_axes = {});
 
+/**
+ * Documented covalent-bonding scale factor for derive_bond_graph.
+ *
+ * Sites bond when their separation is at most this factor times the sum of their
+ * Bragg-Slater radii. Against the Slater-1964-bohr-v1 table this factor sits above every
+ * first- and second-row single-bond ratio the table produces (the largest is the peroxide
+ * O-O bond at 1.23) and below the tightest ordinary nonbonded contact ratio (a four-
+ * membered-ring 1,3 C...C diagonal at about 1.53, water 1,3 H...H at 2.17). Homonuclear
+ * F2 sits at 1.41 because the table's fluorine radius is anomalously small; that case is
+ * reported as a disconnected graph rather than silently guessed.
+ */
+constexpr double kCovalentBondScale = 1.3;
+
+/** Deterministic covalent bond-graph derivation with its auditable distance record. */
+struct PSI_API BondGraphDerivation {
+    BondGraph graph;
+    double covalent_scale{};
+    std::string radius_table;
+    std::vector<double> radii;
+    /** Bond-ordered separations and acceptance thresholds, in bohr. */
+    std::vector<double> bond_distances;
+    std::vector<double> bond_thresholds;
+    std::size_t component_count{};
+    std::vector<std::size_t> component_labels;
+};
+
+/**
+ * Derive a connected covalent bond graph from the molecular geometry.
+ *
+ * Bonds are the site pairs i < j with |r_i - r_j| <= covalent_scale * (R_i + R_j), using the
+ * existing versioned libmints Bragg-Slater radius table. The bond list is sorted and
+ * orientation-independent because only interatomic distances enter. LW localization over a
+ * disconnected graph is not meaningful, so a graph with more than one connected component
+ * fails closed instead of yielding isolated sites.
+ */
+PSI_API BondGraphDerivation derive_bond_graph(const Molecule& molecule,
+                                             double covalent_scale = kCovalentBondScale);
+
+namespace detail {
+/** Bragg-Slater radius in bohr from the versioned Slater-1964-bohr-v1 table. */
+PSI_API double slater_radius(int atomic_number);
+
+/** Pure geometry seam shared by the molecular derivation and the math tests. */
+BondGraphDerivation derive_bond_graph(const std::vector<SitePosition>& sites,
+                                     const std::vector<int>& atomic_numbers,
+                                     double covalent_scale);
+}  // namespace detail
+
 /** Exact reviewed physical WSM policy; only the condition gate is caller-tunable. */
 struct PSI_API RefinementOptions {
     unsigned int wsm_rank{3};
