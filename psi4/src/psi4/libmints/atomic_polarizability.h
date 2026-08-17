@@ -976,6 +976,115 @@ struct PSI_API RefinementConstraints {
 /** The parsed polarizability-definition constraints used by WSM refinement. */
 using PDefConstraints = RefinementConstraints;
 
+/** Local-to-global site axis frame; column j holds local axis j in molecular coordinates. */
+using SiteAxes = std::array<std::array<double, 3>, 3>;
+
+/** Exact point-group classification of the 15 L3 components at one site's local frame. */
+struct PSI_API SiteSymmetry {
+    /** libmints SymmOps bit mask of the operations that leave this site fixed. */
+    unsigned char point_group_bits{};
+    /** Directional Schoenflies label from PointGroup::bits_to_full_name. */
+    std::string point_group;
+    /** Diagonal local-frame sign triples of the site-group operations, in char-table order. */
+    std::vector<std::array<int, 3>> operation_signs;
+    /** Irreducible-representation class index of each L3 component, in first-seen order. */
+    std::array<std::size_t, 15> component_class{};
+    std::size_t class_count{};
+    /** Upper-triangle (t, u) component pairs that remain fit variables. */
+    std::vector<std::array<std::size_t, 2>> active_pairs;
+    /** Orbit representative whose variables this site copies; the site itself when independent. */
+    std::size_t symmetry_source{};
+    /** Local-frame sign triple of the operation carrying symmetry_source onto this site. */
+    std::array<int, 3> copy_signs{{1, 1, 1}};
+};
+
+/** Auditable PDef derivation: the mask, the symmetry-copy equalities, and their provenance. */
+struct PSI_API PDefDerivation {
+    PDefConstraints constraints;
+    std::vector<SiteSymmetry> sites;
+    /** Directional label of the largest D2h subgroup realized by the current molecular frame. */
+    std::string molecular_point_group;
+    std::size_t variable_count{};
+    std::size_t active_variable_count{};
+    std::size_t equality_row_count{};
+    std::size_t independent_variable_count{};
+    double geometry_tolerance{};
+};
+
+/**
+ * Derive the WSM active-variable mask and symmetry-copy equalities from site symmetry.
+ *
+ * An upper-triangle pair (t, u) is a fit variable exactly when the real solid harmonics t
+ * and u carry the same one-dimensional irreducible representation of the site's point group
+ * in that site's local axis frame; every other pair is frozen at zero by omitting its column
+ * from the design matrix. Sites related by a molecular symmetry operation are tied to the
+ * lowest-indexed member of their orbit by exact +-1 equality rows instead of being fitted.
+ *
+ * The site group is the subgroup of the molecular point group fixing the site. Only the D2h
+ * subgroups libmints itself detects occur, so every operation is a diagonal sign triple and
+ * every character is an integer product: the mask is bit-reproducible with no tolerance test.
+ *
+ * site_axes is empty for the molecular frame or supplies one right-handed orthonormal
+ * local-to-global frame per site. Fails closed when the molecular frame does not realize the
+ * detected point group, when a local frame is not orthonormal or right-handed, and when a
+ * local frame fails to diagonalize a site-group operation.
+ *
+ * The returned mask and equalities index variables in whichever frame site_axes selects, so
+ * refine_wsm - whose design matrix uses molecular-frame harmonics - requires the empty
+ * default. The sixteen-site derivation envelope is looser than refine_wsm's own three-site
+ * variable envelope, which still applies downstream.
+ */
+PSI_API PDefDerivation derive_pdef_constraints(const Molecule& molecule,
+                                              const std::vector<SiteAxes>& site_axes = {});
+
+/**
+ * Documented covalent-bonding scale factor for derive_bond_graph.
+ *
+ * Sites bond when their separation is at most this factor times the sum of their
+ * Bragg-Slater radii. Against the Slater-1964-bohr-v1 table this factor sits above every
+ * first- and second-row single-bond ratio the table produces (the largest is the peroxide
+ * O-O bond at 1.23) and below the tightest ordinary nonbonded contact ratio (a four-
+ * membered-ring 1,3 C...C diagonal at about 1.53, water 1,3 H...H at 2.17). Homonuclear
+ * F2 sits at 1.41 because the table's fluorine radius is anomalously small; that case is
+ * reported as a disconnected graph rather than silently guessed.
+ */
+constexpr double kCovalentBondScale = 1.3;
+
+/** Deterministic covalent bond-graph derivation with its auditable distance record. */
+struct PSI_API BondGraphDerivation {
+    BondGraph graph;
+    double covalent_scale{};
+    std::string radius_table;
+    std::vector<double> radii;
+    /** Bond-ordered separations and acceptance thresholds, in bohr. */
+    std::vector<double> bond_distances;
+    std::vector<double> bond_thresholds;
+    std::size_t component_count{};
+    std::vector<std::size_t> component_labels;
+};
+
+/**
+ * Derive a connected covalent bond graph from the molecular geometry.
+ *
+ * Bonds are the site pairs i < j with |r_i - r_j| <= covalent_scale * (R_i + R_j), using the
+ * existing versioned libmints Bragg-Slater radius table. The bond list is sorted and
+ * orientation-independent because only interatomic distances enter. LW localization over a
+ * disconnected graph is not meaningful, so a graph with more than one connected component
+ * fails closed instead of yielding isolated sites.
+ */
+PSI_API BondGraphDerivation derive_bond_graph(const Molecule& molecule,
+                                             double covalent_scale = kCovalentBondScale);
+
+namespace detail {
+/** Bragg-Slater radius in bohr from the versioned Slater-1964-bohr-v1 table. */
+PSI_API double slater_radius(int atomic_number);
+
+/** Pure geometry seam shared by the molecular derivation and the math tests. */
+BondGraphDerivation derive_bond_graph(const std::vector<SitePosition>& sites,
+                                     const std::vector<int>& atomic_numbers,
+                                     double covalent_scale);
+}  // namespace detail
+
 /** Exact reviewed physical WSM policy; only the condition gate is caller-tunable. */
 struct PSI_API RefinementOptions {
     unsigned int wsm_rank{3};

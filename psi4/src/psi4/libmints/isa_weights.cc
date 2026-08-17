@@ -28,6 +28,9 @@
 namespace psi {
 namespace {
 
+// The single versioned radius table lives in detail:: so other native stages reuse it.
+using psi::detail::slater_radius;
+
 constexpr double kPi = 3.141592653589793238462643383279502884;
 constexpr double kLogFloor = -676.3964185322641;  // log(DBL_MIN) + 32
 constexpr double kCoincidentTolerance = 1.0e-12;
@@ -381,6 +384,10 @@ double normalized_overlap(const Profile& first_input, const Profile& second_inpu
     return std::abs(1.0 - static_cast<double>(overlap));
 }
 
+}  // namespace
+
+namespace detail {
+
 // Bragg-Slater radii in bohr, Slater JCP 41 (1964) 3199.  This versioned
 // table intentionally has no out-of-range guess.
 double slater_radius(int atomic_number) {
@@ -399,9 +406,13 @@ double slater_radius(int atomic_number) {
         4.063, 4.063, 3.685, 3.401, 3.401, 3.307, 3.307, 3.307, 3.307, 3.307, 3.307, 3.307,
         3.307, 3.307, 3.307, 3.307, 3.307};
     if (atomic_number <= 0 || static_cast<std::size_t>(atomic_number) >= radii.size())
-        throw PSIEXCEPTION("ISA: atomic number is absent from radius table Slater-1964-bohr-v1");
+        throw PSIEXCEPTION("atomic number is absent from radius table Slater-1964-bohr-v1");
     return radii[static_cast<std::size_t>(atomic_number)];
 }
+
+}  // namespace detail
+
+namespace {
 
 void validate_inputs(const std::vector<SitePosition>& sites, const std::vector<SitePosition>& points,
                      const std::vector<double>& weights, const std::vector<int>& atomic_numbers) {

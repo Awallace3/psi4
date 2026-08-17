@@ -37,6 +37,7 @@
 #include "psi4/libmints/oeprop.h"
 #include "psi4/libmints/atomic_polarizability.h"
 #include "psi4/libmints/matrix.h"
+#include "psi4/libmints/molecule.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libscf_solver/hf.h"
@@ -1429,6 +1430,85 @@ void export_oeprop(py::module &m) {
                   FrequencyGrid{grid_frequencies, grid_weights}));
           },
           "sites"_a, "frequencies"_a, "tensors"_a, "grid_frequencies"_a, "grid_weights"_a);
+    m.def("_atomic_polarizability_derive_pdef_constraints",
+          [](const Molecule& molecule, const std::vector<SharedMatrix>& axis_matrices) {
+              std::vector<SiteAxes> site_axes(axis_matrices.size());
+              for (std::size_t site = 0; site < axis_matrices.size(); ++site) {
+                  const auto& frame = axis_matrices[site];
+                  if (!frame || frame->nirrep() != 1 || frame->nrow() != 3 || frame->ncol() != 3)
+                      throw PSIEXCEPTION("PDef constraints: local axes must be 3 by 3 matrices");
+                  for (std::size_t row = 0; row < 3; ++row)
+                      for (std::size_t column = 0; column < 3; ++column)
+                          site_axes[site][row][column] =
+                              (*frame)(static_cast<int>(row), static_cast<int>(column));
+              }
+              const auto derived = derive_pdef_constraints(molecule, site_axes);
+              py::list sites;
+              for (const auto& record : derived.sites) {
+                  py::dict values;
+                  values["point_group"] = record.point_group;
+                  values["point_group_bits"] = record.point_group_bits;
+                  values["operation_signs"] = record.operation_signs;
+                  values["component_class"] = record.component_class;
+                  values["class_count"] = record.class_count;
+                  values["active_pairs"] = record.active_pairs;
+                  values["symmetry_source"] = record.symmetry_source;
+                  values["copy_signs"] = record.copy_signs;
+                  sites.append(std::move(values));
+              }
+              py::dict result;
+              result["molecular_point_group"] = derived.molecular_point_group;
+              result["variable_count"] = derived.variable_count;
+              result["active_variable_count"] = derived.active_variable_count;
+              result["equality_row_count"] = derived.equality_row_count;
+              result["independent_variable_count"] = derived.independent_variable_count;
+              result["geometry_tolerance"] = derived.geometry_tolerance;
+              result["active_variables"] = derived.constraints.active_variables;
+              result["equality"] = derived.constraints.equality;
+              result["equality_targets"] = derived.constraints.equality_targets;
+              result["sites"] = std::move(sites);
+              return result;
+          },
+          "molecule"_a, "site_axes"_a = std::vector<SharedMatrix>());
+    m.def("_atomic_polarizability_derive_bond_graph",
+          [](const Molecule& molecule, double covalent_scale) {
+              const auto derived = derive_bond_graph(molecule, covalent_scale);
+              py::dict result;
+              result["site_count"] = derived.graph.site_count;
+              result["bonds"] = derived.graph.bonds;
+              result["covalent_scale"] = derived.covalent_scale;
+              result["radius_table"] = derived.radius_table;
+              result["radii"] = derived.radii;
+              result["bond_distances"] = derived.bond_distances;
+              result["bond_thresholds"] = derived.bond_thresholds;
+              result["component_count"] = derived.component_count;
+              result["component_labels"] = derived.component_labels;
+              return result;
+          },
+          "molecule"_a, "covalent_scale"_a = kCovalentBondScale);
+    m.def("_atomic_polarizability_derive_bond_graph_from_sites",
+          [](const Matrix& site_matrix, const std::vector<int>& atomic_numbers,
+             double covalent_scale) {
+              if (site_matrix.nirrep() != 1 || site_matrix.ncol() != 3 || site_matrix.nrow() <= 0)
+                  throw PSIEXCEPTION("Bond graph: sites must be a nonempty N by 3 matrix");
+              std::vector<SitePosition> sites(static_cast<std::size_t>(site_matrix.nrow()));
+              for (std::size_t site = 0; site < sites.size(); ++site)
+                  for (std::size_t axis = 0; axis < 3; ++axis)
+                      sites[site][axis] = site_matrix(site, axis);
+              const auto derived = detail::derive_bond_graph(sites, atomic_numbers, covalent_scale);
+              py::dict result;
+              result["site_count"] = derived.graph.site_count;
+              result["bonds"] = derived.graph.bonds;
+              result["covalent_scale"] = derived.covalent_scale;
+              result["radius_table"] = derived.radius_table;
+              result["radii"] = derived.radii;
+              result["bond_distances"] = derived.bond_distances;
+              result["bond_thresholds"] = derived.bond_thresholds;
+              result["component_count"] = derived.component_count;
+              result["component_labels"] = derived.component_labels;
+              return result;
+          },
+          "sites"_a, "atomic_numbers"_a, "covalent_scale"_a = kCovalentBondScale);
 
     py::class_<AtomicPolarizabilityCalculator>(m, "AtomicPolarizabilityCalculator",
                                                "Native atomic-polarizability pipeline entry point")
