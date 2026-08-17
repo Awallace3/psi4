@@ -824,3 +824,341 @@ def test_native_atomic_polarizability_source_guard():
 
     canary = 'void launch() { std::system("camcasp"); }'
     assert source_violations(canary) == ["forbidden process API: std::system(", "forbidden external term: camcasp"]
+
+
+# Ordered rank pairs permitted by the isotropic L3 recoupling table, with the
+# published prefactor numerators binom(2*la + 2*lb, 2*la); every K is that
+# numerator divided by 2*pi. (1,4)/(4,1) also satisfy n = 12 but rank 4 is
+# absent from an L3 model, so they are deliberately not present.
+_DISPERSION_RANK_PAIRS = (
+    (6, 1, 1, 6.0),
+    (8, 1, 2, 15.0),
+    (8, 2, 1, 15.0),
+    (10, 1, 3, 28.0),
+    (10, 3, 1, 28.0),
+    (10, 2, 2, 70.0),
+    (12, 2, 3, 210.0),
+    (12, 3, 2, 210.0),
+)
+
+_DISPERSION_SITES = [[0.0, 0.0, 0.0], [0.0, 1.43, 1.11], [0.0, -1.43, 1.11]]
+
+
+def _dispersion_l3(rank_values, coupling=0.0):
+    """Build a 15 by 15 L3 tensor whose rank-l block has isotropic mean rank_values[l - 1]."""
+    values = [[0.0] * 15 for _ in range(15)]
+    for start, end, value in ((0, 3, rank_values[0]), (3, 8, rank_values[1]), (8, 15, rank_values[2])):
+        for index in range(start, end):
+            values[index][index] = value
+    for first, second in ((0, 1), (3, 4), (8, 9), (0, 4), (2, 9), (5, 13)):
+        values[first][second] = coupling
+        values[second][first] = coupling
+    return values
+
+
+def _mapped_casimir_quadrature(count, scale):
+    """Half-line Gauss-Legendre mapping of the specification, ascending, static point first."""
+    nodes, weights = np.polynomial.legendre.leggauss(count)
+    points = sorted(
+        (scale * (1.0 - node) / (1.0 + node), weight * 2.0 * scale / (1.0 + node) ** 2)
+        for node, weight in zip(nodes, weights)
+    )
+    return [0.0] + [point[0] for point in points], [0.0] + [point[1] for point in points]
+
+
+def _compute_dispersion(models, grid_frequencies, grid_weights, sites=None, protocol=True):
+    """models[frequency][site] holds 15 by 15 nested values in grid-frequency order."""
+    tensors = [_matrix(tensor) for frequency in models for tensor in frequency]
+    entry = (
+        psi4.core._atomic_polarizability_compute_dispersion
+        if protocol
+        else psi4.core._atomic_polarizability_test_compute_dispersion
+    )
+    return entry(
+        _matrix(sites if sites is not None else _DISPERSION_SITES[: len(models[0])]),
+        list(grid_frequencies),
+        tensors,
+        list(grid_frequencies),
+        list(grid_weights),
+    )
+
+
+def _uniform_dispersion_models(profiles, frequency_count, coupling=0.0):
+    return [[_dispersion_l3(profile, coupling) for profile in profiles] for _ in range(frequency_count)]
+
+
+def _rank_pair_contribution(result, order, first_rank, second_rank, first_site, second_site):
+    terms = result["rank_pair_terms"]
+    site_count = result["site_count"]
+    index = next(
+        position
+        for position, term in enumerate(terms)
+        if (term["coefficient_order"], term["first_rank"], term["second_rank"])
+        == (order, first_rank, second_rank)
+    )
+    return result["rank_pair_contributions"][
+        index * site_count * site_count + first_site * site_count + second_site
+    ]
+
+
+@pytest.mark.parametrize("order,first_rank,second_rank,numerator", _DISPERSION_RANK_PAIRS)
+def test_dispersion_rank_prefactor_matches_published_binomial_table(order, first_rank, second_rank, numerator):
+    prefactor = psi4.core._atomic_polarizability_dispersion_rank_prefactor(first_rank, second_rank)
+    assert prefactor == pytest.approx(numerator / (2.0 * math.pi), rel=1.0e-15)
+    assert order == 2 * (first_rank + second_rank + 1)
+    assert prefactor == psi4.core._atomic_polarizability_dispersion_rank_prefactor(
+        second_rank, first_rank
+    )
+
+
+def test_dispersion_rank_prefactor_rejects_ranks_outside_the_l3_model():
+    for first_rank, second_rank in ((0, 1), (1, 0), (4, 1), (1, 4)):
+        with pytest.raises(RuntimeError, match=r"rank"):
+            psi4.core._atomic_polarizability_dispersion_rank_prefactor(first_rank, second_rank)
+
+
+def test_dispersion_recoupling_table_contains_exactly_the_permitted_ordered_pairs():
+    result = _compute_dispersion(
+        _uniform_dispersion_models([[1.0, 2.0, 3.0]], 11, coupling=0.25),
+        *psi4.core._atomic_polarizability_make_casimir_grid(10, 0.5),
+    )
+    assert [
+        (term["coefficient_order"], term["first_rank"], term["second_rank"])
+        for term in result["rank_pair_terms"]
+    ] == [(order, first_rank, second_rank) for order, first_rank, second_rank, _ in _DISPERSION_RANK_PAIRS]
+    assert [term["prefactor"] for term in result["rank_pair_terms"]] == pytest.approx(
+        [numerator / (2.0 * math.pi) for _, _, _, numerator in _DISPERSION_RANK_PAIRS], rel=1.0e-15
+    )
+
+
+def test_dispersion_isotropic_rank_extraction_uses_block_trace_over_two_l_plus_one():
+    values = [[0.0] * 15 for _ in range(15)]
+    for index in range(15):
+        values[index][index] = float(index + 1)
+    for first, second in ((0, 2), (3, 7), (8, 14), (1, 9)):
+        values[first][second] = 100.0
+        values[second][first] = 100.0
+
+    extract = psi4.core._atomic_polarizability_dispersion_isotropic_rank
+    assert extract(_matrix(values), 1) == pytest.approx((1.0 + 2.0 + 3.0) / 3.0, rel=1.0e-15)
+    assert extract(_matrix(values), 2) == pytest.approx(sum(range(4, 9)) / 5.0, rel=1.0e-15)
+    assert extract(_matrix(values), 3) == pytest.approx(sum(range(9, 16)) / 7.0, rel=1.0e-15)
+
+
+@pytest.mark.parametrize("rank", [0, 4])
+def test_dispersion_isotropic_rank_extraction_rejects_ranks_outside_the_l3_model(rank):
+    with pytest.raises(RuntimeError, match=r"rank"):
+        psi4.core._atomic_polarizability_dispersion_isotropic_rank(
+            _matrix(_dispersion_l3([1.0, 1.0, 1.0])), rank
+        )
+
+
+def test_dispersion_isotropic_c6_matches_analytic_three_over_pi_integration():
+    # Higher ranks are populated because the L3 model must be rank complete, but
+    # C6 depends only on the rank-1 isotropic means.
+    frequencies, weights = psi4.core._atomic_polarizability_make_casimir_grid(10, 0.5)
+    dipoles = (1.5, 0.75)
+    models = _uniform_dispersion_models(
+        [[dipoles[0], 0.4, 0.2], [dipoles[1], 0.3, 0.1]], len(frequencies)
+    )
+    result = _compute_dispersion(models, frequencies, weights)
+
+    weight_sum = sum(weights)
+    assert result["quadrature_weight_sum"] == pytest.approx(weight_sum, rel=1.0e-15)
+    for first in range(2):
+        for second in range(2):
+            assert result["c6"].get(first, second) == pytest.approx(
+                (3.0 / math.pi) * dipoles[first] * dipoles[second] * weight_sum, rel=1.0e-13
+            )
+
+
+def test_dispersion_pair_matrices_are_exactly_symmetric():
+    frequencies, weights = psi4.core._atomic_polarizability_make_casimir_grid(10, 0.5)
+    models = [
+        [
+            _dispersion_l3([2.3 / (1.0 + frequency), 0.9 / (1.0 + frequency), 0.4 / (1.0 + frequency)]),
+            _dispersion_l3([0.6 / (1.0 + 3.0 * frequency), 0.2, 0.05]),
+            _dispersion_l3([0.5, 0.11 / (1.0 + frequency ** 2), 0.03]),
+        ]
+        for frequency in frequencies
+    ]
+    result = _compute_dispersion(models, frequencies, weights)
+
+    for name in ("c6", "c8", "c10", "c12"):
+        matrix = result[name]
+        assert matrix.shape == (3, 3)
+        assert all(
+            matrix.get(first, second) == matrix.get(second, first)
+            for first in range(3) for second in range(3)
+        )
+        assert all(matrix.get(first, second) > 0.0 for first in range(3) for second in range(3))
+
+    # Individual ordered rank-pair terms are not themselves symmetric.
+    assert _rank_pair_contribution(result, 8, 1, 2, 0, 1) != pytest.approx(
+        _rank_pair_contribution(result, 8, 1, 2, 1, 0), rel=1.0e-6
+    )
+
+
+@pytest.mark.parametrize("order,first_rank,second_rank,numerator", _DISPERSION_RANK_PAIRS)
+def test_dispersion_each_permitted_rank_pair_contributes_its_closed_form_term(
+    order, first_rank, second_rank, numerator
+):
+    frequencies, weights = psi4.core._atomic_polarizability_make_casimir_grid(10, 0.5)
+    profiles = ([1.3, 0.7, 0.21], [0.45, 0.19, 0.06])
+    models = [
+        [_dispersion_l3([value / (1.0 + frequency) for value in profile]) for profile in profiles]
+        for frequency in frequencies
+    ]
+    result = _compute_dispersion(models, frequencies, weights)
+
+    expected = (numerator / (2.0 * math.pi)) * sum(
+        weight * profiles[0][first_rank - 1] * profiles[1][second_rank - 1] / (1.0 + frequency) ** 2
+        for frequency, weight in zip(frequencies, weights)
+    )
+    assert _rank_pair_contribution(result, order, first_rank, second_rank, 0, 1) == pytest.approx(
+        expected, rel=1.0e-13
+    )
+
+    coefficient = {6: "c6", 8: "c8", 10: "c10", 12: "c12"}[order]
+    assembled = sum(
+        _rank_pair_contribution(result, term_order, term_first, term_second, 0, 1)
+        for term_order, term_first, term_second, _ in _DISPERSION_RANK_PAIRS
+        if term_order == order
+    )
+    assert result[coefficient].get(0, 1) == pytest.approx(assembled, rel=1.0e-14)
+
+
+def test_dispersion_quadrature_converges_for_a_single_pole_model():
+    pole = 0.5
+    dipole = 1.7
+    # (3/pi) * integral of (a/(1+(w/w0)^2))^2 dw = (3/4) * a^2 * w0.
+    exact = 0.75 * dipole * dipole * pole
+
+    reviewed_frequencies, reviewed_weights = _mapped_casimir_quadrature(10, 0.5)
+    assert reviewed_frequencies == pytest.approx(_REVIEWED_FREQUENCIES, abs=1.0e-13)
+    assert reviewed_weights == pytest.approx(_REVIEWED_WEIGHTS, rel=1.0e-13)
+
+    errors = []
+    for count in (4, 8, 16):
+        frequencies, weights = _mapped_casimir_quadrature(count, pole)
+        models = [
+            [
+                _dispersion_l3([
+                    dipole / (1.0 + (frequency / pole) ** 2),
+                    0.4 / (1.0 + (frequency / pole) ** 2),
+                    0.1 / (1.0 + (frequency / pole) ** 2),
+                ])
+            ]
+            for frequency in frequencies
+        ]
+        result = _compute_dispersion(models, frequencies, weights, protocol=False)
+        errors.append(abs(result["c6"].get(0, 0) - exact) / exact)
+
+    assert errors[0] > errors[1] > errors[2]
+    assert errors[2] < 1.0e-9
+
+
+@pytest.mark.parametrize("rank", [2, 3])
+def test_dispersion_rejects_a_model_missing_a_higher_rank_block(rank):
+    frequencies, weights = psi4.core._atomic_polarizability_make_casimir_grid(10, 0.5)
+    profile = [1.0, 0.5, 0.25]
+    profile[rank - 1] = 0.0
+    models = _uniform_dispersion_models([[1.0, 0.5, 0.25], profile], len(frequencies))
+
+    with pytest.raises(RuntimeError, match=rf"rank[ -]{rank}"):
+        _compute_dispersion(models, frequencies, weights)
+
+
+def test_dispersion_static_point_carries_no_quadrature_weight():
+    frequencies, weights = psi4.core._atomic_polarizability_make_casimir_grid(10, 0.5)
+    assert frequencies[0] == 0.0
+    assert weights[0] == 0.0
+
+    models = _uniform_dispersion_models([[1.1, 0.6, 0.2], [0.7, 0.3, 0.1]], len(frequencies))
+    baseline = _compute_dispersion(models, frequencies, weights)
+    models[0] = [_dispersion_l3([9.5, 8.5, 7.5]), _dispersion_l3([6.5, 5.5, 4.5])]
+    perturbed = _compute_dispersion(models, frequencies, weights)
+
+    for name in ("c6", "c8", "c10", "c12"):
+        assert all(
+            baseline[name].get(first, second) == perturbed[name].get(first, second)
+            for first in range(2) for second in range(2)
+        )
+
+
+def test_dispersion_rejects_a_static_point_that_carries_quadrature_weight():
+    frequencies, weights = psi4.core._atomic_polarizability_make_casimir_grid(10, 0.5)
+    weights[0] = 1.0e-6
+    models = _uniform_dispersion_models([[1.1, 0.6, 0.2]], len(frequencies))
+
+    with pytest.raises(RuntimeError, match=r"static"):
+        _compute_dispersion(models, frequencies, weights)
+
+
+def test_dispersion_accepts_any_positive_protocol_grid_scale():
+    for scale in (0.25, 0.5, 1.0):
+        frequencies, weights = psi4.core._atomic_polarizability_make_casimir_grid(10, scale)
+        models = _uniform_dispersion_models([[1.0, 0.5, 0.25]], len(frequencies))
+        result = _compute_dispersion(models, frequencies, weights)
+        assert result["inferred_scale"] == pytest.approx(scale, rel=1.0e-12)
+        assert result["protocol_grid_enforced"] is True
+        assert result["c6"].get(0, 0) == pytest.approx(
+            (3.0 / math.pi) * sum(weights), rel=1.0e-13
+        )
+
+
+def test_dispersion_rejects_frequency_grid_mismatch():
+    frequencies, weights = psi4.core._atomic_polarizability_make_casimir_grid(10, 0.5)
+    models = _uniform_dispersion_models([[1.0, 0.5, 0.25]], len(frequencies))
+
+    with pytest.raises(RuntimeError, match=r"eleven"):
+        _compute_dispersion(models[:-1], frequencies[:-1], weights[:-1])
+
+    shifted = list(frequencies)
+    shifted[5] *= 1.000001
+    with pytest.raises(RuntimeError, match=r"make_casimir_grid"):
+        _compute_dispersion(models, shifted, weights)
+
+    halved = [0.5 * weight for weight in weights]
+    with pytest.raises(RuntimeError, match=r"make_casimir_grid"):
+        _compute_dispersion(models, frequencies, halved)
+
+
+def test_dispersion_rejects_a_model_count_that_disagrees_with_the_grid():
+    frequencies, weights = psi4.core._atomic_polarizability_make_casimir_grid(10, 0.5)
+    models = _uniform_dispersion_models([[1.0, 0.5, 0.25]], len(frequencies))
+    tensors = [_matrix(tensor) for frequency in models[:-1] for tensor in frequency]
+
+    with pytest.raises(RuntimeError, match=r"one model per grid frequency"):
+        psi4.core._atomic_polarizability_compute_dispersion(
+            _matrix(_DISPERSION_SITES[:1]),
+            list(frequencies)[:-1],
+            tensors,
+            list(frequencies),
+            list(weights),
+        )
+
+
+def test_dispersion_plan_bounds_storage_before_allocation():
+    frequencies, weights = psi4.core._atomic_polarizability_make_casimir_grid(10, 0.5)
+    models = _uniform_dispersion_models([[1.0, 0.5, 0.25], [0.7, 0.3, 0.1]], len(frequencies))
+    result = _compute_dispersion(models, frequencies, weights)
+    plan = result["plan"]
+
+    assert result["frequency_count"] == 11
+    assert result["weighted_frequency_count"] == 10
+    assert plan["frequency_count"] == 11
+    assert plan["site_count"] == 2
+    assert plan["coefficient_count"] == 4
+    assert plan["rank_pair_count"] == len(_DISPERSION_RANK_PAIRS)
+    assert plan["isotropic_elements"] == 11 * 2 * 3
+    assert plan["coefficient_elements"] == 4 * 2 * 2
+    assert plan["contribution_elements"] == len(_DISPERSION_RANK_PAIRS) * 2 * 2
+    assert plan["work_terms"] == len(_DISPERSION_RANK_PAIRS) * 2 * 2 * 11
+    assert len(result["rank_pair_contributions"]) == plan["contribution_elements"]
+    assert plan["estimated_bytes"] <= plan["reserved_memory_bytes"]
+    assert plan["algorithm"]
+    assert plan["memory_semantics"]
+
+    with pytest.raises(RuntimeError, match=r"site envelope"):
+        psi4.core._atomic_polarizability_plan_dispersion(11, 4096, 1 << 30)
