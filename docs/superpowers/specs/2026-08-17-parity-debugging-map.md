@@ -60,3 +60,28 @@ Recommended investigation order for any Task 8 mismatch, given the settled rows 
    directly, isolating Task 4.
 
 Do not loosen the `rtol=1e-4, atol=1e-5` gate at any step.
+
+## Charge flow is not the explanation for a conservation deficit
+
+Measured 2026-08-17 from the reviewed nonlocal NL4 oracle, which is `RANK 0 : 4` and so
+carries the rank-0 charge-flow blocks explicitly. Reconstructing the molecular dipole
+polarizability from that model, including and excluding rank 0:
+
+| | `xx` | `yy` | `zz` | isotropic |
+| - | ---- | ---- | ---- | --------- |
+| with rank-0 charge flow | `10.1499` | `9.0052` | `9.6003` | `9.5852` |
+| rank-0 discarded | `9.1793` | `9.0052` | `9.4334` | `9.2060` |
+| ratio | `0.904` | `1.000` | `0.983` | `0.960` |
+
+Two consequences:
+
+- Charge flow is worth only about **4% isotropically**. Discarding it entirely still leaves
+  96% of the molecular polarizability, so it cannot explain a large deficit.
+- Charge flow contributes **exactly nothing out of plane** (`yy` ratio `1.000`); it only
+  moves the in-plane components. Any deficit that is *worst* out of plane therefore has a
+  different mechanism.
+
+Also useful as targets: the reviewed *nonlocal* model reconstructs to isotropic `9.5852`, and
+the reviewed *refined* L3 model sums to `(10.191, 8.997, 9.603)`, isotropic `9.597`. Both
+reviewed stages conserve, and the refinement absorbs charge flow essentially losslessly —
+which is the behaviour a correct WSM implementation must reproduce.
