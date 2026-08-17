@@ -100,6 +100,24 @@ Do not use the SCF test fixtures for parity. Measured behaviour:
 The `1e-4` parity gate requires at least the middle row. Pin the parity grid explicitly in
 options and record it, rather than inheriting a default.
 
+**Amendment (Task 7, measured 2026-08-17):** the table above was measured without diffuse
+functions and does not transfer. With aug-cc-pVDZ the LW charge-sum residual sticks at
+`1.2e-05` on a `302/50` DFT grid no matter how dense the ISA grid is (tested to
+`150/24/32`), and only `590/99` brings it inside `1e-6`. The DFT grid, not the ISA grid, is
+the binding constraint once diffuse functions are present; densifying ISA past `60/18/24`
+moved C6 by only `4e-05` relative. Read the table as a floor for a compact basis, and
+expect to raise the DFT grid with the basis.
+
+## Memory (Task 7, measured)
+
+The WSM design matrix carries one dense row per unordered fit-point pair and the stage gate
+refuses to run when the estimated peak exceeds *half* the configured memory. For the
+default 407-point fit grid with the 170-variable / 66-equality-row C2v(Z) water mask, the
+peak is `454,828,904` bytes, so the gate needs at least about 0.87 GiB configured. Psi4's
+500 MB default fails closed. The driver therefore sets memory explicitly
+(`PIPELINE_MEMORY_BYTES`, 4 GiB) and restores the previous value afterwards. `pytest` pins
+this as an executable fact rather than a comment.
+
 ## Tests to add for this task
 
 Extend `tests/pytests/test_atomic_polarizabilities.py`, which already holds the reviewed

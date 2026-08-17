@@ -385,6 +385,10 @@ class PSI_API OEProp {
     /// Compute field at specified grid points
     void compute_field_over_grid();
 
+    /// Optional SCF triple members for the native atomic-polarizability pipeline.
+    std::shared_ptr<Wavefunction> atomic_polarizability_precursor_;
+    std::shared_ptr<Wavefunction> atomic_polarizability_cation_;
+
     MultipolePropCalc mpc_;
     PopulationAnalysisCalc pac_;
     ESPPropCalc epc_;
@@ -413,6 +417,14 @@ class PSI_API OEProp {
     void set_title(const std::string& title) { names_ = {title + (title.empty() ? "" : " ") + "{}"}; title_ = title; }
     /// Set titles for use in saving information
     void set_names(const std::unordered_set<std::string> names) { names_ = names; }
+    /// Supply the neutral precursor and cation SCFs the native atomic-polarizability
+    /// pipeline needs alongside this object's GRAC-corrected reference wavefunction.
+    /// Without them ATOMIC_POLARIZABILITIES fails closed and publishes nothing.
+    void set_atomic_polarizability_references(std::shared_ptr<Wavefunction> neutral_precursor_wfn,
+                                             std::shared_ptr<Wavefunction> cation_wfn) {
+        atomic_polarizability_precursor_ = std::move(neutral_precursor_wfn);
+        atomic_polarizability_cation_ = std::move(cation_wfn);
+    }
     /// Compute and print/save the properties
     void compute();
 

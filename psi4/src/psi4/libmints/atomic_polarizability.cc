@@ -5478,11 +5478,101 @@ DispersionMatrices compute_dispersion(const std::vector<RefinedL3Model>& models,
     return compute_dispersion_impl(models, frequencies, true);
 }
 
+ISAOptions isa_options_from(Options& options) {
+    const std::string prefix = "ISA options: ";
+    const int radial = options.get_int("ATOMIC_POLARIZABILITY_ISA_RADIAL_POINTS");
+    const int polar = options.get_int("ATOMIC_POLARIZABILITY_ISA_ANGULAR_POLAR_POINTS");
+    const int azimuthal = options.get_int("ATOMIC_POLARIZABILITY_ISA_ANGULAR_AZIMUTHAL_POINTS");
+    const int iterations = options.get_int("ATOMIC_POLARIZABILITY_ISA_MAX_ITERATIONS");
+    if (radial <= 0 || polar <= 0 || azimuthal <= 0 || iterations <= 0)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "ISA grid and iteration keywords must be positive");
+    const double convergence = options.get_double("ATOMIC_POLARIZABILITY_ISA_CONVERGENCE");
+    if (!(convergence > 0.0) || !std::isfinite(convergence))
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "ISA convergence must be finite and positive");
+    ISAOptions defaults;
+    return ISAOptions(static_cast<std::size_t>(radial), static_cast<std::size_t>(polar),
+                      static_cast<std::size_t>(azimuthal), static_cast<std::size_t>(iterations),
+                      convergence, defaults.mix_fraction(), defaults.initial_alpha(),
+                      defaults.tail_join_factor(), defaults.tail_activation_iteration(),
+                      defaults.tail_activation_convergence(), defaults.electron_count_tolerance());
+}
+
+ResponseKernel reviewed_response_kernel() { return ResponseKernel(0.25, 0.75); }
+
+namespace {
+
+constexpr double kReferenceGeometryTolerance = 1.0e-10;
+
+/**
+ * The WSM design matrix is built from molecular-frame harmonics, so every site's
+ * local-to-global frame is the identity and the packing rotation is the identity too.
+ * Keeping the rotation explicit means rotate_tensor still enforces orthonormality and
+ * det(R) = 1 on the frame actually used.
+ */
+Matrix identity_site_frame() {
+    Matrix rotation("atomic polarizability local-to-global frame", 3, 3);
+    for (int axis = 0; axis < 3; ++axis) rotation.set(axis, axis, 1.0);
+    return rotation;
+}
+
+/** Fail closed unless the auxiliary SCF describes exactly the reference's structure. */
+void require_matching_structure(const Wavefunction& reference, const Wavefunction& other,
+                                const std::string& role) {
+    const std::string prefix = "atomic polarizability: the " + role + " wavefunction ";
+    const auto reference_molecule = reference.molecule();
+    const auto other_molecule = other.molecule();
+    if (!reference_molecule || !other_molecule)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "has no molecule");
+    if (reference_molecule->natom() != other_molecule->natom())
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "has a different atom count");
+    for (int atom = 0; atom < reference_molecule->natom(); ++atom) {
+        if (reference_molecule->true_atomic_number(atom) != other_molecule->true_atomic_number(atom))
+            throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "has a different nuclear framework");
+        for (int axis = 0; axis < 3; ++axis) {
+            const double displacement =
+                reference_molecule->xyz(atom, axis) - other_molecule->xyz(atom, axis);
+            if (!std::isfinite(displacement) ||
+                std::abs(displacement) > kReferenceGeometryTolerance)
+                throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+                    prefix + "is not at the reference geometry; the vertical protocol requires "
+                             "all three SCFs at one geometry");
+        }
+    }
+    const auto reference_basis = reference.basisset();
+    const auto other_basis = other.basisset();
+    if (!reference_basis || !other_basis)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "has no orbital basis");
+    if (reference_basis->name() != other_basis->name() ||
+        reference_basis->nbf() != other_basis->nbf())
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            prefix + "does not use the reference orbital basis; the vertical protocol requires "
+                     "one complete basis for all three SCFs");
+}
+
+}  // namespace
+
+AtomicPolarizabilityCalculator::AtomicPolarizabilityCalculator(
+    std::shared_ptr<Wavefunction> grac_wfn, std::shared_ptr<Wavefunction> neutral_precursor_wfn,
+    std::shared_ptr<Wavefunction> cation_wfn)
+    : wfn_(std::move(grac_wfn)),
+      neutral_precursor_wfn_(std::move(neutral_precursor_wfn)),
+      cation_wfn_(std::move(cation_wfn)) {
+    if (!wfn_)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            "the GRAC-corrected reference wavefunction is missing");
+    if (!neutral_precursor_wfn_)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            "the neutral precursor wavefunction is missing; it fixes the applied GRAC shift");
+    if (!cation_wfn_)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            "the cation wavefunction is missing; it fixes the vertical ionization potential");
+}
+
 AtomicPolarizabilityCalculator::AtomicPolarizabilityCalculator(std::shared_ptr<Wavefunction> wfn)
     : wfn_(std::move(wfn)) {
-    if (!wfn_) {
-        throw PSIEXCEPTION("AtomicPolarizabilityCalculator: wavefunction is null");
-    }
+    if (!wfn_)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            "the GRAC-corrected reference wavefunction is missing");
 }
 
 void AtomicPolarizabilityCalculator::validate_wavefunction_prerequisites() const {
@@ -5494,19 +5584,188 @@ void AtomicPolarizabilityCalculator::validate_wavefunction_prerequisites() const
         // Some Wavefunction accessors reject incomplete, safely constructed wavefunctions.
     }
 
-    if (!has_orbital_response_data) {
-        throw PSIEXCEPTION(
-            "AtomicPolarizabilityCalculator: unsupported wavefunction is missing required orbital response data");
+    if (!has_orbital_response_data)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            "the reference wavefunction is missing required orbital response data");
+
+    // The bare single-wavefunction path lands here. It must never publish partial output.
+    if (!neutral_precursor_wfn_ || !cation_wfn_)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            "the native pipeline needs the GRAC-corrected reference together with its neutral "
+            "precursor and cation wavefunctions, which a bare OEProp call cannot supply. Run "
+            "psi4.driver.procrouting.atomic_polarizability.atomic_polarizabilities instead, or "
+            "hand the triple to OEProp with set_atomic_polarizability_references");
+
+    require_matching_structure(*wfn_, *neutral_precursor_wfn_, "neutral precursor");
+    require_matching_structure(*wfn_, *cation_wfn_, "cation");
+}
+
+AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
+    const std::string prefix = "atomic polarizability: ";
+    // Nothing downstream allocates output until this gate passes.
+    validate_wavefunction_prerequisites();
+    Options& options = Process::environment.options;
+
+    const int nonzero = options.get_int("ATOMIC_POLARIZABILITY_N_FREQUENCIES");
+    if (nonzero <= 0)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the nonzero frequency count must be positive");
+    const double scale = options.get_double("ATOMIC_POLARIZABILITY_FREQUENCY_SCALE");
+    AtomicPolarizabilityPublication result;
+    result.grid = make_casimir_grid(static_cast<unsigned int>(nonzero), scale);
+    const std::size_t frequency_count = result.grid.frequencies.size();
+
+    // Stage 1: the frozen GRAC response context, which revalidates the SCF triple itself.
+    auto context = FrozenResponseContext::create(wfn_, neutral_precursor_wfn_, cation_wfn_);
+    if (!context) throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the frozen response context is null");
+    const auto molecule = context->molecule();
+    if (!molecule) throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the frozen context has no molecule");
+    const std::size_t site_count = context->sites().size();
+    if (site_count == 0 || site_count != static_cast<std::size_t>(molecule->natom()))
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "frozen sites and molecular atoms disagree");
+
+    // Stage 2: the ISA partition of the frozen density.
+    const auto kernel = reviewed_response_kernel();
+    auto isa_weights = compute_isa_weights(context, isa_options_from(options));
+    result.isa = isa_weights.diagnostics();
+    if (!result.isa.converged)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the ISA partition did not converge");
+    if (isa_weights.site_count() != site_count)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "ISA sites and frozen sites disagree");
+
+    // Stage 3: the frequency-dependent site-pair response.
+    const ISAPolResponseProvider provider(context, kernel, std::move(isa_weights));
+    const auto responses = provider.compute_isapol_response(result.grid);
+    if (responses.size() != frequency_count)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the response provider returned the wrong frequency count");
+
+    // Stage 4: the covalent bond graph, which fails closed when disconnected.
+    result.bond_graph = derive_bond_graph(*molecule,
+                                          options.get_double("ATOMIC_POLARIZABILITY_COVALENT_SCALE"));
+    if (result.bond_graph.component_count != 1 || result.bond_graph.graph.site_count != site_count)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the derived bond graph is not a single connected component over the sites");
+
+    // Stage 5: LW localization at every frequency.
+    const double localization_tolerance =
+        options.get_double("ATOMIC_POLARIZABILITY_LOCALIZATION_TOLERANCE");
+    if (!(localization_tolerance > 0.0) || !std::isfinite(localization_tolerance))
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the localization tolerance must be finite and positive");
+    std::vector<LocalizedResponse> localized;
+    localized.reserve(frequency_count);
+    result.localization_residuals.reserve(frequency_count);
+    for (std::size_t frequency = 0; frequency < frequency_count; ++frequency) {
+        if (responses[frequency].frequency != result.grid.frequencies[frequency])
+            throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the response frequencies do not match the protocol grid");
+        auto one = localize_lw(responses[frequency], result.bond_graph.graph, localization_tolerance);
+        if (one.local.size() != site_count)
+            throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "localization returned the wrong site count");
+        result.localization_residuals.push_back(one.residuals);
+        localized.push_back(std::move(one));
     }
+
+    // Stage 6: the symmetry-faithful fit points and the external-point response on them.
+    const auto fit_points = generate_wsm_fit_points(*molecule, options);
+    result.fit_points = fit_points.plan;
+    if (fit_points.points.empty())
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "no WSM fit points were generated");
+    const auto point_response =
+        evaluate_point_response(context, kernel, result.grid.frequencies, fit_points.points);
+    if (point_response.frequency_count() != frequency_count ||
+        point_response.points().size() != fit_points.points.size())
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the point response does not span the requested grid and points");
+
+    // Stage 7: the PDef active-variable mask.
+    //
+    // FRAME CONTRACT: derive_pdef_constraints must be called with EMPTY site axes. The
+    // returned mask indexes variables in whichever frame site_axes selects, and refine_wsm's
+    // design matrix uses molecular-frame harmonics, so any non-identity local frame here
+    // yields a mask indexed in the wrong frame and plausible-looking but wrong anisotropy.
+    const std::vector<SiteAxes> molecular_frame_axes{};
+    if (!molecular_frame_axes.empty())
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the PDef mask must be derived in the molecular frame");
+    result.pdef = derive_pdef_constraints(*molecule, molecular_frame_axes);
+    if (result.pdef.active_variable_count == 0 || result.pdef.independent_variable_count == 0)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the PDef derivation left no fit variables");
+
+    // Stage 8: the constrained L3 WSM refinement at every frequency.
+    RefinementOptions refinement;
+    refinement.maximum_condition_number =
+        options.get_double("ATOMIC_POLARIZABILITY_MAX_CONDITION_NUMBER");
+    const auto models = refine_wsm(localized, point_response, result.pdef.constraints, refinement);
+    if (models.size() != frequency_count)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "refinement returned the wrong frequency count");
+    result.refinement.reserve(frequency_count);
+    for (const auto& model : models) {
+        if (model.tensors.size() != site_count)
+            throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "a refined model has the wrong site count");
+        result.refinement.push_back(model.diagnostics);
+    }
+
+    // Stage 9: isotropic dispersion recoupling on the same protocol grid.
+    result.dispersion = compute_dispersion(models, result.grid);
+    if (!result.dispersion.c6 || !result.dispersion.c8 || !result.dispersion.c10 ||
+        !result.dispersion.c12)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "dispersion recoupling produced no coefficients");
+
+    // Stage 10: pack the dipole blocks into the global Cartesian frame.
+    const auto frame = identity_site_frame();
+    const int rows = static_cast<int>(frequency_count * site_count);
+    auto dynamic = std::make_shared<Matrix>("ATOMIC DYNAMIC POLARIZABILITIES", rows, 6);
+    auto statics = std::make_shared<Matrix>("ATOMIC POLARIZABILITIES",
+                                            static_cast<int>(site_count), 6);
+    auto frequencies = std::make_shared<Matrix>("ATOMIC POLARIZABILITY FREQUENCIES",
+                                                static_cast<int>(frequency_count), 1);
+    for (std::size_t frequency = 0; frequency < frequency_count; ++frequency) {
+        if (models[frequency].frequency != result.grid.frequencies[frequency])
+            throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "a refined model frequency left the protocol grid");
+        frequencies->set(static_cast<int>(frequency), 0, result.grid.frequencies[frequency]);
+        for (std::size_t site = 0; site < site_count; ++site) {
+            const auto local = local_spherical_dipole_to_cartesian(models[frequency].tensors[site]);
+            const auto packed = pack_symmetric_tensor(rotate_tensor(local, frame));
+            const int row = static_cast<int>(frequency * site_count + site);
+            for (int component = 0; component < 6; ++component) {
+                if (!std::isfinite(packed[static_cast<std::size_t>(component)]))
+                    throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "a packed global tensor is not finite");
+                dynamic->set(row, component, packed[static_cast<std::size_t>(component)]);
+                if (frequency == 0)
+                    statics->set(static_cast<int>(site), component,
+                                 packed[static_cast<std::size_t>(component)]);
+            }
+        }
+    }
+    // The static tensor is the zero-frequency block, exactly.
+    for (std::size_t site = 0; site < site_count; ++site)
+        for (int component = 0; component < 6; ++component)
+            if (statics->get(static_cast<int>(site), component) !=
+                dynamic->get(static_cast<int>(site), component))
+                throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the static tensor is not the zero-frequency block");
+
+    result.static_polarizabilities = statics;
+    result.dynamic_polarizabilities = dynamic;
+    result.frequencies = frequencies;
+    return result;
 }
 
 void AtomicPolarizabilityCalculator::compute() {
-    // Output arrays must not be allocated or published until every native response
-    // prerequisite has been validated. The response provider is added in a later stage.
-    validate_wavefunction_prerequisites();
-    throw PSIEXCEPTION(
-        "AtomicPolarizabilityCalculator: required native response data are unavailable: missing GRAC "
-        "provenance and ISA weights");
+    // Every stage gate lives in run(). Publication below is unconditional precisely because
+    // run() either returns a complete result or throws, so partial output cannot escape.
+    const auto result = run();
+
+    const std::vector<std::pair<std::string, SharedMatrix>> published{
+        {"ATOMIC POLARIZABILITIES", result.static_polarizabilities},
+        {"ATOMIC DYNAMIC POLARIZABILITIES", result.dynamic_polarizabilities},
+        {"ATOMIC POLARIZABILITY FREQUENCIES", result.frequencies},
+        {"ATOMIC C6", result.dispersion.c6},
+        {"ATOMIC C8", result.dispersion.c8},
+        {"ATOMIC C10", result.dispersion.c10},
+        {"ATOMIC C12", result.dispersion.c12}};
+    for (const auto& entry : published)
+        if (!entry.second)
+            throw ATOMIC_POLARIZABILITY_PREREQUISITE("atomic polarizability: '" + entry.first +
+                                                     "' was not produced");
+    for (const auto& entry : published) {
+        Process::environment.arrays[entry.first] = entry.second;
+        wfn_->set_array_variable(entry.first, entry.second);
+    }
 }
 
 }  // namespace psi

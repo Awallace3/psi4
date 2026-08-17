@@ -45,10 +45,46 @@ section is the authoritative record; it is evidence-backed and supersedes the ch
 | 4. ISA-Pol response | **done** | Full composed chain verified in `test_native_atomic_polarizability_source_guard.py:96-126`; recovered molecular response diagonal to `7e-15`. |
 | 5. WSM refinement | **done, but under-determined without constraints** | Runs, conserves the isotropic sum to `3e-4`. Anisotropy is NOT pinned down: see the gaps below. |
 | 6. Dispersion recoupling | **done, oracle-verified** | All four coefficients within `2.5e-7` relative of the reviewed CASIMIR values; see below. |
-| 7. End-to-end publication | **partial** | Literals extracted and committed. Stage chaining and publication of the seven variables not yet written; 0 of 7 currently published. |
-| 8. Oracle acceptance | **partial** | Frequencies and C6–C12 accepted. The full aug-cc-pVTZ/GRAC protocol has never been run. |
+| 7. End-to-end publication | **done** | All seven variables publish from one `OEProp` call on the SCF triple; verified end to end on PBE0/aug-cc-pVDZ. See the Task 7 record below. |
+| 8. Oracle acceptance | **partial** | Frequencies and C6–C12 accepted in isolation. The full aug-cc-pVTZ/GRAC protocol has never been run; the six reviewed-literal comparisons exist but are skipped by default. |
 
-Test suite for this feature: **306 passing**, 0 failing.
+Test suite for this feature: **375 passing** under `-m mints`, 0 failing, 6 skipped
+(the reviewed-literal parity comparisons).
+
+### Task 7 record
+
+The chain is `FrozenResponseContext::create` -> `compute_isa_weights` ->
+`ISAPolResponseProvider::compute_isapol_response` -> `derive_bond_graph` -> `localize_lw`
+-> `generate_wsm_fit_points` + `evaluate_point_response` -> `derive_pdef_constraints` ->
+`refine_wsm` -> `compute_dispersion` -> pack -> publish, with a gate between every pair of
+stages. `AtomicPolarizabilityCalculator::run()` either returns all seven arrays or throws
+`AtomicPolarizabilityPrerequisiteError`; `compute()` publishes only after `run()` returns.
+The driver entry point is
+`psi4.driver.procrouting.atomic_polarizability.atomic_polarizabilities`.
+
+Measured facts that constrain any future change:
+
+- **Memory.** The default 407-point fit grid needs a WSM peak of `454,828,904` bytes, and
+  the stage gate reserves half of configured memory, so it requires at least ~0.87 GiB
+  configured. Psi4's 500 MB default fails closed. The driver sets 4 GiB explicitly
+  (`PIPELINE_MEMORY_BYTES`) and restores the previous value afterwards.
+- **Grid quality is basis dependent.** With aug-cc-pVDZ the LW charge-sum residual sticks
+  at `1.2e-05` on a `302/50` DFT grid regardless of ISA density (tested to `150/24/32`);
+  only `590/99` brings it inside `1e-6`. The DFT grid, not the ISA grid, is binding. The
+  wiring spec's grid table was measured without diffuse functions and does not transfer.
+- **PDef mask under declared C1.** For the reviewed geometry with `symmetry c1`, `no_com`,
+  `no_reorient`, `derive_pdef_constraints` reports `C2v(Z)` with site groups
+  `C2v(Z)/Cs(Y)/Cs(Y)`, `38/66/66` active pairs, 170 active, 66 equality rows, and 104
+  independent variables, exactly as the PDef spec predicts. This is now pinned by a test.
+- **Frame.** `derive_pdef_constraints` is called with empty `site_axes` and the packing
+  rotation is the identity, because `refine_wsm`'s harmonics are molecular-frame.
+
+Known non-parity residual at aug-cc-pVDZ, left for Task 8: the published hydrogen `xz`
+component is about `-0.91` against a reviewed `+0.0058`. It is symmetry-allowed (`10` and
+`11c` share `A'` at a `Cs` site), so the mask is not at fault, and the debugging map rules
+out the publication and dispersion math, which points at Task 4 or Task 5. C10/C12 also
+come out negative for hydrogen at this basis, consistent with a non-positive isotropic
+rank-2/rank-3 trace in a small basis.
 
 ### Task 6 acceptance record
 
@@ -68,8 +104,8 @@ Residuals are consistent with the six/seven-figure rounding of the reviewed lite
 
 ### Remaining work, in dependency order
 
-The blockers are missing *connective tissue*, not broken stage numerics. Stages 2–6 each
-hold their own invariants on real data.
+All seven items below were closed by Task 7 except item 7, whose measured numbers are now
+recorded above. The list is retained for provenance.
 
 1. **PDef active-variable constraints** — derived and specified
    ([spec](../specs/2026-08-17-pdef-constraint-derivation.md)). Without the mask the L3 fit
