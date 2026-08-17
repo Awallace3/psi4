@@ -1,5 +1,8 @@
 import argparse
 import json
+import os
+import subprocess
+import sys
 import traceback
 from pathlib import Path
 
@@ -87,6 +90,37 @@ def _raw_identity_qcschema_molecule():
 
 
 
+# Per-scenario option overrides. Mirrored by _CHECKPOINT_SCENARIOS in
+# test_saptdft_checkpoint.py, which derives expected stage lists from them.
+_SCENARIO_OPTIONS = {
+    "localization": {
+        "sapt_dft_do_dhf": False,
+        "sapt_dft_do_ddft": False,
+        "sapt_dft_do_fsapt": "FISAPT",
+    },
+    "fsapt_einsums": {
+        "sapt_dft_do_dhf": False,
+        "sapt_dft_do_ddft": False,
+        "sapt_dft_do_disp": True,
+        "sapt_dft_do_fsapt": "SAPTDFT",
+        "sapt_dft_functional": "HF",
+        "sapt_dft_mp2_disp_alg": "FISAPT",
+        "sapt_dft_use_einsums": True,
+    },
+    "fsapt_fisapt": {
+        "sapt_dft_do_dhf": False,
+        "sapt_dft_do_ddft": False,
+        "sapt_dft_do_disp": True,
+        "sapt_dft_do_fsapt": "FISAPT",
+        "sapt_dft_functional": "HF",
+        "sapt_dft_mp2_disp_alg": "FISAPT",
+        "sapt_dft_use_einsums": False,
+    },
+    "disp": {"sapt_dft_do_ddft": False, "sapt_dft_do_disp": True},
+    "lrc": {"sapt_dft_functional": "wb97x", "dft_radial_points": 50, "dft_spherical_points": 110},
+}
+
+
 def _configure(scenario, name):
     core.clean()
     core.clean_options()
@@ -114,53 +148,7 @@ def _configure(scenario, name):
     }
     if "-d3" in name.lower() or "-d4" in name.lower():
         options["sapt_dft_functional"] = "pbe0"
-    if scenario == "localization":
-        options.update(
-            {
-                "sapt_dft_do_dhf": False,
-                "sapt_dft_do_ddft": False,
-                "sapt_dft_do_fsapt": "FISAPT",
-            }
-        )
-    elif scenario == "fsapt_einsums":
-        options.update(
-            {
-                "sapt_dft_do_dhf": False,
-                "sapt_dft_do_ddft": False,
-                "sapt_dft_do_disp": True,
-                "sapt_dft_do_fsapt": "SAPTDFT",
-                "sapt_dft_functional": "HF",
-                "sapt_dft_mp2_disp_alg": "FISAPT",
-                "sapt_dft_use_einsums": True,
-            }
-        )
-    elif scenario == "fsapt_fisapt":
-        options.update(
-            {
-                "sapt_dft_do_dhf": False,
-                "sapt_dft_do_ddft": False,
-                "sapt_dft_do_disp": True,
-                "sapt_dft_do_fsapt": "FISAPT",
-                "sapt_dft_functional": "HF",
-                "sapt_dft_mp2_disp_alg": "FISAPT",
-                "sapt_dft_use_einsums": False,
-            }
-        )
-    elif scenario == "disp":
-        options.update(
-            {
-                "sapt_dft_do_ddft": False,
-                "sapt_dft_do_disp": True,
-            }
-        )
-    elif scenario == "lrc":
-        options.update(
-            {
-                "sapt_dft_functional": "wb97x",
-                "dft_radial_points": 50,
-                "dft_spherical_points": 110,
-            }
-        )
+    options.update(_SCENARIO_OPTIONS.get(scenario, {}))
     psi4.set_options(options)
     sapt_dimer, monomer_a, monomer_b = proc_util.prepare_sapt_molecule(mol, "dimer")
     return mol, {
@@ -382,75 +370,36 @@ def _install_restart_guards(
 
     from psi4.driver.procrouting.sapt import sapt_jk_terms, sapt_mp2_terms
 
-    guarded_modules = [sapt_jk_terms]
-    guarded_mp2_modules = [sapt_mp2_terms]
+    jk_modules = [sapt_jk_terms]
+    mp2_modules = [sapt_mp2_terms]
     try:
         from psi4.driver.procrouting.sapt import sapt_jk_terms_ein, sapt_mp2_terms_ein
     except ImportError:
         pass
     else:
-        guarded_modules.append(sapt_jk_terms_ein)
-        guarded_mp2_modules.append(sapt_mp2_terms_ein)
+        jk_modules.append(sapt_jk_terms_ein)
+        mp2_modules.append(sapt_mp2_terms_ein)
 
-    for module in guarded_modules:
-        original_electrostatics = module.electrostatics
-        original_exchange = module.exchange
-        original_induction = module.induction
+    def install_stage_guard(module, attribute, guarded_stages):
+        """Fail if a component routine runs while its stage is already checkpointed."""
+        original = getattr(module, attribute)
 
-        def guarded_electrostatics(*args, _original=original_electrostatics, **kwargs):
+        def guarded(*args, _original=original, **kwargs):
             summary["stage_routine_call_count"] += 1
             stage = current_context["name"]
-            if stage in {"hf_sapt_elst", "elst"}:
-                _guard_completed_stage(stage, "electrostatics")
+            if stage in guarded_stages:
+                _guard_completed_stage(stage, attribute)
             return _original(*args, **kwargs)
 
-        def guarded_exchange(*args, _original=original_exchange, **kwargs):
-            summary["stage_routine_call_count"] += 1
-            stage = current_context["name"]
-            if stage in {"hf_sapt_exch", "exch"}:
-                _guard_completed_stage(stage, "exchange")
-            return _original(*args, **kwargs)
+        setattr(module, attribute, guarded)
 
-        def guarded_induction(*args, _original=original_induction, **kwargs):
-            summary["stage_routine_call_count"] += 1
-            stage = current_context["name"]
-            if stage in {"hf_sapt_ind", "ind"}:
-                _guard_completed_stage(stage, "induction")
-            return _original(*args, **kwargs)
-
-        module.electrostatics = guarded_electrostatics
-        module.exchange = guarded_exchange
-        module.induction = guarded_induction
-
-    for module in guarded_mp2_modules:
-        original_fdds = module.df_fdds_dispersion
-        original_mp2_fisapt = module.df_mp2_fisapt_dispersion
-        original_mp2_sapt = module.df_mp2_sapt_dispersion
-
-        def guarded_fdds(*args, _original=original_fdds, **kwargs):
-            summary["stage_routine_call_count"] += 1
-            stage = current_context["name"]
-            if stage == "disp":
-                _guard_completed_stage(stage, "df_fdds_dispersion")
-            return _original(*args, **kwargs)
-
-        def guarded_mp2_fisapt(*args, _original=original_mp2_fisapt, **kwargs):
-            summary["stage_routine_call_count"] += 1
-            stage = current_context["name"]
-            if stage == "disp":
-                _guard_completed_stage(stage, "df_mp2_fisapt_dispersion")
-            return _original(*args, **kwargs)
-
-        def guarded_mp2_sapt(*args, _original=original_mp2_sapt, **kwargs):
-            summary["stage_routine_call_count"] += 1
-            stage = current_context["name"]
-            if stage == "disp":
-                _guard_completed_stage(stage, "df_mp2_sapt_dispersion")
-            return _original(*args, **kwargs)
-
-        module.df_fdds_dispersion = guarded_fdds
-        module.df_mp2_fisapt_dispersion = guarded_mp2_fisapt
-        module.df_mp2_sapt_dispersion = guarded_mp2_sapt
+    for module in jk_modules:
+        install_stage_guard(module, "electrostatics", {"hf_sapt_elst", "elst"})
+        install_stage_guard(module, "exchange", {"hf_sapt_exch", "exch"})
+        install_stage_guard(module, "induction", {"hf_sapt_ind", "ind"})
+    for module in mp2_modules:
+        for attribute in ["df_fdds_dispersion", "df_mp2_fisapt_dispersion", "df_mp2_sapt_dispersion"]:
+            install_stage_guard(module, attribute, {"disp"})
 
     if guard_jk:
         def guarded_jk_build(*args, **kwargs):
@@ -459,102 +408,72 @@ def _install_restart_guards(
 
         core.JK.build = guarded_jk_build
     elif count_jk_builds or capture_jk_settings:
+        # Record how each JK object was configured so a restart can be checked
+        # against the settings the uninterrupted run used (omega, wK, memory...).
         jk_states = {}
         original_jk_build = core.JK.build
-        original_set_do_j = core.JK.set_do_J
-        original_set_do_k = core.JK.set_do_K
-        original_set_do_wk = core.JK.set_do_wK
-        original_set_memory = core.JK.set_memory
-        original_set_omega = core.JK.set_omega
-        original_set_omega_alpha = core.JK.set_omega_alpha
-        original_set_omega_beta = core.JK.set_omega_beta
         original_initialize = core.JK.initialize
 
         def _jk_state(jk):
-            return jk_states.setdefault(
-                id(jk),
-                {
-                    "built": False,
-                    "context": current_context["name"],
-                    "orbital_basis": None,
-                    "aux_basis": None,
-                    "memory": None,
-                    "do_J": None,
-                    "do_K": None,
-                    "do_wK": None,
-                    "omega": None,
-                    "omega_alpha": None,
-                    "omega_beta": None,
-                    "initialized": False,
-                },
-            )
+            return jk_states.setdefault(id(jk), {
+                "built": False, "context": current_context["name"], "orbital_basis": None,
+                "aux_basis": None, "memory": None, "do_J": None, "do_K": None, "do_wK": None,
+                "omega": None, "omega_alpha": None, "omega_beta": None, "initialized": False,
+            })
 
         def counted_jk_build(*args, **kwargs):
             jk = original_jk_build(*args, **kwargs)
             summary["jk_build_count"] += 1
             state = _jk_state(jk)
-            state["built"] = True
-            orbital_basis = kwargs.get("orbital") if "orbital" in kwargs else (args[0] if args else None)
-            aux_basis = kwargs.get("aux") if "aux" in kwargs else (args[1] if len(args) > 1 else None)
-            state["context"] = current_context["name"]
-            state["orbital_basis"] = orbital_basis.name() if hasattr(orbital_basis, "name") else None
-            state["aux_basis"] = aux_basis.name() if hasattr(aux_basis, "name") else None
-            if "memory" in kwargs:
-                state["memory"] = kwargs["memory"]
-            if "do_wK" in kwargs:
-                state["do_wK"] = kwargs["do_wK"]
+            orbital_basis = kwargs.get("orbital", args[0] if args else None)
+            aux_basis = kwargs.get("aux", args[1] if len(args) > 1 else None)
+            state.update({
+                "built": True,
+                "context": current_context["name"],
+                "orbital_basis": getattr(orbital_basis, "name", lambda: None)(),
+                "aux_basis": getattr(aux_basis, "name", lambda: None)(),
+            })
+            for key in ["memory", "do_wK"]:
+                if key in kwargs:
+                    state[key] = kwargs[key]
             return jk
-
-        def wrapped_set_do_j(self, value):
-            _jk_state(self)["do_J"] = bool(value)
-            return original_set_do_j(self, value)
-
-        def wrapped_set_do_k(self, value):
-            _jk_state(self)["do_K"] = bool(value)
-            return original_set_do_k(self, value)
-
-        def wrapped_set_do_wk(self, value):
-            _jk_state(self)["do_wK"] = bool(value)
-            return original_set_do_wk(self, value)
-
-        def wrapped_set_memory(self, value):
-            _jk_state(self)["memory"] = int(value)
-            return original_set_memory(self, value)
-
-        def wrapped_set_omega(self, value):
-            _jk_state(self)["omega"] = float(value)
-            return original_set_omega(self, value)
-
-        def wrapped_set_omega_alpha(self, value):
-            _jk_state(self)["omega_alpha"] = float(value)
-            return original_set_omega_alpha(self, value)
-
-        def wrapped_set_omega_beta(self, value):
-            _jk_state(self)["omega_beta"] = float(value)
-            return original_set_omega_beta(self, value)
 
         def wrapped_initialize(self):
             _jk_state(self)["initialized"] = True
             return original_initialize(self)
 
         core.JK.build = counted_jk_build
-        core.JK.set_do_J = wrapped_set_do_j
-        core.JK.set_do_K = wrapped_set_do_k
-        core.JK.set_do_wK = wrapped_set_do_wk
-        core.JK.set_memory = wrapped_set_memory
-        core.JK.set_omega = wrapped_set_omega
-        core.JK.set_omega_alpha = wrapped_set_omega_alpha
-        core.JK.set_omega_beta = wrapped_set_omega_beta
         core.JK.initialize = wrapped_initialize
+
+        # set_do_J -> "do_J", set_omega_alpha -> "omega_alpha", ...
+        for setter, cast in [("set_do_J", bool), ("set_do_K", bool), ("set_do_wK", bool),
+                             ("set_memory", int), ("set_omega", float),
+                             ("set_omega_alpha", float), ("set_omega_beta", float)]:
+            def wrapped(self, value, _original=getattr(core.JK, setter),
+                        _key=setter[len("set_"):], _cast=cast):
+                _jk_state(self)[_key] = _cast(value)
+                return _original(self, value)
+
+            setattr(core.JK, setter, wrapped)
+
         summary["_jk_states"] = jk_states
 
 
+# F-SAPT routine to disable per completed stage: (einsums module attr, FISAPT method).
+_FSAPT_STAGE_ROUTINES = {
+    "elst": ("felst", "felst"),
+    "exch": ("fexch", "fexch"),
+    "ind": ("find", "find"),
+    "disp": ("fdisp0", "fdisp"),
+}
+
+
 def _install_fsapt_guards(forbid_stages):
+    """Make the F-SAPT routines of already-checkpointed stages fail if re-entered."""
     if not forbid_stages:
         return
 
     forbid_stages = set(forbid_stages)
-
     from psi4.driver.procrouting.sapt import saptdft_fisapt, sapt_jk_terms_ein
 
     def boom(label):
@@ -569,22 +488,14 @@ def _install_fsapt_guards(forbid_stages):
             return original_setup(*args, **kwargs)
 
         saptdft_fisapt.setup_fisapt_object = guarded_setup
-        sapt_jk_terms_ein.localization = lambda *args, **kwargs: boom("fsapt_setup")
-        sapt_jk_terms_ein.partition = lambda *args, **kwargs: boom("fsapt_setup")
-        sapt_jk_terms_ein.flocalization = lambda *args, **kwargs: boom("fsapt_setup")
+        for attribute in ["localization", "partition", "flocalization"]:
+            setattr(sapt_jk_terms_ein, attribute, lambda *a, **k: boom("fsapt_setup"))
 
-    if "elst" in forbid_stages:
-        sapt_jk_terms_ein.felst = lambda *args, **kwargs: boom("fsapt_elst")
-        core.FISAPT.felst = lambda self, *args, **kwargs: boom("fsapt_elst")
-    if "exch" in forbid_stages:
-        sapt_jk_terms_ein.fexch = lambda *args, **kwargs: boom("fsapt_exch")
-        core.FISAPT.fexch = lambda self, *args, **kwargs: boom("fsapt_exch")
-    if "ind" in forbid_stages:
-        sapt_jk_terms_ein.find = lambda *args, **kwargs: boom("fsapt_ind")
-        core.FISAPT.find = lambda self, *args, **kwargs: boom("fsapt_ind")
-    if "disp" in forbid_stages:
-        sapt_jk_terms_ein.fdisp0 = lambda *args, **kwargs: boom("fsapt_disp")
-        core.FISAPT.fdisp = lambda self, *args, **kwargs: boom("fsapt_disp")
+    for stage, (einsums_attr, fisapt_attr) in _FSAPT_STAGE_ROUTINES.items():
+        if stage in forbid_stages:
+            label = f"fsapt_{stage}"
+            setattr(sapt_jk_terms_ein, einsums_attr, lambda *a, _l=label, **k: boom(_l))
+            setattr(core.FISAPT, fisapt_attr, lambda self, *a, _l=label, **k: boom(_l))
 
 
 def _capture_fsapt_variables(summary):
@@ -602,6 +513,55 @@ def _capture_fsapt_variables(summary):
     summary["fsapt_variables"] = {
         label: _serialize_value(_safe_variable(label)) for label in labels if _safe_variable(label) is not None
     }
+
+
+def run(
+    *,
+    checkpoint_dir,
+    mode,
+    stop_after=None,
+    name="sapt(dft)",
+    scenario="default",
+    guard_jk=False,
+    count_jk_builds=False,
+    capture_jk_settings=False,
+    capture_fsapt=False,
+    forbid_banners=None,
+    forbid_fsapt_stages=None,
+    qcschema_protocols=None,
+    qcschema_extras=None,
+):
+    """Run this worker in a fresh interpreter; return (CompletedProcess, summary dict).
+
+    Tests drive SAPT(DFT) through here rather than in-process so a restart cannot be
+    satisfied by Psi4 state left in memory by an earlier run.
+    """
+    command = [sys.executable, __file__, mode, str(checkpoint_dir), "--name", name, "--scenario", scenario]
+    for flag, enabled in [
+        ("--guard-jk", guard_jk),
+        ("--count-jk-builds", count_jk_builds),
+        ("--capture-jk-settings", capture_jk_settings),
+        ("--capture-fsapt", capture_fsapt),
+    ]:
+        if enabled:
+            command.append(flag)
+    for flag, value in [
+        ("--stop-after", stop_after),
+        ("--qcschema-protocols-json", None if qcschema_protocols is None else json.dumps(qcschema_protocols)),
+        ("--qcschema-extras-json", None if qcschema_extras is None else json.dumps(qcschema_extras)),
+    ]:
+        if value is not None:
+            command.extend([flag, value])
+    for banner in forbid_banners or []:
+        command.extend(["--forbid-banner", banner])
+    for stage in forbid_fsapt_stages or []:
+        command.extend(["--forbid-fsapt-stage", stage])
+
+    completed = subprocess.run(command, check=False, capture_output=True, text=True, env=dict(os.environ))
+    output_lines = [line for line in completed.stdout.splitlines() if line.strip()]
+    if not output_lines:
+        raise AssertionError(completed.stderr or completed.stdout or "checkpoint worker produced no output")
+    return completed, json.loads(output_lines[-1])
 
 
 def main():

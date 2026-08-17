@@ -1,8 +1,4 @@
-import json
-import os
 from pathlib import Path
-import subprocess
-import sys
 
 import pytest
 import psi4
@@ -38,38 +34,7 @@ def _saptdft_runtime_only_qcschema_extras():
 
 
 
-def _run_saptdft_checkpoint_worker(
-    *,
-    checkpoint_dir,
-    mode,
-    stop_after=None,
-    name="sapt(dft)",
-    scenario="default",
-    guard_jk=False,
-    qcschema_protocols=None,
-    qcschema_extras=None,
-):
-    worker = os.path.join(os.path.dirname(__file__), "fsaptdft_checkpoint_worker.py")
-    command = [sys.executable, worker, mode, str(checkpoint_dir), "--name", name, "--scenario", scenario]
-    if stop_after is not None:
-        command.extend(["--stop-after", stop_after])
-    if guard_jk:
-        command.append("--guard-jk")
-    if qcschema_protocols is not None:
-        command.extend(["--qcschema-protocols-json", json.dumps(qcschema_protocols)])
-    if qcschema_extras is not None:
-        command.extend(["--qcschema-extras-json", json.dumps(qcschema_extras)])
-    completed = subprocess.run(
-        command,
-        check=False,
-        capture_output=True,
-        text=True,
-        env=dict(os.environ),
-    )
-    output_lines = [line for line in completed.stdout.splitlines() if line.strip()]
-    if not output_lines:
-        raise AssertionError(completed.stderr or completed.stdout or "fsaptdft checkpoint worker produced no output")
-    return completed, json.loads(output_lines[-1])
+from fsaptdft_checkpoint_worker import run as _run_saptdft_checkpoint_worker
 
 
 _sapt_testing_mols = {
