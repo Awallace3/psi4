@@ -1642,7 +1642,11 @@ void export_oeprop(py::module &m) {
 
     py::class_<AtomicPolarizabilityCalculator>(m, "AtomicPolarizabilityCalculator",
                                                "Native atomic-polarizability pipeline entry point")
-        .def(py::init<std::shared_ptr<Wavefunction>>())
+        .def(py::init<std::shared_ptr<Wavefunction>>(),
+             "Single-wavefunction seam without the SCF triple; compute() fails closed.")
+        .def(py::init<std::shared_ptr<Wavefunction>, std::shared_ptr<Wavefunction>,
+                      std::shared_ptr<Wavefunction>>(),
+             "grac_wfn"_a, "neutral_precursor_wfn"_a, "cation_wfn"_a)
         .def("compute", &AtomicPolarizabilityCalculator::compute,
              "Validate prerequisites and compute native atomic polarizabilities.");
 
@@ -1676,7 +1680,12 @@ void export_oeprop(py::module &m) {
              "Follow up with side names, if the side effect is undesired,", "title"_a)
         .def("set_names", &OEProp::set_names,
              "Instruct OEProp to save variables under all specified names. The property name will "
-             "be inserted at every occurrence of {}, like Python format strings. Wipes other names-to-save-by.");
+             "be inserted at every occurrence of {}, like Python format strings. Wipes other names-to-save-by.")
+        .def("set_atomic_polarizability_references", &OEProp::set_atomic_polarizability_references,
+             "Supply the neutral precursor and cation SCF wavefunctions required by the native "
+             "ATOMIC_POLARIZABILITIES task alongside this object's GRAC-corrected reference. "
+             "Without them the task fails closed and publishes nothing.",
+             "neutral_precursor_wfn"_a, "cation_wfn"_a);
 
     // class_<GridProp, std::shared_ptr<GridProp> >("GridProp", "docstring").
     //    def("add", &GridProp::gridpy_add, "docstring").

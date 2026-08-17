@@ -12,12 +12,14 @@ these defines a different model and invalidates every literal below.
 """
 
 import inspect
+import os
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 import psi4
+from psi4.driver.procrouting import atomic_polarizability as native_driver
 
 
 pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.mints]
@@ -243,6 +245,400 @@ def test_dispersion_quadrature_weights_are_casimir_polder():
 
     assert weights[0] == 0.0, "the static point must carry no quadrature weight"
     np.testing.assert_allclose(weights[1:], expected, rtol=1.0e-12, atol=0.0)
+
+
+# --------------------------------------------------------------------------------------
+# End-to-end publication (Task 7).
+#
+# The seven public array variables. Every one must appear, with the shape recorded in
+# docs/superpowers/specs/2026-08-17-end-to-end-wiring.md, or none may appear at all.
+# --------------------------------------------------------------------------------------
+
+PUBLISHED_VARIABLES = (
+    "ATOMIC POLARIZABILITIES",
+    "ATOMIC DYNAMIC POLARIZABILITIES",
+    "ATOMIC POLARIZABILITY FREQUENCIES",
+    "ATOMIC C6",
+    "ATOMIC C8",
+    "ATOMIC C10",
+    "ATOMIC C12",
+)
+
+PUBLISHED_SHAPES = {
+    "ATOMIC POLARIZABILITIES": (3, 6),
+    "ATOMIC DYNAMIC POLARIZABILITIES": (33, 6),
+    "ATOMIC POLARIZABILITY FREQUENCIES": (11, 1),
+    "ATOMIC C6": (3, 3),
+    "ATOMIC C8": (3, 3),
+    "ATOMIC C10": (3, 3),
+    "ATOMIC C12": (3, 3),
+}
+
+# The reviewed geometry: C2 axis along z, molecule in the xz plane, O at the origin.
+# `symmetry c1`/`no_com`/`no_reorient` is the reviewed protocol, and the PDef mask is
+# derived geometrically, so C2v(Z) is still detected under the declared C1.
+REVIEWED_GEOMETRY = """
+0 1
+O  0.00000000  0.0  0.00000000
+H  1.45365196  0.0 -1.12168732
+H -1.45365196  0.0 -1.12168732
+symmetry c1
+no_com
+no_reorient
+units bohr
+"""
+
+# Wiring verification protocol. Deliberately NOT the reviewed parity protocol: a smaller
+# orbital basis, so its published numbers differ from the reviewed literals by basis and
+# it gates shapes, symmetry, and fail-closed behaviour only, never the literals.
+#
+# The DFT grid is 590/99 rather than the wiring spec's 302/50, because the spec's grid
+# table was measured without diffuse functions: with aug-cc-pVDZ the LW charge-sum residual
+# sticks at 1.2e-05 on a 302/50 grid no matter how dense the ISA grid is, and only a 590/99
+# grid brings it inside 1e-6. Densifying the ISA grid past 60/18/24 changes C6 by 4e-05
+# relative here, so the DFT grid, not the ISA grid, is the binding constraint.
+WIRING_PROTOCOL = {
+    "basis": "aug-cc-pvdz",
+    "scf_type": "pk",
+    "dft_spherical_points": 590,
+    "dft_radial_points": 99,
+    "dft_density_tolerance": 1.0e-12,
+    "atomic_polarizability_isa_radial_points": 60,
+    "atomic_polarizability_isa_angular_polar_points": 18,
+    "atomic_polarizability_isa_angular_azimuthal_points": 24,
+    "atomic_polarizability_localization_tolerance": 1.0e-6,
+}
+
+# Fail-closed behaviour depends on no grid or basis quality at all, so its SCF triple is
+# built as cheaply as possible.
+FAIL_CLOSED_PROTOCOL = {
+    "basis": "sto-3g",
+    "scf_type": "pk",
+    "dft_spherical_points": 50,
+    "dft_radial_points": 12,
+    "dft_density_tolerance": 1.0e-12,
+}
+
+# The reviewed parity protocol. Running it is Task 8, not Task 7; it is expensive, so the
+# six literal comparisons below are skipped unless it is explicitly requested. They are
+# reported as skipped rather than passed precisely so an unexercised comparison can never
+# be mistaken for a satisfied one.
+PARITY_PROTOCOL = {
+    "basis": "aug-cc-pvtz",
+    "scf_type": "pk",
+    "dft_spherical_points": 590,
+    "dft_radial_points": 99,
+    "dft_density_tolerance": 1.0e-12,
+    "atomic_polarizability_isa_radial_points": 100,
+    "atomic_polarizability_isa_angular_polar_points": 24,
+    "atomic_polarizability_isa_angular_azimuthal_points": 32,
+    "atomic_polarizability_localization_tolerance": 1.0e-8,
+}
+
+PARITY_SKIP_REASON = (
+    "the reviewed aug-cc-pVTZ/GRAC parity protocol is Task 8; set "
+    "PSI4_ATOMIC_POLARIZABILITY_PARITY=1 to exercise the reviewed-literal comparisons"
+)
+
+
+def _published(wfn):
+    """Collect the seven published arrays from a wavefunction as NumPy arrays."""
+    return {name: np.asarray(wfn.array_variable(name)) for name in PUBLISHED_VARIABLES}
+
+
+def _run_protocol(protocol):
+    psi4.core.clean_variables()
+    psi4.core.be_quiet()
+    psi4.set_options(protocol)
+    molecule = psi4.geometry(REVIEWED_GEOMETRY)
+    wfn = native_driver.atomic_polarizabilities(molecule=molecule)
+    return _published(wfn)
+
+
+@pytest.fixture(scope="module")
+def wiring_published():
+    return _run_protocol(WIRING_PROTOCOL)
+
+
+@pytest.fixture(scope="module")
+def parity_published():
+    if os.environ.get("PSI4_ATOMIC_POLARIZABILITY_PARITY") != "1":
+        pytest.skip(PARITY_SKIP_REASON)
+    return _run_protocol(PARITY_PROTOCOL)
+
+
+@pytest.mark.scf
+def test_published_shapes(wiring_published):
+    for name, shape in PUBLISHED_SHAPES.items():
+        assert wiring_published[name].shape == shape, name
+
+
+@pytest.mark.scf
+def test_published_values_are_finite(wiring_published):
+    for name, array in wiring_published.items():
+        assert np.all(np.isfinite(array)), name
+
+
+@pytest.mark.scf
+def test_published_static_block_is_the_zero_frequency_dynamic_block(wiring_published):
+    static = wiring_published["ATOMIC POLARIZABILITIES"]
+    dynamic = wiring_published["ATOMIC DYNAMIC POLARIZABILITIES"]
+    np.testing.assert_allclose(static, dynamic[:3], rtol=0.0, atol=0.0)
+
+
+@pytest.mark.scf
+def test_published_frequencies_are_the_protocol_grid(wiring_published):
+    frequencies = wiring_published["ATOMIC POLARIZABILITY FREQUENCIES"].ravel()
+    expected, _weights = psi4.core._atomic_polarizability_make_casimir_grid(10, 0.5)
+    np.testing.assert_allclose(
+        frequencies,
+        np.asarray(expected, dtype=float),
+        rtol=FREQUENCY_RTOL,
+        atol=FREQUENCY_ATOL,
+    )
+
+
+@pytest.mark.scf
+def test_published_tensors_are_exactly_symmetric_at_every_frequency(wiring_published):
+    """Every per-atom global Cartesian tensor is exactly symmetric.
+
+    The packed form is symmetric by construction, so the substance is that publication
+    happened at all: the packer rejects an asymmetric tensor rather than symmetrizing it,
+    so a successful publication is the assertion. The round trip below additionally pins
+    that the packed order really is xx, xy, xz, yy, yz, zz.
+    """
+    dynamic = wiring_published["ATOMIC DYNAMIC POLARIZABILITIES"]
+    for row in range(dynamic.shape[0]):
+        tensor = _unpack(dynamic[row])
+        np.testing.assert_allclose(tensor, tensor.T, rtol=0.0, atol=0.0)
+        repacked = psi4.core._atomic_polarizability_pack_symmetric_tensor(
+            psi4.core.Matrix.from_array(tensor)
+        )
+        np.testing.assert_allclose(np.asarray(repacked), dynamic[row], rtol=0.0, atol=0.0)
+
+
+@pytest.mark.scf
+def test_published_oxygen_tensor_is_diagonal_at_every_frequency(wiring_published):
+    """O sits on both mirror planes, so C2v forbids every off-diagonal Cartesian element.
+
+    This is a prediction of the derived PDef mask rather than a packing identity: without
+    the mask the under-determined L3 fit invents exactly this kind of anisotropy.
+    """
+    dynamic = wiring_published["ATOMIC DYNAMIC POLARIZABILITIES"]
+    for block in range(11):
+        _, xy, xz, _, yz, _ = dynamic[3 * block]
+        assert abs(xy) <= TENSOR_ATOL, (block, xy)
+        assert abs(xz) <= TENSOR_ATOL, (block, xz)
+        assert abs(yz) <= TENSOR_ATOL, (block, yz)
+
+
+@pytest.mark.scf
+def test_published_output_satisfies_the_h2o_c2_relation(wiring_published):
+    """alpha_H2 = S_x alpha_H1 S_x on published output, at every frequency.
+
+    This is the observable consequence of the PDef symmetry mask and the H2-copies-H1
+    equality rows, so it fails if the mask is derived in the wrong frame.
+    """
+    mirror = np.diag([-1.0, 1.0, 1.0])
+    dynamic = wiring_published["ATOMIC DYNAMIC POLARIZABILITIES"]
+    for block in range(11):
+        h1 = _unpack(dynamic[3 * block + 1])
+        h2 = _unpack(dynamic[3 * block + 2])
+        np.testing.assert_allclose(h2, mirror @ h1 @ mirror, rtol=TENSOR_RTOL, atol=TENSOR_ATOL)
+
+
+@pytest.mark.scf
+def test_published_dispersion_is_symmetric_with_equivalent_hydrogens(wiring_published):
+    for name in ("ATOMIC C6", "ATOMIC C8", "ATOMIC C10", "ATOMIC C12"):
+        array = wiring_published[name]
+        np.testing.assert_allclose(array, array.T, rtol=0.0, atol=0.0, err_msg=name)
+        np.testing.assert_allclose(
+            array[1], array[2], rtol=TENSOR_RTOL, atol=TENSOR_ATOL, err_msg=name
+        )
+
+
+# --------------------------------------------------------------------------------------
+# Wiring preconditions that need no SCF. These pin the two things the wiring is easiest to
+# get quietly wrong: the frame the PDef mask is expressed in, and the memory the WSM stage
+# needs on the default fit grid.
+# --------------------------------------------------------------------------------------
+
+
+def test_pdef_mask_is_derived_geometrically_not_from_the_declared_point_group():
+    """`symmetry c1` must not disable the mask: detection is geometric.
+
+    The reviewed protocol declares C1 with no_com/no_reorient. If the mask were keyed off
+    the declared point group it would silently go fully active (360 variables), the L3 fit
+    would be under-determined, and it would invent hydrogen dipole anisotropy.
+    """
+    molecule = psi4.geometry(REVIEWED_GEOMETRY)
+    molecule.update_geometry()
+    assert molecule.point_group().symbol() == "c1"
+
+    derived = psi4.core._atomic_polarizability_derive_pdef_constraints(molecule)
+    assert derived["molecular_point_group"] == "C2v(Z)"
+    assert derived["variable_count"] == 360
+    assert derived["active_variable_count"] == 170
+    assert derived["equality_row_count"] == 66
+    assert derived["independent_variable_count"] == 104
+    assert [site["point_group"] for site in derived["sites"]] == ["C2v(Z)", "Cs(Y)", "Cs(Y)"]
+    assert [len(site["active_pairs"]) for site in derived["sites"]] == [38, 66, 66]
+    # H2 is a symmetry copy of H1, not an independent fit.
+    assert [site["symmetry_source"] for site in derived["sites"]] == [0, 1, 1]
+
+
+def test_local_axes_move_the_mask_out_of_the_frame_refine_wsm_needs():
+    """A non-identity local frame yields a mask indexed in that frame, not the molecular one.
+
+    refine_wsm's harmonics are global, so it must be handed the empty-site_axes mask. This
+    pins the hazard: the same molecule with rotated local axes produces a *different* mask,
+    which would look plausible and be wrong.
+    """
+    molecule = psi4.geometry(REVIEWED_GEOMETRY)
+    molecule.update_geometry()
+    molecular = psi4.core._atomic_polarizability_derive_pdef_constraints(molecule)
+
+    swap_xy = psi4.core.Matrix.from_array(
+        np.array([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]])
+    )
+    rotated = psi4.core._atomic_polarizability_derive_pdef_constraints(
+        molecule, [swap_xy, swap_xy, swap_xy]
+    )
+    assert list(rotated["active_variables"]) != list(molecular["active_variables"])
+
+
+def test_default_fit_grid_needs_more_than_psi4s_default_memory():
+    """The 407-point default grid does not fit the 500 MB default; the driver must raise it.
+
+    The WSM design matrix carries one dense row per unordered fit-point pair and the stage
+    gate reserves half of configured memory, so this is a hard architectural constraint,
+    not a tuning preference.
+    """
+    molecule = psi4.geometry(REVIEWED_GEOMETRY)
+    molecule.update_geometry()
+    points = np.asarray(psi4.core._atomic_polarizability_wsm_fit_points(molecule)["points"])
+    assert points.shape == (407, 3)
+
+    active, constraints = 170, 66
+    with pytest.raises(RuntimeError, match="exceeds half the reserved memory"):
+        psi4.core._atomic_polarizability_plan_wsm_refinement(
+            points.shape[0], 3, active, constraints, 500 * 1000 * 1000
+        )
+    plan = psi4.core._atomic_polarizability_plan_wsm_refinement(
+        points.shape[0], 3, active, constraints, native_driver.PIPELINE_MEMORY_BYTES
+    )
+    assert plan["estimated_bytes"] > 500 * 1000 * 1000 // 2
+    assert 2 * plan["estimated_bytes"] <= native_driver.PIPELINE_MEMORY_BYTES
+
+
+@pytest.fixture(scope="module")
+def fail_closed_triple():
+    psi4.core.be_quiet()
+    psi4.set_options(FAIL_CLOSED_PROTOCOL)
+    molecule = psi4.geometry(REVIEWED_GEOMETRY)
+    return list(native_driver.atomic_polarizability_scf_triple(molecule=molecule))
+
+
+@pytest.mark.scf
+@pytest.mark.parametrize("missing", [0, 1, 2])
+def test_missing_wavefunction_fails_closed_and_publishes_nothing(fail_closed_triple, missing):
+    """Any absent member of the SCF triple must raise and publish nothing at all."""
+    psi4.core.clean_variables()
+    triple = list(fail_closed_triple)
+    reference = triple[0]
+    triple[missing] = None
+
+    with pytest.raises(RuntimeError, match="AtomicPolarizabilityPrerequisiteError"):
+        native_driver.publish_atomic_polarizabilities(*triple)
+
+    for name in PUBLISHED_VARIABLES:
+        assert not psi4.core.has_variable(name), name
+        assert not reference.has_array_variable(name), name
+
+
+@pytest.mark.scf
+def test_mismatched_basis_fails_closed_and_publishes_nothing(fail_closed_triple):
+    """An SCF triple that does not share one basis must raise and publish nothing."""
+    psi4.core.clean_variables()
+    psi4.core.be_quiet()
+    grac, precursor, _cation = fail_closed_triple
+    molecule = psi4.geometry(REVIEWED_GEOMETRY)
+    cation = molecule.clone()
+    cation.set_molecular_charge(1)
+    cation.set_multiplicity(2)
+    cation.update_geometry()
+    psi4.set_options({"basis": "6-31g", "scf_type": "pk", "reference": "uhf"})
+    _, wrong_basis = psi4.energy("scf", molecule=cation, return_wfn=True)
+    psi4.set_options({"reference": "rhf"})
+
+    with pytest.raises(RuntimeError, match="AtomicPolarizabilityPrerequisiteError"):
+        native_driver.publish_atomic_polarizabilities(grac, precursor, wrong_basis)
+
+    for name in PUBLISHED_VARIABLES:
+        assert not psi4.core.has_variable(name), name
+        assert not grac.has_array_variable(name), name
+
+
+@pytest.mark.scf
+def test_bare_oeprop_on_a_single_wavefunction_fails_closed():
+    """A bare OEProp call without the SCF triple must never publish partial output."""
+    psi4.core.be_quiet()
+    psi4.set_options({"basis": "sto-3g", "scf_type": "pk"})
+    molecule = psi4.geometry(REVIEWED_GEOMETRY)
+    _, wfn = psi4.energy("scf", molecule=molecule, return_wfn=True)
+
+    properties = psi4.core.OEProp(wfn)
+    properties.add("ATOMIC_POLARIZABILITIES")
+    with pytest.raises(RuntimeError, match="AtomicPolarizabilityPrerequisiteError"):
+        properties.compute()
+
+    for name in PUBLISHED_VARIABLES:
+        assert not wfn.has_array_variable(name), name
+
+
+# --------------------------------------------------------------------------------------
+# The six reviewed-literal comparisons. These are the Task 8 acceptance gate and are
+# only meaningful under the reviewed protocol; see PARITY_SKIP_REASON.
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.scf
+def test_parity_static_polarizabilities_match_camcasp(parity_published):
+    np.testing.assert_allclose(
+        parity_published["ATOMIC POLARIZABILITIES"],
+        np.asarray(REFERENCE_STATIC_POLARIZABILITIES),
+        rtol=TENSOR_RTOL,
+        atol=TENSOR_ATOL,
+    )
+
+
+@pytest.mark.scf
+def test_parity_dynamic_polarizabilities_match_camcasp(parity_published):
+    np.testing.assert_allclose(
+        parity_published["ATOMIC DYNAMIC POLARIZABILITIES"],
+        np.asarray(REFERENCE_DYNAMIC_POLARIZABILITIES),
+        rtol=TENSOR_RTOL,
+        atol=TENSOR_ATOL,
+    )
+
+
+@pytest.mark.scf
+@pytest.mark.parametrize(
+    "name,reference",
+    [
+        ("ATOMIC C6", REFERENCE_C6),
+        ("ATOMIC C8", REFERENCE_C8),
+        ("ATOMIC C10", REFERENCE_C10),
+        ("ATOMIC C12", REFERENCE_C12),
+    ],
+)
+def test_parity_dispersion_coefficients_match_camcasp(parity_published, name, reference):
+    np.testing.assert_allclose(
+        parity_published[name],
+        np.asarray(reference),
+        rtol=TENSOR_RTOL,
+        atol=TENSOR_ATOL,
+    )
 
 
 # --------------------------------------------------------------------------------------

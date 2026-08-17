@@ -836,7 +836,15 @@ void OEProp::compute() {
 }
 
 void OEProp::compute_atomic_polarizabilities() {
-    AtomicPolarizabilityCalculator calculator(wfn_);
+    // A bare OEProp call has no SCF triple, so the single-wavefunction constructor is used
+    // and the calculator fails closed before allocating any output.
+    if (!atomic_polarizability_precursor_ || !atomic_polarizability_cation_) {
+        AtomicPolarizabilityCalculator calculator(wfn_);
+        calculator.compute();
+        return;
+    }
+    AtomicPolarizabilityCalculator calculator(wfn_, atomic_polarizability_precursor_,
+                                              atomic_polarizability_cation_);
     calculator.compute();
 }
 

@@ -775,7 +775,12 @@ def test_atomic_polarizabilities_fail_closed_without_response_data():
     oeprop.add("MULTIPOLE(2)")
     oeprop.add("ATOMIC_POLARIZABILITIES")
 
-    with pytest.raises(RuntimeError, match=r"AtomicPolarizabilityCalculator.*response data"):
+    # A bare OEProp call has no SCF triple, so the pipeline names the missing prerequisite
+    # rather than publishing anything, including the multipoles queued alongside it.
+    with pytest.raises(
+        RuntimeError,
+        match=r"AtomicPolarizabilityPrerequisiteError.*neutral precursor and cation",
+    ):
         oeprop.compute()
 
     unpublished = ("DIPOLE", "QUADRUPOLE", *_PUBLIC_ARRAYS)
@@ -793,7 +798,10 @@ def test_atomic_polarizabilities_reject_incomplete_wavefunction_prerequisites():
     wfn = psi4.core.Wavefunction.build(molecule, "sto-3g")
     calculator = psi4.core.AtomicPolarizabilityCalculator(wfn)
 
-    with pytest.raises(RuntimeError, match=r"unsupported wavefunction.*orbital response data"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"AtomicPolarizabilityPrerequisiteError.*missing required orbital response data",
+    ):
         calculator.compute()
 
     assert all(not wfn.has_array_variable(name) for name in _PUBLIC_ARRAYS)

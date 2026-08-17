@@ -180,6 +180,32 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- Largest fit-point count accepted by WSM refinement. -*/
     options.add_int("ATOMIC_POLARIZABILITY_FIT_MAX_POINTS", 500);
 
+    /*- Radial nodes per atom in the native ISA partition quadrature. The wiring
+    specification's measured grid table puts the ``1e-4`` parity gate at or above
+    60/18/24 with a 302/50 DFT grid; the defaults here are the tighter 100/18/24. -*/
+    options.add_int("ATOMIC_POLARIZABILITY_ISA_RADIAL_POINTS", 100);
+    /*- Polar angular nodes per atom in the native ISA partition quadrature. -*/
+    options.add_int("ATOMIC_POLARIZABILITY_ISA_ANGULAR_POLAR_POINTS", 18);
+    /*- Azimuthal angular nodes per atom in the native ISA partition quadrature. -*/
+    options.add_int("ATOMIC_POLARIZABILITY_ISA_ANGULAR_AZIMUTHAL_POINTS", 24);
+    /*- Largest number of native ISA fixed-point iterations. -*/
+    options.add_int("ATOMIC_POLARIZABILITY_ISA_MAX_ITERATIONS", 120);
+    /*- Native ISA fixed-point convergence threshold. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_ISA_CONVERGENCE", 1.0e-9);
+
+    /*- Largest LW-localization residual accepted before the native atomic-polarizability
+    pipeline fails closed. This is a physical convergence gate on the response grid, not a
+    comparison tolerance: the wiring specification measures ``1e-6`` for a 302/50 DFT grid
+    with ISA 60/18/24 and ``1e-8`` for 590/99 with ISA 100/24/32. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_LOCALIZATION_TOLERANCE", 1.0e-6);
+    /*- Largest WSM design-matrix condition number accepted before the native
+    atomic-polarizability pipeline fails closed. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_MAX_CONDITION_NUMBER", 1.0e12);
+    /*- Covalent-bonding scale factor used to derive the LW bond graph from the geometry.
+    Sites bond when separated by at most this factor times the sum of their Bragg-Slater
+    radii; the graph must be connected. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_COVALENT_SCALE", 1.3);
+
     /*- Psi4 dies if energy does not converge. !expert -*/
     options.add_bool("DIE_IF_NOT_CONVERGED", true);
     /*- Integral package to use. If compiled with Simint support, change this option to use them; LibInt2 is used

@@ -27,9 +27,27 @@
 #include <vector>
 
 #include "psi4/psi4-dec.h"
+#include "psi4/libpsi4util/exception.h"
 #include "psi4/libmints/typedefs.h"
 
 namespace psi {
+
+/**
+ * Named fail-closed error for every native atomic-polarizability prerequisite gate.
+ *
+ * Every message carries the class name, so a caller can distinguish a missing or
+ * inconsistent prerequisite from an ordinary numerical failure. The pipeline publishes
+ * nothing at all when this is thrown; partial output is never produced.
+ */
+class PSI_API AtomicPolarizabilityPrerequisiteError : public PsiException {
+   public:
+    AtomicPolarizabilityPrerequisiteError(const std::string& message, const char* file,
+                                          int line) noexcept
+        : PsiException("AtomicPolarizabilityPrerequisiteError: " + message, file, line) {}
+};
+
+#define ATOMIC_POLARIZABILITY_PREREQUISITE(message) \
+    AtomicPolarizabilityPrerequisiteError(message, __FILE__, __LINE__)
 
 class BasisSet;
 struct BasisSetStructuralSnapshot;
@@ -1404,18 +1422,63 @@ PSI_API Matrix rotate_tensor(const Matrix& local, const Matrix& local_to_global)
 /** Pack a symmetric Cartesian tensor as xx, xy, xz, yy, yz, zz. */
 PSI_API std::array<double, 6> pack_symmetric_tensor(const Matrix& tensor);
 
-/** Native atomic-polarizability pipeline entry point. */
+/** Read the ATOMIC_POLARIZABILITY_ISA_* keywords into a validated ISA policy. */
+PSI_API ISAOptions isa_options_from(Options& options);
+
+/** The exact reviewed protocol response kernel, 25 percent CHF plus 75 percent ALDA. */
+PSI_API ResponseKernel reviewed_response_kernel();
+
+/**
+ * Complete, validated pipeline output. Nothing here is published until every stage gate
+ * has passed, so a caller either receives all seven arrays or an exception.
+ *
+ * static_polarizabilities is (sites, 6) and dynamic_polarizabilities is
+ * (frequencies * sites, 6), both packed xx, xy, xz, yy, yz, zz in the global Cartesian
+ * frame and frequency-major over site-major blocks. frequencies is (frequencies, 1).
+ */
+struct PSI_API AtomicPolarizabilityPublication {
+    FrequencyGrid grid;
+    SharedMatrix static_polarizabilities;
+    SharedMatrix dynamic_polarizabilities;
+    SharedMatrix frequencies;
+    DispersionMatrices dispersion;
+    /** Stage provenance, in chain order, for auditing a parity mismatch. */
+    ISADiagnostics isa;
+    BondGraphDerivation bond_graph;
+    FitPointPlan fit_points;
+    PDefDerivation pdef;
+    std::vector<LocalizationResiduals> localization_residuals;
+    std::vector<RefinementDiagnostics> refinement;
+};
+
+/**
+ * Native atomic-polarizability pipeline entry point.
+ *
+ * FrozenResponseContext::create needs the GRAC-corrected reference together with the
+ * neutral precursor and cation wavefunctions that fix the applied shift, so this class
+ * takes all three. Per the end-to-end wiring specification the Python driver runs the
+ * three SCFs; a property class does not drive SCF. The single-wavefunction constructor is
+ * retained only so a bare OEProp call keeps failing closed with a clear message.
+ */
 class PSI_API AtomicPolarizabilityCalculator {
    public:
+    AtomicPolarizabilityCalculator(std::shared_ptr<Wavefunction> grac_wfn,
+                                   std::shared_ptr<Wavefunction> neutral_precursor_wfn,
+                                   std::shared_ptr<Wavefunction> cation_wfn);
+    /** Bare-OEProp seam: retains no SCF triple, so compute() fails closed. */
     explicit AtomicPolarizabilityCalculator(std::shared_ptr<Wavefunction> wfn);
 
-    /** Compute and publish the atomic polarizability and dispersion arrays. */
+    /** Run every stage, then publish the seven arrays only if all of them passed. */
     void compute();
+    /** Run every stage and return the complete result without publishing anything. */
+    AtomicPolarizabilityPublication run() const;
 
    private:
     void validate_wavefunction_prerequisites() const;
 
     std::shared_ptr<Wavefunction> wfn_;
+    std::shared_ptr<Wavefunction> neutral_precursor_wfn_;
+    std::shared_ptr<Wavefunction> cation_wfn_;
 };
 
 }  // namespace psi
