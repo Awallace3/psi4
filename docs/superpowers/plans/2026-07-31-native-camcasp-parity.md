@@ -42,7 +42,7 @@ section is the authoritative record; it is evidence-backed and supersedes the ch
 | 1. Plumbing | **done** | `valid_methods` accepts `ATOMIC_POLARIZABILITIES` (`python_helpers.py:744`); OEProp dispatch at `oeprop.cc:805`; calculator skeleton fails closed. |
 | 2. Frequency/tensor algebra | **done, oracle-verified** | Grid matches reviewed frequencies to `7.1e-15`; `(10,11c,11s) -> (z,x,y)` and `R alpha R^T` reproduce the reviewed tensors exactly (`0.0`). |
 | 3. LW localization | **done** | Conserves the molecular sum on real SCF data to `4.5e-8` (dipole) / `5.7e-7` (full L3) at all eleven frequencies. |
-| 4. ISA-Pol response | **done** | Full composed chain verified in `test_native_atomic_polarizability_source_guard.py:96-126`; recovered molecular response diagonal to `7e-15`. |
+| 4. ISA-Pol response | **runs; magnitude unverified** | Full composed chain verified in `test_native_atomic_polarizability_source_guard.py:96-126`. The molecular-sum check confirmed only *diagonality* (`7e-15`) and monotonic decay, **not magnitude against an independent molecular polarizability** — see the conservation deficit below. |
 | 5. WSM refinement | **done, but under-determined without constraints** | Runs, conserves the isotropic sum to `3e-4`. Anisotropy is NOT pinned down: see the gaps below. |
 | 6. Dispersion recoupling | **done, oracle-verified** | All four coefficients within `2.5e-7` relative of the reviewed CASIMIR values; see below. |
 | 7. End-to-end publication | **done** | All seven variables publish from one `OEProp` call on the SCF triple; verified end to end on PBE0/aug-cc-pVDZ. See the Task 7 record below. |
@@ -131,12 +131,36 @@ Residuals are consistent with the six/seven-figure rounding of the reviewed lite
    **This is the top open item and the main obstacle to polarizability parity.** Bisect using
    the stage oracles listed in
    [the debugging map](../specs/2026-08-17-parity-debugging-map.md).
-2. **Explain the isotropic magnitude gap.** At aug-cc-pVDZ, O `3.097` and H `1.468` against
-   reviewed `6.130` / `1.734`; the atomic sum is `6.03` where water's molecular
-   polarizability at this basis should be near `9.3`. A basis change alone should not halve
-   the oxygen value, so this must be shown to be basis-driven or diagnosed as a defect.
-   Check the molecular-sum conservation of the published model as the first step, since that
-   needs no reference data.
+2. **Molecular-polarizability conservation deficit — confirmed defect, not a basis effect.**
+   Measured 2026-08-17 at PBE0/aug-cc-pVDZ, DFT `590/99`, ISA `60/18/24`, comparing the
+   published atomic sum against Psi4's own `DIPOLE POLARIZABILITY` at the identical
+   functional, basis, and grid:
+
+   | component | published atomic sum | Psi4 molecular | ratio |
+   | --------- | -------------------- | -------------- | ----- |
+   | `xx` | `7.7729` | `10.1035` | `0.77` |
+   | `yy` | `4.4369` | `8.7373` | `0.51` |
+   | `zz` | `5.8910` | `9.2378` | `0.64` |
+   | isotropic | `6.0336` | `9.3595` | `0.64` |
+
+   The deficit is **anisotropic and worst out of plane** (`yy`, perpendicular to the
+   molecular plane). For contrast the reviewed model sums to `(10.191, 8.997, 9.603)`,
+   isotropic `9.597`, conserving to 1–2%. So a correct distributed model *does* reproduce the
+   molecular polarizability, and ours loses about 36% of it.
+
+   Scope note: the earlier stage checks do not localize this. LW localization and WSM
+   refinement were each shown to conserve *relative to their own input*, and the Task 4 check
+   verified only diagonality and decay, never magnitude — so a uniform deficit originating in
+   the response stage would have passed every existing test. Confirm by summing the ISA-Pol
+   site-pair response directly and comparing to `9.3595` before looking downstream.
+
+   Leading hypotheses, in order: (a) the `25% CHF + 75% ALDA` reference kernel is assembled
+   incorrectly (e.g. blended as a weighted average of kernels rather than the intended
+   functional derivative); (b) the site-pair contraction drops contributions, e.g. charge-flow
+   (rank 0) terms that the reviewed L3 model has absorbed into local dipole terms — note the
+   reviewed model carries no rank 0, yet still conserves, which is precisely what WSM
+   refinement is supposed to achieve; (c) transition-multipole projection is truncated or
+   misnormalized.
 3. **Task 8 full-protocol parity run** — the aug-cc-pVTZ/GRAC protocol has never been run,
    and the six reviewed-literal comparisons are skipped by default behind
    `PSI4_ATOMIC_POLARIZABILITY_PARITY=1`. They must be reported as skipped, never as passed,
