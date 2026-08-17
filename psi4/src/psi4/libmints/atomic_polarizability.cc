@@ -5622,6 +5622,17 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
     const std::size_t site_count = context->sites().size();
     if (site_count == 0 || site_count != static_cast<std::size_t>(molecule->natom()))
         throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "frozen sites and molecular atoms disagree");
+    // refine_wsm pairs fit points, which are generated from the molecule, against site
+    // positions, which are inherited from the frozen context. The two must therefore be the
+    // same points in the same order. They agree today, but a divergence would corrupt the
+    // fitted anisotropy without tripping any dimensional check, so it is enforced here.
+    for (std::size_t site = 0; site < site_count; ++site)
+        for (int axis = 0; axis < 3; ++axis)
+            if (std::abs(context->sites()[site][static_cast<std::size_t>(axis)] -
+                         molecule->xyz(static_cast<int>(site), axis)) >
+                kReferenceGeometryTolerance)
+                throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+                    prefix + "frozen site positions and molecular coordinates disagree");
 
     // Stage 2: the ISA partition of the frozen density.
     const auto kernel = reviewed_response_kernel();
@@ -5656,8 +5667,14 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
         if (responses[frequency].frequency != result.grid.frequencies[frequency])
             throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the response frequencies do not match the protocol grid");
         auto one = localize_lw(responses[frequency], result.bond_graph.graph, localization_tolerance);
-        if (one.local.size() != site_count)
+        if (one.local.size() != site_count || one.positions.size() != site_count)
             throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "localization returned the wrong site count");
+        for (std::size_t site = 0; site < site_count; ++site)
+            for (std::size_t axis = 0; axis < 3; ++axis)
+                if (std::abs(one.positions[site][axis] - context->sites()[site][axis]) >
+                    kReferenceGeometryTolerance)
+                    throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+                        prefix + "localized site positions left the frozen site frame");
         result.localization_residuals.push_back(one.residuals);
         localized.push_back(std::move(one));
     }
