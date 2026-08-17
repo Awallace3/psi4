@@ -85,3 +85,36 @@ Also useful as targets: the reviewed *nonlocal* model reconstructs to isotropic 
 the reviewed *refined* L3 model sums to `(10.191, 8.997, 9.603)`, isotropic `9.597`. Both
 reviewed stages conserve, and the refinement absorbs charge flow essentially losslessly —
 which is the behaviour a correct WSM implementation must reproduce.
+
+## The conservation deficit is frequency-dependent
+
+Measured 2026-08-17: our published isotropic atomic sum against the reviewed one at all
+eleven frequencies. The bases differ (aug-cc-pVDZ vs the reviewed aug-cc-pVTZ), so the
+absolute ratio carries basis error — the *shape* is the signal.
+
+| `omega` | ours | reviewed | ratio |
+| ------- | ---- | -------- | ----- |
+| `0.000000` | `6.03357` | `9.59686` | `0.629` |
+| `0.095447` | `5.91086` | `9.29983` | `0.636` |
+| `0.370417` | `4.78189` | `6.91797` | `0.691` |
+| `1.264899` | `1.98139` | `2.38764` | `0.830` |
+| `6.910886` | `0.14174` | `0.15490` | `0.915` |
+| `37.823762` | `0.00533` | `0.00612` | `0.871` |
+
+This separates the defect into two independent effects:
+
+1. **A frequency-dependent part, about 37% at `omega = 0`, closing as `omega` grows.** As
+   `omega` rises the bare response `chi0` shrinks and the kernel correction to
+   `alpha = chi0 (1 - K chi0)^-1` matters less. A deficit that vanishes in exactly that limit
+   is the signature of a **kernel that screens too strongly**. Check the Hartree term for
+   double counting, the sign and prefactor on the ALDA `fxc`, and whether the 25% exchange
+   fraction is applied twice (once via the superfunctional, again in the blend).
+2. **A residual frequency-independent part of roughly 10%,** visible where kernel effects
+   have died away (the plateau near `0.90`, not `1.00`). This cannot be the kernel and points
+   at the uncoupled response or transition-multipole normalization. Treat it as a second,
+   independent bug and re-measure the plateau after fixing the kernel.
+
+Basis differences do not produce a monotone `0.63 -> 0.90` ramp in `omega`, so the trend is
+not a basis artifact. For a basis-clean single point, compare the `omega = 0` sum against
+Psi4's own `DIPOLE POLARIZABILITY` at the same basis and grid (`9.3595` at PBE0/aug-cc-pVDZ,
+DFT `590/99`).
