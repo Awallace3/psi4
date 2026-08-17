@@ -38,6 +38,7 @@
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/mintshelper.h"
 #include "psi4/libmints/molecule.h"
+#include "psi4/libmints/pointgrp.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/liboptions/liboptions.h"
@@ -4204,6 +4205,355 @@ std::vector<RefinedL3Model> refine_wsm(
         result.push_back(refine_wsm_frequency(
             localized[frequency], point_response, frequency, constraints, options));
     return result;
+}
+
+namespace {
+
+/** Exact geometry tolerance for site-symmetry classification, in bohr; matches libmints. */
+constexpr double kSiteSymmetryTolerance = DEFAULT_SYM_TOL;
+/** Largest deviation tolerated before a local axis frame is rejected as non-diagonalizing. */
+constexpr double kSiteAxisTolerance = 1.0e-10;
+/**
+ * Bounded derivation envelope. Sixteen sites cap the equality matrix at 1920 columns and
+ * 1920 rows; refine_wsm applies its own stricter three-site variable envelope downstream.
+ */
+constexpr std::size_t kMaximumConstraintSites = 16;
+
+/**
+ * Monomial parity (px, py, pz) of the real solid harmonics in the 15-component L3 order
+ * 10, 11c, 11s, 20, 21c, 21s, 22c, 22s, 30, 31c, 31s, 32c, 32s, 33c, 33s.
+ *
+ * Every real solid harmonic in this basis is a sum of monomials sharing one parity per axis,
+ * so a diagonal sign operation multiplies it by an exact integer character.
+ */
+constexpr std::array<std::array<int, 3>, kWSMComponents> kL3MonomialParity = {{
+    {{0, 0, 1}}, {{1, 0, 0}}, {{0, 1, 0}},
+    {{0, 0, 0}}, {{1, 0, 1}}, {{0, 1, 1}}, {{0, 0, 0}}, {{1, 1, 0}},
+    {{0, 0, 1}}, {{1, 0, 0}}, {{0, 1, 0}}, {{0, 0, 1}}, {{1, 1, 1}}, {{1, 0, 0}}, {{0, 1, 0}},
+}};
+
+/** Exact integer character of one L3 component under a diagonal sign operation. */
+int l3_character(std::size_t component, const std::array<int, 3>& signs) {
+    int character = 1;
+    for (std::size_t axis = 0; axis < 3; ++axis)
+        if (kL3MonomialParity[component][axis] != 0) character *= signs[axis];
+    return character;
+}
+
+/** One libmints D2h generator reduced to its exact diagonal signs. */
+struct DiagonalOperation {
+    unsigned char bit{};
+    std::array<int, 3> signs{{1, 1, 1}};
+};
+
+/**
+ * Read the eight D2h generators from libmints and keep only their diagonal signs.
+ * libmints builds C2(z) from a finite rotation whose off-diagonal sines vanish only to
+ * roundoff; the diagonal is the exact signed representation, as libmints itself relies on.
+ */
+std::vector<DiagonalOperation> d2h_diagonal_operations() {
+    CharacterTable table(static_cast<unsigned char>(PointGroups::D2h));
+    std::vector<DiagonalOperation> result;
+    result.reserve(static_cast<std::size_t>(table.order()));
+    for (int index = 0; index < table.order(); ++index) {
+        const SymmetryOperation& operation = table.symm_operation(index);
+        DiagonalOperation entry;
+        entry.bit = operation.bit();
+        for (int axis = 0; axis < 3; ++axis) {
+            const double diagonal = operation(axis, axis);
+            if (!std::isfinite(diagonal) || std::abs(std::abs(diagonal) - 1.0) > kSiteAxisTolerance)
+                throw PSIEXCEPTION("PDef constraints: D2h generators must have unit diagonal signs");
+            entry.signs[static_cast<std::size_t>(axis)] = diagonal < 0.0 ? -1 : 1;
+        }
+        result.push_back(entry);
+    }
+    return result;
+}
+
+/** Distinguishing nuclear identity used when matching symmetry images. */
+struct SiteIdentity {
+    int atomic_number{};
+    double nuclear_charge{};
+    double mass{};
+};
+
+/** The D2h subgroup exactly realized by the supplied frame, with its site permutations. */
+struct FrameSymmetry {
+    std::vector<DiagonalOperation> operations;
+    std::vector<std::vector<std::size_t>> images;
+    unsigned char bits{};
+};
+
+FrameSymmetry detect_frame_symmetry(const std::vector<SitePosition>& sites,
+                                    const std::vector<SiteIdentity>& identities) {
+    const std::string prefix = "PDef constraints: ";
+    FrameSymmetry result;
+    const auto candidates = d2h_diagonal_operations();
+    result.operations.reserve(candidates.size());
+    result.images.reserve(candidates.size());
+    for (const auto& candidate : candidates) {
+        std::vector<std::size_t> images(sites.size(), sites.size());
+        bool complete = true;
+        for (std::size_t site = 0; site < sites.size() && complete; ++site) {
+            SitePosition imaged{};
+            for (std::size_t axis = 0; axis < 3; ++axis)
+                imaged[axis] = candidate.signs[axis] * sites[site][axis];
+            for (std::size_t other = 0; other < sites.size(); ++other) {
+                if (identities[other].atomic_number != identities[site].atomic_number) continue;
+                if (std::abs(identities[other].nuclear_charge - identities[site].nuclear_charge) >
+                        kSiteSymmetryTolerance ||
+                    std::abs(identities[other].mass - identities[site].mass) > kSiteSymmetryTolerance)
+                    continue;
+                double deviation = 0.0;
+                for (std::size_t axis = 0; axis < 3; ++axis)
+                    deviation = std::max(deviation, std::abs(imaged[axis] - sites[other][axis]));
+                if (deviation > kSiteSymmetryTolerance) continue;
+                if (images[site] != sites.size())
+                    throw PSIEXCEPTION(prefix + "sites coincide within the symmetry tolerance");
+                images[site] = other;
+            }
+            if (images[site] == sites.size()) complete = false;
+        }
+        if (!complete) continue;
+        result.operations.push_back(candidate);
+        result.images.push_back(std::move(images));
+        result.bits = static_cast<unsigned char>(result.bits | candidate.bit);
+    }
+    if (result.operations.empty())
+        throw PSIEXCEPTION(prefix + "the identity is not a symmetry of the supplied geometry");
+    return result;
+}
+
+void validate_site_axes(const SiteAxes& axes, std::size_t site) {
+    const std::string prefix =
+        "PDef constraints: site " + std::to_string(site) + " local axes ";
+    for (std::size_t row = 0; row < 3; ++row)
+        for (std::size_t column = 0; column < 3; ++column)
+            if (!std::isfinite(axes[row][column])) throw PSIEXCEPTION(prefix + "must be finite");
+    for (std::size_t first = 0; first < 3; ++first) {
+        for (std::size_t second = 0; second < 3; ++second) {
+            double overlap = 0.0;
+            for (std::size_t axis = 0; axis < 3; ++axis)
+                overlap += axes[axis][first] * axes[axis][second];
+            const double expected = first == second ? 1.0 : 0.0;
+            if (std::abs(overlap - expected) > kSiteAxisTolerance)
+                throw PSIEXCEPTION(prefix + "must be orthonormal");
+        }
+    }
+    const double determinant =
+        axes[0][0] * (axes[1][1] * axes[2][2] - axes[1][2] * axes[2][1]) -
+        axes[0][1] * (axes[1][0] * axes[2][2] - axes[1][2] * axes[2][0]) +
+        axes[0][2] * (axes[1][0] * axes[2][1] - axes[1][1] * axes[2][0]);
+    if (determinant <= 0.0) throw PSIEXCEPTION(prefix + "must be right-handed");
+}
+
+/**
+ * Express diag(signs) in the target and source local frames as target^T diag(signs) source.
+ * The result must be an exact diagonal sign matrix; anything else means the local axes do
+ * not diagonalize the operation and the integer character arithmetic would be invalid.
+ */
+std::array<int, 3> local_operation_signs(const SiteAxes& target, const SiteAxes& source,
+                                         const std::array<int, 3>& signs,
+                                         const std::string& context) {
+    std::array<int, 3> result{{1, 1, 1}};
+    for (std::size_t row = 0; row < 3; ++row) {
+        for (std::size_t column = 0; column < 3; ++column) {
+            double value = 0.0;
+            for (std::size_t axis = 0; axis < 3; ++axis)
+                value += target[axis][row] * signs[axis] * source[axis][column];
+            const double rounded = std::round(value);
+            const bool diagonal = row == column;
+            if (!std::isfinite(value) || std::abs(value - rounded) > kSiteAxisTolerance ||
+                (diagonal ? std::abs(rounded) != 1.0 : rounded != 0.0))
+                throw PSIEXCEPTION("PDef constraints: " + context +
+                                   " local axes must diagonalize every site-group operation "
+                                   "with unit signs");
+            if (diagonal) result[row] = rounded < 0.0 ? -1 : 1;
+        }
+    }
+    return result;
+}
+
+/** Group the 15 L3 components by their exact character tuple over the site-group operations. */
+void classify_components(const std::vector<std::array<int, 3>>& operation_signs,
+                         SiteSymmetry& record) {
+    std::vector<std::vector<int>> tuples(kWSMComponents);
+    for (std::size_t component = 0; component < kWSMComponents; ++component) {
+        tuples[component].reserve(operation_signs.size());
+        for (const auto& signs : operation_signs)
+            tuples[component].push_back(l3_character(component, signs));
+    }
+    std::vector<std::size_t> representatives;
+    for (std::size_t component = 0; component < kWSMComponents; ++component) {
+        std::size_t label = representatives.size();
+        for (std::size_t candidate = 0; candidate < representatives.size(); ++candidate) {
+            if (tuples[component] == tuples[representatives[candidate]]) {
+                label = candidate;
+                break;
+            }
+        }
+        if (label == representatives.size()) representatives.push_back(component);
+        record.component_class[component] = label;
+    }
+    record.class_count = representatives.size();
+    record.active_pairs.clear();
+    for (std::size_t first = 0; first < kWSMComponents; ++first)
+        for (std::size_t second = first; second < kWSMComponents; ++second)
+            if (record.component_class[first] == record.component_class[second])
+                record.active_pairs.push_back({first, second});
+}
+
+}  // namespace
+
+PDefDerivation derive_pdef_constraints(const Molecule& molecule,
+                                      const std::vector<SiteAxes>& site_axes) {
+    const std::string prefix = "PDef constraints: ";
+    const int atom_count = molecule.natom();
+    if (atom_count <= 0) throw PSIEXCEPTION(prefix + "at least one site is required");
+    const std::size_t site_count = static_cast<std::size_t>(atom_count);
+    if (site_count > kMaximumConstraintSites)
+        throw PSIEXCEPTION(prefix + "derivation envelope is at most sixteen sites");
+    if (!site_axes.empty() && site_axes.size() != site_count)
+        throw PSIEXCEPTION(prefix + "supply either no local axes or one local axis frame per site");
+
+    SiteAxes molecular_frame{};
+    for (std::size_t axis = 0; axis < 3; ++axis) molecular_frame[axis][axis] = 1.0;
+    std::vector<SiteAxes> axes(site_count, molecular_frame);
+    if (!site_axes.empty()) axes = site_axes;
+    for (std::size_t site = 0; site < site_count; ++site) validate_site_axes(axes[site], site);
+
+    // Symmetry operations act about the molecular symmetry center, so the scan is translation
+    // invariant: only the frame's rotational alignment can hide a symmetry element.
+    const Vector3 center = molecule.center_of_mass();
+    std::vector<SitePosition> sites(site_count);
+    std::vector<SiteIdentity> identities(site_count);
+    for (std::size_t site = 0; site < site_count; ++site) {
+        const int atom = static_cast<int>(site);
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            sites[site][axis] = molecule.xyz(atom, static_cast<int>(axis)) - center[axis];
+            if (!std::isfinite(sites[site][axis]))
+                throw PSIEXCEPTION(prefix + "site coordinates must be finite");
+        }
+        identities[site] = {molecule.true_atomic_number(atom), molecule.Z(atom),
+                            molecule.mass(atom)};
+    }
+
+    const auto symmetry = detect_frame_symmetry(sites, identities);
+    // libmints locates the true symmetry axes independently of the current frame; counting the
+    // operations realized there is the frame-independent reference for the gate below.
+    Molecule probe = molecule.clone();
+    const auto frame = probe.symmetry_frame(kSiteSymmetryTolerance);
+    if (!frame || frame->nirrep() != 1 || frame->nrow() != 3 || frame->ncol() != 3)
+        throw PSIEXCEPTION(prefix + "libmints returned an unusable symmetry frame");
+    std::vector<SitePosition> canonical(site_count);
+    for (std::size_t site = 0; site < site_count; ++site)
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            double value = 0.0;
+            for (std::size_t source = 0; source < 3; ++source)
+                value += sites[site][source] *
+                         (*frame)(static_cast<int>(source), static_cast<int>(axis));
+            canonical[site][axis] = value;
+        }
+    const auto reference = detect_frame_symmetry(canonical, identities);
+    if (symmetry.operations.size() < reference.operations.size())
+        throw PSIEXCEPTION(prefix + "the molecular frame does not realize the detected " +
+                           std::string(PointGroup::bits_to_full_name(reference.bits)) +
+                           " point group; rotate the geometry into its symmetry frame before "
+                           "deriving constraints");
+
+    const auto variable_count = checked_c1_product(site_count, kWSMVariablesPerSite, prefix);
+
+    PDefDerivation derivation;
+    derivation.geometry_tolerance = kSiteSymmetryTolerance;
+    derivation.molecular_point_group = PointGroup::bits_to_full_name(symmetry.bits);
+    derivation.variable_count = variable_count;
+    derivation.sites.resize(site_count);
+
+    for (std::size_t site = 0; site < site_count; ++site) {
+        auto& record = derivation.sites[site];
+        record.symmetry_source = site;
+        for (std::size_t operation = 0; operation < symmetry.operations.size(); ++operation) {
+            if (symmetry.images[operation][site] != site) {
+                record.symmetry_source =
+                    std::min(record.symmetry_source, symmetry.images[operation][site]);
+                continue;
+            }
+            record.point_group_bits = static_cast<unsigned char>(
+                record.point_group_bits | symmetry.operations[operation].bit);
+            record.operation_signs.push_back(local_operation_signs(
+                axes[site], axes[site], symmetry.operations[operation].signs,
+                "site " + std::to_string(site)));
+        }
+        record.point_group = PointGroup::bits_to_full_name(record.point_group_bits);
+        classify_components(record.operation_signs, record);
+    }
+
+    for (std::size_t site = 0; site < site_count; ++site) {
+        auto& record = derivation.sites[site];
+        if (record.symmetry_source == site) continue;
+        const std::size_t source = record.symmetry_source;
+        std::size_t carrier = symmetry.operations.size();
+        for (std::size_t operation = 0; operation < symmetry.operations.size(); ++operation)
+            if (symmetry.images[operation][source] == site) {
+                carrier = operation;
+                break;
+            }
+        if (carrier == symmetry.operations.size())
+            throw PSIEXCEPTION(prefix + "site orbits are inconsistent with the detected symmetry");
+        record.copy_signs = local_operation_signs(
+            axes[site], axes[source], symmetry.operations[carrier].signs,
+            "site " + std::to_string(site) + " and " + std::to_string(source));
+        if (record.active_pairs != derivation.sites[source].active_pairs)
+            throw PSIEXCEPTION(prefix + "symmetry-related sites disagree on their active pairs");
+    }
+
+    // Every count is fixed before the mask and the equality matrix are allocated.
+    std::size_t equality_rows = 0;
+    std::size_t independent = 0;
+    std::size_t active_variables = 0;
+    for (std::size_t site = 0; site < site_count; ++site) {
+        const auto& record = derivation.sites[site];
+        active_variables += record.active_pairs.size();
+        if (record.symmetry_source == site) independent += record.active_pairs.size();
+        else equality_rows += derivation.sites[record.symmetry_source].active_pairs.size();
+    }
+    if (equality_rows > variable_count)
+        throw PSIEXCEPTION(prefix + "equality rows exceed the variable envelope");
+    derivation.active_variable_count = active_variables;
+    derivation.equality_row_count = equality_rows;
+    derivation.independent_variable_count = independent;
+
+    derivation.constraints.active_variables.assign(variable_count, false);
+    for (std::size_t site = 0; site < site_count; ++site)
+        for (const auto& pair : derivation.sites[site].active_pairs)
+            derivation.constraints.active_variables[
+                site * kWSMVariablesPerSite + wsm_upper_index(pair[0], pair[1])] = true;
+
+    derivation.constraints.equality = std::make_shared<Matrix>(
+        "PDef symmetry copies", static_cast<int>(equality_rows),
+        static_cast<int>(variable_count));
+    derivation.constraints.equality_targets.assign(equality_rows, 0.0);
+    std::size_t row = 0;
+    for (std::size_t site = 0; site < site_count; ++site) {
+        const auto& record = derivation.sites[site];
+        if (record.symmetry_source == site) continue;
+        const std::size_t source = record.symmetry_source;
+        for (const auto& pair : derivation.sites[source].active_pairs) {
+            const std::size_t within = wsm_upper_index(pair[0], pair[1]);
+            const int character =
+                l3_character(pair[0], record.copy_signs) * l3_character(pair[1], record.copy_signs);
+            (*derivation.constraints.equality)(
+                static_cast<int>(row), static_cast<int>(site * kWSMVariablesPerSite + within)) = 1.0;
+            (*derivation.constraints.equality)(
+                static_cast<int>(row),
+                static_cast<int>(source * kWSMVariablesPerSite + within)) =
+                -static_cast<double>(character);
+            ++row;
+        }
+    }
+    if (row != equality_rows)
+        throw PSIEXCEPTION(prefix + "equality row accounting is inconsistent");
+    return derivation;
 }
 
 Matrix lw_graph_operator(const BondGraph& graph) { return to_psi_matrix(make_graph_operator(graph)); }

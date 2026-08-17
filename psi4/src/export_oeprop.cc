@@ -37,6 +37,7 @@
 #include "psi4/libmints/oeprop.h"
 #include "psi4/libmints/atomic_polarizability.h"
 #include "psi4/libmints/matrix.h"
+#include "psi4/libmints/molecule.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libscf_solver/hf.h"
@@ -1303,6 +1304,47 @@ void export_oeprop(py::module &m) {
                   localized.residuals.local_charge);
               return result;
           });
+
+    m.def("_atomic_polarizability_derive_pdef_constraints",
+          [](const Molecule& molecule, const std::vector<SharedMatrix>& axis_matrices) {
+              std::vector<SiteAxes> site_axes(axis_matrices.size());
+              for (std::size_t site = 0; site < axis_matrices.size(); ++site) {
+                  const auto& frame = axis_matrices[site];
+                  if (!frame || frame->nirrep() != 1 || frame->nrow() != 3 || frame->ncol() != 3)
+                      throw PSIEXCEPTION("PDef constraints: local axes must be 3 by 3 matrices");
+                  for (std::size_t row = 0; row < 3; ++row)
+                      for (std::size_t column = 0; column < 3; ++column)
+                          site_axes[site][row][column] =
+                              (*frame)(static_cast<int>(row), static_cast<int>(column));
+              }
+              const auto derived = derive_pdef_constraints(molecule, site_axes);
+              py::list sites;
+              for (const auto& record : derived.sites) {
+                  py::dict values;
+                  values["point_group"] = record.point_group;
+                  values["point_group_bits"] = record.point_group_bits;
+                  values["operation_signs"] = record.operation_signs;
+                  values["component_class"] = record.component_class;
+                  values["class_count"] = record.class_count;
+                  values["active_pairs"] = record.active_pairs;
+                  values["symmetry_source"] = record.symmetry_source;
+                  values["copy_signs"] = record.copy_signs;
+                  sites.append(std::move(values));
+              }
+              py::dict result;
+              result["molecular_point_group"] = derived.molecular_point_group;
+              result["variable_count"] = derived.variable_count;
+              result["active_variable_count"] = derived.active_variable_count;
+              result["equality_row_count"] = derived.equality_row_count;
+              result["independent_variable_count"] = derived.independent_variable_count;
+              result["geometry_tolerance"] = derived.geometry_tolerance;
+              result["active_variables"] = derived.constraints.active_variables;
+              result["equality"] = derived.constraints.equality;
+              result["equality_targets"] = derived.constraints.equality_targets;
+              result["sites"] = std::move(sites);
+              return result;
+          },
+          "molecule"_a, "site_axes"_a = std::vector<SharedMatrix>());
 
     py::class_<AtomicPolarizabilityCalculator>(m, "AtomicPolarizabilityCalculator",
                                                "Native atomic-polarizability pipeline entry point")
