@@ -69,6 +69,10 @@ diagnostics stay meaningful.
 
 ## Validation status
 
+Validated two independent ways.
+
+### 1. Against the reviewed model *definition*
+
 The rule was applied to the reviewed H2O model definition and compared pair-by-pair:
 
 | site | predicted active pairs | reviewed active pairs | set difference |
@@ -78,6 +82,32 @@ The rule was applied to the reviewed H2O model definition and compared pair-by-p
 
 Exact agreement on membership, not merely on count. The `H2 COPY H1` relation is also
 present in the reviewed definition.
+
+### 2. Against the reviewed model *output*
+
+Stronger check, independent of the definition file: every entry of the reviewed 15x15
+tensors that the rule marks forbidden should be identically zero. Scanning all eleven
+frequency blocks:
+
+| site | forbidden entries checked | max abs value on a forbidden entry | max abs value on an allowed entry |
+| ---- | ------------------------- | ---------------------------------- | --------------------------------- |
+| `O`  | 1804 | `0.000e+00` | `1.895e+02` |
+| `H1` | 1188 | `0.000e+00` | `4.204e+01` |
+
+Exactly zero, not merely small. The reviewed model freezes precisely the degrees of freedom
+this rule predicts, so applying the mask removes exactly the right directions from the fit.
+
+### Why this fixes the observed pathology
+
+For a `Cs` hydrogen the dipole block spans `(10, 11c, 11s)`. The rule allows `10-10`,
+`10-11c`, `11c-11c` (all `A'`) and `11s-11s` (`A''`), and forbids `10-11s` and `11c-11s`.
+In local Cartesian `(z, x, y)` those two forbidden pairs are exactly `alpha_zy` and
+`alpha_xy`. So the mask forces `alpha_yz = alpha_xy = 0` by construction — which is the
+`+/-5.34` element that the unconstrained fit was inventing, and which the reviewed model
+reports as exactly zero.
+
+The mask constrains *which* entries may be nonzero. It does not by itself guarantee the
+correct *values* on the allowed entries; those still depend on the response stage.
 
 ## Implementation notes
 

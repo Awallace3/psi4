@@ -66,30 +66,51 @@ coefficients under the plan tolerances (`rtol=1e-4, atol=1e-5`):
 Residuals are consistent with the six/seven-figure rounding of the reviewed literals. See
 [the recoupling spec](../specs/2026-08-17-isotropic-dispersion-recoupling.md).
 
-### Remaining work, in dependency order
+### Completed since: constraints, bond graph, fit points
 
-The blockers are missing *connective tissue*, not broken stage numerics. Stages 2–6 each
-hold their own invariants on real data.
+- **PDef active-variable constraints** — done ([spec](../specs/2026-08-17-pdef-constraint-derivation.md)).
+  Reproduces the reviewed definition exactly (O 38/38, H1 66/66, 104 independent variables)
+  and, independently, the reviewed *output*: every symmetry-forbidden tensor entry in the
+  reviewed model is exactly `0.000e+00` (1804 checked for O, 1188 for H1, all frequencies).
+  This eliminates the invented hydrogen `alpha_yz = +/-5.34` (eigenvalues
+  `[-4.51, -0.011, +6.19]`) that the unconstrained fit produced. Verified to detect
+  `C2v(Z)` geometrically even under the reviewed `symmetry c1 / no_com / no_reorient` flags.
+- **Bond-graph derivation** — done. Covalent-radius based, scale `1.3`, reusing the
+  versioned Bragg–Slater table promoted out of `isa_weights.cc`. Fails closed on
+  disconnected graphs (so non-covalent complexes are rejected; accepted, monomer-only).
+- **WSM fit-point generation** — done. Nested equidistant Lebedev surfaces, exact `O_h`
+  orbit structure, `407` points by default with measured symmetry deviation exactly `0.0`
+  and fit recovery stable to `~1e-12` across `129/189/249` points.
 
-1. **PDef active-variable constraints** — derived and specified
-   ([spec](../specs/2026-08-17-pdef-constraint-derivation.md)). Without the mask the L3 fit
-   invents dipole anisotropy: a real run gave hydrogen `alpha_yz = +/-5.34` (eigenvalues
-   `[-4.51, -0.011, +6.19]`) against a reviewed value of exactly `0`. **This is the largest
-   known obstacle to polarizability parity.**
-2. **WSM fit-point generation** — absent entirely; `evaluate_point_response` documents
-   "No points are generated or refined." Must be deterministic and point-group faithful.
-3. **Bond-graph derivation** — absent; `localize_lw` requires a caller-supplied graph.
-4. **GRAC three-SCF orchestration** — `FrozenResponseContext::create` needs GRAC, neutral
-   precursor, and cation wavefunctions, but `AtomicPolarizabilityCalculator` holds a single
-   `wfn_`. Largest architectural hole.
-5. **Stage chaining and publication** — `compute()` is still an unconditional throw and no
-   `set_array_variable` call exists anywhere.
-6. **Options plumbing** — only two options exist; ISA grid, localization tolerance, fit
-   points, bond graph, and PDef policy all need entries.
-7. **Grid quality must be pinned.** The existing SCF test fixtures
-   (`dft_spherical_points 50 / radial 12`, ISA `30/10/12`) are far too coarse for the
-   `1e-4` gate — `localize_lw` rejects them above `1e-2`. Production quality measured at
-   `302/50` with ISA `60/18/24`. Do not mistake the fixtures for the parity protocol.
+### Remaining work
+
+1. **GRAC three-SCF orchestration and stage chaining** — decided: the Python driver runs
+   the three SCFs and the calculator receives them
+   ([spec](../specs/2026-08-17-end-to-end-wiring.md)). `compute()` is still an unconditional
+   throw and no `set_array_variable` call exists; 0 of 7 variables publish.
+2. **Task 8 full-protocol parity run** — the aug-cc-pVTZ/GRAC protocol has never been run.
+
+### Constraints discovered during implementation
+
+- **Shell limits are absolute bohr, not vdW multiples.** Decided by measurement: under the
+  vdW reading the minimum weighted design-column norm is `6.6e-06`, 15x *below* the frozen
+  WSM column cutoff of `1e-4`, which would prune the entire rank-3 block and contradict
+  `wsm_rank=3`. Under the bohr reading it is `1.6e-02`, clearing the cutoff by 163x.
+- **The reviewed 2000-point grid is architecturally infeasible** with the current dense
+  pair-row design: 2000 points implies ~2.0e6 rows x 360 columns, about `5.8 GB` for the
+  design matrix alone, and `kWSMMaximumPoints` is `500`. Use the converged 407-point grid.
+- **Memory.** Psi4's `500 MB` default supports only ~125 fit points; 249 points needs
+  ~`510 MB` and the 407-point default ~`1.3 GB`. End-to-end wiring must raise process memory
+  explicitly or `refine_wsm` fails closed on its own default grid.
+- **Grid quality must be pinned.** The existing SCF test fixtures
+  (`dft_spherical_points 50 / radial 12`, ISA `30/10/12`) are far too coarse for the
+  `1e-4` gate — `localize_lw` rejects them above `1e-2`. Production quality measured at
+  `302/50` with ISA `60/18/24`. Do not mistake the fixtures for the parity protocol.
+- **Pre-existing defect, worked around not fixed:** `PointGroup::operator=` in
+  `psi4/src/psi4/libmints/pointgrp.h` does not copy `bits_`, so a copied `PointGroup` has an
+  indeterminate character table. Also `SymmetryOperation::rotation(2)` leaves
+  `sin(pi) ~ 1.2e-16` off-diagonal, so `C2(z)` is not exactly diagonal; comparisons must use
+  a tolerance, not exact zero.
 
 ### Task 1: Native representation and public plumbing
 
