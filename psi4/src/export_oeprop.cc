@@ -1304,6 +1304,132 @@ void export_oeprop(py::module &m) {
               return result;
           });
 
+    const auto l3_tensor_from_matrix = [](const SharedMatrix& matrix, const char* context) {
+        if (!matrix || matrix->nirrep() != 1 || matrix->nrow() != 15 || matrix->ncol() != 15)
+            throw PSIEXCEPTION(std::string(context) + ": expected 15 by 15 rank-3 L3 tensors");
+        L3Matrix values{};
+        for (std::size_t row = 0; row < values.size(); ++row)
+            for (std::size_t column = 0; column < values[row].size(); ++column)
+                values[row][column] = (*matrix)(row, column);
+        return values;
+    };
+    const auto refined_models_from_python =
+        [l3_tensor_from_matrix](const Matrix& site_matrix, const std::vector<double>& frequencies,
+                               const std::vector<SharedMatrix>& tensors) {
+            if (site_matrix.nirrep() != 1 || site_matrix.ncol() != 3 || site_matrix.nrow() <= 0)
+                throw PSIEXCEPTION("dispersion: sites must be a nonempty N by 3 matrix");
+            const auto site_count = static_cast<std::size_t>(site_matrix.nrow());
+            std::vector<SitePosition> sites(site_count);
+            for (std::size_t site = 0; site < site_count; ++site)
+                for (std::size_t axis = 0; axis < 3; ++axis) sites[site][axis] = site_matrix(site, axis);
+            if (tensors.size() != frequencies.size() * site_count)
+                throw PSIEXCEPTION(
+                    "dispersion: expected one frequency-major 15 by 15 tensor per site");
+            std::vector<RefinedL3Model> models(frequencies.size());
+            for (std::size_t frequency = 0; frequency < frequencies.size(); ++frequency) {
+                models[frequency].frequency = frequencies[frequency];
+                models[frequency].positions = sites;
+                models[frequency].tensors.resize(site_count);
+                for (std::size_t site = 0; site < site_count; ++site)
+                    models[frequency].tensors[site] =
+                        l3_tensor_from_matrix(tensors[frequency * site_count + site], "dispersion");
+            }
+            return models;
+        };
+    const auto dispersion_plan_dict = [](const DispersionPlan& plan) {
+        py::dict plan_values;
+        plan_values["frequency_count"] = plan.frequency_count;
+        plan_values["site_count"] = plan.site_count;
+        plan_values["max_frequency_count"] = plan.max_frequency_count;
+        plan_values["max_site_count"] = plan.max_site_count;
+        plan_values["coefficient_count"] = plan.coefficient_count;
+        plan_values["rank_pair_count"] = plan.rank_pair_count;
+        plan_values["isotropic_elements"] = plan.isotropic_elements;
+        plan_values["isotropic_bytes"] = plan.isotropic_bytes;
+        plan_values["coefficient_elements"] = plan.coefficient_elements;
+        plan_values["coefficient_bytes"] = plan.coefficient_bytes;
+        plan_values["contribution_elements"] = plan.contribution_elements;
+        plan_values["contribution_bytes"] = plan.contribution_bytes;
+        plan_values["rank_pair_table_bytes"] = plan.rank_pair_table_bytes;
+        plan_values["metadata_bytes"] = plan.metadata_bytes;
+        plan_values["estimated_bytes"] = plan.estimated_bytes;
+        plan_values["configured_memory_bytes"] = plan.configured_memory_bytes;
+        plan_values["reserved_memory_bytes"] = plan.reserved_memory_bytes;
+        plan_values["work_terms"] = plan.work_terms;
+        plan_values["max_work_terms"] = plan.max_work_terms;
+        plan_values["algorithm"] = plan.algorithm;
+        plan_values["memory_semantics"] = plan.memory_semantics;
+        return plan_values;
+    };
+    const auto dispersion_result_dict = [dispersion_plan_dict](const DispersionMatrices& dispersion) {
+        const auto& diagnostics = dispersion.diagnostics;
+        py::list rank_pair_terms;
+        for (const auto& term : diagnostics.rank_pair_terms) {
+            py::dict values;
+            values["coefficient_order"] = term.coefficient_order;
+            values["first_rank"] = term.first_rank;
+            values["second_rank"] = term.second_rank;
+            values["prefactor"] = term.prefactor;
+            rank_pair_terms.append(std::move(values));
+        }
+        py::dict result;
+        result["c6"] = dispersion.c6;
+        result["c8"] = dispersion.c8;
+        result["c10"] = dispersion.c10;
+        result["c12"] = dispersion.c12;
+        result["frequency_count"] = diagnostics.frequency_count;
+        result["weighted_frequency_count"] = diagnostics.weighted_frequency_count;
+        result["site_count"] = diagnostics.site_count;
+        result["quadrature_weight_sum"] = diagnostics.quadrature_weight_sum;
+        result["min_isotropic_polarizability"] = diagnostics.min_isotropic_polarizability;
+        result["max_isotropic_polarizability"] = diagnostics.max_isotropic_polarizability;
+        result["nonpositive_isotropic_count"] = diagnostics.nonpositive_isotropic_count;
+        result["inferred_scale"] = diagnostics.inferred_scale;
+        result["max_protocol_grid_deviation"] = diagnostics.max_protocol_grid_deviation;
+        result["protocol_grid_enforced"] = diagnostics.protocol_grid_enforced;
+        result["rank_pair_terms"] = std::move(rank_pair_terms);
+        result["rank_pair_contributions"] = diagnostics.rank_pair_contributions;
+        result["plan"] = dispersion_plan_dict(diagnostics.plan);
+        return result;
+    };
+    m.def("_atomic_polarizability_dispersion_rank_prefactor", &detail::dispersion_rank_prefactor,
+          "first_rank"_a, "second_rank"_a);
+    m.def("_atomic_polarizability_dispersion_isotropic_rank",
+          [l3_tensor_from_matrix](const SharedMatrix& tensor, unsigned int rank) {
+              return detail::isotropic_rank_polarizability(
+                  l3_tensor_from_matrix(tensor, "isotropic rank polarizability"), rank);
+          },
+          "tensor"_a, "rank"_a);
+    m.def("_atomic_polarizability_plan_dispersion",
+          [dispersion_plan_dict](std::size_t frequency_count, std::size_t site_count,
+                                 std::size_t memory_bytes) {
+              return dispersion_plan_dict(
+                  detail::plan_dispersion(frequency_count, site_count, memory_bytes));
+          },
+          "frequency_count"_a, "site_count"_a, "memory_bytes"_a);
+    m.def("_atomic_polarizability_compute_dispersion",
+          [refined_models_from_python, dispersion_result_dict](
+              const Matrix& sites, const std::vector<double>& frequencies,
+              const std::vector<SharedMatrix>& tensors,
+              const std::vector<double>& grid_frequencies,
+              const std::vector<double>& grid_weights) {
+              return dispersion_result_dict(compute_dispersion(
+                  refined_models_from_python(sites, frequencies, tensors),
+                  FrequencyGrid{grid_frequencies, grid_weights}));
+          },
+          "sites"_a, "frequencies"_a, "tensors"_a, "grid_frequencies"_a, "grid_weights"_a);
+    m.def("_atomic_polarizability_test_compute_dispersion",
+          [refined_models_from_python, dispersion_result_dict](
+              const Matrix& sites, const std::vector<double>& frequencies,
+              const std::vector<SharedMatrix>& tensors,
+              const std::vector<double>& grid_frequencies,
+              const std::vector<double>& grid_weights) {
+              return dispersion_result_dict(detail::compute_dispersion_test_only(
+                  refined_models_from_python(sites, frequencies, tensors),
+                  FrequencyGrid{grid_frequencies, grid_weights}));
+          },
+          "sites"_a, "frequencies"_a, "tensors"_a, "grid_frequencies"_a, "grid_weights"_a);
+
     py::class_<AtomicPolarizabilityCalculator>(m, "AtomicPolarizabilityCalculator",
                                                "Native atomic-polarizability pipeline entry point")
         .def(py::init<std::shared_ptr<Wavefunction>>())

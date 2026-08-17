@@ -1069,6 +1069,102 @@ std::vector<RefinedL3Model> refine_wsm_test_only(
     const PDefConstraints& constraints, const RefinementOptions& options);
 }  // namespace detail
 
+/** One ordered rank pair of the isotropic `00 00 0` recoupling table. */
+struct PSI_API DispersionRankPair {
+    unsigned int coefficient_order{};
+    unsigned int first_rank{};
+    unsigned int second_rank{};
+    double prefactor{};
+};
+
+/** Up-front storage and work accounting for the isotropic recoupling sum. */
+struct PSI_API DispersionPlan {
+    std::size_t frequency_count{};
+    std::size_t site_count{};
+    std::size_t max_frequency_count{};
+    std::size_t max_site_count{};
+    std::size_t coefficient_count{};
+    std::size_t rank_pair_count{};
+    std::size_t isotropic_elements{};
+    std::size_t isotropic_bytes{};
+    std::size_t coefficient_elements{};
+    std::size_t coefficient_bytes{};
+    std::size_t contribution_elements{};
+    std::size_t contribution_bytes{};
+    std::size_t rank_pair_table_bytes{};
+    std::size_t metadata_bytes{};
+    std::size_t estimated_bytes{};
+    std::size_t configured_memory_bytes{};
+    std::size_t reserved_memory_bytes{};
+    std::size_t work_terms{};
+    std::size_t max_work_terms{};
+    std::string algorithm;
+    std::string memory_semantics;
+};
+
+/**
+ * Auditable isotropic-recoupling metadata. rank_pair_contributions is
+ * rank-pair-major over rank_pair_terms and then row-major over ordered site
+ * pairs, so the ordered term t contribution for sites (A,B) lives at
+ * t*site_count^2 + A*site_count + B.
+ */
+struct PSI_API DispersionDiagnostics {
+    std::size_t frequency_count{};
+    std::size_t weighted_frequency_count{};
+    std::size_t site_count{};
+    double quadrature_weight_sum{};
+    double min_isotropic_polarizability{};
+    double max_isotropic_polarizability{};
+    std::size_t nonpositive_isotropic_count{};
+    double inferred_scale{};
+    double max_protocol_grid_deviation{};
+    bool protocol_grid_enforced{};
+    std::vector<DispersionRankPair> rank_pair_terms;
+    std::vector<double> rank_pair_contributions;
+    DispersionPlan plan;
+};
+
+/**
+ * Isotropic `00 00 0` dispersion coefficients as (site, site) matrices.
+ * Only the trace of each diagonal rank block of the L3 model enters, so no
+ * real Clebsch-Gordan contraction table is required for these outputs. C8
+ * through C12 are reviewed L3-model parity, not rank-complete physics: the
+ * rank-4 terms of C12 are absent from an L3 model by construction.
+ */
+struct PSI_API DispersionMatrices {
+    SharedMatrix c6;
+    SharedMatrix c8;
+    SharedMatrix c10;
+    SharedMatrix c12;
+    DispersionDiagnostics diagnostics;
+};
+
+/**
+ * Recouple one frequency-major set of refined L3 models into C6/C8/C10/C12.
+ * The grid must be the protocol grid produced by make_casimir_grid at some
+ * positive scale, one model per grid frequency; the static zero frequency
+ * carries no quadrature weight and is excluded from the dispersion sum.
+ */
+PSI_API DispersionMatrices compute_dispersion(const std::vector<RefinedL3Model>& models,
+                                              const FrequencyGrid& frequencies);
+
+namespace detail {
+DispersionPlan plan_dispersion(std::size_t frequency_count, std::size_t site_count,
+                               std::size_t memory_bytes);
+/** Isotropic rank-l polarizability Tr(alpha^{ll})/(2l+1); rank must be 1, 2, or 3. */
+double isotropic_rank_polarizability(const L3Matrix& tensor, unsigned int rank);
+/** Ordered rank-pair prefactor binom(2*la + 2*lb, 2*la)/(2*pi). */
+double dispersion_rank_prefactor(unsigned int first_rank, unsigned int second_rank);
+/** The validated ordered rank-pair table; every entry has n = 2*(la + lb + 1). */
+const std::vector<DispersionRankPair>& dispersion_rank_pairs();
+/**
+ * Quadrature-convergence seam: identical recoupling on a caller-supplied
+ * ascending half-line grid instead of the eleven-point protocol grid.
+ */
+DispersionMatrices compute_dispersion_test_only(const std::vector<RefinedL3Model>& models,
+                                                const FrequencyGrid& frequencies);
+}  // namespace detail
+
 PSI_API Matrix lw_graph_operator(const BondGraph& graph);
 PSI_API std::pair<Matrix, std::vector<double>> lw_graph_pseudoinverse(const BondGraph& graph);
 PSI_API L3WorkingVector translate_l3_multipoles(const L3WorkingVector& source,

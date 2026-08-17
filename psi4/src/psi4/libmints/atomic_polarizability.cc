@@ -4487,6 +4487,27 @@ LocalizedResponse localize_lw(const SitePairResponse& response, const BondGraph&
     return result;
 }
 
+namespace {
+
+// Standard ten-point Gauss-Legendre nodes and weights on [-1, 1], stored in the
+// ascending order of the mapped half-line frequencies: the mapped point at index
+// p uses t = -kHalfLineNodes[p], so that
+//   frequency(p) = scale * (1 + kHalfLineNodes[p]) / (1 - kHalfLineNodes[p]),
+//   weight(p)    = kHalfLineWeights[p] * 2 * scale / (1 - kHalfLineNodes[p])^2.
+// Both tables are symmetric, so the reversal is invisible in the weights.
+constexpr std::array<double, 10> kHalfLineNodes{
+    -0.9739065285171717, -0.8650633666889845, -0.6794095682990244, -0.4333953941292472,
+    -0.1488743389816312, 0.1488743389816312,  0.4333953941292472,  0.6794095682990244,
+    0.8650633666889845,  0.9739065285171717,
+};
+constexpr std::array<double, 10> kHalfLineWeights{
+    0.06667134430868814, 0.1494513491505806, 0.2190863625159820, 0.2692667193099964,
+    0.2955242247147529,  0.2955242247147529, 0.2692667193099964, 0.2190863625159820,
+    0.1494513491505806,  0.06667134430868814,
+};
+
+}  // namespace
+
 FrequencyGrid make_casimir_grid(unsigned int nonzero_count, double scale) {
     if (nonzero_count != 10) {
         throw PSIEXCEPTION("make_casimir_grid: protocol requires exactly ten nonzero frequencies");
@@ -4510,16 +4531,6 @@ FrequencyGrid make_casimir_grid(unsigned int nonzero_count, double scale) {
         6.910885950408292,
         37.82376235021415,
     };
-    static constexpr std::array<double, 10> nodes{
-        -0.9739065285171717, -0.8650633666889845, -0.6794095682990244, -0.4333953941292472,
-        -0.1488743389816312, 0.1488743389816312,  0.4333953941292472,  0.6794095682990244,
-        0.8650633666889845,  0.9739065285171717,
-    };
-    static constexpr std::array<double, 10> legendre_weights{
-        0.06667134430868814, 0.1494513491505806, 0.2190863625159820, 0.2692667193099964,
-        0.2955242247147529,  0.2955242247147529, 0.2692667193099964, 0.2190863625159820,
-        0.1494513491505806,  0.06667134430868814,
-    };
 
     FrequencyGrid grid;
     grid.frequencies.reserve(reviewed_frequencies.size());
@@ -4530,10 +4541,10 @@ FrequencyGrid make_casimir_grid(unsigned int nonzero_count, double scale) {
     }
     grid.frequencies.push_back(0.0);
     grid.weights.push_back(0.0);
-    for (std::size_t point = 0; point < nodes.size(); ++point) {
+    for (std::size_t point = 0; point < kHalfLineNodes.size(); ++point) {
         const double frequency = reviewed_frequencies[point + 1] * scale_ratio;
-        const double denominator = 1.0 - nodes[point];
-        const double weight = legendre_weights[point] * 2.0 * scale / (denominator * denominator);
+        const double denominator = 1.0 - kHalfLineNodes[point];
+        const double weight = kHalfLineWeights[point] * 2.0 * scale / (denominator * denominator);
         if (!std::isfinite(frequency) || frequency <= 0.0 || !std::isfinite(weight) || weight <= 0.0) {
             throw PSIEXCEPTION("make_casimir_grid: scale must be finite and positive at every grid point");
         }
@@ -4589,6 +4600,422 @@ Matrix rotate_tensor(const Matrix& local, const Matrix& local_to_global) {
 std::array<double, 6> pack_symmetric_tensor(const Matrix& tensor) {
     require_finite_symmetric(tensor, "pack_symmetric_tensor");
     return {tensor(0, 0), tensor(0, 1), tensor(0, 2), tensor(1, 1), tensor(1, 2), tensor(2, 2)};
+}
+
+namespace {
+
+constexpr std::size_t kDispersionRankCount = 3;
+constexpr std::size_t kDispersionCoefficientCount = 4;
+constexpr std::size_t kDispersionMaximumSites = 256;
+constexpr std::size_t kDispersionMaximumFrequencies = 64;
+constexpr std::size_t kDispersionMaximumWorkTerms = 100000000;
+constexpr std::size_t kProtocolGridPoints = 11;
+constexpr double kDispersionGridTolerance = 1.0e-10;
+constexpr double kDispersionPositionTolerance = 1.0e-10;
+
+/** Real-spherical row/column offset of the rank-l diagonal block of an L3Matrix. */
+std::size_t dispersion_rank_offset(unsigned int rank) {
+    return static_cast<std::size_t>(rank) * static_cast<std::size_t>(rank) - 1;
+}
+
+std::size_t dispersion_rank_dimension(unsigned int rank) {
+    return 2 * static_cast<std::size_t>(rank) + 1;
+}
+
+void require_dispersion_rank(unsigned int rank, const std::string& prefix) {
+    if (rank < 1 || rank > kDispersionRankCount) {
+        throw PSIEXCEPTION(prefix + "rank must lie inside the L3 range 1 through 3");
+    }
+}
+
+double dispersion_deviation(double actual, double expected) {
+    return std::abs(actual - expected) / std::max(1.0, std::abs(expected));
+}
+
+/**
+ * Self-check the ordered recoupling table before it is used. The isotropic
+ * 00 00 0 component only needs these closed-form prefactors, so this replaces a
+ * real Clebsch-Gordan contraction loader for the published coefficients.
+ */
+void validate_dispersion_rank_pairs(const std::vector<DispersionRankPair>& pairs) {
+    const std::string prefix = "dispersion recoupling table: ";
+    if (pairs.empty()) throw PSIEXCEPTION(prefix + "the ordered rank-pair table is empty");
+    for (const auto& pair : pairs) {
+        require_dispersion_rank(pair.first_rank, prefix);
+        require_dispersion_rank(pair.second_rank, prefix);
+        if (pair.coefficient_order != 2 * (pair.first_rank + pair.second_rank + 1))
+            throw PSIEXCEPTION(prefix + "every ordered pair must satisfy n = 2 (la + lb + 1)");
+        if (pair.coefficient_order < 6 || pair.coefficient_order > 12 ||
+            pair.coefficient_order % 2 != 0)
+            throw PSIEXCEPTION(prefix + "coefficient order must be one of 6, 8, 10, or 12");
+        const double expected = binomial(2 * (pair.first_rank + pair.second_rank),
+                                        2 * pair.first_rank) / (2.0 * M_PI);
+        if (!std::isfinite(pair.prefactor) || pair.prefactor <= 0.0 || pair.prefactor != expected)
+            throw PSIEXCEPTION(prefix + "every prefactor must be binom(2 la + 2 lb, 2 la)/(2 pi)");
+        const auto identical = std::count_if(
+            pairs.begin(), pairs.end(), [&pair](const DispersionRankPair& other) {
+                return other.first_rank == pair.first_rank && other.second_rank == pair.second_rank;
+            });
+        if (identical != 1) throw PSIEXCEPTION(prefix + "ordered pairs must be unique");
+        const auto exchanged = std::count_if(
+            pairs.begin(), pairs.end(), [&pair](const DispersionRankPair& other) {
+                return other.first_rank == pair.second_rank &&
+                       other.second_rank == pair.first_rank && other.prefactor == pair.prefactor;
+            });
+        if (exchanged != 1)
+            throw PSIEXCEPTION(prefix + "ordered pairs must be closed under rank exchange");
+    }
+    for (unsigned int order = 6; order <= 12; order += 2) {
+        if (std::none_of(pairs.begin(), pairs.end(), [order](const DispersionRankPair& pair) {
+                return pair.coefficient_order == order;
+            }))
+            throw PSIEXCEPTION(prefix + "every published coefficient needs at least one ordered pair");
+    }
+}
+
+std::size_t dispersion_coefficient_index(unsigned int coefficient_order) {
+    return (static_cast<std::size_t>(coefficient_order) - 6) / 2;
+}
+
+/**
+ * Validate the caller-supplied quadrature and return its total weight. Both the
+ * protocol and convergence paths require an ascending non-negative grid whose
+ * static zero frequency carries no quadrature weight.
+ */
+double validate_dispersion_grid(const FrequencyGrid& grid, const std::string& prefix) {
+    double weight_sum = 0.0;
+    for (std::size_t point = 0; point < grid.frequencies.size(); ++point) {
+        const double frequency = grid.frequencies[point];
+        const double weight = grid.weights[point];
+        require_finite(frequency, "dispersion grid frequency");
+        require_finite(weight, "dispersion grid weight");
+        if (frequency < 0.0)
+            throw PSIEXCEPTION(prefix + "imaginary-frequency grid points must be non-negative");
+        if (point != 0 && frequency <= grid.frequencies[point - 1])
+            throw PSIEXCEPTION(prefix + "grid frequencies must be strictly ascending");
+        if (weight < 0.0) throw PSIEXCEPTION(prefix + "quadrature weights must be non-negative");
+        if (frequency == 0.0 && weight != 0.0)
+            throw PSIEXCEPTION(prefix + "the static zero frequency must carry no quadrature weight");
+        weight_sum += weight;
+        require_finite(weight_sum, "dispersion quadrature weight sum");
+    }
+    if (weight_sum <= 0.0)
+        throw PSIEXCEPTION(prefix + "at least one grid point must carry positive quadrature weight");
+    return weight_sum;
+}
+
+/**
+ * Confirm the grid is the eleven-point protocol grid at one positive scale and
+ * report the inferred scale plus the largest relative deviation. The scale is
+ * recovered from the first mapped node and then every remaining frequency and
+ * all ten weights are checked against the closed-form mapping.
+ */
+std::pair<double, double> validate_protocol_dispersion_grid(const FrequencyGrid& grid,
+                                                            const std::string& prefix) {
+    if (grid.frequencies.size() != kProtocolGridPoints)
+        throw PSIEXCEPTION(prefix +
+                           "protocol requires the static point plus ten mapped imaginary "
+                           "frequencies, that is exactly eleven grid points");
+    if (grid.frequencies[0] != 0.0 || grid.weights[0] != 0.0)
+        throw PSIEXCEPTION(prefix +
+                           "the protocol grid must begin with the static zero frequency at zero weight");
+    const double leading = 1.0 - kHalfLineNodes[0];
+    const double inferred_scale = grid.frequencies[1] * leading / (1.0 + kHalfLineNodes[0]);
+    require_finite(inferred_scale, "dispersion protocol grid scale");
+    if (inferred_scale <= 0.0)
+        throw PSIEXCEPTION(prefix + "the inferred protocol grid scale must be positive");
+
+    double max_deviation = 0.0;
+    for (std::size_t point = 0; point < kHalfLineNodes.size(); ++point) {
+        const double denominator = 1.0 - kHalfLineNodes[point];
+        const double frequency = inferred_scale * (1.0 + kHalfLineNodes[point]) / denominator;
+        const double weight =
+            kHalfLineWeights[point] * 2.0 * inferred_scale / (denominator * denominator);
+        require_finite(frequency, "dispersion protocol grid frequency");
+        require_finite(weight, "dispersion protocol grid weight");
+        max_deviation = std::max(
+            max_deviation, dispersion_deviation(grid.frequencies[point + 1], frequency));
+        max_deviation =
+            std::max(max_deviation, dispersion_deviation(grid.weights[point + 1], weight));
+    }
+    if (max_deviation > kDispersionGridTolerance)
+        throw PSIEXCEPTION(prefix +
+                           "grid must match make_casimir_grid at the inferred protocol scale");
+    return {inferred_scale, max_deviation};
+}
+
+DispersionMatrices compute_dispersion_impl(const std::vector<RefinedL3Model>& models,
+                                           const FrequencyGrid& grid,
+                                           bool require_protocol_grid) {
+    const std::string prefix = "compute_dispersion: ";
+    if (models.empty()) throw PSIEXCEPTION(prefix + "at least one refined L3 model is required");
+    if (grid.frequencies.size() != grid.weights.size())
+        throw PSIEXCEPTION(prefix + "grid frequencies and weights must have equal counts");
+    if (models.size() != grid.frequencies.size())
+        throw PSIEXCEPTION(prefix + "expected exactly one model per grid frequency");
+
+    const double weight_sum = validate_dispersion_grid(grid, prefix);
+    double inferred_scale = 0.0;
+    double max_grid_deviation = 0.0;
+    if (require_protocol_grid) {
+        const auto protocol = validate_protocol_dispersion_grid(grid, prefix);
+        inferred_scale = protocol.first;
+        max_grid_deviation = protocol.second;
+    }
+
+    const std::size_t site_count = models.front().tensors.size();
+    for (std::size_t point = 0; point < models.size(); ++point) {
+        const auto& model = models[point];
+        if (model.tensors.size() != site_count || model.positions.size() != site_count)
+            throw PSIEXCEPTION(prefix +
+                               "every model must supply one L3 tensor and one position per site");
+        require_finite(model.frequency, "refined model frequency");
+        if (dispersion_deviation(model.frequency, grid.frequencies[point]) >
+            kDispersionGridTolerance)
+            throw PSIEXCEPTION(prefix + "model frequency does not match its grid frequency");
+        for (std::size_t site = 0; site < site_count; ++site)
+            for (std::size_t axis = 0; axis < kTensorDimension; ++axis)
+                if (std::abs(model.positions[site][axis] -
+                             models.front().positions[site][axis]) > kDispersionPositionTolerance)
+                    throw PSIEXCEPTION(prefix + "site positions must agree across all frequencies");
+    }
+
+    const auto plan = detail::plan_dispersion(models.size(), site_count,
+                                              Process::environment.get_memory());
+    const auto& pairs = detail::dispersion_rank_pairs();
+
+    std::vector<double> isotropic(plan.isotropic_elements, 0.0);
+    std::size_t nonpositive_count = 0;
+    double minimum_isotropic = std::numeric_limits<double>::infinity();
+    double maximum_isotropic = -std::numeric_limits<double>::infinity();
+    std::size_t weighted_frequency_count = 0;
+    for (std::size_t point = 0; point < models.size(); ++point) {
+        if (grid.weights[point] > 0.0) ++weighted_frequency_count;
+        for (std::size_t site = 0; site < site_count; ++site) {
+            const auto& tensor = models[point].tensors[site];
+            for (unsigned int rank = 1; rank <= kDispersionRankCount; ++rank) {
+                const auto offset = dispersion_rank_offset(rank);
+                const auto dimension = dispersion_rank_dimension(rank);
+                bool populated = false;
+                for (std::size_t index = 0; index < dimension; ++index)
+                    if (tensor[offset + index][offset + index] != 0.0) populated = true;
+                if (!populated) {
+                    std::ostringstream message;
+                    message << prefix << "site " << site << " at frequency index " << point
+                            << " supplies an empty rank " << rank
+                            << " block; a rank-complete L3 model must supply ranks 1 through 3";
+                    throw PSIEXCEPTION(message.str());
+                }
+                const double value = detail::isotropic_rank_polarizability(tensor, rank);
+                if (value <= 0.0) ++nonpositive_count;
+                minimum_isotropic = std::min(minimum_isotropic, value);
+                maximum_isotropic = std::max(maximum_isotropic, value);
+                isotropic[(point * site_count + site) * kDispersionRankCount + (rank - 1)] = value;
+            }
+        }
+    }
+
+    std::vector<double> contributions(plan.contribution_elements, 0.0);
+    for (std::size_t term = 0; term < pairs.size(); ++term) {
+        const auto& pair = pairs[term];
+        for (std::size_t first = 0; first < site_count; ++first) {
+            for (std::size_t second = 0; second < site_count; ++second) {
+                double integral = 0.0;
+                for (std::size_t point = 0; point < models.size(); ++point) {
+                    if (grid.weights[point] == 0.0) continue;
+                    const double first_value = isotropic[(point * site_count + first) *
+                                                             kDispersionRankCount +
+                                                         (pair.first_rank - 1)];
+                    const double second_value = isotropic[(point * site_count + second) *
+                                                              kDispersionRankCount +
+                                                          (pair.second_rank - 1)];
+                    // The product of the two isotropic factors is parenthesized so
+                    // that exchanging the ordered pair reproduces the same value bit
+                    // for bit and pair symmetry is exact.
+                    integral += grid.weights[point] * (first_value * second_value);
+                }
+                const double contribution = pair.prefactor * integral;
+                require_finite(contribution, "dispersion rank-pair contribution");
+                contributions[(term * site_count + first) * site_count + second] = contribution;
+            }
+        }
+    }
+
+    const auto matrix_dimension = static_cast<int>(site_count);
+    std::array<SharedMatrix, kDispersionCoefficientCount> coefficients{
+        std::make_shared<Matrix>("Isotropic C6", matrix_dimension, matrix_dimension),
+        std::make_shared<Matrix>("Isotropic C8", matrix_dimension, matrix_dimension),
+        std::make_shared<Matrix>("Isotropic C10", matrix_dimension, matrix_dimension),
+        std::make_shared<Matrix>("Isotropic C12", matrix_dimension, matrix_dimension),
+    };
+    for (std::size_t first = 0; first < site_count; ++first) {
+        for (std::size_t second = first; second < site_count; ++second) {
+            std::array<double, kDispersionCoefficientCount> totals{};
+            for (std::size_t term = 0; term < pairs.size(); ++term)
+                totals[dispersion_coefficient_index(pairs[term].coefficient_order)] +=
+                    contributions[(term * site_count + first) * site_count + second];
+            for (std::size_t coefficient = 0; coefficient < totals.size(); ++coefficient) {
+                require_finite(totals[coefficient], "isotropic dispersion coefficient");
+                // Assigning both triangles from one sum keeps C_n[A][B] exactly
+                // equal to C_n[B][A] even though single ordered terms are not symmetric.
+                (*coefficients[coefficient])(first, second) = totals[coefficient];
+                (*coefficients[coefficient])(second, first) = totals[coefficient];
+            }
+        }
+    }
+
+    DispersionMatrices result;
+    result.c6 = coefficients[0];
+    result.c8 = coefficients[1];
+    result.c10 = coefficients[2];
+    result.c12 = coefficients[3];
+    result.diagnostics.frequency_count = models.size();
+    result.diagnostics.weighted_frequency_count = weighted_frequency_count;
+    result.diagnostics.site_count = site_count;
+    result.diagnostics.quadrature_weight_sum = weight_sum;
+    result.diagnostics.min_isotropic_polarizability = minimum_isotropic;
+    result.diagnostics.max_isotropic_polarizability = maximum_isotropic;
+    // Non-positive isotropic blocks are reported, never repaired or dropped: a
+    // reviewed L3 model may contain non-positive-definite higher-rank blocks.
+    result.diagnostics.nonpositive_isotropic_count = nonpositive_count;
+    result.diagnostics.inferred_scale = inferred_scale;
+    result.diagnostics.max_protocol_grid_deviation = max_grid_deviation;
+    result.diagnostics.protocol_grid_enforced = require_protocol_grid;
+    result.diagnostics.rank_pair_terms = pairs;
+    result.diagnostics.rank_pair_contributions = std::move(contributions);
+    result.diagnostics.plan = plan;
+    return result;
+}
+
+}  // namespace
+
+namespace detail {
+
+DispersionPlan plan_dispersion(std::size_t frequency_count, std::size_t site_count,
+                               std::size_t memory_bytes) {
+    const std::string prefix = "dispersion plan: ";
+    if (frequency_count == 0 || frequency_count > kDispersionMaximumFrequencies)
+        throw PSIEXCEPTION(prefix + "frequency envelope is 1 through 64");
+    if (site_count == 0 || site_count > kDispersionMaximumSites)
+        throw PSIEXCEPTION(prefix + "site envelope is 1 through 256");
+    const auto& pairs = dispersion_rank_pairs();
+    const auto bytes = [&prefix](std::size_t elements) {
+        return checked_c1_product(elements, sizeof(double), prefix);
+    };
+    const auto site_pairs = checked_c1_product(site_count, site_count, prefix);
+    const auto isotropic_elements = checked_c1_product(
+        checked_c1_product(frequency_count, site_count, prefix), kDispersionRankCount, prefix);
+    const auto coefficient_elements =
+        checked_c1_product(site_pairs, kDispersionCoefficientCount, prefix);
+    const auto contribution_elements = checked_c1_product(site_pairs, pairs.size(), prefix);
+    const auto rank_pair_table_bytes =
+        checked_c1_product(pairs.size(), sizeof(DispersionRankPair), prefix);
+    const auto work_terms = checked_c1_product(contribution_elements, frequency_count, prefix);
+    if (work_terms > kDispersionMaximumWorkTerms)
+        throw PSIEXCEPTION(prefix + "isotropic recoupling work exceeds the supported envelope");
+    // One conservative megabyte covers the matrix objects, plan strings, and the
+    // Python export of the diagnostics record.
+    constexpr std::size_t conservative_overhead_bytes = 1024ULL * 1024ULL;
+    const auto estimated_bytes = checked_c1_sum(
+        checked_c1_sum(bytes(isotropic_elements), bytes(coefficient_elements), prefix),
+        checked_c1_sum(bytes(contribution_elements),
+                       checked_c1_sum(rank_pair_table_bytes, conservative_overhead_bytes, prefix),
+                       prefix),
+        prefix);
+    const auto reserved = memory_bytes / 2;
+    if (estimated_bytes > reserved)
+        throw PSIEXCEPTION(prefix +
+                           "isotropic/coefficient/rank-pair storage exceeds half the reserved memory");
+
+    DispersionPlan plan;
+    plan.frequency_count = frequency_count;
+    plan.site_count = site_count;
+    plan.max_frequency_count = kDispersionMaximumFrequencies;
+    plan.max_site_count = kDispersionMaximumSites;
+    plan.coefficient_count = kDispersionCoefficientCount;
+    plan.rank_pair_count = pairs.size();
+    plan.isotropic_elements = isotropic_elements;
+    plan.isotropic_bytes = bytes(isotropic_elements);
+    plan.coefficient_elements = coefficient_elements;
+    plan.coefficient_bytes = bytes(coefficient_elements);
+    plan.contribution_elements = contribution_elements;
+    plan.contribution_bytes = bytes(contribution_elements);
+    plan.rank_pair_table_bytes = rank_pair_table_bytes;
+    plan.metadata_bytes = conservative_overhead_bytes;
+    plan.estimated_bytes = estimated_bytes;
+    plan.configured_memory_bytes = memory_bytes;
+    plan.reserved_memory_bytes = reserved;
+    plan.work_terms = work_terms;
+    plan.max_work_terms = kDispersionMaximumWorkTerms;
+    plan.algorithm = "isotropic-rank-trace/ordered-rank-pair/half-line-quadrature-sum";
+    plan.memory_semantics =
+        "hard half-memory gate over the frequency-major isotropic ranks, four site-pair "
+        "coefficient matrices, ordered rank-pair contributions, and the validated rank-pair table";
+    return plan;
+}
+
+double isotropic_rank_polarizability(const L3Matrix& tensor, unsigned int rank) {
+    const std::string prefix = "isotropic rank polarizability: ";
+    require_dispersion_rank(rank, prefix);
+    const auto offset = dispersion_rank_offset(rank);
+    const auto dimension = dispersion_rank_dimension(rank);
+    double trace = 0.0;
+    for (std::size_t index = 0; index < dimension; ++index) {
+        const double value = tensor[offset + index][offset + index];
+        require_finite(value, "isotropic rank polarizability");
+        trace += value;
+    }
+    // Only the trace of the diagonal rank block enters the isotropic 00 00 0
+    // component; rank-mixing blocks and all anisotropic components drop out.
+    const double mean = trace / static_cast<double>(dimension);
+    require_finite(mean, "isotropic rank polarizability");
+    return mean;
+}
+
+double dispersion_rank_prefactor(unsigned int first_rank, unsigned int second_rank) {
+    const std::string prefix = "dispersion rank prefactor: ";
+    require_dispersion_rank(first_rank, prefix);
+    require_dispersion_rank(second_rank, prefix);
+    const double prefactor =
+        binomial(2 * (first_rank + second_rank), 2 * first_rank) / (2.0 * M_PI);
+    require_finite(prefactor, "dispersion rank prefactor");
+    return prefactor;
+}
+
+const std::vector<DispersionRankPair>& dispersion_rank_pairs() {
+    static const std::vector<DispersionRankPair> table = [] {
+        // Ordered rank pairs with n = 2 (la + lb + 1) <= 12 that an L3 model can
+        // supply. (1,4) and (4,1) also give n = 12 but rank 4 is absent, which is
+        // why C12 is reviewed-model parity rather than rank-complete dispersion.
+        static constexpr std::array<std::array<unsigned int, 2>, 8> ordered{{
+            {{1, 1}}, {{1, 2}}, {{2, 1}}, {{1, 3}}, {{3, 1}}, {{2, 2}}, {{2, 3}}, {{3, 2}},
+        }};
+        std::vector<DispersionRankPair> pairs;
+        pairs.reserve(ordered.size());
+        for (const auto& entry : ordered) {
+            DispersionRankPair pair;
+            pair.first_rank = entry[0];
+            pair.second_rank = entry[1];
+            pair.coefficient_order = 2 * (entry[0] + entry[1] + 1);
+            pair.prefactor = dispersion_rank_prefactor(entry[0], entry[1]);
+            pairs.push_back(pair);
+        }
+        validate_dispersion_rank_pairs(pairs);
+        return pairs;
+    }();
+    return table;
+}
+
+DispersionMatrices compute_dispersion_test_only(const std::vector<RefinedL3Model>& models,
+                                                const FrequencyGrid& frequencies) {
+    return compute_dispersion_impl(models, frequencies, false);
+}
+
+}  // namespace detail
+
+DispersionMatrices compute_dispersion(const std::vector<RefinedL3Model>& models,
+                                      const FrequencyGrid& frequencies) {
+    return compute_dispersion_impl(models, frequencies, true);
 }
 
 AtomicPolarizabilityCalculator::AtomicPolarizabilityCalculator(std::shared_ptr<Wavefunction> wfn)
