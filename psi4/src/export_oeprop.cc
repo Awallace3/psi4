@@ -34,6 +34,7 @@
 #include "psi4/libfunctional/LibXCfunctional.h"
 #include "psi4/libfunctional/functional.h"
 #include "psi4/libfunctional/superfunctional.h"
+#include "psi4/libfock/cubature.h"
 #include "psi4/libmints/oeprop.h"
 #include "psi4/libmints/atomic_polarizability.h"
 #include "psi4/libmints/matrix.h"
@@ -41,7 +42,9 @@
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libscf_solver/hf.h"
+#include "psi4/liboptions/liboptions.h"
 #include "psi4/libpsi4util/exception.h"
+#include "psi4/libpsi4util/process.h"
 
 using namespace psi;
 namespace py = pybind11;
@@ -155,6 +158,133 @@ void export_oeprop(py::module &m) {
           },
           "point_count"_a, "site_count"_a, "active_variable_count"_a,
           "constraint_rows"_a, "memory_bytes"_a);
+
+    // ==> Symmetry-faithful WSM fit-point generation seams <== //
+    const auto fit_point_options_from_dict = [](const py::dict& values) {
+        FitPointOptions options;
+        for (const auto& entry : values) {
+            const auto key = py::cast<std::string>(entry.first);
+            if (key == "spherical_points")
+                options.spherical_points = entry.second.cast<std::size_t>();
+            else if (key == "radial_shells")
+                options.radial_shells = entry.second.cast<std::size_t>();
+            else if (key == "inner_limit")
+                options.inner_limit = entry.second.cast<double>();
+            else if (key == "outer_limit")
+                options.outer_limit = entry.second.cast<double>();
+            else if (key == "maximum_points")
+                options.maximum_points = entry.second.cast<std::size_t>();
+            else if (key == "merge_tolerance_bohr")
+                options.merge_tolerance_bohr = entry.second.cast<double>();
+            else if (key == "radial_units") {
+                const auto units = entry.second.cast<std::string>();
+                if (units == "BOHR")
+                    options.radial_units = FitPointRadialUnits::Bohr;
+                else if (units == "VDW")
+                    options.radial_units = FitPointRadialUnits::VanDerWaals;
+                else
+                    throw PSIEXCEPTION("WSM fit points: unsupported radial units '" + units + "'");
+            } else
+                throw PSIEXCEPTION("WSM fit points: unknown option '" + key + "'");
+        }
+        return options;
+    };
+    const auto fit_point_plan_dict = [](const FitPointPlan& plan) {
+        py::dict values;
+        values["atom_count"] = plan.atom_count;
+        values["spherical_points"] = plan.spherical_points;
+        values["radial_shells"] = plan.radial_shells;
+        values["lebedev_order"] = plan.lebedev_order;
+        values["symmetry_operation_count"] = plan.symmetry_operation_count;
+        values["candidate_count"] = plan.candidate_count;
+        values["point_count"] = plan.point_count;
+        values["maximum_points"] = plan.maximum_points;
+        values["candidate_bytes"] = plan.candidate_bytes;
+        values["retained_metadata_bytes"] = plan.retained_metadata_bytes;
+        values["estimated_bytes"] = plan.estimated_bytes;
+        values["shell_offsets"] = plan.shell_offsets;
+        values["radial_units"] = plan.radial_units;
+        values["algorithm"] = plan.algorithm;
+        return values;
+    };
+    const auto fit_point_set_dict = [fit_point_plan_dict](const FitPointSet& set) {
+        auto points = std::make_shared<Matrix>("WSM fit points", static_cast<int>(set.points.size()), 3);
+        for (std::size_t point = 0; point < set.points.size(); ++point)
+            for (std::size_t axis = 0; axis < 3; ++axis)
+                (*points)(point, axis) = set.points[point][axis];
+        py::dict values;
+        values["points"] = std::move(points);
+        values["nearest_offsets"] = set.nearest_offsets;
+        values["shell_index"] = set.shell_index;
+        values["generator_atom"] = set.generator_atom;
+        values["scaling_radii"] = set.scaling_radii;
+        values["max_symmetry_deviation"] = set.max_symmetry_deviation;
+        values["max_octahedral_deviation"] = set.max_octahedral_deviation;
+        values["plan"] = fit_point_plan_dict(set.plan);
+        return values;
+    };
+    m.def("_atomic_polarizability_lebedev_unit_sphere", [](int npoints) {
+        const auto nodes = lebedev_spherical_grid(npoints);
+        auto grid = std::make_shared<Matrix>("Lebedev unit sphere",
+                                             static_cast<int>(nodes.size()), 4);
+        for (std::size_t node = 0; node < nodes.size(); ++node) {
+            (*grid)(node, 0) = nodes[node].x;
+            (*grid)(node, 1) = nodes[node].y;
+            (*grid)(node, 2) = nodes[node].z;
+            (*grid)(node, 3) = nodes[node].w;
+        }
+        return grid;
+    }, "npoints"_a);
+    m.def("_atomic_polarizability_plan_fit_points",
+          [fit_point_options_from_dict, fit_point_plan_dict](std::size_t atom_count,
+                                                             const py::dict& option_values) {
+              return fit_point_plan_dict(
+                  plan_fit_points(atom_count, fit_point_options_from_dict(option_values)));
+          },
+          "atom_count"_a, "options"_a = py::dict());
+    m.def("_atomic_polarizability_generate_fit_points",
+          [fit_point_options_from_dict, fit_point_set_dict](
+              const std::vector<int>& atomic_numbers, const Matrix& center_matrix,
+              const std::vector<SharedMatrix>& symmetry_operations,
+              const SharedMatrix& angular_frame, const py::dict& option_values) {
+              if (center_matrix.nirrep() != 1 || center_matrix.ncol() != 3 ||
+                  center_matrix.nrow() <= 0)
+                  throw PSIEXCEPTION("WSM fit points: centers must be a nonempty N by 3 matrix");
+              std::vector<SitePosition> centers(static_cast<std::size_t>(center_matrix.nrow()));
+              for (std::size_t atom = 0; atom < centers.size(); ++atom)
+                  for (std::size_t axis = 0; axis < 3; ++axis)
+                      centers[atom][axis] = center_matrix(atom, axis);
+              const auto to_operation = [](const SharedMatrix& matrix, const char* what) {
+                  if (!matrix || matrix->nirrep() != 1 || matrix->nrow() != 3 || matrix->ncol() != 3)
+                      throw PSIEXCEPTION(std::string("WSM fit points: ") + what +
+                                         " must be a 3 by 3 matrix");
+                  FitPointOperation operation{};
+                  for (std::size_t row = 0; row < 3; ++row)
+                      for (std::size_t column = 0; column < 3; ++column)
+                          operation[3 * row + column] = (*matrix)(row, column);
+                  return operation;
+              };
+              std::vector<FitPointOperation> operations;
+              operations.reserve(symmetry_operations.size());
+              for (const auto& matrix : symmetry_operations)
+                  operations.push_back(to_operation(matrix, "each symmetry operation"));
+              const auto frame = angular_frame ? to_operation(angular_frame, "the angular frame")
+                                               : identity_fit_point_frame();
+              return fit_point_set_dict(generate_fit_points(
+                  atomic_numbers, centers, operations, frame,
+                  fit_point_options_from_dict(option_values)));
+          },
+          "atomic_numbers"_a, "centers"_a, "symmetry_operations"_a,
+          "angular_frame"_a = SharedMatrix(), "options"_a = py::dict());
+    m.def("_atomic_polarizability_wsm_fit_points",
+          [fit_point_set_dict](const std::shared_ptr<Molecule>& molecule) {
+              if (!molecule) throw PSIEXCEPTION("WSM fit points: a molecule is required");
+              return fit_point_set_dict(
+                  generate_wsm_fit_points(*molecule, Process::environment.options));
+          },
+          "molecule"_a);
+    m.def("_atomic_polarizability_bondi_vdw_radius", &bondi_vdw_radius_bohr, "atomic_number"_a);
+
     m.def("_atomic_polarizability_test_refine_wsm",
           [](const Matrix& point_matrix, const std::vector<double>& frequencies,
              const std::vector<SharedMatrix>& responses, const Matrix& site_matrix,

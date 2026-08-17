@@ -164,6 +164,22 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- Scale in atomic units for the native atomic-polarizability frequency grid. -*/
     options.add_double("ATOMIC_POLARIZABILITY_FREQUENCY_SCALE", 0.5);
 
+    /*- Lebedev nodes placed on each atom in each fit-point shell of the native
+    atomic-polarizability WSM refinement (A :ref:`Lebedev Points <table:lebedevorder>` number) -*/
+    options.add_int("ATOMIC_POLARIZABILITY_FIT_SPHERICAL_POINTS", 50);
+    /*- Number of nested fit-point shells spanning the inner and outer shell limits. -*/
+    options.add_int("ATOMIC_POLARIZABILITY_FIT_RADIAL_SHELLS", 5);
+    /*- Innermost fit-point shell limit; fit points never come closer than this to a
+    nucleus, because the distributed multipole expansion diverges there. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_FIT_INNER_LIMIT", 2.0);
+    /*- Outermost fit-point shell limit. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_FIT_OUTER_LIMIT", 4.0);
+    /*- Convention for the fit-point shell limits: absolute bohr distances from the
+    nearest nucleus, or multiples of that nucleus' Bondi van der Waals radius. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_FIT_RADIAL_UNITS", "BOHR", "BOHR VDW");
+    /*- Largest fit-point count accepted by WSM refinement. -*/
+    options.add_int("ATOMIC_POLARIZABILITY_FIT_MAX_POINTS", 500);
+
     /*- Psi4 dies if energy does not converge. !expert -*/
     options.add_bool("DIE_IF_NOT_CONVERGED", true);
     /*- Integral package to use. If compiled with Simint support, change this option to use them; LibInt2 is used

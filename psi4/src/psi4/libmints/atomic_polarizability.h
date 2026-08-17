@@ -35,6 +35,7 @@ class BasisSet;
 struct BasisSetStructuralSnapshot;
 class Matrix;
 class Molecule;
+class Options;
 class SuperFunctional;
 class Vector;
 class Wavefunction;
@@ -443,14 +444,123 @@ class PSI_API PointResponseData {
  * occupied-major transition order from the frozen context and reviewed kernel.
  * The native electronic AO multipole-potential sign is retained in v; because
  * the response is bilinear in v, a global potential-sign convention cancels.
- * No points are generated or refined. Exact duplicate points are rejected;
- * minimum_site_distance_bohr=0 deliberately permits evaluation at nuclei.
+ * This routine only evaluates; it never builds or refines a point set. The
+ * production point source is generate_wsm_fit_points below. Exact duplicate
+ * points are rejected; minimum_site_distance_bohr=0 deliberately permits
+ * evaluation at nuclei.
  */
 PSI_API PointResponseData evaluate_point_response(
     const std::shared_ptr<const FrozenResponseContext>& context,
     const ResponseKernel& kernel, const std::vector<double>& frequencies,
     const std::vector<SitePosition>& points,
     double minimum_site_distance_bohr = 0.0);
+
+/* ==> Symmetry-faithful WSM fit-point generation <== */
+
+/** Row-major Cartesian 3 by 3 symmetry operation acting as p -> S p. */
+using FitPointOperation = std::array<double, 9>;
+
+/**
+ * Radial convention for the fit-point shell limits.
+ *
+ * Bohr treats the limits as absolute distances from the nearest nucleus.
+ * VanDerWaals scales them by the Bondi radius of the nearest nucleus.
+ * Bohr is the reviewed protocol's convention: under the van der Waals reading
+ * the whole rank-3 design block falls at or below the fixed 1e-4 WSM column
+ * cutoff and would be pruned, which contradicts the reviewed rank-3 model.
+ */
+enum class FitPointRadialUnits { Bohr, VanDerWaals };
+
+/** Deterministic nested-equidistant-surface fit-point policy. */
+struct PSI_API FitPointOptions {
+    /** Lebedev nodes per atom per shell; must be a supported Lebedev size. */
+    std::size_t spherical_points{50};
+    /** Shells spanning the closed interval [inner_limit, outer_limit]. */
+    std::size_t radial_shells{5};
+    double inner_limit{2.0};
+    double outer_limit{4.0};
+    FitPointRadialUnits radial_units{FitPointRadialUnits::Bohr};
+    /** Hard ceiling; the WSM refinement envelope is 500 points. */
+    std::size_t maximum_points{500};
+    /** Coincident-point merge radius in bohr. */
+    double merge_tolerance_bohr{1.0e-8};
+};
+
+/** Up-front candidate and storage bound, computed before any point is built. */
+struct PSI_API FitPointPlan {
+    std::size_t atom_count{};
+    std::size_t spherical_points{};
+    std::size_t radial_shells{};
+    std::size_t lebedev_order{};
+    std::size_t symmetry_operation_count{};
+    std::size_t candidate_count{};
+    std::size_t point_count{};
+    std::size_t maximum_points{};
+    std::size_t candidate_bytes{};
+    std::size_t retained_metadata_bytes{};
+    std::size_t estimated_bytes{};
+    std::vector<double> shell_offsets;
+    std::string radial_units;
+    std::string algorithm;
+};
+
+/** Generated fit points with the provenance needed to audit shell membership. */
+struct PSI_API FitPointSet {
+    std::vector<SitePosition> points;
+    /** min over atoms of |p - R_A| / scaling_radii[A]; equals the point's shell offset. */
+    std::vector<double> nearest_offsets;
+    std::vector<std::size_t> shell_index;
+    std::vector<std::size_t> generator_atom;
+    /** Per-atom radial scale in bohr; all ones under the bohr convention. */
+    std::vector<double> scaling_radii;
+    /** Verified largest displacement when every operation maps the set onto itself. */
+    double max_symmetry_deviation{};
+    /** Verified largest |F^T S F| departure from a signed coordinate permutation. */
+    double max_octahedral_deviation{};
+    FitPointPlan plan;
+};
+
+/** Bondi (1964)/Mantina (2009) van der Waals radius in bohr; throws off table. */
+PSI_API double bondi_vdw_radius_bohr(int atomic_number);
+
+/** Identity angular frame, i.e. Lebedev axes aligned with the Cartesian axes. */
+PSI_API FitPointOperation identity_fit_point_frame();
+
+/** Bound the candidate set and storage before generating anything. */
+PSI_API FitPointPlan plan_fit_points(std::size_t atom_count, const FitPointOptions& options);
+
+/**
+ * Build the union over shells and atoms of the Lebedev-sampled surfaces at each
+ * shell offset, keeping only the nodes no closer to any other nucleus, and merge
+ * coincident points.
+ *
+ * angular_frame is the proper rotation carrying the Lebedev axes into the frame
+ * the molecule is expressed in; the Lebedev node u is placed along
+ * angular_frame * u. Every symmetry operation must be orthogonal, must map the
+ * nuclear framework onto itself, and must be a signed coordinate permutation in
+ * the angular frame, i.e. an element of O_h there. Those three conditions make
+ * the node set exactly invariant, which is then verified as a postcondition:
+ * an arbitrary point set would inject symmetry-violating residuals into the
+ * fitted anisotropy, so anything else fails closed rather than fitting.
+ *
+ * The result carries no RNG, hash-order, or iteration-order dependence, and
+ * because the enumeration is purely index driven, rotating centers, operations
+ * and angular_frame by R reproduces the same points transformed by R.
+ */
+PSI_API FitPointSet generate_fit_points(const std::vector<int>& atomic_numbers,
+                                       const std::vector<SitePosition>& centers,
+                                       const std::vector<FitPointOperation>& symmetry_operations,
+                                       const FitPointOperation& angular_frame,
+                                       const FitPointOptions& options);
+
+/** Read the ATOMIC_POLARIZABILITY_FIT_* keywords into a validated policy. */
+PSI_API FitPointOptions fit_point_options_from(Options& options);
+
+/**
+ * Production fit-point source for refine_wsm: reads the ATOMIC_POLARIZABILITY_FIT_*
+ * keywords and closes over the symmetry operations of the molecule's own point group.
+ */
+PSI_API FitPointSet generate_wsm_fit_points(const Molecule& molecule, Options& options);
 
 namespace detail {
 PointResponsePlan plan_point_response_provider(
