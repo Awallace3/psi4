@@ -43,12 +43,12 @@ section is the authoritative record; it is evidence-backed and supersedes the ch
 | 2. Frequency/tensor algebra | **done, oracle-verified** | Grid matches reviewed frequencies to `7.1e-15`; `(10,11c,11s) -> (z,x,y)` and `R alpha R^T` reproduce the reviewed tensors exactly (`0.0`). |
 | 3. LW localization | **done** | Conserves the molecular sum on real SCF data to `4.5e-8` (dipole) / `5.7e-7` (full L3) at all eleven frequencies. |
 | 4. ISA-Pol response | **done, magnitude verified** | Summing the site-pair blocks with rank 0 translated to a common origin gives `(9.9106, 8.3580, 8.9598)`, isotropic `9.0761`, i.e. `0.970` of Psi4's own molecular `DIPOLE POLARIZABILITY` at the identical functional/basis/grid. The residual 3% is the deliberate `25% CHF + 75% ALDA` kernel difference. |
-| 5. WSM refinement | **conserves; still under-determined off the diagonal** | Was losing 36% of the molecular polarizability by fitting inside the charge density; fixed 2026-08-17, now conserves to `1.5e-2` of the response it is derived from. The *anisotropy* is still not pinned down: off-diagonal site components are grid-dependent noise, see remaining work item 1. |
+| 5. WSM refinement | **conserves; anchor scope corrected** | Was losing 36% of the molecular polarizability by fitting inside the charge density; fixed 2026-08-17, now conserves to `1.5e-2` of the response it is derived from. The rank-1 anchor scope was also corrected the same day (the reviewed protocol penalizes the whole dipole block, not just its diagonal), restoring a positive-definite published hydrogen dipole block. |
 | 6. Dispersion recoupling | **done, oracle-verified** | All four coefficients within `2.5e-7` relative of the reviewed CASIMIR values; see below. |
 | 7. End-to-end publication | **done** | All seven variables publish from one `OEProp` call on the SCF triple; verified end to end on PBE0/aug-cc-pVDZ. See the Task 7 record below. |
 | 8. Oracle acceptance | **partial** | Frequencies and C6–C12 accepted in isolation. The full aug-cc-pVTZ/GRAC protocol has never been run; the six reviewed-literal comparisons exist but are skipped by default. |
 
-Test suite for this feature: **380 passing** under `-m mints`
+Test suite for this feature: **381 passing** under `-m mints`
 (`--ignore=tests/pytests/test_camcasp_reference.py`, which is pre-existing-uncollectable),
 0 failing, 6 skipped (the reviewed-literal parity comparisons).
 
@@ -82,11 +82,12 @@ Measured facts that constrain any future change:
 - **Frame.** `derive_pdef_constraints` is called with empty `site_axes` and the packing
   rotation is the identity, because `refine_wsm`'s harmonics are molecular-frame.
 
-Known non-parity residual at aug-cc-pVDZ, left for Task 8: the published hydrogen `xz`
-component is `+4.29` against a reviewed `+0.0058`. It is symmetry-allowed (`10` and `11c`
-share `A'` at a `Cs` site), so the mask is not at fault; it is diagnosed as an
-under-determined fit variable in remaining work item 1. Hydrogen C10/C12 were negative at
-this basis before the conservation fix and are now positive (`47.3`, `269`).
+Known non-parity residual at aug-cc-pVDZ, left for Task 8: the site-by-site distribution of
+the localized response differs from the reviewed model, so `alpha_yy` and `alpha_zz` are
+mis-split between O and H even though the total conserves to `0.955`. See remaining work
+item 1. The hydrogen `xz` drift reported here earlier (`+4.29`) was a separate defect in the
+anchor scope and is fixed. Hydrogen C10/C12 were negative at this basis before the
+conservation fix and are now positive (`47.3`, `269`).
 
 ### Task 6 acceptance record
 
@@ -126,33 +127,37 @@ Residuals are consistent with the six/seven-figure rounding of the reviewed lite
 
 ### Remaining work
 
-1. **Hydrogen `xz` is an under-determined fit variable, not a scale error.** Diagnosed
-   2026-08-17 while fixing item 2; it is **not** the same root cause and it is **not fixed**.
-   Published `+4.29` at aug-cc-pVDZ against a reviewed `+0.0058` (it was `-0.91` before the
-   fit points were moved outside the density). Evidence that it is under-determination:
+1. **Site misdistribution of the localized response — the sole remaining parity gap.**
+   The hydrogen `xz` under-determination recorded here earlier was **resolved 2026-08-17**:
+   the reviewed PFIT protocol anchors the whole rank-1 dipole block, not just its diagonal
+   (its log penalizes exactly seven parameters, including `H1_10_11c`, which *is* the `xz`
+   component). Anchoring the full block moved hydrogen `xz` from `+4.29` to `-0.679` and
+   restored a positive-definite published hydrogen dipole block, eigenvalues
+   `(0.654, 0.654, 2.079)`.
 
-   - `refine_wsm` anchors only the three site-local *diagonal* dipole components
-     (`anchor_variable_count == 3` of 170 active variables) with `lambda = 0.001`. At
-     physically valid fit radii the design matrix condition number is `1.4e4`, and the
-     hydrogen `xz` variable moves over `+1.18`, `+2.52`, `+4.29` across three fit grids
-     that all reproduce the point response to `<7e-4` and all conserve the molecular
-     polarizability to better than 2%. A value that swings 300% between equally good fits
-     is not determined by the data.
-   - Anchoring all 170 active variables to the LW reference instead (same
-     `lambda = 0.001`) drops the condition number to `3.4`, stabilises hydrogen `xz` to
-     `-0.643 / -0.665` across those same grids, and leaves conservation at `0.982`–`0.998`.
-     So the penalty term, not the response, decides this component.
-   - The stabilised value is the LW-localized one (`-0.679`), so reaching the reviewed
-     `+0.0058` additionally requires the localization/partition to change — the reviewed
-     hydrogen `xz` is essentially zero while ours is `-0.68` before any fitting.
+   What remains is that our **LW-localized values differ from the reviewed anchors**, and
+   since the penalty holds the dipole block near its anchor, the final answer inherits that
+   error. At PBE0/aug-cc-pVDZ against the reviewed aug-cc-pVTZ anchors:
 
-   Consequence to be aware of: the published hydrogen tensor is currently **not positive
-   definite** at aug-cc-pVDZ (eigenvalues `-2.93`, `0.654`, `+5.67`) because of this
-   component. Next step is a decision on the WSM penalty scope — extending the anchor
-   beyond the diagonal is a protocol change and was deliberately *not* made as part of the
-   conservation fix, because it substitutes one unvalidated value for another rather than
-   reaching reviewed parity. Bisect further using the stage oracles listed in
+   | | `alpha_xx` | `alpha_yy` | `alpha_zz` |
+   | - | ---------- | ---------- | ---------- |
+   | `O` ours | `6.692` | `6.854` | `6.494` |
+   | `O` reviewed | `7.035` | `5.764` | `5.583` |
+   | `H` ours | `1.583` | `0.655` | `1.150` |
+   | `H` reviewed | `1.557` | `1.621` | `2.009` |
+
+   The totals nearly agree (conservation `0.955`), so this is a **misdistribution between
+   sites, not a magnitude error**: our oxygen is far too isotropic and absorbs out-of-plane
+   response the reviewed model assigns to the hydrogens. `alpha_xx` agrees well on both
+   sites while `yy` and `zz` are badly split — a directional signature. This lives in the
+   ISA partition (Task 4) or the LW localization (Task 3). Bisect against the reviewed
+   anchor table, which is a per-component oracle for Task 3's output; see
    [the debugging map](../specs/2026-08-17-parity-debugging-map.md).
+
+   Note the reviewed model's *full* L3 hydrogen array is itself not positive definite (its
+   log reports a `-0.754777` eigenvalue), which the plan's Global Constraints anticipate.
+   The published *dipole* block is a separate matter and is now positive definite.
+
 2. **Molecular-polarizability conservation deficit — FIXED 2026-08-17.** Root cause: the
    WSM fit points were generated 2.0–4.0 bohr from the nuclei, i.e. *inside* the molecular
    charge density, where a rank-3 distributed multipole model cannot represent the
