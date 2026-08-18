@@ -238,13 +238,30 @@ def test_h2_copy_equality_active_zeros_cutoff_and_kkt_oracle():
         _refine(points, sites, response, active=active,
                 equality=inactive_nan, targets=[0.])
 
-    cutoff_points = np.asarray(points) * 1.5
-    cutoff_response = _response(cutoff_points, sites, tensors)
+    # The 1e-4 policy cutoff is RELATIVE to the largest weighted design-column norm, so
+    # it prunes on rank rather than on absolute magnitude. Variable 119 is the (33s, 33s)
+    # rank-3 diagonal, whose column falls off as r^-14 against the r^-6 of the rank-1
+    # variables; pushing the points out by 4x takes its relative norm to 3e-5.
     tiny_active = active.copy(); tiny_active[119] = True
+    cutoff_points = np.asarray(points) * 4.
+    cutoff_response = _response(cutoff_points, sites, tensors)
     pruned = _refine(cutoff_points, sites, cutoff_response, active=tiny_active,
                      equality=equality, targets=[0.])[0]
     assert 119 in pruned["pruned_variables"]
     assert pruned["solution"][119] == 0.
+    assert pruned["applied_column_cutoff"] == pytest.approx(
+        1e-4 * pruned["maximum_weighted_column_norm"], rel=1e-14)
+
+    # Scale invariance is the point of the relative reading: uniformly shrinking every
+    # column norm must not change which columns survive. An absolute cutoff failed this,
+    # and that failure is what previously forced the fit points inside the density.
+    for factor in (1., 1.5, 2.):
+        scaled_points = np.asarray(points) * factor
+        scaled = _refine(scaled_points, sites, _response(scaled_points, sites, tensors),
+                         active=tiny_active, equality=equality, targets=[0.])[0]
+        assert scaled["pruned_variables"] == []
+        assert scaled["applied_column_cutoff"] == pytest.approx(
+            1e-4 * scaled["maximum_weighted_column_norm"], rel=1e-14)
 
 
 def test_point_site_permutation_covariance_and_frequency_major_wrapper():

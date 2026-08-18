@@ -362,6 +362,9 @@ void export_oeprop(py::module &m) {
                   values["objective_residual_norm"] = model.diagnostics.objective_residual_norm;
                   values["max_point_residual"] = model.diagnostics.max_point_residual;
                   values["max_output_asymmetry"] = model.diagnostics.max_output_asymmetry;
+                  values["maximum_weighted_column_norm"] =
+                      model.diagnostics.maximum_weighted_column_norm;
+                  values["applied_column_cutoff"] = model.diagnostics.applied_column_cutoff;
                   values["row_weight_source"] = model.diagnostics.row_weight_source;
                   py::dict policy;
                   policy["wsm_rank"] = options.wsm_rank;

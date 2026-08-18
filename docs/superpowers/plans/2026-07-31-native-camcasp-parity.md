@@ -42,14 +42,15 @@ section is the authoritative record; it is evidence-backed and supersedes the ch
 | 1. Plumbing | **done** | `valid_methods` accepts `ATOMIC_POLARIZABILITIES` (`python_helpers.py:744`); OEProp dispatch at `oeprop.cc:805`; calculator skeleton fails closed. |
 | 2. Frequency/tensor algebra | **done, oracle-verified** | Grid matches reviewed frequencies to `7.1e-15`; `(10,11c,11s) -> (z,x,y)` and `R alpha R^T` reproduce the reviewed tensors exactly (`0.0`). |
 | 3. LW localization | **done** | Conserves the molecular sum on real SCF data to `4.5e-8` (dipole) / `5.7e-7` (full L3) at all eleven frequencies. |
-| 4. ISA-Pol response | **runs; magnitude unverified** | Full composed chain verified in `test_native_atomic_polarizability_source_guard.py:96-126`. The molecular-sum check confirmed only *diagonality* (`7e-15`) and monotonic decay, **not magnitude against an independent molecular polarizability** — see the conservation deficit below. |
-| 5. WSM refinement | **done, but under-determined without constraints** | Runs, conserves the isotropic sum to `3e-4`. Anisotropy is NOT pinned down: see the gaps below. |
+| 4. ISA-Pol response | **done, magnitude verified** | Summing the site-pair blocks with rank 0 translated to a common origin gives `(9.9106, 8.3580, 8.9598)`, isotropic `9.0761`, i.e. `0.970` of Psi4's own molecular `DIPOLE POLARIZABILITY` at the identical functional/basis/grid. The residual 3% is the deliberate `25% CHF + 75% ALDA` kernel difference. |
+| 5. WSM refinement | **conserves; still under-determined off the diagonal** | Was losing 36% of the molecular polarizability by fitting inside the charge density; fixed 2026-08-17, now conserves to `1.5e-2` of the response it is derived from. The *anisotropy* is still not pinned down: off-diagonal site components are grid-dependent noise, see remaining work item 1. |
 | 6. Dispersion recoupling | **done, oracle-verified** | All four coefficients within `2.5e-7` relative of the reviewed CASIMIR values; see below. |
 | 7. End-to-end publication | **done** | All seven variables publish from one `OEProp` call on the SCF triple; verified end to end on PBE0/aug-cc-pVDZ. See the Task 7 record below. |
 | 8. Oracle acceptance | **partial** | Frequencies and C6–C12 accepted in isolation. The full aug-cc-pVTZ/GRAC protocol has never been run; the six reviewed-literal comparisons exist but are skipped by default. |
 
-Test suite for this feature: **375 passing** under `-m mints`, 0 failing, 6 skipped
-(the reviewed-literal parity comparisons).
+Test suite for this feature: **380 passing** under `-m mints`
+(`--ignore=tests/pytests/test_camcasp_reference.py`, which is pre-existing-uncollectable),
+0 failing, 6 skipped (the reviewed-literal parity comparisons).
 
 ### Task 7 record
 
@@ -64,10 +65,12 @@ The driver entry point is
 
 Measured facts that constrain any future change:
 
-- **Memory.** The default 407-point fit grid needs a WSM peak of `454,828,904` bytes, and
-  the stage gate reserves half of configured memory, so it requires at least ~0.87 GiB
+- **Memory.** The default 329-point fit grid needs a WSM peak of `304,876,088` bytes, and
+  the stage gate reserves half of configured memory, so it requires at least ~0.58 GiB
   configured. Psi4's 500 MB default fails closed. The driver sets 4 GiB explicitly
-  (`PIPELINE_MEMORY_BYTES`) and restores the previous value afterwards.
+  (`PIPELINE_MEMORY_BYTES`) and restores the previous value afterwards. (Before the fit
+  shells were moved outside the charge density the default grid was 407 points and needed
+  `454,828,904` bytes.)
 - **Grid quality is basis dependent.** With aug-cc-pVDZ the LW charge-sum residual sticks
   at `1.2e-05` on a `302/50` DFT grid regardless of ISA density (tested to `150/24/32`);
   only `590/99` brings it inside `1e-6`. The DFT grid, not the ISA grid, is binding. The
@@ -80,11 +83,10 @@ Measured facts that constrain any future change:
   rotation is the identity, because `refine_wsm`'s harmonics are molecular-frame.
 
 Known non-parity residual at aug-cc-pVDZ, left for Task 8: the published hydrogen `xz`
-component is about `-0.91` against a reviewed `+0.0058`. It is symmetry-allowed (`10` and
-`11c` share `A'` at a `Cs` site), so the mask is not at fault, and the debugging map rules
-out the publication and dispersion math, which points at Task 4 or Task 5. C10/C12 also
-come out negative for hydrogen at this basis, consistent with a non-positive isotropic
-rank-2/rank-3 trace in a small basis.
+component is `+4.29` against a reviewed `+0.0058`. It is symmetry-allowed (`10` and `11c`
+share `A'` at a `Cs` site), so the mask is not at fault; it is diagnosed as an
+under-determined fit variable in remaining work item 1. Hydrogen C10/C12 were negative at
+this basis before the conservation fix and are now positive (`47.3`, `269`).
 
 ### Task 6 acceptance record
 
@@ -124,59 +126,129 @@ Residuals are consistent with the six/seven-figure rounding of the reviewed lite
 
 ### Remaining work
 
-1. **Investigate the hydrogen `xz` discrepancy.** Published `-0.91` at aug-cc-pVDZ against a
-   reviewed `+0.0058`. It is symmetry-*allowed*, so the mask is not responsible, and the
-   frequency grid, spherical/Cartesian mapping, and dispersion recoupling are all
-   oracle-exact — so the cause lies in Task 4 (ISA-Pol response) or Task 5 (WSM refinement).
-   **This is the top open item and the main obstacle to polarizability parity.** Bisect using
-   the stage oracles listed in
+1. **Hydrogen `xz` is an under-determined fit variable, not a scale error.** Diagnosed
+   2026-08-17 while fixing item 2; it is **not** the same root cause and it is **not fixed**.
+   Published `+4.29` at aug-cc-pVDZ against a reviewed `+0.0058` (it was `-0.91` before the
+   fit points were moved outside the density). Evidence that it is under-determination:
+
+   - `refine_wsm` anchors only the three site-local *diagonal* dipole components
+     (`anchor_variable_count == 3` of 170 active variables) with `lambda = 0.001`. At
+     physically valid fit radii the design matrix condition number is `1.4e4`, and the
+     hydrogen `xz` variable moves over `+1.18`, `+2.52`, `+4.29` across three fit grids
+     that all reproduce the point response to `<7e-4` and all conserve the molecular
+     polarizability to better than 2%. A value that swings 300% between equally good fits
+     is not determined by the data.
+   - Anchoring all 170 active variables to the LW reference instead (same
+     `lambda = 0.001`) drops the condition number to `3.4`, stabilises hydrogen `xz` to
+     `-0.643 / -0.665` across those same grids, and leaves conservation at `0.982`–`0.998`.
+     So the penalty term, not the response, decides this component.
+   - The stabilised value is the LW-localized one (`-0.679`), so reaching the reviewed
+     `+0.0058` additionally requires the localization/partition to change — the reviewed
+     hydrogen `xz` is essentially zero while ours is `-0.68` before any fitting.
+
+   Consequence to be aware of: the published hydrogen tensor is currently **not positive
+   definite** at aug-cc-pVDZ (eigenvalues `-2.93`, `0.654`, `+5.67`) because of this
+   component. Next step is a decision on the WSM penalty scope — extending the anchor
+   beyond the diagonal is a protocol change and was deliberately *not* made as part of the
+   conservation fix, because it substitutes one unvalidated value for another rather than
+   reaching reviewed parity. Bisect further using the stage oracles listed in
    [the debugging map](../specs/2026-08-17-parity-debugging-map.md).
-2. **Molecular-polarizability conservation deficit — confirmed defect, not a basis effect.**
-   Measured 2026-08-17 at PBE0/aug-cc-pVDZ, DFT `590/99`, ISA `60/18/24`, comparing the
-   published atomic sum against Psi4's own `DIPOLE POLARIZABILITY` at the identical
-   functional, basis, and grid:
-
-   | component | published atomic sum | Psi4 molecular | ratio |
-   | --------- | -------------------- | -------------- | ----- |
-   | `xx` | `7.7729` | `10.1035` | `0.77` |
-   | `yy` | `4.4369` | `8.7373` | `0.51` |
-   | `zz` | `5.8910` | `9.2378` | `0.64` |
-   | isotropic | `6.0336` | `9.3595` | `0.64` |
-
-   The deficit is **anisotropic and worst out of plane** (`yy`, perpendicular to the
-   molecular plane). For contrast the reviewed model sums to `(10.191, 8.997, 9.603)`,
-   isotropic `9.597`, conserving to 1–2%. So a correct distributed model *does* reproduce the
-   molecular polarizability, and ours loses about 36% of it.
-
-   Scope note: the earlier stage checks do not localize this. LW localization and WSM
-   refinement were each shown to conserve *relative to their own input*, and the Task 4 check
-   verified only diagonality and decay, never magnitude — so a uniform deficit originating in
-   the response stage would have passed every existing test. Confirm by summing the ISA-Pol
-   site-pair response directly and comparing to `9.3595` before looking downstream.
-
-   Leading hypotheses, in order: (a) the `25% CHF + 75% ALDA` reference kernel is assembled
-   incorrectly (e.g. blended as a weighted average of kernels rather than the intended
-   functional derivative); (b) the site-pair contraction drops contributions, e.g. charge-flow
-   (rank 0) terms that the reviewed L3 model has absorbed into local dipole terms — note the
-   reviewed model carries no rank 0, yet still conserves, which is precisely what WSM
-   refinement is supposed to achieve; (c) transition-multipole projection is truncated or
-   misnormalized.
+2. **Molecular-polarizability conservation deficit — FIXED 2026-08-17.** Root cause: the
+   WSM fit points were generated 2.0–4.0 bohr from the nuclei, i.e. *inside* the molecular
+   charge density, where a rank-3 distributed multipole model cannot represent the
+   point-to-point response at all. See the record below.
 3. **Task 8 full-protocol parity run** — the aug-cc-pVTZ/GRAC protocol has never been run,
    and the six reviewed-literal comparisons are skipped by default behind
    `PSI4_ATOMIC_POLARIZABILITY_PARITY=1`. They must be reported as skipped, never as passed,
    until they are actually exercised.
 
+### Conservation-deficit record (2026-08-17)
+
+**Stage localization.** The site-pair response was summed with every site's rank-0 block
+translated to a common origin, which is algebraically the molecular dipole operator for any
+partition of unity. Static, PBE0/aug-cc-pVDZ, DFT `590/99`, ISA `60/18/24`:
+
+| stage | `xx` | `yy` | `zz` | isotropic | vs. own response |
+| ----- | ---- | ---- | ---- | --------- | ---------------- |
+| ISA-Pol site-pair response (Task 4) | `9.9106` | `8.3580` | `8.9598` | `9.0761` | — |
+| LW `local[site]` rank-1 sum (Task 3) | `9.9106` | `8.3580` | `8.9598` | `9.0761` | `1.0000` |
+| refined L3 rank-1 sum (Task 5, published) | `7.7729` | `4.4369` | `5.8910` | `6.0336` | **`0.6648`** |
+| Psi4 molecular `DIPOLE POLARIZABILITY` | `10.1035` | `8.7373` | `9.2378` | `9.3595` | — |
+
+So Tasks 3 and 4 conserve exactly and the entire loss was inside `refine_wsm`. The 3%
+between the response stage and Psi4's molecular value is the deliberate kernel difference
+(`25% CHF + 75% ALDA` versus PBE0's own kernel) and is *not* a defect. That number also
+refutes the kernel hypothesis outright: the translated site-pair sum **is**
+`4 mu^T (H1 + omega^2 H2^-1)^-1 mu` with the reviewed kernel, so a kernel over-screening
+by 37% is arithmetically impossible given a measured ratio of `0.970`.
+
+**Root cause.** The fit points sat 2.0–4.0 bohr from the nuclei, inside the valence
+density. Feeding the conserving LW model through the same multipole formula `refine_wsm`
+fits reveals it cannot represent the ab initio point response there:
+
+| nearest-nucleus distance | `Pi_obs` | `Pi_model(LW)` | ratio |
+| ------------------------ | -------- | -------------- | ----- |
+| `2.0` bohr | `2.504e-01` | `1.406e+00` | `5.61` |
+| `3.0` bohr | `4.614e-02` | `5.332e-02` | `1.16` |
+| `4.0` bohr | `1.606e-02` | `1.627e-02` | `1.013` |
+| `6.0` bohr | `3.543e-03` | `3.549e-03` | `1.002` |
+| `8.0` bohr | `1.328e-03` | `1.334e-03` | `1.004` |
+
+Charge penetration damps the true response by a factor of `5.6` at 2 bohr. Least squares
+against data the model provably cannot fit (461% relative model error) drives the fitted
+polarizabilities down. The reviewed CamCASP point grid, read from the ignored development
+oracle, places its 500 points **4.63 to 11.46 bohr** from the nearest nucleus (mean
+`8.48`) — two to three times further out than ours.
+
+Why the deficit ramped with frequency (`0.63` at `omega=0` to `~0.90` in the tail) and
+looked like over-screening: at higher imaginary frequency the response is shorter ranged,
+so the unrepresentable penetration region contributes less of the total and the fit error
+shrinks. The ramp is generated entirely inside `refine_wsm` — the site-pair response
+conserves at every frequency.
+
+**Enabling defect.** `solve_constrained_least_squares` compares the `1e-4` policy cutoff
+against the *absolute* weighted column 2-norm. Since the irregular harmonics fall off as
+`r^-(2l+1)`, that makes the retained rank a function of the shell radii: at the reviewed
+radii the rank-3 columns are pruned and the constraint elimination then fails closed with
+"constraints are ambiguous (linearly dependent)". The absolute reading therefore *cannot
+express the reviewed protocol at all*. `refine_wsm` now scales the policy cutoff by the
+largest weighted column norm, making it the rank threshold it was always meant to be.
+On the corrected default grid the smallest rank-3 column is `2.36e-05` absolute (pruned
+under the absolute reading) but `2.78e-04` relative (retained).
+
+**After the fix**, defaults `4.5`–`11.5` bohr, 329 points:
+
+| | `xx` | `yy` | `zz` | isotropic |
+| - | ---- | ---- | ---- | --------- |
+| published atomic sum (static) | `9.8572` | `8.1627` | `8.7956` | `8.9385` |
+| ratio to the site-pair response | `0.9946` | `0.9766` | `0.9817` | `0.9848` |
+| ratio to Psi4 molecular | `0.9756` | `0.9342` | `0.9521` | `0.9550` |
+
+At `omega = 0.370417` the ratio to the site-pair response is `0.9902`. Against the reviewed
+literals the isotropic sum now runs `0.931` at `omega=0` rising through `0.998` at
+`omega=1.26` (residual is the aug-cc-pVDZ/aug-cc-pVTZ basis difference and the kernel); the
+pre-fix curve ran `0.629` to `0.915`. The apparent "second, frequency-independent 10%
+residual" was the same single cause.
+
+The regression tests are
+`test_atomic_polarizabilities.py::test_published_atomic_sum_conserves_the_site_pair_response`
+(static and `omega=0.370417`) and
+`::test_published_atomic_sum_conserves_psi4s_molecular_dipole_polarizability`. Both fail on
+the pre-fix configuration by 19–23%.
+
 ### Constraints discovered during implementation
 
-- **Shell limits are absolute bohr, not vdW multiples.** Decided by measurement: under the
-  vdW reading the minimum weighted design-column norm is `6.6e-06`, 15x *below* the frozen
-  WSM column cutoff of `1e-4`, which would prune the entire rank-3 block and contradict
-  `wsm_rank=3`. Under the bohr reading it is `1.6e-02`, clearing the cutoff by 163x.
+- **Fit points must lie outside the charge density.** Superseded claim, kept as a warning:
+  an earlier revision read the `1e-4` WSM cutoff as an absolute weighted column norm and
+  concluded from it that the shell limits had to be `2.0`–`4.0` bohr rather than van der
+  Waals multiples. That inference was invalid and cost 36% of the molecular polarizability;
+  see the conservation record above. The cutoff is relative and cannot select a radial
+  convention.
 - **The reviewed 2000-point grid is architecturally infeasible** with the current dense
   pair-row design: 2000 points implies ~2.0e6 rows x 360 columns, about `5.8 GB` for the
-  design matrix alone, and `kWSMMaximumPoints` is `500`. Use the converged 407-point grid.
+  design matrix alone, and `kWSMMaximumPoints` is `500`. Use the converged 329-point grid.
 - **Memory.** Psi4's `500 MB` default supports only ~125 fit points; 249 points needs
-  ~`510 MB` and the 407-point default ~`1.3 GB`. End-to-end wiring must raise process memory
+  ~`510 MB` and the 329-point default ~`0.9 GB`. End-to-end wiring must raise process memory
   explicitly or `refine_wsm` fails closed on its own default grid.
 - **Grid quality must be pinned.** The existing SCF test fixtures
   (`dft_spherical_points 50 / radial 12`, ISA `30/10/12`) are far too coarse for the

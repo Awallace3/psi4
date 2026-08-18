@@ -169,11 +169,15 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     options.add_int("ATOMIC_POLARIZABILITY_FIT_SPHERICAL_POINTS", 50);
     /*- Number of nested fit-point shells spanning the inner and outer shell limits. -*/
     options.add_int("ATOMIC_POLARIZABILITY_FIT_RADIAL_SHELLS", 5);
-    /*- Innermost fit-point shell limit; fit points never come closer than this to a
-    nucleus, because the distributed multipole expansion diverges there. -*/
-    options.add_double("ATOMIC_POLARIZABILITY_FIT_INNER_LIMIT", 2.0);
+    /*- Innermost fit-point shell limit. Fit points must lie *outside* the molecular
+    charge density, because a rank-3 distributed multipole model cannot represent the
+    point-to-point response where the point penetrates the density: measured on
+    H2O/aug-cc-pVDZ, a conserving LW-localized model overpredicts the ab initio
+    point response by a factor of 5.6 at 2.0 bohr from a nucleus and matches it to
+    1.3 percent at 4.0 bohr and 0.4 percent beyond 6 bohr. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_FIT_INNER_LIMIT", 4.5);
     /*- Outermost fit-point shell limit. -*/
-    options.add_double("ATOMIC_POLARIZABILITY_FIT_OUTER_LIMIT", 4.0);
+    options.add_double("ATOMIC_POLARIZABILITY_FIT_OUTER_LIMIT", 11.5);
     /*- Convention for the fit-point shell limits: absolute bohr distances from the
     nearest nucleus, or multiples of that nucleus' Bondi van der Waals radius. -*/
     options.add_str("ATOMIC_POLARIZABILITY_FIT_RADIAL_UNITS", "BOHR", "BOHR VDW");
