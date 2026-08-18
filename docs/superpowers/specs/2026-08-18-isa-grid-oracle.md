@@ -214,24 +214,91 @@ Development-only, run outside the repository:
 Per the plan's Global Constraints, only fixed literals from this run may be checked in; nothing
 in the repository may read `.camcasp-reference/` or invoke CamCASP, ORIENT, PFIT or CASIMIR.
 
-## The checked-in literals are now runnable but unsatisfiable
+The `ISA_GRID_*` polarizability literals are reproducible from the tracked extractor rather than
+from an ad-hoc script. `devtools/camcasp_reference.py` already carries the whole path — using
+`parse_refined_polarizabilities(refined, ACCEPTED_ATOM_LABELS, limit=3)`, `build_local_frames`
+against the run's `H2O.axes`, then `dipole_local_cartesian` and `rotate_tensor` per site, packed
+as `xx, xy, xz, yy, yz, zz` — and it reproduces the checked-in values to exactly `0.0`. Its
+`build` subcommand cannot be used end to end here only because it requires a CASIMIR `.pot`
+file, which this run has none of; the Cn literals were recoupled with our own engine instead.
 
-With `PARITY_PROTOCOL` fixed, the six reviewed-literal comparisons behind
-`PSI4_ATOMIC_POLARIZABILITY_PARITY=1` will execute rather than skip — and will fail, because
-those literals record the **DF-partitioned** calculation. Measured against our aug-cc-pVTZ
-output:
+## Resolution: two oracles, two gates (2026-08-18)
 
-| comparison | deviation from the `rtol=1e-4, atol=1e-5` gate |
-| ---------- | --------------------------------------------- |
-| static polarizabilities | 11 of 18 entries outside, up to `6.2e4x` |
-| `ATOMIC C6` | up to `5.0e4x` |
-| `ATOMIC C8` | up to `2.6e4x` |
-| `ATOMIC C10` | up to `2.2e4x` |
-| `ATOMIC C12` | up to `9.0e4x` |
+With `PARITY_PROTOCOL` fixed, the six reviewed-literal comparisons execute rather than skip.
+They cannot pass, because those literals record the **DF-partitioned** calculation. The open
+decision named in the earlier revision of this section is now closed, along the line the
+partition spec's resolved decision 1 already set out ("both, ISA-GRID first; the existing DF
+reference is retained as a second data point"):
 
-This is documented at the point of use in `tests/pytests/test_atomic_polarizabilities.py` so the
-failure cannot be mistaken for a regression. Per the plan's Global Constraints the gate must not
-be loosened and the literals must not be rewritten to make it pass; closing this properly means
-regenerating the reference literals from a matching partition (the Task F run already produces
-them) and deciding whether the DF literals are retained as a separate oracle. **That decision is
-open and is the natural start of Task 8.**
+- The ISA-GRID model above was extracted into `ISA_GRID_*` literals in
+  `tests/pytests/test_atomic_polarizabilities.py` — all eleven frequencies, per site, plus
+  C6–C12 recoupled with our own engine — and is the **acceptance oracle**, compared inside an
+  explicitly measured band.
+- The `DF_*` literals are **retained unchanged** and their comparisons stay at the plan's
+  `rtol=1e-4, atol=1e-5` gate as `xfail(strict=True)`. They record what a C-DF partition
+  (Task G) would have to satisfy; `strict=True` means implementing one produces a loud failure
+  demanding the marker be removed rather than a quiet pass.
+
+Neither the gate nor any literal was altered.
+
+**The extraction is validated, not asserted.** Run against the reviewed DF model, the same
+extractor reproduces the previously reviewed 33x6 literal table to exactly `0.0`, and the same
+recoupling harness reproduces the checked-in `DF_C6`–`DF_C12` to their printed precision. Only
+then was it applied to the ISA-GRID model. The frame handling matters: the `.pol` files report
+each site in its own local axes, and H1's are the molecular axes rotated 180 degrees about z,
+so a real harmonic `lm{c,s}` picks up `(-1)^m` and `alpha_(t,u) -> (-1)^(m_t+m_u) alpha_(t,u)`.
+
+**A geometry defect surfaced in the process.** The test module's `REVIEWED_GEOMETRY` placed
+`H1` at *positive* x while the reviewed `H2O_A.in` places it at negative x — a mirror image.
+That is invisible in every x-even component and flips the sign of `xz` and `yz`. It is fixed;
+`H1 alpha_xz` now reads `+0.653` against the oracle's `+0.645` instead of `-0.653`.
+
+## Measured band, and what it does not cover
+
+Ours at `PARITY_PROTOCOL` against the ISA-GRID oracle:
+
+| quantity | worst relative deviation | where |
+| -------- | ------------------------ | ----- |
+| static dipole block | `0.1529` | `H alpha_yy` (ours `0.6446`, oracle `0.7609`) |
+| dynamic dipole block | `0.1529` at `omega=0`, falling monotonically to `0.0443` at `omega=37.8` | same component |
+| per-pair `C6` | `0.0993` | `H-H` |
+| per-pair `C8` | `0.2552` | `H-H` |
+| per-pair `C10` | `0.3593` | `H-H` |
+| per-pair `C12` | `0.4555` | `H-H` |
+
+Components that are zero by symmetry are exactly `0.0` in both, so the absolute floor is `1e-5`.
+
+**Direction of effect, independent of any band.** On each of the eight components where the two
+oracles separate by more than 5 percent — `O yy/zz` and `H xz/yy/zz` — the published value is
+closer to ISA-GRID by factors of 7.9 to 83:
+
+| component | ours | `d` to ISA-GRID | `d` to DF | ratio |
+| --------- | ---- | --------------- | --------- | ----- |
+| `O yy`  | `7.4144` | `0.0594` | `1.6523` | `27.8` |
+| `O zz`  | `6.9551` | `0.1739` | `1.3714` | `7.9`  |
+| `H xz`  | `0.6531` | `0.0078` | `0.6474` | `83.0` |
+| `H yy`  | `0.6446` | `0.1163` | `0.9728` | `8.4`  |
+| `H zz`  | `1.1591` | `0.0817` | `0.8505` | `10.4` |
+
+This is asserted as a test, because no tolerance can satisfy it. The `xx` components are
+deliberately excluded: the two oracles agree there to better than one percent (`O` `0.0002`,
+`H` `0.0084` separation), so which is nearer is noise — and DF is in fact marginally nearer on
+`H xx`, `0.035` against `0.048`. The discriminating set is pinned in the test so it cannot
+quietly shrink to whichever components happen to agree.
+
+**Finding: the partition does not explain the higher-rank deficit.** Once the oracle matches,
+C6 lands within 10 percent per pair — but the deficit grows monotonically with rank, and it
+grows against *both* CamCASP models even though the recoupling is bit-identical across the
+comparison. Per-pair ratios to ISA-GRID:
+
+| coefficient | `O-O` | `O-H` | `H-H` | total |
+| ----------- | ----- | ----- | ----- | ----- |
+| `C6`  | `0.988` | `0.944` | `0.901` | `0.967` |
+| `C8`  | `0.802` | `0.771` | `0.745` | `0.789` |
+| `C10` | `0.737` | `0.690` | `0.641` | `0.717` |
+| `C12` | `0.653` | `0.589` | `0.545` | `0.628` |
+
+So our rank-2 and rank-3 site blocks are systematically smaller than CamCASP's. That is a Task
+5 (`refine_wsm`) or rank-truncation question, not a partition one, and it is now the leading
+parity gap. Untested candidates: the 329-point fit grid against the reviewed 2000, the relative
+rank cutoff pruning rank-3 columns, and the anchor penalty constraining only rank 1.

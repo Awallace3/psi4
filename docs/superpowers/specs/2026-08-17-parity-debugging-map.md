@@ -4,6 +4,20 @@ Companion to `plans/2026-07-31-native-camcasp-parity.md`. Records which parts of
 pipeline are now *analytically settled* versus which still carry numerical risk, so
 Task 8 mismatch investigation can start at the right stage instead of bisecting blindly.
 
+**Update 2026-08-18 (Task 8 run).** Two things below are superseded by
+[the ISA-GRID oracle](2026-08-18-isa-grid-oracle.md), which regenerated a matching-partition
+reference:
+
+- the per-site anchor comparison against `H2O_ref_wt4_L3_*.pol` measured us against a
+  **C-DF-partitioned** model. The site misdistribution it reported is a property of the
+  partition and is reproduced by changing the reference's partition alone;
+- the conclusion that "all parity error must originate in Task 5" **survives and is now
+  supported by a second, independent measurement**: against the matching oracle the dipole
+  block agrees to `0.153` worst-case and per-pair C6 to `0.099`, but the deficit grows
+  monotonically with rank to `0.46` at C12 with the recoupling held identical. So the live
+  question is the rank-2/rank-3 blocks out of `refine_wsm`, and this map is still the right
+  place to start.
+
 ## Settled exactly (no remaining numerical risk)
 
 Each of these was checked against the reviewed oracle and reproduces it to the stated

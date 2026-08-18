@@ -394,8 +394,9 @@ investigated by stage invariant and tolerances are not loosened.
 - [ ] Grid-convergence test at the documented `590/99` prerequisite.
 - [ ] ISA-DMA multipoles checked against fixed literals for at least two molecules.
 - [x] Task F oracle regenerated and the residual recorded (2026-08-18).
-- [ ] Per-site `alpha` and per-pair `C6` regression-tested against the Task F literals within
-      the measured band, not the `1e-4` gate.
+- [x] Per-site `alpha` and per-pair `C6` regression-tested against the Task F literals within
+      the measured band, not the `1e-4` gate (2026-08-18; C8/C10/C12 added as well, each with
+      its own band because the deviation grows with rank).
 - [ ] A partition A/B harness measures the per-site `alpha` split as a function of partition
       alone, with all other stages fixed.
 - [ ] Full `-m mints` suite still green (currently 381 passed, 6 skipped).
