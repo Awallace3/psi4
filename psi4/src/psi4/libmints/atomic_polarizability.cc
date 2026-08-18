@@ -3955,6 +3955,31 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
         }
     }
 
+    // The WSM policy cutoff is a RELATIVE rank threshold, not an atomic-unit
+    // magnitude. solve_constrained_least_squares compares against an absolute
+    // weighted column norm, so the protocol value is scaled here by the largest
+    // weighted column norm of this design matrix.
+    //
+    // This matters physically, not just numerically. The irregular harmonics fall
+    // off as r^-(2l+1), so every column norm shrinks as the fit points move
+    // outward, and an absolute cutoff silently makes the retained rank a function
+    // of the shell radii. Under the absolute reading the reviewed protocol's own
+    // point grid (4.63 to 11.46 bohr from the nearest nucleus) prunes the rank-3
+    // block and then fails closed in the constraint elimination with "constraints
+    // are ambiguous (linearly dependent)" -- that is, the absolute reading cannot
+    // express the reviewed protocol at all. The relative reading admits it.
+    double maximum_weighted_column_norm = 0.0;
+    for (std::size_t variable = 0; variable < active_to_full.size(); ++variable) {
+        double norm = 0.0;
+        for (std::size_t row = 0; row < plan.pair_rows; ++row)
+            norm = std::hypot(norm, row_weights[row] * design(row, variable));
+        if (!std::isfinite(norm))
+            throw PSIEXCEPTION(prefix + "weighted design column norm overflowed");
+        maximum_weighted_column_norm = std::max(maximum_weighted_column_norm, norm);
+    }
+    if (!std::isfinite(maximum_weighted_column_norm) || !(maximum_weighted_column_norm > 0.0))
+        throw PSIEXCEPTION(prefix + "design matrix has no nonzero weighted column");
+
     std::vector<double> anchor(active_to_full.size(), 0.0);
     std::vector<double> reference(active_to_full.size(), 0.0);
     std::size_t anchor_count = 0;
@@ -3986,7 +4011,7 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
     }
 
     detail::ConstrainedLeastSquaresOptions solve_options;
-    solve_options.column_cutoff = options.cutoff;
+    solve_options.column_cutoff = options.cutoff * maximum_weighted_column_norm;
     solve_options.prune_below_cutoff = true;
     solve_options.maximum_condition_number = options.maximum_condition_number;
     solve_options.maximum_workspace_elements = plan.workspace_elements;
@@ -4015,6 +4040,8 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
     pending.diagnostics.anchor_residual_norm = solved.anchor_residual_norm;
     pending.diagnostics.constraint_residual_norm = solved.constraint_residual_norm;
     pending.diagnostics.objective_residual_norm = solved.objective_residual_norm;
+    pending.diagnostics.maximum_weighted_column_norm = maximum_weighted_column_norm;
+    pending.diagnostics.applied_column_cutoff = solve_options.column_cutoff;
     pending.diagnostics.row_weight_source = "full_symmetric_frobenius";
     pending.diagnostics.plan = plan;
     for (std::size_t site = 0; site < site_count; ++site) {

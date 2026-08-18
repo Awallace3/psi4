@@ -458,6 +458,209 @@ def test_published_dispersion_is_symmetric_with_equivalent_hydrogens(wiring_publ
 
 
 # --------------------------------------------------------------------------------------
+# Molecular-polarizability conservation.
+#
+# A distributed polarizability model must reproduce the molecular dipole polarizability
+# when its site tensors are summed. Nothing else in this suite asserts that: the LW
+# localization and WSM refinement stage tests each verify conservation only relative to
+# their own input, and the published-output tests check symmetry, diagonality and decay,
+# never magnitude. A uniform deficit therefore used to pass everything -- and did: the
+# published sum once recovered 64 percent of Psi4's own molecular value (xx 0.77,
+# yy 0.51, zz 0.64) because the WSM fit points sat inside the charge density where a
+# rank-3 multipole model cannot represent the point-to-point response.
+#
+# Two independent references are used, because they fail for different reasons:
+#
+#  * Psi4's own coupled-perturbed molecular DIPOLE POLARIZABILITY at the identical
+#    functional, basis and DFT grid. This is a genuinely external number, but it uses
+#    PBE0's own xc kernel while the pipeline deliberately uses 25 percent CHF plus
+#    75 percent ALDA, so a few percent of disagreement is expected by construction.
+#  * The pipeline's own ISA-Pol site-pair response, contracted here -- outside the
+#    pipeline -- with the exact molecular dipole operator. Summing the rank-1 site
+#    blocks together with rank-0 times the site position is algebraically exact for any
+#    partition of unity, so this reference is available at every frequency and isolates
+#    the localization and refinement stages from the response kernel.
+#
+# Neither gate may be loosened to make a comparison pass.
+# --------------------------------------------------------------------------------------
+
+#: Largest fraction by which the summed distributed model may fall short of, or exceed,
+#: the site-pair response it was derived from. The only legitimate sources of difference
+#: are the rank-3 truncation of the site model and the finite fit grid; measured at
+#: 0.5 percent (xx), 2.4 percent (yy) and 1.9 percent (zz) on this protocol.
+RESPONSE_CONSERVATION_TOLERANCE = 0.05
+
+#: Largest fraction by which the summed distributed model may differ from Psi4's own
+#: molecular value. Wider than the gate above because the reference kernel differs from
+#: PBE0's by construction; the site-pair response itself sits 3 percent below Psi4's
+#: molecular value for that reason alone.
+MOLECULAR_CONSERVATION_TOLERANCE = 0.15
+
+#: Imaginary frequency used for the dynamic conservation check (grid index 5).
+CONSERVATION_FREQUENCY_INDEX = 5
+
+# Index of the rank-1 component in the 16-component 00/rank-1/rank-2/rank-3 site-pair
+# block, per axis, and the matching Cartesian axis index.
+_SITE_PAIR_DIPOLE_ROW = {"x": 2, "y": 3, "z": 1}
+_CARTESIAN_AXIS = {"x": 0, "y": 1, "z": 2}
+
+
+def _molecular_polarizability_from_site_pairs(response):
+    """Contract a site-pair response block set into the molecular dipole polarizability.
+
+    The site-pair blocks carry ranks 0 to 3 about each site. Translating every site's
+    contribution to a common origin makes the total dipole operator
+    ``sum_s [Q_s,1m + R_s,m Q_s,00]``, which equals the molecular dipole operator exactly
+    whenever the site weights partition unity -- independently of the partition, the rank
+    truncation or the basis. So this is an exact reconstruction, not an approximation.
+    """
+    positions = np.asarray(response["positions"])
+    blocks = [np.asarray(block) for block in response["blocks"]]
+    site_count = positions.shape[0]
+    assert len(blocks) == site_count * site_count
+
+    def operator(axis, site):
+        vector = np.zeros(16)
+        vector[_SITE_PAIR_DIPOLE_ROW[axis]] = 1.0
+        vector[0] = positions[site][_CARTESIAN_AXIS[axis]]
+        return vector
+
+    alpha = np.zeros((3, 3))
+    for first, first_axis in enumerate("xyz"):
+        for second, second_axis in enumerate("xyz"):
+            total = 0.0
+            for source in range(site_count):
+                left = operator(first_axis, source)
+                for sink in range(site_count):
+                    right = operator(second_axis, sink)
+                    total += left @ blocks[source * site_count + sink] @ right
+            alpha[first, second] = total
+    return alpha
+
+
+@pytest.fixture(scope="module")
+def wiring_conservation():
+    """Published output, the site-pair response behind it, and Psi4's molecular value.
+
+    One SCF triple feeds all three so the comparison is at a single electronic state.
+    """
+    psi4.core.clean_variables()
+    psi4.core.be_quiet()
+    psi4.set_options(WIRING_PROTOCOL)
+    molecule = psi4.geometry(REVIEWED_GEOMETRY)
+    triple = native_driver.atomic_polarizability_scf_triple(molecule=molecule)
+
+    published = _published(native_driver.publish_atomic_polarizabilities(*triple))
+    frequencies = published["ATOMIC POLARIZABILITY FREQUENCIES"].ravel()
+    imaginary = float(frequencies[CONSERVATION_FREQUENCY_INDEX])
+
+    incoming_memory = psi4.core.get_memory()
+    psi4.core.set_memory_bytes(int(native_driver.PIPELINE_MEMORY_BYTES), True)
+    try:
+        context = psi4.core._atomic_polarizability_make_frozen_response_context(*triple)
+        provider = psi4.core._atomic_polarizability_make_native_response_provider(
+            context,
+            {
+                "radial_points": WIRING_PROTOCOL["atomic_polarizability_isa_radial_points"],
+                "angular_polar_points":
+                    WIRING_PROTOCOL["atomic_polarizability_isa_angular_polar_points"],
+                "angular_azimuthal_points":
+                    WIRING_PROTOCOL["atomic_polarizability_isa_angular_azimuthal_points"],
+            },
+        )
+        site_pairs = provider.compute([0.0, imaginary], [0.0, 1.0])
+    finally:
+        psi4.core.set_memory_bytes(int(incoming_memory), True)
+
+    response_reference = {
+        0: _molecular_polarizability_from_site_pairs(site_pairs[0]),
+        CONSERVATION_FREQUENCY_INDEX: _molecular_polarizability_from_site_pairs(site_pairs[1]),
+    }
+
+    # Psi4's own molecular CPKS polarizability, uncorrected and unshifted, at the same
+    # functional, basis and DFT grid. This is the external reference.
+    psi4.core.clean_variables()
+    psi4.set_options(dict(WIRING_PROTOCOL, dft_grac_shift=0.0, reference="rhf"))
+    psi4.properties("pbe0", properties=["DIPOLE_POLARIZABILITIES"],
+                    molecule=psi4.geometry(REVIEWED_GEOMETRY))
+    molecular = np.array([
+        psi4.variable("DIPOLE POLARIZABILITY XX"),
+        psi4.variable("DIPOLE POLARIZABILITY YY"),
+        psi4.variable("DIPOLE POLARIZABILITY ZZ"),
+    ])
+    return published, response_reference, molecular
+
+
+def _summed_distributed_tensor(published, frequency_index):
+    """Sum the published per-atom Cartesian tensors at one frequency."""
+    dynamic = published["ATOMIC DYNAMIC POLARIZABILITIES"]
+    site_count = published["ATOMIC POLARIZABILITIES"].shape[0]
+    start = frequency_index * site_count
+    packed = dynamic[start:start + site_count].sum(axis=0)
+    return _unpack(packed)
+
+
+@pytest.mark.scf
+@pytest.mark.parametrize("frequency_index", [0, CONSERVATION_FREQUENCY_INDEX])
+def test_published_atomic_sum_conserves_the_site_pair_response(
+    wiring_conservation, frequency_index
+):
+    """The summed distributed model must reproduce the response it was derived from.
+
+    This is the assertion the suite was missing. LW localization is an exact
+    redistribution and WSM refinement is a refinement, not a rescaling, so the summed
+    rank-1 site blocks must return the site-pair response contracted with the molecular
+    dipole operator, to within the rank-3 truncation of the site model.
+    """
+    published, response_reference, _ = wiring_conservation
+    summed = _summed_distributed_tensor(published, frequency_index)
+    expected = response_reference[frequency_index]
+    for axis in range(3):
+        reference = expected[axis, axis]
+        assert reference > 0.0, (frequency_index, axis, reference)
+        deficit = abs(summed[axis, axis] - reference) / reference
+        assert deficit <= RESPONSE_CONSERVATION_TOLERANCE, (
+            f"frequency index {frequency_index}, axis {'xyz'[axis]}: distributed sum "
+            f"{summed[axis, axis]:.6f} against site-pair response {reference:.6f} "
+            f"({deficit:.1%} away)"
+        )
+    isotropic = np.trace(summed) / 3.0
+    expected_isotropic = np.trace(expected) / 3.0
+    deficit = abs(isotropic - expected_isotropic) / expected_isotropic
+    assert deficit <= RESPONSE_CONSERVATION_TOLERANCE, (
+        f"frequency index {frequency_index}: isotropic distributed sum {isotropic:.6f} "
+        f"against site-pair response {expected_isotropic:.6f} ({deficit:.1%} away)"
+    )
+
+
+@pytest.mark.scf
+def test_published_atomic_sum_conserves_psi4s_molecular_dipole_polarizability(
+    wiring_conservation
+):
+    """The static summed model must reproduce Psi4's own molecular CPKS polarizability.
+
+    Independent of the pipeline entirely: a separate coupled-perturbed calculation at the
+    same functional, basis and DFT grid. The reference kernel differs from PBE0's by
+    construction, which is why this gate is wider than the site-pair gate; it is still far
+    tighter than the 36 percent deficit it exists to catch.
+    """
+    published, _, molecular = wiring_conservation
+    summed = _summed_distributed_tensor(published, 0)
+    for axis in range(3):
+        deficit = abs(summed[axis, axis] - molecular[axis]) / molecular[axis]
+        assert deficit <= MOLECULAR_CONSERVATION_TOLERANCE, (
+            f"axis {'xyz'[axis]}: distributed sum {summed[axis, axis]:.6f} against Psi4's "
+            f"molecular {molecular[axis]:.6f} ({deficit:.1%} away)"
+        )
+    isotropic = np.trace(summed) / 3.0
+    deficit = abs(isotropic - molecular.mean()) / molecular.mean()
+    assert deficit <= MOLECULAR_CONSERVATION_TOLERANCE, (
+        f"isotropic distributed sum {isotropic:.6f} against Psi4's molecular "
+        f"{molecular.mean():.6f} ({deficit:.1%} away)"
+    )
+
+
+# --------------------------------------------------------------------------------------
 # Wiring preconditions that need no SCF. These pin the two things the wiring is easiest to
 # get quietly wrong: the frame the PDef mask is expressed in, and the memory the WSM stage
 # needs on the default fit grid.
@@ -508,7 +711,7 @@ def test_local_axes_move_the_mask_out_of_the_frame_refine_wsm_needs():
 
 
 def test_default_fit_grid_needs_more_than_psi4s_default_memory():
-    """The 407-point default grid does not fit the 500 MB default; the driver must raise it.
+    """The 329-point default grid does not fit the 500 MB default; the driver must raise it.
 
     The WSM design matrix carries one dense row per unordered fit-point pair and the stage
     gate reserves half of configured memory, so this is a hard architectural constraint,
@@ -517,7 +720,7 @@ def test_default_fit_grid_needs_more_than_psi4s_default_memory():
     molecule = psi4.geometry(REVIEWED_GEOMETRY)
     molecule.update_geometry()
     points = np.asarray(psi4.core._atomic_polarizability_wsm_fit_points(molecule)["points"])
-    assert points.shape == (407, 3)
+    assert points.shape == (329, 3)
 
     active, constraints = 170, 66
     with pytest.raises(RuntimeError, match="exceeds half the reserved memory"):

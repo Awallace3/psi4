@@ -134,7 +134,7 @@ def test_fit_point_plan_bounds_the_candidate_set_before_generation():
     assert plan["radial_shells"] == 5
     assert plan["lebedev_order"] == 11
     assert plan["candidate_count"] == 3 * 50 * 5
-    assert plan["shell_offsets"] == pytest.approx([2.0, 2.5, 3.0, 3.5, 4.0], abs=1e-14)
+    assert plan["shell_offsets"] == pytest.approx([4.5, 6.25, 8.0, 9.75, 11.5], abs=1e-14)
     assert plan["maximum_points"] == 500
     assert plan["candidate_bytes"] == plan["candidate_count"] * 24
     assert plan["estimated_bytes"] >= plan["candidate_bytes"]
@@ -391,7 +391,7 @@ def test_wsm_fit_points_reads_the_atomic_polarizability_fit_options():
     default = _from_molecule(molecule)
     assert default["plan"]["spherical_points"] == 50
     assert default["plan"]["radial_shells"] == 5
-    assert default["plan"]["shell_offsets"] == pytest.approx([2.0, 2.5, 3.0, 3.5, 4.0])
+    assert default["plan"]["shell_offsets"] == pytest.approx([4.5, 6.25, 8.0, 9.75, 11.5])
     assert default["plan"]["radial_units"] == "BOHR"
     assert default["plan"]["maximum_points"] == 500
     assert default["plan"]["symmetry_operation_count"] == 4
@@ -526,35 +526,62 @@ def test_refined_l3_model_is_stable_under_fit_point_refinement(wsm_refinement_me
     assert fine_change < 1.0e-6 * scale
 
 
-def _min_weighted_column_norm(points, sites):
-    """Smallest weighted design-column norm over all 120 variables of every site.
-
-    The WSM policy prunes any column below a fixed absolute cutoff of 1e-4, so a
-    shell placement whose rank-3 columns fall under that cutoff cannot support the
-    reviewed rank-3 model at all.
-    """
+def _weighted_column_norms(points, sites):
+    """Weighted design-column norms over all 120 variables of every site."""
     irregular = np.array([[_irregular(point, site) for site in sites] for point in points])
-    smallest = np.inf
+    norms = []
     for site in range(len(sites)):
         block = irregular[:, site, :]
         for first in range(15):
             for second in range(first, 15):
                 outer = np.outer(block[:, first], block[:, second])
                 design = outer if first == second else outer + outer.T
-                smallest = min(smallest, np.linalg.norm(design))
-    return smallest
+                norms.append(np.linalg.norm(design))
+    return np.asarray(norms)
 
 
-def test_bohr_shell_limits_keep_every_design_column_above_the_fixed_wsm_cutoff():
-    """Why 2.0/4.0 are read as bohr offsets rather than van der Waals multiples."""
+def test_the_default_grid_needs_the_relative_wsm_column_cutoff():
+    """The default shell limits keep rank 3 only because the 1e-4 cutoff is relative.
+
+    This replaces an earlier test which read the cutoff as an absolute weighted column
+    norm in atomic units and, on that basis, argued the shell limits had to be small
+    enough to keep the rank-3 columns above 1e-4. That inference is what put every fit
+    point inside the charge density, where a rank-3 multipole model cannot represent the
+    point-to-point response, and it cost 36 percent of the molecular polarizability.
+
+    The irregular harmonics fall off as r^-(2l+1), so an absolute threshold silently makes
+    the retained rank a function of how far out the points sit. `refine_wsm` therefore
+    scales the policy cutoff by the largest weighted column norm. The numbers below are
+    the whole argument: on the default grid the smallest rank-3 column is 2.4e-5 in
+    absolute terms -- it would be pruned outright under the absolute reading -- but 2.8e-4
+    relative to the largest column, so the relative reading retains it and `wsm_rank=3`
+    remains satisfiable at physically valid radii.
+    """
     cutoff = 1.0e-4
     sites = np.asarray(_WATER_CENTERS)
+    norms = _weighted_column_norms(
+        _generate(spherical_points=50, radial_shells=5)["points"], sites)
 
-    bohr_points = _generate(spherical_points=50, radial_shells=5)["points"]
-    assert _min_weighted_column_norm(bohr_points, sites) > 100.0 * cutoff
+    assert norms.min() < cutoff                 # rejected by the absolute reading
+    assert norms.min() > cutoff * norms.max()   # retained by the relative reading
 
-    vdw_points = _generate(spherical_points=50, radial_shells=5, radial_units="VDW")["points"]
-    assert _min_weighted_column_norm(vdw_points, sites) < cutoff
+
+def test_default_shell_limits_bracket_the_reviewed_point_grid_span():
+    """The default band is 4.5 to 11.5 bohr from the nearest nucleus.
+
+    The reviewed point-to-point grid spans 4.63 to 11.46 bohr from the nearest nucleus, so
+    the default band brackets it. The radial convention stays BOHR because that span is an
+    absolute band rather than a shell offset derived from any radius table. The physical
+    requirement behind the band -- that a rank-3 multipole model can actually reproduce
+    the point-to-point response there -- is asserted against a real density by the
+    molecular-conservation tests in test_atomic_polarizabilities.py.
+    """
+    psi4.core.clean_options()
+    default = _from_molecule(_water_molecule())
+    offsets = np.asarray(default["nearest_offsets"])
+    assert offsets.min() == pytest.approx(4.5, abs=1e-12)
+    assert offsets.max() == pytest.approx(11.5, abs=1e-12)
+    assert default["plan"]["radial_units"] == "BOHR"
 
 
 def test_refined_l3_model_respects_c2_site_symmetry_on_the_generated_grid(wsm_refinement_memory):

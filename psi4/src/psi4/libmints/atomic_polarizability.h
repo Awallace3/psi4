@@ -483,20 +483,38 @@ using FitPointOperation = std::array<double, 9>;
  *
  * Bohr treats the limits as absolute distances from the nearest nucleus.
  * VanDerWaals scales them by the Bondi radius of the nearest nucleus.
- * Bohr is the reviewed protocol's convention: under the van der Waals reading
- * the whole rank-3 design block falls at or below the fixed 1e-4 WSM column
- * cutoff and would be pruned, which contradicts the reviewed rank-3 model.
+ * Bohr is the reviewed protocol's convention: the reviewed point-to-point grid
+ * spans 4.63 to 11.46 bohr from the nearest nucleus, an absolute band that is
+ * not a fixed multiple of either the O or the H Bondi radius.
+ *
+ * A previous revision justified Bohr by observing that the van der Waals reading
+ * pushes the rank-3 design columns below the fixed 1e-4 WSM cutoff. That was a
+ * symptom of comparing the cutoff against an *absolute* weighted column norm and
+ * is no longer relevant: refine_wsm now scales the cutoff by the largest weighted
+ * column norm, so it is a rank threshold rather than an atomic-unit magnitude.
  */
 enum class FitPointRadialUnits { Bohr, VanDerWaals };
 
-/** Deterministic nested-equidistant-surface fit-point policy. */
+/**
+ * Deterministic nested-equidistant-surface fit-point policy.
+ *
+ * The shell limits must keep every fit point outside the molecular charge
+ * density. A rank-3 distributed multipole model cannot represent the
+ * point-to-point response of a point that penetrates the density, and fitting to
+ * such points drives the fitted polarizabilities far below the response they were
+ * derived from. Measured on H2O/aug-cc-pVDZ with PBE0 and the reviewed kernel:
+ * a conserving LW-localized model overpredicts the ab initio point response by a
+ * factor of 5.6 at 2.0 bohr, and reproduces it to 1.3 percent at 4.0 bohr and to
+ * 0.4 percent beyond 6 bohr. The 4.5 to 11.5 bohr default brackets the reviewed
+ * grid's measured 4.63 to 11.46 bohr span.
+ */
 struct PSI_API FitPointOptions {
     /** Lebedev nodes per atom per shell; must be a supported Lebedev size. */
     std::size_t spherical_points{50};
     /** Shells spanning the closed interval [inner_limit, outer_limit]. */
     std::size_t radial_shells{5};
-    double inner_limit{2.0};
-    double outer_limit{4.0};
+    double inner_limit{4.5};
+    double outer_limit{11.5};
     FitPointRadialUnits radial_units{FitPointRadialUnits::Bohr};
     /** Hard ceiling; the WSM refinement envelope is 500 points. */
     std::size_t maximum_points{500};
@@ -1266,6 +1284,10 @@ struct PSI_API RefinementDiagnostics {
     double objective_residual_norm{};
     double max_point_residual{};
     double max_output_asymmetry{};
+    /** Largest weighted design-column norm; the policy cutoff is relative to it. */
+    double maximum_weighted_column_norm{};
+    /** The absolute threshold actually handed to the least-squares kernel. */
+    double applied_column_cutoff{};
     std::string row_weight_source;
     WSMRefinementPlan plan;
 };
