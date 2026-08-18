@@ -100,6 +100,85 @@ the partition **redistributes without changing the total**, exactly as it must.
 
 Site sums: DF isotropic `9.5969`, ISA-GRID `9.6074`.
 
+## Basis-matched comparison against our pipeline
+
+Our pipeline run at `PARITY_PROTOCOL` (PBE0/aug-cc-pVTZ, GRAC, DFT `590/99`, ISA `100/24/32`),
+so basis, geometry and functional match both CamCASP columns. Static per-site dipole
+polarizabilities in the site-local frame:
+
+| site | comp | ours | CamCASP DF | ratio | CamCASP ISA-GRID | ratio |
+| ---- | ---- | ---- | ---------- | ----- | ---------------- | ----- |
+| `O` | `xx` | `6.9203` | `7.0435` | `0.9825` | `7.0420` | `0.9827` |
+| `O` | `yy` | `7.4144` | `5.7621` | `1.2868` | `7.4738` | `0.9921` |
+| `O` | `zz` | `6.9551` | `5.5837` | `1.2456` | `7.1290` | `0.9756` |
+| `H` | `xx` | `1.5388` | `1.5737` | `0.9778` | `1.5870` | `0.9696` |
+| `H` | `yy` | `0.6446` | `1.6174` | `0.3985` | `0.7609` | `0.8471` |
+| `H` | `zz` | `1.1591` | `2.0096` | `0.5768` | `1.2408` | `0.9341` |
+| `H` | `zx` | `-0.6531` | `-0.0058` | `113.35` | `-0.6453` | `1.0122` |
+
+Isotropic: `O` ours `7.0966` (DF `1.158`, ISA-GRID `0.984`); `H` ours `1.1142`
+(DF `0.643`, ISA-GRID `0.931`). Molecular sum ours `9.3249`, `0.971` of both references —
+the totals were never the problem.
+
+**Against the matching oracle six of seven components agree to 2–5% and the worst,
+`H alpha_yy`, to 15%; against DF the same numbers are wrong by up to a factor of 113.**
+
+## C6 dispersion coefficients
+
+Both CamCASP refined models were recoupled with **our own** dispersion engine (verified to
+`2.5e-7`), so this comparison isolates the partition and not the recoupling.
+
+| pair | ours | CamCASP DF | ratio | CamCASP ISA-GRID | ratio |
+| ---- | ---- | ---------- | ----- | ---------------- | ----- |
+| `O-O` | `26.17151` | `17.25559` | `1.5167` | `26.48177` | `0.9883` |
+| `O-H` | `3.90955`  | `5.38233`  | `0.7264` | `4.14232`  | `0.9438` |
+| `H-H` | `0.58678`  | `1.69868`  | `0.3454` | `0.65147`  | `0.9007` |
+| total | `44.15682` | `45.57962` | `0.9688` | `45.65691` | `0.9671` |
+
+Per-pair C6 goes from wrong by up to a factor of three to within 1–10%. Note the total was
+already within 3% of the DF reference — a pairwise-blind check would have missed the error
+entirely, which is why the per-pair oracle matters.
+
+## ISA populations
+
+Ours at the reviewed basis against CamCASP's ISA-GRID shape-function charges. Our fixed point
+converged in 32 iterations with max overlap residual `7.0e-10`, max unity residual `2.2e-16`
+and electron count `10.00000002`.
+
+| site | ours | CamCASP | delta | ours `q` | CamCASP `q` |
+| ---- | ---- | ------- | ----- | -------- | ----------- |
+| `O`  | `8.83434` | `8.81587` | `+0.01847` | `-0.8343` | `-0.8159` |
+| `H1` | `0.58283` | `0.58866` | `-0.00583` | `+0.4172` | `+0.4113` |
+| `H2` | `0.58283` | `0.58866` | `-0.00583` | `+0.4172` | `+0.4113` |
+
+Agreement to `0.018 e` on oxygen and `0.006 e` on hydrogen, consistent with the two being
+different ISA variants (ours real-space throughout; CamCASP's shape functions come from the
+basis-space ISA-A functional) and with CamCASP's own `0.0068` residual charge. These are the
+Task B acceptance literals.
+
+## Two blockers found while running our side
+
+Both are real and neither is caused by the partition.
+
+1. **The response provenance seal refuses a converged SCF.** At aug-cc-pVTZ the cation UKS
+   converges by Psi4's own criteria — `Energy and wave function converged`, final
+   `Delta E = -3.08e-07` and `RMS |[F,P]| = 8.92e-07` against `1e-6` thresholds — yet
+   `FrozenResponseContext` rejects it with `cation SCF state has no finalized provenance seal`.
+   Convergence is marginal, and `HF::capture_response_provenance_if_converged` re-derives the
+   criteria from its own last *observed* iteration rather than trusting the SCF's verdict.
+   Tightening to `e_convergence 1e-10, d_convergence 1e-9` clears it. **This makes the reviewed
+   parity protocol unrunnable as written and should be fixed before Task 8**; the protocol
+   dictionary needs explicit convergence keys either way.
+2. **`PARITY_PROTOCOL`'s localization tolerance is unattainable.** It sets
+   `atomic_polarizability_localization_tolerance = 1e-8`, but the measured LW charge-sum
+   residual at aug-cc-pVTZ with DFT `590/99` and ISA `100/24/32` is `5.39e-07`, so
+   `localize_lw` fails its postcondition. For reference the reviewed ORIENT run used
+   `Sum-rule test 1e-7` and tolerated its own rank-truncation residuals up to `7e-4`. The
+   numbers above were taken at `1e-6`, a **diagnostic** relaxation which is irrelevant at the
+   1% level this comparison probes; the parity gate itself (`rtol=1e-4, atol=1e-5`) was not
+   touched. Task 8 must either justify `1e-8` with a converged grid study or set the tolerance
+   from measurement.
+
 ## Consequences
 
 1. **Every feature of our "misdistribution" is reproduced by the partition change alone.** ISA
