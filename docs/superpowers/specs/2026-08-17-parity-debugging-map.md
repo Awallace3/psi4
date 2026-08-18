@@ -128,3 +128,52 @@ Basis differences do not produce a monotone `0.63 -> 0.90` ramp in `omega`, so t
 not a basis artifact. For a basis-clean single point, compare the `omega = 0` sum against
 Psi4's own `DIPOLE POLARIZABILITY` at the same basis and grid (`9.3595` at PBE0/aug-cc-pVDZ,
 DFT `590/99`).
+
+## The reviewed PFIT anchor values are a direct Task 3 oracle
+
+Discovered 2026-08-17. The reviewed PFIT log tabulates, for every independent variable,
+both the fitted value and its **anchor** — and the anchor *is* the LW-localized value that
+`refine_wsm` receives as `LocalizedResponse.local`. That makes it a precise, per-component
+oracle for the output of Task 3, without needing to parse the localized model itself.
+
+Only seven parameters carry nonzero penalty, which settles the penalty scope as a matter of
+fact rather than judgement: the reviewed protocol anchors the **whole rank-1 dipole block**,
+not just its diagonal.
+
+| parameter | reviewed anchor | meaning (local frame) |
+| --------- | --------------- | --------------------- |
+| `O_10_10` | `5.58320` | `alpha_zz` |
+| `O_11c_11c` | `7.03535` | `alpha_xx` |
+| `O_11s_11s` | `5.76374` | `alpha_yy` |
+| `H1_10_10` | `2.00865` | `alpha_zz` |
+| `H1_10_11c` | `-0.00576` | `alpha_zx` |
+| `H1_11c_11c` | `1.55739` | `alpha_xx` |
+| `H1_11s_11s` | `1.62075` | `alpha_yy` |
+
+On a site whose only symmetry is a mirror plane the dipole off-diagonal is symmetry-allowed,
+and it is the component the point response constrains least — so it must be anchored or it
+drifts. Anchoring only the diagonal let it reach `+4.29` against a reviewed `+0.0058` while
+still fitting the response and conserving the molecular sum, and left the published hydrogen
+dipole block indefinite. Fixed by anchoring the full rank-1 block.
+
+### Remaining discrepancy: our localized values differ from the reviewed anchors
+
+Because the penalty holds the dipole block near its anchor, our final answer inherits any
+error in our LW-localized model. Measured at PBE0/aug-cc-pVDZ against the reviewed
+aug-cc-pVTZ anchors above (so some basis error is expected, but not this much):
+
+| | `alpha_xx` | `alpha_yy` | `alpha_zz` |
+| - | ---------- | ---------- | ---------- |
+| `O` ours | `6.692` | `6.854` | `6.494` |
+| `O` reviewed | `7.035` | `5.764` | `5.583` |
+| `H` ours | `1.583` | `0.655` | `1.150` |
+| `H` reviewed | `1.557` | `1.621` | `2.009` |
+
+The totals nearly agree (conservation is `0.955`), so this is a **misdistribution**, not a
+magnitude error: our oxygen comes out far too isotropic and absorbs out-of-plane response
+that the reviewed model assigns to the hydrogens. Note `alpha_xx` agrees well on both sites
+while `yy` and `zz` are badly split — a directional signature, not a uniform scale.
+
+This is now the sole remaining source of polarizability disagreement, and it lives in the
+ISA partition (Task 4) or the LW localization (Task 3). The anchor table above is the right
+target to bisect against, since it isolates Task 3's output from everything downstream.
