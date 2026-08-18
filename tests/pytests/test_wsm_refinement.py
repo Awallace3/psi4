@@ -196,7 +196,7 @@ def test_noisy_weight4_dipole_diagonal_anchor_is_applied_and_reported():
     assert result["policy"] == {
         "wsm_rank": 3, "hydrogen_rank": 3, "weight_type": 4,
         "weight_coefficient": .001, "cutoff": 1e-4,
-        "weight_type_definition": "inherited protocol: anchor only site-local diagonal dipole components to LocalizedResponse.local",
+        "weight_type_definition": "inherited protocol: anchor the site-local rank-1 dipole block to LocalizedResponse.local",
         "external_oracle_parity_claimed": False,
     }
     assert result["anchor_variable_count"] == 3
@@ -370,3 +370,47 @@ def test_source_guard_no_normal_equations_generator_or_external_executable():
         assert term not in body
     assert re.search(r"\b(?:pfit|orient|camcasp)\b", body, re.IGNORECASE) is None
     assert "solve_constrained_least_squares(" in body
+
+
+def test_mirror_site_dipole_offdiagonal_is_anchored_not_left_free():
+    """The rank-1 anchor must cover the dipole off-diagonal, not only the diagonal.
+
+    On a site with mirror-only symmetry the allowed dipole off-diagonal is the Cartesian
+    component the point response constrains least. The reviewed protocol penalizes the whole
+    rank-1 block, so this variable is held near its localized reference. Anchoring only the
+    diagonal leaves it free to drift far from any physical value while still fitting the
+    response, which is what this test pins down.
+    """
+    rng = np.random.default_rng(1707)
+    points = rng.normal(size=(9, 3)) * 2 + [.9, -.4, .6]
+    sites = [[0., 0., 0.]]
+
+    # Active: the three dipole diagonals plus the 10-11c off-diagonal, i.e. the pattern a
+    # Cs site produces (4 rank-1 variables).
+    active = np.zeros(120, dtype=bool)
+    active[[_upper_index(i, i) for i in range(3)]] = True
+    active[_upper_index(0, 1)] = True
+
+    reference = np.zeros((15, 15))
+    reference[0, 0], reference[1, 1], reference[2, 2] = 8., 7., 6.
+    reference[0, 1] = reference[1, 0] = 0.05
+
+    true = np.zeros((15, 15))
+    true[0, 0], true[1, 1], true[2, 2] = 2., 3., 4.
+    true[0, 1] = true[1, 0] = 0.05
+
+    noisy = _response(points, sites, [true])
+    noisy[np.triu_indices(len(points))] += rng.normal(
+        scale=.08, size=len(points) * (len(points) + 1) // 2)
+    noisy = np.triu(noisy) + np.triu(noisy, 1).T
+
+    result = _refine(points, sites, noisy, localized=[reference], active=active)[0]
+
+    # All four rank-1 variables are anchored, not just the three diagonals.
+    assert result["anchor_variable_count"] == 4
+
+    fitted = np.asarray(result["tensors"])[0]
+    # The anchored off-diagonal stays near its reference rather than drifting.
+    assert abs(fitted[0, 1] - reference[0, 1]) < abs(reference[0, 1]) + 1.0
+    # It is also symmetric in the packed tensor.
+    assert fitted[0, 1] == pytest.approx(fitted[1, 0], abs=1e-12)

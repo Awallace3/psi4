@@ -373,7 +373,7 @@ void export_oeprop(py::module &m) {
                   policy["weight_coefficient"] = options.weight_coefficient;
                   policy["cutoff"] = options.cutoff;
                   policy["weight_type_definition"] =
-                      "inherited protocol: anchor only site-local diagonal dipole components to LocalizedResponse.local";
+                      "inherited protocol: anchor the site-local rank-1 dipole block to LocalizedResponse.local";
                   policy["external_oracle_parity_claimed"] = false;
                   values["policy"] = std::move(policy);
                   result.append(std::move(values));

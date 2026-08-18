@@ -3986,7 +3986,12 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
     for (std::size_t variable = 0; variable < identities.size(); ++variable) {
         const auto identity = identities[variable];
         reference[variable] = localized.local[identity.site][identity.first][identity.second];
-        if (identity.first == identity.second && identity.first < 3) {
+        // The reviewed protocol penalizes the whole rank-1 (dipole-dipole) block toward the
+        // localized reference, not merely its diagonal. On a site with mirror-only symmetry
+        // the allowed dipole off-diagonal is exactly the Cartesian component that the point
+        // response constrains least, so leaving it free lets it drift far from any physical
+        // value while still fitting the response and conserving the molecular sum.
+        if (identity.first < 3 && identity.second < 3) {
             anchor[variable] = 1.0;
             ++anchor_count;
         }
