@@ -1,6 +1,7 @@
 # ISA Partition as a Standalone `oeprop` Method
 
-Status: **draft, pending the decisions in [Open decisions](#open-decisions)**.
+Status: **accepted 2026-08-18**; all four scoping decisions resolved, see
+[Resolved decisions](#resolved-decisions).
 Companion to `plans/2026-07-31-native-camcasp-parity.md` and
 [the parity debugging map](2026-08-17-parity-debugging-map.md).
 
@@ -66,7 +67,22 @@ The reviewed control file `work/H2O/H2O.clt` contains **no ISA directive**; it i
 `Run-type properties` job. (`Initialized stockholder atoms = T` on line 93 refers to the
 ground-state/DMA machinery, not to the response partition.)
 
-For contrast, CamCASP's *actual* ISA-Pol path — present in the runtime as
+CamCASP selects the partition with a single `DIST-ALG` directive inside its
+`Polarizability` block. `examples/properties/H2O-wxhole/output/H2O_DZ.out` line 1372 shows the
+alternative we want:
+
+```
+BEGIN Polarizability
+  DIST-ALG ISA-GRID   ( this sets the ISA-GRID-based partitioning )
+```
+
+`ISA-GRID` is CamCASP's **real-space, grid-based** iterated-stockholder partition — the same
+family as our implementation — and it writes `*_ISA-GRID_f11_NL4_fmtA.pol` in place of
+`*_DF_...`/`*_NL4_...`. So a matching oracle is one directive away from the reviewed control
+file, not a new method. (The wxhole example additionally enables a WXhole model, which we do
+not want; only `DIST-ALG` should change relative to the reviewed protocol.)
+
+For contrast, CamCASP's basis-space ISA path — present in the runtime as
 `methods/isa-pol-from-isa-A` and exercised by
 `examples/properties/H2O-wxhole` — requires an `ISA-Basis`, an `AtomAux-Basis`, a converged
 ISA-A step, and emits an `H2O_atoms.ISA` shape-function file. None of those exist in the
@@ -229,22 +245,131 @@ investigated by stage invariant and tolerances are not loosened.
       alone, with all other stages fixed.
 - [ ] Full `-m mints` suite still green (currently 381 passed, 6 skipped).
 
-## Open decisions
+## Resolved decisions
 
-These are the questions that need answers before this spec is executable; they are asked of
-the user directly and this section will be replaced by the resolutions.
+Decided by the user 2026-08-18.
 
-1. **Parity target.** Given the reviewed oracle uses C-DF partitioning, do we (a) implement
-   C-DF partitioning to match the existing oracle, (b) regenerate a CamCASP ISA-Pol reference
-   so our ISA implementation has a matching oracle (the runtime, `isa-pol.py` and the
-   `isa-pol-from-isa-A` method templates are all present), or (c) treat ISA as a deliberately
-   different model and drop the ~100% target against this oracle?
-2. **ISA flavour.** CamCASP's ISA is **ISA-A**: shape functions expanded in an auxiliary
-   s-function basis (`MAX-L 0`, 7 primitives for O in the example). Ours is real-space on a
-   radial/angular grid. If we want to compare against any CamCASP ISA output, do we match
-   ISA-A, or compare only basis-independent observables (charges, populations)?
-3. **Published surface.** Which of the proposed variables are actually wanted, and how should
-   the ragged shape functions be published?
-4. **Naming.** `ISA_CHARGES` as the `oeprop` task name and `ISA_*` option prefix, versus
-   reusing the existing `ATOMIC_POLARIZABILITY_ISA_*` keywords for a property that is no
-   longer polarizability-specific.
+1. **Parity target: both, ISA-GRID first.** Regenerate an ISA-GRID oracle now to close parity
+   against the partition we already implement, and keep C-DF as a follow-on so both CamCASP
+   partition schemes are reproducible. The existing DF reference is retained as a second data
+   point rather than discarded.
+2. **Published surface: all four groups** — charges and populations, convergence diagnostics,
+   radial shape functions, and ISA-DMA multipoles.
+3. **Plumbing: computed by default, injectable by argument.** The polarizability entry point
+   keeps recomputing the partition internally; an explicit `partition=` overrides it. This is
+   what makes a partition A/B test possible.
+4. **Naming: `ISA_CHARGES` task with an `ISA_*` option prefix.** The existing
+   `ATOMIC_POLARIZABILITY_ISA_*` keywords are kept as the polarizability pipeline's own
+   overrides so no current behaviour changes.
+
+## Work breakdown
+
+### Task A — decouple the partition from the response context
+
+As designed above: extract `compute_isa_partition(const ISAPartitionInput&, const ISAOptions&)`
+from the existing `solve()` core, and reimplement `compute_isa_weights(context, options)` as a
+thin adapter over it, preserving the seal and the `friend` access path.
+
+**Gate:** partition weights through the new primitive equal the sealed path exactly (`0.0`).
+
+### Task B — the `ISA_CHARGES` oeprop task
+
+Register `ISA_CHARGES` in `OEProp::compute()` dispatching to `OEProp::compute_isa_partition()`,
+structurally following `compute_mbis_multipoles`: build a `MolecularGrid` from the `ISA_*`
+options, evaluate the density, call the primitive, publish, print. New options
+`ISA_RADIAL_POINTS`, `ISA_ANGULAR_POLAR_POINTS`, `ISA_ANGULAR_AZIMUTHAL_POINTS`,
+`ISA_MAX_ITERATIONS`, `ISA_CONVERGENCE`, `ISA_SPHERICAL_POINTS`, `ISA_GRID_RADIAL_POINTS`,
+defaulting to the same values as the `ATOMIC_POLARIZABILITY_ISA_*` set.
+
+Published variables:
+
+| variable | shape | content |
+| -------- | ----- | ------- |
+| `ISA CHARGES` | natom x 1 | `Z_a - N_a` |
+| `ISA POPULATIONS` | natom x 1 | integrated `N_a` |
+| `ISA ITERATIONS` | scalar | fixed-point iteration count |
+| `ISA MAX OVERLAP RESIDUAL` | scalar | shape-function convergence residual |
+| `ISA MAX UNITY RESIDUAL` | scalar | pointwise `sum_a w_a(r) - 1` |
+| `ISA POPULATION ERROR` | scalar | `sum_a N_a - N` |
+| `ISA SHAPE FUNCTION <a>` | n_r x 2 | per-atom radial node, `log w_a(r)` |
+| `ISA TAIL PARAMETERS` | natom x 2 | join radius, exponent |
+
+Radial shape functions are ragged, so they are published as one `n_r x 2` matrix per atom
+rather than padded into a single array; the per-atom row counts are recoverable from the
+matrices themselves.
+
+**Fail-closed:** non-convergence, pointwise unity failure or population non-conservation throws
+before any variable is published, matching the rest of this pipeline.
+
+### Task C — externally supplied partitions
+
+Replace `ISAWeights::create_test_only` with a documented non-test constructor that validates
+the supplied partition against the sealed context (site count, grid cardinality, pointwise
+unity, non-negativity) before accepting it.
+
+### Task D — Python driver surface
+
+Add `isa_partition(molecule, ...)` to `psi4/driver/procrouting/atomic_polarizability.py`, and
+accept `atomic_polarizabilities(..., partition=None)`; `None` keeps today's internal path.
+
+### Task E — ISA-DMA multipoles
+
+Distributed multipoles to rank 4 using the ISA weights, published as `ISA MULTIPOLES`
+(natom x 25, spherical, CamCASP component order). Comparable to CamCASP's `*_ISA.mom` files —
+`CO2_ISA.mom` and `formamide_ISA.mom` exist in the runtime examples and give two independent
+molecules to check against.
+
+### Task F — regenerate the ISA-GRID oracle
+
+Copy the reviewed `work/H2O/H2O.clt` protocol unchanged except for adding `DIST-ALG ISA-GRID`
+to the `Polarizability` block, re-run, and record the resulting `*_ISA-GRID_*_NL4_*.pol`,
+localized L3 and refined L3 models as new development-only oracles. **Do not** enable the
+WXhole model that the `H2O-wxhole` example additionally uses.
+
+This is a development action outside the repository's production surface; the resulting
+literals are what get checked in, never the tree.
+
+### Task G — C-DF partitioning (follow-on)
+
+Deferred. Scope it only after Task F establishes whether ISA-GRID closes the gap, since the
+size of the residual determines how much of C-DF is actually needed.
+
+## Validation plan
+
+Because the current reviewed oracle is not an ISA calculation, ISA needs oracles of its own.
+In priority order:
+
+1. **Analytic.** A promolecule of two spherical Gaussians has a closed-form stockholder
+   partition. `test_isa_gaussian_fixed_point` already covers this and can be lifted to the
+   public path.
+2. **Partition-of-unity and conservation.** `sum_a w_a(r) = 1` pointwise; `sum_a N_a = N`;
+   `sum_a q_a = Q`. No external reference needed; already enforced internally.
+3. **Grid convergence.** ISA charges stable to `1e-5` under refinement of both grids. Recorded
+   prerequisite: the **DFT grid, not the ISA grid, is binding** — `302/50` sat at `1.2e-5`
+   regardless of ISA density, and only `590/99` came inside `1e-6`.
+4. **Literature and `*_ISA.mom` references** as fixed checked-in literals.
+5. **The regenerated ISA-GRID oracle** from Task F, at the `rtol=1e-4, atol=1e-5` gate.
+
+Constraints inherited unchanged from the plan's Global Constraints: production code and pytest
+must not invoke, clone, access or read CamCASP, ORIENT, PFIT, CASIMIR or `.camcasp-reference/`;
+no ORIENT GPLv3 source, comments, structure or control flow may be copied; mismatches are
+investigated by stage invariant and tolerances are not loosened.
+
+## Acceptance criteria
+
+- [ ] `compute_isa_partition` primitive exists; sealed-path weights unchanged (exact `0.0`).
+- [ ] `ISA_CHARGES` oeprop task publishes all eight variables from a plain wavefunction, and
+      fails closed on non-convergence.
+- [ ] The response provider accepts an externally supplied partition through a non-test API,
+      validated against the sealed context.
+- [ ] `atomic_polarizabilities(..., partition=...)` round-trips a partition from
+      `isa_partition(...)` and reproduces the internal path bit-for-bit when given its own
+      output.
+- [ ] Partition-of-unity, population and charge conservation asserted in pytest.
+- [ ] Grid-convergence test at the documented `590/99` prerequisite.
+- [ ] ISA-DMA multipoles checked against fixed literals for at least two molecules.
+- [ ] Task F oracle regenerated; per-site `alpha` compared against it at `rtol=1e-4,
+      atol=1e-5`, and the residual recorded in the debugging map whether or not it passes.
+- [ ] A partition A/B harness measures the per-site `alpha` split as a function of partition
+      alone, with all other stages fixed.
+- [ ] Full `-m mints` suite still green (currently 381 passed, 6 skipped).

@@ -174,6 +174,19 @@ magnitude error: our oxygen comes out far too isotropic and absorbs out-of-plane
 that the reviewed model assigns to the hydrogens. Note `alpha_xx` agrees well on both sites
 while `yy` and `zz` are badly split — a directional signature, not a uniform scale.
 
-This is now the sole remaining source of polarizability disagreement, and it lives in the
-ISA partition (Task 4) or the LW localization (Task 3). The anchor table above is the right
-target to bisect against, since it isolates Task 3's output from everything downstream.
+This was bisected on 2026-08-18 and **the localization is not the cause**. Feeding the
+reviewed nonlocal `H2O_NL4_000.pol` through our own `localize_lw` — truncated to rank 3 exactly
+as ORIENT's `Limit all rank 3` does — reproduces the reviewed `H2O_L3_000.pol` to `7.4e-13` on
+every one of the 675 tensor entries, for all three sites. `H1` requires the documented
+local-frame rotation (180 degrees about `z`, so `alpha_(t,u) -> (-1)^(m_t + m_u) alpha_(t,u)`),
+which takes it from `1.5472e+01` to `5.4623e-13`. That test is hermetic: no SCF, basis, grid or
+partition enters it, so it is an unambiguous verdict on Task 3 alone.
+
+The cause is instead a **partition-scheme mismatch**, not a bug. `work/H2O/OUT/H2O.out` line
+411 states the reviewed algorithm as `ALGORITHM: DF : density-fitting-based partitioning of the
+FDDS`, and `H2O.cks` selects `C-DF` over a 246-function auxiliary basis; the reviewed control
+file has no ISA directive at all. Our Task 4 partitions by real-space stockholder weights. Two
+different distributions of the same molecular response agree on the total and disagree on the
+split — which is exactly the observed signature. See
+[the ISA partition spec](2026-08-18-isa-partition-oeprop.md) for the resolution, including the
+one-directive `DIST-ALG ISA-GRID` route to a matching oracle.
