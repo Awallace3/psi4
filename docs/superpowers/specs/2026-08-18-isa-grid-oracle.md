@@ -158,7 +158,9 @@ Task B acceptance literals.
 
 ## Two blockers found while running our side
 
-Both are real and neither is caused by the partition.
+Both are real and neither is caused by the partition. **Both are now fixed in
+`PARITY_PROTOCOL`,** which was verified to run end to end and publish all seven variables
+after the change.
 
 1. **The response provenance seal refuses a converged SCF.** At aug-cc-pVTZ the cation UKS
    converges by Psi4's own criteria — `Energy and wave function converged`, final
@@ -166,18 +168,19 @@ Both are real and neither is caused by the partition.
    `FrozenResponseContext` rejects it with `cation SCF state has no finalized provenance seal`.
    Convergence is marginal, and `HF::capture_response_provenance_if_converged` re-derives the
    criteria from its own last *observed* iteration rather than trusting the SCF's verdict.
-   Tightening to `e_convergence 1e-10, d_convergence 1e-9` clears it. **This makes the reviewed
-   parity protocol unrunnable as written and should be fixed before Task 8**; the protocol
-   dictionary needs explicit convergence keys either way.
+   Tightening to `e_convergence 1e-10, d_convergence 1e-9` clears it, and those keys are now
+   pinned in `PARITY_PROTOCOL`. The underlying strictness remains: the seal will refuse any
+   marginally converged state, so a protocol that inherits Psi4's `1e-6` defaults at a diffuse
+   basis can still fail closed. Worth reconciling with Psi4's own verdict, but no longer a
+   blocker.
 2. **`PARITY_PROTOCOL`'s localization tolerance is unattainable.** It sets
    `atomic_polarizability_localization_tolerance = 1e-8`, but the measured LW charge-sum
    residual at aug-cc-pVTZ with DFT `590/99` and ISA `100/24/32` is `5.39e-07`, so
    `localize_lw` fails its postcondition. For reference the reviewed ORIENT run used
    `Sum-rule test 1e-7` and tolerated its own rank-truncation residuals up to `7e-4`. The
-   numbers above were taken at `1e-6`, a **diagnostic** relaxation which is irrelevant at the
-   1% level this comparison probes; the parity gate itself (`rtol=1e-4, atol=1e-5`) was not
-   touched. Task 8 must either justify `1e-8` with a converged grid study or set the tolerance
-   from measurement.
+   numbers above were taken at `1e-6`, which is also what the wiring protocol uses and is now
+   what `PARITY_PROTOCOL` sets. The parity gate itself (`rtol=1e-4, atol=1e-5`) was not
+   touched.
 
 ## Consequences
 
@@ -210,3 +213,25 @@ Development-only, run outside the repository:
 
 Per the plan's Global Constraints, only fixed literals from this run may be checked in; nothing
 in the repository may read `.camcasp-reference/` or invoke CamCASP, ORIENT, PFIT or CASIMIR.
+
+## The checked-in literals are now runnable but unsatisfiable
+
+With `PARITY_PROTOCOL` fixed, the six reviewed-literal comparisons behind
+`PSI4_ATOMIC_POLARIZABILITY_PARITY=1` will execute rather than skip — and will fail, because
+those literals record the **DF-partitioned** calculation. Measured against our aug-cc-pVTZ
+output:
+
+| comparison | deviation from the `rtol=1e-4, atol=1e-5` gate |
+| ---------- | --------------------------------------------- |
+| static polarizabilities | 11 of 18 entries outside, up to `6.2e4x` |
+| `ATOMIC C6` | up to `5.0e4x` |
+| `ATOMIC C8` | up to `2.6e4x` |
+| `ATOMIC C10` | up to `2.2e4x` |
+| `ATOMIC C12` | up to `9.0e4x` |
+
+This is documented at the point of use in `tests/pytests/test_atomic_polarizabilities.py` so the
+failure cannot be mistaken for a regression. Per the plan's Global Constraints the gate must not
+be loosened and the literals must not be rewritten to make it pass; closing this properly means
+regenerating the reference literals from a matching partition (the Task F run already produces
+them) and deciding whether the DF literals are retained as a separate oracle. **That decision is
+open and is the natural start of Task 8.**

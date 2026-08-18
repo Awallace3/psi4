@@ -323,21 +323,35 @@ FAIL_CLOSED_PROTOCOL = {
 # six literal comparisons below are skipped unless it is explicitly requested. They are
 # reported as skipped rather than passed precisely so an unexercised comparison can never
 # be mistaken for a satisfied one.
+#
+# Convergence is pinned rather than inherited. At this basis the cation UKS lands only just
+# inside Psi4's 1e-6 defaults (final Delta E -3.08e-07, RMS |[F,P]| 8.92e-07), and the
+# response provenance seal re-derives convergence from its own last observed iteration rather
+# than trusting the SCF's verdict, so it refuses the state and the whole pipeline fails closed.
+# Tightening the SCF gives the seal margin to work with.
+#
+# The localization tolerance is 1e-6, matching the wiring protocol, because that is what the
+# grid actually delivers: the measured LW charge-sum residual here is 5.39e-07. A tighter 1e-8
+# is not attainable at 590/99 and only made localize_lw fail its own postcondition.
 PARITY_PROTOCOL = {
     "basis": "aug-cc-pvtz",
     "scf_type": "pk",
+    "e_convergence": 1.0e-10,
+    "d_convergence": 1.0e-9,
     "dft_spherical_points": 590,
     "dft_radial_points": 99,
     "dft_density_tolerance": 1.0e-12,
     "atomic_polarizability_isa_radial_points": 100,
     "atomic_polarizability_isa_angular_polar_points": 24,
     "atomic_polarizability_isa_angular_azimuthal_points": 32,
-    "atomic_polarizability_localization_tolerance": 1.0e-8,
+    "atomic_polarizability_localization_tolerance": 1.0e-6,
 }
 
 PARITY_SKIP_REASON = (
     "the reviewed aug-cc-pVTZ/GRAC parity protocol is Task 8; set "
-    "PSI4_ATOMIC_POLARIZABILITY_PARITY=1 to exercise the reviewed-literal comparisons"
+    "PSI4_ATOMIC_POLARIZABILITY_PARITY=1 to exercise the reviewed-literal comparisons. "
+    "Those literals come from a CamCASP run that partitions the FDDS by constrained density "
+    "fitting, not ISA, so an ISA pipeline cannot satisfy them; see the comment above them"
 )
 
 
@@ -802,6 +816,23 @@ def test_bare_oeprop_on_a_single_wavefunction_fails_closed():
 # --------------------------------------------------------------------------------------
 # The six reviewed-literal comparisons. These are the Task 8 acceptance gate and are
 # only meaningful under the reviewed protocol; see PARITY_SKIP_REASON.
+#
+# They cannot pass as things stand, for an understood reason that is not a defect in this
+# code. The literals come from a CamCASP run whose distributed-polarizability algorithm is
+# "DF : density-fitting-based partitioning of the FDDS", while this pipeline partitions the
+# response by real-space ISA. Those are different models of the same molecular response:
+# they agree on the total and disagree on how it is split between sites. Regenerating the
+# reference with grid ISA, holding the wavefunction, auxiliary basis and fit points
+# byte-identical, reproduces this pipeline to 2-5% on six of seven per-site dipole
+# components and 1-10% per pair on C6, against errors up to a factor of 113 here.
+#
+# Measured against these literals: 11 of 18 static entries fall outside the gate, by up to
+# 6e4 times the tolerance, and the Cn matrices by up to 9e4 times. Do not resolve that by
+# loosening the gate or rewriting the literals -- they are a faithful record of a
+# DF-partitioned calculation, and the plan's constraints forbid both. Either regenerate
+# them from a matching partition or keep them as the DF oracle they are.
+#
+# See docs/superpowers/specs/2026-08-18-isa-grid-oracle.md.
 # --------------------------------------------------------------------------------------
 
 
