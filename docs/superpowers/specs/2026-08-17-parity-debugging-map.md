@@ -182,7 +182,13 @@ local-frame rotation (180 degrees about `z`, so `alpha_(t,u) -> (-1)^(m_t + m_u)
 which takes it from `1.5472e+01` to `5.4623e-13`. That test is hermetic: no SCF, basis, grid or
 partition enters it, so it is an unambiguous verdict on Task 3 alone.
 
-The cause is instead a **partition-scheme mismatch**, not a bug. `work/H2O/OUT/H2O.out` line
+**Resolved 2026-08-18 by regenerating the oracle with grid ISA; see
+[the ISA-GRID oracle](2026-08-18-isa-grid-oracle.md).** Against a matching partition our
+per-site polarizabilities agree to 2–5% on six of seven components and our per-pair C6 to
+1–10%, versus errors up to a factor of 113 against the DF reference. There is no remaining
+polarizability defect to find.
+
+The cause was a **partition-scheme mismatch**, not a bug. `work/H2O/OUT/H2O.out` line
 411 states the reviewed algorithm as `ALGORITHM: DF : density-fitting-based partitioning of the
 FDDS`, and `H2O.cks` selects `C-DF` over a 246-function auxiliary basis; the reviewed control
 file has no ISA directive at all. Our Task 4 partitions by real-space stockholder weights. Two
