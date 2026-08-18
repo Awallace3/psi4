@@ -1,0 +1,250 @@
+# ISA Partition as a Standalone `oeprop` Method
+
+Status: **draft, pending the decisions in [Open decisions](#open-decisions)**.
+Companion to `plans/2026-07-31-native-camcasp-parity.md` and
+[the parity debugging map](2026-08-17-parity-debugging-map.md).
+
+## Objective as stated
+
+> Implement the ISA partition as another `oeprop` method in Psi4, to then pass into the
+> atomic-polarizability/C6 code, so we can isolate the localization discrepancy and reach
+> nearly 100% agreement on both polarizabilities and C6 coefficients.
+
+Two measurements taken while scoping this spec change what "isolate the localization
+discrepancy" should mean. Both are recorded below because they redirect the work.
+
+## Finding 1: the LW localization is already exact — it is not the discrepancy
+
+The reviewed CamCASP tree contains **both ends of the localization step as files**:
+
+| file | role |
+| ---- | ---- |
+| `work/H2O/H2O_NL4_000.pol` | the nonlocal site-pair response, ranks 0–4, 25x25, all 9 ordered pairs — the *input* to localization |
+| `work/H2O/H2O.temp000` | the ORIENT script: `Limit all rank 3`, then `Localise LW test 1e-7 Limit 3` |
+| `work/H2O/H2O_L3_000.pol` | the localized L3 model, 15x15 per site — the *output* of localization |
+
+That makes Task 3 testable **hermetically**: feed the reviewed nonlocal model into our own
+`localize_lw` and compare against the reviewed localized model. No SCF, no basis, no grid,
+no partition enters the comparison, so the result is an unambiguous verdict on Task 3 alone.
+The existing `_atomic_polarizability_localize_lw` binding already accepts arbitrary
+16x16 rank-0-through-3 blocks plus positions and bonds, so no new code was needed.
+
+Measured 2026-08-18, truncating rank 4 exactly as ORIENT's `Limit all rank 3` does:
+
+| site | max abs difference over all 15x15 entries |
+| ---- | ----------------------------------------- |
+| `O`  | `7.4e-13` |
+| `H1` | `5.5e-13` (after the local-frame sign below) |
+| `H2` | `5.1e-13` |
+
+`H1` initially showed `1.5e+01`. That is not an error: the ORIENT log states H1's local axes
+are the parent axes **rotated 180 degrees about z** (`p_x = -1, p_y = -1, p_z = +1`), applied
+after localization by `Edit H2O / #include H2O.axes`, while `O` and `H2` local axes coincide
+with the parent. Under that rotation a real spherical harmonic `lm{c,s}` picks up `(-1)^m`, so
+`alpha_(t,u) -> (-1)^(m_t + m_u) alpha_(t,u)`. Applying exactly that sign pattern takes H1
+from `1.5472e+01` to `5.4623e-13` — confirming both the localization and the frame convention.
+
+**Conclusion: Task 3 reproduces ORIENT's Lillestolen–Wheatley localization to `~1e-12` on
+every one of the 675 tensor entries.** It cannot be the source of the site misdistribution,
+and the localization does not need to be isolated — it is already settled.
+
+This also *retires* the interpretation in the debugging map that the gap "lives in the ISA
+partition (Task 4) or the LW localization (Task 3)". It lives in Task 4, exclusively.
+
+## Finding 2: the reviewed oracle does not use ISA at all
+
+`work/H2O/OUT/H2O.out` line 411 states the distributed-polarizability algorithm outright:
+
+```
+ Distributed polarizability calculation
+ ALGORITHM: DF : density-fitting-based partitioning of the FDDS
+```
+
+and `work/H2O/H2O.cks` selects `C-DF` ("For unconstrained DF use: DF"), `DF with
+constraints`, `DF-TYPE-MONOMER NN`, over a 246-function Cartesian `MC`-type auxiliary basis.
+The reviewed control file `work/H2O/H2O.clt` contains **no ISA directive**; it is a plain
+`Run-type properties` job. (`Initialized stockholder atoms = T` on line 93 refers to the
+ground-state/DMA machinery, not to the response partition.)
+
+For contrast, CamCASP's *actual* ISA-Pol path — present in the runtime as
+`methods/isa-pol-from-isa-A` and exercised by
+`examples/properties/H2O-wxhole` — requires an `ISA-Basis`, an `AtomAux-Basis`, a converged
+ISA-A step, and emits an `H2O_atoms.ISA` shape-function file. None of those exist in the
+reviewed tree.
+
+So the reviewed oracle partitions the FDDS by **constrained density fitting onto atom-centred
+auxiliary functions**, an auxiliary-basis-space partition, while our Task 4 partitions it by
+**real-space iterated-stockholder weights**. These are two different, both legitimate,
+distributions of the same molecular response. They agree on the total — which is exactly what
+we observe, conservation `0.955` — and disagree on how it is split between sites.
+
+The observed signature matches this mechanism rather than a bug: hydrogen's diffuse auxiliary
+functions own out-of-plane response that a real-space stockholder weight assigns to oxygen,
+which is why `alpha_xx` agrees on both sites while `yy` and `zz` are misallocated.
+
+**Consequence: improving or exposing the ISA partition cannot by itself reach agreement with
+this oracle, because this oracle is not an ISA calculation.** Any plan that measures ISA
+against `H2O_ref_wt4_L3_*.pol` is comparing two different physical models.
+
+## What this means for the objective
+
+The objective decomposes into two separable goals that were previously conflated:
+
+1. **Inspectability** — expose the ISA partition as a first-class, standalone Psi4 property so
+   it can be computed, published, printed and validated without running the whole response
+   pipeline, and so it can be handed to the polarizability/C6 code as an explicit input.
+   This is worth doing regardless of Finding 2 and is what the request literally asks for.
+2. **Parity** — reach ~100% agreement on polarizabilities and C6. This now requires the
+   *partition schemes to match*, which Finding 2 says they currently do not. See the options
+   in [Open decisions](#open-decisions).
+
+Goal 1 is a prerequisite for diagnosing goal 2 either way: with ISA published as its own
+property we can compare partition observables (populations, charges, shape functions,
+ISA-DMA multipoles) against a matching oracle instead of inferring partition error from a
+polarizability four stages downstream.
+
+## Existing state
+
+The ISA partition is already implemented and converging; it is simply not addressable.
+
+- `psi4/src/psi4/libmints/isa_weights.cc` (1119 lines) — real-space iterated stockholder:
+  Gauss–Legendre mapped radial quadrature, product spherical angular grid, PCHIP log-profile
+  interpolation, exponential tail fitting, log-sum-exp promolecule, Bragg–Slater radii.
+- `compute_isa_weights(context, ISAOptions)` returns `ISAWeights`, whose `partition_weights_`
+  are **private** and reachable only by `friend class ISAPolResponseProvider`.
+- `ISADiagnostics` already carries `atomic_populations`, `radial_nodes`, `log_profiles`,
+  `tail_join_radii`, `tail_alphas`, convergence residuals and a `context_digest`.
+- Options exist: `ATOMIC_POLARIZABILITY_ISA_{RADIAL_POINTS, ANGULAR_POLAR_POINTS,
+  ANGULAR_AZIMUTHAL_POINTS, MAX_ITERATIONS, CONVERGENCE}`.
+- Test-only bindings exist (`_atomic_polarizability_compute_isa_weights`,
+  `_atomic_polarizability_test_isa*`), but nothing publishes ISA results as Psi4 variables and
+  there is no `oeprop` task.
+
+The blocking structural fact: `ISAWeights` is **bound to a sealed `FrozenResponseContext`**
+(its ordered response grid, sites and frozen AO density). A standalone `oeprop` method must
+therefore either construct such a context from a plain wavefunction, or the partition must be
+refactored to accept a grid + density directly. That is the main design decision below.
+
+## Proposed design (Goal 1)
+
+### Task A — decouple the partition from the response context
+
+Introduce a narrow input struct so the stockholder solver does not require a sealed response
+context:
+
+```cpp
+struct PSI_API ISAPartitionInput {
+    std::vector<SitePosition> sites;
+    std::vector<int> atomic_numbers;
+    std::vector<SitePosition> points;     // ordered output grid
+    std::vector<double> weights;          // integration weights, same order
+    std::vector<double> density;          // molecular density at points
+    double formal_electron_count{};
+};
+```
+
+`compute_isa_partition(const ISAPartitionInput&, const ISAOptions&) -> ISAPartition`
+becomes the primitive. `compute_isa_weights(context, options)` is reimplemented as a thin
+adapter over it, preserving the existing seal and the `friend` access path so Task 4 output is
+bit-identical. The `solve()` core in `isa_weights.cc` already takes exactly these arguments,
+so this is a signature extraction rather than new numerics.
+
+**Invariant to assert:** for the wiring protocol, the partition weights obtained through the
+new primitive equal those obtained through the existing sealed path to `0.0` exactly.
+
+### Task B — the `oeprop` task
+
+Register `ISA_CHARGES` (name pending the decision below) in `OEProp::compute()`, dispatching
+to `OEProp::compute_isa_partition()`, following `compute_mbis_multipoles` as the structural
+model: build a `MolecularGrid` from `ISA_*_POINTS` options, evaluate the density on it, call
+the primitive, publish, print.
+
+Published `wfn_` variables (final list pending the decision below):
+
+| variable | shape | content |
+| -------- | ----- | ------- |
+| `ISA CHARGES` | natom x 1 | `Z_a - N_a`, the ISA atomic charges |
+| `ISA POPULATIONS` | natom x 1 | integrated `N_a` |
+| `ISA SHAPE FUNCTION NODES` | ragged | per-atom radial nodes |
+| `ISA SHAPE FUNCTION LOG VALUES` | ragged | per-atom `log w_a(r)` |
+| `ISA TAIL PARAMETERS` | natom x 2 | join radius, exponent |
+| `ISA ITERATIONS` (scalar) | — | fixed-point iteration count |
+| `ISA MAX OVERLAP RESIDUAL` (scalar) | — | convergence residual |
+
+Ragged arrays do not fit `set_array_variable`; the shape functions are therefore proposed as
+`natom` separate variables (`ISA SHAPE FUNCTION 0`, ...) or as a single padded matrix. This is
+a decision point.
+
+**Fail-closed behaviour, matching the rest of this pipeline:** if the fixed point does not
+converge, if pointwise partition unity fails, or if the integrated population does not
+conserve, `compute_isa_partition` throws before publishing anything. No partially populated
+variable is ever visible.
+
+### Task C — accept an externally supplied partition
+
+Add a documented, non-test entry point so a partition computed by Task B (or supplied by the
+user) can be handed to the response provider, replacing the current
+`ISAWeights::create_test_only`. This is what "pass into this atomic-polarizability/C6 code"
+requires, and it is also what makes a **partition A/B test** possible: run the entire
+downstream pipeline twice, changing only the partition, with every other stage fixed.
+
+### Task D — Python driver surface
+
+Extend `psi4/driver/procrouting/atomic_polarizability.py` with an `isa_partition(molecule,
+...)` entry, and allow `atomic_polarizabilities(..., partition=...)` to consume one.
+
+## Validation plan
+
+Because the reviewed oracle is not an ISA calculation, ISA needs oracles of its own. In
+priority order:
+
+1. **Analytic.** A promolecule of two spherical Gaussians has a closed-form stockholder
+   partition; ISA must reproduce it. The existing `test_isa_gaussian_fixed_point` already
+   covers the fixed point and can be lifted to the public path.
+2. **Partition-of-unity and conservation.** `sum_a w_a(r) = 1` pointwise; `sum_a N_a = N`;
+   `sum_a q_a = Q`. These need no external reference and are already enforced internally.
+3. **Grid convergence.** ISA charges stable to `1e-5` under refinement of both the DFT grid
+   and the ISA grid. Note the recorded prerequisite: the **DFT grid, not the ISA grid, was
+   binding** in earlier tests — `302/50` sat at `1.2e-5` regardless of ISA density, and only
+   `590/99` came inside `1e-6`.
+4. **Literature.** Published ISA charges for H2O (and the `CO2_ISA.mom` /
+   `formamide_ISA.mom` reference multipoles in the runtime examples) as fixed checked-in
+   literals.
+5. **A matching CamCASP oracle**, if the decision below calls for one.
+
+Constraints inherited unchanged from the plan's Global Constraints: production code and pytest
+must not invoke, clone, access or read CamCASP, ORIENT, PFIT, CASIMIR or `.camcasp-reference/`;
+no ORIENT GPLv3 source, comments, structure or control flow may be copied; mismatches are
+investigated by stage invariant and tolerances are not loosened.
+
+## Acceptance criteria
+
+- [ ] `compute_isa_partition` primitive exists; sealed-path weights unchanged (exact `0.0`).
+- [ ] `oeprop` task computes and publishes the ISA partition from a plain wavefunction, and
+      fails closed on non-convergence.
+- [ ] The response provider accepts an externally supplied partition through a non-test API.
+- [ ] Partition-of-unity, population and charge conservation asserted in pytest.
+- [ ] Grid-convergence test at the documented `590/99` prerequisite.
+- [ ] A partition A/B harness measures the per-site `alpha` split as a function of partition
+      alone, with all other stages fixed.
+- [ ] Full `-m mints` suite still green (currently 381 passed, 6 skipped).
+
+## Open decisions
+
+These are the questions that need answers before this spec is executable; they are asked of
+the user directly and this section will be replaced by the resolutions.
+
+1. **Parity target.** Given the reviewed oracle uses C-DF partitioning, do we (a) implement
+   C-DF partitioning to match the existing oracle, (b) regenerate a CamCASP ISA-Pol reference
+   so our ISA implementation has a matching oracle (the runtime, `isa-pol.py` and the
+   `isa-pol-from-isa-A` method templates are all present), or (c) treat ISA as a deliberately
+   different model and drop the ~100% target against this oracle?
+2. **ISA flavour.** CamCASP's ISA is **ISA-A**: shape functions expanded in an auxiliary
+   s-function basis (`MAX-L 0`, 7 primitives for O in the example). Ours is real-space on a
+   radial/angular grid. If we want to compare against any CamCASP ISA output, do we match
+   ISA-A, or compare only basis-independent observables (charges, populations)?
+3. **Published surface.** Which of the proposed variables are actually wanted, and how should
+   the ragged shape functions be published?
+4. **Naming.** `ISA_CHARGES` as the `oeprop` task name and `ISA_*` option prefix, versus
+   reusing the existing `ATOMIC_POLARIZABILITY_ISA_*` keywords for a property that is no
+   longer polarizability-specific.
