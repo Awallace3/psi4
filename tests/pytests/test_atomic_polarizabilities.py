@@ -533,7 +533,11 @@ def _published(wfn):
 def _run_protocol(protocol):
     psi4.core.clean_variables()
     psi4.core.be_quiet()
-    psi4.set_options(protocol)
+    # The partition is set explicitly on every protocol rather than inherited. Psi4 options
+    # are global and sticky, so a protocol that ran under one partition would otherwise leak
+    # it into the next one in the same session, and which arm produced a given comparison
+    # would depend on test ordering.
+    psi4.set_options({"atomic_polarizability_partition": "ISA", **protocol})
     molecule = psi4.geometry(REVIEWED_GEOMETRY)
     wfn = native_driver.atomic_polarizabilities(molecule=molecule)
     return _published(wfn)
@@ -549,6 +553,20 @@ def parity_published():
     if os.environ.get("PSI4_ATOMIC_POLARIZABILITY_PARITY") != "1":
         pytest.skip(PARITY_SKIP_REASON)
     return _run_protocol(PARITY_PROTOCOL)
+
+
+@pytest.fixture(scope="module")
+def parity_published_cdf():
+    """The same protocol partitioned by constrained density fitting instead.
+
+    Only the partition keyword differs from :func:`parity_published`. Everything the two
+    arms share -- geometry, orbital basis, grid, GRAC protocol, response kernel, LW
+    localization, WSM refinement, dispersion recoupling -- is the same code on the same
+    inputs, which is what makes the pair of comparisons attributable to the partition.
+    """
+    if os.environ.get("PSI4_ATOMIC_POLARIZABILITY_PARITY") != "1":
+        pytest.skip(PARITY_SKIP_REASON)
+    return _run_protocol({**PARITY_PROTOCOL, "atomic_polarizability_partition": "CDF"})
 
 
 @pytest.mark.scf
@@ -1010,9 +1028,20 @@ def test_bare_oeprop_on_a_single_wavefunction_fails_closed():
 # --------------------------------------------------------------------------------------
 
 DF_XFAIL_REASON = (
-    "the DF literals record a constrained-density-fitting partition of the FDDS; this "
-    "pipeline partitions in real space (ISA), so the two models split the same molecular "
-    "response differently. Not a defect -- see ISA_GRID_* for the matching oracle"
+    "measured under PARTITION=CDF on 2026-08-19, at the reviewed protocol and the "
+    "reference's own auxiliary basis, penalty and localisation weights: the worst "
+    "per-component deviation from the DF literals is 3.7 percent on the static dipole "
+    "block (O alpha_yy, ours 5.549905 against 5.762074) and 4.0 / 20.1 / 31.1 / 41.9 "
+    "percent on C6 / C8 / C10 / C12. That misses rtol=1e-4 by four orders of magnitude, "
+    "and the residual is not in the partition: switching to the oracle's own partition "
+    "cut the dipole-block disagreement from 15.3 to 3.7 percent while leaving the "
+    "rank-growing Cn deficit essentially where the real-space arm has it against its own "
+    "matching oracle (9.9 / 25.5 / 35.9 / 45.6 percent). Two partition-independent "
+    "residuals remain, both measured: a uniform 2.9 percent molecular-total deficit "
+    "(site-summed isotropic dipole 9.316812 against 9.596857, ratio 0.970819, and the two "
+    "oracles agree with each other on that total to 0.11 percent) which sits upstream of "
+    "the partition, and a rank-2/rank-3 site-block deficit which sits downstream of it. "
+    "See CDF_* below for the measured band, and the plan's Task G record"
 )
 
 #: Bands against the ISA-GRID oracle. Every one is set from measurement at PARITY_PROTOCOL
@@ -1040,6 +1069,33 @@ ISA_DISPERSION_BANDS = {
     "ATOMIC C8": 0.27,
     "ATOMIC C10": 0.37,
     "ATOMIC C12": 0.47,
+}
+
+#: Bands against the DF oracle under ``PARTITION=CDF``, the arm whose partition *is* the
+#: DF oracle's. Set from measurement at PARITY_PROTOCOL on 2026-08-19, and kept as bands
+#: rather than promoted to the plan's ``rtol=1e-4`` gate because the comparison misses that
+#: gate; see :data:`DF_XFAIL_REASON` for the measured numbers and the diagnosis.
+#:
+#:  * dipole block, static and dynamic: worst is O alpha_yy at 0.0342 relative once the
+#:    absolute floor absorbs H alpha_xz. Every other component is inside 0.034, and the
+#:    same component is worst at every frequency, so the static band bounds all eleven.
+#:  * the absolute floor is 1.5e-2 rather than TENSOR_ATOL, and one component needs it:
+#:    H alpha_xz, ours 0.018584 against 0.005762. That is a near-zero out-of-plane
+#:    component where 1.3e-2 absolute *is* the whole quantity, so a relative band on it
+#:    would be measuring nothing. It is deliberately still inside the discriminating set
+#:    of the anti-conflation test below, where it separates the two oracles by 48x.
+#:  * the C6 band is much tighter than the real-space arm's (0.045 against 0.11) and the
+#:    C8/C10/C12 bands are barely tighter (0.21/0.32/0.43 against 0.27/0.37/0.47). That
+#:    contrast is the measurement: the partition explains the dipole block and C6, and
+#:    explains almost none of the higher-rank deficit.
+CDF_STATIC_BAND = 0.04
+CDF_DYNAMIC_BAND = 0.04
+CDF_BAND_ATOL = 1.5e-2
+CDF_DISPERSION_BANDS = {
+    "ATOMIC C6": 0.045,
+    "ATOMIC C8": 0.21,
+    "ATOMIC C10": 0.32,
+    "ATOMIC C12": 0.43,
 }
 
 
@@ -1090,23 +1146,42 @@ def test_parity_dispersion_coefficients_match_the_isa_oracle(parity_published, n
 
 
 @pytest.mark.scf
-def test_parity_output_is_closer_to_the_isa_oracle_than_to_the_df_oracle(parity_published):
-    """Direction of effect, asserted without reference to any band.
+@pytest.mark.parametrize(
+    "arm,near,far",
+    [
+        ("isa", ISA_GRID_STATIC_POLARIZABILITIES, DF_STATIC_POLARIZABILITIES),
+        ("cdf", DF_STATIC_POLARIZABILITIES, ISA_GRID_STATIC_POLARIZABILITIES),
+    ],
+)
+def test_each_partition_arm_lands_on_its_own_oracle_and_not_the_other(
+    parity_published, parity_published_cdf, arm, near, far
+):
+    """Direction of effect, asserted without reference to any band, on both arms.
 
     A band can always be widened; this cannot. On every component where the two oracles
-    actually disagree -- i.e. where the partition is what is being measured -- the published
-    value must be closer to the ISA-GRID model, and by a wide margin. That is the whole
-    claim that the partition, and not a defect, accounts for the difference between them.
+    actually disagree -- i.e. where the partition is what is being measured -- the value
+    published under a given partition must be closer to *that partition's* oracle, and by
+    a wide margin. Running it both ways is what makes the claim two-sided: it is no longer
+    merely that the real-space arm is nearer the real-space oracle, but that swapping the
+    partition swaps which oracle the output lands on, with the whole rest of the pipeline
+    held fixed. That is the test the two-oracle confusion would have failed.
 
-    The discriminating set is pinned rather than derived loosely, so it cannot quietly shrink
-    to the handful of components that happen to agree. It is the out-of-plane and
-    off-diagonal response: O yy/zz and H xz/yy/zz. The xx components are deliberately outside
-    it -- the two oracles agree there to better than one percent, so which one is nearer is
-    noise, and DF is in fact marginally nearer on H xx (0.035 against 0.048).
+    The discriminating set is pinned rather than derived loosely, so it cannot quietly
+    shrink to the handful of components that happen to agree. It is the out-of-plane and
+    off-diagonal response: O yy/zz and H xz/yy/zz. The xx components are deliberately
+    outside it -- the two oracles agree there to better than one percent, so which one is
+    nearer is noise.
+
+    Measured margins on 2026-08-19: the real-space arm is 7.9x to 82x nearer its oracle,
+    and the auxiliary arm 8.8x to 49x nearer its own.
     """
-    published = parity_published["ATOMIC POLARIZABILITIES"]
+    published = (parity_published if arm == "isa" else parity_published_cdf)[
+        "ATOMIC POLARIZABILITIES"
+    ]
     isa = np.asarray(ISA_GRID_STATIC_POLARIZABILITIES)
     df = np.asarray(DF_STATIC_POLARIZABILITIES)
+    near = np.asarray(near)
+    far = np.asarray(far)
 
     scale = np.maximum(np.abs(isa), np.abs(df))
     separation = np.divide(np.abs(isa - df), scale, out=np.zeros_like(scale), where=scale > 0.0)
@@ -1122,15 +1197,102 @@ def test_parity_output_is_closer_to_the_isa_oracle_than_to_the_df_oracle(parity_
     }
     assert found == expected, found
 
-    to_isa = np.abs(published - isa)
-    to_df = np.abs(published - df)
+    to_near = np.abs(published - near)
+    to_far = np.abs(published - far)
     for site, component in zip(*np.nonzero(discriminating)):
-        near, far = to_isa[site, component], to_df[site, component]
-        assert far > 3.0 * near, (
-            f"{REFERENCE_ATOM_ORDER[site]} alpha_{labels[component]}: published "
-            f"{published[site, component]:.6f} is {near:.6f} from the ISA-GRID oracle and "
-            f"{far:.6f} from DF -- not the decisive separation the partition should produce"
+        close, distant = to_near[site, component], to_far[site, component]
+        assert distant > 3.0 * close, (
+            f"{arm}: {REFERENCE_ATOM_ORDER[site]} alpha_{labels[component]}: published "
+            f"{published[site, component]:.6f} is {close:.6f} from its own partition's "
+            f"oracle and {distant:.6f} from the other -- not the decisive separation the "
+            f"partition should produce"
         )
+
+
+@pytest.mark.scf
+def test_the_two_oracles_agree_on_the_molecular_total_and_disagree_on_the_split(
+    parity_published, parity_published_cdf
+):
+    """The algebraic reason the two oracles are two partitions and not two answers.
+
+    Both partitions reproduce the same molecular response, so their site-summed isotropic
+    dipole polarizabilities must agree even where their per-site splits do not. Measured:
+    the oracles agree with each other to 0.11 percent while their O/H split differs by
+    18 percent, and both of our arms land on the same total as each other to within a
+    fraction of a percent while landing on different splits. The residual between our
+    total and the oracles' -- 0.9708 of it -- is therefore partition-independent, and this
+    test pins that separation so a partition change cannot be blamed for it later.
+    """
+    def isotropic(published):
+        tensors = published["ATOMIC POLARIZABILITIES"]
+        return float(((tensors[:, 0] + tensors[:, 3] + tensors[:, 5]) / 3.0).sum())
+
+    def oracle_isotropic(literals):
+        tensors = np.asarray(literals)
+        return float(((tensors[:, 0] + tensors[:, 3] + tensors[:, 5]) / 3.0).sum())
+
+    isa_oracle = oracle_isotropic(ISA_GRID_STATIC_POLARIZABILITIES)
+    df_oracle = oracle_isotropic(DF_STATIC_POLARIZABILITIES)
+    assert abs(isa_oracle - df_oracle) / df_oracle < 2.0e-3
+
+    ours_isa = isotropic(parity_published)
+    ours_cdf = isotropic(parity_published_cdf)
+    assert abs(ours_isa - ours_cdf) / ours_cdf < 1.0e-2
+    for ours, oracle in ((ours_isa, isa_oracle), (ours_cdf, df_oracle)):
+        assert 0.96 < ours / oracle < 0.98
+
+    # And the splits genuinely differ, which is the other half of the statement.
+    isa_split = np.asarray(ISA_GRID_STATIC_POLARIZABILITIES)[0, 3]
+    df_split = np.asarray(DF_STATIC_POLARIZABILITIES)[0, 3]
+    assert abs(isa_split - df_split) / df_split > 0.1
+
+
+@pytest.mark.scf
+def test_parity_static_polarizabilities_are_inside_the_measured_cdf_band(parity_published_cdf):
+    """Per-site static tensors under the auxiliary partition against the DF oracle."""
+    np.testing.assert_allclose(
+        parity_published_cdf["ATOMIC POLARIZABILITIES"],
+        np.asarray(DF_STATIC_POLARIZABILITIES),
+        rtol=CDF_STATIC_BAND,
+        atol=CDF_BAND_ATOL,
+    )
+
+
+@pytest.mark.scf
+def test_parity_dynamic_polarizabilities_are_inside_the_measured_cdf_band(parity_published_cdf):
+    np.testing.assert_allclose(
+        parity_published_cdf["ATOMIC DYNAMIC POLARIZABILITIES"],
+        np.asarray(DF_DYNAMIC_POLARIZABILITIES),
+        rtol=CDF_DYNAMIC_BAND,
+        atol=CDF_BAND_ATOL,
+    )
+
+
+@pytest.mark.scf
+@pytest.mark.parametrize(
+    "name,reference",
+    [
+        ("ATOMIC C6", DF_C6),
+        ("ATOMIC C8", DF_C8),
+        ("ATOMIC C10", DF_C10),
+        ("ATOMIC C12", DF_C12),
+    ],
+)
+def test_parity_dispersion_coefficients_are_inside_the_measured_cdf_band(
+    parity_published_cdf, name, reference
+):
+    """Per-pair Cn under the auxiliary partition, where the rank-growing residual lives.
+
+    The C6 band here is 0.045 against the real-space arm's 0.11, and the C12 band is 0.43
+    against 0.47. The partition accounts for the first contrast and almost none of the
+    second, which is the whole diagnostic content of these four numbers.
+    """
+    np.testing.assert_allclose(
+        parity_published_cdf[name],
+        np.asarray(reference),
+        rtol=CDF_DISPERSION_BANDS[name],
+        atol=CDF_BAND_ATOL,
+    )
 
 
 @pytest.mark.scf

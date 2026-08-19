@@ -254,6 +254,23 @@ Decided by the user 2026-08-18.
    against the partition we already implement, and keep C-DF as a follow-on so both CamCASP
    partition schemes are reproducible. The existing DF reference is retained as a second data
    point rather than discarded.
+
+   **Discharged 2026-08-19.** Both halves are done: the ISA-GRID oracle is the acceptance
+   oracle inside a measured band, and C-DF is implemented as the second selectable partition
+   with the DF reference retained and still gated at the plan tolerance as a strict xfail.
+   Neither literal set was rewritten and neither gate was loosened. Two findings from having
+   both arms native, neither of which was reachable with one:
+
+   - the C-DF arm is what proves the two references are two *partitions* of one response
+     rather than two answers: the two oracles agree on the site-summed isotropic dipole
+     polarizability to `0.11` percent while their O/H split differs by 18 percent, and
+     switching one keyword swaps which oracle our output lands on, by factors of 8.8-49 (C-DF
+     arm) and 7.9-82 (real-space arm) on the discriminating components, with the whole rest of
+     the pipeline held fixed;
+   - the residual that remains is *not* the partition. It splits into a uniform `0.971`
+     molecular-total deficit that is identical on both arms against both oracles, and a
+     rank-2/rank-3 site-block deficit that the partition barely moves. Both are now recorded
+     as measured quantities rather than suspected causes.
 2. **Published surface: all four groups** — charges and populations, convergence diagnostics,
    radial shape functions, and ISA-DMA multipoles.
 3. **Plumbing: computed by default, injectable by argument.** The polarizability entry point
@@ -338,11 +355,18 @@ Acceptance literals it produced, for use by Tasks A–E:
 | `H` static `zx` | `-0.64527` |
 | `C6` `(O-O, O-H, H-H)` | `26.48177, 4.14232, 0.65147` |
 
-### Task G — C-DF partitioning — **not needed, stays deferred**
+### Task G — C-DF partitioning — **built 2026-08-19**
 
-Task F showed ISA-GRID closes the gap, so C-DF is not required for parity. The reviewed DF
-reference remains valid; it simply answers a different question. Revisit only if a DF-partitioned
-model is wanted as a deliverable in its own right.
+Superseded. Task F showed ISA-GRID closes most of the dipole-block gap, so C-DF was not required
+for parity — but it *was* wanted as a deliverable in its own right, because it is the only way to
+turn the partition from an implicit property of the implementation into an explicit input and so
+make the partition A/B experiment native on both arms. It is now implemented and switchable
+(`ATOMIC_POLARIZABILITY_PARTITION = ISA | CDF`, default `ISA`, ISA path bit-identical), and the
+reviewed DF reference is reproduced to `0.0368` worst-case on the static dipole block and
+`0.0399` worst-pair on C6 — not to the plan's `rtol=1e-4`, which is missed by four orders of
+magnitude, so the six `DF_*` `xfail(strict=True)` markers stay. The experiment's real payoff is
+that it localises the remaining residual away from the partition entirely: see the Task G record
+in [the plan](../plans/2026-07-31-native-camcasp-parity.md).
 
 ## Validation plan
 

@@ -56,6 +56,7 @@ section is the authoritative record; it is evidence-backed and supersedes the ch
 | 6. Dispersion recoupling | **done, oracle-verified** | All four coefficients within `2.5e-7` relative of the reviewed CASIMIR values; see below. |
 | 7. End-to-end publication | **done** | All seven variables publish from one `OEProp` call on the SCF triple; verified end to end on PBE0/aug-cc-pVDZ. See the Task 7 record below. |
 | 8. Oracle acceptance | **run; dipole block and C6 accepted, higher ranks not** | The full aug-cc-pVTZ/GRAC protocol has now been run end to end. Against the matching ISA-GRID oracle the dipole block agrees to `0.153` worst-case (`H alpha_yy`) and per-pair C6 to `0.099`; C8/C10/C12 sit `0.26`/`0.36`/`0.46` below it. See the Task 8 record below. |
+| G. C-DF partitioning | **built, switchable; DF comparisons still miss the gate** | `ATOMIC_POLARIZABILITY_PARTITION` selects `ISA` or `CDF`, default `ISA`, ISA path bit-identical. Under `CDF` at the reference's own auxiliary basis, penalty and localisation weights the dipole block agrees with the DF oracle to `0.0368` worst-case and per-pair C6 to `0.0399`, but `rtol=1e-4` is missed by four orders of magnitude and the six `xfail(strict=True)` markers stay. The experiment localises the residual: 2.9 percent of it is a partition-independent molecular-total deficit and the rest is the partition-independent rank-2/3 deficit. See the Task G record below. |
 
 Test suite for this feature: **389 passing** under `-m mints`
 (`--ignore=tests/pytests/test_camcasp_reference.py`, which is pre-existing-uncollectable),
@@ -81,6 +82,11 @@ loosened. Instead:
 - the **DF** literals are retained as `DF_*` and their six comparisons are kept at the plan
   gate as `xfail(strict=True)`, so a future C-DF partition (Task G) turns them into a loud
   failure demanding the marker be removed rather than letting them quietly start passing.
+
+*Updated 2026-08-19:* Task G has been built and the six `DF_*` comparisons were rerun under
+`ATOMIC_POLARIZABILITY_PARTITION = CDF`. They still miss `rtol=1e-4`, by four orders of
+magnitude, so the `xfail(strict=True)` markers **stay**. See the Task G record below for the
+measured per-component deviations and what they localise the residual to.
 
 The extraction procedure is validated rather than asserted: run on the reviewed DF model it
 reproduces the previously reviewed 33x6 literal table to **exactly `0.0`**, and the Cn
@@ -141,6 +147,103 @@ rank cutoff pruning rank-3 columns, and the anchor penalty pulling only the dipo
 **Bands now pinned in pytest** (measured, at the point of use): dipole block `0.16` static and
 dynamic with `atol=1e-5`; per-pair `C6 0.11`, `C8 0.27`, `C10 0.37`, `C12 0.47`. They are
 per-coefficient rather than one number precisely so the C6 comparison keeps testing something.
+
+### Task G record (2026-08-19) — C-DF partitioning built; the residual is not the partition
+
+The auxiliary-space (C-DF) partition is implemented and switchable
+(`ATOMIC_POLARIZABILITY_PARTITION = ISA | CDF`, default `ISA`). Both CamCASP partition schemes
+are now reproducible in this pipeline, which makes the partition A/B experiment native on both
+arms — and that experiment is what this record reports.
+
+**The reviewed reference's own protocol was used, not an approximation of it.** The auxiliary
+basis is the reference's own: `aug-cc-pVTZ-RI` built **Cartesian**, verified at
+`nbf = 246, nshell = 56, puream = false` with per-centre shell counts
+`O {s:9, p:7, d:6, f:4, g:2}`, `H {s:5, p:4, d:3, f:2}` — exactly the reference's recorded
+`Size = 246 / Shells = 56 / Cartesian`. The charge condition is a **finite quadratic penalty**
+of weight `1.0`, not a hard Lagrange constraint, and the localisation form is the inter-site
+one at weight `5.0e-4`. Measured on the assembled normal matrix: condition number
+**`7.7966e+12`**, reproducing the independently recorded `7.798e12` to four digits; all 246
+spectral directions retained, no truncation; 67 of 246 auxiliary functions carry charge.
+
+**The sign of the localisation weight is now settled empirically.** The published prose and the
+published equation disagree about which sign localizes. The normal matrix is
+`(1 - eta) J + eta K_self`, a convex combination of two positive semidefinite matrices only for
+`0 <= eta <= 1`; at `eta = -5.0e-4` the assembled matrix is **indefinite and the solver fails
+closed**. So `eta = +5.0e-4` with `J - eta K_inter` is the only usable reading, and it is the
+one attested in the code.
+
+**Static dipole block** under `PARITY_PROTOCOL` + `PARTITION=CDF`, against the DF oracle:
+
+| site | comp | ours (CDF) | DF | relative deviation |
+| ---- | ---- | ---------- | -- | ------------------ |
+| `O` | `xx` | `6.852111` | `7.043490` | `0.0272` |
+| `O` | `yy` | `5.549905` | `5.762074` | `0.0368` |
+| `O` | `zz` | `5.384899` | `5.583657` | `0.0356` |
+| `H1` | `xx` | `1.568789` | `1.573675` | `0.0031` |
+| `H1` | `yy` | `1.569245` | `1.617427` | `0.0298` |
+| `H1` | `zz` | `1.943726` | `2.009573` | `0.0328` |
+| `H1` | `xz` | `0.018584` | `0.005762` | `2.225` (absolute `1.28e-2`) |
+
+`xy` and `yz` are exactly `0.0` on every site in both, as symmetry requires. The dynamic block
+is worst at the same component at every frequency, so the static band bounds all eleven.
+
+**Per-pair dispersion** against the DF oracle: `C6` `0.0399`, `C8` `0.2015`, `C10` `0.3107`,
+`C12` `0.4193` worst-pair relative deviation.
+
+**Verdict on the six `DF_*` comparisons at `rtol=1e-4, atol=1e-5`: all six FAIL.** The markers
+were not removed and the gate was not widened. What the run *does* establish is where the
+residual is not:
+
+1. **The partition is reproduced.** Switching to the oracle's own partition cut the worst
+   dipole-block disagreement from `0.153` (real-space arm against its own matching ISA-GRID
+   oracle) to `0.0368`, a factor of 4.2, and cut worst-pair `C6` from `0.099` to `0.0399`. On
+   the eight components where the two oracles separate by more than 5 percent, the `CDF` arm is
+   **8.8x to 49x** nearer the DF oracle; the `ISA` arm is 7.9x to 82x nearer ISA-GRID. Swapping
+   one keyword swaps which oracle the output lands on, with the rest of the pipeline held
+   fixed. That is now a two-sided test rather than a one-sided one.
+2. **Residual 1: a uniform 2.9 percent molecular-total deficit, upstream of the partition.**
+   Site-summed isotropic static dipole polarizability, all four remeasured on 2026-08-19 at
+   `PARITY_PROTOCOL`: `CDF` arm `9.316812`, `ISA` arm `9.324909`, DF oracle `9.596857`,
+   ISA-GRID oracle `9.607417`. Ratios: `CDF`/DF `0.970819`, `ISA`/ISA-GRID `0.970595`,
+   `CDF`/ISA-GRID `0.969752`, `ISA`/DF `0.971663` — the same `0.971` in all four combinations,
+   while the two oracles agree with each other on that total to `0.11` percent. The same `0.971` on both arms against both oracles means
+   this deficit is a property of `G(i omega)` or the response kernel, not of how `G` is
+   distributed. Two untested candidates, both recorded in the C-DF research: the reference
+   density-fitted the two-electron integrals entering its own propagator (`DF-integrals` with
+   no constraints) while we use exact integrals, and it is not established from the run record
+   whether its distributed block used `ALDA` or `ALDA+CHF` against our fixed 25/75 kernel.
+3. **Residual 2: the rank-growing `Cn` deficit, downstream of the partition.** Worst-pair
+   deviations under `CDF` against DF are `0.040 / 0.202 / 0.311 / 0.419` for `C6`–`C12`; the
+   real-space arm's against ISA-GRID are `0.099 / 0.255 / 0.359 / 0.456`. The partition moved
+   `C6` by a factor of 2.5 and moved `C8`–`C12` by almost nothing. This confirms the Task 8
+   finding *by construction* rather than by inference: the rank-2/rank-3 site blocks are
+   systematically small under **both** partitions, so the cause is in Task 5 (`refine_wsm`) or
+   in the rank-3 truncation, exactly where Task 8 put it.
+
+**What is pinned in pytest.** A measured `CDF_*` band against the DF oracle — dipole block
+`0.04` static and dynamic with `atol=1.5e-2`, per-pair `C6 0.045`, `C8 0.21`, `C10 0.32`,
+`C12 0.43` — plus the two-sided anti-conflation test and a test that the two oracles agree on
+the molecular total while disagreeing on the split. The `atol` of `1.5e-2` exists for exactly
+one component, `H alpha_xz`, where `1.3e-2` absolute *is* the whole quantity; it stays inside
+the discriminating set, where it separates the two oracles by 49x.
+
+**Cost note.** The `ISA` arm is bit-identical to before, verified by running the pinned wiring
+protocol on both sides of the change and comparing all seven published arrays with
+`np.array_equal`: **all seven bit-identical**. The `CDF` arm skips the real-space partition
+entirely rather than computing and discarding it.
+
+**One gate had to be re-derived, and it is not a comparison tolerance.** `localize_lw`'s
+charge-sum postcondition is `max_{a,t} |sum_b alpha[a,b][t][0]|`, and since
+`alpha[a,b][t][0] = 4 B[a,t,:] G B[b,00,:]^T`, summing over `b` contracts `B` against
+`sum_b B[b,00,:]` — which *is* the fit's charge residual `sum_k q_k d_k^{ia}`. The
+postcondition is therefore linear in that residual: under the auxiliary partition it measures
+the partition's charge penalty, not whether the response grid has converged, and holding it at
+real-space precision rejects the model rather than a defect. Measured at the reviewed protocol:
+fit charge residual `4.57e-05`, propagating to an LW charge-sum residual of `6.73e-04`, an
+amplification of `14.7`. The auxiliary arm therefore gates at the user keyword or `100x` the
+measured fit residual, whichever is larger, and both numbers are published in the pipeline's
+diagnostics. Every other LW residual is unaffected: off-site `6.87e-09`, reciprocity exactly
+`0`, molecular-sum `4.55e-13`.
 
 ### Task 7 record
 
