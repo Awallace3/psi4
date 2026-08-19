@@ -20,6 +20,10 @@
 #include <array>
 #include <cmath>
 #include <complex>
+#include <cstdint>
+#include <map>
+#include <set>
+#include <unordered_map>
 #include <iomanip>
 #include <initializer_list>
 #include <limits>
@@ -6060,6 +6064,1162 @@ double direct_anisotropic_energy(const std::vector<double>& product,
     // E_disp = -(1/2 pi) int dw sum T_{tu} T_{t'u'} alpha^A_{t t'} alpha^B_{u u'};
     // the frequency integral and its 1/(2 pi) are already inside the block product.
     return -total;
+}
+
+}  // namespace detail
+
+namespace {
+
+constexpr unsigned int kAnisotropicOrderMin = 6;
+constexpr unsigned int kAnisotropicOrderMax = 14;
+constexpr unsigned int kAnisotropicPublishedOrderMax = 12;
+constexpr std::size_t kAnisotropicOrderCount = kAnisotropicOrderMax - kAnisotropicOrderMin + 1;
+constexpr double kAnisotropicScalarTolerance = 1.0e-12;
+constexpr double kAnisotropicCollapseTolerance = 1.0e-13;
+constexpr double kAnisotropicClosureTolerance = 1.0e-12;
+constexpr char kAnisotropicTableVersion[] = "partB-recoupling-1";
+constexpr char kAnisotropicTableGenerator[] =
+    "atomic_polarizability.cc generate_anisotropic_recoupling_table";
+
+/**
+ * Dense Clebsch-Gordan cache over the range the table needs: two ranks up to
+ * kAnisotropicCoupledRankMax coupling to a total rank up to
+ * kAnisotropicTotalRankMax. The four-Clebsch-Gordan geometric sum evaluates
+ * hundreds of millions of coefficients, so they are generated once and read
+ * thereafter.
+ */
+class AnisotropicClebschGordanCache {
+   public:
+    AnisotropicClebschGordanCache() {
+        values_.assign(kRankStride * kRankStride * kTotalStride * kOrderStride * kOrderStride,
+                       0.0);
+        for (int first = 0; first <= static_cast<int>(kAnisotropicCoupledRankMax); ++first)
+            for (int second = 0; second <= static_cast<int>(kAnisotropicCoupledRankMax); ++second)
+                for (int total = 0; total <= static_cast<int>(kAnisotropicTotalRankMax); ++total)
+                    for (int first_order = -first; first_order <= first; ++first_order)
+                        for (int second_order = -second; second_order <= second; ++second_order)
+                            values_[index(first, second, total, first_order, second_order)] =
+                                anisotropic_clebsch_gordan(first, first_order, second,
+                                                           second_order, total,
+                                                           first_order + second_order);
+    }
+
+    double at(int first, int first_order, int second, int second_order, int total) const {
+        if (first < 0 || second < 0 || total < 0) return 0.0;
+        if (first > static_cast<int>(kAnisotropicCoupledRankMax) ||
+            second > static_cast<int>(kAnisotropicCoupledRankMax) ||
+            total > static_cast<int>(kAnisotropicTotalRankMax))
+            throw PSIEXCEPTION(
+                "anisotropic recoupling: a Clebsch-Gordan request left the tabulated range");
+        if (std::abs(first_order) > first || std::abs(second_order) > second) return 0.0;
+        if (std::abs(first_order + second_order) > total) return 0.0;
+        return values_[index(first, second, total, first_order, second_order)];
+    }
+
+   private:
+    static constexpr std::size_t kRankStride = kAnisotropicCoupledRankMax + 1;
+    static constexpr std::size_t kTotalStride = kAnisotropicTotalRankMax + 1;
+    static constexpr std::size_t kOrderStride = 2 * kAnisotropicCoupledRankMax + 1;
+
+    static std::size_t index(int first, int second, int total, int first_order,
+                             int second_order) {
+        const auto shifted_first =
+            static_cast<std::size_t>(first_order + static_cast<int>(kAnisotropicCoupledRankMax));
+        const auto shifted_second =
+            static_cast<std::size_t>(second_order + static_cast<int>(kAnisotropicCoupledRankMax));
+        return ((((static_cast<std::size_t>(first) * kRankStride +
+                   static_cast<std::size_t>(second)) *
+                      kTotalStride +
+                  static_cast<std::size_t>(total)) *
+                     kOrderStride +
+                 shifted_first) *
+                kOrderStride) +
+               shifted_second;
+    }
+
+    std::vector<double> values_;
+};
+
+/** <j1 m1; j2 m2 | j (m1 + m2)>, cached. */
+double anisotropic_coupling(int first, int first_order, int second, int second_order, int total) {
+    static const AnisotropicClebschGordanCache cache;
+    return cache.at(first, first_order, second, second_order, total);
+}
+
+/**
+ * D^{l}_{m k}(O) defined by C_{lm}(O rhat) = sum_k D^{l}_{m k}(O) C_{lk}(rhat),
+ * obtained from the real rank rotation as D = U^dagger W U. Indexed [m + l][k + l].
+ */
+std::vector<std::vector<Complex>> anisotropic_wigner_rotation(unsigned int rank,
+                                                             const SiteAxes& rotation) {
+    const std::size_t dimension = anisotropic_rank_dimension(rank);
+    const auto real_block = anisotropic_real_rotation(rank, rotation);
+    if (anisotropic_rotation_orthogonality_deviation(real_block) > kAnisotropicRotationTolerance)
+        throw PSIEXCEPTION(
+            "anisotropic recoupling: the derived real rank rotation is not orthogonal");
+    const auto& transform = anisotropic_real_transform(rank);
+    std::vector<std::vector<Complex>> intermediate(
+        dimension, std::vector<Complex>(dimension, Complex(0.0, 0.0)));
+    for (std::size_t order = 0; order < dimension; ++order)
+        for (std::size_t component = 0; component < dimension; ++component)
+            for (std::size_t inner = 0; inner < dimension; ++inner)
+                intermediate[order][component] +=
+                    std::conj(transform[inner][order]) * real_block[inner][component];
+    std::vector<std::vector<Complex>> result(dimension,
+                                             std::vector<Complex>(dimension, Complex(0.0, 0.0)));
+    for (std::size_t order = 0; order < dimension; ++order)
+        for (std::size_t target = 0; target < dimension; ++target) {
+            Complex accumulator(0.0, 0.0);
+            for (std::size_t component = 0; component < dimension; ++component)
+                accumulator += intermediate[order][component] * transform[component][target];
+            require_finite(accumulator, "anisotropic Wigner rotation");
+            result[order][target] = accumulator;
+        }
+    return result;
+}
+
+/** eta and Ncal of the reality phase: 1 for an even argument, -i for an odd one. */
+Complex anisotropic_parity_phase(unsigned int total) {
+    return total % 2 == 0 ? Complex(1.0, 0.0) : Complex(0.0, -1.0);
+}
+
+/**
+ * Pcheck^{(la, la', l1)}[k1][t][t'], the real Clebsch-Gordan coupling matrix
+ *
+ *   eta * sum_{kappa1 ka ka'} U^{(l1)}[k1][kappa1] <la ka; la' ka'|l1 kappa1>
+ *                             conj(U^{(la)}[t][ka]) conj(U^{(la')}[t'][ka']),
+ *
+ * with eta = 1 for even (la + la' + l1) and -i for odd. That phase is what makes
+ * Pcheck real; if the phases had not conspired the derivation would be wrong, so
+ * the reality is asserted rather than assumed.
+ */
+std::vector<double> anisotropic_coupling_values(unsigned int first_rank,
+                                                unsigned int second_rank,
+                                                unsigned int coupled_rank) {
+    const auto& first_transform = anisotropic_real_transform(first_rank);
+    const auto& second_transform = anisotropic_real_transform(second_rank);
+    const auto& coupled_transform = anisotropic_real_transform(coupled_rank);
+    const auto first_dimension = anisotropic_rank_dimension(first_rank);
+    const auto second_dimension = anisotropic_rank_dimension(second_rank);
+    const auto coupled_dimension = anisotropic_rank_dimension(coupled_rank);
+    std::vector<Complex> accumulator(coupled_dimension * first_dimension * second_dimension,
+                                     Complex(0.0, 0.0));
+    for (std::size_t component = 0; component < coupled_dimension; ++component)
+        for (std::size_t coupled_index = 0; coupled_index < coupled_dimension; ++coupled_index) {
+            const Complex weight = coupled_transform[component][coupled_index];
+            if (weight == Complex(0.0, 0.0)) continue;
+            const int coupled_order =
+                static_cast<int>(coupled_index) - static_cast<int>(coupled_rank);
+            for (std::size_t first_index = 0; first_index < first_dimension; ++first_index) {
+                const int first_order =
+                    static_cast<int>(first_index) - static_cast<int>(first_rank);
+                const int second_order = coupled_order - first_order;
+                if (std::abs(second_order) > static_cast<int>(second_rank)) continue;
+                const auto second_index =
+                    static_cast<std::size_t>(second_order + static_cast<int>(second_rank));
+                const double coefficient =
+                    anisotropic_coupling(static_cast<int>(first_rank), first_order,
+                                         static_cast<int>(second_rank), second_order,
+                                         static_cast<int>(coupled_rank));
+                if (coefficient == 0.0) continue;
+                const Complex scaled = weight * coefficient;
+                for (std::size_t row = 0; row < first_dimension; ++row) {
+                    const Complex left = std::conj(first_transform[row][first_index]);
+                    if (left == Complex(0.0, 0.0)) continue;
+                    const Complex partial = scaled * left;
+                    const std::size_t base =
+                        (component * first_dimension + row) * second_dimension;
+                    for (std::size_t column = 0; column < second_dimension; ++column)
+                        accumulator[base + column] +=
+                            partial * std::conj(second_transform[column][second_index]);
+                }
+            }
+        }
+    const Complex phase = anisotropic_parity_phase(first_rank + second_rank + coupled_rank);
+    std::vector<double> values(accumulator.size(), 0.0);
+    for (std::size_t slot = 0; slot < accumulator.size(); ++slot) {
+        const Complex value = accumulator[slot] * phase;
+        require_finite(value, "anisotropic coupling matrix");
+        if (std::abs(value.imag()) >
+            kAnisotropicRealityTolerance * std::max(1.0, std::abs(value.real())))
+            throw PSIEXCEPTION(
+                "anisotropic recoupling: the real coupling matrix acquired an imaginary part");
+        values[slot] = value.real();
+    }
+    return values;
+}
+
+/** Lambda_j of the four-Clebsch-Gordan collapse, with the worst proportionality residual. */
+struct AnisotropicCollapse {
+    double value{};
+    double residual{};
+};
+
+/**
+ * Contracting the four-Clebsch-Gordan geometric sum against <L1 M1; L2 M2|j M>
+ * collapses onto a single Clebsch-Gordan,
+ *
+ *   sum_{M1 M2} G_{M1 M2, mu1 mu2} <L1 M1; L2 M2|j M> = Lambda_j <l1 mu1; l2 mu2|j mu>,
+ *
+ * with Lambda_j independent of (mu1, mu2). This is a 9j symbol in disguise, but it
+ * is obtained here by least squares over every (mu1, mu2) and the residual of the
+ * proportionality is returned so the generator can prove the collapse instead of
+ * assuming the identity.
+ */
+AnisotropicCollapse anisotropic_collapse(unsigned int first_site_rank,
+                                         unsigned int first_site_rank_prime,
+                                         unsigned int second_site_rank,
+                                         unsigned int second_site_rank_prime,
+                                         unsigned int first_rank, unsigned int second_rank,
+                                         unsigned int coupled_rank) {
+    const int capital_first =
+        static_cast<int>(first_site_rank) + static_cast<int>(second_site_rank);
+    const int capital_second =
+        static_cast<int>(first_site_rank_prime) + static_cast<int>(second_site_rank_prime);
+    double numerator = 0.0;
+    double denominator = 0.0;
+    std::vector<std::pair<double, double>> pairs;
+    for (int first_order = -static_cast<int>(first_rank);
+         first_order <= static_cast<int>(first_rank); ++first_order)
+        for (int second_order = -static_cast<int>(second_rank);
+             second_order <= static_cast<int>(second_rank); ++second_order) {
+            const int total_order = first_order + second_order;
+            if (std::abs(total_order) > static_cast<int>(coupled_rank)) continue;
+            double total = 0.0;
+            for (int first_site_order = -static_cast<int>(first_site_rank);
+                 first_site_order <= static_cast<int>(first_site_rank); ++first_site_order) {
+                const int first_prime_order = first_order - first_site_order;
+                if (std::abs(first_prime_order) > static_cast<int>(first_site_rank_prime))
+                    continue;
+                const double first_coupling = anisotropic_coupling(
+                    static_cast<int>(first_site_rank), first_site_order,
+                    static_cast<int>(first_site_rank_prime), first_prime_order,
+                    static_cast<int>(first_rank));
+                if (first_coupling == 0.0) continue;
+                for (int second_site_order = -static_cast<int>(second_site_rank);
+                     second_site_order <= static_cast<int>(second_site_rank);
+                     ++second_site_order) {
+                    const int second_prime_order = second_order - second_site_order;
+                    if (std::abs(second_prime_order) > static_cast<int>(second_site_rank_prime))
+                        continue;
+                    const int capital_first_order = first_site_order + second_site_order;
+                    const int capital_second_order = first_prime_order + second_prime_order;
+                    if (std::abs(capital_first_order) > capital_first) continue;
+                    if (std::abs(capital_second_order) > capital_second) continue;
+                    const double second_coupling = anisotropic_coupling(
+                        static_cast<int>(second_site_rank), second_site_order,
+                        static_cast<int>(second_site_rank_prime), second_prime_order,
+                        static_cast<int>(second_rank));
+                    if (second_coupling == 0.0) continue;
+                    total += anisotropic_coupling(static_cast<int>(first_site_rank),
+                                                  first_site_order,
+                                                  static_cast<int>(second_site_rank),
+                                                  second_site_order, capital_first) *
+                             anisotropic_coupling(static_cast<int>(first_site_rank_prime),
+                                                  first_prime_order,
+                                                  static_cast<int>(second_site_rank_prime),
+                                                  second_prime_order, capital_second) *
+                             first_coupling * second_coupling *
+                             anisotropic_coupling(capital_first, capital_first_order,
+                                                  capital_second, capital_second_order,
+                                                  static_cast<int>(coupled_rank));
+                }
+            }
+            const double reference =
+                anisotropic_coupling(static_cast<int>(first_rank), first_order,
+                                     static_cast<int>(second_rank), second_order,
+                                     static_cast<int>(coupled_rank));
+            numerator += total * reference;
+            denominator += reference * reference;
+            pairs.emplace_back(total, reference);
+        }
+    AnisotropicCollapse collapse;
+    collapse.value = denominator > 0.0 ? numerator / denominator : 0.0;
+    require_finite(collapse.value, "anisotropic four-coupling collapse");
+    for (const auto& pair : pairs)
+        collapse.residual =
+            std::max(collapse.residual, std::abs(pair.first - collapse.value * pair.second));
+    return collapse;
+}
+
+bool anisotropic_label_less(const AnisotropicDispersionLabel& first,
+                            const AnisotropicDispersionLabel& second) {
+    return std::tie(first.order, first.first_rank, first.first_component, first.second_rank,
+                    first.second_component, first.coupled_rank) <
+           std::tie(second.order, second.first_rank, second.first_component, second.second_rank,
+                    second.second_component, second.coupled_rank);
+}
+
+bool anisotropic_entry_less(const AnisotropicRecouplingEntry& first,
+                            const AnisotropicRecouplingEntry& second) {
+    return std::tie(first.first_site_rank, first.first_site_rank_prime, first.second_site_rank,
+                    first.second_site_rank_prime, first.first_rank, first.second_rank,
+                    first.coupled_rank) <
+           std::tie(second.first_site_rank, second.first_site_rank_prime,
+                    second.second_site_rank, second.second_site_rank_prime, second.first_rank,
+                    second.second_rank, second.coupled_rank);
+}
+
+const AnisotropicCouplingMatrix* anisotropic_find_coupling(
+    const AnisotropicRecouplingTable& table, unsigned int first_rank, unsigned int second_rank,
+    unsigned int coupled_rank) {
+    for (const auto& candidate : table.coupling_matrices)
+        if (candidate.first_rank == first_rank && candidate.second_rank == second_rank &&
+            candidate.coupled_rank == coupled_rank)
+            return &candidate;
+    return nullptr;
+}
+
+std::size_t anisotropic_find_label(const AnisotropicRecouplingTable& table,
+                                   const AnisotropicDispersionLabel& label) {
+    const auto found = std::lower_bound(table.labels.begin(), table.labels.end(), label,
+                                        anisotropic_label_less);
+    if (found == table.labels.end() || anisotropic_label_less(label, *found))
+        return table.labels.size();
+    return static_cast<std::size_t>(found - table.labels.begin());
+}
+
+const AnisotropicRecouplingEntry* anisotropic_find_entry(
+    const AnisotropicRecouplingTable& table, const AnisotropicRecouplingEntry& key) {
+    const auto found = std::lower_bound(table.entries.begin(), table.entries.end(), key,
+                                        anisotropic_entry_less);
+    if (found == table.entries.end() || anisotropic_entry_less(key, *found)) return nullptr;
+    return &*found;
+}
+
+/**
+ * The dense W of one label, taken from a specific table so the validator can run
+ * its closure checks before that table is published through the accessor. Never a
+ * storage form: 15^4 doubles per label times 29762 labels would be twelve
+ * gigabytes.
+ */
+std::vector<double> anisotropic_dense_from(const AnisotropicRecouplingTable& table,
+                                           const AnisotropicDispersionLabel& label) {
+    const std::string prefix = "dense anisotropic recoupling: ";
+    const auto index = anisotropic_find_label(table, label);
+    if (index == table.labels.size())
+        throw PSIEXCEPTION(prefix + "the requested label is not in the recoupling table");
+    std::vector<double> dense(kAnisotropicBlockProductElements, 0.0);
+    for (std::size_t slot = table.label_entry_offsets[index];
+         slot < table.label_entry_offsets[index + 1]; ++slot) {
+        const auto& entry = table.entries[table.label_entry_indices[slot]];
+        const auto* first_coupling = anisotropic_find_coupling(
+            table, entry.first_site_rank, entry.first_site_rank_prime, entry.first_rank);
+        const auto* second_coupling = anisotropic_find_coupling(
+            table, entry.second_site_rank, entry.second_site_rank_prime, entry.second_rank);
+        if (!first_coupling || !second_coupling)
+            throw PSIEXCEPTION(prefix + "the table is missing a coupling matrix");
+        const auto first_dimension = anisotropic_rank_dimension(entry.first_site_rank);
+        const auto first_prime_dimension =
+            anisotropic_rank_dimension(entry.first_site_rank_prime);
+        const auto second_dimension = anisotropic_rank_dimension(entry.second_site_rank);
+        const auto second_prime_dimension =
+            anisotropic_rank_dimension(entry.second_site_rank_prime);
+        const auto first_offset = dispersion_rank_offset(entry.first_site_rank);
+        const auto first_prime_offset = dispersion_rank_offset(entry.first_site_rank_prime);
+        const auto second_offset = dispersion_rank_offset(entry.second_site_rank);
+        const auto second_prime_offset = dispersion_rank_offset(entry.second_site_rank_prime);
+        const std::size_t first_base =
+            label.first_component * first_dimension * first_prime_dimension;
+        const std::size_t second_base =
+            label.second_component * second_dimension * second_prime_dimension;
+        for (std::size_t row = 0; row < first_dimension; ++row)
+            for (std::size_t column = 0; column < first_prime_dimension; ++column) {
+                const double left =
+                    first_coupling->values[first_base + row * first_prime_dimension + column];
+                if (left == 0.0) continue;
+                const double scaled = entry.scalar * left;
+                for (std::size_t other_row = 0; other_row < second_dimension; ++other_row)
+                    for (std::size_t other_column = 0; other_column < second_prime_dimension;
+                         ++other_column)
+                        dense[anisotropic_block_index(first_offset + row,
+                                                      first_prime_offset + column,
+                                                      second_offset + other_row,
+                                                      second_prime_offset + other_column)] +=
+                            scaled * second_coupling->values[second_base +
+                                                             other_row * second_prime_dimension +
+                                                             other_column];
+            }
+    }
+    return dense;
+}
+
+const std::vector<std::pair<std::string, std::string>>& anisotropic_expected_conventions() {
+    static const std::vector<std::pair<std::string, std::string>> conventions{
+        {"racah", "C_lm(rhat) = sqrt(4 pi/(2l+1)) Y_lm(rhat)"},
+        {"real_transform",
+         "C_{l,+m} = (-1)^m (R_lmc + i R_lms)/sqrt2; C_{l,-m} = (R_lmc - i R_lms)/sqrt2"},
+        {"interaction_tensor",
+         "T^c_{la ma, lb mb} = (-1)^lb sqrt(binom(2L,2la)) <la ma; lb mb|L M> "
+         "conj(C_LM(Rhat))/R^(L+1), L = la + lb, R = R_B - R_A"},
+        {"reality_phase",
+         "eta = 1 for even (la + la' + l1) else -i; Ncal = 1 for even (l1 + l2 + j) else -i"},
+        {"energy", "E_disp = - sum_n R^-n sum_labels C_n[label] S_label"},
+        {"block_product",
+         "M_{(t t')(u u')} = (1/2 pi) sum_k w_k alpha^A_{t t'} alpha^B_{u u'}, so the table "
+         "carries the bare binomial and never binom/(2 pi)"},
+    };
+    return conventions;
+}
+
+/**
+ * Generate the factorised recoupling table.
+ *
+ *   g^r = (-1)^{lb + lb'} sqrt(binom(2 L1, 2 la) binom(2 L2, 2 la'))
+ *         * <L1 0; L2 0|j 0> * Lambda_j / (eta_A eta_B Ncal)
+ *
+ * The <L1 0; L2 0|j 0> factor forces L1 + L2 + j even, which is the master
+ * selection rule of the whole table, and because L1 + L2 = n - 2 the three
+ * parities (la + la' + l1), (lb + lb' + l2) and (l1 + l2 + j) always sum to an
+ * even number, so eta_A eta_B Ncal is real and g^r is real. That is a structural
+ * consistency check, not a convention, and it is asserted below.
+ */
+/**
+ * The real S function block of one (l1, l2, j) triple, row-major over (k1, k2):
+ *
+ *   Stilde_{kappa1 kappa2} = sum_{mu1 mu2} <l1 mu1; l2 mu2 | j mu>
+ *        D^{l1}_{mu1 kappa1} D^{l2}_{mu2 kappa2} conj(C_{j mu}(Rhat)),  mu = mu1 + mu2
+ *   S^{l1 l2 j}_{k1 k2}    = Ncal * sum_{kappa1 kappa2} conj(U^{(l1)}[k1][kappa1])
+ *                                   conj(U^{(l2)}[k2][kappa2]) Stilde_{kappa1 kappa2}
+ *
+ * with Ncal = 1 for even (l1 + l2 + j) and -i for odd. That phase is exactly what
+ * makes S real; the reality is asserted, not assumed.
+ */
+std::vector<double> anisotropic_s_function_block(
+    const std::vector<std::vector<Complex>>& first_rotation,
+    const std::vector<std::vector<Complex>>& second_rotation,
+    const std::vector<std::vector<Complex>>& harmonics,
+    const std::array<unsigned int, 3>& key) {
+    const unsigned int first_rank = key[0];
+    const unsigned int second_rank = key[1];
+    const unsigned int coupled_rank = key[2];
+    const auto first_dimension = anisotropic_rank_dimension(first_rank);
+    const auto second_dimension = anisotropic_rank_dimension(second_rank);
+    std::vector<Complex> accumulator(first_dimension * second_dimension, Complex(0.0, 0.0));
+    for (std::size_t first_index = 0; first_index < first_dimension; ++first_index) {
+        const int first_order = static_cast<int>(first_index) - static_cast<int>(first_rank);
+        for (std::size_t second_index = 0; second_index < second_dimension; ++second_index) {
+            const int second_order =
+                static_cast<int>(second_index) - static_cast<int>(second_rank);
+            const int total_order = first_order + second_order;
+            if (std::abs(total_order) > static_cast<int>(coupled_rank)) continue;
+            const double coefficient = anisotropic_coupling(
+                static_cast<int>(first_rank), first_order, static_cast<int>(second_rank),
+                second_order, static_cast<int>(coupled_rank));
+            if (coefficient == 0.0) continue;
+            const Complex factor =
+                coefficient *
+                std::conj(harmonics[coupled_rank][static_cast<std::size_t>(
+                    total_order + static_cast<int>(coupled_rank))]);
+            for (std::size_t first_component = 0; first_component < first_dimension;
+                 ++first_component) {
+                const Complex left = factor * first_rotation[first_index][first_component];
+                if (left == Complex(0.0, 0.0)) continue;
+                for (std::size_t second_component = 0; second_component < second_dimension;
+                     ++second_component)
+                    accumulator[first_component * second_dimension + second_component] +=
+                        left * second_rotation[second_index][second_component];
+            }
+        }
+    }
+    const auto& first_transform = anisotropic_real_transform(first_rank);
+    const auto& second_transform = anisotropic_real_transform(second_rank);
+    const Complex phase =
+        anisotropic_parity_phase(first_rank + second_rank + coupled_rank);
+    std::vector<double> values(first_dimension * second_dimension, 0.0);
+    for (std::size_t first_component = 0; first_component < first_dimension;
+         ++first_component)
+        for (std::size_t second_component = 0; second_component < second_dimension;
+             ++second_component) {
+            Complex total(0.0, 0.0);
+            for (std::size_t first_order = 0; first_order < first_dimension; ++first_order) {
+                const Complex left = std::conj(first_transform[first_component][first_order]);
+                if (left == Complex(0.0, 0.0)) continue;
+                for (std::size_t second_order = 0; second_order < second_dimension;
+                     ++second_order) {
+                    const Complex right =
+                        std::conj(second_transform[second_component][second_order]);
+                    if (right == Complex(0.0, 0.0)) continue;
+                    total += left * right *
+                             accumulator[first_order * second_dimension + second_order];
+                }
+            }
+            total *= phase;
+            require_finite(total, "anisotropic S function");
+            if (std::abs(total.imag()) >
+                kAnisotropicRealityTolerance * std::max(1.0, std::abs(total.real())))
+                throw PSIEXCEPTION(
+                    "anisotropic S functions: the real S function acquired an imaginary part");
+            values[first_component * second_dimension + second_component] = total.real();
+        }
+    return values;
+}
+
+AnisotropicRecouplingTable generate_anisotropic_recoupling_table() {
+    AnisotropicRecouplingTable table;
+    table.version = kAnisotropicTableVersion;
+    table.generator = kAnisotropicTableGenerator;
+    table.component_order = anisotropic_component_order();
+    table.conventions = anisotropic_expected_conventions();
+
+    std::set<std::array<unsigned int, 3>> coupling_keys;
+    for (unsigned int first_site = kAnisotropicSiteRankMin;
+         first_site <= kAnisotropicSiteRankMax; ++first_site)
+        for (unsigned int first_prime = kAnisotropicSiteRankMin;
+             first_prime <= kAnisotropicSiteRankMax; ++first_prime)
+            for (unsigned int second_site = kAnisotropicSiteRankMin;
+                 second_site <= kAnisotropicSiteRankMax; ++second_site)
+                for (unsigned int second_prime = kAnisotropicSiteRankMin;
+                     second_prime <= kAnisotropicSiteRankMax; ++second_prime) {
+                    const unsigned int capital_first = first_site + second_site;
+                    const unsigned int capital_second = first_prime + second_prime;
+                    const double amplitude =
+                        ((second_site + second_prime) % 2 == 0 ? 1.0 : -1.0) *
+                        std::sqrt(binomial(2 * capital_first, 2 * first_site) *
+                                  binomial(2 * capital_second, 2 * first_prime));
+                    const unsigned int first_low = first_site > first_prime
+                                                       ? first_site - first_prime
+                                                       : first_prime - first_site;
+                    const unsigned int second_low = second_site > second_prime
+                                                        ? second_site - second_prime
+                                                        : second_prime - second_site;
+                    for (unsigned int first_rank = first_low;
+                         first_rank <= first_site + first_prime; ++first_rank)
+                        for (unsigned int second_rank = second_low;
+                             second_rank <= second_site + second_prime; ++second_rank) {
+                            const unsigned int coupled_low = std::max(
+                                capital_first > capital_second ? capital_first - capital_second
+                                                               : capital_second - capital_first,
+                                first_rank > second_rank ? first_rank - second_rank
+                                                         : second_rank - first_rank);
+                            const unsigned int coupled_high =
+                                std::min(capital_first + capital_second,
+                                         first_rank + second_rank);
+                            for (unsigned int coupled = coupled_low; coupled <= coupled_high;
+                                 ++coupled) {
+                                if ((capital_first + capital_second + coupled) % 2 != 0) continue;
+                                const double axial = anisotropic_coupling(
+                                    static_cast<int>(capital_first), 0,
+                                    static_cast<int>(capital_second), 0,
+                                    static_cast<int>(coupled));
+                                if (axial == 0.0) continue;
+                                const auto collapse = anisotropic_collapse(
+                                    first_site, first_prime, second_site, second_prime,
+                                    first_rank, second_rank, coupled);
+                                table.max_collapse_residual =
+                                    std::max(table.max_collapse_residual, collapse.residual);
+                                const double scalar = amplitude * axial * collapse.value;
+                                if (std::abs(scalar) < kAnisotropicScalarTolerance) continue;
+                                const Complex phase =
+                                    anisotropic_parity_phase(first_site + first_prime +
+                                                             first_rank) *
+                                    anisotropic_parity_phase(second_site + second_prime +
+                                                             second_rank) *
+                                    anisotropic_parity_phase(first_rank + second_rank + coupled);
+                                if (std::abs(phase.imag()) > 1.0e-14)
+                                    throw PSIEXCEPTION(
+                                        "anisotropic recoupling: the reality phase is not real");
+                                AnisotropicRecouplingEntry entry;
+                                entry.first_site_rank = first_site;
+                                entry.first_site_rank_prime = first_prime;
+                                entry.second_site_rank = second_site;
+                                entry.second_site_rank_prime = second_prime;
+                                entry.order =
+                                    first_site + first_prime + second_site + second_prime + 2;
+                                entry.first_rank = first_rank;
+                                entry.second_rank = second_rank;
+                                entry.coupled_rank = coupled;
+                                entry.scalar = scalar / phase.real();
+                                require_finite(entry.scalar, "anisotropic recoupling scalar");
+                                table.entries.push_back(entry);
+                                coupling_keys.insert({first_site, first_prime, first_rank});
+                                coupling_keys.insert({second_site, second_prime, second_rank});
+                            }
+                        }
+                }
+    std::sort(table.entries.begin(), table.entries.end(), anisotropic_entry_less);
+
+    for (const auto& key : coupling_keys) {
+        AnisotropicCouplingMatrix matrix;
+        matrix.first_rank = key[0];
+        matrix.second_rank = key[1];
+        matrix.coupled_rank = key[2];
+        matrix.values = anisotropic_coupling_values(key[0], key[1], key[2]);
+        table.coupling_matrices.push_back(std::move(matrix));
+    }
+
+    // Labels, and the compressed label-to-entry map.
+    std::map<std::array<unsigned int, 6>, std::vector<std::size_t>> per_label;
+    for (std::size_t index = 0; index < table.entries.size(); ++index) {
+        const auto& entry = table.entries[index];
+        for (unsigned int first_component = 0;
+             first_component < anisotropic_rank_dimension(entry.first_rank); ++first_component)
+            for (unsigned int second_component = 0;
+                 second_component < anisotropic_rank_dimension(entry.second_rank);
+                 ++second_component)
+                per_label[{entry.order, entry.first_rank, first_component, entry.second_rank,
+                           second_component, entry.coupled_rank}]
+                    .push_back(index);
+    }
+    table.labels.reserve(per_label.size());
+    table.label_entry_offsets.reserve(per_label.size() + 1);
+    table.label_entry_offsets.push_back(0);
+    for (const auto& item : per_label) {
+        AnisotropicDispersionLabel label;
+        label.order = item.first[0];
+        label.first_rank = item.first[1];
+        label.first_component = item.first[2];
+        label.second_rank = item.first[3];
+        label.second_component = item.first[4];
+        label.coupled_rank = item.first[5];
+        table.labels.push_back(label);
+        table.label_entry_indices.insert(table.label_entry_indices.end(), item.second.begin(),
+                                        item.second.end());
+        table.label_entry_offsets.push_back(table.label_entry_indices.size());
+    }
+
+    // The real rank rotations the S functions depend on are exercised once here so
+    // the reported orthogonality deviation covers every rank the table can request.
+    SiteAxes probe{{{0.36, -0.48, 0.8}, {0.8, 0.6, 0.0}, {-0.48, 0.64, 0.6}}};
+    for (unsigned int rank = 0; rank <= kAnisotropicCoupledRankMax; ++rank)
+        table.max_rotation_orthogonality_deviation =
+            std::max(table.max_rotation_orthogonality_deviation,
+                     anisotropic_rotation_orthogonality_deviation(
+                         anisotropic_real_rotation(rank, probe)));
+    return table;
+}
+
+}  // namespace
+
+namespace detail {
+
+const std::string& anisotropic_recoupling_table_version() {
+    static const std::string version = kAnisotropicTableVersion;
+    return version;
+}
+
+void validate_anisotropic_recoupling_table(const AnisotropicRecouplingTable& table) {
+    const std::string prefix = "anisotropic recoupling table: ";
+
+    // --- File level. ---
+    if (table.version != anisotropic_recoupling_table_version())
+        throw PSIEXCEPTION(prefix + "the declared table version is not the compiled-in version");
+    if (table.generator != kAnisotropicTableGenerator)
+        throw PSIEXCEPTION(prefix + "the declared generator is not the compiled-in generator");
+    if (table.component_order != anisotropic_component_order())
+        throw PSIEXCEPTION(prefix +
+                           "the declared component ordering is not the L3 component ordering");
+    if (table.conventions != anisotropic_expected_conventions())
+        throw PSIEXCEPTION(prefix +
+                           "the declared conventions are not the compiled-in conventions");
+    if (table.entries.empty()) throw PSIEXCEPTION(prefix + "the scalar table is empty");
+    if (table.labels.empty()) throw PSIEXCEPTION(prefix + "the label table is empty");
+    if (table.max_collapse_residual > kAnisotropicCollapseTolerance)
+        throw PSIEXCEPTION(prefix +
+                           "the four-coupling collapse residual exceeds the generation tolerance");
+    if (table.max_rotation_orthogonality_deviation > kAnisotropicClosureTolerance)
+        throw PSIEXCEPTION(prefix + "a derived real rank rotation is not orthogonal");
+
+    // --- Per scalar entry. ---
+    std::array<std::set<unsigned int>, 4> observed_ranks;
+    for (std::size_t index = 0; index < table.entries.size(); ++index) {
+        const auto& entry = table.entries[index];
+        const std::array<unsigned int, 4> site_ranks{
+            entry.first_site_rank, entry.first_site_rank_prime, entry.second_site_rank,
+            entry.second_site_rank_prime};
+        for (std::size_t slot = 0; slot < site_ranks.size(); ++slot) {
+            if (site_ranks[slot] < kAnisotropicSiteRankMin ||
+                site_ranks[slot] > kAnisotropicSiteRankMax)
+                throw PSIEXCEPTION(prefix + "every site rank must lie inside the L3 range 1 to 3");
+            observed_ranks[slot].insert(site_ranks[slot]);
+        }
+        if (!std::isfinite(entry.scalar))
+            throw PSIEXCEPTION(prefix + "every recoupling scalar must be finite");
+        if (entry.scalar == 0.0)
+            throw PSIEXCEPTION(prefix +
+                               "a vanishing scalar must be absent, not stored as a zero");
+        const unsigned int order = entry.first_site_rank + entry.first_site_rank_prime +
+                                   entry.second_site_rank + entry.second_site_rank_prime + 2;
+        if (entry.order != order)
+            throw PSIEXCEPTION(prefix + "every entry must satisfy n = la + la' + lb + lb' + 2");
+        if (entry.order < kAnisotropicOrderMin || entry.order > kAnisotropicOrderMax)
+            throw PSIEXCEPTION(prefix + "an L3 model can only produce orders 6 through 14");
+        const unsigned int first_low = entry.first_site_rank > entry.first_site_rank_prime
+                                           ? entry.first_site_rank - entry.first_site_rank_prime
+                                           : entry.first_site_rank_prime - entry.first_site_rank;
+        if (entry.first_rank < first_low ||
+            entry.first_rank > entry.first_site_rank + entry.first_site_rank_prime)
+            throw PSIEXCEPTION(prefix + "l1 must satisfy the (la, la') triangle rule");
+        const unsigned int second_low =
+            entry.second_site_rank > entry.second_site_rank_prime
+                ? entry.second_site_rank - entry.second_site_rank_prime
+                : entry.second_site_rank_prime - entry.second_site_rank;
+        if (entry.second_rank < second_low ||
+            entry.second_rank > entry.second_site_rank + entry.second_site_rank_prime)
+            throw PSIEXCEPTION(prefix + "l2 must satisfy the (lb, lb') triangle rule");
+        const unsigned int capital_first = entry.first_site_rank + entry.second_site_rank;
+        const unsigned int capital_second =
+            entry.first_site_rank_prime + entry.second_site_rank_prime;
+        const unsigned int capital_low = capital_first > capital_second
+                                             ? capital_first - capital_second
+                                             : capital_second - capital_first;
+        if (entry.coupled_rank < capital_low ||
+            entry.coupled_rank > capital_first + capital_second)
+            throw PSIEXCEPTION(prefix + "j must satisfy the (L1, L2) triangle rule");
+        const unsigned int coupled_low = entry.first_rank > entry.second_rank
+                                             ? entry.first_rank - entry.second_rank
+                                             : entry.second_rank - entry.first_rank;
+        if (entry.coupled_rank < coupled_low ||
+            entry.coupled_rank > entry.first_rank + entry.second_rank)
+            throw PSIEXCEPTION(prefix + "j must satisfy the (l1, l2) triangle rule");
+        if ((capital_first + capital_second + entry.coupled_rank) % 2 != 0)
+            throw PSIEXCEPTION(prefix +
+                               "L1 + L2 + j must be even, the master selection rule of the table");
+        if (index > 0 && !anisotropic_entry_less(table.entries[index - 1], entry))
+            throw PSIEXCEPTION(prefix + "scalar entries must be sorted and unique on their key");
+        if (!anisotropic_find_coupling(table, entry.first_site_rank,
+                                       entry.first_site_rank_prime, entry.first_rank) ||
+            !anisotropic_find_coupling(table, entry.second_site_rank,
+                                       entry.second_site_rank_prime, entry.second_rank))
+            throw PSIEXCEPTION(prefix + "every entry needs its two coupling matrices");
+        // Exchange closure, entry-wise. Swapping the two sites and the two label
+        // halves must reproduce the same table up to (-1)^{l1 + l2}. The sign is
+        // (-1)^{l1 + l2}, never (-1)^j: j always carries the parity of n because
+        // L1 + L2 + j is even and L1 + L2 = n - 2.
+        AnisotropicRecouplingEntry mirror;
+        mirror.first_site_rank = entry.second_site_rank;
+        mirror.first_site_rank_prime = entry.second_site_rank_prime;
+        mirror.second_site_rank = entry.first_site_rank;
+        mirror.second_site_rank_prime = entry.first_site_rank_prime;
+        mirror.first_rank = entry.second_rank;
+        mirror.second_rank = entry.first_rank;
+        mirror.coupled_rank = entry.coupled_rank;
+        const auto* found = anisotropic_find_entry(table, mirror);
+        if (!found)
+            throw PSIEXCEPTION(prefix + "the scalar table is not closed under site exchange");
+        const double sign = (entry.first_rank + entry.second_rank) % 2 == 0 ? 1.0 : -1.0;
+        if (std::abs(found->scalar - sign * entry.scalar) >
+            kAnisotropicClosureTolerance * std::abs(entry.scalar))
+            throw PSIEXCEPTION(prefix +
+                               "the exchange relation g^r(BA) = (-1)^{l1+l2} g^r(AB) is violated");
+    }
+    for (const auto& ranks : observed_ranks)
+        for (unsigned int rank = kAnisotropicSiteRankMin; rank <= kAnisotropicSiteRankMax;
+             ++rank)
+            if (ranks.count(rank) == 0)
+                throw PSIEXCEPTION(prefix +
+                                   "a missing L3 rank is an error, not a zero contribution");
+
+    // --- Coupling matrices. ---
+    for (const auto& matrix : table.coupling_matrices) {
+        if (matrix.first_rank < kAnisotropicSiteRankMin ||
+            matrix.first_rank > kAnisotropicSiteRankMax ||
+            matrix.second_rank < kAnisotropicSiteRankMin ||
+            matrix.second_rank > kAnisotropicSiteRankMax)
+            throw PSIEXCEPTION(prefix + "a coupling matrix names a rank outside the L3 range");
+        const std::size_t expected = anisotropic_rank_dimension(matrix.coupled_rank) *
+                                     anisotropic_rank_dimension(matrix.first_rank) *
+                                     anisotropic_rank_dimension(matrix.second_rank);
+        if (matrix.values.size() != expected)
+            throw PSIEXCEPTION(prefix + "a coupling matrix has the wrong shape");
+        for (double value : matrix.values)
+            if (!std::isfinite(value))
+                throw PSIEXCEPTION(prefix + "every coupling matrix element must be finite");
+    }
+
+    // --- Per label, and the compressed label-to-entry map. ---
+    if (table.label_entry_offsets.size() != table.labels.size() + 1)
+        throw PSIEXCEPTION(prefix + "the label offset array must carry one terminal entry");
+    if (table.label_entry_offsets.front() != 0 ||
+        table.label_entry_offsets.back() != table.label_entry_indices.size())
+        throw PSIEXCEPTION(prefix + "the label offset array does not span the entry index array");
+    for (std::size_t index = 0; index < table.labels.size(); ++index) {
+        const auto& label = table.labels[index];
+        if (label.first_component >= anisotropic_rank_dimension(label.first_rank) ||
+            label.second_component >= anisotropic_rank_dimension(label.second_rank))
+            throw PSIEXCEPTION(prefix + "a real component index exceeds 2 l + 1");
+        const unsigned int coupled_low = label.first_rank > label.second_rank
+                                             ? label.first_rank - label.second_rank
+                                             : label.second_rank - label.first_rank;
+        if (label.coupled_rank < coupled_low ||
+            label.coupled_rank > label.first_rank + label.second_rank)
+            throw PSIEXCEPTION(prefix + "a label's j violates the (l1, l2) triangle rule");
+        if (index > 0 && !anisotropic_label_less(table.labels[index - 1], label))
+            throw PSIEXCEPTION(prefix + "labels must be sorted and unique");
+        if (table.label_entry_offsets[index] > table.label_entry_offsets[index + 1])
+            throw PSIEXCEPTION(prefix + "the label offset array must be non-decreasing");
+        AnisotropicDispersionLabel mirror;
+        mirror.order = label.order;
+        mirror.first_rank = label.second_rank;
+        mirror.first_component = label.second_component;
+        mirror.second_rank = label.first_rank;
+        mirror.second_component = label.first_component;
+        mirror.coupled_rank = label.coupled_rank;
+        if (anisotropic_find_label(table, mirror) == table.labels.size())
+            throw PSIEXCEPTION(prefix + "the label set is not closed under label exchange");
+        // No published label may have an identically vanishing W. Distinct site-rank
+        // blocks occupy disjoint supports, so W vanishes only if every contributing
+        // entry vanishes on this label's two component rows.
+        bool alive = false;
+        for (std::size_t slot = table.label_entry_offsets[index];
+             slot < table.label_entry_offsets[index + 1]; ++slot) {
+            if (slot >= table.label_entry_indices.size())
+                throw PSIEXCEPTION(prefix + "a label offset leaves the entry index array");
+            const auto entry_index = table.label_entry_indices[slot];
+            if (entry_index >= table.entries.size())
+                throw PSIEXCEPTION(prefix + "a label entry index leaves the scalar table");
+            const auto& entry = table.entries[entry_index];
+            if (entry.order != label.order || entry.first_rank != label.first_rank ||
+                entry.second_rank != label.second_rank ||
+                entry.coupled_rank != label.coupled_rank)
+                throw PSIEXCEPTION(prefix + "a label draws on an entry that does not match it");
+            const auto* first_coupling = anisotropic_find_coupling(
+                table, entry.first_site_rank, entry.first_site_rank_prime, entry.first_rank);
+            const auto* second_coupling = anisotropic_find_coupling(
+                table, entry.second_site_rank, entry.second_site_rank_prime, entry.second_rank);
+            if (!first_coupling || !second_coupling)
+                throw PSIEXCEPTION(prefix + "every entry needs its two coupling matrices");
+            const auto first_stride = anisotropic_rank_dimension(entry.first_site_rank) *
+                                      anisotropic_rank_dimension(entry.first_site_rank_prime);
+            const auto second_stride = anisotropic_rank_dimension(entry.second_site_rank) *
+                                       anisotropic_rank_dimension(entry.second_site_rank_prime);
+            bool first_nonzero = false;
+            for (std::size_t offset = 0; offset < first_stride; ++offset)
+                if (first_coupling->values[label.first_component * first_stride + offset] != 0.0)
+                    first_nonzero = true;
+            bool second_nonzero = false;
+            for (std::size_t offset = 0; offset < second_stride; ++offset)
+                if (second_coupling->values[label.second_component * second_stride + offset] !=
+                    0.0)
+                    second_nonzero = true;
+            if (first_nonzero && second_nonzero) alive = true;
+        }
+        if (!alive)
+            throw PSIEXCEPTION(prefix + "a label has an identically vanishing recoupling weight");
+    }
+
+    // --- Closure invariants the loader proves rather than assumes. ---
+    for (const auto& pair : dispersion_rank_pairs()) {
+        AnisotropicDispersionLabel isotropic;
+        isotropic.order = 2 * (pair.first_rank + pair.second_rank + 1);
+        const auto dense = anisotropic_dense_from(table, isotropic);
+        const auto first_offset = dispersion_rank_offset(pair.first_rank);
+        const auto second_offset = dispersion_rank_offset(pair.second_rank);
+        double traced = 0.0;
+        for (std::size_t first = 0; first < dispersion_rank_dimension(pair.first_rank); ++first)
+            for (std::size_t second = 0; second < dispersion_rank_dimension(pair.second_rank);
+                 ++second)
+                traced += dense[anisotropic_block_index(
+                    first_offset + first, first_offset + first, second_offset + second,
+                    second_offset + second)];
+        // The block product spends the 1/(2 pi), so the traced table returns the bare
+        // binomial. Requiring binom/(2 pi) here, as the spec's check 1 does, would
+        // make every published coefficient 2 pi too small.
+        const double expected =
+            binomial(2 * (pair.first_rank + pair.second_rank), 2 * pair.first_rank);
+        if (std::abs(traced - expected) > kAnisotropicClosureTolerance * expected)
+            throw PSIEXCEPTION(
+                prefix + "the isotropic reduction does not return binom(2 la + 2 lb, 2 la)");
+    }
+    const SitePosition canonical{0.0, 0.0, 1.0};
+    const auto tensor = multipole_interaction_tensor(canonical);
+    for (unsigned int first_rank = kAnisotropicSiteRankMin;
+         first_rank <= kAnisotropicSiteRankMax; ++first_rank)
+        for (unsigned int second_rank = kAnisotropicSiteRankMin;
+             second_rank <= kAnisotropicSiteRankMax; ++second_rank) {
+            const auto first_offset = dispersion_rank_offset(first_rank);
+            const auto second_offset = dispersion_rank_offset(second_rank);
+            double total = 0.0;
+            for (std::size_t first = 0; first < dispersion_rank_dimension(first_rank); ++first)
+                for (std::size_t second = 0; second < dispersion_rank_dimension(second_rank);
+                     ++second) {
+                    const double value =
+                        tensor[first_offset + first][second_offset + second];
+                    total += value * value;
+                }
+            const double expected =
+                binomial(2 * (first_rank + second_rank), 2 * first_rank);
+            if (std::abs(total - expected) > kAnisotropicClosureTolerance * expected)
+                throw PSIEXCEPTION(prefix +
+                                   "the interaction tensor norm identity does not hold at the "
+                                   "canonical separation");
+        }
+    // S_{(0, 0, 0, 0, 0)} is identically one: the coupling, the harmonic and both
+    // rotations are all the rank-zero case and the reality phase is +1.
+    const double scalar_s_function =
+        anisotropic_coupling(0, 0, 0, 0, 0) * anisotropic_parity_phase(0).real();
+    if (std::abs(scalar_s_function - 1.0) > kAnisotropicClosureTolerance)
+        throw PSIEXCEPTION(prefix + "the rank-zero S function is not identically one");
+}
+
+const AnisotropicRecouplingTable& anisotropic_recoupling_table() {
+    static const AnisotropicRecouplingTable table = [] {
+        auto generated = generate_anisotropic_recoupling_table();
+        // Generated, then validated before first use. The generator is not trusted
+        // any more than a file on disk would be.
+        validate_anisotropic_recoupling_table(generated);
+        return generated;
+    }();
+    return table;
+}
+
+std::vector<double> dense_anisotropic_recoupling(const AnisotropicDispersionLabel& label) {
+    return anisotropic_dense_from(anisotropic_recoupling_table(), label);
+}
+
+std::vector<double> anisotropic_coefficients_from_block_product(
+    const std::vector<double>& product) {
+    const std::string prefix = "anisotropic dispersion coefficients: ";
+    if (product.size() != kAnisotropicBlockProductElements)
+        throw PSIEXCEPTION(prefix + "expected the full 15^4 block product");
+    const auto& table = anisotropic_recoupling_table();
+
+    // Two caches over the factorised form. The first contracts M against the A-side
+    // coupling matrix once per (site-rank block, l1); the second finishes the job
+    // against the B-side matrix once per (block, l1, l2). Both are shared by every
+    // (k1, k2) and every j of that block, which is the whole point of storing the
+    // table factorised.
+    const auto pack = [](const AnisotropicRecouplingEntry& entry, bool with_second) {
+        std::uint64_t key = entry.first_site_rank;
+        key = key * 8 + entry.first_site_rank_prime;
+        key = key * 8 + entry.second_site_rank;
+        key = key * 8 + entry.second_site_rank_prime;
+        key = key * 16 + entry.first_rank;
+        key = key * 16 + (with_second ? entry.second_rank + 1 : 0);
+        return key;
+    };
+    std::unordered_map<std::uint64_t, std::vector<double>> half;
+    std::unordered_map<std::uint64_t, std::vector<double>> full;
+    for (const auto& entry : table.entries) {
+        const auto full_key = pack(entry, true);
+        if (full.count(full_key) != 0) continue;
+        const auto half_key = pack(entry, false);
+        const auto first_dimension = anisotropic_rank_dimension(entry.first_site_rank);
+        const auto first_prime_dimension =
+            anisotropic_rank_dimension(entry.first_site_rank_prime);
+        const auto second_dimension = anisotropic_rank_dimension(entry.second_site_rank);
+        const auto second_prime_dimension =
+            anisotropic_rank_dimension(entry.second_site_rank_prime);
+        const auto first_components = anisotropic_rank_dimension(entry.first_rank);
+        const auto second_components = anisotropic_rank_dimension(entry.second_rank);
+        auto found = half.find(half_key);
+        if (found == half.end()) {
+            const auto* coupling = anisotropic_find_coupling(
+                table, entry.first_site_rank, entry.first_site_rank_prime, entry.first_rank);
+            if (!coupling) throw PSIEXCEPTION(prefix + "the table is missing a coupling matrix");
+            const auto first_offset = dispersion_rank_offset(entry.first_site_rank);
+            const auto first_prime_offset =
+                dispersion_rank_offset(entry.first_site_rank_prime);
+            const auto second_offset = dispersion_rank_offset(entry.second_site_rank);
+            const auto second_prime_offset =
+                dispersion_rank_offset(entry.second_site_rank_prime);
+            std::vector<double> partial(
+                first_components * second_dimension * second_prime_dimension, 0.0);
+            for (std::size_t component = 0; component < first_components; ++component)
+                for (std::size_t row = 0; row < first_dimension; ++row)
+                    for (std::size_t column = 0; column < first_prime_dimension; ++column) {
+                        const double weight =
+                            coupling->values[(component * first_dimension + row) *
+                                                 first_prime_dimension +
+                                             column];
+                        if (weight == 0.0) continue;
+                        const std::size_t source = anisotropic_block_index(
+                            first_offset + row, first_prime_offset + column, 0, 0);
+                        const std::size_t target =
+                            component * second_dimension * second_prime_dimension;
+                        for (std::size_t other_row = 0; other_row < second_dimension;
+                             ++other_row)
+                            for (std::size_t other_column = 0;
+                                 other_column < second_prime_dimension; ++other_column)
+                                partial[target + other_row * second_prime_dimension +
+                                        other_column] +=
+                                    weight *
+                                    product[source +
+                                            (second_offset + other_row) * kAnisotropicDimension +
+                                            second_prime_offset + other_column];
+                    }
+            found = half.emplace(half_key, std::move(partial)).first;
+        }
+        const auto* coupling = anisotropic_find_coupling(
+            table, entry.second_site_rank, entry.second_site_rank_prime, entry.second_rank);
+        if (!coupling) throw PSIEXCEPTION(prefix + "the table is missing a coupling matrix");
+        const auto& partial = found->second;
+        std::vector<double> finished(first_components * second_components, 0.0);
+        const auto stride = second_dimension * second_prime_dimension;
+        for (std::size_t component = 0; component < first_components; ++component)
+            for (std::size_t other = 0; other < second_components; ++other) {
+                double accumulator = 0.0;
+                for (std::size_t offset = 0; offset < stride; ++offset)
+                    accumulator += partial[component * stride + offset] *
+                                   coupling->values[other * stride + offset];
+                finished[component * second_components + other] = accumulator;
+            }
+        full.emplace(full_key, std::move(finished));
+    }
+
+    std::vector<double> coefficients(table.labels.size(), 0.0);
+    for (std::size_t index = 0; index < table.labels.size(); ++index) {
+        const auto& label = table.labels[index];
+        double total = 0.0;
+        for (std::size_t slot = table.label_entry_offsets[index];
+             slot < table.label_entry_offsets[index + 1]; ++slot) {
+            const auto& entry = table.entries[table.label_entry_indices[slot]];
+            const auto& finished = full.at(pack(entry, true));
+            total += entry.scalar *
+                     finished[label.first_component *
+                                  anisotropic_rank_dimension(entry.second_rank) +
+                              label.second_component];
+        }
+        require_finite(total, "anisotropic dispersion coefficient");
+        coefficients[index] = total;
+    }
+    return coefficients;
+}
+
+std::vector<double> anisotropic_s_functions(const SiteAxes& first_frame,
+                                           const SiteAxes& second_frame,
+                                           const SitePosition& direction) {
+    const std::string prefix = "anisotropic S functions: ";
+    require_anisotropic_rotation(first_frame);
+    require_anisotropic_rotation(second_frame);
+    const auto& table = anisotropic_recoupling_table();
+    std::vector<std::vector<std::vector<Complex>>> first_rotations(
+        kAnisotropicCoupledRankMax + 1);
+    std::vector<std::vector<std::vector<Complex>>> second_rotations(
+        kAnisotropicCoupledRankMax + 1);
+    for (unsigned int rank = 0; rank <= kAnisotropicCoupledRankMax; ++rank) {
+        first_rotations[rank] = anisotropic_wigner_rotation(rank, first_frame);
+        second_rotations[rank] = anisotropic_wigner_rotation(rank, second_frame);
+    }
+    const auto harmonics = anisotropic_direction_harmonics(direction, kAnisotropicTotalRankMax);
+    std::map<std::array<unsigned int, 3>, std::vector<double>> functions;
+    for (const auto& label : table.labels) {
+        const std::array<unsigned int, 3> key{label.first_rank, label.second_rank,
+                                              label.coupled_rank};
+        if (functions.count(key) != 0) continue;
+        functions.emplace(key, anisotropic_s_function_block(
+                                   first_rotations[label.first_rank],
+                                   second_rotations[label.second_rank], harmonics, key));
+    }
+    std::vector<double> values(table.labels.size(), 0.0);
+    for (std::size_t index = 0; index < table.labels.size(); ++index) {
+        const auto& label = table.labels[index];
+        const auto& block = functions.at(
+            {label.first_rank, label.second_rank, label.coupled_rank});
+        values[index] =
+            block[label.first_component * anisotropic_rank_dimension(label.second_rank) +
+                  label.second_component];
+    }
+    return values;
+}
+
+
+std::vector<double> anisotropic_orientational_average_test_only() {
+    const auto& table = anisotropic_recoupling_table();
+    // <D^l>_{SO(3)} from an Euler-angle rule that is exact for every rank the label
+    // set carries: uniform in alpha and gamma with 2 lmax + 1 points, Gauss-Legendre
+    // in cos beta with lmax + 1 points.
+    const unsigned int azimuthal_count = 2 * kAnisotropicCoupledRankMax + 1;
+    const auto polar = anisotropic_gauss_legendre(kAnisotropicCoupledRankMax + 1);
+    std::vector<std::vector<std::vector<Complex>>> averaged(kAnisotropicCoupledRankMax + 1);
+    for (unsigned int rank = 0; rank <= kAnisotropicCoupledRankMax; ++rank)
+        averaged[rank].assign(anisotropic_rank_dimension(rank),
+                              std::vector<Complex>(anisotropic_rank_dimension(rank),
+                                                   Complex(0.0, 0.0)));
+    double weight_sum = 0.0;
+    for (unsigned int first_index = 0; first_index < azimuthal_count; ++first_index) {
+        const double alpha =
+            2.0 * M_PI * static_cast<double>(first_index) / static_cast<double>(azimuthal_count);
+        for (std::size_t polar_index = 0; polar_index < polar.first.size(); ++polar_index) {
+            const double beta = std::acos(polar.first[polar_index]);
+            for (unsigned int last_index = 0; last_index < azimuthal_count; ++last_index) {
+                const double gamma = 2.0 * M_PI * static_cast<double>(last_index) /
+                                     static_cast<double>(azimuthal_count);
+                const double weight =
+                    polar.second[polar_index] / (2.0 * static_cast<double>(azimuthal_count) *
+                                                 static_cast<double>(azimuthal_count));
+                weight_sum += weight;
+                const double cos_alpha = std::cos(alpha), sin_alpha = std::sin(alpha);
+                const double cos_beta = std::cos(beta), sin_beta = std::sin(beta);
+                const double cos_gamma = std::cos(gamma), sin_gamma = std::sin(gamma);
+                const SiteAxes first_turn{{{cos_alpha, -sin_alpha, 0.0},
+                                           {sin_alpha, cos_alpha, 0.0},
+                                           {0.0, 0.0, 1.0}}};
+                const SiteAxes middle{{{cos_beta, 0.0, sin_beta},
+                                       {0.0, 1.0, 0.0},
+                                       {-sin_beta, 0.0, cos_beta}}};
+                const SiteAxes last_turn{{{cos_gamma, -sin_gamma, 0.0},
+                                          {sin_gamma, cos_gamma, 0.0},
+                                          {0.0, 0.0, 1.0}}};
+                SiteAxes rotation{};
+                for (std::size_t row = 0; row < 3; ++row)
+                    for (std::size_t column = 0; column < 3; ++column) {
+                        double value = 0.0;
+                        for (std::size_t inner = 0; inner < 3; ++inner)
+                            for (std::size_t other = 0; other < 3; ++other)
+                                value += first_turn[row][inner] * middle[inner][other] *
+                                         last_turn[other][column];
+                        rotation[row][column] = value;
+                    }
+                for (unsigned int rank = 0; rank <= kAnisotropicCoupledRankMax; ++rank) {
+                    const auto wigner = anisotropic_wigner_rotation(rank, rotation);
+                    for (std::size_t row = 0; row < wigner.size(); ++row)
+                        for (std::size_t column = 0; column < wigner.size(); ++column)
+                            averaged[rank][row][column] += weight * wigner[row][column];
+                }
+            }
+        }
+    }
+    if (std::abs(weight_sum - 1.0) > kAnisotropicClosureTolerance)
+        throw PSIEXCEPTION(
+            "anisotropic orientational average: the SO(3) quadrature weights do not sum to one");
+
+    // <C_{j mu}>_{S^2} from a product rule exact for every j the label set carries.
+    const unsigned int sphere_polar_count = kAnisotropicTotalRankMax + 2;
+    const unsigned int sphere_azimuthal_count = 4 * kAnisotropicTotalRankMax + 3;
+    const auto sphere = anisotropic_gauss_legendre(sphere_polar_count);
+    std::vector<std::vector<Complex>> harmonics(kAnisotropicTotalRankMax + 1);
+    for (unsigned int rank = 0; rank <= kAnisotropicTotalRankMax; ++rank)
+        harmonics[rank].assign(anisotropic_rank_dimension(rank), Complex(0.0, 0.0));
+    for (std::size_t polar_index = 0; polar_index < sphere.first.size(); ++polar_index) {
+        const double cosine = sphere.first[polar_index];
+        const double sine = std::sqrt(std::max(0.0, 1.0 - cosine * cosine));
+        for (unsigned int azimuthal_index = 0; azimuthal_index < sphere_azimuthal_count;
+             ++azimuthal_index) {
+            const double azimuth = 2.0 * M_PI * static_cast<double>(azimuthal_index) /
+                                   static_cast<double>(sphere_azimuthal_count);
+            const SitePosition direction{sine * std::cos(azimuth), sine * std::sin(azimuth),
+                                         cosine};
+            const double weight = 0.5 * sphere.second[polar_index] /
+                                  static_cast<double>(sphere_azimuthal_count);
+            const auto values =
+                anisotropic_direction_harmonics(direction, kAnisotropicTotalRankMax);
+            for (unsigned int rank = 0; rank <= kAnisotropicTotalRankMax; ++rank)
+                for (std::size_t order = 0; order < values[rank].size(); ++order)
+                    harmonics[rank][order] += weight * values[rank][order];
+        }
+    }
+
+    std::map<std::array<unsigned int, 3>, std::vector<double>> functions;
+    for (const auto& label : table.labels) {
+        const std::array<unsigned int, 3> key{label.first_rank, label.second_rank,
+                                              label.coupled_rank};
+        if (functions.count(key) != 0) continue;
+        functions.emplace(key,
+                          anisotropic_s_function_block(averaged[label.first_rank],
+                                                       averaged[label.second_rank],
+                                                       harmonics, key));
+    }
+    std::vector<double> values(table.labels.size(), 0.0);
+    for (std::size_t index = 0; index < table.labels.size(); ++index) {
+        const auto& label = table.labels[index];
+        const auto& block =
+            functions.at({label.first_rank, label.second_rank, label.coupled_rank});
+        values[index] =
+            block[label.first_component * anisotropic_rank_dimension(label.second_rank) +
+                  label.second_component];
+    }
+    return values;
 }
 
 }  // namespace detail

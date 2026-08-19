@@ -1644,6 +1644,13 @@ std::vector<double> dense_anisotropic_recoupling(const AnisotropicDispersionLabe
 std::vector<double> anisotropic_s_functions(const SiteAxes& first_frame,
                                             const SiteAxes& second_frame,
                                             const SitePosition& direction);
+/**
+ * Test seam: the explicit SO(3) x SO(3) x S^2 average of every S function, one per
+ * internal label. The analytic selection rule is
+ * <S_label> = delta_{label, (n, 0, 0, 0, 0, 0)}, and this computes it by quadrature
+ * instead so the selection rule is verified rather than assumed.
+ */
+std::vector<double> anisotropic_orientational_average_test_only();
 /** E_disp straight from the interaction tensor: -sum T_{tu} T_{t'u'} M_{(t t')(u u')}. */
 double direct_anisotropic_energy(const std::vector<double>& product,
                                  const SitePosition& separation);

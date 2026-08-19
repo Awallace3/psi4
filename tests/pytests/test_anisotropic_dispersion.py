@@ -467,3 +467,347 @@ def test_direct_energy_is_exactly_the_double_sum_over_the_interaction_tensor():
                              for up in range(_L3_DIMENSION))
     assert abs(energy / (-total) - 1.0) < 1.0e-14
     assert energy < 0.0
+
+
+# ---------------------------------------------------------------------------
+# B6/B7 -- the real recoupling table W.
+# ---------------------------------------------------------------------------
+#
+# W is stored factorised and never materialised densely: one label costs 15^4
+# doubles and there are 29762 labels, so a dense table would be twelve gigabytes.
+# The factorised form is exact,
+#
+#   W^{n, l1 k1, l2 k2, j}_{(t t')(u u')}
+#     = sum_{blocks with that n} g^r Pcheck^{(la, la', l1)}_{k1,(t t')}
+#                                    Pcheck^{(lb, lb', l2)}_{k2,(u u')},
+#
+# so the 2723 nonzero g^r scalars plus 37 universal coupling matrices are the
+# whole table.  dense_anisotropic_recoupling exists only as a single-label test
+# seam and is used below to pin the isotropic reduction and the exchange rule.
+#
+# The radial order is n = la + la' + lb + lb' + 2, NOT 2 (la + lb + 1).  T_{tu}
+# and T_{t'u'} may carry different ranks, so an L3 model produces every order
+# from 6 to 14, including the odd C7, C9, C11, C13 that vanish on orientational
+# averaging but are genuine anisotropic coefficients.
+
+_TABLE_VERSION = "partB-recoupling-1"
+_RECOUPLING_ENTRY_COUNT = 2723
+_INTERNAL_LABEL_COUNT = 29762
+_PUBLISHED_LABEL_COUNT = 16985
+_COUPLING_MATRIX_COUNT = 37
+_DISTINCT_RANK_QUADRUPLES = 530
+_LABELS_PER_ORDER = {6: 104, 7: 391, 8: 896, 9: 1748, 10: 3063,
+                     11: 4486, 12: 6297, 13: 7457, 14: 5320}
+
+# The single n = 6 block is (la, la', lb, lb') = (1, 1, 1, 1). Closed forms are
+# annotations; the numbers are what the generator must reproduce.
+_N6_SCALARS = {
+    (0, 0, 0): 2.0,                    # 2
+    (0, 2, 2): -1.4142135623730951,    # -sqrt(2)
+    (1, 1, 0): 1.7320508075688772,     # sqrt(3), symmetry null
+    (1, 1, 2): 2.449489742783178,      # sqrt(6), symmetry null
+    (2, 0, 2): -1.4142135623730951,    # -sqrt(2)
+    (2, 2, 0): 0.4472135954999579,     # 1/sqrt(5)
+    (2, 2, 2): 0.5345224838248488,     # sqrt(2/7)
+    (2, 2, 4): 4.30282299360405,       # 18 sqrt(2/35)
+}
+
+# The C6 (l1, l2, j) triples that survive a symmetric L3 model. This is the
+# textbook anisotropic-C6 label set and it is an external sanity check on the
+# whole construction: dipole-dipole dispersion anisotropy carries only the
+# rank-0 and rank-2 parts of each site's polarizability.
+_LIVE_C6_TRIPLES = ((0, 0, 0), (0, 2, 2), (2, 0, 2), (2, 2, 0), (2, 2, 2), (2, 2, 4))
+
+_TABLE_REJECTIONS = (
+    "version",
+    "generator",
+    "component_order",
+    "conventions",
+    "nonfinite_scalar",
+    "site_rank",
+    "order_mismatch",
+    "order_range",
+    "first_rank_triangle",
+    "second_rank_triangle",
+    "capital_triangle",
+    "coupled_triangle",
+    "parity",
+    "zero_scalar",
+    "duplicate_entry",
+    "missing_site_rank",
+    "component_index",
+    "label_triangle",
+    "label_order",
+    "duplicate_label",
+    "exchange_closure",
+    "exchange_scalar",
+    "empty_label",
+    "offset_count",
+    "offset_monotonic",
+    "entry_index_range",
+    "missing_coupling_matrix",
+    "coupling_matrix_shape",
+    "isotropic_reduction",
+    "rotation_orthogonality",
+    "collapse_residual",
+)
+
+
+def _table():
+    return psi4.core._atomic_polarizability_anisotropic_recoupling_table()
+
+
+def _dense_recoupling(label):
+    return psi4.core._atomic_polarizability_test_dense_anisotropic_recoupling(list(label))
+
+
+def _coefficients(first_tensors, second_tensors, weights=None):
+    return psi4.core._atomic_polarizability_test_anisotropic_coefficients(
+        [_matrix(tensor) for tensor in first_tensors],
+        [_matrix(tensor) for tensor in second_tensors],
+        list(weights if weights is not None else _REVIEWED_WEIGHTS))
+
+
+def _label_index(table):
+    return {tuple(label): index for index, label in enumerate(table["labels"])}
+
+
+def test_recoupling_table_declares_its_version_and_conventions():
+    table = _table()
+    assert table["version"] == _TABLE_VERSION
+    assert tuple(table["component_order"]) == _COMPONENT_ORDER
+    conventions = dict(table["conventions"])
+    for key in ("racah", "real_transform", "interaction_tensor", "reality_phase",
+                "energy", "block_product"):
+        assert conventions[key]
+    # The block product carries the 1/(2 pi); the table therefore carries the bare
+    # binomial. Stating it in the table is what makes the two halves auditable.
+    assert "2 pi" in conventions["block_product"]
+
+
+def test_recoupling_table_has_the_expected_size():
+    table = _table()
+    assert table["entry_count"] == _RECOUPLING_ENTRY_COUNT
+    assert table["label_count"] == _INTERNAL_LABEL_COUNT
+    assert table["coupling_matrix_count"] == _COUPLING_MATRIX_COUNT
+    assert len(table["labels"]) == _INTERNAL_LABEL_COUNT
+    assert len(table["entries"]) == _RECOUPLING_ENTRY_COUNT
+
+
+def test_recoupling_table_spans_every_order_from_six_to_fourteen():
+    """An L3 model produces C6..C14, odd orders included; n = la + la' + lb + lb' + 2."""
+    table = _table()
+    per_order = {}
+    for label in table["labels"]:
+        per_order[label[0]] = per_order.get(label[0], 0) + 1
+    assert per_order == _LABELS_PER_ORDER
+    published = sum(count for order, count in _LABELS_PER_ORDER.items() if order <= 12)
+    assert published == _PUBLISHED_LABEL_COUNT
+
+
+def test_recoupling_table_has_the_expected_distinct_rank_quadruples():
+    table = _table()
+    quadruples = {(label[0], label[1], label[3], label[5]) for label in table["labels"]}
+    assert len(quadruples) == _DISTINCT_RANK_QUADRUPLES
+
+
+def test_recoupling_table_labels_are_sorted_and_unique():
+    labels = [tuple(label) for label in _table()["labels"]]
+    assert labels == sorted(labels)
+    assert len(set(labels)) == len(labels)
+
+
+def test_recoupling_table_order_six_scalars_match_their_closed_forms():
+    entries = {(entry["first_rank"], entry["second_rank"], entry["coupled_rank"]):
+               entry["scalar"] for entry in _table()["entries"] if entry["order"] == 6}
+    assert set(entries) == set(_N6_SCALARS)
+    for key, expected in _N6_SCALARS.items():
+        assert abs(entries[key] - expected) <= 1.0e-13 * abs(expected)
+
+
+@pytest.mark.parametrize("first_rank,second_rank,binomial", [
+    (1, 1, 6.0), (1, 2, 15.0), (2, 1, 15.0), (1, 3, 28.0), (3, 1, 28.0),
+    (2, 2, 70.0), (2, 3, 210.0), (3, 2, 210.0),
+])
+def test_recoupling_table_isotropic_reduction_returns_the_bare_binomial(
+        first_rank, second_rank, binomial):
+    """W[n, 00, 00, 0] traced over the diagonal rank blocks equals binom, not binom/(2 pi).
+
+    The 1/(2 pi) is spent inside M, so the table carries the bare binomial.  This is
+    B.5 check 1 with the spec's double-counted 2 pi removed; asserting binom/(2 pi)
+    here would make every coefficient 2 pi too small.
+    """
+    order = 2 * (first_rank + second_rank + 1)
+    dense = _dense_recoupling((order, 0, 0, 0, 0, 0))
+    first_lo, first_hi = _RANK_SLICE[first_rank]
+    second_lo, second_hi = _RANK_SLICE[second_rank]
+    traced = 0.0
+    for first in range(first_lo, first_hi):
+        for second in range(second_lo, second_hi):
+            traced += dense[((first * _L3_DIMENSION + first) * _L3_DIMENSION + second)
+                            * _L3_DIMENSION + second]
+    assert abs(traced / binomial - 1.0) < 1.0e-13
+
+
+def test_recoupling_table_isotropic_label_matches_the_isotropic_engine():
+    """C_n[00 00 0] must equal compute_dispersion's C6..C12 to machine precision."""
+    models = _synthetic_models((51, 52))
+    reference = _isotropic_dispersion(models)
+    coefficients = _coefficients([frequency[0] for frequency in models],
+                                 [frequency[1] for frequency in models])
+    index = _label_index(_table())
+    for order in _ISOTROPIC_ORDERS:
+        expected = reference["c%d" % order].get(0, 1)
+        actual = coefficients[index[(order, 0, 0, 0, 0, 0)]]
+        assert abs(actual / expected - 1.0) < 1.0e-14
+
+
+@pytest.mark.parametrize("label", [
+    (6, 0, 0, 0, 0, 0),
+    (6, 2, 4, 2, 4, 0),
+    (7, 2, 4, 3, 6, 1),
+    (8, 2, 4, 4, 8, 2),
+    (9, 2, 4, 5, 10, 3),
+    (10, 2, 4, 6, 12, 4),
+    (11, 3, 6, 6, 12, 3),
+    (12, 4, 8, 6, 12, 2),
+    (13, 5, 10, 6, 12, 1),
+    (14, 6, 12, 6, 12, 0),
+])
+def test_recoupling_factorised_contraction_equals_the_dense_contraction(label):
+    """The factorised (g^r, Pcheck) form is exact, not an approximation of a dense W."""
+    models = _synthetic_models((61, 62))
+    first = [frequency[0] for frequency in models]
+    second = [frequency[1] for frequency in models]
+    product = _block_product(first, second)["values"]
+    dense = _dense_recoupling(label)
+    contracted = sum(a * b for a, b in zip(dense, product))
+    coefficients = _coefficients(first, second)
+    factorised = coefficients[_label_index(_table())[label]]
+    scale = max(abs(value) for value in coefficients)
+    assert abs(factorised - contracted) <= 1.0e-13 * scale
+
+
+@pytest.mark.parametrize("label", [
+    (6, 0, 0, 2, 3, 2),
+    (7, 1, 1, 2, 1, 1),
+    (8, 1, 1, 3, 1, 2),
+    (9, 2, 4, 5, 10, 3),
+    (11, 1, 1, 2, 1, 1),
+    (12, 4, 8, 6, 12, 2),
+    (14, 6, 12, 6, 12, 0),
+])
+def test_recoupling_table_exchange_rule_carries_minus_one_to_the_l1_plus_l2(label):
+    """W^{l2 k2, l1 k1} with the site blocks transposed = (-1)^{l1+l2} W^{l1 k1, l2 k2}.
+
+    The sign is (-1)^{l1 + l2}, not (-1)^j.  Because L1 + L2 + j is even and
+    L1 + L2 = n - 2, j always has the parity of n, so (-1)^j is a different factor
+    and using it fails by a full sign on part of the table.
+    """
+    order, first_rank, first_component, second_rank, second_component, coupled = label
+    forward = _dense_recoupling(label)
+    mirror = _dense_recoupling((order, second_rank, second_component,
+                                first_rank, first_component, coupled))
+    sign = -1.0 if (first_rank + second_rank) % 2 else 1.0
+    scale = max(abs(value) for value in forward)
+    assert scale > 0.0
+    worst = 0.0
+    for t in range(_L3_DIMENSION):
+        for tp in range(_L3_DIMENSION):
+            for u in range(_L3_DIMENSION):
+                for up in range(_L3_DIMENSION):
+                    lhs = mirror[((u * _L3_DIMENSION + up) * _L3_DIMENSION + t)
+                                 * _L3_DIMENSION + tp]
+                    rhs = sign * forward[((t * _L3_DIMENSION + tp) * _L3_DIMENSION + u)
+                                         * _L3_DIMENSION + up]
+                    worst = max(worst, abs(lhs - rhs))
+    assert worst / scale < 1.0e-12
+
+
+def test_recoupling_coefficients_obey_the_exchange_rule_over_the_whole_label_set():
+    """C^{BA}[l2 k2, l1 k1, j] = (-1)^{l1+l2} C^{AB}[l1 k1, l2 k2, j], all 29762 labels."""
+    models = _synthetic_models((71, 72))
+    first = [frequency[0] for frequency in models]
+    second = [frequency[1] for frequency in models]
+    forward = _coefficients(first, second)
+    backward = _coefficients(second, first)
+    table = _table()
+    index = _label_index(table)
+    scale = max(abs(value) for value in forward)
+    worst = 0.0
+    for slot, label in enumerate(table["labels"]):
+        order, first_rank, first_component, second_rank, second_component, coupled = label
+        mirror = (order, second_rank, second_component, first_rank, first_component, coupled)
+        assert mirror in index
+        sign = -1.0 if (first_rank + second_rank) % 2 else 1.0
+        worst = max(worst, abs(backward[index[mirror]] - sign * forward[slot]))
+    assert worst / scale < 1.0e-13
+
+
+def test_recoupling_table_label_set_is_closed_under_the_exchange():
+    table = _table()
+    labels = {tuple(label) for label in table["labels"]}
+    for order, first_rank, first_component, second_rank, second_component, coupled in labels:
+        assert (order, second_rank, second_component, first_rank, first_component,
+                coupled) in labels
+
+
+def test_recoupling_table_live_order_six_triples_are_the_textbook_set():
+    """A symmetric L3 model leaves exactly the standard anisotropic C6 label set."""
+    models = _synthetic_models((81, 82))
+    coefficients = _coefficients([frequency[0] for frequency in models],
+                                 [frequency[1] for frequency in models])
+    table = _table()
+    scale = max(abs(value) for value in coefficients)
+    live = set()
+    for slot, label in enumerate(table["labels"]):
+        if label[0] == 6 and abs(coefficients[slot]) > 1.0e-12 * scale:
+            live.add((label[1], label[3], label[5]))
+    assert tuple(sorted(live)) == _LIVE_C6_TRIPLES
+
+
+def test_recoupling_table_orientational_average_returns_the_isotropic_coefficient():
+    """<S_label> = delta_{label, (n, 0, 0, 0, 0, 0)} under SO(3) x SO(3) x S^2 averaging.
+
+    Checked by explicit quadrature over the whole label set, exact for l <= 6 in the
+    Euler angles and for j <= 12 on the sphere, then propagated to the coefficients.
+    """
+    models = _synthetic_models((91, 92))
+    result = psi4.core._atomic_polarizability_test_anisotropic_orientational_average(
+        [_matrix(frequency[0]) for frequency in models],
+        [_matrix(frequency[1]) for frequency in models],
+        list(_REVIEWED_WEIGHTS))
+    assert result["max_s_function_deviation"] < 1.0e-12
+    assert result["max_isotropic_deviation"] < 1.0e-12
+    assert result["label_count"] == _INTERNAL_LABEL_COUNT
+
+
+def test_recoupling_table_rank_completeness_covers_every_l3_rank():
+    """A missing rank is an error, not a zero contribution, as in the isotropic engine."""
+    entries = _table()["entries"]
+    for key in ("first_site_rank", "first_site_rank_prime",
+                "second_site_rank", "second_site_rank_prime"):
+        assert {entry[key] for entry in entries} == {1, 2, 3}
+
+
+def test_recoupling_table_reports_its_generation_residuals():
+    table = _table()
+    assert table["max_collapse_residual"] < 1.0e-13
+    assert table["max_rotation_orthogonality_deviation"] < 1.0e-12
+
+
+@pytest.mark.parametrize("mutation", _TABLE_REJECTIONS)
+def test_recoupling_table_loader_refuses_a_structurally_invalid_table(mutation):
+    """Following validate_dispersion_rank_pairs: fail closed, never trust the table."""
+    with pytest.raises(RuntimeError):
+        psi4.core._atomic_polarizability_test_anisotropic_table_rejection(mutation)
+
+
+def test_recoupling_table_rejection_seam_rejects_an_unknown_mutation():
+    with pytest.raises(RuntimeError):
+        psi4.core._atomic_polarizability_test_anisotropic_table_rejection("not-a-mutation")
+
+
+def test_recoupling_table_accepts_the_generated_table():
+    """The generated table itself must pass every invariant the loader enforces."""
+    assert psi4.core._atomic_polarizability_test_anisotropic_table_rejection("none") is True
