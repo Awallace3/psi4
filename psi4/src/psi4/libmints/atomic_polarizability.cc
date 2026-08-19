@@ -5510,6 +5510,422 @@ DispersionMatrices compute_dispersion(const std::vector<RefinedL3Model>& models,
     return compute_dispersion_impl(models, frequencies, true);
 }
 
+// ---------------------------------------------------------------------------
+// Anisotropic distributed dispersion coefficients.
+//
+// Published equations only. See the declarations in atomic_polarizability.h for
+// the reference list; nothing below is transcribed from any external package.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/** Ranks the L3 dispersion tensor carries; rank 0 lives in the 16-component workspace. */
+constexpr unsigned int kAnisotropicSiteRankMin = 1;
+constexpr unsigned int kAnisotropicSiteRankMax = 3;
+/** l1 and l2 couple two site ranks, so they reach 2*kAnisotropicSiteRankMax. */
+constexpr unsigned int kAnisotropicCoupledRankMax = 6;
+/** j couples l1 and l2, so it reaches 2*kAnisotropicCoupledRankMax. */
+constexpr unsigned int kAnisotropicTotalRankMax = 12;
+constexpr std::size_t kAnisotropicDimension = 15;
+constexpr double kAnisotropicRealityTolerance = 1.0e-11;
+constexpr double kAnisotropicRotationTolerance = 1.0e-11;
+
+std::size_t anisotropic_rank_dimension(unsigned int rank) { return 2 * rank + 1; }
+
+/** Factorials as long double so the alternating Racah sum keeps full double precision. */
+long double anisotropic_factorial(int argument) {
+    static const std::vector<long double> table = [] {
+        std::vector<long double> values(64, 1.0L);
+        for (std::size_t index = 1; index < values.size(); ++index)
+            values[index] = values[index - 1] * static_cast<long double>(index);
+        return values;
+    }();
+    if (argument < 0 || static_cast<std::size_t>(argument) >= table.size())
+        throw PSIEXCEPTION("anisotropic recoupling: factorial argument left the supported range");
+    return table[static_cast<std::size_t>(argument)];
+}
+
+/**
+ * <j1 m1; j2 m2 | j m> from Racah's closed formula for integer angular momenta,
+ * Brink and Satchler, "Angular Momentum", 2nd ed. (1968).
+ */
+double anisotropic_clebsch_gordan(int j1, int m1, int j2, int m2, int j, int m) {
+    if (j1 < 0 || j2 < 0 || j < 0) return 0.0;
+    if (m1 + m2 != m) return 0.0;
+    if (j < std::abs(j1 - j2) || j > j1 + j2) return 0.0;
+    if (std::abs(m1) > j1 || std::abs(m2) > j2 || std::abs(m) > j) return 0.0;
+    long double prefactor = static_cast<long double>(2 * j + 1);
+    prefactor *= anisotropic_factorial(j1 + j2 - j) * anisotropic_factorial(j1 - j2 + j) *
+                 anisotropic_factorial(-j1 + j2 + j) / anisotropic_factorial(j1 + j2 + j + 1);
+    prefactor *= anisotropic_factorial(j1 + m1) * anisotropic_factorial(j1 - m1) *
+                 anisotropic_factorial(j2 + m2) * anisotropic_factorial(j2 - m2) *
+                 anisotropic_factorial(j + m) * anisotropic_factorial(j - m);
+    const int lower = std::max(0, std::max(j2 - j - m1, j1 + m2 - j));
+    const int upper = std::min(j1 + j2 - j, std::min(j1 - m1, j2 + m2));
+    long double sum = 0.0L;
+    for (int k = lower; k <= upper; ++k) {
+        const long double denominator =
+            anisotropic_factorial(k) * anisotropic_factorial(j1 + j2 - j - k) *
+            anisotropic_factorial(j1 - m1 - k) * anisotropic_factorial(j2 + m2 - k) *
+            anisotropic_factorial(j - j2 + m1 + k) * anisotropic_factorial(j - j1 - m2 + k);
+        sum += (k % 2 == 0 ? 1.0L : -1.0L) / denominator;
+    }
+    const double value = static_cast<double>(std::sqrt(prefactor) * sum);
+    require_finite(value, "anisotropic Clebsch-Gordan coefficient");
+    return value;
+}
+
+/**
+ * Racah-normalised complex solid harmonics of a direction,
+ * C_{lm}(rhat) = sqrt(4 pi/(2l+1)) Y_{lm}(rhat), returned as [l][m + l].
+ * The associated Legendre functions carry the Condon-Shortley phase, which is the
+ * phase convention the L3 model's real/complex transform already assumes.
+ */
+std::vector<std::vector<Complex>> anisotropic_direction_harmonics(const SitePosition& direction,
+                                                                 unsigned int lmax) {
+    const double length = std::sqrt(direction[0] * direction[0] + direction[1] * direction[1] +
+                                   direction[2] * direction[2]);
+    require_finite(length, "anisotropic direction harmonics");
+    if (!(length > 0.0))
+        throw PSIEXCEPTION("anisotropic recoupling: the direction must be a nonzero vector");
+    const double cosine = direction[2] / length;
+    const double azimuth = std::atan2(direction[1], direction[0]);
+    const double sine = std::sqrt(std::max(0.0, 1.0 - cosine * cosine));
+
+    std::vector<std::vector<double>> legendre(lmax + 1, std::vector<double>(lmax + 1, 0.0));
+    for (unsigned int order = 0; order <= lmax; ++order) {
+        double diagonal = 1.0;
+        for (unsigned int step = 1; step <= order; ++step)
+            diagonal *= -(2.0 * static_cast<double>(step) - 1.0) * sine;
+        legendre[order][order] = diagonal;
+        if (order + 1 <= lmax)
+            legendre[order + 1][order] =
+                cosine * (2.0 * static_cast<double>(order) + 1.0) * diagonal;
+        for (unsigned int degree = order + 2; degree <= lmax; ++degree)
+            legendre[degree][order] =
+                (cosine * (2.0 * static_cast<double>(degree) - 1.0) * legendre[degree - 1][order] -
+                 (static_cast<double>(degree) + static_cast<double>(order) - 1.0) *
+                     legendre[degree - 2][order]) /
+                (static_cast<double>(degree) - static_cast<double>(order));
+    }
+
+    std::vector<std::vector<Complex>> harmonics(lmax + 1);
+    for (unsigned int degree = 0; degree <= lmax; ++degree) {
+        harmonics[degree].assign(2 * degree + 1, Complex(0.0, 0.0));
+        for (unsigned int order = 0; order <= degree; ++order) {
+            const double normalisation = std::sqrt(static_cast<double>(
+                anisotropic_factorial(static_cast<int>(degree - order)) /
+                anisotropic_factorial(static_cast<int>(degree + order))));
+            const Complex value = normalisation * legendre[degree][order] *
+                                  std::exp(Complex(0.0, static_cast<double>(order) * azimuth));
+            require_finite(value, "anisotropic direction harmonics");
+            harmonics[degree][degree + order] = value;
+            if (order > 0)
+                harmonics[degree][degree - order] =
+                    (order % 2 == 0 ? 1.0 : -1.0) * std::conj(value);
+        }
+    }
+    return harmonics;
+}
+
+/**
+ * The unitary real/complex transform U^{(l)}, R_t = sum_m U^{(l)}[t][m + l] C_{lm},
+ * read straight off real_to_complex: C_{l,+m} = (-1)^m (R_lmc + i R_lms)/sqrt2 and
+ * C_{l,-m} = (R_lmc - i R_lms)/sqrt2, inverted. Row order is l0, l1c, l1s, ... .
+ */
+const std::vector<std::vector<Complex>>& anisotropic_real_transform(unsigned int rank) {
+    static const std::vector<std::vector<std::vector<Complex>>> table = [] {
+        std::vector<std::vector<std::vector<Complex>>> built(kAnisotropicCoupledRankMax + 1);
+        const double inverse_root2 = 1.0 / std::sqrt(2.0);
+        for (unsigned int degree = 0; degree <= kAnisotropicCoupledRankMax; ++degree) {
+            const std::size_t dimension = 2 * degree + 1;
+            built[degree].assign(dimension, std::vector<Complex>(dimension, Complex(0.0, 0.0)));
+            built[degree][0][degree] = Complex(1.0, 0.0);
+            std::size_t row = 1;
+            for (unsigned int order = 1; order <= degree; ++order) {
+                const double phase = order % 2 == 0 ? 1.0 : -1.0;
+                built[degree][row][degree + order] = Complex(phase * inverse_root2, 0.0);
+                built[degree][row][degree - order] = Complex(inverse_root2, 0.0);
+                ++row;
+                built[degree][row][degree + order] = Complex(0.0, -phase * inverse_root2);
+                built[degree][row][degree - order] = Complex(0.0, inverse_root2);
+                ++row;
+            }
+        }
+        return built;
+    }();
+    if (rank > kAnisotropicCoupledRankMax)
+        throw PSIEXCEPTION("anisotropic recoupling: real transform rank left the supported range");
+    return table[rank];
+}
+
+/** The real regular solid harmonics R_t(r) of one rank, in the l0, l1c, l1s, ... order. */
+std::vector<double> anisotropic_real_solid_harmonics(unsigned int rank,
+                                                     const SitePosition& point) {
+    const double length =
+        std::sqrt(point[0] * point[0] + point[1] * point[1] + point[2] * point[2]);
+    const auto harmonics = anisotropic_direction_harmonics(point, rank);
+    const auto& transform = anisotropic_real_transform(rank);
+    const double radial = std::pow(length, static_cast<double>(rank));
+    std::vector<double> result(anisotropic_rank_dimension(rank), 0.0);
+    for (std::size_t component = 0; component < result.size(); ++component) {
+        Complex accumulator(0.0, 0.0);
+        for (std::size_t order = 0; order < result.size(); ++order)
+            accumulator += transform[component][order] * harmonics[rank][order];
+        require_finite(accumulator, "anisotropic real solid harmonics");
+        result[component] = accumulator.real() * radial;
+    }
+    return result;
+}
+
+/** Gauss-Legendre nodes and weights on [-1, 1] by Newton iteration on P_n. */
+std::pair<std::vector<double>, std::vector<double>> anisotropic_gauss_legendre(
+    unsigned int count) {
+    if (count == 0)
+        throw PSIEXCEPTION("anisotropic recoupling: Gauss-Legendre requires at least one node");
+    std::vector<double> nodes(count, 0.0);
+    std::vector<double> weights(count, 0.0);
+    for (unsigned int index = 0; index < count; ++index) {
+        double node = std::cos(M_PI * (static_cast<double>(index) + 0.75) /
+                               (static_cast<double>(count) + 0.5));
+        double derivative = 0.0;
+        for (unsigned int iteration = 0; iteration < 100; ++iteration) {
+            double previous = 1.0;
+            double current = node;
+            for (unsigned int degree = 2; degree <= count; ++degree) {
+                const double next = ((2.0 * static_cast<double>(degree) - 1.0) * node * current -
+                                     (static_cast<double>(degree) - 1.0) * previous) /
+                                    static_cast<double>(degree);
+                previous = current;
+                current = next;
+            }
+            derivative =
+                static_cast<double>(count) * (node * current - previous) / (node * node - 1.0);
+            const double step = current / derivative;
+            node -= step;
+            if (std::abs(step) < 1.0e-16) break;
+        }
+        require_finite(node, "anisotropic Gauss-Legendre node");
+        require_finite(derivative, "anisotropic Gauss-Legendre weight");
+        nodes[index] = node;
+        weights[index] = 2.0 / ((1.0 - node * node) * derivative * derivative);
+    }
+    return {nodes, weights};
+}
+
+void require_anisotropic_rotation(const SiteAxes& rotation) {
+    Matrix as_matrix(3, 3);
+    for (std::size_t row = 0; row < 3; ++row)
+        for (std::size_t column = 0; column < 3; ++column)
+            as_matrix(static_cast<int>(row), static_cast<int>(column)) = rotation[row][column];
+    require_rotation(as_matrix);
+}
+
+/**
+ * The real rank-l rotation W^{(l)}, defined by R_t(O r) = sum_s W^{(l)}[t][s] R_s(r).
+ *
+ * Obtained from the orthogonality of the real solid harmonics on the unit sphere,
+ * W^{(l)}[t][s] = (2l+1) <R_t(O rhat) R_s(rhat)>, with a product rule that is
+ * exact for the degree-2l integrand: Gauss-Legendre in cos theta and the uniform
+ * azimuthal trapezoid. Every caller then checks W W^T = 1.
+ */
+std::vector<std::vector<double>> anisotropic_real_rotation(unsigned int rank,
+                                                          const SiteAxes& rotation) {
+    const std::size_t dimension = anisotropic_rank_dimension(rank);
+    std::vector<std::vector<double>> result(dimension, std::vector<double>(dimension, 0.0));
+    if (rank == 0) {
+        result[0][0] = 1.0;
+        return result;
+    }
+    const auto polar = anisotropic_gauss_legendre(rank + 2);
+    const unsigned int azimuthal_count = 4 * rank + 3;
+    for (std::size_t polar_index = 0; polar_index < polar.first.size(); ++polar_index) {
+        const double cosine = polar.first[polar_index];
+        const double sine = std::sqrt(std::max(0.0, 1.0 - cosine * cosine));
+        for (unsigned int azimuthal_index = 0; azimuthal_index < azimuthal_count;
+             ++azimuthal_index) {
+            const double azimuth = 2.0 * M_PI * static_cast<double>(azimuthal_index) /
+                                   static_cast<double>(azimuthal_count);
+            const SitePosition direction{sine * std::cos(azimuth), sine * std::sin(azimuth),
+                                         cosine};
+            SitePosition rotated{0.0, 0.0, 0.0};
+            for (std::size_t row = 0; row < 3; ++row)
+                for (std::size_t column = 0; column < 3; ++column)
+                    rotated[row] += rotation[row][column] * direction[column];
+            const auto plain = anisotropic_real_solid_harmonics(rank, direction);
+            const auto turned = anisotropic_real_solid_harmonics(rank, rotated);
+            // 0.5 * w_polar turns the Gauss-Legendre rule into a unit-sphere average and
+            // 1/azimuthal_count normalises the exact azimuthal trapezoid.
+            const double weight =
+                0.5 * polar.second[polar_index] / static_cast<double>(azimuthal_count);
+            for (std::size_t first = 0; first < dimension; ++first)
+                for (std::size_t second = 0; second < dimension; ++second)
+                    result[first][second] += weight * turned[first] * plain[second];
+        }
+    }
+    const double scale = static_cast<double>(2 * rank + 1);
+    for (auto& row : result)
+        for (auto& value : row) {
+            value *= scale;
+            require_finite(value, "anisotropic real rank rotation");
+        }
+    return result;
+}
+
+double anisotropic_rotation_orthogonality_deviation(
+    const std::vector<std::vector<double>>& rotation) {
+    double worst = 0.0;
+    for (std::size_t row = 0; row < rotation.size(); ++row)
+        for (std::size_t column = 0; column < rotation.size(); ++column) {
+            double dot = 0.0;
+            for (std::size_t index = 0; index < rotation.size(); ++index)
+                dot += rotation[row][index] * rotation[column][index];
+            worst = std::max(worst, std::abs(dot - (row == column ? 1.0 : 0.0)));
+        }
+    return worst;
+}
+
+/**
+ * T^c_{la ma, lb mb}(R) = (-1)^{lb} sqrt(binom(2 L, 2 la)) <la ma; lb mb | L M>
+ *                         conj(C_{L M}(Rhat)) / R^{L + 1},  L = la + lb, M = ma + mb.
+ *
+ * The amplitude is fixed by the norm identity, because
+ * sum_{ma mb} |CG|^2 |C_{L M}|^2 = sum_M |C_{L M}(Rhat)|^2 = 1, and the (-1)^{lb}
+ * is the parity the irregular harmonic of the reversed separation carries.
+ */
+std::vector<std::vector<Complex>> anisotropic_interaction_block_complex(
+    unsigned int first_rank, unsigned int second_rank, const SitePosition& separation) {
+    const unsigned int total = first_rank + second_rank;
+    const double length =
+        std::sqrt(separation[0] * separation[0] + separation[1] * separation[1] +
+                  separation[2] * separation[2]);
+    if (!(length > 0.0))
+        throw PSIEXCEPTION(
+            "multipole interaction tensor: the site separation must be a nonzero vector");
+    const auto harmonics = anisotropic_direction_harmonics(separation, total);
+    const double amplitude =
+        std::sqrt(binomial(2 * total, 2 * first_rank)) * (second_rank % 2 == 0 ? 1.0 : -1.0);
+    const double radial = std::pow(length, static_cast<double>(total + 1));
+    const auto first_dimension = anisotropic_rank_dimension(first_rank);
+    const auto second_dimension = anisotropic_rank_dimension(second_rank);
+    std::vector<std::vector<Complex>> block(
+        first_dimension, std::vector<Complex>(second_dimension, Complex(0.0, 0.0)));
+    for (std::size_t first = 0; first < first_dimension; ++first) {
+        const int first_order = static_cast<int>(first) - static_cast<int>(first_rank);
+        for (std::size_t second = 0; second < second_dimension; ++second) {
+            const int second_order = static_cast<int>(second) - static_cast<int>(second_rank);
+            const int total_order = first_order + second_order;
+            if (std::abs(total_order) > static_cast<int>(total)) continue;
+            const double coefficient = anisotropic_clebsch_gordan(
+                static_cast<int>(first_rank), first_order, static_cast<int>(second_rank),
+                second_order, static_cast<int>(total), total_order);
+            if (coefficient == 0.0) continue;
+            const auto harmonic_index =
+                static_cast<std::size_t>(total_order + static_cast<int>(total));
+            const Complex value = amplitude * coefficient *
+                                  std::conj(harmonics[total][harmonic_index]) / radial;
+            require_finite(value, "multipole interaction tensor");
+            block[first][second] = value;
+        }
+    }
+    return block;
+}
+
+/** The real-basis block, T = U^{(la)*} T^c U^{(lb)dagger}. */
+std::vector<std::vector<double>> anisotropic_interaction_block(unsigned int first_rank,
+                                                              unsigned int second_rank,
+                                                              const SitePosition& separation) {
+    const auto complex_block =
+        anisotropic_interaction_block_complex(first_rank, second_rank, separation);
+    const auto& first_transform = anisotropic_real_transform(first_rank);
+    const auto& second_transform = anisotropic_real_transform(second_rank);
+    const auto first_dimension = anisotropic_rank_dimension(first_rank);
+    const auto second_dimension = anisotropic_rank_dimension(second_rank);
+    std::vector<std::vector<double>> block(first_dimension,
+                                           std::vector<double>(second_dimension, 0.0));
+    for (std::size_t first = 0; first < first_dimension; ++first)
+        for (std::size_t second = 0; second < second_dimension; ++second) {
+            Complex accumulator(0.0, 0.0);
+            for (std::size_t first_order = 0; first_order < first_dimension; ++first_order) {
+                const Complex left = std::conj(first_transform[first][first_order]);
+                if (left == Complex(0.0, 0.0)) continue;
+                for (std::size_t second_order = 0; second_order < second_dimension;
+                     ++second_order) {
+                    const Complex right = std::conj(second_transform[second][second_order]);
+                    if (right == Complex(0.0, 0.0)) continue;
+                    accumulator += left * complex_block[first_order][second_order] * right;
+                }
+            }
+            require_finite(accumulator, "multipole interaction tensor");
+            if (std::abs(accumulator.imag()) >
+                kAnisotropicRealityTolerance * std::max(1.0, std::abs(accumulator.real())))
+                throw PSIEXCEPTION(
+                    "multipole interaction tensor: the real block acquired an imaginary part");
+            block[first][second] = accumulator.real();
+        }
+    return block;
+}
+
+}  // namespace
+
+const std::vector<std::string>& anisotropic_component_order() {
+    static const std::vector<std::string> order = [] {
+        std::vector<std::string> labels;
+        for (unsigned int rank = kAnisotropicSiteRankMin; rank <= kAnisotropicSiteRankMax;
+             ++rank) {
+            labels.push_back(std::to_string(rank) + "0");
+            for (unsigned int order_index = 1; order_index <= rank; ++order_index) {
+                labels.push_back(std::to_string(rank) + std::to_string(order_index) + "c");
+                labels.push_back(std::to_string(rank) + std::to_string(order_index) + "s");
+            }
+        }
+        if (labels.size() != kAnisotropicDimension)
+            throw PSIEXCEPTION(
+                "anisotropic recoupling: the L3 component ordering must have fifteen entries");
+        return labels;
+    }();
+    return order;
+}
+
+namespace detail {
+
+L3Matrix multipole_interaction_tensor(const SitePosition& separation) {
+    for (double component : separation)
+        require_finite(component, "multipole interaction tensor separation");
+    L3Matrix tensor{};
+    for (unsigned int first_rank = kAnisotropicSiteRankMin;
+         first_rank <= kAnisotropicSiteRankMax; ++first_rank) {
+        const auto first_offset = dispersion_rank_offset(first_rank);
+        for (unsigned int second_rank = kAnisotropicSiteRankMin;
+             second_rank <= kAnisotropicSiteRankMax; ++second_rank) {
+            const auto second_offset = dispersion_rank_offset(second_rank);
+            const auto block = anisotropic_interaction_block(first_rank, second_rank, separation);
+            for (std::size_t row = 0; row < block.size(); ++row)
+                for (std::size_t column = 0; column < block[row].size(); ++column)
+                    tensor[first_offset + row][second_offset + column] = block[row][column];
+        }
+    }
+    return tensor;
+}
+
+L3Matrix l3_rank_rotation(const SiteAxes& rotation) {
+    require_anisotropic_rotation(rotation);
+    L3Matrix result{};
+    for (unsigned int rank = kAnisotropicSiteRankMin; rank <= kAnisotropicSiteRankMax; ++rank) {
+        const auto offset = dispersion_rank_offset(rank);
+        const auto block = anisotropic_real_rotation(rank, rotation);
+        if (anisotropic_rotation_orthogonality_deviation(block) > kAnisotropicRotationTolerance)
+            throw PSIEXCEPTION(
+                "anisotropic recoupling: the derived real rank rotation is not orthogonal");
+        for (std::size_t row = 0; row < block.size(); ++row)
+            for (std::size_t column = 0; column < block.size(); ++column)
+                result[offset + row][offset + column] = block[row][column];
+    }
+    return result;
+}
+
+}  // namespace detail
+
 ISAOptions isa_options_from(Options& options) {
     const std::string prefix = "ISA options: ";
     const int radial = options.get_int("ATOMIC_POLARIZABILITY_ISA_RADIAL_POINTS");

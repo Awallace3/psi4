@@ -1706,4 +1706,50 @@ void export_oeprop(py::module &m) {
     //    def("set_caxis", &GridProp::set_caxis, "docstring").
     //    def("set_format", &GridProp::set_format, "docstring").
     //    def("compute", &GridProp::gridpy_compute, "docstring");
+
+    // ------------------------------------------------------------------
+    // Anisotropic distributed dispersion coefficients. Appended as one block so
+    // the isotropic exports above stay untouched.
+    // ------------------------------------------------------------------
+    const auto anisotropic_site_position = [](const std::vector<double>& values,
+                                              const char* context) {
+        if (values.size() != 3)
+            throw PSIEXCEPTION(std::string(context) + ": expected exactly three components");
+        SitePosition position{};
+        for (std::size_t axis = 0; axis < 3; ++axis) position[axis] = values[axis];
+        return position;
+    };
+    const auto anisotropic_site_axes = [](const SharedMatrix& matrix, const char* context) {
+        if (!matrix || matrix->nirrep() != 1 || matrix->nrow() != 3 || matrix->ncol() != 3)
+            throw PSIEXCEPTION(std::string(context) + ": expected a 3 by 3 frame");
+        SiteAxes axes{};
+        for (std::size_t row = 0; row < 3; ++row)
+            for (std::size_t column = 0; column < 3; ++column)
+                axes[row][column] = (*matrix)(static_cast<int>(row), static_cast<int>(column));
+        return axes;
+    };
+    const auto anisotropic_l3_matrix = [](const L3Matrix& values, const char* name) {
+        auto matrix = std::make_shared<Matrix>(name, 15, 15);
+        for (std::size_t row = 0; row < values.size(); ++row)
+            for (std::size_t column = 0; column < values[row].size(); ++column)
+                matrix->set(static_cast<int>(row), static_cast<int>(column), values[row][column]);
+        return matrix;
+    };
+    m.def("_atomic_polarizability_anisotropic_component_order",
+          []() { return anisotropic_component_order(); });
+    m.def("_atomic_polarizability_test_multipole_interaction_tensor",
+          [anisotropic_site_position, anisotropic_l3_matrix](const std::vector<double>& separation) {
+              return anisotropic_l3_matrix(
+                  detail::multipole_interaction_tensor(
+                      anisotropic_site_position(separation, "multipole interaction tensor")),
+                  "Multipole interaction tensor");
+          },
+          "separation"_a);
+    m.def("_atomic_polarizability_test_l3_rank_rotation",
+          [anisotropic_site_axes, anisotropic_l3_matrix](const SharedMatrix& rotation) {
+              return anisotropic_l3_matrix(
+                  detail::l3_rank_rotation(anisotropic_site_axes(rotation, "L3 rank rotation")),
+                  "L3 rank rotation");
+          },
+          "rotation"_a);
 }
