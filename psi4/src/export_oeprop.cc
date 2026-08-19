@@ -1891,4 +1891,496 @@ void export_oeprop(py::module &m) {
     //    def("set_caxis", &GridProp::set_caxis, "docstring").
     //    def("set_format", &GridProp::set_format, "docstring").
     //    def("compute", &GridProp::gridpy_compute, "docstring");
+
+    // ------------------------------------------------------------------
+    // Anisotropic distributed dispersion coefficients. Appended as one block so
+    // the isotropic exports above stay untouched.
+    // ------------------------------------------------------------------
+    const auto anisotropic_site_position = [](const std::vector<double>& values,
+                                              const char* context) {
+        if (values.size() != 3)
+            throw PSIEXCEPTION(std::string(context) + ": expected exactly three components");
+        SitePosition position{};
+        for (std::size_t axis = 0; axis < 3; ++axis) position[axis] = values[axis];
+        return position;
+    };
+    const auto anisotropic_site_axes = [](const SharedMatrix& matrix, const char* context) {
+        if (!matrix || matrix->nirrep() != 1 || matrix->nrow() != 3 || matrix->ncol() != 3)
+            throw PSIEXCEPTION(std::string(context) + ": expected a 3 by 3 frame");
+        SiteAxes axes{};
+        for (std::size_t row = 0; row < 3; ++row)
+            for (std::size_t column = 0; column < 3; ++column)
+                axes[row][column] = (*matrix)(static_cast<int>(row), static_cast<int>(column));
+        return axes;
+    };
+    const auto anisotropic_l3_matrix = [](const L3Matrix& values, const char* name) {
+        auto matrix = std::make_shared<Matrix>(name, 15, 15);
+        for (std::size_t row = 0; row < values.size(); ++row)
+            for (std::size_t column = 0; column < values[row].size(); ++column)
+                matrix->set(static_cast<int>(row), static_cast<int>(column), values[row][column]);
+        return matrix;
+    };
+    m.def("_atomic_polarizability_anisotropic_component_order",
+          []() { return anisotropic_component_order(); });
+    m.def("_atomic_polarizability_test_multipole_interaction_tensor",
+          [anisotropic_site_position, anisotropic_l3_matrix](const std::vector<double>& separation) {
+              return anisotropic_l3_matrix(
+                  detail::multipole_interaction_tensor(
+                      anisotropic_site_position(separation, "multipole interaction tensor")),
+                  "Multipole interaction tensor");
+          },
+          "separation"_a);
+    m.def("_atomic_polarizability_test_l3_rank_rotation",
+          [anisotropic_site_axes, anisotropic_l3_matrix](const SharedMatrix& rotation) {
+              return anisotropic_l3_matrix(
+                  detail::l3_rank_rotation(anisotropic_site_axes(rotation, "L3 rank rotation")),
+                  "L3 rank rotation");
+          },
+          "rotation"_a);
+    const auto anisotropic_tensor_series = [l3_tensor_from_matrix](
+                                               const std::vector<SharedMatrix>& tensors,
+                                               const char* context) {
+        std::vector<L3Matrix> series(tensors.size());
+        for (std::size_t point = 0; point < tensors.size(); ++point)
+            series[point] = l3_tensor_from_matrix(tensors[point], context);
+        return series;
+    };
+    m.def("_atomic_polarizability_test_anisotropic_block_product",
+          [anisotropic_tensor_series](const std::vector<SharedMatrix>& first,
+                                     const std::vector<SharedMatrix>& second,
+                                     const std::vector<double>& weights) {
+              const auto product = detail::anisotropic_block_product(
+                  anisotropic_tensor_series(first, "anisotropic block product"),
+                  anisotropic_tensor_series(second, "anisotropic block product"), weights);
+              const auto isotropic = detail::isotropic_from_anisotropic_block_product(product);
+              py::dict result;
+              result["values"] = product;
+              result["isotropic"] = std::vector<double>(isotropic.begin(), isotropic.end());
+              return result;
+          },
+          "first"_a, "second"_a, "weights"_a);
+    m.def("_atomic_polarizability_test_direct_anisotropic_energy",
+          [anisotropic_tensor_series, anisotropic_site_position](
+              const std::vector<SharedMatrix>& first, const std::vector<SharedMatrix>& second,
+              const std::vector<double>& weights, const std::vector<double>& separation) {
+              const auto product = detail::anisotropic_block_product(
+                  anisotropic_tensor_series(first, "direct anisotropic dispersion energy"),
+                  anisotropic_tensor_series(second, "direct anisotropic dispersion energy"),
+                  weights);
+              return detail::direct_anisotropic_energy(
+                  product,
+                  anisotropic_site_position(separation, "direct anisotropic dispersion energy"));
+          },
+          "first"_a, "second"_a, "weights"_a, "separation"_a);
+    const auto anisotropic_label_from_python = [](const std::vector<unsigned int>& values) {
+        if (values.size() != 6)
+            throw PSIEXCEPTION(
+                "anisotropic dispersion label: expected (n, l1, k1, l2, k2, j)");
+        AnisotropicDispersionLabel label;
+        label.order = values[0];
+        label.first_rank = values[1];
+        label.first_component = values[2];
+        label.second_rank = values[3];
+        label.second_component = values[4];
+        label.coupled_rank = values[5];
+        return label;
+    };
+    m.def("_atomic_polarizability_anisotropic_recoupling_table", []() {
+        const auto& table = detail::anisotropic_recoupling_table();
+        py::list labels;
+        for (const auto& label : table.labels)
+            labels.append(std::vector<unsigned int>{
+                label.order, label.first_rank, label.first_component, label.second_rank,
+                label.second_component, label.coupled_rank});
+        py::list entries;
+        for (const auto& entry : table.entries) {
+            py::dict values;
+            values["first_site_rank"] = entry.first_site_rank;
+            values["first_site_rank_prime"] = entry.first_site_rank_prime;
+            values["second_site_rank"] = entry.second_site_rank;
+            values["second_site_rank_prime"] = entry.second_site_rank_prime;
+            values["order"] = entry.order;
+            values["first_rank"] = entry.first_rank;
+            values["second_rank"] = entry.second_rank;
+            values["coupled_rank"] = entry.coupled_rank;
+            values["scalar"] = entry.scalar;
+            entries.append(std::move(values));
+        }
+        py::list conventions;
+        for (const auto& convention : table.conventions)
+            conventions.append(py::make_tuple(convention.first, convention.second));
+        py::dict result;
+        result["version"] = table.version;
+        result["generator"] = table.generator;
+        result["component_order"] = table.component_order;
+        result["conventions"] = std::move(conventions);
+        result["entry_count"] = table.entries.size();
+        result["label_count"] = table.labels.size();
+        result["coupling_matrix_count"] = table.coupling_matrices.size();
+        result["labels"] = std::move(labels);
+        result["entries"] = std::move(entries);
+        result["max_collapse_residual"] = table.max_collapse_residual;
+        result["collapse_audit_count"] = table.collapse_audit_count;
+        result["max_rotation_orthogonality_deviation"] =
+            table.max_rotation_orthogonality_deviation;
+        return result;
+    });
+    m.def("_atomic_polarizability_test_dense_anisotropic_recoupling",
+          [anisotropic_label_from_python](const std::vector<unsigned int>& label) {
+              return detail::dense_anisotropic_recoupling(anisotropic_label_from_python(label));
+          },
+          "label"_a);
+    m.def("_atomic_polarizability_test_anisotropic_coefficients",
+          [anisotropic_tensor_series](const std::vector<SharedMatrix>& first,
+                                     const std::vector<SharedMatrix>& second,
+                                     const std::vector<double>& weights) {
+              return detail::anisotropic_coefficients_from_block_product(
+                  detail::anisotropic_block_product(
+                      anisotropic_tensor_series(first, "anisotropic dispersion coefficients"),
+                      anisotropic_tensor_series(second, "anisotropic dispersion coefficients"),
+                      weights));
+          },
+          "first"_a, "second"_a, "weights"_a);
+    m.def("_atomic_polarizability_test_anisotropic_s_functions",
+          [anisotropic_site_axes, anisotropic_site_position](const SharedMatrix& first_frame,
+                                                            const SharedMatrix& second_frame,
+                                                            const std::vector<double>& direction) {
+              return detail::anisotropic_s_functions(
+                  anisotropic_site_axes(first_frame, "anisotropic S functions"),
+                  anisotropic_site_axes(second_frame, "anisotropic S functions"),
+                  anisotropic_site_position(direction, "anisotropic S functions"));
+          },
+          "first_frame"_a, "second_frame"_a, "direction"_a);
+    m.def("_atomic_polarizability_test_anisotropic_orientational_average",
+          [anisotropic_tensor_series](const std::vector<SharedMatrix>& first,
+                                     const std::vector<SharedMatrix>& second,
+                                     const std::vector<double>& weights) {
+              const auto& table = detail::anisotropic_recoupling_table();
+              const auto averaged = detail::anisotropic_orientational_average_test_only();
+              const auto coefficients = detail::anisotropic_coefficients_from_block_product(
+                  detail::anisotropic_block_product(
+                      anisotropic_tensor_series(first, "anisotropic orientational average"),
+                      anisotropic_tensor_series(second, "anisotropic orientational average"),
+                      weights));
+              double worst_s_function = 0.0;
+              std::map<unsigned int, double> per_order;
+              std::map<unsigned int, double> isotropic;
+              for (std::size_t index = 0; index < table.labels.size(); ++index) {
+                  const auto& label = table.labels[index];
+                  const bool scalar = label.first_rank == 0 && label.second_rank == 0 &&
+                                      label.coupled_rank == 0;
+                  worst_s_function =
+                      std::max(worst_s_function, std::abs(averaged[index] - (scalar ? 1.0 : 0.0)));
+                  per_order[label.order] += coefficients[index] * averaged[index];
+                  if (scalar) isotropic[label.order] = coefficients[index];
+              }
+              double worst_isotropic = 0.0;
+              for (const auto& item : isotropic) {
+                  // The caller supplies arbitrary tensors through this seam, so the
+                  // scalar coefficient is not guaranteed nonzero; refuse rather than
+                  // report an infinity as if it were a measurement.
+                  if (!(std::abs(item.second) > 0.0))
+                      throw PSIEXCEPTION(
+                          "anisotropic orientational average: the isotropic coefficient "
+                          "vanished, so no relative deviation is defined");
+                  worst_isotropic = std::max(
+                      worst_isotropic,
+                      std::abs(per_order.at(item.first) / item.second - 1.0));
+              }
+              py::dict result;
+              result["max_s_function_deviation"] = worst_s_function;
+              result["max_isotropic_deviation"] = worst_isotropic;
+              result["label_count"] = table.labels.size();
+              return result;
+          },
+          "first"_a, "second"_a, "weights"_a);
+    m.def("_atomic_polarizability_test_anisotropic_table_rejection",
+          [](const std::string& mutation) {
+              // Every mutation below breaks exactly one structural invariant. The
+              // loader must refuse the table rather than trust it, following the
+              // precedent of validate_dispersion_rank_pairs.
+              auto table = detail::anisotropic_recoupling_table();
+              if (mutation == "none") {
+                  detail::validate_anisotropic_recoupling_table(table);
+                  return true;
+              }
+              if (table.entries.empty() || table.labels.empty())
+                  throw PSIEXCEPTION("anisotropic table rejection: the table is empty");
+              auto& entry = table.entries.front();
+              auto& label = table.labels.front();
+              if (mutation == "version") {
+                  table.version = "partB-recoupling-0";
+              } else if (mutation == "generator") {
+                  table.generator = "hand edited";
+              } else if (mutation == "component_order") {
+                  table.component_order.at(4) = "12c";
+              } else if (mutation == "conventions") {
+                  table.conventions.at(5).second = "M = sum_k w_k alpha^A alpha^B";
+              } else if (mutation == "nonfinite_scalar") {
+                  entry.scalar = std::numeric_limits<double>::quiet_NaN();
+              } else if (mutation == "site_rank") {
+                  entry.first_site_rank = 4;
+              } else if (mutation == "order_mismatch") {
+                  entry.order += 2;
+              } else if (mutation == "first_rank_triangle") {
+                  // Mutate the LAST entry: raising l1 on any earlier one also breaks the
+                  // sort order, which is validated before the triangle rules, so the
+                  // mutation would prove the wrong invariant.
+                  auto& last = table.entries.back();
+                  last.first_rank = last.first_site_rank + last.first_site_rank_prime + 1;
+              } else if (mutation == "second_rank_triangle") {
+                  auto& last = table.entries.back();
+                  last.second_rank = last.second_site_rank + last.second_site_rank_prime + 1;
+              } else if (mutation == "capital_triangle") {
+                  entry.coupled_rank = entry.first_site_rank + entry.first_site_rank_prime +
+                                       entry.second_site_rank + entry.second_site_rank_prime + 2;
+              } else if (mutation == "coupled_triangle") {
+                  entry.first_rank = 0;
+                  entry.second_rank = 0;
+                  entry.coupled_rank = 2;
+              } else if (mutation == "parity") {
+                  // Bump j by one on an entry where j + 1 still satisfies both triangle
+                  // rules, so the L1 + L2 + j parity rule is what fires rather than a
+                  // triangle. Entries within a rank group differ in j by two, so this
+                  // also leaves the sort order intact.
+                  bool bumped = false;
+                  for (auto& item : table.entries) {
+                      const unsigned int capital =
+                          item.first_site_rank + item.second_site_rank +
+                          item.first_site_rank_prime + item.second_site_rank_prime;
+                      const unsigned int ceiling =
+                          std::min(capital, item.first_rank + item.second_rank);
+                      if (item.coupled_rank + 1 <= ceiling) {
+                          item.coupled_rank += 1;
+                          bumped = true;
+                          break;
+                      }
+                  }
+                  if (!bumped)
+                      throw PSIEXCEPTION(
+                          "anisotropic table rejection: no entry admits a parity mutation");
+              } else if (mutation == "zero_scalar") {
+                  entry.scalar = 0.0;
+              } else if (mutation == "duplicate_entry") {
+                  table.entries.insert(table.entries.begin(), table.entries.front());
+              } else if (mutation == "missing_site_rank") {
+                  table.entries.erase(
+                      std::remove_if(table.entries.begin(), table.entries.end(),
+                                     [](const AnisotropicRecouplingEntry& item) {
+                                         return item.first_site_rank == 3;
+                                     }),
+                      table.entries.end());
+              } else if (mutation == "component_index") {
+                  label.first_component = 2 * label.first_rank + 1;
+              } else if (mutation == "label_triangle") {
+                  label.coupled_rank = label.first_rank + label.second_rank + 1;
+              } else if (mutation == "label_order") {
+                  std::swap(table.labels.front(), table.labels.back());
+              } else if (mutation == "duplicate_label") {
+                  // Duplicating the entry span as well, so the copy is a structurally
+                  // complete label and uniqueness is the only thing it violates.
+                  const auto span = table.label_entry_offsets[1];
+                  table.label_entry_indices.insert(
+                      table.label_entry_indices.begin(), table.label_entry_indices.begin(),
+                      table.label_entry_indices.begin() + span);
+                  for (auto& offset : table.label_entry_offsets) offset += span;
+                  table.label_entry_offsets.front() = 0;
+                  table.label_entry_offsets.insert(table.label_entry_offsets.begin() + 1, span);
+                  table.labels.insert(table.labels.begin(), table.labels.front());
+              } else if (mutation == "empty_span") {
+                  // A label whose entry span is empty contributes nothing yet still
+                  // occupies a published column.
+                  table.label_entry_offsets[1] = table.label_entry_offsets[0];
+              } else if (mutation == "exchange_closure") {
+                  // Dropping the LAST label proves nothing: it is (14, 6 12, 6 12, 12),
+                  // which is its own exchange mirror, so the label set stays closed and
+                  // the loader accepts the table. Drop one whose mirror is a different
+                  // label instead, and keep the compressed map consistent so the
+                  // exchange check is what fires.
+                  std::size_t target = table.labels.size();
+                  for (std::size_t index = 0; index < table.labels.size(); ++index) {
+                      const auto& candidate = table.labels[index];
+                      if (candidate.first_rank != candidate.second_rank ||
+                          candidate.first_component != candidate.second_component) {
+                          target = index;
+                          break;
+                      }
+                  }
+                  if (target == table.labels.size())
+                      throw PSIEXCEPTION(
+                          "anisotropic table rejection: every label is its own mirror");
+                  const auto lower = table.label_entry_offsets[target];
+                  const auto upper = table.label_entry_offsets[target + 1];
+                  table.label_entry_indices.erase(table.label_entry_indices.begin() + lower,
+                                                  table.label_entry_indices.begin() + upper);
+                  table.labels.erase(table.labels.begin() + target);
+                  table.label_entry_offsets.erase(table.label_entry_offsets.begin() + target + 1);
+                  for (std::size_t index = target + 1; index < table.label_entry_offsets.size();
+                       ++index)
+                      table.label_entry_offsets[index] -= (upper - lower);
+              } else if (mutation == "exchange_scalar") {
+                  // entries.front() is (1,1,1,1) with l1 = l2 = j = 0, its own exchange
+                  // mirror, so scaling it leaves g^r(BA) = (-1)^{l1+l2} g^r(AB) intact
+                  // and only the isotropic reduction notices. Scale one whose mirror is
+                  // a different entry so the exchange relation itself is what fires.
+                  bool scaled = false;
+                  for (auto& item : table.entries) {
+                      if (item.first_site_rank != item.second_site_rank ||
+                          item.first_site_rank_prime != item.second_site_rank_prime ||
+                          item.first_rank != item.second_rank) {
+                          item.scalar *= 1.5;
+                          scaled = true;
+                          break;
+                      }
+                  }
+                  if (!scaled)
+                      throw PSIEXCEPTION(
+                          "anisotropic table rejection: every entry is its own mirror");
+              } else if (mutation == "empty_label") {
+                  for (auto& matrix : table.coupling_matrices)
+                      std::fill(matrix.values.begin(), matrix.values.end(), 0.0);
+              } else if (mutation == "offset_count") {
+                  table.label_entry_offsets.pop_back();
+              } else if (mutation == "offset_monotonic") {
+                  std::swap(table.label_entry_offsets.at(1), table.label_entry_offsets.at(2));
+              } else if (mutation == "entry_index_range") {
+                  table.label_entry_indices.front() = table.entries.size();
+              } else if (mutation == "missing_coupling_matrix") {
+                  table.coupling_matrices.pop_back();
+              } else if (mutation == "coupling_matrix_shape") {
+                  table.coupling_matrices.front().values.pop_back();
+              } else if (mutation == "isotropic_reduction") {
+                  for (auto& item : table.entries)
+                      if (item.order == 6) item.scalar *= 1.0 + 1.0e-6;
+              } else if (mutation == "rotation_orthogonality") {
+                  table.max_rotation_orthogonality_deviation = 1.0;
+              } else if (mutation == "collapse_residual") {
+                  table.max_collapse_residual = 1.0;
+              } else if (mutation == "collapse_audit_count") {
+                  table.collapse_audit_count = 0;
+              } else {
+                  throw PSIEXCEPTION("anisotropic table rejection: unknown mutation '" +
+                                     mutation + "'");
+              }
+              // Returns false when the loader ACCEPTS the mutated table. Throwing here
+              // instead would be indistinguishable from a genuine rejection, because
+              // both surface as the same Python exception type, and the whole suite
+              // would then pass whether or not the loader refused anything.
+              detail::validate_anisotropic_recoupling_table(table);
+              return false;
+          },
+          "mutation"_a);
+    m.def("_atomic_polarizability_test_anisotropic_energy_reconstruction",
+          [anisotropic_tensor_series, anisotropic_site_axes, anisotropic_site_position](
+              const std::vector<SharedMatrix>& first, const std::vector<SharedMatrix>& second,
+              const std::vector<double>& weights, const SharedMatrix& first_frame,
+              const SharedMatrix& second_frame, const std::vector<double>& direction,
+              double distance) {
+              const auto reconstruction = detail::anisotropic_energy_reconstruction(
+                  anisotropic_tensor_series(first, "anisotropic energy reconstruction"),
+                  anisotropic_tensor_series(second, "anisotropic energy reconstruction"), weights,
+                  anisotropic_site_axes(first_frame, "anisotropic energy reconstruction"),
+                  anisotropic_site_axes(second_frame, "anisotropic energy reconstruction"),
+                  anisotropic_site_position(direction, "anisotropic energy reconstruction"),
+                  distance);
+              py::dict result;
+              result["direct_energy"] = reconstruction.direct_energy;
+              result["full_energy"] = reconstruction.full_energy;
+              result["published_energy"] = reconstruction.published_energy;
+              result["full_relative_deviation"] = reconstruction.full_relative_deviation;
+              result["published_relative_deviation"] =
+                  reconstruction.published_relative_deviation;
+              result["max_s_function_imaginary"] = reconstruction.max_s_function_imaginary;
+              result["full_label_count"] = reconstruction.full_label_count;
+              result["published_label_count"] = reconstruction.published_label_count;
+              return result;
+          },
+          "first"_a, "second"_a, "weights"_a, "first_frame"_a, "second_frame"_a, "direction"_a,
+          "distance"_a);
+    const auto anisotropic_plan_dict = [](const AnisotropicDispersionPlan& plan) {
+        py::dict values;
+        values["frequency_count"] = plan.frequency_count;
+        values["site_count"] = plan.site_count;
+        values["max_frequency_count"] = plan.max_frequency_count;
+        values["max_site_count"] = plan.max_site_count;
+        values["site_pair_count"] = plan.site_pair_count;
+        values["published_maximum_order"] = plan.published_maximum_order;
+        values["internal_maximum_order"] = plan.internal_maximum_order;
+        values["internal_label_count"] = plan.internal_label_count;
+        values["published_label_count"] = plan.published_label_count;
+        values["recoupling_entry_count"] = plan.recoupling_entry_count;
+        values["recoupling_table_bytes"] = plan.recoupling_table_bytes;
+        values["coupling_matrix_bytes"] = plan.coupling_matrix_bytes;
+        values["label_table_bytes"] = plan.label_table_bytes;
+        values["block_product_elements"] = plan.block_product_elements;
+        values["block_product_bytes"] = plan.block_product_bytes;
+        values["coefficient_elements"] = plan.coefficient_elements;
+        values["coefficient_bytes"] = plan.coefficient_bytes;
+        values["published_elements"] = plan.published_elements;
+        values["published_bytes"] = plan.published_bytes;
+        values["label_matrix_elements"] = plan.label_matrix_elements;
+        values["label_matrix_bytes"] = plan.label_matrix_bytes;
+        values["metadata_bytes"] = plan.metadata_bytes;
+        values["estimated_bytes"] = plan.estimated_bytes;
+        values["configured_memory_bytes"] = plan.configured_memory_bytes;
+        values["reserved_memory_bytes"] = plan.reserved_memory_bytes;
+        values["work_terms"] = plan.work_terms;
+        values["max_work_terms"] = plan.max_work_terms;
+        values["algorithm"] = plan.algorithm;
+        values["memory_semantics"] = plan.memory_semantics;
+        return values;
+    };
+    const auto anisotropic_result_dict =
+        [anisotropic_plan_dict](const AnisotropicDispersionCoefficients& computed) {
+            const auto& diagnostics = computed.diagnostics;
+            py::dict result;
+            result["coefficients"] = computed.coefficients;
+            result["labels"] = computed.labels;
+            result["table_version"] = diagnostics.table_version;
+            result["frequency_count"] = diagnostics.frequency_count;
+            result["weighted_frequency_count"] = diagnostics.weighted_frequency_count;
+            result["site_count"] = diagnostics.site_count;
+            result["internal_label_count"] = diagnostics.internal_label_count;
+            result["published_label_count"] = diagnostics.published_label_count;
+            result["recoupling_entry_count"] = diagnostics.recoupling_entry_count;
+            result["published_maximum_order"] = diagnostics.published_maximum_order;
+            result["internal_maximum_order"] = diagnostics.internal_maximum_order;
+            result["quadrature_weight_sum"] = diagnostics.quadrature_weight_sum;
+            result["max_isotropic_deviation"] = diagnostics.max_isotropic_deviation;
+            result["max_permutation_deviation"] = diagnostics.max_permutation_deviation;
+            result["dropped_order_weight_fraction"] = diagnostics.dropped_order_weight_fraction;
+            result["labels_per_order"] = diagnostics.labels_per_order;
+            result["plan"] = anisotropic_plan_dict(diagnostics.plan);
+            return result;
+        };
+    m.def("_atomic_polarizability_plan_anisotropic_dispersion",
+          [anisotropic_plan_dict](std::size_t frequency_count, std::size_t site_count,
+                                 unsigned int published_maximum_order,
+                                 std::size_t memory_bytes) {
+              return anisotropic_plan_dict(detail::plan_anisotropic_dispersion(
+                  frequency_count, site_count, published_maximum_order, memory_bytes));
+          },
+          "frequency_count"_a, "site_count"_a, "published_maximum_order"_a, "memory_bytes"_a);
+    m.def("_atomic_polarizability_compute_anisotropic_dispersion",
+          [refined_models_from_python, anisotropic_result_dict](
+              const Matrix& sites, const std::vector<double>& frequencies,
+              const std::vector<SharedMatrix>& tensors,
+              const std::vector<double>& grid_frequencies,
+              const std::vector<double>& grid_weights) {
+              return anisotropic_result_dict(compute_anisotropic_dispersion(
+                  refined_models_from_python(sites, frequencies, tensors),
+                  FrequencyGrid{grid_frequencies, grid_weights}));
+          },
+          "sites"_a, "frequencies"_a, "tensors"_a, "grid_frequencies"_a, "grid_weights"_a);
+    m.def("_atomic_polarizability_test_compute_anisotropic_dispersion",
+          [refined_models_from_python, anisotropic_result_dict](
+              const Matrix& sites, const std::vector<double>& frequencies,
+              const std::vector<SharedMatrix>& tensors,
+              const std::vector<double>& grid_frequencies,
+              const std::vector<double>& grid_weights) {
+              return anisotropic_result_dict(detail::compute_anisotropic_dispersion_test_only(
+                  refined_models_from_python(sites, frequencies, tensors),
+                  FrequencyGrid{grid_frequencies, grid_weights}));
+          },
+          "sites"_a, "frequencies"_a, "tensors"_a, "grid_frequencies"_a, "grid_weights"_a);
 }

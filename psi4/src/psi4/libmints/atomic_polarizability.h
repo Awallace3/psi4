@@ -1711,6 +1711,279 @@ DispersionMatrices compute_dispersion_test_only(const std::vector<RefinedL3Model
                                                 const FrequencyGrid& frequencies);
 }  // namespace detail
 
+// ---------------------------------------------------------------------------
+// Anisotropic distributed dispersion coefficients.
+//
+// The published isotropic quartet above keeps only the trace of each diagonal
+// rank block of the L3 model. Everything the anisotropic set needs is already
+// present in the refined 15 x 15 tensors; what is missing is the interaction
+// tensor that turns those blocks into an orientation-dependent energy, and the
+// recoupling table that projects the result onto the S-function basis.
+//
+// Published equations only: A. J. Stone, "The Theory of Intermolecular Forces",
+// 2nd ed., OUP (2013), Sec. 3.3, Sec. 4.3 and App. B/F; A. J. Stone,
+// Mol. Phys. 36, 241 (1978) (the S function expansion); A. J. Stone and
+// R. J. A. Tough, Chem. Phys. Lett. 110, 123 (1984); G. J. Williams and
+// A. J. Stone, J. Chem. Phys. 119, 4620 (2003); D. M. Brink and
+// R. J. A. Satchler, "Angular Momentum", 2nd ed. (1968) for the Clebsch-Gordan
+// algebra and the rotation law of a coupled tensor product.
+// ---------------------------------------------------------------------------
+
+/**
+ * The real-spherical component ordering of the 15-component L3 dispersion
+ * tensor: 10, 11c, 11s, 20, ..., 33s. Rank offsets are l*l - 1.
+ */
+PSI_API const std::vector<std::string>& anisotropic_component_order();
+
+/** One anisotropic dispersion label C_n[l1 k1, l2 k2, j]. */
+struct PSI_API AnisotropicDispersionLabel {
+    /** Radial order n = la + la' + lb + lb' + 2, so 6 through 14 for an L3 model. */
+    unsigned int order{};
+    /** Coupled rank of the first site's polarizability index pair. */
+    unsigned int first_rank{};
+    /** Real component k1 of the first site's coupled rank, in the l0, l1c, l1s, ... order. */
+    unsigned int first_component{};
+    unsigned int second_rank{};
+    unsigned int second_component{};
+    /** Rank of the intermolecular harmonic the two site ranks couple to. */
+    unsigned int coupled_rank{};
+};
+
+/**
+ * One nonzero factorised recoupling scalar g^r.
+ *
+ * g^r = (-1)^{lb + lb'} sqrt(binom(2 L1, 2 la) binom(2 L2, 2 la'))
+ *       * <L1 0; L2 0 | j 0> * Lambda_j  /  (eta_A eta_B Ncal),
+ * with L1 = la + lb, L2 = la' + lb', Lambda_j the collapsed four-Clebsch-Gordan
+ * geometric sum, and the parity phases that make the S functions and the
+ * coupling matrices real.
+ */
+struct PSI_API AnisotropicRecouplingEntry {
+    unsigned int first_site_rank{};         // la
+    unsigned int first_site_rank_prime{};   // la'
+    unsigned int second_site_rank{};        // lb
+    unsigned int second_site_rank_prime{};  // lb'
+    unsigned int order{};                   // n = la + la' + lb + lb' + 2
+    unsigned int first_rank{};              // l1
+    unsigned int second_rank{};             // l2
+    unsigned int coupled_rank{};            // j
+    double scalar{};                        // g^r
+};
+
+/**
+ * The real Clebsch-Gordan coupling matrix Pcheck^{(la, la', l1)}, row-major over
+ * (k1, rank-local index of la, rank-local index of la'). This is pure angular
+ * momentum algebra, shared by every block that carries the same rank triple.
+ */
+struct PSI_API AnisotropicCouplingMatrix {
+    unsigned int first_rank{};    // la
+    unsigned int second_rank{};   // la'
+    unsigned int coupled_rank{};  // l1
+    std::vector<double> values;
+};
+
+/**
+ * The versioned recoupling table, stored factorised.
+ *
+ * A dense W for one label costs 15^4 doubles and the L3 label set has 29762
+ * entries, so a dense table would be twelve gigabytes; it is never materialised
+ * outside the single-label test seam. The factorised form is exact:
+ *   W^{n, l1 k1, l2 k2, j}_{(t t')(u u')}
+ *     = sum_{blocks with that n} g^r Pcheck^{A}_{k1,(t t')} Pcheck^{B}_{k2,(u u')}.
+ * label_entry_offsets/label_entry_indices are the compressed row layout of the
+ * label-to-entry map: label i draws on entries
+ * [label_entry_offsets[i], label_entry_offsets[i + 1]).
+ */
+struct PSI_API AnisotropicRecouplingTable {
+    std::string version;
+    std::string generator;
+    std::vector<std::string> component_order;
+    std::vector<std::pair<std::string, std::string>> conventions;
+    std::vector<AnisotropicRecouplingEntry> entries;
+    std::vector<AnisotropicCouplingMatrix> coupling_matrices;
+    std::vector<AnisotropicDispersionLabel> labels;
+    std::vector<std::size_t> label_entry_offsets;
+    std::vector<std::size_t> label_entry_indices;
+    /**
+     * Worst residual of the four-Clebsch-Gordan collapse, audited over every
+     * (block, l1, l2, j) the triangle rules admit rather than only over the entries
+     * that survive the selection rules.
+     */
+    double max_collapse_residual{};
+    /** How many (block, l1, l2, j) combinations that audit covered. */
+    std::size_t collapse_audit_count{};
+    /** Worst |W W^T - 1| over the real rank rotations the generator exercised. */
+    double max_rotation_orthogonality_deviation{};
+};
+
+/** Up-front storage and work accounting for the anisotropic recoupling sum. */
+struct PSI_API AnisotropicDispersionPlan {
+    std::size_t frequency_count{};
+    std::size_t site_count{};
+    std::size_t max_frequency_count{};
+    std::size_t max_site_count{};
+    std::size_t site_pair_count{};
+    unsigned int published_maximum_order{};
+    unsigned int internal_maximum_order{};
+    std::size_t internal_label_count{};
+    std::size_t published_label_count{};
+    std::size_t recoupling_entry_count{};
+    std::size_t recoupling_table_bytes{};
+    std::size_t coupling_matrix_bytes{};
+    std::size_t label_table_bytes{};
+    std::size_t block_product_elements{};
+    std::size_t block_product_bytes{};
+    std::size_t coefficient_elements{};
+    std::size_t coefficient_bytes{};
+    std::size_t published_elements{};
+    std::size_t published_bytes{};
+    std::size_t label_matrix_elements{};
+    std::size_t label_matrix_bytes{};
+    std::size_t metadata_bytes{};
+    std::size_t estimated_bytes{};
+    std::size_t configured_memory_bytes{};
+    std::size_t reserved_memory_bytes{};
+    std::size_t work_terms{};
+    std::size_t max_work_terms{};
+    std::string algorithm;
+    std::string memory_semantics;
+};
+
+/** Auditable provenance for the anisotropic coefficient array. */
+struct PSI_API AnisotropicDispersionDiagnostics {
+    std::string table_version;
+    std::size_t frequency_count{};
+    std::size_t weighted_frequency_count{};
+    std::size_t site_count{};
+    std::size_t internal_label_count{};
+    std::size_t published_label_count{};
+    std::size_t recoupling_entry_count{};
+    unsigned int published_maximum_order{};
+    unsigned int internal_maximum_order{};
+    double quadrature_weight_sum{};
+    /** Worst |C_n[00 00 0]/isotropic engine - 1| over site pairs and n = 6, 8, 10, 12. */
+    double max_isotropic_deviation{};
+    /** Worst violation of C^{BA}[l2 k2, l1 k1, j] = (-1)^{l1 + l2} C^{AB}[l1 k1, l2 k2, j]. */
+    double max_permutation_deviation{};
+    /**
+     * Share of sum |C| carried by the orders the publication filter discards.
+     * Truncation to n <= 12 is a publication filter applied at the very end: the
+     * discarded orders are computed and validated, and they carry real energy, so
+     * only the full internal set reconstructs E_disp exactly.
+     */
+    double dropped_order_weight_fraction{};
+    /** Internal label count per order, index 0 holding n = 6 through index 8 holding n = 14. */
+    std::vector<std::size_t> labels_per_order;
+    AnisotropicDispersionPlan plan;
+};
+
+/**
+ * One direct-versus-expansion reconstruction of E_disp at a fixed relative
+ * orientation. The full label set reproduces the direct double sum exactly; the
+ * published n <= 12 subset does not, and cannot, because the discarded orders
+ * carry real energy. Both residuals are reported so the difference is visible
+ * rather than inferred.
+ */
+struct PSI_API AnisotropicReconstruction {
+    double direct_energy{};
+    double full_energy{};
+    double published_energy{};
+    double full_relative_deviation{};
+    double published_relative_deviation{};
+    double max_s_function_imaginary{};
+    std::size_t full_label_count{};
+    std::size_t published_label_count{};
+};
+
+/**
+ * The published anisotropic coefficient array plus its label companion.
+ *
+ * coefficients is (site_count^2, published_label_count), row-major over ordered
+ * site pairs so that pair (A, B) is row A*site_count + B. Ordered pairs are
+ * required, not folded: exchanging the two label halves picks up (-1)^{l1 + l2},
+ * so the array is not symmetric in the site index at fixed label. labels is
+ * (published_label_count, 6) carrying n, l1, k1, l2, k2, j as exact integers.
+ */
+struct PSI_API AnisotropicDispersionCoefficients {
+    SharedMatrix coefficients;
+    SharedMatrix labels;
+    AnisotropicDispersionDiagnostics diagnostics;
+};
+
+/**
+ * Recouple one frequency-major set of refined L3 models into the anisotropic
+ * coefficient set, published truncated to n <= 12. The grid must be the protocol
+ * grid produced by make_casimir_grid at some positive scale.
+ */
+PSI_API AnisotropicDispersionCoefficients compute_anisotropic_dispersion(
+    const std::vector<RefinedL3Model>& models, const FrequencyGrid& frequencies);
+
+namespace detail {
+/** The compiled-in recoupling table version a loaded table must declare. */
+const std::string& anisotropic_recoupling_table_version();
+/**
+ * The factorised recoupling table, generated once and validated before first
+ * use. Following the precedent of validate_dispersion_rank_pairs this refuses a
+ * table that fails any structural invariant rather than trusting it.
+ */
+const AnisotropicRecouplingTable& anisotropic_recoupling_table();
+/** Fail closed on any structural invariant violation of a candidate table. */
+void validate_anisotropic_recoupling_table(const AnisotropicRecouplingTable& table);
+/**
+ * T_{tu}(R) over the 15-component L3 ordering with R = R_B - R_A. Rank block
+ * (la, lb) satisfies sum_{t,u} T_{tu}^2 = binom(2 la + 2 lb, 2 la)/R^{2(la+lb+1)}.
+ */
+L3Matrix multipole_interaction_tensor(const SitePosition& separation);
+/** Block-diagonal real rotation of one L3 tensor index; alpha^glob = W alpha^loc W^T. */
+L3Matrix l3_rank_rotation(const SiteAxes& rotation);
+/**
+ * M_{(t t')(u u')} = (1/2 pi) sum_k w_k alpha^A_{t t'}(i w_k) alpha^B_{u u'}(i w_k)
+ * for one ordered site pair, row-major over (t, t', u, u').
+ */
+std::vector<double> anisotropic_block_product(const std::vector<L3Matrix>& first,
+                                              const std::vector<L3Matrix>& second,
+                                              const std::vector<double>& weights);
+/** Trace the diagonal rank blocks of M back onto the isotropic C6, C8, C10, C12. */
+std::array<double, 4> isotropic_from_anisotropic_block_product(
+    const std::vector<double>& product);
+/** C_n[label] for every internal label, in table label order, from one ordered pair's M. */
+std::vector<double> anisotropic_coefficients_from_block_product(
+    const std::vector<double>& product);
+/** The dense W of one label as 15^4 row-major doubles; a test seam, never a storage form. */
+std::vector<double> dense_anisotropic_recoupling(const AnisotropicDispersionLabel& label);
+/** The real S functions, one per internal label, in table label order. */
+std::vector<double> anisotropic_s_functions(const SiteAxes& first_frame,
+                                            const SiteAxes& second_frame,
+                                            const SitePosition& direction);
+/**
+ * Test seam: the explicit SO(3) x SO(3) x S^2 average of every S function, one per
+ * internal label. The analytic selection rule is
+ * <S_label> = delta_{label, (n, 0, 0, 0, 0, 0)}, and this computes it by quadrature
+ * instead so the selection rule is verified rather than assumed.
+ */
+std::vector<double> anisotropic_orientational_average_test_only();
+/**
+ * Reconstruct E_disp two ways at one relative orientation: straight from the
+ * interaction tensor, and from the coefficients contracted against their S
+ * functions. The models are supplied in each site's local frame and rotated into
+ * the global frame by the two frames given.
+ */
+AnisotropicReconstruction anisotropic_energy_reconstruction(
+    const std::vector<L3Matrix>& first, const std::vector<L3Matrix>& second,
+    const std::vector<double>& weights, const SiteAxes& first_frame,
+    const SiteAxes& second_frame, const SitePosition& direction, double distance);
+/** E_disp straight from the interaction tensor: -sum T_{tu} T_{t'u'} M_{(t t')(u u')}. */
+double direct_anisotropic_energy(const std::vector<double>& product,
+                                 const SitePosition& separation);
+AnisotropicDispersionPlan plan_anisotropic_dispersion(std::size_t frequency_count,
+                                                      std::size_t site_count,
+                                                      unsigned int published_maximum_order,
+                                                      std::size_t memory_bytes);
+/** Identical recoupling on a caller-supplied ascending half-line grid. */
+AnisotropicDispersionCoefficients compute_anisotropic_dispersion_test_only(
+    const std::vector<RefinedL3Model>& models, const FrequencyGrid& frequencies);
+}  // namespace detail
+
 PSI_API Matrix lw_graph_operator(const BondGraph& graph);
 PSI_API std::pair<Matrix, std::vector<double>> lw_graph_pseudoinverse(const BondGraph& graph);
 PSI_API L3WorkingVector translate_l3_multipoles(const L3WorkingVector& source,
@@ -1760,6 +2033,7 @@ struct PSI_API AtomicPolarizabilityPublication {
     SharedMatrix dynamic_polarizabilities;
     SharedMatrix frequencies;
     DispersionMatrices dispersion;
+    AnisotropicDispersionCoefficients anisotropic_dispersion;
     /** Which definition partitioned the response. */
     ResponsePartition partition{ResponsePartition::RealSpaceISA};
     /** Stage provenance, in chain order, for auditing a parity mismatch. */
@@ -1790,7 +2064,7 @@ class PSI_API AtomicPolarizabilityCalculator {
     /** Bare-OEProp seam: retains no SCF triple, so compute() fails closed. */
     explicit AtomicPolarizabilityCalculator(std::shared_ptr<Wavefunction> wfn);
 
-    /** Run every stage, then publish the seven arrays only if all of them passed. */
+    /** Run every stage, then publish the nine arrays only if all of them passed. */
     void compute();
     /** Run every stage and return the complete result without publishing anything. */
     AtomicPolarizabilityPublication run() const;
