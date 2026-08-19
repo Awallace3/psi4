@@ -1328,16 +1328,34 @@ std::vector<double> test_isa_tail_probabilities(const std::vector<double>& tail_
 /** Production response interface; no mutable Wavefunction is retained or revalidated. */
 class PSI_API ISAPolResponseProvider {
    public:
+    /** Real-space partition arm: the caller supplies converged partition weights. */
     ISAPolResponseProvider(std::shared_ptr<const FrozenResponseContext> context,
                            ResponseKernel kernel, ISAWeights isa_weights);
+    /**
+     * Auxiliary-space partition arm. No partition weights exist on this arm, and
+     * handing it any is rejected rather than ignored: the two arms must not be able
+     * to silently blend.
+     */
+    ISAPolResponseProvider(std::shared_ptr<const FrozenResponseContext> context,
+                           ResponseKernel kernel, CDFOptions cdf_options);
 
+    ResponsePartition partition() const { return partition_; }
+    /** Auxiliary-fit provenance from the most recent response, if the arm produced any. */
+    const std::optional<CDFPartitionDiagnostics>& cdf_diagnostics() const {
+        return cdf_diagnostics_;
+    }
     std::size_t expected_response_count(const FrequencyGrid& frequencies) const;
     std::vector<SitePairResponse> compute_isapol_response(const FrequencyGrid& frequencies) const;
 
    private:
     std::shared_ptr<const FrozenResponseContext> context_;
     ResponseKernel kernel_;
-    ISAWeights isa_weights_;
+    ResponsePartition partition_{ResponsePartition::RealSpaceISA};
+    std::optional<ISAWeights> isa_weights_;
+    CDFOptions cdf_options_;
+    // compute_isapol_response is const because it publishes nothing; this records the
+    // fit provenance of the partition it just built so the caller can gate on it.
+    mutable std::optional<CDFPartitionDiagnostics> cdf_diagnostics_;
 };
 
 /** Unweighted undirected graph over the polarizable sites. */
@@ -1719,6 +1737,15 @@ PSI_API ISAOptions isa_options_from(Options& options);
 /** The exact reviewed protocol response kernel, 25 percent CHF plus 75 percent ALDA. */
 PSI_API ResponseKernel reviewed_response_kernel();
 
+/** Read ATOMIC_POLARIZABILITY_PARTITION into a validated partition selection. */
+PSI_API ResponsePartition response_partition_from(Options& options);
+
+/** Read the ATOMIC_POLARIZABILITY_CDF_* keywords into a validated auxiliary-fit policy. */
+PSI_API CDFOptions cdf_options_from(Options& options);
+
+/** Basis-set map key under which the auxiliary partition's basis must be attached. */
+PSI_API const char* auxiliary_partition_basis_key();
+
 /**
  * Complete, validated pipeline output. Nothing here is published until every stage gate
  * has passed, so a caller either receives all seven arrays or an exception.
@@ -1733,8 +1760,12 @@ struct PSI_API AtomicPolarizabilityPublication {
     SharedMatrix dynamic_polarizabilities;
     SharedMatrix frequencies;
     DispersionMatrices dispersion;
+    /** Which definition partitioned the response. */
+    ResponsePartition partition{ResponsePartition::RealSpaceISA};
     /** Stage provenance, in chain order, for auditing a parity mismatch. */
     ISADiagnostics isa;
+    /** Present only under the auxiliary partition. */
+    std::optional<CDFPartitionDiagnostics> cdf;
     BondGraphDerivation bond_graph;
     FitPointPlan fit_points;
     PDefDerivation pdef;

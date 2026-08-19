@@ -44,6 +44,7 @@ See ``docs/superpowers/specs/2026-08-17-end-to-end-wiring.md``.
 
 __all__ = [
     "PIPELINE_MEMORY_BYTES",
+    "AUXILIARY_PARTITION_BASIS_KEY",
     "atomic_polarizabilities",
     "atomic_polarizability_scf_triple",
     "publish_atomic_polarizabilities",
@@ -66,6 +67,38 @@ from ..p4util.exceptions import ValidationError
 #: This is deliberately explicit rather than incidental: raise it if you raise
 #: ``ATOMIC_POLARIZABILITY_FIT_MAX_POINTS`` toward its 500-point architectural ceiling.
 PIPELINE_MEMORY_BYTES = 4 * 1024**3
+
+
+#: Basis-set map key the native pipeline resolves its auxiliary partition basis under.
+#:
+#: The C++ side never builds a basis set: ``.gbs`` parsing lives in the Python driver by
+#: Psi4 convention, so the auxiliary basis is built here and attached to the reference
+#: wavefunction, and the pipeline fails closed with an explanatory message if it is absent.
+AUXILIARY_PARTITION_BASIS_KEY = "DF_BASIS_ATOMIC_POLARIZABILITY"
+
+
+def _attach_partition_auxiliary_basis(grac_wfn: core.Wavefunction) -> None:
+    """Attach the auxiliary basis when ``ATOMIC_POLARIZABILITY_PARTITION`` is ``CDF``.
+
+    Built with ``puream=0`` rather than through the global ``PUREAM`` keyword. ``PUREAM``
+    takes precedence over both the per-file setting and the build argument and is global,
+    so setting it would silently flip the *orbital* basis to Cartesian as well -- which
+    would change the wavefunction rather than the partition.
+    """
+    if core.get_global_option("ATOMIC_POLARIZABILITY_PARTITION") != "CDF":
+        return
+    name = core.get_global_option("ATOMIC_POLARIZABILITY_CDF_AUX_BASIS")
+    auxiliary = core.BasisSet.build(
+        grac_wfn.molecule(), AUXILIARY_PARTITION_BASIS_KEY, name, puream=0, quiet=True
+    )
+    if auxiliary.has_puream():
+        raise ValidationError(
+            "atomic polarizabilities: the auxiliary partition basis "
+            f"'{name}' resolved to spherical functions. A Cartesian auxiliary space is "
+            "a different space with a different partition, so this fails closed rather "
+            "than silently substituting one for the other; check the global PUREAM option"
+        )
+    grac_wfn.set_basisset(AUXILIARY_PARTITION_BASIS_KEY, auxiliary)
 
 
 class AtomicPolarizabilitySCFTriple(NamedTuple):
@@ -176,6 +209,8 @@ def publish_atomic_polarizabilities(
             "AtomicPolarizabilityPrerequisiteError: the GRAC-corrected reference "
             "wavefunction is missing"
         )
+
+    _attach_partition_auxiliary_basis(grac_wfn)
 
     properties = core.OEProp(grac_wfn)
     if neutral_precursor_wfn is not None and cation_wfn is not None:

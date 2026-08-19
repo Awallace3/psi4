@@ -3298,11 +3298,48 @@ ISAPolResponsePreflight preflight_isapol_response_provider(
 
 ISAPolResponseProvider::ISAPolResponseProvider(std::shared_ptr<const FrozenResponseContext> context,
                                                ResponseKernel kernel, ISAWeights isa_weights)
-    : context_(std::move(context)), kernel_(std::move(kernel)), isa_weights_(std::move(isa_weights)) {
+    : context_(std::move(context)), kernel_(std::move(kernel)),
+      partition_(ResponsePartition::RealSpaceISA), isa_weights_(std::move(isa_weights)) {
     if (!context_) throw PSIEXCEPTION("ISAPolResponseProvider: frozen response context is null");
-    if (isa_weights_.context_.get() != context_.get())
+    if (isa_weights_->context_.get() != context_.get())
         throw PSIEXCEPTION("ISAPolResponseProvider: ISA weights belong to a different frozen response context");
 }
+
+ISAPolResponseProvider::ISAPolResponseProvider(std::shared_ptr<const FrozenResponseContext> context,
+                                               ResponseKernel kernel, CDFOptions cdf_options)
+    : context_(std::move(context)), kernel_(std::move(kernel)),
+      partition_(ResponsePartition::ConstrainedDF), cdf_options_(std::move(cdf_options)) {
+    if (!context_) throw PSIEXCEPTION("ISAPolResponseProvider: frozen response context is null");
+    if (!context_->auxiliary_basis())
+        throw PSIEXCEPTION(
+            "ISAPolResponseProvider: the auxiliary partition requires an auxiliary basis sealed "
+            "into the frozen response context");
+}
+
+namespace {
+
+// The two partition producers are named here, once each, outside the response body.
+// compute_isapol_response therefore mentions the projection stage exactly once, and
+// which definition it dispatches to is a property of this function rather than of a
+// branch inside the response route.
+detail::TransitionMultipoleProjection project_transition_multipoles_for_partition(
+    const std::shared_ptr<const FrozenResponseContext>& context,
+    const std::optional<ISAWeights>& isa_weights, ResponsePartition partition,
+    const CDFOptions& cdf_options, std::optional<CDFPartitionDiagnostics>* cdf_diagnostics) {
+    if (partition == ResponsePartition::ConstrainedDF) {
+        CDFPartitionDiagnostics measured;
+        auto projection = project_transition_multipoles_cdf(context, cdf_options, &measured);
+        if (cdf_diagnostics) *cdf_diagnostics = std::move(measured);
+        return projection;
+    }
+    if (cdf_diagnostics) cdf_diagnostics->reset();
+    if (!isa_weights)
+        throw PSIEXCEPTION(
+            "transition multipole projection: the real-space partition requires partition weights");
+    return project_transition_multipoles(context, *isa_weights);
+}
+
+}  // namespace
 
 std::size_t ISAPolResponseProvider::expected_response_count(const FrequencyGrid& frequencies) const {
     context_->verify_basis_unchanged();
@@ -3341,30 +3378,44 @@ std::vector<SitePairResponse> ISAPolResponseProvider::compute_isapol_response(
     const auto frequency_count = expected_response_count(frequencies);
     if (kernel_.chf_exchange() != 0.25 || kernel_.alda_kernel() != 0.75)
         throw PSIEXCEPTION(prefix + "response-kernel metadata is inconsistent");
-    if (isa_weights_.context_.get() != context_.get())
-        throw PSIEXCEPTION(prefix + "ISA weights belong to a different frozen response context");
     const auto site_count = context_->sites().size();
     const auto point_count = context_->grid_point_count();
-    if (site_count == 0 || isa_weights_.site_count() != site_count ||
-        isa_weights_.point_count() != point_count)
-        throw PSIEXCEPTION(prefix + "ISA dimensions do not match the frozen response context");
-    const auto isa_element_count = checked_c1_product(
-        point_count, site_count, prefix);
-    if (isa_weights_.partition_weights_.size() != isa_element_count)
-        throw PSIEXCEPTION(prefix + "ISA partition dimensions are inconsistent");
-    for (std::size_t point = 0; point < point_count; ++point) {
-        double unity = 0.0;
-        for (std::size_t site = 0; site < site_count; ++site) {
-            const double value =
-                isa_weights_.partition_weights_[point * site_count + site];
-            if (!std::isfinite(value) || value < 0.0)
-                throw PSIEXCEPTION(prefix +
-                                   "ISA partition must be finite and nonnegative");
-            unity += value;
+    if (site_count == 0)
+        throw PSIEXCEPTION(prefix + "the frozen response context has no sites");
+    // Partition-specific preflight. The real-space arm needs converged partition
+    // weights on the sealed grid; the auxiliary arm has none and must not be handed
+    // any, so a run under one definition can never quietly consume the other's input.
+    if (partition_ == ResponsePartition::RealSpaceISA) {
+        if (!isa_weights_)
+            throw PSIEXCEPTION(prefix + "the real-space partition requires partition weights");
+        if (isa_weights_->context_.get() != context_.get())
+            throw PSIEXCEPTION(prefix + "ISA weights belong to a different frozen response context");
+        if (isa_weights_->site_count() != site_count ||
+            isa_weights_->point_count() != point_count)
+            throw PSIEXCEPTION(prefix + "ISA dimensions do not match the frozen response context");
+        const auto isa_element_count = checked_c1_product(
+            point_count, site_count, prefix);
+        if (isa_weights_->partition_weights_.size() != isa_element_count)
+            throw PSIEXCEPTION(prefix + "ISA partition dimensions are inconsistent");
+        for (std::size_t point = 0; point < point_count; ++point) {
+            double unity = 0.0;
+            for (std::size_t site = 0; site < site_count; ++site) {
+                const double value =
+                    isa_weights_->partition_weights_[point * site_count + site];
+                if (!std::isfinite(value) || value < 0.0)
+                    throw PSIEXCEPTION(prefix +
+                                       "ISA partition must be finite and nonnegative");
+                unity += value;
+            }
+            if (!std::isfinite(unity) ||
+                std::abs(unity - 1.0) > kValidationTolerance)
+                throw PSIEXCEPTION(prefix + "pointwise ISA partition unity failed");
         }
-        if (!std::isfinite(unity) ||
-            std::abs(unity - 1.0) > kValidationTolerance)
-            throw PSIEXCEPTION(prefix + "pointwise ISA partition unity failed");
+    } else {
+        if (isa_weights_)
+            throw PSIEXCEPTION(prefix + "the auxiliary partition must not be handed partition weights");
+        if (!context_->auxiliary_basis())
+            throw PSIEXCEPTION(prefix + "the auxiliary partition requires a sealed auxiliary basis");
     }
 
     // Allocation-light validation and all pure resource planners precede C1's
@@ -3402,13 +3453,14 @@ std::vector<SitePairResponse> ISAPolResponseProvider::compute_isapol_response(
         c1.orbital_gaps, *c1.coulomb, *c1.exchange_direct,
         *c1.exchange_transpose, *alda.full_alda, kernel_);
 
-    const auto projection = project_transition_multipoles(context_, isa_weights_);
+    const auto projection = project_transition_multipoles_for_partition(
+        context_, isa_weights_, partition_, cdf_options_, &cdf_diagnostics_);
     if (projection.transitions != c1.transitions || !projection.values ||
         projection.values->nirrep() != 1 ||
         static_cast<std::size_t>(projection.values->nrow()) != provider_plan.component_count ||
         static_cast<std::size_t>(projection.values->ncol()) != transition_count)
         throw PSIEXCEPTION(prefix +
-                           "ISA projection transition ordering/dimensions differ from the response Hessian");
+                           "partition projection transition ordering/dimensions differ from the response Hessian");
 
     Matrix identity(static_cast<int>(transition_count),
                     static_cast<int>(transition_count));
@@ -5581,6 +5633,42 @@ ISAOptions isa_options_from(Options& options) {
 
 ResponseKernel reviewed_response_kernel() { return ResponseKernel(0.25, 0.75); }
 
+const char* auxiliary_partition_basis_key() { return "DF_BASIS_ATOMIC_POLARIZABILITY"; }
+
+ResponsePartition response_partition_from(Options& options) {
+    const std::string prefix = "response partition: ";
+    const std::string selection = options.get_str("ATOMIC_POLARIZABILITY_PARTITION");
+    if (selection == "ISA") return ResponsePartition::RealSpaceISA;
+    if (selection == "CDF") return ResponsePartition::ConstrainedDF;
+    throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "unsupported partition '" + selection + "'");
+}
+
+CDFOptions cdf_options_from(Options& options) {
+    const std::string prefix = "constrained density fit options: ";
+    CDFOptions policy;
+    policy.auxiliary_basis = options.get_str("ATOMIC_POLARIZABILITY_CDF_AUX_BASIS");
+    if (policy.auxiliary_basis.empty())
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "an auxiliary basis label is required");
+    const std::string localisation = options.get_str("ATOMIC_POLARIZABILITY_CDF_LOCALISATION");
+    if (localisation == "INTER-SITE")
+        policy.localisation = CDFLocalisation::InterSite;
+    else if (localisation == "SITE")
+        policy.localisation = CDFLocalisation::SiteSelfRepulsion;
+    else if (localisation == "NONE")
+        policy.localisation = CDFLocalisation::None;
+    else
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "unsupported localisation constraint '" +
+                                                 localisation + "'");
+    policy.localisation_weight = options.get_double("ATOMIC_POLARIZABILITY_CDF_LOCALISATION_WEIGHT");
+    policy.constraint_penalty = options.get_double("ATOMIC_POLARIZABILITY_CDF_CHARGE_PENALTY");
+    if (!std::isfinite(policy.localisation_weight))
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the localisation weight must be finite");
+    if (!std::isfinite(policy.constraint_penalty) || policy.constraint_penalty < 0.0)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            prefix + "the charge penalty weight must be finite and nonnegative");
+    return policy;
+}
+
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
@@ -6701,8 +6789,23 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
     result.grid = make_casimir_grid(static_cast<unsigned int>(nonzero), scale);
     const std::size_t frequency_count = result.grid.frequencies.size();
 
+    // The partition selection and its auxiliary-fit policy are read once, here, and
+    // travel with the frozen context. No stage reads process options at its point of use.
+    const auto partition = response_partition_from(options);
+    const bool auxiliary_partition = partition == ResponsePartition::ConstrainedDF;
+    const auto cdf_options = auxiliary_partition ? cdf_options_from(options) : CDFOptions();
+    const std::string auxiliary_key =
+        auxiliary_partition ? auxiliary_partition_basis_key() : std::string();
+    if (auxiliary_partition && !wfn_->basisset_exists(auxiliary_key))
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            prefix + "the auxiliary partition needs the '" + cdf_options.auxiliary_basis +
+            "' auxiliary basis attached to the reference wavefunction under '" + auxiliary_key +
+            "', which a bare OEProp call cannot supply. Run "
+            "psi4.driver.procrouting.atomic_polarizability.atomic_polarizabilities instead");
+
     // Stage 1: the frozen GRAC response context, which revalidates the SCF triple itself.
-    auto context = FrozenResponseContext::create(wfn_, neutral_precursor_wfn_, cation_wfn_);
+    auto context =
+        FrozenResponseContext::create(wfn_, neutral_precursor_wfn_, cation_wfn_, auxiliary_key);
     if (!context) throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the frozen response context is null");
     const auto molecule = context->molecule();
     if (!molecule) throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the frozen context has no molecule");
@@ -6721,20 +6824,33 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
                 throw ATOMIC_POLARIZABILITY_PREREQUISITE(
                     prefix + "frozen site positions and molecular coordinates disagree");
 
-    // Stage 2: the ISA partition of the frozen density.
+    // Stage 2: the partition of the frozen density. The real-space arm converges
+    // stockholder weights on the sealed grid; the auxiliary arm needs no grid partition
+    // at all, so its weights are never computed rather than computed and discarded.
     const auto kernel = reviewed_response_kernel();
-    auto isa_weights = compute_isa_weights(context, isa_options_from(options));
-    result.isa = isa_weights.diagnostics();
-    if (!result.isa.converged)
-        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the ISA partition did not converge");
-    if (isa_weights.site_count() != site_count)
-        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "ISA sites and frozen sites disagree");
+    std::optional<ISAWeights> isa_weights;
+    if (!auxiliary_partition) {
+        isa_weights = compute_isa_weights(context, isa_options_from(options));
+        result.isa = isa_weights->diagnostics();
+        if (!result.isa.converged)
+            throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the ISA partition did not converge");
+        if (isa_weights->site_count() != site_count)
+            throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "ISA sites and frozen sites disagree");
+    }
 
     // Stage 3: the frequency-dependent site-pair response.
-    const ISAPolResponseProvider provider(context, kernel, std::move(isa_weights));
+    const auto provider =
+        auxiliary_partition
+            ? ISAPolResponseProvider(context, kernel, cdf_options)
+            : ISAPolResponseProvider(context, kernel, std::move(*isa_weights));
     const auto responses = provider.compute_isapol_response(result.grid);
     if (responses.size() != frequency_count)
         throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the response provider returned the wrong frequency count");
+    result.partition = partition;
+    result.cdf = provider.cdf_diagnostics();
+    if (auxiliary_partition != result.cdf.has_value())
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            prefix + "the partition selection and the reported fit provenance disagree");
 
     // Stage 4: the covalent bond graph, which fails closed when disconnected.
     result.bond_graph = derive_bond_graph(*molecule,
@@ -6743,10 +6859,34 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
         throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the derived bond graph is not a single connected component over the sites");
 
     // Stage 5: LW localization at every frequency.
-    const double localization_tolerance =
+    double localization_tolerance =
         options.get_double("ATOMIC_POLARIZABILITY_LOCALIZATION_TOLERANCE");
     if (!(localization_tolerance > 0.0) || !std::isfinite(localization_tolerance))
         throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the localization tolerance must be finite and positive");
+    if (auxiliary_partition) {
+        // The LW charge-sum postcondition is max over sites and components of
+        // |sum_b alpha[a,b][t][0]|, and alpha[a,b][t][0] = 4 B[a,t,:] G B[b,00,:]^T, so
+        // summing over b contracts B against sum_b B[b,00,:] -- which is exactly the fit's
+        // charge residual r_ia = sum_k q_k d_k^{ia}. The postcondition is therefore LINEAR
+        // in that residual: under the auxiliary partition it measures the partition's own
+        // charge penalty, not whether the response grid has converged, and gating it at
+        // real-space precision would reject the model rather than a defect.
+        //
+        // Measured at the reviewed protocol (aug-cc-pVTZ, 246-function Cartesian auxiliary
+        // basis, penalty weight 1.0, localisation weight 5.0e-4): the fit's charge residual
+        // is 4.57e-05 and the LW charge-sum residual it produces is 6.73e-04, an
+        // amplification of 14.7 through the response contraction. The gate below is the
+        // user's keyword or that measured residual amplified by a factor of one hundred,
+        // whichever is larger. It stays proportional to a measured quantity, so a fit that
+        // has stopped constraining charge is still rejected; both numbers are published in
+        // result.cdf and result.localization_residuals.
+        constexpr double kChargeResidualAmplification = 1.0e2;
+        localization_tolerance = std::max(
+            localization_tolerance, kChargeResidualAmplification * result.cdf->max_charge_residual);
+        if (!std::isfinite(localization_tolerance) || !(localization_tolerance > 0.0))
+            throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+                prefix + "the derived auxiliary-partition localization tolerance is not usable");
+    }
     std::vector<LocalizedResponse> localized;
     localized.reserve(frequency_count);
     result.localization_residuals.reserve(frequency_count);

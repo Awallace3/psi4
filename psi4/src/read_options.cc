@@ -184,6 +184,35 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- Largest fit-point count accepted by WSM refinement. -*/
     options.add_int("ATOMIC_POLARIZABILITY_FIT_MAX_POINTS", 500);
 
+    /*- Which definition distributes the frequency-dependent density susceptibility over
+    sites in the native atomic-polarizability pipeline. ``ISA`` is the real-space iterated
+    stockholder partition on the sealed response grid. ``CDF`` is constrained density
+    fitting onto an atom-centred auxiliary basis, which is a different definition of the
+    per-site split rather than a more accurate evaluation of the same one: the two agree
+    on the molecular total and disagree on how it is divided. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_PARTITION", "ISA", "ISA CDF");
+    /*- Auxiliary basis for ``ATOMIC_POLARIZABILITY_PARTITION CDF``. It is built with
+    Cartesian functions, which is not incidental: a Cartesian shell of degree L carries
+    every rank L, L-2, ... down to 0 or 1, so its d and g components carry charge and its
+    f components carry a dipole, and the spherical form of the same shell list is a
+    different auxiliary space with a different partition. -*/
+    options.add_str_i("ATOMIC_POLARIZABILITY_CDF_AUX_BASIS", "AUG-CC-PVTZ-RI");
+    /*- Localisation quadratic form added to the auxiliary Coulomb metric before the fit.
+    ``INTER-SITE`` subtracts the weighted inter-site repulsion of the fitted density,
+    ``SITE`` adds the weighted site self-repulsion, and ``NONE`` fits the bare Coulomb
+    metric. Without one of the first two the fit has no preference for putting density
+    weight on its own centre and the resulting per-site split is not localized. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_CDF_LOCALISATION", "INTER-SITE", "INTER-SITE SITE NONE");
+    /*- Weight of the ``ATOMIC_POLARIZABILITY_CDF_LOCALISATION`` form. Signed: the
+    published prose and equation for the inter-site form disagree about which sign
+    localizes, so the sign is a data choice here and whichever is used is reported. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_CDF_LOCALISATION_WEIGHT", 5.0e-4);
+    /*- Quadratic penalty weight on the fitted charge of each transition density. This is
+    a finite penalty, not a Lagrange multiplier: the fitted densities are expected to
+    violate the charge condition by a small nonzero amount, and the reviewed reference
+    calculation's own record of that violation is about 1e-2. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_CDF_CHARGE_PENALTY", 1.0);
+
     /*- Radial nodes per atom in the native ISA partition quadrature. The wiring
     specification's measured grid table puts the ``1e-4`` parity gate at or above
     60/18/24 with a 302/50 DFT grid; the defaults here are the tighter 100/18/24. -*/
