@@ -1100,6 +1100,105 @@ void export_oeprop(py::module &m) {
                   points, weights, partition, sites, transition_values));
           }, "points"_a, "weights"_a, "partition"_a, "sites"_a,
           "transition_values"_a);
+    const auto cdf_options_from_dict = [](const py::dict& option_values) {
+        CDFOptions options;
+        for (const auto& entry : option_values) {
+            const auto key = py::cast<std::string>(entry.first);
+            if (key == "auxiliary_basis")
+                options.auxiliary_basis = entry.second.cast<std::string>();
+            else if (key == "localisation") {
+                const auto form = entry.second.cast<std::string>();
+                if (form == "inter-site")
+                    options.localisation = CDFLocalisation::InterSite;
+                else if (form == "site-self-repulsion")
+                    options.localisation = CDFLocalisation::SiteSelfRepulsion;
+                else if (form == "none")
+                    options.localisation = CDFLocalisation::None;
+                else
+                    throw PSIEXCEPTION("constrained density fit: unsupported localisation '" + form +
+                                       "'");
+            } else if (key == "localisation_weight")
+                options.localisation_weight = entry.second.cast<double>();
+            else if (key == "constraints_policy") {
+                const auto policy = entry.second.cast<std::string>();
+                if (policy == "penalty")
+                    options.constraints = CDFConstraintPolicy::QuadraticPenalty;
+                else if (policy == "hard")
+                    options.constraints = CDFConstraintPolicy::HardConstraint;
+                else
+                    throw PSIEXCEPTION("constrained density fit: unsupported constraint policy '" +
+                                       policy + "'");
+            } else if (key == "constraint_penalty")
+                options.constraint_penalty = entry.second.cast<double>();
+            else if (key == "metric_relative_cutoff")
+                options.metric_relative_cutoff = entry.second.cast<double>();
+            else if (key == "maximum_condition_number")
+                options.maximum_condition_number = entry.second.cast<double>();
+            else
+                throw PSIEXCEPTION("constrained density fit: unknown option '" + key + "'");
+        }
+        return options;
+    };
+    m.def("_atomic_polarizability_test_auxiliary_coulomb_metric",
+          [](const std::shared_ptr<BasisSet>& auxiliary) {
+              return detail::auxiliary_coulomb_metric(auxiliary);
+          }, "auxiliary"_a);
+    m.def("_atomic_polarizability_test_cdf_localised_normal_matrix",
+          [](const Matrix& coulomb_metric, const std::vector<std::size_t>& function_to_site,
+             std::size_t site_count, const std::string& localisation, double weight) {
+              CDFLocalisation form = CDFLocalisation::None;
+              if (localisation == "inter-site")
+                  form = CDFLocalisation::InterSite;
+              else if (localisation == "site-self-repulsion")
+                  form = CDFLocalisation::SiteSelfRepulsion;
+              else if (localisation != "none")
+                  throw PSIEXCEPTION("constrained density fit: unsupported localisation '" +
+                                     localisation + "'");
+              return detail::cdf_localised_normal_matrix(coulomb_metric, function_to_site,
+                                                          site_count, form, weight);
+          }, "coulomb_metric"_a, "function_to_site"_a, "site_count"_a, "localisation"_a,
+          "weight"_a);
+    m.def("_atomic_polarizability_estimate_cdf_partition",
+          [](std::size_t nbf, std::size_t naux, std::size_t nocc, std::size_t nvir,
+             std::size_t site_count, std::size_t memory_bytes) {
+              const auto plan = plan_cdf_partition(nbf, naux, nocc, nvir, site_count, memory_bytes);
+              py::dict values;
+              values["algorithm"] = plan.algorithm;
+              values["memory_semantics"] = plan.memory_semantics;
+              values["naux"] = plan.naux;
+              values["transition_count"] = plan.transition_count;
+              values["metric_bytes"] = plan.metric_bytes;
+              values["three_index_bytes"] = plan.three_index_bytes;
+              values["coefficient_bytes"] = plan.coefficient_bytes;
+              values["moment_bytes"] = plan.moment_bytes;
+              values["projection_bytes"] = plan.projection_bytes;
+              values["estimated_bytes"] = plan.estimated_bytes;
+              values["reserved_memory_bytes"] = plan.reserved_memory_bytes;
+              values["work_terms"] = plan.work_terms;
+              values["max_work_terms"] = plan.max_work_terms;
+              values["max_auxiliary_count"] = plan.max_auxiliary_count;
+              return values;
+          }, "nbf"_a, "naux"_a, "nocc"_a, "nvir"_a, "site_count"_a, "memory_bytes"_a);
+    m.def("_atomic_polarizability_test_project_transition_multipoles_cdf",
+          [projection_result_dict, cdf_options_from_dict](
+              const std::shared_ptr<FrozenResponseContext>& context,
+              const py::dict& option_values) {
+              CDFPartitionDiagnostics diagnostics;
+              auto result = projection_result_dict(project_transition_multipoles_cdf(
+                  context, cdf_options_from_dict(option_values), &diagnostics));
+              result["max_charge_residual"] = diagnostics.max_charge_residual;
+              result["charge_residual_bound"] = diagnostics.charge_residual_bound;
+              result["charged_auxiliary_count"] = diagnostics.charged_auxiliary_count;
+              result["localisation"] = diagnostics.localisation;
+              result["localisation_weight"] = diagnostics.localisation_weight;
+              result["condition_number"] = diagnostics.fit.condition_number;
+              result["discarded_directions"] = diagnostics.fit.discarded_directions;
+              result["retained_rank"] = diagnostics.fit.retained_rank;
+              result["max_stationarity_residual"] = diagnostics.fit.max_stationarity_residual;
+              result["fit_policy"] = diagnostics.fit.policy;
+              result["auxiliary_count"] = diagnostics.fit.auxiliary_count;
+              return result;
+          }, "context"_a, "options"_a = py::dict());
     m.def("_atomic_polarizability_test_project_transition_multipoles_context",
           [projection_result_dict](const std::shared_ptr<FrozenResponseContext>& context,
                                    const std::shared_ptr<FrozenResponseContext>& isa_context,
@@ -1392,8 +1491,16 @@ void export_oeprop(py::module &m) {
             return site_pair_response_list(provider.compute_isapol_response(
                 FrequencyGrid{std::move(frequencies), std::move(weights)}));
         });
-    m.def("_atomic_polarizability_make_frozen_response_context", &FrozenResponseContext::create,
-          "grac_wfn"_a, "neutral_precursor_wfn"_a, "cation_wfn"_a);
+    m.def("_atomic_polarizability_make_frozen_response_context",
+          [](const std::shared_ptr<Wavefunction>& grac_wfn,
+             const std::shared_ptr<Wavefunction>& neutral_precursor_wfn,
+             const std::shared_ptr<Wavefunction>& cation_wfn,
+             const std::string& auxiliary_key) {
+              return FrozenResponseContext::create(grac_wfn, neutral_precursor_wfn, cation_wfn,
+                                                   auxiliary_key);
+          },
+          "grac_wfn"_a, "neutral_precursor_wfn"_a, "cation_wfn"_a,
+          "auxiliary_key"_a = std::string());
     m.def("_atomic_polarizability_compute_isa_weights",
           [isa_options_from_dict, isa_result_dict](const std::shared_ptr<FrozenResponseContext>& context,
                                                      const py::dict& option_values) {

@@ -22,6 +22,7 @@
 #include <map>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -290,6 +291,21 @@ class PSI_API FrozenResponseContext {
         const std::shared_ptr<Wavefunction>& neutral_precursor_wfn,
         const std::shared_ptr<Wavefunction>& cation_wfn);
 
+    /**
+     * Second-stage factory that additionally seals an auxiliary basis.
+     *
+     * auxiliary_key must already resolve on the GRAC wavefunction; an empty key
+     * is exactly the three-argument factory. The auxiliary basis is snapshotted the
+     * same way the orbital basis is and rechecked by verify_basis_unchanged, because
+     * a partition comparison whose auxiliary basis is unattested cannot support the
+     * claim that only the partition differs.
+     */
+    static std::shared_ptr<FrozenResponseContext> create(
+        const std::shared_ptr<Wavefunction>& grac_wfn,
+        const std::shared_ptr<Wavefunction>& neutral_precursor_wfn,
+        const std::shared_ptr<Wavefunction>& cation_wfn,
+        const std::string& auxiliary_key);
+
     const std::shared_ptr<const Matrix>& Ca() const { return Ca_; }
     const std::shared_ptr<const Matrix>& Cb() const { return Cb_; }
     const std::shared_ptr<const Vector>& epsilon_a() const { return epsilon_a_; }
@@ -301,6 +317,9 @@ class PSI_API FrozenResponseContext {
     double energy() const { return energy_; }
     const std::shared_ptr<const Molecule>& molecule() const { return molecule_; }
     const std::shared_ptr<const BasisSet>& basis() const { return basis_; }
+    /** Sealed auxiliary basis, or null when none was attached. */
+    const std::shared_ptr<const BasisSet>& auxiliary_basis() const { return auxiliary_basis_; }
+    const std::string& auxiliary_basis_key() const { return auxiliary_basis_key_; }
     const std::shared_ptr<const SuperFunctional>& functional() const { return functional_; }
     const std::vector<SitePosition>& sites() const { return sites_; }
     const std::vector<double>& grid_points() const { return grid_points_; }
@@ -327,7 +346,10 @@ class PSI_API FrozenResponseContext {
                           std::vector<double> grid_weights, std::vector<FrozenGridBlock> grid_blocks,
                           GRACProvenance grac, std::string functional_name,
                           std::string grac_x_name, std::string grac_c_name,
-                          double functional_density_tolerance);
+                          double functional_density_tolerance,
+                          std::shared_ptr<const BasisSet> auxiliary_basis,
+                          std::shared_ptr<const BasisSetStructuralSnapshot> auxiliary_basis_snapshot,
+                          std::string auxiliary_basis_key);
 
     std::shared_ptr<const Matrix> Ca_;
     std::shared_ptr<const Matrix> Cb_;
@@ -352,6 +374,10 @@ class PSI_API FrozenResponseContext {
     std::string grac_x_name_;
     std::string grac_c_name_;
     double functional_density_tolerance_{};
+    // Deliberate alias under the same contract as basis_, and rechecked alongside it.
+    std::shared_ptr<const BasisSet> auxiliary_basis_;
+    std::shared_ptr<const BasisSetStructuralSnapshot> auxiliary_basis_snapshot_;
+    std::string auxiliary_basis_key_;
 };
 
 /** Up-front storage and integral-work gate for caller-supplied point response. */
@@ -996,6 +1022,247 @@ class PSI_API ISAWeights {
     ISADiagnostics diagnostics_;
 };
 
+/** Rank-0-through-rank-3 real-spherical component count of one auxiliary moment row. */
+constexpr std::size_t kAuxiliaryMomentComponents = 16;
+
+/** How the auxiliary-space fit treats its linear constraint set. */
+enum class PSI_API CDFConstraintPolicy {
+    /**
+     * Minimise Delta + penalty * ||C d - n||^2. The reviewed reference calculation
+     * uses this form with a finite weight, and its fitted transition densities
+     * therefore violate the charge condition by a small but nonzero amount. A hard
+     * constraint would give machine zero and a different partition.
+     */
+    QuadraticPenalty,
+    /** Minimise Delta subject to C d = n exactly; the penalty -> infinity limit. */
+    HardConstraint,
+};
+
+/**
+ * Localisation quadratic form added to the Coulomb metric before the fit.
+ *
+ * The auxiliary-space fit minimises the Coulomb self-repulsion of the fit error
+ * alone. That alone does not distribute the fitted density over sites in any
+ * particular way, so a distributed-polarizability fit adds a second quadratic
+ * form built from the site-blocked fitted densities
+ *
+ *   E^ab[d] = ( rho~^a || rho~^b ),   rho~^a(r) = sum_{k on a} d_k chi_k(r)
+ *
+ * whose two published variants are, with weight eta,
+ *
+ *   InterSite:          Delta - eta * sum_{a, b != a} E^ab   (the reviewed default)
+ *   SiteSelfRepulsion:  Delta + eta * sum_a           E^aa
+ *
+ * Because ( chi_k || chi_l ) is exactly the Coulomb metric J, both forms are a
+ * masked rescaling of J itself: sum_{a, b != a} E^ab = d^T K_inter d with
+ * K_inter = J masked to different sites, and sum_a E^aa = d^T K_self d with
+ * K_self = J masked to the same site. J = K_self + K_inter exactly, and that
+ * identity is what the unit tests for the assembler check.
+ *
+ * The published prose for the inter-site form says it "minimizes the inter-site
+ * repulsion" while the displayed equation subtracts the term at the recommended
+ * positive eta, which rewards it. Both readings are carried here rather than
+ * guessed at: the sign is a data choice through the sign of eta, and whichever
+ * is used is recorded in the diagnostics.
+ */
+enum class PSI_API CDFLocalisation {
+    /** No localisation form; the normal matrix is the bare Coulomb metric. */
+    None,
+    /** Delta - eta * sum_{a, b != a} E^ab. */
+    InterSite,
+    /** Delta + eta * sum_a E^aa. */
+    SiteSelfRepulsion,
+};
+
+/** Deterministic numerical policy for the auxiliary-space constrained density fit. */
+struct PSI_API CDFOptions {
+    /** Auxiliary basis label; must resolve through MintsHelper::get_basisset. */
+    std::string auxiliary_basis;
+    /** Localisation quadratic form folded into the normal matrix. */
+    CDFLocalisation localisation{CDFLocalisation::InterSite};
+    /** Weight of the localisation form. The reviewed reference protocol is 5.0e-4. */
+    double localisation_weight{5.0e-4};
+    /** Constraint treatment; the penalty form generalises the hard one. */
+    CDFConstraintPolicy constraints{CDFConstraintPolicy::QuadraticPenalty};
+    /** Quadratic penalty weight on ||C d - n||^2; ignored under HardConstraint. */
+    double constraint_penalty{1.0};
+    // The two gates below are set by measurement, not by taste, and they are
+    // deliberately looser than the values first proposed for this stage.
+    //
+    // The reviewed reference calculation fits a 246-function Cartesian auxiliary
+    // basis whose bare Coulomb metric was measured at lam_min = 5.4657e-10,
+    // lam_max = 1.0393e+03, condition number 1.902e+12 -- its 48 Cartesian
+    // contaminant functions are very nearly linearly dependent on the rest. With
+    // the reviewed localisation and charge-penalty terms applied the normal matrix
+    // is measured at 7.798e+12, and the reference solved that system by a plain LU
+    // factorisation with no truncation whatsoever. A maximum_condition_number of
+    // 1.0e+12 -- the value originally proposed for this stage -- therefore fails
+    // closed on the very calculation this stage exists to reproduce, and a
+    // metric_relative_cutoff of 1.0e-10 puts the threshold at 1.04e-07, roughly
+    // thirty spectral directions above lam_min, discarding every one of them.
+    //
+    // So: admit the reviewed protocol (1.0e+14 > 7.798e+12), and put the cutoff at
+    // 1.0e-14, which retains the whole spectrum of that matrix and makes
+    // truncation an explicitly requested diagnostic rather than a silent default.
+    //
+    // The cutoff is RELATIVE and is applied inside the solver as
+    // metric_relative_cutoff * lam_max. It is never compared against an absolute
+    // eigenvalue magnitude, because the auxiliary exponents alone would then decide
+    // the retained rank -- the same lesson already recorded for the WSM refinement
+    // column cutoff, and reinforced here: an absolute 1.0e-10 sits at the very
+    // bottom of the Cartesian spectrum and nowhere near the spherical one.
+    double metric_relative_cutoff{1.0e-14};
+    double maximum_condition_number{1.0e14};
+    /** Hard cap on any single LAPACK workspace request, in scalar elements. */
+    std::size_t maximum_workspace_elements{std::numeric_limits<std::size_t>::max()};
+};
+
+/** Complete fit diagnostics; assigned only after every gate has passed. */
+struct PSI_API CDFDiagnostics {
+    std::size_t auxiliary_count{};
+    std::size_t transition_count{};
+    std::size_t constraint_count{};
+    std::size_t retained_rank{};
+    std::size_t discarded_directions{};
+    double smallest_eigenvalue{};
+    double largest_eigenvalue{};
+    double condition_number{};
+    double retained_condition_number{};
+    double effective_cutoff{};
+    double max_constraint_residual{};
+    double max_stationarity_residual{};
+    double max_coefficient_magnitude{};
+    std::string policy;
+    std::string algorithm;
+};
+
+namespace detail {
+/**
+ * Pure evaluator: analytic Racah regular real solid-harmonic moments of every
+ * auxiliary function about its assigned site.
+ *
+ * Returns (auxiliary.nbf(), kAuxiliaryMomentComponents) in the component order
+ * 00; 10 11c 11s; 20 21c 21s 22c 22s; 30 31c 31s 32c 32s 33c 33s, matching the
+ * convention of the projection stage exactly. Column 0 is the function charge
+ * integral chi_k dr. The auxiliary basis must be Cartesian.
+ */
+PSI_API Matrix auxiliary_multipole_moments(const BasisSet& auxiliary,
+                                           const std::vector<SitePosition>& sites,
+                                           const std::vector<std::size_t>& function_to_site);
+
+/**
+ * Pure evaluator: constrained auxiliary-space fit coefficients d[k, (ia)].
+ *
+ * metric is the (naux, naux) symmetric normal matrix of the fit functional -- the
+ * Coulomb metric already carrying any localisation quadratic form the caller wants
+ * -- rhs is (naux, transitions), constraints is (rows, naux) and constraint_targets
+ * is one target per row shared by every transition. The constraint term is added
+ * here, either as the quadratic penalty or as a hard equality. J^-1 is never formed:
+ * the solve is a symmetric eigendecomposition with an explicit relative spectral
+ * cutoff, applied to the right-hand sides by two matrix products.
+ */
+PSI_API Matrix solve_constrained_density_fit(const Matrix& metric, const Matrix& rhs,
+                                             const Matrix& constraints,
+                                             const std::vector<double>& constraint_targets,
+                                             const CDFOptions& options,
+                                             CDFDiagnostics* diagnostics);
+
+/**
+ * Pure evaluator: the two-centre Coulomb metric J_kl = ( chi_k || chi_l ).
+ *
+ * Serial by construction, unlike the shared fitting-metric utility, because every
+ * stage of this pipeline runs under a single-thread contract.
+ */
+PSI_API Matrix auxiliary_coulomb_metric(const std::shared_ptr<const BasisSet>& auxiliary_basis);
+
+/**
+ * Pure evaluator: the fit's symmetric normal matrix, Coulomb metric plus the
+ * selected localisation quadratic form.
+ *
+ * K_inter and K_self are J masked by site coincidence, so the assembled matrix is
+ * elementwise J_kl scaled by 1 (same site) and 1 - eta (different sites) under
+ * InterSite, and by 1 + eta (same site) and 1 (different sites) under
+ * SiteSelfRepulsion. The mask is derived from function_to_site, never from the
+ * basis, so a caller may site-group auxiliary functions however it likes.
+ */
+PSI_API Matrix cdf_localised_normal_matrix(const Matrix& coulomb_metric,
+                                           const std::vector<std::size_t>& function_to_site,
+                                           std::size_t site_count,
+                                           CDFLocalisation localisation, double weight);
+}  // namespace detail
+
+/** Which definition distributes the frequency-dependent density susceptibility over sites. */
+enum class PSI_API ResponsePartition {
+    /** Real-space iterated stockholder weights on the sealed response grid. */
+    RealSpaceISA,
+    /** Constrained density fitting onto an atom-centred auxiliary basis. */
+    ConstrainedDF,
+};
+
+/** Up-front storage and work accounting for the auxiliary-space partition. */
+struct PSI_API CDFPartitionPlan {
+    std::size_t nbf{};
+    std::size_t naux{};
+    std::size_t nocc{};
+    std::size_t nvir{};
+    std::size_t site_count{};
+    std::size_t transition_count{};
+    std::size_t metric_bytes{};
+    std::size_t three_index_bytes{};
+    std::size_t coefficient_bytes{};
+    std::size_t moment_bytes{};
+    std::size_t projection_bytes{};
+    std::size_t estimated_bytes{};
+    std::size_t configured_memory_bytes{};
+    std::size_t reserved_memory_bytes{};
+    std::size_t work_terms{};
+    std::size_t max_work_terms{};
+    std::size_t max_auxiliary_count{};
+    std::string algorithm;
+    std::string memory_semantics;
+};
+
+/**
+ * Resource gate for the auxiliary-space partition, evaluated before any dense
+ * allocation. Three-index integrals are streamed one auxiliary shell at a time, so
+ * three_index_bytes accounts for one shell block rather than the whole (P|mu nu)
+ * tensor; every other term is a retained payload and is hard-gated against the
+ * documented half-memory reservation.
+ */
+PSI_API CDFPartitionPlan plan_cdf_partition(std::size_t nbf, std::size_t naux, std::size_t nocc,
+                                            std::size_t nvir, std::size_t site_count,
+                                            std::size_t memory_bytes);
+
+/** Measured fit quality of one auxiliary-space partition, reported after every gate. */
+struct PSI_API CDFPartitionDiagnostics {
+    CDFPartitionPlan plan;
+    CDFDiagnostics fit;
+    /** max over transitions of |sum_k q_k d_k|, the charge-condition violation. */
+    double max_charge_residual{};
+    /** Bound the charge residual was gated against. */
+    double charge_residual_bound{};
+    /** Auxiliary functions carrying nonzero charge integral chi_k dr. */
+    std::size_t charged_auxiliary_count{};
+    /** Sign and weight of the localisation form actually applied. */
+    double localisation_weight{};
+    std::string localisation;
+};
+
+/**
+ * Production auxiliary-space projection bound to the frozen context's sealed
+ * auxiliary basis. Returns exactly the layout project_transition_multipoles
+ * returns: site-major B[A * 16 + t, (ia)] in the component order
+ * 00; 10 11c 11s; 20 21c 21s 22c 22s; 30 31c 31s 32c 32s 33c 33s, columns in the
+ * canonical occupied-major transition order.
+ *
+ * The charge condition is a finite quadratic penalty, not a hard constraint, so
+ * sum_k q_k d_k is small but nonzero and the rank-0 rows sum to that residual
+ * rather than to machine zero. The residual is measured, gated, and reported.
+ */
+PSI_API detail::TransitionMultipoleProjection project_transition_multipoles_cdf(
+    const std::shared_ptr<const FrozenResponseContext>& context, const CDFOptions& options,
+    CDFPartitionDiagnostics* diagnostics = nullptr);
+
 /** Compute native real-space ISA probabilities on the exact sealed response grid. */
 PSI_API ISAWeights compute_isa_weights(std::shared_ptr<const FrozenResponseContext> context,
                                        const ISAOptions& options = ISAOptions());
@@ -1329,111 +1596,6 @@ std::vector<RefinedL3Model> refine_wsm_test_only(
 }  // namespace detail
 
 
-/** Rank-0-through-rank-3 real-spherical component count of one auxiliary moment row. */
-constexpr std::size_t kAuxiliaryMomentComponents = 16;
-
-/** How the auxiliary-space fit treats its linear constraint set. */
-enum class PSI_API CDFConstraintPolicy {
-    /**
-     * Minimise Delta + penalty * ||C d - n||^2. The reviewed reference calculation
-     * uses this form with a finite weight, and its fitted transition densities
-     * therefore violate the charge condition by a small but nonzero amount. A hard
-     * constraint would give machine zero and a different partition.
-     */
-    QuadraticPenalty,
-    /** Minimise Delta subject to C d = n exactly; the penalty -> infinity limit. */
-    HardConstraint,
-};
-
-/** Deterministic numerical policy for the auxiliary-space constrained density fit. */
-struct PSI_API CDFOptions {
-    /** Auxiliary basis label; must resolve through MintsHelper::get_basisset. */
-    std::string auxiliary_basis;
-    /** Constraint treatment; the penalty form generalises the hard one. */
-    CDFConstraintPolicy constraints{CDFConstraintPolicy::QuadraticPenalty};
-    /** Quadratic penalty weight on ||C d - n||^2; ignored under HardConstraint. */
-    double constraint_penalty{1.0};
-    // The two gates below are set by measurement, not by taste, and they are
-    // deliberately looser than the values first proposed for this stage.
-    //
-    // The reviewed reference calculation fits a 246-function Cartesian auxiliary
-    // basis whose bare Coulomb metric was measured at lam_min = 5.4657e-10,
-    // lam_max = 1.0393e+03, condition number 1.902e+12 -- its 48 Cartesian
-    // contaminant functions are very nearly linearly dependent on the rest. With
-    // the reviewed localisation and charge-penalty terms applied the normal matrix
-    // is measured at 7.798e+12, and the reference solved that system by a plain LU
-    // factorisation with no truncation whatsoever. A maximum_condition_number of
-    // 1.0e+12 -- the value originally proposed for this stage -- therefore fails
-    // closed on the very calculation this stage exists to reproduce, and a
-    // metric_relative_cutoff of 1.0e-10 puts the threshold at 1.04e-07, roughly
-    // thirty spectral directions above lam_min, discarding every one of them.
-    //
-    // So: admit the reviewed protocol (1.0e+14 > 7.798e+12), and put the cutoff at
-    // 1.0e-14, which retains the whole spectrum of that matrix and makes
-    // truncation an explicitly requested diagnostic rather than a silent default.
-    //
-    // The cutoff is RELATIVE and is applied inside the solver as
-    // metric_relative_cutoff * lam_max. It is never compared against an absolute
-    // eigenvalue magnitude, because the auxiliary exponents alone would then decide
-    // the retained rank -- the same lesson already recorded for the WSM refinement
-    // column cutoff, and reinforced here: an absolute 1.0e-10 sits at the very
-    // bottom of the Cartesian spectrum and nowhere near the spherical one.
-    double metric_relative_cutoff{1.0e-14};
-    double maximum_condition_number{1.0e14};
-    /** Hard cap on any single LAPACK workspace request, in scalar elements. */
-    std::size_t maximum_workspace_elements{std::numeric_limits<std::size_t>::max()};
-};
-
-/** Complete fit diagnostics; assigned only after every gate has passed. */
-struct PSI_API CDFDiagnostics {
-    std::size_t auxiliary_count{};
-    std::size_t transition_count{};
-    std::size_t constraint_count{};
-    std::size_t retained_rank{};
-    std::size_t discarded_directions{};
-    double smallest_eigenvalue{};
-    double largest_eigenvalue{};
-    double condition_number{};
-    double retained_condition_number{};
-    double effective_cutoff{};
-    double max_constraint_residual{};
-    double max_stationarity_residual{};
-    double max_coefficient_magnitude{};
-    std::string policy;
-    std::string algorithm;
-};
-
-namespace detail {
-/**
- * Pure evaluator: analytic Racah regular real solid-harmonic moments of every
- * auxiliary function about its assigned site.
- *
- * Returns (auxiliary.nbf(), kAuxiliaryMomentComponents) in the component order
- * 00; 10 11c 11s; 20 21c 21s 22c 22s; 30 31c 31s 32c 32s 33c 33s, matching the
- * convention of the projection stage exactly. Column 0 is the function charge
- * integral chi_k dr. The auxiliary basis must be Cartesian.
- */
-PSI_API Matrix auxiliary_multipole_moments(const BasisSet& auxiliary,
-                                           const std::vector<SitePosition>& sites,
-                                           const std::vector<std::size_t>& function_to_site);
-
-/**
- * Pure evaluator: constrained auxiliary-space fit coefficients d[k, (ia)].
- *
- * metric is the (naux, naux) symmetric normal matrix of the fit functional -- the
- * Coulomb metric already carrying any localisation quadratic form the caller wants
- * -- rhs is (naux, transitions), constraints is (rows, naux) and constraint_targets
- * is one target per row shared by every transition. The constraint term is added
- * here, either as the quadratic penalty or as a hard equality. J^-1 is never formed:
- * the solve is a symmetric eigendecomposition with an explicit relative spectral
- * cutoff, applied to the right-hand sides by two matrix products.
- */
-PSI_API Matrix solve_constrained_density_fit(const Matrix& metric, const Matrix& rhs,
-                                             const Matrix& constraints,
-                                             const std::vector<double>& constraint_targets,
-                                             const CDFOptions& options,
-                                             CDFDiagnostics* diagnostics);
-}  // namespace detail
 
 /** One ordered rank pair of the isotropic `00 00 0` recoupling table. */
 struct PSI_API DispersionRankPair {

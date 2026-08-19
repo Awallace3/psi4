@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <complex>
 #include <iomanip>
@@ -35,6 +36,8 @@
 #include "psi4/libfock/jk.h"
 #include "psi4/libfock/points.h"
 #include "psi4/libmints/basisset.h"
+#include "psi4/libmints/integral.h"
+#include "psi4/libmints/twobody.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/mintshelper.h"
 #include "psi4/libmints/molecule.h"
@@ -813,7 +816,10 @@ FrozenResponseContext::FrozenResponseContext(
     std::shared_ptr<const SuperFunctional> functional, std::vector<SitePosition> sites,
     std::vector<double> grid_points, std::vector<double> grid_weights,
     std::vector<FrozenGridBlock> grid_blocks, GRACProvenance grac, std::string functional_name,
-    std::string grac_x_name, std::string grac_c_name, double functional_density_tolerance)
+    std::string grac_x_name, std::string grac_c_name, double functional_density_tolerance,
+    std::shared_ptr<const BasisSet> auxiliary_basis,
+    std::shared_ptr<const BasisSetStructuralSnapshot> auxiliary_basis_snapshot,
+    std::string auxiliary_basis_key)
     : Ca_(std::move(Ca)), Cb_(std::move(Cb)), epsilon_a_(std::move(epsilon_a)),
       epsilon_b_(std::move(epsilon_b)), occupation_a_(std::move(occupation_a)),
       occupation_b_(std::move(occupation_b)), Da_(std::move(Da)), Db_(std::move(Db)), energy_(energy),
@@ -822,11 +828,23 @@ FrozenResponseContext::FrozenResponseContext(
       sites_(std::move(sites)), grid_points_(std::move(grid_points)), grid_weights_(std::move(grid_weights)),
       grid_blocks_(std::move(grid_blocks)), grac_(std::move(grac)),
       functional_name_(std::move(functional_name)), grac_x_name_(std::move(grac_x_name)),
-      grac_c_name_(std::move(grac_c_name)), functional_density_tolerance_(functional_density_tolerance) {}
+      grac_c_name_(std::move(grac_c_name)), functional_density_tolerance_(functional_density_tolerance),
+      auxiliary_basis_(std::move(auxiliary_basis)),
+      auxiliary_basis_snapshot_(std::move(auxiliary_basis_snapshot)),
+      auxiliary_basis_key_(std::move(auxiliary_basis_key)) {}
 
 void FrozenResponseContext::verify_basis_unchanged() const {
     if (!basis_ || !basis_snapshot_ || basis_->structural_snapshot() != *basis_snapshot_)
         throw PSIEXCEPTION("FrozenResponseContext: retained basis changed after provenance sealing");
+    // The auxiliary alias is checked here rather than at its point of use so every
+    // existing call site inherits the check: the partition comparison rests entirely
+    // on the claim that nothing but the partition definition differs.
+    if (static_cast<bool>(auxiliary_basis_) != static_cast<bool>(auxiliary_basis_snapshot_))
+        throw PSIEXCEPTION(
+            "FrozenResponseContext: auxiliary basis and its provenance snapshot must both exist");
+    if (auxiliary_basis_ && auxiliary_basis_->structural_snapshot() != *auxiliary_basis_snapshot_)
+        throw PSIEXCEPTION(
+            "FrozenResponseContext: retained auxiliary basis changed after provenance sealing");
 }
 
 namespace {
@@ -2867,6 +2885,13 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
     const std::shared_ptr<Wavefunction>& grac_wfn,
     const std::shared_ptr<Wavefunction>& neutral_precursor_wfn,
     const std::shared_ptr<Wavefunction>& cation_wfn) {
+    return create(grac_wfn, neutral_precursor_wfn, cation_wfn, std::string());
+}
+
+std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
+    const std::shared_ptr<Wavefunction>& grac_wfn,
+    const std::shared_ptr<Wavefunction>& neutral_precursor_wfn,
+    const std::shared_ptr<Wavefunction>& cation_wfn, const std::string& auxiliary_key) {
     const auto grac_hf = require_converged_scf(grac_wfn, "GRAC neutral");
     const auto precursor_hf = require_converged_scf(neutral_precursor_wfn, "neutral precursor");
     const auto cation_hf = require_converged_scf(cation_wfn, "cation");
@@ -2994,6 +3019,30 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
     sites.reserve(grac_molecule->natom());
     for (int atom = 0; atom < grac_molecule->natom(); ++atom)
         sites.push_back({grac_molecule->x(atom), grac_molecule->y(atom), grac_molecule->z(atom)});
+    // The auxiliary basis is resolved and sealed last, after every electronic and
+    // structural gate above has passed, so a bad auxiliary label cannot mask a bad
+    // reference state. It is snapshotted exactly as the orbital basis is, and the
+    // snapshot records has_puream(): a Cartesian and a spherical auxiliary basis over
+    // the same shells are different bases and the seal must be able to tell them apart.
+    std::shared_ptr<const BasisSet> auxiliary_basis;
+    std::shared_ptr<const BasisSetStructuralSnapshot> auxiliary_snapshot;
+    if (!auxiliary_key.empty()) {
+        if (!grac_hf->basisset_exists(auxiliary_key))
+            throw PSIEXCEPTION("FrozenResponseContext: auxiliary basis '" + auxiliary_key +
+                               "' is not attached to the GRAC-corrected reference wavefunction");
+        auto resolved = grac_hf->get_basisset(auxiliary_key);
+        if (!resolved || resolved->nbf() <= 0 || resolved->nshell() <= 0)
+            throw PSIEXCEPTION("FrozenResponseContext: auxiliary basis '" + auxiliary_key +
+                               "' is empty");
+        const auto auxiliary_molecule = resolved->molecule();
+        if (!auxiliary_molecule || !same_nuclei_and_geometry(*grac_molecule, *auxiliary_molecule))
+            throw PSIEXCEPTION("FrozenResponseContext: auxiliary basis '" + auxiliary_key +
+                               "' does not describe the reference nuclear framework");
+        auxiliary_snapshot =
+            std::make_shared<const BasisSetStructuralSnapshot>(resolved->structural_snapshot());
+        auxiliary_basis = std::move(resolved);
+    }
+
     GRACProvenance provenance{precursor_seal.energy, cation_seal.energy, homo, ip, applied_shift,
                               cation_seal.reference, cation_seal.charge, cation_seal.multiplicity};
     auto molecule_copy = std::make_shared<Molecule>(grac_molecule->clone());
@@ -3006,7 +3055,8 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
         grac_seal.Da->clone(), grac_seal.Db->clone(), grac_seal.energy, std::move(molecule_copy),
         grac_hf->basisset(), grac_seal.basis, functional, std::move(sites), grac_seal.grid_points,
         grac_seal.grid_weights, std::move(grid_blocks), std::move(provenance), grac_seal.functional.name,
-        kProtocolGRACX, kProtocolGRACC, functional_density_tolerance));
+        kProtocolGRACX, kProtocolGRACC, functional_density_tolerance, std::move(auxiliary_basis),
+        std::move(auxiliary_snapshot), auxiliary_key));
 }
 
 ISAWeights::ISAWeights(std::shared_ptr<const FrozenResponseContext> context,
@@ -6109,6 +6159,430 @@ Matrix solve_constrained_density_fit(const Matrix& metric, const Matrix& rhs,
     }
     return result;
 }
+
+
+Matrix auxiliary_coulomb_metric(const std::shared_ptr<const BasisSet>& auxiliary_basis) {
+    const std::string prefix = "auxiliary Coulomb metric: ";
+    if (!auxiliary_basis) throw PSIEXCEPTION(prefix + "auxiliary basis is null");
+    const BasisSet& auxiliary = *auxiliary_basis;
+    if (auxiliary.nbf() <= 0 || auxiliary.nshell() <= 0)
+        throw PSIEXCEPTION(prefix + "auxiliary basis is empty");
+    const auto count = static_cast<std::size_t>(auxiliary.nbf());
+    auto shared = std::const_pointer_cast<BasisSet>(auxiliary_basis);
+    auto zero = BasisSet::zero_ao_basis_set();
+    IntegralFactory factory(shared, zero, shared, zero);
+    std::shared_ptr<TwoBodyAOInt> integrals(factory.eri());
+    if (!integrals) throw PSIEXCEPTION(prefix + "two-electron integral engine is unavailable");
+    Matrix metric("AUXILIARY COULOMB METRIC", static_cast<int>(count), static_cast<int>(count));
+    for (int first = 0; first < auxiliary.nshell(); ++first) {
+        const int first_count = auxiliary.shell(first).nfunction();
+        const int first_start = auxiliary.shell(first).function_index();
+        for (int second = 0; second <= first; ++second) {
+            const int second_count = auxiliary.shell(second).nfunction();
+            const int second_start = auxiliary.shell(second).function_index();
+            integrals->compute_shell(first, 0, second, 0);
+            const double* buffer = integrals->buffer();
+            for (int row = 0, index = 0; row < first_count; ++row)
+                for (int column = 0; column < second_count; ++column, ++index) {
+                    const double value = buffer[index];
+                    if (!std::isfinite(value))
+                        throw PSIEXCEPTION(prefix + "two-centre integral is not finite");
+                    metric(first_start + row, second_start + column) = value;
+                    metric(second_start + column, first_start + row) = value;
+                }
+        }
+    }
+    for (std::size_t function = 0; function < count; ++function)
+        if (!(metric(static_cast<int>(function), static_cast<int>(function)) > 0.0))
+            throw PSIEXCEPTION(prefix + "an auxiliary function has nonpositive self-repulsion");
+    return metric;
+}
+
+Matrix cdf_localised_normal_matrix(const Matrix& coulomb_metric,
+                                   const std::vector<std::size_t>& function_to_site,
+                                   std::size_t site_count, CDFLocalisation localisation,
+                                   double weight) {
+    const std::string prefix = "constrained density fit normal matrix: ";
+    if (coulomb_metric.nirrep() != 1 || coulomb_metric.nrow() <= 0 ||
+        coulomb_metric.ncol() != coulomb_metric.nrow())
+        throw PSIEXCEPTION(prefix + "Coulomb metric must be a nonempty square C1 matrix");
+    const auto count = static_cast<std::size_t>(coulomb_metric.nrow());
+    if (function_to_site.size() != count)
+        throw PSIEXCEPTION(prefix +
+                           "function-to-site map must cover every auxiliary function exactly once");
+    if (site_count == 0) throw PSIEXCEPTION(prefix + "at least one site is required");
+    for (const auto site : function_to_site)
+        if (site >= site_count)
+            throw PSIEXCEPTION(prefix + "function-to-site map names a site that does not exist");
+    if (!std::isfinite(weight))
+        throw PSIEXCEPTION(prefix + "localisation weight must be finite");
+    if (localisation != CDFLocalisation::None && std::abs(weight) >= 1.0)
+        throw PSIEXCEPTION(prefix +
+                           "localisation weight must be smaller than one in magnitude; it rescales "
+                           "the Coulomb metric and a magnitude of one or more can destroy its "
+                           "positive definiteness");
+
+    // K_inter and K_self are the Coulomb metric masked by site coincidence, and
+    // K_self + K_inter is the metric itself. So the localisation form never needs a
+    // second integral evaluation: it is a masked elementwise rescaling of the metric.
+    const double same_site_scale =
+        localisation == CDFLocalisation::SiteSelfRepulsion ? 1.0 + weight : 1.0;
+    const double cross_site_scale = localisation == CDFLocalisation::InterSite ? 1.0 - weight : 1.0;
+    Matrix normal("CONSTRAINED DENSITY FIT NORMAL MATRIX", static_cast<int>(count),
+                  static_cast<int>(count));
+    for (std::size_t row = 0; row < count; ++row)
+        for (std::size_t column = 0; column < count; ++column) {
+            const double value = coulomb_metric(static_cast<int>(row), static_cast<int>(column));
+            if (!std::isfinite(value)) throw PSIEXCEPTION(prefix + "Coulomb metric is not finite");
+            const double scale = function_to_site[row] == function_to_site[column]
+                                     ? same_site_scale
+                                     : cross_site_scale;
+            const double scaled = scale * value;
+            if (!std::isfinite(scaled))
+                throw PSIEXCEPTION(prefix + "localisation rescaling overflowed");
+            normal(static_cast<int>(row), static_cast<int>(column)) = scaled;
+        }
+    return normal;
+}
+
+}  // namespace detail
+
+CDFPartitionPlan plan_cdf_partition(std::size_t nbf, std::size_t naux, std::size_t nocc,
+                                    std::size_t nvir, std::size_t site_count,
+                                    std::size_t memory_bytes) {
+    const std::string prefix = "constrained density fit partition: ";
+    constexpr std::size_t max_auxiliary = 8192;
+    constexpr std::size_t max_sites = 64;
+    constexpr std::size_t max_transitions = 512;
+    constexpr std::size_t max_work = 64ULL * 1024ULL * 1024ULL * 1024ULL;
+    constexpr std::size_t overhead = 1024ULL * 1024ULL;
+    // One auxiliary shell block of three-index integrals is live at a time; the
+    // widest Cartesian shell inside the supported angular-momentum envelope is the
+    // (L + 1)(L + 2) / 2 count at L = kMaximumAuxiliaryAngularMomentum.
+    constexpr std::size_t max_shell_functions =
+        (kMaximumAuxiliaryAngularMomentum + 1) * (kMaximumAuxiliaryAngularMomentum + 2) / 2;
+    if (nbf == 0 || naux == 0 || nocc == 0 || nvir == 0 || site_count == 0)
+        throw PSIEXCEPTION(prefix + "resource-plan dimensions must be nonzero");
+    if (naux > max_auxiliary)
+        throw PSIEXCEPTION(prefix + "auxiliary function count exceeds the supported envelope");
+    if (site_count > max_sites)
+        throw PSIEXCEPTION(prefix + "site count exceeds the supported canonical-molecule envelope");
+    const auto transition_count = checked_c1_product(nocc, nvir, prefix);
+    if (transition_count > max_transitions)
+        throw PSIEXCEPTION(prefix + "transition count exceeds the supported response envelope");
+    const auto nmo = checked_c1_sum(nocc, nvir, prefix);
+    if (naux > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        transition_count > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        checked_c1_product(site_count, 16, prefix) >
+            static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw PSIEXCEPTION(prefix + "dimensions exceed native matrix limits");
+
+    const auto auxiliary_square = checked_c1_product(naux, naux, prefix);
+    // Three retained naux x naux matrices: the Coulomb metric, the localised normal
+    // matrix, and the solver's own eigendecomposition copy of it.
+    const auto metric_bytes =
+        checked_c1_product(checked_c1_product(3, auxiliary_square, prefix), sizeof(double), prefix);
+    const auto three_index_bytes = checked_c1_product(
+        checked_c1_product(max_shell_functions, checked_c1_product(nbf, nbf, prefix), prefix),
+        sizeof(double), prefix);
+    // The right-hand sides, the coefficients, and the solver's two internal copies.
+    const auto coefficient_bytes = checked_c1_product(
+        checked_c1_product(4, checked_c1_product(naux, transition_count, prefix), prefix),
+        sizeof(double), prefix);
+    const auto moment_bytes = checked_c1_product(
+        checked_c1_product(naux, kAuxiliaryMomentComponents, prefix), sizeof(double), prefix);
+    const auto projection_bytes = checked_c1_product(
+        checked_c1_product(checked_c1_product(site_count, 16, prefix), transition_count, prefix),
+        sizeof(double), prefix);
+    const auto orbital_bytes = checked_c1_product(
+        checked_c1_product(nmo, nbf, prefix), sizeof(double), prefix);
+    auto estimated = checked_c1_sum(metric_bytes, three_index_bytes, prefix);
+    estimated = checked_c1_sum(estimated, coefficient_bytes, prefix);
+    estimated = checked_c1_sum(estimated, moment_bytes, prefix);
+    estimated = checked_c1_sum(estimated, projection_bytes, prefix);
+    estimated = checked_c1_sum(estimated, orbital_bytes, prefix);
+    estimated = checked_c1_sum(estimated, overhead, prefix);
+
+    // The dominant work is the auxiliary-space transform of the three-index
+    // integrals, naux occupied-index contractions of an nbf x nbf block.
+    auto work = checked_c1_product(naux, checked_c1_product(nbf, nbf, prefix), prefix);
+    work = checked_c1_product(work, nmo, prefix);
+    if (work > max_work) throw PSIEXCEPTION(prefix + "work bound exceeded");
+    if (estimated > memory_bytes / 2)
+        throw PSIEXCEPTION(prefix + "conservative simultaneous storage exceeds reserved memory");
+
+    CDFPartitionPlan plan;
+    plan.nbf = nbf;
+    plan.naux = naux;
+    plan.nocc = nocc;
+    plan.nvir = nvir;
+    plan.site_count = site_count;
+    plan.transition_count = transition_count;
+    plan.metric_bytes = metric_bytes;
+    plan.three_index_bytes = three_index_bytes;
+    plan.coefficient_bytes = coefficient_bytes;
+    plan.moment_bytes = moment_bytes;
+    plan.projection_bytes = projection_bytes;
+    plan.estimated_bytes = estimated;
+    plan.configured_memory_bytes = memory_bytes;
+    plan.reserved_memory_bytes = memory_bytes / 2;
+    plan.work_terms = work;
+    plan.max_work_terms = max_work;
+    plan.max_auxiliary_count = max_auxiliary;
+    plan.algorithm = "AUXILIARY_SHELL_STREAMED_THREE_INDEX_TRANSFORM_DENSE_NORMAL_SOLVE";
+    plan.memory_semantics = "CONSERVATIVE_SIMULTANEOUS_LIVE_RESERVATION";
+    return plan;
+}
+
+namespace {
+
+// The reference calculation's own record of how badly its fitted transition
+// densities violate the charge condition: the largest off-diagonal deviation of
+// integral rho~_ij dr from zero is 1.07e-02 in the block that produced its
+// distributed polarizabilities. The condition is a finite quadratic penalty there,
+// not a Lagrange constraint, so it is violated by design and asserting machine zero
+// would be asserting a precision the reference does not have. This ceiling is five
+// times that recorded violation: loose enough to admit the model being reproduced,
+// tight enough that a fit which has stopped constraining charge at all fails closed.
+constexpr double kCDFChargeResidualBound = 5.0e-2;
+
+}  // namespace
+
+detail::TransitionMultipoleProjection project_transition_multipoles_cdf(
+    const std::shared_ptr<const FrozenResponseContext>& context, const CDFOptions& options,
+    CDFPartitionDiagnostics* diagnostics) {
+    const std::string prefix = "constrained density fit partition: ";
+    if (!context) throw PSIEXCEPTION(prefix + "frozen response context is null");
+    const auto orbital_const = context->basis();
+    if (!orbital_const) throw PSIEXCEPTION(prefix + "retained orbital basis is unavailable");
+    const auto auxiliary_const = context->auxiliary_basis();
+    if (!auxiliary_const)
+        throw PSIEXCEPTION(prefix +
+                           "the frozen response context carries no sealed auxiliary basis; the "
+                           "auxiliary partition cannot be run without one");
+    if (!options.auxiliary_basis.empty()) {
+        // The requested basis must be the basis that was sealed. A name mismatch here
+        // means the caller asked for one auxiliary space and attached another, which
+        // would make the partition unattributable rather than merely wrong.
+        std::string requested = options.auxiliary_basis;
+        std::string sealed = auxiliary_const->name();
+        for (auto& character : requested) character = std::toupper(character);
+        for (auto& character : sealed) character = std::toupper(character);
+        if (requested != sealed)
+            throw PSIEXCEPTION(prefix + "the requested auxiliary basis '" +
+                               options.auxiliary_basis +
+                               "' does not match the basis sealed into the frozen response "
+                               "context, '" + auxiliary_const->name() + "'");
+    }
+    if (auxiliary_const->has_puream())
+        throw PSIEXCEPTION(prefix + "the auxiliary basis must use Cartesian functions");
+    const int nbf_int = orbital_const->nbf();
+    const int naux_int = auxiliary_const->nbf();
+    if (nbf_int <= 0 || naux_int <= 0) throw PSIEXCEPTION(prefix + "a retained basis is empty");
+    const auto nbf = static_cast<std::size_t>(nbf_int);
+    const auto naux = static_cast<std::size_t>(naux_int);
+    const auto counts = validate_restricted_alda_orbitals(*context);
+    const auto nsites = context->sites().size();
+    if (nsites == 0) throw PSIEXCEPTION(prefix + "the frozen response context has no sites");
+    const auto nov = checked_c1_product(counts.first, counts.second, prefix);
+
+    // Every auxiliary function is projected onto the site it is centred on, and the
+    // auxiliary centres must be exactly the frozen sites in exactly the frozen order.
+    // Otherwise the site-major layout below would silently mean something else.
+    if (auxiliary_const->molecule() &&
+        static_cast<std::size_t>(auxiliary_const->molecule()->natom()) != nsites)
+        throw PSIEXCEPTION(prefix + "the auxiliary basis spans a different number of centres");
+    std::vector<std::size_t> function_to_site(naux, 0);
+    for (std::size_t function = 0; function < naux; ++function) {
+        const int center = auxiliary_const->function_to_center(static_cast<int>(function));
+        if (center < 0 || static_cast<std::size_t>(center) >= nsites)
+            throw PSIEXCEPTION(prefix + "an auxiliary function is centred off the frozen sites");
+        function_to_site[function] = static_cast<std::size_t>(center);
+    }
+    for (int index = 0; index < auxiliary_const->nshell(); ++index) {
+        const auto& shell = auxiliary_const->shell(index);
+        const int center = shell.ncenter();
+        if (center < 0 || static_cast<std::size_t>(center) >= nsites)
+            throw PSIEXCEPTION(prefix + "an auxiliary shell is centred off the frozen sites");
+        for (int axis = 0; axis < 3; ++axis)
+            if (std::abs(shell.coord(axis) -
+                         context->sites()[static_cast<std::size_t>(center)][static_cast<std::size_t>(axis)]) >
+                kValidationTolerance)
+                throw PSIEXCEPTION(prefix +
+                                   "an auxiliary shell centre does not sit on its frozen site");
+    }
+
+    // Both resource plans run before any dense allocation. The projection planner is
+    // reused unchanged over the auxiliary sum, whose terms are naux x nsites x 16 x nov
+    // exactly as the real-space producer's are over quadrature points.
+    const auto plan = plan_cdf_partition(nbf, naux, counts.first, counts.second, nsites,
+                                         Process::environment.get_memory());
+    const auto projection_plan = detail::plan_transition_multipole_projection(
+        naux, nsites, nov, naux, 0, 0, Process::environment.get_memory());
+    context->verify_basis_unchanged();
+
+    const auto moments = detail::auxiliary_multipole_moments(*auxiliary_const, context->sites(),
+                                                             function_to_site);
+    if (moments.nrow() != naux_int ||
+        static_cast<std::size_t>(moments.ncol()) != kAuxiliaryMomentComponents)
+        throw PSIEXCEPTION(prefix + "auxiliary moment dimensions are inconsistent");
+    std::size_t charged = 0;
+    Matrix charge_constraint("AUXILIARY CHARGE CONSTRAINT", 1, naux_int);
+    for (std::size_t function = 0; function < naux; ++function) {
+        const double charge = moments(static_cast<int>(function), 0);
+        charge_constraint(0, static_cast<int>(function)) = charge;
+        if (charge != 0.0) ++charged;
+    }
+    if (charged == 0)
+        throw PSIEXCEPTION(prefix + "no auxiliary function carries charge; the charge condition "
+                                    "would be vacuous");
+
+    const auto metric = detail::auxiliary_coulomb_metric(auxiliary_const);
+    const auto normal = detail::cdf_localised_normal_matrix(
+        metric, function_to_site, nsites, options.localisation, options.localisation_weight);
+
+    // Three-index integrals are streamed one auxiliary shell at a time and reduced to
+    // the transition basis immediately, so the full (P|mu nu) tensor is never live.
+    std::vector<std::size_t> occupied, virtuals;
+    for (int orbital = 0; orbital < context->Ca()->ncol(); ++orbital)
+        (context->occupation_a()->get(0, orbital) == 1.0 ? occupied : virtuals)
+            .push_back(static_cast<std::size_t>(orbital));
+    if (occupied.size() != counts.first || virtuals.size() != counts.second)
+        throw PSIEXCEPTION(prefix + "occupied/virtual partition is inconsistent");
+    const auto nocc = counts.first;
+    const auto nvir = counts.second;
+    std::vector<double> occupied_transposed(checked_c1_product(nocc, nbf, prefix), 0.0);
+    std::vector<double> virtual_columns(checked_c1_product(nbf, nvir, prefix), 0.0);
+    const auto& Ca = *context->Ca();
+    for (std::size_t index = 0; index < nocc; ++index)
+        for (std::size_t mu = 0; mu < nbf; ++mu)
+            occupied_transposed[index * nbf + mu] =
+                Ca(static_cast<int>(mu), static_cast<int>(occupied[index]));
+    for (std::size_t index = 0; index < nvir; ++index)
+        for (std::size_t mu = 0; mu < nbf; ++mu)
+            virtual_columns[mu * nvir + index] =
+                Ca(static_cast<int>(mu), static_cast<int>(virtuals[index]));
+
+    auto auxiliary_shared = std::const_pointer_cast<BasisSet>(auxiliary_const);
+    auto orbital_shared = std::const_pointer_cast<BasisSet>(orbital_const);
+    auto zero = BasisSet::zero_ao_basis_set();
+    IntegralFactory factory(auxiliary_shared, zero, orbital_shared, orbital_shared);
+    std::shared_ptr<TwoBodyAOInt> integrals(factory.eri());
+    if (!integrals) throw PSIEXCEPTION(prefix + "two-electron integral engine is unavailable");
+    Matrix rhs("CONSTRAINED DENSITY FIT RIGHT HAND SIDES", naux_int, static_cast<int>(nov));
+    std::size_t widest_shell = 0;
+    for (int index = 0; index < auxiliary_const->nshell(); ++index)
+        widest_shell = std::max(widest_shell,
+                                static_cast<std::size_t>(auxiliary_const->shell(index).nfunction()));
+    std::vector<double> block(
+        checked_c1_product(widest_shell, checked_c1_product(nbf, nbf, prefix), prefix), 0.0);
+    std::vector<double> half(checked_c1_product(nocc, nbf, prefix), 0.0);
+    std::vector<double> reduced(checked_c1_product(nocc, nvir, prefix), 0.0);
+    for (int shell = 0; shell < auxiliary_const->nshell(); ++shell) {
+        const int shell_count = auxiliary_const->shell(shell).nfunction();
+        const int shell_start = auxiliary_const->shell(shell).function_index();
+        std::fill(block.begin(), block.end(), 0.0);
+        for (int first = 0; first < orbital_const->nshell(); ++first) {
+            const int first_count = orbital_const->shell(first).nfunction();
+            const int first_start = orbital_const->shell(first).function_index();
+            for (int second = 0; second < orbital_const->nshell(); ++second) {
+                const int second_count = orbital_const->shell(second).nfunction();
+                const int second_start = orbital_const->shell(second).function_index();
+                integrals->compute_shell(shell, 0, first, second);
+                const double* buffer = integrals->buffer();
+                for (int local = 0, index = 0; local < shell_count; ++local)
+                    for (int mu = 0; mu < first_count; ++mu)
+                        for (int nu = 0; nu < second_count; ++nu, ++index) {
+                            const double value = buffer[index];
+                            if (!std::isfinite(value))
+                                throw PSIEXCEPTION(prefix +
+                                                   "three-index integral is not finite");
+                            block[(static_cast<std::size_t>(local) * nbf +
+                                   static_cast<std::size_t>(first_start + mu)) *
+                                      nbf +
+                                  static_cast<std::size_t>(second_start + nu)] = value;
+                        }
+            }
+        }
+        for (int local = 0; local < shell_count; ++local) {
+            double* operand = block.data() + static_cast<std::size_t>(local) * nbf * nbf;
+            C_DGEMM('N', 'N', static_cast<int>(nocc), nbf_int, nbf_int, 1.0,
+                    occupied_transposed.data(), nbf_int, operand, nbf_int, 0.0, half.data(),
+                    nbf_int);
+            C_DGEMM('N', 'N', static_cast<int>(nocc), static_cast<int>(nvir), nbf_int, 1.0,
+                    half.data(), nbf_int, virtual_columns.data(), static_cast<int>(nvir), 0.0,
+                    reduced.data(), static_cast<int>(nvir));
+            for (std::size_t transition = 0; transition < nov; ++transition) {
+                const double value = reduced[transition];
+                if (!std::isfinite(value))
+                    throw PSIEXCEPTION(prefix + "transformed right-hand side is not finite");
+                rhs(shell_start + local, static_cast<int>(transition)) = value;
+            }
+        }
+    }
+
+    CDFDiagnostics fit;
+    const std::vector<double> charge_targets{0.0};
+    const auto coefficients = detail::solve_constrained_density_fit(
+        normal, rhs, charge_constraint, charge_targets, options, &fit);
+    if (coefficients.nrow() != naux_int ||
+        static_cast<std::size_t>(coefficients.ncol()) != nov)
+        throw PSIEXCEPTION(prefix + "fit coefficient dimensions are inconsistent");
+    // The charge condition is a penalty, so this residual is expected to be small and
+    // nonzero. Its measured value bounds the conservation invariant downstream, and it
+    // is gated against an explicit ceiling derived from the reference's own record.
+    if (!std::isfinite(fit.max_constraint_residual) ||
+        fit.max_constraint_residual > kCDFChargeResidualBound)
+        throw PSIEXCEPTION(prefix + "the fitted charge condition residual " +
+                           std::to_string(fit.max_constraint_residual) +
+                           " exceeds the explicit ceiling " +
+                           std::to_string(kCDFChargeResidualBound));
+
+    auto values = std::make_shared<Matrix>(static_cast<int>(nsites * 16), static_cast<int>(nov));
+    for (std::size_t function = 0; function < naux; ++function) {
+        const auto site = function_to_site[function];
+        for (std::size_t component = 0; component < kAuxiliaryMomentComponents; ++component) {
+            const double moment = moments(static_cast<int>(function), static_cast<int>(component));
+            if (moment == 0.0) continue;
+            const auto row = static_cast<int>(site * 16 + component);
+            for (std::size_t transition = 0; transition < nov; ++transition) {
+                const double increment =
+                    moment * coefficients(static_cast<int>(function), static_cast<int>(transition));
+                if (!std::isfinite(increment))
+                    throw PSIEXCEPTION(prefix + "auxiliary multipole contraction overflowed");
+                (*values)(row, static_cast<int>(transition)) += increment;
+                if (!std::isfinite((*values)(row, static_cast<int>(transition))))
+                    throw PSIEXCEPTION(prefix + "auxiliary multipole accumulation overflowed");
+            }
+        }
+    }
+
+    detail::TransitionMultipoleProjection result;
+    result.transitions = make_restricted_alda_transitions(*context, nov);
+    result.values = std::move(values);
+    result.plan = projection_plan;
+    result.plan.algorithm = plan.algorithm;
+    if (diagnostics) {
+        CDFPartitionDiagnostics pending;
+        pending.plan = plan;
+        pending.fit = fit;
+        pending.max_charge_residual = fit.max_constraint_residual;
+        pending.charge_residual_bound = kCDFChargeResidualBound;
+        pending.charged_auxiliary_count = charged;
+        pending.localisation_weight =
+            options.localisation == CDFLocalisation::None ? 0.0 : options.localisation_weight;
+        pending.localisation = options.localisation == CDFLocalisation::None
+                                   ? "none"
+                                   : (options.localisation == CDFLocalisation::InterSite
+                                          ? "inter-site"
+                                          : "site-self-repulsion");
+        *diagnostics = pending;
+    }
+    context->verify_basis_unchanged();
+    return result;
+}
+
+namespace detail {
 
 }  // namespace detail
 
