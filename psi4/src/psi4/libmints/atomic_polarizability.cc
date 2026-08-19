@@ -6489,7 +6489,7 @@ std::vector<double> anisotropic_s_function_block(
     const std::vector<std::vector<Complex>>& first_rotation,
     const std::vector<std::vector<Complex>>& second_rotation,
     const std::vector<std::vector<Complex>>& harmonics,
-    const std::array<unsigned int, 3>& key) {
+    const std::array<unsigned int, 3>& key, double* imaginary_residual = nullptr) {
     const unsigned int first_rank = key[0];
     const unsigned int second_rank = key[1];
     const unsigned int coupled_rank = key[2];
@@ -6546,6 +6546,8 @@ std::vector<double> anisotropic_s_function_block(
             }
             total *= phase;
             require_finite(total, "anisotropic S function");
+            if (imaginary_residual)
+                *imaginary_residual = std::max(*imaginary_residual, std::abs(total.imag()));
             if (std::abs(total.imag()) >
                 kAnisotropicRealityTolerance * std::max(1.0, std::abs(total.real())))
                 throw PSIEXCEPTION(
@@ -7076,9 +7078,10 @@ std::vector<double> anisotropic_coefficients_from_block_product(
     return coefficients;
 }
 
-std::vector<double> anisotropic_s_functions(const SiteAxes& first_frame,
-                                           const SiteAxes& second_frame,
-                                           const SitePosition& direction) {
+std::vector<double> anisotropic_s_functions_impl(const SiteAxes& first_frame,
+                                                const SiteAxes& second_frame,
+                                                const SitePosition& direction,
+                                                double* imaginary_residual) {
     const std::string prefix = "anisotropic S functions: ";
     require_anisotropic_rotation(first_frame);
     require_anisotropic_rotation(second_frame);
@@ -7099,7 +7102,8 @@ std::vector<double> anisotropic_s_functions(const SiteAxes& first_frame,
         if (functions.count(key) != 0) continue;
         functions.emplace(key, anisotropic_s_function_block(
                                    first_rotations[label.first_rank],
-                                   second_rotations[label.second_rank], harmonics, key));
+                                   second_rotations[label.second_rank], harmonics, key,
+                                   imaginary_residual));
     }
     std::vector<double> values(table.labels.size(), 0.0);
     for (std::size_t index = 0; index < table.labels.size(); ++index) {
@@ -7111,6 +7115,102 @@ std::vector<double> anisotropic_s_functions(const SiteAxes& first_frame,
                   label.second_component];
     }
     return values;
+}
+
+std::vector<double> anisotropic_s_functions(const SiteAxes& first_frame,
+                                           const SiteAxes& second_frame,
+                                           const SitePosition& direction) {
+    return anisotropic_s_functions_impl(first_frame, second_frame, direction, nullptr);
+}
+
+/**
+ * Reconstruct E_disp two ways. Route (a) is the double sum of B.3.1 straight from
+ * the interaction tensor with no table involved; route (b) is
+ * E_disp = - sum_n R^-n sum_labels C_n[label] S_label. Route (b) over the full
+ * internal label set reproduces route (a) to machine precision.
+ *
+ * The published n <= 12 subset is reported separately and is *not* exact: the
+ * discarded orders 13 and 14 fall out of an L3 model naturally and carry real
+ * energy. Truncation is a publication filter applied at the very end, never a
+ * restriction on the internal table, so the published residual is a physical
+ * truncation error and not a numerical one.
+ */
+AnisotropicReconstruction anisotropic_energy_reconstruction(
+    const std::vector<L3Matrix>& first, const std::vector<L3Matrix>& second,
+    const std::vector<double>& weights, const SiteAxes& first_frame,
+    const SiteAxes& second_frame, const SitePosition& direction, double distance) {
+    const std::string prefix = "anisotropic energy reconstruction: ";
+    require_finite(distance, "anisotropic reconstruction separation");
+    if (!(distance > 0.0)) throw PSIEXCEPTION(prefix + "the separation must be positive");
+    const double length = std::sqrt(direction[0] * direction[0] + direction[1] * direction[1] +
+                                    direction[2] * direction[2]);
+    if (!(length > 0.0))
+        throw PSIEXCEPTION(prefix + "the separation direction must be a nonzero vector");
+    const SitePosition unit{direction[0] / length, direction[1] / length, direction[2] / length};
+    const SitePosition separation{distance * unit[0], distance * unit[1], distance * unit[2]};
+
+    const auto& table = anisotropic_recoupling_table();
+    // The coefficients are a property of the two local frames, so they come from the
+    // local block product; the direct energy is a property of the global geometry, so
+    // it comes from the rotated one. That split is the whole point of the S functions.
+    const auto coefficients = anisotropic_coefficients_from_block_product(
+        anisotropic_block_product(first, second, weights));
+    const auto first_rotation = l3_rank_rotation(first_frame);
+    const auto second_rotation = l3_rank_rotation(second_frame);
+    const auto rotate = [](const L3Matrix& tensor, const L3Matrix& rotation) {
+        L3Matrix intermediate{};
+        for (std::size_t row = 0; row < kAnisotropicDimension; ++row)
+            for (std::size_t column = 0; column < kAnisotropicDimension; ++column) {
+                double value = 0.0;
+                for (std::size_t inner = 0; inner < kAnisotropicDimension; ++inner)
+                    value += rotation[row][inner] * tensor[inner][column];
+                intermediate[row][column] = value;
+            }
+        L3Matrix result{};
+        for (std::size_t row = 0; row < kAnisotropicDimension; ++row)
+            for (std::size_t column = 0; column < kAnisotropicDimension; ++column) {
+                double value = 0.0;
+                for (std::size_t inner = 0; inner < kAnisotropicDimension; ++inner)
+                    value += intermediate[row][inner] * rotation[column][inner];
+                result[row][column] = value;
+            }
+        return result;
+    };
+    std::vector<L3Matrix> global_first(first.size());
+    std::vector<L3Matrix> global_second(second.size());
+    for (std::size_t point = 0; point < first.size(); ++point)
+        global_first[point] = rotate(first[point], first_rotation);
+    for (std::size_t point = 0; point < second.size(); ++point)
+        global_second[point] = rotate(second[point], second_rotation);
+
+    AnisotropicReconstruction result;
+    result.direct_energy = direct_anisotropic_energy(
+        anisotropic_block_product(global_first, global_second, weights), separation);
+    const auto functions =
+        anisotropic_s_functions_impl(first_frame, second_frame, unit,
+                                     &result.max_s_function_imaginary);
+    double full = 0.0;
+    double published = 0.0;
+    for (std::size_t index = 0; index < table.labels.size(); ++index) {
+        if (coefficients[index] == 0.0) continue;
+        const double term = coefficients[index] * functions[index] /
+                            std::pow(distance, static_cast<double>(table.labels[index].order));
+        full += term;
+        if (table.labels[index].order <= kAnisotropicPublishedOrderMax) published += term;
+    }
+    result.full_label_count = table.labels.size();
+    for (const auto& label : table.labels)
+        if (label.order <= kAnisotropicPublishedOrderMax) ++result.published_label_count;
+    result.full_energy = -full;
+    result.published_energy = -published;
+    require_finite(result.direct_energy, "anisotropic reconstruction direct energy");
+    require_finite(result.full_energy, "anisotropic reconstruction expansion energy");
+    const double scale = std::abs(result.direct_energy);
+    if (!(scale > 0.0)) throw PSIEXCEPTION(prefix + "the direct energy vanished");
+    result.full_relative_deviation = std::abs(result.full_energy - result.direct_energy) / scale;
+    result.published_relative_deviation =
+        std::abs(result.published_energy - result.direct_energy) / scale;
+    return result;
 }
 
 

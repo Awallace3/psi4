@@ -2004,4 +2004,31 @@ void export_oeprop(py::module &m) {
                                  "' was accepted by the loader");
           },
           "mutation"_a);
+    m.def("_atomic_polarizability_test_anisotropic_energy_reconstruction",
+          [anisotropic_tensor_series, anisotropic_site_axes, anisotropic_site_position](
+              const std::vector<SharedMatrix>& first, const std::vector<SharedMatrix>& second,
+              const std::vector<double>& weights, const SharedMatrix& first_frame,
+              const SharedMatrix& second_frame, const std::vector<double>& direction,
+              double distance) {
+              const auto reconstruction = detail::anisotropic_energy_reconstruction(
+                  anisotropic_tensor_series(first, "anisotropic energy reconstruction"),
+                  anisotropic_tensor_series(second, "anisotropic energy reconstruction"), weights,
+                  anisotropic_site_axes(first_frame, "anisotropic energy reconstruction"),
+                  anisotropic_site_axes(second_frame, "anisotropic energy reconstruction"),
+                  anisotropic_site_position(direction, "anisotropic energy reconstruction"),
+                  distance);
+              py::dict result;
+              result["direct_energy"] = reconstruction.direct_energy;
+              result["full_energy"] = reconstruction.full_energy;
+              result["published_energy"] = reconstruction.published_energy;
+              result["full_relative_deviation"] = reconstruction.full_relative_deviation;
+              result["published_relative_deviation"] =
+                  reconstruction.published_relative_deviation;
+              result["max_s_function_imaginary"] = reconstruction.max_s_function_imaginary;
+              result["full_label_count"] = reconstruction.full_label_count;
+              result["published_label_count"] = reconstruction.published_label_count;
+              return result;
+          },
+          "first"_a, "second"_a, "weights"_a, "first_frame"_a, "second_frame"_a, "direction"_a,
+          "distance"_a);
 }

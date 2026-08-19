@@ -1585,6 +1585,24 @@ struct PSI_API AnisotropicDispersionDiagnostics {
 };
 
 /**
+ * One direct-versus-expansion reconstruction of E_disp at a fixed relative
+ * orientation. The full label set reproduces the direct double sum exactly; the
+ * published n <= 12 subset does not, and cannot, because the discarded orders
+ * carry real energy. Both residuals are reported so the difference is visible
+ * rather than inferred.
+ */
+struct PSI_API AnisotropicReconstruction {
+    double direct_energy{};
+    double full_energy{};
+    double published_energy{};
+    double full_relative_deviation{};
+    double published_relative_deviation{};
+    double max_s_function_imaginary{};
+    std::size_t full_label_count{};
+    std::size_t published_label_count{};
+};
+
+/**
  * The published anisotropic coefficient array plus its label companion.
  *
  * coefficients is (site_count^2, published_label_count), row-major over ordered
@@ -1651,6 +1669,16 @@ std::vector<double> anisotropic_s_functions(const SiteAxes& first_frame,
  * instead so the selection rule is verified rather than assumed.
  */
 std::vector<double> anisotropic_orientational_average_test_only();
+/**
+ * Reconstruct E_disp two ways at one relative orientation: straight from the
+ * interaction tensor, and from the coefficients contracted against their S
+ * functions. The models are supplied in each site's local frame and rotated into
+ * the global frame by the two frames given.
+ */
+AnisotropicReconstruction anisotropic_energy_reconstruction(
+    const std::vector<L3Matrix>& first, const std::vector<L3Matrix>& second,
+    const std::vector<double>& weights, const SiteAxes& first_frame,
+    const SiteAxes& second_frame, const SitePosition& direction, double distance);
 /** E_disp straight from the interaction tensor: -sum T_{tu} T_{t'u'} M_{(t t')(u u')}. */
 double direct_anisotropic_energy(const std::vector<double>& product,
                                  const SitePosition& separation);

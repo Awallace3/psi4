@@ -811,3 +811,162 @@ def test_recoupling_table_rejection_seam_rejects_an_unknown_mutation():
 def test_recoupling_table_accepts_the_generated_table():
     """The generated table itself must pass every invariant the loader enforces."""
     assert psi4.core._atomic_polarizability_test_anisotropic_table_rejection("none") is True
+
+
+# ---------------------------------------------------------------------------
+# B8 -- the decisive direct-energy reconstruction.  This is the acceptance gate.
+# ---------------------------------------------------------------------------
+#
+# E_disp is computed two ways at each orientation:
+#
+#   (a) directly from the double sum of B.3.1 with the interaction tensor and no
+#       table whatsoever;
+#   (b) from C_n[label] contracted against its S function,
+#       E_disp = - sum_n R^-n sum_labels C_n[label] S_label(Omega_A, Omega_B, Rhat).
+#
+# Route (b) must reproduce route (a) to machine precision over the FULL internal
+# label set, n = 6..14.
+#
+# It must NOT be asserted to machine precision over the published n <= 12 subset,
+# and the test below deliberately does not do that.  Truncation to n <= 12 is a
+# publication filter applied at the very end; the discarded orders 13 and 14 carry
+# real energy, so reconstructing from the published array is not exact and cannot
+# be.  The truncation residual is measured and recorded here as a bound instead, so
+# that the next reader is not sent chasing a defect that does not exist.
+
+# RECORDED TRUNCATION RESIDUAL.  Measured over the twelve orientations below with a
+# rank-complete synthetic L3 model at R = 6.5 a0, the published n <= 12 subset
+# reconstructs E_disp to a relative residual of
+#
+#     3.84e-05  (degenerate: A rotated by pi about y)   -- smallest
+#     4.29e-04  (generic 4)                             -- largest
+#
+# The point of recording it is that it is ten orders of magnitude larger than the
+# 7.7e-15 the full label set achieves, and that gap is physics, not a defect: the
+# discarded n = 13 and n = 14 orders carry real energy.  The bounds bracket the
+# measurement rather than merely capping it, so the test also fails if the
+# truncation ever silently becomes exact -- which would mean the dropped orders had
+# stopped being computed at all.
+_TRUNCATION_RESIDUAL_BOUND = 1.0e-3
+_TRUNCATION_RESIDUAL_FLOOR = 1.0e-5
+
+_ORIENTATIONS = (
+    # (name, first frame Euler angles, second frame Euler angles, direction)
+    ("axial, both frames identity", (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+    ("axial, A rotated about z", (0.7, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+    ("axial, B tilted by pi/2", (0.0, 0.0, 0.0), (0.0, math.pi / 2, 0.0), (0.0, 0.0, 1.0)),
+    ("axial along x", (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
+    ("axial along y", (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
+    ("both frames identity, R diagonal", (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (1.0, 1.0, 1.0)),
+    ("A = B = pi/2 about y, R = z", (0.0, math.pi / 2, 0.0), (0.0, math.pi / 2, 0.0),
+     (0.0, 0.0, 1.0)),
+    ("degenerate: A rotated by pi about y", (0.0, math.pi, 0.0), (0.0, 0.0, 0.0),
+     (0.0, 0.0, 1.0)),
+    ("generic 1", (0.31, 1.07, -0.62), (2.24, 0.48, 1.91), (0.37, -0.62, 0.69)),
+    ("generic 2", (-1.44, 2.06, 0.85), (0.19, 1.63, -2.71), (-0.81, 0.29, 0.51)),
+    ("generic 3", (2.98, 0.19, 1.12), (-0.55, 2.87, 0.33), (0.14, 0.93, -0.34)),
+    ("generic 4", (0.05, 3.05, -1.77), (1.68, 0.11, 2.42), (-0.46, -0.55, -0.70)),
+)
+
+_RECONSTRUCTION_SEPARATION = 6.5
+
+
+def _reconstruction(name, first_angles, second_angles, direction, distance=None):
+    models = _synthetic_models((101, 102))
+    return psi4.core._atomic_polarizability_test_anisotropic_energy_reconstruction(
+        [_matrix(frequency[0]) for frequency in models],
+        [_matrix(frequency[1]) for frequency in models],
+        list(_REVIEWED_WEIGHTS),
+        _matrix(_rotation(*first_angles)),
+        _matrix(_rotation(*second_angles)),
+        list(direction),
+        distance if distance is not None else _RECONSTRUCTION_SEPARATION)
+
+
+@pytest.mark.parametrize("case", _ORIENTATIONS, ids=[case[0] for case in _ORIENTATIONS])
+def test_direct_energy_reconstruction_is_exact_on_the_full_label_set(case):
+    """The acceptance gate: the S-function expansion reproduces E_disp exactly.
+
+    Over the full internal label set, n = 6 through 14.  Nothing but our own L3
+    models and the interaction tensor is involved, so this validates the entire
+    recoupling table without any external reference.
+    """
+    result = _reconstruction(*case)
+    assert result["direct_energy"] < 0.0
+    assert result["max_s_function_imaginary"] < 1.0e-12
+    assert result["full_relative_deviation"] < 1.0e-13
+
+
+@pytest.mark.parametrize("case", _ORIENTATIONS, ids=[case[0] for case in _ORIENTATIONS])
+def test_published_truncation_residual_is_physical_not_numerical(case):
+    """The n <= 12 subset does NOT reconstruct E_disp exactly, and must not be asked to.
+
+    Orders 13 and 14 fall out of an L3 model naturally and carry real energy.  This
+    records the size of what the publication filter discards; asserting machine
+    precision here would be wrong and would send the next reader hunting a
+    non-defect.  The lower bound is as important as the upper one: it fails if the
+    truncation ever silently becomes exact, which would mean the dropped orders had
+    stopped being computed.
+    """
+    result = _reconstruction(*case)
+    residual = result["published_relative_deviation"]
+    assert _TRUNCATION_RESIDUAL_FLOOR < residual < _TRUNCATION_RESIDUAL_BOUND
+    assert result["published_label_count"] == _PUBLISHED_LABEL_COUNT
+    assert result["full_label_count"] == _INTERNAL_LABEL_COUNT
+
+
+def test_direct_energy_reconstruction_holds_at_every_separation():
+    """R enters only as R^-n, so a spread of separations independently checks n."""
+    for distance in (4.75, 9.25, 14.0):
+        result = _reconstruction(*_ORIENTATIONS[8], distance=distance)
+        assert result["full_relative_deviation"] < 1.0e-13
+
+
+def test_published_truncation_residual_falls_off_as_the_seventh_power_of_r():
+    """The discarded orders start at n = 13, so the relative residual must go as R^-7.
+
+    This is the strongest available statement that the truncation residual is the
+    physical tail of the expansion and not numerical noise: noise would not scale,
+    and a residual driven by any order other than 13 would scale with a different
+    exponent.
+    """
+    near = _reconstruction(*_ORIENTATIONS[8], distance=4.75)
+    far = _reconstruction(*_ORIENTATIONS[8], distance=9.5)
+    ratio = near["published_relative_deviation"] / far["published_relative_deviation"]
+    # 2^7 = 128 for a doubling of R; measured 145.46, the sub-leading n = 14 term and
+    # the R-dependence of the retained orders together pulling it above the pure power.
+    assert 120.0 < ratio < 160.0
+
+
+def test_direct_energy_reconstruction_reverses_with_the_separation():
+    """E_disp(A, B; R) = E_disp(B, A; -R), the physical content of the exchange rule."""
+    models = _synthetic_models((111, 112))
+    first = [_matrix(frequency[0]) for frequency in models]
+    second = [_matrix(frequency[1]) for frequency in models]
+    frame_a = _matrix(_rotation(0.44, 1.21, -0.87))
+    frame_b = _matrix(_rotation(-1.93, 0.66, 2.15))
+    direction = [0.3, -0.6, 0.74]
+    forward = psi4.core._atomic_polarizability_test_anisotropic_energy_reconstruction(
+        first, second, list(_REVIEWED_WEIGHTS), frame_a, frame_b, direction, 5.5)
+    backward = psi4.core._atomic_polarizability_test_anisotropic_energy_reconstruction(
+        second, first, list(_REVIEWED_WEIGHTS), frame_b, frame_a,
+        [-value for value in direction], 5.5)
+    assert abs(forward["direct_energy"] / backward["direct_energy"] - 1.0) < 1.0e-14
+
+
+def test_s_functions_are_real_and_the_scalar_one_is_unity():
+    table = _table()
+    index = _label_index(table)
+    values = psi4.core._atomic_polarizability_test_anisotropic_s_functions(
+        _matrix(_rotation(0.83, 1.27, -0.41)), _matrix(_rotation(-2.02, 0.55, 1.11)),
+        [0.37, -0.62, 0.69])
+    assert len(values) == _INTERNAL_LABEL_COUNT
+    for order in (6, 8, 10, 12, 14):
+        assert abs(values[index[(order, 0, 0, 0, 0, 0)]] - 1.0) < 1.0e-13
+
+
+def test_s_functions_reject_an_improper_frame():
+    with pytest.raises(RuntimeError):
+        psi4.core._atomic_polarizability_test_anisotropic_s_functions(
+            _matrix([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]]),
+            _matrix(_rotation(0.0, 0.0, 0.0)), [0.0, 0.0, 1.0])
