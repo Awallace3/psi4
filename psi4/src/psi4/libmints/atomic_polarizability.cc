@@ -5533,6 +5533,202 @@ ResponseKernel reviewed_response_kernel() { return ResponseKernel(0.25, 0.75); }
 
 namespace {
 
+constexpr double kPi = 3.14159265358979323846;
+
+/** Auxiliary shells beyond this angular momentum are outside the rank-3 moment envelope. */
+constexpr unsigned int kMaximumAuxiliaryAngularMomentum = 6;
+
+/** One monomial gamma * x^p y^q z^s of a Racah regular real solid harmonic. */
+struct SolidHarmonicMonomial {
+    double coefficient;
+    unsigned int x_power;
+    unsigned int y_power;
+    unsigned int z_power;
+};
+
+/**
+ * Rank-0 through rank-3 Racah-normalised regular real solid harmonics, expanded as
+ * Cartesian monomials in the component order 00; 10 11c 11s; 20 21c 21s 22c 22s;
+ * 30 31c 31s 32c 32s 33c 33s.
+ *
+ * Term for term this is regular_harmonics() above, which is the only convention the
+ * projection stage of this pipeline accepts. The unit-normalised real spherical
+ * harmonics generated elsewhere in libmints differ from these by an l-dependent
+ * factor and are deliberately not reused here.
+ */
+const std::array<std::vector<SolidHarmonicMonomial>, kAuxiliaryMomentComponents>&
+regular_harmonic_monomials() {
+    const double root3 = std::sqrt(3.0);
+    const double root15 = std::sqrt(15.0);
+    const double dipole_octupole = std::sqrt(3.0 / 8.0);
+    const double octupole = std::sqrt(10.0) / 4.0;
+    static const std::array<std::vector<SolidHarmonicMonomial>, kAuxiliaryMomentComponents> table{{
+        {{1.0, 0, 0, 0}},
+        {{1.0, 0, 0, 1}},
+        {{1.0, 1, 0, 0}},
+        {{1.0, 0, 1, 0}},
+        {{1.0, 0, 0, 2}, {-0.5, 2, 0, 0}, {-0.5, 0, 2, 0}},
+        {{root3, 1, 0, 1}},
+        {{root3, 0, 1, 1}},
+        {{0.5 * root3, 2, 0, 0}, {-0.5 * root3, 0, 2, 0}},
+        {{root3, 1, 1, 0}},
+        {{1.0, 0, 0, 3}, {-1.5, 2, 0, 1}, {-1.5, 0, 2, 1}},
+        {{4.0 * dipole_octupole, 1, 0, 2}, {-dipole_octupole, 3, 0, 0}, {-dipole_octupole, 1, 2, 0}},
+        {{4.0 * dipole_octupole, 0, 1, 2}, {-dipole_octupole, 2, 1, 0}, {-dipole_octupole, 0, 3, 0}},
+        {{0.5 * root15, 2, 0, 1}, {-0.5 * root15, 0, 2, 1}},
+        {{root15, 1, 1, 1}},
+        {{octupole, 3, 0, 0}, {-3.0 * octupole, 1, 2, 0}},
+        {{3.0 * octupole, 2, 1, 0}, {-octupole, 0, 3, 0}},
+    }};
+    return table;
+}
+
+/** integral x^power exp(-exponent x^2) dx over the whole line; zero for odd power. */
+double gaussian_moment_1d(unsigned int power, double exponent) {
+    if (power % 2 == 1) return 0.0;
+    double result = std::sqrt(kPi / exponent);
+    const double half_step = 1.0 / std::sqrt(2.0 * exponent);
+    for (unsigned int factor = 1; factor < power; factor += 2)
+        result *= static_cast<double>(factor);
+    for (unsigned int step = 0; step < power; ++step) result *= half_step;
+    return result;
+}
+
+double small_binomial(unsigned int total, unsigned int chosen) {
+    double result = 1.0;
+    for (unsigned int step = 0; step < chosen; ++step)
+        result = result * static_cast<double>(total - step) / static_cast<double>(step + 1);
+    return result;
+}
+
+double integer_power(double base, unsigned int power) {
+    double result = 1.0;
+    for (unsigned int step = 0; step < power; ++step) result *= base;
+    return result;
+}
+
+}  // namespace
+
+namespace detail {
+
+Matrix auxiliary_multipole_moments(const BasisSet& auxiliary,
+                                   const std::vector<SitePosition>& sites,
+                                   const std::vector<std::size_t>& function_to_site) {
+    const std::string prefix = "auxiliary multipole moments: ";
+    if (auxiliary.nbf() <= 0 || auxiliary.nshell() <= 0)
+        throw PSIEXCEPTION(prefix + "auxiliary basis is empty");
+    const auto function_count = static_cast<std::size_t>(auxiliary.nbf());
+    if (sites.empty()) throw PSIEXCEPTION(prefix + "at least one site is required");
+    if (function_to_site.size() != function_count)
+        throw PSIEXCEPTION(prefix +
+                           "function-to-site map must cover every auxiliary function exactly once");
+    for (const auto site : function_to_site)
+        if (site >= sites.size())
+            throw PSIEXCEPTION(prefix + "function-to-site map names a site that does not exist");
+    for (const auto& site : sites)
+        for (const double coordinate : site)
+            if (!std::isfinite(coordinate))
+                throw PSIEXCEPTION(prefix + "site position is not finite");
+
+    const auto element_count = checked_c1_product(function_count, kAuxiliaryMomentComponents, prefix);
+    std::vector<double> moments(element_count, 0.0);
+    const auto& table = regular_harmonic_monomials();
+    std::size_t covered = 0;
+
+    for (int index = 0; index < auxiliary.nshell(); ++index) {
+        const auto& shell = auxiliary.shell(index);
+        if (shell.is_pure())
+            throw PSIEXCEPTION(prefix + "auxiliary basis must use Cartesian functions");
+        if (shell.am() < 0 || shell.am() > static_cast<int>(kMaximumAuxiliaryAngularMomentum))
+            throw PSIEXCEPTION(prefix + "auxiliary angular momentum envelope is 0 through 6");
+        if (shell.nprimitive() <= 0)
+            throw PSIEXCEPTION(prefix + "auxiliary shell has no primitives");
+        const auto am = static_cast<unsigned int>(shell.am());
+        const double* origin = shell.center();
+        const auto first = static_cast<std::size_t>(shell.function_index());
+        std::size_t component = 0;
+        for (int x_degree = static_cast<int>(am); x_degree >= 0; --x_degree) {
+            for (int y_degree = static_cast<int>(am) - x_degree; y_degree >= 0; --y_degree) {
+                const auto z_degree = static_cast<unsigned int>(
+                    static_cast<int>(am) - x_degree - y_degree);
+                const auto function = checked_c1_sum(first, component, prefix);
+                ++component;
+                ++covered;
+                if (function >= function_count)
+                    throw PSIEXCEPTION(prefix + "shell layout overruns the auxiliary basis");
+                const auto& site = sites[function_to_site[function]];
+                const double offset_x = origin[0] - site[0];
+                const double offset_y = origin[1] - site[1];
+                const double offset_z = origin[2] - site[2];
+                if (!std::isfinite(offset_x) || !std::isfinite(offset_y) || !std::isfinite(offset_z))
+                    throw PSIEXCEPTION(prefix + "auxiliary function displacement is not finite");
+                const auto row = checked_c1_product(function, kAuxiliaryMomentComponents, prefix);
+                for (int primitive = 0; primitive < shell.nprimitive(); ++primitive) {
+                    const double exponent = shell.exp(primitive);
+                    const double contraction = shell.coef(primitive);
+                    if (!std::isfinite(exponent) || !(exponent > 0.0) || !std::isfinite(contraction))
+                        throw PSIEXCEPTION(prefix +
+                                           "auxiliary primitive is not a finite positive Gaussian");
+                    for (std::size_t component_index = 0;
+                         component_index < kAuxiliaryMomentComponents; ++component_index) {
+                        double value = 0.0;
+                        for (const auto& term : table[component_index]) {
+                            for (unsigned int nx = 0; nx <= term.x_power; ++nx) {
+                                const double weight_x = small_binomial(term.x_power, nx) *
+                                                        integer_power(offset_x, term.x_power - nx);
+                                if (weight_x == 0.0) continue;
+                                const double moment_x = gaussian_moment_1d(
+                                    static_cast<unsigned int>(x_degree) + nx, exponent);
+                                if (moment_x == 0.0) continue;
+                                for (unsigned int ny = 0; ny <= term.y_power; ++ny) {
+                                    const double weight_y =
+                                        small_binomial(term.y_power, ny) *
+                                        integer_power(offset_y, term.y_power - ny);
+                                    if (weight_y == 0.0) continue;
+                                    const double moment_y = gaussian_moment_1d(
+                                        static_cast<unsigned int>(y_degree) + ny, exponent);
+                                    if (moment_y == 0.0) continue;
+                                    for (unsigned int nz = 0; nz <= term.z_power; ++nz) {
+                                        const double weight_z =
+                                            small_binomial(term.z_power, nz) *
+                                            integer_power(offset_z, term.z_power - nz);
+                                        if (weight_z == 0.0) continue;
+                                        const double moment_z =
+                                            gaussian_moment_1d(z_degree + nz, exponent);
+                                        if (moment_z == 0.0) continue;
+                                        value += term.coefficient * weight_x * weight_y * weight_z *
+                                                 moment_x * moment_y * moment_z;
+                                    }
+                                }
+                            }
+                        }
+                        moments[row + component_index] += contraction * value;
+                    }
+                }
+            }
+        }
+    }
+    if (covered != function_count)
+        throw PSIEXCEPTION(prefix + "shell layout does not cover the auxiliary basis exactly once");
+    for (const double value : moments)
+        if (!std::isfinite(value)) throw PSIEXCEPTION(prefix + "derived moment is not finite");
+
+    Matrix result("AUXILIARY MULTIPOLE MOMENTS", static_cast<int>(function_count),
+                  static_cast<int>(kAuxiliaryMomentComponents));
+    for (std::size_t function = 0; function < function_count; ++function) {
+        const auto row = checked_c1_product(function, kAuxiliaryMomentComponents, prefix);
+        for (std::size_t component_index = 0; component_index < kAuxiliaryMomentComponents;
+             ++component_index)
+            result(static_cast<int>(function), static_cast<int>(component_index)) =
+                moments[row + component_index];
+    }
+    return result;
+}
+
+}  // namespace detail
+
+namespace {
+
 constexpr double kReferenceGeometryTolerance = 1.0e-10;
 
 /**

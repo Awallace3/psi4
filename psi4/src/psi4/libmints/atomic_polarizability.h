@@ -1328,6 +1328,26 @@ std::vector<RefinedL3Model> refine_wsm_test_only(
     const PDefConstraints& constraints, const RefinementOptions& options);
 }  // namespace detail
 
+
+/** Rank-0-through-rank-3 real-spherical component count of one auxiliary moment row. */
+constexpr std::size_t kAuxiliaryMomentComponents = 16;
+
+namespace detail {
+/**
+ * Pure evaluator: analytic Racah regular real solid-harmonic moments of every
+ * auxiliary function about its assigned site.
+ *
+ * Returns (auxiliary.nbf(), kAuxiliaryMomentComponents) in the component order
+ * 00; 10 11c 11s; 20 21c 21s 22c 22s; 30 31c 31s 32c 32s 33c 33s, matching the
+ * convention of the projection stage exactly. Column 0 is the function charge
+ * integral chi_k dr. The auxiliary basis must be Cartesian.
+ */
+PSI_API Matrix auxiliary_multipole_moments(const BasisSet& auxiliary,
+                                           const std::vector<SitePosition>& sites,
+                                           const std::vector<std::size_t>& function_to_site);
+
+}  // namespace detail
+
 /** One ordered rank pair of the isotropic `00 00 0` recoupling table. */
 struct PSI_API DispersionRankPair {
     unsigned int coefficient_order{};

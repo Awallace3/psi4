@@ -37,6 +37,7 @@
 #include "psi4/libfock/cubature.h"
 #include "psi4/libmints/oeprop.h"
 #include "psi4/libmints/atomic_polarizability.h"
+#include "psi4/libmints/basisset.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/vector.h"
@@ -444,6 +445,28 @@ void export_oeprop(py::module &m) {
           "design"_a, "observations"_a, "row_weights"_a, "lambda"_a,
           "diagonal_anchor"_a, "reference"_a, "constraints"_a,
           "constraint_targets"_a, "options"_a = py::dict());
+    m.def("_atomic_polarizability_test_auxiliary_multipole_moments",
+          [](std::shared_ptr<BasisSet> auxiliary, const Matrix& site_positions,
+             const std::vector<std::size_t>& function_to_site) {
+              if (!auxiliary)
+                  throw PSIEXCEPTION("auxiliary multipole moments: an auxiliary basis is required");
+              if (site_positions.nirrep() != 1 || site_positions.ncol() != 3)
+                  throw PSIEXCEPTION("auxiliary multipole moments: sites must be an N by 3 matrix");
+              std::vector<SitePosition> sites(static_cast<std::size_t>(site_positions.nrow()));
+              for (std::size_t site = 0; site < sites.size(); ++site)
+                  for (std::size_t axis = 0; axis < 3; ++axis)
+                      sites[site][axis] =
+                          site_positions(static_cast<int>(site), static_cast<int>(axis));
+              auto moments = std::make_shared<Matrix>(
+                  detail::auxiliary_multipole_moments(*auxiliary, sites, function_to_site));
+              py::dict values;
+              values["moments"] = moments;
+              values["component_count"] = kAuxiliaryMomentComponents;
+              values["function_count"] = static_cast<std::size_t>(auxiliary->nbf());
+              values["site_count"] = sites.size();
+              return values;
+          },
+          "auxiliary"_a, "sites"_a, "function_to_site"_a);
     m.def("_atomic_polarizability_solve_restricted_response",
           [](const Matrix& H1, const Matrix& H2, double omega, const Matrix& rhs) {
               const auto result = detail::solve_dense_restricted_response(H1, H2, omega, rhs);
