@@ -5607,6 +5607,39 @@ double integer_power(double base, unsigned int power) {
     return result;
 }
 
+int validated_cdf_workspace(double query, std::size_t maximum_elements, const std::string& prefix,
+                            const char* context) {
+    if (!std::isfinite(query) || query < 1.0 ||
+        query > static_cast<double>(std::numeric_limits<int>::max()))
+        throw PSIEXCEPTION(prefix + context + " workspace query failed");
+    const auto rounded = static_cast<std::size_t>(std::ceil(query));
+    if (rounded > maximum_elements)
+        throw PSIEXCEPTION(prefix + context + " workspace exceeds the explicit allocation cap");
+    return static_cast<int>(rounded);
+}
+
+/** Ascending symmetric eigendecomposition; the buffer returns V^T in row-major order. */
+void symmetric_eigendecomposition(std::vector<double>& matrix, std::size_t count,
+                                  std::vector<double>& eigenvalues, std::size_t maximum_elements,
+                                  const std::string& prefix, const char* context) {
+    eigenvalues.assign(count, 0.0);
+    const int order = static_cast<int>(count);
+    double query = 0.0;
+    int info = C_DSYEV('V', 'U', order, matrix.data(), order, eigenvalues.data(), &query, -1);
+    if (info != 0) throw PSIEXCEPTION(prefix + context + " workspace query failed");
+    const int workspace_size = validated_cdf_workspace(query, maximum_elements, prefix, context);
+    std::vector<double> workspace(static_cast<std::size_t>(workspace_size));
+    info = C_DSYEV('V', 'U', order, matrix.data(), order, eigenvalues.data(), workspace.data(),
+                   workspace_size);
+    if (info != 0) throw PSIEXCEPTION(prefix + context + " failed to converge");
+    for (const double value : eigenvalues)
+        if (!std::isfinite(value))
+            throw PSIEXCEPTION(prefix + context + " produced a nonfinite eigenvalue");
+    for (const double value : matrix)
+        if (!std::isfinite(value))
+            throw PSIEXCEPTION(prefix + context + " produced a nonfinite eigenvector");
+}
+
 }  // namespace
 
 namespace detail {
@@ -5721,6 +5754,358 @@ Matrix auxiliary_multipole_moments(const BasisSet& auxiliary,
              ++component_index)
             result(static_cast<int>(function), static_cast<int>(component_index)) =
                 moments[row + component_index];
+    }
+    return result;
+}
+
+Matrix solve_constrained_density_fit(const Matrix& metric, const Matrix& rhs,
+                                     const Matrix& constraints,
+                                     const std::vector<double>& constraint_targets,
+                                     const CDFOptions& options, CDFDiagnostics* diagnostics) {
+    const std::string prefix = "constrained density fit: ";
+    if (metric.nirrep() != 1 || rhs.nirrep() != 1 || constraints.nirrep() != 1)
+        throw PSIEXCEPTION(prefix + "every input must be a dense C1 matrix");
+    if (metric.nrow() <= 0 || metric.ncol() != metric.nrow())
+        throw PSIEXCEPTION(prefix + "metric must be a nonempty square matrix");
+    if (rhs.nrow() != metric.nrow() || rhs.ncol() <= 0)
+        throw PSIEXCEPTION(prefix + "right-hand side must be (auxiliary functions, transitions)");
+    if (constraints.nrow() > 0 && constraints.ncol() != metric.nrow())
+        throw PSIEXCEPTION(prefix + "constraint rows must span the auxiliary functions");
+    const auto count = static_cast<std::size_t>(metric.nrow());
+    const auto transitions = static_cast<std::size_t>(rhs.ncol());
+    const auto constraint_count = static_cast<std::size_t>(std::max(constraints.nrow(), 0));
+    if (constraint_targets.size() != constraint_count)
+        throw PSIEXCEPTION(prefix + "one constraint target is required per constraint row");
+    if (count > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        transitions > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw PSIEXCEPTION(prefix + "problem dimensions exceed the LAPACK envelope");
+    if (!std::isfinite(options.constraint_penalty) || options.constraint_penalty < 0.0)
+        throw PSIEXCEPTION(prefix + "constraint penalty must be finite and nonnegative");
+    if (!std::isfinite(options.metric_relative_cutoff) || options.metric_relative_cutoff <= 0.0 ||
+        options.metric_relative_cutoff >= 1.0)
+        throw PSIEXCEPTION(prefix + "metric relative cutoff must lie strictly between 0 and 1");
+    if (!std::isfinite(options.maximum_condition_number) || options.maximum_condition_number < 1.0)
+        throw PSIEXCEPTION(prefix + "maximum condition number must be finite and at least one");
+    for (const double target : constraint_targets)
+        if (!std::isfinite(target)) throw PSIEXCEPTION(prefix + "constraint target is not finite");
+
+    double metric_scale = 0.0;
+    for (std::size_t row = 0; row < count; ++row)
+        for (std::size_t column = 0; column < count; ++column) {
+            const double value = metric(static_cast<int>(row), static_cast<int>(column));
+            if (!std::isfinite(value)) throw PSIEXCEPTION(prefix + "metric is not finite");
+            metric_scale = std::max(metric_scale, std::abs(value));
+        }
+    if (!(metric_scale > 0.0)) throw PSIEXCEPTION(prefix + "metric is identically zero");
+    // Symmetry is a structural property of a Coulomb metric plus a symmetric
+    // localisation form, so a violation is a caller defect rather than round-off.
+    const double symmetry_tolerance = 1.0e-12 * metric_scale;
+    for (std::size_t row = 0; row < count; ++row)
+        for (std::size_t column = row + 1; column < count; ++column)
+            if (std::abs(metric(static_cast<int>(row), static_cast<int>(column)) -
+                         metric(static_cast<int>(column), static_cast<int>(row))) >
+                symmetry_tolerance)
+                throw PSIEXCEPTION(prefix + "metric must be symmetric");
+
+    double target_scale = 0.0;
+    const auto target_elements = checked_c1_product(count, transitions, prefix);
+    std::vector<double> targets(target_elements, 0.0);
+    for (std::size_t row = 0; row < count; ++row) {
+        const auto offset = checked_c1_product(row, transitions, prefix);
+        for (std::size_t column = 0; column < transitions; ++column) {
+            const double value = rhs(static_cast<int>(row), static_cast<int>(column));
+            if (!std::isfinite(value))
+                throw PSIEXCEPTION(prefix + "right-hand side is not finite");
+            targets[offset + column] = value;
+            target_scale = std::max(target_scale, std::abs(value));
+        }
+    }
+    const auto constraint_elements = checked_c1_product(constraint_count, count, prefix);
+    std::vector<double> constraint_rows(constraint_elements, 0.0);
+    for (std::size_t row = 0; row < constraint_count; ++row) {
+        const auto offset = checked_c1_product(row, count, prefix);
+        for (std::size_t column = 0; column < count; ++column) {
+            const double value = constraints(static_cast<int>(row), static_cast<int>(column));
+            if (!std::isfinite(value)) throw PSIEXCEPTION(prefix + "constraint row is not finite");
+            constraint_rows[offset + column] = value;
+        }
+    }
+
+    const bool penalty_policy = options.constraints == CDFConstraintPolicy::QuadraticPenalty;
+    const auto normal_elements = checked_c1_product(count, count, prefix);
+    std::vector<double> normal(normal_elements, 0.0);
+    for (std::size_t row = 0; row < count; ++row) {
+        const auto offset = checked_c1_product(row, count, prefix);
+        for (std::size_t column = 0; column < count; ++column)
+            normal[offset + column] =
+                0.5 * (metric(static_cast<int>(row), static_cast<int>(column)) +
+                       metric(static_cast<int>(column), static_cast<int>(row)));
+    }
+    if (penalty_policy && constraint_count > 0 && options.constraint_penalty > 0.0) {
+        for (std::size_t constraint = 0; constraint < constraint_count; ++constraint) {
+            const auto constraint_offset = checked_c1_product(constraint, count, prefix);
+            for (std::size_t row = 0; row < count; ++row) {
+                const double left = constraint_rows[constraint_offset + row];
+                if (left == 0.0) continue;
+                const auto offset = checked_c1_product(row, count, prefix);
+                for (std::size_t column = 0; column < count; ++column)
+                    normal[offset + column] += options.constraint_penalty * left *
+                                               constraint_rows[constraint_offset + column];
+                const auto target_offset = checked_c1_product(row, transitions, prefix);
+                for (std::size_t column = 0; column < transitions; ++column)
+                    targets[target_offset + column] +=
+                        options.constraint_penalty * left * constraint_targets[constraint];
+            }
+        }
+        for (const double value : normal)
+            if (!std::isfinite(value))
+                throw PSIEXCEPTION(prefix + "constraint penalty overflowed the normal matrix");
+        for (const double value : targets)
+            if (!std::isfinite(value))
+                throw PSIEXCEPTION(prefix + "constraint penalty overflowed the right-hand side");
+        target_scale = 0.0;
+        for (const double value : targets) target_scale = std::max(target_scale, std::abs(value));
+    }
+
+    std::vector<double> eigenvalues;
+    symmetric_eigendecomposition(normal, count, eigenvalues, options.maximum_workspace_elements,
+                                 prefix, "normal matrix eigendecomposition");
+    const double largest = eigenvalues.back();
+    if (!(largest > 0.0)) throw PSIEXCEPTION(prefix + "normal matrix has no positive eigenvalue");
+    // The cutoff is RELATIVE to the largest eigenvalue. An absolute magnitude would make
+    // the retained rank a function of the auxiliary exponents alone.
+    const double cutoff = options.metric_relative_cutoff * largest;
+    const double smallest = eigenvalues.front();
+    if (smallest < -cutoff)
+        throw PSIEXCEPTION(prefix + "normal matrix is not positive semidefinite");
+    const double condition = smallest > 0.0 ? largest / smallest
+                                            : std::numeric_limits<double>::infinity();
+    if (!std::isfinite(condition) || condition > options.maximum_condition_number)
+        throw PSIEXCEPTION(prefix + "condition number exceeds explicit threshold");
+    std::size_t first_retained = 0;
+    while (first_retained < count && !(eigenvalues[first_retained] > cutoff)) ++first_retained;
+    const std::size_t retained_rank = count - first_retained;
+    if (retained_rank == 0)
+        throw PSIEXCEPTION(prefix + "every spectral direction fell below the relative cutoff");
+    const double retained_condition = largest / eigenvalues[first_retained];
+
+    // Apply the truncated spectral pseudo-inverse to a right-hand-side block by two
+    // matrix products. The inverse itself is never materialised.
+    double* retained_vectors = normal.data() + checked_c1_product(first_retained, count, prefix);
+    const auto apply_pseudo_inverse = [&](std::vector<double>& block, std::size_t columns) {
+        std::vector<double> projected(checked_c1_product(retained_rank, columns, prefix), 0.0);
+        C_DGEMM('N', 'N', static_cast<int>(retained_rank), static_cast<int>(columns),
+                static_cast<int>(count), 1.0, retained_vectors, static_cast<int>(count),
+                block.data(), static_cast<int>(columns), 0.0, projected.data(),
+                static_cast<int>(columns));
+        for (std::size_t mode = 0; mode < retained_rank; ++mode) {
+            const double scale = 1.0 / eigenvalues[first_retained + mode];
+            const auto offset = checked_c1_product(mode, columns, prefix);
+            for (std::size_t column = 0; column < columns; ++column) projected[offset + column] *= scale;
+        }
+        std::vector<double> result(checked_c1_product(count, columns, prefix), 0.0);
+        C_DGEMM('T', 'N', static_cast<int>(count), static_cast<int>(columns),
+                static_cast<int>(retained_rank), 1.0, retained_vectors, static_cast<int>(count),
+                projected.data(), static_cast<int>(columns), 0.0, result.data(),
+                static_cast<int>(columns));
+        for (const double value : result)
+            if (!std::isfinite(value))
+                throw PSIEXCEPTION(prefix + "pseudo-inverse application overflowed");
+        return result;
+    };
+
+    std::vector<double> solution = apply_pseudo_inverse(targets, transitions);
+    std::vector<double> multipliers(checked_c1_product(constraint_count, transitions, prefix), 0.0);
+
+    if (!penalty_policy && constraint_count > 0) {
+        // Feasibility and independence of the constraint set itself, checked in the same
+        // order and with the same vocabulary as the refinement solver.
+        std::vector<double> gram(checked_c1_product(constraint_count, constraint_count, prefix), 0.0);
+        for (std::size_t row = 0; row < constraint_count; ++row) {
+            const auto row_offset = checked_c1_product(row, count, prefix);
+            const auto gram_offset = checked_c1_product(row, constraint_count, prefix);
+            for (std::size_t column = 0; column < constraint_count; ++column) {
+                const auto column_offset = checked_c1_product(column, count, prefix);
+                double value = 0.0;
+                for (std::size_t term = 0; term < count; ++term)
+                    value += constraint_rows[row_offset + term] * constraint_rows[column_offset + term];
+                gram[gram_offset + column] = value;
+            }
+        }
+        std::vector<double> gram_eigenvalues;
+        symmetric_eigendecomposition(gram, constraint_count, gram_eigenvalues,
+                                     options.maximum_workspace_elements, prefix,
+                                     "constraint Gram eigendecomposition");
+        const double gram_largest = gram_eigenvalues.back();
+        if (!(gram_largest > 0.0))
+            throw PSIEXCEPTION(prefix + "constraints are ambiguous (linearly dependent)");
+        const double gram_cutoff = 1.0e-12 * gram_largest;
+        double target_norm = 0.0;
+        for (const double target : constraint_targets) target_norm = std::hypot(target_norm, target);
+        double feasibility_residual = 0.0;
+        std::size_t constraint_rank = 0;
+        for (std::size_t mode = 0; mode < constraint_count; ++mode) {
+            const auto offset = checked_c1_product(mode, constraint_count, prefix);
+            if (gram_eigenvalues[mode] > gram_cutoff) {
+                ++constraint_rank;
+                continue;
+            }
+            double projection = 0.0;
+            for (std::size_t row = 0; row < constraint_count; ++row)
+                projection += gram[offset + row] * constraint_targets[row];
+            feasibility_residual = std::hypot(feasibility_residual, projection);
+        }
+        if (feasibility_residual > 1.0e-10 * (1.0 + target_norm))
+            throw PSIEXCEPTION(prefix + "constraints are inconsistent");
+        if (constraint_rank < constraint_count)
+            throw PSIEXCEPTION(prefix + "constraints are ambiguous (linearly dependent)");
+
+        std::vector<double> transposed(constraint_elements, 0.0);
+        for (std::size_t row = 0; row < count; ++row) {
+            const auto offset = checked_c1_product(row, constraint_count, prefix);
+            for (std::size_t constraint = 0; constraint < constraint_count; ++constraint)
+                transposed[offset + constraint] =
+                    constraint_rows[checked_c1_product(constraint, count, prefix) + row];
+        }
+        std::vector<double> projected_constraints =
+            apply_pseudo_inverse(transposed, constraint_count);
+        std::vector<double> reduced(
+            checked_c1_product(constraint_count, constraint_count, prefix), 0.0);
+        for (std::size_t row = 0; row < constraint_count; ++row) {
+            const auto row_offset = checked_c1_product(row, count, prefix);
+            const auto reduced_offset = checked_c1_product(row, constraint_count, prefix);
+            for (std::size_t column = 0; column < constraint_count; ++column) {
+                double value = 0.0;
+                for (std::size_t term = 0; term < count; ++term)
+                    value += constraint_rows[row_offset + term] *
+                             projected_constraints[checked_c1_product(term, constraint_count, prefix) +
+                                                   column];
+                reduced[reduced_offset + column] = value;
+            }
+        }
+        std::vector<double> reduced_eigenvalues;
+        symmetric_eigendecomposition(reduced, constraint_count, reduced_eigenvalues,
+                                     options.maximum_workspace_elements, prefix,
+                                     "constraint elimination eigendecomposition");
+        const double reduced_largest = reduced_eigenvalues.back();
+        if (!(reduced_largest > 0.0))
+            throw PSIEXCEPTION(prefix + "constraints are ambiguous after cutoff pruning");
+        const double reduced_cutoff = options.metric_relative_cutoff * reduced_largest;
+        for (const double value : reduced_eigenvalues)
+            if (!(value > reduced_cutoff))
+                throw PSIEXCEPTION(prefix + "constraints are ambiguous after cutoff pruning");
+
+        std::vector<double> offsets(checked_c1_product(constraint_count, transitions, prefix), 0.0);
+        for (std::size_t row = 0; row < constraint_count; ++row) {
+            const auto row_offset = checked_c1_product(row, count, prefix);
+            const auto offset = checked_c1_product(row, transitions, prefix);
+            for (std::size_t column = 0; column < transitions; ++column) {
+                double value = -constraint_targets[row];
+                for (std::size_t term = 0; term < count; ++term)
+                    value += constraint_rows[row_offset + term] *
+                             solution[checked_c1_product(term, transitions, prefix) + column];
+                offsets[offset + column] = value;
+            }
+        }
+        for (std::size_t mode = 0; mode < constraint_count; ++mode) {
+            const auto mode_offset = checked_c1_product(mode, constraint_count, prefix);
+            const double scale = 1.0 / reduced_eigenvalues[mode];
+            for (std::size_t column = 0; column < transitions; ++column) {
+                double projection = 0.0;
+                for (std::size_t row = 0; row < constraint_count; ++row)
+                    projection += reduced[mode_offset + row] *
+                                  offsets[checked_c1_product(row, transitions, prefix) + column];
+                projection *= scale;
+                for (std::size_t row = 0; row < constraint_count; ++row)
+                    multipliers[checked_c1_product(row, transitions, prefix) + column] +=
+                        reduced[mode_offset + row] * projection;
+            }
+        }
+        for (std::size_t row = 0; row < count; ++row) {
+            const auto offset = checked_c1_product(row, transitions, prefix);
+            const auto projected_offset = checked_c1_product(row, constraint_count, prefix);
+            for (std::size_t column = 0; column < transitions; ++column) {
+                double correction = 0.0;
+                for (std::size_t constraint = 0; constraint < constraint_count; ++constraint)
+                    correction += projected_constraints[projected_offset + constraint] *
+                                  multipliers[checked_c1_product(constraint, transitions, prefix) +
+                                              column];
+                solution[offset + column] -= correction;
+            }
+        }
+    }
+
+    for (const double value : solution)
+        if (!std::isfinite(value)) throw PSIEXCEPTION(prefix + "fit coefficient is not finite");
+
+    double max_coefficient = 0.0;
+    for (const double value : solution) max_coefficient = std::max(max_coefficient, std::abs(value));
+    double max_constraint_residual = 0.0;
+    for (std::size_t row = 0; row < constraint_count; ++row) {
+        const auto row_offset = checked_c1_product(row, count, prefix);
+        for (std::size_t column = 0; column < transitions; ++column) {
+            double value = -constraint_targets[row];
+            for (std::size_t term = 0; term < count; ++term)
+                value += constraint_rows[row_offset + term] *
+                         solution[checked_c1_product(term, transitions, prefix) + column];
+            max_constraint_residual = std::max(max_constraint_residual, std::abs(value));
+        }
+    }
+    double max_stationarity_residual = 0.0;
+    for (std::size_t row = 0; row < count; ++row) {
+        const auto offset = checked_c1_product(row, transitions, prefix);
+        for (std::size_t column = 0; column < transitions; ++column) {
+            double value = -targets[offset + column];
+            for (std::size_t term = 0; term < count; ++term)
+                value += 0.5 *
+                         (metric(static_cast<int>(row), static_cast<int>(term)) +
+                          metric(static_cast<int>(term), static_cast<int>(row))) *
+                         solution[checked_c1_product(term, transitions, prefix) + column];
+            if (penalty_policy && options.constraint_penalty > 0.0) {
+                for (std::size_t constraint = 0; constraint < constraint_count; ++constraint) {
+                    double projection = 0.0;
+                    const auto constraint_offset = checked_c1_product(constraint, count, prefix);
+                    for (std::size_t term = 0; term < count; ++term)
+                        projection += constraint_rows[constraint_offset + term] *
+                                      solution[checked_c1_product(term, transitions, prefix) + column];
+                    value += options.constraint_penalty *
+                             constraint_rows[constraint_offset + row] * projection;
+                }
+            } else {
+                for (std::size_t constraint = 0; constraint < constraint_count; ++constraint)
+                    value += constraint_rows[checked_c1_product(constraint, count, prefix) + row] *
+                             multipliers[checked_c1_product(constraint, transitions, prefix) + column];
+            }
+            max_stationarity_residual =
+                std::max(max_stationarity_residual, std::abs(value) / (1.0 + target_scale));
+        }
+    }
+
+    CDFDiagnostics pending;
+    pending.auxiliary_count = count;
+    pending.transition_count = transitions;
+    pending.constraint_count = constraint_count;
+    pending.retained_rank = retained_rank;
+    pending.discarded_directions = first_retained;
+    pending.smallest_eigenvalue = smallest;
+    pending.largest_eigenvalue = largest;
+    pending.condition_number = condition;
+    pending.retained_condition_number = retained_condition;
+    pending.effective_cutoff = cutoff;
+    pending.max_constraint_residual = max_constraint_residual;
+    pending.max_stationarity_residual = max_stationarity_residual;
+    pending.max_coefficient_magnitude = max_coefficient;
+    pending.policy = penalty_policy ? "quadratic-penalty" : "hard-constraint";
+    pending.algorithm =
+        "symmetric-eigendecomposition/relative-spectral-cutoff/two-product-pseudo-inverse";
+    if (diagnostics) *diagnostics = pending;
+
+    Matrix result("CONSTRAINED DENSITY FIT COEFFICIENTS", static_cast<int>(count),
+                  static_cast<int>(transitions));
+    for (std::size_t row = 0; row < count; ++row) {
+        const auto offset = checked_c1_product(row, transitions, prefix);
+        for (std::size_t column = 0; column < transitions; ++column)
+            result(static_cast<int>(row), static_cast<int>(column)) = solution[offset + column];
     }
     return result;
 }

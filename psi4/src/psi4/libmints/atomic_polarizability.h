@@ -1332,6 +1332,77 @@ std::vector<RefinedL3Model> refine_wsm_test_only(
 /** Rank-0-through-rank-3 real-spherical component count of one auxiliary moment row. */
 constexpr std::size_t kAuxiliaryMomentComponents = 16;
 
+/** How the auxiliary-space fit treats its linear constraint set. */
+enum class PSI_API CDFConstraintPolicy {
+    /**
+     * Minimise Delta + penalty * ||C d - n||^2. The reviewed reference calculation
+     * uses this form with a finite weight, and its fitted transition densities
+     * therefore violate the charge condition by a small but nonzero amount. A hard
+     * constraint would give machine zero and a different partition.
+     */
+    QuadraticPenalty,
+    /** Minimise Delta subject to C d = n exactly; the penalty -> infinity limit. */
+    HardConstraint,
+};
+
+/** Deterministic numerical policy for the auxiliary-space constrained density fit. */
+struct PSI_API CDFOptions {
+    /** Auxiliary basis label; must resolve through MintsHelper::get_basisset. */
+    std::string auxiliary_basis;
+    /** Constraint treatment; the penalty form generalises the hard one. */
+    CDFConstraintPolicy constraints{CDFConstraintPolicy::QuadraticPenalty};
+    /** Quadratic penalty weight on ||C d - n||^2; ignored under HardConstraint. */
+    double constraint_penalty{1.0};
+    // The two gates below are set by measurement, not by taste, and they are
+    // deliberately looser than the values first proposed for this stage.
+    //
+    // The reviewed reference calculation fits a 246-function Cartesian auxiliary
+    // basis whose bare Coulomb metric was measured at lam_min = 5.4657e-10,
+    // lam_max = 1.0393e+03, condition number 1.902e+12 -- its 48 Cartesian
+    // contaminant functions are very nearly linearly dependent on the rest. With
+    // the reviewed localisation and charge-penalty terms applied the normal matrix
+    // is measured at 7.798e+12, and the reference solved that system by a plain LU
+    // factorisation with no truncation whatsoever. A maximum_condition_number of
+    // 1.0e+12 -- the value originally proposed for this stage -- therefore fails
+    // closed on the very calculation this stage exists to reproduce, and a
+    // metric_relative_cutoff of 1.0e-10 puts the threshold at 1.04e-07, roughly
+    // thirty spectral directions above lam_min, discarding every one of them.
+    //
+    // So: admit the reviewed protocol (1.0e+14 > 7.798e+12), and put the cutoff at
+    // 1.0e-14, which retains the whole spectrum of that matrix and makes
+    // truncation an explicitly requested diagnostic rather than a silent default.
+    //
+    // The cutoff is RELATIVE and is applied inside the solver as
+    // metric_relative_cutoff * lam_max. It is never compared against an absolute
+    // eigenvalue magnitude, because the auxiliary exponents alone would then decide
+    // the retained rank -- the same lesson already recorded for the WSM refinement
+    // column cutoff, and reinforced here: an absolute 1.0e-10 sits at the very
+    // bottom of the Cartesian spectrum and nowhere near the spherical one.
+    double metric_relative_cutoff{1.0e-14};
+    double maximum_condition_number{1.0e14};
+    /** Hard cap on any single LAPACK workspace request, in scalar elements. */
+    std::size_t maximum_workspace_elements{std::numeric_limits<std::size_t>::max()};
+};
+
+/** Complete fit diagnostics; assigned only after every gate has passed. */
+struct PSI_API CDFDiagnostics {
+    std::size_t auxiliary_count{};
+    std::size_t transition_count{};
+    std::size_t constraint_count{};
+    std::size_t retained_rank{};
+    std::size_t discarded_directions{};
+    double smallest_eigenvalue{};
+    double largest_eigenvalue{};
+    double condition_number{};
+    double retained_condition_number{};
+    double effective_cutoff{};
+    double max_constraint_residual{};
+    double max_stationarity_residual{};
+    double max_coefficient_magnitude{};
+    std::string policy;
+    std::string algorithm;
+};
+
 namespace detail {
 /**
  * Pure evaluator: analytic Racah regular real solid-harmonic moments of every
@@ -1346,6 +1417,22 @@ PSI_API Matrix auxiliary_multipole_moments(const BasisSet& auxiliary,
                                            const std::vector<SitePosition>& sites,
                                            const std::vector<std::size_t>& function_to_site);
 
+/**
+ * Pure evaluator: constrained auxiliary-space fit coefficients d[k, (ia)].
+ *
+ * metric is the (naux, naux) symmetric normal matrix of the fit functional -- the
+ * Coulomb metric already carrying any localisation quadratic form the caller wants
+ * -- rhs is (naux, transitions), constraints is (rows, naux) and constraint_targets
+ * is one target per row shared by every transition. The constraint term is added
+ * here, either as the quadratic penalty or as a hard equality. J^-1 is never formed:
+ * the solve is a symmetric eigendecomposition with an explicit relative spectral
+ * cutoff, applied to the right-hand sides by two matrix products.
+ */
+PSI_API Matrix solve_constrained_density_fit(const Matrix& metric, const Matrix& rhs,
+                                             const Matrix& constraints,
+                                             const std::vector<double>& constraint_targets,
+                                             const CDFOptions& options,
+                                             CDFDiagnostics* diagnostics);
 }  // namespace detail
 
 /** One ordered rank pair of the isotropic `00 00 0` recoupling table. */

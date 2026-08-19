@@ -1,9 +1,13 @@
 """Pure-evaluator tests for the constrained density-fitting partition core.
 
-``auxiliary_multipole_moments`` computes the analytic Racah regular real
-solid-harmonic moments ``Q_t[k]`` of every auxiliary basis function about its
-assigned site. It is a caller-supplied-data pure evaluator with no wavefunction,
-no grid and no process options.
+Two evaluators are covered here, both of which are caller-supplied-data pure
+functions with no wavefunction, no grid and no process options:
+
+* ``auxiliary_multipole_moments`` -- analytic Racah regular real solid-harmonic
+  moments ``Q_t[k]`` of every auxiliary basis function about its assigned site;
+* ``solve_constrained_density_fit`` -- the auxiliary-space normal-equation solve
+  under either a finite quadratic constraint penalty or a hard equality
+  constraint.
 
 The moment tests carry two independent oracles: closed-form literals recorded in
 the resolved-open-questions research, and a product Gauss-Hermite quadrature
@@ -360,3 +364,216 @@ def test_auxiliary_multipole_moments_fail_closed_on_an_invalid_site_map():
         _moments(basis, [(0.0, 0.0, 0.0)], [0] * (basis.nbf() - 1))
     with pytest.raises(RuntimeError, match=r"site that does not exist"):
         _moments(basis, [(0.0, 0.0, 0.0)], [1] * basis.nbf())
+
+
+# --------------------------------------------------------------------------
+# A3 -- solve_constrained_density_fit
+# --------------------------------------------------------------------------
+
+
+def _solve(metric, rhs, constraints, targets, **options):
+    result = psi4.core._atomic_polarizability_test_constrained_density_fit(
+        psi4.core.Matrix.from_array(np.asarray(metric, dtype=float)),
+        psi4.core.Matrix.from_array(np.asarray(rhs, dtype=float)),
+        psi4.core.Matrix.from_array(np.asarray(constraints, dtype=float)),
+        list(np.asarray(targets, dtype=float)),
+        options,
+    )
+    return np.array(result["coefficients"]), result
+
+
+def _spd_metric(eigenvalues, seed):
+    rng = np.random.default_rng(seed)
+    basis = np.linalg.qr(rng.standard_normal((len(eigenvalues), len(eigenvalues))))[0]
+    return basis @ np.diag(np.asarray(eigenvalues, dtype=float)) @ basis.T
+
+
+def _well_conditioned_problem(seed=20260818, size=12, transitions=3, rows=2):
+    rng = np.random.default_rng(seed)
+    metric = _spd_metric(rng.uniform(0.5, 4.0, size), seed + 1)
+    constraints = rng.standard_normal((rows, size))
+    targets = rng.standard_normal(rows)
+    exact = np.zeros((size, transitions))
+    particular = np.linalg.lstsq(constraints, targets, rcond=None)[0]
+    null = np.linalg.svd(constraints)[2][rows:]
+    for column in range(transitions):
+        exact[:, column] = particular + null.T @ rng.standard_normal(size - rows)
+    multipliers = rng.standard_normal((rows, transitions))
+    rhs = metric @ exact + constraints.T @ multipliers
+    return metric, rhs, constraints, targets, exact
+
+
+def test_hard_constraint_recovers_the_exact_solution_in_the_auxiliary_span():
+    """A KKT point built by construction must be reproduced exactly."""
+    metric, rhs, constraints, targets, exact = _well_conditioned_problem()
+    solution, result = _solve(
+        metric, rhs, constraints, targets, constraints_policy="hard"
+    )
+    assert np.allclose(solution, exact, rtol=1.0e-10, atol=1.0e-11)
+    assert result["policy"] == "hard-constraint"
+    assert result["constraint_count"] == constraints.shape[0]
+    assert result["discarded_directions"] == 0
+
+
+def test_hard_constraint_is_satisfied_to_machine_precision():
+    metric, rhs, constraints, targets, _ = _well_conditioned_problem()
+    solution, result = _solve(
+        metric, rhs, constraints, targets, constraints_policy="hard"
+    )
+    residual = constraints @ solution - targets[:, None]
+    assert np.max(np.abs(residual)) < 1.0e-12
+    assert result["max_constraint_residual"] < 1.0e-12
+
+
+def test_the_penalty_leaves_a_finite_constraint_residual_that_falls_as_one_over_lambda():
+    """The reviewed reference protocol is a soft penalty, not a hard constraint."""
+    metric, rhs, constraints, targets, _ = _well_conditioned_problem()
+    residuals = []
+    for penalty in (1.0, 1.0e2, 1.0e4):
+        solution, result = _solve(
+            metric, rhs, constraints, targets,
+            constraints_policy="penalty", constraint_penalty=penalty,
+        )
+        assert result["policy"] == "quadratic-penalty"
+        residuals.append(np.max(np.abs(constraints @ solution - targets[:, None])))
+    assert residuals[0] > 1.0e-3
+    for previous, current in zip(residuals, residuals[1:]):
+        assert current < previous / 50.0
+
+
+def test_the_penalty_reproduces_the_hard_constraint_solution_as_lambda_grows():
+    metric, rhs, constraints, targets, _ = _well_conditioned_problem()
+    hard, _ = _solve(metric, rhs, constraints, targets, constraints_policy="hard")
+    errors = []
+    for penalty in (1.0, 1.0e2, 1.0e4):
+        solution, _ = _solve(
+            metric, rhs, constraints, targets,
+            constraints_policy="penalty", constraint_penalty=penalty,
+        )
+        errors.append(np.max(np.abs(solution - hard)))
+    for previous, current in zip(errors, errors[1:]):
+        assert current < previous / 50.0
+    assert errors[-1] < 1.0e-4
+
+    # Beyond this the penalty matrix itself is the accuracy limit, not the model:
+    # its condition number grows linearly in the penalty weight, so the approach to
+    # the hard-constraint solution stalls at the double-precision floor near 2e-07.
+    tight, result = _solve(
+        metric, rhs, constraints, targets,
+        constraints_policy="penalty", constraint_penalty=1.0e6,
+    )
+    assert np.max(np.abs(tight - hard)) < 1.0e-6
+    assert result["condition_number"] > 1.0e7
+
+
+def test_general_multi_row_constraints_are_supported():
+    metric, rhs, constraints, targets, exact = _well_conditioned_problem(
+        seed=99, size=15, transitions=4, rows=5
+    )
+    solution, result = _solve(
+        metric, rhs, constraints, targets, constraints_policy="hard"
+    )
+    assert result["constraint_count"] == 5
+    assert np.allclose(solution, exact, rtol=1.0e-10, atol=1.0e-11)
+    assert np.max(np.abs(constraints @ solution - targets[:, None])) < 1.0e-12
+
+
+def test_an_empty_constraint_set_reduces_to_the_plain_metric_solve():
+    metric, rhs, _, _, _ = _well_conditioned_problem()
+    solution, result = _solve(metric, rhs, np.zeros((0, metric.shape[0])), [])
+    assert result["constraint_count"] == 0
+    assert np.allclose(metric @ solution, rhs, rtol=1.0e-10, atol=1.0e-11)
+
+
+def test_the_metric_cutoff_is_relative_and_never_an_absolute_magnitude():
+    """Rescaling the metric must not change which directions are retained.
+
+    An absolute cutoff would keep both directions of the unscaled problem and
+    discard both of the scaled one; a relative cutoff discards exactly the same
+    direction in each. The solution must scale as ``1/s`` and nothing else.
+    """
+    size = 6
+    spectrum = [1.0, 0.8, 0.6, 0.4, 0.2, 1.0e-4]
+    metric = _spd_metric(spectrum, seed=7)
+    rng = np.random.default_rng(11)
+    rhs = rng.standard_normal((size, 2))
+    empty = np.zeros((0, size))
+
+    plain, plain_result = _solve(
+        metric, rhs, empty, [], metric_relative_cutoff=1.0e-2
+    )
+    scale = 1.0e-6
+    scaled, scaled_result = _solve(
+        scale * metric, rhs, empty, [], metric_relative_cutoff=1.0e-2
+    )
+
+    assert plain_result["discarded_directions"] == 1
+    assert scaled_result["discarded_directions"] == 1
+    assert plain_result["retained_rank"] == scaled_result["retained_rank"] == size - 1
+    assert np.allclose(scaled, plain / scale, rtol=1.0e-9, atol=1.0e-9)
+    assert math.isclose(
+        plain_result["condition_number"], scaled_result["condition_number"],
+        rel_tol=1.0e-9,
+    )
+    assert math.isclose(
+        plain_result["effective_cutoff"] / scaled_result["effective_cutoff"],
+        1.0 / scale,
+        rel_tol=1.0e-9,
+    )
+
+
+def test_the_default_gates_admit_the_reviewed_reference_conditioning():
+    """The reviewed normal matrix is measured at 7.8e12; 1e12 would reject it."""
+    size = 8
+    spectrum = [1.0393e03 / 7.798e12] + [1.0] * (size - 2) + [1.0393e03]
+    metric = _spd_metric(spectrum, seed=13)
+    rng = np.random.default_rng(17)
+    rhs = rng.standard_normal((size, 2))
+    _, result = _solve(metric, rhs, np.zeros((0, size)), [])
+    # The eigendecomposition of a 7.8e+12 matrix cannot resolve its own condition
+    # number to better than a few parts in 1e5; the point of the assertion is that
+    # the gate admits it, not that the diagnostic is exact.
+    assert math.isclose(result["condition_number"], 7.798e12, rel_tol=1.0e-4)
+    assert result["discarded_directions"] == 0
+    assert result["maximum_condition_number"] == pytest.approx(1.0e14)
+    assert result["metric_relative_cutoff"] == pytest.approx(1.0e-14)
+
+
+def test_an_ill_conditioned_metric_fails_closed():
+    size = 6
+    metric = _spd_metric([1.0e-16] + [1.0] * (size - 1), seed=23)
+    rng = np.random.default_rng(29)
+    rhs = rng.standard_normal((size, 1))
+    with pytest.raises(RuntimeError, match=r"condition number exceeds explicit threshold"):
+        _solve(metric, rhs, np.zeros((0, size)), [])
+
+
+def test_inconsistent_and_ambiguous_constraints_fail_closed():
+    metric, rhs, constraints, targets, _ = _well_conditioned_problem()
+    # A repeated row with a consistent target is ambiguous, not infeasible.
+    duplicated = np.vstack([constraints, constraints[0]])
+    with pytest.raises(RuntimeError, match=r"constraints are ambiguous \(linearly dependent\)"):
+        _solve(
+            metric, rhs, duplicated, list(targets) + [targets[0]],
+            constraints_policy="hard",
+        )
+    # A repeated row with a contradictory target is infeasible, and is reported as
+    # such before the ambiguity check, exactly as the refinement solver orders them.
+    with pytest.raises(RuntimeError, match=r"constraints are inconsistent"):
+        _solve(
+            metric, rhs, duplicated, list(targets) + [targets[0] + 1.0],
+            constraints_policy="hard",
+        )
+    with pytest.raises(RuntimeError, match=r"constraints are inconsistent"):
+        _solve(
+            metric, rhs, np.vstack([constraints, np.zeros(constraints.shape[1])]),
+            list(targets) + [1.0], constraints_policy="hard",
+        )
+
+
+def test_a_nonsymmetric_metric_fails_closed():
+    metric, rhs, _, _, _ = _well_conditioned_problem()
+    broken = metric.copy()
+    broken[0, 1] += 1.0
+    with pytest.raises(RuntimeError, match=r"metric must be symmetric"):
+        _solve(broken, rhs, np.zeros((0, metric.shape[0])), [])

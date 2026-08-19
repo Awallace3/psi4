@@ -467,6 +467,61 @@ void export_oeprop(py::module &m) {
               return values;
           },
           "auxiliary"_a, "sites"_a, "function_to_site"_a);
+    m.def("_atomic_polarizability_test_constrained_density_fit",
+          [](const Matrix& metric, const Matrix& rhs, const Matrix& constraints,
+             const std::vector<double>& constraint_targets, const py::dict& option_values) {
+              CDFOptions options;
+              for (const auto& entry : option_values) {
+                  const auto key = py::cast<std::string>(entry.first);
+                  if (key == "auxiliary_basis")
+                      options.auxiliary_basis = entry.second.cast<std::string>();
+                  else if (key == "constraints_policy") {
+                      const auto policy = entry.second.cast<std::string>();
+                      if (policy == "penalty")
+                          options.constraints = CDFConstraintPolicy::QuadraticPenalty;
+                      else if (policy == "hard")
+                          options.constraints = CDFConstraintPolicy::HardConstraint;
+                      else
+                          throw PSIEXCEPTION(
+                              "constrained density fit: unknown constraint policy '" + policy + "'");
+                  } else if (key == "constraint_penalty")
+                      options.constraint_penalty = entry.second.cast<double>();
+                  else if (key == "metric_relative_cutoff")
+                      options.metric_relative_cutoff = entry.second.cast<double>();
+                  else if (key == "maximum_condition_number")
+                      options.maximum_condition_number = entry.second.cast<double>();
+                  else if (key == "maximum_workspace_elements")
+                      options.maximum_workspace_elements = entry.second.cast<std::size_t>();
+                  else
+                      throw PSIEXCEPTION("constrained density fit: unknown option '" + key + "'");
+              }
+              CDFDiagnostics diagnostics;
+              auto coefficients = std::make_shared<Matrix>(detail::solve_constrained_density_fit(
+                  metric, rhs, constraints, constraint_targets, options, &diagnostics));
+              py::dict values;
+              values["coefficients"] = coefficients;
+              values["auxiliary_count"] = diagnostics.auxiliary_count;
+              values["transition_count"] = diagnostics.transition_count;
+              values["constraint_count"] = diagnostics.constraint_count;
+              values["retained_rank"] = diagnostics.retained_rank;
+              values["discarded_directions"] = diagnostics.discarded_directions;
+              values["smallest_eigenvalue"] = diagnostics.smallest_eigenvalue;
+              values["largest_eigenvalue"] = diagnostics.largest_eigenvalue;
+              values["condition_number"] = diagnostics.condition_number;
+              values["retained_condition_number"] = diagnostics.retained_condition_number;
+              values["effective_cutoff"] = diagnostics.effective_cutoff;
+              values["max_constraint_residual"] = diagnostics.max_constraint_residual;
+              values["max_stationarity_residual"] = diagnostics.max_stationarity_residual;
+              values["max_coefficient_magnitude"] = diagnostics.max_coefficient_magnitude;
+              values["policy"] = diagnostics.policy;
+              values["algorithm"] = diagnostics.algorithm;
+              values["constraint_penalty"] = options.constraint_penalty;
+              values["metric_relative_cutoff"] = options.metric_relative_cutoff;
+              values["maximum_condition_number"] = options.maximum_condition_number;
+              return values;
+          },
+          "metric"_a, "rhs"_a, "constraints"_a, "constraint_targets"_a,
+          "options"_a = py::dict());
     m.def("_atomic_polarizability_solve_restricted_response",
           [](const Matrix& H1, const Matrix& H2, double omega, const Matrix& rhs) {
               const auto result = detail::solve_dense_restricted_response(H1, H2, omega, rhs);
