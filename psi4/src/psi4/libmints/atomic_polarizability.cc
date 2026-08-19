@@ -6599,17 +6599,22 @@ AnisotropicRecouplingTable generate_anisotropic_recoupling_table() {
                                          first_rank + second_rank);
                             for (unsigned int coupled = coupled_low; coupled <= coupled_high;
                                  ++coupled) {
+                                // The collapse is audited over every (block, l1, l2, j) the
+                                // triangle rules admit, not only over the ones that survive
+                                // the selection rules, so the recorded residual covers the
+                                // whole algebra rather than the part that happens to be used.
+                                const auto collapse = anisotropic_collapse(
+                                    first_site, first_prime, second_site, second_prime,
+                                    first_rank, second_rank, coupled);
+                                table.max_collapse_residual =
+                                    std::max(table.max_collapse_residual, collapse.residual);
+                                ++table.collapse_audit_count;
                                 if ((capital_first + capital_second + coupled) % 2 != 0) continue;
                                 const double axial = anisotropic_coupling(
                                     static_cast<int>(capital_first), 0,
                                     static_cast<int>(capital_second), 0,
                                     static_cast<int>(coupled));
                                 if (axial == 0.0) continue;
-                                const auto collapse = anisotropic_collapse(
-                                    first_site, first_prime, second_site, second_prime,
-                                    first_rank, second_rank, coupled);
-                                table.max_collapse_residual =
-                                    std::max(table.max_collapse_residual, collapse.residual);
                                 const double scalar = amplitude * axial * collapse.value;
                                 if (std::abs(scalar) < kAnisotropicScalarTolerance) continue;
                                 const Complex phase =
@@ -6719,6 +6724,9 @@ void validate_anisotropic_recoupling_table(const AnisotropicRecouplingTable& tab
     if (table.max_collapse_residual > kAnisotropicCollapseTolerance)
         throw PSIEXCEPTION(prefix +
                            "the four-coupling collapse residual exceeds the generation tolerance");
+    if (table.collapse_audit_count < table.entries.size())
+        throw PSIEXCEPTION(prefix +
+                           "the collapse audit covered fewer combinations than the table stores");
     if (table.max_rotation_orthogonality_deviation > kAnisotropicClosureTolerance)
         throw PSIEXCEPTION(prefix + "a derived real rank rotation is not orthogonal");
 

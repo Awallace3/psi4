@@ -1517,8 +1517,14 @@ struct PSI_API AnisotropicRecouplingTable {
     std::vector<AnisotropicDispersionLabel> labels;
     std::vector<std::size_t> label_entry_offsets;
     std::vector<std::size_t> label_entry_indices;
-    /** Worst residual of the four-Clebsch-Gordan collapse over every generated entry. */
+    /**
+     * Worst residual of the four-Clebsch-Gordan collapse, audited over every
+     * (block, l1, l2, j) the triangle rules admit rather than only over the entries
+     * that survive the selection rules.
+     */
     double max_collapse_residual{};
+    /** How many (block, l1, l2, j) combinations that audit covered. */
+    std::size_t collapse_audit_count{};
     /** Worst |W W^T - 1| over the real rank rotations the generator exercised. */
     double max_rotation_orthogonality_deviation{};
 };

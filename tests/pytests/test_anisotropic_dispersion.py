@@ -496,6 +496,9 @@ _INTERNAL_LABEL_COUNT = 29762
 _PUBLISHED_LABEL_COUNT = 16985
 _COUPLING_MATRIX_COUNT = 37
 _DISTINCT_RANK_QUADRUPLES = 530
+# (block, l1, l2, j) combinations the triangle rules admit; 2911 of them survive the
+# L1 + L2 + j parity rule and a nonvanishing <L1 0; L2 0|j 0> and reach the table.
+_COLLAPSE_AUDIT_COUNT = 5497
 _LABELS_PER_ORDER = {6: 104, 7: 391, 8: 896, 9: 1748, 10: 3063,
                      11: 4486, 12: 6297, 13: 7457, 14: 5320}
 
@@ -550,6 +553,7 @@ _TABLE_REJECTIONS = (
     "isotropic_reduction",
     "rotation_orthogonality",
     "collapse_residual",
+    "collapse_audit_count",
 )
 
 
@@ -794,6 +798,10 @@ def test_recoupling_table_reports_its_generation_residuals():
     table = _table()
     assert table["max_collapse_residual"] < 1.0e-13
     assert table["max_rotation_orthogonality_deviation"] < 1.0e-12
+    # The collapse is audited over every (block, l1, l2, j) the triangle rules admit,
+    # not only over the 2911 that survive the selection rules, so the recorded residual
+    # covers the whole four-Clebsch-Gordan algebra rather than the part in use.
+    assert table["collapse_audit_count"] == _COLLAPSE_AUDIT_COUNT
 
 
 @pytest.mark.parametrize("mutation", _TABLE_REJECTIONS)

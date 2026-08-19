@@ -1835,6 +1835,7 @@ void export_oeprop(py::module &m) {
         result["labels"] = std::move(labels);
         result["entries"] = std::move(entries);
         result["max_collapse_residual"] = table.max_collapse_residual;
+        result["collapse_audit_count"] = table.collapse_audit_count;
         result["max_rotation_orthogonality_deviation"] =
             table.max_rotation_orthogonality_deviation;
         return result;
@@ -1995,6 +1996,8 @@ void export_oeprop(py::module &m) {
                   table.max_rotation_orthogonality_deviation = 1.0;
               } else if (mutation == "collapse_residual") {
                   table.max_collapse_residual = 1.0;
+              } else if (mutation == "collapse_audit_count") {
+                  table.collapse_audit_count = 0;
               } else {
                   throw PSIEXCEPTION("anisotropic table rejection: unknown mutation '" +
                                      mutation + "'");
