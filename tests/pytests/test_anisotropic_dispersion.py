@@ -970,3 +970,247 @@ def test_s_functions_reject_an_improper_frame():
         psi4.core._atomic_polarizability_test_anisotropic_s_functions(
             _matrix([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]]),
             _matrix(_rotation(0.0, 0.0, 0.0)), [0.0, 0.0, 1.0])
+
+
+# ---------------------------------------------------------------------------
+# B9 -- publication, and the resource gate.
+# ---------------------------------------------------------------------------
+#
+# Contract (b) truncated to n <= 12, with the four existing isotropic matrices
+# retained unchanged:
+#
+#   ATOMIC DISPERSION COEFFICIENTS   (site_count^2, 16985)
+#   ATOMIC DISPERSION LABELS         (16985, 6)  carrying n, l1, k1, l2, k2, j
+#
+# Ordered site pairs are required, not folded: exchanging the two label halves picks
+# up (-1)^{l1 + l2}, so the array is not symmetric in the site index at fixed label.
+# Row A*site_count + B is the ordered pair (A, B).
+#
+# The naive sizing that motivated contract (b) assumed the label set numbered
+# "dozens".  It is 29762 internally and 16985 published, three orders of magnitude
+# out, which is why the resource gate below is not optional.
+
+_LABEL_COLUMNS = 6
+_ANISOTROPIC_ARRAYS = ("ATOMIC DISPERSION COEFFICIENTS", "ATOMIC DISPERSION LABELS")
+
+# One gibibyte, the memory the plan gate is exercised against.
+_ONE_GIBIBYTE = 1024 ** 3
+
+
+def _plan(frequency_count, site_count, maximum_order=12, memory_bytes=_ONE_GIBIBYTE):
+    return psi4.core._atomic_polarizability_plan_anisotropic_dispersion(
+        frequency_count, site_count, maximum_order, memory_bytes)
+
+
+def _compute_anisotropic(models, sites=None, protocol=True):
+    site_count = len(models[0])
+    entry = (psi4.core._atomic_polarizability_compute_anisotropic_dispersion if protocol
+             else psi4.core._atomic_polarizability_test_compute_anisotropic_dispersion)
+    return entry(
+        _matrix(list(sites if sites is not None else _DISPERSION_SITES[:site_count])),
+        list(_REVIEWED_FREQUENCIES),
+        [_matrix(tensor) for frequency in models for tensor in frequency],
+        list(_REVIEWED_FREQUENCIES),
+        list(_REVIEWED_WEIGHTS))
+
+
+def test_published_arrays_carry_the_decided_variable_names():
+    result = _compute_anisotropic(_synthetic_models((200, 201)))
+    assert (result["coefficients"].name, result["labels"].name) == _ANISOTROPIC_ARRAYS
+
+
+def test_published_arrays_have_the_decided_shape():
+    models = _synthetic_models((201, 202))
+    result = _compute_anisotropic(models)
+    coefficients = result["coefficients"]
+    labels = result["labels"]
+    assert coefficients.rows(0) == 4                      # ordered pairs of two sites
+    assert coefficients.cols(0) == _PUBLISHED_LABEL_COUNT
+    assert labels.rows(0) == _PUBLISHED_LABEL_COUNT
+    assert labels.cols(0) == _LABEL_COLUMNS
+    assert result["published_label_count"] == _PUBLISHED_LABEL_COUNT
+    assert result["internal_label_count"] == _INTERNAL_LABEL_COUNT
+    assert result["published_maximum_order"] == 12
+    assert result["internal_maximum_order"] == 14
+    assert result["table_version"] == _TABLE_VERSION
+
+
+def test_published_labels_are_the_internal_labels_filtered_at_order_twelve():
+    """Truncation is a publication filter applied at the very end, nothing more."""
+    result = _compute_anisotropic(_synthetic_models((203, 204)))
+    labels = result["labels"]
+    published = [tuple(int(labels.get(row, column)) for column in range(_LABEL_COLUMNS))
+                 for row in range(labels.rows(0))]
+    internal = [tuple(label) for label in _table()["labels"]]
+    assert published == [label for label in internal if label[0] <= 12]
+    assert max(label[0] for label in published) == 12
+    assert sorted({label[0] for label in published}) == [6, 7, 8, 9, 10, 11, 12]
+
+
+def test_published_isotropic_entries_equal_atomic_c6_through_c12_exactly():
+    """The required test of B.4: the 00 00 0 entries must equal the four matrices.
+
+    Machine precision, every ordered site pair.  The isotropic matrices are the
+    orientational average of the anisotropic set, so this is the seam that says the
+    new array and the old one describe the same physics.
+    """
+    models = _synthetic_models((205, 206, 207))
+    reference = _isotropic_dispersion(models)
+    result = _compute_anisotropic(models)
+    labels = result["labels"]
+    coefficients = result["coefficients"]
+    site_count = 3
+    slots = {}
+    for row in range(labels.rows(0)):
+        label = tuple(int(labels.get(row, column)) for column in range(_LABEL_COLUMNS))
+        if label[1:] == (0, 0, 0, 0, 0):
+            slots[label[0]] = row
+    assert sorted(slots) == [6, 8, 10, 12]
+    worst = 0.0
+    for order, slot in slots.items():
+        for first in range(site_count):
+            for second in range(site_count):
+                expected = reference["c%d" % order].get(first, second)
+                actual = coefficients.get(first * site_count + second, slot)
+                worst = max(worst, abs(actual / expected - 1.0))
+    assert worst < 1.0e-14
+
+
+def test_published_coefficients_are_ordered_pairs_not_folded():
+    """C^{BA}[l2 k2, l1 k1, j] = (-1)^{l1+l2} C^{AB}[l1 k1, l2 k2, j] across the rows."""
+    models = _synthetic_models((208, 209))
+    result = _compute_anisotropic(models)
+    labels = result["labels"]
+    coefficients = result["coefficients"]
+    index = {}
+    for row in range(labels.rows(0)):
+        index[tuple(int(labels.get(row, column)) for column in range(_LABEL_COLUMNS))] = row
+    scale = max(abs(coefficients.get(row, column))
+                for row in range(coefficients.rows(0)) for column in (0, 1, 2))
+    assert scale > 0.0
+    worst = 0.0
+    antisymmetric = 0
+    for label, slot in index.items():
+        order, first_rank, first_component, second_rank, second_component, coupled = label
+        mirror = index[(order, second_rank, second_component, first_rank, first_component,
+                        coupled)]
+        sign = -1.0 if (first_rank + second_rank) % 2 else 1.0
+        forward = coefficients.get(0 * 2 + 1, slot)
+        backward = coefficients.get(1 * 2 + 0, mirror)
+        worst = max(worst, abs(backward - sign * forward))
+        if sign < 0.0 and abs(forward) > 0.0:
+            antisymmetric += 1
+    assert worst / max(1.0, abs(scale)) < 1.0e-9
+    # If the array had been folded onto unordered pairs the odd-l1+l2 labels could not
+    # be represented at all, so their presence is what makes ordered rows necessary.
+    assert antisymmetric > 0
+
+
+def test_published_diagnostics_record_what_truncation_discards():
+    result = _compute_anisotropic(_synthetic_models((210, 211)))
+    assert 0.0 < result["dropped_order_weight_fraction"] < 1.0
+    assert result["max_isotropic_deviation"] < 1.0e-14
+    assert result["max_permutation_deviation"] < 1.0e-13
+    assert result["labels_per_order"] == [104, 391, 896, 1748, 3063, 4486, 6297, 7457, 5320]
+    assert result["quadrature_weight_sum"] > 0.0
+    assert result["weighted_frequency_count"] == 10
+
+
+def test_published_arrays_reject_a_grid_that_is_not_the_protocol_grid():
+    models = _synthetic_models((212, 213))
+    frequencies = list(_REVIEWED_FREQUENCIES)
+    frequencies[5] *= 1.05
+    with pytest.raises(RuntimeError):
+        psi4.core._atomic_polarizability_compute_anisotropic_dispersion(
+            _matrix(list(_DISPERSION_SITES[:2])), frequencies,
+            [_matrix(tensor) for frequency in models for tensor in frequency],
+            frequencies, list(_REVIEWED_WEIGHTS))
+
+
+def test_published_arrays_accept_a_scaled_protocol_grid():
+    """The protocol grid is checked at its inferred scale, not against one hard number."""
+    models = _synthetic_models((214, 215))
+    scaled_frequencies = [0.0] + [2.0 * value for value in _REVIEWED_FREQUENCIES[1:]]
+    scaled_weights = [0.0] + [2.0 * value for value in _REVIEWED_WEIGHTS[1:]]
+    result = psi4.core._atomic_polarizability_compute_anisotropic_dispersion(
+        _matrix(list(_DISPERSION_SITES[:2])), scaled_frequencies,
+        [_matrix(tensor) for frequency in models for tensor in frequency],
+        scaled_frequencies, scaled_weights)
+    assert result["published_label_count"] == _PUBLISHED_LABEL_COUNT
+
+
+def test_published_arrays_reject_a_model_missing_a_higher_rank_block():
+    models = _synthetic_models((216, 217))
+    for frequency in models:
+        for index in range(8, 15):
+            for other in range(15):
+                frequency[1][index][other] = 0.0
+                frequency[1][other][index] = 0.0
+    with pytest.raises(RuntimeError):
+        _compute_anisotropic(models)
+
+
+# --- the resource gate -----------------------------------------------------
+
+def test_plan_reports_the_full_internal_and_published_label_counts():
+    plan = _plan(11, 3)
+    assert plan["internal_label_count"] == _INTERNAL_LABEL_COUNT
+    assert plan["published_label_count"] == _PUBLISHED_LABEL_COUNT
+    assert plan["recoupling_entry_count"] == _RECOUPLING_ENTRY_COUNT
+    assert plan["frequency_count"] == 11
+    assert plan["site_count"] == 3
+    assert plan["site_pair_count"] == 9
+    assert plan["published_maximum_order"] == 12
+    assert plan["internal_maximum_order"] == 14
+    assert plan["max_frequency_count"] == 64
+    assert plan["max_site_count"] == 256
+    assert plan["algorithm"]
+    assert plan["memory_semantics"]
+
+
+def test_plan_sizes_the_coefficient_array_from_the_internal_label_count():
+    """The naive sizing is three orders of magnitude out; the plan uses the real count."""
+    plan = _plan(11, 3)
+    assert plan["coefficient_elements"] == 9 * _INTERNAL_LABEL_COUNT
+    assert plan["coefficient_bytes"] == plan["coefficient_elements"] * 8
+    assert plan["published_elements"] == 9 * _PUBLISHED_LABEL_COUNT
+    assert plan["published_bytes"] == plan["published_elements"] * 8
+    assert plan["label_matrix_elements"] == _PUBLISHED_LABEL_COUNT * _LABEL_COLUMNS
+    assert plan["block_product_elements"] == 15 ** 4
+    assert plan["estimated_bytes"] > plan["coefficient_bytes"]
+    assert plan["reserved_memory_bytes"] == _ONE_GIBIBYTE // 2
+    assert plan["estimated_bytes"] <= plan["reserved_memory_bytes"]
+
+
+def test_plan_gates_the_envelope_before_anything_else():
+    for frequency_count, site_count in ((0, 3), (65, 3), (11, 0), (11, 257)):
+        with pytest.raises(RuntimeError):
+            _plan(frequency_count, site_count)
+
+
+def test_plan_gates_the_published_maximum_order():
+    for maximum_order in (5, 15):
+        with pytest.raises(RuntimeError):
+            _plan(11, 3, maximum_order=maximum_order)
+    # Every order in the L3 range is a legitimate publication filter.
+    for maximum_order in range(6, 15):
+        assert _plan(11, 3, maximum_order=maximum_order)["published_maximum_order"] == \
+            maximum_order
+
+
+def test_plan_gates_work_before_memory():
+    """A large site count trips the work gate, whose message names work, not memory."""
+    with pytest.raises(RuntimeError, match="work"):
+        _plan(11, 256, memory_bytes=1 << 60)
+
+
+def test_plan_gates_memory_when_the_work_envelope_still_fits():
+    with pytest.raises(RuntimeError, match="memory"):
+        _plan(11, 32, memory_bytes=1024 * 1024)
+
+
+def test_plan_scales_quadratically_in_the_site_count():
+    small = _plan(11, 2)
+    large = _plan(11, 4)
+    assert large["coefficient_elements"] == 4 * small["coefficient_elements"]
+    assert large["work_terms"] == 4 * small["work_terms"]

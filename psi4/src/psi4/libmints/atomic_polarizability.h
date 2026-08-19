@@ -1731,6 +1731,7 @@ struct PSI_API AtomicPolarizabilityPublication {
     SharedMatrix dynamic_polarizabilities;
     SharedMatrix frequencies;
     DispersionMatrices dispersion;
+    AnisotropicDispersionCoefficients anisotropic_dispersion;
     /** Stage provenance, in chain order, for auditing a parity mismatch. */
     ISADiagnostics isa;
     BondGraphDerivation bond_graph;
@@ -1757,7 +1758,7 @@ class PSI_API AtomicPolarizabilityCalculator {
     /** Bare-OEProp seam: retains no SCF triple, so compute() fails closed. */
     explicit AtomicPolarizabilityCalculator(std::shared_ptr<Wavefunction> wfn);
 
-    /** Run every stage, then publish the seven arrays only if all of them passed. */
+    /** Run every stage, then publish the nine arrays only if all of them passed. */
     void compute();
     /** Run every stage and return the complete result without publishing anything. */
     AtomicPolarizabilityPublication run() const;

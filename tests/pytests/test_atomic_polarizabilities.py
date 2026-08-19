@@ -416,9 +416,16 @@ def test_dispersion_quadrature_weights_are_casimir_polder():
 # --------------------------------------------------------------------------------------
 # End-to-end publication (Task 7).
 #
-# The seven public array variables. Every one must appear, with the shape recorded in
+# The nine public array variables. Every one must appear, with the shape recorded in
 # docs/superpowers/specs/2026-08-17-end-to-end-wiring.md, or none may appear at all.
+# The two anisotropic arrays are contract (b) of
+# docs/superpowers/specs/2026-08-18-anisotropic-cn-and-cdf.md B.4, truncated to
+# n <= 12: one row per *ordered* site pair, one column per published label, plus a
+# self-describing (n, l1, k1, l2, k2, j) label companion.
 # --------------------------------------------------------------------------------------
+
+# Published anisotropic labels: the internal L3 set of 29762 filtered at n <= 12.
+ANISOTROPIC_PUBLISHED_LABELS = 16985
 
 PUBLISHED_VARIABLES = (
     "ATOMIC POLARIZABILITIES",
@@ -428,6 +435,8 @@ PUBLISHED_VARIABLES = (
     "ATOMIC C8",
     "ATOMIC C10",
     "ATOMIC C12",
+    "ATOMIC DISPERSION COEFFICIENTS",
+    "ATOMIC DISPERSION LABELS",
 )
 
 PUBLISHED_SHAPES = {
@@ -438,6 +447,8 @@ PUBLISHED_SHAPES = {
     "ATOMIC C8": (3, 3),
     "ATOMIC C10": (3, 3),
     "ATOMIC C12": (3, 3),
+    "ATOMIC DISPERSION COEFFICIENTS": (9, ANISOTROPIC_PUBLISHED_LABELS),
+    "ATOMIC DISPERSION LABELS": (ANISOTROPIC_PUBLISHED_LABELS, 6),
 }
 
 # The reviewed geometry: C2 axis along z, molecule in the xz plane, O at the origin.
@@ -526,7 +537,7 @@ PARITY_SKIP_REASON = (
 
 
 def _published(wfn):
-    """Collect the seven published arrays from a wavefunction as NumPy arrays."""
+    """Collect the nine published arrays from a wavefunction as NumPy arrays."""
     return {name: np.asarray(wfn.array_variable(name)) for name in PUBLISHED_VARIABLES}
 
 

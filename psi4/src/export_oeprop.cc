@@ -2031,4 +2031,90 @@ void export_oeprop(py::module &m) {
           },
           "first"_a, "second"_a, "weights"_a, "first_frame"_a, "second_frame"_a, "direction"_a,
           "distance"_a);
+    const auto anisotropic_plan_dict = [](const AnisotropicDispersionPlan& plan) {
+        py::dict values;
+        values["frequency_count"] = plan.frequency_count;
+        values["site_count"] = plan.site_count;
+        values["max_frequency_count"] = plan.max_frequency_count;
+        values["max_site_count"] = plan.max_site_count;
+        values["site_pair_count"] = plan.site_pair_count;
+        values["published_maximum_order"] = plan.published_maximum_order;
+        values["internal_maximum_order"] = plan.internal_maximum_order;
+        values["internal_label_count"] = plan.internal_label_count;
+        values["published_label_count"] = plan.published_label_count;
+        values["recoupling_entry_count"] = plan.recoupling_entry_count;
+        values["recoupling_table_bytes"] = plan.recoupling_table_bytes;
+        values["coupling_matrix_bytes"] = plan.coupling_matrix_bytes;
+        values["label_table_bytes"] = plan.label_table_bytes;
+        values["block_product_elements"] = plan.block_product_elements;
+        values["block_product_bytes"] = plan.block_product_bytes;
+        values["coefficient_elements"] = plan.coefficient_elements;
+        values["coefficient_bytes"] = plan.coefficient_bytes;
+        values["published_elements"] = plan.published_elements;
+        values["published_bytes"] = plan.published_bytes;
+        values["label_matrix_elements"] = plan.label_matrix_elements;
+        values["label_matrix_bytes"] = plan.label_matrix_bytes;
+        values["metadata_bytes"] = plan.metadata_bytes;
+        values["estimated_bytes"] = plan.estimated_bytes;
+        values["configured_memory_bytes"] = plan.configured_memory_bytes;
+        values["reserved_memory_bytes"] = plan.reserved_memory_bytes;
+        values["work_terms"] = plan.work_terms;
+        values["max_work_terms"] = plan.max_work_terms;
+        values["algorithm"] = plan.algorithm;
+        values["memory_semantics"] = plan.memory_semantics;
+        return values;
+    };
+    const auto anisotropic_result_dict =
+        [anisotropic_plan_dict](const AnisotropicDispersionCoefficients& computed) {
+            const auto& diagnostics = computed.diagnostics;
+            py::dict result;
+            result["coefficients"] = computed.coefficients;
+            result["labels"] = computed.labels;
+            result["table_version"] = diagnostics.table_version;
+            result["frequency_count"] = diagnostics.frequency_count;
+            result["weighted_frequency_count"] = diagnostics.weighted_frequency_count;
+            result["site_count"] = diagnostics.site_count;
+            result["internal_label_count"] = diagnostics.internal_label_count;
+            result["published_label_count"] = diagnostics.published_label_count;
+            result["recoupling_entry_count"] = diagnostics.recoupling_entry_count;
+            result["published_maximum_order"] = diagnostics.published_maximum_order;
+            result["internal_maximum_order"] = diagnostics.internal_maximum_order;
+            result["quadrature_weight_sum"] = diagnostics.quadrature_weight_sum;
+            result["max_isotropic_deviation"] = diagnostics.max_isotropic_deviation;
+            result["max_permutation_deviation"] = diagnostics.max_permutation_deviation;
+            result["dropped_order_weight_fraction"] = diagnostics.dropped_order_weight_fraction;
+            result["labels_per_order"] = diagnostics.labels_per_order;
+            result["plan"] = anisotropic_plan_dict(diagnostics.plan);
+            return result;
+        };
+    m.def("_atomic_polarizability_plan_anisotropic_dispersion",
+          [anisotropic_plan_dict](std::size_t frequency_count, std::size_t site_count,
+                                 unsigned int published_maximum_order,
+                                 std::size_t memory_bytes) {
+              return anisotropic_plan_dict(detail::plan_anisotropic_dispersion(
+                  frequency_count, site_count, published_maximum_order, memory_bytes));
+          },
+          "frequency_count"_a, "site_count"_a, "published_maximum_order"_a, "memory_bytes"_a);
+    m.def("_atomic_polarizability_compute_anisotropic_dispersion",
+          [refined_models_from_python, anisotropic_result_dict](
+              const Matrix& sites, const std::vector<double>& frequencies,
+              const std::vector<SharedMatrix>& tensors,
+              const std::vector<double>& grid_frequencies,
+              const std::vector<double>& grid_weights) {
+              return anisotropic_result_dict(compute_anisotropic_dispersion(
+                  refined_models_from_python(sites, frequencies, tensors),
+                  FrequencyGrid{grid_frequencies, grid_weights}));
+          },
+          "sites"_a, "frequencies"_a, "tensors"_a, "grid_frequencies"_a, "grid_weights"_a);
+    m.def("_atomic_polarizability_test_compute_anisotropic_dispersion",
+          [refined_models_from_python, anisotropic_result_dict](
+              const Matrix& sites, const std::vector<double>& frequencies,
+              const std::vector<SharedMatrix>& tensors,
+              const std::vector<double>& grid_frequencies,
+              const std::vector<double>& grid_weights) {
+              return anisotropic_result_dict(detail::compute_anisotropic_dispersion_test_only(
+                  refined_models_from_python(sites, frequencies, tensors),
+                  FrequencyGrid{grid_frequencies, grid_weights}));
+          },
+          "sites"_a, "frequencies"_a, "tensors"_a, "grid_frequencies"_a, "grid_weights"_a);
 }

@@ -6370,7 +6370,7 @@ const AnisotropicCouplingMatrix* anisotropic_find_coupling(
     return nullptr;
 }
 
-std::size_t anisotropic_find_label(const AnisotropicRecouplingTable& table,
+std::size_t anisotropic_label_index(const AnisotropicRecouplingTable& table,
                                    const AnisotropicDispersionLabel& label) {
     const auto found = std::lower_bound(table.labels.begin(), table.labels.end(), label,
                                         anisotropic_label_less);
@@ -6396,7 +6396,7 @@ const AnisotropicRecouplingEntry* anisotropic_find_entry(
 std::vector<double> anisotropic_dense_from(const AnisotropicRecouplingTable& table,
                                            const AnisotropicDispersionLabel& label) {
     const std::string prefix = "dense anisotropic recoupling: ";
-    const auto index = anisotropic_find_label(table, label);
+    const auto index = anisotropic_label_index(table, label);
     if (index == table.labels.size())
         throw PSIEXCEPTION(prefix + "the requested label is not in the recoupling table");
     std::vector<double> dense(kAnisotropicBlockProductElements, 0.0);
@@ -6857,7 +6857,7 @@ void validate_anisotropic_recoupling_table(const AnisotropicRecouplingTable& tab
         mirror.second_rank = label.first_rank;
         mirror.second_component = label.first_component;
         mirror.coupled_rank = label.coupled_rank;
-        if (anisotropic_find_label(table, mirror) == table.labels.size())
+        if (anisotropic_label_index(table, mirror) == table.labels.size())
             throw PSIEXCEPTION(prefix + "the label set is not closed under label exchange");
         // No published label may have an identically vanishing W. Distinct site-rank
         // blocks occupy disjoint supports, so W vanishes only if every contributing
@@ -7324,6 +7324,366 @@ std::vector<double> anisotropic_orientational_average_test_only() {
 
 }  // namespace detail
 
+namespace {
+
+constexpr std::size_t kAnisotropicMaximumSites = 256;
+constexpr std::size_t kAnisotropicMaximumFrequencies = 64;
+constexpr std::size_t kAnisotropicMaximumWorkTerms = 20000000000ULL;
+constexpr std::size_t kAnisotropicLabelColumns = 6;
+
+/**
+ * Recouple the anisotropic set for every ordered site pair and publish the labels
+ * whose order survives the truncation filter.
+ *
+ * The truncation is applied at the very END, to the published array only. Orders
+ * 13 and 14 are computed, validated and counted; they simply are not written out.
+ * The internal coefficient array always carries the full label set, because only
+ * the full set reconstructs E_disp exactly.
+ */
+AnisotropicDispersionCoefficients compute_anisotropic_dispersion_impl(
+    const std::vector<RefinedL3Model>& models, const FrequencyGrid& grid,
+    bool require_protocol_grid) {
+    const std::string prefix = "compute_anisotropic_dispersion: ";
+    if (models.empty()) throw PSIEXCEPTION(prefix + "at least one refined L3 model is required");
+    if (grid.frequencies.size() != grid.weights.size())
+        throw PSIEXCEPTION(prefix + "grid frequencies and weights must have equal counts");
+    if (models.size() != grid.frequencies.size())
+        throw PSIEXCEPTION(prefix + "expected exactly one model per grid frequency");
+    const double weight_sum = validate_dispersion_grid(grid, prefix);
+    if (require_protocol_grid) validate_protocol_dispersion_grid(grid, prefix);
+
+    const std::size_t site_count = models.front().tensors.size();
+    for (std::size_t point = 0; point < models.size(); ++point) {
+        const auto& model = models[point];
+        if (model.tensors.size() != site_count || model.positions.size() != site_count)
+            throw PSIEXCEPTION(prefix +
+                               "every model must supply one L3 tensor and one position per site");
+        require_finite(model.frequency, "refined model frequency");
+        if (dispersion_deviation(model.frequency, grid.frequencies[point]) >
+            kDispersionGridTolerance)
+            throw PSIEXCEPTION(prefix + "model frequency does not match its grid frequency");
+        for (std::size_t site = 0; site < site_count; ++site)
+            for (std::size_t axis = 0; axis < kTensorDimension; ++axis)
+                if (std::abs(model.positions[site][axis] -
+                             models.front().positions[site][axis]) > kDispersionPositionTolerance)
+                    throw PSIEXCEPTION(prefix + "site positions must agree across all frequencies");
+        // Rank completeness, inherited from the isotropic engine: a missing rank is an
+        // error, not a zero contribution, and anisotropy lives disproportionately in
+        // the higher-rank blocks.
+        for (std::size_t site = 0; site < site_count; ++site)
+            for (unsigned int rank = kAnisotropicSiteRankMin; rank <= kAnisotropicSiteRankMax;
+                 ++rank) {
+                const auto offset = dispersion_rank_offset(rank);
+                bool populated = false;
+                for (std::size_t index = 0; index < dispersion_rank_dimension(rank); ++index)
+                    if (model.tensors[site][offset + index][offset + index] != 0.0)
+                        populated = true;
+                if (!populated) {
+                    std::ostringstream message;
+                    message << prefix << "site " << site << " at frequency index " << point
+                            << " supplies an empty rank " << rank
+                            << " block; a rank-complete L3 model must supply ranks 1 through 3";
+                    throw PSIEXCEPTION(message.str());
+                }
+            }
+    }
+
+    const auto& table = detail::anisotropic_recoupling_table();
+    const auto plan = detail::plan_anisotropic_dispersion(
+        models.size(), site_count, kAnisotropicPublishedOrderMax,
+        Process::environment.get_memory());
+
+    std::vector<std::size_t> published_slots;
+    published_slots.reserve(plan.published_label_count);
+    for (std::size_t index = 0; index < table.labels.size(); ++index)
+        if (table.labels[index].order <= kAnisotropicPublishedOrderMax)
+            published_slots.push_back(index);
+    if (published_slots.size() != plan.published_label_count)
+        throw PSIEXCEPTION(prefix + "the publication filter disagrees with the plan");
+
+    std::size_t weighted_frequency_count = 0;
+    for (double weight : grid.weights)
+        if (weight > 0.0) ++weighted_frequency_count;
+
+    // Every ordered site pair, because exchanging the two label halves picks up
+    // (-1)^{l1 + l2}: the array is not symmetric in the site index at fixed label.
+    std::vector<std::vector<double>> internal(plan.site_pair_count);
+    for (std::size_t first = 0; first < site_count; ++first)
+        for (std::size_t second = 0; second < site_count; ++second) {
+            std::vector<L3Matrix> left(models.size());
+            std::vector<L3Matrix> right(models.size());
+            for (std::size_t point = 0; point < models.size(); ++point) {
+                left[point] = models[point].tensors[first];
+                right[point] = models[point].tensors[second];
+            }
+            internal[first * site_count + second] =
+                detail::anisotropic_coefficients_from_block_product(
+                    detail::anisotropic_block_product(left, right, grid.weights));
+        }
+
+    const auto matrix_rows = static_cast<int>(plan.site_pair_count);
+    const auto matrix_columns = static_cast<int>(plan.published_label_count);
+    auto coefficients = std::make_shared<Matrix>("ATOMIC DISPERSION COEFFICIENTS", matrix_rows,
+                                                matrix_columns);
+    auto labels = std::make_shared<Matrix>("ATOMIC DISPERSION LABELS", matrix_columns,
+                                          static_cast<int>(kAnisotropicLabelColumns));
+    for (std::size_t column = 0; column < published_slots.size(); ++column) {
+        const auto& label = table.labels[published_slots[column]];
+        const std::array<unsigned int, kAnisotropicLabelColumns> values{
+            label.order,       label.first_rank,       label.first_component,
+            label.second_rank, label.second_component, label.coupled_rank};
+        for (std::size_t slot = 0; slot < values.size(); ++slot)
+            labels->set(static_cast<int>(column), static_cast<int>(slot),
+                        static_cast<double>(values[slot]));
+    }
+
+    double dropped_weight = 0.0;
+    double total_weight = 0.0;
+    double worst_permutation = 0.0;
+    double worst_isotropic = 0.0;
+    double coefficient_scale = 0.0;
+    for (const auto& row : internal)
+        for (double value : row) coefficient_scale = std::max(coefficient_scale, std::abs(value));
+    for (std::size_t pair = 0; pair < internal.size(); ++pair) {
+        const auto& row = internal[pair];
+        for (std::size_t index = 0; index < row.size(); ++index) {
+            require_finite(row[index], "anisotropic dispersion coefficient");
+            total_weight += std::abs(row[index]);
+            if (table.labels[index].order > kAnisotropicPublishedOrderMax)
+                dropped_weight += std::abs(row[index]);
+        }
+        for (std::size_t column = 0; column < published_slots.size(); ++column)
+            coefficients->set(static_cast<int>(pair), static_cast<int>(column),
+                              row[published_slots[column]]);
+    }
+    // The permutation relation across ordered site pairs, measured rather than assumed.
+    std::vector<std::size_t> mirrored(table.labels.size());
+    std::vector<double> exchange_sign(table.labels.size(), 1.0);
+    for (std::size_t index = 0; index < table.labels.size(); ++index) {
+        const auto& label = table.labels[index];
+        AnisotropicDispersionLabel mirror;
+        mirror.order = label.order;
+        mirror.first_rank = label.second_rank;
+        mirror.first_component = label.second_component;
+        mirror.second_rank = label.first_rank;
+        mirror.second_component = label.first_component;
+        mirror.coupled_rank = label.coupled_rank;
+        mirrored[index] = anisotropic_label_index(table, mirror);
+        if (mirrored[index] == table.labels.size())
+            throw PSIEXCEPTION(prefix + "the label set is not exchange closed");
+        exchange_sign[index] =
+            (label.first_rank + label.second_rank) % 2 == 0 ? 1.0 : -1.0;
+    }
+    for (std::size_t first = 0; first < site_count; ++first)
+        for (std::size_t second = 0; second < site_count; ++second) {
+            const auto& forward = internal[first * site_count + second];
+            const auto& backward = internal[second * site_count + first];
+            for (std::size_t index = 0; index < table.labels.size(); ++index)
+                worst_permutation =
+                    std::max(worst_permutation, std::abs(backward[mirrored[index]] -
+                                                        exchange_sign[index] * forward[index]));
+        }
+    if (coefficient_scale > 0.0) worst_permutation /= coefficient_scale;
+
+    // The isotropic 00 00 0 entries must equal the four published matrices.
+    const auto isotropic = compute_dispersion_impl(models, grid, require_protocol_grid);
+    const std::array<SharedMatrix, 4> reference{isotropic.c6, isotropic.c8, isotropic.c10,
+                                               isotropic.c12};
+    for (unsigned int order = 6; order <= kAnisotropicPublishedOrderMax; order += 2) {
+        AnisotropicDispersionLabel scalar;
+        scalar.order = order;
+        const auto index = anisotropic_label_index(table, scalar);
+        if (index == table.labels.size())
+            throw PSIEXCEPTION(prefix + "the isotropic 00 00 0 label is missing");
+        const auto& matrix = reference[dispersion_coefficient_index(order)];
+        for (std::size_t first = 0; first < site_count; ++first)
+            for (std::size_t second = 0; second < site_count; ++second) {
+                const double expected =
+                    (*matrix)(static_cast<int>(first), static_cast<int>(second));
+                const double actual = internal[first * site_count + second][index];
+                if (expected != 0.0)
+                    worst_isotropic =
+                        std::max(worst_isotropic, std::abs(actual / expected - 1.0));
+            }
+    }
+
+    // Both closure relations fail closed rather than merely being reported. The
+    // derivation proves them, so a violation means the recoupling and the isotropic
+    // engine have drifted apart and the published array cannot be trusted.
+    if (worst_isotropic > kAnisotropicClosureTolerance)
+        throw PSIEXCEPTION(prefix +
+                           "the isotropic 00 00 0 entries left the published C6 through C12");
+    if (worst_permutation > kAnisotropicClosureTolerance)
+        throw PSIEXCEPTION(prefix +
+                           "the ordered site pairs violate the (-1)^{l1+l2} exchange relation");
+
+    AnisotropicDispersionCoefficients result;
+    result.coefficients = coefficients;
+    result.labels = labels;
+    result.diagnostics.table_version = table.version;
+    result.diagnostics.frequency_count = models.size();
+    result.diagnostics.weighted_frequency_count = weighted_frequency_count;
+    result.diagnostics.site_count = site_count;
+    result.diagnostics.internal_label_count = table.labels.size();
+    result.diagnostics.published_label_count = published_slots.size();
+    result.diagnostics.recoupling_entry_count = table.entries.size();
+    result.diagnostics.published_maximum_order = kAnisotropicPublishedOrderMax;
+    result.diagnostics.internal_maximum_order = kAnisotropicOrderMax;
+    result.diagnostics.quadrature_weight_sum = weight_sum;
+    result.diagnostics.max_isotropic_deviation = worst_isotropic;
+    result.diagnostics.max_permutation_deviation = worst_permutation;
+    result.diagnostics.dropped_order_weight_fraction =
+        total_weight > 0.0 ? dropped_weight / total_weight : 0.0;
+    result.diagnostics.labels_per_order.assign(kAnisotropicOrderCount, 0);
+    for (const auto& label : table.labels)
+        ++result.diagnostics.labels_per_order[label.order - kAnisotropicOrderMin];
+    result.diagnostics.plan = plan;
+    return result;
+}
+
+}  // namespace
+
+namespace detail {
+
+AnisotropicDispersionPlan plan_anisotropic_dispersion(std::size_t frequency_count,
+                                                     std::size_t site_count,
+                                                     unsigned int published_maximum_order,
+                                                     std::size_t memory_bytes) {
+    const std::string prefix = "anisotropic dispersion plan: ";
+    // Envelope gates first, then the work gate, then the memory gate. Nothing is
+    // assigned into the plan until every throw has been passed.
+    if (frequency_count == 0 || frequency_count > kAnisotropicMaximumFrequencies)
+        throw PSIEXCEPTION(prefix + "frequency envelope is 1 through 64");
+    if (site_count == 0 || site_count > kAnisotropicMaximumSites)
+        throw PSIEXCEPTION(prefix + "site envelope is 1 through 256");
+    if (published_maximum_order < kAnisotropicOrderMin ||
+        published_maximum_order > kAnisotropicOrderMax)
+        throw PSIEXCEPTION(prefix +
+                           "the publication filter must keep an order between 6 and 14; an L3 "
+                           "model produces exactly that range");
+
+    const auto& table = anisotropic_recoupling_table();
+    std::size_t published_label_count = 0;
+    for (const auto& label : table.labels)
+        if (label.order <= published_maximum_order) ++published_label_count;
+    if (published_label_count == 0)
+        throw PSIEXCEPTION(prefix + "the publication filter kept no labels");
+
+    const auto bytes = [&prefix](std::size_t elements) {
+        return checked_c1_product(elements, sizeof(double), prefix);
+    };
+    const auto site_pairs = checked_c1_product(site_count, site_count, prefix);
+    // The naive sizing of the output contract assumed the label set numbered dozens.
+    // It is 29762 internally, three orders of magnitude out, so the coefficient array
+    // is sized from the real internal count and not from the published one.
+    const auto coefficient_elements =
+        checked_c1_product(site_pairs, table.labels.size(), prefix);
+    const auto published_elements = checked_c1_product(site_pairs, published_label_count, prefix);
+    const auto label_matrix_elements =
+        checked_c1_product(published_label_count, kAnisotropicLabelColumns, prefix);
+    const auto recoupling_table_bytes =
+        checked_c1_product(table.entries.size(), sizeof(AnisotropicRecouplingEntry), prefix);
+    std::size_t coupling_matrix_elements = 0;
+    for (const auto& matrix : table.coupling_matrices)
+        coupling_matrix_elements =
+            checked_c1_sum(coupling_matrix_elements, matrix.values.size(), prefix);
+    const auto coupling_matrix_bytes = checked_c1_sum(
+        bytes(coupling_matrix_elements),
+        checked_c1_product(table.coupling_matrices.size(), sizeof(AnisotropicCouplingMatrix),
+                           prefix),
+        prefix);
+    const auto label_table_bytes = checked_c1_sum(
+        checked_c1_product(table.labels.size(), sizeof(AnisotropicDispersionLabel), prefix),
+        checked_c1_product(
+            checked_c1_sum(table.label_entry_offsets.size(), table.label_entry_indices.size(),
+                           prefix),
+            sizeof(std::size_t), prefix),
+        prefix);
+
+    // Work gate. The dominant cost is one 15^4 block product per ordered site pair per
+    // weighted frequency, followed by the factorised contraction against the table.
+    const auto block_product_work =
+        checked_c1_product(checked_c1_product(site_pairs, kAnisotropicBlockProductElements,
+                                              prefix),
+                           frequency_count, prefix);
+    // Each scalar entry drives one (2 l1 + 1) by (2 l2 + 1) contraction, bounded by the
+    // largest coupled rank the table can carry.
+    constexpr std::size_t coupled_components = 2 * kAnisotropicCoupledRankMax + 1;
+    const auto contraction_work = checked_c1_product(
+        site_pairs,
+        checked_c1_product(table.entries.size(),
+                           checked_c1_product(coupled_components, coupled_components, prefix),
+                           prefix),
+        prefix);
+    const auto work_terms = checked_c1_sum(block_product_work, contraction_work, prefix);
+    if (work_terms > kAnisotropicMaximumWorkTerms)
+        throw PSIEXCEPTION(prefix + "anisotropic recoupling work exceeds the supported envelope");
+
+    // Memory gate.
+    constexpr std::size_t conservative_overhead_bytes = 4ULL * 1024ULL * 1024ULL;
+    auto estimated_bytes = checked_c1_sum(bytes(coefficient_elements),
+                                          bytes(published_elements), prefix);
+    estimated_bytes = checked_c1_sum(estimated_bytes, bytes(label_matrix_elements), prefix);
+    estimated_bytes =
+        checked_c1_sum(estimated_bytes, bytes(kAnisotropicBlockProductElements), prefix);
+    estimated_bytes = checked_c1_sum(estimated_bytes, recoupling_table_bytes, prefix);
+    estimated_bytes = checked_c1_sum(estimated_bytes, coupling_matrix_bytes, prefix);
+    estimated_bytes = checked_c1_sum(estimated_bytes, label_table_bytes, prefix);
+    estimated_bytes = checked_c1_sum(estimated_bytes, conservative_overhead_bytes, prefix);
+    const auto reserved = memory_bytes / 2;
+    if (estimated_bytes > reserved)
+        throw PSIEXCEPTION(prefix +
+                           "coefficient/label/table storage exceeds half the reserved memory");
+
+    AnisotropicDispersionPlan plan;
+    plan.frequency_count = frequency_count;
+    plan.site_count = site_count;
+    plan.max_frequency_count = kAnisotropicMaximumFrequencies;
+    plan.max_site_count = kAnisotropicMaximumSites;
+    plan.site_pair_count = site_pairs;
+    plan.published_maximum_order = published_maximum_order;
+    plan.internal_maximum_order = kAnisotropicOrderMax;
+    plan.internal_label_count = table.labels.size();
+    plan.published_label_count = published_label_count;
+    plan.recoupling_entry_count = table.entries.size();
+    plan.recoupling_table_bytes = recoupling_table_bytes;
+    plan.coupling_matrix_bytes = coupling_matrix_bytes;
+    plan.label_table_bytes = label_table_bytes;
+    plan.block_product_elements = kAnisotropicBlockProductElements;
+    plan.block_product_bytes = bytes(kAnisotropicBlockProductElements);
+    plan.coefficient_elements = coefficient_elements;
+    plan.coefficient_bytes = bytes(coefficient_elements);
+    plan.published_elements = published_elements;
+    plan.published_bytes = bytes(published_elements);
+    plan.label_matrix_elements = label_matrix_elements;
+    plan.label_matrix_bytes = bytes(label_matrix_elements);
+    plan.metadata_bytes = conservative_overhead_bytes;
+    plan.estimated_bytes = estimated_bytes;
+    plan.configured_memory_bytes = memory_bytes;
+    plan.reserved_memory_bytes = reserved;
+    plan.work_terms = work_terms;
+    plan.max_work_terms = kAnisotropicMaximumWorkTerms;
+    plan.algorithm =
+        "full-block-product/factorised-recoupling-table/ordered-site-pair/publication-filter";
+    plan.memory_semantics =
+        "hard half-memory gate over the full internal coefficient array, the truncated "
+        "published array and its label companion, one 15^4 block product, and the versioned "
+        "factorised recoupling table";
+    return plan;
+}
+
+AnisotropicDispersionCoefficients compute_anisotropic_dispersion_test_only(
+    const std::vector<RefinedL3Model>& models, const FrequencyGrid& frequencies) {
+    return compute_anisotropic_dispersion_impl(models, frequencies, false);
+}
+
+}  // namespace detail
+
+AnisotropicDispersionCoefficients compute_anisotropic_dispersion(
+    const std::vector<RefinedL3Model>& models, const FrequencyGrid& frequencies) {
+    return compute_anisotropic_dispersion_impl(models, frequencies, true);
+}
+
 ISAOptions isa_options_from(Options& options) {
     const std::string prefix = "ISA options: ";
     const int radial = options.get_int("ATOMIC_POLARIZABILITY_ISA_RADIAL_POINTS");
@@ -7569,6 +7929,14 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
         !result.dispersion.c12)
         throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "dispersion recoupling produced no coefficients");
 
+    // Stage 9b: the anisotropic set on the same protocol grid and the same models.
+    // Truncation to n <= 12 is applied inside compute_anisotropic_dispersion as a
+    // publication filter; orders 13 and 14 are computed and validated regardless.
+    result.anisotropic_dispersion = compute_anisotropic_dispersion(models, result.grid);
+    if (!result.anisotropic_dispersion.coefficients || !result.anisotropic_dispersion.labels)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            prefix + "anisotropic recoupling produced no coefficients");
+
     // Stage 10: pack the dipole blocks into the global Cartesian frame.
     const auto frame = identity_site_frame();
     const int rows = static_cast<int>(frequency_count * site_count);
@@ -7620,7 +7988,9 @@ void AtomicPolarizabilityCalculator::compute() {
         {"ATOMIC C6", result.dispersion.c6},
         {"ATOMIC C8", result.dispersion.c8},
         {"ATOMIC C10", result.dispersion.c10},
-        {"ATOMIC C12", result.dispersion.c12}};
+        {"ATOMIC C12", result.dispersion.c12},
+        {"ATOMIC DISPERSION COEFFICIENTS", result.anisotropic_dispersion.coefficients},
+        {"ATOMIC DISPERSION LABELS", result.anisotropic_dispersion.labels}};
     for (const auto& entry : published)
         if (!entry.second)
             throw ATOMIC_POLARIZABILITY_PREREQUISITE("atomic polarizability: '" + entry.first +
