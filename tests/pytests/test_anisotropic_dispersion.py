@@ -17,6 +17,7 @@ References for the mathematics, all published:
 """
 
 import math
+import re
 
 import pytest
 
@@ -512,7 +513,7 @@ _N6_SCALARS = {
     (2, 0, 2): -1.4142135623730951,    # -sqrt(2)
     (2, 2, 0): 0.4472135954999579,     # 1/sqrt(5)
     (2, 2, 2): 0.5345224838248488,     # sqrt(2/7)
-    (2, 2, 4): 4.30282299360405,       # 18 sqrt(2/35)
+    (2, 2, 4): 4.302822993603817,      # 18 sqrt(2/35)
 }
 
 # The C6 (l1, l2, j) triples that survive a symmetric L3 model. This is the
@@ -521,39 +522,43 @@ _N6_SCALARS = {
 # rank-0 and rank-2 parts of each site's polarizability.
 _LIVE_C6_TRIPLES = ((0, 0, 0), (0, 2, 2), (2, 0, 2), (2, 2, 0), (2, 2, 2), (2, 2, 4))
 
+# Each mutation breaks one structural invariant, paired with the fragment of the
+# message the loader must produce.  Pinning the message is what makes the suite mean
+# anything: without it a mutation that trips a *different* invariant, or one the
+# loader accepts outright, looks identical to a mutation that works as intended.
 _TABLE_REJECTIONS = (
-    "version",
-    "generator",
-    "component_order",
-    "conventions",
-    "nonfinite_scalar",
-    "site_rank",
-    "order_mismatch",
-    "order_range",
-    "first_rank_triangle",
-    "second_rank_triangle",
-    "capital_triangle",
-    "coupled_triangle",
-    "parity",
-    "zero_scalar",
-    "duplicate_entry",
-    "missing_site_rank",
-    "component_index",
-    "label_triangle",
-    "label_order",
-    "duplicate_label",
-    "exchange_closure",
-    "exchange_scalar",
-    "empty_label",
-    "offset_count",
-    "offset_monotonic",
-    "entry_index_range",
-    "missing_coupling_matrix",
-    "coupling_matrix_shape",
-    "isotropic_reduction",
-    "rotation_orthogonality",
-    "collapse_residual",
-    "collapse_audit_count",
+    ("version", "not the compiled-in version"),
+    ("generator", "not the compiled-in generator"),
+    ("component_order", "not the L3 component ordering"),
+    ("conventions", "not the compiled-in conventions"),
+    ("nonfinite_scalar", "must be finite"),
+    ("site_rank", "inside the L3 range 1 to 3"),
+    ("order_mismatch", "n = la + la' + lb + lb' + 2"),
+    ("first_rank_triangle", "l1 must satisfy"),
+    ("second_rank_triangle", "l2 must satisfy"),
+    ("capital_triangle", "(L1, L2) triangle"),
+    ("coupled_triangle", "j must satisfy the (l1, l2)"),
+    ("parity", "L1 + L2 + j must be even"),
+    ("zero_scalar", "must be absent, not stored as a zero"),
+    ("duplicate_entry", "sorted and unique on their key"),
+    ("missing_site_rank", "missing L3 rank is an error"),
+    ("component_index", "exceeds 2 l + 1"),
+    ("label_triangle", "label's j violates"),
+    ("label_order", "labels must be sorted and unique"),
+    ("duplicate_label", "labels must be sorted and unique"),
+    ("empty_span", "must draw on at least one scalar entry"),
+    ("exchange_closure", "not closed under label exchange"),
+    ("exchange_scalar", "g^r(BA) = (-1)^{l1+l2} g^r(AB) is violated"),
+    ("empty_label", "identically vanishing recoupling weight"),
+    ("offset_count", "one terminal entry"),
+    ("offset_monotonic", "non-decreasing"),
+    ("entry_index_range", "leaves the scalar table"),
+    ("missing_coupling_matrix", "needs its two coupling matrices"),
+    ("coupling_matrix_shape", "wrong shape"),
+    ("isotropic_reduction", "does not return binom"),
+    ("rotation_orthogonality", "not orthogonal"),
+    ("collapse_residual", "collapse residual exceeds"),
+    ("collapse_audit_count", "collapse audit covered the wrong number"),
 )
 
 
@@ -582,11 +587,17 @@ def test_recoupling_table_declares_its_version_and_conventions():
     assert tuple(table["component_order"]) == _COMPONENT_ORDER
     conventions = dict(table["conventions"])
     for key in ("racah", "real_transform", "interaction_tensor", "reality_phase",
-                "energy", "block_product"):
+                "energy", "block_product", "unverified"):
         assert conventions[key]
     # The block product carries the 1/(2 pi); the table therefore carries the bare
     # binomial. Stating it in the table is what makes the two halves auditable.
     assert "2 pi" in conventions["block_product"]
+    # The table also carries what is NOT settled. The reality phase Ncal is derived
+    # here rather than quoted, and the residual real sign per (l1, l2, j) plus any
+    # (2j+1)^(1/2)-type normalisation of the published S function definition are not
+    # pinned down. Every check in this file is convention-internal and unaffected;
+    # a term-by-term external comparison is not, and must settle this first.
+    assert "not yet guaranteed comparable term by term" in conventions["unverified"]
 
 
 def test_recoupling_table_has_the_expected_size():
@@ -626,7 +637,9 @@ def test_recoupling_table_order_six_scalars_match_their_closed_forms():
                entry["scalar"] for entry in _table()["entries"] if entry["order"] == 6}
     assert set(entries) == set(_N6_SCALARS)
     for key, expected in _N6_SCALARS.items():
-        assert abs(entries[key] - expected) <= 1.0e-13 * abs(expected)
+        # 1e-15 relative, not 1e-13: at 1e-13 a mistyped last digit still passes, and
+        # one of these literals was in fact mistyped until the tolerance was tightened.
+        assert abs(entries[key] - expected) <= 1.0e-15 * abs(expected)
 
 
 @pytest.mark.parametrize("first_rank,second_rank,binomial", [
@@ -804,10 +817,17 @@ def test_recoupling_table_reports_its_generation_residuals():
     assert table["collapse_audit_count"] == _COLLAPSE_AUDIT_COUNT
 
 
-@pytest.mark.parametrize("mutation", _TABLE_REJECTIONS)
-def test_recoupling_table_loader_refuses_a_structurally_invalid_table(mutation):
-    """Following validate_dispersion_rank_pairs: fail closed, never trust the table."""
-    with pytest.raises(RuntimeError):
+@pytest.mark.parametrize("mutation,message", _TABLE_REJECTIONS,
+                         ids=[case[0] for case in _TABLE_REJECTIONS])
+def test_recoupling_table_loader_refuses_a_structurally_invalid_table(mutation, message):
+    """Following validate_dispersion_rank_pairs: fail closed, never trust the table.
+
+    The seam returns False when the loader *accepts* the mutated table, so an accepted
+    mutation fails here with DID NOT RAISE rather than passing silently.  The message
+    is matched too, so a mutation that trips some other invariant on the way also
+    fails instead of quietly proving the wrong thing.
+    """
+    with pytest.raises(RuntimeError, match=re.escape(message)):
         psi4.core._atomic_polarizability_test_anisotropic_table_rejection(mutation)
 
 
@@ -1176,16 +1196,21 @@ def test_plan_reports_the_full_internal_and_published_label_counts():
     assert plan["memory_semantics"]
 
 
-def test_plan_sizes_the_coefficient_array_from_the_internal_label_count():
-    """The naive sizing is three orders of magnitude out; the plan uses the real count."""
+def test_plan_sizes_the_working_set_from_the_internal_label_count():
+    """The naive sizing is three orders of magnitude out; the plan uses the real count.
+
+    The working set is two rows of the *internal* 29762-label set -- the two orderings
+    of one unordered site pair, which is all that has to be live to measure the
+    exchange relation -- and the output is the truncated site_count^2 by 16985 array.
+    """
     plan = _plan(11, 3)
-    assert plan["coefficient_elements"] == 9 * _INTERNAL_LABEL_COUNT
+    assert plan["coefficient_elements"] == 2 * _INTERNAL_LABEL_COUNT
     assert plan["coefficient_bytes"] == plan["coefficient_elements"] * 8
     assert plan["published_elements"] == 9 * _PUBLISHED_LABEL_COUNT
     assert plan["published_bytes"] == plan["published_elements"] * 8
     assert plan["label_matrix_elements"] == _PUBLISHED_LABEL_COUNT * _LABEL_COLUMNS
     assert plan["block_product_elements"] == 15 ** 4
-    assert plan["estimated_bytes"] > plan["coefficient_bytes"]
+    assert plan["estimated_bytes"] > plan["published_bytes"]
     assert plan["reserved_memory_bytes"] == _ONE_GIBIBYTE // 2
     assert plan["estimated_bytes"] <= plan["reserved_memory_bytes"]
 
@@ -1218,7 +1243,21 @@ def test_plan_gates_memory_when_the_work_envelope_still_fits():
 
 
 def test_plan_scales_quadratically_in_the_site_count():
+    """Work and output scale as site_count^2; the working set does not scale at all."""
     small = _plan(11, 2)
     large = _plan(11, 4)
-    assert large["coefficient_elements"] == 4 * small["coefficient_elements"]
+    assert large["published_elements"] == 4 * small["published_elements"]
     assert large["work_terms"] == 4 * small["work_terms"]
+    assert large["coefficient_elements"] == small["coefficient_elements"]
+
+
+def test_plan_memory_ceiling_is_set_by_the_published_array_not_the_working_set():
+    """The site ceiling comes from the output contract itself, and the plan says so.
+
+    Contract (b) is intrinsically site_count^2 by 16985 doubles, so a large enough
+    molecule cannot be published at any working-set size.  The gate names that rather
+    than hiding it, and the published array is the term that dominates the estimate.
+    """
+    plan = _plan(11, 16)
+    assert plan["published_bytes"] > 4 * plan["coefficient_bytes"]
+    assert "output contract" in plan["memory_semantics"]

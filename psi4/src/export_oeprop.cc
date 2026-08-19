@@ -1890,10 +1890,18 @@ void export_oeprop(py::module &m) {
                   if (scalar) isotropic[label.order] = coefficients[index];
               }
               double worst_isotropic = 0.0;
-              for (const auto& item : isotropic)
+              for (const auto& item : isotropic) {
+                  // The caller supplies arbitrary tensors through this seam, so the
+                  // scalar coefficient is not guaranteed nonzero; refuse rather than
+                  // report an infinity as if it were a measurement.
+                  if (!(std::abs(item.second) > 0.0))
+                      throw PSIEXCEPTION(
+                          "anisotropic orientational average: the isotropic coefficient "
+                          "vanished, so no relative deviation is defined");
                   worst_isotropic = std::max(
                       worst_isotropic,
                       std::abs(per_order.at(item.first) / item.second - 1.0));
+              }
               py::dict result;
               result["max_s_function_deviation"] = worst_s_function;
               result["max_isotropic_deviation"] = worst_isotropic;
@@ -1929,18 +1937,15 @@ void export_oeprop(py::module &m) {
                   entry.first_site_rank = 4;
               } else if (mutation == "order_mismatch") {
                   entry.order += 2;
-              } else if (mutation == "order_range") {
-                  for (auto& item : table.entries) {
-                      item.first_site_rank = 1;
-                      item.first_site_rank_prime = 1;
-                      item.second_site_rank = 1;
-                      item.second_site_rank_prime = 1;
-                      item.order = 6;
-                  }
               } else if (mutation == "first_rank_triangle") {
-                  entry.first_rank = entry.first_site_rank + entry.first_site_rank_prime + 1;
+                  // Mutate the LAST entry: raising l1 on any earlier one also breaks the
+                  // sort order, which is validated before the triangle rules, so the
+                  // mutation would prove the wrong invariant.
+                  auto& last = table.entries.back();
+                  last.first_rank = last.first_site_rank + last.first_site_rank_prime + 1;
               } else if (mutation == "second_rank_triangle") {
-                  entry.second_rank = entry.second_site_rank + entry.second_site_rank_prime + 1;
+                  auto& last = table.entries.back();
+                  last.second_rank = last.second_site_rank + last.second_site_rank_prime + 1;
               } else if (mutation == "capital_triangle") {
                   entry.coupled_rank = entry.first_site_rank + entry.first_site_rank_prime +
                                        entry.second_site_rank + entry.second_site_rank_prime + 2;
@@ -1949,7 +1954,26 @@ void export_oeprop(py::module &m) {
                   entry.second_rank = 0;
                   entry.coupled_rank = 2;
               } else if (mutation == "parity") {
-                  entry.coupled_rank += 1;
+                  // Bump j by one on an entry where j + 1 still satisfies both triangle
+                  // rules, so the L1 + L2 + j parity rule is what fires rather than a
+                  // triangle. Entries within a rank group differ in j by two, so this
+                  // also leaves the sort order intact.
+                  bool bumped = false;
+                  for (auto& item : table.entries) {
+                      const unsigned int capital =
+                          item.first_site_rank + item.second_site_rank +
+                          item.first_site_rank_prime + item.second_site_rank_prime;
+                      const unsigned int ceiling =
+                          std::min(capital, item.first_rank + item.second_rank);
+                      if (item.coupled_rank + 1 <= ceiling) {
+                          item.coupled_rank += 1;
+                          bumped = true;
+                          break;
+                      }
+                  }
+                  if (!bumped)
+                      throw PSIEXCEPTION(
+                          "anisotropic table rejection: no entry admits a parity mutation");
               } else if (mutation == "zero_scalar") {
                   entry.scalar = 0.0;
               } else if (mutation == "duplicate_entry") {
@@ -1968,14 +1992,65 @@ void export_oeprop(py::module &m) {
               } else if (mutation == "label_order") {
                   std::swap(table.labels.front(), table.labels.back());
               } else if (mutation == "duplicate_label") {
+                  // Duplicating the entry span as well, so the copy is a structurally
+                  // complete label and uniqueness is the only thing it violates.
+                  const auto span = table.label_entry_offsets[1];
+                  table.label_entry_indices.insert(
+                      table.label_entry_indices.begin(), table.label_entry_indices.begin(),
+                      table.label_entry_indices.begin() + span);
+                  for (auto& offset : table.label_entry_offsets) offset += span;
+                  table.label_entry_offsets.front() = 0;
+                  table.label_entry_offsets.insert(table.label_entry_offsets.begin() + 1, span);
                   table.labels.insert(table.labels.begin(), table.labels.front());
-                  table.label_entry_offsets.insert(table.label_entry_offsets.begin(), 0);
+              } else if (mutation == "empty_span") {
+                  // A label whose entry span is empty contributes nothing yet still
+                  // occupies a published column.
+                  table.label_entry_offsets[1] = table.label_entry_offsets[0];
               } else if (mutation == "exchange_closure") {
-                  table.labels.pop_back();
-                  table.label_entry_offsets.pop_back();
-                  table.label_entry_indices.resize(table.label_entry_offsets.back());
+                  // Dropping the LAST label proves nothing: it is (14, 6 12, 6 12, 12),
+                  // which is its own exchange mirror, so the label set stays closed and
+                  // the loader accepts the table. Drop one whose mirror is a different
+                  // label instead, and keep the compressed map consistent so the
+                  // exchange check is what fires.
+                  std::size_t target = table.labels.size();
+                  for (std::size_t index = 0; index < table.labels.size(); ++index) {
+                      const auto& candidate = table.labels[index];
+                      if (candidate.first_rank != candidate.second_rank ||
+                          candidate.first_component != candidate.second_component) {
+                          target = index;
+                          break;
+                      }
+                  }
+                  if (target == table.labels.size())
+                      throw PSIEXCEPTION(
+                          "anisotropic table rejection: every label is its own mirror");
+                  const auto lower = table.label_entry_offsets[target];
+                  const auto upper = table.label_entry_offsets[target + 1];
+                  table.label_entry_indices.erase(table.label_entry_indices.begin() + lower,
+                                                  table.label_entry_indices.begin() + upper);
+                  table.labels.erase(table.labels.begin() + target);
+                  table.label_entry_offsets.erase(table.label_entry_offsets.begin() + target + 1);
+                  for (std::size_t index = target + 1; index < table.label_entry_offsets.size();
+                       ++index)
+                      table.label_entry_offsets[index] -= (upper - lower);
               } else if (mutation == "exchange_scalar") {
-                  entry.scalar *= 1.5;
+                  // entries.front() is (1,1,1,1) with l1 = l2 = j = 0, its own exchange
+                  // mirror, so scaling it leaves g^r(BA) = (-1)^{l1+l2} g^r(AB) intact
+                  // and only the isotropic reduction notices. Scale one whose mirror is
+                  // a different entry so the exchange relation itself is what fires.
+                  bool scaled = false;
+                  for (auto& item : table.entries) {
+                      if (item.first_site_rank != item.second_site_rank ||
+                          item.first_site_rank_prime != item.second_site_rank_prime ||
+                          item.first_rank != item.second_rank) {
+                          item.scalar *= 1.5;
+                          scaled = true;
+                          break;
+                      }
+                  }
+                  if (!scaled)
+                      throw PSIEXCEPTION(
+                          "anisotropic table rejection: every entry is its own mirror");
               } else if (mutation == "empty_label") {
                   for (auto& matrix : table.coupling_matrices)
                       std::fill(matrix.values.begin(), matrix.values.end(), 0.0);
@@ -2002,9 +2077,12 @@ void export_oeprop(py::module &m) {
                   throw PSIEXCEPTION("anisotropic table rejection: unknown mutation '" +
                                      mutation + "'");
               }
+              // Returns false when the loader ACCEPTS the mutated table. Throwing here
+              // instead would be indistinguishable from a genuine rejection, because
+              // both surface as the same Python exception type, and the whole suite
+              // would then pass whether or not the loader refused anything.
               detail::validate_anisotropic_recoupling_table(table);
-              throw PSIEXCEPTION("anisotropic table rejection: mutation '" + mutation +
-                                 "' was accepted by the loader");
+              return false;
           },
           "mutation"_a);
     m.def("_atomic_polarizability_test_anisotropic_energy_reconstruction",
