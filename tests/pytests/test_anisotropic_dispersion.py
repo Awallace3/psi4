@@ -241,3 +241,229 @@ def test_interaction_tensor_rejects_a_vanishing_separation():
 def test_rank_rotation_rejects_an_improper_frame():
     with pytest.raises(RuntimeError):
         _rank_rotation([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]])
+
+
+# ---------------------------------------------------------------------------
+# B4/B5 -- the full block-product frequency integral M.
+# ---------------------------------------------------------------------------
+#
+# M_{(t t')(u u')} = (1/2 pi) sum_k w_k alpha^A_{t t'}(i w_k) alpha^B_{u u'}(i w_k)
+#
+# The 1/(2 pi) lives inside M.  That bookkeeping is load bearing: with it, the
+# recoupling table traced over the diagonal rank blocks must equal
+# binom(2 la + 2 lb, 2 la) and *not* binom/(2 pi), because the 1/(2 pi) is
+# already spent.  The isotropic engine spends it in the rank-pair prefactor
+# instead, which is why tracing M below divides by (2 la + 1)(2 lb + 1).
+
+_ISOTROPIC_ORDERS = (6, 8, 10, 12)
+_DISPERSION_SITES = ([0.0, 0.0, 0.0], [0.0, 1.43, 1.11], [0.0, -1.43, 1.11])
+
+
+def _synthetic_l3(seed, scale=1.0):
+    """A symmetric, rank-complete 15 by 15 L3 tensor from a reproducible sequence.
+
+    A plain linear congruential recurrence keeps the tensor reproducible without
+    depending on a random-number stream that is not part of any contract.
+    """
+    state = (seed * 6364136223846793005 + 1442695040888963407) % (1 << 63)
+    values = [[0.0] * _L3_DIMENSION for _ in range(_L3_DIMENSION)]
+    for row in range(_L3_DIMENSION):
+        for column in range(row, _L3_DIMENSION):
+            state = (state * 6364136223846793005 + 1442695040888963407) % (1 << 63)
+            entry = (float(state >> 11) / float(1 << 51) - 1.0) * scale
+            values[row][column] = entry
+            values[column][row] = entry
+    for index in range(_L3_DIMENSION):
+        values[index][index] += (2.0 + 0.25 * index) * scale
+    return values
+
+
+def _synthetic_models(site_seeds, scale=1.0):
+    """models[frequency][site], one tensor per protocol grid point per site."""
+    return [[_synthetic_l3(seed * 1000 + point, scale) for seed in site_seeds]
+            for point in range(len(_REVIEWED_FREQUENCIES))]
+
+
+def _block_product(first_tensors, second_tensors, weights=None):
+    return psi4.core._atomic_polarizability_test_anisotropic_block_product(
+        [_matrix(tensor) for tensor in first_tensors],
+        [_matrix(tensor) for tensor in second_tensors],
+        list(weights if weights is not None else _REVIEWED_WEIGHTS))
+
+
+def _product_at(product, first, second, third, fourth):
+    return product[((first * _L3_DIMENSION + second) * _L3_DIMENSION + third) * _L3_DIMENSION
+                   + fourth]
+
+
+def _isotropic_dispersion(models, sites=None):
+    site_count = len(models[0])
+    return psi4.core._atomic_polarizability_compute_dispersion(
+        _matrix(list(sites if sites is not None else _DISPERSION_SITES[:site_count])),
+        list(_REVIEWED_FREQUENCIES),
+        [_matrix(tensor) for frequency in models for tensor in frequency],
+        list(_REVIEWED_FREQUENCIES),
+        list(_REVIEWED_WEIGHTS))
+
+
+def _within_ulp(actual, expected, allowed):
+    """True when actual is within `allowed` units in the last place of expected."""
+    if actual == expected:
+        return True
+    return abs(actual - expected) <= allowed * math.ulp(abs(expected))
+
+
+def test_block_product_traced_reproduces_the_isotropic_path_to_the_last_place():
+    """Tracing the diagonal rank blocks of M must return the isotropic engine's value.
+
+    This is the seam that says the generalisation really is a generalisation.
+
+    Exact bit equality is *not* available here and asserting it would be wrong.  The
+    isotropic engine traces each rank block first and then sums over the frequency
+    grid; M sums over the grid first and the rank traces are taken afterwards.  The
+    two are the same real number but a different floating-point summation order, so
+    the honest claim -- and the one asserted -- is agreement to a couple of units in
+    the last place.  The spec's "bit-for-bit" wording is unachievable through M by
+    construction, not by defect.
+    """
+    models = _synthetic_models((1, 2))
+    reference = _isotropic_dispersion(models)
+    traced = _block_product([frequency[0] for frequency in models],
+                            [frequency[1] for frequency in models])["isotropic"]
+    for index, order in enumerate(_ISOTROPIC_ORDERS):
+        expected = reference["c%d" % order].get(0, 1)
+        assert _within_ulp(traced[index], expected, 4)
+
+
+def test_block_product_traced_reproduces_the_isotropic_path_for_every_ordered_pair():
+    """Every ordered site pair, on and off the diagonal, agrees to the last place."""
+    models = _synthetic_models((3, 4, 5))
+    reference = _isotropic_dispersion(models)
+    for first in range(3):
+        for second in range(3):
+            traced = _block_product([frequency[first] for frequency in models],
+                                    [frequency[second] for frequency in models])["isotropic"]
+            for index, order in enumerate(_ISOTROPIC_ORDERS):
+                expected = reference["c%d" % order].get(first, second)
+                assert _within_ulp(traced[index], expected, 8)
+
+
+def test_block_product_is_bit_exactly_symmetric_under_site_exchange():
+    """M^{AB}_{(t t')(u u')} = M^{BA}_{(u u')(t t')}, element for element, exactly.
+
+    Parenthesizing the two site factors as one product makes this exact rather than
+    approximate, which is what lets the permutation relation on the coefficients be
+    asserted at machine precision later.
+    """
+    models = _synthetic_models((6, 7))
+    first = [frequency[0] for frequency in models]
+    second = [frequency[1] for frequency in models]
+    forward = _block_product(first, second)["values"]
+    backward = _block_product(second, first)["values"]
+    for t in range(_L3_DIMENSION):
+        for tp in range(_L3_DIMENSION):
+            for u in range(_L3_DIMENSION):
+                for up in range(_L3_DIMENSION):
+                    assert (_product_at(forward, t, tp, u, up)
+                            == _product_at(backward, u, up, t, tp))
+
+
+def test_block_product_traced_is_symmetric_under_site_exchange():
+    """The ordered rank-pair table is exchange closed, so tracing M is site symmetric."""
+    models = _synthetic_models((6, 7))
+    first = [frequency[0] for frequency in models]
+    second = [frequency[1] for frequency in models]
+    forward = _block_product(first, second)["isotropic"]
+    backward = _block_product(second, first)["isotropic"]
+    for index in range(len(_ISOTROPIC_ORDERS)):
+        assert _within_ulp(forward[index], backward[index], 8)
+
+
+def test_block_product_carries_the_one_over_two_pi_inside_m():
+    """M already carries the 1/(2 pi); one unit-weight point of unit tensors shows it."""
+    identity = [[1.0 if row == column else 0.0 for column in range(_L3_DIMENSION)]
+                for row in range(_L3_DIMENSION)]
+    unit = _block_product([identity], [identity], [1.0])["values"]
+    assert abs(_product_at(unit, 0, 0, 0, 0) - 1.0 / (2.0 * math.pi)) < 1.0e-17
+    assert _product_at(unit, 0, 1, 0, 0) == 0.0
+
+
+def test_block_product_is_linear_in_the_quadrature_weights():
+    models = _synthetic_models((7, 8))
+    first = [frequency[0] for frequency in models]
+    second = [frequency[1] for frequency in models]
+    single = _block_product(first, second)["isotropic"]
+    doubled = _block_product(first, second,
+                             [2.0 * weight for weight in _REVIEWED_WEIGHTS])["isotropic"]
+    for index in range(len(_ISOTROPIC_ORDERS)):
+        assert doubled[index] == 2.0 * single[index]
+
+
+@pytest.mark.parametrize("indices", [(0, 0, 0, 0), (2, 7, 1, 14), (14, 3, 8, 5),
+                                     (5, 5, 12, 12), (9, 0, 13, 6)])
+def test_block_product_is_the_weighted_outer_product_of_the_two_tensors(indices):
+    models = _synthetic_models((11, 12))
+    first = [frequency[0] for frequency in models]
+    second = [frequency[1] for frequency in models]
+    values = _block_product(first, second)["values"]
+    t, tp, u, up = indices
+    expected = sum(weight * (first[point][t][tp] * second[point][u][up])
+                   for point, weight in enumerate(_REVIEWED_WEIGHTS)) / (2.0 * math.pi)
+    # Two units in the last place: the C++ accumulation is fused-multiply-add
+    # contracted under -march=native while Python's is not, so the two are the same
+    # expression evaluated with different rounding, not different expressions.
+    assert _within_ulp(_product_at(values, t, tp, u, up), expected, 2)
+
+
+def test_block_product_static_point_carries_no_quadrature_weight():
+    models = _synthetic_models((21, 22))
+    first = [frequency[0] for frequency in models]
+    second = [frequency[1] for frequency in models]
+    baseline = _block_product(first, second)
+    first[0] = _synthetic_l3(999, scale=17.0)
+    second[0] = _synthetic_l3(998, scale=17.0)
+    perturbed = _block_product(first, second)
+    assert perturbed["values"] == baseline["values"]
+    assert perturbed["isotropic"] == baseline["isotropic"]
+
+
+def test_block_product_rejects_a_tensor_count_that_misses_the_grid():
+    models = _synthetic_models((31, 32))
+    with pytest.raises(RuntimeError):
+        _block_product([frequency[0] for frequency in models][:-1],
+                       [frequency[1] for frequency in models])
+
+
+def test_block_product_rejects_a_negative_quadrature_weight():
+    models = _synthetic_models((33, 34))
+    weights = list(_REVIEWED_WEIGHTS)
+    weights[4] = -weights[4]
+    with pytest.raises(RuntimeError):
+        _block_product([frequency[0] for frequency in models],
+                       [frequency[1] for frequency in models], weights)
+
+
+def test_direct_energy_is_exactly_the_double_sum_over_the_interaction_tensor():
+    """E_disp = -sum_{t t' u u'} T_{tu} T_{t'u'} M_{(t t')(u u')}, no table involved.
+
+    Contracted independently in Python over all 15^4 terms.  This is the oracle the
+    recoupling table is later gated against, so it is pinned here on its own.
+    """
+    models = _synthetic_models((41, 42))
+    separation = [1.7, -2.9, 5.3]
+    first = [frequency[0] for frequency in models]
+    second = [frequency[1] for frequency in models]
+    energy = psi4.core._atomic_polarizability_test_direct_anisotropic_energy(
+        [_matrix(tensor) for tensor in first], [_matrix(tensor) for tensor in second],
+        list(_REVIEWED_WEIGHTS), separation)
+    tensor = _interaction_tensor(separation)
+    values = _block_product(first, second)["values"]
+    total = 0.0
+    for t in range(_L3_DIMENSION):
+        for tp in range(_L3_DIMENSION):
+            for u in range(_L3_DIMENSION):
+                row = ((t * _L3_DIMENSION + tp) * _L3_DIMENSION + u) * _L3_DIMENSION
+                total += sum(tensor[t][u] * tensor[tp][up] * values[row + up]
+                             for up in range(_L3_DIMENSION))
+    assert abs(energy / (-total) - 1.0) < 1.0e-14
+    assert energy < 0.0

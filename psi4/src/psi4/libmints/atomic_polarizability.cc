@@ -5926,6 +5926,144 @@ L3Matrix l3_rank_rotation(const SiteAxes& rotation) {
 
 }  // namespace detail
 
+namespace {
+
+/** Row-major element count of the (t, t', u, u') block product. */
+constexpr std::size_t kAnisotropicBlockProductElements =
+    kAnisotropicDimension * kAnisotropicDimension * kAnisotropicDimension *
+    kAnisotropicDimension;
+
+std::size_t anisotropic_block_index(std::size_t first, std::size_t second, std::size_t third,
+                                    std::size_t fourth) {
+    return ((first * kAnisotropicDimension + second) * kAnisotropicDimension + third) *
+               kAnisotropicDimension +
+           fourth;
+}
+
+/**
+ * Validate a caller-supplied half-line quadrature for the block product. The
+ * static zero frequency must carry no weight, exactly as the isotropic engine
+ * requires, because the block product excludes it by skipping zero weights.
+ */
+double validate_anisotropic_weights(const std::vector<double>& weights,
+                                    const std::string& prefix) {
+    if (weights.empty())
+        throw PSIEXCEPTION(prefix + "at least one quadrature weight is required");
+    double weight_sum = 0.0;
+    for (double weight : weights) {
+        require_finite(weight, "anisotropic block product weight");
+        if (weight < 0.0)
+            throw PSIEXCEPTION(prefix + "quadrature weights must be non-negative");
+        weight_sum += weight;
+        require_finite(weight_sum, "anisotropic block product weight sum");
+    }
+    if (!(weight_sum > 0.0))
+        throw PSIEXCEPTION(prefix + "at least one weight must be positive");
+    return weight_sum;
+}
+
+}  // namespace
+
+namespace detail {
+
+std::vector<double> anisotropic_block_product(const std::vector<L3Matrix>& first,
+                                              const std::vector<L3Matrix>& second,
+                                              const std::vector<double>& weights) {
+    const std::string prefix = "anisotropic block product: ";
+    if (first.size() != weights.size() || second.size() != weights.size())
+        throw PSIEXCEPTION(prefix + "expected exactly one L3 tensor per grid weight");
+    validate_anisotropic_weights(weights, prefix);
+    std::vector<double> product(kAnisotropicBlockProductElements, 0.0);
+    for (std::size_t point = 0; point < weights.size(); ++point) {
+        // The static zero frequency carries no quadrature weight and is skipped, so
+        // whatever model sits there cannot influence the result.
+        if (weights[point] == 0.0) continue;
+        const auto& left = first[point];
+        const auto& right = second[point];
+        for (std::size_t row = 0; row < kAnisotropicDimension; ++row)
+            for (std::size_t column = 0; column < kAnisotropicDimension; ++column) {
+                const double first_value = left[row][column];
+                require_finite(first_value, "anisotropic block product tensor element");
+                const std::size_t base = anisotropic_block_index(row, column, 0, 0);
+                for (std::size_t other_row = 0; other_row < kAnisotropicDimension; ++other_row)
+                    for (std::size_t other_column = 0; other_column < kAnisotropicDimension;
+                         ++other_column)
+                        // The product of the two site factors is parenthesized so that
+                        // exchanging the two sites reproduces the same value bit for
+                        // bit, exactly as the isotropic engine does.
+                        product[base + other_row * kAnisotropicDimension + other_column] +=
+                            weights[point] *
+                            (first_value * right[other_row][other_column]);
+            }
+    }
+    // The 1/(2 pi) of the frequency integral lives inside M. Every downstream user
+    // of M therefore carries a bare binom(2 la + 2 lb, 2 la), never binom/(2 pi).
+    for (double& value : product) {
+        value /= 2.0 * M_PI;
+        require_finite(value, "anisotropic block product");
+    }
+    return product;
+}
+
+std::array<double, 4> isotropic_from_anisotropic_block_product(
+    const std::vector<double>& product) {
+    const std::string prefix = "anisotropic block product trace: ";
+    if (product.size() != kAnisotropicBlockProductElements)
+        throw PSIEXCEPTION(prefix + "expected the full 15^4 block product");
+    std::array<double, 4> totals{};
+    for (const auto& pair : dispersion_rank_pairs()) {
+        const auto first_offset = dispersion_rank_offset(pair.first_rank);
+        const auto second_offset = dispersion_rank_offset(pair.second_rank);
+        const auto first_dimension = dispersion_rank_dimension(pair.first_rank);
+        const auto second_dimension = dispersion_rank_dimension(pair.second_rank);
+        double traced = 0.0;
+        for (std::size_t first = 0; first < first_dimension; ++first)
+            for (std::size_t second = 0; second < second_dimension; ++second)
+                traced += product[anisotropic_block_index(
+                    first_offset + first, first_offset + first, second_offset + second,
+                    second_offset + second)];
+        // M already carries the 1/(2 pi), so the recoupling factor here is the bare
+        // binomial and the two rank multiplicities that turn traces into means.
+        const double contribution =
+            binomial(2 * (pair.first_rank + pair.second_rank), 2 * pair.first_rank) * traced /
+            (static_cast<double>(first_dimension) * static_cast<double>(second_dimension));
+        require_finite(contribution, "anisotropic block product trace");
+        totals[dispersion_coefficient_index(pair.coefficient_order)] += contribution;
+    }
+    for (double value : totals) require_finite(value, "anisotropic block product trace");
+    return totals;
+}
+
+double direct_anisotropic_energy(const std::vector<double>& product,
+                                 const SitePosition& separation) {
+    const std::string prefix = "direct anisotropic dispersion energy: ";
+    if (product.size() != kAnisotropicBlockProductElements)
+        throw PSIEXCEPTION(prefix + "expected the full 15^4 block product");
+    const auto tensor = multipole_interaction_tensor(separation);
+    double total = 0.0;
+    for (std::size_t first = 0; first < kAnisotropicDimension; ++first)
+        for (std::size_t second = 0; second < kAnisotropicDimension; ++second) {
+            const std::size_t base = anisotropic_block_index(first, second, 0, 0);
+            double inner = 0.0;
+            for (std::size_t third = 0; third < kAnisotropicDimension; ++third) {
+                const double left = tensor[first][third];
+                if (left == 0.0) continue;
+                double partial = 0.0;
+                for (std::size_t fourth = 0; fourth < kAnisotropicDimension; ++fourth)
+                    partial += tensor[second][fourth] *
+                               product[base + third * kAnisotropicDimension + fourth];
+                inner += left * partial;
+            }
+            total += inner;
+        }
+    require_finite(total, "direct anisotropic dispersion energy");
+    // E_disp = -(1/2 pi) int dw sum T_{tu} T_{t'u'} alpha^A_{t t'} alpha^B_{u u'};
+    // the frequency integral and its 1/(2 pi) are already inside the block product.
+    return -total;
+}
+
+}  // namespace detail
+
 ISAOptions isa_options_from(Options& options) {
     const std::string prefix = "ISA options: ";
     const int radial = options.get_int("ATOMIC_POLARIZABILITY_ISA_RADIAL_POINTS");

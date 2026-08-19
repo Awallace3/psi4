@@ -1752,4 +1752,39 @@ void export_oeprop(py::module &m) {
                   "L3 rank rotation");
           },
           "rotation"_a);
+    const auto anisotropic_tensor_series = [l3_tensor_from_matrix](
+                                               const std::vector<SharedMatrix>& tensors,
+                                               const char* context) {
+        std::vector<L3Matrix> series(tensors.size());
+        for (std::size_t point = 0; point < tensors.size(); ++point)
+            series[point] = l3_tensor_from_matrix(tensors[point], context);
+        return series;
+    };
+    m.def("_atomic_polarizability_test_anisotropic_block_product",
+          [anisotropic_tensor_series](const std::vector<SharedMatrix>& first,
+                                     const std::vector<SharedMatrix>& second,
+                                     const std::vector<double>& weights) {
+              const auto product = detail::anisotropic_block_product(
+                  anisotropic_tensor_series(first, "anisotropic block product"),
+                  anisotropic_tensor_series(second, "anisotropic block product"), weights);
+              const auto isotropic = detail::isotropic_from_anisotropic_block_product(product);
+              py::dict result;
+              result["values"] = product;
+              result["isotropic"] = std::vector<double>(isotropic.begin(), isotropic.end());
+              return result;
+          },
+          "first"_a, "second"_a, "weights"_a);
+    m.def("_atomic_polarizability_test_direct_anisotropic_energy",
+          [anisotropic_tensor_series, anisotropic_site_position](
+              const std::vector<SharedMatrix>& first, const std::vector<SharedMatrix>& second,
+              const std::vector<double>& weights, const std::vector<double>& separation) {
+              const auto product = detail::anisotropic_block_product(
+                  anisotropic_tensor_series(first, "direct anisotropic dispersion energy"),
+                  anisotropic_tensor_series(second, "direct anisotropic dispersion energy"),
+                  weights);
+              return detail::direct_anisotropic_energy(
+                  product,
+                  anisotropic_site_position(separation, "direct anisotropic dispersion energy"));
+          },
+          "first"_a, "second"_a, "weights"_a, "separation"_a);
 }
