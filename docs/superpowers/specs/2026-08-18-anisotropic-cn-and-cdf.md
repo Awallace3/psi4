@@ -621,8 +621,24 @@ against anything**, or the comparison will measure a known upstream defect and t
       orientations. This is the acceptance gate for `W`.
 - [x] **B9.** Publish per the chosen contract; assert the isotropic entries equal the existing
       four matrices to machine precision. Commit `feat: publish anisotropic dispersion coefficients`.
-- [ ] **B10.** Extend `devtools/camcasp_reference.py` to parse CASIMIR's anisotropic output;
+- [x] **B10.** Extend `devtools/camcasp_reference.py` to parse CASIMIR's anisotropic output;
       extract literals from a **partition-matched** run; compare at the plan gate.
+      **Done 2026-08-20. Complete as a measurement, negative as a gate, and it located a new
+      defect.** A partition-matched ISA-GRID CASIMIR run now exists and validates end to end
+      (its isotropic `00 00 0` C6 reproduces the `ISA_GRID_C6` literals to all seven printed
+      figures). 10457 shared coefficients compared, **0 inside `rtol=1e-4`**, two strict xfails
+      retained with measured reasons; the gate was not widened. Three findings:
+      (a) our published label set **strictly contains** CamCASP's, with 0 labels it emits that
+      we omit, and all 5703 of its nonzero coefficients landing on labels we also make nonzero;
+      (b) `casimir` hard-caps at `C12` and at coupled rank `j <= 8`, so our 222 nonzero `j >= 9`
+      labels have **no external oracle at any rank** — and that sector is not marginal, one such
+      label reaches `247.2` against CASIMIR's largest printed `|C11|` of `299.1`;
+      (c) the `j` dependence of our recoupling prefactor differs from CASIMIR's by exactly
+      `1/|<l1 0; l2 0 | j 0>|` on the `sigma`-even sector at C6, to `6.45e-07`. Whether that is
+      the S-function normalisation convention §9.1 flagged as unverified, or a defect on one
+      side, **cannot be decided internally** — see the B10 section of
+      [the ISA-GRID oracle spec](2026-08-18-isa-grid-oracle.md). Until it is, do not "fix"
+      either implementation, and do not gate anything anisotropic label-by-label.
 
 ---
 

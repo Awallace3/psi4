@@ -47,6 +47,23 @@ Two facts make this a genuine single-variable experiment:
 
 ### Prerequisites discovered
 
+Three of these were found only when the run was reproduced on 2026-08-20. The recipe above
+is **not sufficient on its own**; all three are required.
+
+- **`OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1` are mandatory for bit-reproducibility.** The
+  statically linked `camcasp` binary carries an OpenBLAS built with OpenMP loops (it prints
+  `OpenBLAS Warning : Detect OpenMP Loop`), so on a many-core host the default thread count
+  changes the reduction order. Without them the "Control" step above **fails**: every product
+  drifts at ~`1e-8` relative (`3.5222874976599733E-02` against `3.5222875406388465E-02`)
+  while remaining self-consistent and self-reproducible, so the run looks healthy and the
+  bit-for-bit claim silently does not hold. With them the control is exactly byte-identical
+  across `*_NL4_fmtA.pol`, `*_NL4_fmtB.pol`, `*.p2p` and `*_DMA2_L4.mom`.
+- **`orient` must be on `PATH`** or `localize.py` aborts with "Can't find the Orient program".
+  The working executable is `.camcasp-reference/tools/orient/bin/orient`, ORIENT 5.0.10, the
+  same version the reviewed run used.
+- **The job directory must sit exactly one level under `.camcasp-reference/work/`**, for the
+  `CGdir` reason recorded above.
+
 - **`DIST-ALG ISA-GRID` is not a one-line change.** It needs a preceding `Begin ISA` block; the
   spec's earlier "one directive away" claim was too optimistic and is corrected here.
 - **ISA algorithm A requires a spherical Atom-Aux basis.** With the reviewed Cartesian aux basis
@@ -56,7 +73,16 @@ Two facts make this a genuine single-variable experiment:
 - CamCASP's ISA-GRID is a hybrid: shape functions from the basis-space ISA-A functional,
   applied pointwise on the integration grid. Ours is real-space throughout.
 - CamCASP's dispersion step (`casimir`) failed on a hardcoded relative runtime path from the
-  reviewed run's directory depth. Not pursued: our own recoupling is verified to `2.5e-7`.
+  reviewed run's directory depth. Not pursued at the time: our own recoupling is verified to
+  `2.5e-7`.
+
+  > **Resolved 2026-08-20 (Task B10).** The path is the `.data` file's
+  > `CGdir ../../tools/camcasp-runtime/data/realcg`, read by `casimir` itself and not by
+  > `process`. It resolves correctly from any job directory exactly one level under
+  > `.camcasp-reference/work/`; the original attempt ran three levels deep under
+  > `/fastscratch`, where it resolved to a nonexistent path. **No path rewrite is needed** —
+  > only the right directory depth. The ISA-GRID casimir run is now complete; see
+  > "## Anisotropic dispersion coefficients" below.
 
 ## ISA convergence and charges
 
@@ -302,3 +328,396 @@ So our rank-2 and rank-3 site blocks are systematically smaller than CamCASP's. 
 5 (`refine_wsm`) or rank-truncation question, not a partition one, and it is now the leading
 parity gap. Untested candidates: the 329-point fit grid against the reviewed 2000, the relative
 rank cutoff pruning rank-3 columns, and the anchor penalty constraining only rank 1.
+
+## Anisotropic dispersion coefficients (added 2026-08-20, Task B10)
+
+The ISA-GRID `casimir` run that this document originally abandoned is now complete, giving a
+**partition-matched external oracle for the full anisotropic `Cn[l1 k1, l2 k2, j]` table**
+rather than only the isotropic `00 00 0` row.
+
+Product: `.camcasp-reference/work/H2O-isagrid/H2O_ref_wt4_L3_casimir.out`, sha256
+`a405b6b07904beecdb7d7fb7a527cc64d0b92355212261a8c5b349a09c296999`.
+
+### The run is the same one this document already reported
+
+Every intermediate is byte-identical to the run whose numbers appear in the tables above, so
+the anisotropic table and the existing `ISA_GRID_*` literals come from one calculation:
+
+| artifact | result |
+| -------- | ------ |
+| `H2O_atoms.ISA`, `H2O_ISA-GRID_f11_NL4_fmtB.pol` | byte-identical |
+| `H2O.pdef` (regenerated, not copied) | byte-identical |
+| `H2O_L3_0f10.pol`, `H2O_ref_wt4_L3_0f10.pol` | byte-identical |
+| `H2O_casimir.temp`, `H2O_ref_wt4_L3_casimir.data` | byte-identical structure |
+| emitted `*.p2p` | byte-identical to the **reviewed DF** run |
+
+ISA convergence reproduced exactly: 40 iterations, all sites `Y`, residual charge
+`0.006810839`, `KL(BASIS) = 0.070602963`, `KL(GRID) = 0.044905972`, populations
+`O 8.8158670` / `H 0.58866109`.
+
+The `.data` diff against the reviewed DF casimir input is the cleanest possible statement of
+the experiment: **529 lines each, all 189 structural lines identical byte-for-byte at
+identical positions, all 340 value lines different.** Every protocol constant — `Maximum
+rank 3`, `Limit rank to 3`, `Limit rank to 3 for H1 H2`, `Frequencies STATIC + 10`, `cutoff
+0.0001`, `Print nonzero`, `Skip 0`, `Dispersion 12` — is provably unchanged. Only the
+partition moved.
+
+### End-to-end validation
+
+CamCASP's own recoupling, run on its own ISA-GRID refined model, reproduces the isotropic C6
+that **our** engine produced from the same model:
+
+| pair | CASIMIR `00 00 0` C6 | reviewed `ISA_GRID_C6` literal |
+| ---- | -------------------- | ------------------------------ |
+| O-O  | `26.48177`  | `26.48176709`  |
+| H-O  | `4.142317`  | `4.142316899`  |
+| H-H  | `0.6514697` | `0.6514696683` |
+
+Agreement to all seven printed significant figures, each printed value being the correct
+7-figure rounding of the literal. The same extraction applied to the reviewed DF output
+returns `17.25559 / 5.382332 / 1.698678`, matching the DF column exactly — so the extraction
+is sound and the difference between the two oracles really is the partition.
+
+Higher orders, O-O: C8 `490.4584`, C10 `9673.248`, C12 `150417.4`.
+
+### Table shape
+
+Three site-**type** pair blocks in the order `O O`, `H O`, `H H` (note `H O`, not `O H`), with
+979 / 1840 / 3466 nonzero rows, 6285 total — **identical row counts to the DF output**, so the
+two share a sparsity pattern and differ only in values.
+
+### On-disk format, and the one way to get it silently wrong
+
+Rows are `l1k1  l2k2  j` followed by values for C6..C12 in order. `Print nonzero` omits
+all-zero rows entirely, so an absent label means an exact zero and the row count is not fixed.
+
+**Values are left-aligned from C6, and only *trailing* zeros are truncated.** Leading and
+interior zeros are printed. The decisive evidence is that `10 10 0` carries seven fields of
+which the first two are explicit `0.0`:
+
+```
+    10   10   0     0.0            0.0         -1.840416         0.0         -3.878088         0.0         -5.086604
+```
+
+Under a "leading zeros omitted, columns right-shifted" reading that row could only have five
+fields. A parser that left-pads instead of right-pads shifts every coefficient by one order
+and still produces plausible, correctly-signed, correctly-magnituded output — the exact
+silent-wrong-answer failure mode of §0.2.
+
+The invariant that catches it, derived and then confirmed against every sampled row:
+
+> **`n === j (mod 2)`** — a label's nonzero orders all share the parity of its coupled
+> rank `j`.
+
+> **Corrected 2026-08-20 (task B10).** This invariant was originally written as
+> `n === l1 + l2 (mod 2)`, generalising from a sample in which every row happened to have
+> `l1 + l2 === j`. Measured over the whole file: `n === j (mod 2)` holds on **0 of 10457**
+> nonzero coefficients as a violation, while `n === l1 + l2 (mod 2)` is violated by **2968**
+> of them — the first counterexample being O-O `20 22s 1`, nonzero at C7 (-0.009141865), C9 and
+> C11 with `l1 + l2 = 4` against odd `n`. The `j` form is the one the derivation predicts: step 5 of
+> [`2026-08-18-anisotropic-recoupling-derivation.md`](2026-08-18-anisotropic-recoupling-derivation.md)
+> forces `L1 + L2 + j` even with `L1 + L2 = n - 2`, and there is no parity constraint on
+> `l1 + l2` at all. The alignment argument below is unaffected, because `00 10 1` has
+> `l1 + l2 = j = 1`. Parsers must enforce the `j` form; enforcing the `l1 + l2` form would
+> reject the file.
+
+Confirmed on `00 00 0`, `00 10 1`, `10 10 0`, `10 10 2`, `00 20 2`, `00 22c 2`, `00 30 3`,
+`10 20 1`, `20 20 0`. Under the shifted reading, `00 10 1` would place its nonzeros at even
+orders against `l1 + l2 = 1`, so **the misalignment violates this invariant on the first
+odd-`j` row it touches.** Parsers must enforce it. There is also a per-label minimum order:
+`10 10 *` starts at C8 because `l1 = 1` forces `la != la'` on both sites, hence
+`la + la' >= 3` and `n >= 8`; `00 10 1` starts at C7.
+
+Fortran `E` exponents appear as `0.9276924E-01`.
+
+### C13 and C14 have no oracle at any rank
+
+`casimir` **hard-caps at C12**. Setting `Dispersion 13`, `14` or `16` aborts immediately with
+
+```
+Dispersion coefficients only up to C12
+```
+
+exit code 9 plus a `casimir.error` marker; the string is compiled into the binary, so it is
+not a keyword or protocol setting. `process` likewise emits `Dispersion 12` for an L3 model,
+and `localize.py` hardcodes wsmlimit 3 -> 12.
+
+An L3 model does reach `n = 14` by the rank algebra, so this is CamCASP declining to compute
+orders it could define. **Consequence: the decision to publish only `n <= 12` while computing
+6..14 internally discards nothing that could ever have been validated externally.** The
+missing C13/C14 is not an extraction gap to close. Evidence at
+`.camcasp-reference/work/H2O-c1314-probe/`.
+
+### The anisotropic parity comparison, and the convention it did *not* resolve (2026-08-20, B10)
+
+Measured at `PARITY_PROTOCOL` on `REVIEWED_GEOMETRY` under `PARTITION=ISA`, comparing
+`ATOMIC DISPERSION COEFFICIENTS` against the table above. Test:
+`tests/pytests/test_anisotropic_dispersion_parity.py`.
+
+**The run is the right one.** The isotropic `00 00 0` entries of the anisotropic array
+reproduce the already-recorded `ISA_GRID_*` bands to the digit: C6 `0.0117 / 0.0562 / 0.0993`
+and C12 `0.347 / 0.411 / 0.456` on O-O / H-O / H-H. So everything below is a property of the
+anisotropic sector, not of the run or the extraction.
+
+**Frames.** Our array is indexed by *ordered site pairs*, row `A * 3 + B`, with every site
+frame the molecular frame. CASIMIR prints one block per site *type* in each site's own local
+axes, and `H2O.axes` says `H1 z global Z x from H2 to H1`, `H2 z global Z x from H1 to H2`.
+With H1 at negative x, **H2's local axes are the molecular axes and H1's are those rotated by
+pi about z**, so the comparable rows are `(O,O)`, `(H2,O)`, `(H2,H2)` and no rotation is
+needed. Using H1 multiplies every coefficient by `(-1)^(|m1| + |m2|)`. Verified rather than
+assumed: the `(H1,·)` rows equal the `(H2,·)` rows under exactly that factor, 0 violations out
+of 5921 / 3195 / 3195 entries above 1e-6 of the per-order scale, worst relative deviation
+`1.65e-11`.
+
+#### The exchange conventions really do differ
+
+| table | law under `(l1 k1) <-> (l2 k2)` at a fixed diagonal site pair | violations |
+| ----- | ------------------------------------------------------------- | ---------- |
+| ours | `C[l2 k2, l1 k1, j] = (-1)^(l1+l2) C[l1 k1, l2 k2, j]` | 0 / 1706 (O,O), 0 / 5921 (H2,H2) |
+| CASIMIR | `C[l2 k2, l1 k1, j] = C[l1 k1, l2 k2, j]`, identical digits | 0 / 1671 (O-O), 0 / 5703 (H-H) |
+
+Ours is the law the derivation proves (§B.5 check 4, residual `1.01e-16`, tied to the physical
+statement `E(A,B;R) = E(B,A;-R)` at `6.66e-16`). The counts for our side are taken above a
+noise floor of `1e-6` of the per-order scale; with no floor there are 68 / 568 apparent
+violations out of 16985, all of them cancellation-dominated entries below that floor.
+
+**Correction to an earlier analysis.** `(-1)^(l1+l2)` cannot reconcile the two, because it is
+*symmetric* under the label exchange and therefore cannot change any table's exchange
+symmetry. `(-1)^l1` and `(-1)^l2` both can — if `A(2,1) = (-1)^(l1+l2) A(1,2)` then
+`B = (-1)^(l2) A` satisfies `B(2,1) = (-1)^(l1) A(2,1) = (-1)^(2 l1 + l2) A(1,2) = B(1,2)` —
+and they differ from each other exactly on the `l1 + l2` odd labels, so at most one of them
+can be right. Verified numerically on a synthetic table obeying the law.
+
+#### No sign map reconciles the tables
+
+Over the 10457 shared nonzero coefficients (CASIMIR's `j <= 8`, `n <= 12`, restricted to
+labels it prints as nonzero; **0** of its nonzero entries falls outside our published label
+set):
+
+| map applied to ours | sign disagreements | median \|rel\| | p90 | worst | inside 1e-4 |
+| ------------------- | -----------------: | -------------: | --: | ----: | ----------: |
+| identity | 5343 | 1.1760 | 7.57 | 3088.8 | 0 |
+| `(-1)^l1` | 5158 | 1.1576 | 7.61 | 3090.8 | 0 |
+| `(-1)^l2` | 5134 | 1.1369 | 7.71 | 3090.8 | 0 |
+| `(-1)^(l1+l2)` | 5295 | 1.1663 | 7.54 | 3088.8 | 0 |
+| `(-1)^j` | 5263 | 1.1652 | 7.55 | 3088.8 | 0 |
+| `(-1)^(l1+l2+j)` | 5313 | 1.1731 | 7.61 | 3088.8 | 0 |
+| `i^(l1-l2-j) / Ncal` of §4.4 | 5189 | 1.1443 | 7.67 | 3090.8 | 0 |
+| `(-1)^floor((l1-l2-j)/2)` | 5271 | 1.1524 | 7.67 | 3090.8 | 0 |
+
+**No sign function explains 100 % of the flips, and none comes near.** The best of twelve
+tried explains 51.1 % of the observed signs, against an identity baseline of 48.9 %. Every map leaves a residual near or above 1, i.e.
+near a pure sign, and none lands in the 1-10 %..46 % band of the known property deficits.
+
+More decisively, **the required sign is not a function of the label at all**, so no
+S-function phase convention — which by construction is one real `±1` per `(l1, l2, j)`
+(§9.1 of the derivation) — can be the explanation:
+
+| grouping | populated groups | groups requiring *both* signs |
+| -------- | ---------------: | ----------------------------: |
+| `(l1, l2, j)` | 128 | 114 |
+| `(n, l1, l2, j)` | 273 | 238 |
+
+This is not cancellation noise. Restricted to entries above 1 % of the per-order scale:
+
+| order | entries | sign disagreements | `(l1,l2,j)` groups | mixed-sign groups | median \|rel\| |
+| ----- | ------: | -----------------: | -----------------: | ----------------: | -------------: |
+| C6 | 27 | **0** | 6 | **0** | 0.467 |
+| C7 | 113 | 57 | 16 | 14 | 1.749 |
+| C8 | 176 | 96 | 23 | 18 | 1.220 |
+| C9 | 434 | 215 | 34 | 30 | 1.069 |
+| C10 | 413 | 213 | 40 | 32 | 1.053 |
+| C11 | 717 | 350 | 53 | 47 | 1.001 |
+| C12 | 593 | 300 | 51 | 43 | 1.003 |
+
+C6 is clean and everything above it is not.
+
+#### There *is* a convention difference, and it is a magnitude, not a sign
+
+C6 is the only published order at which exactly one site-block quadruple contributes —
+`(la, la', lb, lb') = (1,1,1,1)` is the only solution of `la+la'+lb+lb' = 4` with every rank
+in 1..3 — so at fixed `(l1, l2, k1, k2)` the `j` dependence of the ratio ours/CASIMIR measures
+the recoupling prefactor and nothing else. Measured:
+
+> **ratio(j) x `|<l1 0; l2 0 | j 0>|` is independent of `j`, to `6.45e-07`** — the printed
+> precision of the reference — for every one of the `4 + 6 + 9 = 19` component pairs
+> `(k1, k2)` of the three blocks, at `(l1, l2) = (2, 2)`, `j = 0, 2, 4`.
+
+`1 / |<2 0; 2 0 | j 0>|` is `2.23607 / 1.87083 / 1.39443` for `j = 0 / 2 / 4`; the raw ratios
+on H-H are `2.40573 / 2.01275 / 1.50044`, and the worst per-component spread after the
+correction is `6.45e-07`. Example, H-H `(k1,k2) = (3,3)` (`22c 22c`):
+`1.1217966 / 1.1217966 / 1.1217966`.
+
+The rival reading — that the factor is `<L1 0; L2 0 | j 0>` with `L1 = L2 = 2`, which the
+`j` scan alone cannot distinguish because `(l1, l2) = (L1, L2)` at C6 — is excluded by the
+rank cross-product identity. Writing `rho` for the per-rank physical residual, a correct
+factor must leave `rho_0^A rho_2^B . rho_2^A rho_0^B = rho_0^A rho_0^B . rho_2^A rho_2^B`:
+
+| factor | H-H | H-O | O-O |
+| ------ | --: | --: | --: |
+| `<l1 0; l2 0 \| j 0>` | `0.969017` vs `0.969232`, **2.2e-04** | `1.684319` vs `1.682947`, **8.2e-04** | `2.937` vs `2.474`, 1.9e-01 |
+| `<L1 0; L2 0 \| j 0>` | fails by **36 %** | — | — |
+
+(The O-O column fails under both for a physical reason, below.)
+
+**This factor does not extend to the whole table.** `<l1 0; l2 0 | j 0>` vanishes identically
+whenever `l1 + l2 + j` is odd, and **2968 of the 10457** shared nonzero entries (28.4 %) are
+of that kind, with both tables nonzero there — the largest being O-O C12 `22s 30 4`, CASIMIR
+`-2194.16` against ours `-276.144`.
+
+> **Corrected 2026-08-20 on review.** An earlier draft of this section concluded from the
+> paragraph above that "a convention factor that annihilates 28 % of the reference is not a
+> convention", and therefore that one of the two `j` dependences must be wrong. **That
+> inference does not hold, and the stronger claim is withdrawn.**
+>
+> It assumes the reconciling factor must be *literally* `<l1 0; l2 0 | j 0>` on every label.
+> It need not be. Those 2968 entries are **exactly** the sine-carrying labels: measured over
+> the whole file, `l1 + l2 + j + sigma` is even on **6285 of 6285** rows, so
+> `l1 + l2 + j` odd is identical to `sigma` odd. The real S functions on that sector are built
+> from sine components, whose normalisation involves Clebsch-Gordan coefficients with
+> **nonzero** `m`, not the `m = 0` coefficient fitted here. An `m = 0` CG is only the right
+> object for the cosine-only sector, so its vanishing on the sine sector is expected and
+> carries no information about whether either table is wrong. A normalisation equal to
+> `1/|<l1 0; l2 0 | j 0>|` on the `sigma`-even sector and finite on the `sigma`-odd sector is
+> entirely admissible.
+>
+> The evidence in fact points the other way: if our `j` dependence were genuinely wrong, a
+> *convention-shaped* correction would not be expected to land H-H inside the independently
+> recorded 1-10 % deficit band — and it does, factorising per component to 0.07-0.25 %.
+
+**So the conclusion of B10 is negative, specific, and bounded:**
+
+1. On the `sigma`-even sector at C6 the two tables differ by exactly `1/|<l1 0; l2 0 | j 0>|`,
+   to `6.45e-07` — the oracle's printed precision — across all 19 component pairs of all three
+   blocks. That is an exact, reproducible localisation of a real discrepancy in the `j`
+   dependence of the recoupling prefactor.
+2. After removing it, the residual on H-H **is** the already-known property deficit and nothing
+   more, and the O blocks are fully accounted for by measured cancellation amplification
+   (below). So on that sector the factor is very likely the correct reconciliation.
+3. **Which side matches Stone's convention cannot be decided internally**, and the `sigma`-odd
+   sector is not covered by the factor at all. Both remain open.
+
+§9.1 of the derivation already named this as the open item: the
+`<L1 0; L2 0 | j 0> * Lambda_j` split inside `g^r` is invariant under `C -> C.kappa`,
+`S -> S/kappa`, so the derivation's own §B.5 check 2 — direct energy reconstruction, exact to
+machine precision — cannot and does not pin it. **B10 has now measured the discrepancy and
+localised it exactly; it has not established which side is right.** Resolving that needs the
+published Stone S-function definition or a third independent table, and **no internal check
+can substitute.** Until then, do not "fix" either implementation.
+
+#### What is left after the C6 factor, and where it lives
+
+Residual `|`ours/CASIMIR`|` at C6 after multiplying by `|<l1 0; l2 0 | j 0>|`:
+
+Columns are `(l1, l2)`, and `l1` belongs to the block's **first** printed type — so on the
+`H O` block `(2, 0)` is rank 2 on H and `(0, 2)` is rank 2 on O.
+
+| block | `(0,0)` | `(0,2)` | `(2,0)` | `(2,2)` |
+| ----- | ------: | ------: | ------: | ------: |
+| H-H | 0.9007 | 0.9844 | 0.9844 | 1.0761 |
+| H-O | 0.9438 | 1.6324 | 1.0318 | 1.7831 |
+| O-O | 0.9883 | 1.7139 | 1.7139 | 2.5031 |
+
+On **H-H** that is `9.9 % / 1.6 % / 7.6 %` — inside the recorded 1-10 % ISA-GRID C6 band, and
+it factorises into a per-component product to `0.07-0.25 %` (`rho_20 = 1.0310`,
+`rho_21c = 1.0229`, `rho_22c = 1.0592` against `rho_0 = 0.9490`). So on H-H the anisotropic
+residual *is* the already-known property deficit and nothing more.
+
+On every block containing **O** it is 63-150 %, and the excess sits entirely on labels
+carrying a rank-2 coupled index on the O site — `(0,2)` and `(2,2)` in the table above, never
+`(0,0)` or the H-side `(2,0)`. The reason is cancellation, not a new defect, and it is
+directly measurable in the dipole block that feeds C6. Static `alpha` against the same
+oracle:
+
+| site | per-component | isotropic mean | coupled rank-2 `q20 = (2 a_zz - a_xx - a_yy)/2` |
+| ---- | ------------- | -------------- | ----------------------------------------------- |
+| O | `xx 6.920310/7.041967` (1.7 %), `yy 7.414385/7.473775` (0.8 %), `zz 6.955088/7.128955` (2.4 %) | 1.6 % | `-0.212260` vs `-0.128916`, **64.7 %** |
+| H | `yy 0.644611/0.760938` (15.3 %) worst | 6.9 % | `+0.067367` vs `+0.066802`, **0.85 %** |
+
+O's dipole polarizability is nearly isotropic, so `q20` is a small difference of large
+numbers and a 2 % component error becomes a **65 %** error in the traceless part — which is
+precisely the `1.714` ratio the C6 `(0,2)` labels show, to 4 %. H's dipole block is strongly
+anisotropic, so the same arithmetic does not amplify: H is 15 % out per component and 0.85 %
+out in `q20`. **The O-O anisotropic excess is the O dipole deficit amplified about 40-fold by
+cancellation, not a separate defect.** Consistent with that, the per-component factorisation
+that works to `2.2e-04` on H fails at `1.9e-01` on O-O.
+
+Median relative deviation at C6 falls from `1.2275` to `0.1218` once the factor is applied;
+over the whole shared set it barely moves, `1.1760` to `1.0677`, with 0 entries inside `1e-4`
+either way.
+
+#### The B10 parity table (identity map, as published)
+
+| pair | n | compared | inside 1e-4 | median \|rel\| | p90 | worst \|rel\| | worst label |
+| ---- | -: | -------: | ----------: | -------------: | --: | ------------: | ----------- |
+| O-O | 6 | 17 | 0 | 2.469 | 5.21 | 5.88 | `22c 20 0`, ours 6.497e-04 vs 9.443e-05 |
+| O-O | 7 | 46 | 0 | 5.287 | 76.4 | 105.0 | `32c 20 1`, ours 8.054e-03 vs -7.745e-05 |
+| O-O | 8 | 104 | 0 | 1.436 | 61.7 | 317.8 | `22s 32c 2`, ours 0.291903 vs -9.213e-04 |
+| O-O | 9 | 194 | 0 | 1.499 | 31.6 | 183.8 | `32c 40 3`, ours 0.138674 vs -7.586e-04 |
+| O-O | 10 | 334 | 0 | 1.276 | 8.54 | 3088.8 | `32c 52c 4`, ours 8.126e-02 vs 2.630e-05 |
+| O-O | 11 | 412 | 0 | 1.046 | 2.98 | 57.7 | `42c 30 5`, ours -4.86195 vs 8.581e-02 |
+| O-O | 12 | 564 | 0 | 1.047 | 3.03 | 32.7 | `60 42c 8`, ours 7.74861 vs -0.244681 |
+| H-O | 6 | 24 | 0 | 1.991 | 3.02 | 3.82 | `22c 22c 0`, ours -2.638e-03 vs -5.476e-04 |
+| H-O | 7 | 79 | 0 | 2.887 | 42.7 | 160.4 | `32c 22c 1`, ours -7.014e-03 vs 4.401e-05 |
+| H-O | 8 | 181 | 0 | 2.071 | 25.6 | 141.4 | `30 32c 0`, ours 5.370e-02 vs 3.771e-04 |
+| H-O | 9 | 356 | 0 | 1.530 | 19.3 | 1354.2 | `43c 32c 7`, ours -20.2878 vs 1.499e-02 |
+| H-O | 10 | 612 | 0 | 1.229 | 6.62 | 631.4 | `52c 32c 4`, ours -2.515e-02 vs -3.976e-05 |
+| H-O | 11 | 781 | 0 | 1.048 | 5.30 | 145.9 | `32s 22s 1`, ours 11.7693 vs -8.122e-02 |
+| H-O | 12 | 1050 | 0 | 1.058 | 3.56 | 240.3 | `43c 22c 2`, ours 92.5743 vs 0.383661 |
+| H-H | 6 | 34 | 0 | 0.963 | 1.42 | 1.51 | `22c 22c 0`, ours 1.407e-02 vs 5.610e-03 |
+| H-H | 7 | 132 | 0 | 2.367 | 12.0 | 21.3 | `31c 20 1`, ours -4.553e-04 vs 2.239e-05 |
+| H-H | 8 | 318 | 0 | 1.867 | 13.2 | 40.6 | `30 32c 0`, ours -4.837e-02 vs -1.163e-03 |
+| H-H | 9 | 648 | 0 | 1.557 | 13.0 | 514.5 | `43c 31c 5`, ours -5.980e-02 vs 1.165e-04 |
+| H-H | 10 | 1132 | 0 | 1.427 | 9.77 | 1721.5 | `22c 43c 4`, ours -3.67574 vs -2.134e-03 |
+| H-H | 11 | 1476 | 0 | 1.097 | 7.54 | 346.7 | `10 22c 1`, ours -23.0982 vs 6.681e-02 |
+| H-H | 12 | 1963 | 0 | 1.070 | 5.85 | 222.0 | `22c 22c 2`, ours -52.3156 vs -0.234602 |
+
+Whole shared set: **10457 comparisons, 0 inside `rtol = 1e-4`, median `1.1760`, worst
+`3088.8`.** The plan's gate is missed by four orders of magnitude and the test is recorded as
+a strict xfail, exactly as the six `DF_*` comparisons are. Nothing was tuned and no tolerance
+was loosened.
+
+Note that the worst offenders are *not* the leading coefficients — they are small entries
+sitting near a cancellation, where a 30 % error in a large term becomes a factor of 1000.
+Selecting instead the single largest `|Cn|` per block per order gives 18 comparisons, median
+`0.50`, worst `1.55`; **six of those 18 have the opposite sign, and all six are odd-order
+labels with `l1 + l2` odd and `j = 1`** — precisely where the exchange conventions clash —
+while the nine even-order ones are all the isotropic `00 00 0` coefficient and reproduce the
+recorded ISA-GRID bands exactly.
+
+#### The label sets, and the 735 coefficients that have no oracle
+
+Our published label set **strictly contains** CASIMIR's: 0 of its 10457 nonzero coefficients
+lands on a label we do not publish. Of the labels we publish and it omits:
+
+| block | omitted `(label, order)` entries with `j <= 8` | of those, nonzero in ours | entries with `j >= 9` | of those, nonzero |
+| ----- | --: | --: | --: | --: |
+| O-O | 14579 | **0** | 735 | 67 |
+| H-O | 13167 | **0** | 735 | 122 |
+| H-H | 10547 | **0** | 735 | 222 |
+
+So every omission inside CASIMIR's `j <= 8` cap is a zero in our table too, and almost all of
+them are *bit*-exact: 14523 / 12996 / 10144 of the entries above are literally `0.0`, and the
+largest residual among the remainder is `5.68e-14` (`7.11e-15` on H-H) — floating-point
+summation noise, against per-order scales of order `10^1` to `10^5`. **The sparsity patterns
+agree completely.** The 735 entries above the cap exist only at `n = 11`
+(380) and `n = 12` (355), because `j <= 8` cannot be exceeded at lower order, and they are
+**not** a negligible tail: the single largest `|C11|` of the entire H-H pair is one of them,
+label `43c 54c 9` at `247.242`. `casimir` prints nothing above `j = 8` and refuses
+`Dispersion 13` outright, so these coefficients cannot be validated externally at all. They
+are a recorded gap, like C13/C14 above, not an extraction gap to close.
+
+#### Consequences for the plan
+
+1. **B10 is complete as a measurement and negative as a gate.** The comparison is landed at
+   `rtol = 1e-4` as a strict xfail with the numbers above in its reason string.
+2. **The `j` dependence of the recoupling prefactor is now a known open defect**, not merely
+   an unverified convention. It is localised to a single identified Clebsch-Gordan factor and
+   is measured at C6 to `6.45e-07`. Closing it requires the published `[S13]` §3.3 / `[S78]`
+   S-function definition, or an independent third table — not more of our own internal
+   checks, all of which are invariant under exactly this ambiguity.
+3. **§B.6's sequencing advice is confirmed, twice over.** Even on the block where the
+   convention question is settled (H-H at C6) the residual is the rank deficit; and on every
+   block containing O the anisotropic comparison is amplified by cancellation to 70-150 %
+   from a dipole block that agrees to 2.5 %. Gating anisotropic `Cn` against anything is
+   premature until both the rank deficit and the `j`-dependence factor are closed.
