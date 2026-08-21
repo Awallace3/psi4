@@ -239,6 +239,150 @@ def rotate_tensor(local: Matrix3, rotation: Matrix3) -> Matrix3:
     return global_tensor
 
 
+# ---------------------------------------------------------------------------------------
+# Full L3 (rank 1 through 3) local-axes to molecular-frame rotation.
+#
+# A `.pol` refined block is a 15x15 site-diagonal matrix in the site's own local axes,
+# ordered 10 11c 11s 20 21c 21s 22c 22s 30 31c 31s 32c 32s 33c 33s. The helpers above
+# rotate only the rank-1 3x3 sub-block; these rotate the whole block.
+#
+# The reviewed H2O local axes keep global Z, so every site frame is a rotation about z and
+# the real solid harmonics mix only within one (lkc, lks) pair. With `local_to_global`
+# equal to Rz(a) = [[cos a, -sin a, 0], [sin a, cos a, 0], [0, 0, 1]] the molecular-frame
+# components are
+#
+#     lkc_global = cos(k a) lkc_local - sin(k a) lks_local
+#     lks_global = sin(k a) lkc_local + cos(k a) lks_local
+#
+# which is the transpose of the passive convention; the sign is fixed, not chosen, by
+# requiring that the rank-1 sub-block reproduce `rotate_tensor(dipole_local_cartesian(.))`
+# exactly. At a = pi this collapses to the diagonal sign matrix (-1)^k on both components,
+# so the reviewed H1 block simply picks up (-1)^(k + k').
+# ---------------------------------------------------------------------------------------
+
+# (rank, |order|, kind) for each of REAL_REFINED_COMPONENTS_L3; kind 0 is the k = 0
+# component, 1 the cosine component and 2 the sine component.
+_L3_COMPONENT_ORDERS = tuple(
+    (rank, order, kind)
+    for rank in range(1, 4)
+    for order, kind in (
+        (0, 0),
+        *((index, side) for index in range(1, rank + 1) for side in (1, 2)),
+    )
+)
+
+
+def l3_component_orders() -> tuple[tuple[int, int, int], ...]:
+    """Return ``(rank, |order|, kind)`` for each rank-1-through-3 real-spherical component.
+
+    ``kind`` is 0 for the ``k = 0`` component, 1 for the cosine component and 2 for the
+    sine component, in the same order as :data:`REAL_REFINED_COMPONENTS_L3`.
+    """
+    for (rank, order, kind), name in zip(
+        _L3_COMPONENT_ORDERS, REAL_REFINED_COMPONENTS_L3
+    ):
+        suffix = {0: "", 1: "c", 2: "s"}[kind]
+        if f"{rank}{order}{suffix}" != name:
+            raise ReferenceFormatError(
+                f"L3 component order table disagrees with the component names at {name}"
+            )
+    return _L3_COMPONENT_ORDERS
+
+
+def z_rotation_angle(rotation: Matrix3, tolerance: float = 1.0e-10) -> float:
+    """Return the angle ``a`` for which ``rotation`` equals ``Rz(a)``.
+
+    Raises :class:`ReferenceFormatError` when the frame is not a proper rotation or moves
+    the global z axis, because then the real solid harmonics mix across ``|k|`` and a
+    single angle cannot describe the transformation.
+    """
+    validate_rotation_matrix(rotation, tolerance)
+    if (
+        abs(rotation[0][2]) > tolerance
+        or abs(rotation[1][2]) > tolerance
+        or abs(rotation[2][0]) > tolerance
+        or abs(rotation[2][1]) > tolerance
+        or abs(rotation[2][2] - 1.0) > tolerance
+    ):
+        raise ReferenceFormatError("local frame is not a rotation about z")
+    return math.atan2(rotation[1][0], rotation[0][0])
+
+
+def l3_z_rotation_matrix(angle: float) -> tuple[tuple[float, ...], ...]:
+    """15x15 real-spherical representation of ``Rz(angle)`` on ranks 1 through 3."""
+    if not math.isfinite(angle):
+        raise ReferenceFormatError("L3 z-rotation angle must be finite")
+    orders = l3_component_orders()
+    values = [[0.0] * len(orders) for _ in orders]
+    for row, (rank, order, kind) in enumerate(orders):
+        cosine = math.cos(order * angle)
+        sine = math.sin(order * angle)
+        for column, (other_rank, other_order, other_kind) in enumerate(orders):
+            if other_rank != rank or other_order != order:
+                continue
+            if kind == 0:
+                values[row][column] = 1.0 if other_kind == 0 else 0.0
+            elif kind == 1:
+                values[row][column] = cosine if other_kind == 1 else -sine
+            else:
+                values[row][column] = sine if other_kind == 1 else cosine
+    return tuple(tuple(row) for row in values)
+
+
+def rotate_l3_about_z(
+    local: Sequence[Sequence[float]], angle: float
+) -> tuple[tuple[float, ...], ...]:
+    """Rotate a 15x15 rank-1-through-3 block from local axes into the molecular frame."""
+    size = len(l3_component_orders())
+    if len(local) != size or any(len(row) != size for row in local):
+        raise ReferenceFormatError(
+            f"an L3 block must be {size}x{size} over rank 1 through 3"
+        )
+    for row in local:
+        for value in row:
+            if not math.isfinite(value):
+                raise ReferenceFormatError("L3 block contains a non-finite value")
+    rotation = l3_z_rotation_matrix(angle)
+    # D alpha D^T, written as two passes so the intermediate stays 15x15.
+    intermediate = [
+        [
+            sum(rotation[row][index] * local[index][column] for index in range(size))
+            for column in range(size)
+        ]
+        for row in range(size)
+    ]
+    rotated = tuple(
+        tuple(
+            sum(intermediate[row][index] * rotation[column][index] for index in range(size))
+            for column in range(size)
+        )
+        for row in range(size)
+    )
+    for row in rotated:
+        for value in row:
+            if not math.isfinite(value):
+                raise ReferenceFormatError(
+                    "rotated L3 block contains a non-finite value"
+                )
+    return rotated
+
+
+def l3_local_to_molecular(
+    model: SphericalModel, rotation: Matrix3
+) -> tuple[tuple[float, ...], ...]:
+    """Return a parsed 15x15 refined block in the molecular frame.
+
+    ``model`` must carry exactly :data:`REAL_REFINED_COMPONENTS_L3`, and ``rotation`` is
+    the site's ``local_to_global`` frame as built by :func:`build_local_frames`.
+    """
+    if tuple(model.components) != REAL_REFINED_COMPONENTS_L3:
+        raise ReferenceFormatError(
+            "an L3 block must be indexed by the real refined components of "
+            "rank 1 through 3"
+        )
+    return rotate_l3_about_z(model.matrix, z_rotation_angle(rotation))
+
+
 FREQ2_FIELD_RE = re.compile(r"\bFREQ2\s+(\S+)")
 # CamCASP's NL4 formatter emits a zero-leading mantissa with seven fractional
 # digits and a signed two-digit Fortran exponent.
@@ -398,6 +542,422 @@ def parse_isotropic_cn(
                     raise ReferenceFormatError(f"{path}: {order} matrix is not symmetric")
         matrices[order] = matrix
     return matrices
+
+
+
+# ---------------------------------------------------------------------------------------
+# CASIMIR's full anisotropic dispersion table.
+#
+# `parse_isotropic_cn` above extracts the single `00 00 0` row of each site-type-pair
+# block. The parser below extracts the whole block: `Cn[l1 k1, l2 k2, j]` for every
+# printed label and every order C6 through C12.
+#
+# Two properties of the printed format are load bearing:
+#
+#   1. **Trailing zeros are truncated.** A row carries between one and seven values and
+#      the absent ones are always the HIGH orders: `00 10 1` prints six values because
+#      its C12 is zero, while `00 20 2` prints all seven because its interior odd orders
+#      are printed as `0.0`. Values are therefore padded on the RIGHT, never on the left.
+#      Padding on the wrong side shifts every coefficient by one order and produces a
+#      plausible-looking table, so the parser also checks the parity rule below, which
+#      fails loudly on 4124 of the 6285 rows of a real L3 run if the side is flipped.
+#   2. **`Print nonzero`** suppresses all-zero rows entirely, so an absent label is an
+#      explicit zero and the row count is not fixed.
+#
+# Selection rules enforced, all from
+# docs/superpowers/specs/2026-08-18-anisotropic-recoupling-derivation.md 5 and 7:
+#
+#   * `0 <= k <= 2 l` for both component indices, and `l <= 6` for an L3 model
+#     (`l1 in |la - la'| .. la + la'` with the site ranks in 1..3).
+#   * `|l1 - l2| <= j <= l1 + l2` and `j <= 12`.
+#   * `(L1 + L2 + j)` even with `L1 + L2 = n - 2`, i.e. a nonzero `Cn` needs `n - j` even.
+#     This is what makes the odd orders C7, C9, C11 appear at all, and it is the rule that
+#     catches a left-padded read: `00 10 1` read one column late puts its nonzeros on
+#     C8/C10/C12 against `j = 1`. Measured on the DF and the ISA-GRID L3 runs: 0 violations
+#     as printed, 4124 violations if the padding side is flipped.
+#
+#     The parity is keyed on `j`, NOT on `l1 + l2`. The two differ on 1958 of the 6285 rows
+#     of a real L3 run, and `n === l1 + l2 (mod 2)` is false: `20 22s 1` has `l1 + l2 = 4`
+#     and nonzero C7, C9, C11, and `20 32s 2` has `l1 + l2 = 5` and nonzero C8, C10, C12.
+#     Enforcing the `l1 + l2` form would reject 2968 legitimate coefficients per file.
+#   * `n = la + la' + lb + lb' + 2` with every site rank in 1..3, so `la + la' >= max(2, l1)`
+#     -- and `la + la' >= 3` when `l1` is odd, because a symmetric site polarizability makes
+#     the `la == la'` contribution vanish for odd `l1` (derivation 5.1, `sigma_A =
+#     (-1)^(la + la' - l1)`), so `la != la'`. A nonzero `Cn` therefore needs
+#     `n >= f(l1) + f(l2) + 2` with `f(l) = max(2, l)` for even `l` and `max(3, l)` for odd
+#     `l`. That subsumes `j <= L1 + L2 = n - 2`, because `j <= l1 + l2 <= f(l1) + f(l2)`.
+#     Measured: 0 violations on both real files, and the bound is *tight* -- attained -- for
+#     all 46 `(l1, l2)` pairs that occur, which is what distinguishes it from the weaker
+#     `max(2, l)` form (`10 10 j` starts at C8, `00 10 1` at C7). Our own table agrees: the
+#     189 published labels below this bound carry `|Cn| / max|Cn| < 3e-37`.
+#
+# NOT a rule, though it looks like one: `l1 + l2 + j + sigma` even, with `sigma` the number
+# of sine components among `k1, k2`. It holds with 0 violations on all 6285 rows of BOTH
+# reference files -- but both files are H2O, and it is a *molecular symmetry* selection rule,
+# not a format invariant. Proof, by our own engine: projecting a synthetic site
+# polarizability onto the subspace invariant under a mirror plane (zeroing every block that
+# couples a sine component to a non-sine one) drives all 14762 labels that violate it to
+# exactly 0.0, while a generic site polarizability puts up to 7.5% of the largest coefficient
+# on them. H2O is planar, so its reference tables cannot distinguish the two. Enforcing this
+# would silently reject a legitimate CASIMIR table for a molecule without that mirror, so it
+# is deliberately NOT enforced -- and `n - j` even is exactly as sharp a discriminator for the
+# padding side (the same 0 versus 4124 counts), so nothing is lost.
+#
+# EXCHANGE CONVENTION -- verified against a real L3 run, and it is NOT ours.
+# CASIMIR prints both orderings of a homonuclear type pair with bit-identical digits:
+#
+#     Cn[l2 k2, l1 k1, j] == Cn[l1 k1, l2 k2, j]                     (CASIMIR, measured)
+#
+# over all 979 O-O and all 3466 H-H labels of `H2O_ref_wt4_L3_casimir.out`. Psi4's own
+# table obeys the derivation's phase instead,
+#
+#     Cn[l2 k2, l1 k1, j] == (-1)^(l1 + l2) Cn[l1 k1, l2 k2, j]      (Psi4, exact)
+#
+# which disagrees on every label with `l1 + l2` odd -- 424 of the 979 O-O labels, at a
+# relative deviation of exactly 2. The two conventions differ by a label-dependent sign
+# whose ratio under exchange is `(-1)^(l1 + l2)`; `(-1)^l2` is one such sign, and it is
+# consistent with the `(-1)^lb` phase the derivation had to fit rather than quote. The
+# isotropic `00 00 0` label is unaffected, so nothing already gated changes. A parity
+# test against this table MUST resolve the sign convention first: comparing the two
+# tables label-by-label without it reports a defect on roughly half the labels that is
+# purely a convention. This parser enforces CASIMIR's convention, because that is what
+# the file it is reading satisfies.
+# ---------------------------------------------------------------------------------------
+
+ANISOTROPIC_CN_ORDERS: tuple[int, ...] = (6, 7, 8, 9, 10, 11, 12)
+ANISOTROPIC_CN_COLUMNS: tuple[str, ...] = tuple(
+    f"C{order}" for order in ANISOTROPIC_CN_ORDERS
+)
+# An L3 model couples site ranks 1..3, so l1 and l2 reach 6 and j reaches 12.
+ANISOTROPIC_RANK_MAX = 6
+ANISOTROPIC_COUPLED_RANK_MAX = 12
+
+# `<rank><|k|>` with a `c`/`s` suffix exactly when k > 0.
+ANISOTROPIC_COMPONENT_RE = re.compile(r"([0-9])([0-9])([cs]?)")
+ANISOTROPIC_COUPLED_RANK_RE = re.compile(r"[0-9]{1,2}")
+
+#: `(l1, k1, l2, k2, j)`, with `k` an index into the per-rank real-component order
+#: `l0, l1c, l1s, l2c, l2s, ...` -- the same convention as the published
+#: `ATOMIC DISPERSION LABELS` matrix.
+AnisotropicLabel = tuple[int, int, int, int, int]
+
+
+def parse_anisotropic_component(field: str, context: str) -> tuple[int, int]:
+    """Return `(rank, component)` for a CamCASP real-solid-harmonic label field.
+
+    `field` is `<rank><|k|>` with a `c` or `s` suffix exactly when `k > 0`: `00`, `10`,
+    `22c`, `32s`, `66c`. `component` indexes the per-rank real-component order
+    `l0, l1c, l1s, l2c, l2s, ...`, so `k = 0` maps to 0, `ltc` to `2t - 1` and `lts`
+    to `2t`. Inverse of :func:`format_anisotropic_component`.
+    """
+    match = ANISOTROPIC_COMPONENT_RE.fullmatch(field)
+    if match is None:
+        raise ReferenceFormatError(f"{context}: malformed component field {field!r}")
+    rank = int(match.group(1))
+    order = int(match.group(2))
+    suffix = match.group(3)
+    if rank > ANISOTROPIC_RANK_MAX or order > rank:
+        raise ReferenceFormatError(f"{context}: malformed component field {field!r}")
+    if (order == 0) != (suffix == ""):
+        raise ReferenceFormatError(f"{context}: malformed component field {field!r}")
+    if order == 0:
+        return rank, 0
+    return rank, 2 * order - 1 if suffix == "c" else 2 * order
+
+
+def format_anisotropic_component(
+    rank: int, component: int, context: str = "anisotropic component"
+) -> str:
+    """Return the CamCASP label field for `component` of `rank`.
+
+    Inverse of :func:`parse_anisotropic_component` over `0 <= component <= 2 * rank`.
+    """
+    if not 0 <= rank <= ANISOTROPIC_RANK_MAX:
+        raise ReferenceFormatError(
+            f"{context}: component rank {rank} is outside the L3 coupled range "
+            f"0 to {ANISOTROPIC_RANK_MAX}"
+        )
+    if not 0 <= component <= 2 * rank:
+        raise ReferenceFormatError(
+            f"{context}: component index {component} is out of range for rank {rank}"
+        )
+    if component == 0:
+        return f"{rank}0"
+    return f"{rank}{(component + 1) // 2}{'c' if component % 2 else 's'}"
+
+
+def format_anisotropic_label(label: AnisotropicLabel) -> str:
+    """Render `(l1, k1, l2, k2, j)` the way CASIMIR prints it, e.g. `22c 32s 4`."""
+    first_rank, first_component, second_rank, second_component, coupled = label
+    return (
+        f"{format_anisotropic_component(first_rank, first_component)} "
+        f"{format_anisotropic_component(second_rank, second_component)} {coupled}"
+    )
+
+
+def anisotropic_minimum_order(first_rank: int, second_rank: int) -> int:
+    """Smallest `n` that can carry a nonzero `Cn[l1 k1, l2 k2, j]`.
+
+    `n = la + la' + lb + lb' + 2` with every site rank in 1..3 and `l1 <= la + la'`, so
+    `la + la' >= max(2, l1)`; and for odd `l1` the `la == la'` contribution vanishes for a
+    symmetric site polarizability, so `la != la'` and `la + la' >= 3`. Likewise for the
+    second site. The bound is attained for every `(l1, l2)` pair a real L3 run prints.
+    """
+    return sum(
+        max(2, rank) if rank % 2 == 0 else max(3, rank)
+        for rank in (first_rank, second_rank)
+    ) + 2
+
+
+def _validate_anisotropic_label(label: AnisotropicLabel, context: str) -> None:
+    first_rank, first_component, second_rank, second_component, coupled = label
+    format_anisotropic_component(first_rank, first_component, context)
+    format_anisotropic_component(second_rank, second_component, context)
+    if not abs(first_rank - second_rank) <= coupled <= first_rank + second_rank:
+        raise ReferenceFormatError(
+            f"{context}: j must satisfy |l1 - l2| <= j <= l1 + l2, "
+            f"found j = {coupled} for l1 = {first_rank}, l2 = {second_rank}"
+        )
+    if coupled > ANISOTROPIC_COUPLED_RANK_MAX:
+        raise ReferenceFormatError(
+            f"{context}: j = {coupled} exceeds the L3 maximum "
+            f"{ANISOTROPIC_COUPLED_RANK_MAX}"
+        )
+
+
+@dataclass(frozen=True)
+class AnisotropicPairTable:
+    """Every printed `Cn[l1 k1, l2 k2, j]` for one CASIMIR site-type pair.
+
+    `first_type` and `second_type` record the printed orientation: the first label field
+    of every row belongs to `first_type`. `coefficients` holds only the labels the file
+    printed, each as a full seven-tuple over :data:`ANISOTROPIC_CN_ORDERS` with the
+    truncated trailing zeros restored. Use :meth:`row` or :meth:`coefficient` rather than
+    indexing `coefficients`, so that a label `Print nonzero` suppressed reads back as the
+    exact zero it is.
+    """
+
+    source: Path
+    first_type: str
+    second_type: str
+    coefficients: dict[AnisotropicLabel, tuple[float, ...]]
+    orders: tuple[int, ...] = ANISOTROPIC_CN_ORDERS
+
+    @property
+    def labels(self) -> tuple[AnisotropicLabel, ...]:
+        """The printed labels, sorted by `(l1, k1, l2, k2, j)`."""
+        return tuple(sorted(self.coefficients))
+
+    def row(self, label: AnisotropicLabel) -> tuple[float, ...]:
+        """`Cn` for every order in :data:`ANISOTROPIC_CN_ORDERS`, zeros where omitted."""
+        context = (
+            f"{self.source}: pair block {(self.first_type, self.second_type)} "
+            f"label {tuple(label)}"
+        )
+        _validate_anisotropic_label(label, context)
+        return self.coefficients.get(tuple(label), (0.0,) * len(self.orders))
+
+    def coefficient(self, label: AnisotropicLabel, order: int) -> float:
+        """`Cn[label]` for a single `n`, zero where the label or the order is omitted."""
+        if order not in self.orders:
+            raise ReferenceFormatError(
+                f"{self.source}: order C{order} is not one of "
+                + " ".join(ANISOTROPIC_CN_COLUMNS)
+            )
+        return self.row(label)[self.orders.index(order)]
+
+
+def _parse_anisotropic_pair_block(
+    path: Path,
+    lines: Sequence[str],
+    index: int,
+    pair_key: tuple[str, str],
+    first_type: str,
+    second_type: str,
+) -> tuple[AnisotropicPairTable, int]:
+    columns = tuple(lines[index].split()[2:])
+    if tuple(name.upper() for name in columns) != ANISOTROPIC_CN_COLUMNS:
+        raise ReferenceFormatError(
+            f"{path}: pair block {pair_key} header columns must be exactly "
+            + " ".join(ANISOTROPIC_CN_COLUMNS)
+            + f" in ascending order, found {' '.join(columns)}"
+        )
+    width = len(columns)
+    coefficients: dict[AnisotropicLabel, tuple[float, ...]] = {}
+    index += 1
+
+    while index < len(lines) and lines[index].strip().lower() != "end":
+        if PAIR_HEADER_RE.match(lines[index]):
+            raise ReferenceFormatError(
+                f"{path}: pair block {pair_key} missing explicit End terminator "
+                "before the next pair block"
+            )
+        if not lines[index].strip():
+            index += 1
+            continue
+        fields = lines[index].split()
+        context = f"{path}: pair block {pair_key} row {' '.join(fields[:3])}"
+        if len(fields) < 3:
+            raise ReferenceFormatError(
+                f"{path}: pair block {pair_key} row {lines[index].strip()!r} needs "
+                "three label fields"
+            )
+        first_rank, first_component = parse_anisotropic_component(fields[0], context)
+        second_rank, second_component = parse_anisotropic_component(fields[1], context)
+        if ANISOTROPIC_COUPLED_RANK_RE.fullmatch(fields[2]) is None:
+            raise ReferenceFormatError(f"{context}: malformed coupled rank {fields[2]!r}")
+        label = (
+            first_rank,
+            first_component,
+            second_rank,
+            second_component,
+            int(fields[2]),
+        )
+        _validate_anisotropic_label(label, context)
+        if label in coefficients:
+            raise ReferenceFormatError(
+                f"{path}: pair block {pair_key} duplicate label row "
+                f"{format_anisotropic_label(label)}"
+            )
+
+        printed = fields[3:]
+        if not printed:
+            raise ReferenceFormatError(f"{context}: row carries no numeric values")
+        if len(printed) > width:
+            raise ReferenceFormatError(
+                f"{context}: row carries {len(printed)} numeric values, at most "
+                f"{width} are defined by the header"
+            )
+        # Trailing zeros are truncated: pad on the RIGHT, never on the left.
+        values = tuple(
+            _float(printed[slot], f"{context}: {columns[slot]}") if slot < len(printed)
+            else 0.0
+            for slot in range(width)
+        )
+        minimum_order = anisotropic_minimum_order(first_rank, second_rank)
+        for order, value in zip(ANISOTROPIC_CN_ORDERS, values):
+            if value == 0.0:
+                continue
+            if (order - label[4]) % 2:
+                raise ReferenceFormatError(
+                    f"{context}: nonzero C{order} requires n - j even, because "
+                    "(L1 + L2 + j) is even and L1 + L2 = n - 2"
+                )
+            if order < minimum_order:
+                raise ReferenceFormatError(
+                    f"{context}: nonzero C{order} requires n >= {minimum_order}, the "
+                    "smallest n = la + la' + lb + lb' + 2 that can reach "
+                    f"l1 = {first_rank}, l2 = {second_rank}"
+                )
+        coefficients[label] = values
+        index += 1
+
+    if index >= len(lines):
+        raise ReferenceFormatError(
+            f"{path}: pair block {pair_key} missing explicit End terminator"
+        )
+    table = AnisotropicPairTable(
+        source=path,
+        first_type=first_type,
+        second_type=second_type,
+        coefficients=coefficients,
+    )
+    if first_type == second_type:
+        _validate_anisotropic_exchange(path, pair_key, table)
+    return table, index + 1
+
+
+def _validate_anisotropic_exchange(
+    path: Path, pair_key: tuple[str, str], table: AnisotropicPairTable
+) -> None:
+    """CASIMIR prints both orderings of a homonuclear pair with identical digits."""
+    for label, values in table.coefficients.items():
+        first_rank, first_component, second_rank, second_component, coupled = label
+        mirror = (second_rank, second_component, first_rank, first_component, coupled)
+        if mirror not in table.coefficients:
+            raise ReferenceFormatError(
+                f"{path}: pair block {pair_key} is not closed under the "
+                f"(l1 k1) <-> (l2 k2) exchange: {format_anisotropic_label(label)} has "
+                f"no {format_anisotropic_label(mirror)} row"
+            )
+        mirrored = table.coefficients[mirror]
+        for order, value, other in zip(ANISOTROPIC_CN_ORDERS, values, mirrored):
+            if abs(value - other) > 1.0e-8 * max(1.0, abs(value), abs(other)):
+                raise ReferenceFormatError(
+                    f"{path}: pair block {pair_key} violates the (l1 k1) <-> (l2 k2) "
+                    f"exchange at C{order}: {format_anisotropic_label(label)} carries "
+                    f"{value!r} but {format_anisotropic_label(mirror)} carries {other!r}"
+                )
+
+
+def parse_anisotropic_cn(
+    path: Path,
+    atom_labels: Sequence[str],
+    atom_types: Mapping[str, str],
+) -> dict[tuple[str, str], AnisotropicPairTable]:
+    """Parse CASIMIR's full anisotropic dispersion table.
+
+    Returns one :class:`AnisotropicPairTable` per site-type pair, keyed by the sorted
+    type pair -- `("H", "O")` for a block printed as either `H O` or `O H` -- so that a
+    caller can look a pair up without knowing which orientation the file printed. The
+    table itself records the printed orientation in `first_type`/`second_type`, because
+    for a heteronuclear pair only one orientation is printed and the label fields are
+    not interchangeable.
+
+    Every printed label carries all seven orders C6 through C12 as floats, with
+    CASIMIR's truncated trailing zeros restored. A label the file omits is an exact zero
+    (`Print nonzero`), which `AnisotropicPairTable.row` returns as such.
+
+    Raises `ReferenceFormatError`, with the path and the offending row, on a malformed
+    label field, a duplicate label, a missing `End`, a row with no values or more values
+    than the header defines, a header that is not exactly C6..C12 ascending, a violation
+    of any selection rule in the module comment above, a homonuclear block that is not
+    closed under the `(l1 k1) <-> (l2 k2)` exchange, a missing atom-type pair, or an
+    isotropic `00 00 0` row that disagrees with :func:`parse_isotropic_cn`.
+    """
+    lines = path.read_text().splitlines()
+    tables: dict[tuple[str, str], AnisotropicPairTable] = {}
+    index = 0
+
+    while index < len(lines):
+        header = PAIR_HEADER_RE.match(lines[index])
+        if not header:
+            index += 1
+            continue
+        first_type, second_type = header.group(1), header.group(2)
+        pair_key = tuple(sorted((first_type, second_type)))
+        if pair_key in tables:
+            raise ReferenceFormatError(f"{path}: duplicate pair block {pair_key}")
+        tables[pair_key], index = _parse_anisotropic_pair_block(
+            path, lines, index, pair_key, first_type, second_type
+        )
+
+    required_pairs = {
+        tuple(sorted((atom_types[left], atom_types[right])))
+        for left in atom_labels
+        for right in atom_labels
+    }
+    missing = required_pairs - set(tables)
+    if missing:
+        raise ReferenceFormatError(f"{path}: missing atom-type pairs {sorted(missing)}")
+
+    # Free consistency gate: the reviewed isotropic parser and this one must report the
+    # same 00 00 0 row, so the new parser cannot drift away from the reviewed one.
+    isotropic = parse_isotropic_cn(path, atom_labels, atom_types)
+    for row, left in enumerate(atom_labels):
+        for column, right in enumerate(atom_labels):
+            pair_key = tuple(sorted((atom_types[left], atom_types[right])))
+            for order in CN_ORDERS:
+                expected = isotropic[order][row][column]
+                observed = tables[pair_key].coefficient(
+                    (0, 0, 0, 0, 0), int(order[1:])
+                )
+                if observed != expected:
+                    raise ReferenceFormatError(
+                        f"{path}: pair block {pair_key} anisotropic 00 00 0 {order} "
+                        f"{observed!r} disagrees with parse_isotropic_cn {expected!r}"
+                    )
+    return tables
 
 
 def _active_lines(text: str) -> list[tuple[int, str]]:

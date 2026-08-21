@@ -1806,6 +1806,248 @@ def test_allows_bang_rule_shaped_comment():
     )
 
 
+# --------------------------------------------------------------------------------------
+# Full L3 (rank 1 through 3) local-axes to molecular-frame rotation.
+#
+# `dipole_local_cartesian`/`rotate_tensor` above handle only the rank-1 3x3 sub-block.
+# The `.pol` payload is a 15x15 site-diagonal block in the site's own local axes, and the
+# reviewed H2O axes are pure rotations about the global Z, so the general z-rotation of the
+# real solid harmonics is all that is needed to bring the whole block to the molecular
+# frame. These tests pin the general form and pin that it reduces to the existing rank-1
+# extraction, which is the only part of the rotation that already had a consumer.
+# --------------------------------------------------------------------------------------
+
+from devtools.camcasp_reference import (  # noqa: E402
+    REAL_REFINED_COMPONENTS_L3,
+    l3_component_orders,
+    l3_local_to_molecular,
+    l3_z_rotation_matrix,
+    z_rotation_angle,
+)
+
+
+def _z_frame(angle):
+    cosine = math.cos(angle)
+    sine = math.sin(angle)
+    return ((cosine, -sine, 0.0), (sine, cosine, 0.0), (0.0, 0.0, 1.0))
+
+
+def _sample_l3_matrix(seed=20260820):
+    """A symmetric 15x15 with every entry distinct and nonzero."""
+    values = [[0.0] * 15 for _ in range(15)]
+    state = seed
+    for row in range(15):
+        for column in range(row, 15):
+            state = (state * 1103515245 + 12345) % 2147483648
+            value = (state / 2147483648.0) * 2.0 - 1.0
+            values[row][column] = value
+            values[column][row] = value
+    return tuple(tuple(row) for row in values)
+
+
+class _L3Model:
+    def __init__(self, matrix):
+        self.components = REAL_REFINED_COMPONENTS_L3
+        self.matrix = matrix
+
+
+def test_l3_component_orders_agree_with_the_component_names():
+    orders = l3_component_orders()
+    assert len(orders) == len(REAL_REFINED_COMPONENTS_L3) == 15
+    for (rank, order, kind), name in zip(orders, REAL_REFINED_COMPONENTS_L3):
+        if kind == 0:
+            assert order == 0
+            assert name == f"{rank}0"
+        elif kind == 1:
+            assert name == f"{rank}{order}c"
+        elif kind == 2:
+            assert name == f"{rank}{order}s"
+        else:
+            raise AssertionError(f"unknown component kind {kind}")
+    assert [rank for rank, _order, _kind in orders] == (
+        [1] * 3 + [2] * 5 + [3] * 7
+    )
+
+
+def test_l3_half_turn_about_z_is_the_parity_of_the_order():
+    """(-1)^k on both the cosine and the sine component of every rank."""
+    rotation = l3_z_rotation_matrix(math.pi)
+    expected = [
+        (-1.0) ** order for _rank, order, _kind in l3_component_orders()
+    ]
+    assert expected == [1, -1, -1, 1, -1, -1, 1, 1, 1, -1, -1, 1, 1, -1, -1]
+    for row in range(15):
+        for column in range(15):
+            reference = expected[row] if row == column else 0.0
+            assert rotation[row][column] == pytest.approx(reference, abs=1.0e-14)
+
+
+def test_l3_z_rotation_is_orthogonal_block_diagonal_and_composes():
+    first, second = 0.37, -1.29
+    for angle in (first, second, first + second):
+        rotation = l3_z_rotation_matrix(angle)
+        for row in range(15):
+            for column in range(15):
+                product = sum(
+                    rotation[row][index] * rotation[column][index] for index in range(15)
+                )
+                assert product == pytest.approx(1.0 if row == column else 0.0, abs=1.0e-13)
+        ranks = [rank for rank, _order, _kind in l3_component_orders()]
+        for row in range(15):
+            for column in range(15):
+                if ranks[row] != ranks[column]:
+                    assert rotation[row][column] == 0.0
+
+    left = l3_z_rotation_matrix(first)
+    right = l3_z_rotation_matrix(second)
+    composed = l3_z_rotation_matrix(first + second)
+    for row in range(15):
+        for column in range(15):
+            value = sum(left[row][index] * right[index][column] for index in range(15))
+            assert value == pytest.approx(composed[row][column], abs=1.0e-13)
+
+
+def test_l3_zero_rotation_is_the_identity_and_returns_the_block_unchanged():
+    matrix = _sample_l3_matrix()
+    rotated = l3_local_to_molecular(_L3Model(matrix), _z_frame(0.0))
+    assert rotated == matrix
+
+
+def test_l3_rotation_reproduces_the_existing_rank_one_cartesian_extraction():
+    """The rank-1 sub-block of the general rotation is the existing 3x3 rotation.
+
+    This is the cross-check that fixes the sign convention: the rank-1 part of
+    `l3_local_to_molecular` must be exactly what `rotate_tensor` already produces from
+    `dipole_local_cartesian`, for every angle and not only the reviewed half turn.
+    """
+    matrix = _sample_l3_matrix()
+    model = _L3Model(matrix)
+    for angle in (0.0, math.pi, math.pi / 2.0, -0.83, 2.41):
+        frame = _z_frame(angle)
+        expected = rotate_tensor(dipole_local_cartesian(model), frame)
+        rotated = l3_local_to_molecular(model, frame)
+        actual = dipole_local_cartesian(_L3Model(rotated))
+        for row in range(3):
+            for column in range(3):
+                assert actual[row][column] == pytest.approx(
+                    expected[row][column], abs=1.0e-13
+                )
+
+
+def test_l3_rotation_preserves_symmetry_and_every_rank_block_trace():
+    matrix = _sample_l3_matrix()
+    rotated = l3_local_to_molecular(_L3Model(matrix), _z_frame(0.91))
+    offsets = {1: (0, 3), 2: (3, 8), 3: (8, 15)}
+    for row in range(15):
+        for column in range(15):
+            assert rotated[row][column] == pytest.approx(
+                rotated[column][row], abs=1.0e-13
+            )
+    for start, stop in offsets.values():
+        before = sum(matrix[index][index] for index in range(start, stop))
+        after = sum(rotated[index][index] for index in range(start, stop))
+        assert after == pytest.approx(before, abs=1.0e-12)
+
+
+def test_l3_rotation_reproduces_the_reviewed_hydrogen_half_turn_signs():
+    """The reviewed H1 frame is diag(-1, -1, 1), so the block picks up (-1)^(k+k')."""
+    matrix = _sample_l3_matrix()
+    frames = build_local_frames(CANONICAL_GEOMETRY, CANONICAL_AXES)
+    assert z_rotation_angle(frames["H1"]) == pytest.approx(math.pi, abs=1.0e-12)
+    assert z_rotation_angle(frames["H2"]) == pytest.approx(0.0, abs=1.0e-12)
+    assert z_rotation_angle(frames["O"]) == pytest.approx(0.0, abs=1.0e-12)
+
+    rotated = l3_local_to_molecular(_L3Model(matrix), frames["H1"])
+    signs = [(-1.0) ** order for _rank, order, _kind in l3_component_orders()]
+    for row in range(15):
+        for column in range(15):
+            assert rotated[row][column] == pytest.approx(
+                signs[row] * signs[column] * matrix[row][column], abs=1.0e-14
+            )
+
+
+def test_z_rotation_angle_rejects_a_frame_that_is_not_a_rotation_about_z():
+    tilted = ((1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 1.0, 0.0))
+    try:
+        z_rotation_angle(tilted)
+    except ReferenceFormatError as exc:
+        assert "rotation about z" in str(exc)
+    else:
+        raise AssertionError("a frame that moves the z axis was accepted")
+
+
+def test_l3_local_to_molecular_rejects_a_non_l3_component_list():
+    model = _L3Model(_sample_l3_matrix())
+    model.components = REAL_REFINED_COMPONENTS_L3[:14]
+    try:
+        l3_local_to_molecular(model, _z_frame(0.0))
+    except ReferenceFormatError as exc:
+        assert "rank 1 through 3" in str(exc)
+    else:
+        raise AssertionError("a truncated component list was accepted")
+
+
+def test_full_l3_block_is_extractable_from_a_pol_file_and_rotated_to_the_molecule(
+    tmp_path,
+):
+    """End to end: parse a real-format `.pol`, then rotate all 15x15 to the molecular frame.
+
+    This is the extraction seam a `.pol`-based oracle needs regardless of which partition
+    the oracle turns out to be: the file is in per-site local axes, the pipeline publishes
+    in the molecular frame, and until now only the rank-1 3x3 could be brought across.
+    """
+    source = tmp_path / "H2O_ref_wt4_L3_0f10.pol"
+    source.write_text(make_real_l3_refined_text())
+    blocks = parse_refined_polarizabilities(source, ("O", "H1", "H2"), limit=3)
+    frames = build_local_frames(CANONICAL_GEOMETRY, CANONICAL_AXES)
+    signs = [(-1.0) ** order for _rank, order, _kind in l3_component_orders()]
+
+    for block in blocks:
+        for label, model in block.atoms.items():
+            assert len(model.matrix) == 15
+            rotated = l3_local_to_molecular(model, frames[label])
+            assert len(rotated) == 15 and all(len(row) == 15 for row in rotated)
+            # O and H2 keep the molecular axes; H1's frame is the half turn about z.
+            if label == "H1":
+                expected = [
+                    [signs[row] * signs[column] * model.matrix[row][column]
+                     for column in range(15)]
+                    for row in range(15)
+                ]
+            else:
+                expected = [list(row) for row in model.matrix]
+            for row in range(15):
+                for column in range(15):
+                    assert rotated[row][column] == pytest.approx(
+                        expected[row][column], abs=1.0e-12
+                    )
+            # And the rank-1 sub-block still agrees with the pre-existing 3x3 extraction.
+            reference = rotate_tensor(dipole_local_cartesian(model), frames[label])
+            actual = dipole_local_cartesian(
+                type("Rotated", (), {
+                    "components": REAL_REFINED_COMPONENTS_L3,
+                    "matrix": rotated,
+                })()
+            )
+            for row in range(3):
+                for column in range(3):
+                    assert actual[row][column] == pytest.approx(
+                        reference[row][column], abs=1.0e-12
+                    )
+
+
+def test_l3_local_to_molecular_rejects_a_non_finite_entry():
+    values = [list(row) for row in _sample_l3_matrix()]
+    values[4][7] = math.nan
+    values[7][4] = math.nan
+    try:
+        l3_local_to_molecular(_L3Model(tuple(tuple(row) for row in values)), _z_frame(0.5))
+    except ReferenceFormatError as exc:
+        assert "non-finite" in str(exc)
+    else:
+        raise AssertionError("a non-finite L3 entry was accepted")
+
+
 from devtools.camcasp_reference import parse_isotropic_cn  # noqa: E402
 
 
@@ -1977,6 +2219,526 @@ def test_rejects_isotropic_cn_truncated_numeric_row(tmp_path):
         truncated,
         "('O', 'O') 00 00 0 row requires 7 numeric values, found 5",
     )
+
+
+from devtools.camcasp_reference import (  # noqa: E402
+    ANISOTROPIC_CN_ORDERS,
+    format_anisotropic_component,
+    parse_anisotropic_component,
+    parse_anisotropic_cn,
+)
+
+
+# CASIMIR prints the anisotropic dispersion table one site-type pair at a time.
+# Two format rules drive every test below and both are load bearing:
+#
+#   1. Trailing zeros are truncated, so a row may carry fewer than seven values and
+#      the missing ones are always the HIGH orders.  Padding on the left instead of
+#      the right shifts every coefficient by one order and still looks plausible --
+#      exactly the silent-wrong-answer class the spec's 0.2 warns about.
+#   2. `Print nonzero` suppresses all-zero rows entirely, so an absent label is an
+#      explicit zero and the row count is not fixed.
+#
+# The fixtures are inline literals, as everywhere else in this module: no test here
+# reads .camcasp-reference.
+ANISOTROPIC_MINIMAL = """\
+  O  O               C6             C7             C8             C9             C10            C11            C12
+    00   00   0   17.25559         0.0          346.4240         0.0          7484.441         0.0          127231.0
+    00   10   1     0.0          2.495460         0.0          47.40600         0.0          611.5787
+    10   00   1     0.0          2.495460         0.0          47.40600         0.0          611.5787
+  End
+  H  O               C6             C7             C8             C9             C10            C11            C12
+    00   00   0   4.0              0.0          40.0             0.0          400.0            0.0          4000.0
+    10   00   1     0.0          1.5              0.0          2.5              0.0          3.5
+  End
+  H  H               C6             C7             C8             C9             C10            C11            C12
+    00   00   0   1.0              0.0          10.0             0.0          100.0            0.0          1000.0
+  End
+"""
+
+ANISOTROPIC_ATOMS = ("O", "H1", "H2")
+ANISOTROPIC_TYPES = {"O": "O", "H1": "H", "H2": "H"}
+
+# A checked-in excerpt of the real O-O block of a CASIMIR L3 run: every row whose
+# two component fields are drawn from {00, 10, 20, 22c, 32s}, which is closed under
+# the (l1 k1) <-> (l2 k2) exchange.  It carries all three printed widths (seven,
+# six and five values), Fortran E notation, and both signs.
+#
+# PARTITION: this excerpt comes from an `ALGORITHM: DF` run.  It validates the
+# PARSER only.  It is not an acceptance oracle for our coefficients, which use the
+# real-space ISA partition -- see the ISA-GRID oracle spec.
+ANISOTROPIC_REAL_OO_EXCERPT = """\
+  O  O               C6             C7             C8             C9             C10            C11            C12
+    00   00   0   17.25559         0.0          346.4240         0.0          7484.441         0.0          127231.0
+    00   10   1     0.0          2.495460         0.0          47.40600         0.0          611.5787
+    00   20   2 -0.6668269         0.0          9.874998         0.0         -71.32532         0.0         -2495.471
+    00   22c  2   1.373456         0.0         -83.58557         0.0         -1581.118         0.0         -31975.40
+    10   00   1     0.0          2.495460         0.0          47.40600         0.0          611.5787
+    10   10   0     0.0            0.0         -1.840416         0.0         -3.878088         0.0         -5.086604
+    10   10   2     0.0            0.0          5.889332         0.0          11.08025         0.0          13.56428
+    10   20   1     0.0         0.6593627E-02     0.0          2.741821         0.0          36.24792
+    10   20   3     0.0        -0.2637451E-01     0.0         -8.225462         0.0         -93.20894
+    10   22c  1     0.0        -0.6275114E-01     0.0          4.218341         0.0         -6.293209
+    10   22c  3     0.0         0.2510046         0.0         -12.65502         0.0          16.18254
+    20   00   2 -0.6668269         0.0          9.874998         0.0         -71.32532         0.0         -2495.471
+    20   10   1     0.0         0.6593627E-02     0.0          2.741821         0.0          36.24792
+    20   10   3     0.0        -0.2637451E-01     0.0         -8.225462         0.0         -93.20894
+    20   20   0  0.5284247E-02     0.0         0.5276892E-01     0.0          11.79026         0.0          102.0883
+    20   20   2  0.7548924E-02     0.0         0.5146583         0.0         0.4611457         0.0          505.7939
+    20   20   4  0.8152837E-01     0.0        -0.8644944         0.0          59.80558         0.0         -350.3379
+    20   22c  0 -0.1039188E-01     0.0         0.2875369         0.0         -12.27495         0.0          529.2748
+    20   22c  2 -0.1484555E-01     0.0        -0.6781712         0.0          29.75989         0.0         -150.1823
+    20   22c  4 -0.1603319         0.0          3.995723         0.0         -116.6961         0.0          2342.372
+    20   32s  2     0.0            0.0         0.3682080         0.0          11.29362         0.0          368.9838
+    20   32s  4     0.0            0.0         -1.041450         0.0         -22.99908         0.0         -626.1862
+    22c  00   2   1.373456         0.0         -83.58557         0.0         -1581.118         0.0         -31975.40
+    22c  10   1     0.0        -0.6275114E-01     0.0          4.218341         0.0         -6.293209
+    22c  10   3     0.0         0.2510046         0.0         -12.65502         0.0          16.18254
+    22c  20   0 -0.1039188E-01     0.0         0.2875369         0.0         -12.27495         0.0          529.2748
+    22c  20   2 -0.1484555E-01     0.0        -0.6781712         0.0          29.75989         0.0         -150.1823
+    22c  20   4 -0.1603319         0.0          3.995723         0.0         -116.6961         0.0          2342.372
+    22c  22c  0  0.2237669E-01     0.0         -1.424668         0.0          78.68345         0.0          529.9167
+    22c  22c  2  0.3196670E-01     0.0          1.040114         0.0         -144.1549         0.0         -294.7734
+    22c  22c  4  0.3452403         0.0         -13.99763         0.0          664.1365         0.0          2561.827
+    22c  32s  2     0.0            0.0        -0.6477949         0.0          19.86803         0.0          232.7170
+    22c  32s  4     0.0            0.0          1.832241         0.0         -40.46059         0.0         -394.9339
+    32s  20   2     0.0            0.0         0.3682080         0.0          11.29362         0.0          368.9838
+    32s  20   4     0.0            0.0         -1.041450         0.0         -22.99908         0.0         -626.1862
+    32s  22c  2     0.0            0.0        -0.6477949         0.0          19.86803         0.0          232.7170
+    32s  22c  4     0.0            0.0          1.832241         0.0         -40.46059         0.0         -394.9339
+    32s  32s  0     0.0            0.0            0.0            0.0         0.4525525
+    32s  32s  4     0.0            0.0            0.0            0.0         -2.962162
+    32s  32s  6     0.0            0.0            0.0            0.0         -6.582582
+  End
+"""
+
+
+def parse_anisotropic(tmp_path, name, text):
+    source = tmp_path / name
+    source.write_text(text)
+    return source, parse_anisotropic_cn(source, ANISOTROPIC_ATOMS, ANISOTROPIC_TYPES)
+
+
+def assert_rejects_anisotropic_cn(tmp_path, name, text, expected):
+    source = tmp_path / name
+    source.write_text(text)
+    try:
+        parse_anisotropic_cn(source, ANISOTROPIC_ATOMS, ANISOTROPIC_TYPES)
+    except ReferenceFormatError as exc:
+        assert str(source) in str(exc), str(exc)
+        assert expected in str(exc), str(exc)
+    else:
+        raise AssertionError(f"invalid anisotropic Cn input was accepted: {name}")
+
+
+def test_anisotropic_component_names_round_trip_over_every_coupled_rank():
+    """Component index 0 is `l0`, index 2t-1 is `ltc` and index 2t is `lts`."""
+    for rank in range(7):
+        names = [format_anisotropic_component(rank, index) for index in range(2 * rank + 1)]
+        assert names[0] == f"{rank}0"
+        assert len(set(names)) == len(names)
+        for index, name in enumerate(names):
+            assert parse_anisotropic_component(name, "round trip") == (rank, index)
+        for order in range(1, rank + 1):
+            assert names[2 * order - 1] == f"{rank}{order}c"
+            assert names[2 * order] == f"{rank}{order}s"
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["21", "20c", "20s", "23c", "12c", "10x", "", "710", "1", "222c", "-10", "1.0", "1 0"],
+)
+def test_rejects_malformed_anisotropic_component_names(field):
+    with pytest.raises(ReferenceFormatError, match="component"):
+        parse_anisotropic_component(field, "malformed component")
+
+
+@pytest.mark.parametrize("rank,index", [(0, 1), (2, 5), (7, 0), (3, -1)])
+def test_rejects_out_of_range_anisotropic_component_indices(rank, index):
+    with pytest.raises(ReferenceFormatError, match="component"):
+        format_anisotropic_component(rank, index)
+
+
+def test_parses_every_order_for_every_site_type_pair(tmp_path):
+    source, table = parse_anisotropic(tmp_path, "minimal.out", ANISOTROPIC_MINIMAL)
+    assert sorted(table) == [("H", "H"), ("H", "O"), ("O", "O")]
+    assert table[("O", "O")].orders == ANISOTROPIC_CN_ORDERS == (6, 7, 8, 9, 10, 11, 12)
+    assert table[("O", "O")].source == source
+    assert table[("O", "O")].row((0, 0, 0, 0, 0)) == (
+        17.25559, 0.0, 346.4240, 0.0, 7484.441, 0.0, 127231.0)
+    assert table[("H", "O")].first_type == "H"
+    assert table[("H", "O")].second_type == "O"
+    assert table[("H", "H")].coefficient((0, 0, 0, 0, 0), 12) == 1000.0
+
+
+def test_trailing_zeros_are_truncated_on_the_right_not_the_left(tmp_path):
+    """`00 10 1` carries six values: its C12 is zero and simply is not printed.
+
+    Under left padding the same six values would land on C7..C12, making C7 zero
+    and C12 = 611.5787, so every assertion here fails if the side is ever flipped.
+    """
+    source, table = parse_anisotropic(tmp_path, "truncated.out", ANISOTROPIC_MINIMAL)
+    pair = table[("O", "O")]
+    assert pair.row((0, 0, 1, 0, 1)) == (0.0, 2.495460, 0.0, 47.40600, 0.0, 611.5787, 0.0)
+    assert pair.coefficient((0, 0, 1, 0, 1), 7) == 2.495460
+    assert pair.coefficient((0, 0, 1, 0, 1), 11) == 611.5787
+    assert pair.coefficient((0, 0, 1, 0, 1), 12) == 0.0
+
+
+def test_rejects_a_row_that_is_consistent_only_under_left_padding(tmp_path):
+    """The converse: only a left-padding parser can accept this row.
+
+    `j = 1` is odd, so only odd orders may be nonzero -- (L1 + L2 + j) is even and
+    L1 + L2 = n - 2, so n and j share a parity.  Read with the correct right
+    padding these six values put C6, C8 and C10 nonzero, which is forbidden.
+    """
+    flipped = ANISOTROPIC_MINIMAL.replace(
+        "    00   10   1     0.0          2.495460         0.0"
+        "          47.40600         0.0          611.5787",
+        "    00   10   1   2.495460         0.0          47.40600"
+        "         0.0          611.5787         0.0",
+        1,
+    )
+    assert_rejects_anisotropic_cn(
+        tmp_path, "left-padded.out", flipped, "nonzero C6 requires n - j even")
+
+
+def test_absent_labels_are_explicit_zeros(tmp_path):
+    """`Print nonzero` omits all-zero rows, so a missing label is a zero."""
+    source, table = parse_anisotropic(tmp_path, "omitted.out", ANISOTROPIC_MINIMAL)
+    pair = table[("O", "O")]
+    absent = (2, 0, 2, 0, 4)
+    assert absent not in pair.labels
+    assert pair.row(absent) == (0.0,) * 7
+    assert pair.coefficient(absent, 10) == 0.0
+    assert len(pair.labels) == 3
+
+
+def test_rejects_lookup_of_a_label_the_selection_rules_forbid(tmp_path):
+    source, table = parse_anisotropic(tmp_path, "lookup.out", ANISOTROPIC_MINIMAL)
+    pair = table[("O", "O")]
+    with pytest.raises(ReferenceFormatError, match="j must satisfy"):
+        pair.row((1, 0, 1, 0, 4))
+    with pytest.raises(ReferenceFormatError, match="component"):
+        pair.row((1, 3, 1, 0, 0))
+    with pytest.raises(ReferenceFormatError, match="order"):
+        pair.coefficient((0, 0, 0, 0, 0), 13)
+
+
+def test_rejects_duplicate_label_row_within_a_pair_block(tmp_path):
+    row = ("    00   10   1     0.0          2.495460         0.0"
+           "          47.40600         0.0          611.5787\n")
+    assert_rejects_anisotropic_cn(
+        tmp_path, "duplicate-label.out", ANISOTROPIC_MINIMAL.replace(row, row + row, 1),
+        "duplicate label row 00 10 1")
+
+
+def test_rejects_missing_end_terminator(tmp_path):
+    assert_rejects_anisotropic_cn(
+        tmp_path, "no-final-end.out", ANISOTROPIC_MINIMAL.rsplit("  End\n", 1)[0] + "\n",
+        "missing explicit End terminator")
+    assert_rejects_anisotropic_cn(
+        tmp_path, "no-inner-end.out", ANISOTROPIC_MINIMAL.replace("  End\n", "", 1),
+        "missing explicit End terminator")
+
+
+def test_rejects_row_with_too_many_or_no_numeric_values(tmp_path):
+    assert_rejects_anisotropic_cn(
+        tmp_path, "eight-values.out",
+        ANISOTROPIC_MINIMAL.replace("127231.0", "127231.0  9.0", 1),
+        "row carries 8 numeric values, at most 7 are defined")
+    assert_rejects_anisotropic_cn(
+        tmp_path, "no-values.out",
+        ANISOTROPIC_MINIMAL.replace(
+            "    00   10   1     0.0          2.495460         0.0"
+            "          47.40600         0.0          611.5787\n",
+            "    00   10   1\n", 1),
+        "row carries no numeric values")
+
+
+def test_rejects_malformed_label_field_in_a_row(tmp_path):
+    assert_rejects_anisotropic_cn(
+        tmp_path, "bad-component.out",
+        ANISOTROPIC_MINIMAL.replace("    00   10   1  ", "    00   1x   1  ", 1),
+        "malformed component field '1x'")
+    assert_rejects_anisotropic_cn(
+        tmp_path, "bad-coupled.out",
+        ANISOTROPIC_MINIMAL.replace("    00   10   1  ", "    00   10   x  ", 1),
+        "malformed coupled rank 'x'")
+
+
+def test_rejects_header_whose_column_order_is_not_ascending(tmp_path):
+    scrambled = ANISOTROPIC_MINIMAL.replace(
+        "C6             C7             C8", "C8             C7             C6", 1)
+    assert_rejects_anisotropic_cn(
+        tmp_path, "scrambled-header.out", scrambled,
+        "header columns must be exactly C6 C7 C8 C9 C10 C11 C12 in ascending order")
+
+
+def test_rejects_header_with_a_missing_or_unknown_column(tmp_path):
+    assert_rejects_anisotropic_cn(
+        tmp_path, "missing-c9.out", ANISOTROPIC_MINIMAL.replace("C9             ", "", 1),
+        "header columns must be exactly C6 C7 C8 C9 C10 C11 C12 in ascending order")
+    assert_rejects_anisotropic_cn(
+        tmp_path, "extra-c13.out",
+        ANISOTROPIC_MINIMAL.replace("C12", "C12            C13", 1),
+        "header columns must be exactly C6 C7 C8 C9 C10 C11 C12 in ascending order")
+
+
+def test_rejects_a_row_violating_the_coupled_rank_triangle(tmp_path):
+    assert_rejects_anisotropic_cn(
+        tmp_path, "triangle.out",
+        ANISOTROPIC_MINIMAL.replace("    00   10   1  ", "    00   10   2  ", 1),
+        "j must satisfy |l1 - l2| <= j <= l1 + l2")
+
+
+def test_rejects_a_row_whose_nonzero_order_contradicts_the_parity_rule(tmp_path):
+    """(L1 + L2 + j) even with L1 + L2 = n - 2 forces n and j to share a parity."""
+    assert_rejects_anisotropic_cn(
+        tmp_path, "parity.out",
+        ANISOTROPIC_MINIMAL.replace(
+            "    00   00   0   17.25559         0.0          346.4240",
+            "    00   00   0   17.25559         1.0          346.4240", 1),
+        "nonzero C7 requires n - j even")
+
+
+def test_parity_rule_is_keyed_on_j_and_not_on_l1_plus_l2(tmp_path):
+    """A tempting near-miss rule, `n === l1 + l2 (mod 2)`, is false and must not be used.
+
+    `20 22s 1` is real: l1 + l2 = 4 is even while its nonzero orders C7, C9, C11 are odd,
+    because the rule is (L1 + L2 + j) even with L1 + L2 = n - 2, i.e. n === j (mod 2).
+    j and l1 + l2 disagree in parity on 1958 of the 6285 rows of a real L3 run, and the
+    l1 + l2 form would reject 2968 legitimate coefficients per run.
+    """
+    source, table = parse_anisotropic(
+        tmp_path, "odd-j-even-ranks.out",
+        ANISOTROPIC_MINIMAL.replace(
+            "  End\n  H  O",
+            "    20   22s  1     0.0        -0.2179209         0.0         -10.47543"
+            "         0.0         -362.0459\n"
+            "    22s  20   1     0.0        -0.2179209         0.0         -10.47543"
+            "         0.0         -362.0459\n"
+            "  End\n  H  O", 1))
+    assert table[("O", "O")].row((2, 0, 2, 4, 1)) == (
+        0.0, -0.2179209, 0.0, -10.47543, 0.0, -362.0459, 0.0)
+
+
+def test_accepts_a_row_the_h2o_mirror_parity_rule_would_reject(tmp_path):
+    """`l1 + l2 + j + sigma` even is a molecular symmetry rule, not a format rule.
+
+    It holds on every row of both H2O reference files, but H2O is planar; our own engine
+    puts up to 7.5% of the largest coefficient on the labels that violate it as soon as
+    the site polarizability is not mirror invariant.  A parser that enforced it would
+    reject a legitimate CASIMIR table for a molecule without that mirror, so `00 11s 1`
+    -- l1 + l2 + j + sigma = 3 -- must parse.
+    """
+    source, table = parse_anisotropic(
+        tmp_path, "mirror-odd.out",
+        ANISOTROPIC_MINIMAL.replace(
+            "  End\n  H  O",
+            "    00   11s  1     0.0          1.0              0.0          2.0"
+            "              0.0          3.0\n"
+            "    11s  00   1     0.0          1.0              0.0          2.0"
+            "              0.0          3.0\n"
+            "  End\n  H  O", 1))
+    assert table[("O", "O")].row((0, 0, 1, 2, 1)) == (0.0, 1.0, 0.0, 2.0, 0.0, 3.0, 0.0)
+
+
+def test_minimum_order_matches_an_exhaustive_search_over_the_site_ranks(tmp_path):
+    """`m(l)` is the smallest la + la' an L3 model can use to reach coupled rank l.
+
+    Searched rather than asserted from the closed form: la, la' in 1..3 with
+    |la - la'| <= l <= la + la', and la == la' allowed only for even l, because a
+    symmetric site polarizability nulls the la == la' contribution at odd l.
+    """
+    def smallest_site_rank_sum(rank):
+        return min(
+            first + second
+            for first in (1, 2, 3)
+            for second in (1, 2, 3)
+            if (first != second or rank % 2 == 0)
+            and abs(first - second) <= rank <= first + second
+        )
+
+    assert [smallest_site_rank_sum(rank) for rank in range(7)] == [2, 3, 2, 3, 4, 5, 6]
+    for first in range(7):
+        for second in range(7):
+            assert camcasp_reference.anisotropic_minimum_order(first, second) == (
+                smallest_site_rank_sum(first) + smallest_site_rank_sum(second) + 2)
+    # The three CamCASP-measured anchors.
+    assert camcasp_reference.anisotropic_minimum_order(0, 0) == 6
+    assert camcasp_reference.anisotropic_minimum_order(0, 1) == 7
+    assert camcasp_reference.anisotropic_minimum_order(1, 1) == 8
+
+
+def test_rejects_a_row_whose_nonzero_order_is_below_the_recoverable_minimum(tmp_path):
+    """n = la + la' + lb + lb' + 2 with every site rank in 1..3 bounds n below.
+
+    l1 <= la + la' with la, la' in 1..3 forces la + la' >= max(2, l1), so a nonzero
+    coefficient needs n >= m(l1) + m(l2) + 2.  That subsumes j <= L1 + L2.
+    """
+    assert_rejects_anisotropic_cn(
+        tmp_path, "below-minimum.out",
+        ANISOTROPIC_MINIMAL.replace(
+            "  End\n  H  O", "    30   30   0   1.0\n  End\n  H  O", 1),
+        "nonzero C6 requires n >= 8")
+
+
+def test_minimum_order_is_three_not_two_per_side_for_an_odd_coupled_rank(tmp_path):
+    """For odd l1 the la == la' contribution vanishes, so la + la' >= 3, not >= 2.
+
+    That is why `10 10 j` starts at C8 and `00 10 1` at C7.  Under the weaker
+    `f(l) = max(2, l)` bound the C6 row below would be accepted; the bound is attained
+    for every (l1, l2) pair a real L3 run prints, so the tighter form is the real one.
+    """
+    assert_rejects_anisotropic_cn(
+        tmp_path, "odd-rank-minimum.out",
+        ANISOTROPIC_MINIMAL.replace(
+            "  End\n  H  O", "    10   10   0   1.0\n  End\n  H  O", 1),
+        "nonzero C6 requires n >= 8")
+    # C7 at l1 = 1, l2 = 3: the weaker max(2, l) bound gives 7 and accepts it, the real
+    # bound gives 8 and rejects it, and the parity rule cannot mask the difference
+    # because 7 - 1 is even.
+    assert_rejects_anisotropic_cn(
+        tmp_path, "odd-rank-minimum-mixed.out",
+        ANISOTROPIC_MINIMAL.replace(
+            "  End\n  H  O",
+            "    10   30   3     0.0          1.0\n"
+            "    30   10   3     0.0          1.0\n"
+            "  End\n  H  O", 1),
+        "nonzero C7 requires n >= 8")
+
+
+def test_rejects_a_homonuclear_pair_that_is_not_exchange_closed(tmp_path):
+    """CASIMIR prints both orderings of a homonuclear pair with identical digits."""
+    assert_rejects_anisotropic_cn(
+        tmp_path, "unmirrored.out",
+        ANISOTROPIC_MINIMAL.replace(
+            "    10   00   1     0.0          2.495460         0.0"
+            "          47.40600         0.0          611.5787\n", "", 1),
+        "is not closed under the (l1 k1) <-> (l2 k2) exchange")
+    assert_rejects_anisotropic_cn(
+        tmp_path, "asymmetric.out",
+        ANISOTROPIC_MINIMAL.replace(
+            "    10   00   1     0.0          2.495460", "    10   00   1     0.0          2.595460", 1),
+        "exchange")
+
+
+def test_heteronuclear_pair_is_not_required_to_be_exchange_closed(tmp_path):
+    """CASIMIR prints only one ordering of H O; the mirror is in no block at all."""
+    source, table = parse_anisotropic(tmp_path, "heteronuclear.out", ANISOTROPIC_MINIMAL)
+    pair = table[("H", "O")]
+    assert (1, 0, 0, 0, 1) in pair.labels
+    assert (0, 0, 1, 0, 1) not in pair.labels
+    assert pair.row((0, 0, 1, 0, 1)) == (0.0,) * 7
+
+
+def test_isotropic_row_agrees_with_the_reviewed_isotropic_parser(tmp_path):
+    source, table = parse_anisotropic(tmp_path, "consistency.out", ANISOTROPIC_MINIMAL)
+    matrices = parse_isotropic_cn(source, ANISOTROPIC_ATOMS, ANISOTROPIC_TYPES)
+    for row, left in enumerate(ANISOTROPIC_ATOMS):
+        for column, right in enumerate(ANISOTROPIC_ATOMS):
+            pair = table[tuple(sorted((ANISOTROPIC_TYPES[left], ANISOTROPIC_TYPES[right])))]
+            for order in (6, 8, 10, 12):
+                assert (pair.coefficient((0, 0, 0, 0, 0), order)
+                        == matrices[f"C{order}"][row][column])
+
+
+def test_rejects_an_isotropic_row_that_disagrees_with_the_isotropic_parser(
+    tmp_path, monkeypatch
+):
+    """The cross-check is what stops the new parser drifting from the reviewed one.
+
+    No text can make the two disagree today -- they read the same row through the
+    same converter -- so the guard is exercised by perturbing what the reviewed
+    parser reports.  Without it a future refactor could silently diverge.
+    """
+    source = tmp_path / "drift.out"
+    source.write_text(ANISOTROPIC_MINIMAL)
+    reviewed = camcasp_reference.parse_isotropic_cn
+
+    def perturbed(path, atom_labels, atom_types):
+        matrices = dict(reviewed(path, atom_labels, atom_types))
+        rows = [list(row) for row in matrices["C10"]]
+        rows[0][0] += 1.0e-9
+        matrices["C10"] = tuple(tuple(row) for row in rows)
+        return matrices
+
+    monkeypatch.setattr(camcasp_reference, "parse_isotropic_cn", perturbed)
+    with pytest.raises(ReferenceFormatError, match="disagrees with parse_isotropic_cn"):
+        camcasp_reference.parse_anisotropic_cn(source, ANISOTROPIC_ATOMS, ANISOTROPIC_TYPES)
+
+
+def test_requires_an_isotropic_row_in_every_pair_block(tmp_path):
+    assert_rejects_anisotropic_cn(
+        tmp_path, "no-isotropic.out",
+        ANISOTROPIC_MINIMAL.replace(
+            "    00   00   0   1.0              0.0          10.0",
+            "    20   20   0   1.0              0.0          10.0", 1),
+        "missing 00 00 0 row")
+
+
+def test_rejects_duplicate_and_missing_pair_blocks(tmp_path):
+    assert_rejects_anisotropic_cn(
+        tmp_path, "duplicate-pair.out",
+        ANISOTROPIC_MINIMAL + (
+            "  O  H               C6             C7             C8             C9"
+            "             C10            C11            C12\n"
+            "    00   00   0   9.0              0.0          90.0             0.0"
+            "          900.0            0.0          9000.0\n"
+            "  End\n"),
+        "duplicate pair block ('H', 'O')")
+    assert_rejects_anisotropic_cn(
+        tmp_path, "missing-pair.out",
+        ANISOTROPIC_MINIMAL.replace(
+            "  H  H               C6             C7             C8             C9"
+            "             C10            C11            C12\n"
+            "    00   00   0   1.0              0.0          10.0             0.0"
+            "          100.0            0.0          1000.0\n"
+            "  End\n", "", 1),
+        "missing atom-type pairs [('H', 'H')]")
+
+
+def test_golden_real_oo_block_excerpt(tmp_path):
+    """A checked-in excerpt of a real CASIMIR O-O block, parsed end to end."""
+    source = tmp_path / "H2O_ref_wt4_L3_casimir_OO_excerpt.out"
+    source.write_text(ANISOTROPIC_REAL_OO_EXCERPT)
+    table = parse_anisotropic_cn(source, ("O",), {"O": "O"})
+    assert sorted(table) == [("O", "O")]
+    pair = table[("O", "O")]
+    assert len(pair.labels) == 40
+
+    # 00 00 0: seven printed values, all four even orders live.
+    assert pair.row((0, 0, 0, 0, 0)) == (
+        17.25559, 0.0, 346.4240, 0.0, 7484.441, 0.0, 127231.0)
+    # 10 20 3: six printed values in Fortran E notation, C12 truncated away.
+    assert pair.row((1, 0, 2, 0, 3)) == (
+        0.0, -0.2637451e-01, 0.0, -8.225462, 0.0, -93.20894, 0.0)
+    # 32s 32s 0: five printed values, C11 and C12 both truncated away.
+    assert pair.row((3, 4, 3, 4, 0)) == (0.0, 0.0, 0.0, 0.0, 0.4525525, 0.0, 0.0)
+    assert pair.coefficient((3, 4, 3, 4, 6), 10) == -6.582582
+    # 20 32s 4 and its mirror carry identical digits.
+    assert pair.row((2, 0, 3, 4, 4)) == pair.row((3, 4, 2, 0, 4))
+    # Labels the excerpt omits are exact zeros, not absent data.
+    assert pair.row((1, 0, 1, 0, 1)) == (0.0,) * 7
+
+    # Every printed label obeys the selection rules, and the coupled ranks and
+    # component indices span more than the isotropic corner.
+    assert {label[4] for label in pair.labels} == {0, 1, 2, 3, 4, 6}
+    assert {label[0] for label in pair.labels} == {0, 1, 2, 3}
+    assert {label[1] for label in pair.labels} == {0, 3, 4}
+
+    # `20 32s 4` has l1 + l2 = 5 odd and nonzero C8, C10, C12: the order parity follows
+    # j, not l1 + l2.  This row is the counterexample that keeps the wrong rule out.
+    assert pair.coefficient((2, 0, 3, 4, 4), 8) == -1.041450
+
+    # The two mechanical properties of the printed format, asserted rather than assumed:
+    # no row carries more than the seven header columns, and no row ends in an explicit
+    # `0.0`, which is what "trailing zeros are truncated" means operationally.
+    for line in ANISOTROPIC_REAL_OO_EXCERPT.splitlines()[1:-1]:
+        printed = line.split()[3:]
+        assert 1 <= len(printed) <= 7
+        assert float(printed[-1]) != 0.0
 
 
 import json
