@@ -171,3 +171,6 @@ fsapt/
 profile.txt
 tests/pytests/test_saptdft.log
 
+
+# Development-only PES driver outputs (see water-pes-aim.py header)
+/water-pes-aim.work/
