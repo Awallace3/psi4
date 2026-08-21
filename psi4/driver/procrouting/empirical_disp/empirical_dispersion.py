@@ -27,7 +27,7 @@
 #
 
 import collections
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import qcengine as qcng
@@ -35,8 +35,9 @@ from qcelemental.models.v2 import AtomicInput
 
 from psi4 import core
 
-from .. import p4util
-from ..p4util.exceptions import ValidationError, UpgradeHelper
+from ... import p4util
+from ...p4util.exceptions import ValidationError, UpgradeHelper
+from .xdm_params import get_xdm_bj_params, normalize_xdm_model
 
 _engine_can_do = collections.OrderedDict([
     # engine order establishes default for each disp
@@ -176,7 +177,7 @@ class EmpiricalDispersion():
 
     """
     def __init__(self, *, name_hint: str = None, level_hint: str = None, param_tweaks: Union[Dict, List] = None, engine: str = None, gcp_engine: str = None, save_pairwise_disp: bool = False):
-        from .dft import dashcoeff_supplement
+        from ..dft import dashcoeff_supplement
         self.dashcoeff_supplement = dashcoeff_supplement
         self.save_pairwise_disp = save_pairwise_disp
 
@@ -430,3 +431,112 @@ class EmpiricalDispersion():
             wfn.set_variable('DISPERSION CORRECTION HESSIAN', H)
         optstash.restore()
         return core.Matrix.from_array(H)
+
+
+class XDMDispersionFunctor():
+    """Lightweight wrapper for XDM (exchange-hole dipole moment) dispersion correction.
+
+    Unlike other empirical dispersion corrections (D2, D3, D4), XDM requires a
+    converged wavefunction (electron density), so it must be computed post-SCF.
+
+    Attributes
+    ----------
+    engine : str
+        Always 'xdm'.
+    fctldash : str
+        Functional name with -XDM(<model>) suffix.
+    dashlevel : str
+        Always 'xdm'.
+
+    Parameters
+    ----------
+    functional_name
+        Name of the DFT functional (used for free-atom volume lookup).
+    basis_name
+        Name of the basis set (used for BJ parameter lookup together with functional).
+    a1
+        Explicit a1 BJ damping parameter (overrides lookup).
+    a2_ang
+        Explicit a2 BJ damping parameter in angstrom (overrides lookup).
+    model
+        XDM damping-parameter model label (``kb49`` or ``los-ii``).
+
+    """
+    def __init__(self, functional_name: str, basis_name: Optional[str] = None, a1: Optional[float] = None, a2_ang: Optional[float] = None,
+                 model: str = "kb49"):
+        self._xdm_model = normalize_xdm_model(model)
+        self.engine = "xdm"
+        self.fctldash = f"{functional_name}-xdm({self._xdm_model})"
+        self.dashlevel = f"xdm({self._xdm_model})"
+        self._functional_name = functional_name
+        self._basis_name = basis_name
+        self._a1 = a1
+        self._a2_ang = a2_ang
+
+        if a1 is not None and a2_ang is not None:
+            self.xdm = core.XDMDispersion.build(functional_name, a1, a2_ang)
+            return
+
+        if basis_name is None:
+            raise ValidationError("XDM requires a basis name or explicit a1, a2 parameters.")
+
+        try:
+            fitted_a1, fitted_a2_ang = get_xdm_bj_params(functional_name, basis_name, model=self._xdm_model)
+        except KeyError:
+            lookup_key = f"{functional_name.lower()}/{basis_name.lower()}"
+            raise ValidationError(
+                "XDMDispersion: No fitted BJ parameters for "
+                f"{lookup_key} with model {self._xdm_model}. "
+                "Provide [a1, a2] through XDM_DISPERSION_PARAMETERS."
+            )
+
+        self.xdm = core.XDMDispersion.build(functional_name, fitted_a1, fitted_a2_ang)
+
+    def print_out(self):
+        """Format XDM dispersion parameters for output file."""
+        text = []
+        text.append("   => {}: XDM Dispersion <=".format(self.fctldash.upper()))
+        text.append('')
+        text.append('    Exchange-Hole Dipole Moment (XDM) with Becke-Johnson Damping')
+        text.append('    A. D. Becke and E. R. Johnson, J. Chem. Phys. 127, 154108 (2007)')
+        text.append('')
+        text.append("    %6s = %14.6f" % ("a1", self.xdm.a1()))
+        text.append("    %6s = %14.6f [bohr]" % ("a2", self.xdm.a2()))
+        text.append("    NOTE: XDM requires a converged density and is computed post-SCF.")
+        text.append('\n')
+        core.print_out('\n'.join(text))
+
+    def compute_energy(self, molecule: core.Molecule, wfn: core.Wavefunction = None) -> float:
+        """Compute XDM dispersion energy from a converged wavefunction.
+
+        Parameters
+        ----------
+        molecule
+            System (unused for XDM, but kept for API compatibility).
+        wfn
+            Converged wavefunction with density matrix. Required.
+
+        Returns
+        -------
+        float
+            Dispersion energy [Eh].
+
+        """
+        if wfn is None:
+            raise ValidationError("XDM dispersion requires a converged wavefunction (density matrix).")
+
+        ene = self.xdm.compute_energy(wfn)
+        core.set_variable('DISPERSION CORRECTION ENERGY', ene)
+        if self.fctldash:
+            core.set_variable(f"{self.fctldash.upper()} DISPERSION CORRECTION ENERGY", ene)
+
+        # Copy XDM coefficient arrays from process environment to wavefunction
+        for var_name in ['XDM C6 COEFFICIENTS', 'XDM C8 COEFFICIENTS', 'XDM C10 COEFFICIENTS', 'XDM RC COEFFICIENTS', 'XDM PAIRWISE ENERGY']:
+            if core.has_array_variable(var_name):
+                wfn.set_array_variable(var_name, core.array_variable(var_name))
+
+        return ene
+
+    def compute_gradient(self, molecule: core.Molecule, wfn: core.Wavefunction = None) -> core.Matrix:
+        """Reject unavailable XDM derivatives."""
+        raise NotImplementedError("XDM derivatives are not implemented.")

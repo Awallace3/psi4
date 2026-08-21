@@ -289,19 +289,20 @@ for key in functionals:
     # Energy
     procedures['energy'][key] = proc.run_scf
 
-    if not (ssuper.is_c_hybrid() or ssuper.is_c_lrc() or ssuper.needs_vv10()):
+    is_xdm = functionals[key].get("dispersion", {}).get("type") == "xdm"
+    if not is_xdm and not (ssuper.is_c_hybrid() or ssuper.is_c_lrc() or ssuper.needs_vv10()):
         procedures['energy']['td-' + key] = proc.run_tdscf_energy
 
     # Properties
-    if not ssuper.is_c_hybrid():
+    if not is_xdm and not ssuper.is_c_hybrid():
         procedures['properties'][key] = proc.run_scf_property
 
     # Gradients
-    if not (ssuper.is_c_hybrid() or ssuper.is_c_lrc() or ssuper.needs_vv10()):
+    if not is_xdm and not (ssuper.is_c_hybrid() or ssuper.is_c_lrc() or ssuper.needs_vv10()):
         procedures['gradient'][key] = proc.select_scf_gradient
 
     # Hessians
-    if not ssuper.is_gga(): # N.B. this eliminates both GGA and m-GGA, as the latter contains GGA terms
+    if not is_xdm and not ssuper.is_gga(): # N.B. this eliminates both GGA and m-GGA, as the latter contains GGA terms
         procedures['hessian'][key] = proc.run_scf_hessian
 
 # Integrate CFOUR with driver routines

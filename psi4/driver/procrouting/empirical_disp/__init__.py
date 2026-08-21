@@ -3,7 +3,7 @@
 #
 # Psi4: an open-source quantum chemistry software package
 #
-# Copyright (c) 2007-2026 The Psi4 Developers.
+# Copyright (c) 2007-2025 The Psi4 Developers.
 #
 # The copyrights for code used from other parties are included in
 # the corresponding files.
@@ -26,8 +26,4 @@
 # @END LICENSE
 #
 
-from . import dft, diis, libcubeprop, response, scf_proc
-from .empirical_disp.empirical_dispersion import EmpiricalDispersion
-from .empirical_disp import empirical_dispersion
-from .proc import scf_helper, scf_wavefunction_factory
-from .proc_table import energy_only_methods, hooks, integrated_basis_methods, procedures
+from . import empirical_dispersion

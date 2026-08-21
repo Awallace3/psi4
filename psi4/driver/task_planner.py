@@ -35,7 +35,7 @@ __all__ = [
 import copy
 import logging
 import os
-from typing import Dict, Tuple, Union
+from typing import Any, Dict, Tuple, Union
 
 from qcelemental.models.v2 import DriverEnum
 
@@ -52,6 +52,16 @@ from .task_base import AtomicComputer
 logger = logging.getLogger(__name__)
 
 TaskComputers = Union[AtomicComputer, CompositeComputer, FiniteDifferenceComputer, ManyBodyComputer]
+
+
+def _uses_xdm(value: Any) -> bool:
+    if isinstance(value, str):
+        return "-xdm" in value.lower()
+    if isinstance(value, dict):
+        return any(_uses_xdm(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_uses_xdm(item) for item in value)
+    return False
 
 
 def expand_cbs_methods(method: str, basis: str, driver: DriverEnum, **kwargs) -> Tuple[str, str, Dict]:
@@ -152,6 +162,17 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
     pertinent_manybody_kwargs = ["bsse_type", "return_total_data", "max_nbody", "supersystem_ie_only", "embedding_charges", ] 
     current_manybody_kwargs = {kw: kwargs.pop(kw) for kw in pertinent_manybody_kwargs if kw in kwargs}
     # explicit: "levels"
+
+    uses_xdm = _uses_xdm((method, cbsmeta, kwargs.get("levels", {})))
+    if current_manybody_kwargs.get("bsse_type") is not None:
+        bsse_type = current_manybody_kwargs["bsse_type"]
+        bsse_types = [bsse_type] if isinstance(bsse_type, str) else bsse_type
+        unsupported_bsse = {"cp", "vmfc"}
+        if uses_xdm and any(item.lower() in unsupported_bsse for item in bsse_types):
+            raise NotImplementedError("Counterpoise-based XDM energies are not implemented.")
+
+    if uses_xdm and driver != "energy":
+        raise NotImplementedError("XDM derivatives are not implemented.")
 
     # Build a packet
     packet = {"molecule": molecule, "driver": driver, "method": method, "basis": basis, "keywords": keywords}

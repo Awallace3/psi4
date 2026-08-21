@@ -58,7 +58,8 @@ from ..p4util.exceptions import (
 
 #from psi4.driver.molutil import *
 from ..qcdb.basislist import corresponding_basis
-from . import dft, empirical_dispersion, mcscf, proc_util, response, solvent
+from . import dft, mcscf, proc_util, response, solvent
+from .empirical_disp import empirical_dispersion
 from .proc_data import method_algorithm_type
 from .roa import run_roa
 
@@ -1389,15 +1390,43 @@ def select_mrcc(name, **kwargs):
 def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwargs):
 
     if core.has_option_changed("SCF", "DFT_DISPERSION_PARAMETERS"):
-        modified_disp_params = core.get_option("SCF", "DFT_DISPERSION_PARAMETERS")
+        modified_dft_disp_params = core.get_option("SCF", "DFT_DISPERSION_PARAMETERS")
     else:
-        modified_disp_params = None
+        modified_dft_disp_params = None
+
+    if core.has_option_changed("SCF", "XDM_DISPERSION_PARAMETERS"):
+        modified_xdm_params = core.get_option("SCF", "XDM_DISPERSION_PARAMETERS")
+        if len(modified_xdm_params) != 2:
+            raise ValidationError("XDM_DISPERSION_PARAMETERS must contain exactly two values: [a1, a2_angstrom].")
+    else:
+        modified_xdm_params = None
 
     # Figure out functional
     superfunc, disp_type = dft.build_superfunctional(name, restricted)
 
     if disp_type:
-        if isinstance(name, dict):
+        if disp_type["type"] == "xdm":
+            # XDM dispersion: requires converged wavefunction, computed post-SCF
+            basis_name = core.get_global_option("BASIS")
+            xdm_model = "kb49"
+            if "params" in disp_type:
+                xdm_model = str(disp_type["params"].get("xdm_model", xdm_model)).lower()
+
+            # Strip -XDM or -XDM(<model>) suffix from functional name for BJ parameter lookup
+            func_name = superfunc.name()
+            func_name = re.sub(r"-xdm(?:\([^)]*\))?$", "", func_name, flags=re.IGNORECASE)
+            if modified_xdm_params is not None:
+                _disp_functor = empirical_dispersion.XDMDispersionFunctor(
+                    functional_name=func_name,
+                    a1=float(modified_xdm_params[0]),
+                    a2_ang=float(modified_xdm_params[1]),
+                    model=xdm_model)
+            else:
+                _disp_functor = empirical_dispersion.XDMDispersionFunctor(
+                    functional_name=func_name,
+                    basis_name=basis_name,
+                    model=xdm_model)
+        elif isinstance(name, dict):
             # user dft_functional={} spec - type for lookup, dict val for param defs,
             #   name & citation discarded so only param matches to existing defs will print labels
             _disp_functor = empirical_dispersion.EmpiricalDispersion(name_hint='',
@@ -1409,7 +1438,7 @@ def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwar
             # dft/*functionals.py spec - name & type for lookup, option val for param tweaks
             _disp_functor = empirical_dispersion.EmpiricalDispersion(name_hint=superfunc.name(),
                                                                      level_hint=disp_type["type"],
-                                                                     param_tweaks=modified_disp_params,
+                                                                     param_tweaks=modified_dft_disp_params,
                                                                      save_pairwise_disp=save_pairwise_disp,
                                                                      engine=kwargs.get('engine', None))
 
@@ -1908,10 +1937,11 @@ def scf_helper(name, post_scf=True, **kwargs):
             core.print_out("         " + banner.center(58))
         if cast:
             core.print_out("         " + "SCF Castup computation".center(58))
-        ref_wfn = scf_wavefunction_factory(name, base_wfn, core.get_option('SCF', 'REFERENCE'), **kwargs)
+        cast_name = re.sub(r"-xdm(?:\([^)]*\))?$", "", name, flags=re.IGNORECASE) if isinstance(name, str) else name
+        ref_wfn = scf_wavefunction_factory(cast_name, base_wfn, core.get_option('SCF', 'REFERENCE'), **kwargs)
 
         # Compute additive correction: dftd3, mp2d, dftd4, etc.
-        if hasattr(ref_wfn, "_disp_functor"):
+        if hasattr(ref_wfn, "_disp_functor") and ref_wfn._disp_functor.engine != "xdm":
             disp_energy = ref_wfn._disp_functor.compute_energy(ref_wfn.molecule())
             ref_wfn.set_variable("-D Energy", disp_energy)
         ref_wfn.compute_energy()
@@ -2003,7 +2033,8 @@ def scf_helper(name, post_scf=True, **kwargs):
         scf_wfn.basisset().print_detail_out()
 
     # Compute additive correction: dftd3, mp2d, dftd4, etc.
-    if hasattr(scf_wfn, "_disp_functor"):
+    # XDM is computed post-SCF since it needs the converged density.
+    if hasattr(scf_wfn, "_disp_functor") and scf_wfn._disp_functor.engine != 'xdm':
         disp_energy = scf_wfn._disp_functor.compute_energy(scf_wfn.molecule(), scf_wfn)
         scf_wfn.set_variable("-D Energy", disp_energy)
 
@@ -2045,6 +2076,14 @@ def scf_helper(name, post_scf=True, **kwargs):
         scf_wfn.set_jk(jk_obj)
 
     e_scf = scf_wfn.compute_energy()
+
+    # Post-SCF XDM dispersion correction (requires converged density)
+    if hasattr(scf_wfn, "_disp_functor") and scf_wfn._disp_functor.engine == 'xdm':
+        xdm_energy = scf_wfn._disp_functor.compute_energy(scf_wfn.molecule(), scf_wfn)
+        scf_wfn.set_variable("XDM ENERGY", xdm_energy)
+        scf_wfn.set_variable("DISPERSION CORRECTION ENERGY", xdm_energy)
+        e_scf += xdm_energy
+
     for obj in [core, scf_wfn]:
         # set_variable("SCF TOTAL ENERGY")  # P::e SCF
         for pv in ["SCF TOTAL ENERGY", "CURRENT ENERGY", "CURRENT REFERENCE ENERGY"]:

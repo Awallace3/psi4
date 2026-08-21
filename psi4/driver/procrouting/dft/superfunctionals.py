@@ -70,6 +70,15 @@ def build_superfunctional(name, restricted, npoints=None, deriv=1):
     elif name.lower() in dft_builder.functionals:
         sup = dft_builder.build_superfunctional_from_dictionary(dft_builder.functionals[name.lower()], npoints, deriv,
                                                                 restricted)
+    # Attach XDM to any known base functional.
+    elif match := re.fullmatch(r'(.+)-xdm(?:\((kb49|los-ii)\))?', name.lower()):
+        base_name, model = match.groups()
+        if base_name in dft_builder.functionals:
+            base_dict = dict(dft_builder.functionals[base_name])
+            base_dict["dispersion"] = {"type": "xdm", "params": {"xdm_model": model or "kb49"}}
+            sup = dft_builder.build_superfunctional_from_dictionary(base_dict, npoints, deriv, restricted)
+        else:
+            raise ValidationError("SCF: Functional (%s) not found!" % name)
     else:
         raise ValidationError("SCF: Functional (%s) not found!" % name)
 
