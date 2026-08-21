@@ -187,7 +187,7 @@ def publish_atomic_polarizabilities(
     cation_wfn: Optional[core.Wavefunction],
     memory: Optional[int] = PIPELINE_MEMORY_BYTES,
 ) -> core.Wavefunction:
-    """Chain the native stages and publish the seven array variables.
+    """Chain the native stages and publish the twelve array variables.
 
     Parameters
     ----------
@@ -202,7 +202,7 @@ def publish_atomic_polarizabilities(
     Returns
     -------
     psi4.core.Wavefunction
-        ``grac_wfn``, now carrying the seven arrays.
+        ``grac_wfn``, now carrying the twelve arrays.
     """
     if grac_wfn is None:
         raise RuntimeError(
@@ -237,9 +237,18 @@ def atomic_polarizabilities(
 
     This is the single entry point for the pipeline. It publishes
     ``ATOMIC POLARIZABILITIES`` ``(natom, 6)``, ``ATOMIC DYNAMIC POLARIZABILITIES``
-    ``(nfreq * natom, 6)``, ``ATOMIC POLARIZABILITY FREQUENCIES`` ``(nfreq, 1)``, and
-    ``ATOMIC C6``/``C8``/``C10``/``C12`` ``(natom, natom)``, on both the returned
-    wavefunction and the global QCVariable store. Either all seven appear or none do.
+    ``(nfreq * natom, 6)``, ``ATOMIC POLARIZABILITY FREQUENCIES`` ``(nfreq, 1)``,
+    ``ATOMIC C6``/``C8``/``C10``/``C12`` ``(natom, natom)``, ``ATOMIC DISPERSION
+    COEFFICIENTS``/``LABELS``, and the full rank-1-through-3 distributed response as
+    ``ATOMIC ANISOTROPIC POLARIZABILITIES`` ``(natom * 15, 15)``, ``ATOMIC ANISOTROPIC
+    DYNAMIC POLARIZABILITIES`` ``(nfreq * natom * 15, 15)`` and ``ATOMIC ANISOTROPIC
+    POLARIZABILITY COMPONENTS`` ``(15, 3)``, on both the returned wavefunction and the
+    global QCVariable store. Either all twelve appear or none do.
+
+    The anisotropic blocks are real-spherical in the order ``10, 11c, 11s, 20, 21c, 21s,
+    22c, 22s, 30, 31c, 31s, 32c, 32s, 33c, 33s`` and are in the **molecular** frame; the
+    ``COMPONENTS`` companion carries ``(l, |k|, kind)`` per component with ``kind`` 0 for
+    ``k = 0``, 1 for the cosine component and 2 for the sine component.
 
     Grid quality is not inherited silently: pin ``DFT_SPHERICAL_POINTS``,
     ``DFT_RADIAL_POINTS``, and the ``ATOMIC_POLARIZABILITY_ISA_*`` keywords explicitly. The

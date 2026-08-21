@@ -8957,6 +8957,50 @@ Matrix identity_site_frame() {
     return rotation;
 }
 
+/**
+ * (l, |k|, kind) per real-spherical component, with kind 0 for the k = 0 component, 1 for
+ * the cosine component and 2 for the sine component.
+ *
+ * Regenerated from the same rank/order nesting as anisotropic_component_order() and then
+ * checked entry by entry against it, so the published, machine-readable table cannot drift
+ * from the ordering the tensors are actually stored in.
+ */
+SharedMatrix anisotropic_component_descriptors() {
+    const std::string prefix = "atomic polarizability: ";
+    const auto& order = anisotropic_component_order();
+    if (order.size() != kAnisotropicDimension)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            prefix + "the L3 component ordering must have fifteen entries");
+    auto table = std::make_shared<Matrix>("ATOMIC ANISOTROPIC POLARIZABILITY COMPONENTS",
+                                          static_cast<int>(kAnisotropicDimension), 3);
+    std::size_t index = 0;
+    for (unsigned int rank = kAnisotropicSiteRankMin; rank <= kAnisotropicSiteRankMax;
+         ++rank) {
+        for (unsigned int absolute_order = 0; absolute_order <= rank; ++absolute_order) {
+            const int first_kind = absolute_order == 0 ? 0 : 1;
+            const int last_kind = absolute_order == 0 ? 0 : 2;
+            for (int kind = first_kind; kind <= last_kind; ++kind) {
+                std::string expected =
+                    std::to_string(rank) + std::to_string(absolute_order);
+                if (kind == 1) expected += "c";
+                if (kind == 2) expected += "s";
+                if (index >= order.size() || order[index] != expected)
+                    throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+                        prefix + "the published component table disagrees with the L3 "
+                                 "component ordering at '" + expected + "'");
+                table->set(static_cast<int>(index), 0, static_cast<double>(rank));
+                table->set(static_cast<int>(index), 1, static_cast<double>(absolute_order));
+                table->set(static_cast<int>(index), 2, static_cast<double>(kind));
+                ++index;
+            }
+        }
+    }
+    if (index != order.size())
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            prefix + "the published component table is incomplete");
+    return table;
+}
+
 /** Fail closed unless the auxiliary SCF describes exactly the reference's structure. */
 void require_matching_structure(const Wavefunction& reference, const Wavefunction& other,
                                 const std::string& role) {
@@ -9225,20 +9269,42 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
         throw ATOMIC_POLARIZABILITY_PREREQUISITE(
             prefix + "anisotropic recoupling produced no coefficients");
 
-    // Stage 10: pack the dipole blocks into the global Cartesian frame.
+    // Stage 10: pack the dipole blocks into the global Cartesian frame, and publish the
+    // refined rank-1-through-3 blocks whole alongside them.
+    //
+    // Both come from one RefinedL3Model::tensors entry, so the dipole arrays are a strict
+    // sub-block of the anisotropic ones. The anisotropic blocks are written verbatim and
+    // are therefore in the *molecular* frame, not in per-site local axes: the WSM design
+    // matrix is built from molecular-frame harmonics, which is exactly why
+    // identity_site_frame() is the identity. A reference written in per-site local axes has
+    // to be rotated before it can be compared component by component.
     const auto frame = identity_site_frame();
     const int rows = static_cast<int>(frequency_count * site_count);
+    const int anisotropic_columns = static_cast<int>(kAnisotropicDimension);
+    const std::size_t anisotropic_row_count =
+        frequency_count * site_count * kAnisotropicDimension;
+    if (anisotropic_row_count >
+        static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            prefix + "the anisotropic publication does not fit in one matrix");
     auto dynamic = std::make_shared<Matrix>("ATOMIC DYNAMIC POLARIZABILITIES", rows, 6);
     auto statics = std::make_shared<Matrix>("ATOMIC POLARIZABILITIES",
                                             static_cast<int>(site_count), 6);
     auto frequencies = std::make_shared<Matrix>("ATOMIC POLARIZABILITY FREQUENCIES",
                                                 static_cast<int>(frequency_count), 1);
+    auto anisotropic_dynamic =
+        std::make_shared<Matrix>("ATOMIC ANISOTROPIC DYNAMIC POLARIZABILITIES",
+                                 static_cast<int>(anisotropic_row_count), anisotropic_columns);
+    auto anisotropic_statics = std::make_shared<Matrix>(
+        "ATOMIC ANISOTROPIC POLARIZABILITIES",
+        static_cast<int>(site_count) * anisotropic_columns, anisotropic_columns);
     for (std::size_t frequency = 0; frequency < frequency_count; ++frequency) {
         if (models[frequency].frequency != result.grid.frequencies[frequency])
             throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "a refined model frequency left the protocol grid");
         frequencies->set(static_cast<int>(frequency), 0, result.grid.frequencies[frequency]);
         for (std::size_t site = 0; site < site_count; ++site) {
-            const auto local = local_spherical_dipole_to_cartesian(models[frequency].tensors[site]);
+            const auto& spherical = models[frequency].tensors[site];
+            const auto local = local_spherical_dipole_to_cartesian(spherical);
             const auto packed = pack_symmetric_tensor(rotate_tensor(local, frame));
             const int row = static_cast<int>(frequency * site_count + site);
             for (int component = 0; component < 6; ++component) {
@@ -9249,6 +9315,22 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
                     statics->set(static_cast<int>(site), component,
                                  packed[static_cast<std::size_t>(component)]);
             }
+            // Block index frequency * sites + site, so an anisotropic block sits at
+            // fifteen times the row its packed dipole tensor occupies.
+            const int anisotropic_row = row * anisotropic_columns;
+            const int anisotropic_static_row = static_cast<int>(site) * anisotropic_columns;
+            for (int component = 0; component < anisotropic_columns; ++component)
+                for (int other = 0; other < anisotropic_columns; ++other) {
+                    const double value = spherical[static_cast<std::size_t>(component)]
+                                                  [static_cast<std::size_t>(other)];
+                    if (!std::isfinite(value))
+                        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+                            prefix + "an anisotropic site block is not finite");
+                    anisotropic_dynamic->set(anisotropic_row + component, other, value);
+                    if (frequency == 0)
+                        anisotropic_statics->set(anisotropic_static_row + component, other,
+                                                 value);
+                }
         }
     }
     // The static tensor is the zero-frequency block, exactly.
@@ -9257,10 +9339,18 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
             if (statics->get(static_cast<int>(site), component) !=
                 dynamic->get(static_cast<int>(site), component))
                 throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the static tensor is not the zero-frequency block");
+    for (int row = 0; row < static_cast<int>(site_count) * anisotropic_columns; ++row)
+        for (int column = 0; column < anisotropic_columns; ++column)
+            if (anisotropic_statics->get(row, column) != anisotropic_dynamic->get(row, column))
+                throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+                    prefix + "the static anisotropic block is not the zero-frequency block");
 
     result.static_polarizabilities = statics;
     result.dynamic_polarizabilities = dynamic;
     result.frequencies = frequencies;
+    result.anisotropic_static_polarizabilities = anisotropic_statics;
+    result.anisotropic_dynamic_polarizabilities = anisotropic_dynamic;
+    result.anisotropic_polarizability_components = anisotropic_component_descriptors();
     return result;
 }
 
@@ -9278,7 +9368,12 @@ void AtomicPolarizabilityCalculator::compute() {
         {"ATOMIC C10", result.dispersion.c10},
         {"ATOMIC C12", result.dispersion.c12},
         {"ATOMIC DISPERSION COEFFICIENTS", result.anisotropic_dispersion.coefficients},
-        {"ATOMIC DISPERSION LABELS", result.anisotropic_dispersion.labels}};
+        {"ATOMIC DISPERSION LABELS", result.anisotropic_dispersion.labels},
+        {"ATOMIC ANISOTROPIC POLARIZABILITIES", result.anisotropic_static_polarizabilities},
+        {"ATOMIC ANISOTROPIC DYNAMIC POLARIZABILITIES",
+         result.anisotropic_dynamic_polarizabilities},
+        {"ATOMIC ANISOTROPIC POLARIZABILITY COMPONENTS",
+         result.anisotropic_polarizability_components}};
     for (const auto& entry : published)
         if (!entry.second)
             throw ATOMIC_POLARIZABILITY_PREREQUISITE("atomic polarizability: '" + entry.first +

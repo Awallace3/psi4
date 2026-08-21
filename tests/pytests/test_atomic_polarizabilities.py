@@ -416,16 +416,27 @@ def test_dispersion_quadrature_weights_are_casimir_polder():
 # --------------------------------------------------------------------------------------
 # End-to-end publication (Task 7).
 #
-# The nine public array variables. Every one must appear, with the shape recorded in
+# The twelve public array variables. Every one must appear, with the shape recorded in
 # docs/superpowers/specs/2026-08-17-end-to-end-wiring.md, or none may appear at all.
-# The two anisotropic arrays are contract (b) of
+# The two anisotropic dispersion arrays are contract (b) of
 # docs/superpowers/specs/2026-08-18-anisotropic-cn-and-cdf.md B.4, truncated to
 # n <= 12: one row per *ordered* site pair, one column per published label, plus a
 # self-describing (n, l1, k1, l2, k2, j) label companion.
+#
+# The three anisotropic *polarizability* arrays publish the full rank-1-through-3
+# distributed response that the pipeline already computes, constrains and refines. The
+# 15x15 site block is real-spherical in the component order 10, 11c, 11s, 20, 21c, 21s,
+# 22c, 22s, 30, 31c, 31s, 32c, 32s, 33c, 33s, and it is in the *molecular* frame, because
+# the WSM design matrix is built from molecular-frame harmonics and every site frame is
+# therefore the identity. A `.pol` reference block is in per-site local axes and has to be
+# rotated before it can be compared; see devtools.camcasp_reference.l3_local_to_molecular.
 # --------------------------------------------------------------------------------------
 
 # Published anisotropic labels: the internal L3 set of 29762 filtered at n <= 12.
 ANISOTROPIC_PUBLISHED_LABELS = 16985
+
+#: Real-spherical components of a rank-1-through-3 site block: 3 + 5 + 7.
+ANISOTROPIC_COMPONENTS = 15
 
 PUBLISHED_VARIABLES = (
     "ATOMIC POLARIZABILITIES",
@@ -437,6 +448,9 @@ PUBLISHED_VARIABLES = (
     "ATOMIC C12",
     "ATOMIC DISPERSION COEFFICIENTS",
     "ATOMIC DISPERSION LABELS",
+    "ATOMIC ANISOTROPIC POLARIZABILITIES",
+    "ATOMIC ANISOTROPIC DYNAMIC POLARIZABILITIES",
+    "ATOMIC ANISOTROPIC POLARIZABILITY COMPONENTS",
 )
 
 PUBLISHED_SHAPES = {
@@ -449,6 +463,12 @@ PUBLISHED_SHAPES = {
     "ATOMIC C12": (3, 3),
     "ATOMIC DISPERSION COEFFICIENTS": (9, ANISOTROPIC_PUBLISHED_LABELS),
     "ATOMIC DISPERSION LABELS": (ANISOTROPIC_PUBLISHED_LABELS, 6),
+    "ATOMIC ANISOTROPIC POLARIZABILITIES": (3 * ANISOTROPIC_COMPONENTS, ANISOTROPIC_COMPONENTS),
+    "ATOMIC ANISOTROPIC DYNAMIC POLARIZABILITIES": (
+        33 * ANISOTROPIC_COMPONENTS,
+        ANISOTROPIC_COMPONENTS,
+    ),
+    "ATOMIC ANISOTROPIC POLARIZABILITY COMPONENTS": (ANISOTROPIC_COMPONENTS, 3),
 }
 
 # The reviewed geometry: C2 axis along z, molecule in the xz plane, O at the origin.
@@ -537,7 +557,7 @@ PARITY_SKIP_REASON = (
 
 
 def _published(wfn):
-    """Collect the nine published arrays from a wavefunction as NumPy arrays."""
+    """Collect the twelve published arrays from a wavefunction as NumPy arrays."""
     return {name: np.asarray(wfn.array_variable(name)) for name in PUBLISHED_VARIABLES}
 
 
@@ -584,6 +604,17 @@ def parity_published_cdf():
 def test_published_shapes(wiring_published):
     for name, shape in PUBLISHED_SHAPES.items():
         assert wiring_published[name].shape == shape, name
+
+
+def test_published_variable_and_shape_tables_cover_the_same_set():
+    """The all-or-nothing contract is enforced by iterating PUBLISHED_VARIABLES.
+
+    Every fail-closed test below walks that tuple, and test_published_shapes walks
+    PUBLISHED_SHAPES, so a name added to one and not the other would silently escape both
+    the shape gate and the publishes-nothing gate.
+    """
+    assert tuple(PUBLISHED_SHAPES) == PUBLISHED_VARIABLES
+    assert len(set(PUBLISHED_VARIABLES)) == len(PUBLISHED_VARIABLES) == 12
 
 
 @pytest.mark.scf
@@ -667,6 +698,198 @@ def test_published_dispersion_is_symmetric_with_equivalent_hydrogens(wiring_publ
         np.testing.assert_allclose(array, array.T, rtol=0.0, atol=0.0, err_msg=name)
         np.testing.assert_allclose(
             array[1], array[2], rtol=TENSOR_RTOL, atol=TENSOR_ATOL, err_msg=name
+        )
+
+
+# --------------------------------------------------------------------------------------
+# The full anisotropic (rank 1 through 3) distributed polarizability tensors.
+#
+# These are the same refined L3 models the dipole arrays are cut out of, published whole.
+# Nothing here compares against a `.pol` literal: the reviewed .pol file is the C-DF
+# partition, which is the wrong partition for this pipeline's default ISA arm, so the
+# assertions below are internal-consistency and symmetry statements that hold under either
+# partition. See docs/superpowers/specs/2026-08-18-isa-grid-oracle.md.
+# --------------------------------------------------------------------------------------
+
+#: Real-spherical dipole components (10, 11c, 11s) are (z, x, y), so Cartesian x, y, z
+#: reads spherical rows 1, 2, 0 -- the same mapping local_spherical_dipole_to_cartesian uses.
+_CARTESIAN_TO_SPHERICAL_DIPOLE = (1, 2, 0)
+
+
+def _anisotropic_block(array, index):
+    """The `index`-th 15x15 block of a published anisotropic polarizability array."""
+    start = index * ANISOTROPIC_COMPONENTS
+    return array[start : start + ANISOTROPIC_COMPONENTS]
+
+
+@pytest.mark.scf
+def test_published_anisotropic_static_block_is_the_zero_frequency_dynamic_block(
+    wiring_published,
+):
+    static = wiring_published["ATOMIC ANISOTROPIC POLARIZABILITIES"]
+    dynamic = wiring_published["ATOMIC ANISOTROPIC DYNAMIC POLARIZABILITIES"]
+    assert np.array_equal(static, dynamic[: 3 * ANISOTROPIC_COMPONENTS])
+
+
+@pytest.mark.scf
+def test_published_anisotropic_dynamic_blocks_are_frequency_major_over_sites(
+    wiring_published,
+):
+    """Block index is frequency * natom + site, matching the packed dipole array.
+
+    The dipole array's own layout is asserted elsewhere; what is pinned here is that the
+    anisotropic array uses the *same* index, so a consumer can read one from the other.
+    """
+    dipole = wiring_published["ATOMIC DYNAMIC POLARIZABILITIES"]
+    dynamic = wiring_published["ATOMIC ANISOTROPIC DYNAMIC POLARIZABILITIES"]
+    assert dynamic.shape[0] == dipole.shape[0] * ANISOTROPIC_COMPONENTS
+    for block in range(dipole.shape[0]):
+        spherical = _anisotropic_block(dynamic, block)
+        packed = np.array(
+            [
+                spherical[_CARTESIAN_TO_SPHERICAL_DIPOLE[row]][
+                    _CARTESIAN_TO_SPHERICAL_DIPOLE[column]
+                ]
+                for row, column in ((0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2))
+            ]
+        )
+        assert np.array_equal(packed, dipole[block]), block
+
+
+@pytest.mark.scf
+def test_published_anisotropic_rank_one_sub_block_is_the_published_dipole_tensor(
+    wiring_published,
+):
+    """Components 10, 11c, 11s reproduce ATOMIC POLARIZABILITIES bit for bit.
+
+    Both arrays are cut from the same `RefinedL3Model::tensors` entry, and the dipole path
+    only reindexes and then rotates by the identity frame, which is exact in IEEE
+    arithmetic (each accumulation has one nonzero term). So `np.array_equal` is the right
+    comparison and no tolerance is needed; anything weaker would hide a wrong index map.
+    """
+    static = wiring_published["ATOMIC ANISOTROPIC POLARIZABILITIES"]
+    dipole = wiring_published["ATOMIC POLARIZABILITIES"]
+    for site in range(dipole.shape[0]):
+        spherical = _anisotropic_block(static, site)
+        cartesian = np.array(
+            [
+                [
+                    spherical[_CARTESIAN_TO_SPHERICAL_DIPOLE[row]][
+                        _CARTESIAN_TO_SPHERICAL_DIPOLE[column]
+                    ]
+                    for column in range(3)
+                ]
+                for row in range(3)
+            ]
+        )
+        packed = psi4.core._atomic_polarizability_pack_symmetric_tensor(
+            psi4.core.Matrix.from_array(cartesian)
+        )
+        assert np.array_equal(np.asarray(packed), dipole[site]), site
+
+
+@pytest.mark.scf
+def test_published_anisotropic_blocks_are_exactly_symmetric(wiring_published):
+    """The refined L3 model writes [t][u] and [u][t] from one variable, so it is exact.
+
+    The measured worst asymmetry over all 33 published blocks is therefore 0.0, and this
+    asserts that rather than a tolerance: a nonzero value would mean the block no longer
+    comes from the constrained upper-triangle solution.
+    """
+    dynamic = wiring_published["ATOMIC ANISOTROPIC DYNAMIC POLARIZABILITIES"]
+    worst = 0.0
+    for block in range(dynamic.shape[0] // ANISOTROPIC_COMPONENTS):
+        matrix = _anisotropic_block(dynamic, block)
+        worst = max(worst, float(np.max(np.abs(matrix - matrix.T))))
+    assert worst == 0.0
+
+
+@pytest.mark.scf
+def test_published_anisotropic_component_table_is_the_l3_component_order(wiring_published):
+    """The (l, |k|, kind) table must decode to anisotropic_component_order() exactly."""
+    components = wiring_published["ATOMIC ANISOTROPIC POLARIZABILITY COMPONENTS"]
+    order = psi4.core._atomic_polarizability_anisotropic_component_order()
+    assert len(order) == ANISOTROPIC_COMPONENTS
+    suffix = {0: "", 1: "c", 2: "s"}
+    for index, name in enumerate(order):
+        rank, absolute_order, kind = components[index]
+        assert rank == int(rank) and absolute_order == int(absolute_order)
+        assert kind == int(kind)
+        assert f"{int(rank)}{int(absolute_order)}{suffix[int(kind)]}" == name
+        assert 1 <= int(rank) <= 3
+        assert 0 <= int(absolute_order) <= int(rank)
+        assert (int(absolute_order) == 0) == (int(kind) == 0)
+
+
+@pytest.mark.scf
+def test_published_anisotropic_blocks_vanish_outside_the_derived_site_symmetry(
+    wiring_published,
+):
+    """Every pair the derived PDef mask freezes must be exactly zero, at every rank.
+
+    The dipole arrays can only see this at rank 1 (the O tensor being diagonal). Here it is
+    the whole 38-pair C2v mask on O and the 66-pair Cs mask on each hydrogen: 82 of the 120
+    upper-triangle variables on O, and 54 on each H, are frozen out of the design matrix
+    and must therefore be identically zero in the published block.
+    """
+    molecule = psi4.geometry(REVIEWED_GEOMETRY)
+    derived = psi4.core._atomic_polarizability_derive_pdef_constraints(molecule, [])
+    dynamic = wiring_published["ATOMIC ANISOTROPIC DYNAMIC POLARIZABILITIES"]
+    site_count = len(derived["sites"])
+
+    frozen_counts = []
+    for site, record in enumerate(derived["sites"]):
+        active = {tuple(pair) for pair in record["active_pairs"]}
+        frozen = [
+            (t, u)
+            for t in range(ANISOTROPIC_COMPONENTS)
+            for u in range(t, ANISOTROPIC_COMPONENTS)
+            if (t, u) not in active
+        ]
+        frozen_counts.append(len(frozen))
+        for frequency in range(11):
+            matrix = _anisotropic_block(dynamic, frequency * site_count + site)
+            for t, u in frozen:
+                assert matrix[t][u] == 0.0, (site, frequency, t, u)
+                assert matrix[u][t] == 0.0, (site, frequency, u, t)
+    assert frozen_counts == [120 - 38, 120 - 66, 120 - 66]
+
+
+@pytest.mark.scf
+def test_published_anisotropic_hydrogen_blocks_are_the_derived_symmetry_copy(
+    wiring_published,
+):
+    """alpha_H2[t][u] = chi[t] chi[u] alpha_H1[t][u] at every rank and frequency.
+
+    The PDef derivation makes H2 a signed copy of H1 through equality *rows of the
+    least-squares system*, not a post-hoc assignment, so the copy holds to solver precision
+    rather than bit for bit. Measured worst deviation over all 11 frequencies and all 225
+    entries is 2.84e-14 absolute on this wiring protocol and 4.26e-14 on the reviewed parity
+    protocol (2.55e-14 and 2.84e-14 relative to max(1, |alpha_H1|)), so 1e-12 is 23-35x the
+    observed residual and still 7 orders tighter than the plan's TENSOR_ATOL of 1e-5. It is
+    a bound on solver conditioning, not a physics tolerance: if it ever fails, the equality
+    rows have stopped being imposed. chi is the character of each L3 component under the
+    site-mapping operation, re-derived numerically from the exported harmonics so no
+    integer parity table is mirrored here.
+    """
+    from test_atomic_polarizability_symmetry import _numeric_characters
+
+    molecule = psi4.geometry(REVIEWED_GEOMETRY)
+    derived = psi4.core._atomic_polarizability_derive_pdef_constraints(molecule, [])
+    assert [record["symmetry_source"] for record in derived["sites"]] == [0, 1, 1]
+    characters = _numeric_characters(derived["sites"][2]["copy_signs"])
+    assert characters.shape == (ANISOTROPIC_COMPONENTS,)
+    # The reviewed C2 axis is z and the site map is the mirror through the molecular plane,
+    # so the character is (-1)^k: every sine component and every odd-order cosine flips.
+    assert list(characters) == [1, -1, -1, 1, -1, -1, 1, 1, 1, -1, -1, 1, 1, -1, -1]
+
+    dynamic = wiring_published["ATOMIC ANISOTROPIC DYNAMIC POLARIZABILITIES"]
+    signs = np.outer(characters, characters).astype(float)
+    for frequency in range(11):
+        first = _anisotropic_block(dynamic, 3 * frequency + 1)
+        second = _anisotropic_block(dynamic, 3 * frequency + 2)
+        np.testing.assert_allclose(
+            second, signs * first, rtol=0.0, atol=1.0e-12, err_msg=str(frequency)
         )
 
 

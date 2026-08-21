@@ -2021,17 +2021,35 @@ PSI_API const char* auxiliary_partition_basis_key();
 
 /**
  * Complete, validated pipeline output. Nothing here is published until every stage gate
- * has passed, so a caller either receives all seven arrays or an exception.
+ * has passed, so a caller either receives every array or an exception.
  *
  * static_polarizabilities is (sites, 6) and dynamic_polarizabilities is
  * (frequencies * sites, 6), both packed xx, xy, xz, yy, yz, zz in the global Cartesian
  * frame and frequency-major over site-major blocks. frequencies is (frequencies, 1).
+ *
+ * The anisotropic members carry the same refined models whole, as real-spherical 15x15
+ * site blocks in the rank-1-through-3 order returned by anisotropic_component_order().
+ * anisotropic_static_polarizabilities is (sites * 15, 15) and
+ * anisotropic_dynamic_polarizabilities is (frequencies * sites * 15, 15), block index
+ * frequency * sites + site so that it matches the packed dipole row index exactly.
+ *
+ * These blocks are in the **molecular** frame, not in per-site local axes: the WSM design
+ * matrix is built from molecular-frame harmonics, so every site's local-to-global frame is
+ * the identity (see identity_site_frame). A reference file written in per-site local axes
+ * must be rotated before it can be compared component by component.
+ *
+ * anisotropic_polarizability_components is (15, 3) carrying (l, |k|, kind) per component,
+ * with kind 0 for the k = 0 component, 1 for the cosine component and 2 for the sine
+ * component. It makes the component convention machine-readable instead of documentary.
  */
 struct PSI_API AtomicPolarizabilityPublication {
     FrequencyGrid grid;
     SharedMatrix static_polarizabilities;
     SharedMatrix dynamic_polarizabilities;
     SharedMatrix frequencies;
+    SharedMatrix anisotropic_static_polarizabilities;
+    SharedMatrix anisotropic_dynamic_polarizabilities;
+    SharedMatrix anisotropic_polarizability_components;
     DispersionMatrices dispersion;
     AnisotropicDispersionCoefficients anisotropic_dispersion;
     /** Which definition partitioned the response. */
@@ -2064,7 +2082,7 @@ class PSI_API AtomicPolarizabilityCalculator {
     /** Bare-OEProp seam: retains no SCF triple, so compute() fails closed. */
     explicit AtomicPolarizabilityCalculator(std::shared_ptr<Wavefunction> wfn);
 
-    /** Run every stage, then publish the nine arrays only if all of them passed. */
+    /** Run every stage, then publish the twelve arrays only if all of them passed. */
     void compute();
     /** Run every stage and return the complete result without publishing anything. */
     AtomicPolarizabilityPublication run() const;
