@@ -411,45 +411,54 @@ def fig_cg_correction():
     return ax.render()
 
 
-def fig_pes(mode):
+def _sapt0_water_curves(term):
     p = D["pes"]
     dist = p["distances"]
-    arms = p["modes"][mode]
-    ax = Axes(width=1000, height=400, xlabel="R(O–O)  /  Å",
-              ylabel="energy  /  kcal mol⁻¹",
-              title=f"Water dimer: induction and dispersion, BJ radius from {mode}")
-    style = {"ours": (PALETTE[0], False), "isa_grid": (PALETTE[2], True),
-             "df": (PALETTE[1], True)}
-    label = {"ours": "ours", "isa_grid": "ISA-GRID", "df": "C-DF (wrong oracle)"}
-    for key in ("ours", "isa_grid", "df"):
-        col, dash = style[key]
-        ax.add(dist, [r["ind"] for r in arms[key]], f"E_ind {label[key]}", col,
-               marker=True, dashed=dash)
-    for key in ("ours", "isa_grid", "df"):
-        col, dash = style[key]
-        ax.add(dist, [r["d3"] for r in arms[key]], f"E_disp {label[key]}", col,
-               marker=True, dashed=dash, width=3.0)
+    arms = p["modes"]["r4r2"]
+    sapt = D["sapt0_water"]["rows"]
+    if [row["distance"] for row in sapt] != dist:
+        raise RuntimeError("SAPT0 and force-field water grids differ")
+    if term == "induction":
+        values = lambda rows: [row["ind"] for row in rows]
+        reference = [row["ind_kcal_mol"] for row in sapt]
+    elif term == "dispersion":
+        values = lambda rows: [row["c6"] + row["c8"] + row["c10"] for row in rows]
+        reference = [row["disp_kcal_mol"] for row in sapt]
+    else:
+        raise ValueError(term)
+    return dist, values(arms["ours"]), values(arms["isa_grid"]), reference
+
+
+def fig_pes_sapt0(term):
+    dist, ours, camcasp, sapt = _sapt0_water_curves(term)
+    if term == "induction":
+        title, ylabel, model_label, ref_label = (
+            "induction", "E_ind  /  kcal mol⁻¹", "Induction", "SAPT0 induction reference")
+    else:
+        title, ylabel, model_label, ref_label = (
+            "dispersion", "E_disp  /  kcal mol⁻¹", "Dispersion C6+C8+C10",
+            "SAPT0 dispersion reference")
+    ax = Axes(width=1000, height=400, xlabel="R(O–O)  /  Å", ylabel=ylabel,
+              title=f"Water dimer {title} against SAPT0/aug-cc-pVDZ")
+    ax.add(dist, camcasp, f"CamCASP ISA-GRID {model_label}", PALETTE[2], marker=True,
+           dashed=True, width=2.4)
+    ax.add(dist, ours, f"our re-implementation {model_label}", PALETTE[0], marker=True,
+           width=2.4)
+    ax.add(dist, sapt, ref_label, "#111111", marker=True, width=3.2)
     return ax.render()
 
 
-def fig_pes_delta():
-    p = D["pes"]
-    dist = p["distances"]
-    ax = Axes(width=1000, height=380, xlabel="R(O–O)  /  Å",
-              ylabel="ours − ISA-GRID  /  kcal mol⁻¹",
-              title="Energy error against the matched oracle (positive = under-binding)")
-    for mode, dash in (("r4r2", False), ("c8c6", True)):
-        a = p["modes"][mode]
-        ax.add(dist, [o["ind"] - r["ind"] for o, r in zip(a["ours"], a["isa_grid"])],
-               f"induction ({mode})", PALETTE[0], marker=True, dashed=dash)
-        ax.add(dist, [o["d3"] - r["d3"] for o, r in zip(a["ours"], a["isa_grid"])],
-               f"dispersion ({mode})", PALETTE[1], marker=True, dashed=dash, width=2.6)
-    a = p["modes"]["r4r2"]
-    ax.add(dist, [o["ind"] - r["ind"] for o, r in zip(a["df"], a["isa_grid"])],
-           "induction, wrong oracle", "#a0aec0", marker=True)
-    ax.add(dist, [o["d3"] - r["d3"] for o, r in zip(a["df"], a["isa_grid"])],
-           "dispersion, wrong oracle", "#718096", marker=True, dashed=True)
-    ax.hline(0.0, "", "#1a202c", dashed=False)
+def fig_pes_sapt0_error(term):
+    dist, ours, camcasp, sapt = _sapt0_water_curves(term)
+    label = "induction" if term == "induction" else "dispersion C6+C8+C10"
+    ax = Axes(width=1000, height=360, xlabel="R(O–O)  /  Å",
+              ylabel="FF − SAPT0  /  kcal mol⁻¹",
+              title=f"Water dimer {label} error against SAPT0")
+    ax.add(dist, [x-r for x, r in zip(camcasp, sapt)], "CamCASP ISA-GRID − SAPT0",
+           PALETTE[2], marker=True, dashed=True, width=2.4)
+    ax.add(dist, [x-r for x, r in zip(ours, sapt)], "our re-implementation − SAPT0",
+           PALETTE[0], marker=True, width=2.4)
+    ax.hline(0.0, "exact SAPT0 agreement", "#111111", dashed=False)
     return ax.render()
 
 
@@ -755,10 +764,24 @@ def main():
     pes = D["pes"]
     di = pes["distances"].index(2.912)
     a4 = pes["modes"]["r4r2"]
-    a8 = pes["modes"]["c8c6"]
-    ind_d = a4["ours"][di]["ind"] - a4["isa_grid"][di]["ind"]
-    dsp_d = a4["ours"][di]["d3"] - a4["isa_grid"][di]["d3"]
-    dsp_d8 = a8["ours"][di]["d3"] - a8["isa_grid"][di]["d3"]
+    sapt_rows = D["sapt0_water"]["rows"]
+    sapt_eq = sapt_rows[di]
+    full_disp = lambda row: row["c6"] + row["c8"] + row["c10"]
+    ind_d = a4["ours"][di]["ind"] - sapt_eq["ind_kcal_mol"]
+    dsp_d = full_disp(a4["ours"][di]) - sapt_eq["disp_kcal_mol"]
+    cam_ind_d = a4["isa_grid"][di]["ind"] - sapt_eq["ind_kcal_mol"]
+    cam_dsp_d = full_disp(a4["isa_grid"][di]) - sapt_eq["disp_kcal_mol"]
+    near = [i for i, distance in enumerate(pes["distances"]) if 2.8 <= distance <= 4.0]
+
+    def mae(arm, term):
+        if term == "ind":
+            errors = [a4[arm][i]["ind"] - sapt_rows[i]["ind_kcal_mol"] for i in near]
+        else:
+            orders = term.split("+")
+            errors = [sum(a4[arm][i][order] for order in orders)
+                      - sapt_rows[i]["disp_kcal_mol"] for i in near]
+        return float(np.mean(np.abs(errors)))
+
     aniso = a4["ours"][di]["ind"] - a4["ours"][di]["ind_iso"]
     ratios = [abs(x["ours"] / x["ref"]) for x in D["aniso_cn"] if x["ref"] != 0]
     reldev = np.array([abs((x["ours"] - x["ref"]) / x["ref"])
@@ -781,8 +804,8 @@ H<sub>2</sub>O, PBE0/aug-cc-pVTZ + GRAC, ALDA+CHF, LW→L3, PFIT WSM weight 4
 <div class="kpi"><div class="v">2</div><div class="k">partition routes</div></div>
 <div class="kpi"><div class="v">2.94 %</div><div class="k">rank-1 α deficit</div></div>
 <div class="kpi"><div class="v">31.9 %</div><div class="k">rank-2 α deficit</div></div>
-<div class="kpi"><div class="v">{abs(ind_d):.3f}</div><div class="k">induction error, kcal/mol</div></div>
-<div class="kpi"><div class="v">{abs(dsp_d):.3f}</div><div class="k">dispersion error, kcal/mol</div></div>
+<div class="kpi"><div class="v">{abs(ind_d):.3f}</div><div class="k">induction error vs SAPT0</div></div>
+<div class="kpi"><div class="v">{abs(dsp_d):.3f}</div><div class="k">C6+C8+C10 error vs SAPT0</div></div>
 <div class="kpi"><div class="v">10457</div><div class="k">anisotropic Cₙ compared</div></div>
 <div class="kpi"><div class="v">0</div><div class="k">inside rtol 1e-4</div></div>
 </div>
@@ -995,52 +1018,85 @@ inside a D3-comparable total.</p>
 <h3>8.1 Water dimer: controlled property-parity surface</h3>
 <p>A rigid water-dimer surface provides the isolation test: geometries, MBIS permanent
 multipoles, damping parameters and energy kernels are held identical across arms, so every
-difference is attributable to the distributed properties and to nothing else. The SAPT0 curves
-are the external reference for the advanced terms; the ours-versus-ISA-GRID deltas below remain
-the stricter diagnostic for locating property errors.</p>
+difference is attributable to the distributed properties and to nothing else. The black
+SAPT0 curves are the physical reference for every error quoted below.</p>
 
-{fig_pes("r4r2")}
-{fig_pes_delta()}
-<p class="caption">Solid lines are the standard r4r2 damping radius, dashed the coefficient-derived
-one. The grey pair shows what the <em>wrong</em> oracle would have implied — note it inverts the
-sign of the dispersion verdict.</p>
+<div class="grid2">
+{fig_pes_sapt0("induction")}
+{fig_pes_sapt0("dispersion")}
+</div>
+<p class="caption">Induction and dispersion are plotted separately. Blue is our
+re-implementation, green is the partition-matched CamCASP ISA-GRID model, and black is the
+SAPT0/aug-cc-pVDZ component reference. Dispersion is the damped C6+C8+C10 sum.</p>
 
-<table class="tight"><thead><tr><th>at R(O–O) = 2.912 Å</th><th class="n">ours</th>
-<th class="n">ISA-GRID</th><th class="n">Δ</th><th class="n">Δ %</th></tr></thead><tbody>
-<tr><td>induction</td><td class="n">{a4['ours'][di]['ind']:.4f}</td>
-<td class="n">{a4['isa_grid'][di]['ind']:.4f}</td><td class="n">{ind_d:+.4f}</td>
-<td class="n">{100*ind_d/a4['isa_grid'][di]['ind']:.2f}</td></tr>
-<tr><td>dispersion C6+C8, r4r2 radius</td><td class="n">{a4['ours'][di]['d3']:.4f}</td>
-<td class="n">{a4['isa_grid'][di]['d3']:.4f}</td><td class="n">{dsp_d:+.4f}</td>
-<td class="n">{100*dsp_d/a4['isa_grid'][di]['d3']:.2f}</td></tr>
-<tr><td>dispersion C6+C8, √(C8/C6) radius</td><td class="n">{a8['ours'][di]['d3']:.4f}</td>
-<td class="n">{a8['isa_grid'][di]['d3']:.4f}</td><td class="n">{dsp_d8:+.4f}</td>
-<td class="n">{100*dsp_d8/a8['isa_grid'][di]['d3']:.2f}</td></tr>
+<div class="grid2">
+{fig_pes_sapt0_error("induction")}
+{fig_pes_sapt0_error("dispersion")}
+</div>
+<p class="caption">All residuals are force field minus SAPT0; positive means under-binding and
+negative means over-binding.</p>
+
+<table class="tight"><thead><tr><th>at R(O–O) = 2.912 Å</th><th class="n">SAPT0</th>
+<th class="n">ours</th><th class="n">ours − SAPT0</th><th class="n">ours %</th>
+<th class="n">CamCASP</th><th class="n">CamCASP − SAPT0</th><th class="n">CamCASP %</th>
+</tr></thead><tbody>
+<tr><td>induction</td><td class="n">{sapt_eq['ind_kcal_mol']:.4f}</td>
+<td class="n">{a4['ours'][di]['ind']:.4f}</td><td class="n">{ind_d:+.4f}</td>
+<td class="n">{100*ind_d/abs(sapt_eq['ind_kcal_mol']):+.1f}</td>
+<td class="n">{a4['isa_grid'][di]['ind']:.4f}</td><td class="n">{cam_ind_d:+.4f}</td>
+<td class="n">{100*cam_ind_d/abs(sapt_eq['ind_kcal_mol']):+.1f}</td></tr>
+<tr><td>dispersion C6</td><td class="n">{sapt_eq['disp_kcal_mol']:.4f}</td>
+<td class="n">{a4['ours'][di]['c6']:.4f}</td>
+<td class="n">{a4['ours'][di]['c6']-sapt_eq['disp_kcal_mol']:+.4f}</td>
+<td class="n">{100*(a4['ours'][di]['c6']-sapt_eq['disp_kcal_mol'])/abs(sapt_eq['disp_kcal_mol']):+.1f}</td>
+<td class="n">{a4['isa_grid'][di]['c6']:.4f}</td>
+<td class="n">{a4['isa_grid'][di]['c6']-sapt_eq['disp_kcal_mol']:+.4f}</td>
+<td class="n">{100*(a4['isa_grid'][di]['c6']-sapt_eq['disp_kcal_mol'])/abs(sapt_eq['disp_kcal_mol']):+.1f}</td></tr>
+<tr><td>dispersion C6+C8</td><td class="n">{sapt_eq['disp_kcal_mol']:.4f}</td>
+<td class="n">{a4['ours'][di]['c6']+a4['ours'][di]['c8']:.4f}</td>
+<td class="n">{a4['ours'][di]['c6']+a4['ours'][di]['c8']-sapt_eq['disp_kcal_mol']:+.4f}</td>
+<td class="n">{100*(a4['ours'][di]['c6']+a4['ours'][di]['c8']-sapt_eq['disp_kcal_mol'])/abs(sapt_eq['disp_kcal_mol']):+.1f}</td>
+<td class="n">{a4['isa_grid'][di]['c6']+a4['isa_grid'][di]['c8']:.4f}</td>
+<td class="n">{a4['isa_grid'][di]['c6']+a4['isa_grid'][di]['c8']-sapt_eq['disp_kcal_mol']:+.4f}</td>
+<td class="n">{100*(a4['isa_grid'][di]['c6']+a4['isa_grid'][di]['c8']-sapt_eq['disp_kcal_mol'])/abs(sapt_eq['disp_kcal_mol']):+.1f}</td></tr>
+<tr><td>dispersion C6+C8+C10</td><td class="n">{sapt_eq['disp_kcal_mol']:.4f}</td>
+<td class="n">{full_disp(a4['ours'][di]):.4f}</td><td class="n">{dsp_d:+.4f}</td>
+<td class="n">{100*dsp_d/abs(sapt_eq['disp_kcal_mol']):+.1f}</td>
+<td class="n">{full_disp(a4['isa_grid'][di]):.4f}</td><td class="n">{cam_dsp_d:+.4f}</td>
+<td class="n">{100*cam_dsp_d/abs(sapt_eq['disp_kcal_mol']):+.1f}</td></tr>
+</tbody></table>
+
+<table class="tight"><thead><tr><th>MAE over R = 2.8–4.0 Å</th>
+<th class="n">ours</th><th class="n">CamCASP ISA-GRID</th></tr></thead><tbody>
+<tr><td>induction</td><td class="n">{mae('ours','ind'):.4f}</td>
+<td class="n">{mae('isa_grid','ind'):.4f}</td></tr>
+<tr><td>dispersion C6</td><td class="n">{mae('ours','c6'):.4f}</td>
+<td class="n">{mae('isa_grid','c6'):.4f}</td></tr>
+<tr><td>dispersion C6+C8</td><td class="n">{mae('ours','c6+c8'):.4f}</td>
+<td class="n">{mae('isa_grid','c6+c8'):.4f}</td></tr>
+<tr><td>dispersion C6+C8+C10</td><td class="n">{mae('ours','c6+c8+c10'):.4f}</td>
+<td class="n">{mae('isa_grid','c6+c8+c10'):.4f}</td></tr>
 </tbody></table>
 
 <div class="warnbox">
-<p><strong>Dispersion is the problem; induction is not.</strong> The 2.9 % rank-1 polarizability
-deficit costs {abs(100*ind_d/a4['isa_grid'][di]['ind']):.1f} % of the induction energy and is
-nearly flat in R, as a linear property should be. Dispersion is
-{abs(100*dsp_d/a4['isa_grid'][di]['d3']):.0f} % out and strongly R-dependent.</p>
-<p><strong>But most of that is a damping artifact.</strong> Switching to Becke and Johnson's
-original √(C8/C6) radius drops it to {abs(100*dsp_d8/a8['isa_grid'][di]['d3']):.1f} %, because
-our smaller C8/C6 ratio damps less and partly cancels the coefficient deficit. So the rank
-deficit is largely absorbable by refitting damping — but <em>not</em> by dropping our
-coefficients into an existing r4r2-parametrised D3.</p>
+<p><strong>The SAPT0 verdict differs from the property-parity verdict.</strong> At equilibrium,
+our induction under-binds SAPT0 by {ind_d:.3f} kcal/mol
+({100*ind_d/abs(sapt_eq['ind_kcal_mol']):.1f} %), while CamCASP under-binds by
+{cam_ind_d:.3f} kcal/mol. For dispersion, C6 alone under-binds; adding C8 crosses the SAPT0
+reference and gives the smallest near-region MAE for our coefficients; adding C10 makes both
+models substantially too attractive. C10 therefore exposes a damping/convergence failure here,
+not an accuracy improvement.</p>
 </div>
 
-{fig_pes_orders()}
-<p class="caption">By order. The C8 error is roughly four times the C6 error in kcal/mol, which
-is the energetic restatement of the rank-2/3 deficit. Note also that C10 alone rivals C6 at the
-minimum — the pairwise expansion is barely converging there under a single order-independent
-damping radius, so C10 is reported separately and excluded from any D3-comparable total.</p>
-
-{fig_anisotropy()}
-<p class="caption">Anisotropy is worth {abs(aniso):.3f} kcal/mol at the minimum,
-{abs(100*aniso/a4['ours'][di]['ind']):.0f} % of the induction energy, and ours reproduces the
-oracle's anisotropy to 4 %. Every isotropic-α consumer discards this — which includes every
-induction model in the reference force-field codebase.</p>
+<div class="note">
+<p><strong>Advanced-term diagnostics.</strong> The equilibrium and MAE tables above quantify C6,
+C6+C8 and C6+C8+C10 against the same SAPT0 dispersion target; SAPT0 does not provide a Cn-order
+decomposition. The induction curves use the full distributed polarizability tensor. Its
+anisotropic contribution is {abs(aniso):.3f} kcal/mol at equilibrium
+({abs(100*aniso/a4['ours'][di]['ind']):.0f} % of our induction energy), but its accuracy is
+judged only through the full induction residual against SAPT0, not through a separate SAPT
+anisotropy component that does not exist.</p>
+</div>
 
 <h3>8.2 External PES benchmark set</h3>
 <table><thead><tr><th>system</th><th>rigid scan</th><th>why it is included</th>

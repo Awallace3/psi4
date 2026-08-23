@@ -34,7 +34,14 @@ for mode in ("r4r2", "c8c6"):
         per_arm[key] = rows
     OUT["pes"]["modes"][mode] = per_arm
 OUT["pes"]["labels"] = {k: v["label"] for k, v in arms.items()}
-print("pes done")
+sapt_path = Path(__file__).resolve().parent / "sapt0-water.tsv"
+sapt_lines = [line for line in sapt_path.read_text().splitlines() if not line.startswith("#")]
+sapt_header = sapt_lines[0].split("\t")
+sapt_rows = [dict(zip(sapt_header, map(float, line.split("\t")))) for line in sapt_lines[1:]]
+OUT["sapt0_water"] = {"method": "SAPT0/aug-cc-pVDZ", "rows": sapt_rows}
+if [row["distance"] for row in sapt_rows] != distances:
+    raise RuntimeError("SAPT0 water grid does not match the force-field PES grid")
+print("pes + SAPT0 reference done")
 
 # ------------------------------------------------- rank-resolved polarizability
 ours_l3 = np.asarray(json.load(open("ours_full.json"))["ATOMIC ANISOTROPIC POLARIZABILITIES"]).reshape(3, 15, 15)
