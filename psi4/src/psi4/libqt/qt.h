@@ -212,6 +212,9 @@ PSI_API
 int C_DGESDD(char jobz, int m, int n, double* a, int lda, double* s, double* u, int ldu, double* vt, int ldvt,
              double* work, int lwork, int* iwork);
 PSI_API
+int C_DGESVD(char jobu, char jobvt, int m, int n, double* a, int lda, double* s, double* u, int ldu,
+             double* vt, int ldvt, double* work, int lwork);
+PSI_API
 int C_DGESV(int n, int nrhs, double* a, int lda, int* ipiv, double* b, int ldb);
 int C_DGESVX(char fact, char trans, int n, int nrhs, double* a, int lda, double* af, int ldaf, int* ipiv, char equed,
              double* r, double* c, double* b, int ldb, double* x, int ldx, double* rcond, double* ferr, double* berr,

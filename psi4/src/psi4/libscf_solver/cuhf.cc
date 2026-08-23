@@ -141,6 +141,7 @@ void CUHF::save_density_and_energy() {
     Da_old_->copy(Dt_);
     Db_old_->copy(Dt_);
     Dt_old_->copy(Dt_);
+    begin_response_iteration();
 }
 
 void CUHF::form_G() {
@@ -328,33 +329,39 @@ void CUHF::form_C(double shift) {
 }
 
 void CUHF::form_D() {
-    Da_->zero();
-    Db_->zero();
+    record_response_iteration_state();
+    try {
+        Da_->zero();
+        Db_->zero();
 
-    for (int h = 0; h < nirrep_; ++h) {
-        int nso = nsopi_[h];
-        int nmo = nmopi_[h];
-        int na = nalphapi_[h];
-        int nb = nbetapi_[h];
+        for (int h = 0; h < nirrep_; ++h) {
+            int nso = nsopi_[h];
+            int nmo = nmopi_[h];
+            int na = nalphapi_[h];
+            int nb = nbetapi_[h];
 
-        if (nso == 0 || nmo == 0) continue;
+            if (nso == 0 || nmo == 0) continue;
 
-        double** Ca = Ca_->pointer(h);
-        double** Cb = Cb_->pointer(h);
-        double** Da = Da_->pointer(h);
-        double** Db = Db_->pointer(h);
+            double** Ca = Ca_->pointer(h);
+            double** Cb = Cb_->pointer(h);
+            double** Da = Da_->pointer(h);
+            double** Db = Db_->pointer(h);
 
-        C_DGEMM('N', 'T', nso, nso, na, 1.0, Ca[0], nmo, Ca[0], nmo, 0.0, Da[0], nso);
-        C_DGEMM('N', 'T', nso, nso, nb, 1.0, Cb[0], nmo, Cb[0], nmo, 0.0, Db[0], nso);
-    }
+            C_DGEMM('N', 'T', nso, nso, na, 1.0, Ca[0], nmo, Ca[0], nmo, 0.0, Da[0], nso);
+            C_DGEMM('N', 'T', nso, nso, nb, 1.0, Cb[0], nmo, Cb[0], nmo, 0.0, Db[0], nso);
+        }
 
-    Dt_->copy(Da_);
-    Dt_->add(Db_);
+        Dt_->copy(Da_);
+        Dt_->add(Db_);
 
-    if (debug_) {
-        outfile->Printf("in CUHF::form_D:\n");
-        Da_->print();
-        Db_->print();
+        if (debug_) {
+            outfile->Printf("in CUHF::form_D:\n");
+            Da_->print();
+            Db_->print();
+        }
+    } catch (...) {
+        mark_response_compute_failed();
+        throw;
     }
 }
 

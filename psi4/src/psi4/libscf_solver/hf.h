@@ -29,6 +29,10 @@
 #ifndef HF_H
 #define HF_H
 
+#include <cstddef>
+#include <map>
+#include <memory>
+#include <string>
 #include <vector>
 #include <functional>
 #include "psi4/libmints/wavefunction.h"
@@ -46,9 +50,92 @@ class PCM;
 class SuperFunctional;
 class VBase;
 class BasisSet;
+struct BasisSetStructuralSnapshot;
 class DIISManager;
 class PSIO;
 namespace scf {
+
+struct PSI_API ResponseFunctionalComponentState {
+    int libxc_id{-1};
+    std::string libxc_canonical_name;
+    std::map<std::string, double> effective_parameters;
+    double alpha{};
+    double omega{};
+    double lsda_cutoff{};
+    double meta_cutoff{};
+    double density_cutoff{};
+    bool gga{};
+    bool meta{};
+    bool lrc{};
+    bool unpolarized{};
+
+    bool operator==(const ResponseFunctionalComponentState& other) const;
+};
+
+struct PSI_API ResponseFunctionalState {
+    std::string name;
+    std::vector<ResponseFunctionalComponentState> x_components;
+    std::vector<ResponseFunctionalComponentState> c_components;
+    ResponseFunctionalComponentState grac_x;
+    ResponseFunctionalComponentState grac_c;
+    double x_alpha{};
+    double x_beta{};
+    double x_omega{};
+    double c_alpha{};
+    double c_ss_alpha{};
+    double c_os_alpha{};
+    double c_omega{};
+    double vv10_b{};
+    double vv10_c{};
+    double vv10_beta{};
+    double density_tolerance{};
+    double grac_shift{};
+    double grac_alpha{};
+    double grac_beta{};
+    int max_points{};
+    int deriv{};
+    bool needs_vv10{};
+    bool needs_grac{};
+    bool libxc_functional{};
+    bool gga{};
+    bool meta{};
+    bool unpolarized{};
+
+    bool same_ground_state(const ResponseFunctionalState& other) const;
+};
+
+struct PSI_API ResponseGridBlockState {
+    std::size_t offset{};
+    std::size_t point_count{};
+    std::vector<int> functions_local_to_global;
+};
+
+struct PSI_API ResponseSCFProvenance {
+    ResponseFunctionalState functional;
+    std::vector<ResponseFunctionalState> functional_workers;
+    std::shared_ptr<const SuperFunctional> sealed_functional;
+    std::shared_ptr<const BasisSetStructuralSnapshot> basis;
+    std::shared_ptr<const Molecule> sealed_molecule;
+    std::shared_ptr<const Matrix> Ca;
+    std::shared_ptr<const Matrix> Cb;
+    std::shared_ptr<const Vector> epsilon_a;
+    std::shared_ptr<const Vector> epsilon_b;
+    std::shared_ptr<const Vector> occupation_a;
+    std::shared_ptr<const Vector> occupation_b;
+    std::shared_ptr<const Matrix> Da;
+    std::shared_ptr<const Matrix> Db;
+    std::vector<double> grid_points;
+    std::vector<double> grid_weights;
+    std::vector<ResponseGridBlockState> grid_blocks;
+    bool potential_grac_initialized{};
+    double energy{};
+    double occupied_homo{};
+    int charge{};
+    int multiplicity{};
+    int nalpha{};
+    int nbeta{};
+    std::string reference;
+};
 
 class HF : public Wavefunction {
    protected:
@@ -93,8 +180,31 @@ class HF : public Wavefunction {
     /// Current Iteration
     int iteration_;
 
-    /// Did the SCF converge?
+    /// Legacy native SCF convergence bookkeeping (not response provenance).
     bool converged_;
+
+    /// C++-verified convergence/finalization facts and their frozen response record.
+    bool response_state_sealed_;
+    bool response_iteration_metrics_valid_;
+    bool response_finalize_completed_;
+    bool response_compute_failed_;
+    bool response_last_iteration_final_grid_;
+    double response_e_convergence_;
+    double response_d_convergence_;
+    double response_previous_iteration_energy_;
+    double response_last_energy_change_;
+    double response_last_density_norm_;
+    std::size_t response_native_iteration_id_;
+    std::size_t response_last_observed_iteration_id_;
+    std::size_t response_distinct_iterations_observed_;
+    std::shared_ptr<const ResponseSCFProvenance> response_provenance_;
+
+    void reset_response_provenance_tracking();
+    void mark_response_compute_failed();
+    void begin_response_iteration();
+    void record_response_iteration_state();
+    bool capture_response_provenance_if_converged();
+    std::shared_ptr<const ResponseSCFProvenance> capture_response_provenance() const;
 
     /// Nuclear repulsion energy
     double nuclearrep_;
@@ -305,6 +415,10 @@ class HF : public Wavefunction {
 
     /// The DFT Functional object (or null if it has been deleted)
     std::shared_ptr<SuperFunctional> functional() const { return functional_; }
+    /// Narrow const access used only while freezing a verified response context.
+    std::shared_ptr<const SuperFunctional> response_functional() const { return functional_; }
+    bool response_state_sealed() const { return response_state_sealed_; }
+    const std::shared_ptr<const ResponseSCFProvenance>& response_provenance() const { return response_provenance_; }
 
     /// The DFT Potential object (or null if it has been deleted)
     /// This needs to be virtual so that subclasses can enforce their

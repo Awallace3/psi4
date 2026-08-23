@@ -38,6 +38,7 @@
 #include "psi4/libciomr/libciomr.h"
 #include "psi4/libqt/qt.h"
 #include "psi4/libmints/oeprop.h"
+#include "psi4/libmints/atomic_polarizability.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/onebody.h"
@@ -800,6 +801,9 @@ void OEProp::compute() {
         outfile->Printf("\nProperties computed using the %s density matrix\n\n", title_.c_str());
     }
 
+    // Atomic polarizabilities fail closed before any other task can publish output.
+    if (tasks_.count("ATOMIC_POLARIZABILITIES")) compute_atomic_polarizabilities();
+
     // Search for multipole strings, which are handled separately
     std::set<std::string>::const_iterator iter = tasks_.begin();
     std::regex mpoles("^MULTIPOLE(?:S)?\\s*\\((\\d+)\\)$");
@@ -829,6 +833,19 @@ void OEProp::compute() {
     if (tasks_.count("NO_OCCUPATIONS")) compute_no_occupations();
     if (tasks_.count("GRID_FIELD")) compute_field_over_grid();
     if (tasks_.count("GRID_ESP")) compute_esp_over_grid();
+}
+
+void OEProp::compute_atomic_polarizabilities() {
+    // A bare OEProp call has no SCF triple, so the single-wavefunction constructor is used
+    // and the calculator fails closed before allocating any output.
+    if (!atomic_polarizability_precursor_ || !atomic_polarizability_cation_) {
+        AtomicPolarizabilityCalculator calculator(wfn_);
+        calculator.compute();
+        return;
+    }
+    AtomicPolarizabilityCalculator calculator(wfn_, atomic_polarizability_precursor_,
+                                              atomic_polarizability_cation_);
+    calculator.compute();
 }
 
 void OEProp::compute_multipoles(int order, bool transition) {

@@ -197,7 +197,7 @@ class PSI_API Molecule {
     Molecule(const Molecule& other);
     virtual ~Molecule();
 
-    Molecule clone() {
+    Molecule clone() const {
         Molecule new_obj(*this);
         return new_obj;
     }

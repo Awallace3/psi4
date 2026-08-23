@@ -156,7 +156,7 @@ std::shared_ptr<SuperFunctional> SuperFunctional::build_polarized() {
 
     return sup;
 }
-std::shared_ptr<SuperFunctional> SuperFunctional::build_worker() {
+std::shared_ptr<SuperFunctional> SuperFunctional::build_worker() const {
     // Build the superfunctional
     auto sup = std::make_shared<SuperFunctional>();
 
@@ -172,6 +172,9 @@ std::shared_ptr<SuperFunctional> SuperFunctional::build_worker() {
     sup->deriv_ = deriv_;
     sup->max_points_ = max_points_;
     sup->libxc_xc_func_ = libxc_xc_func_;
+    // Frozen response provenance requires the effective positive master cutoff
+    // to survive every worker/copy boundary, including component thresholds.
+    sup->set_density_tolerance(density_tolerance_);
     if (needs_vv10_) {
         sup->needs_vv10_ = true;
         sup->vv10_b_ = vv10_b_;
@@ -187,6 +190,22 @@ std::shared_ptr<SuperFunctional> SuperFunctional::build_worker() {
     }
     sup->allocate();
 
+    return sup;
+}
+std::shared_ptr<SuperFunctional> SuperFunctional::build_response_copy() const {
+    auto sup = build_worker();
+    sup->name_ = name_;
+    sup->description_ = description_;
+    sup->citation_ = citation_;
+    sup->xclib_description_ = xclib_description_;
+    sup->x_omega_ = x_omega_;
+    sup->c_omega_ = c_omega_;
+    sup->x_alpha_ = x_alpha_;
+    sup->x_beta_ = x_beta_;
+    sup->c_alpha_ = c_alpha_;
+    sup->c_ss_alpha_ = c_ss_alpha_;
+    sup->c_os_alpha_ = c_os_alpha_;
+    sup->set_density_tolerance(density_tolerance_);
     return sup;
 }
 void SuperFunctional::print(std::string out, int level) const {

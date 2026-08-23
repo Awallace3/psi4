@@ -360,6 +360,22 @@ class SphericalGrid {
     void print(std::string out_fname = "outfile", int level = 1) const;
 };
 
+/**
+ * Nodes and 4pi-normalized weights of one statically stored Lebedev grid on the
+ * unit sphere. This is a read-only accessor for the grid tables that
+ * MolecularGrid already uses; it throws if npoints is not a supported Lebedev
+ * size, so callers never silently fall back to a different angular order. Each
+ * grid is a union of complete octahedral orbits, so the returned node set is
+ * invariant under the full O_h matrix group.
+ */
+std::vector<MassPoint> PSI_API lebedev_spherical_grid(int npoints);
+
+/** Supported Lebedev sizes, ascending, for diagnostics and error messages. */
+std::vector<int> PSI_API lebedev_spherical_grid_sizes();
+
+/** Harmonic order of one supported Lebedev size; throws for unsupported sizes. */
+int PSI_API lebedev_spherical_grid_order(int npoints);
+
 class BlockOPoints {
    protected:
     /// number of points in this block

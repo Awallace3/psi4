@@ -116,6 +116,13 @@ class PSI_API VBase {
     std::shared_ptr<SuperFunctional> functional() const { return functional_; }
     std::vector<std::shared_ptr<PointFunctions>> properties() const { return point_workers_; }
     std::shared_ptr<DFTGrid> grid() const { return grid_; }
+    /// Narrow read-only seams used when freezing actual GRAC response state.
+    bool grac_initialized() const { return grac_initialized_; }
+    std::shared_ptr<const DFTGrid> response_grid() const { return grid_; }
+    std::vector<std::shared_ptr<const SuperFunctional>> response_functional_workers() const {
+        return std::vector<std::shared_ptr<const SuperFunctional>>(functional_workers_.begin(),
+                                                                    functional_workers_.end());
+    }
     std::shared_ptr<BlockOPoints> get_block(int block);
     size_t nblocks();
     std::map<std::string, double>& quadrature_values() { return quad_values_; }

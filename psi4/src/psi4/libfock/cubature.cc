@@ -165,6 +165,8 @@ class LebedevGridMgr {
     static int findNPointsByOrder_roundUp(int order);
 
     static void PrintHelp();
+    // Supported (npoints, order) pairs in ascending order.
+    static std::vector<std::pair<int, int>> listGrids();
     static const int MaxOrder = 131;
 
    private:
@@ -321,6 +323,43 @@ void LebedevGridMgr::PrintHelp() {
     for (int i = 0; grids_[i].mkGridFn != nullptr; i++)
         outfile->Printf("\t%11d %11d\n", grids_[i].npoints, grids_[i].order);
     outfile->Printf("\n");
+}
+
+std::vector<std::pair<int, int>> LebedevGridMgr::listGrids() {
+    std::vector<std::pair<int, int>> entries;
+    for (int i = 0; grids_[i].mkGridFn != nullptr; i++)
+        entries.emplace_back(grids_[i].npoints, grids_[i].order);
+    return entries;
+}
+
+std::vector<int> lebedev_spherical_grid_sizes() {
+    std::vector<int> sizes;
+    for (const auto &entry : LebedevGridMgr::listGrids()) sizes.push_back(entry.first);
+    return sizes;
+}
+
+// Gating on findOrderByNPoints excludes the nonstandard 18-point SG-1 grid,
+// which findGridByNPoints would otherwise return.
+int lebedev_spherical_grid_order(int npoints) {
+    const int order = LebedevGridMgr::findOrderByNPoints(npoints);
+    if (order < 0) {
+        std::string supported;
+        for (const int size : lebedev_spherical_grid_sizes())
+            supported += (supported.empty() ? "" : ", ") + std::to_string(size);
+        throw PSIEXCEPTION("Lebedev grid: " + std::to_string(npoints) +
+                           " is not a supported Lebedev point count; supported sizes are " +
+                           supported);
+    }
+    return order;
+}
+
+std::vector<MassPoint> lebedev_spherical_grid(int npoints) {
+    lebedev_spherical_grid_order(npoints);
+    const MassPoint *grid = LebedevGridMgr::findGridByNPoints(npoints);
+    if (grid == nullptr)
+        throw PSIEXCEPTION("Lebedev grid: supported size " + std::to_string(npoints) +
+                           " has no initialized node table");
+    return std::vector<MassPoint>(grid, grid + npoints);
 }
 
 inline MassPoint LebedevGridMgr::MASSPOINT(double x, double y, double z, double w) {

@@ -97,6 +97,11 @@ build*
 debug
 debug_latest
 *.sh
+# Tracked CamCASP reference generator; external dependencies and outputs stay local.
+!/devtools/regenerate-camcasp.sh
+/.camcasp-reference/
+/orient/
+/camcasp-bin/
 TEST
 */test.py
 */test.dat
@@ -164,3 +169,7 @@ pytest_output.log
 AGENTS.md
 profile.txt
 fsapt
+tests/pytests/test_saptdft.log
+
+# Development-only PES driver outputs (see water-pes-aim.py header)
+/water-pes-aim.work/

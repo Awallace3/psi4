@@ -69,11 +69,11 @@ TwoBodyAOInt::TwoBodyAOInt(const IntegralFactory *intsfactory, int deriv)
     braket_same_ = (original_bs1_ == original_bs3_ && original_bs2_ == original_bs4_);
 
     // Setup sieve data
-    screening_threshold_ = Process::environment.options.get_double("INTS_TOLERANCE");
+    screening_threshold_ = integral_->screening_threshold();
 
     sieve_initialized_ = false;
 
-    auto screentype = Process::environment.options.get_str("SCREENING");
+    auto screentype = integral_->screening_type();
     if (screentype == "SCHWARZ")
         screening_type_ = ScreeningType::Schwarz;
     else if (screentype == "CSAM")

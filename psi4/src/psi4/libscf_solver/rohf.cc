@@ -287,6 +287,7 @@ void ROHF::save_density_and_energy() {
     Da_old_->copy(Da_);
     Db_old_->copy(Db_);
     Dt_old_->copy(Dt_);
+    begin_response_iteration();
 }
 
 void ROHF::form_initial_F() {
@@ -449,32 +450,38 @@ void ROHF::form_initial_C() {
 }
 
 void ROHF::form_D() {
-    Da_->zero();
-    Db_->zero();
+    record_response_iteration_state();
+    try {
+        Da_->zero();
+        Db_->zero();
 
-    for (int h = 0; h < nirrep_; ++h) {
-        int nso = nsopi_[h];
-        int nmo = nmopi_[h];
-        int na = nalphapi_[h];
-        int nb = nbetapi_[h];
+        for (int h = 0; h < nirrep_; ++h) {
+            int nso = nsopi_[h];
+            int nmo = nmopi_[h];
+            int na = nalphapi_[h];
+            int nb = nbetapi_[h];
 
-        if (nso == 0 || nmo == 0) continue;
+            if (nso == 0 || nmo == 0) continue;
 
-        auto Ca = Ca_->pointer(h);
-        auto Da = Da_->pointer(h);
-        auto Db = Db_->pointer(h);
+            auto Ca = Ca_->pointer(h);
+            auto Da = Da_->pointer(h);
+            auto Db = Db_->pointer(h);
 
-        C_DGEMM('N', 'T', nso, nso, na, 1.0, Ca[0], nmo, Ca[0], nmo, 0.0, Da[0], nso);
-        C_DGEMM('N', 'T', nso, nso, nb, 1.0, Ca[0], nmo, Ca[0], nmo, 0.0, Db[0], nso);
-    }
+            C_DGEMM('N', 'T', nso, nso, na, 1.0, Ca[0], nmo, Ca[0], nmo, 0.0, Da[0], nso);
+            C_DGEMM('N', 'T', nso, nso, nb, 1.0, Ca[0], nmo, Ca[0], nmo, 0.0, Db[0], nso);
+        }
 
-    Dt_->copy(Da_);
-    Dt_->add(Db_);
+        Dt_->copy(Da_);
+        Dt_->add(Db_);
 
-    if (debug_) {
-        outfile->Printf("in ROHF::form_D:\n");
-        Da_->print();
-        Db_->print();
+        if (debug_) {
+            outfile->Printf("in ROHF::form_D:\n");
+            Da_->print();
+            Db_->print();
+        }
+    } catch (...) {
+        mark_response_compute_failed();
+        throw;
     }
 }
 

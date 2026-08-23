@@ -159,6 +159,86 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     describing the origin about which one-electron properties are computed. -*/
     options.add("PROPERTIES_ORIGIN", new ArrayType());
 
+    /*- Number of nonzero imaginary frequencies in the native atomic-polarizability pipeline. -*/
+    options.add_int("ATOMIC_POLARIZABILITY_N_FREQUENCIES", 10);
+    /*- Scale in atomic units for the native atomic-polarizability frequency grid. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_FREQUENCY_SCALE", 0.5);
+
+    /*- Lebedev nodes placed on each atom in each fit-point shell of the native
+    atomic-polarizability WSM refinement (A :ref:`Lebedev Points <table:lebedevorder>` number) -*/
+    options.add_int("ATOMIC_POLARIZABILITY_FIT_SPHERICAL_POINTS", 50);
+    /*- Number of nested fit-point shells spanning the inner and outer shell limits. -*/
+    options.add_int("ATOMIC_POLARIZABILITY_FIT_RADIAL_SHELLS", 5);
+    /*- Innermost fit-point shell limit. Fit points must lie *outside* the molecular
+    charge density, because a rank-3 distributed multipole model cannot represent the
+    point-to-point response where the point penetrates the density: measured on
+    H2O/aug-cc-pVDZ, a conserving LW-localized model overpredicts the ab initio
+    point response by a factor of 5.6 at 2.0 bohr from a nucleus and matches it to
+    1.3 percent at 4.0 bohr and 0.4 percent beyond 6 bohr. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_FIT_INNER_LIMIT", 4.5);
+    /*- Outermost fit-point shell limit. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_FIT_OUTER_LIMIT", 11.5);
+    /*- Convention for the fit-point shell limits: absolute bohr distances from the
+    nearest nucleus, or multiples of that nucleus' Bondi van der Waals radius. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_FIT_RADIAL_UNITS", "BOHR", "BOHR VDW");
+    /*- Largest fit-point count accepted by WSM refinement. -*/
+    options.add_int("ATOMIC_POLARIZABILITY_FIT_MAX_POINTS", 500);
+
+    /*- Which definition distributes the frequency-dependent density susceptibility over
+    sites in the native atomic-polarizability pipeline. ``ISA`` is the real-space iterated
+    stockholder partition on the sealed response grid. ``CDF`` is constrained density
+    fitting onto an atom-centred auxiliary basis, which is a different definition of the
+    per-site split rather than a more accurate evaluation of the same one: the two agree
+    on the molecular total and disagree on how it is divided. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_PARTITION", "ISA", "ISA CDF");
+    /*- Auxiliary basis for ``ATOMIC_POLARIZABILITY_PARTITION CDF``. It is built with
+    Cartesian functions, which is not incidental: a Cartesian shell of degree L carries
+    every rank L, L-2, ... down to 0 or 1, so its d and g components carry charge and its
+    f components carry a dipole, and the spherical form of the same shell list is a
+    different auxiliary space with a different partition. -*/
+    options.add_str_i("ATOMIC_POLARIZABILITY_CDF_AUX_BASIS", "AUG-CC-PVTZ-RI");
+    /*- Localisation quadratic form added to the auxiliary Coulomb metric before the fit.
+    ``INTER-SITE`` subtracts the weighted inter-site repulsion of the fitted density,
+    ``SITE`` adds the weighted site self-repulsion, and ``NONE`` fits the bare Coulomb
+    metric. Without one of the first two the fit has no preference for putting density
+    weight on its own centre and the resulting per-site split is not localized. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_CDF_LOCALISATION", "INTER-SITE", "INTER-SITE SITE NONE");
+    /*- Weight of the ``ATOMIC_POLARIZABILITY_CDF_LOCALISATION`` form. Signed: the
+    published prose and equation for the inter-site form disagree about which sign
+    localizes, so the sign is a data choice here and whichever is used is reported. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_CDF_LOCALISATION_WEIGHT", 5.0e-4);
+    /*- Quadratic penalty weight on the fitted charge of each transition density. This is
+    a finite penalty, not a Lagrange multiplier: the fitted densities are expected to
+    violate the charge condition by a small nonzero amount, and the reviewed reference
+    calculation's own record of that violation is about 1e-2. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_CDF_CHARGE_PENALTY", 1.0);
+
+    /*- Radial nodes per atom in the native ISA partition quadrature. The wiring
+    specification's measured grid table puts the ``1e-4`` parity gate at or above
+    60/18/24 with a 302/50 DFT grid; the defaults here are the tighter 100/18/24. -*/
+    options.add_int("ATOMIC_POLARIZABILITY_ISA_RADIAL_POINTS", 100);
+    /*- Polar angular nodes per atom in the native ISA partition quadrature. -*/
+    options.add_int("ATOMIC_POLARIZABILITY_ISA_ANGULAR_POLAR_POINTS", 18);
+    /*- Azimuthal angular nodes per atom in the native ISA partition quadrature. -*/
+    options.add_int("ATOMIC_POLARIZABILITY_ISA_ANGULAR_AZIMUTHAL_POINTS", 24);
+    /*- Largest number of native ISA fixed-point iterations. -*/
+    options.add_int("ATOMIC_POLARIZABILITY_ISA_MAX_ITERATIONS", 120);
+    /*- Native ISA fixed-point convergence threshold. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_ISA_CONVERGENCE", 1.0e-9);
+
+    /*- Largest LW-localization residual accepted before the native atomic-polarizability
+    pipeline fails closed. This is a physical convergence gate on the response grid, not a
+    comparison tolerance: the wiring specification measures ``1e-6`` for a 302/50 DFT grid
+    with ISA 60/18/24 and ``1e-8`` for 590/99 with ISA 100/24/32. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_LOCALIZATION_TOLERANCE", 1.0e-6);
+    /*- Largest WSM design-matrix condition number accepted before the native
+    atomic-polarizability pipeline fails closed. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_MAX_CONDITION_NUMBER", 1.0e12);
+    /*- Covalent-bonding scale factor used to derive the LW bond graph from the geometry.
+    Sites bond when separated by at most this factor times the sum of their Bragg-Slater
+    radii; the graph must be connected. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_COVALENT_SCALE", 1.3);
+
     /*- Psi4 dies if energy does not converge. !expert -*/
     options.add_bool("DIE_IF_NOT_CONVERGED", true);
     /*- Integral package to use. If compiled with Simint support, change this option to use them; LibInt2 is used

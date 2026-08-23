@@ -54,11 +54,7 @@ from ..solvent.efp import get_qm_atoms_opts, modify_Fock_induced, modify_Fock_pe
 
 
 def scf_compute_energy(self):
-    """Base class Wavefunction requires this function. Here it is
-    simply a wrapper around initialize(), iterations(), finalize_energy(). It
-    returns the SCF energy computed by finalize_energy().
-
-    """
+    """Initialize, iterate, and finalize an SCF calculation."""
     if core.get_option('SCF', 'DF_SCF_GUESS') and (core.get_global_option('SCF_TYPE') == 'DIRECT'):
         # speed up DIRECT algorithm (recomputes full (non-DF) integrals
         #   each iter) by first converging via fast DF iterations, then
@@ -87,17 +83,13 @@ def scf_compute_energy(self):
     except SCFConvergenceError as e:
         if core.get_option("SCF", "FAIL_ON_MAXITER"):
             core.print_out("  Failed to converge.\n")
-            # energy = 0.0
-            # A P::e fn to either throw or protest upon nonconvergence
-            # die_if_not_converged()
             raise e
         else:
             core.print_out("  Energy and/or wave function did not converge, but proceeding anyway.\n\n")
     else:
         core.print_out("  Energy and wave function converged.\n\n")
 
-    scf_energy = self.finalize_energy()
-    return scf_energy
+    return self.finalize_energy()
 
 
 def _build_jk(wfn, memory):

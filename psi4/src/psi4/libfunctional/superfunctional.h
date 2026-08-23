@@ -165,7 +165,9 @@ class SuperFunctional {
     // breaking eigenvectors of the MO hessian or linear response eigenproblem.
     std::shared_ptr<SuperFunctional> build_polarized();
     // Builds a worker version of the superfunctional
-    std::shared_ptr<SuperFunctional> build_worker();
+    std::shared_ptr<SuperFunctional> build_worker() const;
+    // Complete detached copy used by the single-thread frozen response context.
+    std::shared_ptr<SuperFunctional> build_response_copy() const;
 
     // Allocate values (MUST be called after adding new functionals to the superfunctional)
     void allocate();
@@ -197,8 +199,12 @@ class SuperFunctional {
 
     std::vector<std::shared_ptr<Functional>>& x_functionals() { return x_functionals_; }
     std::vector<std::shared_ptr<Functional>>& c_functionals() { return c_functionals_; }
+    const std::vector<std::shared_ptr<Functional>>& x_functionals() const { return x_functionals_; }
+    const std::vector<std::shared_ptr<Functional>>& c_functionals() const { return c_functionals_; }
     std::shared_ptr<Functional> grac_x_functional() { return grac_x_functional_; }
     std::shared_ptr<Functional> grac_c_functional() { return grac_c_functional_; }
+    std::shared_ptr<const Functional> grac_x_functional() const { return grac_x_functional_; }
+    std::shared_ptr<const Functional> grac_c_functional() const { return grac_c_functional_; }
 
     std::shared_ptr<Functional> x_functional(const std::string& name);
     std::shared_ptr<Functional> c_functional(const std::string& name);
@@ -258,6 +264,7 @@ class SuperFunctional {
     double c_os_alpha() const { return c_os_alpha_; }
     double vv10_b() const { return vv10_b_; }
     double vv10_c() const { return vv10_c_; }
+    double vv10_beta() const { return vv10_beta_; }
     double grac_shift() const { return grac_shift_; }
     double grac_alpha() const { return grac_alpha_; }
     double grac_beta() const { return grac_beta_; }

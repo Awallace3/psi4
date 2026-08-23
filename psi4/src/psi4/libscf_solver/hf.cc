@@ -27,11 +27,13 @@
  */
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <functional>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -48,8 +50,11 @@
 #include "psi4/libpsio/psio.h"
 #include "psi4/libiwl/iwl.hpp"
 #include "psi4/libqt/qt.h"
+#include "psi4/libfock/cubature.h"
 #include "psi4/libfock/jk.h"
 #include "psi4/libfock/v.h"
+#include "psi4/libfunctional/functional.h"
+#include "psi4/libfunctional/LibXCfunctional.h"
 #include "psi4/libfunctional/superfunctional.h"
 
 #include "psi4/libpsi4util/libpsi4util.h"
@@ -86,6 +91,103 @@ extern bool brianEnable;
 namespace psi {
 namespace scf {
 
+bool ResponseFunctionalComponentState::operator==(const ResponseFunctionalComponentState& other) const {
+    return libxc_id == other.libxc_id && libxc_canonical_name == other.libxc_canonical_name &&
+           effective_parameters == other.effective_parameters && alpha == other.alpha && omega == other.omega &&
+           lsda_cutoff == other.lsda_cutoff && meta_cutoff == other.meta_cutoff &&
+           density_cutoff == other.density_cutoff && gga == other.gga && meta == other.meta &&
+           lrc == other.lrc && unpolarized == other.unpolarized;
+}
+
+bool ResponseFunctionalState::same_ground_state(const ResponseFunctionalState& other) const {
+    const auto same_components = [](const auto& left, const auto& right) {
+        if (left.size() != right.size()) return false;
+        for (std::size_t i = 0; i < left.size(); ++i) {
+            const auto& a = left[i];
+            const auto& b = right[i];
+            if (a.libxc_id != b.libxc_id || a.libxc_canonical_name != b.libxc_canonical_name ||
+                a.effective_parameters != b.effective_parameters || a.alpha != b.alpha || a.omega != b.omega ||
+                a.lsda_cutoff != b.lsda_cutoff || a.meta_cutoff != b.meta_cutoff ||
+                a.density_cutoff != b.density_cutoff || a.gga != b.gga || a.meta != b.meta ||
+                a.lrc != b.lrc) return false;
+        }
+        return true;
+    };
+    return same_components(x_components, other.x_components) &&
+           same_components(c_components, other.c_components) &&
+           x_alpha == other.x_alpha && x_beta == other.x_beta && x_omega == other.x_omega &&
+           c_alpha == other.c_alpha && c_ss_alpha == other.c_ss_alpha && c_os_alpha == other.c_os_alpha &&
+           c_omega == other.c_omega && vv10_b == other.vv10_b && vv10_c == other.vv10_c &&
+           vv10_beta == other.vv10_beta && density_tolerance == other.density_tolerance &&
+           max_points == other.max_points && deriv == other.deriv && needs_vv10 == other.needs_vv10 &&
+           libxc_functional == other.libxc_functional && gga == other.gga && meta == other.meta;
+}
+
+namespace {
+ResponseFunctionalComponentState capture_functional_component(const std::shared_ptr<const Functional>& component) {
+    if (!component) throw PSIEXCEPTION("SCF response provenance: functional component is null");
+    ResponseFunctionalComponentState result;
+    if (const auto libxc = std::dynamic_pointer_cast<const LibXCFunctional>(component)) {
+        result.libxc_id = libxc->libxc_id();
+        result.libxc_canonical_name = libxc->libxc_canonical_name();
+        result.effective_parameters = libxc->effective_parameter_map();
+    } else {
+        result.libxc_canonical_name = component->name();
+        result.effective_parameters = component->parameters();
+    }
+    result.alpha = component->alpha();
+    result.omega = component->omega();
+    result.lsda_cutoff = component->lsda_cutoff();
+    result.meta_cutoff = component->meta_cutoff();
+    result.density_cutoff = component->density_cutoff();
+    result.gga = component->is_gga();
+    result.meta = component->is_meta();
+    result.lrc = component->is_lrc();
+    result.unpolarized = component->is_unpolarized();
+    return result;
+}
+
+ResponseFunctionalState capture_functional_state(const std::shared_ptr<const SuperFunctional>& functional) {
+    if (!functional) throw PSIEXCEPTION("SCF response provenance: superfunctional is null");
+    if (functional->needs_xc() &&
+        (!std::isfinite(functional->density_tolerance()) || !(functional->density_tolerance() > 0.0)))
+        throw PSIEXCEPTION("SCF response provenance: DFT functional density tolerance must be finite and positive");
+    ResponseFunctionalState result;
+    result.name = functional->name();
+    for (const auto& component : functional->x_functionals())
+        result.x_components.push_back(capture_functional_component(component));
+    for (const auto& component : functional->c_functionals())
+        result.c_components.push_back(capture_functional_component(component));
+    if (functional->needs_grac()) {
+        result.grac_x = capture_functional_component(functional->grac_x_functional());
+        result.grac_c = capture_functional_component(functional->grac_c_functional());
+    }
+    result.x_alpha = functional->x_alpha();
+    result.x_beta = functional->x_beta();
+    result.x_omega = functional->x_omega();
+    result.c_alpha = functional->c_alpha();
+    result.c_ss_alpha = functional->c_ss_alpha();
+    result.c_os_alpha = functional->c_os_alpha();
+    result.c_omega = functional->c_omega();
+    result.vv10_b = functional->vv10_b();
+    result.vv10_c = functional->vv10_c();
+    result.vv10_beta = functional->vv10_beta();
+    result.density_tolerance = functional->density_tolerance();
+    result.grac_shift = functional->grac_shift();
+    result.grac_alpha = functional->grac_alpha();
+    result.grac_beta = functional->grac_beta();
+    result.max_points = functional->max_points();
+    result.deriv = functional->deriv();
+    result.needs_vv10 = functional->needs_vv10();
+    result.needs_grac = functional->needs_grac();
+    result.libxc_functional = functional->is_libxc_func();
+    result.gga = functional->is_gga();
+    result.meta = functional->is_meta();
+    result.unpolarized = functional->is_unpolarized();
+    return result;
+}
+}  // namespace
+
 HF::HF(SharedWavefunction ref_wfn, std::shared_ptr<SuperFunctional> func, Options& options, std::shared_ptr<PSIO> psio)
     : Wavefunction(options), functional_(func) {
     shallow_copy(ref_wfn);
@@ -95,8 +197,189 @@ HF::HF(SharedWavefunction ref_wfn, std::shared_ptr<SuperFunctional> func, Option
 
 HF::~HF() {}
 
+void HF::reset_response_provenance_tracking() {
+    response_state_sealed_ = false;
+    response_iteration_metrics_valid_ = false;
+    response_finalize_completed_ = false;
+    response_compute_failed_ = false;
+    response_last_iteration_final_grid_ = false;
+    response_e_convergence_ = options_.get_double("E_CONVERGENCE");
+    response_d_convergence_ = options_.get_double("D_CONVERGENCE");
+    response_previous_iteration_energy_ = std::numeric_limits<double>::quiet_NaN();
+    response_last_energy_change_ = std::numeric_limits<double>::quiet_NaN();
+    response_last_density_norm_ = std::numeric_limits<double>::quiet_NaN();
+    response_native_iteration_id_ = 0;
+    response_last_observed_iteration_id_ = 0;
+    response_distinct_iterations_observed_ = 0;
+    response_provenance_.reset();
+}
+
+void HF::mark_response_compute_failed() {
+    response_state_sealed_ = false;
+    response_iteration_metrics_valid_ = false;
+    response_finalize_completed_ = false;
+    response_compute_failed_ = true;
+    response_last_iteration_final_grid_ = false;
+    response_previous_iteration_energy_ = std::numeric_limits<double>::quiet_NaN();
+    response_last_energy_change_ = std::numeric_limits<double>::quiet_NaN();
+    response_last_density_norm_ = std::numeric_limits<double>::quiet_NaN();
+    response_provenance_.reset();
+}
+
+void HF::begin_response_iteration() {
+    // This hook is reached only after a reference-specific save of the current
+    // density. Its counter is independent of the Python-visible iteration label.
+    response_state_sealed_ = false;
+    response_iteration_metrics_valid_ = false;
+    response_finalize_completed_ = false;
+    response_last_iteration_final_grid_ = false;
+    response_provenance_.reset();
+    if (response_native_iteration_id_ == std::numeric_limits<std::size_t>::max()) {
+        mark_response_compute_failed();
+        return;
+    }
+    ++response_native_iteration_id_;
+}
+
+void HF::record_response_iteration_state() {
+    // A reference-specific density update is the successful end of the native
+    // work observed here. Repeated density/compute calls in one native iteration
+    // cannot manufacture a second convergence observation.
+    if (response_compute_failed_ || response_native_iteration_id_ == 0 ||
+        response_last_observed_iteration_id_ == response_native_iteration_id_) return;
+
+    response_iteration_metrics_valid_ = false;
+    response_last_iteration_final_grid_ = false;
+    try {
+        const auto energy_it = energies_.find("Total Energy");
+        if (energy_it == energies_.end() || !std::isfinite(energy_it->second) || !X_ || !S_ || !Fa() || !Da()) return;
+
+        const double current_energy = energy_it->second;
+        const double previous_energy = response_previous_iteration_energy_;
+        response_previous_iteration_energy_ = current_energy;
+        response_last_observed_iteration_id_ = response_native_iteration_id_;
+        ++response_distinct_iterations_observed_;
+        if (!std::isfinite(previous_energy)) return;
+
+        const auto gradient_a = form_FDSmSDF(Fa(), Da());
+        double density_norm = options_.get_bool("DIIS_RMS_ERROR") ? gradient_a->rms() : gradient_a->absmax();
+        if (!same_a_b_dens()) {
+            if (!Fb() || !Db()) return;
+            const auto gradient_b = form_FDSmSDF(Fb(), Db());
+            if (options_.get_bool("DIIS_RMS_ERROR")) {
+                density_norm = std::sqrt(0.5 * (density_norm * density_norm + gradient_b->rms() * gradient_b->rms()));
+            } else {
+                density_norm = std::max(density_norm, gradient_b->absmax());
+            }
+        }
+
+        bool final_grid = true;
+        if (scf_type_.find("COSX") != std::string::npos) {
+            const auto composite_jk = std::dynamic_pointer_cast<CompositeJK>(jk_);
+            final_grid = composite_jk && composite_jk->get_COSX_grid() == "Final";
+        }
+        response_last_energy_change_ = current_energy - previous_energy;
+        response_last_density_norm_ = density_norm;
+        response_last_iteration_final_grid_ = final_grid;
+        response_iteration_metrics_valid_ = std::isfinite(response_last_energy_change_) && std::isfinite(density_norm);
+    } catch (...) {
+        mark_response_compute_failed();
+    }
+}
+
+bool HF::capture_response_provenance_if_converged() {
+    // Repeated calls on an already captured state are deliberately idempotent: later
+    // potential/grid option mutation cannot move the single successful boundary.
+    if (response_state_sealed_ && response_provenance_) return true;
+    response_state_sealed_ = false;
+    response_provenance_.reset();
+    if (response_compute_failed_ || !response_finalize_completed_ || !response_iteration_metrics_valid_ ||
+        response_distinct_iterations_observed_ < 2 || response_native_iteration_id_ == 0 ||
+        response_last_observed_iteration_id_ != response_native_iteration_id_ ||
+        !response_last_iteration_final_grid_ || !std::isfinite(response_e_convergence_) ||
+        !std::isfinite(response_d_convergence_) || response_e_convergence_ <= 0.0 || response_d_convergence_ <= 0.0 ||
+        !(std::abs(response_last_energy_change_) < response_e_convergence_) ||
+        !(response_last_density_norm_ < response_d_convergence_)) return false;
+    try {
+        response_provenance_ = capture_response_provenance();
+        response_state_sealed_ = static_cast<bool>(response_provenance_);
+    } catch (...) {
+        response_provenance_.reset();
+        response_state_sealed_ = false;
+    }
+    return response_state_sealed_;
+}
+
+std::shared_ptr<const ResponseSCFProvenance> HF::capture_response_provenance() const {
+    if (!functional_ || !basisset() || !molecule() || !std::isfinite(energy()) || !Ca() || !Cb() ||
+        !Da() || !Db() || !epsilon_a() || !epsilon_b() || !occupation_a() || !occupation_b())
+        throw PSIEXCEPTION("SCF response provenance: finalized electronic state is incomplete");
+    auto result = std::make_shared<ResponseSCFProvenance>();
+    result->functional = capture_functional_state(functional_);
+    if (functional_->needs_xc()) {
+        const auto potential = V_potential();
+        if (!potential) throw PSIEXCEPTION("SCF response provenance: DFT potential is unavailable");
+        result->potential_grac_initialized = potential->grac_initialized();
+        if (functional_->needs_grac()) {
+            for (const auto& worker : potential->response_functional_workers())
+                result->functional_workers.push_back(capture_functional_state(worker));
+            if (result->functional_workers.empty())
+                throw PSIEXCEPTION("SCF response provenance: GRAC functional workers are unavailable");
+        }
+        const auto grid = potential->response_grid();
+        if (!grid || grid->npoints() <= 0 || grid->blocks().empty())
+            throw PSIEXCEPTION("SCF response provenance: exact ordered DFT response grid is unavailable");
+        result->grid_points.reserve(static_cast<std::size_t>(grid->npoints()) * 3);
+        result->grid_weights.reserve(static_cast<std::size_t>(grid->npoints()));
+        std::size_t offset = 0;
+        for (const auto& block : grid->blocks()) {
+            if (!block || block->npoints() == 0)
+                throw PSIEXCEPTION("SCF response provenance: DFT response grid contains an empty block");
+            result->grid_blocks.push_back({offset, block->npoints(), block->functions_local_to_global()});
+            for (std::size_t point = 0; point < block->npoints(); ++point) {
+                const std::array<double, 4> values{block->x()[point], block->y()[point], block->z()[point], block->w()[point]};
+                if (!std::all_of(values.begin(), values.end(), [](double value) { return std::isfinite(value); }))
+                    throw PSIEXCEPTION("SCF response provenance: DFT response grid contains nonfinite data");
+                result->grid_points.insert(result->grid_points.end(), values.begin(), values.begin() + 3);
+                result->grid_weights.push_back(values[3]);
+            }
+            offset += block->npoints();
+        }
+        if (offset != static_cast<std::size_t>(grid->npoints()))
+            throw PSIEXCEPTION("SCF response provenance: DFT response grid block cardinality is inconsistent");
+    }
+    result->sealed_functional = functional_->build_response_copy();
+    result->basis = std::make_shared<BasisSetStructuralSnapshot>(basisset()->structural_snapshot());
+    result->sealed_molecule = std::make_shared<Molecule>(molecule()->clone());
+    result->Ca = Ca()->clone();
+    result->Cb = Cb()->clone();
+    result->epsilon_a = std::make_shared<Vector>(epsilon_a()->clone());
+    result->epsilon_b = std::make_shared<Vector>(epsilon_b()->clone());
+    result->occupation_a = std::make_shared<Vector>(occupation_a()->clone());
+    result->occupation_b = std::make_shared<Vector>(occupation_b()->clone());
+    result->Da = Da()->clone();
+    result->Db = Db()->clone();
+    result->energy = energy();
+    result->charge = charge_;
+    result->multiplicity = multiplicity_;
+    result->nalpha = nalpha_;
+    result->nbeta = nbeta_;
+    result->reference = functional_->needs_xc() ? (same_a_b_orbs() ? "RKS" : "UKS")
+                                                : (same_a_b_orbs() ? "RHF" : "UHF");
+    const auto occupation = occupation_a();
+    double homo = -std::numeric_limits<double>::infinity();
+    for (int h = 0; h < occupation->nirrep(); ++h)
+        for (int orbital = 0; orbital < occupation->dim(h); ++orbital)
+            if (occupation->get(h, orbital) > 0.0) homo = std::max(homo, epsilon_a()->get(h, orbital));
+    if (!std::isfinite(homo)) throw PSIEXCEPTION("SCF response provenance: no finite occupied alpha HOMO");
+    result->occupied_homo = homo;
+    return result;
+}
+
 void HF::common_init() {
     attempt_number_ = 1;
+    converged_ = false;
+    reset_response_provenance_tracking();
     reset_occ_ = false;
     sad_ = false;
     module_ = "scf";
@@ -375,26 +658,39 @@ void HF::initialize_gtfock_jk() {
 }
 
 void HF::finalize() {
-    // Clean memory off, handle diis closeout, etc
+    // Reaching the native finalizer is necessary, but not sufficient. The seal
+    // requires distinct native iteration observations, the start-of-run
+    // thresholds, convergence metrics, and the observed final COSX grid.
+    try {
+        // Clean memory off, handle diis closeout, etc
 
-    // This will be the only one
-    if (!options_.get_bool("SAVE_JK")) {
-        jk_.reset();
+        // This will be the only one
+        if (!options_.get_bool("SAVE_JK")) {
+            jk_.reset();
+        }
+
+        // Clean up after DIIS
+        if (initialized_diis_manager_) diis_manager_.attr("delete_diis_file")();
+        diis_manager_ = py::none();
+        initialized_diis_manager_ = false;
+
+        // Figure out how many frozen virtual and frozen core per irrep
+        compute_fcpi();
+        compute_fvpi();
+        energy_ = energies_["Total Energy"];
+
+        // Sphalf_.reset();
+        X_.reset();
+        T_.reset();
+
+        // Capture is the final successful native lifecycle transition. No
+        // public finalizer call can bypass the independently observed facts.
+        response_finalize_completed_ = true;
+        capture_response_provenance_if_converged();
+    } catch (...) {
+        mark_response_compute_failed();
+        throw;
     }
-
-    // Clean up after DIIS
-    if (initialized_diis_manager_) diis_manager_.attr("delete_diis_file")();
-    diis_manager_ = py::none();
-    initialized_diis_manager_ = false;
-
-    // Figure out how many frozen virtual and frozen core per irrep
-    compute_fcpi();
-    compute_fvpi();
-    energy_ = energies_["Total Energy"];
-
-    // Sphalf_.reset();
-    X_.reset();
-    T_.reset();
 }
 
 void HF::set_jk(std::shared_ptr<JK> jk) {
@@ -997,6 +1293,10 @@ void HF::compute_sapgau_guess() {
 }
 
 void HF::guess() {
+    // Native guess construction is the start of a new SCF lifecycle. Snapshot
+    // convergence thresholds here and revoke every record from an earlier run.
+    reset_response_provenance_tracking();
+
     // don't save guess energy as "the" energy because we need to avoid
     // a false positive test for convergence on the first iteration (that
     // was happening before in tests/scf-guess-read before I removed

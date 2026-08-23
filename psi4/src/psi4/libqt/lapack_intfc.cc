@@ -82,6 +82,7 @@ extern int F_DGERFS(char*, int*, int*, double*, int*, double*, int*, int*, doubl
                     double*, double*, int*, int*);
 extern int F_DGERQF(int*, int*, double*, int*, double*, double*, int*, int*);
 extern int F_DGESDD(char*, int*, int*, double*, int*, double*, double*, int*, double*, int*, double*, int*, int*, int*);
+extern int F_DGESVD(char*, char*, int*, int*, double*, int*, double*, double*, int*, double*, int*, double*, int*, int*);
 extern int F_DGESV(int*, int*, double*, int*, int*, double*, int*, int*);
 extern int F_DGESVX(char*, char*, int*, int*, double*, int*, double*, int*, int*, char*, double*, double*, double*,
                     int*, double*, int*, double*, double*, double*, double*, int*, int*);
@@ -3657,6 +3658,13 @@ int PSI_API C_DGESDD(char jobz, int m, int n, double* a, int lda, double* s, dou
              double* work, int lwork, int* iwork) {
     int info;
     ::F_DGESDD(&jobz, &m, &n, a, &lda, s, u, &ldu, vt, &ldvt, work, &lwork, iwork, &info);
+    return info;
+}
+
+int PSI_API C_DGESVD(char jobu, char jobvt, int m, int n, double* a, int lda, double* s, double* u, int ldu,
+                     double* vt, int ldvt, double* work, int lwork) {
+    int info;
+    ::F_DGESVD(&jobu, &jobvt, &m, &n, a, &lda, s, u, &ldu, vt, &ldvt, work, &lwork, &info);
     return info;
 }
 

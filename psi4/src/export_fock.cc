@@ -46,6 +46,10 @@ namespace py = pybind11;
 using namespace pybind11::literals;
 
 void export_fock(py::module &m) {
+    m.def("_direct_jk_uses_brian_backend", &detail::direct_jk_uses_brian_backend,
+          "Pure DirectJK backend selector test seam.", "brian_enabled"_a,
+          "standard_integral_backend_only"_a);
+
     py::class_<JK, std::shared_ptr<JK>>(m, "JK", "docstring")
         .def_static("build_JK",
                     [](std::shared_ptr<BasisSet> basis, std::shared_ptr<BasisSet> aux) {
@@ -194,7 +198,12 @@ void export_fock(py::module &m) {
         .def("dfh", &MemDFJK::dfh, "Return the DFHelper object.");
 
     py::class_<DirectJK, std::shared_ptr<DirectJK>, JK>(m, "DirectJK", "docstring")
-        .def("do_incfock_iter", &DirectJK::do_incfock_iter, "Was the last Fock build incremental?");
+        .def("do_incfock_iter", &DirectJK::do_incfock_iter, "Was the last Fock build incremental?")
+        .def("set_standard_integral_backend_only", &DirectJK::set_standard_integral_backend_only,
+             "Bypass BrianQC and use DirectJK's standard integral-engine path.")
+        .def("standard_integral_backend_only", &DirectJK::standard_integral_backend_only)
+        .def("integral_engine_thread_count", &DirectJK::integral_engine_thread_count,
+             "Integral-engine threads observed during the most recent compute.");
 
     py::class_<CompositeJK, std::shared_ptr<CompositeJK>, JK>(m, "CompositeJK", "docstring")
         .def("do_incfock_iter", &CompositeJK::do_incfock_iter, "Was the last Fock build incremental?")

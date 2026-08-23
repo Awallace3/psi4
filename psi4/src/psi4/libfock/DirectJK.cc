@@ -127,7 +127,7 @@ void DirectJK::print_header() const {
 void DirectJK::preiterations() {
 
 #ifdef USING_BrianQC
-    if (brianEnable) {
+    if (detail::direct_jk_uses_brian_backend(brianEnable, standard_integral_backend_only_)) {
         double threshold = cutoff_ * (brianCPHFFlag ? 1e-3 : 1e-0); // CPHF needs higher precision
         brianCOMSetPrecisionThresholds(&brianCookie, &threshold);
         checkBrian();
@@ -166,9 +166,11 @@ void DirectJK::incfock_postiter() {
 }
 
 void DirectJK::compute_JK() {
-   
+    // Zero is a safe diagnostic for no integral-engine path (including BrianQC).
+    integral_engine_thread_count_ = 0;
+
 #ifdef USING_BrianQC
-    if (brianEnable) {
+    if (detail::direct_jk_uses_brian_backend(brianEnable, standard_integral_backend_only_)) {
         // zero out J, K, and wK matrices
         zero();
         
@@ -348,7 +350,9 @@ void DirectJK::compute_JK() {
         zero();
     }
 
-    auto factory = std::make_shared<IntegralFactory>(primary_, primary_, primary_, primary_);
+    // Bind integral construction to this DirectJK's Options registry. This is
+    // essential for callers that provide an isolated canonical configuration.
+    auto factory = std::make_shared<IntegralFactory>(primary_, primary_, primary_, primary_, options_);
     
     // Passed in as a dummy when J (and/or K) is not built
     std::vector<SharedMatrix> temp;
@@ -422,7 +426,8 @@ void DirectJK::build_JK_matrices(std::vector<std::shared_ptr<TwoBodyAOInt>>& int
     // => Sizing <= //
 
     int nshell = primary_->nshell();
-    int nthread = df_ints_num_threads_;
+    int nthread = static_cast<int>(ints.size());
+    integral_engine_thread_count_ = ints.size();
 
     // => Task Blocking <= //
 

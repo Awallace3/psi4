@@ -109,6 +109,7 @@ class Functional {
     // => Parameters <= //
 
     const std::map<std::string, double>& parameters() { return parameters_; }
+    const std::map<std::string, double>& parameters() const { return parameters_; }
     virtual void set_parameter(const std::string& key, double val);
 
     // => Setters <= //

@@ -58,6 +58,61 @@ class BasisSetParser;
 class SOBasisSet;
 class IntegralFactory;
 
+/** Value-only description of one Gaussian/ECP shell for structural provenance. */
+struct PSI_API BasisShellSnapshot {
+    int shell_type{};
+    int angular_momentum{};
+    int puream{};
+    int center{};
+    int start{};
+    int nfunction{};
+    int ncartesian{};
+    std::vector<double> coordinates;
+    std::vector<double> exponents;
+    std::vector<double> coefficients;
+    std::vector<double> original_coefficients;
+    std::vector<double> erd_coefficients;
+    std::vector<int> radial_powers;
+
+    bool operator==(const BasisShellSnapshot& other) const;
+};
+
+/** Complete value-only structural snapshot used to attest an orbital basis. */
+struct PSI_API BasisSetStructuralSnapshot {
+    std::string name;
+    std::string key;
+    std::string target;
+    std::vector<BasisShellSnapshot> shells;
+    std::vector<BasisShellSnapshot> ecp_shells;
+    std::map<std::string, int> core_electrons;
+    std::vector<int> scalar_state;
+    bool puream{};
+    std::vector<int> n_prim_per_shell;
+    std::vector<int> shell_first_ao;
+    std::vector<int> shell_first_exponent;
+    std::vector<int> shell_first_basis_function;
+    std::vector<int> shell_center;
+    std::vector<int> ecp_shell_center;
+    std::vector<int> function_to_shell;
+    std::vector<int> ao_to_shell;
+    std::vector<int> function_center;
+    std::vector<int> center_to_nshell;
+    std::vector<int> center_to_shell;
+    std::vector<int> center_to_ecp_nshell;
+    std::vector<int> center_to_ecp_shell;
+    std::vector<double> unique_exponents;
+    std::vector<double> unique_coefficients;
+    std::vector<double> unique_original_coefficients;
+    std::vector<double> unique_ecp_exponents;
+    std::vector<double> unique_ecp_coefficients;
+    std::vector<int> unique_ecp_radial_powers;
+    std::vector<double> erd_coefficients;
+    std::vector<double> centers;
+
+    bool operator==(const BasisSetStructuralSnapshot& other) const;
+    bool operator!=(const BasisSetStructuralSnapshot& other) const { return !(*this == other); }
+};
+
 /*! \ingroup MINTS */
 
 //! Basis set container class
@@ -191,6 +246,9 @@ class PSI_API BasisSet {
 
     /** Initialize singleton values that are shared by all basis set objects. */
     static void initialize_singletons();
+
+    /** Capture every construction-significant shell/ECP/center/contraction field by value. */
+    BasisSetStructuralSnapshot structural_snapshot() const;
 
     /** Number of primitives.
      *  @return The total number of primitives in all contractions.

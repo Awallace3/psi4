@@ -93,6 +93,11 @@ class LibXCFunctional : public Functional {
     void set_density_cutoff(double cut) override;
     void set_omega(double omega);
     void set_tweak(std::map<std::string, double>, bool);
+    /// Complete effective LibXC external-parameter map, including defaults.
+    std::map<std::string, double> effective_parameter_map() const;
+    /// Immutable identity of the initialized LibXC object (C++ provenance only).
+    int libxc_id() const { return func_id_; }
+    std::string libxc_canonical_name() const;
     // Name, Kind, Coefficient for each functional in the superfunctional
     std::vector<std::tuple<std::string, int, double>> get_mix_data();
 
@@ -106,7 +111,7 @@ class LibXCFunctional : public Functional {
     double needs_vv10() { return needs_vv10_; }
     double vv10_b() { return vv10_b_; }
     double vv10_c() { return vv10_c_; }
-    double density_cutoff() { return density_cutoff_; }
+    double density_cutoff() const { return density_cutoff_; }
 
     // Get libxc provenance stamp
     static std::string xclib_description();
