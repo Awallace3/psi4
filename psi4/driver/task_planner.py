@@ -171,8 +171,10 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
         if uses_xdm and any(item.lower() in unsupported_bsse for item in bsse_types):
             raise NotImplementedError("Counterpoise-based XDM energies are not implemented.")
 
-    if uses_xdm and driver != "energy":
-        raise NotImplementedError("XDM derivatives are not implemented.")
+    # XDM has no analytic derivatives: gradients are finite differences of the
+    # full XDM energy (see proc_table, where XDM registers for energy only).
+    if uses_xdm and driver in ("hessian", "properties"):
+        raise NotImplementedError(f"XDM {driver} is not implemented.")
 
     # Build a packet
     packet = {"molecule": molecule, "driver": driver, "method": method, "basis": basis, "keywords": keywords}

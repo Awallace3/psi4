@@ -136,17 +136,22 @@ units angstrom
         ):
             psi4.energy("b3lyp-xdm", molecule=dimer, bsse_type=bsse_type)
 
-    with pytest.raises(NotImplementedError, match="XDM derivatives are not implemented"):
-        psi4.gradient("b3lyp-xdm", molecule=dimer)
+    for bsse_type in ["cp", "vmfc", ["nocp", "vmfc"]]:
+        with pytest.raises(
+            NotImplementedError,
+            match="Counterpoise-based XDM energies are not implemented",
+        ):
+            psi4.gradient("b3lyp-xdm", molecule=dimer, bsse_type=bsse_type)
 
     from psi4.driver.task_planner import task_planner
 
+    findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
     with pytest.raises(NotImplementedError, match="Counterpoise-based XDM energies are not implemented"):
         task_planner("energy", "b3lyp-xdm/cc-pv[d,t]z", dimer, bsse_type="cp")
-    with pytest.raises(NotImplementedError, match="XDM derivatives are not implemented"):
-        task_planner("gradient", "b3lyp-xdm/cc-pv[d,t]z", dimer)
-    with pytest.raises(NotImplementedError, match="XDM derivatives are not implemented"):
-        task_planner("gradient", "b3lyp", dimer, bsse_type="nocp", levels={1: "b3lyp-xdm"})
+    with pytest.raises(NotImplementedError, match="Counterpoise-based XDM energies are not implemented"):
+        task_planner("gradient", "b3lyp-xdm/cc-pv[d,t]z", dimer, bsse_type="cp", **findif_kwargs)
+    with pytest.raises(NotImplementedError, match="Counterpoise-based XDM energies are not implemented"):
+        task_planner("gradient", "b3lyp", dimer, bsse_type="cp", levels={1: "b3lyp-xdm"}, **findif_kwargs)
 
     e_los_ii = psi4.energy("b3lyp-xdm(los-ii)", molecule=dimer, bsse_type="nocp")
     assert compare_values(e_los_ii, -0.0010595757, 8, "No-CP XDM(LoS-II) energy")
@@ -232,3 +237,258 @@ units angstrom
     e_ref = -74.9690725681
     e = psi4.energy("hf-xdm", molecule=mol)
     assert compare_values(e, e_ref, 8, "HF-XDM energy with custom parameters")
+
+
+@pytest.mark.xdm
+def test_xdm_gradient_findif():
+    """XDM gradients are finite differences of the full XDM-corrected energy.
+
+    Compares ``psi4.gradient`` against an independently assembled central
+    difference of ``psi4.energy`` over every Cartesian coordinate, and confirms
+    that the XDM-minus-B3LYP gradient difference reproduces the finite-difference
+    derivative of :psivar:`DISPERSION CORRECTION ENERGY`.
+    """
+
+    geom = """
+0 1
+O   -1.55100700  -0.11452000   0.00000000
+H   -1.93425900   0.76250300   0.00000000
+H   -0.59967700   0.04071200   0.10000000
+units angstrom
+symmetry c1
+no_reorient
+no_com
+"""
+    # Pin the grid and tighten SCF so the differences are not grid/convergence noise.
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "DFT_SPHERICAL_POINTS": 302,
+            "DFT_RADIAL_POINTS": 75,
+            "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
+            "scf__e_convergence": 1e-11,
+            "scf__d_convergence": 1e-10,
+        }
+    )
+
+    mol = psi4.geometry(geom)
+    grad_xdm = np.asarray(psi4.gradient("b3lyp-xdm", molecule=mol))
+    assert grad_xdm.shape == (3, 3)
+
+    def displaced(method, xyz):
+        m = psi4.geometry(geom)
+        m.set_geometry(psi4.core.Matrix.from_array(xyz))
+        m.update_geometry()
+        ene = psi4.energy(method, molecule=m)
+        return ene, psi4.variable("DISPERSION CORRECTION ENERGY")
+
+    xyz0 = np.asarray(mol.geometry())
+    step = 0.005
+    fd_total = np.zeros((3, 3))
+    fd_disp = np.zeros((3, 3))
+    for atom in range(3):
+        for cart in range(3):
+            plus, minus = xyz0.copy(), xyz0.copy()
+            plus[atom, cart] += step
+            minus[atom, cart] -= step
+            e_p, d_p = displaced("b3lyp-xdm", plus)
+            e_m, d_m = displaced("b3lyp-xdm", minus)
+            fd_total[atom, cart] = (e_p - e_m) / (2 * step)
+            fd_disp[atom, cart] = (d_p - d_m) / (2 * step)
+
+    assert np.allclose(grad_xdm, fd_total, atol=1e-5), (
+        f"XDM gradient does not match central difference:\n{grad_xdm - fd_total}"
+    )
+
+    # The XDM contribution must actually be present in the gradient.
+    grad_b3lyp = np.asarray(psi4.gradient("b3lyp", molecule=mol, dertype=0))
+    assert np.abs(fd_disp).max() > 1e-5, "dispersion gradient too small to be a meaningful test"
+    assert np.allclose(grad_xdm - grad_b3lyp, fd_disp, atol=1e-5), (
+        f"XDM-minus-B3LYP gradient does not match d(DISPERSION CORRECTION ENERGY):\n"
+        f"{(grad_xdm - grad_b3lyp) - fd_disp}"
+    )
+
+
+@pytest.mark.xdm
+def test_xdm_gradient_uks_parity():
+    """A closed-shell UKS XDM gradient must match the RKS one."""
+
+    mol = psi4.geometry("""
+0 1
+O   -1.55100700  -0.11452000   0.00000000
+H   -1.93425900   0.76250300   0.00000000
+H   -0.59967700   0.04071200   0.00000000
+units angstrom
+    """)
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "DFT_SPHERICAL_POINTS": 302,
+            "DFT_RADIAL_POINTS": 75,
+            "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
+            "scf__e_convergence": 1e-11,
+            "scf__d_convergence": 1e-10,
+            "REFERENCE": "RKS",
+        }
+    )
+    grad_rks = np.asarray(psi4.gradient("b3lyp-xdm", molecule=mol))
+
+    psi4.set_options({"REFERENCE": "UKS"})
+    grad_uks = np.asarray(psi4.gradient("b3lyp-xdm", molecule=mol))
+    psi4.set_options({"REFERENCE": "RKS"})
+
+    assert np.allclose(grad_rks, grad_uks, atol=1e-7), (
+        f"RKS and UKS XDM gradients differ:\n{grad_rks - grad_uks}"
+    )
+
+
+@pytest.mark.xdm
+def test_xdm_gradient_open_shell():
+    """XDM gradients work for an open-shell (UKS) system."""
+
+    mol = psi4.geometry("""
+0 2
+C  0.000000  0.000000  0.000000
+H  0.000000  1.078000  0.000000
+H  0.933000 -0.539000  0.000000
+H -0.933000 -0.539000  0.000000
+units angstrom
+    """)
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "reference": "uks",
+            "DFT_SPHERICAL_POINTS": 302,
+            "DFT_RADIAL_POINTS": 75,
+            "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
+            "scf__e_convergence": 1e-11,
+            "scf__d_convergence": 1e-10,
+        }
+    )
+    grad = np.asarray(psi4.gradient("b3lyp-xdm", molecule=mol))
+    psi4.set_options({"reference": "rks"})
+    assert grad.shape == (4, 3)
+    assert np.isfinite(grad).all()
+
+
+@pytest.mark.xdm
+def test_xdm_gradient_nbody_levels():
+    """XDM gradients compose with no-CP many-body ``levels`` and with a basis slash spec."""
+
+    dimer = psi4.geometry("""0 1
+N -1.578718 -0.046611 0.000000
+H -2.158621 0.136396 -0.809565
+H -2.158621 0.136396 0.809565
+H -0.849471 0.658193 0.000000
+--
+0 1
+O    2.35062500   0.11146900   0.00000000
+H    2.68039800  -0.37374100  -0.75856100
+H    2.68039800  -0.37374100   0.75856100
+units angstrom
+    """)
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "DFT_SPHERICAL_POINTS": 302,
+            "DFT_RADIAL_POINTS": 75,
+            "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
+        }
+    )
+
+    from psi4.driver.task_planner import task_planner
+    from psi4.driver.driver_findif import FiniteDifferenceComputer
+    from psi4.driver.driver_nbody import ManyBodyComputer
+
+    findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
+
+    # Every XDM gradient route must be finite difference, never an analytic SCF gradient.
+    plan = task_planner("gradient", "b3lyp-xdm", dimer, **findif_kwargs)
+    assert isinstance(plan, FiniteDifferenceComputer)
+
+    plan = task_planner("gradient", "b3lyp-xdm/sto-3g", dimer, **findif_kwargs)
+    assert isinstance(plan, FiniteDifferenceComputer)
+
+    plan = task_planner(
+        "gradient", "b3lyp", dimer, bsse_type="nocp", levels={1: "b3lyp-xdm", 2: "b3lyp"}, **findif_kwargs
+    )
+    assert isinstance(plan, ManyBodyComputer)
+
+    grad = np.asarray(psi4.gradient("b3lyp-xdm", molecule=dimer, bsse_type="nocp"))
+    assert grad.shape == (7, 3)
+    assert np.isfinite(grad).all()
+
+
+@pytest.mark.xdm
+def test_xdm_hessian_and_properties_blocked():
+    """XDM Hessians and analytic properties remain clearly rejected."""
+
+    mol = psi4.geometry("""
+0 1
+O   -1.55100700  -0.11452000   0.00000000
+H   -1.93425900   0.76250300   0.00000000
+H   -0.59967700   0.04071200   0.00000000
+units angstrom
+    """)
+    psi4.set_options({"basis": "sto-3g", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
+
+    with pytest.raises(NotImplementedError, match="XDM hessian is not implemented"):
+        psi4.hessian("b3lyp-xdm", molecule=mol)
+    with pytest.raises(NotImplementedError, match="XDM properties is not implemented"):
+        psi4.properties("b3lyp-xdm", properties=["dipole"], molecule=mol)
+
+    # No internal route may use an incomplete analytic XDM derivative.
+    from psi4.driver.procrouting.empirical_disp.empirical_dispersion import XDMDispersionFunctor
+
+    functor = XDMDispersionFunctor(functional_name="b3lyp", a1=0.5, a2_ang=1.0)
+    with pytest.raises(NotImplementedError, match="Analytic XDM gradients are not implemented"):
+        functor.compute_gradient(mol)
+
+
+@pytest.mark.xdm
+def test_xdm_gradient_produces_attraction():
+    """The XDM gradient must add real intermolecular attraction.
+
+    A broken or silently omitted XDM gradient leaves the dispersion-free DFT gradient,
+    which does not pull a stretched closed-shell dimer together. At a stretched Ne2
+    separation the XDM gradient must point inward (dE/dR > 0, so the energy falls as the
+    atoms approach) and must exceed the plain-B3LYP gradient by the finite-difference
+    derivative of :psivar:`DISPERSION CORRECTION ENERGY`.
+    """
+    BOHR = 0.52917721067
+    R, step = 4.0, 0.01
+
+    psi4.set_options(
+        {
+            "basis": "aug-cc-pvdz",
+            "DFT_SPHERICAL_POINTS": 302,
+            "DFT_RADIAL_POINTS": 75,
+            "scf__e_convergence": 1e-11,
+            "scf__d_convergence": 1e-10,
+        }
+    )
+
+    def dimer(r):
+        return psi4.geometry(f"0 1\nNe 0 0 0\nNe 0 0 {r}\nunits angstrom")
+
+    def dEdR(method, r):
+        # z-gradient of the second atom is dE/dR for this collinear dimer, in Eh/bohr
+        return np.asarray(psi4.gradient(method, molecule=dimer(r)))[1, 2]
+
+    def edisp(r):
+        psi4.energy("b3lyp-xdm", molecule=dimer(r))
+        return psi4.variable("DISPERSION CORRECTION ENERGY")
+
+    d_xdm = dEdR("b3lyp-xdm", R)
+    d_b3lyp = dEdR("b3lyp", R)
+
+    assert d_xdm > 0.0, f"XDM gradient is not attractive at {R} A: dE/dR = {d_xdm:.3e}"
+    assert d_xdm > d_b3lyp, (
+        f"XDM gradient ({d_xdm:.3e}) is not more attractive than B3LYP ({d_b3lyp:.3e})"
+    )
+
+    fd_disp = (edisp(R + step) - edisp(R - step)) / (2 * step) * BOHR
+    assert np.isclose(d_xdm - d_b3lyp, fd_disp, atol=5e-6), (
+        f"XDM-minus-B3LYP gradient {d_xdm - d_b3lyp:.4e} does not match "
+        f"d(DISPERSION CORRECTION ENERGY)/dR {fd_disp:.4e}"
+    )

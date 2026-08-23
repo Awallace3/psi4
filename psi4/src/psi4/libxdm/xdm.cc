@@ -356,7 +356,7 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
 }
 
 // ============================================================================
-// Pairwise BJ-damped dispersion energy and gradient
+// Pairwise BJ-damped dispersion energy
 // ============================================================================
 
 double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::vector<AtomicData>& atoms) {

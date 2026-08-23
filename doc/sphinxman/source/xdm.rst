@@ -34,8 +34,8 @@
 XDM: Exchange-Hole Dipole Moment Dispersion Model
 ==================================================
 
-.. codeauthor:: Alistair Price and Austin M. Wallace
-.. sectionauthor:: Alistair Price and Austin M. Wallace
+.. codeauthor:: Alastair Price and Austin M. Wallace
+.. sectionauthor:: Alastair Price and Austin M. Wallace
 
 *Module:* :ref:`Samples <apdx:testSuitexdm>`
 
@@ -159,27 +159,27 @@ PSI variable :psivar:`DISPERSION CORRECTION ENERGY`.
 
 .. table:: DFT functionals available with the -XDM suffix
 
-   +-------------------+-------------+
-   | Functional        | Type        |
-   +===================+=============+
-   | B3LYP-XDM        | Hybrid GGA  |
-   +-------------------+-------------+
-   | PBE0-XDM         | Hybrid GGA  |
-   +-------------------+-------------+
-   | BHandHLYP-XDM    | Hybrid GGA  |
-   +-------------------+-------------+
-   | CAM-B3LYP-XDM    | Range-sep.  |
-   +-------------------+-------------+
-   | LC-wPBE-XDM      | Range-sep.  |
-   +-------------------+-------------+
-   | B97-1-XDM        | Hybrid GGA  |
-   +-------------------+-------------+
-   | BLYP-XDM         | GGA         |
-   +-------------------+-------------+
-   | PW86PBE-XDM      | GGA         |
-   +-------------------+-------------+
-   | PBE-XDM          | GGA         |
-   +-------------------+-------------+
+   +---------------+------------+
+   | Functional    | Type       |
+   +===============+============+
+   | B3LYP-XDM     | Hybrid GGA |
+   +---------------+------------+
+   | PBE0-XDM      | Hybrid GGA |
+   +---------------+------------+
+   | BHandHLYP-XDM | Hybrid GGA |
+   +---------------+------------+
+   | CAM-B3LYP-XDM | Range-sep. |
+   +---------------+------------+
+   | LC-wPBE-XDM   | Range-sep. |
+   +---------------+------------+
+   | B97-1-XDM     | Hybrid GGA |
+   +---------------+------------+
+   | BLYP-XDM      | GGA        |
+   +---------------+------------+
+   | PW86PBE-XDM   | GGA        |
+   +---------------+------------+
+   | PBE-XDM       | GGA        |
+   +---------------+------------+
 
 
 Damping Parameters
@@ -213,8 +213,9 @@ For unlisted combinations, supply :math:`(a_1, a_2)` through
 |scf__xdm_dispersion_parameters|. The full table is in
 ``psi4/driver/procrouting/empirical_disp/xdm_params.py``.
 
-Counterpoise-based XDM energies are not implemented. Requests with
-``bsse_type='cp'`` or ``'vmfc'`` raise ``NotImplementedError``. Use ``'nocp'``
+Counterpoise-based XDM energies and gradients are not implemented. Requests
+with ``bsse_type='cp'`` or ``'vmfc'`` raise ``NotImplementedError``, including
+when nested in a CBS specification or in many-body ``levels``. Use ``'nocp'``
 for a two-body interaction energy::
 
    energy('b3lyp-xdm', bsse_type='nocp')
@@ -305,21 +306,17 @@ Keywords summarized:
 
 .. table:: XDM-related options
 
-   +------------------------------------------+-----------------------------------------------------+
-   | Keyword                                  | Description                                         |
-   +==========================================+=====================================================+
-   | |scf__xdm_dispersion_parameters|         | ``[a1, a2_angstrom]``. Override automatic            |
-   |                                          | BJ parameter lookup. Two-element array.              |
-   +------------------------------------------+-----------------------------------------------------+
-   | |scf__dft_spherical_points|               | Number of angular Lebedev points for the DFT         |
-   |                                          | grid.  Affects the XDM integration accuracy.         |
-   +------------------------------------------+-----------------------------------------------------+
-   | |scf__dft_radial_points|                  | Number of radial points for the DFT grid.            |
-   |                                          | Affects the XDM integration accuracy.                |
-   +------------------------------------------+-----------------------------------------------------+
-   | |scf__basis|                              | Orbital basis set. Used together with the functional |
-   |                                          | name to look up fitted :math:`(a_1, a_2)` values.   |
-   +------------------------------------------+-----------------------------------------------------+
+   +----------------------------------+-----------------------------------------------------------------------------------------------+
+   | Keyword                          | Description                                                                                   |
+   +==================================+===============================================================================================+
+   | |scf__xdm_dispersion_parameters| | ``[a1, a2_angstrom]``. Override automatic BJ parameter lookup. Two-element array.             |
+   +----------------------------------+-----------------------------------------------------------------------------------------------+
+   | |scf__dft_spherical_points|      | Number of angular Lebedev points for the DFT grid. Affects the XDM integration accuracy.      |
+   +----------------------------------+-----------------------------------------------------------------------------------------------+
+   | |scf__dft_radial_points|         | Number of radial points for the DFT grid. Affects the XDM integration accuracy.               |
+   +----------------------------------+-----------------------------------------------------------------------------------------------+
+   | |scf__basis|                     | Orbital basis set. Used with the functional name to look up fitted :math:`(a_1, a_2)` values. |
+   +----------------------------------+-----------------------------------------------------------------------------------------------+
 
 
 How It Works Internally
@@ -333,8 +330,48 @@ How It Works Internally
    are assembled from these atomic properties.
 4. The BJ-damped dispersion energy (Eq. :eq:`XDMdisp`) is evaluated and added
    to the SCF total energy.
-XDM gradients and Hessians are not implemented.
 
 Because XDM is a post-SCF correction, the SCF cycles themselves are
 unaffected by the dispersion correction.  The XDM energy is added once
 after convergence.
+
+
+Derivatives
+~~~~~~~~~~~
+
+XDM gradients are available and are evaluated by finite differences of the
+complete XDM-corrected energy::
+
+   grad = psi4.gradient("b3lyp-xdm")
+
+Analytic XDM gradients are *not* implemented.  Because every XDM ingredient
+--- the exchange-hole multipole moments, the Hirshfeld atomic volumes, the
+polarizabilities, the :math:`C_6`/:math:`C_8`/:math:`C_{10}` coefficients, and
+the damping radius :math:`R_{\mathrm{vdW}}` --- is a functional of the
+converged density, an analytic derivative requires the response of all of
+those quantities to nuclear displacement.  Finite differences of the energy
+capture these terms by construction.
+
+.. warning:: Do not approximate the XDM gradient by differentiating only the
+   pair distances :math:`R_{ij}` while holding the dispersion coefficients and
+   damping radii fixed.  That form is accurate to about 0.1% between
+   well-separated closed-shell fragments, but for bonded atom pairs the
+   coefficient-response terms dominate: the frozen-coefficient derivative can
+   have the wrong sign and an error of order 100% of the true value.
+
+Because the gradient is a finite difference of energies, the cost is
+:math:`6N_{\mathrm{atom}}` (or fewer, when point-group symmetry reduces the
+number of displacements) XDM-corrected SCF calculations.  Since XDM quantities
+are integrated on the DFT grid, use a dense grid and tight SCF convergence so
+that grid noise does not contaminate the difference, for example::
+
+   psi4.set_options({
+       "dft_spherical_points": 590,
+       "dft_radial_points": 99,
+       "scf__e_convergence": 1e-10,
+       "scf__d_convergence": 1e-8,
+   })
+
+XDM Hessians and analytic properties are not implemented and raise
+``NotImplementedError``.  Counterpoise-corrected gradients are blocked
+for the same reason as counterpoise-corrected energies.

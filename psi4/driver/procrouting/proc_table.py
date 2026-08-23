@@ -289,6 +289,9 @@ for key in functionals:
     # Energy
     procedures['energy'][key] = proc.run_scf
 
+    # XDM registers for energy only. Every XDM ingredient is a functional of the
+    # converged density, so there is no analytic derivative; leaving gradient/hessian
+    # unregistered makes the driver negotiate a finite difference of XDM energies.
     is_xdm = functionals[key].get("dispersion", {}).get("type") == "xdm"
     if not is_xdm and not (ssuper.is_c_hybrid() or ssuper.is_c_lrc() or ssuper.needs_vv10()):
         procedures['energy']['td-' + key] = proc.run_tdscf_energy

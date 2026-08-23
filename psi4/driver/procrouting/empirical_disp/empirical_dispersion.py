@@ -538,5 +538,14 @@ class XDMDispersionFunctor():
         return ene
 
     def compute_gradient(self, molecule: core.Molecule, wfn: core.Wavefunction = None) -> core.Matrix:
-        """Reject unavailable XDM derivatives."""
-        raise NotImplementedError("XDM derivatives are not implemented.")
+        """Reject analytic XDM derivatives.
+
+        Every XDM ingredient (moments, Hirshfeld volumes, polarizabilities, C6/C8/C10,
+        R_vdW) is a functional of the converged density, so an analytic gradient needs
+        the response of all of them. Differentiating only the pair distances R_ij is not
+        the derivative of the energy. XDM gradients are obtained instead by finite
+        differences of the full XDM energy via psi4.gradient().
+        """
+        raise NotImplementedError(
+            "Analytic XDM gradients are not implemented. XDM gradients are evaluated by "
+            "finite differences of the XDM-corrected energy; call psi4.gradient() instead.")
