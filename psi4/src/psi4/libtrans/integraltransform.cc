@@ -3,7 +3,7 @@
  *
  * Psi4: an open-source quantum chemistry software package
  *
- * Copyright (c) 2007-2025 The Psi4 Developers.
+ * Copyright (c) 2007-2026 The Psi4 Developers.
  *
  * The copyrights for code used from other parties are included in
  * the corresponding files.
@@ -208,11 +208,11 @@ void IntegralTransform::initialize() {
 
     aQT_ = init_int_array(nmo_);
     if (transformationType_ == TransformationType::Restricted) {
-        reorder_qt(clsdpi_, openpi_, frzcpi_, frzvpi_, aQT_, mopi_, nirreps_);
+        reorder_qt(clsdpi_, openpi_, frzcpi_, frzvpi_, aQT_, mopi_);
         bQT_ = aQT_;
     } else {
         bQT_ = init_int_array(nmo_);
-        reorder_qt_uhf(clsdpi_, openpi_, frzcpi_, frzvpi_, aQT_, bQT_, mopi_, nirreps_);
+        reorder_qt_uhf(clsdpi_, openpi_, frzcpi_, frzvpi_, aQT_, bQT_, mopi_);
     }
     // Set up the correlated to Pitzer arrays.  These have to include the occupied core terms, because
     // the reference contributions are already folded into the TPDM.  However, they don't include frozen

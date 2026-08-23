@@ -167,10 +167,9 @@ Pipfile.lock
 pytest_output.dat
 pytest_output.log
 AGENTS.md
-fsapt/
 profile.txt
+fsapt
 tests/pytests/test_saptdft.log
-
 
 # Development-only PES driver outputs (see water-pes-aim.py header)
 /water-pes-aim.work/

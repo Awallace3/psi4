@@ -86,7 +86,7 @@ difference is confined to the construction of the projection matrix `B`:
         +-----------------+------------------+
         |                                    |
    ISA route (implemented)             C-DF route (this spec)
-                                    
+
    B[A,t,(ia)] = sum_p w_p             B[A,t,(ia)] = sum_{k in A} Q_t^A[k] d_k^{ia}
                  * w_A(r_p)
                  * R_t(r_p - R_A)
