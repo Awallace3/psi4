@@ -807,7 +807,7 @@ because no internal check can decide which side is right.</p>
 <li><a href="#props">Numerical agreement: polarizabilities</a></li>
 <li><a href="#cn">Numerical agreement: dispersion coefficients</a></li>
 <li><a href="#aniso">The anisotropic table and the convention question</a></li>
-<li><a href="#energy">What the errors cost in energy</a></li>
+<li><a href="#energy">Energy validation: parity and SAPT0</a></li>
 <li><a href="#status">Implementation status, task by task</a></li>
 <li><a href="#left">What is left to do</a></li>
 </ol></nav>
@@ -970,12 +970,34 @@ implementation. Until then, do not "fix" either side.</p>
 </div>
 """)
     P.append(f"""
-<h2 id="energy"><span class="num">8</span>What the errors cost in energy</h2>
+<h2 id="energy"><span class="num">8</span>Energy-level validation: internal parity and SAPT0 references</h2>
 
-<p>Property-space percentages do not say whether a model is usable. A rigid water-dimer surface
-answers that directly: geometries, MBIS permanent multipoles, damping parameters and energy
-kernels are held identical across arms, so every difference is attributable to the distributed
-properties and to nothing else.</p>
+<p>Property-space percentages do not say whether a model is usable. Energy validation therefore
+has two layers. The first is a controlled same-kernel comparison, which isolates the effect of
+our distributed properties. The second is an external <strong>SAPT0/aug-cc-pVDZ</strong>
+reference, which asks whether the resulting advanced force-field terms reproduce the physical
+induction and dispersion surfaces rather than merely reproducing CamCASP properties.</p>
+
+<div class="note">
+<p><strong>SAPT reference convention.</strong> At every geometry record the Psi4 SAPT0 induction
+component (second-order induction + exchange-induction, including the SAPT0 δ<sub>HF</sub>
+correction when reported in the induction total) and the SAPT0 dispersion component
+(second-order dispersion + exchange-dispersion). Compare those totals directly with the
+advanced force-field <i>E</i><sub>ind</sub> and <i>E</i><sub>disp</sub>; do not compare either one
+with the full SAPT interaction energy.</p>
+<p>For dispersion, report the force-field prediction cumulatively as <strong>C6</strong>,
+<strong>C6+C8</strong>, and <strong>C6+C8+C10</strong>. SAPT0 supplies one dispersion target,
+not an order decomposition, so the three cumulative curves measure whether each added
+long-range order improves the same reference. C10 must remain visible rather than being hidden
+inside a D3-comparable total.</p>
+</div>
+
+<h3>8.1 Water dimer: controlled property-parity surface</h3>
+<p>A rigid water-dimer surface provides the isolation test: geometries, MBIS permanent
+multipoles, damping parameters and energy kernels are held identical across arms, so every
+difference is attributable to the distributed properties and to nothing else. The SAPT0 curves
+are the external reference for the advanced terms; the ours-versus-ISA-GRID deltas below remain
+the stricter diagnostic for locating property errors.</p>
 
 {fig_pes("r4r2")}
 {fig_pes_delta()}
@@ -1019,6 +1041,42 @@ damping radius, so C10 is reported separately and excluded from any D3-comparabl
 {abs(100*aniso/a4['ours'][di]['ind']):.0f} % of the induction energy, and ours reproduces the
 oracle's anisotropy to 4 %. Every isotropic-α consumer discards this — which includes every
 induction model in the reference force-field codebase.</p>
+
+<h3>8.2 External PES benchmark set</h3>
+<table><thead><tr><th>system</th><th>rigid scan</th><th>why it is included</th>
+<th>SAPT0/aug-cc-pVDZ targets</th><th>advanced-FF curves</th></tr></thead><tbody>
+<tr><td><strong>water–water</strong><br>S22 hydrogen-bonded</td>
+<td>O–O separation, fixed S22 orientation; retain R = 2.5–8.0 Å grid</td>
+<td>Induction-dominated test with strong polarizability anisotropy and an existing
+property-parity diagnosis.</td>
+<td><i>E</i><sub>ind</sub><sup>SAPT0</sup>, <i>E</i><sub>disp</sub><sup>SAPT0</sup></td>
+<td>full-tensor <i>E</i><sub>ind</sub>; damped C6, C6+C8, C6+C8+C10</td></tr>
+<tr><td><strong>benzene–benzene</strong><br>S22 parallel-displaced</td>
+<td>Interplanar separation through the S22 geometry, preserving the lateral offset and monomer
+orientations; include the repulsive wall, minimum and long-range tail</td>
+<td>Dispersion-dominated, extended π system. It gives the C8 and C10 metrics enough weight to be
+meaningful instead of letting a water hydrogen bond dominate the verdict.</td>
+<td><i>E</i><sub>ind</sub><sup>SAPT0</sup>, <i>E</i><sub>disp</sub><sup>SAPT0</sup></td>
+<td>full-tensor <i>E</i><sub>ind</sub>; damped C6, C6+C8, C6+C8+C10</td></tr>
+</tbody></table>
+
+<h3>8.3 Metrics against SAPT0</h3>
+<table class="tight"><thead><tr><th>term</th><th>primary metric</th><th>diagnostic metrics</th>
+</tr></thead><tbody>
+<tr><td>induction</td><td>MAE of <i>E</i><sub>ind</sub><sup>FF</sup> −
+<i>E</i><sub>ind</sub><sup>SAPT0</sup> over the attractive and near-minimum region</td>
+<td>error at the SAPT0 minimum; tail-relative error; full-tensor minus isotropised
+contribution</td></tr>
+<tr><td>dispersion</td><td>MAE of each cumulative C6, C6+C8 and C6+C8+C10 curve against
+<i>E</i><sub>disp</sub><sup>SAPT0</sup></td><td>change in MAE on adding C8 and C10; error at the
+SAPT0 minimum; long-range log-slope; damping sensitivity</td></tr>
+</tbody></table>
+<div class="warnbox">
+<p><strong>Acceptance rule for higher orders.</strong> C8 or C10 counts as an improvement only if
+it reduces the SAPT0 dispersion error over the near-minimum and attractive regions on
+<strong>both</strong> water–water and benzene–benzene. A better asymptotic coefficient that worsens
+the damped PES is a damping-model failure, not a successful advanced term.</p>
+</div>
 """)
 
     P.append("""
@@ -1055,7 +1113,10 @@ Numbers are measured, not quoted: the polarizability and dispersion tables come 
 run of the reviewed parity protocol, and the reference values from the checked-in CamCASP
 oracles via <code>devtools/camcasp_reference.py</code>. Energies come from
 <code>water-pes-aim.py</code>, whose two kernels are cross-checked against an independent
-implementation (dispersion bit-exact at 1.1e-16, induction to 3.3e-8 kcal/mol).</p>
+implementation (dispersion bit-exact at 1.1e-16, induction to 3.3e-8 kcal/mol). Section 8
+also defines SAPT0/aug-cc-pVDZ induction and dispersion as the external PES references; those
+SAPT values must be generated for both listed benchmark systems before force-field accuracy is
+claimed.</p>
 <p>Charts are inline SVG and render without network access. Equations use MathJax from a CDN and
 degrade to readable TeX source without it.</p>
 </footer>
