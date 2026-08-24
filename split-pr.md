@@ -118,6 +118,43 @@ The public API at `atomic_polarizability.h:1690-1996` takes only POD types — `
 `SitePairResponse`, `BondGraph`, `FrequencyGrid`, `L3Matrix`, `SitePosition`, `SiteAxes`.
 Python bindings already exist (`export_oeprop.cc:123, 1554, 1729`) and take plain matrices.
 
+### The `2.5e-7` on C6 is a test of the transform, not of our data
+
+This is the single easiest thing to misread in this document, so it is spelled out.
+
+The recoupling validation fed **CamCASP's own L3 models** into **our** engine and compared against
+**CamCASP's own** coefficients:
+
+| C6 | `O-O` | `O-H` | `H-H` |
+| -- | ----- | ----- | ----- |
+| recoupling test output | `17.25559` | `5.382332` | `1.698678` |
+| CamCASP `DF` reference | `17.256` | `5.3823` | `1.6987` |
+| **our own model's C6** | **`26.172`** | **`3.9095`** | **`0.5868`** |
+
+Symbolically the test establishes `f_ours(x_theirs) == f_theirs(x_theirs)` to `2.5e-7`. It says
+nothing about `x_ours`, which never enters it. Our own `O-O` C6 is out by a factor of 1.5 against
+that same oracle.
+
+The data comparison is the separate one in §4.5 of `camcasp_psi4_todo.md`: `f_ours(x_ours)` versus
+`f_ours(x_ISA-GRID)` — same function on both sides, only the model differing — giving
+`0.988 / 0.944 / 0.901` per pair and `0.967` on the total. **That is not parity.**
+
+### Why C6 is nonetheless the best coefficient
+
+Not luck, and not the transform compensating for bad data:
+
+1. **C6 is a pure rank-1 quantity.** It draws only on the ordered pair `(1,1)`. Rank 1 is the
+   *anchored* block — the one carrying the penalty, and the one that agrees. C8 adds
+   `(1,2)`/`(2,1)`, C10 adds `(1,3)`/`(3,1)`/`(2,2)`, C12 is `(2,3)`/`(3,2)`. The ladder
+   `0.967 -> 0.789 -> 0.717 -> 0.628` tracks rank-2/3 content monotonically; it is the rank-2/3
+   deficit weighted by each coefficient's exposure to it.
+2. **It uses the isotropic average.** The worst dipole component is `H alpha_yy` at `0.847`, but
+   C6 uses `alpha_bar_1 = Tr(alpha)/3`: O `0.984`, H `0.931`.
+3. **The error falls with frequency and C6 integrates over all of it** — `0.153` static, `0.110`
+   at `omega = 0.370`, `0.044` at `omega = 37.8`. Checkable: a static-only model predicts
+   `0.984^2 = 0.968` (O-O), `0.931^2 = 0.867` (H-H), `0.916` (O-H); the actual ratios are `0.988`,
+   `0.901`, `0.944` — all three *above* the static prediction, consistently.
+
 ### Why this slice is credible
 
 Two independent reasons, beyond the tolerances above:
@@ -244,6 +281,11 @@ Do not describe PR 1 as shipping "isotropic dispersion coefficients at parity." 
 is at parity (`2.5e-7` against CASIMIR, fed reviewed models). The **coefficients this branch
 currently produces end-to-end** are not: C6 `0.967`, C8 `0.789`, C10 `0.717`, C12 `0.628` of the
 ISA-GRID totals. PR 1 ships the former and none of the latter.
+
+These are two different C6 numbers computed from two different inputs — see
+[§3, "The `2.5e-7` on C6 is a test of the transform, not of our data"](#the-25e-7-on-c6-is-a-test-of-the-transform-not-of-our-data).
+Anyone reading "C6 at `2.5e-7`" next to "C6 accepted at 1–10 %" will assume one of them is wrong;
+both are correct and they measure different things.
 
 ---
 
