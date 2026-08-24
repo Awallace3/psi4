@@ -47,9 +47,15 @@ Two changed files were checked for semantic rather than textual impact and are i
   need no registration there (they are already added in `libmints/CMakeLists.txt`).
 - `psi4/driver/task_base.py` — a QCPortal `>= 0.70.0` version gate.
 
-**Conclusion: no major upstream change impacts this work.** The merge was *verified* clean but
-deliberately **not performed** — the working checkout has uncommitted modifications, and the
-merge is the branch owner's call. To take it:
+**Conclusion: no major upstream change impacts this work.**
+
+The merge was then **performed for real** on the `split-pr-doc` branch (which carries this
+document): `git merge upstream/master` completed with the `ort` strategy, no conflicts, touching
+exactly the 13 files predicted above. So the clean result is demonstrated, not just predicted.
+
+It was **not** performed on `camcasp` itself — that checkout has uncommitted modifications to six
+files plus several untracked ones, and merging into in-flight work is the branch owner's call.
+To take it there:
 
 ```bash
 git checkout camcasp && git merge upstream/master
