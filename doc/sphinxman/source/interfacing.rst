@@ -58,6 +58,7 @@ platform capabilities, *etc*.
    gau2grid
    gcp
    gdma
+   gtfock
    libint
    molden
    mrcc

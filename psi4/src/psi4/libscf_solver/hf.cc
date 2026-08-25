@@ -360,18 +360,13 @@ void HF::rotate_orbitals(SharedMatrix C, const SharedMatrix x) {
     C->copy(tmp);
 }
 void HF::initialize_gtfock_jk() {
-    // Build the JK from options, symmetric type
-#ifdef HAVE_JK_FACTORY
-    // construction of `jk_` depends on communication through legacy_molecule, now removed
-
-    // DGAS is adding to the ghetto, this Python -> C++ -> C -> C++ -> back to C is FUBAR
-    if (options_.get_bool("SOSCF"))
-        jk_ = std::make_shared<GTFockJK>(basisset_, 2, false);
-    else
-        jk_ = std::make_shared<GTFockJK>(basisset_, 2, true);
-#else
-    throw PSIEXCEPTION("GTFock was not compiled in this version.\n");
-#endif
+    // Build the JK from options, symmetric type.
+    // Construction of `jk_` used to depend on communication through
+    // legacy_molecule, now removed. GTFock's engine fixes its density count at
+    // creation, so let GTFockJK adopt whatever libfock hands it on the first
+    // build rather than guessing here; GTFockJK reports when Psi4 was built
+    // without GTFock.
+    jk_ = std::make_shared<GTFockJK>(basisset_);
 }
 
 void HF::finalize() {

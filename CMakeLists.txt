@@ -131,6 +131,7 @@ option(ENABLE_Einsums "Enables the Einsums tensor library" OFF)
 option(ENABLE_simint "Enables use of SIMINT two-electron integral library" OFF)
 option(ENABLE_gauxc "Enables use of GauXC density functional library" OFF)
 option(ENABLE_gdma "Enables Stone's GDMA multipole code (requires Fortran; can also be added at runtime)" OFF)
+option(ENABLE_GTFock "Enables GTFock for MPI-distributed J/K builds (requires MPI, mpi4py, and a separately built GTFock+Simint; see doc/sphinxman/source/gtfock.rst)" OFF)
 option(ENABLE_IntegratorXX "Enables use of IntegratorXX density functional grids library" OFF)
 option(ENABLE_OpenOrbitalOptimizer "Enables the OpenOrbitalOptimizer library (requires Armadillo)" OFF)
 option(ENABLE_PCMSolver "Enables PCMSolver library (requires Fortran)" OFF)
@@ -277,6 +278,7 @@ ExternalProject_Add(psi4-core
            brianqc_external
            integratorxx_external
            gauxc_external
+           gtfock_external
 
    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/psi4
    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${STAGED_INSTALL_PREFIX}
@@ -332,6 +334,7 @@ ExternalProject_Add(psi4-core
               -DENABLE_Einsums=${ENABLE_Einsums}
               -DENABLE_simint=${ENABLE_simint}
               -DENABLE_gdma=${ENABLE_gdma}
+              -DENABLE_GTFock=${ENABLE_GTFock}
               -DENABLE_PCMSolver=${ENABLE_PCMSolver}
               -DENABLE_mdi=${ENABLE_mdi}
               -DENABLE_BrianQC=${ENABLE_BrianQC}
@@ -348,6 +351,7 @@ ExternalProject_Add(psi4-core
               -DEinsums_DIR=${Einsums_DIR}
               -Dgau2grid_DIR=${gau2grid_DIR}
               -Dgdma_DIR=${gdma_DIR}
+              -DGTFock_ROOT=${GTFock_ROOT}
               -DLibint2_DIR=${Libint2_DIR}
               -DOpenOrbitalOptimizer_DIR=${OpenOrbitalOptimizer_DIR}
               -DPCMSolver_DIR=${PCMSolver_DIR}

@@ -26,6 +26,7 @@ foreach(dir
   ddx
   integratorxx
   gauxc  # keep this _after_ integratorxx as it's checking <project>_DIR
+  gtfock
   )
   add_subdirectory(${dir})
 endforeach()

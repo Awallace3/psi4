@@ -28,6 +28,7 @@
 
 #include "psi4/pybind11.h"
 
+#include "psi4/libfock/gtfock_interface.h"
 #include "psi4/libfock/jk.h"
 #include "psi4/libfock/soscf.h"
 #include "psi4/lib3index/denominator.h"
@@ -202,6 +203,24 @@ void export_fock(py::module &m) {
         .def("set_COSX_grid", &CompositeJK::set_COSX_grid, "Set grid to use for COSX for this SCF iteration.")
         .def("get_COSX_grid", &CompositeJK::get_COSX_grid, "Return grid used for COSX for this SCF iteration.")
         .def("get_snLinK_max_am", &CompositeJK::get_snLinK_max_am, "Return maximum AM supported by current GauXC instance, if GauXC support is enabled.");
+
+    // GTFock's engine is MPI-global rather than per-object, so these report on
+    // the process, not on any one JK. psi4.driver.gtfock cross-checks them
+    // against mpi4py to prove Python, Psi4, and GTFock share one MPI runtime.
+    m.def("gtfock_enabled", &MinimalInterface::enabled,
+          "Was Psi4 compiled with GTFock support (-DENABLE_GTFock=ON)?");
+    m.def("gtfock_mpi_initialized", &MinimalInterface::mpi_initialized,
+          "Has MPI been initialized in this process, as GTFock's MPI library sees it?");
+    m.def("gtfock_world_rank", &MinimalInterface::world_rank,
+          "Rank of this process in MPI_COMM_WORLD as GTFock sees it, or -1 without MPI.");
+    m.def("gtfock_world_size", &MinimalInterface::world_size,
+          "Size of MPI_COMM_WORLD as GTFock sees it, or -1 without MPI.");
+    m.def("gtfock_fock_builds", &MinimalInterface::total_fock_builds,
+          "Number of GTFock Fock builds this process has run. Zero proves GTFock never ran.");
+    m.def("gtfock_process_grid", &MinimalInterface::process_grid,
+          "[nprow, npcol] of the most recent GTFock engine, or [-1, -1] if none was built.");
+    m.def("gtfock_local_block", &MinimalInterface::local_block,
+          "[start_row, end_row, start_col, end_col] of the AO block GTFock gave this rank.");
 
     py::class_<scf::SADGuess, std::shared_ptr<scf::SADGuess>>(m, "SADGuess", "docstring")
         .def_static("build_SAD",

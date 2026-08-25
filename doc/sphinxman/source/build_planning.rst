@@ -325,6 +325,8 @@ are available pre-built from conda.
 
 * :ref:`simint <cmake:simint>` |w---w| :ref:`[what is simint?] <sec:simint>` :source:`[simint min version] <external/upstream/simint/CMakeLists.txt#L2>`
 
+* :ref:`GTFock <cmake:gtfock>` |w---w| :ref:`[what is GTFock?] <sec:gtfock>` (external build only; needs Simint, MPI, and mpi4py)
+
 * :ref:`OpenOrbitalOptimizer <cmake:ooo>` |w---w| `[what is OpenOrbitalOptimizer?] <sec:ooo>` (August 2025; added by v1.10)
 
 Additionally, there are runtime-loaded capabilities:

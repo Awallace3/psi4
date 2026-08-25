@@ -7,6 +7,7 @@ list(APPEND sources
   DiskDFJK.cc
   DiskJK.cc
   GTFockJK.cc
+  gtfock_interface.cc
   LinK.cc
   MemDFJK.cc
   PKJK.cc

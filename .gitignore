@@ -93,6 +93,10 @@ metadata.out.cmake
 # Compilation directories that people use
 obj*
 *objdir
+# conda/psi4-path-advisor.py writes these into the source root
+/objdir*/
+/cache_*.cmake
+/env_*.yaml
 build*
 debug
 debug_latest
@@ -162,5 +166,6 @@ Pipfile.lock
 pytest_output.dat
 pytest_output.log
 AGENTS.md
+CLAUDE.md
 profile.txt
 fsapt

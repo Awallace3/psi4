@@ -178,6 +178,7 @@ _addons_ = {
     "einsums": _CMake_to_Py_boolean("@ENABLE_Einsums@"),
     "pyeinsums": which_import("einsums", return_bool=True),
     "gauxc": _CMake_to_Py_boolean("@ENABLE_gauxc@"),
+    "gtfock": _CMake_to_Py_boolean("@ENABLE_GTFock@"),
     "integratorxx": _CMake_to_Py_boolean("@ENABLE_IntegratorXX@"),
     "ooo": _CMake_to_Py_boolean("@ENABLE_OpenOrbitalOptimizer@"),
     "qcmanybody": which_import("qcmanybody", return_bool=True),

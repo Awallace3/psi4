@@ -825,22 +825,28 @@ class PSI_API DirectJK : public JK {
 
 /** \brief Derived class extending the JK object to GTFock
  *
- *   Unfortunately GTFock needs to know the number of density
- *   matrices and whether they are symmetric at construction.
- *   These two points are not within the design considerations of
- *   the base JK object and so this adds a slight complication if you
- *   want to use GTFock under those circumstances.  To get around
- *   this, you'll need to manually build a GTFockJK
- *   object and pass it into the constructor.  Don't worry
- *   building a GTFockJK object is easy, take a look at
- *   the Hartree-Fock code in HF.cc
+ *   GTFock is MPI-parallel and fixes the number of density matrices and
+ *   whether they are symmetric when its engine is created, neither of which
+ *   the base JK object knows at construction. The one-argument constructor
+ *   therefore defers engine creation to the first compute_JK() and adopts the
+ *   shape libfock asks for; pass NMats/AreSymm explicitly only when you need to
+ *   pin them.
  *
+ *   MPI must already be running: drive this from Python through
+ *   psi4.driver.gtfock, which imports mpi4py. See
+ *   doc/sphinxman/source/gtfock.rst for the build and run procedure and for the
+ *   prototype's limits.
  */
 class GTFockJK : public JK {
    private:
     /// The actual instance that does the implementing
     std::shared_ptr<MinimalInterface> Impl_;
+    /// Density matrices per Fock build the GTFock engine is (or will be) built for
     int NMats_ = 0;
+    /// Whether those densities are symmetric
+    bool are_symm_ = true;
+    /// True when NMats_/are_symm_ came from the caller rather than from libfock
+    bool fixed_shape_ = false;
 
     std::string name() override { return "GTFockJK"; }
     size_t memory_estimate() override;
@@ -854,8 +860,8 @@ class GTFockJK : public JK {
     void compute_JK() override;
     /// Delete integrals, files, etc
     void postiterations() override {}
-    /// I don't fell the need to further clutter the output...
-    void print_header() const override {}
+    /// Report the MPI geometry GTFock is actually running on
+    void print_header() const override;
 
    public:
     /** \brief Your public interface to GTFock

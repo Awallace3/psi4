@@ -182,6 +182,17 @@ std::shared_ptr<JK> JK::build_JK(std::shared_ptr<BasisSet> primary, std::shared_
 
         return jk;
 
+    } else if (jk_type == "GTFOCK") {
+        // GTFock builds its own distributed engine and screens internally, so
+        // the usual Psi4 cutoff/screening setters have nothing to act on; it
+        // reads INTS_TOLERANCE directly when it creates the engine.
+        auto jk = std::make_shared<GTFockJK>(primary);
+        if (options["PRINT"].has_changed()) jk->set_print(options.get_int("PRINT"));
+        if (options["DEBUG"].has_changed()) jk->set_debug(options.get_int("DEBUG"));
+        if (options["BENCH"].has_changed()) jk->set_bench(options.get_int("BENCH"));
+
+        return jk;
+
     /// handle composite methods
     } else if (is_composite) {
         auto jk = std::make_shared<CompositeJK>(primary, auxiliary, options);
