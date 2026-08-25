@@ -83,8 +83,9 @@ Prototype scope
 * **One engine per process.** GTFock caches the basis, the Simint handle, and
   its screening and blocking buffers in global state that it fills once and
   never refreshes, so |PSIfour| builds a single GTFock engine and reuses it.
-  Asking for a second engine with a different molecule, basis, or task shape in
-  the same process raises; run that case in a fresh process.
+  Asking for a second engine with a different molecule, basis, screening
+  tolerance, or task shape in the same process raises; run that case in a fresh
+  process.
 * **Screening is density-weighted.** ``INTS_TOLERANCE`` (equivalently
   ``jk.set_cutoff()``) is handed to GTFock verbatim as its ``tolscr``, which is
   the right mapping: GTFock and |PSIfour| share one convention, each storing a
@@ -143,8 +144,13 @@ OpenMPI.
     ...       -DCMAKE_INSTALL_PREFIX=/path/to/install-psi4-gtfock
     >>> cmake --build objdir_gtfock -j 12
 
-``-DCMAKE_PREFIX_PATH`` must include the GTFock install prefix because Simint is
-installed there too, alongside ``libgtfock``.
+``-DGTFock_ROOT`` alone is enough to resolve GTFock: libcint, GTMatrix, and the
+Simint that GTFock was built against are all found as plain libraries under that
+same prefix, alongside ``libgtfock``. Simint is deliberately *not* located
+through its CMake package config, so enabling GTFock never also switches on
+|PSIfours| own :ref:`Simint <sec:simint>` ERI engine. Naming the GTFock prefix in
+``-DCMAKE_PREFIX_PATH`` as well, as above, is harmless; the ``${CONDA_PREFIX}``
+entry there is what the rest of the build environment needs.
 
 ``-DLAPACK_LIBRARIES`` must name MKL's *layered* libraries rather than letting
 |PSIfour| pick ``libmkl_rt``. GTFock links MKL's BLACS and ScaLAPACK, whose
@@ -236,9 +242,10 @@ How to configure GTFock for building Psi4
   builds with GTFock. Default ``OFF``.
 * :makevar:`GTFock_ROOT` |w---w| CMake variable to specify where the pre-built
   GTFock can be found. Set to the installation directory containing
-  ``include/pfock.h`` and ``lib/libgtfock.so``.
-* :makevar:`CMAKE_PREFIX_PATH` |w---w| must also contain that prefix, since
-  Simint is detected from it.
+  ``include/pfock.h`` and ``lib/libgtfock.so``. libcint, GTMatrix, and Simint
+  are located under the same prefix.
+* :makevar:`CMAKE_PREFIX_PATH` |w---w| an alternative to :makevar:`GTFock_ROOT`;
+  add the same prefix to it.
 
 There is no internal build: GTFock has no conda package and no CMake package
 config, so |PSIfour| only ever links a GTFock you built yourself.

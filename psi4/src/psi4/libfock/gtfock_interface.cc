@@ -209,10 +209,11 @@ void MinimalInterface::check_supported(std::shared_ptr<BasisSet> primary, size_t
                 "GTFock: shell " + std::to_string(s) + " has angular momentum l = " + std::to_string(am) +
                 ", above the maximum of " + std::to_string(_SIMINT_OSTEI_MAXAM) +
                 " this GTFock/Simint build supports. GTFock indexes its shell-pair work lists by "
-                "angular momentum against a table sized for l <= " + std::to_string(_SIMINT_OSTEI_MAXAM) +
+                "angular momentum against a table sized for l <= " +
+                std::to_string(_SIMINT_OSTEI_MAXAM) +
                 ", so a higher shell would corrupt memory rather than fail. Choose a basis set whose "
-                "maximum angular momentum is at most " + std::to_string(_SIMINT_OSTEI_MAXAM) +
-                " (through g functions), or use another SCF_TYPE.");
+                "maximum angular momentum is at most " +
+                std::to_string(_SIMINT_OSTEI_MAXAM) + " (through g functions), or use another SCF_TYPE.");
         }
     }
     // PFock_create(..., symm=0) puts GTFock in its nosymm mode, where the whole
@@ -314,10 +315,9 @@ MinimalInterface::MinimalInterface(std::shared_ptr<BasisSet> primary, size_t nma
             delete engine;
             throw PSIEXCEPTION("GTFock: CInt_createBasisSet failed.");
         }
-        if (CInt_importBasisSet(engine->basis, key.natom, key.Zs.data(), key.x.data(), key.y.data(),
-                                key.z.data(), key.nprim, key.nshell, key.pure, key.shells_per_atom.data(),
-                                key.prims_per_shell.data(), key.am.data(), key.cc.data(),
-                                key.alpha.data()) != CINT_STATUS_SUCCESS) {
+        if (CInt_importBasisSet(engine->basis, key.natom, key.Zs.data(), key.x.data(), key.y.data(), key.z.data(),
+                                key.nprim, key.nshell, key.pure, key.shells_per_atom.data(), key.prims_per_shell.data(),
+                                key.am.data(), key.cc.data(), key.alpha.data()) != CINT_STATUS_SUCCESS) {
             CInt_destroyBasisSet(engine->basis);
             delete engine;
             throw PSIEXCEPTION("GTFock: CInt_importBasisSet failed.");
@@ -326,8 +326,8 @@ MinimalInterface::MinimalInterface(std::shared_ptr<BasisSet> primary, size_t nma
             const int got = CInt_getNumFuncs(engine->basis);
             CInt_destroyBasisSet(engine->basis);
             delete engine;
-            throw PSIEXCEPTION("GTFock: imported basis has " + std::to_string(got) +
-                               " functions but Psi4's has " + std::to_string(nbf_) + ".");
+            throw PSIEXCEPTION("GTFock: imported basis has " + std::to_string(got) + " functions but Psi4's has " +
+                               std::to_string(nbf_) + ".");
         }
 
         // A negative task count lets GTFock pick its own task blocking. The
@@ -339,8 +339,8 @@ MinimalInterface::MinimalInterface(std::shared_ptr<BasisSet> primary, size_t nma
         // weights that product by the largest relevant density element, which
         // Psi4's default Schwarz/CSAM screening does not, so at the same
         // tolerance GTFock screens somewhat more aggressively.
-        if (PFock_create(engine->basis, nprow_, npcol_, -1, cutoff_, static_cast<int>(nmats_),
-                         are_symm_ ? 1 : 0, &engine->pfock) != PFOCK_STATUS_SUCCESS) {
+        if (PFock_create(engine->basis, nprow_, npcol_, -1, cutoff_, static_cast<int>(nmats_), are_symm_ ? 1 : 0,
+                         &engine->pfock) != PFOCK_STATUS_SUCCESS) {
             CInt_destroyBasisSet(engine->basis);
             delete engine;
             throw PSIEXCEPTION(

@@ -207,8 +207,7 @@ void export_fock(py::module &m) {
     // GTFock's engine is MPI-global rather than per-object, so these report on
     // the process, not on any one JK. psi4.driver.gtfock cross-checks them
     // against mpi4py to prove Python, Psi4, and GTFock share one MPI runtime.
-    m.def("gtfock_enabled", &MinimalInterface::enabled,
-          "Was Psi4 compiled with GTFock support (-DENABLE_GTFock=ON)?");
+    m.def("gtfock_enabled", &MinimalInterface::enabled, "Was Psi4 compiled with GTFock support (-DENABLE_GTFock=ON)?");
     m.def("gtfock_mpi_initialized", &MinimalInterface::mpi_initialized,
           "Has MPI been initialized in this process, as GTFock's MPI library sees it?");
     m.def("gtfock_world_rank", &MinimalInterface::world_rank,

@@ -79,8 +79,8 @@ void GTFockJK::compute_JK() {
     // one GTFock engine, so building a doomed one and then throwing would poison
     // every later request.
     if (requested != NMats_) {
-        throw PSIEXCEPTION("GTFockJK: this engine was built for " + std::to_string(NMats_) +
-                           " density matrices but " + std::to_string(requested) + " were supplied.");
+        throw PSIEXCEPTION("GTFockJK: this engine was built for " + std::to_string(NMats_) + " density matrices but " +
+                           std::to_string(requested) + " were supplied.");
     }
     if (are_symm_ && !lr_symmetric_) {
         throw PSIEXCEPTION(
