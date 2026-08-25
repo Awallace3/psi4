@@ -187,17 +187,29 @@ def test_gtfock_rhf_energy_matches_reference(gtfock_mpi):
 
 
 @uusing("gtfock")
-def test_gtfock_refuses_spherical_high_am(gtfock_mpi):
-    """GTFock's Simint path is Cartesian; a spherical d shell must be refused."""
+@pytest.mark.parametrize("basis", ["cc-pVDZ", "sto-3g"])
+def test_gtfock_refuses_spherical_basis(gtfock_mpi, basis):
+    """GTFock's Simint path is Cartesian, so every spherical basis must be refused.
+
+    ``sto-3g`` is the s/p-only case: its shell counts do match GTFock's 2l+1
+    sizing, but Simint fills a p shell as px, py, pz while Psi4 orders pure
+    shells by m, so it would come back permuted rather than merely mis-sized.
+    It has to raise, not return a wrong energy.
+    """
     mol = _water()
-    primary = psi4.core.BasisSet.build(mol, "ORBITAL", "cc-pVDZ", puream=True)
+    primary = psi4.core.BasisSet.build(mol, "ORBITAL", basis, puream=True)
+    assert primary.has_puream()
     psi4.set_options({"scf_type": "gtfock"})
     jk = psi4.core.JK.build_JK(primary, None)
+    jk.set_do_K(True)
     jk.initialize()
     jk.C_clear()
     jk.C_left_add(psi4.core.Matrix.from_array(np.zeros((primary.nbf(), 1))))
+
+    builds_before = gtfock_mpi.fock_builds()
     with pytest.raises(RuntimeError, match="spherical"):
         jk.compute()
+    assert gtfock_mpi.fock_builds() == builds_before
 
 
 @uusing("gtfock")

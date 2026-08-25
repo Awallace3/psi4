@@ -380,7 +380,7 @@ void CIWavefunction::setup_mcscf_ints_ao() {
     if (scf_type == "GTFOCK") {
         // Formerly this communicated through P::e.set_legacy_molecule(molecule_) here. Legacy molecule removed.
         // GTFockJK itself reports when Psi4 was built without GTFock.
-        jk_ = std::make_shared<GTFockJK>(basisset_);
+        jk_ = JK::build_JK(basisset_, BasisSet::zero_ao_basis_set(), options_, "GTFOCK");
     } else if ((options_.get_str("SCF_TYPE").find("DF") != std::string::npos) || scf_type == "CD" || scf_type == "PK" ||
                scf_type == "DIRECT" || scf_type == "OUT_OF_CORE") {
         jk_ = JK::build_JK(this->basisset(), get_basisset("DF_BASIS_SCF"), options_, false,

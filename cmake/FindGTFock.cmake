@@ -14,7 +14,7 @@
 #
 #  GTFock_FOUND         - True when every GTFock piece was located
 #  GTFock_INCLUDE_DIRS  - Include directories for pfock.h, CInt.h, GTMatrix.h
-#  GTFock_LIBRARIES     - The GTFock/CInt/GTMatrix libraries
+#  GTFock_LIBRARIES     - The GTFock/CInt/GTMatrix/Simint libraries
 #
 # and defines the imported target:
 #
@@ -52,6 +52,20 @@ find_library(GTFock_GTMATRIX_LIBRARY
   PATH_SUFFIXES lib lib64
   DOC "The GTMatrix distributed-matrix library")
 
+# Simint is resolved as a plain library path rather than through
+# find_package(simint CONFIG), on purpose. That find would define the
+# simint::simint imported target in the calling directory scope, and Psi4 gates
+# its own Simint ERI engine on `if(TARGET simint::simint)` rather than on
+# ENABLE_simint -- so enabling GTFock would silently switch on an unrelated
+# integral engine that the build still reports as disabled, and without the
+# am${MAX_AM_ERI} component check Psi4's own Simint block requires. GTFock's
+# public headers never include <simint/simint.h> (libcint's CInt.h says so
+# outright), so the library alone is all this target needs.
+find_library(GTFock_SIMINT_LIBRARY
+  NAMES simint
+  PATH_SUFFIXES lib lib64
+  DOC "The Simint ERI library GTFock was built against")
+
 set(GTFock_INCLUDE_DIRS
   ${GTFock_PFOCK_INCLUDE_DIR}
   ${GTFock_CINT_INCLUDE_DIR}
@@ -62,13 +76,15 @@ endif()
 set(GTFock_LIBRARIES
   ${GTFock_PFOCK_LIBRARY}
   ${GTFock_CINT_LIBRARY}
-  ${GTFock_GTMATRIX_LIBRARY})
+  ${GTFock_GTMATRIX_LIBRARY}
+  ${GTFock_SIMINT_LIBRARY})
 
 find_package_handle_standard_args(GTFock
   REQUIRED_VARS
     GTFock_PFOCK_LIBRARY
     GTFock_CINT_LIBRARY
     GTFock_GTMATRIX_LIBRARY
+    GTFock_SIMINT_LIBRARY
     GTFock_PFOCK_INCLUDE_DIR
     GTFock_CINT_INCLUDE_DIR
     GTFock_GTMATRIX_INCLUDE_DIR
@@ -80,7 +96,6 @@ if(GTFock_FOUND AND NOT TARGET GTFock::gtfock)
     # GTFock target without both is not usable. GTFock is C, so ask only for the
     # C components and let Psi4's C++ shim sit on top of the C API.
     find_package(MPI REQUIRED COMPONENTS C)
-    find_package(simint 0.8 CONFIG REQUIRED)
     find_package(OpenMP REQUIRED COMPONENTS C)
 
     add_library(GTFock::gtfock UNKNOWN IMPORTED)
@@ -91,7 +106,7 @@ if(GTFock_FOUND AND NOT TARGET GTFock::gtfock)
       INTERFACE
         "${GTFock_CINT_LIBRARY}"
         "${GTFock_GTMATRIX_LIBRARY}"
-        simint::simint
+        "${GTFock_SIMINT_LIBRARY}"
         MPI::MPI_C
         OpenMP::OpenMP_C)
 endif()
@@ -102,4 +117,5 @@ mark_as_advanced(
   GTFock_GTMATRIX_INCLUDE_DIR
   GTFock_PFOCK_LIBRARY
   GTFock_CINT_LIBRARY
-  GTFock_GTMATRIX_LIBRARY)
+  GTFock_GTMATRIX_LIBRARY
+  GTFock_SIMINT_LIBRARY)

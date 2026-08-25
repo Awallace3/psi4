@@ -62,10 +62,13 @@ Prototype scope
 * **One density matrix per Fock build**, i.e. closed-shell RHF. GTFock's
   GTMatrix-backed engine keeps a single global density matrix, so open-shell and
   multi-density work (UHF, ROHF, SOSCF, response) raise rather than run.
-* **Cartesian basis sets** (``puream false``), or any basis whose maximum
-  angular momentum is ``p``. GTFock sizes spherical shells as :math:`2l+1` while
-  the Simint driver it calls fills Cartesian shell blocks; those agree only
-  through ``l = 1``. A spherical basis with ``d`` or higher raises.
+* **Cartesian basis sets only** (``puream false``). GTFock's Simint driver fills
+  Cartesian shell blocks while GTFock sizes a basis it labels spherical as
+  :math:`2l+1` per shell. The counts diverge above ``l = 1``, and even at
+  ``l = 1`` the orderings differ |w---w| Simint lays a ``p`` shell out as
+  ``px, py, pz`` while |PSIfour| orders pure shells by :math:`m` |w---w| so a
+  spherical basis would give a permuted J/K. Any spherical basis raises,
+  including an ``s``/``p``-only one such as the default spherical ``sto-3g``.
 * **No range-separated exchange.** ``wK`` is unavailable from GTFock.
 * **One engine per process.** GTFock caches the basis, the Simint handle, and
   its screening and blocking buffers in global state that it fills once and

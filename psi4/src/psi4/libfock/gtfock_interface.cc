@@ -183,15 +183,18 @@ void MinimalInterface::check_supported(std::shared_ptr<BasisSet> primary, size_t
             " were requested. The prototype covers closed-shell RHF (SCF_TYPE GTFOCK); use another SCF_TYPE "
             "for open-shell or multi-density work.");
     }
-    // GTFock counts 2l+1 functions per shell for a basis it labels spherical,
-    // but the Simint driver it actually calls fills Cartesian shell blocks.
-    // Those agree only through l=1, so anything else would silently scramble
-    // the AO indexing. Refuse rather than return a permuted J/K.
-    if (primary->has_puream() && primary->max_am() > 1) {
+    // A basis imported as spherical makes libcint size shells as 2l+1 while the
+    // Simint driver underneath fills Cartesian shell blocks. The counts diverge
+    // above l=1, and even at l=1 the ordering does not match: Simint lays a p
+    // shell out as px, py, pz while Psi4 orders pure shells by m. So GTFock
+    // would read the density under permuted AO labels and return a wrong J/K,
+    // silently, for a plain spherical s/p basis. Cartesian only.
+    if (primary->has_puream()) {
         throw PSIEXCEPTION(
-            "GTFock: spherical-harmonic basis sets with l > 1 are not supported because GTFock's Simint "
-            "path evaluates Cartesian shell blocks while sizing them as spherical. Set PUREAM false (or "
-            "choose a Cartesian basis) to use SCF_TYPE GTFOCK.");
+            "GTFock: spherical-harmonic basis sets are not supported; GTFock requires a Cartesian basis. "
+            "GTFock's Simint path fills Cartesian shell blocks (px, py, pz) while Psi4 orders pure shells "
+            "by m, and above l = 1 the two do not even agree on how many functions a shell has. Set "
+            "PUREAM false, or choose a Cartesian basis set, to use SCF_TYPE GTFOCK.");
     }
     // PFock_create(..., symm=0) puts GTFock in its nosymm mode, where the whole
     // post-build correction branch in PFock_computeFock is commented out
@@ -372,6 +375,9 @@ void MinimalInterface::SetP(const std::vector<std::shared_ptr<Matrix>>& Ps) {
     if (PFock_computeFock(impl_->engine->basis, impl_->engine->pfock) != PFOCK_STATUS_SUCCESS) {
         throw PSIEXCEPTION("GTFock: PFock_computeFock failed.");
     }
+    // Everything below reads the result matrices one-sidedly out of other ranks'
+    // blocks, so no rank may run ahead of another's last local write to them.
+    MPI_Barrier(MPI_COMM_WORLD);
     ++fock_builds_;
     ++gtfock_total_fock_builds;
 
@@ -381,13 +387,13 @@ void MinimalInterface::SetP(const std::vector<std::shared_ptr<Matrix>>& Ps) {
     // functional, and that path never calls GetK at all. A nonzero density
     // always gives a nonzero K, so one probe per engine settles it.
     if (density_was_nonzero_ && !impl_->engine->combined_jk_checked) {
-        impl_->engine->combined_jk_checked = true;
         if (gtmatrix_is_zero(impl_->engine->pfock->gtm_Kmat, nbf_, mpi_rank_)) {
             throw PSIEXCEPTION(
                 "GTFock returned an identically zero exchange matrix, which means it was built with "
                 "GTF_COMBINED_JK=ON. Rebuild GTFock with -DGTF_COMBINED_JK=OFF so J and K come back "
                 "separately.");
         }
+        impl_->engine->combined_jk_checked = true;
     }
 }
 
