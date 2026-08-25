@@ -69,6 +69,16 @@ Prototype scope
   ``px, py, pz`` while |PSIfour| orders pure shells by :math:`m` |w---w| so a
   spherical basis would give a permuted J/K. Any spherical basis raises,
   including an ``s``/``p``-only one such as the default spherical ``sto-3g``.
+* **Maximum angular momentum** :math:`l \le 4` (through ``g`` functions).
+  libcint indexes GTFock's shell-pair work lists as
+  :math:`l_P (l_{max} + 1) + l_Q` into a table sized for the maximum angular
+  momentum the linked Simint was generated for, without checking the bound, so
+  a higher shell would corrupt memory rather than fail. |PSIfour| refuses any
+  shell above the ceiling, naming the offending shell. GTFock must therefore be
+  built against a Simint generated for at least the angular momentum in use;
+  ``gtfock_psi4``'s pinned build supplies :math:`l_{max} = 4`, which matches the
+  value libcint compiles against. A basis such as Cartesian ``cc-pV5Z``, which
+  carries ``h`` functions, raises.
 * **No range-separated exchange.** ``wK`` is unavailable from GTFock.
 * **One engine per process.** GTFock caches the basis, the Simint handle, and
   its screening and blocking buffers in global state that it fills once and

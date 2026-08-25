@@ -5,10 +5,11 @@ The GTFock path is opt-in: it exists only when Psi4 was configured with
 the default build reports no GTFock and needs no MPI; everything else skips
 through the standard ``uusing("gtfock")`` add-on marker.
 
-Every test here drives the linked library rather than a header or a stub: the
-single-rank tests go through ``psi4.core``/``JK`` into ``libgtfock.so``, and the
-multi-rank test launches ``mpirun`` on the installed Psi4 and reads back what
-each rank's own GTFock engine reported.
+Every test here drives the linked library rather than a header or a stub: they
+all go through ``psi4.core``/``JK`` into ``libgtfock.so``. The tests that need a
+GTFock engine of their own do so in a subprocess, because a process gets exactly
+one engine; the multi-rank test launches ``mpirun`` on the installed Psi4 and
+reads back what each rank's own GTFock engine reported.
 """
 
 import json
@@ -127,41 +128,96 @@ def test_gtfock_module_works_without_mpi4py():
         assert "mpi4py" in probe.stdout
 
 
+# Compare GTFock's J/K against DirectJK's for one basis, in a process of its
+# own. A process gets exactly one GTFock engine (see `Prototype scope` in
+# doc/sphinxman/source/gtfock.rst), so two bases cannot be compared from the
+# same interpreter; each parametrization forks a fresh Psi4 instead. This still
+# drives the shipped, linked libgtfock.so through psi4.core/JK -- it is the same
+# code path the in-process tests use, just isolated.
+_JK_COMPARE_PROBE = r'''
+import json
+import sys
+
+import numpy as np
+
+import psi4
+from psi4.driver import gtfock
+
+basis, scratch = sys.argv[1], sys.argv[2]
+psi4.core.IOManager.shared_object().set_default_path(scratch)
+psi4.core.set_output_file(scratch + "/jk_probe.out", False)
+psi4.set_num_threads(1)
+
+gtfock.initialize()
+
+psi4.geometry({geometry!r})
+psi4.set_options({{"basis": basis, "puream": False, "df_scf_guess": False,
+                  "guess": "core", "e_convergence": 1e-10, "d_convergence": 1e-9}})
+
+# A converged density is a more demanding input than a random matrix: it has
+# the sparsity pattern GTFock's screening actually acts on.
+psi4.set_options({{"scf_type": "pk"}})
+_, wfn = psi4.energy("scf", return_wfn=True)
+primary = wfn.basisset()
+Cocc = wfn.Ca_subset("AO", "OCC")
+
+
+def jk_of(scf_type):
+    psi4.set_options({{"scf_type": scf_type}})
+    jk = psi4.core.JK.build_JK(primary, None)
+    jk.set_do_K(True)
+    jk.initialize()
+    jk.C_clear()
+    jk.C_left_add(Cocc)
+    jk.compute()
+    return jk, np.array(jk.J()[0]), np.array(jk.K()[0])
+
+
+ref_jk, J_ref, K_ref = jk_of("direct")
+builds_before = gtfock.fock_builds()
+gt_jk, J_gt, K_gt = jk_of("gtfock")
+
+print("PSI4-GTFOCK-JSON " + json.dumps({{
+    "ref_name": ref_jk.name(),
+    "gt_name": gt_jk.name(),
+    "fock_builds": gtfock.fock_builds() - builds_before,
+    "max_dJ": float(np.max(np.abs(J_gt - J_ref))),
+    "max_dK": float(np.max(np.abs(K_gt - K_ref))),
+    "max_am": max(primary.shell(s).am for s in range(primary.nshell())),
+    "nbf": primary.nbf(),
+}}), flush=True)
+'''.format(geometry=GEOMETRY)
+
+
 @uusing("gtfock")
-def test_gtfock_jk_matches_directjk(gtfock_mpi):
-    """J and K from GTFock must match Psi4's own DirectJK for the same density."""
-    mol = _water()
-    psi4.set_options({"basis": "sto-3g", "puream": False, "df_scf_guess": False,
-                      "guess": "core", "e_convergence": 1e-10, "d_convergence": 1e-9})
+@pytest.mark.parametrize("basis,expected_max_am", [("sto-3g", 1), ("6-31G*", 2)])
+def test_gtfock_jk_matches_directjk(gtfock_mpi, tmp_path, basis, expected_max_am):
+    """J and K from GTFock must match Psi4's own DirectJK for the same density.
 
-    # A converged density is a more demanding input than a random matrix: it has
-    # the sparsity pattern GTFock's screening actually acts on.
-    psi4.set_options({"scf_type": "pk"})
-    _, wfn = psi4.energy("scf", return_wfn=True)
-    primary = wfn.basisset()
-    Cocc = wfn.Ca_subset("AO", "OCC")
+    ``6-31G*`` carries a Cartesian ``d`` shell, which is where GTFock's and
+    Psi4's conventions could next diverge: the ordering inside a six-function
+    ``d`` block, and the normalization Simint applies to the raw contraction
+    coefficients the shim hands it. A permuted or mis-scaled J/K would show up
+    here rather than silently in a user's energy.
+    """
+    probe = subprocess.run(
+        [sys.executable, "-c", _JK_COMPARE_PROBE, basis, str(tmp_path)],
+        capture_output=True, text=True, timeout=900)
+    assert probe.returncode == 0, f"{probe.stdout}\n{probe.stderr}"
 
-    def jk_of(scf_type):
-        psi4.set_options({"scf_type": scf_type})
-        jk = psi4.core.JK.build_JK(primary, None)
-        jk.set_do_K(True)
-        jk.initialize()
-        jk.C_clear()
-        jk.C_left_add(Cocc)
-        jk.compute()
-        return jk, np.array(jk.J()[0]), np.array(jk.K()[0])
+    lines = [line for line in probe.stdout.splitlines() if line.startswith("PSI4-GTFOCK-JSON ")]
+    assert len(lines) == 1, f"{probe.stdout}\n{probe.stderr}"
+    report = json.loads(lines[0].split(" ", 1)[1])
 
-    ref_jk, J_ref, K_ref = jk_of("direct")
-    builds_before = gtfock_mpi.fock_builds()
-    gt_jk, J_gt, K_gt = jk_of("gtfock")
-
+    # The basis really did reach the angular momentum this case is here to cover.
+    assert report["max_am"] == expected_max_am
     # Guard against a silent fallback to Psi4's own integrals.
-    assert ref_jk.name() == "DirectJK"
-    assert gt_jk.name() == "GTFockJK"
-    assert gtfock_mpi.fock_builds() == builds_before + 1
+    assert report["ref_name"] == "DirectJK"
+    assert report["gt_name"] == "GTFockJK"
+    assert report["fock_builds"] == 1
 
-    assert np.max(np.abs(J_gt - J_ref)) < JK_TOL
-    assert np.max(np.abs(K_gt - K_ref)) < JK_TOL
+    assert report["max_dJ"] < JK_TOL
+    assert report["max_dK"] < JK_TOL
 
 
 @uusing("gtfock")
@@ -208,6 +264,34 @@ def test_gtfock_refuses_spherical_basis(gtfock_mpi, basis):
 
     builds_before = gtfock_mpi.fock_builds()
     with pytest.raises(RuntimeError, match="spherical"):
+        jk.compute()
+    assert gtfock_mpi.fock_builds() == builds_before
+
+
+@uusing("gtfock")
+def test_gtfock_refuses_high_angular_momentum(gtfock_mpi):
+    """A shell above GTFock's angular-momentum ceiling must raise, not corrupt memory.
+
+    libcint indexes GTFock's per-thread shell-pair work lists as
+    ``l_P * (l_max + 1) + l_Q`` into a table sized for ``l_max``, with no bound
+    check, so an ``h`` shell (``l = 5``) indexes past the end of that array.
+    Cartesian ``cc-pV5Z`` puts ``h`` functions on oxygen, and ``puream false`` is
+    exactly what the GTFock docs tell users to set, so this is reachable from a
+    documented configuration. It has to raise before GTFock is ever entered.
+    """
+    mol = _water()
+    primary = psi4.core.BasisSet.build(mol, "ORBITAL", "cc-pV5Z", puream=False)
+    assert not primary.has_puream()
+    assert max(primary.shell(s).am for s in range(primary.nshell())) >= 5
+    psi4.set_options({"scf_type": "gtfock"})
+    jk = psi4.core.JK.build_JK(primary, None)
+    jk.set_do_K(True)
+    jk.initialize()
+    jk.C_clear()
+    jk.C_left_add(psi4.core.Matrix.from_array(np.zeros((primary.nbf(), 1))))
+
+    builds_before = gtfock_mpi.fock_builds()
+    with pytest.raises(RuntimeError, match="angular momentum"):
         jk.compute()
     assert gtfock_mpi.fock_builds() == builds_before
 

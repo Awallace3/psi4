@@ -196,6 +196,25 @@ void MinimalInterface::check_supported(std::shared_ptr<BasisSet> primary, size_t
             "by m, and above l = 1 the two do not even agree on how many functions a shell has. Set "
             "PUREAM false, or choose a Cartesian basis set, to use SCF_TYPE GTFOCK.");
     }
+    // libcint hard-codes _SIMINT_OSTEI_MAXAM to match the max angular momentum
+    // the linked Simint was generated for, and derives _SIMINT_AM_PAIRS from it.
+    // CInt_SIMINT_getShellpairAMIndex forms am_P * (MAXAM + 1) + am_Q with no
+    // bound check, and fock_task.c subscripts an array of exactly _SIMINT_AM_PAIRS
+    // ket shell-pair lists with it, so a shell above the ceiling writes past the
+    // end of that array instead of failing. Refuse here.
+    for (int s = 0; s < primary->nshell(); ++s) {
+        const int am = primary->shell(s).am();
+        if (am > _SIMINT_OSTEI_MAXAM) {
+            throw PSIEXCEPTION(
+                "GTFock: shell " + std::to_string(s) + " has angular momentum l = " + std::to_string(am) +
+                ", above the maximum of " + std::to_string(_SIMINT_OSTEI_MAXAM) +
+                " this GTFock/Simint build supports. GTFock indexes its shell-pair work lists by "
+                "angular momentum against a table sized for l <= " + std::to_string(_SIMINT_OSTEI_MAXAM) +
+                ", so a higher shell would corrupt memory rather than fail. Choose a basis set whose "
+                "maximum angular momentum is at most " + std::to_string(_SIMINT_OSTEI_MAXAM) +
+                " (through g functions), or use another SCF_TYPE.");
+        }
+    }
     // PFock_create(..., symm=0) puts GTFock in its nosymm mode, where the whole
     // post-build correction branch in PFock_computeFock is commented out
     // ("GTMatrix cannot handle this yet...") so gtm_Fmat/gtm_Kmat never get the
