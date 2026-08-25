@@ -236,6 +236,32 @@ def test_gtfock_refuses_nonsymmetric_reuse(gtfock_mpi):
 
 
 @uusing("gtfock")
+def test_gtfock_refuses_nonsymmetric_engine(gtfock_mpi):
+    """A first-ever GTFock build with C_left != C_right must refuse too.
+
+    The sibling of ``test_gtfock_refuses_nonsymmetric_reuse``: here nothing has
+    pinned the symmetry flag, so libfock would otherwise create the engine in
+    GTFock's nosymm mode, whose post-build symmetrization is missing upstream.
+    """
+    mol = _water()
+    primary = psi4.core.BasisSet.build(mol, "ORBITAL", "sto-3g", puream=False)
+    psi4.set_options({"scf_type": "gtfock"})
+    jk = psi4.core.JK.build_JK(primary, None)
+    jk.set_do_K(True)
+    jk.initialize()
+
+    rng = np.random.RandomState(1)
+    jk.C_clear()
+    jk.C_left_add(psi4.core.Matrix.from_array(rng.rand(primary.nbf(), 1)))
+    jk.C_right_add(psi4.core.Matrix.from_array(rng.rand(primary.nbf(), 1)))
+
+    builds_before = gtfock_mpi.fock_builds()
+    with pytest.raises(RuntimeError, match="nosymm"):
+        jk.compute()
+    assert gtfock_mpi.fock_builds() == builds_before
+
+
+@uusing("gtfock")
 @pytest.mark.parametrize("nranks", [2])
 def test_gtfock_multirank_mpirun(tmp_path, nranks):
     """Run the whole Python -> mpi4py -> Psi4 -> GTFock path under mpirun.

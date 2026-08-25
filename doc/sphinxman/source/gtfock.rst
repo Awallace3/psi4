@@ -72,6 +72,13 @@ Prototype scope
   never refreshes, so |PSIfour| builds a single GTFock engine and reuses it.
   Asking for a second engine with a different molecule, basis, or task shape in
   the same process raises; run that case in a fresh process.
+* **Screening is more conservative than the requested tolerance.**
+  ``INTS_TOLERANCE`` (equivalently ``jk.set_cutoff()``) is handed to GTFock
+  verbatim as its ``tolscr``, but GTFock stores ``tolscr * tolscr`` and compares
+  that against a Schwarz bound on the integral, whereas |PSIfour| documents
+  ``INTS_TOLERANCE`` as the absolute magnitude below which a TEI is neglected.
+  A requested tolerance of :math:`t` therefore screens at :math:`t^2`, so GTFock
+  always discards fewer integrals than asked. That costs time, not accuracy.
 * J and K are gathered on rank 0 and broadcast, so every rank holds the full
   matrices. Distributing the SCF itself is later work.
 

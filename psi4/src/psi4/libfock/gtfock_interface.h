@@ -108,7 +108,7 @@ class MinimalInterface {
 
    private:
     /// Refuse basis sets and task shapes whose answer would be wrong, not slow.
-    void check_supported(std::shared_ptr<BasisSet> primary, size_t nmats) const;
+    void check_supported(std::shared_ptr<BasisSet> primary, size_t nmats, bool are_symm) const;
 
     struct Impl;
     std::unique_ptr<Impl> impl_;

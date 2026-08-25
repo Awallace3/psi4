@@ -173,7 +173,7 @@ int MinimalInterface::world_size() {
     return size;
 }
 
-void MinimalInterface::check_supported(std::shared_ptr<BasisSet> primary, size_t nmats) const {
+void MinimalInterface::check_supported(std::shared_ptr<BasisSet> primary, size_t nmats, bool are_symm) const {
     // GTFock's GTMatrix-backed engine keeps exactly one global density matrix
     // and asserts num_dmat == 1 deep inside fock_task.c, so refuse here where
     // the message can still be useful.
@@ -193,11 +193,24 @@ void MinimalInterface::check_supported(std::shared_ptr<BasisSet> primary, size_t
             "path evaluates Cartesian shell blocks while sizing them as spherical. Set PUREAM false (or "
             "choose a Cartesian basis) to use SCF_TYPE GTFOCK.");
     }
+    // PFock_create(..., symm=0) puts GTFock in its nosymm mode, where the whole
+    // post-build correction branch in PFock_computeFock is commented out
+    // ("GTMatrix cannot handle this yet...") so gtm_Fmat/gtm_Kmat never get the
+    // symmetrization the symm branch applies, and num_dmat2 becomes 2 while
+    // fock_buf.c requires 1. That returns a wrong J/K rather than failing, so
+    // refuse non-symmetric densities at the one place both GTFockJK
+    // constructors and the adopt-on-first-build path funnel through.
+    if (!are_symm) {
+        throw PSIEXCEPTION(
+            "GTFock: non-symmetric densities (C_left != C_right) are not supported. GTFock's nosymm mode "
+            "skips the symmetrization its Fock build depends on, so it would return a wrong J/K. SOSCF, "
+            "stability analysis, and response-type builds need another SCF_TYPE.");
+    }
 }
 
 MinimalInterface::MinimalInterface(std::shared_ptr<BasisSet> primary, size_t nmats, bool are_symm, double cutoff)
     : impl_(new Impl), nmats_(nmats), are_symm_(are_symm), cutoff_(cutoff) {
-    check_supported(primary, nmats);
+    check_supported(primary, nmats, are_symm);
 
     // GTFock refuses to build without MPI, and it is the Python layer's job to
     // have started MPI through mpi4py. Say so plainly instead of letting
@@ -296,8 +309,12 @@ MinimalInterface::MinimalInterface(std::shared_ptr<BasisSet> primary, size_t nma
         }
 
         // A negative task count lets GTFock pick its own task blocking. The
-        // screening tolerance is the JK object's own cutoff, so set_cutoff() is
-        // honored here exactly as it is by DirectJK and friends.
+        // screening tolerance is the JK object's own cutoff, handed over
+        // verbatim: GTFock stores tolscr*tolscr and compares that against a
+        // Schwarz TEI bound, so an INTS_TOLERANCE of t screens at t^2 rather
+        // than at the absolute TEI magnitude t that Psi4 documents. GTFock
+        // therefore always screens more conservatively than asked, which costs
+        // integrals rather than accuracy.
         if (PFock_create(engine->basis, nprow_, npcol_, -1, cutoff_, static_cast<int>(nmats_),
                          are_symm_ ? 1 : 0, &engine->pfock) != PFOCK_STATUS_SUCCESS) {
             CInt_destroyBasisSet(engine->basis);
@@ -434,7 +451,7 @@ bool MinimalInterface::mpi_initialized() { return false; }
 int MinimalInterface::world_rank() { return -1; }
 int MinimalInterface::world_size() { return -1; }
 
-void MinimalInterface::check_supported(std::shared_ptr<BasisSet>, size_t) const {}
+void MinimalInterface::check_supported(std::shared_ptr<BasisSet>, size_t, bool) const {}
 
 MinimalInterface::MinimalInterface(std::shared_ptr<BasisSet>, size_t, bool, double) {
     throw PSIEXCEPTION("Psi4 was not compiled with GTFock support. Reconfigure with -DENABLE_GTFock=ON.");
