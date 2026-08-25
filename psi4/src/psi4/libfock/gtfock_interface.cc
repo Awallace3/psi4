@@ -313,11 +313,13 @@ MinimalInterface::MinimalInterface(std::shared_ptr<BasisSet> primary, size_t nma
 
         // A negative task count lets GTFock pick its own task blocking. The
         // screening tolerance is the JK object's own cutoff, handed over
-        // verbatim: GTFock stores tolscr*tolscr and compares that against a
-        // Schwarz TEI bound, so an INTS_TOLERANCE of t screens at t^2 rather
-        // than at the absolute TEI magnitude t that Psi4 documents. GTFock
-        // therefore always screens more conservatively than asked, which costs
-        // integrals rather than accuracy.
+        // verbatim: GTFock and Psi4 share one screening convention. Both store
+        // the unsquared shell-pair maximum max|(MN|MN)| and test the product of
+        // two of them against the squared threshold, so INTS_TOLERANCE maps
+        // straight onto GTFock's tolscr with no conversion. GTFock additionally
+        // weights that product by the largest relevant density element, which
+        // Psi4's default Schwarz/CSAM screening does not, so at the same
+        // tolerance GTFock screens somewhat more aggressively.
         if (PFock_create(engine->basis, nprow_, npcol_, -1, cutoff_, static_cast<int>(nmats_),
                          are_symm_ ? 1 : 0, &engine->pfock) != PFOCK_STATUS_SUCCESS) {
             CInt_destroyBasisSet(engine->basis);

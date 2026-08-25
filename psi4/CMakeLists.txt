@@ -243,7 +243,14 @@ if(${ENABLE_GTFock})
     # No CMake package config ships with GTFock, so this is a MODULE find over
     # GTFock_ROOT (set by the superbuild from its own detection).
     find_package(GTFock MODULE REQUIRED)
-    list(APPEND _addons ${GTFock_PFOCK_LIBRARY})
+    # Every library the GTFock target pulls in, not just libgtfock: _addons is
+    # the sole input to core.so's rpath, and the CInt/GTMatrix/Simint finds are
+    # independent, so none of them need share libgtfock's directory.
+    list(APPEND _addons
+      ${GTFock_PFOCK_LIBRARY}
+      ${GTFock_CINT_LIBRARY}
+      ${GTFock_GTMATRIX_LIBRARY}
+      ${GTFock_SIMINT_LIBRARY})
     message(STATUS "${Cyan}Using GTFock${ColourReset}: ${GTFock_PFOCK_LIBRARY}")
 else()
     message(STATUS "Disabled GTFock ${GTFock_ROOT}")
