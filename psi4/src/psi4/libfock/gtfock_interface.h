@@ -60,8 +60,9 @@ class Matrix;
 class MinimalInterface {
    public:
     /*! \param nmats   number of density matrices per Fock build (must be 1)
-     *  \param are_symm whether those densities are symmetric */
-    MinimalInterface(std::shared_ptr<BasisSet> primary, size_t nmats, bool are_symm);
+     *  \param are_symm whether those densities are symmetric
+     *  \param cutoff   Schwarz screening tolerance handed to GTFock */
+    MinimalInterface(std::shared_ptr<BasisSet> primary, size_t nmats, bool are_symm, double cutoff);
     ~MinimalInterface();
 
     MinimalInterface(const MinimalInterface&) = delete;
@@ -114,6 +115,7 @@ class MinimalInterface {
 
     size_t nmats_ = 1;
     bool are_symm_ = true;
+    double cutoff_ = 0.0;
     size_t fock_builds_ = 0;
     bool density_was_nonzero_ = false;
     int nbf_ = 0;

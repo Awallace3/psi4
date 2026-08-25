@@ -43,9 +43,7 @@
 #include "psi4/libmints/gshell.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/molecule.h"
-#include "psi4/liboptions/liboptions.h"
 #include "psi4/libpsi4util/PsiOutStream.h"
-#include "psi4/libpsi4util/process.h"
 #include "psi4/psi4-dec.h"
 
 extern "C" {
@@ -88,6 +86,7 @@ struct GTFockEngineKey {
     int nbf = 0;
     size_t nmats = 1;
     bool symm = true;
+    double cutoff = 0.0;
     std::vector<int> Zs, shells_per_atom, prims_per_shell, am;
     std::vector<double> x, y, z, cc, alpha;
 
@@ -110,12 +109,35 @@ struct GTFockEngine {
     PFock_t pfock = nullptr;
     int nprow = 1;
     int npcol = 1;
+    /// Whether this engine has already been checked for GTF_COMBINED_JK=ON.
+    bool combined_jk_checked = false;
 };
 
 /// Deliberately never deleted. Releasing GTMatrix windows at static-destruction
 /// time would run after mpi4py's atexit MPI_Finalize; MPI_Finalize reclaims
 /// them anyway.
 GTFockEngine* gtfock_engine = nullptr;
+
+/*! True when a distributed GTMatrix is identically zero everywhere.
+ *
+ *  GTFock's one-sided get is not collective, so one rank reads the whole global
+ *  matrix and broadcasts the verdict; every rank must agree, because the callers
+ *  turn it into a collective throw. */
+bool gtmatrix_is_zero(GTMatrix_t matrix, int nbf, int rank) {
+    int is_zero = 1;
+    if (rank == 0) {
+        std::vector<double> buffer(static_cast<size_t>(nbf) * nbf, 0.0);
+        GTM_getBlock(matrix, 0, nbf, 0, nbf, buffer.data(), nbf);
+        for (double value : buffer) {
+            if (value != 0.0) {
+                is_zero = 0;
+                break;
+            }
+        }
+    }
+    MPI_Bcast(&is_zero, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    return is_zero != 0;
+}
 
 }  // namespace
 
@@ -173,8 +195,8 @@ void MinimalInterface::check_supported(std::shared_ptr<BasisSet> primary, size_t
     }
 }
 
-MinimalInterface::MinimalInterface(std::shared_ptr<BasisSet> primary, size_t nmats, bool are_symm)
-    : impl_(new Impl), nmats_(nmats), are_symm_(are_symm) {
+MinimalInterface::MinimalInterface(std::shared_ptr<BasisSet> primary, size_t nmats, bool are_symm, double cutoff)
+    : impl_(new Impl), nmats_(nmats), are_symm_(are_symm), cutoff_(cutoff) {
     check_supported(primary, nmats);
 
     // GTFock refuses to build without MPI, and it is the Python layer's job to
@@ -202,6 +224,7 @@ MinimalInterface::MinimalInterface(std::shared_ptr<BasisSet> primary, size_t nma
     GTFockEngineKey key;
     key.nmats = nmats;
     key.symm = are_symm;
+    key.cutoff = cutoff_;
     key.nbf = nbf_;
     key.pure = primary->has_puream() ? 1 : 0;
 
@@ -241,7 +264,8 @@ MinimalInterface::MinimalInterface(std::shared_ptr<BasisSet> primary, size_t nma
     if (gtfock_engine != nullptr) {
         if (!(gtfock_engine->key == key)) {
             throw PSIEXCEPTION(
-                "GTFock: this process already built a GTFock engine for a different basis or task shape. "
+                "GTFock: this process already built a GTFock engine for a different basis, screening "
+                "tolerance, or task shape. "
                 "GTFock caches its basis and integral buffers in global state that it fills once per "
                 "process, so only one engine can exist. Run the second system in a fresh process.");
         }
@@ -271,9 +295,10 @@ MinimalInterface::MinimalInterface(std::shared_ptr<BasisSet> primary, size_t nma
                                " functions but Psi4's has " + std::to_string(nbf_) + ".");
         }
 
-        // A negative task count lets GTFock pick its own task blocking.
-        const double ints_tolerance = Process::environment.options.get_double("INTS_TOLERANCE");
-        if (PFock_create(engine->basis, nprow_, npcol_, -1, ints_tolerance, static_cast<int>(nmats_),
+        // A negative task count lets GTFock pick its own task blocking. The
+        // screening tolerance is the JK object's own cutoff, so set_cutoff() is
+        // honored here exactly as it is by DirectJK and friends.
+        if (PFock_create(engine->basis, nprow_, npcol_, -1, cutoff_, static_cast<int>(nmats_),
                          are_symm_ ? 1 : 0, &engine->pfock) != PFOCK_STATUS_SUCCESS) {
             CInt_destroyBasisSet(engine->basis);
             delete engine;
@@ -315,16 +340,16 @@ void MinimalInterface::SetP(const std::vector<std::shared_ptr<Matrix>>& Ps) {
     }
 
     // Psi4 replicates the density on every rank, so a single writer avoids
-    // redundant one-sided traffic; the sync makes it visible to all ranks.
-    double zero = 0.0;
-    GTM_fill(impl_->engine->pfock->gtm_Dmat, &zero);
+    // redundant one-sided traffic; the sync makes it visible to all ranks. The
+    // put covers the whole global matrix, so pre-zeroing would be both dead work
+    // and a race against rank 0's one-sided writes into the other ranks' blocks.
     if (mpi_rank_ == 0) {
         GTM_putBlock(impl_->engine->pfock->gtm_Dmat, 0, nbf_, 0, nbf_, P->pointer(0)[0], nbf_);
     }
     GTM_sync(impl_->engine->pfock->gtm_Dmat);
 
-    // Remembered so GetK can tell a genuinely zero exchange (zero density) from
-    // a GTFock built without a separate K matrix.
+    // Remembered so the combined-JK probe below can tell a genuinely zero
+    // exchange (zero density) from a GTFock built without a separate K matrix.
     density_was_nonzero_ = P->absmax() != 0.0;
 
     if (PFock_computeFock(impl_->engine->basis, impl_->engine->pfock) != PFOCK_STATUS_SUCCESS) {
@@ -332,6 +357,21 @@ void MinimalInterface::SetP(const std::vector<std::shared_ptr<Matrix>>& Ps) {
     }
     ++fock_builds_;
     ++gtfock_total_fock_builds;
+
+    // A GTFock built with GTF_COMBINED_JK=ON folds exchange into gtm_Fmat and
+    // leaves gtm_Kmat at zero, so GetJ would hand back J - K/2 as the Coulomb
+    // matrix. Detect it here rather than in GetK: do_K_ is false for any pure
+    // functional, and that path never calls GetK at all. A nonzero density
+    // always gives a nonzero K, so one probe per engine settles it.
+    if (density_was_nonzero_ && !impl_->engine->combined_jk_checked) {
+        impl_->engine->combined_jk_checked = true;
+        if (gtmatrix_is_zero(impl_->engine->pfock->gtm_Kmat, nbf_, mpi_rank_)) {
+            throw PSIEXCEPTION(
+                "GTFock returned an identically zero exchange matrix, which means it was built with "
+                "GTF_COMBINED_JK=ON. Rebuild GTFock with -DGTF_COMBINED_JK=OFF so J and K come back "
+                "separately.");
+        }
+    }
 }
 
 namespace {
@@ -376,15 +416,6 @@ void MinimalInterface::GetK(std::vector<std::shared_ptr<Matrix>>& Ks) {
     }
     // gtm_Kmat holds -K, ready to be added to 2J; flip the sign for Psi4's K.
     gather_scaled(Ks[0], impl_->engine->pfock->gtm_Kmat, nbf_, mpi_rank_, -1.0);
-
-    // A GTFock built with GTF_COMBINED_JK=ON folds exchange into gtm_Fmat and
-    // leaves gtm_Kmat at zero, which would look like a converged SCF with no
-    // exchange at all. A nonzero density always gives a nonzero K, so catch it.
-    if (density_was_nonzero_ && Ks[0]->absmax() == 0.0) {
-        throw PSIEXCEPTION(
-            "GTFock returned an identically zero exchange matrix, which means it was built with "
-            "GTF_COMBINED_JK=ON. Rebuild GTFock with -DGTF_COMBINED_JK=OFF so J and K come back separately.");
-    }
 }
 
 }  // namespace psi
@@ -405,7 +436,7 @@ int MinimalInterface::world_size() { return -1; }
 
 void MinimalInterface::check_supported(std::shared_ptr<BasisSet>, size_t) const {}
 
-MinimalInterface::MinimalInterface(std::shared_ptr<BasisSet>, size_t, bool) {
+MinimalInterface::MinimalInterface(std::shared_ptr<BasisSet>, size_t, bool, double) {
     throw PSIEXCEPTION("Psi4 was not compiled with GTFock support. Reconfigure with -DENABLE_GTFock=ON.");
 }
 MinimalInterface::~MinimalInterface() = default;

@@ -71,16 +71,25 @@ void GTFockJK::compute_JK() {
     // libfock is asking for on the first build and reuse the engine after that,
     // so an SCF pays engine setup once rather than once per iteration.
     const int requested = static_cast<int>(C_left_.size());
-    if (!Impl_) {
-        if (!fixed_shape_) {
-            NMats_ = requested;
-            are_symm_ = lr_symmetric_;
-        }
-        Impl_ = std::make_shared<MinimalInterface>(primary_, static_cast<size_t>(NMats_), are_symm_);
+    if (!Impl_ && !fixed_shape_) {
+        NMats_ = requested;
+        are_symm_ = lr_symmetric_;
     }
+    // Both shape checks run before the engine is created: a process gets exactly
+    // one GTFock engine, so building a doomed one and then throwing would poison
+    // every later request.
     if (requested != NMats_) {
         throw PSIEXCEPTION("GTFockJK: this engine was built for " + std::to_string(NMats_) +
                            " density matrices but " + std::to_string(requested) + " were supplied.");
+    }
+    if (are_symm_ && !lr_symmetric_) {
+        throw PSIEXCEPTION(
+            "GTFockJK: this engine exploits density symmetry, but C_left != C_right on this build. "
+            "SOSCF, stability analysis, and response-type J/K builds are outside the GTFock prototype; "
+            "use another SCF_TYPE for them.");
+    }
+    if (!Impl_) {
+        Impl_ = std::make_shared<MinimalInterface>(primary_, static_cast<size_t>(NMats_), are_symm_, cutoff_);
     }
 
     Impl_->SetP(D_ao_);
@@ -97,7 +106,13 @@ void GTFockJK::print_header() const {
         } else {
             outfile->Printf("    MPI ranks:          %d\n", MinimalInterface::world_size());
         }
-        outfile->Printf("    Densities per build: %d\n\n", NMats_);
+        if (Impl_ || fixed_shape_) {
+            outfile->Printf("    Densities per build: %d\n\n", NMats_);
+        } else {
+            // The engine is created on the first compute_JK(), which is where the
+            // density count comes from; there is nothing honest to print yet.
+            outfile->Printf("    Densities per build: deferred to first build\n\n");
+        }
     }
 }
 

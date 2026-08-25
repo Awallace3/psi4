@@ -201,6 +201,41 @@ def test_gtfock_refuses_spherical_high_am(gtfock_mpi):
 
 
 @uusing("gtfock")
+def test_gtfock_refuses_nonsymmetric_reuse(gtfock_mpi):
+    """A reused engine that assumes density symmetry must refuse C_left != C_right.
+
+    GTFock is created with its symmetry flag fixed, so once an engine has been
+    built for symmetric densities a later SOSCF/response-style build with
+    ``C_left != C_right`` would exploit a symmetry the density no longer has.
+    That has to raise, not return a plausible-looking wrong J/K.
+    """
+    mol = _water()
+    primary = psi4.core.BasisSet.build(mol, "ORBITAL", "sto-3g", puream=False)
+    psi4.set_options({"scf_type": "gtfock"})
+    jk = psi4.core.JK.build_JK(primary, None)
+    jk.set_do_K(True)
+    jk.initialize()
+
+    rng = np.random.RandomState(0)
+    Cl = psi4.core.Matrix.from_array(rng.rand(primary.nbf(), 1))
+    Cr = psi4.core.Matrix.from_array(rng.rand(primary.nbf(), 1))
+
+    # First build is symmetric, which is what pins the engine's symmetry flag.
+    jk.C_clear()
+    jk.C_left_add(Cl)
+    jk.compute()
+
+    jk.C_clear()
+    jk.C_left_add(Cl)
+    jk.C_right_add(Cr)
+    builds_before = gtfock_mpi.fock_builds()
+    with pytest.raises(RuntimeError, match="C_left != C_right"):
+        jk.compute()
+    # The refusal must come before GTFock is handed the asymmetric density.
+    assert gtfock_mpi.fock_builds() == builds_before
+
+
+@uusing("gtfock")
 @pytest.mark.parametrize("nranks", [2])
 def test_gtfock_multirank_mpirun(tmp_path, nranks):
     """Run the whole Python -> mpi4py -> Psi4 -> GTFock path under mpirun.

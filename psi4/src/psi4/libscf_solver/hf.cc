@@ -366,7 +366,11 @@ void HF::initialize_gtfock_jk() {
     // creation, so let GTFockJK adopt whatever libfock hands it on the first
     // build rather than guessing here; GTFockJK reports when Psi4 was built
     // without GTFock.
-    jk_ = std::make_shared<GTFockJK>(basisset_);
+    auto jk = std::make_shared<GTFockJK>(basisset_);
+    if (options_["INTS_TOLERANCE"].has_changed() || options_.get_str("SCREENING") == "NONE") {
+        jk->set_cutoff(options_.get_str("SCREENING") == "NONE" ? 0.0 : options_.get_double("INTS_TOLERANCE"));
+    }
+    jk_ = jk;
 }
 
 void HF::finalize() {
