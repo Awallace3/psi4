@@ -68,6 +68,12 @@ class MinimalInterface {
     MinimalInterface(const MinimalInterface&) = delete;
     MinimalInterface& operator=(const MinimalInterface&) = delete;
 
+    /*! Every matrix passed to or filled by these three must be a single dense
+     *  `nbf x nbf` C1 block, because each transfer moves `nbf*nbf` contiguous
+     *  doubles through `Matrix::pointer(0)`; a null, symmetry-blocked, or
+     *  wrongly sized matrix is refused rather than read or written past its
+     *  end. `GetJ`/`GetK` do not resize their destinations; callers must hand
+     *  them matrices that are already that shape. */
     /// Push densities into GTFock and run the distributed Fock build.
     void SetP(const std::vector<std::shared_ptr<Matrix>>& Ps);
     /// Pull the Coulomb matrices of the last build, in Psi4's convention.

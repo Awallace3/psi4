@@ -153,8 +153,8 @@ void check_c1_shape(const std::shared_ptr<Matrix>& mat, int nbf, const char* wha
     }
     if (mat->nirrep() != 1 || mat->rowspi()[0] != nbf || mat->colspi()[0] != nbf) {
         throw PSIEXCEPTION(std::string("GTFock: ") + what + " must be a single " + std::to_string(nbf) + " x " +
-                           std::to_string(nbf) + " C1 block; GTFock works only in C1 and this build has nbf = " +
-                           std::to_string(nbf) + ".");
+                           std::to_string(nbf) +
+                           " C1 block; GTFock works only in C1 and this build has nbf = " + std::to_string(nbf) + ".");
     }
 }
 
@@ -224,15 +224,14 @@ void MinimalInterface::check_supported(std::shared_ptr<BasisSet> primary, size_t
     for (int s = 0; s < primary->nshell(); ++s) {
         const int am = primary->shell(s).am();
         if (am > _SIMINT_OSTEI_MAXAM) {
-            throw PSIEXCEPTION(
-                "GTFock: shell " + std::to_string(s) + " has angular momentum l = " + std::to_string(am) +
-                ", above the maximum of " + std::to_string(_SIMINT_OSTEI_MAXAM) +
-                " this GTFock/Simint build supports. GTFock indexes its shell-pair work lists by "
-                "angular momentum against a table sized for l <= " +
-                std::to_string(_SIMINT_OSTEI_MAXAM) +
-                ", so a higher shell would corrupt memory rather than fail. Choose a basis set whose "
-                "maximum angular momentum is at most " +
-                std::to_string(_SIMINT_OSTEI_MAXAM) + ", or use another SCF_TYPE.");
+            throw PSIEXCEPTION("GTFock: shell " + std::to_string(s) + " has angular momentum l = " +
+                               std::to_string(am) + ", above the maximum of " + std::to_string(_SIMINT_OSTEI_MAXAM) +
+                               " this GTFock/Simint build supports. GTFock indexes its shell-pair work lists by "
+                               "angular momentum against a table sized for l <= " +
+                               std::to_string(_SIMINT_OSTEI_MAXAM) +
+                               ", so a higher shell would corrupt memory rather than fail. Choose a basis set whose "
+                               "maximum angular momentum is at most " +
+                               std::to_string(_SIMINT_OSTEI_MAXAM) + ", or use another SCF_TYPE.");
         }
     }
     // PFock_create(..., symm=0) puts GTFock in its nosymm mode, where the whole

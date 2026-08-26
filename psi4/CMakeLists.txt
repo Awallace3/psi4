@@ -244,8 +244,10 @@ if(${ENABLE_GTFock})
     # GTFock_ROOT (set by the superbuild from its own detection).
     find_package(GTFock MODULE REQUIRED)
     # Every library the GTFock target pulls in, not just libgtfock: _addons is
-    # the sole input to core.so's rpath, and the CInt/GTMatrix/Simint finds are
-    # independent, so none of them need share libgtfock's directory.
+    # the sole input to core.so's rpath. The CInt/GTMatrix finds are
+    # independent of libgtfock's location, and Simint, though confined to
+    # GTFock's own prefix, may still sit in a sibling lib64, so none of them
+    # need share libgtfock's directory.
     list(APPEND _addons
       ${GTFock_PFOCK_LIBRARY}
       ${GTFock_CINT_LIBRARY}

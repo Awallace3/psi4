@@ -69,16 +69,16 @@ Prototype scope
   ``px, py, pz`` while |PSIfour| orders pure shells by :math:`m` |w---w| so a
   spherical basis would give a permuted J/K. Any spherical basis raises,
   including an ``s``/``p``-only one such as the default spherical ``sto-3g``.
-* **Maximum angular momentum** :math:`l \le 4` (through ``g`` functions).
-  libcint indexes GTFock's shell-pair work lists as
-  :math:`l_P (l_{max} + 1) + l_Q` into a table sized for the maximum angular
-  momentum the linked Simint was generated for, without checking the bound, so
-  a higher shell would corrupt memory rather than fail. |PSIfour| refuses any
-  shell above the ceiling, naming the offending shell. GTFock must therefore be
-  built against a Simint generated for at least the angular momentum in use;
-  ``gtfock_psi4``'s pinned build supplies :math:`l_{max} = 4`, which matches the
-  value libcint compiles against. A basis such as Cartesian ``cc-pV5Z``, which
-  carries ``h`` functions, raises.
+* **Maximum angular momentum bounded by the linked Simint.** libcint indexes
+  GTFock's shell-pair work lists as :math:`l_P (l_{max} + 1) + l_Q` into a table
+  sized for the maximum angular momentum the linked Simint was generated for,
+  without checking the bound, so a higher shell would corrupt memory rather than
+  fail. |PSIfour| refuses any shell above the ceiling, naming the offending
+  shell and the ceiling itself. GTFock must therefore be built against a Simint
+  generated for at least the angular momentum in use; ``gtfock_psi4``'s pinned
+  build supplies :math:`l_{max} = 4` (through ``g`` functions), which matches
+  the value libcint compiles against, so a basis such as Cartesian ``cc-pV5Z``,
+  which carries ``h`` functions, raises.
 * **No range-separated exchange.** ``wK`` is unavailable from GTFock.
 * **One engine per process.** GTFock caches the basis, the Simint handle, and
   its screening and blocking buffers in global state that it fills once and
@@ -148,7 +148,12 @@ OpenMPI.
 Simint that GTFock was built against are all found as plain libraries under that
 same prefix, alongside ``libgtfock``. Simint is deliberately *not* located
 through its CMake package config, so enabling GTFock never also switches on
-|PSIfours| own :ref:`Simint <sec:simint>` ERI engine. Naming the GTFock prefix in
+|PSIfours| own :ref:`Simint <sec:simint>` ERI engine, and it is searched *only*
+inside the GTFock prefix: the angular-momentum ceiling above is read out of
+GTFock's own ``CInt.h``, so any other ``libsimint`` on the system would leave
+that guard describing a library the build does not link. The GTFock install must
+therefore carry its own ``libsimint``; configure fails if it does not, however
+many Simints the surrounding environment provides. Naming the GTFock prefix in
 ``-DCMAKE_PREFIX_PATH`` as well, as above, is harmless; the ``${CONDA_PREFIX}``
 entry there is what the rest of the build environment needs.
 
@@ -243,7 +248,7 @@ How to configure GTFock for building Psi4
 * :makevar:`GTFock_ROOT` |w---w| CMake variable to specify where the pre-built
   GTFock can be found. Set to the installation directory containing
   ``include/pfock.h`` and ``lib/libgtfock.so``. libcint, GTMatrix, and Simint
-  are located under the same prefix.
+  are located under the same prefix, and Simint is looked for *only* there.
 * :makevar:`CMAKE_PREFIX_PATH` |w---w| an alternative to :makevar:`GTFock_ROOT`;
   add the same prefix to it.
 
