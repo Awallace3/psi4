@@ -61,10 +61,24 @@ find_library(GTFock_GTMATRIX_LIBRARY
 # am${MAX_AM_ERI} component check Psi4's own Simint block requires. GTFock's
 # public headers never include <simint/simint.h> (libcint's CInt.h says so
 # outright), so the library alone is all this target needs.
-find_library(GTFock_SIMINT_LIBRARY
-  NAMES simint
-  PATH_SUFFIXES lib lib64
-  DOC "The Simint ERI library GTFock was built against")
+#
+# The search is confined to the prefix GTFock itself was found in, because the
+# only correct Simint here is the one GTFock was linked against: Psi4's shim
+# reads _SIMINT_OSTEI_MAXAM out of GTFock's CInt.h to bound shell angular
+# momentum, and a different Simint on the system would make that guard describe
+# a library the build does not use.
+if(GTFock_PFOCK_LIBRARY)
+    get_filename_component(_gtfock_libdir "${GTFock_PFOCK_LIBRARY}" DIRECTORY)
+    get_filename_component(_gtfock_prefix "${_gtfock_libdir}" DIRECTORY)
+    find_library(GTFock_SIMINT_LIBRARY
+      NAMES simint
+      HINTS "${_gtfock_prefix}" "${GTFock_ROOT}" ENV GTFock_ROOT
+      PATH_SUFFIXES lib lib64
+      NO_DEFAULT_PATH
+      DOC "The Simint ERI library GTFock was built against")
+    unset(_gtfock_libdir)
+    unset(_gtfock_prefix)
+endif()
 
 set(GTFock_INCLUDE_DIRS
   ${GTFock_PFOCK_INCLUDE_DIR}

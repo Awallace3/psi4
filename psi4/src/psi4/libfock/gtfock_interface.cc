@@ -139,6 +139,25 @@ bool gtmatrix_is_zero(GTMatrix_t matrix, int nbf, int rank) {
     return is_zero != 0;
 }
 
+/*! Refuse any matrix that is not one dense nbf x nbf C1 block.
+ *
+ *  Every transfer between Psi4 and a GTMatrix here moves nbf*nbf contiguous
+ *  doubles through Matrix::pointer(0). Matrix::pointer(0) hands back the first
+ *  irrep block, so a symmetry-blocked or wrongly sized matrix would be read or
+ *  written past its end rather than fail. GTFock is C1-only by construction --
+ *  GTFockJK::C1() is true, so libfock hands it AO matrices -- which makes any
+ *  other shape a caller error worth naming. */
+void check_c1_shape(const std::shared_ptr<Matrix>& mat, int nbf, const char* what) {
+    if (!mat) {
+        throw PSIEXCEPTION(std::string("GTFock: ") + what + " is null.");
+    }
+    if (mat->nirrep() != 1 || mat->rowspi()[0] != nbf || mat->colspi()[0] != nbf) {
+        throw PSIEXCEPTION(std::string("GTFock: ") + what + " must be a single " + std::to_string(nbf) + " x " +
+                           std::to_string(nbf) + " C1 block; GTFock works only in C1 and this build has nbf = " +
+                           std::to_string(nbf) + ".");
+    }
+}
+
 }  // namespace
 
 struct MinimalInterface::Impl {
@@ -213,7 +232,7 @@ void MinimalInterface::check_supported(std::shared_ptr<BasisSet> primary, size_t
                 std::to_string(_SIMINT_OSTEI_MAXAM) +
                 ", so a higher shell would corrupt memory rather than fail. Choose a basis set whose "
                 "maximum angular momentum is at most " +
-                std::to_string(_SIMINT_OSTEI_MAXAM) + " (through g functions), or use another SCF_TYPE.");
+                std::to_string(_SIMINT_OSTEI_MAXAM) + ", or use another SCF_TYPE.");
         }
     }
     // PFock_create(..., symm=0) puts GTFock in its nosymm mode, where the whole
@@ -376,9 +395,7 @@ void MinimalInterface::SetP(const std::vector<std::shared_ptr<Matrix>>& Ps) {
                            std::to_string(Ps.size()) + ".");
     }
     const std::shared_ptr<Matrix>& P = Ps[0];
-    if (P->rowspi()[0] != nbf_ || P->colspi()[0] != nbf_) {
-        throw PSIEXCEPTION("GTFock: density matrix is not nbf x nbf in C1.");
-    }
+    check_c1_shape(P, nbf_, "density matrix");
 
     // Psi4 replicates the density on every rank, so a single writer avoids
     // redundant one-sided traffic; the sync makes it visible to all ranks. The
@@ -448,6 +465,9 @@ void MinimalInterface::GetJ(std::vector<std::shared_ptr<Matrix>>& Js) {
         throw PSIEXCEPTION("GTFock: expected " + std::to_string(nmats_) + " J matrices, got " +
                            std::to_string(Js.size()) + ".");
     }
+    // gather_scaled writes nbf_ x nbf_ doubles through pointer(0); validate the
+    // destination before it does, not after.
+    check_c1_shape(Js[0], nbf_, "J matrix");
     // GTFock accumulates 2J into gtm_Fmat (its "Fock" matrix in the separate-K
     // build), so halve it to reach Psi4's J.
     gather_scaled(Js[0], impl_->engine->pfock->gtm_Fmat, nbf_, mpi_rank_, 0.5);
@@ -458,6 +478,7 @@ void MinimalInterface::GetK(std::vector<std::shared_ptr<Matrix>>& Ks) {
         throw PSIEXCEPTION("GTFock: expected " + std::to_string(nmats_) + " K matrices, got " +
                            std::to_string(Ks.size()) + ".");
     }
+    check_c1_shape(Ks[0], nbf_, "K matrix");
     // gtm_Kmat holds -K, ready to be added to 2J; flip the sign for Psi4's K.
     gather_scaled(Ks[0], impl_->engine->pfock->gtm_Kmat, nbf_, mpi_rank_, -1.0);
 }

@@ -358,6 +358,56 @@ def test_gtfock_refuses_nonsymmetric_engine(gtfock_mpi):
 
 
 @uusing("gtfock")
+def test_gtfock_refuses_wrongly_shaped_matrix(gtfock_mpi):
+    """Every Psi4 <-> GTMatrix transfer must refuse a non-``nbf x nbf`` C1 block.
+
+    ``SetP``, ``GetJ`` and ``GetK`` all move ``nbf*nbf`` contiguous doubles
+    through ``Matrix::pointer(0)``, so a matrix of any other shape would be read
+    or written past its end rather than fail. They share one guard; this drives
+    it through the linked library on the side libfock can actually reach, by
+    handing a GTFock JK orbitals whose AO row count does not match the basis.
+
+    ``GetJ``/``GetK`` call the same guard as a backstop for direct C++ users of
+    ``gtfock_interface.h``. libfock itself cannot trip that half: ``JK`` sizes
+    ``J_ao_``/``K_ao_`` from the very ``D_ao_`` that ``SetP`` validates, so the
+    density gate below always fires first.
+    """
+    mol = _water()
+    primary = psi4.core.BasisSet.build(mol, "ORBITAL", "sto-3g", puream=False)
+    psi4.set_options({"scf_type": "gtfock"})
+    jk = psi4.core.JK.build_JK(primary, None)
+    jk.set_do_K(True)
+    jk.initialize()
+
+    assert primary.nbf() > 2
+    rng = np.random.RandomState(3)
+    jk.C_clear()
+    jk.C_left_add(psi4.core.Matrix.from_array(rng.rand(primary.nbf() - 2, 1)))
+
+    builds_before = gtfock_mpi.fock_builds()
+    with pytest.raises(RuntimeError, match="density matrix"):
+        jk.compute()
+    # The refusal has to come before GTFock is handed the mis-sized block.
+    assert gtfock_mpi.fock_builds() == builds_before
+
+
+def _oversubscribe_flag(mpirun):
+    """``--oversubscribe`` is an Open MPI spelling; MPICH's mpiexec rejects it.
+
+    Both implementations install a program called ``mpirun``, so ask the
+    launcher on PATH whether it accepts the flag rather than guessing from its
+    name. A test box usually has fewer cores than the ranks below ask for, and
+    Open MPI refuses to place them without it.
+    """
+    try:
+        probe = subprocess.run([mpirun, "--oversubscribe", "-n", "1", sys.executable, "-c", ""],
+                               capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return ["--oversubscribe"] if probe.returncode == 0 else []
+
+
+@uusing("gtfock")
 @pytest.mark.parametrize("nranks", [2])
 def test_gtfock_multirank_mpirun(tmp_path, nranks):
     """Run the whole Python -> mpi4py -> Psi4 -> GTFock path under mpirun.
@@ -371,6 +421,8 @@ def test_gtfock_multirank_mpirun(tmp_path, nranks):
     if mpirun is None:
         pytest.skip("no mpirun/mpiexec on PATH")
     pytest.importorskip("mpi4py")
+
+    launch = [mpirun] + _oversubscribe_flag(mpirun)
 
     driver = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gtfock_mpi_driver.py")
 
@@ -389,7 +441,7 @@ def test_gtfock_multirank_mpirun(tmp_path, nranks):
     env["MKL_NUM_THREADS"] = "1"
 
     proc = subprocess.run(
-        [mpirun, "--oversubscribe", "-n", str(nranks), sys.executable, driver, str(tmp_path)],
+        launch + ["-n", str(nranks), sys.executable, driver, str(tmp_path)],
         capture_output=True, text=True, env=env, timeout=900)
     assert proc.returncode == 0, f"mpirun failed:\n{proc.stdout}\n{proc.stderr}"
 
