@@ -72,7 +72,7 @@ class PSI_API XDMDispersion {
     static std::shared_ptr<XDMDispersion> build(const std::string& functional, double a1, double a2_angstrom);
 
     /// Compute XDM dispersion energy from a converged wavefunction.
-    double compute_energy(std::shared_ptr<Wavefunction> wfn);
+    double compute_energy(std::shared_ptr<Wavefunction> wfn, double hf_fraction = -1.0);
 
     double a1() const { return a1_; }
     double a2() const { return a2_; }
@@ -87,7 +87,7 @@ class PSI_API XDMDispersion {
     std::vector<AtomicData> integrate_properties(std::shared_ptr<Wavefunction> wfn);
 
     /// Compute pairwise BJ-damped dispersion energy.
-    double pairwise_energy(std::shared_ptr<Molecule> mol, const std::vector<AtomicData>& atoms);
+    double pairwise_energy(std::shared_ptr<Molecule> mol, const std::vector<AtomicData>& atoms, double hf_fraction);
 };
 
 }  // namespace xdm

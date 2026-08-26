@@ -74,9 +74,9 @@ std::shared_ptr<XDMDispersion> XDMDispersion::build(const std::string& functiona
 // Energy
 // ============================================================================
 
-double XDMDispersion::compute_energy(std::shared_ptr<Wavefunction> wfn) {
+double XDMDispersion::compute_energy(std::shared_ptr<Wavefunction> wfn, double hf_fraction) {
     auto atoms = integrate_properties(wfn);
-    return pairwise_energy(wfn->molecule(), atoms);
+    return pairwise_energy(wfn->molecule(), atoms, hf_fraction);
 }
 
 // ============================================================================
@@ -122,7 +122,13 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     std::vector<int> atomic_nums(natom);
     std::vector<std::array<double, 3>> atom_coords(natom);
     for (int a = 0; a < natom; a++) {
-        atomic_nums[a] = static_cast<int>(std::lround(mol->Z(a)));
+        const double effective_z = mol->Z(a);
+        const int true_z = mol->true_atomic_number(a);
+        if (effective_z > 0.0 && std::abs(effective_z - true_z) > 1.0e-8) {
+            throw PSIEXCEPTION("XDM: effective-core potentials are not supported because all-electron densities are required (atom " +
+                               std::to_string(a + 1) + ", " + mol->symbol(a) + ").");
+        }
+        atomic_nums[a] = effective_z > 0.0 ? true_z : 0;
         if (atomic_nums[a] > FTOT_NELEM) {
             throw PSIEXCEPTION("XDM: no tabulated free-atom density for atom " + std::to_string(a + 1) + " (" +
                                mol->symbol(a) + ", Z = " + std::to_string(atomic_nums[a]) +
@@ -386,7 +392,8 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
 // Pairwise BJ-damped dispersion energy
 // ============================================================================
 
-double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::vector<AtomicData>& atoms) {
+double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::vector<AtomicData>& atoms,
+                                      double hf_fraction) {
     int natom = mol->natom();
 
     std::vector<int> real_atoms;
@@ -403,7 +410,7 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
         int Z = mol->true_atomic_number(i);
 
         double alpha_free = get_free_polarizability(Z);
-        double vol_free = get_free_volume(Z, functional_name_);
+        double vol_free = get_free_volume(Z, functional_name_, hf_fraction);
 
         if (vol_free > 1.0e-10 && atoms[i].vol > 1.0e-10) {
             atpol[i] = atoms[i].vol * alpha_free / vol_free;

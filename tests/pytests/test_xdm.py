@@ -406,6 +406,15 @@ units angstrom
     plan = task_planner("gradient", "b3lyp-xdm", dimer, **findif_kwargs)
     assert isinstance(plan, FiniteDifferenceComputer)
 
+    plan = task_planner(
+        "gradient",
+        "scf",
+        dimer,
+        dft_functional={"name": "custom-xdm", "dispersion": {"type": "xdm"}},
+        **findif_kwargs,
+    )
+    assert isinstance(plan, FiniteDifferenceComputer)
+
     plan = task_planner("gradient", "b3lyp-xdm/sto-3g", dimer, **findif_kwargs)
     assert isinstance(plan, FiniteDifferenceComputer)
 
@@ -417,6 +426,58 @@ units angstrom
     grad = np.asarray(psi4.gradient("b3lyp-xdm", molecule=dimer, bsse_type="nocp"))
     assert grad.shape == (7, 3)
     assert np.isfinite(grad).all()
+
+
+def test_empirical_dispersion_compatibility_import():
+    from psi4.driver.procrouting.empirical_dispersion import EmpiricalDispersion as compatibility_class
+    from psi4.driver.procrouting.empirical_disp.empirical_dispersion import EmpiricalDispersion
+
+    assert compatibility_class is EmpiricalDispersion
+
+
+@pytest.mark.xdm
+def test_xdm_uses_wavefunction_exchange_fraction():
+    from psi4.driver.procrouting.empirical_disp.empirical_dispersion import XDMDispersionFunctor
+
+    class Functional:
+        def x_alpha(self):
+            return 0.54
+
+    class Wavefunction:
+        def functional(self):
+            return Functional()
+
+        def set_array_variable(self, name, value):
+            pass
+
+    class Recorder:
+        def compute_energy(self, wfn, hf_fraction):
+            self.hf_fraction = hf_fraction
+            return -0.01
+
+    functor = XDMDispersionFunctor(functional_name="m06-2x", a1=0.5, a2_ang=1.0)
+    recorder = Recorder()
+    functor.xdm = recorder
+
+    assert functor.compute_energy(None, Wavefunction()) == -0.01
+    assert recorder.hf_fraction == pytest.approx(0.54)
+
+
+@pytest.mark.xdm
+def test_xdm_rejects_ecp_density():
+    mol = psi4.geometry("0 2\nBr 0 0 0\nunits angstrom")
+    psi4.set_options(
+        {
+            "basis": "lanl2dz",
+            "reference": "uks",
+            "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="effective-core potentials are not supported"):
+        psi4.energy("pbe-xdm", molecule=mol)
+
+    psi4.set_options({"reference": "rks"})
 
 
 @pytest.mark.xdm

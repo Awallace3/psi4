@@ -529,7 +529,10 @@ class XDMDispersionFunctor():
         if wfn is None:
             raise ValidationError("XDM dispersion requires a converged wavefunction (density matrix).")
 
-        ene = self.xdm.compute_energy(wfn)
+        functional = wfn.functional()
+        if functional is None:
+            raise ValidationError("XDM dispersion requires a DFT wavefunction with functional metadata.")
+        ene = self.xdm.compute_energy(wfn, functional.x_alpha())
         core.set_variable('DISPERSION CORRECTION ENERGY', ene)
         if self.fctldash:
             core.set_variable(f"{self.fctldash.upper()} DISPERSION CORRECTION ENERGY", ene)

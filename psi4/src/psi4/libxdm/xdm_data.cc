@@ -259,7 +259,7 @@ double get_free_volume(int Z, const std::string& functional, double hf_fraction)
     // For elements with functional-specific data (Z=1..36, excluding K=19, Ca=20)
     bool has_specific = (Z < 19 || (Z > 20 && Z <= 36));
 
-    if (has_specific && hf_fraction < 0.0) {
+    if (has_specific) {
         // Use functional-specific table
         if (functional == "blyp") return frevol_blyp[Z];
         if (functional == "b3lyp") return frevol_b3lyp[Z];

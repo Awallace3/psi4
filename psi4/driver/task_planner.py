@@ -69,6 +69,14 @@ def _uses_xdm(value: Any) -> bool:
     return False
 
 
+def _negotiate_derivative_type(driver, method, user_dertype, uses_xdm):
+    if uses_xdm and driver == "gradient":
+        if user_dertype not in (None, 0):
+            raise NotImplementedError("Analytic XDM gradients are not implemented; use dertype=0.")
+        user_dertype = 0
+    return negotiate_derivative_type(driver, method, user_dertype, verbose=1)
+
+
 def expand_cbs_methods(method: str, basis: str, driver: DriverEnum, **kwargs) -> Tuple[str, str, Dict]:
     """Sort out the user input method string into recognized fields. Handles cases like:
 
@@ -210,7 +218,7 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
 
                 methods = [sr.method for sr in dummyplan.task_list]
                 # TODO: pass more info, so fn can use for managed_methods -- ref, qc_module, fc/ae, conv/df
-                dermode = negotiate_derivative_type(driver, methods, dertype, verbose=1)
+                dermode = _negotiate_derivative_type(driver, methods, dertype, uses_xdm)
 
                 if dermode[0] == dermode[1]:  # analytic
                     logger.info("PLANNING MB(CBS):  {mc_level_idx=} {packet=} {cbsmeta=} {dertype=} kw={kwargs}")
@@ -232,7 +240,7 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
                                      # TODO dertype expected in kwargs?
 
             else:
-                dermode = negotiate_derivative_type(driver, method, dertype, verbose=1)
+                dermode = _negotiate_derivative_type(driver, method, dertype, uses_xdm)
                 if dermode[0] == dermode[1]:  # analytic
                     logger.info(f"PLANNING MB:  {mc_level_idx=} {packet=} {kwargs=}")
                     plan.build_tasks(AtomicComputer, **packet, mc_level_idx=mc_level_idx, **kwargs)
@@ -261,7 +269,7 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
 
         methods = [sr.method for sr in dummyplan.task_list]
         # TODO: pass more info, so fn can use for managed_methods -- ref, qc_module, fc/ae, conv/df
-        dermode = negotiate_derivative_type(driver, methods, kwargs.pop('dertype', None), verbose=1)
+        dermode = _negotiate_derivative_type(driver, methods, kwargs.pop('dertype', None), uses_xdm)
 
         if dermode[0] == dermode[1]:  # analytic
             logger.info('PLANNING CBS:  packet={packet} kw={kwargs}')
@@ -280,7 +288,7 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
 
     # Done with Wrappers -- know we want E, G, or H -- but may still be FD or AtomicComputer
     else:
-        dermode = negotiate_derivative_type(driver, method, kwargs.pop('dertype', None), verbose=1)
+        dermode = _negotiate_derivative_type(driver, method, kwargs.pop('dertype', None), uses_xdm)
         convcrit = negotiate_convergence_criterion(dermode, method, return_optstash=False)
 
         if dermode[0] == dermode[1]:  # analytic
