@@ -262,7 +262,8 @@ def check_consistency(func_dictionary):
                 f"SCF: Dispersion type not specified in functional {name}")
         # XDM dispersion is handled natively, not through qcengine dashcoeff
         if disp["type"] == "xdm":
-            pass  # XDM params are looked up at runtime from Python tables
+            from ..empirical_disp.xdm_params import normalize_xdm_model
+            normalize_xdm_model(disp.get("params", {}).get("xdm_model", "kb49"))
         elif disp["type"] not in _dispersion_aliases:
             raise ValidationError(
                 f"SCF: Dispersion type ({disp['type']}) should be among ({list(_dispersion_aliases.keys()) + ['xdm']})")

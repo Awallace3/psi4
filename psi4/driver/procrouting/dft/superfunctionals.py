@@ -75,7 +75,12 @@ def build_superfunctional(name, restricted, npoints=None, deriv=1):
         base_name, model = match.groups()
         if base_name in dft_builder.functionals:
             base_dict = dict(dft_builder.functionals[base_name])
-            base_dict["dispersion"] = {"type": "xdm", "params": {"xdm_model": model or "kb49"}}
+            xdm_name = base_dict["name"] + ("-XDM" if model is None else f"-XDM({model.upper()})")
+            if xdm_name.lower() in dft_builder.functionals:
+                base_dict = dft_builder.functionals[xdm_name.lower()]
+            else:
+                base_dict["name"] = xdm_name
+                base_dict["dispersion"] = {"type": "xdm", "params": {"xdm_model": model or "kb49"}}
             sup = dft_builder.build_superfunctional_from_dictionary(base_dict, npoints, deriv, restricted)
         else:
             raise ValidationError("SCF: Functional (%s) not found!" % name)

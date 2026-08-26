@@ -37,7 +37,7 @@ from psi4 import core
 
 from ... import p4util
 from ...p4util.exceptions import ValidationError, UpgradeHelper
-from .xdm_params import get_xdm_bj_params, normalize_xdm_model
+from .xdm_params import available_xdm_bases, get_xdm_bj_params, normalize_xdm_model
 
 _engine_can_do = collections.OrderedDict([
     # engine order establishes default for each disp
@@ -484,10 +484,14 @@ class XDMDispersionFunctor():
             fitted_a1, fitted_a2_ang = get_xdm_bj_params(functional_name, basis_name, model=self._xdm_model)
         except KeyError:
             lookup_key = f"{functional_name.lower()}/{basis_name.lower()}"
+            fitted_bases = available_xdm_bases(functional_name, self._xdm_model)
+            hint = (f" Bases fitted for {functional_name.lower()} with model {self._xdm_model}: {fitted_bases}."
+                    if fitted_bases else
+                    f" No basis is fitted for {functional_name.lower()} with model {self._xdm_model}.")
             raise ValidationError(
                 "XDMDispersion: No fitted BJ parameters for "
                 f"{lookup_key} with model {self._xdm_model}. "
-                "Provide [a1, a2] through XDM_DISPERSION_PARAMETERS."
+                "Provide [a1, a2] through XDM_DISPERSION_PARAMETERS." + hint
             )
 
         self.xdm = core.XDMDispersion.build(functional_name, fitted_a1, fitted_a2_ang)

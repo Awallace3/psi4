@@ -41,6 +41,7 @@
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/wavefunction.h"
+#include "psi4/libpsi4util/exception.h"
 #include "psi4/libpsi4util/process.h"
 #include "psi4/libqt/qt.h"
 #include "psi4/psi4-dec.h"
@@ -122,12 +123,18 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
     std::vector<std::array<double, 3>> atom_coords(natom);
     for (int a = 0; a < natom; a++) {
         atomic_nums[a] = static_cast<int>(std::lround(mol->Z(a)));
+        if (atomic_nums[a] > FTOT_NELEM) {
+            throw PSIEXCEPTION("XDM: no tabulated free-atom density for atom " + std::to_string(a + 1) + " (" +
+                               mol->symbol(a) + ", Z = " + std::to_string(atomic_nums[a]) +
+                               "). XDM is parametrized for Z <= " + std::to_string(FTOT_NELEM) + ".");
+        }
         atom_coords[a][0] = mol->x(a);
         atom_coords[a][1] = mol->y(a);
         atom_coords[a][2] = mol->z(a);
     }
 
     ProatomDensity proatom;
+    proatom.prepare(natom, atomic_nums.data());
     std::vector<std::vector<double>> hirshfeld_weights;
 
     // --- Allocate per-atom accumulators ---
@@ -139,6 +146,11 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
 
     // --- Loop over grid blocks ---
     const auto& blocks = grid->blocks();
+
+    int num_threads = Process::environment.get_n_threads();
+
+    size_t nbhole_failed = 0;
+    size_t nbhole_total = 0;
 
     for (size_t ib = 0; ib < blocks.size(); ib++) {
         auto block = blocks[ib];
@@ -160,7 +172,7 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
                                   hirshfeld_weights);
 
         // Get density quantities from PointFunctions
-        // RKS: RHO_A = rho_total, GAMMA_AA = |grad rho_alpha|^2, TAU_A = tau_nohalf_alpha
+        // RKS: RHO_A = rho_total, GAMMA_AA = |grad rho_total|^2, TAU_A = tau_nohalf_alpha
         // UKS: RHO_A = rho_alpha, GAMMA_AA = |grad rho_alpha|^2, TAU_A = 0.5*tau_nohalf_alpha
         double* rho_a_p;
         double* rho_b_p;
@@ -225,6 +237,7 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
 
             // Diagonal Laplacian contribution: 2 * sum_c phi_cc . T0
             std::vector<double> lapl(npoints, 0.0);
+#pragma omp parallel for schedule(static) num_threads(num_threads)
             for (int P = 0; P < npoints; P++) {
                 lapl[P] = 2.0 * (C_DDOT(nlocal, phi_xx[P], 1, Tp[P], 1) + C_DDOT(nlocal, phi_yy[P], 1, Tp[P], 1) +
                                  C_DDOT(nlocal, phi_zz[P], 1, Tp[P], 1));
@@ -235,6 +248,7 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
             // For UKS: TAU = 0.5*tau_nohalf, so tau_nohalf = 2*TAU, add 2*(2*TAU) = 4*TAU
             double* tau_p = (spin == 0) ? tau_a_p : tau_b_p;
             double tau_factor = restricted ? 2.0 : 4.0;
+#pragma omp parallel for schedule(static) num_threads(num_threads)
             for (int P = 0; P < npoints; P++) {
                 lapl[P] += tau_factor * tau_p[P];
             }
@@ -243,11 +257,12 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
             double* rho_p = (spin == 0) ? rho_a_p : rho_b_p;
             double* gamma_p = (spin == 0) ? gamma_aa_p : gamma_bb_p;
 
+#pragma omp parallel for schedule(static) num_threads(num_threads) reduction(+ : nbhole_failed, nbhole_total)
             for (int P = 0; P < npoints; P++) {
                 double rho_spin, grad_sq, tau_nohalf;
 
                 if (restricted) {
-                    // RKS: RHO_A = rho_total, GAMMA_AA = |grad rho_alpha|^2, TAU_A = tau_nohalf_alpha
+                    // RKS: RHO_A = rho_total, GAMMA_AA = |grad rho_total|^2, TAU_A = tau_nohalf_alpha
                     rho_spin = rho_p[P] * 0.5;
                     grad_sq = 0.25 * gamma_p[P];
                     tau_nohalf = tau_p[P];  // already tau_nohalf for alpha
@@ -272,12 +287,15 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
                 // Exchange-hole curvature Q
                 double Q = exchange_hole_curvature(rho_spin, grad_sq, tau_nohalf, lapl[P]);
 
-                // Becke-Roussel b parameter
+                // Becke-Roussel b parameter. Points where the solve fails fall back to
+                // b = 0 and are tallied for the warning printed after the block loop.
                 double b;
+                nbhole_total += 1;
                 try {
                     b = bhole(rho_spin, Q, 1.0);
                 } catch (...) {
                     b = 0.0;
+                    nbhole_failed += 1;
                 }
 
                 if (spin == 0) {
@@ -297,6 +315,7 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
         }
 
         // --- Integrate XDM moments using Hirshfeld weights ---
+#pragma omp parallel for schedule(dynamic) num_threads(num_threads)
         for (int a = 0; a < natom; a++) {
             if (atomic_nums[a] < 1) continue;
 
@@ -341,6 +360,14 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
                 atom_data[a].charge += w * h * rho_tot;
             }
         }
+    }
+
+    if (nbhole_failed > 0) {
+        outfile->Printf("\n  WARNING: the Becke-Roussel b parameter could not be solved at %zu of %zu grid points\n",
+                        nbhole_failed, nbhole_total);
+        outfile->Printf("           (%.3f%%). Those points were treated as b = 0, so the XDM moments below\n",
+                        100.0 * static_cast<double>(nbhole_failed) / static_cast<double>(nbhole_total));
+        outfile->Printf("           are approximate.\n");
     }
 
     // Print summary
@@ -406,8 +433,8 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
     double** rcp = rc_mat->pointer();
 
     outfile->Printf("  ==> XDM Pairwise Coefficients <==\n\n");
-    outfile->Printf("    %4s %4s %12s %16s %16s %16s %12s %12s %12s\n", "i", "j", "dij", "C6", "C8", "C10", "Rc",
-                    "Rvdw", "E_disp");
+    outfile->Printf("    %4s %4s %6s %6s %12s %16s %16s %16s %12s %12s %12s\n", "i", "j", "mol_i", "mol_j", "dij",
+                    "C6", "C8", "C10", "Rc", "Rvdw", "E_disp");
 
     for (int ii = 0; ii < nreal; ii++) {
         int i = real_atoms[ii];
@@ -461,8 +488,8 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
             e_disp_pairs->set(ii, jj, e_disp_tmp);
             e_disp_pairs->set(jj, ii, e_disp_tmp);
 
-            outfile->Printf("    %4d %4d %12.6f %16.9E %16.9E %16.9E %12.6f %12.6f %12.6f\n", i + 1, j + 1, d, c6, c8,
-                            c10, rc, rvdw, e_disp_tmp);
+            outfile->Printf("    %4d %4d %6d %6d %12.6f %16.9E %16.9E %16.9E %12.6f %12.6f %12.6f\n", ii + 1, jj + 1,
+                            i + 1, j + 1, d, c6, c8, c10, rc, rvdw, e_disp_tmp);
         }
     }
 

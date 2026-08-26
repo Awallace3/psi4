@@ -58,6 +58,11 @@ def _uses_xdm(value: Any) -> bool:
     if isinstance(value, str):
         return "-xdm" in value.lower()
     if isinstance(value, dict):
+        # ``dft_functional`` dicts carry XDM in a nested dispersion block rather
+        # than in the method name.
+        disp = value.get("dispersion")
+        if isinstance(disp, dict) and str(disp.get("type", "")).lower() == "xdm":
+            return True
         return any(_uses_xdm(item) for item in value.values())
     if isinstance(value, (list, tuple, set)):
         return any(_uses_xdm(item) for item in value)
@@ -163,7 +168,7 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
     current_manybody_kwargs = {kw: kwargs.pop(kw) for kw in pertinent_manybody_kwargs if kw in kwargs}
     # explicit: "levels"
 
-    uses_xdm = _uses_xdm((method, cbsmeta, kwargs.get("levels", {})))
+    uses_xdm = _uses_xdm((method, cbsmeta, kwargs.get("levels", {}), kwargs.get("dft_functional")))
     if current_manybody_kwargs.get("bsse_type") is not None:
         bsse_type = current_manybody_kwargs["bsse_type"]
         bsse_types = [bsse_type] if isinstance(bsse_type, str) else bsse_type

@@ -37,7 +37,7 @@ XDM: Exchange-Hole Dipole Moment Dispersion Model
 .. codeauthor:: Alastair Price and Austin M. Wallace
 .. sectionauthor:: Alastair Price and Austin M. Wallace
 
-*Module:* :ref:`Samples <apdx:testSuitexdm>`
+*Module:* :source:`LIBXDM <psi4/src/psi4/libxdm>`
 
 Theory
 ~~~~~~
@@ -92,22 +92,10 @@ and basis set. The XDM implementation in |PSIfour| stores fitted
 (see :ref:`table:xdmparams`).
 
 For further details on the theoretical derivation, see
-[Becke:2005:154104]_, [Becke:2007:154108]_, and [Johnson:2006:174104]_.
-
-.. rubric:: Key references
-
-.. [Becke:2005:154104] A. D. Becke and E. R. Johnson,
-   *J. Chem. Phys.* **122**, 154104 (2005).
-.. [Becke:2007:154108] A. D. Becke and E. R. Johnson,
-   *J. Chem. Phys.* **127**, 154108 (2007).
-.. [Becke:2006:014104] A. D. Becke and E. R. Johnson,
-   *J. Chem. Phys.* **124**, 014104 (2006).
-.. [Johnson:2006:174104] E. R. Johnson and A. D. Becke,
-   *J. Chem. Phys.* **124**, 174104 (2006).
-.. [Becke:1989:3761] A. D. Becke and M. R. Roussel,
-   *Phys. Rev. A* **39**, 3761 (1989).
-.. [Hirshfeld:1977:129] F. L. Hirshfeld,
-   *Theor. Chim. Acta* **44**, 129 (1977).
+[Becke:2005:154104]_, [Becke:2007:154108]_, and [Johnson:2006:174104]_. The
+exchange-hole model is that of [Becke:1989:3761]_, and the atomic partitioning
+follows [Hirshfeld:1977:129]_; see also [Becke:2006:014104]_. All citations are
+defined in :ref:`apdx:bib`.
 
 
 Differences from DFTD3/DFTD4
@@ -150,7 +138,9 @@ appends a Grimme correction.  For example::
    energy('b3lyp-xdm')
 
 ``-XDM`` selects the KB49 damping model. Use ``-XDM(KB49)`` explicitly or
-``-XDM(LOS-II)`` where LOS-II parameters are available.
+``-XDM(LOS-II)`` for the LoS-II refit, which is fitted only for the three
+functional/basis combinations in :ref:`table:xdmlosiiparams`. Any other
+combination requires |scf__xdm_dispersion_parameters|.
 
 The dispersion correction is available after a calculation in the
 PSI variable :psivar:`DISPERSION CORRECTION ENERGY`.
@@ -208,6 +198,20 @@ density-derived, :math:`(a_1, a_2)` vary with both functional and basis set.
    +-------------------------------+--------+-----------+
    | PBE / aug-cc-pVDZ             | 0.5556 | 2.3610    |
    +-------------------------------+--------+-----------+
+
+.. _`table:xdmlosiiparams`:
+
+.. table:: Complete LoS-II XDM BJ damping parameters (a1, a2 in angstrom)
+
+   +-------------------------------+----------+-----------+
+   | Functional / Basis            | a1       | a2 (Ang)  |
+   +===============================+==========+===========+
+   | B3LYP / aug-cc-pVTZ           | 0.344500 | 2.304241  |
+   +-------------------------------+----------+-----------+
+   | B3LYP / aug-cc-pVDZ           | 0.362043 | 2.452093  |
+   +-------------------------------+----------+-----------+
+   | PBE0 / aug-cc-pVDZ            | 0.068267 | 3.963874  |
+   +-------------------------------+----------+-----------+
 
 For unlisted combinations, supply :math:`(a_1, a_2)` through
 |scf__xdm_dispersion_parameters|. The full table is in

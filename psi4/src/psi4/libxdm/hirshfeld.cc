@@ -20,6 +20,8 @@
 #include "hirshfeld.h"
 #include "xdm_data.h"
 
+#include "psi4/libpsi4util/process.h"
+
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -108,6 +110,12 @@ void ProatomDensity::initialize_spline(int Z) const {
     spline_initialized_[idx] = true;
 }
 
+void ProatomDensity::prepare(int natom, const int* atomic_nums) const {
+    for (int a = 0; a < natom; a++) {
+        initialize_spline(atomic_nums[a]);
+    }
+}
+
 double ProatomDensity::evaluate(int Z, double r) const {
     if (Z < 1 || Z > FTOT_NELEM) return 0.0;
     if (r < 1.0e-15) return 0.0;
@@ -150,27 +158,32 @@ void compute_hirshfeld_weights(const ProatomDensity& proatom, int natom, const i
         atom_weights.assign(npoints, 0.0);
     }
 
-    // Compute promolecular density at each grid point
-    std::vector<double> promol(npoints, 0.0);
+    // Building the splines mutates the evaluator, so it has to happen before the
+    // threaded region below.
+    proatom.prepare(natom, atomic_nums);
 
-    for (int a = 0; a < natom; a++) {
-        if (atomic_nums[a] < 1) continue;
-        for (int p = 0; p < npoints; p++) {
+    int num_threads = Process::environment.get_n_threads();
+
+    // Compute promolecular density at each grid point, then normalize in place:
+    // h_A(r) = rho_A(r) / promol(r)
+#pragma omp parallel for schedule(static) num_threads(num_threads)
+    for (int p = 0; p < npoints; p++) {
+        double promol = 0.0;
+        for (int a = 0; a < natom; a++) {
+            if (atomic_nums[a] < 1) continue;
             double dx = grid_x[p] - atom_coords[a][0];
             double dy = grid_y[p] - atom_coords[a][1];
             double dz = grid_z[p] - atom_coords[a][2];
             double r = std::sqrt(dx * dx + dy * dy + dz * dz);
             double arho = proatom.evaluate(atomic_nums[a], r);
             weights[a][p] = arho;
-            promol[p] += arho;
+            promol += arho;
         }
-    }
 
-    // Normalize: h_A(r) = rho_A(r) / promol(r)
-    for (int a = 0; a < natom; a++) {
-        if (atomic_nums[a] < 1) continue;
-        for (int p = 0; p < npoints; p++) {
-            weights[a][p] /= std::max(promol[p], 1.0e-40);
+        double promol_inv = 1.0 / std::max(promol, 1.0e-40);
+        for (int a = 0; a < natom; a++) {
+            if (atomic_nums[a] < 1) continue;
+            weights[a][p] *= promol_inv;
         }
     }
 }

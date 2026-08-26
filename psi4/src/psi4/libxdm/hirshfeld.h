@@ -37,10 +37,18 @@ class ProatomDensity {
 
     /// Evaluate the free-atom density at distance r from a nucleus of element Z.
     /// Returns rho_atom(r) in atomic units.
+    ///
+    /// Splines are built on first use, which mutates the cache. Concurrent calls are
+    /// only safe once every element that will be requested has been passed to
+    /// ``prepare``.
     double evaluate(int Z, double r) const;
 
+    /// Build the splines for every element in ``atomic_nums`` [natom], so that
+    /// subsequent ``evaluate`` calls for those elements only read the cache.
+    void prepare(int natom, const int* atomic_nums) const;
+
    private:
-    /// Initialize spline coefficients for element Z (lazy, thread-safe via const + mutable).
+    /// Initialize spline coefficients for element Z. Mutates the cache; not thread-safe.
     void initialize_spline(int Z) const;
 
     /// Whether spline has been initialized for each element

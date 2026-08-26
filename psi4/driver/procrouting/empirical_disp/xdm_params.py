@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
+
+from ...p4util.exceptions import ValidationError
 
 
 _XDM_BJ_PARAMS_ANGSTROM: Dict[str, Tuple[float, float]] = {
@@ -129,18 +131,36 @@ _XDM_LOS_II_PARAMS_ANGSTROM: Dict[str, Tuple[float, float]] = {
 }
 
 
+_XDM_MODEL_ALIASES: Dict[str, str] = {
+    "": "kb49",
+    "kb49": "kb49",
+    "los-ii": "los-ii",
+}
+
+_XDM_PARAM_TABLES: Dict[str, Dict[str, Tuple[float, float]]] = {
+    "kb49": _XDM_BJ_PARAMS_ANGSTROM,
+    "los-ii": _XDM_LOS_II_PARAMS_ANGSTROM,
+}
+
+
 def normalize_xdm_model(model: str) -> str:
     """Normalize XDM damping model names to canonical internal labels."""
 
-    normalized = model.strip().lower()
-    aliases = {
-        "": "kb49",
-        "kb49": "kb49",
-        "los-ii": "los-ii",
-    }
-    if normalized not in aliases:
-        raise KeyError(normalized)
-    return aliases[normalized]
+    normalized = str(model).strip().lower()
+    if normalized not in _XDM_MODEL_ALIASES:
+        supported = sorted(m for m in _XDM_MODEL_ALIASES if m)
+        raise ValidationError(
+            f"XDM: Unrecognized damping model ({model}). Supported models are ({supported})."
+        )
+    return _XDM_MODEL_ALIASES[normalized]
+
+
+def available_xdm_bases(functional_name: str, model: str = "kb49") -> List[str]:
+    """Basis names with fitted (a1, a2) for ``functional_name`` under ``model``."""
+
+    func = functional_name.lower()
+    table = _XDM_PARAM_TABLES[normalize_xdm_model(model)]
+    return sorted(key.split("/", 1)[1] for key in table if key.split("/", 1)[0] == func)
 
 
 def get_xdm_bj_params(
@@ -167,9 +187,8 @@ def get_xdm_bj_params(
     key = f"{func}/{basis}"
     normalized_model = normalize_xdm_model(model)
 
-    if key in _XDM_BJ_PARAMS_ANGSTROM:
-        if normalized_model == "los-ii":
-            return _XDM_LOS_II_PARAMS_ANGSTROM[key]
-        return _XDM_BJ_PARAMS_ANGSTROM[key]
+    table = _XDM_PARAM_TABLES[normalized_model]
+    if key in table:
+        return table[key]
 
     raise KeyError(key)
