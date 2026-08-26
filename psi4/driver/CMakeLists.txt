@@ -19,6 +19,7 @@ list(APPEND sources
   driver_nbody
   driver_util
   frac
+  gtfock
   inputparser
   qmmm
   wrapper_database

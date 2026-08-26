@@ -182,6 +182,18 @@ std::shared_ptr<JK> JK::build_JK(std::shared_ptr<BasisSet> primary, std::shared_
 
         return jk;
 
+    } else if (jk_type == "GTFOCK") {
+        // GTFock builds its own distributed engine and picks its own screening
+        // scheme, but it does take a Schwarz tolerance, so the cutoff setter
+        // applies here as it does elsewhere. CSAM has no GTFock analogue.
+        auto jk = std::make_shared<GTFockJK>(primary);
+        if (options["INTS_TOLERANCE"].has_changed() || options.get_str("SCREENING") == "NONE") jk->set_cutoff(cutoff);
+        if (options["PRINT"].has_changed()) jk->set_print(options.get_int("PRINT"));
+        if (options["DEBUG"].has_changed()) jk->set_debug(options.get_int("DEBUG"));
+        if (options["BENCH"].has_changed()) jk->set_bench(options.get_int("BENCH"));
+
+        return jk;
+
     /// handle composite methods
     } else if (is_composite) {
         auto jk = std::make_shared<CompositeJK>(primary, auxiliary, options);

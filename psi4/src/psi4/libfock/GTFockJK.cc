@@ -25,38 +25,95 @@
  *
  * @END LICENSE
  */
-#include "psi4/libpsi4util/exception.h"
 #include "psi4/libfock/jk.h"
-#ifdef ENABLE_GTFOCK
-#include <GTFock/MinimalInterface.h>
-#else
-namespace psi {
-struct MinimalInterface {
-    MinimalInterface(size_t, bool) { throw PSIEXCEPTION("PSI4 has not been compiled with GTFock support"); }
-    void SetP(std::vector<SharedMatrix>&) {}
-    void GetJ(std::vector<SharedMatrix>&) {}
-    void GetK(std::vector<SharedMatrix>&) {}
-};
-}  // namespace psi
-#endif
 
-#ifdef ENABLE_GTFOCK
+#include "psi4/libfock/gtfock_interface.h"
+#include "psi4/libmints/basisset.h"
+#include "psi4/libpsi4util/PsiOutStream.h"
+#include "psi4/libpsi4util/exception.h"
+#include "psi4/psi4-dec.h"
+
 namespace psi {
-GTFockJK::GTFockJK(std::shared_ptr<psi::BasisSet> Primary) : JK(Primary), Impl_(new MinimalInterface()) {}
-size_t GTFockJK::estimate_memory() {
-    return 0; // Effectively
+
+namespace {
+/// The GTFock engine is only created on the first compute_JK(), so report a
+/// GTFock-less build here rather than several driver layers later.
+void require_gtfock() {
+    if (!MinimalInterface::enabled()) {
+        throw PSIEXCEPTION("Psi4 was not compiled with GTFock support. Reconfigure with -DENABLE_GTFock=ON.");
+    }
 }
+}  // namespace
+
+GTFockJK::GTFockJK(std::shared_ptr<psi::BasisSet> Primary) : JK(Primary) { require_gtfock(); }
+
+GTFockJK::GTFockJK(std::shared_ptr<psi::BasisSet> Primary, size_t NMats, bool AreSymm)
+    : JK(Primary), NMats_(static_cast<int>(NMats)), are_symm_(AreSymm), fixed_shape_(true) {
+    require_gtfock();
+}
+
+size_t GTFockJK::memory_estimate() {
+    // GTFock allocates its own distributed buffers outside Psi4's accounting,
+    // so there is nothing here for Psi4's memory planner to reserve.
+    return 0;
+}
+
 void GTFockJK::compute_JK() {
+    if (do_wK_) {
+        throw PSIEXCEPTION("GTFockJK: range-separated (wK) integrals are not available from GTFock.");
+    }
 
     // zero out J, K, and wK matrices
     zero();
 
-    NMats_ = C_left_.size();
-    Impl_->create_pfock(NMats_, lr_symmetric_);
+    // GTFock fixes the density count when its engine is created. The
+    // three-argument constructor pins it up front; otherwise adopt whatever
+    // libfock is asking for on the first build and reuse the engine after that,
+    // so an SCF pays engine setup once rather than once per iteration.
+    const int requested = static_cast<int>(C_left_.size());
+    if (!Impl_ && !fixed_shape_) {
+        NMats_ = requested;
+        are_symm_ = lr_symmetric_;
+    }
+    // Both shape checks run before the engine is created: a process gets exactly
+    // one GTFock engine, so building a doomed one and then throwing would poison
+    // every later request.
+    if (requested != NMats_) {
+        throw PSIEXCEPTION("GTFockJK: this engine was built for " + std::to_string(NMats_) + " density matrices but " +
+                           std::to_string(requested) + " were supplied.");
+    }
+    if (are_symm_ && !lr_symmetric_) {
+        throw PSIEXCEPTION(
+            "GTFockJK: this engine exploits density symmetry, but C_left != C_right on this build. "
+            "SOSCF, stability analysis, and response-type J/K builds are outside the GTFock prototype; "
+            "use another SCF_TYPE for them.");
+    }
+    if (!Impl_) {
+        Impl_ = std::make_shared<MinimalInterface>(primary_, static_cast<size_t>(NMats_), are_symm_, cutoff_);
+    }
+
     Impl_->SetP(D_ao_);
-    Impl_->GetJ(J_ao_);
-    Impl_->GetK(K_ao_);
-    Impl_->destroy_gtfock();
+    if (do_J_) Impl_->GetJ(J_ao_);
+    if (do_K_) Impl_->GetK(K_ao_);
 }
+
+void GTFockJK::print_header() const {
+    if (print_) {
+        outfile->Printf("  ==> GTFockJK: MPI-Distributed J/K <==\n\n");
+        if (Impl_) {
+            outfile->Printf("    MPI ranks:          %d\n", Impl_->mpi_size());
+            outfile->Printf("    Process grid:       %d x %d\n", Impl_->nprow(), Impl_->npcol());
+        } else {
+            outfile->Printf("    MPI ranks:          %d\n", MinimalInterface::world_size());
+        }
+        if (Impl_ || fixed_shape_) {
+            outfile->Printf("    Densities per build: %d\n\n", NMats_);
+        } else {
+            // The engine is created on the first compute_JK(), which is where the
+            // density count comes from; there is nothing honest to print yet.
+            outfile->Printf("    Densities per build: deferred to first build\n\n");
+        }
+    }
+}
+
 }  // namespace psi
-#endif

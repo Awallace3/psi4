@@ -705,6 +705,12 @@ CD
     for gradient computations.  The algorithm to obtain the Cholesky
     vectors is not designed for computations with thousands of basis
     functions.
+GTFOCK
+    An MPI-distributed Fock build using exact ERIs, supplied by the optional
+    GTFock add-on and driven from Python through mpi4py. Available only in a
+    |PSIfour| built with ``-DENABLE_GTFock=ON``, and a prototype: it covers
+    closed-shell RHF in a Cartesian basis and raises on anything outside that.
+    See :ref:`sec:gtfock`.
 
 |PSIfour| also features the capability to use "composite" Fock matrix build
 algorithms - arbitrary combinations of specialized algorithms that construct

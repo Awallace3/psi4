@@ -95,6 +95,7 @@ _programs = {
     "einsums": psi4.addons("einsums"),
     "pyeinsums": which_import("einsums", return_bool=True),
     "gauxc": psi4.addons("gauxc"),
+    "gtfock": psi4.addons("gtfock"),
     "ooo": psi4.addons("ooo"),
     "pandas": which_import("pandas", return_bool=True),
 }

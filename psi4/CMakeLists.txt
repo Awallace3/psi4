@@ -239,6 +239,25 @@ else()
     message(STATUS "Disabled simint ${simint_DIR}")
 endif()
 
+if(${ENABLE_GTFock})
+    # No CMake package config ships with GTFock, so this is a MODULE find over
+    # GTFock_ROOT (set by the superbuild from its own detection).
+    find_package(GTFock MODULE REQUIRED)
+    # Every library the GTFock target pulls in, not just libgtfock: _addons is
+    # the sole input to core.so's rpath. The CInt/GTMatrix finds are
+    # independent of libgtfock's location, and Simint, though confined to
+    # GTFock's own prefix, may still sit in a sibling lib64, so none of them
+    # need share libgtfock's directory.
+    list(APPEND _addons
+      ${GTFock_PFOCK_LIBRARY}
+      ${GTFock_CINT_LIBRARY}
+      ${GTFock_GTMATRIX_LIBRARY}
+      ${GTFock_SIMINT_LIBRARY})
+    message(STATUS "${Cyan}Using GTFock${ColourReset}: ${GTFock_PFOCK_LIBRARY}")
+else()
+    message(STATUS "Disabled GTFock ${GTFock_ROOT}")
+endif()
+
 if(${ENABLE_BrianQC})
     find_package(BrianQC 1.1 CONFIG REQUIRED)  # edit in codedeps
     get_property(_loc TARGET BrianQC::static_wrapper PROPERTY LOCATION)
@@ -369,6 +388,7 @@ install(
     PATTERN "f12_libint1.json"
     PATTERN "tdscf_reference_data.json"
     PATTERN "utils.py"
+    PATTERN "gtfock_mpi_driver.py"  # launched under mpirun by test_gtfock.py
   )
 install(
   DIRECTORY

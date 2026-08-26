@@ -155,6 +155,17 @@ jobs:
       with:
         fetch-depth: 0
 
+      # fetch-depth: 0 gets commits but not tags a fork never mirrored. Without an
+      # annotated tag reachable from HEAD, psi4/versioner.py can't reconcile against
+      # psi4/metadata.py, writes `__version__ = 'undefined'`, and `import psi4` raises
+      # from header.py. Same remedy header.py's own message recommends.
+    - name: Fetch version tags
+      run: |
+        if ! git describe --long HEAD > /dev/null 2>&1; then
+          git fetch --no-tags https://github.com/psi4/psi4.git "refs/tags/*:refs/tags/*"
+        fi
+        git describe --abbrev=7 --long --always HEAD
+
       # see CMAKE_OSX_SYSROOT and CMAKE_Fortran_FLAGS for use
       # mac_ver line returns, e.g., "10.15" for Catalina & "11.6" for Big Sur. but phracker doesn't support all minor, so some logic to hardcode.
     - name: Prepare compiler environment, SDK (M)

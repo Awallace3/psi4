@@ -1,0 +1,62 @@
+# Conda environment for the optional GTFock MPI J/K path (linux-64).
+#
+# This is `linux-64-buildrun.yaml` (Psi4's core build/run dependencies) plus the
+# GTFock milestone-1 build contract from https://github.com/Awallace3/gtfock_psi4
+# and mpi4py, which is what starts MPI from Python. See
+# doc/sphinxman/source/gtfock.rst for the full build and run procedure.
+#
+#   conda env create -n p4gtf -f devtools/conda-envs/linux-64-gtfock.yaml --solver libmamba
+#   conda activate p4gtf
+name: p4gtf
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+    # build
+  - cmake=3.31.6              # GTFock's generated Simint needs CMake <4 policy compat
+  - ninja
+  - pkg-config
+  - git
+    # non-qc buildtime required
+  - blas-devel                # req'd with libblas
+  - c-compiler<2
+  - cxx-compiler<2
+  - fortran-compiler<2        # req'd by GTFock's OptErd/OED Fortran kernels
+  - eigen                     # req'd with libint
+  - libblas=*=*mkl
+  - libboost-headers          # req'd with libint
+  - llvm-openmp
+  - numpy
+  - pip
+  - pybind11
+  - python=3.12
+  - python-gil
+    # qc buildtime required
+  - gau2grid
+  - libint
+  - libxc-c
+  - optking>=0.5.0
+  - qcelemental>=0.50.4
+  - qcengine>=0.50.0
+    # runtime required
+  - msgpack-python            # req'd with qcelemental
+  - networkx                  # req'd with qcelemental
+  - pydantic>=2.11.0,<3       # req'd with qcelemental
+  - scipy
+  - setuptools                # req'd with qcelemental
+    # test
+  - h5py
+  - memory_profiler
+  - pandas
+  - pytest
+  - pytest-xdist
+    # GTFock build contract (gtfock_psi4/env.yml). Build Psi4 with these same
+    # IntelLLVM compilers so Psi4 and GTFock share one OpenMP runtime (libomp).
+  - dpcpp_linux-64=2025.3.1   # provides icx/icpx
+  - mpi=1.0=openmpi           # one MPI ABI across GTFock, GTMatrix, MKL BLACS
+  - openmpi=5.0.8
+  - mkl-devel=2025.3.1
+  - mkl-include=2025.3.1
+  - tbb=2022.3.0
+    # Python -> MPI driver for Psi4's GTFock path
+  - mpi4py
