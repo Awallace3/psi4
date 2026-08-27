@@ -376,7 +376,7 @@ def test_h2_copy_equality_active_zeros_cutoff_and_kkt_oracle():
     assert set(unpruned["kept_variables"]) == set(np.flatnonzero(tiny_active))
     assert unpruned["applied_column_cutoff"] == 0.
     assert unpruned["policy"]["cutoff"] == 0.
-    assert unpruned["policy"]["column_pruning_definition"] == "disabled (PFIT SVD-off parity)"
+    assert unpruned["policy"]["column_pruning_definition"] == "disabled (SVD-off no-pre-pruning parity)"
 
 
 def test_point_site_permutation_covariance_and_frequency_major_wrapper():

@@ -6740,7 +6740,7 @@ const std::vector<std::pair<std::string, std::string>>& anisotropic_expected_con
         {"unverified",
          "Stone's even-sector Sbar normalisation and phase are pinned by Stone (1978) and "
          "Stone--Tough (1984), but the residual real-component sign for unequal coupled "
-         "ranks and the plain-S odd-sector CASIMIR convention are not yet guaranteed "
+         "ranks and the plain-S odd-sector external convention are not yet guaranteed "
          "comparable term by term with external anisotropic output"},
     };
     return conventions;
