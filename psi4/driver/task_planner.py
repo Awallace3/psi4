@@ -69,6 +69,14 @@ def _uses_xdm(value: Any) -> bool:
     return False
 
 
+def _callable_dispersion(functional):
+    from .procrouting.dft import build_superfunctional
+
+    reference = core.get_option("SCF", "REFERENCE").upper()
+    _, dispersion = build_superfunctional(functional, reference in ("RHF", "RKS"))
+    return dispersion
+
+
 def _negotiate_derivative_type(driver, method, user_dertype, uses_xdm):
     if uses_xdm and driver == "gradient":
         if user_dertype not in (None, 0):
@@ -176,7 +184,13 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
     current_manybody_kwargs = {kw: kwargs.pop(kw) for kw in pertinent_manybody_kwargs if kw in kwargs}
     # explicit: "levels"
 
-    uses_xdm = _uses_xdm((method, cbsmeta, kwargs.get("levels", {}), kwargs.get("dft_functional")))
+    dft_functional = kwargs.get("dft_functional")
+    needs_dispersion_metadata = driver != "energy" or current_manybody_kwargs.get("bsse_type") is not None
+    if callable(dft_functional) and needs_dispersion_metadata:
+        dft_metadata = _callable_dispersion(dft_functional)
+    else:
+        dft_metadata = dft_functional
+    uses_xdm = _uses_xdm((method, cbsmeta, kwargs.get("levels", {}), dft_metadata))
     if current_manybody_kwargs.get("bsse_type") is not None:
         bsse_type = current_manybody_kwargs["bsse_type"]
         bsse_types = [bsse_type] if isinstance(bsse_type, str) else bsse_type

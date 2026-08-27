@@ -258,8 +258,25 @@ double get_free_volume(int Z, const std::string& functional, double hf_fraction)
 
     // For elements with functional-specific data (Z=1..36, excluding K=19, Ca=20)
     bool has_specific = (Z < 19 || (Z > 20 && Z <= 36));
+    double table_hf_fraction = -1.0;
+    if (functional == "blyp" || functional == "pbe" || functional == "pw86pbe" || functional == "pw86")
+        table_hf_fraction = 0.0;
+    else if (functional == "camb3lyp" || functional == "cam-b3lyp")
+        table_hf_fraction = 0.19;
+    else if (functional == "b3lyp")
+        table_hf_fraction = 0.20;
+    else if (functional == "b97-1" || functional == "b971")
+        table_hf_fraction = 0.21;
+    else if (functional == "pbe0")
+        table_hf_fraction = 0.25;
+    else if (functional == "bhahlyp" || functional == "bhandhlyp" || functional == "bhandh")
+        table_hf_fraction = 0.50;
+    else if (functional == "lcwpbe" || functional == "lc-wpbe" || functional == "lrc-wpbe")
+        table_hf_fraction = 0.0;
 
-    if (has_specific) {
+    bool use_specific = has_specific && table_hf_fraction >= 0.0 &&
+                        (hf_fraction < 0.0 || std::abs(hf_fraction - table_hf_fraction) < 1.0e-10);
+    if (use_specific) {
         // Use functional-specific table
         if (functional == "blyp") return frevol_blyp[Z];
         if (functional == "b3lyp") return frevol_b3lyp[Z];

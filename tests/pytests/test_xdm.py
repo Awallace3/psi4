@@ -415,6 +415,17 @@ units angstrom
     )
     assert isinstance(plan, FiniteDifferenceComputer)
 
+    def callable_xdm(name, npoints, deriv, restricted):
+        superfunctional = psi4.core.SuperFunctional.blank()
+        superfunctional.set_name("CALLABLE-XDM")
+        return superfunctional, {"type": "xdm", "params": {"xdm_model": "kb49"}}
+
+    plan = task_planner("gradient", "scf", dimer, dft_functional=callable_xdm, **findif_kwargs)
+    assert isinstance(plan, FiniteDifferenceComputer)
+
+    with pytest.raises(NotImplementedError, match="Counterpoise-based XDM energies are not implemented"):
+        task_planner("energy", "scf", dimer, dft_functional=callable_xdm, bsse_type="cp")
+
     plan = task_planner("gradient", "b3lyp-xdm/sto-3g", dimer, **findif_kwargs)
     assert isinstance(plan, FiniteDifferenceComputer)
 
@@ -461,6 +472,27 @@ def test_xdm_uses_wavefunction_exchange_fraction():
 
     assert functor.compute_energy(None, Wavefunction()) == -0.01
     assert recorder.hf_fraction == pytest.approx(0.54)
+
+
+@pytest.mark.xdm
+def test_xdm_runtime_exchange_changes_free_volume():
+    mol = psi4.geometry("0 1\nH 0 0 0\nH 0 0 1.5\nunits angstrom")
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "DFT_SPHERICAL_POINTS": 110,
+            "DFT_RADIAL_POINTS": 50,
+        }
+    )
+    _, wfn = psi4.energy("b3lyp", molecule=mol, return_wfn=True)
+    xdm = psi4.core.XDMDispersion.build("b3lyp", 0.5, 1.0)
+
+    xdm.compute_energy(wfn, 0.20)
+    standard_c6 = psi4.core.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
+    xdm.compute_energy(wfn, 0.50)
+    modified_c6 = psi4.core.array_variable("XDM C6 COEFFICIENTS").np[0, 1]
+
+    assert not np.isclose(standard_c6, modified_c6, rtol=1.0e-10, atol=1.0e-12)
 
 
 @pytest.mark.xdm
