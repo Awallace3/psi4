@@ -482,7 +482,9 @@ def test_direct_energy_is_exactly_the_double_sum_over_the_interaction_tensor():
 #     = sum_{blocks with that n} g^r Pcheck^{(la, la', l1)}_{k1,(t t')}
 #                                    Pcheck^{(lb, lb', l2)}_{k2,(u u')},
 #
-# so the 2723 nonzero g^r scalars plus 37 universal coupling matrices are the
+# where Lambda_j inside g^r is the closed Wigner 9j of Stone--Tough (1984), eq. (32),
+# independently cross-checked against the explicit four-CG least-squares collapse. Thus the
+# 2723 nonzero g^r scalars plus 37 universal coupling matrices are the
 # whole table.  dense_anisotropic_recoupling exists only as a single-label test
 # seam and is used below to pin the isotropic reduction and the exchange rule.
 #
@@ -592,11 +594,9 @@ def test_recoupling_table_declares_its_version_and_conventions():
     # The block product carries the 1/(2 pi); the table therefore carries the bare
     # binomial. Stating it in the table is what makes the two halves auditable.
     assert "2 pi" in conventions["block_product"]
-    # The table also carries what is NOT settled. The reality phase Ncal is derived
-    # here rather than quoted, and the residual real sign per (l1, l2, j) plus any
-    # (2j+1)^(1/2)-type normalisation of the published S function definition are not
-    # pinned down. Every check in this file is convention-internal and unaffected;
-    # a term-by-term external comparison is not, and must settle this first.
+    # Stone (1978) and Stone--Tough (1984) now pin the even-sector Sbar magnitude
+    # conversion. The table still records the narrower unresolved items: the residual
+    # real-component sign for unequal ranks and CASIMIR's plain-S odd-sector convention.
     assert "not yet guaranteed comparable term by term" in conventions["unverified"]
 
 
@@ -783,6 +783,76 @@ def test_recoupling_table_live_order_six_triples_are_the_textbook_set():
     assert tuple(sorted(live)) == _LIVE_C6_TRIPLES
 
 
+def test_linear_molecule_c6_maps_to_stones_published_gamma_ratios():
+    """Williams--Stone (2003) eqs. (7)-(12) and Stone (4.3.26)-(4.3.29) agree.
+
+    WS03 fixes the six Stone-C/Sbar factors as 2, -sqrt(2), -sqrt(2), 1/5, 2/7,
+    and 108/35 times W and the relevant irreducible-polarizability integral. Stone's book
+    rewrites the same linear-molecule result as the three gamma ratios used below.
+
+    The current table is paired with its own CG-normalised S functions.  To compare these
+    even-parity linear-C6 coefficients with Stone's published C (paired with Sbar), first
+    convert to Stone's Cbar by applying sqrt(2j+1) and the Stone/current reality-phase ratio,
+    then apply (4.3.25)'s 3j.  Conditional on Stone's signed-3j convention, the exact
+    1/15, 2/21 and 36/35 gamma ratios show that both factors are needed; direct energy
+    reconstruction cannot reveal either one.
+    """
+    def linear_dipole(parallel, perpendicular):
+        tensor = [[0.0] * _L3_DIMENSION for _ in range(_L3_DIMENSION)]
+        tensor[0][0] = parallel       # 10 = z
+        tensor[1][1] = perpendicular  # 11c = x
+        tensor[2][2] = perpendicular  # 11s = y
+        return tensor
+
+    parallel_a, perpendicular_a = 5.0, 2.0
+    parallel_b, perpendicular_b = 7.0, 3.0
+    alpha_a = (parallel_a + 2.0 * perpendicular_a) / 3.0
+    alpha_b = (parallel_b + 2.0 * perpendicular_b) / 3.0
+    delta_a = parallel_a - perpendicular_a
+    delta_b = parallel_b - perpendicular_b
+
+    # One artificial quadrature point with weight 2 pi cancels the block product's
+    # 1/(2 pi).  In this normalization the common prefactor in Stone's formulas is 2.
+    coefficients = _coefficients([linear_dipole(parallel_a, perpendicular_a)],
+                                 [linear_dipole(parallel_b, perpendicular_b)],
+                                 weights=[2.0 * math.pi])
+    index = _label_index(_table())
+    assert abs(coefficients[index[(6, 0, 0, 0, 0, 0)]] - 6.0 * alpha_a * alpha_b) < 1.0e-13
+    c202 = coefficients[index[(6, 2, 0, 0, 0, 2)]]
+    c022 = coefficients[index[(6, 0, 0, 2, 0, 2)]]
+    assert abs(c202 - 2.0 * delta_a * alpha_b) < 1.0e-13
+    assert abs(c022 - 2.0 * alpha_a * delta_b) < 1.0e-13
+    # WS03 eqs. (8)-(9) are ordered: unlike sites generally have C022 != C202.
+    assert c022 != c202
+
+    # For l1=l2=2: i^(l1-l2-j)/Ncal_current is +1, -1, +1 for j=0,2,4.
+    # The signed 3j values are (1/sqrt5, -sqrt(2/35), +sqrt(2/35)).
+    phase_ratio = {0: 1.0, 2: -1.0, 4: 1.0}
+    three_j = {0: 1.0 / math.sqrt(5.0),
+               2: -math.sqrt(2.0 / 35.0),
+               4: math.sqrt(2.0 / 35.0)}
+    stone_c = {}
+    for coupled in (0, 2, 4):
+        internal = coefficients[index[(6, 2, 0, 2, 0, coupled)]]
+        stone_cbar = internal * math.sqrt(2.0 * coupled + 1.0) * phase_ratio[coupled]
+        stone_c[coupled] = three_j[coupled] * stone_cbar
+
+    gamma22_c6 = 2.0 * delta_a * delta_b
+    expected = {0: gamma22_c6 / 15.0,
+                2: 2.0 * gamma22_c6 / 21.0,
+                4: 36.0 * gamma22_c6 / 35.0}
+    for coupled in (0, 2, 4):
+        assert abs(stone_c[coupled] - expected[coupled]) < 1.0e-13
+
+    # The j=2 member is a negative control for each factor separately. Omitting the
+    # Stone/current phase gives the wrong sign; omitting sqrt(2j+1) gives the wrong scale.
+    internal_j2 = coefficients[index[(6, 2, 0, 2, 0, 2)]]
+    without_phase = three_j[2] * internal_j2 * math.sqrt(5.0)
+    without_sqrt = three_j[2] * internal_j2 * phase_ratio[2]
+    assert abs(without_phase - expected[2]) > 1.0
+    assert abs(without_sqrt - expected[2]) > 1.0
+
+
 def test_recoupling_table_orientational_average_returns_the_isotropic_coefficient():
     """<S_label> = delta_{label, (n, 0, 0, 0, 0, 0)} under SO(3) x SO(3) x S^2 averaging.
 
@@ -808,6 +878,7 @@ def test_recoupling_table_rank_completeness_covers_every_l3_rank():
 
 
 def test_recoupling_table_reports_its_generation_residuals():
+    """The closed Stone--Tough 9j agrees with every explicit four-CG collapse."""
     table = _table()
     assert table["max_collapse_residual"] < 1.0e-13
     assert table["max_rotation_orthogonality_deviation"] < 1.0e-12

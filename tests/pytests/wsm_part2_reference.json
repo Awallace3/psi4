@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "source": {
+    "authors": [
+      "A. J. Misquitta",
+      "A. J. Stone",
+      "S. L. Price"
+    ],
+    "title": "Accurate Induction Energies for Small Organic Molecules. 2. Development and Testing of Distributed Polarizability Models against SAPT(DFT) Energies",
+    "journal": "Journal of Chemical Theory and Computation",
+    "volume": 4,
+    "pages": "19-32",
+    "year": 2008,
+    "doi": "10.1021/ct700105f",
+    "local_pdf": "req_papers_1/ct700105f.pdf",
+    "local_pdf_sha256": "e80d82f65b2305f9ef4327d7f41004aa3fac254454607c752d977ddf55045d84"
+  },
+  "equation_2": {
+    "printed_page": 23,
+    "off_diagonal_strength": 0.0,
+    "dipole_components": ["10", "11c", "11s"],
+    "dipole_block_diagonal_strength": 1.0e-5,
+    "all_other_diagonal_strength": 0.0,
+    "interpretation": "Static rank-1-only WSM penalty; zero higher-rank strength is unregularized least squares on those variables."
+  },
+  "response_quality_gates_percent_of_range": {
+    "comparison": "strictly_less_than",
+    "rank_1": {
+      "maximum": 6.0,
+      "rms": 0.2
+    },
+    "rank_2": {
+      "maximum": 2.0,
+      "rms": 0.05
+    }
+  },
+  "table_1_wsm_energy_map_differences": {
+    "units": "kJ mol^-1",
+    "probe": "unit charge",
+    "surface": "vdW x 2",
+    "columns": ["Formamide", "N-MPA", "Benzene", "BOQQUT"],
+    "rows": {
+      "L1,WSM": {
+        "maximum": [3.48, 2.32, 2.98, 2.48],
+        "rms": [1.35, 0.74, 1.58, 0.82]
+      },
+      "L2,WSM": {
+        "maximum": [1.14, 1.29, 0.69, 2.27],
+        "rms": [0.27, 0.21, 0.25, 0.23]
+      },
+      "L2/L1,WSM": {
+        "maximum": [1.18, 0.99, 0.67, 1.48],
+        "rms": [0.34, 0.34, 0.42, 0.32]
+      }
+    }
+  },
+  "recommended_model": {
+    "heavy_atom_rank": 2,
+    "hydrogen_rank": 1,
+    "label": "L2/L1,WSM"
+  },
+  "grid_caveat": {
+    "system": "BOQQUT",
+    "point_count": 2000,
+    "reason": "Make the error from the unsymmetrized grid negligible.",
+    "limitation": "Table 1 and the response gates are validation targets, not standalone solver oracles without the paper's full surface, basis, radii, symmetry, and grid protocol."
+  }
+}

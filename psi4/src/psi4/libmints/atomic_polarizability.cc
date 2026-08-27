@@ -28,6 +28,7 @@
 #include <iomanip>
 #include <initializer_list>
 #include <limits>
+#include <numeric>
 #include <queue>
 #include <sstream>
 #include <string>
@@ -3881,6 +3882,16 @@ std::size_t wsm_upper_index(std::size_t first, std::size_t second) {
     return first * kWSMComponents - first * (first - 1) / 2 + (second - first);
 }
 
+/**
+ * Rank l of an L3 site-tensor component. The 15-component ordering packs rank l into
+ * [l*l - 1, (l+1)*(l+1) - 2] -- rank 1 at 0..2, rank 2 at 3..7, rank 3 at 8..14 -- so the
+ * rank is floor(sqrt(component + 1)). Exact in double for this range; no component index
+ * here is large enough for the square root to land on the wrong side of an integer.
+ */
+unsigned int component_rank(std::size_t component) {
+    return static_cast<unsigned int>(std::sqrt(static_cast<double>(component + 1)));
+}
+
 L3WorkingVector irregular_harmonics(const SitePosition& point, const SitePosition& site) {
     SitePosition displacement{};
     double radius_squared = 0.0;
@@ -3907,9 +3918,23 @@ L3WorkingVector irregular_harmonics(const SitePosition& point, const SitePositio
 }
 
 void validate_wsm_policy(const RefinementOptions& options) {
+    const bool supported_cutoff = std::isfinite(options.cutoff) &&
+                                  (options.cutoff == 0.0 || options.cutoff == 1.0e-4);
     if (options.wsm_rank != 3 || options.hydrogen_rank != 3 || options.weight_type != 4 ||
-        options.weight_coefficient != 0.001 || options.cutoff != 1.0e-4)
-        throw PSIEXCEPTION("WSM refinement: only the exact rank-3/rank-3 weight-type-4 physical policy is supported");
+        !supported_cutoff)
+        throw PSIEXCEPTION("WSM refinement: only the rank-3/rank-3 weight-type-4 policy with relative cutoff 1e-4 or SVD-off cutoff 0 is supported");
+    if (options.anchor_rank_limit < 1 || options.anchor_rank_limit > 3)
+        throw PSIEXCEPTION("WSM refinement: anchor rank limit must be between one and three");
+    // The anchor penalty weight is the g_pp' of Stone, "The Theory of Intermolecular
+    // Forces", 2nd ed., eqn (9.3.13): the positive semidefinite weight matrix pulling the
+    // fitted parameters towards the localization-stage anchor values. Stone notes it is
+    // what keeps poorly determined ('buried', small J_Pk) parameters from taking on
+    // unphysical values (§9.3.4), so its magnitude is a physical choice rather than a
+    // fixed constant, and it is left free here instead of pinned to the 0.001 default.
+    // Zero would recover bounded, unregularized least squares, but this hybrid production
+    // policy deliberately requires a positive anchor weight.
+    if (!std::isfinite(options.weight_coefficient) || options.weight_coefficient <= 0.0)
+        throw PSIEXCEPTION("WSM refinement: the anchor penalty weight must be finite and positive");
     if (!std::isfinite(options.maximum_condition_number) || options.maximum_condition_number < 1.0)
         throw PSIEXCEPTION("WSM refinement: maximum condition number must be finite and at least one");
 }
@@ -4044,7 +4069,9 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
     for (std::size_t first_point = 0; first_point < points.size(); ++first_point) {
         for (std::size_t second_point = first_point; second_point < points.size(); ++second_point, ++pair) {
             observations[pair] = (*response)(first_point, second_point);
-            if (first_point != second_point) row_weights[pair] = std::sqrt(2.0);
+            if (options.row_weight_policy == WSMRowWeightPolicy::FullSymmetricFrobenius &&
+                first_point != second_point)
+                row_weights[pair] = std::sqrt(2.0);
             for (std::size_t variable = 0; variable < identities.size(); ++variable) {
                 const auto identity = identities[variable];
                 const auto& first_irregular = irregular[first_point * site_count + identity.site];
@@ -4061,10 +4088,11 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
         }
     }
 
-    // The WSM policy cutoff is a RELATIVE rank threshold, not an atomic-unit
-    // magnitude. solve_constrained_least_squares compares against an absolute
-    // weighted column norm, so the protocol value is scaled here by the largest
-    // weighted column norm of this design matrix.
+    // A nonzero WSM policy cutoff is a RELATIVE rank threshold, not an atomic-unit
+    // magnitude. solve_constrained_least_squares compares against an absolute weighted
+    // column norm, so the protocol value is scaled here by the largest weighted column
+    // norm of this design matrix. A zero cutoff explicitly disables pre-pruning, matching
+    // the reference no-pre-pruning ledger's "SVD off" policy.
     //
     // This matters physically, not just numerically. The irregular harmonics fall
     // off as r^-(2l+1), so every column norm shrinks as the fit points move
@@ -4097,10 +4125,16 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
         // the allowed dipole off-diagonal is exactly the Cartesian component that the point
         // response constrains least, so leaving it free lets it drift far from any physical
         // value while still fitting the response and conserving the molecular sum.
-        if (identity.first < 3 && identity.second < 3) {
+        //
+        // The L3 component index packs rank l into [l*l - 1, (l+1)*(l+1) - 2], so the rank of
+        // a component is floor(sqrt(component + 1)). anchor_rank_limit == 1 reproduces the
+        // reviewed rank-1-only protocol exactly; a higher limit extends Stone's g_pp' penalty
+        // (eqn 9.3.13) over the higher blocks, which is where §9.3.4 says it is actually
+        // needed. A block left unanchored has a zero row in g_pp', so NO penalty weight can
+        // constrain it however large weight_coefficient is made.
+        if (component_rank(identity.first) <= options.anchor_rank_limit &&
+            component_rank(identity.second) <= options.anchor_rank_limit)
             anchor[variable] = 1.0;
-            ++anchor_count;
-        }
     }
 
     std::vector<std::size_t> effective_rows;
@@ -4121,9 +4155,63 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
                 (*constraints.equality)(effective_rows[row], active_to_full[variable]);
     }
 
+    if (options.normalize_copy_penalties) {
+        // PDef exposes symmetry copies as separate active columns joined by homogeneous
+        // signed/equal two-column constraints, while the reference fit carries one
+        // independent parameter and one penalty per copy class. Without normalization,
+        // m expanded copies multiply the physical anchor strength by m. Build exactly
+        // those copy classes (not general conservation constraints) and distribute one
+        // squared penalty over each class with row scale 1/sqrt(m).
+        std::vector<std::size_t> parent(active_to_full.size());
+        std::iota(parent.begin(), parent.end(), std::size_t{0});
+        const auto find_root = [&parent](std::size_t variable) {
+            while (parent[variable] != variable) variable = parent[variable];
+            return variable;
+        };
+        for (std::size_t row = 0; row < effective_rows.size(); ++row) {
+            if (reduced_targets[row] != 0.0) continue;
+            std::array<std::size_t, 2> columns{};
+            std::array<double, 2> coefficients{};
+            std::size_t count = 0;
+            for (std::size_t variable = 0; variable < active_to_full.size(); ++variable) {
+                const double coefficient = reduced_constraints(row, variable);
+                if (coefficient == 0.0) continue;
+                if (count < 2) {
+                    columns[count] = variable;
+                    coefficients[count] = coefficient;
+                }
+                ++count;
+            }
+            if (count != 2) continue;
+            const double coefficient_scale = std::max(std::abs(coefficients[0]),
+                                                      std::abs(coefficients[1]));
+            if (coefficient_scale == 0.0 ||
+                std::abs(std::abs(coefficients[0]) - std::abs(coefficients[1])) >
+                    16.0 * std::numeric_limits<double>::epsilon() * coefficient_scale)
+                continue;
+            const auto first_root = find_root(columns[0]);
+            const auto second_root = find_root(columns[1]);
+            if (first_root != second_root) parent[second_root] = first_root;
+        }
+        std::vector<std::size_t> anchored_per_root(active_to_full.size(), 0);
+        for (std::size_t variable = 0; variable < anchor.size(); ++variable)
+            if (anchor[variable] != 0.0) ++anchored_per_root[find_root(variable)];
+        for (std::size_t variable = 0; variable < anchor.size(); ++variable) {
+            if (anchor[variable] == 0.0) continue;
+            const auto multiplicity = anchored_per_root[find_root(variable)];
+            anchor[variable] = 1.0 / std::sqrt(static_cast<double>(multiplicity));
+        }
+        anchor_count = static_cast<std::size_t>(std::count_if(
+            anchored_per_root.begin(), anchored_per_root.end(),
+            [](std::size_t count) { return count != 0; }));
+    } else {
+        anchor_count = static_cast<std::size_t>(std::count_if(
+            anchor.begin(), anchor.end(), [](double value) { return value != 0.0; }));
+    }
+
     detail::ConstrainedLeastSquaresOptions solve_options;
     solve_options.column_cutoff = options.cutoff * maximum_weighted_column_norm;
-    solve_options.prune_below_cutoff = true;
+    solve_options.prune_below_cutoff = options.cutoff > 0.0;
     solve_options.maximum_condition_number = options.maximum_condition_number;
     solve_options.maximum_workspace_elements = plan.workspace_elements;
     const auto solved = detail::solve_constrained_least_squares(
@@ -4153,7 +4241,10 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
     pending.diagnostics.objective_residual_norm = solved.objective_residual_norm;
     pending.diagnostics.maximum_weighted_column_norm = maximum_weighted_column_norm;
     pending.diagnostics.applied_column_cutoff = solve_options.column_cutoff;
-    pending.diagnostics.row_weight_source = "full_symmetric_frobenius";
+    pending.diagnostics.row_weight_source =
+        options.row_weight_policy == WSMRowWeightPolicy::FullSymmetricFrobenius
+            ? "full_symmetric_frobenius"
+            : "unique_pair_equal";
     pending.diagnostics.plan = plan;
     for (std::size_t site = 0; site < site_count; ++site) {
         for (std::size_t first = 0; first < kWSMComponents; ++first) {
@@ -5681,6 +5772,66 @@ double anisotropic_clebsch_gordan(int j1, int m1, int j2, int m2, int j, int m) 
     return value;
 }
 
+/** Triangle coefficient Delta(a,b,c) used by Racah's integer-angular-momentum 6j formula. */
+long double anisotropic_triangle_coefficient(int a, int b, int c) {
+    if (a < 0 || b < 0 || c < std::abs(a - b) || c > a + b) return 0.0L;
+    return std::sqrt(anisotropic_factorial(a + b - c) *
+                     anisotropic_factorial(a - b + c) *
+                     anisotropic_factorial(-a + b + c) /
+                     anisotropic_factorial(a + b + c + 1));
+}
+
+/** Wigner 6j symbol from Racah's closed formula, for the integer ranks used here. */
+double anisotropic_wigner_6j(int a, int b, int c, int d, int e, int f) {
+    const long double prefactor = anisotropic_triangle_coefficient(a, b, c) *
+                                  anisotropic_triangle_coefficient(a, e, f) *
+                                  anisotropic_triangle_coefficient(d, b, f) *
+                                  anisotropic_triangle_coefficient(d, e, c);
+    if (prefactor == 0.0L) return 0.0;
+    const int lower = std::max({a + b + c, a + e + f, d + b + f, d + e + c});
+    const int upper =
+        std::min({a + b + d + e, a + c + d + f, b + c + e + f});
+    long double sum = 0.0L;
+    for (int z = lower; z <= upper; ++z) {
+        const long double denominator =
+            anisotropic_factorial(z - a - b - c) *
+            anisotropic_factorial(z - a - e - f) *
+            anisotropic_factorial(z - d - b - f) *
+            anisotropic_factorial(z - d - e - c) *
+            anisotropic_factorial(a + b + d + e - z) *
+            anisotropic_factorial(a + c + d + f - z) *
+            anisotropic_factorial(b + c + e + f - z);
+        sum += (z % 2 == 0 ? 1.0L : -1.0L) * anisotropic_factorial(z + 1) /
+               denominator;
+    }
+    const double value = static_cast<double>(prefactor * sum);
+    require_finite(value, "anisotropic Wigner 6j symbol");
+    return value;
+}
+
+/**
+ * Wigner 9j symbol as a sum of three 6j symbols. This is the row ordering in
+ * Stone--Tough (1984), eq. (32), and in the four-Clebsch-Gordan recoupling below.
+ */
+double anisotropic_wigner_9j(int j11, int j12, int j13, int j21, int j22, int j23,
+                             int j31, int j32, int j33) {
+    long double sum = 0.0L;
+    // All ranks are integers, so the standard (-1)^(2x) factor is identically +1.
+    const int maximum = 2 * static_cast<int>(kAnisotropicTotalRankMax);
+    for (int x = 0; x <= maximum; ++x) {
+        const double first = anisotropic_wigner_6j(j11, j21, j31, j32, j33, x);
+        if (first == 0.0) continue;
+        const double second = anisotropic_wigner_6j(j12, j22, j32, j21, x, j23);
+        if (second == 0.0) continue;
+        const double third = anisotropic_wigner_6j(j13, j23, j33, x, j11, j12);
+        if (third == 0.0) continue;
+        sum += static_cast<long double>(2 * x + 1) * first * second * third;
+    }
+    const double value = static_cast<double>(sum);
+    require_finite(value, "anisotropic Wigner 9j symbol");
+    return value;
+}
+
 /**
  * Racah-normalised complex solid harmonics of a direction,
  * C_{lm}(rhat) = sqrt(4 pi/(2l+1)) Y_{lm}(rhat), returned as [l][m + l].
@@ -6370,10 +6521,14 @@ struct AnisotropicCollapse {
  *
  *   sum_{M1 M2} G_{M1 M2, mu1 mu2} <L1 M1; L2 M2|j M> = Lambda_j <l1 mu1; l2 mu2|j mu>,
  *
- * with Lambda_j independent of (mu1, mu2). This is a 9j symbol in disguise, but it
- * is obtained here by least squares over every (mu1, mu2) and the residual of the
- * proportionality is returned so the generator can prove the collapse instead of
- * assuming the identity.
+ * where Stone--Tough (1984), eq. (32), and the standard recoupling identity give
+ *
+ *   Lambda_j = sqrt((2L1+1)(2L2+1)(2l1+1)(2l2+1))
+ *              { la  lb  L1; la'  lb'  L2; l1  l2  j }.
+ *
+ * The returned value is this closed 9j expression. The explicit least-squares collapse over
+ * every (mu1,mu2) is retained as an independent cross-check, and its disagreement with the
+ * closed form is included in the residual.
  */
 AnisotropicCollapse anisotropic_collapse(unsigned int first_site_rank,
                                          unsigned int first_site_rank_prime,
@@ -6442,9 +6597,20 @@ AnisotropicCollapse anisotropic_collapse(unsigned int first_site_rank,
             denominator += reference * reference;
             pairs.emplace_back(total, reference);
         }
+    const double fitted_value = denominator > 0.0 ? numerator / denominator : 0.0;
+    const double nine_j = anisotropic_wigner_9j(
+        static_cast<int>(first_site_rank), static_cast<int>(second_site_rank), capital_first,
+        static_cast<int>(first_site_rank_prime), static_cast<int>(second_site_rank_prime),
+        capital_second, static_cast<int>(first_rank), static_cast<int>(second_rank),
+        static_cast<int>(coupled_rank));
     AnisotropicCollapse collapse;
-    collapse.value = denominator > 0.0 ? numerator / denominator : 0.0;
-    require_finite(collapse.value, "anisotropic four-coupling collapse");
+    collapse.value =
+        std::sqrt(static_cast<double>((2 * capital_first + 1) * (2 * capital_second + 1) *
+                                      (2 * first_rank + 1) * (2 * second_rank + 1))) *
+        nine_j;
+    require_finite(fitted_value, "anisotropic fitted four-coupling collapse");
+    require_finite(collapse.value, "anisotropic closed-form four-coupling collapse");
+    collapse.residual = std::abs(fitted_value - collapse.value);
     for (const auto& pair : pairs)
         collapse.residual =
             std::max(collapse.residual, std::abs(pair.first - collapse.value * pair.second));
@@ -6568,14 +6734,14 @@ const std::vector<std::pair<std::string, std::string>>& anisotropic_expected_con
          "M_{(t t')(u u')} = (1/2 pi) sum_k w_k alpha^A_{t t'} alpha^B_{u u'}, so the table "
          "carries the bare binomial and never binom/(2 pi)"},
         // Recorded in the table, not only in a commit message, because it travels with
-        // the numbers and it is the one thing a term-by-term external comparison must
-        // settle first. Every check the loader and the test suite run is
-        // convention-internal and is unaffected by it.
+        // the numbers. Stone (1978) and Stone--Tough (1984) now pin the even-sector
+        // magnitude conversion; the real-component sign and the later plain-S odd sector
+        // still need external termwise checks.
         {"unverified",
-         "the S function reality phase Ncal is derived here, not quoted: the residual real "
-         "sign per (l1, l2, j) triple and any (2j+1)^(1/2)-type normalisation of the "
-         "published S function definition are NOT pinned down, so these C_n values are not "
-         "yet guaranteed comparable term by term with any external anisotropic output"},
+         "Stone's even-sector Sbar normalisation and phase are pinned by Stone (1978) and "
+         "Stone--Tough (1984), but the residual real-component sign for unequal coupled "
+         "ranks and the plain-S odd-sector CASIMIR convention are not yet guaranteed "
+         "comparable term by term with external anisotropic output"},
     };
     return conventions;
 }
@@ -6586,6 +6752,8 @@ const std::vector<std::pair<std::string, std::string>>& anisotropic_expected_con
  *   g^r = (-1)^{lb + lb'} sqrt(binom(2 L1, 2 la) binom(2 L2, 2 la'))
  *         * <L1 0; L2 0|j 0> * Lambda_j / (eta_A eta_B Ncal)
  *
+ * Lambda_j is evaluated from the closed Wigner 9j in Stone--Tough (1984), eq. (32),
+ * and independently cross-checked by the explicit four-CG least-squares collapse.
  * The <L1 0; L2 0|j 0> factor forces L1 + L2 + j even, which is the master
  * selection rule of the whole table, and because L1 + L2 = n - 2 the three
  * parities (la + la' + l1), (lb + lb' + l2) and (l1 + l2 + j) always sum to an
