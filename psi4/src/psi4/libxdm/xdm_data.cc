@@ -253,36 +253,50 @@ double get_free_polarizability(int Z) {
     return frepol[Z];
 }
 
+namespace {
+
+double specific_volume_hf_fraction(const std::string& functional) {
+    if (functional == "blyp" || functional == "pbe" || functional == "pw86pbe" || functional == "pw86") return 0.0;
+    if (functional == "camb3lyp" || functional == "cam-b3lyp") return 0.19;
+    if (functional == "b3lyp") return 0.20;
+    if (functional == "b97-1" || functional == "b971") return 0.21;
+    if (functional == "pbe0") return 0.25;
+    if (functional == "bhahlyp" || functional == "bhandhlyp" || functional == "bhandh") return 0.50;
+    if (functional == "lcwpbe" || functional == "lc-wpbe" || functional == "lrc-wpbe") return 0.0;
+    return -1.0;
+}
+
+double fitted_hf_fraction(const std::string& functional) {
+    double fraction = specific_volume_hf_fraction(functional);
+    if (functional == "bp86" || functional == "b86bpbe" || functional == "tpss") return 0.0;
+    if (functional == "b3p86" || functional == "b3pw91") return 0.20;
+    if (functional == "hse06") return 0.25;
+    if (functional == "hf") return 1.0;
+    return fraction;
+}
+
+bool is_range_separated(const std::string& functional) {
+    return functional == "camb3lyp" || functional == "cam-b3lyp" || functional == "hse06" ||
+           functional == "lcwpbe" || functional == "lc-wpbe" || functional == "lrc-wpbe";
+}
+
+}  // namespace
+
+void validate_xdm_hf_fraction(const std::string& functional, double hf_fraction) {
+    double expected = fitted_hf_fraction(functional);
+    if (is_range_separated(functional) && std::abs(hf_fraction - expected) >= 1.0e-10) {
+        throw std::invalid_argument("XDM: modified exact exchange is unsupported for range-separated functional " +
+                                    functional + ".");
+    }
+}
+
 double get_free_volume(int Z, const std::string& functional, double hf_fraction) {
     if (Z < 1 || Z > MAX_Z) return 0.0;
 
     // For elements with functional-specific data (Z=1..36, excluding K=19, Ca=20)
     bool has_specific = (Z < 19 || (Z > 20 && Z <= 36));
-    double table_hf_fraction = -1.0;
-    if (functional == "blyp" || functional == "pbe" || functional == "pw86pbe" || functional == "pw86")
-        table_hf_fraction = 0.0;
-    else if (functional == "camb3lyp" || functional == "cam-b3lyp")
-        table_hf_fraction = 0.19;
-    else if (functional == "b3lyp")
-        table_hf_fraction = 0.20;
-    else if (functional == "b97-1" || functional == "b971")
-        table_hf_fraction = 0.21;
-    else if (functional == "pbe0")
-        table_hf_fraction = 0.25;
-    else if (functional == "bhahlyp" || functional == "bhandhlyp" || functional == "bhandh")
-        table_hf_fraction = 0.50;
-    else if (functional == "lcwpbe" || functional == "lc-wpbe" || functional == "lrc-wpbe")
-        table_hf_fraction = 0.0;
-
-    double nominal_hf_fraction = table_hf_fraction;
-    if (functional == "bp86" || functional == "b86bpbe" || functional == "tpss")
-        nominal_hf_fraction = 0.0;
-    else if (functional == "b3p86" || functional == "b3pw91")
-        nominal_hf_fraction = 0.20;
-    else if (functional == "hse06")
-        nominal_hf_fraction = 0.25;
-    else if (functional == "hf")
-        nominal_hf_fraction = 1.0;
+    double table_hf_fraction = specific_volume_hf_fraction(functional);
+    double nominal_hf_fraction = fitted_hf_fraction(functional);
 
     bool use_specific = has_specific && table_hf_fraction >= 0.0 &&
                         (hf_fraction < 0.0 || std::abs(hf_fraction - table_hf_fraction) < 1.0e-10);

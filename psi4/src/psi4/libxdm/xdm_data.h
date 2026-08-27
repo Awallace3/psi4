@@ -76,6 +76,8 @@ extern const double frevol1[5][11];
 /// @param hf_fraction    fraction of HF exchange (used for general hybrids and interpolation)
 double get_free_volume(int Z, const std::string& functional, double hf_fraction = -1.0);
 
+void validate_xdm_hf_fraction(const std::string& functional, double hf_fraction);
+
 /// Get free-atom polarizability for element Z (atomic units).
 double get_free_polarizability(int Z);
 

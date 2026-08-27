@@ -39,6 +39,10 @@ units angstrom
     for hf_fraction in (-0.1, 1.1):
         with pytest.raises(ValueError, match="exact-exchange fraction must be between 0 and 1"):
             direct_xdm.compute_energy(wfn, hf_fraction)
+    for functional_name, hf_fraction in (("lc-wpbe", 0.20), ("cam-b3lyp", 0.20), ("hse06", 0.20)):
+        range_xdm = psi4.core.XDMDispersion.build(functional_name, 0.5, 1.0)
+        with pytest.raises(ValueError, match="modified exact exchange is unsupported for range-separated functional"):
+            range_xdm.compute_energy(wfn, hf_fraction)
     assert "DISPERSION CORRECTION ENERGY" in wfn_vars
     assert np.isclose(wfn_vars["DISPERSION CORRECTION ENERGY"], e - e_reg, atol=1e-6)
     assert np.isclose(
