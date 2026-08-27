@@ -147,12 +147,16 @@ PSI variable :psivar:`DISPERSION CORRECTION ENERGY`.
 
 .. _`table:xdmfuncs`:
 
-.. table:: DFT functionals available with the -XDM suffix
+.. table:: Methods available with the -XDM suffix
 
    +---------------+------------+
-   | Functional    | Type       |
+   | Method        | Type       |
    +===============+============+
    | B3LYP-XDM     | Hybrid GGA |
+   +---------------+------------+
+   | B3P86-XDM     | Hybrid GGA |
+   +---------------+------------+
+   | B3PW91-XDM    | Hybrid GGA |
    +---------------+------------+
    | PBE0-XDM      | Hybrid GGA |
    +---------------+------------+
@@ -160,15 +164,25 @@ PSI variable :psivar:`DISPERSION CORRECTION ENERGY`.
    +---------------+------------+
    | CAM-B3LYP-XDM | Range-sep. |
    +---------------+------------+
+   | HSE06-XDM     | Range-sep. |
+   +---------------+------------+
    | LC-wPBE-XDM   | Range-sep. |
    +---------------+------------+
    | B97-1-XDM     | Hybrid GGA |
    +---------------+------------+
    | BLYP-XDM      | GGA        |
    +---------------+------------+
+   | B86BPBE-XDM   | GGA        |
+   +---------------+------------+
+   | BP86-XDM      | GGA        |
+   +---------------+------------+
    | PW86PBE-XDM   | GGA        |
    +---------------+------------+
    | PBE-XDM       | GGA        |
+   +---------------+------------+
+   | TPSS-XDM      | Meta-GGA   |
+   +---------------+------------+
+   | HF-XDM        | HF         |
    +---------------+------------+
 
 

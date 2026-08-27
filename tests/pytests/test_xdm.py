@@ -35,6 +35,10 @@ units angstrom
     psi4.set_options({"BASIS_GUESS": False})
     wfn_vars = wfn.variables()
     assert np.isclose(wfn.energy(), e, atol=1.0e-12)
+    direct_xdm = psi4.core.XDMDispersion.build("b3lyp", 0.5, 1.0)
+    for hf_fraction in (-0.1, 1.1):
+        with pytest.raises(ValueError, match="exact-exchange fraction must be between 0 and 1"):
+            direct_xdm.compute_energy(wfn, hf_fraction)
     assert "DISPERSION CORRECTION ENERGY" in wfn_vars
     assert np.isclose(wfn_vars["DISPERSION CORRECTION ENERGY"], e - e_reg, atol=1e-6)
     assert np.isclose(

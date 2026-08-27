@@ -87,6 +87,9 @@ double XDMDispersion::compute_energy(std::shared_ptr<Wavefunction> wfn, double h
     if (!std::isfinite(hf_fraction)) {
         throw std::invalid_argument("XDM exact-exchange fraction must be finite.");
     }
+    if (hf_fraction < 0.0 || hf_fraction > 1.0) {
+        throw std::invalid_argument("XDM exact-exchange fraction must be between 0 and 1.");
+    }
     auto atoms = integrate_properties(wfn);
     return pairwise_energy(wfn->molecule(), atoms, hf_fraction);
 }
