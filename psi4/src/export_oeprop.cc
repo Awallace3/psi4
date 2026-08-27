@@ -325,7 +325,19 @@ void export_oeprop(py::module &m) {
                   else if (key == "hydrogen_rank") options.hydrogen_rank = entry.second.cast<unsigned int>();
                   else if (key == "weight_type") options.weight_type = entry.second.cast<unsigned int>();
                   else if (key == "weight_coefficient") options.weight_coefficient = entry.second.cast<double>();
+                  else if (key == "anchor_rank_limit") options.anchor_rank_limit = entry.second.cast<unsigned int>();
                   else if (key == "cutoff") options.cutoff = entry.second.cast<double>();
+                  else if (key == "row_weight_policy") {
+                      const auto value = entry.second.cast<std::string>();
+                      if (value == "full_symmetric_frobenius")
+                          options.row_weight_policy = WSMRowWeightPolicy::FullSymmetricFrobenius;
+                      else if (value == "unique_pair_equal")
+                          options.row_weight_policy = WSMRowWeightPolicy::UniquePairEqual;
+                      else
+                          throw PSIEXCEPTION("WSM refinement: unsupported row weight policy '" + value + "'");
+                  }
+                  else if (key == "normalize_copy_penalties")
+                      options.normalize_copy_penalties = entry.second.cast<bool>();
                   else if (key == "maximum_condition_number")
                       options.maximum_condition_number = entry.second.cast<double>();
                   else throw PSIEXCEPTION("WSM refinement: unknown policy option '" + key + "'");
@@ -372,9 +384,18 @@ void export_oeprop(py::module &m) {
                   policy["hydrogen_rank"] = options.hydrogen_rank;
                   policy["weight_type"] = options.weight_type;
                   policy["weight_coefficient"] = options.weight_coefficient;
+                  policy["anchor_rank_limit"] = options.anchor_rank_limit;
                   policy["cutoff"] = options.cutoff;
+                  policy["row_weight_policy"] =
+                      options.row_weight_policy == WSMRowWeightPolicy::FullSymmetricFrobenius
+                          ? "full_symmetric_frobenius"
+                          : "unique_pair_equal";
+                  policy["normalize_copy_penalties"] = options.normalize_copy_penalties;
                   policy["weight_type_definition"] =
-                      "inherited protocol: anchor the site-local rank-1 dipole block to LocalizedResponse.local";
+                      "weight type 4: anchor each symmetric block whose two component ranks are at or below anchor_rank_limit";
+                  policy["column_pruning_definition"] = options.cutoff == 0.0
+                      ? "disabled (PFIT SVD-off parity)"
+                      : "relative weighted-column-norm threshold";
                   policy["external_oracle_parity_claimed"] = false;
                   values["policy"] = std::move(policy);
                   result.append(std::move(values));

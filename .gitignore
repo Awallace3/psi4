@@ -57,6 +57,7 @@ dfh.*
 input.log
 
 *.json
+!tests/pytests/wsm_part2_reference.json
 
 # Special test cases
 tests/*/iter.dat

@@ -670,6 +670,43 @@ def test_lw_refined_workspace_matches_full_two_site_oracle_and_reversed_edge():
         _assert_refined_invariants(result, positions, values, 2.0e-10)
 
 
+def test_lw_co_axis_aligned_charge_flow_has_closed_local_cartesian_oracle():
+    """A C--O diatomic on +z needs no local/molecular frame conversion.
+
+    For a two-site tree, a scalar charge-flow response q localizes to
+    -q/2 R_l(d) R_l'(d) at C. At O, translating along -d adds (-1)^(l+l').
+    Along z only m=0 survives, making every rank-1-through-3 entry a closed monomial.
+    """
+    bond_length = 2.132  # approximately the experimental C--O distance, bohr
+    charge_flow = 0.4
+    positions = [[0.0, 0.0, 0.0], [0.0, 0.0, bond_length]]
+    values = [_working_l3_matrix() for _ in range(4)]
+    values[0][0][0] = values[3][0][0] = -charge_flow
+    values[1][0][0] = values[2][0][0] = charge_flow
+
+    result = _lw_localize(positions, values, [(0, 1)])
+    carbon_tail = np.zeros(15)
+    oxygen_tail = np.zeros(15)
+    for rank, component in ((1, 0), (2, 3), (3, 8)):
+        carbon_tail[component] = bond_length**rank
+        oxygen_tail[component] = (-bond_length)**rank
+    expected = [
+        -0.5 * charge_flow * np.outer(carbon_tail, carbon_tail),
+        -0.5 * charge_flow * np.outer(oxygen_tail, oxygen_tail),
+    ]
+
+    for site in range(2):
+        _assert_matrix_close(_matrix_values(result["local"][site]), expected[site], 3.0e-11)
+    assert result["local"][0].get(0, 3) == pytest.approx(
+        -0.5 * charge_flow * bond_length**3, abs=3.0e-11)
+    assert result["local"][1].get(0, 3) == pytest.approx(
+        0.5 * charge_flow * bond_length**3, abs=3.0e-11)
+    assert all(result["local"][0].get(index, index) == pytest.approx(
+        result["local"][1].get(index, index), abs=3.0e-11)
+               for index in (0, 3, 8))
+    _assert_refined_invariants(result, positions, values, 3.0e-10)
+
+
 def test_lw_noncharge_seed_has_independent_reciprocity_sum_and_origin_oracles():
     positions = [[0.1, -0.2, 0.3], [0.8, 0.1, -0.4]]
     values = [_working_l3_matrix() for _ in range(4)]

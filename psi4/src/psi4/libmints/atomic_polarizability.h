@@ -1516,14 +1516,48 @@ BondGraphDerivation derive_bond_graph(const std::vector<SitePosition>& sites,
                                      double covalent_scale);
 }  // namespace detail
 
-/** Exact reviewed physical WSM policy; only the condition gate is caller-tunable. */
+enum class WSMRowWeightPolicy {
+    /** Upper-triangle storage represents the Frobenius norm of the full symmetric matrix. */
+    FullSymmetricFrobenius,
+    /** Every stored diagonal/off-diagonal point pair contributes once with equal weight. */
+    UniquePairEqual,
+};
+
+/** Reviewed physical WSM policy, with explicit parity seams for the anchor and solver. */
 struct PSI_API RefinementOptions {
     unsigned int wsm_rank{3};
     unsigned int hydrogen_rank{3};
     unsigned int weight_type{4};
     double weight_coefficient{0.001};
+    /**
+     * Relative weighted-column-norm threshold. The default 1e-4 preserves the existing
+     * scale-invariant pruning policy; zero disables pre-pruning and represents the
+     * CamCASP PFIT reference ledger's "SVD off" policy. No other value is supported.
+     */
     double cutoff{1.0e-4};
+    WSMRowWeightPolicy row_weight_policy{WSMRowWeightPolicy::FullSymmetricFrobenius};
+    /**
+     * Count a signed/equal PDef copy class as one independently fitted parameter in the
+     * anchor objective. In the expanded constrained basis, each of m anchored copies gets
+     * an anchor-row scale 1/sqrt(m), preventing symmetry-equivalent sites from multiplying
+     * the physical penalty strength.
+     */
+    bool normalize_copy_penalties{true};
     double maximum_condition_number{1.0e12};
+    /**
+     * Highest site-tensor rank pulled towards the localization-stage anchor by the
+     * penalty term of Stone, "The Theory of Intermolecular Forces", 2nd ed., eqn
+     * (9.3.13). A block is anchored when BOTH of its component ranks are at or below
+     * this limit; every higher block is left entirely free, i.e. its row of the
+     * weight matrix g_pp' is zero and no penalty weight can act on it.
+     *
+     * The default of 1 anchors only the rank-1 (dipole-dipole) block, which is the
+     * reviewed protocol. Note that Stone's g_pp' runs over ALL fitted parameters, and
+     * §9.3.4 motivates it specifically for the poorly determined ('buried', small
+     * J_Pk) parameters -- which are the HIGH-rank blocks, not the dipole block. Raise
+     * this to 2 or 3 to extend the anchor over rank 2 and rank 3.
+     */
+    unsigned int anchor_rank_limit{1};
 };
 
 /** Up-front dense-design resource accounting. */
