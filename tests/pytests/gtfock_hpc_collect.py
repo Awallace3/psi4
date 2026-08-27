@@ -146,7 +146,7 @@ def rst_table(points):
     """
     order = {"direct": 0, "df": 1, "pk": 2, "gtfock": 3}
     header = ["arm", "ranks", "thr", "grid", "iters", "SCF (s)", "J/K (s)",
-              "speedup", "RSS/rank", "RSS node", "dE (Eh)"]
+              "speedup", "RSS/rank (MB)", "RSS node (MB)", "dE (Eh)"]
     for system in sorted({p["system"] for p in points}):
         rows = sorted((p for p in points if p["system"] == system),
                       key=lambda p: (order.get(p["arm"], 9), p["ranks"]))

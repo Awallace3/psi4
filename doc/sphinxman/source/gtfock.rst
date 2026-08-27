@@ -377,6 +377,147 @@ These are measurements from one node of one machine at one problem size, reporte
 as measured and not extrapolated. The script is in the tree so they can be
 re-measured rather than taken on faith.
 
+Rank scaling at a fixed core count
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The table above answers "does adding cores help?" |w---w| each rank there had a
+single thread, so four ranks used four times the hardware. A user with a fixed
+allocation asks a different and harder question: given one node, is it better to
+split its cores across MPI ranks or to leave them in one threaded process? That
+comparison holds the total core count constant, so nothing is hidden by the extra
+hardware, and it is the comparison that puts the replicated remainder of the SCF
+under a spotlight.
+
+:source:`tests/pytests/gtfock_hpc_benchmark.py` measures one point per
+invocation and :source:`tests/pytests/gtfock_hpc_phoenix.slurm` sweeps a whole
+system inside a single exclusive allocation, so no two points in a sweep can land
+on different hardware. :source:`tests/pytests/gtfock_hpc_collect.py` reduces the
+per-rank JSON to the tables below and to
+:source:`tests/pytests/gtfock_hpc_results.csv`, which carries every number
+measured, including the ones not shown here.
+
+The systems are two dimers from a live SAPT(DFT) study, run as single
+closed-shell molecules with both fragments present |w---w| this is a Fock-build
+measurement, not an interaction energy. The basis is 6-31+G**, chosen because
+|PSIfour| ships it Cartesian and the GTFock engine currently supports Cartesian
+basis sets only; that is a statement about the engine's present envelope, not
+about the basis. The benchmark asserts the loaded basis is Cartesian and has the
+expected function count, so a basis change cannot quietly turn the two arms into
+two different computations.
+
+The hardware is one exclusive node of Georgia Tech's Phoenix cluster,
+``cpu-small`` partition with the ``core24`` feature: two 12-core Intel Xeon Gold
+6226 sockets at 2.70 GHz, 24 physical cores, 187 GB, no hyperthreading in the
+allocation. Every point in a sweep gets all 24 cores. The reference arms run as
+one process with 24 OpenMP threads; GTFock runs as 1 rank x 24 threads, 2 x 12,
+and 4 x 6. Both reference arms are |PSIfours| own builders on the same node:
+``DirectJK`` (``scf_type direct``) is the algorithmic apples-to-apples baseline,
+since it evaluates the same exact ERIs GTFock does, and ``MemDFJK``
+(``scf_type df``) is recorded alongside it as a *different* algorithm, useful for
+context but not a like-for-like comparison. The submission script carries the
+account, QOS, and partition the runs actually used |w---w| ``gts-cs207-chemx``,
+``inferno``, ``cpu-small`` |w---w| so the queue is part of the record rather than
+something to guess at. The two systems ran in two jobs on two nodes of that same
+partition and feature; every comparison below is within one system, and none is
+drawn across them.
+
+Two details of the protocol are worth stating because they cut against the
+conclusion rather than for it. First, a ``core24`` node is two sockets, and
+OpenMPI refuses to bind one rank across both packages, so the one-rank GTFock
+point runs unbound while the 2- and 4-rank points come out socket-local
+(``--report-bindings`` recorded ``package[0][core:0-11]`` and
+``package[1][core:12-23]`` at two ranks, and two ranks per package at four): the
+NUMA advantage sits on the multi-rank side. Second, the SAD guess and its atomic
+J/K are pinned to density fitting on every point (``sad_scf_type df``), and
+``df_scf_guess`` is off, so the guess is identical work in all arms and no DF
+pre-pass hides inside the measured SCF. Convergence thresholds, integral
+screening, and the maximum iteration count are the same everywhere.
+
+Peak memory is the per-rank high-water mark read from ``/proc/self/status``
+(``VmHWM``), not from ``sacct``: all five points of a system share one SLURM job,
+so the single job-level ``MaxRSS`` |w---w| 1.8 GB for the peptide sweep, 10.4 GB
+for the nanotube one |w---w| belongs to the whole sweep and cannot be attributed
+to a point. It is reported two ways, because they answer different questions:
+``RSS/rank`` is what one process needed, ``RSS node`` is the sum over ranks,
+which is what the node had to supply.
+
+.. peptide backbone dimer, 24 atoms, 6-31+G** (260 basis functions in 122
+   shells), on atl1-1-02-006-1-1
+
+======  =====  ===  ====  =====  =======  =======  =======  =============  =============  ========
+arm     ranks  thr  grid  iters  SCF (s)  J/K (s)  speedup  RSS/rank (MB)  RSS node (MB)  dE (Eh)
+======  =====  ===  ====  =====  =======  =======  =======  =============  =============  ========
+direct  1      24   ---   11     20.1     16.1     ---      801            801            ---
+df      1      24   ---   11     3.3      0.6      ---      1492           1492           6.0e-04
+gtfock  1      24   1x1   11     6.8      5.1      1.00     643            643            -1.3e-07
+gtfock  2      12   1x2   11     6.1      4.6      1.12     499            995            -1.3e-07
+gtfock  4      6    2x2   11     6.3      4.8      1.08     474            1891           -1.3e-07
+======  =====  ===  ====  =====  =======  =======  =======  =============  =============  ========
+
+.. ethene plus nanotube fragment, 42 atoms, 6-31+G** (574 basis functions in 256
+   shells), on atl1-1-02-006-18-2
+
+======  =====  ===  ====  =====  =======  =======  =======  =============  =============  ========
+arm     ranks  thr  grid  iters  SCF (s)  J/K (s)  speedup  RSS/rank (MB)  RSS node (MB)  dE (Eh)
+======  =====  ===  ====  =====  =======  =======  =======  =============  =============  ========
+direct  1      24   ---   11     302.9    294.1    ---      1105           1105           ---
+df      1      24   ---   11     32.7     7.7      ---      10360          10360          1.4e-03
+gtfock  1      24   1x1   11     94.9     87.6     1.00     803            803            -8.4e-06
+gtfock  2      12   1x2   11     94.5     84.5     1.00     699            1397           -8.4e-06
+gtfock  4      6    2x2   11     88.7     84.2     1.07     605            2403           -8.4e-06
+======  =====  ===  ====  =====  =======  =======  =======  =============  =============  ========
+
+``speedup`` is total SCF against the one-rank GTFock point, ``dE`` is against the
+``direct`` arm on the same system, and ``J/K (s)`` is the ``JK: JK`` timer that
+wraps ``JK::compute()`` for every builder, so it is the same clock in all three
+arms. Every point converged in 11 iterations, and the GTFock energy is identical
+across ranks to every digit printed |w---w| the spread within a rank count is
+exactly zero, not merely small. Rank-count invariance survives at production
+size, not just in the tests.
+
+The engine itself is a clear win at equal hardware. GTFock computes the same
+exact ERIs as ``DirectJK`` and does it 3.0x faster on the peptide and 3.2x faster
+on the nanotube, in less memory per process (643 against 801 MB, 803 against
+1105 MB). That is Simint plus GTFock's own task scheduling, and it is available
+at one rank.
+
+Splitting a fixed core count across ranks, however, buys essentially nothing:
+1.00, 1.12, 1.08 on the peptide and 1.00, 1.00, 1.07 on the nanotube. This is a
+negative result and it is the honest one. It is also not simply Amdahl's law
+acting on the replicated remainder: the J/K build *alone* barely moves either
+(5.1 to 4.8 s, and 87.6 to 84.2 s), and on the nanotube the remainder is only 8%
+of the SCF, which would still allow 3.3x at four ranks. GTFock's OpenMP threading
+inside a single rank already saturates the 24 cores, so re-partitioning the same
+cores into MPI ranks adds a gather-and-broadcast round per Fock build without
+adding any compute to divide it over.
+
+Memory moves the wrong way while that happens. Each rank's own footprint does
+fall |w---w| 643 to 474 MB and 803 to 605 MB |w---w| so the distributed AO blocks
+are real and not a bookkeeping fiction. But the replicated J, K, density, and
+Fock matrices dominate, so the node total grows roughly with the rank count:
+2.9x on the peptide and 3.0x on the nanotube at four ranks. Paying three times
+the memory for a 1.08x speedup is not a trade worth making.
+
+The practical consequence for a user with one node is short: run GTFock with one
+rank and all the cores. Ranks earn their keep when they bring *more* cores, which
+is what the previous section measures; they do not earn it by subdividing a fixed
+set. Distributing the rest of the SCF is what would change that, and it is the
+same conclusion the fixed-thread table reaches from the other direction.
+
+The density-fitting line is included for orientation and should not be read as a
+loss. It is faster in wall clock, but it is a different algorithm: it approximates
+the ERIs, and it lands 6.0e-04 :math:`E_h` (peptide) and 1.4e-03 :math:`E_h`
+(nanotube) away from the exact-ERI answer, while needing 10.1 GB for the nanotube
+|w---w| more than four times the whole four-rank GTFock node footprint. GTFock's
+own offset from ``direct``, -1.3e-07 and -8.4e-06 :math:`E_h`, is the Simint
+primitive-screening floor described under `Prototype scope`_: it grows with the
+number of well-separated centres and is identical at every rank count, which is
+what distinguishes it from a distribution bug.
+
+These are measurements from one cluster at two problem sizes, reported as
+measured and not extrapolated. The driver, the submission script, the reducer,
+and the raw numbers are all in the tree.
+
 .. _`cmake:gtfock`:
 
 How to configure GTFock for building Psi4
