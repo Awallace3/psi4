@@ -577,22 +577,36 @@ def test_xdm_rejects_nonlocal_double_dispersion():
 
 
 @pytest.mark.xdm
+def test_xdm_automatic_damping_rejects_modified_exchange():
+    from psi4.driver.procrouting import proc
+
+    psi4.set_options({"basis": "aug-cc-pvdz", "DFT_ALPHA": 0.50})
+    with pytest.raises(
+        psi4.p4util.ValidationError,
+        match="Automatic XDM damping parameters require.*exact-exchange fraction",
+    ):
+        proc.build_functional_and_disp("b3lyp-xdm", True)
+
+
+@pytest.mark.xdm
 def test_xdm_rejects_range_separation_override():
-    from psi4.driver.procrouting.empirical_disp.empirical_dispersion import XDMDispersionFunctor
+    from psi4.driver.procrouting import proc
 
-    class Functional:
-        def is_x_lrc(self):
-            return True
+    psi4.set_options({"basis": "sto-3g", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
 
-        def x_alpha(self):
-            return 0.0
+    def callable_xdm(name, npoints, deriv, restricted):
+        superfunctional = psi4.core.SuperFunctional.XC_build("XC_HYB_GGA_XC_LRC_WPBE", restricted)
+        superfunctional.set_lock(False)
+        superfunctional.set_name("LC-wPBE-XDM")
+        superfunctional.set_x_omega(0.8)
+        return superfunctional, {"type": "xdm", "params": {"xdm_model": "kb49"}}
+
+    superfunctional, functor = proc.build_functional_and_disp(callable_xdm, True)
 
     class Wavefunction:
         def functional(self):
-            return Functional()
+            return superfunctional
 
-    psi4.set_options({"DFT_OMEGA": 0.8})
-    functor = XDMDispersionFunctor(functional_name="lc-wpbe", a1=0.5, a2_ang=1.0)
     with pytest.raises(psi4.p4util.ValidationError, match="modified range-separation parameters"):
         functor.compute_energy(None, Wavefunction())
 

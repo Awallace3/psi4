@@ -463,7 +463,8 @@ class XDMDispersionFunctor():
 
     """
     def __init__(self, functional_name: str, basis_name: Optional[str] = None, a1: Optional[float] = None, a2_ang: Optional[float] = None,
-                 model: str = "kb49"):
+                 model: str = "kb49", expected_x_omega: Optional[float] = None,
+                 expected_x_beta: Optional[float] = None):
         self._xdm_model = normalize_xdm_model(model)
         self.engine = "xdm"
         self.fctldash = f"{functional_name}-xdm({self._xdm_model})"
@@ -472,6 +473,8 @@ class XDMDispersionFunctor():
         self._basis_name = basis_name
         self._a1 = a1
         self._a2_ang = a2_ang
+        self._expected_x_omega = expected_x_omega
+        self._expected_x_beta = expected_x_beta
 
         if a1 is not None and a2_ang is not None:
             self.xdm = core.XDMDispersion.build(functional_name, a1, a2_ang)
@@ -532,7 +535,18 @@ class XDMDispersionFunctor():
         functional = wfn.functional()
         if functional is None:
             raise ValidationError("XDM dispersion requires a DFT wavefunction with functional metadata.")
-        if functional.is_x_lrc() and core.has_option_changed("SCF", "DFT_OMEGA"):
+        range_mismatch = (
+            self._expected_x_omega is not None
+            and abs(functional.x_omega() - self._expected_x_omega) >= 1.0e-10
+        ) or (
+            self._expected_x_beta is not None
+            and abs(functional.x_beta() - self._expected_x_beta) >= 1.0e-10
+        )
+        if range_mismatch or (
+            self._expected_x_omega is None
+            and functional.is_x_lrc()
+            and core.has_option_changed("SCF", "DFT_OMEGA")
+        ):
             raise ValidationError("XDM does not support modified range-separation parameters.")
         ene = self.xdm.compute_energy(wfn, functional.x_alpha())
         core.set_variable('DISPERSION CORRECTION ENERGY', ene)

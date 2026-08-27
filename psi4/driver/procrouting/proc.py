@@ -59,6 +59,7 @@ from ..p4util.exceptions import (
 #from psi4.driver.molutil import *
 from ..qcdb.basislist import corresponding_basis
 from . import dft, mcscf, proc_util, response, solvent
+from .dft import dft_builder
 from .empirical_disp import empirical_dispersion
 from .proc_data import method_algorithm_type
 from .roa import run_roa
@@ -1409,6 +1410,14 @@ def _without_xdm_dispersion(name):
     return name
 
 
+def _reference_xdm_superfunctional(functional_name, restricted):
+    definition = dft_builder.functionals.get(functional_name.lower())
+    if definition is None or "dispersion" in definition:
+        return None
+    npoints = core.get_option("SCF", "DFT_BLOCK_MAX_POINTS")
+    return dft_builder.build_superfunctional_from_dictionary(definition, npoints, 1, restricted)[0]
+
+
 def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwargs):
 
     if core.has_option_changed("SCF", "DFT_DISPERSION_PARAMETERS"):
@@ -1437,17 +1446,30 @@ def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwar
             # Strip -XDM or -XDM(<model>) suffix from functional name for BJ parameter lookup
             func_name = superfunc.name()
             func_name = re.sub(r"-xdm(?:\([^)]*\))?$", "", func_name, flags=re.IGNORECASE)
+            reference_superfunc = _reference_xdm_superfunctional(func_name, restricted)
+            if modified_xdm_params is None:
+                if reference_superfunc is None or abs(superfunc.x_alpha() - reference_superfunc.x_alpha()) >= 1.0e-10:
+                    raise ValidationError(
+                        "Automatic XDM damping parameters require the fitted functional's exact-exchange fraction. "
+                        "Provide [a1, a2] through XDM_DISPERSION_PARAMETERS for modified exchange.")
+
+            expected_x_omega = reference_superfunc.x_omega() if reference_superfunc is not None else None
+            expected_x_beta = reference_superfunc.x_beta() if reference_superfunc is not None else None
             if modified_xdm_params is not None:
                 _disp_functor = empirical_dispersion.XDMDispersionFunctor(
                     functional_name=func_name,
                     a1=float(modified_xdm_params[0]),
                     a2_ang=float(modified_xdm_params[1]),
-                    model=xdm_model)
+                    model=xdm_model,
+                    expected_x_omega=expected_x_omega,
+                    expected_x_beta=expected_x_beta)
             else:
                 _disp_functor = empirical_dispersion.XDMDispersionFunctor(
                     functional_name=func_name,
                     basis_name=basis_name,
-                    model=xdm_model)
+                    model=xdm_model,
+                    expected_x_omega=expected_x_omega,
+                    expected_x_beta=expected_x_beta)
         elif isinstance(name, dict):
             # user dft_functional={} spec - type for lookup, dict val for param defs,
             #   name & citation discarded so only param matches to existing defs will print labels
