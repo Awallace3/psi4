@@ -183,13 +183,14 @@ for fname, fdict in dict_functionals.items():
 
 for functional_name, base_dict in _xdm_base_functionals.items():
     functional_aliases = get_functional_aliases(base_dict)
+    func = copy.deepcopy(base_dict)
+    func["name"] = base_dict["name"] + "-XDM"
+    func["dispersion"] = {"type": "xdm", "params": {"xdm_model": "kb49"}}
     for alias in functional_aliases:
-        xdm_alias = alias + "-xdm"
-        if xdm_alias not in functionals:
-            func = copy.deepcopy(base_dict)
-            func["name"] = base_dict["name"] + "-XDM"
-            func["dispersion"] = {"type": "xdm", "params": {"xdm_model": "kb49"}}
-            functionals[xdm_alias] = func
+        for suffix in ("-xdm", "-xdm(kb49)"):
+            xdm_alias = alias + suffix
+            if xdm_alias not in functionals:
+                functionals[xdm_alias] = func
 
 
 def check_consistency(func_dictionary):

@@ -31,6 +31,7 @@ calls for each of the *name* values of the energy(), optimize(),
 response(), and frequency() function. *name* can be assumed lowercase by here.
 
 """
+import math
 import os
 import re
 import shutil
@@ -1411,11 +1412,25 @@ def _without_xdm_dispersion(name):
 
 
 def _reference_xdm_superfunctional(functional_name, restricted):
-    definition = dft_builder.functionals.get(functional_name.lower())
-    if definition is None or "dispersion" in definition:
-        return None
-    npoints = core.get_option("SCF", "DFT_BLOCK_MAX_POINTS")
-    return dft_builder.build_superfunctional_from_dictionary(definition, npoints, 1, restricted)[0]
+    normalized_name = functional_name.lower()
+    candidates = [normalized_name]
+    for definition in dft_builder.dict_functionals.values():
+        dispersion = definition.get("dispersion")
+        if not isinstance(dispersion, dict) or dispersion.get("type") != "xdm":
+            continue
+        base_aliases = [
+            re.sub(r"-xdm(?:\([^)]*\))?$", "", alias, flags=re.IGNORECASE)
+            for alias in dft_builder.get_functional_aliases(definition)
+        ]
+        if normalized_name in base_aliases:
+            candidates.extend(base_aliases)
+
+    for candidate in candidates:
+        definition = dft_builder.functionals.get(candidate)
+        if definition is not None and "dispersion" not in definition:
+            npoints = core.get_option("SCF", "DFT_BLOCK_MAX_POINTS")
+            return dft_builder.build_superfunctional_from_dictionary(definition, npoints, 1, restricted)[0]
+    return None
 
 
 def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwargs):
@@ -1429,6 +1444,12 @@ def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwar
         modified_xdm_params = core.get_option("SCF", "XDM_DISPERSION_PARAMETERS")
         if len(modified_xdm_params) != 2:
             raise ValidationError("XDM_DISPERSION_PARAMETERS must contain exactly two values: [a1, a2_angstrom].")
+        try:
+            modified_xdm_params = [float(value) for value in modified_xdm_params]
+        except (TypeError, ValueError):
+            raise ValidationError("XDM_DISPERSION_PARAMETERS values must be finite numbers.")
+        if not all(math.isfinite(value) for value in modified_xdm_params):
+            raise ValidationError("XDM_DISPERSION_PARAMETERS values must be finite numbers.")
     else:
         modified_xdm_params = None
 

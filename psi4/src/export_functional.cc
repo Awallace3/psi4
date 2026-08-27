@@ -325,7 +325,7 @@ void export_functional(py::module &m) {
         .def_static("build", py::overload_cast<const std::string&, double, double>(&xdm::XDMDispersion::build),
                     "functional"_a, "a1"_a, "a2_angstrom"_a,
                     "Build from functional name with explicit a1 and a2 (a2 in angstrom).")
-        .def("compute_energy", &xdm::XDMDispersion::compute_energy, "wfn"_a, "hf_fraction"_a = -1.0,
+        .def("compute_energy", &xdm::XDMDispersion::compute_energy, "wfn"_a, "hf_fraction"_a,
              "Compute XDM dispersion energy from a converged wavefunction.")
         .def("a1", &xdm::XDMDispersion::a1, "Get a1 BJ damping parameter.")
         .def("a2", &xdm::XDMDispersion::a2, "Get a2 BJ damping parameter (bohr).")

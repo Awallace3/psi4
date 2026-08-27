@@ -72,7 +72,7 @@ class PSI_API XDMDispersion {
     static std::shared_ptr<XDMDispersion> build(const std::string& functional, double a1, double a2_angstrom);
 
     /// Compute XDM dispersion energy from a converged wavefunction.
-    double compute_energy(std::shared_ptr<Wavefunction> wfn, double hf_fraction = -1.0);
+    double compute_energy(std::shared_ptr<Wavefunction> wfn, double hf_fraction);
 
     double a1() const { return a1_; }
     double a2() const { return a2_; }

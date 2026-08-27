@@ -577,6 +577,44 @@ def test_xdm_rejects_nonlocal_double_dispersion():
 
 
 @pytest.mark.xdm
+def test_xdm_kb49_aliases_and_lcwpbe_reference():
+    from psi4.driver.procrouting import proc
+    from psi4.driver.procrouting.dft import dft_builder
+
+    assert "hse06-xdm" in dft_builder.functionals
+    assert "hse06-xdm(kb49)" in dft_builder.functionals
+
+    psi4.set_options({"basis": "aug-cc-pvdz"})
+    superfunctional, functor = proc.build_functional_and_disp("lc-wpbe-xdm", True)
+    assert superfunctional.name().lower().startswith("lc-wpbe-xdm")
+    assert functor.engine == "xdm"
+
+
+@pytest.mark.xdm
+def test_xdm_rejects_nonfinite_damping_parameters():
+    from psi4.driver.procrouting import proc
+
+    psi4.set_options({"XDM_DISPERSION_PARAMETERS": [float("nan"), 1.0]})
+    with pytest.raises(psi4.p4util.ValidationError, match="values must be finite numbers"):
+        proc.build_functional_and_disp("b3lyp-xdm", True)
+
+
+@pytest.mark.xdm
+def test_xdm_public_api_validation():
+    direct = psi4.core.XDMDispersion(0.5, 1.0, "B3LYP")
+    factory = psi4.core.XDMDispersion.build("b3lyp", 0.5, 0.52917720859)
+
+    assert direct.functional_name() == "b3lyp"
+    assert direct.functional_name() == factory.functional_name()
+    with pytest.raises(ValueError, match="damping parameters must be finite"):
+        psi4.core.XDMDispersion(float("inf"), 1.0, "b3lyp")
+    with pytest.raises(ValueError, match="non-null wavefunction"):
+        direct.compute_energy(None, 0.20)
+    with pytest.raises(TypeError):
+        direct.compute_energy(None)
+
+
+@pytest.mark.xdm
 def test_xdm_automatic_damping_rejects_modified_exchange():
     from psi4.driver.procrouting import proc
 

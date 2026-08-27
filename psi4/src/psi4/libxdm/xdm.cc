@@ -47,7 +47,9 @@
 #include "psi4/psi4-dec.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -61,13 +63,17 @@ static constexpr double BOHR_TO_ANGSTROM = 0.52917720859;
 // ============================================================================
 
 XDMDispersion::XDMDispersion(double a1, double a2_bohr, const std::string& functional_name)
-    : a1_(a1), a2_(a2_bohr), functional_name_(functional_name) {}
+    : a1_(a1), a2_(a2_bohr), functional_name_(functional_name) {
+    if (!std::isfinite(a1_) || !std::isfinite(a2_)) {
+        throw std::invalid_argument("XDM damping parameters must be finite.");
+    }
+    std::transform(functional_name_.begin(), functional_name_.end(), functional_name_.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+}
 
 std::shared_ptr<XDMDispersion> XDMDispersion::build(const std::string& functional, double a1, double a2_angstrom) {
-    std::string func_lower = functional;
-    std::transform(func_lower.begin(), func_lower.end(), func_lower.begin(), ::tolower);
     double a2_bohr = a2_angstrom / BOHR_TO_ANGSTROM;
-    return std::make_shared<XDMDispersion>(a1, a2_bohr, func_lower);
+    return std::make_shared<XDMDispersion>(a1, a2_bohr, functional);
 }
 
 // ============================================================================
@@ -75,6 +81,12 @@ std::shared_ptr<XDMDispersion> XDMDispersion::build(const std::string& functiona
 // ============================================================================
 
 double XDMDispersion::compute_energy(std::shared_ptr<Wavefunction> wfn, double hf_fraction) {
+    if (!wfn) {
+        throw std::invalid_argument("XDM compute_energy requires a non-null wavefunction.");
+    }
+    if (!std::isfinite(hf_fraction)) {
+        throw std::invalid_argument("XDM exact-exchange fraction must be finite.");
+    }
     auto atoms = integrate_properties(wfn);
     return pairwise_energy(wfn->molecule(), atoms, hf_fraction);
 }
