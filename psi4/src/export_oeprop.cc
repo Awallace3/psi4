@@ -394,7 +394,7 @@ void export_oeprop(py::module &m) {
                   policy["weight_type_definition"] =
                       "weight type 4: anchor each symmetric block whose two component ranks are at or below anchor_rank_limit";
                   policy["column_pruning_definition"] = options.cutoff == 0.0
-                      ? "disabled (PFIT SVD-off parity)"
+                      ? "disabled (SVD-off no-pre-pruning parity)"
                       : "relative weighted-column-norm threshold";
                   policy["external_oracle_parity_claimed"] = false;
                   values["policy"] = std::move(policy);
