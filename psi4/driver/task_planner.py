@@ -54,18 +54,25 @@ logger = logging.getLogger(__name__)
 TaskComputers = Union[AtomicComputer, CompositeComputer, FiniteDifferenceComputer, ManyBodyComputer]
 
 
-def _uses_xdm(value: Any) -> bool:
+def _dispersion_uses_xdm(value: Any) -> bool:
+    return isinstance(value, dict) and str(value.get("type", "")).lower() == "xdm"
+
+
+def _functional_uses_xdm(value: Any) -> bool:
     if isinstance(value, str):
         return "-xdm" in value.lower()
     if isinstance(value, dict):
-        # ``dft_functional`` dicts carry XDM in a nested dispersion block rather
-        # than in the method name.
-        disp = value.get("dispersion")
-        if isinstance(disp, dict) and str(disp.get("type", "")).lower() == "xdm":
-            return True
-        return any(_uses_xdm(item) for item in value.values())
+        return _dispersion_uses_xdm(value.get("dispersion"))
+    return False
+
+
+def _container_uses_xdm(value: Any) -> bool:
+    if isinstance(value, str):
+        return "-xdm" in value.lower()
+    if isinstance(value, dict):
+        return any(_container_uses_xdm(item) for item in value.values())
     if isinstance(value, (list, tuple, set)):
-        return any(_uses_xdm(item) for item in value)
+        return any(_container_uses_xdm(item) for item in value)
     return False
 
 
@@ -187,10 +194,10 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
     dft_functional = kwargs.get("dft_functional")
     needs_dispersion_metadata = driver != "energy" or current_manybody_kwargs.get("bsse_type") is not None
     if callable(dft_functional) and needs_dispersion_metadata:
-        dft_metadata = _callable_dispersion(dft_functional)
+        dft_uses_xdm = _dispersion_uses_xdm(_callable_dispersion(dft_functional))
     else:
-        dft_metadata = dft_functional
-    uses_xdm = _uses_xdm((method, cbsmeta, kwargs.get("levels", {}), dft_metadata))
+        dft_uses_xdm = _functional_uses_xdm(dft_functional)
+    uses_xdm = dft_uses_xdm or _container_uses_xdm((method, cbsmeta, kwargs.get("levels", {})))
     if current_manybody_kwargs.get("bsse_type") is not None:
         bsse_type = current_manybody_kwargs["bsse_type"]
         bsse_types = [bsse_type] if isinstance(bsse_type, str) else bsse_type

@@ -532,6 +532,8 @@ class XDMDispersionFunctor():
         functional = wfn.functional()
         if functional is None:
             raise ValidationError("XDM dispersion requires a DFT wavefunction with functional metadata.")
+        if functional.is_x_lrc() and core.has_option_changed("SCF", "DFT_OMEGA"):
+            raise ValidationError("XDM does not support modified range-separation parameters.")
         ene = self.xdm.compute_energy(wfn, functional.x_alpha())
         core.set_variable('DISPERSION CORRECTION ENERGY', ene)
         if self.fctldash:

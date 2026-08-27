@@ -240,6 +240,41 @@ units angstrom
 
 
 @pytest.mark.xdm
+def test_xdm_rejects_unknown_parameter_keys():
+    from psi4.driver.procrouting import dft
+
+    bad_functional = {
+        "name": "TYPO-XDM",
+        "xc_functionals": {"HYB_GGA_XC_B3LYP": {}},
+        "dispersion": {"type": "xdm", "params": {"xdm_modle": "los-ii"}},
+    }
+    with pytest.raises(psi4.p4util.ValidationError, match="Unsupported XDM dispersion params.*xdm_modle"):
+        dft.build_superfunctional(bad_functional, True)
+
+
+@pytest.mark.xdm
+def test_xdm_callable_basis_guess_skips_dispersion():
+    mol = psi4.geometry("0 1\nH 0 0 0\nH 0 0 1.5\nunits angstrom")
+    psi4.set_options(
+        {
+            "basis": "aug-cc-pvdz",
+            "BASIS_GUESS": "sto-3g",
+            "DFT_SPHERICAL_POINTS": 110,
+            "DFT_RADIAL_POINTS": 50,
+        }
+    )
+
+    def callable_xdm(name, npoints, deriv, restricted):
+        superfunctional = psi4.core.SuperFunctional.XC_build("XC_HYB_GGA_XC_B3LYP", restricted)
+        superfunctional.set_name("B3LYP-XDM")
+        return superfunctional, {"type": "xdm", "params": {"xdm_model": "kb49"}}
+
+    energy = psi4.energy("scf", molecule=mol, dft_functional=callable_xdm)
+    psi4.set_options({"BASIS_GUESS": False})
+    assert np.isfinite(energy)
+
+
+@pytest.mark.xdm
 def test_xdm_gradient_findif():
     """XDM gradients are finite differences of the full XDM-corrected energy.
 
@@ -399,6 +434,7 @@ units angstrom
     from psi4.driver.task_planner import task_planner
     from psi4.driver.driver_findif import FiniteDifferenceComputer
     from psi4.driver.driver_nbody import ManyBodyComputer
+    from psi4.driver.task_base import AtomicComputer
 
     findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
 
@@ -414,6 +450,15 @@ units angstrom
         **findif_kwargs,
     )
     assert isinstance(plan, FiniteDifferenceComputer)
+
+    plan = task_planner(
+        "gradient",
+        "scf",
+        dimer,
+        dft_functional={"name": "metadata-noise", "description": "Comparison to -XDM methods"},
+        **findif_kwargs,
+    )
+    assert isinstance(plan, AtomicComputer)
 
     def callable_xdm(name, npoints, deriv, restricted):
         superfunctional = psi4.core.SuperFunctional.blank()
@@ -453,6 +498,9 @@ def test_xdm_uses_wavefunction_exchange_fraction():
     class Functional:
         def x_alpha(self):
             return 0.54
+
+        def is_x_lrc(self):
+            return False
 
     class Wavefunction:
         def functional(self):
@@ -511,6 +559,10 @@ def test_xdm_modified_exchange_rejects_heavy_elements():
     with pytest.raises(ValueError, match="modified HF exchange is unsupported for Z > 10"):
         xdm.compute_energy(wfn, 0.50)
 
+    unknown_xdm = psi4.core.XDMDispersion.build("m06-2x", 0.5, 1.0)
+    with pytest.raises(ValueError, match="modified HF exchange is unsupported for Z > 10"):
+        unknown_xdm.compute_energy(wfn, 0.54)
+
 
 @pytest.mark.xdm
 def test_xdm_rejects_nonlocal_double_dispersion():
@@ -522,6 +574,27 @@ def test_xdm_rejects_nonlocal_double_dispersion():
     assert "wb97m-v-xdm" not in dft_builder.functionals
     with pytest.raises(ValidationError, match="XDM cannot be combined.*VV10"):
         dft.build_superfunctional("wb97m-v-xdm", True)
+
+
+@pytest.mark.xdm
+def test_xdm_rejects_range_separation_override():
+    from psi4.driver.procrouting.empirical_disp.empirical_dispersion import XDMDispersionFunctor
+
+    class Functional:
+        def is_x_lrc(self):
+            return True
+
+        def x_alpha(self):
+            return 0.0
+
+    class Wavefunction:
+        def functional(self):
+            return Functional()
+
+    psi4.set_options({"DFT_OMEGA": 0.8})
+    functor = XDMDispersionFunctor(functional_name="lc-wpbe", a1=0.5, a2_ang=1.0)
+    with pytest.raises(psi4.p4util.ValidationError, match="modified range-separation parameters"):
+        functor.compute_energy(None, Wavefunction())
 
 
 @pytest.mark.xdm

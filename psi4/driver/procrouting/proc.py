@@ -1387,6 +1387,28 @@ def select_mrcc(name, **kwargs):
         return func(name, **kwargs)
 
 
+def _without_xdm_dispersion(name):
+    if isinstance(name, str):
+        return re.sub(r"-xdm(?:\([^)]*\))?$", "", name, flags=re.IGNORECASE)
+    if isinstance(name, dict):
+        dispersion = name.get("dispersion")
+        if isinstance(dispersion, dict) and str(dispersion.get("type", "")).lower() == "xdm":
+            guess_name = dict(name)
+            guess_name.pop("dispersion")
+            return guess_name
+        return name
+    if callable(name):
+        def guess_functional(*args, **kwargs):
+            result = name(*args, **kwargs)
+            if isinstance(result, (list, tuple)) and len(result) > 1:
+                dispersion = result[1]
+                if isinstance(dispersion, dict) and str(dispersion.get("type", "")).lower() == "xdm":
+                    return result[0]
+            return result
+        return guess_functional
+    return name
+
+
 def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwargs):
 
     if core.has_option_changed("SCF", "DFT_DISPERSION_PARAMETERS"):
@@ -1937,7 +1959,7 @@ def scf_helper(name, post_scf=True, **kwargs):
             core.print_out("         " + banner.center(58))
         if cast:
             core.print_out("         " + "SCF Castup computation".center(58))
-        cast_name = re.sub(r"-xdm(?:\([^)]*\))?$", "", name, flags=re.IGNORECASE) if isinstance(name, str) else name
+        cast_name = _without_xdm_dispersion(name)
         ref_wfn = scf_wavefunction_factory(cast_name, base_wfn, core.get_option('SCF', 'REFERENCE'), **kwargs)
 
         # Compute additive correction: dftd3, mp2d, dftd4, etc.

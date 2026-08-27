@@ -81,6 +81,7 @@ dict = {
 """
 import collections
 import copy
+from collections.abc import Mapping
 
 from qcengine.programs.empirical_dispersion_resources import dashcoeff, get_dispersion_aliases, new_d4_api
 
@@ -263,7 +264,15 @@ def check_consistency(func_dictionary):
         # XDM dispersion is handled natively, not through qcengine dashcoeff
         if disp["type"] == "xdm":
             from ..empirical_disp.xdm_params import normalize_xdm_model
-            normalize_xdm_model(disp.get("params", {}).get("xdm_model", "kb49"))
+            params = disp.get("params", {})
+            if not isinstance(params, Mapping):
+                raise ValidationError(f"SCF: XDM dispersion params for {name} must be a mapping.")
+            unknown_params = sorted((key for key in params if key != "xdm_model"), key=str)
+            if unknown_params:
+                raise ValidationError(
+                    f"SCF: Unsupported XDM dispersion params for {name}: {unknown_params}. "
+                    "Supported params are ['xdm_model'].")
+            normalize_xdm_model(params.get("xdm_model", "kb49"))
         elif disp["type"] not in _dispersion_aliases:
             raise ValidationError(
                 f"SCF: Dispersion type ({disp['type']}) should be among ({list(_dispersion_aliases.keys()) + ['xdm']})")
