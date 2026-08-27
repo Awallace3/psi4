@@ -2148,6 +2148,7 @@ def scf_helper(name, post_scf=True, **kwargs):
         scf_wfn.set_variable("XDM ENERGY", xdm_energy)
         scf_wfn.set_variable("DISPERSION CORRECTION ENERGY", xdm_energy)
         e_scf += xdm_energy
+        scf_wfn.set_energy(e_scf)
         if scf_wfn.functional().needs_xc():
             e_dft = scf_wfn.variable("DFT TOTAL ENERGY") + xdm_energy
             for obj in [core, scf_wfn]:

@@ -34,6 +34,7 @@ units angstrom
     e, wfn = psi4.energy("b3lyp-xdm", molecule=mol, return_wfn=True)
     psi4.set_options({"BASIS_GUESS": False})
     wfn_vars = wfn.variables()
+    assert np.isclose(wfn.energy(), e, atol=1.0e-12)
     assert "DISPERSION CORRECTION ENERGY" in wfn_vars
     assert np.isclose(wfn_vars["DISPERSION CORRECTION ENERGY"], e - e_reg, atol=1e-6)
     assert np.isclose(
@@ -615,6 +616,16 @@ def test_xdm_public_api_validation():
 
 
 @pytest.mark.xdm
+def test_xdm_rejects_partial_explicit_parameters():
+    from psi4.driver.procrouting.empirical_disp.empirical_dispersion import XDMDispersionFunctor
+
+    with pytest.raises(psi4.p4util.ValidationError, match="a1 and a2_ang must be provided together"):
+        XDMDispersionFunctor("b3lyp", basis_name="aug-cc-pvdz", a1=9.0)
+    with pytest.raises(psi4.p4util.ValidationError, match="a1 and a2_ang must be provided together"):
+        XDMDispersionFunctor("b3lyp", basis_name="aug-cc-pvdz", a2_ang=9.0)
+
+
+@pytest.mark.xdm
 def test_xdm_automatic_damping_rejects_modified_exchange():
     from psi4.driver.procrouting import proc
 
@@ -641,12 +652,25 @@ def test_xdm_rejects_range_separation_override():
 
     superfunctional, functor = proc.build_functional_and_disp(callable_xdm, True)
 
+    def unknown_callable_xdm(name, npoints, deriv, restricted):
+        unknown = psi4.core.SuperFunctional.XC_build("XC_HYB_GGA_XC_LRC_WPBE", restricted)
+        unknown.set_lock(False)
+        unknown.set_name("MY-LRC-XDM")
+        return unknown, {"type": "xdm", "params": {"xdm_model": "kb49"}}
+
+    unknown_superfunctional, unknown_functor = proc.build_functional_and_disp(unknown_callable_xdm, True)
+
     class Wavefunction:
+        def __init__(self, functional):
+            self._functional = functional
+
         def functional(self):
-            return superfunctional
+            return self._functional
 
     with pytest.raises(psi4.p4util.ValidationError, match="modified range-separation parameters"):
-        functor.compute_energy(None, Wavefunction())
+        functor.compute_energy(None, Wavefunction(superfunctional))
+    with pytest.raises(psi4.p4util.ValidationError, match="unknown range-separated functionals"):
+        unknown_functor.compute_energy(None, Wavefunction(unknown_superfunctional))
 
 
 @pytest.mark.xdm

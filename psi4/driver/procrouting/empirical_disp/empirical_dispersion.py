@@ -476,6 +476,9 @@ class XDMDispersionFunctor():
         self._expected_x_omega = expected_x_omega
         self._expected_x_beta = expected_x_beta
 
+        if (a1 is None) != (a2_ang is None):
+            raise ValidationError("XDM explicit damping parameters a1 and a2_ang must be provided together.")
+
         if a1 is not None and a2_ang is not None:
             self.xdm = core.XDMDispersion.build(functional_name, a1, a2_ang)
             return
@@ -542,12 +545,9 @@ class XDMDispersionFunctor():
             self._expected_x_beta is not None
             and abs(functional.x_beta() - self._expected_x_beta) >= 1.0e-10
         )
-        if range_mismatch or (
-            self._expected_x_omega is None
-            and functional.is_x_lrc()
-            and core.has_option_changed("SCF", "DFT_OMEGA")
-        ):
-            raise ValidationError("XDM does not support modified range-separation parameters.")
+        if range_mismatch or (self._expected_x_omega is None and functional.is_x_lrc()):
+            raise ValidationError(
+                "XDM does not support modified range-separation parameters or unknown range-separated functionals.")
         ene = self.xdm.compute_energy(wfn, functional.x_alpha())
         core.set_variable('DISPERSION CORRECTION ENERGY', ene)
         if self.fctldash:
