@@ -770,3 +770,28 @@ def test_hpc_collector_refuses_the_same_directory_twice(tmp_path):
 
     with pytest.raises(SystemExit, match="more than one record for rank"):
         gtfock_hpc_collect.load_points([run, run])
+
+
+def test_hpc_collector_reduces_one_multinode_run(tmp_path):
+    """One job whose ranks sit on different nodes is one point, not two runs.
+
+    Run identity is the job id and its nodelist; the per-rank ``host`` differs as
+    soon as a launch spans more than one node, and that is a distributed point
+    rather than a repeated sweep.
+    """
+    import gtfock_hpc_collect
+
+    run = _write_hpc_records(
+        tmp_path / "peptide_12400108",
+        [_hpc_record(0, host="atl1-1-01-002-8-0",
+                     slurm_nodelist="atl1-1-01-002-[8-9]-0"),
+         _hpc_record(1, host="atl1-1-01-002-9-0",
+                     slurm_nodelist="atl1-1-01-002-[8-9]-0")])
+
+    points = gtfock_hpc_collect.load_points([run])
+
+    assert len(points) == 1
+    assert points[0]["scf_wall_s"] == 101.0
+    assert points[0]["jk_wall_s"] == 51.0
+    assert points[0]["peak_rss_sum_mb"] == 2000.0
+    assert points[0]["slurm_nodelist"] == "atl1-1-01-002-[8-9]-0"

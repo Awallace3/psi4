@@ -709,7 +709,8 @@ GTFOCK
     An MPI-distributed Fock build using exact ERIs, supplied by the optional
     GTFock add-on and driven from Python through mpi4py. Available only in a
     |PSIfour| built with ``-DENABLE_GTFock=ON``, and a prototype: it covers
-    closed-shell RHF in a Cartesian basis and raises on anything outside that.
+    closed-shell RHF and hybrid DFT in a Cartesian basis and raises on anything
+    outside that, range-separated functionals included.
     See :ref:`sec:gtfock`.
 
 |PSIfour| also features the capability to use "composite" Fock matrix build

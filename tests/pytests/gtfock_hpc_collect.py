@@ -40,19 +40,24 @@ _COLUMNS = [
 def _refuse_mixed_runs(system, arm, ranks, records):
     """Refuse to reduce a point whose records did not come from one single run.
 
-    A point is one launch: `ranks` records, one per rank, from one job on one
-    host. If a sweep was repeated -- a job timed out, a node was drained -- and
-    both result directories are handed over at once, the records land under the
-    same (system, arm, ranks) key and a max over wall clocks or a sum over
-    memory would silently span two runs on two pieces of hardware. That is
-    exactly the drift the generated table exists to prevent, so it is fatal
-    rather than a warning.
+    A point is one launch: `ranks` records, one per rank, from one job. If a
+    sweep was repeated -- a job timed out, a node was drained -- and both result
+    directories are handed over at once, the records land under the same
+    (system, arm, ranks) key and a max over wall clocks or a sum over memory
+    would silently span two runs on two pieces of hardware. That is exactly the
+    drift the generated table exists to prevent, so it is fatal rather than a
+    warning.
+
+    A run is identified by its SLURM job id and nodelist rather than by the
+    per-rank host, because the nodelist is the same string on every rank of a
+    launch while `host` is not: a single job spread over several nodes is one
+    point, and keying on `host` would refuse it.
     """
-    runs = {(r.get("slurm_job_id"), r.get("host")) for r in records}
+    runs = {(r.get("slurm_job_id"), r.get("slurm_nodelist")) for r in records}
     if len(runs) > 1:
         listed = ", ".join(
-            f"job {job or '(no SLURM_JOB_ID)'} on {host}"
-            for job, host in sorted(runs, key=lambda run: (str(run[0]), str(run[1]))))
+            f"job {job or '(no SLURM_JOB_ID)'} on {nodes}"
+            for job, nodes in sorted(runs, key=lambda run: (str(run[0]), str(run[1]))))
         raise SystemExit(
             f"{system}/{arm}/n{ranks} collapses records from more than one run "
             f"({listed}); reducing them together would take a maximum over "

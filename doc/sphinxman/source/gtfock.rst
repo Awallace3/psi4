@@ -266,16 +266,22 @@ Testing
 ~~~~~~~
 
 :source:`tests/pytests/test_gtfock.py` covers the opt-in path and skips cleanly
-when GTFock is absent, except for the two optionality guards, which always run:
+when GTFock is absent, except for the two optionality guards and the four
+reducer tests, which always run:
 
 .. code-block:: bash
 
     >>> pytest -v tests/pytests/test_gtfock.py
 
-Without GTFock this is ``2 passed, 16 skipped``; the two that run assert that
-:py:mod:`psi4.driver.gtfock` imports, reports itself unavailable, raises a
-GTFock-specific error rather than a stray ``ImportError``, and needs no mpi4py to
-do any of it.
+Without GTFock this is ``6 passed, 16 skipped``. The two optionality guards
+assert that :py:mod:`psi4.driver.gtfock` imports, reports itself unavailable,
+raises a GTFock-specific error rather than a stray ``ImportError``, and needs no
+mpi4py to do any of it. The four reducer tests drive
+:source:`tests/pytests/gtfock_hpc_collect.py` over synthesized per-rank records
+and need neither GTFock nor MPI: they check that one run collapses to one row
+with the slowest rank's wall clock and the node's summed memory, that a job
+spanning several nodes is still one point, and that records from two jobs or one
+directory passed twice are refused rather than silently merged.
 
 The multi-rank cases launch :source:`tests/pytests/gtfock_mpi_driver.py` under
 ``mpirun`` and assert per-rank evidence: mpi4py and |PSIfours| MPI agree, each
@@ -434,13 +440,17 @@ J/K are pinned to density fitting on every point (``sad_scf_type df``), and
 pre-pass hides inside the measured SCF. Convergence thresholds, integral
 screening, and the maximum iteration count are the same everywhere.
 
-Peak memory is the per-rank high-water mark read from ``/proc/self/status``
-(``VmHWM``), not from ``sacct``: all five points of a system share one SLURM job,
-so the single job-level ``MaxRSS`` |w---w| 1.8 GB for the peptide sweep, 10.4 GB
-for the nanotube one |w---w| belongs to the whole sweep and cannot be attributed
-to a point. It is reported two ways, because they answer different questions:
-``RSS/rank`` is what one process needed, ``RSS node`` is the sum over ranks,
-which is what the node had to supply.
+Peak memory per point is the per-rank high-water mark read from
+``/proc/self/status`` (``VmHWM``). ``sacct`` reports no ``MaxRSS`` on this
+cluster, so the only job-level figure is the ``mem=`` field of the SLURM
+epilogue's ``Rsrc Used:`` line |w---w| 1.8 GB for the peptide job, 10.4 GB for
+the nanotube one |w---w| and all five points of a system share one job, so that
+figure belongs to the whole sweep and cannot be attributed to a point. Both
+jobs' provenance, ``sacct`` output and epilogue are copied verbatim into
+:source:`tests/pytests/gtfock_hpc_provenance.txt`. The per-rank measurement is
+reported two ways, because they answer different questions: ``RSS/rank`` is what
+one process needed, ``RSS node`` is the sum over ranks, which is what the node
+had to supply.
 
 .. peptide backbone dimer, 24 atoms, 6-31+G** (260 basis functions in 122
    shells), on atl1-1-02-006-1-1
