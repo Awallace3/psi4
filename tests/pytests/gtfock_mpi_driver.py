@@ -46,10 +46,10 @@ no_com
 """,
     # A water hexamer cage: 18 atoms, 60 shells and 114 basis functions in
     # Cartesian 6-31G*, 390 in Cartesian cc-pVTZ. Big enough that GTFock's 2x2
-    # grid at four ranks gives each rank a 55x55 AO panel which GTFock then
-    # splits into 4x4 task blocks -- see local_task_shape in the report. A
-    # single water would give each rank one block and prove nothing about the
-    # decomposition.
+    # grid at four ranks gives each rank a strict sub-block of the AO matrix
+    # which GTFock then splits into more than one task block in each dimension
+    # -- see local_block and local_task_shape in the report. A single water
+    # would give each rank one block and prove nothing about the decomposition.
     "water6": """
 0 1
 O   -0.7021  -1.4498   1.2298

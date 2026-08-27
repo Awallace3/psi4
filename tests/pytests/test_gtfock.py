@@ -84,8 +84,9 @@ def _water():
 # ranks it wants a 2x2 process grid whose per-rank AO panel is still large enough
 # for GTFock to split into several task blocks. Cartesian 6-31G* on the water
 # hexamer gives 60 shells and 114 basis functions, so each of the four ranks owns
-# a 55x55 panel blocked 4x4. Water/STO-3G, the smoke case above, has 5 shells and
-# would hand each rank a single degenerate block.
+# a strict sub-block of that matrix, itself split into more than one task block in
+# each dimension. Water/STO-3G, the smoke case above, has 5 shells and would hand
+# each rank a single degenerate block.
 HEXAMER_BASIS = "6-31G*"
 
 
@@ -696,3 +697,76 @@ def test_gtfock_rank_count_invariance(tmp_path, method):
     assert max(energies) - min(energies) < RANK_INVARIANCE_TOL, (
         f"{method} energy depends on the rank count: spread "
         f"{max(energies) - min(energies):.3e} Eh over {energies}")
+
+
+def _hpc_record(rank, **overrides):
+    """One ``gtfock_hpc_benchmark.py`` per-rank record, with the fields the reducer reads.
+
+    The serialized record is that script's output contract: it is what lands in
+    ``<json-out>.rank<N>.json`` and what the collector consumes.
+    """
+    record = {
+        "system": "peptide", "arm": "gtfock", "basis": "6-31+G**", "method": "scf",
+        "nbf": 260, "nshell": 128, "puream": False, "jk_name": "GTFockJK",
+        "ranks": 2, "rank": rank, "threads_per_rank": 12, "total_cores": 24,
+        "iterations": 11, "jk_calls": 11,
+        "scf_energy": -757.5, "scf_wall_seconds": 100.0 + rank,
+        "jk_wall_seconds": 50.0 + rank, "peak_rss_mb": 1000.0,
+        "host": "atl1-1-01-002-8-0", "slurm_job_id": "12400108",
+        "slurm_nodelist": "atl1-1-01-002-8-0",
+    }
+    record.update(overrides)
+    return record
+
+
+def _write_hpc_records(directory, records):
+    directory.mkdir(parents=True, exist_ok=True)
+    for record in records:
+        path = directory / f"peptide_gtfock_n{record['ranks']}.rank{record['rank']}.json"
+        path.write_text(json.dumps(record))
+    return str(directory)
+
+
+def test_hpc_collector_reduces_one_run(tmp_path):
+    """One run reduces to one row: wall clock is the slowest rank, memory the node."""
+    import gtfock_hpc_collect
+
+    run = _write_hpc_records(tmp_path / "peptide_12400108",
+                             [_hpc_record(0), _hpc_record(1)])
+
+    points = gtfock_hpc_collect.load_points([run])
+
+    assert len(points) == 1
+    assert points[0]["scf_wall_s"] == 101.0
+    assert points[0]["jk_wall_s"] == 51.0
+    assert points[0]["peak_rss_sum_mb"] == 2000.0
+    assert points[0]["slurm_job_id"] == "12400108"
+
+
+def test_hpc_collector_refuses_records_from_two_jobs(tmp_path):
+    """A repeated sweep must abort, not silently reduce two jobs into one row.
+
+    The maxima and the summed memory would otherwise span unrelated hardware,
+    and the documentation tables are generated from exactly these rows.
+    """
+    import gtfock_hpc_collect
+
+    first = _write_hpc_records(tmp_path / "peptide_12395891",
+                               [_hpc_record(0, slurm_job_id="12395891"),
+                                _hpc_record(1, slurm_job_id="12395891")])
+    second = _write_hpc_records(tmp_path / "peptide_12400108",
+                                [_hpc_record(0), _hpc_record(1)])
+
+    with pytest.raises(SystemExit, match="more than one run"):
+        gtfock_hpc_collect.load_points([first, second])
+
+
+def test_hpc_collector_refuses_the_same_directory_twice(tmp_path):
+    """Passing one directory twice would double the node-memory column."""
+    import gtfock_hpc_collect
+
+    run = _write_hpc_records(tmp_path / "peptide_12400108",
+                             [_hpc_record(0), _hpc_record(1)])
+
+    with pytest.raises(SystemExit, match="more than one record for rank"):
+        gtfock_hpc_collect.load_points([run, run])

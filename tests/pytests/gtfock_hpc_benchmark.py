@@ -145,6 +145,28 @@ _EXPECTED_NBF = {"peptide": 260, "nanotube": 574}
 _ARMS = {"gtfock": "gtfock", "direct": "direct", "df": "df", "pk": "pk"}
 
 
+def assert_basis_as_sized(system, basis_name, basis) -> None:
+    """Refuse the point unless the basis is the Cartesian one it was sized for.
+
+    A spherical basis would be refused by GTFock's Simint path at best and make
+    the two arms different computations at worst, and a basis-function count that
+    disagrees means the geometry or the basis is not what was measured. Both are
+    fatal: a point that is not the point asked for is worse than a missing one.
+    """
+    if basis.has_puream():
+        raise RuntimeError(
+            f"{basis_name} came up spherical: GTFock's Simint path is Cartesian "
+            "only, and a spherical basis would make the two arms different "
+            "computations. Check the basis definition rather than forcing "
+            "puream.")
+    expected = _EXPECTED_NBF[system]
+    if basis.nbf() != expected:
+        raise RuntimeError(
+            f"{system}/{basis_name} gave {basis.nbf()} basis functions, "
+            f"expected {expected}: the geometry or the basis is not what this "
+            "benchmark was sized for.")
+
+
 def parse_args(argv):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--system", choices=sorted(_SYSTEMS), required=True)
@@ -219,7 +241,7 @@ def main(argv=None) -> int:
     psi4.set_num_threads(args.threads)
     psi4.set_memory(args.memory)
 
-    psi4.geometry(_SYSTEMS[args.system])
+    molecule = psi4.geometry(_SYSTEMS[args.system])
     # Every arm gets the same convergence, the same guess and the same integral
     # threshold, so the only thing that differs between two points is the J/K
     # algorithm and the rank count. df_scf_guess is off everywhere: it would
@@ -244,25 +266,25 @@ def main(argv=None) -> int:
         "save_jk": True,
     })
 
+    # Built and checked here, before any integral work, so a mistyped --basis or
+    # an edited geometry costs a second of a queued allocation rather than a
+    # whole SCF -- and, under the SLURM script's `set -eo pipefail`, rather than
+    # the rest of the sweep behind it.
+    assert_basis_as_sized(
+        args.system, args.basis,
+        psi4.core.BasisSet.build(molecule, "ORBITAL", args.basis))
+
     builds_before = gtfock.fock_builds() if gtfock is not None else 0
     start = time.perf_counter()
     energy, wfn = psi4.energy(args.method, return_wfn=True)
     elapsed = time.perf_counter() - start
     jk_wall, jk_calls = jk_build_seconds()
 
+    # The report describes the basis the SCF actually used, so it is read back
+    # off the wavefunction and held to the same guards -- the pre-flight check
+    # cannot see a basis the driver swapped underneath it.
     basis = wfn.basisset()
-    if basis.has_puream():
-        raise RuntimeError(
-            f"{args.basis} came up spherical: GTFock's Simint path is Cartesian "
-            "only, and a spherical basis would make the two arms different "
-            "computations. Check the basis definition rather than forcing "
-            "puream.")
-    expected = _EXPECTED_NBF[args.system]
-    if basis.nbf() != expected:
-        raise RuntimeError(
-            f"{args.system}/{args.basis} gave {basis.nbf()} basis functions, "
-            f"expected {expected}: the geometry or the basis is not what this "
-            "benchmark was sized for.")
+    assert_basis_as_sized(args.system, args.basis, basis)
 
     report = {
         "system": args.system,

@@ -15,6 +15,7 @@ one shows replicated storage getting more expensive with rank count.
 """
 
 import argparse
+import collections
 import csv
 import glob
 import json
@@ -36,6 +37,36 @@ _COLUMNS = [
 ]
 
 
+def _refuse_mixed_runs(system, arm, ranks, records):
+    """Refuse to reduce a point whose records did not come from one single run.
+
+    A point is one launch: `ranks` records, one per rank, from one job on one
+    host. If a sweep was repeated -- a job timed out, a node was drained -- and
+    both result directories are handed over at once, the records land under the
+    same (system, arm, ranks) key and a max over wall clocks or a sum over
+    memory would silently span two runs on two pieces of hardware. That is
+    exactly the drift the generated table exists to prevent, so it is fatal
+    rather than a warning.
+    """
+    runs = {(r.get("slurm_job_id"), r.get("host")) for r in records}
+    if len(runs) > 1:
+        listed = ", ".join(
+            f"job {job or '(no SLURM_JOB_ID)'} on {host}"
+            for job, host in sorted(runs, key=lambda run: (str(run[0]), str(run[1]))))
+        raise SystemExit(
+            f"{system}/{arm}/n{ranks} collapses records from more than one run "
+            f"({listed}); reducing them together would take a maximum over "
+            "unrelated hardware. Pass one job's result directory at a time.")
+
+    seen = collections.Counter(r["rank"] for r in records)
+    duplicated = sorted(rank for rank, count in seen.items() if count > 1)
+    if duplicated:
+        raise SystemExit(
+            f"{system}/{arm}/n{ranks} has more than one record for rank(s) "
+            f"{duplicated}; the summed-memory and maximum-wall-clock columns "
+            "would double-count. Pass each result directory once.")
+
+
 def load_points(directories):
     """Collapse ``*.rank<N>.json`` files into one dict per (system, arm, ranks)."""
     by_key = {}
@@ -51,6 +82,7 @@ def load_points(directories):
 
     points = []
     for (system, arm, ranks), records in sorted(by_key.items()):
+        _refuse_mixed_runs(system, arm, ranks, records)
         if len(records) != ranks:
             print(f"warning: {system}/{arm}/n{ranks} has {len(records)} rank "
                   f"records, expected {ranks}", file=sys.stderr)

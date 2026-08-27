@@ -287,10 +287,11 @@ counter advanced, and the energy agrees with |PSIfours| own PK result.
 
 * ``test_gtfock_rank_count_invariance`` is the correctness case. It runs ``scf``
   and ``b3lyp`` on a water hexamer in Cartesian 6-31G* (60 shells, 114 basis
-  functions) at one, two and four ranks. Four ranks give a 2x2 process grid, four
-  distinct 55x55 AO panels, and a 4x4 task blocking *inside* each panel; the test
-  asserts all three, because a system small enough to hand each rank a single
-  block would say nothing about the decomposition.
+  functions) at one, two and four ranks. Four ranks give a 2x2 process grid, and
+  each of the four ranks owns a strict sub-block of the 114-function matrix that
+  GTFock has itself split into more than one task block in each dimension; the
+  test asserts all three, because a system small enough to hand each rank a
+  single block would say nothing about the decomposition.
 
   It then makes two separate comparisons at two separate, separately stated
   tolerances, because they are two different claims:
