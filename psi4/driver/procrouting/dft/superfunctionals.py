@@ -143,6 +143,9 @@ def build_superfunctional(name, restricted, npoints=None, deriv=1):
     if (core.has_option_changed("SCF", "NL_DISPERSION_PARAMETERS") and core.has_option_changed("SCF", "DFT_VV10_B")):
         raise ValidationError("SCF: Decide between NL_DISPERSION_PARAMETERS and DFT_VV10_B !!")
 
+    if isinstance(sup[1], dict) and sup[1].get("type") == "xdm" and sup[0].vv10_b() > 0.0:
+        raise ValidationError("SCF: XDM cannot be combined with a functional that includes VV10 nonlocal correlation.")
+
     # Check SCF_TYPE
     if sup[0].is_x_lrc() and (core.get_global_option("SCF_TYPE")
                               not in ["DISK_DF", "MEM_DF", "DIRECT", "DF", "OUT_OF_CORE", "PK"]):

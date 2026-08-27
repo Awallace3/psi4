@@ -496,6 +496,35 @@ def test_xdm_runtime_exchange_changes_free_volume():
 
 
 @pytest.mark.xdm
+def test_xdm_modified_exchange_rejects_heavy_elements():
+    mol = psi4.geometry("0 1\nCl 0 0 0\nCl 0 0 2.0\nunits angstrom")
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "DFT_SPHERICAL_POINTS": 110,
+            "DFT_RADIAL_POINTS": 50,
+        }
+    )
+    _, wfn = psi4.energy("b3lyp", molecule=mol, return_wfn=True)
+    xdm = psi4.core.XDMDispersion.build("b3lyp", 0.5, 1.0)
+
+    with pytest.raises(ValueError, match="modified HF exchange is unsupported for Z > 10"):
+        xdm.compute_energy(wfn, 0.50)
+
+
+@pytest.mark.xdm
+def test_xdm_rejects_nonlocal_double_dispersion():
+    from psi4.driver.p4util.exceptions import ValidationError
+    from psi4.driver.procrouting import dft
+    from psi4.driver.procrouting.dft import dft_builder
+
+    assert "b3lyp-xdm" in dft_builder.functionals
+    assert "wb97m-v-xdm" not in dft_builder.functionals
+    with pytest.raises(ValidationError, match="XDM cannot be combined.*VV10"):
+        dft.build_superfunctional("wb97m-v-xdm", True)
+
+
+@pytest.mark.xdm
 def test_xdm_rejects_ecp_density():
     mol = psi4.geometry("0 2\nBr 0 0 0\nunits angstrom")
     psi4.set_options(

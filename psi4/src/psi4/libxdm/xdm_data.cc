@@ -274,6 +274,16 @@ double get_free_volume(int Z, const std::string& functional, double hf_fraction)
     else if (functional == "lcwpbe" || functional == "lc-wpbe" || functional == "lrc-wpbe")
         table_hf_fraction = 0.0;
 
+    double nominal_hf_fraction = table_hf_fraction;
+    if (functional == "bp86" || functional == "b86bpbe" || functional == "tpss")
+        nominal_hf_fraction = 0.0;
+    else if (functional == "b3p86" || functional == "b3pw91")
+        nominal_hf_fraction = 0.20;
+    else if (functional == "hse06")
+        nominal_hf_fraction = 0.25;
+    else if (functional == "hf")
+        nominal_hf_fraction = 1.0;
+
     bool use_specific = has_specific && table_hf_fraction >= 0.0 &&
                         (hf_fraction < 0.0 || std::abs(hf_fraction - table_hf_fraction) < 1.0e-10);
     if (use_specific) {
@@ -290,30 +300,15 @@ double get_free_volume(int Z, const std::string& functional, double hf_fraction)
     }
 
     // Determine the real HF fraction for interpolation
-    double rchf = hf_fraction;
-    if (rchf < 0.0) {
-        // Derive HF fraction from functional name
-        if (functional == "blyp" || functional == "pbe" || functional == "pw86pbe" || functional == "pw86" ||
-            functional == "bp86" || functional == "b86bpbe" || functional == "tpss")
-            rchf = 0.0;
-        else if (functional == "b3lyp" || functional == "b3p86" || functional == "b3pw91" ||
-                 functional == "camb3lyp" || functional == "cam-b3lyp")
-            rchf = 0.20;
-        else if (functional == "b97-1" || functional == "b971")
-            rchf = 0.21;
-        else if (functional == "pbe0" || functional == "hse06" || functional == "lcwpbe" ||
-                 functional == "lc-wpbe" || functional == "lrc-wpbe")
-            rchf = 0.25;
-        else if (functional == "bhahlyp" || functional == "bhandhlyp" || functional == "bhandh")
-            rchf = 0.50;
-        else if (functional == "hf")
-            rchf = 1.0;
-        else
-            rchf = 0.0;
-    }
+    double rchf = hf_fraction >= 0.0 ? hf_fraction : std::max(0.0, nominal_hf_fraction);
 
     // For Z > 10 or fallback: use LSDA/UGBS
     if (Z > 10) {
+        if (hf_fraction >= 0.0 && nominal_hf_fraction >= 0.0 &&
+            std::abs(hf_fraction - nominal_hf_fraction) >= 1.0e-10) {
+            throw std::invalid_argument("XDM: modified HF exchange is unsupported for Z > 10 because no "
+                                        "fraction-dependent free-atom volumes are available.");
+        }
         return frevol0[Z];
     }
 

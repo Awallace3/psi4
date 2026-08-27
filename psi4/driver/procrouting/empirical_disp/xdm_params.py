@@ -155,6 +155,13 @@ def normalize_xdm_model(model: str) -> str:
     return _XDM_MODEL_ALIASES[normalized]
 
 
+def available_xdm_functionals(model: str = "kb49") -> List[str]:
+    """Functional names with fitted XDM damping parameters under ``model``."""
+
+    table = _XDM_PARAM_TABLES[normalize_xdm_model(model)]
+    return sorted({key.split("/", 1)[0] for key in table})
+
+
 def available_xdm_bases(functional_name: str, model: str = "kb49") -> List[str]:
     """Basis names with fitted (a1, a2) for ``functional_name`` under ``model``."""
 

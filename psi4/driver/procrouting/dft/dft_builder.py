@@ -87,6 +87,7 @@ from qcengine.programs.empirical_dispersion_resources import dashcoeff, get_disp
 from psi4 import core
 
 from ...p4util.exceptions import ValidationError
+from ..empirical_disp.xdm_params import available_xdm_functionals
 from . import dh_functionals, gga_functionals, hyb_functionals, lda_functionals, libxc_functionals, mgga_functionals
 
 dict_functionals = {}
@@ -171,13 +172,12 @@ for functional_name in dict_functionals:
                         alias += "-" + nominal_dispersion_level.lower()
                         functionals[alias] = func
 
-# Auto-generate -xdm variants for all base functionals that don't already have one.
-# This allows any functional to be used with XDM dispersion (e.g., hf-xdm, tpss-xdm)
-# when the user supplies XDM_DISPERSION_PARAMETERS, or when parameters are available
-# in the xdm_params.py lookup table.
+# Auto-generate -xdm variants for base functionals with fitted damping parameters.
 _xdm_base_functionals = {}
+_xdm_parameterized_functionals = set(available_xdm_functionals())
 for fname, fdict in dict_functionals.items():
-    if "dispersion" not in fdict:
+    aliases = set(get_functional_aliases(fdict))
+    if "dispersion" not in fdict and aliases & _xdm_parameterized_functionals:
         _xdm_base_functionals[fname] = fdict
 
 for functional_name, base_dict in _xdm_base_functionals.items():
