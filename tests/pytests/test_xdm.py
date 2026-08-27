@@ -92,8 +92,18 @@ units angstrom
     assert np.isclose(disp_corr, ref_disp_corr, atol=1e-6), (
         f"Expected dispersion correction {ref_disp_corr}, got {disp_corr}"
     )
-    # shapes of XDM C6 COEFFICIENTS should be (3, 3)
     assert wfn_m.variables()["XDM C6 COEFFICIENTS"].shape == (3, 3)
+    for variable in (
+        "XDM C6 COEFFICIENTS",
+        "XDM C8 COEFFICIENTS",
+        "XDM C10 COEFFICIENTS",
+        "XDM RC COEFFICIENTS",
+    ):
+        coefficients = wfn_m.variables()[variable].np
+        assert np.all(np.isfinite(coefficients))
+        assert np.all(np.diag(coefficients) > 0.0)
+    pairwise_energy = wfn_m.variables()["XDM PAIRWISE ENERGY"].np
+    assert np.allclose(np.diag(pairwise_energy), 0.0, atol=0.0)
     m = psi4.geometry("""
 0 1
 O    1.35062500   0.11146900   0.00000000

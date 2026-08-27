@@ -461,16 +461,8 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
 
     for (int ii = 0; ii < nreal; ii++) {
         int i = real_atoms[ii];
-        for (int jj = ii + 1; jj < nreal; jj++) {
+        for (int jj = ii; jj < nreal; jj++) {
             int j = real_atoms[jj];
-
-            // Interatomic distance
-            double xij = mol->x(j) - mol->x(i);
-            double yij = mol->y(j) - mol->y(i);
-            double zij = mol->z(j) - mol->z(i);
-            double d = std::sqrt(xij * xij + yij * yij + zij * zij);
-
-            if (d < 1.0e-10) continue;
 
             // Dispersion coefficients
             double denom = atoms[i].mm1 * atpol[j] + atoms[j].mm1 * atpol[i];
@@ -482,9 +474,8 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
             double c10 = 2.0 * fac * (atoms[i].mm1 * atoms[j].mm3 + atoms[i].mm3 * atoms[j].mm1) +
                          4.2 * fac * atoms[i].mm2 * atoms[j].mm2;
 
-            // Critical radius and vdW radius (BJ damping)
+            // Critical radius (BJ damping)
             double rc = (std::sqrt(c8 / c6) + std::sqrt(std::sqrt(c10 / c6)) + std::sqrt(c10 / c8)) / 3.0;
-            double rvdw = a1_ * rc + a2_;
 
             // Store coefficients in symmetric matrices
             c6p[ii][jj] = c6;
@@ -496,6 +487,17 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
             rcp[ii][jj] = rc;
             rcp[jj][ii] = rc;
 
+            if (ii == jj) continue;
+
+            // Interatomic distance
+            double xij = mol->x(j) - mol->x(i);
+            double yij = mol->y(j) - mol->y(i);
+            double zij = mol->z(j) - mol->z(i);
+            double d = std::sqrt(xij * xij + yij * yij + zij * zij);
+
+            if (d < 1.0e-10) continue;
+
+            double rvdw = a1_ * rc + a2_;
             double rvdw6 = std::pow(rvdw, 6);
             double rvdw8 = std::pow(rvdw, 8);
             double rvdw10 = std::pow(rvdw, 10);
