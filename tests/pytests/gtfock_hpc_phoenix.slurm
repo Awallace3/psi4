@@ -12,6 +12,8 @@
 # the reference arms as one process with 24 threads, GTFock as 1x24, 2x12 and
 # 4x6 ranks-by-threads. Comparing a 4-rank run against a 1-rank run that had
 # only a quarter of the machine would measure the allocation, not the engine.
+# The node is two 12-core sockets, which is why the rank placement below is not
+# uniform across rank counts; see run_point.
 #
 #SBATCH --account=gts-cs207-chemx
 #SBATCH --qos=inferno
@@ -81,10 +83,24 @@ run_point() {
                   --json-out "$OUT/$tag")
     export OMP_NUM_THREADS=$threads MKL_NUM_THREADS=$threads
     if [ "$arm" = "gtfock" ]; then
-        # PE=<threads> hands each rank its own set of physical cores, so the
-        # ranks do not contend for the same ones as the rank count rises.
-        mpirun -n "$ranks" --map-by "ppr:${ranks}:node:PE=${threads}" --bind-to core \
-            "${cmd[@]}"
+        # PE=<threads> hands each rank its own disjoint set of physical cores, so
+        # the ranks do not fight over the same ones as the rank count rises.
+        #
+        # The single-rank point is the exception: there is nothing to partition,
+        # and one core set covering all 24 cores spans both sockets, which
+        # OpenMPI refuses to bind ("would cause the process to be bound to CPUs
+        # in more than one package"). That point runs unbound, exactly like the
+        # single-process reference arms, with OMP_PLACES=cores spreading its
+        # threads. Note which way this cuts: at 2 and 4 ranks every rank sits
+        # inside one socket, while the 1-rank point straddles both, so the
+        # NUMA advantage is on the multi-rank side of the comparison.
+        local -a placement=(--bind-to none)
+        if [ "$ranks" -gt 1 ]; then
+            placement=(--map-by "ppr:${ranks}:node:PE=${threads}" --bind-to core)
+        fi
+        # --report-bindings puts the affinity each rank actually got into the job
+        # log, so the placement above is recorded rather than assumed.
+        mpirun -n "$ranks" "${placement[@]}" --report-bindings "${cmd[@]}"
     else
         "${cmd[@]}"
     fi

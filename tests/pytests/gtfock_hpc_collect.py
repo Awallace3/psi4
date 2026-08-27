@@ -137,16 +137,61 @@ def print_table(points):
                   f"{p['scf_energy']:17.9f} {de:>13s}")
 
 
+def rst_table(points):
+    """Emit each system as a docutils simple table, ready to paste into the docs.
+
+    The documentation table is generated rather than transcribed so that no
+    number in :source:`doc/sphinxman/source/gtfock.rst` can drift away from the
+    run that produced it.
+    """
+    order = {"direct": 0, "df": 1, "pk": 2, "gtfock": 3}
+    header = ["arm", "ranks", "thr", "grid", "iters", "SCF (s)", "J/K (s)",
+              "speedup", "RSS/rank", "RSS node", "dE (Eh)"]
+    for system in sorted({p["system"] for p in points}):
+        rows = sorted((p for p in points if p["system"] == system),
+                      key=lambda p: (order.get(p["arm"], 9), p["ranks"]))
+        head = rows[0]
+        body = []
+        for p in rows:
+            speedup = (f"{p['speedup_vs_gtfock_n1']:.2f}"
+                       if p["speedup_vs_gtfock_n1"] != "" else "---")
+            de = f"{p['dE_vs_direct_eh']:.1e}" if p["dE_vs_direct_eh"] != "" else "---"
+            body.append([
+                p["arm"], str(p["ranks"]), str(p["threads_per_rank"]),
+                p["process_grid"] or "---", str(p["iterations"]),
+                f"{p['scf_wall_s']:.1f}", f"{p['jk_wall_s']:.1f}", speedup,
+                f"{p['peak_rss_max_mb']:.0f}", f"{p['peak_rss_sum_mb']:.0f}", de,
+            ])
+        widths = [max(len(row[i]) for row in [header] + body)
+                  for i in range(len(header))]
+        rule = "  ".join("=" * w for w in widths)
+        def line(cells):
+            return "  ".join(c.ljust(w) for c, w in zip(cells, widths)).rstrip()
+        print(f"\n.. {system}: {head['basis']} nbf={head['nbf']} "
+              f"nshell={head['nshell']} on {head['slurm_nodelist'] or head['host']}")
+        print(rule)
+        print(line(header))
+        print(rule)
+        for row in body:
+            print(line(row))
+        print(rule)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("directories", nargs="+",
                         help="result directories written by the SLURM script")
     parser.add_argument("--csv", default=None)
     parser.add_argument("--json", default=None)
+    parser.add_argument("--rst", action="store_true",
+                        help="also print the docs table, so it is generated "
+                             "rather than transcribed by hand")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
     points = add_derived(load_points(args.directories))
     print_table(points)
+    if args.rst:
+        rst_table(points)
 
     if args.csv:
         with open(args.csv, "w", newline="") as handle:
