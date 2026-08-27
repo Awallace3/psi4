@@ -30,10 +30,7 @@ namespace psi {
 namespace xdm {
 
 ProatomDensity::ProatomDensity()
-    : spline_initialized_(FTOT_NELEM, false),
-      spline_a_(FTOT_NELEM),
-      spline_b_(FTOT_NELEM),
-      spline_c_(FTOT_NELEM) {}
+    : spline_initialized_(FTOT_NELEM, false), spline_a_(FTOT_NELEM), spline_b_(FTOT_NELEM), spline_c_(FTOT_NELEM) {}
 
 void ProatomDensity::initialize_spline(int Z) const {
     if (Z < 1 || Z > FTOT_NELEM) return;
@@ -150,9 +147,8 @@ double ProatomDensity::evaluate(int Z, double r) const {
 }
 
 void compute_hirshfeld_weights(const ProatomDensity& proatom, int natom, const int* atomic_nums,
-                               const double atom_coords[][3], int npoints, const double* grid_x,
-                               const double* grid_y, const double* grid_z,
-                               std::vector<std::vector<double>>& weights) {
+                               const double atom_coords[][3], int npoints, const double* grid_x, const double* grid_y,
+                               const double* grid_z, std::vector<std::vector<double>>& weights) {
     weights.resize(natom);
     for (auto& atom_weights : weights) {
         atom_weights.assign(npoints, 0.0);

@@ -26,7 +26,6 @@
 # @END LICENSE
 #
 import re
-
 """
 Superfunctional builder function & handlers.
 The new definition of functionals is based on a dictionary with the following structure
@@ -103,6 +102,7 @@ dict_functionals.update(dh_functionals.functional_list)
 if new_d4_api is False:
     dict_functionals.pop("r2scan3c")
 
+
 def get_functional_aliases(functional_dict):
     if "alias" in functional_dict:
         aliases = [each.lower() for each in functional_dict["alias"]]
@@ -134,9 +134,9 @@ for functional_name in dict_functionals:
             # "bless" the original functional dft/*_functionals dispersion definition including aliases
             dashcoeff_supplement[disp['type']]['definitions'][formal] = disp
             # add omitted default parameters of the dispersion correction
-            for p,val in dashcoeff[disp['type']]['default'].items():
+            for p, val in dashcoeff[disp['type']]['default'].items():
                 if p not in dashcoeff_supplement[disp['type']]['definitions'][formal]['params'].keys():
-                    dashcoeff_supplement[disp['type']]['definitions'][formal]['params'][p]=val
+                    dashcoeff_supplement[disp['type']]['definitions'][formal]['params'][p] = val
             # generate dispersion aliases for every functional alias
             for nominal_dispersion_level, resolved_dispersion_level in _dispersion_aliases.items():
                 if resolved_dispersion_level == disp["type"]:
@@ -260,8 +260,7 @@ def check_consistency(func_dictionary):
         disp = func_dictionary["dispersion"]
         # 3b) check dispersion type present and known
         if "type" not in disp:
-            raise ValidationError(
-                f"SCF: Dispersion type not specified in functional {name}")
+            raise ValidationError(f"SCF: Dispersion type not specified in functional {name}")
         # XDM dispersion is handled natively, not through qcengine dashcoeff
         if disp["type"] == "xdm":
             from ..empirical_disp.xdm_params import normalize_xdm_model
@@ -270,23 +269,25 @@ def check_consistency(func_dictionary):
                 raise ValidationError(f"SCF: XDM dispersion params for {name} must be a mapping.")
             unknown_params = sorted((key for key in params if key != "xdm_model"), key=str)
             if unknown_params:
-                raise ValidationError(
-                    f"SCF: Unsupported XDM dispersion params for {name}: {unknown_params}. "
-                    "Supported params are ['xdm_model'].")
+                raise ValidationError(f"SCF: Unsupported XDM dispersion params for {name}: {unknown_params}. "
+                                      "Supported params are ['xdm_model'].")
             normalize_xdm_model(params.get("xdm_model", "kb49"))
         elif disp["type"] not in _dispersion_aliases:
             raise ValidationError(
-                f"SCF: Dispersion type ({disp['type']}) should be among ({list(_dispersion_aliases.keys()) + ['xdm']})")
+                f"SCF: Dispersion type ({disp['type']}) should be among ({list(_dispersion_aliases.keys()) + ['xdm']})"
+            )
     # 3c) check dispersion params complete
         else:
             allowed_params = sorted(dashcoeff[_dispersion_aliases[disp["type"]]]["default"].keys())
             if "params" not in disp or sorted(disp["params"].keys()) != allowed_params:
                 raise ValidationError(
-                    f"SCF: Dispersion params for {name} ({list(disp['params'].keys())}) must include all ({allowed_params})")
+                    f"SCF: Dispersion params for {name} ({list(disp['params'].keys())}) must include all ({allowed_params})"
+                )
     # 3d) check formatting for dispersion citation
         if "citation" in disp:
             cit = disp["citation"]
-            if cit and not ((cit.startswith('    ') and cit.endswith('\n')) or re.match(r"^10.\d{4,9}/[-._;()/:A-Z0-9]+$", cit)):
+            if cit and not (
+                (cit.startswith('    ') and cit.endswith('\n')) or re.match(r"^10.\d{4,9}/[-._;()/:A-Z0-9]+$", cit)):
                 raise ValidationError(
                     f"SCF: All citations should have the form '    A. Student, B. Prof, J. Goodstuff Vol, Page, Year\n', not : {cit}"
                 )
@@ -313,8 +314,9 @@ def libxc_functionals_in_dictionary(func_dictionary):
 def unavailable_libxc_functionals(func_dictionary):
     """Of the LibXC functionals a definition needs, those absent from the linked
     LibXC build (e.g. renamed or newly added between LibXC versions)."""
-    return [name for name in libxc_functionals_in_dictionary(func_dictionary)
-            if not core.LibXCFunctional.available(name)]
+    return [
+        name for name in libxc_functionals_in_dictionary(func_dictionary) if not core.LibXCFunctional.available(name)
+    ]
 
 
 def functional_available(func_dictionary):
@@ -338,10 +340,9 @@ def build_superfunctional_from_dictionary(func_dictionary, npoints, deriv, restr
     # with an actionable message naming the missing method(s) instead.
     missing = unavailable_libxc_functionals(func_dictionary)
     if missing:
-        raise ValidationError(
-            f"SCF: functional '{func_dictionary.get('name', '?')}' requires LibXC "
-            f"functional(s) {missing} not present in the linked LibXC build; the "
-            f"method is unavailable in this LibXC version.")
+        raise ValidationError(f"SCF: functional '{func_dictionary.get('name', '?')}' requires LibXC "
+                              f"functional(s) {missing} not present in the linked LibXC build; the "
+                              f"method is unavailable in this LibXC version.")
 
     # Either process the "xc_functionals" special case
     if "xc_functionals" in func_dictionary:
@@ -475,7 +476,8 @@ def build_superfunctional_from_dictionary(func_dictionary, npoints, deriv, restr
         sup.set_citation(func_dictionary["citation"])
     if "description" in func_dictionary:
         if "doi" in func_dictionary:
-            sup.set_description(func_dictionary["description"].replace("\n", "") + "  (" + func_dictionary["doi"].lstrip() + ")")
+            sup.set_description(func_dictionary["description"].replace("\n", "") + "  (" +
+                                func_dictionary["doi"].lstrip() + ")")
         else:
             sup.set_description(func_dictionary["description"])
 

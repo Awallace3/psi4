@@ -3,7 +3,7 @@
 .. #
 .. # Psi4: an open-source quantum chemistry software package
 .. #
-.. # Copyright (c) 2007-2025 The Psi4 Developers.
+.. # Copyright (c) 2007-2026 The Psi4 Developers.
 .. #
 .. # The copyrights for code used from other parties are included in
 .. # the corresponding files.
@@ -126,8 +126,8 @@ Running XDM
 ~~~~~~~~~~~
 
 An XDM dispersion correction is requested by appending ``-XDM`` to a
-supported DFT functional name, analogous to how ``-D3`` or ``-D3BJ``
-appends a Grimme correction.  For example::
+supported functional name, analogous to how ``-D3`` or ``-D3BJ`` appends a
+Grimme correction.  For example::
 
    molecule h2o {
        O
@@ -285,28 +285,30 @@ the number of non-ghost atoms::
 PSI Variables
 ~~~~~~~~~~~~~
 
-After an XDM-corrected computation, the following PSI variables are set:
+After an XDM-corrected computation, the following PSI variables are set. All
+matrix variables have shape ``(N_real, N_real)`` as described under **Ghost
+Atoms**.
 
 .. table:: PSI variables set by the XDM module
 
-   +--------------------------------------+-----------------------------------------------------------+
-   | Variable                             | Description                                               |
-   +======================================+===========================================================+
-   | :psivar:`DISPERSION CORRECTION       | Total XDM dispersion energy [Eh]                          |
-   | ENERGY`                              |                                                           |
-   +--------------------------------------+-----------------------------------------------------------+
-   | ``XDM ENERGY``                       | Same as above (alias)                                     |
-   +--------------------------------------+-----------------------------------------------------------+
-   | ``XDM C6 COEFFICIENTS``              | Pairwise :math:`C_6` coefficients (Matrix, N x N)         |
-   +--------------------------------------+-----------------------------------------------------------+
-   | ``XDM C8 COEFFICIENTS``              | Pairwise :math:`C_8` coefficients (Matrix, N x N)         |
-   +--------------------------------------+-----------------------------------------------------------+
-   | ``XDM C10 COEFFICIENTS``             | Pairwise :math:`C_{10}` coefficients (Matrix, N x N)      |
-   +--------------------------------------+-----------------------------------------------------------+
-   | ``XDM RC COEFFICIENTS``              | Pairwise critical radii :math:`R_{c,ij}` (Matrix, N x N)  |
-   +--------------------------------------+-----------------------------------------------------------+
-   | ``XDM PAIRWISE ENERGY``              | Pairwise dispersion energies (Matrix, N x N)              |
-   +--------------------------------------+-----------------------------------------------------------+
+   +---------------------------------------+-----------------------------------------------------------+
+   | Variable                              | Description                                               |
+   +=======================================+===========================================================+
+   | :psivar:`DISPERSION CORRECTION        | Total XDM dispersion energy [Eh]                          |
+   | ENERGY`                               |                                                           |
+   +---------------------------------------+-----------------------------------------------------------+
+   | ``XDM ENERGY``                        | Same as above (alias)                                     |
+   +---------------------------------------+-----------------------------------------------------------+
+   | ``XDM C6 COEFFICIENTS``               | Pairwise :math:`C_6` coefficients                         |
+   +---------------------------------------+-----------------------------------------------------------+
+   | ``XDM C8 COEFFICIENTS``               | Pairwise :math:`C_8` coefficients                         |
+   +---------------------------------------+-----------------------------------------------------------+
+   | ``XDM C10 COEFFICIENTS``              | Pairwise :math:`C_{10}` coefficients                      |
+   +---------------------------------------+-----------------------------------------------------------+
+   | ``XDM RC COEFFICIENTS``               | Pairwise critical radii :math:`R_{c,ij}`                  |
+   +---------------------------------------+-----------------------------------------------------------+
+   | ``XDM PAIRWISE ENERGY``               | Pairwise dispersion energies                              |
+   +---------------------------------------+-----------------------------------------------------------+
 
 These can be accessed from the wavefunction object::
 
@@ -390,6 +392,6 @@ that grid noise does not contaminate the difference, for example::
        "scf__d_convergence": 1e-8,
    })
 
-XDM Hessians and analytic properties are not implemented and raise
+XDM Hessians and property calculations are not implemented and raise
 ``NotImplementedError``.  Counterpoise-corrected gradients are blocked
 for the same reason as counterpoise-corrected energies.

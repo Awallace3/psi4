@@ -187,7 +187,13 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
     current_findif_kwargs = {kw: kwargs.pop(kw) for kw in pertinent_findif_kwargs if kw in kwargs}
     # explicit: 'findif_mode'
 
-    pertinent_manybody_kwargs = ["bsse_type", "return_total_data", "max_nbody", "supersystem_ie_only", "embedding_charges", ] 
+    pertinent_manybody_kwargs = [
+        "bsse_type",
+        "return_total_data",
+        "max_nbody",
+        "supersystem_ie_only",
+        "embedding_charges",
+    ]
     current_manybody_kwargs = {kw: kwargs.pop(kw) for kw in pertinent_manybody_kwargs if kw in kwargs}
     # explicit: "levels"
 
@@ -225,7 +231,8 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
         for mc_level_idx, mtd in enumerate(plan.levels.values()):
             mtdkey = plan.input_data.specification.specification[mtd].model.method
             mtdin = mtdkey if mtd == "(auto)" else mtd
-            method, basis, cbsmeta = expand_cbs_methods(mtdin, basis, driver, cbsmeta=cbsmeta, **kwargs)  # NEW mtd->mtdkey
+            method, basis, cbsmeta = expand_cbs_methods(mtdin, basis, driver, cbsmeta=cbsmeta,
+                                                        **kwargs)  # NEW mtd->mtdkey
             packet.update({'method': method, 'basis': basis})
 
             # Tell the task builder which level to add a task list for
@@ -243,7 +250,8 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
 
                 if dermode[0] == dermode[1]:  # analytic
                     logger.info("PLANNING MB(CBS):  {mc_level_idx=} {packet=} {cbsmeta=} {dertype=} kw={kwargs}")
-                    plan.build_tasks(CompositeComputer, **packet, mc_level_idx=mc_level_idx, **cbsmeta, **kwargs)  # TODO dertype expected in kwargs?
+                    plan.build_tasks(CompositeComputer, **packet, mc_level_idx=mc_level_idx, **cbsmeta,
+                                     **kwargs)  # TODO dertype expected in kwargs?
 
                 else:
                     logger.info(
@@ -258,25 +266,24 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
                                      **cbsmeta,
                                      **current_findif_kwargs,
                                      **kwargs)
-                                     # TODO dertype expected in kwargs?
+                    # TODO dertype expected in kwargs?
 
             else:
                 dermode = _negotiate_derivative_type(driver, method, dertype, uses_xdm)
                 if dermode[0] == dermode[1]:  # analytic
                     logger.info(f"PLANNING MB:  {mc_level_idx=} {packet=} {kwargs=}")
                     plan.build_tasks(AtomicComputer, **packet, mc_level_idx=mc_level_idx, **kwargs)
-                                     # TODO dertype expected in kwargs?
+                    # TODO dertype expected in kwargs?
                 else:
                     logger.info(
-                        f"PLANNING MB(FD):  {mc_level_idx=} {packet=} findif_kw={current_findif_kwargs} kw={kwargs}"
-                    )
+                        f"PLANNING MB(FD):  {mc_level_idx=} {packet=} findif_kw={current_findif_kwargs} kw={kwargs}")
                     plan.build_tasks(FiniteDifferenceComputer,
                                      **packet,
                                      mc_level_idx=mc_level_idx,
                                      findif_mode=dermode,
                                      **current_findif_kwargs,
                                      **kwargs)
-                                     # TODO dertype expected in kwargs?
+                    # TODO dertype expected in kwargs?
 
         return plan
 
@@ -319,7 +326,4 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
             keywords.update(convcrit)
             logger.info(
                 f'PLANNING FD:  dermode={dermode} keywords={keywords} findif_kw={current_findif_kwargs} kw={kwargs}')
-            return FiniteDifferenceComputer(**packet,
-                                            findif_mode=dermode,
-                                            **current_findif_kwargs,
-                                            **kwargs)
+            return FiniteDifferenceComputer(**packet, findif_mode=dermode, **current_findif_kwargs, **kwargs)

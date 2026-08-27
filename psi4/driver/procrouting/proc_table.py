@@ -36,7 +36,6 @@ from .dft import build_superfunctional_from_dictionary, functional_available, fu
 
 # never import wrappers or aliases into this file
 
-
 # ADVICE upon adding to the `procedures` dict:
 # * (1) add entry to `procedures` below. See ADVICE in psi4/driver/procrouting/proc.py on run_ vs. select_
 # * (2) add entry to `method_governing_type_keywords` in psi4/driver/procrouting/proc_data.py
@@ -252,12 +251,18 @@ for key in functionals:
 
 # Will complete modelchem spec with basis='(auto)' for following methods
 integrated_basis_methods = [
-    'g2', 'gaussian-2',
-    'hf3c', 'hf-3c',
-    'pbeh3c', 'pbeh-3c',
-    'b973c', 'b97-3c',
-    'r2scan3c', 'r2scan-3c',
-    'wb97x3c', 'wb97x-3c',
+    'g2',
+    'gaussian-2',
+    'hf3c',
+    'hf-3c',
+    'pbeh3c',
+    'pbeh-3c',
+    'b973c',
+    'b97-3c',
+    'r2scan3c',
+    'r2scan-3c',
+    'wb97x3c',
+    'wb97x-3c',
     'sns-mp2',
 ]
 
@@ -307,7 +312,7 @@ for key in functionals:
         procedures['gradient'][key] = proc.select_scf_gradient
 
     # Hessians
-    if not ssuper.is_gga(): # N.B. this eliminates both GGA and m-GGA, as the latter contains GGA terms
+    if not ssuper.is_gga():  # N.B. this eliminates both GGA and m-GGA, as the latter contains GGA terms
         procedures['hessian'][key] = proc.run_scf_hessian
 
 # Integrate CFOUR with driver routines

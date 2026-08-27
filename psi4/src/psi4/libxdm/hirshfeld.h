@@ -74,9 +74,8 @@ class ProatomDensity {
 /// @param grid_z       Grid z-coordinates [npoints]
 /// @param weights      Output: Hirshfeld weights [natom][npoints]
 void compute_hirshfeld_weights(const ProatomDensity& proatom, int natom, const int* atomic_nums,
-                               const double atom_coords[][3], int npoints, const double* grid_x,
-                               const double* grid_y, const double* grid_z,
-                               std::vector<std::vector<double>>& weights);
+                               const double atom_coords[][3], int npoints, const double* grid_x, const double* grid_y,
+                               const double* grid_z, std::vector<std::vector<double>>& weights);
 
 }  // namespace xdm
 }  // namespace psi

@@ -6,7 +6,6 @@ from typing import Dict, List, Tuple
 
 from ...p4util.exceptions import ValidationError
 
-
 _XDM_BJ_PARAMS_ANGSTROM: Dict[str, Tuple[float, float]] = {
     # ---- B3LYP ----
     # noCP (KB49 RMSP fit)
@@ -130,7 +129,6 @@ _XDM_LOS_II_PARAMS_ANGSTROM: Dict[str, Tuple[float, float]] = {
     "pbe0/aug-cc-pvdz": (0.068267, 3.963874),
 }
 
-
 _XDM_MODEL_ALIASES: Dict[str, str] = {
     "": "kb49",
     "kb49": "kb49",
@@ -149,9 +147,7 @@ def normalize_xdm_model(model: str) -> str:
     normalized = str(model).strip().lower()
     if normalized not in _XDM_MODEL_ALIASES:
         supported = sorted(m for m in _XDM_MODEL_ALIASES if m)
-        raise ValidationError(
-            f"XDM: Unrecognized damping model ({model}). Supported models are ({supported})."
-        )
+        raise ValidationError(f"XDM: Unrecognized damping model ({model}). Supported models are ({supported}).")
     return _XDM_MODEL_ALIASES[normalized]
 
 

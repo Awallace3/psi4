@@ -50,7 +50,7 @@ using namespace psi;
 namespace py = pybind11;
 using namespace pybind11::literals;
 
-void export_functional(py::module &m) {
+void export_functional(py::module& m) {
     py::class_<Functional, std::shared_ptr<Functional>>(m, "Functional", "docstring")
         .def_static("build_base", &Functional::build_base, "alias"_a, "docstring")
         .def("compute_functional", &Functional::compute_functional, "docstring")
@@ -90,25 +90,25 @@ void export_functional(py::module &m) {
     py::class_<BlockOPoints, std::shared_ptr<BlockOPoints>>(m, "BlockOPoints", "docstring")
         .def(py::init<SharedVector, SharedVector, SharedVector, SharedVector, std::shared_ptr<BasisExtents>>())
         .def("x",
-             [](BlockOPoints &grid) {
+             [](BlockOPoints& grid) {
                  auto ret = std::make_shared<Vector>("X Grid points", grid.npoints());
                  C_DCOPY(grid.npoints(), grid.x(), 1, ret->pointer(), 1);
                  return ret;
              })
         .def("y",
-             [](BlockOPoints &grid) {
+             [](BlockOPoints& grid) {
                  auto ret = std::make_shared<Vector>("Y Grid points", grid.npoints());
                  C_DCOPY(grid.npoints(), grid.y(), 1, ret->pointer(), 1);
                  return ret;
              })
         .def("z",
-             [](BlockOPoints &grid) {
+             [](BlockOPoints& grid) {
                  auto ret = std::make_shared<Vector>("Z Grid points", grid.npoints());
                  C_DCOPY(grid.npoints(), grid.z(), 1, ret->pointer(), 1);
                  return ret;
              })
         .def("w",
-             [](BlockOPoints &grid) {
+             [](BlockOPoints& grid) {
                  auto ret = std::make_shared<Vector>("Grid Weights", grid.npoints());
                  C_DCOPY(grid.npoints(), grid.w(), 1, ret->pointer(), 1);
                  return ret;
@@ -124,11 +124,11 @@ void export_functional(py::module &m) {
 
         .def(py::init<>())
         .def_static("blank", &SuperFunctional::blank, "Initialize a blank SuperFunctional.")
-        .def_static("XC_build", &SuperFunctional::XC_build, "name"_a, "unpolarized"_a, "tweak"_a = py::dict{}, "Builds a SuperFunctional from a XC string.")
+        .def_static("XC_build", &SuperFunctional::XC_build, "name"_a, "unpolarized"_a, "tweak"_a = py::dict{},
+                    "Builds a SuperFunctional from a XC string.")
         .def("allocate", &SuperFunctional::allocate,
              "Allocates the vectors, should be called after ansatz or npoint changes.")
-        .def("compute_functional", &SuperFunctional::compute_functional,
-             "vals"_a, "npoints"_a = -1, "singlet"_a = true,
+        .def("compute_functional", &SuperFunctional::compute_functional, "vals"_a, "npoints"_a = -1, "singlet"_a = true,
              "Computes the SuperFunctional.")
         .def("x_functional", &SuperFunctional::x_functional, "Returns the desired X Functional.")
         .def("c_functional", &SuperFunctional::c_functional, "Returns the desired C Functional.")
@@ -187,14 +187,16 @@ void export_functional(py::module &m) {
         .def("set_grac_alpha", &SuperFunctional::set_grac_alpha, "Sets the GRAC alpha parameter.")
         .def("set_grac_beta", &SuperFunctional::set_grac_beta, "Sets the GRAC beta parameter.")
         .def("set_density_tolerance", &SuperFunctional::set_density_tolerance, "Sets the density threshold for LibXC.")
-        .def("print_density_threshold", &SuperFunctional::py_print_density_threshold, "Queries the LibXCFunctionals for their density threshold values")
+        .def("print_density_threshold", &SuperFunctional::py_print_density_threshold,
+             "Queries the LibXCFunctionals for their density threshold values")
         .def("needs_xc", &SuperFunctional::needs_xc, "Does this functional need XC quantities.")
         .def("needs_vv10", &SuperFunctional::needs_vv10, "Does this functional need VV10 dispersion.")
         .def("needs_grac", &SuperFunctional::needs_grac, "Does this functional need GRAC.")
         .def("print_out", &SuperFunctional::py_print, "Prints out functional details.")
         .def("print_detail", &SuperFunctional::py_print_detail, "Prints all SuperFunctional information.")
         .def("xclib_description", &SuperFunctional::xclib_description, "LibXC version and citation string.")
-        .def("set_xclib_description", &SuperFunctional::set_xclib_description, "Sets the LibXC version and citation string");
+        .def("set_xclib_description", &SuperFunctional::set_xclib_description,
+             "Sets the LibXC version and citation string");
 
     typedef void (LibXCFunctional::*tweak_set1)(std::vector<double>, bool);
     typedef void (LibXCFunctional::*tweak_set2)(std::map<std::string, double>, bool);
@@ -203,9 +205,10 @@ void export_functional(py::module &m) {
         .def(py::init<std::string, bool>())
         .def("get_mix_data", &LibXCFunctional::get_mix_data, "docstring")
         .def("set_tweak", tweak_set1(&LibXCFunctional::set_tweak), "tweaks"_a, "quiet"_a = false,
-            "Set all tweaks on a LibXC functional through a list. Deprecated in v1.4")
+             "Set all tweaks on a LibXC functional through a list. Deprecated in v1.4")
         .def("set_tweak", tweak_set2(&LibXCFunctional::set_tweak), "tweaks"_a, "quiet"_a = false,
-            "Set all tweaks on a LibXC functional through a dictionary of names (usually underscore prepended) and values. New in v1.4")
+             "Set all tweaks on a LibXC functional through a dictionary of names (usually underscore prepended) and "
+             "values. New in v1.4")
         .def("set_omega", &LibXCFunctional::set_omega, "docstring")
         .def("set_density_cutoff", &LibXCFunctional::set_density_cutoff, "docstring")
         .def("density_cutoff", &LibXCFunctional::density_cutoff, "docstring")
@@ -248,17 +251,17 @@ void export_functional(py::module &m) {
 
     py::class_<DFTGrid, std::shared_ptr<DFTGrid>, MolecularGrid>(m, "DFTGrid", "docstring")
         .def_static("build",
-                    [](std::shared_ptr<Molecule> &mol, std::shared_ptr<BasisSet> &basis) {
+                    [](std::shared_ptr<Molecule>& mol, std::shared_ptr<BasisSet>& basis) {
                         return std::make_shared<DFTGrid>(mol, basis, Process::environment.options);
                     })
-        .def_static("build", [](std::shared_ptr<Molecule> &mol, std::shared_ptr<BasisSet> &basis,
+        .def_static("build", [](std::shared_ptr<Molecule>& mol, std::shared_ptr<BasisSet>& basis,
                                 std::map<std::string, int> int_opts, std::map<std::string, std::string> string_opts) {
             return std::make_shared<DFTGrid>(mol, basis, int_opts, string_opts, Process::environment.options);
         });
 
     py::class_<VBase, std::shared_ptr<VBase>>(m, "VBase", "docstring")
         .def_static("build",
-                    [](std::shared_ptr<BasisSet> &basis, std::shared_ptr<SuperFunctional> &func, std::string type) {
+                    [](std::shared_ptr<BasisSet>& basis, std::shared_ptr<SuperFunctional>& func, std::string type) {
                         return VBase::build_V(basis, func, Process::environment.options, type);
                     })
         .def("initialize", &VBase::initialize, "doctsring")
@@ -318,8 +321,8 @@ void export_functional(py::module &m) {
         .def("a2", &Dispersion::get_a2, "docstring")
         .def("print_out", &Dispersion::py_print, "docstring");
 
-    py::class_<xdm::XDMDispersion, std::shared_ptr<xdm::XDMDispersion>>(m, "XDMDispersion",
-        "XDM (exchange-hole dipole moment) dispersion correction with Becke-Johnson damping.")
+    py::class_<xdm::XDMDispersion, std::shared_ptr<xdm::XDMDispersion>>(
+        m, "XDMDispersion", "XDM (exchange-hole dipole moment) dispersion correction with Becke-Johnson damping.")
         .def(py::init<double, double, const std::string&>(), "a1"_a, "a2_bohr"_a, "functional_name"_a,
              "Construct with BJ damping parameters a1 and a2 (in bohr) and functional name.")
         .def_static("build", py::overload_cast<const std::string&, double, double>(&xdm::XDMDispersion::build),
@@ -350,23 +353,24 @@ void export_functional(py::module &m) {
         .def("R_A", &sapt::FDDS_Dispersion::R_A, "Obtains (R^t)^-1 for monomer A.")
         .def("R_B", &sapt::FDDS_Dispersion::R_B, "Obtains (R^t)^-1 for monomer B.");
 
-     py::class_<NumIntHelper, std::shared_ptr<NumIntHelper>>(m, "NumIntHelper",
-                                                             "Computes numerical integrals using a DFT grid.")
-         .def(py::init<std::shared_ptr<DFTGrid>>())
-         .def("numint_grid", &NumIntHelper::numint_grid)
-         .def("density_integral", &NumIntHelper::density_integral,
-              "Compute an integral \\int \\rho(r) f(r) where f is a vector-valued function. f is represented for each "
-              "block of points of the integration grid as a matrix (n_data, n_points). Return has shape (n_data)",
-              "grid_data"_a, "D"_a)
-         .def("dd_density_integral", &NumIntHelper::dd_density_integral,
-              "Compute an integral \\int \\rho(r) f(r) where f is a vector-valued function. f is represented for each "
-              "block of points of the integration grid as a matrix (n_data, n_points). Return has shape (n_atoms, "
-              "n_data)", "grid_data"_a, "D"_a)
-         .def("potential_integral", &NumIntHelper::potential_integral,
-              "Compute an integral \\int \\chi_\\mu(r) \\chi_\\nu(r) f(r) where f is a scalar function represented for "
-              "each block of points of the integration grid as a vector of n_points.")
-         .def("potential_gradient", &NumIntHelper::potential_gradient,
-              "Compute a Hellmann-Feynman gradient contribution 2 D \\int \\nabla \\chi_\\mu(r) \\chi_\\nu(r) f(r) "
-              "where f is a scalar function represented for each block of points of the integration grid as a vector "
-              "of n_points.");
+    py::class_<NumIntHelper, std::shared_ptr<NumIntHelper>>(m, "NumIntHelper",
+                                                            "Computes numerical integrals using a DFT grid.")
+        .def(py::init<std::shared_ptr<DFTGrid>>())
+        .def("numint_grid", &NumIntHelper::numint_grid)
+        .def("density_integral", &NumIntHelper::density_integral,
+             "Compute an integral \\int \\rho(r) f(r) where f is a vector-valued function. f is represented for each "
+             "block of points of the integration grid as a matrix (n_data, n_points). Return has shape (n_data)",
+             "grid_data"_a, "D"_a)
+        .def("dd_density_integral", &NumIntHelper::dd_density_integral,
+             "Compute an integral \\int \\rho(r) f(r) where f is a vector-valued function. f is represented for each "
+             "block of points of the integration grid as a matrix (n_data, n_points). Return has shape (n_atoms, "
+             "n_data)",
+             "grid_data"_a, "D"_a)
+        .def("potential_integral", &NumIntHelper::potential_integral,
+             "Compute an integral \\int \\chi_\\mu(r) \\chi_\\nu(r) f(r) where f is a scalar function represented for "
+             "each block of points of the integration grid as a vector of n_points.")
+        .def("potential_gradient", &NumIntHelper::potential_gradient,
+             "Compute a Hellmann-Feynman gradient contribution 2 D \\int \\nabla \\chi_\\mu(r) \\chi_\\nu(r) f(r) "
+             "where f is a scalar function represented for each block of points of the integration grid as a vector "
+             "of n_points.");
 }

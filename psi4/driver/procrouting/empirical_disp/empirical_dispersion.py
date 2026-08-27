@@ -52,16 +52,20 @@ _engine_can_do = collections.OrderedDict([
 ]) # yapf: disable
 _install_dftd3python = " Allow the default dispersion engine to run by removing 'engine=' and installing `conda install dftd3-python -c conda-forge`."
 _obsolete_engines = {
-    ("dftd3", "d2"): ("engine='dftd3'", "engine='libdisp'", "1.10", " Allow the default (internal) dispersion engine to run by removing 'engine='."),
+    ("dftd3", "d2"): ("engine='dftd3'", "engine='libdisp'", "1.10",
+                      " Allow the default (internal) dispersion engine to run by removing 'engine='."),
     ("dftd3", "d3zero2b"): ("engine='dftd3'", "engine='s-dftd3'", "1.10", _install_dftd3python),
     ("dftd3", "d3bj2b"): ("engine='dftd3'", "engine='s-dftd3'", "1.10", _install_dftd3python),
     ("dftd3", "d3mzero2b"): ("engine='dftd3'", "engine='s-dftd3'", "1.10", _install_dftd3python),
     ("dftd3", "d3mbj2b"): ("engine='dftd3'", "engine='s-dftd3'", "1.10", _install_dftd3python),
-    ("gcp", "3c"): ("engine='gcp'", "engine='mctc-gcp'", "1.10", " Allow the default dispersion engine to run by removing 'engine=' and installing `conda install gcp-correction -c conda-forge`."),
+    ("gcp", "3c"):
+    ("engine='gcp'", "engine='mctc-gcp'", "1.10",
+     " Allow the default dispersion engine to run by removing 'engine=' and installing `conda install gcp-correction -c conda-forge`."
+     ),
 }
 
 
-def _capable_engines_for_disp()-> Dict[str, List[str]]:
+def _capable_engines_for_disp() -> Dict[str, List[str]]:
     """Invert _engine_can_do dictionary and check program detection.
 
     Returns a dictionary with keys all dispersion levels and values a list of all
@@ -176,7 +180,15 @@ class EmpiricalDispersion():
         Whether to request atomic pairwise analysis.
 
     """
-    def __init__(self, *, name_hint: str = None, level_hint: str = None, param_tweaks: Union[Dict, List] = None, engine: str = None, gcp_engine: str = None, save_pairwise_disp: bool = False):
+
+    def __init__(self,
+                 *,
+                 name_hint: str = None,
+                 level_hint: str = None,
+                 param_tweaks: Union[Dict, List] = None,
+                 engine: str = None,
+                 gcp_engine: str = None,
+                 save_pairwise_disp: bool = False):
         from ..dft import dashcoeff_supplement
         self.dashcoeff_supplement = dashcoeff_supplement
         self.save_pairwise_disp = save_pairwise_disp
@@ -281,12 +293,14 @@ class EmpiricalDispersion():
                     'molecule': molecule.to_schema(dtype=3),
                     'provenance': p4util.provenance_stamp(__name__),
                 })
-            jobrec = qcng.compute(
-                resi,
-                self.engine,
-                raise_error=True,
-                return_version=2,
-                task_config={"scratch_directory": core.IOManager.shared_object().get_default_path(), "ncores": core.get_num_threads()})
+            jobrec = qcng.compute(resi,
+                                  self.engine,
+                                  raise_error=True,
+                                  return_version=2,
+                                  task_config={
+                                      "scratch_directory": core.IOManager.shared_object().get_default_path(),
+                                      "ncores": core.get_num_threads()
+                                  })
 
             dashd_part = float(jobrec.extras['qcvars']['DISPERSION CORRECTION ENERGY'])
             if wfn is not None:
@@ -300,12 +314,14 @@ class EmpiricalDispersion():
                                      jobrec.extras['qcvars']["2-BODY PAIRWISE DISPERSION CORRECTION ANALYSIS"])
 
             if self.fctldash in ['hf3c', 'pbeh3c', 'r2scan3c', 'b973c']:
-                jobrec = qcng.compute(
-                    resi,
-                    self.gcp_engine,
-                    raise_error=True,
-                    return_version=2,
-                    task_config={"scratch_directory": core.IOManager.shared_object().get_default_path(), "ncores": core.get_num_threads()})
+                jobrec = qcng.compute(resi,
+                                      self.gcp_engine,
+                                      raise_error=True,
+                                      return_version=2,
+                                      task_config={
+                                          "scratch_directory": core.IOManager.shared_object().get_default_path(),
+                                          "ncores": core.get_num_threads()
+                                      })
                 gcp_part = jobrec.return_result
                 dashd_part += gcp_part
 
@@ -318,9 +334,7 @@ class EmpiricalDispersion():
                 core.set_variable(f"{self.fctldash} DISPERSION CORRECTION ENERGY", ene)
             return ene
 
-    def compute_gradient(self,
-                         molecule: core.Molecule,
-                         wfn: core.Wavefunction = None) -> core.Matrix:
+    def compute_gradient(self, molecule: core.Molecule, wfn: core.Wavefunction = None) -> core.Matrix:
         """Compute dispersion gradient based on engine, dispersion level, and parameters in `self`.
 
         Parameters
@@ -356,12 +370,14 @@ class EmpiricalDispersion():
                     'molecule': molecule.to_schema(dtype=3),
                     'provenance': p4util.provenance_stamp(__name__),
                 })
-            jobrec = qcng.compute(
-                resi,
-                self.engine,
-                raise_error=True,
-                return_version=2,
-                task_config={"scratch_directory": core.IOManager.shared_object().get_default_path(), "ncores": core.get_num_threads()})
+            jobrec = qcng.compute(resi,
+                                  self.engine,
+                                  raise_error=True,
+                                  return_version=2,
+                                  task_config={
+                                      "scratch_directory": core.IOManager.shared_object().get_default_path(),
+                                      "ncores": core.get_num_threads()
+                                  })
 
             dashd_part = core.Matrix.from_array(jobrec.extras['qcvars']['DISPERSION CORRECTION GRADIENT'])
             if wfn is not None:
@@ -370,12 +386,14 @@ class EmpiricalDispersion():
                         wfn.set_variable(k, float(qca) if isinstance(qca, str) else qca)
 
             if self.fctldash in ['hf3c', 'pbeh3c', 'r2scan3c', 'b973c']:
-                jobrec = qcng.compute(
-                    resi,
-                    self.gcp_engine,
-                    raise_error=True,
-                    return_version=2,
-                    task_config={"scratch_directory": core.IOManager.shared_object().get_default_path(), "ncores": core.get_num_threads()})
+                jobrec = qcng.compute(resi,
+                                      self.gcp_engine,
+                                      raise_error=True,
+                                      return_version=2,
+                                      task_config={
+                                          "scratch_directory": core.IOManager.shared_object().get_default_path(),
+                                          "ncores": core.get_num_threads()
+                                      })
                 gcp_part = core.Matrix.from_array(jobrec.return_result)
                 dashd_part.add(gcp_part)
 
@@ -383,9 +401,7 @@ class EmpiricalDispersion():
         else:
             return self.disp.compute_gradient(molecule)
 
-    def compute_hessian(self,
-                        molecule: core.Molecule,
-                        wfn: core.Wavefunction = None) -> core.Matrix:
+    def compute_hessian(self, molecule: core.Molecule, wfn: core.Wavefunction = None) -> core.Matrix:
         """Compute dispersion Hessian based on engine, dispersion level, and parameters in `self`.
         Uses finite difference, as no dispersion engine has analytic second derivatives.
 
@@ -462,8 +478,14 @@ class XDMDispersionFunctor():
         XDM damping-parameter model label (``kb49`` or ``los-ii``).
 
     """
-    def __init__(self, functional_name: str, basis_name: Optional[str] = None, a1: Optional[float] = None, a2_ang: Optional[float] = None,
-                 model: str = "kb49", expected_x_omega: Optional[float] = None,
+
+    def __init__(self,
+                 functional_name: str,
+                 basis_name: Optional[str] = None,
+                 a1: Optional[float] = None,
+                 a2_ang: Optional[float] = None,
+                 model: str = "kb49",
+                 expected_x_omega: Optional[float] = None,
                  expected_x_beta: Optional[float] = None):
         self._xdm_model = normalize_xdm_model(model)
         self.engine = "xdm"
@@ -494,11 +516,9 @@ class XDMDispersionFunctor():
             hint = (f" Bases fitted for {functional_name.lower()} with model {self._xdm_model}: {fitted_bases}."
                     if fitted_bases else
                     f" No basis is fitted for {functional_name.lower()} with model {self._xdm_model}.")
-            raise ValidationError(
-                "XDMDispersion: No fitted BJ parameters for "
-                f"{lookup_key} with model {self._xdm_model}. "
-                "Provide [a1, a2] through XDM_DISPERSION_PARAMETERS." + hint
-            )
+            raise ValidationError("XDMDispersion: No fitted BJ parameters for "
+                                  f"{lookup_key} with model {self._xdm_model}. "
+                                  "Provide [a1, a2] through XDM_DISPERSION_PARAMETERS." + hint)
 
         self.xdm = core.XDMDispersion.build(functional_name, fitted_a1, fitted_a2_ang)
 
@@ -538,13 +558,9 @@ class XDMDispersionFunctor():
         functional = wfn.functional()
         if functional is None:
             raise ValidationError("XDM dispersion requires a DFT wavefunction with functional metadata.")
-        range_mismatch = (
-            self._expected_x_omega is not None
-            and abs(functional.x_omega() - self._expected_x_omega) >= 1.0e-10
-        ) or (
-            self._expected_x_beta is not None
-            and abs(functional.x_beta() - self._expected_x_beta) >= 1.0e-10
-        )
+        range_mismatch = (self._expected_x_omega is not None and abs(functional.x_omega() - self._expected_x_omega)
+                          >= 1.0e-10) or (self._expected_x_beta is not None
+                                          and abs(functional.x_beta() - self._expected_x_beta) >= 1.0e-10)
         if range_mismatch or (self._expected_x_omega is None and functional.is_x_lrc()):
             raise ValidationError(
                 "XDM does not support modified range-separation parameters or unknown range-separated functionals.")
@@ -554,7 +570,10 @@ class XDMDispersionFunctor():
             core.set_variable(f"{self.fctldash.upper()} DISPERSION CORRECTION ENERGY", ene)
 
         # Copy XDM coefficient arrays from process environment to wavefunction
-        for var_name in ['XDM C6 COEFFICIENTS', 'XDM C8 COEFFICIENTS', 'XDM C10 COEFFICIENTS', 'XDM RC COEFFICIENTS', 'XDM PAIRWISE ENERGY']:
+        for var_name in [
+                'XDM C6 COEFFICIENTS', 'XDM C8 COEFFICIENTS', 'XDM C10 COEFFICIENTS', 'XDM RC COEFFICIENTS',
+                'XDM PAIRWISE ENERGY'
+        ]:
             if core.has_array_variable(var_name):
                 wfn.set_array_variable(var_name, core.array_variable(var_name))
 
@@ -569,6 +588,5 @@ class XDMDispersionFunctor():
         the derivative of the energy. XDM gradients are obtained instead by finite
         differences of the full XDM energy via psi4.gradient().
         """
-        raise NotImplementedError(
-            "Analytic XDM gradients are not implemented. XDM gradients are evaluated by "
-            "finite differences of the XDM-corrected energy; call psi4.gradient() instead.")
+        raise NotImplementedError("Analytic XDM gradients are not implemented. XDM gradients are evaluated by "
+                                  "finite differences of the XDM-corrected energy; call psi4.gradient() instead.")

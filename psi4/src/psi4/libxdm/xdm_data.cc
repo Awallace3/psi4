@@ -276,8 +276,8 @@ double fitted_hf_fraction(const std::string& functional) {
 }
 
 bool is_range_separated(const std::string& functional) {
-    return functional == "camb3lyp" || functional == "cam-b3lyp" || functional == "hse06" ||
-           functional == "lcwpbe" || functional == "lc-wpbe" || functional == "lrc-wpbe";
+    return functional == "camb3lyp" || functional == "cam-b3lyp" || functional == "hse06" || functional == "lcwpbe" ||
+           functional == "lc-wpbe" || functional == "lrc-wpbe";
 }
 
 }  // namespace
@@ -318,12 +318,13 @@ double get_free_volume(int Z, const std::string& functional, double hf_fraction)
 
     // For Z > 10 or fallback: use LSDA/UGBS
     if (Z > 10) {
-        bool modified_known_exchange = nominal_hf_fraction >= 0.0 &&
-                                       std::abs(hf_fraction - nominal_hf_fraction) >= 1.0e-10;
+        bool modified_known_exchange =
+            nominal_hf_fraction >= 0.0 && std::abs(hf_fraction - nominal_hf_fraction) >= 1.0e-10;
         bool unknown_nonzero_exchange = nominal_hf_fraction < 0.0 && std::abs(hf_fraction) >= 1.0e-10;
         if (hf_fraction >= 0.0 && (modified_known_exchange || unknown_nonzero_exchange)) {
-            throw std::invalid_argument("XDM: modified HF exchange is unsupported for Z > 10 because no "
-                                        "fraction-dependent free-atom volumes are available.");
+            throw std::invalid_argument(
+                "XDM: modified HF exchange is unsupported for Z > 10 because no "
+                "fraction-dependent free-atom volumes are available.");
         }
         return frevol0[Z];
     }

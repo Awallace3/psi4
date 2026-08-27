@@ -141,8 +141,9 @@ std::vector<AtomicData> XDMDispersion::integrate_properties(std::shared_ptr<Wave
         const double effective_z = mol->Z(a);
         const int true_z = mol->true_atomic_number(a);
         if (effective_z > 0.0 && std::abs(effective_z - true_z) > 1.0e-8) {
-            throw PSIEXCEPTION("XDM: effective-core potentials are not supported because all-electron densities are required (atom " +
-                               std::to_string(a + 1) + ", " + mol->symbol(a) + ").");
+            throw PSIEXCEPTION(
+                "XDM: effective-core potentials are not supported because all-electron densities are required (atom " +
+                std::to_string(a + 1) + ", " + mol->symbol(a) + ").");
         }
         atomic_nums[a] = effective_z > 0.0 ? true_z : 0;
         if (atomic_nums[a] > FTOT_NELEM) {
@@ -456,8 +457,8 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
     double** rcp = rc_mat->pointer();
 
     outfile->Printf("  ==> XDM Pairwise Coefficients <==\n\n");
-    outfile->Printf("    %4s %4s %6s %6s %12s %16s %16s %16s %12s %12s %12s\n", "i", "j", "mol_i", "mol_j", "dij",
-                    "C6", "C8", "C10", "Rc", "Rvdw", "E_disp");
+    outfile->Printf("    %4s %4s %6s %6s %12s %16s %16s %16s %12s %12s %12s\n", "i", "j", "mol_i", "mol_j", "dij", "C6",
+                    "C8", "C10", "Rc", "Rvdw", "E_disp");
 
     for (int ii = 0; ii < nreal; ii++) {
         int i = real_atoms[ii];
