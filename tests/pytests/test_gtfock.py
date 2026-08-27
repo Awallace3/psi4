@@ -711,7 +711,7 @@ def _hpc_record(rank, **overrides):
         "ranks": 2, "rank": rank, "threads_per_rank": 12, "total_cores": 24,
         "iterations": 11, "jk_calls": 11,
         "scf_energy": -757.5, "scf_wall_seconds": 100.0 + rank,
-        "jk_wall_seconds": 50.0 + rank, "peak_rss_mb": 1000.0,
+        "jk_wall_seconds": 50.0 + rank, "peak_rss_mb": 900.0 + 200.0 * rank,
         "host": "atl1-1-01-002-8-0", "slurm_job_id": "12400108",
         "slurm_nodelist": "atl1-1-01-002-8-0",
     }
@@ -728,7 +728,12 @@ def _write_hpc_records(directory, records):
 
 
 def test_hpc_collector_reduces_one_run(tmp_path):
-    """One run reduces to one row: wall clock is the slowest rank, memory the node."""
+    """One run reduces to one row: wall clock is the slowest rank, memory the node.
+
+    The two memory columns are the two the documentation publishes as
+    ``RSS/rank`` and ``RSS node``, so both the worst rank and the sum over ranks
+    are pinned here rather than only one of them.
+    """
     import gtfock_hpc_collect
 
     run = _write_hpc_records(tmp_path / "peptide_12400108",
@@ -739,6 +744,7 @@ def test_hpc_collector_reduces_one_run(tmp_path):
     assert len(points) == 1
     assert points[0]["scf_wall_s"] == 101.0
     assert points[0]["jk_wall_s"] == 51.0
+    assert points[0]["peak_rss_max_mb"] == 1100.0
     assert points[0]["peak_rss_sum_mb"] == 2000.0
     assert points[0]["slurm_job_id"] == "12400108"
 
@@ -793,5 +799,26 @@ def test_hpc_collector_reduces_one_multinode_run(tmp_path):
     assert len(points) == 1
     assert points[0]["scf_wall_s"] == 101.0
     assert points[0]["jk_wall_s"] == 51.0
+    assert points[0]["peak_rss_max_mb"] == 1100.0
     assert points[0]["peak_rss_sum_mb"] == 2000.0
     assert points[0]["slurm_nodelist"] == "atl1-1-01-002-[8-9]-0"
+
+
+def test_hpc_collector_refuses_two_runs_without_a_job_id(tmp_path):
+    """Off SLURM there is no job id, so the result directory identifies the run.
+
+    Two interactive attempts that each died after writing a different rank's file
+    would otherwise union to a complete-looking {0, 1} under one identity, and
+    the row's maximum wall clock and summed memory would span both attempts.
+    """
+    import gtfock_hpc_collect
+
+    first = _write_hpc_records(
+        tmp_path / "attempt_one",
+        [_hpc_record(1, slurm_job_id=None, slurm_nodelist=None)])
+    second = _write_hpc_records(
+        tmp_path / "attempt_two",
+        [_hpc_record(0, slurm_job_id=None, slurm_nodelist=None)])
+
+    with pytest.raises(SystemExit, match="more than one run"):
+        gtfock_hpc_collect.load_points([first, second])

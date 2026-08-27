@@ -202,18 +202,49 @@ def peak_rss_mb() -> float:
     return float("nan")
 
 
-def jk_build_seconds():
-    """Wall clock inside ``JK::compute()``, and how many times it ran.
+# The timer libfock wraps around ``compute_JK()`` for every JK subclass, and the
+# parent it sits under in the production SCF. ``get_timer_records`` is keyed by
+# full path and its ``timer_name`` is the leaf only, so the leaf name alone names
+# one record per distinct parent rather than one record.
+_JK_TIMER = "JK: JK"
+_JK_TIMER_PARENT = "HF: Form G"
 
-    ``JK: JK`` is the timer libfock wraps around ``compute_JK()`` for every JK
-    subclass, so the same number means the same thing in every arm: integrals
-    plus whatever communication that arm needs, and nothing of the
-    diagonalization, DIIS or guess around it.
+
+def jk_build_seconds(arm):
+    """The production SCF's J/K timer: its full path, wall clock, and call count.
+
+    ``JK: JK`` means the same thing in every arm -- integrals plus whatever
+    communication that arm needs, and nothing of the diagonalization, DIIS or
+    guess around it -- which is what makes the arms comparable.
+
+    Which record it is matters as much as the number. SAD builds its own JK for
+    the atomic subproblems rather than routing through SCF_TYPE, so a guess-side
+    ``JK: JK`` can exist at another path; the SCF's is the one under
+    ``HF: Form G``. Selecting by leaf name alone would be selecting by traversal
+    order. An ambiguous or absent timer is fatal here, at the point of
+    measurement, rather than a plausible-looking wrong number in the table or a
+    ``null`` that fails in the reducer hours later.
     """
-    for record in psi4.core.get_timer_records(False).values():
-        if record.get("timer_name") == "JK: JK":
-            return record["wall_time"], record["n_calls"]
-    return None, 0
+    matches = {key: record
+               for key, record in psi4.core.get_timer_records(False).items()
+               if key == _JK_TIMER or key.endswith(f";{_JK_TIMER}")}
+    under_scf = {key: record for key, record in matches.items()
+                 if key.startswith(f"{_JK_TIMER_PARENT};")}
+    chosen = under_scf or matches
+    if not chosen:
+        raise RuntimeError(
+            f"the {arm} arm finished with no '{_JK_TIMER}' timer record, so "
+            "there is no J/K wall clock to report for this point. The timer "
+            "libfock wraps around compute_JK() is either unavailable in this "
+            "build or no longer called that.")
+    if len(chosen) > 1:
+        raise RuntimeError(
+            f"the {arm} arm has more than one '{_JK_TIMER}' timer record "
+            f"({', '.join(sorted(chosen))}), so which one is the production "
+            f"SCF's J/K build is ambiguous. Expected exactly one under "
+            f"'{_JK_TIMER_PARENT}'.")
+    key, record = next(iter(chosen.items()))
+    return key, record["wall_time"], record["n_calls"]
 
 
 def main(argv=None) -> int:
@@ -278,7 +309,7 @@ def main(argv=None) -> int:
     start = time.perf_counter()
     energy, wfn = psi4.energy(args.method, return_wfn=True)
     elapsed = time.perf_counter() - start
-    jk_wall, jk_calls = jk_build_seconds()
+    jk_timer_key, jk_wall, jk_calls = jk_build_seconds(args.arm)
 
     # The report describes the basis the SCF actually used, so it is read back
     # off the wavefunction and held to the same guards -- the pre-flight check
@@ -303,6 +334,7 @@ def main(argv=None) -> int:
         "scf_wall_seconds": elapsed,
         "jk_wall_seconds": jk_wall,
         "jk_calls": jk_calls,
+        "jk_timer_key": jk_timer_key,
         "peak_rss_mb": peak_rss_mb(),
         "jk_name": wfn.jk().name(),
         "df_basis_scf": psi4.core.get_global_option("DF_BASIS_SCF") or "(auto)",

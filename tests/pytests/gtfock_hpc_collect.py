@@ -37,6 +37,37 @@ _COLUMNS = [
 ]
 
 
+# Where a record was loaded from, stamped on it by load_points. Not a field the
+# benchmark writes, and not a CSV column: it is only how a run off SLURM, where
+# there is no job id, is told apart from another one.
+_SOURCE_DIRECTORY = "_source_directory"
+
+
+def _run_identity(record):
+    """What distinguishes one launch from another, for a record of one rank.
+
+    Under SLURM it is the job id together with the nodelist, not the per-rank
+    `host`: the nodelist is the same string on every rank of a launch while
+    `host` is not, so a single job spread over several nodes stays one point.
+
+    Off SLURM there is no job id at all -- both fields come back None -- and
+    every interactive run would otherwise share the one identity (None, None).
+    The result directory identifies the run instead, since one launch writes its
+    per-rank files under one directory even when its ranks span hosts.
+    """
+    job = record.get("slurm_job_id")
+    if job:
+        return ("job", str(job), str(record.get("slurm_nodelist") or "(no nodelist)"))
+    return ("directory", record[_SOURCE_DIRECTORY], "")
+
+
+def _describe_run(identity):
+    kind, first, second = identity
+    if kind == "job":
+        return f"job {first} on {second}"
+    return f"the run under {first} (no SLURM_JOB_ID)"
+
+
 def _refuse_mixed_runs(system, arm, ranks, records):
     """Refuse to reduce a point whose records did not come from one single run.
 
@@ -47,17 +78,10 @@ def _refuse_mixed_runs(system, arm, ranks, records):
     would silently span two runs on two pieces of hardware. That is exactly the
     drift the generated table exists to prevent, so it is fatal rather than a
     warning.
-
-    A run is identified by its SLURM job id and nodelist rather than by the
-    per-rank host, because the nodelist is the same string on every rank of a
-    launch while `host` is not: a single job spread over several nodes is one
-    point, and keying on `host` would refuse it.
     """
-    runs = {(r.get("slurm_job_id"), r.get("slurm_nodelist")) for r in records}
+    runs = {_run_identity(r) for r in records}
     if len(runs) > 1:
-        listed = ", ".join(
-            f"job {job or '(no SLURM_JOB_ID)'} on {nodes}"
-            for job, nodes in sorted(runs, key=lambda run: (str(run[0]), str(run[1]))))
+        listed = ", ".join(_describe_run(run) for run in sorted(runs))
         raise SystemExit(
             f"{system}/{arm}/n{ranks} collapses records from more than one run "
             f"({listed}); reducing them together would take a maximum over "
@@ -80,6 +104,7 @@ def load_points(directories):
         for path in sorted(glob.glob(pattern)):
             with open(path) as handle:
                 record = json.load(handle)
+            record[_SOURCE_DIRECTORY] = directory
             key = (record["system"], record["arm"], record["ranks"])
             by_key.setdefault(key, []).append(record)
     if not by_key:
@@ -111,6 +136,9 @@ def load_points(directories):
             "total_cores": head["total_cores"],
             "iterations": iterations[0] if len(iterations) == 1 else str(iterations),
             "jk_calls": head["jk_calls"],
+            # Records written before the benchmark recorded which timer it read
+            # carry no key; they still reduce, they just cannot say.
+            "jk_timer_key": head.get("jk_timer_key", ""),
             "scf_wall_s": max(r["scf_wall_seconds"] for r in records),
             "jk_wall_s": max(r["jk_wall_seconds"] for r in records),
             "peak_rss_max_mb": max(r["peak_rss_mb"] for r in records),
