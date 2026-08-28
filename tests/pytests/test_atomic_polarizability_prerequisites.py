@@ -126,10 +126,10 @@ def test_actual_grac_context_is_verified_and_frozen(grac_states):
     ]
     differences = [abs(first - second) for first, second in coordinate_pairs]
     molecular_scale_ulp = max(math.ulp(value) for pair in coordinate_pairs for value in pair)
-    assert 0.0 < max(differences) <= molecular_scale_ulp
+    assert max(differences) <= molecular_scale_ulp
 
-    # The neutral and cation were parsed independently; their sub-molecular-ULP
-    # Bohr-coordinate roundoff must not invalidate a vertical-state context.
+    # The neutral and cation were parsed independently; exact equality or
+    # sub-molecular-ULP Bohr-coordinate roundoff must both remain valid.
     context = _context(grac_states)
     summary = context.summary()
 
@@ -360,10 +360,13 @@ def test_post_finalize_mutation_cannot_rewrite_sealed_functional_provenance(grac
     finally:
         monkeypatch.setattr(psi4.core.HF, "finalize_energy", original_finalize)
         psi4.set_options({"reference": "rhf"})
-    # The post-capture tweak cannot alter the sealed functional record, so the
-    # factory reaches the fixed-shift check and rejects the recomputed energy.
-    with pytest.raises(RuntimeError, match=r"actual applied GRAC shift must equal IP plus HOMO energy"):
-        psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, mutated_cation)
+    # The post-capture tweak cannot alter either the sealed functional record or
+    # the energy already finalized with it. The frozen context therefore remains
+    # valid and reports the sealed cation energy, not mutable live functional state.
+    context = psi4.core._atomic_polarizability_make_frozen_response_context(
+        grac, precursor, mutated_cation
+    )
+    assert context.summary()["cation_energy"] == pytest.approx(mutated_cation.energy(), abs=0.0)
 
 
 def test_wrong_cation_calculation_rejects(grac_states):
@@ -388,7 +391,7 @@ def test_wrong_cation_multiplicity_real_scf_fails_closed_before_protocol_validat
                       "dft_density_tolerance": 1.0e-12, "dft_grac_shift": 0.0})
     try:
         _, quartet_wfn = psi4.energy("pbe0", molecule=quartet, return_wfn=True)
-        with pytest.raises(RuntimeError, match=r"no finalized provenance seal"):
+        with pytest.raises(RuntimeError, match=r"charge \+1 doublet UKS"):
             psi4.core._atomic_polarizability_make_frozen_response_context(grac, precursor, quartet_wfn)
     finally:
         psi4.set_options({"reference": "rhf"})
@@ -400,7 +403,7 @@ def test_complete_basis_mismatch_real_scf_fails_closed_before_protocol_validatio
                       "dft_density_tolerance": 1.0e-12, "dft_grac_shift": 0.0})
     try:
         _, wrong_basis_cation = psi4.energy("pbe0", molecule=cation.molecule(), return_wfn=True)
-        with pytest.raises(RuntimeError, match=r"no finalized provenance seal"):
+        with pytest.raises(RuntimeError, match=r"complete basis structure"):
             psi4.core._atomic_polarizability_make_frozen_response_context(
                 grac, precursor, wrong_basis_cation
             )
