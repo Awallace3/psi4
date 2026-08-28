@@ -392,9 +392,12 @@ def test_basis_space_a_uses_a_sealed_spherical_auxiliary_basis(frozen_h2o_contex
         formal_from_density, abs=2.0e-10
     )
     assert diagnostics["atomic_populations"] == pytest.approx(
-        [8.464331601897436, 0.7812434988834898, 0.7812434989039919], abs=5.0e-8
+        [8.463238319244926, 0.7817901402103271, 0.7817901402296243], abs=5.0e-8
     )
     assert diagnostics["grid_profile"]["radius_table"] == "CamCASP-Gauss-Legendre-beta-0.5"
+    assert diagnostics["tail_join_radii"] == pytest.approx(
+        [1.7009999999999998, 1.417294, 1.417294], abs=2.0e-9
+    )
     assert all(alpha > 0.0 for alpha in diagnostics["tail_alphas"])
     assert all(math.isfinite(value) for value in diagnostics["tail_log_amplitudes"])
     real = psi4.core._atomic_polarizability_compute_isa_weights(

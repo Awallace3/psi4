@@ -234,6 +234,26 @@ struct Profile {
         return std::max(kLogFloor, value);
     }
 
+    double pchip_derivative(double radius) const {
+        if (!std::isfinite(radius) || radius < 0.0)
+            throw PSIEXCEPTION("ISA: profile derivative radius is invalid");
+        if (radius <= nodes.front()) return slopes.front();
+        if (radius >= nodes.back()) return slopes.back();
+        const auto upper = std::upper_bound(nodes.begin(), nodes.end(), radius);
+        const std::size_t i = static_cast<std::size_t>(std::distance(nodes.begin(), upper) - 1);
+        const double h = nodes[i + 1] - nodes[i];
+        const double t = (radius - nodes[i]) / h;
+        const double t2 = t * t;
+        const double derivative =
+            ((6.0 * t2 - 6.0 * t) * logs[i] +
+             (3.0 * t2 - 4.0 * t + 1.0) * h * slopes[i] +
+             (-6.0 * t2 + 6.0 * t) * logs[i + 1] +
+             (3.0 * t2 - 2.0 * t) * h * slopes[i + 1]) / h;
+        if (!std::isfinite(derivative))
+            throw PSIEXCEPTION("ISA: profile derivative is not finite");
+        return derivative;
+    }
+
     double eval(double radius) const {
         if (!std::isfinite(radius) || radius < 0.0) throw PSIEXCEPTION("ISA: profile radius is invalid");
         double value;
@@ -295,6 +315,36 @@ void fit_tail(Profile& profile, const Quadrature& radial, double scale, double j
     profile.tail_join = join;
     profile.tail_alpha = alpha;
     profile.tail_log_amplitude = log_value + alpha * join;
+}
+
+void fit_tail_slope_charge(Profile& profile, const Quadrature& radial,
+                           double scale, double join) {
+    const double alpha = -profile.pchip_derivative(join);
+    if (!std::isfinite(alpha) || alpha <= 0.0)
+        throw PSIEXCEPTION("ISA basis-space A: tail logarithmic slope is not decaying");
+    const auto tail_radial = mapped_radial(radial.nodes.size() - 1, scale);
+    long double charge = 0.0L;
+    for (std::size_t index = 1; index < tail_radial.nodes.size(); ++index) {
+        const double radius_double = join + tail_radial.nodes[index];
+        const long double radius = radius_double;
+        charge += 4.0L * static_cast<long double>(kPi) * radius * radius *
+                  tail_radial.weights[index] *
+                  std::exp(static_cast<long double>(profile.pchip(radius_double)));
+    }
+    if (!(charge > 0.0L) || !std::isfinite(static_cast<double>(charge)))
+        throw PSIEXCEPTION("ISA basis-space A: raw tail charge is not finite and positive");
+    const long double a = alpha;
+    const long double r = join;
+    const long double radial_factor = r * r / a + 2.0L * r / (a * a) + 2.0L / (a * a * a);
+    const long double log_amplitude =
+        std::log(charge) - std::log(4.0L * static_cast<long double>(kPi) * radial_factor) + a * r;
+    if (!std::isfinite(static_cast<double>(log_amplitude)))
+        throw PSIEXCEPTION("ISA basis-space A: charge-preserving tail amplitude is not finite");
+    profile.gaussian = false;
+    profile.has_tail = true;
+    profile.tail_join = join;
+    profile.tail_alpha = alpha;
+    profile.tail_log_amplitude = static_cast<double>(log_amplitude);
 }
 
 std::vector<double> probabilities(const SitePosition& point, const std::vector<SitePosition>& sites,
@@ -909,7 +959,11 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
         scales[site] = options.method() == ISAMethod::BasisSpaceA
                            ? 0.5
                            : slater_radius(atomic_numbers[site]);
-        joins[site] = options.tail_join_factor() * slater_radius(atomic_numbers[site]);
+        const double tail_radius = options.method() == ISAMethod::BasisSpaceA &&
+                                           atomic_numbers[site] == 1
+                                       ? 0.9448626666666667
+                                       : slater_radius(atomic_numbers[site]);
+        joins[site] = options.tail_join_factor() * tail_radius;
         radial[site] = mapped_radial(options.radial_points(), scales[site]);
     }
 
@@ -1056,7 +1110,10 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
                 try {
                     if (inject_tail_fit_failure_iteration == iteration + 1)
                         throw PSIEXCEPTION("ISA test injection: tail fit failure");
-                    fit_tail(updated[site], radial[site], scales[site], joins[site]);
+                    if (options.method() == ISAMethod::BasisSpaceA)
+                        fit_tail_slope_charge(updated[site], radial[site], scales[site], joins[site]);
+                    else
+                        fit_tail(updated[site], radial[site], scales[site], joins[site]);
                 } catch (const std::exception&) {
                     tail_fit_failed_this_iteration = true;
                     ++diagnostics.tail_fit_failures;
