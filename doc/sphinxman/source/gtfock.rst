@@ -699,7 +699,138 @@ measured and not extrapolated. What they support is narrow and worth stating
 plainly: given a system large enough to give each node real work, GTFock turns
 additional nodes into a proportionally faster exact-ERI Fock build |w---w| 3.33x
 on four nodes, 91% efficiency in the J/K itself |w---w| and the SCF wrapped around
-it does not distribute at all.
+it does not distribute at all. The section below runs the same protocol on a
+system 2.7x wider, where both halves of that sentence get sharper and the second
+one starts to cost more than it does here.
+
+At production size: 1555 basis functions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The sweeps above top out at 574 basis functions. That is large enough to show the
+distribution working and too small to say what it is worth: the peptide's
+four-second SCF sits near the cluster's noise floor, and even the nanotube's
+one-node J/K build is only 88.7 s. This section repeats the one-rank-per-node
+protocol on a system 2.7x wider |w---w| a 157-atom fragment pair carved out of PDB
+``3acx`` (a 118-atom peptide and a 39-atom ligand fragment, run as one
+closed-shell molecule) in Cartesian ``6-31G**``: 1555 basis functions in 702
+shells, 12 iterations and 13 Fock builds at every point.
+
+:source:`tests/pytests/gtfock_hpc_phoenix_protein.slurm` runs it, submitted with
+``FM_BASIS=6-31G**``. Job 12445512 took 57 minutes of a four-node allocation and
+used the same driver, the same reducer and the same pre-flight placement check as
+the two sweeps above, on four nodes of the same type but not the same four nodes.
+Two things in that script differ on purpose: a twelve-hour walltime, and 160 GB
+rather than 120 GB for the single-process reference arms, so that density fitting
+keeps its three-index tensor in core instead of silently becoming ``DiskDFJK`` and
+reporting a third algorithm under the second one's name. It did stay in core
+|w---w| the ``df`` row below is ``MemDFJK``, peaking at the 94750 MB in the
+table.
+
+.. 157-atom fragment pair from PDB 3acx, 6-31G** (1555 basis functions in 702
+   shells), on atl1-1-02-006-16-2 and three more nodes, job 12445512
+
+======  =====  ===  ====  =====  =======  =======  =======  =============  =============  ========
+arm     ranks  thr  grid  iters  SCF (s)  J/K (s)  speedup  RSS/rank (MB)  RSS node (MB)  dE (Eh)
+======  =====  ===  ====  =====  =======  =======  =======  =============  =============  ========
+direct  1      24   ---   12     1674.2   1606.4   ---      3371           3371           ---
+df      1      24   ---   12     393.5    244.1    ---      94750          94750          5.0e-03
+gtfock  1      24   1x1   12     403.9    359.9    1.00     2407           2407           -5.4e-05
+gtfock  2      24   1x2   12     224.1    179.9    1.80     2299           4568           -5.4e-05
+gtfock  3      24   1x3   12     165.5    123.9    2.44     2215           6618           -5.4e-05
+gtfock  4      24   2x2   12     129.5    94.1     3.12     2170           8650           -5.4e-05
+======  =====  ===  ====  =====  =======  =======  =======  =============  =============  ========
+
+The Fock build distributes better here than anywhere else in this document: 1.00,
+2.00, 2.91, 3.82, which is 100%, 97% and 96% parallel efficiency at two, three
+and four nodes, against the nanotube's 97/93/91% and the peptide's 78/66/58%. Size is the whole reason. One
+node spends 27.68 s per Fock build here against 7.39 s on the nanotube, and
+subtracting an ideal 1/N from the measured four-node build leaves 0.32 s per build
+against the nanotube's 0.18 s |w---w| 1.8x the overhead to hide 3.7x the work. The
+SCF total follows at 1.00, 1.80, 2.44, 3.12, cutting 403.9 s to 129.5 s.
+
+That 3.12x is *lower* than the nanotube's 3.33x, and the reason is exactly what
+running a bigger system was supposed to expose. The replicated remainder |w---w| SCF
+total minus the J/K timer |w---w| is 44.0, 44.2, 41.7 and 35.5 s here against the
+nanotube's 4.15, 3.72, 3.57 and 3.55. Going from 574 to 1555 basis functions
+multiplied the one-node J/K build by 4.1 and that remainder by 10.6, so the
+fraction of the SCF GTFock does not distribute went *up* with system size: 4.5% to
+10.9% of the one-node wall clock, and 13% to 27% at four nodes. Diagonalization,
+DIIS and the density build are :math:`O(N^3)` and replicated on every rank, while
+a screened Fock build is not, and over this range the replicated part is growing
+faster. Even a free J/K could not take this four-node SCF below about 35 s, an 11x
+ceiling on the one-node 403.9 s and a lower one than the 26x the nanotube had.
+Distributing the rest of the SCF is what would move this number, and the larger
+the system the more that is true.
+
+The remainder is also the one quantity here that is not quite flat: it sheds 8.5 s
+across the sweep while the J/K sheds 266 s. Nothing in the record decomposes that
+8.5 s, and the component of it that could most plausibly shrink with rank count
+does not |w---w| GTFock prints the cost of its Schwarz screening setup, and that
+is 0.87, 0.86, 0.81 and 0.84 s at one through four nodes. It is reported rather
+than explained.
+
+Rank-count invariance holds at production size. Within a rank count every rank
+returns a bitwise identical energy; across one, two, three and four nodes the
+spread is 1.1e-11 :math:`E_h`, two orders of magnitude inside the 1e-09 tolerance
+the in-tree invariance test enforces and six inside the offset from ``direct``.
+Every point converged in 12 iterations with 13 J/K builds, on the 1x1, 1x2, 1x3
+and 2x2 grids.
+
+That offset, -5.4e-05 :math:`E_h`, is the primitive-pair screening difference
+described under `Testing`_, and it behaves as that section says it does: it grows
+with the number of well-separated centres |w---w| -1.3e-07 :math:`E_h` at 24
+atoms, -8.4e-06 at 42, -5.4e-05 here at 157. It is the same to three significant
+figures at all four rank counts, so it is a property of the engine and not of the
+distribution.
+
+The reference arms support three different comparisons and they are worth keeping
+apart. Like for like on one node, GTFock's 403.9 s against ``DirectJK``'s 1674.2 s
+is 4.15x, or 4.46x on the J/K timer alone |w---w| a wider margin than the 2.5x and
+3.2x the smaller systems gave, since a larger molecule is what GTFock's blocking
+and screening are built for. Against density fitting, |PSIfour|'s default and the
+algorithm most users actually run, the one-node points are effectively tied at
+403.9 s to 393.5 s, and four nodes make the exact-ERI engine 3.0x faster than
+density fitting on the same molecule |w---w| at 2170 MB per rank against 94750 in
+one process, and 93x closer to the exact-ERI answer (-5.4e-05 against +5.0e-03
+:math:`E_h` of fitting error). The CSV's ``speedup_vs_direct`` column reaches
+12.9x at four nodes; that compares 96 cores against 24 and is a throughput number,
+not an algorithmic one.
+
+Memory finally shows the distribution doing something. Per-rank RSS *falls* with
+rank count here |w---w| 2407, 2299, 2215, 2170 MB |w---w| rather than staying flat
+as it did at 574 basis functions, and the summed footprint grows 3.59x over a 4x
+increase in ranks instead of 4.0x. The AO blocks GTFock actually partitions are
+large enough at 1555 basis functions to show against the replicated matrices,
+though the replicated part still dominates: four nodes hold 8650 MB between them
+to do what one node did in 2407.
+
+The one-sided control was repeated at this size rather than carried over, since
+the RMA volume per Fock build grows with the square of the basis and the previous
+check was made at 574 basis functions. With ``OMPI_MCA_osc`` unset the four-node
+point runs 128.4 s SCF and 93.8 s J/K against 129.5 and 94.1, and the two energies
+agree to 7.3e-12 :math:`E_h`, so the exclusion is cosmetic here too. Per-rank
+memory is again not: 2870 MB against 2170, an increment within 17 MB of the one
+both smaller systems showed.
+
+One boundary belongs on this result: it is measured in Cartesian ``6-31G**``. The
+same molecule in ``6-31+G**`` is 1863 basis functions, and there the GTFock SCF
+ran 100 iterations without converging |w---w| job 12434225, which then died before
+either reference arm started and is the failure the point-level error handling in
+the script was written for. That is a correctness limit still under investigation
+rather than a scaling one, and it is why this section reports the smaller basis.
+No non-GTFock engine has been run to convergence on that larger input yet either,
+so nothing here should be read as a claim, in any direction, about
+diffuse-augmented bases at this size.
+
+Six more measured points and a third control, from a third job on the same
+cluster, again reported as measured and not extrapolated. What they add to the two
+smaller systems is a size dependence that runs in two directions at once: the Fock
+build distributes better the larger the system gets, reaching 96% parallel
+efficiency on four nodes, while the replicated remainder around it grows faster
+than the Fock build does, so the speedup of the SCF as a whole does not keep
+improving |w---w| 1.84x at 260 basis functions, 3.33x at 574, 3.12x at 1555. Both
+halves of that point at the same next step, which is distributing the rest of the
+SCF rather than tuning the part that already scales.
 
 .. _`cmake:gtfock`:
 
