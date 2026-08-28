@@ -27,8 +27,8 @@ same build as the Phoenix jobs, through the same GTFockJK path, with
 OMPI_MCA_osc=^ucx set. This is not the Phoenix hardware and none of these
 numbers are scaling measurements; the quantities compared are matrix elements,
 which do not depend on the machine. The thread count differs between probes
-(48, then 4, then 20) for scheduling reasons only and is stated with each
-result. The scripts are reproduced verbatim, including the absolute paths they
+(48 in section 1, 20 in section 3) for scheduling reasons only and is stated
+with each result; section 2 varies it deliberately and reports what that did. The scripts are reproduced verbatim, including the absolute paths they
 were run with; those paths are a scratch directory and this worktree, and are
 the two things to change to run them elsewhere.
 
@@ -316,6 +316,7 @@ part, and the trace ratio.
     ERANK ranks=1 threads=4   GTFockJK eps=3.101426e-03 maxdJ=1.599700e-01 normdJ=7.440673e+00 resid_frac=0.188 trace_ratio=0.99700201 t=1544.7s
     ERANK ranks=2 threads=4   GTFockJK eps=3.101426e-03 maxdJ=1.599700e-01 normdJ=7.440673e+00 resid_frac=0.188 trace_ratio=0.99700201 t=714.4s
     ERANK ranks=4 threads=4   GTFockJK eps=3.101426e-03 maxdJ=1.599700e-01 normdJ=7.440673e+00 resid_frac=0.188 trace_ratio=0.99700201 t=473.9s
+    ERANK ranks=1 threads=1   GTFockJK eps=3.101426e-03 maxdJ=1.599700e-01 normdJ=7.440673e+00 resid_frac=0.188 trace_ratio=0.99700201 t=4957.3s
 
 Every reported digit is identical across 1, 2 and 4 ranks: the same best-fit
 deficit, the same largest element, the same Frobenius norm, the same residual
@@ -332,7 +333,17 @@ The wall time is the only thing in the row that moves, and it moves the right
 way (1544.7 -> 714.4 -> 473.9 s, 2.16x and 3.26x), so the ranks really were
 doing the divided work rather than each quietly repeating it.
 
-What survives, then, is a deterministic property of the serial integral path in
+The last row varies the other axis. Holding the rank count at one and dropping
+from 4 threads to 1 changes the shared-memory partitioning completely -- GTFock's
+per-thread Fock blocking buffers and its distribution of shell quartets over
+threads both go away -- and every reported digit is identical again, at 3.2x the
+wall time (4957.3 s against 1544.7 s, so the four threads were dividing real work
+too). The deficit is therefore invariant under both levels of parallelism GTFock
+has and not only the distributed one, which is what makes "deterministic property
+of the integral path" the reading that survives rather than merely the one left
+over.
+
+What survives, then, is a deterministic property of the integral path itself in
 a diffuse basis. eps = 3.101426e-03 is a uniform 0.31% shortfall; resid_frac =
 0.188 says 19% of the difference is not uniform, so it is not a single global
 scale factor either. Both parts are reproducible to every digit.
@@ -350,10 +361,10 @@ cancelling contributions, so this is a real possibility and not a formality.
 
 screentest.py answers it by measuring the spread among Psi4's OWN J builds on the
 identical density, with the screening deliberately varied over a range far wider
-than any defensible setting: two tolerances four orders of magnitude apart, and
-three different screening algorithms including the density-aware one. That spread
-is the resolution of the whole experiment. Nothing smaller than it can be
-attributed to any engine.
+than any defensible setting: two tolerances four orders of magnitude apart, three
+different screening algorithms including the density-aware one, and one run with
+screening switched off entirely. That spread is the resolution of the whole
+experiment. Nothing smaller than it can be attributed to any engine.
 
 --- screentest.py, verbatim ---
     """Is the 0.31% J deficit a GTFock defect, or an artifact of the probe density?
@@ -427,14 +438,19 @@ attributed to any engine.
     built direct/csam/1e-16      DirectJK   normJ=2.35637400e+03 764.1s
     built direct/schwarz/1e-12   DirectJK   normJ=2.35637400e+03 614.4s
     built direct/density/1e-12   DirectJK   normJ=2.35637400e+03 636.8s
+    built direct/none            DirectJK   normJ=2.35637400e+03 4557.8s
 
-Four settings, one number, identical in all nine significant figures printed.
+Five settings, one number, identical in all nine significant figures printed.
 Tightening INTS_TOLERANCE from 1e-12 to 1e-16 does nothing. Swapping CSAM for
 Schwarz does nothing. Switching to density-aware screening -- the one setting
 that actually looks at the probe density before deciding what to drop, and so the
-one most exposed to a pathological probe -- does nothing. Psi4's J on this density
-is stable to better than one part in 1e+08 against everything that can be
-varied about how it is screened.
+one most exposed to a pathological probe -- does nothing. Turning screening off
+altogether does nothing either, and that last row is the one that removes the
+axis rather than varying it: SCREENING none computes every shell quartet, which
+is why it costs 4557.8 s against 497.2 s for the default, a 9.2x price for a
+number that does not change in any printed digit. Psi4's J on this density is
+stable to better than one part in 1e+08 against everything that can be varied
+about how it is screened, and against not screening at all.
 
 Against that resolution, GTFock's J is not close. Taking the Frobenius norms
 directly from the matrices the section 1 probe cached:

@@ -136,8 +136,8 @@ Prototype scope
   (1555 basis functions) and does not converge in Cartesian ``6-31+G**``
   (1863), running the full 100 iterations. The failure is the engine's and not
   the system's: |PSIfours| own ``DirectJK`` and its density fitting each
-  converged the identical 1863-function input in 12 monotone iterations from the
-  same build on the same node type. It is J that breaks and not K, and it
+  converged the identical 1863-function input in 12 monotone iterations from
+  the same build on the same node type. It is J that breaks and not K, and it
   follows the diffuse shells rather than the size |w---w| adding them to the
   same molecule multiplies the Frobenius norm of the J difference against
   ``DirectJK`` by 2900 while multiplying the same norm for K by only 21,
@@ -146,9 +146,10 @@ Prototype scope
   screen described above would produce, but the connection is unproven and the
   screen is not exposed, so it cannot be tested directly. Three other
   explanations are excluded by measurement: distribution (the deficit is
-  identical at 1, 2 and 4 ranks), screening tolerance in general (|PSIfours|
-  own J on this density is unmoved to nine digits by every screening control
-  it exposes), and basis conditioning as a cause rather than an amplifier (the
+  identical at 1, 2 and 4 ranks, and at 1 and 4 threads within a rank),
+  screening in general (|PSIfours| own J on this density is unmoved to nine
+  digits by every screening control it exposes and by switching screening off
+  altogether), and basis conditioning as a cause rather than an amplifier (the
   1863-function overlap matrix is near-singular at 1.09e-07, just above the
   ``S_TOLERANCE`` default, but both reference engines cross it without
   difficulty). Until the mechanism is understood, treat a diffuse-augmented
