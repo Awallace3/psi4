@@ -131,6 +131,32 @@ Prototype scope
   separately stated tolerances for exactly this reason (see `Testing`_). Anyone
   wanting |PSIfour|-grade agreement on an extended system needs a GTFock built
   with a tighter primitive screen; that tolerance is not currently exposed.
+* **Diffuse functions on a large system are not supported.** On a 157-atom
+  fragment pair the SCF converges through GTFock in Cartesian ``6-31G**`` (1555
+  basis functions) and does not converge in Cartesian ``6-31+G**`` (1863),
+  running the full 100 iterations. The failure is GTFock's rather than the
+  system's: |PSIfours| own ``DirectJK`` and its density fitting each converged
+  the identical 1863-function input in 12 monotone iterations on the same build
+  and the same hardware. Comparing the two engines' matrices on one converged
+  density, at fixed molecule and geometry with only the basis changed, isolates
+  which matrix is at fault. Adding the diffuse shells multiplies the Frobenius
+  norm of the J difference by 2900 |w---w| 2.6e-03 to 7.4 |w---w| while the same
+  norm for K grows only 21x, from 2.9e-05 to 6.1e-04, and GTFock's largest J
+  element comes back 0.39% short of the reference where its largest K element
+  matches to every digit printed. J is what breaks, and it breaks on diffuse
+  functions rather than on size. That is the shape of error the hardcoded
+  primitive-pair screen described above would produce, since a fixed absolute
+  cutoff prunes exactly the small-exponent primitive pairs diffuse shells
+  contribute and their long tails matter far more to the Coulomb term than to
+  exchange |w---w| but that connection is not proven and no other cause has been
+  ruled out. Near-singularity compounds the failure without causing it: the
+  1863-function overlap matrix has a smallest eigenvalue of 1.09e-07, 9% above
+  the ``S_TOLERANCE`` default, so |PSIfour| orthogonalizes symmetrically and any
+  Fock error is amplified by about 9e+06 |w---w| yet the two reference engines
+  cross that same near-singular basis without difficulty. Until this is
+  understood, treat a diffuse-augmented basis on a system of this size as
+  unsupported rather than merely slow, and check any such result against a
+  non-GTFock ``SCF_TYPE`` before relying on it.
 * **The Fock build is distributed; the SCF is not.** J and K are gathered on
   rank 0 and broadcast, so every rank holds the full matrices and then runs an
   identical replicated SCF: diagonalization, DIIS, and the DFT quadrature are
@@ -816,11 +842,15 @@ One boundary belongs on this result: it is measured in Cartesian ``6-31G**``. Th
 same molecule in ``6-31+G**`` is 1863 basis functions, and there the GTFock SCF
 ran 100 iterations without converging |w---w| job 12434225, which then died before
 either reference arm started and is the failure the point-level error handling in
-the script was written for. That is a correctness limit still under investigation
-rather than a scaling one, and it is why this section reports the smaller basis.
-No non-GTFock engine has been run to convergence on that larger input yet either,
-so nothing here should be read as a claim, in any direction, about
-diffuse-augmented bases at this size.
+the script was written for. Job 12441235 supplied the reference arms that job
+never reached, on one node of the same type: ``DirectJK`` converged that input in
+12 iterations to -3642.752751 :math:`E_h` in 8470 s, and density fitting in 12 to
+-3642.748403 in 829 s, both monotonically and both with the DIIS error falling to
+1.6e-08. So the non-convergence is GTFock's and not the system's, which is why
+this section reports the smaller basis and why the restriction is stated under
+`Prototype scope`_ rather than treated as a scaling limit. Nothing about
+distribution is implicated either: the J error behind it is present in full at a
+single rank.
 
 Six more measured points and a third control, from a third job on the same
 cluster, again reported as measured and not extrapolated. What they add to the two

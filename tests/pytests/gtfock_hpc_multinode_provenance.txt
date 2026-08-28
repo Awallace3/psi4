@@ -7,6 +7,8 @@ doc/sphinxman/source/gtfock.rst: job 12433686 (peptide), job 12433617
 no table row and are kept anyway because the reason each failed is itself a
 measurement: job 12433616, a discarded first attempt at the peptide sweep, and
 job 12434225, the attempt to run protein157 in 6-31+G** rather than 6-31G**.
+Job 12441235 follows 12434225 as its control: a single node running the two
+reference J/K arms that 12434225 died before reaching.
 
 These jobs are the companion to the fixed-core jobs recorded in
 gtfock_hpc_provenance.txt and ask the opposite question. There, one 24-core node
@@ -263,9 +265,8 @@ after 6h53m on four nodes the job wrote no JSON at all. Both consequences were
 fixed afterwards: the script now traps a failing point and continues (the
 FAILED_POINTS array in gtfock_hpc_phoenix_protein.slurm), and job 12445512 ran
 the same molecule in the smaller basis. The non-convergence itself is a
-correctness question still open at the time of writing, and no reference arm ever
-started here, so this job says nothing about whether a non-GTFock engine
-converges on the same input.
+correctness question still open at the time of writing. No reference arm ever
+started here, so job 12441235 below was run to supply them.
 
 === provenance ===
 job         : 12434225 gtfp-protein157
@@ -309,6 +310,75 @@ Rsrc Used:     cput=27-13:26:24,vmem=0,walltime=06:53:24,mem=4307400K,energy_use
 Partition:     cpu-small
 QOS:           inferno
 Nodes:         atl1-1-03-003-1-[1-2],atl1-1-03-003-2-2,atl1-1-03-003-3-1
+---------------------------------------
+
+--- job 12441235, protein157/6-31+G**: reference arms for 12434225 ---
+
+One node of the same type, same commit, same 24 threads and 160 GB, same molecule
+and basis as 12434225. Both reference engines converge in 12 iterations, cleanly
+and monotonically, so the non-convergence 12434225 hit is a property of the
+GTFock J/K engine and not of the system, the basis or the overlap matrix. Note
+that density fitting reports DiskDFJK here rather than MemDFJK: at 1863 basis
+functions the packed three-index tensor does not fit even the 160 GB budget, and
+the benchmark labels the algorithm it actually got. The 4.35e-03 Eh gap between
+the two reference energies is that fitting error, not a defect.
+
+job        : 12441235 gtfp-protref
+node       : atl1-1-02-005-25-2.pace.gatech.edu (atl1-1-02-005-25-2)
+psi4       : 8ae2767f0 test(gtfock): add a 1863-basis-function system to the HPC benchmark
+purpose    : reference J/K arms for protein157/6-31+G**, same settings as 12434225
+CPU(s):                                  24
+Model name:                              Intel(R) Xeon(R) Gold 6226 CPU @ 2.70GHz
+               total        used        free      shared  buff/cache   available
+Mem:             187           4          23           0         160         182
+
+--- job 12441235: reduced records, both arms ---
+
+arm=df      nbf=1863 nshell=856 jk=DiskDFJK  iters=12 jk_calls=13 scf= 828.8s jk= 581.5s rss=127899MB E=-3642.748402698655
+arm=direct  nbf=1863 nshell=856 jk=DirectJK  iters=12 jk_calls=13 scf=8469.8s jk=8407.5s rss=  4884MB E=-3642.752751325688
+
+--- job 12441235: SCF convergence, from gtfp-protref_12441235.log ---
+
+   @DF-RHF iter SAD: -3637.28631040232904   -3.63729e+03   0.00000e+00
+   @DF-RHF iter   1: -3640.47388129245701   -3.18757e+00   1.10420e-03 DIIS/ADIIS
+   @DF-RHF iter   2: -3642.17203345050984   -1.69815e+00   6.42350e-04 DIIS/ADIIS
+   @DF-RHF iter   3: -3642.70305395780633   -5.31021e-01   1.44930e-04 DIIS/ADIIS
+   @DF-RHF iter   4: -3642.74172084714701   -3.86669e-02   5.33945e-05 DIIS
+   @DF-RHF iter   5: -3642.74780157318492   -6.08073e-03   1.05363e-05 DIIS
+   @DF-RHF iter   6: -3642.74825820182195   -4.56629e-04   5.51230e-06 DIIS
+   @DF-RHF iter   7: -3642.74837542412024   -1.17222e-04   2.12220e-06 DIIS
+   @DF-RHF iter   8: -3642.74839818106011   -2.27569e-05   9.91758e-07 DIIS
+   @DF-RHF iter   9: -3642.74840211643641   -3.93538e-06   3.48186e-07 DIIS
+   @DF-RHF iter  10: -3642.74840265803323   -5.41597e-07   9.57843e-08 DIIS
+   @DF-RHF iter  11: -3642.74840269355809   -3.55249e-08   3.76695e-08 DIIS
+   @DF-RHF iter  12: -3642.74840269865490   -5.09681e-09   1.64178e-08 DIIS
+
+   @RHF iter SAD: -3637.28957793881091   -3.63729e+03   0.00000e+00
+   @RHF iter   1: -3640.47839940863378   -3.18882e+00   1.10421e-03 ADIIS/DIIS
+   @RHF iter   2: -3642.17642266191069   -1.69802e+00   6.42355e-04 ADIIS/DIIS
+   @RHF iter   3: -3642.70743270216008   -5.31010e-01   1.44900e-04 ADIIS/DIIS
+   @RHF iter   4: -3642.74607499520243   -3.86423e-02   5.33722e-05 DIIS
+   @RHF iter   5: -3642.75215055980698   -6.07556e-03   1.05322e-05 DIIS
+   @RHF iter   6: -3642.75260691936091   -4.56360e-04   5.51022e-06 DIIS
+   @RHF iter   7: -3642.75272408519777   -1.17166e-04   2.12114e-06 DIIS
+   @RHF iter   8: -3642.75274681705014   -2.27319e-05   9.91034e-07 DIIS
+   @RHF iter   9: -3642.75275074488854   -3.92784e-06   3.47817e-07 DIIS
+   @RHF iter  10: -3642.75275128519024   -5.40302e-07   9.56971e-08 DIIS
+   @RHF iter  11: -3642.75275132035131   -3.51611e-08   3.76321e-08 DIIS
+   @RHF iter  12: -3642.75275132568822   -5.33691e-09   1.64021e-08 DIIS
+
+--- job 12441235: SLURM epilogue from gtfp-protref_12441235.log ---
+
+Begin Slurm Epilog: Aug-28-2026 15:51:05
+Job ID:        12441235
+User ID:       awallace43
+Account:       gts-cs207-chemx
+Job name:      gtfp-protref
+Resources:     cpu=24,mem=182808M,node=1
+Rsrc Used:     cput=2-14:44:24,vmem=0,walltime=02:36:51,mem=131289240K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-005-25-2
 ---------------------------------------
 
 Control point: the one-sided MPI component
