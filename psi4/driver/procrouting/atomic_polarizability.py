@@ -78,25 +78,37 @@ AUXILIARY_PARTITION_BASIS_KEY = "DF_BASIS_ATOMIC_POLARIZABILITY"
 
 
 def _attach_partition_auxiliary_basis(grac_wfn: core.Wavefunction) -> None:
-    """Attach the auxiliary basis when ``ATOMIC_POLARIZABILITY_PARTITION`` is ``CDF``.
+    """Attach the selected partition's auxiliary basis without changing the AO basis.
 
-    Built with ``puream=0`` rather than through the global ``PUREAM`` keyword. ``PUREAM``
-    takes precedence over both the per-file setting and the build argument and is global,
-    so setting it would silently flip the *orbital* basis to Cartesian as well -- which
-    would change the wavefunction rather than the partition.
+    The constrained-fit partition requires Cartesian functions, while basis-space ISA A
+    requires spherical functions so that its shape is exactly the ``l = 0`` block. The two
+    methods are mutually exclusive and share one sealed map key.
     """
-    if core.get_global_option("ATOMIC_POLARIZABILITY_PARTITION") != "CDF":
+    partition = core.get_global_option("ATOMIC_POLARIZABILITY_PARTITION")
+    isa_method = core.get_global_option("ATOMIC_POLARIZABILITY_ISA_METHOD")
+    if partition == "CDF":
+        name = core.get_global_option("ATOMIC_POLARIZABILITY_CDF_AUX_BASIS")
+        puream = 0
+    elif partition == "ISA" and isa_method == "BASIS_SPACE_A":
+        name = core.get_global_option("ATOMIC_POLARIZABILITY_ISA_AUX_BASIS")
+        puream = 1
+    else:
         return
-    name = core.get_global_option("ATOMIC_POLARIZABILITY_CDF_AUX_BASIS")
+
     auxiliary = core.BasisSet.build(
-        grac_wfn.molecule(), AUXILIARY_PARTITION_BASIS_KEY, name, puream=0, quiet=True
+        grac_wfn.molecule(), AUXILIARY_PARTITION_BASIS_KEY, name, puream=puream, quiet=True
     )
-    if auxiliary.has_puream():
+    if partition == "CDF" and auxiliary.has_puream():
         raise ValidationError(
-            "atomic polarizabilities: the auxiliary partition basis "
+            "atomic polarizabilities: the constrained-fit auxiliary basis "
             f"'{name}' resolved to spherical functions. A Cartesian auxiliary space is "
-            "a different space with a different partition, so this fails closed rather "
-            "than silently substituting one for the other; check the global PUREAM option"
+            "required; check the global PUREAM option"
+        )
+    if partition == "ISA" and not auxiliary.has_puream():
+        raise ValidationError(
+            "atomic polarizabilities: basis-space ISA A auxiliary basis "
+            f"'{name}' resolved to Cartesian functions. A spherical auxiliary space is "
+            "required; check the global PUREAM option"
         )
     grac_wfn.set_basisset(AUXILIARY_PARTITION_BASIS_KEY, auxiliary)
 

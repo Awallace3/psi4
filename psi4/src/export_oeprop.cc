@@ -59,7 +59,8 @@ void export_oeprop(py::module &m) {
                 key != "angular_azimuthal_points" && key != "max_iterations" &&
                 key != "convergence" && key != "mix_fraction" && key != "initial_alpha" &&
                 key != "tail_join_factor" && key != "tail_activation_iteration" &&
-                key != "tail_activation_convergence" && key != "electron_count_tolerance")
+                key != "tail_activation_convergence" && key != "electron_count_tolerance" &&
+                key != "method" && key != "basis_eigenvalue_cutoff")
                 throw PSIEXCEPTION("ISAOptions: unknown option '" + key + "'");
         }
         const auto size_value = [&values](const char* key, std::size_t fallback) {
@@ -68,13 +69,21 @@ void export_oeprop(py::module &m) {
         const auto double_value = [&values](const char* key, double fallback) {
             return values.contains(key) ? values[key].cast<double>() : fallback;
         };
+        ISAMethod method = ISAMethod::RealSpace;
+        if (values.contains("method")) {
+            const auto selection = values["method"].cast<std::string>();
+            if (selection == "real-space") method = ISAMethod::RealSpace;
+            else if (selection == "basis-space-a") method = ISAMethod::BasisSpaceA;
+            else throw PSIEXCEPTION("ISAOptions: method must be 'real-space' or 'basis-space-a'");
+        }
         return ISAOptions(size_value("radial_points", 100), size_value("angular_polar_points", 18),
                           size_value("angular_azimuthal_points", 24), size_value("max_iterations", 120),
                           double_value("convergence", 1.0e-9), double_value("mix_fraction", 1.0),
                           double_value("initial_alpha", 1.0), double_value("tail_join_factor", 1.5),
                           size_value("tail_activation_iteration", 20),
                           double_value("tail_activation_convergence", 1.0e-6),
-                          double_value("electron_count_tolerance", 0.1));
+                          double_value("electron_count_tolerance", 0.1), method,
+                          double_value("basis_eigenvalue_cutoff", 1.0e-12));
     };
     const auto isa_diagnostics_dict = [](const ISADiagnostics& diagnostics) {
         py::dict grid;
@@ -86,6 +95,13 @@ void export_oeprop(py::module &m) {
         grid["radius_table"] = diagnostics.grid_profile.radius_table;
         grid["atom_scales"] = diagnostics.grid_profile.atom_scales;
         py::dict result;
+        result["method"] = diagnostics.method;
+        result["density_source"] = diagnostics.density_source;
+        result["auxiliary_function_count"] = diagnostics.auxiliary_function_count;
+        result["auxiliary_functions_per_site"] = diagnostics.auxiliary_functions_per_site;
+        result["retained_basis_ranks"] = diagnostics.retained_basis_ranks;
+        result["max_basis_condition_number"] = diagnostics.max_basis_condition_number;
+        result["nonpositive_shape_repairs"] = diagnostics.nonpositive_shape_repairs;
         result["electron_count"] = diagnostics.electron_count;
         result["formal_electron_count"] = diagnostics.formal_electron_count;
         result["electron_count_absolute_error"] = diagnostics.electron_count_absolute_error;

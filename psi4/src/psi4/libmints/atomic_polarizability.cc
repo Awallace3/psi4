@@ -8058,12 +8058,23 @@ ISAOptions isa_options_from(Options& options) {
     const double convergence = options.get_double("ATOMIC_POLARIZABILITY_ISA_CONVERGENCE");
     if (!(convergence > 0.0) || !std::isfinite(convergence))
         throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "ISA convergence must be finite and positive");
+    const std::string method_name = options.get_str("ATOMIC_POLARIZABILITY_ISA_METHOD");
+    ISAMethod method;
+    if (method_name == "REAL_SPACE") method = ISAMethod::RealSpace;
+    else if (method_name == "BASIS_SPACE_A") method = ISAMethod::BasisSpaceA;
+    else throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "unsupported method '" + method_name + "'");
+    const double basis_cutoff = options.get_double("ATOMIC_POLARIZABILITY_ISA_BASIS_EIGENVALUE_CUTOFF");
+    if (method == ISAMethod::BasisSpaceA &&
+        (!(basis_cutoff > 0.0) || basis_cutoff >= 1.0 || !std::isfinite(basis_cutoff)))
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            prefix + "basis eigenvalue cutoff must be finite and between zero and one");
     ISAOptions defaults;
     return ISAOptions(static_cast<std::size_t>(radial), static_cast<std::size_t>(polar),
                       static_cast<std::size_t>(azimuthal), static_cast<std::size_t>(iterations),
                       convergence, defaults.mix_fraction(), defaults.initial_alpha(),
                       defaults.tail_join_factor(), defaults.tail_activation_iteration(),
-                      defaults.tail_activation_convergence(), defaults.electron_count_tolerance());
+                      defaults.tail_activation_convergence(), defaults.electron_count_tolerance(),
+                      method, basis_cutoff);
 }
 
 ResponseKernel reviewed_response_kernel() { return ResponseKernel(0.25, 0.75); }
@@ -9273,14 +9284,21 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
     const auto partition = response_partition_from(options);
     const bool auxiliary_partition = partition == ResponsePartition::ConstrainedDF;
     const auto cdf_options = auxiliary_partition ? cdf_options_from(options) : CDFOptions();
+    const auto isa_policy = auxiliary_partition ? ISAOptions() : isa_options_from(options);
+    const bool basis_space_isa = !auxiliary_partition && isa_policy.method() == ISAMethod::BasisSpaceA;
+    const bool needs_auxiliary_basis = auxiliary_partition || basis_space_isa;
     const std::string auxiliary_key =
-        auxiliary_partition ? auxiliary_partition_basis_key() : std::string();
-    if (auxiliary_partition && !wfn_->basisset_exists(auxiliary_key))
+        needs_auxiliary_basis ? auxiliary_partition_basis_key() : std::string();
+    if (needs_auxiliary_basis && !wfn_->basisset_exists(auxiliary_key)) {
+        const std::string requested = auxiliary_partition
+                                          ? cdf_options.auxiliary_basis
+                                          : options.get_str("ATOMIC_POLARIZABILITY_ISA_AUX_BASIS");
         throw ATOMIC_POLARIZABILITY_PREREQUISITE(
-            prefix + "the auxiliary partition needs the '" + cdf_options.auxiliary_basis +
+            prefix + "the selected partition method needs the '" + requested +
             "' auxiliary basis attached to the reference wavefunction under '" + auxiliary_key +
             "', which a bare OEProp call cannot supply. Run "
             "psi4.driver.procrouting.atomic_polarizability.atomic_polarizabilities instead");
+    }
 
     // Stage 1: the frozen GRAC response context, which revalidates the SCF triple itself.
     auto context =
@@ -9309,7 +9327,7 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
     const auto kernel = reviewed_response_kernel();
     std::optional<ISAWeights> isa_weights;
     if (!auxiliary_partition) {
-        isa_weights = compute_isa_weights(context, isa_options_from(options));
+        isa_weights = compute_isa_weights(context, isa_policy);
         result.isa = isa_weights->diagnostics();
         if (!result.isa.converged)
             throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the ISA partition did not converge");

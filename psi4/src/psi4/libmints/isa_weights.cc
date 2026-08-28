@@ -1,8 +1,8 @@
 /*
- * Native real-space iterated-stockholder (ISA) weights.
+ * Native iterated-stockholder (ISA) weights.
  *
- * This implementation deliberately solves the defining stockholder fixed point
- * from the frozen AO density.  It does not use MBIS, nearest-centre, or uniform
+ * The real-space and basis-space-A representations solve the same defining fixed
+ * point from the frozen AO density. Neither uses MBIS, nearest-centre, or uniform
  * production fallbacks.
  */
 
@@ -23,7 +23,9 @@
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/molecule.h"
+#include "psi4/libmints/vector.h"
 #include "psi4/libpsi4util/exception.h"
+#include "psi4/libpsi4util/process.h"
 
 namespace psi {
 namespace {
@@ -453,11 +455,310 @@ struct CoreResult {
     ISADiagnostics diagnostics;
 };
 
+struct BasisSpaceBlock {
+    std::vector<int> functions;
+    std::vector<std::size_t> s_offsets;
+    std::vector<double> values;
+    std::vector<double> integration_weights;
+    std::vector<double> coefficients;
+    std::shared_ptr<Matrix> eigenvectors;
+    std::shared_ptr<Vector> eigenvalues;
+    std::size_t retained_rank{};
+    double condition_number{};
+};
+
+struct BasisSpaceWorkspace {
+    std::vector<BasisSpaceBlock> blocks;
+    std::size_t auxiliary_function_count{};
+};
+
+std::vector<double> solve_basis_block(const BasisSpaceBlock& block, const std::vector<double>& rhs,
+                                      double relative_cutoff) {
+    const std::size_t count = block.functions.size();
+    if (!block.eigenvectors || !block.eigenvalues || rhs.size() != count)
+        throw PSIEXCEPTION("ISA basis-space A: local least-squares dimensions are inconsistent");
+    const double maximum = block.eigenvalues->get(static_cast<int>(count - 1));
+    const double cutoff = relative_cutoff * maximum;
+    std::vector<double> solution(count, 0.0);
+    for (std::size_t mode = 0; mode < count; ++mode) {
+        const double eigenvalue = block.eigenvalues->get(static_cast<int>(mode));
+        if (eigenvalue <= cutoff) continue;
+        KahanSum projection;
+        for (std::size_t row = 0; row < count; ++row)
+            projection.add((*block.eigenvectors)(static_cast<int>(row), static_cast<int>(mode)) * rhs[row]);
+        const double scaled = projection.sum / eigenvalue;
+        if (!std::isfinite(scaled))
+            throw PSIEXCEPTION("ISA basis-space A: local least-squares solve is not finite");
+        for (std::size_t row = 0; row < count; ++row)
+            solution[row] += (*block.eigenvectors)(static_cast<int>(row), static_cast<int>(mode)) * scaled;
+    }
+    for (double value : solution)
+        if (!std::isfinite(value))
+            throw PSIEXCEPTION("ISA basis-space A: local coefficient is not finite");
+    return solution;
+}
+
+Profile basis_shape_profile(const BasisSpaceBlock& block, const Quadrature& radial,
+                            const AngularGrid& angular, const Profile* fallback,
+                            std::size_t* repairs) {
+    const std::size_t local_count = block.functions.size();
+    const std::size_t nangular = angular.directions.size();
+    const std::size_t point_count = 1 + (radial.nodes.size() - 1) * nangular;
+    if (block.values.size() != point_count * local_count || block.coefficients.size() != local_count ||
+        block.s_offsets.empty())
+        throw PSIEXCEPTION("ISA basis-space A: shape-profile dimensions are inconsistent");
+    std::vector<double> logs(radial.nodes.size(), kLogFloor);
+    for (std::size_t r = 0; r < radial.nodes.size(); ++r) {
+        KahanSum average;
+        const std::size_t angular_count = r == 0 ? 1 : nangular;
+        for (std::size_t q = 0; q < angular_count; ++q) {
+            const std::size_t point = r == 0 ? 0 : 1 + (r - 1) * nangular + q;
+            KahanSum value;
+            for (const auto offset : block.s_offsets)
+                value.add(block.coefficients[offset] * block.values[point * local_count + offset]);
+            average.add((r == 0 ? 1.0 : angular.weights[q]) * value.sum);
+        }
+        double value = average.sum;
+        if (!std::isfinite(value))
+            throw PSIEXCEPTION("ISA basis-space A: shape function is not finite");
+        if (value < 0.0) {
+            if (repairs) ++*repairs;
+            throw PSIEXCEPTION(
+                fallback ? "ISA basis-space A: projected auxiliary shape is not positive"
+                         : "ISA basis-space A: initial auxiliary shape is not positive");
+        }
+        logs[r] = value == 0.0 ? kLogFloor : std::max(kLogFloor, std::log(value));
+    }
+    return Profile(radial.nodes, std::move(logs));
+}
+
+BasisSpaceWorkspace make_basis_workspace(const BasisSet& auxiliary,
+                                         const std::vector<SitePosition>& sites,
+                                         const std::vector<Quadrature>& radial,
+                                         const AngularGrid& angular,
+                                         double initial_alpha,
+                                         double relative_cutoff,
+                                         std::vector<Profile>* initial_profiles) {
+    const std::string prefix = "ISA basis-space A: ";
+    if (!auxiliary.has_puream())
+        throw PSIEXCEPTION(prefix + "the sealed auxiliary basis must use spherical functions");
+    if (auxiliary.nbf() <= 0 || auxiliary.nshell() <= 0)
+        throw PSIEXCEPTION(prefix + "the sealed auxiliary basis is empty");
+    if (auxiliary.molecule() && static_cast<std::size_t>(auxiliary.molecule()->natom()) != sites.size())
+        throw PSIEXCEPTION(prefix + "the auxiliary basis spans a different number of centres");
+    const std::size_t naux = static_cast<std::size_t>(auxiliary.nbf());
+    std::vector<std::vector<int>> functions(sites.size());
+    std::vector<std::vector<std::size_t>> s_offsets(sites.size());
+    std::vector<std::pair<double, int>> initial_candidates(sites.size(),
+                                                           {std::numeric_limits<double>::infinity(), -1});
+    for (int shell_index = 0; shell_index < auxiliary.nshell(); ++shell_index) {
+        const auto& shell = auxiliary.shell(shell_index);
+        const int center = shell.ncenter();
+        if (center < 0 || static_cast<std::size_t>(center) >= sites.size())
+            throw PSIEXCEPTION(prefix + "an auxiliary shell is centred off the frozen sites");
+        for (int axis = 0; axis < 3; ++axis)
+            if (std::abs(shell.coord(axis) - sites[static_cast<std::size_t>(center)][static_cast<std::size_t>(axis)]) >
+                kCoincidentTolerance)
+                throw PSIEXCEPTION(prefix + "an auxiliary shell centre does not match its frozen site");
+        const std::size_t site = static_cast<std::size_t>(center);
+        const std::size_t prior = functions[site].size();
+        for (int local = 0; local < shell.nfunction(); ++local)
+            functions[site].push_back(shell.function_index() + local);
+        if (shell.am() == 0) {
+            if (shell.nfunction() != 1)
+                throw PSIEXCEPTION(prefix + "an s shell does not contain exactly one spherical function");
+            s_offsets[site].push_back(prior);
+            for (int primitive = 0; primitive < shell.nprimitive(); ++primitive) {
+                const double exponent = shell.exp(primitive);
+                if (!std::isfinite(exponent) || exponent <= 0.0)
+                    throw PSIEXCEPTION(prefix + "an auxiliary exponent is not finite and positive");
+                const double distance = std::abs(std::log(exponent / initial_alpha));
+                if (distance < initial_candidates[site].first)
+                    initial_candidates[site] = {distance, static_cast<int>(prior)};
+            }
+        }
+    }
+
+    if (naux > 8192 || sites.size() > 64)
+        throw PSIEXCEPTION(prefix + "auxiliary dimensions exceed the supported envelope");
+    const auto checked_add = [&prefix](std::size_t first, std::size_t second) {
+        if (second > std::numeric_limits<std::size_t>::max() - first)
+            throw PSIEXCEPTION(prefix + "workspace cardinality overflows");
+        return first + second;
+    };
+    const auto checked_product = [&prefix](std::size_t first, std::size_t second) {
+        if (first != 0 && second > std::numeric_limits<std::size_t>::max() / first)
+            throw PSIEXCEPTION(prefix + "workspace cardinality overflows");
+        return first * second;
+    };
+    std::size_t estimated_elements = 0;
+    for (std::size_t site = 0; site < sites.size(); ++site) {
+        const std::size_t local_count = functions[site].size();
+        const std::size_t point_count =
+            checked_add(1, checked_product(radial[site].nodes.size() - 1,
+                                           angular.directions.size()));
+        estimated_elements = checked_add(
+            estimated_elements, checked_product(local_count, point_count));
+        estimated_elements = checked_add(
+            estimated_elements, checked_product(3, checked_product(local_count, local_count)));
+        estimated_elements = checked_add(
+            estimated_elements, checked_add(point_count, checked_product(4, local_count)));
+    }
+    const std::size_t estimated_bytes = checked_product(estimated_elements, sizeof(double));
+    const std::size_t configured_memory = Process::environment.get_memory();
+    if (configured_memory == 0 || estimated_bytes > configured_memory / 2)
+        throw PSIEXCEPTION(prefix + "workspace exceeds half of configured memory");
+
+    BasisSpaceWorkspace workspace;
+    workspace.auxiliary_function_count = naux;
+    workspace.blocks.resize(sites.size());
+    auto* mutable_auxiliary = const_cast<BasisSet*>(&auxiliary);
+    std::vector<double> phi(naux, 0.0);
+    initial_profiles->clear();
+    initial_profiles->reserve(sites.size());
+    const std::size_t nangular = angular.directions.size();
+    for (std::size_t site = 0; site < sites.size(); ++site) {
+        auto& block = workspace.blocks[site];
+        block.functions = std::move(functions[site]);
+        block.s_offsets = std::move(s_offsets[site]);
+        if (block.functions.empty() || block.s_offsets.empty() || initial_candidates[site].second < 0)
+            throw PSIEXCEPTION(prefix + "every site needs auxiliary functions and at least one s shell");
+        const std::size_t local_count = block.functions.size();
+        const std::size_t point_count = 1 + (radial[site].nodes.size() - 1) * nangular;
+        if (local_count > std::numeric_limits<std::size_t>::max() / point_count)
+            throw PSIEXCEPTION(prefix + "local basis-grid cardinality overflows");
+        block.values.reserve(local_count * point_count);
+        block.integration_weights.reserve(point_count);
+        const auto append_point = [&](const SitePosition& point, double weight) {
+            mutable_auxiliary->compute_phi(phi.data(), point[0], point[1], point[2]);
+            for (const int function : block.functions) {
+                const double value = phi[static_cast<std::size_t>(function)];
+                if (!std::isfinite(value))
+                    throw PSIEXCEPTION(prefix + "an auxiliary basis value is not finite");
+                block.values.push_back(value);
+            }
+            block.integration_weights.push_back(weight);
+        };
+        append_point(sites[site], 0.0);
+        for (std::size_t r = 1; r < radial[site].nodes.size(); ++r) {
+            const double radius = radial[site].nodes[r];
+            const double shell_weight = 4.0 * kPi * radius * radius * radial[site].weights[r];
+            for (std::size_t q = 0; q < nangular; ++q) {
+                const auto& direction = angular.directions[q];
+                append_point({sites[site][0] + radius * direction[0],
+                              sites[site][1] + radius * direction[1],
+                              sites[site][2] + radius * direction[2]},
+                             shell_weight * angular.weights[q]);
+            }
+        }
+        if (block.integration_weights.size() != point_count || block.values.size() != point_count * local_count)
+            throw PSIEXCEPTION(prefix + "local basis-grid construction is inconsistent");
+
+        Matrix overlap(static_cast<int>(local_count), static_cast<int>(local_count));
+        for (std::size_t point = 0; point < point_count; ++point) {
+            const double weight = block.integration_weights[point];
+            for (std::size_t row = 0; row < local_count; ++row)
+                for (std::size_t column = 0; column <= row; ++column)
+                    overlap(static_cast<int>(row), static_cast<int>(column)) +=
+                        weight * block.values[point * local_count + row] *
+                        block.values[point * local_count + column];
+        }
+        for (std::size_t row = 0; row < local_count; ++row)
+            for (std::size_t column = 0; column < row; ++column)
+                overlap(static_cast<int>(column), static_cast<int>(row)) =
+                    overlap(static_cast<int>(row), static_cast<int>(column));
+        block.eigenvectors = std::make_shared<Matrix>(static_cast<int>(local_count), static_cast<int>(local_count));
+        block.eigenvalues = std::make_shared<Vector>(static_cast<int>(local_count));
+        overlap.diagonalize(*block.eigenvectors, *block.eigenvalues, ascending);
+        const double maximum = block.eigenvalues->get(static_cast<int>(local_count - 1));
+        if (!std::isfinite(maximum) || maximum <= 0.0)
+            throw PSIEXCEPTION(prefix + "local overlap matrix is not positive semidefinite");
+        const double cutoff = relative_cutoff * maximum;
+        double minimum = maximum;
+        for (std::size_t mode = 0; mode < local_count; ++mode) {
+            const double value = block.eigenvalues->get(static_cast<int>(mode));
+            if (!std::isfinite(value) || value < -64.0 * std::numeric_limits<double>::epsilon() * maximum)
+                throw PSIEXCEPTION(prefix + "local overlap eigensystem is invalid");
+            if (value > cutoff) {
+                ++block.retained_rank;
+                minimum = std::min(minimum, value);
+            }
+        }
+        if (block.retained_rank == 0)
+            throw PSIEXCEPTION(prefix + "local overlap solve retained no auxiliary directions");
+        block.condition_number = maximum / minimum;
+        block.coefficients.assign(local_count, 0.0);
+        block.coefficients[static_cast<std::size_t>(initial_candidates[site].second)] = 1.0;
+        initial_profiles->push_back(basis_shape_profile(block, radial[site], angular, nullptr, nullptr));
+    }
+    return workspace;
+}
+
+std::vector<Profile> update_basis_profiles(BasisSpaceWorkspace& workspace,
+                                           const std::vector<SitePosition>& sites,
+                                           const std::vector<Quadrature>& radial,
+                                           const AngularGrid& angular,
+                                           const std::vector<std::vector<double>>& shell_density,
+                                           const std::vector<Profile>& profiles,
+                                           const ISAOptions& options,
+                                           ISADiagnostics* diagnostics) {
+    const std::size_t nangular = angular.directions.size();
+    std::vector<Profile> updated;
+    updated.reserve(sites.size());
+    for (std::size_t site = 0; site < sites.size(); ++site) {
+        auto& block = workspace.blocks[site];
+        const std::size_t local_count = block.functions.size();
+        const std::size_t point_count = block.integration_weights.size();
+        if (shell_density[site].size() != point_count || block.values.size() != point_count * local_count)
+            throw PSIEXCEPTION("ISA basis-space A: local target-grid dimensions are inconsistent");
+        std::vector<double> rhs(local_count, 0.0);
+        std::size_t point_index = 0;
+        const auto accumulate = [&](const SitePosition& point) {
+            const auto partition = probabilities(point, sites, profiles);
+            const double target = shell_density[site][point_index] * partition[site];
+            const double weight = block.integration_weights[point_index];
+            for (std::size_t function = 0; function < local_count; ++function)
+                rhs[function] += weight * block.values[point_index * local_count + function] * target;
+            ++point_index;
+        };
+        accumulate(sites[site]);
+        for (std::size_t r = 1; r < radial[site].nodes.size(); ++r) {
+            const double radius = radial[site].nodes[r];
+            for (std::size_t q = 0; q < nangular; ++q) {
+                const auto& direction = angular.directions[q];
+                accumulate({sites[site][0] + radius * direction[0],
+                            sites[site][1] + radius * direction[1],
+                            sites[site][2] + radius * direction[2]});
+            }
+        }
+        if (point_index != point_count)
+            throw PSIEXCEPTION("ISA basis-space A: local target-grid indexing is inconsistent");
+        block.coefficients = solve_basis_block(block, rhs, options.basis_eigenvalue_cutoff());
+        Profile next = basis_shape_profile(block, radial[site], angular, &profiles[site],
+                                           diagnostics ? &diagnostics->nonpositive_shape_repairs : nullptr);
+        if (options.mix_fraction() < 1.0) {
+            std::vector<double> logs(next.logs.size(), kLogFloor);
+            const double eta = options.mix_fraction();
+            for (std::size_t r = 0; r < logs.size(); ++r) {
+                const double old_log = profiles[site].eval(radial[site].nodes[r]);
+                const double new_log = next.eval(radial[site].nodes[r]);
+                const double maximum = std::max(old_log, new_log);
+                logs[r] = maximum + std::log((1.0 - eta) * std::exp(old_log - maximum) +
+                                             eta * std::exp(new_log - maximum));
+            }
+            next = Profile(radial[site].nodes, std::move(logs));
+        }
+        updated.push_back(std::move(next));
+    }
+    return updated;
+}
+
 CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SitePosition>& output_points,
                  const std::vector<double>& output_weights, const std::vector<int>& atomic_numbers,
                  const std::vector<double>& supplied_output_density,
                  const std::function<double(const SitePosition&)>& density_evaluator,
                  const ISAOptions& options, double formal_electron_count, bool enforce_electron_count,
+                 const BasisSet* auxiliary_basis = nullptr,
                  std::size_t inject_tail_fit_failure_iteration = 0,
                  std::size_t test_min_iterations = 0) {
     validate_inputs(sites, output_points, output_weights, atomic_numbers);
@@ -466,24 +767,61 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
     clamp_density(output_density);
 
     const std::size_t nsite = sites.size();
-    const auto angular = product_spherical_grid(options.angular_polar_points(), options.angular_azimuthal_points());
-    const std::size_t nangular = angular.directions.size();
+    const auto checked_add = [](std::size_t first, std::size_t second) {
+        if (second > std::numeric_limits<std::size_t>::max() - first)
+            throw PSIEXCEPTION("ISA: shell-grid cardinality overflows");
+        return first + second;
+    };
+    const auto checked_product = [](std::size_t first, std::size_t second) {
+        if (first != 0 && second > std::numeric_limits<std::size_t>::max() / first)
+            throw PSIEXCEPTION("ISA: shell-grid cardinality overflows");
+        return first * second;
+    };
+    const std::size_t nangular = checked_product(options.angular_polar_points(),
+                                                 options.angular_azimuthal_points());
+    const std::size_t radial_angular = checked_product(options.radial_points(), nangular);
+    if (radial_angular == std::numeric_limits<std::size_t>::max())
+        throw PSIEXCEPTION("ISA: shell-grid cardinality overflows");
+    const std::size_t shell_points = checked_product(nsite, checked_add(radial_angular, 1));
+    const std::size_t base_elements = checked_add(
+        shell_points, checked_add(checked_product(output_points.size(), nsite),
+                                  checked_product(4, nangular)));
+    const std::size_t base_bytes = checked_product(base_elements, sizeof(double));
+    const std::size_t configured_memory = Process::environment.get_memory();
+    if (configured_memory == 0 || base_bytes > configured_memory / 2)
+        throw PSIEXCEPTION("ISA: shell-grid workspace exceeds half of configured memory");
+    const auto angular = product_spherical_grid(options.angular_polar_points(),
+                                                options.angular_azimuthal_points());
+    if (angular.directions.size() != nangular)
+        throw PSIEXCEPTION("ISA: angular grid cardinality is inconsistent");
     std::vector<Quadrature> radial(nsite);
     std::vector<double> scales(nsite), joins(nsite);
-    std::vector<Profile> profiles;
-    profiles.reserve(nsite);
     for (std::size_t site = 0; site < nsite; ++site) {
         scales[site] = slater_radius(atomic_numbers[site]);
         joins[site] = options.tail_join_factor() * scales[site];
         radial[site] = mapped_radial(options.radial_points(), scales[site]);
-        profiles.push_back(Profile::initial(radial[site].nodes, options.initial_alpha()));
     }
 
-    // Seal the auxiliary density once. Ordering is (site, origin; radial, angular).
+    std::vector<Profile> profiles;
+    profiles.reserve(nsite);
+    BasisSpaceWorkspace basis_workspace;
+    if (options.method() == ISAMethod::BasisSpaceA) {
+        if (!auxiliary_basis)
+            throw PSIEXCEPTION("ISA basis-space A: the frozen context carries no sealed auxiliary basis");
+        basis_workspace = make_basis_workspace(*auxiliary_basis, sites, radial, angular,
+                                               options.initial_alpha(),
+                                               options.basis_eigenvalue_cutoff(), &profiles);
+    } else {
+        for (std::size_t site = 0; site < nsite; ++site)
+            profiles.push_back(Profile::initial(radial[site].nodes, options.initial_alpha()));
+    }
+
+    // Seal the auxiliary density only after every representation-specific allocation
+    // has passed its memory and basis preflight. Ordering is (site, origin; radial, angular).
     std::vector<std::vector<double>> shell_density(nsite);
     for (std::size_t site = 0; site < nsite; ++site) {
         auto& values = shell_density[site];
-        values.reserve(1 + options.radial_points() * nangular);
+        values.reserve(radial_angular + 1);
         values.push_back(density_evaluator(sites[site]));
         for (std::size_t r = 1; r < radial[site].nodes.size(); ++r) {
             const double radius = radial[site].nodes[r];
@@ -507,6 +845,17 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
         throw PSIEXCEPTION("ISA: molecular-grid electron count exceeds the configured integration tolerance");
 
     ISADiagnostics diagnostics;
+    diagnostics.method = options.method() == ISAMethod::BasisSpaceA ? "basis-space-a" : "real-space";
+    diagnostics.density_source = "frozen AO density";
+    if (options.method() == ISAMethod::BasisSpaceA) {
+        diagnostics.auxiliary_function_count = basis_workspace.auxiliary_function_count;
+        for (const auto& block : basis_workspace.blocks) {
+            diagnostics.auxiliary_functions_per_site.push_back(block.functions.size());
+            diagnostics.retained_basis_ranks.push_back(block.retained_rank);
+            diagnostics.max_basis_condition_number =
+                std::max(diagnostics.max_basis_condition_number, block.condition_number);
+        }
+    }
     diagnostics.electron_count = electron_sum.sum;
     diagnostics.formal_electron_count = formal_electron_count;
     diagnostics.electron_count_absolute_error = electron_error;
@@ -525,47 +874,53 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
 
     for (std::size_t iteration = 0; iteration < options.max_iterations(); ++iteration) {
         std::vector<Profile> updated;
-        updated.reserve(nsite);
-        for (std::size_t site = 0; site < nsite; ++site) {
-            std::vector<double> logs(radial[site].nodes.size(), kLogFloor);
-            std::size_t shell_index = 0;
-            {
-                const auto p = probabilities(sites[site], sites, profiles);
-                const double average = shell_density[site][shell_index++] * p[site];
-                logs[0] = average > 0.0 ? std::max(kLogFloor, std::log(average)) : profiles[site].eval(0.0);
-                if (average <= 0.0) ++diagnostics.underflow_fallbacks;
-            }
-            for (std::size_t r = 1; r < radial[site].nodes.size(); ++r) {
-                KahanSum average;
-                const double radius = radial[site].nodes[r];
-                for (std::size_t q = 0; q < nangular; ++q) {
-                    const auto& direction = angular.directions[q];
-                    SitePosition point{sites[site][0] + radius * direction[0],
-                                       sites[site][1] + radius * direction[1],
-                                       sites[site][2] + radius * direction[2]};
-                    const auto p = probabilities(point, sites, profiles);
-                    average.add(angular.weights[q] * shell_density[site][shell_index++] * p[site]);
+        if (options.method() == ISAMethod::BasisSpaceA) {
+            updated = update_basis_profiles(basis_workspace, sites, radial, angular,
+                                            shell_density, profiles, options, &diagnostics);
+        } else {
+            updated.reserve(nsite);
+            for (std::size_t site = 0; site < nsite; ++site) {
+                std::vector<double> logs(radial[site].nodes.size(), kLogFloor);
+                std::size_t shell_index = 0;
+                {
+                    const auto p = probabilities(sites[site], sites, profiles);
+                    const double average = shell_density[site][shell_index++] * p[site];
+                    logs[0] = average > 0.0 ? std::max(kLogFloor, std::log(average)) : profiles[site].eval(0.0);
+                    if (average <= 0.0) ++diagnostics.underflow_fallbacks;
                 }
-                if (!std::isfinite(average.sum) || average.sum < 0.0)
-                    throw PSIEXCEPTION("ISA: spherical stockholder average is not finite and nonnegative");
-                if (average.sum > 0.0) logs[r] = std::max(kLogFloor, std::log(average.sum));
-                else {
-                    logs[r] = profiles[site].eval(radius);
-                    ++diagnostics.underflow_fallbacks;
+                for (std::size_t r = 1; r < radial[site].nodes.size(); ++r) {
+                    KahanSum average;
+                    const double radius = radial[site].nodes[r];
+                    for (std::size_t q = 0; q < nangular; ++q) {
+                        const auto& direction = angular.directions[q];
+                        SitePosition point{sites[site][0] + radius * direction[0],
+                                           sites[site][1] + radius * direction[1],
+                                           sites[site][2] + radius * direction[2]};
+                        const auto p = probabilities(point, sites, profiles);
+                        average.add(angular.weights[q] * shell_density[site][shell_index++] * p[site]);
+                    }
+                    if (!std::isfinite(average.sum) || average.sum < 0.0)
+                        throw PSIEXCEPTION("ISA: spherical stockholder average is not finite and nonnegative");
+                    if (average.sum > 0.0) logs[r] = std::max(kLogFloor, std::log(average.sum));
+                    else {
+                        logs[r] = profiles[site].eval(radius);
+                        ++diagnostics.underflow_fallbacks;
+                    }
                 }
-            }
-            if (shell_index != shell_density[site].size()) throw PSIEXCEPTION("ISA: shell-grid indexing is inconsistent");
+                if (shell_index != shell_density[site].size())
+                    throw PSIEXCEPTION("ISA: shell-grid indexing is inconsistent");
 
-            if (options.mix_fraction() < 1.0) {
-                const double eta = options.mix_fraction();
-                for (std::size_t r = 0; r < logs.size(); ++r) {
-                    const double old_log = profiles[site].eval(radial[site].nodes[r]);
-                    const double maximum = std::max(old_log, logs[r]);
-                    logs[r] = maximum + std::log((1.0 - eta) * std::exp(old_log - maximum) +
-                                                 eta * std::exp(logs[r] - maximum));
+                if (options.mix_fraction() < 1.0) {
+                    const double eta = options.mix_fraction();
+                    for (std::size_t r = 0; r < logs.size(); ++r) {
+                        const double old_log = profiles[site].eval(radial[site].nodes[r]);
+                        const double maximum = std::max(old_log, logs[r]);
+                        logs[r] = maximum + std::log((1.0 - eta) * std::exp(old_log - maximum) +
+                                                     eta * std::exp(logs[r] - maximum));
+                    }
                 }
+                updated.emplace_back(radial[site].nodes, std::move(logs));
             }
-            updated.emplace_back(radial[site].nodes, std::move(logs));
         }
 
         double provisional_residual = 0.0;
@@ -636,7 +991,7 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
     }
     if (!diagnostics.converged) {
         std::ostringstream message;
-        message << "ISA: real-space stockholder iteration did not converge; max overlap residual = "
+        message << "ISA: stockholder iteration did not converge; max overlap residual = "
                 << std::setprecision(17) << diagnostics.max_overlap_residual;
         throw PSIEXCEPTION(message.str());
     }
@@ -823,7 +1178,7 @@ struct DigestBuilder {
 
 std::string context_digest(const FrozenResponseContext& context, const ISAOptions& options) {
     DigestBuilder digest;
-    digest.string("native-real-space-isa-context-v3");
+    digest.string("native-isa-context-v4");
     digest.scalar(static_cast<std::uint64_t>(context.sites().size()));
     for (const auto& site : context.sites())
         for (double coordinate : site) digest.scalar(coordinate);
@@ -858,6 +1213,14 @@ std::string context_digest(const FrozenResponseContext& context, const ISAOption
     digest.scalar(static_cast<std::uint64_t>(options.tail_activation_iteration()));
     digest.scalar(options.tail_activation_convergence());
     digest.scalar(options.electron_count_tolerance());
+    digest.scalar(static_cast<int>(options.method()));
+    digest.scalar(options.basis_eigenvalue_cutoff());
+    if (options.method() == ISAMethod::BasisSpaceA) {
+        if (!context.auxiliary_basis())
+            throw PSIEXCEPTION("ISA context digest: basis-space A requires a sealed auxiliary basis");
+        digest.basis(context.auxiliary_basis()->structural_snapshot());
+        digest.string(context.auxiliary_basis_key());
+    }
     std::ostringstream stream;
     stream << std::hex << std::setw(16) << std::setfill('0') << digest.hash;
     return stream.str();
@@ -869,20 +1232,25 @@ ISAOptions::ISAOptions(std::size_t radial_points, std::size_t angular_polar_poin
                        std::size_t angular_azimuthal_points, std::size_t max_iterations,
                        double convergence, double mix_fraction, double initial_alpha,
                        double tail_join_factor, std::size_t tail_activation_iteration,
-                       double tail_activation_convergence, double electron_count_tolerance)
+                       double tail_activation_convergence, double electron_count_tolerance,
+                       ISAMethod method, double basis_eigenvalue_cutoff)
     : radial_points_(radial_points), angular_polar_points_(angular_polar_points),
       angular_azimuthal_points_(angular_azimuthal_points), max_iterations_(max_iterations),
       convergence_(convergence), mix_fraction_(mix_fraction), initial_alpha_(initial_alpha),
       tail_join_factor_(tail_join_factor), tail_activation_iteration_(tail_activation_iteration),
       tail_activation_convergence_(tail_activation_convergence),
-      electron_count_tolerance_(electron_count_tolerance) {
+      electron_count_tolerance_(electron_count_tolerance), method_(method),
+      basis_eigenvalue_cutoff_(basis_eigenvalue_cutoff) {
     if (radial_points_ < 4 || angular_polar_points_ < 2 || angular_azimuthal_points_ < 4 ||
         max_iterations_ == 0 || tail_activation_iteration_ == 0 || !std::isfinite(convergence_) ||
         convergence_ <= 0.0 || !std::isfinite(mix_fraction_) || mix_fraction_ <= 0.0 ||
         mix_fraction_ > 1.0 || !std::isfinite(initial_alpha_) || initial_alpha_ <= 0.0 ||
         !std::isfinite(tail_join_factor_) || tail_join_factor_ <= 0.0 ||
         !std::isfinite(tail_activation_convergence_) || tail_activation_convergence_ <= 0.0 ||
-        !std::isfinite(electron_count_tolerance_) || electron_count_tolerance_ < 0.0)
+        !std::isfinite(electron_count_tolerance_) || electron_count_tolerance_ < 0.0 ||
+        (method_ == ISAMethod::BasisSpaceA &&
+         (!std::isfinite(basis_eigenvalue_cutoff_) || basis_eigenvalue_cutoff_ <= 0.0 ||
+          basis_eigenvalue_cutoff_ >= 1.0)))
         throw PSIEXCEPTION("ISAOptions: grid, iteration, tail, mixing, and tolerance values are invalid");
     if (angular_polar_points_ > std::numeric_limits<std::size_t>::max() / angular_azimuthal_points_)
         throw PSIEXCEPTION("ISAOptions: angular grid cardinality overflows");
@@ -944,8 +1312,11 @@ ISAWeights compute_isa_weights(std::shared_ptr<const FrozenResponseContext> cont
                                 shell_phi[mu] * shell_phi[nu]);
         return contraction.sum;
     };
+    const BasisSet* auxiliary = options.method() == ISAMethod::BasisSpaceA
+                                    ? context->auxiliary_basis().get()
+                                    : nullptr;
     auto result = solve(context->sites(), points, context->grid_weights(), atomic_numbers, output_density,
-                        evaluator, options, formal_electrons, true);
+                        evaluator, options, formal_electrons, true, auxiliary);
     result.diagnostics.context_digest = context_digest(*context, options);
     context->verify_basis_unchanged();
     return ISAWeights(std::move(context), std::move(result.weights), std::move(result.diagnostics));
@@ -977,8 +1348,11 @@ SyntheticISAResult compute_synthetic_isa(const std::vector<SitePosition>& sites,
     for (std::size_t point = 0; point < output_points.size(); ++point) density[point] = evaluator(output_points[point]);
     KahanSum count;
     for (std::size_t point = 0; point < density.size(); ++point) count.add(output_weights[point] * density[point]);
+    if (options.method() != ISAMethod::RealSpace)
+        throw PSIEXCEPTION("ISA synthetic fixture: basis-space A requires a sealed native auxiliary basis");
     auto core = solve(sites, output_points, output_weights, atomic_numbers, density, evaluator,
-                      options, count.sum, false, inject_tail_fit_failure_iteration, test_min_iterations);
+                      options, count.sum, false, nullptr, inject_tail_fit_failure_iteration,
+                      test_min_iterations);
     return {sites.size(), std::move(core.weights), std::move(core.diagnostics)};
 }
 

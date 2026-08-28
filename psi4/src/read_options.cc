@@ -185,8 +185,8 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     options.add_int("ATOMIC_POLARIZABILITY_FIT_MAX_POINTS", 500);
 
     /*- Which definition distributes the frequency-dependent density susceptibility over
-    sites in the native atomic-polarizability pipeline. ``ISA`` is the real-space iterated
-    stockholder partition on the sealed response grid. ``CDF`` is constrained density
+    sites in the native atomic-polarizability pipeline. ``ISA`` is the iterated-stockholder
+    partition selected by ``ATOMIC_POLARIZABILITY_ISA_METHOD``. ``CDF`` is constrained density
     fitting onto an atom-centred auxiliary basis, which is a different definition of the
     per-site split rather than a more accurate evaluation of the same one: the two agree
     on the molecular total and disagree on how it is divided. -*/
@@ -212,6 +212,17 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     violate the charge condition by a small nonzero amount, and the reviewed reference
     calculation's own record of that violation is about 1e-2. -*/
     options.add_double("ATOMIC_POLARIZABILITY_CDF_CHARGE_PENALTY", 1.0);
+
+    /*- Representation used to solve the ISA fixed point. ``REAL_SPACE`` retains the
+    historical direct spherical-average implementation. ``BASIS_SPACE_A`` projects each
+    stockholder atom into a sealed spherical auxiliary basis and takes its s block as the
+    next shape function. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_ISA_METHOD", "REAL_SPACE", "REAL_SPACE BASIS_SPACE_A");
+    /*- Spherical auxiliary basis used only by ``ISA_METHOD BASIS_SPACE_A``. The Python
+    driver attaches this basis without changing the orbital basis representation. -*/
+    options.add_str_i("ATOMIC_POLARIZABILITY_ISA_AUX_BASIS", "AUG-CC-PVTZ-RI");
+    /*- Relative spectral cutoff for each atom-local overlap least-squares solve. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_ISA_BASIS_EIGENVALUE_CUTOFF", 1.0e-12);
 
     /*- Radial nodes per atom in the native ISA partition quadrature. The wiring
     specification's measured grid table puts the ``1e-4`` parity gate at or above

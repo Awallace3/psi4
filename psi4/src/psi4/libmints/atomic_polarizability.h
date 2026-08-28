@@ -149,7 +149,15 @@ DenseRestrictedResponse solve_dense_restricted_response(const Matrix& H1, const 
                                                          double omega, const Matrix& rhs);
 }  // namespace detail
 
-/** Explicit, deterministic controls for the native real-space ISA fixed point. */
+/** Select the representation used to solve the iterated-stockholder fixed point. */
+enum class PSI_API ISAMethod {
+    /** Direct spherical averaging of the frozen AO density on atom-centred grids. */
+    RealSpace,
+    /** Atom-local least-squares projection in a sealed spherical auxiliary basis. */
+    BasisSpaceA,
+};
+
+/** Explicit, deterministic controls for the native ISA fixed point. */
 class PSI_API ISAOptions {
    public:
     ISAOptions(std::size_t radial_points = 100, std::size_t angular_polar_points = 18,
@@ -158,7 +166,9 @@ class PSI_API ISAOptions {
                double initial_alpha = 1.0, double tail_join_factor = 1.5,
                std::size_t tail_activation_iteration = 20,
                double tail_activation_convergence = 1.0e-6,
-               double electron_count_tolerance = 0.1);
+               double electron_count_tolerance = 0.1,
+               ISAMethod method = ISAMethod::RealSpace,
+               double basis_eigenvalue_cutoff = 1.0e-12);
 
     std::size_t radial_points() const { return radial_points_; }
     std::size_t angular_polar_points() const { return angular_polar_points_; }
@@ -171,6 +181,8 @@ class PSI_API ISAOptions {
     std::size_t tail_activation_iteration() const { return tail_activation_iteration_; }
     double tail_activation_convergence() const { return tail_activation_convergence_; }
     double electron_count_tolerance() const { return electron_count_tolerance_; }
+    ISAMethod method() const { return method_; }
+    double basis_eigenvalue_cutoff() const { return basis_eigenvalue_cutoff_; }
 
    private:
     std::size_t radial_points_;
@@ -184,6 +196,8 @@ class PSI_API ISAOptions {
     std::size_t tail_activation_iteration_;
     double tail_activation_convergence_;
     double electron_count_tolerance_;
+    ISAMethod method_;
+    double basis_eigenvalue_cutoff_;
 };
 
 struct PSI_API ISAGridProfile {
@@ -198,6 +212,13 @@ struct PSI_API ISAGridProfile {
 
 /** Deterministic diagnostics for a successfully converged native ISA partition. */
 struct PSI_API ISADiagnostics {
+    std::string method;
+    std::string density_source;
+    std::size_t auxiliary_function_count{};
+    std::vector<std::size_t> auxiliary_functions_per_site;
+    std::vector<std::size_t> retained_basis_ranks;
+    double max_basis_condition_number{};
+    std::size_t nonpositive_shape_repairs{};
     double electron_count{};
     double formal_electron_count{};
     double electron_count_absolute_error{};
