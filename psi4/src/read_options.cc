@@ -221,6 +221,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- Spherical auxiliary basis used only by ``ISA_METHOD BASIS_SPACE_A``. The Python
     driver attaches this basis without changing the orbital basis representation. -*/
     options.add_str_i("ATOMIC_POLARIZABILITY_ISA_AUX_BASIS", "AUG-CC-PVTZ-RI");
+    /*- Cartesian molecular auxiliary basis for the charge-constrained Coulomb fit
+    that supplies the ``Doo-C`` density target to basis-space ISA A. -*/
+    options.add_str_i("ATOMIC_POLARIZABILITY_ISA_DENSITY_AUX_BASIS", "AUG-CC-PVTZ-RI");
     /*- Relative spectral cutoff for each atom-local overlap least-squares solve. -*/
     options.add_double("ATOMIC_POLARIZABILITY_ISA_BASIS_EIGENVALUE_CUTOFF", 1.0e-12);
 

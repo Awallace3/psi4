@@ -824,7 +824,10 @@ FrozenResponseContext::FrozenResponseContext(
     std::string grac_x_name, std::string grac_c_name, double functional_density_tolerance,
     std::shared_ptr<const BasisSet> auxiliary_basis,
     std::shared_ptr<const BasisSetStructuralSnapshot> auxiliary_basis_snapshot,
-    std::string auxiliary_basis_key)
+    std::string auxiliary_basis_key,
+    std::shared_ptr<const BasisSet> density_auxiliary_basis,
+    std::shared_ptr<const BasisSetStructuralSnapshot> density_auxiliary_basis_snapshot,
+    std::string density_auxiliary_basis_key)
     : Ca_(std::move(Ca)), Cb_(std::move(Cb)), epsilon_a_(std::move(epsilon_a)),
       epsilon_b_(std::move(epsilon_b)), occupation_a_(std::move(occupation_a)),
       occupation_b_(std::move(occupation_b)), Da_(std::move(Da)), Db_(std::move(Db)), energy_(energy),
@@ -836,7 +839,10 @@ FrozenResponseContext::FrozenResponseContext(
       grac_c_name_(std::move(grac_c_name)), functional_density_tolerance_(functional_density_tolerance),
       auxiliary_basis_(std::move(auxiliary_basis)),
       auxiliary_basis_snapshot_(std::move(auxiliary_basis_snapshot)),
-      auxiliary_basis_key_(std::move(auxiliary_basis_key)) {}
+      auxiliary_basis_key_(std::move(auxiliary_basis_key)),
+      density_auxiliary_basis_(std::move(density_auxiliary_basis)),
+      density_auxiliary_basis_snapshot_(std::move(density_auxiliary_basis_snapshot)),
+      density_auxiliary_basis_key_(std::move(density_auxiliary_basis_key)) {}
 
 void FrozenResponseContext::verify_basis_unchanged() const {
     if (!basis_ || !basis_snapshot_ || basis_->structural_snapshot() != *basis_snapshot_)
@@ -850,6 +856,14 @@ void FrozenResponseContext::verify_basis_unchanged() const {
     if (auxiliary_basis_ && auxiliary_basis_->structural_snapshot() != *auxiliary_basis_snapshot_)
         throw PSIEXCEPTION(
             "FrozenResponseContext: retained auxiliary basis changed after provenance sealing");
+    if (static_cast<bool>(density_auxiliary_basis_) !=
+        static_cast<bool>(density_auxiliary_basis_snapshot_))
+        throw PSIEXCEPTION(
+            "FrozenResponseContext: density auxiliary basis and snapshot must both exist");
+    if (density_auxiliary_basis_ &&
+        density_auxiliary_basis_->structural_snapshot() != *density_auxiliary_basis_snapshot_)
+        throw PSIEXCEPTION(
+            "FrozenResponseContext: retained density auxiliary basis changed after provenance sealing");
 }
 
 namespace {
@@ -2890,13 +2904,21 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
     const std::shared_ptr<Wavefunction>& grac_wfn,
     const std::shared_ptr<Wavefunction>& neutral_precursor_wfn,
     const std::shared_ptr<Wavefunction>& cation_wfn) {
-    return create(grac_wfn, neutral_precursor_wfn, cation_wfn, std::string());
+    return create(grac_wfn, neutral_precursor_wfn, cation_wfn, std::string(), std::string());
 }
 
 std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
     const std::shared_ptr<Wavefunction>& grac_wfn,
     const std::shared_ptr<Wavefunction>& neutral_precursor_wfn,
     const std::shared_ptr<Wavefunction>& cation_wfn, const std::string& auxiliary_key) {
+    return create(grac_wfn, neutral_precursor_wfn, cation_wfn, auxiliary_key, std::string());
+}
+
+std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
+    const std::shared_ptr<Wavefunction>& grac_wfn,
+    const std::shared_ptr<Wavefunction>& neutral_precursor_wfn,
+    const std::shared_ptr<Wavefunction>& cation_wfn, const std::string& auxiliary_key,
+    const std::string& density_auxiliary_key) {
     const auto grac_hf = require_converged_scf(grac_wfn, "GRAC neutral");
     const auto precursor_hf = require_converged_scf(neutral_precursor_wfn, "neutral precursor");
     const auto cation_hf = require_converged_scf(cation_wfn, "cation");
@@ -3029,24 +3051,30 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
     // reference state. It is snapshotted exactly as the orbital basis is, and the
     // snapshot records has_puream(): a Cartesian and a spherical auxiliary basis over
     // the same shells are different bases and the seal must be able to tell them apart.
-    std::shared_ptr<const BasisSet> auxiliary_basis;
-    std::shared_ptr<const BasisSetStructuralSnapshot> auxiliary_snapshot;
-    if (!auxiliary_key.empty()) {
-        if (!grac_hf->basisset_exists(auxiliary_key))
-            throw PSIEXCEPTION("FrozenResponseContext: auxiliary basis '" + auxiliary_key +
+    const auto resolve_auxiliary = [&](const std::string& key, const std::string& role) {
+        std::pair<std::shared_ptr<const BasisSet>,
+                  std::shared_ptr<const BasisSetStructuralSnapshot>> result;
+        if (key.empty()) return result;
+        if (!grac_hf->basisset_exists(key))
+            throw PSIEXCEPTION("FrozenResponseContext: " + role + " auxiliary basis '" + key +
                                "' is not attached to the GRAC-corrected reference wavefunction");
-        auto resolved = grac_hf->get_basisset(auxiliary_key);
+        auto resolved = grac_hf->get_basisset(key);
         if (!resolved || resolved->nbf() <= 0 || resolved->nshell() <= 0)
-            throw PSIEXCEPTION("FrozenResponseContext: auxiliary basis '" + auxiliary_key +
+            throw PSIEXCEPTION("FrozenResponseContext: " + role + " auxiliary basis '" + key +
                                "' is empty");
         const auto auxiliary_molecule = resolved->molecule();
         if (!auxiliary_molecule || !same_nuclei_and_geometry(*grac_molecule, *auxiliary_molecule))
-            throw PSIEXCEPTION("FrozenResponseContext: auxiliary basis '" + auxiliary_key +
+            throw PSIEXCEPTION("FrozenResponseContext: " + role + " auxiliary basis '" + key +
                                "' does not describe the reference nuclear framework");
-        auxiliary_snapshot =
+        result.second =
             std::make_shared<const BasisSetStructuralSnapshot>(resolved->structural_snapshot());
-        auxiliary_basis = std::move(resolved);
-    }
+        result.first = std::move(resolved);
+        return result;
+    };
+    auto auxiliary = resolve_auxiliary(auxiliary_key, "atom-local");
+    auto density_auxiliary = resolve_auxiliary(density_auxiliary_key, "density-fit");
+    if (!auxiliary_key.empty() && auxiliary_key == density_auxiliary_key)
+        throw PSIEXCEPTION("FrozenResponseContext: atom-local and density-fit auxiliary keys must differ");
 
     GRACProvenance provenance{precursor_seal.energy, cation_seal.energy, homo, ip, applied_shift,
                               cation_seal.reference, cation_seal.charge, cation_seal.multiplicity};
@@ -3060,8 +3088,10 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
         grac_seal.Da->clone(), grac_seal.Db->clone(), grac_seal.energy, std::move(molecule_copy),
         grac_hf->basisset(), grac_seal.basis, functional, std::move(sites), grac_seal.grid_points,
         grac_seal.grid_weights, std::move(grid_blocks), std::move(provenance), grac_seal.functional.name,
-        kProtocolGRACX, kProtocolGRACC, functional_density_tolerance, std::move(auxiliary_basis),
-        std::move(auxiliary_snapshot), auxiliary_key));
+        kProtocolGRACX, kProtocolGRACC, functional_density_tolerance,
+        std::move(auxiliary.first), std::move(auxiliary.second), auxiliary_key,
+        std::move(density_auxiliary.first), std::move(density_auxiliary.second),
+        density_auxiliary_key));
 }
 
 ISAWeights::ISAWeights(std::shared_ptr<const FrozenResponseContext> context,
@@ -8080,6 +8110,7 @@ ISAOptions isa_options_from(Options& options) {
 ResponseKernel reviewed_response_kernel() { return ResponseKernel(0.25, 0.75); }
 
 const char* auxiliary_partition_basis_key() { return "DF_BASIS_ATOMIC_POLARIZABILITY"; }
+const char* isa_atom_auxiliary_basis_key() { return "ISA_ATOM_AUXILIARY"; }
 
 ResponsePartition response_partition_from(Options& options) {
     const std::string prefix = "response partition: ";
@@ -9287,22 +9318,35 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
     const auto isa_policy = auxiliary_partition ? ISAOptions() : isa_options_from(options);
     const bool basis_space_isa = !auxiliary_partition && isa_policy.method() == ISAMethod::BasisSpaceA;
     const bool needs_auxiliary_basis = auxiliary_partition || basis_space_isa;
-    const std::string auxiliary_key =
-        needs_auxiliary_basis ? auxiliary_partition_basis_key() : std::string();
-    if (needs_auxiliary_basis && !wfn_->basisset_exists(auxiliary_key)) {
+    const std::string auxiliary_key = auxiliary_partition
+                                          ? auxiliary_partition_basis_key()
+                                          : (basis_space_isa ? isa_atom_auxiliary_basis_key()
+                                                             : std::string());
+    const std::string density_auxiliary_key =
+        basis_space_isa ? auxiliary_partition_basis_key() : std::string();
+    const auto require_attached = [&](const std::string& key, const std::string& requested,
+                                      const std::string& role) {
+        if (!key.empty() && !wfn_->basisset_exists(key))
+            throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+                prefix + "basis-space ISA needs the " + role + " basis '" + requested +
+                "' attached under '" + key + "'. Run "
+                "psi4.driver.procrouting.atomic_polarizability.atomic_polarizabilities instead");
+    };
+    if (needs_auxiliary_basis) {
         const std::string requested = auxiliary_partition
                                           ? cdf_options.auxiliary_basis
                                           : options.get_str("ATOMIC_POLARIZABILITY_ISA_AUX_BASIS");
-        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
-            prefix + "the selected partition method needs the '" + requested +
-            "' auxiliary basis attached to the reference wavefunction under '" + auxiliary_key +
-            "', which a bare OEProp call cannot supply. Run "
-            "psi4.driver.procrouting.atomic_polarizability.atomic_polarizabilities instead");
+        require_attached(auxiliary_key, requested,
+                         auxiliary_partition ? "partition auxiliary" : "atom-local auxiliary");
     }
+    if (basis_space_isa)
+        require_attached(density_auxiliary_key,
+                         options.get_str("ATOMIC_POLARIZABILITY_ISA_DENSITY_AUX_BASIS"),
+                         "density-fit auxiliary");
 
     // Stage 1: the frozen GRAC response context, which revalidates the SCF triple itself.
-    auto context =
-        FrozenResponseContext::create(wfn_, neutral_precursor_wfn_, cation_wfn_, auxiliary_key);
+    auto context = FrozenResponseContext::create(wfn_, neutral_precursor_wfn_, cation_wfn_,
+                                                 auxiliary_key, density_auxiliary_key);
     if (!context) throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the frozen response context is null");
     const auto molecule = context->molecule();
     if (!molecule) throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the frozen context has no molecule");

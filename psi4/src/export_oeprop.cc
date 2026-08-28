@@ -100,8 +100,16 @@ void export_oeprop(py::module &m) {
         result["auxiliary_function_count"] = diagnostics.auxiliary_function_count;
         result["auxiliary_functions_per_site"] = diagnostics.auxiliary_functions_per_site;
         result["retained_basis_ranks"] = diagnostics.retained_basis_ranks;
+        result["basis_coefficients"] = diagnostics.basis_coefficients;
         result["max_basis_condition_number"] = diagnostics.max_basis_condition_number;
         result["nonpositive_shape_repairs"] = diagnostics.nonpositive_shape_repairs;
+        result["selective_bvls_active_bounds"] = diagnostics.selective_bvls_active_bounds;
+        result["max_bvls_kkt_residual"] = diagnostics.max_bvls_kkt_residual;
+        result["fitted_density_auxiliary_count"] = diagnostics.fitted_density_auxiliary_count;
+        result["fitted_density_charge"] = diagnostics.fitted_density_charge;
+        result["fitted_density_charge_residual"] = diagnostics.fitted_density_charge_residual;
+        result["fitted_density_stationarity_residual"] =
+            diagnostics.fitted_density_stationarity_residual;
         result["electron_count"] = diagnostics.electron_count;
         result["formal_electron_count"] = diagnostics.formal_electron_count;
         result["electron_count_absolute_error"] = diagnostics.electron_count_absolute_error;
@@ -122,6 +130,7 @@ void export_oeprop(py::module &m) {
         result["log_profiles"] = diagnostics.log_profiles;
         result["tail_join_radii"] = diagnostics.tail_join_radii;
         result["tail_alphas"] = diagnostics.tail_alphas;
+        result["tail_log_amplitudes"] = diagnostics.tail_log_amplitudes;
         result["context_digest"] = diagnostics.context_digest;
         return result;
     };
@@ -1532,12 +1541,13 @@ void export_oeprop(py::module &m) {
           [](const std::shared_ptr<Wavefunction>& grac_wfn,
              const std::shared_ptr<Wavefunction>& neutral_precursor_wfn,
              const std::shared_ptr<Wavefunction>& cation_wfn,
-             const std::string& auxiliary_key) {
+             const std::string& auxiliary_key,
+             const std::string& density_auxiliary_key) {
               return FrozenResponseContext::create(grac_wfn, neutral_precursor_wfn, cation_wfn,
-                                                   auxiliary_key);
+                                                   auxiliary_key, density_auxiliary_key);
           },
           "grac_wfn"_a, "neutral_precursor_wfn"_a, "cation_wfn"_a,
-          "auxiliary_key"_a = std::string());
+          "auxiliary_key"_a = std::string(), "density_auxiliary_key"_a = std::string());
     m.def("_atomic_polarizability_compute_isa_weights",
           [isa_options_from_dict, isa_result_dict](const std::shared_ptr<FrozenResponseContext>& context,
                                                      const py::dict& option_values) {
@@ -1553,6 +1563,14 @@ void export_oeprop(py::module &m) {
               auto isa = ISAWeights::create_test_only(isa_context, std::move(weights));
               return std::make_shared<ISAPolResponseProvider>(context, ResponseKernel(0.25, 0.75), std::move(isa));
           }, "context"_a, "isa_context"_a);
+    m.def("_atomic_polarizability_make_test_response_provider_with_weights",
+          [](const std::shared_ptr<FrozenResponseContext>& context,
+             const std::shared_ptr<FrozenResponseContext>& isa_context,
+             std::vector<double> weights) {
+              auto isa = ISAWeights::create_test_only(isa_context, std::move(weights));
+              return std::make_shared<ISAPolResponseProvider>(
+                  context, ResponseKernel(0.25, 0.75), std::move(isa));
+          }, "context"_a, "isa_context"_a, "weights"_a);
     m.def("_atomic_polarizability_make_native_response_provider",
           [isa_options_from_dict](const std::shared_ptr<FrozenResponseContext>& context,
                                   const py::dict& option_values) {

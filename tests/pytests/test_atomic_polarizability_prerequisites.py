@@ -436,6 +436,20 @@ def test_frozen_context_is_unaffected_by_later_source_orbital_and_density_mutati
         da.set(0, 0, old_da)
 
 
+def test_explicit_test_weights_are_structurally_validated(grac_states):
+    context = _context(grac_states)
+    summary = context.summary()
+    count = summary["grid_point_count"] * summary["site_count"]
+    provider = psi4.core._atomic_polarizability_make_test_response_provider_with_weights(
+        context, context, [1.0 / summary["site_count"]] * count
+    )
+    assert provider.expected_response_count([0.0], [0.0]) == 1
+    with pytest.raises(RuntimeError, match=r"partition weights"):
+        psi4.core._atomic_polarizability_make_test_response_provider_with_weights(
+            context, context, [1.0] * (count - 1)
+        )
+
+
 def test_frozen_context_attests_final_functional_density_tolerance(grac_states):
     grac, precursor, _, _ = grac_states
     context = _context(grac_states)

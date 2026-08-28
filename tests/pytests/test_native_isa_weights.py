@@ -13,6 +13,7 @@ pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.mints]
 
 _BASIS_H2O_CONTEXT = None
 _BASIS_H2O_AUXILIARY = None
+_BASIS_H2O_DENSITY_AUXILIARY = None
 
 
 def _synthetic(sites, points, terms, *, weights=None, atomic_numbers=None, **options):
@@ -255,7 +256,7 @@ def test_basis_space_options_fail_closed_without_a_native_auxiliary_basis():
 
 @pytest.fixture(scope="module")
 def frozen_h2o_context():
-    global _BASIS_H2O_CONTEXT, _BASIS_H2O_AUXILIARY
+    global _BASIS_H2O_CONTEXT, _BASIS_H2O_AUXILIARY, _BASIS_H2O_DENSITY_AUXILIARY
     psi4.core.be_quiet()
     psi4.set_options(
         {
@@ -301,13 +302,18 @@ def frozen_h2o_context():
     context = psi4.core._atomic_polarizability_make_frozen_response_context(
         grac, precursor, cation_wfn
     )
-    auxiliary_key = "DF_BASIS_ATOMIC_POLARIZABILITY"
+    auxiliary_key = "ISA_ATOM_AUXILIARY"
+    density_auxiliary_key = "DF_BASIS_ATOMIC_POLARIZABILITY"
     _BASIS_H2O_AUXILIARY = psi4.core.BasisSet.build(
         grac.molecule(), auxiliary_key, "cc-pvdz-ri", puream=1, quiet=True
     )
+    _BASIS_H2O_DENSITY_AUXILIARY = psi4.core.BasisSet.build(
+        grac.molecule(), density_auxiliary_key, "cc-pvdz-ri", puream=0, quiet=True
+    )
     grac.set_basisset(auxiliary_key, _BASIS_H2O_AUXILIARY)
+    grac.set_basisset(density_auxiliary_key, _BASIS_H2O_DENSITY_AUXILIARY)
     _BASIS_H2O_CONTEXT = psi4.core._atomic_polarizability_make_frozen_response_context(
-        grac, precursor, cation_wfn, auxiliary_key
+        grac, precursor, cation_wfn, auxiliary_key, density_auxiliary_key
     )
     overlap = np.asarray(psi4.core.MintsHelper(grac.basisset()).ao_overlap())
     frozen_density = np.asarray(grac.Da()) + np.asarray(grac.Db())
@@ -362,7 +368,11 @@ def test_basis_space_a_uses_a_sealed_spherical_auxiliary_basis(frozen_h2o_contex
     assert all(math.fsum(row) == pytest.approx(1.0, abs=1.0e-13) for row in rows)
     diagnostics = result["diagnostics"]
     assert diagnostics["method"] == "basis-space-a"
-    assert diagnostics["density_source"] == "frozen AO density"
+    assert diagnostics["density_source"] == "Doo-C fitted auxiliary density"
+    assert diagnostics["fitted_density_auxiliary_count"] == _BASIS_H2O_DENSITY_AUXILIARY.nbf()
+    assert diagnostics["fitted_density_charge"] == pytest.approx(10.0, abs=1.0e-3)
+    assert diagnostics["fitted_density_charge_residual"] <= 1.0e-3
+    assert math.isfinite(diagnostics["fitted_density_stationarity_residual"])
     assert diagnostics["auxiliary_function_count"] == _BASIS_H2O_AUXILIARY.nbf()
     expected_per_site = [
         sum(_BASIS_H2O_AUXILIARY.function_to_center(function) == site
@@ -373,6 +383,8 @@ def test_basis_space_a_uses_a_sealed_spherical_auxiliary_basis(frozen_h2o_contex
     assert all(rank > 0 for rank in diagnostics["retained_basis_ranks"])
     assert math.isfinite(diagnostics["max_basis_condition_number"])
     assert diagnostics["nonpositive_shape_repairs"] == 0
+    assert diagnostics["selective_bvls_active_bounds"] == 1
+    assert diagnostics["max_bvls_kkt_residual"] <= 1.0e-10
     assert math.fsum(diagnostics["atomic_populations"]) == pytest.approx(
         diagnostics["electron_count"], abs=2.0e-10
     )
@@ -380,8 +392,11 @@ def test_basis_space_a_uses_a_sealed_spherical_auxiliary_basis(frozen_h2o_contex
         formal_from_density, abs=2.0e-10
     )
     assert diagnostics["atomic_populations"] == pytest.approx(
-        [8.500677596728877, 0.7630705014779949, 0.7630705014779815], abs=5.0e-8
+        [8.464331601897436, 0.7812434988834898, 0.7812434989039919], abs=5.0e-8
     )
+    assert diagnostics["grid_profile"]["radius_table"] == "CamCASP-Gauss-Legendre-beta-0.5"
+    assert all(alpha > 0.0 for alpha in diagnostics["tail_alphas"])
+    assert all(math.isfinite(value) for value in diagnostics["tail_log_amplitudes"])
     real = psi4.core._atomic_polarizability_compute_isa_weights(
         frozen_h2o_context[0], {key: value for key, value in options.items() if key != "method"}
     )
@@ -392,6 +407,7 @@ def test_basis_space_a_uses_a_sealed_spherical_auxiliary_basis(frozen_h2o_contex
 def test_driver_attaches_the_selected_spherical_isa_auxiliary_basis(frozen_h2o_context):
     from psi4.driver.procrouting.atomic_polarizability import (
         AUXILIARY_PARTITION_BASIS_KEY,
+        ISA_ATOM_AUXILIARY_BASIS_KEY,
         _attach_partition_auxiliary_basis,
     )
 
@@ -400,12 +416,15 @@ def test_driver_attaches_the_selected_spherical_isa_auxiliary_basis(frozen_h2o_c
         "atomic_polarizability_partition": "ISA",
         "atomic_polarizability_isa_method": "BASIS_SPACE_A",
         "atomic_polarizability_isa_aux_basis": "cc-pvdz-ri",
+        "atomic_polarizability_isa_density_aux_basis": "cc-pvdz-ri",
     })
     try:
         _attach_partition_auxiliary_basis(grac)
-        attached = grac.get_basisset(AUXILIARY_PARTITION_BASIS_KEY)
-        assert attached.name().upper() == "CC-PVDZ-RI"
-        assert attached.has_puream() is True
+        atom = grac.get_basisset(ISA_ATOM_AUXILIARY_BASIS_KEY)
+        density = grac.get_basisset(AUXILIARY_PARTITION_BASIS_KEY)
+        assert atom.name().upper() == density.name().upper() == "CC-PVDZ-RI"
+        assert atom.has_puream() is True
+        assert density.has_puream() is False
     finally:
         psi4.set_options({"atomic_polarizability_isa_method": "REAL_SPACE"})
 
@@ -413,7 +432,7 @@ def test_driver_attaches_the_selected_spherical_isa_auxiliary_basis(frozen_h2o_c
 @pytest.mark.scf
 def test_basis_space_a_requires_a_sealed_auxiliary_basis(frozen_h2o_context):
     context, _, _ = frozen_h2o_context
-    with pytest.raises(RuntimeError, match=r"no sealed auxiliary basis"):
+    with pytest.raises(RuntimeError, match=r"Cartesian density auxiliary bases are required"):
         psi4.core._atomic_polarizability_compute_isa_weights(
             context, {"method": "basis-space-a", "radial_points": 12,
                       "angular_polar_points": 6, "angular_azimuthal_points": 8}

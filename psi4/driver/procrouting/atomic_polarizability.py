@@ -45,6 +45,7 @@ See ``docs/superpowers/specs/2026-08-17-end-to-end-wiring.md``.
 __all__ = [
     "PIPELINE_MEMORY_BYTES",
     "AUXILIARY_PARTITION_BASIS_KEY",
+    "ISA_ATOM_AUXILIARY_BASIS_KEY",
     "atomic_polarizabilities",
     "atomic_polarizability_scf_triple",
     "publish_atomic_polarizabilities",
@@ -75,42 +76,58 @@ PIPELINE_MEMORY_BYTES = 4 * 1024**3
 #: Psi4 convention, so the auxiliary basis is built here and attached to the reference
 #: wavefunction, and the pipeline fails closed with an explanatory message if it is absent.
 AUXILIARY_PARTITION_BASIS_KEY = "DF_BASIS_ATOMIC_POLARIZABILITY"
+#: Distinct spherical atom-local expansion used by basis-space ISA Algorithm A.
+ISA_ATOM_AUXILIARY_BASIS_KEY = "ISA_ATOM_AUXILIARY"
 
 
 def _attach_partition_auxiliary_basis(grac_wfn: core.Wavefunction) -> None:
     """Attach the selected partition's auxiliary basis without changing the AO basis.
 
-    The constrained-fit partition requires Cartesian functions, while basis-space ISA A
-    requires spherical functions so that its shape is exactly the ``l = 0`` block. The two
-    methods are mutually exclusive and share one sealed map key.
+    The constrained-fit partition requires Cartesian functions. Basis-space ISA A uses
+    both a Cartesian molecular density-fit space and a distinct spherical atom-local
+    expansion whose ``l = 0`` block is the shape function.
     """
     partition = core.get_global_option("ATOMIC_POLARIZABILITY_PARTITION")
     isa_method = core.get_global_option("ATOMIC_POLARIZABILITY_ISA_METHOD")
     if partition == "CDF":
         name = core.get_global_option("ATOMIC_POLARIZABILITY_CDF_AUX_BASIS")
-        puream = 0
-    elif partition == "ISA" and isa_method == "BASIS_SPACE_A":
-        name = core.get_global_option("ATOMIC_POLARIZABILITY_ISA_AUX_BASIS")
-        puream = 1
-    else:
+        auxiliary = core.BasisSet.build(
+            grac_wfn.molecule(), AUXILIARY_PARTITION_BASIS_KEY, name,
+            puream=0, quiet=True
+        )
+        if auxiliary.has_puream():
+            raise ValidationError(
+                "atomic polarizabilities: the constrained-fit auxiliary basis "
+                f"'{name}' resolved to spherical functions. A Cartesian auxiliary space is "
+                "required; check the global PUREAM option"
+            )
+        grac_wfn.set_basisset(AUXILIARY_PARTITION_BASIS_KEY, auxiliary)
+        return
+    if partition != "ISA" or isa_method != "BASIS_SPACE_A":
         return
 
-    auxiliary = core.BasisSet.build(
-        grac_wfn.molecule(), AUXILIARY_PARTITION_BASIS_KEY, name, puream=puream, quiet=True
+    atom_name = core.get_global_option("ATOMIC_POLARIZABILITY_ISA_AUX_BASIS")
+    density_name = core.get_global_option("ATOMIC_POLARIZABILITY_ISA_DENSITY_AUX_BASIS")
+    atom_auxiliary = core.BasisSet.build(
+        grac_wfn.molecule(), ISA_ATOM_AUXILIARY_BASIS_KEY, atom_name,
+        puream=1, quiet=True
     )
-    if partition == "CDF" and auxiliary.has_puream():
+    density_auxiliary = core.BasisSet.build(
+        grac_wfn.molecule(), AUXILIARY_PARTITION_BASIS_KEY, density_name,
+        puream=0, quiet=True
+    )
+    if not atom_auxiliary.has_puream():
         raise ValidationError(
-            "atomic polarizabilities: the constrained-fit auxiliary basis "
-            f"'{name}' resolved to spherical functions. A Cartesian auxiliary space is "
-            "required; check the global PUREAM option"
+            "atomic polarizabilities: basis-space ISA A atom auxiliary basis "
+            f"'{atom_name}' resolved to Cartesian functions"
         )
-    if partition == "ISA" and not auxiliary.has_puream():
+    if density_auxiliary.has_puream():
         raise ValidationError(
-            "atomic polarizabilities: basis-space ISA A auxiliary basis "
-            f"'{name}' resolved to Cartesian functions. A spherical auxiliary space is "
-            "required; check the global PUREAM option"
+            "atomic polarizabilities: basis-space ISA A density auxiliary basis "
+            f"'{density_name}' resolved to spherical functions"
         )
-    grac_wfn.set_basisset(AUXILIARY_PARTITION_BASIS_KEY, auxiliary)
+    grac_wfn.set_basisset(ISA_ATOM_AUXILIARY_BASIS_KEY, atom_auxiliary)
+    grac_wfn.set_basisset(AUXILIARY_PARTITION_BASIS_KEY, density_auxiliary)
 
 
 class AtomicPolarizabilitySCFTriple(NamedTuple):

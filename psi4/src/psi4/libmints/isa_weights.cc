@@ -2,8 +2,9 @@
  * Native iterated-stockholder (ISA) weights.
  *
  * The real-space and basis-space-A representations solve the same defining fixed
- * point from the frozen AO density. Neither uses MBIS, nearest-centre, or uniform
- * production fallbacks.
+ * point from a sealed density target. Real-space ISA uses the frozen AO density;
+ * basis-space A uses a charge-constrained Coulomb fit in a distinct Cartesian
+ * auxiliary space. Neither uses MBIS, nearest-centre, or uniform production fallbacks.
  */
 
 #include "psi4/libmints/atomic_polarizability.h"
@@ -21,6 +22,8 @@
 #include <utility>
 
 #include "psi4/libmints/basisset.h"
+#include "psi4/libmints/integral.h"
+#include "psi4/libmints/twobody.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/molecule.h"
 #include "psi4/libmints/vector.h"
@@ -458,8 +461,10 @@ struct CoreResult {
 struct BasisSpaceBlock {
     std::vector<int> functions;
     std::vector<std::size_t> s_offsets;
+    std::vector<bool> diffuse_s_lower_bounds;
     std::vector<double> values;
     std::vector<double> integration_weights;
+    std::vector<double> normal_matrix;
     std::vector<double> coefficients;
     std::shared_ptr<Matrix> eigenvectors;
     std::shared_ptr<Vector> eigenvalues;
@@ -473,29 +478,110 @@ struct BasisSpaceWorkspace {
 };
 
 std::vector<double> solve_basis_block(const BasisSpaceBlock& block, const std::vector<double>& rhs,
-                                      double relative_cutoff) {
+                                      double relative_cutoff, std::size_t* active_bound_count,
+                                      double* kkt_residual) {
     const std::size_t count = block.functions.size();
-    if (!block.eigenvectors || !block.eigenvalues || rhs.size() != count)
+    if (rhs.size() != count || block.normal_matrix.size() != count * count ||
+        block.diffuse_s_lower_bounds.size() != count)
         throw PSIEXCEPTION("ISA basis-space A: local least-squares dimensions are inconsistent");
-    const double maximum = block.eigenvalues->get(static_cast<int>(count - 1));
-    const double cutoff = relative_cutoff * maximum;
+
+    // CamCASP's BVLS policy does not make the whole ISA expansion nonnegative. It
+    // lower-bounds only s shells whose primitive exponents lie in [0, 0.5]; compact
+    // s and every higher-angular-momentum coefficient remain free. Solve that convex
+    // quadratic by an active-set method over the overlap normal equations.
+    std::vector<bool> active(count, false);
     std::vector<double> solution(count, 0.0);
-    for (std::size_t mode = 0; mode < count; ++mode) {
-        const double eigenvalue = block.eigenvalues->get(static_cast<int>(mode));
-        if (eigenvalue <= cutoff) continue;
-        KahanSum projection;
-        for (std::size_t row = 0; row < count; ++row)
-            projection.add((*block.eigenvectors)(static_cast<int>(row), static_cast<int>(mode)) * rhs[row]);
-        const double scaled = projection.sum / eigenvalue;
-        if (!std::isfinite(scaled))
-            throw PSIEXCEPTION("ISA basis-space A: local least-squares solve is not finite");
-        for (std::size_t row = 0; row < count; ++row)
-            solution[row] += (*block.eigenvectors)(static_cast<int>(row), static_cast<int>(mode)) * scaled;
+    const auto solve_free = [&]() {
+        std::vector<std::size_t> free;
+        for (std::size_t index = 0; index < count; ++index)
+            if (!active[index]) free.push_back(index);
+        std::fill(solution.begin(), solution.end(), 0.0);
+        if (free.empty()) return;
+        const std::size_t nfree = free.size();
+        Matrix matrix(static_cast<int>(nfree), static_cast<int>(nfree));
+        for (std::size_t row = 0; row < nfree; ++row)
+            for (std::size_t column = 0; column < nfree; ++column)
+                matrix(static_cast<int>(row), static_cast<int>(column)) =
+                    block.normal_matrix[free[row] * count + free[column]];
+        Matrix vectors(static_cast<int>(nfree), static_cast<int>(nfree));
+        Vector values(static_cast<int>(nfree));
+        matrix.diagonalize(vectors, values, ascending);
+        const double maximum = values.get(static_cast<int>(nfree - 1));
+        if (!std::isfinite(maximum) || maximum <= 0.0)
+            throw PSIEXCEPTION("ISA basis-space A: free overlap block is not positive semidefinite");
+        const double cutoff = relative_cutoff * maximum;
+        for (std::size_t mode = 0; mode < nfree; ++mode) {
+            const double eigenvalue = values.get(static_cast<int>(mode));
+            if (eigenvalue <= cutoff) continue;
+            KahanSum projection;
+            for (std::size_t row = 0; row < nfree; ++row)
+                projection.add(vectors(static_cast<int>(row), static_cast<int>(mode)) * rhs[free[row]]);
+            const double scaled = projection.sum / eigenvalue;
+            if (!std::isfinite(scaled))
+                throw PSIEXCEPTION("ISA basis-space A: bounded least-squares solve is not finite");
+            for (std::size_t row = 0; row < nfree; ++row)
+                solution[free[row]] += vectors(static_cast<int>(row), static_cast<int>(mode)) * scaled;
+        }
+    };
+
+    double rhs_scale = 1.0;
+    for (const double value : rhs) rhs_scale = std::max(rhs_scale, std::abs(value));
+    const double tolerance = 1.0e-11 * rhs_scale;
+    for (std::size_t iteration = 0; iteration < 8 * count + 16; ++iteration) {
+        solve_free();
+        std::size_t violated = count;
+        double most_negative = -tolerance;
+        for (std::size_t index = 0; index < count; ++index) {
+            if (!active[index] && block.diffuse_s_lower_bounds[index] && solution[index] < most_negative) {
+                most_negative = solution[index];
+                violated = index;
+            }
+        }
+        if (violated != count) {
+            active[violated] = true;
+            continue;
+        }
+
+        std::size_t release = count;
+        double worst_gradient = -tolerance;
+        for (std::size_t index = 0; index < count; ++index) {
+            if (!active[index]) continue;
+            KahanSum gradient;
+            gradient.add(-rhs[index]);
+            for (std::size_t column = 0; column < count; ++column)
+                gradient.add(block.normal_matrix[index * count + column] * solution[column]);
+            if (gradient.sum < worst_gradient) {
+                worst_gradient = gradient.sum;
+                release = index;
+            }
+        }
+        if (release == count) {
+            std::size_t active_count = 0;
+            double residual = 0.0;
+            for (std::size_t index = 0; index < count; ++index) {
+                if (!std::isfinite(solution[index]))
+                    throw PSIEXCEPTION("ISA basis-space A: local coefficient is not finite");
+                KahanSum gradient;
+                gradient.add(-rhs[index]);
+                for (std::size_t column = 0; column < count; ++column)
+                    gradient.add(block.normal_matrix[index * count + column] * solution[column]);
+                if (active[index]) {
+                    ++active_count;
+                    residual = std::max(residual, std::max(0.0, -gradient.sum));
+                } else {
+                    residual = std::max(residual, std::abs(gradient.sum));
+                    if (block.diffuse_s_lower_bounds[index])
+                        residual = std::max(residual, std::max(0.0, -solution[index]));
+                }
+                if (std::abs(solution[index]) < tolerance) solution[index] = 0.0;
+            }
+            if (active_bound_count) *active_bound_count = active_count;
+            if (kkt_residual) *kkt_residual = residual / (1.0 + rhs_scale);
+            return solution;
+        }
+        active[release] = false;
     }
-    for (double value : solution)
-        if (!std::isfinite(value))
-            throw PSIEXCEPTION("ISA basis-space A: local coefficient is not finite");
-    return solution;
+    throw PSIEXCEPTION("ISA basis-space A: selective BVLS active set did not converge");
 }
 
 Profile basis_shape_profile(const BasisSpaceBlock& block, const Quadrature& radial,
@@ -549,6 +635,7 @@ BasisSpaceWorkspace make_basis_workspace(const BasisSet& auxiliary,
     const std::size_t naux = static_cast<std::size_t>(auxiliary.nbf());
     std::vector<std::vector<int>> functions(sites.size());
     std::vector<std::vector<std::size_t>> s_offsets(sites.size());
+    std::vector<std::vector<bool>> diffuse_s_lower_bounds(sites.size());
     std::vector<std::pair<double, int>> initial_candidates(sites.size(),
                                                            {std::numeric_limits<double>::infinity(), -1});
     for (int shell_index = 0; shell_index < auxiliary.nshell(); ++shell_index) {
@@ -562,8 +649,15 @@ BasisSpaceWorkspace make_basis_workspace(const BasisSet& auxiliary,
                 throw PSIEXCEPTION(prefix + "an auxiliary shell centre does not match its frozen site");
         const std::size_t site = static_cast<std::size_t>(center);
         const std::size_t prior = functions[site].size();
-        for (int local = 0; local < shell.nfunction(); ++local)
+        bool diffuse_s_bound = shell.am() == 0;
+        for (int primitive = 0; primitive < shell.nprimitive(); ++primitive) {
+            const double exponent = shell.exp(primitive);
+            diffuse_s_bound = diffuse_s_bound && exponent >= 0.0 && exponent <= 0.5;
+        }
+        for (int local = 0; local < shell.nfunction(); ++local) {
             functions[site].push_back(shell.function_index() + local);
+            diffuse_s_lower_bounds[site].push_back(diffuse_s_bound);
+        }
         if (shell.am() == 0) {
             if (shell.nfunction() != 1)
                 throw PSIEXCEPTION(prefix + "an s shell does not contain exactly one spherical function");
@@ -600,7 +694,7 @@ BasisSpaceWorkspace make_basis_workspace(const BasisSet& auxiliary,
         estimated_elements = checked_add(
             estimated_elements, checked_product(local_count, point_count));
         estimated_elements = checked_add(
-            estimated_elements, checked_product(3, checked_product(local_count, local_count)));
+            estimated_elements, checked_product(4, checked_product(local_count, local_count)));
         estimated_elements = checked_add(
             estimated_elements, checked_add(point_count, checked_product(4, local_count)));
     }
@@ -621,6 +715,7 @@ BasisSpaceWorkspace make_basis_workspace(const BasisSet& auxiliary,
         auto& block = workspace.blocks[site];
         block.functions = std::move(functions[site]);
         block.s_offsets = std::move(s_offsets[site]);
+        block.diffuse_s_lower_bounds = std::move(diffuse_s_lower_bounds[site]);
         if (block.functions.empty() || block.s_offsets.empty() || initial_candidates[site].second < 0)
             throw PSIEXCEPTION(prefix + "every site needs auxiliary functions and at least one s shell");
         const std::size_t local_count = block.functions.size();
@@ -666,6 +761,11 @@ BasisSpaceWorkspace make_basis_workspace(const BasisSet& auxiliary,
         for (std::size_t row = 0; row < local_count; ++row)
             for (std::size_t column = 0; column < row; ++column)
                 overlap(static_cast<int>(column), static_cast<int>(row)) =
+                    overlap(static_cast<int>(row), static_cast<int>(column));
+        block.normal_matrix.resize(local_count * local_count);
+        for (std::size_t row = 0; row < local_count; ++row)
+            for (std::size_t column = 0; column < local_count; ++column)
+                block.normal_matrix[row * local_count + column] =
                     overlap(static_cast<int>(row), static_cast<int>(column));
         block.eigenvectors = std::make_shared<Matrix>(static_cast<int>(local_count), static_cast<int>(local_count));
         block.eigenvalues = std::make_shared<Vector>(static_cast<int>(local_count));
@@ -733,7 +833,16 @@ std::vector<Profile> update_basis_profiles(BasisSpaceWorkspace& workspace,
         }
         if (point_index != point_count)
             throw PSIEXCEPTION("ISA basis-space A: local target-grid indexing is inconsistent");
-        block.coefficients = solve_basis_block(block, rhs, options.basis_eigenvalue_cutoff());
+        std::size_t active_bounds = 0;
+        double kkt_residual = 0.0;
+        block.coefficients = solve_basis_block(block, rhs, options.basis_eigenvalue_cutoff(),
+                                               &active_bounds, &kkt_residual);
+        if (diagnostics) {
+            diagnostics->selective_bvls_active_bounds =
+                std::max(diagnostics->selective_bvls_active_bounds, active_bounds);
+            diagnostics->max_bvls_kkt_residual =
+                std::max(diagnostics->max_bvls_kkt_residual, kkt_residual);
+        }
         Profile next = basis_shape_profile(block, radial[site], angular, &profiles[site],
                                            diagnostics ? &diagnostics->nonpositive_shape_repairs : nullptr);
         if (options.mix_fraction() < 1.0) {
@@ -797,8 +906,10 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
     std::vector<Quadrature> radial(nsite);
     std::vector<double> scales(nsite), joins(nsite);
     for (std::size_t site = 0; site < nsite; ++site) {
-        scales[site] = slater_radius(atomic_numbers[site]);
-        joins[site] = options.tail_join_factor() * scales[site];
+        scales[site] = options.method() == ISAMethod::BasisSpaceA
+                           ? 0.5
+                           : slater_radius(atomic_numbers[site]);
+        joins[site] = options.tail_join_factor() * slater_radius(atomic_numbers[site]);
         radial[site] = mapped_radial(options.radial_points(), scales[site]);
     }
 
@@ -832,7 +943,13 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
                 values.push_back(density_evaluator(point));
             }
         }
-        clamp_density(values);
+        if (options.method() == ISAMethod::BasisSpaceA) {
+            for (const double value : values)
+                if (!std::isfinite(value))
+                    throw PSIEXCEPTION("ISA basis-space A: fitted target density is not finite");
+        } else {
+            clamp_density(values);
+        }
     }
 
     KahanSum electron_sum;
@@ -865,7 +982,9 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
     diagnostics.grid_profile.shell_point_count = nsite * (1 + options.radial_points() * nangular);
     diagnostics.grid_profile.angular_rule = "Gauss-Legendre-polar x uniform-azimuth exact product rule";
     diagnostics.grid_profile.radial_rule = "mapped Gauss-Legendre r=s*x/(1-x), explicit origin";
-    diagnostics.grid_profile.radius_table = "Slater-1964-bohr-v1";
+    diagnostics.grid_profile.radius_table = options.method() == ISAMethod::BasisSpaceA
+                                                ? "CamCASP-Gauss-Legendre-beta-0.5"
+                                                : "Slater-1964-bohr-v1";
     diagnostics.grid_profile.atom_scales = scales;
 
     std::vector<double> previous_populations(nsite, 0.0);
@@ -1044,10 +1163,17 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
     if (std::abs(result.diagnostics.total_charge_residual) > charge_bound)
         throw PSIEXCEPTION("ISA: integrated stockholder population conservation failed");
     for (const auto& rule : radial) result.diagnostics.radial_nodes.push_back(rule.nodes);
+    if (options.method() == ISAMethod::BasisSpaceA) {
+        result.diagnostics.basis_coefficients.reserve(basis_workspace.blocks.size());
+        for (const auto& block : basis_workspace.blocks)
+            result.diagnostics.basis_coefficients.push_back(block.coefficients);
+    }
     for (const auto& profile : profiles) {
         result.diagnostics.log_profiles.push_back(profile.logs);
         result.diagnostics.tail_join_radii.push_back(profile.has_tail ? profile.tail_join : 0.0);
         result.diagnostics.tail_alphas.push_back(profile.has_tail ? profile.tail_alpha : 0.0);
+        result.diagnostics.tail_log_amplitudes.push_back(
+            profile.has_tail ? profile.tail_log_amplitude : 0.0);
     }
     return result;
 }
@@ -1176,9 +1302,136 @@ struct DigestBuilder {
     }
 };
 
+struct FittedAuxiliaryDensity {
+    std::shared_ptr<const BasisSet> basis;
+    std::vector<double> coefficients;
+    std::vector<double> values;
+    double charge{};
+    double charge_residual{};
+    double stationarity_residual{};
+
+    double evaluate(const SitePosition& point) {
+        auto* mutable_basis = const_cast<BasisSet*>(basis.get());
+        mutable_basis->compute_phi(values.data(), point[0], point[1], point[2]);
+        KahanSum result;
+        for (std::size_t function = 0; function < coefficients.size(); ++function)
+            result.add(coefficients[function] * values[function]);
+        if (!std::isfinite(result.sum))
+            throw PSIEXCEPTION("ISA basis-space A: fitted density is not finite");
+        return result.sum;
+    }
+};
+
+FittedAuxiliaryDensity make_fitted_auxiliary_density(const FrozenResponseContext& context,
+                                                      double electron_count) {
+    const std::string prefix = "ISA basis-space A Doo-C fit: ";
+    const auto orbital = context.basis();
+    const auto auxiliary = context.density_auxiliary_basis();
+    if (!orbital || !auxiliary)
+        throw PSIEXCEPTION(prefix + "orbital and Cartesian density auxiliary bases are required");
+    if (auxiliary->has_puream())
+        throw PSIEXCEPTION(prefix + "density auxiliary basis must use Cartesian functions");
+    const std::size_t nbf = static_cast<std::size_t>(orbital->nbf());
+    const std::size_t naux = static_cast<std::size_t>(auxiliary->nbf());
+    if (nbf == 0 || naux == 0 || naux > 8192)
+        throw PSIEXCEPTION(prefix + "basis dimensions are outside the supported envelope");
+    const auto checked_product = [&prefix](std::size_t first, std::size_t second) {
+        if (first != 0 && second > std::numeric_limits<std::size_t>::max() / first)
+            throw PSIEXCEPTION(prefix + "workspace cardinality overflows");
+        return first * second;
+    };
+    const auto checked_add = [&prefix](std::size_t first, std::size_t second) {
+        if (second > std::numeric_limits<std::size_t>::max() - first)
+            throw PSIEXCEPTION(prefix + "workspace cardinality overflows");
+        return first + second;
+    };
+    const std::size_t auxiliary_square = checked_product(naux, naux);
+    const std::size_t three_index = checked_product(naux, checked_product(nbf, nbf));
+    const std::size_t estimated_elements = checked_add(
+        checked_product(3, auxiliary_square), checked_add(three_index, checked_product(8, naux)));
+    const std::size_t estimated = checked_product(sizeof(double), estimated_elements);
+    if (estimated > Process::environment.get_memory() / 2)
+        throw PSIEXCEPTION(prefix + "workspace exceeds half of configured memory");
+
+    const auto metric = detail::auxiliary_coulomb_metric(auxiliary);
+    std::vector<std::size_t> function_to_site(naux, 0);
+    for (std::size_t function = 0; function < naux; ++function) {
+        const int center = auxiliary->function_to_center(static_cast<int>(function));
+        if (center < 0 || static_cast<std::size_t>(center) >= context.sites().size())
+            throw PSIEXCEPTION(prefix + "density auxiliary function is centred off the sites");
+        function_to_site[function] = static_cast<std::size_t>(center);
+    }
+    const auto moments = detail::auxiliary_multipole_moments(
+        *auxiliary, context.sites(), function_to_site);
+    Matrix constraints("ISA DOO-C CHARGE CONSTRAINT", 1, static_cast<int>(naux));
+    for (std::size_t function = 0; function < naux; ++function)
+        constraints(0, static_cast<int>(function)) = moments(static_cast<int>(function), 0);
+
+    Matrix rhs("ISA DOO-C RIGHT HAND SIDE", static_cast<int>(naux), 1);
+    auto auxiliary_shared = std::const_pointer_cast<BasisSet>(auxiliary);
+    auto orbital_shared = std::const_pointer_cast<BasisSet>(orbital);
+    auto zero = BasisSet::zero_ao_basis_set();
+    IntegralFactory factory(auxiliary_shared, zero, orbital_shared, orbital_shared);
+    std::shared_ptr<TwoBodyAOInt> integrals(factory.eri());
+    if (!integrals) throw PSIEXCEPTION(prefix + "three-centre integral engine is unavailable");
+    for (int p_shell = 0; p_shell < auxiliary->nshell(); ++p_shell) {
+        const int p_count = auxiliary->shell(p_shell).nfunction();
+        const int p_start = auxiliary->shell(p_shell).function_index();
+        for (int mu_shell = 0; mu_shell < orbital->nshell(); ++mu_shell) {
+            const int mu_count = orbital->shell(mu_shell).nfunction();
+            const int mu_start = orbital->shell(mu_shell).function_index();
+            for (int nu_shell = 0; nu_shell < orbital->nshell(); ++nu_shell) {
+                const int nu_count = orbital->shell(nu_shell).nfunction();
+                const int nu_start = orbital->shell(nu_shell).function_index();
+                integrals->compute_shell(p_shell, 0, mu_shell, nu_shell);
+                const double* buffer = integrals->buffer();
+                for (int p = 0, index = 0; p < p_count; ++p)
+                    for (int mu = 0; mu < mu_count; ++mu)
+                        for (int nu = 0; nu < nu_count; ++nu, ++index) {
+                            const double density = context.Da()->get(mu_start + mu, nu_start + nu) +
+                                                   context.Db()->get(mu_start + mu, nu_start + nu);
+                            const double increment = density * buffer[index];
+                            if (!std::isfinite(increment))
+                                throw PSIEXCEPTION(prefix + "right-hand-side contraction is not finite");
+                            rhs(p_start + p, 0) += increment;
+                        }
+            }
+        }
+    }
+
+    CDFOptions fit_options;
+    fit_options.localisation = CDFLocalisation::None;
+    fit_options.localisation_weight = 0.0;
+    fit_options.constraints = CDFConstraintPolicy::QuadraticPenalty;
+    fit_options.constraint_penalty = 100.0;
+    // The reference solves this Lambda=100 system by untruncated LU despite its
+    // near-dependent Cartesian contaminants. Retain the full measured spectrum here;
+    // diagnostics still expose the condition number and stationarity residual.
+    fit_options.metric_relative_cutoff = 1.0e-16;
+    fit_options.maximum_condition_number = 1.0e18;
+    CDFDiagnostics diagnostics;
+    const auto solved = detail::solve_constrained_density_fit(
+        metric, rhs, constraints, {electron_count}, fit_options, &diagnostics);
+    FittedAuxiliaryDensity result;
+    result.basis = auxiliary;
+    result.coefficients.resize(naux);
+    result.values.resize(naux);
+    KahanSum charge;
+    for (std::size_t function = 0; function < naux; ++function) {
+        result.coefficients[function] = solved(static_cast<int>(function), 0);
+        charge.add(constraints(0, static_cast<int>(function)) * result.coefficients[function]);
+    }
+    result.charge = charge.sum;
+    result.charge_residual = std::abs(result.charge - electron_count);
+    result.stationarity_residual = diagnostics.max_stationarity_residual;
+    if (!std::isfinite(result.charge) || result.charge_residual > 1.0e-3)
+        throw PSIEXCEPTION(prefix + "fitted charge residual exceeds 1e-3 electrons");
+    return result;
+}
+
 std::string context_digest(const FrozenResponseContext& context, const ISAOptions& options) {
     DigestBuilder digest;
-    digest.string("native-isa-context-v4");
+    digest.string("native-isa-context-v5");
     digest.scalar(static_cast<std::uint64_t>(context.sites().size()));
     for (const auto& site : context.sites())
         for (double coordinate : site) digest.scalar(coordinate);
@@ -1218,8 +1471,12 @@ std::string context_digest(const FrozenResponseContext& context, const ISAOption
     if (options.method() == ISAMethod::BasisSpaceA) {
         if (!context.auxiliary_basis())
             throw PSIEXCEPTION("ISA context digest: basis-space A requires a sealed auxiliary basis");
+        if (!context.density_auxiliary_basis())
+            throw PSIEXCEPTION("ISA context digest: basis-space A requires a sealed density auxiliary basis");
         digest.basis(context.auxiliary_basis()->structural_snapshot());
         digest.string(context.auxiliary_basis_key());
+        digest.basis(context.density_auxiliary_basis()->structural_snapshot());
+        digest.string(context.density_auxiliary_basis_key());
     }
     std::ostringstream stream;
     stream << std::hex << std::setw(16) << std::setfill('0') << digest.hash;
@@ -1296,27 +1553,45 @@ ISAWeights compute_isa_weights(std::shared_ptr<const FrozenResponseContext> cont
         throw PSIEXCEPTION("ISA: formal frozen electron count is not finite and positive");
     validate_inputs(context->sites(), points, context->grid_weights(), atomic_numbers);
     auto output_density = ao_density(*context, points, &maps);
-    // Reuse one AO buffer for the deterministic serial auxiliary-grid pass.
-    // Matrix/basis dimensions were validated by ao_density above.
-    auto* shell_basis = const_cast<BasisSet*>(context->basis().get());
-    const auto shell_da = context->Da();
-    const auto shell_db = context->Db();
-    std::vector<double> shell_phi(static_cast<std::size_t>(shell_basis->nbf()));
-    const auto evaluator = [shell_basis, shell_da, shell_db, shell_phi = std::move(shell_phi)](
-                               const SitePosition& point) mutable {
-        shell_basis->compute_phi(shell_phi.data(), point[0], point[1], point[2]);
-        KahanSum contraction;
-        for (std::size_t mu = 0; mu < shell_phi.size(); ++mu)
-            for (std::size_t nu = 0; nu < shell_phi.size(); ++nu)
-                contraction.add((shell_da->get(mu, nu) + shell_db->get(mu, nu)) *
-                                shell_phi[mu] * shell_phi[nu]);
-        return contraction.sum;
-    };
+    std::function<double(const SitePosition&)> evaluator;
+    std::shared_ptr<FittedAuxiliaryDensity> fitted_density;
+    if (options.method() == ISAMethod::BasisSpaceA) {
+        fitted_density = std::make_shared<FittedAuxiliaryDensity>(
+            make_fitted_auxiliary_density(*context, formal_electrons));
+        evaluator = [fitted_density](const SitePosition& point) {
+            return fitted_density->evaluate(point);
+        };
+    } else {
+        // Reuse one AO buffer for the deterministic serial auxiliary-grid pass.
+        // Matrix/basis dimensions were validated by ao_density above.
+        auto* shell_basis = const_cast<BasisSet*>(context->basis().get());
+        const auto shell_da = context->Da();
+        const auto shell_db = context->Db();
+        std::vector<double> shell_phi(static_cast<std::size_t>(shell_basis->nbf()));
+        evaluator = [shell_basis, shell_da, shell_db, shell_phi = std::move(shell_phi)](
+                        const SitePosition& point) mutable {
+            shell_basis->compute_phi(shell_phi.data(), point[0], point[1], point[2]);
+            KahanSum contraction;
+            for (std::size_t mu = 0; mu < shell_phi.size(); ++mu)
+                for (std::size_t nu = 0; nu < shell_phi.size(); ++nu)
+                    contraction.add((shell_da->get(mu, nu) + shell_db->get(mu, nu)) *
+                                    shell_phi[mu] * shell_phi[nu]);
+            return contraction.sum;
+        };
+    }
     const BasisSet* auxiliary = options.method() == ISAMethod::BasisSpaceA
                                     ? context->auxiliary_basis().get()
                                     : nullptr;
     auto result = solve(context->sites(), points, context->grid_weights(), atomic_numbers, output_density,
                         evaluator, options, formal_electrons, true, auxiliary);
+    if (fitted_density) {
+        result.diagnostics.density_source = "Doo-C fitted auxiliary density";
+        result.diagnostics.fitted_density_auxiliary_count = fitted_density->coefficients.size();
+        result.diagnostics.fitted_density_charge = fitted_density->charge;
+        result.diagnostics.fitted_density_charge_residual = fitted_density->charge_residual;
+        result.diagnostics.fitted_density_stationarity_residual =
+            fitted_density->stationarity_residual;
+    }
     result.diagnostics.context_digest = context_digest(*context, options);
     context->verify_basis_unchanged();
     return ISAWeights(std::move(context), std::move(result.weights), std::move(result.diagnostics));

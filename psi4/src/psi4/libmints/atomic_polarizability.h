@@ -217,8 +217,15 @@ struct PSI_API ISADiagnostics {
     std::size_t auxiliary_function_count{};
     std::vector<std::size_t> auxiliary_functions_per_site;
     std::vector<std::size_t> retained_basis_ranks;
+    std::vector<std::vector<double>> basis_coefficients;
     double max_basis_condition_number{};
     std::size_t nonpositive_shape_repairs{};
+    std::size_t selective_bvls_active_bounds{};
+    double max_bvls_kkt_residual{};
+    std::size_t fitted_density_auxiliary_count{};
+    double fitted_density_charge{};
+    double fitted_density_charge_residual{};
+    double fitted_density_stationarity_residual{};
     double electron_count{};
     double formal_electron_count{};
     double electron_count_absolute_error{};
@@ -239,6 +246,7 @@ struct PSI_API ISADiagnostics {
     std::vector<std::vector<double>> log_profiles;
     std::vector<double> tail_join_radii;
     std::vector<double> tail_alphas;
+    std::vector<double> tail_log_amplitudes;
     std::string context_digest;
 };
 
@@ -326,6 +334,13 @@ class PSI_API FrozenResponseContext {
         const std::shared_ptr<Wavefunction>& neutral_precursor_wfn,
         const std::shared_ptr<Wavefunction>& cation_wfn,
         const std::string& auxiliary_key);
+    /** Seal distinct atom-local and molecular density-fitting auxiliary spaces. */
+    static std::shared_ptr<FrozenResponseContext> create(
+        const std::shared_ptr<Wavefunction>& grac_wfn,
+        const std::shared_ptr<Wavefunction>& neutral_precursor_wfn,
+        const std::shared_ptr<Wavefunction>& cation_wfn,
+        const std::string& auxiliary_key,
+        const std::string& density_auxiliary_key);
 
     const std::shared_ptr<const Matrix>& Ca() const { return Ca_; }
     const std::shared_ptr<const Matrix>& Cb() const { return Cb_; }
@@ -341,6 +356,11 @@ class PSI_API FrozenResponseContext {
     /** Sealed auxiliary basis, or null when none was attached. */
     const std::shared_ptr<const BasisSet>& auxiliary_basis() const { return auxiliary_basis_; }
     const std::string& auxiliary_basis_key() const { return auxiliary_basis_key_; }
+    /** Separate Cartesian auxiliary space used for the constrained fitted ISA target. */
+    const std::shared_ptr<const BasisSet>& density_auxiliary_basis() const {
+        return density_auxiliary_basis_;
+    }
+    const std::string& density_auxiliary_basis_key() const { return density_auxiliary_basis_key_; }
     const std::shared_ptr<const SuperFunctional>& functional() const { return functional_; }
     const std::vector<SitePosition>& sites() const { return sites_; }
     const std::vector<double>& grid_points() const { return grid_points_; }
@@ -370,7 +390,10 @@ class PSI_API FrozenResponseContext {
                           double functional_density_tolerance,
                           std::shared_ptr<const BasisSet> auxiliary_basis,
                           std::shared_ptr<const BasisSetStructuralSnapshot> auxiliary_basis_snapshot,
-                          std::string auxiliary_basis_key);
+                          std::string auxiliary_basis_key,
+                          std::shared_ptr<const BasisSet> density_auxiliary_basis,
+                          std::shared_ptr<const BasisSetStructuralSnapshot> density_auxiliary_basis_snapshot,
+                          std::string density_auxiliary_basis_key);
 
     std::shared_ptr<const Matrix> Ca_;
     std::shared_ptr<const Matrix> Cb_;
@@ -399,6 +422,9 @@ class PSI_API FrozenResponseContext {
     std::shared_ptr<const BasisSet> auxiliary_basis_;
     std::shared_ptr<const BasisSetStructuralSnapshot> auxiliary_basis_snapshot_;
     std::string auxiliary_basis_key_;
+    std::shared_ptr<const BasisSet> density_auxiliary_basis_;
+    std::shared_ptr<const BasisSetStructuralSnapshot> density_auxiliary_basis_snapshot_;
+    std::string density_auxiliary_basis_key_;
 };
 
 /** Up-front storage and integral-work gate for caller-supplied point response. */
