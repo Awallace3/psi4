@@ -400,10 +400,15 @@ shows what that threshold buys: eight eigenvalues lie below 1e-6 and none below
 It does not help. Sixty iterations, the DIIS error stuck between 4.9e-06 and
 1.3e-05 against a 1e-07 target, and the energy oscillating over a 7.7e-03 Eh
 band around -3695.478 -- 52.73 Eh BELOW the converged DirectJK reference of
--3642.752751 from 12441235. Discarding variational freedom can only raise an
-SCF energy, so that offset is not the orthogonalization's; it is the size a
-0.31% deficit in J reaches on a system whose Coulomb energy is 1.66e+04 Eh. The
-supporting measurement is in gtfock_diffuse_j_diagnostics.txt, section 4.
+-3642.752751 from 12441235. Discarding variational freedom can only raise an SCF
+energy, so that offset is not the orthogonalization's; the run is converging on
+the right answer to a different Fock operator. What makes it different is not
+established. This job was originally read as excluding the conditioning of the
+basis, and that reading has since been withdrawn: eight directions out of 1863
+moves s_min only from 1.089528e-07 to 1.050e-06, which is one decade of a factor
+worth about 9.2e+06, so the remedy was far too weak to exclude anything. See
+gtfock_diffuse_j_diagnostics.txt, section 5, which also withdraws the 0.31% J
+deficit this paragraph used to invoke.
 
 The job has no JSON record because the probe script crashed after the SCF
 returned, on a regex that parsed the printed minimum eigenvalue and choked on

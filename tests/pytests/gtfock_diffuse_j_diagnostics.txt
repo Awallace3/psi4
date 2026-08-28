@@ -4,9 +4,15 @@ on a large system are not supported" bullet
 
 doc/sphinxman/source/gtfock.rst states, under `Prototype scope`, that GTFock
 cannot converge protein157 in Cartesian 6-31+G** (1863 basis functions) while
-Psi4's own DirectJK and density fitting both converge the identical input, and
-that the fault is in J rather than K and follows the diffuse shells rather than
-the system size. Those are the claims this file backs.
+Psi4's own DirectJK and density fitting both converge the identical input. That
+is the claim this file backs, and it is measured directly from the runs.
+
+This file also once claimed to locate the fault -- in J rather than K, and in
+the diffuse shells rather than the system size. It does not any more. Section 5
+is a control that was run late and overturned that attribution; the cause is
+open. Sections 1 through 4 are preserved as run, because their measurements are
+sound even where the conclusions drawn from them were not, and because the way
+they went wrong is worth keeping.
 
 Two kinds of evidence live in two different files, and the split is deliberate:
 
@@ -35,16 +41,25 @@ things to change to run them elsewhere.
 
 Two cautions apply to every number below.
 
-The comparison density is NOT a converged SCF density -- it cannot be, since the
-SCF being diagnosed does not converge. It is the occupied orbitals after a single
-SCF iteration from a SAD guess, taken from the run that cached Cocc.npy with
-maxiter=1 and fail_on_maxiter=False, then reused verbatim by every later probe.
-It was produced by GTFock, because at this size the density-fitting alternative
-falls back to DiskDFJK and writes ~128 GiB of scratch to answer a question that
-does not depend on which engine made it: both engines are handed the identical
-matrix, so any difference between their outputs is theirs. Section 3 is the
-control that tests whether the density is nonetheless pathological enough to
-manufacture a difference on its own.
+The comparison density used in sections 1 through 4 is NOT a converged SCF
+density -- it cannot be, since the SCF being diagnosed does not converge. It is
+the occupied orbitals after a single SCF iteration from a SAD guess, taken from
+the run that cached Cocc.npy with maxiter=1 and fail_on_maxiter=False, then
+reused verbatim by every later probe. It was produced by GTFock, because at this
+size the density-fitting alternative falls back to DiskDFJK and writes ~128 GiB
+of scratch.
+
+READ SECTION 5 BEFORE SECTIONS 1 THROUGH 4. That density was finally measured,
+late, at max|D| = 1.19e+06, against the ~2 of any physical closed-shell density:
+one SCF iteration in this basis had already left the physical range by six
+orders of magnitude, and every difference sections 1 through 4 report was
+measured there. Their numbers are real and reproducible. The attribution built
+on them -- that GTFock's J is 0.31% low -- is not: section 5 repeats the probe
+on a physical density of the same molecule in the same basis and finds the two
+engines agreeing to eight significant figures. The earlier sections are kept
+exactly as they were run, with each withdrawn conclusion marked where it occurs,
+because what they actually measured is still evidence -- just evidence about the
+density rather than about GTFock.
 
 The probes report Frobenius norms and element-wise maxima of DIFFERENCES between
 two engines on that density. They are meaningful as a comparison between engines
@@ -221,6 +236,11 @@ every digit printed. Both engines return exactly symmetric J and K (the
 asymmetry rows are 0.000e+00 throughout), so this is not a transposition or
 accumulation-order artifact.
 
+[WITHDRAWN, see section 5. The 6-31+G** density this is measured on has max|D| =
+2.38e+06 while the 6-31G** density it is compared against has max|D| = 2.08. The
+comparison changes the density and the basis at the same time. On matched
+physical densities the two bases agree, and J and K behave alike.]
+
 Conditioning is measured here, not assumed, and it is a multiplier rather than a
 cause. The 1863-function overlap matrix has s_min = 1.089528e-07, only 9% above
 the S_TOLERANCE default of 1e-7 (psi4/src/read_options.cc), so Psi4 orthogonalizes
@@ -358,7 +378,10 @@ scale factor either. Both parts are reproducible to every digit.
 ------------------------------------------------------------------------
 
 Sections 1 and 2 establish that the difference is in J, follows the diffuse
-shells, and does not depend on the rank count. None of that yet rules out the
+shells, and does not depend on the rank count. [The first two of those are
+WITHDRAWN, see section 5; the rank-count result stands. The section is preserved
+because the question it asks next is the right one, and because the answer it
+gives to that question is wrong in an instructive way.] None of that yet rules out the
 least interesting explanation: that this density is so badly conditioned as a
 probe that NO integral engine could be trusted on it, and the 0.31% is measuring
 the probe rather than GTFock. The density's J is a difference of much larger
@@ -663,6 +686,12 @@ run is at its sixtieth iteration. The claim the numbers support is not an
 identity but a scale: nothing about orthogonalization operates at 50 Eh on this
 system, and the J deficit does. K, by contrast, contributes 0.12 Eh.
 
+[WITHDRAWN in full, see section 5. Neither exclusion holds: the first is a non-
+sequitur, since the reference engines have no perturbation for the 9.2e+06
+amplification to act on, and the second rests on a remedy that this same section
+measured as removing only 8 directions of 1863, worth one decade of
+amplification. Conditioning is the leading suspect, not an excluded one.]
+
 Conditioning is now excluded twice. It was already excluded as a cause, because
 DirectJK and density fitting converge the identical near-singular input in 12
 monotone iterations (job 12441235); it is excluded as a remedy here, because
@@ -670,3 +699,250 @@ removing the near-null directions outright leaves the failure intact and leaves
 the energy in the same wrong place. What the small s_min does do is amplify --
 ||dF||_F / s_min = 1.37e+08 from section 1 -- and the amplification of an error
 is not the error.
+
+
+5. The physical-density control: was any of it GTFock's?
+--------------------------------------------------------
+
+Sections 1 through 4 all measure the same thing: a difference between two
+engines handed one cached density. That design is sound only if the density is
+one the engines could actually be asked for in a converged calculation. Nothing
+above checked that. Section 3's title asks whether the deficit is real or the
+probe density is, but what section 3 varied was Psi4's screening on the SAME
+density; it never varied the density. The control below does, and it is the one
+that decides the question.
+
+The check that should have come first costs no integrals. A closed-shell density
+normalised so that tr(DS) is the electron count has elements of order 1, and at
+most 2 -- two electrons in one orbital on one function. Measuring the three
+cached densities:
+
+    density                              max|D|        ||D||_F
+    6-31G**   after one SCF iteration   2.0770e+00   2.4338e+01
+    6-31+G**  after one SCF iteration   2.3847e+06   9.6701e+06
+    6-31+G**  converged 6-31G** proj.   2.0770e+00   2.4338e+01
+
+The middle row is the density every number in sections 1 through 4 was measured
+on. One SCF iteration in the diffuse basis had already carried it six orders of
+magnitude out of physical range. It is not a guess density that happens to be
+unconverged; it is wreckage produced by the very failure being diagnosed. The
+first and third rows agree to five figures because the projection is Lowdin-
+symmetrised and preserves the metric, which is also the check that the
+projection did not invent anything.
+
+So the probe density had to be replaced with one that is delocalized -- unlike
+the SAD guess, which is block diagonal by atom and so blind to any inter-atomic
+effect -- and physical, unlike the iterate. The converged 6-31G** density
+projected into 6-31+G** is both, and it is a density this molecule genuinely
+has.
+
+--- physdens.py, verbatim ---
+
+"""Compare the engines at protein157/6-31+G** on a PHYSICAL delocalized density.
+
+Two densities have already been compared at this point and they disagree about
+whether GTFock is broken:
+
+  SAD (block diagonal by atom, physical)   -> engines agree to 1.2e-06 Eh
+  SCF iterate in this near-singular basis  -> GTFock's J is 0.31% low
+
+Those differ in two ways at once, delocalization and scale, so neither explains
+the other. This supplies the missing third density: delocalized like the second,
+physical like the first. It is the converged 6-31G** density -- measured max|D| =
+2.08 -- projected into 6-31+G**, so the comparison changes only the pathology and
+holds the delocalization fixed.
+
+If the engines agree here, the 0.31% belongs to the probe density and not to
+GTFock, and the SCF failure is about what the near-singular basis does to the
+iterates. If they still disagree, it is GTFock's, on a density no one can call
+unreasonable. The projection is validated (orthonormality, electron count,
+density scale) before any of it is believed.
+"""
+import os, sys, time, numpy as np
+os.environ.setdefault("PSI_SCRATCH", "/fastscratch/awallace43/psi4tmp")
+import psi4
+sys.path.insert(0, "/home/awallace43/.treehouse/psi4-1ae95c/2/psi4/tests/pytests")
+from gtfock_hpc_benchmark import _SYSTEMS
+D = "/tmp/fm-psi4-djk/diag"
+psi4.set_num_threads(int(os.environ.get("PD_THREADS", "24"))); psi4.set_memory("40 GB")
+psi4.core.set_output_file(f"{D}/physdens.out", False)
+
+mol = psi4.geometry(_SYSTEMS["protein157"])
+def build_basis(name):
+    psi4.set_options({"basis": name, "puream": False, "scf_type": "direct"})
+    w = psi4.core.Wavefunction.build(mol, psi4.core.get_global_option("BASIS"))
+    return w.basisset(), w.nalpha()
+
+bs_old, ndocc = build_basis("6-31G**")
+bs_new, ndocc_new = build_basis("6-31+G**")
+assert ndocc == ndocc_new, (ndocc, ndocc_new)
+C_old = np.load(f"{D}/Cocc_631Gss.npy")
+assert C_old.shape == (bs_old.nbf(), ndocc), (C_old.shape, bs_old.nbf(), ndocc)
+
+mints = psi4.core.MintsHelper(bs_new)
+S_nn = np.asarray(mints.ao_overlap())
+S_no = np.asarray(mints.ao_overlap(bs_new, bs_old))
+assert S_no.shape == (bs_new.nbf(), bs_old.nbf()), S_no.shape
+
+# Least-squares projection. S_nn is near singular (s_min ~ 1e-7), so a plain
+# inverse would inject exactly the near-null-space blow-up this probe exists to
+# avoid; the pseudoinverse cutoff discards it instead.
+C_proj = np.linalg.pinv(S_nn, rcond=1e-6) @ (S_no @ C_old)
+M = C_proj.T @ S_nn @ C_proj
+w, V = np.linalg.eigh(M)
+print(f"projection metric eigenvalues: min={w.min():.6e} max={w.max():.6e}", flush=True)
+Cocc = C_proj @ (V @ np.diag(w ** -0.5) @ V.T)
+
+orth = np.abs(Cocc.T @ S_nn @ Cocc - np.eye(ndocc)).max()
+Dm = 2.0 * Cocc @ Cocc.T
+nelec = np.trace(Dm @ S_nn)
+print(f"VALIDATE  max|C^T S C - I| = {orth:.3e}   tr(DS) = {nelec:.6f} "
+      f"(expect {2*ndocc})   max|D| = {np.abs(Dm).max():.4e}   "
+      f"||D||_F = {np.linalg.norm(Dm):.4e}", flush=True)
+if orth > 1e-8 or abs(nelec - 2 * ndocc) > 1e-6:
+    print("PROJECTION REJECTED: not an orthonormal N-electron density; "
+          "nothing below this line would mean anything.", flush=True)
+    sys.exit(1)
+np.save(f"{D}/Cocc_proj_631pGss.npy", Cocc)
+Cm = psi4.core.Matrix.from_array(np.ascontiguousarray(Cocc))
+
+def buildJK(scf_type):
+    psi4.set_options({"basis": "6-31+G**", "puream": False,
+                      "ints_tolerance": 1e-12, "scf_type": scf_type})
+    jk = psi4.core.JK.build_JK(bs_new, None)
+    jk.set_do_J(True); jk.set_do_K(True); jk.initialize()
+    jk.C_left_add(Cm)
+    t = time.perf_counter(); jk.compute(); dt = time.perf_counter() - t
+    J = np.asarray(jk.J()[0]).copy(); K = np.asarray(jk.K()[0]).copy()
+    nm = jk.name(); jk.finalize()
+    print(f"  [{dt:7.1f}s] {nm} ({scf_type})", flush=True)
+    return J, K
+
+Jd, Kd = buildJK("direct")
+Jg, Kg = buildJK("gtfock")
+dJ, dK = Jg - Jd, Kg - Kd
+x = Jd.ravel()
+eps = -(x @ dJ.ravel()) / (x @ x)
+resid = np.linalg.norm(dJ + eps * Jd) / max(np.linalg.norm(dJ), 1e-300)
+dF = 2.0 * dJ - dK
+e2 = 2.0 * np.sum(Dm * dJ) - np.sum(Dm * dK)
+print(f"\nPHYS eps={eps:.6e} resid_frac={resid:.3f} "
+      f"maxdJ={np.abs(dJ).max():.6e} normdJ={np.linalg.norm(dJ):.6e} "
+      f"maxdK={np.abs(dK).max():.6e} normdK={np.linalg.norm(dK):.6e} "
+      f"normdF={np.linalg.norm(dF):.6e} dE2={e2:.6e} Eh "
+      f"trace_ratio={np.trace(Jg)/np.trace(Jd):.8f}", flush=True)
+print("=== PHYSDENS_DONE ===", flush=True)
+
+--- results, from after_ranks.log ---
+
+projection metric eigenvalues: min=1.000000e+00 max=1.000000e+00
+VALIDATE  max|C^T S C - I| = 6.661e-15   tr(DS) = 580.000000 (expect 580)   max|D| = 2.0770e+00   ||D||_F = 2.4338e+01
+  [  421.3s] GTFockJK (gtfock)
+
+PHYS eps=3.611712e-09 resid_frac=1.000 maxdJ=6.990697e-04 normdJ=7.341583e-03 maxdK=5.323189e-06 normdK=1.039973e-04 normdF=1.465512e-02 dE2=-2.179793e-04 Eh trace_ratio=1.00000000
+
+Set against the same quantities on the wrecked density, in the same basis, for
+the same molecule, from the same two engines:
+
+    density                       eps          resid     ||dJ||       dE2
+    6-31+G**  one SCF iteration   3.101426e-03  0.188   7.4407e+00   -97.1 Eh
+    6-31+G**  projected physical  3.611712e-09  1.000   7.3416e-03   -2.18e-04 Eh
+    6-31G**   one SCF iteration   3.553951e-09  1.000   2.5910e-03    --
+
+eps falls by six orders of magnitude. resid_frac goes from 0.188 to 1.000,
+meaning the difference stops having any uniform component at all and becomes
+purely scattered -- which is precisely the signature section 3 measured for
+every screening option Psi4 exposes, and which section 3 used to argue that
+GTFock's difference was of a different KIND. On a physical density it is not of
+a different kind. trace_ratio is 1.00000000. The two-electron energy difference
+is 2.18e-04 Eh rather than tens of hartrees.
+
+The bottom row is the decisive comparison and it was sitting in section 1
+unread. GTFock's agreement with DirectJK on a physical 6-31+G** density (eps =
+3.6e-09) is the same as its agreement on a physical 6-31G** density (eps =
+3.6e-09). The diffuse shells make no difference to it.
+
+What falls
+~~~~~~~~~~
+
+Every claim of the form "GTFock's J is 0.31% low" is withdrawn. GTFock's J is
+0.31% low on one specific wrecked density, and so, for all this file shows, is
+any J built by any method that screens at all. Specifically:
+
+  - Section 1's conclusion that the fault "follows the diffuse shells rather
+    than the size" is confounded: the 6-31G** arm was measured on a physical
+    density (max|D| = 2.08) and the 6-31+G** arm on a wrecked one
+    (max|D| = 2.38e+06). Two things changed between the arms, not one. On
+    matched physical densities the two bases give the same answer.
+  - Section 1's contrast between J and K -- J 0.31% low, K within 1e-06 -- is
+    measured on that same density. It remains true OF that density and is no
+    longer evidence that J is where GTFock breaks.
+  - Section 3's conclusion that GTFock's difference is a different kind from
+    any Psi4 screening choice is withdrawn. On a physical density it has the
+    same resid_frac = 1.000 scattered signature they do.
+  - Section 4's energy arithmetic -- that -eps * E_J = -51.6 Eh accounts for
+    the failing run's -52.7 Eh offset -- is withdrawn. Both quantities are
+    properties of diverged states, and matching two numbers that each come
+    from the wreckage does not establish that one causes the other.
+  - The doc bullet's primitive-screen hypothesis loses its supporting
+    evidence. It is not disproven -- GTFock does screen primitives at a
+    hardcoded 1e-14 that INTS_TOLERANCE cannot reach, and that is still a real
+    property of the stack -- but nothing in this file now argues that it is
+    what breaks this SCF.
+
+What stands
+~~~~~~~~~~~
+
+The user-facing restriction is unaffected, because it never depended on the
+mechanism. GTFock runs the full 100 iterations on protein157/6-31+G** (job
+12434225) while DirectJK converges it to -3642.752751 and DiskDFJK to
+-3642.748403, each in 12 monotone iterations from the same build (job 12441235).
+Diffuse functions on a system this size remain unsupported.
+
+Also unaffected:
+
+  - Rank and thread invariance, section 2. Every digit is identical at 1, 2 and
+    4 ranks and at 1, 4, 8 and 24 threads, with a 12.2x wall-clock span across
+    the thread sweep. Whatever this is, it is not a distribution bug. This was
+    always the strongest result in the file and it needed no density
+    assumption: it compares GTFock to GTFock.
+  - The measured cost of Psi4's own screening controls, section 3: at most
+    5.19e-04 in Frobenius norm against an unscreened build. That is a
+    measurement of Psi4, not of GTFock, and it stands.
+  - The overlap spectra, section 4: s_min = 1.089528e-07 for 6-31+G** with 8
+    eigenvalues below 1e-6 and 22 below 1e-5, against s_min = 3.321363e-04 for
+    6-31G** with nothing below 1e-5.
+  - Job 12441826: S_TOLERANCE raised to 1e-6 does not rescue the SCF.
+
+What this reopens
+~~~~~~~~~~~~~~~~~
+
+Section 4 closed with "conditioning is now excluded twice". That is wrong in
+both halves and is retracted here.
+
+It was excluded as a CAUSE on the grounds that DirectJK and density fitting
+cross the same near-singular overlap in 12 iterations. That does not follow.
+Symmetric orthogonalization amplifies a PERTURBATION to the Fock build by
+1/s_min, about 9.2e+06 here. DirectJK has no perturbation with respect to
+itself, so there is nothing for its 9.2e+06 to act on, and its converging is
+exactly what a conditioning-amplification mechanism predicts rather than
+evidence against one. What the reference runs establish is that the basis alone
+is survivable, not that the basis is innocent when combined with a second
+engine.
+
+It was excluded as a REMEDY on the grounds that S_TOLERANCE 1e-6 left the
+failure intact. But section 4 measured, and then did not use, how weak that
+remedy is: raising the threshold to 1e-6 discards 8 directions out of 1863 and
+moves s_min from 1.089528e-07 to the ninth eigenvalue at 1.050e-06. The
+amplification goes from 9.18e+06 to 9.52e+05. One decade. A remedy that buys one
+decade failing does not exclude a mechanism that may need four.
+
+The consistent reading of everything now measured is that a small engine
+difference -- ||dF||_F = 1.47e-02 on a physical density, which is ordinary
+screening-level disagreement -- meets an amplification of 9.2e+06 in this basis
+and destroys the iterate, after which the density leaves physical range and the
+engines diverge for the uninteresting reason that they are being asked about a
+matrix with elements of 1e+06. On that reading the 0.31% is the consequence and
+the conditioning is the cause. This is a hypothesis, stated as one. It predicts
+that the blow-up is visible at the very first iteration, which is testable and
+cheap.
