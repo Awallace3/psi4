@@ -136,8 +136,8 @@ Prototype scope
   (1555 basis functions) and does not converge in Cartesian ``6-31+G**``
   (1863), running the full 100 iterations. The failure is the engine's and not
   the system's: |PSIfours| own ``DirectJK`` and its density fitting each
-  converged the identical 1863-function input in 12 monotone iterations on the
-  same build and the same hardware. It is J that breaks and not K, and it
+  converged the identical 1863-function input in 12 monotone iterations from the
+  same build on the same node type. It is J that breaks and not K, and it
   follows the diffuse shells rather than the size |w---w| adding them to the
   same molecule multiplies the Frobenius norm of the J difference against
   ``DirectJK`` by 2900 while multiplying the same norm for K by only 21,
