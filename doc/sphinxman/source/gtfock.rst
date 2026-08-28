@@ -266,23 +266,24 @@ Testing
 ~~~~~~~
 
 :source:`tests/pytests/test_gtfock.py` covers the opt-in path and skips cleanly
-when GTFock is absent, except for the two optionality guards and the five
+when GTFock is absent, except for the two optionality guards and the six
 reducer tests, which always run:
 
 .. code-block:: bash
 
     >>> pytest -v tests/pytests/test_gtfock.py
 
-Without GTFock this is ``7 passed, 16 skipped``. The two optionality guards
+Without GTFock this is ``8 passed, 16 skipped``. The two optionality guards
 assert that :py:mod:`psi4.driver.gtfock` imports, reports itself unavailable,
 raises a GTFock-specific error rather than a stray ``ImportError``, and needs no
-mpi4py to do any of it. The five reducer tests drive
+mpi4py to do any of it. The six reducer tests drive
 :source:`tests/pytests/gtfock_hpc_collect.py` over synthesized per-rank records
 and need neither GTFock nor MPI: they check that one run collapses to one row
 with the slowest rank's wall clock, the worst rank's memory and the node's summed
 memory, that a job spanning several nodes is still one point, and that records
-from two jobs, one directory passed twice, or two runs with no job id at all are
-refused rather than silently merged.
+from two jobs, one directory passed twice, two runs with no job id at all, or a
+point missing some of the ranks it declares are refused rather than silently
+merged.
 
 The multi-rank cases launch :source:`tests/pytests/gtfock_mpi_driver.py` under
 ``mpirun`` and assert per-rank evidence: mpi4py and |PSIfours| MPI agree, each

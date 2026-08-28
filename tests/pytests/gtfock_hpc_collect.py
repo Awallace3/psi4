@@ -96,6 +96,27 @@ def _refuse_mixed_runs(system, arm, ranks, records):
             "would double-count. Pass each result directory once.")
 
 
+def _refuse_incomplete_point(system, arm, ranks, records):
+    """Refuse to reduce a point that is missing some of its ranks.
+
+    A point declaring `ranks` ranks must carry one record from each of them. A
+    job killed at its wall limit part way through a sweep leaves a truncated
+    set: the two guards above still pass, because the survivors do come from one
+    job and no rank repeats, yet `peak_rss_sum_mb` would then sum fewer ranks
+    than the `ranks` column claims and the wall clocks would be a maximum over
+    only the ranks that finished. The resulting row is indistinguishable from a
+    complete point in the CSV the documentation tables are generated from, and a
+    warning on stderr is invisible in a job log, so this is fatal.
+    """
+    found = sorted(r["rank"] for r in records)
+    if found != list(range(ranks)):
+        raise SystemExit(
+            f"{system}/{arm}/n{ranks} is incomplete: expected {ranks} rank "
+            f"record(s), ranks 0-{ranks - 1}, but found {len(found)}, "
+            f"rank(s) {found}. Reducing it would report a node memory summed "
+            "over fewer ranks than the row claims. Re-run that point.")
+
+
 def load_points(directories):
     """Collapse ``*.rank<N>.json`` files into one dict per (system, arm, ranks)."""
     by_key = {}
@@ -113,9 +134,7 @@ def load_points(directories):
     points = []
     for (system, arm, ranks), records in sorted(by_key.items()):
         _refuse_mixed_runs(system, arm, ranks, records)
-        if len(records) != ranks:
-            print(f"warning: {system}/{arm}/n{ranks} has {len(records)} rank "
-                  f"records, expected {ranks}", file=sys.stderr)
+        _refuse_incomplete_point(system, arm, ranks, records)
         head = records[0]
         energies = [r["scf_energy"] for r in records]
         # An SCF that took a different number of iterations on different ranks

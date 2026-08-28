@@ -822,3 +822,20 @@ def test_hpc_collector_refuses_two_runs_without_a_job_id(tmp_path):
 
     with pytest.raises(SystemExit, match="more than one run"):
         gtfock_hpc_collect.load_points([first, second])
+
+
+def test_hpc_collector_refuses_a_truncated_point(tmp_path):
+    """A job killed at its wall limit leaves fewer rank files than it declares.
+
+    The survivors carry one job id and one nodelist and no rank repeats, so the
+    run-identity and duplicate guards both pass; only the completeness check
+    stops the row, whose node memory would otherwise be summed over half the
+    ranks the ``ranks`` column claims.
+    """
+    import gtfock_hpc_collect
+
+    run = _write_hpc_records(tmp_path / "peptide_12400108",
+                             [_hpc_record(0, ranks=4), _hpc_record(1, ranks=4)])
+
+    with pytest.raises(SystemExit, match="is incomplete"):
+        gtfock_hpc_collect.load_points([run])
