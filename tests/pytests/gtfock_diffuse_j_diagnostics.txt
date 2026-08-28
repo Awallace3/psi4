@@ -632,11 +632,21 @@ matrices from section 1 -- so this is the one-iteration SAD-guess density
 again, and a magnitude check rather than a prediction -- the two-electron
 energies 2*tr(D J) and -tr(D K) are:
 
+--- the arithmetic, run against the section 1 .npy files ---
+
+    C  = np.load("Cocc_631pGss.npy")
+    D  = C @ C.T
+    EJ = lambda J: 2 * np.einsum("ij,ij->", D, J)   # 2 tr(D J)
+    EK = lambda K: -1 * np.einsum("ij,ij->", D, K)  # -tr(D K)
+    for tag in ("direct", "gtfock"):
+        print(tag, EJ(np.load(f"J_{tag}_631pGss.npy")),
+                   EK(np.load(f"K_{tag}_631pGss.npy")))
+
     E_J[direct] =   16646.166307 Eh      E_K[direct] =  -476.659933 Eh
     E_J[gtfock] =   16549.060281 Eh      E_K[gtfock] =  -476.542883 Eh
       dE_J      =     -97.106026 Eh        dE_K      =     0.117050 Eh
 
-    eps * E_J[direct]                    =  -51.626853 Eh  (uniform part alone)
+    -eps * E_J[direct]                   =  -51.626853 Eh  (uniform part alone)
     12441826 offset from the reference   =  -52.725549 Eh  (-3695.4783 vs
                                                             -3642.752751)
 
