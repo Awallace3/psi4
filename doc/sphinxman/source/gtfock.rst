@@ -147,9 +147,10 @@ Prototype scope
   screen is not exposed, so it cannot be tested directly. Three other
   explanations are excluded by measurement: distribution (the deficit is
   identical at 1, 2 and 4 ranks, and at 1 and 4 threads within a rank),
-  screening in general (|PSIfours| own J on this density is unmoved to nine
-  digits by every screening control it exposes and by switching screening off
-  altogether), and basis conditioning as a cause rather than an amplifier (the
+  screening in general (against an unscreened reference build, every screening
+  control |PSIfour| exposes costs at most 5e-04 in Frobenius norm and leaves
+  no uniform component at all, where GTFock's difference is 7.4 and is 81%
+  uniform), and basis conditioning as a cause rather than an amplifier (the
   1863-function overlap matrix is near-singular at 1.09e-07, just above the
   ``S_TOLERANCE`` default, but both reference engines cross it without
   difficulty). Until the mechanism is understood, treat a diffuse-augmented

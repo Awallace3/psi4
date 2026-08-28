@@ -26,11 +26,12 @@ Threadripper 3960X, 24 physical cores and 48 hardware threads -- against the
 same build as the Phoenix jobs, through the same GTFockJK path, with
 OMPI_MCA_osc=^ucx set. This is not the Phoenix hardware and none of these
 numbers are scaling measurements; the quantities compared are matrix elements,
-which do not depend on the machine. The thread count differs between probes
-(48 in section 1, 20 in section 3) for scheduling reasons only and is stated
-with each result; section 2 varies it deliberately and reports what that did. The scripts are reproduced verbatim, including the absolute paths they
-were run with; those paths are a scratch directory and this worktree, and are
-the two things to change to run them elsewhere.
+which do not depend on the machine. The thread count differs between probes (48
+in section 1, 20 in section 3) for scheduling reasons only and is stated with
+each result; section 2 varies it deliberately and reports what that did. The
+scripts are reproduced verbatim, including the absolute paths they were run
+with; those paths are a scratch directory and this worktree, and are the two
+things to change to run them elsewhere.
 
 Two cautions apply to every number below.
 
@@ -439,39 +440,75 @@ experiment. Nothing smaller than it can be attributed to any engine.
     built direct/schwarz/1e-12   DirectJK   normJ=2.35637400e+03 614.4s
     built direct/density/1e-12   DirectJK   normJ=2.35637400e+03 636.8s
     built direct/none            DirectJK   normJ=2.35637400e+03 4557.8s
+    built gtfock                 GTFockJK   normJ=2.34906630e+03 359.6s
 
-Five settings, one number, identical in all nine significant figures printed.
-Tightening INTS_TOLERANCE from 1e-12 to 1e-16 does nothing. Swapping CSAM for
-Schwarz does nothing. Switching to density-aware screening -- the one setting
-that actually looks at the probe density before deciding what to drop, and so the
-one most exposed to a pathological probe -- does nothing. Turning screening off
-altogether does nothing either, and that last row is the one that removes the
-axis rather than varying it: SCREENING none computes every shell quartet, which
-is why it costs 4557.8 s against 497.2 s for the default, a 9.2x price for a
-number that does not change in any printed digit. Psi4's J on this density is
-stable to better than one part in 1e+08 against everything that can be varied
-about how it is screened, and against not screening at all.
+    variant                   eps_vs_none        maxdJ       normdJ   resid
+    direct/csam/1e-12       -9.522363e-11   1.6687e-05   5.1866e-04   1.000
+    direct/csam/1e-16        7.073881e-15   6.2511e-09   7.4937e-08   1.000
+    direct/schwarz/1e-12    -3.699454e-11   5.9255e-06   1.6596e-04   1.000
+    direct/density/1e-12     2.863309e-12   8.6031e-09   6.2372e-08   0.994
+    direct/none             -0.000000e+00   0.0000e+00   0.0000e+00   0.000
+    gtfock                   3.101426e-03   1.5997e-01   7.4407e+00   0.188
 
-Against that resolution, GTFock's J is not close. Taking the Frobenius norms
-directly from the matrices the section 1 probe cached:
+The reference row is direct/none, the only build that drops nothing at all, so
+every other row is that variant's entire cost in accuracy rather than its
+distance from another approximation. It is an expensive reference -- 4557.8 s
+against 497.2 s for the default, a 9.2x price for computing every shell quartet
+-- and paying it is what turns the rest of the table into a measurement.
+
+Note first what the printed norms alone would have suggested and did not settle.
+All five DirectJK builds report normJ = 2.35637400e+03, identical in every digit
+printed, but norm agreement is not matrix agreement: ||J_a|| - ||J_b|| is bounded
+by ||J_a - J_b|| and says nothing else about it. The eps table is the quantity
+that decides, and it shows the screening rows are not identical, only small.
+
+Two things then separate the screening rows from the GTFock row, and the second
+matters more than the first.
+
+The sizes differ by four orders of magnitude. The worst any screening choice does
+is ||dJ||_F = 5.1866e-04, from the default CSAM at 1e-12; GTFock's is 7.4407e+00,
+larger by 14000x. Tightening INTS_TOLERANCE from 1e-12 to 1e-16 shrinks the
+screening error by four further orders of magnitude, to 7.4937e-08. That is a
+converging approximation behaving the way an approximation should, and even at
+its loosest it is four orders of magnitude from GTFock.
+
+The SHAPES differ, and no size argument can be traded against that. Every
+screening row has resid = 1.000, or 0.994 for the density-aware one: after
+removing the best-fit multiple of J itself, essentially the whole difference
+remains. That is what dropping quartets does -- the loss is scattered over the
+elements the dropped quartets touched and carries no component along J, which is
+why the fitted eps for those rows is 1e-10 to 1e-15, which is zero. The GTFock
+row has resid = 0.188 and eps = 3.101426e-03: 81% of its difference IS a uniform
+shrinking of J. These are different kinds of error, not one kind at two
+magnitudes. No setting of a shell-quartet screen produced a uniform deficit here,
+because a uniform deficit is not what a shell-quartet screen produces.
+
+That answers the question the section opened with. If the probe density were
+pathological, the row most exposed would be direct/density/1e-12, the only one
+that inspects the density before deciding what to drop. It is instead among the
+cleanest rows in the table, at ||dJ||_F = 6.2372e-08. The density does not
+manufacture the deficit; the deficit is GTFock's.
+
+The gtfock row also reproduces section 2 exactly -- eps = 3.101426e-03,
+maxdJ = 1.5997e-01, normdJ = 7.4407e+00, resid = 0.188 -- from a third script, in
+a third process, against a DIFFERENT reference: the unscreened build here, the
+csam/1e-12 build in section 2. Those two references differ by 5.1866e-04 in
+Frobenius norm, four orders of magnitude below the 7.44 being measured, which is
+why swapping them changes nothing and why the agreement is a real check rather
+than an artifact of a shared baseline.
+
+For the J-against-K comparison the cached matrices give:
 
     ||J_direct||_F = 2.35637400e+03      ||K_direct||_F = 7.19074980e+01
     ||J_gtfock||_F = 2.34906630e+03      ||K_gtfock||_F = 7.19074490e+01
     J ratio = 0.99689875  (0.3101% low)  K ratio = 0.9999993184  (0.7 ppm low)
 
-Two independent checks fall out of these four numbers. ||J_direct||_F reproduces
-the screentest DirectJK value in all nine digits although it came from a
-different script in a different process, so the cached matrices and the live
-control are the same computation. And the 0.3101% J deficit reproduces the
-best-fit eps = 3.101426e-03 of section 2 to four significant figures, although
-one is a norm ratio and the other a least-squares projection.
-
-The conclusion is that the deficit is GTFock's. It exceeds the control's
-resolution by a factor of 1.5e+06, so no amount of probe pathology
-explains it: a density that made screening decisions matter would have moved
-Psi4's four variants apart first, and it moved them not at all. K, built by the
-same engine from the same density in the same call, sits 4550x closer to the
-reference than J does, taking the two ratios above at face value.
+||J_direct||_F here reproduces the screentest DirectJK value in all nine digits
+although it came from a different script in a different process, and the 0.3101%
+J deficit reproduces the least-squares eps to four significant figures although
+one is a norm ratio and the other a projection. K, built by the same engine from
+the same density in the same call, sits 4550x closer to the reference than J
+does.
 
 What this does NOT settle is the mechanism. Every knob varied above is a
 SHELL-QUARTET screening decision, which is the only kind Psi4 exposes; GTFock's
