@@ -85,6 +85,11 @@ export OMP_PROC_BIND=close
   echo "reference   : ${CORES_PER_RANK} cores, ${REFERENCE_MEMORY_GB} GB, single process"
   echo "system      : ${FM_SYSTEM} / ${FM_BASIS} / ${FM_METHOD}"
   echo "psi4        : $(git -C "$FM_PSI4" log --oneline -1)"
+  # A commit SHA alone is a lie about a checkout that was patched in place,
+  # and this one is staged by copy rather than by pull, so say so and show
+  # exactly what moved.
+  echo "tree        : $(git -C "$FM_PSI4" status --porcelain | wc -l) file(s) modified vs that commit"
+  git -C "$FM_PSI4" diff --stat
   echo "mpirun      : $(which mpirun) -- $(mpirun --version | head -1)"
   lscpu | grep -E "^(Model name|Socket|Core|Thread|CPU\(s\)):"
   free -g | head -2
@@ -107,6 +112,14 @@ if [ "$distinct_hosts" -ne "$MAX_RANKS" ]; then
     exit 1
 fi
 
+# Points that exited non-zero. A single arm that fails -- an SCF that will not
+# converge at this size is the obvious way -- must not take the rest of the
+# sweep with it: under `set -e` that is exactly what happened to job 12434225,
+# which spent 6h53m on four nodes and wrote no JSON at all. Each point is
+# therefore allowed to fail on its own, and the job reports a non-zero exit at
+# the end so the failure is still visible in sacct.
+FAILED_POINTS=()
+
 # run_point <arm> <ranks> [destination-directory]
 #
 # The destination defaults to $OUT, whose *.rank*.json files are the sweep the
@@ -126,14 +139,20 @@ run_point() {
                   --memory "${mem_gb} GB" --scratch "$dest/$tag"
                   --json-out "$dest/$tag")
     export OMP_NUM_THREADS=$CORES_PER_RANK MKL_NUM_THREADS=$CORES_PER_RANK
+    local rc=0
     if [ "$arm" = "gtfock" ]; then
         # A core set covering all 24 cores spans both sockets, which OpenMPI
         # refuses to bind, so every point runs unbound with OMP_PLACES=cores
         # spreading its threads.
-        mpirun -n "$ranks" --map-by ppr:1:node --bind-to none --report-bindings "${cmd[@]}"
+        mpirun -n "$ranks" --map-by ppr:1:node --bind-to none --report-bindings "${cmd[@]}" || rc=$?
     else
-        "${cmd[@]}"
+        "${cmd[@]}" || rc=$?
     fi
+    if [ "$rc" -ne 0 ]; then
+        echo "POINT FAILED: ${tag} exited ${rc}; continuing the sweep." >&2
+        FAILED_POINTS+=("${tag}(rc=${rc})")
+    fi
+    return 0
 }
 
 # Point order is chosen so that a walltime overrun costs the least interesting
@@ -160,3 +179,7 @@ sacct -j "$SLURM_JOB_ID" --format=JobID,JobName%20,Elapsed,MaxRSS,MaxVMSize,NNod
     | tee "$OUT/sacct.txt"
 echo "results in $OUT"
 echo "SCALING_DONE"
+if [ ${#FAILED_POINTS[@]} -ne 0 ]; then
+    echo "FAILED POINTS (${#FAILED_POINTS[@]}): ${FAILED_POINTS[*]}" >&2
+    exit 1
+fi

@@ -308,8 +308,15 @@ no_com
 }
 
 # Expected basis-function counts, asserted so a geometry or basis mix-up shows up
-# in the first second of a queued job rather than in the results table.
-_EXPECTED_NBF = {"peptide": 260, "nanotube": 574, "protein157": 1863}
+# in the first second of a queued job rather than in the results table. Keyed on
+# the (system, basis) pair, lower-cased, because --basis is a knob: a system has
+# one size per basis, not one size.
+_EXPECTED_NBF = {
+    ("peptide", "6-31+g**"): 260,
+    ("nanotube", "6-31+g**"): 574,
+    ("protein157", "6-31+g**"): 1863,
+    ("protein157", "6-31g**"): 1555,
+}
 
 # J/K algorithms this script can put under the same SCF. "gtfock" is the engine
 # under test; "direct" is Psi4's own exact-ERI builder and is the algorithmic
@@ -332,7 +339,15 @@ def assert_basis_as_sized(system, basis_name, basis) -> None:
             "only, and a spherical basis would make the two arms different "
             "computations. Check the basis definition rather than forcing "
             "puream.")
-    expected = _EXPECTED_NBF[system]
+    try:
+        expected = _EXPECTED_NBF[(system, basis_name.lower())]
+    except KeyError:
+        known = ", ".join(f"{s}/{b}" for s, b in sorted(_EXPECTED_NBF))
+        raise RuntimeError(
+            f"{system}/{basis_name} has no recorded size, so the count below "
+            f"cannot be checked against anything. Sized pairs: {known}. Add the "
+            f"pair to _EXPECTED_NBF once you have confirmed its basis-function "
+            f"count ({basis.nbf()} here) is the intended one.") from None
     if basis.nbf() != expected:
         raise RuntimeError(
             f"{system}/{basis_name} gave {basis.nbf()} basis functions, "
