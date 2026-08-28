@@ -134,33 +134,28 @@ Prototype scope
 * **Diffuse functions on a large system are not supported.** On a 157-atom
   fragment pair the SCF converges through GTFock in Cartesian ``6-31G**``
   (1555 basis functions) and does not converge in Cartesian ``6-31+G**``
-  (1863), running the full 100 iterations. The failure is GTFock's rather than
+  (1863), running the full 100 iterations. The failure is the engine's and not
   the system's: |PSIfours| own ``DirectJK`` and its density fitting each
   converged the identical 1863-function input in 12 monotone iterations on the
-  same build and the same hardware. Comparing the two engines' matrices on one
-  converged density, at fixed molecule and geometry with only the basis
-  changed, isolates which matrix is at fault. Adding the diffuse shells
-  multiplies the Frobenius norm of the J difference by 2900 |w---w| 2.6e-03 to
-  7.4 |w---w| while the same norm for K grows only 21x, from 2.9e-05 to
-  6.1e-04, and GTFock's largest J element comes back 0.39% short of the
-  reference where its largest K element matches to every digit printed. J is
-  what breaks, and it breaks on diffuse functions rather than on size. That is
-  the shape of error the hardcoded primitive-pair screen described above would
-  produce, since a fixed absolute cutoff prunes exactly the small-exponent
-  primitive pairs diffuse shells contribute and their long tails matter far
-  more to the Coulomb term than to exchange |w---w| but that connection is not
-  proven and no other cause has been ruled out. What is settled is that
-  distribution is not the cause: rebuilding J on one fixed density at 1, 2,
-  and 4 ranks returns a difference from the reference that is identical to
-  every digit carried, so this is a property of the serial integral path and
-  not of how work is split. Near-singularity compounds the failure without
-  causing it: the 1863-function overlap matrix has a smallest eigenvalue of
-  1.09e-07, 9% above the ``S_TOLERANCE`` default, so |PSIfour| orthogonalizes
-  symmetrically and any Fock error is amplified by about 9e+06 |w---w| yet the
-  two reference engines cross that same near-singular basis without
-  difficulty. Until this is understood, treat a diffuse-augmented basis on a
-  system of this size as unsupported rather than merely slow, and check any
-  such result against a non-GTFock ``SCF_TYPE`` before relying on it.
+  same build and the same hardware. It is J that breaks and not K, and it
+  follows the diffuse shells rather than the size |w---w| adding them to the
+  same molecule multiplies the Frobenius norm of the J difference against
+  ``DirectJK`` by 2900 while multiplying the same norm for K by only 21,
+  leaving GTFock's J 0.31% short on a fixed density where its K is within one
+  part in 1e+06. That is the shape of error the hardcoded primitive-pair
+  screen described above would produce, but the connection is unproven and the
+  screen is not exposed, so it cannot be tested directly. Three other
+  explanations are excluded by measurement: distribution (the deficit is
+  identical at 1, 2 and 4 ranks), screening tolerance in general (|PSIfours|
+  own J on this density is unmoved to nine digits by every screening control
+  it exposes), and basis conditioning as a cause rather than an amplifier (the
+  1863-function overlap matrix is near-singular at 1.09e-07, just above the
+  ``S_TOLERANCE`` default, but both reference engines cross it without
+  difficulty). Until the mechanism is understood, treat a diffuse-augmented
+  basis on a system of this size as unsupported rather than merely slow, and
+  check any such result against a non-GTFock ``SCF_TYPE``. The probes, their
+  scripts and their verbatim output are in
+  :source:`tests/pytests/gtfock_diffuse_j_diagnostics.txt`.
 * **The Fock build is distributed; the SCF is not.** J and K are gathered on
   rank 0 and broadcast, so every rank holds the full matrices and then runs an
   identical replicated SCF: diagonalization, DIIS, and the DFT quadrature are

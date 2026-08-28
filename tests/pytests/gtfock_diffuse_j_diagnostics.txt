@@ -1,0 +1,466 @@
+GTFock's J deficit on a diffuse basis: the probes behind the "Diffuse functions
+on a large system are not supported" bullet
+=============================================================================
+
+doc/sphinxman/source/gtfock.rst states, under `Prototype scope`, that GTFock
+cannot converge protein157 in Cartesian 6-31+G** (1863 basis functions) while
+Psi4's own DirectJK and density fitting both converge the identical input, and
+that the fault is in J rather than K and follows the diffuse shells rather than
+the system size. Those are the claims this file backs.
+
+Two kinds of evidence live in two different files, and the split is deliberate:
+
+  * gtfock_hpc_multinode_provenance.txt holds the SCHEDULER records -- jobs
+    12434225 (the failed GTFock run) and 12441235 (the two reference arms that
+    converged). Those establish THAT the SCF fails and that the failure is the
+    engine's.
+  * this file holds the WORKSTATION probes that ask WHY. They are not SCF runs.
+    Each builds J and K once, from one fixed density handed identically to
+    both engines, and compares the resulting matrices directly. Removing the SCF from the loop is the whole
+    point: a diverging SCF confounds the error in the Fock build with the
+    feedback that error drives, and none of these numbers would mean anything
+    if the density kept moving underneath them.
+
+Every probe ran on one workstation -- cos-4a16505.cos.gatech.edu, an AMD Ryzen
+Threadripper 3960X, 24 physical cores and 48 hardware threads -- against the
+same build as the Phoenix jobs, through the same GTFockJK path, with
+OMPI_MCA_osc=^ucx set. This is not the Phoenix hardware and none of these
+numbers are scaling measurements; the quantities compared are matrix elements,
+which do not depend on the machine. The thread count differs between probes
+(48, then 4, then 20) for scheduling reasons only and is stated with each
+result. The scripts are reproduced verbatim, including the absolute paths they
+were run with; those paths are a scratch directory and this worktree, and are
+the two things to change to run them elsewhere.
+
+Two cautions apply to every number below.
+
+The comparison density is NOT a converged SCF density -- it cannot be, since the
+SCF being diagnosed does not converge. It is the occupied orbitals after a single
+SCF iteration from a SAD guess, taken from the run that cached Cocc.npy with
+maxiter=1 and fail_on_maxiter=False, then reused verbatim by every later probe.
+It was produced by GTFock, because at this size the density-fitting alternative
+falls back to DiskDFJK and writes ~128 GiB of scratch to answer a question that
+does not depend on which engine made it: both engines are handed the identical
+matrix, so any difference between their outputs is theirs. Section 3 is the
+control that tests whether the density is nonetheless pathological enough to
+manufacture a difference on its own.
+
+The probes report Frobenius norms and element-wise maxima of DIFFERENCES between
+two engines on that density. They are meaningful as a comparison between engines
+on identical input; they are not error bars on either engine's absolute accuracy,
+and no energy should be inferred from them.
+
+
+1. The basis swap: is it size or is it diffuseness?
+---------------------------------------------------
+
+fockdiff3.py builds J and K on protein157 with both DirectJK and GTFockJK, from
+one cached density, and reports the difference. It is run twice on the SAME
+molecule and geometry with only the basis changed: 6-31G** (1555 functions,
+which converges through GTFock) and 6-31+G** (1863, which does not). Holding
+everything but the basis fixed is what separates "GTFock degrades with system
+size" from "GTFock degrades on diffuse functions" -- the two readings that both
+predict a failure in the larger basis alone.
+
+The script also diagonalizes the overlap matrix in the same process, so the
+conditioning number quoted next to ||dF|| comes from the same run rather than
+from a separate script that might have been given different options.
+
+--- fockdiff3.py, verbatim ---
+    """Same measurement as fockdiff2.py, parameterised by basis via FD_BASIS.
+    
+    fockdiff2 measures the GTFock-vs-DirectJK perturbation on protein157 in
+    6-31+G**, the basis whose SCF collapses. On its own that cannot separate two
+    explanations:
+    
+      * the perturbation is ordinary, and 1/s_min amplifies it (conditioning), or
+      * the diffuse shells make GTFock's 1e-14 primitive screening genuinely
+        worse, so the perturbation is itself larger (screening).
+    
+    Both would produce a collapse only in the diffuse basis. Running the identical
+    probe on 6-31G**, which converges through both engines, is the control that
+    tells them apart: comparable ||dF|| means conditioning, a much smaller ||dF||
+    means screening is at least partly responsible.
+    
+    Everything is tagged by basis so the two runs cannot overwrite each other.
+    """
+    import os, sys, time, numpy as np
+    os.environ.setdefault("PSI_SCRATCH", "/fastscratch/awallace43/psi4tmp")
+    import psi4
+    sys.path.insert(0, "/home/awallace43/.treehouse/psi4-1ae95c/2/psi4/tests/pytests")
+    from gtfock_hpc_benchmark import _SYSTEMS
+    
+    D = "/tmp/fm-psi4-djk/diag"
+    BASIS = os.environ.get("FD_BASIS", "6-31G**")
+    TAG = BASIS.replace("+", "p").replace("*", "s").replace("-", "")
+    
+    psi4.set_num_threads(48); psi4.set_memory("40 GB")
+    psi4.core.set_output_file(f"{D}/fockdiff3_{TAG}.out", False)
+    mol = psi4.geometry(_SYSTEMS["protein157"])
+    common = {"basis": BASIS, "puream": False, "guess": "sad",
+              "sad_scf_type": "df", "df_scf_guess": False, "ints_tolerance": 1e-12}
+    
+    cocc_path = f"{D}/Cocc_{TAG}.npy"
+    if os.path.exists(cocc_path):
+        psi4.set_options({**common, "scf_type": "direct"})
+        wfn = psi4.core.Wavefunction.build(mol, psi4.core.get_global_option("BASIS"))
+        basis = wfn.basisset()
+        Cocc = psi4.core.Matrix.from_array(np.load(cocc_path))
+        print(f"reused cached Cocc for {BASIS}", flush=True)
+    else:
+        # NOT "df": MemDFJK wants >100 GiB of AOs at this size and silently falls
+        # back to DiskDFJK. Any Cocc works -- both engines are handed the same one.
+        psi4.set_options({**common, "scf_type": "gtfock", "maxiter": 1,
+                          "fail_on_maxiter": False})
+        _, w = psi4.energy("scf", return_wfn=True)
+        basis = w.basisset(); Cocc = w.Ca_subset("AO", "OCC")
+        np.save(cocc_path, np.asarray(Cocc))
+        print(f"built and cached Cocc for {BASIS}", flush=True)
+    
+    print(f"nbf = {basis.nbf()}   basis = {BASIS}", flush=True)
+    
+    # The overlap spectrum, so the amplification factor quoted alongside ||dF||
+    # comes out of the same process rather than a separate script.
+    mints = psi4.core.MintsHelper(basis)
+    S = np.asarray(mints.ao_overlap())
+    s = np.linalg.eigvalsh(S)
+    print(f"s_min = {s.min():.6e}   1/s_min = {1.0/s.min():.3e}", flush=True)
+    
+    def build(scf_type):
+        psi4.set_options({**common, "scf_type": scf_type})
+        jk = psi4.core.JK.build_JK(basis, None)
+        jk.set_do_J(True); jk.set_do_K(True); jk.initialize()
+        jk.C_left_add(Cocc)
+        t = time.perf_counter(); jk.compute(); dt = time.perf_counter() - t
+        J = np.asarray(jk.J()[0]).copy(); K = np.asarray(jk.K()[0]).copy()
+        print(f"[{dt:7.1f}s] {jk.name()} ({scf_type})", flush=True)
+        jk.finalize()
+        np.save(f"{D}/J_{scf_type}_{TAG}.npy", J); np.save(f"{D}/K_{scf_type}_{TAG}.npy", K)
+        return J, K
+    
+    Jd, Kd = build("direct")
+    Jg, Kg = build("gtfock")
+    
+    def asym(M):
+        return np.abs(M - M.T).max()
+    
+    print()
+    print(f"{'quantity':>26} {'direct':>14} {'gtfock':>14}")
+    print(f"{'max|J - J^T| (asymmetry)':>26} {asym(Jd):>14.3e} {asym(Jg):>14.3e}")
+    print(f"{'max|K - K^T| (asymmetry)':>26} {asym(Kd):>14.3e} {asym(Kg):>14.3e}")
+    print(f"{'max|J|':>26} {np.abs(Jd).max():>14.6f} {np.abs(Jg).max():>14.6f}")
+    print(f"{'max|K|':>26} {np.abs(Kd).max():>14.6f} {np.abs(Kg).max():>14.6f}")
+    print()
+    dJ, dK = Jg - Jd, Kg - Kd
+    # The SCF diagonalizes X^T F X with F = H + 2J - K, so the Fock perturbation is
+    # 2*dJ - dK, not dJ or dK alone. That combination is what 1/s_min multiplies.
+    dF = 2.0 * dJ - dK
+    print(f"max|dJ| = {np.abs(dJ).max():.6e}   ||dJ||_F = {np.linalg.norm(dJ):.6e}")
+    print(f"max|dK| = {np.abs(dK).max():.6e}   ||dK||_F = {np.linalg.norm(dK):.6e}")
+    print(f"max|dF| = {np.abs(dF).max():.6e}   ||dF||_F = {np.linalg.norm(dF):.6e}   (dF = 2dJ - dK)")
+    print(f"dJ asymmetric part: {asym(dJ):.3e}    dK asymmetric part: {asym(dK):.3e}")
+    print(f"amplified ||dF||_F / s_min = {np.linalg.norm(dF)/s.min():.3e}")
+    i, j = np.unravel_index(np.abs(dK).argmax(), dK.shape)
+    print(f"largest dK at AO ({i},{j}): direct={Kd[i,j]:.8e} gtfock={Kg[i,j]:.8e}")
+    print("=== FD3_DONE ===", flush=True)
+
+--- FD_BASIS=6-31+G** (the basis that does not converge), reduced from fd3.log ---
+
+    nbf = 1863   basis = 6-31+G**
+    s_min = 1.089528e-07   1/s_min = 9.178e+06
+    [  394.6s] DirectJK (direct)
+    [  205.3s] GTFockJK (gtfock)
+
+                      quantity         direct         gtfock
+      max|J - J^T| (asymmetry)      0.000e+00      0.000e+00
+      max|K - K^T| (asymmetry)      0.000e+00      0.000e+00
+                        max|J|      39.535276      39.382141
+                        max|K|       4.916480       4.916480
+
+    max|dJ| = 1.599700e-01   ||dJ||_F = 7.440673e+00
+    max|dK| = 6.603088e-05   ||dK||_F = 6.106648e-04
+    max|dF| = 3.199400e-01   ||dF||_F = 1.488131e+01   (dF = 2dJ - dK)
+    dJ asymmetric part: 0.000e+00    dK asymmetric part: 0.000e+00
+    amplified ||dF||_F / s_min = 1.366e+08
+    largest dK at AO (850,850): direct=5.36683636e-01 gtfock=5.36617605e-01
+
+--- FD_BASIS=6-31G** (the basis that does converge), reduced from fd3.log ---
+
+    nbf = 1555   basis = 6-31G**
+    s_min = 3.321363e-04   1/s_min = 3.011e+03
+    [   72.4s] DirectJK (direct)
+    [   20.0s] GTFockJK (gtfock)
+
+                      quantity         direct         gtfock
+      max|J - J^T| (asymmetry)      0.000e+00      0.000e+00
+      max|K - K^T| (asymmetry)      0.000e+00      0.000e+00
+                        max|J|      37.426842      37.426841
+                        max|K|       4.893526       4.893526
+
+    max|dJ| = 2.079276e-04   ||dJ||_F = 2.590981e-03
+    max|dK| = 2.164234e-06   ||dK||_F = 2.947698e-05
+    max|dF| = 4.156051e-04   ||dF||_F = 5.172155e-03   (dF = 2dJ - dK)
+    dJ asymmetric part: 0.000e+00    dK asymmetric part: 0.000e+00
+    amplified ||dF||_F / s_min = 1.557e+01
+    largest dK at AO (945,1418): direct=-5.67237707e-06 gtfock=-3.50814268e-06
+
+What the pair says. Adding the diffuse shells to the same molecule multiplies
+||dJ||_F by 2872 (2.590981e-03 -> 7.440673e+00) while multiplying ||dK||_F by
+only 20.7 (2.947698e-05 -> 6.106648e-04). The two matrices are built by the same
+engine in the same call from the same density, so a defect that scaled with
+system size, integral count, or contraction depth would have moved them
+together. It moved them apart by two orders of magnitude. J is the matrix at
+fault, and 1555 -> 1863 functions is far too small a step to explain a factor of
+2872 by size.
+
+The element-wise view says the same thing more bluntly. In the diffuse basis
+GTFock's largest J element comes back 39.382141 against DirectJK's 39.535276 --
+0.387% low -- while its largest K element is 4.916480 against 4.916480, equal in
+every digit printed. Both engines return exactly symmetric J and K (the
+asymmetry rows are 0.000e+00 throughout), so this is not a transposition or
+accumulation-order artifact.
+
+Conditioning is measured here, not assumed, and it is a multiplier rather than a
+cause. The 1863-function overlap matrix has s_min = 1.089528e-07, only 9% above
+the S_TOLERANCE default of 1e-7 (psi4/src/read_options.cc), so Psi4 orthogonalizes
+symmetrically instead of canonically and the Fock perturbation is amplified by
+about 9.2e+06; the 1555-function basis sits at 3.321363e-04, three thousand-fold
+better conditioned. The amplified quantity differs by 8.8e+06 between the two
+legs while ||dF||_F itself differs by only 2.9e+03, so conditioning is doing most
+of the arithmetic work in the collapse. But it cannot be the cause: DirectJK and
+density fitting cross that same near-singular basis and converge in 12 monotone
+iterations (job 12441235), and they do so because their own dF is zero. An
+amplifier with nothing to amplify is harmless. This is why the doc bullet says
+near-singularity "compounds the failure without causing it", and why an earlier
+draft that blamed conditioning was withdrawn rather than published.
+
+
+2. The rank and thread sweep: is any of this caused by distribution?
+---------------------------------------------------------------------
+
+A 0.31% uniform shortfall in J with a 19% non-uniform residual has the shape of
+a small fraction of work units going missing. If that were what it is, the
+fraction would move when the work is partitioned differently. If it is instead a
+deterministic screening or extent decision, it is a property of the basis and
+will not move at all. Those predictions are opposite, so one sweep settles it.
+
+This also extends acceptance criterion 1 to the place it matters most: rank-count
+invariance is proven by the test suite at small sizes, and this asks whether it
+survives at 1863 functions in the basis where the engine actually fails.
+
+epsranks.py rebuilds J with GTFockJK from the same cached density used above and
+compares it to the cached J_direct, reporting the best-fit uniform deficit
+eps = -<Jd,dJ>/<Jd,Jd>, the residual fraction left after removing that uniform
+part, and the trace ratio.
+
+--- epsranks.py, verbatim ---
+    """Does the 0.31% J deficit depend on rank count or thread count?
+    
+    The deficit is a uniform -0.31% scaling of J with 19% residual noise, which is
+    the shape of a small random fraction of WORK UNITS going missing rather than an
+    integral-accuracy limit. If that is what it is, the fraction should move with
+    how the work is partitioned. If it is instead a deterministic screening or
+    extent decision, the fraction is a property of the basis and will not move at
+    all. Those two predictions are opposite, so one sweep separates them.
+    
+    This also bears directly on acceptance criterion 1: rank-count invariance is
+    proven at small sizes, and this asks whether it still holds at 1863 basis
+    functions in a diffuse basis -- the point where the engine actually fails.
+    
+    Compares against the cached J_direct for the same cached density, so every point
+    in the sweep is the same computation with only the partitioning changed.
+    """
+    import os, sys, time, numpy as np
+    os.environ.setdefault("PSI_SCRATCH", "/fastscratch/awallace43/psi4tmp")
+    import psi4
+    sys.path.insert(0, "/home/awallace43/.treehouse/psi4-1ae95c/2/psi4/tests/pytests")
+    from gtfock_hpc_benchmark import _SYSTEMS
+    
+    D = "/tmp/fm-psi4-djk/diag"
+    RANK = int(os.environ.get("OMPI_COMM_WORLD_RANK", "0"))
+    NRANK = int(os.environ.get("OMPI_COMM_WORLD_SIZE", "1"))
+    NTHREAD = int(os.environ.get("ER_THREADS", "24"))
+    
+    psi4.set_num_threads(NTHREAD)
+    psi4.set_memory("30 GB")
+    psi4.core.set_output_file(f"{D}/eps_ranks_r{RANK}of{NRANK}_t{NTHREAD}.out", False)
+    
+    mol = psi4.geometry(_SYSTEMS["protein157"])
+    psi4.set_options({"basis": "6-31+G**", "puream": False,
+                      "ints_tolerance": 1e-12, "scf_type": "gtfock"})
+    wfn = psi4.core.Wavefunction.build(mol, psi4.core.get_global_option("BASIS"))
+    basis = wfn.basisset()
+    Cocc = psi4.core.Matrix.from_array(np.load(f"{D}/Cocc_631pGss.npy"))
+    
+    jk = psi4.core.JK.build_JK(basis, None)
+    jk.set_do_J(True); jk.set_do_K(False); jk.initialize()
+    jk.C_left_add(Cocc)
+    t = time.perf_counter(); jk.compute(); dt = time.perf_counter() - t
+    Jg = np.asarray(jk.J()[0]).copy()
+    name = jk.name()
+    jk.finalize()
+    
+    if RANK == 0:
+        Jd = np.load(f"{D}/J_direct_631pGss.npy")
+        dJ = Jg - Jd
+        x, y = Jd.ravel(), dJ.ravel()
+        eps = -(x @ y) / (x @ x)
+        resid = np.linalg.norm(dJ + eps * Jd) / max(np.linalg.norm(dJ), 1e-300)
+        print(f"ERANK ranks={NRANK} threads={NTHREAD} {name:>10s} "
+              f"eps={eps:.6e} maxdJ={np.abs(dJ).max():.6e} "
+              f"normdJ={np.linalg.norm(dJ):.6e} resid_frac={resid:.3f} "
+              f"trace_ratio={np.trace(Jg)/np.trace(Jd):.8f} t={dt:.1f}s", flush=True)
+
+--- sweep results, reduced from ranks.log; one rank's line per point, rank 0 ---
+
+    ERANK ranks=1 threads=4   GTFockJK eps=3.101426e-03 maxdJ=1.599700e-01 normdJ=7.440673e+00 resid_frac=0.188 trace_ratio=0.99700201 t=1544.7s
+    ERANK ranks=2 threads=4   GTFockJK eps=3.101426e-03 maxdJ=1.599700e-01 normdJ=7.440673e+00 resid_frac=0.188 trace_ratio=0.99700201 t=714.4s
+    ERANK ranks=4 threads=4   GTFockJK eps=3.101426e-03 maxdJ=1.599700e-01 normdJ=7.440673e+00 resid_frac=0.188 trace_ratio=0.99700201 t=473.9s
+
+Every reported digit is identical across 1, 2 and 4 ranks: the same best-fit
+deficit, the same largest element, the same Frobenius norm, the same residual
+fraction, the same trace ratio. GTFock partitions the work genuinely differently
+at each point -- its own log shows the Fock-block dimensions changing from
+(1863 1863 1863 1863) at one rank to (1863 940 1863 1863) at two and
+(940 940 1863 1863) at four -- and the answer does not move.
+
+That closes the distribution question in the negative. maxdJ and normdJ here also
+reproduce the single-process fockdiff3.py numbers above exactly, which is a
+second, independent check: two scripts, two invocation paths, one answer.
+
+The wall time is the only thing in the row that moves, and it moves the right
+way (1544.7 -> 714.4 -> 473.9 s, 2.16x and 3.26x), so the ranks really were
+doing the divided work rather than each quietly repeating it.
+
+What survives, then, is a deterministic property of the serial integral path in
+a diffuse basis. eps = 3.101426e-03 is a uniform 0.31% shortfall; resid_frac =
+0.188 says 19% of the difference is not uniform, so it is not a single global
+scale factor either. Both parts are reproducible to every digit.
+
+
+3. The screening control: is the deficit real, or is the probe density?
+------------------------------------------------------------------------
+
+Sections 1 and 2 establish that the difference is in J, follows the diffuse
+shells, and does not depend on the rank count. None of that yet rules out the
+least interesting explanation: that this density is so badly conditioned as a
+probe that NO integral engine could be trusted on it, and the 0.31% is measuring
+the probe rather than GTFock. The density's J is a difference of much larger
+cancelling contributions, so this is a real possibility and not a formality.
+
+screentest.py answers it by measuring the spread among Psi4's OWN J builds on the
+identical density, with the screening deliberately varied over a range far wider
+than any defensible setting: two tolerances four orders of magnitude apart, and
+three different screening algorithms including the density-aware one. That spread
+is the resolution of the whole experiment. Nothing smaller than it can be
+attributed to any engine.
+
+--- screentest.py, verbatim ---
+    """Is the 0.31% J deficit a GTFock defect, or an artifact of the probe density?
+    
+    The probe density at protein157/6-31+G** has elements of order 1e6 cancelling to
+    tr(DS)=580 exactly, so J[D] is a difference of large numbers. Two very different
+    readings survive that:
+    
+      (a) GTFock drops contributions a density-aware builder keeps, and the deficit
+          is real. Then Psi4's OWN builder should move when its screening is changed,
+          and the density-aware setting should sit apart from the blind ones.
+      (b) No engine can be trusted on a density this pathological, and the deficit
+          measures the probe rather than GTFock. Then Psi4's builders will scatter
+          among THEMSELVES by a comparable amount, and the GTFock gap is not special.
+    
+    Psi4's default CSAM screening is itself density-blind and at 1e-12 is LOOSER than
+    GTFock's hardcoded 1e-14, so the naive "GTFock screens too aggressively" story
+    already fails on its face; this measures what is actually happening instead. The
+    spread among the Psi4 variants is the control: it is the resolution below which
+    nothing can be concluded about GTFock.
+    """
+    import os, sys, time, numpy as np
+    os.environ.setdefault("PSI_SCRATCH", "/fastscratch/awallace43/psi4tmp")
+    import psi4
+    sys.path.insert(0, "/home/awallace43/.treehouse/psi4-1ae95c/2/psi4/tests/pytests")
+    from gtfock_hpc_benchmark import _SYSTEMS
+    D = "/tmp/fm-psi4-djk/diag"
+    psi4.set_num_threads(int(os.environ.get("ST_THREADS", "24"))); psi4.set_memory("40 GB")
+    psi4.core.set_output_file(f"{D}/screentest.out", False)
+    
+    mol = psi4.geometry(_SYSTEMS["protein157"])
+    base = {"basis": "6-31+G**", "puream": False}
+    psi4.set_options({**base, "scf_type": "direct"})
+    wfn = psi4.core.Wavefunction.build(mol, psi4.core.get_global_option("BASIS"))
+    basis = wfn.basisset()
+    Cocc = psi4.core.Matrix.from_array(np.load(f"{D}/Cocc_631pGss.npy"))
+    
+    def buildJ(label, opts):
+        psi4.set_options({**base, **opts})
+        jk = psi4.core.JK.build_JK(basis, None)
+        jk.set_do_J(True); jk.set_do_K(False); jk.initialize()
+        jk.C_left_add(Cocc)
+        t = time.perf_counter(); jk.compute(); dt = time.perf_counter() - t
+        J = np.asarray(jk.J()[0]).copy(); nm = jk.name(); jk.finalize()
+        print(f"  built {label:<22s} {nm:<10s} normJ={np.linalg.norm(J):.8e} {dt:.1f}s", flush=True)
+        return label, J
+    
+    variants = [
+        buildJ("direct/csam/1e-12",   {"scf_type": "direct", "screening": "csam",    "ints_tolerance": 1e-12}),
+        buildJ("direct/csam/1e-16",   {"scf_type": "direct", "screening": "csam",    "ints_tolerance": 1e-16}),
+        buildJ("direct/schwarz/1e-12",{"scf_type": "direct", "screening": "schwarz", "ints_tolerance": 1e-12}),
+        buildJ("direct/density/1e-12",{"scf_type": "direct", "screening": "density", "ints_tolerance": 1e-12}),
+        buildJ("direct/none",         {"scf_type": "direct", "screening": "none",    "ints_tolerance": 1e-16}),
+        buildJ("gtfock",              {"scf_type": "gtfock", "ints_tolerance": 1e-12}),
+    ]
+    # Reference is the unscreened build: the only one that drops nothing at all.
+    ref = dict(variants)["direct/none"]
+    print(f"\n{'variant':<22s} {'eps_vs_none':>14s} {'maxdJ':>12s} {'normdJ':>12s} {'resid':>7s}", flush=True)
+    x = ref.ravel()
+    for label, J in variants:
+        dJ = J - ref
+        eps = -(x @ dJ.ravel()) / (x @ x)
+        r = np.linalg.norm(dJ + eps * ref) / max(np.linalg.norm(dJ), 1e-300)
+        print(f"{label:<22s} {eps:>14.6e} {np.abs(dJ).max():>12.4e} "
+              f"{np.linalg.norm(dJ):>12.4e} {r:>7.3f}", flush=True)
+    print("=== SCREENTEST_DONE ===", flush=True)
+
+--- results, reduced from after_ranks.log, 20 threads ---
+
+    built direct/csam/1e-12      DirectJK   normJ=2.35637400e+03 497.2s
+    built direct/csam/1e-16      DirectJK   normJ=2.35637400e+03 764.1s
+    built direct/schwarz/1e-12   DirectJK   normJ=2.35637400e+03 614.4s
+    built direct/density/1e-12   DirectJK   normJ=2.35637400e+03 636.8s
+
+Four settings, one number, identical in all nine significant figures printed.
+Tightening INTS_TOLERANCE from 1e-12 to 1e-16 does nothing. Swapping CSAM for
+Schwarz does nothing. Switching to density-aware screening -- the one setting
+that actually looks at the probe density before deciding what to drop, and so the
+one most exposed to a pathological probe -- does nothing. Psi4's J on this density
+is stable to better than one part in 1e+08 against everything that can be
+varied about how it is screened.
+
+Against that resolution, GTFock's J is not close. Taking the Frobenius norms
+directly from the matrices the section 1 probe cached:
+
+    ||J_direct||_F = 2.35637400e+03      ||K_direct||_F = 7.19074980e+01
+    ||J_gtfock||_F = 2.34906630e+03      ||K_gtfock||_F = 7.19074490e+01
+    J ratio = 0.99689875  (0.3101% low)  K ratio = 0.9999993184  (0.7 ppm low)
+
+Two independent checks fall out of these four numbers. ||J_direct||_F reproduces
+the screentest DirectJK value in all nine digits although it came from a
+different script in a different process, so the cached matrices and the live
+control are the same computation. And the 0.3101% J deficit reproduces the
+best-fit eps = 3.101426e-03 of section 2 to four significant figures, although
+one is a norm ratio and the other a least-squares projection.
+
+The conclusion is that the deficit is GTFock's. It exceeds the control's
+resolution by a factor of 1.5e+06, so no amount of probe pathology
+explains it: a density that made screening decisions matter would have moved
+Psi4's four variants apart first, and it moved them not at all. K, built by the
+same engine from the same density in the same call, sits 4550x closer to the
+reference than J does, taking the two ratios above at face value.
+
+What this does NOT settle is the mechanism. Every knob varied above is a
+SHELL-QUARTET screening decision, which is the only kind Psi4 exposes; GTFock's
+hardcoded 1e-14 acts on individual PRIMITIVE pairs, and Psi4 has no equivalent
+setting to sweep against it. So the primitive-screen hypothesis in the doc bullet
+survives this experiment rather than being confirmed by it. What the experiment
+does remove is the weaker reading -- that any screened builder loses this much on
+this basis -- which is now excluded by direct measurement.
