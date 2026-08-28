@@ -482,11 +482,11 @@ gtfock  4      6    2x2   11     88.7     84.2     1.07     605            2403 
 
 ``speedup`` is total SCF against the one-rank GTFock point, ``dE`` is against the
 ``direct`` arm on the same system, and ``J/K (s)`` is the ``JK: JK`` timer that
-wraps ``JK::compute()`` for every builder, so it is the same clock in all three
-arms. Every point converged in 11 iterations, and the GTFock energy is identical
-across ranks to every digit printed |w---w| the spread within a rank count is
-exactly zero, not merely small. Rank-count invariance survives at production
-size, not just in the tests.
+``JK::compute()`` wraps around every builder's ``compute_JK()``, so it is the
+same clock in all three arms. Every point converged in 11 iterations, and the
+GTFock energy is identical across ranks to every digit printed |w---w| the
+spread within a rank count is exactly zero, not merely small. Rank-count
+invariance survives at production size, not just in the tests.
 
 The engine itself is a clear win at equal hardware. GTFock computes the same
 exact ERIs as ``DirectJK`` and does it 3.0x faster on the peptide and 3.2x faster
