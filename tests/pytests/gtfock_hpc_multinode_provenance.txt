@@ -8,7 +8,10 @@ no table row and are kept anyway because the reason each failed is itself a
 measurement: job 12433616, a discarded first attempt at the peptide sweep, and
 job 12434225, the attempt to run protein157 in 6-31+G** rather than 6-31G**.
 Job 12441235 follows 12434225 as its control: a single node running the two
-reference J/K arms that 12434225 died before reaching.
+reference J/K arms that 12434225 died before reaching. Job 12441826 follows both
+as an attempted remedy, testing whether canonical orthogonalization rescues the
+SCF that 12434225 could not converge; it does not, and the record is kept for the
+same reason the other two failures are.
 
 These jobs are the companion to the fixed-core jobs recorded in
 gtfock_hpc_provenance.txt and ask the opposite question. There, one 24-core node
@@ -380,6 +383,77 @@ Partition:     cpu-small
 QOS:           inferno
 Nodes:         atl1-1-02-005-25-2
 ---------------------------------------
+
+
+Job 12441826: the S_TOLERANCE remedy, and why it is kept as a failure
+=====================================================================
+
+protein157/6-31+G** has a minimum overlap eigenvalue of 1.089528e-07, 9% above
+Psi4's default S_TOLERANCE of 1e-7, so Psi4 keeps all 1863 functions and
+orthogonalizes symmetrically -- which amplifies any error in the Fock build by
+1/s_min, about 9.2e+06. This job raised S_TOLERANCE to 1e-6, the only departure
+from the benchmark settings, to force canonical orthogonalization instead and
+project the near-null directions out. Rebuilding the overlap spectrum alone
+shows what that threshold buys: eight eigenvalues lie below 1e-6 and none below
+1e-7, so the change discards exactly eight directions and leaves 1855.
+
+It does not help. Sixty iterations, the DIIS error stuck between 4.9e-06 and
+1.3e-05 against a 1e-07 target, and the energy oscillating over a 7.7e-03 Eh
+band around -3695.478 -- 52.73 Eh BELOW the converged DirectJK reference of
+-3642.752751 from 12441235. Discarding variational freedom can only raise an
+SCF energy, so that offset is not the orthogonalization's; it is the size a
+0.31% deficit in J reaches on a system whose Coulomb energy is 1.66e+04 Eh. The
+supporting measurement is in gtfock_diffuse_j_diagnostics.txt, section 4.
+
+The job has no JSON record because the probe script crashed after the SCF
+returned, on a regex that parsed the printed minimum eigenvalue and choked on
+the sentence-ending period ("1.0895284891e-07."); a second arm then overwrote
+psi4.out. The iteration tail below is what the batch wrapper had already
+echoed, and it is the whole surviving record of the run.
+
+--- job 12441826: provenance block, from gtfp-stol_12441826.log ---
+
+job  : 12441826 gtfp-stol
+node : atl1-1-02-011-15-2.pace.gatech.edu
+psi4 : 8ae2767f0 test(gtfock): add a 1863-basis-function system to the HPC benchmark
+
+--- job 12441826: last 20 iterations, from gtfp-stol_12441826.log ---
+
+   @RHF iter  41: -3695.48192274412395   -3.21947e-04   9.50037e-06 DIIS
+   @RHF iter  42: -3695.48264735424709   -7.24610e-04   8.89496e-06 DIIS
+   @RHF iter  43: -3695.48260614508581    4.12092e-05   8.78172e-06 DIIS
+   @RHF iter  44: -3695.48086583310032    1.74031e-03   9.01978e-06 DIIS
+   @RHF iter  45: -3695.47785958841450    3.00624e-03   8.58042e-06 DIIS
+   @RHF iter  46: -3695.47771858036685    1.41008e-04   8.07412e-06 DIIS
+   @RHF iter  47: -3695.47814795901832   -4.29379e-04   7.32297e-06 DIIS
+   @RHF iter  48: -3695.47493730575115    3.21065e-03   1.05209e-05 DIIS
+   @RHF iter  49: -3695.47588902708048   -9.51721e-04   7.52384e-06 DIIS
+   @RHF iter  50: -3695.47522703879622    6.61988e-04   1.02695e-05 DIIS
+   @RHF iter  51: -3695.47545722380346   -2.30185e-04   1.26777e-05 DIIS
+   @RHF iter  52: -3695.47619730361657   -7.40080e-04   1.03923e-05 DIIS
+   @RHF iter  53: -3695.47727379618846   -1.07649e-03   6.74108e-06 DIIS
+   @RHF iter  54: -3695.47837416081347   -1.10036e-03   5.03960e-06 DIIS
+   @RHF iter  55: -3695.47868333798579   -3.09177e-04   5.36972e-06 DIIS
+   @RHF iter  56: -3695.47953749350745   -8.54156e-04   5.10444e-06 DIIS
+   @RHF iter  57: -3695.47950943621800    2.80573e-05   5.11623e-06 DIIS
+   @RHF iter  58: -3695.47933882281541    1.70613e-04   5.14183e-06 DIIS
+   @RHF iter  59: -3695.47897122826362    3.67595e-04   5.26952e-06 DIIS
+   @RHF iter  60: -3695.47864627876879    3.24949e-04   4.94205e-06 DIIS
+
+--- job 12441826: SLURM epilogue from gtfp-stol_12441826.log ---
+
+Begin Slurm Epilog: Aug-28-2026 17:29:06
+Job ID:        12441826
+User ID:       awallace43
+Account:       gts-cs207-chemx
+Job name:      gtfp-stol
+Resources:     cpu=24,mem=182808M,node=1
+Rsrc Used:     cput=4-03:24:48,vmem=0,walltime=04:08:32,mem=4339196K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-011-15-2
+---------------------------------------
+
 
 Control point: the one-sided MPI component
 ==========================================

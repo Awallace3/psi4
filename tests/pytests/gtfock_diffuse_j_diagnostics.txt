@@ -517,3 +517,142 @@ setting to sweep against it. So the primitive-screen hypothesis in the doc bulle
 survives this experiment rather than being confirmed by it. What the experiment
 does remove is the weaker reading -- that any screened builder loses this much on
 this basis -- which is now excluded by direct measurement.
+
+
+4. The orthogonalization remedy: is the near-singular overlap the cause?
+------------------------------------------------------------------------
+
+Section 1 measured a minimum overlap eigenvalue of 1.089528e-07 for the failing
+basis, 9% above Psi4's default S_TOLERANCE of 1e-7. Psi4 therefore keeps every
+function and orthogonalizes symmetrically, and symmetric orthogonalization
+amplifies an error in the Fock build by 1/s_min -- about 9.2e+06 here. That is
+a natural suspect and worth testing rather than arguing about, so PACE job
+12441826 tested it: one 24-core node, the same geometry, basis, guess and
+convergence thresholds as the benchmark, maxiter 60, and S_TOLERANCE raised to
+1e-6 as the only departure. Raising the threshold above s_min is what makes
+Psi4 switch to canonical orthogonalization and project the offending directions
+out entirely.
+
+Before reading the result it is worth knowing exactly how much that threshold
+change removes, which is a property of the overlap matrix alone and costs no
+integrals to measure.
+
+--- smin_spectrum.py, verbatim ---
+
+"""How many overlap eigenvalues does S_TOLERANCE 1e-6 actually discard?
+
+Job 12441826 raised S_TOLERANCE from the 1e-7 default to 1e-6 to force canonical
+orthogonalization on protein157/6-31+G**.  Its psi4.out was overwritten by a
+second arm before the "Using ... orthogonalization" line could be read back, so
+this rebuilds the overlap matrix alone -- no integrals, no SCF -- and counts the
+eigenvalues below each threshold.  That is what decides the code path.
+"""
+import importlib.util, os, numpy as np, psi4
+
+REPO = "/home/awallace43/.treehouse/psi4-1ae95c/2/psi4"
+spec = importlib.util.spec_from_file_location(
+    "b", os.path.join(REPO, "tests", "pytests", "gtfock_hpc_benchmark.py"))
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+psi4.core.be_quiet()
+mol = psi4.geometry(m._SYSTEMS["protein157"])
+for basis in ("6-31+G**", "6-31G**"):
+    bs = psi4.core.BasisSet.build(mol, "ORBITAL", basis)
+    S = np.asarray(psi4.core.MintsHelper(bs).ao_overlap())
+    w = np.linalg.eigvalsh(S)
+    print(f"{basis:10s} nbf={bs.nbf():5d}  s_min={w[0]:.6e}  "
+          f"below 1e-7: {(w<1e-7).sum():3d}   below 1e-6: {(w<1e-6).sum():3d}   "
+          f"below 1e-5: {(w<1e-5).sum():3d}")
+    print(f"{'':10s} 10 smallest: " + " ".join(f"{x:.3e}" for x in w[:10]))
+
+--- results, long lines folded to fit ---
+
+6-31+G**   nbf= 1863  s_min=1.089528e-07
+           below 1e-7:   0   below 1e-6:   8   below 1e-5:  22
+           10 smallest: 1.090e-07 1.413e-07 2.623e-07 3.316e-07 4.357e-07
+                        5.940e-07 6.227e-07 7.347e-07 1.050e-06 1.442e-06
+6-31G**    nbf= 1555  s_min=3.321363e-04
+           below 1e-7:   0   below 1e-6:   0   below 1e-5:   0
+           10 smallest: 3.321e-04 4.062e-04 1.003e-03 1.493e-03 1.663e-03
+                        1.688e-03 1.787e-03 1.871e-03 1.923e-03 2.030e-03
+
+So the change is real and it is small. At the default nothing at all lies below
+the cutoff, the SCF runs symmetric orthogonalization and keeps all 1863
+functions; at 1e-6 eight eigenvalues fall below it, Psi4 switches to canonical
+orthogonalization and discards those eight directions, leaving 1855. The
+converging control basis is not near the question -- its smallest eigenvalue is
+3.3e-04 and nothing lies below 1e-5 -- which is consistent with conditioning
+tracking the diffuse shells even if it turns out not to be what breaks the SCF.
+
+The job's own JSON record is missing through a probe bug, not a Psi4 failure.
+The SCF returned; the script then crashed parsing the printed minimum
+eigenvalue with a regex that choked on the sentence-ending period
+("1.0895284891e-07."), and a second arm overwrote psi4.out before the
+orthogonalization banner could be read back. What survives is the iteration
+tail the job wrapper echoed, which is why the code path above is reconstructed
+from the overlap spectrum rather than quoted from the output.
+
+--- job 12441826, atl1-1-02-011-15-2, psi4 8ae2767f0, walltime 04:08:32 ---
+
+   @RHF iter  41: -3695.48192274412395   -3.21947e-04   9.50037e-06 DIIS
+   @RHF iter  42: -3695.48264735424709   -7.24610e-04   8.89496e-06 DIIS
+   @RHF iter  43: -3695.48260614508581    4.12092e-05   8.78172e-06 DIIS
+   @RHF iter  44: -3695.48086583310032    1.74031e-03   9.01978e-06 DIIS
+   @RHF iter  45: -3695.47785958841450    3.00624e-03   8.58042e-06 DIIS
+   @RHF iter  46: -3695.47771858036685    1.41008e-04   8.07412e-06 DIIS
+   @RHF iter  47: -3695.47814795901832   -4.29379e-04   7.32297e-06 DIIS
+   @RHF iter  48: -3695.47493730575115    3.21065e-03   1.05209e-05 DIIS
+   @RHF iter  49: -3695.47588902708048   -9.51721e-04   7.52384e-06 DIIS
+   @RHF iter  50: -3695.47522703879622    6.61988e-04   1.02695e-05 DIIS
+   @RHF iter  51: -3695.47545722380346   -2.30185e-04   1.26777e-05 DIIS
+   @RHF iter  52: -3695.47619730361657   -7.40080e-04   1.03923e-05 DIIS
+   @RHF iter  53: -3695.47727379618846   -1.07649e-03   6.74108e-06 DIIS
+   @RHF iter  54: -3695.47837416081347   -1.10036e-03   5.03960e-06 DIIS
+   @RHF iter  55: -3695.47868333798579   -3.09177e-04   5.36972e-06 DIIS
+   @RHF iter  56: -3695.47953749350745   -8.54156e-04   5.10444e-06 DIIS
+   @RHF iter  57: -3695.47950943621800    2.80573e-05   5.11623e-06 DIIS
+   @RHF iter  58: -3695.47933882281541    1.70613e-04   5.14183e-06 DIIS
+   @RHF iter  59: -3695.47897122826362    3.67595e-04   5.26952e-06 DIIS
+   @RHF iter  60: -3695.47864627876879    3.24949e-04   4.94205e-06 DIIS
+
+The remedy fails. Sixty iterations, the DIIS error stuck between 4.9e-06 and
+1.3e-05 against a 1e-07 target, the energy wandering over a 7.7e-03 Eh band
+rather than settling. Canonical orthogonalization does not rescue this SCF.
+
+The informative part is not that it failed but where it failed to. The run is
+oscillating around -3695.478, which is 52.73 Eh BELOW the converged DirectJK
+reference of -3642.752751 from job 12441235. Orthogonalization cannot do that
+in either direction: discarding eight directions from the variational space can
+only raise an SCF energy, never lower it. Whatever this run is heading toward
+is not a worse-conditioned approximation to the right answer, it is the right
+answer to a different Fock operator.
+
+The J deficit is the right size to be that different operator. Using the cached
+matrices from section 1 -- so this is the one-iteration SAD-guess density
+again, and a magnitude check rather than a prediction -- the two-electron
+energies 2*tr(D J) and -tr(D K) are:
+
+    E_J[direct] =   16646.166307 Eh      E_K[direct] =  -476.659933 Eh
+    E_J[gtfock] =   16549.060281 Eh      E_K[gtfock] =  -476.542883 Eh
+      dE_J      =     -97.106026 Eh        dE_K      =     0.117050 Eh
+
+    eps * E_J[direct]                    =  -51.626853 Eh  (uniform part alone)
+    12441826 offset from the reference   =  -52.725549 Eh  (-3695.4783 vs
+                                                            -3642.752751)
+
+A 0.31% deficit on a Coulomb energy of 1.66e+04 Eh is tens of hartrees, and
+tens of hartrees is what the failing run shows. The uniform component of the
+deficit by itself accounts for 51.6 of the observed 52.7; the full difference
+on this density is -97.1, larger, which is expected given that the two
+densities are not the same one -- these matrices are from a SAD guess and the
+run is at its sixtieth iteration. The claim the numbers support is not an
+identity but a scale: nothing about orthogonalization operates at 50 Eh on this
+system, and the J deficit does. K, by contrast, contributes 0.12 Eh.
+
+Conditioning is now excluded twice. It was already excluded as a cause, because
+DirectJK and density fitting converge the identical near-singular input in 12
+monotone iterations (job 12441235); it is excluded as a remedy here, because
+removing the near-null directions outright leaves the failure intact and leaves
+the energy in the same wrong place. What the small s_min does do is amplify --
+||dF||_F / s_min = 1.37e+08 from section 1 -- and the amplification of an error
+is not the error.
