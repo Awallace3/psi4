@@ -513,8 +513,9 @@ the memory for a 1.08x speedup is not a trade worth making.
 
 The practical consequence for a user with one node is short: run GTFock with one
 rank and all the cores. Ranks earn their keep when they bring *more* cores, which
-is what the previous section measures; they do not earn it by subdividing a fixed
-set. Distributing the rest of the SCF is what would change that, and it is the
+is what the previous section measures at one thread per rank and what
+`Scaling out: one rank per node`_ measures at twenty-four; they do not earn it by
+subdividing a fixed set. Distributing the rest of the SCF is what would change that, and it is the
 same conclusion the fixed-thread table reaches from the other direction.
 
 The density-fitting line is included for orientation and should not be read as a
@@ -530,6 +531,175 @@ what distinguishes it from a distribution bug.
 These are measurements from one cluster at two problem sizes, reported as
 measured and not extrapolated. The driver, the submission script, the reducer,
 and the raw numbers are all in the tree.
+
+Scaling out: one rank per node
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The two tables above hold the hardware fixed and vary how it is used. This one
+does the opposite: every rank owns a whole 24-core node, so the rank count and
+the core count grow together, 24 to 96 cores across four nodes. It is the
+question a user with a queue allocation actually asks |w---w| "if I request four
+nodes instead of one, what do I get?" |w---w| and it is the only one of the three
+sweeps in which the ranks have to talk across a network.
+
+:source:`tests/pytests/gtfock_hpc_phoenix_multinode.slurm` runs it, with the same
+driver and the same reducer as the fixed-core sweep. All four GTFock points, both
+reference arms, and a control point come out of a *single* four-node allocation,
+so a wider point cannot be faster for having landed on quieter hardware, and
+``SLURM_JOB_NODELIST`` is identical across the points. The four nodes were checked
+identical from ``scontrol show node`` |w---w| two-socket Xeon Gold 6226,
+``CPUTot=24``, ``RealMemory=191000``, same feature list |w---w| and the nodes are
+InfiniBand-connected: UCX 1.19.1 in this environment reports ``rc_mlx5``,
+``dc_mlx5`` and ``ud_mlx5`` transports on a Mellanox ``mlx5_0:1`` HCA, so the
+cross-node traffic has a real IB path rather than falling back to Ethernet. Each
+rank gets 24 cores and 120 GB. A core set spanning all 24 cores crosses both
+sockets, which OpenMPI refuses to bind, so every point here runs unbound with
+``OMP_PLACES=cores``, the one-rank point included; unlike the fixed-core sweep,
+the placement is uniform across the rank counts rather than varying with them.
+
+Before spending any SCF time the script launches a ``hostname``-only MPI job and
+aborts unless the ranks land on as many distinct hosts as there are ranks. A sweep
+that quietly oversubscribed one node would measure the wrong thing while looking
+entirely plausible; both jobs' checks are recorded in
+:source:`tests/pytests/gtfock_hpc_multinode_provenance.txt`. Every per-point
+number is in :source:`tests/pytests/gtfock_hpc_multinode_results.csv`, kept
+separate from the fixed-core CSV rather than merged into it, because the reducer
+keys a point on (system, arm, ranks) and the two sweeps share rank counts while
+meaning different things by them.
+
+.. peptide backbone dimer, 24 atoms, 6-31+G** (260 basis functions in 122
+   shells), on atl1-1-02-010-23-2 and three more nodes, job 12433686
+
+======  =====  ===  ====  =====  =======  =======  =======  =============  =============  ========
+arm     ranks  thr  grid  iters  SCF (s)  J/K (s)  speedup  RSS/rank (MB)  RSS node (MB)  dE (Eh)
+======  =====  ===  ====  =====  =======  =======  =======  =============  =============  ========
+direct  1      24   ---   11     17.8     16.1     ---      806            806            ---
+df      1      24   ---   11     3.8      0.6      ---      1482           1482           6.0e-04
+gtfock  1      24   1x1   11     7.1      4.9      1.00     643            643            -1.3e-07
+gtfock  2      24   1x2   11     5.0      3.2      1.43     647            1291           -1.3e-07
+gtfock  3      24   1x3   11     4.3      2.5      1.66     649            1936           -1.3e-07
+gtfock  4      24   2x2   11     3.9      2.1      1.84     647            2580           -1.3e-07
+======  =====  ===  ====  =====  =======  =======  =======  =============  =============  ========
+
+.. ethene plus nanotube fragment, 42 atoms, 6-31+G** (574 basis functions in 256
+   shells), on the same four nodes, job 12433617
+
+======  =====  ===  ====  =====  =======  =======  =======  =============  =============  ========
+arm     ranks  thr  grid  iters  SCF (s)  J/K (s)  speedup  RSS/rank (MB)  RSS node (MB)  dE (Eh)
+======  =====  ===  ====  =====  =======  =======  =======  =============  =============  ========
+direct  1      24   ---   11     300.9    293.2    ---      1124           1124           ---
+df      1      24   ---   11     44.5     7.8      ---      10342          10342          1.4e-03
+gtfock  1      24   1x1   11     92.8     88.7     1.00     803            803            -8.4e-06
+gtfock  2      24   1x2   11     49.7     45.9     1.87     803            1592           -8.4e-06
+gtfock  3      24   1x3   11     35.5     31.9     2.62     791            2354           -8.4e-06
+gtfock  4      24   2x2   11     27.9     24.3     3.33     807            3205           -8.4e-06
+======  =====  ===  ====  =====  =======  =======  =======  =============  =============  ========
+
+Here ``ranks`` is also the node count, and ``thr`` stays at 24 rather than falling
+as it does in the fixed-core table, so the total core count is 24 x ``ranks``.
+``speedup`` is again total SCF against the one-rank GTFock point, which for this
+sweep means one node.
+
+Rank-count invariance holds across nodes at production size, and the tables
+understate it. Within one rank count every rank returns a bitwise identical
+energy, so the reducer's spread column is exactly zero. Across rank counts the
+spread is 4.5e-13 :math:`E_h` on the peptide and 1.4e-11 on the nanotube |w---w|
+factors of 2200 and 73 inside the 1e-09 tolerance the in-tree invariance test
+enforces, and four to five orders of magnitude inside the -1.3e-07 and -8.4e-06
+:math:`E_h` offsets from ``direct``. Those offsets are in turn the same to six
+significant figures as the ones the fixed-core sweep measured in a different job
+on different nodes with a different partitioning, which is a cross-check the two
+sweeps get for free by sharing a driver. Every point converged in 11 iterations
+with 12 J/K builds. Three nodes are in the table deliberately: ``split_procs()``
+factors a prime rank count as 1x3 rather than refusing it, and this is the
+measurement that says so |w---w| the in-tree invariance test now pins that grid
+as well.
+
+The speedup is real. On the nanotube, four nodes cut the SCF from 92.8 s to
+27.9 s (1.00, 1.87, 2.62, 3.33), and the J/K build itself from 88.7 s to 24.3 s
+(1.00, 1.93, 2.78, 3.64) |w---w| 97%, 93% and 91% parallel efficiency in the part
+of the SCF that GTFock actually distributes. The peptide gains less: 1.00, 1.43,
+1.66, 1.84 on the SCF and 1.00, 1.55, 1.97, 2.32 on the J/K, for 78%, 66% and 58%
+efficiency. Both are a different world from the 1.07x and 1.08x the same rank
+counts bought when they were subdividing one node's cores, and the difference is
+not the engine: it is that these ranks brought hardware with them.
+
+The gap between the two systems is a size effect and it is measurable rather than
+asserted. Per Fock build, the nanotube is 18x more J/K work than the peptide
+(7.39 s against 0.41 s at one node) but only 4.9x more matrix to gather and
+broadcast, since the communicated J and K scale as the square of the basis size
+while the integral work scales much more steeply. Subtracting an ideal 1/N from
+the measured four-node build leaves 0.07 s per build on the peptide and 0.18 s on
+the nanotube |w---w| both small in absolute terms, and decisive only when the
+build being divided is itself 0.4 s.
+
+What does not scale is everything else. The SCF total minus the J/K timer is
+2.18, 1.80, 1.82, 1.86 s across the peptide's four points and 4.15, 3.72, 3.57,
+3.55 s across the nanotube's: flat, because it is replicated on every rank by
+design |w---w| each rank holds the full J and K, so diagonalization, DIIS, and the
+DFT quadrature are done four times over rather than divided. That remainder is
+the ceiling. Even a J/K build driven to zero could not take the peptide's
+four-node SCF below 1.86 s (3.8x on 7.1 s) or the nanotube's below 3.55 s (26x on
+92.8 s), and on the peptide the remainder is already 48% of the four-node wall
+clock against 13% on the nanotube. Distributing the rest of the SCF, not tuning
+the Fock build, is what would move these numbers further.
+
+Memory behaves the way the design predicts, and the reading is the opposite of
+the fixed-core sweep's. Per-rank RSS is flat here |w---w| 643 to 647 MB on the
+peptide, 803 to 807 MB on the nanotube |w---w| because per-rank memory is exactly
+what this protocol holds constant, and because the replicated matrices dominate
+the distributed AO blocks at these sizes. The summed footprint still grows about
+linearly with the rank count, 4.0x at four nodes in both systems, but each node is
+now supplying under 1 GB of its own 187 GB rather than four ranks competing for
+one node's budget. The same growth that made the fixed-core result a bad trade is
+close to free here.
+
+Two comparisons in the CSV need reading carefully. ``speedup_vs_direct`` reaches
+4.61x on the peptide and 10.79x on the nanotube at four nodes, but that ratio
+compares 96 cores against 24: it is a throughput number, not an algorithmic one.
+The like-for-like engine comparison is the one-node row, 2.5x and 3.2x against
+``DirectJK`` on identical hardware, consistent with the 3.0x and 3.2x the
+fixed-core sweep measured. The density-fitting line also moved between the two
+sweeps on the nanotube, 32.7 s there against 44.5 s here, while its ``J/K: JK``
+timer did not budge (7.7 against 7.8 s) |w---w| the whole difference is outside
+``JK::compute()``, in ``MemDFJK``'s three-index integral construction, which is
+I/O-bound on shared cluster storage. It is recorded rather than smoothed, and it
+is one more reason to read the DF row as orientation only. What is worth noting is
+that GTFock's four-node exact-ERI SCF, 27.9 s, is faster than either
+density-fitting measurement in this document while carrying no fitting error and
+using 807 MB per process against 10.3 GB in one.
+
+The one-sided component was checked rather than assumed. Both submission scripts
+export ``OMPI_MCA_osc=^ucx`` to silence a per-rank OpenMPI log line, and GTFock's
+``GTMatrix`` layer genuinely does use MPI one-sided RMA (``MPI_Win_create``,
+``MPI_Get``, ``MPI_Accumulate``, window lock/unlock), so across a network that
+export is an assumption about the component carrying real traffic and not a
+cosmetic setting. The multi-node script therefore re-runs its widest point with
+the variable unset, into a subdirectory the reducer will not merge with the point
+it controls. The wall clock is unchanged |w---w| 4.1 s / 2.3 s against 3.9 / 2.1
+on the peptide, 27.9 / 24.3 against 27.9 / 24.3 on the nanotube |w---w| so nothing
+in the tables above depends on it. Per-rank memory is not: letting OpenMPI choose
+the UCX one-sided component roughly doubles it, to 1364 MB and 1523 MB.
+
+One caveat belongs on the peptide numbers specifically. A first attempt at that
+sweep returned a one-node baseline of 33.4 s SCF against a 5.4 s J/K build, a 28 s
+remainder where every other point in the same job had 1.6 to 2.7 s; taken at face
+value it would have reported 8.55x at four nodes against a J/K improvement of only
+2.49x. It was diagnosed as a transient stall rather than a systematic effect |w---w|
+that process burned 215 s of user time in 33 s of wall on 24 cores while an
+equivalent point elsewhere did the same work in 6 s |w---w| the sweep was
+resubmitted with a byte-identical script, and the discarded job's records are kept
+in the provenance file instead of deleted. The lesson is in the numbers: a
+four-second SCF on a shared cluster sits close enough to the noise floor that one
+point can be wrong by a factor of five, which is the second reason to treat the
+peptide's 1.84x as the weaker of the two results.
+
+Twelve measured points and two controls, from two jobs on one cluster, reported as
+measured and not extrapolated. What they support is narrow and worth stating
+plainly: given a system large enough to give each node real work, GTFock turns
+additional nodes into a proportionally faster exact-ERI Fock build |w---w| 3.33x
+on four nodes, 91% efficiency in the J/K itself |w---w| and the SCF wrapped around
+it does not distribute at all.
 
 .. _`cmake:gtfock`:
 

@@ -647,6 +647,14 @@ def test_gtfock_rank_count_invariance(tmp_path, method):
     AO panels, and a per-rank panel that GTFock split into more than one block in
     each direction -- otherwise the sweep would be measuring a system too small
     to decompose. ``b3lyp`` covers the hybrid-DFT path through the same J/K.
+
+    Three ranks are in the sweep because a prime rank count is the one case
+    ``split_procs()`` cannot factor squarely: it starts from
+    ``floor(sqrt(nprocs))`` and decrements until the row count divides, which for
+    a prime means falling all the way to a 1xN grid. That is a different branch
+    from the 2x2 case and a plausible place to refuse a rank count outright, so
+    the grid assertion below pins it to 1x3 rather than leaving it to be
+    discovered by a user with three nodes.
     """
     launch = _mpi_launch()
 
@@ -661,7 +669,7 @@ def test_gtfock_rank_count_invariance(tmp_path, method):
     driver_args = ["--molecule", "water6", "--basis", HEXAMER_BASIS, "--method", method]
     results = {nranks: _run_mpi_driver(launch, nranks, os.path.join(str(tmp_path), f"n{nranks}"),
                                       driver_args)
-               for nranks in (1, 2, 4)}
+               for nranks in (1, 2, 3, 4)}
 
     energies = []
     for nranks, reports in results.items():
@@ -690,6 +698,7 @@ def test_gtfock_rank_count_invariance(tmp_path, method):
             "this system is too small to prove anything about the decomposition")
 
     assert results[4][0]["process_grid"] == [2, 2]
+    assert results[3][0]["process_grid"] == [1, 3]
     assert results[2][0]["process_grid"] == [1, 2]
     # The distributed claim: every rank of every rank count agrees with every
     # other to roundoff, so nothing about the decomposition leaked into the

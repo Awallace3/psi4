@@ -176,8 +176,9 @@ def parse_args(argv):
     parser.add_argument("--method", default="scf",
                         help="anything psi4.energy accepts that needs only J and K")
     parser.add_argument("--threads", type=int, default=1,
-                        help="OpenMP threads for this process; ranks x threads is "
-                             "held constant across the comparison")
+                        help="OpenMP threads for this process; the fixed-core sweep "
+                             "holds ranks x threads constant, the multi-node sweep "
+                             "holds threads constant and lets the ranks add nodes")
     parser.add_argument("--memory", default="4 GB")
     parser.add_argument("--scratch", default=".",
                         help="directory for per-rank scratch and Psi4 output files")

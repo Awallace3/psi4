@@ -1,0 +1,238 @@
+GTFock multi-node scale-out sweep: scheduler records for the Phoenix jobs
+========================================================================
+
+Copied verbatim from the run artifacts behind the multi-node tables in
+doc/sphinxman/source/gtfock.rst: job 12433686 (peptide) and job 12433617
+(nanotube), plus job 12433616, a discarded first attempt at the peptide sweep
+kept here because the reason it was discarded is itself a measurement.
+
+These jobs are the companion to the fixed-core jobs recorded in
+gtfock_hpc_provenance.txt and ask the opposite question. There, one 24-core node
+was subdivided among the ranks; here each rank owns a whole 24-core node, so the
+total core count grows 24 -> 48 -> 72 -> 96 with the rank count. Both sweeps ran
+the same driver, the same basis, and the same two molecules, so the two sets of
+numbers differ only in what was held constant.
+
+For each job, in order: the run's own provenance block; placement.txt, the
+hostname-only MPI launch check the batch script runs before any paid SCF (it
+FATALs if the ranks do not land on as many distinct hosts as there are ranks);
+the sacct query for the job (whose MaxRSS and MaxVMSize columns come back empty
+on this cluster, as they did for the fixed-core jobs); and the SLURM epilogue
+block PACE appends to the job log after the batch script has already exited.
+
+The epilogue's "Rsrc Used: ... mem=" field is the citable source for job-level
+memory: 1653048K (1.58 GiB) for the peptide job and 10801940K (10.30 GiB) for
+the nanotube job. Both are peaks over the whole job, so the nanotube figure is
+the density-fitting reference point (10.3 GB in one process) rather than any
+GTFock point; the GTFock points peak at 3205 MB summed over four nodes. The
+epilogue's "cput" field is allocated core-time, not consumed core-time
+(96 cores x the walltime in each of these jobs), so it says nothing about
+utilisation. Every per-point number quoted in gtfock.rst comes from
+gtfock_hpc_multinode_results.csv instead.
+
+All four nodes are identical: two-socket Xeon Gold 6226, CPUTot=24,
+RealMemory=191000, same feature list. Both accepted jobs happened to receive the
+same four nodes, and each job took all of its points from a single 4-node
+allocation, so a wider point cannot be faster for having landed on better
+hardware.
+
+--- job 12433686, peptide: provenance.txt ---
+
+=== provenance ===
+job         : 12433686 gtfmn-peptide
+batch host  : atl1-1-02-010-23-2.pace.gatech.edu
+nodes       : 4 (atl1-1-02-010-23-2,atl1-1-02-011-17-1,atl1-1-02-018-1-1,atl1-1-02-018-10-1)
+partition   : cpu-small  account: gts-cs207-chemx  qos: inferno
+per rank    : 24 cores, 120 GB; one rank per node
+system      : peptide / 6-31+G** / scf
+psi4        : 0cf999a66 no-mistakes(document): correct J/K timer attribution in GTFock docs
+mpirun      : /storage/scratch1/3/awallace43/fm-gtfock/envs/p4gtf/bin/mpirun -- mpirun (Open MPI) 5.0.8
+CPU(s):                                  24
+Model name:                              Intel(R) Xeon(R) Gold 6226 CPU @ 2.70GHz
+               total        used        free      shared  buff/cache   available
+Mem:             187           3         179           0           5         183
+NodeName=atl1-1-02-010-23-2 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U2,IBL02,R02010,cpu-small RealMemory=191000
+NodeName=atl1-1-02-011-17-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U2,IBL02,R02011,cpu-small RealMemory=191000
+NodeName=atl1-1-02-018-1-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U1,IBL02,R02018,cpu-small RealMemory=191000
+NodeName=atl1-1-02-018-10-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U1,IBL02,R02018,cpu-small RealMemory=191000
+
+--- job 12433686, peptide: placement.txt (cross-node launch check) ---
+
+rank 0/4 on atl1-1-02-010-23-2.pace.gatech.edu
+rank 1/4 on atl1-1-02-011-17-1.pace.gatech.edu
+rank 2/4 on atl1-1-02-018-1-1.pace.gatech.edu
+rank 3/4 on atl1-1-02-018-10-1.pace.gatech.edu
+
+--- job 12433686, peptide: sacct.txt ---
+
+JobID|JobName|Elapsed|MaxRSS|MaxVMSize|NNodes|NCPUS
+12433686|gtfmn-peptide|00:01:28|||4|96
+12433686.batch|batch|00:01:28|||1|24
+12433686.extern|extern|00:01:28|||4|96
+12433686.0|prted|00:00:13|12056K|0|3|96
+12433686.1|prted|00:00:25|10208K|0|3|96
+12433686.2|prted|00:00:35|786576K|0|3|96
+12433686.3|prted|00:00:43|794832K|0|3|96
+12433686.4|prted|00:00:52|793764K|0|3|96
+12433686.5|prted|00:01:28|1549216K|0|3|96
+
+--- job 12433686, peptide: SLURM epilogue from gtfmn-peptide_12433686.log ---
+
+Begin Slurm Epilog: Aug-28-2026 05:39:59
+Job ID:        12433686
+User ID:       awallace43
+Account:       gts-cs207-chemx
+Job name:      gtfmn-peptide
+Resources:     cpu=96,mem=731232M,node=4
+Rsrc Used:     cput=02:20:48,vmem=0,walltime=00:01:28,mem=1653048K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-010-23-2,atl1-1-02-011-17-1,atl1-1-02-018-1-1,atl1-1-02-018-10-1
+---------------------------------------
+
+--- job 12433617, nanotube: provenance.txt ---
+
+=== provenance ===
+job         : 12433617 gtfmn-nanotube
+batch host  : atl1-1-02-010-23-2.pace.gatech.edu
+nodes       : 4 (atl1-1-02-010-23-2,atl1-1-02-011-17-1,atl1-1-02-018-1-1,atl1-1-02-018-10-1)
+partition   : cpu-small  account: gts-cs207-chemx  qos: inferno
+per rank    : 24 cores, 120 GB; one rank per node
+system      : nanotube / 6-31+G** / scf
+psi4        : 0cf999a66 no-mistakes(document): correct J/K timer attribution in GTFock docs
+mpirun      : /storage/scratch1/3/awallace43/fm-gtfock/envs/p4gtf/bin/mpirun -- mpirun (Open MPI) 5.0.8
+CPU(s):                                  24
+Model name:                              Intel(R) Xeon(R) Gold 6226 CPU @ 2.70GHz
+               total        used        free      shared  buff/cache   available
+Mem:             187           4         178           0           5         183
+NodeName=atl1-1-02-010-23-2 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U2,IBL02,R02010,cpu-small RealMemory=191000
+NodeName=atl1-1-02-011-17-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U2,IBL02,R02011,cpu-small RealMemory=191000
+NodeName=atl1-1-02-018-1-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U1,IBL02,R02018,cpu-small RealMemory=191000
+NodeName=atl1-1-02-018-10-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U1,IBL02,R02018,cpu-small RealMemory=191000
+
+--- job 12433617, nanotube: placement.txt (cross-node launch check) ---
+
+rank 0/4 on atl1-1-02-010-23-2.pace.gatech.edu
+rank 1/4 on atl1-1-02-011-17-1.pace.gatech.edu
+rank 2/4 on atl1-1-02-018-1-1.pace.gatech.edu
+rank 3/4 on atl1-1-02-018-10-1.pace.gatech.edu
+
+--- job 12433617, nanotube: sacct.txt ---
+
+JobID|JobName|Elapsed|MaxRSS|MaxVMSize|NNodes|NCPUS
+12433617|gtfmn-nanotube|00:11:39|||4|96
+12433617.batch|batch|00:11:39|||1|24
+12433617.extern|extern|00:11:39|||4|96
+12433617.0|prted|00:00:10|9748K|0|3|96
+12433617.1|prted|00:01:49|10680K|0|3|96
+12433617.2|prted|00:02:43|984420K|0|3|96
+12433617.3|prted|00:03:24|993428K|0|3|96
+12433617.4|prted|00:03:56|1000304K|0|3|96
+12433617.5|prted|00:11:39|1758892K|0|3|96
+
+--- job 12433617, nanotube: SLURM epilogue from gtfmn-nanotube_12433617.log ---
+
+Begin Slurm Epilog: Aug-28-2026 05:38:25
+Job ID:        12433617
+User ID:       awallace43
+Account:       gts-cs207-chemx
+Job name:      gtfmn-nanotube
+Resources:     cpu=96,mem=731232M,node=4
+Rsrc Used:     cput=18:38:24,vmem=0,walltime=00:11:39,mem=10801940K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-010-23-2,atl1-1-02-011-17-1,atl1-1-02-018-1-1,atl1-1-02-018-10-1
+---------------------------------------
+
+--- job 12433616, peptide: DISCARDED attempt, provenance.txt ---
+
+=== provenance ===
+job         : 12433616 gtfmn-peptide
+batch host  : atl1-1-02-010-23-2.pace.gatech.edu
+nodes       : 4 (atl1-1-02-010-23-2,atl1-1-02-011-17-1,atl1-1-02-018-1-1,atl1-1-02-018-10-1)
+partition   : cpu-small  account: gts-cs207-chemx  qos: inferno
+per rank    : 24 cores, 120 GB; one rank per node
+system      : peptide / 6-31+G** / scf
+psi4        : 0cf999a66 no-mistakes(document): correct J/K timer attribution in GTFock docs
+mpirun      : /storage/scratch1/3/awallace43/fm-gtfock/envs/p4gtf/bin/mpirun -- mpirun (Open MPI) 5.0.8
+CPU(s):                                  24
+Model name:                              Intel(R) Xeon(R) Gold 6226 CPU @ 2.70GHz
+               total        used        free      shared  buff/cache   available
+Mem:             187           3         179           0           5         183
+NodeName=atl1-1-02-010-23-2 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U2,IBL02,R02010,cpu-small RealMemory=191000
+NodeName=atl1-1-02-011-17-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U2,IBL02,R02011,cpu-small RealMemory=191000
+NodeName=atl1-1-02-018-1-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U1,IBL02,R02018,cpu-small RealMemory=191000
+NodeName=atl1-1-02-018-10-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U1,IBL02,R02018,cpu-small RealMemory=191000
+
+--- job 12433616, peptide: SLURM epilogue from gtfmn-peptide_12433616.log ---
+
+Begin Slurm Epilog: Aug-28-2026 05:26:40
+Job ID:        12433616
+User ID:       awallace43
+Account:       gts-cs207-chemx
+Job name:      gtfmn-peptide
+Resources:     cpu=96,mem=731232M,node=4
+Rsrc Used:     cput=04:59:12,vmem=0,walltime=00:03:07,mem=1707424K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-010-23-2,atl1-1-02-011-17-1,atl1-1-02-018-1-1,atl1-1-02-018-10-1
+---------------------------------------
+
+
+Control point: the one-sided MPI component
+==========================================
+
+Both batch scripts export OMPI_MCA_osc=^ucx to silence a per-rank OpenMPI log
+line. GTFock's GTMatrix layer does use MPI one-sided RMA (MPI_Win_create,
+MPI_Get, MPI_Accumulate, win lock/unlock, in GTMatrix_Get.c and
+GTMatrix_Update.c), so across a network that exclusion is an assumption about
+which component carries real traffic, not a cosmetic setting. The multi-node
+script therefore re-runs its widest point with the variable unset, into
+results/<job>/control_osc_default/ so the reducer cannot merge it with the point
+it controls. Reduced separately:
+
+  system    arm     ranks thr grid  iters  SCF (s)  J/K (s)  RSS/rank  RSS tot
+  peptide   gtfock      4  24  2x2     11      4.1      2.3      1364     5445
+  nanotube  gtfock      4  24  2x2     11     27.9     24.3      1523     6073
+
+Against the primary 4-node points (peptide 3.9 / 2.1, nanotube 27.9 / 24.3) the
+wall clock is unchanged: the exclusion does not shape the timings reported in
+gtfock.rst. It does change memory, and in the direction that favours excluding
+it -- letting OpenMPI pick the UCX osc component roughly doubles per-rank RSS,
+647 -> 1364 MB on the peptide and 807 -> 1523 MB on the nanotube.
+
+
+Discarded job 12433616: why the peptide sweep was re-run
+========================================================
+
+The first peptide job produced a 1-node baseline contaminated by a transient
+stall, which inflated every speedup derived from it. Per-point rank-0 wall
+clocks, with the SCF total's non-J/K remainder in the last column:
+
+  job 12433616 (discarded)              job 12433686 (kept)
+  arm     n   SCF     J/K   remainder   arm     n   SCF     J/K   remainder
+  gtfock  1   33.43    5.35     28.09   gtfock  1    7.10    4.92      2.18
+  gtfock  2    5.30    3.42      1.89   gtfock  2    4.97    3.17      1.80
+  gtfock  3    4.33    2.60      1.73   gtfock  3    4.27    2.45      1.82
+  gtfock  4    3.91    2.12      1.79   gtfock  4    3.85    1.99      1.86
+  direct  1   17.68   16.09      1.59   direct  1   17.78   16.09      1.69
+  df      1    3.28    0.62      2.66   df      1    3.80    0.62      3.18
+
+Every point in the discarded job except gtfock n=1 has a remainder between 1.59
+and 2.66 s, and the kept job's n=1 remainder is 2.18 s. The 28.09 s outlier is
+the whole discrepancy, and it is outside the J/K build, so it is not a Fock-build
+effect at all. Two checks ruled out a systematic "first process in the job"
+artefact: the nanotube job's n=1 point is also the first process in its job and
+has a 4.15 s remainder, and the discarded run's own psi4 process used 215.35 s of
+user time in 33 s of wall on 24 cores (6.5x) against 146.65 s in 6 s (24x) for
+the equivalent fixed-core point -- more user time than the 2-node point's two
+processes combined, which is threads spinning at a barrier rather than extra
+work.
+
+Taking the 33.43 s baseline at face value would have reported SCF speedups of
+1.00 / 6.30 / 7.61 / 8.55 against a J/K improvement of only 1.00 / 1.57 / 2.02 /
+2.49 -- a super-linear result manufactured by a slow reference. Since no
+systematic effect was found to correct, the fix was to resubmit the byte-identical
+script rather than to add a warm-up point; the re-run's uniform remainders
+confirm the stall was transient. This job's records are kept rather than deleted
+so the discard is auditable.
