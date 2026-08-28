@@ -8,11 +8,14 @@ Psi4's own DirectJK and density fitting both converge the identical input. That
 is the claim this file backs, and it is measured directly from the runs.
 
 This file also once claimed to locate the fault -- in J rather than K, and in
-the diffuse shells rather than the system size. It does not any more. Section 5
-is a control that was run late and overturned that attribution; the cause is
-open. Sections 1 through 4 are preserved as run, because their measurements are
-sound even where the conclusions drawn from them were not, and because the way
-they went wrong is worth keeping.
+the diffuse shells rather than the system size. It does not any more. Sections
+5 and 6 are controls that were run late: section 5 overturned that attribution,
+and section 6 localizes the failure to the very first SCF iteration and shows
+that Psi4's own DirectJK takes that first step into the same near-null subspace
+of the overlap, only far less deeply. The cause is still open. Sections 1
+through 4 are preserved as run, because their measurements are sound even where
+the conclusions drawn from them were not, and because the way they went wrong
+is worth keeping.
 
 Two kinds of evidence live in two different files, and the split is deliberate:
 
@@ -20,12 +23,14 @@ Two kinds of evidence live in two different files, and the split is deliberate:
     12434225 (the failed GTFock run) and 12441235 (the two reference arms that
     converged). Those establish THAT the SCF fails and that the failure is the
     engine's.
-  * this file holds the WORKSTATION probes that ask WHY. They are not SCF runs.
-    Each builds J and K once, from one fixed density handed identically to
-    both engines, and compares the resulting matrices directly. Removing the SCF from the loop is the whole
-    point: a diverging SCF confounds the error in the Fock build with the
-    feedback that error drives, and none of these numbers would mean anything
-    if the density kept moving underneath them.
+  * this file holds the WORKSTATION probes that ask WHY. Sections 1 through 5
+    are not SCF runs: each builds J and K once, from one fixed density handed
+    identically to both engines, and compares the resulting matrices directly.
+    Removing the SCF from the loop is the whole point, because a diverging SCF
+    confounds the error in the Fock build with the feedback that error drives,
+    and none of those numbers would mean anything if the density kept moving
+    underneath them. Section 6 deliberately puts a single iteration back, to
+    ask where the divergence starts, and says so where it does.
 
 Every probe ran on one workstation -- cos-4a16505.cos.gatech.edu, an AMD Ryzen
 Threadripper 3960X, 24 physical cores and 48 hardware threads -- against the
@@ -33,11 +38,11 @@ same build as the Phoenix jobs, through the same GTFockJK path, with
 OMPI_MCA_osc=^ucx set. This is not the Phoenix hardware and none of these
 numbers are scaling measurements; the quantities compared are matrix elements,
 which do not depend on the machine. The thread count differs between probes (48
-in section 1, 20 in section 3) for scheduling reasons only and is stated with
-each result; section 2 varies it deliberately and reports what that did. The
-scripts are reproduced verbatim, including the absolute paths they were run
-with; those paths are a scratch directory and this worktree, and are the two
-things to change to run them elsewhere.
+in section 1, 20 in section 3, 24 in section 6) for scheduling reasons only and
+is stated with each result; section 2 varies it deliberately and reports what
+that did. The scripts are reproduced verbatim, including the absolute paths
+they were run with; those paths are a scratch directory and this worktree, and
+are the two things to change to run them elsewhere.
 
 Two cautions apply to every number below.
 
@@ -58,8 +63,10 @@ on them -- that GTFock's J is 0.31% low -- is not: section 5 repeats the probe
 on a physical density of the same molecule in the same basis and finds the two
 engines agreeing to eight significant figures. The earlier sections are kept
 exactly as they were run, with each withdrawn conclusion marked where it occurs,
-because what they actually measured is still evidence -- just evidence about the
-density rather than about GTFock.
+because what they actually measured is still evidence -- just evidence about
+the density rather than about GTFock. Section 6 then measures that first
+iteration itself, through both engines from an identical guess, and finds the
+same collapse beginning in the reference run.
 
 The probes report Frobenius norms and element-wise maxima of DIFFERENCES between
 two engines on that density. They are meaningful as a comparison between engines
@@ -540,10 +547,13 @@ does.
 What this does NOT settle is the mechanism. Every knob varied above is a
 SHELL-QUARTET screening decision, which is the only kind Psi4 exposes; GTFock's
 hardcoded 1e-14 acts on individual PRIMITIVE pairs, and Psi4 has no equivalent
-setting to sweep against it. So the primitive-screen hypothesis in the doc bullet
-survives this experiment rather than being confirmed by it. What the experiment
-does remove is the weaker reading -- that any screened builder loses this much on
-this basis -- which is now excluded by direct measurement.
+setting to sweep against it. So the primitive-screen hypothesis this section
+was written to test survives this experiment rather than being confirmed by it.
+What the experiment does remove is the weaker reading -- that any screened
+builder loses this much on this basis -- which is now excluded by direct
+measurement.
+[The doc bullet no longer advances the primitive screen as the explanation for
+this failure; see section 5.]
 
 
 4. The orthogonalization remedy: is the near-singular overlap the cause?
@@ -686,11 +696,13 @@ run is at its sixtieth iteration. The claim the numbers support is not an
 identity but a scale: nothing about orthogonalization operates at 50 Eh on this
 system, and the J deficit does. K, by contrast, contributes 0.12 Eh.
 
-[WITHDRAWN in full, see section 5. Neither exclusion holds: the first is a non-
-sequitur, since the reference engines have no perturbation for the 9.2e+06
-amplification to act on, and the second rests on a remedy that this same section
-measured as removing only 8 directions of 1863, worth one decade of
-amplification. Conditioning is the leading suspect, not an excluded one.]
+[WITHDRAWN in full, see sections 5 and 6. Neither exclusion holds: the first is
+a non sequitur, since the reference engines have no perturbation for the
+9.2e+06 amplification to act on, and the second rests on a remedy that this
+same section measured as removing only 8 directions of 1863, worth one decade
+of amplification. Conditioning is the leading suspect, not an excluded one, and
+section 6 measures DirectJK's own first iterate falling into the same near-null
+subspace of the overlap that GTFock's falls into.]
 
 Conditioning is now excluded twice. It was already excluded as a cause, because
 DirectJK and density fitting converge the identical near-singular input in 12
@@ -884,10 +896,11 @@ any J built by any method that screens at all. Specifically:
     the failing run's -52.7 Eh offset -- is withdrawn. Both quantities are
     properties of diverged states, and matching two numbers that each come
     from the wreckage does not establish that one causes the other.
-  - The doc bullet's primitive-screen hypothesis loses its supporting
-    evidence. It is not disproven -- GTFock does screen primitives at a
-    hardcoded 1e-14 that INTS_TOLERANCE cannot reach, and that is still a real
-    property of the stack -- but nothing in this file now argues that it is
+  - The primitive-screen hypothesis, which the doc bullet used to advance and
+    no longer does, loses its supporting evidence. It is not disproven --
+    GTFock does screen primitives at a hardcoded 1e-14 that INTS_TOLERANCE
+    cannot reach, and that is still a real property of the stack, measurable
+    on the six-water cluster -- but nothing in this file now argues that it is
     what breaks this SCF.
 
 What stands
@@ -940,9 +953,408 @@ decade failing does not exclude a mechanism that may need four.
 The consistent reading of everything now measured is that a small engine
 difference -- ||dF||_F = 1.47e-02 on a physical density, which is ordinary
 screening-level disagreement -- meets an amplification of 9.2e+06 in this basis
-and destroys the iterate, after which the density leaves physical range and the
-engines diverge for the uninteresting reason that they are being asked about a
-matrix with elements of 1e+06. On that reading the 0.31% is the consequence and
-the conditioning is the cause. This is a hypothesis, stated as one. It predicts
-that the blow-up is visible at the very first iteration, which is testable and
-cheap.
+and destroys the iterate, after which the engines are being asked about a
+density that no longer resembles one. On that reading the 0.31% is the
+consequence and the conditioning is the cause. This is a hypothesis, stated as
+one. It predicts that the blow-up is visible at the very first iteration, which
+is testable and cheap. Section 6 tests it, and it survives.
+
+One thing that reading must not be allowed to say -- and that an earlier draft
+of this paragraph did say -- is that the engines diverge on the wrecked iterate
+because they are "being asked about a matrix with elements of 1e+06". Size
+alone cannot do it. J is linear in D, so under D -> cD both J and dJ scale by
+c, and
+
+    eps = -<Jref,dJ>/<Jref,Jref>      resid_frac = ||dJ + eps*Jref||/||dJ||
+
+are left exactly where they were. A density scaled up by a million gives the
+same eps as the physical density it was scaled from. What separates eps =
+3.1e-03 from eps = 3.6e-09 therefore cannot be the magnitude of the probe and
+can only be its DIRECTION. Section 6 measures both halves of that: it confirms
+the scale invariance on the engines themselves rather than assuming it, and it
+shows where in the basis the wrecked iterate points.
+
+
+6. Where it is born: the first iteration
+----------------------------------------
+
+Section 5 ended with a hypothesis and a cheap prediction: that an ordinary
+screening-level engine difference meets this basis's 9.2e+06 amplification and
+destroys the iterate, and that if that is what happens, the damage should be
+visible at the very first iteration. This section runs that test and the two
+controls that go with it. Everything below is protein157 in 6-31+G**,
+Cartesian, one rank, 24 threads, on the same build as sections 1 through 5.
+
+One iteration from an identical guess
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+iter1.py hands each engine the same SAD guess and the same options and stops
+after exactly one iteration, so the only thing that differs between the two
+arms is the J/K build inside that single iteration.
+
+--- iter1.py, verbatim ---
+"""Which engine's FIRST iterate blows up, and does the other one's?
+
+The probe density that sections 1-3 measure GTFock against was built by
+`scf_type gtfock, maxiter 1` from a SAD guess. It has max|D| = 2.4e+06. A
+physical closed-shell density in this basis has max|D| ~ 2. So one SCF
+iteration in this basis already left the physical range by six orders of
+magnitude, and every difference sections 1-3 report was measured there.
+
+That invalidates the attribution but not the failure: GTFock still runs 100
+iterations on protein157/6-31+G** where DirectJK and DiskDFJK converge in 12.
+The question this script asks is where the two engines part company.
+
+Both arms start from the IDENTICAL SAD guess and take exactly one iteration,
+differing only in the J/K engine. Then:
+
+  - if DirectJK's first iterate is also ~1e+06, the blow-up belongs to the
+    basis, both engines suffer it, and GTFock's divergence is something else;
+  - if DirectJK's first iterate is ~2 and GTFock's is ~1e+06, then GTFock's
+    SCF is already destroyed at iteration one, and the 0.31% measured on the
+    wreckage is the consequence rather than the cause.
+
+Reported per arm: the iterate energy, max|D|, ||D||_F, and tr(DS) (which must
+be the electron count for any density that is a projector onto occupied
+orbitals, however large its elements are).
+"""
+import os, sys, time, numpy as np
+os.environ.setdefault("PSI_SCRATCH", "/fastscratch/awallace43/psi4tmp")
+import psi4
+sys.path.insert(0, "/home/awallace43/.treehouse/psi4-1ae95c/2/psi4/tests/pytests")
+from gtfock_hpc_benchmark import _SYSTEMS
+
+D = "/tmp/fm-psi4-djk/diag"
+psi4.set_num_threads(24); psi4.set_memory("40 GB")
+psi4.core.set_output_file(f"{D}/iter1.out", False)
+mol = psi4.geometry(_SYSTEMS["protein157"])
+common = {"basis": "6-31+G**", "puream": False, "guess": "sad",
+          "sad_scf_type": "df", "df_scf_guess": False, "ints_tolerance": 1e-12,
+          "maxiter": 1, "fail_on_maxiter": False}
+
+wref = psi4.core.Wavefunction.build(mol, "6-31+G**")
+S = np.asarray(psi4.core.MintsHelper(wref.basisset()).ao_overlap())
+nbf = wref.basisset().nbf()
+print(f"nbf={nbf}  s_min={np.linalg.eigvalsh(S).min():.6e}", flush=True)
+
+for scf_type in ("direct", "gtfock"):
+    t = time.time()
+    psi4.set_options({**common, "scf_type": scf_type})
+    e, w = psi4.energy("scf", return_wfn=True)
+    C = np.asarray(w.Ca_subset("AO", "OCC")); Dm = C @ C.T
+    np.save(f"{D}/Cocc_iter1_{scf_type}.npy", C)
+    print(f"ITER1 engine={scf_type:7s} E={e:.6f} max|D|={np.abs(Dm).max():.4e} "
+          f"normD={np.linalg.norm(Dm):.4e} trDS={2*np.einsum('ij,ij->',Dm,S):.6f} "
+          f"nocc={C.shape[1]} t={time.time()-t:.1f}s", flush=True)
+    psi4.core.clean()
+
+
+--- results, from iter1.log ---
+
+nbf=1863  s_min=1.089528e-07
+ITER1 engine=direct  E=-3640.478399 max|D|=1.4177e+02 normD=5.1445e+02 trDS=580.000000 nocc=290 t=904.2s
+ITER1 engine=gtfock  E=-3699.587353 max|D|=1.1866e+06 normD=4.8206e+06 trDS=580.000000 nocc=290 t=299.6s
+
+A convention note first, because these numbers meet the section 5 table and are
+not stated the same way there. iter1.py reports max|D| for D = C C^T, while the
+section 5 table reports the physical D = 2 C C^T. Doubled, the two first
+iterates are max|D| = 2.8354e+02 for DirectJK and 2.3732e+06 for GTFock,
+against the cached probe density's 2.3847e+06. The GTFock arm reproduces the
+cached wreckage to 0.48%, which is as close as two runs of a diverged iterate
+at different thread counts -- 24 here, 48 for the cache -- have any business
+being. The density sections 1 through 3 were measured on was not a one-off.
+
+The DirectJK arm is checkable against something outside this machine. Its
+iteration-1 energy, -3640.478399, is job 12441235's iteration 1 to every digit
+that job printed, -3640.47839940863378. The guess, the integrals, the
+orthogonalization and the first Fock build are therefore the same calculation
+here as on the cluster, and the two arms of this script differ in nothing but
+the engine.
+
+Now the result. Against the converged reference of -3642.752751:
+
+    DirectJK  after one iteration    -3640.478399     +2.27 Eh  (above)
+    GTFockJK  after one iteration    -3699.587353    -56.83 Eh  (below)
+    the failing run, oscillating     -3695.478       -52.73 Eh  (below)
+
+DirectJK's first iterate is an unremarkable one: 2.3 Eh high, and eleven
+iterations from done. GTFock's is already 56.8 Eh BELOW the converged answer,
+which is 4.1 Eh past where its own 100-iteration run eventually settles to
+oscillate. The offset that section 4 spent its energy arithmetic trying to
+account for is not accumulated over 100 iterations. It is present after one,
+and the remaining 99 do not build it -- they fail to remove it.
+
+Section 5's prediction is confirmed. Two things this does NOT show, and both
+matter. It does not show that GTFock's J or K is wrong, because an energy
+computed with GTFock's own operator on a density this far out of range is not
+comparable with anything. And it does not separate amplification from a plain
+large engine error on the guess, since either would put the divergence in the
+first iteration. The next two subsections separate them.
+
+Where the iterates sit in the overlap spectrum
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Section 5 argued that the difference had to be one of direction rather than
+magnitude, but it never measured a direction. This does, and it costs no
+integrals at all: every occupied-coefficient matrix involved is already on disk
+from the probes above, and the whole measurement is one 1863x1863 symmetric
+eigendecomposition.
+
+--- nullweight.py, verbatim ---
+"""Does the wrecked iterate live in the near-null subspace of the overlap?
+
+Section 5 argued from linearity that the size of a density cannot change eps,
+so if the wrecked iterate disagrees where a physical one agrees, the difference
+has to be in DIRECTION. This measures the direction directly, and needs no
+integrals: every occupied-coefficient matrix involved is already on disk.
+
+Write S = U diag(s) U^T and y = U^T C, so w_k = ||y_k||^2 is the weight the
+occupied space puts on overlap eigenvector k. Two identities pin the picture:
+
+    sum_k s_k w_k = tr(C^T S C) = nocc     (C is S-orthonormal, always)
+    sum_k w_k     = ||C||_F^2              (unconstrained, can be anything)
+
+The first holds for every iterate no matter how wrecked, because every iterate
+is a projector onto 290 occupied orbitals -- iter1.py measured tr(DS) = 580.000
+for both engines. So a density can only acquire large elements by moving its
+weight onto SMALL s_k. The ratio
+
+    s_eff = nocc / ||C||_F^2
+
+is the s-weighted mean eigenvalue the occupied space sits on: O(1) for a
+physical density, and driven toward s_min for one that has fallen into the
+near-null directions. That single number is the direction, quantified.
+"""
+import numpy as np, psi4, sys
+sys.path.insert(0, "/home/awallace43/.treehouse/psi4-1ae95c/2/psi4/tests/pytests")
+from gtfock_hpc_benchmark import _SYSTEMS
+
+D = "/tmp/fm-psi4-djk/diag"
+psi4.core.set_output_file(f"{D}/nullweight.out", False)
+mol = psi4.geometry(_SYSTEMS["protein157"])
+psi4.set_options({"basis": "6-31+G**", "puream": False})
+bs = psi4.core.Wavefunction.build(mol, "6-31+G**").basisset()
+S = np.asarray(psi4.core.MintsHelper(bs).ao_overlap())
+s, U = np.linalg.eigh(S)
+print(f"nbf={len(s)}  s_min={s.min():.6e}  below 1e-6: {(s<1e-6).sum()}  "
+      f"below 1e-5: {(s<1e-5).sum()}  below 1e-4: {(s<1e-4).sum()}", flush=True)
+
+cases = [("physical (proj. from 6-31G**)", "Cocc_proj_631pGss.npy"),
+         ("iter 1, DirectJK",              "Cocc_iter1_direct.npy"),
+         ("iter 1, GTFockJK",              "Cocc_iter1_gtfock.npy"),
+         ("iter 1, GTFockJK (cached)",     "Cocc_631pGss.npy")]
+
+print(f"\n{'density':32s} {'||C||_F^2':>12s} {'s_eff':>11s} "
+      f"{'w(s<1e-6)':>10s} {'w(s<1e-5)':>10s} {'w(s<1e-4)':>10s}")
+for label, fn in cases:
+    C = np.load(f"{D}/{fn}")
+    w = np.einsum("kj,kj->k", U.T @ C, U.T @ C)
+    n2, nocc = w.sum(), C.shape[1]
+    chk = float(s @ w)
+    f = [w[s < t].sum() / n2 for t in (1e-6, 1e-5, 1e-4)]
+    print(f"{label:32s} {n2:12.4e} {nocc/n2:11.4e} "
+          f"{f[0]:10.6f} {f[1]:10.6f} {f[2]:10.6f}   [sum s*w = {chk:.4f}, nocc = {nocc}]")
+
+
+--- results, from nullweight.log ---
+
+nbf=1863  s_min=1.089528e-07  below 1e-6: 8  below 1e-5: 22  below 1e-4: 51
+density                             ||C||_F^2       s_eff  w(s<1e-6)  w(s<1e-5)  w(s<1e-4)
+physical (proj. from 6-31G**)      1.8938e+02  1.5313e+00   0.000000   0.000000   0.000037   [sum s*w = 290.0000, nocc = 290]
+iter 1, DirectJK                   1.4064e+03  2.0620e-01   0.716447   0.831403   0.859906   [sum s*w = 290.0000, nocc = 290]
+iter 1, GTFockJK                   8.8074e+06  3.2927e-05   0.886590   0.973846   0.998746   [sum s*w = 290.0000, nocc = 290]
+iter 1, GTFockJK (cached)          8.8227e+06  3.2870e-05   0.886841   0.973890   0.998748   [sum s*w = 290.0000, nocc = 290]
+
+Read the constraint in the trailing bracket first. sum_k s_k w_k = 290.0000 on
+all four rows, which is tr(C^T S C) = nocc, so every one of these -- including
+the wreckage -- is a properly S-orthonormal set of 290 occupied orbitals.
+Nothing here is a broken or non-idempotent density. That is exactly what makes
+s_eff meaningful: the only way a density satisfying that constraint can reach
+||C||_F^2 = 8.8e+06 is by putting its weight where s is small.
+
+And it does. 99.87% of GTFock's first iterate lies in the 51-dimensional
+subspace where s < 1e-4, and 88.7% in the 8-dimensional subspace where s <
+1e-6; its s_eff = 3.29e-05 sits only a factor of 302 above s_min itself. The
+physical density, for contrast, puts 3.7e-05 of its weight below 1e-4 and
+nothing measurable below 1e-5. Section 5's "direction" is now a measured
+quantity rather than an inference.
+
+The row that changes the picture, though, is DirectJK's. The reference engine's
+first iterate ALSO collapses into the near-null subspace: 71.6% of its weight
+below 1e-6, s_eff = 0.206 against the physical density's 1.53. Falling into the
+near-null directions of this overlap on the first iteration is not something
+GTFock does. It is what this basis does to this molecule, and the engine that
+converges in 12 iterations does it too.
+
+What separates the two is depth. A factor of 6.3e+03 in s_eff lies between the
+first iterates. DirectJK lands shallow enough that DIIS pulls it back out over
+eleven more iterations; GTFock lands nearly four orders deeper and never
+returns.
+
+That is the strongest support the conditioning hypothesis has, and it is also
+the honest limit of it. The mechanism section 5 proposed is a linear-response
+argument: a perturbation ||dF||_F = 1.47e-02 amplified by 1/s_min = 9.2e+06.
+That estimate gives 1.3e+05, comfortably more than the 2.9e+03 growth in
+||C||_F actually seen between the two first iterates, so the mechanism has
+enough headroom to produce what is observed. But an estimate that overshoots by
+a factor of 46 establishes only that the effect is available, not that it is
+the one acting; and the reference iterate is not a small perturbation of the
+physical density either, so linear response is being invoked where it does not
+strictly hold. 1/s_min is a scale here, not a calculation.
+
+Scale or direction?
+~~~~~~~~~~~~~~~~~~~
+
+The linearity argument in section 5 is a statement about the engines, not a
+theorem about the code: an engine that screened on the density would break it,
+and screening is the whole subject of this file. scaletest.py measures it
+instead of asserting it, by rebuilding J and K from both engines on the
+physical projected density scaled by 1e+06 -- putting its elements in the same
+range as the wrecked iterate while leaving its direction untouched.
+
+--- scaletest.py, verbatim ---
+"""Is the disagreement about the density's SIZE or its DIRECTION?
+
+Section 5 replaced a probe density with max|D| = 2.4e+06 by a physical one with
+max|D| = 2.08 and the engines went from disagreeing at 3.1e-03 to agreeing at
+3.6e-09. The obvious reading -- that the huge elements are what break the
+comparison -- is wrong on its face, because J is LINEAR in D. Under D -> cD both
+J and dJ scale by c, so
+
+    eps = -<J,dJ>/<J,J>    and    resid_frac = ||dJ + eps J|| / ||dJ||
+
+are both invariant. Magnitude cannot move them. What can move them is DIRECTION:
+which subspace the density occupies. The wrecked iterate is dominated by the
+near-null directions of S, where diffuse functions almost coincide and screening
+decisions are most delicate; the physical density is not.
+
+Linearity is an assumption about the engines, though, not a theorem about the
+code: an engine that screens on the density would violate it. GTFock screens
+Schwarz-style on primitive pairs at a fixed 1e-14 with no reference to D, so it
+should be exactly linear. This measures that instead of asserting it.
+
+The physical density from physdens.py is rebuilt scaled by 1e+06 -- putting its
+elements in the same range as the wrecked iterate while leaving its direction
+untouched. If eps stays at 3.6e-09, magnitude is irrelevant and the 0.31%
+belongs to the wrecked density's direction. If eps moves toward 3.1e-03, an
+engine is screening on the density and the story is different.
+"""
+import os, sys, time, numpy as np
+os.environ.setdefault("PSI_SCRATCH", "/fastscratch/awallace43/psi4tmp")
+import psi4
+sys.path.insert(0, "/home/awallace43/.treehouse/psi4-1ae95c/2/psi4/tests/pytests")
+from gtfock_hpc_benchmark import _SYSTEMS
+
+D = "/tmp/fm-psi4-djk/diag"
+SCALE = 1.0e6
+psi4.set_num_threads(24); psi4.set_memory("40 GB")
+psi4.core.set_output_file(f"{D}/scaletest.out", False)
+mol = psi4.geometry(_SYSTEMS["protein157"])
+common = {"basis": "6-31+G**", "puream": False, "guess": "sad",
+          "sad_scf_type": "df", "df_scf_guess": False, "ints_tolerance": 1e-12}
+psi4.set_options({**common, "scf_type": "direct"})
+basis = psi4.core.Wavefunction.build(mol, "6-31+G**").basisset()
+
+C = np.load(f"{D}/Cocc_proj_631pGss.npy") * np.sqrt(SCALE)
+Dm = 2.0 * C @ C.T
+print(f"scaled physical density: max|D|={np.abs(Dm).max():.4e} "
+      f"||D||_F={np.linalg.norm(Dm):.4e}  (scale={SCALE:g})", flush=True)
+Cm = psi4.core.Matrix.from_array(np.ascontiguousarray(C))
+
+out = {}
+for scf_type in ("direct", "gtfock"):
+    t = time.time()
+    psi4.set_options({**common, "scf_type": scf_type})
+    jk = psi4.core.JK.build_JK(basis, None)
+    jk.set_do_J(True); jk.set_do_K(True); jk.initialize()
+    jk.C_left_add(Cm)          # symmetric build: C_right_add would make GTFock
+    jk.compute()               # refuse it, and is not what physdens.py did
+    out[scf_type] = (np.array(jk.J()[0]), np.array(jk.K()[0]))
+    np.save(f"{D}/J_{scf_type}_scaled.npy", out[scf_type][0])
+    np.save(f"{D}/K_{scf_type}_scaled.npy", out[scf_type][1])
+    jk.finalize()
+    print(f"  [{time.time()-t:7.1f}s] {scf_type}", flush=True)
+
+Jd, Kd = out["direct"]; Jg, Kg = out["gtfock"]
+dJ, dK = Jg - Jd, Kg - Kd
+eps = -np.einsum("ij,ij->", Jd, dJ) / np.einsum("ij,ij->", Jd, Jd)
+resid = np.linalg.norm(dJ + eps * Jd) / np.linalg.norm(dJ)
+print(f"SCALED eps={eps:.6e} resid_frac={resid:.3f} maxdJ={np.abs(dJ).max():.6e} "
+      f"normdJ={np.linalg.norm(dJ):.6e} normdK={np.linalg.norm(dK):.6e}", flush=True)
+print(f"  unscaled reference from physdens: eps=3.611712e-09 resid_frac=1.000 "
+      f"normdJ=7.341583e-03", flush=True)
+print(f"  linearity check: normdJ/scale = {np.linalg.norm(dJ)/SCALE:.6e} "
+      f"(expect 7.341583e-03)", flush=True)
+
+
+--- results, from scaletest.log ---
+
+scaled physical density: max|D|=2.0770e+06 ||D||_F=2.4338e+07  (scale=1e+06)
+  [  443.6s] direct
+  [  264.7s] gtfock
+SCALED eps=3.611711e-09 resid_frac=1.000 maxdJ=6.990697e+02 normdJ=7.341583e+03 normdK=1.039973e+02
+  unscaled reference from physdens: eps=3.611712e-09 resid_frac=1.000 normdJ=7.341583e-03
+  linearity check: normdJ/scale = 7.341583e-03 (expect 7.341583e-03)
+
+eps comes back at 3.611711e-09 against the unscaled 3.611712e-09, agreeing to
+seven significant figures; resid_frac is 1.000 in both; and normdJ, which
+scaled by the full factor of a million to 7.341583e+03, divides back down to
+7.341583e-03 against the unscaled 7.341583e-03, to every digit printed. Both
+engines are exactly linear in the density across six orders of magnitude of it.
+
+So magnitude is not merely irrelevant in theory, it is measurably irrelevant
+here. A density with max|D| = 2.08e+06 and the physical density it was scaled
+from give the same eps to the digits printed. Whatever made the wrecked iterate
+disagree at eps = 3.1e-03 was its direction, which the previous subsection
+located: 99.87% of it inside the subspace where the overlap eigenvalue is below
+1e-4.
+
+What section 6 establishes
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  - The divergence is created in the first iteration. From an identical SAD
+    guess, one iteration separates the engines by 59.1 Eh and their iterates'
+    max|D| by a factor of 8.4e+03. None of the failure requires 100 iterations
+    to appear.
+  - The first iterate of BOTH engines collapses into the near-null subspace of
+    the overlap. That is a property of protein157 in 6-31+G** and not of
+    GTFock: DirectJK puts 71.6% of its occupied weight on the 8 overlap
+    eigenvectors below 1e-6 and still converges in 12 iterations.
+  - GTFock's iterate goes a further 6.3e+03 down, to s_eff = 3.3e-05, which is
+    only 302 times s_min, and does not come back.
+  - Every iterate here is a valid S-orthonormal projector onto 290 occupied
+    orbitals, tr(DS) = 580.000000 exactly. The failure is in which subspace the
+    orbitals occupy, not in the algebraic form of the density.
+  - Both engines are linear in the density over six orders of magnitude, so
+    the size of a probe density cannot affect eps and never could have. Only
+    its direction can.
+  - The cached probe density of sections 1 through 3 is reproducible: a fresh
+    GTFock first iterate lands within 0.48% of it.
+
+What is still open
+~~~~~~~~~~~~~~~~~~
+
+The cause. Everything above is consistent with section 5's hypothesis and none
+of it proves that hypothesis. The specific gap is that nothing here connects
+the engine difference measured on a physical density, ||dF||_F = 1.47e-02, to
+the depth GTFock's iterate actually reaches, other than by an
+order-of-magnitude estimate that overshoots by a factor of 46. Closing that
+would need the perturbation measured on the guess density itself and the
+eigenvalue gaps of the guess Fock matrix, neither of which is in this file.
+
+Two cheaper experiments would sharpen it and are not done:
+
+  - Whether DirectJK, restarted from GTFock's first iterate, recovers. If it
+    does, GTFock's damage is a one-time push into a bad region rather than a
+    difference the engine keeps re-injecting; if it does not, the region is
+    simply unreachable by this SCF and the engine choice only decides who falls
+    into it. Cocc_iter1_gtfock.npy is on disk for exactly this.
+  - Whether canonical orthogonalization, which drops near-null directions
+    outright rather than raising a threshold inside symmetric
+    orthogonalization, changes the outcome. Section 4's S_TOLERANCE probe moved
+    s_min by one decade and is not this test.
+
+Until one of those is run the user-facing statement stays where section 5 left
+it: the restriction is measured, distribution is excluded, GTFock's accuracy on
+physical densities in this basis is established, and the cause is open with the
+conditioning of the basis as the leading suspect.

@@ -153,10 +153,17 @@ Prototype scope
   iterations does not clear it, since neither has a second engine's
   difference to amplify; and raising ``S_TOLERANCE`` to 1e-6 does not rescue
   the run, but it discards only 8 of 1863 directions and buys a single
-  decade of that factor. Until the mechanism is understood, treat a
-  diffuse-augmented basis on a system of this size as unsupported rather
-  than merely slow, and check any such result against a non-GTFock
-  ``SCF_TYPE``. The probes, their scripts and their verbatim output are in
+  decade of that factor. The failure is at least localized in time: from an
+  identical guess, one SCF iteration already puts GTFock 57 Eh below the
+  converged reference, and 99.9% of that iterate's occupied space lies in
+  the subspace where the overlap eigenvalue is below 1e-4. ``DirectJK``
+  falls into that subspace on its own first iteration too |w---w| which is
+  why the basis rather than the engine is the suspect |w---w| but it lands
+  more than three orders of magnitude shallower and recovers. Until the
+  mechanism is understood, treat a diffuse-augmented basis on a system of
+  this size as unsupported rather than merely slow, and check any such
+  result against a non-GTFock ``SCF_TYPE``. The probes, their scripts and
+  their verbatim output are in
   :source:`tests/pytests/gtfock_diffuse_j_diagnostics.txt`; that file also
   records an earlier attribution of this failure to a 0.31% deficit in
   GTFock's J, which a later control withdrew, and why.
