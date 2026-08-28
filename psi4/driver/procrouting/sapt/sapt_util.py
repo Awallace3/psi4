@@ -126,7 +126,16 @@ def print_sapt_hf_summary(data, name, dimer_wfn, short=False, delta_hf=False):
         return ret
 
 
-def print_sapt_dft_summary(data, name, dimer_wfn, do_dft=True, short=False, do_disp=True, do_delta_dft=False):
+def print_sapt_dft_summary(
+    data,
+    name,
+    dimer_wfn,
+    do_dft=True,
+    short=False,
+    do_disp=True,
+    do_delta_dft=False,
+    induction_type="CPKS",
+):
     ret = "   %s Results\n" % name
     ret += "  " + "-" * 105 + "\n"
 
@@ -150,27 +159,29 @@ def print_sapt_dft_summary(data, name, dimer_wfn, do_dft=True, short=False, do_d
     dimer_wfn.set_variable("SAPT EXCH ENERGY", data["Exch10"])
 
     # Induction
-    ind = data["Ind20,r"] + data["Exch-Ind20,r"]
-    ind_ab = data["Ind20,r (A<-B)"] + data["Exch-Ind20,r (A<-B)"]
-    ind_ba = data["Ind20,r (A->B)"] + data["Exch-Ind20,r (A->B)"]
+    if induction_type == "NONE":
+        ind = data["SAPT DFT INDUCTION ENERGY"]
+        label = "Induction (delta HF)" if "Delta HF Correction" in data else "Induction (omitted)"
+        ret += print_sapt_var(label, ind) + "\n"
+        ret += "      No second-order induction breakdown is available.\n"
+    else:
+        ind = data["Ind20,r"] + data["Exch-Ind20,r"]
+        ind_ab = data["Ind20,r (A<-B)"] + data["Exch-Ind20,r (A<-B)"]
+        ind_ba = data["Ind20,r (A->B)"] + data["Exch-Ind20,r (A->B)"]
+        if "Delta HF Correction" in data:
+            ind += data["Delta HF Correction"]
 
-    if "Delta HF Correction" in list(data):
-        ind += data["Delta HF Correction"]
-
-    ret += print_sapt_var("Induction", ind) + "\n"
-
-    ret += print_sapt_var("  Ind2,r", data["Ind20,r"]) + "\n"
-    ret += print_sapt_var("  Exch-Ind2,r", data["Exch-Ind20,r"]) + "\n"
-    ret += print_sapt_var("  Induction (A<-B)", ind_ab) + "\n"
-    ret += print_sapt_var("  Induction (A->B)", ind_ba) + "\n"
-
-    if "Delta HF Correction" in list(data):
-        ret += print_sapt_var("  delta HF,r (2)", data["Delta HF Correction"]) + "\n"
-    # if "Delta DFT Correction" in list(data):
-    #     ret += "      ---------------" + "\n"
-    #     ret += print_sapt_var("  delta DFT,r (2)", data["Delta DFT Correction"]) + "\n"
+        source = " (SAPT0)" if induction_type == "CPHF" and do_dft else ""
+        ret += print_sapt_var("Induction" + source, ind) + "\n"
+        ret += print_sapt_var("  Ind2,r" + source, data["Ind20,r"]) + "\n"
+        ret += print_sapt_var("  Exch-Ind2,r" + source, data["Exch-Ind20,r"]) + "\n"
+        ret += print_sapt_var("  Induction (A<-B)" + source, ind_ab) + "\n"
+        ret += print_sapt_var("  Induction (A->B)" + source, ind_ba) + "\n"
+        if "Delta HF Correction" in data:
+            ret += print_sapt_var("  delta HF,r (2)", data["Delta HF Correction"]) + "\n"
 
     ret += "\n"
+    data["SAPT IND ENERGY"] = ind
     core.set_variable("SAPT IND ENERGY", ind)
     dimer_wfn.set_variable("SAPT IND ENERGY", ind)
 
@@ -198,10 +209,14 @@ def print_sapt_dft_summary(data, name, dimer_wfn, do_dft=True, short=False, do_d
         empirical_disp_key = "D3 IE"
 
     if empirical_disp_key and not do_disp and do_delta_dft:
-        disp = data[empirical_disp_key] + data["Delta DFT Correction"] - data['Delta HF Correction']
+        disp = (
+            data[empirical_disp_key]
+            + data["Delta DFT Correction"]
+            - data.get("Delta HF Correction", 0.0)
+        )
         ret += print_sapt_var("Dispersion", disp) + "\n"
         ret += print_sapt_var("  delta DFT,r (2)", data["Delta DFT Correction"]) + "\n"
-        subtract_delta_hf_for_total_dispersion = -data["Delta HF Correction"]
+        subtract_delta_hf_for_total_dispersion = -data.get("Delta HF Correction", 0.0)
         ret += print_sapt_var("  -delta HF,r (2)", subtract_delta_hf_for_total_dispersion) + "\n"
         ret += print_sapt_var(f"  G{empirical_disp_key}", data[empirical_disp_key]) + "\n"
     elif empirical_disp_key and not do_disp:
@@ -224,6 +239,8 @@ def print_sapt_dft_summary(data, name, dimer_wfn, do_dft=True, short=False, do_d
     # Total energy
     total = data["Elst10,r"] + extern_extern_IE + data["Exch10"] + ind + disp
     ret += print_sapt_var("Total %-17s" % name, total, start_spacer="    ") + "\n"
+    data["SAPT(DFT) TOTAL ENERGY"] = total
+    data["SAPT TOTAL ENERGY"] = total
     core.set_variable("SAPT(DFT) TOTAL ENERGY", total)
     core.set_variable("SAPT TOTAL ENERGY", total)
     core.set_variable("CURRENT ENERGY", total)

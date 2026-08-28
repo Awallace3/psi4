@@ -555,6 +555,23 @@ uncoupled exchange-dispersion energy directly.
              an older version of |PSIfour| to produce a different value of
              exchange-dispersion energy from the latest version.
 
+Induction treatments
+~~~~~~~~~~~~~~~~~~~~
+
+|sapt__sapt_dft_induction_type| controls the induction calculation. The default,
+``CPKS``, evaluates the SAPT(DFT) response. ``CPHF`` skips that response and uses
+the SAPT0 induction terms and :math:`\Delta`-HF correction computed in the
+:math:`\Delta`-HF segment; the final table identifies their SAPT0 source. This
+approximation is effective because SAPT0 captures nearly all induction effects,
+with statistically negligible shifts relative to CPKS induction. ``CPHF``
+therefore requires |sapt__sapt_dft_do_dhf|.
+
+``NONE`` omits second-order induction. Without :math:`\Delta`-HF, induction is
+zero. With :math:`\Delta`-HF, the full induction component is assigned as the
+remainder that enforces
+:math:`E_{elst}+E_{exch}+E_{ind}=E_{int}^{HF}`; no ``Ind20`` or directional
+breakdown is then available. F-SAPT cannot be combined with ``NONE``.
+
 SAPT(DFT)-D3 and SAPT(DFT)-D4 variants
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -629,6 +646,7 @@ Basic Keywords for SAPT(DFT)
 .. include:: autodir_options_c/sapt__sapt_dft_grac_shift_a.rst
 .. include:: autodir_options_c/sapt__sapt_dft_grac_shift_b.rst
 .. include:: autodir_options_c/sapt__sapt_dft_do_dhf.rst
+.. include:: autodir_options_c/sapt__sapt_dft_induction_type.rst
 .. include:: autodir_options_c/sapt__sapt_dft_exch_disp_scale_scheme.rst
 .. include:: autodir_options_c/sapt__sapt_dft_grac_compute.rst
 .. include:: autodir_options_c/sapt__sapt_dft_do_ddft.rst

@@ -124,7 +124,6 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     # Alter default algorithm
     if not core.has_global_option_changed("SCF_TYPE"):
         core.set_global_option("SCF_TYPE", "DF")
-    core.prepare_options_for_module("SAPT")
 
     # Get the molecule of interest
     ref_wfn = kwargs.get("ref_wfn", None)
@@ -283,13 +282,11 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         # # Re-prepare options after local option changes
         # core.prepare_options_for_module("SAPT")
 
-    do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
     do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
     do_disp = core.get_option("SAPT", "SAPT_DFT_DO_DISP")
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     sapt_dft_D3_IE = core.get_option("SAPT", "SAPT_DFT_D3_IE")
     do_dft = sapt_dft_functional != "HF"
-    do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() != "NONE"
 
     if do_fsapt and (sapt_dft_D4_IE or sapt_dft_D3_IE):
         dispersion_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
@@ -339,6 +336,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     core.print_out("   Monomer B GRAC Shift    %12.6f\n" % mon_b_shift)
     # fmt: off
     core.print_out("   Delta HF                %12s\n" % ("True" if do_delta_hf else "False"))
+    core.print_out("   Induction Type          %12s\n" % induction_type)
     core.print_out("   JK Algorithm            %12s\n" % core.get_global_option("SCF_TYPE"))
     # fmt: on
     core.print_out("\n")
@@ -585,40 +583,39 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             hf_data.update(exch)
             core.timer_off("SAPT(HF):exch")
 
-            # Induction
-            core.timer_on("SAPT(HF):ind")
-            ind = jk_terms.induction(
-                hf_cache_ein,
-                sapt_jk,
-                True,
-                maxiter=core.get_option("SAPT", "MAXITER"),
-                conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
-                Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
-            )
-            hf_data.update(ind)
-            core.timer_off("SAPT(HF):ind")
+            if induction_type != "NONE":
+                core.timer_on("SAPT(HF):ind")
+                ind = jk_terms.induction(
+                    hf_cache_ein,
+                    sapt_jk,
+                    True,
+                    maxiter=core.get_option("SAPT", "MAXITER"),
+                    conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
+                    Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
+                )
+                hf_data.update(ind)
+                core.timer_off("SAPT(HF):ind")
 
-            # Keep the SAPT(HF) component subtotal available for F-SAPT
-            # induction scaling. The SAPT(DFT) component values overwrite
-            # data later for the final SAPT(DFT) report, but the dHF term is
-            # defined as HF IE minus the SAPT(HF) subtotal.
             dhf_value = (
                 hf_data["HF DIMER"] - hf_data["HF MONOMER A"] - hf_data["HF MONOMER B"]
             )
-            # set for fisapt_obj.drop for saptdft_fisapt.py::setup_fisapt_object
             data["DHF VALUE"] = dhf_value
 
             core.print_out("\n")
-            core.print_out(
-                print_sapt_hf_summary(
-                    hf_data,
-                    "SAPT(HF)",
-                    dimer_wfn=hf_wfn_dimer,
-                    delta_hf=dhf_value,
+            if induction_type == "NONE":
+                core.print_out("   SAPT0 induction skipped; induction will be assigned from delta HF.\n")
+            else:
+                core.print_out(
+                    print_sapt_hf_summary(
+                        hf_data,
+                        "SAPT(HF)",
+                        dimer_wfn=hf_wfn_dimer,
+                        delta_hf=dhf_value,
+                    )
                 )
-            )
-
-            data["Delta HF Correction"] = core.variable("SAPT(DFT) Delta HF")
+                data["Delta HF Correction"] = core.variable("SAPT(DFT) Delta HF")
+                if induction_type == "CPHF":
+                    data.update(ind)
             sapt_jk.finalize()
 
             del hf_wfn_A, hf_wfn_B, sapt_jk
@@ -863,9 +860,6 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         sapt_dft_functional, mon_a_shift, mon_b_shift, bool(do_delta_hf), scf_alg
     )
 
-    # Compute Delta HF for SAPT(HF)?
-    delta_hf = do_delta_hf and not do_dft
-
     # Call SAPT(DFT)
     sapt_jk = wfn_B.jk()
     sapt_dft(
@@ -876,7 +870,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         sapt_jk=sapt_jk,
         data=data,
         print_header=False,
-        delta_hf=delta_hf,
+        delta_hf=do_delta_hf,
         cleanup_jk=True,
         external_potentials=kwargs.get("external_potentials", None),
         do_delta_dft=do_delta_dft,
@@ -1261,33 +1255,49 @@ def sapt_dft(
 
     # Induction
     core.timer_on("SAPT(DFT):ind")
-    ind = jk_terms.induction(
-        cache,
-        sapt_jk,
-        True,
-        sapt_jk_B=sapt_jk_B,
-        maxiter=core.get_option("SAPT", "MAXITER"),
-        conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
-        Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
-    )
-    data.update(ind)
+    induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
+    if induction_type == "CPKS" or (induction_type == "CPHF" and not do_dft):
+        ind = jk_terms.induction(
+            cache,
+            sapt_jk,
+            True,
+            sapt_jk_B=sapt_jk_B,
+            maxiter=core.get_option("SAPT", "MAXITER"),
+            conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
+            Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
+        )
+        data.update(ind)
+    else:
+        core.print_out(f"\n   SAPT(DFT) induction skipped ({induction_type}).\n")
 
-    # Delta HF is computed in the SAPT(HF) segment above. Do not recompute it
-    # from the SAPT(DFT) component subtotal here, as that changes the meaning
-    # of the dHF correction and the F-SAPT induction scaling.
-    if delta_hf and "Delta HF Correction" not in data:
+    if induction_type == "NONE":
+        ind_total = 0.0
+        if delta_hf:
+            ind_total = (
+                data["DHF VALUE"]
+                - data["Elst10,r"]
+                - data.get("extern_extern_IE", 0.0)
+                - data["Exch10"]
+            )
+            data["Delta HF Correction"] = ind_total
+            core.set_variable("SAPT(DFT) Delta HF", ind_total)
+        data["SAPT DFT INDUCTION ENERGY"] = ind_total
+    elif delta_hf and "Delta HF Correction" not in data:
         total_sapt = (
             data["Elst10,r"] + data["Exch10"] + data["Ind20,r"] + data["Exch-Ind20,r"]
         )
         sapt_hf_delta = data["DHF VALUE"] - total_sapt
         core.set_variable("SAPT(DFT) Delta HF", sapt_hf_delta)
-        data["Delta HF Correction"] = core.variable("SAPT(DFT) Delta HF")
+        data["Delta HF Correction"] = sapt_hf_delta
 
     # Set Delta DFT for SAPT(DFT) if requested
     if do_delta_dft:
-        sapt_dft_elst_exch_indu = (
-            data["Elst10,r"] + data["Exch10"] + data["Ind20,r"] + data["Exch-Ind20,r"]
+        base_ind = (
+            0.0
+            if induction_type == "NONE"
+            else data["Ind20,r"] + data["Exch-Ind20,r"]
         )
+        sapt_dft_elst_exch_indu = data["Elst10,r"] + data["Exch10"] + base_ind
         sapt_dft_delta = data["DFT IE"] - sapt_dft_elst_exch_indu
         core.set_variable("SAPT(DFT) Delta DFT", sapt_dft_delta)
         data["Delta DFT Correction"] = core.variable("SAPT(DFT) Delta DFT")
@@ -1545,6 +1555,7 @@ def sapt_dft(
             do_dft=do_dft,
             do_disp=do_disp,
             do_delta_dft=do_delta_dft,
+            induction_type=induction_type,
         )
     )
 
