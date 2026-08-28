@@ -318,6 +318,8 @@ part, and the trace ratio.
     ERANK ranks=2 threads=4   GTFockJK eps=3.101426e-03 maxdJ=1.599700e-01 normdJ=7.440673e+00 resid_frac=0.188 trace_ratio=0.99700201 t=714.4s
     ERANK ranks=4 threads=4   GTFockJK eps=3.101426e-03 maxdJ=1.599700e-01 normdJ=7.440673e+00 resid_frac=0.188 trace_ratio=0.99700201 t=473.9s
     ERANK ranks=1 threads=1   GTFockJK eps=3.101426e-03 maxdJ=1.599700e-01 normdJ=7.440673e+00 resid_frac=0.188 trace_ratio=0.99700201 t=4957.3s
+    ERANK ranks=1 threads=8   GTFockJK eps=3.101426e-03 maxdJ=1.599700e-01 normdJ=7.440673e+00 resid_frac=0.188 trace_ratio=0.99700201 t=881.3s
+    ERANK ranks=1 threads=24  GTFockJK eps=3.101426e-03 maxdJ=1.599700e-01 normdJ=7.440673e+00 resid_frac=0.188 trace_ratio=0.99700201 t=405.4s
 
 Every reported digit is identical across 1, 2 and 4 ranks: the same best-fit
 deficit, the same largest element, the same Frobenius norm, the same residual
@@ -330,19 +332,21 @@ That closes the distribution question in the negative. maxdJ and normdJ here als
 reproduce the single-process fockdiff3.py numbers above exactly, which is a
 second, independent check: two scripts, two invocation paths, one answer.
 
-The wall time is the only thing in the row that moves, and it moves the right
-way (1544.7 -> 714.4 -> 473.9 s, 2.16x and 3.26x), so the ranks really were
-doing the divided work rather than each quietly repeating it.
+The wall time is the only thing that moves across the three rank rows, and it
+moves the right way (1544.7 -> 714.4 -> 473.9 s, 2.16x and 3.26x), so the ranks
+really were doing the divided work rather than each quietly repeating it.
 
-The last row varies the other axis. Holding the rank count at one and dropping
-from 4 threads to 1 changes the shared-memory partitioning completely -- GTFock's
-per-thread Fock blocking buffers and its distribution of shell quartets over
-threads both go away -- and every reported digit is identical again, at 3.2x the
-wall time (4957.3 s against 1544.7 s, so the four threads were dividing real work
-too). The deficit is therefore invariant under both levels of parallelism GTFock
-has and not only the distributed one, which is what makes "deterministic property
-of the integral path" the reading that survives rather than merely the one left
-over.
+The last three rows vary the other axis. Holding the rank count at one and
+sweeping 1, 4, 8 and 24 threads changes the shared-memory partitioning
+completely: GTFock sizes its per-thread Fock blocking buffers from the thread
+count and hands out shell quartets over threads, and at one thread that whole
+layer is gone. Every reported digit is identical at all four points. The wall
+time spans 4957.3 -> 1544.7 -> 881.3 -> 405.4 s, a 12.2x speedup over a 24x
+thread range, so the threads were dividing real work rather than repeating it
+and the invariance is not the trivial kind. Combined with the rank sweep, the
+deficit is invariant under both levels of parallelism GTFock has and not only
+the distributed one, which is what makes "deterministic property of the
+integral path" the reading that survives rather than merely the one left over.
 
 What survives, then, is a deterministic property of the integral path itself in
 a diffuse basis. eps = 3.101426e-03 is a uniform 0.31% shortfall; resid_frac =

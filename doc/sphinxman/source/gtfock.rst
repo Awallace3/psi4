@@ -149,19 +149,20 @@ Prototype scope
   described above would produce, but the connection is unproven and the screen
   is not exposed, so it cannot be tested directly. Three other explanations
   are excluded by measurement: distribution (the deficit is identical at 1, 2
-  and 4 ranks, and at 1 and 4 threads within a rank), screening in general
-  (against an unscreened reference build, every screening control |PSIfour|
-  exposes costs at most 5e-04 in Frobenius norm and leaves no uniform
-  component at all, where GTFock's difference is 7.4 and is 81% uniform), and
-  basis conditioning as a cause rather than an amplifier (the 1863-function
-  overlap matrix is near-singular at 1.09e-07, just above the ``S_TOLERANCE``
-  default, but both reference engines cross it in 12 iterations, and raising
-  ``S_TOLERANCE`` to 1e-6 to force canonical orthogonalization leaves the
-  failure intact and the energy in the same wrong place). Until the mechanism
-  is understood, treat a diffuse-augmented basis on a system of this size as
-  unsupported rather than merely slow, and check any such result against a
-  non-GTFock ``SCF_TYPE``. The probes, their scripts and their verbatim output
-  are in :source:`tests/pytests/gtfock_diffuse_j_diagnostics.txt`.
+  and 4 ranks, and at 1, 4, 8 and 24 threads within a rank), screening in
+  general (against an unscreened reference build, every screening control
+  |PSIfour| exposes costs at most 5e-04 in Frobenius norm and leaves no
+  uniform component at all, where GTFock's difference is 7.4 and is 81%
+  uniform), and basis conditioning as a cause rather than an amplifier (the
+  1863-function overlap matrix is near-singular at 1.09e-07, just above the
+  ``S_TOLERANCE`` default, but both reference engines cross it in 12
+  iterations, and raising ``S_TOLERANCE`` to 1e-6 to force canonical
+  orthogonalization leaves the failure intact and the energy in the same wrong
+  place). Until the mechanism is understood, treat a diffuse-augmented basis
+  on a system of this size as unsupported rather than merely slow, and check
+  any such result against a non-GTFock ``SCF_TYPE``. The probes, their scripts
+  and their verbatim output are in
+  :source:`tests/pytests/gtfock_diffuse_j_diagnostics.txt`.
 * **The Fock build is distributed; the SCF is not.** J and K are gathered on
   rank 0 and broadcast, so every rank holds the full matrices and then runs an
   identical replicated SCF: diagonalization, DIIS, and the DFT quadrature are
