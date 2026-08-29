@@ -40,7 +40,9 @@ Two kinds of evidence live in two different files, and the split is deliberate:
     8 then move in both directions at once: section 7 runs whole SCFs, several
     of them multi-hour, because the questions it asks are about what an
     iteration DOES with a difference; section 8 removes the iteration
-    altogether and works in linear algebra on two saved Fock matrices.
+    altogether and works in linear algebra on two saved Fock matrices, and
+    ends by replacing one of its own observations with a bound that holds
+    whatever the observation happened to show.
 
 Every probe ran on one workstation -- cos-4a16505.cos.gatech.edu, an AMD Ryzen
 Threadripper 3960X, 24 physical cores and 48 hardware threads -- against the
@@ -51,9 +53,11 @@ which do not depend on the machine. The thread count differs between probes (48
 in section 1, 20 in section 3, 24 in section 6, and in sections 7 and 8
 whatever the reproduced wrapper sets, between 24 and 2) for scheduling reasons
 only and is stated with each result; section 2 varies it deliberately and
-reports what that did, and section 7 uses a same-engine pair at two thread
-counts to put a noise floor under every difference it quotes. The scripts are
-reproduced verbatim, including the absolute paths they were run with; those
+reports what that did, and sections 7 and 8 both use a same-engine pair at two
+thread counts to put a noise floor under every difference they quote -- section
+8 also puts that pair through the diagonalization, where it settles that
+GTFock's failure is invariant to thread count and so is not a race. The scripts
+are reproduced verbatim, including the absolute paths they were run with; those
 paths are a scratch directory and this worktree, and are the two things to
 change to run them elsewhere.
 
@@ -3812,3 +3816,311 @@ through. What should not be inferred is that 1e-03 is a general remedy. It was
 selected as the first rung where a diagnostic count reached zero on THIS
 molecule in THIS basis; the count is cheap to compute and is the thing to carry
 over, not the number.
+
+
+The threading floor put through the diagonalization, and a bound
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Two controls were already standing when this subsection was written and neither
+of them did the thing it looks like they did. Section 7 measured DirectJK's own
+run-to-run irreproducibility and found it WORSE than GTFock's engine difference
+by every placement measure -- enriched 3.98 in the near-null block against an
+even-spreading baseline, amplified 3.4e+05 by symmetric orthogonalization --
+and DirectJK converges this system in 12 iterations. The DF control above
+supplied an arm with a difference of comparable size and a different placement.
+But section 7's figure was taken on dG, on a different density, over the
+s<1e-04 block, and it stopped at the norms: it never asked what the SCF's
+actual first diagonalization does with that noise. Since this whole section
+rests on a count of orbitals that change identity in exactly that step, the
+noise floor belongs in the same count, and until now it was not in it. Nothing
+below should be quoted alongside the 3.98; it is a different matrix on a
+different density and the numbers do not transfer.
+
+The arms were queued as chain4's second item before any of this was written,
+and the runner says what they were for.
+
+--- run_chain4.sh, the relevant comment, verbatim ---
+  #   2. the 24-thread pair -- DirectJK's own threading noise through the same
+  #      matrix analysis. Section 7 saw it move the first-iterate energy by
+  #      3.08e-03 Eh with no engine difference involved; the question here is
+  #      whether it switches any orbitals. It must not.
+
+What had to change to use them was small and is worth stating precisely,
+because a control is worthless if the script was bent to fit it.
+guess_analyze.py already compared each engine against its own 24-thread run in
+the norm block -- that part is original and unmodified. What it did not do was
+PROFILE those arms: the diagonalization block and the principal-angle block
+both iterated over a hardcoded triple, so the two t24 arms were measured as
+matrices and then dropped before the step that counts orbitals. The patch adds
+them to that iteration and changes nothing else. No tolerance, no basis, no
+density, and no arm's arithmetic was touched.
+
+--- the patch to guess_analyze.py, verbatim ---
+  # The _t24 arms are the same engine at a different thread count, so any
+  # orbital they switch relative to their own 20-thread run is switched by
+  # roundoff alone and by nothing that distinguishes one engine from another.
+  # They belong in the diagonalization and principal-angle blocks for the same
+  # reason they belong in the ||dF|| block above: without them, "GTFock switches
+  # 14 orbitals" is a number with no floor under it. DirectJK's threading noise
+  # is the one arm in this whole file guaranteed to contain no engine difference
+  # at all, and it was already found ENRICHED in the near-null directions by
+  # 3.98x -- above chance, and above GTFock's 0.4288 -- while converging
+  # perfectly well. If enrichment were the discriminator this arm would have to
+  # switch orbitals. It should switch none.
+  occ = {t: profile(t)
+         for t in ("direct", "gtfock", "df", "direct_t24", "gtfock_t24")
+         if F.get(t) is not None}
+
+
+The two noise-floor arms, as norms first. These are one engine against itself
+at 20 and 24 threads, so whatever they contain is roundoff and nothing that
+distinguishes one engine from another.
+
+That comment does the thing the paragraph above warns against: it sets section
+7's 3.98, a dG figure taken over the s<1e-04 block on another density, beside
+GTFock's 0.4288, a dF figure over s<1e-05, as though the two were on one scale.
+It is left as written because it was written before the arm ran, and the
+sentence that carries the weight -- "It should switch none" -- is a prediction
+rather than an argument. The correct dF figure for this arm is measured below
+and comes out 2.545, still above chance and still above GTFock's 0.4288, so the
+comparison the comment was reaching for survives the correction. It simply was
+not entitled to it at the time.
+
+--- guess_analyze.py, the roundoff floors, verbatim ---
+  === direct at 24 threads - at 20  (ROUNDOFF FLOOR, one engine) ===
+    dF        : ||dF||=1.730779e-12 max|dF|=7.815970e-14 rel=8.817444e-15
+    shape     : eps=-2.233846e-15 resid_frac=0.967376
+    dF'=X^T dF X: ||dF'||=4.814154e-07 amplification=2.7815e+05
+    weight in the 22 directions with s<1e-05: 5.975900e-02  (evenly spread would give 2.347837e-02, enrichment 2.545e+00)
+    first-order response ||dC||=1.874357e-09
+
+  === gtfock at 24 threads - at 20  (ROUNDOFF FLOOR, one engine) ===
+    dF        : ||dF||=9.270788e-12 max|dF|=1.509903e-12 rel=4.722999e-14
+    shape     : eps=7.107539e-15 resid_frac=0.988612
+    dF'=X^T dF X: ||dF'||=3.096705e-06 amplification=3.3403e+05
+    weight in the 22 directions with s<1e-05: 7.232939e-02  (evenly spread would give 2.347837e-02, enrichment 3.081e+00)
+    first-order response ||dC||=1.231119e-08
+
+Read the amplification and the enrichment columns against the two engine arms
+quoted earlier in this section, and the ordering is the wrong way round twice
+over. By symmetric-orthogonalization amplification the four arms rank
+gtfock_t24 3.34e+05, direct_t24 2.78e+05, gtfock 1.51e+03, df 3.23 -- the
+failing arm is THIRD of four, two orders below both noise floors. By enrichment
+in the 22 directions with s<1e-05 they rank gtfock_t24 3.081, direct_t24 2.545,
+gtfock 0.4288, df 9.1e-07 -- the failing arm is third of four again, and BELOW
+chance, while the arm with the highest enrichment of anything measured in this
+file is GTFock's own threading roundoff. Either statistic, used as a screen,
+would clear the engine that fails and flag the two that cannot fail by
+construction.
+
+By absolute content in the orthogonalized basis the ordering inverts and
+becomes clean: ||X^T dF X|| is 2.20e+01 for gtfock, 2.35e-02 for df, 3.10e-06
+for gtfock_t24, 4.81e-07 for direct_t24. The failing arm is first by three
+orders over the nearest safe one and by seven over the floors. That is the same
+conclusion the DF control reached, now with two further arms placed on the safe
+side of it -- and the two added arms are the interesting ones, because they are
+the arms that a placement-based screen ranks WORST.
+
+The diagonalizations themselves, which is what the patch was for. The
+direct_t24 arm is the load-bearing one: same engine, same density, same basis,
+different thread count, and therefore a difference containing no engine
+information at all.
+
+--- guess_analyze.py, the two added arms, verbatim ---
+  === first diagonalization, direct_t24 ===
+    lowest 5 eigenvalues of X^T F X: -2.1002e+01 -2.0976e+01 -2.0976e+01 -2.0974e+01 -2.0974e+01
+    e_homo=-4.683970e-01 e_lumo=-2.439952e-01 gap=2.244018e-01
+    occupied space: near-null share of the norm=2.094085e-06  of the coefficients=8.126888e-01
+    D=C C^T: max|D|=1.2037e+02 trDS=580.000000
+    near-null units in the occupied space: 6.0728e-04 of 22 (even spreading would give 3.42, so 5.64e+03x depleted)
+    occupied orbitals with s_eff < 1e-03: 0 of 290;  < 1e-04: 0;  < 1e-05: 0
+    five smallest s_eff among the occupied:
+      orbital  275  eigenvalue=-5.135449e-01  s_eff=1.6450e-02  near-null norm share=1.6471e-05
+      orbital  276  eigenvalue=-5.044758e-01  s_eff=3.2543e-02  near-null norm share=1.0044e-05
+      orbital  210  eigenvalue=-7.123532e-01  s_eff=4.9385e-02  near-null norm share=1.4006e-05
+      orbital  264  eigenvalue=-5.609793e-01  s_eff=5.2689e-02  near-null norm share=9.7868e-06
+      orbital  170  eigenvalue=-8.419292e-01  s_eff=5.5906e-02  near-null norm share=4.8730e-06
+    eigenvectors more than half near-null by norm: 0 (0 of them among the occupied 290)
+
+  === first diagonalization, gtfock_t24 ===
+    lowest 5 eigenvalues of X^T F X: -2.1002e+01 -2.0976e+01 -2.0976e+01 -2.0974e+01 -2.0974e+01
+    e_homo=-5.135196e-01 e_lumo=-5.045072e-01 gap=9.012465e-03
+    occupied space: near-null share of the norm=1.415612e-02  of the coefficients=9.725827e-01
+    D=C C^T: max|D|=1.1976e+06 trDS=580.000000
+    near-null units in the occupied space: 4.1053e+00 of 22 (even spreading would give 3.42, so 8.34e-01x depleted)
+    occupied orbitals with s_eff < 1e-03: 107 of 290;  < 1e-04: 41;  < 1e-05: 14
+    five smallest s_eff among the occupied:
+      orbital   82  eigenvalue=-2.851011e+00  s_eff=6.7657e-07  near-null norm share=3.5305e-01
+      orbital   77  eigenvalue=-7.830824e+00  s_eff=7.3618e-07  near-null norm share=4.3278e-01
+      orbital   99  eigenvalue=-1.649680e+00  s_eff=8.9358e-07  near-null norm share=1.6597e-01
+      orbital  125  eigenvalue=-1.336273e+00  s_eff=1.3975e-06  near-null norm share=2.2642e-01
+      orbital   78  eigenvalue=-6.790402e+00  s_eff=1.6268e-06  near-null norm share=4.8162e-01
+    eigenvectors more than half near-null by norm: 0 (0 of them among the occupied 290)
+
+--- and the principal angles, verbatim ---
+  === occupied subspace, direct_t24 vs direct ===
+    principal angles: max=0.0001 deg  median=0.0000e+00 deg
+    orbitals rotated by more than    1 deg: 0 of 290
+    orbitals rotated by more than   10 deg: 0 of 290
+    orbitals rotated by more than   45 deg: 0 of 290
+
+  === occupied subspace, gtfock_t24 vs direct ===
+    principal angles: max=89.9979 deg  median=2.6961e-02 deg
+    orbitals rotated by more than    1 deg: 22 of 290
+    orbitals rotated by more than   10 deg: 14 of 290
+    orbitals rotated by more than   45 deg: 14 of 290
+
+Zero, on the arm that a placement screen ranks second-worst of four. The max
+principal angle between direct_t24's occupied space and direct's is 0.0001
+degrees, no orbital moves past one degree, and the s_eff counts are 0/0/0
+exactly as DirectJK's own are. A perturbation amplified 2.78e+05 by this basis
+and enriched 2.5x in its 22 worst directions changes the identity of not one of
+290 occupied orbitals.
+
+The gtfock_t24 arm answers a question nobody had asked out loud but which would
+have undermined everything above if it went the other way. Its first
+diagonalization is not merely similar to the 20-thread GTFock arm's, it is the
+same to every digit printed: gap 9.012465e-03, 107/41/14 occupied orbitals
+below s_eff 1e-03/1e-04/1e-05, the same five deepest orbitals at the same
+eigenvalues, max principal angle 89.9979 degrees against direct with 22 past
+one degree and 14 past 45. The failure is deterministic and invariant to thread
+count. It is not a race, not a reduction-order artifact, and not something that
+would come and go between runs -- which also means it is something a fixed
+input will reproduce, and that the 14 orbitals are a property of GTFock's
+integrals rather than of any particular execution of them.
+
+With four arms placed, the empirical rule is firm: absolute near-singular
+content separates them and the two obvious alternatives do not. What it is not,
+yet, is a rule anyone could apply to a fifth engine without running the
+diagonalization. It is worth asking whether a bound gives one, because if it
+does then the screen is a matrix norm and a subtraction rather than an
+eigendecomposition, and the tool for it is standard.
+
+--- weyl.py, verbatim ---
+  """Is the orbital-identity count predictable BEFORE the diagonalization?
+
+  guess_analyze.py measures how many occupied orbitals change identity by
+  doing both diagonalizations and taking principal angles. That is a
+  measurement. This asks whether the same answer follows from a bound, so
+  that a future engine can be screened without running anything.
+
+  The tool is Davis-Kahan, not Weyl. Weyl bounds how far an EIGENVALUE
+  moves under a perturbation; what decides whether an orbital is occupied
+  is which SUBSPACE the lowest 290 eigenvectors span, and the sin-theta
+  theorem bounds exactly that:
+
+      sin(theta_max)  <=  ||E||_2 / (delta - ||E||_2)      for ||E||_2 < delta
+
+  with E = X^T dF X the perturbation in the orthogonalized basis and delta
+  the HOMO-LUMO gap of the reference. Two things follow, and only the
+  second one is interesting.
+
+    - When ||E||_2 is far below delta the bound is tight and near zero, so
+      NO orbital can change identity. That is a guarantee, not an
+      observation, and it holds however enriched the perturbation is in the
+      near-null directions.
+    - When ||E||_2 reaches delta the bound goes to infinity and then
+      negative -- it says nothing at all. That is not a prediction of
+      failure. It is the withdrawal of the guarantee, which is the honest
+      thing a bound can do, and it is why the 14 switched orbitals need the
+      measurement in guess_analyze.py and cannot be read off from here.
+
+  So this file can only ever certify the safe arms. It is still worth
+  having: it converts "DF and the threading floor happen to switch nothing"
+  into "DF and the threading floor CANNOT switch anything", and it puts the
+  one arm that fails on the far side of a line rather than at the end of a
+  list of numbers.
+
+  The 2-norm is what the theorem takes. guess_analyze.py reports Frobenius
+  norms throughout, which are an upper bound on the 2-norm and can exceed
+  it by up to sqrt(n) = 43 here, so the two are printed side by side rather
+  than one being substituted for the other.
+  """
+  import numpy as np
+
+  D_ = "/tmp/fm-psi4-djk/diag"
+  NOCC = 290
+
+  S = np.load(f"{D_}/gs_S.npy")
+  s, U = np.linalg.eigh(S)
+  Xs = U @ np.diag(s**-0.5) @ U.T
+  F = {t: np.load(f"{D_}/gs_F_{t}.npy")
+       for t in ("direct", "direct_t24", "gtfock", "gtfock_t24", "df")}
+
+  e0 = np.linalg.eigvalsh(Xs.T @ F["direct"] @ Xs)
+  delta = e0[NOCC] - e0[NOCC - 1]
+  print(f"reference gap delta = {delta:.6e} Eh   (e_homo={e0[NOCC-1]:.6f} "
+        f"e_lumo={e0[NOCC]:.6f})")
+  print()
+  hdr = (f"{'arm':<22} {'||dF||_F':>11} {'||E||_F':>11} {'||E||_2':>11} "
+         f"{'||E||_2/delta':>13} {'sin(th) bound':>14} {'switched':>9}")
+  print(hdr)
+  print("-" * len(hdr))
+
+  # switched counts as MEASURED by guess_analyze.py, quoted so the bound and
+  # the measurement can be read on one line. Nothing here computes them.
+  measured = {("direct_t24", "direct"): 0, ("gtfock_t24", "gtfock"): 0,
+              ("df", "direct"): 0, ("gtfock", "direct"): 14}
+
+  for (a, b), sw in measured.items():
+      dF = F[a] - F[b]
+      E = Xs.T @ dF @ Xs
+      n2 = np.linalg.norm(E, 2)
+      r = n2 / delta
+      bound = f"{n2/(delta-n2):.3e}" if n2 < delta else "NO GUARANTEE"
+      print(f"{a+' - '+b:<22} {np.linalg.norm(dF):>11.4e} "
+            f"{np.linalg.norm(E):>11.4e} {n2:>11.4e} {r:>13.4e} "
+            f"{bound:>14} {sw:>9}")
+
+  print()
+  print("A bound that certifies an arm safe must be BELOW 1 in the ||E||_2/delta")
+  print("column. Read that column against the enrichment and amplification")
+  print("figures in guess_analyze.py, which order the arms differently.")
+  print("EXIT=0")
+
+--- its output, verbatim ---
+  reference gap delta = 2.244018e-01 Eh   (e_homo=-0.468397 e_lumo=-0.243995)
+
+  arm                       ||dF||_F     ||E||_F     ||E||_2 ||E||_2/delta  sin(th) bound  switched
+  -------------------------------------------------------------------------------------------------
+  direct_t24 - direct     1.7308e-12  4.8142e-07  3.6266e-07    1.6161e-06      1.616e-06         0
+  gtfock_t24 - gtfock     9.2708e-12  3.0967e-06  3.0719e-06    1.3689e-05      1.369e-05         0
+  df - direct             7.2861e-03  2.3502e-02  2.5310e-03    1.1279e-02      1.141e-02         0
+  gtfock - direct         1.4617e-02  2.2006e+01  8.5787e+00    3.8229e+01   NO GUARANTEE        14
+
+  A bound that certifies an arm safe must be BELOW 1 in the ||E||_2/delta
+  column. Read that column against the enrichment and amplification
+  figures in guess_analyze.py, which order the arms differently.
+  EXIT=0
+
+The ratio ||E||_2/delta certifies three arms and withdraws the guarantee from
+exactly one. direct_t24 at 1.6e-06, gtfock_t24 at 1.4e-05 and df at 1.1e-02 are
+all below one, so Davis-Kahan bounds their occupied subspaces to within
+sin(theta) of 1.6e-06, 1.4e-05 and 1.1e-02 of DirectJK's -- the last of which
+is 0.65 degrees, against the 0.0033 degrees actually measured, so the bound is
+loose by about 200x and still decisive. Those three arms could not have
+switched an orbital whatever else is true about them. GTFock's engine
+difference sits at 38.2, thirty-eight times the gap it would have to stay
+under, and there the bound says nothing whatever.
+
+That asymmetry is the whole content and it should not be oversold. A sin-theta
+bound can only certify safety. It does not predict the 14 switched orbitals, it
+does not predict any switch at all, and an arm above one on this ratio is not
+thereby broken -- the bound has simply gone silent and the diagonalization has
+to be run. So this does not replace guess_analyze.py or the orbital-identity
+count, and it certainly does not replace an SCF. What it does is convert three
+observations into three guarantees, which matters because "DF and the threading
+floor happened to switch nothing" is a weaker sentence than "DF and the
+threading floor could not have", and the argument in this section leans on the
+arms that pass at least as hard as on the one that fails.
+
+It also puts a usable number on the failure for the first time. GTFock's
+difference in the orthogonalized basis has spectral norm 8.58 Eh against a
+HOMO-LUMO gap of 0.2244 Eh. Whatever the origin of the 7e-05 relative
+difference in F -- still open, still with the hardcoded 1e-14 primitive-pair
+screening as the standing and unconfirmed suspect -- the reason it is fatal
+here is that symmetric orthogonalization turns it into a perturbation
+thirty-eight times larger than the gap that has to hold the occupied space
+together. That is also, in one line, why raising S_TOLERANCE works: dropping
+the near-singular directions is dropping precisely the directions in which
+||E||_2 is built.
