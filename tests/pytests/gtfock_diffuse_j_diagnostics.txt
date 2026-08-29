@@ -4302,3 +4302,102 @@ the missing quantity was already on disk and cost nothing to fetch. Section 5's
 standing rule covers densities; the companion for energies is: never compare
 two engines at a restricted rung without the same two engines at the
 unrestricted one.
+
+
+The third engine, in energy, and a registered prediction revised
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The specall.py run that died on the memory trap has been resumed, so density
+fitting's J and K on the same converged density are now on disk alongside the
+two the previous subsection compared. That makes the comparison three-way, and
+it turns out to carry the answer to a question control D could only bound.
+
+  --- jk3_sym_df_compare.log, on the DF-converged density (tr(DS) = 290) ---
+
+    reference DirectJK   ||J|| = 2.321378e+03   ||K|| = 7.277195e+01
+
+    gtfock  J: rel = 3.1613e-06  eps = -4.0810e-09  resid_frac = 0.999999
+            K: rel = 1.4606e-06  eps = +1.0141e-09  resid_frac = 1.000000
+    df      J: rel = 7.7791e-07  eps = +1.9951e-08  resid_frac = 0.999671
+            K: rel = 1.3286e-04  eps = +1.3789e-05  resid_frac = 0.994600
+
+The two engines fail in opposite halves. DF's J is four times MORE accurate
+than GTFock's; its K is ninety-one times worse. That is what resolution of the
+identity does -- it fits the Coulomb metric, so the Coulomb half is what it
+fits well -- but it is worth stating in this file's own numbers, because it
+means GTFock's K is not merely clean in absolute terms. It is two orders of
+magnitude cleaner than the corresponding half of the engine that converges this
+system without complaint.
+
+DF's K is also the first difference anywhere in this file for which the
+best-fit uniform deficit is a real signal rather than a rounding artifact.
+Section 5's headline that "GTFock's J comes back 0.31% low" was withdrawn
+because resid_frac came back at 1.000000 and eps three orders below the
+scatter, which is what pure scatter looks like. Here eps = 1.3789e-05 on K with
+resid_frac = 0.9946: DF's exchange matrix really is uniformly about 1.4e-05
+small, and ||K_df|| = 7.277094e+01 against ||K_direct|| = 7.277195e+01 confirms
+it independently. The decomposition was never broken. It correctly reports
+nothing for GTFock and a genuine systematic for DF.
+
+The reason this settles anything is that a difference in J and K can be turned
+into a difference in energy without running an SCF. Contracting against the
+density the matrices were built from, dE_2e = 2 tr(D dJ) - tr(D dK):
+
+    engine      2tr(D dJ)     -tr(D dK)        total
+    gtfock       +0.1238       -0.0013       +0.1224  mEh
+    df           -1.3884       +5.7340       +4.3457  mEh
+
+  for scale, 2tr(D J) = 16211.3029 Eh and -tr(D K) = -485.3121 Eh
+
+Take the DF row first, because it is checkable. The full-space benchmark that
+produced the reference had DiskDFJK at -3642.748402699 and DirectJK at
+-3642.752751326, a difference of +4.3486 mEh. The contraction gives +4.3457
+mEh. Those agree to 0.0029 mEh, 0.07%, and they are computed from disjoint
+things: one is a difference of two converged SCF energies, the other is two
+saved matrices contracted against a density, with no SCF in it at all. The
+agreement is what stationarity predicts -- each SCF sits at its own minimum, so
+to first order the difference of the converged energies is just the difference
+of the energy functionals evaluated at a common density -- and it means the
++4.349 mEh that control D's arithmetic leaned on is now measured twice by
+independent routes. DF's 4.3 mEh is also almost entirely its exchange half,
++5.73 mEh from K partly cancelled by -1.39 mEh from J, which is the same
+uniform K deficit arriving a third time: 1.3789e-05 of 485.31 Eh is 6.7 mEh.
+
+Now the GTFock row, which is the point. +0.1224 mEh is a DIRECT measurement of
+GTFock's own energy error on a converged physical density, and control D could
+only bound that quantity as a residual of two others. It is 1.2% of the 9.896
+mEh that S_TOL = 1e-03 leaves above the reference. Nothing in it uses the
+transfer assumption, and it does not depend on DF at all. The attribution of
+that residual to truncation therefore no longer rests on the DF ladder alone.
+GTFock's error is essentially all in J: its K contributes -0.0013 mEh, 1.3
+microhartree, on the half GTF_COMBINED_JK=OFF exists to recover separately.
+
+It also revises a prediction that was registered less than an hour ago, and the
+revision goes in before control E returns rather than after. run_chain7.sh
+predicts DirectJK at the 1e-03 rung landing on -3642.742425, from the DF-ladder
+arithmetic that put GTFock's own error there at -0.429 mEh. The direct
+measurement puts it at +0.1224 mEh: opposite sign, a third the size. Both
+cannot hold unless GTFock's error changes sign between full space and the rung.
+The direct measurement is the better evidence, because it measures the quantity
+instead of inferring it as what is left over from two others, so:
+
+  E_direct(98) = -3642.742977  (+0.009774)  delta_g(98) = +0.1224 mEh, measured
+  E_direct(98) = -3642.742855  (+0.009896)  delta_g(98) = 0
+  E_direct(98) = -3642.742426  (+0.010325)  delta_g(98) = -0.429 mEh, inferred
+
+The revised prediction is the first line. run_chain7.sh is left as written,
+with its timestamp, as the record of what was predicted before this measurement
+existed; if control E comes back on -3642.7424 then this revision is wrong and
+the arithmetic it replaced was right.
+
+What does not move under any of the three readings is the conclusion. They span
+0.55 mEh out of 9.9, so the residual at S_TOL = 1e-03 is between 94% and 98%
+truncation whichever is correct. The 0.55 mEh is itself identifiable: the gap
+between the two engines is -4.778 mEh at the rung and -4.226 mEh at full space,
+and control E is what splits that drift between them.
+
+One last echo of section 7. Its falsifiability control was that DF disagrees
+with DirectJK 2800 times harder than GTFock does, in F on the SAD guess, and
+converges anyway. On a converged density and in energy rather than in a matrix
+norm the ratio is 36 rather than 2800, but it points the same way: the engine
+with the larger error is the one that works.
