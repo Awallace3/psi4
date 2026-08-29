@@ -2786,8 +2786,9 @@ of a discrete mechanism, and it is why an 85% reduction in a norm buys nothing.
 This is not a blind prediction and should not be dressed as one: by 01:40 the
 1e-04 arm was already visibly oscillating near -3643.54 in its own iteration
 table, so the ladder was read with that outcome in view. The rung that is
-genuinely blind is S_TOL = 1e-03, where the count is zero and no SCF has
-reported.
+genuinely blind is S_TOL = 1e-03, where the count is zero and no SCF had
+reported when this was written. It has since reported, and it converged; the
+last subsection of this section records it.
 
 One cross-check worth recording, because it arrived from an unrelated
 experiment and is stronger than anything it was collected for. The relative
@@ -3642,7 +3643,9 @@ angle of 0.1839 degrees and GTFock's gap back to 2.244494e-01 against
 DirectJK's 2.244542e-01. If the mechanism is what this section says it is, that
 rung should CONVERGE, and the restriction this whole investigation started from
 would have a remedy rather than only a diagnosis. It is queued as an SCF rather
-than claimed here, for exactly the reason stated above.
+than claimed here, for exactly the reason stated above. It has since run, and
+it did converge -- see the last subsection of this section. This paragraph is
+left as it was written, before the run.
 
 Two things in that output are worth stopping on. The first is that the DirectJK
 column is flat -- gap 0.2244 at every rung to four figures, no occupied orbital
@@ -3748,4 +3751,64 @@ take them away, is now answered: that arm ran and failed, at -3643.533829.
 Taking away the directions those orbitals were built from does not take away
 the failure, and the ladder says why in one integer -- one orbital still
 changes identity at that rung. The rung where the count reaches zero is 1e-03,
-and that is the one still running.
+and that one converged.
+
+
+The blind rung reported
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Everything above this subsection was written before the S_TOL = 1e-03 SCF
+returned, and three separate paragraphs say so in those words. It has now
+returned. It converged.
+
+  CANON engine=gtfock ortho=canonical S_TOL=1e-03 nmo=1765 of nbf=1863 [Overall, 98 of 1863 possible MOs eliminated]
+  CANON engine=gtfock ortho=canonical converged=True E=-3642.742855 max|D|=1.0409e+00 normC2=1.9043e+02 trDS=580.000000 t=3130.2s
+  vs converged reference -3642.752751: +0.009896 Eh
+
+  @RHF iter   6: -3642.74271094163669   -4.52104e-04   5.80708e-06 DIIS
+  @RHF iter   7: -3642.74282774640051   -1.16805e-04   2.22859e-06 DIIS
+  @RHF iter   8: -3642.74285030830470   -2.25619e-05   1.03864e-06 DIIS
+  @RHF iter   9: -3642.74285415240411   -3.84410e-06   3.64124e-07 DIIS
+  @RHF iter  10: -3642.74285468042035   -5.28016e-07   9.97658e-08 DIIS
+  Energy and wave function converged.
+  Total Energy =                      -3642.7428546804185316
+
+Ten iterations from the SAD guess, in 3130 seconds against 13245 and 14163 for
+the two arms that failed -- those were slow precisely because they were
+thrashing. The density is physical: max|D| = 1.0409e+00 in this subsection's C
+C^T convention, against 1.7100e+04 at 1e-05 and 3.6475e+02 at 1e-04, and
+matching to four digits the 1.0416e+00 that guess_ladder.py had predicted by
+rediagonalization at this rung. The energy sits 0.009896 Eh ABOVE the
+full-space reference. Above is the part that matters: a canonical restriction
+is a restriction, so it cannot beat the unrestricted minimum, and the two
+failing arms coming in 27.118 and 0.781 Eh BELOW the reference was the
+signature that they had solved a different problem. This one is on the correct
+side, by a margin of the size a truncation should cost.
+
+That makes the orbital-identity count 4 for 4: 14, 9, 1, 0 switched orbitals
+predicting the 100-iteration limit, -3669.871214, -3643.533829 and convergence,
+in that order. Three of those four were scored after the fact and this one was
+not -- the prediction is in the paragraphs above, in writing, naming the rung
+and the outcome before the run started. It is the only genuinely blind
+prediction this file contains, and it held.
+
+One thing it does NOT yet establish, and the control is running rather than
+argued. The remaining 0.009896 Eh could be the price of dropping 98 directions,
+which any engine would pay, or it could be GTFock's own error surviving into
+the truncated space. Control C paid +0.008319 Eh under density fitting for
+dropping 51, so the figure is the right size for pure truncation -- but "the
+right size for" is precisely the reasoning section 5 was wrong about twice, and
+a matched control costs one already-written script. Density fitting at this
+identical 1e-03 rung is queued as control D. Until it reports, the honest
+statement is that S_TOL = 1e-03 converges GTFock on a system that otherwise
+cannot be run at all, to within 0.01 Eh of the reference, with the attribution
+of that 0.01 Eh open.
+
+The user-facing consequence is the one thing here that changes what someone
+should DO. The gtfock.rst restriction stands as written -- the default path,
+symmetric orthogonalization, does fail -- but it is no longer only a
+restriction, because there is now a measured setting that gets this system
+through. What should not be inferred is that 1e-03 is a general remedy. It was
+selected as the first rung where a diagnostic count reached zero on THIS
+molecule in THIS basis; the count is cheap to compute and is the thing to carry
+over, not the number.

@@ -189,34 +189,50 @@ Prototype scope
   hardcoded 1e-14 primitive-pair screen described in the bullet above is the
   standing suspect and has not been shown to be the cause.
 
-  A remedy is being tested rather than recommended. Because the switch is a
-  property of the orthogonalizer, canonical orthogonalization should remove it
-  once ``S_TOLERANCE`` is high enough to discard the directions the spurious
-  states are built from. Rediagonalizing the saved guess Fock matrices at each
-  rung, the number of orbitals that change identity falls monotonically
-  |w---w| 14, 9, 1, 0, 0 for the symmetric case and for ``S_TOLERANCE`` 1e-05,
-  1e-04, 1e-03 and 1e-02 |w---w| and that ordering matches the SCF runs done
-  at the first three rungs: symmetric, 1e-05 and 1e-04 all fail, ending 57, 27
-  and 0.8 :math:`E_h` below the reference. One orbital that changes identity is
-  evidently enough, so do not read the shrinking energy error as partial
-  success. Density fitting run at that same 1e-04 rung converges normally, to
-  within 0.008 :math:`E_h` of the reference, which places the residual failure
-  on the engine rather than on the truncation. Whether the first clean rung
-  actually converges is a separate question that one diagonalization cannot
-  answer, and the run that answers it has not reported. Note also that raising
-  ``S_TOLERANCE`` to 1e-6 does not
-  rescue anything: it discards 8 of 1863 directions and leaves the switch
-  intact. Worth knowing when reading a log: this system misses |PSIfours| own
-  automatic protection by 9%. ``S_TOLERANCE`` defaults to 1e-7 and the
-  smallest overlap eigenvalue here is 1.0895e-07, so the SCF prints ``Using
-  symmetric orthogonalization`` and eliminates no MOs. Had the geometry been
-  slightly different, canonical orthogonalization would have engaged on its
-  own.
+  There is a measured way through, on this system. Because the switch is a
+  property of the orthogonalizer, canonical orthogonalization removes it once
+  ``S_TOLERANCE`` is high enough to discard the directions the spurious states
+  are built from. Rediagonalizing the saved guess Fock matrices at each rung,
+  the number of orbitals that change identity falls monotonically |w---w| 14,
+  9, 1, 0, 0 for the symmetric case and for ``S_TOLERANCE`` 1e-05, 1e-04, 1e-03
+  and 1e-02 |w---w| and that count predicts every SCF that has been run.
+  Symmetric, 1e-05 and 1e-04 all fail, ending 57, 27 and 0.8 :math:`E_h` below
+  the reference; one orbital that changes identity is evidently enough, so do
+  not read the shrinking energy error as partial success. Density fitting at
+  that same 1e-04 rung converges normally, which places that failure on the
+  engine rather than on the truncation.
 
-  So: treat a diffuse-augmented basis on a system of this size as
-  unsupported rather than merely slow, and check any such result against a
-  non-GTFock ``SCF_TYPE``. The probes, their scripts and their verbatim
-  output are in
+  ``S_TOLERANCE 1e-3``, the first rung at which the count reaches zero, does
+  converge: 10 iterations from the SAD guess to -3642.742855 :math:`E_h`, which
+  is 0.0099 :math:`E_h` ABOVE the full-space reference and so on the side a
+  variational restriction has to be on. It was named in the diagnostics file as
+  the rung that should work before the run started. Whether that last 0.0099
+  :math:`E_h` is the price of dropping 98 directions, which any engine pays, or
+  GTFock's own residual error, is being measured by a matched density-fitting
+  run at the same rung and is not settled here.
+
+  Treat this as a workaround for this system rather than a general
+  prescription. The rung was chosen because a diagnostic count reached zero on
+  this molecule in this basis; that count is cheap to compute and is the
+  transferable part, the number is not. Nudging ``S_TOLERANCE`` to 1e-6 in
+  particular rescues nothing: it discards 8 of 1863 directions and leaves the
+  switch intact.
+
+  Worth knowing when reading a log: this system misses |PSIfours| own automatic
+  protection by 9%. ``S_TOLERANCE`` defaults to 1e-7 and the smallest overlap
+  eigenvalue here is 1.0895e-07, so the SCF prints ``Using symmetric
+  orthogonalization`` and eliminates no MOs. Had the geometry been slightly
+  different, canonical orthogonalization would have engaged on its own.
+
+  So: on the default settings, treat a diffuse-augmented basis on a system of
+  this size as unsupported rather than merely slow, and check any such result
+  against a non-GTFock ``SCF_TYPE``. Raising ``S_TOLERANCE`` to 1e-3 does
+  converge this particular case, as described above, but it was tuned on this
+  one system and it changes the answer by 0.01 :math:`E_h` for reasons not yet
+  fully attributed, so it is a workaround to verify rather than a setting to
+  adopt blindly.
+
+  The probes, their scripts and their verbatim output are in
   :source:`tests/pytests/gtfock_diffuse_j_diagnostics.txt`; that file also
   records two earlier attributions of this failure that later controls
   withdrew |w---w| a 0.31% deficit in GTFock's J, and a claim that
