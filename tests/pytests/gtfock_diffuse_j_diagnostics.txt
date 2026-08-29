@@ -4600,3 +4600,183 @@ and all three are subtractions between converged SCF energies with no
 contraction, no transfer and no second-order argument anywhere in them. What
 control F changed is the account of why a contraction mispredicted one of
 them, which is a question about method rather than about GTFock.
+
+
+Control G: do diffuse shells enlarge the error, or only amplify it?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Everything above measures GTFock in one basis, and every screen this file
+endorses was calibrated in that basis. ||X^T dF X||_2 / gap was therefore
+never once measured where GTFock SUCCEEDS on this molecule, which is the
+only place it could have been embarrassed: a screen that reads 38.2 for the
+failing case and also reads 38.2 for the working one is not a screen, it is
+a constant. Job 12445512 converged protein157 in Cartesian 6-31G** through
+GTFock, DirectJK and DF alike, 12 iterations each, so the working case was
+already on disk and the comparison costs four Fock builds.
+
+The underlying question is the one the diffuse work left open. GTFock and
+DirectJK differ by rel = 7.4e-05 in F on the SAD density at 6-31+G**. Do
+diffuse shells ENLARGE that difference, or do they only AMPLIFY a difference
+whose size they barely touch? The two accounts predict the same failure and
+different fixes, and one basis cannot separate them.
+
+cond631.py is guess.py with the basis lifted into an environment variable;
+it asserts nbf against the benchmark's own table so a silently wrong basis
+cannot be read as a result. One variable changes: 6-31G** instead of
+6-31+G**. Same molecule, same SAD guess, same code path, 20 threads for the
+comparison and 24 for the roundoff floor, one engine per process because
+GTFock caches its engine globally.
+
+Three predictions were written into run_chain9.sh's header before it ran:
+
+  1. rel = ||dF||/||F|| lands within a factor of 3 of the 6-31+G** value
+     7.4e-05, i.e. in [2.5e-05, 2.2e-04]. Reason: ladder.log measured
+     max|dJ| across this same diffuse addition on two smaller systems and it
+     did not move -- peptide 2.576e-05 -> 2.578e-05, nanotube 8.566e-05 ->
+     8.566e-05 -- while going peptide -> nanotube, 2.1x the shells,
+     multiplied it by 3.3. The accuracy limit tracks centres, not diffuse
+     shells.
+
+  2. ||E||_2 / gap comes back BELOW 1, so Davis-Kahan certifies that no
+     occupied orbital can change identity, against 38.2 where the guarantee
+     lapses and 14 switch. Magnitude guess, stated so it is falsifiable:
+     between 1e-04 and 1e-01, from 38.2 scaled by the 3048x ratio in
+     1/s_min.
+
+  3. switched = 0. Not blind; it is asserted in cond631_analyze.py as a
+     setup check, because job 12445512 already converged this arm.
+
+The measurement:
+
+  --- chain9.log, cond631_analyze.py ---
+
+  basis                  nbf       s_min        gap    rel(dF)    ||E||_2  ||E||_2/gap  switched   max ang
+  6-31G**  (converges)  1555   3.321e-04     0.2272  3.041e-05  6.034e-02    2.655e-01         0    0.064d
+  6-31+G** (fails)      1863   1.090e-07     0.2244  7.447e-05  8.579e+00    3.823e+01        14   89.998d
+
+  roundoff floor, same engine at 24 threads against 20:
+    6-31G**  (converges) rel=7.076e-15  ||E||_2/gap=1.449e-10  switched=0
+    6-31+G** (fails)     rel=8.817e-15  ||E||_2/gap=1.616e-06  switched=0
+
+    6-31G**  (converges) near-null counts s<1e-3/1e-4/1e-5: 2/0/0
+    6-31+G** (fails)     near-null counts s<1e-3/1e-4/1e-5: 98/51/22
+
+The signal clears its own floor by nine orders at 6-31G** and seven at
+6-31+G**, so neither row is roundoff.
+
+Prediction 1 HIT: 3.041e-05, inside the band and near its lower edge. Note
+what the band absorbed, though. rel grew 2.45x across the basis swap, and
+the JUSTIFICATION offered for the prediction was that it would not move at
+all -- ladder.log's two smaller systems moved it by 0.08% and 0.00%. A
+factor-of-3 band was generous enough to pass a genuine 2.45x drift, so the
+number passed and the reason behind it did not, quite. The honest reading is
+that the diffuse shells do enlarge the raw difference somewhat, just not by
+anything like the amount needed to explain the failure.
+
+Prediction 2 SPLIT. The qualitative half is a hit: 0.2655 is below 1, the
+Davis-Kahan certificate holds, and switched = 0 as the certificate requires.
+The magnitude half is a miss -- 0.2655 sits 2.7x above the stated ceiling of
+1e-01 -- and the way it is wrong is worth keeping. 1/s_min is the WORST-CASE
+amplification a symmetric orthogonalization can apply, realized only by a
+perturbation living entirely in the single most near-singular direction.
+Decomposing what actually happened:
+
+  screen growth   x143.99   (2.655e-01 -> 3.823e+01)
+    of which rel    x2.45
+    conditioning   x58.80   against 1/s_min's x3048, and sqrt(3048) = 55.2
+
+The conditioning realized 58.8 of the 3048 available, near one factor of
+s^-1/2 rather than two. Scaling a screen by 1/s_min overstated it by 52x
+here. That is the same bound-quoted-as-a-value error control F caught in the
+contraction, in a second guise, and it is the reason the magnitude guess was
+written down at all: an unfalsifiable "below 1" would have hidden it.
+
+Prediction 3 passed, as a setup check rather than a result.
+
+Three further measures of the raw error, none of them rel, all pointing the
+same way:
+
+  E_sad, GTFock minus DirectJK      1.410e-07 -> 1.180e-06 Eh    x8.37
+  converged SCF engine gap         -0.0540   -> -0.4260   mEh    x7.89
+  rel = ||dF||_F / ||F||_F          3.041e-05 -> 7.447e-05       x2.45
+
+against x3048 in 1/s_min and x144 in the screen. The three disagree with
+each other by a factor of 3, which is expected -- an energy is a contraction
+and a norm is not -- and it does not matter: every measure of the raw error
+moves by between 2x and 9x while the conditioning moves by three thousand.
+The verdict does not depend on which one is used. The 6-31G** SCF numbers
+are the same subtraction the attribution rests on elsewhere, taken from job
+12445512: GTFock -3642.668783859064 against DirectJK -3642.668729856554,
+both in 12 iterations, so -0.0540 mEh is a converged-to-converged difference
+with no contraction in it.
+
+DF supplies the control in this basis too, and the same way it did in the
+other one. At 6-31G** DF sits +5.0351 mEh from DirectJK, 93.2x GTFock's
+-0.0540, and DF converges here in 12 iterations like everything else. Size
+alone is not the discriminator in the basis where nothing fails, either.
+
+The first diagonalization, computed for both bases by one script so the rows
+are commensurate (cond631_seff.py):
+
+  --- cond631_seff.log ---
+
+  === 6-31G** (converges)  nbf=1555  s_min=3.321363e-04 ===
+    arm                 gap    min s_eff  min s_eff/s_min
+    direct         0.227247   1.0077e+00         3.03e+03
+    gtfock         0.227246   1.0077e+00         3.03e+03
+    arm vs direct    max ang   median ang          >45 deg
+    gtfock          0.0641d   2.0938e-03                0
+
+  === 6-31+G** (fails)  nbf=1863  s_min=1.089528e-07 ===
+    arm                 gap    min s_eff  min s_eff/s_min
+    direct         0.224402   1.6450e-02         1.51e+05
+    gtfock         0.009012   6.7657e-07         6.21e+00
+    df             0.224406   1.6463e-02         1.51e+05
+    arm vs direct    max ang   median ang          >45 deg
+    gtfock         89.9979d   2.6961e-02               14
+    df              0.0033d   9.0553e-04                0
+
+One caveat has to be stated before those s_eff figures are read across the
+two rows. For an S-orthonormal orbital sum_k s_k y_k^2 = 1, so ||c||^2 <=
+1/s_min and therefore s_eff >= s_min always. At 6-31+G** the threshold
+"s_eff < 1e-04" spans three decades of room; at 6-31G**, where s_min =
+3.32e-04, it is UNREACHABLE by construction and would read 0 whatever the
+engine did. Counting occupied orbitals below a fixed absolute s_eff is
+exactly the fixed-bottom-tier trap this file already warns about, wearing a
+different hat. What is commensurate is min s_eff itself, read against the
+floor the basis provides.
+
+Read that way the separation is total and it is not about the engine. In
+6-31G** both engines' worst occupied orbital sits at s_eff = 1.0077, an
+ordinary valence orbital three thousand times above the floor, and the two
+engines agree on it to five figures; their gaps agree to six digits and the
+largest principal angle between their occupied spaces is 0.064 degrees. In
+6-31+G** DirectJK and DF are still out at 1.6e-02, five orders above their
+floor, while GTFock's worst occupied orbital comes to rest 6.2x above the
+most near-singular direction the basis has -- it did not merely drift into
+the near-null region, it landed essentially on the bottom of it. GTFock is
+the same engine in both rows. What changed is whether there was a floor to
+fall to.
+
+So: AMPLIFY, and by a wide enough margin that no choice among the available
+measures reverses it. Diffuse shells multiply GTFock's difference from
+DirectJK by something between 2x and 9x, and multiply the near-singular
+amplification of that difference by 3048x, of which 59x is realized. The
+failure is a conditioning failure that GTFock's error is merely large enough
+to trigger, not an accuracy failure that diffuse functions provoke.
+
+Two things this does NOT settle, both worth stating because the file has
+twice paid for skipping over them.
+
+It does not identify the ORIGIN of the ~3e-05 relative difference in F. That
+difference is present at full strength in a basis containing no diffuse
+shells at all, on a system that converges, which does narrow the field --
+whatever produces it is generic to GTFock's integrals rather than provoked
+by diffuse functions. The hardcoded 1e-14 primitive-pair screening remains
+the standing suspect and remains untested; nothing here touches it.
+
+And the margin at 6-31G** is not comfortable. 0.2655 is 3.8x below 1, not
+three orders. Davis-Kahan certifies this case and certifies it honestly, but
+a system four times worse in this metric would lose the guarantee, and above
+1 the screen predicts nothing at all -- it can only ever certify safety.
+Two points, one certified and one not, is a calibration and not a law.

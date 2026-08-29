@@ -206,14 +206,32 @@ Prototype scope
   is 1.6e-06 and 1.4e-05 for the two threading controls and 1.1e-02 for DF, so
   all three are certified against any change of occupation and all three are
   measured at none. For GTFock it is 38: the guarantee lapses, and fourteen
-  orbitals change. The certificate runs one way only |w---w| exceeding the gap
+  orbitals change. Measured for GTFock in ``6-31G**``, where this molecule
+  converges through every engine, it is 0.27, certified, and no orbital
+  changes. Note the margin there: a factor of four below the gap, not orders
+  of magnitude. The certificate runs one way only |w---w| exceeding the gap
   proves nothing |w---w| but it does put a number on the failure, and it says
   in one line why the remedy below works. Discarding the near-singular
   directions discards the directions :math:`\|E\|_2` is built from.
 
-  What that leaves open is the origin of the 7e-05 difference itself. The
-  hardcoded 1e-14 primitive-pair screen described in the bullet above is the
-  standing suspect and has not been shown to be the cause.
+  Diffuse shells are not what creates that difference; they are what makes it
+  matter. Repeating the guess-density comparison on the same molecule in
+  ``6-31G**`` gives 3.0e-05 relative against the 7.4e-05 above, a factor of
+  2.4, and GTFock's error in the guess energy grows by 8, from 1.4e-07 to
+  1.2e-06 :math:`E_h` |w---w| while the amplification available to act on it
+  grows by 3048 and the screen above by 144. Two to eight against three
+  thousand is not a close call. The accuracy of the working case is likewise
+  unremarkable: in ``6-31G**`` GTFock converges to -3642.668784 :math:`E_h`
+  against ``DirectJK``'s -3642.668730, both in 12 iterations, and density
+  fitting sits 93 times further from ``DirectJK`` than that and converges as
+  well. What fails in the larger basis is the conditioning, which GTFock's
+  error is merely large enough to trigger.
+
+  What that leaves open is the origin of the 7e-05 difference itself, now
+  known to be generic to the GTFock stack rather than provoked by diffuse
+  functions, since it is present at full strength in a basis that has none.
+  The hardcoded 1e-14 primitive-pair screen described in the bullet above is
+  the standing suspect and has not been shown to be the cause.
 
   There is a measured way through, on this system. Because the switch is a
   property of the orthogonalizer, canonical orthogonalization removes it once
