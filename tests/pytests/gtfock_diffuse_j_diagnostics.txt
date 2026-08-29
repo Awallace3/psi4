@@ -3809,7 +3809,9 @@ a matched control costs one already-written script. Density fitting at this
 identical 1e-03 rung is queued as control D. Until it reports, the honest
 statement is that S_TOL = 1e-03 converges GTFock on a system that otherwise
 cannot be run at all, to within 0.01 Eh of the reference, with the attribution
-of that 0.01 Eh open.
+of that 0.01 Eh open. (It has since reported, and the last subsection of this
+section settles the attribution as truncation -- though not by the comparison
+this paragraph expects, because the control as posed here is missing a term.)
 
 The user-facing consequence is the one thing here that changes what someone
 should DO. The gtfock.rst restriction stands as written -- the default path,
