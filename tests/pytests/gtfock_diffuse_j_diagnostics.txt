@@ -4388,7 +4388,9 @@ instead of inferring it as what is left over from two others, so:
 The revised prediction is the first line. run_chain7.sh is left as written,
 with its timestamp, as the record of what was predicted before this measurement
 existed; if control E comes back on -3642.7424 then this revision is wrong and
-the arithmetic it replaced was right.
+the arithmetic it replaced was right. It did, to 0.004 mEh, and the next
+subsection is that correction: the revision registered here is WITHDRAWN, and
+the +0.1224 mEh below is a full-space figure that does not describe the rung.
 
 What does not move under any of the three readings is the conclusion. They span
 0.55 mEh out of 9.9, so the residual at S_TOL = 1e-03 is between 94% and 98%
@@ -4401,3 +4403,94 @@ with DirectJK 2800 times harder than GTFock does, in F on the SAD guess, and
 converges anyway. On a converged density and in energy rather than in a matrix
 norm the ratio is 36 rather than 2800, but it points the same way: the engine
 with the larger error is the one that works.
+
+
+Control E, and the prediction that was right before it was revised
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Control E has reported, and it falsifies the revision above on the exact
+condition that paragraph named.
+
+  CANON engine=direct ortho=canonical S_TOL=1e-03 nmo=1765 of nbf=1863
+  CANON engine=direct ortho=canonical converged=True E=-3642.742429
+        max|D|=1.0409e+00 normC2=1.9034e+02 trDS=580.000000 t=5921.0s
+  vs converged reference -3642.752751: +0.010322 Eh
+
+Scored against the two predictions, in the order they were made:
+
+  run_chain7.sh, DF-ladder arithmetic     -3642.742425   err +0.0040 mEh
+  the revision above, full-space contraction  -3642.742977   err -0.5480 mEh
+
+The discarded prediction was 137 times the more accurate. The revision was
+argued for on the grounds that it measured the quantity instead of inferring
+it as a leftover, and that reasoning was wrong: what it measured was a
+different quantity that happens to carry the same name.
+
+Two transfers were in play and only one of them holds.
+
+TRUNCATION COST TRANSFERS BETWEEN ENGINES. The DF ladder put the cost of
+dropping 98 directions at +10.3257 mEh as a difference of two DF energies.
+DirectJK's own ladder now measures it at +10.3223 mEh. The two agree to
+0.0034 mEh, which is the whole basis of the discarded prediction and it was
+sound. Removing the same 98 overlap directions costs two different engines
+the same energy to four figures.
+
+THE ENGINE GAP DOES NOT TRANSFER BETWEEN RUNGS, and that is the error.
+
+  quantity                                        gtfock          df
+  contraction on the full-space converged D      +0.1224      +4.3457  mEh
+  SCF difference at the 1e-03 rung               -0.4260      +4.3520  mEh
+  drift                                          -0.5484      +0.0063  mEh
+
+DF's gap is the control and it barely moves: 0.006 mEh across the same rung
+that moves GTFock's by 0.548, eighty-seven times more. So the failure is not
+that contraction is unsound at a restricted rung. It is specific to GTFock,
+and the reason is a number this file has had since section 7 sitting next to
+one control F printed this morning.
+
+  where GTFock's difference lives   1.0e-02 of its squared norm in the 22
+                                    directions with s < 1e-05
+  where DF's difference lives       2.1e-08 of its squared norm there
+
+  where the full-space converged D lives   84% of its occupied weight in
+                                           the 51 directions with s < 1e-04
+  where the rung's own converged D lives   6.45e-10 of it there
+
+Nine orders of magnitude separate the two densities in exactly the region
+GTFock's difference occupies, because the rung's whole purpose is to delete
+that region. Contracting GTFock's difference on a density that lives there
+and then quoting the result for a calculation whose density does not is not
+a measurement of the second calculation at all. DF's difference has no
+weight there either way, which is why the same operation worked for DF and
+why DF validated a method that was about to be misapplied.
+
+THE ATTRIBUTION, now with no transfer of any kind in it:
+
+  residual, E_gtfock(98) - E_direct(full)                 +9.8963 mEh
+    truncation, E_direct(98) - E_direct(full)            +10.3223  (104.3%)
+    GTFock's engine error at the rung                     -0.4260   (-4.3%)
+
+The headline is unchanged and is now measured rather than bracketed: the
++0.0099 Eh residual at S_TOLERANCE 1e-3 is the price of dropping 98
+directions, and GTFock's own contribution is a small NEGATIVE offset that
+makes the answer look 0.43 mEh better than the correctly truncated one
+rather than worse. Both facts are single subtractions between converged SCF
+energies. The +0.1224 mEh full-space figure is still correct for what it
+measures -- GTFock's two-electron energy error on a full-space density --
+and should simply never have been quoted at the rung.
+
+This is the fourth time in this investigation that a number has been
+measured on one density and spent on another, and the first time the
+resulting claim was published before it was caught. The standing rule at the
+end of section 5 covers only half of the mistake. Its second half:
+
+  never carry an engine difference measured on one density to a calculation
+  whose density you have not profiled the same way, and profile it in the
+  region where that engine's difference is known to live
+
+Control F is registered against this explanation rather than being consulted
+after the fact. It rebuilds J and K for all three engines on control E's own
+converged density and contracts there, predicting -0.426 mEh for GTFock and
++4.352 mEh for DF, both targets taken from SCF energies the contraction does
+not see. If the GTFock arm returns near +0.12 again the explanation above is
+wrong and contraction genuinely does fail at a restricted rung.

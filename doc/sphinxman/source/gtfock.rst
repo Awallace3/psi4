@@ -234,16 +234,16 @@ Prototype scope
   variational restriction has to be on. It was named in the diagnostics file as
   the rung that should work before the run started. That 0.0099 :math:`E_h` is
   the price of dropping 98 directions rather than GTFock's own residual error.
-  GTFock's own error can be measured directly and is far too small to be it:
-  contracting its J and K difference against a converged density puts its
-  two-electron energy 0.00012 :math:`E_h` from ``DirectJK``'s, near 1% of the
-  residual. Density fitting reaches the same place from the other side, putting
-  the truncation cost at 0.0103 :math:`E_h` as a difference of two of its own
-  energies in which its fitting error cancels. Do not read density fitting's
-  raw figure at the rung instead: it converges the same restricted problem
-  0.0048 :math:`E_h` worse than GTFock, because it also sits 0.0043 :math:`E_h`
-  above the reference in the full space. Comparing two engines at a restricted
-  rung needs both of them at the unrestricted one as well.
+  Running ``DirectJK`` at the same rung settles that by subtraction alone: it
+  converges to -3642.742429 :math:`E_h`, which puts the cost of dropping the 98
+  directions at 0.0103 :math:`E_h` and leaves GTFock 0.0004 :math:`E_h` BELOW
+  the correctly truncated answer rather than above it. Density fitting's own
+  ladder independently agrees on 0.0103 :math:`E_h`, as a difference of two of
+  its own energies in which its fitting error cancels. Do not read density
+  fitting's raw figure at the rung instead: it converges the same restricted
+  problem 0.0048 :math:`E_h` worse than GTFock, because it also sits 0.0043
+  :math:`E_h` above the reference in the full space. Comparing two engines at a
+  restricted rung needs both of them at the unrestricted one as well.
 
   Treat this as a workaround for this system rather than a general
   prescription. The rung was chosen because a diagnostic count reached zero on
