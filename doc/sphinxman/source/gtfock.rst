@@ -185,6 +185,32 @@ Prototype scope
   GTFock's 1e-06 |w---w| and it is entirely safe. How large the error is does
   not matter; how much of it survives orthogonalization does.
 
+  Two further controls put a floor under those numbers and a bound over them.
+  ``DirectJK`` run against itself at a different thread count yields a
+  difference containing no engine information whatever, yet by both obvious
+  placement statistics it looks worse than GTFock: symmetric orthogonalization
+  amplifies it 3e+05-fold against GTFock's 1.5e+03, and it is *enriched* in the
+  near-singular directions 2.5-fold where GTFock is depleted. It changes the
+  identity of no orbital at all. GTFock's own threading roundoff is more
+  extreme still on both counts and likewise changes none, while reproducing the
+  20-thread first diagonalization to every digit printed |w---w| the same
+  collapsed gap, the same fourteen orbitals, the same 89.998 degrees |w---w| so
+  the failure is deterministic and is not a race. Neither statistic can serve
+  as a screen; both rank the failing engine third of four.
+
+  What discriminates, and admits a bound, is the absolute size of the
+  difference in the orthogonalized basis. Writing :math:`E = X^{T}(\Delta F)X`
+  and :math:`\delta` for the reference HOMO-LUMO gap, the Davis-Kahan sine
+  theorem bounds the rotation of the occupied space by
+  :math:`\|E\|_2/(\delta-\|E\|_2)` whenever :math:`\|E\|_2<\delta`. That ratio
+  is 1.6e-06 and 1.4e-05 for the two threading controls and 1.1e-02 for DF, so
+  all three are certified against any change of occupation and all three are
+  measured at none. For GTFock it is 38: the guarantee lapses, and fourteen
+  orbitals change. The certificate runs one way only |w---w| exceeding the gap
+  proves nothing |w---w| but it does put a number on the failure, and it says
+  in one line why the remedy below works. Discarding the near-singular
+  directions discards the directions :math:`\|E\|_2` is built from.
+
   What that leaves open is the origin of the 7e-05 difference itself. The
   hardcoded 1e-14 primitive-pair screen described in the bullet above is the
   standing suspect and has not been shown to be the cause.
