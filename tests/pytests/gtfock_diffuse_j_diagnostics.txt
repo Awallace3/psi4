@@ -40,9 +40,10 @@ Two kinds of evidence live in two different files, and the split is deliberate:
     8 then move in both directions at once: section 7 runs whole SCFs, several
     of them multi-hour, because the questions it asks are about what an
     iteration DOES with a difference; section 8 removes the iteration
-    altogether and works in linear algebra on two saved Fock matrices, and
-    ends by replacing one of its own observations with a bound that holds
-    whatever the observation happened to show.
+    altogether and works in linear algebra on two saved Fock matrices, replaces
+    one of its own observations with a bound that holds whatever the
+    observation happened to show, and closes by going back for the one matrix
+    the file had measured since section 5 and never normalized.
 
 Every probe ran on one workstation -- cos-4a16505.cos.gatech.edu, an AMD Ryzen
 Threadripper 3960X, 24 physical cores and 48 hardware threads -- against the
@@ -4124,3 +4125,79 @@ thirty-eight times larger than the gap that has to hold the occupied space
 together. That is also, in one line, why raising S_TOLERANCE works: dropping
 the near-singular directions is dropping precisely the directions in which
 ||E||_2 is built.
+
+
+K, and a density that looks pathological but is not
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Section 5 printed maxdK and normdK beside every J figure and then never used
+them. eps and resid_frac were computed on J alone, and there was no ||K|| in
+the output to normalize the K difference against, so the file has carried an
+absolute number for K since section 5 without ever saying whether it was large.
+That is a gap worth closing rather than leaving, because K is the half that
+GTF_COMBINED_JK=OFF exists to recover separately -- if GTFock's K were
+systematically wrong, the whole of sections 6 through 8 would have been chasing
+the wrong matrix.
+
+The arrays were already on disk. specall.py saves J and K per engine per
+density, and its direct and gtfock arms had both completed before the run died
+(on which see the end of this subsection). Comparing them costs no SCF:
+
+  --- jk_sym_df_compare.log, on the DF-converged density ---
+
+  J:  ||J_direct||=2.321378e+03  ||d||=7.338512e-03
+       rel = 3.1613e-06   max|d| = 6.9879e-04
+       best-fit uniform deficit eps = -4.0810e-09   resid_frac = 0.999998
+
+  K:  ||K_direct||=7.277195e+01  ||d||=1.062927e-04
+       rel = 1.4606e-06   max|d| = 5.3457e-06
+       best-fit uniform deficit eps = 1.0141e-09   resid_frac = 1.000000
+
+K is the cleaner of the two: 1.46e-06 relative against J's 3.16e-06, with
+resid_frac exactly 1.000000 and a best-fit uniform deficit of 1.0e-09, three
+orders below the scatter it is trying to explain. It is the same signature J
+has, at half the size. Whatever GTFock is doing differently, it is not doing it
+to the exchange matrix preferentially, and the suspicion that fell naturally on
+the separately-recovered half is answered: no.
+
+The J figure in that block is not new -- 3.1613e-06 is the number section 5
+already reports -- but the way it arrives is worth recording, because on the
+face of it the two measurements should not agree. Section 5's physical density
+has max|D| = 1.04 in the C C^T convention. The density used here, the converged
+DF one, has max|D| = 124.7 in the same convention and ||D|| 33 times larger.
+Two densities that far apart cannot both give ||dJ|| = 7.34e-03, since J is
+linear in D. Either one of the two runs was measuring something other than what
+it said, or the two densities are not as far apart as max|D| makes them look.
+
+They are not. The principal angles settle it: the largest angle between the two
+occupied subspaces is 4.76 degrees, and both carry tr(DS) = 290.0000 exactly.
+Contracted against the same J, they give 8.105651e+03 and 8.104275e+03, equal
+to four figures. The two densities span the same occupied space; they differ in
+how that space is coordinatized, and the 120x in max|D| is the near-singular
+representation and nothing else. This is the max|D| bullet of section 6
+arriving a second time by an independent route, and it is the cleanest
+demonstration of it in the file: two representations of one physical state,
+max|D| 1.04 and 124.7, producing the same J to four digits and the same engine
+difference to four digits.
+
+The near-null occupied weight of this density, read the way section 6 warns
+against reading it, is 0.85 in the 98 directions below s=1e-03 and 0.81 in the
+22 below 1e-05. Quoted alone that looks like a density sitting almost entirely
+in the singular subspace. It is the coefficient-share statistic, it is the one
+section 6 records as useless, and the 4.76-degree principal angle against an
+independently constructed physical density is the reason why: the share is high
+for a state that is physically unremarkable. Do not read it as evidence either
+way.
+
+Finally, why the run died, since the traceback is in the logs and will look
+alarming to anyone who finds it. It is not an engine result. specall.py builds
+its JK objects with psi4.core.JK.build(basis, aux=None, do_wK=False), and with
+memory left at None that helper takes the two-argument build_JK, which never
+overrides JK::common_init()'s hardcoded memory_ = 32000000 doubles. Every
+engine in that script therefore ran under a 256 MB cap inside a 40 GB process.
+DirectJK and GTFockJK never read memory_ and finished normally, which is why
+their arrays are on disk and the comparison above was possible; DiskDFJK checks
+it, needs 191M doubles for this system, and threw. The fix is one line,
+jk.set_memory() before initialize(), and the trap is worth knowing because it
+is silent on exactly the engines that do not care and fatal only on the one
+that does.
