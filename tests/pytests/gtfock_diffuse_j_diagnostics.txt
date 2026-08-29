@@ -42,8 +42,10 @@ Two kinds of evidence live in two different files, and the split is deliberate:
     iteration DOES with a difference; section 8 removes the iteration
     altogether and works in linear algebra on two saved Fock matrices, replaces
     one of its own observations with a bound that holds whatever the
-    observation happened to show, and closes by going back for the one matrix
-    the file had measured since section 5 and never normalized.
+    observation happened to show, goes back for the one matrix the file had
+    measured since section 5 and never normalized, and ends on a control that
+    could not have answered the question it was posed for until a number that
+    had been on disk the whole time was put back into it.
 
 Every probe ran on one workstation -- cos-4a16505.cos.gatech.edu, an AMD Ryzen
 Threadripper 3960X, 24 physical cores and 48 hardware threads -- against the
@@ -4201,3 +4203,100 @@ it, needs 191M doubles for this system, and threw. The fix is one line,
 jk.set_memory() before initialize(), and the trap is worth knowing because it
 is silent on exactly the engines that do not care and fatal only on the one
 that does.
+
+
+Control D, and a baseline the control forgot to subtract
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+"The blind rung reported" left exactly one thing open and named the control
+that would close it: density fitting at the same S_TOL = 1e-03 rung, 98
+directions dropped, to say whether GTFock's residual +0.009896 Eh is the price
+of the truncation or GTFock's own error surviving into the truncated space. The
+control ran. It returned a third answer.
+
+  CANON engine=df ortho=canonical S_TOL=1e-03 nmo=1765 of nbf=1863 [Overall, 98 of 1863 possible MOs eliminated]
+  CANON engine=df ortho=canonical converged=True E=-3642.738077 max|D|=1.0409e+00 normC2=1.9034e+02 trDS=580.000000 t=2121.1s
+  vs converged reference -3642.752751: +0.014674 Eh
+
+run_chain5.sh had posed two outcomes in its header, and they are worth quoting
+because neither happened: "If DF at this identical rung lands on the same
+figure, the remedy is clean and the engine contributes nothing detectable. If
+DF lands materially closer to the reference, GTFock still carries an error here
+and the remedy is a mitigation rather than a fix." DF landed materially
+FURTHER: +0.014674 Eh against GTFock's +0.009896 at the identical rung, worse
+by 0.004778 Eh. Read at face value that says the engine under investigation is
+the more accurate of the two, which is a strange thing for it to be.
+
+It is not strange once the third number is put back. Both arms minimise over
+the SAME space -- X_c depends only on S and the tolerance, so at 98 dropped the
+two runs solve the identical 1765-dimensional restricted problem, and both come
+back with max|D| = 1.0409e+00 on it. The difference between their answers is
+therefore entirely integrals. And DF's integrals on this system carry a
+measured offset that has been on disk since the benchmark that produced the
+reference in the first place:
+
+  results/logs/gtfp-protref_12441235.log, PSI4-GTFOCK-JSON records:
+
+    arm=direct  jk=DirectJK   E=-3642.752751326  iters=12  t=8469.8 s
+    arm=df      jk=DiskDFJK   E=-3642.748402699  iters=12  t= 828.8 s
+
+DF's fitting error at full space is +4.349 mEh, which is not small next to the
+truncation cost being measured -- it is about half of it -- and every DF rung
+carries it. Comparing E_df(rung) against E_gtfock(rung) through a common
+DirectJK baseline therefore compares a DF number that is 4.3 mEh high to a
+GTFock number that is not. The control as posed could not have answered the
+question it was built for, and would have answered it wrongly in the branch it
+was most likely to hit: had DF landed on GTFock's figure, the header would have
+called the remedy clean, when what that coincidence would actually have meant
+is GTFock carrying a +4.3 mEh error of its own.
+
+What the control CAN answer, once the offset is put back, is better than what
+was asked, because the offset cancels in a difference of two DF numbers:
+
+  T(51) = E_df(1e-04) - E_df(full) = -3642.744432 - (-3642.748403) =  +3.971 mEh
+  T(98) = E_df(1e-03) - E_df(full) = -3642.738077 - (-3642.748403) = +10.326 mEh
+
+Those are measurements of the truncation cost with no engine in them to first
+order, and they behave as a variational restriction must: both positive, and
+monotone in the number of directions removed. Against T(98), GTFock's +9.896
+mEh is 0.429 mEh LOW -- 4.3% of the residual, and on the wrong side, since
+dropping directions from a variational space cannot lower the minimum.
+
+So the standing question has an answer. The +0.0099 Eh at S_TOL = 1e-03 is the
+truncation cost. GTFock contributes at most a few tenths of a mEh at this rung,
+and what it does contribute has the wrong sign to be truncation. For scale, DF
+converges the same restricted problem 0.0048 Eh worse.
+
+The assumption this rests on is that DF's fitting error is the SAME at full
+space and at 98 dropped. Nothing above measures that. It is measured at full
+space and used at the rung, and 0.429 mEh is 10% of it -- exactly the order a
+drift between the two would produce. The decomposition therefore puts an upper
+bound on GTFock's error at this rung and cannot resolve it from zero.
+
+Control E removes the assumption by running the reference engine at the rung:
+DirectJK, canonical, S_TOL = 1e-03, which measures T(98) directly with nothing
+to transfer. It is queued as run_chain7.sh behind the specall resume, and its
+two readings differ by more than their spread, so both are registered here
+before it returns:
+
+  If GTFock's -0.429 mEh is real, DirectJK lands at -3642.742425 (+0.010326).
+  If it is drift in DF's fitting error, DirectJK lands at -3642.742855
+  (+0.009896), on GTFock's own figure.
+
+The prediction is the first. It is the weaker of the two claims -- it says
+GTFock carries a small nonzero error at this rung rather than none -- and it is
+the one that has to be withdrawn if DirectJK comes back on GTFock's digit.
+DirectJK ran the full space in 8470 s and its cost is per shell quartet, which
+does not care that 98 MOs are gone, so expect two to three hours.
+
+The way this control failed to be well posed is worth keeping, because it is
+the same failure as the two withdrawals in section 5 wearing different clothes.
+There the missing step was printing max|D| on a density before measuring an
+engine difference on it. Here it was printing the full-space number of the
+engine about to be used as a control, before comparing it to another engine
+through a baseline neither had been checked against. Both times the comparison
+looked like it was between two things when it was between three, and both times
+the missing quantity was already on disk and cost nothing to fetch. Section 5's
+standing rule covers densities; the companion for energies is: never compare
+two engines at a restricted rung without the same two engines at the
+unrestricted one.

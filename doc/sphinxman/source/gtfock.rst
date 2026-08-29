@@ -232,10 +232,17 @@ Prototype scope
   converge: 10 iterations from the SAD guess to -3642.742855 :math:`E_h`, which
   is 0.0099 :math:`E_h` ABOVE the full-space reference and so on the side a
   variational restriction has to be on. It was named in the diagnostics file as
-  the rung that should work before the run started. Whether that last 0.0099
-  :math:`E_h` is the price of dropping 98 directions, which any engine pays, or
-  GTFock's own residual error, is being measured by a matched density-fitting
-  run at the same rung and is not settled here.
+  the rung that should work before the run started. That 0.0099 :math:`E_h` is
+  the price of dropping 98 directions rather than GTFock's own residual error.
+  Density fitting at the identical rung measures the truncation cost as 0.0103
+  :math:`E_h`, as a difference of two of its own energies in which its fitting
+  error cancels, and GTFock lands 0.0004 :math:`E_h` on the far side of that
+  |w---w| the wrong sign for a truncation, and at the limit of what the
+  comparison resolves. Do not read density fitting's raw figure at the rung
+  instead: it converges the same restricted problem 0.0048 :math:`E_h` worse
+  than GTFock, because it also sits 0.0043 :math:`E_h` above the reference in
+  the full space. Comparing two engines at a restricted rung needs both of them
+  at the unrestricted one as well.
 
   Treat this as a workaround for this system rather than a general
   prescription. The rung was chosen because a diagnostic count reached zero on
