@@ -203,7 +203,8 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
         dft_uses_xdm = _dispersion_uses_xdm(_callable_dispersion(dft_functional))
     else:
         dft_uses_xdm = _functional_uses_xdm(dft_functional)
-    uses_xdm = dft_uses_xdm or _container_uses_xdm((method, cbsmeta, kwargs.get("levels", {})))
+    task_uses_xdm = dft_uses_xdm or _container_uses_xdm((method, cbsmeta))
+    uses_xdm = task_uses_xdm or _container_uses_xdm(kwargs.get("levels", {}))
     if current_manybody_kwargs.get("bsse_type") is not None:
         bsse_type = current_manybody_kwargs["bsse_type"]
         bsse_types = [bsse_type] if isinstance(bsse_type, str) else bsse_type
@@ -234,6 +235,7 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
             method, basis, cbsmeta = expand_cbs_methods(mtdin, basis, driver, cbsmeta=cbsmeta,
                                                         **kwargs)  # NEW mtd->mtdkey
             packet.update({'method': method, 'basis': basis})
+            level_uses_xdm = dft_uses_xdm or _container_uses_xdm((method, cbsmeta))
 
             # Tell the task builder which level to add a task list for
             # * see https://github.com/psi4/psi4/pull/1351#issuecomment-549948276 for discussion of where build_tasks logic should live
@@ -246,7 +248,7 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
 
                 methods = [sr.method for sr in dummyplan.task_list]
                 # TODO: pass more info, so fn can use for managed_methods -- ref, qc_module, fc/ae, conv/df
-                dermode = _negotiate_derivative_type(driver, methods, dertype, uses_xdm)
+                dermode = _negotiate_derivative_type(driver, methods, dertype, level_uses_xdm)
 
                 if dermode[0] == dermode[1]:  # analytic
                     logger.info("PLANNING MB(CBS):  {mc_level_idx=} {packet=} {cbsmeta=} {dertype=} kw={kwargs}")
@@ -269,7 +271,7 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
                     # TODO dertype expected in kwargs?
 
             else:
-                dermode = _negotiate_derivative_type(driver, method, dertype, uses_xdm)
+                dermode = _negotiate_derivative_type(driver, method, dertype, level_uses_xdm)
                 if dermode[0] == dermode[1]:  # analytic
                     logger.info(f"PLANNING MB:  {mc_level_idx=} {packet=} {kwargs=}")
                     plan.build_tasks(AtomicComputer, **packet, mc_level_idx=mc_level_idx, **kwargs)
@@ -297,7 +299,7 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
 
         methods = [sr.method for sr in dummyplan.task_list]
         # TODO: pass more info, so fn can use for managed_methods -- ref, qc_module, fc/ae, conv/df
-        dermode = _negotiate_derivative_type(driver, methods, kwargs.pop('dertype', None), uses_xdm)
+        dermode = _negotiate_derivative_type(driver, methods, kwargs.pop('dertype', None), task_uses_xdm)
 
         if dermode[0] == dermode[1]:  # analytic
             logger.info('PLANNING CBS:  packet={packet} kw={kwargs}')
@@ -316,7 +318,7 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
 
     # Done with Wrappers -- know we want E, G, or H -- but may still be FD or AtomicComputer
     else:
-        dermode = _negotiate_derivative_type(driver, method, kwargs.pop('dertype', None), uses_xdm)
+        dermode = _negotiate_derivative_type(driver, method, kwargs.pop('dertype', None), task_uses_xdm)
         convcrit = negotiate_convergence_criterion(dermode, method, return_optstash=False)
 
         if dermode[0] == dermode[1]:  # analytic

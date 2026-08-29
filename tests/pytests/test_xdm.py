@@ -492,6 +492,68 @@ units angstrom
     assert np.isfinite(grad).all()
 
 
+@pytest.mark.xdm
+def test_xdm_mixed_levels_preserve_analytic_gradients():
+    """Only the ``levels`` entries that actually use XDM are planned as finite differences."""
+
+    dimer = psi4.geometry("""0 1
+N -1.578718 -0.046611 0.000000
+H -2.158621 0.136396 -0.809565
+H -2.158621 0.136396 0.809565
+H -0.849471 0.658193 0.000000
+--
+0 1
+O    2.35062500   0.11146900   0.00000000
+H    2.68039800  -0.37374100  -0.75856100
+H    2.68039800  -0.37374100   0.75856100
+units angstrom
+    """)
+    psi4.set_options({
+        "basis": "sto-3g",
+        "DFT_SPHERICAL_POINTS": 302,
+        "DFT_RADIAL_POINTS": 75,
+        "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
+    })
+
+    from psi4.driver.task_planner import task_planner
+    from psi4.driver.driver_findif import FiniteDifferenceComputer
+    from psi4.driver.driver_nbody import ManyBodyComputer
+    from psi4.driver.task_base import AtomicComputer
+
+    findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
+
+    plan = task_planner("gradient",
+                        "b3lyp",
+                        dimer,
+                        bsse_type="nocp",
+                        levels={
+                            1: "b3lyp-xdm",
+                            2: "b3lyp"
+                        },
+                        **findif_kwargs)
+    assert isinstance(plan, ManyBodyComputer)
+
+    planned = {}
+    for task in plan.task_list.values():
+        planned.setdefault(task.method.lower(), set()).add(type(task))
+
+    assert planned["b3lyp-xdm"] == {FiniteDifferenceComputer}
+    assert planned["b3lyp"] == {AtomicComputer}
+
+    # A user-requested analytic gradient is still refused because one level needs XDM.
+    with pytest.raises(NotImplementedError, match="Analytic XDM gradients are not implemented"):
+        task_planner("gradient",
+                     "b3lyp",
+                     dimer,
+                     bsse_type="nocp",
+                     dertype=1,
+                     levels={
+                         1: "b3lyp-xdm",
+                         2: "b3lyp"
+                     },
+                     **findif_kwargs)
+
+
 def test_empirical_dispersion_compatibility_import():
     from psi4.driver.procrouting.empirical_dispersion import EmpiricalDispersion as compatibility_class
     from psi4.driver.procrouting.empirical_disp.empirical_dispersion import EmpiricalDispersion
