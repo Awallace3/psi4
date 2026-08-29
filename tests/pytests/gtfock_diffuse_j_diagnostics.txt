@@ -4456,6 +4456,12 @@ one control F printed this morning.
                                            the 51 directions with s < 1e-04
   where the rung's own converged D lives   6.45e-10 of it there
 
+WRONG BELOW, and control F is the refutation: contracting on the rung's
+own density, which does NOT live in that region, misses by the same
+0.41 mEh. The missing term is orbital relaxation and the correct account
+is the next subsection. The paragraph is kept because the reasoning is
+worth seeing refuted, not because any of it holds.
+
 Nine orders of magnitude separate the two densities in exactly the region
 GTFock's difference occupies, because the rung's whole purpose is to delete
 that region. Contracting GTFock's difference on a density that lives there
@@ -4494,3 +4500,103 @@ converged density and contracts there, predicting -0.426 mEh for GTFock and
 +4.352 mEh for DF, both targets taken from SCF energies the contraction does
 not see. If the GTFock arm returns near +0.12 again the explanation above is
 wrong and contraction genuinely does fail at a restricted rung.
+
+
+Control F, and the term both explanations were missing
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Control F was registered against the explanation above and refutes half of it.
+
+  --- rungdens.log, on control E's own converged density (tr(DS) = 290) ---
+
+    D = C C^T: max|D|=1.0409e+00  ||D||=1.2142e+01
+    occupied weight in the  98 directions with s<1e-03: 2.501321e-08
+    occupied weight in the  51 directions with s<1e-04: 6.454412e-10
+
+    engine      2tr(D dJ)    -tr(D dK)        total     registered
+    gtfock        -0.0140      +0.0000      -0.0140  mEh    -0.426
+    df            -1.3913      +5.7463      +4.3550  mEh    +4.352
+
+The DF arm lands to 0.003 mEh. Contraction is therefore sound at a restricted
+rung, which was the first of the two candidates and it is now excluded. The
+GTFock arm misses by 0.412 mEh, which excludes the second candidate as well:
+the density swap was NOT the mechanism. This contraction was evaluated on the
+rung's own converged density, carrying 2.5e-08 of its occupied weight in the
+98 deleted directions instead of the 84% the full-space density carries, and
+the miss did not shrink. The near-null placement argument of the preceding
+subsection is WRONG.
+
+What both explanations were missing is a term neither of them contained.
+
+  E_X(D_X) - E_ref(D_ref) = [E_X(D_ref) - E_ref(D_ref)]   first order
+                          + [E_X(D_X)   - E_X(D_ref)]     relaxation
+
+The second bracket is non-positive because D_X minimizes E_X. It is second
+order in the engine difference, and a contraction omits it entirely.
+
+  engine      SCF gap   first order   relaxation
+  gtfock      -0.4260       -0.0140      -0.4120  mEh
+  df          +4.3520       +4.3550      -0.0030  mEh
+
+GTFock's rung gap is 97% orbital relaxation and DF's is 0.07%. Both come out
+negative, as the variational argument requires, which is the first check the
+decomposition passes and the cheapest one available.
+
+The second check has no free parameter. To second order the relaxation is
+tr(dG.dD), with dG = 2dJ - dK the engine's Fock difference at the reference
+density and dD the difference of the two converged densities, both already on
+disk from control E and control F:
+
+  engine     tr(dG.dD)      target        err
+  gtfock       -0.4179     -0.4120    -0.0059  mEh
+  df           -0.0030     -0.0030    +0.0000  mEh
+
+One formula, two targets 140x apart in magnitude, no fitted constant, and the
+larger one is reproduced to 1.4%.
+
+The density change behind it, measured rather than argued:
+
+  engine       ||dD||       rel   w(s<1e-3)   w(s<1e-4)   max principal angle
+  gtfock   2.8733e-01  2.37e-02   2.270e-07   6.879e-10          0.2562 deg
+  df       3.3185e-03  2.73e-04   1.160e-06   2.023e-08          0.0074 deg
+
+GTFock's converged rung density sits eighty-seven times further from
+DirectJK's than DF's does. Note where that difference does NOT live: 2.3e-07
+of it in the 98 near-singular directions, less than DF's own 1.2e-06. The
+rung did exactly what it was for, and what is left is ordinary orbital
+relaxation in the well-conditioned space. GTFock's difference is pure scatter
+(resid_frac = 1.000000) where DF's K difference is a near-uniform deficit
+(0.994595), and scatter is the kind of perturbation that couples occupied to
+virtual and moves orbitals; that is a plausible reason for the 87x and it is
+NOT measured here, so do not repeat it as one.
+
+THE CORRECTED READING OF A CONTRACTION. It is a BOUND, not an estimate, and
+which side it bounds depends on whose converged density it is evaluated at,
+because the omitted bracket is a relaxation and each engine sits at its own
+minimum:
+
+  evaluated at the REFERENCE engine's density   true gap <= contraction
+  evaluated at the TEST engine's density        true gap >= contraction
+
+All three cases measured in this file respect it, including one on the far
+side:
+
+  gtfock at the rung, at D_direct    -0.4260 <= -0.0140   upper bound
+  df     at the rung, at D_direct    +4.3520 <= +4.3550   upper bound
+  df     in full space, at D_df      +4.3486 >= +4.3457   lower bound
+
+This retires the way the +0.1224 mEh full-space figure was read two
+subsections ago. It was evaluated on DF's converged density, which is close
+to DirectJK's but is not GTFock's, so it bounds GTFock's full-space energy
+error from ABOVE and says nothing about how far below it sits. At the rung
+the true value came in 0.41 mEh under an estimate of exactly that kind. The
+honest statement is that GTFock's full-space two-electron energy error is at
+most about +0.12 mEh and may be substantially more negative. It was never a
+measurement of the value, and the claim that it was is withdrawn.
+
+None of this touches the attribution. The residual at S_TOLERANCE 1e-3 is
++9.8963 mEh, the truncation is +10.3223 and GTFock's own error is -0.4260,
+and all three are subtractions between converged SCF energies with no
+contraction, no transfer and no second-order argument anywhere in them. What
+control F changed is the account of why a contraction mispredicted one of
+them, which is a question about method rather than about GTFock.
