@@ -9,13 +9,19 @@ is the claim this file backs, and it is measured directly from the runs.
 
 This file also once claimed to locate the fault -- in J rather than K, and in
 the diffuse shells rather than the system size. It does not any more. Sections
-5 and 6 are controls that were run late: section 5 overturned that attribution,
-and section 6 localizes the failure to the very first SCF iteration and shows
-that Psi4's own DirectJK takes that first step into the same near-null subspace
-of the overlap, only far less deeply. The cause is still open. Sections 1
-through 4 are preserved as run, because their measurements are sound even where
-the conclusions drawn from them were not, and because the way they went wrong
-is worth keeping.
+5 through 8 were run late: section 5 overturned that attribution, section 6
+localized the failure to the very first SCF iteration, section 7 ran the two
+experiments section 6 had only named, and section 8 measured the difference
+between the engines as a MATRIX rather than as an energy. The mechanism is now
+measured -- a discrete occupation switch in the first diagonalization, set out
+at the head of section 8 -- while its origin, the 7e-05 relative difference in
+F that drives the switch, is still open. Sections 1 through 4 are preserved as
+run, because their measurements are sound even where the conclusions drawn from
+them were not, and because the way they went wrong is worth keeping. Section
+6's own reading -- that DirectJK falls into the same near-null subspace, just
+less deeply, and survives -- is one of the conclusions that did not survive;
+section 8 withdraws it, and shows that DirectJK does not enter that subspace at
+all.
 
 Two kinds of evidence live in two different files, and the split is deliberate:
 
@@ -30,7 +36,11 @@ Two kinds of evidence live in two different files, and the split is deliberate:
     confounds the error in the Fock build with the feedback that error drives,
     and none of those numbers would mean anything if the density kept moving
     underneath them. Section 6 deliberately puts a single iteration back, to
-    ask where the divergence starts, and says so where it does.
+    ask where the divergence starts, and says so where it does. Sections 7 and
+    8 then move in both directions at once: section 7 runs whole SCFs, several
+    of them multi-hour, because the questions it asks are about what an
+    iteration DOES with a difference; section 8 removes the iteration
+    altogether and works in linear algebra on two saved Fock matrices.
 
 Every probe ran on one workstation -- cos-4a16505.cos.gatech.edu, an AMD Ryzen
 Threadripper 3960X, 24 physical cores and 48 hardware threads -- against the
@@ -38,11 +48,14 @@ same build as the Phoenix jobs, through the same GTFockJK path, with
 OMPI_MCA_osc=^ucx set. This is not the Phoenix hardware and none of these
 numbers are scaling measurements; the quantities compared are matrix elements,
 which do not depend on the machine. The thread count differs between probes (48
-in section 1, 20 in section 3, 24 in section 6) for scheduling reasons only and
-is stated with each result; section 2 varies it deliberately and reports what
-that did. The scripts are reproduced verbatim, including the absolute paths
-they were run with; those paths are a scratch directory and this worktree, and
-are the two things to change to run them elsewhere.
+in section 1, 20 in section 3, 24 in section 6, and in sections 7 and 8
+whatever the reproduced wrapper sets, between 24 and 2) for scheduling reasons
+only and is stated with each result; section 2 varies it deliberately and
+reports what that did, and section 7 uses a same-engine pair at two thread
+counts to put a noise floor under every difference it quotes. The scripts are
+reproduced verbatim, including the absolute paths they were run with; those
+paths are a scratch directory and this worktree, and are the two things to
+change to run them elsewhere.
 
 Two cautions apply to every number below.
 
@@ -54,8 +67,12 @@ reused verbatim by every later probe. It was produced by GTFock, because at this
 size the density-fitting alternative falls back to DiskDFJK and writes ~128 GiB
 of scratch.
 
-READ SECTION 5 BEFORE SECTIONS 1 THROUGH 4. That density was finally measured,
-late, at max|D| = 1.19e+06, against the ~2 of any physical closed-shell density:
+READ SECTION 5 BEFORE SECTIONS 1 THROUGH 4, AND SECTION 7'S CONVENTION NOTE
+BEFORE COMPARING ANY max|D| ACROSS SECTIONS. That density was finally measured,
+late, at max|D| = 1.19e+06, against the ~2 of any physical closed-shell density
+-- a yardstick section 7 has since had to qualify, because in a basis this
+near-singular the correct converged density measures 1.2e+02 in the same
+convention and is perfectly physical:
 one SCF iteration in this basis had already left the physical range by six
 orders of magnitude, and every difference sections 1 through 4 report was
 measured there. Their numbers are real and reproducible. The attribution built
@@ -996,10 +1013,29 @@ arms is the J/K build inside that single iteration.
 """Which engine's FIRST iterate blows up, and does the other one's?
 
 The probe density that sections 1-3 measure GTFock against was built by
-`scf_type gtfock, maxiter 1` from a SAD guess. It has max|D| = 2.4e+06. A
-physical closed-shell density in this basis has max|D| ~ 2. So one SCF
-iteration in this basis already left the physical range by six orders of
-magnitude, and every difference sections 1-3 report was measured there.
+`scf_type gtfock, maxiter 1` from a SAD guess. Quoted as the closed-shell
+density D = 2 C C^T it has max|D| = 2.4e+06, four orders past the 2.5e+02 a
+CONVERGED density in this basis reaches, and it puts 99.87% of its occupied
+weight in the 51 overlap directions below 1e-04 where a converged density
+puts 84%. So one SCF iteration in this basis already left the physical
+range, and every difference sections 1-3 report was measured there.
+
+One factor of two has to be stated or this note contradicts the output
+printed a few lines below it. physdens.py, scaletest.py and section 8's
+spectral scripts form D = 2 C C^T; iter1.py here, canon.py and evalconv.py
+form C C^T and print half. Sections 5, 6 and 8 quote the 2 C C^T figures, so
+where iter1.py's output reads max|D| = 1.1866e+06 the paragraph above reads
+2.4e+06; section 7 runs entirely on canon.py and evalconv.py, quotes their
+C C^T figures, and restates the bound in that convention at its head. Weight
+fractions are ratios and do not care. No comparison anywhere in this file
+crosses the two.
+
+An earlier version of this note said a physical density here has max|D| ~ 2.
+That figure came from a 6-31G** density projected into 6-31+G**, which
+carries almost no diffuse character; section 8 measures the converged
+6-31+G** density and retires the yardstick. Near-null dominance is normal
+in this basis, and the wrecked iterate differs from a converged one by four
+orders of degree, not by kind.
 
 That invalidates the attribution but not the failure: GTFock still runs 100
 iterations on protein157/6-31+G** where DirectJK and DiskDFJK converge in 12.
@@ -1063,6 +1099,21 @@ against the cached probe density's 2.3847e+06. The GTFock arm reproduces the
 cached wreckage to 0.48%, which is as close as two runs of a diverged iterate
 at different thread counts -- 24 here, 48 for the cache -- have any business
 being. The density sections 1 through 3 were measured on was not a one-off.
+
+A second convention note, and this one is a caveat rather than a bookkeeping
+detail. Psi4's SCF computes the energy of the density it ENTERED the iteration
+with and diagonalizes afterwards -- scf_iterator.py runs form_G, form_F,
+compute_E, then form_C and form_D, and prints last -- so the energy printed at
+iteration n belongs to D_(n-1), and a run stopped at maxiter=1 returns orbitals
+one diagonalization PAST the energy it reported. The energies quoted in this
+section are therefore E[D_1], while the orbitals decomposed below, saved as
+Cocc_iter1_*.npy, are C_2. Both arms of iter1.py are stopped the same way, so
+every engine-to-engine comparison here is like with like and none of the
+conclusions move. But the two are genuinely different objects, and where this
+section says "first iterate" it means whichever of them the sentence is about.
+They are not close: section 7 measures DirectJK evaluating GTFock's returned
+C_2 at -3504.380, 195 Eh away from the -3699.584 that the same run printed for
+E[D_1].
 
 The DirectJK arm is checkable against something outside this machine. Its
 iteration-1 energy, -3640.478399, is job 12441235's iteration 1 to every digit
@@ -1358,3 +1409,2343 @@ Until one of those is run the user-facing statement stays where section 5 left
 it: the restriction is measured, distribution is excluded, GTFock's accuracy on
 physical densities in this basis is established, and the cause is open with the
 conditioning of the basis as the leading suspect.
+
+
+7. The two experiments section 6 left undone
+--------------------------------------------
+
+Section 6 ended by naming two experiments and recording that neither was run.
+Both are run here. They were chosen because each one splits the remaining
+hypothesis in a different place: the restart asks whether GTFock's damage is a
+single push into a bad region or a difference the engine keeps re-injecting,
+and canonical orthogonalization asks whether removing the near-null subspace
+outright removes the failure with it. The second turned up an answer that
+neither of section 6's alternatives anticipated, and forced two further control
+runs that were not planned when this section was started. Those are here too,
+because the finding is worthless without them.
+
+The restart, and why its setup had to be checked before it was trusted
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Psi4's GUESS READ path reads the orbitals from the wavefunction scratch file
+numbered 180 and installs them through guess_Ca (proc.py:1944). If that file is
+not there it does not fail. It prints a warning and falls back to SAD
+(proc.py:1972). That default is the single most dangerous thing about this
+experiment, because a silent fallback produces a DirectJK run started from SAD,
+which converges to the reference in twelve iterations and looks exactly like
+the successful restart the experiment was hoping for. The wrong answer here is
+indistinguishable from the desired one by inspection of the energy alone.
+
+restart.py therefore asserts on the string that only the real path prints,
+"Reading orbitals from file", and aborts if it is absent. The mechanism was
+also smoke-tested end to end on a water dimer in 6-31G before any time was
+spent at 1863 functions: GTFock one iteration from SAD gave -151.807929,
+DirectJK restarted from those orbitals gave -151.960552 in 9 iterations, and
+the assert confirmed the READ path fired. That is a five-minute run that
+protects a nine-hour one.
+
+One point of bookkeeping carries over from section 6's second convention note
+and matters for reading everything below. What restart.py hands to DirectJK is
+the orbital set GTFock RETURNS from a maxiter=1 run, and Psi4 diagonalizes
+after it computes the energy, so those orbitals are C_2 while the energy the
+same run printed, -3699.584272, is E[D_1]. The two are not close. DirectJK
+evaluates the handed-over C_2 at -3504.380, which is 195 Eh away from the
+energy its own source run reported. Everywhere below, "the iterate" means
+whichever of the two the sentence is about, and they are named explicitly. One
+digit will also look wrong: sections 5 and 6 quote this same first-iterate
+energy as -3699.587353, not -3699.584272. That is not a typo in either place
+and not a difference in what was run. It is a measurement, and it is taken
+apart under "A digit in the table disagrees with section 6" below.
+
+--- restart.py, verbatim ---
+"""Is GTFock's damage a one-time push, or a region this SCF cannot leave?
+
+Section 6 established that GTFock's first iterate on protein157/6-31+G** is
+already 57 Eh below the converged reference, and that 99.87% of its occupied
+space lies where the overlap eigenvalue is below 1e-4. DirectJK's own first
+iterate falls into the same subspace, 6.3e+03 shallower in the weighted-mean
+eigenvalue, and recovers.
+
+This script hands GTFock's first iterate to DirectJK and lets DirectJK finish.
+
+  - if DirectJK converges to the reference -3642.752751, then GTFock's damage
+    is a one-time push into a bad region that a healthy engine can climb out
+    of, and what keeps GTFock's own run oscillating is a difference it keeps
+    re-injecting at every iteration;
+  - if DirectJK also fails from there, the region is simply unreachable by
+    this SCF, and the engine choice only decides who falls into it.
+
+The restart goes through Psi4's own GUESS READ path (proc.py reads
+`scf_wfn.get_scratch_filename(180) + '.npy'` and calls guess_Ca/guess_Cb), so
+the second arm is an ordinary Psi4 SCF, not a hand-rolled iteration.
+
+SMOKE=1 runs the same mechanism on a two-water system in 6-31G in seconds,
+and asserts that the READ path actually fired rather than silently falling
+back to SAD -- proc.py's fallback prints a warning and continues, so a typo
+in the scratch path would otherwise look like a successful experiment.
+"""
+import os, re, sys, time, numpy as np
+os.environ.setdefault("PSI_SCRATCH", "/fastscratch/awallace43/psi4tmp")
+import psi4
+sys.path.insert(0, "/home/awallace43/.treehouse/psi4-1ae95c/2/psi4/tests/pytests")
+from gtfock_hpc_benchmark import _SYSTEMS
+
+D = "/tmp/fm-psi4-djk/diag"
+SMOKE = bool(int(os.environ.get("SMOKE", "0")))
+NT = int(os.environ.get("RS_THREADS", "24"))
+tag = "smoke" if SMOKE else "restart"
+out = f"{D}/{tag}.out"
+
+psi4.set_num_threads(NT); psi4.set_memory("40 GB")
+psi4.core.set_output_file(out, False)
+
+if SMOKE:
+    geom, basis, maxiter2 = """
+0 1
+O  0.000  0.000  0.000
+H  0.757  0.586  0.000
+H -0.757  0.586  0.000
+--
+0 1
+O  0.000  0.000  3.000
+H  0.757  0.586  3.000
+H -0.757  0.586  3.000
+units angstrom
+symmetry c1
+no_reorient
+no_com
+""", "6-31G", 50
+else:
+    geom, basis, maxiter2 = _SYSTEMS["protein157"], "6-31+G**", 25
+
+mol = psi4.geometry(geom)
+common = {"basis": basis, "puream": False, "sad_scf_type": "df",
+          "df_scf_guess": False, "ints_tolerance": 1e-12,
+          "fail_on_maxiter": False}
+
+wref = psi4.core.Wavefunction.build(mol, basis)
+S = np.asarray(psi4.core.MintsHelper(wref.basisset()).ao_overlap())
+s = np.linalg.eigvalsh(S)
+print(f"nbf={wref.basisset().nbf()}  s_min={s.min():.6e}", flush=True)
+
+def report(label, e, w, t):
+    C = np.asarray(w.Ca_subset("AO", "OCC")); Dm = C @ C.T
+    print(f"{label:34s} E={e:.6f} max|D|={np.abs(Dm).max():.4e} "
+          f"normC2={np.linalg.norm(C)**2:.4e} "
+          f"trDS={2*np.einsum('ij,ij->',Dm,S):.6f} t={t:.1f}s", flush=True)
+    return C
+
+# arm 1: one GTFock iteration from SAD -- the damaged iterate
+t = time.time()
+psi4.set_options({**common, "scf_type": "gtfock", "guess": "sad", "maxiter": 1})
+e1, w1 = psi4.energy("scf", return_wfn=True)
+report("GTFOCK  1 iteration from SAD", e1, w1, time.time() - t)
+
+# hand it to DirectJK through Psi4's own READ path
+w1.to_file(w1.get_scratch_filename(180))
+
+t = time.time()
+psi4.set_options({**common, "scf_type": "direct", "guess": "read",
+                  "maxiter": maxiter2})
+e2, w2 = psi4.energy("scf", return_wfn=True)
+C2 = report("DIRECT  restarted from that", e2, w2, time.time() - t)
+np.save(f"{D}/Cocc_{tag}_direct.npy", C2)
+
+txt = open(out).read()
+did_read = "Reading orbitals from file" in txt
+print(f"READ path fired: {did_read}", flush=True)
+assert did_read, "GUESS READ silently fell back to SAD -- experiment is void"
+
+# converged, or ran out of iterations?
+niter = len(re.findall(r"^\s+@DF-RHF iter|^\s+@RHF iter", txt, re.M))
+conv = "Energy and wave function converged" in txt or "converged." in txt
+print(f"DIRECT restart: niter={niter} converged={conv} E={e2:.6f}", flush=True)
+if not SMOKE:
+    print(f"vs converged reference -3642.752751: {e2 + 3642.752751:+.6f} Eh",
+          flush=True)
+print("EXIT=0", flush=True)
+
+
+--- restart.log, verbatim (PFock setup banner elided) ---
+
+nbf=1863  s_min=1.089528e-07
+GTFOCK  1 iteration from SAD       E=-3699.584272 max|D|=1.1849e+06 normC2=8.8107e+06 trDS=580.000000 t=498.6s
+DIRECT  restarted from that        E=-1891.505781 max|D|=2.7012e+04 normC2=2.2954e+05 trDS=580.000000 t=23654.0s
+READ path fired: True
+DIRECT restart: niter=28 converged=False E=-1891.505781
+vs converged reference -3642.752751: +1751.246970 Eh
+
+DirectJK does not recover. Started from GTFock's C_2 it runs its full 25
+iterations without converging and stops at -1891.505781, which is 1751.25 Eh
+ABOVE the reference -3642.752751, having begun at -3504.380, itself already 138
+Eh above it. That is restart.py's second branch: the point one GTFock iteration
+reaches is not a point this SCF returns from, and which engine is driving makes
+no difference to that.
+
+The trajectory is worth reading rather than summarising, because "did not
+converge" understates it. Both arms are below; the first is the maxiter=1
+GTFock run that produced the orbitals, the second is DirectJK started from
+them.
+
+--- restart.out, SCF 1 of 2 (gtfock, maxiter 1) ---
+
+   @RHF iter SAD: -3637.28957675861784   -3.63729e+03   0.00000e+00
+   @RHF iter   1: -3699.58427230557754   -6.22947e+01   1.66859e-03 ADIIS/DIIS
+
+--- restart.out, SCF 2 of 2 (direct, from READ) ---
+
+   @RHF iter   0: -3504.38008756341696   -3.50438e+03   6.04582e-03
+   @RHF iter   1:  2614.57440690395561    6.11895e+03   3.41815e-02 ADIIS/DIIS
+   @RHF iter   2:  3741.59632528411566    1.12702e+03   3.51917e-02 ADIIS/DIIS
+   @RHF iter   3:  5995.91176954022376    2.25432e+03   3.61994e-02 ADIIS/DIIS
+   @RHF iter   4:  3736.02205126223089   -2.25989e+03   3.81130e-02 ADIIS/DIIS
+   @RHF iter   5:  -441.92683053333349   -4.17795e+03   2.71588e-02 ADIIS/DIIS
+   @RHF iter   6: -1672.62965839966455   -1.23070e+03   2.18383e-02 ADIIS/DIIS
+   @RHF iter   7:  -485.33989708909394    1.18729e+03   2.68704e-02 ADIIS/DIIS
+   @RHF iter   8: -2148.22985800878996   -1.66289e+03   1.71543e-02 ADIIS/DIIS
+   @RHF iter   9:  2881.29480075608808    5.02952e+03   4.08002e-02 ADIIS/DIIS
+   @RHF iter  10:    11.21541610317217   -2.87008e+03   2.86611e-02 ADIIS/DIIS
+   @RHF iter  11: -1605.29750155665533   -1.61651e+03   2.06523e-02 ADIIS/DIIS
+   @RHF iter  12:  -241.47048488606197    1.36383e+03   2.55555e-02 ADIIS/DIIS
+   @RHF iter  13: -1386.13669301279333   -1.14467e+03   2.49740e-02 ADIIS/DIIS
+   @RHF iter  14: -2719.78125641686165   -1.33364e+03   1.44537e-02 ADIIS/DIIS
+   @RHF iter  15: -2673.77056488980998    4.60107e+01   1.35122e-02 ADIIS/DIIS
+   @RHF iter  16:  -908.25075709312296    1.76552e+03   2.51635e-02 ADIIS/DIIS
+   @RHF iter  17: -3219.87908255494222   -2.31163e+03   7.80472e-03 ADIIS/DIIS
+   @RHF iter  18:   323.84501927479687    3.54372e+03   3.63684e-02 ADIIS/DIIS
+   @RHF iter  19: -1222.93418431403188   -1.54678e+03   2.75161e-02 ADIIS/DIIS
+   @RHF iter  20: -1210.18414900488824    1.27500e+01   2.77803e-02 ADIIS/DIIS
+   @RHF iter  21: -1317.91201227031888   -1.07728e+02   2.70760e-02 ADIIS/DIIS
+   @RHF iter  22: -1603.44787471167365   -2.85536e+02   2.51654e-02 ADIIS/DIIS
+   @RHF iter  23: -1937.48806179948406   -3.34040e+02   1.94368e-02 ADIIS/DIIS
+   @RHF iter  24: -1536.50397753568177    4.00984e+02   2.49734e-02 ADIIS/DIIS
+   @RHF iter  25: -1891.50578087033500   -3.55002e+02   2.29595e-02 ADIIS/DIIS
+
+Iterations 1 through 4 report +2614, +3742, +5996 and +3736 Eh -- positive
+total energies for a 580-electron molecule -- and the next twenty wander
+between -3220 and +324 without settling, with the DIIS error never falling
+below 7.8e-03. The final orbitals still carry max|D| = 2.7012e+04. That is
+better than the 1.1849e+06 handed to them and still 27 times past the 1e+03
+threshold this section arrives at below.
+
+One number in the verdict line is a miscount and is not worth trusting: it
+reports niter=28, which is every "@RHF iter" row in restart.out including the
+two the GTFock arm wrote. DirectJK ran 25, its maxiter. Nothing else in the
+line depends on it -- converged=False comes from the absence of Psi4's own
+convergence string, and the energy is the returned one.
+
+What this settles is narrow and useful. It is not that DirectJK is fragile:
+from SAD, in this basis, DirectJK converges in twelve iterations. It is that no
+continuing engine difference is NEEDED to explain the failure. One injection is
+sufficient, so the hypothesis that GTFock keeps re-injecting a difference at
+every iteration is no longer load-bearing -- it may still be true, but the
+failure does not require it. The whole mechanism question collapses onto the
+first Fock build on the SAD density, which is exactly the measurement section 6
+named as missing and guess.py makes.
+
+Canonical orthogonalization, and the tolerance that makes it real
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Section 4 raised S_TOLERANCE inside symmetric orthogonalization and the failure
+survived. That is not this test. Symmetric orthogonalization keeps every
+direction and rescales it by s^(-1/2); canonical orthogonalization discards the
+directions below the threshold, so the occupied orbitals are confined to
+span(X) and the near-null subspace is gone rather than damped.
+
+The threshold has to be chosen deliberately or the experiment is void in a way
+that is invisible from the output. s_min for this system is 1.09e-07 and Psi4's
+default S_TOLERANCE is 1E-7, so a canonical run left at the default drops
+nothing at all and reproduces the symmetric result exactly, while printing
+every sign of having applied a remedy. Control A below confirms this directly:
+at 1e-7 it reports "s<S_TOL(1e-07): 0". Section 6's weight decomposition says
+where the threshold has to reach, since 99.87% of GTFock's first iterate sits
+below s = 1e-4 and 88.7% below 1e-6. The sweep therefore uses 1e-5 and 1e-4,
+removing 22 and 51 of 1863 directions, and canon.py prints the count so that a
+null setting is visible as one.
+
+--- canon.py, verbatim ---
+"""Does removing the near-null subspace outright let GTFock converge?
+
+Section 4 raised S_TOLERANCE inside SYMMETRIC orthogonalization and the
+failure survived; section 6 recorded that this is NOT the canonical-
+orthogonalization test and left the latter undone. This is that test.
+
+The distinction matters because of where the weight is. Section 6's overlap
+decomposition puts 99.87% of GTFock's first iterate below s = 1e-4 and 88.7%
+below 1e-6, so a threshold has to reach at least 1e-5 before it removes the
+subspace the iterate actually occupies. s_min here is 1.09e-07, so Psi4's
+DEFAULT S_TOLERANCE of 1e-7 drops nothing at all: a canonical run left at the
+default would be a null experiment that looks like a real one. This script
+therefore sweeps the tolerance explicitly and prints how many functions each
+setting removed, so a null experiment is visible as one.
+
+  s < 1e-6:  8 of 1863      s < 1e-5: 22      s < 1e-4: 51
+
+If GTFock converges once those directions are gone, the near-singular overlap
+is the mechanism and not merely a suspect. If it still fails with 51 of 1863
+directions removed, the overlap is not sufficient to explain it.
+"""
+import os, re, sys, time, numpy as np
+os.environ.setdefault("PSI_SCRATCH", "/fastscratch/awallace43/psi4tmp")
+import psi4
+sys.path.insert(0, "/home/awallace43/.treehouse/psi4-1ae95c/2/psi4/tests/pytests")
+from gtfock_hpc_benchmark import _SYSTEMS
+
+D = "/tmp/fm-psi4-djk/diag"
+STOL = float(os.environ["S_TOL"])
+ENG = os.environ.get("CN_ENGINE", "gtfock")
+NT = int(os.environ.get("CN_THREADS", "20"))
+ORTHO = os.environ.get("CN_ORTHO", "canonical")
+tag = f"canon_{ENG}_{STOL:.0e}" if ORTHO == "canonical" else f"sym_{ENG}"
+
+psi4.set_num_threads(NT); psi4.set_memory("40 GB")
+out = f"{D}/{tag}.out"
+psi4.core.set_output_file(out, False)
+
+mol = psi4.geometry(_SYSTEMS["protein157"])
+wref = psi4.core.Wavefunction.build(mol, "6-31+G**")
+S = np.asarray(psi4.core.MintsHelper(wref.basisset()).ao_overlap())
+s = np.linalg.eigvalsh(S)
+nbf = wref.basisset().nbf()
+print(f"nbf={nbf}  s_min={s.min():.6e}  s<S_TOL({STOL:.0e}): {(s<STOL).sum()}",
+      flush=True)
+
+t = time.time()
+psi4.set_options({"basis": "6-31+G**", "puream": False, "guess": "sad",
+                  "sad_scf_type": "df", "df_scf_guess": False,
+                  "ints_tolerance": 1e-12, "maxiter": 25,
+                  "fail_on_maxiter": False, "scf_type": ENG,
+                  "s_orthogonalization": ORTHO, "s_tolerance": STOL})
+e, w = psi4.energy("scf", return_wfn=True)
+dt = time.time() - t
+
+C = np.asarray(w.Ca_subset("AO", "OCC")); Dm = C @ C.T
+txt = open(out).read()
+m = re.search(r"Overall, (\d+) of (\d+) possible MOs eliminated", txt)
+dropped = m.group(0) if m else "no elimination line in output"
+conv = "Energy and wave function converged" in txt
+print(f"CANON engine={ENG} ortho={ORTHO} S_TOL={STOL:.0e} nmo={w.nmo()} of nbf={nbf} "
+      f"[{dropped}]", flush=True)
+print(f"CANON engine={ENG} ortho={ORTHO} converged={conv} E={e:.6f} max|D|={np.abs(Dm).max():.4e} "
+      f"normC2={np.linalg.norm(C)**2:.4e} "
+      f"trDS={2*np.einsum('ij,ij->',Dm,S):.6f} t={dt:.1f}s", flush=True)
+print(f"vs converged reference -3642.752751: {e + 3642.752751:+.6f} Eh",
+      flush=True)
+np.save(f"{D}/Cocc_{tag}.npy", C)
+print("EXIT=0", flush=True)
+
+
+The reproduction above is the script as it stands, which is not bit-for-bit the
+script that produced the S_TOL=1e-5 result. That run was already in progress
+when the controls below turned out to be necessary, and adding them required
+canon.py to take the orthogonalization as a parameter instead of hardcoding it.
+Two things changed: an ORTHO variable read from the environment and defaulting
+to "canonical", and an engine/ortho tag added to the two printed verdict lines.
+The default reproduces the original behaviour exactly, so the 1e-5 arm ran the
+same calculation the text above describes; what differs is only the wording of
+its output lines, and canon.log carries both formats for that reason. The 1e-4
+arm and both controls ran the reproduced source.
+
+=== canon gtfock S_TOL=1e-5 18:39:59 ===
+nbf=1863  s_min=1.089528e-07  s<S_TOL(1e-05): 22
+CANON engine=gtfock S_TOL=1e-05 nmo=1841 of nbf=1863 [Overall, 22 of 1863 possible MOs eliminated]
+CANON converged=False E=-3669.871214 max|D|=1.7100e+04 normC2=2.5196e+05 trDS=580.000000 t=13245.3s
+vs converged reference -3642.752751: -27.118463 Eh
+=== canon gtfock S_TOL=1e-4 22:20:49 ===
+nbf=1863  s_min=1.089528e-07  s<S_TOL(1e-04): 51
+CANON engine=gtfock ortho=canonical S_TOL=1e-04 nmo=1812 of nbf=1863 [Overall, 51 of 1863 possible MOs eliminated]
+CANON engine=gtfock ortho=canonical converged=False E=-3643.533829 max|D|=3.6475e+02 normC2=6.2415e+03 trDS=580.000000 t=14162.9s
+vs converged reference -3642.752751: -0.781078 Eh
+=== DONE canon 02:17:07 ===
+nbf=1863  s_min=1.089528e-07  s<S_TOL(1e-03): 98
+
+Two arms, two failures, and the second is by far the smaller. At S_TOL = 1e-5,
+with 22 directions removed, GTFock ends 27.118463 Eh BELOW the converged
+reference; at 1e-4, with 51 removed, it ends 0.781078 Eh below. Neither
+converged in 25 iterations. Removing more of the near-null subspace does not
+rescue the SCF, but it shrinks the damage by a factor of 34.7, and that
+ordering is the dose-response the next subsection reads.
+
+Being below the reference is the part that needs saying out loud. Canonical
+orthogonalization is a RESTRICTION: it solves the same problem in a strictly
+smaller space, so its minimum cannot lie below the full-space minimum. An arm
+that reports 27 Eh under the reference is therefore not a worse-converged
+version of the right answer, it is an answer to a different question. Either
+the reference is not the full-space minimum, or GTFock is occupying something
+the variational argument does not cover. That is what forced the DF controls
+below; without them this subsection would be an artifact.
+
+The iteration tables are reproduced in full because their SHAPE carries
+information the endpoints do not. Neither arm wanders. The 1e-5 arm is monotone
+from iteration 7 onward -- nineteen consecutive decreases, with the DIIS error
+falling 2.30e-04 to 5.22e-06 and not reversing once; the 1e-4 arm oscillates in
+the fifth decimal at 7.2e-05. Both are close to converged in the only sense the
+SCF measures. They are converging to the wrong solution rather than failing to
+converge to the right one, and a run that ends at 1e-05 on the error and 27 Eh
+on the energy has found a stationary point of a problem it should not have been
+solving.
+
+--- canon_gtfock_1e-05.out: Overall, 22 of 1863 possible MOs eliminated. ---
+
+   @RHF iter SAD: -3637.28957675860693   -3.63729e+03   0.00000e+00
+   @RHF iter   1: -3665.60212766281438   -2.83126e+01   1.32098e-03 DIIS/ADIIS
+   @RHF iter   2: -3631.92682701460399    3.36753e+01   3.11296e-03 DIIS/ADIIS
+   @RHF iter   3: -3667.03824177212118   -3.51114e+01   9.85666e-04 DIIS/ADIIS
+   @RHF iter   4: -3669.04078776138886   -2.00255e+00   4.79113e-04 DIIS/ADIIS
+   @RHF iter   5: -3668.55514923478222    4.85639e-01   5.25048e-04 DIIS/ADIIS
+   @RHF iter   6: -3666.89330673979384    1.66184e+00   7.83974e-04 DIIS/ADIIS
+   @RHF iter   7: -3669.52341187927777   -2.63011e+00   2.30419e-04 DIIS/ADIIS
+   @RHF iter   8: -3669.63514746551846   -1.11736e-01   1.36462e-04 DIIS/ADIIS
+   @RHF iter   9: -3669.68882998798108   -5.36825e-02   9.54339e-05 DIIS
+   @RHF iter  10: -3669.74163143681108   -5.28014e-02   6.07224e-05 DIIS
+   @RHF iter  11: -3669.77263572847551   -3.10043e-02   5.43288e-05 DIIS
+   @RHF iter  12: -3669.80173107061455   -2.90953e-02   4.55860e-05 DIIS
+   @RHF iter  13: -3669.82184135765601   -2.01103e-02   3.70772e-05 DIIS
+   @RHF iter  14: -3669.83112492797773   -9.28357e-03   3.18644e-05 DIIS
+   @RHF iter  15: -3669.84165478024624   -1.05299e-02   2.29904e-05 DIIS
+   @RHF iter  16: -3669.84788384460080   -6.22906e-03   1.52131e-05 DIIS
+   @RHF iter  17: -3669.85199758461931   -4.11374e-03   1.42193e-05 DIIS
+   @RHF iter  18: -3669.85380487571638   -1.80729e-03   1.28446e-05 DIIS
+   @RHF iter  19: -3669.85588245461804   -2.07758e-03   1.03773e-05 DIIS
+   @RHF iter  20: -3669.85977317634934   -3.89072e-03   8.82336e-06 DIIS
+   @RHF iter  21: -3669.86203214434681   -2.25897e-03   8.46043e-06 DIIS
+   @RHF iter  22: -3669.86433377699905   -2.30163e-03   7.48281e-06 DIIS
+   @RHF iter  23: -3669.86740491768251   -3.07114e-03   6.60670e-06 DIIS
+   @RHF iter  24: -3669.86914497192811   -1.74005e-03   5.48081e-06 DIIS
+   @RHF iter  25: -3669.87121437760106   -2.06941e-03   5.22178e-06 DIIS
+
+--- canon_gtfock_1e-04.out: Overall, 51 of 1863 possible MOs eliminated. ---
+
+   @RHF iter SAD: -3637.28957675861420   -3.63729e+03   0.00000e+00
+   @RHF iter   1: -3641.27255880473422   -3.98298e+00   1.12036e-03 DIIS/ADIIS
+   @RHF iter   2: -3640.20406404608912    1.06849e+00   1.23695e-03 DIIS/ADIIS
+   @RHF iter   3: -3642.87459398571627   -2.67053e+00   6.24417e-04 DIIS/ADIIS
+   @RHF iter   4: -3643.37977462908566   -5.05181e-01   2.52748e-04 DIIS/ADIIS
+   @RHF iter   5: -3643.49459841318276   -1.14824e-01   1.03109e-04 DIIS/ADIIS
+   @RHF iter   6: -3643.51734687555108   -2.27485e-02   3.30009e-05 DIIS
+   @RHF iter   7: -3643.52666058442446   -9.31371e-03   2.92995e-05 DIIS
+   @RHF iter   8: -3643.52758958203231   -9.28998e-04   2.66198e-05 DIIS
+   @RHF iter   9: -3643.53497324999807   -7.38367e-03   3.52235e-05 DIIS
+   @RHF iter  10: -3643.53414308702668    8.30163e-04   3.71141e-05 DIIS
+   @RHF iter  11: -3643.53870108999217   -4.55800e-03   3.87431e-05 DIIS
+   @RHF iter  12: -3643.53938128304253   -6.80193e-04   3.79284e-05 DIIS
+   @RHF iter  13: -3643.54016435954145   -7.83076e-04   4.23807e-05 DIIS
+   @RHF iter  14: -3643.54206732120110   -1.90296e-03   3.88028e-05 DIIS
+   @RHF iter  15: -3643.54155166571036    5.15655e-04   3.95930e-05 DIIS
+   @RHF iter  16: -3643.54171157586643   -1.59910e-04   3.94709e-05 DIIS
+   @RHF iter  17: -3643.53972620779859    1.98537e-03   3.90834e-05 DIIS
+   @RHF iter  18: -3643.53938406166890    3.42146e-04   4.05777e-05 DIIS
+   @RHF iter  19: -3643.54007024899147   -6.86187e-04   5.02085e-05 DIIS
+   @RHF iter  20: -3643.48217513453528    5.78951e-02   1.64105e-04 DIIS/ADIIS
+   @RHF iter  21: -3643.54339109066314   -6.12160e-02   3.28766e-05 DIIS
+   @RHF iter  22: -3643.54156766451160    1.82343e-03   4.07455e-05 DIIS
+   @RHF iter  23: -3643.53416607720101    7.40159e-03   7.29691e-05 DIIS
+   @RHF iter  24: -3643.53341399512101    7.52082e-04   7.09603e-05 DIIS
+   @RHF iter  25: -3643.53382867179425   -4.14677e-04   7.21069e-05 DIIS
+
+What canonical orthogonalization actually does to GTFock
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+It reduces the damage in proportion to how much of the near-null subspace it
+removes, and at the tolerance section 6 proposed it does not remove enough. Run
+at three tolerances the sweep is a clean dose-response, and because every arm
+starts from the same SAD guess and differs only in how many overlap directions
+survive, the first iterate isolates the effect with no iteration history to
+confound it.
+
+  orthogonalization    dropped   GTFock E[D_1]   reference   error
+  --------------------------------------------------------------------
+  symmetric                  0      -3699.5843   -3640.4739     -59.11
+  canonical 1e-05           22      -3665.6021   -3640.4732     -25.13
+  canonical 1e-04           51      -3641.2726   -3640.4720      -0.80
+
+The reference column is DF in every row -- control A's symmetric run and
+controls B and C's canonical runs -- so the three reference cells are one
+engine measured three times and differ only in the truncation. Two checks say
+the column is doing its job. DF's own first iterate moves by 7.2e-04 Eh when 22
+directions are dropped, so the reference is very nearly constant down the table
+and the error column is a property of GTFock alone. And DirectJK's full-space
+first iterate, -3640.4784, sits 4.5e-03 Eh from DF's, which is DF's fitting
+error at this geometry and is more than two orders below the smallest number in
+the error column, so nothing in the table turns on which of the two non-GTFock
+engines is used as the reference. Control C runs the 1e-04 reference rather
+than leaving that row extrapolated.
+
+A digit in the table disagrees with section 6, and that is the measurement
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The symmetric row above reads -3699.5843. Sections 5 and 6 quote the same
+number, for the same calculation, as -3699.587353. The two runs used the same
+molecule, the same basis, the same guess and the same option dictionary; they
+were checked against each other key by key. They differ in one thing only, and
+it is not a physics input: iter1.py ran on 24 threads and restart.py on 20.
+
+Four GTFock runs of this system are on record and every one of them reports the
+SAD energy, which is E of the same guess density before any iteration has
+happened:
+
+  threads  E[D_sad]                    E[D_1]  run
+  --------------------------------------------------------------------------
+       24  -3637.28957675860     -3699.587353  iter1.py, section 6's harness
+       20  -3637.28957675862     -3699.584272  restart.py, its maxiter=1 arm
+       20  -3637.28957675861               --  canon.py at 1e-05, SAD row only
+       20  -3637.28957675861               --  canon.py at 1e-04, SAD row only
+
+E[D_SAD] agrees across the four to 1.5e-11 Eh -- eighteen ulp of a number this
+size, which is the floor for a threaded summation over this many integrals. One
+SCF iteration later the two comparable runs are 3.08e-03 Eh apart. Nothing
+between those two numbers is an engine difference, an option difference or a
+screening difference. The only thing that differs is the order in which threads
+accumulated into F.
+
+That is the amplification, measured directly and with no second engine
+involved. Be precise about what the 1.5e-11 bounds: E[D_SAD] is F contracted
+with D, so agreement there constrains the thread-order perturbation along one
+direction rather than its norm over the whole matrix, and the true perturbation
+may be larger. Read as a lower bound on the numerator, the ratio between what
+enters an iteration and what leaves it is at least 1e+08 -- some two orders
+past the 9.2e+06 that symmetric orthogonalization applies to a matrix here,
+which is the right neighbourhood but not a number this section can derive
+exactly, since the perturbation passes through orthogonalization, a
+diagonalization and a density build before it reaches the energy. The useful
+part does not depend on the exact chain. It settles a question section 6 could
+not: the sensitivity belongs to this system and this orthogonalization, not to
+GTFock, because GTFock is on both sides of the comparison.
+
+It does not, by itself, convict the conditioning. Being violently sensitive to
+a perturbation is not the same as being unable to survive one, and this
+measurement says nothing yet about whether DirectJK is equally sensitive -- no
+thread-order pair was run for it, and inferring one from GTFock's would be
+exactly the shortcut the rest of this file exists to avoid. Section 8 makes
+that a measurement instead of an inference by capturing F itself, per engine,
+at two thread counts, so the noise floor is taken in the same norm and on the
+same matrix as the engine difference it has to be compared against. What this
+result does on its own is fix the units of the discussion. A first iterate
+quoted for this system carries about three decimal places of meaning and no
+more, so -3699.587353 should be read as -3699.587, and the "GTFock lands 57 Eh
+below the reference at iteration one" conclusion of section 6 is untouched --
+57 Eh is four orders above the thread-order noise. Only the trailing digits
+were ever overstated.
+
+How big the disagreement is does not predict what it does
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The thread-order pair is one point on a curve worth having three of. All three
+of these scripts pin sad_scf_type=df and df_scf_guess=false, so the SAD density
+does not depend on scf_type: every pair below is two engines, or two thread
+counts, evaluated on the SAME matrix, and the four GTFock runs agreeing to 18
+ulp is the check that this held in practice and not just on paper. That makes
+the SAD energy a common measuring stick for how much the members of a pair
+disagree, and the first iterate a measure of what that disagreement did.
+
+  pair, both on the same SAD density      d E[D_sad]   d E[D_1]  outcome
+  --------------------------------------------------------------------------
+  GTFock 24 threads vs GTFock 20 threads    1.46e-11   3.08e-03  both fail
+  GTFock vs DirectJK, one process           1.18e-06   5.91e+01  split
+  DF vs DirectJK                            3.27e-03   4.52e-03  both converge
+
+Read the middle column and the perturbation grows by eight orders of magnitude
+down the table. Read the right column and the damage does not follow it
+anywhere. DF disagrees with DirectJK 2800 times harder than GTFock does, and
+its first iterate lands 13000 times closer. The size of the disagreement
+between two engines carries no information about whether the SCF survives it.
+Section 5 reached the same conclusion from the other side, by showing the
+best-fit deficit between two engines is invariant to the scale of the density
+it is measured on; this is the same statement about the scale of the
+perturbation rather than the scale of the input.
+
+GTFock's own amplification is not even linear in its own perturbation. Scaling
+the thread-order row up by the 81000x that separates it from the engine row
+predicts 250 Eh at iteration one; the measured value is 59 Eh, smaller by a
+factor of four. So there is no single amplification number for this system, and
+any argument of the form "the perturbation is X and the conditioning is Y,
+therefore the error is XY" is unsupported here no matter which way it comes
+out.
+
+The limit of this table is worth being explicit about, because it is also the
+design of the next experiment. E[D_SAD] is F contracted against one matrix. It
+bounds how much two engines disagree along D and says nothing about the norm of
+their difference or about where that difference sits in the overlap spectrum --
+two perturbations with identical energy projections can differ by orders of
+magnitude in both. So the table rules things out rather than in. What it rules
+out is every explanation of GTFock's failure that runs through "its integrals
+are less accurate", because DF's are far less accurate by this measure and DF
+converges. What it cannot do is say what is different about GTFock's
+difference, and that requires comparing the matrices themselves, which is
+section 8.
+
+What the dose-response table does not show is a fix. At 22 directions removed
+GTFock still runs out at the 25-iteration limit, converged=False, at E =
+-3669.871214 with max|D| = 1.7100e+04. What changes at that tolerance is mostly
+the APPEARANCE of the failure. In the full space GTFock oscillates visibly;
+here it produces a textbook-looking DIIS trace, monotone from iteration 4
+onward and down to a DIIS error of 8.82e-06 by iteration 20, while its density
+sits four orders of magnitude out. That trace is worth recording as a trap in
+its own right: read at iteration 20 it looks like a converging calculation, and
+it is not one. A DIIS error is a statement about the commutator of two
+matrices, not about whether the density those matrices came from is physical.
+
+At 51 directions removed the first iterate is nearly right and the SCF still
+does not finish the job: it settles near -3643.539 with its DIIS error pinned
+around 3.8e-05 rather than falling, which is roughly 0.79 Eh below control B.
+That is the wrong side of a variational bound, because the 1e-04 space is
+SMALLER than control B's 1e-05 space and its true minimum therefore has to lie
+ABOVE -3642.746799, not below it. Its verdict line:
+
+  [still running: iteration 25, E = -3643.53382867179425, DIIS error 7.21069e-05]
+
+Where a GTFock run does not converge its energy is not a Hartree-Fock energy of
+the truncated space and no variational argument applies to it -- it is simply
+where a failing iteration happened to be when the limit hit. The question that
+matters is therefore not whether -3669.87 is too low, but whether the truncated
+space is well-behaved at all. Two DF controls answer that, and they are the
+reason this section has controls: control A reruns the full space with
+symmetric orthogonalization to establish that the reference is reproducible
+under exactly these options rather than assumed, and control B reruns the
+IDENTICAL 1841-dimensional space GTFock failed in.
+
+--- run_control.sh, verbatim ---
+#!/bin/bash
+# Controls for the canon sweep. GTFock-canonical at S_TOL=1e-5 is converging to
+# an energy BELOW the full-space symmetric reference, which a truncated space
+# cannot do variationally unless that reference is not the global minimum. These
+# two DF runs separate those cases. DF is inexact by ~mEh and the gap in question
+# is 27 Eh, so DF is more than sharp enough and costs minutes instead of hours.
+set -eo pipefail
+source /tmp/fm-psi4-djk/env.sh
+cd /tmp/fm-psi4-djk/diag
+export PSI_SCRATCH=/fastscratch/awallace43/psi4tmp OMPI_MCA_osc=^ucx
+export OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 CN_THREADS=8 CN_ENGINE=df
+
+echo "=== control A: df symmetric (reproduce the reference) $(date +%T) ==="
+S_TOL=1e-7 CN_ORTHO=symmetric timeout 7200 python canon.py \
+  || echo "CONTROL A FAILED rc=$?"
+
+echo "=== control B: df canonical S_TOL=1e-5 (same space as gtfock) $(date +%T) ==="
+S_TOL=1e-5 CN_ORTHO=canonical timeout 7200 python canon.py \
+  || echo "CONTROL B FAILED rc=$?"
+
+echo "=== DONE control $(date +%T) ==="
+
+
+=== control A: df symmetric (reproduce the reference) 19:46:24 ===
+nbf=1863  s_min=1.089528e-07  s<S_TOL(1e-07): 0
+CANON engine=df ortho=symmetric S_TOL=1e-07 nmo=1863 of nbf=1863 [no elimination line in output]
+CANON engine=df ortho=symmetric converged=True E=-3642.748403 max|D|=1.2470e+02 normC2=1.2449e+03 trDS=580.000000 t=5737.9s
+vs converged reference -3642.752751: +0.004348 Eh
+=== control B: df canonical S_TOL=1e-5 (same space as gtfock) 21:23:04 ===
+nbf=1863  s_min=1.089528e-07  s<S_TOL(1e-05): 22
+CANON engine=df ortho=canonical S_TOL=1e-05 nmo=1841 of nbf=1863 [Overall, 22 of 1863 possible MOs eliminated]
+CANON engine=df ortho=canonical converged=True E=-3642.746799 max|D|=1.4384e+00 normC2=2.3368e+02 trDS=580.000000 t=5370.6s
+vs converged reference -3642.752751: +0.005952 Eh
+=== DONE control 22:53:37 ===
+
+Control B converges. In precisely the space where GTFock runs out of
+iterations, DF reaches -3642.746799, which is 1.6e-03 Eh from the full-space
+value and, as a variational restriction is obliged to be, very slightly above
+it. The space is fine.
+
+So the two halves of this experiment point in opposite directions and both are
+real. Removing near-null directions helps GTFock enormously and monotonically,
+which is what an amplifier looks like and is the strongest evidence yet that
+the conditioning of this basis is part of the mechanism. And DF optimizes
+without difficulty in the same truncated space, which means the conditioning
+cannot be the whole of it. An amplifier needs something to amplify. Section 6
+framed this as a choice between two suspects and the answer is that it was the
+wrong question: what has to be explained is not the 9.2e+06 by itself but the
+product of it with whatever GTFock feeds into it, and that second factor has
+never been measured on the density the SCF actually starts from. Section 8
+measures it.
+
+One number already makes the product worth taking seriously and one already
+makes it insufficient. GTFock's J and K differ from DirectJK's on physical
+densities by a purely scattered relative 3.2e-06, measured below; times 9.2e+06
+that is order tens, which is the order of the discrepancy being explained. But
+DF differs from DirectJK on this same SAD density by 3.3e-03 Eh, a thousand
+times more than GTFock's scatter, and DF converges here untroubled. Magnitude
+alone therefore cannot be the discriminator, exactly as section 5 found for the
+density. What distinguishes a perturbation that survives this basis from one
+that does not has to be WHERE it sits in the overlap spectrum, not how big it
+is, and that is a measurable claim rather than a plausible one.
+
+A yardstick this file has been using needs qualifying
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+One convention first, or these numbers will not line up with the ones above.
+The scripts of THIS subsection -- canon.py and evalconv.py -- form D = C C^T
+and print that; section 5's physdens.py and section 8's spectral scripts form
+the closed-shell D = 2 C C^T and print twice as much. Every max|D| below is
+quoted as canon.py and evalconv.py print it, which restates section 5's bound
+of "about 2" as a bound of about 1 here. The one figure that has to come from
+the other convention is flagged where it appears. Nothing is compared across
+the two.
+
+The two controls also correct something section 5 asserts and everything since
+has relied on. Section 5 rules a density physical by the bound "elements of
+order 1, and at most 2 -- two electrons in one orbital on one function", and
+that bound assumes an AO basis that is not nearly linearly dependent. Control
+A's converged full-space density measures max|D| = 1.2470e+02. It is the
+correct converged solution and it exceeds the bound by a factor of 125.
+
+Control B shows why, and shows the bound is not so much wrong as incomplete. It
+is the same physical solution -- the energies agree to 1.6e-03 Eh -- with the
+22 near-null directions removed, and its density measures max|D| = 1.4384e+00,
+44% above the old bound rather than the two orders control A sits above it.
+Near-linear dependence inflates AO density elements by a factor of about 87
+here through large cancelling coefficients, without changing the solution they
+represent. So max|D| in the full space is a diagnostic of the CONDITIONING of
+the representation, not a test of whether the physics is sane, and a probe
+cannot be rejected on that number alone. The 1.2e+06 and 1.7e+04 densities this
+file has rejected exceed even the corrected threshold by factors of 1.2e+03 and
+17, and both came out of runs that had not converged, so no earlier rejection
+is disturbed; what changes is that the threshold for future ones is 1e+03 and
+not 1, and that magnitude alone was never the whole reason either of them was
+thrown out.
+
+There is a second consequence, and it bears on how much section 5 established.
+Its physical 6-31+G** probe is the converged 6-31G** density projected in, and
+that probe measures max|D| = 2.0770e+00 in physdens.py's 2 C C^T convention,
+1.0385e+00 in this subsection's -- identical to five figures to the 6-31G**
+density it came from, which the section notes and attributes to the projection
+preserving the metric. The reading it does not draw is that a projected density
+carries almost no weight on the functions that are not in the space it was
+projected from. So the density section 5 cleared the engines on barely occupies
+the diffuse subspace, which is the subspace this whole failure lives in. That
+does not overturn section 5's result. It bounds it: the engines agree on
+densities that avoid the difficult directions, and until the measurement below,
+none had been compared on one that does not.
+
+The same question without the SCF: both engines on both control densities
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The controls answer by optimization. A second measurement answers by direct
+evaluation and is sharper, because it removes the SCF entirely. The density it
+needs has to be two things at once, and no probe used earlier in this file was
+both. It has to be converged -- section 5 withdrew a headline result once its
+probe turned out to be an iterate of the failing run -- and it has to occupy
+the diffuse subspace, which section 5's replacement probe, a 6-31G** density
+projected in, does not. The two DF controls just run are the first densities on
+hand that are both, so evalconv.py evaluates J and K from each of them in both
+engines and reports E_J, E_K, the best-fit uniform deficit and the residual
+fraction. The obvious candidate, GTFock's own canonical orbitals, is
+deliberately not used: that run did not converge, its density measures max|D| =
+1.7100e+04, and the script's own guard rejects it. It is left as the default
+input precisely so that running the script bare exercises the guard instead of
+producing a number.
+
+--- evalconv.py, verbatim ---
+"""Evaluate a CONVERGED, diffuse-occupying density in both engines.
+
+Section 7's canonical run does not converge GTFock. At S_TOLERANCE = 1e-5,
+with 22 directions removed, it runs to the 25-iteration limit and stops at
+-3669.871214, which is 27.12 Eh BELOW the full-space reference that control A
+reproduces at -3642.748403. A variational restriction cannot lower the
+minimum, so either the truncated space genuinely holds a lower solution, or
+GTFock's J/K is wrong at the point it fell to. Control B settles that with an
+independent DF optimization in the same space. This script attacks the same
+question from the other side and is strictly sharper, because it removes the
+SCF entirely.
+
+The density is the one thing every earlier attempt lacked. Section 5 withdrew
+a headline conclusion because its probe turned out to be an iterate of the
+failing run, four orders past anything a converged density in this basis
+reaches. Its replacement probe erred the other way: a 6-31G** density
+projected in, which barely occupies the diffuse subspace this failure lives
+in. What is wanted is a density that is both converged and diffuse-occupying,
+and section 7's two DF controls are the first that are. run_eval.sh therefore
+sets EC_C explicitly, twice: control A's full-space density and control B's
+1e-5-truncated one. The default CFILE below is deliberately the density the
+guard REJECTS -- GTFock's own canonical iterate at max|D| = 1.7100e+04 -- so
+running this with no EC_C set exercises the guard instead of producing a
+number.
+
+Reported per engine: E_J = 2 tr(D J) and E_K = -tr(D K) with D = C C^T, plus
+the best-fit uniform deficit eps = -<Jref,dJ>/<Jref,Jref> and the residual
+fraction that says whether a difference is uniform or scattered.
+
+This docstring was rewritten after the runs it describes, to stop calling the
+canonical run converged and to drop the "physical is ~2" yardstick section 8
+retires. No executable line changed; the guard below still reads 1e+03, which
+is what actually ran.
+"""
+import os, sys, time, numpy as np
+os.environ.setdefault("PSI_SCRATCH", "/fastscratch/awallace43/psi4tmp")
+import psi4
+REPO = "/home/awallace43/.treehouse/psi4-1ae95c/2/psi4"
+sys.path.insert(0, f"{REPO}/tests/pytests")
+from gtfock_hpc_benchmark import _SYSTEMS
+
+D_ = "/tmp/fm-psi4-djk/diag"
+CFILE = os.environ.get("EC_C", f"{D_}/Cocc_canon_gtfock_1e-05.npy")
+NT = int(os.environ.get("EC_THREADS", "20"))
+
+psi4.set_num_threads(NT); psi4.set_memory("40 GB")
+psi4.core.set_output_file(f"{D_}/evalconv.out", False)
+mol = psi4.geometry(_SYSTEMS["protein157"])
+psi4.set_options({"basis": "6-31+G**", "puream": False,
+                  "ints_tolerance": 1e-12})
+wfn = psi4.core.Wavefunction.build(mol, "6-31+G**")
+basis = wfn.basisset()
+
+C = np.load(CFILE)
+Dm = C @ C.T
+S = np.asarray(psi4.core.MintsHelper(basis).ao_overlap())
+print(f"C={CFILE} shape={C.shape} max|D|={np.abs(Dm).max():.4e} "
+      f"normC2={np.linalg.norm(C)**2:.4e} "
+      f"trDS={2*np.einsum('ij,ij->',Dm,S):.6f}",
+      flush=True)
+# Section 5 sets the physicality bar at "elements of order 1, and at most 2 --
+# two electrons in one orbital on one function". That bound assumes a
+# well-conditioned AO basis. It does not hold here: with near-linear
+# dependence the MO coefficients grow large and cancelling, and the AO density
+# elements go with them. The genuinely CONVERGED 6-31+G** solution, control A,
+# measures max|D| = 1.2470e+02, and DirectJK's own first iterate measures
+# 1.4177e+02. A guard set at 2, or at 100, rejects the correct density. The
+# wreckage this guard exists to catch is two to four orders further out
+# (1.7e+04 for the canonical GTFock run, 1.2e+06 for the withdrawn probe), so
+# 1e+03 separates them with a decade of margin on each side.
+PHYS_MAX = 1.2470e+02
+assert np.abs(Dm).max() < 1e3, \
+    f"max|D|={np.abs(Dm).max():.3e} is {np.abs(Dm).max()/PHYS_MAX:.1f}x the " \
+    f"converged value {PHYS_MAX:.4e} -- refusing to measure an engine " \
+    "difference on it (see section 5, and section 7 on why the bar is not 2)"
+
+Cm = psi4.core.Matrix.from_array(C)
+res = {}
+for eng in ("direct", "gtfock"):
+    psi4.set_options({"scf_type": eng})
+    t = time.time()
+    jk = psi4.core.JK.build(basis, aux=None, do_wK=False)
+    jk.set_do_J(True); jk.set_do_K(True)
+    jk.initialize()
+    jk.C_left_add(Cm); jk.compute()
+    J = np.asarray(jk.J()[0]).copy(); K = np.asarray(jk.K()[0]).copy()
+    jk.finalize()
+    eJ = 2*np.einsum("ij,ij->", Dm, J); eK = -np.einsum("ij,ij->", Dm, K)
+    res[eng] = (J, K)
+    print(f"EVAL engine={eng} E_J={eJ:.9f} E_K={eK:.9f} "
+          f"normJ={np.linalg.norm(J):.9e} normK={np.linalg.norm(K):.9e} "
+          f"t={time.time()-t:.1f}s", flush=True)
+
+for name, i in (("J", 0), ("K", 1)):
+    ref, got = res["direct"][i], res["gtfock"][i]
+    d = got - ref
+    eps = -np.einsum("ij,ij->", ref, d) / np.einsum("ij,ij->", ref, ref)
+    resid = np.linalg.norm(d + eps*ref) / np.linalg.norm(d)
+    print(f"DIFF {name}: eps={eps:.6e} resid_frac={resid:.6f} "
+          f"max|d|={np.abs(d).max():.6e} "
+          f"rel={np.linalg.norm(d)/np.linalg.norm(ref):.6e}",
+          flush=True)
+print("EXIT=0", flush=True)
+
+
+--- eval.log, verbatim (PFock setup banner elided) ---
+
+=== evalconv Cocc_sym_df 22:54:18 ===
+C=/tmp/fm-psi4-djk/diag/Cocc_sym_df.npy shape=(1863, 290) max|D|=1.2470e+02 normC2=1.2449e+03 trDS=580.000000
+EVAL engine=direct E_J=16211.302905220 E_K=-485.312142818 normJ=2.321378074e+03 normK=7.277194511e+01 t=2189.7s
+EVAL engine=gtfock E_J=16211.303028997 E_K=-485.312144160 normJ=2.321378083e+03 normK=7.277194504e+01 t=1464.6s
+DIFF J: eps=-4.081045e-09 resid_frac=0.999999 max|d|=6.987946e-04 rel=3.161274e-06
+DIFF K: eps=1.014062e-09 resid_frac=1.000000 max|d|=5.345662e-06 rel=1.460628e-06
+EXIT=0
+=== evalconv Cocc_canon_df_1e-05 23:55:17 ===
+C=/tmp/fm-psi4-djk/diag/Cocc_canon_df_1e-05.npy shape=(1863, 290) max|D|=1.4384e+00 normC2=2.3368e+02 trDS=580.000000
+EVAL engine=direct E_J=16211.280165289 E_K=-485.307516471 normJ=2.321376372e+03 normK=7.277170003e+01 t=2189.8s
+EVAL engine=gtfock E_J=16211.280186372 E_K=-485.307517089 normJ=2.321376373e+03 normK=7.277169981e+01 t=1549.7s
+DIFF J: eps=-6.559437e-10 resid_frac=1.000000 max|d|=6.987941e-04 rel=3.161269e-06
+DIFF K: eps=2.950647e-09 resid_frac=0.999998 max|d|=5.341490e-06 rel=1.437988e-06
+EXIT=0
+=== DONE evalconv 00:57:42 ===
+
+Both engines agree on both densities, and the agreement does not depend on
+which one. J differs by rel = 3.161274e-06 on control A's full-space density
+and 3.161269e-06 on control B's truncated one -- six figures apart across two
+separately optimized solutions -- at resid_frac 0.999999 and 1.000000, which is
+a purely scattered difference and not a uniform deficit. The best-fit uniform
+component is -4.1e-09 and -6.6e-10, three orders below the scatter. K behaves
+the same way, at rel = 1.5e-06 and 1.4e-06. On a converged density that
+genuinely occupies the diffuse subspace, what GTFock does differently is a
+3e-06 relative scatter in J: the same magnitude and the same signature section
+5 measured on its own physical probes, and the same one Psi4's screening
+options produce.
+
+That closes off the reading control B alone left open. Control B showed the
+truncated space does not hold a solution at -3669.87, so GTFock's J/K has to be
+wrong somewhere along the trajectory that took it there; the natural next
+inference is that it is also wrong at the converged point, and the SCF merely
+walks to wherever the error is largest. It is not. Evaluated at control B's
+converged density -- the very point GTFock's own canonical run failed to find
+-- GTFock's J and K are right to 3e-06 relative. The engine difference at the
+answer is not the size of the failure, so the failure is something the
+iteration does with a difference this small, not a difference that is large
+where the SCF is supposed to end up.
+
+One pair of numbers in the block is worth reading twice. The two densities
+differ by a factor of 87 in max|D|, 1.2470e+02 against 1.4384e+00, and their J
+matrices agree to seven figures, normJ = 2.321378074e+03 against
+2.321376372e+03. They are the same physical solution: the 22 removed directions
+carried a large and largely cancelling contribution to the AO density elements,
+and essentially nothing to the two-electron operators built from them. That is
+the concrete form of what the max|D| discussion above argued in the abstract,
+and it is why max|d| for J comes back at 6.987946e-04 on one density and
+6.987941e-04 on the other. The absolute engine difference tracks the physical
+solution, not the conditioning of the representation carrying it.
+
+What this measurement leaves open is the iteration itself. A scattered 3e-06
+difference in J is not large, but it enters a space where symmetric
+orthogonalization amplifies by 9.2e+06, on a first iterate that both engines
+drive deep into the near-null subspace and only one of them recovers from.
+Whether that difference is placed in those directions or merely passes through
+them is a question about where it sits spectrally, and nothing measured so far
+answers it. Section 8 measures exactly that.
+
+
+8. The engine difference in F on the guess density itself
+---------------------------------------------------------
+
+Section 7 ends with a question it cannot answer from energies. Three
+perturbations to the same SAD calculation span eight orders of magnitude and
+their first-iterate damage does not follow: DF, the largest by far, is
+harmless; GTFock, 2800 times smaller, is fatal. Something other than size
+distinguishes them, and every quantity that could distinguish them -- the norm
+of the difference in F, where that difference sits in the overlap spectrum,
+what it does to the orbital gaps -- lives in the matrix, not in a scalar
+contraction of it.
+
+So this section measures the matrix. Both engines build F on the SAME SAD
+density, F is saved, and the comparison is done afterwards in pure linear
+algebra. There is nothing new in the physics; the whole point is that the Fock
+build is the SCF's own, not a reimplementation. guess.py calls initialize(),
+form_G() and form_F() on a wavefunction built by the ordinary factory, so the F
+it saves is the F that produced the diverging first iterates of sections 6 and
+7.
+
+Where the difference sits, and a correction to how it was first measured
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+One matrix comparison can be made before any of that runs, for free. Several of
+the earlier probes left both engines' J and K on disk, and adding the overlap
+matrix for the same basis costs three seconds, so the whole spectral question
+is answerable in numpy with no integral work at all. That is what makes it free
+to rerun -- and free to correct, which it needed.
+
+The correction comes first because it changes what the numbers mean. The first
+version of spec.py loaded the J and K files tagged _631pGss and this file's
+draft described them as the physical arm: the converged 6-31G** density
+projected into 6-31+G**, max|D| = 2.08, the arm where section 5 got its 3.6e-09
+agreement. They are not. physdens.py saved exactly one array,
+Cocc_proj_631pGss.npy, and no J or K at all; the _631pGss matrices were built
+by fockdiff3.py on the CACHED Cocc, which is a first iterate of the failing
+GTFock run with max|D| = 2.4e+06 and 99.87% of its occupied weight inside the
+51 overlap directions below 1e-04. The tell was a factor of 1013 between the
+||dJ|| the draft quoted from physdens and the ||dJ|| spec.py measured. This is
+the same error section 5 already had to withdraw once, which is why the
+standing rule is to never measure an engine difference on a density whose
+max|D| has not been looked at, and why every arm below now prints max|D| and
+its near-null occupied weight before anything else.
+
+The physical arm does exist, by a different route. scaletest.py built both
+engines' J and K on physdens.py's projected density scaled up by 1e+06, and it
+measured both engines exactly linear in D to seven significant figures, so
+dividing those matrices back down by 1e+06 recovers the physical density's J
+and K to every digit. That is checked rather than assumed: the recovered ||dJ||
+comes out at 7.341583e-03, which is physdens.py's number to all seven figures,
+and max|D| comes out at 2.0770, which is the 2.08 the file has been quoting.
+Both densities are profiled below and nothing is compared across them.
+
+Two calibrations are needed, and either one alone gives an answer that reads as
+decisive and is not. The first is enrichment: the fraction of ||M||^2 landing
+in the near-null block, divided by the fraction a matrix with no preference
+would put there. One is indifferent. A random symmetric matrix is carried
+through the whole calculation and must come out at one, or the metric is wrong
+and nothing under it means anything. The second is the statistic that actually
+decides something -- the SCF diagonalizes X F X, not F, so what matters is how
+much of the ORTHOGONALIZED matrix lands in that block -- and it is quoted
+against both the physical G on the same density and a same-norm random matrix.
+
+A noise floor turned out to be on disk as well. fockdiff2.py and fockdiff3.py
+both built on the cached Cocc and the two files are bit-identical, so the
+untagged and _631pGss matrices are two INDEPENDENT builds of each engine on one
+density. Their difference is the same-engine reproducibility floor, and section
+7 is the section that showed how badly a missing noise floor can mislead on
+this system.
+
+The overlap itself has to come from somewhere, so it is reproduced first.
+ovlp.py is the three-second job: build the basis, take the AO overlap, print
+the spectrum's endpoints and save the matrix. It writes S_631pGss.npy rather
+than the gs_S.npy guess.py uses, because guess.py writes gs_S.npy and gs_H.npy
+together behind one exists() check and creating gs_S.npy here would silently
+suppress gs_H.npy later. Its printed spectrum is not reproduced separately;
+spec.py recomputes and reports the same numbers from the saved matrix at the
+top of the block after it.
+
+--- ovlp.py, verbatim ---
+"""Save the 6-31+G** overlap so cached J/K can be analyzed without integrals.
+
+The J and K matrices scaletest.py left behind -- both engines, on the
+converged 6-31G** density physdens.py projected into 6-31+G** -- are the
+only physical density on which both engines' matrices, and not just their
+energies, are on disk. Section 8 wants to know WHERE an engine difference
+sits in the overlap spectrum, and that question can be asked of these
+matrices immediately, for the price of one overlap integral, instead of
+waiting on the queue.
+
+Saved under its own name rather than gs_S.npy on purpose: guess.py writes
+gs_S.npy and gs_H.npy together behind a single exists() check, so creating
+gs_S.npy here would silently suppress gs_H.npy later.
+
+Two threads, because four long jobs are running and this one is seconds of
+work.
+"""
+import os, sys, time, numpy as np
+os.environ.setdefault("PSI_SCRATCH", "/fastscratch/awallace43/psi4tmp")
+import psi4
+sys.path.insert(0, "/home/awallace43/.treehouse/psi4-1ae95c/2/psi4/tests/pytests")
+from gtfock_hpc_benchmark import _SYSTEMS
+D = "/tmp/fm-psi4-djk/diag"
+psi4.set_num_threads(2); psi4.set_memory("8 GB")
+psi4.core.set_output_file(f"{D}/ovlp.out", False)
+mol = psi4.geometry(_SYSTEMS["protein157"])
+psi4.set_options({"basis": "6-31+G**", "puream": False, "scf_type": "direct"})
+t = time.time()
+w = psi4.core.Wavefunction.build(mol, psi4.core.get_global_option("BASIS"))
+S = np.asarray(psi4.core.MintsHelper(w.basisset()).ao_overlap())
+s = np.linalg.eigvalsh(S)
+print(f"OVLP nbf={S.shape[0]} nocc={w.nalpha()} s_min={s.min():.6e} "
+      f"s_max={s.max():.6e} n(s<1e-4)={int((s < 1e-4).sum())} "
+      f"t={time.time()-t:.1f}s", flush=True)
+assert S.shape[0] == 1863, S.shape
+np.save(f"{D}/S_631pGss.npy", S)
+print("EXIT=0", flush=True)
+
+
+--- spec.py, verbatim ---
+"""Where in the overlap spectrum does an engine difference sit?
+
+Section 7 showed that the SIZE of a disagreement between two J/K engines
+predicts nothing: DF disagrees with DirectJK 2800x harder than GTFock does
+and converges anyway. The obvious remaining candidate is placement -- that
+GTFock's difference is concentrated in the near-null directions of S, where
+orthogonalization multiplies it by up to 9.2e+06.
+
+Two densities, and NAMING them correctly is the whole discipline of this
+script, because the first version of it silently ran on the wrong one. The
+J and K matrices on disk under the tag _631pGss were built by fockdiff3.py
+from Cocc_631pGss.npy, and that Cocc is not a physical density at all: it is
+a first iterate of the failing GTFock run, max|D| = 2.4e+06, with 99.87% of
+its occupied weight inside the 51 overlap directions below 1e-04. The
+physical arm has to come from scaletest.py's _scaled matrices, which were
+built on physdens.py's projected density and are divided back down by their
+1e+06 factor here. Both are loaded, both have their max|D| printed, and
+nothing is compared across them.
+
+That the physical arm can be recovered by division is not an assumption:
+section 5 measured both engines exactly linear in D across six orders, so
+J(D/s) = J(D)/s to every digit printed. Placement is scale-invariant anyway;
+only the absolute norms move.
+
+Two calibrations, and each one alone gives an answer that reads as decisive
+and is not.
+
+The enrichment is the fraction of ||M||^2 landing in the near-null block of
+the S eigenbasis, divided by the fraction a matrix with no preference for
+those directions would put there. Enrichment 1 is indifferent, and a random
+symmetric matrix is carried through the whole calculation to check that it
+comes out at 1. If it does not, the metric is wrong and nothing below it
+means anything.
+
+The second number is the one that decides something. The SCF diagonalizes
+X F X, not F, so what matters is not where M has weight but where X M X
+does, and specifically how much of X M X lands in the near-null block. That
+is quoted against two controls: the physical G that DirectJK built on that
+same density, and a random symmetric matrix rescaled to M's own norm. The
+first asks whether the perturbation can compete with the chemistry in those
+directions. The second asks whether its placement is unusual at all -- and
+without it, "dG has 22 units of near-null content" has no scale attached.
+
+No integrals here; rerunning is free.
+"""
+import numpy as np
+D = "/tmp/fm-psi4-djk/diag"
+RAND_NN_PER_NORM = 0.0
+
+S = np.load(f"{D}/S_631pGss.npy")
+s, U = np.linalg.eigh(S)
+n = len(s)
+X = U @ np.diag(s ** -0.5) @ U.T
+
+
+def _amp_canon(M, k):
+    """Amplification under canonical orthogonalization dropping k."""
+    Xc = U[:, k:] * (s[k:] ** -0.5)
+    return np.linalg.norm(Xc.T @ M @ Xc) / np.linalg.norm(M)
+
+
+def profile(M, name, ref=None, thresholds=(1e-3, 1e-4, 1e-5)):
+    """||M||, its S^-1/2 amplification, and its near-null weight.
+
+    Everything is quoted twice: absolutely, and as a ratio to ref, the
+    physical G built by DirectJK on the same density. The ratio is the
+    number that means something. "dG has 5e-08 of its weight in the
+    near-null block" sounds like nothing until the physical matrix it
+    perturbs turns out to have 1e-10 there.
+    """
+    Mt = U.T @ M @ U
+    tot = np.linalg.norm(Mt) ** 2
+    amp = np.linalg.norm(X @ M @ X) / np.linalg.norm(M)
+    r = "" if ref is None else f"  ({amp / ref[0]:.2f}x G)"
+    out = [f"  {name:<22} ||M||={np.linalg.norm(M):.6e} "
+           f"max|M|={np.abs(M).max():.6e}",
+           f"    amp(symmetric)={amp:.4e}{r} "
+           f"||XMX||={amp * np.linalg.norm(M):.6e}"]
+    fr = {}
+    for th in thresholds:
+        k = int((s < th).sum())
+        if k == 0:
+            continue
+        # weight with EITHER index in the near-null block
+        w = (tot - np.linalg.norm(Mt[k:, k:]) ** 2) / tot
+        fr[th] = w
+        even = 1.0 - (1.0 - k / n) ** 2
+        rr = "" if ref is None else f" {w / ref[1][th]:9.4g}x G"
+        out.append(f"    s<{th:.0e}: k={k:4d} frac={w:.4e} "
+                   f"even={even:.4e} enr={w / even:.3e}{rr}")
+    out.append(f"    amp(canonical, drop 22/51/98)="
+               + " ".join(f"{_amp_canon(M, k):.3e}" for k in (22, 51, 98)))
+    # The statistic that decides anything: how much of the ORTHOGONALIZED
+    # matrix lands in the near-null block. A perturbation only has to beat
+    # the physical Fock matrix THERE to own those directions.
+    A = Mt / np.sqrt(np.outer(s, s))
+    for th in (1e-4,):
+        k = int((s < th).sum())
+        nn = np.sqrt(max(np.linalg.norm(A) ** 2
+                         - np.linalg.norm(A[k:, k:]) ** 2, 0.0))
+        rr = "" if ref is None else f" {nn / ref[2]:8.2e}x G"
+        if RAND_NN_PER_NORM and ref is not None:
+            rr += (f" {nn / (RAND_NN_PER_NORM * np.linalg.norm(M)):8.2e}x"
+                   " rand")
+        out.append(f"    ||XMX|| in the s<{th:.0e} block: {nn:.6e}{rr}")
+        near = nn
+    return "\n".join(out), (amp, fr, near)
+
+
+print(f"SPEC nbf={n} s_min={s.min():.6e} "
+      f"k(1e-3,1e-4,1e-5)={[int((s < t).sum()) for t in (1e-3, 1e-4, 1e-5)]}",
+      flush=True)
+
+# The random matrix goes first because everything else is quoted against it.
+# Its enr must come out at 1 in all three windows; that is the check that
+# the metric measures what it claims to.
+rng = np.random.default_rng(0)
+R = rng.standard_normal((n, n))
+R = R + R.T
+txt, rnd = profile(R, "random symmetric")
+print(txt, flush=True)
+RAND_NN_PER_NORM = rnd[2] / np.linalg.norm(R)
+
+# (label, matrix tag, the Cocc, the factor scaletest.py multiplied INTO the
+# matrices). The Cocc on disk is unscaled in both cases; only the _scaled
+# J/K carry the 1e+06, because scaletest.py applied it when it built them.
+SETS = [("physical: 6-31G** density projected into 6-31+G**",
+         "_scaled", "Cocc_proj_631pGss.npy", 1.0e6),
+        ("pathological: a first iterate of the failing GTFock run",
+         "_631pGss", "Cocc_631pGss.npy", 1.0)]
+
+# fockdiff2.py and fockdiff3.py both built on the cached Cocc, and the two
+# files are bit-identical, so the untagged and _631pGss matrices are two
+# INDEPENDENT builds of each engine on one density. Their difference is the
+# same-engine noise floor -- threaded integral accumulation is not bitwise
+# reproducible -- and without it none of the numbers below has an error bar.
+NOISE_TAGS = ("", "_631pGss")
+
+for label, tag, cocc, scale in SETS:
+    C = np.load(f"{D}/{cocc}")
+    Dm = 2.0 * C @ C.T
+    Ct = U.T @ C
+    k = int((s < 1e-4).sum())
+    wD = np.linalg.norm(Ct[:k]) ** 2 / np.linalg.norm(Ct) ** 2
+    print(f"\n=== {label} ===\n"
+          f"  from {cocc} (matrices divided by {scale:g})\n"
+          f"    max|D|={np.abs(Dm).max():.4e} "
+          f"||D||={np.linalg.norm(Dm):.4e}\n"
+          f"    occupied weight in the {k} directions with s<1e-04: "
+          f"{wD:.6f}", flush=True)
+    Jd = np.load(f"{D}/J_direct{tag}.npy") / scale
+    Jg = np.load(f"{D}/J_gtfock{tag}.npy") / scale
+    Kd = np.load(f"{D}/K_direct{tag}.npy") / scale
+    Kg = np.load(f"{D}/K_gtfock{tag}.npy") / scale
+    Gd, Gg = 2 * Jd - Kd, 2 * Jg - Kg
+    txt, ctl = profile(Gd, "G_direct (control)")
+    print(txt, flush=True)
+    for M, nm in ((Jd, "J_direct (reference)"), (Kd, "K_direct (reference)"),
+                  (Gg - Gd, "dG = gtfock-direct"), (Jg - Jd, "dJ"),
+                  (Kg - Kd, "dK")):
+        print(profile(M, nm, ref=ctl)[0], flush=True)
+    if tag == NOISE_TAGS[1] and np.array_equal(
+            np.load(f"{D}/Cocc.npy"), np.load(f"{D}/{cocc}")):
+        for e in ("direct", "gtfock"):
+            a, b = (np.load(f"{D}/J_{e}{t}.npy") for t in NOISE_TAGS)
+            ka, kb = (np.load(f"{D}/K_{e}{t}.npy") for t in NOISE_TAGS)
+            dG = 2 * (a - b) - (ka - kb)
+            print(profile(dG, f"noise: {e} vs {e}", ref=ctl)[0], flush=True)
+print("\nEXIT=0", flush=True)
+
+
+--- spec.out, verbatim ---
+SPEC nbf=1863 s_min=1.089528e-07 k(1e-3,1e-4,1e-5)=[98, 51, 22]
+  random symmetric       ||M||=2.634508e+03 max|M|=7.595611e+00
+    amp(symmetric)=2.3325e+04 ||XMX||=6.144878e+07
+    s<1e-03: k=  98 frac=1.0265e-01 even=1.0244e-01 enr=1.002e+00
+    s<1e-04: k=  51 frac=5.4366e-02 even=5.4001e-02 enr=1.007e+00
+    s<1e-05: k=  22 frac=2.3442e-02 even=2.3478e-02 enr=9.984e-01
+    amp(canonical, drop 22/51/98)=7.086e+02 1.243e+02 3.306e+01
+    ||XMX|| in the s<1e-04 block: 6.144790e+07
+
+=== physical: 6-31G** density projected into 6-31+G** ===
+  from Cocc_proj_631pGss.npy (matrices divided by 1e+06)
+    max|D|=2.0770e+00 ||D||=2.4338e+01
+    occupied weight in the 51 directions with s<1e-04: 0.000037
+  G_direct (control)     ||M||=4.581885e+03 max|M|=6.996805e+01
+    amp(symmetric)=4.8371e-01 ||XMX||=2.216292e+03
+    s<1e-03: k=  98 frac=4.1846e-09 even=1.0244e-01 enr=4.085e-08
+    s<1e-04: k=  51 frac=1.3918e-10 even=5.4001e-02 enr=2.577e-09
+    s<1e-05: k=  22 frac=6.2785e-12 even=2.3478e-02 enr=2.674e-10
+    amp(canonical, drop 22/51/98)=4.816e-01 4.791e-01 4.743e-01
+    ||XMX|| in the s<1e-04 block: 3.038069e+02
+  J_direct (reference)   ||M||=2.322091e+03 max|M|=3.742684e+01
+    amp(symmetric)=4.8110e-01  (0.99x G) ||XMX||=1.117157e+03
+    s<1e-03: k=  98 frac=4.1650e-09 even=1.0244e-01 enr=4.066e-08    0.9953x G
+    s<1e-04: k=  51 frac=1.3883e-10 even=5.4001e-02 enr=2.571e-09    0.9975x G
+    s<1e-05: k=  22 frac=6.2770e-12 even=2.3478e-02 enr=2.674e-10    0.9998x G
+    amp(canonical, drop 22/51/98)=4.791e-01 4.766e-01 4.719e-01
+    ||XMX|| in the s<1e-04 block: 1.519817e+02 5.00e-01x G 2.81e-06x rand
+  K_direct (reference)   ||M||=7.291058e+01 max|M|=4.893526e+00
+    amp(symmetric)=5.3254e-01  (1.10x G) ||XMX||=3.882778e+01
+    s<1e-03: k=  98 frac=8.4574e-08 even=1.0244e-01 enr=8.256e-07     20.21x G
+    s<1e-04: k=  51 frac=3.1046e-09 even=5.4001e-02 enr=5.749e-08     22.31x G
+    s<1e-05: k=  22 frac=1.4191e-10 even=2.3478e-02 enr=6.044e-09      22.6x G
+    amp(canonical, drop 22/51/98)=5.325e-01 5.324e-01 5.322e-01
+    ||XMX|| in the s<1e-04 block: 8.947078e-01 2.94e-03x G 5.26e-07x rand
+  dG = gtfock-direct     ||M||=1.465512e-02 max|M|=1.397944e-03
+    amp(symmetric)=1.5041e+03  (3109.50x G) ||XMX||=2.204262e+01
+    s<1e-03: k=  98 frac=1.5653e-01 even=1.0244e-01 enr=1.528e+00 3.741e+07x G
+    s<1e-04: k=  51 frac=5.1530e-02 even=5.4001e-02 enr=9.542e-01 3.703e+08x G
+    s<1e-05: k=  22 frac=1.0070e-02 even=2.3478e-02 enr=4.289e-01 1.604e+09x G
+    amp(canonical, drop 22/51/98)=8.588e+02 2.325e+02 6.087e+01
+    ||XMX|| in the s<1e-04 block: 2.177771e+01 7.17e-02x G 6.37e-02x rand
+  dJ                     ||M||=7.341583e-03 max|M|=6.990697e-04
+    amp(symmetric)=1.5012e+03  (3103.62x G) ||XMX||=1.102149e+01
+    s<1e-03: k=  98 frac=1.5647e-01 even=1.0244e-01 enr=1.527e+00 3.739e+07x G
+    s<1e-04: k=  51 frac=5.1568e-02 even=5.4001e-02 enr=9.550e-01 3.705e+08x G
+    s<1e-05: k=  22 frac=1.0099e-02 even=2.3478e-02 enr=4.302e-01 1.609e+09x G
+    amp(canonical, drop 22/51/98)=8.571e+02 2.320e+02 6.076e+01
+    ||XMX|| in the s<1e-04 block: 1.088904e+01 3.58e-02x G 6.36e-02x rand
+  dK                     ||M||=1.039973e-04 max|M|=5.323188e-06
+    amp(symmetric)=1.6481e+02  (340.73x G) ||XMX||=1.713999e-02
+    s<1e-03: k=  98 frac=1.5949e-01 even=1.0244e-01 enr=1.557e+00 3.811e+07x G
+    s<1e-04: k=  51 frac=6.6401e-02 even=5.4001e-02 enr=1.230e+00 4.771e+08x G
+    s<1e-05: k=  22 frac=2.2062e-02 even=2.3478e-02 enr=9.397e-01 3.514e+09x G
+    amp(canonical, drop 22/51/98)=3.683e+01 1.827e+01 7.214e+00
+    ||XMX|| in the s<1e-04 block: 1.703430e-02 5.61e-05x G 7.02e-03x rand
+
+=== pathological: a first iterate of the failing GTFock run ===
+  from Cocc_631pGss.npy (matrices divided by 1)
+    max|D|=2.3847e+06 ||D||=9.6701e+06
+    occupied weight in the 51 directions with s<1e-04: 0.998748
+  G_direct (control)     ||M||=4.651675e+03 max|M|=7.415407e+01
+    amp(symmetric)=4.8239e-01 ||XMX||=2.243910e+03
+    s<1e-03: k=  98 frac=4.3967e-09 even=1.0244e-01 enr=4.292e-08
+    s<1e-04: k=  51 frac=1.4408e-10 even=5.4001e-02 enr=2.668e-09
+    s<1e-05: k=  22 frac=6.5426e-12 even=2.3478e-02 enr=2.787e-10
+    amp(canonical, drop 22/51/98)=4.804e-01 4.779e-01 4.731e-01
+    ||XMX|| in the s<1e-04 block: 3.064469e+02
+  J_direct (reference)   ||M||=2.356374e+03 max|M|=3.953528e+01
+    amp(symmetric)=4.7994e-01  (0.99x G) ||XMX||=1.130925e+03
+    s<1e-03: k=  98 frac=4.3898e-09 even=1.0244e-01 enr=4.285e-08    0.9984x G
+    s<1e-04: k=  51 frac=1.4411e-10 even=5.4001e-02 enr=2.669e-09         1x G
+    s<1e-05: k=  22 frac=6.5596e-12 even=2.3478e-02 enr=2.794e-10     1.003x G
+    amp(canonical, drop 22/51/98)=4.779e-01 4.755e-01 4.708e-01
+    ||XMX|| in the s<1e-04 block: 1.533967e+02 5.01e-01x G 2.79e-06x rand
+  K_direct (reference)   ||M||=7.190750e+01 max|M|=4.916480e+00
+    amp(symmetric)=5.4043e-01  (1.12x G) ||XMX||=3.886130e+01
+    s<1e-03: k=  98 frac=8.8620e-08 even=1.0244e-01 enr=8.651e-07     20.16x G
+    s<1e-04: k=  51 frac=3.2479e-09 even=5.4001e-02 enr=6.015e-08     22.54x G
+    s<1e-05: k=  22 frac=1.4947e-10 even=2.3478e-02 enr=6.366e-09     22.85x G
+    amp(canonical, drop 22/51/98)=5.404e-01 5.403e-01 5.400e-01
+    ||XMX|| in the s<1e-04 block: 9.774616e-01 3.19e-03x G 5.83e-07x rand
+  dG = gtfock-direct     ||M||=1.488131e+01 max|M|=3.199400e-01
+    amp(symmetric)=1.6055e+00  (3.33x G) ||XMX||=2.389229e+01
+    s<1e-03: k=  98 frac=1.7143e-07 even=1.0244e-01 enr=1.673e-06     38.99x G
+    s<1e-04: k=  51 frac=5.3435e-08 even=5.4001e-02 enr=9.895e-07     370.9x G
+    s<1e-05: k=  22 frac=1.0367e-08 even=2.3478e-02 enr=4.415e-07      1585x G
+    amp(canonical, drop 22/51/98)=9.943e-01 5.234e-01 4.657e-01
+    ||XMX|| in the s<1e-04 block: 2.258715e+01 7.37e-02x G 6.51e-05x rand
+  dJ                     ||M||=7.440673e+00 max|M|=1.599700e-01
+    amp(symmetric)=1.6073e+00  (3.33x G) ||XMX||=1.195912e+01
+    s<1e-03: k=  98 frac=1.7213e-07 even=1.0244e-01 enr=1.680e-06     39.15x G
+    s<1e-04: k=  51 frac=5.3729e-08 even=5.4001e-02 enr=9.950e-07     372.9x G
+    s<1e-05: k=  22 frac=1.0446e-08 even=2.3478e-02 enr=4.449e-07      1597x G
+    amp(canonical, drop 22/51/98)=9.952e-01 5.235e-01 4.657e-01
+    ||XMX|| in the s<1e-04 block: 1.130694e+01 3.69e-02x G 6.52e-05x rand
+  dK                     ||M||=6.106648e-04 max|M|=6.603088e-05
+    amp(symmetric)=1.3923e+02  (288.63x G) ||XMX||=8.502329e-02
+    s<1e-03: k=  98 frac=1.0827e-02 even=1.0244e-01 enr=1.057e-01 2.462e+06x G
+    s<1e-04: k=  51 frac=3.4434e-03 even=5.4001e-02 enr=6.377e-02  2.39e+07x G
+    s<1e-05: k=  22 frac=8.9307e-04 even=2.3478e-02 enr=3.804e-02 1.365e+08x G
+    amp(canonical, drop 22/51/98)=6.094e+01 2.589e+01 1.834e+01
+    ||XMX|| in the s<1e-04 block: 8.354064e-02 2.73e-04x G 5.87e-03x rand
+  noise: direct vs direct ||M||=9.497891e-08 max|M|=1.150578e-08
+    amp(symmetric)=3.4292e+05  (710878.19x G) ||XMX||=3.257005e-02
+    s<1e-03: k=  98 frac=3.2355e-01 even=1.0244e-01 enr=3.158e+00 7.359e+07x G
+    s<1e-04: k=  51 frac=2.1485e-01 even=5.4001e-02 enr=3.979e+00 1.491e+09x G
+    s<1e-05: k=  22 frac=1.6382e-01 even=2.3478e-02 enr=6.978e+00 2.504e+10x G
+    amp(canonical, drop 22/51/98)=1.960e+03 3.764e+02 7.805e+01
+    ||XMX|| in the s<1e-04 block: 3.257003e-02 1.06e-04x G 1.47e+01x rand
+  noise: gtfock vs gtfock ||M||=8.760448e-08 max|M|=5.238689e-09
+    amp(symmetric)=5.8114e+05  (1204721.87x G) ||XMX||=5.091071e-02
+    s<1e-03: k=  98 frac=2.9187e-01 even=1.0244e-01 enr=2.849e+00 6.638e+07x G
+    s<1e-04: k=  51 frac=1.8315e-01 even=5.4001e-02 enr=3.392e+00 1.271e+09x G
+    s<1e-05: k=  22 frac=1.2023e-01 even=2.3478e-02 enr=5.121e+00 1.838e+10x G
+    amp(canonical, drop 22/51/98)=2.349e+03 4.121e+02 7.110e+01
+    ||XMX|| in the s<1e-04 block: 5.091070e-02 1.66e-04x G 2.49e+01x rand
+
+EXIT=0
+
+
+On the physical density the placement hypothesis, in the form this file has
+been carrying it, is dead. GTFock's difference from DirectJK is spectrally
+INDIFFERENT: enrichment 0.954 at 1e-04, 0.955 for dJ, 1.23 for dK, against an
+indifferent baseline of 1.0 that the random control reproduces at 1.007. Its
+orthogonalized near-null content is 6.4e-02 times what a same-norm random
+matrix would put there. GTFock does not preferentially perturb the near-null
+directions of S. It perturbs them slightly less than chance.
+
+The ratios to G invert that meaning if they are quoted alone, and they very
+nearly were. dG on the pathological density reads "370.9x G" at 1e-04, which
+sounds like concentration; its absolute enrichment is 9.895e-07, meaning it has
+a million times LESS near-null content than indifference. The ratio is large
+only because the control is extraordinarily depleted -- the physical G sits at
+enrichment 2.7e-09, almost exactly orthogonal to those directions -- so
+anything at all looks enriched beside it. Reporting the conspicuous number as
+the operative one is precisely the move this file keeps having to undo.
+
+What survives is weaker and quantitative. Because G is so depleted there, even
+an indifferent perturbation arrives in those directions hugely over-represented
+relative to the chemistry: on the physical density ||dG||/||G|| is 3.20e-06
+overall, but inside the s<1e-04 block the orthogonalized ratio is 7.17e-02. The
+near-singular overlap converts a 3-ppm engine difference into a 7% perturbation
+of the directions the SCF is least able to defend, a relative amplification of
+2.24e+04. That is the strongest form of the conditioning hypothesis the data
+actually supports.
+
+The noise floor then damages even that. Two runs of DirectJK on one density
+differ by ||dG|| = 9.50e-08, which is 1.6e+08 times smaller than the engine
+difference -- but that noise is enriched 3.98 in the near-null block, is 14.7
+times a same-norm random matrix there, and is amplified 3.4e+05 by symmetric
+orthogonalization against G's 0.48. By every PLACEMENT measure, DirectJK's own
+run-to-run irreproducibility is far worse than GTFock's engine difference, and
+DirectJK converges this system in 12 iterations. A quantity that ranks the
+passing engine's noise above the failing engine's difference is not the
+discriminator.
+
+So placement joins magnitude in the list of things that do not separate the two
+engines. What is left standing is absolute near-null content, where the
+ordering is finally the right way round. The engine difference puts 2.178e+01
+into that block on the physical density and 2.259e+01 on the pathological one
+-- within 4% of each other, which is itself worth noticing, given that the two
+densities differ by six orders of magnitude -- against a noise floor of
+3.257e-02. That floor is measured on the pathological density only, because
+that is the density on which two independent builds of each engine happen to
+exist; since the numerator barely moves between the two, the ratio is about
+6.7e+02 whichever way it is taken. That is a real quantity, well clear of
+noise, and it is the one the DF control has to rule on.
+
+The canonical ladder is consistent with the dose-response experiment and makes
+a prediction. Dropping the 22 directions below 1e-05 cuts dG's amplification
+from 1.50e+03 to 8.59e+02, barely half; dropping 51 takes it to 2.33e+02, and
+98 to 6.09e+01. Section 7's S_TOL = 1e-05 arm removed 22 directions and GTFock
+still failed, which a 43% reduction is at least consistent with -- it does not
+predict failure, it merely fails to rule it out. The 1e-04 arm now running
+removes 51 and cuts the amplification by 85%, which is a much harder thing to
+survive. If GTFock fails there too, orthogonalization amplification is not the
+mechanism and this line of attack is finished.
+
+That condition fired. The 1e-04 arm reported at 02:17 and GTFock failed there
+too -- converged=False, E = -3643.533829, 0.781078 Eh below the reference,
+after 25 iterations oscillating in the fifth decimal. The sentence above
+therefore stands as written: amplification measured as a NORM reduction is not
+the mechanism. Cutting dG's amplification by 85% does not save the SCF, and a
+statistic that scores a rung 85% better while that rung still fails is not
+measuring the thing that decides.
+
+What replaced it was already on disk when the arm reported, and it is a
+discrete count rather than a norm: guess_ladder.py, written at 01:40 and so 37
+minutes ahead of the verdict, shows ONE occupied orbital still changing
+identity at 51 directions dropped. One is enough -- that is the entire content
+of a discrete mechanism, and it is why an 85% reduction in a norm buys nothing.
+This is not a blind prediction and should not be dressed as one: by 01:40 the
+1e-04 arm was already visibly oscillating near -3643.54 in its own iteration
+table, so the ladder was read with that outcome in view. The rung that is
+genuinely blind is S_TOL = 1e-03, where the count is zero and no SCF has
+reported.
+
+One cross-check worth recording, because it arrived from an unrelated
+experiment and is stronger than anything it was collected for. The relative
+engine difference measured here on the projected density is ||dJ||/||J|| =
+3.161626e-06. Section 7's evalconv.py, on two converged densities reached by a
+different route through a different code path, reports 3.161274e-06 and
+3.161269e-06. Three physical densities whose max|D| spans 1.4384e+00 to
+1.2470e+02 give the same relative engine difference to four figures, and
+wherever the decomposition was computed the residual comes back purely
+scattered with a uniform component three orders below it. That constancy is a
+lead rather than a result, but it is the shape a FIXED perturbation of the
+two-electron integrals would produce -- something like the hardcoded 1e-14
+primitive-pair screening this file's opening sections identified -- and not the
+shape of anything that depends on the density it is contracted with. It is not,
+at any rate, a mechanism that switches on when the SCF starts to fail: it is
+the same 3 ppm at the converged density itself, which is the point the SCF is
+supposed to arrive at and where, by construction, nothing has gone wrong yet.
+
+The control this subsection still lacks is DF. Section 7 built its whole
+argument on DF disagreeing with DirectJK 2800 times harder than GTFock does
+while converging comfortably, and the same falsification has to be run here: if
+DF's difference is also spectrally indifferent, its absolute near-null content
+is necessarily far larger than GTFock's, and the last surviving statistic dies
+the way the others did. specall.py is queued to answer that, and it widens the
+question while it is there. Both arms above rest on matrices other scripts
+built for other purposes, so both densities are historical accidents;
+specall.py builds all three engines' J and K on the converged full-space
+density -- the representative one, the density the SCF is actually trying to
+reach -- and adds DF on the projected density, so the falsification and the
+representative measurement land together.
+
+The smoke check comes first, because a script that calls initialize() and
+form_G() by hand can very easily be building something that is not the SCF's
+Fock matrix, and there is a printed row to test it against. The SAD density is
+formed before any of this, so it must be bit-identical across arms, and the
+energy at that density must land on the SCF's own "@RHF iter SAD" line to every
+digit the line carries.
+
+GUESS engine=direct tag=direct nbf=1863 nocc=465 max|D_sad|=1.0295e+00 trDS=580.000000 t=19.5s
+FOCK engine=direct tag=direct E_sad=-3637.289577939 normF=1.962902990e+02 max|F|=2.099545e+01 t=1066.8s
+GUESS engine=gtfock tag=gtfock nbf=1863 nocc=465 max|D_sad|=1.0295e+00 trDS=580.000000 t=13.6s
+FOCK engine=gtfock tag=gtfock E_sad=-3637.289576759 normF=1.962902988e+02 max|F|=2.099545e+01 t=112.0s
+GUESS engine=df tag=df nbf=1863 nocc=465 max|D_sad|=1.0295e+00 trDS=580.000000 t=1725.9s
+FOCK engine=df tag=df E_sad=-3637.286310363 normF=1.962910674e+02 max|F|=2.099545e+01 t=570.0s
+
+iter1.out SCF 1 of 2, direct   @RHF iter SAD: -3637.28957793879999   -3.63729e+03   0.00000e+00
+iter1.out SCF 2 of 2, gtfock   @RHF iter SAD: -3637.28957675860329   -3.63729e+03   0.00000e+00
+
+It does. max|D_sad| = 1.0295e+00 and trDS = 580.000000 = 2 x 290 are identical
+across arms, and the direct arm's E_sad = -3637.289577939 sits on iter1.out's
+first SAD row, -3637.28957793879999, to all nine digits guess.py prints. So the
+object being differenced below is the SCF's.
+
+The two SAD rows also say something on their own, before any script runs. Both
+arms start from the identical density, and the SCF's own printed energies at
+that density differ by 1.180e-06 Eh -- 3.2e-10 relative -- which is the engine
+difference contracted into a scalar, with the cancellation that implies. One
+iteration later the same two runs are 59 Eh apart. Whatever the mechanism turns
+out to be, that is the amplification to be explained, and it is visible in two
+lines of ordinary Psi4 output with no analysis at all.
+
+The design point that took a section to learn is the noise floor. A number like
+||F_gtfock - F_direct|| means nothing on its own, because two runs of ONE
+engine do not agree either -- threaded integral accumulation is not bitwise
+reproducible, section 7 measured this system turning an 18-ulp perturbation
+into 3.08e-03 Eh one iteration later, and the subsection above found that
+same-engine noise outranking the engine difference on every placement measure
+there is. So every engine runs twice, at 20 and at 24 threads, and every
+engine-to-engine number is quoted against the same-engine number in the same
+norm. Without that column the engine difference has no error bar and cannot
+honestly be called a difference at all.
+
+The DF arm is the falsifiability control. Section 7 showed DF disagreeing with
+DirectJK far more than GTFock does, in energy, while converging comfortably. If
+the matrix-level story is to explain anything it has to reproduce that: DF's
+difference from DirectJK must look structurally UNLIKE GTFock's, in whatever
+quantity is claimed to be the discriminator. A quantity that ranks DF as the
+worst offender has been fitted to the wrong thing, and the run that would
+expose it is in the queue rather than left as an argument.
+
+--- guess.py, verbatim ---
+"""Measure the engine difference in F on the SAD guess density itself.
+
+Section 6 named exactly this as the gap: closing the mechanism "would
+need the perturbation measured on the guess density itself and the
+eigenvalue gaps of the guess Fock matrix, neither of which is in this
+file". Section 7 made it worth doing. Canonical orthogonalization caps
+the S^-1/2 amplification at 3.2e+02 instead of 9.2e+06, and GTFock's
+first iterate is STILL 25.1 Eh below the two DF arms, which land on
+-3640.473 either way. So the mechanism is not amplification alone.
+
+The point of entry is that both engines start from the SAME SAD density
+and the SCF's iteration 1 is one Fock build plus one diagonalization
+away from it. Nothing here is reimplemented: the script calls the
+wavefunction's own initialize() / form_G() / form_F(), which is the code
+path that produced the diverging numbers, and saves F, D, X, H, S. All
+the linear algebra -- ||dF||, the orbital gaps, the subspace rotation --
+happens in guess_analyze.py, which needs no integrals and so can be
+rerun and corrected for free.
+
+Self-check built in: section 5 measured the two engines agreeing on the
+SAD density to ~1e-06 Eh, so E printed here must agree between the two
+runs to that order and must land near the -3637.2896 that both exact-K
+SCF runs print for their SAD row. If it does not, the setup is wrong and
+nothing downstream is worth reading.
+
+One engine per process (GS_ENGINE=direct|gtfock): GTFock caches its
+engine in global state, so two engines cannot share an interpreter.
+
+Do not read the nocc= field as an electron count. It prints wfn.nalpha()
+straight after initialize(), and the SAD guess has by then overwritten
+nalphapi_ with its own atomic-orbital occupation count, so it reads 465
+where the molecule has 290 doubly occupied orbitals. The check that the
+density is the right one is trDS, which prints 580.000000 = 2 x 290 in
+every arm, together with E_sad landing on the SCF's own SAD row.
+"""
+import os, sys, time, numpy as np
+os.environ.setdefault("PSI_SCRATCH", "/fastscratch/awallace43/psi4tmp")
+import psi4
+REPO = "/home/awallace43/.treehouse/psi4-1ae95c/2/psi4"
+sys.path.insert(0, f"{REPO}/tests/pytests")
+from gtfock_hpc_benchmark import _SYSTEMS
+from psi4.driver.procrouting import proc
+
+D_ = "/tmp/fm-psi4-djk/diag"
+ENG = os.environ.get("GS_ENGINE", "direct")
+# A second run of the SAME engine is not redundant: it measures the
+# run-to-run noise floor, without which ||F_gtfock - F_direct|| has no
+# error bar and cannot be called an engine difference at all. Threaded
+# integral codes are not bitwise reproducible, and this system is known
+# to turn roundoff into milli-Hartrees -- two GTFock runs of one
+# identical maxiter=1 calculation agree on E[D_sad] to 1.5e-11 Eh and
+# then report E[D_1] 3.08e-03 Eh apart.
+TAG = os.environ.get("GS_TAG", ENG)
+NT = int(os.environ.get("GS_THREADS", "20"))
+
+psi4.set_num_threads(NT); psi4.set_memory("40 GB")
+psi4.core.set_output_file(f"{D_}/guess_{TAG}.out", False)
+mol = psi4.geometry(_SYSTEMS["protein157"])
+# sad_scf_type is pinned even though "DF" is already its default
+# (read_options.cc:1829) and it does not follow scf_type. Pinning it states
+# the property every arm depends on -- that the SAD density is built the same
+# way whatever engine is under test -- instead of leaving it to a default
+# that a future Psi4 could change. guess_analyze.py asserts the densities are
+# identical to 1e-10 regardless, so a regression here is caught rather than
+# absorbed.
+psi4.set_options({"basis": "6-31+G**", "puream": False,
+                  "scf_type": ENG, "ints_tolerance": 1e-12,
+                  "guess": "sad", "sad_scf_type": "df",
+                  "df_scf_guess": False})
+
+t = time.time()
+base = psi4.core.Wavefunction.build(mol, "6-31+G**")
+wfn = proc.scf_wavefunction_factory("HF", base, "RHF")
+wfn.initialize()          # form_H, form_Shalf, guess -- the SCF's own path
+D0 = np.asarray(wfn.Da()).copy()
+S = np.asarray(psi4.core.MintsHelper(wfn.basisset()).ao_overlap())
+print(f"GUESS engine={ENG} tag={TAG} nbf={D0.shape[0]} nocc={wfn.nalpha()} "
+      f"max|D_sad|={np.abs(D0).max():.4e} "
+      f"trDS={2*np.einsum('ij,ij->',D0,S):.6f} t={time.time()-t:.1f}s",
+      flush=True)
+
+t = time.time()
+wfn.form_G()              # the engine under test, on the SAD density
+wfn.form_F()
+E = wfn.compute_E()
+F = np.asarray(wfn.Fa()).copy()
+print(f"FOCK engine={ENG} tag={TAG} E_sad={E:.9f} "
+      f"normF={np.linalg.norm(F):.9e} max|F|={np.abs(F).max():.6e} "
+      f"t={time.time()-t:.1f}s", flush=True)
+
+np.save(f"{D_}/gs_F_{TAG}.npy", F)
+np.save(f"{D_}/gs_D_{TAG}.npy", D0)
+# X is NOT saved. The first version of this script called wfn.X() for it and
+# died there with AttributeError after the 1067 s direct Fock build had
+# already been paid for -- psi4.core.Wavefunction binds H() and S() but no
+# orthogonalizer. Nothing is lost: X is a function of S alone, so
+# guess_analyze.py forms whichever orthogonalizer it wants from gs_S.npy,
+# which also lets it use the symmetric and the canonical one on the same
+# saved F without rebuilding integrals. Both engines see the same S.
+if not os.path.exists(f"{D_}/gs_S.npy"):
+    np.save(f"{D_}/gs_S.npy", S)
+    np.save(f"{D_}/gs_H.npy", np.asarray(wfn.H()))
+print("EXIT=0", flush=True)
+
+
+--- guess_analyze.py, verbatim ---
+"""How a 1e-06 engine difference becomes a 59 Eh first iterate.
+
+Reads what guess.py saved and does no integral work, so it is free to
+rerun and free to correct. Everything here is a statement about the SAME
+SAD density: guess.py checks that, and this script refuses to continue
+if the densities the engines started from are not identical, because
+every number below is meaningless if they are not.
+
+Three questions, in order.
+
+1. How big is the engine difference in F? Reported as ||dF||_F, as a
+   fraction of ||F||, and split into the best-fit uniform part eps and
+   the scattered residual, the same decomposition sections 5 and 7 use
+   for J and K.
+
+2. How big is it where the eigenvalue problem actually lives? The SCF
+   does not diagonalize F, it diagonalizes X^T F X. For symmetric
+   orthogonalization X = S^-1/2, so in the overlap eigenbasis every
+   element is divided by sqrt(s_k s_l), and with s_min = 1.09e-07 that
+   is a factor of up to 9.2e+06 applied ELEMENTWISE and unevenly. A
+   perturbation can be negligible in F and enormous in X^T F X. That
+   ratio, ||dF'|| / ||dF||, is the amplification this basis actually
+   applies to this engine, as opposed to the worst case it could apply
+   to something.
+
+3. Does the difference live in the near-null directions? The weight
+   fraction below is the share of ||dF||^2 with at least one index among
+   the 22 overlap eigenvectors under 1e-05. This is where DF earns its
+   place: DF's difference from DirectJK is a thousand times LARGER than
+   GTFock's and DF converges here anyway, so size alone cannot be the
+   discriminator, and if location is, the two engines have to differ in
+   this number and not merely in that one.
+
+Then the first-order orbital response sum_ia |dF'_ai|^2/(e_i-e_a)^2,
+which is the quantity that actually turns a Fock perturbation into a
+different density, evaluated on DirectJK's own guess orbital energies.
+
+Last, and added after restart.py showed that everything is decided in
+iteration one, the diagonalization itself: for each engine the occupied
+space X^T F X actually selects, how much of it lives in the near-null
+directions, and the principal angles between one engine's occupied
+subspace and another's. That is the step where a 1e-06 difference in a
+matrix either does or does not become a different set of 290 orbitals,
+and it costs no integrals.
+"""
+import glob, os, sys, numpy as np
+
+D_ = "/tmp/fm-psi4-djk/diag"
+NULL_TOL = 1e-5
+
+
+tags = sorted(os.path.basename(q)[5:-4]
+              for q in glob.glob(f"{D_}/gs_F_*.npy"))
+F = {t: np.load(f"{D_}/gs_F_{t}.npy") for t in tags}
+have = list(F)
+if "direct" not in have:
+    sys.exit("no reference Fock matrix yet: run guess.py GS_ENGINE=direct")
+print(f"arms present: {' '.join(have)}")
+
+# The whole comparison is conditional on one thing: same input density.
+Dref = np.load(f"{D_}/gs_D_direct.npy")
+for t in have:
+    d = np.abs(np.load(f"{D_}/gs_D_{t}.npy") - Dref).max()
+    print(f"  D_sad[{t}] vs D_sad[direct]: max|diff|={d:.3e}")
+    assert d < 1e-10, (
+        f"{t} started from a different SAD density (max|diff|={d:.3e}); "
+        "every number below compares two engines on one density and none "
+        "of them mean anything if that is not true")
+
+S = np.load(f"{D_}/gs_S.npy")
+s, U = np.linalg.eigh(S)
+null = s < NULL_TOL
+print(f"nbf={len(s)} s_min={s.min():.6e} s<{NULL_TOL:g}: {null.sum()}  "
+      f"symmetric amplification 1/s_min={1/s.min():.2e}")
+
+# Orbital energies and the occupied/virtual split of the REFERENCE guess
+# Fock matrix, in the symmetrically orthogonalized basis.
+Xs = U @ np.diag(s**-0.5) @ U.T
+e, V = np.linalg.eigh(Xs.T @ F["direct"] @ Xs)
+nocc = 290
+gap = e[nocc] - e[nocc - 1]
+print(f"reference guess Fock: e_homo={e[nocc-1]:.6f} e_lumo={e[nocc]:.6f} "
+      f"gap={gap:.6e}  min|e_i-e_a| over all ia pairs="
+      f"{np.abs(e[nocc:][None, :] - e[:nocc][:, None]).min():.6e}")
+
+
+def compare(a, b, label):
+    """Everything this file wants to know about F[a] - F[b]."""
+    dF = F[a] - F[b]
+    nrm = np.linalg.norm(dF)
+    if nrm == 0.0:
+        print(f"\n=== {label} ===\n  identical")
+        return nrm
+    base = F[b]
+    eps = -np.einsum("ij,ij->", base, dF) / np.einsum("ij,ij->", base, base)
+    resid = np.linalg.norm(dF + eps * base) / nrm
+    print(f"\n=== {label} ===")
+    print(f"  dF        : ||dF||={nrm:.6e} max|dF|={np.abs(dF).max():.6e} "
+          f"rel={nrm/np.linalg.norm(base):.6e}")
+    print(f"  shape     : eps={eps:.6e} resid_frac={resid:.6f}")
+
+    # the same perturbation where the eigenproblem actually lives
+    dFp = Xs.T @ dF @ Xs
+    print(f"  dF'=X^T dF X: ||dF'||={np.linalg.norm(dFp):.6e} "
+          f"amplification={np.linalg.norm(dFp)/nrm:.4e}")
+
+    # where it sits in the overlap spectrum
+    dt = U.T @ dF @ U
+    tot = np.einsum("ij,ij->", dt, dt)
+    mask = null[:, None] | null[None, :]
+    frac = (dt[mask] ** 2).sum() / tot
+    even = 1.0 - (1.0 - null.sum() / len(s)) ** 2
+    print(f"  weight in the {null.sum()} directions with s<{NULL_TOL:g}: "
+          f"{frac:.6e}  (evenly spread would give {even:.6e}, "
+          f"enrichment {frac/even:.3e})")
+
+    # first-order orbital response on the reference guess orbitals
+    g = V.T @ dFp @ V
+    de = e[:nocc][:, None] - e[nocc:][None, :]
+    print(f"  first-order response ||dC||="
+          f"{np.sqrt(((g[:nocc, nocc:] / de) ** 2).sum()):.6e}")
+    return nrm
+
+
+# The noise floor first: without it, an engine difference is just a number.
+floor = {}
+for eng in ("direct", "gtfock", "df"):
+    if F.get(eng) is not None and F.get(eng + "_t24") is not None:
+        floor[eng] = compare(
+            eng + "_t24", eng,
+            f"{eng} at 24 threads - at 20  (ROUNDOFF FLOOR, one engine)")
+
+for t in ("gtfock", "df"):
+    if F.get(t) is None:
+        continue
+    n = compare(t, "direct", f"{t} - direct, on the SAD density")
+    for eng, fl in floor.items():
+        if fl > 0:
+            print(f"  vs {eng} noise floor: {n/fl:.3e}x")
+
+
+# ---------------------------------------------------------------------------
+# What the SCF does with these matrices, from the saved matrices alone.
+#
+# restart.py settled that the failure is decided in iteration one and that no
+# healthy engine recovers from where GTFock lands, so the only step left to
+# examine is the single diagonalization between the guess Fock matrix and the
+# first density. That step needs no integrals: X^T F X for the F already on
+# disk gives the same orbitals the SCF picked.
+#
+# The measure of near-null content used here is S-weighted. An orbital c with
+# c^T S c = 1, written in the overlap eigenbasis as y = U^T c, distributes its
+# unit norm as s_k y_k^2, so the near-null share of the NORM is well defined
+# and needs no convention. The raw coefficient share sum y_k^2 is reported
+# beside it because that is the quantity max|D| responds to, and the two can
+# differ by the 1e+07 that separates s_min from s_max. They do: on the
+# reference guess Fock the coefficient share is 0.81 and the norm share is
+# 2.1e-06. Sections 6 and 7 quote the coefficient measure, which therefore
+# reads 0.8 for a first iterate that is perfectly healthy and recovers -- it
+# was never as discriminating as it looked, and the norm measure is the one
+# that distinguishes "large cancelling coefficients along near-null
+# directions" from "those directions are actually occupied".
+#
+# This diagonalization is plain: no DIIS, no ADIIS, no damping. The SCF's own
+# iteration one applies whatever accelerator it has, so the orbitals here need
+# not be bit-identical to the ones a maxiter=1 run returns, and are not.
+# iter1.py's DirectJK arm reports max|D| = 1.4177e+02 where this reports
+# 1.2037e+02, an 18% gap on a quantity that is a sum of large cancelling
+# terms and so is not stable to that level anyway. Which of the accelerator
+# and the cancellation accounts for it is not measured here. The shares and
+# the principal angles below are ratios over the whole occupied space and do
+# not have that sensitivity.
+def profile(tag):
+    e, V = np.linalg.eigh(Xs.T @ F[tag] @ Xs)
+    Call = Xs @ V                              # all 1863 AO orbitals
+    C = Call[:, :nocc]                         # the occupied ones
+    yall = U.T @ Call
+    swall = s[:, None] * yall ** 2
+    per_all = swall[null].sum(0) / swall.sum(0)   # near-null norm share, each
+    y, sw = yall[:, :nocc], swall[:, :nocc]
+    near_norm = sw[null].sum() / sw.sum()
+    near_coef = (y[null] ** 2).sum() / (y ** 2).sum()
+    Dm = C @ C.T                               # C C^T, canon.py's convention
+    print(f"\n=== first diagonalization, {tag} ===")
+    print(f"  lowest 5 eigenvalues of X^T F X: "
+          + " ".join(f"{v:.4e}" for v in e[:5]))
+    print(f"  e_homo={e[nocc-1]:.6e} e_lumo={e[nocc]:.6e} "
+          f"gap={e[nocc]-e[nocc-1]:.6e}")
+    print(f"  occupied space: near-null share of the norm={near_norm:.6e}  "
+          f"of the coefficients={near_coef:.6e}")
+    print(f"  D=C C^T: max|D|={np.abs(Dm).max():.4e} "
+          f"trDS={2*np.einsum('ij,ij->', Dm, S):.6f}")
+
+    # Where the near-null directions END UP in the spectrum. Aufbau fills the
+    # lowest 290 eigenvectors whatever they are made of, so if the 22
+    # amplified directions produce eigenvalues below e_lumo they are occupied
+    # outright, and that is a discrete switch rather than a proportional
+    # response -- which is the only kind of mechanism that turns a 1e-06
+    # difference in F into tens of Eh in one step. The margin printed last is
+    # how far the lowest such eigenvalue sits ABOVE the HOMO; negative means
+    # at least one is already inside the occupied set.
+    # How much near-null content the occupied space actually took. Across a
+    # COMPLETE S-orthonormal set, C C^T = S^{-1} exactly, so each S-eigenvector
+    # contributes exactly 1.0 of weighted norm summed over all 1863 orbitals:
+    # the 22 near-null directions hold 22 units in total, and even spreading
+    # would put 22*290/1863 = 3.42 of them in the occupied 290. That is the
+    # baseline the occupied figure below should be read against -- a share of
+    # 2e-06 is not "small", it is depleted by three-and-a-half orders relative
+    # to indifference, which is what a well-behaved guess should look like.
+    got = sw[null].sum()
+    print(f"  near-null units in the occupied space: {got:.4e} of 22 "
+          f"(even spreading would give {22*nocc/len(s):.2f}, "
+          f"so {22*nocc/len(s)/got:.2e}x depleted)")
+    # Which overlap eigenvalue is actually implicated. An S-orthonormal
+    # orbital satisfies sum_k s_k y_k^2 = 1, so if it were a PURE S-eigenvector
+    # its AO norm would be exactly 1/s_k. Turning that round, s_eff =
+    # 1/||c||^2 is the overlap eigenvalue an orbital of this AO norm would
+    # have if it were pure -- a single number naming where in the spectrum the
+    # orbital is living, comparable straight across engines and against the
+    # canonical S_TOL ladder. A healthy valence orbital has s_eff of order 1.
+    seff = 1.0 / (y ** 2).sum(0)
+    order = np.argsort(seff)
+    print(f"  occupied orbitals with s_eff < 1e-03: "
+          f"{int((seff < 1e-3).sum())} of {nocc};  < 1e-04: "
+          f"{int((seff < 1e-4).sum())};  < 1e-05: {int((seff < 1e-5).sum())}")
+    print("  five smallest s_eff among the occupied:")
+    for j in order[:5]:
+        print(f"    orbital {j:4d}  eigenvalue={e[j]:+.6e}  "
+              f"s_eff={seff[j]:.4e}  near-null norm share={per_all[j]:.4e}")
+    dom = np.flatnonzero(per_all > 0.5)
+    print(f"  eigenvectors more than half near-null by norm: {len(dom)} "
+          f"({int((dom < nocc).sum())} of them among the occupied 290)")
+    if len(dom):
+        print(f"    their eigenvalues span {e[dom].min():.6e} to "
+              f"{e[dom].max():.6e}; lowest sits at rank {int(dom.min())}")
+        print(f"    margin (lowest near-null eigenvalue - e_homo) = "
+              f"{e[dom].min() - e[nocc-1]:+.6e}")
+    return C, e
+
+
+occ = {t: profile(t) for t in ("direct", "gtfock", "df") if F.get(t) is not None}
+
+# Do the two engines actually pick a different occupied space? Principal
+# angles answer it directly: both C are S-orthonormal, so the singular values
+# of C_a^T S C_b are the cosines. Anything below 1 is a rotation the engine
+# difference caused, and a cosine near 0 is an orbital swapped outright.
+if "direct" in occ:
+    Ca = occ["direct"][0]
+    for t, (Cb, _) in occ.items():
+        if t == "direct":
+            continue
+        cos = np.clip(np.linalg.svd(Ca.T @ S @ Cb, compute_uv=False), -1, 1)
+        ang = np.degrees(np.arccos(cos))
+        print(f"\n=== occupied subspace, {t} vs direct ===")
+        print(f"  principal angles: max={ang.max():.4f} deg  "
+              f"median={np.median(ang):.4e} deg")
+        for thr in (1.0, 10.0, 45.0):
+            print(f"  orbitals rotated by more than {thr:>4.0f} deg: "
+                  f"{int((ang > thr).sum())} of {nocc}")
+print("\nEXIT=0")
+
+
+A prediction, registered before the gtfock arm returned
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The direct arm finished first and its analysis ran alone, so the reference side
+of the comparison is already on the page while the other side is still
+building. That is an opportunity to say in advance what the pending number has
+to look like, and this file has enough withdrawn conclusions in it to make
+writing the prediction down first worth the paragraph.
+
+Two facts from the direct arm set it up. First, the guess Fock is
+well-conditioned where conditioning matters: e_homo = -4.683970e-01, e_lumo =
+-2.439952e-01, a gap of 2.244018e-01 Eh, which is also the smallest
+occupied-virtual denominator in the whole matrix. First-order perturbation
+theory through a gap that size cannot rotate an orbital appreciably for a 1e-06
+perturbation, so a SMOOTH response is ruled out as the mechanism by the
+reference side alone. Second, across a complete S-orthonormal set C C^T =
+S^{-1} exactly, so each overlap eigenvector carries exactly 1.0 of weighted
+norm summed over all 1863 orbitals; the 22 directions below 1e-05 hold 22
+units, and indifference would leave 22 x 290/1863 = 3.42 of them in the
+occupied 290. DirectJK's first diagonalization puts 6.07e-04 there. Its
+occupied space is not merely clean of the near-null block, it is depleted in it
+by three and a half orders relative to chance, and not one of the 1863
+eigenvectors is even half near-null.
+
+So the prediction is a discrete one, because a discrete mechanism is the only
+kind left. Aufbau fills the lowest 290 eigenvectors of X^T F X whatever they
+are made of. Symmetric orthogonalization divides by sqrt(s), so a direction
+with s = 1e-07 is scaled by 3.0e+03 and its eigenvalue can land anywhere; if
+GTFock's difference moves one such eigenvalue below e_lumo, that direction is
+occupied outright, and nothing about the size of the perturbation constrains
+what happens next. That is a switch, not a response, and a switch is the only
+thing that turns 1.180e-06 Eh into 59 Eh in one iteration. The measurement to
+watch is therefore not the norm of dF at all but three integers and a margin:
+how many eigenvectors come back more than half near-null, how many of those
+fall inside the lowest 290, and how far the lowest of them sits above the HOMO.
+DirectJK's answers are 0, 0, and not applicable.
+
+There is a quantitative edge to it as well, and it is the part most likely to
+be wrong. If one direction of overlap eigenvalue s* becomes occupied, its AO
+coefficients scale as 1/sqrt(s*) and its contribution to D as 1/s*, so max|D|
+should rise from the healthy 1.4177e+02 by roughly that factor. iter1.py
+measured GTFock's first iterate at max|D| = 1.1866e+06, a ratio of 8.4e+03,
+which read literally puts s* near 1.2e-04. That is a crude estimate -- max|D|
+is a maximum over elements, not a norm, and the prefactor is a product of AO
+coefficients that need not be typical -- but the number it lands on is not a
+neutral one. 1.2e-04 is at the boundary section 7's canonical ladder straddles:
+dropping everything below 1e-05 removes 22 directions, leaves anything at 1e-04
+in place, and GTFock still failed; dropping below 1e-04 removes 51, would
+remove such a direction, and that arm is the one oscillating within 0.79 Eh of
+the reference instead of tens of Eh away. If the pending arm reports its lowest
+near-null-dominated occupied eigenvector sitting at s of order 1e-04, three
+independent things agree. If it reports 0 of them, as DirectJK does, then the
+first diagonalization is not where the damage is, this prediction is simply
+wrong, and the search moves to the accelerator and the energy expression.
+
+The measurement
+~~~~~~~~~~~~~~~
+
+arms present: df direct gtfock
+  D_sad[df] vs D_sad[direct]: max|diff|=3.580e-15
+  D_sad[direct] vs D_sad[direct]: max|diff|=0.000e+00
+  D_sad[gtfock] vs D_sad[direct]: max|diff|=2.970e-15
+nbf=1863 s_min=1.089528e-07 s<1e-05: 22  symmetric amplification 1/s_min=9.18e+06
+reference guess Fock: e_homo=-0.468397 e_lumo=-0.243995 gap=2.244018e-01  min|e_i-e_a| over all ia pairs=2.244018e-01
+
+=== gtfock - direct, on the SAD density ===
+  dF        : ||dF||=1.461676e-02 max|dF|=1.395217e-03 rel=7.446502e-05
+  shape     : eps=3.823689e-09 resid_frac=1.000000
+  dF'=X^T dF X: ||dF'||=2.200647e+01 amplification=1.5056e+03
+  weight in the 22 directions with s<1e-05: 1.006693e-02  (evenly spread would give 2.347837e-02, enrichment 4.288e-01)
+  first-order response ||dC||=1.860960e-01
+
+=== df - direct, on the SAD density ===
+  dF        : ||dF||=7.286145e-03 max|dF|=5.307886e-04 rel=3.711923e-05
+  shape     : eps=-3.914193e-06 resid_frac=0.994425
+  dF'=X^T dF X: ||dF'||=2.350190e-02 amplification=3.2256e+00
+  weight in the 22 directions with s<1e-05: 2.138492e-08  (evenly spread would give 2.347837e-02, enrichment 9.108e-07)
+  first-order response ||dC||=4.171381e-04
+
+=== first diagonalization, direct ===
+  lowest 5 eigenvalues of X^T F X: -2.1002e+01 -2.0976e+01 -2.0976e+01 -2.0974e+01 -2.0974e+01
+  e_homo=-4.683970e-01 e_lumo=-2.439952e-01 gap=2.244018e-01
+  occupied space: near-null share of the norm=2.094085e-06  of the coefficients=8.126888e-01
+  D=C C^T: max|D|=1.2037e+02 trDS=580.000000
+  near-null units in the occupied space: 6.0728e-04 of 22 (even spreading would give 3.42, so 5.64e+03x depleted)
+  occupied orbitals with s_eff < 1e-03: 0 of 290;  < 1e-04: 0;  < 1e-05: 0
+  five smallest s_eff among the occupied:
+    orbital  275  eigenvalue=-5.135449e-01  s_eff=1.6450e-02  near-null norm share=1.6471e-05
+    orbital  276  eigenvalue=-5.044758e-01  s_eff=3.2543e-02  near-null norm share=1.0044e-05
+    orbital  210  eigenvalue=-7.123532e-01  s_eff=4.9385e-02  near-null norm share=1.4006e-05
+    orbital  264  eigenvalue=-5.609793e-01  s_eff=5.2689e-02  near-null norm share=9.7868e-06
+    orbital  170  eigenvalue=-8.419292e-01  s_eff=5.5906e-02  near-null norm share=4.8730e-06
+  eigenvectors more than half near-null by norm: 0 (0 of them among the occupied 290)
+
+=== first diagonalization, gtfock ===
+  lowest 5 eigenvalues of X^T F X: -2.1002e+01 -2.0976e+01 -2.0976e+01 -2.0974e+01 -2.0974e+01
+  e_homo=-5.135196e-01 e_lumo=-5.045072e-01 gap=9.012465e-03
+  occupied space: near-null share of the norm=1.415612e-02  of the coefficients=9.725827e-01
+  D=C C^T: max|D|=1.1976e+06 trDS=580.000000
+  near-null units in the occupied space: 4.1053e+00 of 22 (even spreading would give 3.42, so 8.34e-01x depleted)
+  occupied orbitals with s_eff < 1e-03: 107 of 290;  < 1e-04: 41;  < 1e-05: 14
+  five smallest s_eff among the occupied:
+    orbital   82  eigenvalue=-2.851011e+00  s_eff=6.7657e-07  near-null norm share=3.5305e-01
+    orbital   77  eigenvalue=-7.830824e+00  s_eff=7.3618e-07  near-null norm share=4.3278e-01
+    orbital   99  eigenvalue=-1.649680e+00  s_eff=8.9357e-07  near-null norm share=1.6597e-01
+    orbital  125  eigenvalue=-1.336273e+00  s_eff=1.3975e-06  near-null norm share=2.2642e-01
+    orbital   78  eigenvalue=-6.790402e+00  s_eff=1.6268e-06  near-null norm share=4.8162e-01
+  eigenvectors more than half near-null by norm: 0 (0 of them among the occupied 290)
+
+=== first diagonalization, df ===
+  lowest 5 eigenvalues of X^T F X: -2.1002e+01 -2.0976e+01 -2.0976e+01 -2.0974e+01 -2.0974e+01
+  e_homo=-4.683589e-01 e_lumo=-2.439528e-01 gap=2.244061e-01
+  occupied space: near-null share of the norm=2.094025e-06  of the coefficients=8.126646e-01
+  D=C C^T: max|D|=1.2035e+02 trDS=580.000000
+  near-null units in the occupied space: 6.0727e-04 of 22 (even spreading would give 3.42, so 5.64e+03x depleted)
+  occupied orbitals with s_eff < 1e-03: 0 of 290;  < 1e-04: 0;  < 1e-05: 0
+  five smallest s_eff among the occupied:
+    orbital  275  eigenvalue=-5.135177e-01  s_eff=1.6463e-02  near-null norm share=1.6463e-05
+    orbital  276  eigenvalue=-5.044510e-01  s_eff=3.2532e-02  near-null norm share=1.0038e-05
+    orbital  210  eigenvalue=-7.123322e-01  s_eff=4.9436e-02  near-null norm share=1.4002e-05
+    orbital  264  eigenvalue=-5.609551e-01  s_eff=5.2634e-02  near-null norm share=9.7896e-06
+    orbital  170  eigenvalue=-8.419103e-01  s_eff=5.5954e-02  near-null norm share=4.8697e-06
+  eigenvectors more than half near-null by norm: 0 (0 of them among the occupied 290)
+
+=== occupied subspace, gtfock vs direct ===
+  principal angles: max=89.9979 deg  median=2.6961e-02 deg
+  orbitals rotated by more than    1 deg: 22 of 290
+  orbitals rotated by more than   10 deg: 14 of 290
+  orbitals rotated by more than   45 deg: 14 of 290
+
+=== occupied subspace, df vs direct ===
+  principal angles: max=0.0033 deg  median=9.0555e-04 deg
+  orbitals rotated by more than    1 deg: 0 of 290
+  orbitals rotated by more than   10 deg: 0 of 290
+  orbitals rotated by more than   45 deg: 0 of 290
+
+Read the perturbation first, because it is unremarkable. GTFock's guess Fock
+differs from DirectJK's by ||dF|| = 1.461676e-02, which is 7.446502e-05
+relative -- larger than the 3.16e-06 that section 7 measured for J alone, as it
+must be, since this is F and includes K. Its shape is the same shape every
+physical density in this file has produced: resid_frac = 1.000000, with a
+best-fit uniform component of 3.823689e-09 three orders below the scatter. And
+its placement is not merely unremarkable but the wrong way round for the story
+anyone would want to tell: of the orthogonalized weight, a fraction
+1.006693e-02 lands in the 22 directions below 1e-05, where even spreading would
+put 2.347837e-02. Enrichment 0.4288. GTFock's difference is DEPLETED in the
+near-singular block, by more than a factor of two.
+
+Now read what the two Fock matrices do when they are diagonalized, which is the
+whole of the difference between an SCF that converges and one that does not.
+DirectJK's occupied space is clean: no orbital anywhere near the near-singular
+block, the smallest s_eff among all 290 being 1.6450e-02, e_homo = -0.4684,
+e_lumo = -0.2440, a gap of 0.2244 Eh. GTFock's occupied space contains 107
+orbitals with s_eff below 1e-03, 41 below 1e-04 and 14 below 1e-05, the deepest
+at 6.7657e-07 -- within a factor of six of s_min itself. Its gap has collapsed
+from 0.2244 to 9.012465e-03 Eh, a factor of 25, and the frontier has moved:
+DirectJK's LUMO sits at -0.2440 while GTFock's HOMO and LUMO are both near
+-0.51, which is to say that states DirectJK leaves empty above -0.24 have been
+pushed below -0.50 and filled.
+
+The principal angles say the same thing in the sharpest possible form. The
+median rotation between the two occupied subspaces is 2.6961e-02 degrees -- 276
+of the 290 orbitals are, to three decimal places, the same orbitals. The other
+14 are rotated by more than 45 degrees, the largest principal angle being
+89.9979 degrees, which is a state in one subspace essentially orthogonal to the
+whole of the other. Fourteen is also exactly the number of occupied orbitals
+with s_eff below 1e-05. Nothing was bent; fourteen states were REPLACED, and
+they were replaced by states living in the near-singular part of the overlap.
+
+That is the mechanism, and it is discrete. Aufbau fills the lowest 290
+eigenvectors of X^T F X whatever they are made of, symmetric orthogonalization
+scales the s = 1.09e-07 direction by 1/sqrt(s) = 3.0e+03 and its diagonal
+contribution by 9.2e+06, and a 7e-05 relative perturbation passed through that
+is more than enough to move such a state past a competitor. It does not have to
+be aimed at the near-null block to do it -- as measured above, GTFock's is
+aimed away from it -- it only has to be large enough somewhere that the
+amplifier reaches. The spurious states do not arrive marginally, either: their
+eigenvalues are -7.83, -6.79, -2.85, -1.65, -1.34 Eh, deep in the core region
+rather than jostling at the Fermi level, and fourteen doubly-occupied states at
+that depth is the right order for the 57 Eh by which section 6's first iterate
+undershoots. This also retires the last of the smooth-response hypotheses: with
+a 0.2244 Eh gap on the reference side, first-order theory cannot move an
+orbital appreciably for a 7e-05 perturbation, and indeed 276 orbitals barely
+move. The damage is entirely in the fourteen that changed identity.
+
+The DF control: the same size of difference, the opposite outcome
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Everything above rests on a claim this file has twice had to retract in other
+forms -- that WHERE the difference sits matters more than how big it is -- and
+until now the evidence for it was indirect. Magnitude was ruled out because J
+is linear in D. Enrichment was ruled out because DirectJK's own threading noise
+is enriched 3.98 and converges fine. What was missing was a second engine with
+a difference of COMPARABLE SIZE and a different placement, run through the
+identical diagonalization. Density fitting supplies exactly that, and
+guess.py's df arm was queued to get it.
+
+The commitment was written into the runner before the arm started, so it is
+reproduced here rather than described. Its header states both readings, and the
+second of them would have taken this section apart.
+
+--- run_gsdf.sh, verbatim ---
+#!/bin/bash
+# The DF arm of guess.py, pulled forward for the same reason the gtfock arm
+# was: it decides something and it is short.
+#
+# Section 8 has the mechanism -- 14 occupied orbitals below s_eff 1e-05 in
+# GTFock's first diagonalization against none in DirectJK's, 14 of 290
+# rotated past 45 degrees -- and the sharpest test it can be put to is DF.
+# DF's difference from DirectJK is ~3e-03 Eh here, a thousand times GTFock's,
+# and DF converges this system in 12 iterations. If a difference a thousand
+# times larger switches ZERO orbitals, then size is confirmed irrelevant and
+# the discrete crossing is the whole story. If DF switches orbitals too, the
+# story is wrong and section 8 has to come apart.
+set -eo pipefail
+cd /tmp/fm-psi4-djk/diag
+source /tmp/fm-psi4-djk/env.sh
+cd /tmp/fm-psi4-djk/diag
+echo "=== guess df $(date -Is) ==="
+GS_ENGINE=df GS_THREADS=8 timeout 14400 python guess.py 2>&1 | tee guess_df.log
+echo "ALLDONE-GSDF $(date -Is)"
+
+
+It is the sharpest control available because DF is by far the cruder
+approximation. Its SAD energy is -3637.286310363 against DirectJK's
+-3637.289577939, an error of 3.27e-03 Eh, where GTFock's is 1.18e-06 Eh -- DF
+is wrong by 2769 times as much on the number the SCF actually reports. And DF
+converges this system in 12 iterations. If size were the operative quantity the
+ordering would be the other way round.
+
+In the Fock matrix the two differences are not far apart at all. ||dF|| is
+7.286145e-03 for DF against 1.461676e-02 for GTFock, a relative 3.711923e-05
+against 7.446502e-05: DF's difference is HALF of GTFock's, not a thousandth.
+The 2769x was an energy figure, and the energy is a contraction of dF with D
+that happens to cancel for GTFock and not for DF. On the matrix the SCF
+diagonalizes they are the same size to within a factor of two, which is what
+makes what follows a controlled comparison rather than a comparison of a large
+thing with a small one.
+
+They differ in one place, by five orders of magnitude. Of dF's squared norm,
+the weight landing in the 22 directions with s < 1e-05 is 1.006693e-02 for
+GTFock and 2.138492e-08 for DF -- a ratio of 4.7e+05. Against even spreading
+those read as enrichment 4.288e-01 and 9.108e-07: GTFock's difference is
+spectrally INDIFFERENT, sitting a little below chance, while DF's is very
+nearly orthogonal to the near-singular subspace. The consequence is the
+amplification. ||X^T dF X|| is 2.200647e+01 for GTFock and 2.350190e-02 for DF,
+so symmetric orthogonalization magnifies GTFock's difference 1.5056e+03 times
+and DF's 3.2256e+00 times. The first-order orbital response follows: ||dC|| =
+1.860960e-01 against 4.171381e-04, a factor of 446.
+
+And the diagonalization is decided by that and nothing else. DF's first
+diagonalization is DirectJK's, to five figures: gap 2.244061e-01 against
+2.244018e-01, max|D| 1.2035e+02 against 1.2037e+02, smallest occupied s_eff
+1.6463e-02 against 1.6450e-02, and 0 of 290 occupied orbitals below s_eff
+1e-03, 1e-04 or 1e-05 -- the same 0/0/0 DirectJK gives and not the 107/41/14
+GTFock gives. The principal angles are the whole result in one line: DF against
+DirectJK has a MAXIMUM angle of 0.0033 degrees and not one orbital rotated past
+1 degree, where GTFock against DirectJK has 14 rotated past 45 degrees and a
+maximum of 89.9979. All three arms built their F on a bit-identical SAD
+density; D_sad[df] differs from D_sad[direct] by max|diff| = 3.580e-15.
+
+That is the pre-registered test run_gsdf.sh was written to make, and it came
+out on the side the mechanism predicted: a difference of the same size, placed
+differently, switches ZERO orbitals. Absolute near-null content, or
+equivalently ||X^T dF X||, is the discriminator. Magnitude is not, enrichment
+against even spreading is not, and this file spent two withdrawn conclusions
+learning that the hard way.
+
+Why DF should be safe here is a hypothesis and not a measurement, and it is
+worth writing down only because it is testable. DF's error lives in the span of
+the fitting basis, which is built to cover the chemically occupied space, so it
+is smooth and low-rank in the directions the SCF actually uses and has almost
+no projection onto the near-singular tail. GTFock's difference is a
+per-primitive-pair screening truncation at a hardcoded 1e-14, which has no such
+structure: it drops whatever falls under the threshold, and the diffuse
+primitive products that build the near-singular directions of S are precisely
+the small ones. That would explain an indifferent rather than an enriched
+placement -- screening does not target the near-null block, it simply fails to
+protect it -- but nothing here measures it, and the standing suspect remains a
+suspect.
+
+The same ladder section 7 climbed, in seconds
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Section 7 walked a canonical-orthogonalization ladder as full SCF runs, hours
+per rung, and section 8 has just found the failure to be a discrete occupation
+switch in the first diagonalization. Those are the same axis, and once the
+guess Fock matrices are on disk the ladder can be walked in numpy, because
+canonical orthogonalization changes only X. guess_ladder.py rediagonalizes both
+engines' saved matrices under X_c at each rung and asks what the rung does to
+the switch. It is not a substitute for the SCF runs -- one diagonalization
+cannot say whether an iteration recovers -- but a rung that still has the
+spurious states never had a chance.
+
+--- guess_ladder.py, verbatim ---
+"""Walk section 7's canonical ladder on section 8's saved guess Fock matrices.
+
+Section 8 found the failure to be a discrete occupation switch in the first
+diagonalization: under symmetric orthogonalization GTFock's guess Fock puts
+14 occupied orbitals below s_eff 1e-05 where DirectJK puts none, and 14 of
+the 290 occupied orbitals are rotated past 45 degrees. Section 7 meanwhile
+walked a canonical-orthogonalization ladder AS FULL SCF RUNS, at a cost of
+hours per rung, and found S_TOL = 1e-05 failing while 1e-04 came within 0.79
+Eh of the reference.
+
+Those are the same axis, and the connection can be measured in seconds rather
+than hours, because canonical orthogonalization changes only X. The Fock
+matrices both engines built on the identical SAD density are already on disk;
+rediagonalizing them under X_c(S_TOL) asks exactly what the ladder does to the
+switch, with no SCF and no integrals. It is not a substitute for the SCF runs
+-- one diagonalization cannot say whether an iteration recovers -- but if the
+spurious states are still there at a given rung, that rung had no chance.
+
+Reports per rung and engine: how many occupied orbitals sit below each s_eff
+decade, the HOMO-LUMO gap, max|D|, and the principal angles between the two
+engines' occupied subspaces AT THAT RUNG. The last is the headline: it counts
+orbitals that changed identity, which is what the mechanism is.
+"""
+import numpy as np
+
+D = "/tmp/fm-psi4-djk/diag"
+S = np.load(f"{D}/gs_S.npy")
+F = {t: np.load(f"{D}/gs_F_{t}.npy") for t in ("direct", "gtfock")}
+nbf, nocc = S.shape[0], 290
+s, U = np.linalg.eigh(S)
+print(f"nbf={nbf} nocc={nocc} s_min={s.min():.6e}")
+
+def solve(Fm, X):
+    e, V = np.linalg.eigh(X.T @ Fm @ X)
+    return e, X @ V[:, :nocc]
+
+for tol in (0.0, 1e-5, 1e-4, 1e-3, 1e-2):
+    keep = s > tol
+    ndrop = int((~keep).sum())
+    if tol == 0.0:                       # symmetric, the SCF's default
+        X = U @ np.diag(s ** -0.5) @ U.T
+        lbl = "symmetric (nothing dropped)"
+    else:
+        X = U[:, keep] * s[keep] ** -0.5
+        lbl = f"canonical S_TOL={tol:.0e}, {ndrop} dropped"
+    print(f"\n=== {lbl} ===")
+    C = {}
+    for t in ("direct", "gtfock"):
+        e, C[t] = solve(F[t], X)
+        seff = 1.0 / (C[t] ** 2).sum(0)
+        Dm = C[t] @ C[t].T
+        print(f"  {t:7s} gap={e[nocc]-e[nocc-1]:.6e} "
+              f"max|D|={np.abs(Dm).max():.4e} "
+              f"s_eff<1e-3:{int((seff<1e-3).sum()):4d} "
+              f"<1e-4:{int((seff<1e-4).sum()):4d} "
+              f"<1e-5:{int((seff<1e-5).sum()):4d} "
+              f"min={seff.min():.3e}")
+    # Both C are S-orthonormal, so the singular values of C_a^T S C_b are the
+    # cosines of the principal angles between the occupied subspaces.
+    sv = np.linalg.svd(C["gtfock"].T @ S @ C["direct"], compute_uv=False)
+    ang = np.degrees(np.arccos(np.clip(sv, -1.0, 1.0)))
+    print(f"  angles: max={ang.max():.4f} deg median={np.median(ang):.4e} deg"
+          f"  >1deg:{int((ang>1).sum())}  >10deg:{int((ang>10).sum())}"
+          f"  >45deg:{int((ang>45).sum())} of {nocc}")
+
+
+nbf=1863 nocc=290 s_min=1.089528e-07
+
+=== symmetric (nothing dropped) ===
+  direct  gap=2.244018e-01 max|D|=1.2037e+02 s_eff<1e-3:   0 <1e-4:   0 <1e-5:   0 min=1.645e-02
+  gtfock  gap=9.012465e-03 max|D|=1.1976e+06 s_eff<1e-3: 107 <1e-4:  41 <1e-5:  14 min=6.766e-07
+  angles: max=89.9979 deg median=2.6961e-02 deg  >1deg:22  >10deg:14  >45deg:14 of 290
+
+=== canonical S_TOL=1e-05, 22 dropped ===
+  direct  gap=2.244300e-01 max|D|=1.1413e+00 s_eff<1e-3:   0 <1e-4:   0 <1e-5:   0 min=6.382e-01
+  gtfock  gap=1.125256e-03 max|D|=1.7307e+04 s_eff<1e-3:  14 <1e-4:   8 <1e-5:   0 min=2.486e-05
+  angles: max=89.9928 deg median=1.7242e-02 deg  >1deg:11  >10deg:9  >45deg:9 of 290
+
+=== canonical S_TOL=1e-04, 51 dropped ===
+  direct  gap=2.244410e-01 max|D|=1.0416e+00 s_eff<1e-3:   0 <1e-4:   0 <1e-5:   0 min=1.006e+00
+  gtfock  gap=5.407775e-03 max|D|=3.0473e+02 s_eff<1e-3:   1 <1e-4:   0 <1e-5:   0 min=5.244e-04
+  angles: max=89.9988 deg median=1.1851e-02 deg  >1deg:2  >10deg:1  >45deg:1 of 290
+
+=== canonical S_TOL=1e-03, 98 dropped ===
+  direct  gap=2.244542e-01 max|D|=1.0413e+00 s_eff<1e-3:   0 <1e-4:   0 <1e-5:   0 min=1.008e+00
+  gtfock  gap=2.244494e-01 max|D|=1.0413e+00 s_eff<1e-3:   0 <1e-4:   0 <1e-5:   0 min=1.008e+00
+  angles: max=0.1839 deg median=7.6187e-03 deg  >1deg:0  >10deg:0  >45deg:0 of 290
+
+=== canonical S_TOL=1e-02, 237 dropped ===
+  direct  gap=2.245894e-01 max|D|=1.0359e+00 s_eff<1e-3:   0 <1e-4:   0 <1e-5:   0 min=1.009e+00
+  gtfock  gap=2.245882e-01 max|D|=1.0359e+00 s_eff<1e-3:   0 <1e-4:   0 <1e-5:   0 min=1.009e+00
+  angles: max=0.0712 deg median=4.0175e-03 deg  >1deg:0  >10deg:0  >45deg:0 of 290
+
+The count of occupied orbitals that changed identity goes 14, 9, 1, 0, 0 as the
+ladder drops 0, 22, 51, 98 and 237 directions. It is monotone, it reaches zero,
+and at the three rungs section 7 has actually run as SCFs the two agree:
+symmetric orthogonalization keeps 14 switched orbitals and the SCF runs its
+100-iteration limit 57 Eh low; S_TOL = 1e-05 keeps 9 and the SCF fails at
+-3669.871214; S_TOL = 1e-04 keeps 1 and the SCF finishes at -3643.533829,
+0.781078 Eh from the reference instead of tens of Eh from it. A one-line linear
+algebra calculation reproduces the ordering of three multi-hour SCF runs, and
+it does so through a quantity -- how many orbitals were REPLACED -- that was
+not available when the ladder was designed.
+
+S_TOL = 1e-03 is therefore the interesting rung: the first at which the switch
+is gone entirely, both engines' occupied spaces agreeing to a maximum principal
+angle of 0.1839 degrees and GTFock's gap back to 2.244494e-01 against
+DirectJK's 2.244542e-01. If the mechanism is what this section says it is, that
+rung should CONVERGE, and the restriction this whole investigation started from
+would have a remedy rather than only a diagnosis. It is queued as an SCF rather
+than claimed here, for exactly the reason stated above.
+
+Two things in that output are worth stopping on. The first is that the DirectJK
+column is flat -- gap 0.2244 at every rung to four figures, no occupied orbital
+below s_eff 1e-03 anywhere, nothing to remove because nothing was ever there.
+The ladder is not making both engines better; it is taking away the room
+GTFock's difference needs, and DirectJK does not notice it has gone. The second
+is that the gap does NOT order the rungs. GTFock's runs 9.012465e-03, then
+1.125256e-03, then 5.407775e-03, then 0.2244: it gets WORSE from the symmetric
+rung to 1e-05, on a ladder where everything else improves monotonically. The
+gap is a difference of two eigenvalues in a spectrum being rebuilt underneath
+it, and it is not the statistic to order anything by. The orbital-identity
+count is.
+
+Two checks that the ladder rests on, both cheap and both worth having on the
+page. First, the analysis above uses X = S^{-1/2} over all 1863 directions, and
+that is only the SCF's own orthogonalizer if the SCF did not quietly drop any.
+It did not: iter1.out reports "Minimum eigenvalue in the overlap matrix is
+1.0895284887E-07", then "Using symmetric orthogonalization", and the string
+"eliminated" appears nowhere in the file. Second, and less comfortably, that
+eigenvalue is 8.95% above the S_TOLERANCE default of 1e-07. Psi4 switches to
+canonical orthogonalization by itself below that threshold, so this system
+misses its own protection by a hair. The near-miss is not a result and nothing
+here depends on it, but anyone reading a log of this calculation should know
+that the line saying symmetric orthogonalization was used is a coin landing on
+its edge.
+
+And the retired yardstick comes back explained, which is the tidiest result in
+this file. The superseded rule was that a physical density in this basis has
+max|D| about 2, in physdens.py's 2 C C^T convention -- retired in section 7
+because the genuinely converged density measures 1.2e+02 and DirectJK's own
+healthy first iterate 1.4e+02. Here is DirectJK's guess density, the same
+matrix throughout, read at each rung in guess_ladder.py's C C^T convention:
+1.2037e+02 under symmetric orthogonalization, then 1.1413e+00, 1.0416e+00,
+1.0413e+00 as the near-singular directions come out. That last figure is
+2.0826e+00 in the other convention. The old yardstick was never wrong about the
+physics; it was quoting a number from a basis with no near-linear dependence in
+it, and the 87x inflation it could not account for is entirely an artefact of
+dividing by sqrt(s) for s down to 1.09e-07. Both statements survive: reject a
+probe above 1e+03 when the orthogonalization is symmetric, and expect about 2
+when the near-singular directions have been projected out.
+
+A correction to section 6
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Section 6 reported that DirectJK's own first iterate "falls into the same
+near-null subspace, just 6.3e+03 shallower in the weighted-mean eigenvalue, and
+recovers", and drew from it the reasonable-sounding moral that occupying the
+near-singular block is survivable and therefore cannot by itself be the
+failure. That moral is withdrawn. It rested on the near-null share of the
+COEFFICIENTS, which reads 8.126888e-01 for DirectJK's healthy first
+diagonalization and 9.725827e-01 for GTFock's ruinous one -- 0.81 against 0.97,
+a comparison that was never going to separate anything. The share of the
+weighted NORM reads 2.094085e-06 against 1.415612e-02, and s_eff, which is the
+honest form of the same question, reads 0 occupied orbitals below 1e-05 against
+14. DirectJK does not fall into the near-singular subspace at all. It stays out
+of it entirely, and the "shallower but similar" reading was an artefact of the
+wrong denominator.
+
+The distinction is not subtle once stated, and section 7's max|D| convention
+note is the same kind of error caught earlier. In the AO basis a near-singular
+overlap makes coefficients large as a matter of course, so counting
+coefficients measures the basis and not the state. Weighting by s measures how
+much of the orbital's actual norm lives where the metric is degenerate, which
+is the thing that matters. Every near-null statement in sections 6 and 7 that
+is phrased over coefficients should be read as uninformative rather than as
+evidence; the ones phrased over weighted norm, enrichment, or absolute
+orthogonalized content stand.
+
+Scoring the prediction
+~~~~~~~~~~~~~~~~~~~~~~
+
+The registered prediction was right about the kind of mechanism and wrong about
+how to detect it, which is worth separating carefully. Right: the failure is a
+discrete occupation switch and not a proportional response; the occupied space
+acquires near-singular content; and the axis that matters is the overlap
+spectrum, the same axis section 7's canonical ladder walks. Wrong: all three
+integers nominated as the measurement came back 0 for BOTH engines. Not one
+eigenvector of either matrix is more than half near-null, so the margin above
+the HOMO was never even computed, and a test that cannot distinguish -3640 Eh
+from -3699 Eh is not a test.
+
+It failed for a definite reason and the reason is instructive. "Near-null" was
+fixed at the 22 directions below 1e-05, so the statistic asked whether a single
+orbital was built mostly out of the very bottom of the spectrum. None is:
+GTFock's deepest offender draws 0.35 of its weight from that block and the rest
+from the tier above, and the near-singular region here is not 22 directions but
+a continuum -- 98 below 1e-03, 51 below 1e-04, 22 below 1e-05. An orbital can
+be catastrophically ill-conditioned while drawing no more than a third of its
+weight from any one tier. s_eff = 1/||c||^2, added after the numbers came back
+and before any of them were interpreted, is the statistic that does not care
+where in the continuum an orbital gets its norm from, and it separates the two
+engines 14/41/107 against 0/0/0.
+
+The quantitative edge of the prediction was wrong outright. max|D| implied s*
+near 1.2e-04; the measured deep end is 6.7657e-07, one to two orders lower. The
+failure mode is the one the prediction flagged as most likely -- max|D| is a
+maximum over elements and its prefactor is a product of AO coefficients that is
+not typical -- and it under-read the depth badly. Of the things this file has
+used max|D| for, it survives as a coarse alarm and not as a measurement of
+anything. Where 41 occupied orbitals below s_eff 1e-04 leaves section 7's
+canonical ladder, whose 1e-04 arm removes exactly the 51 directions that would
+take them away, is now answered: that arm ran and failed, at -3643.533829.
+Taking away the directions those orbitals were built from does not take away
+the failure, and the ladder says why in one integer -- one orbital still
+changes identity at that rung. The rung where the count reaches zero is 1e-03,
+and that is the one still running.

@@ -137,36 +137,91 @@ Prototype scope
   (1863), running the full 100 iterations. The failure is the engine's and
   not the system's: |PSIfours| own ``DirectJK`` and its density fitting each
   converged the identical 1863-function input in 12 monotone iterations from
-  the same build on the same node type. Why it fails is not established.
-  Distribution is excluded by measurement |w---w| every diagnostic quantity
-  is identical at 1, 2 and 4 ranks and at 1, 4, 8 and 24 threads within a
-  rank |w---w| and so is any suggestion that GTFock is simply inaccurate on
-  this basis: on a physical density for this molecule in ``6-31+G**``,
-  GTFock's J agrees with ``DirectJK`` to a best-fit uniform deficit of 4e-09
-  with a purely scattered residual, which is the same agreement it shows in
-  ``6-31G**`` and the same signature |PSIfours| own screening options give.
-  The leading suspect is instead the interaction between the engine and the
-  conditioning of this basis: the 1863-function overlap matrix is nearly
-  singular, at 1.09e-07, just above the ``S_TOLERANCE`` default, so
-  symmetric orthogonalization multiplies any difference in the Fock build by
-  about 9e+06. That the reference engines cross the same overlap in 12
-  iterations does not clear it, since neither has a second engine's
-  difference to amplify; and raising ``S_TOLERANCE`` to 1e-6 does not rescue
-  the run, but it discards only 8 of 1863 directions and buys a single
-  decade of that factor. The failure is at least localized in time: from an
-  identical guess, one SCF iteration already puts GTFock 57 Eh below the
-  converged reference, and 99.9% of that iterate's occupied space lies in
-  the subspace where the overlap eigenvalue is below 1e-4. ``DirectJK``
-  falls into that subspace on its own first iteration too |w---w| which is
-  why the basis rather than the engine is the suspect |w---w| but it lands
-  more than three orders of magnitude shallower and recovers. Until the
-  mechanism is understood, treat a diffuse-augmented basis on a system of
-  this size as unsupported rather than merely slow, and check any such
-  result against a non-GTFock ``SCF_TYPE``. The probes, their scripts and
-  their verbatim output are in
+  the same build on the same node type. Distribution is excluded by
+  measurement |w---w| every diagnostic quantity is identical at 1, 2 and 4
+  ranks and at 1, 4, 8 and 24 threads within a rank |w---w| and so is any
+  suggestion that GTFock is simply inaccurate on this basis: on a physical
+  density for this molecule in ``6-31+G**``, GTFock's J agrees with
+  ``DirectJK`` to 3e-06 relative with a purely scattered residual, which is
+  the same signature |PSIfours| own screening options give.
+
+  The mechanism is a discrete occupation switch in the SCF's very first
+  diagonalization. The 1863-function overlap matrix is nearly singular
+  |w---w| smallest eigenvalue 1.09e-07, and 98 of 1863 directions below
+  1e-03 |w---w| so symmetric orthogonalization divides by
+  :math:`\sqrt{s}` and amplifies any difference in the Fock build by up to
+  9e+06. Both engines were made to build F on the bit-identical SAD guess
+  density and the two matrices diagonalized side by side. They differ by
+  7e-05 relative, and that difference is not even aimed at the near-singular
+  block |w---w| it is *depleted* there by a factor of two against an
+  even-spread baseline. It does not need to be aimed. Aufbau fills the
+  lowest 290 eigenvectors whatever they are made of, and 14 near-singular
+  states are driven down past the physical ones, arriving deep at
+  :math:`-7.8` to :math:`-1.3\ E_h` rather than jostling at the Fermi
+  level. ``DirectJK``'s occupied space contains no such state at all; its
+  worst orbital sits at an effective overlap eigenvalue of 1.6e-02.
+  The principal angles between the two occupied subspaces are decisive: 276
+  of the 290 orbitals agree to 0.03 degrees and 14 are rotated past 45
+  degrees, the largest at 89.998. Nothing is bent; fourteen states are
+  replaced. Fourteen doubly-occupied spurious states at that depth is also
+  the right size for the 57 :math:`E_h` by which the first iterate
+  undershoots. There is no smooth-response account available, and none is
+  needed: ``DirectJK``'s guess Fock has a 0.22 :math:`E_h` HOMO-LUMO gap, so
+  first-order theory cannot move an orbital appreciably for a 7e-05
+  perturbation, and 276 of them indeed do not move.
+
+  A control settles which quantity is the operative one, because size is not
+  it. Density fitting's guess Fock differs from ``DirectJK``'s by 3.7e-05
+  relative, half of GTFock's 7.4e-05 and so the same size to within a factor of
+  two, yet DF converges this input in 12 iterations. What differs is where the
+  two differences land. Of its squared norm, DF puts 2e-08 into the 22
+  directions below :math:`s = 10^{-5}` where GTFock puts 1e-02, a ratio of
+  5e+05, so symmetric orthogonalization magnifies DF's difference threefold and
+  GTFock's fifteen-hundred-fold. DF's first diagonalization is consequently
+  ``DirectJK``'s to five figures: maximum principal angle 0.003 degrees, not
+  one orbital rotated past 1 degree, and no occupied orbital anywhere near the
+  singular region. Note that DF is by far the cruder engine here |w---w| its
+  energy at the guess density is wrong by 3e-03 :math:`E_h`, some 2700 times
+  GTFock's 1e-06 |w---w| and it is entirely safe. How large the error is does
+  not matter; how much of it survives orthogonalization does.
+
+  What that leaves open is the origin of the 7e-05 difference itself. The
+  hardcoded 1e-14 primitive-pair screen described in the bullet above is the
+  standing suspect and has not been shown to be the cause.
+
+  A remedy is being tested rather than recommended. Because the switch is a
+  property of the orthogonalizer, canonical orthogonalization should remove it
+  once ``S_TOLERANCE`` is high enough to discard the directions the spurious
+  states are built from. Rediagonalizing the saved guess Fock matrices at each
+  rung, the number of orbitals that change identity falls monotonically
+  |w---w| 14, 9, 1, 0, 0 for the symmetric case and for ``S_TOLERANCE`` 1e-05,
+  1e-04, 1e-03 and 1e-02 |w---w| and that ordering matches the SCF runs done
+  at the first three rungs: symmetric, 1e-05 and 1e-04 all fail, ending 57, 27
+  and 0.8 :math:`E_h` below the reference. One orbital that changes identity is
+  evidently enough, so do not read the shrinking energy error as partial
+  success. Density fitting run at that same 1e-04 rung converges normally, to
+  within 0.008 :math:`E_h` of the reference, which places the residual failure
+  on the engine rather than on the truncation. Whether the first clean rung
+  actually converges is a separate question that one diagonalization cannot
+  answer, and the run that answers it has not reported. Note also that raising
+  ``S_TOLERANCE`` to 1e-6 does not
+  rescue anything: it discards 8 of 1863 directions and leaves the switch
+  intact. Worth knowing when reading a log: this system misses |PSIfours| own
+  automatic protection by 9%. ``S_TOLERANCE`` defaults to 1e-7 and the
+  smallest overlap eigenvalue here is 1.0895e-07, so the SCF prints ``Using
+  symmetric orthogonalization`` and eliminates no MOs. Had the geometry been
+  slightly different, canonical orthogonalization would have engaged on its
+  own.
+
+  So: treat a diffuse-augmented basis on a system of this size as
+  unsupported rather than merely slow, and check any such result against a
+  non-GTFock ``SCF_TYPE``. The probes, their scripts and their verbatim
+  output are in
   :source:`tests/pytests/gtfock_diffuse_j_diagnostics.txt`; that file also
-  records an earlier attribution of this failure to a 0.31% deficit in
-  GTFock's J, which a later control withdrew, and why.
+  records two earlier attributions of this failure that later controls
+  withdrew |w---w| a 0.31% deficit in GTFock's J, and a claim that
+  ``DirectJK`` falls into the same near-singular subspace and merely lands
+  shallower |w---w| together with why each was wrong.
 * **The Fock build is distributed; the SCF is not.** J and K are gathered on
   rank 0 and broadcast, so every rank holds the full matrices and then runs an
   identical replicated SCF: diagonalization, DIIS, and the DFT quadrature are
