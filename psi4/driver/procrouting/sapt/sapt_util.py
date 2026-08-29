@@ -181,7 +181,6 @@ def print_sapt_dft_summary(
             ret += print_sapt_var("  delta HF,r (2)", data["Delta HF Correction"]) + "\n"
 
     ret += "\n"
-    data["SAPT IND ENERGY"] = ind
     core.set_variable("SAPT IND ENERGY", ind)
     dimer_wfn.set_variable("SAPT IND ENERGY", ind)
 
@@ -239,8 +238,6 @@ def print_sapt_dft_summary(
     # Total energy
     total = data["Elst10,r"] + extern_extern_IE + data["Exch10"] + ind + disp
     ret += print_sapt_var("Total %-17s" % name, total, start_spacer="    ") + "\n"
-    data["SAPT(DFT) TOTAL ENERGY"] = total
-    data["SAPT TOTAL ENERGY"] = total
     core.set_variable("SAPT(DFT) TOTAL ENERGY", total)
     core.set_variable("SAPT TOTAL ENERGY", total)
     core.set_variable("CURRENT ENERGY", total)

@@ -1273,12 +1273,7 @@ def sapt_dft(
     if induction_type == "NONE":
         ind_total = 0.0
         if delta_hf:
-            ind_total = (
-                data["DHF VALUE"]
-                - data["Elst10,r"]
-                - data.get("extern_extern_IE", 0.0)
-                - data["Exch10"]
-            )
+            ind_total = data["DHF VALUE"] - data["Elst10,r"] - data["Exch10"]
             data["Delta HF Correction"] = ind_total
             core.set_variable("SAPT(DFT) Delta HF", ind_total)
         data["SAPT DFT INDUCTION ENERGY"] = ind_total
