@@ -560,17 +560,23 @@ Induction treatments
 
 |sapt__sapt_dft_induction_type| controls the induction calculation. The default,
 ``CPKS``, evaluates the SAPT(DFT) response. ``CPHF`` skips that response and uses
-the SAPT0 induction terms and :math:`\Delta`-HF correction computed in the
-:math:`\Delta`-HF segment; the final table identifies their SAPT0 source. This
-approximation is effective because SAPT0 captures nearly all induction effects,
-with statistically negligible shifts relative to CPKS induction. ``CPHF``
-therefore requires |sapt__sapt_dft_do_dhf|.
+the SAPT0 induction terms computed from the HF orbitals instead; the final table
+identifies their SAPT0 source. This approximation is effective because SAPT0
+captures nearly all induction effects, with statistically negligible shifts
+relative to CPKS induction. With |sapt__sapt_dft_do_dhf| enabled, ``CPHF`` also
+reuses the :math:`\Delta`-HF correction from that segment; with it disabled, only
+the SAPT0 :math:`E_{ind,resp}^{(2)}` and :math:`E_{exch-ind,resp}^{(2)}` terms are
+reported and no :math:`\Delta`-HF correction is computed or stored.
 
 ``NONE`` omits second-order induction. Without :math:`\Delta`-HF, induction is
 zero. With :math:`\Delta`-HF, the full induction component is assigned as the
 remainder that enforces
 :math:`E_{elst}+E_{exch}+E_{ind}=E_{int}^{HF}`; no ``Ind20`` or directional
-breakdown is then available. F-SAPT cannot be combined with ``NONE``.
+breakdown is then available.
+
+F-SAPT requires the SAPT(DFT) fragment induction and therefore works only with
+``CPKS``; both ``CPHF`` and ``NONE`` are rejected when |sapt__sapt_dft_do_fsapt|
+is enabled.
 
 SAPT(DFT)-D3 and SAPT(DFT)-D4 variants
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

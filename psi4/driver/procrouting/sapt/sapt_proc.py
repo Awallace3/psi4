@@ -109,6 +109,15 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     core.Wavefunction
         The dimer wavefunction with SAPT(DFT) results stored as variables.
     """
+    core.prepare_options_for_module("SAPT")
+    induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
+    do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
+    do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() != "NONE"
+    if induction_type == "NONE" and do_fsapt:
+        raise ValidationError("F-SAPT requires induction; SAPT_DFT_INDUCTION_TYPE=NONE is unavailable.")
+    if induction_type == "CPHF" and do_fsapt:
+        raise ValidationError("F-SAPT requires SAPT(DFT) fragment induction; SAPT_DFT_INDUCTION_TYPE=CPHF is unavailable.")
+
     use_einsums = core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS")
 
     # Build SAPT cache
@@ -299,6 +308,9 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                 "interaction energy; the reported scalar energies remain authoritative.\n\n"
             )
 
+    # CPHF needs the HF segment for the SAPT0 induction terms, even without delta HF.
+    run_hf_segment = do_delta_hf or (induction_type == "CPHF" and do_dft)
+
     # Because SAPT(DFT) FDDS Dispersion doesn't have FSAPT support currently,
     # catch this case when FISAPT is requested with SAPT_DFT_DO_DISP false
     if do_fsapt and do_disp and sapt_dft_functional != "HF":
@@ -448,7 +460,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         ext_pot_C = [np.array(x) for x in ext_pot_C]
     ext_pot_A = external_potentials.get("A")
     ext_pot_B = external_potentials.get("B")
-    if do_delta_hf:
+    if run_hf_segment:
         core.set_global_option("DF_INTS_IO", "SAVE")
         core.timer_on("SAPT(DFT):Dimer SCF")
         hf_data = {}
@@ -531,9 +543,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             core.print_out(
                 "         ---------------------------------------------------------\n"
             )
-            core.print_out(
-                "         " + "SAPT(DFT): delta HF Segment".center(58) + "\n"
-            )
+            segment_name = "SAPT(DFT): delta HF Segment" if do_delta_hf else "SAPT(DFT): SAPT0 Induction Segment"
+            core.print_out("         " + segment_name.center(58) + "\n")
             core.print_out("\n")
             core.print_out(
                 "         " + "by Daniel G. A. Smith and Rob Parrish".center(58) + "\n"
@@ -599,7 +610,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             dhf_value = (
                 hf_data["HF DIMER"] - hf_data["HF MONOMER A"] - hf_data["HF MONOMER B"]
             )
-            data["DHF VALUE"] = dhf_value
+            if do_delta_hf:
+                data["DHF VALUE"] = dhf_value
 
             core.print_out("\n")
             if induction_type == "NONE":
@@ -610,10 +622,11 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                         hf_data,
                         "SAPT(HF)",
                         dimer_wfn=hf_wfn_dimer,
-                        delta_hf=dhf_value,
+                        delta_hf=dhf_value if do_delta_hf else False,
                     )
                 )
-                data["Delta HF Correction"] = core.variable("SAPT(DFT) Delta HF")
+                if do_delta_hf:
+                    data["Delta HF Correction"] = core.variable("SAPT(DFT) Delta HF")
                 if induction_type == "CPHF":
                     data.update(ind)
             sapt_jk.finalize()

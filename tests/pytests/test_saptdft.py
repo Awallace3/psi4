@@ -1261,7 +1261,13 @@ def test_charge_field_inputs():
 @pytest.mark.saptdft
 @pytest.mark.parametrize(
     "induction_type, delta_hf, expected_calls",
-    [(None, True, 2), ("CPHF", True, 1), ("NONE", True, 0), ("NONE", False, 0)],
+    [
+        (None, True, 2),
+        ("CPHF", True, 1),
+        ("CPHF", False, 1),
+        ("NONE", True, 0),
+        ("NONE", False, 0),
+    ],
 )
 def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expected_calls):
     mol = psi4.geometry("""
@@ -1293,6 +1299,8 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
         return result
 
     monkeypatch.setattr(sapt_proc.sapt_jk_terms, "induction", wrapped_induction)
+    outfile = Path("pytest_output.dat")
+    offset = len(outfile.read_bytes()) if outfile.exists() else 0
     energy, wfn = psi4.energy("sapt(dft)", molecule=mol, return_wfn=True)
     assert len(calls) == expected_calls
 
@@ -1300,11 +1308,12 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
     assert psi4.core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE") == mode
     if mode == "CPHF":
         assert compare_values(calls[0]["Ind20,r"], psi4.variable("Ind20,r"), 12, "SAPT0 Ind20")
-        expected = (
-            calls[0]["Ind20,r"]
-            + calls[0]["Exch-Ind20,r"]
-            + psi4.variable("SAPT(DFT) DELTA HF")
-        )
+        expected = calls[0]["Ind20,r"] + calls[0]["Exch-Ind20,r"]
+        if delta_hf:
+            expected += psi4.variable("SAPT(DFT) DELTA HF")
+        else:
+            assert not psi4.core.has_variable("SAPT(DFT) DELTA HF")
+            assert not wfn.has_variable("SAPT(DFT) DELTA HF")
         assert compare_values(expected, psi4.variable("SAPT IND ENERGY"), 12, "SAPT0 induction")
     elif mode == "NONE":
         expected = 0.0
@@ -1330,9 +1339,12 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
     )
 
     psi4.core.flush_outfile()
-    output = Path("pytest_output.dat").read_text()
+    with outfile.open() as fh:
+        fh.seek(offset)
+        output = fh.read()
     if mode == "CPHF":
         assert "Induction (SAPT0)" in output
+        assert ("delta HF,r (2)" in output) is delta_hf
     elif mode == "NONE":
         assert "No second-order induction breakdown is available." in output
 
@@ -1341,9 +1353,16 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
 @pytest.mark.parametrize(
     "options, message",
     [
-        ({"sapt_dft_induction_type": "CPHF", "sapt_dft_do_dhf": False}, "requires SAPT_DFT_DO_DHF"),
         ({"sapt_dft_induction_type": "NONE", "sapt_dft_do_fsapt": "SAPTDFT"}, "F-SAPT requires induction"),
         ({"sapt_dft_induction_type": "NONE", "sapt_dft_do_fsapt": "FISAPT"}, "F-SAPT requires induction"),
+        (
+            {"sapt_dft_induction_type": "CPHF", "sapt_dft_do_fsapt": "SAPTDFT"},
+            "F-SAPT requires SAPT\\(DFT\\) fragment induction",
+        ),
+        (
+            {"sapt_dft_induction_type": "CPHF", "sapt_dft_do_fsapt": "FISAPT"},
+            "F-SAPT requires SAPT\\(DFT\\) fragment induction",
+        ),
     ],
 )
 def test_saptdft_induction_option_checks(monkeypatch, options, message):

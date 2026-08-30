@@ -1189,8 +1189,10 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         /*- Compute the Delta-HF correction? -*/
         options.add_bool("SAPT_DFT_DO_DHF", true);
         /*- Induction treatment for SAPT(DFT). ``CPKS`` computes DFT response,
-        ``CPHF`` reuses SAPT0 induction from the Delta-HF segment, and ``NONE``
-        omits second-order induction. -*/
+        ``CPHF`` reuses the SAPT0 induction terms computed from HF orbitals
+        (adding the Delta-HF correction only when |sapt__sapt_dft_do_dhf| is
+        true), and ``NONE`` omits second-order induction. ``CPHF`` and ``NONE``
+        are unavailable with F-SAPT. -*/
         options.add_str("SAPT_DFT_INDUCTION_TYPE", "CPKS", "CPKS CPHF NONE");
         /*- Enables SAPT(DFT) to be run with PyEinsums if available -*/
         options.add_bool("SAPT_DFT_USE_EINSUMS", true);
