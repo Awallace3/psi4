@@ -1346,6 +1346,10 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
     with outfile.open() as fh:
         fh.seek(offset)
         output = fh.read()
+    assert "Dimer for Localization" not in output
+    assert ("     HF   (Dimer)\n" in output) is (delta_hf or mode == "CPHF")
+    assert ("SAPT(DFT): delta HF Dimer" in output) is delta_hf
+    assert output.count("==> E10 Electostatics <==") == (1 if mode == "NONE" else 2)
     if mode == "CPHF":
         assert "Induction (SAPT0)" in output
         assert ("delta HF,r (2)" in output) is delta_hf
@@ -1504,6 +1508,27 @@ symmetry c1
         7,
         "SAPT EXCH-DISP20(S^inf) ENERGY",
     )
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize(
+    "induction_type, message",
+    [
+        ("CPHF", "SAPT_DFT_INDUCTION_TYPE=CPHF reuses the SAPT0 induction terms"),
+        ("NONE", "SAPT_DFT_INDUCTION_TYPE=NONE with delta HF"),
+    ],
+)
+def test_saptdft_sapt_dft_api_requires_hf_segment_data(induction_type, message):
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ne 1 4.5
+  units bohr
+    """)
+    psi4.set_options({"basis": "sto-3g", "sapt_dft_induction_type": induction_type})
+    wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
+    with pytest.raises(psi4.ValidationError, match=message):
+        sapt_proc.sapt_dft(wfn, wfn, wfn, delta_hf=True)
 
 
 if __name__ == "__main__":

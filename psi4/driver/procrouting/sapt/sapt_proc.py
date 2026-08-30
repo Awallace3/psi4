@@ -315,6 +315,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
     # CPHF needs the HF segment for the SAPT0 induction terms, even without delta HF.
     run_hf_segment = do_delta_hf or (induction_type == "CPHF" and do_dft)
+    hf_segment_label = "delta HF" if do_delta_hf else "SAPT0 induction"
 
     # Because SAPT(DFT) FDDS Dispersion doesn't have FSAPT support currently,
     # catch this case when FISAPT is requested with SAPT_DFT_DO_DISP false
@@ -358,7 +359,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     # fmt: on
     core.print_out("\n")
     core.print_out("   Required computations:\n")
-    if do_delta_hf:
+    if run_hf_segment:
         core.print_out("     HF   (Dimer)\n")
         core.print_out("     HF   (Monomer A)\n")
         core.print_out("     HF   (Monomer B)\n")
@@ -478,7 +479,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                 )
             )
         hf_wfn_dimer = scf_helper(
-            "SCF", molecule=sapt_dimer, banner="SAPT(DFT): delta HF Dimer", **kwargs
+            "SCF", molecule=sapt_dimer, banner=f"SAPT(DFT): {hf_segment_label} Dimer", **kwargs
         )
         if do_ext_potential:
             kwargs.pop("external_potentials")
@@ -496,7 +497,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         hf_wfn_A = scf_helper(
             "SCF",
             molecule=monomerA,
-            banner="SAPT(DFT): delta HF Monomer A",
+            banner=f"SAPT(DFT): {hf_segment_label} Monomer A",
             jk=jk_obj,
             **kwargs,
         )
@@ -516,7 +517,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         hf_wfn_B = scf_helper(
             "SCF",
             molecule=monomerB,
-            banner="SAPT(DFT): delta HF Monomer B",
+            banner=f"SAPT(DFT): {hf_segment_label} Monomer B",
             jk=jk_obj,
             **kwargs,
         )
@@ -548,7 +549,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             core.print_out(
                 "         ---------------------------------------------------------\n"
             )
-            segment_name = "SAPT(DFT): delta HF Segment" if do_delta_hf else "SAPT(DFT): SAPT0 Induction Segment"
+            segment_name = f"SAPT(DFT): {hf_segment_label} Segment"
             core.print_out("         " + segment_name.center(58) + "\n")
             core.print_out("\n")
             core.print_out(
@@ -576,30 +577,30 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     kwargs["external_potentials"]["B"] = ext_pot_B
                     _set_external_potentials_to_wavefunction(ext_pot_B, hf_wfn_B)
 
-            # Build cache
-            hf_cache_ein = jk_terms.build_sapt_jk_cache(
-                hf_wfn_dimer,
-                hf_wfn_A,
-                hf_wfn_B,
-                sapt_jk,
-                True,
-                external_potentials=kwargs.get("external_potentials", None),
-            )
-
-            # Electrostatics
-            core.timer_on("SAPT(HF):elst")
-            elst, extern_extern_IE = jk_terms.electrostatics(hf_cache_ein, True)
-            hf_data["extern_extern_IE"] = extern_extern_IE
-            hf_data.update(elst)
-            core.timer_off("SAPT(HF):elst")
-
-            # Exchange
-            core.timer_on("SAPT(HF):exch")
-            exch = jk_terms.exchange(hf_cache_ein, sapt_jk, True)
-            hf_data.update(exch)
-            core.timer_off("SAPT(HF):exch")
-
             if induction_type != "NONE":
+                # Build cache
+                hf_cache_ein = jk_terms.build_sapt_jk_cache(
+                    hf_wfn_dimer,
+                    hf_wfn_A,
+                    hf_wfn_B,
+                    sapt_jk,
+                    True,
+                    external_potentials=kwargs.get("external_potentials", None),
+                )
+
+                # Electrostatics
+                core.timer_on("SAPT(HF):elst")
+                elst, extern_extern_IE = jk_terms.electrostatics(hf_cache_ein, True)
+                hf_data["extern_extern_IE"] = extern_extern_IE
+                hf_data.update(elst)
+                core.timer_off("SAPT(HF):elst")
+
+                # Exchange
+                core.timer_on("SAPT(HF):exch")
+                exch = jk_terms.exchange(hf_cache_ein, sapt_jk, True)
+                hf_data.update(exch)
+                core.timer_off("SAPT(HF):exch")
+
                 core.timer_on("SAPT(HF):ind")
                 ind = jk_terms.induction(
                     hf_cache_ein,
@@ -1201,6 +1202,24 @@ def sapt_dft(
     """
 
     # Handle the input options
+    if data is None:
+        data = {}
+
+    induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
+    if induction_type == "CPHF" and do_dft and "Ind20,r" not in data:
+        raise ValidationError(
+            "SAPT_DFT_INDUCTION_TYPE=CPHF reuses the SAPT0 induction terms computed by the "
+            "SAPT(DFT) delta HF segment, which sapt_dft() does not run. Call "
+            "energy('sapt(dft)') instead of sapt_dft() directly, or supply the SAPT0 "
+            "induction terms in `data`."
+        )
+    if induction_type == "NONE" and delta_hf and "DHF VALUE" not in data:
+        raise ValidationError(
+            "SAPT_DFT_INDUCTION_TYPE=NONE with delta HF needs the 'DHF VALUE' produced by the "
+            "SAPT(DFT) delta HF segment, which sapt_dft() does not run. Call "
+            "energy('sapt(dft)') instead of sapt_dft() directly, or supply 'DHF VALUE' in `data`."
+        )
+
     core.timer_on("SAPT(DFT):Build JK")
     if print_header:
         sapt_dft_header()
@@ -1238,8 +1257,6 @@ def sapt_dft(
         sapt_jk.set_do_wK(True)
         sapt_jk.set_omega(wfn_A.functional().x_omega())
 
-    if data is None:
-        data = {}
     use_einsums = core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS")
 
     # Build SAPT cache
@@ -1274,7 +1291,6 @@ def sapt_dft(
 
     # Induction
     core.timer_on("SAPT(DFT):ind")
-    induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
     if induction_type == "CPKS" or (induction_type == "CPHF" and not do_dft):
         ind = jk_terms.induction(
             cache,
