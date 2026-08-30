@@ -43,6 +43,23 @@ def print_sapt_var(name, value, short=False, start_spacer="    "):
         return start_spacer + "%-28s % 15.8f [mEh] % 15.8f [kcal/mol] % 15.8f [kJ/mol]" % vals
 
 
+def print_sapt_hf_induction_summary(data, name):
+
+    ind = data["Ind20,r"] + data["Exch-Ind20,r"]
+    ind_ab = data["Ind20,r (A<-B)"] + data["Exch-Ind20,r (A<-B)"]
+    ind_ba = data["Ind20,r (A->B)"] + data["Exch-Ind20,r (A->B)"]
+
+    ret = "   Partial %s Results, SAPT0 induction only (no dHF)\n" % name
+    ret += "  " + "-" * 105 + "\n"
+    ret += print_sapt_var("Induction (no dHF)", ind) + "\n"
+    ret += print_sapt_var("  Ind20,r", data["Ind20,r"]) + "\n"
+    ret += print_sapt_var("  Exch-Ind20,r", data["Exch-Ind20,r"]) + "\n"
+    ret += print_sapt_var("  Induction (A<-B) (no dHF)", ind_ab) + "\n"
+    ret += print_sapt_var("  Induction (A->B) (no dHF)", ind_ba) + "\n"
+    ret += "  " + "-" * 105 + "\n"
+    return ret
+
+
 def print_sapt_hf_summary(data, name, dimer_wfn, short=False, delta_hf=False):
 
     ret = "   Partial %s Results, to compute Delta HF (dHF)\n" % name
@@ -160,8 +177,9 @@ def print_sapt_dft_summary(
 
     # Induction
     if induction_type == "NONE":
-        ind = data["SAPT DFT INDUCTION ENERGY"]
-        label = "Induction (delta HF)" if "Delta HF Correction" in data else "Induction (omitted)"
+        has_delta_hf = "Delta HF Correction" in data
+        ind = data["Delta HF Correction"] if has_delta_hf else 0.0
+        label = "Induction (delta HF)" if has_delta_hf else "Induction (omitted)"
         ret += print_sapt_var(label, ind) + "\n"
         ret += "      No second-order induction breakdown is available.\n"
     else:

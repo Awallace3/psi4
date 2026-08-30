@@ -1314,6 +1314,8 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
         else:
             assert not psi4.core.has_variable("SAPT(DFT) DELTA HF")
             assert not wfn.has_variable("SAPT(DFT) DELTA HF")
+            assert not psi4.core.has_variable("SAPT0 TOTAL ENERGY")
+            assert not wfn.has_variable("SAPT0 TOTAL ENERGY")
         assert compare_values(expected, psi4.variable("SAPT IND ENERGY"), 12, "SAPT0 induction")
     elif mode == "NONE":
         expected = 0.0
@@ -1325,6 +1327,8 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
             )
         assert compare_values(expected, psi4.variable("SAPT IND ENERGY"), 12, "omitted induction")
         assert not psi4.core.has_variable("Ind20,r")
+        assert not psi4.core.has_variable("SAPT DFT INDUCTION ENERGY")
+        assert not wfn.has_variable("SAPT DFT INDUCTION ENERGY")
 
     expected_total = sum(
         psi4.variable(f"SAPT {term} ENERGY")
@@ -1345,6 +1349,8 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
     if mode == "CPHF":
         assert "Induction (SAPT0)" in output
         assert ("delta HF,r (2)" in output) is delta_hf
+        assert ("SAPT0 induction only (no dHF)" in output) is not delta_hf
+        assert "Total SAPT(HF)" not in output
     elif mode == "NONE":
         assert "No second-order induction breakdown is available." in output
 

@@ -47,7 +47,12 @@ from . import (
     sapt_sf_terms,
     saptdft_fisapt,
 )
-from .sapt_util import print_sapt_dft_summary, print_sapt_hf_summary, print_sapt_var
+from .sapt_util import (
+    print_sapt_dft_summary,
+    print_sapt_hf_induction_summary,
+    print_sapt_hf_summary,
+    print_sapt_var,
+)
 import qcelemental as qcel
 from ...p4util.exceptions import ConvergenceError
 
@@ -616,19 +621,20 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             core.print_out("\n")
             if induction_type == "NONE":
                 core.print_out("   SAPT0 induction skipped; induction will be assigned from delta HF.\n")
-            else:
+            elif do_delta_hf:
                 core.print_out(
                     print_sapt_hf_summary(
                         hf_data,
                         "SAPT(HF)",
                         dimer_wfn=hf_wfn_dimer,
-                        delta_hf=dhf_value if do_delta_hf else False,
+                        delta_hf=dhf_value,
                     )
                 )
-                if do_delta_hf:
-                    data["Delta HF Correction"] = core.variable("SAPT(DFT) Delta HF")
-                if induction_type == "CPHF":
-                    data.update(ind)
+                data["Delta HF Correction"] = core.variable("SAPT(DFT) Delta HF")
+            else:
+                core.print_out(print_sapt_hf_induction_summary(hf_data, "SAPT(HF)"))
+            if induction_type == "CPHF":
+                data.update(ind)
             sapt_jk.finalize()
 
             del hf_wfn_A, hf_wfn_B, sapt_jk
@@ -1284,12 +1290,10 @@ def sapt_dft(
         core.print_out(f"\n   SAPT(DFT) induction skipped ({induction_type}).\n")
 
     if induction_type == "NONE":
-        ind_total = 0.0
         if delta_hf:
             ind_total = data["DHF VALUE"] - data["Elst10,r"] - data["Exch10"]
             data["Delta HF Correction"] = ind_total
             core.set_variable("SAPT(DFT) Delta HF", ind_total)
-        data["SAPT DFT INDUCTION ENERGY"] = ind_total
     elif delta_hf and "Delta HF Correction" not in data:
         total_sapt = (
             data["Elst10,r"] + data["Exch10"] + data["Ind20,r"] + data["Exch-Ind20,r"]
