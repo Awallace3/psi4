@@ -30,6 +30,8 @@ import numpy as np
 from pprint import pprint as pp
 
 from psi4 import core
+
+from ... import p4util
 from ...p4util.exceptions import *
 # Need to import FISAPT to set fdrop, plot, save_fsapt_variables methods
 from . import fisapt_proc
@@ -358,9 +360,6 @@ def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars, do_disp=True, do_e
         "IndAB_AB": "IndAB_AB",
         "IndBA_AB": "IndBA_AB",
     }
-    # Set whether to drop dispersion matrix... fisapt has specific option
-    # for this...
-    core.set_local_option("FISAPT", "FISAPT_DO_FSAPT_DISP", do_disp)
     if do_disp:
         cache_keys["Disp_AB"] = "Disp_AB"
     matrix_cache = {
@@ -376,10 +375,15 @@ def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars, do_disp=True, do_e
     }
     for key in vector_cache.keys():
         vector_cache[key].name = key.upper()
-    fisapt.set_matrix(matrix_cache)
-    fisapt.set_vector(vector_cache)
-    fisapt.fdrop()
-    fisapt.save_variables_to_wfn(wfn, sapt_type='SAPT(DFT)')
+    optstash = p4util.OptionsState(["FISAPT", "FISAPT_DO_FSAPT_DISP"])
+    try:
+        core.set_local_option("FISAPT", "FISAPT_DO_FSAPT_DISP", do_disp)
+        fisapt.set_matrix(matrix_cache)
+        fisapt.set_vector(vector_cache)
+        fisapt.fdrop()
+        fisapt.save_variables_to_wfn(wfn, sapt_type='SAPT(DFT)')
+    finally:
+        optstash.restore()
     # Now drop empirical D3/D4 dispersion if computed and expose the
     # same variable through both global and returned-wavefunction APIs.
     if do_empirical_disp:

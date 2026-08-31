@@ -986,6 +986,7 @@ no_com
     # Clear variables for next calculation
     psi4.core.clean()
     psi4.core.clean_variables()
+    initial_fsapt_disp = core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP")
 
     # Run SAPT(DFT) with FISAPT option (HF functional to match SAPT0)
     psi4.set_options(
@@ -1113,6 +1114,14 @@ no_com
                 6,
                 f"{saptdft_fsapt_data['Frag1'][i]} {saptdft_fsapt_data['Frag2'][i]} {key}",
             )
+
+    assert core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP") is initial_fsapt_disp
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.set_options({"FISAPT_FSAPT_FILEPATH": "none"})
+    _, following_wfn = psi4.energy("fisapt0", molecule=mol, return_wfn=True)
+    assert following_wfn.has_variable("FSAPT_DISP_AB")
+    assert np.linalg.norm(following_wfn.variable("FSAPT_DISP_AB").np) > 0.0
 
 
 if __name__ == "__main__":
