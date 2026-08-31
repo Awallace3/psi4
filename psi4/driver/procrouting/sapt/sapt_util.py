@@ -43,19 +43,27 @@ def print_sapt_var(name, value, short=False, start_spacer="    "):
         return start_spacer + "%-28s % 15.8f [mEh] % 15.8f [kcal/mol] % 15.8f [kJ/mol]" % vals
 
 
-def print_sapt_hf_induction_summary(data, name):
+def _sapt_hf_induction_block(data):
 
     ind = data["Ind20,r"] + data["Exch-Ind20,r"]
     ind_ab = data["Ind20,r (A<-B)"] + data["Exch-Ind20,r (A<-B)"]
     ind_ba = data["Ind20,r (A->B)"] + data["Exch-Ind20,r (A->B)"]
 
-    ret = "   Partial %s Results, SAPT0 induction only (no dHF)\n" % name
-    ret += "  " + "-" * 105 + "\n"
-    ret += print_sapt_var("Induction (no dHF)", ind) + "\n"
+    ret = print_sapt_var("Induction (no dHF)", ind) + "\n"
     ret += print_sapt_var("  Ind20,r", data["Ind20,r"]) + "\n"
     ret += print_sapt_var("  Exch-Ind20,r", data["Exch-Ind20,r"]) + "\n"
     ret += print_sapt_var("  Induction (A<-B) (no dHF)", ind_ab) + "\n"
     ret += print_sapt_var("  Induction (A->B) (no dHF)", ind_ba) + "\n"
+    return ret, ind, ind_ab, ind_ba
+
+
+def print_sapt_hf_induction_summary(data, name):
+
+    induction_block, ind, ind_ab, ind_ba = _sapt_hf_induction_block(data)
+
+    ret = "   Partial %s Results, SAPT0 induction only (no dHF)\n" % name
+    ret += "  " + "-" * 105 + "\n"
+    ret += induction_block
     ret += "  " + "-" * 105 + "\n"
     return ret
 
@@ -79,15 +87,9 @@ def print_sapt_hf_summary(data, name, dimer_wfn, short=False, delta_hf=False):
     core.set_variable("SAPT EXCH ENERGY", data["Exch10"])
 
     # Induction (no dHF)
-    ind = data["Ind20,r"] + data["Exch-Ind20,r"]
-    ind_ab = data["Ind20,r (A<-B)"] + data["Exch-Ind20,r (A<-B)"]
-    ind_ba = data["Ind20,r (A->B)"] + data["Exch-Ind20,r (A->B)"]
+    induction_block, ind, ind_ab, ind_ba = _sapt_hf_induction_block(data)
 
-    ret += print_sapt_var("Induction (no dHF)", ind) + "\n"
-    ret += print_sapt_var("  Ind20,r", data["Ind20,r"]) + "\n"
-    ret += print_sapt_var("  Exch-Ind20,r", data["Exch-Ind20,r"]) + "\n"
-    ret += print_sapt_var("  Induction (A<-B) (no dHF)", ind_ab) + "\n"
-    ret += print_sapt_var("  Induction (A->B) (no dHF)", ind_ba) + "\n"
+    ret += induction_block
     ret += "\n"
     core.set_variable("SAPT IND ENERGY", ind)
 

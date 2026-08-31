@@ -1354,7 +1354,8 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
         assert "Induction (SAPT0)" in output
         assert ("delta HF,r (2)" in output) is delta_hf
         assert ("SAPT0 induction only (no dHF)" in output) is not delta_hf
-        assert "Total SAPT(HF)" not in output
+        assert ("to compute Delta HF (dHF)" in output) is delta_hf
+        assert ("Subtotal SAPT(HF)" in output) is delta_hf
     elif mode == "NONE":
         assert "No second-order induction breakdown is available." in output
 

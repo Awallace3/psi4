@@ -133,6 +133,7 @@ def _sapt_dft_dispersion_interaction_energy(
                 FSAPT_EMPIRICAL_DISP[B, A] = pairwise_energies[A, B]
         data[f"{disp_label} IE"] = E_disp
         data['FSAPT_EMPIRICAL_DISP'] = FSAPT_EMPIRICAL_DISP
+        dimer_wfn.set_variable("PAIRWISE DISPERSION CORRECTION ANALYSIS", FSAPT_EMPIRICAL_DISP)
         _disp_functor.print_out()
     elif d_type == gd_type:
         # This uses the default Grimme parameters for the given

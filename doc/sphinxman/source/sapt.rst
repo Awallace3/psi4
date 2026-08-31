@@ -572,7 +572,11 @@ reported and no :math:`\Delta`-HF correction is computed or stored.
 zero. With :math:`\Delta`-HF, the full induction component is assigned as the
 remainder that enforces
 :math:`E_{elst}+E_{exch}+E_{ind}=E_{int}^{HF}`; no ``Ind20`` or directional
-breakdown is then available.
+breakdown is then available. The meaning of the ``SAPT(DFT) DELTA HF``
+QCVariable is therefore mode dependent: with ``CPKS`` or ``CPHF`` it holds the
+usual :math:`\delta_{HF}^{(2)}` correction to the second-order induction,
+whereas with ``NONE`` it holds that entire induction remainder, which is the
+whole reported induction energy.
 
 F-SAPT requires the SAPT(DFT) fragment induction and therefore works only with
 ``CPKS``; both ``CPHF`` and ``NONE`` are rejected when |sapt__sapt_dft_do_fsapt|

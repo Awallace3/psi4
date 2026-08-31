@@ -1035,6 +1035,12 @@ no_com"""
         d4_disp = variable("FISAPT0-D DISP ENERGY") * au2kcal
         assert compare_values(ref_d4mi, d4_disp, 5, "Ethene-Ethyne -d4")
 
+        pw_disp_i = variable("FSAPT_EMPIRICAL_DISP").to_array()
+        assert compare_values(variable("FISAPT0-D DISP ENERGY"), pw_disp_i.sum(), 8,
+                              "D4(I) pairwise dispersion sums to the reported D4(I) dispersion")
+        assert compare_values(0.0, pw_disp_i[:5, :5].sum() + pw_disp_i[5:, 5:].sum(), 10,
+                              "D4(I) pairwise dispersion carries no intramonomer terms")
+
         psi4.energy("fisapt0-d4(s)", molecule=mol)
         d4_disp = variable("FISAPT0-D DISP ENERGY") * au2kcal
         assert compare_values(ref_d4, d4_disp, 5, "Ethene-Ethyne -d4")
