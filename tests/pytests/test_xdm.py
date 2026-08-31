@@ -99,6 +99,7 @@ units angstrom
         assert np.all(np.diag(coefficients) > 0.0)
     pairwise_energy = wfn_m.variables()["XDM PAIRWISE ENERGY"].np
     assert np.allclose(np.diag(pairwise_energy), 0.0, atol=0.0)
+    assert np.isclose(pairwise_energy.sum(), disp_corr, atol=1.0e-12)
     m = psi4.geometry("""
 0 1
 O    1.35062500   0.11146900   0.00000000
@@ -540,6 +541,19 @@ units angstrom
     assert planned["b3lyp-xdm"] == {FiniteDifferenceComputer}
     assert planned["b3lyp"] == {AtomicComputer}
 
+    cbs_plan = task_planner("gradient",
+                            "b3lyp",
+                            dimer,
+                            bsse_type="nocp",
+                            levels={
+                                1: "b3lyp-xdm/cc-pv[d,t]z",
+                                2: "b3lyp"
+                            },
+                            **findif_kwargs)
+    assert isinstance(cbs_plan, ManyBodyComputer)
+    assert {type(task) for task in cbs_plan.task_list.values()} == {FiniteDifferenceComputer, AtomicComputer}
+    assert all(task.basis == "sto-3g" for task in cbs_plan.task_list.values() if isinstance(task, AtomicComputer))
+
     # A user-requested analytic gradient is still refused because one level needs XDM.
     with pytest.raises(NotImplementedError, match="Analytic XDM gradients are not implemented"):
         task_planner("gradient",
@@ -671,9 +685,15 @@ def test_xdm_kb49_aliases_and_lcwpbe_reference():
     assert "hse06-xdm(kb49)" in dft_builder.functionals
 
     psi4.set_options({"basis": "aug-cc-pvdz"})
-    superfunctional, functor = proc.build_functional_and_disp("lc-wpbe-xdm", True)
-    assert superfunctional.name().lower().startswith("lc-wpbe-xdm")
-    assert functor.engine == "xdm"
+    reference, _ = proc.build_functional_and_disp("lc-wpbe", True)
+    for alias in ("lc-wpbe-xdm", "lcwpbe-xdm", "wpbe-xdm"):
+        superfunctional, functor = proc.build_functional_and_disp(alias, True)
+        assert superfunctional.name().lower().startswith("lc-wpbe-xdm")
+        assert superfunctional.x_alpha() == reference.x_alpha()
+        assert superfunctional.x_beta() == reference.x_beta()
+        assert superfunctional.x_omega() == reference.x_omega()
+        assert functor.engine == "xdm"
+        assert functor.xdm.functional_name() == "lc-wpbe"
 
 
 @pytest.mark.xdm

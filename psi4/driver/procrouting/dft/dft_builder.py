@@ -183,8 +183,11 @@ for fname, fdict in dict_functionals.items():
 
 for functional_name, base_dict in _xdm_base_functionals.items():
     functional_aliases = get_functional_aliases(base_dict)
+    parameterized_aliases = sorted(set(functional_aliases) & _xdm_parameterized_functionals)
+    canonical_alias = (base_dict["name"].lower()
+                       if base_dict["name"].lower() in parameterized_aliases else parameterized_aliases[0])
     func = copy.deepcopy(base_dict)
-    func["name"] = base_dict["name"] + "-XDM"
+    func["name"] = canonical_alias + "-XDM"
     func["dispersion"] = {"type": "xdm", "params": {"xdm_model": "kb49"}}
     for alias in functional_aliases:
         for suffix in ("-xdm", "-xdm(kb49)"):

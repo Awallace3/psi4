@@ -510,8 +510,8 @@ double XDMDispersion::pairwise_energy(std::shared_ptr<Molecule> mol, const std::
             // Dispersion energy
             e_disp_tmp = -(c6 / (d6 + rvdw6) + c8 / (d8 + rvdw8) + c10 / (d10 + rvdw10));
             e_disp += e_disp_tmp;
-            e_disp_pairs->set(ii, jj, e_disp_tmp);
-            e_disp_pairs->set(jj, ii, e_disp_tmp);
+            e_disp_pairs->set(ii, jj, 0.5 * e_disp_tmp);
+            e_disp_pairs->set(jj, ii, 0.5 * e_disp_tmp);
 
             outfile->Printf("    %4d %4d %6d %6d %12.6f %16.9E %16.9E %16.9E %12.6f %12.6f %12.6f\n", ii + 1, jj + 1,
                             i + 1, j + 1, d, c6, c8, c10, rc, rvdw, e_disp_tmp);

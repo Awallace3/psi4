@@ -58,14 +58,6 @@ def _dispersion_uses_xdm(value: Any) -> bool:
     return isinstance(value, dict) and str(value.get("type", "")).lower() == "xdm"
 
 
-def _functional_uses_xdm(value: Any) -> bool:
-    if isinstance(value, str):
-        return "-xdm" in value.lower()
-    if isinstance(value, dict):
-        return _dispersion_uses_xdm(value.get("dispersion"))
-    return False
-
-
 def _container_uses_xdm(value: Any) -> bool:
     if isinstance(value, str):
         return "-xdm" in value.lower()
@@ -202,7 +194,7 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
     if callable(dft_functional) and needs_dispersion_metadata:
         dft_uses_xdm = _dispersion_uses_xdm(_callable_dispersion(dft_functional))
     else:
-        dft_uses_xdm = _functional_uses_xdm(dft_functional)
+        dft_uses_xdm = _container_uses_xdm(dft_functional)
     task_uses_xdm = dft_uses_xdm or _container_uses_xdm((method, cbsmeta))
     uses_xdm = task_uses_xdm or _container_uses_xdm(kwargs.get("levels", {}))
     if current_manybody_kwargs.get("bsse_type") is not None:
@@ -227,13 +219,17 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
 
         plan = ManyBodyComputer.from_psi4_task_planner(levels=levels, **packet, **current_manybody_kwargs)  # **kwargs)
         original_molecule = packet.pop("molecule")
+        default_basis = basis
+        initial_cbsmeta = cbsmeta
 
         # Add tasks for every nbody level requested
         for mc_level_idx, mtd in enumerate(plan.levels.values()):
             mtdkey = plan.input_data.specification.specification[mtd].model.method
             mtdin = mtdkey if mtd == "(auto)" else mtd
-            method, basis, cbsmeta = expand_cbs_methods(mtdin, basis, driver, cbsmeta=cbsmeta,
-                                                        **kwargs)  # NEW mtd->mtdkey
+            level_kwargs = dict(kwargs)
+            if mtdin == "cbs" and initial_cbsmeta:
+                level_kwargs["cbsmeta"] = initial_cbsmeta
+            method, basis, cbsmeta = expand_cbs_methods(mtdin, default_basis, driver, **level_kwargs)
             packet.update({'method': method, 'basis': basis})
             level_uses_xdm = dft_uses_xdm or _container_uses_xdm((method, cbsmeta))
 
