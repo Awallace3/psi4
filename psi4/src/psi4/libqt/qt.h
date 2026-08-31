@@ -84,9 +84,6 @@ void parallel_timer_off(const std::string& key, int thread_rank);
 void start_skip_timers();
 void stop_skip_timers();
 void clean_timers();
-PSI_API
-std::map<std::string, std::map<std::string, double>> get_timer_dict();
-
 struct TimerRecord {
     std::string timer_id;
     std::string parent_id;

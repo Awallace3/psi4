@@ -1071,7 +1071,7 @@ def felst(
     ):
         ext_pot_A = cache["external_potentials"]["A"]
         ext_pot_B = cache["external_potentials"]["B"]
-        ext_ext = ext_pot_A.computeExternExternInteraction(ext_pot_B) * 2.0
+        ext_ext = ext_pot_A.computeExternExternInteraction(ext_pot_B)
         Elst_AB[nA_atoms + na, nB_atoms + nb] += ext_ext
 
     # Store breakdown matrix in cache
@@ -2008,7 +2008,7 @@ def find(
             abs(scalars["Ind20,u (A->B)"] - Ind20u_BA) < 1e-8
         ), f"Ind20u_BA mismatch: {1000 * scalars['Ind20,u (A->B)']:.8f} vs {1000 * Ind20u_BA:.8f}"
         core.print_out(
-            f"    Ind20,u                 = {Ind20u_AB + Ind20u_BA * 1000:18.8f} [mEh]\n"
+            f"    Ind20,u                 = {(Ind20u_AB + Ind20u_BA) * 1000:18.8f} [mEh]\n"
         )
         core.print_out(
             f"    Exch-Ind20,u (A<-B)     = {ExchInd20u_AB * 1000:18.8f} [mEh]\n"
@@ -2023,7 +2023,7 @@ def find(
             abs(scalars["Exch-Ind20,u (A->B)"] - ExchInd20u_BA) < 1e-8
         ), f"ExchInd20u_BA mismatch: {1000 * scalars['Exch-Ind20,u (A->B)']:.8f} vs {1000 * ExchInd20u_BA:.8f}"
         core.print_out(
-            f"    Exch-Ind20,u            = {ExchInd20u_AB + ExchInd20u_BA * 1000:18.8f} [mEh]\n\n"
+            f"    Exch-Ind20,u            = {(ExchInd20u_AB + ExchInd20u_BA) * 1000:18.8f} [mEh]\n\n"
         )
 
     # Induction scaling

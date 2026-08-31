@@ -340,11 +340,17 @@ def sapt_empirical_dispersion(name, dimer_wfn, **kwargs):
         core.print_out("   | Supermolecular Dispersion Interaction Energy E_IE = E_IJ - E_I - E_J |\n")
         _, _disp_functor = build_functional_and_disp('hf-' + disp_name.replace("(s)", ""), restricted=True, save_pairwise_disp=save_pair, **kwargs)
 
-        ## Dimer dispersion
-        dimer_disp_energy = _disp_functor.compute_energy(dimer_wfn.molecule(), dimer_wfn)
-        ## Monomer dispersion
-        mon_disp_energy = _disp_functor.compute_energy(monomerA)
-        mon_disp_energy += _disp_functor.compute_energy(monomerB)
+        if save_pair:
+            dimer_disp_energy, monA_disp_energy, monB_disp_energy, _ = (
+                edisp_interaction_energy.compute_supermolecular_dispersion(
+                    _disp_functor, sapt_dimer, monomerA, monomerB, dimer_wfn
+                )
+            )
+            mon_disp_energy = monA_disp_energy + monB_disp_energy
+        else:
+            dimer_disp_energy = _disp_functor.compute_energy(dimer_wfn.molecule(), dimer_wfn)
+            mon_disp_energy = _disp_functor.compute_energy(monomerA)
+            mon_disp_energy += _disp_functor.compute_energy(monomerB)
 
         disp_interaction_energy = dimer_disp_energy - mon_disp_energy
     core.set_variable(saptd_name + "-D DISP ENERGY", disp_interaction_energy)

@@ -1,4 +1,5 @@
 add_subdirectory(dft)
+add_subdirectory(empirical_disp)
 add_subdirectory(findif_response_utils)
 # add_subdirectory(libcubeprop)
 # add_subdirectory(mcscf)
@@ -8,7 +9,6 @@ add_subdirectory(scf_proc)
 add_subdirectory(solvent)
 
 list(APPEND sources
-  empirical_dispersion
   interface_cfour
   proc_table
   roa

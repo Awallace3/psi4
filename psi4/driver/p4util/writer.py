@@ -460,8 +460,7 @@ def write_timer_csv(filename: Optional[str] = None):
     if filename is None:
         filename = "timer.csv"
 
-    # Get the timer dictionary from core
-    timer_dict = core.get_timer_dict()
+    timer_dict = core.get_timer_records()
 
     # Write to CSV file
     with open(filename, 'w', newline='') as csvfile:
@@ -476,7 +475,8 @@ def write_timer_csv(filename: Optional[str] = None):
         return_str = "timer_name,wall_time,user_time,system_time,n_calls\n"
 
         writer.writeheader()
-        for timer_name, timer_data in sorted(timer_dict.items()):
+        for _, timer_data in sorted(timer_dict.items()):
+            timer_name = timer_data['timer_name']
             row = {
                 'timer_name': timer_name,
                 'wall_time': timer_data['wall_time'],

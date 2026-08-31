@@ -165,9 +165,8 @@ def print_sapt_dft_summary(
     if extern_extern_IE != 0:
         ret += print_sapt_var("  Elst (extern-extern)", data["extern_extern_IE"]) + "\n"
     ret += "\n"
-    elst = data["Elst10,r"] + extern_extern_IE
-    core.set_variable("SAPT ELST ENERGY", elst)
-    dimer_wfn.set_variable("SAPT ELST ENERGY", elst)
+    core.set_variable("SAPT ELST ENERGY", data["Elst10,r"] + extern_extern_IE)
+    dimer_wfn.set_variable("SAPT ELST ENERGY", data["Elst10,r"] + extern_extern_IE)
 
     # Exchange
     ret += print_sapt_var("Exchange", data["Exch10"]) + "\n"

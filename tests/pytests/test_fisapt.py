@@ -1044,6 +1044,11 @@ no_com"""
         psi4.energy("fisapt0-d4(s)", molecule=mol)
         d4_disp = variable("FISAPT0-D DISP ENERGY") * au2kcal
         assert compare_values(ref_d4, d4_disp, 5, "Ethene-Ethyne -d4")
+        pw_disp_s = variable("FSAPT_EMPIRICAL_DISP").to_array()
+        assert compare_values(variable("FISAPT0-D DISP ENERGY"), pw_disp_s.sum(), 8,
+                              "D4(S) interaction pairwise dispersion sums to the reported dispersion")
+        assert compare_values(0.0, pw_disp_s[:5, :5].sum() + pw_disp_s[5:, 5:].sum(), 10,
+                              "D4(S) interaction pairwise dispersion removes monomer terms")
 
         psi4.energy("fisapt0-d4bj2b(s)", molecule=mol)
         d4m_disp = variable("FISAPT0-D DISP ENERGY") * au2kcal
@@ -1091,6 +1096,17 @@ def test_sapt_d4_intermolecular_rejects_atm_parameters(method):
     psi4.set_options({"basis": "cc-pvdz"})
     with pytest.raises(psi4.ValidationError, match="two-body hf-d4bjeeqtwo"):
         psi4.energy(method, molecule=mol)
+
+
+@pytest.mark.fsapt
+def test_sapt_d4_intermolecular_rejects_parameter_override():
+    from psi4.driver.procrouting.empirical_disp import edisp_interaction_energy
+
+    psi4.set_options({"dft_dispersion_parameters": [1.0, 2.0]})
+    with pytest.raises(psi4.ValidationError, match="fixed hf-d4bjeeqtwo/d4bj2b"):
+        edisp_interaction_energy.sapt_dft_d4_interaction_energy(
+            None, None, None, None, "hf-d4bjeeqtwo", "intermolecular", {}
+        )
 
 
 @pytest.mark.fsapt
