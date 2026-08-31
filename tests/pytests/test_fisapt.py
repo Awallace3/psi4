@@ -1063,8 +1063,10 @@ no_com"""
         pw_disp_s = variable("FSAPT_EMPIRICAL_DISP").to_array()
         assert compare_values(variable("FISAPT0-D DISP ENERGY"), pw_disp_s.sum(), 8,
                               "D4(S) interaction pairwise dispersion sums to the reported dispersion")
-        assert compare_values(0.0, pw_disp_s[:5, :5].sum() + pw_disp_s[5:, 5:].sum(), 10,
-                              "D4(S) interaction pairwise dispersion removes monomer terms")
+        # D4 coordination numbers differ between dimer and isolated monomers, so a true
+        # dimer-minus-monomers interaction matrix retains their small intramonomer difference.
+        intramonomer_difference = pw_disp_s[:5, :5].sum() + pw_disp_s[5:, 5:].sum()
+        assert abs(intramonomer_difference) > 1.0e-12
 
         psi4.energy("fisapt0-d4bj2b(s)", molecule=mol)
         d4m_disp = variable("FISAPT0-D DISP ENERGY") * au2kcal
@@ -1093,6 +1095,15 @@ no_com"""
         pp(f_energies)
         for key in ["Elst", "Exch", "IndAB", "IndBA", "Disp", "Total", "EDisp"]:
             assert compare_values(fEref_d4m[key], f_energies[key], 6, key)
+
+        psi4.set_options({"FISAPT_FSAPT_FILEPATH": "none"})
+        psi4.energy("fisapt0-d4(i)", molecule=mol)
+        assert compare_values(
+            variable("FISAPT0-D DISP ENERGY"),
+            variable("FSAPT_EMPIRICAL_DISP").to_array().sum(),
+            8,
+            "D4(I) pairwise data remains available when file output is disabled",
+        )
     finally:
         if os.path.exists(fsapt_dirname):
             shutil.rmtree(fsapt_dirname)

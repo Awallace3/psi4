@@ -596,13 +596,12 @@ SAPT(DFT) variants where the SAPT(DFT) dispersion term is replaced by semi-empir
     energy('dft-d3(sapt)')
     energy('dft-d4(sapt)')
 
-where ``(i)`` denotes an intermolecular pairwise dispersion treatment using
-the corresponding ``(i)`` damping-parameter record, while ``(s)`` denotes a
-supermolecular treatment using the corresponding ``(s)`` record. The four
-``sapt(dft)-d3/d4(i/s)`` variants currently support
-``SAPT_DFT_FUNCTIONAL`` values HF, PBE0, and B3LYP. The
-``dft-d3(sapt)`` and ``dft-d4(sapt)`` methods instead support any functional
-with damping parameters available from their respective dispersion engine.
+where ``(i)`` denotes an intermolecular pairwise dispersion treatment and
+``(s)`` denotes a supermolecular treatment. The D4(I) route always uses the
+fixed two-body ``hf-d4bjeeqtwo`` parameters (level ``d4bj2b``), and rejects a
+changed |scf__dft_dispersion_parameters| option rather than overriding them.
+Currently support only exists for setting |sapt__sapt_dft_functional| equal to
+HF, PBE0, or B3LYP for these methods.
 
 When a semi-empirical variant is used, the total SAPT(DFT) decomposition is
 still reported through standard SAPT variables (electrostatics, exchange,
@@ -1135,11 +1134,13 @@ SAPT0-D3/aug-cc-pVDZ, and SAPT0-D4/aug-cc-pVDZ.
 The intermolecular ``(i)`` treatment sums the pairwise -D4 dispersion over
 intermolecular atom pairs only, so it is defined solely for the two-body
 ``hf-d4bjeeqtwo`` parameters (level ``d4bj2b``); the Axilrod-Teller-Muto
-three-body term has no pairwise decomposition. Every ``sapt0-d4*(i)`` and
-``fisapt0-d4*(i)`` method therefore uses that fixed parameterization, and a
-method name that explicitly requests an ATM parameter set intermolecularly (for
-example ``sapt0-d4bjeeqatm``) is rejected during option validation before any
-computation; request it supermolecularly as ``sapt0-d4bjeeqatm(s)`` instead.
+three-body term has no pairwise decomposition. The generic ``sapt0-d4(i)`` and
+``fisapt0-d4(i)`` names, together with aliases that resolve to
+``d4bjeeqtwo``, therefore use that fixed parameterization. Other resolved
+levels, including ``d4bj``/``d4(bj)`` aliases that include ATM, are rejected
+for the intermolecular route; request an available level supermolecularly by
+adding ``(s)``. A changed |scf__dft_dispersion_parameters| option is also
+rejected for D4(I), rather than overriding the fixed parameters.
 
 A simple water dimer computation using SAPT0-D may look like::
 

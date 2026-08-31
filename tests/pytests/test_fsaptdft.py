@@ -986,6 +986,9 @@ no_com
     # Clear variables for next calculation
     psi4.core.clean()
     psi4.core.clean_variables()
+    # Establish the normal fisapt0 behavior explicitly: the preceding fisapt0-d4
+    # calculation intentionally disables its ab initio pair-dispersion output.
+    core.set_local_option("FISAPT", "FISAPT_DO_FSAPT_DISP", True)
     initial_fsapt_disp = core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP")
 
     # Run SAPT(DFT) with FISAPT option (HF functional to match SAPT0)

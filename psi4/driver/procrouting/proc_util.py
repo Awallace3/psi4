@@ -401,6 +401,7 @@ def sapt_empirical_dispersion(name, dimer_wfn, **kwargs):
         core.set_variable("FSAPT_" + pw_disp.name.upper(), pw_disp)
         if core.get_option("FISAPT", "FISAPT_DO_FSAPT"):
             filepath = core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH")
-            fisapt_proc._drop(pw_disp, filepath)
+            if filepath.lower() != "none":
+                fisapt_proc._drop(pw_disp, filepath)
 
     return dimer_wfn

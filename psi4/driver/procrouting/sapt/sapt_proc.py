@@ -1152,7 +1152,11 @@ def sapt_dft(
     sapt_jk_B : core.JK or None, optional
         Separate JK object for monomer B, by default None (uses ``sapt_jk``).
     data : dict or None, optional
-        Pre-existing data dictionary to update, by default None.
+        Pre-existing data dictionary to update, by default None. Direct calls
+        with ``SAPT_DFT_INDUCTION_TYPE=CPHF`` must provide ``Ind20,r``,
+        ``Exch-Ind20,r``, and both directional forms of each term. Direct calls
+        with ``SAPT_DFT_INDUCTION_TYPE=NONE`` and ``delta_hf=True`` must provide
+        ``DHF VALUE``.
     print_header : bool, optional
         Whether to print the SAPT(DFT) header, by default True.
     cleanup_jk : bool, optional
@@ -1185,7 +1189,7 @@ def sapt_dft(
     ... ''')
     >>> psi4.set_options({"BASIS": "aug-cc-pVDZ"})
     >>> sapt_dimer, monomerA, monomerB = psi4.proc_util.prepare_sapt_molecule(
-    ...     sapt_dimer, "dimer"
+    ...     dimer, "dimer"
     ... )
     >>> psi4.set_options({"DFT_GRAC_SHIFT": 0.203293})
     >>> wfnA, energyA = psi4.energy("PBE0", molecule=monomerA, return_wfn=True)
