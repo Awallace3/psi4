@@ -263,6 +263,47 @@ def prepare_sapt_molecule(sapt_dimer: core.Molecule, sapt_basis: str) -> Tuple[c
     return (sapt_dimer, monomerA, monomerB)
 
 
+SAPT_D4_INTERMOLECULAR_PARAM_NAME = "hf-d4bjeeqtwo"
+SAPT_D4_INTERMOLECULAR_LEVEL = "d4bj2b"
+
+
+def validate_sapt_empirical_dispersion(name):
+    """Validate the -D variant requested by SAPT method *name*.
+
+    The intermolecular pairwise -D4 route, ``(i)``, is parameterized only for the
+    two-body ``hf-d4bjeeqtwo`` (``d4bj2b``) damping parameters, since the
+    Axilrod-Teller-Muto three-body term has no pairwise decomposition.
+
+    Returns
+    -------
+    bool
+        True when *name* selects the intermolecular pairwise -D4 route.
+
+    Raises
+    ------
+    ValidationError
+        When *name* requests a -D4 parameter set unavailable to that route.
+    """
+
+    from .dft.dft_builder import _dispersion_aliases
+
+    disp_name = name.split("-")[1].lower()
+    if "d4" not in disp_name or disp_name.endswith("(s)"):
+        return False
+
+    variant = disp_name[:-3] if disp_name.endswith("(i)") else disp_name
+    resolved = _dispersion_aliases.get(variant)
+    if resolved != "d4bjeeqtwo" and (resolved is None or "atm" in variant):
+        raise ValidationError(
+            f"SAPT -D4: '{name}' selects the intermolecular pairwise -D4 treatment, which is only "
+            f"parameterized for the two-body {SAPT_D4_INTERMOLECULAR_PARAM_NAME} "
+            f"({SAPT_D4_INTERMOLECULAR_LEVEL}) damping parameters, so the '{variant}' parameter set "
+            f"is unavailable. Use '{name.split('-')[0]}-{variant}(s)' for the supermolecular "
+            f"{variant} treatment, or '{name.split('-')[0]}-{SAPT_D4_INTERMOLECULAR_LEVEL}(i)'."
+        )
+    return True
+
+
 def sapt_empirical_dispersion(name, dimer_wfn, **kwargs):
     from .sapt import fisapt_proc
     from .empirical_disp import edisp_interaction_energy
@@ -280,13 +321,16 @@ def sapt_empirical_dispersion(name, dimer_wfn, **kwargs):
 
     save_pair = (saptd_name == "FISAPT0")
 
-    if 'd4' in disp_name.lower() and not disp_name.lower().endswith('(s)'):
+    if validate_sapt_empirical_dispersion(name):
+        core.print_out("   | Intermolecular Pairwise Dispersion Interaction Energy E_IE = sum_AB 2 E_AB |\n")
+        core.print_out(f"   | -D4 parameters fixed to {SAPT_D4_INTERMOLECULAR_PARAM_NAME}"
+                       f" ({SAPT_D4_INTERMOLECULAR_LEVEL}) |\n")
         result = edisp_interaction_energy.sapt_dft_d4_interaction_energy(
             sapt_dimer=sapt_dimer,
             monomerA=monomerA,
             monomerB=monomerB,
             dimer_wfn=dimer_wfn,
-            dftd4_functional_name='hf-d4bjeeqtwo',
+            dftd4_functional_name=SAPT_D4_INTERMOLECULAR_PARAM_NAME,
             d4_type='intermolecular',
             data={},
         )

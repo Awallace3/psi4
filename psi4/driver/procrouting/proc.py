@@ -4959,6 +4959,8 @@ def run_sapt(name, **kwargs):
     do_empirical_disp = True if '-d' in name.lower() else False
 
     if do_empirical_disp:
+        proc_util.validate_sapt_empirical_dispersion(name)
+
         ## Make sure we are turning SAPT0 dispersion off
         core.set_local_option('SAPT', 'SAPT0_E10', True)
         core.set_local_option('SAPT', 'SAPT0_E20IND', True)
@@ -5301,6 +5303,9 @@ def run_fisapt(name, **kwargs):
 
     if core.get_option('SCF', 'REFERENCE') != 'RHF':
         raise ValidationError('FISAPT requires requires \"reference rhf\".')
+
+    if "-d" in name.lower():
+        proc_util.validate_sapt_empirical_dispersion(name)
 
     if ref_wfn is None:
         core.timer_on("FISAPT: Dimer SCF")

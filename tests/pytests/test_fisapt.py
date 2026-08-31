@@ -1077,6 +1077,38 @@ no_com"""
             shutil.rmtree(fsapt_dirname)
 
 
+@pytest.mark.fsapt
+@pytest.mark.parametrize("method", ["sapt0-d4bjeeqatm", "fisapt0-d4bjeeqatm(i)"])
+def test_sapt_d4_intermolecular_rejects_atm_parameters(method):
+    """The intermolecular pairwise -D4 route only carries two-body parameters."""
+
+    mol = psi4.geometry("""
+    He 0.0 0.0 0.0
+    --
+    He 0.0 0.0 4.0
+    units angstrom
+    """)
+    psi4.set_options({"basis": "cc-pvdz"})
+    with pytest.raises(psi4.ValidationError, match="two-body hf-d4bjeeqtwo"):
+        psi4.energy(method, molecule=mol)
+
+
+@pytest.mark.fsapt
+@pytest.mark.parametrize("method", ["hf-d4(i)", "hf-d4(s)"])
+def test_hf_d4_suffixed_names_are_not_sapt_methods(method):
+    """HF-named -D4 methods must not dispatch to a SAPT computation."""
+
+    mol = psi4.geometry("""
+    He 0.0 0.0 0.0
+    --
+    He 0.0 0.0 4.0
+    units angstrom
+    """)
+    psi4.set_options({"basis": "cc-pvdz"})
+    with pytest.raises(psi4.ValidationError, match="not available"):
+        psi4.energy(method, molecule=mol)
+
+
 if __name__ == "__main__":
     test_fsapt_d4()
     # test_fsapt_psivars_dict()

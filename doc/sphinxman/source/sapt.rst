@@ -1132,6 +1132,15 @@ SAPT0-D3/aug-cc-pVDZ, and SAPT0-D4/aug-cc-pVDZ.
    [Wallace:2024:114115]_, or above in the section ``SAPT(DFT)-D3 and
    SAPT(DFT)-D4 variants``.
 
+The intermolecular ``(i)`` treatment sums the pairwise -D4 dispersion over
+intermolecular atom pairs only, so it is defined solely for the two-body
+``hf-d4bjeeqtwo`` parameters (level ``d4bj2b``); the Axilrod-Teller-Muto
+three-body term has no pairwise decomposition. Every ``sapt0-d4*(i)`` and
+``fisapt0-d4*(i)`` method therefore uses that fixed parameterization, and a
+method name that explicitly requests an ATM parameter set intermolecularly (for
+example ``sapt0-d4bjeeqatm``) is rejected during option validation before any
+computation; request it supermolecularly as ``sapt0-d4bjeeqatm(s)`` instead.
+
 A simple water dimer computation using SAPT0-D may look like::
 
     molecule water_dimer {
