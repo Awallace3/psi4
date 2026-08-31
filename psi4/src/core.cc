@@ -296,11 +296,8 @@ void py_be_quiet() {
     if (!outfile) throw PSIEXCEPTION("Psi4: Unable to redirect output to /dev/null.");
 }
 
-double sapt_nuclear_external_potential_python(
-    std::shared_ptr<Wavefunction> reference_,
-    py::dict py_matrices_,
-    Options& options_
-){
+double sapt_nuclear_external_potential_python(std::shared_ptr<Wavefunction> reference_, py::dict py_matrices_,
+                                              Options& options_) {
     std::map<std::string, std::shared_ptr<Matrix>> matrices_;
     for (auto item : py_matrices_) {
         matrices_[item.first.cast<std::string>()] = item.second.cast<std::shared_ptr<Matrix>>();

@@ -647,7 +647,7 @@ where :math:`E_{int}^{D}` is the corresponding -D3/-D4 interaction energy. The
 double counting of induction effects present in both of these terms. Overall,
 Psi4 keeps the SAPT-like electrostatics, exchange, and induction terms, then
 assigns the remaining supermolecular DFT-D correction to dispersion so that the
-summed components reproduce the supermolecular DFT-D interaction energy. 
+summed components reproduce the supermolecular DFT-D interaction energy.
 
 
 Basic Keywords for SAPT(DFT) 
@@ -1169,6 +1169,6 @@ A simple water dimer computation using SAPT0-D may look like::
 
 Given the naturally pairwise-atomic nature of these empirical dispersion corrections,
 integration with existing FSAPT functionality is also available simply by calling
-``energy("fsapt0-d3mbj")`` or ``energy("fsapt0-d4bj2b")`` (alias to ``energy("fsapt0-d4bjeeqtwo")``). See :ref:`FSAPT
+``energy("fisapt0-d3mbj")`` or ``energy("fisapt0-d4bj2b")`` (alias to ``energy("fisapt0-d4bjeeqtwo")``). See :ref:`FSAPT
 <sec:fisapt>` documentation for more details on using FSAPT for functional
 group analyses.
