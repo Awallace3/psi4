@@ -53,7 +53,23 @@ no_com"""
     )
     # NOTE: wfn used for keeping SAPT data together, but the wavefunction is
     # just the dimer SCF wavefunction.
+    outfile = "pytest_output.dat"
+    output_offset = os.path.getsize(outfile) if os.path.exists(outfile) else 0
     _, wfn = psi4.energy("fisapt0", return_wfn=True)
+    psi4.core.flush_outfile()
+    with open(outfile) as handle:
+        handle.seek(output_offset)
+        output = handle.read()
+    assert "## E Nuc" not in output
+
+    fisapt = psi4.core.FISAPT(wfn)
+    fisapt.localize()
+    fisapt.partition()
+    fisapt.overlap()
+    fisapt.kinetic()
+    fisapt.nuclear()
+    assert all(matrix is not None for matrix in fisapt.matrices().values())
+
     keys = ["Enuc", "Eelst", "Eexch", "Eind", "Edisp", "Etot"]
     Eref = {
         "Enuc": 35.07529824960602,

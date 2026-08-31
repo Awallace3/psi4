@@ -679,16 +679,11 @@ void FISAPT::nuclear() {
     // Apparently, we were using C full strength, but the others I think get scaled by 0.5 because Rob counts
     // A->B and B->A separately and adds them (see a few lines up this fn...maybe due to how FSAPT files are written)
     matrices_["Enucs"] = Enucs;
-    Etot += psi::sapt_nuclear_external_potential_matrix(
-        reference_,
-        matrices_,
-        options_
-    );
+    Etot += psi::sapt_nuclear_external_potential_matrix(reference_, matrices_, options_);
 
     // => Print <= //
 
     // Zs->print();
-    //Enucs->print();
 
     outfile->Printf("    Nuclear Repulsion Tot: %24.16E [Eh]\n", Etot);
     outfile->Printf("\n");
