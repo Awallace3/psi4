@@ -517,6 +517,7 @@ units angstrom
     })
 
     from psi4.driver.task_planner import task_planner
+    from psi4.driver.driver_cbs import CompositeComputer
     from psi4.driver.driver_findif import FiniteDifferenceComputer
     from psi4.driver.driver_nbody import ManyBodyComputer
     from psi4.driver.task_base import AtomicComputer
@@ -551,8 +552,27 @@ units angstrom
                             },
                             **findif_kwargs)
     assert isinstance(cbs_plan, ManyBodyComputer)
-    assert {type(task) for task in cbs_plan.task_list.values()} == {FiniteDifferenceComputer, AtomicComputer}
+    assert {type(task) for task in cbs_plan.task_list.values()} == {CompositeComputer, AtomicComputer}
     assert all(task.basis == "sto-3g" for task in cbs_plan.task_list.values() if isinstance(task, AtomicComputer))
+    for task in cbs_plan.task_list.values():
+        if isinstance(task, CompositeComputer):
+            assert {type(component) for component in task.task_list} == {FiniteDifferenceComputer}
+
+    mixed_cbs_plan = task_planner(
+        "gradient",
+        "cbs",
+        dimer,
+        scf_wfn="b3lyp-xdm",
+        scf_basis="sto-3g",
+        corl_wfn="mp2",
+        corl_basis="sto-3g",
+        **findif_kwargs,
+    )
+    mixed_tasks = {}
+    for task in mixed_cbs_plan.task_list:
+        mixed_tasks.setdefault(task.method.lower(), set()).add(type(task))
+    assert mixed_tasks["b3lyp-xdm"] == {FiniteDifferenceComputer}
+    assert mixed_tasks["mp2"] == {AtomicComputer}
 
     # A user-requested analytic gradient is still refused because one level needs XDM.
     with pytest.raises(NotImplementedError, match="Analytic XDM gradients are not implemented"):

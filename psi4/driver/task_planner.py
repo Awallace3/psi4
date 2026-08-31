@@ -58,9 +58,17 @@ def _dispersion_uses_xdm(value: Any) -> bool:
     return isinstance(value, dict) and str(value.get("type", "")).lower() == "xdm"
 
 
-def _container_uses_xdm(value: Any) -> bool:
+def _functional_uses_xdm(value: Any) -> bool:
     if isinstance(value, str):
         return "-xdm" in value.lower()
+    if isinstance(value, dict):
+        return _dispersion_uses_xdm(value.get("dispersion"))
+    return False
+
+
+def _container_uses_xdm(value: Any) -> bool:
+    if isinstance(value, str):
+        return _functional_uses_xdm(value)
     if isinstance(value, dict):
         return any(_container_uses_xdm(item) for item in value.values())
     if isinstance(value, (list, tuple, set)):
@@ -194,8 +202,11 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
     if callable(dft_functional) and needs_dispersion_metadata:
         dft_uses_xdm = _dispersion_uses_xdm(_callable_dispersion(dft_functional))
     else:
-        dft_uses_xdm = _container_uses_xdm(dft_functional)
-    task_uses_xdm = dft_uses_xdm or _container_uses_xdm((method, cbsmeta))
+        dft_uses_xdm = _functional_uses_xdm(dft_functional)
+    cbs_kwargs_uses_xdm = any(
+        _container_uses_xdm(value) for key, value in kwargs.items() if key.endswith("_wfn") or key == "cbs_metadata"
+    )
+    task_uses_xdm = dft_uses_xdm or cbs_kwargs_uses_xdm or _container_uses_xdm((method, cbsmeta))
     uses_xdm = task_uses_xdm or _container_uses_xdm(kwargs.get("levels", {}))
     if current_manybody_kwargs.get("bsse_type") is not None:
         bsse_type = current_manybody_kwargs["bsse_type"]
@@ -246,7 +257,16 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
                 # TODO: pass more info, so fn can use for managed_methods -- ref, qc_module, fc/ae, conv/df
                 dermode = _negotiate_derivative_type(driver, methods, dertype, level_uses_xdm)
 
-                if dermode[0] == dermode[1]:  # analytic
+                if level_uses_xdm and driver == "gradient":
+                    logger.info("PLANNING MB(CBS(XDM COMPONENTS)):  {mc_level_idx=} {packet=} {cbsmeta=} kw={kwargs}")
+                    plan.build_tasks(CompositeComputer,
+                                     **packet,
+                                     mc_level_idx=mc_level_idx,
+                                     component_findif_kwargs=current_findif_kwargs,
+                                     dft_functional_uses_xdm=dft_uses_xdm,
+                                     **cbsmeta,
+                                     **kwargs)
+                elif dermode[0] == dermode[1]:  # analytic
                     logger.info("PLANNING MB(CBS):  {mc_level_idx=} {packet=} {cbsmeta=} {dertype=} kw={kwargs}")
                     plan.build_tasks(CompositeComputer, **packet, mc_level_idx=mc_level_idx, **cbsmeta,
                                      **kwargs)  # TODO dertype expected in kwargs?
@@ -297,7 +317,13 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
         # TODO: pass more info, so fn can use for managed_methods -- ref, qc_module, fc/ae, conv/df
         dermode = _negotiate_derivative_type(driver, methods, kwargs.pop('dertype', None), task_uses_xdm)
 
-        if dermode[0] == dermode[1]:  # analytic
+        if task_uses_xdm and driver == "gradient":
+            logger.info(f'PLANNING CBS(XDM COMPONENTS):  packet={packet} kw={kwargs}')
+            return CompositeComputer(**packet,
+                                     component_findif_kwargs=current_findif_kwargs,
+                                     dft_functional_uses_xdm=dft_uses_xdm,
+                                     **kwargs)
+        elif dermode[0] == dermode[1]:  # analytic
             logger.info('PLANNING CBS:  packet={packet} kw={kwargs}')
             plan = CompositeComputer(**packet, **kwargs)
             return plan
