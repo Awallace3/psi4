@@ -78,6 +78,10 @@ def build_superfunctional(name, restricted, npoints=None, deriv=1):
             xdm_name = base_dict["name"] + ("-XDM" if model is None else f"-XDM({model.upper()})")
             if xdm_name.lower() in dft_builder.functionals:
                 base_dict = dft_builder.functionals[xdm_name.lower()]
+            elif "dispersion" in base_dict:
+                raise ValidationError(
+                    "SCF: XDM cannot be combined with the '%s' dispersion correction already defined for functional (%s)."
+                    % (base_dict["dispersion"].get("type", "unknown"), base_dict["name"]))
             else:
                 base_dict["name"] = xdm_name
                 base_dict["dispersion"] = {"type": "xdm", "params": {"xdm_model": model or "kb49"}}

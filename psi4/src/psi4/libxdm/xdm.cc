@@ -44,6 +44,7 @@
 #include "psi4/libpsi4util/exception.h"
 #include "psi4/libpsi4util/process.h"
 #include "psi4/libqt/qt.h"
+#include "psi4/physconst.h"
 #include "psi4/psi4-dec.h"
 
 #include <algorithm>
@@ -55,8 +56,6 @@
 
 namespace psi {
 namespace xdm {
-
-static constexpr double BOHR_TO_ANGSTROM = 0.52917720859;
 
 // ============================================================================
 // Constructor and factory methods
@@ -72,7 +71,7 @@ XDMDispersion::XDMDispersion(double a1, double a2_bohr, const std::string& funct
 }
 
 std::shared_ptr<XDMDispersion> XDMDispersion::build(const std::string& functional, double a1, double a2_angstrom) {
-    double a2_bohr = a2_angstrom / BOHR_TO_ANGSTROM;
+    double a2_bohr = a2_angstrom / pc_bohr2angstroms;
     return std::make_shared<XDMDispersion>(a1, a2_bohr, functional);
 }
 

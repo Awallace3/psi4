@@ -646,6 +646,23 @@ def test_xdm_rejects_nonlocal_double_dispersion():
 
 
 @pytest.mark.xdm
+def test_xdm_rejects_empirical_double_dispersion():
+    from psi4.driver.p4util.exceptions import ValidationError
+    from psi4.driver.procrouting import dft, proc
+    from psi4.driver.procrouting.dft import dft_builder
+
+    assert dft_builder.functionals["b3lyp-d3bj"]["dispersion"]["type"] == "d3bj"
+    assert "b3lyp-d3bj-xdm" not in dft_builder.functionals
+
+    with pytest.raises(ValidationError, match="XDM cannot be combined with the 'd3bj' dispersion"):
+        dft.build_superfunctional("b3lyp-d3bj-xdm", True)
+
+    psi4.set_options({"basis": "aug-cc-pvdz", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
+    with pytest.raises(ValidationError, match="XDM cannot be combined with the 'd3bj' dispersion"):
+        proc.build_functional_and_disp("b3lyp-d3bj-xdm", True)
+
+
+@pytest.mark.xdm
 def test_xdm_kb49_aliases_and_lcwpbe_reference():
     from psi4.driver.procrouting import proc
     from psi4.driver.procrouting.dft import dft_builder
