@@ -1533,6 +1533,36 @@ def test_saptdft_sapt_dft_api_requires_hf_segment_data(induction_type, message):
 
 
 @pytest.mark.saptdft
+def test_saptdft_direct_api_reports_all_missing_cphf_terms():
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ne 1 4.5
+  units bohr
+    """)
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "sapt_dft_induction_type": "CPHF",
+            "sapt_dft_do_fsapt": "NONE",
+        }
+    )
+    wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
+    with pytest.raises(psi4.ValidationError) as exc_info:
+        sapt_proc.sapt_dft(wfn, wfn, wfn, data={"Ind20,r": 0.0})
+
+    message = str(exc_info.value)
+    for key in [
+        "Exch-Ind20,r",
+        "Ind20,r (A<-B)",
+        "Ind20,r (A->B)",
+        "Exch-Ind20,r (A<-B)",
+        "Exch-Ind20,r (A->B)",
+    ]:
+        assert key in message
+
+
+@pytest.mark.saptdft
 @pytest.mark.parametrize(
     "induction_type, fsapt_type, message",
     [

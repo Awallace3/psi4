@@ -881,6 +881,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         external_potentials=kwargs.get("external_potentials", None),
         do_delta_dft=do_delta_dft,
         do_disp=do_disp,
+        do_d3=sapt_dft_D3_IE,
+        do_d4=sapt_dft_D4_IE,
     )
 
     # Copy data back into globals
@@ -1126,6 +1128,8 @@ def sapt_dft(
     external_potentials: dict | None = None,
     do_delta_dft: bool = False,
     do_disp: bool = True,
+    do_d3: bool = False,
+    do_d4: bool = False,
 ) -> dict:
     """Compute the SAPT(DFT) interaction energy components.
 
@@ -1161,6 +1165,10 @@ def sapt_dft(
         Whether to compute delta-DFT correction, by default False.
     do_disp : bool, optional
         Whether to compute dispersion, by default True.
+    do_d3 : bool, optional
+        Whether routed D3 interaction dispersion is present, by default False.
+    do_d4 : bool, optional
+        Whether routed D4 interaction dispersion is present, by default False.
 
     Returns
     -------
@@ -1197,12 +1205,21 @@ def sapt_dft(
         raise ValidationError("F-SAPT requires induction; SAPT_DFT_INDUCTION_TYPE=NONE is unavailable.")
     if induction_type == "CPHF" and do_fsapt:
         raise ValidationError("F-SAPT requires SAPT(DFT) fragment induction; SAPT_DFT_INDUCTION_TYPE=CPHF is unavailable.")
-    if induction_type == "CPHF" and do_dft and "Ind20,r" not in data:
+    cphf_induction_keys = [
+        "Ind20,r",
+        "Exch-Ind20,r",
+        "Ind20,r (A<-B)",
+        "Ind20,r (A->B)",
+        "Exch-Ind20,r (A<-B)",
+        "Exch-Ind20,r (A->B)",
+    ]
+    missing_cphf_keys = [key for key in cphf_induction_keys if key not in data]
+    if induction_type == "CPHF" and do_dft and missing_cphf_keys:
         raise ValidationError(
             "SAPT_DFT_INDUCTION_TYPE=CPHF reuses the SAPT0 induction terms computed by the "
             "SAPT(DFT) delta HF segment, which sapt_dft() does not run. Call "
-            "energy('sapt(dft)') instead of sapt_dft() directly, or supply the SAPT0 "
-            "induction terms in `data`."
+            "energy('sapt(dft)') instead of sapt_dft() directly, or supply all SAPT0 "
+            f"induction terms in `data`. Missing keys: {', '.join(missing_cphf_keys)}."
         )
     if induction_type == "NONE" and delta_hf and "DHF VALUE" not in data:
         raise ValidationError(
@@ -1555,11 +1572,7 @@ def sapt_dft(
             cache[k] = v
         FISAPT_obj.fdrop(external_potentials)
 
-    sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
-    sapt_dft_D3_IE = core.get_option("SAPT", "SAPT_DFT_D3_IE")
-    if do_fsapt and (
-        sapt_dft_D4_IE or sapt_dft_D3_IE
-    ):
+    if do_fsapt and (do_d4 or do_d3):
         cache["FSAPT_EMPIRICAL_DISP"] = core.Matrix.from_array(
             data["FSAPT_EMPIRICAL_DISP"]
         )
@@ -1581,7 +1594,13 @@ def sapt_dft(
     # because FISAPT_obj drop sets core variables, avoid setting them twice
     if core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH").upper() != "NONE" and do_fsapt:
         FISAPT_obj = saptdft_fisapt.drop_saptdft_variables(
-            dimer_wfn, wfn_A, wfn_B, cache, data
+            dimer_wfn,
+            wfn_A,
+            wfn_B,
+            cache,
+            data,
+            do_disp=do_disp,
+            do_empirical_disp=do_d4 or do_d3,
         )
     elif do_fsapt:
         def _set_fsapt_var(label, value):
@@ -1597,7 +1616,7 @@ def sapt_dft(
         _set_fsapt_var("FSAPT_EXCH_AB", cache["Exch_AB"])
         _set_fsapt_var("FSAPT_INDAB_AB", cache["IndAB_AB"])
         _set_fsapt_var("FSAPT_INDBA_AB", cache["IndBA_AB"])
-        if sapt_dft_D4_IE or sapt_dft_D3_IE:
+        if do_d4 or do_d3:
             disp_ab = cache["Elst_AB"].clone()
             disp_ab.zero()
             _set_fsapt_var("FSAPT_DISP_AB", disp_ab)

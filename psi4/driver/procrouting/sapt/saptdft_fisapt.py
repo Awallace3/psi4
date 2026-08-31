@@ -326,7 +326,7 @@ def setup_fisapt_object(
     return fisapt
 
 
-def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars):
+def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars, do_disp=True, do_empirical_disp=False):
     """
     Setup FISAPT object to call fisapt_fdrop for dropping SAPT(DFT) variables.
 
@@ -342,6 +342,10 @@ def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars):
         SAPT(DFT) cache containing orbital data
     scalars : dict
         SAPT energy components dictionary
+    do_disp : bool
+        Whether the routed calculation includes SAPT dispersion.
+    do_empirical_disp : bool
+        Whether the routed calculation includes empirical dispersion.
     """
     fisapt = core.FISAPT(wfn)
     # iterate through cache and scalars to set these labels for
@@ -356,8 +360,8 @@ def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars):
     }
     # Set whether to drop dispersion matrix... fisapt has specific option
     # for this...
-    core.set_local_option("FISAPT", "FISAPT_DO_FSAPT_DISP", core.get_option("SAPT", "SAPT_DFT_DO_DISP"))
-    if core.get_option("SAPT", "SAPT_DFT_DO_DISP"):
+    core.set_local_option("FISAPT", "FISAPT_DO_FSAPT_DISP", do_disp)
+    if do_disp:
         cache_keys["Disp_AB"] = "Disp_AB"
     matrix_cache = {
         fisapt_key: cache[sdft_key] for sdft_key, fisapt_key in cache_keys.items()
@@ -378,7 +382,7 @@ def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars):
     fisapt.save_variables_to_wfn(wfn, sapt_type='SAPT(DFT)')
     # Now drop empirical D3/D4 dispersion if computed and expose the
     # same variable through both global and returned-wavefunction APIs.
-    if core.get_option("SAPT", "SAPT_DFT_D4_IE") or core.get_option("SAPT", "SAPT_DFT_D3_IE"):
+    if do_empirical_disp:
         pw_disp = cache["FSAPT_EMPIRICAL_DISP"]
         pw_disp.name = "Empirical_Disp"
         filepath = core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH")

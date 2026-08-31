@@ -1083,7 +1083,15 @@ no_com"""
 
 
 @pytest.mark.fsapt
-@pytest.mark.parametrize("method", ["sapt0-d4bjeeqatm", "fisapt0-d4bjeeqatm(i)"])
+@pytest.mark.parametrize(
+    "method",
+    [
+        "sapt0-d4bjeeqatm",
+        "fisapt0-d4bjeeqatm(i)",
+        "sapt0-d4bj",
+        "fisapt0-d4(bj)(i)",
+    ],
+)
 def test_sapt_d4_intermolecular_rejects_atm_parameters(method):
     """The intermolecular pairwise -D4 route only carries two-body parameters."""
 

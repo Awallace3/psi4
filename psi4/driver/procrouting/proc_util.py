@@ -293,7 +293,7 @@ def validate_sapt_empirical_dispersion(name):
 
     variant = disp_name[:-3] if disp_name.endswith("(i)") else disp_name
     resolved = _dispersion_aliases.get(variant)
-    if resolved != "d4bjeeqtwo" and (resolved is None or "atm" in variant):
+    if variant != "d4" and resolved != "d4bjeeqtwo":
         raise ValidationError(
             f"SAPT -D4: '{name}' selects the intermolecular pairwise -D4 treatment, which is only "
             f"parameterized for the two-body {SAPT_D4_INTERMOLECULAR_PARAM_NAME} "

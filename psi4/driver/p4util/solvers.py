@@ -159,7 +159,7 @@ def cg_solver(
         # Update x and r
         for x in active:
             alpha[x] = rz_old[x] / Ap_vec[x].vector_dot(p_vec[x])
-            if np.isnan(alpha)[0]:
+            if np.isnan(alpha[x]):
                 core.print_out("CG: Alpha is NaN for vector %d. Stopping vector." % x)
                 active_mask[x] = False
                 continue
@@ -309,7 +309,7 @@ def cg_solver_ein(
         # Update x and r
         for x in active:
             alpha[x] = rz_old[x] / ein.core.dot(Ap_vec[x], p_vec[x])
-            if np.isnan(alpha)[0]:
+            if np.isnan(alpha[x]):
                 core.print_out("CG: Alpha is NaN for vector %d. Stopping vector." % x)
                 active_mask[x] = False
                 continue
