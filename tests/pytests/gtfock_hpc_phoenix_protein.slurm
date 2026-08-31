@@ -49,10 +49,20 @@ MAX_RANKS=${SLURM_JOB_NUM_NODES:-4}
 # and 8462 auxiliary functions the packed (Q|mn) tensor is 109.5 GiB, which does
 # not fit a 120 GB budget, and MemDFJK would silently become DiskDFJK -- a third
 # algorithm, bottlenecked on scratch I/O, wearing the label of the second. The
-# node has 186 GiB, so the reference arms get 160 GB: enough to keep density
-# fitting in core and give Psi4's default its best showing on this hardware. The
-# benchmark records the JK class it actually got, so if the fit fails anyway the
-# results say DiskDFJK rather than quietly mislabelling the point.
+# node has 186 GiB, so the reference arms get 160 GB, and the benchmark records
+# the JK class it actually got, so if the fit fails anyway the results say
+# DiskDFJK rather than quietly mislabelling the point.
+#
+# It does fail at 1863 basis functions, and the recording is what caught it. Psi4
+# hands MemDFJK's estimator only part of the declared budget, so 160 GB here is
+# 111.759 GiB there against 127.825 GiB of AOs needed, and job 12638902 printed
+# "MemDFJK requires too much memory. DiskDFJK algorithm will be used." The
+# 6-31G** point at 1555 basis functions does stay in core; the 6-31+G** point at
+# 1863 does not, and the previously documented 829 s figure for it was DiskDFJK.
+# Keeping that point in core took 185 GB on a 376 GB node (job 12639820), which
+# is more than the 186 GiB nodes this script otherwise targets can supply, so the
+# default is left at 160 and the fallback is reported rather than engineered
+# around. See tests/pytests/gtfock_df_setup_provenance.txt.
 MEMORY_PER_RANK_GB=${FM_MEMORY_PER_RANK_GB:-120}
 REFERENCE_MEMORY_GB=${FM_REFERENCE_MEMORY_GB:-160}
 

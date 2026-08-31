@@ -28,12 +28,12 @@ _COLUMNS = [
     "system", "basis", "method", "nbf", "nshell", "puream",
     "arm", "jk_name", "ranks", "threads_per_rank", "total_cores",
     "iterations", "jk_calls",
-    "scf_wall_s", "jk_wall_s",
+    "scf_wall_s", "jk_wall_s", "df_setup_s", "scf_remainder_s",
     "speedup_vs_gtfock_n1", "jk_speedup_vs_gtfock_n1", "speedup_vs_direct",
     "peak_rss_max_mb", "peak_rss_sum_mb",
     "scf_energy", "dE_vs_direct_eh", "dE_across_ranks_eh",
     "process_grid", "local_task_shape",
-    "host", "slurm_job_id", "slurm_nodelist",
+    "host", "slurm_job_id", "slurm_nodelist", "df_setup_keys",
 ]
 
 
@@ -160,6 +160,17 @@ def load_points(directories):
             "jk_timer_key": head.get("jk_timer_key", ""),
             "scf_wall_s": max(r["scf_wall_seconds"] for r in records),
             "jk_wall_s": max(r["jk_wall_seconds"] for r in records),
+            # The DF three-index build, which JK::initialize() runs outside the
+            # "JK: JK" timer, and the whole non-J/K remainder that contains it.
+            # Both are blank on records written before the benchmark measured
+            # them rather than back-filled with a zero that would read as a
+            # measured absence.
+            "df_setup_s": (max(r["df_setup_total_seconds"] for r in records)
+                           if all("df_setup_total_seconds" in r for r in records) else ""),
+            "scf_remainder_s": (max(r["scf_remainder_seconds"] for r in records)
+                                if all("scf_remainder_seconds" in r for r in records) else ""),
+            "df_setup_keys": "|".join(
+                e["key"] for e in head.get("df_setup_records", [])),
             "peak_rss_max_mb": max(r["peak_rss_mb"] for r in records),
             "peak_rss_sum_mb": sum(r["peak_rss_mb"] for r in records),
             "scf_energy": head["scf_energy"],

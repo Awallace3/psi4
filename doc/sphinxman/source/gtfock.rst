@@ -642,7 +642,11 @@ gtfock  4      6    2x2   11     88.7     84.2     1.07     605            2403 
 ``speedup`` is total SCF against the one-rank GTFock point, ``dE`` is against the
 ``direct`` arm on the same system, and ``J/K (s)`` is the ``JK: JK`` timer that
 ``JK::compute()`` wraps around every builder's ``compute_JK()``, so it is the
-same clock in all three arms. Every point converged in 11 iterations, and the
+same clock in all three arms. It is not the same *fraction* of each arm's work:
+on ``df`` it excludes the three-index construction, which happens before that
+timer opens, so every ``df`` row's ``J/K (s)`` in this document is a partial
+figure. `What the J/K timer does not cover`_ measures what it leaves out, at all
+four sizes. Every point converged in 11 iterations, and the
 GTFock energy is identical across ranks to every digit printed |w---w| the
 spread within a rank count is exactly zero, not merely small. Rank-count
 invariance survives at production size, not just in the tests.
@@ -820,9 +824,15 @@ The like-for-like engine comparison is the one-node row, 2.5x and 3.2x against
 ``DirectJK`` on identical hardware, consistent with the 3.0x and 3.2x the
 fixed-core sweep measured. The density-fitting line also moved between the two
 sweeps on the nanotube, 32.7 s there against 44.5 s here, while its ``J/K: JK``
-timer did not budge (7.7 against 7.8 s) |w---w| the whole difference is outside
-``JK::compute()``, in ``MemDFJK``'s three-index integral construction, which is
-I/O-bound on shared cluster storage. It is recorded rather than smoothed, and it
+timer did not budge (7.7 against 7.8 s), so the whole difference is outside
+``JK::compute()``. It is not the three-index integral construction, which is
+where an earlier version of this paragraph put it: two dedicated re-runs of this
+point (jobs 12638902 and 12639820) time that construction at 6.5 and 6.3 s and
+land the whole SCF at 17.9 and 18.0 s, under either sweep figure. The swing sits
+in the non-J/K remainder instead, and the likeliest reading is the one the
+peptide re-run makes visible |w---w| 21.172 s in ``HF: DIIS`` on a cold node
+against 0.598 s on a warm one, which is PSIO scratch I/O on shared storage and
+not work the arm does. It is recorded rather than smoothed, and it
 is one more reason to read the DF row as orientation only. What is worth noting is
 that GTFock's four-node exact-ERI SCF, 27.9 s, is faster than either
 density-fitting measurement in this document while carrying no fitting error and
@@ -881,9 +891,10 @@ the two sweeps above, on four nodes of the same type but not the same four nodes
 Two things in that script differ on purpose: a twelve-hour walltime, and 160 GB
 rather than 120 GB for the single-process reference arms, so that density fitting
 keeps its three-index tensor in core instead of silently becoming ``DiskDFJK`` and
-reporting a third algorithm under the second one's name. It did stay in core
-|w---w| the ``df`` row below is ``MemDFJK``, peaking at the 94750 MB in the
-table.
+reporting a third algorithm under the second one's name. It did stay in core at
+this width |w---w| the ``df`` row below is ``MemDFJK``, peaking at the 94750 MB
+in the table. It does not at 1863 basis functions, which the basis-set boundary
+at the end of this section reports.
 
 .. 157-atom fragment pair from PDB 3acx, 6-31G** (1555 basis functions in 702
    shells), on atl1-1-02-006-16-2 and three more nodes, job 12445512
@@ -951,9 +962,13 @@ algorithm most users actually run, the one-node points are effectively tied at
 403.9 s to 393.5 s, and four nodes make the exact-ERI engine 3.0x faster than
 density fitting on the same molecule |w---w| at 2170 MB per rank against 94750 in
 one process, and 93x closer to the exact-ERI answer (-5.4e-05 against +5.0e-03
-:math:`E_h` of fitting error). The CSV's ``speedup_vs_direct`` column reaches
-12.9x at four nodes; that compares 96 cores against 24 and is a throughput number,
-not an algorithmic one.
+:math:`E_h` of fitting error). Both of those are SCF totals and both stand. The
+comparison that does not is the one the ``J/K (s)`` column invites: 1606.4 s
+against 244.1 s is 6.6x, but 91.6 s of this ``df`` point's integral work happens
+before that timer opens, and the honest ratio of integral work is 4.7x.
+`What the J/K timer does not cover`_ has the split. The CSV's
+``speedup_vs_direct`` column reaches 12.9x at four nodes; that compares 96 cores
+against 24 and is a throughput number, not an algorithmic one.
 
 Memory finally shows the distribution doing something. Per-rank RSS *falls* with
 rank count here |w---w| 2407, 2299, 2215, 2170 MB |w---w| rather than staying flat
@@ -979,7 +994,15 @@ the script was written for. Job 12441235 supplied the reference arms that job
 never reached, on one node of the same type: ``DirectJK`` converged that input in
 12 iterations to -3642.752751 :math:`E_h` in 8470 s, and density fitting in 12 to
 -3642.748403 in 829 s, both monotonically and both with the DIIS error falling to
-1.6e-08. So the non-convergence is GTFock's and not the system's, which is why
+1.6e-08. That density-fitting figure is ``DiskDFJK``, not ``MemDFJK``. At 1863
+basis functions the 160 GB this script gives the reference arms reaches MemDFJK's
+estimator as 111.759 GiB against the 127.825 GiB of AOs it needs, so |PSIfour|
+falls back, and the in-core guarantee that holds at 1555 does not extend here.
+Job 12638902 reproduced the fallback, and job 12639820 held the same point in
+core at 185 GB, where it took 778.3 s against the disk algorithm's 716.2 s on a
+node of the same type |w---w| in core was not the faster arrangement.
+
+So the non-convergence is GTFock's and not the system's, which is why
 this section reports the smaller basis and why the restriction is stated under
 `Prototype scope`_ rather than treated as a scaling limit. Nothing about
 distribution is implicated either: rebuilding J on one fixed density at 1, 2, and
@@ -994,6 +1017,137 @@ than the Fock build does, so the speedup of the SCF as a whole does not keep
 improving |w---w| 1.84x at 260 basis functions, 3.33x at 574, 3.12x at 1555. Both
 halves of that point at the same next step, which is distributing the rest of the
 SCF rather than tuning the part that already scales.
+
+What the J/K timer does not cover
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Every table above sets a ``df`` row's ``J/K (s)`` beside a ``direct`` or
+``gtfock`` row's, and the quotient invites being read as a ratio of Fock-build
+speed. It is not one, and the reason is structural rather than statistical.
+``JK::initialize()`` calls the subclass's ``preiterations()``
+(:source:`psi4/src/psi4/libfock/jk.cc`), and ``timer_on("JK: JK")`` is opened
+later, inside ``JK::compute()``. Whatever a builder does in ``preiterations()``
+is invisible to that clock. ``DirectJK::preiterations()`` does essentially
+nothing beyond a BrianQC hook, and GTFock's one-shot Simint and screening setup
+is reported separately above. But ``MemDFJK::preiterations()`` ends in
+``dfh_->initialize()`` with method ``STORE``
+(:source:`psi4/src/psi4/libfock/MemDFJK.cc`): it builds the entire three-index
+tensor and keeps it. That is most of density fitting's integral work, and none
+of it is in the column.
+
+``J/K (s)`` is therefore the same clock in every arm, as those sections say, but
+it does not cover the same *fraction* of each arm's work. On the exact-ERI arms
+it covers all the integral work. On ``df`` it covers the contraction and not the
+construction, and the ratio between the two columns is correspondingly
+flattered.
+
+Measuring the omission needed no new C++. ``DFH: sparsity prep`` and
+``DFH: initialize()`` have been timers in
+:source:`psi4/src/psi4/lib3index/dfhelper.cc` all along, and ``DiskDFJK``
+brackets its own setup under ``JK: (A|mn)``, ``JK: (A|Q)^-1/2`` and
+``JK: (Q|mn)`` (:source:`psi4/src/psi4/libfock/DiskDFJK.cc`) |w---w| all of them
+top-level timers, siblings of ``HF: Form G`` rather than children of ``JK: JK``.
+Both vocabularies have to be watched, because both builders answer to
+``scf_type df`` and only one of them uses ``DFHelper``.
+:source:`tests/pytests/gtfock_hpc_phoenix_df_setup.slurm` re-runs the ``df`` arm
+alone at all four documented sizes, one process on one exclusive ``core24``
+node, and :source:`tests/pytests/gtfock_hpc_phoenix_df_setup2.slurm` repeats the
+three points that needed a warm node or a larger budget. Wall seconds, ``setup``
+being the sum of those top-level timers and ``rest`` the SCF with both the setup
+and ``JK: JK`` removed:
+
+.. density fitting alone, one process x 24 threads, exclusive core24 nodes,
+   jobs 12638902 (160 GB) and 12639820 (120 GB, 185 GB at the last row)
+
+==========  ====  ========  =========  =======  ========  =======  ========  ========
+system      nbf   builder   setup (s)  J/K (s)  rest (s)  SCF (s)  RSS (MB)  job
+==========  ====  ========  =========  =======  ========  =======  ========  ========
+peptide     260   MemDFJK   0.84       0.62     1.86      3.3      1494      12639820
+nanotube    574   MemDFJK   6.33       8.32     3.38      18.0     10362     12639820
+protein157  1555  MemDFJK   91.58      248.38   50.75     390.7    94736     12638902
+protein157  1863  DiskDFJK  167.11     479.16   69.92     716.2    128048    12638902
+protein157  1863  MemDFJK   285.53     426.78   65.98     778.3    194145    12639820
+==========  ====  ========  =========  =======  ========  =======  ========  ========
+
+Setup is between a quarter and better than a third of the density-fitting SCF at
+every size measured |w---w| 25%, 35%, 23%, 23% and 37% of the SCF column |w---w|
+and at every size but the smallest it is larger than the whole non-J/K remainder
+left after it is removed. It
+does not amortise away with system size either: it grows from 0.84 s to 285.5 s
+across a 7.2x widening of the basis, and at 1863 basis functions in core it is
+two thirds the size of all thirteen Fock builds put together.
+
+The 1555-basis-function point is where this changes a published number, because
+it is the only size at which the re-run reproduces the in-job measurement. Job
+12638902 returns 390.70 s SCF and 248.38 s in ``JK: JK`` against job 12445512's
+393.5 and 244.1, 0.7% and 1.7% apart on a different node of the same type. That
+licenses putting the three ways of comparing it against the same job's
+``direct`` arm (1674.2 s SCF, 1606.4 s J/K) side by side:
+
+* ``JK: JK`` against ``JK: JK``, which is what the two table columns give:
+  **6.47x**.
+* integral work against integral work, the DF setup added back:
+  1606.4 / (248.38 + 91.58) = **4.73x**.
+* SCF total against SCF total: 1674.2 / 390.70 = **4.28x**.
+
+The first overstates the last by 51%. The third is the one that answers "how
+much sooner do I get an energy", the second is the one that answers "how much
+cheaper are the integrals", and the first answers neither.
+
+The 574-basis-function point does not reproduce, and the split is published
+there with no ratio attached. Two re-runs give 18.0 and 17.9 s SCF where the two
+sweeps gave 44.5 and 32.7. Their 6.3 and 6.5 s of setup against 7.8 and 8.3 s of
+J/K is a real measurement of this build on this hardware, and the fraction it
+implies stands; a speedup against a ``direct`` arm measured in a different job at a
+different hour is not something these runs license, so none is quoted. The
+260-basis-function point is in the same position for a smaller reason, its whole
+SCF being 3.3 s, and is worth reporting only for the shape: 0.62 s inside
+``JK: JK``, 0.84 s building the tensor and 1.86 s in everything else, so at this
+size density fitting's advantage over exact ERIs is not a Fock-build story at
+all.
+
+The two 1863-basis-function rows are the one place both builders ran the same
+input, and they divide the work differently rather than one being a slow copy of
+the other. ``DiskDFJK`` spends 167.1 s in setup |w---w| ``JK: (A|mn)`` 19.9,
+``JK: (A|Q)^-1/2`` 40.1, ``JK: (Q|mn)`` 102.7 |w---w| and 479.2 s in J/K.
+``MemDFJK`` at a 185 GB budget spends 285.5 s in setup and 426.8 s in J/K. Going
+in core buys 52 s of Fock build and pays 118 s for it. Its
+``DFH: AO Construction`` and ``DFH: AO-Met. Contraction`` each report 38 calls
+against 1 at 1555 basis functions, so the tensor was assembled in 38 Q-shell
+blocks: in core by the estimator's standard, and not comfortably. Peak RSS was
+194145 MB against the 185 GB declared, which is worth knowing before reading
+that budget as a cap.
+
+With both rows in hand the diffuse-function comparison finally has a
+same-algorithm form. ``MemDFJK`` goes 390.7 s to 778.3 s from 1555 to 1863 basis
+functions, 1.99x, against ``DirectJK``'s 1674.2 s to 8470 s, 5.06x |w---w| so
+the diffuse set costs the exact-ERI arm about 2.5x what it costs density
+fitting, which is the screening degradation described under `Testing`_ showing
+up in wall clock. The 2.11x that 393.5 s and 829 s appear to give is not one
+algorithm's inflation, since those two points are ``MemDFJK`` and ``DiskDFJK``;
+that it lands near the right answer anyway is a coincidence and not a
+confirmation.
+
+None of this moves a GTFock number, and it does not disturb any comparison in
+this document that was made on SCF totals: the one-node tie at 1555 basis
+functions, the 3.0x at four nodes, the per-process memory contrast and the
+fitting-error contrast all stand as written. What it removes is the use of a
+``df`` row's ``J/K (s)`` as a proxy for how fast density fitting builds a Fock
+matrix. Two things it does not settle. Every point here is one process, so
+nothing in this section speaks to how a *distributed* density fitting would
+compare against distributed GTFock, which is the comparison the prototype
+actually needs. And every figure is a single measurement on shared storage, with
+the 260-basis-function point's own history |w---w| 27.5 s and 26.4 s on two cold
+nodes, then 3.3 s on the second of them once a discarded warm-up point had run
+|w---w| as the standing reminder of what one such measurement is worth.
+
+Both jobs' provenance blocks, ``sacct`` records, epilogues and full timer trees
+are copied verbatim into
+:source:`tests/pytests/gtfock_df_setup_provenance.txt`, together with the two
+lines in which |PSIfour| announces the fallback.
+:source:`tests/pytests/gtfock_hpc_benchmark.py` now reports the setup total, its
+constituent timer keys and the SCF remainder next to the J/K figure it already
+reported, so a future sweep records the split without a second job.
 
 .. _`cmake:gtfock`:
 

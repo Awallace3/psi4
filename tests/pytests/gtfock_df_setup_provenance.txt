@@ -1,0 +1,430 @@
+Density-fitting setup cost: scheduler and timer records for two Phoenix jobs
+============================================================================
+
+Behind the "What the J/K timer does not cover" section of
+doc/sphinxman/source/gtfock.rst. Two jobs, both one process on one exclusive
+core24 node, both re-running only the ``df`` arm so that the cost
+``JK::initialize()`` pays outside ``timer_on("JK: JK")`` could be read off
+directly:
+
+  12638902  gtfdf-setup   four points at 160 GB: 260, 574, 1555 and 1863 bf
+  12639820  gtfdf-setup2  a discarded warm-up, then 260 and 574 bf at 120 GB
+                          and 1863 bf at 185 GB
+
+The second job exists because of two things the first one showed. Its 260-bf
+point took 27.5 s against 3.3 s in every earlier sweep, and the timer tree below
+puts 21.172 s of that in ``HF: DIIS`` -- PSIO scratch I/O on cold Lustre, paid
+once by whichever process runs first, and absorbed in the second job by a
+throwaway warm-up point. And its 1863-bf point silently changed algorithm: the
+MemDFJK memory estimate did not fit the budget, so Psi4 fell back to DiskDFJK
+(the two lines quoted below), which does not use DFHelper and so reported a
+setup cost of zero through instrumentation that only watched ``DFH:
+initialize()``. Raising the budget to 185 GB in the second job kept the same
+point in core, and the two builders are reported side by side rather than one
+being chosen.
+
+The citable per-point split is the timer tree, not the JSON record: the driver
+at the time these jobs ran captured only ``DFH: initialize()``, so its
+``df_setup_total_seconds`` field omits ``DFH: sparsity prep`` everywhere and all
+of DiskDFJK's setup at 1863 bf. tests/pytests/gtfock_hpc_benchmark.py has since
+been widened to capture both builders' names; the numbers in gtfock.rst are the
+widened totals, summed from the trees below.
+
+--- algorithm fallback, job 12638902, protein157_1863 ---
+
+results/dfsetup_12638902/protein157_1863/protein157_1863/psi4_rank0.out:255-256
+
+  MemDFJK Memory: AOs need 127.825 GiB; user supplied 111.759 GiB.
+  MemDFJK requires too much memory. DiskDFJK algorithm will be used.
+
+No such pair appears in any other point of either job, so every other row below
+is MemDFJK.
+
+==============================================================================
+Scheduler records
+==============================================================================
+
+--- job 12638902, gtfdf-setup: log excerpt (provenance, per-point records, epilogue) ---
+
+=== provenance ===
+job         : 12638902 gtfdf-setup
+batch host  : atl1-1-02-002-16-1.pace.gatech.edu
+nodes       : 1 (atl1-1-02-002-16-1)
+partition   : cpu-small  account: gts-cs207-chemx  qos: embers
+reference   : 24 cores, 160 GB, single process
+psi4        : 8ae2767f0 test(gtfock): add a 1863-basis-function system to the HPC benchmark
+tree        : 5 file(s) modified vs that commit
+ tests/pytests/gtfock_hpc_benchmark.py          | 60 ++++++++++++++++++++++++--
+ tests/pytests/gtfock_hpc_collect.py            | 15 ++++++-
+ tests/pytests/gtfock_hpc_phoenix_protein.slurm | 27 +++++++++++-
+ 3 files changed, 95 insertions(+), 7 deletions(-)
+CPU(s):                                  24
+Model name:                              Intel(R) Xeon(R) Gold 6226 CPU @ 2.70GHz
+               total        used        free      shared  buff/cache   available
+Mem:             376           6         358           0          14         369
+=== peptide_260: peptide / 6-31+G** / df, 1 rank x 24 thread(s), 160 GB ===
+PSI4-GTFOCK-JSON {"system": "peptide", "arm": "df", "basis": "6-31+G**", "method": "scf", "nbf": 260, "nshell": 122, "puream": false, "ranks": 1, "rank": 0, "threads_per_rank": 24, "total_cores": 24, "scf_energy": -494.0531291471352, "iterations": 11, "scf_wall_seconds": 27.503320020856336, "jk_wall_seconds": 0.622086142, "jk_calls": 12, "jk_timer_key": "HF: Form G;JK: JK", "df_setup_records": [{"key": "DFH: initialize()", "wall_seconds": 1.9679395540000002, "n_calls": 1}], "df_setup_total_seconds": 1.9679395540000002, "scf_remainder_seconds": 26.881233878856335, "peak_rss_mb": 1477.16015625, "jk_name": "MemDFJK", "df_basis_scf": "(auto)", "host": "atl1-1-02-002-16-1.pace.gatech.edu", "processor": "x86_64", "slurm_job_id": "12638902", "slurm_nodelist": "atl1-1-02-002-16-1"}
+=== nanotube_574: nanotube / 6-31+G** / df, 1 rank x 24 thread(s), 160 GB ===
+PSI4-GTFOCK-JSON {"system": "nanotube", "arm": "df", "basis": "6-31+G**", "method": "scf", "nbf": 574, "nshell": 256, "puream": false, "ranks": 1, "rank": 0, "threads_per_rank": 24, "total_cores": 24, "scf_energy": -993.8844341019212, "iterations": 11, "scf_wall_seconds": 17.945930681889877, "jk_wall_seconds": 7.804757647000001, "jk_calls": 12, "jk_timer_key": "HF: Form G;JK: JK", "df_setup_records": [{"key": "DFH: initialize()", "wall_seconds": 6.05764864, "n_calls": 1}], "df_setup_total_seconds": 6.05764864, "scf_remainder_seconds": 10.141173034889876, "peak_rss_mb": 10357.203125, "jk_name": "MemDFJK", "df_basis_scf": "(auto)", "host": "atl1-1-02-002-16-1.pace.gatech.edu", "processor": "x86_64", "slurm_job_id": "12638902", "slurm_nodelist": "atl1-1-02-002-16-1"}
+=== protein157_1555: protein157 / 6-31G** / df, 1 rank x 24 thread(s), 160 GB ===
+PSI4-GTFOCK-JSON {"system": "protein157", "arm": "df", "basis": "6-31G**", "method": "scf", "nbf": 1555, "nshell": 702, "puream": false, "ranks": 1, "rank": 0, "threads_per_rank": 24, "total_cores": 24, "scf_energy": -3642.663694743058, "iterations": 12, "scf_wall_seconds": 390.70279793883674, "jk_wall_seconds": 248.378620395, "jk_calls": 13, "jk_timer_key": "HF: Form G;JK: JK", "df_setup_records": [{"key": "DFH: initialize()", "wall_seconds": 88.32979766300001, "n_calls": 1}], "df_setup_total_seconds": 88.32979766300001, "scf_remainder_seconds": 142.32417754383673, "peak_rss_mb": 94735.93359375, "jk_name": "MemDFJK", "df_basis_scf": "(auto)", "host": "atl1-1-02-002-16-1.pace.gatech.edu", "processor": "x86_64", "slurm_job_id": "12638902", "slurm_nodelist": "atl1-1-02-002-16-1"}
+=== protein157_1863: protein157 / 6-31+G** / df, 1 rank x 24 thread(s), 160 GB ===
+PSI4-GTFOCK-JSON {"system": "protein157", "arm": "df", "basis": "6-31+G**", "method": "scf", "nbf": 1863, "nshell": 856, "puream": false, "ranks": 1, "rank": 0, "threads_per_rank": 24, "total_cores": 24, "scf_energy": -3642.7484026986367, "iterations": 12, "scf_wall_seconds": 716.1949210220482, "jk_wall_seconds": 479.15950655, "jk_calls": 13, "jk_timer_key": "HF: Form G;JK: JK", "df_setup_records": [], "df_setup_total_seconds": 0, "scf_remainder_seconds": 237.03541447204822, "peak_rss_mb": 128047.81640625, "jk_name": "DiskDFJK", "df_basis_scf": "(auto)", "host": "atl1-1-02-002-16-1.pace.gatech.edu", "processor": "x86_64", "slurm_job_id": "12638902", "slurm_nodelist": "atl1-1-02-002-16-1"}
+=== sacct ===
+JobID|JobName|Elapsed|MaxRSS|MaxVMSize|NNodes|NCPUS
+12638902|gtfdf-setup|00:21:26|||1|24
+12638902.batch|batch|00:21:26|||1|24
+12638902.extern|extern|00:21:26|||1|24
+results in /storage/scratch1/3/awallace43/fm-gtfock/results/dfsetup_12638902
+DF_SETUP_DONE
+---------------------------------------
+Begin Slurm Epilog: Aug-31-2026 17:43:12
+Job ID:        12638902
+User ID:       awallace43
+Account:       gts-cs207-chemx
+Job name:      gtfdf-setup
+Resources:     cpu=24,mem=376808M,node=1
+Rsrc Used:     cput=08:34:24,vmem=0,walltime=00:21:26,mem=131472900K,energy_used=0
+Partition:     cpu-small
+QOS:           embers
+Nodes:         atl1-1-02-002-16-1
+---------------------------------------
+
+--- job 12638902, gtfdf-setup: sacct ---
+
+JobID|JobName|Elapsed|State|NNodes|NCPUS
+12638902|gtfdf-setup|00:21:26|COMPLETED|1|24
+12638902.batch|batch|00:21:26|COMPLETED|1|24
+12638902.extern|extern|00:21:26|COMPLETED|1|24
+
+--- job 12639820, gtfdf-setup2: log excerpt (provenance, per-point records, epilogue) ---
+
+=== provenance ===
+job         : 12639820 gtfdf-setup2
+batch host  : atl1-1-01-003-31-1.pace.gatech.edu
+nodes       : 1 (atl1-1-01-003-31-1)
+partition   : cpu-small  account: gts-cs207-chemx  qos: embers
+psi4        : 8ae2767f0 test(gtfock): add a 1863-basis-function system to the HPC benchmark
+tree        : 6 file(s) modified vs that commit
+ tests/pytests/gtfock_hpc_benchmark.py          | 60 ++++++++++++++++++++++++--
+ tests/pytests/gtfock_hpc_collect.py            | 15 ++++++-
+ tests/pytests/gtfock_hpc_phoenix_protein.slurm | 27 +++++++++++-
+ 3 files changed, 95 insertions(+), 7 deletions(-)
+CPU(s):                                  24
+Model name:                              Intel(R) Xeon(R) Gold 6226 CPU @ 2.70GHz
+               total        used        free      shared  buff/cache   available
+Mem:             376           5         331           0          41         370
+=== warmup: peptide / 6-31+G** / df, 1 rank x 24 thread(s), 120 GB ===
+PSI4-GTFOCK-JSON {"system": "peptide", "arm": "df", "basis": "6-31+G**", "method": "scf", "nbf": 260, "nshell": 122, "puream": false, "ranks": 1, "rank": 0, "threads_per_rank": 24, "total_cores": 24, "scf_energy": -494.0531291471359, "iterations": 11, "scf_wall_seconds": 26.389635222032666, "jk_wall_seconds": 0.632033324, "jk_calls": 12, "jk_timer_key": "HF: Form G;JK: JK", "df_setup_records": [{"key": "DFH: initialize()", "wall_seconds": 1.607555459, "n_calls": 1}], "df_setup_total_seconds": 1.607555459, "scf_remainder_seconds": 25.757601898032668, "peak_rss_mb": 1463.8984375, "jk_name": "MemDFJK", "df_basis_scf": "(auto)", "host": "atl1-1-01-003-31-1.pace.gatech.edu", "processor": "x86_64", "slurm_job_id": "12639820", "slurm_nodelist": "atl1-1-01-003-31-1"}
+=== peptide_260: peptide / 6-31+G** / df, 1 rank x 24 thread(s), 120 GB ===
+PSI4-GTFOCK-JSON {"system": "peptide", "arm": "df", "basis": "6-31+G**", "method": "scf", "nbf": 260, "nshell": 122, "puream": false, "ranks": 1, "rank": 0, "threads_per_rank": 24, "total_cores": 24, "scf_energy": -494.05312914713545, "iterations": 11, "scf_wall_seconds": 3.3152578049339354, "jk_wall_seconds": 0.615152679, "jk_calls": 12, "jk_timer_key": "HF: Form G;JK: JK", "df_setup_records": [{"key": "DFH: initialize()", "wall_seconds": 0.736547146, "n_calls": 1}], "df_setup_total_seconds": 0.736547146, "scf_remainder_seconds": 2.7001051259339355, "peak_rss_mb": 1494.484375, "jk_name": "MemDFJK", "df_basis_scf": "(auto)", "host": "atl1-1-01-003-31-1.pace.gatech.edu", "processor": "x86_64", "slurm_job_id": "12639820", "slurm_nodelist": "atl1-1-01-003-31-1"}
+=== nanotube_574: nanotube / 6-31+G** / df, 1 rank x 24 thread(s), 120 GB ===
+PSI4-GTFOCK-JSON {"system": "nanotube", "arm": "df", "basis": "6-31+G**", "method": "scf", "nbf": 574, "nshell": 256, "puream": false, "ranks": 1, "rank": 0, "threads_per_rank": 24, "total_cores": 24, "scf_energy": -993.8844341019185, "iterations": 11, "scf_wall_seconds": 18.02931998297572, "jk_wall_seconds": 8.315239921, "jk_calls": 12, "jk_timer_key": "HF: Form G;JK: JK", "df_setup_records": [{"key": "DFH: initialize()", "wall_seconds": 5.910866337000001, "n_calls": 1}], "df_setup_total_seconds": 5.910866337000001, "scf_remainder_seconds": 9.714080061975721, "peak_rss_mb": 10361.79296875, "jk_name": "MemDFJK", "df_basis_scf": "(auto)", "host": "atl1-1-01-003-31-1.pace.gatech.edu", "processor": "x86_64", "slurm_job_id": "12639820", "slurm_nodelist": "atl1-1-01-003-31-1"}
+=== protein157_1863_mem185: protein157 / 6-31+G** / df, 1 rank x 24 thread(s), 185 GB ===
+PSI4-GTFOCK-JSON {"system": "protein157", "arm": "df", "basis": "6-31+G**", "method": "scf", "nbf": 1863, "nshell": 856, "puream": false, "ranks": 1, "rank": 0, "threads_per_rank": 24, "total_cores": 24, "scf_energy": -3642.7484027044065, "iterations": 12, "scf_wall_seconds": 778.2897751750425, "jk_wall_seconds": 426.78379091200003, "jk_calls": 13, "jk_timer_key": "HF: Form G;JK: JK", "df_setup_records": [{"key": "DFH: initialize()", "wall_seconds": 281.82559029600003, "n_calls": 1}], "df_setup_total_seconds": 281.82559029600003, "scf_remainder_seconds": 351.5059842630424, "peak_rss_mb": 194145.38671875, "jk_name": "MemDFJK", "df_basis_scf": "(auto)", "host": "atl1-1-01-003-31-1.pace.gatech.edu", "processor": "x86_64", "slurm_job_id": "12639820", "slurm_nodelist": "atl1-1-01-003-31-1"}
+=== sacct ===
+JobID|JobName|Elapsed|MaxRSS|MaxVMSize|NNodes|NCPUS
+12639820|gtfdf-setup2|00:15:15|||1|24
+12639820.batch|batch|00:15:15|||1|24
+12639820.extern|extern|00:15:15|||1|24
+results in /storage/scratch1/3/awallace43/fm-gtfock/results/dfsetup2_12639820
+DF_SETUP2_DONE
+---------------------------------------
+Begin Slurm Epilog: Aug-31-2026 18:17:03
+Job ID:        12639820
+User ID:       awallace43
+Account:       gts-cs207-chemx
+Job name:      gtfdf-setup2
+Resources:     cpu=24,mem=376808M,node=1
+Rsrc Used:     cput=06:06:24,vmem=0,walltime=00:15:16,mem=199321168K,energy_used=0
+Partition:     cpu-small
+QOS:           embers
+Nodes:         atl1-1-01-003-31-1
+---------------------------------------
+
+--- job 12639820, gtfdf-setup2: sacct ---
+
+JobID|JobName|Elapsed|State|NNodes|NCPUS
+12639820|gtfdf-setup2|00:15:16|COMPLETED|1|24
+12639820.batch|batch|00:15:16|COMPLETED|1|24
+12639820.extern|extern|00:15:16|COMPLETED|1|24
+
+==============================================================================
+Timer trees, timer.dat, one block per point
+==============================================================================
+
+--- job 12638902, peptide_260: peptide / 6-31+G** / 260 bf / 160 GB ---
+
+Host: atl1-1-02-002-16-1.pace.gatech.edu
+
+Timers On : Mon Aug 31 17:22:13 2026
+Timers Off: Mon Aug 31 17:23:17 2026
+
+Wall Time:       63.48 seconds
+
+--------------------------------------------------------------------------------------
+DFH: sparsity prep                  :      0.133u      0.017s      0.705w      1 calls
+| Libint2ERI::Libint2ERI            :      0.100u      0.017s      0.666w      1 calls
+DFH: initialize()                   :     40.733u      2.000s      1.968w      1 calls
+| Libint2ERI::Libint2ERI            :      1.883u      0.050s      0.053w     25 calls
+| DFH: AO Construction              :      6.100u      0.167s      0.236w      1 calls
+| DFH: AO-Met. Contraction          :      6.250u      0.300s      0.165w      1 calls
+HF: Form core H                     :      3.200u      0.133s      0.129w      1 calls
+HF: Form S/X                        :      1.700u      0.083s      0.088w      1 calls
+HF: Guess                           :     24.533u      1.183s      0.776w      1 calls
+| SAD Guess                         :     24.367u      1.167s      0.771w      1 calls
+HF: Form G                          :     24.000u      1.050s      0.632w     12 calls
+| JK: D                             :      0.000u      0.017s      0.002w     12 calls
+| JK: USO2AO                        :      0.067u      0.000s      0.002w     12 calls
+| JK: JK                            :     23.750u      1.017s      0.622w     12 calls
+| | DFH: compute_JK()               :     23.617u      1.017s      0.619w     12 calls
+| | | DFH: Grabbing AOs             :      0.000u      0.000s      0.000w     12 calls
+| | | DFH: compute_J                :      3.667u      0.050s      0.094w     12 calls
+| | | DFH: compute_K                :      7.550u      0.017s      0.196w     12 calls
+| JK: AO2USO                        :      0.000u      0.000s      0.000w     12 calls
+HF: Form F                          :      0.050u      0.000s      0.002w     12 calls
+HF: Form D                          :      0.083u      0.017s      0.002w     12 calls
+HF: DIIS                            :     35.383u      1.767s     21.172w     11 calls
+HF: Form C                          :      9.683u      0.317s      0.264w     11 calls
+
+--- job 12638902, nanotube_574: nanotube / 6-31+G** / 574 bf / 160 GB ---
+
+Host: atl1-1-02-002-16-1.pace.gatech.edu
+
+Timers On : Mon Aug 31 17:23:19 2026
+Timers Off: Mon Aug 31 17:23:40 2026
+
+Wall Time:       21.25 seconds
+
+--------------------------------------------------------------------------------------
+DFH: sparsity prep                  :      0.650u      0.033s      0.436w      1 calls
+| Libint2ERI::Libint2ERI            :      0.417u      0.033s      0.296w      1 calls
+DFH: initialize()                   :    213.617u      6.683s      6.058w      1 calls
+| Libint2ERI::Libint2ERI            :      5.467u      0.183s      0.265w     25 calls
+| DFH: AO Construction              :     54.400u      1.050s      1.395w      1 calls
+| DFH: AO-Met. Contraction          :     97.383u      2.717s      2.817w      1 calls
+HF: Form core H                     :      5.450u      0.150s      0.149w      1 calls
+HF: Form S/X                        :      2.067u      0.050s      0.053w      1 calls
+HF: Guess                           :      6.000u      0.317s      0.162w      1 calls
+| SAD Guess                         :      5.783u      0.317s      0.156w      1 calls
+HF: Form G                          :    269.517u      8.450s      7.829w     12 calls
+| JK: D                             :      0.200u      0.000s      0.006w     12 calls
+| JK: USO2AO                        :      0.050u      0.000s      0.001w     12 calls
+| JK: JK                            :    268.683u      8.400s      7.805w     12 calls
+| | DFH: compute_JK()               :    268.200u      8.400s      7.793w     12 calls
+| | | DFH: Grabbing AOs             :      0.000u      0.000s      0.000w     12 calls
+| | | DFH: compute_J                :     35.567u      0.033s      0.896w     12 calls
+| | | DFH: compute_K                :    142.067u      0.350s      3.580w     12 calls
+| JK: AO2USO                        :      0.000u      0.000s      0.000w     12 calls
+HF: Form F                          :      0.300u      0.017s      0.009w     12 calls
+HF: Form D                          :      0.217u      0.000s      0.006w     12 calls
+HF: DIIS                            :     23.850u      1.317s      1.021w     11 calls
+HF: Form C                          :     19.233u      0.400s      0.494w     11 calls
+
+--- job 12638902, protein157_1555: protein157 / 6-31G** / 1555 bf / 160 GB ---
+
+Host: atl1-1-02-002-16-1.pace.gatech.edu
+
+Timers On : Mon Aug 31 17:23:41 2026
+Timers Off: Mon Aug 31 17:30:15 2026
+
+Wall Time:      394.35 seconds
+
+--------------------------------------------------------------------------------------
+DFH: sparsity prep                  :      6.533u      0.133s      3.245w      1 calls
+| Libint2ERI::Libint2ERI            :      4.017u      0.083s      2.471w      1 calls
+DFH: initialize()                   :   2838.850u     44.317s     88.330w      1 calls
+| Libint2ERI::Libint2ERI            :      4.100u      0.000s      2.439w     25 calls
+| DFH: AO Construction              :    428.650u      7.567s     13.583w      1 calls
+| DFH: AO-Met. Contraction          :   1706.133u     20.167s     52.983w      1 calls
+HF: Form core H                     :     45.900u      0.667s      1.219w      1 calls
+HF: Form S/X                        :     28.567u      1.200s      1.046w      1 calls
+HF: Guess                           :     33.900u      1.650s      1.847w      1 calls
+| SAD Guess                         :     30.683u      1.533s      1.762w      1 calls
+HF: Form G                          :   6483.483u    128.967s    248.663w     13 calls
+| JK: D                             :      2.050u      0.083s      0.055w     13 calls
+| JK: USO2AO                        :      0.233u      0.017s      0.004w     13 calls
+| JK: JK                            :   6473.233u    128.417s    248.379w     13 calls
+| | DFH: compute_JK()               :   6466.517u    128.167s    248.202w     13 calls
+| | | DFH: Grabbing AOs             :      0.000u      0.000s      0.000w     13 calls
+| | | DFH: compute_J                :    307.467u      1.450s      7.952w     13 calls
+| | | DFH: compute_K                :   6000.233u      1.533s    151.432w     13 calls
+| JK: AO2USO                        :      0.283u      0.017s      0.008w     13 calls
+HF: Form F                          :      3.033u      0.133s      0.104w     13 calls
+HF: Form D                          :      1.867u      0.100s      0.054w     13 calls
+HF: DIIS                            :    213.150u     13.483s     25.222w     12 calls
+HF: Form C                          :    183.550u      7.100s      4.961w     12 calls
+
+--- job 12638902, protein157_1863: protein157 / 6-31+G** / 1863 bf / 160 GB (fell back to DiskDFJK) ---
+
+Host: atl1-1-02-002-16-1.pace.gatech.edu
+
+Timers On : Mon Aug 31 17:30:35 2026
+Timers Off: Mon Aug 31 17:43:03 2026
+
+Wall Time:      748.01 seconds
+
+--------------------------------------------------------------------------------------
+DFH: sparsity prep                  :      7.383u      0.233s      4.372w      1 calls
+| Libint2ERI::Libint2ERI            :      4.550u      0.150s      3.457w      1 calls
+Libint2ERI::Libint2ERI              :      9.100u      0.017s      5.391w      2 calls
+JK: (A|mn)                          :    701.983u     84.900s     19.890w      1 calls
+JK: (A|Q)^-1/2                      :   1516.833u     29.967s     40.117w      1 calls
+| Libint2ERI::Libint2ERI            :      1.733u      0.100s      0.047w     24 calls
+JK: (Q|mn)                          :   4058.317u     19.817s    102.734w      1 calls
+HF: Form core H                     :     60.250u      0.900s      2.192w      1 calls
+HF: Form S/X                        :     38.133u      1.633s      1.241w      1 calls
+HF: Guess                           :     40.417u      1.917s      2.733w      1 calls
+| SAD Guess                         :     38.717u      1.850s      2.605w      1 calls
+HF: Form G                          :  18744.600u    210.500s    479.586w     13 calls
+| JK: D                             :      2.817u      0.200s      0.077w     13 calls
+| JK: USO2AO                        :      0.483u      0.000s      0.009w     13 calls
+| JK: JK                            :  18728.767u    209.650s    479.160w     13 calls
+| | JK: J                           :    710.200u      1.000s     17.904w     14 calls
+| | | JK: J1                        :    401.617u      0.433s     10.127w     14 calls
+| | | JK: J2                        :    299.133u      0.367s      7.532w     14 calls
+| | JK: K                           :  17945.900u    203.017s    459.269w     14 calls
+| | | JK: K1                        :  10554.117u    201.450s    273.040w     14 calls
+| | | JK: K2                        :   7389.800u      1.383s    186.185w     14 calls
+| JK: AO2USO                        :      0.450u      0.000s      0.011w     13 calls
+HF: Form F                          :      4.883u      0.167s      0.132w     13 calls
+HF: Form D                          :      2.700u      0.083s      0.074w     13 calls
+HF: DIIS                            :    260.050u     15.417s     28.595w     12 calls
+HF: Form C                          :    267.233u     10.500s      7.310w     12 calls
+
+--- job 12639820, warmup: peptide / 6-31+G** / 260 bf / 120 GB (discarded warm-up point) ---
+
+Host: atl1-1-01-003-31-1.pace.gatech.edu
+
+Timers On : Mon Aug 31 18:02:14 2026
+Timers Off: Mon Aug 31 18:03:20 2026
+
+Wall Time:       66.51 seconds
+
+--------------------------------------------------------------------------------------
+DFH: sparsity prep                  :      0.133u      0.000s      0.708w      1 calls
+| Libint2ERI::Libint2ERI            :      0.083u      0.000s      0.680w      1 calls
+DFH: initialize()                   :     35.367u      2.067s      1.608w      1 calls
+| Libint2ERI::Libint2ERI            :      1.867u      0.083s      0.053w     25 calls
+| DFH: AO Construction              :      6.367u      0.183s      0.286w      1 calls
+| DFH: AO-Met. Contraction          :      5.850u      0.283s      0.155w      1 calls
+HF: Form core H                     :      2.700u      0.100s      0.297w      1 calls
+HF: Form S/X                        :      0.700u      0.000s      0.038w      1 calls
+HF: Guess                           :     24.867u      1.050s      0.848w      1 calls
+| SAD Guess                         :     24.617u      1.050s      0.841w      1 calls
+HF: Form G                          :     25.300u      1.133s      0.668w     12 calls
+| JK: D                             :      0.067u      0.000s      0.002w     12 calls
+| JK: USO2AO                        :      1.033u      0.050s      0.028w     12 calls
+| JK: JK                            :     24.017u      1.083s      0.632w     12 calls
+| | DFH: compute_JK()               :     23.917u      1.067s      0.629w     12 calls
+| | | DFH: Grabbing AOs             :      0.000u      0.000s      0.000w     12 calls
+| | | DFH: compute_J                :      3.567u      0.050s      0.092w     12 calls
+| | | DFH: compute_K                :      7.650u      0.100s      0.199w     12 calls
+| JK: AO2USO                        :      0.000u      0.000s      0.000w     12 calls
+HF: Form F                          :      0.167u      0.000s      0.002w     12 calls
+HF: Form D                          :      0.083u      0.000s      0.002w     12 calls
+HF: DIIS                            :     29.867u      1.550s     20.055w     11 calls
+HF: Form C                          :      7.583u      0.417s      0.299w     11 calls
+
+--- job 12639820, peptide_260: peptide / 6-31+G** / 260 bf / 120 GB ---
+
+Host: atl1-1-01-003-31-1.pace.gatech.edu
+
+Timers On : Mon Aug 31 18:03:23 2026
+Timers Off: Mon Aug 31 18:03:29 2026
+
+Wall Time:        6.60 seconds
+
+--------------------------------------------------------------------------------------
+DFH: sparsity prep                  :      0.117u      0.033s      0.100w      1 calls
+| Libint2ERI::Libint2ERI            :      0.083u      0.033s      0.073w      1 calls
+DFH: initialize()                   :     25.850u      1.250s      0.737w      1 calls
+| Libint2ERI::Libint2ERI            :      1.867u      0.067s      0.053w     25 calls
+| DFH: AO Construction              :      6.567u      0.133s      0.171w      1 calls
+| DFH: AO-Met. Contraction          :      6.033u      0.283s      0.159w      1 calls
+HF: Form core H                     :      1.250u      0.033s      0.084w      1 calls
+HF: Form S/X                        :      0.450u      0.033s      0.012w      1 calls
+HF: Guess                           :     11.967u      0.567s      0.322w      1 calls
+| SAD Guess                         :     11.817u      0.567s      0.318w      1 calls
+HF: Form G                          :     23.683u      1.017s      0.621w     12 calls
+| JK: D                             :      0.067u      0.000s      0.001w     12 calls
+| JK: USO2AO                        :      0.000u      0.000s      0.000w     12 calls
+| JK: JK                            :     23.533u      0.983s      0.615w     12 calls
+| | DFH: compute_JK()               :     23.417u      0.983s      0.613w     12 calls
+| | | DFH: Grabbing AOs             :      0.000u      0.000s      0.000w     12 calls
+| | | DFH: compute_J                :      3.683u      0.000s      0.092w     12 calls
+| | | DFH: compute_K                :      7.533u      0.083s      0.196w     12 calls
+| JK: AO2USO                        :      0.000u      0.000s      0.000w     12 calls
+HF: Form F                          :      0.083u      0.000s      0.002w     12 calls
+HF: Form D                          :      0.083u      0.017s      0.002w     12 calls
+HF: DIIS                            :     13.100u      0.683s      0.598w     11 calls
+HF: Form C                          :      4.283u      0.033s      0.110w     11 calls
+
+--- job 12639820, nanotube_574: nanotube / 6-31+G** / 574 bf / 120 GB ---
+
+Host: atl1-1-01-003-31-1.pace.gatech.edu
+
+Timers On : Mon Aug 31 18:03:30 2026
+Timers Off: Mon Aug 31 18:03:50 2026
+
+Wall Time:       20.54 seconds
+
+--------------------------------------------------------------------------------------
+DFH: sparsity prep                  :      0.650u      0.033s      0.417w      1 calls
+| Libint2ERI::Libint2ERI            :      0.433u      0.033s      0.279w      1 calls
+DFH: initialize()                   :    209.900u      6.950s      5.911w      1 calls
+| Libint2ERI::Libint2ERI            :      4.800u      0.150s      0.267w     25 calls
+| DFH: AO Construction              :     51.900u      1.133s      1.331w      1 calls
+| DFH: AO-Met. Contraction          :     95.600u      2.517s      2.750w      1 calls
+HF: Form core H                     :      5.150u      0.083s      0.134w      1 calls
+HF: Form S/X                        :      1.950u      0.067s      0.051w      1 calls
+HF: Guess                           :      4.883u      0.417s      0.135w      1 calls
+| SAD Guess                         :      4.683u      0.417s      0.130w      1 calls
+HF: Form G                          :    288.883u      9.150s      8.340w     12 calls
+| JK: D                             :      0.200u      0.017s      0.007w     12 calls
+| JK: USO2AO                        :      0.033u      0.000s      0.001w     12 calls
+| JK: JK                            :    287.950u      9.083s      8.315w     12 calls
+| | DFH: compute_JK()               :    287.433u      9.083s      8.304w     12 calls
+| | | DFH: Grabbing AOs             :      0.000u      0.000s      0.000w     12 calls
+| | | DFH: compute_J                :     35.800u      0.033s      0.902w     12 calls
+| | | DFH: compute_K                :    160.750u      1.150s      4.073w     12 calls
+| JK: AO2USO                        :      0.017u      0.000s      0.000w     12 calls
+HF: Form F                          :      0.333u      0.000s      0.009w     12 calls
+HF: Form D                          :      0.217u      0.000s      0.006w     12 calls
+HF: DIIS                            :     25.817u      1.333s      0.959w     11 calls
+HF: Form C                          :     18.850u      0.517s      0.486w     11 calls
+
+--- job 12639820, protein157_1863_mem185: protein157 / 6-31+G** / 1863 bf / 185 GB (stayed MemDFJK) ---
+
+Host: atl1-1-01-003-31-1.pace.gatech.edu
+
+Timers On : Mon Aug 31 18:03:51 2026
+Timers Off: Mon Aug 31 18:16:53 2026
+
+Wall Time:      781.83 seconds
+
+--------------------------------------------------------------------------------------
+DFH: sparsity prep                  :      7.350u      0.250s      3.705w      1 calls
+| Libint2ERI::Libint2ERI            :      4.550u      0.150s      2.826w      1 calls
+DFH: initialize()                   :   7663.683u    271.917s    281.826w      1 calls
+| Libint2ERI::Libint2ERI            :      4.550u      0.017s      2.724w     25 calls
+| DFH: AO Construction              :   1199.250u     12.233s     54.668w     38 calls
+| DFH: AO-Met. Contraction          :   5135.200u    229.200s    187.825w     38 calls
+HF: Form core H                     :     60.833u      0.883s      2.052w      1 calls
+HF: Form S/X                        :     45.500u      1.933s      2.051w      1 calls
+HF: Guess                           :     37.833u      1.483s      3.382w      1 calls
+| SAD Guess                         :     36.067u      1.417s      3.118w      1 calls
+HF: Form G                          :  12470.333u    169.517s    427.319w     13 calls
+| JK: D                             :      2.900u      0.033s      0.078w     13 calls
+| JK: USO2AO                        :      0.850u      0.050s      0.019w     13 calls
+| JK: JK                            :  12452.833u    168.733s    426.784w     13 calls
+| | DFH: compute_JK()               :  12442.333u    168.317s    426.491w     13 calls
+| | | DFH: Grabbing AOs             :      0.000u      0.000s      0.000w     26 calls
+| | | DFH: compute_J                :    835.383u      1.450s     21.133w     26 calls
+| | | DFH: compute_K                :  11427.400u      2.900s    288.411w     26 calls
+| JK: AO2USO                        :      1.733u      0.050s      0.047w     13 calls
+HF: Form F                          :      5.800u      0.217s      0.173w     13 calls
+HF: Form D                          :      2.600u      0.100s      0.071w     13 calls
+HF: DIIS                            :    312.400u     18.667s     31.249w     12 calls
+HF: Form C                          :    269.833u     10.800s      7.280w     12 calls
+

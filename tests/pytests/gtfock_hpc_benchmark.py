@@ -436,6 +436,60 @@ def jk_build_seconds(arm):
     return key, record["wall_time"], record["n_calls"]
 
 
+# Where density fitting does the work the ``JK: JK`` timer does not see.
+# ``JK::initialize()`` (libfock/jk.cc:593) calls the subclass ``preiterations()``
+# outside ``timer_on("JK: JK")`` (jk.cc:650), and for ``MemDFJK`` that is
+# ``dfh_->initialize()`` with method STORE (libfock/MemDFJK.cc:71) -- the whole
+# three-index tensor, built and kept. ``DirectJK::preiterations()`` does nothing
+# comparable, so ``JK: JK`` covers all of an exact-ERI arm's integral work and
+# only the GEMM half of density fitting's. Reporting the two arms' ``jk_wall``
+# side by side without this number overstates the DF advantage several-fold.
+#
+# Two builders answer to ``scf_type df`` and they instrument themselves
+# differently, so both vocabularies have to be listened for. ``MemDFJK`` goes
+# through ``DFHelper`` and brackets ``DFH: sparsity prep`` and
+# ``DFH: initialize()``; ``DiskDFJK`` (lib3index is not involved) brackets
+# ``JK: (A|mn)``, ``JK: (A|Q)^-1/2`` and ``JK: (Q|mn)`` in its own
+# ``preiterations()`` (libfock/DiskDFJK.cc:430). Watching only the DFHelper
+# names reports a setup cost of zero for the disk algorithm, which reads as a
+# measured absence and is the one wrong answer this instrumentation can give.
+# Every name here is a top-level timer, sibling to ``HF: Form G`` rather than
+# nested inside another entry on this list, so summing them double-counts
+# nothing. ``DFH: AO Construction`` and ``DFH: AO-Met. Contraction`` are
+# deliberately absent: they are children of ``DFH: initialize()``.
+_DF_SETUP_TIMERS = (
+    "DFH: sparsity prep",
+    "DFH: initialize()",
+    "JK: (A|mn)",
+    "JK: (A|Q)^-1/2",
+    "JK: (Q|mn)",
+)
+
+
+def df_setup_records():
+    """Every density-fitting setup timer record, by full path.
+
+    More than one record can share a timer name: ``sad_scf_type df`` builds its
+    own DFHelper for the atomic subproblems, so a guess-side record can sit at a
+    different path than the production JK's. Rather than pick between them by a
+    rule this script cannot verify from inside one run, every record is reported
+    with its full path, longest first, and the reduction decides in the open. An
+    arm with no density fitting anywhere returns an empty list, which is a
+    measurement and not a failure.
+    """
+    def is_setup(key):
+        return any(key == name or key.endswith(f";{name}")
+                   for name in _DF_SETUP_TIMERS)
+
+    return sorted(
+        ({"key": key,
+          "wall_seconds": record["wall_time"],
+          "n_calls": record["n_calls"]}
+         for key, record in psi4.core.get_timer_records(False).items()
+         if is_setup(key)),
+        key=lambda entry: -entry["wall_seconds"])
+
+
 def main(argv=None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
 
@@ -499,6 +553,7 @@ def main(argv=None) -> int:
     energy, wfn = psi4.energy(args.method, return_wfn=True)
     elapsed = time.perf_counter() - start
     jk_timer_key, jk_wall, jk_calls = jk_build_seconds(args.arm)
+    df_setup = df_setup_records()
 
     # The report describes the basis the SCF actually used, so it is read back
     # off the wavefunction and held to the same guards -- the pre-flight check
@@ -524,6 +579,13 @@ def main(argv=None) -> int:
         "jk_wall_seconds": jk_wall,
         "jk_calls": jk_calls,
         "jk_timer_key": jk_timer_key,
+        # The DF setup cost, and the part of the SCF no J/K timer covers. The
+        # remainder is diagonalization, DIIS and the density build in every arm,
+        # plus -- in the df arm only -- the three-index tensor construction,
+        # which is why the two are reported together rather than one alone.
+        "df_setup_records": df_setup,
+        "df_setup_total_seconds": sum(r["wall_seconds"] for r in df_setup),
+        "scf_remainder_seconds": elapsed - jk_wall,
         "peak_rss_mb": peak_rss_mb(),
         "jk_name": wfn.jk().name(),
         "df_basis_scf": psi4.core.get_global_option("DF_BASIS_SCF") or "(auto)",
