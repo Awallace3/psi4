@@ -1907,7 +1907,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         parameters are to be specified in this array option.
         Unused for functionals constructed by user. -*/
         options.add("DFT_DISPERSION_PARAMETERS", new ArrayType());
-        /*- Parameters defining the XDM Becke-Johnson [a1, a2] damping function parameters -*/
+        /*- Two finite parameters ``[a1, a2]`` for XDM Becke--Johnson damping; ``a2`` is in angstrom. -*/
         options.add("XDM_DISPERSION_PARAMETERS", new ArrayType());
         /*- Parameters defining the -NL/-V dispersion correction. First b, then C -*/
         options.add("NL_DISPERSION_PARAMETERS", new ArrayType());

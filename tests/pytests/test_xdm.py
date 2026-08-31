@@ -556,7 +556,11 @@ units angstrom
     assert all(task.basis == "sto-3g" for task in cbs_plan.task_list.values() if isinstance(task, AtomicComputer))
     for task in cbs_plan.task_list.values():
         if isinstance(task, CompositeComputer):
-            assert {type(component) for component in task.task_list} == {FiniteDifferenceComputer}
+            component_types = {}
+            for component in task.task_list:
+                component_types.setdefault(component.method.lower(), set()).add(type(component))
+            assert component_types["b3lyp-xdm"] == {FiniteDifferenceComputer}
+            assert component_types["hf"] == {AtomicComputer}
 
     mixed_cbs_plan = task_planner(
         "gradient",

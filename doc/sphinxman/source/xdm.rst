@@ -251,7 +251,15 @@ keyword.  This option accepts a two-element array ``[a1, a2]`` where
    energy('b3lyp-xdm')
 
 When |scf__xdm_dispersion_parameters| is set, it overrides any automatic
-functional/basis lookup.
+functional/basis lookup. Automatic lookup requires the fitted functional's
+original exact-exchange fraction. With explicit parameters, modified global
+exact exchange is supported only for systems whose atoms have
+:math:`Z \leq 10`; modified range-separation parameters and unknown
+range-separated functionals are not supported.
+
+XDM requires an all-electron density, so calculations using effective-core
+potentials are rejected. XDM also cannot be combined with another empirical
+dispersion correction or a functional that includes VV10 nonlocal correlation.
 
 
 Ghost Atoms
@@ -307,7 +315,7 @@ Atoms**.
    +---------------------------------------+-----------------------------------------------------------+
    | ``XDM RC COEFFICIENTS``               | Pairwise critical radii :math:`R_{c,ij}`                  |
    +---------------------------------------+-----------------------------------------------------------+
-   | ``XDM PAIRWISE ENERGY``               | Pairwise dispersion energies                              |
+   | ``XDM PAIRWISE ENERGY``               | Symmetric pair energies; matrix sums to total energy      |
    +---------------------------------------+-----------------------------------------------------------+
 
 These can be accessed from the wavefunction object::
@@ -363,6 +371,13 @@ XDM gradients are available and are evaluated by finite differences of the
 complete XDM-corrected energy::
 
    grad = psi4.gradient("b3lyp-xdm")
+
+In mixed many-body ``levels`` and CBS specifications, only XDM levels or CBS
+components use finite differences; non-XDM components retain analytic
+gradients when available. A structured or callable ``dft_functional`` whose
+dispersion metadata has ``type: "xdm"`` follows the same routing. Explicitly
+requesting an analytic derivative with ``dertype=1`` is rejected; omit
+``dertype`` or use ``dertype=0``.
 
 Analytic XDM gradients are *not* implemented.  Because every XDM ingredient
 --- the exchange-hole multipole moments, the Hirshfeld atomic volumes, the

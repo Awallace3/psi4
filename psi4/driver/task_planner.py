@@ -249,6 +249,8 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
             if method == "cbs":
                 # This CompositeComputer is discarded after being used for dermode.
                 simplekwargs = copy.deepcopy(kwargs)
+                if level_uses_xdm and driver == "gradient":
+                    simplekwargs["component_findif_kwargs"] = current_findif_kwargs
                 simplecbsmeta = copy.deepcopy(cbsmeta)
                 simplecbsmeta['verbose'] = 0
                 dummyplan = CompositeComputer(**packet, **simplecbsmeta, molecule=original_molecule, **simplekwargs)
@@ -310,6 +312,8 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
         kwargs.update(cbsmeta)
         # This CompositeComputer is discarded after being used for dermode. Could have used directly for analytic except for excess printing with FD
         simplekwargs = copy.deepcopy(kwargs)
+        if task_uses_xdm and driver == "gradient":
+            simplekwargs["component_findif_kwargs"] = current_findif_kwargs
         simplekwargs['verbose'] = 0
         dummyplan = CompositeComputer(**packet, **simplekwargs)
 
