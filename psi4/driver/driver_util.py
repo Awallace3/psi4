@@ -96,21 +96,14 @@ def negotiate_convergence_criterion(dermode: Union[Tuple[str, str], Tuple[int, i
 def apply_convergence_criterion_defaults(convcrit: Dict[str, Any], keywords: Dict[str, Any]) -> Dict[str, Any]:
     """Return *keywords* backed by *convcrit* defaults, letting user keywords win.
 
-    A negotiated module-local criterion (e.g., ``SCF__E_CONVERGENCE``) is
-    withheld when *keywords* already carries that keyword under any casing or
-    carries the global keyword (e.g., ``E_CONVERGENCE``) that it would shadow.
-    This mirrors :py:func:`negotiate_convergence_criterion`, which withholds the
-    same criteria when the user has changed the corresponding local or global
-    option.
+    A negotiated criterion (e.g., ``SCF__E_CONVERGENCE``) is withheld only
+    when *keywords* already carries that exact key under any casing. A global
+    ``E_CONVERGENCE`` does not suppress the SCF-local finite-difference
+    criterion, matching the standard direct finite-difference route.
 
     """
     present = {str(kw).upper() for kw in keywords}
-    defaults = {}
-    for key, value in convcrit.items():
-        shadowed = {key.upper(), key.upper().rpartition("__")[2]}
-        if shadowed & present:
-            continue
-        defaults[key] = value
+    defaults = {key: value for key, value in convcrit.items() if key.upper() not in present}
 
     return {**defaults, **keywords}
 

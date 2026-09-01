@@ -695,10 +695,10 @@ symmetry c1
         assert keywords["SCF__E_CONVERGENCE"] == pytest.approx(1.0e-8)
         assert keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
 
-    # A global stage override is not shadowed by a looser negotiated module-local criterion.
+    # A global criterion does not suppress the direct-route SCF-local finite-difference default.
     staged, defaulted = xdm_component_keywords({"e_convergence": 1.0e-10})
     for keywords in staged:
-        assert [value for key, value in keywords.items() if key.upper() == "SCF__E_CONVERGENCE"] == []
+        assert keywords["SCF__E_CONVERGENCE"] == pytest.approx(1.0e-8)
         assert [value for key, value in keywords.items() if key.upper() == "E_CONVERGENCE"] == [pytest.approx(1.0e-10)]
         assert keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
     for keywords in defaulted:
