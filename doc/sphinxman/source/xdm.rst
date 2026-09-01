@@ -379,6 +379,13 @@ dispersion metadata has ``type: "xdm"`` follows the same routing. Explicitly
 requesting an analytic derivative with ``dertype=1`` is rejected; omit
 ``dertype`` or use ``dertype=0``.
 
+Finite-difference XDM gradients automatically use Psi4's standard ``(1, 0)``
+SCF convergence criteria. Each XDM CBS component receives the same criteria
+before its finite-difference tasks are constructed. An explicit
+module-qualified CBS stage option such as ``scf__e_convergence`` takes
+precedence; an unqualified ``e_convergence`` does not suppress the tighter
+SCF-local finite-difference criterion.
+
 Analytic XDM gradients are *not* implemented.  Because every XDM ingredient
 --- the exchange-hole multipole moments, the Hirshfeld atomic volumes, the
 polarizabilities, the :math:`C_6`/:math:`C_8`/:math:`C_{10}` coefficients, and
