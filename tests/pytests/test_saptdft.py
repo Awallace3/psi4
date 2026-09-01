@@ -1284,6 +1284,7 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
         "sapt_dft_do_dhf": delta_hf,
         "sapt_dft_do_hybrid": False,
         "sapt_dft_use_einsums": False,
+        "sapt__maxiter": 7,
         "orbital_optimizer_package": "internal",
     }
     if induction_type is not None:
@@ -1291,11 +1292,13 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
     psi4.set_options(options)
 
     calls = []
+    iteration_limits = []
     induction = sapt_proc.sapt_jk_terms.induction
 
     def wrapped_induction(*args, **kwargs):
         result = induction(*args, **kwargs)
         calls.append(result)
+        iteration_limits.append(kwargs["maxiter"])
         return result
 
     monkeypatch.setattr(sapt_proc.sapt_jk_terms, "induction", wrapped_induction)
@@ -1303,6 +1306,7 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
     offset = len(outfile.read_bytes()) if outfile.exists() else 0
     energy, wfn = psi4.energy("sapt(dft)", molecule=mol, return_wfn=True)
     assert len(calls) == expected_calls
+    assert iteration_limits == [7] * expected_calls
 
     mode = induction_type or "CPKS"
     assert psi4.core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE") == mode

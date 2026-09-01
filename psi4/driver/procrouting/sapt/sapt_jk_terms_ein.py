@@ -2960,7 +2960,7 @@ def induction(
     cache: dict,
     jk: core.JK,
     do_print: bool = True,
-    maxiter: int = 12,
+    maxiter: int | None = None,
     conv: float = 1.0e-8,
     do_response: bool = True,
     Sinf: bool = False,
@@ -3000,8 +3000,9 @@ def induction(
         JK integral engine for Coulomb and exchange matrices.
     do_print : bool, optional
         Whether to print results, by default True.
-    maxiter : int, optional
-        Maximum CPSCF iterations for coupled induction, by default 12.
+    maxiter : int or None, optional
+        Maximum CPSCF iterations for coupled induction. If omitted, use the
+        SAPT ``MAXITER`` option, whose default is 50.
     conv : float, optional
         Convergence threshold for CPSCF solver, by default 1.0e-8.
     do_response : bool, optional
@@ -3020,6 +3021,9 @@ def induction(
         ``'Exch-Ind20,u'``, and coupled variants (``'Ind20,r'``, etc.)
         when ``do_response=True``.
     """
+
+    if maxiter is None:
+        maxiter = core.get_option("SAPT", "MAXITER")
 
     if do_print:
         core.print_out("\n  ==> E20 Induction Einsums <== \n\n")

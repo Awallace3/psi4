@@ -407,7 +407,7 @@ def induction(
     cache,
     jk,
     do_print=True,
-    maxiter=50,
+    maxiter=None,
     conv=1.0e-8,
     do_response=True,
     Sinf=False,
@@ -415,7 +415,13 @@ def induction(
 ):
     """
     Compute Ind20 and Exch-Ind20 quantities from a SAPT cache and JK object.
+
+    If ``maxiter`` is omitted, the iteration budget is read from the SAPT
+    ``MAXITER`` option, whose default is 50.
     """
+
+    if maxiter is None:
+        maxiter = core.get_option("SAPT", "MAXITER")
 
     if do_print:
         core.print_out("\n  ==> E20 Induction <== \n\n")
