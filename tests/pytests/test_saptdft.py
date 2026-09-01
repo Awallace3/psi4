@@ -1259,6 +1259,7 @@ def test_charge_field_inputs():
 
 
 @pytest.mark.saptdft
+@pytest.mark.parametrize("use_einsums", [False, True])
 @pytest.mark.parametrize(
     "induction_type, delta_hf, expected_calls",
     [
@@ -1269,7 +1270,10 @@ def test_charge_field_inputs():
         ("NONE", False, 0),
     ],
 )
-def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expected_calls):
+def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expected_calls, use_einsums):
+    if use_einsums:
+        pytest.importorskip("einsums")
+
     mol = psi4.geometry("""
   Ne
   --
@@ -1283,8 +1287,8 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
         "sapt_dft_grac_shift_b": 0.203293,
         "sapt_dft_do_dhf": delta_hf,
         "sapt_dft_do_hybrid": False,
-        "sapt_dft_use_einsums": False,
-        "sapt__maxiter": 7,
+        "sapt_dft_use_einsums": use_einsums,
+        "sapt_dft_induction_maxiter": 7,
         "orbital_optimizer_package": "internal",
     }
     if induction_type is not None:
@@ -1293,7 +1297,8 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
 
     calls = []
     iteration_limits = []
-    induction = sapt_proc.sapt_jk_terms.induction
+    jk_terms = sapt_proc.sapt_jk_terms_ein if use_einsums else sapt_proc.sapt_jk_terms
+    induction = jk_terms.induction
 
     def wrapped_induction(*args, **kwargs):
         result = induction(*args, **kwargs)
@@ -1301,7 +1306,7 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
         iteration_limits.append(kwargs["maxiter"])
         return result
 
-    monkeypatch.setattr(sapt_proc.sapt_jk_terms, "induction", wrapped_induction)
+    monkeypatch.setattr(jk_terms, "induction", wrapped_induction)
     outfile = Path("pytest_output.dat")
     offset = len(outfile.read_bytes()) if outfile.exists() else 0
     energy, wfn = psi4.energy("sapt(dft)", molecule=mol, return_wfn=True)
@@ -1353,7 +1358,8 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
     assert "Dimer for Localization" not in output
     assert ("     HF   (Dimer)\n" in output) is (delta_hf or mode == "CPHF")
     assert ("SAPT(DFT): delta HF Dimer" in output) is delta_hf
-    assert output.count("==> E10 Electostatics <==") == (1 if mode == "NONE" else 2)
+    elst_banner = "==> E10 Electrostatics <==" if use_einsums else "==> E10 Electostatics <=="
+    assert output.count(elst_banner) == (1 if mode == "NONE" else 2)
     if mode == "CPHF":
         assert "Induction (SAPT0)" in output
         assert ("delta HF,r (2)" in output) is delta_hf

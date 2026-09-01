@@ -1194,6 +1194,8 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         true), and ``NONE`` omits second-order induction. ``CPHF`` and ``NONE``
         are unavailable with F-SAPT. -*/
         options.add_str("SAPT_DFT_INDUCTION_TYPE", "CPKS", "CPKS CPHF NONE");
+        /*- Maximum number of coupled-induction CPHF/CPKS iterations for SAPT(DFT). -*/
+        options.add_int("SAPT_DFT_INDUCTION_MAXITER", 50);
         /*- Enables SAPT(DFT) to be run with PyEinsums if available -*/
         options.add_bool("SAPT_DFT_USE_EINSUMS", true);
         /*- Enables the hybrid xc kernel in dispersion? !expert -*/

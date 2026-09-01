@@ -585,7 +585,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     hf_cache_ein,
                     sapt_jk,
                     True,
-                    maxiter=core.get_option("SAPT", "MAXITER"),
+                    maxiter=core.get_option("SAPT", "SAPT_DFT_INDUCTION_MAXITER"),
                     conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
                     Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
                 )
@@ -1298,7 +1298,7 @@ def sapt_dft(
             sapt_jk,
             True,
             sapt_jk_B=sapt_jk_B,
-            maxiter=core.get_option("SAPT", "MAXITER"),
+            maxiter=core.get_option("SAPT", "SAPT_DFT_INDUCTION_MAXITER"),
             conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
             Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
         )
