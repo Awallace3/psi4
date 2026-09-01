@@ -292,17 +292,6 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
     do_dft = sapt_dft_functional != "HF"
 
-    if do_fsapt and (sapt_dft_D4_IE or sapt_dft_D3_IE):
-        dispersion_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
-        if do_delta_dft or dispersion_type != "intermolecular":
-            core.print_out(
-                "\n    Warning: the empirical F-SAPT dispersion breakdown uses the "
-                "intermolecular atom-pair contributions from the dimer calculation. "
-                "For supermolecular and delta-DFT D3/D4 methods, this qualitative "
-                "breakdown does not in general sum to the scalar dispersion or total "
-                "interaction energy; the reported scalar energies remain authoritative.\n\n"
-            )
-
     # CPHF needs the HF segment for the SAPT0 induction terms, even without delta HF.
     run_hf_segment = do_delta_hf or (induction_type == "CPHF" and do_dft)
     hf_segment_label = "delta HF" if do_delta_hf else "SAPT0 induction"

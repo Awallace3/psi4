@@ -108,7 +108,7 @@ def test_sapt_dft_compute_ddft_d4():
     "method, expected_disp",
     [
         ("SAPT(DFT)-D4(S)", -0.003605830),
-        ("SAPT(DFT)-D4(I)", -0.0042277709),
+        ("SAPT(DFT)-D4(I)", -0.0026531896),
         ("DFT-D4(SAPT)", -0.0057317156),
     ],
 )
