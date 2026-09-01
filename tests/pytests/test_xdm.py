@@ -632,6 +632,60 @@ symmetry c1
         assert task.keywords["SCF__D_CONVERGENCE"] == direct_plan.keywords["SCF__D_CONVERGENCE"]
 
 
+@pytest.mark.xdm
+def test_xdm_cbs_component_convergence_respects_stage_options():
+    """CBS stage-local convergence options survive the finite-difference defaults."""
+
+    mol = psi4.geometry("""
+0 1
+O
+H 1 0.96
+H 1 0.96 2 104.5
+symmetry c1
+    """)
+    psi4.set_options({"basis": "sto-3g", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
+
+    from psi4.driver.driver_findif import FiniteDifferenceComputer
+    from psi4.driver.task_planner import task_planner
+
+    findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
+
+    def xdm_component_keywords(stage_options):
+        plan = task_planner(
+            "gradient",
+            "cbs",
+            mol,
+            cbs_metadata=[
+                {
+                    "wfn": "b3lyp-xdm",
+                    "basis": "sto-3g",
+                    "options": stage_options
+                },
+                {
+                    "wfn": "mp2",
+                    "basis": "sto-3g"
+                },
+            ],
+            **findif_kwargs,
+        )
+        tasks = [task for task in plan.task_list if task.method.lower() == "b3lyp-xdm"]
+        assert tasks and all(isinstance(task, FiniteDifferenceComputer) for task in tasks)
+        return [task.keywords for task in tasks]
+
+    # A module-local stage override is not shadowed by a looser negotiated duplicate.
+    for keywords in xdm_component_keywords({"scf__e_convergence": 1.0e-10}):
+        scf_ec = [value for key, value in keywords.items() if key.upper() == "SCF__E_CONVERGENCE"]
+        assert scf_ec == [pytest.approx(1.0e-10)]
+        # Criteria the stage did not set still pick up the finite-difference default.
+        assert keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
+
+    # A global stage override is not shadowed by a looser negotiated module-local criterion.
+    for keywords in xdm_component_keywords({"e_convergence": 1.0e-10}):
+        assert [value for key, value in keywords.items() if key.upper() == "SCF__E_CONVERGENCE"] == []
+        assert [value for key, value in keywords.items() if key.upper() == "E_CONVERGENCE"] == [pytest.approx(1.0e-10)]
+        assert keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
+
+
 def test_empirical_dispersion_compatibility_import():
     from psi4.driver.procrouting.empirical_dispersion import EmpiricalDispersion as compatibility_class
     from psi4.driver.procrouting.empirical_disp.empirical_dispersion import EmpiricalDispersion

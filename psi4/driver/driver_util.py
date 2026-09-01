@@ -93,6 +93,28 @@ def negotiate_convergence_criterion(dermode: Union[Tuple[str, str], Tuple[int, i
         return cc
 
 
+def apply_convergence_criterion_defaults(convcrit: Dict[str, Any], keywords: Dict[str, Any]) -> Dict[str, Any]:
+    """Return *keywords* backed by *convcrit* defaults, letting user keywords win.
+
+    A negotiated module-local criterion (e.g., ``SCF__E_CONVERGENCE``) is
+    withheld when *keywords* already carries that keyword under any casing or
+    carries the global keyword (e.g., ``E_CONVERGENCE``) that it would shadow.
+    This mirrors :py:func:`negotiate_convergence_criterion`, which withholds the
+    same criteria when the user has changed the corresponding local or global
+    option.
+
+    """
+    present = {str(kw).upper() for kw in keywords}
+    defaults = {}
+    for key, value in convcrit.items():
+        shadowed = {key.upper(), key.upper().rpartition("__")[2]}
+        if shadowed & present:
+            continue
+        defaults[key] = value
+
+    return {**defaults, **keywords}
+
+
 def upgrade_interventions(method):
     try:
         lowermethod = method.lower()

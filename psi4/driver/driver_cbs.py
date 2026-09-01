@@ -1620,8 +1620,9 @@ class CompositeComputer(BaseComputer):
                 if self.driver == "gradient" and job_uses_xdm:
                     from .driver_findif import FiniteDifferenceComputer
 
-                    task_data["keywords"].update(
-                        driver_util.negotiate_convergence_criterion((1, 0), job["f_wfn"], return_optstash=False))
+                    task_data["keywords"] = driver_util.apply_convergence_criterion_defaults(
+                        driver_util.negotiate_convergence_criterion((1, 0), job["f_wfn"], return_optstash=False),
+                        task_data["keywords"])
                     task = FiniteDifferenceComputer(
                         **task_data,
                         findif_mode=(1, 0),
