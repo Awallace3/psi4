@@ -28,6 +28,8 @@
 
 #include "psi4/pybind11.h"
 
+#include <string>
+
 #include "psi4/libfock/gtfock_df_interface.h"
 #include "psi4/libfock/gtfock_interface.h"
 #include "psi4/libfock/jk.h"
@@ -236,6 +238,12 @@ void export_fock(py::module &m) {
           "shows the fitted tensor was distributed rather than replicated.");
     m.def("gtfock_df_local_tensor_doubles", &MinimalDFInterface::last_local_tensor_doubles,
           "Doubles in this rank's slice of the most recent distributed DF fitted tensor, or 0.");
+    m.def(
+        "gtfock_df_setup_timer", []() { return std::string(GTFOCK_DF_SETUP_TIMER); },
+        "Name of the top-level timer GTFockDFJK brackets its engine build with. The fitted tensor is built "
+        "in preiterations(), which runs before JK::compute() opens 'JK: JK', so this is the density-fitting "
+        "setup cost that no J/K clock covers -- exported so a benchmark reads the name rather than copying "
+        "it.");
 
     py::class_<scf::SADGuess, std::shared_ptr<scf::SADGuess>>(m, "SADGuess", "docstring")
         .def_static("build_SAD",

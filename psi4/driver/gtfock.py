@@ -58,6 +58,7 @@ __all__ = [
     "df_available",
     "df_jk_builds",
     "df_partition",
+    "df_setup_timer",
     "fock_builds",
     "initialize",
     "mpi_info",
@@ -126,6 +127,20 @@ def df_partition() -> Dict[str, Any]:
         "nlocal_pairs": nlocal_pairs,
         "local_tensor_doubles": core.gtfock_df_local_tensor_doubles(),
     }
+
+
+def df_setup_timer() -> str:
+    """The timer name that covers the distributed DF setup, read from the module.
+
+    ``GTFockDFJK`` builds and distributes the fitted tensor in
+    ``preiterations()``, which ``JK::initialize()`` runs before
+    ``JK::compute()`` opens ``JK: JK``. That is most of this algorithm's
+    integral work and no J/K clock sees it, exactly as for ``MemDFJK``, so the
+    builder brackets it under its own top-level timer. Anything summing
+    density-fitting setup costs should read the name from here rather than
+    hard-code it.
+    """
+    return core.gtfock_df_setup_timer()
 
 
 def mpi_info() -> Dict[str, int]:

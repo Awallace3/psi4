@@ -29,6 +29,7 @@
 #include "psi4/libfock/jk.h"
 
 #include "psi4/libfock/gtfock_df_interface.h"
+#include "psi4/libfock/jk_timer_bracket.h"
 #include "psi4/libfock/gtfock_interface.h"
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/matrix.h"
@@ -75,6 +76,17 @@ void GTFockDFJK::preiterations() {
     // point of this class: GTFock's DF engine keeps no process-global state, so
     // it can be created before the iterations start, which puts the fitting
     // setup inside JK::initialize() exactly where MemDFJK's is.
+    //
+    // And exactly where MemDFJK's is means outside "JK: JK", which JK::compute()
+    // opens later: three-center integrals, the metric inverse square root and
+    // the redistribution are the bulk of this algorithm's integral work and no
+    // J/K clock sees any of it. MemDFJK is legible anyway because DFHelper
+    // brackets its own setup; this engine is C and brackets nothing, so without
+    // a timer here a benchmark that sums the density-fitting setup timers would
+    // report zero for this builder -- a measured absence, and the one wrong
+    // answer that instrumentation can give. The bracket unwinds because
+    // PDF_create throws to refuse a basis it cannot handle.
+    JKTimerBracket setup(GTFOCK_DF_SETUP_TIMER);
     Impl_ = std::make_shared<MinimalDFInterface>(primary_, auxiliary_, fitting_condition_,
                                                  nthreads_ > 0 ? nthreads_ : omp_nthread_);
 }

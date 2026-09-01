@@ -40,6 +40,16 @@ namespace psi {
 class BasisSet;
 class Matrix;
 
+/*! \brief The timer GTFockDFJK::preiterations() brackets its engine build with.
+ *
+ *  A top-level timer, sibling to "HF: Form G" rather than nested inside any
+ *  J/K clock, so a benchmark may add it to the "JK: JK" total without
+ *  double-counting. It is named here rather than spelled out at the one call
+ *  site so that Python can read the name off the module (gtfock.df_setup_timer)
+ *  instead of carrying a copy that can drift out of step with the C++.
+ */
+inline constexpr const char* GTFOCK_DF_SETUP_TIMER = "JK: GTFock DF setup";
+
 /*! \brief Psi4's side of the Psi4 <-> GTFock density-fitting bridge.
  *
  *  This is the DF counterpart of MinimalInterface. Where that class drives

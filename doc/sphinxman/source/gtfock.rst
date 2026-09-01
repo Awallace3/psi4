@@ -381,8 +381,20 @@ because this engine is a density-fitting builder: the tensor is built in
 ``preiterations()``, which ``JK::initialize()`` runs *before*
 ``timer_on("JK: JK")`` is ever opened. The ``JK: JK`` line in a ``GTFOCK_DF``
 output therefore reports the per-iteration contractions only and omits the setup
-that dominates a short run. Read ``Total time``, or instrument
-``preiterations()``, before comparing it against a ``direct`` or ``gtfock`` row.
+that dominates a short run.
+
+Unlike ``MemDFJK``, which is legible through ``DFHelper``'s own timers, the
+GTFock DF engine is C and brackets nothing, so a tool that summed the known
+density-fitting setup timers would report a confident zero for this builder
+|w---w| a measured absence, which is the one wrong answer instrumentation can
+give. ``GTFockDFJK::preiterations()`` therefore opens a top-level timer of its
+own, ``JK: GTFock DF setup``, a sibling of ``HF: Form G`` rather than a child of
+``JK: JK``, covering the three-centre integrals, the metric inverse square root
+and the redistribution together. The name is defined once in
+:source:`psi4/src/psi4/libfock/gtfock_df_interface.h` and read back through
+:py:func:`psi4.driver.gtfock.df_setup_timer`, so a benchmark asks the module for
+it rather than carrying a copy that can drift. Add that line to ``JK: JK``, or
+read ``Total time``, before comparing against a ``direct`` or ``gtfock`` row.
 
 Measured behaviour
 ..................

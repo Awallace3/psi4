@@ -27,6 +27,7 @@
  */
 
 #include "jk.h"
+#include "jk_timer_bracket.h"
 
 #include "psi4/lib3index/3index.h"
 #include "psi4/libpsio/psio.hpp"
@@ -56,33 +57,6 @@ using namespace psi;
 namespace psi {
 
 namespace {
-
-/*
- * A timer bracket that survives an exception.
- *
- * ``timer_on`` records the label on a stack and ``timer_off`` pops it, so a
- * label left on by an escaping exception is not merely a missing time: the next
- * ``timer_on`` for it throws "is already on" from inside the timer's OpenMP
- * lock, without releasing it, and the ``timer_done`` at interpreter shutdown
- * then spins on that lock forever. JK subclasses legitimately throw out of
- * ``compute_JK`` to refuse a request, so the bracket around them has to unwind.
- */
-class JKTimerBracket {
-   public:
-    explicit JKTimerBracket(const char* label) : label_(label) { timer_on(label_); }
-    ~JKTimerBracket() {
-        // Called while an exception may be in flight, so it must not throw.
-        try {
-            timer_off(label_);
-        } catch (...) {
-        }
-    }
-    JKTimerBracket(const JKTimerBracket&) = delete;
-    JKTimerBracket& operator=(const JKTimerBracket&) = delete;
-
-   private:
-    const char* label_;
-};
 
 /*
  * Undoes ``JK::compute``'s C_right_ = C_left_ aliasing however the call ends.
