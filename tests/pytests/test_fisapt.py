@@ -1060,14 +1060,6 @@ no_com"""
         psi4.energy("fisapt0-d4(s)", molecule=mol)
         d4_disp = variable("FISAPT0-D DISP ENERGY") * au2kcal
         assert compare_values(ref_d4, d4_disp, 5, "Ethene-Ethyne -d4")
-        pw_disp_s = variable("FSAPT_EMPIRICAL_DISP").to_array()
-        assert compare_values(variable("FISAPT0-D DISP ENERGY"), pw_disp_s.sum(), 8,
-                              "D4(S) interaction pairwise dispersion sums to the reported dispersion")
-        # D4 coordination numbers differ between dimer and isolated monomers, so a true
-        # dimer-minus-monomers interaction matrix retains their small intramonomer difference.
-        intramonomer_difference = pw_disp_s[:5, :5].sum() + pw_disp_s[5:, 5:].sum()
-        assert abs(intramonomer_difference) > 1.0e-12
-
         psi4.energy("fisapt0-d4bj2b(s)", molecule=mol)
         d4m_disp = variable("FISAPT0-D DISP ENERGY") * au2kcal
         assert compare_values(ref_d4m, d4m_disp, 5, "Ethene-Ethyne -d4M")

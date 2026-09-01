@@ -35,50 +35,6 @@ from ...p4util.exceptions import ValidationError
 from . import empirical_dispersion
 
 
-def _pairwise_array(wfn: core.Wavefunction, molecule: core.Molecule, natom: int) -> np.ndarray:
-    pairwise = wfn.variable("PAIRWISE DISPERSION CORRECTION ANALYSIS").np.copy()
-    if pairwise.shape == (natom, natom):
-        return pairwise
-
-    real_atoms = [i for i in range(molecule.natom()) if molecule.Z(i) > 0]
-    if pairwise.shape != (len(real_atoms), len(real_atoms)):
-        raise ValidationError(
-            f"Pairwise dispersion matrix shape {pairwise.shape} cannot be mapped onto {natom} dimer atoms."
-        )
-    mapped = np.zeros((natom, natom))
-    mapped[np.ix_(real_atoms, real_atoms)] = pairwise
-    return mapped
-
-
-def compute_supermolecular_dispersion(
-    disp_functor,
-    sapt_dimer: core.Molecule,
-    monomerA: core.Molecule,
-    monomerB: core.Molecule,
-    dimer_wfn: core.Wavefunction,
-) -> tuple[float, float, float, np.ndarray]:
-    dimer_disp = disp_functor.compute_energy(sapt_dimer, dimer_wfn)
-    dimer_pairwise = _pairwise_array(dimer_wfn, sapt_dimer, sapt_dimer.natom())
-    dimer_variables = dimer_wfn.variables()
-    monA_disp = disp_functor.compute_energy(monomerA, dimer_wfn)
-    monA_pairwise = _pairwise_array(dimer_wfn, monomerA, sapt_dimer.natom())
-    monB_disp = disp_functor.compute_energy(monomerB, dimer_wfn)
-    monB_pairwise = _pairwise_array(dimer_wfn, monomerB, sapt_dimer.natom())
-    interaction_pairwise = dimer_pairwise - monA_pairwise - monB_pairwise
-    interaction_energy = dimer_disp - monA_disp - monB_disp
-    residual = interaction_energy - interaction_pairwise.sum()
-    real_a = [i for i in range(monomerA.natom()) if monomerA.Z(i) > 0]
-    real_b = [i for i in range(monomerB.natom()) if monomerB.Z(i) > 0]
-    if residual and real_a and real_b:
-        correction = residual / (2 * len(real_a) * len(real_b))
-        interaction_pairwise[np.ix_(real_a, real_b)] += correction
-        interaction_pairwise[np.ix_(real_b, real_a)] += correction
-    for name, value in dimer_variables.items():
-        dimer_wfn.set_variable(name, value)
-    dimer_wfn.set_variable("PAIRWISE DISPERSION CORRECTION ANALYSIS", interaction_pairwise)
-    return dimer_disp, monA_disp, monB_disp, interaction_pairwise
-
-
 def _sapt_dft_dispersion_interaction_energy(
     sapt_dimer: core.Molecule,
     monomerA: core.Molecule,
@@ -154,14 +110,14 @@ def _sapt_dft_dispersion_interaction_energy(
             param_tweaks=modified_disp_params,
             save_pairwise_disp=True,
         )
-        dimer_disp, monA_disp, monB_disp, interaction_pairwise = compute_supermolecular_dispersion(
-            _disp_functor, sapt_dimer, monomerA, monomerB, dimer_wfn
-        )
+        dimer_disp = _disp_functor.compute_energy(sapt_dimer, dimer_wfn)
+        monA_disp = _disp_functor.compute_energy(monomerA)
+        monB_disp = _disp_functor.compute_energy(monomerB)
         data[f"{disp_label} DIMER"] = dimer_disp
         data[f"{disp_label} MONOMER A"] = monA_disp
         data[f"{disp_label} MONOMER B"] = monB_disp
         data[f"{disp_label} IE"] = dimer_disp - monA_disp - monB_disp
-        data['FSAPT_EMPIRICAL_DISP'] = interaction_pairwise
+        data['FSAPT_EMPIRICAL_DISP'] = dimer_wfn.variable("PAIRWISE DISPERSION CORRECTION ANALYSIS")
         _disp_functor.print_out()
     elif d_type == "intermolecular":
         monAs = np.array([i for i in range(monomerA.natom()) if monomerA.Z(i) > 0])
@@ -204,14 +160,14 @@ def _sapt_dft_dispersion_interaction_energy(
             save_pairwise_disp=True,
         )
 
-        dimer_disp, monA_disp, monB_disp, interaction_pairwise = compute_supermolecular_dispersion(
-            _disp_functor, sapt_dimer, monomerA, monomerB, dimer_wfn
-        )
+        dimer_disp = _disp_functor.compute_energy(sapt_dimer, dimer_wfn)
+        monA_disp = _disp_functor.compute_energy(monomerA)
+        monB_disp = _disp_functor.compute_energy(monomerB)
         data[f"{disp_label} DIMER"] = dimer_disp
         data[f"{disp_label} MONOMER A"] = monA_disp
         data[f"{disp_label} MONOMER B"] = monB_disp
         data[f"{disp_label} IE"] = dimer_disp - monA_disp - monB_disp
-        data['FSAPT_EMPIRICAL_DISP'] = interaction_pairwise
+        data['FSAPT_EMPIRICAL_DISP'] = dimer_wfn.variable("PAIRWISE DISPERSION CORRECTION ANALYSIS")
         _disp_functor.print_out()
     else:
         raise ValueError(

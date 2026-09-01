@@ -369,11 +369,10 @@ Typical usage is::
 For empirical SAPT(DFT)-D3/D4 runs, the FSAPT table separates conventional
 SAPT dispersion and empirical pairwise dispersion. In
 :func:`~psi4.driver.fsapt_analysis` output, ``EDisp`` contains the empirical
-D3/D4 partition and can be nonzero even when ``Disp`` is zero. The published
-``FSAPT_EMPIRICAL_DISP`` interaction matrix sums to the reported scalar
-empirical dispersion: an intermolecular treatment contains only cross-monomer
-pairs, while a supermolecular treatment subtracts the mapped isolated-monomer
-pair matrices from the dimer pair matrix.
+D3/D4 partition and can be nonzero even when ``Disp`` is zero. For
+supermolecular and :math:`\Delta`-DFT variants, this qualitative partition uses
+the dimer atom-pair contributions and therefore need not sum to the
+authoritative scalar dispersion or total interaction energy.
 
 
 Order-1 Visualization with PyMol
