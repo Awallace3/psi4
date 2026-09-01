@@ -651,6 +651,7 @@ symmetry c1
     findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
 
     def xdm_component_keywords(stage_options):
+        """Split the XDM components into those carrying the stage options and those without."""
         plan = task_planner(
             "gradient",
             "cbs",
@@ -668,22 +669,77 @@ symmetry c1
             ],
             **findif_kwargs,
         )
-        tasks = [task for task in plan.task_list if task.method.lower() == "b3lyp-xdm"]
-        assert tasks and all(isinstance(task, FiniteDifferenceComputer) for task in tasks)
-        return [task.keywords for task in tasks]
+        staged, defaulted = [], []
+        for job, task in zip(plan.compute_list, plan.task_list):
+            if task.method.lower() != "b3lyp-xdm":
+                continue
+            assert isinstance(task, FiniteDifferenceComputer)
+            if job["f_options"] == stage_options:
+                staged.append(task.keywords)
+            else:
+                assert job["f_options"] is False
+                defaulted.append(task.keywords)
+        # The delta stage's implicit lower method repeats b3lyp-xdm without the stage options.
+        assert staged and defaulted
+        return staged, defaulted
 
     # A module-local stage override is not shadowed by a looser negotiated duplicate.
-    for keywords in xdm_component_keywords({"scf__e_convergence": 1.0e-10}):
-        scf_ec = [value for key, value in keywords.items() if key.upper() == "SCF__E_CONVERGENCE"]
-        assert scf_ec == [pytest.approx(1.0e-10)]
+    staged, defaulted = xdm_component_keywords({"scf__e_convergence": 1.0e-10})
+    for keywords in staged:
+        assert [value for key, value in keywords.items() if key.upper() == "SCF__E_CONVERGENCE"] == [
+            pytest.approx(1.0e-10)
+        ]
         # Criteria the stage did not set still pick up the finite-difference default.
+        assert keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
+    for keywords in defaulted:
+        assert keywords["SCF__E_CONVERGENCE"] == pytest.approx(1.0e-8)
         assert keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
 
     # A global stage override is not shadowed by a looser negotiated module-local criterion.
-    for keywords in xdm_component_keywords({"e_convergence": 1.0e-10}):
+    staged, defaulted = xdm_component_keywords({"e_convergence": 1.0e-10})
+    for keywords in staged:
         assert [value for key, value in keywords.items() if key.upper() == "SCF__E_CONVERGENCE"] == []
         assert [value for key, value in keywords.items() if key.upper() == "E_CONVERGENCE"] == [pytest.approx(1.0e-10)]
         assert keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
+    for keywords in defaulted:
+        assert keywords["SCF__E_CONVERGENCE"] == pytest.approx(1.0e-8)
+        assert keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
+
+
+@pytest.mark.xdm
+def test_xdm_cbs_unavailable_method_raises_missing_method():
+    """An unavailable -XDM CBS stage still reports Psi4's method-availability error."""
+
+    mol = psi4.geometry("""
+0 1
+O
+H 1 0.96
+H 1 0.96 2 104.5
+symmetry c1
+    """)
+    psi4.set_options({"basis": "sto-3g", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
+
+    from psi4.driver.task_planner import task_planner
+
+    with pytest.raises(psi4.MissingMethodError, match="b3lypp-xdm"):
+        task_planner(
+            "gradient",
+            "cbs",
+            mol,
+            cbs_metadata=[
+                {
+                    "wfn": "b3lypp-xdm",
+                    "basis": "sto-3g"
+                },
+                {
+                    "wfn": "mp2",
+                    "basis": "sto-3g"
+                },
+            ],
+            findif_verbose=1,
+            findif_stencil_size=3,
+            findif_step_size=0.005,
+        )
 
 
 def test_empirical_dispersion_compatibility_import():

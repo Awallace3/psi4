@@ -167,6 +167,7 @@ from .driver_cbs_helper import (  # lgtm[py/unused-import]
 from .driver_util import UpgradeHelper
 from .p4util.exceptions import ValidationError
 from .procrouting.interface_cfour import cfour_psivar_list
+from .procrouting.proc_table import procedures
 from .task_base import AtomicComputer, BaseComputer, EnergyGradientHessianWfnReturn
 
 if TYPE_CHECKING:
@@ -1620,9 +1621,10 @@ class CompositeComputer(BaseComputer):
                 if self.driver == "gradient" and job_uses_xdm:
                     from .driver_findif import FiniteDifferenceComputer
 
-                    task_data["keywords"] = driver_util.apply_convergence_criterion_defaults(
-                        driver_util.negotiate_convergence_criterion((1, 0), job["f_wfn"], return_optstash=False),
-                        task_data["keywords"])
+                    if job["f_wfn"] in procedures["energy"]:
+                        task_data["keywords"] = driver_util.apply_convergence_criterion_defaults(
+                            driver_util.negotiate_convergence_criterion((1, 0), job["f_wfn"], return_optstash=False),
+                            task_data["keywords"])
                     task = FiniteDifferenceComputer(
                         **task_data,
                         findif_mode=(1, 0),
