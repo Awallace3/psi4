@@ -603,7 +603,11 @@ H 1 0.96
 H 1 0.96 2 104.5
 symmetry c1
     """)
-    psi4.set_options({"basis": "sto-3g", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
+    psi4.set_options({
+        "basis": "sto-3g",
+        "e_convergence": 1.0e-6,
+        "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
+    })
 
     from psi4.driver.driver_findif import FiniteDifferenceComputer
     from psi4.driver.task_base import AtomicComputer
@@ -625,9 +629,11 @@ symmetry c1
     xdm_tasks = [task for task in cbs_plan.task_list if task.method.lower() == "b3lyp-xdm"]
     assert xdm_tasks and all(isinstance(task, FiniteDifferenceComputer) for task in xdm_tasks)
     assert any(task.method.lower() == "mp2" and isinstance(task, AtomicComputer) for task in cbs_plan.task_list)
+    assert direct_plan.keywords["E_CONVERGENCE"] == pytest.approx(1.0e-6)
+    assert direct_plan.keywords["SCF__E_CONVERGENCE"] == pytest.approx(1.0e-8)
+    assert direct_plan.keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
     for task in xdm_tasks:
-        assert task.keywords["SCF__E_CONVERGENCE"] == pytest.approx(1.0e-8)
-        assert task.keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
+        assert task.keywords["E_CONVERGENCE"] == pytest.approx(1.0e-6)
         assert task.keywords["SCF__E_CONVERGENCE"] == direct_plan.keywords["SCF__E_CONVERGENCE"]
         assert task.keywords["SCF__D_CONVERGENCE"] == direct_plan.keywords["SCF__D_CONVERGENCE"]
 
@@ -695,7 +701,7 @@ symmetry c1
         assert keywords["SCF__E_CONVERGENCE"] == pytest.approx(1.0e-8)
         assert keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
 
-    # A global criterion does not suppress the direct-route SCF-local finite-difference default.
+    # An unqualified stage criterion does not suppress the SCF-local finite-difference default.
     staged, defaulted = xdm_component_keywords({"e_convergence": 1.0e-10})
     for keywords in staged:
         assert keywords["SCF__E_CONVERGENCE"] == pytest.approx(1.0e-8)
