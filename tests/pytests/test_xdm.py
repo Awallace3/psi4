@@ -592,6 +592,46 @@ units angstrom
                      **findif_kwargs)
 
 
+@pytest.mark.xdm
+def test_xdm_cbs_components_use_findif_convergence():
+    """CBS XDM components use the same tightened convergence criteria as direct finite differences."""
+
+    mol = psi4.geometry("""
+0 1
+O
+H 1 0.96
+H 1 0.96 2 104.5
+symmetry c1
+    """)
+    psi4.set_options({"basis": "sto-3g", "XDM_DISPERSION_PARAMETERS": [0.5, 1.0]})
+
+    from psi4.driver.driver_findif import FiniteDifferenceComputer
+    from psi4.driver.task_base import AtomicComputer
+    from psi4.driver.task_planner import task_planner
+
+    findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
+    direct_plan = task_planner("gradient", "b3lyp-xdm", mol, **findif_kwargs)
+    cbs_plan = task_planner(
+        "gradient",
+        "cbs",
+        mol,
+        scf_wfn="b3lyp-xdm",
+        scf_basis="sto-3g",
+        corl_wfn="mp2",
+        corl_basis="sto-3g",
+        **findif_kwargs,
+    )
+
+    xdm_tasks = [task for task in cbs_plan.task_list if task.method.lower() == "b3lyp-xdm"]
+    assert xdm_tasks and all(isinstance(task, FiniteDifferenceComputer) for task in xdm_tasks)
+    assert any(task.method.lower() == "mp2" and isinstance(task, AtomicComputer) for task in cbs_plan.task_list)
+    for task in xdm_tasks:
+        assert task.keywords["SCF__E_CONVERGENCE"] == pytest.approx(1.0e-8)
+        assert task.keywords["SCF__D_CONVERGENCE"] == pytest.approx(1.0e-8)
+        assert task.keywords["SCF__E_CONVERGENCE"] == direct_plan.keywords["SCF__E_CONVERGENCE"]
+        assert task.keywords["SCF__D_CONVERGENCE"] == direct_plan.keywords["SCF__D_CONVERGENCE"]
+
+
 def test_empirical_dispersion_compatibility_import():
     from psi4.driver.procrouting.empirical_dispersion import EmpiricalDispersion as compatibility_class
     from psi4.driver.procrouting.empirical_disp.empirical_dispersion import EmpiricalDispersion
