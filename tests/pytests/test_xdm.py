@@ -605,7 +605,7 @@ symmetry c1
     """)
     psi4.set_options({
         "basis": "sto-3g",
-        "e_convergence": 1.0e-6,
+        "e_convergence": 1.0e-10,
         "XDM_DISPERSION_PARAMETERS": [0.5, 1.0],
     })
 
@@ -613,6 +613,11 @@ symmetry c1
     from psi4.driver.task_base import AtomicComputer
     from psi4.driver.task_planner import task_planner
 
+    energy_plan = task_planner("energy", "scf", mol)
+    assert energy_plan.keywords["E_CONVERGENCE"] == pytest.approx(1.0e-10)
+    assert "SCF__E_CONVERGENCE" not in energy_plan.keywords
+
+    psi4.set_options({"e_convergence": 1.0e-6})
     findif_kwargs = dict(findif_verbose=1, findif_stencil_size=3, findif_step_size=0.005)
     direct_plan = task_planner("gradient", "b3lyp-xdm", mol, **findif_kwargs)
     cbs_plan = task_planner(

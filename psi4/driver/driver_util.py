@@ -37,7 +37,13 @@ from .procrouting import proc
 from .procrouting.proc_table import procedures
 
 
-def negotiate_convergence_criterion(dermode: Union[Tuple[str, str], Tuple[int, int]], method: str, return_optstash: bool = False):
+def negotiate_convergence_criterion(
+    dermode: Union[Tuple[str, str], Tuple[int, int]],
+    method: str,
+    return_optstash: bool = False,
+    *,
+    scf_local_options_only: bool = False,
+):
     r"""
     This function will set local SCF and global energy convergence criterion
     to the defaults listed at:
@@ -71,15 +77,16 @@ def negotiate_convergence_criterion(dermode: Union[Tuple[str, str], Tuple[int, i
     # Set method-dependent scf convergence criteria, check against energy routines
     # Set post-scf convergence criteria (global will cover all correlated modules)
     cc = {}
+    has_scf_option_changed = core.has_local_option_changed if scf_local_options_only else core.has_option_changed
     if procedures['energy'][method] in [proc.run_scf, proc.run_tdscf_energy]:
-        if not core.has_local_option_changed('SCF', 'E_CONVERGENCE'):
+        if not has_scf_option_changed('SCF', 'E_CONVERGENCE'):
             cc['SCF__E_CONVERGENCE'] = math.pow(10, -scf_Ec)
-        if not core.has_local_option_changed('SCF', 'D_CONVERGENCE'):
+        if not has_scf_option_changed('SCF', 'D_CONVERGENCE'):
             cc['SCF__D_CONVERGENCE'] = math.pow(10, -scf_Dc)
     else:
-        if not core.has_local_option_changed('SCF', 'E_CONVERGENCE'):
+        if not has_scf_option_changed('SCF', 'E_CONVERGENCE'):
             cc['SCF__E_CONVERGENCE'] = math.pow(10, -pscf_Ec)
-        if not core.has_local_option_changed('SCF', 'D_CONVERGENCE'):
+        if not has_scf_option_changed('SCF', 'D_CONVERGENCE'):
             cc['SCF__D_CONVERGENCE'] = math.pow(10, -pscf_Dc)
         if not core.has_global_option_changed('E_CONVERGENCE'):
             cc['E_CONVERGENCE'] = math.pow(10, -gen_Ec)

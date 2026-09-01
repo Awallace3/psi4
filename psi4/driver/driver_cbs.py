@@ -1623,7 +1623,12 @@ class CompositeComputer(BaseComputer):
 
                     if job["f_wfn"] in procedures["energy"]:
                         task_data["keywords"] = driver_util.apply_convergence_criterion_defaults(
-                            driver_util.negotiate_convergence_criterion((1, 0), job["f_wfn"], return_optstash=False),
+                            driver_util.negotiate_convergence_criterion(
+                                (1, 0),
+                                job["f_wfn"],
+                                return_optstash=False,
+                                scf_local_options_only=True,
+                            ),
                             task_data["keywords"])
                     task = FiniteDifferenceComputer(
                         **task_data,

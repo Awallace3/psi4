@@ -345,7 +345,12 @@ def task_planner(driver: DriverEnum, method: str, molecule: core.Molecule, **kwa
     # Done with Wrappers -- know we want E, G, or H -- but may still be FD or AtomicComputer
     else:
         dermode = _negotiate_derivative_type(driver, method, kwargs.pop('dertype', None), task_uses_xdm)
-        convcrit = negotiate_convergence_criterion(dermode, method, return_optstash=False)
+        convcrit = negotiate_convergence_criterion(
+            dermode,
+            method,
+            return_optstash=False,
+            scf_local_options_only=dermode[0] != dermode[1],
+        )
 
         if dermode[0] == dermode[1]:  # analytic
             logger.info(f'PLANNING Atomic:  keywords={keywords}')
