@@ -55,6 +55,59 @@ using namespace psi;
 
 namespace psi {
 
+namespace {
+
+/*
+ * A timer bracket that survives an exception.
+ *
+ * ``timer_on`` records the label on a stack and ``timer_off`` pops it, so a
+ * label left on by an escaping exception is not merely a missing time: the next
+ * ``timer_on`` for it throws "is already on" from inside the timer's OpenMP
+ * lock, without releasing it, and the ``timer_done`` at interpreter shutdown
+ * then spins on that lock forever. JK subclasses legitimately throw out of
+ * ``compute_JK`` to refuse a request, so the bracket around them has to unwind.
+ */
+class JKTimerBracket {
+   public:
+    explicit JKTimerBracket(const char* label) : label_(label) { timer_on(label_); }
+    ~JKTimerBracket() {
+        // Called while an exception may be in flight, so it must not throw.
+        try {
+            timer_off(label_);
+        } catch (...) {
+        }
+    }
+    JKTimerBracket(const JKTimerBracket&) = delete;
+    JKTimerBracket& operator=(const JKTimerBracket&) = delete;
+
+   private:
+    const char* label_;
+};
+
+/*
+ * Undoes ``JK::compute``'s C_right_ = C_left_ aliasing however the call ends.
+ *
+ * The alias is an implementation detail of one call, and the trailing
+ * ``C_right_.clear()`` only runs on the success path. A ``compute_JK`` that
+ * throws to refuse a request would otherwise leave C_right_ set, and the next
+ * ``compute`` would read the same symmetric input as non-symmetric.
+ */
+class JKAliasGuard {
+   public:
+    JKAliasGuard(std::vector<SharedMatrix>& C_right, bool aliased) : C_right_(C_right), aliased_(aliased) {}
+    ~JKAliasGuard() {
+        if (aliased_) C_right_.clear();
+    }
+    JKAliasGuard(const JKAliasGuard&) = delete;
+    JKAliasGuard& operator=(const JKAliasGuard&) = delete;
+
+   private:
+    std::vector<SharedMatrix>& C_right_;
+    bool aliased_;
+};
+
+}  // namespace
+
 template <class T>
 void _set_dfjk_options(std::shared_ptr<T> jk, Options& options) {
     double cutoff = options.get_str("SCREENING") == "NONE" ? 0.0 : options.get_double("INTS_TOLERANCE");
@@ -606,12 +659,15 @@ void JK::initialize() { preiterations(); }
 
 void JK::compute() {
     // Is this density symmetric?
+    bool aliased_C_right = false;
     if (C_left_.size() && !C_right_.size()) {
         lr_symmetric_ = true;
         C_right_ = C_left_;
+        aliased_C_right = true;
     } else {
         lr_symmetric_ = false;
     }
+    JKAliasGuard alias_guard(C_right_, aliased_C_right);
 
     // Figure out the symmetry and which codes will stay in C1 symmetry
     input_symmetry_cast_map_.clear();
@@ -647,26 +703,26 @@ void JK::compute() {
     }
 
     // Construct the densities
-    timer_on("JK: D");
-    compute_D();
-    timer_off("JK: D");
+    {
+        JKTimerBracket t("JK: D");
+        compute_D();
+    }
 
     if (C1()) {
-        timer_on("JK: USO2AO");
+        JKTimerBracket t("JK: USO2AO");
         USO2AO();
-        timer_off("JK: USO2AO");
     } else {
         allocate_JK();
     }
 
-    timer_on("JK: JK");
-    compute_JK();
-    timer_off("JK: JK");
+    {
+        JKTimerBracket t("JK: JK");
+        compute_JK();
+    }
 
     if (C1()) {
-        timer_on("JK: AO2USO");
+        JKTimerBracket t("JK: AO2USO");
         AO2USO();
-        timer_off("JK: AO2USO");
     }
 
     if (debug_ > 6) {
@@ -685,10 +741,6 @@ void JK::compute() {
             J_[N]->print("outfile");
             K_[N]->print("outfile");
         }
-    }
-
-    if (lr_symmetric_) {
-        C_right_.clear();
     }
 }
 
