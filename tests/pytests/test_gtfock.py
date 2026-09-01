@@ -16,6 +16,15 @@ two and four ranks on a water hexamer and compares every rank's energy against a
 single-process Psi4 PK reference. ``tests/pytests/gtfock_benchmark.py`` runs the
 same sweep with timings; it is a script rather than a test because it takes
 minutes.
+
+The ``test_gtfock_df_*`` tests cover the second, separate engine: ``SCF_TYPE
+GTFOCK_DF``, which distributes a fitted three-index tensor by auxiliary function
+instead of distributing four-centre integrals. It has its own add-on marker,
+``uusing("gtfock_df")``, because a GTFock install can predate ``libgtfockdf`` and
+lack it entirely. Unlike the exact path it needs no subprocess isolation: a
+``PDF_t`` keeps no file-scope state, so a process may hold several engines at
+once and may destroy them, which ``test_gtfock_df_engine_is_reentrant`` pins
+down.
 """
 
 import json
@@ -63,6 +72,21 @@ CLUSTER_ENGINE_TOL = 1.0e-5
 # measured spread is ~1e-12 Eh at 390 basis functions. This is the tolerance that
 # carries the distributed-correctness claim, so it stays tight.
 RANK_INVARIANCE_TOL = 1.0e-9
+# GTFock's density fitting against Psi4's own MemDFJK, given the *same* fitting
+# basis. This is a much tighter comparison than the exact-path one above: both
+# sides expand in the same auxiliary space, and J and K are invariant to the
+# rotation within it that distinguishes GTFock's eigendecomposition of the
+# Coulomb metric from DFHelper's, so only the three-centre integrals and the
+# contraction order differ. Measured on water/cc-pVDZ with cc-pVDZ-JKFIT:
+# max|dJ| ~ 1e-12, max|dK| ~ 2e-13, dE ~ 5e-12 Eh. 1e-9 keeps three orders of
+# headroom over the largest of those while still catching a real disagreement.
+DF_JK_TOL = 1.0e-9
+DF_ENERGY_TOL = 1.0e-9
+# The DF orbital/fitting pair the DF tests use. Both must be Cartesian, so the
+# tests build them with puream=False; cc-pVDZ-JKFIT tops out at f (l = 3), well
+# inside GTFDF_maxSupportedAM().
+DF_BASIS = "cc-pVDZ"
+DF_FITTING_BASIS = "cc-pVDZ-JKFIT"
 
 GEOMETRY = """
 0 1
@@ -531,6 +555,413 @@ def test_gtfock_refuses_wrongly_shaped_matrix(gtfock_mpi):
     assert gtfock_mpi.fock_builds() == builds_before
 
 
+# --------------------------------------------------------------------------
+# SCF_TYPE GTFOCK_DF: the distributed density-fitted engine.
+#
+# A separate engine from the exact path above, and separately optional: a
+# GTFock install can predate libgtfockdf, so these carry their own add-on
+# marker. They also need no subprocess isolation -- see the module docstring.
+# --------------------------------------------------------------------------
+
+
+def _df_bases(orbital=DF_BASIS, fitting=DF_FITTING_BASIS, mol=None):
+    """A Cartesian orbital/fitting pair on water, which is what the DF engine takes."""
+    mol = _water() if mol is None else mol
+    primary = psi4.core.BasisSet.build(mol, "ORBITAL", orbital, puream=False)
+    auxiliary = psi4.core.BasisSet.build(mol, "DF_BASIS_SCF", fitting, puream=False)
+    assert not primary.has_puream() and not auxiliary.has_puream()
+    return primary, auxiliary
+
+
+def _df_jk(primary, auxiliary, scf_type):
+    """A built, initialized JK of the requested type over this basis pair."""
+    psi4.set_options({"scf_type": scf_type})
+    jk = psi4.core.JK.build_JK(primary, auxiliary)
+    jk.set_do_K(True)
+    jk.initialize()
+    return jk
+
+
+def test_gtfock_df_is_optional():
+    """A build without the DF engine must say so, and must not need MPI to say it.
+
+    The sibling of ``test_gtfock_is_optional``, and separate from it on purpose:
+    ``libgtfockdf`` is optional *within* ``ENABLE_GTFock``, so the two flags can
+    legitimately disagree and each needs its own guard.
+    """
+    enabled = psi4.core.gtfock_df_enabled()
+    assert enabled == psi4.addons("gtfock_df"), "psi4.addons and core disagree about GTFock DF"
+
+    from psi4.driver import gtfock
+
+    assert gtfock.df_available() == enabled
+    # The DF engine cannot exist without the GTFock it is built on top of.
+    assert not enabled or psi4.core.gtfock_enabled()
+    if not enabled:
+        # Reporting must work without MPI ever having been initialized.
+        assert gtfock.df_jk_builds() == 0
+        assert gtfock.df_partition() == {"nbf": -1, "naux": -1, "nlocal_aux": -1,
+                                         "nmetric_null": -1, "nlocal_pairs": -1,
+                                         "local_tensor_doubles": 0}
+
+
+@uusing("gtfock_df")
+def test_gtfock_df_jk_matches_memdfjk(gtfock_mpi):
+    """J and K from GTFock's DF engine must match Psi4's MemDFJK on the same fitting basis.
+
+    Given one auxiliary basis the two sides are expanding in the same space, so
+    this is a far tighter comparison than the exact path's Simint-vs-Libint2 one:
+    the rotation within the auxiliary space that separates GTFock's
+    eigendecomposition of ``(P|Q)`` from DFHelper's cancels out of both J and K.
+    What is left is three-centre integral accuracy and contraction order, and
+    that is what ``DF_JK_TOL`` is sized for.
+    """
+    primary, auxiliary = _df_bases()
+
+    # A converged density, so the comparison runs on the matrix an SCF actually
+    # feeds the engine rather than on a random one.
+    psi4.set_options({"basis": DF_BASIS, "puream": False, "df_basis_scf": DF_FITTING_BASIS,
+                      "scf_type": "mem_df", "df_scf_guess": False, "guess": "core",
+                      "e_convergence": 1e-10, "d_convergence": 1e-9})
+    _, wfn = psi4.energy("scf", return_wfn=True)
+    Cocc = wfn.Ca_subset("AO", "OCC")
+
+    ref = _df_jk(primary, auxiliary, "mem_df")
+    ref.C_clear()
+    ref.C_left_add(Cocc)
+    ref.compute()
+
+    builds_before = gtfock_mpi.df_jk_builds()
+    gt = _df_jk(primary, auxiliary, "gtfock_df")
+    # Building the fitted tensor is setup, not a J/K build.
+    assert gtfock_mpi.df_jk_builds() == builds_before
+    gt.C_clear()
+    gt.C_left_add(Cocc)
+    gt.compute()
+
+    # Guard against a silent fallback to Psi4's own DF.
+    assert ref.name() == "MemDFJK"
+    assert gt.name() == "GTFockDFJK"
+    assert gtfock_mpi.df_jk_builds() == builds_before + 1
+
+    partition = gtfock_mpi.df_partition()
+    assert partition["nbf"] == primary.nbf()
+    assert partition["naux"] == auxiliary.nbf()
+
+    assert np.max(np.abs(np.array(gt.J()[0]) - np.array(ref.J()[0]))) < DF_JK_TOL
+    assert np.max(np.abs(np.array(gt.K()[0]) - np.array(ref.K()[0]))) < DF_JK_TOL
+
+
+@uusing("gtfock_df")
+def test_gtfock_df_rhf_energy_matches_mem_df(gtfock_mpi):
+    """A full RHF driven by the DF engine must land on Psi4's own DF energy.
+
+    ``mem_df`` rather than ``pk`` is the right reference: both sides are making
+    the same fitting approximation in the same auxiliary basis, so any
+    disagreement here is an implementation difference and not the DF error.
+    """
+    _water()
+    common = {"basis": DF_BASIS, "puream": False, "df_basis_scf": DF_FITTING_BASIS,
+              "df_scf_guess": False, "guess": "core", "e_convergence": 1e-10,
+              "d_convergence": 1e-9, "save_jk": True}
+
+    psi4.set_options({**common, "scf_type": "mem_df"})
+    e_ref = psi4.energy("scf")
+
+    builds_before = gtfock_mpi.df_jk_builds()
+    psi4.set_options({**common, "scf_type": "gtfock_df"})
+    e_gtfock, wfn = psi4.energy("scf", return_wfn=True)
+
+    assert wfn.jk().name() == "GTFockDFJK"
+    assert gtfock_mpi.df_jk_builds() > builds_before, "the GTFock DF engine never ran"
+    # proc.py has to have put a real fitting basis on the wavefunction; the
+    # zero basis it hands the exact path would leave the engine with naux == 0.
+    assert wfn.get_basisset("DF_BASIS_SCF").nbf() > 0
+    assert abs(e_gtfock - e_ref) < DF_ENERGY_TOL
+
+
+@uusing("gtfock_df")
+def test_gtfock_df_uhf_energy_matches_mem_df(gtfock_mpi):
+    """An open-shell UHF must match too, which is the multiple-density path.
+
+    ``PDF_computeJK`` takes one density at a time, so ``GTFockDFJK::compute_JK``
+    loops over ``D_ao_``. RHF has one entry and would not notice the loop being
+    wrong; UHF has two, and a loop that reused the alpha density or overwrote
+    the alpha J would show up here.
+
+    The doublet also drives the ``nocc == 0`` guard on nothing, so
+    ``test_gtfock_df_handles_an_empty_occupied_block`` covers that separately.
+    """
+    psi4.geometry("""
+0 2
+O   0.000000000000   0.000000000000  -0.068516219320
+H   0.000000000000   0.790689573744   0.543701060715
+units angstrom
+symmetry c1
+no_reorient
+no_com
+""")
+    common = {"basis": DF_BASIS, "puream": False, "df_basis_scf": DF_FITTING_BASIS,
+              "reference": "uhf", "df_scf_guess": False, "guess": "core",
+              "e_convergence": 1e-10, "d_convergence": 1e-9, "save_jk": True}
+
+    psi4.set_options({**common, "scf_type": "mem_df"})
+    e_ref = psi4.energy("scf")
+
+    builds_before = gtfock_mpi.df_jk_builds()
+    psi4.set_options({**common, "scf_type": "gtfock_df"})
+    e_gtfock, wfn = psi4.energy("scf", return_wfn=True)
+
+    assert wfn.jk().name() == "GTFockDFJK"
+    # Two densities per iteration, so at least two builds per SCF cycle.
+    assert gtfock_mpi.df_jk_builds() >= builds_before + 2
+    assert abs(e_gtfock - e_ref) < DF_ENERGY_TOL
+
+
+@uusing("gtfock_df")
+def test_gtfock_df_handles_an_empty_occupied_block(gtfock_mpi):
+    """A spin with no electrons must give K = 0, not a degenerate DGEMM.
+
+    A hydrogen atom UHF has ``nbeta == 0``, so the beta build reaches
+    ``PDF_computeJK`` with an ``nocc == 0`` ``Cocc``. ``GTFockDFJK`` drops K for
+    that build and leaves the zeroed matrix in place rather than handing GTFock a
+    zero-column orbital block. The energy is the check that it dropped only K:
+    the beta *Coulomb* term is still needed and is not zero.
+    """
+    psi4.geometry("""
+0 2
+H   0.0   0.0   0.0
+units angstrom
+symmetry c1
+no_reorient
+no_com
+""")
+    common = {"basis": DF_BASIS, "puream": False, "df_basis_scf": DF_FITTING_BASIS,
+              "reference": "uhf", "df_scf_guess": False, "guess": "core",
+              "e_convergence": 1e-10, "d_convergence": 1e-9, "save_jk": True}
+
+    psi4.set_options({**common, "scf_type": "mem_df"})
+    e_ref = psi4.energy("scf")
+
+    psi4.set_options({**common, "scf_type": "gtfock_df"})
+    e_gtfock, wfn = psi4.energy("scf", return_wfn=True)
+
+    assert wfn.jk().name() == "GTFockDFJK"
+    assert wfn.nbetapi().sum() == 0, "this case is only meaningful with an empty beta block"
+    assert abs(e_gtfock - e_ref) < DF_ENERGY_TOL
+
+
+@uusing("gtfock_df")
+def test_gtfock_df_builds_its_engine_in_initialize(gtfock_mpi):
+    """The fitted tensor must be built by ``initialize()``, not lazily on first ``compute()``.
+
+    This is the whole reason ``GTFockDFJK`` differs from ``GTFockJK`` in where it
+    creates its engine, and it is a timing claim as much as a correctness one.
+    Psi4 runs ``preiterations()`` from ``JK::initialize()``, *outside* the
+    ``"JK: JK"`` timer that wraps ``compute()``. Building the tensor there is
+    what puts GTFock's DF setup cost in the same place ``MemDFJK`` puts its own,
+    so the two engines' ``JK: JK`` numbers mean the same thing and can be
+    compared. An engine built lazily inside the first ``compute()`` would land
+    that one-off cost inside the timer and make the first SCF iteration look
+    enormous and every later one artificially cheap.
+
+    ``df_partition()`` reports the last engine any rank created, so the
+    pre-``initialize()`` assertion is that ``build_JK`` changed nothing -- an
+    earlier test in the same process may already have left a partition behind.
+    """
+    primary, auxiliary = _df_bases()
+    before = gtfock_mpi.df_partition()
+    builds_before = gtfock_mpi.df_jk_builds()
+
+    psi4.set_options({"scf_type": "gtfock_df"})
+    jk = psi4.core.JK.build_JK(primary, auxiliary)
+    jk.set_do_K(True)
+    # Constructing the JK is not what creates the engine.
+    assert gtfock_mpi.df_partition() == before
+
+    jk.initialize()
+    after = gtfock_mpi.df_partition()
+    assert after["nbf"] == primary.nbf()
+    assert after["naux"] == auxiliary.nbf()
+    assert after["local_tensor_doubles"] > 0, "initialize() did not build a fitted tensor"
+    # ... and it did so without computing any J or K.
+    assert gtfock_mpi.df_jk_builds() == builds_before
+
+
+@uusing("gtfock_df")
+def test_gtfock_df_engine_is_reentrant(gtfock_mpi):
+    """Two DF engines may be alive at once, and a released one may be rebuilt.
+
+    The exact path cannot do either: ``fock_task.c`` keeps its state in
+    file-scope globals, so a process gets one ``PFock_t`` for its lifetime and
+    the shim's singleton is deliberately never destroyed. ``PDF_t`` has no such
+    globals, which is what lets ``GTFockDFJK`` own its engine outright, build it
+    in ``preiterations()`` and drop it in ``postiterations()``. If that ever
+    stopped being true this test would deadlock or corrupt the second engine
+    rather than fail quietly, so it is worth pinning.
+    """
+    primary, auxiliary = _df_bases()
+    small, small_aux = _df_bases(orbital="6-31G")
+
+    first = _df_jk(primary, auxiliary, "gtfock_df")
+    second = _df_jk(small, small_aux, "gtfock_df")
+    # Two live engines over different basis pairs.
+    assert gtfock_mpi.df_partition()["nbf"] == small.nbf()
+    assert small.nbf() != primary.nbf()
+
+    rng = np.random.RandomState(11)
+    for jk, basis in ((first, primary), (second, small)):
+        jk.C_clear()
+        jk.C_left_add(psi4.core.Matrix.from_array(rng.rand(basis.nbf(), 2)))
+        jk.compute()
+        assert np.max(np.abs(np.array(jk.J()[0]))) > 0.0
+
+    # postiterations() releases the engine, and initialize() may build another.
+    first.finalize()
+    with pytest.raises(RuntimeError, match="before initialize"):
+        first.compute()
+    # That refusal also has to leave the object reusable, which is a claim about
+    # JK::compute() rather than about this engine: it aliases C_right_ to C_left_
+    # and opens the "JK: JK" timer around compute_JK, and until both were made to
+    # unwind, a refused build turned the next one into a bogus "non-symmetric
+    # densities" error and the timer left at exit deadlocked the interpreter.
+    first.initialize()
+    first.compute()
+    assert gtfock_mpi.df_partition()["nbf"] == primary.nbf()
+
+
+@uusing("gtfock_df")
+@pytest.mark.parametrize("spherical", ["orbital", "fitting"])
+def test_gtfock_df_refuses_spherical_basis(gtfock_mpi, spherical):
+    """Both bases must be Cartesian, and each must be screened on its own.
+
+    The DF engine drives Simint over a *pair* of basis sets, so there are two
+    places a spherical basis can enter. Psi4's ``PUREAM`` normally applies to
+    both at once, which would hide a check that only looked at one of them;
+    these two cases build the pair by hand so exactly one side is spherical.
+    """
+    mol = _water()
+    puream = {"orbital": spherical == "orbital", "fitting": spherical == "fitting"}
+    primary = psi4.core.BasisSet.build(mol, "ORBITAL", DF_BASIS, puream=puream["orbital"])
+    auxiliary = psi4.core.BasisSet.build(mol, "DF_BASIS_SCF", DF_FITTING_BASIS,
+                                         puream=puream["fitting"])
+    assert primary.has_puream() != auxiliary.has_puream()
+
+    psi4.set_options({"scf_type": "gtfock_df"})
+    jk = psi4.core.JK.build_JK(primary, auxiliary)
+    jk.set_do_K(True)
+
+    # The refusal is at engine creation, so it comes out of initialize().
+    with pytest.raises(RuntimeError, match="spherical"):
+        jk.initialize()
+
+
+@uusing("gtfock_df")
+def test_gtfock_df_refuses_high_angular_momentum(gtfock_mpi):
+    """A shell above Simint's generated ceiling must raise, not read past its tables.
+
+    ``GTFDF_maxSupportedAM()`` reports ``SIMINT_OSTEI_MAXAM`` from the linked
+    Simint. Simint dispatches through generated tables indexed by angular
+    momentum with no bound check, so a shell above it reads past them rather
+    than failing. Cartesian ``cc-pV6Z`` puts ``i`` functions (``l = 6``) on
+    oxygen, one above the ceiling this build was generated for.
+
+    Note this ceiling is *not* the exact path's: libcint hardcodes its own,
+    lower ``_SIMINT_OSTEI_MAXAM``, which is why ``cc-pV5Z`` is enough to trip
+    ``test_gtfock_refuses_high_angular_momentum`` and is not enough here.
+    """
+    mol = _water()
+    primary = psi4.core.BasisSet.build(mol, "ORBITAL", "cc-pV6Z", puream=False)
+    auxiliary = psi4.core.BasisSet.build(mol, "DF_BASIS_SCF", DF_FITTING_BASIS, puream=False)
+    assert max(primary.shell(sh).am for sh in range(primary.nshell())) >= 6
+
+    psi4.set_options({"scf_type": "gtfock_df"})
+    jk = psi4.core.JK.build_JK(primary, auxiliary)
+    jk.set_do_K(True)
+
+    with pytest.raises(RuntimeError, match="angular momentum"):
+        jk.initialize()
+
+
+@uusing("gtfock_df")
+def test_gtfock_df_refuses_wk(gtfock_mpi):
+    """GTFock fits the plain Coulomb operator, so range separation must be refused."""
+    primary, auxiliary = _df_bases()
+    psi4.set_options({"scf_type": "gtfock_df"})
+    jk = psi4.core.JK.build_JK(primary, auxiliary)
+    jk.set_do_K(True)
+    jk.set_do_wK(True)
+    jk.set_omega(0.3)
+    jk.initialize()
+
+    rng = np.random.RandomState(5)
+    jk.C_clear()
+    jk.C_left_add(psi4.core.Matrix.from_array(rng.rand(primary.nbf(), 1)))
+
+    builds_before = gtfock_mpi.df_jk_builds()
+    with pytest.raises(RuntimeError, match="range-separated"):
+        jk.compute()
+    assert gtfock_mpi.df_jk_builds() == builds_before
+
+
+@uusing("gtfock_df")
+def test_gtfock_df_refuses_nonsymmetric_density(gtfock_mpi):
+    """K needs ``D = Cocc Cocc^T``, so ``C_left != C_right`` must raise.
+
+    ``PDF_computeJK`` contracts ``B`` against a single occupied block for K,
+    which is only the exchange matrix when the density factorizes that way. A
+    response-style build with two different coefficient blocks does not, and
+    would come back a plausible-looking wrong K rather than an error.
+
+    J is unaffected -- it needs only the density -- but the guard fires on the
+    whole build, because a caller asking for both would silently get one right
+    matrix and one wrong one.
+    """
+    primary, auxiliary = _df_bases()
+    jk = _df_jk(primary, auxiliary, "gtfock_df")
+
+    rng = np.random.RandomState(6)
+    jk.C_clear()
+    jk.C_left_add(psi4.core.Matrix.from_array(rng.rand(primary.nbf(), 2)))
+    jk.C_right_add(psi4.core.Matrix.from_array(rng.rand(primary.nbf(), 2)))
+
+    builds_before = gtfock_mpi.df_jk_builds()
+    with pytest.raises(RuntimeError, match="non-symmetric"):
+        jk.compute()
+    assert gtfock_mpi.df_jk_builds() == builds_before
+
+
+@uusing("gtfock_df")
+def test_gtfock_df_computes_j_without_k(gtfock_mpi):
+    """A J-only build must skip K entirely and still match MemDFJK.
+
+    ``PDF_computeJK`` takes NULL for either output, and a J-only caller never
+    supplies an occupied block -- so this is the path where asking GTFock for
+    ``Cocc`` anyway would dereference nothing. It is also the path a
+    Coulomb-only method such as a pure functional's ``form_G`` takes.
+    """
+    primary, auxiliary = _df_bases()
+    psi4.set_options({"basis": DF_BASIS, "puream": False, "df_basis_scf": DF_FITTING_BASIS,
+                      "scf_type": "mem_df", "df_scf_guess": False, "guess": "core",
+                      "e_convergence": 1e-10, "d_convergence": 1e-9})
+    _, wfn = psi4.energy("scf", return_wfn=True)
+    Cocc = wfn.Ca_subset("AO", "OCC")
+
+    matrices = {}
+    for scf_type in ("mem_df", "gtfock_df"):
+        psi4.set_options({"scf_type": scf_type})
+        jk = psi4.core.JK.build_JK(primary, auxiliary)
+        jk.set_do_J(True)
+        jk.set_do_K(False)
+        jk.initialize()
+        jk.C_clear()
+        jk.C_left_add(Cocc)
+        jk.compute()
+        matrices[scf_type] = np.array(jk.J()[0])
+
+    assert np.max(np.abs(matrices["gtfock_df"] - matrices["mem_df"])) < DF_JK_TOL
+
+
 def _oversubscribe_flag(mpirun):
     """``--oversubscribe`` is an Open MPI spelling; MPICH's mpiexec rejects it.
 
@@ -705,6 +1136,84 @@ def test_gtfock_rank_count_invariance(tmp_path, method):
     # energy. This is the tight tolerance.
     assert max(energies) - min(energies) < RANK_INVARIANCE_TOL, (
         f"{method} energy depends on the rank count: spread "
+        f"{max(energies) - min(energies):.3e} Eh over {energies}")
+
+
+@uusing("gtfock_df")
+def test_gtfock_df_rank_count_invariance(tmp_path):
+    """The DF engine's energy and its partition must both add up at every rank count.
+
+    The distributed-correctness evidence for ``SCF_TYPE GTFOCK_DF``, and it
+    carries two claims the exact path's sweep cannot.
+
+    The first is the energy, held to ``RANK_INVARIANCE_TOL``. The fitted tensor
+    is cut by auxiliary function and each rank contracts only its own slice, so
+    J and K are completed by an ``MPI_Allreduce``; the rank count changes which
+    partial sums land on which rank and in what order, and nothing else. An
+    energy that moved with the rank count would mean a slice was dropped or
+    double-counted.
+
+    The second is the partition itself, and it is exact rather than approximate:
+    the auxiliary functions are dealt out in one contiguous block per rank, so
+    ``nlocal_aux`` must sum to ``naux`` with nothing left over and nothing
+    counted twice. The same holds for ``nlocal_pairs`` over the AO-element
+    partition used before the redistribution, and for the tensor slices, which
+    must sum to the whole ``naux x npair`` tensor. A rank-count-dependent
+    off-by-one in either partition is invisible in the energy -- the missing
+    auxiliary function's contribution is small -- but shows up here immediately.
+
+    ``nmetric_null`` is checked to be identical on every rank because the metric
+    is inverted redundantly: every rank eigendecomposes the same replicated
+    ``(P|Q)`` so that they agree bit for bit and need no further communication
+    to stay in step. A rank that dropped a different number of vectors than its
+    peers would be contracting against a different fitting space.
+    """
+    launch = _mpi_launch()
+
+    driver_args = ["--molecule", "water6", "--scf-type", "gtfock_df",
+                   "--basis", DF_BASIS, "--df-basis", DF_FITTING_BASIS]
+    results = {nranks: _run_mpi_driver(launch, nranks,
+                                       os.path.join(str(tmp_path), f"n{nranks}"), driver_args)
+               for nranks in (1, 2, 3, 4)}
+
+    # The one-rank run is the undistributed baseline every partition sum is
+    # compared against, so read the totals off it rather than hardcoding them.
+    whole = results[1][0]["df_partition"]
+    assert whole["nlocal_aux"] == whole["naux"]
+
+    energies = []
+    for nranks, reports in results.items():
+        for report in reports:
+            rank = report["mpi4py_rank"]
+            assert report["mpi4py_size"] == nranks
+            assert report["core_mpi"] == {"rank": rank, "size": nranks, "initialized": True}
+            # libfock built the DF engine, not a fallback and not the exact path.
+            assert report["jk_name"] == "GTFockDFJK", f"n={nranks} rank {rank} used {report['jk_name']}"
+            assert report["fock_builds"] > 0, f"n={nranks} rank {rank} ran no DF build"
+            assert report["df_partition"]["naux"] == whole["naux"]
+            assert report["df_partition"]["nbf"] == whole["nbf"]
+            # Every rank inverted the same metric and kept the same fitting space.
+            assert report["df_partition"]["nmetric_null"] == whole["nmetric_null"], (
+                f"n={nranks} rank {rank} dropped a different number of metric vectors")
+            energies.append(report["scf_energy"])
+
+        partitions = [report["df_partition"] for report in reports]
+        # The auxiliary partition covers naux exactly once.
+        assert sum(part["nlocal_aux"] for part in partitions) == whole["naux"], (
+            f"n={nranks}: auxiliary functions do not partition naux")
+        # ... and so does the AO-element partition the three-centre integrals use.
+        assert sum(part["nlocal_pairs"] for part in partitions) == whole["nlocal_pairs"], (
+            f"n={nranks}: AO pair elements do not partition the whole set")
+        # ... and the slices add up to the whole fitted tensor.
+        assert (sum(part["local_tensor_doubles"] for part in partitions)
+                == whole["local_tensor_doubles"]), f"n={nranks}: tensor slices do not tile"
+        if nranks > 1:
+            # The tensor really was cut up rather than replicated on every rank.
+            assert max(part["local_tensor_doubles"] for part in partitions) \
+                < whole["local_tensor_doubles"], f"n={nranks}: a rank holds the whole tensor"
+
+    assert max(energies) - min(energies) < RANK_INVARIANCE_TOL, (
+        f"the DF energy depends on the rank count: spread "
         f"{max(energies) - min(energies):.3e} Eh over {energies}")
 
 

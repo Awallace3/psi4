@@ -237,7 +237,7 @@ static bool SAD_use_fitting(const Options& opt) {
         (jk_type == "GTFOCK")) {
         return false;
     }
-    if ((jk_type == "DF") || (jk_type == "MEM_DF") || (jk_type == "DISK_DF")) {
+    if ((jk_type == "DF") || (jk_type == "MEM_DF") || (jk_type == "DISK_DF") || (jk_type == "GTFOCK_DF")) {
         return true;
     }
     throw PSIEXCEPTION("SAD_SCF_TYPE " + opt.get_str("SAD_SCF_TYPE") + " not implemented.\n");

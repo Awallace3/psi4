@@ -179,6 +179,9 @@ _addons_ = {
     "pyeinsums": which_import("einsums", return_bool=True),
     "gauxc": _CMake_to_Py_boolean("@ENABLE_gauxc@"),
     "gtfock": _CMake_to_Py_boolean("@ENABLE_GTFock@"),
+    # Separate from "gtfock": libgtfockdf is optional within ENABLE_GTFock, so a
+    # GTFock build can lack the distributed density-fitting engine entirely.
+    "gtfock_df": _CMake_to_Py_boolean("@GTFock_DF_FOUND@"),
     "integratorxx": _CMake_to_Py_boolean("@ENABLE_IntegratorXX@"),
     "ooo": _CMake_to_Py_boolean("@ENABLE_OpenOrbitalOptimizer@"),
     "qcmanybody": which_import("qcmanybody", return_bool=True),

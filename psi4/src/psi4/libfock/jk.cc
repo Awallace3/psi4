@@ -247,6 +247,22 @@ std::shared_ptr<JK> JK::build_JK(std::shared_ptr<BasisSet> primary, std::shared_
 
         return jk;
 
+    } else if (jk_type == "GTFOCK_DF") {
+        // The distributed density-fitted sibling of GTFOCK. It needs the fitting
+        // basis, so proc.py has to have put a real DF_BASIS_SCF on the
+        // wavefunction rather than the zero basis; GTFockDFJK says so plainly if
+        // it did not. Screening lives inside GTFock's own three-center engine,
+        // so INTS_TOLERANCE has no hook here, but the metric inversion honours
+        // DF_FITTING_CONDITION exactly as MemDFJK does.
+        auto jk = std::make_shared<GTFockDFJK>(primary, auxiliary);
+        jk->set_fitting_condition(options.get_double("DF_FITTING_CONDITION"));
+        if (options["DF_INTS_NUM_THREADS"].has_changed()) jk->set_nthreads(options.get_int("DF_INTS_NUM_THREADS"));
+        if (options["PRINT"].has_changed()) jk->set_print(options.get_int("PRINT"));
+        if (options["DEBUG"].has_changed()) jk->set_debug(options.get_int("DEBUG"));
+        if (options["BENCH"].has_changed()) jk->set_bench(options.get_int("BENCH"));
+
+        return jk;
+
     /// handle composite methods
     } else if (is_composite) {
         auto jk = std::make_shared<CompositeJK>(primary, auxiliary, options);

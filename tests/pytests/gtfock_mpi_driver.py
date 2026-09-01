@@ -16,6 +16,12 @@ The default case is the STO-3G water RHF the milestone-2 test used. ``--molecule
 and ``--basis`` reach the larger systems the rank-count and timing evidence need,
 and ``--method`` reaches hybrid DFT; ``scf`` and any hybrid functional go through
 the same GTFock J/K, so one script covers both.
+
+``--scf-type`` selects which GTFock engine to drive: ``gtfock`` is the exact
+four-centre path, ``gtfock_df`` the distributed density-fitted one. They report
+different things -- the exact path has a process grid and an AO block, the DF
+path an auxiliary-function partition -- so the report carries whichever the
+selected engine actually has and ``null`` for the other.
 """
 
 import argparse
@@ -88,6 +94,12 @@ def parse_args(argv):
                         help="anything psi4.energy accepts that needs only J and K, "
                              "i.e. scf or a hybrid functional such as b3lyp")
     parser.add_argument("--memory", default="1 GB")
+    parser.add_argument("--scf-type", choices=["gtfock", "gtfock_df"], default="gtfock",
+                        help="which GTFock engine to drive: the exact four-centre "
+                             "path or the distributed density-fitted one")
+    parser.add_argument("--df-basis", default=None,
+                        help="fitting basis for --scf-type gtfock_df; defaults to "
+                             "Psi4's own -jkfit choice for --basis")
     return parser.parse_args(argv)
 
 
@@ -110,10 +122,12 @@ def main(argv=None) -> int:
 
     psi4.geometry(_MOLECULES[args.molecule])
     # GTFock's Simint path is Cartesian; see MinimalInterface::check_supported.
+    # puream false covers the fitting basis too, which the DF engine also needs
+    # Cartesian: Psi4 applies PUREAM to every basis it builds for this molecule.
     psi4.set_options({
         "basis": args.basis,
         "puream": False,
-        "scf_type": "gtfock",
+        "scf_type": args.scf_type,
         "df_scf_guess": False,
         "guess": "core",
         "e_convergence": 1e-10,
@@ -122,8 +136,11 @@ def main(argv=None) -> int:
         # reported; without this psi4 releases it and wfn.jk() is None.
         "save_jk": True,
     })
+    if args.df_basis is not None:
+        psi4.set_options({"df_basis_scf": args.df_basis})
 
-    builds_before = gtfock.fock_builds()
+    is_df = args.scf_type == "gtfock_df"
+    builds_before = gtfock.df_jk_builds() if is_df else gtfock.fock_builds()
     # Wall-clock of the whole SCF, timed identically on every rank. The ranks
     # leave the SCF together (the last GTFock build is collective), so the
     # spread across ranks is load imbalance plus startup skew, not signal.
@@ -135,11 +152,15 @@ def main(argv=None) -> int:
         "mpi4py_rank": info["rank"],
         "mpi4py_size": info["size"],
         "core_mpi": gtfock.mpi_info(),
-        "process_grid": psi4.core.gtfock_process_grid(),
-        "local_block": psi4.core.gtfock_local_block(),
-        "local_task_shape": psi4.core.gtfock_local_task_shape(),
+        # The exact path's AO decomposition, or the DF path's auxiliary-function
+        # partition. Only one of the two is meaningful per run; see --scf-type.
+        "process_grid": None if is_df else psi4.core.gtfock_process_grid(),
+        "local_block": None if is_df else psi4.core.gtfock_local_block(),
+        "local_task_shape": None if is_df else psi4.core.gtfock_local_task_shape(),
+        "df_partition": gtfock.df_partition() if is_df else None,
         "jk_name": wfn.jk().name(),
-        "fock_builds": gtfock.fock_builds() - builds_before,
+        "scf_type": args.scf_type,
+        "fock_builds": (gtfock.df_jk_builds() if is_df else gtfock.fock_builds()) - builds_before,
         "scf_energy": energy,
         "scf_wall_seconds": elapsed,
         "iterations": wfn.iteration_,
@@ -148,6 +169,7 @@ def main(argv=None) -> int:
         "method": args.method,
         "nbf": wfn.basisset().nbf(),
         "nshell": wfn.basisset().nshell(),
+        "naux": wfn.get_basisset("DF_BASIS_SCF").nbf() if is_df else None,
         "processor": info["processor"],
     }
     print("PSI4-GTFOCK-JSON " + json.dumps(report), flush=True)

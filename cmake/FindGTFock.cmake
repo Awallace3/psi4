@@ -15,10 +15,19 @@
 #  GTFock_FOUND         - True when every GTFock piece was located
 #  GTFock_INCLUDE_DIRS  - Include directories for pfock.h, CInt.h, GTMatrix.h
 #  GTFock_LIBRARIES     - The GTFock/CInt/GTMatrix/Simint libraries
+#  GTFock_DF_FOUND      - True when the distributed density-fitting engine is
+#                         also present
 #
-# and defines the imported target:
+# and defines the imported targets:
 #
 #  GTFock::gtfock       - GTFock plus CInt, GTMatrix, Simint, and MPI
+#  GTFock::gtfockdf     - The distributed density-fitting engine, only when
+#                         GTFock_DF_FOUND
+#
+# The density-fitting engine (libgtfockdf, gtfock_pdf.h) is a later addition to
+# gtfock_psi4, so it is optional *within* GTFock rather than a requirement:
+# an older install still configures and builds, and SCF_TYPE GTFOCK_DF then
+# reports at run time that this Psi4 has no DF support.
 
 include(FindPackageHandleStandardArgs)
 
@@ -80,10 +89,27 @@ if(GTFock_PFOCK_LIBRARY)
     unset(_gtfock_prefix)
 endif()
 
+find_path(GTFock_PDF_INCLUDE_DIR
+  NAMES gtfock_pdf.h
+  PATH_SUFFIXES include
+  DOC "Directory holding GTFock's gtfock_pdf.h (distributed density fitting)")
+
+find_path(GTFock_DF_INCLUDE_DIR
+  NAMES gtfock_df.h
+  PATH_SUFFIXES include
+  DOC "Directory holding GTFock's gtfock_df.h (three- and two-center integrals)")
+
+find_library(GTFock_DF_LIBRARY
+  NAMES gtfockdf
+  PATH_SUFFIXES lib lib64
+  DOC "The GTFock distributed density-fitting library")
+
 set(GTFock_INCLUDE_DIRS
   ${GTFock_PFOCK_INCLUDE_DIR}
   ${GTFock_CINT_INCLUDE_DIR}
-  ${GTFock_GTMATRIX_INCLUDE_DIR})
+  ${GTFock_GTMATRIX_INCLUDE_DIR}
+  ${GTFock_PDF_INCLUDE_DIR}
+  ${GTFock_DF_INCLUDE_DIR})
 if(GTFock_INCLUDE_DIRS)
     list(REMOVE_DUPLICATES GTFock_INCLUDE_DIRS)
 endif()
@@ -125,6 +151,32 @@ if(GTFock_FOUND AND NOT TARGET GTFock::gtfock)
         OpenMP::OpenMP_C)
 endif()
 
+# All three pieces or none: the shim includes both headers and calls into both
+# GTFDF_* and PDF_*, so a half-present install must not define USING_GTFock_DF.
+if(GTFock_FOUND AND GTFock_DF_LIBRARY AND GTFock_PDF_INCLUDE_DIR AND GTFock_DF_INCLUDE_DIR)
+    set(GTFock_DF_FOUND TRUE)
+else()
+    set(GTFock_DF_FOUND FALSE)
+endif()
+
+if(GTFock_DF_FOUND AND NOT TARGET GTFock::gtfockdf)
+    add_library(GTFock::gtfockdf UNKNOWN IMPORTED)
+    set_target_properties(GTFock::gtfockdf PROPERTIES
+      IMPORTED_LOCATION "${GTFock_DF_LIBRARY}"
+      INTERFACE_INCLUDE_DIRECTORIES "${GTFock_INCLUDE_DIRS}")
+    # libgtfockdf drives Simint directly over a primary/auxiliary basis pair and
+    # calls BLAS/LAPACK for the metric inverse square root, so it needs CInt and
+    # Simint alongside MPI and OpenMP. GTFock::gtfock carries the same set and
+    # is always present when this target is, so link through it.
+    target_link_libraries(GTFock::gtfockdf INTERFACE GTFock::gtfock)
+endif()
+
+if(GTFock_FOUND AND NOT GTFock_DF_FOUND)
+    message(STATUS
+      "Found GTFock without its distributed density-fitting engine (libgtfockdf, gtfock_pdf.h); "
+      "SCF_TYPE GTFOCK_DF will be unavailable. Rebuild gtfock_psi4 from a revision that ships it.")
+endif()
+
 mark_as_advanced(
   GTFock_PFOCK_INCLUDE_DIR
   GTFock_CINT_INCLUDE_DIR
@@ -132,4 +184,7 @@ mark_as_advanced(
   GTFock_PFOCK_LIBRARY
   GTFock_CINT_LIBRARY
   GTFock_GTMATRIX_LIBRARY
-  GTFock_SIMINT_LIBRARY)
+  GTFock_SIMINT_LIBRARY
+  GTFock_PDF_INCLUDE_DIR
+  GTFock_DF_INCLUDE_DIR
+  GTFock_DF_LIBRARY)

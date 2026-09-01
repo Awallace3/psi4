@@ -48,6 +48,15 @@ contributions into distributed matrices. |PSIfour| can use it as an alternative
 :term:`SCF_TYPE <SCF_TYPE (SCF)>`, ``GTFOCK``, in place of its own Libint2-based
 J/K builders.
 
+``gtfock_psi4`` also carries a second, separate engine: a distributed
+density-fitted J/K built on the same Simint driver, exposed as
+:term:`SCF_TYPE <SCF_TYPE (SCF)>` ``GTFOCK_DF``. It distributes the fitted
+three-index tensor over ranks by auxiliary function rather than the AO matrix by
+block, it lifts three of the restrictions below, and it is optional *within*
+``ENABLE_GTFock`` |w---w| a GTFock install predating ``libgtfockdf`` supplies
+``GTFOCK`` and not ``GTFOCK_DF``. See `Distributed density fitting`_. Everything
+between here and that section describes the exact four-centre path.
+
 .. warning:: This is a **prototype**. It proves the Python |w---w| MPI |w---w|
    GTFock path end to end; it is not a production distributed SCF driver. The
    restrictions in `Prototype scope`_ are enforced with explicit errors rather
@@ -301,6 +310,114 @@ Prototype scope
   share of the run every time a rank is added. Distributing the SCF itself, so
   that each rank keeps only its own AO panel, is later work.
 
+Distributed density fitting
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``SCF_TYPE GTFOCK_DF`` is a second engine, sharing nothing with the one above but
+the Simint it computes integrals with. Rather than partitioning the AO matrix and
+evaluating four-centre quartets, it builds the fitted three-index tensor
+
+.. math:: B_Q^{mn} = \sum_P \left[\mathbf{J}^{-1/2}\right]_{PQ} (P|mn)
+
+once at setup, distributes it over ranks **by auxiliary function** :math:`Q`, and
+then contracts it against a density each iteration:
+:math:`c_Q = \sum_{rs} B_Q^{rs} D_{rs}`, :math:`J_{mn} = \sum_Q B_Q^{mn} c_Q`, and
+:math:`K_{mn} = \sum_Q \sum_i B_Q^{mi} B_Q^{ni}`. :math:`Q` is the distribution
+axis because K needs every AO pair of a given :math:`Q` on one rank; the AO pairs,
+which the three-centre integral phase is itself partitioned over, are
+redistributed once at setup and never again.
+
+Each build costs one ``MPI_Allreduce`` of :math:`2 n_{bf}^2` doubles, so J and K
+come back fully replicated, exactly as from the exact path. What is distributed is
+the tensor, and that is the quantity worth distributing: it is
+:math:`\mathcal{O}(n_{aux} n_{bf}^2)`, each rank holds only its own slice, and it
+is the one thing here that does fall as :math:`1/N`.
+
+The |PSIfour| side is ``GTFockDFJK``
+(:source:`psi4/src/psi4/libfock/GTFockDFJK.cc`) over an RAII shim
+(:source:`psi4/src/psi4/libfock/gtfock_df_interface.cc`) around ``gtfock_psi4``'s
+``PDF_t``. It takes the fitting basis from ``DF_BASIS_SCF``, the Coulomb metric's
+relative eigenvalue cutoff from ``DF_FITTING_CONDITION``, and its thread count
+from ``DF_INTS_NUM_THREADS``.
+
+What it lifts
+.............
+
+* **Open-shell works.** ``PDF_computeJK`` takes one density and one occupied
+  block per call and keeps no per-density state, so ``GTFockDFJK`` loops over the
+  densities ``JK`` handed it. UHF runs; the exact path's single global density
+  matrix is not in the way.
+* **The engine is re-entrant.** ``PDF_t`` keeps no file-scope state, unlike
+  ``fock_task.c``, so the engine is an ordinary member rather than a
+  process-lifetime singleton: ``GTFockDFJK`` builds it in ``preiterations()`` and
+  releases it in ``postiterations()``, several may be alive at once over different
+  basis pairs, and a released one may be rebuilt. There is no "one engine per
+  process" rule and no need to run a second case in a fresh process. Note that
+  ``HF::finalize()`` does not call ``JK::finalize()``, so in an ordinary SCF the
+  engine is released when the ``JK`` object is, not at the end of the iterations.
+* **The angular-momentum ceiling is Simint's own.** The DF driver calls Simint
+  directly instead of going through libcint's shell-pair work lists, so its bound
+  is ``SIMINT_OSTEI_MAXAM`` read out of Simint |w---w| :math:`l_{max} = 5`, through
+  ``h``, in ``gtfock_psi4``'s pinned build, one higher than libcint's separately
+  hardcoded 4. Cartesian ``cc-pV5Z`` therefore runs here and raises on the exact
+  path. |PSIfour| screens against ``GTFDF_maxSupportedAM()`` rather than a copied
+  constant, so the two cannot drift apart.
+
+What it keeps
+.............
+
+* **Cartesian basis sets only, and now that is two basis sets.** The orbital and
+  the fitting basis are screened separately and each raises on its own. ``puream
+  false`` in the input covers both.
+* **No range-separated exchange.** ``do_wK`` raises in ``compute_JK``.
+* **Symmetric densities only.** ``C_left != C_right`` raises rather than returning
+  a K built from the wrong pair.
+* **The Fock build is distributed; the SCF is not.** Unchanged from the exact
+  path: diagonalization, DIIS and any DFT quadrature stay replicated on every
+  rank, and J and K are replicated after the reduction.
+
+One caveat from `What the J/K timer does not cover`_ applies here with full force,
+because this engine is a density-fitting builder: the tensor is built in
+``preiterations()``, which ``JK::initialize()`` runs *before*
+``timer_on("JK: JK")`` is ever opened. The ``JK: JK`` line in a ``GTFOCK_DF``
+output therefore reports the per-iteration contractions only and omits the setup
+that dominates a short run. Read ``Total time``, or instrument
+``preiterations()``, before comparing it against a ``direct`` or ``gtfock`` row.
+
+Measured behaviour
+..................
+
+One water in Cartesian ``cc-pVDZ`` with ``cc-pVDZ-JKFIT``, against |PSIfours| own
+``MemDFJK`` on the same basis pair and the same densities: ``max|dJ|`` 1.1e-12 and
+``max|dK|`` 2.1e-13, and a full RHF landing 5.2e-12 :math:`E_h` from the
+``mem_df`` energy. The two builders solve the same fitting equations, so this is
+roundoff and is expected to stay roundoff |w---w| it is not the loose cross-engine
+agreement the exact path has against PK.
+
+The water hexamer in the same basis pair (150 basis functions, 786 auxiliary
+functions, 6 auxiliary directions dropped by the fitting condition, a
+9,028,782-double tensor) splits exactly at four ranks: 197 + 197 + 196 + 196
+auxiliary functions, AO-pair-element counts summing to the whole, and tensor
+slices tiling the whole tensor with no rank holding all of it. Every rank reports
+the same null-space dimension, since the metric is inverted redundantly from a
+replicated :math:`(P|Q)`. The energy spread over one, two, three and four ranks is
+around 4e-14 :math:`E_h`, and wall time goes from 6.5 s at one rank to 4.3 s at
+four |w---w| a real but sublinear gain, for the same replicated-remainder reason as
+the exact path.
+
+Introspection, all usable without mpi4py and all separate from the exact path's
+counters:
+
+* :py:func:`psi4.core.gtfock_df_enabled` |w---w| was |PSIfour| compiled against
+  ``libgtfockdf``. Equivalently ``psi4.addons("gtfock_df")`` and
+  :py:func:`psi4.driver.gtfock.df_available`.
+* :py:func:`psi4.core.gtfock_df_jk_builds` |w---w| DF J/K builds this process ran
+* :py:func:`psi4.core.gtfock_df_partition` |w---w| the most recently created
+  engine's ``nbf``, ``naux``, auxiliary functions on this rank, metric null-space
+  dimension, and local AO-pair elements.
+  :py:func:`psi4.driver.gtfock.df_partition` returns those and the local tensor
+  size as a dict. All are ``-1`` before any engine has been built.
+
 Installation
 ~~~~~~~~~~~~
 
@@ -360,6 +477,15 @@ therefore carry its own ``libsimint``; configure fails if it does not, however
 many Simints the surrounding environment provides. Naming the GTFock prefix in
 ``-DCMAKE_PREFIX_PATH`` as well, as above, is harmless; the ``${CONDA_PREFIX}``
 entry there is what the rest of the build environment needs.
+
+The density-fitted engine is detected separately, and needs no extra configure
+flag. ``FindGTFock`` looks for ``gtfock_pdf.h``, ``gtfock_df.h`` and
+``libgtfockdf`` under the same prefix and sets ``GTFock_DF_FOUND`` only when all
+three turn up alongside ``libgtfock``; configure prints a status line when it
+finds GTFock without them. Such a build still gets ``SCF_TYPE GTFOCK``, and
+``psi4.addons("gtfock_df")`` is False. The recipe above installs the DF library
+by default, so a GTFock install predating it is the only way to land on that
+side.
 
 ``-DLAPACK_LIBRARIES`` must name MKL's *layered* libraries rather than letting
 |PSIfour| pick ``libmkl_rt``. GTFock links MKL's BLACS and ScaLAPACK, whose
@@ -421,21 +547,43 @@ Introspection helpers, all usable without mpi4py:
   distributed; block counts above one show the rank's panel was large enough for
   GTFock to subdivide.
 
+``SCF_TYPE GTFOCK_DF`` is driven the same way, since ``PDF_create`` is collective
+and so also needs MPI up before |PSIfour| touches it. It adds a fitting basis,
+which must be Cartesian too |w---w| ``puream false`` covers both:
+
+.. code-block:: python
+
+    psi4.set_options({"basis": "cc-pvdz", "puream": False,
+                      "df_basis_scf": "cc-pvdz-jkfit",
+                      "scf_type": "gtfock_df"})
+    energy = psi4.energy("scf")               # or psi4.energy("uhf")
+
+    assert psi4.core.gtfock_df_jk_builds() > 0
+    print(gtfock.df_partition())              # how the fitted tensor was split
+
+Its counters are separate from the exact path's, because the two engines share no
+state; they are listed under `Distributed density fitting`_.
+
 Testing
 ~~~~~~~
 
-:source:`tests/pytests/test_gtfock.py` covers the opt-in path and skips cleanly
-when GTFock is absent, except for the two optionality guards and the six
+:source:`tests/pytests/test_gtfock.py` covers both opt-in paths and skips cleanly
+when GTFock is absent, except for the three optionality guards and the six
 reducer tests, which always run:
 
 .. code-block:: bash
 
     >>> pytest -v tests/pytests/test_gtfock.py
 
-Without GTFock this is ``8 passed, 16 skipped``. The two optionality guards
+Without GTFock this is ``9 passed, 29 skipped``. Two of the optionality guards
 assert that :py:mod:`psi4.driver.gtfock` imports, reports itself unavailable,
 raises a GTFock-specific error rather than a stray ``ImportError``, and needs no
-mpi4py to do any of it. The six reducer tests drive
+mpi4py to do any of it. The third, ``test_gtfock_df_is_optional``, is separate
+from them on purpose: ``libgtfockdf`` is optional *within* ``ENABLE_GTFock``, so
+the two add-on flags can legitimately disagree and each needs its own guard. It
+checks that ``psi4.addons``, ``psi4.core.gtfock_df_enabled`` and
+:py:func:`psi4.driver.gtfock.df_available` agree, and that the DF flag is never
+set without the GTFock one under it. The six reducer tests drive
 :source:`tests/pytests/gtfock_hpc_collect.py` over synthesized per-rank records
 and need neither GTFock nor MPI: they check that one run collapses to one row
 with the slowest rank's wall clock, the worst rank's memory and the node's summed
@@ -493,6 +641,34 @@ counter advanced, and the energy agrees with |PSIfours| own PK result.
 DFT is swept over rank counts alongside RHF even though the engine code is the
 same for both, because what DFT changes is the caller: the exchange scaling and
 the ``do_wK`` request are decided in |PSIfours| SCF, not in GTFock.
+
+The fourteen ``test_gtfock_df_*`` cases carry their own ``gtfock_df`` marker and,
+unlike the exact path's, need no subprocess isolation: the engine is re-entrant,
+so they build and drop engines freely in one process. They assert, in order: that
+J and K match |PSIfours| own ``MemDFJK`` on the same basis pair to 1.0e-9 (the two
+solve the same fitting equations, so anything looser would be hiding a bug rather
+than pinning one); that RHF and UHF energies match ``mem_df``; that an empty
+occupied block, i.e. a hydrogen atom's beta space, is handled rather than passed
+to ``PDF_computeJK`` as ``nocc = 0`` work; that the engine really is built in
+``initialize()`` and not on first use, which is the claim
+`What the J/K timer does not cover`_ turns on; that two engines may be alive at
+once and a released one rebuilt; that a spherical orbital basis and a spherical
+fitting basis each raise on their own; that a basis above
+``GTFDF_maxSupportedAM()`` raises, which needs Cartesian ``cc-pV6Z`` rather than
+``cc-pV5Z`` because this path's ceiling is one higher than the exact path's; that
+``wK`` and a non-symmetric density each raise; and that J alone can be requested
+without K.
+
+``test_gtfock_df_rank_count_invariance`` is the distributed case. It drives
+:source:`tests/pytests/gtfock_mpi_driver.py` with ``--scf-type gtfock_df`` and
+``--df-basis`` at one, two, three and four ranks on the water hexamer, and checks
+both halves of the claim: that the per-rank auxiliary-function counts, AO-pair
+element counts and tensor slice sizes each sum to the whole-tensor totals with no
+rank holding all of it, and that the energy is invariant to 1.0e-9 :math:`E_h`
+across rank counts. Summing to the total is what distinguishes a real partition
+from a replicated tensor that happens to give the right answer. Three ranks is in
+the sweep because ``naux`` does not divide evenly by it, which is the case the
+remainder handling in the partition exists for.
 
 Measured rank scaling
 ~~~~~~~~~~~~~~~~~~~~~

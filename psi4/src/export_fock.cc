@@ -28,6 +28,7 @@
 
 #include "psi4/pybind11.h"
 
+#include "psi4/libfock/gtfock_df_interface.h"
 #include "psi4/libfock/gtfock_interface.h"
 #include "psi4/libfock/jk.h"
 #include "psi4/libfock/soscf.h"
@@ -222,6 +223,19 @@ void export_fock(py::module &m) {
           "[start_row, end_row, start_col, end_col] of the AO block GTFock gave this rank.");
     m.def("gtfock_local_task_shape", &MinimalInterface::local_task_shape,
           "[nblks_row, nblks_col, ntasks] of GTFock's task decomposition of this rank's AO block.");
+
+    // The distributed density-fitting engine is a separate, optional GTFock
+    // library, so it has its own enabled() and its own tallies.
+    m.def("gtfock_df_enabled", &MinimalDFInterface::enabled,
+          "Was Psi4 compiled against a GTFock that ships the distributed density-fitting engine?");
+    m.def("gtfock_df_jk_builds", &MinimalDFInterface::total_jk_builds,
+          "Number of distributed DF J/K builds this process has run. Zero proves GTFock never ran.");
+    m.def("gtfock_df_partition", &MinimalDFInterface::last_partition,
+          "[nbf, naux, nlocal_aux, nmetric_null, nlocal_pairs] of the most recent distributed DF engine, "
+          "or five -1s if none was built. nlocal_aux differing across ranks and summing to naux is what "
+          "shows the fitted tensor was distributed rather than replicated.");
+    m.def("gtfock_df_local_tensor_doubles", &MinimalDFInterface::last_local_tensor_doubles,
+          "Doubles in this rank's slice of the most recent distributed DF fitted tensor, or 0.");
 
     py::class_<scf::SADGuess, std::shared_ptr<scf::SADGuess>>(m, "SADGuess", "docstring")
         .def_static("build_SAD",
