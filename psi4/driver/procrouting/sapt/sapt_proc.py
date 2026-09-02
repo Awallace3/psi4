@@ -87,8 +87,6 @@ def _normalize_saptdft_external_potentials(
         return None
 
     normalized = validate_external_potential(external_potentials)
-    if not normalized:
-        return None
     required_wavefunctions = {
         "dimer": (dimer_wfn, normalized if validate_dimer else None)
     }

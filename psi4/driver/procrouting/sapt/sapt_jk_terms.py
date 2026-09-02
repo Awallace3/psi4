@@ -33,6 +33,7 @@ import numpy as np
 from psi4 import core
 
 from ...p4util import solvers
+from ...p4util.exceptions import ConvergenceError, ValidationError
 from ...p4util.exceptions import *
 from .sapt_util import print_sapt_var
 from pprint import pprint as pp
@@ -834,6 +835,9 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     Solve the SAPT CPHF (or CPKS) equations.
     """
 
+    if maxiter <= 0:
+        raise ValidationError("SAPT_DFT_INDUCTION_MAXITER must be positive.")
+
     cache["wfn_A"].set_jk(jk)
     if sapt_jk_B:
         cache["wfn_B"].set_jk(sapt_jk_B)
@@ -931,5 +935,16 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
         printer=pfunc,
     )
     core.print_out("   " + ("-" * sep_size) + "\n")
+
+    final_resid = [
+        (resid[0].sum_of_squares() / start_resid[0]) ** 0.5,
+        (resid[1].sum_of_squares() / start_resid[1]) ** 0.5,
+    ]
+    if any(not np.isfinite(value) or value >= conv for value in final_resid):
+        raise ConvergenceError(
+            "SAPT coupled induction equations",
+            maxiter,
+            f"Final relative residuals: A<-B={final_resid[0]:.3e}, B->A={final_resid[1]:.3e}.",
+        )
 
     return vecs

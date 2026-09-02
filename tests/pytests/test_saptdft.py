@@ -7,6 +7,7 @@ import qcelemental as qcel
 from pathlib import Path
 from pprint import pprint as pp
 from addons import uusing
+from psi4.driver.p4util.exceptions import ConvergenceError
 from psi4.driver.procrouting.sapt import sapt_proc, sapt_util
 
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
@@ -1413,6 +1414,47 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
 
 
 @pytest.mark.saptdft
+@pytest.mark.parametrize("use_einsums", [False, True])
+@pytest.mark.parametrize("failure", ["iteration limit", "unconverged"])
+def test_saptdft_induction_rejects_invalid_solver_results(monkeypatch, use_einsums, failure):
+    if use_einsums:
+        pytest.importorskip("einsums")
+
+    mol = psi4.geometry("Ne\n--\nNe 1 4.5\nunits bohr")
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "sapt_dft_grac_shift_a": 0.203293,
+            "sapt_dft_grac_shift_b": 0.203293,
+            "sapt_dft_do_dhf": False,
+            "sapt_dft_do_hybrid": False,
+            "sapt_dft_use_einsums": use_einsums,
+            "sapt_dft_induction_maxiter": 0 if failure == "iteration limit" else 1,
+            "orbital_optimizer_package": "internal",
+        }
+    )
+
+    jk_terms = sapt_proc.sapt_jk_terms_ein if use_einsums else sapt_proc.sapt_jk_terms
+    if failure == "unconverged":
+        solver_name = "cg_solver_ein" if use_einsums else "cg_solver"
+
+        def unconverged_solver(rhs, *args, **kwargs):
+            return rhs, rhs
+
+        monkeypatch.setattr(jk_terms.solvers, solver_name, unconverged_solver)
+        error = ConvergenceError
+        message = "Could not converge SAPT coupled induction equations"
+    else:
+        error = psi4.ValidationError
+        message = "SAPT_DFT_INDUCTION_MAXITER must be positive"
+
+    with pytest.raises(error, match=message):
+        psi4.energy("sapt(dft)", molecule=mol)
+    assert not psi4.core.has_variable("SAPT DFT INDUCTION ENERGY")
+
+
+@pytest.mark.saptdft
 @pytest.mark.parametrize(
     "options, message",
     [
@@ -1728,6 +1770,20 @@ def test_saptdft_direct_api_normalizes_external_potential_keys():
     assert set(normalized) == {"A"}
     assert dimer_wfn.has_potential_variable("A")
     assert not dimer_wfn.has_potential_variable("B")
+
+    dimer_wfn.set_external_potential(psi4.core.ExternalPotential())
+    wfn_A.set_external_potential(psi4.core.ExternalPotential())
+    normalized = sapt_proc._normalize_saptdft_external_potentials(
+        {}, dimer_wfn, wfn_A, wfn_B, validate_dimer=True
+    )
+    assert normalized == {}
+    assert not any(dimer_wfn.has_potential_variable(key) for key in "ABC")
+
+    dimer_wfn.set_potential_variable("C", stale_b)
+    assert sapt_proc._normalize_saptdft_external_potentials(
+        None, dimer_wfn, wfn_A, wfn_B, validate_dimer=True
+    ) is None
+    assert dimer_wfn.has_potential_variable("C")
 
 
 @pytest.mark.saptdft

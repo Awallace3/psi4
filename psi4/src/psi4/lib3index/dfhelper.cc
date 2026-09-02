@@ -2610,10 +2610,9 @@ void DFHelper::write_disk_tensor(std::string key, SharedMatrix M, std::vector<si
     check_file_tuple(key, i0, i1, i2);
     check_matrix_size(key, M, i0, i1, i2);
 
-    // "wb" is the way to go. the stream will change when when the tensor is read,
-    // but this should be extendible to back-and-forth read/writes.
-    std::string op = "wb";
-    put_tensor(std::get<1>(files_[key]), M->pointer()[0], i0, i1, i2, op);
+    std::string filename = std::get<1>(files_[key]);
+    std::string op = file_streams_.count(filename) ? "r+b" : "wb";
+    put_tensor(filename, M->pointer()[0], i0, i1, i2, op);
 }
 
 // Write to a disk tensor from pointer, be careful!
@@ -2652,10 +2651,9 @@ void DFHelper::write_disk_tensor(std::string key, double* b, std::vector<size_t>
     check_file_key(key);
     check_file_tuple(key, i0, i1, i2);
 
-    // "wb" is the way to go. the stream will change when when the tensor is read,
-    // but this should be extendible to back-and-forth read/writes.
-    std::string op = "wb";
-    put_tensor(std::get<1>(files_[key]), b, i0, i1, i2, op);
+    std::string filename = std::get<1>(files_[key]);
+    std::string op = file_streams_.count(filename) ? "r+b" : "wb";
+    put_tensor(filename, b, i0, i1, i2, op);
 }
 
 void DFHelper::check_file_key(std::string name) {
@@ -2667,6 +2665,10 @@ void DFHelper::check_file_key(std::string name) {
 }
 void DFHelper::check_matrix_size(std::string name, SharedMatrix M, std::pair<size_t, size_t> t0,
                                  std::pair<size_t, size_t> t1, std::pair<size_t, size_t> t2) {
+    if (!M) {
+        throw PSIEXCEPTION("DFHelper tensor operations require a matrix.");
+    }
+
     size_t A0 = std::get<1>(t0) - std::get<0>(t0) + 1;
     size_t A1 = (std::get<1>(t1) - std::get<0>(t1) + 1) * (std::get<1>(t2) - std::get<0>(t2) + 1);
 

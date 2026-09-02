@@ -103,7 +103,7 @@ def test_ibolocalizer2_static_build():
         localizer.localize(psi4.core.Matrix(basis.nbf() + 1, 1), fock)
 
 
-def test_dfhelper_write_disk_tensor_rejects_invalid_ranges():
+def test_dfhelper_disk_tensor_validation_and_interleaved_io():
     mol = psi4.geometry("He\nsymmetry c1")
     basis = psi4.core.BasisSet.build(mol, "BASIS", "sto-3g")
     helper = psi4.core.DFHelper(basis, basis)
@@ -114,6 +114,24 @@ def test_dfhelper_write_disk_tensor_rejects_invalid_ranges():
         )
     with pytest.raises(RuntimeError, match="missing not found"):
         helper.fill_tensor("missing", psi4.core.Matrix(1, 1))
+
+    helper.add_disk_tensor("test", (2, 1, 1))
+    with pytest.raises(RuntimeError, match="require a matrix"):
+        helper.write_disk_tensor("test", None)
+    with pytest.raises(RuntimeError, match="require a matrix"):
+        helper.fill_tensor("test", None)
+
+    first = psi4.core.Matrix.from_array(np.array([[1.0]]))
+    helper.write_disk_tensor("test", first, [0, 1], [0, 1], [0, 1])
+    roundtrip = psi4.core.Matrix(1, 1)
+    helper.fill_tensor("test", roundtrip, [0, 1], [0, 1], [0, 1])
+    assert np.array_equal(roundtrip.np.ravel(), first.np.ravel())
+
+    second = psi4.core.Matrix.from_array(np.array([[2.0]]))
+    helper.write_disk_tensor("test", second, [1, 2], [0, 1], [0, 1])
+    combined = psi4.core.Matrix(2, 1)
+    helper.fill_tensor("test", combined)
+    assert np.array_equal(combined.np.ravel(), np.array([1.0, 2.0]))
 
 
 @pytest.mark.fsapt

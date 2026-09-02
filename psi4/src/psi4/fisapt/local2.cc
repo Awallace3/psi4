@@ -353,7 +353,7 @@ std::map<std::string, std::shared_ptr<Matrix> > IBOLocalizer2::localize(std::sha
         throw PSIEXCEPTION("IBOLocalizer2::localize requires single-irrep Cocc and Focc matrices.");
     }
     int nocc = Cocc->coldim(0);
-    if (Cocc->rowdim(0) != S_->rowdim(0)) {
+    if (Cocc->rowdim(0) != primary_->nbf()) {
         throw PSIEXCEPTION("IBOLocalizer2::localize Cocc row dimension must match the primary basis.");
     }
     if (Focc->rowdim(0) != nocc || Focc->coldim(0) != nocc) {

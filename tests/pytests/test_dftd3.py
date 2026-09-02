@@ -7,6 +7,14 @@ import psi4
 
 pytestmark = [pytest.mark.psi, pytest.mark.api]
 
+
+def test_empirical_dispersion_legacy_import_path():
+    from psi4.driver.procrouting.empirical_dispersion import EmpiricalDispersion as legacy
+    from psi4.driver.procrouting.empirical_disp import EmpiricalDispersion
+
+    assert legacy is EmpiricalDispersion
+
+
 @uusing("dftd3")
 def test_dftd3_dft_grad_lr3():
     """modified VV10-less B97 functional gradient wB97X-V -> wB97X-D3BJ"""
