@@ -136,6 +136,19 @@ def setup_fisapt_object(
     # J_P_A and J_P_B have flipped terminology in FISAPT...
     matrix_cache["J_P_A"] = to_matrix(cache["J_P_B"])
     matrix_cache["J_P_B"] = to_matrix(cache["J_P_A"])
+    for fragment in "AB":
+        if wfn.has_potential_variable(fragment):
+            matrix_cache[f"V{fragment}_extern"] = wfn.potential_variable(
+                fragment
+            ).computePotentialMatrix(wfn.basisset())
+    if wfn.has_potential_variable("A") and wfn.has_potential_variable("B"):
+        extern_extern = core.Matrix("extern_extern_IE", 3, 3)
+        interaction = wfn.potential_variable("A").computeExternExternInteraction(
+            wfn.potential_variable("B")
+        )
+        extern_extern.np[0, 1] = interaction * 0.5
+        extern_extern.np[1, 0] = interaction * 0.5
+        matrix_cache["extern_extern_IE"] = extern_extern
 
     # Vector keys for eigenvalues
     vector_keys = {

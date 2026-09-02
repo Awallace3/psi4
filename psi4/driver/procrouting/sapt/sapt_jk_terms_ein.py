@@ -687,13 +687,16 @@ def build_sapt_jk_cache(
     # External Potentials need to add to V_A and V_B. Preserve the
     # normalized metadata for downstream F-SAPT partitioning.
     cache["external_potentials"] = external_potentials
+    cache["external_potential_objects"] = {}
     if external_potentials:
         if external_potentials.get("A") is not None:
-            ext_A = wfn_A.external_pot().computePotentialMatrix(wfn_A.basisset())
-            cache["V_A"].add(ext_A)
+            external_A = wfn_A.external_pot()
+            cache["external_potential_objects"]["A"] = external_A
+            cache["V_A"].add(external_A.computePotentialMatrix(wfn_A.basisset()))
         if external_potentials.get("B") is not None:
-            ext_B = wfn_B.external_pot().computePotentialMatrix(wfn_B.basisset())
-            cache["V_B"].add(ext_B)
+            external_B = wfn_B.external_pot()
+            cache["external_potential_objects"]["B"] = external_B
+            cache["V_B"].add(external_B.computePotentialMatrix(wfn_B.basisset()))
 
     # Anything else we might need
     # S corresponds to the overlap matrix, S^{AO}
@@ -888,8 +891,8 @@ def felst(
             Elst1_terms[3] += E
 
     # External A - atom B interactions
-    if "A" in cache.get("external_potentials", {}):
-        ext_pot_A = cache["external_potentials"]["A"]
+    if "A" in cache.get("external_potential_objects", {}):
+        ext_pot_A = cache["external_potential_objects"]["A"]
         for B in range(nB_atoms):
             atom_mol = core.Molecule([core.Atom(ZB.np[B])])
             atom_mol.set_geometry([mol.xyz(B)])
@@ -898,8 +901,8 @@ def felst(
             Elst1_terms[3] += interaction
 
     # External B - atom A interactions
-    if "B" in cache.get("external_potentials", {}):
-        ext_pot_B = cache["external_potentials"]["B"]
+    if "B" in cache.get("external_potential_objects", {}):
+        ext_pot_B = cache["external_potential_objects"]["B"]
         for A in range(nA_atoms):
             atom_mol = core.Molecule([core.Atom(ZA.np[A])])
             atom_mol.set_geometry([mol.xyz(A)])
@@ -1006,8 +1009,8 @@ def felst(
         Elst_AB[A, nB_atoms : nB_atoms + nb] += E_vec
 
     # Add external-A <-> orbital b interaction
-    if "A" in cache.get("external_potentials", {}):
-        ext_pot_A = cache["external_potentials"]["A"]
+    if "A" in cache.get("external_potential_objects", {}):
+        ext_pot_A = cache["external_potential_objects"]["A"]
         Vtemp = ext_pot_A.computePotentialMatrix(dimer_basis)
 
         Vtemp_mat = Vtemp.clone()
@@ -1041,8 +1044,8 @@ def felst(
         Elst_AB[nA_atoms : nA_atoms + na, B] += E_vec
 
     # Add orbital a <-> external-B interaction
-    if "B" in cache.get("external_potentials", {}):
-        ext_pot_B = cache["external_potentials"]["B"]
+    if "B" in cache.get("external_potential_objects", {}):
+        ext_pot_B = cache["external_potential_objects"]["B"]
         Vtemp = ext_pot_B.computePotentialMatrix(dimer_basis)
 
         Vtemp_mat = Vtemp.clone()
@@ -1066,11 +1069,11 @@ def felst(
     )
 
     # Add extern-extern contribution if both external potentials exist
-    if "A" in cache.get("external_potentials", {}) and "B" in cache.get(
-        "external_potentials", {}
+    if "A" in cache.get("external_potential_objects", {}) and "B" in cache.get(
+        "external_potential_objects", {}
     ):
-        ext_pot_A = cache["external_potentials"]["A"]
-        ext_pot_B = cache["external_potentials"]["B"]
+        ext_pot_A = cache["external_potential_objects"]["A"]
+        ext_pot_B = cache["external_potential_objects"]["B"]
         ext_ext = ext_pot_A.computeExternExternInteraction(ext_pot_B)
         Elst_AB[nA_atoms + na, nB_atoms + nb] += ext_ext
 

@@ -1028,7 +1028,7 @@ no_com
             **options,
             "SAPT_DFT_USE_EINSUMS": use_einsums,
             "SAPT_DFT_DO_FSAPT": "SAPTDFT" if use_einsums else "FISAPT",
-            "FISAPT_FSAPT_FILEPATH": str(tmp_path),
+            "FISAPT_FSAPT_FILEPATH": str(tmp_path) if use_einsums else "none",
         }
     )
 
@@ -1046,20 +1046,27 @@ no_com
         assert np.allclose(
             saptdft_wfn.variable(label), np.asarray([row[1] for row in potential])
         )
-        external_xyz = tmp_path / f"Extern_{fragment}.xyz"
-        assert external_xyz.is_file()
-        serialized_coordinates = np.asarray(
-            [
-                [float(value) for value in line.split()[1:4]]
-                for line in external_xyz.read_text().splitlines()[2:]
-            ]
-        )
-        assert np.allclose(
-            serialized_coordinates,
-            np.asarray([row[1] for row in potential]) * psi4.constants.bohr2angstroms,
-            atol=5.0e-7,
-        )
+        if use_einsums:
+            external_xyz = tmp_path / f"Extern_{fragment}.xyz"
+            assert external_xyz.is_file()
+            serialized_coordinates = np.asarray(
+                [
+                    [float(value) for value in line.split()[1:4]]
+                    for line in external_xyz.read_text().splitlines()[2:]
+                ]
+            )
+            assert np.allclose(
+                serialized_coordinates,
+                np.asarray([row[1] for row in potential]) * psi4.constants.bohr2angstroms,
+                atol=5.0e-7,
+            )
     assert saptdft_wfn.has_variable("FSAPT_INDAB_AB")
+    assert compare_values(
+        saptdft_wfn.variable("SAPT ELST ENERGY"),
+        np.asarray(saptdft_wfn.variable("FSAPT_ELST_AB")).sum(),
+        7,
+        f"F-SAPT electrostatics with external potentials use_einsums={use_einsums}",
+    )
 
     calculated_sapthf_energies = {k1: psi4.core.variable(k2) for k1, k2 in key_labels}
     calculated_sapthf_energies["Enuc"] = mol.nuclear_repulsion_energy()

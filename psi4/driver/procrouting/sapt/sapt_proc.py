@@ -744,11 +744,6 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     # Reset external potentials on kwargs['external_potentials']
     kwargs["external_potentials"] = {}
     if do_ext_potential:
-        dimer_wfn.del_potential_variable("C")
-        _set_external_potentials_to_wavefunction(
-            construct_external_potential_in_field_C([ext_pot_A, ext_pot_B]),
-            dimer_wfn,
-        )
         if ext_pot_C is not None:
             kwargs["external_potentials"]["C"] = ext_pot_C
         if ext_pot_A is not None:
@@ -757,6 +752,20 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         if ext_pot_B is not None:
             kwargs["external_potentials"]["B"] = ext_pot_B
             _set_external_potentials_to_wavefunction(ext_pot_B, wfn_B)
+        for fragment in "ABC":
+            if dimer_wfn.has_potential_variable(fragment):
+                dimer_wfn.del_potential_variable(fragment)
+        if ext_pot_C is not None:
+            _set_external_potentials_to_wavefunction({"C": ext_pot_C}, dimer_wfn)
+        dimer_pair_potentials = {
+            fragment: potential
+            for fragment, potential in (("A", ext_pot_A), ("B", ext_pot_B))
+            if potential is not None
+        }
+        if dimer_pair_potentials:
+            _set_external_potentials_to_wavefunction(
+                dimer_pair_potentials, dimer_wfn
+            )
 
     # Save JK object
     sapt_jk = wfn_B.jk()
