@@ -129,6 +129,24 @@ def df_partition() -> Dict[str, Any]:
     }
 
 
+def df_setup_phases() -> Dict[str, float]:
+    """Wall seconds this rank spent in each phase of the most recent DF build.
+
+    The setup timer says how much building the fitted tensor cost; this says
+    which part of it, which is the part that decides whether adding ranks will
+    help. ``int3c`` (three-center integrals), ``fit`` and ``redist`` divide over
+    ranks; ``metric`` and especially ``factor`` do not, since every rank factors
+    the same Coulomb metric on its own share of the cores.
+
+    Keys come from GTFock, so a phase added there appears here without a change
+    on this side. Every rank times its own elapsed seconds, waits inside
+    collectives included, so the spread of one phase across ranks is that
+    phase's load imbalance. Empty before any engine is built, or when Psi4 was
+    compiled without the DF engine.
+    """
+    return dict(core.gtfock_df_setup_phases())
+
+
 def df_setup_timer() -> str:
     """The timer name that covers the distributed DF setup, read from the module.
 

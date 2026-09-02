@@ -32,6 +32,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 import numpy as np
 import pytest
@@ -613,6 +614,7 @@ def test_gtfock_df_is_optional():
         assert gtfock.df_partition() == {"nbf": -1, "naux": -1, "nlocal_aux": -1,
                                          "nmetric_null": -1, "nlocal_pairs": -1,
                                          "local_tensor_doubles": 0}
+        assert gtfock.df_setup_phases() == {}
 
 
 @uusing("gtfock_df")
@@ -621,8 +623,9 @@ def test_gtfock_df_jk_matches_memdfjk(gtfock_mpi):
 
     Given one auxiliary basis the two sides are expanding in the same space, so
     this is a far tighter comparison than the exact path's Simint-vs-Libint2 one:
-    the rotation within the auxiliary space that separates GTFock's
-    eigendecomposition of ``(P|Q)`` from DFHelper's cancels out of both J and K.
+    the rotation within the auxiliary space that separates GTFock's pivoted
+    Cholesky of ``(P|Q)`` from DFHelper's inverse square root cancels out of
+    both J and K.
     What is left is three-centre integral accuracy and contraction order, and
     that is what ``DF_JK_TOL`` is sized for.
     """
@@ -800,6 +803,39 @@ def test_gtfock_df_builds_its_engine_in_initialize(gtfock_mpi):
     assert after["local_tensor_doubles"] > 0, "initialize() did not build a fitted tensor"
     # ... and it did so without computing any J or K.
     assert gtfock_mpi.df_jk_builds() == builds_before
+
+
+@uusing("gtfock_df")
+def test_gtfock_df_setup_phases_account_for_the_build(gtfock_mpi):
+    """The phase clocks must name every phase, in build order, and sum inside the build.
+
+    The setup timer says what the fit cost; these say which part of it, which is
+    what decides whether more ranks would help -- ``int3c``, ``fit`` and
+    ``redist`` divide over ranks, ``metric`` and ``factor`` do not. The names
+    come from GTFock, so this also pins the two sides' agreement on them: a
+    phase renamed there and not in ``gtfock_hpc_collect.py`` drops a column from
+    the published table rather than failing anything.
+
+    The sum bound is loose on purpose. The phases are disjoint but do not tile
+    the build -- allocation and partitioning sit between them -- so all that
+    must hold is that they fit inside it.
+    """
+    primary, auxiliary = _df_bases()
+
+    psi4.set_options({"scf_type": "gtfock_df"})
+    jk = psi4.core.JK.build_JK(primary, auxiliary)
+    jk.set_do_K(True)
+    start = time.perf_counter()
+    jk.initialize()
+    elapsed = time.perf_counter() - start
+
+    phases = gtfock_mpi.df_setup_phases()
+    assert list(phases) == ["metric", "factor", "int3c", "fit", "redist"]
+    assert all(seconds >= 0.0 for seconds in phases.values()), phases
+    assert sum(phases.values()) > 0.0, "the whole build was timed as instantaneous"
+    assert sum(phases.values()) <= elapsed, (phases, elapsed)
+
+    jk.finalize()
 
 
 @uusing("gtfock_df")

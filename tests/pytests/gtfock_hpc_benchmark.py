@@ -660,6 +660,11 @@ def main(argv=None) -> int:
         report.update({
             "fock_builds": gtfock.df_jk_builds() - jk_builds_before,
             "df_partition": gtfock.df_partition(),
+            # The setup timer above is the total; this is where it went. Only
+            # some of these phases divide over ranks, so the breakdown is what
+            # says whether a setup that stopped improving has stopped because
+            # of the replicated metric factorization or something else.
+            "df_setup_phases": gtfock.df_setup_phases(),
         })
 
     print("PSI4-GTFOCK-JSON " + json.dumps(report), flush=True)

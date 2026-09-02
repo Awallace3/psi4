@@ -22,6 +22,12 @@ import json
 import os
 import sys
 
+# GTFock's setup phases, in the order PDF_create runs them. The CSV needs a
+# fixed column per phase, so this list is a copy of the engine's; a phase added
+# there and not here still reaches the JSON, just not the table.
+_DF_PHASES = ("metric", "factor", "int3c", "fit", "redist")
+
+
 # One row per point. Written in this order so the CSV reads left to right as
 # "what was run", "what it cost", "was it the same answer".
 _COLUMNS = [
@@ -37,6 +43,10 @@ _COLUMNS = [
     # every other arm, since none of them has one.
     "naux", "nlocal_aux_min", "nlocal_aux_max", "nlocal_aux_sum",
     "nmetric_null", "local_tensor_mb_max", "local_tensor_mb_sum",
+    # Where df_setup_s went. Only some of these phases divide over ranks, so
+    # this is what says whether a setup that stopped improving stopped because
+    # of the replicated metric factorization or for some other reason.
+    *(f"df_phase_{name}_s" for name in _DF_PHASES),
     "host", "slurm_job_id", "slurm_nodelist", "df_setup_keys",
 ]
 
@@ -152,6 +162,25 @@ def _reduce_df_partition(records):
     }
 
 
+def _reduce_df_phases(records):
+    """Reduce the DF setup phase clocks across the ranks of one point.
+
+    Maxima, like every other wall clock here: the build is collective, so each
+    phase costs the point what its slowest rank spent in it. That includes the
+    time a rank spent waiting, which is the point -- a phase whose maximum far
+    exceeds its minimum is not expensive, it is imbalanced.
+
+    Records written before the benchmark measured this carry no phases and
+    reduce to nothing, which the CSV writes as blanks rather than as zeros that
+    would read like a phase that cost nothing.
+    """
+    per_rank = [r["df_setup_phases"] for r in records if r.get("df_setup_phases")]
+    if not per_rank:
+        return {}
+    return {f"df_phase_{name}_s": max(p.get(name, 0.0) for p in per_rank)
+            for name in _DF_PHASES}
+
+
 def load_points(directories):
     """Collapse ``*.rank<N>.json`` files into one dict per (system, arm, ranks)."""
     by_key = {}
@@ -211,6 +240,7 @@ def load_points(directories):
             "scf_energy": head["scf_energy"],
             "dE_across_ranks_eh": max(energies) - min(energies),
             **_reduce_df_partition(records),
+            **_reduce_df_phases(records),
             "process_grid": "x".join(str(n) for n in head["process_grid"]) if "process_grid" in head else "",
             "local_task_shape": "x".join(str(n) for n in head["local_task_shape"]) if "local_task_shape" in head else "",
             "host": head["host"],
