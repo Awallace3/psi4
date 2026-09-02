@@ -389,7 +389,7 @@ density-fitting setup timers would report a confident zero for this builder
 |w---w| a measured absence, which is the one wrong answer instrumentation can
 give. ``GTFockDFJK::preiterations()`` therefore opens a top-level timer of its
 own, ``JK: GTFock DF setup``, a sibling of ``HF: Form G`` rather than a child of
-``JK: JK``, covering the three-centre integrals, the metric inverse square root
+``JK: JK``, covering the three-centre integrals, the metric factorization
 and the redistribution together. The name is defined once in
 :source:`psi4/src/psi4/libfock/gtfock_df_interface.h` and read back through
 :py:func:`psi4.driver.gtfock.df_setup_timer`, so a benchmark asks the module for
@@ -1377,14 +1377,14 @@ against that system's ``direct`` energy, so it is fitting error and not drift.
 =========  =====  ===  ====  =====  =========  =======  ========  =======  =======  =============  =============  ========
 arm        ranks  thr  grid  iters  setup (s)  J/K (s)  rest (s)  SCF (s)  speedup  RSS/rank (MB)  RSS node (MB)  dE (Eh)
 =========  =====  ===  ====  =====  =========  =======  ========  =======  =======  =============  =============  ========
-direct     1      24   ---   11     0.0        11.4     1.3       12.7     ---      586            586            ---
-df         1      24   ---   11     1.4        2.5      1.3       5.2      ---      1324           1324           6.0e-04
-gtfock     1      24   1x1   11     0.0        3.9      1.2       5.2      1.00     410            410            -1.3e-07
-gtfock     2      12   1x2   11     0.0        3.9      1.1       5.0      1.04     314            628            -1.3e-07
-gtfock     4      6    2x2   11     0.0        3.8      1.1       4.8      1.07     274            1093           -1.3e-07
-gtfock_df  1      24   ---   11     1.3        2.9      1.4       5.5      1.00     980            980            6.0e-04
-gtfock_df  2      12   ---   11     1.2        1.8      1.3       4.3      1.29     596            1190           6.0e-04
-gtfock_df  4      6    ---   11     1.0        1.4      1.1       3.5      1.56     394            1574           6.0e-04
+direct     1      24   ---   11     0.0        11.4     1.2       12.6     ---      585            585            ---
+df         1      24   ---   11     1.3        2.4      1.2       5.0      ---      1325           1325           6.0e-04
+gtfock     1      24   1x1   11     0.0        3.9      1.3       5.1      1.00     411            411            -1.3e-07
+gtfock     2      12   1x2   11     0.0        3.9      1.1       5.0      1.02     314            627            -1.3e-07
+gtfock     4      6    2x2   11     0.0        3.8      1.1       4.9      1.04     273            1090           -1.3e-07
+gtfock_df  1      24   ---   11     0.5        2.8      1.3       4.7      1.00     882            882            6.0e-04
+gtfock_df  2      12   ---   11     0.6        1.8      1.2       3.6      1.31     569            1139           6.0e-04
+gtfock_df  4      6    ---   11     0.5        1.4      1.2       3.0      1.55     371            1484           6.0e-04
 =========  =====  ===  ====  =====  =========  =======  ========  =======  =======  =============  =============  ========
 
 .. nanotube: 6-31+G** nbf=574 nshell=256 on cos-4a16505.cos.gatech.edu
@@ -1392,98 +1392,173 @@ gtfock_df  4      6    ---   11     1.0        1.4      1.1       3.5      1.56 
 =========  =====  ===  ====  =====  =========  =======  ========  =======  =======  =============  =============  ========
 arm        ranks  thr  grid  iters  setup (s)  J/K (s)  rest (s)  SCF (s)  speedup  RSS/rank (MB)  RSS node (MB)  dE (Eh)
 =========  =====  ===  ====  =====  =========  =======  ========  =======  =======  =============  =============  ========
-direct     1      24   ---   11     0.0        203.7    2.5       206.2    ---      928            928            ---
-df         1      24   ---   11     19.9       38.8     2.7       61.5     ---      10282          10282          1.4e-03
-gtfock     1      24   1x1   11     0.0        69.5     2.6       72.0     1.00     563            563            -8.4e-06
-gtfock     2      12   1x2   11     0.0        68.0     2.6       70.6     1.02     484            966            -8.4e-06
-gtfock     4      6    2x2   11     0.0        64.8     2.8       67.6     1.07     430            1711           -8.4e-06
-gtfock_df  1      24   ---   11     14.9       23.9     2.8       41.6     1.00     8118           8118           1.4e-03
-gtfock_df  2      12   ---   11     12.0       21.0     2.9       35.8     1.16     4227           8454           1.4e-03
-gtfock_df  4      6    ---   11     12.7       14.0     3.0       29.7     1.40     2262           9045           1.4e-03
+direct     1      24   ---   11     0.0        204.2    2.5       206.7    ---      927            927            ---
+df         1      24   ---   11     20.2       39.2     2.8       62.2     ---      10282          10282          1.4e-03
+gtfock     1      24   1x1   11     0.0        67.4     2.6       70.0     1.00     562            562            -8.4e-06
+gtfock     2      12   1x2   11     0.0        68.5     2.7       71.1     0.98     483            965            -8.4e-06
+gtfock     4      6    2x2   11     0.0        66.3     2.7       69.0     1.01     430            1706           -8.4e-06
+gtfock_df  1      24   ---   11     6.9        24.4     2.7       34.1     1.00     4475           4475           1.3e-03
+gtfock_df  2      12   ---   11     7.9        21.1     2.8       31.8     1.07     4125           8248           1.3e-03
+gtfock_df  4      6    ---   11     6.5        13.9     3.1       23.4     1.46     2179           8715           1.3e-03
 =========  =====  ===  ====  =====  =========  =======  ========  =======  =======  =============  =============  ========
 
 **The fitted arm scales at a fixed core count and the exact arm does not.** This
-is the result. ``gtfock_df`` takes its J/K from 2.876 s to 1.397 s on the
-peptide, **2.06x**, and from 23.879 s to 14.029 s on the nanotube, **1.70x**,
-while ``gtfock`` on the same machine over the same rank counts goes 3.938 to
-3.787 and 69.457 to 64.849 |w---w| **1.04x** and **1.07x**, the same flat curve
+is the result. ``gtfock_df`` takes its J/K from 2.847 s to 1.380 s on the
+peptide, **2.06x**, and from 24.426 s to 13.835 s on the nanotube, **1.77x**,
+while ``gtfock`` on the same machine over the same rank counts goes 3.871 to
+3.789 and 67.405 to 66.213 |w---w| **1.02x** both times, the same flat curve
 `Rank scaling at a fixed core count`_ reports on Phoenix. Splitting 24 cores
 into four ranks costs the exact path everything it gains, because the work each
 rank drops is work some rank still has to do and the shell-quartet partition
 replicates rather than divides. Splitting them for the fitted path divides an
 actual tensor.
 
-The full SCF gains less |w---w| **1.56x** and **1.40x** |w---w| and the tables
+The full SCF gains less |w---w| **1.55x** and **1.46x** |w---w| and the tables
 say why without needing an argument, because ``setup`` and ``rest`` are printed
-beside ``J/K``. At four ranks on the nanotube the J/K that scales is 14.0 s of a
-29.7 s SCF; the 12.7 s of fitting setup and the 3.0 s of replicated remainder
-are the other 53%. This is Amdahl's law with the serial fraction itemised, and
-it names the next piece of work rather than qualifying this one.
+beside ``J/K``. At four ranks on the nanotube the J/K that scales is 13.9 s of a
+23.4 s SCF; the 6.5 s of fitting setup and the 3.1 s of replicated remainder are
+the other 41%. This is Amdahl's law with the serial fraction itemised, and it
+names the next piece of work rather than qualifying this one.
 
-**Setup does not yet scale.** 14.9 to 12.0 to 12.7 s on the nanotube, 1.26 to
-1.03 s on the peptide: within noise of flat, and non-monotonic. The
-three-centre integrals do divide across ranks, but the metric inverse square
-root is computed redundantly on every rank and the redistribution that follows
-it is all-to-all, and together they eat the integral saving. That is the
-component to attack next, and it is worth attacking: at four ranks it is 43% of
-the nanotube SCF, up from 36% at one rank purely because everything around it
-got faster.
+**Setup got 2.2x faster and still does not divide.** 6.9, 7.9, 6.5 s on the
+nanotube and 0.5, 0.6, 0.5 s on the peptide: flat, and non-monotonic, which is
+the same shape the previous revision of this table reported. What changed is the
+level it is flat at. Two things landed in between |w---w| the Coulomb metric is
+now factored by a pivoted Cholesky instead of an eigendecomposition and an
+explicit inverse square root, and at one rank the fitted tensor is adopted in
+place instead of copied |w---w| and together they took the nanotube's one-rank
+setup from 14.9 s to 6.9 s and its one-rank peak memory from 8118 MB to 4475 MB.
+Neither touches the shape of the curve, and the phase clocks now say why it has
+that shape. ``PDF_create`` times its five phases separately and
+:py:func:`psi4.driver.gtfock.df_setup_phases` reports them; worst rank shown:
+
+=========  =====  ========  ========  =======  =======  ========  =========
+system     ranks  metric    factor    int3c    fit      redist    setup (s)
+=========  =====  ========  ========  =======  =======  ========  =========
+peptide    1      0.010     0.028     0.248    0.211    0.000     0.5
+peptide    2      0.022     0.028     0.143    0.208    0.205     0.6
+peptide    4      0.031     0.030     0.097    0.203    0.123     0.5
+nanotube   1      0.049     0.372     2.538    3.858    0.001     6.9
+nanotube   2      0.108     0.401     1.433    3.912    2.040     7.9
+nanotube   4      0.151     0.405     0.930    3.782    1.555     6.5
+=========  =====  ========  ========  =======  =======  ========  =========
+
+Read that against what a fixed *total* core count can show. A phase that divides
+perfectly over ranks comes out **flat** here, because each rank gets 1/n of the
+work on 1/n of the cores; a phase that gets **faster** was not using 24 threads
+well to begin with; a phase that gets **slower** is communication the one-rank
+run never paid. ``fit``, the triangular solve, is the flat one and the largest,
+3.86 to 3.91 to 3.78 s on the nanotube |w---w| an MKL ``dtrsm`` that already
+threads. ``int3c`` is the one that falls, 2.54 to 0.93 s, so the three-centre
+integrals were the phase leaving threads idle at 24 and ranks are buying thread
+efficiency rather than work division. ``redist`` is the one that appears: 0.001
+s at one rank, where there is nothing to move, and 1.6 to 2.0 s at two and four.
+``metric`` and ``factor`` together are 0.56 s of the 6.5 s at four ranks, so the
+replicated factorization has stopped being the thing to attack.
+
+The two movements roughly cancel and the total sits still. The consequence is
+sharper than the flat number looks: **a fixed-total-core sweep cannot show setup
+scaling even in principle**, because the only phase with room to improve is the
+one that was thread-starved, and the phase that would improve on more hardware
+is being handed no more hardware. The sweep that can show it is fixed cores per
+rank across nodes, which adds cores as it adds ranks |w---w| and which also
+makes ``redist`` cross a network for the first time. That measurement is not in
+this document.
 
 **Per-rank memory falls with rank count, which is the point of distributing at
-all.** The nanotube's fitted tensor costs 8118 MB in one process and 2262 MB per
-rank in four, **3.59x** less; the peptide's, 980 to 394 MB, 2.49x. The node
-total barely moves |w---w| 8118 to 9045 MB |w---w| and that is expected and not
-a defect: on one node this buys nothing, and it is exactly what lets the same
+all.** The nanotube's peak resident set is 4475 MB in one process and 2179 MB
+per rank in four, **2.05x** less; the peptide's, 882 to 371 MB, 2.38x. The node
+total rises |w---w| 4475 to 8715 MB |w---w| and that is expected and not a
+defect: on one node this buys nothing, and it is exactly what lets the same
 calculation cross onto four nodes, where the total is what four nodes have and
-the per-rank figure is what one node must hold. The partition is clean:
+the per-rank figure is what one node must hold.
+
+**The multi-rank peak is twice the tensor, and that is the redistribution.** The
+fitted tensor is the steady-state cost and it divides exactly: 3810 MB at one
+rank on the nanotube, 953 MB at four. At one rank the peak is 4475 MB, so the
+engine holds one copy of it and 665 MB of everything else, |PSIfour| included.
+At two ranks the tensor is 1905 MB per rank against a 4125 MB peak, and at four
+it is 953 against 2179 |w---w| about **2x the tensor per rank**, and the factor
+does not shrink as ranks are added. That excess is structural. ``PDF_create``
+builds the tensor partitioned over AO pairs, because that is how the
+three-centre integrals come out, and J and K need it partitioned over auxiliary
+functions, because K forces Q-locality. Turning one into the other is an
+all-to-all, and the source buffer must stay allocated until the last
+``MPI_Sendrecv`` has read from it, so both partitionings exist at once. At one
+rank there is nothing to move, so the AO-partitioned buffer is adopted in place
+and the peak is one tensor; from two ranks up it is two. Cutting that back to
+one means blocking the entire build |w---w| integrals, solve and exchange over
+slices of the auxiliary index |w---w| which trades one large all-to-all for many
+small ones. Whether that trade is worth making depends on what the all-to-all
+costs on a network, and no measurement in this document has crossed one.
+
+The partition itself is clean:
 
 =========  ====  ======  =====  ==========  ================  =============
 system     nbf   naux    ranks  aux/rank    tensor/rank (MB)  null vectors
 =========  ====  ======  =====  ==========  ================  =============
-peptide    260   1360    1      1360        355               4
-peptide    260   1360    2      680, 680    177               4
-peptide    260   1360    4      340 x 4     89                4
-nanotube   574   3026    1      3026        3825              124
-nanotube   574   3026    2      1513, 1513  1913              124
-nanotube   574   3026    4      757 x 4     957               124
+peptide    260   1360    1      1358        354               2
+peptide    260   1360    2      679, 679    177               2
+peptide    260   1360    4      339-340     89                2
+nanotube   574   3026    1      3014        3810              12
+nanotube   574   3026    2      1507, 1507  1905              12
+nanotube   574   3026    4      753-754     953               12
 =========  ====  ======  =====  ==========  ================  =============
 
-The auxiliary index divides to within one function at every rank count, so no
-rank carries a long tail, and the null-vector count the 1e-12 fitting-condition
-cutoff produces is identical on every rank at every rank count |w---w| the
-metric is diagonalised redundantly, so a rank-dependent count would mean the
-ranks disagreed about the fitting basis. The tensor sizes above are the fitted
-tensor alone; the ``RSS/rank`` column is larger because setup transiently holds
-the AO-partitioned three-centre integrals as well.
+``aux/rank`` counts the rows kept after the fitting condition, so it sums to
+``naux`` less the null vectors. The auxiliary index divides to within one
+function at every rank count, so no rank carries a long tail, and the
+null-vector count is identical on every rank at every rank count |w---w| every
+rank factors the same metric, so a rank-dependent count would mean the ranks
+disagreed about the fitting basis. Those counts are far below what the previous
+revision of this table reported, 2 against 4 and 12 against 124, because the
+criterion changed with the factorization: a pivoted Cholesky drops an auxiliary
+function when its *pivot* falls below 1e-12 of the largest, where the
+eigendecomposition dropped it on its *eigenvalue*. Those are two different
+truncations of the same metric and they need not agree; what the difference
+costs in energy is the next paragraph. The tensor sizes above are the fitted
+tensor alone; the ``RSS/rank`` column is larger for the reason just given.
 
-**The energies are right.** ``gtfock_df`` and |PSIfour|'s ``MemDFJK`` agree to
-1e-9 Eh on both systems |w---w| -494.053129149 against -494.053129150, and
--993.884434104 against -993.884434105 |w---w| and the ``dE`` column is identical
-across the ``df`` and ``gtfock_df`` rows to the two digits shown, so the
-distributed engine reproduces |PSIfour|'s fitting error rather than adding one
-of its own. Across rank counts the energy moves by 7e-9 Eh on the peptide and
-2.3e-8 on the nanotube, which is reduction order and not a partition-dependent
-result. The exact ``gtfock`` rows carry a ``dE`` three to four orders of
-magnitude smaller because they are not fitted at all; the comparison there is
-against ``direct``'s own integrals, not against a fitting basis.
+**The energies are right, and the two fitted engines no longer agree to
+roundoff.** ``gtfock_df`` and |PSIfour|'s ``MemDFJK`` land -494.053129047
+against -494.053129150 on the peptide and -993.884472871 against -993.884434105
+on the nanotube: 1.0e-7 and 3.9e-5 Eh apart, where the previous revision of this
+table had them agreeing to 1e-9. That gap is the truncation difference above and
+nothing else. GTFock keeps 3014 of the nanotube's 3026 auxiliary functions;
+``DFHelper`` applies a relative eigenvalue floor to the same metric and has no
+reason to keep the same set. On the nanotube GTFock's choice lands 3.9e-5 Eh
+*closer* to ``direct`` than ``MemDFJK`` does, 1.319e-3 against 1.358e-3 of
+fitting error; on the peptide the ordering reverses, by 1e-7. Neither is a claim
+that one criterion is better than the other. The point is that the disagreement
+is a documented property of two truncations rather than an error in the
+distribution, which is what ``test_gtfock_df_truncation_differs_from_dfhelper``
+exists to pin; where the two engines must agree exactly the tests set
+``DF_CONDITION`` to 1e-12, and they do.
+
+Across rank counts the energy does not move at all: the three ``gtfock_df`` rows
+are identical to every digit |PSIfour| prints, on both systems, so nothing here
+is partition-dependent. The exact ``gtfock`` rows carry a ``dE`` three to four
+orders of magnitude smaller because they are not fitted at all; the comparison
+there is against ``direct``'s own integrals, not against a fitting basis.
 
 **Against the arms a user would otherwise reach for**, at equal cores and on
 this machine: on the nanotube ``gtfock_df`` at four ranks finishes the SCF in
-29.7 s against ``df``'s 61.5 s (**2.07x**), exact ``gtfock``'s 67.6 s (2.27x)
-and ``direct``'s 206.2 s (6.94x). On the peptide, 3.5 s against 5.2, 4.8 and
-12.7 s. The one-rank comparison against ``df`` is worth separating out, because
+23.4 s against ``df``'s 62.2 s (**2.66x**), exact ``gtfock``'s 69.0 s (2.95x)
+and ``direct``'s 206.7 s (8.85x). On the peptide, 3.0 s against 5.0, 4.9 and
+12.6 s. The one-rank comparison against ``df`` is worth separating out, because
 it is a different claim: with no distribution at all ``gtfock_df`` is already
-faster than ``MemDFJK`` on the nanotube, 41.6 s against 61.5 s, splitting as
-14.9 against 19.9 s of setup and 23.9 against 38.8 s of J/K, and slightly slower
-on the peptide, 5.5 against 5.2 s. That is a Simint-versus-Libint integral
-comparison and a different contraction schedule, not a statement about
-distribution, and one machine and two systems is not enough to generalise it.
+faster than ``MemDFJK`` on both systems, 34.1 s against 62.2 s on the nanotube
+and 4.7 against 5.0 s on the peptide, splitting on the nanotube as 6.9 against
+20.2 s of setup and 24.4 against 39.2 s of J/K. That is a Simint-versus-Libint
+integral comparison, a different contraction schedule and a different metric
+factorization, not a statement about distribution, and one machine and two
+systems is not enough to generalise it.
 
 **What this does not settle.** The 1555-basis-function system the Phoenix
 sections use was deliberately not run here: its fitted tensor is 8237 auxiliary
-functions over 1.21 M Cartesian pairs, 74 GB in one process, and setup
-transiently holds both the AO-partitioned and the Q-partitioned copy, which is
-too close to this workstation's 188 GB to attempt. Whether the fitted arm's
+functions over 1.21 M Cartesian pairs, 74 GB in one process. One rank now holds
+one copy of that rather than two, which moves it from impossible on this
+workstation's 188 GB to merely unwise, and it was still not attempted. Whether the fitted arm's
 advantage holds at production size is a Phoenix measurement and is not made
 here. Neither is any multi-node point: everything above is one node, so the
 all-to-all in setup never crossed a network, and `Scaling out: one rank per

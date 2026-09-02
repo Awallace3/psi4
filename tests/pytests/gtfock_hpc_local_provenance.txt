@@ -2,40 +2,39 @@ Local fixed-core sweep behind the "Distributed density fitting against
 distributed GTFock" section of doc/sphinxman/source/gtfock.rst.
 Driver: tests/pytests/gtfock_hpc_local.sh (FM_SYSTEM=peptide, then nanotube).
 Collected with tests/pytests/gtfock_hpc_collect.py; per-point records in
-tests/pytests/gtfock_hpc_local_results.{csv,json}.
+tests/pytests/gtfock_hpc_local_results.csv.
 
 ################ peptide ################
 === provenance ===
 host        : cos-4a16505.cos.gatech.edu
-date        : 2026-09-01T14:42:04-04:00
+date        : 2026-09-01T20:26:37-04:00
 cores       : 24 physical, memory 120 GB total to Psi4
 system      : peptide / 6-31+G** / scf
-psi4        : ad9004dfb3 feat(libfock): add GTFockDFJK, a distributed density-fitted J/K
-psi4 dirty  : 9 modified file(s)
+psi4        : 0fad496009 feat(gtfock): carry the DF setup phase breakdown into the benchmark tables
+psi4 dirty  : 0 modified file(s)
 mpirun      : /home/awallace43/miniconda3/envs/p4gtf/bin/mpirun -- mpirun (Open MPI) 5.0.8
 CPU(s):                                  48
 Model name:                              AMD Ryzen Threadripper 3960X 24-Core Processor
 NUMA node(s):                            1
                total        used        free      shared  buff/cache   available
-Mem:             188          22          98           0          66         166
+Mem:             188          23          97           0          66         165
+
 ################ nanotube ################
 === provenance ===
 host        : cos-4a16505.cos.gatech.edu
-date        : 2026-09-01T14:43:09-04:00
+date        : 2026-09-01T20:27:40-04:00
 cores       : 24 physical, memory 120 GB total to Psi4
 system      : nanotube / 6-31+G** / scf
-psi4        : ad9004dfb3 feat(libfock): add GTFockDFJK, a distributed density-fitted J/K
-psi4 dirty  : 9 modified file(s)
+psi4        : 0fad496009 feat(gtfock): carry the DF setup phase breakdown into the benchmark tables
+psi4 dirty  : 0 modified file(s)
 mpirun      : /home/awallace43/miniconda3/envs/p4gtf/bin/mpirun -- mpirun (Open MPI) 5.0.8
 CPU(s):                                  48
 Model name:                              AMD Ryzen Threadripper 3960X 24-Core Processor
 NUMA node(s):                            1
                total        used        free      shared  buff/cache   available
-Mem:             188          22          98           0          66         165
+Mem:             188          23          97           0          66         165
 
 ################ core bindings, mpirun --report-bindings ################
-
-=== provenance ===
 
 === peptide_direct_n1: 1 rank(s) x 24 thread(s), 120 GB each ===
 
@@ -66,8 +65,6 @@ Mem:             188          22          98           0          66         165
     Rank 1 bound to package[0][core:6-11]
     Rank 2 bound to package[0][core:12-17]
     Rank 3 bound to package[0][core:18-23]
-
-=== provenance ===
 
 === nanotube_direct_n1: 1 rank(s) x 24 thread(s), 120 GB each ===
 
