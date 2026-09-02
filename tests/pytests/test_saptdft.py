@@ -1679,6 +1679,25 @@ def test_saptdft_direct_api_normalizes_external_potential_keys():
             },
         )
 
+    clean_wfn_B = psi4.core.Wavefunction.build(mol, "sto-3g")
+    normalized = sapt_proc._normalize_saptdft_external_potentials(
+        {"A": [[1.0, [2.0, 0.0, 0.0]]]},
+        dimer_wfn,
+        wfn_A,
+        clean_wfn_B,
+    )
+    assert set(normalized) == {"A"}
+
+    with pytest.raises(
+        psi4.ValidationError, match="aggregate potential carried by the monomer B"
+    ):
+        sapt_proc._normalize_saptdft_external_potentials(
+            {"A": [[1.0, [2.0, 0.0, 0.0]]]},
+            dimer_wfn,
+            wfn_A,
+            wfn_B,
+        )
+
     dimer_wfn.set_external_potential(psi4.core.ExternalPotential())
     psi4.set_options({"sapt_dft_do_fsapt": "FISAPT"})
     try:
@@ -1695,6 +1714,7 @@ def test_saptdft_direct_api_normalizes_external_potential_keys():
         psi4.set_options({"sapt_dft_do_fsapt": "NONE"})
 
     dimer_wfn.set_external_potential(dimer_external)
+    wfn_B.set_external_potential(psi4.core.ExternalPotential())
     stale_b = psi4.core.ExternalPotential()
     stale_b.addCharge(-0.25, 3.5, 0.0, 0.0)
     dimer_wfn.set_potential_variable("B", stale_b)

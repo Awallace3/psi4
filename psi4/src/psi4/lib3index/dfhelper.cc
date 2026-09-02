@@ -2384,6 +2384,7 @@ void DFHelper::fill_tensor(std::string name, double* b, std::vector<size_t> a1, 
 
 // Fill using a pre-allocated SharedMatrix
 void DFHelper::fill_tensor(std::string name, SharedMatrix M) {
+    check_file_key(name);
     std::string filename = std::get<1>(files_[name]);
     std::tuple<size_t, size_t, size_t> sizes;
     sizes = (tsizes_.find(filename) != tsizes_.end() ? tsizes_[filename] : sizes_[filename]);
@@ -2391,6 +2392,7 @@ void DFHelper::fill_tensor(std::string name, SharedMatrix M) {
     fill_tensor(name, M, {0, std::get<0>(sizes)}, {0, std::get<1>(sizes)}, {0, std::get<2>(sizes)});
 }
 void DFHelper::fill_tensor(std::string name, SharedMatrix M, std::vector<size_t> a1) {
+    check_file_key(name);
     std::string filename = std::get<1>(files_[name]);
     std::tuple<size_t, size_t, size_t> sizes;
     sizes = (tsizes_.find(filename) != tsizes_.end() ? tsizes_[filename] : sizes_[filename]);
@@ -2398,6 +2400,7 @@ void DFHelper::fill_tensor(std::string name, SharedMatrix M, std::vector<size_t>
     fill_tensor(name, M, a1, {0, std::get<1>(sizes)}, {0, std::get<2>(sizes)});
 }
 void DFHelper::fill_tensor(std::string name, SharedMatrix M, std::vector<size_t> a1, std::vector<size_t> a2) {
+    check_file_key(name);
     std::string filename = std::get<1>(files_[name]);
     std::tuple<size_t, size_t, size_t> sizes;
     sizes = (tsizes_.find(filename) != tsizes_.end() ? tsizes_[filename] : sizes_[filename]);
@@ -2406,6 +2409,7 @@ void DFHelper::fill_tensor(std::string name, SharedMatrix M, std::vector<size_t>
 }
 void DFHelper::fill_tensor(std::string name, SharedMatrix M, std::vector<size_t> t0, std::vector<size_t> t1,
                            std::vector<size_t> t2) {
+    check_file_key(name);
     std::string filename = std::get<1>(files_[name]);
     // has this integral been transposed?
     std::tuple<size_t, size_t, size_t> sizes;

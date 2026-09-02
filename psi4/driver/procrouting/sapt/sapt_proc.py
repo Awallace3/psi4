@@ -92,18 +92,18 @@ def _normalize_saptdft_external_potentials(
     required_wavefunctions = {
         "dimer": (dimer_wfn, normalized if validate_dimer else None)
     }
-    if "A" in normalized or "C" in normalized:
-        required_wavefunctions["monomer A"] = (
-            wfn_A,
-            {key: normalized[key] for key in ("A", "C") if key in normalized},
-        )
-    if "B" in normalized or "C" in normalized:
-        required_wavefunctions["monomer B"] = (
-            wfn_B,
-            {key: normalized[key] for key in ("B", "C") if key in normalized},
-        )
+    required_wavefunctions["monomer A"] = (
+        wfn_A,
+        {key: normalized[key] for key in ("A", "C") if key in normalized},
+    )
+    required_wavefunctions["monomer B"] = (
+        wfn_B,
+        {key: normalized[key] for key in ("B", "C") if key in normalized},
+    )
     for label, (wfn, expected_specification) in required_wavefunctions.items():
         if wfn.external_pot() is None:
+            if expected_specification == {}:
+                continue
             raise ValidationError(
                 f"sapt_dft() external_potentials require the {label} wavefunction to carry its external potential."
             )

@@ -112,6 +112,8 @@ def test_dfhelper_write_disk_tensor_rejects_invalid_ranges():
         helper.write_disk_tensor(
             "missing", psi4.core.Matrix(1, 1), [], [0, 1], [0, 1]
         )
+    with pytest.raises(RuntimeError, match="missing not found"):
+        helper.fill_tensor("missing", psi4.core.Matrix(1, 1))
 
 
 @pytest.mark.fsapt
