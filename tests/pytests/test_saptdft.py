@@ -1046,7 +1046,19 @@ no_com
         assert np.allclose(
             saptdft_wfn.variable(label), np.asarray([row[1] for row in potential])
         )
-        assert (tmp_path / f"Extern_{fragment}.xyz").is_file()
+        external_xyz = tmp_path / f"Extern_{fragment}.xyz"
+        assert external_xyz.is_file()
+        serialized_coordinates = np.asarray(
+            [
+                [float(value) for value in line.split()[1:4]]
+                for line in external_xyz.read_text().splitlines()[2:]
+            ]
+        )
+        assert np.allclose(
+            serialized_coordinates,
+            np.asarray([row[1] for row in potential]) * psi4.constants.bohr2angstroms,
+            atol=5.0e-7,
+        )
     assert saptdft_wfn.has_variable("FSAPT_INDAB_AB")
 
     calculated_sapthf_energies = {k1: psi4.core.variable(k2) for k1, k2 in key_labels}
@@ -1575,7 +1587,9 @@ def test_saptdft_direct_api_reports_all_missing_cphf_terms():
     )
     wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
     with pytest.raises(psi4.ValidationError) as exc_info:
-        sapt_proc.sapt_dft(wfn, wfn, wfn, data={"Ind20,r": 0.0})
+        sapt_proc.sapt_dft(
+            wfn, wfn, wfn, data={"Ind20,r": 0.0}, external_potentials={}
+        )
 
     message = str(exc_info.value)
     for key in [
@@ -1586,6 +1600,52 @@ def test_saptdft_direct_api_reports_all_missing_cphf_terms():
         "Exch-Ind20,r (A->B)",
     ]:
         assert key in message
+
+
+@pytest.mark.saptdft
+def test_saptdft_direct_api_normalizes_external_potential_keys():
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ne 1 4.5
+  units bohr
+    """)
+    psi4.set_options({"basis": "sto-3g", "sapt_dft_induction_type": "CPKS"})
+    dimer_wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
+    wfn_A = psi4.core.Wavefunction.build(mol, "sto-3g")
+    wfn_B = psi4.core.Wavefunction.build(mol, "sto-3g")
+    dimer_external = psi4.core.ExternalPotential()
+    dimer_external.addCharge(1.0, 2.0, 0.0, 0.0)
+    dimer_wfn.set_external_potential(dimer_external)
+
+    with pytest.raises(psi4.ValidationError, match="monomer A wavefunction"):
+        sapt_proc.sapt_dft(
+            dimer_wfn,
+            wfn_A,
+            wfn_B,
+            external_potentials={"a": [[1.0, [2.0, 0.0, 0.0]]]},
+        )
+
+
+@pytest.mark.saptdft
+def test_saptdft_rejects_ssapt_scaling_before_computation():
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ne 1 4.5
+  units bohr
+    """)
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "sapt_dft_do_fsapt": "SAPTDFT",
+            "sapt_dft_induction_type": "CPKS",
+            "fisapt__ssapt0_scale": True,
+        }
+    )
+    wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
+    with pytest.raises(psi4.ValidationError, match="does not support FISAPT__SSAPT0_SCALE"):
+        sapt_proc.sapt_dft(wfn, wfn, wfn)
 
 
 @pytest.mark.saptdft

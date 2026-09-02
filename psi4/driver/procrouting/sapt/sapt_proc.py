@@ -71,6 +71,35 @@ except ImportError:
 __all__ = ["run_sapt_dft", "sapt_dft", "run_sf_sapt"]
 
 
+def _validate_saptdft_fsapt_options(induction_type, do_fsapt):
+    if induction_type == "NONE" and do_fsapt:
+        raise ValidationError("F-SAPT requires induction; SAPT_DFT_INDUCTION_TYPE=NONE is unavailable.")
+    if induction_type == "CPHF" and do_fsapt:
+        raise ValidationError("F-SAPT requires SAPT(DFT) fragment induction; SAPT_DFT_INDUCTION_TYPE=CPHF is unavailable.")
+    if do_fsapt and core.get_option("FISAPT", "SSAPT0_SCALE"):
+        raise ValidationError("SAPT(DFT) F-SAPT does not support FISAPT__SSAPT0_SCALE=true.")
+
+
+def _normalize_saptdft_external_potentials(external_potentials, dimer_wfn, wfn_A, wfn_B):
+    if external_potentials is None:
+        return None
+
+    normalized = validate_external_potential(external_potentials)
+    if not normalized:
+        return None
+    required_wavefunctions = [("dimer", dimer_wfn)]
+    if "A" in normalized:
+        required_wavefunctions.append(("monomer A", wfn_A))
+    if "B" in normalized:
+        required_wavefunctions.append(("monomer B", wfn_B))
+    for label, wfn in required_wavefunctions:
+        if wfn.external_pot() is None:
+            raise ValidationError(
+                f"sapt_dft() external_potentials require the {label} wavefunction to carry its external potential."
+            )
+    return normalized
+
+
 def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     """Run SAPT(DFT) while restoring all driver-managed options and timers."""
     optstash = p4util.OptionsState(
@@ -115,10 +144,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
     do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() != "NONE"
-    if induction_type == "NONE" and do_fsapt:
-        raise ValidationError("F-SAPT requires induction; SAPT_DFT_INDUCTION_TYPE=NONE is unavailable.")
-    if induction_type == "CPHF" and do_fsapt:
-        raise ValidationError("F-SAPT requires SAPT(DFT) fragment induction; SAPT_DFT_INDUCTION_TYPE=CPHF is unavailable.")
+    _validate_saptdft_fsapt_options(induction_type, do_fsapt)
 
     use_einsums = core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS")
 
@@ -1204,10 +1230,10 @@ def sapt_dft(
 
     induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
     do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() != "NONE"
-    if induction_type == "NONE" and do_fsapt:
-        raise ValidationError("F-SAPT requires induction; SAPT_DFT_INDUCTION_TYPE=NONE is unavailable.")
-    if induction_type == "CPHF" and do_fsapt:
-        raise ValidationError("F-SAPT requires SAPT(DFT) fragment induction; SAPT_DFT_INDUCTION_TYPE=CPHF is unavailable.")
+    _validate_saptdft_fsapt_options(induction_type, do_fsapt)
+    external_potentials = _normalize_saptdft_external_potentials(
+        external_potentials, dimer_wfn, wfn_A, wfn_B
+    )
     cphf_induction_keys = [
         "Ind20,r",
         "Exch-Ind20,r",

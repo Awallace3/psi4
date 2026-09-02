@@ -25,7 +25,7 @@ def _outfile_tail(offset):
 
 
 def test_fisapt_public_helper_validation():
-    mol = psi4.geometry("He\nsymmetry c1")
+    mol = psi4.geometry("He\n--\nHe 1 3.0\nsymmetry c1")
     basis = psi4.core.BasisSet.build(mol, "BASIS", "sto-3g")
     wfn = psi4.core.Wavefunction.build(mol, basis)
 
@@ -39,7 +39,24 @@ def test_fisapt_public_helper_validation():
     wfn.set_potential_variable("A", external)
     with pytest.raises(RuntimeError, match="requires matrix 'VA'"):
         psi4.core.sapt_nuclear_external_potential_python(
-            wfn, {"Enucs": psi4.core.Matrix(1, 1)}, psi4.core.get_options()
+            wfn, {"Enucs": psi4.core.Matrix(2, 2)}, psi4.core.get_options()
+        )
+
+    with pytest.raises(RuntimeError, match="matrix 'Enucs' is undersized"):
+        psi4.core.sapt_nuclear_external_potential_python(
+            wfn,
+            {
+                "Enucs": psi4.core.Matrix(1, 1),
+                "VA": psi4.core.Matrix(basis.nbf(), basis.nbf()),
+            },
+            psi4.core.get_options(),
+        )
+
+    with pytest.raises(RuntimeError, match="matrix 'VA' is undersized"):
+        psi4.core.sapt_nuclear_external_potential_python(
+            wfn,
+            {"Enucs": psi4.core.Matrix(2, 2), "VA": psi4.core.Matrix(1, 1)},
+            psi4.core.get_options(),
         )
 
 

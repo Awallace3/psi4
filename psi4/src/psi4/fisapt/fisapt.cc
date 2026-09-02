@@ -8022,16 +8022,31 @@ double sapt_nuclear_external_potential_matrix(std::shared_ptr<Wavefunction> refe
         return matrix->second;
     };
 
-    auto Enucs = require_matrix("Enucs");
-    for (const auto& label : {std::string("A"), std::string("B")}) {
-        if (reference_->has_potential_variable(label)) {
-            require_matrix("V" + label);
+    auto require_dimensions = [](const std::shared_ptr<Matrix>& matrix, int rows, int columns,
+                                 const std::string& key) {
+        if (matrix->nrow() < rows || matrix->ncol() < columns) {
+            throw PSIEXCEPTION("SAPT nuclear/external potential matrix '" + key + "' is undersized.");
         }
-    }
-    double** Enucsp = Enucs->pointer();
+    };
 
     std::shared_ptr<BasisSet> primary_ = reference_->basisset();
     std::shared_ptr<Molecule> mol = reference_->molecule();
+    int required_dimension = mol->nfragments();
+    if (reference_->has_potential_variable("B") && required_dimension < 2) required_dimension = 2;
+    if (reference_->has_potential_variable("C") && required_dimension < 3) required_dimension = 3;
+    if (required_dimension > 3) {
+        throw PSIEXCEPTION("SAPT nuclear/external potential supports at most three fragments.");
+    }
+
+    auto Enucs = require_matrix("Enucs");
+    require_dimensions(Enucs, required_dimension, required_dimension, "Enucs");
+    for (const auto& label : {std::string("A"), std::string("B")}) {
+        if (reference_->has_potential_variable(label)) {
+            auto potential_matrix = require_matrix("V" + label);
+            require_dimensions(potential_matrix, reference_->nso(), reference_->nso(), "V" + label);
+        }
+    }
+    double** Enucsp = Enucs->pointer();
     std::vector<std::shared_ptr<ExternalPotential>> pot_list;
     std::vector<int> pot_ids;
     double Etot = 0.0;

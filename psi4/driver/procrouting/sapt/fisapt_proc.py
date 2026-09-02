@@ -32,6 +32,8 @@ import numpy as np
 
 from psi4 import core
 
+from ...constants import constants
+
 
 def fisapt_compute_energy(self, jk_obj, *, external_potentials=None):
     """Computes the FSAPT energy. FISAPT::compute_energy"""
@@ -167,13 +169,16 @@ def fisapt_fdrop(self, external_potentials=None):
             if not potential_lst:
                 continue
 
-            xyz = f"{len(potential_lst)}\n\n"
-            xyz += "".join("Ch %f %f %f\n" % tuple(xyz_row) for xyz_row in potential_lst)
             potential_array = np.asarray(potential_lst)
+            potential_array_angstrom = potential_array * constants.bohr2angstroms
+            external_xyz = f"{len(potential_lst)}\n\n"
+            external_xyz += "".join(
+                "Ch %f %f %f\n" % tuple(xyz_row) for xyz_row in potential_array_angstrom
+            )
             core.set_variable(f"FSAPT_EXTERN_POTENTIAL_{frag}", potential_array)
             if write_output_files:
                 with open(filepath + os.sep + f"Extern_{frag}.xyz", "w") as fh:
-                    fh.write(xyz)
+                    fh.write(external_xyz)
 
     vectors = self.vectors()
     matrices = self.matrices()
