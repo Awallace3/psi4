@@ -1643,30 +1643,33 @@ the highest-numbered rank has the smallest ``jk_skew`` at two, three and four
 ranks alike, meaning the others wait for it. What makes it late is upstream of
 J/K, not inside it.
 
-**Four nodes is nonetheless not reliably faster than three.** Five independent
+**Four nodes is nonetheless not reliably faster than three.** Six independent
 four-node allocations ran the same nanotube sweep:
 
-=====  =====  =====  =====  =====  =====
-ranks  run A  run B  run C  run D  run E
-=====  =====  =====  =====  =====  =====
-1      15.9   15.9   15.9   21.1   15.8
-2      8.4    22.6   8.4    8.2    8.4
-3      6.1    19.1   5.7    5.7    5.9
-4      8.8    12.4   4.5    10.3   4.3
-=====  =====  =====  =====  =====  =====
+=====  =====  =====  =====  =====  =====  =====
+ranks  run A  run B  run C  run D  run E  run F
+=====  =====  =====  =====  =====  =====  =====
+1      15.9   15.9   15.9   21.1   15.8   15.9
+2      8.4    22.6   8.4    8.2    8.4    8.2
+3      6.1    19.1   5.7    5.7    5.9    5.8
+4      8.8    12.4   4.5    10.3   4.3    4.5
+=====  =====  =====  =====  =====  =====  =====
 
-J/K seconds; run E is the table above. Two and three ranks reproduce well
-|w---w| 8.2 to 8.4 s and 5.7 to 6.1 s in four of the five |w---w| but four ranks
-reads 4.3, 4.5, 8.8, 10.3 and 12.4, and in three of the five it is *slower than
-three ranks*. So the 1.86x above is reproducible but not dependable, and a user
-should expect the three-node figure. The phase table says what the bad runs are
-not: with ``jk_comm`` at 21 ms and ``jk_local`` dividing linearly, neither the
-fabric nor the algorithm has the headroom to cost eight seconds, so the variance
-is in the allocations. Run B is inflated at every multi-rank point while its
-``df`` and ``direct`` references match the other four to within 3%, so its
-hardware was comparable and whatever went wrong was specific to running four
-communicating ranks on it. The engine's own arithmetic is meanwhile
-deterministic: one-rank J/K is 15.8 or 15.9 s in four of the five runs.
+J/K seconds; run E is the table above, and run F reproduced that whole table
+independently |w---w| every rank count within 0.3 s of its tabled J/K,
+``jk_local`` dividing 3.93x against the tabled 3.95x, the same energies to nine
+digits |w---w| so those figures are not a lucky draw. Two and three ranks reproduce well |w---w| 8.2 to 8.4 s and 5.7 to
+6.1 s in five of the six |w---w| but four ranks reads 4.3, 4.5, 4.5, 8.8, 10.3
+and 12.4, and in three of the six it is *slower than three ranks*. So the 1.86x
+above is reproducible but not dependable, and a user should expect the three-node
+figure. The phase table says what the bad runs are not: with ``jk_comm`` at 21 ms
+and ``jk_local`` dividing linearly, neither the fabric nor the algorithm has the
+headroom to cost eight seconds, so the variance is in the allocations. Run B is
+inflated at every multi-rank point while its ``df`` and ``direct`` references
+match the other five to within 3%, so its hardware was comparable and whatever
+went wrong was specific to running four communicating ranks on it. The engine's
+own arithmetic is meanwhile deterministic: one-rank J/K is 15.8 or 15.9 s in five
+of the six runs.
 
 **Per-rank memory is the reliable win, and it is monotone in every run.** The
 nanotube holds 4963 MB in one process against ``MemDFJK``'s 10348, already
@@ -1748,31 +1751,61 @@ and it costs 18 ms. On this evidence the blocked rebuild that would halve the
 multi-rank memory peak is worth doing: it trades one large all-to-all for many
 small ones, and the large one is not what is expensive.
 
-The same control on the nanotube, where the all-to-all moves 749 MB per rank
-instead of 70, **did not measure anything and is not reported**. Its ``factor``
-read 1.32x and the non-J/K part of its SCF 3.2x, on identical cores of the same
-physical node, so placement was not what its two halves differed in: the packed
-half necessarily runs on a quarter of the per-rank memory budget, four ranks
-sharing one node's RAM, and at nanotube size that budget changes what |PSIfour|
-does outside J/K. The job now gives both halves the packed budget. It is worth
-recording what the confounded run appeared to show |w---w| ``redist`` 0.85x, the
-all-to-all *faster* over InfiniBand than through shared memory |w---w| because
-that is plausible on its face, four ranks on one node contending for the same
-memory controllers while four nodes each have their own and an HCA to do the
-copy, and because an earlier revision of this job published a claim in that
-direction that turned out to be two runs that were both spread. A control that
-fails its own validators is not evidence for a conclusion merely because the
-conclusion is believable.
+**The same control on the nanotube moves 749 MB per rank and still does not pay
+for it.** An earlier revision of this section reported that control as measuring
+nothing, on the grounds that its packed half necessarily ran on a quarter of the
+per-rank memory budget and that at nanotube size the budget changes what
+|PSIfour| does outside J/K. The job now gives both halves the packed budget, and
+that diagnosis was wrong: the non-J/K part of the SCF still runs 3.2x slower in
+the spread half, the same as before, and peak RSS was already identical in the
+two halves of both runs to within 0.7%, so the budget was never what they
+differed in. ``factor`` still fails as well, at 1.19x against an ``int3c`` floor
+of 1.06x, and on the one physical node the two halves share it reads 0.610 s
+spread against 0.506 s packed |w---w| the same six cores of the same machine,
+21% apart on a dense Cholesky that communicates nothing.
 
-**What this does not settle.** The 749 MB per rank all-to-all, per the paragraph
-above. Why three of five four-node allocations lose to their own three-node
-point, which the phase clocks narrow to the allocations without identifying what
-about them. Anything at production size: the 1555-basis-function system was not
-run here either. And ``rest`` |w---w| the part of the SCF outside J/K and setup
-|w---w| is flat at 3.5 to 3.8 s across every rank count on the nanotube and is
-replicated on every rank, so it is a floor no amount of distribution moves, and
-it is already 37% of the four-node SCF. Amdahl's law reaches this engine through
-``rest`` long before the all-to-all matters.
+That leaves a bound rather than a measurement, and the bound points the useful
+way, because both unexplained divergences make the spread half *slower* at work
+that never touches the network. Four runs of this control exist:
+
+========  ========  ======  ======  ======  ======  ======
+job       system    factor  fit     int3c   metric  redist
+========  ========  ======  ======  ======  ======  ======
+12712724  peptide   1.04x   0.99x   1.13x   2.22x   1.08x
+12714112  peptide   1.34x   0.99x   1.37x   5.46x   1.35x
+12714113  nanotube  1.28x   1.03x   1.10x   2.10x   0.91x
+12735820  nanotube  1.19x   0.99x   1.06x   3.68x   0.76x
+========  ========  ======  ======  ======  ======  ======
+
+Spread over four nodes divided by packed on one, four ranks of six cores in
+every case, mean over the ranks. ``redist`` carries the entire all-to-all and is
+24% *faster* spread than packed on the nanotube, and was 9% faster in the run
+before it, while ``metric`` |w---w| an ``Allreduce`` of 73.3 MB |w---w| pays
+3.7x for the fabric. The absolute ratios plainly do not reproduce; the peptide
+control ran twice and its spread half was slower across the board the second
+time. What reproduces is each run against its own non-communicating phase:
+``redist`` sits at 0.72 to 0.98 of the ``int3c`` ratio in all four controls. So
+crossing four nodes costs this redistribution no more than shuffling the same
+bytes through one node's shared memory, which is unsurprising once stated
+|w---w| four ranks on one node contend for one memory system, while four nodes
+have four of them and an HCA each to do the copy. That also carries the
+peptide's verdict on the blocked rebuild up to the larger tensor: at eleven
+times the payload, one large all-to-all is still not what setup pays for.
+
+**What this does not settle.** Why the two halves of the locality control
+disagree by 3.2x outside J/K on the nanotube, on matched cores and now a matched
+memory budget. The main sweep rules out the spreading itself: ``rest`` is 3.45 s
+with one rank on one node and 3.48 s with four ranks on four, so having remote
+peers does not touch it at 24 threads, and the divergence shows up only in the
+control's six bound cores. Why three of six four-node allocations lose to their
+own three-node point, which the phase clocks narrow to the allocations without
+identifying what about them. Anything at production size: the
+1555-basis-function system was not run here either. And ``rest`` |w---w| the
+part of the SCF outside J/K and setup |w---w| is flat at 3.5 to 3.8 s across
+every rank count on the nanotube and is replicated on every rank, so it is a
+floor no amount of distribution moves, and it is already 37% of the four-node
+SCF. Amdahl's law reaches this engine through ``rest`` long before the
+all-to-all matters.
 
 .. _`cmake:gtfock`:
 
