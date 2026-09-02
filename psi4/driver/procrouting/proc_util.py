@@ -304,6 +304,23 @@ def validate_sapt_empirical_dispersion(name):
     return True
 
 
+def warn_qualitative_fsapt_empirical_dispersion():
+    """Print the caveat for a qualitative F-SAPT empirical-dispersion pair matrix.
+
+    The atom-pair breakdown always comes from the dimer -D3/-D4 calculation, so
+    for the supermolecular and delta-DFT flavors it does not sum to the scalar
+    dispersion energy that the run reports.
+    """
+
+    core.print_out(
+        "\n    Warning: the empirical F-SAPT dispersion breakdown uses the "
+        "intermolecular atom-pair contributions from the dimer calculation. "
+        "For supermolecular and delta-DFT D3/D4 methods, this qualitative "
+        "breakdown does not in general sum to the scalar dispersion or total "
+        "interaction energy; the reported scalar energies remain authoritative.\n\n"
+    )
+
+
 def sapt_empirical_dispersion(name, dimer_wfn, **kwargs):
     from .sapt import fisapt_proc
     from .empirical_disp import edisp_interaction_energy
@@ -321,7 +338,8 @@ def sapt_empirical_dispersion(name, dimer_wfn, **kwargs):
 
     save_pair = (saptd_name == "FISAPT0")
 
-    if validate_sapt_empirical_dispersion(name):
+    intermolecular_pairwise = validate_sapt_empirical_dispersion(name)
+    if intermolecular_pairwise:
         core.print_out("   | Intermolecular Pairwise Dispersion Interaction Energy E_IE = sum_AB 2 E_AB |\n")
         core.print_out(f"   | -D4 parameters fixed to {SAPT_D4_INTERMOLECULAR_PARAM_NAME}"
                        f" ({SAPT_D4_INTERMOLECULAR_LEVEL}) |\n")
@@ -389,6 +407,8 @@ def sapt_empirical_dispersion(name, dimer_wfn, **kwargs):
         # fisapt-d was designed with classic dftd3 pairwise that was too large by a factor of 2 (satisfied sum(pairwise) = 2 * two-body-dispersion-energy)
         # by QCEngine v0.26.0, dftd3 interface corrected to match s-dftd3 and dftd4, so file dropped here changes, and fsapt.py script compensates
         core.print_out("\n  Warning: Use the `Empirical_Disp.dat` file only with `fsapt.py` from Psi4 v1.7.0 or later.\n")
+        if not intermolecular_pairwise:
+            warn_qualitative_fsapt_empirical_dispersion()
         pw_disp.name = 'Empirical_Disp'
         core.set_variable("FSAPT_" + pw_disp.name.upper(), pw_disp)
         if core.get_option("FISAPT", "FISAPT_DO_FSAPT"):

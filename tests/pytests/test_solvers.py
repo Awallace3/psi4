@@ -20,12 +20,8 @@ def test_cg_solver_ein_stops_nan_rhs_independently(monkeypatch):
     )
     monkeypatch.setitem(sys.modules, "einsums", SimpleNamespace(core=fake_core))
 
-    class CloneArray(np.ndarray):
-        def clone(self):
-            return self.copy()
-
     rhs = [np.array([1.0]), np.array([0.0])]
-    guess = [np.zeros(1).view(CloneArray), np.zeros(1).view(CloneArray)]
+    guess = [np.zeros(1), np.zeros(1)]
 
     def hx_function(vectors, active_mask):
         return [vectors[0].copy(), np.zeros_like(vectors[1])]

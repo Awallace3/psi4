@@ -266,7 +266,7 @@ def cg_solver_ein(
     else:
         if len(guess) != len(rhs_vec):
             raise ValidationError("CG Solver: Guess vector length does not match RHS vector length.")
-        x_vec = [x.clone() for x in guess]
+        x_vec = [x.copy() for x in guess]
 
     Ax_vec = hx_function(x_vec, active_mask)
 

@@ -139,7 +139,6 @@ units bohr
         "SAPT_DFT_DO_DDFT",
         "SAPT_DFT_D3_IE",
         "SAPT_DFT_D4_IE",
-        "SAPT_DFT_D_TYPE",
     )
     before = {
         option: (
@@ -1358,7 +1357,7 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
     assert "Dimer for Localization" not in output
     assert ("     HF   (Dimer)\n" in output) is (delta_hf or mode == "CPHF")
     assert ("SAPT(DFT): delta HF Dimer" in output) is delta_hf
-    elst_banner = "==> E10 Electrostatics <==" if use_einsums else "==> E10 Electostatics <=="
+    elst_banner = "==> E10 Electrostatics <=="
     assert output.count(elst_banner) == (1 if mode == "NONE" else 2)
     if mode == "CPHF":
         assert "Induction (SAPT0)" in output

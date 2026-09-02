@@ -9,6 +9,20 @@ from pprint import pprint as pp
 
 pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick]
 
+_OUTFILE = "pytest_output.dat"
+
+
+def _outfile_offset():
+    psi4.core.flush_outfile()
+    return os.path.getsize(_OUTFILE) if os.path.exists(_OUTFILE) else 0
+
+
+def _outfile_tail(offset):
+    psi4.core.flush_outfile()
+    with open(_OUTFILE) as fh:
+        fh.seek(offset)
+        return fh.read()
+
 
 @pytest.mark.fsapt
 def test_fsapt_psivars_dict():
@@ -1046,10 +1060,14 @@ no_com"""
         "Total": -0.033049949574937065,
     }
 
+    caveat = "this qualitative breakdown does not in general sum to the scalar dispersion"
+
     try:
+        offset = _outfile_offset()
         psi4.energy("fisapt0-d4(i)", molecule=mol)
         d4_disp = variable("FISAPT0-D DISP ENERGY") * au2kcal
         assert compare_values(ref_d4mi, d4_disp, 5, "Ethene-Ethyne -d4")
+        assert caveat not in _outfile_tail(offset)
 
         pw_disp_i = variable("FSAPT_EMPIRICAL_DISP").to_array()
         assert compare_values(variable("FISAPT0-D DISP ENERGY"), pw_disp_i.sum(), 8,
@@ -1057,9 +1075,13 @@ no_com"""
         assert compare_values(0.0, pw_disp_i[:5, :5].sum() + pw_disp_i[5:, 5:].sum(), 10,
                               "D4(I) pairwise dispersion carries no intramonomer terms")
 
+        offset = _outfile_offset()
         psi4.energy("fisapt0-d4(s)", molecule=mol)
         d4_disp = variable("FISAPT0-D DISP ENERGY") * au2kcal
         assert compare_values(ref_d4, d4_disp, 5, "Ethene-Ethyne -d4")
+        pw_disp_s = variable("FSAPT_EMPIRICAL_DISP").to_array()
+        assert abs(variable("FISAPT0-D DISP ENERGY") - pw_disp_s.sum()) > 1.0e-6
+        assert caveat in _outfile_tail(offset)
         psi4.energy("fisapt0-d4bj2b(s)", molecule=mol)
         d4m_disp = variable("FISAPT0-D DISP ENERGY") * au2kcal
         assert compare_values(ref_d4m, d4m_disp, 5, "Ethene-Ethyne -d4M")

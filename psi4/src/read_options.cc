@@ -1208,14 +1208,6 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("SAPT_DFT_D3_IE", false);
         /*- Compute -D4 dispersion in SAPT(DFT) for SAPT(DFT)-D4? !expert -*/
         options.add_bool("SAPT_DFT_D4_IE", false);
-        /*- Specify whether the -D3/-D4 correction for SAPT(DFT)-D3/-D4 is
-         computed intermolecularly (I) or from the supermolecular dimer-minus-
-         monomers difference (S). SAPT(DFT)-D4 generally performs better with
-         respect to high-level SAPT dispersion when computed intermolecularly
-         as SAPT(DFT)-D4(I). For SAPT(DFT)-D3, either -D3(I) or -D3(S) can
-         reliably be used. SAPT(DFT) sets this option from the method name.
-         !expert -*/
-        options.add_str("SAPT_DFT_D_TYPE", "INTERMOLECULAR", "INTERMOLECULAR SUPERMOLECULAR GD3_SUPERMOLECULAR GD4_SUPERMOLECULAR");
         /*- Scheme for approximating exchange-dispersion for SAPT-DFT.
         Previous to Nov 2022, default was ``FIXED`` with Hesselmann value.
         ``NONE`` Use unscaled ``Exch-Disp2,u`` .

@@ -276,7 +276,7 @@ def electrostatics(cache, do_print=True):
     Computes the E10 electrostatics from a build_sapt_jk_cache datacache.
     """
     if do_print:
-        core.print_out("\n  ==> E10 Electostatics <== \n\n")
+        core.print_out("\n  ==> E10 Electrostatics <== \n\n")
 
     # ELST
     Elst10 = 0.0

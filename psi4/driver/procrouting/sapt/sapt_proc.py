@@ -83,7 +83,6 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         ["SAPT", "SAPT_DFT_DO_DDFT"],
         ["SAPT", "SAPT_DFT_D3_IE"],
         ["SAPT", "SAPT_DFT_D4_IE"],
-        ["SAPT", "SAPT_DFT_D_TYPE"],
     )
     core.timer_on("SAPT(DFT) Energy")
     try:
@@ -187,7 +186,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
     do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
     do_disp = core.get_option("SAPT", "SAPT_DFT_DO_DISP")
-    dispersion_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
+    dispersion_type = None
     sapt_dft_D4_IE = False
     sapt_dft_D3_IE = False
     # Need to identify which flavor of -D we are using
@@ -237,9 +236,10 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             )
         else:
             raise ValueError(
-                "SAPT(DFT)-D4 must be specified as 'SAPT(DFT)-D4(S)' or "
-                "'SAPT(DFT)-D4(I)' through setting SAPT_DFT_D_TYPE to "
-                "'supermolecular' or 'intermolecular'."
+                "SAPT(DFT)-D4 flavors are selected by method name: use "
+                "'SAPT(DFT)-D4(I)' for the intermolecular -D4, 'SAPT(DFT)-D4(S)' "
+                "for the supermolecular -D4, or 'DFT-D4(SAPT)' for the "
+                "delta-DFT+D4 correction."
             )
     elif "-D3" in name.upper():
         if "-D3(S)" in name.upper():
@@ -287,14 +287,22 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             )
         else:
             raise ValueError(
-                "SAPT(DFT)-D3 must be specified as 'SAPT(DFT)-D3(S)' or "
-                "'SAPT(DFT)-D3(I)' through setting SAPT_DFT_D_TYPE to "
-                "'supermolecular' or 'intermolecular'."
+                "SAPT(DFT)-D3 flavors are selected by method name: use "
+                "'SAPT(DFT)-D3(I)' for the intermolecular -D3, 'SAPT(DFT)-D3(S)' "
+                "for the supermolecular -D3, or 'DFT-D3(SAPT)' for the "
+                "delta-DFT+D3 correction."
             )
         # # Re-prepare options after local option changes
         # core.prepare_options_for_module("SAPT")
 
     do_dft = sapt_dft_functional != "HF"
+
+    if (
+        do_fsapt
+        and (sapt_dft_D4_IE or sapt_dft_D3_IE)
+        and (do_delta_dft or dispersion_type != "intermolecular")
+    ):
+        proc_util.warn_qualitative_fsapt_empirical_dispersion()
 
     # CPHF needs the HF segment for the SAPT0 induction terms, even without delta HF.
     run_hf_segment = do_delta_hf or (induction_type == "CPHF" and do_dft)
