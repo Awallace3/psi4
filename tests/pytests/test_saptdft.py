@@ -674,8 +674,10 @@ no_com
         molecule=mol,
         return_wfn=True,
     )
+    if energy_method == "sapt(dft)":
+        for fragment in external_pot_keys:
+            assert wfn.has_potential_variable(fragment)
     if test_id == "c" and energy_method == "sapt(dft)":
-        assert wfn.has_potential_variable("C")
         assert abs(wfn.external_pot().computeNuclearEnergy(mol)) < 1.0e-14
         assert abs(wfn.potential_variable("C").computeNuclearEnergy(mol)) > 1.0e-6
 

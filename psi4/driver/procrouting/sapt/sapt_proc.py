@@ -582,8 +582,13 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             if do_ext_potential:
                 kwargs["external_potentials"] = {}
                 hf_wfn_dimer.del_potential_variable("C")
+                dimer_pair_potentials = {
+                    fragment: potential
+                    for fragment, potential in (("A", ext_pot_A), ("B", ext_pot_B))
+                    if potential is not None
+                }
                 _set_external_potentials_to_wavefunction(
-                    construct_external_potential_in_field_C([ext_pot_A, ext_pot_B]),
+                    dimer_pair_potentials,
                     hf_wfn_dimer,
                 )
                 if ext_pot_C is not None:
@@ -1680,6 +1685,7 @@ def sapt_dft(
             dimer_wfn,
             external_potentials=external_potentials,
             sapt_type="SAPT(DFT)",
+            do_disp=do_disp,
         )
     return data
 

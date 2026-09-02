@@ -8039,6 +8039,9 @@ double sapt_nuclear_external_potential_matrix(std::shared_ptr<Wavefunction> refe
     }
 
     auto Enucs = require_matrix("Enucs");
+    if (Enucs->nirrep() != 1) {
+        throw PSIEXCEPTION("SAPT nuclear/external potential matrix 'Enucs' must have one irrep.");
+    }
     require_dimensions(Enucs, required_dimension, required_dimension, "Enucs");
     for (const auto& label : {std::string("A"), std::string("B")}) {
         if (reference_->has_potential_variable(label)) {

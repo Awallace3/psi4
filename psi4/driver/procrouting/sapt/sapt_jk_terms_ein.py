@@ -690,11 +690,11 @@ def build_sapt_jk_cache(
     cache["external_potential_objects"] = {}
     if external_potentials:
         if external_potentials.get("A") is not None:
-            external_A = wfn_A.external_pot()
+            external_A = wfn_dimer.potential_variable("A")
             cache["external_potential_objects"]["A"] = external_A
             cache["V_A"].add(external_A.computePotentialMatrix(wfn_A.basisset()))
         if external_potentials.get("B") is not None:
-            external_B = wfn_B.external_pot()
+            external_B = wfn_dimer.potential_variable("B")
             cache["external_potential_objects"]["B"] = external_B
             cache["V_B"].add(external_B.computePotentialMatrix(wfn_B.basisset()))
 

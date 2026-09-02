@@ -346,13 +346,35 @@ std::shared_ptr<Matrix> IBOLocalizer2::reorder_orbitals(std::shared_ptr<Matrix> 
 std::map<std::string, std::shared_ptr<Matrix> > IBOLocalizer2::localize(std::shared_ptr<Matrix> Cocc,
                                                                         std::shared_ptr<Matrix> Focc,
                                                                         const std::vector<int>& ranges2) {
-    if (!A_) build_iaos();
+    if (!Cocc || !Focc) {
+        throw PSIEXCEPTION("IBOLocalizer2::localize requires Cocc and Focc matrices.");
+    }
+    if (Cocc->nirrep() != 1 || Focc->nirrep() != 1) {
+        throw PSIEXCEPTION("IBOLocalizer2::localize requires single-irrep Cocc and Focc matrices.");
+    }
+    int nocc = Cocc->coldim(0);
+    if (Cocc->rowdim(0) != S_->rowdim(0)) {
+        throw PSIEXCEPTION("IBOLocalizer2::localize Cocc row dimension must match the primary basis.");
+    }
+    if (Focc->rowdim(0) != nocc || Focc->coldim(0) != nocc) {
+        throw PSIEXCEPTION("IBOLocalizer2::localize Focc dimensions must match the occupied orbitals.");
+    }
 
     std::vector<int> ranges = ranges2;
-    if (!ranges.size()) {
-        ranges.push_back(0);
-        ranges.push_back(Cocc->colspi()[0]);
+    if (ranges.empty()) {
+        ranges = {0, nocc};
+    } else {
+        if (ranges.size() < 2 || ranges.front() != 0 || ranges.back() != nocc) {
+            throw PSIEXCEPTION("IBOLocalizer2::localize ranges must cover all occupied orbitals.");
+        }
+        for (size_t index = 1; index < ranges.size(); ++index) {
+            if (ranges[index - 1] < 0 || ranges[index] <= ranges[index - 1] || ranges[index] > nocc) {
+                throw PSIEXCEPTION("IBOLocalizer2::localize ranges must contain increasing in-bounds endpoints.");
+            }
+        }
     }
+
+    if (!A_) build_iaos();
 
     std::vector<std::vector<int> > minao_inds;
     for (int A = 0; A < true_atoms_.size(); A++) {

@@ -404,7 +404,10 @@ def drop_saptdft_variables(
         fisapt.set_vector(vector_cache)
         fisapt.fdrop(external_potentials)
         fisapt.save_variables_to_wfn(
-            wfn, external_potentials=external_potentials, sapt_type="SAPT(DFT)"
+            wfn,
+            external_potentials=external_potentials,
+            sapt_type="SAPT(DFT)",
+            do_disp=do_disp,
         )
     finally:
         optstash.restore()

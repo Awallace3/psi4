@@ -110,10 +110,10 @@ def build_sapt_jk_cache(
     # interaction of A-B.
     if external_potentials:
         if external_potentials.get("A") is not None:
-            ext_A = wfn_A.external_pot().computePotentialMatrix(wfn_A.basisset())
+            ext_A = wfn_dimer.potential_variable("A").computePotentialMatrix(wfn_A.basisset())
             cache["V_A"].add(ext_A)
         if external_potentials.get("B") is not None:
-            ext_B = wfn_B.external_pot().computePotentialMatrix(wfn_B.basisset())
+            ext_B = wfn_dimer.potential_variable("B").computePotentialMatrix(wfn_B.basisset())
             cache["V_B"].add(ext_B)
 
     # Anything else we might need
@@ -218,10 +218,10 @@ def build_sapt_jk_cache_sums(
     # External Potentials need to add to V_A and V_B
     if external_potentials:
         if external_potentials.get("A") is not None:
-            ext_A = wfn_A.external_pot().computePotentialMatrix(wfn_A.basisset())
+            ext_A = wfn_dimer.potential_variable("A").computePotentialMatrix(wfn_A.basisset())
             cache["V_A"].add(ext_A)
         if external_potentials.get("B") is not None:
-            ext_B = wfn_B.external_pot().computePotentialMatrix(wfn_B.basisset())
+            ext_B = wfn_dimer.potential_variable("B").computePotentialMatrix(wfn_B.basisset())
             cache["V_B"].add(ext_B)
 
     # Anything else we might need

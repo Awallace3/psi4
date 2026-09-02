@@ -1002,12 +1002,14 @@ no_com
             "SAPT_DFT_DO_FSAPT": "FISAPT",
             "SAPT_DFT_USE_EINSUMS": True,
             "FISAPT_DO_FSAPT": False,
-            "FISAPT_FSAPT_FILEPATH": "tmp",
+            "FISAPT_FSAPT_FILEPATH": "none",
             "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
         }
     )
     _, wfn = psi4.energy("sapt(dft)-d4(i)", molecule=mol, return_wfn=True)
     assert wfn.has_variable("FSAPT_EMPIRICAL_DISP")
+    assert wfn.has_variable("FSAPT_DISP_AB")
+    assert np.linalg.norm(wfn.variable("FSAPT_DISP_AB").np) == 0.0
 
     # Collect SAPT(DFT) energies
     saptdft_energies = {

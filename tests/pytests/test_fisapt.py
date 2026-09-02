@@ -59,6 +59,20 @@ def test_fisapt_public_helper_validation():
             psi4.core.get_options(),
         )
 
+    blocked_dimension = psi4.core.Dimension([1, 1])
+    blocked_enucs = psi4.core.Matrix(
+        "Enucs", blocked_dimension, blocked_dimension
+    )
+    with pytest.raises(RuntimeError, match="matrix 'Enucs' must have one irrep"):
+        psi4.core.sapt_nuclear_external_potential_python(
+            wfn,
+            {
+                "Enucs": blocked_enucs,
+                "VA": psi4.core.Matrix(basis.nbf(), basis.nbf()),
+            },
+            psi4.core.get_options(),
+        )
+
 
 def test_ibolocalizer2_static_build():
     mol = psi4.geometry("He\nsymmetry c1")
@@ -75,6 +89,15 @@ def test_ibolocalizer2_static_build():
     localized = localizer.localize(coefficients, fock)
     assert {"L", "U", "F", "Q", "A"}.issubset(localized)
     localizer.print_charges()
+
+    for ranges in ([-1, 1], [0, 2], [0, 0, 1]):
+        with pytest.raises(RuntimeError, match="IBOLocalizer2::localize ranges"):
+            localizer.localize(coefficients, fock, ranges)
+
+    with pytest.raises(RuntimeError, match="Focc dimensions"):
+        localizer.localize(coefficients, psi4.core.Matrix(2, 2))
+    with pytest.raises(RuntimeError, match="Cocc row dimension"):
+        localizer.localize(psi4.core.Matrix(basis.nbf() + 1, 1), fock)
 
 
 def test_dfhelper_write_disk_tensor_rejects_invalid_ranges():

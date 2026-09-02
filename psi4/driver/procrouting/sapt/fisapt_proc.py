@@ -257,7 +257,7 @@ def fisapt_fdrop(self, external_potentials=None):
                 _drop(matrices["sDisp_AB"], ssapt_filepath)
 
 
-def fisapt_variables_to_wfn(self, ref_wfn, external_potentials=None, sapt_type='fisapt0'):
+def fisapt_variables_to_wfn(self, ref_wfn, external_potentials=None, sapt_type="fisapt0", do_disp=None):
     """
     Stores FISAPT variables to the wavefunction for AtomicResults to
     store results.
@@ -316,15 +316,15 @@ def fisapt_variables_to_wfn(self, ref_wfn, external_potentials=None, sapt_type='
     ref_wfn.set_variable("FSAPT_INDAB_AB", matrices["IndAB_AB"])
     ref_wfn.set_variable("FSAPT_INDBA_AB", matrices["IndBA_AB"])
 
-    # Handle conditional cases
-    if core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP"):
+    publish_disp = core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP") if do_disp is None else do_disp
+    if publish_disp:
         ref_wfn.set_variable("FSAPT_DISP_AB", matrices["Disp_AB"])
 
     if core.get_option("FISAPT", "SSAPT0_SCALE"):
         ref_wfn.set_variable("FSAPT_SINDAB_AB", matrices["sIndAB_AB"])
         ref_wfn.set_variable("FSAPT_SINDBA_AB", matrices["sIndBA_AB"])
 
-        if core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP"):
+        if publish_disp:
             ref_wfn.set_variable("FSAPT_SDISP_AB", matrices["sDisp_AB"])
     return
 
