@@ -1449,7 +1449,10 @@ def scf_wavefunction_factory(name, ref_wfn, reference, **kwargs):
         wfn._disp_functor = _disp_functor
 
     # Set the DF basis sets
-    df_needed = core.get_global_option("SCF_TYPE") in ["DF", "MEM_DF", "DISK_DF" ]
+    # GTFOCK_DF is fitted like the DF family -- it distributes the same fitted
+    # tensor over MPI ranks -- so it needs a real DF_BASIS_SCF here. Plain
+    # GTFOCK is exact and deliberately stays off this list.
+    df_needed = core.get_global_option("SCF_TYPE") in ["DF", "MEM_DF", "DISK_DF", "GTFOCK_DF"]
     df_needed |= "DFDIRJ" in core.get_global_option("SCF_TYPE")
     df_needed |= (core.get_global_option("SCF_TYPE") == "DIRECT" and core.get_option("SCF", "DF_SCF_GUESS"))
     if df_needed:

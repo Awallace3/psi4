@@ -52,6 +52,13 @@ if(TARGET GTFock::gtfock)
   target_link_libraries(psi4_optional_deps INTERFACE GTFock::gtfock)
   target_compile_definitions(psi4_optional_deps INTERFACE USING_GTFock)
 endif()
+# The distributed density-fitting engine is optional within GTFock; see
+# cmake/FindGTFock.cmake. SCF_TYPE GTFOCK_DF compiles either way and throws at
+# construction when this definition is absent.
+if(TARGET GTFock::gtfockdf)
+  target_link_libraries(psi4_optional_deps INTERFACE GTFock::gtfockdf)
+  target_compile_definitions(psi4_optional_deps INTERFACE USING_GTFock_DF)
+endif()
 
 if(TARGET dkh::dkh)
   target_link_libraries(psi4_optional_deps INTERFACE dkh::dkh)

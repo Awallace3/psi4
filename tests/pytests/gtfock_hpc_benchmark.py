@@ -318,11 +318,18 @@ _EXPECTED_NBF = {
     ("protein157", "6-31g**"): 1555,
 }
 
-# J/K algorithms this script can put under the same SCF. "gtfock" is the engine
-# under test; "direct" is Psi4's own exact-ERI builder and is the algorithmic
-# apples-to-apples reference; "df" is density fitting, a *different* algorithm
-# that is what most users actually run, recorded as a secondary line.
-_ARMS = {"gtfock": "gtfock", "direct": "direct", "df": "df", "pk": "pk"}
+# J/K algorithms this script can put under the same SCF. "gtfock" is the exact
+# four-center engine; "gtfock_df" is the distributed density-fitting engine that
+# grew out of it, and is the arm that makes the DF comparison a like-for-like
+# one; "direct" is Psi4's own exact-ERI builder and is the algorithmic
+# apples-to-apples reference for "gtfock"; "df" is Psi4's own density fitting
+# and is the reference for "gtfock_df".
+_ARMS = {"gtfock": "gtfock", "gtfock_df": "gtfock_df", "direct": "direct",
+         "df": "df", "pk": "pk"}
+
+# The arms that bring up MPI and drive a GTFock engine. Everything else is one
+# process with every core.
+_MPI_ARMS = ("gtfock", "gtfock_df")
 
 
 def assert_basis_as_sized(system, basis_name, basis) -> None:
@@ -361,6 +368,10 @@ def parse_args(argv):
     parser.add_argument("--arm", choices=sorted(_ARMS), required=True,
                         help="which J/K algorithm to put under the SCF")
     parser.add_argument("--basis", default="6-31+G**")
+    parser.add_argument("--df-basis", default=None,
+                        help="fitting basis for the df and gtfock_df arms; the "
+                             "default is whatever Psi4 pairs with --basis, built "
+                             "Cartesian because the orbital basis is")
     parser.add_argument("--method", default="scf",
                         help="anything psi4.energy accepts that needs only J and K")
     parser.add_argument("--threads", type=int, default=1,
@@ -457,6 +468,12 @@ def jk_build_seconds(arm):
 # nested inside another entry on this list, so summing them double-counts
 # nothing. ``DFH: AO Construction`` and ``DFH: AO-Met. Contraction`` are
 # deliberately absent: they are children of ``DFH: initialize()``.
+# ``GTFockDFJK`` is a third vocabulary, and the one this comparison exists for.
+# It brackets its whole engine build -- three-center integrals, the metric
+# inverse square root and the redistribution -- under a single top-level timer,
+# whose name is read off the module rather than copied, so a rename in the C++
+# cannot silently turn this arm's setup cost into a measured zero. The name is
+# only available in a build that has the engine, so it is appended when it is.
 _DF_SETUP_TIMERS = (
     "DFH: sparsity prep",
     "DFH: initialize()",
@@ -464,6 +481,17 @@ _DF_SETUP_TIMERS = (
     "JK: (A|Q)^-1/2",
     "JK: (Q|mn)",
 )
+
+try:
+    from psi4.driver import gtfock as _gtfock_module
+
+    if _gtfock_module.df_available():
+        _DF_SETUP_TIMERS = _DF_SETUP_TIMERS + (_gtfock_module.df_setup_timer(),)
+except (ImportError, AttributeError):
+    # A Psi4 without the GTFock module, or one predating the exported name. The
+    # other arms are unaffected; the gtfock_df arm cannot run in such a build
+    # anyway, so there is nothing whose setup could go unmeasured.
+    pass
 
 
 def df_setup_records():
@@ -493,10 +521,15 @@ def df_setup_records():
 def main(argv=None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
 
-    if args.arm == "gtfock":
+    if args.arm in _MPI_ARMS:
         # mpi4py's import is what calls MPI_Init_thread; go through Psi4's own
         # entry point so the benchmark exercises the shipped module.
         from psi4.driver import gtfock
+        if args.arm == "gtfock_df" and not gtfock.df_available():
+            raise RuntimeError(
+                "this Psi4 links GTFock but not its distributed density-fitting "
+                "engine, so the gtfock_df arm cannot run. Rebuild against a "
+                "GTFock that ships libgtfockdf and gtfock_pdf.h.")
         info = gtfock.initialize()
         rank, size = info["rank"], info["size"]
         processor = info["processor"]
@@ -539,6 +572,12 @@ def main(argv=None) -> int:
         # reported; without it psi4 releases the object and wfn.jk() is None.
         "save_jk": True,
     })
+    if args.df_basis:
+        # Both fitted arms get the same fitting basis when one is named, so that
+        # the only difference between them stays the engine. Left unset, Psi4
+        # pairs its own with --basis and builds it Cartesian because the orbital
+        # basis is, which is what GTFock's Simint path requires of both.
+        psi4.set_options({"df_basis_scf": args.df_basis})
 
     # Built and checked here, before any integral work, so a mistyped --basis or
     # an edited geometry costs a second of a queued allocation rather than a
@@ -548,7 +587,14 @@ def main(argv=None) -> int:
         args.system, args.basis,
         psi4.core.BasisSet.build(molecule, "ORBITAL", args.basis))
 
-    builds_before = gtfock.fock_builds() if gtfock is not None else 0
+    # Each engine has its own tally; asking the exact one about a DF run would
+    # report a confident zero.
+    if gtfock is None:
+        jk_builds_before = 0
+    elif args.arm == "gtfock_df":
+        jk_builds_before = gtfock.df_jk_builds()
+    else:
+        jk_builds_before = gtfock.fock_builds()
     start = time.perf_counter()
     energy, wfn = psi4.energy(args.method, return_wfn=True)
     elapsed = time.perf_counter() - start
@@ -595,12 +641,36 @@ def main(argv=None) -> int:
         "slurm_nodelist": os.environ.get("SLURM_JOB_NODELIST"),
     }
     if gtfock is not None:
+        report["core_mpi"] = gtfock.mpi_info()
+    if args.arm == "gtfock":
         report.update({
-            "fock_builds": gtfock.fock_builds() - builds_before,
-            "core_mpi": gtfock.mpi_info(),
+            "fock_builds": gtfock.fock_builds() - jk_builds_before,
             "process_grid": psi4.core.gtfock_process_grid(),
             "local_block": psi4.core.gtfock_local_block(),
             "local_task_shape": psi4.core.gtfock_local_task_shape(),
+        })
+    elif args.arm == "gtfock_df":
+        # The DF engine partitions the auxiliary index, not the AO matrix, so it
+        # has no process grid and no local AO block to report. The fields are
+        # left out rather than filled with a placeholder the reducer would have
+        # to tell apart from a measurement. What replaces them is the partition
+        # itself: nlocal_aux summing to naux over the ranks is what says the
+        # fitted tensor was distributed rather than replicated, and it is the
+        # one claim this arm makes that a wall clock cannot check.
+        report.update({
+            "fock_builds": gtfock.df_jk_builds() - jk_builds_before,
+            "df_partition": gtfock.df_partition(),
+            # The setup timer above is the total; this is where it went. Only
+            # some of these phases divide over ranks, so the breakdown is what
+            # says whether a setup that stopped improving has stopped because
+            # of the replicated metric factorization or something else.
+            "df_setup_phases": gtfock.df_setup_phases(),
+            # And the same question asked of the iterations rather than the
+            # build: how much of J/K was arithmetic (jk_local), how much was
+            # waiting for the slowest rank (jk_skew), and how much was the
+            # reduction (jk_comm). Summed over calls; fock_builds above divides
+            # them into a per-build cost.
+            "df_jk_phases": gtfock.df_jk_phases(),
         })
 
     print("PSI4-GTFOCK-JSON " + json.dumps(report), flush=True)

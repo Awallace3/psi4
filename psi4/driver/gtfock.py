@@ -45,12 +45,20 @@ Typical use, from a script launched as ``mpirun -n 2 python script.py``::
     psi4.set_options({"scf_type": "gtfock", "puream": False})
     energy = psi4.energy("scf")         # J/K come from GTFock on every rank
     assert gtfock.fock_builds() > 0     # GTFock really ran
+
+For the density-fitted engine, set ``scf_type`` to ``gtfock_df`` instead and
+assert on :func:`df_jk_builds`; :func:`df_partition` then reports how the fitted
+tensor was split over the ranks.
 """
 
 __all__ = [
     "GTFockNotAvailable",
     "available",
     "decomposition",
+    "df_available",
+    "df_jk_builds",
+    "df_partition",
+    "df_setup_timer",
     "fock_builds",
     "initialize",
     "mpi_info",
@@ -77,6 +85,101 @@ def fock_builds() -> int:
     its own integrals, so tests assert on this rather than on timings.
     """
     return core.gtfock_fock_builds()
+
+
+def df_available() -> bool:
+    """Whether this Psi4 links GTFock's *distributed density-fitting* engine.
+
+    That engine (``libgtfockdf``) is a later addition to gtfock_psi4 and is
+    optional within ``-DENABLE_GTFock=ON``, so :func:`available` can be true
+    while this is false. ``SCF_TYPE GTFOCK_DF`` needs this one.
+    """
+    return core.gtfock_df_enabled()
+
+
+def df_jk_builds() -> int:
+    """How many distributed density-fitted J/K builds this process has run.
+
+    The DF engine is separate from the exact one, so this counter is separate
+    from :func:`fock_builds`; a ``GTFOCK_DF`` calculation moves this one.
+    """
+    return core.gtfock_df_jk_builds()
+
+
+def df_partition() -> Dict[str, Any]:
+    """How the most recent DF engine split the fitted tensor over this rank.
+
+    ``nlocal_aux`` is the number of auxiliary functions this rank owns: on more
+    than one rank these differ between ranks and sum to ``naux``, which is what
+    shows the tensor was distributed rather than replicated. ``nmetric_null``
+    counts auxiliary functions the fitting condition dropped, ``nlocal_pairs``
+    the AO-pair elements this rank computed integrals for before redistribution
+    (legitimately zero when there are more ranks than shell pairs), and
+    ``local_tensor_doubles`` the size of this rank's slice. Every entry is
+    ``-1`` (or ``0``) before any engine is built.
+    """
+    nbf, naux, nlocal_aux, nmetric_null, nlocal_pairs = core.gtfock_df_partition()
+    return {
+        "nbf": nbf,
+        "naux": naux,
+        "nlocal_aux": nlocal_aux,
+        "nmetric_null": nmetric_null,
+        "nlocal_pairs": nlocal_pairs,
+        "local_tensor_doubles": core.gtfock_df_local_tensor_doubles(),
+    }
+
+
+def df_setup_phases() -> Dict[str, float]:
+    """Wall seconds this rank spent in each phase of the most recent DF build.
+
+    The setup timer says how much building the fitted tensor cost; this says
+    which part of it, which is the part that decides whether adding ranks will
+    help. ``int3c`` (three-center integrals), ``fit`` and ``redist`` divide over
+    ranks; ``metric`` and especially ``factor`` do not, since every rank factors
+    the same Coulomb metric on its own share of the cores.
+
+    Keys come from GTFock, so a phase added there appears here without a change
+    on this side. Every rank times its own elapsed seconds, waits inside
+    collectives included, so the spread of one phase across ranks is that
+    phase's load imbalance. Empty before any engine is built, or when Psi4 was
+    compiled without the DF engine.
+    """
+    return dict(core.gtfock_df_setup_phases())
+
+
+def df_jk_phases() -> Dict[str, float]:
+    """Wall seconds this rank spent in each part of the most recent DF J/K builds.
+
+    Summed over every ``compute_JK`` call the engine ran, so divide by the Fock
+    build count for a per-call figure. ``jk_local`` is the contraction over this
+    rank's slice of the fitted tensor and is the part that divides over ranks;
+    ``jk_skew`` is a barrier that drains the wait for the slowest rank into its
+    own clock, so it is load imbalance rather than communication; ``jk_comm`` is
+    the reduction of J and K over all ranks with that wait already removed, so it
+    is what the network actually costs per Fock build.
+
+    Without the barrier the last two would be one number, and a J/K build that
+    slowed down would not say whether to fix the partition or the fabric.
+
+    Keys come from GTFock, so a part added there appears here without a change on
+    this side. Empty before any engine is built, or when Psi4 was compiled
+    without the DF engine.
+    """
+    return dict(core.gtfock_df_jk_phases())
+
+
+def df_setup_timer() -> str:
+    """The timer name that covers the distributed DF setup, read from the module.
+
+    ``GTFockDFJK`` builds and distributes the fitted tensor in
+    ``preiterations()``, which ``JK::initialize()`` runs before
+    ``JK::compute()`` opens ``JK: JK``. That is most of this algorithm's
+    integral work and no J/K clock sees it, exactly as for ``MemDFJK``, so the
+    builder brackets it under its own top-level timer. Anything summing
+    density-fitting setup costs should read the name from here rather than
+    hard-code it.
+    """
+    return core.gtfock_df_setup_timer()
 
 
 def mpi_info() -> Dict[str, int]:

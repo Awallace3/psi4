@@ -27,6 +27,7 @@
  */
 
 #include "jk.h"
+#include "jk_timer_bracket.h"
 
 #include "psi4/lib3index/3index.h"
 #include "psi4/libpsio/psio.hpp"
@@ -54,6 +55,32 @@
 using namespace psi;
 
 namespace psi {
+
+namespace {
+
+/*
+ * Undoes ``JK::compute``'s C_right_ = C_left_ aliasing however the call ends.
+ *
+ * The alias is an implementation detail of one call, and the trailing
+ * ``C_right_.clear()`` only runs on the success path. A ``compute_JK`` that
+ * throws to refuse a request would otherwise leave C_right_ set, and the next
+ * ``compute`` would read the same symmetric input as non-symmetric.
+ */
+class JKAliasGuard {
+   public:
+    JKAliasGuard(std::vector<SharedMatrix>& C_right, bool aliased) : C_right_(C_right), aliased_(aliased) {}
+    ~JKAliasGuard() {
+        if (aliased_) C_right_.clear();
+    }
+    JKAliasGuard(const JKAliasGuard&) = delete;
+    JKAliasGuard& operator=(const JKAliasGuard&) = delete;
+
+   private:
+    std::vector<SharedMatrix>& C_right_;
+    bool aliased_;
+};
+
+}  // namespace
 
 template <class T>
 void _set_dfjk_options(std::shared_ptr<T> jk, Options& options) {
@@ -188,6 +215,22 @@ std::shared_ptr<JK> JK::build_JK(std::shared_ptr<BasisSet> primary, std::shared_
         // applies here as it does elsewhere. CSAM has no GTFock analogue.
         auto jk = std::make_shared<GTFockJK>(primary);
         if (options["INTS_TOLERANCE"].has_changed() || options.get_str("SCREENING") == "NONE") jk->set_cutoff(cutoff);
+        if (options["PRINT"].has_changed()) jk->set_print(options.get_int("PRINT"));
+        if (options["DEBUG"].has_changed()) jk->set_debug(options.get_int("DEBUG"));
+        if (options["BENCH"].has_changed()) jk->set_bench(options.get_int("BENCH"));
+
+        return jk;
+
+    } else if (jk_type == "GTFOCK_DF") {
+        // The distributed density-fitted sibling of GTFOCK. It needs the fitting
+        // basis, so proc.py has to have put a real DF_BASIS_SCF on the
+        // wavefunction rather than the zero basis; GTFockDFJK says so plainly if
+        // it did not. Screening lives inside GTFock's own three-center engine,
+        // so INTS_TOLERANCE has no hook here, but the metric inversion honours
+        // DF_FITTING_CONDITION exactly as MemDFJK does.
+        auto jk = std::make_shared<GTFockDFJK>(primary, auxiliary);
+        jk->set_fitting_condition(options.get_double("DF_FITTING_CONDITION"));
+        if (options["DF_INTS_NUM_THREADS"].has_changed()) jk->set_nthreads(options.get_int("DF_INTS_NUM_THREADS"));
         if (options["PRINT"].has_changed()) jk->set_print(options.get_int("PRINT"));
         if (options["DEBUG"].has_changed()) jk->set_debug(options.get_int("DEBUG"));
         if (options["BENCH"].has_changed()) jk->set_bench(options.get_int("BENCH"));
@@ -606,12 +649,15 @@ void JK::initialize() { preiterations(); }
 
 void JK::compute() {
     // Is this density symmetric?
+    bool aliased_C_right = false;
     if (C_left_.size() && !C_right_.size()) {
         lr_symmetric_ = true;
         C_right_ = C_left_;
+        aliased_C_right = true;
     } else {
         lr_symmetric_ = false;
     }
+    JKAliasGuard alias_guard(C_right_, aliased_C_right);
 
     // Figure out the symmetry and which codes will stay in C1 symmetry
     input_symmetry_cast_map_.clear();
@@ -647,26 +693,26 @@ void JK::compute() {
     }
 
     // Construct the densities
-    timer_on("JK: D");
-    compute_D();
-    timer_off("JK: D");
+    {
+        JKTimerBracket t("JK: D");
+        compute_D();
+    }
 
     if (C1()) {
-        timer_on("JK: USO2AO");
+        JKTimerBracket t("JK: USO2AO");
         USO2AO();
-        timer_off("JK: USO2AO");
     } else {
         allocate_JK();
     }
 
-    timer_on("JK: JK");
-    compute_JK();
-    timer_off("JK: JK");
+    {
+        JKTimerBracket t("JK: JK");
+        compute_JK();
+    }
 
     if (C1()) {
-        timer_on("JK: AO2USO");
+        JKTimerBracket t("JK: AO2USO");
         AO2USO();
-        timer_off("JK: AO2USO");
     }
 
     if (debug_ > 6) {
@@ -685,10 +731,6 @@ void JK::compute() {
             J_[N]->print("outfile");
             K_[N]->print("outfile");
         }
-    }
-
-    if (lr_symmetric_) {
-        C_right_.clear();
     }
 }
 

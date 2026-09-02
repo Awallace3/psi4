@@ -28,6 +28,9 @@
 
 #include "psi4/pybind11.h"
 
+#include <string>
+
+#include "psi4/libfock/gtfock_df_interface.h"
 #include "psi4/libfock/gtfock_interface.h"
 #include "psi4/libfock/jk.h"
 #include "psi4/libfock/soscf.h"
@@ -222,6 +225,36 @@ void export_fock(py::module &m) {
           "[start_row, end_row, start_col, end_col] of the AO block GTFock gave this rank.");
     m.def("gtfock_local_task_shape", &MinimalInterface::local_task_shape,
           "[nblks_row, nblks_col, ntasks] of GTFock's task decomposition of this rank's AO block.");
+
+    // The distributed density-fitting engine is a separate, optional GTFock
+    // library, so it has its own enabled() and its own tallies.
+    m.def("gtfock_df_enabled", &MinimalDFInterface::enabled,
+          "Was Psi4 compiled against a GTFock that ships the distributed density-fitting engine?");
+    m.def("gtfock_df_jk_builds", &MinimalDFInterface::total_jk_builds,
+          "Number of distributed DF J/K builds this process has run. Zero proves GTFock never ran.");
+    m.def("gtfock_df_partition", &MinimalDFInterface::last_partition,
+          "[nbf, naux, nlocal_aux, nmetric_null, nlocal_pairs] of the most recent distributed DF engine, "
+          "or five -1s if none was built. nlocal_aux differing across ranks and summing to naux is what "
+          "shows the fitted tensor was distributed rather than replicated.");
+    m.def("gtfock_df_local_tensor_doubles", &MinimalDFInterface::last_local_tensor_doubles,
+          "Doubles in this rank's slice of the most recent distributed DF fitted tensor, or 0.");
+    m.def("gtfock_df_setup_phases", &MinimalDFInterface::last_setup_phases,
+          "[(name, seconds)] this rank spent in each phase of the most recent distributed DF engine "
+          "build, in build order, or an empty list if none was built. The setup timer says how much "
+          "the fit cost; this says which part of it, and the spread of one phase across ranks is that "
+          "phase's load imbalance.");
+    m.def("gtfock_df_jk_phases", &MinimalDFInterface::last_jk_phases,
+          "[(name, seconds)] this rank accumulated in each part of the most recent distributed DF engine's "
+          "J/K builds, summed over every call, or an empty list if none was built. jk_local is the "
+          "contraction over this rank's tensor rows, jk_skew is the barrier that drains the wait for the "
+          "slowest rank, and jk_comm is the reduction of J and K with that wait already removed -- so "
+          "jk_comm is what the network costs per Fock build and jk_skew is what load imbalance costs.");
+    m.def(
+        "gtfock_df_setup_timer", []() { return std::string(GTFOCK_DF_SETUP_TIMER); },
+        "Name of the top-level timer GTFockDFJK brackets its engine build with. The fitted tensor is built "
+        "in preiterations(), which runs before JK::compute() opens 'JK: JK', so this is the density-fitting "
+        "setup cost that no J/K clock covers -- exported so a benchmark reads the name rather than copying "
+        "it.");
 
     py::class_<scf::SADGuess, std::shared_ptr<scf::SADGuess>>(m, "SADGuess", "docstring")
         .def_static("build_SAD",

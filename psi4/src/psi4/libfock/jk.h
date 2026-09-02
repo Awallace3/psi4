@@ -44,6 +44,7 @@ PRAGMA_WARNING_POP
 
 namespace psi {
 class MinimalInterface;
+class MinimalDFInterface;
 class BasisSet;
 class Matrix;
 class TwoBodyAOInt;
@@ -883,6 +884,68 @@ class GTFockJK : public JK {
     *   This code calls GTFock once the number of densities was read from jk object
     */
     GTFockJK(std::shared_ptr<psi::BasisSet> Primary);
+};
+
+/** \brief Derived class extending the JK object to GTFock's distributed
+ *         density fitting
+ *
+ *   Where GTFockJK distributes the exact four-center Fock build, this class
+ *   distributes the density-fitted one: the fitted tensor \f$B_Q^{mn}\f$ is
+ *   built once and split across ranks by auxiliary index Q, and each Fock build
+ *   contracts the local slice and reduces. The result is MemDFJK's answer to
+ *   the fitting condition, computed and stored on many nodes instead of one.
+ *
+ *   Unlike GTFockJK, the engine is created in preiterations(), because GTFock's
+ *   DF engine keeps no process-global state. That also puts the fitting setup
+ *   cost inside JK::initialize(), where MemDFJK's already is, so the two are
+ *   comparable on a timer.
+ *
+ *   MPI must already be running: drive this from Python through
+ *   psi4.driver.gtfock, which imports mpi4py. See
+ *   doc/sphinxman/source/gtfock.rst for the build and run procedure and for the
+ *   prototype's limits.
+ */
+class GTFockDFJK : public JK {
+   private:
+    /// The distributed DF engine, created in preiterations()
+    std::shared_ptr<MinimalDFInterface> Impl_;
+    /// Fitting basis, which the base JK object does not keep
+    std::shared_ptr<BasisSet> auxiliary_;
+    /// Relative eigenvalue cutoff for inverting the Coulomb metric
+    double fitting_condition_ = 1.0e-12;
+    /// OpenMP threads for the three-center integrals; <= 0 means GTFock decides
+    int nthreads_ = 0;
+
+    std::string name() override { return "GTFockDFJK"; }
+    size_t memory_estimate() override;
+
+   protected:
+    /// Do we need to backtransform to C1 under the hood?
+    bool C1() const override { return true; }
+    /// Build and distribute the fitted tensor
+    void preiterations() override;
+    /// Compute J/K for current C/D
+    void compute_JK() override;
+    /// Release the fitted tensor and the engine's communicator
+    void postiterations() override;
+    /// Report the MPI geometry and the tensor partition GTFock is running on
+    void print_header() const override;
+
+   public:
+    /** \brief Your public interface to GTFock's distributed density fitting
+     *
+     *  \param[in] Primary   orbital basis; must be Cartesian
+     *  \param[in] Auxiliary fitting basis (DF_BASIS_SCF); must be Cartesian
+     */
+    GTFockDFJK(std::shared_ptr<BasisSet> Primary, std::shared_ptr<BasisSet> Auxiliary);
+
+    /// Relative eigenvalue cutoff for the Coulomb metric inverse, i.e. DF_FITTING_CONDITION
+    void set_fitting_condition(double condition) { fitting_condition_ = condition; }
+    /// OpenMP threads for the three-center integrals
+    void set_nthreads(int nthreads) { nthreads_ = nthreads; }
+
+    /// The fitting basis this object was built with
+    std::shared_ptr<BasisSet> auxiliary() const { return auxiliary_; }
 };
 
 /**
