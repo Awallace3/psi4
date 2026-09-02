@@ -1392,9 +1392,16 @@ def _hpc_record(rank, **overrides):
 
 
 def _write_hpc_records(directory, records):
+    """Write records under the names the SLURM scripts give them.
+
+    The arm belongs in the file name because a sweep puts several arms in one
+    directory; keying only on the rank count would have two arms overwrite each
+    other at the same width and silently shorten the sweep.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     for record in records:
-        path = directory / f"peptide_gtfock_n{record['ranks']}.rank{record['rank']}.json"
+        path = (directory
+                / f"{record['system']}_{record['arm']}_n{record['ranks']}.rank{record['rank']}.json")
         path.write_text(json.dumps(record))
     return str(directory)
 
@@ -1419,6 +1426,66 @@ def test_hpc_collector_reduces_one_run(tmp_path):
     assert points[0]["peak_rss_max_mb"] == 1100.0
     assert points[0]["peak_rss_sum_mb"] == 2000.0
     assert points[0]["slurm_job_id"] == "12400108"
+
+
+def test_hpc_collector_rates_the_distributed_engine_against_psi4_df(tmp_path):
+    """The comparison a user actually needs: same approximation, two implementations.
+
+    ``speedup_vs_gtfock_n1`` says whether the distributed engine scales, which is
+    a different question from whether it is worth running. Only Psi4's own
+    density fitting computes the same approximate energy, so it is the only
+    reference against which a ratio is a statement about implementations rather
+    than about methods -- and the memory ratio is the one that can come out the
+    opposite way from the speed ratio, which is the whole reason both are here.
+
+    All three ratios are oriented "df over this point", so above one is a win for
+    the distributed engine no matter which quantity is being read. The MemDFJK
+    row itself must carry blanks, not a self-comparison of 1.00 that a reader
+    would mistake for a measurement.
+    """
+    import gtfock_hpc_collect
+
+    run = _write_hpc_records(tmp_path / "peptide_12400108", [
+        _hpc_record(0, arm="df", jk_name="MemDFJK", ranks=1, threads_per_rank=24,
+                    scf_wall_seconds=20.0, jk_wall_seconds=4.0, peak_rss_mb=1000.0),
+        _hpc_record(0, arm="gtfock_df", jk_name="GTFockDFJK", ranks=1,
+                    threads_per_rank=24, scf_wall_seconds=40.0,
+                    jk_wall_seconds=8.0, peak_rss_mb=500.0),
+        # Two ranks that finish together, so the reduced wall clock is 10 s and
+        # the per-rank memory is a quarter of MemDFJK's while the total is half.
+        _hpc_record(0, arm="gtfock_df", jk_name="GTFockDFJK", ranks=2,
+                    scf_wall_seconds=10.0, jk_wall_seconds=2.0, peak_rss_mb=250.0),
+        _hpc_record(1, arm="gtfock_df", jk_name="GTFockDFJK", ranks=2,
+                    scf_wall_seconds=10.0, jk_wall_seconds=2.0, peak_rss_mb=250.0),
+    ])
+
+    points = gtfock_hpc_collect.add_derived(gtfock_hpc_collect.load_points([run]))
+    by_key = {(p["arm"], p["ranks"]): p for p in points}
+    assert set(by_key) == {("df", 1), ("gtfock_df", 1), ("gtfock_df", 2)}
+
+    memdf = by_key["df", 1]
+    assert memdf["speedup_vs_df"] == ""
+    assert memdf["rss_ratio_vs_df"] == ""
+    assert memdf["rss_total_ratio_vs_df"] == ""
+
+    # Slower than MemDFJK on one rank, and the memory ratio says the opposite:
+    # the two verdicts genuinely disagree, which a single column cannot report.
+    one = by_key["gtfock_df", 1]
+    assert one["speedup_vs_df"] == pytest.approx(0.5)
+    assert one["rss_ratio_vs_df"] == pytest.approx(2.0)
+    assert one["rss_total_ratio_vs_df"] == pytest.approx(2.0)
+
+    two = by_key["gtfock_df", 2]
+    assert two["speedup_vs_df"] == pytest.approx(2.0)
+    assert two["rss_ratio_vs_df"] == pytest.approx(4.0)
+    # Per rank and in total part company as soon as ranks multiply a per-rank
+    # floor, so the total ratio must not be allowed to track the per-rank one.
+    assert two["rss_total_ratio_vs_df"] == pytest.approx(2.0)
+
+    # Every arm is still measured against its own one-rank point for scaling,
+    # and MemDFJK is not a scaling arm so it gets no speedup at all.
+    assert two["speedup_vs_gtfock_n1"] == pytest.approx(4.0)
+    assert memdf["speedup_vs_gtfock_n1"] == ""
 
 
 def test_hpc_collector_refuses_records_from_two_jobs(tmp_path):

@@ -41,6 +41,12 @@ _COLUMNS = [
     "scf_wall_s", "jk_wall_s", "df_setup_s", "scf_remainder_s",
     "speedup_vs_gtfock_n1", "jk_speedup_vs_gtfock_n1", "speedup_vs_direct",
     "peak_rss_max_mb", "peak_rss_sum_mb",
+    # The distributed engine measured against Psi4's own density fitting, which
+    # is the only arm computing the same approximate answer and so the only one
+    # a ratio against is a statement about implementations rather than about
+    # methods. All three are oriented "df over this point", so above one means
+    # the distributed engine won and below one means it lost.
+    "speedup_vs_df", "rss_ratio_vs_df", "rss_total_ratio_vs_df",
     "scf_energy", "dE_vs_direct_eh", "dE_across_ranks_eh",
     "process_grid", "local_task_shape",
     # How the distributed density-fitting arm split the fitted tensor. Blank for
@@ -295,6 +301,13 @@ def add_derived(points):
         base_of = {arm: next((p for p in rows if p["arm"] == arm and p["ranks"] == 1), None)
                    for arm in _SCALING_ARMS}
         direct = next((p for p in rows if p["arm"] == "direct"), None)
+        # Psi4's MemDFJK, and deliberately not keyed on rank count: it is a
+        # single-process arm, so every distributed point is compared against the
+        # same shared-memory baseline. That is the honest comparison, because the
+        # question the ratio answers is whether someone with this molecule is
+        # better off running the distributed engine, not whether the distributed
+        # engine scales -- speedup_vs_gtfock_n1 already answers that one.
+        memdf = next((p for p in rows if p["arm"] == "df"), None)
         for point in rows:
             # Speedup is only meaningful against the same algorithm at one rank;
             # for the reference arms it is left blank rather than invented.
@@ -311,6 +324,19 @@ def add_derived(points):
             else:
                 point["speedup_vs_direct"] = ""
                 point["dE_vs_direct_eh"] = ""
+            if memdf is not None and point is not memdf:
+                point["speedup_vs_df"] = memdf["scf_wall_s"] / point["scf_wall_s"]
+                # Per rank is the "does it fit on the node" number; the total is
+                # the "what did the job cost the cluster" number. They point
+                # opposite ways once rank count multiplies a fixed per-rank
+                # floor, so reporting one alone would flatter whichever side of
+                # the comparison it was picked to serve.
+                point["rss_ratio_vs_df"] = memdf["peak_rss_max_mb"] / point["peak_rss_max_mb"]
+                point["rss_total_ratio_vs_df"] = memdf["peak_rss_sum_mb"] / point["peak_rss_sum_mb"]
+            else:
+                point["speedup_vs_df"] = ""
+                point["rss_ratio_vs_df"] = ""
+                point["rss_total_ratio_vs_df"] = ""
     return points
 
 
@@ -326,20 +352,26 @@ def print_table(points):
         # "setup" is the density-fitting cost that runs in preiterations(),
         # before JK::compute() opens its clock. Shown beside "J/K (s)" because a
         # fitted arm's J/K column is not comparable to an exact arm's without it.
+        # "spdup" is against this arm's own one-rank point and answers "does it
+        # scale". "vs df" and "mem/df" are against Psi4's MemDFJK and answer the
+        # different question of whether to use this engine at all; both are
+        # oriented so that above one is a win for the row.
         print(f"{'arm':9s} {'ranks':>5s} {'thr':>4s} {'grid':>5s} {'iters':>5s} "
               f"{'setup (s)':>9s} {'J/K (s)':>9s} {'SCF (s)':>9s} {'spdup':>6s} "
-              f"{'RSS/rank':>9s} {'RSS tot':>9s} {'energy (Eh)':>17s} "
-              f"{'dE vs direct':>13s}")
-        print("-" * 129)
+              f"{'vs df':>6s} {'RSS/rank':>9s} {'RSS tot':>9s} {'mem/df':>7s} "
+              f"{'energy (Eh)':>17s} {'dE vs direct':>13s}")
+        print("-" * 144)
         for p in rows:
             speedup = f"{p['speedup_vs_gtfock_n1']:.2f}" if p["speedup_vs_gtfock_n1"] != "" else "--"
             de = f"{p['dE_vs_direct_eh']:.2e}" if p["dE_vs_direct_eh"] != "" else "--"
             setup = f"{p['df_setup_s']:9.1f}" if p["df_setup_s"] != "" else f"{'--':>9s}"
+            vs_df = f"{p['speedup_vs_df']:.2f}" if p["speedup_vs_df"] != "" else "--"
+            mem_df = f"{p['rss_ratio_vs_df']:.2f}" if p["rss_ratio_vs_df"] != "" else "--"
             print(f"{p['arm']:9s} {p['ranks']:5d} {p['threads_per_rank']:4d} "
                   f"{p['process_grid'] or '--':>5s} {str(p['iterations']):>5s} "
                   f"{setup} {p['jk_wall_s']:9.1f} {p['scf_wall_s']:9.1f} {speedup:>6s} "
-                  f"{p['peak_rss_max_mb']:9.0f} {p['peak_rss_sum_mb']:9.0f} "
-                  f"{p['scf_energy']:17.9f} {de:>13s}")
+                  f"{vs_df:>6s} {p['peak_rss_max_mb']:9.0f} {p['peak_rss_sum_mb']:9.0f} "
+                  f"{mem_df:>7s} {p['scf_energy']:17.9f} {de:>13s}")
 
 
 def rst_table(points):
@@ -358,11 +390,19 @@ def rst_table(points):
     # exists to undo. Sweeps predating the instrumentation report neither, and
     # get the old eleven-column table rather than two columns of blanks.
     split = any(p["df_setup_s"] != "" for p in points)
+    # Whether a MemDFJK reference was run at all. Its absence is the normal case
+    # for a sweep of the exact path, which has nothing to compare against it.
+    versus_df = any(p["arm"] == "df" for p in points)
     header = (["arm", "ranks", "thr", "grid", "iters"]
               + (["setup (s)"] if split else [])
               + ["J/K (s)"]
               + (["rest (s)"] if split else [])
-              + ["SCF (s)", "speedup", "RSS/rank (MB)", "RSS node (MB)", "dE (Eh)"])
+              + ["SCF (s)", "speedup"]
+              # Shown only when the sweep actually ran Psi4's own density
+              # fitting, so a docs table never carries a column of dashes where
+              # the reader would look for the comparison that matters.
+              + (["vs df", "mem vs df"] if versus_df else [])
+              + ["RSS/rank (MB)", "RSS node (MB)", "dE (Eh)"])
     for system in sorted({p["system"] for p in points}):
         rows = sorted((p for p in points if p["system"] == system),
                       key=lambda p: (order.get(p["arm"], 9), p["ranks"]))
@@ -384,8 +424,11 @@ def rst_table(points):
                 + ([f"{setup:.1f}"] if split else [])
                 + [f"{p['jk_wall_s']:.1f}"]
                 + ([f"{rest:.1f}" if rest != "" else "---"] if split else [])
-                + [f"{p['scf_wall_s']:.1f}", speedup,
-                   f"{p['peak_rss_max_mb']:.0f}", f"{p['peak_rss_sum_mb']:.0f}", de])
+                + [f"{p['scf_wall_s']:.1f}", speedup]
+                + ([f"{p['speedup_vs_df']:.2f}" if p["speedup_vs_df"] != "" else "---",
+                    f"{p['rss_ratio_vs_df']:.2f}" if p["rss_ratio_vs_df"] != "" else "---"]
+                   if versus_df else [])
+                + [f"{p['peak_rss_max_mb']:.0f}", f"{p['peak_rss_sum_mb']:.0f}", de])
         widths = [max(len(row[i]) for row in [header] + body)
                   for i in range(len(header))]
         rule = "  ".join("=" * w for w in widths)
