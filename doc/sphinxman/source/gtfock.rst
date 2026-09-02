@@ -1559,12 +1559,12 @@ systems is not enough to generalise it.
 sections use was deliberately not run here: its fitted tensor is 8237 auxiliary
 functions over 1.21 M Cartesian pairs, 74 GB in one process. One rank now holds
 one copy of that rather than two, which moves it from impossible on this
-workstation's 188 GB to merely unwise, and it was still not attempted. Whether the fitted arm's
-advantage holds at production size is a Phoenix measurement and is not made
-here. Neither is any multi-node point: everything above is one node, so the
-all-to-all in setup never crossed a network. `Distributed density fitting across
-nodes`_ is that measurement, on the same two systems at a whole node per rank.
-And every row here is a single run.
+workstation's 188 GB to merely unwise, and it was still not attempted. Whether
+the fitted arm's advantage holds at production size is a Phoenix measurement
+and is not made here. Neither is any multi-node point: everything above is one
+node, so the all-to-all in setup never crossed a network. `Distributed density
+fitting across nodes`_ is that measurement, on the same two systems at a whole
+node per rank. And every row here is a single run.
 
 Distributed density fitting across nodes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1579,94 +1579,115 @@ adding nodes, which is the shape a user actually runs. The job is
 construction and therefore one node's worth of hardware however many nodes the
 allocation holds.
 
-.. peptide: 6-31+G** nbf=260 nshell=122 on atl1-1-02-002-20-2,atl1-1-02-003-1-2,atl1-1-02-003-3-2,atl1-1-02-003-4-1
+.. peptide: 6-31+G** nbf=260 nshell=122 on atl1-1-02-008-10-1,atl1-1-02-009-12-2,atl1-1-02-011-22-1,atl1-1-02-011-28-1 (job 12714112)
 =========  =====  ===  ====  =====  =========  =======  ========  =======  =======  =====  =========  =============  =============  =======
 arm        ranks  thr  grid  iters  setup (s)  J/K (s)  rest (s)  SCF (s)  speedup  vs df  mem vs df  RSS/rank (MB)  RSS node (MB)  dE (Eh)
 =========  =====  ===  ====  =====  =========  =======  ========  =======  =======  =====  =========  =============  =============  =======
-direct     1      24   ---   11     0.0        16.0     1.6       17.5     ---      0.18   1.86       798            798            ---
-df         1      24   ---   11     0.8        0.6      1.7       3.1      ---      ---    ---        1485           1485           6.0e-04
-gtfock_df  1      24   ---   11     0.3        2.8      1.8       4.9      1.00     0.64   1.28       1159           1159           6.0e-04
-gtfock_df  2      24   ---   11     0.3        1.5      1.8       3.5      1.40     0.90   1.50       990            1968           6.0e-04
-gtfock_df  3      24   ---   11     0.2        1.3      2.1       3.4      1.46     0.94   1.71       868            2591           6.0e-04
-gtfock_df  4      24   ---   11     0.3        1.1      2.0       3.1      1.58     1.02   1.78       833            3309           6.0e-04
+direct     1      24   ---   11     0.0        16.2     3.1       19.3     ---      0.17   1.84       803            803            ---
+df         1      24   ---   11     0.9        0.6      1.8       3.3      ---      ---    ---        1476           1476           6.0e-04
+gtfock_df  1      24   ---   11     0.3        2.2      1.8       4.3      1.00     0.76   1.27       1161           1161           6.0e-04
+gtfock_df  2      24   ---   11     0.3        1.3      2.1       3.6      1.20     0.91   1.49       990            1974           6.0e-04
+gtfock_df  3      24   ---   11     0.2        1.2      2.0       3.2      1.33     1.01   1.70       869            2595           6.0e-04
+gtfock_df  4      24   ---   11     0.2        1.0      2.1       3.1      1.39     1.06   1.77       832            3315           6.0e-04
 =========  =====  ===  ====  =====  =========  =======  ========  =======  =======  =====  =========  =============  =============  =======
 
-.. nanotube: 6-31+G** nbf=574 nshell=256 on atl1-1-02-002-17-2,atl1-1-02-002-19-2,atl1-1-02-002-20-[1-2]
+.. nanotube: 6-31+G** nbf=574 nshell=256 on the same four nodes (job 12714113)
 =========  =====  ===  ====  =====  =========  =======  ========  =======  =======  =====  =========  =============  =============  =======
 arm        ranks  thr  grid  iters  setup (s)  J/K (s)  rest (s)  SCF (s)  speedup  vs df  mem vs df  RSS/rank (MB)  RSS node (MB)  dE (Eh)
 =========  =====  ===  ====  =====  =========  =======  ========  =======  =======  =====  =========  =============  =============  =======
-direct     1      24   ---   11     0.0        291.6    10.7      302.3    ---      0.06   9.35       1107           1107           ---
-df         1      24   ---   11     6.5        8.1      3.5       18.1     ---      ---    ---        10352          10352          1.4e-03
-gtfock_df  1      24   ---   11     3.7        15.9     3.6       23.1     1.00     0.78   2.09       4964           4964           1.3e-03
-gtfock_df  2      24   ---   11     3.3        8.4      3.6       15.1     1.52     1.19   2.24       4622           9243           1.3e-03
-gtfock_df  3      24   ---   11     2.2        5.7      3.7       11.4     2.03     1.59   3.19       3249           9733           1.3e-03
-gtfock_df  4      24   ---   11     2.0        4.5      3.7       9.9      2.33     1.83   4.07       2544           10152          1.3e-03
+direct     1      24   ---   11     0.0        292.7    9.0       301.7    ---      0.06   9.40       1101           1101           ---
+df         1      24   ---   11     6.4        8.3      3.5       18.2     ---      ---    ---        10348          10348          1.4e-03
+gtfock_df  1      24   ---   11     3.6        15.8     3.5       23.0     1.00     0.79   2.09       4963           4963           1.3e-03
+gtfock_df  2      24   ---   11     3.1        8.4      3.7       14.9     1.54     1.22   2.24       4617           9228           1.3e-03
+gtfock_df  3      24   ---   11     2.4        5.9      3.8       11.7     1.96     1.55   3.18       3250           9718           1.3e-03
+gtfock_df  4      24   ---   11     2.0        4.3      3.6       9.8      2.35     1.86   4.07       2541           10145          1.3e-03
 =========  =====  ===  ====  =====  =========  =======  ========  =======  =======  =====  =========  =============  =============  =======
 
 **The distributed engine overtakes** |PSIfour| **'s own density fitting at two
 nodes.** ``vs df`` is the ratio that answers whether to run this engine at all,
 because ``MemDFJK`` is the only arm computing the same approximate energy
-|w---w| a ratio against ``direct`` would be a statement about methods, not
-about implementations. On the nanotube it reads 0.78 at one node, 1.19 at two
-and 1.59 at three. ``speedup`` answers the different question of whether the
-engine scales, and is against this arm's own one-node point.
+|w---w| a ratio against ``direct`` would be a statement about methods, not about
+implementations. On the nanotube it reads 0.79 at one node, 1.22 at two, 1.55 at
+three and 1.86 at four. ``speedup`` answers the different question of whether
+the engine scales at all, and so is against this arm's own one-node point.
 
-**One node loses, and it loses in J/K alone.** Setup is 3.7 s against
-``MemDFJK``'s 6.5 s before any distribution at all, so the pivoted Cholesky is
-ahead from the start and only widens its lead as ranks divide it. The deficit is
-entirely the 15.9 s of J/K against 8.1 s. What that 15.9 s consists of is two
-paragraphs below.
+**One node loses, and it loses in J/K alone.** Setup is 3.6 s against
+``MemDFJK``'s 6.4 s before any distribution has happened, so the pivoted
+Cholesky is ahead from the start and only widens its lead as ranks divide it.
+The whole deficit is the 15.8 s of J/K against 8.3 s, and what that 15.8 s
+consists of is three paragraphs below.
 
-**Four nodes does not reliably help.** Four independent four-node allocations
-ran the same nanotube sweep, and the multi-rank points do not agree:
+**J/K divides almost perfectly, and the network is not what it costs.**
+``jk_local``, ``jk_skew`` and ``jk_comm`` split each build into contracting this
+rank's tensor rows, waiting at the barrier for the slowest rank, and the
+reduction itself. Maxima over ranks, nanotube, summed over all twelve builds:
 
-=========  ======  ======  ======  ======
-ranks      run A   run B   run C   run D
-=========  ======  ======  ======  ======
-1          15.9    15.9    15.9    21.1
-2          8.4     22.6    8.4     8.2
-3          6.1     19.1    5.7     5.7
-4          8.8     12.4    4.5     10.3
-=========  ======  ======  ======  ======
+=====  ==========  =========  =========  ==========  =====================
+ranks  jk_local    jk_skew    jk_comm    J/K wall    jk_local scaling
+=====  ==========  =========  =========  ==========  =====================
+1      15.787      0.000      0.000      15.83       1.00
+2      8.012       0.334      0.015      8.37        1.97
+3      5.342       0.518      0.036      5.94        2.96
+4      3.992       0.311      0.021      4.34        3.95
+=====  ==========  =========  =========  ==========  =====================
 
-J/K seconds. Two ranks and three ranks reproduce well |w---w| 8.2 to 8.4 s and
-5.7 to 6.1 s in three of the four |w---w| but four ranks reads 4.5, 8.8, 10.3
-and 12.4, and in three of the four runs it is *slower than three ranks*. The
-table above is run C, which is the minimum at every rank count and therefore
-the one allocation with nothing else going on; its 1.83x at four nodes is the
-best case and not the expected one. Run B is inflated at every multi-rank point
-while its ``df`` and ``direct`` references match the other three to within 3%,
-so the hardware was comparable and whatever went wrong was specific to running
-four communicating ranks on it. The engine's own arithmetic is deterministic:
-the one-rank J/K is 15.9 s in three runs to the tenth of a second.
+The contraction divides 3.95x over four ranks, which is as close to linear as
+this measurement can resolve, and the reduction costs 21 ms of a 4.34 s build.
+That is the expected size: J and K are replicated on return, so the only
+collective is one ``Allreduce`` of 2 nbf^2 doubles, 5.27 MB here, twelve times.
+Everything left over is ``jk_skew``, at most 0.52 s over all twelve builds, and
+it is not the auxiliary partition being uneven: ``jk_local`` spreads 1.3% across
+the four ranks, 51 ms against 3.99 s, while the barrier absorbs up to 311 ms. So
+ranks reach the build at measurably different times, and systematically |w---w|
+the highest-numbered rank has the smallest ``jk_skew`` at two, three and four
+ranks alike, meaning the others wait for it. What makes it late is upstream of
+J/K, not inside it.
 
-This is the number to distrust, and ``jk_skew`` is the instrument built for it.
-The J/K reduction is preceded by a barrier precisely so that waiting for the
-slowest rank lands in its own clock rather than inside the ``Allreduce``; if the
-four-node scatter is a straggler and not the fabric, that clock is where it will
-show, since the fabric's own share is a 5.27 MB ``Allreduce``. The runs in this
-section predate that instrument, so the attribution is not made here.
+**Four nodes is nonetheless not reliably faster than three.** Five independent
+four-node allocations ran the same nanotube sweep:
+
+=====  =====  =====  =====  =====  =====
+ranks  run A  run B  run C  run D  run E
+=====  =====  =====  =====  =====  =====
+1      15.9   15.9   15.9   21.1   15.8
+2      8.4    22.6   8.4    8.2    8.4
+3      6.1    19.1   5.7    5.7    5.9
+4      8.8    12.4   4.5    10.3   4.3
+=====  =====  =====  =====  =====  =====
+
+J/K seconds; run E is the table above. Two and three ranks reproduce well
+|w---w| 8.2 to 8.4 s and 5.7 to 6.1 s in four of the five |w---w| but four ranks
+reads 4.3, 4.5, 8.8, 10.3 and 12.4, and in three of the five it is *slower than
+three ranks*. So the 1.86x above is reproducible but not dependable, and a user
+should expect the three-node figure. The phase table says what the bad runs are
+not: with ``jk_comm`` at 21 ms and ``jk_local`` dividing linearly, neither the
+fabric nor the algorithm has the headroom to cost eight seconds, so the variance
+is in the allocations. Run B is inflated at every multi-rank point while its
+``df`` and ``direct`` references match the other four to within 3%, so its
+hardware was comparable and whatever went wrong was specific to running four
+communicating ranks on it. The engine's own arithmetic is meanwhile
+deterministic: one-rank J/K is 15.8 or 15.9 s in four of the five runs.
 
 **Per-rank memory is the reliable win, and it is monotone in every run.** The
-nanotube holds 4964 MB in one process against ``MemDFJK``'s 10352, already
-**2.09x** less with no distribution, and 2544 MB per rank at four nodes,
-**4.07x** less. The node total rises, 4964 to 10151 MB, for the reason
+nanotube holds 4963 MB in one process against ``MemDFJK``'s 10348, already
+**2.09x** less before any distribution, and 2541 MB per rank at four nodes,
+**4.07x** less. The node total rises, 4963 to 10145 MB, for the reason
 `Distributed density fitting against distributed GTFock`_ gives |w---w| two
 partitionings of the tensor coexist during the all-to-all |w---w| and that is
-what makes the total the wrong number to read here: 10151 MB spread over four
-nodes is 2544 MB each, and the per-rank figure is what one node holds. On this
-system ``direct`` is the memory-cheapest arm at 1107 MB and 302.2 s, which is
-the trade being made.
+what makes the total the wrong number to read here: 10145 MB spread over four
+nodes is 2541 MB on each, and the per-rank figure is what one node has to hold.
+On this system ``direct`` is still the memory-cheapest arm at 1101 MB, and it
+takes 301.7 s, which is the trade being made.
 
-**The J/K deficit is not MPI, and it is not the GEMMs.** ``PDF_computeJK``
-builds exchange one auxiliary function at a time: scatter that function's packed
-AO-pair row into a dense nbf x nbf slice, half-transform it against the occupied
-coefficients, accumulate the outer product. The scatter costs nbf^2 writes and
-does not depend on how many occupied orbitals there are; the ``dgemm`` and
-``dsyrk`` after it are both linear in that count. So timing one build at several
-widths of the occupied coefficient matrix and fitting a line separates them with
-no new instrumentation, the intercept being everything the orbital count does
-not reach:
+**The J/K deficit is the densify, not MPI and not the GEMMs.**
+``PDF_computeJK`` builds exchange one auxiliary function at a time: scatter that
+function's packed AO-pair row into a dense nbf x nbf slice, half-transform it
+against the occupied coefficients, accumulate the outer product. The scatter
+costs nbf^2 writes and does not depend on how many occupied orbitals there are;
+the ``dgemm`` and ``dsyrk`` after it are both linear in that count. So timing
+one build at several widths of the occupied coefficient matrix and fitting a
+line separates them with no new instrumentation, the intercept being everything
+the orbital count does not reach:
 
 ========  =======  =================  ===============  ====================
 system    threads  nocc-independent   nocc-linear      densify/BLAS speedup
@@ -1679,7 +1700,7 @@ nanotube  1        3.922 s (39%)      6.092 s (61%)    ---
 
 At one thread the BLAS dominates, which is why this was not obvious. At the 24
 threads the tables above actually run, it inverts: the scatter is 72% of the
-nanotube's local J/K, and the last column says why |w---w| the BLAS takes 9.8x
+nanotube's local J/K, and the last column is why |w---w| the BLAS takes 9.8x
 from 24 cores and the scatter takes 2.5x. It is not bandwidth. The nanotube
 moves about 11 GiB per build, 3.72 GiB reading the tensor and 7.40 GiB writing
 both triangles of the slice, in 1.574 s |w---w| 7.2 GB/s, an order of magnitude
@@ -1689,7 +1710,7 @@ dense slice. These figures are a workstation measurement, so the seconds do not
 transfer to Phoenix |w---w| the same build takes 1.32 s there against 2.29 s
 here |w---w| but the split does, and the probe reproduces the production path to
 3%: 2.218 s for its widest build against the 2.29 s per build the same
-workstation spends inside an actual SCF. The fix this points at is to
+workstation spends inside a real SCF. The fix this points at is to
 half-transform on the packed shell-pair blocks and delete the scatter, which
 would take most of that 72% out of a path that is 69% of the one-node SCF above.
 
@@ -1743,14 +1764,15 @@ direction that turned out to be two runs that were both spread. A control that
 fails its own validators is not evidence for a conclusion merely because the
 conclusion is believable.
 
-**What this does not settle.** The 749 MB per rank all-to-all, per the
-paragraph above. The four-node J/K scatter, which needs ``jk_skew`` measured
-across nodes rather than within one. Anything at production size: the
-1555-basis-function system was not run here either. And ``rest`` |w---w| the
-part of the SCF outside J/K and setup |w---w| is flat at 3.6 to 3.7 s across
-every rank count on the nanotube and is replicated on every rank, so it is a
-floor that no amount of distribution moves and it is 37% of the four-node SCF.
-Amdahl's law applies to it long before the all-to-all matters.
+**What this does not settle.** The 749 MB per rank all-to-all, per the paragraph
+above. Why three of five four-node allocations lose to their own three-node
+point, which the phase clocks narrow to the allocations without identifying what
+about them. Anything at production size: the 1555-basis-function system was not
+run here either. And ``rest`` |w---w| the part of the SCF outside J/K and setup
+|w---w| is flat at 3.5 to 3.8 s across every rank count on the nanotube and is
+replicated on every rank, so it is a floor no amount of distribution moves, and
+it is already 37% of the four-node SCF. Amdahl's law reaches this engine through
+``rest`` long before the all-to-all matters.
 
 .. _`cmake:gtfock`:
 
