@@ -31,18 +31,20 @@
 namespace psi {
 namespace linalg {
 
-Eigen::Map<Eigen::MatrixXd> eigen_map(Matrix& matrix) {
+static_assert(EigenRowMajorMatrix::IsRowMajor);
+
+EigenRowMajorMap eigen_map(Matrix& matrix) {
     if (matrix.nirrep() != 1) {
         std::string message = "linalg::eigen_map() called, but matrix only has one irrep! ";
         message += "Use linalg::eigen_maps() instead.";
         throw PSIEXCEPTION(message);
     }
 
-    return Eigen::Map<Eigen::MatrixXd>(matrix.get_pointer(), matrix.nrow(), matrix.ncol());
+    return EigenRowMajorMap(matrix.get_pointer(), matrix.nrow(), matrix.ncol());
 }
 
-std::vector<Eigen::Map<Eigen::MatrixXd>> eigen_maps(Matrix& matrix) {
-    std::vector<Eigen::Map<Eigen::MatrixXd>> maps;
+std::vector<EigenRowMajorMap> eigen_maps(Matrix& matrix) {
+    std::vector<EigenRowMajorMap> maps;
     maps.reserve(matrix.nirrep());
 
     for (int h = 0; h != matrix.nirrep(); ++h) {

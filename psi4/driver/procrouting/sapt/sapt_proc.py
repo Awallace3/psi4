@@ -80,14 +80,18 @@ def _validate_saptdft_fsapt_options(induction_type, do_fsapt):
         raise ValidationError("SAPT(DFT) F-SAPT does not support FISAPT__SSAPT0_SCALE=true.")
 
 
-def _normalize_saptdft_external_potentials(external_potentials, dimer_wfn, wfn_A, wfn_B):
+def _normalize_saptdft_external_potentials(
+    external_potentials, dimer_wfn, wfn_A, wfn_B, validate_dimer=False
+):
     if external_potentials is None:
         return None
 
     normalized = validate_external_potential(external_potentials)
     if not normalized:
         return None
-    required_wavefunctions = {"dimer": (dimer_wfn, None)}
+    required_wavefunctions = {
+        "dimer": (dimer_wfn, normalized if validate_dimer else None)
+    }
     if "A" in normalized or "C" in normalized:
         required_wavefunctions["monomer A"] = (
             wfn_A,
@@ -967,6 +971,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         do_disp=do_disp,
         do_d3=sapt_dft_D3_IE,
         do_d4=sapt_dft_D4_IE,
+        _driver_managed_external_potentials=True,
     )
 
     # Copy data back into globals
@@ -1214,6 +1219,7 @@ def sapt_dft(
     do_disp: bool = True,
     do_d3: bool = False,
     do_d4: bool = False,
+    _driver_managed_external_potentials: bool = False,
 ) -> dict:
     """Compute the SAPT(DFT) interaction energy components.
 
@@ -1291,7 +1297,11 @@ def sapt_dft(
     do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() != "NONE"
     _validate_saptdft_fsapt_options(induction_type, do_fsapt)
     external_potentials = _normalize_saptdft_external_potentials(
-        external_potentials, dimer_wfn, wfn_A, wfn_B
+        external_potentials,
+        dimer_wfn,
+        wfn_A,
+        wfn_B,
+        validate_dimer=do_fsapt and not _driver_managed_external_potentials,
     )
     cphf_induction_keys = [
         "Ind20,r",

@@ -1679,6 +1679,21 @@ def test_saptdft_direct_api_normalizes_external_potential_keys():
             },
         )
 
+    dimer_wfn.set_external_potential(psi4.core.ExternalPotential())
+    psi4.set_options({"sapt_dft_do_fsapt": "FISAPT"})
+    try:
+        with pytest.raises(
+            psi4.ValidationError, match="aggregate potential carried by the dimer"
+        ):
+            sapt_proc.sapt_dft(
+                dimer_wfn,
+                wfn_A,
+                wfn_B,
+                external_potentials={"A": [[1.0, [2.0, 0.0, 0.0]]]},
+            )
+    finally:
+        psi4.set_options({"sapt_dft_do_fsapt": "NONE"})
+
 
 @pytest.mark.saptdft
 @pytest.mark.fsapt

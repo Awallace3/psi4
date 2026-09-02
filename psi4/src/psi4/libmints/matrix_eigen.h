@@ -36,10 +36,10 @@ namespace psi {
 namespace linalg {
 
 /// Map a single-irrep Psi4 Matrix onto its underlying data.
-PSI_API Eigen::Map<Eigen::MatrixXd> eigen_map(Matrix& matrix);
+PSI_API EigenRowMajorMap eigen_map(Matrix& matrix);
 
 /// Map each irrep block of a Psi4 Matrix onto its underlying data.
-PSI_API std::vector<Eigen::Map<Eigen::MatrixXd>> eigen_maps(Matrix& matrix);
+PSI_API std::vector<EigenRowMajorMap> eigen_maps(Matrix& matrix);
 
 }  // namespace linalg
 }  // namespace psi
