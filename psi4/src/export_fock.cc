@@ -238,6 +238,11 @@ void export_fock(py::module &m) {
           "shows the fitted tensor was distributed rather than replicated.");
     m.def("gtfock_df_local_tensor_doubles", &MinimalDFInterface::last_local_tensor_doubles,
           "Doubles in this rank's slice of the most recent distributed DF fitted tensor, or 0.");
+    m.def("gtfock_df_setup_phases", &MinimalDFInterface::last_setup_phases,
+          "[(name, seconds)] this rank spent in each phase of the most recent distributed DF engine "
+          "build, in build order, or an empty list if none was built. The setup timer says how much "
+          "the fit cost; this says which part of it, and the spread of one phase across ranks is that "
+          "phase's load imbalance.");
     m.def(
         "gtfock_df_setup_timer", []() { return std::string(GTFOCK_DF_SETUP_TIMER); },
         "Name of the top-level timer GTFockDFJK brackets its engine build with. The fitted tensor is built "

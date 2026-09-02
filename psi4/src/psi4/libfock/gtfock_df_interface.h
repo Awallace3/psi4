@@ -31,6 +31,8 @@
 
 #include <cstddef>
 #include <memory>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "psi4/pragma.h"
@@ -120,6 +122,16 @@ class MinimalDFInterface {
     /// Doubles in this rank's slice of the fitted tensor.
     size_t local_tensor_doubles() const { return local_tensor_doubles_; }
 
+    /*! Wall seconds this rank spent in each phase of the engine build, paired
+     *  with the phase's name and in the order the build runs them.
+     *
+     *  The phases are disjoint and sum to slightly less than the build, the
+     *  remainder being allocation and partitioning. Every rank times its own
+     *  elapsed seconds, waits inside collectives included, so the spread of one
+     *  phase across ranks is that phase's load imbalance. Empty when Psi4 was
+     *  built without the DF engine. */
+    std::vector<std::pair<std::string, double>> setup_phases() const { return setup_phases_; }
+
     int mpi_rank() const { return mpi_rank_; }
     int mpi_size() const { return mpi_size_; }
     /// J/K builds this engine has run.
@@ -135,6 +147,8 @@ class MinimalDFInterface {
     static std::vector<int> last_partition();
     /// Doubles in this rank's slice of the most recent engine's tensor, or 0.
     static size_t last_local_tensor_doubles();
+    /// setup_phases() of the most recent engine, or empty if none was built.
+    static std::vector<std::pair<std::string, double>> last_setup_phases();
 
    private:
     /// Refuse basis sets whose answer would be wrong, not merely slow.
@@ -152,6 +166,7 @@ class MinimalDFInterface {
     int nmetric_null_ = 0;
     int nlocal_pairs_ = 0;
     size_t local_tensor_doubles_ = 0;
+    std::vector<std::pair<std::string, double>> setup_phases_;
     int mpi_rank_ = 0;
     int mpi_size_ = 1;
 };

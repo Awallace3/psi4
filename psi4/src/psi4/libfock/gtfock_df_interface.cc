@@ -33,6 +33,7 @@
 #ifdef USING_GTFock_DF
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <mpi.h>
@@ -62,6 +63,11 @@ size_t gtfockdf_total_jk_builds = 0;
 /// tensor was distributed rather than replicated.
 std::vector<int> gtfockdf_last_partition{-1, -1, -1, -1, -1};
 size_t gtfockdf_last_local_tensor_doubles = 0;
+
+/// Where the most recent engine build spent its wall time, by phase. Setup is a
+/// third of SCF here and does not scale like the integrals do, so which phase
+/// it is matters; see doc/sphinxman/source/gtfock.rst.
+std::vector<std::pair<std::string, double>> gtfockdf_last_setup_phases;
 
 /*! Marshal one Psi4 BasisSet into GTFock's CInt layout.
  *
@@ -153,6 +159,10 @@ size_t MinimalDFInterface::total_jk_builds() { return gtfockdf_total_jk_builds; 
 std::vector<int> MinimalDFInterface::last_partition() { return gtfockdf_last_partition; }
 
 size_t MinimalDFInterface::last_local_tensor_doubles() { return gtfockdf_last_local_tensor_doubles; }
+
+std::vector<std::pair<std::string, double>> MinimalDFInterface::last_setup_phases() {
+    return gtfockdf_last_setup_phases;
+}
 
 void MinimalDFInterface::check_supported(const std::shared_ptr<BasisSet>& primary,
                                          const std::shared_ptr<BasisSet>& auxiliary) const {
@@ -247,9 +257,9 @@ MinimalDFInterface::MinimalDFInterface(std::shared_ptr<BasisSet> primary, std::s
         throw;
     }
 
-    // This is the expensive call: all three-center integrals, the metric
-    // inverse square root, and the redistribution that gives each rank its own
-    // slice of Q. Unlike the exact path's PFock engine there is no global state
+    // This is the expensive call: all three-center integrals, the Coulomb
+    // metric and its factorization, the fit, and the redistribution that gives
+    // each rank its own slice of Q. Unlike the exact path's PFock engine there is no global state
     // behind it, so it may be built here, destroyed, and built again.
     if (PDF_create(MPI_COMM_WORLD, impl_->primary, impl_->auxiliary, nthreads_, fitting_condition_, &impl_->pdf) !=
         CINT_STATUS_SUCCESS) {
@@ -266,8 +276,18 @@ MinimalDFInterface::MinimalDFInterface(std::shared_ptr<BasisSet> primary, std::s
     nmetric_null_ = PDF_nMetricNullVectors(impl_->pdf);
     nlocal_pairs_ = PDF_nLocalPairElements(impl_->pdf);
     local_tensor_doubles_ = PDF_localTensorSize(impl_->pdf);
+    // Read the phase clocks now rather than on demand: the engine may be
+    // destroyed long before a benchmark asks, and PDF_phaseName is the only
+    // place these names live.
+    setup_phases_.reserve(PDF_NPHASES);
+    for (int phase = 0; phase < PDF_NPHASES; ++phase) {
+        const PDF_Phase p = static_cast<PDF_Phase>(phase);
+        const char* name = PDF_phaseName(p);
+        setup_phases_.emplace_back(name != nullptr ? name : "?", PDF_phaseSeconds(impl_->pdf, p));
+    }
     gtfockdf_last_partition = {nbf_, naux_, nlocal_aux_, nmetric_null_, nlocal_pairs_};
     gtfockdf_last_local_tensor_doubles = local_tensor_doubles_;
+    gtfockdf_last_setup_phases = setup_phases_;
 }
 
 MinimalDFInterface::~MinimalDFInterface() {
@@ -348,6 +368,7 @@ bool MinimalDFInterface::enabled() { return false; }
 size_t MinimalDFInterface::total_jk_builds() { return 0; }
 std::vector<int> MinimalDFInterface::last_partition() { return {-1, -1, -1, -1, -1}; }
 size_t MinimalDFInterface::last_local_tensor_doubles() { return 0; }
+std::vector<std::pair<std::string, double>> MinimalDFInterface::last_setup_phases() { return {}; }
 
 void MinimalDFInterface::check_supported(const std::shared_ptr<BasisSet>&, const std::shared_ptr<BasisSet>&) const {}
 
