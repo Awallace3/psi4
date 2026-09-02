@@ -78,8 +78,12 @@ class MinimalDFInterface {
    public:
     /*! \param primary   orbital basis; must be Cartesian
      *  \param auxiliary fitting basis; must be Cartesian
-     *  \param fitting_condition relative eigenvalue cutoff for inverting the
-     *         Coulomb metric, i.e. Psi4's DF_FITTING_CONDITION
+     *  \param fitting_condition Psi4's DF_FITTING_CONDITION, forwarded as the
+     *         relative cutoff for factoring the Coulomb metric. GTFock applies
+     *         it as a pivoted-Cholesky pivot tolerance rather than DFHelper's
+     *         eigenvalue floor, so the two engines can retain different numbers
+     *         of auxiliary functions on a metric whose spectrum straddles it
+     *         -- see gtfock_pdf.c's pdf_factor_metric
      *  \param nthreads  OpenMP threads for the three-center integrals */
     MinimalDFInterface(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
                        double fitting_condition, int nthreads);

@@ -75,13 +75,23 @@ RANK_INVARIANCE_TOL = 1.0e-9
 # GTFock's density fitting against Psi4's own MemDFJK, given the *same* fitting
 # basis. This is a much tighter comparison than the exact-path one above: both
 # sides expand in the same auxiliary space, and J and K are invariant to the
-# rotation within it that distinguishes GTFock's eigendecomposition of the
-# Coulomb metric from DFHelper's, so only the three-centre integrals and the
-# contraction order differ. Measured on water/cc-pVDZ with cc-pVDZ-JKFIT:
-# max|dJ| ~ 1e-12, max|dK| ~ 2e-13, dE ~ 5e-12 Eh. 1e-9 keeps three orders of
-# headroom over the largest of those while still catching a real disagreement.
+# rotation within it that distinguishes GTFock's pivoted Cholesky of the Coulomb
+# metric from DFHelper's eigendecomposition, so only the three-centre integrals
+# and the contraction order differ. Measured on water/cc-pVDZ with
+# cc-pVDZ-JKFIT: max|dJ| ~ 7e-12, max|dK| ~ 3e-12, dE ~ 5e-12 Eh. 1e-9 keeps
+# over two orders of headroom while still catching a real disagreement.
 DF_JK_TOL = 1.0e-9
 DF_ENERGY_TOL = 1.0e-9
+# The two engines only expand in the *same* auxiliary space if neither of them
+# has thrown part of it away, and they do not decide that the same way: GTFock
+# truncates on a pivoted-Cholesky pivot, DFHelper on a relative eigenvalue. On
+# this basis pair Psi4's 1e-10 default lands between the smallest eigenvalue
+# (3.83e-08) and its floor (4.17e-08), so DFHelper drops one vector that GTFock
+# keeps and J moves by 3.4e-07 -- a truncation-policy difference, not an
+# implementation one. Pinning the condition below the whole spectrum takes that
+# out of the tight comparisons; test_gtfock_df_truncation_differs_from_dfhelper
+# covers the difference itself.
+DF_CONDITION = 1.0e-12
 # The DF orbital/fitting pair the DF tests use. Both must be Cartesian, so the
 # tests build them with puream=False; cc-pVDZ-JKFIT tops out at f (l = 3), well
 # inside GTFDF_maxSupportedAM().
@@ -622,7 +632,8 @@ def test_gtfock_df_jk_matches_memdfjk(gtfock_mpi):
     # feeds the engine rather than on a random one.
     psi4.set_options({"basis": DF_BASIS, "puream": False, "df_basis_scf": DF_FITTING_BASIS,
                       "scf_type": "mem_df", "df_scf_guess": False, "guess": "core",
-                      "e_convergence": 1e-10, "d_convergence": 1e-9})
+                      "e_convergence": 1e-10, "d_convergence": 1e-9,
+                      "df_fitting_condition": DF_CONDITION})
     _, wfn = psi4.energy("scf", return_wfn=True)
     Cocc = wfn.Ca_subset("AO", "OCC")
 
@@ -663,7 +674,8 @@ def test_gtfock_df_rhf_energy_matches_mem_df(gtfock_mpi):
     _water()
     common = {"basis": DF_BASIS, "puream": False, "df_basis_scf": DF_FITTING_BASIS,
               "df_scf_guess": False, "guess": "core", "e_convergence": 1e-10,
-              "d_convergence": 1e-9, "save_jk": True}
+              "d_convergence": 1e-9, "save_jk": True,
+              "df_fitting_condition": DF_CONDITION}
 
     psi4.set_options({**common, "scf_type": "mem_df"})
     e_ref = psi4.energy("scf")
@@ -703,7 +715,8 @@ no_com
 """)
     common = {"basis": DF_BASIS, "puream": False, "df_basis_scf": DF_FITTING_BASIS,
               "reference": "uhf", "df_scf_guess": False, "guess": "core",
-              "e_convergence": 1e-10, "d_convergence": 1e-9, "save_jk": True}
+              "e_convergence": 1e-10, "d_convergence": 1e-9, "save_jk": True,
+              "df_fitting_condition": DF_CONDITION}
 
     psi4.set_options({**common, "scf_type": "mem_df"})
     e_ref = psi4.energy("scf")
@@ -738,7 +751,8 @@ no_com
 """)
     common = {"basis": DF_BASIS, "puream": False, "df_basis_scf": DF_FITTING_BASIS,
               "reference": "uhf", "df_scf_guess": False, "guess": "core",
-              "e_convergence": 1e-10, "d_convergence": 1e-9, "save_jk": True}
+              "e_convergence": 1e-10, "d_convergence": 1e-9, "save_jk": True,
+              "df_fitting_condition": DF_CONDITION}
 
     psi4.set_options({**common, "scf_type": "mem_df"})
     e_ref = psi4.energy("scf")
@@ -943,7 +957,8 @@ def test_gtfock_df_computes_j_without_k(gtfock_mpi):
     primary, auxiliary = _df_bases()
     psi4.set_options({"basis": DF_BASIS, "puream": False, "df_basis_scf": DF_FITTING_BASIS,
                       "scf_type": "mem_df", "df_scf_guess": False, "guess": "core",
-                      "e_convergence": 1e-10, "d_convergence": 1e-9})
+                      "e_convergence": 1e-10, "d_convergence": 1e-9,
+                      "df_fitting_condition": DF_CONDITION})
     _, wfn = psi4.energy("scf", return_wfn=True)
     Cocc = wfn.Ca_subset("AO", "OCC")
 
@@ -960,6 +975,61 @@ def test_gtfock_df_computes_j_without_k(gtfock_mpi):
         matrices[scf_type] = np.array(jk.J()[0])
 
     assert np.max(np.abs(matrices["gtfock_df"] - matrices["mem_df"])) < DF_JK_TOL
+
+
+@uusing("gtfock_df")
+def test_gtfock_df_truncation_differs_from_dfhelper(gtfock_mpi):
+    """At Psi4's default condition the two engines drop different functions.
+
+    The rest of the DF comparisons pin ``DF_CONDITION`` so that neither engine
+    truncates and they are testing the same fit. This one deliberately runs at
+    Psi4's 1e-10 default, where they do not agree, and records why: DFHelper
+    discards eigenvectors below 1e-10 times the largest eigenvalue, while GTFock
+    stops its pivoted Cholesky once the largest remaining Schur-complement
+    diagonal falls below 1e-10 times the first. On this basis pair the metric's
+    smallest eigenvalue (3.83e-08) sits just under DFHelper's floor (4.17e-08)
+    and well above GTFock's pivot cutoff (4.42e-09), so DFHelper throws one
+    function away and GTFock keeps all 131.
+
+    Which is right is not a matter of taste here: measured against the
+    untruncated fit, GTFock lands on it and DFHelper is 3.4e-07 away in J. This
+    guards that ordering, so a later change to the factorization cannot quietly
+    make the fit *worse* than the reference it is supposed to reproduce.
+    """
+    primary, auxiliary = _df_bases()
+    psi4.set_options({"basis": DF_BASIS, "puream": False, "df_basis_scf": DF_FITTING_BASIS,
+                      "scf_type": "mem_df", "df_scf_guess": False, "guess": "core",
+                      "e_convergence": 1e-10, "d_convergence": 1e-9,
+                      "df_fitting_condition": DF_CONDITION})
+    _, wfn = psi4.energy("scf", return_wfn=True)
+    Cocc = wfn.Ca_subset("AO", "OCC")
+
+    def matrices(scf_type, condition):
+        psi4.set_options({"scf_type": scf_type, "df_fitting_condition": condition})
+        jk = psi4.core.JK.build_JK(primary, auxiliary)
+        jk.set_do_J(True)
+        jk.set_do_K(True)
+        jk.initialize()
+        jk.C_clear()
+        jk.C_left_add(Cocc)
+        jk.compute()
+        out = (np.array(jk.J()[0]), np.array(jk.K()[0]))
+        jk.finalize()
+        return out
+
+    # 1e-14 is below the whole spectrum, so this is the fit with nothing dropped.
+    ref = matrices("mem_df", 1.0e-14)
+    mem = matrices("mem_df", 1.0e-10)
+    gtf = matrices("gtfock_df", 1.0e-10)
+
+    dev = lambda a, b: max(np.max(np.abs(a[0] - b[0])), np.max(np.abs(a[1] - b[1])))
+    mem_dev, gtf_dev = dev(mem, ref), dev(gtf, ref)
+
+    # DFHelper really is truncating at the default; if it stops, this test has
+    # lost its subject and should be re-derived rather than silently passing.
+    assert mem_dev > 1.0e-8, f"DFHelper no longer truncates here (dev {mem_dev:.3e})"
+    # GTFock is not, and so sits on the untruncated answer.
+    assert gtf_dev < DF_JK_TOL, f"GTFock drifted off the untruncated fit (dev {gtf_dev:.3e})"
 
 
 def _oversubscribe_flag(mpirun):
