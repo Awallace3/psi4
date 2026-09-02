@@ -27,6 +27,10 @@ import sys
 # there and not here still reaches the JSON, just not the table.
 _DF_PHASES = ("metric", "factor", "int3c", "fit", "redist")
 
+# The same for a J/K build, in the order PDF_computeJK runs them. Summed over
+# every call the point made, so divide by jk_calls for a per-build cost.
+_DF_JK_PHASES = ("jk_local", "jk_skew", "jk_comm")
+
 
 # One row per point. Written in this order so the CSV reads left to right as
 # "what was run", "what it cost", "was it the same answer".
@@ -47,6 +51,10 @@ _COLUMNS = [
     # this is what says whether a setup that stopped improving stopped because
     # of the replicated metric factorization or for some other reason.
     *(f"df_phase_{name}_s" for name in _DF_PHASES),
+    # And where jk_wall_s went. jk_local divides over ranks and jk_comm does
+    # not, so this is what says whether a J/K column that stopped improving ran
+    # out of local work or started paying for the network.
+    *(f"df_phase_{name}_s" for name in _DF_JK_PHASES),
     "host", "slurm_job_id", "slurm_nodelist", "df_setup_keys",
 ]
 
@@ -181,6 +189,28 @@ def _reduce_df_phases(records):
             for name in _DF_PHASES}
 
 
+def _reduce_jk_phases(records):
+    """Reduce the DF J/K phase clocks across the ranks of one point.
+
+    Maxima again, but they mean three different things and only two of them
+    add. ``jk_local`` is the arithmetic on the rank that had the most of it, so
+    its maximum is the critical path. ``jk_comm`` is a collective and reads
+    about the same everywhere. ``jk_skew`` is the opposite of ``jk_local``: the
+    rank that waits longest at the barrier is the rank that finished its rows
+    first, so its maximum is not part of the critical path but the idle time the
+    imbalance cost the least-loaded rank.
+
+    So ``jk_local + jk_comm`` is roughly ``jk_wall_s`` and ``jk_skew`` sits
+    beside it rather than inside the sum. Adding all three would charge the
+    point for work and for waiting on that same work.
+    """
+    per_rank = [r["df_jk_phases"] for r in records if r.get("df_jk_phases")]
+    if not per_rank:
+        return {}
+    return {f"df_phase_{name}_s": max(p.get(name, 0.0) for p in per_rank)
+            for name in _DF_JK_PHASES}
+
+
 def load_points(directories):
     """Collapse ``*.rank<N>.json`` files into one dict per (system, arm, ranks)."""
     by_key = {}
@@ -241,6 +271,7 @@ def load_points(directories):
             "dE_across_ranks_eh": max(energies) - min(energies),
             **_reduce_df_partition(records),
             **_reduce_df_phases(records),
+            **_reduce_jk_phases(records),
             "process_grid": "x".join(str(n) for n in head["process_grid"]) if "process_grid" in head else "",
             "local_task_shape": "x".join(str(n) for n in head["local_task_shape"]) if "local_task_shape" in head else "",
             "host": head["host"],
