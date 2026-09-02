@@ -250,8 +250,13 @@ _ans12 = {"B": {"points": _qxyz4a, "diffuse": _qxyzw4a}, "A": {"matrix": _mat5a}
     ({"B": {"points": _qxyz4b, "diffuse": _qxyzw4b}, "A": [None, None, _mat5c]}, _ans12),
     ({"b": [_qxyz4b, _qxyzw4b], "a": {"matrix": _mat5a}}, _ans12),
 ])
-def test_extern_parsing(ep, ans):
-    cptd = psi4.procrouting.proc.validate_external_potential(ep)
+@pytest.mark.parametrize("validator", ["p4util", "proc"])
+def test_extern_parsing(validator, ep, ans):
+    validate = {
+        "p4util": psi4.p4util.validate_external_potential,
+        "proc": psi4.procrouting.proc.validate_external_potential,
+    }[validator]
+    cptd = validate(ep)
     assert compare_recursive(ans, cptd)
 
 

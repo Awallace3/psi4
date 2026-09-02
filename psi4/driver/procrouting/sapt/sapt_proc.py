@@ -81,8 +81,6 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         ["SCF", "SAVE_JK"],
         ["SAPT", "SAPT_DFT_DO_DISP"],
         ["SAPT", "SAPT_DFT_DO_DDFT"],
-        ["SAPT", "SAPT_DFT_D3_IE"],
-        ["SAPT", "SAPT_DFT_D4_IE"],
     )
     core.timer_on("SAPT(DFT) Energy")
     try:

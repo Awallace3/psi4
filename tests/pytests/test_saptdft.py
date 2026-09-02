@@ -137,8 +137,6 @@ units bohr
     managed_options = (
         "SAPT_DFT_DO_DISP",
         "SAPT_DFT_DO_DDFT",
-        "SAPT_DFT_D3_IE",
-        "SAPT_DFT_D4_IE",
     )
     before = {
         option: (

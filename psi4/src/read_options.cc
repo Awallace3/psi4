@@ -1202,12 +1202,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("SAPT_DFT_DO_HYBRID", true);
         /*- Compute the Delta-DFT correction? -*/
         options.add_bool("SAPT_DFT_DO_DDFT", false);
-        /*- Do SAPT(DFT) dispersion? May be disabled when using the Delta-DFT correction and SAPT_DFT_D4_IE. -*/
+        /*- Do SAPT(DFT) dispersion? Automatically disabled by the -D3/-D4 method names, which
+        supply dispersion from an empirical correction instead. -*/
         options.add_bool("SAPT_DFT_DO_DISP", true);
-        /*- Compute -D3 dispersion in SAPT(DFT) for SAPT(DFT)-D3? !expert -*/
-        options.add_bool("SAPT_DFT_D3_IE", false);
-        /*- Compute -D4 dispersion in SAPT(DFT) for SAPT(DFT)-D4? !expert -*/
-        options.add_bool("SAPT_DFT_D4_IE", false);
         /*- Scheme for approximating exchange-dispersion for SAPT-DFT.
         Previous to Nov 2022, default was ``FIXED`` with Hesselmann value.
         ``NONE`` Use unscaled ``Exch-Disp2,u`` .

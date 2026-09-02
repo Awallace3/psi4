@@ -235,7 +235,6 @@ no_com
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
             "SAPT_DFT_DO_FSAPT": "FISAPT",
-            "SAPT_DFT_D4_IE": False,
             "SAPT_DFT_DO_DISP": True,
             "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
             # Normally on
@@ -845,7 +844,6 @@ no_com
             "SAPT_DFT_DO_HYBRID": False,
             # "SAPT_DFT_DO_FSAPT": "FISAPT",
             "SAPT_DFT_DO_FSAPT": "SAPTDFT",
-            "SAPT_DFT_D4_IE": False,
             "SAPT_DFT_DO_DISP": True,
             "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
             "SAPT_DFT_USE_EINSUMS": False,
