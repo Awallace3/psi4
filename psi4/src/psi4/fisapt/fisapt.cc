@@ -7978,6 +7978,11 @@ std::map<std::string, std::shared_ptr<Matrix> > CPHF_FISAPT::product(
 // method for updating/setting matrices_, if key exists, update it, else create it
 void FISAPT::set_matrix(std::map<std::string, std::shared_ptr<Matrix>> update_matrices) {
     for (const auto& pair : update_matrices) {
+        if (!pair.second) {
+            throw PSIEXCEPTION("FISAPT::set_matrix requires a matrix for key '" + pair.first + "'.");
+        }
+    }
+    for (const auto& pair : update_matrices) {
         const std::string& key = pair.first;
         const std::shared_ptr<Matrix>& matrix = pair.second;
         // outfile->Printf(" Setting matrix %s\n", key.c_str());
@@ -7987,6 +7992,11 @@ void FISAPT::set_matrix(std::map<std::string, std::shared_ptr<Matrix>> update_ma
 
 // method for updating/setting vector_, if key exists, update it, else create it
 void FISAPT::set_vector(std::map<std::string, std::shared_ptr<Vector>> update_vector) {
+    for (const auto& pair : update_vector) {
+        if (!pair.second) {
+            throw PSIEXCEPTION("FISAPT::set_vector requires a vector for key '" + pair.first + "'.");
+        }
+    }
     for (const auto& pair : update_vector) {
         const std::string& key = pair.first;
         const std::shared_ptr<Vector>& vec = pair.second;

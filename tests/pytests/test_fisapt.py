@@ -113,6 +113,20 @@ def test_ibolocalizer2_static_build():
         localizer.localize(psi4.core.Matrix(basis.nbf() + 1, 1), fock)
 
 
+def test_fisapt_setters_reject_null_state_atomically():
+    mol = psi4.geometry("He\nsymmetry c1")
+    wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
+    fisapt = psi4.core.FISAPT(wfn)
+
+    with pytest.raises(RuntimeError, match="set_matrix requires a matrix for key 'null'"):
+        fisapt.set_matrix({"accepted": psi4.core.Matrix(1, 1), "null": None})
+    assert "accepted" not in fisapt.matrices()
+
+    with pytest.raises(RuntimeError, match="set_vector requires a vector for key 'null'"):
+        fisapt.set_vector({"accepted": psi4.core.Vector(1), "null": None})
+    assert "accepted" not in fisapt.vectors()
+
+
 def test_dfhelper_disk_tensor_validation_and_interleaved_io():
     mol = psi4.geometry("He\nsymmetry c1")
     basis = psi4.core.BasisSet.build(mol, "BASIS", "sto-3g")
