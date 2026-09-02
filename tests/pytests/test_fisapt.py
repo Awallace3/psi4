@@ -153,6 +153,11 @@ def test_dfhelper_disk_tensor_validation_and_interleaved_io():
     helper.fill_tensor("test", roundtrip, [0, 1], [0, 1], [0, 1])
     assert np.array_equal(roundtrip.np.ravel(), first.np.ravel())
 
+    partial = psi4.core.Matrix(2, 1)
+    partial.np[:] = 9.0
+    with pytest.raises(RuntimeError, match="DFHelper:get_tensor: read error"):
+        helper.fill_tensor("test", partial)
+
     second = psi4.core.Matrix.from_array(np.array([[2.0]]))
     helper.write_disk_tensor("test", second, [1, 2], [0, 1], [0, 1])
     combined = psi4.core.Matrix(2, 1)

@@ -975,7 +975,7 @@ void DFHelper::put_tensor(std::string file, double* Mp, const size_t start1, con
     // is everything contiguous?
     if (st == 0) {
         size_t s = fwrite(&Mp[0], sizeof(double), a0 * a1, fp);
-        if (!s) {
+        if (s != a0 * a1) {
             std::stringstream error;
             error << "DFHelper:put_tensor: write error";
             throw PSIEXCEPTION(error.str().c_str());
@@ -984,7 +984,7 @@ void DFHelper::put_tensor(std::string file, double* Mp, const size_t start1, con
         for (size_t i = start1; i < stop1; i++) {
             // write
             size_t s = fwrite(&Mp[(i - start1) * a1], sizeof(double), a1, fp);
-            if (!s) {
+            if (s != a1) {
                 std::stringstream error;
                 error << "DFHelper:put_tensor: write error";
                 throw PSIEXCEPTION(error.str().c_str());
@@ -994,7 +994,7 @@ void DFHelper::put_tensor(std::string file, double* Mp, const size_t start1, con
         }
         // manual last one
         size_t s = fwrite(&Mp[(a0 - 1) * a1], sizeof(double), a1, fp);
-        if (!s) {
+        if (s != a1) {
             std::stringstream error;
             error << "DFHelper:put_tensor: write error";
             throw PSIEXCEPTION(error.str().c_str());
@@ -1010,7 +1010,7 @@ void DFHelper::put_tensor_AO(std::string file, double* Mp, size_t size, size_t s
 
     // everything is contiguous
     size_t s = fwrite(&Mp[0], sizeof(double), size, fp);
-    if (!s) {
+    if (s != size) {
         std::stringstream error;
         error << "DFHelper:put_tensor_AO: write error";
         throw PSIEXCEPTION(error.str().c_str());
@@ -1025,7 +1025,7 @@ void DFHelper::get_tensor_AO(std::string file, double* Mp, size_t size, size_t s
 
     // everything is contiguous
     size_t s = fread(&Mp[0], sizeof(double), size, fp);
-    if (!s) {
+    if (s != size) {
         std::stringstream error;
         error << "DFHelper:get_tensor_AO: read error";
         throw PSIEXCEPTION(error.str().c_str());
@@ -1085,7 +1085,7 @@ void DFHelper::get_tensor_(std::string file, double* b, const size_t start1, con
     // is everything contiguous?
     if (st == 0) {
         size_t s = fread(&b[0], sizeof(double), a0 * a1, fp);
-        if (!s) {
+        if (s != a0 * a1) {
             std::stringstream error;
             error << "DFHelper:get_tensor: read error";
             throw PSIEXCEPTION(error.str().c_str());
@@ -1094,7 +1094,7 @@ void DFHelper::get_tensor_(std::string file, double* b, const size_t start1, con
         for (size_t i = 0; i < a0 - 1; i++) {
             // read
             size_t s = fread(&b[i * a1], sizeof(double), a1, fp);
-            if (!s) {
+            if (s != a1) {
                 std::stringstream error;
                 error << "DFHelper:get_tensor: read error";
                 throw PSIEXCEPTION(error.str().c_str());
@@ -1109,7 +1109,7 @@ void DFHelper::get_tensor_(std::string file, double* b, const size_t start1, con
         }
         // manual last one
         size_t s = fread(&b[(a0 - 1) * a1], sizeof(double), a1, fp);
-        if (!s) {
+        if (s != a1) {
             std::stringstream error;
             error << "DFHelper:get_tensor: read error";
             throw PSIEXCEPTION(error.str().c_str());
