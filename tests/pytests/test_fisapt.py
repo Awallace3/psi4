@@ -71,6 +71,21 @@ def test_ibolocalizer2_static_build():
     )
 
     assert isinstance(localizer, psi4.core.IBOLocalizer2)
+    fock = psi4.core.Matrix(1, 1)
+    localized = localizer.localize(coefficients, fock)
+    assert {"L", "U", "F", "Q", "A"}.issubset(localized)
+    localizer.print_charges()
+
+
+def test_dfhelper_write_disk_tensor_rejects_invalid_ranges():
+    mol = psi4.geometry("He\nsymmetry c1")
+    basis = psi4.core.BasisSet.build(mol, "BASIS", "sto-3g")
+    helper = psi4.core.DFHelper(basis, basis)
+
+    with pytest.raises(RuntimeError, match="two increasing bounds"):
+        helper.write_disk_tensor(
+            "missing", psi4.core.Matrix(1, 1), [], [0, 1], [0, 1]
+        )
 
 
 @pytest.mark.fsapt

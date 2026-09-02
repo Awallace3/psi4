@@ -737,19 +737,20 @@ def build_sapt_jk_cache(
 
     cache["extern_extern_IE"] = 0.0
     if external_potentials:
-        dimer_nr += wfn_dimer.external_pot().computeNuclearEnergy(wfn_dimer.molecule())
         if external_potentials.get("A") is not None:
-            monA_nr += wfn_A.external_pot().computeNuclearEnergy(wfn_A.molecule())
+            potential_A = wfn_dimer.potential_variable("A")
+            dimer_nr += potential_A.computeNuclearEnergy(wfn_dimer.molecule())
+            monA_nr += potential_A.computeNuclearEnergy(wfn_A.molecule())
         if external_potentials.get("B") is not None:
-            monB_nr += wfn_B.external_pot().computeNuclearEnergy(wfn_B.molecule())
+            potential_B = wfn_dimer.potential_variable("B")
+            dimer_nr += potential_B.computeNuclearEnergy(wfn_dimer.molecule())
+            monB_nr += potential_B.computeNuclearEnergy(wfn_B.molecule())
         if (
             external_potentials.get("A") is not None
             and external_potentials.get("B") is not None
         ):
-            cache["extern_extern_IE"] = (
-                wfn_A.external_pot().computeExternExternInteraction(
-                    wfn_B.external_pot()
-                )
+            cache["extern_extern_IE"] = potential_A.computeExternExternInteraction(
+                potential_B
             )
 
     cache["nuclear_repulsion_energy"] = dimer_nr - monA_nr - monB_nr

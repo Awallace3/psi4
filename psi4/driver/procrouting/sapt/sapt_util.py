@@ -208,6 +208,10 @@ def print_sapt_dft_summary(
     if do_disp:
         if do_dft:
             disp = data["Disp20"] + data["Exch-Disp20,r"]
+            if do_delta_dft:
+                disp += data["Delta DFT Correction"] - data.get(
+                    "Delta HF Correction", 0.0
+                )
             ret += print_sapt_var("Dispersion", disp) + "\n"
             ret += print_sapt_var("  Disp2,r", data["Disp20"]) + "\n"
             ret += print_sapt_var("  Disp2,u", data["Disp20,u"]) + "\n"

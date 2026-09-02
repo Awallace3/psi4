@@ -7,7 +7,7 @@ import qcelemental as qcel
 from pathlib import Path
 from pprint import pprint as pp
 from addons import uusing
-from psi4.driver.procrouting.sapt import sapt_proc
+from psi4.driver.procrouting.sapt import sapt_proc, sapt_util
 
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
 pytestmark = [pytest.mark.psi, pytest.mark.api]
@@ -1637,6 +1637,44 @@ def test_saptdft_direct_api_normalizes_external_potential_keys():
             wfn_B,
             external_potentials={"a": [[1.0, [2.0, 0.0, 0.0]]]},
         )
+
+    with pytest.raises(psi4.ValidationError, match="monomer A wavefunction"):
+        sapt_proc.sapt_dft(
+            dimer_wfn,
+            wfn_A,
+            wfn_B,
+            external_potentials={"c": [[1.0, [2.0, 0.0, 0.0]]]},
+        )
+
+
+@pytest.mark.saptdft
+def test_saptdft_summary_includes_standalone_delta_dft():
+    mol = psi4.geometry("He\n--\nHe 1 4.0\nunits bohr")
+    wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
+    data = {
+        "Elst10,r": 1.0,
+        "Exch10": 2.0,
+        "Exch10(S^2)": 2.0,
+        "Ind20,r": 3.0,
+        "Exch-Ind20,r": 4.0,
+        "Ind20,r (A<-B)": 1.0,
+        "Exch-Ind20,r (A<-B)": 2.0,
+        "Ind20,r (A->B)": 2.0,
+        "Exch-Ind20,r (A->B)": 2.0,
+        "Delta HF Correction": 0.5,
+        "Disp20": 5.0,
+        "Disp20,u": 5.0,
+        "Exch-Disp20,r": 6.0,
+        "Exch-Disp20,u": 6.0,
+        "Delta DFT Correction": 1.5,
+    }
+
+    sapt_util.print_sapt_dft_summary(
+        data, "SAPT(DFT)", wfn, do_disp=True, do_delta_dft=True
+    )
+
+    assert compare_values(12.0, wfn.variable("SAPT DISP ENERGY"), 12)
+    assert compare_values(22.5, wfn.variable("SAPT TOTAL ENERGY"), 12)
 
 
 @pytest.mark.saptdft

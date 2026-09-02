@@ -297,9 +297,11 @@ def fisapt_variables_to_wfn(self, ref_wfn, external_potentials=None, sapt_type='
         ref_wfn.set_variable("SAPT HF(2) ENERGY C", scalars["E_C"])
         ref_wfn.set_variable("SAPT HF(2) ENERGY HF", scalars["HF"])
 
-    # Check if doing FSAPT. If not, we do not have FSAPT vars to set so just
-    # return early
-    if not core.get_option("FISAPT", "FISAPT_DO_FSAPT"):
+    if sapt_type.lower() == "fisapt0":
+        do_fsapt = core.get_option("FISAPT", "FISAPT_DO_FSAPT")
+    else:
+        do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() != "NONE"
+    if not do_fsapt:
         return
     for fragment, coordinates in _external_potential_coordinates(
         external_potentials

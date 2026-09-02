@@ -401,6 +401,22 @@ void Matrix::copy(const Matrix &cp) { copy(&cp); }
 
 void Matrix::copy(const SharedMatrix &cp) { copy(cp.get()); }
 
+Eigen::Map<Eigen::MatrixXd> Matrix::eigen_map() {
+    if (nirrep() != 1) {
+        throw PSIEXCEPTION("Matrix::eigen_map() requires a matrix with one irrep; use Matrix::eigen_maps() instead.");
+    }
+    return Eigen::Map<Eigen::MatrixXd>(get_pointer(), nrow(), ncol());
+}
+
+std::vector<Eigen::Map<Eigen::MatrixXd>> Matrix::eigen_maps() {
+    std::vector<Eigen::Map<Eigen::MatrixXd>> maps;
+    maps.reserve(nirrep());
+    for (int h = 0; h != nirrep(); ++h) {
+        maps.emplace_back(get_pointer(h), rowdim(h), coldim(h));
+    }
+    return maps;
+}
+
 #ifdef USING_OpenOrbitalOptimizer
 arma::mat Matrix::to_armadillo_matrix(int h) {
     int nc = coldim(h);

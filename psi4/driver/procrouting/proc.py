@@ -1638,7 +1638,11 @@ def validate_external_potential(external_potential) -> Dict:
 
     return ep2
 
-def _set_external_potentials_to_wavefunction(external_potential: Union[List, Dict[str, List]], wfn: "core.Wavefunction"):
+def _set_external_potentials_to_wavefunction(
+    external_potential: Union[List, Dict[str, List]],
+    wfn: "core.Wavefunction",
+    print_out: bool = True,
+):
     vep = validate_external_potential(external_potential)
 
     total_ep = core.ExternalPotential()
@@ -1702,7 +1706,8 @@ def _set_external_potentials_to_wavefunction(external_potential: Union[List, Dic
 
         wfn.set_potential_variable(frag, frag_ep)
     wfn.set_external_potential(total_ep)
-    total_ep.print_out()
+    if print_out:
+        total_ep.print_out()
 
     # For FSAPT, we can take a dictionary of external potentials, e.g.,
     # external_potentials={'A': potA, 'B': potB, 'C': potC} (any optional)

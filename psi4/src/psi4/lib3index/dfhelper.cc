@@ -2593,7 +2593,11 @@ void DFHelper::write_disk_tensor(std::string key, SharedMatrix M, std::vector<si
 }
 void DFHelper::write_disk_tensor(std::string key, SharedMatrix M, std::vector<size_t> a0, std::vector<size_t> a1,
                                  std::vector<size_t> a2) {
-    // being pythonic ;)
+    for (const auto& range : {a0, a1, a2}) {
+        if (range.size() != 2 || range[0] >= range[1]) {
+            throw PSIEXCEPTION("DFHelper::write_disk_tensor ranges must contain two increasing bounds.");
+        }
+    }
     std::pair<size_t, size_t> i0 = std::make_pair(a0[0], a0[1] - 1);
     std::pair<size_t, size_t> i1 = std::make_pair(a1[0], a1[1] - 1);
     std::pair<size_t, size_t> i2 = std::make_pair(a2[0], a2[1] - 1);
@@ -2632,7 +2636,11 @@ void DFHelper::write_disk_tensor(std::string key, double* b, std::vector<size_t>
 }
 void DFHelper::write_disk_tensor(std::string key, double* b, std::vector<size_t> a0, std::vector<size_t> a1,
                                  std::vector<size_t> a2) {
-    // being pythonic ;)
+    for (const auto& range : {a0, a1, a2}) {
+        if (range.size() != 2 || range[0] >= range[1]) {
+            throw PSIEXCEPTION("DFHelper::write_disk_tensor ranges must contain two increasing bounds.");
+        }
+    }
     std::pair<size_t, size_t> i0 = std::make_pair(a0[0], a0[1] - 1);
     std::pair<size_t, size_t> i1 = std::make_pair(a1[0], a1[1] - 1);
     std::pair<size_t, size_t> i2 = std::make_pair(a2[0], a2[1] - 1);

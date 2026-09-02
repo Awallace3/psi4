@@ -546,13 +546,12 @@ estimated by scaling from the uncoupled value either by a fitted fixed value
 ratio of coupled and uncoupled dispersion energy (suggested by
 [Podeszwa:2006:400]_ ). This can be controlled by keyword
 |sapt__sapt_dft_exch_disp_scale_scheme|, with ``FIXED`` using the
-Hesselmann/Xie approach (the current default, with the Xie factor of 0.770 versus |PSIfours| default prior to Nov 2022),
-``DISP`` using the Podeszwa approach (|PSIfours| default after Nov 2022), or ``NONE`` for not scaling and using the
+Hesselmann/Xie approach (the current default, with the Xie factor of 0.770),
+``DISP`` using the Podeszwa approach, or ``NONE`` for not scaling and using the
 uncoupled exchange-dispersion energy directly.
 
-.. warning:: Since Nov 2022, the defaults of options |sapt__sapt_dft_exch_disp_scale_scheme| and |sapt__sapt_dft_exch_disp_fixed_scale|
-             have been changed. Before, the former defaulted to ``FIXED`` with Hesselmann value of 0.686 for the latter. Now, the former defaults to ``DISP`` and should you instead select ``FIXED``, the default for the latter is the Xie value of 0.770. This might cause
-             an older version of |PSIfour| to produce a different value of
+.. warning:: Before Nov 2022, |sapt__sapt_dft_exch_disp_scale_scheme| defaulted to ``FIXED`` with a Hesselmann factor of 0.686. It subsequently defaulted to ``DISP`` and now defaults to ``FIXED`` with the Xie factor of 0.770. This history can cause
+             older versions of |PSIfour| to produce a different value of
              exchange-dispersion energy from the latest version.
 
 Induction treatments

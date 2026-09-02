@@ -87,16 +87,19 @@ def _normalize_saptdft_external_potentials(external_potentials, dimer_wfn, wfn_A
     normalized = validate_external_potential(external_potentials)
     if not normalized:
         return None
-    required_wavefunctions = [("dimer", dimer_wfn)]
-    if "A" in normalized:
-        required_wavefunctions.append(("monomer A", wfn_A))
-    if "B" in normalized:
-        required_wavefunctions.append(("monomer B", wfn_B))
-    for label, wfn in required_wavefunctions:
+    required_wavefunctions = {"dimer": dimer_wfn}
+    if "A" in normalized or "C" in normalized:
+        required_wavefunctions["monomer A"] = wfn_A
+    if "B" in normalized or "C" in normalized:
+        required_wavefunctions["monomer B"] = wfn_B
+    for label, wfn in required_wavefunctions.items():
         if wfn.external_pot() is None:
             raise ValidationError(
                 f"sapt_dft() external_potentials require the {label} wavefunction to carry its external potential."
             )
+    dimer_external_potential = dimer_wfn.external_pot()
+    _set_external_potentials_to_wavefunction(normalized, dimer_wfn, print_out=False)
+    dimer_wfn.set_external_potential(dimer_external_potential)
     return normalized
 
 
@@ -670,12 +673,20 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     # If we did not compute HF wavefunction, we still need orbital coefficients
     # for IBOLocalizer2
     elif hf_wfn_dimer is None and do_fsapt:
+        if do_ext_potential:
+            kwargs["external_potentials"] = {
+                "C": construct_external_potential_in_field_C(
+                    [ext_pot_C, ext_pot_A, ext_pot_B]
+                )
+            }
         dimer_wfn = scf_helper(
             "SCF",
             molecule=sapt_dimer,
             banner="SAPT(DFT): Dimer for Localization",
             **kwargs,
         )
+        if do_ext_potential:
+            kwargs.pop("external_potentials")
     else:
         dimer_wfn = hf_wfn_dimer
 

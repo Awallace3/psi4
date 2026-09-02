@@ -1001,6 +1001,7 @@ no_com
             "SAPT_DFT_DO_HYBRID": False,
             "SAPT_DFT_DO_FSAPT": "FISAPT",
             "SAPT_DFT_USE_EINSUMS": True,
+            "FISAPT_DO_FSAPT": False,
             "FISAPT_FSAPT_FILEPATH": "tmp",
             "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
         }
