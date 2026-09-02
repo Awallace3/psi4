@@ -89,9 +89,13 @@ def _sapt_dft_dispersion_interaction_energy(
     """
 
     if core.has_option_changed("SCF", "DFT_DISPERSION_PARAMETERS"):
-        if disp_label == "D4" and d_type == "intermolecular":
+        if (
+            disp_label == "D4"
+            and d_type == "intermolecular"
+            and functional_name.lower() == "hf-d4bjeeqtwo"
+        ):
             raise ValidationError(
-                "Intermolecular D4(I) uses fixed hf-d4bjeeqtwo/d4bj2b parameters; "
+                "Intermolecular SAPT0/FISAPT0 D4(I) uses fixed hf-d4bjeeqtwo/d4bj2b parameters; "
                 "DFT_DISPERSION_PARAMETERS overrides are unavailable."
             )
         modified_disp_params = core.get_option("SCF", "DFT_DISPERSION_PARAMETERS")

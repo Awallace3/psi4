@@ -597,11 +597,12 @@ SAPT(DFT) variants where the SAPT(DFT) dispersion term is replaced by semi-empir
     energy('dft-d4(sapt)')
 
 where ``(i)`` denotes an intermolecular pairwise dispersion treatment and
-``(s)`` denotes a supermolecular treatment. The D4(I) route always uses the
-fixed two-body ``hf-d4bjeeqtwo`` parameters (level ``d4bj2b``), and rejects a
-changed |scf__dft_dispersion_parameters| option rather than overriding them.
-Currently support only exists for setting |sapt__sapt_dft_functional| equal to
-HF, PBE0, or B3LYP for these methods.
+``(s)`` denotes a supermolecular treatment. SAPT(DFT)-D4(I) uses the dedicated
+``sapt(<functional>)(i)`` damping-parameter record for the selected
+|sapt__sapt_dft_functional|. Currently support only exists for setting that
+functional equal to HF, PBE0, or B3LYP for these methods. The fixed
+``hf-d4bjeeqtwo`` treatment described below applies to SAPT0/FISAPT0-D4(I),
+not SAPT(DFT)-D4(I).
 
 When a semi-empirical variant is used, the total SAPT(DFT) decomposition is
 still reported through standard SAPT variables (electrostatics, exchange,

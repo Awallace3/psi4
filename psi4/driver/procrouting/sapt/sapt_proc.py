@@ -210,7 +210,11 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             dispersion_type = "supermolecular"
         elif "-D4(I)" in name.upper():
             core.print_out(r"SAPT(DFT)-D4(I): -D4(I) for dispersion")
-            e_disp_param_name = proc_util.SAPT_D4_INTERMOLECULAR_PARAM_NAME
+            e_disp_param_name = (
+                f"sapt({sapt_dft_functional.lower()})(i)"
+                if sapt_dft_functional.lower() != "hf"
+                else "hf"
+            )
             if sapt_dft_functional.lower() not in supported_functionals_edisp:
                 raise ValueError(
                     "SAPT(DFT)-D4 with D4(I) parameters is currently only available for PBE0 and B3LYP."
