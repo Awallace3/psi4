@@ -99,26 +99,27 @@ def _normalize_saptdft_external_potentials(
         {key: normalized[key] for key in ("B", "C") if key in normalized},
     )
     for label, (wfn, expected_specification) in required_wavefunctions.items():
+        if expected_specification is None:
+            continue
         if wfn.external_pot() is None:
             if expected_specification == {}:
                 continue
             raise ValidationError(
                 f"sapt_dft() external_potentials require the {label} wavefunction to carry its external potential."
             )
-        if expected_specification is not None:
-            expected_wfn = core.Wavefunction.build(wfn.molecule(), wfn.basisset())
-            _set_external_potentials_to_wavefunction(
-                expected_specification, expected_wfn, print_out=False
+        expected_wfn = core.Wavefunction.build(wfn.molecule(), wfn.basisset())
+        _set_external_potentials_to_wavefunction(
+            expected_specification, expected_wfn, print_out=False
+        )
+        actual_matrix = wfn.external_pot().computePotentialMatrix(wfn.basisset()).np
+        expected_matrix = expected_wfn.external_pot().computePotentialMatrix(wfn.basisset()).np
+        if actual_matrix.shape != expected_matrix.shape or not np.allclose(
+            actual_matrix, expected_matrix, rtol=0.0, atol=1.0e-12
+        ):
+            raise ValidationError(
+                "sapt_dft() external_potentials do not match the aggregate "
+                f"potential carried by the {label} wavefunction."
             )
-            actual_matrix = wfn.external_pot().computePotentialMatrix(wfn.basisset()).np
-            expected_matrix = expected_wfn.external_pot().computePotentialMatrix(wfn.basisset()).np
-            if actual_matrix.shape != expected_matrix.shape or not np.allclose(
-                actual_matrix, expected_matrix, rtol=0.0, atol=1.0e-12
-            ):
-                raise ValidationError(
-                    "sapt_dft() external_potentials do not match the aggregate "
-                    f"potential carried by the {label} wavefunction."
-                )
     dimer_external_potential = dimer_wfn.external_pot()
     for fragment in "ABC":
         if dimer_wfn.has_potential_variable(fragment):

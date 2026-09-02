@@ -47,6 +47,9 @@ namespace fisapt {
 IBOLocalizer2::IBOLocalizer2(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> minao,
                              std::shared_ptr<Matrix> C)
     : primary_(primary), minao_(minao), C_(C) {
+    if (!primary || !minao || !C) {
+        throw PSIEXCEPTION("IBOLocalizer2 requires primary, minimal, and coefficient inputs.");
+    }
     if (C->nirrep() != 1) {
         throw PSIEXCEPTION("Localizer: C matrix is not C1");
     }

@@ -85,6 +85,16 @@ def test_ibolocalizer2_static_build():
     )
 
     assert isinstance(localizer, psi4.core.IBOLocalizer2)
+    for inputs in (
+        (None, basis, coefficients),
+        (basis, None, coefficients),
+        (basis, basis, None),
+    ):
+        with pytest.raises(RuntimeError, match="IBOLocalizer2 requires"):
+            psi4.core.IBOLocalizer2(*inputs)
+        with pytest.raises(RuntimeError, match="IBOLocalizer2 requires"):
+            psi4.core.IBOLocalizer2.build(*inputs, psi4.core.get_options())
+
     fock = psi4.core.Matrix(1, 1)
     localized = localizer.localize(coefficients, fock)
     assert {"L", "U", "F", "Q", "A"}.issubset(localized)
@@ -134,6 +144,16 @@ def test_dfhelper_disk_tensor_validation_and_interleaved_io():
     combined = psi4.core.Matrix(2, 1)
     helper.fill_tensor("test", combined)
     assert np.array_equal(combined.np.ravel(), np.array([1.0, 2.0]))
+
+    helper.add_disk_tensor("ranged", (4, 2, 2))
+    helper.write_disk_tensor("ranged", psi4.core.Matrix(4, 4))
+    ranged = psi4.core.Matrix.from_array(np.array([[3.0, 4.0], [5.0, 6.0]]))
+    helper.write_disk_tensor("ranged", ranged, [2, 4], [0, 1], [0, 2])
+    result = psi4.core.Matrix(4, 4)
+    helper.fill_tensor("ranged", result)
+    expected = np.zeros((4, 4))
+    expected[2:, :2] = ranged.np
+    assert np.array_equal(result.np.reshape(4, 4), expected)
 
 
 @pytest.mark.fsapt

@@ -509,10 +509,12 @@ class PSI_API DFHelper {
         FILE* get_stream(std::string op);
         void change_stream(std::string op);
         void close_stream();
+        bool has_backing_file() const { return backing_file_; }
 
-        FILE* fp_;
+        FILE* fp_ = nullptr;
         std::string op_;
         bool open_ = false;
+        bool backing_file_ = false;
         std::string filename_;
 
     } Stream;

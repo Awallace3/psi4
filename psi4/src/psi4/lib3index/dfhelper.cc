@@ -875,7 +875,6 @@ FILE* DFHelper::stream_check(std::string filename, std::string op) {
 
     FILE* fp = file_streams_[filename]->get_stream(op);
     if (!fp) {
-        file_streams_.erase(filename);
         throw PSIEXCEPTION("DFHelper could not open tensor file '" + filename + "' with mode '" + op + "'.");
     }
     return fp;
@@ -887,6 +886,7 @@ DFHelper::StreamStruct::StreamStruct(std::string filename, std::string op, bool 
     if (activate) {
         fp_ = fopen(filename.c_str(), op_.c_str());
         open_ = fp_ != nullptr;
+        backing_file_ = open_;
     }
 }
 
@@ -904,6 +904,7 @@ FILE* DFHelper::StreamStruct::get_stream(std::string op) {
         if (!open_) {
             fp_ = fopen(filename_.c_str(), op_.c_str());
             open_ = fp_ != nullptr;
+            backing_file_ = backing_file_ || open_;
         }
     }
 
@@ -917,6 +918,7 @@ void DFHelper::StreamStruct::change_stream(std::string op) {
     op_ = op;
     fp_ = fopen(filename_.c_str(), op_.c_str());
     open_ = fp_ != nullptr;
+    backing_file_ = backing_file_ || open_;
 }
 
 void DFHelper::StreamStruct::close_stream() {
@@ -981,7 +983,7 @@ void DFHelper::put_tensor(std::string file, double* Mp, const size_t start1, con
     } else {
         for (size_t i = start1; i < stop1; i++) {
             // write
-            size_t s = fwrite(&Mp[i * a1], sizeof(double), a1, fp);
+            size_t s = fwrite(&Mp[(i - start1) * a1], sizeof(double), a1, fp);
             if (!s) {
                 std::stringstream error;
                 error << "DFHelper:put_tensor: write error";
@@ -2620,7 +2622,8 @@ void DFHelper::write_disk_tensor(std::string key, SharedMatrix M, std::vector<si
     check_matrix_size(key, M, i0, i1, i2);
 
     std::string filename = std::get<1>(files_[key]);
-    std::string op = file_streams_.count(filename) ? "r+b" : "wb";
+    auto stream = file_streams_.find(filename);
+    std::string op = stream != file_streams_.end() && stream->second->has_backing_file() ? "r+b" : "wb";
     put_tensor(filename, M->pointer()[0], i0, i1, i2, op);
 }
 
@@ -2661,7 +2664,8 @@ void DFHelper::write_disk_tensor(std::string key, double* b, std::vector<size_t>
     check_file_tuple(key, i0, i1, i2);
 
     std::string filename = std::get<1>(files_[key]);
-    std::string op = file_streams_.count(filename) ? "r+b" : "wb";
+    auto stream = file_streams_.find(filename);
+    std::string op = stream != file_streams_.end() && stream->second->has_backing_file() ? "r+b" : "wb";
     put_tensor(filename, b, i0, i1, i2, op);
 }
 

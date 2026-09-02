@@ -1670,6 +1670,12 @@ def test_saptdft_direct_api_normalizes_external_potential_keys():
     dimer_wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
     wfn_A = psi4.core.Wavefunction.build(mol, "sto-3g")
     wfn_B = psi4.core.Wavefunction.build(mol, "sto-3g")
+    normalized = sapt_proc._normalize_saptdft_external_potentials(
+        {}, dimer_wfn, wfn_A, wfn_B
+    )
+    assert normalized == {}
+    assert dimer_wfn.external_pot() is None
+
     dimer_external = psi4.core.ExternalPotential()
     dimer_external.addCharge(1.0, 2.0, 0.0, 0.0)
     dimer_wfn.set_external_potential(dimer_external)
