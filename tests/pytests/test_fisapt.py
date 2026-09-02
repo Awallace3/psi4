@@ -116,6 +116,8 @@ def test_dfhelper_disk_tensor_validation_and_interleaved_io():
         helper.fill_tensor("missing", psi4.core.Matrix(1, 1))
 
     helper.add_disk_tensor("test", (2, 1, 1))
+    with pytest.raises(RuntimeError, match="could not open tensor file"):
+        helper.fill_tensor("test", psi4.core.Matrix(2, 1))
     with pytest.raises(RuntimeError, match="require a matrix"):
         helper.write_disk_tensor("test", None)
     with pytest.raises(RuntimeError, match="require a matrix"):

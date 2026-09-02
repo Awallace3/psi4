@@ -873,7 +873,12 @@ FILE* DFHelper::stream_check(std::string filename, std::string op) {
         file_streams_[filename] = std::make_shared<Stream>(filename, op);
     }
 
-    return file_streams_[filename]->get_stream(op);
+    FILE* fp = file_streams_[filename]->get_stream(op);
+    if (!fp) {
+        file_streams_.erase(filename);
+        throw PSIEXCEPTION("DFHelper could not open tensor file '" + filename + "' with mode '" + op + "'.");
+    }
+    return fp;
 }
 
 DFHelper::StreamStruct::StreamStruct(std::string filename, std::string op, bool activate) {
@@ -881,15 +886,14 @@ DFHelper::StreamStruct::StreamStruct(std::string filename, std::string op, bool 
     filename_ = filename;
     if (activate) {
         fp_ = fopen(filename.c_str(), op_.c_str());
-        open_ = true;
+        open_ = fp_ != nullptr;
     }
 }
 
 DFHelper::StreamStruct::StreamStruct() {}
 
 DFHelper::StreamStruct::~StreamStruct() {
-    fflush(fp_);
-    fclose(fp_);
+    close_stream();
     std::remove(filename_.c_str());
 }
 
@@ -899,7 +903,7 @@ FILE* DFHelper::StreamStruct::get_stream(std::string op) {
     } else {
         if (!open_) {
             fp_ = fopen(filename_.c_str(), op_.c_str());
-            open_ = true;
+            open_ = fp_ != nullptr;
         }
     }
 
@@ -912,11 +916,16 @@ void DFHelper::StreamStruct::change_stream(std::string op) {
     }
     op_ = op;
     fp_ = fopen(filename_.c_str(), op_.c_str());
+    open_ = fp_ != nullptr;
 }
 
 void DFHelper::StreamStruct::close_stream() {
-    fflush(fp_);
-    fclose(fp_);
+    if (open_ && fp_) {
+        fflush(fp_);
+        fclose(fp_);
+    }
+    fp_ = nullptr;
+    open_ = false;
 }
 
 void DFHelper::put_tensor(std::string file, double* b, std::pair<size_t, size_t> i0, std::pair<size_t, size_t> i1,
