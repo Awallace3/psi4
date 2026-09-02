@@ -27,7 +27,6 @@
 #
 
 import numpy as np
-from pprint import pprint as pp
 
 from psi4 import core
 
@@ -323,7 +322,6 @@ def setup_fisapt_object(
     scalar_cache = {
         fisapt_key: scalars[sdft_key] for sdft_key, fisapt_key in scalar_keys.items()
     }
-    pp(scalar_cache)
     fisapt.set_scalar(scalar_cache)
     return fisapt
 
