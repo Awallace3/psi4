@@ -8010,9 +8010,25 @@ void FISAPT::set_scalar(std::map<std::string, double> update_scalars) {
 double sapt_nuclear_external_potential_matrix(std::shared_ptr<Wavefunction> reference_,
                                               std::map<std::string, std::shared_ptr<Matrix>>& matrices_,
                                               Options& options_) {
-    // => External potential <= //
-    // for every key in matrices_ print matrix name
-    double** Enucsp = matrices_["Enucs"]->pointer();
+    if (!reference_) {
+        throw PSIEXCEPTION("SAPT nuclear/external potential requires a wavefunction.");
+    }
+
+    auto require_matrix = [&matrices_](const std::string& key) {
+        auto matrix = matrices_.find(key);
+        if (matrix == matrices_.end() || !matrix->second) {
+            throw PSIEXCEPTION("SAPT nuclear/external potential requires matrix '" + key + "'.");
+        }
+        return matrix->second;
+    };
+
+    auto Enucs = require_matrix("Enucs");
+    for (const auto& label : {std::string("A"), std::string("B")}) {
+        if (reference_->has_potential_variable(label)) {
+            require_matrix("V" + label);
+        }
+    }
+    double** Enucsp = Enucs->pointer();
 
     std::shared_ptr<BasisSet> primary_ = reference_->basisset();
     std::shared_ptr<Molecule> mol = reference_->molecule();

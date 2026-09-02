@@ -1595,7 +1595,8 @@ def sapt_dft(
     )
 
     # because FISAPT_obj drop sets core variables, avoid setting them twice
-    if core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH").upper() != "NONE" and do_fsapt:
+    write_fsapt_files = core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH").upper() != "NONE"
+    if do_fsapt and (write_fsapt_files or (fsapt_type == "SAPTDFT" and use_einsums)):
         FISAPT_obj = saptdft_fisapt.drop_saptdft_variables(
             dimer_wfn,
             wfn_A,
@@ -1604,6 +1605,7 @@ def sapt_dft(
             data,
             do_disp=do_disp,
             do_empirical_disp=do_d4 or do_d3,
+            external_potentials=external_potentials,
         )
     elif do_fsapt:
         def _set_fsapt_var(label, value):
@@ -1626,6 +1628,11 @@ def sapt_dft(
             _set_fsapt_var("FSAPT_EMPIRICAL_DISP", cache["FSAPT_EMPIRICAL_DISP"])
         else:
             _set_fsapt_var("FSAPT_DISP_AB", cache["Disp_AB"])
+        FISAPT_obj.save_variables_to_wfn(
+            dimer_wfn,
+            external_potentials=external_potentials,
+            sapt_type="SAPT(DFT)",
+        )
     return data
 
 

@@ -3067,8 +3067,8 @@ def induction(
     _, J_P_B, J_P_A = jk.J()
 
     # Save for later usage in find()
-    cache["J_P_A"] = J_P_A
-    cache["J_P_B"] = J_P_B
+    cache["J_P_A"] = J_P_A.clone()
+    cache["J_P_B"] = J_P_B.clone()
 
     mapA = {
         "S": S,

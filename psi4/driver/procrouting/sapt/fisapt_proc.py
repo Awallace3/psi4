@@ -257,12 +257,6 @@ def fisapt_variables_to_wfn(self, ref_wfn, external_potentials=None, sapt_type='
         ref_wfn.set_variable("SAPT ELST10,R ENERGY", scalars["Elst10,r"])
         if "Extern-Extern" in scalars:
             ref_wfn.set_variable("SAPT ELST EXTERN-EXTERN ENERGY", scalars["Extern-Extern"])
-        if core.has_variable("FSAPT_EXTERN_POTENTIAL_A"):
-            ref_wfn.set_variable("FSAPT_EXTERN_POTENTIAL_A", core.variable("FSAPT_EXTERN_POTENTIAL_A"))
-        if core.has_variable("FSAPT_EXTERN_POTENTIAL_B"):
-            ref_wfn.set_variable("FSAPT_EXTERN_POTENTIAL_B", core.variable("FSAPT_EXTERN_POTENTIAL_B"))
-        if core.has_variable("FSAPT_EXTERN_POTENTIAL_C"):
-            ref_wfn.set_variable("FSAPT_EXTERN_POTENTIAL_C", core.variable("FSAPT_EXTERN_POTENTIAL_C"))
         ref_wfn.set_variable("SAPT EXCH ENERGY", scalars["Exchange"])
         ref_wfn.set_variable("SAPT EXCH10 ENERGY", scalars["Exch10"])
         ref_wfn.set_variable("SAPT EXCH10(S^2) ENERGY", scalars["Exch10(S^2)"])
@@ -295,6 +289,14 @@ def fisapt_variables_to_wfn(self, ref_wfn, external_potentials=None, sapt_type='
     # return early
     if not core.get_option("FISAPT", "FISAPT_DO_FSAPT"):
         return
+    if external_potentials is not None:
+        from ..proc import validate_external_potential
+
+        normalized_potentials = validate_external_potential(external_potentials)
+        for fragment in normalized_potentials:
+            label = f"FSAPT_EXTERN_POTENTIAL_{fragment}"
+            if core.has_variable(label):
+                ref_wfn.set_variable(label, core.variable(label))
     # Then matrices
     matrices = self.matrices()
     ref_wfn.set_variable("FSAPT_QA", matrices["Qocc0A"])

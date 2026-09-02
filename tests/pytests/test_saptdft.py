@@ -949,7 +949,7 @@ no_com
         pytest.param(False, id="non-einsums"),
     ],
 )
-def test_fisapt0_sapthf_external_potential(use_einsums):
+def test_fisapt0_sapthf_external_potential(use_einsums, tmp_path):
     if use_einsums:
         pytest.importorskip("einsums")
 
@@ -997,6 +997,8 @@ no_com
         "freeze_core": "true",
         "SAPT_DFT_FUNCTIONAL": "hf",
         "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
+        "DO_IND_EXCH_SINF": True,
+        "FISAPT_FSAPT_FILEPATH": "none",
         "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
     }
     psi4.set_options(options)
@@ -1021,14 +1023,31 @@ no_com
 
     psi4.core.clean()
     psi4.core.clean_variables()
-    psi4.set_options({**options, "SAPT_DFT_USE_EINSUMS": use_einsums})
+    psi4.set_options(
+        {
+            **options,
+            "SAPT_DFT_USE_EINSUMS": use_einsums,
+            "SAPT_DFT_DO_FSAPT": "SAPTDFT" if use_einsums else "FISAPT",
+            "FISAPT_FSAPT_FILEPATH": str(tmp_path),
+        }
+    )
 
     # Run the SAPT(HF) energy calculation
-    psi4.energy(
+    _, saptdft_wfn = psi4.energy(
         "sapt(dft)",
         external_potentials=external_potentials,
         molecule=mol,
+        return_wfn=True,
     )
+
+    for fragment, potential in external_potentials.items():
+        label = f"FSAPT_EXTERN_POTENTIAL_{fragment}"
+        assert saptdft_wfn.has_variable(label)
+        assert np.allclose(
+            saptdft_wfn.variable(label), np.asarray([row[1] for row in potential])
+        )
+        assert (tmp_path / f"Extern_{fragment}.xyz").is_file()
+    assert saptdft_wfn.has_variable("FSAPT_INDAB_AB")
 
     calculated_sapthf_energies = {k1: psi4.core.variable(k2) for k1, k2 in key_labels}
     calculated_sapthf_energies["Enuc"] = mol.nuclear_repulsion_energy()

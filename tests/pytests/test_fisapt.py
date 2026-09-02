@@ -24,6 +24,38 @@ def _outfile_tail(offset):
         return fh.read()
 
 
+def test_fisapt_public_helper_validation():
+    mol = psi4.geometry("He\nsymmetry c1")
+    basis = psi4.core.BasisSet.build(mol, "BASIS", "sto-3g")
+    wfn = psi4.core.Wavefunction.build(mol, basis)
+
+    with pytest.raises(RuntimeError, match="requires matrix 'Enucs'"):
+        psi4.core.sapt_nuclear_external_potential_python(
+            wfn, {}, psi4.core.get_options()
+        )
+
+    external = psi4.core.ExternalPotential()
+    external.addCharge(1.0, 2.0, 0.0, 0.0)
+    wfn.set_potential_variable("A", external)
+    with pytest.raises(RuntimeError, match="requires matrix 'VA'"):
+        psi4.core.sapt_nuclear_external_potential_python(
+            wfn, {"Enucs": psi4.core.Matrix(1, 1)}, psi4.core.get_options()
+        )
+
+
+def test_ibolocalizer2_static_build():
+    mol = psi4.geometry("He\nsymmetry c1")
+    basis = psi4.core.BasisSet.build(mol, "BASIS", "sto-3g")
+    coefficients = psi4.core.Matrix(basis.nbf(), 1)
+    coefficients.np[0, 0] = 1.0
+
+    localizer = psi4.core.IBOLocalizer2.build(
+        basis, basis, coefficients, psi4.core.get_options()
+    )
+
+    assert isinstance(localizer, psi4.core.IBOLocalizer2)
+
+
 @pytest.mark.fsapt
 def test_fsapt_psivars_dict():
     """

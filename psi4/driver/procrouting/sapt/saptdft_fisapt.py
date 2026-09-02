@@ -326,7 +326,16 @@ def setup_fisapt_object(
     return fisapt
 
 
-def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars, do_disp=True, do_empirical_disp=False):
+def drop_saptdft_variables(
+    wfn,
+    wfn_A,
+    wfn_B,
+    cache,
+    scalars,
+    do_disp=True,
+    do_empirical_disp=False,
+    external_potentials=None,
+):
     """
     Setup FISAPT object to call fisapt_fdrop for dropping SAPT(DFT) variables.
 
@@ -346,6 +355,8 @@ def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars, do_disp=True, do_e
         Whether the routed calculation includes SAPT dispersion.
     do_empirical_disp : bool
         Whether the routed calculation includes empirical dispersion.
+    external_potentials : dict, optional
+        External potentials to preserve in F-SAPT output and variables.
     """
     fisapt = core.FISAPT(wfn)
     # iterate through cache and scalars to set these labels for
@@ -378,8 +389,10 @@ def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars, do_disp=True, do_e
         core.set_local_option("FISAPT", "FISAPT_DO_FSAPT_DISP", do_disp)
         fisapt.set_matrix(matrix_cache)
         fisapt.set_vector(vector_cache)
-        fisapt.fdrop()
-        fisapt.save_variables_to_wfn(wfn, sapt_type='SAPT(DFT)')
+        fisapt.fdrop(external_potentials)
+        fisapt.save_variables_to_wfn(
+            wfn, external_potentials=external_potentials, sapt_type="SAPT(DFT)"
+        )
     finally:
         optstash.restore()
     # Now drop empirical D3/D4 dispersion if computed and expose the
