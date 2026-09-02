@@ -766,6 +766,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             _set_external_potentials_to_wavefunction(
                 dimer_pair_potentials, dimer_wfn
             )
+        else:
+            dimer_wfn.set_external_potential(core.ExternalPotential())
 
     # Save JK object
     sapt_jk = wfn_B.jk()
