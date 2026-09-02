@@ -579,7 +579,8 @@ whole reported induction energy.
 
 F-SAPT requires the SAPT(DFT) fragment induction and therefore works only with
 ``CPKS``; both ``CPHF`` and ``NONE`` are rejected when |sapt__sapt_dft_do_fsapt|
-is enabled.
+is enabled. Use |sapt__sapt_dft_induction_maxiter| to set the coupled-induction
+iteration limit for either implementation backend.
 
 SAPT(DFT)-D3 and SAPT(DFT)-D4 variants
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -598,8 +599,8 @@ SAPT(DFT) variants where the SAPT(DFT) dispersion term is replaced by semi-empir
 where ``(i)`` denotes an intermolecular pairwise dispersion treatment and
 ``(s)`` denotes a supermolecular treatment. SAPT(DFT)-D4(I) uses the dedicated
 ``sapt(<functional>)(i)`` damping-parameter record for the selected
-|sapt__sapt_dft_functional|. Currently support only exists for setting that
-functional equal to HF, PBE0, or B3LYP for these methods. The fixed
+|sapt__sapt_dft_functional|. Currently, these methods support only HF, PBE0,
+or B3LYP as the selected functional. The fixed
 ``hf-d4bjeeqtwo`` treatment described below applies to SAPT0/FISAPT0-D4(I),
 not SAPT(DFT)-D4(I).
 
@@ -656,6 +657,8 @@ Basic Keywords for SAPT(DFT)
 .. include:: autodir_options_c/sapt__sapt_dft_grac_shift_b.rst
 .. include:: autodir_options_c/sapt__sapt_dft_do_dhf.rst
 .. include:: autodir_options_c/sapt__sapt_dft_induction_type.rst
+.. include:: autodir_options_c/sapt__sapt_dft_induction_maxiter.rst
+.. include:: autodir_options_c/sapt__sapt_dft_do_fsapt.rst
 .. include:: autodir_options_c/sapt__sapt_dft_exch_disp_scale_scheme.rst
 .. include:: autodir_options_c/sapt__sapt_dft_grac_compute.rst
 .. include:: autodir_options_c/sapt__sapt_dft_do_ddft.rst
