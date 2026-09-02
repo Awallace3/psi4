@@ -1646,6 +1646,7 @@ def _set_external_potentials_to_wavefunction(
     vep = validate_external_potential(external_potential)
 
     total_ep = core.ExternalPotential()
+    total_matrix = None
 
     for frag, ep_spec in vep.items():
         frag_ep = core.ExternalPotential()
@@ -1653,7 +1654,10 @@ def _set_external_potentials_to_wavefunction(
         if "matrix" in ep_spec:
             matrix = core.Matrix.from_array(np.array(ep_spec["matrix"]))
             frag_ep.setMatrix(matrix)
-            total_ep.setMatrix(matrix)
+            if total_matrix is None:
+                total_matrix = matrix.clone()
+            else:
+                total_matrix.add(matrix)
 
         if "points" in ep_spec:
             frag_ep.appendCharges(ep_spec["points"])
@@ -1705,6 +1709,8 @@ def _set_external_potentials_to_wavefunction(
             total_ep.addGaussian(corediffbasis, charges)
 
         wfn.set_potential_variable(frag, frag_ep)
+    if total_matrix is not None:
+        total_ep.setMatrix(total_matrix)
     wfn.set_external_potential(total_ep)
     if print_out:
         total_ep.print_out()

@@ -1648,6 +1648,60 @@ def test_saptdft_direct_api_normalizes_external_potential_keys():
             external_potentials={"c": [[1.0, [2.0, 0.0, 0.0]]]},
         )
 
+    wfn_A.set_external_potential(psi4.core.ExternalPotential())
+    wfn_B.set_external_potential(psi4.core.ExternalPotential())
+    with pytest.raises(
+        psi4.ValidationError, match="aggregate potential carried by the monomer A"
+    ):
+        sapt_proc.sapt_dft(
+            dimer_wfn,
+            wfn_A,
+            wfn_B,
+            external_potentials={"a": [[1.0, [2.0, 0.0, 0.0]]]},
+        )
+
+    monomer_a_external = psi4.core.ExternalPotential()
+    monomer_a_external.addCharge(1.0, 2.0, 0.0, 0.0)
+    wfn_A.set_external_potential(monomer_a_external)
+    monomer_b_external = psi4.core.ExternalPotential()
+    monomer_b_external.addCharge(-0.5, 3.0, 0.0, 0.0)
+    wfn_B.set_external_potential(monomer_b_external)
+    with pytest.raises(
+        psi4.ValidationError, match="aggregate potential carried by the monomer A"
+    ):
+        sapt_proc.sapt_dft(
+            dimer_wfn,
+            wfn_A,
+            wfn_B,
+            external_potentials={
+                "A": [[1.0, [2.0, 0.0, 0.0]]],
+                "C": [[-0.5, [3.0, 0.0, 0.0]]],
+            },
+        )
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+def test_saptdft_nofile_fsapt_without_dispersion():
+    mol = psi4.geometry("Ne\n--\nNe 1 4.5\nunits bohr\nsymmetry c1")
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "sapt_dft_functional": "hf",
+            "sapt_dft_do_dhf": False,
+            "sapt_dft_do_disp": False,
+            "sapt_dft_do_fsapt": "FISAPT",
+            "fisapt_fsapt_filepath": "none",
+            "orbital_optimizer_package": "internal",
+        }
+    )
+
+    _, wfn = psi4.energy("sapt(dft)", molecule=mol, return_wfn=True)
+
+    assert wfn.has_variable("FSAPT_DISP_AB")
+    assert np.linalg.norm(wfn.variable("FSAPT_DISP_AB").np) == 0.0
+
 
 @pytest.mark.saptdft
 def test_saptdft_summary_includes_standalone_delta_dft():

@@ -87,16 +87,36 @@ def _normalize_saptdft_external_potentials(external_potentials, dimer_wfn, wfn_A
     normalized = validate_external_potential(external_potentials)
     if not normalized:
         return None
-    required_wavefunctions = {"dimer": dimer_wfn}
+    required_wavefunctions = {"dimer": (dimer_wfn, None)}
     if "A" in normalized or "C" in normalized:
-        required_wavefunctions["monomer A"] = wfn_A
+        required_wavefunctions["monomer A"] = (
+            wfn_A,
+            {key: normalized[key] for key in ("A", "C") if key in normalized},
+        )
     if "B" in normalized or "C" in normalized:
-        required_wavefunctions["monomer B"] = wfn_B
-    for label, wfn in required_wavefunctions.items():
+        required_wavefunctions["monomer B"] = (
+            wfn_B,
+            {key: normalized[key] for key in ("B", "C") if key in normalized},
+        )
+    for label, (wfn, expected_specification) in required_wavefunctions.items():
         if wfn.external_pot() is None:
             raise ValidationError(
                 f"sapt_dft() external_potentials require the {label} wavefunction to carry its external potential."
             )
+        if expected_specification is not None:
+            expected_wfn = core.Wavefunction.build(wfn.molecule(), wfn.basisset())
+            _set_external_potentials_to_wavefunction(
+                expected_specification, expected_wfn, print_out=False
+            )
+            actual_matrix = wfn.external_pot().computePotentialMatrix(wfn.basisset()).np
+            expected_matrix = expected_wfn.external_pot().computePotentialMatrix(wfn.basisset()).np
+            if actual_matrix.shape != expected_matrix.shape or not np.allclose(
+                actual_matrix, expected_matrix, rtol=0.0, atol=1.0e-12
+            ):
+                raise ValidationError(
+                    "sapt_dft() external_potentials do not match the aggregate "
+                    f"potential carried by the {label} wavefunction."
+                )
     dimer_external_potential = dimer_wfn.external_pot()
     _set_external_potentials_to_wavefunction(normalized, dimer_wfn, print_out=False)
     dimer_wfn.set_external_potential(dimer_external_potential)
@@ -764,10 +784,22 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             kwargs["external_potentials"]["C"] = ext_pot_C
         if ext_pot_A is not None:
             kwargs["external_potentials"]["A"] = ext_pot_A
-            _set_external_potentials_to_wavefunction(ext_pot_A, wfn_A)
         if ext_pot_B is not None:
             kwargs["external_potentials"]["B"] = ext_pot_B
-            _set_external_potentials_to_wavefunction(ext_pot_B, wfn_B)
+        monomer_a_potentials = {
+            fragment: potential
+            for fragment, potential in (("A", ext_pot_A), ("C", ext_pot_C))
+            if potential is not None
+        }
+        monomer_b_potentials = {
+            fragment: potential
+            for fragment, potential in (("B", ext_pot_B), ("C", ext_pot_C))
+            if potential is not None
+        }
+        if monomer_a_potentials:
+            _set_external_potentials_to_wavefunction(monomer_a_potentials, wfn_A)
+        if monomer_b_potentials:
+            _set_external_potentials_to_wavefunction(monomer_b_potentials, wfn_B)
         for fragment in "ABC":
             if dimer_wfn.has_potential_variable(fragment):
                 dimer_wfn.del_potential_variable(fragment)
@@ -1674,13 +1706,14 @@ def sapt_dft(
         _set_fsapt_var("FSAPT_EXCH_AB", cache["Exch_AB"])
         _set_fsapt_var("FSAPT_INDAB_AB", cache["IndAB_AB"])
         _set_fsapt_var("FSAPT_INDBA_AB", cache["IndBA_AB"])
-        if do_d4 or do_d3:
+        if do_disp:
+            disp_ab = cache["Disp_AB"]
+        else:
             disp_ab = cache["Elst_AB"].clone()
             disp_ab.zero()
-            _set_fsapt_var("FSAPT_DISP_AB", disp_ab)
+        _set_fsapt_var("FSAPT_DISP_AB", disp_ab)
+        if do_d4 or do_d3:
             _set_fsapt_var("FSAPT_EMPIRICAL_DISP", cache["FSAPT_EMPIRICAL_DISP"])
-        else:
-            _set_fsapt_var("FSAPT_DISP_AB", cache["Disp_AB"])
         FISAPT_obj.save_variables_to_wfn(
             dimer_wfn,
             external_potentials=external_potentials,
