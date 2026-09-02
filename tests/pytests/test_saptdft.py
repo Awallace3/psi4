@@ -1694,6 +1694,21 @@ def test_saptdft_direct_api_normalizes_external_potential_keys():
     finally:
         psi4.set_options({"sapt_dft_do_fsapt": "NONE"})
 
+    dimer_wfn.set_external_potential(dimer_external)
+    stale_b = psi4.core.ExternalPotential()
+    stale_b.addCharge(-0.25, 3.5, 0.0, 0.0)
+    dimer_wfn.set_potential_variable("B", stale_b)
+    normalized = sapt_proc._normalize_saptdft_external_potentials(
+        {"A": [[1.0, [2.0, 0.0, 0.0]]]},
+        dimer_wfn,
+        wfn_A,
+        wfn_B,
+        validate_dimer=True,
+    )
+    assert set(normalized) == {"A"}
+    assert dimer_wfn.has_potential_variable("A")
+    assert not dimer_wfn.has_potential_variable("B")
+
 
 @pytest.mark.saptdft
 @pytest.mark.fsapt

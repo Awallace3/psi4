@@ -90,7 +90,10 @@ def test_ibolocalizer2_static_build():
     assert {"L", "U", "F", "Q", "A"}.issubset(localized)
     localizer.print_charges()
 
-    for ranges in ([-1, 1], [0, 2], [0, 0, 1]):
+    empty_partition = localizer.localize(coefficients, fock, [0, 0, 1])
+    assert {"L", "U", "F", "Q", "A"}.issubset(empty_partition)
+
+    for ranges in ([-1, 1], [0, 2], [0, 1, 0, 1]):
         with pytest.raises(RuntimeError, match="IBOLocalizer2::localize ranges"):
             localizer.localize(coefficients, fock, ranges)
 

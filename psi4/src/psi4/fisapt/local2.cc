@@ -368,8 +368,8 @@ std::map<std::string, std::shared_ptr<Matrix> > IBOLocalizer2::localize(std::sha
             throw PSIEXCEPTION("IBOLocalizer2::localize ranges must cover all occupied orbitals.");
         }
         for (size_t index = 1; index < ranges.size(); ++index) {
-            if (ranges[index - 1] < 0 || ranges[index] <= ranges[index - 1] || ranges[index] > nocc) {
-                throw PSIEXCEPTION("IBOLocalizer2::localize ranges must contain increasing in-bounds endpoints.");
+            if (ranges[index - 1] < 0 || ranges[index] < ranges[index - 1] || ranges[index] > nocc) {
+                throw PSIEXCEPTION("IBOLocalizer2::localize ranges must contain nondecreasing in-bounds endpoints.");
             }
         }
     }

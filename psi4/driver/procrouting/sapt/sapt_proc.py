@@ -122,6 +122,9 @@ def _normalize_saptdft_external_potentials(
                     f"potential carried by the {label} wavefunction."
                 )
     dimer_external_potential = dimer_wfn.external_pot()
+    for fragment in "ABC":
+        if dimer_wfn.has_potential_variable(fragment):
+            dimer_wfn.del_potential_variable(fragment)
     _set_external_potentials_to_wavefunction(normalized, dimer_wfn, print_out=False)
     dimer_wfn.set_external_potential(dimer_external_potential)
     return normalized
