@@ -1035,8 +1035,9 @@ no_com
         print_output=False,
         pdb_dir="tmp",
     )
-    # remove_fisapt files
-    shutil.rmtree("tmp")
+    # remove_fisapt files, if the calculation wrote any
+    if os.path.isdir("tmp"):
+        shutil.rmtree("tmp")
     for pdb_file in pdb_files:
         if os.path.exists(pdb_file):
             os.remove(pdb_file)
