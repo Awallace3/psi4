@@ -665,6 +665,12 @@ def main(argv=None) -> int:
             # says whether a setup that stopped improving has stopped because
             # of the replicated metric factorization or something else.
             "df_setup_phases": gtfock.df_setup_phases(),
+            # And the same question asked of the iterations rather than the
+            # build: how much of J/K was arithmetic (jk_local), how much was
+            # waiting for the slowest rank (jk_skew), and how much was the
+            # reduction (jk_comm). Summed over calls; fock_builds above divides
+            # them into a per-build cost.
+            "df_jk_phases": gtfock.df_jk_phases(),
         })
 
     print("PSI4-GTFOCK-JSON " + json.dumps(report), flush=True)

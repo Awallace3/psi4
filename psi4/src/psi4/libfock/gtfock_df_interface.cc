@@ -69,6 +69,11 @@ size_t gtfockdf_last_local_tensor_doubles = 0;
 /// it is matters; see doc/sphinxman/source/gtfock.rst.
 std::vector<std::pair<std::string, double>> gtfockdf_last_setup_phases;
 
+/// Where the most recent engine's J/K builds spent their wall time, summed over
+/// calls. Unlike the setup phases this cannot be snapshotted once at
+/// construction, because it keeps accumulating; compute_JK refreshes it.
+std::vector<std::pair<std::string, double>> gtfockdf_last_jk_phases;
+
 /*! Marshal one Psi4 BasisSet into GTFock's CInt layout.
  *
  *  CInt_importBasisSet wants raw, .gbs-style contraction coefficients, because
@@ -162,6 +167,10 @@ size_t MinimalDFInterface::last_local_tensor_doubles() { return gtfockdf_last_lo
 
 std::vector<std::pair<std::string, double>> MinimalDFInterface::last_setup_phases() {
     return gtfockdf_last_setup_phases;
+}
+
+std::vector<std::pair<std::string, double>> MinimalDFInterface::last_jk_phases() {
+    return gtfockdf_last_jk_phases;
 }
 
 void MinimalDFInterface::check_supported(const std::shared_ptr<BasisSet>& primary,
@@ -354,6 +363,16 @@ void MinimalDFInterface::compute_JK(const std::shared_ptr<Matrix>& D, const std:
     }
     ++jk_builds_;
     ++gtfockdf_total_jk_builds;
+
+    // Refreshed every call rather than snapshotted once: these clocks
+    // accumulate, and the engine is usually destroyed before a benchmark asks.
+    gtfockdf_last_jk_phases.clear();
+    gtfockdf_last_jk_phases.reserve(PDF_NJKPHASES);
+    for (int phase = 0; phase < PDF_NJKPHASES; ++phase) {
+        const PDF_JKPhase p = static_cast<PDF_JKPhase>(phase);
+        const char* name = PDF_jkPhaseName(p);
+        gtfockdf_last_jk_phases.emplace_back(name != nullptr ? name : "?", PDF_jkPhaseSeconds(impl_->pdf, p));
+    }
 }
 
 }  // namespace psi
@@ -369,6 +388,7 @@ size_t MinimalDFInterface::total_jk_builds() { return 0; }
 std::vector<int> MinimalDFInterface::last_partition() { return {-1, -1, -1, -1, -1}; }
 size_t MinimalDFInterface::last_local_tensor_doubles() { return 0; }
 std::vector<std::pair<std::string, double>> MinimalDFInterface::last_setup_phases() { return {}; }
+std::vector<std::pair<std::string, double>> MinimalDFInterface::last_jk_phases() { return {}; }
 
 void MinimalDFInterface::check_supported(const std::shared_ptr<BasisSet>&, const std::shared_ptr<BasisSet>&) const {}
 

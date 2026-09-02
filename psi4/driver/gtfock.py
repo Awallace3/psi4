@@ -147,6 +147,27 @@ def df_setup_phases() -> Dict[str, float]:
     return dict(core.gtfock_df_setup_phases())
 
 
+def df_jk_phases() -> Dict[str, float]:
+    """Wall seconds this rank spent in each part of the most recent DF J/K builds.
+
+    Summed over every ``compute_JK`` call the engine ran, so divide by the Fock
+    build count for a per-call figure. ``jk_local`` is the contraction over this
+    rank's slice of the fitted tensor and is the part that divides over ranks;
+    ``jk_skew`` is a barrier that drains the wait for the slowest rank into its
+    own clock, so it is load imbalance rather than communication; ``jk_comm`` is
+    the reduction of J and K over all ranks with that wait already removed, so it
+    is what the network actually costs per Fock build.
+
+    Without the barrier the last two would be one number, and a J/K build that
+    slowed down would not say whether to fix the partition or the fabric.
+
+    Keys come from GTFock, so a part added there appears here without a change on
+    this side. Empty before any engine is built, or when Psi4 was compiled
+    without the DF engine.
+    """
+    return dict(core.gtfock_df_jk_phases())
+
+
 def df_setup_timer() -> str:
     """The timer name that covers the distributed DF setup, read from the module.
 

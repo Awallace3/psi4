@@ -149,6 +149,14 @@ class MinimalDFInterface {
     static size_t last_local_tensor_doubles();
     /// setup_phases() of the most recent engine, or empty if none was built.
     static std::vector<std::pair<std::string, double>> last_setup_phases();
+    /*! Wall seconds the most recent engine accumulated in each part of its J/K
+     *  builds -- the local contraction, the wait for the slowest rank, and the
+     *  reduction -- summed over every call, or empty if none was built.
+     *
+     *  The J/K timer says what a Fock build cost; this says how much of that
+     *  was arithmetic and how much was the network, which is the difference
+     *  between a build that will scale and one that will not. */
+    static std::vector<std::pair<std::string, double>> last_jk_phases();
 
    private:
     /// Refuse basis sets whose answer would be wrong, not merely slow.

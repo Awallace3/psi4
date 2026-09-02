@@ -615,6 +615,7 @@ def test_gtfock_df_is_optional():
                                          "nmetric_null": -1, "nlocal_pairs": -1,
                                          "local_tensor_doubles": 0}
         assert gtfock.df_setup_phases() == {}
+        assert gtfock.df_jk_phases() == {}
 
 
 @uusing("gtfock_df")
@@ -834,6 +835,53 @@ def test_gtfock_df_setup_phases_account_for_the_build(gtfock_mpi):
     assert all(seconds >= 0.0 for seconds in phases.values()), phases
     assert sum(phases.values()) > 0.0, "the whole build was timed as instantaneous"
     assert sum(phases.values()) <= elapsed, (phases, elapsed)
+
+    jk.finalize()
+
+
+@uusing("gtfock_df")
+def test_gtfock_df_jk_phases_account_for_the_builds(gtfock_mpi):
+    """The J/K clocks must name every part, tile the J/K builds, and accumulate.
+
+    ``jk_local`` is arithmetic and divides over ranks; ``jk_comm`` is the
+    reduction and does not. Keeping them apart is the whole point: a J/K build
+    that stops improving with more ranks has either run out of local work to
+    divide or started paying for the network, and one number cannot say which.
+    ``jk_skew`` sits between them because an unbarriered reduction would charge
+    the network for a wait that is really load imbalance.
+
+    Unlike the setup phases these accumulate over calls rather than being
+    snapshotted at construction, so this also pins that: two builds must cost
+    more than one.
+    """
+    primary, auxiliary = _df_bases()
+
+    psi4.set_options({"scf_type": "gtfock_df"})
+    jk = psi4.core.JK.build_JK(primary, auxiliary)
+    jk.set_do_K(True)
+    jk.initialize()
+
+    nbf = primary.nbf()
+    C = psi4.core.Matrix(nbf, 1)
+    C.np[:, 0] = 1.0 / nbf**0.5
+    jk.C_left_add(C)
+
+    start = time.perf_counter()
+    jk.compute()
+    first = time.perf_counter() - start
+    after_one = gtfock_mpi.df_jk_phases()
+
+    assert list(after_one) == ["jk_local", "jk_skew", "jk_comm"]
+    assert all(seconds >= 0.0 for seconds in after_one.values()), after_one
+    assert sum(after_one.values()) > 0.0, "the whole build was timed as instantaneous"
+    # The parts tile compute_JK apart from marshalling the matrices in and out,
+    # so they must fit inside the call but need not fill it.
+    assert sum(after_one.values()) <= first, (after_one, first)
+
+    jk.compute()
+    after_two = gtfock_mpi.df_jk_phases()
+    assert sum(after_two.values()) > sum(after_one.values()), (after_one, after_two)
+    assert all(after_two[k] >= after_one[k] for k in after_one), (after_one, after_two)
 
     jk.finalize()
 

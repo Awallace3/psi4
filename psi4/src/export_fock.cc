@@ -243,6 +243,12 @@ void export_fock(py::module &m) {
           "build, in build order, or an empty list if none was built. The setup timer says how much "
           "the fit cost; this says which part of it, and the spread of one phase across ranks is that "
           "phase's load imbalance.");
+    m.def("gtfock_df_jk_phases", &MinimalDFInterface::last_jk_phases,
+          "[(name, seconds)] this rank accumulated in each part of the most recent distributed DF engine's "
+          "J/K builds, summed over every call, or an empty list if none was built. jk_local is the "
+          "contraction over this rank's tensor rows, jk_skew is the barrier that drains the wait for the "
+          "slowest rank, and jk_comm is the reduction of J and K with that wait already removed -- so "
+          "jk_comm is what the network costs per Fock build and jk_skew is what load imbalance costs.");
     m.def(
         "gtfock_df_setup_timer", []() { return std::string(GTFOCK_DF_SETUP_TIMER); },
         "Name of the top-level timer GTFockDFJK brackets its engine build with. The fitted tensor is built "
