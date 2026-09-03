@@ -556,9 +556,18 @@ using FitPointOperation = std::array<double, 9>;
  *
  * Bohr treats the limits as absolute distances from the nearest nucleus.
  * VanDerWaals scales them by the Bondi radius of the nearest nucleus.
- * Bohr is the reviewed protocol's convention: the reviewed point-to-point grid
- * spans 4.63 to 11.46 bohr from the nearest nucleus, an absolute band that is
- * not a fixed multiple of either the O or the H Bondi radius.
+ * Bohr is the reviewed protocol's convention and remains the default so that the
+ * reviewed numbers stay reproducible, but it is an approximation: the reviewed
+ * point-to-point grid spans 4.63 to 11.46 bohr from the nearest nucleus, and that
+ * absolute band is the *envelope* of a per-atom van der Waals band rather than an
+ * absolute band in its own right. For H2O the two van der Waals surfaces bounding
+ * it are 2.0 * R_Bondi(H) = 4.535 and 4.0 * R_Bondi(O) = 11.490 bohr; a finite
+ * random sample undersamples both extremes, which is what leaves 4.63 and 11.46.
+ * Under VanDerWaals the same grid satisfies
+ * min_A |p - R_A| / R_Bondi(A) in [2.0, 4.0] for every point, so the reviewed
+ * limits are exactly 2.0 and 4.0 in this convention. Bohr therefore flattens the
+ * per-atom scaling: at 4.5 bohr it places points 1.245 bohr inside oxygen's own
+ * 2.0 * R_Bondi surface, where the reviewed grid has none.
  *
  * A previous revision justified Bohr by observing that the van der Waals reading
  * pushes the rank-3 design columns below the fixed 1e-4 WSM cutoff. That was a
@@ -567,6 +576,27 @@ using FitPointOperation = std::array<double, 9>;
  * column norm, so it is a rank threshold rather than an atomic-unit magnitude.
  */
 enum class FitPointRadialUnits { Bohr, VanDerWaals };
+
+/**
+ * How the radial shells are distributed across the limit interval.
+ *
+ * Linear spaces the shell offsets equally, which combined with an equal Lebedev
+ * count per shell makes the shell-offset density flat. It is the reviewed
+ * behaviour and the default.
+ *
+ * EqualVolume places the offsets at the equal-volume quantiles of the shell
+ * region, t_k = cbrt(t_in^3 + k/(K-1) * (t_out^3 - t_in^3)). With an equal count
+ * per shell that reproduces a volume-uniform cloud, whose offset density grows as
+ * t^2, deterministically and without an RNG - so the symmetry-faithful
+ * construction and its exact-degeneracy guarantees are preserved.
+ *
+ * The distinction is measurable, not cosmetic. A volume-uniform sample of the
+ * [2.0, 4.0] van der Waals shell has mean offset (4^4 - 2^4) / 4 / ((4^3 - 2^3) / 3)
+ * = 3.2143, whereas a flat sample has mean 3.0. Equal-volume offsets recover
+ * 3.1576 at five shells, 3.1692 at six and 3.1824 at eight, converging on the
+ * continuous value; linear offsets do not converge to it at any shell count.
+ */
+enum class FitPointRadialSpacing { Linear, EqualVolume };
 
 /**
  * Deterministic nested-equidistant-surface fit-point policy.
@@ -589,6 +619,8 @@ struct PSI_API FitPointOptions {
     double inner_limit{4.5};
     double outer_limit{11.5};
     FitPointRadialUnits radial_units{FitPointRadialUnits::Bohr};
+    /** Shell placement across [inner_limit, outer_limit]; Linear is reviewed. */
+    FitPointRadialSpacing radial_spacing{FitPointRadialSpacing::Linear};
     /** Hard ceiling; the WSM refinement envelope is 500 points. */
     std::size_t maximum_points{500};
     /** Coincident-point merge radius in bohr. */
@@ -610,6 +642,7 @@ struct PSI_API FitPointPlan {
     std::size_t estimated_bytes{};
     std::vector<double> shell_offsets;
     std::string radial_units;
+    std::string radial_spacing;
     std::string algorithm;
 };
 

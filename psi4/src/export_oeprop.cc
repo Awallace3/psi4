@@ -210,6 +210,15 @@ void export_oeprop(py::module &m) {
                     options.radial_units = FitPointRadialUnits::VanDerWaals;
                 else
                     throw PSIEXCEPTION("WSM fit points: unsupported radial units '" + units + "'");
+            } else if (key == "radial_spacing") {
+                const auto spacing = entry.second.cast<std::string>();
+                if (spacing == "LINEAR")
+                    options.radial_spacing = FitPointRadialSpacing::Linear;
+                else if (spacing == "EQUAL_VOLUME")
+                    options.radial_spacing = FitPointRadialSpacing::EqualVolume;
+                else
+                    throw PSIEXCEPTION("WSM fit points: unsupported radial spacing '" + spacing +
+                                       "'");
             } else
                 throw PSIEXCEPTION("WSM fit points: unknown option '" + key + "'");
         }
@@ -230,6 +239,7 @@ void export_oeprop(py::module &m) {
         values["estimated_bytes"] = plan.estimated_bytes;
         values["shell_offsets"] = plan.shell_offsets;
         values["radial_units"] = plan.radial_units;
+        values["radial_spacing"] = plan.radial_spacing;
         values["algorithm"] = plan.algorithm;
         return values;
     };

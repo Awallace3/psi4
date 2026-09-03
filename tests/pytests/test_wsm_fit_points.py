@@ -299,6 +299,89 @@ def test_vdw_units_scale_every_shell_by_the_bondi_radius_of_the_nearest_atom():
     assert reduced.max() == pytest.approx(3.0, abs=1e-12)
 
 
+def test_radial_spacing_defaults_to_linear_and_equal_volume_uses_the_volume_quantiles():
+    """EQUAL_VOLUME puts the shells at the equal-volume quantiles of the shell region.
+
+    The reviewed spacing is LINEAR and stays the default. EQUAL_VOLUME exists because a
+    volume-uniform cloud -- which is what a random sample of the shell region is -- has a
+    shell-offset density that grows as t**2, not a flat one. Placing K shells at
+    cbrt(t_in**3 + k/(K-1) (t_out**3 - t_in**3)) and keeping the equal Lebedev count per
+    shell reproduces that density deterministically, so the construction stays
+    symmetry-faithful and RNG-free.
+    """
+    inner, outer, shells = 2.0, 4.0, 5
+    linear = _plan(3, spherical_points=50, radial_shells=shells,
+                   inner_limit=inner, outer_limit=outer)
+    assert linear["radial_spacing"] == "LINEAR"
+    assert linear["shell_offsets"] == pytest.approx([2.0, 2.5, 3.0, 3.5, 4.0], abs=1e-14)
+
+    equal = _plan(3, spherical_points=50, radial_shells=shells,
+                  inner_limit=inner, outer_limit=outer, radial_spacing="EQUAL_VOLUME")
+    assert equal["radial_spacing"] == "EQUAL_VOLUME"
+    quantiles = np.cbrt(np.linspace(inner ** 3, outer ** 3, shells))
+    assert equal["shell_offsets"] == pytest.approx(quantiles, abs=1e-14)
+    # Both endpoints stay exact, so the limit interval is closed under either spacing.
+    assert equal["shell_offsets"][0] == pytest.approx(inner, abs=0.0)
+    assert equal["shell_offsets"][-1] == pytest.approx(outer, abs=0.0)
+
+    # A single shell has no interval to distribute, so the spacing cannot matter.
+    for spacing in ("LINEAR", "EQUAL_VOLUME"):
+        single = _plan(3, spherical_points=50, radial_shells=1,
+                       inner_limit=inner, outer_limit=outer, radial_spacing=spacing)
+        assert single["shell_offsets"] == pytest.approx([inner], abs=1e-14)
+
+
+def test_equal_volume_spacing_converges_on_the_volume_uniform_mean_offset():
+    """Only EQUAL_VOLUME approaches the mean offset of a volume-uniform cloud.
+
+    A cloud sampled uniformly by volume between offsets t_in and t_out has mean offset
+    (t_out**4 - t_in**4) / 4 / ((t_out**3 - t_in**3) / 3); on [2, 4] that is 3.2143. An
+    equal count on equally spaced shells averages 3.0 instead and does not improve with
+    shell count, because the error is in the weighting rather than the resolution.
+    """
+    inner, outer = 2.0, 4.0
+    target = ((outer ** 4 - inner ** 4) / 4.0) / ((outer ** 3 - inner ** 3) / 3.0)
+    assert target == pytest.approx(3.2143, abs=5e-5)
+
+    previous = None
+    for shells in (5, 6, 8):
+        offsets = np.asarray(_plan(3, spherical_points=50, radial_shells=shells,
+                                   inner_limit=inner, outer_limit=outer,
+                                   radial_spacing="EQUAL_VOLUME")["shell_offsets"])
+        linear = np.asarray(_plan(3, spherical_points=50, radial_shells=shells,
+                                  inner_limit=inner, outer_limit=outer)["shell_offsets"])
+        # Equally spaced shells always average the midpoint of the interval.
+        assert linear.mean() == pytest.approx(0.5 * (inner + outer), abs=1e-14)
+        gap = abs(offsets.mean() - target)
+        assert gap < abs(linear.mean() - target)
+        if previous is not None:
+            assert gap < previous
+        previous = gap
+
+
+def test_equal_volume_spacing_preserves_symmetry_and_the_shell_membership_invariants():
+    """The spacing changes only where the shells sit, not the construction's guarantees."""
+    result = _generate(spherical_points=50, radial_shells=5, inner_limit=2.0,
+                       outer_limit=4.0, radial_units="VDW",
+                       radial_spacing="EQUAL_VOLUME")
+    assert result["plan"]["radial_spacing"] == "EQUAL_VOLUME"
+    assert result["max_symmetry_deviation"] < 1e-12
+    assert result["max_octahedral_deviation"] == 0.0
+
+    points = result["points"]
+    for operation in _C2V_OPERATIONS:
+        assert _sets_match(points @ np.asarray(operation).T, points)
+
+    # Every point still lands exactly on one of the requested surfaces.
+    offsets = np.asarray(result["nearest_offsets"])
+    expected = np.asarray(result["plan"]["shell_offsets"])
+    for offset, shell in zip(offsets, result["shell_index"]):
+        assert offset == pytest.approx(expected[shell], abs=1e-12)
+    assert set(result["shell_index"]) == set(range(5))
+    assert offsets.min() == pytest.approx(2.0, abs=1e-12)
+    assert offsets.max() == pytest.approx(4.0, abs=1e-12)
+
+
 def test_bondi_radius_table_is_aligned_with_atomic_number():
     bohr = psi4.constants.bohr2angstroms
     published = {1: 1.20, 2: 1.40, 6: 1.70, 8: 1.52, 10: 1.54, 17: 1.75, 18: 1.88,
@@ -332,6 +415,7 @@ def test_vdw_units_fail_closed_for_elements_outside_the_tabulated_range():
     ({"outer_limit": float("inf")}, "must be finite"),
     ({"maximum_points": 0}, "maximum point count"),
     ({"radial_units": "SURFACE"}, "radial units"),
+    ({"radial_spacing": "GAUSSIAN"}, "radial spacing"),
 ])
 def test_fit_point_generation_fails_closed_on_degenerate_options(options, message):
     with pytest.raises(RuntimeError, match=message):
@@ -393,6 +477,7 @@ def test_wsm_fit_points_reads_the_atomic_polarizability_fit_options():
     assert default["plan"]["radial_shells"] == 5
     assert default["plan"]["shell_offsets"] == pytest.approx([4.5, 6.25, 8.0, 9.75, 11.5])
     assert default["plan"]["radial_units"] == "BOHR"
+    assert default["plan"]["radial_spacing"] == "LINEAR"
     assert default["plan"]["maximum_points"] == 500
     assert default["plan"]["symmetry_operation_count"] == 4
 
@@ -402,12 +487,14 @@ def test_wsm_fit_points_reads_the_atomic_polarizability_fit_options():
         "atomic_polarizability_fit_inner_limit": 2.5,
         "atomic_polarizability_fit_outer_limit": 3.5,
         "atomic_polarizability_fit_max_points": 400,
+        "atomic_polarizability_fit_radial_spacing": "equal_volume",
     })
     tuned = _from_molecule(molecule)
     psi4.core.clean_options()
 
     assert tuned["plan"]["spherical_points"] == 26
     assert tuned["plan"]["radial_shells"] == 2
+    assert tuned["plan"]["radial_spacing"] == "EQUAL_VOLUME"
     assert tuned["plan"]["shell_offsets"] == pytest.approx([2.5, 3.5])
     assert tuned["plan"]["maximum_points"] == 400
     assert len(tuned["points"]) < len(default["points"])
@@ -570,11 +657,17 @@ def test_default_shell_limits_bracket_the_reviewed_point_grid_span():
     """The default band is 4.5 to 11.5 bohr from the nearest nucleus.
 
     The reviewed point-to-point grid spans 4.63 to 11.46 bohr from the nearest nucleus, so
-    the default band brackets it. The radial convention stays BOHR because that span is an
-    absolute band rather than a shell offset derived from any radius table. The physical
-    requirement behind the band -- that a rank-3 multipole model can actually reproduce
-    the point-to-point response there -- is asserted against a real density by the
-    molecular-conservation tests in test_atomic_polarizabilities.py.
+    the default band brackets it, and BOHR stays the default convention so that the
+    reviewed numbers remain reproducible. That absolute span is not, however, evidence
+    that the reviewed grid is defined absolutely: for water it is exactly the envelope of
+    a per-atom van der Waals band, 2.0 * R_Bondi(H) = 4.535 to 4.0 * R_Bondi(O) = 11.490,
+    with a finite random sample undersampling both extremes. BOHR consequently flattens
+    the per-atom scaling, and 4.5 bohr sits 1.245 bohr inside oxygen's own 2.0 * R_Bondi
+    surface; ATOMIC_POLARIZABILITY_FIT_RADIAL_UNITS VDW with limits 2.0 and 4.0 selects
+    the unflattened band. The physical requirement behind the band -- that a rank-3
+    multipole model can actually reproduce the point-to-point response there -- is
+    asserted against a real density by the molecular-conservation tests in
+    test_atomic_polarizabilities.py.
     """
     psi4.core.clean_options()
     default = _from_molecule(_water_molecule())

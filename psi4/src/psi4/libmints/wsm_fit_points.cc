@@ -120,19 +120,42 @@ std::string radial_units_name(FitPointRadialUnits units) {
     return units == FitPointRadialUnits::Bohr ? "BOHR" : "VDW";
 }
 
-/** Equally spaced shell offsets across the closed limit interval. */
+std::string radial_spacing_name(FitPointRadialSpacing spacing) {
+    return spacing == FitPointRadialSpacing::Linear ? "LINEAR" : "EQUAL_VOLUME";
+}
+
+/**
+ * Shell offsets across the closed limit interval.
+ *
+ * Linear spaces them equally. EqualVolume places them at the equal-volume
+ * quantiles, so that an equal Lebedev count per shell samples the shell region
+ * uniformly by volume rather than uniformly in offset. Both endpoints are set
+ * exactly, so the interval is closed under either spacing.
+ */
 std::vector<double> shell_offsets(const FitPointOptions& options) {
     std::vector<double> offsets(options.radial_shells);
     if (options.radial_shells == 1) {
         offsets[0] = options.inner_limit;
         return offsets;
     }
-    const double span = options.outer_limit - options.inner_limit;
     const auto last = options.radial_shells - 1;
-    for (std::size_t shell = 0; shell < options.radial_shells; ++shell)
-        offsets[shell] = options.inner_limit +
-                         span * static_cast<double>(shell) / static_cast<double>(last);
-    offsets[last] = options.outer_limit;
+    const double inner = options.inner_limit;
+    const double outer = options.outer_limit;
+    if (options.radial_spacing == FitPointRadialSpacing::EqualVolume) {
+        const double inner_cubed = inner * inner * inner;
+        const double outer_cubed = outer * outer * outer;
+        const double span = outer_cubed - inner_cubed;
+        for (std::size_t shell = 0; shell < options.radial_shells; ++shell)
+            offsets[shell] = std::cbrt(inner_cubed + span * static_cast<double>(shell) /
+                                                         static_cast<double>(last));
+    } else {
+        const double span = outer - inner;
+        for (std::size_t shell = 0; shell < options.radial_shells; ++shell)
+            offsets[shell] =
+                inner + span * static_cast<double>(shell) / static_cast<double>(last);
+    }
+    offsets[0] = inner;
+    offsets[last] = outer;
     return offsets;
 }
 
@@ -294,6 +317,7 @@ FitPointPlan plan_fit_points(std::size_t atom_count, const FitPointOptions& opti
     plan.maximum_points = options.maximum_points;
     plan.shell_offsets = shell_offsets(options);
     plan.radial_units = radial_units_name(options.radial_units);
+    plan.radial_spacing = radial_spacing_name(options.radial_spacing);
     plan.algorithm = "nested_equidistant_lebedev_surfaces";
     plan.candidate_bytes = checked_product(plan.candidate_count, sizeof(SitePosition));
     plan.retained_metadata_bytes = checked_product(
@@ -453,6 +477,14 @@ FitPointOptions fit_point_options_from(Options& options) {
         policy.radial_units = FitPointRadialUnits::VanDerWaals;
     else
         throw PSIEXCEPTION(std::string(kPrefix) + "unsupported radial units '" + units + "'");
+    const std::string spacing = options.get_str("ATOMIC_POLARIZABILITY_FIT_RADIAL_SPACING");
+    if (spacing == "LINEAR")
+        policy.radial_spacing = FitPointRadialSpacing::Linear;
+    else if (spacing == "EQUAL_VOLUME")
+        policy.radial_spacing = FitPointRadialSpacing::EqualVolume;
+    else
+        throw PSIEXCEPTION(std::string(kPrefix) + "unsupported radial spacing '" + spacing +
+                           "'");
     return policy;
 }
 

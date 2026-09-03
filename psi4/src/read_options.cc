@@ -181,6 +181,18 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- Convention for the fit-point shell limits: absolute bohr distances from the
     nearest nucleus, or multiples of that nucleus' Bondi van der Waals radius. -*/
     options.add_str("ATOMIC_POLARIZABILITY_FIT_RADIAL_UNITS", "BOHR", "BOHR VDW");
+    /*- How the fit-point shells are distributed across the limit interval.
+    ``LINEAR`` spaces the shell offsets equally; with an equal Lebedev count per
+    shell that makes the shell-offset density flat, and it is the reviewed
+    behaviour. ``EQUAL_VOLUME`` puts the offsets at the equal-volume quantiles,
+    cbrt(t_in^3 + k/(K-1) (t_out^3 - t_in^3)), so the same equal count per shell
+    samples the shell region uniformly *by volume* and the offset density grows as
+    t^2. The two differ measurably: a volume-uniform sample of the [2.0, 4.0] van
+    der Waals shell has mean offset 3.2143 against 3.0 for a flat sample, and only
+    ``EQUAL_VOLUME`` converges on that value as the shell count rises (3.1576 at
+    five shells, 3.1692 at six, 3.1824 at eight). -*/
+    options.add_str("ATOMIC_POLARIZABILITY_FIT_RADIAL_SPACING", "LINEAR",
+                    "LINEAR EQUAL_VOLUME");
     /*- Largest fit-point count accepted by WSM refinement. -*/
     options.add_int("ATOMIC_POLARIZABILITY_FIT_MAX_POINTS", 500);
 
