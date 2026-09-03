@@ -106,7 +106,7 @@ constexpr double kBondiRadiiAngstrom[] = {
 };
 constexpr int kBondiMaxZ = static_cast<int>(sizeof(kBondiRadiiAngstrom) / sizeof(double)) - 1;
 
-void require_finite(double value, const char* name) {
+void require_finite_input(double value, const char* name) {
     if (!std::isfinite(value)) throw PSIEXCEPTION(std::string(kPrefix) + name + " must be finite");
 }
 
@@ -137,9 +137,9 @@ std::vector<double> shell_offsets(const FitPointOptions& options) {
 }
 
 void validate_options(const FitPointOptions& options) {
-    require_finite(options.inner_limit, "inner shell limit");
-    require_finite(options.outer_limit, "outer shell limit");
-    require_finite(options.merge_tolerance_bohr, "merge tolerance");
+    require_finite_input(options.inner_limit, "inner shell limit");
+    require_finite_input(options.outer_limit, "outer shell limit");
+    require_finite_input(options.merge_tolerance_bohr, "merge tolerance");
     if (options.radial_shells == 0)
         throw PSIEXCEPTION(std::string(kPrefix) + "at least one radial shell is required");
     if (options.maximum_points == 0)
@@ -175,7 +175,7 @@ double squared_distance(const SitePosition& first, const SitePosition& second) {
 }
 
 void require_orthogonal(const FitPointOperation& operation, const std::string& what) {
-    for (const double entry : operation) require_finite(entry, what.c_str());
+    for (const double entry : operation) require_finite_input(entry, what.c_str());
     for (std::size_t row = 0; row < 3; ++row) {
         for (std::size_t column = 0; column < 3; ++column) {
             double product = 0.0;
@@ -322,7 +322,7 @@ FitPointSet generate_fit_points(const std::vector<int>& atomic_numbers,
     double geometry_scale = 0.0;
     for (const auto& center : centers)
         for (const double coordinate : center) {
-            require_finite(coordinate, "nuclear coordinate");
+            require_finite_input(coordinate, "nuclear coordinate");
             geometry_scale = std::max(geometry_scale, std::abs(coordinate));
         }
     for (std::size_t atom = 0; atom < centers.size(); ++atom)

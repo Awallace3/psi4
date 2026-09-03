@@ -36,7 +36,7 @@ namespace {
 // The single versioned radius table lives in detail:: so other native stages reuse it.
 using psi::detail::slater_radius;
 
-constexpr double kPi = 3.141592653589793238462643383279502884;
+constexpr double kPiWeights = 3.141592653589793238462643383279502884;
 constexpr double kLogFloor = -676.3964185322641;  // log(DBL_MIN) + 32
 constexpr double kCoincidentTolerance = 1.0e-12;
 constexpr double kUnityTolerance = 1.0e-13;
@@ -71,7 +71,7 @@ Quadrature gauss_legendre(std::size_t count, double lower, double upper) {
     result.weights.resize(count);
     const std::size_t half = (count + 1) / 2;
     for (std::size_t i = 0; i < half; ++i) {
-        double root = std::cos(kPi * (static_cast<double>(i) + 0.75) /
+        double root = std::cos(kPiWeights * (static_cast<double>(i) + 0.75) /
                                (static_cast<double>(count) + 0.5));
         double derivative = 0.0;
         for (int iteration = 0; iteration < 100; ++iteration) {
@@ -137,7 +137,7 @@ AngularGrid product_spherical_grid(std::size_t polar_count, std::size_t azimutha
         const double z = polar.nodes[i];
         const double radial = std::sqrt(std::max(0.0, 1.0 - z * z));
         for (std::size_t j = 0; j < azimuthal_count; ++j) {
-            const double phi = 2.0 * kPi * static_cast<double>(j) / static_cast<double>(azimuthal_count);
+            const double phi = 2.0 * kPiWeights * static_cast<double>(j) / static_cast<double>(azimuthal_count);
             grid.directions.push_back({radial * std::cos(phi), radial * std::sin(phi), z});
             grid.weights.push_back(0.5 * polar.weights[i] / static_cast<double>(azimuthal_count));
         }
@@ -206,7 +206,7 @@ struct Profile {
 
     static Profile initial(const std::vector<double>& nodes, double alpha) {
         std::vector<double> logs(nodes.size());
-        const double norm = 1.5 * std::log(alpha / kPi);
+        const double norm = 1.5 * std::log(alpha / kPiWeights);
         for (std::size_t i = 0; i < nodes.size(); ++i) logs[i] = std::max(kLogFloor, norm - alpha * nodes[i] * nodes[i]);
         Profile profile(nodes, std::move(logs));
         profile.gaussian = true;
@@ -266,7 +266,7 @@ struct Profile {
 };
 
 double tail_charge_for_alpha(double value_at_join, double join, double alpha) {
-    return 4.0 * kPi * value_at_join *
+    return 4.0 * kPiWeights * value_at_join *
            (join * join / alpha + 2.0 * join / (alpha * alpha) + 2.0 / (alpha * alpha * alpha));
 }
 
@@ -305,7 +305,7 @@ void fit_tail(Profile& profile, const Quadrature& radial, double scale, double j
     for (std::size_t i = 1; i < tail_radial.nodes.size(); ++i) {
         const double radius_double = join + tail_radial.nodes[i];
         const long double radius = radius_double;
-        charge += 4.0L * static_cast<long double>(kPi) * radius * radius * tail_radial.weights[i] *
+        charge += 4.0L * static_cast<long double>(kPiWeights) * radius * radius * tail_radial.weights[i] *
                   std::exp(static_cast<long double>(profile.pchip(radius_double)));
     }
     const double charge_double = static_cast<double>(charge);
@@ -327,7 +327,7 @@ void fit_tail_slope_charge(Profile& profile, const Quadrature& radial,
     for (std::size_t index = 1; index < tail_radial.nodes.size(); ++index) {
         const double radius_double = join + tail_radial.nodes[index];
         const long double radius = radius_double;
-        charge += 4.0L * static_cast<long double>(kPi) * radius * radius *
+        charge += 4.0L * static_cast<long double>(kPiWeights) * radius * radius *
                   tail_radial.weights[index] *
                   std::exp(static_cast<long double>(profile.pchip(radius_double)));
     }
@@ -337,7 +337,7 @@ void fit_tail_slope_charge(Profile& profile, const Quadrature& radial,
     const long double r = join;
     const long double radial_factor = r * r / a + 2.0L * r / (a * a) + 2.0L / (a * a * a);
     const long double log_amplitude =
-        std::log(charge) - std::log(4.0L * static_cast<long double>(kPi) * radial_factor) + a * r;
+        std::log(charge) - std::log(4.0L * static_cast<long double>(kPiWeights) * radial_factor) + a * r;
     if (!std::isfinite(static_cast<double>(log_amplitude)))
         throw PSIEXCEPTION("ISA basis-space A: charge-preserving tail amplitude is not finite");
     profile.gaussian = false;
@@ -372,7 +372,7 @@ long double exponential_overlap_tail(double log_amplitude, double exponent, doub
     const long double r0 = join;
     const long double polynomial = r0 * r0 / beta + 2.0L * r0 / (beta * beta) +
                                    2.0L / (beta * beta * beta);
-    return 4.0L * static_cast<long double>(kPi) *
+    return 4.0L * static_cast<long double>(kPiWeights) *
            std::exp(static_cast<long double>(log_amplitude) - beta * r0) * polynomial;
 }
 
@@ -395,7 +395,7 @@ double normalized_overlap(const Profile& first_input, const Profile& second_inpu
         // rule. Canonical convergence cannot be declared until tails activate.
         for (std::size_t i = 1; i < radial.nodes.size(); ++i) {
             const long double radius = radial.nodes[i];
-            const long double measure = 4.0L * static_cast<long double>(kPi) * radius * radius * radial.weights[i];
+            const long double measure = 4.0L * static_cast<long double>(kPiWeights) * radius * radius * radial.weights[i];
             const long double a = std::exp(static_cast<long double>(first.eval(radial.nodes[i])));
             const long double b = std::exp(static_cast<long double>(second.eval(radial.nodes[i])));
             cross += measure * a * b;
@@ -416,7 +416,7 @@ double normalized_overlap(const Profile& first_input, const Profile& second_inpu
             for (std::size_t i = 0; i < inner.nodes.size(); ++i) {
                 const long double radius = inner.nodes[i];
                 const long double measure =
-                    4.0L * static_cast<long double>(kPi) * radius * radius * inner.weights[i];
+                    4.0L * static_cast<long double>(kPiWeights) * radius * radius * inner.weights[i];
                 const long double a = std::exp(static_cast<long double>(first.eval(inner.nodes[i])));
                 const long double b = std::exp(static_cast<long double>(second.eval(inner.nodes[i])));
                 cross += measure * a * b;
@@ -787,7 +787,7 @@ BasisSpaceWorkspace make_basis_workspace(const BasisSet& auxiliary,
         append_point(sites[site], 0.0);
         for (std::size_t r = 1; r < radial[site].nodes.size(); ++r) {
             const double radius = radial[site].nodes[r];
-            const double shell_weight = 4.0 * kPi * radius * radius * radial[site].weights[r];
+            const double shell_weight = 4.0 * kPiWeights * radius * radius * radial[site].weights[r];
             for (std::size_t q = 0; q < nangular; ++q) {
                 const auto& direction = angular.directions[q];
                 append_point({sites[site][0] + radius * direction[0],
