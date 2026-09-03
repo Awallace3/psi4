@@ -121,7 +121,57 @@ std::string radial_units_name(FitPointRadialUnits units) {
 }
 
 std::string radial_spacing_name(FitPointRadialSpacing spacing) {
-    return spacing == FitPointRadialSpacing::Linear ? "LINEAR" : "EQUAL_VOLUME";
+    switch (spacing) {
+        case FitPointRadialSpacing::Linear:
+            return "LINEAR";
+        case FitPointRadialSpacing::EqualVolume:
+            return "EQUAL_VOLUME";
+        default:
+            return "EQUAL_VOLUME_CENTROID";
+    }
+}
+
+std::string angular_weighting_name(FitPointAngularWeighting weighting) {
+    return weighting == FitPointAngularWeighting::Uniform ? "UNIFORM" : "VOLUME";
+}
+
+/**
+ * Lebedev nodes offered to each atom per shell.
+ *
+ * Uniform gives every atom the requested count. Volume scales it by the cube of
+ * the atom's scaling radius and snaps to the nearest supported Lebedev size,
+ * never above the requested count, because the shell-region volume an atom owns
+ * grows as rho^3 while both constructions share the same keep rule on each
+ * shell surface. Symmetry-equivalent atoms share an atomic number and therefore
+ * a scaling radius, so they always receive the same count and the invariance of
+ * the finished set is preserved.
+ */
+std::vector<std::size_t> atom_spherical_points(const FitPointOptions& options,
+                                               const std::vector<double>& radii) {
+    std::vector<std::size_t> counts(radii.size(), options.spherical_points);
+    if (options.angular_weighting == FitPointAngularWeighting::Uniform) return counts;
+
+    const double largest = *std::max_element(radii.begin(), radii.end());
+    if (!(largest > 0.0)) throw PSIEXCEPTION(std::string(kPrefix) + "scaling radii must be positive");
+    auto sizes = lebedev_spherical_grid_sizes();
+    std::sort(sizes.begin(), sizes.end());
+    for (std::size_t atom = 0; atom < radii.size(); ++atom) {
+        const double ratio = radii[atom] / largest;
+        const double wanted =
+            static_cast<double>(options.spherical_points) * ratio * ratio * ratio;
+        std::size_t best = static_cast<std::size_t>(sizes.front());
+        double best_gap = std::numeric_limits<double>::max();
+        for (const int size : sizes) {
+            if (static_cast<std::size_t>(size) > options.spherical_points) break;
+            const double gap = std::abs(static_cast<double>(size) - wanted);
+            if (gap < best_gap) {
+                best_gap = gap;
+                best = static_cast<std::size_t>(size);
+            }
+        }
+        counts[atom] = best;
+    }
+    return counts;
 }
 
 /**
@@ -129,8 +179,13 @@ std::string radial_spacing_name(FitPointRadialSpacing spacing) {
  *
  * Linear spaces them equally. EqualVolume places them at the equal-volume
  * quantiles, so that an equal Lebedev count per shell samples the shell region
- * uniformly by volume rather than uniformly in offset. Both endpoints are set
- * exactly, so the interval is closed under either spacing.
+ * uniformly by volume rather than uniformly in offset; both endpoints are set
+ * exactly, so the interval is closed under either. EqualVolumeCentroid divides
+ * the region into K equal-volume sub-shells and takes each sub-shell's volume
+ * centroid, which reproduces the exact continuous volume-uniform mean offset at
+ * every K and places no shell on either limit. A single shell is the inner limit
+ * under every spacing, since that configuration exists to place one named
+ * surface.
  */
 std::vector<double> shell_offsets(const FitPointOptions& options) {
     std::vector<double> offsets(options.radial_shells);
@@ -141,9 +196,23 @@ std::vector<double> shell_offsets(const FitPointOptions& options) {
     const auto last = options.radial_shells - 1;
     const double inner = options.inner_limit;
     const double outer = options.outer_limit;
+    const double inner_cubed = inner * inner * inner;
+    const double outer_cubed = outer * outer * outer;
+    if (options.radial_spacing == FitPointRadialSpacing::EqualVolumeCentroid) {
+        const double span = outer_cubed - inner_cubed;
+        const auto edge = [&](std::size_t index) {
+            return std::cbrt(inner_cubed + span * static_cast<double>(index) /
+                                               static_cast<double>(options.radial_shells));
+        };
+        for (std::size_t shell = 0; shell < options.radial_shells; ++shell) {
+            const double low = edge(shell);
+            const double high = edge(shell + 1);
+            offsets[shell] = 0.75 * (high * high * high * high - low * low * low * low) /
+                             (high * high * high - low * low * low);
+        }
+        return offsets;
+    }
     if (options.radial_spacing == FitPointRadialSpacing::EqualVolume) {
-        const double inner_cubed = inner * inner * inner;
-        const double outer_cubed = outer * outer * outer;
         const double span = outer_cubed - inner_cubed;
         for (std::size_t shell = 0; shell < options.radial_shells; ++shell)
             offsets[shell] = std::cbrt(inner_cubed + span * static_cast<double>(shell) /
@@ -318,6 +387,7 @@ FitPointPlan plan_fit_points(std::size_t atom_count, const FitPointOptions& opti
     plan.shell_offsets = shell_offsets(options);
     plan.radial_units = radial_units_name(options.radial_units);
     plan.radial_spacing = radial_spacing_name(options.radial_spacing);
+    plan.angular_weighting = angular_weighting_name(options.angular_weighting);
     plan.algorithm = "nested_equidistant_lebedev_surfaces";
     plan.candidate_bytes = checked_product(plan.candidate_count, sizeof(SitePosition));
     plan.retained_metadata_bytes = checked_product(
@@ -364,16 +434,29 @@ FitPointSet generate_fit_points(const std::vector<int>& atomic_numbers,
         for (std::size_t atom = 0; atom < centers.size(); ++atom)
             radii[atom] = bondi_vdw_radius_bohr(atomic_numbers[atom]);
 
+    const auto atom_points = atom_spherical_points(options, radii);
+
     // Reuse of Psi4's DFT Lebedev tables; only the node directions are needed, and
-    // they are carried into the angular frame once for the whole enumeration.
-    std::vector<SitePosition> directions;
-    directions.reserve(options.spherical_points);
-    for (const auto& node : lebedev_spherical_grid(static_cast<int>(options.spherical_points)))
-        directions.push_back(
-            apply_operation(angular_frame, SitePosition{node.x, node.y, node.z}));
+    // they are carried into the angular frame once for the whole enumeration. The
+    // grids are cached by node count so atoms sharing a count share one table, and
+    // therefore one node ordering, which the enumeration relies on.
+    std::vector<std::vector<SitePosition>> directions(centers.size());
+    for (std::size_t atom = 0; atom < centers.size(); ++atom) {
+        for (std::size_t earlier = 0; earlier < atom; ++earlier)
+            if (atom_points[earlier] == atom_points[atom]) {
+                directions[atom] = directions[earlier];
+                break;
+            }
+        if (!directions[atom].empty()) continue;
+        directions[atom].reserve(atom_points[atom]);
+        for (const auto& node : lebedev_spherical_grid(static_cast<int>(atom_points[atom])))
+            directions[atom].push_back(
+                apply_operation(angular_frame, SitePosition{node.x, node.y, node.z}));
+    }
 
     FitPointSet result;
     result.scaling_radii = radii;
+    result.spherical_points_by_atom = atom_points;
     result.points.reserve(plan.candidate_count);
     result.nearest_offsets.reserve(plan.candidate_count);
     result.shell_index.reserve(plan.candidate_count);
@@ -398,7 +481,7 @@ FitPointSet generate_fit_points(const std::vector<int>& atomic_numbers,
         const double offset = plan.shell_offsets[shell];
         for (std::size_t atom = 0; atom < centers.size(); ++atom) {
             const double radius = offset * radii[atom];
-            for (const auto& direction : directions) {
+            for (const auto& direction : directions[atom]) {
                 SitePosition candidate{centers[atom][0] + radius * direction[0],
                                        centers[atom][1] + radius * direction[1],
                                        centers[atom][2] + radius * direction[2]};
@@ -482,8 +565,18 @@ FitPointOptions fit_point_options_from(Options& options) {
         policy.radial_spacing = FitPointRadialSpacing::Linear;
     else if (spacing == "EQUAL_VOLUME")
         policy.radial_spacing = FitPointRadialSpacing::EqualVolume;
+    else if (spacing == "EQUAL_VOLUME_CENTROID")
+        policy.radial_spacing = FitPointRadialSpacing::EqualVolumeCentroid;
     else
         throw PSIEXCEPTION(std::string(kPrefix) + "unsupported radial spacing '" + spacing +
+                           "'");
+    const std::string weighting = options.get_str("ATOMIC_POLARIZABILITY_FIT_ANGULAR_WEIGHTING");
+    if (weighting == "UNIFORM")
+        policy.angular_weighting = FitPointAngularWeighting::Uniform;
+    else if (weighting == "VOLUME")
+        policy.angular_weighting = FitPointAngularWeighting::Volume;
+    else
+        throw PSIEXCEPTION(std::string(kPrefix) + "unsupported angular weighting '" + weighting +
                            "'");
     return policy;
 }

@@ -325,7 +325,7 @@ def test_radial_spacing_defaults_to_linear_and_equal_volume_uses_the_volume_quan
     assert equal["shell_offsets"][-1] == pytest.approx(outer, abs=0.0)
 
     # A single shell has no interval to distribute, so the spacing cannot matter.
-    for spacing in ("LINEAR", "EQUAL_VOLUME"):
+    for spacing in ("LINEAR", "EQUAL_VOLUME", "EQUAL_VOLUME_CENTROID"):
         single = _plan(3, spherical_points=50, radial_shells=1,
                        inner_limit=inner, outer_limit=outer, radial_spacing=spacing)
         assert single["shell_offsets"] == pytest.approx([inner], abs=1e-14)
@@ -382,6 +382,111 @@ def test_equal_volume_spacing_preserves_symmetry_and_the_shell_membership_invari
     assert offsets.max() == pytest.approx(4.0, abs=1e-12)
 
 
+def test_centroid_spacing_reproduces_the_volume_uniform_mean_offset_at_every_shell_count():
+    """EQUAL_VOLUME_CENTROID is exact where EQUAL_VOLUME only converges.
+
+    Quantile offsets are the boundaries of K-1 equal-volume sub-shells, so they carry the
+    endpoints and only approach the volume-uniform mean as K rises. Centroid offsets are the
+    volume centroids of K equal-volume sub-shells; since every sub-shell holds the same
+    volume, the unweighted mean of the K centroids is the exact continuous mean at any K.
+    """
+    inner, outer = 2.0, 4.0
+    target = ((outer ** 4 - inner ** 4) / 4.0) / ((outer ** 3 - inner ** 3) / 3.0)
+
+    for shells in (1 + 1, 5, 6, 8, 10):
+        plan = _plan(3, spherical_points=50, radial_shells=shells, inner_limit=inner,
+                     outer_limit=outer, radial_spacing="EQUAL_VOLUME_CENTROID")
+        assert plan["radial_spacing"] == "EQUAL_VOLUME_CENTROID"
+        offsets = np.asarray(plan["shell_offsets"])
+
+        edges = np.cbrt(np.linspace(inner ** 3, outer ** 3, shells + 1))
+        low, high = edges[:-1], edges[1:]
+        expected = 0.75 * (high ** 4 - low ** 4) / (high ** 3 - low ** 3)
+        assert offsets == pytest.approx(expected, abs=1e-14)
+
+        # Exact at every shell count, not merely convergent.
+        assert offsets.mean() == pytest.approx(target, abs=1e-13)
+        # Each centroid lies strictly inside its own sub-shell, so no shell touches a limit.
+        assert np.all(offsets > low)
+        assert np.all(offsets < high)
+        assert offsets[0] > inner
+        assert offsets[-1] < outer
+        assert np.all(np.diff(offsets) > 0.0)
+
+
+def test_volume_angular_weighting_scales_node_counts_by_the_cubed_radius():
+    """VOLUME gives each atom the supported Lebedev size nearest to its volume share.
+
+    Equal node counts hand every atom the same share of each shell surface, but the volume
+    of the shell region an atom owns grows as its scaling radius cubed. The reviewed
+    500-point cloud puts 0.034 of its points nearest a hydrogen, which is the volume share;
+    an equal count gives hydrogen far more than that, so the weighting is the correction.
+    """
+    ratio = (psi4.core._atomic_polarizability_bondi_vdw_radius(1)
+             / psi4.core._atomic_polarizability_bondi_vdw_radius(8)) ** 3
+    assert ratio == pytest.approx(0.4921, abs=5e-5)
+
+    uniform = _generate(spherical_points=50, radial_shells=6, inner_limit=2.0, outer_limit=4.0,
+                        radial_units="VDW", radial_spacing="EQUAL_VOLUME_CENTROID")
+    assert uniform["plan"]["angular_weighting"] == "UNIFORM"
+    assert list(uniform["spherical_points_by_atom"]) == [50, 50, 50]
+
+    weighted = _generate(spherical_points=50, radial_shells=6, inner_limit=2.0, outer_limit=4.0,
+                         radial_units="VDW", radial_spacing="EQUAL_VOLUME_CENTROID",
+                         angular_weighting="VOLUME")
+    assert weighted["plan"]["angular_weighting"] == "VOLUME"
+    # 50 * 0.4921 = 24.6, and 26 is the supported Lebedev size nearest to it.
+    assert list(weighted["spherical_points_by_atom"]) == [50, 26, 26]
+    # Symmetry-equivalent atoms share an atomic number, so they cannot be given
+    # different counts -- that is what keeps the weighted set exactly invariant.
+    assert weighted["spherical_points_by_atom"][1] == weighted["spherical_points_by_atom"][2]
+
+    def hydrogen_fraction(result):
+        radii = np.asarray(result["scaling_radii"])
+        centers = np.asarray(_WATER_CENTERS)
+        reduced = (np.linalg.norm(result["points"][:, None, :] - centers[None, :, :],
+                                  axis=2) / radii[None, :])
+        return float((reduced.argmin(axis=1) != 0).mean())
+
+    volume_share = 0.034
+    assert abs(hydrogen_fraction(weighted) - volume_share) < abs(
+        hydrogen_fraction(uniform) - volume_share)
+    assert hydrogen_fraction(weighted) == pytest.approx(volume_share, abs=0.01)
+
+
+def test_volume_angular_weighting_is_a_no_op_under_the_bohr_convention():
+    """Under BOHR every scaling radius is one, so there is no size to weight by."""
+    uniform = _generate(spherical_points=50, radial_shells=5, radial_units="BOHR")
+    weighted = _generate(spherical_points=50, radial_shells=5, radial_units="BOHR",
+                         angular_weighting="VOLUME")
+    assert list(weighted["spherical_points_by_atom"]) == [50, 50, 50]
+    assert weighted["points"] == pytest.approx(uniform["points"], abs=0.0)
+    assert weighted["nearest_offsets"] == pytest.approx(uniform["nearest_offsets"], abs=0.0)
+    assert list(weighted["generator_atom"]) == list(uniform["generator_atom"])
+
+
+def test_volume_angular_weighting_preserves_symmetry_and_shell_membership():
+    """Weighting changes how many nodes each atom offers, not the guarantees."""
+    result = _generate(spherical_points=50, radial_shells=6, inner_limit=2.0, outer_limit=4.0,
+                       radial_units="VDW", radial_spacing="EQUAL_VOLUME_CENTROID",
+                       angular_weighting="VOLUME")
+    assert result["max_symmetry_deviation"] < 1e-12
+    assert result["max_octahedral_deviation"] == 0.0
+
+    points = result["points"]
+    for operation in _C2V_OPERATIONS:
+        assert _sets_match(points @ np.asarray(operation).T, points)
+
+    expected = np.asarray(result["plan"]["shell_offsets"])
+    for offset, shell in zip(result["nearest_offsets"], result["shell_index"]):
+        assert offset == pytest.approx(expected[shell], abs=1e-12)
+    assert set(result["shell_index"]) == set(range(6))
+    # Centroid shells sit strictly inside the limits, so nothing touches either.
+    offsets = np.asarray(result["nearest_offsets"])
+    assert offsets.min() > 2.0
+    assert offsets.max() < 4.0
+
+
 def test_bondi_radius_table_is_aligned_with_atomic_number():
     bohr = psi4.constants.bohr2angstroms
     published = {1: 1.20, 2: 1.40, 6: 1.70, 8: 1.52, 10: 1.54, 17: 1.75, 18: 1.88,
@@ -416,6 +521,7 @@ def test_vdw_units_fail_closed_for_elements_outside_the_tabulated_range():
     ({"maximum_points": 0}, "maximum point count"),
     ({"radial_units": "SURFACE"}, "radial units"),
     ({"radial_spacing": "GAUSSIAN"}, "radial spacing"),
+    ({"angular_weighting": "SPHERICAL"}, "angular weighting"),
 ])
 def test_fit_point_generation_fails_closed_on_degenerate_options(options, message):
     with pytest.raises(RuntimeError, match=message):
@@ -478,6 +584,8 @@ def test_wsm_fit_points_reads_the_atomic_polarizability_fit_options():
     assert default["plan"]["shell_offsets"] == pytest.approx([4.5, 6.25, 8.0, 9.75, 11.5])
     assert default["plan"]["radial_units"] == "BOHR"
     assert default["plan"]["radial_spacing"] == "LINEAR"
+    assert default["plan"]["angular_weighting"] == "UNIFORM"
+    assert list(default["spherical_points_by_atom"]) == [50, 50, 50]
     assert default["plan"]["maximum_points"] == 500
     assert default["plan"]["symmetry_operation_count"] == 4
 
@@ -488,6 +596,7 @@ def test_wsm_fit_points_reads_the_atomic_polarizability_fit_options():
         "atomic_polarizability_fit_outer_limit": 3.5,
         "atomic_polarizability_fit_max_points": 400,
         "atomic_polarizability_fit_radial_spacing": "equal_volume",
+        "atomic_polarizability_fit_angular_weighting": "volume",
     })
     tuned = _from_molecule(molecule)
     psi4.core.clean_options()
@@ -495,6 +604,9 @@ def test_wsm_fit_points_reads_the_atomic_polarizability_fit_options():
     assert tuned["plan"]["spherical_points"] == 26
     assert tuned["plan"]["radial_shells"] == 2
     assert tuned["plan"]["radial_spacing"] == "EQUAL_VOLUME"
+    assert tuned["plan"]["angular_weighting"] == "VOLUME"
+    # BOHR units leave every scaling radius at one, so VOLUME weights nothing here.
+    assert list(tuned["spherical_points_by_atom"]) == [26, 26, 26]
     assert tuned["plan"]["shell_offsets"] == pytest.approx([2.5, 3.5])
     assert tuned["plan"]["maximum_points"] == 400
     assert len(tuned["points"]) < len(default["points"])

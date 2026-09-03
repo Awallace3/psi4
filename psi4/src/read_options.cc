@@ -190,9 +190,28 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     t^2. The two differ measurably: a volume-uniform sample of the [2.0, 4.0] van
     der Waals shell has mean offset 3.2143 against 3.0 for a flat sample, and only
     ``EQUAL_VOLUME`` converges on that value as the shell count rises (3.1576 at
-    five shells, 3.1692 at six, 3.1824 at eight). -*/
+    five shells, 3.1692 at six, 3.1824 at eight). ``EQUAL_VOLUME_CENTROID`` instead
+    splits the region into K equal-volume sub-shells and takes each sub-shell's
+    volume centroid, 3/4 (b^4 - a^4) / (b^3 - a^3), which gives the exact mean
+    3.2143 at *every* shell count and places no shell on either limit. That last
+    property matters: a quantile shell sits exactly on the inner limit, which is
+    where a small atom's exposed surface fraction peaks, so quantile shells
+    over-sample small atoms even under an ideal per-atom weighting. -*/
     options.add_str("ATOMIC_POLARIZABILITY_FIT_RADIAL_SPACING", "LINEAR",
-                    "LINEAR EQUAL_VOLUME");
+                    "LINEAR EQUAL_VOLUME EQUAL_VOLUME_CENTROID");
+    /*- How the Lebedev node count is spread over atoms of different size.
+    ``UNIFORM`` gives every atom ``ATOMIC_POLARIZABILITY_FIT_SPHERICAL_POINTS``
+    nodes and is the reviewed behaviour. ``VOLUME`` gives atom A the supported
+    Lebedev size nearest to that count times (rho_A / max_B rho_B)^3, the weighting
+    a volume-uniform cloud implies, since the shell-region volume an atom owns grows
+    as rho^3 while both settings apply the same keep rule to each shell surface.
+    Under ``ATOMIC_POLARIZABILITY_FIT_RADIAL_UNITS BOHR`` every scaling radius is
+    one and ``VOLUME`` is exactly a no-op. For H2O in van der Waals units the
+    reviewed 500-point cloud puts 0.034 of its points nearest a hydrogen, matching a
+    volume-uniform sample of the same region to within one Poisson sigma; ``UNIFORM``
+    gives 0.090 and ``VOLUME`` gives 0.033. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_FIT_ANGULAR_WEIGHTING", "UNIFORM",
+                    "UNIFORM VOLUME");
     /*- Largest fit-point count accepted by WSM refinement. -*/
     options.add_int("ATOMIC_POLARIZABILITY_FIT_MAX_POINTS", 500);
 

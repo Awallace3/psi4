@@ -590,13 +590,52 @@ enum class FitPointRadialUnits { Bohr, VanDerWaals };
  * t^2, deterministically and without an RNG - so the symmetry-faithful
  * construction and its exact-degeneracy guarantees are preserved.
  *
+ * EqualVolumeCentroid instead divides the region into K equal-volume sub-shells
+ * and places each offset at its sub-shell's volume centroid,
+ * t_k = 3/4 * (b^4 - a^4) / (b^3 - a^3) over the sub-shell [a, b]. Since each
+ * sub-shell carries the same volume, the unweighted mean of the K centroids is
+ * the exact continuous volume-uniform mean at every K, and no shell lands on
+ * either limit.
+ *
  * The distinction is measurable, not cosmetic. A volume-uniform sample of the
  * [2.0, 4.0] van der Waals shell has mean offset (4^4 - 2^4) / 4 / ((4^3 - 2^3) / 3)
  * = 3.2143, whereas a flat sample has mean 3.0. Equal-volume offsets recover
  * 3.1576 at five shells, 3.1692 at six and 3.1824 at eight, converging on the
  * continuous value; linear offsets do not converge to it at any shell count.
+ * Centroid offsets are 3.2143 at every shell count by construction.
+ *
+ * Quantile placement has one further cost that centroid placement does not. It
+ * puts a full 1/K of the volume weight exactly on the inner limit, and the inner
+ * limit is where a small atom's exposed surface fraction is largest - for H2O the
+ * hydrogen surface fraction surviving the keep rule is 0.228 at t = 2.0 and falls
+ * to zero by t = 3.3. Even with an ideal per-atom volume weighting, quantile
+ * shells therefore over-sample hydrogen: 0.055 of the cloud at five shells
+ * against the continuous 0.034, whereas centroid shells at six shells give 0.033.
  */
-enum class FitPointRadialSpacing { Linear, EqualVolume };
+enum class FitPointRadialSpacing { Linear, EqualVolume, EqualVolumeCentroid };
+
+/**
+ * How the Lebedev node count is distributed over atoms of different size.
+ *
+ * Uniform gives every atom the same node count, which is the reviewed behaviour
+ * and the default. Under the bohr radial convention every scaling radius is one,
+ * so the two settings coincide and Volume is exactly a no-op.
+ *
+ * Volume scales the count by the cube of the atom's scaling radius, so that atom
+ * A receives the supported Lebedev size nearest to
+ * spherical_points * (rho_A / max_B rho_B)^3, clamped to never exceed
+ * spherical_points. That is the weighting a volume-uniform cloud implies: the
+ * shell-region volume atom A owns grows as rho_A^3 while its share of each shell
+ * surface is set by the keep rule, which both constructions apply identically,
+ * so equal node counts over-represent the small atoms.
+ *
+ * The size of the effect is not marginal. Measured against the reviewed
+ * protocol's own 500-point cloud, whose owner split is oxygen 0.966 / hydrogen
+ * 0.034 - matching a volume-uniform sample of the same region to within one
+ * Poisson sigma - Uniform at 50 nodes and six centroid shells gives hydrogen
+ * 0.090 of the cloud, nearly three times its volume share. Volume gives 0.033.
+ */
+enum class FitPointAngularWeighting { Uniform, Volume };
 
 /**
  * Deterministic nested-equidistant-surface fit-point policy.
@@ -621,6 +660,8 @@ struct PSI_API FitPointOptions {
     FitPointRadialUnits radial_units{FitPointRadialUnits::Bohr};
     /** Shell placement across [inner_limit, outer_limit]; Linear is reviewed. */
     FitPointRadialSpacing radial_spacing{FitPointRadialSpacing::Linear};
+    /** Per-atom node-count scaling; Uniform is reviewed. */
+    FitPointAngularWeighting angular_weighting{FitPointAngularWeighting::Uniform};
     /** Hard ceiling; the WSM refinement envelope is 500 points. */
     std::size_t maximum_points{500};
     /** Coincident-point merge radius in bohr. */
@@ -643,6 +684,7 @@ struct PSI_API FitPointPlan {
     std::vector<double> shell_offsets;
     std::string radial_units;
     std::string radial_spacing;
+    std::string angular_weighting;
     std::string algorithm;
 };
 
@@ -655,6 +697,8 @@ struct PSI_API FitPointSet {
     std::vector<std::size_t> generator_atom;
     /** Per-atom radial scale in bohr; all ones under the bohr convention. */
     std::vector<double> scaling_radii;
+    /** Lebedev nodes offered to each atom per shell; uniform unless volume weighted. */
+    std::vector<std::size_t> spherical_points_by_atom;
     /** Verified largest displacement when every operation maps the set onto itself. */
     double max_symmetry_deviation{};
     /** Verified largest |F^T S F| departure from a signed coordinate permutation. */

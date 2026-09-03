@@ -216,9 +216,20 @@ void export_oeprop(py::module &m) {
                     options.radial_spacing = FitPointRadialSpacing::Linear;
                 else if (spacing == "EQUAL_VOLUME")
                     options.radial_spacing = FitPointRadialSpacing::EqualVolume;
+                else if (spacing == "EQUAL_VOLUME_CENTROID")
+                    options.radial_spacing = FitPointRadialSpacing::EqualVolumeCentroid;
                 else
                     throw PSIEXCEPTION("WSM fit points: unsupported radial spacing '" + spacing +
                                        "'");
+            } else if (key == "angular_weighting") {
+                const auto weighting = entry.second.cast<std::string>();
+                if (weighting == "UNIFORM")
+                    options.angular_weighting = FitPointAngularWeighting::Uniform;
+                else if (weighting == "VOLUME")
+                    options.angular_weighting = FitPointAngularWeighting::Volume;
+                else
+                    throw PSIEXCEPTION("WSM fit points: unsupported angular weighting '" +
+                                       weighting + "'");
             } else
                 throw PSIEXCEPTION("WSM fit points: unknown option '" + key + "'");
         }
@@ -240,6 +251,7 @@ void export_oeprop(py::module &m) {
         values["shell_offsets"] = plan.shell_offsets;
         values["radial_units"] = plan.radial_units;
         values["radial_spacing"] = plan.radial_spacing;
+        values["angular_weighting"] = plan.angular_weighting;
         values["algorithm"] = plan.algorithm;
         return values;
     };
@@ -254,6 +266,7 @@ void export_oeprop(py::module &m) {
         values["shell_index"] = set.shell_index;
         values["generator_atom"] = set.generator_atom;
         values["scaling_radii"] = set.scaling_radii;
+        values["spherical_points_by_atom"] = set.spherical_points_by_atom;
         values["max_symmetry_deviation"] = set.max_symmetry_deviation;
         values["max_octahedral_deviation"] = set.max_octahedral_deviation;
         values["plan"] = fit_point_plan_dict(set.plan);
