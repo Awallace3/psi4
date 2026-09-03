@@ -379,6 +379,28 @@ def test_h2_copy_equality_active_zeros_cutoff_and_kkt_oracle():
     assert unpruned["policy"]["column_pruning_definition"] == "disabled (SVD-off no-pre-pruning parity)"
 
 
+def test_the_column_pruning_keyword_defaults_to_the_reviewed_relative_policy():
+    """The production driver reaches both policies only through this keyword.
+
+    RefinementOptions::cutoff has always documented zero as the reference PFIT ledger's
+    "SVD off" policy, and validate_wsm_policy has always accepted it, but the driver
+    built RefinementOptions{} and overrode only the condition number, so zero was
+    reachable from the test-only binding alone. The keyword closes that, and its default
+    must stay the reviewed relative threshold.
+    """
+    import psi4
+
+    try:
+        assert psi4.core.get_global_option("ATOMIC_POLARIZABILITY_WSM_COLUMN_PRUNING") == "RELATIVE"
+        # Lowercase input proves the choice list normalizes rather than rejecting.
+        psi4.set_options({"atomic_polarizability_wsm_column_pruning": "off"})
+        assert psi4.core.get_global_option("ATOMIC_POLARIZABILITY_WSM_COLUMN_PRUNING") == "OFF"
+        with pytest.raises(Exception):
+            psi4.set_options({"atomic_polarizability_wsm_column_pruning": "SOMETIMES"})
+    finally:
+        psi4.core.clean_options()
+
+
 def test_point_site_permutation_covariance_and_frequency_major_wrapper():
     rng = np.random.default_rng(27)
     sites = np.array([[-.5, .2, 0.], [.9, -.1, .3]])

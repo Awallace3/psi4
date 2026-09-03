@@ -279,6 +279,22 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- Largest WSM design-matrix condition number accepted before the native
     atomic-polarizability pipeline fails closed. -*/
     options.add_double("ATOMIC_POLARIZABILITY_MAX_CONDITION_NUMBER", 1.0e12);
+    /*- How the WSM refinement prunes weakly determined design columns before the
+    constrained solve. ``RELATIVE`` drops any column whose weighted norm falls below
+    ``1e-4`` times the largest weighted column norm of the same design matrix, which is
+    the reviewed behaviour. ``OFF`` disables pre-pruning entirely and is the policy the
+    reference PFIT ledger records for itself ("SVD threshold: 0.0"); that ledger's
+    separate ``Pol Cutoff`` of ``1e-4`` is a different quantity and is matched elsewhere.
+
+    The setting is not cosmetic, because the threshold is relative but the columns are
+    not scaled alike: the irregular harmonics fall off as r^-(2l+1), so pulling the fit
+    cloud outward shrinks the rank-3 columns as r^-7 against the rank-1 columns' r^-3 and
+    the rank-3 block crosses the threshold first. ``RELATIVE`` therefore makes the
+    retained rank a function of the shell radii, and a cloud whose innermost shell sits
+    away from the inner limit can lose the rank-3 block altogether - either failing closed
+    in the constraint elimination or leaving a site with an empty rank-3 block. ``OFF``
+    leaves the rank decision to the solver's own conditioning gate. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_WSM_COLUMN_PRUNING", "RELATIVE", "RELATIVE OFF");
     /*- Covalent-bonding scale factor used to derive the LW bond graph from the geometry.
     Sites bond when separated by at most this factor times the sum of their Bragg-Slater
     radii; the graph must be connected. -*/

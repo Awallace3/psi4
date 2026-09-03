@@ -9475,6 +9475,16 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
     RefinementOptions refinement;
     refinement.maximum_condition_number =
         options.get_double("ATOMIC_POLARIZABILITY_MAX_CONDITION_NUMBER");
+    // Only the two policies validate_wsm_policy admits are reachable; the relative
+    // threshold is the reviewed default and zero is the reference ledger's "SVD off".
+    const std::string pruning = options.get_str("ATOMIC_POLARIZABILITY_WSM_COLUMN_PRUNING");
+    if (pruning == "RELATIVE")
+        refinement.cutoff = 1.0e-4;
+    else if (pruning == "OFF")
+        refinement.cutoff = 0.0;
+    else
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "unsupported WSM column-pruning policy '" +
+                                                 pruning + "'");
     const auto models = refine_wsm(localized, point_response, result.pdef.constraints, refinement);
     if (models.size() != frequency_count)
         throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "refinement returned the wrong frequency count");
