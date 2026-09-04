@@ -7,6 +7,7 @@ import qcelemental as qcel
 from pathlib import Path
 from pprint import pprint as pp
 from addons import uusing
+from psi4.driver.procrouting.empirical_disp import edisp_interaction_energy
 from psi4.driver.procrouting.sapt import sapt_proc
 
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
@@ -105,14 +106,14 @@ def test_sapt_dft_compute_ddft_d4():
 @pytest.mark.dftd4
 @uusing("dftd4")
 @pytest.mark.parametrize(
-    "method, expected_disp",
+    "method, expected_disp, expected_param_name",
     [
-        ("SAPT(DFT)-D4(S)", -0.003605830),
-        ("SAPT(DFT)-D4(I)", -0.0042277709),
-        ("DFT-D4(SAPT)", -0.0057317156),
+        ("SAPT(DFT)-D4(S)", -0.003605830, "sapt(pbe0)(s)"),
+        ("SAPT(DFT)-D4(I)", -0.0042277709, "sapt(pbe0)(i)"),
+        ("DFT-D4(SAPT)", -0.0057317156, "pbe0"),
     ],
 )
-def test_saptdft_disp_methods_dftd4(method, expected_disp):
+def test_saptdft_disp_methods_dftd4(method, expected_disp, expected_param_name, monkeypatch):
     mol_dimer = psi4.geometry(
         """
   O -2.930978458   -0.216411437    0.000000000
@@ -149,9 +150,20 @@ units bohr
         for option in managed_options
     }
 
+    parameter_names = []
+    empirical_dispersion = edisp_interaction_energy.empirical_dispersion
+    original_empirical_dispersion = empirical_dispersion.EmpiricalDispersion
+
+    def record_parameter_name(*args, **kwargs):
+        parameter_names.append(kwargs["name_hint"])
+        return original_empirical_dispersion(*args, **kwargs)
+
+    monkeypatch.setattr(empirical_dispersion, "EmpiricalDispersion", record_parameter_name)
+
     psi4.energy(method)
     vars = psi4.core.variables()
     DISP = vars["SAPT DISP ENERGY"]
+    assert parameter_names == [expected_param_name]
     assert compare_values(expected_disp, DISP, 8, f"{method} DISP")
     after = {
         option: (
