@@ -34,6 +34,10 @@ foreach(py ${sources})
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR}/psi4/driver/procrouting)
 endforeach()
 
+install(DIRECTORY empirical_disp
+        DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR}/psi4/driver/procrouting
+        FILES_MATCHING PATTERN "*.py")
+
 install(DIRECTORY libcubeprop
         DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR}/psi4/driver/procrouting
         FILES_MATCHING PATTERN "*.py")
