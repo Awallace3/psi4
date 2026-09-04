@@ -28,6 +28,7 @@ anywhere. See docs/superpowers/specs/2026-08-18-isa-grid-oracle.md.
 """
 
 import inspect
+import itertools
 import os
 from pathlib import Path
 
@@ -451,6 +452,7 @@ PUBLISHED_VARIABLES = (
     "ATOMIC ANISOTROPIC POLARIZABILITIES",
     "ATOMIC ANISOTROPIC DYNAMIC POLARIZABILITIES",
     "ATOMIC ANISOTROPIC POLARIZABILITY COMPONENTS",
+    "ATOMIC POLARIZABILITY REFINEMENT DIAGNOSTICS",
 )
 
 PUBLISHED_SHAPES = {
@@ -469,6 +471,11 @@ PUBLISHED_SHAPES = {
         ANISOTROPIC_COMPONENTS,
     ),
     "ATOMIC ANISOTROPIC POLARIZABILITY COMPONENTS": (ANISOTROPIC_COMPONENTS, 3),
+    # One row per response frequency; the six columns are pruned/kept design-column
+    # counts, the applied absolute cutoff, the largest weighted column norm, the solved
+    # condition number, and the count of below-cutoff columns retained only because an
+    # equality constraint touches them.
+    "ATOMIC POLARIZABILITY REFINEMENT DIAGNOSTICS": (11, 6),
 }
 
 # The reviewed geometry: C2 axis along z, molecule in the xz plane, O at the origin.
@@ -500,6 +507,10 @@ units bohr
 # sticks at 1.2e-05 on a 302/50 grid no matter how dense the ISA grid is, and only a 590/99
 # grid brings it inside 1e-6. Densifying the ISA grid past 60/18/24 changes C6 by 4e-05
 # relative here, so the DFT grid, not the ISA grid, is the binding constraint.
+# The value list declared for ATOMIC_POLARIZABILITY_WSM_ANCHOR_SCALING. Mirrored here so a
+# value added to the keyword without a matching dispatch arm (or the reverse) is caught.
+ANCHOR_SCALING_VALUES = ("UNIT", "ISA-POL", "ISA-POL-GATED")
+
 WIRING_PROTOCOL = {
     "basis": "aug-cc-pvdz",
     "scf_type": "pk",
@@ -614,7 +625,7 @@ def test_published_variable_and_shape_tables_cover_the_same_set():
     the shape gate and the publishes-nothing gate.
     """
     assert tuple(PUBLISHED_SHAPES) == PUBLISHED_VARIABLES
-    assert len(set(PUBLISHED_VARIABLES)) == len(PUBLISHED_VARIABLES) == 12
+    assert len(set(PUBLISHED_VARIABLES)) == len(PUBLISHED_VARIABLES) == 13
 
 
 @pytest.mark.scf
@@ -1171,6 +1182,63 @@ def test_default_fit_grid_needs_more_than_psi4s_default_memory():
 
 
 @pytest.fixture(scope="module")
+def anchor_scaling_published():
+    """The wiring protocol run once under each declared anchor-scaling keyword value.
+
+    Every arm sets the keyword explicitly rather than relying on the default, because Psi4
+    options are global and sticky and an inherited value would silently make two arms the
+    same run.
+    """
+    published = {}
+    for value in ANCHOR_SCALING_VALUES:
+        published[value] = _run_protocol(
+            {**WIRING_PROTOCOL, "atomic_polarizability_wsm_anchor_scaling": value,
+             "atomic_polarizability_wsm_anchor_rank_limit": 1}
+        )
+        assert psi4.core.get_global_option(
+            "ATOMIC_POLARIZABILITY_WSM_ANCHOR_SCALING") == value
+    return published
+
+
+def test_unsupported_anchor_scaling_is_rejected_before_any_work_happens():
+    """A misspelled keyword value must be refused at set time, leaving the option untouched.
+
+    Validation against the declared list is what stops a typo from being silently treated as
+    the default: an arm named for a setting it never used would otherwise report the default
+    arm's numbers under the other arm's label.
+    """
+    key = "atomic_polarizability_wsm_anchor_scaling"
+    psi4.set_options({key: "UNIT"})
+    with pytest.raises(Exception, match="is not a valid choice"):
+        psi4.set_options({key: "ISAPOL-GATED"})
+    assert psi4.core.get_global_option(key.upper()) == "UNIT"
+
+
+@pytest.mark.scf
+def test_each_anchor_scaling_keyword_reaches_the_solver(anchor_scaling_published):
+    """Each declared keyword value must select a distinct anchor convention.
+
+    Nothing else in the suite exercises the keyword strings: the refinement tests drive the
+    C++ hook directly with an options dict, which bypasses the string dispatch that reads
+    ``ATOMIC_POLARIZABILITY_WSM_ANCHOR_SCALING``. Two strings mapping to the same enum arm
+    -- the natural copy-paste bug in that dispatch -- would leave the published output
+    identical, so an arm measured under one of them would silently be the other. Comparing
+    the published tensors pairwise is what makes that observable from Python.
+    """
+    for first, second in itertools.combinations(ANCHOR_SCALING_VALUES, 2):
+        for name in PUBLISHED_VARIABLES:
+            if np.asarray(anchor_scaling_published[first][name]).size == 0:
+                continue
+            if not np.allclose(anchor_scaling_published[first][name],
+                               anchor_scaling_published[second][name], atol=0.0, rtol=0.0):
+                break
+        else:
+            raise AssertionError(
+                f"anchor scaling '{first}' and '{second}' published identical output, so at "
+                "least one keyword did not reach the solver")
+
+
+@pytest.fixture(scope="module")
 def fail_closed_triple():
     psi4.core.be_quiet()
     psi4.set_options(FAIL_CLOSED_PROTOCOL)
@@ -1233,6 +1301,76 @@ def test_bare_oeprop_on_a_single_wavefunction_fails_closed():
 
     for name in PUBLISHED_VARIABLES:
         assert not wfn.has_array_variable(name), name
+
+
+def _attached_auxiliary(wfn, key):
+    """Return the auxiliary basis attached under ``key``, or ``None`` when none is.
+
+    ``Wavefunction::basisset_exists`` is not exposed to Python, and asking for a basis
+    that was never set raises, so presence is tested by asking and catching. Any other
+    error is a real failure and is left to propagate rather than read as "absent".
+    """
+    try:
+        return wfn.get_basisset(key)
+    except RuntimeError as error:
+        if "was not set" not in str(error):
+            raise
+        return None
+
+
+@pytest.mark.scf
+def test_density_fitted_hessian_attaches_the_cartesian_auxiliary_basis():
+    """Selecting the fitted Hessian must attach the same sealed Cartesian space CDF uses.
+
+    The arm is switchable precisely because the auxiliary basis is attached by the driver
+    and sealed by the frozen context; if the attach step did not follow the keyword, the
+    C++ stage would fail closed instead of fitting.
+    """
+    psi4.core.be_quiet()
+    psi4.set_options({"basis": "sto-3g", "scf_type": "pk"})
+    molecule = psi4.geometry(REVIEWED_GEOMETRY)
+    _, wfn = psi4.energy("scf", molecule=molecule, return_wfn=True)
+    key = native_driver.AUXILIARY_PARTITION_BASIS_KEY
+
+    # Neither arm on: nothing is attached, so the exact path stays exactly as it was.
+    psi4.set_options({"atomic_polarizability_partition": "ISA",
+                      "atomic_polarizability_response_integrals": "EXACT"})
+    native_driver._attach_partition_auxiliary_basis(wfn)
+    assert _attached_auxiliary(wfn, key) is None
+
+    # The fitted Hessian alone is enough to require the auxiliary space.
+    psi4.set_options({"atomic_polarizability_response_integrals": "DF"})
+    native_driver._attach_partition_auxiliary_basis(wfn)
+    auxiliary = _attached_auxiliary(wfn, key)
+    assert auxiliary is not None
+    # Cartesian, and the reviewed 246-function water space: 136 on O plus 55 on each H.
+    assert not auxiliary.has_puream()
+    assert auxiliary.nbf() == 246
+    psi4.set_options({"atomic_polarizability_response_integrals": "EXACT"})
+
+
+@pytest.mark.scf
+def test_two_auxiliary_arms_naming_different_bases_fail_closed():
+    """Both arms share one sealed key, so disagreeing names must raise, not pick one."""
+    psi4.core.be_quiet()
+    psi4.set_options({"basis": "sto-3g", "scf_type": "pk"})
+    molecule = psi4.geometry(REVIEWED_GEOMETRY)
+    _, wfn = psi4.energy("scf", molecule=molecule, return_wfn=True)
+    psi4.set_options({
+        "atomic_polarizability_partition": "CDF",
+        "atomic_polarizability_response_integrals": "DF",
+        "atomic_polarizability_cdf_aux_basis": "aug-cc-pvtz-ri",
+        "atomic_polarizability_response_aux_basis": "aug-cc-pvdz-ri",
+    })
+    with pytest.raises(Exception, match="both resolve under one sealed auxiliary basis"):
+        native_driver._attach_partition_auxiliary_basis(wfn)
+    assert _attached_auxiliary(wfn, native_driver.AUXILIARY_PARTITION_BASIS_KEY) is None
+    psi4.set_options({
+        "atomic_polarizability_partition": "ISA",
+        "atomic_polarizability_response_integrals": "EXACT",
+        "atomic_polarizability_cdf_aux_basis": "aug-cc-pvtz-ri",
+        "atomic_polarizability_response_aux_basis": "aug-cc-pvtz-ri",
+    })
 
 
 # --------------------------------------------------------------------------------------

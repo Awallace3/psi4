@@ -140,6 +140,94 @@ def test_cutoff_rejection_mode_fails_closed():
         _solve([[0.999e-4, 0.0], [0.0, 1.0]], [0.0, 1.0], prune_below_cutoff=False)
 
 
+# The design below puts a below-cutoff column under a constraint on purpose. Norm-only
+# pruning drops it and the constraints are only then restricted to the kept columns, so
+# the constraint either loses its whole row or silently comes to mean something else.
+# Both failures are exercised, because the second one does not raise.
+_PRUNED_CONSTRAINT_DESIGN = [[0.5e-4, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+
+
+def test_pruning_both_members_of_a_copy_class_destroys_its_constraint_row():
+    """A homogeneous row whose every column is below cutoff becomes identically zero.
+
+    This is the production failure: a PDef COPY class is ``x_i - x_j = 0``, so once both
+    of its columns are pruned the row is satisfiable but carries no rank, and the solve
+    dies with "constraints are ambiguous (linearly dependent)" rather than fitting worse.
+    """
+    design = [[0.5e-4, 0.0, 0.0], [0.0, 0.6e-4, 0.0], [0.0, 0.0, 1.0]]
+    observations = [0.5e-4 * 2.0, 0.6e-4 * 2.0, 3.0]
+    copy_class = [[1.0, -1.0, 0.0]]
+
+    with pytest.raises(Exception, match="constraints are ambiguous"):
+        _solve(design, observations, constraints=copy_class, targets=[0.0])
+
+    protected = _solve(design, observations, constraints=copy_class, targets=[0.0],
+                       protect_constrained_columns=True)
+    assert protected["kept_columns"] == [0, 1, 2]
+    assert protected["pruned_columns"] == []
+    assert protected["constraint_protected_columns"] == [0, 1]
+    assert protected["constraint_rank"] == 1
+    assert protected["solution"] == pytest.approx([2.0, 2.0, 3.0], abs=2.0e-11)
+    assert protected["constraint_residual_norm"] == pytest.approx(0.0, abs=2.0e-14)
+
+
+def test_pruning_an_inhomogeneous_constrained_column_fails_closed_instead():
+    """With a nonzero target the same zeroed row is caught by the consistency gate.
+
+    Worth pinning separately: it proves the ambiguity throw above is the rank loss and
+    not the target, so the two gates are not interchangeable.
+    """
+    with pytest.raises(Exception, match="constraints are inconsistent"):
+        _solve(_PRUNED_CONSTRAINT_DESIGN, [0.5e-4 * 0.7, 2.0, 3.0],
+               constraints=[[1.0, 0.0, 0.0]], targets=[0.7])
+
+    protected = _solve(_PRUNED_CONSTRAINT_DESIGN, [0.5e-4 * 0.7, 2.0, 3.0],
+                       constraints=[[1.0, 0.0, 0.0]], targets=[0.7],
+                       protect_constrained_columns=True)
+    assert protected["constraint_protected_columns"] == [0]
+    assert protected["solution"] == pytest.approx([0.7, 2.0, 3.0], abs=2.0e-13)
+
+
+def test_pruning_a_constrained_column_silently_rewrites_a_copy_constraint():
+    """The failure with a surviving partner column is wrong answers, not an exception.
+
+    ``x0 = x1`` over the full basis becomes ``-x1 = 0`` once column 0 is pruned, which is
+    a different and satisfiable constraint -- so nothing raises and the two arms differ by
+    the whole value of the copy class.
+    """
+    observations = [0.5e-4 * 2.0, 2.0, 3.0]
+    copy_class = [[1.0, -1.0, 0.0]]
+
+    pruned = _solve(_PRUNED_CONSTRAINT_DESIGN, observations,
+                    constraints=copy_class, targets=[0.0])
+    assert pruned["pruned_columns"] == [0]
+    assert pruned["constraint_protected_columns"] == []
+    assert pruned["solution"] == pytest.approx([0.0, 0.0, 3.0], abs=2.0e-13)
+
+    protected = _solve(_PRUNED_CONSTRAINT_DESIGN, observations,
+                       constraints=copy_class, targets=[0.0],
+                       protect_constrained_columns=True)
+    assert protected["pruned_columns"] == []
+    assert protected["constraint_protected_columns"] == [0]
+    assert protected["solution"] == pytest.approx([2.0, 2.0, 3.0], abs=2.0e-13)
+
+
+def test_protecting_constrained_columns_leaves_unconstrained_pruning_alone():
+    """The arm is a strict exemption: a below-cutoff column no constraint touches is
+    still pruned, so enabling it cannot be mistaken for turning the cutoff off."""
+    arguments = ([[0.5e-4, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                 [0.5e-4 * 0.7, 2.0, 3.0])
+    baseline = _solve(*arguments, constraints=[[0.0, 1.0, 0.0]], targets=[2.0])
+    protected = _solve(*arguments, constraints=[[0.0, 1.0, 0.0]], targets=[2.0],
+                       protect_constrained_columns=True)
+
+    for result in (baseline, protected):
+        assert result["kept_columns"] == [1, 2]
+        assert result["pruned_columns"] == [0]
+        assert result["constraint_protected_columns"] == []
+    assert protected["solution"] == pytest.approx(baseline["solution"], abs=0.0)
+
+
 def test_underdetermined_and_rank_deficient_objectives_are_rejected():
     with pytest.raises(Exception, match="rank deficient"):
         _solve([[1.0, 1.0]], [2.0])

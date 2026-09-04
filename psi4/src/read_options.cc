@@ -212,6 +212,34 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     violate the charge condition by a small nonzero amount, and the reviewed reference
     calculation's own record of that violation is about 1e-2. -*/
     options.add_double("ATOMIC_POLARIZABILITY_CDF_CHARGE_PENALTY", 1.0);
+    /*- How the auxiliary fit treats its charge-normalisation rows. ``PENALTY`` adds
+    ``ATOMIC_POLARIZABILITY_CDF_CHARGE_PENALTY`` times the squared constraint residual to
+    the objective and leaves that residual free to be nonzero; ``EXACT`` imposes the rows
+    as equalities. These are different models, not two solvers for one model: the reviewed
+    reference calculation runs the penalised form at a finite weight, so ``PENALTY`` is the
+    parity setting and ``EXACT`` is the stricter alternative. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_CDF_CONSTRAINTS", "PENALTY", "PENALTY EXACT");
+    /*- How the two-electron integrals of the coupled-Kohn-Sham Hessian are evaluated.
+    ``EXACT`` contracts the four-index integrals directly. ``DF`` density-fits them in the
+    auxiliary basis named by ``ATOMIC_POLARIZABILITY_RESPONSE_AUX_BASIS``, which is what
+    the reviewed reference calculation does, and is therefore the parity setting: the
+    fitting error is not negligible there, and softening the kernel changes every rank of
+    the distributed response that follows. Selecting ``DF`` requires the auxiliary basis to
+    be attached, exactly as ``ATOMIC_POLARIZABILITY_PARTITION CDF`` does. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_RESPONSE_INTEGRALS", "EXACT", "EXACT DF");
+    /*- Auxiliary basis for ``ATOMIC_POLARIZABILITY_RESPONSE_INTEGRALS DF``. Built with
+    Cartesian functions for the same reason the partition auxiliary basis is, and resolved
+    under the same basis-set key, so a run that density-fits both the Hessian and the
+    partition uses one sealed auxiliary space rather than two. -*/
+    options.add_str_i("ATOMIC_POLARIZABILITY_RESPONSE_AUX_BASIS", "AUG-CC-PVTZ-RI");
+    /*- Local correlation functional in the ALDA half of the coupled-Kohn-Sham response
+    kernel. The kernel is fixed at 25% coupled Hartree-Fock plus 75% ALDA and the ALDA
+    exchange is always ``XC_LDA_X``; only the correlation component varies. ``VWN`` is
+    ``XC_LDA_C_VWN`` and is the shipped default, which every committed reference was
+    produced with. ``PW91`` is ``XC_LDA_C_PW``, the PW92 local limit of the PW91 functional
+    the reviewed reference calculation builds its kernel from, and is therefore the parity
+    setting. This is the last stage-A degree of freedom between the two codes. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_ALDA_CORRELATION", "VWN", "VWN PW91");
 
     /*- Radial nodes per atom in the native ISA partition quadrature. The wiring
     specification's measured grid table puts the ``1e-4`` parity gate at or above
@@ -225,6 +253,50 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     options.add_int("ATOMIC_POLARIZABILITY_ISA_MAX_ITERATIONS", 120);
     /*- Native ISA fixed-point convergence threshold. -*/
     options.add_double("ATOMIC_POLARIZABILITY_ISA_CONVERGENCE", 1.0e-9);
+    /*- Per-element radii that set where the native ISA weight function hands over to its
+    exponential tail. ``SLATER-1964`` uses the versioned Bragg-Slater table throughout.
+    ``REFERENCE-HYDROGEN`` keeps that table except for hydrogen, where it uses 0.9449 bohr (0.500 A),
+    the radius the reviewed reference calculation's own published tail parameters imply;
+    oxygen's implied radius already agrees with the Slater table to 2e-4 bohr and no other
+    element has been checked, so the rest of the table is carried over unchanged. This is a
+    tail-onset choice only: the radial quadrature mapping scale and the covalent bond graph
+    keep the Slater table either way, so the choice moves the model and not the grid. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_ISA_TAIL_RADIUS_TABLE", "SLATER-1964", "SLATER-1964 REFERENCE-HYDROGEN");
+    /*- Second condition that closes the native ISA exponential tail. Both choices conserve
+    the charge the untruncated profile carries beyond the join radius, which fixes one of the
+    two tail parameters. ``VALUE`` also matches the value at the join, so the weight function
+    is continuous there and the exponent absorbs the charge. ``SLOPE`` instead matches the
+    logarithmic slope and lets the value step, which is what the reviewed reference
+    calculation does; its step is not small, +5.2 percent on oxygen and +15.4 percent on
+    hydrogen, so this is a different model and not a refinement of ``VALUE``. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_ISA_TAIL_ANCHOR", "VALUE", "VALUE SLOPE");
+    /*- Which space the native ISA shape functions are solved in. These are two different
+    methods, not two discretizations of one method: they are stationary with respect to
+    different variations of the shape function and so converge to different fixed points.
+    ``REAL-SPACE`` represents each shape function as a log-PCHIP radial profile on an
+    atom-centered grid closed by an exponential tail, and its fixed point is the spherical
+    average of the stockholder density itself, unrestricted by any function space.
+    ``BASIS-SPACE`` instead expands each shape function in nonnegative normalized spherical
+    s-Gaussians on the site and refits those coefficients by constrained least squares each
+    iteration, which is what the reviewed reference calculation solves; because the basis
+    functions are spherical about the site, their projections perform the spherical average
+    exactly, so that arm uses no auxiliary grid, no radial interpolation and no tail model,
+    and ``ATOMIC_POLARIZABILITY_ISA_TAIL_*`` are inert under it. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_ISA_ALGORITHM", "REAL-SPACE", "REAL-SPACE BASIS-SPACE");
+    /*- Ratio of the even-tempered s-Gaussian series the ``BASIS-SPACE`` ISA arm expands its
+    shape functions in. The series runs upward from
+    ``ATOMIC_POLARIZABILITY_ISA_BASIS_MINIMUM_EXPONENT`` with a length set by the element's
+    periodic row. Inert unless ``ATOMIC_POLARIZABILITY_ISA_ALGORITHM`` is ``BASIS-SPACE``. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_ISA_BASIS_RATIO", 2.0);
+    /*- Smallest exponent of that even-tempered series, in inverse square bohr. This sets how
+    far into the density tail the ``BASIS-SPACE`` shape functions can reach. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_ISA_BASIS_MINIMUM_EXPONENT", 0.125);
+    /*- Relative ridge added to the scaled Gaussian overlap before each constrained
+    least-squares solve of the ``BASIS-SPACE`` arm. An even-tempered series is deliberately
+    near-degenerate, so this is a conditioning floor and not a physical penalty; it must stay
+    far below ``ATOMIC_POLARIZABILITY_ISA_CONVERGENCE`` or it, rather than the density, would
+    decide the fixed point. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_ISA_BASIS_REGULARIZATION", 1.0e-12);
 
     /*- Largest LW-localization residual accepted before the native atomic-polarizability
     pipeline fails closed. This is a physical convergence gate on the response grid, not a
@@ -234,6 +306,59 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- Largest WSM design-matrix condition number accepted before the native
     atomic-polarizability pipeline fails closed. -*/
     options.add_double("ATOMIC_POLARIZABILITY_MAX_CONDITION_NUMBER", 1.0e12);
+    /*- Column-pruning policy of the constrained WSM refinement solve. ``RELATIVE`` drops
+    design-matrix columns whose weighted norm falls below ``1e-4`` times the largest such
+    norm, which is scale invariant and is the reviewed production policy. ``OFF`` prunes
+    nothing and hands every column to the bounded solve, which is what the reference PFIT
+    ledger records; it is the parity arm, and it keeps columns that carry rank-3
+    information but are poorly determined on the fit-point cloud.
+    ``RELATIVE-CONSTRAINT-SAFE`` applies the same ``1e-4`` relative threshold but exempts
+    any column carrying a nonzero PDef equality-constraint coefficient. Plain ``RELATIVE``
+    selects on weighted column norm alone while the constraints are restricted to the kept
+    columns afterwards, so at a small inner fit radius it can drop every column a symmetry
+    row touches, leaving that row identically zero and failing the solve with "constraints
+    are ambiguous"; an exempted column is pinned by its constraint rather than determined by
+    the fit rows, so a small norm is not grounds to drop it. This arm exists to let a nonzero
+    cutoff and a small fit radius be used together. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_WSM_COLUMN_PRUNING", "RELATIVE",
+                    "RELATIVE RELATIVE-CONSTRAINT-SAFE OFF");
+    /*- Row-weight convention of the constrained WSM refinement solve. The point-response
+    residuals are stored as an upper triangle over site pairs, so a weight has to say what
+    that triangle stands for. ``FULL-SYMMETRIC-FROBENIUS`` treats it as the Frobenius norm
+    of the full symmetric matrix, doubling the off-diagonal pairs, which is the reviewed
+    production policy. ``UNIQUE-PAIR-EQUAL`` gives every stored pair one equal share, which
+    is the reference convention and the parity arm. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_WSM_ROW_WEIGHTS", "FULL-SYMMETRIC-FROBENIUS",
+                    "FULL-SYMMETRIC-FROBENIUS UNIQUE-PAIR-EQUAL");
+    /*- Diagonal convention of the WSM anchor weight matrix g_pp'. ``UNIT`` puts unit weight
+    on every block at or below the anchored rank and zero above it, which is the reviewed
+    production policy. ``ISA-POL`` is the parity arm: it reproduces eqn (22) of Misquitta &
+    Stone, Theor. Chem. Acc. 137, 153 (2018), ``g_kk' = delta_kk' w0 / (1 + (p0_k)^2)``,
+    which under this code's ``lambda ||D(x - x0)||^2`` objective is ``D_k = 1/sqrt(1 +
+    p0_k^2)`` with ``lambda`` taken from |globals__atomic_polarizability_wsm_anchor_weight|.
+    The published form runs over every fitted parameter, so ``ISA-POL`` anchors all ranks
+    and the rank gate does not apply to it.
+    ``ISA-POL-GATED`` applies the same eqn (22) weight but keeps the rank gate, which
+    isolates the rescaling from the removal of the gate; at an anchored rank of 3 it is
+    identical to ``ISA-POL``. -*/
+    options.add_str("ATOMIC_POLARIZABILITY_WSM_ANCHOR_SCALING", "UNIT",
+                    "UNIT ISA-POL ISA-POL-GATED");
+    /*- Overall weight ``w0`` of the WSM anchor penalty, i.e. the ``lambda`` of the
+    ``min ||W(Ax - b)||^2 + lambda ||D(x - x0)||^2`` refinement solve. The default ``1e-3``
+    is the reviewed production value and is also the ISA-Pol value for large systems; that
+    paper relaxes to ``1e-5`` for small systems such as water and methane, where the
+    point-to-point polarizabilities carry enough information to refine even the
+    higher-ranking terms. -*/
+    options.add_double("ATOMIC_POLARIZABILITY_WSM_ANCHOR_WEIGHT", 1.0e-3);
+    /*- Highest component rank the WSM anchor penalty is applied to. A symmetric block is
+    anchored only when BOTH of its component ranks are at or below this limit; a block left
+    out has a zero row in ``g_pp'``, so no penalty weight can constrain it however large
+    |globals__atomic_polarizability_wsm_anchor_weight| is made. The default ``1`` anchors the
+    dipole-dipole block alone, which is the reviewed production policy. This gate does not
+    apply to the ungated ``ISA-POL`` setting of
+    |globals__atomic_polarizability_wsm_anchor_scaling|, which by construction covers every
+    fitted parameter. -*/
+    options.add_int("ATOMIC_POLARIZABILITY_WSM_ANCHOR_RANK_LIMIT", 1);
     /*- Covalent-bonding scale factor used to derive the LW bond graph from the geometry.
     Sites bond when separated by at most this factor times the sum of their Bragg-Slater
     radii; the graph must be connected. -*/

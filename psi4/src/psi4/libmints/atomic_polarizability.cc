@@ -759,8 +759,9 @@ detail::DenseRestrictedResponse detail::solve_dense_restricted_response(
         std::move(scaled_residual), std::move(solution_column_scales));
 }
 
-ResponseKernel::ResponseKernel(double chf_exchange, double alda_kernel)
-    : chf_exchange_(chf_exchange), alda_kernel_(alda_kernel) {
+ResponseKernel::ResponseKernel(double chf_exchange, double alda_kernel,
+                               ALDACorrelation alda_correlation)
+    : chf_exchange_(chf_exchange), alda_kernel_(alda_kernel), alda_correlation_(alda_correlation) {
     if (!std::isfinite(chf_exchange_) || chf_exchange_ != 0.25)
         throw PSIEXCEPTION("ResponseKernel: CHF exchange coefficient must be exactly 0.25");
     if (!std::isfinite(alda_kernel_) || alda_kernel_ != 0.75)
@@ -1136,12 +1137,18 @@ PointResponsePlan plan_point_response_provider(
 }
 
 RestrictedC1JKPlan plan_restricted_c1_jk(std::size_t nbf, std::size_t nocc,
-                                         std::size_t nvir, std::size_t memory_bytes) {
+                                         std::size_t nvir, std::size_t memory_bytes,
+                                         ResponseIntegrals integrals, std::size_t naux) {
     const std::string prefix = "restricted C1 transition primitives: ";
     constexpr std::size_t max_supported_nov = 512;
     constexpr double integral_cutoff = 1.0e-15;
+    const bool density_fitted = integrals == ResponseIntegrals::DensityFitted;
     if (nbf == 0 || nocc == 0 || nvir == 0)
         throw PSIEXCEPTION(prefix + "memory estimate requires nonzero orbital dimensions");
+    if (density_fitted && naux == 0)
+        throw PSIEXCEPTION(prefix + "the density-fitted Hessian requires a nonzero auxiliary dimension");
+    if (!density_fitted && naux != 0)
+        throw PSIEXCEPTION(prefix + "the exact Hessian must not be planned against an auxiliary dimension");
     const auto nov = checked_c1_product(nocc, nvir, prefix);
     if (nov > static_cast<std::size_t>(std::numeric_limits<int>::max()))
         throw PSIEXCEPTION(prefix + "transition-space dimension exceeds native matrix limits");
@@ -1180,8 +1187,20 @@ RestrictedC1JKPlan plan_restricted_c1_jk(std::size_t nbf, std::size_t nocc,
         checked_c1_product(3, ao_square, prefix), sizeof(double), prefix);
     // DirectJK.cc allocates 2*max_task^2 J and 8*max_task^2 K scratch for a
     // nonsymmetric density. max_task <= nbf gives this conservative term.
-    const auto direct_jk_scratch_bytes = checked_c1_product(
-        checked_c1_product(10, ao_square, prefix), sizeof(double), prefix);
+    // On the fitted path no such scratch exists; DFHelper holds the (Q|mn) tensor
+    // and its metric instead, and it honours set_memory by spilling to disk, so
+    // that term stays advisory in exactly the same sense.
+    const auto direct_jk_scratch_bytes =
+        density_fitted ? std::size_t{0}
+                       : checked_c1_product(checked_c1_product(10, ao_square, prefix),
+                                            sizeof(double), prefix);
+    std::size_t df_workspace_bytes = 0;
+    if (density_fitted) {
+        const auto fitted_elements = checked_c1_sum(
+            checked_c1_product(naux, ao_square, prefix),
+            checked_c1_product(2, checked_c1_product(naux, naux, prefix), prefix), prefix);
+        df_workspace_bytes = checked_c1_product(fitted_elements, sizeof(double), prefix);
+    }
     const auto integral_engine_elements = checked_c1_sum(
         checked_c1_product(8, ao_square, prefix), nbf, prefix);
     const auto integral_engine_allowance_bytes = checked_c1_product(
@@ -1196,7 +1215,8 @@ RestrictedC1JKPlan plan_restricted_c1_jk(std::size_t nbf, std::size_t nocc,
     std::size_t estimated_bytes = retained_payload_bytes;
     for (const auto component : {metadata_bytes, coefficient_bytes, matrix_overhead_bytes,
                                  jk_coefficient_bytes, jk_ao_bytes, direct_jk_scratch_bytes,
-                                 integral_engine_allowance_bytes, projection_bytes})
+                                 df_workspace_bytes, integral_engine_allowance_bytes,
+                                 projection_bytes})
         estimated_bytes = checked_c1_sum(estimated_bytes, component, prefix);
 
     RestrictedC1JKPlan plan;
@@ -1216,6 +1236,8 @@ RestrictedC1JKPlan plan_restricted_c1_jk(std::size_t nbf, std::size_t nocc,
     plan.jk_coefficient_bytes = jk_coefficient_bytes;
     plan.jk_ao_bytes = jk_ao_bytes;
     plan.direct_jk_scratch_bytes = direct_jk_scratch_bytes;
+    plan.naux = naux;
+    plan.df_workspace_bytes = df_workspace_bytes;
     plan.integral_engine_allowance_bytes = integral_engine_allowance_bytes;
     plan.projection_bytes = projection_bytes;
     plan.estimated_bytes = estimated_bytes;
@@ -1223,7 +1245,8 @@ RestrictedC1JKPlan plan_restricted_c1_jk(std::size_t nbf, std::size_t nocc,
     plan.incfock = false;
     plan.screening = "NONE";
     plan.memory_semantics = "RETAINED_PAYLOAD_HARD_GATE_WORKSPACE_ADVISORY";
-    plan.algorithm = "DIRECT_JK_CANONICAL_NONSYMMETRIC";
+    plan.algorithm = density_fitted ? "MEM_DF_JK_CANONICAL_NONSYMMETRIC"
+                                    : "DIRECT_JK_CANONICAL_NONSYMMETRIC";
     return plan;
 }
 }  // namespace detail
@@ -1288,9 +1311,17 @@ detail::RestrictedC1Primitives construct_restricted_c1_primitives_impl(
         nocc * nvir > static_cast<std::size_t>(std::numeric_limits<int>::max()))
         throw PSIEXCEPTION(prefix + "transition-space dimension exceeds native matrix limits");
     const std::size_t nov = nocc * nvir;
+    // The integral treatment is sealed into the frozen context, not read here, so
+    // every stage of one calculation is guaranteed to have used the same Hessian.
+    const bool density_fitted = context->response_integrals() == ResponseIntegrals::DensityFitted;
+    const auto& auxiliary = context->auxiliary_basis();
+    if (density_fitted && !auxiliary)
+        throw PSIEXCEPTION(prefix + "the density-fitted Hessian requires a sealed auxiliary basis");
     // Fail before allocating any dense transition primitive or AO JK batch.
     const auto jk_plan = detail::plan_restricted_c1_jk(
-        static_cast<std::size_t>(nbf), nocc, nvir, Process::environment.get_memory());
+        static_cast<std::size_t>(nbf), nocc, nvir, Process::environment.get_memory(),
+        context->response_integrals(),
+        density_fitted ? static_cast<std::size_t>(auxiliary->nbf()) : std::size_t{0});
 
     detail::RestrictedC1Primitives result;
     result.jk_plan = jk_plan;
@@ -1339,11 +1370,31 @@ detail::RestrictedC1Primitives construct_restricted_c1_primitives_impl(
     canonical_options.add_int("INCFOCK_FULL_FOCK_EVERY", 1);
     canonical_options.add_str("INTEGRAL_PACKAGE", "LIBINT2", "LIBINT2");
     auto mutable_basis = std::const_pointer_cast<BasisSet>(basis);
-    auto jk = std::make_shared<DirectJK>(mutable_basis, canonical_options);
-    jk->set_standard_integral_backend_only(true);
+    std::shared_ptr<JK> jk;
+    DirectJK* exact_jk = nullptr;
+    if (density_fitted) {
+        // The fitted path reuses the one sealed auxiliary basis rather than resolving
+        // its own, so a run that fits both the Hessian and the partition provably uses
+        // a single auxiliary space. MemDFJK reads no options at construction; the
+        // registry above is passed only to satisfy its signature.
+        auto mutable_auxiliary = std::const_pointer_cast<BasisSet>(auxiliary);
+        auto fitted_jk = std::make_shared<MemDFJK>(mutable_basis, mutable_auxiliary, canonical_options);
+        fitted_jk->set_memory(jk_plan.reserved_memory_bytes / sizeof(double));
+        // Pin the metric conditioning rather than inherit a default: the fitting error
+        // is the whole point of this path and must not move with an unrelated default.
+        fitted_jk->set_condition(1.0e-12);
+        // DFHelper threads on omp_nthread_, not on the DirectJK-only integral knob.
+        fitted_jk->set_omp_nthread(static_cast<int>(jk_plan.jk_threads));
+        jk = fitted_jk;
+    } else {
+        auto direct_jk = std::make_shared<DirectJK>(mutable_basis, canonical_options);
+        direct_jk->set_standard_integral_backend_only(true);
+        direct_jk->set_df_ints_num_threads(static_cast<int>(jk_plan.jk_threads));
+        exact_jk = direct_jk.get();
+        jk = direct_jk;
+    }
     jk->set_cutoff(jk_plan.integral_cutoff);
     jk->set_csam(false);
-    jk->set_df_ints_num_threads(static_cast<int>(jk_plan.jk_threads));
     jk->set_do_J(true);
     jk->set_do_K(true);
     jk->set_do_wK(false);
@@ -1394,7 +1445,9 @@ detail::RestrictedC1Primitives construct_restricted_c1_primitives_impl(
         left.clear();
         right.clear();
     }
-    result.integral_engine_thread_count = jk->integral_engine_thread_count();
+    // DFHelper exposes no engine thread count, so the fitted path reports zero rather
+    // than restating its own request as an observation.
+    result.integral_engine_thread_count = exact_jk ? exact_jk->integral_engine_thread_count() : 0;
     jk->finalize();
     require_restricted_hessian_primitive(*result.coulomb, nov, "Coulomb J");
     require_restricted_hessian_primitive(*result.exchange_direct, nov, "K_direct");
@@ -1431,6 +1484,13 @@ constexpr const char* kRestrictedALDACutoffSource = "FROZEN_FUNCTIONAL_DENSITY_T
 constexpr std::size_t kRestrictedALDAMaxWorkTerms = 64ULL * 1024ULL * 1024ULL * 1024ULL;
 constexpr const char* kALDAX = "XC_LDA_X";
 constexpr const char* kALDAC = "XC_LDA_C_VWN";
+// PW92, the local (LSDA) limit of the PW91 correlation functional CamCASP uses in the ALDA
+// half of its hybrid kernel. Selected by ATOMIC_POLARIZABILITY_ALDA_CORRELATION PW91.
+constexpr const char* kALDACPW91 = "XC_LDA_C_PW";
+
+const char* alda_correlation_component(ALDACorrelation correlation) {
+    return correlation == ALDACorrelation::PW91 ? kALDACPW91 : kALDAC;
+}
 
 class CompleteBlockOPoints final : public BlockOPoints {
    public:
@@ -1449,17 +1509,19 @@ class CompleteBlockOPoints final : public BlockOPoints {
 
 std::pair<std::shared_ptr<SuperFunctional>, detail::RestrictedALDADiagnostics>
 build_restricted_alda_functional(std::size_t max_points, bool include_correlation,
-                                  double density_cutoff) {
+                                  double density_cutoff, ALDACorrelation alda_correlation) {
     if (max_points == 0 || max_points > static_cast<std::size_t>(std::numeric_limits<int>::max()))
         throw PSIEXCEPTION("restricted ALDA kernel: invalid functional point capacity");
     if (!std::isfinite(density_cutoff) || !(density_cutoff > 0.0))
         throw PSIEXCEPTION("restricted ALDA kernel: frozen functional density tolerance must be finite and positive");
+    const char* const correlation_component = alda_correlation_component(alda_correlation);
     auto exchange = std::make_shared<LibXCFunctional>(kALDAX, true);
-    auto correlation = std::make_shared<LibXCFunctional>(kALDAC, true);
+    auto correlation = std::make_shared<LibXCFunctional>(correlation_component, true);
     exchange->set_alpha(1.0);
     correlation->set_alpha(1.0);
     auto functional = SuperFunctional::blank();
-    functional->set_name("RESPONSE_LDA_X_VWN");
+    functional->set_name(alda_correlation == ALDACorrelation::PW91 ? "RESPONSE_LDA_X_PW91"
+                                                                   : "RESPONSE_LDA_X_VWN");
     functional->add_x_functional(exchange);
     if (include_correlation) functional->add_c_functional(correlation);
     functional->set_density_tolerance(density_cutoff);
@@ -1477,7 +1539,7 @@ build_restricted_alda_functional(std::size_t max_points, bool include_correlatio
 
     detail::RestrictedALDADiagnostics diagnostics;
     diagnostics.exchange_component = kALDAX;
-    diagnostics.correlation_component = include_correlation ? kALDAC : "";
+    diagnostics.correlation_component = include_correlation ? correlation_component : "";
     diagnostics.exchange_libxc_id = exchange->libxc_id();
     diagnostics.correlation_libxc_id = include_correlation ? correlation->libxc_id() : 0;
     diagnostics.exchange_libxc_canonical_name = exchange->libxc_canonical_name();
@@ -1810,9 +1872,10 @@ std::size_t validate_restricted_alda_work_bound_test_only(std::size_t work_terms
 
 std::pair<std::vector<double>, RestrictedALDADiagnostics> evaluate_restricted_alda_fxc_test_only(
     const std::vector<double>& densities, bool include_correlation,
-    double density_cutoff) {
+    double density_cutoff, ALDACorrelation alda_correlation) {
     if (densities.empty()) throw PSIEXCEPTION("restricted ALDA kernel: density array is empty");
-    auto built = build_restricted_alda_functional(densities.size(), include_correlation, density_cutoff);
+    auto built = build_restricted_alda_functional(densities.size(), include_correlation,
+                                                  density_cutoff, alda_correlation);
     auto rho = std::make_shared<Vector>("policy density", densities.size());
     for (std::size_t point = 0; point < densities.size(); ++point) {
         rho->set(point, restricted_alda_policy_density(densities[point], density_cutoff));
@@ -1839,7 +1902,7 @@ SharedMatrix contract_restricted_alda_test_only(
 }
 
 RestrictedALDAPrimitive construct_restricted_alda_kernel(
-    const std::shared_ptr<const FrozenResponseContext>& context, bool retain_test_diagnostics) {
+    const std::shared_ptr<const FrozenResponseContext>& context, bool retain_test_diagnostics, ALDACorrelation alda_correlation) {
     const std::string prefix = "restricted ALDA kernel: ";
     if (!context) throw PSIEXCEPTION(prefix + "frozen response context is null");
     const auto basis_const = context->basis();
@@ -1872,7 +1935,8 @@ RestrictedALDAPrimitive construct_restricted_alda_kernel(
     validate_restricted_alda_duplicate_maps(context->grid_blocks());
     const auto max_block_points = plan.max_block_points;
     auto transitions = make_restricted_alda_transitions(*context, plan.nov);
-    auto built = build_restricted_alda_functional(max_block_points, true, plan.density_cutoff);
+    auto built = build_restricted_alda_functional(max_block_points, true, plan.density_cutoff,
+                                                  alda_correlation);
     built.second.plan = plan;
     built.second.point_count = npoints;
     auto extents = std::make_shared<BasisExtents>(basis, 1.0e-12);
@@ -2712,11 +2776,28 @@ ConstrainedLeastSquaresResult solve_constrained_least_squares(
             norm = std::hypot(norm, row_weights[row] * design(row, column));
         if (!std::isfinite(norm)) throw PSIEXCEPTION(prefix + "weighted column norm overflowed");
         pending.column_weighted_norms[column] = norm;
-        if (norm < options.column_cutoff) {
+        // Pruning selects on the weighted column norm alone, but the equality
+        // constraints are restricted to kept_columns further down. Dropping every
+        // column a constraint row touches leaves that row identically zero, which
+        // costs constraint rank and trips the ambiguity gate below. Optionally exempt
+        // constraint-carrying columns: they are pinned by the constraint rather than
+        // determined by the fit rows, so a small norm is not grounds to drop them.
+        bool constrained = false;
+        if (options.protect_constrained_columns) {
+            for (std::size_t row = 0; row < constraint_count; ++row) {
+                if (constraints(row, column) != 0.0) {
+                    constrained = true;
+                    break;
+                }
+            }
+        }
+        if (norm < options.column_cutoff && !constrained) {
             if (!options.prune_below_cutoff)
                 throw PSIEXCEPTION(prefix + "column " + std::to_string(column) + " is below cutoff");
             pending.pruned_columns.push_back(column);
         } else {
+            if (constrained && norm < options.column_cutoff)
+                pending.constraint_protected_columns.push_back(column);
             pending.full_to_reduced[column] = static_cast<int>(pending.kept_columns.size());
             pending.kept_columns.push_back(column);
         }
@@ -2896,7 +2977,11 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
 std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
     const std::shared_ptr<Wavefunction>& grac_wfn,
     const std::shared_ptr<Wavefunction>& neutral_precursor_wfn,
-    const std::shared_ptr<Wavefunction>& cation_wfn, const std::string& auxiliary_key) {
+    const std::shared_ptr<Wavefunction>& cation_wfn, const std::string& auxiliary_key,
+    ResponseIntegrals response_integrals) {
+    if (response_integrals == ResponseIntegrals::DensityFitted && auxiliary_key.empty())
+        throw PSIEXCEPTION(
+            "FrozenResponseContext: the density-fitted Hessian requires an auxiliary basis key");
     const auto grac_hf = require_converged_scf(grac_wfn, "GRAC neutral");
     const auto precursor_hf = require_converged_scf(neutral_precursor_wfn, "neutral precursor");
     const auto cation_hf = require_converged_scf(cation_wfn, "cation");
@@ -3051,7 +3136,7 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
     GRACProvenance provenance{precursor_seal.energy, cation_seal.energy, homo, ip, applied_shift,
                               cation_seal.reference, cation_seal.charge, cation_seal.multiplicity};
     auto molecule_copy = std::make_shared<Molecule>(grac_molecule->clone());
-    return std::shared_ptr<FrozenResponseContext>(new FrozenResponseContext(
+    auto frozen = std::shared_ptr<FrozenResponseContext>(new FrozenResponseContext(
         grac_seal.Ca->clone(), grac_seal.Cb->clone(),
         std::make_shared<Vector>(grac_seal.epsilon_a->clone()),
         std::make_shared<Vector>(grac_seal.epsilon_b->clone()),
@@ -3062,6 +3147,11 @@ std::shared_ptr<FrozenResponseContext> FrozenResponseContext::create(
         grac_seal.grid_weights, std::move(grid_blocks), std::move(provenance), grac_seal.functional.name,
         kProtocolGRACX, kProtocolGRACC, functional_density_tolerance, std::move(auxiliary_basis),
         std::move(auxiliary_snapshot), auxiliary_key));
+    // Sealed after construction rather than threaded through the constructor, which
+    // already carries every cloned electronic and structural quantity; the object is
+    // still immutable from the moment the factory returns.
+    frozen->response_integrals_ = response_integrals;
+    return frozen;
 }
 
 ISAWeights::ISAWeights(std::shared_ptr<const FrozenResponseContext> context,
@@ -3447,7 +3537,8 @@ std::vector<SitePairResponse> ISAPolResponseProvider::compute_isapol_response(
         c1.orbital_gaps.size() != transition_count)
         throw PSIEXCEPTION(prefix + "restricted C1 transition metadata is inconsistent");
 
-    const auto alda = detail::construct_restricted_alda_kernel(context_, false);
+    const auto alda =
+        detail::construct_restricted_alda_kernel(context_, false, kernel_.alda_correlation());
     if (alda.transitions != c1.transitions || !alda.full_alda ||
         alda.full_alda->nirrep() != 1 ||
         static_cast<std::size_t>(alda.full_alda->nrow()) != transition_count ||
@@ -3853,7 +3944,8 @@ PointResponseData evaluate_point_response(
         *context, points, minimum_site_distance_bohr);
 
     const auto c1 = detail::construct_restricted_c1_primitives(context);
-    const auto alda = detail::construct_restricted_alda_kernel(context, false);
+    const auto alda =
+        detail::construct_restricted_alda_kernel(context, false, kernel.alda_correlation());
     if (c1.transitions != alda.transitions ||
         c1.transitions.size() != plan.transition_count ||
         c1.orbital_gaps.size() != c1.transitions.size() || !alda.full_alda ||
@@ -4132,9 +4224,37 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
         // (eqn 9.3.13) over the higher blocks, which is where §9.3.4 says it is actually
         // needed. A block left unanchored has a zero row in g_pp', so NO penalty weight can
         // constrain it however large weight_coefficient is made.
-        if (component_rank(identity.first) <= options.anchor_rank_limit &&
-            component_rank(identity.second) <= options.anchor_rank_limit)
-            anchor[variable] = 1.0;
+        //
+        // InverseReferenceNorm instead reproduces the published ISA-Pol weight, eqn (22)
+        // of Misquitta & Stone, Theor. Chem. Acc. 137, 153 (2018):
+        //     g_kk' = delta_kk' w0 / (1 + (p0_k)^2)
+        // which under our lambda ||D(x - x0)||^2 objective is D_k = 1/sqrt(1 + p0_k^2)
+        // with lambda = w0. That form runs over ALL fitted parameters, so the rank gate
+        // does not apply to it.
+        //
+        // InverseReferenceNormGated is the same weight behind the rank gate. It exists
+        // because the published form changes two things at once relative to the reviewed
+        // policy -- it rescales the weight by 1/(1 + p0^2) AND it stops excluding the
+        // high-rank blocks -- and those two have opposite signs in the measured dispersion
+        // parity. Gating isolates the rescaling so the two can be attributed separately.
+        // At anchor_rank_limit == 3 the gate admits every block of a rank-3 model, so this
+        // must reproduce InverseReferenceNorm exactly.
+        const bool within_rank_gate = component_rank(identity.first) <= options.anchor_rank_limit &&
+                                      component_rank(identity.second) <= options.anchor_rank_limit;
+        const double reference_value = reference[variable];
+        const double inverse_reference_norm =
+            1.0 / std::sqrt(1.0 + reference_value * reference_value);
+        switch (options.anchor_scaling) {
+            case WSMAnchorScaling::Unit:
+                if (within_rank_gate) anchor[variable] = 1.0;
+                break;
+            case WSMAnchorScaling::InverseReferenceNorm:
+                anchor[variable] = inverse_reference_norm;
+                break;
+            case WSMAnchorScaling::InverseReferenceNormGated:
+                if (within_rank_gate) anchor[variable] = inverse_reference_norm;
+                break;
+        }
     }
 
     std::vector<std::size_t> effective_rows;
@@ -4199,7 +4319,11 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
         for (std::size_t variable = 0; variable < anchor.size(); ++variable) {
             if (anchor[variable] == 0.0) continue;
             const auto multiplicity = anchored_per_root[find_root(variable)];
-            anchor[variable] = 1.0 / std::sqrt(static_cast<double>(multiplicity));
+            // Compose with, rather than replace, the scaling chosen above. For the Unit
+            // policy every incoming weight is exactly 1.0, so this is identical to the
+            // former assignment; for InverseReferenceNorm it preserves the 1/(1 + p0^2)
+            // factor while still spreading one squared penalty over the copy class.
+            anchor[variable] *= 1.0 / std::sqrt(static_cast<double>(multiplicity));
         }
         anchor_count = static_cast<std::size_t>(std::count_if(
             anchored_per_root.begin(), anchored_per_root.end(),
@@ -4212,6 +4336,7 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
     detail::ConstrainedLeastSquaresOptions solve_options;
     solve_options.column_cutoff = options.cutoff * maximum_weighted_column_norm;
     solve_options.prune_below_cutoff = options.cutoff > 0.0;
+    solve_options.protect_constrained_columns = options.protect_constrained_columns;
     solve_options.maximum_condition_number = options.maximum_condition_number;
     solve_options.maximum_workspace_elements = plan.workspace_elements;
     const auto solved = detail::solve_constrained_least_squares(
@@ -4241,6 +4366,7 @@ RefinedL3Model refine_wsm_frequency(const LocalizedResponse& localized,
     pending.diagnostics.objective_residual_norm = solved.objective_residual_norm;
     pending.diagnostics.maximum_weighted_column_norm = maximum_weighted_column_norm;
     pending.diagnostics.applied_column_cutoff = solve_options.column_cutoff;
+    pending.diagnostics.constraint_protected_column_count = solved.constraint_protected_columns.size();
     pending.diagnostics.row_weight_source =
         options.row_weight_policy == WSMRowWeightPolicy::FullSymmetricFrobenius
             ? "full_symmetric_frobenius"
@@ -8058,15 +8184,63 @@ ISAOptions isa_options_from(Options& options) {
     const double convergence = options.get_double("ATOMIC_POLARIZABILITY_ISA_CONVERGENCE");
     if (!(convergence > 0.0) || !std::isfinite(convergence))
         throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "ISA convergence must be finite and positive");
+    const std::string table = options.get_str("ATOMIC_POLARIZABILITY_ISA_TAIL_RADIUS_TABLE");
+    ISATailRadiusTable tail_radius_table = ISATailRadiusTable::Slater1964;
+    if (table == "SLATER-1964")
+        tail_radius_table = ISATailRadiusTable::Slater1964;
+    else if (table == "REFERENCE-HYDROGEN")
+        tail_radius_table = ISATailRadiusTable::ReferenceHydrogen;
+    else
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "unsupported tail radius table '" + table + "'");
+    const std::string anchor = options.get_str("ATOMIC_POLARIZABILITY_ISA_TAIL_ANCHOR");
+    ISATailAnchor tail_anchor = ISATailAnchor::Value;
+    if (anchor == "VALUE")
+        tail_anchor = ISATailAnchor::Value;
+    else if (anchor == "SLOPE")
+        tail_anchor = ISATailAnchor::Slope;
+    else
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "unsupported tail anchor '" + anchor + "'");
+    const std::string algorithm_name = options.get_str("ATOMIC_POLARIZABILITY_ISA_ALGORITHM");
+    ISAAlgorithm algorithm = ISAAlgorithm::RealSpace;
+    if (algorithm_name == "REAL-SPACE")
+        algorithm = ISAAlgorithm::RealSpace;
+    else if (algorithm_name == "BASIS-SPACE")
+        algorithm = ISAAlgorithm::BasisSpace;
+    else
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "unsupported ISA algorithm '" + algorithm_name + "'");
+    const double basis_ratio = options.get_double("ATOMIC_POLARIZABILITY_ISA_BASIS_RATIO");
+    const double basis_minimum = options.get_double("ATOMIC_POLARIZABILITY_ISA_BASIS_MINIMUM_EXPONENT");
+    const double basis_ridge = options.get_double("ATOMIC_POLARIZABILITY_ISA_BASIS_REGULARIZATION");
+    if (!std::isfinite(basis_ratio) || basis_ratio <= 1.0)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "ISA basis ratio must be finite and greater than one");
+    if (!std::isfinite(basis_minimum) || basis_minimum <= 0.0)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "ISA basis minimum exponent must be finite and positive");
+    if (!std::isfinite(basis_ridge) || basis_ridge < 0.0)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "ISA basis regularization must be finite and nonnegative");
+    // The ridge conditions the constrained solve; if it were allowed to reach the convergence
+    // threshold it, and not the density, would decide where the fixed point lands. Only the
+    // basis-space arm applies it, so the relation is required only when that arm is selected.
+    if (algorithm == ISAAlgorithm::BasisSpace && basis_ridge >= convergence)
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            prefix + "ISA basis regularization must stay below the ISA convergence threshold");
     ISAOptions defaults;
     return ISAOptions(static_cast<std::size_t>(radial), static_cast<std::size_t>(polar),
                       static_cast<std::size_t>(azimuthal), static_cast<std::size_t>(iterations),
                       convergence, defaults.mix_fraction(), defaults.initial_alpha(),
                       defaults.tail_join_factor(), defaults.tail_activation_iteration(),
-                      defaults.tail_activation_convergence(), defaults.electron_count_tolerance());
+                      defaults.tail_activation_convergence(), defaults.electron_count_tolerance(),
+                      tail_radius_table, tail_anchor, algorithm, basis_ratio, basis_minimum, basis_ridge);
 }
 
 ResponseKernel reviewed_response_kernel() { return ResponseKernel(0.25, 0.75); }
+
+ResponseKernel response_kernel_from(Options& options) {
+    const std::string selection = options.get_str("ATOMIC_POLARIZABILITY_ALDA_CORRELATION");
+    if (selection == "VWN") return ResponseKernel(0.25, 0.75, ALDACorrelation::VWN);
+    if (selection == "PW91") return ResponseKernel(0.25, 0.75, ALDACorrelation::PW91);
+    throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+        "response kernel: unsupported ALDA correlation '" + selection + "'");
+}
 
 const char* auxiliary_partition_basis_key() { return "DF_BASIS_ATOMIC_POLARIZABILITY"; }
 
@@ -8076,6 +8250,14 @@ ResponsePartition response_partition_from(Options& options) {
     if (selection == "ISA") return ResponsePartition::RealSpaceISA;
     if (selection == "CDF") return ResponsePartition::ConstrainedDF;
     throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "unsupported partition '" + selection + "'");
+}
+
+ResponseIntegrals response_integrals_from(Options& options) {
+    const std::string prefix = "response integrals: ";
+    const std::string selection = options.get_str("ATOMIC_POLARIZABILITY_RESPONSE_INTEGRALS");
+    if (selection == "EXACT") return ResponseIntegrals::Exact;
+    if (selection == "DF") return ResponseIntegrals::DensityFitted;
+    throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "unsupported integral treatment '" + selection + "'");
 }
 
 CDFOptions cdf_options_from(Options& options) {
@@ -8094,6 +8276,14 @@ CDFOptions cdf_options_from(Options& options) {
     else
         throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "unsupported localisation constraint '" +
                                                  localisation + "'");
+    const std::string constraints = options.get_str("ATOMIC_POLARIZABILITY_CDF_CONSTRAINTS");
+    if (constraints == "PENALTY")
+        policy.constraints = CDFConstraintPolicy::QuadraticPenalty;
+    else if (constraints == "EXACT")
+        policy.constraints = CDFConstraintPolicy::HardConstraint;
+    else
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "unsupported constraint policy '" +
+                                                 constraints + "'");
     policy.localisation_weight = options.get_double("ATOMIC_POLARIZABILITY_CDF_LOCALISATION_WEIGHT");
     policy.constraint_penalty = options.get_double("ATOMIC_POLARIZABILITY_CDF_CHARGE_PENALTY");
     if (!std::isfinite(policy.localisation_weight))
@@ -9273,18 +9463,32 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
     const auto partition = response_partition_from(options);
     const bool auxiliary_partition = partition == ResponsePartition::ConstrainedDF;
     const auto cdf_options = auxiliary_partition ? cdf_options_from(options) : CDFOptions();
-    const std::string auxiliary_key =
-        auxiliary_partition ? auxiliary_partition_basis_key() : std::string();
+    // The Hessian's integral treatment is read in the same place and for the same
+    // reason. Both arms resolve one auxiliary space under one key: fitting the Hessian
+    // in one basis while partitioning in another would make the comparison unreadable,
+    // and the driver already refuses to attach two.
+    const auto response_integrals = response_integrals_from(options);
+    const bool auxiliary_hessian = response_integrals == ResponseIntegrals::DensityFitted;
+    const std::string auxiliary_key = (auxiliary_partition || auxiliary_hessian)
+                                          ? auxiliary_partition_basis_key()
+                                          : std::string();
     if (auxiliary_partition && !wfn_->basisset_exists(auxiliary_key))
         throw ATOMIC_POLARIZABILITY_PREREQUISITE(
             prefix + "the auxiliary partition needs the '" + cdf_options.auxiliary_basis +
             "' auxiliary basis attached to the reference wavefunction under '" + auxiliary_key +
             "', which a bare OEProp call cannot supply. Run "
             "psi4.driver.procrouting.atomic_polarizability.atomic_polarizabilities instead");
+    if (auxiliary_hessian && !wfn_->basisset_exists(auxiliary_key))
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(
+            prefix + "the density-fitted Hessian needs the '" +
+            options.get_str("ATOMIC_POLARIZABILITY_RESPONSE_AUX_BASIS") +
+            "' auxiliary basis attached to the reference wavefunction under '" + auxiliary_key +
+            "', which a bare OEProp call cannot supply. Run "
+            "psi4.driver.procrouting.atomic_polarizability.atomic_polarizabilities instead");
 
     // Stage 1: the frozen GRAC response context, which revalidates the SCF triple itself.
-    auto context =
-        FrozenResponseContext::create(wfn_, neutral_precursor_wfn_, cation_wfn_, auxiliary_key);
+    auto context = FrozenResponseContext::create(wfn_, neutral_precursor_wfn_, cation_wfn_,
+                                                 auxiliary_key, response_integrals);
     if (!context) throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the frozen response context is null");
     const auto molecule = context->molecule();
     if (!molecule) throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "the frozen context has no molecule");
@@ -9306,7 +9510,7 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
     // Stage 2: the partition of the frozen density. The real-space arm converges
     // stockholder weights on the sealed grid; the auxiliary arm needs no grid partition
     // at all, so its weights are never computed rather than computed and discarded.
-    const auto kernel = reviewed_response_kernel();
+    const auto kernel = response_kernel_from(options);
     std::optional<ISAWeights> isa_weights;
     if (!auxiliary_partition) {
         isa_weights = compute_isa_weights(context, isa_options_from(options));
@@ -9413,6 +9617,36 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
     RefinementOptions refinement;
     refinement.maximum_condition_number =
         options.get_double("ATOMIC_POLARIZABILITY_MAX_CONDITION_NUMBER");
+    const std::string pruning = options.get_str("ATOMIC_POLARIZABILITY_WSM_COLUMN_PRUNING");
+    if (pruning == "RELATIVE")
+        refinement.cutoff = 1.0e-4;
+    else if (pruning == "RELATIVE-CONSTRAINT-SAFE") {
+        refinement.cutoff = 1.0e-4;
+        refinement.protect_constrained_columns = true;
+    } else if (pruning == "OFF")
+        refinement.cutoff = 0.0;
+    else
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "unsupported WSM column pruning '" + pruning + "'");
+    const std::string row_weights = options.get_str("ATOMIC_POLARIZABILITY_WSM_ROW_WEIGHTS");
+    if (row_weights == "FULL-SYMMETRIC-FROBENIUS")
+        refinement.row_weight_policy = WSMRowWeightPolicy::FullSymmetricFrobenius;
+    else if (row_weights == "UNIQUE-PAIR-EQUAL")
+        refinement.row_weight_policy = WSMRowWeightPolicy::UniquePairEqual;
+    else
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "unsupported WSM row weights '" + row_weights + "'");
+    const std::string anchor_scaling = options.get_str("ATOMIC_POLARIZABILITY_WSM_ANCHOR_SCALING");
+    if (anchor_scaling == "UNIT")
+        refinement.anchor_scaling = WSMAnchorScaling::Unit;
+    else if (anchor_scaling == "ISA-POL")
+        refinement.anchor_scaling = WSMAnchorScaling::InverseReferenceNorm;
+    else if (anchor_scaling == "ISA-POL-GATED")
+        refinement.anchor_scaling = WSMAnchorScaling::InverseReferenceNormGated;
+    else
+        throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "unsupported WSM anchor scaling '" +
+                                                 anchor_scaling + "'");
+    refinement.weight_coefficient = options.get_double("ATOMIC_POLARIZABILITY_WSM_ANCHOR_WEIGHT");
+    refinement.anchor_rank_limit = static_cast<unsigned int>(
+        std::max(0, options.get_int("ATOMIC_POLARIZABILITY_WSM_ANCHOR_RANK_LIMIT")));
     const auto models = refine_wsm(localized, point_response, result.pdef.constraints, refinement);
     if (models.size() != frequency_count)
         throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "refinement returned the wrong frequency count");
@@ -9422,6 +9656,30 @@ AtomicPolarizabilityPublication AtomicPolarizabilityCalculator::run() const {
             throw ATOMIC_POLARIZABILITY_PREREQUISITE(prefix + "a refined model has the wrong site count");
         result.refinement.push_back(model.diagnostics);
     }
+
+    // Publish the solver policy actually exercised, one row per frequency. Without this the
+    // column-pruning and row-weight arms are unobservable from Python: two policies that
+    // happen to prune nothing produce byte-identical output, which is indistinguishable from
+    // a keyword that never reached the solver. Columns are, in order: the number of design
+    // columns pruned, the number kept, the absolute cutoff handed to the kernel, the largest
+    // weighted column norm the cutoff is relative to, the solved condition number, and the
+    // number of below-cutoff columns retained only because an equality constraint touches
+    // them -- which is what separates RELATIVE-CONSTRAINT-SAFE from plain RELATIVE.
+    auto diagnostics = std::make_shared<Matrix>("ATOMIC POLARIZABILITY REFINEMENT DIAGNOSTICS",
+                                                static_cast<int>(frequency_count), 6);
+    for (std::size_t frequency = 0; frequency < frequency_count; ++frequency) {
+        const auto& entry = result.refinement[frequency];
+        diagnostics->set(static_cast<int>(frequency), 0,
+                         static_cast<double>(entry.pruned_variables.size()));
+        diagnostics->set(static_cast<int>(frequency), 1,
+                         static_cast<double>(entry.kept_variables.size()));
+        diagnostics->set(static_cast<int>(frequency), 2, entry.applied_column_cutoff);
+        diagnostics->set(static_cast<int>(frequency), 3, entry.maximum_weighted_column_norm);
+        diagnostics->set(static_cast<int>(frequency), 4, entry.condition_number);
+        diagnostics->set(static_cast<int>(frequency), 5,
+                         static_cast<double>(entry.constraint_protected_column_count));
+    }
+    result.refinement_diagnostics = diagnostics;
 
     // Stage 9: isotropic dispersion recoupling on the same protocol grid.
     result.dispersion = compute_dispersion(models, result.grid);
@@ -9541,7 +9799,8 @@ void AtomicPolarizabilityCalculator::compute() {
         {"ATOMIC ANISOTROPIC DYNAMIC POLARIZABILITIES",
          result.anisotropic_dynamic_polarizabilities},
         {"ATOMIC ANISOTROPIC POLARIZABILITY COMPONENTS",
-         result.anisotropic_polarizability_components}};
+         result.anisotropic_polarizability_components},
+        {"ATOMIC POLARIZABILITY REFINEMENT DIAGNOSTICS", result.refinement_diagnostics}};
     for (const auto& entry : published)
         if (!entry.second)
             throw ATOMIC_POLARIZABILITY_PREREQUISITE("atomic polarizability: '" + entry.first +

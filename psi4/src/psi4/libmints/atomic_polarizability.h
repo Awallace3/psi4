@@ -149,6 +149,67 @@ DenseRestrictedResponse solve_dense_restricted_response(const Matrix& H1, const 
                                                          double omega, const Matrix& rhs);
 }  // namespace detail
 
+/**
+ * Which per-element radius sets the radius where the ISA weight function is replaced by
+ * its exponential tail. This is a tail-onset choice only; the radial quadrature mapping
+ * scale and the covalent bond graph keep the Slater-1964-bohr-v1 table either way, so
+ * selecting a table changes the model and not the grid.
+ */
+enum class PSI_API ISATailRadiusTable {
+    /** The versioned Slater-1964-bohr-v1 table, hydrogen at 0.661 bohr (0.350 A). */
+    Slater1964,
+    /**
+     * Slater-1964-bohr-v1 with hydrogen at 0.9449 bohr (0.500 A), which is the radius the
+     * reviewed reference calculation's own published tail parameters imply. Hydrogen is
+     * the only entry known to differ: oxygen's implied radius agrees with the Slater
+     * table to 2e-4 bohr and no other element has been checked, so every other entry is
+     * carried over unchanged rather than guessed at.
+     */
+    ReferenceHydrogen
+};
+
+/**
+ * Which second condition closes the two-parameter exponential tail w(r) = A exp(-alpha r).
+ * Both choices conserve the charge the untruncated profile carried beyond the join, which
+ * fixes one parameter; the second is free.
+ */
+enum class PSI_API ISATailAnchor {
+    /** Match the value at the join, so w is continuous there. */
+    Value,
+    /**
+     * Match -d ln w / dr at the join, so the logarithmic slope is continuous and the value
+     * is free to step. This is what the reviewed reference calculation does, and its step
+     * is not small: +5.2 percent on oxygen and +15.4 percent on hydrogen.
+     */
+    Slope
+};
+
+/**
+ * Which space the iterated stockholder shape functions live in.
+ *
+ * The two are different methods, not two discretisations of one method: they converge to
+ * different fixed points because they are stationary with respect to different variations
+ * of w. Both are kept because the real-space form is the more accurate partition of the
+ * density we actually have, while the basis-space form is what the reviewed reference
+ * calculation solves and is therefore the only one that can be compared to it directly.
+ */
+enum class PSI_API ISAAlgorithm {
+    /**
+     * w is a log-PCHIP profile sampled on an atom-centred product grid and closed by a
+     * two-parameter exponential tail. The fixed point is the spherical average of the
+     * stockholder density itself, so it is not restricted to any function space.
+     */
+    RealSpace,
+    /**
+     * w is a nonnegative combination of normalised spherical Gaussians centred on the
+     * site, and each iteration refits those coefficients to the stockholder density by
+     * constrained least squares in the Gaussian metric. Every integral is then either
+     * analytic or a sum over the molecular grid that already carries the density, so no
+     * auxiliary atom-centred grid, no tail model and no radial interpolation enter.
+     */
+    BasisSpace
+};
+
 /** Explicit, deterministic controls for the native real-space ISA fixed point. */
 class PSI_API ISAOptions {
    public:
@@ -158,7 +219,12 @@ class PSI_API ISAOptions {
                double initial_alpha = 1.0, double tail_join_factor = 1.5,
                std::size_t tail_activation_iteration = 20,
                double tail_activation_convergence = 1.0e-6,
-               double electron_count_tolerance = 0.1);
+               double electron_count_tolerance = 0.1,
+               ISATailRadiusTable tail_radius_table = ISATailRadiusTable::Slater1964,
+               ISATailAnchor tail_anchor = ISATailAnchor::Value,
+               ISAAlgorithm algorithm = ISAAlgorithm::RealSpace,
+               double basis_ratio = 2.0, double basis_minimum_exponent = 0.125,
+               double basis_regularization = 1.0e-12);
 
     std::size_t radial_points() const { return radial_points_; }
     std::size_t angular_polar_points() const { return angular_polar_points_; }
@@ -171,6 +237,19 @@ class PSI_API ISAOptions {
     std::size_t tail_activation_iteration() const { return tail_activation_iteration_; }
     double tail_activation_convergence() const { return tail_activation_convergence_; }
     double electron_count_tolerance() const { return electron_count_tolerance_; }
+    ISATailRadiusTable tail_radius_table() const { return tail_radius_table_; }
+    ISATailAnchor tail_anchor() const { return tail_anchor_; }
+    ISAAlgorithm algorithm() const { return algorithm_; }
+    /** Ratio of the even-tempered s-Gaussian series the basis-space shape functions use. */
+    double basis_ratio() const { return basis_ratio_; }
+    /** Smallest exponent in that series; the series is generated upward from here. */
+    double basis_minimum_exponent() const { return basis_minimum_exponent_; }
+    /**
+     * Relative ridge added to the scaled Gaussian overlap before each passive-set solve.
+     * An even-tempered series is deliberately near-degenerate, so this is a conditioning
+     * floor, not a physical penalty; it must stay far below the convergence threshold.
+     */
+    double basis_regularization() const { return basis_regularization_; }
 
    private:
     std::size_t radial_points_;
@@ -184,6 +263,12 @@ class PSI_API ISAOptions {
     std::size_t tail_activation_iteration_;
     double tail_activation_convergence_;
     double electron_count_tolerance_;
+    ISATailRadiusTable tail_radius_table_;
+    ISATailAnchor tail_anchor_;
+    ISAAlgorithm algorithm_;
+    double basis_ratio_;
+    double basis_minimum_exponent_;
+    double basis_regularization_;
 };
 
 struct PSI_API ISAGridProfile {
@@ -218,20 +303,56 @@ struct PSI_API ISADiagnostics {
     std::vector<std::vector<double>> log_profiles;
     std::vector<double> tail_join_radii;
     std::vector<double> tail_alphas;
+    /** Which tail-onset radius table produced tail_join_radii. */
+    std::string tail_radius_table;
+    /** Which second condition closed the exponential tail. */
+    std::string tail_anchor;
+    /** Which space the shape functions were solved in. */
+    std::string algorithm;
+    /** Basis-space arm only: the even-tempered s exponents used on each site. */
+    std::vector<std::vector<double>> gaussian_exponents;
+    /** Basis-space arm only: the fitted nonnegative expansion coefficients per site. */
+    std::vector<std::vector<double>> gaussian_coefficients;
+    /**
+     * Basis-space arm only: max over sites of |sum_k c_ak - N_a|, the charge the fitted
+     * shape function misses. Nothing constrains this, so it measures whether the Gaussian
+     * space is wide enough to hold the converged stockholder density.
+     */
+    double max_shape_charge_residual{};
+    /** Basis-space arm only: how many coefficients the nonnegativity bound held at zero. */
+    std::size_t bound_coefficients{};
     std::string context_digest;
+};
+
+/**
+ * Local correlation used inside the ALDA half of the response kernel.
+ *
+ * The exchange half is always XC_LDA_X. Only the correlation component varies, and it is
+ * the sole remaining stage-A degree of freedom between this code and CamCASP: CamCASP
+ * builds its hybrid ALDA+CHF kernel with the PW91 correlation functional, whose local
+ * (LSDA) limit is PW92, while this code has always used VWN.
+ */
+enum class PSI_API ALDACorrelation {
+    /** XC_LDA_C_VWN. The shipped default; every committed reference was produced with it. */
+    VWN,
+    /** XC_LDA_C_PW, the PW92 local limit of PW91. Selects the CamCASP convention. */
+    PW91,
 };
 
 /** Immutable protocol response-kernel selection, independent of the ground-state functional. */
 class PSI_API ResponseKernel {
    public:
-    ResponseKernel(double chf_exchange, double alda_kernel);
+    ResponseKernel(double chf_exchange, double alda_kernel,
+                   ALDACorrelation alda_correlation = ALDACorrelation::VWN);
 
     double chf_exchange() const { return chf_exchange_; }
     double alda_kernel() const { return alda_kernel_; }
+    ALDACorrelation alda_correlation() const { return alda_correlation_; }
 
    private:
     double chf_exchange_;
     double alda_kernel_;
+    ALDACorrelation alda_correlation_;
 };
 
 namespace detail {
@@ -258,6 +379,21 @@ RestrictedSingletHessian assemble_restricted_singlet_hessian(
     const Matrix& exchange_direct, const Matrix& exchange_transpose,
     const Matrix& full_alda, const ResponseKernel& kernel);
 }  // namespace detail
+
+/**
+ * How the two-electron integrals of the coupled-Kohn-Sham Hessian are evaluated.
+ *
+ * These are different models, not two solvers for one model. Density fitting softens
+ * the kernel by its own fitting error, and every rank of the distributed response that
+ * follows inherits that softening, so the choice is sealed into the frozen context
+ * rather than read at the point of use.
+ */
+enum class PSI_API ResponseIntegrals {
+    /** Contract the four-index integrals directly. */
+    Exact,
+    /** Fit the transition densities in the sealed Cartesian auxiliary basis. */
+    DensityFitted,
+};
 
 /** Exact ordered effective DFT-grid state retained by a frozen response context. */
 struct PSI_API FrozenGridBlock {
@@ -299,12 +435,17 @@ class PSI_API FrozenResponseContext {
      * same way the orbital basis is and rechecked by verify_basis_unchanged, because
      * a partition comparison whose auxiliary basis is unattested cannot support the
      * claim that only the partition differs.
+     *
+     * response_integrals seals how the Hessian's two-electron integrals are built.
+     * Selecting DensityFitted without an auxiliary key fails here rather than later,
+     * because the fitted Hessian has no meaning without an attested auxiliary space.
      */
     static std::shared_ptr<FrozenResponseContext> create(
         const std::shared_ptr<Wavefunction>& grac_wfn,
         const std::shared_ptr<Wavefunction>& neutral_precursor_wfn,
         const std::shared_ptr<Wavefunction>& cation_wfn,
-        const std::string& auxiliary_key);
+        const std::string& auxiliary_key,
+        ResponseIntegrals response_integrals = ResponseIntegrals::Exact);
 
     const std::shared_ptr<const Matrix>& Ca() const { return Ca_; }
     const std::shared_ptr<const Matrix>& Cb() const { return Cb_; }
@@ -320,6 +461,8 @@ class PSI_API FrozenResponseContext {
     /** Sealed auxiliary basis, or null when none was attached. */
     const std::shared_ptr<const BasisSet>& auxiliary_basis() const { return auxiliary_basis_; }
     const std::string& auxiliary_basis_key() const { return auxiliary_basis_key_; }
+    /** How this frozen calculation builds the Hessian's two-electron integrals. */
+    ResponseIntegrals response_integrals() const { return response_integrals_; }
     const std::shared_ptr<const SuperFunctional>& functional() const { return functional_; }
     const std::vector<SitePosition>& sites() const { return sites_; }
     const std::vector<double>& grid_points() const { return grid_points_; }
@@ -378,6 +521,7 @@ class PSI_API FrozenResponseContext {
     std::shared_ptr<const BasisSet> auxiliary_basis_;
     std::shared_ptr<const BasisSetStructuralSnapshot> auxiliary_basis_snapshot_;
     std::string auxiliary_basis_key_;
+    ResponseIntegrals response_integrals_{ResponseIntegrals::Exact};
 };
 
 /** Up-front storage and integral-work gate for caller-supplied point response. */
@@ -672,6 +816,10 @@ struct RestrictedC1JKPlan {
     std::size_t jk_coefficient_bytes{};
     std::size_t jk_ao_bytes{};
     std::size_t direct_jk_scratch_bytes{};
+    /** Sealed auxiliary function count; zero on the exact-integral path. */
+    std::size_t naux{};
+    /** Advisory (Q|mn) plus metric workspace; zero on the exact-integral path. */
+    std::size_t df_workspace_bytes{};
     std::size_t integral_engine_allowance_bytes{};
     std::size_t projection_bytes{};
     std::size_t estimated_bytes{};
@@ -682,9 +830,17 @@ struct RestrictedC1JKPlan {
     std::string algorithm;
 };
 
-/** Plan batch-one DirectJK and reject payload beyond the reserved/envelope limits. */
+/**
+ * Plan batch-one JK and reject payload beyond the reserved/envelope limits.
+ *
+ * naux is required when integrals is DensityFitted and must be zero otherwise: the
+ * two paths report different workspace models and neither may quietly stand in for
+ * the other.
+ */
 RestrictedC1JKPlan plan_restricted_c1_jk(std::size_t nbf, std::size_t nocc,
-                                         std::size_t nvir, std::size_t memory_bytes);
+                                         std::size_t nvir, std::size_t memory_bytes,
+                                         ResponseIntegrals integrals = ResponseIntegrals::Exact,
+                                         std::size_t naux = 0);
 
 /** Native C1 restricted transition-space ERI primitives; ALDA is constructed separately. */
 struct RestrictedC1Primitives {
@@ -783,14 +939,15 @@ RestrictedALDAPlan plan_restricted_alda(std::size_t nbf, std::size_t nocc,
                                         double density_cutoff);
 RestrictedALDAPrimitive construct_restricted_alda_kernel(
     const std::shared_ptr<const FrozenResponseContext>& context,
-    bool retain_test_diagnostics = false);
+    bool retain_test_diagnostics = false,
+    ALDACorrelation alda_correlation = ALDACorrelation::VWN);
 SharedMatrix contract_restricted_alda_test_only(
     const std::vector<double>& weights, const Matrix& transition_values,
     const std::vector<double>& densities, const std::vector<double>& fxc,
     double density_cutoff);
 std::pair<std::vector<double>, RestrictedALDADiagnostics> evaluate_restricted_alda_fxc_test_only(
     const std::vector<double>& densities, bool include_correlation,
-    double density_cutoff);
+    double density_cutoff, ALDACorrelation alda_correlation = ALDACorrelation::VWN);
 void validate_restricted_alda_grid_test_only(std::size_t nbf, std::size_t point_count,
                                              const std::vector<double>& weights,
                                              const std::vector<FrozenGridBlock>& blocks);
@@ -945,6 +1102,16 @@ ISAPolResponsePlan plan_isapol_response_provider(
 struct ConstrainedLeastSquaresOptions {
     double column_cutoff{1.0e-4};
     bool prune_below_cutoff{true};
+    /**
+     * Exempt any column carrying a nonzero equality-constraint coefficient from
+     * cutoff pruning. Such a column is determined by its constraint rather than by
+     * the fit rows, so a small weighted norm is not grounds to drop it: pruning it
+     * zeroes its constraint row once the constraints are restricted to kept_columns,
+     * which costs constraint rank and trips the "constraints are ambiguous" gate.
+     * False reproduces the historical norm-only policy exactly and is the default.
+     * Selected from the driver by ``ATOMIC_POLARIZABILITY_WSM_COLUMN_PRUNING``.
+     */
+    bool protect_constrained_columns{false};
     double maximum_condition_number{1.0e12};
     double rank_tolerance{1.0e-12};
     std::size_t maximum_workspace_elements{std::numeric_limits<std::size_t>::max()};
@@ -967,6 +1134,8 @@ struct ConstrainedLeastSquaresResult {
     std::vector<double> solution;
     std::vector<std::size_t> kept_columns;
     std::vector<std::size_t> pruned_columns;
+    /** Columns below cutoff that were kept only because a constraint touches them. */
+    std::vector<std::size_t> constraint_protected_columns;
     std::vector<int> full_to_reduced;
     std::vector<double> column_weighted_norms;
     std::vector<double> singular_values;
@@ -1523,6 +1692,35 @@ enum class WSMRowWeightPolicy {
     UniquePairEqual,
 };
 
+/** How the diagonal of Stone's g_pp' anchor weight matrix is built. */
+enum class PSI_API WSMAnchorScaling {
+    /**
+     * Unit weight on every block at or below ``anchor_rank_limit``, zero above. This is
+     * the reviewed production policy.
+     */
+    Unit,
+    /**
+     * The ISA-Pol prescription, Misquitta & Stone, Theor. Chem. Acc. 137, 153 (2018),
+     * eqn (22): ``g_kk' = delta_kk' w0 / (1 + (p0_k)^2)``, where ``p0_k`` is the
+     * localization-stage reference value of parameter ``k``. Matching that against our
+     * ``lambda ||D(x - x0)||^2`` gives ``D_k = 1/sqrt(1 + p0_k^2)`` with ``lambda = w0``.
+     *
+     * The published form applies at EVERY rank and is self-scaling: it pulls hardest
+     * where ``p0 ~ 0``, which is exactly the buried, poorly determined direction that
+     * Stone §9.3.4 identifies, and barely at all where ``p0`` is large. Selecting this
+     * scaling therefore ignores ``anchor_rank_limit`` and anchors the whole model.
+     */
+    InverseReferenceNorm,
+    /**
+     * The same ISA-Pol eqn (22) weight, but behind the ``anchor_rank_limit`` gate. The
+     * published form changes two things at once relative to ``Unit`` -- it rescales the
+     * weight by ``1/(1 + p0^2)`` and it stops excluding the high-rank blocks -- so this
+     * value isolates the rescaling. At ``anchor_rank_limit == 3`` it is identical to
+     * ``InverseReferenceNorm``.
+     */
+    InverseReferenceNormGated,
+};
+
 /** Reviewed physical WSM policy, with explicit parity seams for the anchor and solver. */
 struct PSI_API RefinementOptions {
     unsigned int wsm_rank{3};
@@ -1533,8 +1731,10 @@ struct PSI_API RefinementOptions {
      * Relative weighted-column-norm threshold. The default 1e-4 preserves the existing
      * scale-invariant pruning policy; zero disables pre-pruning and represents the
      * CamCASP PFIT reference ledger's "SVD off" policy. No other value is supported.
+     * Selected from the driver by ``ATOMIC_POLARIZABILITY_WSM_COLUMN_PRUNING``.
      */
     double cutoff{1.0e-4};
+    /** Selected from the driver by ``ATOMIC_POLARIZABILITY_WSM_ROW_WEIGHTS``. */
     WSMRowWeightPolicy row_weight_policy{WSMRowWeightPolicy::FullSymmetricFrobenius};
     /**
      * Count a signed/equal PDef copy class as one independently fitted parameter in the
@@ -1543,6 +1743,18 @@ struct PSI_API RefinementOptions {
      * the physical penalty strength.
      */
     bool normalize_copy_penalties{true};
+    /**
+     * Exempt columns carrying an equality constraint from cutoff pruning. The cutoff
+     * selects on weighted column norm alone, so at a small inner fit radius it can
+     * drop every column a PDef symmetry row touches, zeroing that row and failing the
+     * solve with "constraints are ambiguous". Enabling this keeps such columns -- they
+     * are pinned by the constraint, not determined by the fit rows -- so a nonzero
+     * cutoff and a small fit radius can be used together.
+     *
+     * False reproduces the historical norm-only policy exactly and is the default.
+     * Selected from the driver by ``ATOMIC_POLARIZABILITY_WSM_COLUMN_PRUNING``.
+     */
+    bool protect_constrained_columns{false};
     double maximum_condition_number{1.0e12};
     /**
      * Highest site-tensor rank pulled towards the localization-stage anchor by the
@@ -1558,6 +1770,13 @@ struct PSI_API RefinementOptions {
      * this to 2 or 3 to extend the anchor over rank 2 and rank 3.
      */
     unsigned int anchor_rank_limit{1};
+    /**
+     * Diagonal convention of the anchor weight matrix g_pp'. ``Unit`` is the reviewed
+     * production policy and honours ``anchor_rank_limit``; ``InverseReferenceNorm`` is
+     * the published ISA-Pol eqn (22) parity arm and covers every rank. Selected from the
+     * driver by ``ATOMIC_POLARIZABILITY_WSM_ANCHOR_SCALING``.
+     */
+    WSMAnchorScaling anchor_scaling{WSMAnchorScaling::Unit};
 };
 
 /** Up-front dense-design resource accounting. */
@@ -1607,6 +1826,8 @@ struct PSI_API RefinementDiagnostics {
     double maximum_weighted_column_norm{};
     /** The absolute threshold actually handed to the least-squares kernel. */
     double applied_column_cutoff{};
+    /** Columns below the cutoff retained only because an equality constraint touches them. */
+    std::size_t constraint_protected_column_count{};
     std::string row_weight_source;
     WSMRefinementPlan plan;
 };
@@ -2043,9 +2264,14 @@ PSI_API ISAOptions isa_options_from(Options& options);
 
 /** The exact reviewed protocol response kernel, 25 percent CHF plus 75 percent ALDA. */
 PSI_API ResponseKernel reviewed_response_kernel();
+/** The reviewed kernel with ALDA_CORRELATION taken from ATOMIC_POLARIZABILITY_ALDA_CORRELATION. */
+PSI_API ResponseKernel response_kernel_from(Options& options);
 
 /** Read ATOMIC_POLARIZABILITY_PARTITION into a validated partition selection. */
 PSI_API ResponsePartition response_partition_from(Options& options);
+
+/** Read ATOMIC_POLARIZABILITY_RESPONSE_INTEGRALS into a validated Hessian integral choice. */
+PSI_API ResponseIntegrals response_integrals_from(Options& options);
 
 /** Read the ATOMIC_POLARIZABILITY_CDF_* keywords into a validated auxiliary-fit policy. */
 PSI_API CDFOptions cdf_options_from(Options& options);
@@ -2097,6 +2323,8 @@ struct PSI_API AtomicPolarizabilityPublication {
     PDefDerivation pdef;
     std::vector<LocalizationResiduals> localization_residuals;
     std::vector<RefinementDiagnostics> refinement;
+    /** Per-frequency solver policy actually exercised; see the publication comment. */
+    SharedMatrix refinement_diagnostics;
 };
 
 /**

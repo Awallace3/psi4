@@ -695,6 +695,63 @@ def test_restricted_c1_estimator_one_entry_memory_boundary_and_envelope_fail_clo
         estimator(2**63, 2**63, 2, 2**64 - 1)
 
 
+def test_restricted_c1_estimator_density_fitted_branch_reports_its_own_workspace():
+    """The fitted planner reports a different workspace model, and the two cannot mix.
+
+    The exact path's DirectJK scratch term and the fitted path's (Q|mn)-plus-metric term
+    are mutually exclusive by construction: neither backend allocates the other's
+    workspace, so a plan that reported both would be describing a calculation that does
+    not exist.
+    """
+    estimator = psi4.core._atomic_polarizability_estimate_restricted_c1_jk
+    nbf, nocc, nvir, naux = 41, 5, 36, 246
+    memory = 2**32
+    exact = estimator(nbf, nocc, nvir, memory)
+    fitted = estimator(nbf, nocc, nvir, memory, "DF", naux)
+
+    assert exact["algorithm"] == "DIRECT_JK_CANONICAL_NONSYMMETRIC"
+    assert fitted["algorithm"] == "MEM_DF_JK_CANONICAL_NONSYMMETRIC"
+
+    # The exact path knows nothing about an auxiliary space.
+    assert exact["naux"] == 0
+    assert exact["df_workspace_bytes"] == 0
+    assert exact["direct_jk_scratch_bytes"] == 10 * nbf**2 * 8
+
+    # The fitted path carries the fitting tensor and its metric instead of JK scratch.
+    assert fitted["naux"] == naux
+    assert fitted["direct_jk_scratch_bytes"] == 0
+    assert fitted["df_workspace_bytes"] == (naux * nbf**2 + 2 * naux**2) * 8
+
+    # The retained payload is the same either way: it is the transition space, which the
+    # integral treatment does not change. Only the advisory workspace differs.
+    assert fitted["retained_payload_bytes"] == exact["retained_payload_bytes"]
+    assert fitted["nov"] == exact["nov"] == nocc * nvir
+
+    assert fitted["estimated_bytes"] == sum(
+        fitted[name]
+        for name in (
+            "retained_payload_bytes",
+            "metadata_bytes",
+            "coefficient_bytes",
+            "matrix_overhead_bytes",
+            "jk_coefficient_bytes",
+            "jk_ao_bytes",
+            "direct_jk_scratch_bytes",
+            "df_workspace_bytes",
+            "integral_engine_allowance_bytes",
+            "projection_bytes",
+        )
+    )
+
+    # Each path refuses the other's auxiliary dimension rather than ignoring it.
+    with pytest.raises(RuntimeError, match=r"nonzero auxiliary dimension"):
+        estimator(nbf, nocc, nvir, memory, "DF", 0)
+    with pytest.raises(RuntimeError, match=r"must not be planned against an auxiliary"):
+        estimator(nbf, nocc, nvir, memory, "EXACT", naux)
+    with pytest.raises(RuntimeError, match=r"unsupported integral treatment"):
+        estimator(nbf, nocc, nvir, memory, "MEM_DF", naux)
+
+
 def test_restricted_alda_one_point_permutation_cutoff_and_failure_oracles():
     contract = psi4.core._atomic_polarizability_test_contract_restricted_alda
     cutoff = 1.0e-4
@@ -854,6 +911,83 @@ def _finite_difference_vwn_fxc(rho, relative_step, density_cutoff):
     step = relative_step * rho
     return (_independent_vwn_potential(rho + step, density_cutoff)
             - _independent_vwn_potential(rho - step, density_cutoff)) / (2.0 * step)
+
+
+def _published_pw92_correlation_energy_density(rho):
+    """Spin-unpolarized PW92 correlation energy per electron, from the published form.
+
+    Perdew & Wang, Phys. Rev. B 45, 13244 (1992), eqn (10) with the Table I paramagnetic
+    parameters. Written out here so the PW91 arm is checked against the literature rather
+    than against another LibXC evaluation of the same functional.
+    """
+    rho = np.asarray(rho, dtype=float)
+    rs = (3.0 / (4.0 * np.pi * rho)) ** (1.0 / 3.0)
+    A, alpha1 = 0.031091, 0.21370
+    beta1, beta2, beta3, beta4 = 7.5957, 3.5876, 1.6382, 0.49294
+    root = np.sqrt(rs)
+    denominator = 2.0 * A * (beta1 * root + beta2 * rs + beta3 * rs * root + beta4 * rs * rs)
+    return -2.0 * A * (1.0 + alpha1 * rs) * np.log1p(1.0 / denominator)
+
+
+def _published_pw92_fxc(rho, relative_step):
+    """d2(rho*eps_c)/drho2 by a central second difference of the published energy density."""
+    rho = np.asarray(rho, dtype=float)
+    step = relative_step * rho
+    def energy(density):
+        return density * _published_pw92_correlation_energy_density(density)
+    return (energy(rho + step) - 2.0 * energy(rho) + energy(rho - step)) / (step * step)
+
+
+def test_restricted_alda_pw91_arm_selects_pw92_and_matches_the_published_parameterization():
+    evaluate = psi4.core._atomic_polarizability_test_restricted_alda_fxc
+    rho = np.array([0.02, 0.08, 0.3, 1.1, 3.0])
+    cutoff = 1.0e-8
+
+    # The shipped default must stay VWN whether or not the argument is supplied.
+    assert (evaluate(rho, True, cutoff)["diagnostics"]["correlation_component"]
+            == "XC_LDA_C_VWN")
+    assert (evaluate(rho, True, cutoff, "vwn")["fxc"]
+            == pytest.approx(evaluate(rho, True, cutoff)["fxc"], abs=0.0))
+
+    pw91 = evaluate(rho, True, cutoff, "pw91")
+    diagnostics = pw91["diagnostics"]
+    assert diagnostics["exchange_component"] == "XC_LDA_X"
+    assert diagnostics["correlation_component"] == "XC_LDA_C_PW"
+    assert diagnostics["correlation_libxc_canonical_name"] == "lda_c_pw"
+    assert diagnostics["exchange_libxc_canonical_name"] == "lda_x"
+    assert diagnostics["correlation_coefficient"] == 1.0
+    assert diagnostics["derivative_order"] == 2
+
+    # Exchange is shared, so the whole difference between the arms is correlation.
+    exchange = evaluate(rho, False, cutoff, "pw91")
+    expected_x = -(1.0 / 3.0) * (3.0 / np.pi) ** (1.0 / 3.0) * rho ** (-2.0 / 3.0)
+    assert exchange["fxc"] == pytest.approx(expected_x, rel=3.0e-13, abs=3.0e-13)
+    assert exchange["diagnostics"]["correlation_component"] == ""
+
+    correlation = np.asarray(pw91["fxc"]) - np.asarray(exchange["fxc"])
+    assert correlation == pytest.approx(_published_pw92_fxc(rho, 1.0e-3), rel=2.0e-5,
+                                        abs=1.0e-9)
+
+    # The arm has to actually move the kernel, or the parity comparison it exists for is
+    # meaningless. VWN and PW92 differ by percent, a thousandfold above the check above.
+    vwn_correlation = (np.asarray(evaluate(rho, True, cutoff, "vwn")["fxc"])
+                       - np.asarray(evaluate(rho, False, cutoff, "vwn")["fxc"]))
+    relative_shift = np.abs(correlation - vwn_correlation) / np.abs(vwn_correlation)
+    assert relative_shift.min() > 1.0e-3
+
+    with pytest.raises(RuntimeError, match="unsupported ALDA correlation"):
+        evaluate(rho, True, cutoff, "pw92")
+
+
+def test_atomic_polarizability_alda_correlation_keyword_defaults_to_vwn():
+    assert psi4.core.get_global_option("ATOMIC_POLARIZABILITY_ALDA_CORRELATION") == "VWN"
+    try:
+        psi4.core.set_global_option("ATOMIC_POLARIZABILITY_ALDA_CORRELATION", "PW91")
+        assert psi4.core.get_global_option("ATOMIC_POLARIZABILITY_ALDA_CORRELATION") == "PW91"
+        with pytest.raises(Exception):
+            psi4.core.set_global_option("ATOMIC_POLARIZABILITY_ALDA_CORRELATION", "PBE")
+    finally:
+        psi4.core.set_global_option("ATOMIC_POLARIZABILITY_ALDA_CORRELATION", "VWN")
 
 
 def test_restricted_alda_components_match_analytic_x_and_refined_vwn_potential_difference():
@@ -1036,3 +1170,117 @@ def test_restricted_alda_source_guard_covers_component_factory_and_production():
     assert production.index("preflight_restricted_alda_grid") < production.index("plan_restricted_alda")
     assert production.index("plan_restricted_alda") < production.index("validate_restricted_alda_duplicate_maps")
     assert "seen_generation" not in source
+
+
+@pytest.mark.scf
+def test_basis_space_arm_partitions_exactly_and_reports_its_own_expansion(frozen_h2o_context):
+    """The basis-space arm must be a partition first and a fit second.
+
+    Whatever the Gaussian space can or cannot represent, the weights it produces are
+    normalised pointwise, so unity and population conservation have to hold to the same
+    tolerance the real-space arm meets. The quality of the fit is reported separately, in the
+    expansion itself, rather than being folded into the partition.
+    """
+    context, formal_from_density, _ = frozen_h2o_context
+    options = {"radial_points": 36, "angular_polar_points": 12, "angular_azimuthal_points": 16,
+               "algorithm": "BASIS-SPACE"}
+    result = psi4.core._atomic_polarizability_compute_isa_weights(context, options)
+    diagnostics = result["diagnostics"]
+
+    assert diagnostics["algorithm"] == "basis-space even-tempered s-Gaussian expansion"
+    assert diagnostics["converged"] is True
+    rows = _rows(result)
+    assert all(math.fsum(row) == pytest.approx(1.0, abs=1.0e-13) for row in rows)
+    assert math.fsum(diagnostics["atomic_populations"]) == pytest.approx(
+        diagnostics["electron_count"], abs=2.0e-10
+    )
+    assert diagnostics["electron_count"] == pytest.approx(formal_from_density, abs=0.1)
+
+    # No auxiliary grid, no radial profile and no tail model enter this arm, so the fields that
+    # describe them must be reported as absent rather than carrying stale real-space values.
+    assert diagnostics["tail_radius_table"] == "none"
+    assert diagnostics["tail_anchor"] == "none"
+    assert diagnostics["tail_fit_failures"] == 0
+    assert diagnostics["radial_nodes"] == []
+    assert diagnostics["log_profiles"] == []
+
+    # Even-tempered series: 9 terms for hydrogen, 12 for oxygen, each a factor of two apart.
+    exponents = diagnostics["gaussian_exponents"]
+    coefficients = diagnostics["gaussian_coefficients"]
+    assert [len(row) for row in exponents] == [12, 9, 9]
+    assert [len(row) for row in coefficients] == [12, 9, 9]
+    assert exponents[0][0] == pytest.approx(0.125)
+    assert all(
+        row[index + 1] == pytest.approx(2.0 * row[index])
+        for row in exponents
+        for index in range(len(row) - 1)
+    )
+    assert exponents[1] == exponents[2]
+    # Nonnegativity is a bound on the fit, so coefficients may sit at zero but never below it.
+    assert all(value >= 0.0 for row in coefficients for value in row)
+    assert diagnostics["bound_coefficients"] <= sum(len(row) for row in coefficients)
+    # Each normalised Gaussian integrates to one, so the coefficient sum is the charge the
+    # fitted shape function carries. Nothing constrains it, so it measures basis completeness.
+    per_site_charge = [math.fsum(row) for row in coefficients]
+    residuals = [abs(charge - population)
+                 for charge, population in zip(per_site_charge, diagnostics["atomic_populations"])]
+    assert max(residuals) == pytest.approx(diagnostics["max_shape_charge_residual"], abs=1.0e-12)
+
+
+@pytest.mark.scf
+def test_the_two_isa_arms_are_distinct_fixed_points_that_cannot_share_a_digest(frozen_h2o_context):
+    """They are different methods, so they must differ in the answer and in the cache key."""
+    context, _, _ = frozen_h2o_context
+    options = {"radial_points": 30, "angular_polar_points": 10, "angular_azimuthal_points": 12}
+    real = psi4.core._atomic_polarizability_compute_isa_weights(context, options)
+    basis = psi4.core._atomic_polarizability_compute_isa_weights(
+        context, dict(options, algorithm="BASIS-SPACE")
+    )
+    repeat = psi4.core._atomic_polarizability_compute_isa_weights(
+        context, dict(options, algorithm="BASIS-SPACE")
+    )
+
+    assert repeat["weights"] == basis["weights"]
+    assert basis["diagnostics"]["context_digest"] != real["diagnostics"]["context_digest"]
+    # Two partitions of one density agree to within a few percent of a charge, but they are
+    # not the same partition, and the gap must be far above the convergence threshold.
+    real_populations = np.asarray(real["diagnostics"]["atomic_populations"])
+    basis_populations = np.asarray(basis["diagnostics"]["atomic_populations"])
+    population_gap = float(np.max(np.abs(real_populations - basis_populations)))
+    assert 1.0e-3 < population_gap < 0.5
+
+    # The series parameters are part of the method, so they must move both.
+    widened = psi4.core._atomic_polarizability_compute_isa_weights(
+        context, dict(options, algorithm="BASIS-SPACE", basis_ratio=2.5)
+    )
+    assert widened["diagnostics"]["context_digest"] != basis["diagnostics"]["context_digest"]
+    assert widened["weights"] != basis["weights"]
+    assert widened["diagnostics"]["gaussian_exponents"][0][1] == pytest.approx(0.3125)
+
+
+@pytest.mark.scf
+def test_basis_space_arm_rejects_unusable_series_and_a_ridge_that_would_set_the_fixed_point(
+    frozen_h2o_context,
+):
+    """The ridge only conditions the solve, so it must stay well under the convergence gate."""
+    context, _, _ = frozen_h2o_context
+    options = {"radial_points": 24, "angular_polar_points": 8, "angular_azimuthal_points": 10,
+               "algorithm": "BASIS-SPACE"}
+    with pytest.raises(RuntimeError, match="unknown ISA algorithm"):
+        psi4.core._atomic_polarizability_compute_isa_weights(context, dict(options, algorithm="A"))
+    with pytest.raises(RuntimeError, match="series and regularization values are invalid"):
+        psi4.core._atomic_polarizability_compute_isa_weights(context, dict(options, basis_ratio=1.0))
+    with pytest.raises(RuntimeError, match="series and regularization values are invalid"):
+        psi4.core._atomic_polarizability_compute_isa_weights(
+            context, dict(options, basis_minimum_exponent=0.0)
+        )
+    with pytest.raises(RuntimeError, match="ridge must stay below the ISA convergence threshold"):
+        psi4.core._atomic_polarizability_compute_isa_weights(
+            context, dict(options, basis_regularization=1.0e-6)
+        )
+    # That same ridge is inert on the real-space arm, so requiring the relation there would
+    # forbid convergence thresholds the real-space arm can legitimately be driven to.
+    real = psi4.core._atomic_polarizability_compute_isa_weights(
+        context, dict(options, algorithm="REAL-SPACE", basis_regularization=1.0e-6)
+    )
+    assert real["diagnostics"]["algorithm"].startswith("real-space")

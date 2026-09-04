@@ -78,24 +78,42 @@ AUXILIARY_PARTITION_BASIS_KEY = "DF_BASIS_ATOMIC_POLARIZABILITY"
 
 
 def _attach_partition_auxiliary_basis(grac_wfn: core.Wavefunction) -> None:
-    """Attach the auxiliary basis when ``ATOMIC_POLARIZABILITY_PARTITION`` is ``CDF``.
+    """Attach the auxiliary basis when either arm that needs one is selected.
+
+    Two arms can ask for an auxiliary space: ``ATOMIC_POLARIZABILITY_PARTITION CDF``
+    fits the density, and ``ATOMIC_POLARIZABILITY_RESPONSE_INTEGRALS DF`` fits the
+    Hessian's two-electron integrals. They share one basis-set key, so when both are
+    on they must name the same basis; naming two would make the run impossible to
+    read as a single-variable comparison, and it fails closed rather than picking one.
 
     Built with ``puream=0`` rather than through the global ``PUREAM`` keyword. ``PUREAM``
     takes precedence over both the per-file setting and the build argument and is global,
     so setting it would silently flip the *orbital* basis to Cartesian as well -- which
     would change the wavefunction rather than the partition.
     """
-    if core.get_global_option("ATOMIC_POLARIZABILITY_PARTITION") != "CDF":
+    wants_partition = core.get_global_option("ATOMIC_POLARIZABILITY_PARTITION") == "CDF"
+    wants_hessian = core.get_global_option("ATOMIC_POLARIZABILITY_RESPONSE_INTEGRALS") == "DF"
+    if not wants_partition and not wants_hessian:
         return
-    name = core.get_global_option("ATOMIC_POLARIZABILITY_CDF_AUX_BASIS")
+    partition_name = core.get_global_option("ATOMIC_POLARIZABILITY_CDF_AUX_BASIS")
+    hessian_name = core.get_global_option("ATOMIC_POLARIZABILITY_RESPONSE_AUX_BASIS")
+    if wants_partition and wants_hessian and partition_name != hessian_name:
+        raise ValidationError(
+            "atomic polarizabilities: the auxiliary partition asks for "
+            f"'{partition_name}' and the density-fitted Hessian asks for '{hessian_name}', "
+            "but both resolve under one sealed auxiliary basis. Name the same basis in "
+            "ATOMIC_POLARIZABILITY_CDF_AUX_BASIS and ATOMIC_POLARIZABILITY_RESPONSE_AUX_BASIS, "
+            "or turn one arm off"
+        )
+    name = partition_name if wants_partition else hessian_name
     auxiliary = core.BasisSet.build(
         grac_wfn.molecule(), AUXILIARY_PARTITION_BASIS_KEY, name, puream=0, quiet=True
     )
     if auxiliary.has_puream():
         raise ValidationError(
-            "atomic polarizabilities: the auxiliary partition basis "
+            "atomic polarizabilities: the auxiliary basis "
             f"'{name}' resolved to spherical functions. A Cartesian auxiliary space is "
-            "a different space with a different partition, so this fails closed rather "
+            "a different space with a different fit, so this fails closed rather "
             "than silently substituting one for the other; check the global PUREAM option"
         )
     grac_wfn.set_basisset(AUXILIARY_PARTITION_BASIS_KEY, auxiliary)

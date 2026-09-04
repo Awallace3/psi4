@@ -175,6 +175,200 @@ def test_wsm_part2_equation_2_rank1_only_penalty_matches_numpy_oracle():
     assert result["policy"]["anchor_rank_limit"] == 1
 
 
+def test_isa_pol_equation_22_anchor_covers_every_rank_and_matches_numpy_oracle():
+    """ISA-Pol eqn (22) anchors every fitted parameter with a reference-scaled weight.
+
+    Misquitta & Stone, Theor. Chem. Acc. 137, 153 (2018), eqn (22) is
+    ``g_kk' = delta_kk' w0 / (1 + (p0_k)^2)``. Under this code's
+    ``min ||W(Ax - b)||^2 + lambda ||D(x - x0)||^2`` objective that is
+    ``D_k = 1/sqrt(1 + p0_k^2)`` with ``lambda = w0``, applied at every rank rather than
+    only at or below ``anchor_rank_limit``. The same fixture as the eqn (2) test above is
+    reused so the two conventions can be read side by side: there the rank-3 pair (3, 3) is
+    unanchored and the six rank-1 rows carry weight exactly one; here all seven are anchored
+    and each row is damped by its own reference value.
+    """
+    rng = np.random.default_rng(2008)
+    points = rng.normal(size=(9, 3)) * 1.7 + [.8, -.4, 1.1]
+    sites = [[0., 0., 0.]]
+    pairs = [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2), (3, 3)]
+    active = np.zeros(120, dtype=bool)
+    active[[_upper_index(first, second) for first, second in pairs]] = True
+
+    truth = np.zeros((15, 15))
+    anchor = np.zeros((15, 15))
+    for index, (first, second) in enumerate(pairs):
+        truth[first, second] = truth[second, first] = .4 + .11 * index
+        anchor[first, second] = anchor[second, first] = 1.8 - .09 * index
+    response = _response(points, sites, [truth])
+    response[np.triu_indices(len(points))] += rng.normal(
+        scale=.03, size=len(points) * (len(points) + 1) // 2)
+    response = np.triu(response) + np.triu(response, 1).T
+
+    result = _refine(
+        points, sites, response, localized=[anchor], active=active,
+        options={"weight_coefficient": 1e-5, "anchor_scaling": "inverse_reference_norm"})[0]
+
+    references = np.array([anchor[first, second] for first, second in pairs])
+    scaling = 1. / np.sqrt(1. + references ** 2)
+    design = _design(points, sites, active)
+    upper = np.triu_indices(len(points))
+    observations = response[upper]
+    row_weights = np.where(upper[0] == upper[1], 1.0, np.sqrt(2.0))
+    augmented = np.vstack((row_weights[:, None] * design, np.sqrt(1e-5) * np.diag(scaling)))
+    targets = np.r_[row_weights * observations, np.sqrt(1e-5) * scaling * references]
+    oracle = np.linalg.lstsq(augmented, targets, rcond=1e-12)[0]
+
+    assert np.asarray(result["solution"])[active] == pytest.approx(oracle, abs=2e-11)
+    # Every fitted parameter is anchored, the rank-3 pair included -- the rank gate is
+    # inactive under this convention.
+    assert result["anchor_variable_count"] == len(pairs)
+    assert result["policy"]["anchor_scaling"] == "inverse_reference_norm"
+    assert result["policy"]["weight_coefficient"] == 1e-5
+    # The weight is self-scaling: it pulls hardest where the reference is smallest, which is
+    # the buried, poorly determined direction, and least where the reference is large.
+    assert np.all(np.diff(scaling[np.argsort(np.abs(references))]) < 0.)
+
+    # The default convention is unchanged by the new keyword: it still reports ``unit`` and
+    # still leaves the rank-3 pair free.
+    default = _refine(points, sites, response, localized=[anchor], active=active,
+                      options={"weight_coefficient": 1e-5})[0]
+    assert default["policy"]["anchor_scaling"] == "unit"
+    assert default["anchor_variable_count"] == 6
+    assert np.asarray(default["solution"])[active] != pytest.approx(oracle, abs=1e-9)
+
+
+def test_isa_pol_gated_separates_the_rescaling_from_the_lifted_rank_gate():
+    """``ISA-POL-GATED`` is the eqn (22) weight behind the ``anchor_rank_limit`` gate.
+
+    The published form changes two things at once relative to ``UNIT``: it rescales the
+    anchor by ``1/(1 + p0^2)`` and it stops excluding the high-rank blocks. Those two have
+    opposite signs in the measured dispersion parity, so the gated variant exists to attribute
+    them separately. Two properties pin it down: at limit 1 only the six rank-1 parameters are
+    anchored, each with the scaled weight; at limit 3 the gate admits every block of a rank-3
+    model, so it must reproduce the ungated arm bit for bit.
+    """
+    rng = np.random.default_rng(2008)
+    points = rng.normal(size=(9, 3)) * 1.7 + [.8, -.4, 1.1]
+    sites = [[0., 0., 0.]]
+    pairs = [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2), (3, 3)]
+    active = np.zeros(120, dtype=bool)
+    active[[_upper_index(first, second) for first, second in pairs]] = True
+
+    truth = np.zeros((15, 15))
+    anchor = np.zeros((15, 15))
+    for index, (first, second) in enumerate(pairs):
+        truth[first, second] = truth[second, first] = .4 + .11 * index
+        anchor[first, second] = anchor[second, first] = 1.8 - .09 * index
+    response = _response(points, sites, [truth])
+    response[np.triu_indices(len(points))] += rng.normal(
+        scale=.03, size=len(points) * (len(points) + 1) // 2)
+    response = np.triu(response) + np.triu(response, 1).T
+
+    def run(scaling, rank_limit):
+        return _refine(points, sites, response, localized=[anchor], active=active,
+                       options={"weight_coefficient": 1e-5, "anchor_scaling": scaling,
+                                "anchor_rank_limit": rank_limit})[0]
+
+    gated = run("inverse_reference_norm_gated", 1)
+    assert gated["policy"]["anchor_scaling"] == "inverse_reference_norm_gated"
+    # Only the six rank-1 parameters are anchored; the rank-3 pair (3, 3) stays free.
+    assert gated["anchor_variable_count"] == 6
+
+    references = np.array([anchor[first, second] for first, second in pairs])
+    scaling = 1. / np.sqrt(1. + references ** 2)
+    design = _design(points, sites, active)
+    upper = np.triu_indices(len(points))
+    row_weights = np.where(upper[0] == upper[1], 1.0, np.sqrt(2.0))
+    penalty = np.zeros((6, len(pairs)))
+    penalty[:, :6] = np.diag(scaling[:6])
+    augmented = np.vstack((row_weights[:, None] * design, np.sqrt(1e-5) * penalty))
+    targets = np.r_[row_weights * response[upper],
+                    np.sqrt(1e-5) * scaling[:6] * references[:6]]
+    oracle = np.linalg.lstsq(augmented, targets, rcond=1e-12)[0]
+    assert np.asarray(gated["solution"])[active] == pytest.approx(oracle, abs=2e-11)
+
+    # At limit 3 the gate admits every block of a rank-3 model, so gating is a no-op.
+    ungated = run("inverse_reference_norm", 1)
+    gated_full = run("inverse_reference_norm_gated", 3)
+    assert gated_full["anchor_variable_count"] == ungated["anchor_variable_count"]
+    assert np.asarray(gated_full["solution"]) == pytest.approx(
+        np.asarray(ungated["solution"]), abs=0.)
+
+    # The gated arm is genuinely between the two conventions: it differs from both.
+    unit = run("unit", 1)
+    assert np.asarray(gated["solution"])[active] != pytest.approx(
+        np.asarray(unit["solution"])[active], abs=1e-10)
+    assert np.asarray(gated["solution"])[active] != pytest.approx(
+        np.asarray(ungated["solution"])[active], abs=1e-10)
+
+
+def test_isa_pol_anchor_composes_with_copy_penalty_normalization():
+    """The copy-penalty spread multiplies the eqn (22) weight instead of replacing it.
+
+    H2 carries one independent parameter and one penalty, so each copy takes half the squared
+    penalty weight -- an anchor row of ``1/sqrt(2)``. Under eqn (22) that factor has to
+    compose with ``1/sqrt(1 + p0^2)`` rather than overwrite it; overwriting would silently
+    discard the reference scaling and leave the flat unit anchor behind. The KKT oracle below
+    pins the composed value: ``lambda D^2`` with ``D^2 = 1/(2 (1 + p0^2))``.
+    """
+    rng = np.random.default_rng(9)
+    sites = [[-.8, 0., 0.], [.8, 0., 0.]]
+    points = rng.normal(size=(10, 3)) * 2.3 + [.2, .4, -.1]
+    active = np.zeros(240, dtype=bool)
+    first = _upper_index(0, 0)
+    second = 120 + _upper_index(0, 0)
+    active[[first, second]] = True
+    equality = np.zeros((1, 240))
+    equality[0, first], equality[0, second] = 1., -1.
+
+    tensors = [np.zeros((15, 15)), np.zeros((15, 15))]
+    tensors[0][0, 0] = tensors[1][0, 0] = 1.7
+    # A reference distinct from the truth, so the penalty actually pulls and its target
+    # contribution is visible in the oracle right-hand side.
+    p0 = 1.2
+    anchor = [np.zeros((15, 15)), np.zeros((15, 15))]
+    anchor[0][0, 0] = anchor[1][0, 0] = p0
+    response = _response(points, sites, tensors)
+
+    result = _refine(points, sites, response, localized=anchor, active=active,
+                     equality=equality, targets=[0.],
+                     options={"anchor_scaling": "inverse_reference_norm"})[0]
+
+    design = _design(points, sites, active)
+    observations = response[np.triu_indices(len(points))]
+    pair_weights = np.array([1. if g == h else np.sqrt(2.)
+                             for g in range(len(points)) for h in range(g, len(points))])
+    weighted_design = pair_weights[:, None] * design
+    weighted_observations = pair_weights * observations
+
+    squared_anchor = 1. / (2. * (1. + p0 * p0))
+    hessian = weighted_design.T @ weighted_design + .001 * squared_anchor * np.eye(2)
+    kkt = np.block([[hessian, np.array([[1.], [-1.]])],
+                    [np.array([[1., -1.]]), np.zeros((1, 1))]])
+    gradient = weighted_design.T @ weighted_observations + .001 * squared_anchor * p0 * np.ones(2)
+    oracle = np.linalg.solve(kkt, np.r_[gradient, 0.])[:2]
+
+    assert np.asarray(result["solution"])[active] == pytest.approx(oracle, abs=3e-12)
+    assert result["anchor_variable_count"] == 1
+    assert result["policy"]["anchor_scaling"] == "inverse_reference_norm"
+
+    # Without the spread each copy keeps a full eqn (22) penalty, doubling the weight.
+    duplicated = _refine(points, sites, response, localized=anchor, active=active,
+                         equality=equality, targets=[0.],
+                         options={"anchor_scaling": "inverse_reference_norm",
+                                  "normalize_copy_penalties": False})[0]
+    duplicated_squared = 1. / (1. + p0 * p0)
+    duplicated_hessian = weighted_design.T @ weighted_design + .001 * duplicated_squared * np.eye(2)
+    duplicated_kkt = np.block([[duplicated_hessian, np.array([[1.], [-1.]])],
+                               [np.array([[1., -1.]]), np.zeros((1, 1))]])
+    duplicated_gradient = (weighted_design.T @ weighted_observations
+                           + .001 * duplicated_squared * p0 * np.ones(2))
+    duplicated_oracle = np.linalg.solve(duplicated_kkt, np.r_[duplicated_gradient, 0.])[:2]
+    assert np.asarray(duplicated["solution"])[active] == pytest.approx(
+        duplicated_oracle, abs=3e-12)
+    assert duplicated["anchor_variable_count"] == 2
+
+
 def test_irregular_harmonics_axis_sentinels_and_laplace_l3_convergence():
     got = np.asarray(psi4.core._atomic_polarizability_test_irregular_harmonics(
         [0., 0., 2.], [0., 0., 0.]))
@@ -282,7 +476,9 @@ def test_noisy_weight4_dipole_diagonal_anchor_is_applied_and_reported():
         "wsm_rank": 3, "hydrogen_rank": 3, "weight_type": 4,
         "weight_coefficient": .001, "anchor_rank_limit": 1, "cutoff": 1e-4,
         "row_weight_policy": "full_symmetric_frobenius",
+        "anchor_scaling": "unit",
         "normalize_copy_penalties": True,
+        "protect_constrained_columns": False,
         "weight_type_definition": "weight type 4: anchor each symmetric block whose two component ranks are at or below anchor_rank_limit",
         "column_pruning_definition": "relative weighted-column-norm threshold",
         "external_oracle_parity_claimed": False,

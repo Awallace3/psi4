@@ -59,7 +59,10 @@ void export_oeprop(py::module &m) {
                 key != "angular_azimuthal_points" && key != "max_iterations" &&
                 key != "convergence" && key != "mix_fraction" && key != "initial_alpha" &&
                 key != "tail_join_factor" && key != "tail_activation_iteration" &&
-                key != "tail_activation_convergence" && key != "electron_count_tolerance")
+                key != "tail_activation_convergence" && key != "electron_count_tolerance" &&
+                key != "tail_radius_table" && key != "tail_anchor" && key != "algorithm" &&
+                key != "basis_ratio" && key != "basis_minimum_exponent" &&
+                key != "basis_regularization")
                 throw PSIEXCEPTION("ISAOptions: unknown option '" + key + "'");
         }
         const auto size_value = [&values](const char* key, std::size_t fallback) {
@@ -68,13 +71,43 @@ void export_oeprop(py::module &m) {
         const auto double_value = [&values](const char* key, double fallback) {
             return values.contains(key) ? values[key].cast<double>() : fallback;
         };
+        const auto string_value = [&values](const char* key, const char* fallback) {
+            return values.contains(key) ? values[key].cast<std::string>() : std::string(fallback);
+        };
+        const auto table_name = string_value("tail_radius_table", "SLATER-1964");
+        ISATailRadiusTable tail_radius_table = ISATailRadiusTable::Slater1964;
+        if (table_name == "SLATER-1964")
+            tail_radius_table = ISATailRadiusTable::Slater1964;
+        else if (table_name == "REFERENCE-HYDROGEN")
+            tail_radius_table = ISATailRadiusTable::ReferenceHydrogen;
+        else
+            throw PSIEXCEPTION("ISAOptions: unknown tail radius table '" + table_name + "'");
+        const auto anchor_name = string_value("tail_anchor", "VALUE");
+        ISATailAnchor tail_anchor = ISATailAnchor::Value;
+        if (anchor_name == "VALUE")
+            tail_anchor = ISATailAnchor::Value;
+        else if (anchor_name == "SLOPE")
+            tail_anchor = ISATailAnchor::Slope;
+        else
+            throw PSIEXCEPTION("ISAOptions: unknown tail anchor '" + anchor_name + "'");
+        const auto algorithm_name = string_value("algorithm", "REAL-SPACE");
+        ISAAlgorithm algorithm = ISAAlgorithm::RealSpace;
+        if (algorithm_name == "REAL-SPACE")
+            algorithm = ISAAlgorithm::RealSpace;
+        else if (algorithm_name == "BASIS-SPACE")
+            algorithm = ISAAlgorithm::BasisSpace;
+        else
+            throw PSIEXCEPTION("ISAOptions: unknown ISA algorithm '" + algorithm_name + "'");
         return ISAOptions(size_value("radial_points", 100), size_value("angular_polar_points", 18),
                           size_value("angular_azimuthal_points", 24), size_value("max_iterations", 120),
                           double_value("convergence", 1.0e-9), double_value("mix_fraction", 1.0),
                           double_value("initial_alpha", 1.0), double_value("tail_join_factor", 1.5),
                           size_value("tail_activation_iteration", 20),
                           double_value("tail_activation_convergence", 1.0e-6),
-                          double_value("electron_count_tolerance", 0.1));
+                          double_value("electron_count_tolerance", 0.1), tail_radius_table, tail_anchor,
+                          algorithm, double_value("basis_ratio", 2.0),
+                          double_value("basis_minimum_exponent", 0.125),
+                          double_value("basis_regularization", 1.0e-12));
     };
     const auto isa_diagnostics_dict = [](const ISADiagnostics& diagnostics) {
         py::dict grid;
@@ -106,6 +139,13 @@ void export_oeprop(py::module &m) {
         result["log_profiles"] = diagnostics.log_profiles;
         result["tail_join_radii"] = diagnostics.tail_join_radii;
         result["tail_alphas"] = diagnostics.tail_alphas;
+        result["tail_radius_table"] = diagnostics.tail_radius_table;
+        result["tail_anchor"] = diagnostics.tail_anchor;
+        result["algorithm"] = diagnostics.algorithm;
+        result["gaussian_exponents"] = diagnostics.gaussian_exponents;
+        result["gaussian_coefficients"] = diagnostics.gaussian_coefficients;
+        result["max_shape_charge_residual"] = diagnostics.max_shape_charge_residual;
+        result["bound_coefficients"] = diagnostics.bound_coefficients;
         result["context_digest"] = diagnostics.context_digest;
         return result;
     };
@@ -336,8 +376,21 @@ void export_oeprop(py::module &m) {
                       else
                           throw PSIEXCEPTION("WSM refinement: unsupported row weight policy '" + value + "'");
                   }
+                  else if (key == "anchor_scaling") {
+                      const auto value = entry.second.cast<std::string>();
+                      if (value == "unit")
+                          options.anchor_scaling = WSMAnchorScaling::Unit;
+                      else if (value == "inverse_reference_norm")
+                          options.anchor_scaling = WSMAnchorScaling::InverseReferenceNorm;
+                      else if (value == "inverse_reference_norm_gated")
+                          options.anchor_scaling = WSMAnchorScaling::InverseReferenceNormGated;
+                      else
+                          throw PSIEXCEPTION("WSM refinement: unsupported anchor scaling '" + value + "'");
+                  }
                   else if (key == "normalize_copy_penalties")
                       options.normalize_copy_penalties = entry.second.cast<bool>();
+                  else if (key == "protect_constrained_columns")
+                      options.protect_constrained_columns = entry.second.cast<bool>();
                   else if (key == "maximum_condition_number")
                       options.maximum_condition_number = entry.second.cast<double>();
                   else throw PSIEXCEPTION("WSM refinement: unknown policy option '" + key + "'");
@@ -378,6 +431,8 @@ void export_oeprop(py::module &m) {
                   values["maximum_weighted_column_norm"] =
                       model.diagnostics.maximum_weighted_column_norm;
                   values["applied_column_cutoff"] = model.diagnostics.applied_column_cutoff;
+                  values["constraint_protected_column_count"] =
+                      model.diagnostics.constraint_protected_column_count;
                   values["row_weight_source"] = model.diagnostics.row_weight_source;
                   py::dict policy;
                   policy["wsm_rank"] = options.wsm_rank;
@@ -391,11 +446,29 @@ void export_oeprop(py::module &m) {
                           ? "full_symmetric_frobenius"
                           : "unique_pair_equal";
                   policy["normalize_copy_penalties"] = options.normalize_copy_penalties;
-                  policy["weight_type_definition"] =
-                      "weight type 4: anchor each symmetric block whose two component ranks are at or below anchor_rank_limit";
+                  policy["protect_constrained_columns"] = options.protect_constrained_columns;
+                  switch (options.anchor_scaling) {
+                      case WSMAnchorScaling::Unit:
+                          policy["anchor_scaling"] = "unit";
+                          policy["weight_type_definition"] =
+                              "weight type 4: anchor each symmetric block whose two component ranks are at or below anchor_rank_limit";
+                          break;
+                      case WSMAnchorScaling::InverseReferenceNorm:
+                          policy["anchor_scaling"] = "inverse_reference_norm";
+                          policy["weight_type_definition"] =
+                              "ISA-Pol eqn (22): g_kk' = w0 / (1 + p0_k^2) over every fitted parameter";
+                          break;
+                      case WSMAnchorScaling::InverseReferenceNormGated:
+                          policy["anchor_scaling"] = "inverse_reference_norm_gated";
+                          policy["weight_type_definition"] =
+                              "ISA-Pol eqn (22) weight g_kk' = w0 / (1 + p0_k^2), restricted to blocks at or below anchor_rank_limit";
+                          break;
+                  }
                   policy["column_pruning_definition"] = options.cutoff == 0.0
                       ? "disabled (SVD-off no-pre-pruning parity)"
-                      : "relative weighted-column-norm threshold";
+                      : (options.protect_constrained_columns
+                             ? "relative weighted-column-norm threshold, constraint columns exempt"
+                             : "relative weighted-column-norm threshold");
                   policy["external_oracle_parity_claimed"] = false;
                   values["policy"] = std::move(policy);
                   result.append(std::move(values));
@@ -418,6 +491,8 @@ void export_oeprop(py::module &m) {
                       options.column_cutoff = entry.second.cast<double>();
                   else if (key == "prune_below_cutoff")
                       options.prune_below_cutoff = entry.second.cast<bool>();
+                  else if (key == "protect_constrained_columns")
+                      options.protect_constrained_columns = entry.second.cast<bool>();
                   else if (key == "maximum_condition_number")
                       options.maximum_condition_number = entry.second.cast<double>();
                   else if (key == "rank_tolerance")
@@ -448,6 +523,7 @@ void export_oeprop(py::module &m) {
               values["solution"] = result.solution;
               values["kept_columns"] = result.kept_columns;
               values["pruned_columns"] = result.pruned_columns;
+              values["constraint_protected_columns"] = result.constraint_protected_columns;
               values["full_to_reduced"] = result.full_to_reduced;
               values["column_weighted_norms"] = result.column_weighted_norms;
               values["singular_values"] = result.singular_values;
@@ -1054,20 +1130,32 @@ void export_oeprop(py::module &m) {
                   blocks.push_back({offsets[block], counts[block], maps[block]});
               detail::validate_restricted_alda_grid_test_only(nbf, point_count, weights, blocks);
           }, "nbf"_a, "point_count"_a, "weights"_a, "offsets"_a, "counts"_a, "maps"_a);
+    // Test seams name the ALDA correlation the way the keyword does, so a Python arm reads
+    // the same as ATOMIC_POLARIZABILITY_ALDA_CORRELATION.
+    const auto alda_correlation_from_name = [](const std::string& name) {
+        if (name == "vwn" || name == "VWN") return ALDACorrelation::VWN;
+        if (name == "pw91" || name == "PW91") return ALDACorrelation::PW91;
+        throw PSIEXCEPTION("atomic polarizability: unsupported ALDA correlation '" + name + "'");
+    };
     m.def("_atomic_polarizability_test_restricted_alda_fxc",
-          [alda_diagnostics_dict](const std::vector<double>& densities, bool include_correlation,
-                                  double density_cutoff) {
+          [alda_diagnostics_dict, alda_correlation_from_name](
+              const std::vector<double>& densities, bool include_correlation,
+              double density_cutoff, const std::string& alda_correlation) {
               const auto result = detail::evaluate_restricted_alda_fxc_test_only(
-                  densities, include_correlation, density_cutoff);
+                  densities, include_correlation, density_cutoff,
+                  alda_correlation_from_name(alda_correlation));
               py::dict values;
               values["fxc"] = result.first;
               values["diagnostics"] = alda_diagnostics_dict(result.second);
               return values;
-          }, "densities"_a, "include_correlation"_a, "density_cutoff"_a);
+          }, "densities"_a, "include_correlation"_a, "density_cutoff"_a,
+             "alda_correlation"_a = "vwn");
     m.def("_atomic_polarizability_test_restricted_alda_kernel",
-          [alda_diagnostics_dict](const std::shared_ptr<FrozenResponseContext>& context,
-                                  bool retain_test_diagnostics) {
-              const auto result = detail::construct_restricted_alda_kernel(context, retain_test_diagnostics);
+          [alda_diagnostics_dict, alda_correlation_from_name](
+              const std::shared_ptr<FrozenResponseContext>& context, bool retain_test_diagnostics,
+              const std::string& alda_correlation) {
+              const auto result = detail::construct_restricted_alda_kernel(
+                  context, retain_test_diagnostics, alda_correlation_from_name(alda_correlation));
               py::dict values;
               values["transition_order"] = "(i,a) occupied-major/virtual-minor";
               values["transitions"] = result.transitions;
@@ -1077,7 +1165,8 @@ void export_oeprop(py::module &m) {
               values["transition_values"] = result.transition_values;
               values["diagnostics"] = alda_diagnostics_dict(result.diagnostics);
               return values;
-          }, "context"_a, "retain_test_diagnostics"_a = false);
+          }, "context"_a, "retain_test_diagnostics"_a = false,
+             "alda_correlation"_a = "vwn");
     m.def("_atomic_polarizability_test_restricted_alda_ao_collocation_target",
           [](const std::shared_ptr<FrozenResponseContext>& context) {
               const auto result = detail::collocate_restricted_alda_ao_target_test_only(context);
@@ -1441,8 +1530,20 @@ void export_oeprop(py::module &m) {
           "block_map_sizes"_a, "memory_bytes"_a, "retain_test_diagnostics"_a,
           "density_cutoff"_a);
     m.def("_atomic_polarizability_estimate_restricted_c1_jk",
-          [](std::size_t nbf, std::size_t nocc, std::size_t nvir, std::size_t memory_bytes) {
-              const auto plan = detail::plan_restricted_c1_jk(nbf, nocc, nvir, memory_bytes);
+          [](std::size_t nbf, std::size_t nocc, std::size_t nvir, std::size_t memory_bytes,
+             const std::string& integrals, std::size_t naux) {
+              // Spelled the same way the keyword is, so a test that pins the planner and a
+              // test that pins the keyword cannot drift apart.
+              ResponseIntegrals treatment;
+              if (integrals == "EXACT")
+                  treatment = ResponseIntegrals::Exact;
+              else if (integrals == "DF")
+                  treatment = ResponseIntegrals::DensityFitted;
+              else
+                  throw PSIEXCEPTION("restricted C1 transition primitives: unsupported integral "
+                                     "treatment '" + integrals + "'");
+              const auto plan =
+                  detail::plan_restricted_c1_jk(nbf, nocc, nvir, memory_bytes, treatment, naux);
               py::dict result;
               result["algorithm"] = plan.algorithm;
               result["nbf"] = plan.nbf;
@@ -1461,6 +1562,8 @@ void export_oeprop(py::module &m) {
               result["jk_coefficient_bytes"] = plan.jk_coefficient_bytes;
               result["jk_ao_bytes"] = plan.jk_ao_bytes;
               result["direct_jk_scratch_bytes"] = plan.direct_jk_scratch_bytes;
+              result["naux"] = plan.naux;
+              result["df_workspace_bytes"] = plan.df_workspace_bytes;
               result["integral_engine_allowance_bytes"] = plan.integral_engine_allowance_bytes;
               result["projection_bytes"] = plan.projection_bytes;
               result["estimated_bytes"] = plan.estimated_bytes;
@@ -1470,7 +1573,7 @@ void export_oeprop(py::module &m) {
               result["memory_semantics"] = plan.memory_semantics;
               return result;
           },
-          "nbf"_a, "nocc"_a, "nvir"_a, "memory_bytes"_a);
+          "nbf"_a, "nocc"_a, "nvir"_a, "memory_bytes"_a, "integrals"_a = "EXACT", "naux"_a = 0);
     const auto site_pair_response_list =
         [](const std::vector<SitePairResponse>& responses) {
             py::list output;

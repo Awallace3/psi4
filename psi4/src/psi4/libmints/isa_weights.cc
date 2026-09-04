@@ -229,6 +229,22 @@ struct Profile {
         return std::max(kLogFloor, value);
     }
 
+    // Derivative of the same Hermite polynomial pchip() evaluates. The monotone limiter
+    // in pchip() is not reproduced here: where it binds, the sampled profile is not
+    // monotone across the interval and its logarithmic slope is not a usable tail
+    // exponent, so the caller is required to reject a nonpositive result instead.
+    double pchip_derivative(double radius) const {
+        if (radius <= nodes.front()) return 0.0;
+        if (radius >= nodes.back()) return slopes.back();
+        const auto upper = std::upper_bound(nodes.begin(), nodes.end(), radius);
+        const std::size_t i = static_cast<std::size_t>(upper - nodes.begin() - 1);
+        const double h = nodes[i + 1] - nodes[i];
+        const double t = (radius - nodes[i]) / h;
+        const double t2 = t * t;
+        return (6.0 * t2 - 6.0 * t) * (logs[i] - logs[i + 1]) / h +
+               (3.0 * t2 - 4.0 * t + 1.0) * slopes[i] + (3.0 * t2 - 2.0 * t) * slopes[i + 1];
+    }
+
     double eval(double radius) const {
         if (!std::isfinite(radius) || radius < 0.0) throw PSIEXCEPTION("ISA: profile radius is invalid");
         double value;
@@ -269,7 +285,8 @@ double solve_tail_alpha(double value_at_join, double join, double charge) {
     return alpha;
 }
 
-void fit_tail(Profile& profile, const Quadrature& radial, double scale, double join) {
+void fit_tail(Profile& profile, const Quadrature& radial, double scale, double join,
+              ISATailAnchor anchor) {
     const double log_value = profile.pchip(join);
     const double value = std::exp(log_value);
     // Integrate on [join, infinity) directly.  Filtering a quadrature built for
@@ -284,12 +301,32 @@ void fit_tail(Profile& profile, const Quadrature& radial, double scale, double j
                   std::exp(static_cast<long double>(profile.pchip(radius_double)));
     }
     const double charge_double = static_cast<double>(charge);
-    const double alpha = solve_tail_alpha(value, join, charge_double);
+    // Both anchors conserve the charge the sampled profile carries beyond the join.
+    // That fixes one of the two tail parameters; the anchor fixes the other.
+    double alpha = 0.0;
+    double log_amplitude = 0.0;
+    if (anchor == ISATailAnchor::Value) {
+        // Continuous value at the join, so the exponent absorbs the charge.
+        alpha = solve_tail_alpha(value, join, charge_double);
+        log_amplitude = log_value + alpha * join;
+    } else {
+        // Continuous logarithmic slope at the join, so the value is free to step.
+        alpha = -profile.pchip_derivative(join);
+        if (!std::isfinite(alpha) || alpha <= 0.0)
+            throw PSIEXCEPTION("ISA: slope-anchored tail needs a decaying profile at the join radius");
+        if (!std::isfinite(charge_double) || charge_double <= 0.0)
+            throw PSIEXCEPTION("ISA: exponential tail fit has invalid value or charge");
+        const double unit_charge = tail_charge_for_alpha(1.0, join, alpha);
+        if (!std::isfinite(unit_charge) || unit_charge <= 0.0)
+            throw PSIEXCEPTION("ISA: slope-anchored tail could not be normalised");
+        log_amplitude = std::log(charge_double / unit_charge) + alpha * join;
+    }
+    if (!std::isfinite(log_amplitude)) throw PSIEXCEPTION("ISA: exponential tail amplitude is invalid");
     profile.gaussian = false;
     profile.has_tail = true;
     profile.tail_join = join;
     profile.tail_alpha = alpha;
-    profile.tail_log_amplitude = log_value + alpha * join;
+    profile.tail_log_amplitude = log_amplitude;
 }
 
 std::vector<double> probabilities(const SitePosition& point, const std::vector<SitePosition>& sites,
@@ -323,15 +360,16 @@ long double exponential_overlap_tail(double log_amplitude, double exponent, doub
 
 double normalized_overlap(const Profile& first_input, const Profile& second_input,
                           const Quadrature& radial, double radial_scale, double default_tail_join,
-                          std::size_t inner_integration_points, bool complete_missing_tails) {
+                          std::size_t inner_integration_points, bool complete_missing_tails,
+                          ISATailAnchor tail_anchor) {
     Profile first = first_input;
     Profile second = second_input;
     if (complete_missing_tails) {
         // At first tail activation the old profile is still raw while the new
         // profile has a fitted tail. Fit a comparison-only tail to the old
         // profile so both functions have their own continuous piecewise form.
-        if (!first.has_tail) fit_tail(first, radial, radial_scale, default_tail_join);
-        if (!second.has_tail) fit_tail(second, radial, radial_scale, default_tail_join);
+        if (!first.has_tail) fit_tail(first, radial, radial_scale, default_tail_join, tail_anchor);
+        if (!second.has_tail) fit_tail(second, radial, radial_scale, default_tail_join, tail_anchor);
     }
     const bool analytic_tail = first.has_tail && second.has_tail;
     long double cross = 0.0L, norm_first = 0.0L, norm_second = 0.0L;
@@ -414,6 +452,29 @@ double slater_radius(int atomic_number) {
 
 namespace {
 
+const char* tail_radius_table_name(ISATailRadiusTable table) {
+    return table == ISATailRadiusTable::Slater1964 ? "Slater-1964-bohr-v1"
+                                                   : "Slater-1964-bohr-v1 with the reviewed reference hydrogen radius";
+}
+
+const char* tail_anchor_name(ISATailAnchor anchor) {
+    return anchor == ISATailAnchor::Value ? "value continuous at r0" : "log-slope continuous at r0";
+}
+
+// Radius that sets where the exponential tail takes over. This is deliberately
+// separate from the radial quadrature mapping scale: selecting a table must move
+// the join and leave the grid, the pro-atom sampling and the covalent bond graph
+// alone, so the two choices stay independently testable.
+double isa_tail_radius(int atomic_number, ISATailRadiusTable table) {
+    // 0.500 A, the radius the reviewed reference calculation's own published tail
+    // parameters imply for hydrogen. Oxygen's implied radius agrees with the Slater
+    // table to 2e-4 bohr and no other element has been checked, so the rest of the
+    // table is carried over unchanged rather than guessed at.
+    constexpr double kReferenceHydrogenRadius = 0.9449;
+    if (table == ISATailRadiusTable::ReferenceHydrogen && atomic_number == 1) return kReferenceHydrogenRadius;
+    return slater_radius(atomic_number);
+}
+
 void validate_inputs(const std::vector<SitePosition>& sites, const std::vector<SitePosition>& points,
                      const std::vector<double>& weights, const std::vector<int>& atomic_numbers) {
     if (sites.empty()) throw PSIEXCEPTION("ISA: at least one real nuclear site is required");
@@ -453,6 +514,493 @@ struct CoreResult {
     ISADiagnostics diagnostics;
 };
 
+// ---------------------------------------------------------------------------
+// Basis-space ISA.
+//
+// The shape function on site a is w_a(r) = sum_k c_ak g_k(r) with
+// g_k(r) = (alpha_k/pi)^{3/2} exp(-alpha_k r^2), so every g_k integrates to one and
+// sum_k c_ak is the charge w_a carries. Each iteration refits c_a to the current
+// stockholder density rho_a = rho * p_a by minimising the squared error in the Gaussian
+// metric subject to c_a >= 0.
+//
+// Because the g_k are spherical about the site, the projection integral
+// <g_k | rho_a^sph> equals <g_k | rho_a> exactly: the spherical average is already
+// performed by the projection and never has to be formed. That is what removes the
+// auxiliary atom-centred grid, the radial interpolation and the tail model in one step,
+// and it is the whole reason this arm exists as a separate method rather than a finer
+// discretisation of the real-space one.
+
+const char* isa_algorithm_name(ISAAlgorithm algorithm) {
+    return algorithm == ISAAlgorithm::RealSpace ? "real-space log-PCHIP profile with exponential tail"
+                                                : "basis-space even-tempered s-Gaussian expansion";
+}
+
+// Even-tempered s series, alpha_k = minimum * ratio^k, generated upward. The count grows
+// by three terms per row of the periodic table, which for the default ratio of two is
+// what keeps the tightest exponent above the 1s scale of the row while leaving the
+// diffuse end of the series fixed.
+std::vector<double> isa_gaussian_exponents(int atomic_number, double ratio, double minimum) {
+    if (atomic_number < 1) throw PSIEXCEPTION("ISA: basis-space shape functions require a positive Z");
+    std::size_t count = 9;
+    if (atomic_number > 2) count += 3;
+    if (atomic_number > 10) count += 3;
+    if (atomic_number > 18) count += 3;
+    if (atomic_number > 36) count += 3;
+    if (atomic_number > 54) count += 3;
+    std::vector<double> exponents(count);
+    double value = minimum;
+    for (std::size_t k = 0; k < count; ++k) {
+        if (!std::isfinite(value) || value <= 0.0)
+            throw PSIEXCEPTION("ISA: basis-space exponent series is not finite and positive");
+        exponents[k] = value;
+        value *= ratio;
+    }
+    return exponents;
+}
+
+// Correlation form of the Gaussian overlap: S_kl / sqrt(S_kk S_ll) reduces exactly to
+// [2 sqrt(alpha_k alpha_l) / (alpha_k + alpha_l)]^{3/2}, which is bounded by one. Solving
+// in this scaling is not cosmetic: an even-tempered series is deliberately close to
+// linearly dependent, and the unscaled normal equations lose most of their digits.
+struct GaussianMetric {
+    std::vector<double> exponents;
+    std::vector<double> scaled_overlap;  // row-major, unit diagonal
+    std::vector<double> diagonal_scale;  // sqrt(S_kk)
+
+    explicit GaussianMetric(std::vector<double> alphas) : exponents(std::move(alphas)) {
+        const std::size_t n = exponents.size();
+        scaled_overlap.assign(n * n, 0.0);
+        diagonal_scale.resize(n);
+        for (std::size_t k = 0; k < n; ++k)
+            diagonal_scale[k] = std::pow(exponents[k] / (2.0 * kPi), 0.75);
+        for (std::size_t k = 0; k < n; ++k) {
+            for (std::size_t l = 0; l < n; ++l) {
+                const double base = 2.0 * std::sqrt(exponents[k] * exponents[l]) /
+                                    (exponents[k] + exponents[l]);
+                scaled_overlap[k * n + l] = std::pow(base, 1.5);
+            }
+        }
+    }
+
+    std::size_t size() const { return exponents.size(); }
+
+    // ||sum_k d_k g_k||^2 in the same metric, from unscaled coefficients.
+    double square_norm(const std::vector<double>& coefficients) const {
+        const std::size_t n = size();
+        KahanSum total;
+        for (std::size_t k = 0; k < n; ++k) {
+            const double left = coefficients[k] * diagonal_scale[k];
+            for (std::size_t l = 0; l < n; ++l)
+                total.add(left * scaled_overlap[k * n + l] * coefficients[l] * diagonal_scale[l]);
+        }
+        return total.sum;
+    }
+};
+
+// Cholesky of the passive block with a relative ridge. Returns false when the block is
+// not positive definite even with the ridge, which the caller must treat as a failure
+// rather than a reason to fall back to some other factorisation.
+bool passive_cholesky(const GaussianMetric& metric, const std::vector<std::size_t>& passive,
+                      double ridge, std::vector<double>& factor) {
+    const std::size_t n = metric.size();
+    const std::size_t m = passive.size();
+    factor.assign(m * m, 0.0);
+    for (std::size_t i = 0; i < m; ++i)
+        for (std::size_t j = 0; j < m; ++j)
+            factor[i * m + j] = metric.scaled_overlap[passive[i] * n + passive[j]];
+    for (std::size_t i = 0; i < m; ++i) factor[i * m + i] += ridge;
+    for (std::size_t i = 0; i < m; ++i) {
+        for (std::size_t j = 0; j <= i; ++j) {
+            KahanSum sum;
+            sum.add(factor[i * m + j]);
+            for (std::size_t k = 0; k < j; ++k) sum.add(-factor[i * m + k] * factor[j * m + k]);
+            if (i == j) {
+                if (!(sum.sum > 0.0) || !std::isfinite(sum.sum)) return false;
+                factor[i * m + i] = std::sqrt(sum.sum);
+            } else {
+                factor[i * m + j] = sum.sum / factor[j * m + j];
+            }
+        }
+        for (std::size_t j = i + 1; j < m; ++j) factor[i * m + j] = 0.0;
+    }
+    return true;
+}
+
+void passive_solve(const std::vector<double>& factor, std::vector<double>& rhs) {
+    const std::size_t m = rhs.size();
+    for (std::size_t i = 0; i < m; ++i) {
+        KahanSum sum;
+        sum.add(rhs[i]);
+        for (std::size_t k = 0; k < i; ++k) sum.add(-factor[i * m + k] * rhs[k]);
+        rhs[i] = sum.sum / factor[i * m + i];
+    }
+    for (std::size_t i = m; i-- > 0;) {
+        KahanSum sum;
+        sum.add(rhs[i]);
+        for (std::size_t k = i + 1; k < m; ++k) sum.add(-factor[k * m + i] * rhs[k]);
+        rhs[i] = sum.sum / factor[i * m + i];
+    }
+}
+
+// Lawson-Hanson active set for min ||sum_k c_k g_k - rho_a||^2 subject to c >= 0, written
+// on the scaled normal equations. The bound is enforced exactly rather than by a penalty
+// so that the returned shape function is nonnegative everywhere by construction, which is
+// what lets the pointwise partition be evaluated in log space without a floor.
+std::vector<double> nonnegative_least_squares(const GaussianMetric& metric,
+                                              const std::vector<double>& projection, double ridge,
+                                              std::size_t& bound_count) {
+    const std::size_t n = metric.size();
+    std::vector<double> scaled_rhs(n);
+    for (std::size_t k = 0; k < n; ++k) scaled_rhs[k] = projection[k] / metric.diagonal_scale[k];
+
+    std::vector<double> solution(n, 0.0);
+    std::vector<bool> is_passive(n, false);
+    std::vector<double> gradient(n), factor, trial;
+    const double tolerance = 1.0e-13 * std::max(1.0, *std::max_element(scaled_rhs.begin(), scaled_rhs.end()));
+    // Each outer pass frees at most one bound coefficient, and the inner pass strictly
+    // shrinks the passive set, so this bound cannot be reached by a converging solve.
+    const std::size_t iteration_limit = 8 * n + 32;
+
+    for (std::size_t outer = 0; outer < iteration_limit; ++outer) {
+        for (std::size_t k = 0; k < n; ++k) {
+            KahanSum sum;
+            sum.add(scaled_rhs[k]);
+            for (std::size_t l = 0; l < n; ++l) sum.add(-metric.scaled_overlap[k * n + l] * solution[l]);
+            gradient[k] = sum.sum;
+        }
+        std::size_t candidate = n;
+        double best = tolerance;
+        for (std::size_t k = 0; k < n; ++k) {
+            if (is_passive[k]) continue;
+            if (gradient[k] > best) {
+                best = gradient[k];
+                candidate = k;
+            }
+        }
+        if (candidate == n) break;
+        is_passive[candidate] = true;
+
+        for (std::size_t inner = 0; inner < iteration_limit; ++inner) {
+            std::vector<std::size_t> passive;
+            for (std::size_t k = 0; k < n; ++k)
+                if (is_passive[k]) passive.push_back(k);
+            if (passive.empty()) break;
+            if (!passive_cholesky(metric, passive, ridge, factor))
+                throw PSIEXCEPTION("ISA: basis-space passive-set normal equations are not positive definite");
+            trial.assign(passive.size(), 0.0);
+            for (std::size_t i = 0; i < passive.size(); ++i) trial[i] = scaled_rhs[passive[i]];
+            passive_solve(factor, trial);
+
+            double smallest = std::numeric_limits<double>::infinity();
+            for (double value : trial) smallest = std::min(smallest, value);
+            if (smallest > 0.0) {
+                std::fill(solution.begin(), solution.end(), 0.0);
+                for (std::size_t i = 0; i < passive.size(); ++i) solution[passive[i]] = trial[i];
+                break;
+            }
+            double step = 1.0;
+            for (std::size_t i = 0; i < passive.size(); ++i) {
+                if (trial[i] > 0.0) continue;
+                const double current = solution[passive[i]];
+                const double denominator = current - trial[i];
+                if (denominator <= 0.0) continue;
+                step = std::min(step, current / denominator);
+            }
+            for (std::size_t i = 0; i < passive.size(); ++i) {
+                const std::size_t k = passive[i];
+                solution[k] += step * (trial[i] - solution[k]);
+            }
+            for (std::size_t i = 0; i < passive.size(); ++i)
+                if (solution[passive[i]] <= 0.0) {
+                    solution[passive[i]] = 0.0;
+                    is_passive[passive[i]] = false;
+                }
+        }
+    }
+
+    bound_count = 0;
+    for (std::size_t k = 0; k < n; ++k) {
+        if (!std::isfinite(solution[k]) || solution[k] < 0.0)
+            throw PSIEXCEPTION("ISA: basis-space coefficients are not finite and nonnegative");
+        if (solution[k] == 0.0) ++bound_count;
+        solution[k] /= metric.diagonal_scale[k];
+    }
+    return solution;
+}
+
+// log w_a at squared distance r2. Evaluated by log-sum-exp so that a grid point far
+// enough out for every term to underflow still yields a usable ratio, which is exactly
+// where the outer shells of a molecular grid live.
+double basis_log_shape(const GaussianMetric& metric, const std::vector<double>& coefficients, double r2) {
+    const std::size_t n = metric.size();
+    double maximum = -std::numeric_limits<double>::infinity();
+    std::vector<double> terms(n, -std::numeric_limits<double>::infinity());
+    for (std::size_t k = 0; k < n; ++k) {
+        if (coefficients[k] <= 0.0) continue;
+        terms[k] = std::log(coefficients[k]) + 1.5 * std::log(metric.exponents[k] / kPi) -
+                   metric.exponents[k] * r2;
+        maximum = std::max(maximum, terms[k]);
+    }
+    if (!std::isfinite(maximum)) return -std::numeric_limits<double>::infinity();
+    KahanSum total;
+    for (std::size_t k = 0; k < n; ++k)
+        if (terms[k] > -std::numeric_limits<double>::infinity()) total.add(std::exp(terms[k] - maximum));
+    if (!(total.sum > 0.0)) return -std::numeric_limits<double>::infinity();
+    return maximum + std::log(total.sum);
+}
+
+CoreResult solve_basis_space(const std::vector<SitePosition>& sites,
+                             const std::vector<SitePosition>& output_points,
+                             const std::vector<double>& output_weights,
+                             const std::vector<int>& atomic_numbers,
+                             const std::vector<double>& supplied_output_density,
+                             const ISAOptions& options, double formal_electron_count,
+                             bool enforce_electron_count, std::size_t test_min_iterations = 0) {
+    validate_inputs(sites, output_points, output_weights, atomic_numbers);
+    std::vector<double> output_density = supplied_output_density;
+    if (output_density.size() != output_points.size()) throw PSIEXCEPTION("ISA: output density cardinality is invalid");
+    clamp_density(output_density);
+
+    const std::size_t nsite = sites.size();
+    const std::size_t npoint = output_points.size();
+
+    KahanSum electron_sum;
+    for (std::size_t point = 0; point < npoint; ++point)
+        electron_sum.add(output_weights[point] * output_density[point]);
+    if (!std::isfinite(electron_sum.sum) || electron_sum.sum <= 0.0)
+        throw PSIEXCEPTION("ISA: molecular-grid electron integration is not finite and positive");
+    const double electron_error = std::abs(electron_sum.sum - formal_electron_count);
+    if (enforce_electron_count && electron_error > options.electron_count_tolerance())
+        throw PSIEXCEPTION("ISA: molecular-grid electron count exceeds the configured integration tolerance");
+
+    std::vector<GaussianMetric> metrics;
+    metrics.reserve(nsite);
+    std::vector<std::vector<double>> coefficients(nsite);
+    for (std::size_t site = 0; site < nsite; ++site) {
+        metrics.emplace_back(isa_gaussian_exponents(atomic_numbers[site], options.basis_ratio(),
+                                                    options.basis_minimum_exponent()));
+        // W-init: a single normalised Gaussian carrying one electron, placed on the series
+        // member closest in log to the requested exponent so the default is exact.
+        const auto& alphas = metrics[site].exponents;
+        std::size_t nearest = 0;
+        double best = std::numeric_limits<double>::infinity();
+        for (std::size_t k = 0; k < alphas.size(); ++k) {
+            const double gap = std::abs(std::log(alphas[k] / options.initial_alpha()));
+            if (gap < best) {
+                best = gap;
+                nearest = k;
+            }
+        }
+        coefficients[site].assign(alphas.size(), 0.0);
+        coefficients[site][nearest] = 1.0;
+    }
+
+    // Squared site-to-point distances are the only geometry the iteration touches, and
+    // they do not change, so they are formed once.
+    std::vector<double> square_distance(nsite * npoint);
+    for (std::size_t site = 0; site < nsite; ++site)
+        for (std::size_t point = 0; point < npoint; ++point) {
+            const double dx = output_points[point][0] - sites[site][0];
+            const double dy = output_points[point][1] - sites[site][1];
+            const double dz = output_points[point][2] - sites[site][2];
+            square_distance[site * npoint + point] = dx * dx + dy * dy + dz * dz;
+        }
+
+    ISADiagnostics diagnostics;
+    diagnostics.electron_count = electron_sum.sum;
+    diagnostics.formal_electron_count = formal_electron_count;
+    diagnostics.electron_count_absolute_error = electron_error;
+    diagnostics.electron_count_relative_error = electron_error / std::max(1.0, std::abs(formal_electron_count));
+    diagnostics.grid_profile.radial_points = 0;
+    diagnostics.grid_profile.angular_points = 0;
+    diagnostics.grid_profile.shell_point_count = 0;
+    diagnostics.grid_profile.angular_rule = "none; the projection integral performs the spherical average";
+    diagnostics.grid_profile.radial_rule = "none; every integral is analytic or on the molecular grid";
+    diagnostics.grid_profile.radius_table = "none";
+    for (std::size_t site = 0; site < nsite; ++site)
+        diagnostics.grid_profile.atom_scales.push_back(slater_radius(atomic_numbers[site]));
+
+    std::vector<double> previous_populations(nsite, 0.0);
+    std::vector<double> previous_output_weights(npoint * nsite, 0.0);
+    std::vector<double> partition(npoint * nsite, 0.0);
+    std::vector<double> log_shape(nsite);
+
+    for (std::size_t iteration = 0; iteration < options.max_iterations(); ++iteration) {
+        // Pointwise stockholder weights from the current shape functions.
+        for (std::size_t point = 0; point < npoint; ++point) {
+            double maximum = -std::numeric_limits<double>::infinity();
+            for (std::size_t site = 0; site < nsite; ++site) {
+                log_shape[site] = basis_log_shape(metrics[site], coefficients[site],
+                                                  square_distance[site * npoint + point]);
+                maximum = std::max(maximum, log_shape[site]);
+            }
+            if (!std::isfinite(maximum)) throw PSIEXCEPTION("ISA: no finite pro-atom log shape at a point");
+            KahanSum denominator;
+            for (std::size_t site = 0; site < nsite; ++site) {
+                const double value = std::exp(log_shape[site] - maximum);
+                partition[point * nsite + site] = value;
+                denominator.add(value);
+            }
+            if (!std::isfinite(denominator.sum) || denominator.sum <= 0.0)
+                throw PSIEXCEPTION("ISA: log-sum-exp promolecule is invalid");
+            for (std::size_t site = 0; site < nsite; ++site)
+                partition[point * nsite + site] /= denominator.sum;
+        }
+
+        // Project the stockholder density onto each site's Gaussian space and refit.
+        double residual = 0.0;
+        diagnostics.bound_coefficients = 0;
+        for (std::size_t site = 0; site < nsite; ++site) {
+            const auto& metric = metrics[site];
+            const std::size_t n = metric.size();
+            std::vector<KahanSum> projection(n);
+            for (std::size_t point = 0; point < npoint; ++point) {
+                const double share = output_weights[point] * output_density[point] *
+                                     partition[point * nsite + site];
+                if (share == 0.0) continue;
+                const double r2 = square_distance[site * npoint + point];
+                for (std::size_t k = 0; k < n; ++k)
+                    projection[k].add(share * std::pow(metric.exponents[k] / kPi, 1.5) *
+                                      std::exp(-metric.exponents[k] * r2));
+            }
+            std::vector<double> rhs(n);
+            for (std::size_t k = 0; k < n; ++k) {
+                if (!std::isfinite(projection[k].sum))
+                    throw PSIEXCEPTION("ISA: basis-space projection integral is not finite");
+                rhs[k] = projection[k].sum;
+            }
+            std::size_t bound = 0;
+            auto updated = nonnegative_least_squares(metric, rhs, options.basis_regularization(), bound);
+            diagnostics.bound_coefficients += bound;
+
+            if (options.mix_fraction() < 1.0) {
+                const double eta = options.mix_fraction();
+                for (std::size_t k = 0; k < n; ++k)
+                    updated[k] = (1.0 - eta) * coefficients[site][k] + eta * updated[k];
+            }
+
+            std::vector<double> difference(n);
+            for (std::size_t k = 0; k < n; ++k) difference[k] = updated[k] - coefficients[site][k];
+            const double change = metric.square_norm(difference);
+            const double scale = metric.square_norm(updated);
+            if (!std::isfinite(change) || change < 0.0 || !std::isfinite(scale) || scale <= 0.0)
+                throw PSIEXCEPTION("ISA: basis-space shape-function norm is not finite and positive");
+            residual = std::max(residual, std::sqrt(change / scale));
+            coefficients[site] = std::move(updated);
+        }
+        diagnostics.max_overlap_residual = residual;
+
+        std::vector<double> populations(nsite, 0.0);
+        diagnostics.max_weight_change = 0.0;
+        for (std::size_t point = 0; point < npoint; ++point)
+            for (std::size_t site = 0; site < nsite; ++site) {
+                const std::size_t index = point * nsite + site;
+                diagnostics.max_weight_change =
+                    std::max(diagnostics.max_weight_change,
+                             std::abs(partition[index] - previous_output_weights[index]));
+                populations[site] += output_weights[point] * output_density[point] * partition[index];
+            }
+        diagnostics.max_population_change = 0.0;
+        for (std::size_t site = 0; site < nsite; ++site)
+            diagnostics.max_population_change = std::max(
+                diagnostics.max_population_change, std::abs(populations[site] - previous_populations[site]));
+        previous_populations = std::move(populations);
+        previous_output_weights = partition;
+        diagnostics.iterations = iteration + 1;
+        if (residual <= options.convergence() && iteration + 1 >= test_min_iterations) {
+            diagnostics.converged = true;
+            break;
+        }
+    }
+    if (!diagnostics.converged) {
+        std::ostringstream message;
+        message << "ISA: basis-space stockholder iteration did not converge; max shape residual = "
+                << std::setprecision(17) << diagnostics.max_overlap_residual;
+        throw PSIEXCEPTION(message.str());
+    }
+
+    CoreResult result;
+    result.weights.resize(npoint * nsite);
+    result.diagnostics = std::move(diagnostics);
+    result.diagnostics.atomic_populations.assign(nsite, 0.0);
+    result.diagnostics.max_unity_residual = 0.0;
+    for (std::size_t point = 0; point < npoint; ++point) {
+        double maximum = -std::numeric_limits<double>::infinity();
+        for (std::size_t site = 0; site < nsite; ++site) {
+            log_shape[site] = basis_log_shape(metrics[site], coefficients[site],
+                                              square_distance[site * npoint + point]);
+            maximum = std::max(maximum, log_shape[site]);
+        }
+        if (!std::isfinite(maximum)) throw PSIEXCEPTION("ISA: no finite pro-atom log shape at a point");
+        std::vector<double> p(nsite);
+        KahanSum denominator;
+        for (std::size_t site = 0; site < nsite; ++site) {
+            p[site] = std::exp(log_shape[site] - maximum);
+            denominator.add(p[site]);
+        }
+        if (!std::isfinite(denominator.sum) || denominator.sum <= 0.0)
+            throw PSIEXCEPTION("ISA: log-sum-exp promolecule is invalid");
+        long double sum = 0.0L;
+        std::size_t largest = 0;
+        for (std::size_t site = 0; site < nsite; ++site) {
+            p[site] /= denominator.sum;
+            sum += p[site];
+            if (p[site] > p[largest]) largest = site;
+        }
+        const double closure = static_cast<double>(1.0L - sum);
+        if (p[largest] + closure >= 0.0 && p[largest] + closure <= 1.0) p[largest] += closure;
+        else {
+            KahanSum renormalize;
+            for (double value : p) renormalize.add(value);
+            for (double& value : p) value /= renormalize.sum;
+        }
+        KahanSum check;
+        for (double value : p) check.add(value);
+        const double unity = std::abs(check.sum - 1.0);
+        result.diagnostics.max_unity_residual = std::max(result.diagnostics.max_unity_residual, unity);
+        if (unity > kUnityTolerance) throw PSIEXCEPTION("ISA: final pointwise partition unity failed");
+        KahanSum partitioned_density;
+        for (std::size_t site = 0; site < nsite; ++site) {
+            const double value = p[site];
+            if (!std::isfinite(value) || value < 0.0 || value > 1.0)
+                throw PSIEXCEPTION("ISA: final partition weight is not finite and bounded");
+            result.weights[point * nsite + site] = value;
+            partitioned_density.add(output_density[point] * value);
+            result.diagnostics.atomic_populations[site] +=
+                output_weights[point] * output_density[point] * value;
+        }
+        const double density_residual = std::abs(partitioned_density.sum - output_density[point]);
+        const double density_bound = 32.0 * std::numeric_limits<double>::epsilon() *
+                                     std::max(1.0, std::abs(output_density[point]));
+        if (density_residual > density_bound) throw PSIEXCEPTION("ISA: pointwise density partition failed");
+    }
+    KahanSum population_sum;
+    for (double population : result.diagnostics.atomic_populations) population_sum.add(population);
+    result.diagnostics.total_charge_residual = population_sum.sum - electron_sum.sum;
+    const double charge_bound = 64.0 * std::numeric_limits<double>::epsilon() *
+                                std::max(1.0, std::abs(electron_sum.sum)) * npoint;
+    if (std::abs(result.diagnostics.total_charge_residual) > charge_bound)
+        throw PSIEXCEPTION("ISA: integrated stockholder population conservation failed");
+    result.diagnostics.algorithm = isa_algorithm_name(ISAAlgorithm::BasisSpace);
+    result.diagnostics.tail_radius_table = "none";
+    result.diagnostics.tail_anchor = "none";
+    // Recompute the charge the fitted shape functions miss against the populations that are
+    // actually published, not against the ones the last iteration saw. The two differ by one
+    // iteration's worth of movement, and a diagnostic that cannot be reproduced from the
+    // numbers reported next to it is worse than no diagnostic.
+    result.diagnostics.max_shape_charge_residual = 0.0;
+    for (std::size_t site = 0; site < nsite; ++site) {
+        result.diagnostics.gaussian_exponents.push_back(metrics[site].exponents);
+        result.diagnostics.gaussian_coefficients.push_back(coefficients[site]);
+        KahanSum charge;
+        for (double value : coefficients[site]) charge.add(value);
+        result.diagnostics.max_shape_charge_residual =
+            std::max(result.diagnostics.max_shape_charge_residual,
+                     std::abs(charge.sum - result.diagnostics.atomic_populations[site]));
+    }
+    return result;
+}
+
 CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SitePosition>& output_points,
                  const std::vector<double>& output_weights, const std::vector<int>& atomic_numbers,
                  const std::vector<double>& supplied_output_density,
@@ -474,7 +1022,8 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
     profiles.reserve(nsite);
     for (std::size_t site = 0; site < nsite; ++site) {
         scales[site] = slater_radius(atomic_numbers[site]);
-        joins[site] = options.tail_join_factor() * scales[site];
+        joins[site] = options.tail_join_factor() *
+                      isa_tail_radius(atomic_numbers[site], options.tail_radius_table());
         radial[site] = mapped_radial(options.radial_points(), scales[site]);
         profiles.push_back(Profile::initial(radial[site].nodes, options.initial_alpha()));
     }
@@ -573,7 +1122,7 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
             provisional_residual = std::max(
                 provisional_residual,
                 normalized_overlap(profiles[site], updated[site], radial[site], scales[site], joins[site],
-                                   options.radial_points(), false));
+                                   options.radial_points(), false, options.tail_anchor()));
         tail_active = tail_active || iteration + 1 >= options.tail_activation_iteration() ||
                       provisional_residual <= options.tail_activation_convergence();
         bool tail_fit_failed_this_iteration = false;
@@ -582,7 +1131,8 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
                 try {
                     if (inject_tail_fit_failure_iteration == iteration + 1)
                         throw PSIEXCEPTION("ISA test injection: tail fit failure");
-                    fit_tail(updated[site], radial[site], scales[site], joins[site]);
+                    fit_tail(updated[site], radial[site], scales[site], joins[site],
+                             options.tail_anchor());
                 } catch (const std::exception&) {
                     tail_fit_failed_this_iteration = true;
                     ++diagnostics.tail_fit_failures;
@@ -602,7 +1152,7 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
         for (std::size_t site = 0; site < nsite; ++site) {
             const double residual = normalized_overlap(
                 profiles[site], updated[site], radial[site], scales[site], joins[site],
-                options.radial_points(), tail_active);
+                options.radial_points(), tail_active, options.tail_anchor());
             diagnostics.max_overlap_residual = std::max(diagnostics.max_overlap_residual, residual);
         }
 
@@ -688,6 +1238,9 @@ CoreResult solve(const std::vector<SitePosition>& sites, const std::vector<SiteP
                                 std::max(1.0, std::abs(electron_sum.sum)) * output_points.size();
     if (std::abs(result.diagnostics.total_charge_residual) > charge_bound)
         throw PSIEXCEPTION("ISA: integrated stockholder population conservation failed");
+    result.diagnostics.algorithm = isa_algorithm_name(ISAAlgorithm::RealSpace);
+    result.diagnostics.tail_radius_table = tail_radius_table_name(options.tail_radius_table());
+    result.diagnostics.tail_anchor = tail_anchor_name(options.tail_anchor());
     for (const auto& rule : radial) result.diagnostics.radial_nodes.push_back(rule.nodes);
     for (const auto& profile : profiles) {
         result.diagnostics.log_profiles.push_back(profile.logs);
@@ -858,6 +1411,24 @@ std::string context_digest(const FrozenResponseContext& context, const ISAOption
     digest.scalar(static_cast<std::uint64_t>(options.tail_activation_iteration()));
     digest.scalar(options.tail_activation_convergence());
     digest.scalar(options.electron_count_tolerance());
+    digest.string(tail_radius_table_name(options.tail_radius_table()));
+    digest.string(tail_anchor_name(options.tail_anchor()));
+    for (int atom = 0; atom < context.molecule()->natom(); ++atom)
+        digest.scalar(isa_tail_radius(static_cast<int>(context.molecule()->Z(atom)),
+                                      options.tail_radius_table()));
+    // The two arms solve different fixed points, so they must never be able to collide on one
+    // digest even when every shared option matches. The series parameters go in unconditionally
+    // for the same reason: a cached real-space result must not be reused for a basis-space run.
+    digest.string(isa_algorithm_name(options.algorithm()));
+    digest.scalar(options.basis_ratio());
+    digest.scalar(options.basis_minimum_exponent());
+    digest.scalar(options.basis_regularization());
+    for (int atom = 0; atom < context.molecule()->natom(); ++atom) {
+        const auto exponents = isa_gaussian_exponents(static_cast<int>(context.molecule()->Z(atom)),
+                                                      options.basis_ratio(),
+                                                      options.basis_minimum_exponent());
+        digest.vector(exponents);
+    }
     std::ostringstream stream;
     stream << std::hex << std::setw(16) << std::setfill('0') << digest.hash;
     return stream.str();
@@ -869,13 +1440,19 @@ ISAOptions::ISAOptions(std::size_t radial_points, std::size_t angular_polar_poin
                        std::size_t angular_azimuthal_points, std::size_t max_iterations,
                        double convergence, double mix_fraction, double initial_alpha,
                        double tail_join_factor, std::size_t tail_activation_iteration,
-                       double tail_activation_convergence, double electron_count_tolerance)
+                       double tail_activation_convergence, double electron_count_tolerance,
+                       ISATailRadiusTable tail_radius_table, ISATailAnchor tail_anchor,
+                       ISAAlgorithm algorithm, double basis_ratio, double basis_minimum_exponent,
+                       double basis_regularization)
     : radial_points_(radial_points), angular_polar_points_(angular_polar_points),
       angular_azimuthal_points_(angular_azimuthal_points), max_iterations_(max_iterations),
       convergence_(convergence), mix_fraction_(mix_fraction), initial_alpha_(initial_alpha),
       tail_join_factor_(tail_join_factor), tail_activation_iteration_(tail_activation_iteration),
       tail_activation_convergence_(tail_activation_convergence),
-      electron_count_tolerance_(electron_count_tolerance) {
+      electron_count_tolerance_(electron_count_tolerance),
+      tail_radius_table_(tail_radius_table), tail_anchor_(tail_anchor), algorithm_(algorithm),
+      basis_ratio_(basis_ratio), basis_minimum_exponent_(basis_minimum_exponent),
+      basis_regularization_(basis_regularization) {
     if (radial_points_ < 4 || angular_polar_points_ < 2 || angular_azimuthal_points_ < 4 ||
         max_iterations_ == 0 || tail_activation_iteration_ == 0 || !std::isfinite(convergence_) ||
         convergence_ <= 0.0 || !std::isfinite(mix_fraction_) || mix_fraction_ <= 0.0 ||
@@ -886,6 +1463,16 @@ ISAOptions::ISAOptions(std::size_t radial_points, std::size_t angular_polar_poin
         throw PSIEXCEPTION("ISAOptions: grid, iteration, tail, mixing, and tolerance values are invalid");
     if (angular_polar_points_ > std::numeric_limits<std::size_t>::max() / angular_azimuthal_points_)
         throw PSIEXCEPTION("ISAOptions: angular grid cardinality overflows");
+    if (!std::isfinite(basis_ratio_) || basis_ratio_ <= 1.0 ||
+        !std::isfinite(basis_minimum_exponent_) || basis_minimum_exponent_ <= 0.0 ||
+        !std::isfinite(basis_regularization_) || basis_regularization_ < 0.0)
+        throw PSIEXCEPTION("ISAOptions: basis-space series and regularization values are invalid");
+    // The ridge is a conditioning floor for the constrained solve. Letting it approach the
+    // convergence threshold would let it, rather than the density, decide the fixed point.
+    // Only the basis-space arm ever applies it, so requiring the relation on the real-space
+    // arm would forbid convergence thresholds that arm can legitimately be driven to.
+    if (algorithm_ == ISAAlgorithm::BasisSpace && basis_regularization_ >= convergence_)
+        throw PSIEXCEPTION("ISAOptions: the basis-space ridge must stay below the ISA convergence threshold");
 }
 
 ISAWeights compute_isa_weights(std::shared_ptr<const FrozenResponseContext> context, const ISAOptions& options) {
@@ -928,24 +1515,34 @@ ISAWeights compute_isa_weights(std::shared_ptr<const FrozenResponseContext> cont
         throw PSIEXCEPTION("ISA: formal frozen electron count is not finite and positive");
     validate_inputs(context->sites(), points, context->grid_weights(), atomic_numbers);
     auto output_density = ao_density(*context, points, &maps);
-    // Reuse one AO buffer for the deterministic serial auxiliary-grid pass.
-    // Matrix/basis dimensions were validated by ao_density above.
-    auto* shell_basis = const_cast<BasisSet*>(context->basis().get());
-    const auto shell_da = context->Da();
-    const auto shell_db = context->Db();
-    std::vector<double> shell_phi(static_cast<std::size_t>(shell_basis->nbf()));
-    const auto evaluator = [shell_basis, shell_da, shell_db, shell_phi = std::move(shell_phi)](
-                               const SitePosition& point) mutable {
-        shell_basis->compute_phi(shell_phi.data(), point[0], point[1], point[2]);
-        KahanSum contraction;
-        for (std::size_t mu = 0; mu < shell_phi.size(); ++mu)
-            for (std::size_t nu = 0; nu < shell_phi.size(); ++nu)
-                contraction.add((shell_da->get(mu, nu) + shell_db->get(mu, nu)) *
-                                shell_phi[mu] * shell_phi[nu]);
-        return contraction.sum;
-    };
-    auto result = solve(context->sites(), points, context->grid_weights(), atomic_numbers, output_density,
-                        evaluator, options, formal_electrons, true);
+    CoreResult result;
+    if (options.algorithm() == ISAAlgorithm::BasisSpace) {
+        // Every integral the basis-space arm needs is either analytic in the Gaussian metric or a
+        // sum over the frozen grid that already carries the density, so it never re-evaluates the
+        // density off that grid. Building the AO evaluator here would cost a basis pass per
+        // auxiliary point for a solver that has no auxiliary grid to spend it on.
+        result = solve_basis_space(context->sites(), points, context->grid_weights(), atomic_numbers,
+                                   output_density, options, formal_electrons, true);
+    } else {
+        // Reuse one AO buffer for the deterministic serial auxiliary-grid pass.
+        // Matrix/basis dimensions were validated by ao_density above.
+        auto* shell_basis = const_cast<BasisSet*>(context->basis().get());
+        const auto shell_da = context->Da();
+        const auto shell_db = context->Db();
+        std::vector<double> shell_phi(static_cast<std::size_t>(shell_basis->nbf()));
+        const auto evaluator = [shell_basis, shell_da, shell_db, shell_phi = std::move(shell_phi)](
+                                   const SitePosition& point) mutable {
+            shell_basis->compute_phi(shell_phi.data(), point[0], point[1], point[2]);
+            KahanSum contraction;
+            for (std::size_t mu = 0; mu < shell_phi.size(); ++mu)
+                for (std::size_t nu = 0; nu < shell_phi.size(); ++nu)
+                    contraction.add((shell_da->get(mu, nu) + shell_db->get(mu, nu)) *
+                                    shell_phi[mu] * shell_phi[nu]);
+            return contraction.sum;
+        };
+        result = solve(context->sites(), points, context->grid_weights(), atomic_numbers, output_density,
+                       evaluator, options, formal_electrons, true);
+    }
     result.diagnostics.context_digest = context_digest(*context, options);
     context->verify_basis_unchanged();
     return ISAWeights(std::move(context), std::move(result.weights), std::move(result.diagnostics));
@@ -1086,7 +1683,7 @@ ISAOverlapTestResult test_isa_overlap(
     second.tail_log_amplitude = second_tail_log_amplitude;
     const auto unused_mapped_rule = mapped_radial(std::max<std::size_t>(4, integration_points), 1.0);
     return {normalized_overlap(first, second, unused_mapped_rule, 1.0, tail_join,
-                               integration_points, true)};
+                               integration_points, true, ISATailAnchor::Value)};
 }
 
 std::vector<double> test_isa_tail_probabilities(const std::vector<double>& tail_log_amplitudes,
