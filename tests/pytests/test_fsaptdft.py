@@ -49,7 +49,11 @@ units angstrom
     )
     psi4.core.clean_timers()
     _ = psi4.energy("sapt(dft)", molecule=mol)
-    compute_time_saptdft_fi_ein = psi4.core.get_timer_dict()["SAPT(DFT) Energy"]
+    compute_time_saptdft_fi_ein = next(
+        record
+        for record in psi4.core.get_timer_records().values()
+        if record["timer_name"] == "SAPT(DFT) Energy"
+    )
     csv_text = psi4.driver.p4util.write_timer_csv("saptdft_fi_useEin_timers.csv")
     df = pd.read_csv("saptdft_fi_useEin_timers.csv")
     os.remove("saptdft_fi_useEin_timers.csv")
