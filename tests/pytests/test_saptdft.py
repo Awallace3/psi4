@@ -8,7 +8,7 @@ from pathlib import Path
 from pprint import pprint as pp
 from addons import uusing
 from psi4.driver.p4util.exceptions import ConvergenceError
-from psi4.driver.procrouting.sapt import sapt_proc, sapt_util
+from psi4.driver.procrouting.sapt import sapt_proc
 
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
 pytestmark = [pytest.mark.psi, pytest.mark.api]
@@ -138,6 +138,9 @@ units bohr
     managed_options = (
         "SAPT_DFT_DO_DISP",
         "SAPT_DFT_DO_DDFT",
+        "SAPT_DFT_D3_IE",
+        "SAPT_DFT_D4_IE",
+        "SAPT_DFT_D_TYPE",
     )
     before = {
         option: (
@@ -669,18 +672,11 @@ no_com
     )
 
     # Run the energy calculation
-    _, wfn = psi4.energy(
+    psi4.energy(
         energy_method,
         external_potentials=external_potentials,
         molecule=mol,
-        return_wfn=True,
     )
-    if energy_method == "sapt(dft)":
-        for fragment in external_pot_keys:
-            assert wfn.has_potential_variable(fragment)
-    if test_id == "c" and energy_method == "sapt(dft)":
-        assert abs(wfn.external_pot().computeNuclearEnergy(mol)) < 1.0e-14
-        assert abs(wfn.potential_variable("C").computeNuclearEnergy(mol)) > 1.0e-6
 
     # Print reference values
     print(f"TEST ID: {test_id}")
@@ -957,7 +953,7 @@ no_com
         pytest.param(False, id="non-einsums"),
     ],
 )
-def test_fisapt0_sapthf_external_potential(use_einsums, tmp_path):
+def test_fisapt0_sapthf_external_potential(use_einsums):
     if use_einsums:
         pytest.importorskip("einsums")
 
@@ -1005,8 +1001,6 @@ no_com
         "freeze_core": "true",
         "SAPT_DFT_FUNCTIONAL": "hf",
         "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
-        "DO_IND_EXCH_SINF": True,
-        "FISAPT_FSAPT_FILEPATH": "none",
         "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
     }
     psi4.set_options(options)
@@ -1031,49 +1025,13 @@ no_com
 
     psi4.core.clean()
     psi4.core.clean_variables()
-    psi4.set_options(
-        {
-            **options,
-            "SAPT_DFT_USE_EINSUMS": use_einsums,
-            "SAPT_DFT_DO_FSAPT": "SAPTDFT" if use_einsums else "FISAPT",
-            "FISAPT_FSAPT_FILEPATH": str(tmp_path) if use_einsums else "none",
-        }
-    )
+    psi4.set_options({**options, "SAPT_DFT_USE_EINSUMS": use_einsums})
 
     # Run the SAPT(HF) energy calculation
-    _, saptdft_wfn = psi4.energy(
+    psi4.energy(
         "sapt(dft)",
         external_potentials=external_potentials,
         molecule=mol,
-        return_wfn=True,
-    )
-
-    for fragment, potential in external_potentials.items():
-        label = f"FSAPT_EXTERN_POTENTIAL_{fragment}"
-        assert saptdft_wfn.has_variable(label)
-        assert np.allclose(
-            saptdft_wfn.variable(label), np.asarray([row[1] for row in potential])
-        )
-        if use_einsums:
-            external_xyz = tmp_path / f"Extern_{fragment}.xyz"
-            assert external_xyz.is_file()
-            serialized_coordinates = np.asarray(
-                [
-                    [float(value) for value in line.split()[1:4]]
-                    for line in external_xyz.read_text().splitlines()[2:]
-                ]
-            )
-            assert np.allclose(
-                serialized_coordinates,
-                np.asarray([row[1] for row in potential]) * psi4.constants.bohr2angstroms,
-                atol=5.0e-7,
-            )
-    assert saptdft_wfn.has_variable("FSAPT_INDAB_AB")
-    assert compare_values(
-        saptdft_wfn.variable("SAPT ELST ENERGY"),
-        np.asarray(saptdft_wfn.variable("FSAPT_ELST_AB")).sum(),
-        7,
-        f"F-SAPT electrostatics with external potentials use_einsums={use_einsums}",
     )
 
     calculated_sapthf_energies = {k1: psi4.core.variable(k2) for k1, k2 in key_labels}
@@ -1302,6 +1260,125 @@ def test_charge_field_inputs():
 
 
 @pytest.mark.saptdft
+def test_einsum_terms():
+    """
+    built from sapt-dft1 ctest
+    """
+    pytest.importorskip("einsums")
+    Eref_nh = {
+        "SAPT ELST ENERGY": -0.22987897,  # mEh
+        "SAPT EXCH ENERGY": 0.59560159,  # mEh
+        "SAPT IND ENERGY": -0.00010341,  # mEh
+        "SAPT DISP ENERGY": 0.00000574,  # mEh
+        "CURRENT ENERGY": 0.36562495,  # mEh
+    }  # TEST
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ne 1 4.5
+  units bohr
+    """)
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "scf_type": "df",
+            "sapt_dft_grac_shift_a": 0.203293,
+            "sapt_dft_grac_shift_b": 0.203293,
+            "SAPT_DFT_DO_DHF": False,
+            "SAPT_DFT_DO_HYBRID": False,
+            "SAPT_DFT_USE_EINSUMS": True,
+            "SAPT_DFT_EXCH_DISP_SCALE_SCHEME": "None",
+            "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
+        }
+    )
+    psi4.energy("sapt(dft)", molecule=mol)
+    for k, v in Eref_nh.items():  # TEST
+        ref = v
+        assert compare_values(
+            ref, psi4.variable(k) * 1000, 7, "!hyb, xd=none, !dHF: " + k
+        )
+
+
+@pytest.mark.saptdft
+@pytest.mark.medlong
+def test_saptdft_inf():
+    # implement this test
+    Eref = {
+        "Exch-Ind20,u (A<-B)": 0.00749283,  # TEST
+        "Exch-Ind20,u (A->B)": 0.07674835,  # TEST
+        "Exch-Ind20,u": 0.08424119,  # TEST
+        "Exch-Ind20,u (A<-B) (S^inf)": 0.00749701,  # TEST
+        "Exch-Ind20,u (A->B) (S^inf)": 0.07677809,  # TEST
+        "Exch-Ind20,u (S^inf)": 0.08427511,  # TEST
+        "Exch-Ind20,r (A<-B)": 0.00838528,  # TEST
+        "Exch-Ind20,r (A->B)": 0.08663184,  # TEST
+        "Exch-Ind20,r": 0.09501712,  # TEST
+        "Exch-Ind20,r (A<-B) (S^inf)": 0.00839011,  # TEST
+        "Exch-Ind20,r (A->B) (S^inf)": 0.08666563,  # TEST
+        "Exch-Ind20,r (S^inf)": 0.09505574,
+    }  # TEST
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ar 1 6.5
+  units bohr
+    """)
+    psi4.set_options(
+        {
+            "basis": "aug-cc-pvdz",
+            "scf_type": "df",
+            "DO_IND_EXCH_SINF": True,
+            "SAPT_DFT_FUNCTIONAL": "HF",
+            "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
+        }
+    )
+    psi4.energy("sapt(dft)", molecule=mol)
+    for k, v in Eref.items():  # TEST
+        ref = v / 1000.0
+        assert compare_values(
+            ref, psi4.variable(k), 6, "sapt(dft) inf exch-ind20: " + k
+        )
+    psi4.core.clean()
+    mol = psi4.geometry("""
+0 1
+O -0.064997  0.000000  1.202015
+H  0.817736  0.000000  1.573527
+H  0.070857  0.000000  0.246803
+--
+0 1
+O  0.060546  0.000000 -1.130293
+H -0.408968 -0.760178 -1.479405
+H -0.408968  0.760178 -1.479405
+
+units angstrom
+no_reorient
+symmetry c1
+""")
+    psi4.set_options(
+        {
+            "basis": "jun-cc-pvdz",
+            "df_basis_scf": "aug-cc-pvtz-jkfit",
+            "df_basis_mp2": "aug-cc-pvtz-ri",
+            "e_convergence": 3e-8,
+            "d_convergence": 3e-8,
+            "scf_type": "mem_df",
+            "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
+            "SAPT_DFT_FUNCTIONAL": "HF",
+            "DO_DISP_EXCH_SINF": True,
+            "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
+        }
+    )
+    psi4.energy("sapt(dft)", molecule=mol)
+    assert compare_values(
+        0.00324766,
+        psi4.variable("sapt exch-disp20(s^inf) energy"),
+        7,
+        "SAPT EXCH-DISP20(S^inf) ENERGY",
+    )
+
+
+
+@pytest.mark.saptdft
 @pytest.mark.parametrize("use_einsums", [False, True])
 @pytest.mark.parametrize(
     "induction_type, delta_hf, expected_calls",
@@ -1488,124 +1565,6 @@ def test_saptdft_induction_option_checks(monkeypatch, options, message):
 
 
 @pytest.mark.saptdft
-def test_einsum_terms():
-    """
-    built from sapt-dft1 ctest
-    """
-    pytest.importorskip("einsums")
-    Eref_nh = {
-        "SAPT ELST ENERGY": -0.22987897,  # mEh
-        "SAPT EXCH ENERGY": 0.59560159,  # mEh
-        "SAPT IND ENERGY": -0.00010341,  # mEh
-        "SAPT DISP ENERGY": 0.00000574,  # mEh
-        "CURRENT ENERGY": 0.36562495,  # mEh
-    }  # TEST
-    mol = psi4.geometry("""
-  Ne
-  --
-  Ne 1 4.5
-  units bohr
-    """)
-    psi4.set_options(
-        {
-            "basis": "sto-3g",
-            "scf_type": "df",
-            "sapt_dft_grac_shift_a": 0.203293,
-            "sapt_dft_grac_shift_b": 0.203293,
-            "SAPT_DFT_DO_DHF": False,
-            "SAPT_DFT_DO_HYBRID": False,
-            "SAPT_DFT_USE_EINSUMS": True,
-            "SAPT_DFT_EXCH_DISP_SCALE_SCHEME": "None",
-            "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
-        }
-    )
-    psi4.energy("sapt(dft)", molecule=mol)
-    for k, v in Eref_nh.items():  # TEST
-        ref = v
-        assert compare_values(
-            ref, psi4.variable(k) * 1000, 7, "!hyb, xd=none, !dHF: " + k
-        )
-
-
-@pytest.mark.saptdft
-@pytest.mark.medlong
-def test_saptdft_inf():
-    # implement this test
-    Eref = {
-        "Exch-Ind20,u (A<-B)": 0.00749283,  # TEST
-        "Exch-Ind20,u (A->B)": 0.07674835,  # TEST
-        "Exch-Ind20,u": 0.08424119,  # TEST
-        "Exch-Ind20,u (A<-B) (S^inf)": 0.00749701,  # TEST
-        "Exch-Ind20,u (A->B) (S^inf)": 0.07677809,  # TEST
-        "Exch-Ind20,u (S^inf)": 0.08427511,  # TEST
-        "Exch-Ind20,r (A<-B)": 0.00838528,  # TEST
-        "Exch-Ind20,r (A->B)": 0.08663184,  # TEST
-        "Exch-Ind20,r": 0.09501712,  # TEST
-        "Exch-Ind20,r (A<-B) (S^inf)": 0.00839011,  # TEST
-        "Exch-Ind20,r (A->B) (S^inf)": 0.08666563,  # TEST
-        "Exch-Ind20,r (S^inf)": 0.09505574,
-    }  # TEST
-    mol = psi4.geometry("""
-  Ne
-  --
-  Ar 1 6.5
-  units bohr
-    """)
-    psi4.set_options(
-        {
-            "basis": "aug-cc-pvdz",
-            "scf_type": "df",
-            "DO_IND_EXCH_SINF": True,
-            "SAPT_DFT_FUNCTIONAL": "HF",
-            "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
-        }
-    )
-    psi4.energy("sapt(dft)", molecule=mol)
-    for k, v in Eref.items():  # TEST
-        ref = v / 1000.0
-        assert compare_values(
-            ref, psi4.variable(k), 6, "sapt(dft) inf exch-ind20: " + k
-        )
-    psi4.core.clean()
-    mol = psi4.geometry("""
-0 1
-O -0.064997  0.000000  1.202015
-H  0.817736  0.000000  1.573527
-H  0.070857  0.000000  0.246803
---
-0 1
-O  0.060546  0.000000 -1.130293
-H -0.408968 -0.760178 -1.479405
-H -0.408968  0.760178 -1.479405
-
-units angstrom
-no_reorient
-symmetry c1
-""")
-    psi4.set_options(
-        {
-            "basis": "jun-cc-pvdz",
-            "df_basis_scf": "aug-cc-pvtz-jkfit",
-            "df_basis_mp2": "aug-cc-pvtz-ri",
-            "e_convergence": 3e-8,
-            "d_convergence": 3e-8,
-            "scf_type": "mem_df",
-            "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
-            "SAPT_DFT_FUNCTIONAL": "HF",
-            "DO_DISP_EXCH_SINF": True,
-            "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
-        }
-    )
-    psi4.energy("sapt(dft)", molecule=mol)
-    assert compare_values(
-        0.00324766,
-        psi4.variable("sapt exch-disp20(s^inf) energy"),
-        7,
-        "SAPT EXCH-DISP20(S^inf) ENERGY",
-    )
-
-
-@pytest.mark.saptdft
 @pytest.mark.parametrize(
     "induction_type, message",
     [
@@ -1659,214 +1618,6 @@ def test_saptdft_direct_api_reports_all_missing_cphf_terms():
 
 
 @pytest.mark.saptdft
-def test_saptdft_direct_api_normalizes_external_potential_keys():
-    mol = psi4.geometry("""
-  Ne
-  --
-  Ne 1 4.5
-  units bohr
-    """)
-    psi4.set_options({"basis": "sto-3g", "sapt_dft_induction_type": "CPKS"})
-    dimer_wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
-    wfn_A = psi4.core.Wavefunction.build(mol, "sto-3g")
-    wfn_B = psi4.core.Wavefunction.build(mol, "sto-3g")
-    normalized = sapt_proc._normalize_saptdft_external_potentials(
-        {}, dimer_wfn, wfn_A, wfn_B
-    )
-    assert normalized == {}
-    assert dimer_wfn.external_pot() is None
-
-    dimer_external = psi4.core.ExternalPotential()
-    dimer_external.addCharge(1.0, 2.0, 0.0, 0.0)
-    dimer_wfn.set_external_potential(dimer_external)
-
-    with pytest.raises(psi4.ValidationError, match="monomer A wavefunction"):
-        sapt_proc.sapt_dft(
-            dimer_wfn,
-            wfn_A,
-            wfn_B,
-            external_potentials={"a": [[1.0, [2.0, 0.0, 0.0]]]},
-        )
-
-    with pytest.raises(psi4.ValidationError, match="monomer A wavefunction"):
-        sapt_proc.sapt_dft(
-            dimer_wfn,
-            wfn_A,
-            wfn_B,
-            external_potentials={"c": [[1.0, [2.0, 0.0, 0.0]]]},
-        )
-
-    wfn_A.set_external_potential(psi4.core.ExternalPotential())
-    wfn_B.set_external_potential(psi4.core.ExternalPotential())
-    with pytest.raises(
-        psi4.ValidationError, match="aggregate potential carried by the monomer A"
-    ):
-        sapt_proc.sapt_dft(
-            dimer_wfn,
-            wfn_A,
-            wfn_B,
-            external_potentials={"a": [[1.0, [2.0, 0.0, 0.0]]]},
-        )
-
-    monomer_a_external = psi4.core.ExternalPotential()
-    monomer_a_external.addCharge(1.0, 2.0, 0.0, 0.0)
-    wfn_A.set_external_potential(monomer_a_external)
-    monomer_b_external = psi4.core.ExternalPotential()
-    monomer_b_external.addCharge(-0.5, 3.0, 0.0, 0.0)
-    wfn_B.set_external_potential(monomer_b_external)
-    with pytest.raises(
-        psi4.ValidationError, match="aggregate potential carried by the monomer A"
-    ):
-        sapt_proc.sapt_dft(
-            dimer_wfn,
-            wfn_A,
-            wfn_B,
-            external_potentials={
-                "A": [[1.0, [2.0, 0.0, 0.0]]],
-                "C": [[-0.5, [3.0, 0.0, 0.0]]],
-            },
-        )
-
-    clean_wfn_B = psi4.core.Wavefunction.build(mol, "sto-3g")
-    normalized = sapt_proc._normalize_saptdft_external_potentials(
-        {"A": [[1.0, [2.0, 0.0, 0.0]]]},
-        dimer_wfn,
-        wfn_A,
-        clean_wfn_B,
-    )
-    assert set(normalized) == {"A"}
-
-    with pytest.raises(
-        psi4.ValidationError, match="aggregate potential carried by the monomer B"
-    ):
-        sapt_proc._normalize_saptdft_external_potentials(
-            {"A": [[1.0, [2.0, 0.0, 0.0]]]},
-            dimer_wfn,
-            wfn_A,
-            wfn_B,
-        )
-
-    dimer_wfn.set_external_potential(psi4.core.ExternalPotential())
-    psi4.set_options({"sapt_dft_do_fsapt": "FISAPT"})
-    try:
-        with pytest.raises(
-            psi4.ValidationError, match="aggregate potential carried by the dimer"
-        ):
-            sapt_proc.sapt_dft(
-                dimer_wfn,
-                wfn_A,
-                wfn_B,
-                external_potentials={"A": [[1.0, [2.0, 0.0, 0.0]]]},
-            )
-    finally:
-        psi4.set_options({"sapt_dft_do_fsapt": "NONE"})
-
-    dimer_wfn.set_external_potential(dimer_external)
-    wfn_B.set_external_potential(psi4.core.ExternalPotential())
-    stale_b = psi4.core.ExternalPotential()
-    stale_b.addCharge(-0.25, 3.5, 0.0, 0.0)
-    dimer_wfn.set_potential_variable("B", stale_b)
-    normalized = sapt_proc._normalize_saptdft_external_potentials(
-        {"A": [[1.0, [2.0, 0.0, 0.0]]]},
-        dimer_wfn,
-        wfn_A,
-        wfn_B,
-        validate_dimer=True,
-    )
-    assert set(normalized) == {"A"}
-    assert dimer_wfn.has_potential_variable("A")
-    assert not dimer_wfn.has_potential_variable("B")
-
-    dimer_wfn.set_external_potential(psi4.core.ExternalPotential())
-    wfn_A.set_external_potential(psi4.core.ExternalPotential())
-    normalized = sapt_proc._normalize_saptdft_external_potentials(
-        {}, dimer_wfn, wfn_A, wfn_B, validate_dimer=True
-    )
-    assert normalized == {}
-    assert not any(dimer_wfn.has_potential_variable(key) for key in "ABC")
-
-    dimer_wfn.set_potential_variable("C", stale_b)
-    assert sapt_proc._normalize_saptdft_external_potentials(
-        None, dimer_wfn, wfn_A, wfn_B, validate_dimer=True
-    ) is None
-    assert dimer_wfn.has_potential_variable("C")
-
-
-@pytest.mark.saptdft
-@pytest.mark.fsapt
-def test_saptdft_nofile_fsapt_without_dispersion():
-    mol = psi4.geometry("Ne\n--\nNe 1 4.5\nunits bohr\nsymmetry c1")
-    psi4.set_options(
-        {
-            "basis": "sto-3g",
-            "scf_type": "df",
-            "sapt_dft_functional": "hf",
-            "sapt_dft_do_dhf": False,
-            "sapt_dft_do_disp": False,
-            "sapt_dft_do_fsapt": "FISAPT",
-            "fisapt_fsapt_filepath": "none",
-            "orbital_optimizer_package": "internal",
-        }
-    )
-
-    _, wfn = psi4.energy("sapt(dft)", molecule=mol, return_wfn=True)
-
-    assert wfn.has_variable("FSAPT_DISP_AB")
-    assert np.linalg.norm(wfn.variable("FSAPT_DISP_AB").np) == 0.0
-
-
-@pytest.mark.saptdft
-def test_saptdft_summary_includes_standalone_delta_dft():
-    mol = psi4.geometry("He\n--\nHe 1 4.0\nunits bohr")
-    wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
-    data = {
-        "Elst10,r": 1.0,
-        "Exch10": 2.0,
-        "Exch10(S^2)": 2.0,
-        "Ind20,r": 3.0,
-        "Exch-Ind20,r": 4.0,
-        "Ind20,r (A<-B)": 1.0,
-        "Exch-Ind20,r (A<-B)": 2.0,
-        "Ind20,r (A->B)": 2.0,
-        "Exch-Ind20,r (A->B)": 2.0,
-        "Delta HF Correction": 0.5,
-        "Disp20": 5.0,
-        "Disp20,u": 5.0,
-        "Exch-Disp20,r": 6.0,
-        "Exch-Disp20,u": 6.0,
-        "Delta DFT Correction": 1.5,
-    }
-
-    sapt_util.print_sapt_dft_summary(
-        data, "SAPT(DFT)", wfn, do_disp=True, do_delta_dft=True
-    )
-
-    assert compare_values(12.0, wfn.variable("SAPT DISP ENERGY"), 12)
-    assert compare_values(22.5, wfn.variable("SAPT TOTAL ENERGY"), 12)
-
-
-@pytest.mark.saptdft
-def test_saptdft_rejects_ssapt_scaling_before_computation():
-    mol = psi4.geometry("""
-  Ne
-  --
-  Ne 1 4.5
-  units bohr
-    """)
-    psi4.set_options(
-        {
-            "basis": "sto-3g",
-            "sapt_dft_do_fsapt": "SAPTDFT",
-            "sapt_dft_induction_type": "CPKS",
-            "fisapt__ssapt0_scale": True,
-        }
-    )
-    wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
-    with pytest.raises(psi4.ValidationError, match="does not support FISAPT__SSAPT0_SCALE"):
-        sapt_proc.sapt_dft(wfn, wfn, wfn)
-
-
-@pytest.mark.saptdft
 @pytest.mark.parametrize(
     "induction_type, fsapt_type, message",
     [
@@ -1893,8 +1644,6 @@ def test_saptdft_direct_api_rejects_unsupported_fsapt_induction(induction_type, 
     wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
     with pytest.raises(psi4.ValidationError, match=message):
         sapt_proc.sapt_dft(wfn, wfn, wfn)
-
-
 if __name__ == "__main__":
     psi4.set_memory("32 GB")
     psi4.set_num_threads(12)

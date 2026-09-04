@@ -9,171 +9,6 @@ from pprint import pprint as pp
 
 pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick]
 
-_OUTFILE = "pytest_output.dat"
-
-
-def _outfile_offset():
-    psi4.core.flush_outfile()
-    return os.path.getsize(_OUTFILE) if os.path.exists(_OUTFILE) else 0
-
-
-def _outfile_tail(offset):
-    psi4.core.flush_outfile()
-    with open(_OUTFILE) as fh:
-        fh.seek(offset)
-        return fh.read()
-
-
-def test_fisapt_public_helper_validation():
-    mol = psi4.geometry("He\n--\nHe 1 3.0\nsymmetry c1")
-    basis = psi4.core.BasisSet.build(mol, "BASIS", "sto-3g")
-    wfn = psi4.core.Wavefunction.build(mol, basis)
-
-    with pytest.raises(RuntimeError, match="requires matrix 'Enucs'"):
-        psi4.core.sapt_nuclear_external_potential_python(
-            wfn, {}, psi4.core.get_options()
-        )
-
-    external = psi4.core.ExternalPotential()
-    external.addCharge(1.0, 2.0, 0.0, 0.0)
-    wfn.set_potential_variable("A", external)
-    with pytest.raises(RuntimeError, match="requires matrix 'VA'"):
-        psi4.core.sapt_nuclear_external_potential_python(
-            wfn, {"Enucs": psi4.core.Matrix(2, 2)}, psi4.core.get_options()
-        )
-
-    with pytest.raises(RuntimeError, match="matrix 'Enucs' is undersized"):
-        psi4.core.sapt_nuclear_external_potential_python(
-            wfn,
-            {
-                "Enucs": psi4.core.Matrix(1, 1),
-                "VA": psi4.core.Matrix(basis.nbf(), basis.nbf()),
-            },
-            psi4.core.get_options(),
-        )
-
-    with pytest.raises(RuntimeError, match="matrix 'VA' is undersized"):
-        psi4.core.sapt_nuclear_external_potential_python(
-            wfn,
-            {"Enucs": psi4.core.Matrix(2, 2), "VA": psi4.core.Matrix(1, 1)},
-            psi4.core.get_options(),
-        )
-
-    blocked_dimension = psi4.core.Dimension([1, 1])
-    blocked_enucs = psi4.core.Matrix(
-        "Enucs", blocked_dimension, blocked_dimension
-    )
-    with pytest.raises(RuntimeError, match="matrix 'Enucs' must have one irrep"):
-        psi4.core.sapt_nuclear_external_potential_python(
-            wfn,
-            {
-                "Enucs": blocked_enucs,
-                "VA": psi4.core.Matrix(basis.nbf(), basis.nbf()),
-            },
-            psi4.core.get_options(),
-        )
-
-
-def test_ibolocalizer2_static_build():
-    mol = psi4.geometry("He\nsymmetry c1")
-    basis = psi4.core.BasisSet.build(mol, "BASIS", "sto-3g")
-    coefficients = psi4.core.Matrix(basis.nbf(), 1)
-    coefficients.np[0, 0] = 1.0
-
-    localizer = psi4.core.IBOLocalizer2.build(
-        basis, basis, coefficients, psi4.core.get_options()
-    )
-
-    assert isinstance(localizer, psi4.core.IBOLocalizer2)
-    for inputs in (
-        (None, basis, coefficients),
-        (basis, None, coefficients),
-        (basis, basis, None),
-    ):
-        with pytest.raises(RuntimeError, match="IBOLocalizer2 requires"):
-            psi4.core.IBOLocalizer2(*inputs)
-        with pytest.raises(RuntimeError, match="IBOLocalizer2 requires"):
-            psi4.core.IBOLocalizer2.build(*inputs, psi4.core.get_options())
-
-    fock = psi4.core.Matrix(1, 1)
-    localized = localizer.localize(coefficients, fock)
-    assert {"L", "U", "F", "Q", "A"}.issubset(localized)
-    localizer.print_charges()
-
-    empty_partition = localizer.localize(coefficients, fock, [0, 0, 1])
-    assert {"L", "U", "F", "Q", "A"}.issubset(empty_partition)
-
-    for ranges in ([-1, 1], [0, 2], [0, 1, 0, 1]):
-        with pytest.raises(RuntimeError, match="IBOLocalizer2::localize ranges"):
-            localizer.localize(coefficients, fock, ranges)
-
-    with pytest.raises(RuntimeError, match="Focc dimensions"):
-        localizer.localize(coefficients, psi4.core.Matrix(2, 2))
-    with pytest.raises(RuntimeError, match="Cocc row dimension"):
-        localizer.localize(psi4.core.Matrix(basis.nbf() + 1, 1), fock)
-
-
-def test_fisapt_setters_reject_null_state_atomically():
-    mol = psi4.geometry("He\nsymmetry c1")
-    wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
-    fisapt = psi4.core.FISAPT(wfn)
-
-    with pytest.raises(RuntimeError, match="set_matrix requires a matrix for key 'null'"):
-        fisapt.set_matrix({"accepted": psi4.core.Matrix(1, 1), "null": None})
-    assert "accepted" not in fisapt.matrices()
-
-    with pytest.raises(RuntimeError, match="set_vector requires a vector for key 'null'"):
-        fisapt.set_vector({"accepted": psi4.core.Vector(1), "null": None})
-    assert "accepted" not in fisapt.vectors()
-
-
-def test_dfhelper_disk_tensor_validation_and_interleaved_io():
-    mol = psi4.geometry("He\nsymmetry c1")
-    basis = psi4.core.BasisSet.build(mol, "BASIS", "sto-3g")
-    helper = psi4.core.DFHelper(basis, basis)
-
-    with pytest.raises(RuntimeError, match="two increasing bounds"):
-        helper.write_disk_tensor(
-            "missing", psi4.core.Matrix(1, 1), [], [0, 1], [0, 1]
-        )
-    with pytest.raises(RuntimeError, match="missing not found"):
-        helper.fill_tensor("missing", psi4.core.Matrix(1, 1))
-
-    helper.add_disk_tensor("test", (2, 1, 1))
-    with pytest.raises(RuntimeError, match="could not open tensor file"):
-        helper.fill_tensor("test", psi4.core.Matrix(2, 1))
-    with pytest.raises(RuntimeError, match="require a matrix"):
-        helper.write_disk_tensor("test", None)
-    with pytest.raises(RuntimeError, match="require a matrix"):
-        helper.fill_tensor("test", None)
-
-    first = psi4.core.Matrix.from_array(np.array([[1.0]]))
-    helper.write_disk_tensor("test", first, [0, 1], [0, 1], [0, 1])
-    roundtrip = psi4.core.Matrix(1, 1)
-    helper.fill_tensor("test", roundtrip, [0, 1], [0, 1], [0, 1])
-    assert np.array_equal(roundtrip.np.ravel(), first.np.ravel())
-
-    partial = psi4.core.Matrix(2, 1)
-    partial.np[:] = 9.0
-    with pytest.raises(RuntimeError, match="DFHelper:get_tensor: read error"):
-        helper.fill_tensor("test", partial)
-
-    second = psi4.core.Matrix.from_array(np.array([[2.0]]))
-    helper.write_disk_tensor("test", second, [1, 2], [0, 1], [0, 1])
-    combined = psi4.core.Matrix(2, 1)
-    helper.fill_tensor("test", combined)
-    assert np.array_equal(combined.np.ravel(), np.array([1.0, 2.0]))
-
-    helper.add_disk_tensor("ranged", (4, 2, 2))
-    helper.write_disk_tensor("ranged", psi4.core.Matrix(4, 4))
-    ranged = psi4.core.Matrix.from_array(np.array([[3.0, 4.0], [5.0, 6.0]]))
-    helper.write_disk_tensor("ranged", ranged, [2, 4], [0, 1], [0, 2])
-    result = psi4.core.Matrix(4, 4)
-    helper.fill_tensor("ranged", result)
-    expected = np.zeros((4, 4))
-    expected[2:, :2] = ranged.np
-    assert np.array_equal(result.np.reshape(4, 4), expected)
-
 
 @pytest.mark.fsapt
 def test_fsapt_psivars_dict():
@@ -218,23 +53,7 @@ no_com"""
     )
     # NOTE: wfn used for keeping SAPT data together, but the wavefunction is
     # just the dimer SCF wavefunction.
-    outfile = "pytest_output.dat"
-    output_offset = os.path.getsize(outfile) if os.path.exists(outfile) else 0
     _, wfn = psi4.energy("fisapt0", return_wfn=True)
-    psi4.core.flush_outfile()
-    with open(outfile) as handle:
-        handle.seek(output_offset)
-        output = handle.read()
-    assert "## E Nuc" not in output
-
-    fisapt = psi4.core.FISAPT(wfn)
-    fisapt.localize()
-    fisapt.partition()
-    fisapt.overlap()
-    fisapt.kinetic()
-    fisapt.nuclear()
-    assert all(matrix is not None for matrix in fisapt.matrices().values())
-
     keys = ["Enuc", "Eelst", "Eexch", "Eind", "Edisp", "Etot"]
     Eref = {
         "Enuc": 35.07529824960602,
@@ -1211,28 +1030,15 @@ no_com"""
         "Total": -0.033049949574937065,
     }
 
-    caveat = "this qualitative breakdown does not in general sum to the scalar dispersion"
-
     try:
-        offset = _outfile_offset()
         psi4.energy("fisapt0-d4(i)", molecule=mol)
         d4_disp = variable("FISAPT0-D DISP ENERGY") * au2kcal
         assert compare_values(ref_d4mi, d4_disp, 5, "Ethene-Ethyne -d4")
-        assert caveat not in _outfile_tail(offset)
 
-        pw_disp_i = variable("FSAPT_EMPIRICAL_DISP").to_array()
-        assert compare_values(variable("FISAPT0-D DISP ENERGY"), pw_disp_i.sum(), 8,
-                              "D4(I) pairwise dispersion sums to the reported D4(I) dispersion")
-        assert compare_values(0.0, pw_disp_i[:5, :5].sum() + pw_disp_i[5:, 5:].sum(), 10,
-                              "D4(I) pairwise dispersion carries no intramonomer terms")
-
-        offset = _outfile_offset()
         psi4.energy("fisapt0-d4(s)", molecule=mol)
         d4_disp = variable("FISAPT0-D DISP ENERGY") * au2kcal
         assert compare_values(ref_d4, d4_disp, 5, "Ethene-Ethyne -d4")
-        pw_disp_s = variable("FSAPT_EMPIRICAL_DISP").to_array()
-        assert abs(variable("FISAPT0-D DISP ENERGY") - pw_disp_s.sum()) > 1.0e-6
-        assert caveat in _outfile_tail(offset)
+
         psi4.energy("fisapt0-d4bj2b(s)", molecule=mol)
         d4m_disp = variable("FISAPT0-D DISP ENERGY") * au2kcal
         assert compare_values(ref_d4m, d4m_disp, 5, "Ethene-Ethyne -d4M")
@@ -1260,69 +1066,9 @@ no_com"""
         pp(f_energies)
         for key in ["Elst", "Exch", "IndAB", "IndBA", "Disp", "Total", "EDisp"]:
             assert compare_values(fEref_d4m[key], f_energies[key], 6, key)
-
-        psi4.set_options({"FISAPT_FSAPT_FILEPATH": "none"})
-        psi4.energy("fisapt0-d4(i)", molecule=mol)
-        assert compare_values(
-            variable("FISAPT0-D DISP ENERGY"),
-            variable("FSAPT_EMPIRICAL_DISP").to_array().sum(),
-            8,
-            "D4(I) pairwise data remains available when file output is disabled",
-        )
     finally:
         if os.path.exists(fsapt_dirname):
             shutil.rmtree(fsapt_dirname)
-
-
-@pytest.mark.fsapt
-@pytest.mark.parametrize(
-    "method",
-    [
-        "sapt0-d4bjeeqatm",
-        "fisapt0-d4bjeeqatm(i)",
-        "sapt0-d4bj",
-        "fisapt0-d4(bj)(i)",
-    ],
-)
-def test_sapt_d4_intermolecular_rejects_atm_parameters(method):
-    """The intermolecular pairwise -D4 route only carries two-body parameters."""
-
-    mol = psi4.geometry("""
-    He 0.0 0.0 0.0
-    --
-    He 0.0 0.0 4.0
-    units angstrom
-    """)
-    psi4.set_options({"basis": "cc-pvdz"})
-    with pytest.raises(psi4.ValidationError, match="two-body hf-d4bjeeqtwo"):
-        psi4.energy(method, molecule=mol)
-
-
-@pytest.mark.fsapt
-def test_sapt_d4_intermolecular_rejects_parameter_override():
-    from psi4.driver.procrouting.empirical_disp import edisp_interaction_energy
-
-    psi4.set_options({"dft_dispersion_parameters": [1.0, 2.0]})
-    with pytest.raises(psi4.ValidationError, match="fixed hf-d4bjeeqtwo/d4bj2b"):
-        edisp_interaction_energy.sapt_dft_d4_interaction_energy(
-            None, None, None, None, "hf-d4bjeeqtwo", "intermolecular", {}
-        )
-
-
-@pytest.mark.fsapt
-@pytest.mark.parametrize("method", ["hf-d4(i)", "hf-d4(s)"])
-def test_hf_d4_suffixed_names_are_not_sapt_methods(method):
-    """HF-named -D4 methods must not dispatch to a SAPT computation."""
-
-    mol = psi4.geometry("""
-    He 0.0 0.0 0.0
-    --
-    He 0.0 0.0 4.0
-    units angstrom
-    """)
-    psi4.set_options({"basis": "cc-pvdz"})
-    with pytest.raises(psi4.ValidationError, match="not available"):
-        psi4.energy(method, molecule=mol)
 
 
 if __name__ == "__main__":

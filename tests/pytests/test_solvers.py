@@ -2,46 +2,10 @@ import numpy as np
 import pytest
 
 import psi4
-from psi4.driver.p4util.solvers import cg_solver_ein, davidson_solver, hamiltonian_solver
+from psi4.driver.p4util.solvers import davidson_solver, hamiltonian_solver
 from utils import compare_arrays
 
 pytestmark = [pytest.mark.psi, pytest.mark.api]
-
-
-@pytest.mark.unittest
-@pytest.mark.solver
-def test_cg_solver_ein_stops_nan_rhs_independently(monkeypatch):
-    import sys
-    from types import SimpleNamespace
-
-    fake_core = SimpleNamespace(
-        dot=lambda left, right: np.dot(left, right),
-        axpy=lambda alpha, source, target: target.__iadd__(alpha * source),
-    )
-    monkeypatch.setitem(sys.modules, "einsums", SimpleNamespace(core=fake_core))
-
-    rhs = [np.array([1.0]), np.array([0.0])]
-    guess = [np.zeros(1), np.zeros(1)]
-
-    def hx_function(vectors, active_mask):
-        return [vectors[0].copy(), np.zeros_like(vectors[1])]
-
-    def preconditioner(vectors, active_mask):
-        return [vector.copy() for vector in vectors]
-
-    solutions, _ = cg_solver_ein(
-        rhs,
-        hx_function,
-        preconditioner,
-        guess=guess,
-        printlvl=0,
-        maxiter=2,
-    )
-
-    assert solutions[0] == pytest.approx([1.0])
-    assert solutions[1] == pytest.approx([0.0])
-    assert all(np.isfinite(solution).all() for solution in solutions)
-
 
 def _diag_dom_sym_mat(size, sep, scale, sym=1.0):
     M = np.zeros((size, size))

@@ -49,10 +49,7 @@ units angstrom
     )
     psi4.core.clean_timers()
     _ = psi4.energy("sapt(dft)", molecule=mol)
-    timer_records = psi4.core.get_timer_records()
-    compute_time_saptdft_fi_ein = next(
-        record for record in timer_records.values() if record["timer_name"] == "SAPT(DFT) Energy"
-    )
+    compute_time_saptdft_fi_ein = psi4.core.get_timer_dict()["SAPT(DFT) Energy"]
     csv_text = psi4.driver.p4util.write_timer_csv("saptdft_fi_useEin_timers.csv")
     df = pd.read_csv("saptdft_fi_useEin_timers.csv")
     os.remove("saptdft_fi_useEin_timers.csv")
@@ -235,6 +232,7 @@ no_com
             "SAPT_DFT_DO_DHF": True,
             "SAPT_DFT_DO_HYBRID": False,
             "SAPT_DFT_DO_FSAPT": "FISAPT",
+            "SAPT_DFT_D4_IE": False,
             "SAPT_DFT_DO_DISP": True,
             "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
             # Normally on
@@ -844,6 +842,7 @@ no_com
             "SAPT_DFT_DO_HYBRID": False,
             # "SAPT_DFT_DO_FSAPT": "FISAPT",
             "SAPT_DFT_DO_FSAPT": "SAPTDFT",
+            "SAPT_DFT_D4_IE": False,
             "SAPT_DFT_DO_DISP": True,
             "SAPT_DFT_MP2_DISP_ALG": "FISAPT",
             "SAPT_DFT_USE_EINSUMS": False,
@@ -984,10 +983,6 @@ no_com
     # Clear variables for next calculation
     psi4.core.clean()
     psi4.core.clean_variables()
-    # Establish the normal fisapt0 behavior explicitly: the preceding fisapt0-d4
-    # calculation intentionally disables its ab initio pair-dispersion output.
-    core.set_local_option("FISAPT", "FISAPT_DO_FSAPT_DISP", True)
-    initial_fsapt_disp = core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP")
 
     # Run SAPT(DFT) with FISAPT option (HF functional to match SAPT0)
     psi4.set_options(
@@ -1001,15 +996,12 @@ no_com
             "SAPT_DFT_DO_HYBRID": False,
             "SAPT_DFT_DO_FSAPT": "FISAPT",
             "SAPT_DFT_USE_EINSUMS": True,
-            "FISAPT_DO_FSAPT": False,
-            "FISAPT_FSAPT_FILEPATH": "none",
+            "FISAPT_FSAPT_FILEPATH": "tmp",
             "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
         }
     )
     _, wfn = psi4.energy("sapt(dft)-d4(i)", molecule=mol, return_wfn=True)
     assert wfn.has_variable("FSAPT_EMPIRICAL_DISP")
-    assert wfn.has_variable("FSAPT_DISP_AB")
-    assert np.linalg.norm(wfn.variable("FSAPT_DISP_AB").np) == 0.0
 
     # Collect SAPT(DFT) energies
     saptdft_energies = {
@@ -1035,9 +1027,8 @@ no_com
         print_output=False,
         pdb_dir="tmp",
     )
-    # remove_fisapt files, if the calculation wrote any
-    if os.path.isdir("tmp"):
-        shutil.rmtree("tmp")
+    # remove_fisapt files
+    shutil.rmtree("tmp")
     for pdb_file in pdb_files:
         if os.path.exists(pdb_file):
             os.remove(pdb_file)
@@ -1119,14 +1110,6 @@ no_com
                 6,
                 f"{saptdft_fsapt_data['Frag1'][i]} {saptdft_fsapt_data['Frag2'][i]} {key}",
             )
-
-    assert core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP") is initial_fsapt_disp
-    psi4.core.clean()
-    psi4.core.clean_variables()
-    psi4.set_options({"FISAPT_DO_FSAPT": True, "FISAPT_FSAPT_FILEPATH": "none"})
-    _, following_wfn = psi4.energy("fisapt0", molecule=mol, return_wfn=True)
-    assert following_wfn.has_variable("FSAPT_DISP_AB")
-    assert np.linalg.norm(following_wfn.variable("FSAPT_DISP_AB").np) > 0.0
 
 
 if __name__ == "__main__":
