@@ -50,6 +50,7 @@ Typical use, from a script launched as ``mpirun -n 2 python script.py``::
 __all__ = [
     "GTFockNotAvailable",
     "available",
+    "decomposition",
     "fock_builds",
     "initialize",
     "mpi_info",
@@ -85,6 +86,23 @@ def mpi_info() -> Dict[str, int]:
         "rank": core.gtfock_world_rank(),
         "size": core.gtfock_world_size(),
         "initialized": core.gtfock_mpi_initialized(),
+    }
+
+
+def decomposition() -> Dict[str, Any]:
+    """How the most recent GTFock engine split the AO matrix over this rank.
+
+    ``grid`` is the ``[nprow, npcol]`` process grid, ``block`` the
+    ``[start_row, end_row, start_col, end_col]`` AO panel this rank owns, and
+    ``task_shape`` the ``[nblks_row, nblks_col, ntasks]`` blocking GTFock chose
+    within that panel. Blocks differing across ranks show the build was really
+    distributed; ``nblks_row``/``nblks_col`` above one show the panel was large
+    enough for GTFock to subdivide. Every entry is ``-1`` before any Fock build.
+    """
+    return {
+        "grid": list(core.gtfock_process_grid()),
+        "block": list(core.gtfock_local_block()),
+        "task_shape": list(core.gtfock_local_task_shape()),
     }
 
 

@@ -65,6 +65,7 @@ size_t gtfock_total_fock_builds = 0;
 /// really was split rather than replicated.
 std::vector<int> gtfock_last_grid{-1, -1};
 std::vector<int> gtfock_last_block{-1, -1, -1, -1};
+std::vector<int> gtfock_last_task_shape{-1, -1, -1};
 
 /*! Factor GTFock's process count into the most square nprow x npcol grid, the
  *  same way GTFock's own SCF driver does. GTFock requires nprow*npcol to equal
@@ -171,6 +172,8 @@ size_t MinimalInterface::total_fock_builds() { return gtfock_total_fock_builds; 
 std::vector<int> MinimalInterface::process_grid() { return gtfock_last_grid; }
 
 std::vector<int> MinimalInterface::local_block() { return gtfock_last_block; }
+
+std::vector<int> MinimalInterface::local_task_shape() { return gtfock_last_task_shape; }
 
 bool MinimalInterface::mpi_initialized() {
     int flag = 0;
@@ -380,8 +383,12 @@ MinimalInterface::MinimalInterface(std::shared_ptr<BasisSet> primary, size_t nma
     end_row_ = gtfock_engine->pfock->efunc_row;
     start_col_ = gtfock_engine->pfock->sfunc_col;
     end_col_ = gtfock_engine->pfock->efunc_col;
+    nblks_row_ = gtfock_engine->pfock->nblks_row;
+    nblks_col_ = gtfock_engine->pfock->nblks_col;
+    ntasks_ = gtfock_engine->pfock->ntasks;
     gtfock_last_grid = {nprow_, npcol_};
     gtfock_last_block = {start_row_, end_row_, start_col_, end_col_};
+    gtfock_last_task_shape = {nblks_row_, nblks_col_, ntasks_};
 }
 
 // The engine outlives every MinimalInterface: see GTFockEngine for why it is
@@ -494,6 +501,7 @@ bool MinimalInterface::enabled() { return false; }
 size_t MinimalInterface::total_fock_builds() { return 0; }
 std::vector<int> MinimalInterface::process_grid() { return {-1, -1}; }
 std::vector<int> MinimalInterface::local_block() { return {-1, -1, -1, -1}; }
+std::vector<int> MinimalInterface::local_task_shape() { return {-1, -1, -1}; }
 bool MinimalInterface::mpi_initialized() { return false; }
 int MinimalInterface::world_rank() { return -1; }
 int MinimalInterface::world_size() { return -1; }

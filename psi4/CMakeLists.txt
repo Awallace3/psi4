@@ -389,6 +389,7 @@ install(
     PATTERN "tdscf_reference_data.json"
     PATTERN "utils.py"
     PATTERN "gtfock_mpi_driver.py"  # launched under mpirun by test_gtfock.py
+    PATTERN "gtfock_hpc_collect.py"  # imported by test_gtfock.py's ungated collector tests
   )
 install(
   DIRECTORY

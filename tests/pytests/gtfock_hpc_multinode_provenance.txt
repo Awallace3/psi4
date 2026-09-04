@@ -1,0 +1,529 @@
+GTFock multi-node scale-out sweep: scheduler records for the Phoenix jobs
+========================================================================
+
+Copied verbatim from the run artifacts behind the multi-node tables in
+doc/sphinxman/source/gtfock.rst: job 12433686 (peptide), job 12433617
+(nanotube) and job 12445512 (protein157 in 6-31G**), plus two jobs that produced
+no table row and are kept anyway because the reason each failed is itself a
+measurement: job 12433616, a discarded first attempt at the peptide sweep, and
+job 12434225, the attempt to run protein157 in 6-31+G** rather than 6-31G**.
+Job 12441235 follows 12434225 as its control: a single node running the two
+reference J/K arms that 12434225 died before reaching. Job 12441826 follows both
+as an attempted remedy, testing whether canonical orthogonalization rescues the
+SCF that 12434225 could not converge; it does not, and the record is kept for the
+same reason the other two failures are.
+
+These jobs are the companion to the fixed-core jobs recorded in
+gtfock_hpc_provenance.txt and ask the opposite question. There, one 24-core node
+was subdivided among the ranks; here each rank owns a whole 24-core node, so the
+total core count grows 24 -> 48 -> 72 -> 96 with the rank count. Both sweeps ran
+the same driver, the same basis, and the same two molecules, so those two sets of
+numbers differ only in what was held constant.
+
+Job 12445512 is a later addition and has no fixed-core counterpart. It runs the
+same protocol from a separate script, gtfock_hpc_phoenix_protein.slurm, submitted
+with FM_BASIS=6-31G**, on a 157-atom fragment pair at 1555 basis functions --
+2.7x the nanotube. Two things in that script differ on purpose: a 12-hour
+walltime, and 160 GB rather than 120 GB for the single-process reference arms, so
+that density fitting at this size keeps its three-index tensor in core instead of
+silently falling back to DiskDFJK and comparing a third algorithm under the
+second one's name. It did stay in core: the reduced record reports MemDFJK.
+
+For each job, in order: the run's own provenance block; placement.txt, the
+hostname-only MPI launch check the batch script runs before any paid SCF (it
+FATALs if the ranks do not land on as many distinct hosts as there are ranks);
+the sacct query for the job (whose MaxRSS and MaxVMSize columns come back empty
+on this cluster, as they did for the fixed-core jobs); and the SLURM epilogue
+block PACE appends to the job log after the batch script has already exited.
+
+The epilogue's "Rsrc Used: ... mem=" field is the citable source for job-level
+memory: 1653048K (1.58 GiB) for the peptide job, 10801940K (10.30 GiB) for the
+nanotube job and 97270096K (92.76 GiB) for the protein157 job. All three are
+peaks over the whole job, so the latter two figures are the density-fitting
+reference points (10.3 GB and 92.5 GB in one process) rather than any GTFock
+point; the GTFock points peak at 3205 MB and 8650 MB summed over four nodes. The
+epilogue's "cput" field is allocated core-time, not consumed core-time
+(96 cores x the walltime in each of these jobs), so it says nothing about
+utilisation. Every per-point number quoted in gtfock.rst comes from
+gtfock_hpc_multinode_results.csv instead.
+
+Every node used by these jobs is identical: two-socket Xeon Gold 6226,
+CPUTot=24, RealMemory=191000, same feature list. The peptide and nanotube jobs
+happened to receive the same four nodes; the protein157 job ran about ten hours
+later the same day and drew four different nodes of the same type, checked
+identical from the same scontrol query. What matters for the scaling claim is not
+that the jobs share hardware but that each job took all of its points from a
+single 4-node allocation, so a wider point cannot be faster for having landed on
+better hardware.
+
+--- job 12433686, peptide: provenance.txt ---
+
+=== provenance ===
+job         : 12433686 gtfmn-peptide
+batch host  : atl1-1-02-010-23-2.pace.gatech.edu
+nodes       : 4 (atl1-1-02-010-23-2,atl1-1-02-011-17-1,atl1-1-02-018-1-1,atl1-1-02-018-10-1)
+partition   : cpu-small  account: gts-cs207-chemx  qos: inferno
+per rank    : 24 cores, 120 GB; one rank per node
+system      : peptide / 6-31+G** / scf
+psi4        : 0cf999a66 no-mistakes(document): correct J/K timer attribution in GTFock docs
+mpirun      : /storage/scratch1/3/awallace43/fm-gtfock/envs/p4gtf/bin/mpirun -- mpirun (Open MPI) 5.0.8
+CPU(s):                                  24
+Model name:                              Intel(R) Xeon(R) Gold 6226 CPU @ 2.70GHz
+               total        used        free      shared  buff/cache   available
+Mem:             187           3         179           0           5         183
+NodeName=atl1-1-02-010-23-2 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U2,IBL02,R02010,cpu-small RealMemory=191000
+NodeName=atl1-1-02-011-17-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U2,IBL02,R02011,cpu-small RealMemory=191000
+NodeName=atl1-1-02-018-1-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U1,IBL02,R02018,cpu-small RealMemory=191000
+NodeName=atl1-1-02-018-10-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U1,IBL02,R02018,cpu-small RealMemory=191000
+
+--- job 12433686, peptide: placement.txt (cross-node launch check) ---
+
+rank 0/4 on atl1-1-02-010-23-2.pace.gatech.edu
+rank 1/4 on atl1-1-02-011-17-1.pace.gatech.edu
+rank 2/4 on atl1-1-02-018-1-1.pace.gatech.edu
+rank 3/4 on atl1-1-02-018-10-1.pace.gatech.edu
+
+--- job 12433686, peptide: sacct.txt ---
+
+JobID|JobName|Elapsed|MaxRSS|MaxVMSize|NNodes|NCPUS
+12433686|gtfmn-peptide|00:01:28|||4|96
+12433686.batch|batch|00:01:28|||1|24
+12433686.extern|extern|00:01:28|||4|96
+12433686.0|prted|00:00:13|12056K|0|3|96
+12433686.1|prted|00:00:25|10208K|0|3|96
+12433686.2|prted|00:00:35|786576K|0|3|96
+12433686.3|prted|00:00:43|794832K|0|3|96
+12433686.4|prted|00:00:52|793764K|0|3|96
+12433686.5|prted|00:01:28|1549216K|0|3|96
+
+--- job 12433686, peptide: SLURM epilogue from gtfmn-peptide_12433686.log ---
+
+Begin Slurm Epilog: Aug-28-2026 05:39:59
+Job ID:        12433686
+User ID:       awallace43
+Account:       gts-cs207-chemx
+Job name:      gtfmn-peptide
+Resources:     cpu=96,mem=731232M,node=4
+Rsrc Used:     cput=02:20:48,vmem=0,walltime=00:01:28,mem=1653048K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-010-23-2,atl1-1-02-011-17-1,atl1-1-02-018-1-1,atl1-1-02-018-10-1
+---------------------------------------
+
+--- job 12433617, nanotube: provenance.txt ---
+
+=== provenance ===
+job         : 12433617 gtfmn-nanotube
+batch host  : atl1-1-02-010-23-2.pace.gatech.edu
+nodes       : 4 (atl1-1-02-010-23-2,atl1-1-02-011-17-1,atl1-1-02-018-1-1,atl1-1-02-018-10-1)
+partition   : cpu-small  account: gts-cs207-chemx  qos: inferno
+per rank    : 24 cores, 120 GB; one rank per node
+system      : nanotube / 6-31+G** / scf
+psi4        : 0cf999a66 no-mistakes(document): correct J/K timer attribution in GTFock docs
+mpirun      : /storage/scratch1/3/awallace43/fm-gtfock/envs/p4gtf/bin/mpirun -- mpirun (Open MPI) 5.0.8
+CPU(s):                                  24
+Model name:                              Intel(R) Xeon(R) Gold 6226 CPU @ 2.70GHz
+               total        used        free      shared  buff/cache   available
+Mem:             187           4         178           0           5         183
+NodeName=atl1-1-02-010-23-2 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U2,IBL02,R02010,cpu-small RealMemory=191000
+NodeName=atl1-1-02-011-17-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U2,IBL02,R02011,cpu-small RealMemory=191000
+NodeName=atl1-1-02-018-1-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U1,IBL02,R02018,cpu-small RealMemory=191000
+NodeName=atl1-1-02-018-10-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U1,IBL02,R02018,cpu-small RealMemory=191000
+
+--- job 12433617, nanotube: placement.txt (cross-node launch check) ---
+
+rank 0/4 on atl1-1-02-010-23-2.pace.gatech.edu
+rank 1/4 on atl1-1-02-011-17-1.pace.gatech.edu
+rank 2/4 on atl1-1-02-018-1-1.pace.gatech.edu
+rank 3/4 on atl1-1-02-018-10-1.pace.gatech.edu
+
+--- job 12433617, nanotube: sacct.txt ---
+
+JobID|JobName|Elapsed|MaxRSS|MaxVMSize|NNodes|NCPUS
+12433617|gtfmn-nanotube|00:11:39|||4|96
+12433617.batch|batch|00:11:39|||1|24
+12433617.extern|extern|00:11:39|||4|96
+12433617.0|prted|00:00:10|9748K|0|3|96
+12433617.1|prted|00:01:49|10680K|0|3|96
+12433617.2|prted|00:02:43|984420K|0|3|96
+12433617.3|prted|00:03:24|993428K|0|3|96
+12433617.4|prted|00:03:56|1000304K|0|3|96
+12433617.5|prted|00:11:39|1758892K|0|3|96
+
+--- job 12433617, nanotube: SLURM epilogue from gtfmn-nanotube_12433617.log ---
+
+Begin Slurm Epilog: Aug-28-2026 05:38:25
+Job ID:        12433617
+User ID:       awallace43
+Account:       gts-cs207-chemx
+Job name:      gtfmn-nanotube
+Resources:     cpu=96,mem=731232M,node=4
+Rsrc Used:     cput=18:38:24,vmem=0,walltime=00:11:39,mem=10801940K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-010-23-2,atl1-1-02-011-17-1,atl1-1-02-018-1-1,atl1-1-02-018-10-1
+---------------------------------------
+
+--- job 12445512, protein157/6-31G**: provenance.txt ---
+
+=== provenance ===
+job         : 12445512 gtfp-p631gss
+batch host  : atl1-1-02-006-16-2.pace.gatech.edu
+nodes       : 4 (atl1-1-02-006-16-2,atl1-1-02-007-8-2,atl1-1-02-007-18-1,atl1-1-02-007-24-1)
+partition   : cpu-small  account: gts-cs207-chemx  qos: inferno
+per rank    : 24 cores, 120 GB; one rank per node
+reference   : 24 cores, 160 GB, single process
+system      : protein157 / 6-31G** / scf
+psi4        : 8ae2767f0 test(gtfock): add a 1863-basis-function system to the HPC benchmark
+tree        : 3 file(s) modified vs that commit
+ tests/pytests/gtfock_hpc_benchmark.py          | 21 +++++++++++++++++---
+ tests/pytests/gtfock_hpc_phoenix_protein.slurm | 27 ++++++++++++++++++++++++--
+ 2 files changed, 43 insertions(+), 5 deletions(-)
+mpirun      : /storage/scratch1/3/awallace43/fm-gtfock/envs/p4gtf/bin/mpirun -- mpirun (Open MPI) 5.0.8
+CPU(s):                                  24
+Model name:                              Intel(R) Xeon(R) Gold 6226 CPU @ 2.70GHz
+               total        used        free      shared  buff/cache   available
+Mem:             187           4         146           0          38         182
+NodeName=atl1-1-02-006-16-2 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL01U1,IBL01,R02006,cpu-small RealMemory=191000
+NodeName=atl1-1-02-007-8-2 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL01U1,IBL01,R02007,cpu-small RealMemory=191000
+NodeName=atl1-1-02-007-18-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL01U1,IBL01,R02007,cpu-small RealMemory=191000
+NodeName=atl1-1-02-007-24-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL01U1,IBL01,R02007,cpu-small RealMemory=191000
+
+--- job 12445512, protein157/6-31G**: placement.txt (cross-node launch check) ---
+
+rank 0/4 on atl1-1-02-006-16-2.pace.gatech.edu
+rank 1/4 on atl1-1-02-007-8-2.pace.gatech.edu
+rank 2/4 on atl1-1-02-007-18-1.pace.gatech.edu
+rank 3/4 on atl1-1-02-007-24-1.pace.gatech.edu
+
+--- job 12445512, protein157/6-31G**: sacct.txt ---
+
+JobID|JobName|Elapsed|MaxRSS|MaxVMSize|NNodes|NCPUS
+12445512|gtfp-p631gss|00:57:16|||4|96
+12445512.batch|batch|00:57:16|||1|24
+12445512.extern|extern|00:57:16|||4|96
+12445512.0|prted|00:00:23|17368K|0|3|96
+12445512.1|prted|00:07:50|10420K|0|3|96
+12445512.2|prted|00:12:20|2598716K|0|3|96
+12445512.3|prted|00:15:55|2657464K|0|3|96
+12445512.4|prted|00:18:44|2500736K|0|3|96
+12445512.5|prted|00:57:16|3278776K|0|3|96
+
+--- job 12445512, protein157/6-31G**: SLURM epilogue from gtfp-p631gss_12445512.log ---
+
+Begin Slurm Epilog: Aug-28-2026 15:29:06
+Job ID:        12445512
+User ID:       awallace43
+Account:       gts-cs207-chemx
+Job name:      gtfp-p631gss
+Resources:     cpu=96,mem=731232M,node=4
+Rsrc Used:     cput=3-19:37:36,vmem=0,walltime=00:57:16,mem=97270096K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-006-16-2,atl1-1-02-007-8-2,atl1-1-02-007-18-1,atl1-1-02-007-24-1
+---------------------------------------
+
+--- job 12433616, peptide: DISCARDED attempt, provenance.txt ---
+
+=== provenance ===
+job         : 12433616 gtfmn-peptide
+batch host  : atl1-1-02-010-23-2.pace.gatech.edu
+nodes       : 4 (atl1-1-02-010-23-2,atl1-1-02-011-17-1,atl1-1-02-018-1-1,atl1-1-02-018-10-1)
+partition   : cpu-small  account: gts-cs207-chemx  qos: inferno
+per rank    : 24 cores, 120 GB; one rank per node
+system      : peptide / 6-31+G** / scf
+psi4        : 0cf999a66 no-mistakes(document): correct J/K timer attribution in GTFock docs
+mpirun      : /storage/scratch1/3/awallace43/fm-gtfock/envs/p4gtf/bin/mpirun -- mpirun (Open MPI) 5.0.8
+CPU(s):                                  24
+Model name:                              Intel(R) Xeon(R) Gold 6226 CPU @ 2.70GHz
+               total        used        free      shared  buff/cache   available
+Mem:             187           3         179           0           5         183
+NodeName=atl1-1-02-010-23-2 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U2,IBL02,R02010,cpu-small RealMemory=191000
+NodeName=atl1-1-02-011-17-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U2,IBL02,R02011,cpu-small RealMemory=191000
+NodeName=atl1-1-02-018-1-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U1,IBL02,R02018,cpu-small RealMemory=191000
+NodeName=atl1-1-02-018-10-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL02U1,IBL02,R02018,cpu-small RealMemory=191000
+
+--- job 12433616, peptide: SLURM epilogue from gtfmn-peptide_12433616.log ---
+
+Begin Slurm Epilog: Aug-28-2026 05:26:40
+Job ID:        12433616
+User ID:       awallace43
+Account:       gts-cs207-chemx
+Job name:      gtfmn-peptide
+Resources:     cpu=96,mem=731232M,node=4
+Rsrc Used:     cput=04:59:12,vmem=0,walltime=00:03:07,mem=1707424K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-010-23-2,atl1-1-02-011-17-1,atl1-1-02-018-1-1,atl1-1-02-018-10-1
+---------------------------------------
+
+
+--- job 12434225, protein157/6-31+G**: FAILED attempt, provenance.txt ---
+
+The reason gtfock.rst reports this molecule in 6-31G** rather than the 6-31+G**
+the batch script defaults to. At 1863 basis functions the one-rank GTFock point
+ran 101 Fock builds -- the guess plus 100 iterations -- and raised
+SCFConvergenceError; under `set -e` that took the rest of the sweep with it, so
+after 6h53m on four nodes the job wrote no JSON at all. Both consequences were
+fixed afterwards: the script now traps a failing point and continues (the
+FAILED_POINTS array in gtfock_hpc_phoenix_protein.slurm), and job 12445512 ran
+the same molecule in the smaller basis. The non-convergence itself is a
+correctness question still open at the time of writing. No reference arm ever
+started here, so job 12441235 below was run to supply them.
+
+=== provenance ===
+job         : 12434225 gtfp-protein157
+batch host  : atl1-1-03-003-1-1.pace.gatech.edu
+nodes       : 4 (atl1-1-03-003-1-[1-2],atl1-1-03-003-2-2,atl1-1-03-003-3-1)
+partition   : cpu-small  account: gts-cs207-chemx  qos: inferno
+per rank    : 24 cores, 120 GB; one rank per node
+reference   : 24 cores, 160 GB, single process
+system      : protein157 / 6-31+G** / scf
+psi4        : 8ae2767f0 test(gtfock): add a 1863-basis-function system to the HPC benchmark
+mpirun      : /storage/scratch1/3/awallace43/fm-gtfock/envs/p4gtf/bin/mpirun -- mpirun (Open MPI) 5.0.8
+CPU(s):                                  24
+Model name:                              Intel(R) Xeon(R) Gold 6226 CPU @ 2.70GHz
+               total        used        free      shared  buff/cache   available
+Mem:             187           3         177           0           7         183
+NodeName=atl1-1-03-003-1-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL03U2,IBL03,R03003,cpu-small RealMemory=191000
+NodeName=atl1-1-03-003-1-2 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL03U2,IBL03,R03003,cpu-small RealMemory=191000
+NodeName=atl1-1-03-003-2-2 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL03U2,IBL03,R03003,cpu-small RealMemory=191000
+NodeName=atl1-1-03-003-3-1 CPUTot=24 AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL03U2,IBL03,R03003,cpu-small RealMemory=191000
+
+--- job 12434225, protein157/6-31+G**: placement.txt (cross-node launch check) ---
+
+rank 0/4 on atl1-1-03-003-1-1.pace.gatech.edu
+rank 1/4 on atl1-1-03-003-1-2.pace.gatech.edu
+rank 2/4 on atl1-1-03-003-2-2.pace.gatech.edu
+rank 3/4 on atl1-1-03-003-3-1.pace.gatech.edu
+
+--- job 12434225, protein157/6-31+G**: failure, from gtfp-protein157_12434225.log ---
+
+psi4.driver.p4util.exceptions.SCFConvergenceError: Could not converge SCF iterations in 100 iterations.
+
+--- job 12434225, protein157/6-31+G**: SLURM epilogue from gtfp-protein157_12434225.log ---
+
+Begin Slurm Epilog: Aug-28-2026 13:48:02
+Job ID:        12434225
+User ID:       awallace43
+Account:       gts-cs207-chemx
+Job name:      gtfp-protein157
+Resources:     cpu=96,mem=731232M,node=4
+Rsrc Used:     cput=27-13:26:24,vmem=0,walltime=06:53:24,mem=4307400K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-03-003-1-[1-2],atl1-1-03-003-2-2,atl1-1-03-003-3-1
+---------------------------------------
+
+--- job 12441235, protein157/6-31+G**: reference arms for 12434225 ---
+
+One node of the same type, same commit, same 24 threads and 160 GB, same molecule
+and basis as 12434225. Both reference engines converge in 12 iterations, cleanly
+and monotonically, so the non-convergence 12434225 hit is a property of the
+GTFock J/K engine and not of the system, the basis or the overlap matrix. Note
+that density fitting reports DiskDFJK here rather than MemDFJK: at 1863 basis
+functions the packed three-index tensor does not fit even the 160 GB budget, and
+the benchmark labels the algorithm it actually got. The 4.35e-03 Eh gap between
+the two reference energies is that fitting error, not a defect.
+
+job        : 12441235 gtfp-protref
+node       : atl1-1-02-005-25-2.pace.gatech.edu (atl1-1-02-005-25-2)
+psi4       : 8ae2767f0 test(gtfock): add a 1863-basis-function system to the HPC benchmark
+purpose    : reference J/K arms for protein157/6-31+G**, same settings as 12434225
+CPU(s):                                  24
+Model name:                              Intel(R) Xeon(R) Gold 6226 CPU @ 2.70GHz
+               total        used        free      shared  buff/cache   available
+Mem:             187           4          23           0         160         182
+
+--- job 12441235: reduced records, both arms ---
+
+arm=df      nbf=1863 nshell=856 jk=DiskDFJK  iters=12 jk_calls=13 scf= 828.8s jk= 581.5s rss=127899MB E=-3642.748402698655
+arm=direct  nbf=1863 nshell=856 jk=DirectJK  iters=12 jk_calls=13 scf=8469.8s jk=8407.5s rss=  4884MB E=-3642.752751325688
+
+--- job 12441235: SCF convergence, from gtfp-protref_12441235.log ---
+
+   @DF-RHF iter SAD: -3637.28631040232904   -3.63729e+03   0.00000e+00
+   @DF-RHF iter   1: -3640.47388129245701   -3.18757e+00   1.10420e-03 DIIS/ADIIS
+   @DF-RHF iter   2: -3642.17203345050984   -1.69815e+00   6.42350e-04 DIIS/ADIIS
+   @DF-RHF iter   3: -3642.70305395780633   -5.31021e-01   1.44930e-04 DIIS/ADIIS
+   @DF-RHF iter   4: -3642.74172084714701   -3.86669e-02   5.33945e-05 DIIS
+   @DF-RHF iter   5: -3642.74780157318492   -6.08073e-03   1.05363e-05 DIIS
+   @DF-RHF iter   6: -3642.74825820182195   -4.56629e-04   5.51230e-06 DIIS
+   @DF-RHF iter   7: -3642.74837542412024   -1.17222e-04   2.12220e-06 DIIS
+   @DF-RHF iter   8: -3642.74839818106011   -2.27569e-05   9.91758e-07 DIIS
+   @DF-RHF iter   9: -3642.74840211643641   -3.93538e-06   3.48186e-07 DIIS
+   @DF-RHF iter  10: -3642.74840265803323   -5.41597e-07   9.57843e-08 DIIS
+   @DF-RHF iter  11: -3642.74840269355809   -3.55249e-08   3.76695e-08 DIIS
+   @DF-RHF iter  12: -3642.74840269865490   -5.09681e-09   1.64178e-08 DIIS
+
+   @RHF iter SAD: -3637.28957793881091   -3.63729e+03   0.00000e+00
+   @RHF iter   1: -3640.47839940863378   -3.18882e+00   1.10421e-03 ADIIS/DIIS
+   @RHF iter   2: -3642.17642266191069   -1.69802e+00   6.42355e-04 ADIIS/DIIS
+   @RHF iter   3: -3642.70743270216008   -5.31010e-01   1.44900e-04 ADIIS/DIIS
+   @RHF iter   4: -3642.74607499520243   -3.86423e-02   5.33722e-05 DIIS
+   @RHF iter   5: -3642.75215055980698   -6.07556e-03   1.05322e-05 DIIS
+   @RHF iter   6: -3642.75260691936091   -4.56360e-04   5.51022e-06 DIIS
+   @RHF iter   7: -3642.75272408519777   -1.17166e-04   2.12114e-06 DIIS
+   @RHF iter   8: -3642.75274681705014   -2.27319e-05   9.91034e-07 DIIS
+   @RHF iter   9: -3642.75275074488854   -3.92784e-06   3.47817e-07 DIIS
+   @RHF iter  10: -3642.75275128519024   -5.40302e-07   9.56971e-08 DIIS
+   @RHF iter  11: -3642.75275132035131   -3.51611e-08   3.76321e-08 DIIS
+   @RHF iter  12: -3642.75275132568822   -5.33691e-09   1.64021e-08 DIIS
+
+--- job 12441235: SLURM epilogue from gtfp-protref_12441235.log ---
+
+Begin Slurm Epilog: Aug-28-2026 15:51:05
+Job ID:        12441235
+User ID:       awallace43
+Account:       gts-cs207-chemx
+Job name:      gtfp-protref
+Resources:     cpu=24,mem=182808M,node=1
+Rsrc Used:     cput=2-14:44:24,vmem=0,walltime=02:36:51,mem=131289240K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-005-25-2
+---------------------------------------
+
+
+Job 12441826: the S_TOLERANCE remedy, and why it is kept as a failure
+=====================================================================
+
+protein157/6-31+G** has a minimum overlap eigenvalue of 1.089528e-07, 9% above
+Psi4's default S_TOLERANCE of 1e-7, so Psi4 keeps all 1863 functions and
+orthogonalizes symmetrically -- which amplifies any error in the Fock build by
+1/s_min, about 9.2e+06. This job raised S_TOLERANCE to 1e-6, the only departure
+from the benchmark settings, to force canonical orthogonalization instead and
+project the near-null directions out. Rebuilding the overlap spectrum alone
+shows what that threshold buys: eight eigenvalues lie below 1e-6 and none below
+1e-7, so the change discards exactly eight directions and leaves 1855.
+
+It does not help. Sixty iterations, the DIIS error stuck between 4.9e-06 and
+1.3e-05 against a 1e-07 target, and the energy oscillating over a 7.7e-03 Eh
+band around -3695.478 -- 52.73 Eh BELOW the converged DirectJK reference of
+-3642.752751 from 12441235. Discarding variational freedom can only raise an SCF
+energy, so that offset is not the orthogonalization's; the run is converging on
+the right answer to a different Fock operator. What makes it different is not
+established. This job was originally read as excluding the conditioning of the
+basis, and that reading has since been withdrawn: eight directions out of 1863
+moves s_min only from 1.089528e-07 to 1.050e-06, which is one decade of a factor
+worth about 9.2e+06, so the remedy was far too weak to exclude anything. See
+gtfock_diffuse_j_diagnostics.txt, section 5, which also withdraws the 0.31% J
+deficit this paragraph used to invoke.
+
+The job has no JSON record because the probe script crashed after the SCF
+returned, on a regex that parsed the printed minimum eigenvalue and choked on
+the sentence-ending period ("1.0895284891e-07."); a second arm then overwrote
+psi4.out. The iteration tail below is what the batch wrapper had already
+echoed, and it is the whole surviving record of the run.
+
+--- job 12441826: provenance block, from gtfp-stol_12441826.log ---
+
+job  : 12441826 gtfp-stol
+node : atl1-1-02-011-15-2.pace.gatech.edu
+psi4 : 8ae2767f0 test(gtfock): add a 1863-basis-function system to the HPC benchmark
+
+--- job 12441826: last 20 iterations, from gtfp-stol_12441826.log ---
+
+   @RHF iter  41: -3695.48192274412395   -3.21947e-04   9.50037e-06 DIIS
+   @RHF iter  42: -3695.48264735424709   -7.24610e-04   8.89496e-06 DIIS
+   @RHF iter  43: -3695.48260614508581    4.12092e-05   8.78172e-06 DIIS
+   @RHF iter  44: -3695.48086583310032    1.74031e-03   9.01978e-06 DIIS
+   @RHF iter  45: -3695.47785958841450    3.00624e-03   8.58042e-06 DIIS
+   @RHF iter  46: -3695.47771858036685    1.41008e-04   8.07412e-06 DIIS
+   @RHF iter  47: -3695.47814795901832   -4.29379e-04   7.32297e-06 DIIS
+   @RHF iter  48: -3695.47493730575115    3.21065e-03   1.05209e-05 DIIS
+   @RHF iter  49: -3695.47588902708048   -9.51721e-04   7.52384e-06 DIIS
+   @RHF iter  50: -3695.47522703879622    6.61988e-04   1.02695e-05 DIIS
+   @RHF iter  51: -3695.47545722380346   -2.30185e-04   1.26777e-05 DIIS
+   @RHF iter  52: -3695.47619730361657   -7.40080e-04   1.03923e-05 DIIS
+   @RHF iter  53: -3695.47727379618846   -1.07649e-03   6.74108e-06 DIIS
+   @RHF iter  54: -3695.47837416081347   -1.10036e-03   5.03960e-06 DIIS
+   @RHF iter  55: -3695.47868333798579   -3.09177e-04   5.36972e-06 DIIS
+   @RHF iter  56: -3695.47953749350745   -8.54156e-04   5.10444e-06 DIIS
+   @RHF iter  57: -3695.47950943621800    2.80573e-05   5.11623e-06 DIIS
+   @RHF iter  58: -3695.47933882281541    1.70613e-04   5.14183e-06 DIIS
+   @RHF iter  59: -3695.47897122826362    3.67595e-04   5.26952e-06 DIIS
+   @RHF iter  60: -3695.47864627876879    3.24949e-04   4.94205e-06 DIIS
+
+--- job 12441826: SLURM epilogue from gtfp-stol_12441826.log ---
+
+Begin Slurm Epilog: Aug-28-2026 17:29:06
+Job ID:        12441826
+User ID:       awallace43
+Account:       gts-cs207-chemx
+Job name:      gtfp-stol
+Resources:     cpu=24,mem=182808M,node=1
+Rsrc Used:     cput=4-03:24:48,vmem=0,walltime=04:08:32,mem=4339196K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-011-15-2
+---------------------------------------
+
+
+Control point: the one-sided MPI component
+==========================================
+
+Both batch scripts export OMPI_MCA_osc=^ucx to silence a per-rank OpenMPI log
+line. GTFock's GTMatrix layer does use MPI one-sided RMA (MPI_Win_create,
+MPI_Get, MPI_Accumulate, win lock/unlock, in GTMatrix_Get.c and
+GTMatrix_Update.c), so across a network that exclusion is an assumption about
+which component carries real traffic, not a cosmetic setting. The multi-node
+script therefore re-runs its widest point with the variable unset, into
+results/<job>/control_osc_default/ so the reducer cannot merge it with the point
+it controls. Reduced separately:
+
+  system      arm     ranks thr grid  iters  SCF (s)  J/K (s)  RSS/rank  RSS tot
+  peptide     gtfock      4  24  2x2     11      4.1      2.3      1364     5445
+  nanotube    gtfock      4  24  2x2     11     27.9     24.3      1523     6073
+  protein157  gtfock      4  24  2x2     12    128.4     93.8      2870    11439
+
+Against the primary 4-node points (peptide 3.9 / 2.1, nanotube 27.9 / 24.3,
+protein157 129.5 / 94.1) the wall clock is unchanged: the exclusion does not
+shape the timings reported in gtfock.rst. The protein157 control matters more
+than the other two, because RMA volume per Fock build grows with the square of
+the basis and 1555 basis functions is 2.7x the size at which the question was
+last asked; it comes back the same answer, and the two energies agree to
+7.3e-12 Eh.
+
+It does change memory, and in the direction that favours excluding it -- letting
+OpenMPI pick the UCX osc component raises per-rank RSS by 700 to 717 MB in every
+case: 647 -> 1364 MB on the peptide, 807 -> 1523 MB on the nanotube, and
+2170 -> 2870 MB on protein157. That the increment is nearly constant across a
+6x range of system size says it is the component's own buffering rather than
+anything that scales with the problem.
+
+
+Discarded job 12433616: why the peptide sweep was re-run
+========================================================
+
+The first peptide job produced a 1-node baseline contaminated by a transient
+stall, which inflated every speedup derived from it. Per-point rank-0 wall
+clocks, with the SCF total's non-J/K remainder in the last column:
+
+  job 12433616 (discarded)              job 12433686 (kept)
+  arm     n   SCF     J/K   remainder   arm     n   SCF     J/K   remainder
+  gtfock  1   33.43    5.35     28.09   gtfock  1    7.10    4.92      2.18
+  gtfock  2    5.30    3.42      1.89   gtfock  2    4.97    3.17      1.80
+  gtfock  3    4.33    2.60      1.73   gtfock  3    4.27    2.45      1.82
+  gtfock  4    3.91    2.12      1.79   gtfock  4    3.85    1.99      1.86
+  direct  1   17.68   16.09      1.59   direct  1   17.78   16.09      1.69
+  df      1    3.28    0.62      2.66   df      1    3.80    0.62      3.18
+
+Every point in the discarded job except gtfock n=1 has a remainder between 1.59
+and 2.66 s, and the kept job's n=1 remainder is 2.18 s. The 28.09 s outlier is
+the whole discrepancy, and it is outside the J/K build, so it is not a Fock-build
+effect at all. Two checks ruled out a systematic "first process in the job"
+artefact: the nanotube job's n=1 point is also the first process in its job and
+has a 4.15 s remainder, and the discarded run's own psi4 process used 215.35 s of
+user time in 33 s of wall on 24 cores (6.5x) against 146.65 s in 6 s (24x) for
+the equivalent fixed-core point -- more user time than the 2-node point's two
+processes combined, which is threads spinning at a barrier rather than extra
+work.
+
+Taking the 33.43 s baseline at face value would have reported SCF speedups of
+1.00 / 6.30 / 7.61 / 8.55 against a J/K improvement of only 1.00 / 1.57 / 2.02 /
+2.49 -- a super-linear result manufactured by a slow reference. Since no
+systematic effect was found to correct, the fix was to resubmit the byte-identical
+script rather than to add a warm-up point; the re-run's uniform remainders
+confirm the stall was transient. This job's records are kept rather than deleted
+so the discard is auditable.

@@ -1,0 +1,93 @@
+GTFock rank-scaling sweep: scheduler records for the two Phoenix jobs
+====================================================================
+
+Copied verbatim from the run artifacts of the two jobs behind the measured
+tables in doc/sphinxman/source/gtfock.rst: job 12400108 (peptide) and job
+12400109 (nanotube). For each job, in order: the run's own provenance block,
+the sacct query for the job (whose MaxRSS and MaxVMSize columns come back empty
+on this cluster), and the SLURM epilogue block PACE appends to the job log after
+the batch script has already exited.
+
+The epilogue's "Rsrc Used: ... mem=" field is the citable source for the two
+job-level memory figures quoted in gtfock.rst. Every per-point number in that
+document comes from gtfock_hpc_results.csv instead.
+
+--- job 12400108, peptide: provenance.txt ---
+
+=== provenance ===
+job         : 12400108 gtf-peptide
+node        : atl1-1-02-006-1-1.pace.gatech.edu (atl1-1-02-006-1-1)
+partition   : cpu-small  account: gts-cs207-chemx  qos: inferno
+cores       : 24 total, memory 120 GB total
+system      : peptide / 6-31+G** / scf
+psi4        : 593f1e44a test(gtfock): place the one-rank GTFock point unbound on a two-socket node
+mpirun      : /storage/scratch1/3/awallace43/fm-gtfock/envs/p4gtf/bin/mpirun -- mpirun (Open MPI) 5.0.8
+CPU(s):                                  24
+Model name:                              Intel(R) Xeon(R) Gold 6226 CPU @ 2.70GHz
+               total        used        free      shared  buff/cache   available
+Mem:             187           5         169           0          14         181
+CPUTot=24
+AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL01U1,IBL01,R02006,cpu-small
+RealMemory=191000
+
+--- job 12400108, peptide: sacct.txt ---
+
+JobID|JobName|Elapsed|MaxRSS|MaxVMSize|NNodes|NCPUS
+12400108|gtf-peptide|00:01:10|||1|24
+12400108.batch|batch|00:01:10|||1|24
+12400108.extern|extern|00:01:10|||1|24
+
+--- job 12400108, peptide: SLURM epilogue from gtf-peptide_12400108.log ---
+
+---------------------------------------
+Begin Slurm Epilog: Aug-27-2026 16:15:33
+Job ID:        12400108
+User ID:       awallace43
+Account:       gts-cs207-chemx
+Job name:      gtf-peptide
+Resources:     cpu=24,mem=182808M,node=1
+Rsrc Used:     cput=00:29:36,vmem=0,walltime=00:01:14,mem=1897180K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-006-1-1
+---------------------------------------
+
+--- job 12400109, nanotube: provenance.txt ---
+
+=== provenance ===
+job         : 12400109 gtf-nanotube
+node        : atl1-1-02-006-18-2.pace.gatech.edu (atl1-1-02-006-18-2)
+partition   : cpu-small  account: gts-cs207-chemx  qos: inferno
+cores       : 24 total, memory 120 GB total
+system      : nanotube / 6-31+G** / scf
+psi4        : 593f1e44a test(gtfock): place the one-rank GTFock point unbound on a two-socket node
+mpirun      : /storage/scratch1/3/awallace43/fm-gtfock/envs/p4gtf/bin/mpirun -- mpirun (Open MPI) 5.0.8
+CPU(s):                                  24
+Model name:                              Intel(R) Xeon(R) Gold 6226 CPU @ 2.70GHz
+               total        used        free      shared  buff/cache   available
+Mem:             187           4          81           0         102         182
+CPUTot=24
+AvailableFeatures=rhel9,intel,localNVMe,core24,mhz2700,gold6226,cascadelake,avx512,IBL01U1,IBL01,R02006,cpu-small
+RealMemory=191000
+
+--- job 12400109, nanotube: sacct.txt ---
+
+JobID|JobName|Elapsed|MaxRSS|MaxVMSize|NNodes|NCPUS
+12400109|gtf-nanotube|00:11:49|||1|24
+12400109.batch|batch|00:11:49|||1|24
+12400109.extern|extern|00:11:49|||1|24
+
+--- job 12400109, nanotube: SLURM epilogue from gtf-nanotube_12400109.log ---
+
+---------------------------------------
+Begin Slurm Epilog: Aug-27-2026 16:26:11
+Job ID:        12400109
+User ID:       awallace43
+Account:       gts-cs207-chemx
+Job name:      gtf-nanotube
+Resources:     cpu=24,mem=182808M,node=1
+Rsrc Used:     cput=04:44:24,vmem=0,walltime=00:11:51,mem=10869304K,energy_used=0
+Partition:     cpu-small
+QOS:           inferno
+Nodes:         atl1-1-02-006-18-2
+---------------------------------------

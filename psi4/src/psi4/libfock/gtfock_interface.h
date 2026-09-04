@@ -93,6 +93,11 @@ class MinimalInterface {
     int end_row() const { return end_row_; }
     int start_col() const { return start_col_; }
     int end_col() const { return end_col_; }
+    /*! GTFock's task decomposition of the panel this rank owns: how many task
+     *  blocks it holds along each dimension, and how many tasks that makes. */
+    int nblks_row() const { return nblks_row_; }
+    int nblks_col() const { return nblks_col_; }
+    int ntasks() const { return ntasks_; }
     /// Number of GTFock Fock builds this engine has run.
     size_t fock_builds() const { return fock_builds_; }
 
@@ -104,6 +109,11 @@ class MinimalInterface {
     /// in the most recent GTFock engine, or four -1s if none. Distinct values
     /// across ranks are evidence GTFock really distributed the build.
     static std::vector<int> local_block();
+    /// {nblks_row, nblks_col, ntasks} of the task decomposition this rank owned
+    /// in the most recent GTFock engine, or three -1s if none. Counts above one
+    /// show the rank's AO panel was itself split into blocks, which is what
+    /// separates a real distributed build from a system too small to decompose.
+    static std::vector<int> local_task_shape();
     /// Total GTFock Fock builds run by this process since it started.
     static size_t total_fock_builds();
     /// True when MPI has been initialized (by mpi4py, ordinarily).
@@ -133,6 +143,9 @@ class MinimalInterface {
     int end_row_ = 0;
     int start_col_ = 0;
     int end_col_ = 0;
+    int nblks_row_ = 0;
+    int nblks_col_ = 0;
+    int ntasks_ = 0;
 };
 
 }  // namespace psi

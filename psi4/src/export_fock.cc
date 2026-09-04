@@ -220,6 +220,8 @@ void export_fock(py::module &m) {
           "[nprow, npcol] of the most recent GTFock engine, or [-1, -1] if none was built.");
     m.def("gtfock_local_block", &MinimalInterface::local_block,
           "[start_row, end_row, start_col, end_col] of the AO block GTFock gave this rank.");
+    m.def("gtfock_local_task_shape", &MinimalInterface::local_task_shape,
+          "[nblks_row, nblks_col, ntasks] of GTFock's task decomposition of this rank's AO block.");
 
     py::class_<scf::SADGuess, std::shared_ptr<scf::SADGuess>>(m, "SADGuess", "docstring")
         .def_static("build_SAD",
