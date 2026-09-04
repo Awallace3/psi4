@@ -1451,10 +1451,6 @@ no_com
             {"sapt_dft_induction_type": "CPHF", "sapt_dft_do_fsapt": "SAPTDFT"},
             "F-SAPT requires SAPT\\(DFT\\) fragment induction",
         ),
-        (
-            {"sapt_dft_induction_type": "CPHF", "sapt_dft_do_fsapt": "FISAPT"},
-            "F-SAPT requires SAPT\\(DFT\\) fragment induction",
-        ),
     ],
 )
 def test_saptdft_induction_option_checks(monkeypatch, options, message):
@@ -1611,6 +1607,26 @@ def test_saptdft_sapt_dft_api_requires_hf_segment_data(induction_type, message):
     wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
     with pytest.raises(psi4.ValidationError, match=message):
         sapt_proc.sapt_dft(wfn, wfn, wfn, delta_hf=True)
+
+
+@pytest.mark.saptdft
+def test_saptdft_sapt_dft_api_requires_cphf_fsapt_data():
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ne 1 4.5
+  units bohr
+    """)
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "sapt_dft_induction_type": "CPHF",
+            "sapt_dft_do_fsapt": "FISAPT",
+        }
+    )
+    wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
+    with pytest.raises(psi4.ValidationError, match="requires HF-backed fragment induction data"):
+        sapt_proc.sapt_dft(wfn, wfn, wfn, data={"Ind20,r": 0.0})
 
 
 if __name__ == "__main__":

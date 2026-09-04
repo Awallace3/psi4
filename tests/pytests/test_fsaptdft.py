@@ -75,6 +75,83 @@ units angstrom
 
 @pytest.mark.saptdft
 @pytest.mark.fsapt
+@pytest.mark.dftd4
+@uusing("dftd4")
+@pytest.mark.parametrize("do_delta_hf", [False, True])
+def test_fsaptdft_d4i_cphf_uses_sapt0_induction_partition(do_delta_hf):
+    molecule = psi4.geometry(
+        """
+0 1
+O  -0.702196054  -0.056060256   0.009942262
+H  -1.022193224   0.846775782  -0.011488714
+H   0.257521062   0.042121496   0.005218999
+--
+0 1
+O   2.268880784   0.026340101   0.000508029
+H   2.645502399  -0.412039965   0.766632411
+H   2.641145101  -0.449872874  -0.744894473
+units angstrom
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    common_options = {
+        "basis": "cc-pvdz",
+        "scf_type": "df",
+        "sapt_dft_grac_shift_a": 0.1307,
+        "sapt_dft_grac_shift_b": 0.1307,
+        "sapt_dft_do_dhf": do_delta_hf,
+        "sapt_dft_induction_type": "CPHF",
+        "sapt_dft_do_fsapt": "FISAPT",
+        "fisapt_fsapt_filepath": "none",
+        "orbital_optimizer_package": "internal",
+    }
+
+    induction_partitions = {}
+    for functional in ("hf", "pbe0"):
+        psi4.core.clean()
+        psi4.core.clean_variables()
+        psi4.set_options({**common_options, "sapt_dft_functional": functional})
+        _, wfn = psi4.energy("sapt(dft)-d4(i)", molecule=molecule, return_wfn=True)
+        induction_partitions[functional] = {
+            direction: np.asarray(wfn.variable(variable)).copy()
+            for direction, variable in {
+                "A<-B": "FSAPT_INDAB_AB",
+                "A->B": "FSAPT_INDBA_AB",
+                "ELST": "FSAPT_ELST_AB",
+                "EXCH": "FSAPT_EXCH_AB",
+            }.items()
+        }
+
+    for direction in ("A<-B", "A->B"):
+        hf_partition = induction_partitions["hf"][direction]
+        pbe0_partition = induction_partitions["pbe0"][direction]
+        assert np.any(hf_partition)
+        np.testing.assert_allclose(
+            pbe0_partition,
+            hf_partition,
+            rtol=0.0,
+            atol=1.0e-10,
+            err_msg=f"CPHF F-SAPT induction partition ({direction})",
+        )
+
+    assert not np.allclose(
+        induction_partitions["pbe0"]["ELST"],
+        induction_partitions["hf"]["ELST"],
+        rtol=0.0,
+        atol=1.0e-10,
+    )
+    assert not np.allclose(
+        induction_partitions["pbe0"]["EXCH"],
+        induction_partitions["hf"]["EXCH"],
+        rtol=0.0,
+        atol=1.0e-10,
+    )
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
 @pytest.mark.saptdft
 def test_fsapthf_disp0_fisapt0_psivars():
     """
