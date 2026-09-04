@@ -577,30 +577,30 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     kwargs["external_potentials"]["B"] = ext_pot_B
                     _set_external_potentials_to_wavefunction(ext_pot_B, hf_wfn_B)
 
+            # Build the SAPT0 cache needed for electrostatics and exchange.
+            hf_cache_ein = jk_terms.build_sapt_jk_cache(
+                hf_wfn_dimer,
+                hf_wfn_A,
+                hf_wfn_B,
+                sapt_jk,
+                True,
+                external_potentials=kwargs.get("external_potentials", None),
+            )
+
+            # Electrostatics
+            core.timer_on("SAPT(HF):elst")
+            elst, extern_extern_IE = jk_terms.electrostatics(hf_cache_ein, True)
+            hf_data["extern_extern_IE"] = extern_extern_IE
+            hf_data.update(elst)
+            core.timer_off("SAPT(HF):elst")
+
+            # Exchange
+            core.timer_on("SAPT(HF):exch")
+            exch = jk_terms.exchange(hf_cache_ein, sapt_jk, True)
+            hf_data.update(exch)
+            core.timer_off("SAPT(HF):exch")
+
             if induction_type != "NONE":
-                # Build cache
-                hf_cache_ein = jk_terms.build_sapt_jk_cache(
-                    hf_wfn_dimer,
-                    hf_wfn_A,
-                    hf_wfn_B,
-                    sapt_jk,
-                    True,
-                    external_potentials=kwargs.get("external_potentials", None),
-                )
-
-                # Electrostatics
-                core.timer_on("SAPT(HF):elst")
-                elst, extern_extern_IE = jk_terms.electrostatics(hf_cache_ein, True)
-                hf_data["extern_extern_IE"] = extern_extern_IE
-                hf_data.update(elst)
-                core.timer_off("SAPT(HF):elst")
-
-                # Exchange
-                core.timer_on("SAPT(HF):exch")
-                exch = jk_terms.exchange(hf_cache_ein, sapt_jk, True)
-                hf_data.update(exch)
-                core.timer_off("SAPT(HF):exch")
-
                 core.timer_on("SAPT(HF):ind")
                 ind = jk_terms.induction(
                     hf_cache_ein,
@@ -621,6 +621,10 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
             core.print_out("\n")
             if induction_type == "NONE":
+                if do_delta_hf:
+                    data["Delta HF Correction"] = (
+                        dhf_value - hf_data["Elst10,r"] - hf_data["Exch10"]
+                    )
                 core.print_out("   SAPT0 induction skipped; induction will be assigned from delta HF.\n")
             elif do_delta_hf:
                 core.print_out(
@@ -1213,11 +1217,12 @@ def sapt_dft(
             "energy('sapt(dft)') instead of sapt_dft() directly, or supply the SAPT0 "
             "induction terms in `data`."
         )
-    if induction_type == "NONE" and delta_hf and "DHF VALUE" not in data:
+    if induction_type == "NONE" and delta_hf and "Delta HF Correction" not in data:
         raise ValidationError(
-            "SAPT_DFT_INDUCTION_TYPE=NONE with delta HF needs the 'DHF VALUE' produced by the "
-            "SAPT(DFT) delta HF segment, which sapt_dft() does not run. Call "
-            "energy('sapt(dft)') instead of sapt_dft() directly, or supply 'DHF VALUE' in `data`."
+            "SAPT_DFT_INDUCTION_TYPE=NONE with delta HF needs the total SAPT0 induction produced "
+            "by the SAPT(DFT) delta HF segment, which sapt_dft() does not run. Call "
+            "energy('sapt(dft)') instead of sapt_dft() directly, or supply that total as "
+            "'Delta HF Correction' in `data`."
         )
 
     core.timer_on("SAPT(DFT):Build JK")
@@ -1307,9 +1312,7 @@ def sapt_dft(
 
     if induction_type == "NONE":
         if delta_hf:
-            ind_total = data["DHF VALUE"] - data["Elst10,r"] - data["Exch10"]
-            data["Delta HF Correction"] = ind_total
-            core.set_variable("SAPT(DFT) Delta HF", ind_total)
+            core.set_variable("SAPT(DFT) Delta HF", data["Delta HF Correction"])
     elif delta_hf and "Delta HF Correction" not in data:
         total_sapt = (
             data["Elst10,r"] + data["Exch10"] + data["Ind20,r"] + data["Exch-Ind20,r"]

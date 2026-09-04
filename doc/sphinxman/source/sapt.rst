@@ -568,11 +568,13 @@ reuses the :math:`\Delta`-HF correction from that segment; with it disabled, onl
 the SAPT0 :math:`E_{ind,resp}^{(2)}` and :math:`E_{exch-ind,resp}^{(2)}` terms are
 reported and no :math:`\Delta`-HF correction is computed or stored.
 
-``NONE`` omits second-order induction. Without :math:`\Delta`-HF, induction is
-zero. With :math:`\Delta`-HF, the full induction component is assigned as the
-remainder that enforces
-:math:`E_{elst}+E_{exch}+E_{ind}=E_{int}^{HF}`; no ``Ind20`` or directional
-breakdown is then available.
+``NONE`` omits the second-order induction breakdown. Without
+:math:`\Delta`-HF, induction is zero. With :math:`\Delta`-HF, its total
+induction is defined from the SAPT0 electrostatics and exchange computed in the
+HF segment,
+:math:`E_{ind}=E_{int}^{HF}-E_{elst}^{SAPT0}-E_{exch}^{SAPT0}`. This equals the
+total ``CPHF`` induction, but no ``Ind20`` or directional breakdown is
+available.
 
 F-SAPT requires the SAPT(DFT) fragment induction and therefore works only with
 ``CPKS``; both ``CPHF`` and ``NONE`` are rejected when |sapt__sapt_dft_do_fsapt|

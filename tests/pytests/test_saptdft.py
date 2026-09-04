@@ -1318,14 +1318,8 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
             assert not wfn.has_variable("SAPT0 TOTAL ENERGY")
         assert compare_values(expected, psi4.variable("SAPT IND ENERGY"), 12, "SAPT0 induction")
     elif mode == "NONE":
-        expected = 0.0
-        if delta_hf:
-            expected = (
-                psi4.variable("DHF VALUE")
-                - psi4.variable("SAPT ELST ENERGY")
-                - psi4.variable("SAPT EXCH ENERGY")
-            )
-        assert compare_values(expected, psi4.variable("SAPT IND ENERGY"), 12, "omitted induction")
+        if not delta_hf:
+            assert compare_values(0.0, psi4.variable("SAPT IND ENERGY"), 12, "omitted induction")
         assert not psi4.core.has_variable("Ind20,r")
         assert not psi4.core.has_variable("SAPT DFT INDUCTION ENERGY")
         assert not wfn.has_variable("SAPT DFT INDUCTION ENERGY")
@@ -1349,7 +1343,8 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
     assert "Dimer for Localization" not in output
     assert ("     HF   (Dimer)\n" in output) is (delta_hf or mode == "CPHF")
     assert ("SAPT(DFT): delta HF Dimer" in output) is delta_hf
-    assert output.count("==> E10 Electostatics <==") == (1 if mode == "NONE" else 2)
+    expected_elst_calls = 1 + int(delta_hf or mode == "CPHF")
+    assert output.count("==> E10 Electostatics <==") == expected_elst_calls
     if mode == "CPHF":
         assert "Induction (SAPT0)" in output
         assert ("delta HF,r (2)" in output) is delta_hf
@@ -1357,6 +1352,51 @@ def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expecte
         assert "Total SAPT(HF)" not in output
     elif mode == "NONE":
         assert "No second-order induction breakdown is available." in output
+
+
+@pytest.mark.saptdft
+def test_saptdft_none_delta_hf_matches_cphf_total_induction():
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ne 1 4.5
+  units bohr
+    """)
+    options = {
+        "basis": "sto-3g",
+        "scf_type": "df",
+        "sapt_dft_grac_shift_a": 0.203293,
+        "sapt_dft_grac_shift_b": 0.203293,
+        "sapt_dft_do_dhf": True,
+        "sapt_dft_do_hybrid": False,
+        "sapt_dft_use_einsums": False,
+        "orbital_optimizer_package": "internal",
+    }
+
+    results = {}
+    for mode in ["CPHF", "NONE"]:
+        psi4.core.clean()
+        psi4.core.clean_variables()
+        psi4.set_options({**options, "sapt_dft_induction_type": mode})
+        energy, wfn = psi4.energy("sapt(dft)", molecule=mol, return_wfn=True)
+        results[mode] = {
+            "induction": wfn.variable("SAPT IND ENERGY"),
+            "total": energy,
+        }
+
+    assert compare_values(
+        results["CPHF"]["induction"],
+        results["NONE"]["induction"],
+        12,
+        "NONE/CPHF total induction",
+    )
+    assert compare_values(
+        results["CPHF"]["total"],
+        results["NONE"]["total"],
+        12,
+        "NONE/CPHF total energy",
+    )
+    assert not psi4.core.has_variable("Ind20,r")
 
 
 @pytest.mark.saptdft
