@@ -1400,6 +1400,48 @@ def test_saptdft_none_delta_hf_matches_cphf_total_induction():
 
 
 @pytest.mark.saptdft
+@pytest.mark.dftd4
+@uusing("dftd4")
+def test_saptdft_d4i_cphf_no_delta_hf_reference():
+    molecule = psi4.geometry(
+        _sapt_testing_mols["neutral_water_dimer"]
+        + """
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.set_options(
+        {
+            "basis": "cc-pvdz",
+            "scf_type": "df",
+            "sapt_dft_functional": "pbe0",
+            "sapt_dft_grac_shift_a": 0.1307,
+            "sapt_dft_grac_shift_b": 0.1307,
+            "sapt_dft_do_dhf": False,
+            "sapt_dft_induction_type": "CPHF",
+            "orbital_optimizer_package": "internal",
+        }
+    )
+
+    energy, wfn = psi4.energy("sapt(dft)-d4(i)", molecule=molecule, return_wfn=True)
+    expected = {
+        "SAPT ELST ENERGY": -0.012738658499742428,
+        "SAPT EXCH ENERGY": 0.011044055646125397,
+        "SAPT IND ENERGY": -0.001598107549445543,
+        "SAPT DISP ENERGY": -0.003609757702328654,
+        "SAPT(DFT) TOTAL ENERGY": -0.006902468105391228,
+    }
+    for variable, reference in expected.items():
+        assert compare_values(reference, wfn.variable(variable), 8, variable)
+
+    assert compare_values(expected["SAPT(DFT) TOTAL ENERGY"], energy, 8, "returned total")
+    assert not wfn.has_variable("SAPT(DFT) DELTA HF")
+
+
+@pytest.mark.saptdft
 @pytest.mark.parametrize(
     "options, message",
     [
