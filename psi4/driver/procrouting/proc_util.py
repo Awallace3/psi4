@@ -263,64 +263,6 @@ def prepare_sapt_molecule(sapt_dimer: core.Molecule, sapt_basis: str) -> Tuple[c
     return (sapt_dimer, monomerA, monomerB)
 
 
-SAPT_D4_INTERMOLECULAR_PARAM_NAME = "hf-d4bjeeqtwo"
-SAPT_D4_INTERMOLECULAR_LEVEL = "d4bj2b"
-
-
-def validate_sapt_empirical_dispersion(name):
-    """Validate the -D variant requested by SAPT method *name*.
-
-    The intermolecular pairwise -D4 route, ``(i)``, is parameterized only for the
-    two-body ``hf-d4bjeeqtwo`` (``d4bj2b``) damping parameters, since the
-    Axilrod-Teller-Muto three-body term has no pairwise decomposition.
-
-    Returns
-    -------
-    bool
-        True when *name* selects the intermolecular pairwise -D4 route.
-
-    Raises
-    ------
-    ValidationError
-        When *name* requests a -D4 parameter set unavailable to that route.
-    """
-
-    from .dft.dft_builder import _dispersion_aliases
-
-    disp_name = name.split("-")[1].lower()
-    if "d4" not in disp_name or disp_name.endswith("(s)"):
-        return False
-
-    variant = disp_name[:-3] if disp_name.endswith("(i)") else disp_name
-    resolved = _dispersion_aliases.get(variant)
-    if variant != "d4" and resolved != "d4bjeeqtwo":
-        raise ValidationError(
-            f"SAPT -D4: '{name}' selects the intermolecular pairwise -D4 treatment, which is only "
-            f"parameterized for the two-body {SAPT_D4_INTERMOLECULAR_PARAM_NAME} "
-            f"({SAPT_D4_INTERMOLECULAR_LEVEL}) damping parameters, so the '{variant}' parameter set "
-            f"is unavailable. Use '{name.split('-')[0]}-{variant}(s)' for the supermolecular "
-            f"{variant} treatment, or '{name.split('-')[0]}-{SAPT_D4_INTERMOLECULAR_LEVEL}(i)'."
-        )
-    return True
-
-
-def warn_qualitative_fsapt_empirical_dispersion():
-    """Print the caveat for a qualitative F-SAPT empirical-dispersion pair matrix.
-
-    The atom-pair breakdown always comes from the dimer -D3/-D4 calculation, so
-    for the supermolecular and delta-DFT flavors it does not sum to the scalar
-    dispersion energy that the run reports.
-    """
-
-    core.print_out(
-        "\n    Warning: the empirical F-SAPT dispersion breakdown uses the "
-        "intermolecular atom-pair contributions from the dimer calculation. "
-        "For supermolecular and delta-DFT D3/D4 methods, this qualitative "
-        "breakdown does not in general sum to the scalar dispersion or total "
-        "interaction energy; the reported scalar energies remain authoritative.\n\n"
-    )
-
-
 def sapt_empirical_dispersion(name, dimer_wfn, **kwargs):
     from .sapt import fisapt_proc
     from .empirical_disp import edisp_interaction_energy
@@ -338,17 +280,13 @@ def sapt_empirical_dispersion(name, dimer_wfn, **kwargs):
 
     save_pair = (saptd_name == "FISAPT0")
 
-    intermolecular_pairwise = validate_sapt_empirical_dispersion(name)
-    if intermolecular_pairwise:
-        core.print_out("   | Intermolecular Pairwise Dispersion Interaction Energy E_IE = sum_AB 2 E_AB |\n")
-        core.print_out(f"   | -D4 parameters fixed to {SAPT_D4_INTERMOLECULAR_PARAM_NAME}"
-                       f" ({SAPT_D4_INTERMOLECULAR_LEVEL}) |\n")
+    if 'd4' in disp_name.lower() and not disp_name.lower().endswith('(s)'):
         result = edisp_interaction_energy.sapt_dft_d4_interaction_energy(
             sapt_dimer=sapt_dimer,
             monomerA=monomerA,
             monomerB=monomerB,
             dimer_wfn=dimer_wfn,
-            dftd4_functional_name=SAPT_D4_INTERMOLECULAR_PARAM_NAME,
+            dftd4_functional_name='hf-d4bjeeqtwo',
             d4_type='intermolecular',
             data={},
         )
@@ -358,7 +296,9 @@ def sapt_empirical_dispersion(name, dimer_wfn, **kwargs):
         core.print_out("   | Supermolecular Dispersion Interaction Energy E_IE = E_IJ - E_I - E_J |\n")
         _, _disp_functor = build_functional_and_disp('hf-' + disp_name.replace("(s)", ""), restricted=True, save_pairwise_disp=save_pair, **kwargs)
 
+        ## Dimer dispersion
         dimer_disp_energy = _disp_functor.compute_energy(dimer_wfn.molecule(), dimer_wfn)
+        ## Monomer dispersion
         mon_disp_energy = _disp_functor.compute_energy(monomerA)
         mon_disp_energy += _disp_functor.compute_energy(monomerB)
 
@@ -407,13 +347,10 @@ def sapt_empirical_dispersion(name, dimer_wfn, **kwargs):
         # fisapt-d was designed with classic dftd3 pairwise that was too large by a factor of 2 (satisfied sum(pairwise) = 2 * two-body-dispersion-energy)
         # by QCEngine v0.26.0, dftd3 interface corrected to match s-dftd3 and dftd4, so file dropped here changes, and fsapt.py script compensates
         core.print_out("\n  Warning: Use the `Empirical_Disp.dat` file only with `fsapt.py` from Psi4 v1.7.0 or later.\n")
-        if not intermolecular_pairwise:
-            warn_qualitative_fsapt_empirical_dispersion()
         pw_disp.name = 'Empirical_Disp'
         core.set_variable("FSAPT_" + pw_disp.name.upper(), pw_disp)
         if core.get_option("FISAPT", "FISAPT_DO_FSAPT"):
             filepath = core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH")
-            if filepath.lower() != "none":
-                fisapt_proc._drop(pw_disp, filepath)
+            fisapt_proc._drop(pw_disp, filepath)
 
     return dimer_wfn

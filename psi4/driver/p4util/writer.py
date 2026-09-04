@@ -33,7 +33,6 @@ Only contains extensions to the :py:class:`psi4.core.Wavefunction` class.
 __all__ = ["write_timer_csv"]
 
 import csv
-import io
 from typing import Optional
 
 from psi4 import core
@@ -461,7 +460,8 @@ def write_timer_csv(filename: Optional[str] = None):
     if filename is None:
         filename = "timer.csv"
 
-    timer_dict = core.get_timer_records()
+    # Get the timer dictionary from core
+    timer_dict = core.get_timer_dict()
 
     # Write to CSV file
     with open(filename, 'w', newline='') as csvfile:
@@ -472,22 +472,20 @@ def write_timer_csv(filename: Optional[str] = None):
             'system_time',
             'n_calls'
         ]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames, lineterminator='\n')
-        return_file = io.StringIO(newline='')
-        return_writer = csv.DictWriter(return_file, fieldnames=fieldnames, lineterminator='\n')
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        return_str = "timer_name,wall_time,user_time,system_time,n_calls\n"
 
         writer.writeheader()
-        return_writer.writeheader()
-        for _, timer_data in sorted(timer_dict.items()):
+        for timer_name, timer_data in sorted(timer_dict.items()):
             row = {
-                'timer_name': timer_data['timer_name'],
+                'timer_name': timer_name,
                 'wall_time': timer_data['wall_time'],
                 'user_time': timer_data['user_time'],
                 'system_time': timer_data['system_time'],
                 'n_calls': int(timer_data['n_calls'])
             }
             writer.writerow(row)
-            return_writer.writerow(row)
+            return_str += f"{timer_name},{timer_data['wall_time']},{timer_data['user_time']},{timer_data['system_time']},{int(timer_data['n_calls'])}\n"
 
     core.print_out(f"\nTimer data written to {filename}\n")
-    return return_file.getvalue()
+    return return_str

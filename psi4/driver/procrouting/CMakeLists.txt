@@ -1,5 +1,4 @@
 add_subdirectory(dft)
-add_subdirectory(empirical_disp)
 add_subdirectory(findif_response_utils)
 # add_subdirectory(libcubeprop)
 # add_subdirectory(mcscf)
@@ -9,6 +8,7 @@ add_subdirectory(scf_proc)
 add_subdirectory(solvent)
 
 list(APPEND sources
+  empirical_dispersion
   interface_cfour
   proc_table
   roa
@@ -33,9 +33,6 @@ foreach(py ${sources})
     install(TARGETS ${py}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR}/psi4/driver/procrouting)
 endforeach()
-
-install(FILES empirical_dispersion.py
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR}/psi4/driver/procrouting)
 
 install(DIRECTORY libcubeprop
         DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR}/psi4/driver/procrouting

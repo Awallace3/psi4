@@ -546,12 +546,13 @@ estimated by scaling from the uncoupled value either by a fitted fixed value
 ratio of coupled and uncoupled dispersion energy (suggested by
 [Podeszwa:2006:400]_ ). This can be controlled by keyword
 |sapt__sapt_dft_exch_disp_scale_scheme|, with ``FIXED`` using the
-Hesselmann/Xie approach (the current default, with the Xie factor of 0.770),
-``DISP`` using the Podeszwa approach, or ``NONE`` for not scaling and using the
+Hesselmann/Xie approach (the current default, with the Xie factor of 0.770 versus |PSIfours| default prior to Nov 2022),
+``DISP`` using the Podeszwa approach (|PSIfours| default after Nov 2022), or ``NONE`` for not scaling and using the
 uncoupled exchange-dispersion energy directly.
 
-.. warning:: Before Nov 2022, |sapt__sapt_dft_exch_disp_scale_scheme| defaulted to ``FIXED`` with a Hesselmann factor of 0.686. It subsequently defaulted to ``DISP`` and now defaults to ``FIXED`` with the Xie factor of 0.770. This history can cause
-             older versions of |PSIfour| to produce a different value of
+.. warning:: Since Nov 2022, the defaults of options |sapt__sapt_dft_exch_disp_scale_scheme| and |sapt__sapt_dft_exch_disp_fixed_scale|
+             have been changed. Before, the former defaulted to ``FIXED`` with Hesselmann value of 0.686 for the latter. Now, the former defaults to ``DISP`` and should you instead select ``FIXED``, the default for the latter is the Xie value of 0.770. This might cause
+             an older version of |PSIfour| to produce a different value of
              exchange-dispersion energy from the latest version.
 
 Induction treatments
@@ -571,16 +572,11 @@ reported and no :math:`\Delta`-HF correction is computed or stored.
 zero. With :math:`\Delta`-HF, the full induction component is assigned as the
 remainder that enforces
 :math:`E_{elst}+E_{exch}+E_{ind}=E_{int}^{HF}`; no ``Ind20`` or directional
-breakdown is then available. The meaning of the ``SAPT(DFT) DELTA HF``
-QCVariable is therefore mode dependent: with ``CPKS`` or ``CPHF`` it holds the
-usual :math:`\delta_{HF}^{(2)}` correction to the second-order induction,
-whereas with ``NONE`` it holds that entire induction remainder, which is the
-whole reported induction energy.
+breakdown is then available.
 
 F-SAPT requires the SAPT(DFT) fragment induction and therefore works only with
 ``CPKS``; both ``CPHF`` and ``NONE`` are rejected when |sapt__sapt_dft_do_fsapt|
-is enabled. Use |sapt__sapt_dft_induction_maxiter| to set the coupled-induction
-iteration limit for either implementation backend.
+is enabled.
 
 SAPT(DFT)-D3 and SAPT(DFT)-D4 variants
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -596,13 +592,13 @@ SAPT(DFT) variants where the SAPT(DFT) dispersion term is replaced by semi-empir
     energy('dft-d3(sapt)')
     energy('dft-d4(sapt)')
 
-where ``(i)`` denotes an intermolecular pairwise dispersion treatment and
-``(s)`` denotes a supermolecular treatment. SAPT(DFT)-D4(I) uses the dedicated
-``sapt(<functional>)(i)`` damping-parameter record for the selected
-|sapt__sapt_dft_functional|. Currently, these methods support only HF, PBE0,
-or B3LYP as the selected functional. The fixed
-``hf-d4bjeeqtwo`` treatment described below applies to SAPT0/FISAPT0-D4(I),
-not SAPT(DFT)-D4(I).
+where ``(i)`` denotes an intermolecular pairwise dispersion treatment using
+the corresponding ``(i)`` damping-parameter record, while ``(s)`` denotes a
+supermolecular treatment using the corresponding ``(s)`` record. The four
+``sapt(dft)-d3/d4(i/s)`` variants currently support
+``SAPT_DFT_FUNCTIONAL`` values HF, PBE0, and B3LYP. The
+``dft-d3(sapt)`` and ``dft-d4(sapt)`` methods instead support any functional
+with damping parameters available from their respective dispersion engine.
 
 When a semi-empirical variant is used, the total SAPT(DFT) decomposition is
 still reported through standard SAPT variables (electrostatics, exchange,
@@ -647,7 +643,7 @@ where :math:`E_{int}^{D}` is the corresponding -D3/-D4 interaction energy. The
 double counting of induction effects present in both of these terms. Overall,
 Psi4 keeps the SAPT-like electrostatics, exchange, and induction terms, then
 assigns the remaining supermolecular DFT-D correction to dispersion so that the
-summed components reproduce the supermolecular DFT-D interaction energy.
+summed components reproduce the supermolecular DFT-D interaction energy. 
 
 
 Basic Keywords for SAPT(DFT) 
@@ -657,8 +653,6 @@ Basic Keywords for SAPT(DFT)
 .. include:: autodir_options_c/sapt__sapt_dft_grac_shift_b.rst
 .. include:: autodir_options_c/sapt__sapt_dft_do_dhf.rst
 .. include:: autodir_options_c/sapt__sapt_dft_induction_type.rst
-.. include:: autodir_options_c/sapt__sapt_dft_induction_maxiter.rst
-.. include:: autodir_options_c/sapt__sapt_dft_do_fsapt.rst
 .. include:: autodir_options_c/sapt__sapt_dft_exch_disp_scale_scheme.rst
 .. include:: autodir_options_c/sapt__sapt_dft_grac_compute.rst
 .. include:: autodir_options_c/sapt__sapt_dft_do_ddft.rst
@@ -1134,17 +1128,6 @@ SAPT0-D3/aug-cc-pVDZ, and SAPT0-D4/aug-cc-pVDZ.
    [Wallace:2024:114115]_, or above in the section ``SAPT(DFT)-D3 and
    SAPT(DFT)-D4 variants``.
 
-The intermolecular ``(i)`` treatment sums the pairwise -D4 dispersion over
-intermolecular atom pairs only, so it is defined solely for the two-body
-``hf-d4bjeeqtwo`` parameters (level ``d4bj2b``); the Axilrod-Teller-Muto
-three-body term has no pairwise decomposition. The generic ``sapt0-d4(i)`` and
-``fisapt0-d4(i)`` names, together with aliases that resolve to
-``d4bjeeqtwo``, therefore use that fixed parameterization. Other resolved
-levels, including ``d4bj``/``d4(bj)`` aliases that include ATM, are rejected
-for the intermolecular route; request an available level supermolecularly by
-adding ``(s)``. A changed |scf__dft_dispersion_parameters| option is also
-rejected for D4(I), rather than overriding the fixed parameters.
-
 A simple water dimer computation using SAPT0-D may look like::
 
     molecule water_dimer {
@@ -1173,6 +1156,6 @@ A simple water dimer computation using SAPT0-D may look like::
 
 Given the naturally pairwise-atomic nature of these empirical dispersion corrections,
 integration with existing FSAPT functionality is also available simply by calling
-``energy("fisapt0-d3mbj")`` or ``energy("fisapt0-d4bj2b")`` (alias to ``energy("fisapt0-d4bjeeqtwo")``). See :ref:`FSAPT
+``energy("fsapt0-d3mbj")`` or ``energy("fsapt0-d4bj2b")`` (alias to ``energy("fsapt0-d4bjeeqtwo")``). See :ref:`FSAPT
 <sec:fisapt>` documentation for more details on using FSAPT for functional
 group analyses.

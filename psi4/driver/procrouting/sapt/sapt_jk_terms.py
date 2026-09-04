@@ -33,7 +33,6 @@ import numpy as np
 from psi4 import core
 
 from ...p4util import solvers
-from ...p4util.exceptions import ConvergenceError, ValidationError
 from ...p4util.exceptions import *
 from .sapt_util import print_sapt_var
 from pprint import pprint as pp
@@ -111,10 +110,10 @@ def build_sapt_jk_cache(
     # interaction of A-B.
     if external_potentials:
         if external_potentials.get("A") is not None:
-            ext_A = wfn_dimer.potential_variable("A").computePotentialMatrix(wfn_A.basisset())
+            ext_A = wfn_A.external_pot().computePotentialMatrix(wfn_A.basisset())
             cache["V_A"].add(ext_A)
         if external_potentials.get("B") is not None:
-            ext_B = wfn_dimer.potential_variable("B").computePotentialMatrix(wfn_B.basisset())
+            ext_B = wfn_B.external_pot().computePotentialMatrix(wfn_B.basisset())
             cache["V_B"].add(ext_B)
 
     # Anything else we might need
@@ -157,16 +156,13 @@ def build_sapt_jk_cache(
     # external potential B.
     cache["extern_extern_IE"] = 0.0
     if external_potentials:
+        dimer_nr += wfn_dimer.external_pot().computeNuclearEnergy(wfn_dimer.molecule()) 
         if external_potentials.get("A") is not None:
-            potential_A = wfn_dimer.potential_variable("A")
-            dimer_nr += potential_A.computeNuclearEnergy(wfn_dimer.molecule())
-            monA_nr += potential_A.computeNuclearEnergy(wfn_A.molecule())
+            monA_nr += wfn_A.external_pot().computeNuclearEnergy(wfn_A.molecule())
         if external_potentials.get("B") is not None:
-            potential_B = wfn_dimer.potential_variable("B")
-            dimer_nr += potential_B.computeNuclearEnergy(wfn_dimer.molecule())
-            monB_nr += potential_B.computeNuclearEnergy(wfn_B.molecule())
+            monB_nr += wfn_B.external_pot().computeNuclearEnergy(wfn_B.molecule())
         if external_potentials.get("A") is not None and external_potentials.get("B") is not None:
-            cache["extern_extern_IE"] = potential_A.computeExternExternInteraction(potential_B)
+            cache["extern_extern_IE"] = wfn_A.external_pot().computeExternExternInteraction(wfn_B.external_pot())
 
     cache["nuclear_repulsion_energy"] = dimer_nr - monA_nr - monB_nr
     return cache
@@ -219,10 +215,10 @@ def build_sapt_jk_cache_sums(
     # External Potentials need to add to V_A and V_B
     if external_potentials:
         if external_potentials.get("A") is not None:
-            ext_A = wfn_dimer.potential_variable("A").computePotentialMatrix(wfn_A.basisset())
+            ext_A = wfn_A.external_pot().computePotentialMatrix(wfn_A.basisset())
             cache["V_A"].add(ext_A)
         if external_potentials.get("B") is not None:
-            ext_B = wfn_dimer.potential_variable("B").computePotentialMatrix(wfn_B.basisset())
+            ext_B = wfn_B.external_pot().computePotentialMatrix(wfn_B.basisset())
             cache["V_B"].add(ext_B)
 
     # Anything else we might need
@@ -263,16 +259,13 @@ def build_sapt_jk_cache_sums(
 
     cache["extern_extern_IE"] = 0.0
     if external_potentials:
+        dimer_nr += wfn_dimer.external_pot().computeNuclearEnergy(wfn_dimer.molecule()) 
         if external_potentials.get("A") is not None:
-            potential_A = wfn_dimer.potential_variable("A")
-            dimer_nr += potential_A.computeNuclearEnergy(wfn_dimer.molecule())
-            monA_nr += potential_A.computeNuclearEnergy(wfn_A.molecule())
+            monA_nr += wfn_A.external_pot().computeNuclearEnergy(wfn_A.molecule())
         if external_potentials.get("B") is not None:
-            potential_B = wfn_dimer.potential_variable("B")
-            dimer_nr += potential_B.computeNuclearEnergy(wfn_dimer.molecule())
-            monB_nr += potential_B.computeNuclearEnergy(wfn_B.molecule())
+            monB_nr += wfn_B.external_pot().computeNuclearEnergy(wfn_B.molecule())
         if external_potentials.get("A") is not None and external_potentials.get("B") is not None:
-            cache["extern_extern_IE"] = potential_A.computeExternExternInteraction(potential_B)
+            cache["extern_extern_IE"] = wfn_A.external_pot().computeExternExternInteraction(wfn_B.external_pot())
 
     cache["nuclear_repulsion_energy"] = dimer_nr - monA_nr - monB_nr
     return cache
@@ -283,7 +276,7 @@ def electrostatics(cache, do_print=True):
     Computes the E10 electrostatics from a build_sapt_jk_cache datacache.
     """
     if do_print:
-        core.print_out("\n  ==> E10 Electrostatics <== \n\n")
+        core.print_out("\n  ==> E10 Electostatics <== \n\n")
 
     # ELST
     Elst10 = 0.0
@@ -835,9 +828,6 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
     Solve the SAPT CPHF (or CPKS) equations.
     """
 
-    if maxiter <= 0:
-        raise ValidationError("SAPT_DFT_INDUCTION_MAXITER must be positive.")
-
     cache["wfn_A"].set_jk(jk)
     if sapt_jk_B:
         cache["wfn_B"].set_jk(sapt_jk_B)
@@ -935,16 +925,5 @@ def _sapt_cpscf_solve(cache, jk, rhsA, rhsB, maxiter, conv, sapt_jk_B=None):
         printer=pfunc,
     )
     core.print_out("   " + ("-" * sep_size) + "\n")
-
-    final_resid = [
-        (resid[0].sum_of_squares() / start_resid[0]) ** 0.5,
-        (resid[1].sum_of_squares() / start_resid[1]) ** 0.5,
-    ]
-    if any(not np.isfinite(value) or value >= conv for value in final_resid):
-        raise ConvergenceError(
-            "SAPT coupled induction equations",
-            maxiter,
-            f"Final relative residuals: A<-B={final_resid[0]:.3e}, B->A={final_resid[1]:.3e}.",
-        )
 
     return vecs

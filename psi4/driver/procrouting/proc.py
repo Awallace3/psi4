@@ -1638,15 +1638,10 @@ def validate_external_potential(external_potential) -> Dict:
 
     return ep2
 
-def _set_external_potentials_to_wavefunction(
-    external_potential: Union[List, Dict[str, List]],
-    wfn: "core.Wavefunction",
-    print_out: bool = True,
-):
+def _set_external_potentials_to_wavefunction(external_potential: Union[List, Dict[str, List]], wfn: "core.Wavefunction"):
     vep = validate_external_potential(external_potential)
 
     total_ep = core.ExternalPotential()
-    total_matrix = None
 
     for frag, ep_spec in vep.items():
         frag_ep = core.ExternalPotential()
@@ -1654,10 +1649,7 @@ def _set_external_potentials_to_wavefunction(
         if "matrix" in ep_spec:
             matrix = core.Matrix.from_array(np.array(ep_spec["matrix"]))
             frag_ep.setMatrix(matrix)
-            if total_matrix is None:
-                total_matrix = matrix.clone()
-            else:
-                total_matrix.add(matrix)
+            total_ep.setMatrix(matrix)
 
         if "points" in ep_spec:
             frag_ep.appendCharges(ep_spec["points"])
@@ -1709,11 +1701,8 @@ def _set_external_potentials_to_wavefunction(
             total_ep.addGaussian(corediffbasis, charges)
 
         wfn.set_potential_variable(frag, frag_ep)
-    if total_matrix is not None:
-        total_ep.setMatrix(total_matrix)
     wfn.set_external_potential(total_ep)
-    if print_out:
-        total_ep.print_out()
+    total_ep.print_out()
 
     # For FSAPT, we can take a dictionary of external potentials, e.g.,
     # external_potentials={'A': potA, 'B': potB, 'C': potC} (any optional)
@@ -4970,8 +4959,6 @@ def run_sapt(name, **kwargs):
     do_empirical_disp = True if '-d' in name.lower() else False
 
     if do_empirical_disp:
-        proc_util.validate_sapt_empirical_dispersion(name)
-
         ## Make sure we are turning SAPT0 dispersion off
         core.set_local_option('SAPT', 'SAPT0_E10', True)
         core.set_local_option('SAPT', 'SAPT0_E20IND', True)
@@ -5314,9 +5301,6 @@ def run_fisapt(name, **kwargs):
 
     if core.get_option('SCF', 'REFERENCE') != 'RHF':
         raise ValidationError('FISAPT requires requires \"reference rhf\".')
-
-    if "-d" in name.lower():
-        proc_util.validate_sapt_empirical_dispersion(name)
 
     if ref_wfn is None:
         core.timer_on("FISAPT: Dimer SCF")

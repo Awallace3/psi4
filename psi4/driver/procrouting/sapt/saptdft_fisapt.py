@@ -27,10 +27,9 @@
 #
 
 import numpy as np
+from pprint import pprint as pp
 
 from psi4 import core
-
-from ... import p4util
 from ...p4util.exceptions import *
 # Need to import FISAPT to set fdrop, plot, save_fsapt_variables methods
 from . import fisapt_proc
@@ -136,19 +135,6 @@ def setup_fisapt_object(
     # J_P_A and J_P_B have flipped terminology in FISAPT...
     matrix_cache["J_P_A"] = to_matrix(cache["J_P_B"])
     matrix_cache["J_P_B"] = to_matrix(cache["J_P_A"])
-    for fragment in "AB":
-        if wfn.has_potential_variable(fragment):
-            matrix_cache[f"V{fragment}_extern"] = wfn.potential_variable(
-                fragment
-            ).computePotentialMatrix(wfn.basisset())
-    if wfn.has_potential_variable("A") and wfn.has_potential_variable("B"):
-        extern_extern = core.Matrix("extern_extern_IE", 3, 3)
-        interaction = wfn.potential_variable("A").computeExternExternInteraction(
-            wfn.potential_variable("B")
-        )
-        extern_extern.np[0, 1] = interaction * 0.5
-        extern_extern.np[1, 0] = interaction * 0.5
-        matrix_cache["extern_extern_IE"] = extern_extern
 
     # Vector keys for eigenvalues
     vector_keys = {
@@ -335,20 +321,12 @@ def setup_fisapt_object(
     scalar_cache = {
         fisapt_key: scalars[sdft_key] for sdft_key, fisapt_key in scalar_keys.items()
     }
+    pp(scalar_cache)
     fisapt.set_scalar(scalar_cache)
     return fisapt
 
 
-def drop_saptdft_variables(
-    wfn,
-    wfn_A,
-    wfn_B,
-    cache,
-    scalars,
-    do_disp=True,
-    do_empirical_disp=False,
-    external_potentials=None,
-):
+def drop_saptdft_variables(wfn, wfn_A, wfn_B, cache, scalars):
     """
     Setup FISAPT object to call fisapt_fdrop for dropping SAPT(DFT) variables.
 
@@ -364,12 +342,6 @@ def drop_saptdft_variables(
         SAPT(DFT) cache containing orbital data
     scalars : dict
         SAPT energy components dictionary
-    do_disp : bool
-        Whether the routed calculation includes SAPT dispersion.
-    do_empirical_disp : bool
-        Whether the routed calculation includes empirical dispersion.
-    external_potentials : dict, optional
-        External potentials to preserve in F-SAPT output and variables.
     """
     fisapt = core.FISAPT(wfn)
     # iterate through cache and scalars to set these labels for
@@ -382,7 +354,10 @@ def drop_saptdft_variables(
         "IndAB_AB": "IndAB_AB",
         "IndBA_AB": "IndBA_AB",
     }
-    if do_disp:
+    # Set whether to drop dispersion matrix... fisapt has specific option
+    # for this...
+    core.set_local_option("FISAPT", "FISAPT_DO_FSAPT_DISP", core.get_option("SAPT", "SAPT_DFT_DO_DISP"))
+    if core.get_option("SAPT", "SAPT_DFT_DO_DISP"):
         cache_keys["Disp_AB"] = "Disp_AB"
     matrix_cache = {
         fisapt_key: cache[sdft_key] for sdft_key, fisapt_key in cache_keys.items()
@@ -397,23 +372,13 @@ def drop_saptdft_variables(
     }
     for key in vector_cache.keys():
         vector_cache[key].name = key.upper()
-    optstash = p4util.OptionsState(["FISAPT", "FISAPT_DO_FSAPT_DISP"])
-    try:
-        core.set_local_option("FISAPT", "FISAPT_DO_FSAPT_DISP", do_disp)
-        fisapt.set_matrix(matrix_cache)
-        fisapt.set_vector(vector_cache)
-        fisapt.fdrop(external_potentials)
-        fisapt.save_variables_to_wfn(
-            wfn,
-            external_potentials=external_potentials,
-            sapt_type="SAPT(DFT)",
-            do_disp=do_disp,
-        )
-    finally:
-        optstash.restore()
+    fisapt.set_matrix(matrix_cache)
+    fisapt.set_vector(vector_cache)
+    fisapt.fdrop()
+    fisapt.save_variables_to_wfn(wfn, sapt_type='SAPT(DFT)')
     # Now drop empirical D3/D4 dispersion if computed and expose the
     # same variable through both global and returned-wavefunction APIs.
-    if do_empirical_disp:
+    if core.get_option("SAPT", "SAPT_DFT_D4_IE") or core.get_option("SAPT", "SAPT_DFT_D3_IE"):
         pw_disp = cache["FSAPT_EMPIRICAL_DISP"]
         pw_disp.name = "Empirical_Disp"
         filepath = core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH")

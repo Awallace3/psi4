@@ -41,7 +41,6 @@
 #include "psi4/libiwl/iwl.hpp"
 #include "psi4/libqt/qt.h"
 #include "psi4/libmints/matrix.h"
-#include "psi4/libmints/matrix_eigen.h"
 #include "psi4/libmints/integral.h"
 #include "psi4/libdpd/dpd.h"
 #include "psi4/libpsi4util/PsiOutStream.h"
@@ -401,10 +400,6 @@ void Matrix::copy_to_row(int h, int row, double const *const data) {
 void Matrix::copy(const Matrix &cp) { copy(&cp); }
 
 void Matrix::copy(const SharedMatrix &cp) { copy(cp.get()); }
-
-EigenRowMajorMap Matrix::eigen_map() { return linalg::eigen_map(*this); }
-
-std::vector<EigenRowMajorMap> Matrix::eigen_maps() { return linalg::eigen_maps(*this); }
 
 #ifdef USING_OpenOrbitalOptimizer
 arma::mat Matrix::to_armadillo_matrix(int h) {

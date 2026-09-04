@@ -71,64 +71,6 @@ except ImportError:
 __all__ = ["run_sapt_dft", "sapt_dft", "run_sf_sapt"]
 
 
-def _validate_saptdft_fsapt_options(induction_type, do_fsapt):
-    if induction_type == "NONE" and do_fsapt:
-        raise ValidationError("F-SAPT requires induction; SAPT_DFT_INDUCTION_TYPE=NONE is unavailable.")
-    if induction_type == "CPHF" and do_fsapt:
-        raise ValidationError("F-SAPT requires SAPT(DFT) fragment induction; SAPT_DFT_INDUCTION_TYPE=CPHF is unavailable.")
-    if do_fsapt and core.get_option("FISAPT", "SSAPT0_SCALE"):
-        raise ValidationError("SAPT(DFT) F-SAPT does not support FISAPT__SSAPT0_SCALE=true.")
-
-
-def _normalize_saptdft_external_potentials(
-    external_potentials, dimer_wfn, wfn_A, wfn_B, validate_dimer=False
-):
-    if external_potentials is None:
-        return None
-
-    normalized = validate_external_potential(external_potentials)
-    required_wavefunctions = {
-        "dimer": (dimer_wfn, normalized if validate_dimer else None)
-    }
-    required_wavefunctions["monomer A"] = (
-        wfn_A,
-        {key: normalized[key] for key in ("A", "C") if key in normalized},
-    )
-    required_wavefunctions["monomer B"] = (
-        wfn_B,
-        {key: normalized[key] for key in ("B", "C") if key in normalized},
-    )
-    for label, (wfn, expected_specification) in required_wavefunctions.items():
-        if expected_specification is None:
-            continue
-        if wfn.external_pot() is None:
-            if expected_specification == {}:
-                continue
-            raise ValidationError(
-                f"sapt_dft() external_potentials require the {label} wavefunction to carry its external potential."
-            )
-        expected_wfn = core.Wavefunction.build(wfn.molecule(), wfn.basisset())
-        _set_external_potentials_to_wavefunction(
-            expected_specification, expected_wfn, print_out=False
-        )
-        actual_matrix = wfn.external_pot().computePotentialMatrix(wfn.basisset()).np
-        expected_matrix = expected_wfn.external_pot().computePotentialMatrix(wfn.basisset()).np
-        if actual_matrix.shape != expected_matrix.shape or not np.allclose(
-            actual_matrix, expected_matrix, rtol=0.0, atol=1.0e-12
-        ):
-            raise ValidationError(
-                "sapt_dft() external_potentials do not match the aggregate "
-                f"potential carried by the {label} wavefunction."
-            )
-    dimer_external_potential = dimer_wfn.external_pot()
-    for fragment in "ABC":
-        if dimer_wfn.has_potential_variable(fragment):
-            dimer_wfn.del_potential_variable(fragment)
-    _set_external_potentials_to_wavefunction(normalized, dimer_wfn, print_out=False)
-    dimer_wfn.set_external_potential(dimer_external_potential)
-    return normalized
-
-
 def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     """Run SAPT(DFT) while restoring all driver-managed options and timers."""
     optstash = p4util.OptionsState(
@@ -139,6 +81,9 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         ["SCF", "SAVE_JK"],
         ["SAPT", "SAPT_DFT_DO_DISP"],
         ["SAPT", "SAPT_DFT_DO_DDFT"],
+        ["SAPT", "SAPT_DFT_D3_IE"],
+        ["SAPT", "SAPT_DFT_D4_IE"],
+        ["SAPT", "SAPT_DFT_D_TYPE"],
     )
     core.timer_on("SAPT(DFT) Energy")
     try:
@@ -173,7 +118,10 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
     do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
     do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() != "NONE"
-    _validate_saptdft_fsapt_options(induction_type, do_fsapt)
+    if induction_type == "NONE" and do_fsapt:
+        raise ValidationError("F-SAPT requires induction; SAPT_DFT_INDUCTION_TYPE=NONE is unavailable.")
+    if induction_type == "CPHF" and do_fsapt:
+        raise ValidationError("F-SAPT requires SAPT(DFT) fragment induction; SAPT_DFT_INDUCTION_TYPE=CPHF is unavailable.")
 
     use_einsums = core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS")
 
@@ -237,13 +185,12 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     e_disp_param_name = None
     supported_functionals_edisp = ["hf", "pbe0", "b3lyp"]
 
-    do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
-    do_disp = core.get_option("SAPT", "SAPT_DFT_DO_DISP")
-    dispersion_type = None
-    sapt_dft_D4_IE = False
-    sapt_dft_D3_IE = False
+    # SAPT_DFT_D4_IE and SAPT_DFT_D3_IE control whether to run -D3/-D4.
+    # Explicit user settings are honored for plain SAPT(DFT); method aliases
+    # below temporarily override them and the public wrapper restores them.
     # Need to identify which flavor of -D we are using
     if "-D4" in name.upper():
+        d4_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
         if "-D4(S)" in name.upper():
             core.print_out(r"SAPT(DFT)-D4(S): -D4(S) for dispersion")
             e_disp_param_name = (
@@ -256,12 +203,14 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     "SAPT(DFT)-D4 with D4(S) parameters is currently only available for PBE0 and B3LYP."
                     f" Functional {sapt_dft_functional.lower()} does not have D4(S) parameters defined."
                 )
-            do_disp = False
-            sapt_dft_D4_IE = True
-            do_delta_dft = False
-            dispersion_type = "supermolecular"
+            core.set_global_option("SAPT_DFT_DO_DISP", 0)
+            core.set_global_option("SAPT_DFT_D4_IE", 1)
+            core.set_global_option("SAPT_DFT_DO_DDFT", 0)
+            core.set_global_option("SAPT_DFT_D_TYPE", "supermolecular")
         elif "-D4(I)" in name.upper():
             core.print_out(r"SAPT(DFT)-D4(I): -D4(I) for dispersion")
+            # D4(I) uses intermolecular atom-pair summation together with the
+            # SAPT functional's dedicated (I) damping-parameter record.
             e_disp_param_name = (
                 f"sapt({sapt_dft_functional.lower()})(i)"
                 if sapt_dft_functional.lower() != "hf"
@@ -272,16 +221,16 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     "SAPT(DFT)-D4 with D4(I) parameters is currently only available for PBE0 and B3LYP."
                     f" Functional {sapt_dft_functional.lower()} does not have D4(I) parameters defined."
                 )
-            do_disp = False
-            sapt_dft_D4_IE = True
-            do_delta_dft = False
-            dispersion_type = "intermolecular"
+            core.set_global_option("SAPT_DFT_DO_DISP", 0)
+            core.set_global_option("SAPT_DFT_D4_IE", 1)
+            core.set_global_option("SAPT_DFT_DO_DDFT", 0)
+            core.set_global_option("SAPT_DFT_D_TYPE", "intermolecular")
         elif "DFT-D4" in name.upper():
             core.print_out(r"DFT-D4(SAPT): $\Delta$-DFT+D4 for dispersion")
-            do_disp = False
-            sapt_dft_D4_IE = True
-            do_delta_dft = True
-            dispersion_type = "gd4_supermolecular"
+            core.set_global_option("SAPT_DFT_DO_DISP", 0)
+            core.set_global_option("SAPT_DFT_D4_IE", 1)
+            core.set_global_option("SAPT_DFT_DO_DDFT", 1)
+            core.set_global_option("SAPT_DFT_D_TYPE", "gd4_supermolecular")
             e_disp_param_name = (
                 sapt_dft_functional.lower()
                 if sapt_dft_functional.lower() != "hf"
@@ -289,12 +238,12 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             )
         else:
             raise ValueError(
-                "SAPT(DFT)-D4 flavors are selected by method name: use "
-                "'SAPT(DFT)-D4(I)' for the intermolecular -D4, 'SAPT(DFT)-D4(S)' "
-                "for the supermolecular -D4, or 'DFT-D4(SAPT)' for the "
-                "delta-DFT+D4 correction."
+                "SAPT(DFT)-D4 must be specified as 'SAPT(DFT)-D4(S)' or "
+                "'SAPT(DFT)-D4(I)' through setting SAPT_DFT_D_TYPE to "
+                "'supermolecular' or 'intermolecular'."
             )
     elif "-D3" in name.upper():
+        d4_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
         if "-D3(S)" in name.upper():
             core.print_out(r"SAPT(DFT)-D3(S): -D3(S) for dispersion")
             e_disp_param_name = (
@@ -307,10 +256,10 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     "SAPT(DFT)-D3 with D3(S) parameters is currently only available for PBE0 and B3LYP."
                     f" Functional {sapt_dft_functional.lower()} does not have D3(S) parameters defined."
                 )
-            do_disp = False
-            sapt_dft_D3_IE = True
-            do_delta_dft = False
-            dispersion_type = "supermolecular"
+            core.set_global_option("SAPT_DFT_DO_DISP", 0)
+            core.set_global_option("SAPT_DFT_D3_IE", 1)
+            core.set_global_option("SAPT_DFT_DO_DDFT", 0)
+            core.set_global_option("SAPT_DFT_D_TYPE", "supermolecular")
         elif "-D3(I)" in name.upper():
             core.print_out(r"SAPT(DFT)-D3(I): -D3(I) for dispersion")
             e_disp_param_name = (
@@ -323,16 +272,16 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     "SAPT(DFT)-D3 with D3(I) parameters is currently only available for PBE0 and B3LYP."
                     f" Functional {sapt_dft_functional.lower()} does not have D3(I) parameters defined."
                 )
-            do_disp = False
-            sapt_dft_D3_IE = True
-            do_delta_dft = False
-            dispersion_type = "intermolecular"
+            core.set_global_option("SAPT_DFT_DO_DISP", 0)
+            core.set_global_option("SAPT_DFT_D3_IE", 1)
+            core.set_global_option("SAPT_DFT_DO_DDFT", 0)
+            core.set_global_option("SAPT_DFT_D_TYPE", "intermolecular")
         elif "DFT-D3" in name.upper():
             core.print_out(r"DFT-D3(SAPT): $\Delta$-DFT+D3 for dispersion")
-            do_disp = False
-            sapt_dft_D3_IE = True
-            do_delta_dft = True
-            dispersion_type = "gd3_supermolecular"
+            core.set_global_option("SAPT_DFT_DO_DISP", 0)
+            core.set_global_option("SAPT_DFT_D3_IE", 1)
+            core.set_global_option("SAPT_DFT_DO_DDFT", 1)
+            core.set_global_option("SAPT_DFT_D_TYPE", "gd3_supermolecular")
             e_disp_param_name = (
                 sapt_dft_functional.lower()
                 if sapt_dft_functional.lower() != "hf"
@@ -340,22 +289,29 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             )
         else:
             raise ValueError(
-                "SAPT(DFT)-D3 flavors are selected by method name: use "
-                "'SAPT(DFT)-D3(I)' for the intermolecular -D3, 'SAPT(DFT)-D3(S)' "
-                "for the supermolecular -D3, or 'DFT-D3(SAPT)' for the "
-                "delta-DFT+D3 correction."
+                "SAPT(DFT)-D3 must be specified as 'SAPT(DFT)-D3(S)' or "
+                "'SAPT(DFT)-D3(I)' through setting SAPT_DFT_D_TYPE to "
+                "'supermolecular' or 'intermolecular'."
             )
         # # Re-prepare options after local option changes
         # core.prepare_options_for_module("SAPT")
 
+    do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
+    do_disp = core.get_option("SAPT", "SAPT_DFT_DO_DISP")
+    sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
+    sapt_dft_D3_IE = core.get_option("SAPT", "SAPT_DFT_D3_IE")
     do_dft = sapt_dft_functional != "HF"
 
-    if (
-        do_fsapt
-        and (sapt_dft_D4_IE or sapt_dft_D3_IE)
-        and (do_delta_dft or dispersion_type != "intermolecular")
-    ):
-        proc_util.warn_qualitative_fsapt_empirical_dispersion()
+    if do_fsapt and (sapt_dft_D4_IE or sapt_dft_D3_IE):
+        dispersion_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
+        if do_delta_dft or dispersion_type != "intermolecular":
+            core.print_out(
+                "\n    Warning: the empirical F-SAPT dispersion breakdown uses the "
+                "intermolecular atom-pair contributions from the dimer calculation. "
+                "For supermolecular and delta-DFT D3/D4 methods, this qualitative "
+                "breakdown does not in general sum to the scalar dispersion or total "
+                "interaction energy; the reported scalar energies remain authoritative.\n\n"
+            )
 
     # CPHF needs the HF segment for the SAPT0 induction terms, even without delta HF.
     run_hf_segment = do_delta_hf or (induction_type == "CPHF" and do_dft)
@@ -608,13 +564,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             if do_ext_potential:
                 kwargs["external_potentials"] = {}
                 hf_wfn_dimer.del_potential_variable("C")
-                dimer_pair_potentials = {
-                    fragment: potential
-                    for fragment, potential in (("A", ext_pot_A), ("B", ext_pot_B))
-                    if potential is not None
-                }
                 _set_external_potentials_to_wavefunction(
-                    dimer_pair_potentials,
+                    construct_external_potential_in_field_C([ext_pot_A, ext_pot_B]),
                     hf_wfn_dimer,
                 )
                 if ext_pot_C is not None:
@@ -655,7 +606,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     hf_cache_ein,
                     sapt_jk,
                     True,
-                    maxiter=core.get_option("SAPT", "SAPT_DFT_INDUCTION_MAXITER"),
+                    maxiter=core.get_option("SAPT", "MAXITER"),
                     conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
                     Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
                 )
@@ -704,20 +655,12 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     # If we did not compute HF wavefunction, we still need orbital coefficients
     # for IBOLocalizer2
     elif hf_wfn_dimer is None and do_fsapt:
-        if do_ext_potential:
-            kwargs["external_potentials"] = {
-                "C": construct_external_potential_in_field_C(
-                    [ext_pot_C, ext_pot_A, ext_pot_B]
-                )
-            }
         dimer_wfn = scf_helper(
             "SCF",
             molecule=sapt_dimer,
             banner="SAPT(DFT): Dimer for Localization",
             **kwargs,
         )
-        if do_ext_potential:
-            kwargs.pop("external_potentials")
     else:
         dimer_wfn = hf_wfn_dimer
 
@@ -786,42 +729,19 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     # Reset external potentials on kwargs['external_potentials']
     kwargs["external_potentials"] = {}
     if do_ext_potential:
+        dimer_wfn.del_potential_variable("C")
+        _set_external_potentials_to_wavefunction(
+            construct_external_potential_in_field_C([ext_pot_A, ext_pot_B]),
+            dimer_wfn,
+        )
         if ext_pot_C is not None:
             kwargs["external_potentials"]["C"] = ext_pot_C
         if ext_pot_A is not None:
             kwargs["external_potentials"]["A"] = ext_pot_A
+            _set_external_potentials_to_wavefunction(ext_pot_A, wfn_A)
         if ext_pot_B is not None:
             kwargs["external_potentials"]["B"] = ext_pot_B
-        monomer_a_potentials = {
-            fragment: potential
-            for fragment, potential in (("A", ext_pot_A), ("C", ext_pot_C))
-            if potential is not None
-        }
-        monomer_b_potentials = {
-            fragment: potential
-            for fragment, potential in (("B", ext_pot_B), ("C", ext_pot_C))
-            if potential is not None
-        }
-        if monomer_a_potentials:
-            _set_external_potentials_to_wavefunction(monomer_a_potentials, wfn_A)
-        if monomer_b_potentials:
-            _set_external_potentials_to_wavefunction(monomer_b_potentials, wfn_B)
-        for fragment in "ABC":
-            if dimer_wfn.has_potential_variable(fragment):
-                dimer_wfn.del_potential_variable(fragment)
-        if ext_pot_C is not None:
-            _set_external_potentials_to_wavefunction({"C": ext_pot_C}, dimer_wfn)
-        dimer_pair_potentials = {
-            fragment: potential
-            for fragment, potential in (("A", ext_pot_A), ("B", ext_pot_B))
-            if potential is not None
-        }
-        if dimer_pair_potentials:
-            _set_external_potentials_to_wavefunction(
-                dimer_pair_potentials, dimer_wfn
-            )
-        else:
-            dimer_wfn.set_external_potential(core.ExternalPotential())
+            _set_external_potentials_to_wavefunction(ext_pot_B, wfn_B)
 
     # Save JK object
     sapt_jk = wfn_B.jk()
@@ -916,13 +836,15 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         )
         core.print_out("\n")
         core.timer_on("SAPT(DFT):D4 Interaction Energy")
+        d4_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
+
         edisp_interaction_energy.sapt_dft_d4_interaction_energy(
             sapt_dimer=sapt_dimer,
             monomerA=monomerA,
             monomerB=monomerB,
             dimer_wfn=dimer_wfn,
             dftd4_functional_name=e_disp_param_name,
-            d4_type=dispersion_type,
+            d4_type=d4_type,
             data=data,
         )
         core.timer_off("SAPT(DFT):D4 Interaction Energy")
@@ -936,13 +858,15 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         )
         core.print_out("\n")
         core.timer_on("SAPT(DFT):D3 Interaction Energy")
+        d3_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
+
         edisp_interaction_energy.sapt_dft_d3_interaction_energy(
             sapt_dimer=sapt_dimer,
             monomerA=monomerA,
             monomerB=monomerB,
             dimer_wfn=dimer_wfn,
             dftd3_functional_name=e_disp_param_name,
-            d3_type=dispersion_type,
+            d3_type=d3_type,
             data=data,
         )
         core.timer_off("SAPT(DFT):D3 Interaction Energy")
@@ -971,9 +895,6 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         external_potentials=kwargs.get("external_potentials", None),
         do_delta_dft=do_delta_dft,
         do_disp=do_disp,
-        do_d3=sapt_dft_D3_IE,
-        do_d4=sapt_dft_D4_IE,
-        _driver_managed_external_potentials=True,
     )
 
     # Copy data back into globals
@@ -1219,9 +1140,6 @@ def sapt_dft(
     external_potentials: dict | None = None,
     do_delta_dft: bool = False,
     do_disp: bool = True,
-    do_d3: bool = False,
-    do_d4: bool = False,
-    _driver_managed_external_potentials: bool = False,
 ) -> dict:
     """Compute the SAPT(DFT) interaction energy components.
 
@@ -1244,11 +1162,7 @@ def sapt_dft(
     sapt_jk_B : core.JK or None, optional
         Separate JK object for monomer B, by default None (uses ``sapt_jk``).
     data : dict or None, optional
-        Pre-existing data dictionary to update, by default None. Direct calls
-        with ``SAPT_DFT_INDUCTION_TYPE=CPHF`` must provide ``Ind20,r``,
-        ``Exch-Ind20,r``, and both directional forms of each term. Direct calls
-        with ``SAPT_DFT_INDUCTION_TYPE=NONE`` and ``delta_hf=True`` must provide
-        ``DHF VALUE``.
+        Pre-existing data dictionary to update, by default None.
     print_header : bool, optional
         Whether to print the SAPT(DFT) header, by default True.
     cleanup_jk : bool, optional
@@ -1261,10 +1175,6 @@ def sapt_dft(
         Whether to compute delta-DFT correction, by default False.
     do_disp : bool, optional
         Whether to compute dispersion, by default True.
-    do_d3 : bool, optional
-        Whether routed D3 interaction dispersion is present, by default False.
-    do_d4 : bool, optional
-        Whether routed D4 interaction dispersion is present, by default False.
 
     Returns
     -------
@@ -1281,7 +1191,7 @@ def sapt_dft(
     ... ''')
     >>> psi4.set_options({"BASIS": "aug-cc-pVDZ"})
     >>> sapt_dimer, monomerA, monomerB = psi4.proc_util.prepare_sapt_molecule(
-    ...     dimer, "dimer"
+    ...     sapt_dimer, "dimer"
     ... )
     >>> psi4.set_options({"DFT_GRAC_SHIFT": 0.203293})
     >>> wfnA, energyA = psi4.energy("PBE0", molecule=monomerA, return_wfn=True)
@@ -1296,30 +1206,12 @@ def sapt_dft(
         data = {}
 
     induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
-    do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() != "NONE"
-    _validate_saptdft_fsapt_options(induction_type, do_fsapt)
-    external_potentials = _normalize_saptdft_external_potentials(
-        external_potentials,
-        dimer_wfn,
-        wfn_A,
-        wfn_B,
-        validate_dimer=do_fsapt and not _driver_managed_external_potentials,
-    )
-    cphf_induction_keys = [
-        "Ind20,r",
-        "Exch-Ind20,r",
-        "Ind20,r (A<-B)",
-        "Ind20,r (A->B)",
-        "Exch-Ind20,r (A<-B)",
-        "Exch-Ind20,r (A->B)",
-    ]
-    missing_cphf_keys = [key for key in cphf_induction_keys if key not in data]
-    if induction_type == "CPHF" and do_dft and missing_cphf_keys:
+    if induction_type == "CPHF" and do_dft and "Ind20,r" not in data:
         raise ValidationError(
             "SAPT_DFT_INDUCTION_TYPE=CPHF reuses the SAPT0 induction terms computed by the "
             "SAPT(DFT) delta HF segment, which sapt_dft() does not run. Call "
-            "energy('sapt(dft)') instead of sapt_dft() directly, or supply all SAPT0 "
-            f"induction terms in `data`. Missing keys: {', '.join(missing_cphf_keys)}."
+            "energy('sapt(dft)') instead of sapt_dft() directly, or supply the SAPT0 "
+            "induction terms in `data`."
         )
     if induction_type == "NONE" and delta_hf and "DHF VALUE" not in data:
         raise ValidationError(
@@ -1405,7 +1297,7 @@ def sapt_dft(
             sapt_jk,
             True,
             sapt_jk_B=sapt_jk_B,
-            maxiter=core.get_option("SAPT", "SAPT_DFT_INDUCTION_MAXITER"),
+            maxiter=core.get_option("SAPT", "MAXITER"),
             conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
             Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
         )
@@ -1456,7 +1348,7 @@ def sapt_dft(
         core.timer_on("SAPT(DFT): F-SAPT Electrostatics")
         cache = jk_terms.felst(
             cache,
-            elst["Elst10,r"],
+            elst["Elst10,r"] + extern_extern_IE,
             dimer_wfn,
             wfn_A,
             wfn_B,
@@ -1672,7 +1564,11 @@ def sapt_dft(
             cache[k] = v
         FISAPT_obj.fdrop(external_potentials)
 
-    if do_fsapt and (do_d4 or do_d3):
+    sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
+    sapt_dft_D3_IE = core.get_option("SAPT", "SAPT_DFT_D3_IE")
+    if do_fsapt and (
+        sapt_dft_D4_IE or sapt_dft_D3_IE
+    ):
         cache["FSAPT_EMPIRICAL_DISP"] = core.Matrix.from_array(
             data["FSAPT_EMPIRICAL_DISP"]
         )
@@ -1692,17 +1588,9 @@ def sapt_dft(
     )
 
     # because FISAPT_obj drop sets core variables, avoid setting them twice
-    write_fsapt_files = core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH").upper() != "NONE"
-    if do_fsapt and (write_fsapt_files or (fsapt_type == "SAPTDFT" and use_einsums)):
+    if core.get_option("FISAPT", "FISAPT_FSAPT_FILEPATH").upper() != "NONE" and do_fsapt:
         FISAPT_obj = saptdft_fisapt.drop_saptdft_variables(
-            dimer_wfn,
-            wfn_A,
-            wfn_B,
-            cache,
-            data,
-            do_disp=do_disp,
-            do_empirical_disp=do_d4 or do_d3,
-            external_potentials=external_potentials,
+            dimer_wfn, wfn_A, wfn_B, cache, data
         )
     elif do_fsapt:
         def _set_fsapt_var(label, value):
@@ -1718,20 +1606,13 @@ def sapt_dft(
         _set_fsapt_var("FSAPT_EXCH_AB", cache["Exch_AB"])
         _set_fsapt_var("FSAPT_INDAB_AB", cache["IndAB_AB"])
         _set_fsapt_var("FSAPT_INDBA_AB", cache["IndBA_AB"])
-        if do_disp:
-            disp_ab = cache["Disp_AB"]
-        else:
+        if sapt_dft_D4_IE or sapt_dft_D3_IE:
             disp_ab = cache["Elst_AB"].clone()
             disp_ab.zero()
-        _set_fsapt_var("FSAPT_DISP_AB", disp_ab)
-        if do_d4 or do_d3:
+            _set_fsapt_var("FSAPT_DISP_AB", disp_ab)
             _set_fsapt_var("FSAPT_EMPIRICAL_DISP", cache["FSAPT_EMPIRICAL_DISP"])
-        FISAPT_obj.save_variables_to_wfn(
-            dimer_wfn,
-            external_potentials=external_potentials,
-            sapt_type="SAPT(DFT)",
-            do_disp=do_disp,
-        )
+        else:
+            _set_fsapt_var("FSAPT_DISP_AB", cache["Disp_AB"])
     return data
 
 

@@ -1194,17 +1194,27 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         true), and ``NONE`` omits second-order induction. ``CPHF`` and ``NONE``
         are unavailable with F-SAPT. -*/
         options.add_str("SAPT_DFT_INDUCTION_TYPE", "CPKS", "CPKS CPHF NONE");
-        /*- Maximum number of coupled-induction CPHF/CPKS iterations for SAPT(DFT). -*/
-        options.add_int("SAPT_DFT_INDUCTION_MAXITER", 50);
         /*- Enables SAPT(DFT) to be run with PyEinsums if available -*/
         options.add_bool("SAPT_DFT_USE_EINSUMS", true);
         /*- Enables the hybrid xc kernel in dispersion? !expert -*/
         options.add_bool("SAPT_DFT_DO_HYBRID", true);
         /*- Compute the Delta-DFT correction? -*/
         options.add_bool("SAPT_DFT_DO_DDFT", false);
-        /*- Do SAPT(DFT) dispersion? Automatically disabled by the -D3/-D4 method names, which
-        supply dispersion from an empirical correction instead. -*/
+        /*- Do SAPT(DFT) Dispersion? Might turn off if using Delte-DFT correction and SAPT_DFT_D4_IE -*/
         options.add_bool("SAPT_DFT_DO_DISP", true);
+        /*- Compute -D3 dispersion in SAPT(DFT) for SAPT(DFT)-D3? !expert -*/
+        options.add_bool("SAPT_DFT_D3_IE", false);
+        /*- Compute -D4 dispersion in SAPT(DFT) for SAPT(DFT)-D4? !expert -*/
+        options.add_bool("SAPT_DFT_D4_IE", false);
+        /*- Specify if -D3/-D4 correction for SAPT(DFT)-D3/-D4 should be computed as
+         SAPT(DFT)-D3/-D4(I) for intermolecular or SAPT(DFT)-D3/-D4(S) for
+         supermolecular. Note, SAPT(DFT)-D4(S) operationally is identical to
+         SAPT0-D3 and SAPT0-D4; however, SAPT(DFT)-D4 performs better with
+         respect to high-level SAPT dispersion when computed intermolecularly
+         as SAPT(DFT)-D4(I). For SAPT(DFT)-D3, either -D3(I) or -D3(S) can
+         reliably be used. This will be set by SAPT(DFT) based on name of the method.
+          !expert -*/
+        options.add_str("SAPT_DFT_D_TYPE", "INTERMOLECULAR", "INTERMOLECULAR SUPERMOLECULAR GD3_SUPERMOLECULAR GD4_SUPERMOLECULAR");
         /*- Scheme for approximating exchange-dispersion for SAPT-DFT.
         Previous to Nov 2022, default was ``FIXED`` with Hesselmann value.
         ``NONE`` Use unscaled ``Exch-Disp2,u`` .

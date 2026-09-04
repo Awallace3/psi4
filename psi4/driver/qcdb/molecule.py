@@ -1489,12 +1489,7 @@ class Molecule(LibmintsMolecule):
                 if not isinstance(qca, (list, np.ndarray)):
                     core.set_variable(k, float(qca))
         if property:
-            from psi4 import core
-
-            c6 = jobrec['extras'].get('dftd4', {}).get('c6 coefficients')
-            if c6 is None:
-                raise ValidationError("run_dftd4: dftd4 harness returned no C6 coefficients for property=True")
-            core.set_variable('DFTD4 C6 COEFFICIENTS', c6)
+            core.set_variable('DFTD4 C6 COEFFICIENTS', jobrec['extras']['dftd4']['c6 coefficients'])
 
         if derint == -1:
             return (float(jobrec['extras']['qcvars']['DISPERSION CORRECTION ENERGY']),

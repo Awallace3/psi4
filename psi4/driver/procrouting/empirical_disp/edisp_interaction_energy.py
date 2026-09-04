@@ -30,8 +30,6 @@ import numpy as np
 
 from psi4 import core
 
-from ...p4util.exceptions import ValidationError
-
 from . import empirical_dispersion
 
 
@@ -89,15 +87,6 @@ def _sapt_dft_dispersion_interaction_energy(
     """
 
     if core.has_option_changed("SCF", "DFT_DISPERSION_PARAMETERS"):
-        if (
-            disp_label == "D4"
-            and d_type == "intermolecular"
-            and functional_name.lower() == "hf-d4bjeeqtwo"
-        ):
-            raise ValidationError(
-                "Intermolecular SAPT0/FISAPT0 D4(I) uses fixed hf-d4bjeeqtwo/d4bj2b parameters; "
-                "DFT_DISPERSION_PARAMETERS overrides are unavailable."
-            )
         modified_disp_params = core.get_option("SCF", "DFT_DISPERSION_PARAMETERS")
     else:
         modified_disp_params = None
@@ -144,7 +133,6 @@ def _sapt_dft_dispersion_interaction_energy(
                 FSAPT_EMPIRICAL_DISP[B, A] = pairwise_energies[A, B]
         data[f"{disp_label} IE"] = E_disp
         data['FSAPT_EMPIRICAL_DISP'] = FSAPT_EMPIRICAL_DISP
-        dimer_wfn.set_variable("PAIRWISE DISPERSION CORRECTION ANALYSIS", FSAPT_EMPIRICAL_DISP)
         _disp_functor.print_out()
     elif d_type == gd_type:
         # This uses the default Grimme parameters for the given

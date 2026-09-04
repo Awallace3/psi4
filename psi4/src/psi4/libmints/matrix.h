@@ -37,7 +37,6 @@
 
 #include "dimension.h"
 
-#include <eigen3/Eigen/Core>
 #ifdef USING_OpenOrbitalOptimizer
 #ifdef USING_LAPACK_MKL
 #include <mkl.h>
@@ -56,9 +55,6 @@ namespace arma {
 
 
 namespace psi {
-
-using EigenRowMajorMatrix = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
-using EigenRowMajorMap = Eigen::Map<EigenRowMajorMatrix>;
 
 struct dpdfile2;
 struct dpdbuf4;
@@ -294,9 +290,6 @@ class PSI_API Matrix : public std::enable_shared_from_this<Matrix> {
     void copy(const Matrix& cp);
     void copy(const Matrix* cp);
     /** @} */
-
-    EigenRowMajorMap eigen_map();
-    std::vector<EigenRowMajorMap> eigen_maps();
 
     /// Returns an Armadillo matrix
     arma::mat to_armadillo_matrix(int h=0);

@@ -32,24 +32,6 @@ import numpy as np
 
 from psi4 import core
 
-from ...constants import constants
-
-
-def _external_potential_coordinates(external_potentials):
-    if external_potentials is None:
-        return {}
-
-    from ..proc import validate_external_potential
-
-    normalized_potentials = validate_external_potential(external_potentials)
-    coordinates = {}
-    for fragment, potential in normalized_potentials.items():
-        potential_rows = [row[1:4] for row in potential.get("points", [])]
-        potential_rows.extend(row[1:4] for row in potential.get("diffuse", []))
-        if potential_rows:
-            coordinates[fragment] = np.asarray(potential_rows)
-    return coordinates
-
 
 def fisapt_compute_energy(self, jk_obj, *, external_potentials=None):
     """Computes the FSAPT energy. FISAPT::compute_energy"""
@@ -174,18 +156,24 @@ def fisapt_fdrop(self, external_potentials=None):
 
     # Write point and diffuse external-potential centers. Matrix-only
     # potentials have no geometry to serialize.
-    for frag, potential_array in _external_potential_coordinates(
-        external_potentials
-    ).items():
-        potential_array_angstrom = potential_array * constants.bohr2angstroms
-        external_xyz = f"{len(potential_array)}\n\n"
-        external_xyz += "".join(
-            "Ch %f %f %f\n" % tuple(xyz_row) for xyz_row in potential_array_angstrom
-        )
-        core.set_variable(f"FSAPT_EXTERN_POTENTIAL_{frag}", potential_array)
-        if write_output_files:
-            with open(filepath + os.sep + f"Extern_{frag}.xyz", "w") as fh:
-                fh.write(external_xyz)
+    if external_potentials is not None:
+        from ..proc import validate_external_potential
+
+        normalized_potentials = validate_external_potential(external_potentials)
+        for frag in "ABC":
+            potential = normalized_potentials.get(frag, {})
+            potential_lst = [row[1:4] for row in potential.get("points", [])]
+            potential_lst.extend(row[1:4] for row in potential.get("diffuse", []))
+            if not potential_lst:
+                continue
+
+            xyz = f"{len(potential_lst)}\n\n"
+            xyz += "".join("Ch %f %f %f\n" % tuple(xyz_row) for xyz_row in potential_lst)
+            potential_array = np.asarray(potential_lst)
+            core.set_variable(f"FSAPT_EXTERN_POTENTIAL_{frag}", potential_array)
+            if write_output_files:
+                with open(filepath + os.sep + f"Extern_{frag}.xyz", "w") as fh:
+                    fh.write(xyz)
 
     vectors = self.vectors()
     matrices = self.matrices()
@@ -257,7 +245,7 @@ def fisapt_fdrop(self, external_potentials=None):
                 _drop(matrices["sDisp_AB"], ssapt_filepath)
 
 
-def fisapt_variables_to_wfn(self, ref_wfn, external_potentials=None, sapt_type="fisapt0", do_disp=None):
+def fisapt_variables_to_wfn(self, ref_wfn, external_potentials=None, sapt_type='fisapt0'):
     """
     Stores FISAPT variables to the wavefunction for AtomicResults to
     store results.
@@ -269,6 +257,12 @@ def fisapt_variables_to_wfn(self, ref_wfn, external_potentials=None, sapt_type="
         ref_wfn.set_variable("SAPT ELST10,R ENERGY", scalars["Elst10,r"])
         if "Extern-Extern" in scalars:
             ref_wfn.set_variable("SAPT ELST EXTERN-EXTERN ENERGY", scalars["Extern-Extern"])
+        if core.has_variable("FSAPT_EXTERN_POTENTIAL_A"):
+            ref_wfn.set_variable("FSAPT_EXTERN_POTENTIAL_A", core.variable("FSAPT_EXTERN_POTENTIAL_A"))
+        if core.has_variable("FSAPT_EXTERN_POTENTIAL_B"):
+            ref_wfn.set_variable("FSAPT_EXTERN_POTENTIAL_B", core.variable("FSAPT_EXTERN_POTENTIAL_B"))
+        if core.has_variable("FSAPT_EXTERN_POTENTIAL_C"):
+            ref_wfn.set_variable("FSAPT_EXTERN_POTENTIAL_C", core.variable("FSAPT_EXTERN_POTENTIAL_C"))
         ref_wfn.set_variable("SAPT EXCH ENERGY", scalars["Exchange"])
         ref_wfn.set_variable("SAPT EXCH10 ENERGY", scalars["Exch10"])
         ref_wfn.set_variable("SAPT EXCH10(S^2) ENERGY", scalars["Exch10(S^2)"])
@@ -297,16 +291,10 @@ def fisapt_variables_to_wfn(self, ref_wfn, external_potentials=None, sapt_type="
         ref_wfn.set_variable("SAPT HF(2) ENERGY C", scalars["E_C"])
         ref_wfn.set_variable("SAPT HF(2) ENERGY HF", scalars["HF"])
 
-    if sapt_type.lower() == "fisapt0":
-        do_fsapt = core.get_option("FISAPT", "FISAPT_DO_FSAPT")
-    else:
-        do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() != "NONE"
-    if not do_fsapt:
+    # Check if doing FSAPT. If not, we do not have FSAPT vars to set so just
+    # return early
+    if not core.get_option("FISAPT", "FISAPT_DO_FSAPT"):
         return
-    for fragment, coordinates in _external_potential_coordinates(
-        external_potentials
-    ).items():
-        ref_wfn.set_variable(f"FSAPT_EXTERN_POTENTIAL_{fragment}", coordinates)
     # Then matrices
     matrices = self.matrices()
     ref_wfn.set_variable("FSAPT_QA", matrices["Qocc0A"])
@@ -316,15 +304,15 @@ def fisapt_variables_to_wfn(self, ref_wfn, external_potentials=None, sapt_type="
     ref_wfn.set_variable("FSAPT_INDAB_AB", matrices["IndAB_AB"])
     ref_wfn.set_variable("FSAPT_INDBA_AB", matrices["IndBA_AB"])
 
-    publish_disp = core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP") if do_disp is None else do_disp
-    if publish_disp:
+    # Handle conditional cases
+    if core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP"):
         ref_wfn.set_variable("FSAPT_DISP_AB", matrices["Disp_AB"])
 
     if core.get_option("FISAPT", "SSAPT0_SCALE"):
         ref_wfn.set_variable("FSAPT_SINDAB_AB", matrices["sIndAB_AB"])
         ref_wfn.set_variable("FSAPT_SINDBA_AB", matrices["sIndBA_AB"])
 
-        if publish_disp:
+        if core.get_option("FISAPT", "FISAPT_DO_FSAPT_DISP"):
             ref_wfn.set_variable("FSAPT_SDISP_AB", matrices["sDisp_AB"])
     return
 

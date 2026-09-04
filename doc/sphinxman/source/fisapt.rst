@@ -371,8 +371,9 @@ SAPT dispersion and empirical pairwise dispersion. In
 :func:`~psi4.driver.fsapt_analysis` output, ``EDisp`` contains the empirical
 D3/D4 partition and can be nonzero even when ``Disp`` is zero. For
 supermolecular and :math:`\Delta`-DFT variants, this qualitative partition uses
-the dimer atom-pair contributions and therefore need not sum to the
-authoritative scalar dispersion or total interaction energy.
+only the intermolecular atom-pair contributions from the dimer calculation and
+therefore need not sum to the authoritative scalar dispersion or total
+interaction energy; Psi4 prints a warning when this approximation is used.
 
 
 Order-1 Visualization with PyMol

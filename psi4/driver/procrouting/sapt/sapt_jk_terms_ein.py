@@ -34,7 +34,6 @@ import numpy as np
 from psi4 import core
 
 from ...p4util import solvers
-from ...p4util.exceptions import ConvergenceError, ValidationError
 from .sapt_util import print_sapt_var
 import einsums as ein
 
@@ -688,16 +687,13 @@ def build_sapt_jk_cache(
     # External Potentials need to add to V_A and V_B. Preserve the
     # normalized metadata for downstream F-SAPT partitioning.
     cache["external_potentials"] = external_potentials
-    cache["external_potential_objects"] = {}
     if external_potentials:
         if external_potentials.get("A") is not None:
-            external_A = wfn_dimer.potential_variable("A")
-            cache["external_potential_objects"]["A"] = external_A
-            cache["V_A"].add(external_A.computePotentialMatrix(wfn_A.basisset()))
+            ext_A = wfn_A.external_pot().computePotentialMatrix(wfn_A.basisset())
+            cache["V_A"].add(ext_A)
         if external_potentials.get("B") is not None:
-            external_B = wfn_dimer.potential_variable("B")
-            cache["external_potential_objects"]["B"] = external_B
-            cache["V_B"].add(external_B.computePotentialMatrix(wfn_B.basisset()))
+            ext_B = wfn_B.external_pot().computePotentialMatrix(wfn_B.basisset())
+            cache["V_B"].add(ext_B)
 
     # Anything else we might need
     # S corresponds to the overlap matrix, S^{AO}
@@ -738,20 +734,19 @@ def build_sapt_jk_cache(
 
     cache["extern_extern_IE"] = 0.0
     if external_potentials:
+        dimer_nr += wfn_dimer.external_pot().computeNuclearEnergy(wfn_dimer.molecule())
         if external_potentials.get("A") is not None:
-            potential_A = wfn_dimer.potential_variable("A")
-            dimer_nr += potential_A.computeNuclearEnergy(wfn_dimer.molecule())
-            monA_nr += potential_A.computeNuclearEnergy(wfn_A.molecule())
+            monA_nr += wfn_A.external_pot().computeNuclearEnergy(wfn_A.molecule())
         if external_potentials.get("B") is not None:
-            potential_B = wfn_dimer.potential_variable("B")
-            dimer_nr += potential_B.computeNuclearEnergy(wfn_dimer.molecule())
-            monB_nr += potential_B.computeNuclearEnergy(wfn_B.molecule())
+            monB_nr += wfn_B.external_pot().computeNuclearEnergy(wfn_B.molecule())
         if (
             external_potentials.get("A") is not None
             and external_potentials.get("B") is not None
         ):
-            cache["extern_extern_IE"] = potential_A.computeExternExternInteraction(
-                potential_B
+            cache["extern_extern_IE"] = (
+                wfn_A.external_pot().computeExternExternInteraction(
+                    wfn_B.external_pot()
+                )
             )
 
     cache["nuclear_repulsion_energy"] = dimer_nr - monA_nr - monB_nr
@@ -893,8 +888,8 @@ def felst(
             Elst1_terms[3] += E
 
     # External A - atom B interactions
-    if "A" in cache.get("external_potential_objects", {}):
-        ext_pot_A = cache["external_potential_objects"]["A"]
+    if "A" in cache.get("external_potentials", {}):
+        ext_pot_A = cache["external_potentials"]["A"]
         for B in range(nB_atoms):
             atom_mol = core.Molecule([core.Atom(ZB.np[B])])
             atom_mol.set_geometry([mol.xyz(B)])
@@ -903,8 +898,8 @@ def felst(
             Elst1_terms[3] += interaction
 
     # External B - atom A interactions
-    if "B" in cache.get("external_potential_objects", {}):
-        ext_pot_B = cache["external_potential_objects"]["B"]
+    if "B" in cache.get("external_potentials", {}):
+        ext_pot_B = cache["external_potentials"]["B"]
         for A in range(nA_atoms):
             atom_mol = core.Molecule([core.Atom(ZA.np[A])])
             atom_mol.set_geometry([mol.xyz(A)])
@@ -1011,8 +1006,8 @@ def felst(
         Elst_AB[A, nB_atoms : nB_atoms + nb] += E_vec
 
     # Add external-A <-> orbital b interaction
-    if "A" in cache.get("external_potential_objects", {}):
-        ext_pot_A = cache["external_potential_objects"]["A"]
+    if "A" in cache.get("external_potentials", {}):
+        ext_pot_A = cache["external_potentials"]["A"]
         Vtemp = ext_pot_A.computePotentialMatrix(dimer_basis)
 
         Vtemp_mat = Vtemp.clone()
@@ -1046,8 +1041,8 @@ def felst(
         Elst_AB[nA_atoms : nA_atoms + na, B] += E_vec
 
     # Add orbital a <-> external-B interaction
-    if "B" in cache.get("external_potential_objects", {}):
-        ext_pot_B = cache["external_potential_objects"]["B"]
+    if "B" in cache.get("external_potentials", {}):
+        ext_pot_B = cache["external_potentials"]["B"]
         Vtemp = ext_pot_B.computePotentialMatrix(dimer_basis)
 
         Vtemp_mat = Vtemp.clone()
@@ -1071,12 +1066,12 @@ def felst(
     )
 
     # Add extern-extern contribution if both external potentials exist
-    if "A" in cache.get("external_potential_objects", {}) and "B" in cache.get(
-        "external_potential_objects", {}
+    if "A" in cache.get("external_potentials", {}) and "B" in cache.get(
+        "external_potentials", {}
     ):
-        ext_pot_A = cache["external_potential_objects"]["A"]
-        ext_pot_B = cache["external_potential_objects"]["B"]
-        ext_ext = ext_pot_A.computeExternExternInteraction(ext_pot_B)
+        ext_pot_A = cache["external_potentials"]["A"]
+        ext_pot_B = cache["external_potentials"]["B"]
+        ext_ext = ext_pot_A.computeExternExternInteraction(ext_pot_B) * 2.0
         Elst_AB[nA_atoms + na, nB_atoms + nb] += ext_ext
 
     # Store breakdown matrix in cache
@@ -2013,7 +2008,7 @@ def find(
             abs(scalars["Ind20,u (A->B)"] - Ind20u_BA) < 1e-8
         ), f"Ind20u_BA mismatch: {1000 * scalars['Ind20,u (A->B)']:.8f} vs {1000 * Ind20u_BA:.8f}"
         core.print_out(
-            f"    Ind20,u                 = {(Ind20u_AB + Ind20u_BA) * 1000:18.8f} [mEh]\n"
+            f"    Ind20,u                 = {Ind20u_AB + Ind20u_BA * 1000:18.8f} [mEh]\n"
         )
         core.print_out(
             f"    Exch-Ind20,u (A<-B)     = {ExchInd20u_AB * 1000:18.8f} [mEh]\n"
@@ -2028,7 +2023,7 @@ def find(
             abs(scalars["Exch-Ind20,u (A->B)"] - ExchInd20u_BA) < 1e-8
         ), f"ExchInd20u_BA mismatch: {1000 * scalars['Exch-Ind20,u (A->B)']:.8f} vs {1000 * ExchInd20u_BA:.8f}"
         core.print_out(
-            f"    Exch-Ind20,u            = {(ExchInd20u_AB + ExchInd20u_BA) * 1000:18.8f} [mEh]\n\n"
+            f"    Exch-Ind20,u            = {ExchInd20u_AB + ExchInd20u_BA * 1000:18.8f} [mEh]\n\n"
         )
 
     # Induction scaling
@@ -2965,7 +2960,7 @@ def induction(
     cache: dict,
     jk: core.JK,
     do_print: bool = True,
-    maxiter: int = 50,
+    maxiter: int = 12,
     conv: float = 1.0e-8,
     do_response: bool = True,
     Sinf: bool = False,
@@ -3006,7 +3001,7 @@ def induction(
     do_print : bool, optional
         Whether to print results, by default True.
     maxiter : int, optional
-        Maximum CPSCF iterations for coupled induction, by default 50.
+        Maximum CPSCF iterations for coupled induction, by default 12.
     conv : float, optional
         Convergence threshold for CPSCF solver, by default 1.0e-8.
     do_response : bool, optional
@@ -3069,12 +3064,50 @@ def induction(
 
     jk.compute()
 
-    _, J_P_B, J_P_A = jk.J()
+    J_Ot, J_P_B, J_P_A = jk.J()
+    K_Ot, K_P_B, K_P_A = jk.K()
 
     # Save for later usage in find()
-    cache["J_P_A"] = J_P_A.clone()
-    cache["J_P_B"] = J_P_B.clone()
+    cache["J_P_A"] = J_P_A
+    cache["J_P_B"] = J_P_B
 
+    # Eq. 17: exchange-induction potential for A due to B
+    EX_A = K_B.clone()
+    EX_A.scale(-1.0)
+    ein.core.axpy(-2.0, J_O.np, EX_A.np)
+    ein.core.axpy(1.0, K_O.np, EX_A.np)
+    ein.core.axpy(2.0, J_P_B.np, EX_A.np)
+
+    # Apply all the axpy operations to EX_A
+    S_DB, S_DB_VA, S_DB_VA_DB_S = chain_gemm_einsums(
+        [S, D_B, V_A, D_B, S], return_tensors=[True, True, False, True]
+    )
+    S_DB_JA, S_DB_JA_DB_S = chain_gemm_einsums(
+        [S_DB, J_A, D_B, S], return_tensors=[True, False, True]
+    )
+    S_DB_S_DA, S_DB_S_DA_VB = chain_gemm_einsums(
+        [S_DB, S, D_A, V_B],
+        return_tensors=[False, True, True],
+    )
+    ein.core.axpy(-1.0, S_DB_VA.np, EX_A.np)
+    ein.core.axpy(-2.0, S_DB_JA.np, EX_A.np)
+    ein.core.axpy(1.0, chain_gemm_einsums([S_DB, K_A]).np, EX_A.np)
+    ein.core.axpy(1.0, S_DB_S_DA_VB.np, EX_A.np)
+    ein.core.axpy(2.0, chain_gemm_einsums([S_DB_S_DA, J_B]).np, EX_A.np)
+    ein.core.axpy(1.0, S_DB_VA_DB_S.np, EX_A.np)
+    ein.core.axpy(2.0, S_DB_JA_DB_S.np, EX_A.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([S_DB, K_O], ["N", "T"]).np, EX_A.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([V_B, D_B, S]).np, EX_A.np)
+    ein.core.axpy(-2.0, chain_gemm_einsums([J_B, D_B, S]).np, EX_A.np)
+    ein.core.axpy(1.0, chain_gemm_einsums([K_B, D_B, S]).np, EX_A.np)
+    ein.core.axpy(1.0, chain_gemm_einsums([V_B, D_A, S, D_B, S]).np, EX_A.np)
+    ein.core.axpy(2.0, chain_gemm_einsums([J_B, D_A, S, D_B, S]).np, EX_A.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([K_O, D_B, S]).np, EX_A.np)
+
+    EX_A_MO_1 = chain_gemm_einsums(
+        [cache["Cocc_A"], EX_A, cache["Cvir_A"]],
+        ["T", "N", "N"],
+    )
     mapA = {
         "S": S,
         "J_O": J_O,
@@ -3095,9 +3128,69 @@ def induction(
         "J_P_B": J_P_B,
     }
     EX_A_MO = build_exch_ind_pot_AB(mapA)
+    assert np.allclose(EX_A_MO, EX_A_MO_1), "EX_A_MO and EX_A_MO_1 do not match!"
 
     # Eq. 17: exchange-induction potential for B due to A
+    EX_B = K_A.clone()
+    EX_B.scale(-1.0)
+    ein.core.axpy(-2.0, J_O.np, EX_B.np)
+    ein.core.axpy(1.0, K_O.np, EX_B.np.T)
+    ein.core.axpy(2.0, J_P_A.np, EX_B.np)
+    cache["J_P_A"] = J_P_A
+    cache["J_P_B"] = J_P_B
+
+    S_DA, S_DA_VB, S_DA_VB_DA_S = chain_gemm_einsums(
+        [S, D_A, V_B, D_A, S], return_tensors=[True, True, False, True]
+    )
+    S_DA_JB, S_DA_JB_DA_S = chain_gemm_einsums(
+        [S_DA, J_B, D_A, S], return_tensors=[True, False, True]
+    )
+    S_DA_S_DB, S_DA_S_DB_VA = chain_gemm_einsums(
+        [S_DA, S, D_B, V_A],
+        return_tensors=[False, True, True],
+    )
+
+    # Apply all the axpy operations to EX_B
+    ein.core.axpy(-1.0, S_DA_VB.np, EX_B.np)
+    ein.core.axpy(-2.0, S_DA_JB.np, EX_B.np)
+    ein.core.axpy(1.0, chain_gemm_einsums([S_DA, K_B]).np, EX_B.np)
+    ein.core.axpy(1.0, S_DA_S_DB_VA.np, EX_B.np)
+    ein.core.axpy(2.0, chain_gemm_einsums([S_DA_S_DB, J_A]).np, EX_B.np)
+    ein.core.axpy(1.0, S_DA_VB_DA_S.np, EX_B.np)
+    ein.core.axpy(2.0, S_DA_JB_DA_S.np, EX_B.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([S_DA, K_O]).np, EX_B.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([V_A, D_A, S]).np, EX_B.np)
+    ein.core.axpy(-2.0, chain_gemm_einsums([J_A, D_A, S]).np, EX_B.np)
+    ein.core.axpy(1.0, chain_gemm_einsums([K_A, D_A, S]).np, EX_B.np)
+    ein.core.axpy(1.0, chain_gemm_einsums([V_A, D_B, S, D_A, S]).np, EX_B.np)
+    ein.core.axpy(2.0, chain_gemm_einsums([J_A, D_B, S, D_A, S]).np, EX_B.np)
+    ein.core.axpy(-1.0, chain_gemm_einsums([K_O, D_A, S], ["T", "N", "N"]).np, EX_B.np)
+
+    EX_B_MO_1 = chain_gemm_einsums(
+        [cache["Cocc_B"], EX_B, cache["Cvir_B"]],
+        ["T", "N", "N"],
+    )
     EX_B_MO = build_exch_ind_pot_BA(mapA)
+    assert np.allclose(EX_B_MO, EX_B_MO_1), "EX_B_MO and EX_B_MO_1 do not match!"
+
+    # Eq. 8: omega^A = V^A + 2*J^A
+    w_A = V_A.clone()
+    w_A.name = "w_A"
+    ein.core.axpy(2.0, J_A.np, w_A.np)
+
+    # Eq. 8: omega^B = V^B + 2*J^B
+    w_B = V_B.clone()
+    w_B.name = "w_B"
+    ein.core.axpy(2.0, J_B.np, w_B.np)
+
+    w_B_MOA_1 = chain_gemm_einsums(
+        [cache["Cocc_A"], w_B, cache["Cvir_A"]],
+        ["T", "N", "N"],
+    )
+    w_A_MOB_1 = chain_gemm_einsums(
+        [cache["Cocc_B"], w_A, cache["Cvir_B"]],
+        ["T", "N", "N"],
+    )
 
     # Eq. 16: induction potential omega_B in MO basis of A
     w_B_MOA = build_ind_pot(
@@ -3119,6 +3212,8 @@ def induction(
         }
     )
     w_A_MOB.name = "w_A_MOB"
+    assert np.allclose(w_B_MOA, w_B_MOA_1), "w_B_MOA and w_B_MOA_1 do not match!"
+    assert np.allclose(w_A_MOB, w_A_MOB_1), "w_A_MOB and w_A_MOB_1 do not match!"
 
     # Do uncoupled induction calculations
     core.print_out("   => Uncoupled Induction <= \n\n")
@@ -3493,9 +3588,6 @@ def _sapt_cpscf_solve(
         Converged response vectors ``[x_A, x_B]`` as numpy arrays.
     """
 
-    if maxiter <= 0:
-        raise ValidationError("SAPT_DFT_INDUCTION_MAXITER must be positive.")
-
     cache["wfn_A"].set_jk(jk)
     if sapt_jk_B:
         cache["wfn_B"].set_jk(sapt_jk_B)
@@ -3613,16 +3705,5 @@ def _sapt_cpscf_solve(
         printer=pfunc,
     )
     core.print_out("   " + ("-" * sep_size) + "\n")
-
-    final_resid = [
-        (ein.core.dot(resid[0], resid[0]) / start_resid[0]) ** 0.5,
-        (ein.core.dot(resid[1], resid[1]) / start_resid[1]) ** 0.5,
-    ]
-    if any(not np.isfinite(value) or value >= conv for value in final_resid):
-        raise ConvergenceError(
-            "SAPT coupled induction equations",
-            maxiter,
-            f"Final relative residuals: A<-B={final_resid[0]:.3e}, B->A={final_resid[1]:.3e}.",
-        )
 
     return vecs

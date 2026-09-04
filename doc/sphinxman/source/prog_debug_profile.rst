@@ -72,7 +72,7 @@ Psi4 exposes internal timers through Python, which is often enough for
 lightweight profiling and regression checks.
 
 - ``psi4.core.clean_timers()`` resets accumulated timer state.
-- ``psi4.core.get_timer_records()`` returns hierarchical timer records keyed by timer ID.
+- ``psi4.core.get_timer_dict()`` returns a dictionary keyed by timer name.
 - ``psi4.driver.p4util.write_timer_csv(filename)`` writes all current timer
   values to CSV (default file name: ``timer.csv``).
 
@@ -88,10 +88,8 @@ Example:
    psi4.core.clean_timers()
    e, wfn = psi4.energy("sapt(dft)", return_wfn=True)
 
-   timers = psi4.core.get_timer_records()
-   sapt_timer = next(record for record in timers.values()
-                     if record["timer_name"] == "SAPT(DFT) Energy")
-   print(f"SAPT(DFT) wall time: {sapt_timer['wall_time']:.2f} s")
+   timers = psi4.core.get_timer_dict()
+   print(f"SAPT(DFT) wall time: {timers['SAPT(DFT) Energy']['wall_time']:.2f} s")
 
    psi4.driver.p4util.write_timer_csv("saptdft_timers.csv")
 

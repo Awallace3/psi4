@@ -873,11 +873,7 @@ FILE* DFHelper::stream_check(std::string filename, std::string op) {
         file_streams_[filename] = std::make_shared<Stream>(filename, op);
     }
 
-    FILE* fp = file_streams_[filename]->get_stream(op);
-    if (!fp) {
-        throw PSIEXCEPTION("DFHelper could not open tensor file '" + filename + "' with mode '" + op + "'.");
-    }
-    return fp;
+    return file_streams_[filename]->get_stream(op);
 }
 
 DFHelper::StreamStruct::StreamStruct(std::string filename, std::string op, bool activate) {
@@ -885,15 +881,15 @@ DFHelper::StreamStruct::StreamStruct(std::string filename, std::string op, bool 
     filename_ = filename;
     if (activate) {
         fp_ = fopen(filename.c_str(), op_.c_str());
-        open_ = fp_ != nullptr;
-        backing_file_ = open_;
+        open_ = true;
     }
 }
 
 DFHelper::StreamStruct::StreamStruct() {}
 
 DFHelper::StreamStruct::~StreamStruct() {
-    close_stream();
+    fflush(fp_);
+    fclose(fp_);
     std::remove(filename_.c_str());
 }
 
@@ -903,8 +899,7 @@ FILE* DFHelper::StreamStruct::get_stream(std::string op) {
     } else {
         if (!open_) {
             fp_ = fopen(filename_.c_str(), op_.c_str());
-            open_ = fp_ != nullptr;
-            backing_file_ = backing_file_ || open_;
+            open_ = true;
         }
     }
 
@@ -917,17 +912,11 @@ void DFHelper::StreamStruct::change_stream(std::string op) {
     }
     op_ = op;
     fp_ = fopen(filename_.c_str(), op_.c_str());
-    open_ = fp_ != nullptr;
-    backing_file_ = backing_file_ || open_;
 }
 
 void DFHelper::StreamStruct::close_stream() {
-    if (open_ && fp_) {
-        fflush(fp_);
-        fclose(fp_);
-    }
-    fp_ = nullptr;
-    open_ = false;
+    fflush(fp_);
+    fclose(fp_);
 }
 
 void DFHelper::put_tensor(std::string file, double* b, std::pair<size_t, size_t> i0, std::pair<size_t, size_t> i1,
@@ -975,7 +964,7 @@ void DFHelper::put_tensor(std::string file, double* Mp, const size_t start1, con
     // is everything contiguous?
     if (st == 0) {
         size_t s = fwrite(&Mp[0], sizeof(double), a0 * a1, fp);
-        if (s != a0 * a1) {
+        if (!s) {
             std::stringstream error;
             error << "DFHelper:put_tensor: write error";
             throw PSIEXCEPTION(error.str().c_str());
@@ -983,8 +972,8 @@ void DFHelper::put_tensor(std::string file, double* Mp, const size_t start1, con
     } else {
         for (size_t i = start1; i < stop1; i++) {
             // write
-            size_t s = fwrite(&Mp[(i - start1) * a1], sizeof(double), a1, fp);
-            if (s != a1) {
+            size_t s = fwrite(&Mp[i * a1], sizeof(double), a1, fp);
+            if (!s) {
                 std::stringstream error;
                 error << "DFHelper:put_tensor: write error";
                 throw PSIEXCEPTION(error.str().c_str());
@@ -994,7 +983,7 @@ void DFHelper::put_tensor(std::string file, double* Mp, const size_t start1, con
         }
         // manual last one
         size_t s = fwrite(&Mp[(a0 - 1) * a1], sizeof(double), a1, fp);
-        if (s != a1) {
+        if (!s) {
             std::stringstream error;
             error << "DFHelper:put_tensor: write error";
             throw PSIEXCEPTION(error.str().c_str());
@@ -1010,7 +999,7 @@ void DFHelper::put_tensor_AO(std::string file, double* Mp, size_t size, size_t s
 
     // everything is contiguous
     size_t s = fwrite(&Mp[0], sizeof(double), size, fp);
-    if (s != size) {
+    if (!s) {
         std::stringstream error;
         error << "DFHelper:put_tensor_AO: write error";
         throw PSIEXCEPTION(error.str().c_str());
@@ -1025,7 +1014,7 @@ void DFHelper::get_tensor_AO(std::string file, double* Mp, size_t size, size_t s
 
     // everything is contiguous
     size_t s = fread(&Mp[0], sizeof(double), size, fp);
-    if (s != size) {
+    if (!s) {
         std::stringstream error;
         error << "DFHelper:get_tensor_AO: read error";
         throw PSIEXCEPTION(error.str().c_str());
@@ -1085,7 +1074,7 @@ void DFHelper::get_tensor_(std::string file, double* b, const size_t start1, con
     // is everything contiguous?
     if (st == 0) {
         size_t s = fread(&b[0], sizeof(double), a0 * a1, fp);
-        if (s != a0 * a1) {
+        if (!s) {
             std::stringstream error;
             error << "DFHelper:get_tensor: read error";
             throw PSIEXCEPTION(error.str().c_str());
@@ -1094,7 +1083,7 @@ void DFHelper::get_tensor_(std::string file, double* b, const size_t start1, con
         for (size_t i = 0; i < a0 - 1; i++) {
             // read
             size_t s = fread(&b[i * a1], sizeof(double), a1, fp);
-            if (s != a1) {
+            if (!s) {
                 std::stringstream error;
                 error << "DFHelper:get_tensor: read error";
                 throw PSIEXCEPTION(error.str().c_str());
@@ -1109,7 +1098,7 @@ void DFHelper::get_tensor_(std::string file, double* b, const size_t start1, con
         }
         // manual last one
         size_t s = fread(&b[(a0 - 1) * a1], sizeof(double), a1, fp);
-        if (s != a1) {
+        if (!s) {
             std::stringstream error;
             error << "DFHelper:get_tensor: read error";
             throw PSIEXCEPTION(error.str().c_str());
@@ -2395,7 +2384,6 @@ void DFHelper::fill_tensor(std::string name, double* b, std::vector<size_t> a1, 
 
 // Fill using a pre-allocated SharedMatrix
 void DFHelper::fill_tensor(std::string name, SharedMatrix M) {
-    check_file_key(name);
     std::string filename = std::get<1>(files_[name]);
     std::tuple<size_t, size_t, size_t> sizes;
     sizes = (tsizes_.find(filename) != tsizes_.end() ? tsizes_[filename] : sizes_[filename]);
@@ -2403,7 +2391,6 @@ void DFHelper::fill_tensor(std::string name, SharedMatrix M) {
     fill_tensor(name, M, {0, std::get<0>(sizes)}, {0, std::get<1>(sizes)}, {0, std::get<2>(sizes)});
 }
 void DFHelper::fill_tensor(std::string name, SharedMatrix M, std::vector<size_t> a1) {
-    check_file_key(name);
     std::string filename = std::get<1>(files_[name]);
     std::tuple<size_t, size_t, size_t> sizes;
     sizes = (tsizes_.find(filename) != tsizes_.end() ? tsizes_[filename] : sizes_[filename]);
@@ -2411,7 +2398,6 @@ void DFHelper::fill_tensor(std::string name, SharedMatrix M, std::vector<size_t>
     fill_tensor(name, M, a1, {0, std::get<1>(sizes)}, {0, std::get<2>(sizes)});
 }
 void DFHelper::fill_tensor(std::string name, SharedMatrix M, std::vector<size_t> a1, std::vector<size_t> a2) {
-    check_file_key(name);
     std::string filename = std::get<1>(files_[name]);
     std::tuple<size_t, size_t, size_t> sizes;
     sizes = (tsizes_.find(filename) != tsizes_.end() ? tsizes_[filename] : sizes_[filename]);
@@ -2420,7 +2406,6 @@ void DFHelper::fill_tensor(std::string name, SharedMatrix M, std::vector<size_t>
 }
 void DFHelper::fill_tensor(std::string name, SharedMatrix M, std::vector<size_t> t0, std::vector<size_t> t1,
                            std::vector<size_t> t2) {
-    check_file_key(name);
     std::string filename = std::get<1>(files_[name]);
     // has this integral been transposed?
     std::tuple<size_t, size_t, size_t> sizes;
@@ -2608,11 +2593,7 @@ void DFHelper::write_disk_tensor(std::string key, SharedMatrix M, std::vector<si
 }
 void DFHelper::write_disk_tensor(std::string key, SharedMatrix M, std::vector<size_t> a0, std::vector<size_t> a1,
                                  std::vector<size_t> a2) {
-    for (const auto& range : {a0, a1, a2}) {
-        if (range.size() != 2 || range[0] >= range[1]) {
-            throw PSIEXCEPTION("DFHelper::write_disk_tensor ranges must contain two increasing bounds.");
-        }
-    }
+    // being pythonic ;)
     std::pair<size_t, size_t> i0 = std::make_pair(a0[0], a0[1] - 1);
     std::pair<size_t, size_t> i1 = std::make_pair(a1[0], a1[1] - 1);
     std::pair<size_t, size_t> i2 = std::make_pair(a2[0], a2[1] - 1);
@@ -2621,10 +2602,10 @@ void DFHelper::write_disk_tensor(std::string key, SharedMatrix M, std::vector<si
     check_file_tuple(key, i0, i1, i2);
     check_matrix_size(key, M, i0, i1, i2);
 
-    std::string filename = std::get<1>(files_[key]);
-    auto stream = file_streams_.find(filename);
-    std::string op = stream != file_streams_.end() && stream->second->has_backing_file() ? "r+b" : "wb";
-    put_tensor(filename, M->pointer()[0], i0, i1, i2, op);
+    // "wb" is the way to go. the stream will change when when the tensor is read,
+    // but this should be extendible to back-and-forth read/writes.
+    std::string op = "wb";
+    put_tensor(std::get<1>(files_[key]), M->pointer()[0], i0, i1, i2, op);
 }
 
 // Write to a disk tensor from pointer, be careful!
@@ -2651,11 +2632,7 @@ void DFHelper::write_disk_tensor(std::string key, double* b, std::vector<size_t>
 }
 void DFHelper::write_disk_tensor(std::string key, double* b, std::vector<size_t> a0, std::vector<size_t> a1,
                                  std::vector<size_t> a2) {
-    for (const auto& range : {a0, a1, a2}) {
-        if (range.size() != 2 || range[0] >= range[1]) {
-            throw PSIEXCEPTION("DFHelper::write_disk_tensor ranges must contain two increasing bounds.");
-        }
-    }
+    // being pythonic ;)
     std::pair<size_t, size_t> i0 = std::make_pair(a0[0], a0[1] - 1);
     std::pair<size_t, size_t> i1 = std::make_pair(a1[0], a1[1] - 1);
     std::pair<size_t, size_t> i2 = std::make_pair(a2[0], a2[1] - 1);
@@ -2663,10 +2640,10 @@ void DFHelper::write_disk_tensor(std::string key, double* b, std::vector<size_t>
     check_file_key(key);
     check_file_tuple(key, i0, i1, i2);
 
-    std::string filename = std::get<1>(files_[key]);
-    auto stream = file_streams_.find(filename);
-    std::string op = stream != file_streams_.end() && stream->second->has_backing_file() ? "r+b" : "wb";
-    put_tensor(filename, b, i0, i1, i2, op);
+    // "wb" is the way to go. the stream will change when when the tensor is read,
+    // but this should be extendible to back-and-forth read/writes.
+    std::string op = "wb";
+    put_tensor(std::get<1>(files_[key]), b, i0, i1, i2, op);
 }
 
 void DFHelper::check_file_key(std::string name) {
@@ -2678,10 +2655,6 @@ void DFHelper::check_file_key(std::string name) {
 }
 void DFHelper::check_matrix_size(std::string name, SharedMatrix M, std::pair<size_t, size_t> t0,
                                  std::pair<size_t, size_t> t1, std::pair<size_t, size_t> t2) {
-    if (!M) {
-        throw PSIEXCEPTION("DFHelper tensor operations require a matrix.");
-    }
-
     size_t A0 = std::get<1>(t0) - std::get<0>(t0) + 1;
     size_t A1 = (std::get<1>(t1) - std::get<0>(t1) + 1) * (std::get<1>(t2) - std::get<0>(t2) + 1);
 

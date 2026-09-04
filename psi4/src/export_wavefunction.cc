@@ -491,12 +491,11 @@ void export_wavefunction(py::module& m) {
     /// IBOLocalizer2 for FISAPT
     py::class_<fisapt::IBOLocalizer2, std::shared_ptr<fisapt::IBOLocalizer2>>(m, "IBOLocalizer2", "An IBO2 Localizer")
         .def(py::init<std::shared_ptr<BasisSet>, std::shared_ptr<BasisSet>, std::shared_ptr<Matrix>>())
-        .def_static("build", &fisapt::IBOLocalizer2::build, "Build the IBO2 localized orbitals.")
-        .def("localize", &fisapt::IBOLocalizer2::localize, "Cocc"_a, "Focc"_a,
-             "ranges"_a = std::vector<int>{}, "Localize the orbitals.")
+        .def("build", &fisapt::IBOLocalizer2::build, "Build the IBO2 localized orbitals.")
+        .def("localize", &fisapt::IBOLocalizer2::localize, "Localize the orbitals.")
         .def("print_header", &fisapt::IBOLocalizer2::print_header, "print header information for IBO2 localizer.")
-        .def("print_charges", &fisapt::IBOLocalizer2::print_charges, "scale"_a = 2.0,
-             "print charges information for IBO2 localizer.");
+        .def("print_charges", &fisapt::IBOLocalizer2::print_charges, "print charges information for IBO2 localizer.")
+    ;
 
     /// CIWavefunction functions
     void (detci::CIvect::*py_civ_copy)(std::shared_ptr<psi::detci::CIvect>, int, int) = &detci::CIvect::copy;

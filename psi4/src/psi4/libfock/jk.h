@@ -1071,6 +1071,7 @@ class PSI_API CDJK : public DiskDFJK {
 
     // => Required Algorithm-Specific Methods <= //
 
+    
     /// @brief CD has no out-of-core algorithm: validates SCF_SUBTYPE, then forces in-core.
     /// @return Always true.
     bool is_core() override;

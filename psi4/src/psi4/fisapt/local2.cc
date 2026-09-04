@@ -47,9 +47,6 @@ namespace fisapt {
 IBOLocalizer2::IBOLocalizer2(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> minao,
                              std::shared_ptr<Matrix> C)
     : primary_(primary), minao_(minao), C_(C) {
-    if (!primary || !minao || !C) {
-        throw PSIEXCEPTION("IBOLocalizer2 requires primary, minimal, and coefficient inputs.");
-    }
     if (C->nirrep() != 1) {
         throw PSIEXCEPTION("Localizer: C matrix is not C1");
     }
@@ -349,35 +346,13 @@ std::shared_ptr<Matrix> IBOLocalizer2::reorder_orbitals(std::shared_ptr<Matrix> 
 std::map<std::string, std::shared_ptr<Matrix> > IBOLocalizer2::localize(std::shared_ptr<Matrix> Cocc,
                                                                         std::shared_ptr<Matrix> Focc,
                                                                         const std::vector<int>& ranges2) {
-    if (!Cocc || !Focc) {
-        throw PSIEXCEPTION("IBOLocalizer2::localize requires Cocc and Focc matrices.");
-    }
-    if (Cocc->nirrep() != 1 || Focc->nirrep() != 1) {
-        throw PSIEXCEPTION("IBOLocalizer2::localize requires single-irrep Cocc and Focc matrices.");
-    }
-    int nocc = Cocc->coldim(0);
-    if (Cocc->rowdim(0) != primary_->nbf()) {
-        throw PSIEXCEPTION("IBOLocalizer2::localize Cocc row dimension must match the primary basis.");
-    }
-    if (Focc->rowdim(0) != nocc || Focc->coldim(0) != nocc) {
-        throw PSIEXCEPTION("IBOLocalizer2::localize Focc dimensions must match the occupied orbitals.");
-    }
+    if (!A_) build_iaos();
 
     std::vector<int> ranges = ranges2;
-    if (ranges.empty()) {
-        ranges = {0, nocc};
-    } else {
-        if (ranges.size() < 2 || ranges.front() != 0 || ranges.back() != nocc) {
-            throw PSIEXCEPTION("IBOLocalizer2::localize ranges must cover all occupied orbitals.");
-        }
-        for (size_t index = 1; index < ranges.size(); ++index) {
-            if (ranges[index - 1] < 0 || ranges[index] < ranges[index - 1] || ranges[index] > nocc) {
-                throw PSIEXCEPTION("IBOLocalizer2::localize ranges must contain nondecreasing in-bounds endpoints.");
-            }
-        }
+    if (!ranges.size()) {
+        ranges.push_back(0);
+        ranges.push_back(Cocc->colspi()[0]);
     }
-
-    if (!A_) build_iaos();
 
     std::vector<std::vector<int> > minao_inds;
     for (int A = 0; A < true_atoms_.size(); A++) {

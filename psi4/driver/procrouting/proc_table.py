@@ -261,6 +261,7 @@ for key in functionals:
         # the default prior to v1.10
         if disp.startswith('d4'):
             for suffix in ['(i)', '(s)']:
+                procedures['energy']['hf-' + disp + suffix] = proc.run_sapt
                 procedures['energy']['sapt0-' + disp + suffix] = proc.run_sapt
                 procedures['energy']['fisapt0-' + disp + suffix] = proc.run_fisapt
 
