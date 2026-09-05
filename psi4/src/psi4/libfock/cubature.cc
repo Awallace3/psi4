@@ -4480,8 +4480,14 @@ void DFTGrid::buildGridFromOptions(std::map<std::string, int> int_opts_map,
     double epsilon = full_float_options["DFT_BASIS_TOLERANCE"];
     auto extents = std::make_shared<BasisExtents>(primary_, epsilon);
     timer_on("build grid");
-    // The options_ member is shadowed 
-    bool is_cuest = options_.get_bool("USE_CUEST");
+    // The options_ member is shadowed
+    // USE_CUEST alone only selects the cuEST DF J/K builder.  The XC quadrature
+    // moves to the GPU -- and with it the skipping of postProcess() below --
+    // only when CUEST_XC is also set.  This conjunction must stay in step with
+    // VBase::use_cuest_xc() in v.cc: if the two disagree, the XC code either
+    // walks an empty blocks() list or asks for a cuest_grid() that was never
+    // built.
+    bool is_cuest = options_.get_bool("USE_CUEST") && options_.get_bool("CUEST_XC");
     MolecularGrid::buildGridFromOptions(opt, is_cuest);
     timer_off("build grid");
     if (is_cuest) return;

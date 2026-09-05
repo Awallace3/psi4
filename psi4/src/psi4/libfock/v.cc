@@ -232,9 +232,16 @@ void VBase::common_init() {
     num_threads_ = omp_get_max_threads();
 #endif
 }
+bool VBase::use_cuest_xc() const {
+#ifdef USING_cuEST
+    return options_.get_bool("USE_CUEST") && options_.get_bool("CUEST_XC");
+#else
+    return false;
+#endif
+}
 void VBase::throw_if_cuest_unsupported(const std::string& what) const {
 #ifdef USING_cuEST
-    if (options_.get_bool("USE_CUEST")) {
+    if (use_cuest_xc()) {
         throw PSIEXCEPTION(
             what +
             " has no cuEST implementation.\n"
@@ -242,7 +249,8 @@ void VBase::throw_if_cuest_unsupported(const std::string& what) const {
             "  post-processing, so there are no CPU grid blocks to integrate over.  Falling\n"
             "  back to the CPU code here would silently produce a zero exchange-correlation\n"
             "  contribution rather than a wrong-but-visible answer.\n"
-            "  Re-run this computation with USE_CUEST false.");
+            "  Set CUEST_XC false to run the exchange-correlation quadrature on the CPU while\n"
+            "  keeping the cuEST density-fitted J/K, or re-run with USE_CUEST false.");
     }
 #endif
 }
@@ -269,7 +277,7 @@ std::shared_ptr<VBase> VBase::build_V(std::shared_ptr<BasisSet> primary, std::sh
 }
 void VBase::set_Cocc(std::vector<SharedMatrix> Coccs) {
 #ifdef USING_cuEST
-    if (options_.get_bool("USE_CUEST")) {
+    if (use_cuest_xc()) {
         cuest_common::ensure_cuest_initialized();
 
         std::vector<uint64_t> d_Cocc_noccs_provided;
@@ -358,7 +366,7 @@ void VBase::initialize() {
     }
 #ifdef USING_cuEST
     // No workers are needed for cuEST, so we can just create the XC Integral Plan here and return
-    if (options_.get_bool("USE_CUEST")) {
+    if (use_cuest_xc()) {
         validate_cuest_xc_components(functional_);
         cuest_common::ensure_cuest_initialized();
 
@@ -1534,7 +1542,7 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         throw PSIEXCEPTION("V: RKS should have only one V Matrix");
     }
 #ifdef USING_cuEST
-    if (options_.get_bool("USE_CUEST")) {
+    if (use_cuest_xc()) {
         cuest_common::ensure_cuest_initialized();
 
         if ((d_Cocc_noccs_.size() != 1)) {
@@ -2719,7 +2727,7 @@ SharedMatrix RV::compute_gradient() {
     // => Setup <= //
     int natom = primary_->molecule()->natom();
 #ifdef USING_cuEST
-    if (options_.get_bool("USE_CUEST")) {
+    if (use_cuest_xc()) {
         cuest_common::ensure_cuest_initialized();
 
         if ((d_Cocc_noccs_.size() != 1)) {
@@ -3857,7 +3865,7 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
         throw PSIEXCEPTION("V: UKS cannot compute GRAC corrections.");
     }
 #ifdef USING_cuEST
-    if (options_.get_bool("USE_CUEST")) {
+    if (use_cuest_xc()) {
         cuest_common::ensure_cuest_initialized();
 
         if ((d_Cocc_noccs_.size() != 2)) {
@@ -5638,7 +5646,7 @@ SharedMatrix UV::compute_gradient() {
     auto natom = primary_->molecule()->natom();
 
 #ifdef USING_cuEST
-    if (options_.get_bool("USE_CUEST")) {
+    if (use_cuest_xc()) {
         cuest_common::ensure_cuest_initialized();
 
         if ((d_Cocc_noccs_.size() != 2)) {

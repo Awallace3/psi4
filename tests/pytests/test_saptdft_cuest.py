@@ -11,21 +11,25 @@ Every remaining electronic-structure step is an SCF that goes through
 monomer B) and two DFT SCFs for the monomers -- so turning on ``USE_CUEST``
 routes the whole method onto the GPU by way of the DF J/K builder.
 
-These tests pin three things:
+These tests pin four things:
   1. ``USE_CUEST`` is *optional*: the cuEST run must reproduce the CPU run.
   2. ``USE_CUEST`` is *complete*: no CPU DF J/K object is constructed anywhere
      in the SAPT(DFT) driver when it is on.
-  3. The one configuration cuEST cannot serve -- a non-zero GRAC shift on the
-     monomer DFT SCFs -- fails loudly rather than silently dropping the
-     asymptotic correction.
+  3. The one configuration the cuEST XC integrator cannot serve -- a non-zero
+     GRAC shift on the monomer DFT SCFs -- fails loudly rather than silently
+     dropping the asymptotic correction.
+  4. ``CUEST_XC false`` is the way out of (3): the XC quadrature moves back to
+     the CPU, GRAC works, and the cuEST DF J/K -- the expensive part -- is kept.
 
-The GRAC caveat is a real restriction on this path, not a test artifact.
-``VBase::set_grac_shift`` (psi4/src/psi4/libfock/v.cc) refuses to run under
-``USE_CUEST`` because the cuEST XC integrator builds the quadrature grid on the
-GPU and never materializes the CPU grid blocks the GRAC correction integrates
-over.  Production SAPT(DFT) normally wants a GRAC shift, so until GRAC has a
-cuEST implementation these runs must set ``SAPT_DFT_GRAC_SHIFT_A``/``_B`` to
-zero.
+The GRAC caveat is a real restriction on the GPU XC path, not a test artifact.
+``VBase::set_grac_shift`` (psi4/src/psi4/libfock/v.cc) refuses to run when the
+cuEST XC integrator is active, because that integrator builds the quadrature
+grid on the GPU and never materializes the CPU grid blocks the GRAC correction
+integrates over.  Production SAPT(DFT) normally wants a GRAC shift, which is why
+``CUEST_XC`` exists: ``USE_CUEST true`` + ``CUEST_XC false`` runs a GRAC-shifted
+monomer DFT SCF at full accuracy with GPU J/K.  Until GRAC gains a cuEST
+implementation, that combination -- not ``USE_CUEST false`` -- is the production
+GPU setting.
 """
 
 import pytest
@@ -63,7 +67,8 @@ def _run_saptdft_d4i(use_cuest, outfile, extra_options=None, grac=0.0):
     """Run SAPT(DFT)-D4(I) with induction from delta HF; return components and output text.
 
     ``grac`` is applied to both monomers.  It defaults to zero because a
-    non-zero shift is incompatible with ``USE_CUEST``; see the module docstring.
+    non-zero shift is incompatible with the cuEST XC path; see the module
+    docstring.
     Setting the two shift options explicitly (even to zero) is what tells the
     driver not to auto-compute them, so ``SAPT_DFT_GRAC_COMPUTE`` stays "NONE".
     """
@@ -170,15 +175,44 @@ def test_saptdft_cuest_d4i_mixed_precision(tmp_path):
 @uusing("cuda_cc8")
 @uusing("dftd4")
 def test_saptdft_cuest_d4i_grac_is_rejected(tmp_path):
-    """A GRAC shift under cuEST must raise, not silently lose the correction.
+    """A GRAC shift under the cuEST XC path must raise, not lose the correction.
 
-    This is the known gap in GPU SAPT(DFT): the monomer DFT SCFs of a
-    production run carry a GRAC shift, and cuEST has no XC path for it.  Pinning
-    the failure here means the day GRAC gains a cuEST implementation, this test
-    turns red and gets replaced by a numerical check.
+    ``CUEST_XC`` is set explicitly so this pins the GPU-XC configuration rather
+    than whatever the default happens to be.  The day GRAC gains a cuEST XC
+    implementation, this test turns red and gets replaced by a numerical check.
     """
     with pytest.raises(RuntimeError, match="GRAC"):
-        _run_saptdft_d4i(True, tmp_path / "gpu_grac.out", grac=0.136)
+        _run_saptdft_d4i(True, tmp_path / "gpu_grac.out", grac=0.136,
+                         extra_options={"CUEST_XC": True})
+
+
+@pytest.mark.saptdft
+@pytest.mark.cuest
+@pytest.mark.dftd4
+@uusing("cuest")
+@uusing("cuda_cc8")
+@uusing("dftd4")
+def test_saptdft_cuest_d4i_grac_with_cpu_xc(tmp_path):
+    """CUEST_XC false buys back GRAC without giving up the cuEST J/K.
+
+    This is the production GPU configuration for SAPT(DFT)-D4(I): the monomer
+    DFT SCFs carry their asymptotic correction, the XC quadrature runs on the
+    CPU, and every J/K build -- the dominant cost, and all of the delta-HF
+    segment -- still goes to the GPU.  The answer must match the pure-CPU run
+    with the same shift.
+    """
+    ref, ref_text = _run_saptdft_d4i(False, tmp_path / "cpu_grac.out", grac=0.136)
+    gpu, gpu_text = _run_saptdft_d4i(True, tmp_path / "gpu_cpuxc_grac.out", grac=0.136,
+                                     extra_options={"CUEST_XC": False})
+
+    for key in _components:
+        assert psi4.compare_values(ref[key], gpu[key], 6,
+                                   f"cuEST (CPU XC) vs CPU: {key}")
+
+    assert "cuESTJK" not in ref_text
+    assert "==> cuESTJK: GPU-Accelerated Density-Fitted J/K Matrices <==" in gpu_text
+    assert "DiskDFJK: Density-Fitted J/K Matrices" not in gpu_text
+    assert "MemDFJK: Density-Fitted J/K Matrices" not in gpu_text
 
 
 @pytest.mark.saptdft

@@ -127,16 +127,34 @@ class PSI_API VBase {
     /// Set things up
     void common_init();
 
+    /// Whether the exchange-correlation quadrature runs on the GPU.
+    ///
+    /// True only when USE_CUEST and CUEST_XC are both set.  USE_CUEST alone
+    /// selects the cuEST density-fitted J/K builder; CUEST_XC additionally
+    /// hands the XC grid to cuEST.  Splitting the two lets a calculation keep
+    /// GPU J/K -- the dominant cost -- while running XC on the CPU, which is
+    /// the only way to reach XC features cuEST has no branch for (GRAC, SAP,
+    /// Vx response kernels, analytic Hessians).
+    ///
+    /// Every site that reads this must agree with DFTGrid::buildGridFromOptions
+    /// in cubature.cc, which uses the same conjunction to decide whether to
+    /// build the GPU grid or a CPU-blocked one.  A disagreement means either an
+    /// empty grid_->blocks() on the CPU path or a missing grid_->cuest_grid()
+    /// on the GPU path.
+    bool use_cuest_xc() const;
+
     /// Guard for CPU-only XC routines that cuEST has no branch for.
     ///
-    /// When USE_CUEST is set, the DFT quadrature grid is built on the GPU and
-    /// MolecularGrid's CPU-side post-processing is skipped entirely
+    /// When the cuEST XC path is active, the DFT quadrature grid is built on
+    /// the GPU and MolecularGrid's CPU-side post-processing is skipped entirely
     /// (cubature.cc: "if (is_cuest) return;" before postProcess()), so
     /// grid_->blocks() is empty and functional_workers_ is never populated.
     /// Any CPU XC routine reached under cuEST would therefore either index an
     /// empty vector (segfault) or loop over zero blocks and silently return a
     /// zero XC contribution.  Routines without a cuEST implementation must call
     /// this to fail loudly instead.  \p what names the operation for the user.
+    /// Setting CUEST_XC false restores the CPU XC path and clears the guard
+    /// without giving up cuEST J/K.
     void throw_if_cuest_unsupported(const std::string& what) const;
 
    public:
