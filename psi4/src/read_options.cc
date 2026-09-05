@@ -184,6 +184,14 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     options.add_int("CUEST_DFK_SLICES", 5);
     /*- Tune # of Ozaki Moduli in emulated DF K computations (requires CUDA and cuEST libraries) -*/
     options.add_int("CUEST_DFK_MODULI", 8);
+    /*- Size below which the SAPT tensor code keeps its matrix multiplications on
+    the CPU even though |globals__use_cuest| is on.  A chain of multiplications is
+    sent to cuBLAS only if one of its links is at least as large as the product of
+    two matrices of this dimension; smaller ones lose more to the PCIe transfer
+    than they gain on the GPU.  Set to 0 to send every chain to the GPU, which is
+    useful for checking the two paths against each other.  No effect unless
+    |globals__use_cuest| is true. -*/
+    options.add_int("CUEST_GEMM_MIN_DIM", 256);
 
     // Note that case-insensitive options are only functional as
     //   globals, not as module-level, and should be defined sparingly

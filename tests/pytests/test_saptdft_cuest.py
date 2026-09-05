@@ -20,6 +20,9 @@ These tests pin four things:
      dropping the asymptotic correction.
   4. ``CUEST_XC false`` is the way out of (3): the XC quadrature moves back to
      the CPU, GRAC works, and the cuEST DF J/K -- the expensive part -- is kept.
+  5. The cuBLAS path through the SAPT electrostatics and exchange tensors, which
+     ``CUEST_GEMM_MIN_DIM`` normally keeps switched off for a system this small,
+     reproduces the einsums path when it is forced on.
 
 The GRAC caveat is a real restriction on the GPU XC path, not a test artifact.
 ``VBase::set_grac_shift`` (psi4/src/psi4/libfock/v.cc) refuses to run when the
@@ -213,6 +216,33 @@ def test_saptdft_cuest_d4i_grac_with_cpu_xc(tmp_path):
     assert "==> cuESTJK: GPU-Accelerated Density-Fitted J/K Matrices <==" in gpu_text
     assert "DiskDFJK: Density-Fitted J/K Matrices" not in gpu_text
     assert "MemDFJK: Density-Fitted J/K Matrices" not in gpu_text
+
+
+@pytest.mark.saptdft
+@pytest.mark.cuest
+@pytest.mark.dftd4
+@uusing("cuest")
+@uusing("cuda_cc8")
+@uusing("dftd4")
+@uusing("einsums")
+def test_saptdft_cuest_d4i_gpu_gemms(tmp_path):
+    """Forcing the electrostatics/exchange gemms onto cuBLAS changes no answer.
+
+    The SAPT tensor code sends a multiplication chain to cuBLAS only once a link
+    is at least ``CUEST_GEMM_MIN_DIM`` cubed, which a cc-pVDZ water dimer never
+    reaches -- the transfers would cost more than the GPU saves.  Setting the
+    threshold to zero forces every chain across, which is what makes this a test
+    of the cuBLAS chain rather than of the heuristic.
+    """
+    ref, _ = _run_saptdft_d4i(False, tmp_path / "cpu.out",
+                              extra_options={"SAPT_DFT_USE_EINSUMS": True})
+    gpu, _ = _run_saptdft_d4i(True, tmp_path / "gpu_gemm.out",
+                              extra_options={"SAPT_DFT_USE_EINSUMS": True,
+                                             "CUEST_GEMM_MIN_DIM": 0})
+
+    for key in _components:
+        assert psi4.compare_values(ref[key], gpu[key], 6,
+                                   f"cuEST (GPU gemms) vs CPU: {key}")
 
 
 @pytest.mark.saptdft

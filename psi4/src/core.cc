@@ -155,6 +155,7 @@ void export_misc(py::module&);
 void export_oeprop(py::module&);
 void export_pcm(py::module&);
 void export_cuestpcm(py::module&);
+void export_cuest_gemm(py::module&);
 void export_plugins(py::module&);
 void export_psio(py::module&);
 void export_wavefunction(py::module&);
@@ -1266,6 +1267,9 @@ PYBIND11_MODULE(core, core) {
 #ifdef USING_cuEST
     // cuEST PCM
     export_cuestpcm(core);
+
+    // cuBLAS matrix-chain multiplication for the SAPT tensor code
+    export_cuest_gemm(core);
 #endif
 
     // CubeProperties
