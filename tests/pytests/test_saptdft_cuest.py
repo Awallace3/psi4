@@ -11,10 +11,21 @@ Every remaining electronic-structure step is an SCF that goes through
 monomer B) and two DFT SCFs for the monomers -- so turning on ``USE_CUEST``
 routes the whole method onto the GPU by way of the DF J/K builder.
 
-These tests pin two things:
+These tests pin three things:
   1. ``USE_CUEST`` is *optional*: the cuEST run must reproduce the CPU run.
   2. ``USE_CUEST`` is *complete*: no CPU DF J/K object is constructed anywhere
      in the SAPT(DFT) driver when it is on.
+  3. The one configuration cuEST cannot serve -- a non-zero GRAC shift on the
+     monomer DFT SCFs -- fails loudly rather than silently dropping the
+     asymptotic correction.
+
+The GRAC caveat is a real restriction on this path, not a test artifact.
+``VBase::set_grac_shift`` (psi4/src/psi4/libfock/v.cc) refuses to run under
+``USE_CUEST`` because the cuEST XC integrator builds the quadrature grid on the
+GPU and never materializes the CPU grid blocks the GRAC correction integrates
+over.  Production SAPT(DFT) normally wants a GRAC shift, so until GRAC has a
+cuEST implementation these runs must set ``SAPT_DFT_GRAC_SHIFT_A``/``_B`` to
+zero.
 """
 
 import pytest
@@ -48,8 +59,14 @@ _components = [
 ]
 
 
-def _run_saptdft_d4i(use_cuest, outfile, extra_options=None):
-    """Run SAPT(DFT)-D4(I) with induction from delta HF; return components and output text."""
+def _run_saptdft_d4i(use_cuest, outfile, extra_options=None, grac=0.0):
+    """Run SAPT(DFT)-D4(I) with induction from delta HF; return components and output text.
+
+    ``grac`` is applied to both monomers.  It defaults to zero because a
+    non-zero shift is incompatible with ``USE_CUEST``; see the module docstring.
+    Setting the two shift options explicitly (even to zero) is what tells the
+    driver not to auto-compute them, so ``SAPT_DFT_GRAC_COMPUTE`` stays "NONE".
+    """
     psi4.core.clean()
     psi4.core.clean_options()
     psi4.core.set_output_file(str(outfile), False)
@@ -59,8 +76,8 @@ def _run_saptdft_d4i(use_cuest, outfile, extra_options=None):
         "basis": "cc-pvdz",
         "scf_type": "df",
         "SAPT_DFT_FUNCTIONAL": "pbe0",
-        "SAPT_DFT_GRAC_SHIFT_A": 0.136,
-        "SAPT_DFT_GRAC_SHIFT_B": 0.136,
+        "SAPT_DFT_GRAC_SHIFT_A": grac,
+        "SAPT_DFT_GRAC_SHIFT_B": grac,
         "SAPT_DFT_INDUCTION_TYPE": "NONE",
         "SAPT_DFT_DO_DHF": True,
         "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
@@ -144,3 +161,33 @@ def test_saptdft_cuest_d4i_mixed_precision(tmp_path):
     for key in _components:
         assert psi4.compare_values(ref[key], gpu[key], atol=5.0e-6,
                                    label=f"cuEST (mixed precision) vs CPU: {key}")
+
+
+@pytest.mark.saptdft
+@pytest.mark.cuest
+@pytest.mark.dftd4
+@uusing("cuest")
+@uusing("cuda_cc8")
+@uusing("dftd4")
+def test_saptdft_cuest_d4i_grac_is_rejected(tmp_path):
+    """A GRAC shift under cuEST must raise, not silently lose the correction.
+
+    This is the known gap in GPU SAPT(DFT): the monomer DFT SCFs of a
+    production run carry a GRAC shift, and cuEST has no XC path for it.  Pinning
+    the failure here means the day GRAC gains a cuEST implementation, this test
+    turns red and gets replaced by a numerical check.
+    """
+    with pytest.raises(RuntimeError, match="GRAC"):
+        _run_saptdft_d4i(True, tmp_path / "gpu_grac.out", grac=0.136)
+
+
+@pytest.mark.saptdft
+@pytest.mark.dftd4
+@uusing("dftd4")
+def test_saptdft_grac_still_works_on_cpu(tmp_path):
+    """The GRAC restriction is cuEST's, not the driver's: the CPU path is fine."""
+    values, text = _run_saptdft_d4i(False, tmp_path / "cpu_grac.out", grac=0.136)
+
+    assert "cuESTJK" not in text
+    for key in _components:
+        assert values[key] is not None
