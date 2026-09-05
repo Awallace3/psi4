@@ -41,6 +41,7 @@
 #include "psi4/libpsi4util/PsiOutStream.h"
 #include "psi4/libpsi4util/process.h"
 #include "psi4/liboptions/liboptions.h"
+#include "psi4/libpsi4util/exception.h"
 #include "psi4/psi4-dec.h"
 
 #include <chrono>
@@ -67,6 +68,7 @@ cuESTJK::cuESTJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> au
       cuest_df_plan_(nullptr),
       cuest_coulomb_compute_params_(nullptr),
       cuest_exchange_compute_params_(nullptr),
+      cuest_nonsym_exchange_compute_params_(nullptr),
       initialized_(false) 
 {
     cuest_common::ensure_cuest_initialized();
@@ -171,6 +173,7 @@ void cuESTJK::preiterations()
     // Create J/K parameters
     CHECK_CUEST(cuestParametersCreate(CUEST_DFCOULOMBCOMPUTE_PARAMETERS, reinterpret_cast<void**>(&cuest_coulomb_compute_params_)));
     CHECK_CUEST(cuestParametersCreate(CUEST_DFSYMMETRICEXCHANGECOMPUTE_PARAMETERS, reinterpret_cast<void**>(&cuest_exchange_compute_params_)));
+    CHECK_CUEST(cuestParametersCreate(CUEST_DFNONSYMMETRICEXCHANGECOMPUTE_PARAMETERS, reinterpret_cast<void**>(&cuest_nonsym_exchange_compute_params_)));
 
     // Set J & K compute parameters
     CHECK_CUEST(cuestParametersConfigure(
@@ -184,6 +187,24 @@ void cuESTJK::preiterations()
         CUEST_DFSYMMETRICEXCHANGECOMPUTE_PARAMETERS, 
         cuest_exchange_compute_params_,
         CUEST_DFSYMMETRICEXCHANGECOMPUTE_PARAMETERS_INT8_MODULUS_COUNT,
+        &dfk_moduli_,
+        sizeof(uint64_t)));
+
+    // The nonsymmetric exchange kernel has the same two emulated-GEMM knobs and
+    // must be given the same values: a K built with C_left != C_right would
+    // otherwise carry a different precision from the K built beside it in the
+    // same SAPT term.
+    CHECK_CUEST(cuestParametersConfigure(
+        CUEST_DFNONSYMMETRICEXCHANGECOMPUTE_PARAMETERS,
+        cuest_nonsym_exchange_compute_params_,
+        CUEST_DFNONSYMMETRICEXCHANGECOMPUTE_PARAMETERS_INT8_SLICE_COUNT,
+        &dfk_slices_,
+        sizeof(uint64_t)));
+
+    CHECK_CUEST(cuestParametersConfigure(
+        CUEST_DFNONSYMMETRICEXCHANGECOMPUTE_PARAMETERS,
+        cuest_nonsym_exchange_compute_params_,
+        CUEST_DFNONSYMMETRICEXCHANGECOMPUTE_PARAMETERS_INT8_MODULUS_COUNT,
         &dfk_moduli_,
         sizeof(uint64_t)));
 
@@ -223,6 +244,10 @@ void cuESTJK::destroy_cuest_objects() {
         CHECK_CUEST(cuestParametersDestroy(CUEST_DFSYMMETRICEXCHANGECOMPUTE_PARAMETERS, cuest_exchange_compute_params_));
         cuest_exchange_compute_params_ = nullptr;
     }
+    if (cuest_nonsym_exchange_compute_params_) {
+        CHECK_CUEST(cuestParametersDestroy(CUEST_DFNONSYMMETRICEXCHANGECOMPUTE_PARAMETERS, cuest_nonsym_exchange_compute_params_));
+        cuest_nonsym_exchange_compute_params_ = nullptr;
+    }
 }
 
 size_t cuESTJK::memory_estimate() {
@@ -255,6 +280,7 @@ void cuESTJK::compute_JK() {
     double* d_J = nullptr;
     double* d_K = nullptr;
     double* d_C = nullptr;
+    double* d_C_right = nullptr;
  
     cudaMalloc(reinterpret_cast<void**>(&d_D), nbf2_bytes);
     cudaMalloc(reinterpret_cast<void**>(&d_J), nbf2_bytes);
@@ -287,15 +313,29 @@ void cuESTJK::compute_JK() {
             int nocc = C_left_ao_[N]->ncol();
             if (nocc == 0) continue;
  
-            CHECK_CUEST(cuestDFSymmetricExchangeComputeWorkspaceQuery(
-                cuest_handle,
-                cuest_df_plan_,
-                cuest_exchange_compute_params_,
-                variableBufferSize,
-                k_temp_desc,
-                static_cast<uint64_t>(nocc),
-                nullptr,
-                d_K));
+            if (lr_symmetric_) {
+                CHECK_CUEST(cuestDFSymmetricExchangeComputeWorkspaceQuery(
+                    cuest_handle,
+                    cuest_df_plan_,
+                    cuest_exchange_compute_params_,
+                    variableBufferSize,
+                    k_temp_desc,
+                    static_cast<uint64_t>(nocc),
+                    nullptr,
+                    d_K));
+            } else {
+                CHECK_CUEST(cuestDFNonsymmetricExchangeComputeWorkspaceQuery(
+                    cuest_handle,
+                    cuest_df_plan_,
+                    cuest_nonsym_exchange_compute_params_,
+                    variableBufferSize,
+                    k_temp_desc,
+                    1,
+                    static_cast<uint64_t>(nocc),
+                    nullptr,
+                    nullptr,
+                    d_K));
+            }
             max_host = std::max(max_host, k_temp_desc->hostBufferSizeInBytes);
             max_device = std::max(max_device, k_temp_desc->deviceBufferSizeInBytes);
         }
@@ -338,33 +378,77 @@ void cuESTJK::compute_JK() {
             if (nocc > 0) {
                 size_t c_bytes = static_cast<size_t>(nocc) * nbf * sizeof(double);
  
+                // cuEST wants the occupied index first (nocc x nbf, row-major);
+                // a Psi4 coefficient matrix is nbf x nocc.
+                auto pack_transposed = [nocc, nbf](const SharedMatrix& C, double* out) {
+                    double** Cp = C->pointer();
+                    for (int i = 0; i < nocc; i++) {
+                        for (int mu = 0; mu < nbf; mu++) {
+                            out[i * nbf + mu] = Cp[mu][i];
+                        }
+                    }
+                };
+ 
                 auto tt0 = clock::now();
                 std::vector<double> C_row_major(nocc * nbf);
-                double** Cp = C_left_ao_[N]->pointer();
-                for (int i = 0; i < nocc; i++) {
-                    for (int mu = 0; mu < nbf; mu++) {
-                        C_row_major[i * nbf + mu] = Cp[mu][i];
+                pack_transposed(C_left_ao_[N], C_row_major.data());
+ 
+                // C_left != C_right happens all over SAPT's exchange terms.  The
+                // symmetric kernel would quietly return K built from C_left
+                // twice, which is a wrong answer that still converges and still
+                // looks plausible -- so the two paths are selected here, never
+                // approximated by one another.
+                std::vector<double> C_right_row_major;
+                if (!lr_symmetric_) {
+                    if (C_right_ao_[N]->ncol() != nocc) {
+                        throw PSIEXCEPTION(
+                            "cuESTJK: C_left and C_right must have the same number of columns; "
+                            "cuEST's nonsymmetric exchange kernel contracts them over a shared "
+                            "occupied index.");
                     }
+                    C_right_row_major.resize(static_cast<size_t>(nocc) * nbf);
+                    pack_transposed(C_right_ao_[N], C_right_row_major.data());
                 }
                 auto tt1 = clock::now();
                 ms_transpose += std::chrono::duration<double, std::milli>(tt1 - tt0).count();
  
                 cudaFree(d_C);
                 cudaMalloc(reinterpret_cast<void**>(&d_C), c_bytes);
+                if (!lr_symmetric_) {
+                    cudaFree(d_C_right);
+                    cudaMalloc(reinterpret_cast<void**>(&d_C_right), c_bytes);
+                }
  
                 auto tk0 = clock::now();
                 cudaMemcpy(d_C, C_row_major.data(), c_bytes, cudaMemcpyHostToDevice);
+                if (!lr_symmetric_) {
+                    cudaMemcpy(d_C_right, C_right_row_major.data(), c_bytes, cudaMemcpyHostToDevice);
+                }
                 auto tk1 = clock::now();
  
-                CHECK_CUEST(cuestDFSymmetricExchangeCompute(
-                    cuest_handle,
-                    cuest_df_plan_,
-                    cuest_exchange_compute_params_,
-                    variableBufferSize,
-                    temporaryJKWorkspace,
-                    static_cast<uint64_t>(nocc),
-                    d_C,
-                    d_K));
+                if (lr_symmetric_) {
+                    CHECK_CUEST(cuestDFSymmetricExchangeCompute(
+                        cuest_handle,
+                        cuest_df_plan_,
+                        cuest_exchange_compute_params_,
+                        variableBufferSize,
+                        temporaryJKWorkspace,
+                        static_cast<uint64_t>(nocc),
+                        d_C,
+                        d_K));
+                } else {
+                    CHECK_CUEST(cuestDFNonsymmetricExchangeCompute(
+                        cuest_handle,
+                        cuest_df_plan_,
+                        cuest_nonsym_exchange_compute_params_,
+                        variableBufferSize,
+                        temporaryJKWorkspace,
+                        1,
+                        static_cast<uint64_t>(nocc),
+                        d_C,
+                        d_C_right,
+                        d_K));
+                }
                 cudaDeviceSynchronize();
                 auto tk2 = clock::now();
  
@@ -390,6 +474,7 @@ void cuESTJK::compute_JK() {
     cudaFree(d_J);
     cudaFree(d_K);
     if (d_C) cudaFree(d_C);
+    if (d_C_right) cudaFree(d_C_right);
     auto t_free_end = clock::now();
  
     double ms_alloc = std::chrono::duration<double, std::milli>(t_alloc - t0).count();
