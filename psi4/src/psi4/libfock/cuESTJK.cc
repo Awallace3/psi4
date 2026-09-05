@@ -69,6 +69,10 @@ cuESTJK::cuESTJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> au
       cuest_coulomb_compute_params_(nullptr),
       cuest_exchange_compute_params_(nullptr),
       cuest_nonsym_exchange_compute_params_(nullptr),
+      // Set in preiterations(); the destructor and the plan rebuild both free
+      // whatever is here, so they must not start out as garbage.
+      cuest_pair_list_ws_ptr_(nullptr),
+      cuest_dfint_plan_ws_ptr_(nullptr),
       initialized_(false) 
 {
     cuest_common::ensure_cuest_initialized();
