@@ -14,6 +14,14 @@ silently computes K(C_left, C_left) and returns it as K(C_left, C_right).  The
 result is finite, smooth, and wrong, and in SAPT(DFT)-D4(I) it moved E_exch by
 38% while leaving E_elst -- which needs only J -- exact to every printed digit.
 
+A second, independent hazard lives in the same builder: cuEST compiles the
+exact-exchange fractions into its DF integral plan, so its K arrives pre-scaled
+by the functional's ``x_alpha``.  Inside an SCF that is accounted for (see the
+``use_cuest`` branch of ``RHF::form_G``), but a J/K object built by a PBE0
+monomer SCF and then inherited by SAPT hands K/4 to formulas that want the bare
+exchange operator -- again shrinking E_exch while leaving E_elst exact.  The last
+two tests pin that behaviour and the setter that undoes it.
+
 These tests are deliberately at the J/K layer rather than at the SAPT layer,
 because a failure here says "the exchange builder is wrong" instead of "one of
 several hundred contractions disagrees".  The coefficient matrices are random:
@@ -57,8 +65,13 @@ def _basis_sets():
     return primary, aux
 
 
-def _run_jk(use_cuest, primary, aux, pairs):
-    """Build a J/K object of the requested flavour and evaluate every (C_left, C_right) pair."""
+def _run_jk(use_cuest, primary, aux, pairs, alpha_before=None, alpha_after=None):
+    """Build a J/K object of the requested flavour and evaluate every (C_left, C_right) pair.
+
+    ``alpha_before`` is applied before ``initialize()``, the way an SCF does it;
+    ``alpha_after`` afterwards, the way a consumer that inherits someone else's
+    J/K object has to.
+    """
     psi4.set_options({
         "scf_type": "df",
         "USE_CUEST": use_cuest,
@@ -69,7 +82,13 @@ def _run_jk(use_cuest, primary, aux, pairs):
     jk = psi4.core.JK.build_JK(primary, aux)
     jk.set_do_J(True)
     jk.set_do_K(True)
+    if alpha_before is not None:
+        jk.set_omega_alpha(alpha_before)
+        jk.set_omega_beta(0.0)
     jk.initialize()
+    if alpha_after is not None:
+        jk.set_omega_alpha(alpha_after)
+        jk.set_omega_beta(0.0)
 
     jk.C_clear()
     for left, right in pairs:
@@ -167,3 +186,61 @@ def test_cuest_jk_asymmetric_is_not_the_symmetric_answer():
     _, _, K_sym = _run_jk(True, primary, aux, [(left, None)])
 
     assert np.abs(K_asym[0] - K_sym[0]).max() > 1.0e-3
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+def test_cuest_jk_k_carries_the_exchange_fraction():
+    """Pin the behaviour that makes an inherited cuEST J/K dangerous.
+
+    cuEST folds the exact-exchange fractions into its DF integral plan, so the K
+    it returns is already multiplied by the functional's ``x_alpha``.  That is
+    why ``RHF::form_G`` sets ``alpha = 1.0`` under cuEST, and it is invisible
+    inside an SCF -- but a J/K object built by a PBE0 monomer SCF and then handed
+    to SAPT quietly delivers K/4 to formulas that want the bare operator.
+
+    The CPU DF builder never carries the fraction: ``omega_alpha`` reaches it
+    only through the combined wK operator, which is off for a global hybrid.
+    So the two builders genuinely disagree here, and the ratio is exactly alpha.
+    """
+    primary, aux = _basis_sets()
+    nbf = primary.nbf()
+    alpha = 0.25  # PBE0
+    pairs = [(_random_coeffs(nbf, 5, 11), _random_coeffs(nbf, 5, 22))]
+
+    _, _, cpu_K = _run_jk(False, primary, aux, pairs, alpha_before=alpha)
+    _, _, gpu_K = _run_jk(True, primary, aux, pairs, alpha_before=alpha)
+
+    assert np.abs(cpu_K[0]).max() > 1.0e-3, "reference K is zero, test is vacuous"
+    assert np.allclose(alpha * cpu_K[0], gpu_K[0], atol=1.0e-8), (
+        "cuEST K is expected to arrive pre-scaled by x_alpha; ratio was "
+        f"{np.abs(gpu_K[0]).max() / np.abs(cpu_K[0]).max():.6f}, not {alpha}"
+    )
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+def test_cuest_jk_exchange_fraction_is_resettable_after_initialize():
+    """Regression test: asking for the bare operator after ``initialize()`` must work.
+
+    This is what ``sapt_dft`` does to the J/K object it inherits from the monomer
+    DFT SCF.  cuEST cannot simply store the new fraction -- it is compiled into
+    the DF integral plan -- so ``cuESTJK::set_omega_alpha`` rebuilds that plan.
+    Before the fix the setter was a silent no-op and SAPT(DFT)-D4(I) with PBE0
+    reported ``SAPT EXCH ENERGY`` 23% low while every other component was exact.
+    """
+    primary, aux = _basis_sets()
+    nbf = primary.nbf()
+    pairs = [(_random_coeffs(nbf, 5, 11), _random_coeffs(nbf, 5, 22))]
+
+    _, cpu_J, cpu_K = _run_jk(False, primary, aux, pairs)
+    _, gpu_J, gpu_K = _run_jk(True, primary, aux, pairs,
+                              alpha_before=0.25, alpha_after=1.0)
+
+    assert np.allclose(cpu_J[0], gpu_J[0], atol=1.0e-8), "J mismatch after plan rebuild"
+    assert np.allclose(cpu_K[0], gpu_K[0], atol=1.0e-8), (
+        "K mismatch after resetting the exchange fraction: max |diff| = "
+        f"{np.abs(cpu_K[0] - gpu_K[0]).max():.3e}"
+    )

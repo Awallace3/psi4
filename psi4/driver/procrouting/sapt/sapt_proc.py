@@ -1298,8 +1298,26 @@ def sapt_dft(
     sapt_jk.set_do_K(True)
 
     if wfn_A.functional().is_x_lrc():
+        if core.get_global_option("USE_CUEST"):
+            raise ValidationError(
+                "SAPT(DFT) with a range-separated SAPT_DFT_FUNCTIONAL is not supported under "
+                "USE_CUEST: cuEST returns the full- and long-range exchange summed into a single "
+                "K, so the separate K and wK the SAPT exchange formulas need are not available. "
+                "Use a global hybrid (e.g. PBE0) for SAPT_DFT_FUNCTIONAL, or set USE_CUEST false."
+            )
         sapt_jk.set_do_wK(True)
         sapt_jk.set_omega(wfn_A.functional().x_omega())
+    else:
+        # SAPT's exchange formulas want the bare exchange operator, but this JK
+        # object is usually inherited from a monomer DFT SCF (`wfn_B.jk()`).
+        # Under cuEST the exact-exchange fraction is folded into the DF integral
+        # plan -- which is why RHF::form_G sets alpha to 1.0 for cuEST -- so an
+        # inherited builder hands back K already scaled by the functional's
+        # x_alpha (0.25 for PBE0), silently shrinking Exch10.  Asking for the
+        # unscaled operator here is a no-op for the CPU builders, whose K never
+        # carried the fraction in the first place.
+        sapt_jk.set_omega_alpha(1.0)
+        sapt_jk.set_omega_beta(0.0)
 
     use_einsums = core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS")
 

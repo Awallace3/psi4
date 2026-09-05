@@ -250,6 +250,27 @@ void cuESTJK::destroy_cuest_objects() {
     }
 }
 
+void cuESTJK::rebuild_cuest_plan() {
+    // Before initialize() the plan does not exist yet and preiterations() will
+    // pick the new fractions up on its own.
+    if (!initialized_) return;
+    destroy_cuest_objects();
+    initialized_ = false;
+    preiterations();
+}
+
+void cuESTJK::set_omega_alpha(double alpha) {
+    if (alpha == omega_alpha_) return;
+    omega_alpha_ = alpha;
+    rebuild_cuest_plan();
+}
+
+void cuESTJK::set_omega_beta(double beta) {
+    if (beta == omega_beta_) return;
+    omega_beta_ = beta;
+    rebuild_cuest_plan();
+}
+
 size_t cuESTJK::memory_estimate() {
     return 0;
 }

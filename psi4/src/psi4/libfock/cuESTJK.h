@@ -86,6 +86,8 @@ class PSI_API cuESTJK : public JK {
     void allocate_workspace(cuestWorkspaceDescriptor_t& desc, cuestWorkspace_t& ws);
     void free_workspace(cuestWorkspace_t& ws);
     void destroy_cuest_objects();
+    /// Tear down and re-create the DF integral plan; a no-op before initialize().
+    void rebuild_cuest_plan();
 
    public:
     cuESTJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary, Options& options);
@@ -96,6 +98,14 @@ class PSI_API cuESTJK : public JK {
         do_wK_ = do_wK;
         do_K_ = do_K_ || do_wK;  // cuEST returns full- and long-range exchange together in K.
     }
+    // cuEST folds the exact-exchange fractions into the DF integral plan, so a K
+    // it returns is already scaled by x_alpha (which is why RHF::form_G sets
+    // alpha to 1.0 under cuEST).  Psi4 lets a JK object outlive the SCF that
+    // configured it -- SAPT reuses the monomer DFT builder -- and a consumer
+    // that wants the bare exchange operator has to be able to say so after
+    // initialize().  Changing a fraction therefore rebuilds the plan.
+    void set_omega_alpha(double alpha) override;
+    void set_omega_beta(double beta) override;
     void print_header() const override;
 
     cuestDFIntPlan_t cuest_df_plan() { return cuest_df_plan_; }
