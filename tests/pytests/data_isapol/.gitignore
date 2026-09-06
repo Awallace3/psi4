@@ -1,0 +1,5 @@
+# Keep the bounded production evidence visible despite the repository-wide JSON ignore.
+!.gitignore
+!camcasp_isa_production_evidence.json
+!camcasp_isa_provider_evidence.json
+!camcasp_isa_basis_*.json

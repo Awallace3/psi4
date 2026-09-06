@@ -332,8 +332,25 @@ void export_functional(py::module &m) {
              "Debug only: prints formatted 3-index intermediate to file.")
         .def("form_aux_matrices", &sapt::FDDS_Dispersion::form_aux_matrices,
              "Forms the uncoupled amplitudes and other matrices for either monomer.")
-        .def("R_A", &sapt::FDDS_Dispersion::R_A, "Obtains (R^t)^-1 for monomer A.")
-        .def("R_B", &sapt::FDDS_Dispersion::R_B, "Obtains (R^t)^-1 for monomer B.");
+        .def("R_A", &sapt::FDDS_Dispersion::R_A, "Obtains R for monomer A; not its inverse.")
+        .def("R_B", &sapt::FDDS_Dispersion::R_B, "Obtains R for monomer B; not its inverse.");
+
+    py::class_<sapt::FDDS_Monomer, std::shared_ptr<sapt::FDDS_Monomer>>(
+        m, "FDDS_Monomer", "Single-system Psi4 FDDS intermediates from explicit orbital inputs; no dummy partner.")
+        .def(py::init<std::shared_ptr<BasisSet>, std::shared_ptr<BasisSet>, SharedMatrix, SharedMatrix,
+                      SharedVector, SharedVector, bool>(),
+             "primary"_a, "auxiliary"_a, "occupied"_a, "virtuals"_a,
+             "occupied_energies"_a, "virtual_energies"_a, "is_hybrid"_a)
+        .def("metric", &sapt::FDDS_Monomer::metric, "Returns a copy of the Coulomb metric.")
+        .def("metric_inv", &sapt::FDDS_Monomer::metric_inv, "Returns a copy under the existing metric rank policy.")
+        .def("aux_overlap", &sapt::FDDS_Monomer::aux_overlap, "Returns a copy of auxiliary overlap.")
+        .def("R", &sapt::FDDS_Monomer::R, "Returns a copy of R, not its inverse; hybrid construction only.")
+        .def("project_density", &sapt::FDDS_Monomer::project_density,
+             "Projects an alpha-spin AO density using the existing spin factor.")
+        .def("form_unc_amplitude", &sapt::FDDS_Monomer::form_unc_amplitude,
+             "Positive unsigned uncoupled response at nonnegative imaginary-axis frequency magnitude.")
+        .def("form_aux_matrices", &sapt::FDDS_Monomer::form_aux_matrices,
+             "Hybrid intermediates including already-negative amp; no extra sign factor.");
 
      py::class_<NumIntHelper, std::shared_ptr<NumIntHelper>>(m, "NumIntHelper",
                                                              "Computes numerical integrals using a DFT grid.")

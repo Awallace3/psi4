@@ -144,6 +144,7 @@ void export_cubeprop(py::module&);
 void export_dpd(py::module&);
 void export_fock(py::module&);
 void export_functional(py::module&);
+void export_isapol(py::module&);
 void export_mints(py::module&);
 void export_misc(py::module&);
 void export_oeprop(py::module&);
@@ -1222,6 +1223,7 @@ PYBIND11_MODULE(core, core) {
     export_misc(core);
     export_fock(core);
     export_functional(core);
+    export_isapol(core);
     export_trans(core);
     export_wavefunction(core);
     export_options(core);

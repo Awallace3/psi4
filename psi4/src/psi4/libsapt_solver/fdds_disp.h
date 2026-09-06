@@ -40,6 +40,11 @@ namespace sapt {
 
 class FDDS_Dispersion {
    protected:
+    // Shared one-/two-system construction. The public pair constructor is unchanged.
+    FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
+                    std::map<std::string, SharedMatrix> matrix_cache,
+                    std::map<std::string, SharedVector> vector_cache, bool is_hybrid, bool single_system);
+
     // BasisSets
     std::shared_ptr<BasisSet> primary_;
     std::shared_ptr<BasisSet> auxiliary_;
@@ -106,9 +111,9 @@ class FDDS_Dispersion {
      * @return         Dictionary of PQ matrics 
      * @return ret["amp"]  PQ uncoupled amplitude
      * @return ret["K1LD"]  K1(lambda * d) = (P|ar) LDar (ar|X+Y|Q)
-     * @return ret["K2LD"]  K2(lambda * d) = (P|ar) LDar (ar|X-Y|Q)
-     * @return ret["K2L"]  K2(lambda) = (P|ar) Lar (ar|X-Y|Q)
-     * @return ret["K21L"]  K21(lambda) = (P|X-Y|ar) Lar (ar|X+Y|Q)
+     * @return ret["K2LD"]  K2(lambda * d) = (P|ar) LDar (ar|Y-X|Q)
+     * @return ret["K2L"]  K2(lambda) = (P|ar) Lar (ar|Y-X|Q)
+     * @return ret["K21L"]  K21(lambda) = (P|Y-X|ar) Lar (ar|X+Y|Q)
      */
     std::map<std::string, SharedMatrix> form_aux_matrices(std::string monomer, double omega);
 
@@ -155,9 +160,9 @@ class FDDS_Dispersion {
     void form_Y(std::string monomer);
 
     /**
-     * Performs QR factorization and store (R^t)^-1 into R_A_ or R_B_
+     * Performs QR factorization; Python constructs the pseudoinverse-transpose.
      * @param monomer Monomer "A" or "B"
-     * @return (R^t)^-1
+     * @return R
      */
     SharedMatrix QR(std::string monomer);
 
@@ -165,6 +170,25 @@ class FDDS_Dispersion {
     void print_tensor_pqQ(std::string tensor_name, std::string file_name, std::tuple<size_t, size_t, size_t> dimensions);
 
 };  // End FDDS_Dispersion
+
+/** Single-system facade over the shared FDDS numerical implementation.
+ * Explicit Psi4 basis/orbital inputs, not native SCF or CamCASP DF construction.
+ * Orbital/energy inputs are copied; metric/overlap/R getters return copies.
+ * Hybrid construction requires nov >= naux under the existing QR policy.
+ */
+class FDDS_Monomer : private FDDS_Dispersion {
+   public:
+    FDDS_Monomer(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
+                 SharedMatrix occupied, SharedMatrix virtuals, SharedVector occupied_energies,
+                 SharedVector virtual_energies, bool is_hybrid);
+    SharedMatrix metric();
+    SharedMatrix metric_inv();
+    SharedMatrix aux_overlap();
+    SharedMatrix R();
+    SharedMatrix project_density(SharedMatrix alpha_density);
+    SharedMatrix form_unc_amplitude(double omega);
+    std::map<std::string, SharedMatrix> form_aux_matrices(double omega);
+};
 }  // namespace sapt
 }  // namespace psi
 

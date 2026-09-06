@@ -1,0 +1,262 @@
+{
+  "schema_version": 1,
+  "validation": {
+    "regression_result": "261 passed in 2.13 s",
+    "log": ".pi/audit/fit-provider-final-tests.log",
+    "build": "p4_ci bash build.sh compiled and installed; inherited optional stubgen/cleanup exit 1",
+    "staged_extension_byte_compare": "passed",
+    "python_compilation": "passed",
+    "git_diff_check": "passed"
+  },
+  "evidence_class": "full exported-input C++ provider reconstruction and frozen fitting with supplied shapes",
+  "reference_track": "adapted-archive Drho-C/LU, existing CamCASP master-source captures; not future Libint2 reference branch",
+  "reference_provenance": "camcasp_isa_basis_evidence.json",
+  "limitations": [
+    "Not native basis or Drho-C generation",
+    "Quadrature, old full coefficients, neighbour list and screened/tail-processed shapes remain supplied",
+    "No native activation, DIIS/mixing, tails, controller or end-to-end parity",
+    "All-block upstream weighted-overlap behavior not certified"
+  ],
+  "command": "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 python -P tests/pytests/data_isapol/oracle/replay_isa_checkpoint.py .pi/audit/basis-water-CASE/isapol-checkpoint.dat --reconstruct-providers --report .pi/audit/basis-water-CASE/provider-replay.json",
+  "environment": {
+    "name": "p4_ci",
+    "PYTHONPATH": "build_camcasp_psi4_joint/stage/lib",
+    "general_integral_backend": "LIBINT2 2.13.1",
+    "provider_arithmetic": "independent analytic Gaussian sampling/weighted overlap, not Libint2 calls"
+  },
+  "cases": {
+    "first": {
+      "report_path": ".pi/audit/basis-water-first/provider-replay.json",
+      "report_sha256": "5cc3e99b9195c7c29a6b6445c69ac43d381d8cf4a32e029c11ca0edf5fbadfbe",
+      "replay": {
+        "schema_version": 1,
+        "evidence_class": "full exported-input provider reconstruction with supplied shape samples",
+        "limitations": "Not native basis/DF generation; captured shapes retain screening and active tails; no controller",
+        "psi4_extension": "/home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/build_camcasp_psi4_joint/stage/lib/psi4/core.cpython-313-x86_64-linux-gnu.so",
+        "call": 1,
+        "atom": 1,
+        "density_name": "Rho : Drho Density DF for H2O",
+        "npoint": 68310,
+        "nfunction": 109,
+        "options": {
+          "w_eps": 0.0,
+          "damping": 0.0,
+          "positive_lambda": 0.0,
+          "positive_max_alpha": 0.2,
+          "s_block_only": true,
+          "positive_auto": true,
+          "density_cutoff": 1e-36
+        },
+        "errors": {
+          "provider_density": {
+            "max_absolute": 5.684341886080802e-14,
+            "max_scaled": 2.4452280328655784e-16
+          },
+          "provider_exponents": {
+            "max_absolute": 0.0,
+            "max_scaled": 0.0
+          },
+          "provider_angular_momenta": {
+            "max_absolute": 0.0,
+            "max_scaled": 0.0
+          },
+          "provider_basis_values": {
+            "max_absolute": 7.105427357601002e-15,
+            "max_scaled": 1.5577638653568506e-16
+          },
+          "provider_overlap": {
+            "max_absolute": 6.661338147750939e-16,
+            "max_scaled": 6.661338147750933e-16
+          },
+          "provider_radius_squared": {
+            "max_absolute": 0.0,
+            "max_scaled": 0.0
+          },
+          "metric": {
+            "max_absolute": 6.661338147750939e-16,
+            "max_scaled": 6.661338147750933e-16
+          },
+          "rhs": {
+            "max_absolute": 3.552713678800501e-15,
+            "max_scaled": 4.4216426717474115e-16
+          },
+          "coefficients": {
+            "max_absolute": 5.889178034124143e-12,
+            "max_scaled": 9.067984591939813e-13
+          },
+          "population": {
+            "max_absolute": 8.348877145181177e-14,
+            "max_scaled": 1.2307018758916716e-14
+          },
+          "provider_raw_shape": {
+            "max_absolute": 5.889178034124143e-12,
+            "max_scaled": 9.067984591939813e-13
+          }
+        },
+        "relative_residual": 3.568388448276264e-17,
+        "excluded_points": 16479,
+        "checkpoint_sha256": "a92593eafb355f01a6bd0134e76d1c18585c331585863867626013d4a29c72e3",
+        "scaled_tolerance": 1e-09,
+        "passed": true
+      }
+    },
+    "activated": {
+      "report_path": ".pi/audit/basis-water-activated/provider-replay.json",
+      "report_sha256": "902a20758639ad5f8d4b6eb08e75e5a620944ba715eaa7fb6b95b2a18ac7f857",
+      "replay": {
+        "schema_version": 1,
+        "evidence_class": "full exported-input provider reconstruction with supplied shape samples",
+        "limitations": "Not native basis/DF generation; captured shapes retain screening and active tails; no controller",
+        "psi4_extension": "/home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/build_camcasp_psi4_joint/stage/lib/psi4/core.cpython-313-x86_64-linux-gnu.so",
+        "call": 157,
+        "atom": 1,
+        "density_name": "Rho : Drho Density DF for H2O",
+        "npoint": 68310,
+        "nfunction": 109,
+        "options": {
+          "w_eps": 0.17,
+          "damping": 0.0,
+          "positive_lambda": 0.001,
+          "positive_max_alpha": 0.2,
+          "s_block_only": true,
+          "positive_auto": true,
+          "density_cutoff": 1e-36
+        },
+        "errors": {
+          "provider_density": {
+            "max_absolute": 5.684341886080802e-14,
+            "max_scaled": 2.4452280328655784e-16
+          },
+          "provider_exponents": {
+            "max_absolute": 0.0,
+            "max_scaled": 0.0
+          },
+          "provider_angular_momenta": {
+            "max_absolute": 0.0,
+            "max_scaled": 0.0
+          },
+          "provider_basis_values": {
+            "max_absolute": 7.105427357601002e-15,
+            "max_scaled": 1.5577638653568506e-16
+          },
+          "provider_overlap": {
+            "max_absolute": 1.7763568394002505e-15,
+            "max_scaled": 3.2155493553843693e-16
+          },
+          "provider_radius_squared": {
+            "max_absolute": 0.0,
+            "max_scaled": 0.0
+          },
+          "metric": {
+            "max_absolute": 1.7763568394002505e-15,
+            "max_scaled": 3.2149673841232853e-16
+          },
+          "rhs": {
+            "max_absolute": 3.552713678800501e-15,
+            "max_scaled": 4.1228934390440666e-16
+          },
+          "coefficients": {
+            "max_absolute": 6.4290794909993565e-12,
+            "max_scaled": 9.348732792347371e-13
+          },
+          "population": {
+            "max_absolute": 4.085620730620576e-14,
+            "max_scaled": 4.640916957441561e-15
+          },
+          "provider_raw_shape": {
+            "max_absolute": 6.4290794909993565e-12,
+            "max_scaled": 9.348732792347371e-13
+          }
+        },
+        "relative_residual": 2.2062003729832137e-17,
+        "excluded_points": 9890,
+        "checkpoint_sha256": "d1af2ea23d3ad3bbf21778973b9d983281d25a502ef2f5b5ae2ac5b6dfe98790",
+        "scaled_tolerance": 1e-09,
+        "passed": true
+      }
+    },
+    "hydrogen": {
+      "report_path": ".pi/audit/basis-water-hydrogen/provider-replay.json",
+      "report_sha256": "c6a6f958b4c3adbec0d0283159772b6897b52f5c062b0d71896dd894df11dcb1",
+      "replay": {
+        "schema_version": 1,
+        "evidence_class": "full exported-input provider reconstruction with supplied shape samples",
+        "limitations": "Not native basis/DF generation; captured shapes retain screening and active tails; no controller",
+        "psi4_extension": "/home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/build_camcasp_psi4_joint/stage/lib/psi4/core.cpython-313-x86_64-linux-gnu.so",
+        "call": 158,
+        "atom": 2,
+        "density_name": "Rho : Drho Density DF for H2O",
+        "npoint": 68310,
+        "nfunction": 49,
+        "options": {
+          "w_eps": 0.17,
+          "damping": 0.0,
+          "positive_lambda": 0.001,
+          "positive_max_alpha": 0.2,
+          "s_block_only": true,
+          "positive_auto": true,
+          "density_cutoff": 1e-36
+        },
+        "errors": {
+          "provider_density": {
+            "max_absolute": 5.684341886080802e-14,
+            "max_scaled": 2.4452280328655784e-16
+          },
+          "provider_exponents": {
+            "max_absolute": 0.0,
+            "max_scaled": 0.0
+          },
+          "provider_angular_momenta": {
+            "max_absolute": 0.0,
+            "max_scaled": 0.0
+          },
+          "provider_basis_values": {
+            "max_absolute": 1.7763568394002505e-15,
+            "max_scaled": 1.8524980762735838e-16
+          },
+          "provider_overlap": {
+            "max_absolute": 8.007583902037866e-16,
+            "max_scaled": 4.293558663801019e-16
+          },
+          "provider_radius_squared": {
+            "max_absolute": 0.0,
+            "max_scaled": 0.0
+          },
+          "metric": {
+            "max_absolute": 8.007583902037866e-16,
+            "max_scaled": 4.293558663801019e-16
+          },
+          "rhs": {
+            "max_absolute": 1.1102230246251565e-16,
+            "max_scaled": 1.1102230246251565e-16
+          },
+          "coefficients": {
+            "max_absolute": 9.216932772559971e-14,
+            "max_scaled": 9.216932772559971e-14
+          },
+          "population": {
+            "max_absolute": 1.0103029524088925e-14,
+            "max_scaled": 1.0103029524088925e-14
+          },
+          "provider_raw_shape": {
+            "max_absolute": 9.216932772559971e-14,
+            "max_scaled": 9.216932772559971e-14
+          }
+        },
+        "relative_residual": 3.9900174571495284e-17,
+        "excluded_points": 9890,
+        "checkpoint_sha256": "0a031d4e88dfbec027f47260ba1f76aabc29254cb1422052186a1ffe3d78163e",
+        "scaled_tolerance": 1e-09,
+        "passed": true
+      }
+    }
+  },
+  "source_sha256": {
+    "psi4/src/psi4/libisapol/explicit_basis.h": "1f2ad8895a708fe30c19dd872fb4390850b5bdcb06e2002d0b530423151c7ff7",
+    "psi4/src/psi4/libisapol/explicit_basis.cc": "4f5b891ce551d6fa5a5a1c9a55a51493afe07ae5df69ec63be3f733ec15bee5d",
+    "psi4/src/psi4/libisapol/isa_fit.cc": "e45b54ba75e89abff6eb13f2de4da5cc4b1d5158c3cc9e85696d856c170309be",
+    "psi4/src/export_isapol.cc": "f07485f855f8bd1dd8344f3c0492302ad936db08cf2d53aba0417dc11050e488",
+    "tests/pytests/data_isapol/oracle/replay_isa_checkpoint.py": "e1baaa3f16b4117eb88204939da46ea229db23ff1c7df7a60f1cdd4d6300059f"
+  },
+  "staged_extension_sha256": "b81033cbf744507fae92dab78fe9a9191643846f66faa8684a291e577d0b93f0"
+}

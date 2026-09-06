@@ -41,6 +41,9 @@
 #include "psi4/lib3index/dfhelper.h"
 
 #include <iomanip>
+#include <algorithm>
+#include <cmath>
+#include <limits>
 
 // OMP
 #ifdef _OPENMP
@@ -55,28 +58,72 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
                                  std::map<std::string, SharedMatrix> matrix_cache,
                                  std::map<std::string, SharedVector> vector_cache, 
                                  bool is_hybrid)
+    : FDDS_Dispersion(primary, auxiliary, matrix_cache, vector_cache, is_hybrid, false) {}
+
+FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
+                                 std::map<std::string, SharedMatrix> matrix_cache,
+                                 std::map<std::string, SharedVector> vector_cache,
+                                 bool is_hybrid, bool single_system)
     : primary_(primary), auxiliary_(auxiliary), matrix_cache_(matrix_cache), vector_cache_(vector_cache), is_hybrid_(is_hybrid) {
     Options& options = Process::environment.options;
 
     // ==> Check incoming cache <==
-    std::vector<std::string> matrix_cache_check = {"Cocc_A", "Cvir_A", "Cocc_B", "Cvir_B"};
+    if (!primary_ || !auxiliary_) throw PSIEXCEPTION("FDDS: primary and auxiliary bases are required");
+    std::vector<std::string> matrix_cache_check = single_system
+        ? std::vector<std::string>{"Cocc_A", "Cvir_A"}
+        : std::vector<std::string>{"Cocc_A", "Cvir_A", "Cocc_B", "Cvir_B"};
     for (auto key : matrix_cache_check) {
-        if (matrix_cache_.find(key) == matrix_cache_.end()) {
+        if (matrix_cache_.find(key) == matrix_cache_.end() || !matrix_cache_.at(key)) {
             outfile->Printf("FDDS_Dispersion: Missing matrix_cache key %s\n", key.c_str());
             throw PSIEXCEPTION("FDDS_Dispersion: Missing values in the matrix_cache!");
         }
     }
 
-    std::vector<std::string> vector_cache_check = {"eps_occ_A", "eps_vir_A", "eps_occ_B", "eps_vir_B"};
+    std::vector<std::string> vector_cache_check = single_system
+        ? std::vector<std::string>{"eps_occ_A", "eps_vir_A"}
+        : std::vector<std::string>{"eps_occ_A", "eps_vir_A", "eps_occ_B", "eps_vir_B"};
     for (auto key : vector_cache_check) {
-        if (vector_cache_.find(key) == vector_cache_.end()) {
+        if (vector_cache_.find(key) == vector_cache_.end() || !vector_cache_.at(key)) {
             outfile->Printf("FDDS_Dispersion: Missing vector_cache key %s\n", key.c_str());
             throw PSIEXCEPTION("FDDS_Dispersion: Missing values in the vector_cache!");
         }
     }
 
+    if (single_system) {
+        for (const auto& key : matrix_cache_check) {
+            const auto& c = matrix_cache_.at(key);
+            if (c->nirrep() != 1 || c->nrow() != primary_->nbf() || c->ncol() == 0)
+                throw PSIEXCEPTION("FDDS_Monomer: require nonempty C1 orbital matrices in the primary basis");
+            for (int i = 0; i < c->nrow(); ++i)
+                for (int j = 0; j < c->ncol(); ++j)
+                    if (!std::isfinite(c->get(i, j)))
+                        throw PSIEXCEPTION("FDDS_Monomer: orbital coefficients must be finite");
+        }
+        double highest_occ = -std::numeric_limits<double>::infinity();
+        double lowest_vir = std::numeric_limits<double>::infinity();
+        for (const auto& block : {std::string("occ"), std::string("vir")}) {
+            const auto& e = vector_cache_.at("eps_" + block + "_A");
+            if (e->nirrep() != 1 || e->dim() != matrix_cache_.at("C" + block + "_A")->ncol())
+                throw PSIEXCEPTION("FDDS_Monomer: orbital energy dimensions do not match coefficients");
+            for (int i = 0; i < e->dim(); ++i) {
+                const double value = e->get(i);
+                if (!std::isfinite(value)) throw PSIEXCEPTION("FDDS_Monomer: energies must be finite");
+                if (block == "occ") highest_occ = std::max(highest_occ, value);
+                else lowest_vir = std::min(lowest_vir, value);
+            }
+        }
+        if (!(lowest_vir > highest_occ))
+            throw PSIEXCEPTION("FDDS_Monomer: positive occupied-virtual gaps are required");
+        const size_t nov = static_cast<size_t>(matrix_cache_.at("Cocc_A")->ncol()) *
+                           static_cast<size_t>(matrix_cache_.at("Cvir_A")->ncol());
+        if (is_hybrid_ && nov < static_cast<size_t>(auxiliary_->nbf()))
+            throw PSIEXCEPTION("FDDS_Monomer: hybrid QR requires nov >= naux; no alternate rank policy is applied");
+        for (const auto& key : matrix_cache_check) matrix_cache_[key] = matrix_cache_.at(key)->clone();
+        for (const auto& key : vector_cache_check) vector_cache_[key] = vector_cache_.at(key)->clone();
+    }
+
     // ==> Form Metric <==
-   
+
     timer_on("Form JS");
     size_t naux = auxiliary_->nbf();
     metric_ = std::make_shared<Matrix>("Inv Coulomb Metric", naux, naux);
@@ -149,8 +196,10 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
     std::vector<SharedMatrix> Cstack_vec;
     Cstack_vec.push_back(matrix_cache_["Cocc_A"]);
     Cstack_vec.push_back(matrix_cache_["Cvir_A"]);
-    Cstack_vec.push_back(matrix_cache_["Cocc_B"]);
-    Cstack_vec.push_back(matrix_cache_["Cvir_B"]);
+    if (!single_system) {
+        Cstack_vec.push_back(matrix_cache_["Cocc_B"]);
+        Cstack_vec.push_back(matrix_cache_["Cvir_B"]);
+    }
 
     size_t doubles = Process::environment.get_memory() * 0.8 / sizeof(double);
     size_t max_MO = 0;
@@ -172,17 +221,19 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
     // Define spaces
     dfh_->add_space("a", Cstack_vec[0]);
     dfh_->add_space("r", Cstack_vec[1]);
-    dfh_->add_space("b", Cstack_vec[2]);
-    dfh_->add_space("s", Cstack_vec[3]);
+    if (!single_system) {
+        dfh_->add_space("b", Cstack_vec[2]);
+        dfh_->add_space("s", Cstack_vec[3]);
+    }
 
     // add transformations
     dfh_->add_transformation("arQ", "a", "r", "pqQ");
-    dfh_->add_transformation("bsQ", "b", "s", "pqQ");
+    if (!single_system) dfh_->add_transformation("bsQ", "b", "s", "pqQ");
     if (is_hybrid_) {
         dfh_->add_transformation("raQ", "r", "a", "pqQ");
-        dfh_->add_transformation("sbQ", "s", "b", "pqQ");
+        if (!single_system) dfh_->add_transformation("sbQ", "s", "b", "pqQ");
         dfh_->add_transformation("Qar", "a", "r", "Qpq");
-        dfh_->add_transformation("Qbs", "b", "s", "Qpq");
+        if (!single_system) dfh_->add_transformation("Qbs", "b", "s", "Qpq");
     }
 
     // transform
@@ -203,15 +254,19 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
 
         dfh_->add_space("a", Cstack_vec[0]);
         dfh_->add_space("r", Cstack_vec[1]);
-        dfh_->add_space("b", Cstack_vec[2]);
-        dfh_->add_space("s", Cstack_vec[3]);
+        if (!single_system) {
+            dfh_->add_space("b", Cstack_vec[2]);
+            dfh_->add_space("s", Cstack_vec[3]);
+        }
 
         dfh_->add_transformation("aaR", "a", "a", "pqQ");
         dfh_->add_transformation("arR", "a", "r", "pqQ");
         dfh_->add_transformation("rrR", "r", "r", "pqQ");
-        dfh_->add_transformation("bbR", "b", "b", "pqQ");
-        dfh_->add_transformation("bsR", "b", "s", "pqQ");
-        dfh_->add_transformation("ssR", "s", "s", "pqQ");
+        if (!single_system) {
+            dfh_->add_transformation("bbR", "b", "b", "pqQ");
+            dfh_->add_transformation("bsR", "b", "s", "pqQ");
+            dfh_->add_transformation("ssR", "s", "s", "pqQ");
+        }
         dfh_->set_release_core_AO_before_metric(true);
         dfh_->transform();
     }
@@ -222,25 +277,63 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
         // QR Factorization of (ar|Q)
         timer_on("FDDS: QR");
         R_A_ = QR("A");
-        R_B_ = QR("B");
+        if (!single_system) R_B_ = QR("B");
         timer_off("FDDS: QR");
 
         // form (ar|(Q)X|Q) = (ar'|a'r) (a'r'|(Q)|Q)
         timer_on("FDDS: Form X");
         form_X("A");
-        form_X("B");
+        if (!single_system) form_X("B");
         timer_off("FDDS: Form X");
 
         // form (ar|(Q)Y|Q) = (aa'|rr') (a'r'|(Q)|Q)
         timer_on("FDDS: Form Y");
         form_Y("A");
-        form_Y("B");
+        if (!single_system) form_Y("B");
         timer_off("FDDS: Form Y");
     }
 
 }
 
 FDDS_Dispersion::~FDDS_Dispersion() {}
+
+FDDS_Monomer::FDDS_Monomer(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
+                           SharedMatrix occupied, SharedMatrix virtuals, SharedVector occupied_energies,
+                           SharedVector virtual_energies, bool is_hybrid)
+    : FDDS_Dispersion(primary, auxiliary, {{"Cocc_A", occupied}, {"Cvir_A", virtuals}},
+                      {{"eps_occ_A", occupied_energies}, {"eps_vir_A", virtual_energies}}, is_hybrid, true) {}
+
+SharedMatrix FDDS_Monomer::metric() { return metric_->clone(); }
+SharedMatrix FDDS_Monomer::metric_inv() { return metric_inv_->clone(); }
+SharedMatrix FDDS_Monomer::aux_overlap() { return aux_overlap_->clone(); }
+SharedMatrix FDDS_Monomer::R() {
+    if (!is_hybrid_) throw PSIEXCEPTION("FDDS_Monomer: R requires hybrid construction");
+    return R_A_->clone();
+}
+
+SharedMatrix FDDS_Monomer::project_density(SharedMatrix alpha_density) {
+    const int n = primary_->nbf();
+    if (!alpha_density || alpha_density->nirrep() != 1 || alpha_density->nrow() != n || alpha_density->ncol() != n)
+        throw PSIEXCEPTION("FDDS_Monomer: alpha density must be a C1 primary-basis square matrix");
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j)
+            if (!std::isfinite(alpha_density->get(i, j)))
+                throw PSIEXCEPTION("FDDS_Monomer: alpha density must be finite");
+    return FDDS_Dispersion::project_densities({alpha_density->clone()}).at(0);
+}
+
+SharedMatrix FDDS_Monomer::form_unc_amplitude(double omega) {
+    if (!std::isfinite(omega) || omega < 0.0)
+        throw PSIEXCEPTION("FDDS_Monomer: frequency must be finite and nonnegative");
+    return FDDS_Dispersion::form_unc_amplitude("A", omega);
+}
+
+std::map<std::string, SharedMatrix> FDDS_Monomer::form_aux_matrices(double omega) {
+    if (!is_hybrid_) throw PSIEXCEPTION("FDDS_Monomer: exchange intermediates require hybrid construction");
+    if (!std::isfinite(omega) || omega < 0.0)
+        throw PSIEXCEPTION("FDDS_Monomer: frequency must be finite and nonnegative");
+    return FDDS_Dispersion::form_aux_matrices("A", omega);
+}
 
 std::vector<SharedMatrix> FDDS_Dispersion::project_densities(std::vector<SharedMatrix> densities) {
     // Perform the contraction

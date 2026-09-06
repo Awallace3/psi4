@@ -37,53 +37,7 @@ from ... import p4util
 from ... import psifiles as psif
 from ...p4util.exceptions import *
 from .sapt_util import print_sapt_var
-
-
-def _symmetrize(mat):
-    tmp = 0.5 * (mat + mat.transpose())
-    return tmp
-
-
-def _compute_fxc(PQrho, half_Saux, halfp_Saux, x_alpha, rho_thresh=1.e-8):
-    """
-    Computes the gridless (P|fxc|Q) ALDA tensor.
-    """
-
-    naux = PQrho.shape[0]
-
-    # Level it out
-    PQrho_lvl = core.triplet(half_Saux, PQrho, half_Saux, False, False, False)
-
-    # Rotate into a diagonal basis
-    rho = core.Vector("rho eigenvalues", naux)
-    U = core.Matrix("rho eigenvectors", naux, naux)
-    PQrho_lvl.diagonalize(U, rho, core.DiagonalizeOrder.Ascending)
-
-    # "Gridless DFT"
-    mask = rho.np < rho_thresh  # Values too small cause singularities
-    rho.np[mask] = rho_thresh
-
-    dft_size = rho.shape[0]
-
-    inp = {"RHO_A": rho}
-    out = {"V": core.Vector(dft_size), "V_RHO_A": core.Vector(dft_size), "V_RHO_A_RHO_A": core.Vector(dft_size)}
-
-    func_x = core.LibXCFunctional('XC_LDA_X', True)
-    func_x.compute_functional(inp, out, dft_size, 2)
-    out["V_RHO_A_RHO_A"].scale(1.0 - x_alpha)
-
-    func_c = core.LibXCFunctional('XC_LDA_C_VWN', True)
-    func_c.compute_functional(inp, out, dft_size, 2)
-
-    out["V_RHO_A_RHO_A"].np[mask] = 0
-
-    # Rotate back
-    Ul = U.clone()
-    Ul.np[:] *= out["V_RHO_A_RHO_A"].np
-    tmp = core.doublet(Ul, U, False, True)
-
-    # Undo the leveling
-    return core.triplet(halfp_Saux, tmp, halfp_Saux, False, False, False)
+from .fdds_response import _compute_fxc, prepare_fdds_hybrid_transform, solve_fdds_response
 
 
 def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points=10, leg_lambda=0.3, do_print=True):
@@ -149,84 +103,33 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points
     if is_hybrid:
         R_A = fdds_obj.R_A().to_array()
         R_B = fdds_obj.R_B().to_array()
-        # `pinv` below can throw `numpy.linalg.LinAlgError: "SVD did not converge"`, so sanitize arrays
-        # zero_tol = 1e-20
-        # R_A[np.abs(R_A) < zero_tol] = 0
-        # R_B[np.abs(R_B) < zero_tol] = 0
-        R_A = np.nan_to_num(R_A)
-        R_B = np.nan_to_num(R_B)
-        # with np.printoptions(threshold=sys.maxsize):
-        #     print("R_A SANITIZED", R_A)
-        #     print("R_B SANITIZED", R_B)
-        Rtinv_A = np.linalg.pinv(R_A, rcond=1.e-13).transpose()
-        Rtinv_B = np.linalg.pinv(R_B, rcond=1.e-13).transpose()
+        Rtinv_A = prepare_fdds_hybrid_transform(R_A)
+        Rtinv_B = prepare_fdds_hybrid_transform(R_B)
 
     for point, weight in zip(*np.polynomial.legendre.leggauss(leg_points)):
 
         omega = leg_lambda * (1.0 - point) / (1.0 + point)
         lambda_scale = ((2.0 * leg_lambda) / (point + 1.0)**2)
 
-        # Monomer A
-        if is_hybrid:
-            aux_dict = fdds_obj.form_aux_matrices("A", omega)
-            aux_dict = {k: v.to_array() for k, v in aux_dict.items()}
-            X_A_uc = aux_dict["amp"].copy()
-            X_A = X_A_uc - x_alpha * aux_dict["K2L"]
+        responses = {}
+        for label, W in (("A", W_A), ("B", W_B)):
+            if is_hybrid:
+                aux_dict = fdds_obj.form_aux_matrices(label, omega)
+                aux_dict = {k: v.to_array() for k, v in aux_dict.items()}
+                uncoupled = aux_dict.pop("amp")  # Hybrid amp is already negative.
+                aux_dict["Rtinv"] = Rtinv_A if label == "A" else Rtinv_B
+            else:
+                uncoupled = fdds_obj.form_unc_amplitude(label, omega)
+                uncoupled.scale(-1.0)
+                uncoupled = uncoupled.to_array()
+                aux_dict = None
+            responses[label] = solve_fdds_response(
+                metric=metric, metric_inv=metric_inv, W=W, uncoupled=uncoupled,
+                x_alpha=x_alpha, hybrid=aux_dict)
+            del uncoupled, aux_dict
 
-            # K matrices
-            K_A = -x_alpha * aux_dict["K1LD"] - x_alpha * aux_dict["K2LD"] + x_alpha * x_alpha * aux_dict["K21L"]
-            KRS_A = K_A.dot(Rtinv_A).dot(metric)
-        else:
-            X_A = fdds_obj.form_unc_amplitude("A", omega)
-            X_A.scale(-1.0)
-            X_A = X_A.to_array()
-            X_A_uc = X_A.copy()
-
-        # Coupled A
-        XSW_A = X_A.dot(metric_inv).dot(W_A)
-        if is_hybrid:
-            XSW_A += 0.25 * KRS_A
-
-        amplitude = np.linalg.pinv(metric - XSW_A, rcond=1.e-13)
-        X_A_coupled = X_A + XSW_A.dot(amplitude).dot(X_A)
-
-        del X_A, XSW_A, amplitude
-        if is_hybrid:
-            del K_A, KRS_A, aux_dict
-
-        # Monomer B
-        if is_hybrid:
-            aux_dict = fdds_obj.form_aux_matrices("B", omega)
-            aux_dict = {k: v.to_array() for k, v in aux_dict.items()}
-            X_B_uc = aux_dict["amp"].copy()
-            X_B = X_B_uc - x_alpha * aux_dict["K2L"]
-
-            # K matrices
-            K_B = -x_alpha * aux_dict["K1LD"] - x_alpha * aux_dict["K2LD"] + x_alpha * x_alpha * aux_dict["K21L"]
-            KRS_B = K_B.dot(Rtinv_B).dot(metric)
-        else:
-            X_B = fdds_obj.form_unc_amplitude("B", omega)
-            X_B.scale(-1.0)
-            X_B = X_B.to_array()
-            X_B_uc = X_B.copy()
-
-        # Coupled B
-        XSW_B = X_B.dot(metric_inv).dot(W_B)
-        if is_hybrid:
-            XSW_B += 0.25 * KRS_B
-
-        amplitude = np.linalg.pinv(metric - XSW_B, rcond=1.e-13)
-        X_B_coupled = X_B + XSW_B.dot(amplitude).dot(X_B)
-
-        del X_B, XSW_B, amplitude
-        if is_hybrid:
-            del K_B, KRS_B, aux_dict
-
-        # Make sure the results are symmetrized
-        X_A_uc = _symmetrize(X_A_uc)
-        X_B_uc = _symmetrize(X_B_uc)
-        X_A_coupled = _symmetrize(X_A_coupled)
-        X_B_coupled = _symmetrize(X_B_coupled)
+        X_A_uc, X_B_uc = responses["A"].uncoupled, responses["B"].uncoupled
+        X_A_coupled, X_B_coupled = responses["A"].coupled, responses["B"].coupled
 
         # Combine
         tmp_uc = metric_inv.dot(X_A_uc).dot(metric_inv)

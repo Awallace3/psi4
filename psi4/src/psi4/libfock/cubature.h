@@ -61,6 +61,20 @@ struct MassPoint {
     double x, y, z, w;
 };
 
+// ==> Lebedev-Laikov table accessors <==
+//
+// Exposed for modules that must assemble their own atomic grids rather than going
+// through DFTGrid -- currently libisapol, which needs unrotated spheres to match
+// CamCASP bit-for-bit.  The weights carry the 4*pi factor, i.e. they sum to 4*pi.
+
+/// Smallest tabulated Lebedev grid size >= npoints, or -1 if npoints exceeds the
+/// largest tabulated grid.  Grids of fewer than 6 points are not considered.
+PSI_API int lebedev_npoints_at_least(int npoints);
+
+/// The Lebedev grid with exactly `npoints` points, or nullptr if there is none.
+/// The returned array is statically allocated and lives for the life of the process.
+PSI_API const MassPoint* lebedev_sphere(int npoints);
+
 class MolecularGrid {
    protected:
     int debug_;
