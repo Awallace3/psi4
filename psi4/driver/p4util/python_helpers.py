@@ -782,15 +782,18 @@ def validate_charge_list(lqxyz, diffuse: bool=False):
         except TypeError:
             return False
 
-        if (not diffuse) and nchg == 2:
-            return chg[0], chg[1][0], chg[1][1], chg[1][2]
-        elif diffuse and nchg == 3:
-            return chg[0], chg[1][0], chg[1][1], chg[1][2], chg[2]
-        elif (not diffuse) and nchg == 4:
-            return chg[0], chg[1], chg[2], chg[3]
-        elif diffuse and nchg == 5:
-            return chg[0], chg[1], chg[2], chg[3], chg[4]
-        else:
+        try:
+            if (not diffuse) and nchg == 2:
+                return chg[0], chg[1][0], chg[1][1], chg[1][2]
+            elif diffuse and nchg == 3:
+                return chg[0], chg[1][0], chg[1][1], chg[1][2], chg[2]
+            elif (not diffuse) and nchg == 4:
+                return chg[0], chg[1], chg[2], chg[3]
+            elif diffuse and nchg == 5:
+                return chg[0], chg[1], chg[2], chg[3], chg[4]
+            else:
+                return False
+        except (IndexError, KeyError, TypeError):
             return False
 
     flattened = [validate_single_charge(pt) for pt in lqxyz]

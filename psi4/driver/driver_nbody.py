@@ -200,7 +200,7 @@ def _validate_fragment_potential(ifr: Any, external_potential: Any) -> List:
     )
 
     if isinstance(external_potential, dict):
-        raise ValidationError(f"{expected}, not per fragment. Found keys {sorted(external_potential)}.")
+        raise ValidationError(f"{expected}, not per fragment. Found keys {list(external_potential)}.")
 
     if not isinstance(external_potential, (list, np.ndarray)):
         raise ValidationError(f"{expected}. Found {type(external_potential).__name__}.")
@@ -787,8 +787,9 @@ class ManyBodyComputer(ManyBodyComputerQCNG):
 
         fragment_scoped_external_potentials = any(
             _is_fragment_keyed_external_potential(
-                specification.keywords.get("function_kwargs", {}).get("external_potentials")
+                external_potentials := specification.keywords.get("function_kwargs", {}).get("external_potentials")
             )
+            and any(len(potential) > 0 for potential in external_potentials.values())
             for specification in self.input_data.specification.specification.values()
         )
         analyze_back = self.qcmb_core.analyze(
