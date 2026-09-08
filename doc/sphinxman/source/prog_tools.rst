@@ -3,7 +3,7 @@
 .. #
 .. # Psi4: an open-source quantum chemistry software package
 .. #
-.. # Copyright (c) 2007-2026 The Psi4 Developers.
+.. # Copyright (c) 2007-2025 The Psi4 Developers.
 .. #
 .. # The copyrights for code used from other parties are included in
 .. # the corresponding files.
@@ -26,16 +26,18 @@
 .. # @END LICENSE
 .. #
 
-.. _`sec:prog_intro`:
+.. include:: autodoc_abbr_options_c.rst
 
-================================================
-Introduction to Programming in |PSIfour|
-================================================
+.. _`sec:prog_tools`:
+
+===============
+Developer Tools
+===============
+
+Development tools and editor integrations that support work on the |PSIfour|
+C++ core and Python driver.
 
 .. toctree::
-   prog_welcome
-   prog_conduct
-   prog_setup
-   prog_tools
-   prog_tour
-   prog_help 
+   :maxdepth: 1
+
+   prog_lsp
