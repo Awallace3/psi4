@@ -63,6 +63,14 @@ inline void check_cuest(cuestStatus_t status, const char* func) {
 
 #define CHECK_CUEST(call) ::psi::cuest_common::check_cuest((call), #call)
 
+constexpr double to_gib = 1.0 / (1024.0 * 1024.0 * 1024.0);
+
+/* Free and total device memory, or false if the driver cannot say. */
+inline bool device_memory(size_t* free_bytes, size_t* total_bytes)
+{
+    return cudaMemGetInfo(free_bytes, total_bytes) == cudaSuccess;
+}
+
 inline cuestWorkspace_t* allocateWorkspace(const cuestWorkspaceDescriptor_t* workspaceDescriptor)
 {
     /* Check that a valid workspace descriptor has been provided. */
@@ -88,7 +96,8 @@ inline cuestWorkspace_t* allocateWorkspace(const cuestWorkspaceDescriptor_t* wor
     if (workspace->hostBufferSizeInBytes) {
         void* hostPtr = (void*) malloc(workspace->hostBufferSizeInBytes);
         if (!hostPtr) {
-            fprintf(stderr, "Failed to allocate host buffer\n");
+            fprintf(stderr, "Failed to allocate host buffer of %.3f GiB\n",
+                    workspace->hostBufferSizeInBytes * to_gib);
             free(workspace);
             exit(EXIT_FAILURE);
         }
@@ -100,7 +109,22 @@ inline cuestWorkspace_t* allocateWorkspace(const cuestWorkspaceDescriptor_t* wor
         void* devicePtr = NULL;
         cudaError_t err = cudaMalloc(&devicePtr, workspace->deviceBufferSizeInBytes);
         if (err != cudaSuccess) {
+            /* Say how much was wanted and how much the card had.  cuEST sizes
+             * this workspace from its own query and there is no budget to
+             * negotiate against, so a bare "out of memory" leaves no way to
+             * tell a system that will never fit from one that lost the card to
+             * another process.  On a cluster whose GPU partition mixes 40 GB
+             * and 80 GB parts behind one name, that distinction is the whole
+             * diagnosis. */
+            size_t dev_free = 0, dev_total = 0;
+            const bool have_dev = device_memory(&dev_free, &dev_total);
             fprintf(stderr, "Failed to allocate device buffer: %s\n", cudaGetErrorString(err));
+            fprintf(stderr, "  requested %.3f GiB", workspace->deviceBufferSizeInBytes * to_gib);
+            if (have_dev) {
+                fprintf(stderr, "; device has %.3f GiB free of %.3f GiB total",
+                        dev_free * to_gib, dev_total * to_gib);
+            }
+            fprintf(stderr, "\n");
             if (workspace->hostBuffer) free((void*) workspace->hostBuffer);
             free(workspace);
             exit(EXIT_FAILURE);

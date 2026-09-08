@@ -73,6 +73,9 @@ cuESTJK::cuESTJK(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> au
       // whatever is here, so they must not start out as garbage.
       cuest_pair_list_ws_ptr_(nullptr),
       cuest_dfint_plan_ws_ptr_(nullptr),
+      pair_list_device_bytes_(0),
+      dfint_plan_device_bytes_(0),
+      jk_temp_device_bytes_(0),
       initialized_(false) 
 {
     cuest_common::ensure_cuest_initialized();
@@ -117,6 +120,8 @@ void cuESTJK::preiterations()
     CHECK_CUEST(cuestAOPairListCreateWorkspaceQuery(cuest_handle, cuest_primary_basis_,
         static_cast<uint64_t>(natom), mol->geometry().pointer()[0], pq_threshold_, pair_params, persistentWorkspaceDescriptor, temporaryWorkspaceDescriptor, nullptr));
 
+    pair_list_device_bytes_ = persistentWorkspaceDescriptor->deviceBufferSizeInBytes;
+
     cuest_pair_list_ws_ptr_ = cuest_common::allocateWorkspace(persistentWorkspaceDescriptor);
     cuestWorkspace_t* temporaryPairListWorkspace = cuest_common::allocateWorkspace(temporaryWorkspaceDescriptor);
 
@@ -160,6 +165,8 @@ void cuESTJK::preiterations()
     CHECK_CUEST(cuestDFIntPlanCreateWorkspaceQuery(cuest_handle,
         cuest_primary_basis_, cuest_auxiliary_basis_, cuest_pair_list_,
         dfint_params, persistentWorkspaceDescriptor, temporaryWorkspaceDescriptor, nullptr));
+
+    dfint_plan_device_bytes_ = persistentWorkspaceDescriptor->deviceBufferSizeInBytes;
 
     cuest_dfint_plan_ws_ptr_ = cuest_common::allocateWorkspace(persistentWorkspaceDescriptor);;
     cuestWorkspace_t* temporaryDFIntPlanWorkspace = cuest_common::allocateWorkspace(temporaryWorkspaceDescriptor);;
@@ -221,6 +228,26 @@ void cuESTJK::preiterations()
     }
 
     initialized_ = true;
+
+    if (print_) {
+        // Report what the card is actually being asked for.  Every other JK
+        // builder prints its memory (MemDFJK prints "AOs need X GiB; user
+        // supplied Y GiB") and falls back to disk when it does not fit; cuEST
+        // has neither a budget nor a fallback, so an over-large system simply
+        // dies in cudaMalloc.  Printing the queried sizes next to the free
+        // device memory turns that into a diagnosis rather than a guess.
+        size_t dev_free = 0, dev_total = 0;
+        const bool have_dev = cuest_common::device_memory(&dev_free, &dev_total);
+        outfile->Printf("    Device memory, AO pair list:  %8.3f [GiB]\n",
+                        pair_list_device_bytes_ * cuest_common::to_gib);
+        outfile->Printf("    Device memory, DF int plan:   %8.3f [GiB]\n",
+                        dfint_plan_device_bytes_ * cuest_common::to_gib);
+        if (have_dev) {
+            outfile->Printf("    Device memory, free/total:    %8.3f / %.3f [GiB]\n",
+                            dev_free * cuest_common::to_gib, dev_total * cuest_common::to_gib);
+        }
+        outfile->Printf("\n");
+    }
 }
 
 void cuESTJK::destroy_cuest_objects() {
@@ -370,6 +397,18 @@ void cuESTJK::compute_JK() {
     total_desc->hostBufferSizeInBytes = max_host;
     total_desc->deviceBufferSizeInBytes = max_device;
  
+    // The temporary workspace is re-queried on every build because it depends on
+    // how many densities and occupied columns this build carries.  Report it the
+    // first time only: it is the peak the card has to absorb on top of the two
+    // persistent workspaces, and repeating it every SCF iteration would bury
+    // the output.
+    const bool first_jk_report = (jk_temp_device_bytes_ == 0);
+    jk_temp_device_bytes_ = max_device;
+    if (print_ && first_jk_report) {
+        outfile->Printf("    Device memory, J/K scratch:   %8.3f [GiB]\n\n",
+                        jk_temp_device_bytes_ * cuest_common::to_gib);
+    }
+
     cuestWorkspace_t* temporaryJKWorkspace = cuest_common::allocateWorkspace(total_desc);
 
     auto t_ws = clock::now();

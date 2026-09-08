@@ -73,6 +73,16 @@ class PSI_API cuESTJK : public JK {
     cuestWorkspace_t* cuest_pair_list_ws_ptr_;
     cuestWorkspace_t* cuest_dfint_plan_ws_ptr_;
 
+    // Device bytes cuEST asked for, recorded as the workspace queries answer.
+    // cuEST sizes its workspaces from a query and Psi4 then cudaMallocs exactly
+    // that much -- there is no budget to negotiate against and no out-of-core
+    // path -- so the queried size is the whole story about whether a system fits
+    // on the card.  Keeping it lets preiterations() report it instead of leaving
+    // a bare "out of memory" as the only evidence.
+    size_t pair_list_device_bytes_;
+    size_t dfint_plan_device_bytes_;
+    size_t jk_temp_device_bytes_;
+
     std::string name() override { return "cuESTJK"; }
     size_t memory_estimate() override;
     bool C1() const override { return true; }
