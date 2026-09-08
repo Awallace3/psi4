@@ -197,6 +197,59 @@ inline void evaluate_cuest_xc_component(
     }
 }
 
+// Evaluate GRAC on cuEST's grid, without CPU collocation blocks. Reusing
+// SuperFunctional keeps the shift, asymptotic blending, and XC energy convention
+// identical to the CPU RKS path. cuEST still builds the AO potential matrix.
+void evaluate_cuest_grac(const std::shared_ptr<SuperFunctional>& functional,
+                         const SharedMatrix& density, size_t npoints, size_t ncomponents,
+                         const double* weights, double* energy_density, double* potential) {
+    constexpr int block_size = 256;
+    auto worker = functional->build_worker();
+    worker->set_lock(false);
+    worker->set_max_points(block_size);
+    worker->set_deriv(1);
+    worker->allocate();
+    worker->set_lock(true);
+    std::map<std::string, SharedVector> inputs;
+    for (const auto& key : {"RHO_A", "RHO_AX", "RHO_AY", "RHO_AZ", "GAMMA_AA", "TAU_A"}) {
+        inputs[key] = std::make_shared<Vector>(key, block_size);
+    }
+    const bool meta = functional->is_meta();
+    const char* gradients[] = {"RHO_AX", "RHO_AY", "RHO_AZ"};
+    for (size_t start = 0; start < npoints; start += block_size) {
+        const int count = std::min<size_t>(block_size, npoints - start);
+        for (int i = 0; i < count; ++i) {
+            const auto point = start + i;
+            // cuEST holds one-spin densities; Psi4's RKS functional inputs are spin-summed.
+            inputs.at("RHO_A")->pointer()[i] = 2.0 * density->pointer()[0][point];
+            double sigma = 0.0;
+            for (int axis = 0; axis < 3; ++axis) {
+                const double gradient = 2.0 * density->pointer()[axis + 1][point];
+                inputs.at(gradients[axis])->pointer()[i] = gradient;
+                sigma += gradient * gradient;
+            }
+            inputs.at("GAMMA_AA")->pointer()[i] = sigma;
+            if (meta) inputs.at("TAU_A")->pointer()[i] = 2.0 * density->pointer()[4][point];
+        }
+        const auto& values = worker->compute_functional(inputs, count);
+        for (int i = 0; i < count; ++i) {
+            const auto point = start + i;
+            const double w = weights[point];
+            // SuperFunctional returns energy per volume (not LibXC's per particle).
+            // GRAC changes the potential, not the underlying XC energy expression.
+            energy_density[point] = values.at("V")->pointer()[i];
+            potential[ncomponents * point] = w * values.at("V_RHO_A")->pointer()[i];
+            for (int axis = 0; axis < 3; ++axis) {
+                potential[ncomponents * point + axis + 1] =
+                    4.0 * w * values.at("V_GAMMA_AA")->pointer()[i] * density->pointer()[axis + 1][point];
+            }
+            // LibXCFunctional halves the tau derivative for CPU AO integration;
+            // cuEST expects the full LibXC derivative instead.
+            if (meta) potential[ncomponents * point + 4] = 2.0 * w * values.at("V_TAU_A")->pointer()[i];
+        }
+    }
+}
+
 }  // namespace
 #endif
 
@@ -934,7 +987,6 @@ std::vector<SharedMatrix> VBase::compute_fock_derivatives() {
     throw PSIEXCEPTION("VBase: compute_fock_derivatives not implemented for this Vx instance.");
 }
 void VBase::set_grac_shift(double grac_shift) {
-    throw_if_cuest_unsupported("The GRAC asymptotic correction (DFT_GRAC_SHIFT)");
     // Well this is a flaw in my plan
     if (!grac_initialized_) {
         double grac_alpha = options_.get_double("DFT_GRAC_ALPHA");
@@ -957,7 +1009,7 @@ void VBase::set_grac_shift(double grac_shift) {
         functional_->set_grac_c_functional(grac_c_func);
         functional_->allocate();
         functional_->set_lock(true);
-        for (size_t i = 0; i < num_threads_; i++) {
+        for (size_t i = 0; i < functional_workers_.size(); i++) {
             functional_workers_[i]->set_lock(false);
             functional_workers_[i]->set_grac_alpha(grac_alpha);
             functional_workers_[i]->set_grac_beta(grac_beta);
@@ -972,7 +1024,7 @@ void VBase::set_grac_shift(double grac_shift) {
     functional_->set_lock(false);
     functional_->set_grac_shift(grac_shift);
     functional_->set_lock(true);
-    for (size_t i = 0; i < num_threads_; i++) {
+    for (size_t i = 0; i < functional_workers_.size(); i++) {
         functional_workers_[i]->set_lock(false);
         functional_workers_[i]->set_grac_shift(grac_shift);
         functional_workers_[i]->set_lock(true);
@@ -1693,7 +1745,13 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         SharedMatrix full_f, full_f_rho, full_f_gamma, full_f_tau;
         double *p_full_f, *p_full_f_rho, *p_full_f_gamma, *p_full_f_tau;
         double *rho_0, *rho_x, *rho_y, *rho_z, *tau_0;
-        switch (ansatz_type) {
+        if (functional_->needs_grac()) {
+            rho_0 = h_rho_matrixT->pointer()[0];
+            full_f = std::make_shared<Matrix>("GRAC energy density", 1, npoints);
+            p_full_f = full_f->pointer()[0];
+            evaluate_cuest_grac(functional_, h_rho_matrixT, npoints, ncomponents,
+                                p_weights, p_full_f, p_Vxc_grid);
+        } else switch (ansatz_type) {
             case CUEST_XCADVANCED_PARAMETERS_APPROXIMATION_LDA:
                 rho = std::make_shared<Matrix>("rho", 1, npoints);
                 p_rho = rho->pointer()[0];
@@ -1934,7 +1992,8 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         double Exc = 0.0;
         double integrated_density = 0.0;
         for (int point = 0; point < npoints; point++) {
-            Exc += 2 * p_weights[point] * p_full_f[point] * rho_0[point];
+            Exc += p_weights[point] * p_full_f[point] *
+                   (functional_->needs_grac() ? 1.0 : 2.0 * rho_0[point]);
             integrated_density += 2 * p_weights[point] * rho_0[point];
         }  
         quad_values_["FUNCTIONAL"] = Exc;
@@ -2723,6 +2782,10 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
 SharedMatrix RV::compute_gradient() {
     // => Validation <= //
     if ((D_AO_.size() != 1)) throw PSIEXCEPTION("V: RKS should have only one D Matrix");
+    if (use_cuest_xc() && functional_->needs_grac()) {
+        throw PSIEXCEPTION("cuEST analytic gradients with GRAC are not implemented; "
+                           "GRAC support currently covers restricted SCF potentials and energies only.");
+    }
 
     // => Setup <= //
     int natom = primary_->molecule()->natom();

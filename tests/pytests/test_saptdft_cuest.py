@@ -11,28 +11,21 @@ Every remaining electronic-structure step is an SCF that goes through
 monomer B) and two DFT SCFs for the monomers -- so turning on ``USE_CUEST``
 routes the whole method onto the GPU by way of the DF J/K builder.
 
-These tests pin four things:
+These tests pin five things:
   1. ``USE_CUEST`` is *optional*: the cuEST run must reproduce the CPU run.
   2. ``USE_CUEST`` is *complete*: no CPU DF J/K object is constructed anywhere
      in the SAPT(DFT) driver when it is on.
-  3. The one configuration the cuEST XC integrator cannot serve -- a non-zero
-     GRAC shift on the monomer DFT SCFs -- fails loudly rather than silently
-     dropping the asymptotic correction.
-  4. ``CUEST_XC false`` is the way out of (3): the XC quadrature moves back to
-     the CPU, GRAC works, and the cuEST DF J/K -- the expensive part -- is kept.
+  3. Nonzero monomer GRAC shifts with cuEST XC reproduce the CPU result,
+     and differ from the unshifted result (the correction is not dropped).
+  4. ``CUEST_XC false`` also supports GRAC while keeping cuEST DF J/K.
   5. The cuBLAS path through the SAPT electrostatics and exchange tensors, which
      ``CUEST_GEMM_MIN_DIM`` normally keeps switched off for a system this small,
      reproduces the einsums path when it is forced on.
 
-The GRAC caveat is a real restriction on the GPU XC path, not a test artifact.
-``VBase::set_grac_shift`` (psi4/src/psi4/libfock/v.cc) refuses to run when the
-cuEST XC integrator is active, because that integrator builds the quadrature
-grid on the GPU and never materializes the CPU grid blocks the GRAC correction
-integrates over.  Production SAPT(DFT) normally wants a GRAC shift, which is why
-``CUEST_XC`` exists: ``USE_CUEST true`` + ``CUEST_XC false`` runs a GRAC-shifted
-monomer DFT SCF at full accuracy with GPU J/K.  Until GRAC gains a cuEST
-implementation, that combination -- not ``USE_CUEST false`` -- is the production
-GPU setting.
+GRAC uses Psi4's SuperFunctional evaluator on the cuEST grid densities and
+passes the corrected grid potential to cuEST for AO integration. CPU grid
+blocks are not needed. Response-based induction/dispersion remain outside
+this GPU-XC configuration; these tests use delta HF and D4(I) instead.
 """
 
 import pytest
@@ -69,9 +62,8 @@ _components = [
 def _run_saptdft_d4i(use_cuest, outfile, extra_options=None, grac=0.0):
     """Run SAPT(DFT)-D4(I) with induction from delta HF; return components and output text.
 
-    ``grac`` is applied to both monomers.  It defaults to zero because a
-    non-zero shift is incompatible with the cuEST XC path; see the module
-    docstring.
+    ``grac`` is applied to both monomers. Zero-shift and GRAC-shifted runs
+    exercise separate functional-evaluation paths.
     Setting the two shift options explicitly (even to zero) is what tells the
     driver not to auto-compute them, so ``SAPT_DFT_GRAC_COMPUTE`` stays "NONE".
     """
@@ -177,16 +169,19 @@ def test_saptdft_cuest_d4i_mixed_precision(tmp_path):
 @uusing("cuest")
 @uusing("cuda_cc8")
 @uusing("dftd4")
-def test_saptdft_cuest_d4i_grac_is_rejected(tmp_path):
-    """A GRAC shift under the cuEST XC path must raise, not lose the correction.
-
-    ``CUEST_XC`` is set explicitly so this pins the GPU-XC configuration rather
-    than whatever the default happens to be.  The day GRAC gains a cuEST XC
-    implementation, this test turns red and gets replaced by a numerical check.
-    """
-    with pytest.raises(RuntimeError, match="GRAC"):
-        _run_saptdft_d4i(True, tmp_path / "gpu_grac.out", grac=0.136,
-                         extra_options={"CUEST_XC": True})
+def test_saptdft_cuest_d4i_grac(tmp_path):
+    """GPU XC must include GRAC, not merely accept its option."""
+    ref, _ = _run_saptdft_d4i(False, tmp_path / "cpu_grac.out", grac=0.136)
+    gpu, text = _run_saptdft_d4i(True, tmp_path / "gpu_grac.out", grac=0.136,
+                                extra_options={"CUEST_XC": True})
+    unshifted, _ = _run_saptdft_d4i(True, tmp_path / "gpu_unshifted.out",
+                                      extra_options={"CUEST_XC": True})
+    for key in _components:
+        assert psi4.compare_values(ref[key], gpu[key], 6, f"cuEST GRAC vs CPU: {key}")
+    assert abs(gpu["SAPT ELST ENERGY"] - unshifted["SAPT ELST ENERGY"]) > 1.e-8
+    assert "cuESTJK" in text
+    assert "DiskDFJK: Density-Fitted J/K Matrices" not in text
+    assert "MemDFJK: Density-Fitted J/K Matrices" not in text
 
 
 @pytest.mark.saptdft
@@ -196,9 +191,9 @@ def test_saptdft_cuest_d4i_grac_is_rejected(tmp_path):
 @uusing("cuda_cc8")
 @uusing("dftd4")
 def test_saptdft_cuest_d4i_grac_with_cpu_xc(tmp_path):
-    """CUEST_XC false buys back GRAC without giving up the cuEST J/K.
+    """CUEST_XC false remains an alternative with cuEST J/K.
 
-    This is the production GPU configuration for SAPT(DFT)-D4(I): the monomer
+    In this hybrid configuration for SAPT(DFT)-D4(I), the monomer
     DFT SCFs carry their asymptotic correction, the XC quadrature runs on the
     CPU, and every J/K build -- the dominant cost, and all of the delta-HF
     segment -- still goes to the GPU.  The answer must match the pure-CPU run
@@ -249,7 +244,7 @@ def test_saptdft_cuest_d4i_gpu_gemms(tmp_path):
 @pytest.mark.dftd4
 @uusing("dftd4")
 def test_saptdft_grac_still_works_on_cpu(tmp_path):
-    """The GRAC restriction is cuEST's, not the driver's: the CPU path is fine."""
+    """The CPU GRAC path remains available without cuEST."""
     values, text = _run_saptdft_d4i(False, tmp_path / "cpu_grac.out", grac=0.136)
 
     assert "cuESTJK" not in text

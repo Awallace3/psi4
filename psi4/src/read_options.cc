@@ -173,10 +173,12 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- Whether |globals__use_cuest| also routes the DFT exchange-correlation
     quadrature through cuEST.  When false, cuEST still builds the density-fitted
     J/K matrices -- the dominant cost -- while the XC grid, its CPU blocking, and
-    the per-thread functional workers are built as usual.  Turn this off to reach
-    the features the cuEST XC integrator does not implement, chiefly the GRAC
-    asymptotic correction (|scf__dft_grac_shift|), which SAPT(DFT) applies to its
-    monomer DFT SCFs.  No effect unless |globals__use_cuest| is true. -*/
+    the per-thread functional workers are built as usual.  Restricted GRAC
+    asymptotic corrections (|scf__dft_grac_shift|), including SAPT(DFT) monomer
+    SCFs, are supported with either setting: the cuEST path evaluates the
+    corrected functional on the host and integrates its potential on the GPU.
+    Response kernels still require CPU XC.  No effect unless
+    |globals__use_cuest| is true. -*/
     options.add_bool("CUEST_XC", true);
     /*- Whether to allow GPU calculations to use mixed precision emulation (requires CUDA and cuEST libraries) -*/
     options.add_bool("CUEST_MIXED_PRECISION", true);

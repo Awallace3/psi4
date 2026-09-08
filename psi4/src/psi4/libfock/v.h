@@ -133,8 +133,9 @@ class PSI_API VBase {
     /// selects the cuEST density-fitted J/K builder; CUEST_XC additionally
     /// hands the XC grid to cuEST.  Splitting the two lets a calculation keep
     /// GPU J/K -- the dominant cost -- while running XC on the CPU, which is
-    /// the only way to reach XC features cuEST has no branch for (GRAC, SAP,
-    /// Vx response kernels, analytic Hessians).
+    /// the only way to reach XC features cuEST has no branch for (SAP,
+    /// Vx response kernels, analytic Hessians). Restricted GRAC potentials
+    /// are evaluated on the host grid arrays and integrated by cuEST.
     ///
     /// Every site that reads this must agree with DFTGrid::buildGridFromOptions
     /// in cubature.cc, which uses the same conjunction to decide whether to
