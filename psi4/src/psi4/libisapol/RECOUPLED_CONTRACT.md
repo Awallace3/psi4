@@ -31,6 +31,17 @@ all saved fresh-water tensors/Cn bitwise at one thread in29.90s/589516KiB RSS
 access avoids electronic-tensor clones before resource preflight; public getters
 still return owned copies.
 
+## Subsequent independent lower-J subset
+
+LOWER_J_VALIDATION.md adds exact coupling-tree overlap expectations for J<n-2,
+even L+H+J, positive ranks<=3 and C6..C12. Parent1795 tests pass34.18s, including
+40 new tests covering224 signal blocks/10056 required rows and all33 reciprocal
+rank-pair classes. Expected values are table-independent; compressed and full
+comparisons require structural rows even at zero. Odd L+H+J normalization is
+still unresolved:5341 actual rows are not numerically certified, not assumed
+absent. This test-only increment changes neither production algorithms nor
+scientific tolerances and does not close native protocol parity.
+
 ## Inputs and ownership
 
 The already validated owned `IsaAnisotropicModel` requires increasing explicit

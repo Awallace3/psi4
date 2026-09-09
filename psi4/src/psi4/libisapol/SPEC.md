@@ -2,6 +2,20 @@
 
 ## 1. Objectives and current status
 
+### Accepted independent lower-J even-parity subset
+
+Parent1795 ISA/FDDS regressions pass34.18s, including40 new cases against the
+unchanged core. Table-independent exact factorial-CG coupling-tree overlaps and
+Sbar normalization validate rank<=3, C6..C12, J<n-2, even L+H+J:224 signal blocks,
+10056 required coefficient rows,76 ordered quadruples/33 reciprocal rank-pair
+classes. Full and compressed inputs enforce required structural rows, including
+zeros. Independent review found no must-fix issue. See LOWER_J_VALIDATION.md and
+`.pi/audit/lower-j-parent-regressions-v2.log`.
+This is NOT full lower-J closure:5341 odd-parity API rows remain numerically
+uncertified because their normalized angular convention is unresolved. They are
+not zero/absent;182 reciprocal angular classes survive in80 blocks. No production
+algorithm or tolerance changes. Rank4/native-SCF/PFIT/GRAC parity remains open.
+
 ### Independent maximal-J validation after checkpoint f996942ad6
 
 All735 J9/C11 and J10/C12 coefficient rows now have table-independent

@@ -2,7 +2,23 @@
 
 **Start here:** read `psi4/src/psi4/libisapol/SPEC.md`, then this plan. The spec owns scientific/API contracts; this file owns execution state. Preserve unrelated uncommitted work. User authorized committing and continuing; checkpoint `f996942ad6` contains the validated native/performance/recoupled implementation. No pushes, resets or reference-tree edits.
 
-## Accepted independent high-J followup
+## Accepted independent lower-J subset (latest)
+
+Parent1795 regressions passed34.18s in `.pi/audit/lower-j-parent-regressions-v2.log`.
+40 new tests validate even L+H+J, strictly J<n-2, rank<=3 C6..C12 using exact
+factorial-CG tree overlaps and sourced Sbar normalization, not production tables.
+224 signal blocks/10056 required rows,76 ordered quadruples/33 reciprocal rank-pair
+classes. Independent review found no must-fix; parent hardened compressed required
+row checks, including zeros. No production changes or rebuild. See
+LOWER_J_VALIDATION.md for derivation and certification bounds.
+
+Next blocker: odd L+H+J Sbar normalization is not established;5341 actual rows
+remain numerically uncertified.182 reciprocal angular classes in80 blocks survive,
+so these cannot be silently set to zero. General full lower-J, maximal channels
+of lower orders, rank4 and matched native basis/GRAC/PFIT remain open. No active
+background tasks. User tmp/ and orient_replacement.md untouched.
+
+## Accepted independent high-J followup (prior increment)
 
 Parent1755 regressions pass24.71s (`.pi/audit/high-j-parent-regressions-v2.log`).
 14 new tests independently validate all735 J9/C11 and J10/C12 rows,7 blocks,
