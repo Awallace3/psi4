@@ -819,6 +819,10 @@ void export_isapol(py::module& m) {
         .def_readonly("r", &RealCGTerm::r).def_readonly("s", &RealCGTerm::s)
         .def_property_readonly("value", &RealCGTerm::value);
     m.def("isapol_realcg_terms", &realcg_terms, "la"_a, "lap"_a);
+    m.def("isapol_realcg_defined", &realcg_defined, "la"_a, "lap"_a,
+          "True for the ordered rank pairs upstream defines: 1<=la,lap<=4 with la+lap<=6. "
+          "casimir.f90 read_cg/recouple skip j1+j2>6, so (3,4), (4,3) and (4,4) have no "
+          "table and no initialized coupled tensor; they are structurally absent.");
     py::class_<IsaRecoupledBlock>(m, "IsaRecoupledBlock")
         .def_readonly("la", &IsaRecoupledBlock::la).def_readonly("lap", &IsaRecoupledBlock::lap)
         .def_readonly("first_component", &IsaRecoupledBlock::first_component)

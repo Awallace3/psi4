@@ -1,4 +1,4 @@
-# Local-axis recoupled dispersion: rank <= 3 first increment
+# Local-axis recoupled dispersion: the ordered rank pairs upstream defines
 
 ## Scope and acceptance status
 
@@ -22,7 +22,7 @@ A subsequent independent factorial/electrostatic oracle validates all735 maximal
 rows on synthetic mixed-rank inputs (26 ordered quadruples,11 reciprocal classes);
 1755 integrated tests pass24.71s. See HIGH_J_VALIDATION.md for the independence
 boundary and limits; this is not a literal high-J archive comparison or a general
-lower-J second-stage oracle. Rank4 is rejected; rank3 C12 remains structurally partial.
+lower-J second-stage oracle. Rank3 C12 remains structurally partial.
 
 Evidence: `.pi/audit/recoupled-parity-tests-v1.log` and
 `recoupled-parity-regressions-v2.log`. The final integrated core also reproduces
@@ -48,9 +48,7 @@ The already validated owned `IsaAnisotropicModel` requires increasing explicit
 ranks, complete blocks among those ranks, exactly reciprocal finite matrices,
 proper explicit local-to-global frames, finite positions, unique site labels,
 nonnegative increasing frequencies, and nonblank provenance. No symmetry repair
-or response fitting is performed. Declared rank 4 is rejected even when its
-entries are zero: upstream skips (3,4), (4,3), (4,4) initialization; that undefined
-state is not a production convention. All nonempty subsets of {1,2,3} work;
+or response fitting is performed. All nonempty subsets of {1,2,3,4} work;
 compressed storage uses offsets in the declared ranks, never a global component
 index as a matrix offset.
 
@@ -68,8 +66,8 @@ Indices outside the supported domain throw.
 Real Racah, no Condon--Shortley phase: rank 1 is **z,x,y**. Public component indices
 are t(l,0)=l*l+1, t(l,mc)=l*l+2*m, t(l,ms)=l*l+2*m+1.
 
-The 1101 shipped nonzero first-stage numerical records cover all nine ordered
-rank pairs <=3. A record `(la,lap,k,q,v,p,denominator,r,s)` has zero-based
+The 1887 shipped nonzero first-stage numerical records cover all thirteen
+ordered rank pairs upstream defines (see "Rank four boundary" below). A record `(la,lap,k,q,v,p,denominator,r,s)` has zero-based
 rank-local k/q and global coupled v. Its value is `(p/denominator)*sqrt(r/s)`
 for r>0, or `i*(p/denominator)*sqrt(-r/s)` for r<0. Thus
 
@@ -119,6 +117,79 @@ the fixed tables and the pair ceiling. Python checks weight sequence length
 before conversion. Oversize input, arithmetic overflow, invalid indices and
 unsupported declared ranks fail explicitly.
 
+## Rank four boundary, taken from the upstream code
+
+`casimir.f90` `read_cg` **and** `recouple` both execute `if (j1+j2>6) cycle`
+inside `do j1=1,4; do j2=1,4`. So the defined domain is the **13 ordered pairs**
+`1<=la,lap<=4` with `la+lap<=6`: rank<=3 unchanged plus (1,4), (4,1), (2,4),
+(4,2). `data/realcg/realcg_3_4`, `realcg_4_3` and `realcg_4_4` exist upstream but
+are never read, and `alpha_c(maxf,4,4,81,MAXS)` has no initializer, so upstream
+leaves (3,4), (4,3), (4,4) formally undefined even though `c9code`..`c12code`
+reference those quadruples. That undefined state is not adopted as a convention
+and is not silently zeroed either.
+
+`realcg_defined(la,lap)` (bound as `isapol_realcg_defined`) is the predicate.
+`realcg_terms` throws outside it. `IsaRecoupledModel` accepts declared rank 4,
+builds **no block at all** for an undefined ordered pair, and charges it no
+resource budget; `value(site,f,la,lap,t)` then returns zero for that structural
+absence exactly as for any other absent block, and still throws for `la` or
+`lap` outside 1..4. A quadruple contributes to `C_n` only if both sites declare
+all four ranks *and* both ordered pairs are defined, so quadruples touching
+(3,4), (4,3) or (4,4) are reported in `missing_table_rank_quadruples` and
+excluded from every sum. A site declaring only rank 4 is legal, contributes
+nothing, and reports `table_complete == False` for every order. Regenerating the
+shipped records is additive only: the 1101 rank<=3 records are bitwise identical
+inside the 1887 total, and `realcg_manifest.txt` pinning rejects any change to an
+already pinned source while allowing newly added ordered pairs.
+
+### Rank four oracle: literal casimir write precision
+
+`tests/pytests/data_isapol/recoupled_rank4_casimir/` is a separately named,
+hash-pinned compressed archive of the **literal print tokens** of CamCASP 6.0
+patchlevel 051 `casimir` for a seeded synthetic single-site mixed-rank 1..4 deck
+(300 upper-triangular entries over labels `10`..`44s`, `FREQUENCIES 0.5 10`,
+`SKIP 0`, `PRINT ALL`, `RECOUPLE ALL`, `DISPERSION 12 A A`). Deck values are
+pseudo-random, not molecular; identity frames and a zero origin are bookkeeping.
+The development-only `oracle/generate_rank4_casimir.py` requires explicit
+CamCASP and casimir paths and **computes no expected value**: reference numbers
+are read back from casimir's own output, whose SHA256 is pinned along with the
+deck, the executable and `casimir.f90`.
+
+The recoupled print format is `g14.6` with a trailing `i` marking a pure
+imaginary component, so the comparison floor is that write precision:
+`|actual - printed| <= 0.5e-5 * 10^floor(log10|printed|)`, with the opposite
+part of the complex value required below 1e-12. The test verifies the **13**
+ordered pairs are exactly the blocks built, 369 printed components (3473 nonzero
+values, 117 written `0.00000` placeholders, 10 components printed as
+`all zero`), and the full Cn table at 7 significant figures: 10029 rows,
+15877 nonzero at rtol 1e-6 with no absolute allowance, 50155 written zero
+placeholders, 4171 omitted trailing fields, and the exact J<=8 rowset with zero
+unexplained extras. Every structural zero here is **exactly** zero in Psi4, so
+the 1e-6 placeholder floor masks nothing. As with the L3 archive, casimir's
+writer loops J=0..8 only; the 735 additional visible J9/10 rows are counted, not
+certified by this fixture, and remain covered by the independent factorial
+oracle. A mutation test proves the write-precision comparator rejects a wrong
+final digit and rejects real leakage into an imaginary block.
+
+Coverage gain for a fully declared single site, shipped-table ordered
+quadruples (`included_rank_quadruples`):
+
+```text
+n        6   7   8   9  10  11  12   total
+1,2,3    1   4  10  16  19  16  10      76
+1,2,3,4  1   4  10  20  31  36  34     136
+missing  0   0   0   0   0   4  10      14
+```
+
+The 14 still-missing quadruples are exactly those needing (3,4), (4,3) or (4,4);
+`table_complete` is therefore False at n=11 and n=12 for a rank-4 declaration,
+by construction and not by tolerance.
+
+Limits: this closes the declared-rank domain and its first/second-stage
+numerics, not native protocol parity. (3,4), (4,3), (4,4) remain uncovered by
+construction, so C11 and C12 lose the quadruples that need them; rank-3 C12
+stays structurally partial; the odd `L+H+J` normalization question is unchanged.
+
 ## Independent runtime example (no CamCASP files)
 
 ```python
@@ -166,8 +237,8 @@ loops J=0..8. Only the test constructs the legacy `abs>1e-6`/J<=8 view; the
 underlying API never drops high J or small values.
 
 The development-only `oracle/generate_recoupled_portable.py` requires explicit
-CamCASP/reference paths, pins the exact deck/pot SHA256, parses all nine full
-CG files, verifies all exact second-stage records using the existing development
+CamCASP/reference paths, pins the exact deck/pot SHA256, parses all thirteen
+full CG files, verifies all exact second-stage records using the existing development
 parser without rewriting them, and records source hashes. Production and pytest
 never open a home CamCASP tree or invoke/import the generator. The raw ~697KB
 pot file is not shipped. Decompression is bounded and the compressed hash is
@@ -180,7 +251,7 @@ Anthony J. Stone**, Copyright (c) 2019 Anthony Stone, MIT. The complete permissi
 and warranty notice is in `RECOUPLED_CAMCASP_LICENSE` and fixture `LICENSE`,
 recovered exactly with `git -C ~/gits/CamCASP show b40ae4f^:LICENSE`.
 `realcg_manifest.txt` (JSON-formatted, .txt to avoid repository JSON ignore rules)
-records actual SHA256 of all nine numerical CG files,
+records actual SHA256 of all thirteen numerical CG files,
 casimir.f90, c6..c12 tables, and that full license. Fixture manifest records
 actual deck, pot and compressed-payload hashes. These are numerical tables,
 not extracted executable source binaries. No ORIENT source was consulted.

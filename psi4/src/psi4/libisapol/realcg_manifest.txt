@@ -3,12 +3,16 @@
     "data/realcg/realcg_1_1": "2ccb817abf75193dc7083525dbdadd9ffe2cfdc1950f3a124a478eddff42f357",
     "data/realcg/realcg_1_2": "464490ae20cac0c2da2f7ffb75556016ba7840d44d92d36d91200ac925b5278b",
     "data/realcg/realcg_1_3": "f0b187315bdb7a45820b890354016ddf5aee0028f45f358ce3021213061741c9",
+    "data/realcg/realcg_1_4": "9a928faa90c9b4191b80531afa1c3129f561786edf6fe434be98d8cc61670e0a",
     "data/realcg/realcg_2_1": "3f5af214f256b58bf786f02c9edbde89c686f02ce20823a82e4336652766d398",
     "data/realcg/realcg_2_2": "d707d54429b327cea62386a70596bd7dfc251080a5868682c74c8810047e67bf",
     "data/realcg/realcg_2_3": "6f1ceb8686915ff7373b6feb35d4982544905cf4798cbc49827758b2aa28ac3d",
+    "data/realcg/realcg_2_4": "958a1f425e3619b05f96c15afbd824dacb533154ffc2cfeb1f1f445314759247",
     "data/realcg/realcg_3_1": "7a9c26f946ada63ab64e7318dff37fabf9b2e4faf299d7dcb6ef9f8750ecc001",
     "data/realcg/realcg_3_2": "9f899770dc8d4ce0e049eb7420328370d615dbd0269fbac64973419b26b04590",
     "data/realcg/realcg_3_3": "e04214d8a46030f3ec6f65cfb473f59e6dde46df5dbdab58590102547d5ccb26",
+    "data/realcg/realcg_4_1": "eb9a5ac62837f036df17ff0bbc0885565d583f4a2cd3be33e8b29c5ebc3d3d34",
+    "data/realcg/realcg_4_2": "d1d931d556dd47382e102f410408c91509129916d2408ab933f16542b8865605",
     "src/casimir/casimir.f90": "3f6d4bc31c046d2440f5e0e7489be18d6a4c5aac09afa3bab25074c3062637ec",
     "src/casimir/c6code.f90": "e45831c4ec14afda91f7fcf66ec23e22008b9bc36ed3a647bd33384314672f45",
     "src/casimir/c7code.f90": "5aa640fb2aee0aa3c2cc3c4a7be6a76a71fdd3ca7b62175d842ded7ba7717555",
@@ -18,12 +22,13 @@
     "src/casimir/c11code.f90": "4b77820cc63a3f3a44148dbbfa79357b5d21926f595dcdfe829f8fe4270c3534",
     "src/casimir/c12code.f90": "b8c7bf08ccecaef5ea771ac2a4484aed29f6d84c7f2be352ccd6c09c43041e9c"
   },
-  "records": 1101,
+  "records": 1887,
   "license_sha256": "d9656075e6c442f7fe7371538440ce7e53fa81a7f5ce9b8df4a3ff29e3f9d1b9",
   "license_git_object": "b40ae4f^:LICENSE",
   "authors": [
     "Alston J. Misquitta",
     "Anthony J. Stone"
   ],
-  "ordering": "la,lap,v,k,q; source line recoverable by unique k,q,v"
+  "ordering": "la,lap,v,k,q; source line recoverable by unique k,q,v",
+  "ordered_pairs": "la,lap in 1..4 with la+lap<=6, matching casimir.f90 \"if (j1+j2>6) cycle\" in read_cg and recouple; realcg_3_4/4_3/4_4 exist upstream but are never read and alpha_c is left uninitialized for those pairs"
 }

@@ -28,37 +28,49 @@ def labels():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--camcasp', type=Path, required=True)
-    parser.add_argument('--reference', type=Path, required=True,
+    parser.add_argument('--reference', type=Path,
                         help='exact work/H2O-isagrid directory, NOT work/H2O')
+    parser.add_argument('--cg-only', action='store_true',
+                        help='regenerate only realcg_data.inc/realcg_manifest.txt. The '
+                             'L3 archive fixture is unchanged and its transient '
+                             'work/H2O-isagrid source directory no longer exists.')
     parser.add_argument('--repo', type=Path, default=Path(__file__).resolve().parents[4])
     args = parser.parse_args()
+    if not args.cg_only and args.reference is None:
+        parser.error('--reference is required unless --cg-only')
     lib = args.repo/'psi4/src/psi4/libisapol'
     # Parse all seven exact stage-two tables with the existing development parser,
     # compare every integer record and block key/offset; never rewrite those files.
-    spec = importlib.util.spec_from_file_location('cn_development_parser', Path(__file__).with_name('parse_cncode.py'))
-    cn = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(cn)
-    cn.SRC = str(args.camcasp/'src/casimir')
-    expected_terms, expected_blocks = [], []
-    for n in range(6,13):
-        for key, terms in sorted(cn.parse(n).items()):
-            expected_blocks.append((n,*key,len(expected_terms),len(terms)))
-            for p,r,la,lap,lb,lbp,ip in terms:
-                expected_terms.append((p.numerator,p.denominator,r.numerator,r.denominator,la,lap,lb,lbp,ip))
-    inc = (lib/'recoupling_data.inc').read_text()
-    actual = [tuple(map(int, row.split(','))) for row in re.findall(r'\{([\d, -]+)\}',inc)]
-    assert len(expected_blocks)==393 and len(expected_terms)==4673
-    assert actual==expected_terms+expected_blocks
-    dest = args.repo/'tests/pytests/data_isapol/recoupled_h2o_isagrid_l3'
-    dest.mkdir(exist_ok=True)
-    license_text = subprocess.check_output(
-        ['git', '-C', str(args.camcasp), 'show', 'b40ae4f^:LICENSE'], text=True)
-    assert 'Copyright (c) 2019 Anthony Stone' in license_text
-    (lib/'RECOUPLED_CAMCASP_LICENSE').write_text(license_text)
-    (dest/'LICENSE').write_text(license_text)
+    if not args.cg_only:
+        spec = importlib.util.spec_from_file_location('cn_development_parser', Path(__file__).with_name('parse_cncode.py'))
+        cn = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cn)
+        cn.SRC = str(args.camcasp/'src/casimir')
+        expected_terms, expected_blocks = [], []
+        for n in range(6,13):
+            for key, terms in sorted(cn.parse(n).items()):
+                expected_blocks.append((n,*key,len(expected_terms),len(terms)))
+                for p,r,la,lap,lb,lbp,ip in terms:
+                    expected_terms.append((p.numerator,p.denominator,r.numerator,r.denominator,la,lap,lb,lbp,ip))
+        inc = (lib/'recoupling_data.inc').read_text()
+        actual = [tuple(map(int, row.split(','))) for row in re.findall(r'\{([\d, -]+)\}',inc)]
+        assert len(expected_blocks)==393 and len(expected_terms)==4673
+        assert actual==expected_terms+expected_blocks
+        dest = args.repo/'tests/pytests/data_isapol/recoupled_h2o_isagrid_l3'
+        dest.mkdir(exist_ok=True)
+        license_text = subprocess.check_output(
+            ['git', '-C', str(args.camcasp), 'show', 'b40ae4f^:LICENSE'], text=True)
+        assert 'Copyright (c) 2019 Anthony Stone' in license_text
+        (lib/'RECOUPLED_CAMCASP_LICENSE').write_text(license_text)
+        (dest/'LICENSE').write_text(license_text)
     hashes, records = {}, []
-    for l in range(1, 4):
-        for p in range(1, 4):
+    # casimir.f90 read_cg/recouple both execute "if (j1+j2>6) cycle", so upstream
+    # never reads realcg_3_4, realcg_4_3 or realcg_4_4 and never initializes
+    # alpha_c for those ordered pairs.  Ship exactly the pairs upstream defines.
+    for l in range(1, 5):
+        for p in range(1, 5):
+            if l + p > 6:
+                continue
             path = args.camcasp/f'data/realcg/realcg_{l}_{p}'
             hashes[str(path.relative_to(args.camcasp))] = sha(path)
             seen = set()
@@ -82,14 +94,34 @@ def main():
         path = args.camcasp/'src/casimir'/name
         hashes[str(path.relative_to(args.camcasp))] = sha(path)
     manifest_path = lib/'realcg_manifest.txt'
+    if args.cg_only:
+        # The MIT notice is already shipped and pinned; re-verify, never refetch.
+        license_text = (lib/'RECOUPLED_CAMCASP_LICENSE').read_text()
+        assert 'Copyright (c) 2019 Anthony Stone' in license_text
+        assert hashlib.sha256(license_text.encode()).hexdigest() == \
+            json.loads(manifest_path.read_text())['license_sha256']
     if manifest_path.exists():
-        assert json.loads(manifest_path.read_text())['source_sha256'] == hashes, 'Pinned numerical sources changed'
+        pinned = json.loads(manifest_path.read_text())['source_sha256']
+        # Newly added ordered pairs extend the pinned set; anything already
+        # pinned must be bitwise identical.
+        assert all(pinned[k] == v for k, v in hashes.items() if k in pinned), \
+            'Pinned numerical sources changed'
+        assert set(pinned) <= set(hashes), 'Pinned numerical sources disappeared'
     manifest_path.write_text(json.dumps({
         'source_sha256': hashes, 'records': len(records),
         'license_sha256': hashlib.sha256(license_text.encode()).hexdigest(),
         'license_git_object': 'b40ae4f^:LICENSE',
         'authors': ['Alston J. Misquitta', 'Anthony J. Stone'],
-        'ordering': 'la,lap,v,k,q; source line recoverable by unique k,q,v'}, indent=2)+'\n')
+        'ordering': 'la,lap,v,k,q; source line recoverable by unique k,q,v',
+        'ordered_pairs': 'la,lap in 1..4 with la+lap<=6, matching casimir.f90 '
+                         '"if (j1+j2>6) cycle" in read_cg and recouple; '
+                         'realcg_3_4/4_3/4_4 exist upstream but are never read '
+                         'and alpha_c is left uninitialized for those pairs'},
+        indent=2)+'\n')
+    if args.cg_only:
+        print(f'{len(records)} CG records over '
+              f'{len({(r[0], r[1]) for r in records})} ordered pairs (cg-only)')
+        return
     deck = args.reference/'H2O_ref_wt4_L3_casimir.data'
     pot = args.reference/'H2O_ref_wt4_L3_C12.pot'
     assert args.reference.name == 'H2O-isagrid'

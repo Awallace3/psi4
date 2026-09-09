@@ -49,7 +49,8 @@ No implementation/build/test background tasks are pending. Old task IDs and
 - Bounded ISA preparation, streamed density/AUX-Q work and deterministic
   independent-output OpenMP. Default one-thread results remain bitwise baseline.
 - Independently callable supplied-input localization/PFIT, isotropic,
-  orientation-resolved and rank≤3 **recoupled** dispersion APIs. They are distinct
+  orientation-resolved and **recoupled** dispersion APIs (declared ranks 1..4 over
+  the 13 ordered pairs upstream defines). They are distinct
   representations, not interchangeable public end-to-end claims.
 - Hash/provenance-qualified expected reference basis manifest plus early
   dimensional response preflight. It is deliberately **not a PartitionRecipe**.
@@ -259,7 +260,11 @@ trace, hashes and separate ISA candidates). Its portable conclusions are in
   Six raw-identity tests do not close this; 182 reciprocal classes in 80 blocks
   survive, so the channels are not absent/zero. User deferred this investigation.
 - General maximal-J channels of lower orders are outside the dedicated high-J
-  certification; rank4 remains rejected by recoupled API; C12 is partial.
+  certification; C12 is partial. Rank 4 is now accepted over the 13 ordered pairs
+  upstream defines (`la+lap<=6`) and certified against built casimir at its write
+  precision; (3,4),(4,3),(4,4) are uninitialized upstream and therefore remain
+  structurally absent, so the C9..C12 quadruples needing them are reported missing
+  coverage rather than zeroed.
 - Matched native ISA reference comparisons, raw tails/Drho/fitted-OV conditioning,
   fitted versus direct response and strict recorded-input LW defects retain
   distinct gates. See SPEC/PROVISIONAL_ACCEPTANCE.md; no blanket tolerance waiver.

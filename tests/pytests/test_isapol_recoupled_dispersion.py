@@ -19,6 +19,7 @@ from isapol_factorial_oracle import cg, real_transform, independent_g
 
 c = psi4.core
 ROOT = Path(__file__).parent/'data_isapol/recoupled_h2o_isagrid_l3'
+RANK4 = Path(__file__).parent/'data_isapol/recoupled_rank4_casimir'
 
 
 def local(matrices, ranks=(1,), frequencies=(1.,), label='analytic', origin=(0.,0.,0.), frame=None,
@@ -38,8 +39,12 @@ def calculate(a, b=None, weights=(1.,), order=12):
     return c.isa_recoupled_dispersion(a, a if b is None else b, list(weights), order)
 
 
-@pytest.mark.parametrize('l,p', itertools.product(range(1,4), repeat=2))
-def test_all_nine_tables_factorial_phase_and_unitarity(l,p):
+DEFINED_PAIRS = [(l,p) for l,p in itertools.product(range(1,5), repeat=2) if l+p <= 6]
+UNDEFINED_PAIRS = [(l,p) for l,p in itertools.product(range(1,5), repeat=2) if l+p > 6]
+
+
+@pytest.mark.parametrize('l,p', DEFINED_PAIRS)
+def test_all_thirteen_tables_factorial_phase_and_unitarity(l,p):
     expected = independent_g(l,p)
     actual = np.zeros_like(expected)
     records = c.isapol_realcg_terms(l,p)
@@ -172,11 +177,41 @@ def test_static_exclusion_weights_frequency_and_determinism():
         calculate(coupled([np.eye(3)],frequencies=(0.,)),weights=(0.,))
 
 
+def test_upstream_undefined_rank_pairs_are_structurally_absent():
+    # casimir.f90 read_cg and recouple both execute "if (j1+j2>6) cycle", so
+    # realcg_3_4/4_3/4_4 are never read and alpha_c is never initialized there.
+    assert [t for t in DEFINED_PAIRS if c.isapol_realcg_defined(*t)] == DEFINED_PAIRS
+    assert not any(c.isapol_realcg_defined(*t) for t in UNDEFINED_PAIRS)
+    assert len(DEFINED_PAIRS) == 13 and len(UNDEFINED_PAIRS) == 3
+    for l,p in UNDEFINED_PAIRS:
+        with pytest.raises((ValueError,RuntimeError),match='undefined upstream'):
+            c.isapol_realcg_terms(l,p)
+    for l in (0,5):
+        assert not c.isapol_realcg_defined(l,1) and not c.isapol_realcg_defined(1,l)
+        with pytest.raises((ValueError,RuntimeError),match='undefined upstream'):
+            c.isapol_realcg_terms(l,1)
+    # A declared rank-4-only site is accepted, builds no block at all, and is
+    # reported as missing coverage; it is never summed as zero-valued data.
+    rec = coupled([np.eye(9)],ranks=(4,))
+    assert [(b.la,b.lap) for b in rec.sites[0]] == []
+    assert rec.value(0,0,4,4,1) == 0
+    with pytest.raises((ValueError,RuntimeError),match='invalid tensor index'):
+        rec.value(0,0,5,1,1)
+    cov = calculate(rec).pairs[0].coverage
+    assert all(not x.table_complete and not x.included_rank_quadruples for x in cov)
+    assert all(x.value == 0. for x in calculate(rec).pairs[0].coefficients)
+    # Mixed declaration keeps every defined ordered pair and drops only (4,4).
+    mixed = coupled([np.eye(3+9)],ranks=(1,4))
+    assert [(b.la,b.lap) for b in mixed.sites[0]] == [(1,1),(1,4),(4,1)]
+    cov = calculate(mixed).pairs[0].coverage
+    missing = {tuple(q) for x in cov for q in x.missing_table_rank_quadruples}
+    included = {tuple(q) for x in cov for q in x.included_rank_quadruples}
+    assert any(q[:2]==(4,4) or q[2:]==(4,4) for q in missing)
+    assert not any(q[:2]==(4,4) or q[2:]==(4,4) for q in included)
+    assert (1,4,4,1) in included
+
+
 def test_rank_four_overflow_and_budgets_rejected():
-    with pytest.raises((ValueError,RuntimeError),match='rank 4'):
-        coupled([np.eye(9)],ranks=(4,))
-    with pytest.raises((ValueError,RuntimeError),match='ranks 1..3'):
-        c.isapol_realcg_terms(3,4)
     with pytest.raises((ValueError,RuntimeError),match='overflow'):
         calculate(coupled([np.eye(3)*1e200]))
     with pytest.raises((ValueError,RuntimeError),match='overflow'):
@@ -277,3 +312,125 @@ def test_literal_h2o_isagrid_l3_archived_write_precision():
         if a==b=='O':
             assert result.pairs[0].coefficient(6,1,1,0)==pytest.approx(26.48177,rel=1e-6)
     assert (row_count,nonzero,placeholders,high)==(6285,10457,30791,411)
+
+
+def check_alpha_token(actual, token, imaginary):
+    # casimir writes recoupled components with g14.6: six significant figures and
+    # a trailing "i" for a pure imaginary value.  The comparison floor is the
+    # write precision itself, never a loosened scientific tolerance.
+    expected = float(token)
+    assert abs(actual.real if imaginary else actual.imag) < 1e-12
+    got = actual.imag if imaginary else actual.real
+    if expected == 0.:
+        assert abs(got) <= 1e-6
+        return 'placeholder'
+    assert abs(got-expected) <= .5*10**(math.floor(math.log10(abs(expected)))-5)
+    return 'nonzero'
+
+
+def test_rank_four_declaration_extends_shipped_table_coverage():
+    """Included/missing shipped-table quadruples, by construction not tolerance."""
+    def counts(ranks):
+        rec = coupled([np.eye(sum(2*l+1 for l in ranks))], ranks=ranks)
+        cov = calculate(rec).pairs[0].coverage
+        return ({x.order:len(x.included_rank_quadruples) for x in cov},
+                {x.order:len(x.missing_table_rank_quadruples) for x in cov})
+    low, _ = counts((1,2,3))
+    high, missing = counts((1,2,3,4))
+    assert [low[n] for n in range(6,13)] == [1,4,10,16,19,16,10]
+    assert [high[n] for n in range(6,13)] == [1,4,10,20,31,36,34]
+    assert [missing[n] for n in range(6,13)] == [0,0,0,0,0,4,10]
+    # Every remaining gap needs an ordered pair casimir never initializes.
+    rec = coupled([np.eye(24)], ranks=(1,2,3,4))
+    for x in calculate(rec).pairs[0].coverage:
+        for q in x.missing_table_rank_quadruples:
+            assert not (c.isapol_realcg_defined(q[0],q[1]) and c.isapol_realcg_defined(q[2],q[3]))
+        assert x.table_complete == (x.order <= 10)
+
+
+def test_alpha_comparator_detects_write_precision_mutation():
+    assert check_alpha_token(complex(1.03877), '1.03877', False) == 'nonzero'
+    assert check_alpha_token(complex(0.,-0.238944), '-0.238944', True) == 'nonzero'
+    assert check_alpha_token(complex(1.0387748), '1.03877', False) == 'nonzero'
+    assert check_alpha_token(0j, '0.00000', True) == 'placeholder'
+    for bad in (complex(1.03878), complex(1.03876), complex(-1.03877)):
+        with pytest.raises(AssertionError):
+            check_alpha_token(bad, '1.03877', False)
+    with pytest.raises(AssertionError):        # real leakage into an imaginary block
+        check_alpha_token(complex(1e-11,-0.238944), '-0.238944', True)
+
+
+def test_rank_four_casimir_write_precision_recoupling_and_dispersion():
+    """Rank 4 taken from the upstream code: the 13 ordered pairs it defines.
+
+    Reference values are literal casimir print tokens for a seeded synthetic
+    mixed-rank 1..4 deck, not values recomputed by the fixture generator.
+    """
+    manifest = json.loads((RANK4/'manifest.txt').read_text())
+    blob = (RANK4/'literal_numeric.json.gz').read_bytes()
+    assert len(blob) == manifest['compressed_bytes'] < 250000
+    assert hashlib.sha256(blob).hexdigest() == manifest['fixture_sha256'] == \
+        'f5243b7c6e9228c57dc69a93b4b50b0f1d54003f59fb6a9b883ac16545108cb3'
+    with gzip.open(RANK4/'literal_numeric.json.gz','rb') as handle:
+        raw = handle.read(1000001)
+    assert len(raw) == manifest['uncompressed_bytes'] < 1000000
+    fixture = json.loads(raw)
+    assert fixture['source_sha256'] == manifest['source_sha256'] == {
+        'rank4_casimir.data':'3b31b33826f8e30e4ad8fa39d16e99310fc38aaabfc1bb8fcc426d770d3b75d2',
+        'rank4_casimir.out':'49997c167a4ee904e36756726d23458972ab7defc4515df775aa6de2a389d681'}
+    assert [tuple(x) for x in fixture['ordered_pairs']] == DEFINED_PAIRS
+    assert fixture['ranks'] == [1,2,3,4] and fixture['frequencies'] == {
+        'kind':'CasimirGrid','n':10,'omega0':0.5}
+
+    grid = c.CasimirGrid(10,.5)
+    freq = [grid.omega(k) for k in range(1,11)]
+    weights = [grid.cp_weight(k) for k in range(1,11)]
+    A = np.zeros((10,24,24))
+    for t,u,line,tokens in fixture['deck_entries']:
+        assert 1 <= line <= 400 and len(tokens) == 10 and 2 <= t <= u <= 25
+        A[:,t-2,u-2] = A[:,u-2,t-2] = list(map(float,tokens))
+    assert len(fixture['deck_entries']) == manifest['counts']['deck_entries'] == 300
+    rec = coupled(A, ranks=(1,2,3,4), frequencies=freq, label='S1',
+                  provenance='rank4 casimir deck SHA256 '+fixture['source_sha256']['rank4_casimir.data'])
+    assert [(b.la,b.lap) for b in rec.sites[0]] == DEFINED_PAIRS
+
+    checked = declared_zero = written_zero = 0
+    for la,lap,label,t,line,tokens in fixture['alpha']:
+        assert (la,lap) in DEFINED_PAIRS and line > 0
+        first, last = (la-lap)**2+1, (la+lap+1)**2
+        assert first <= t <= last
+        for f in range(10):
+            value = rec.value(0,f,la,lap,t)
+            if tokens is None:                     # printed "<label>(<la><lap>) all zero"
+                assert abs(value) <= 1e-6
+                declared_zero += 1
+                continue
+            if check_alpha_token(value, *tokens[f]) == 'placeholder':
+                written_zero += 1
+            else:
+                checked += 1
+    assert (checked, written_zero, declared_zero) == (3473, 117, 100)
+    assert len(fixture['alpha']) == manifest['counts']['alpha_components'] == 369
+
+    result = calculate(rec, weights=weights)
+    rows = {}
+    for x in result.pairs[0].coefficients:
+        rows.setdefault((x.t,x.u,x.J),{})[x.order] = x.value
+    nonzero = placeholders = absent = 0
+    for t,u,J,tlabel,ulabel,line,fields in fixture['cn_rows']:
+        assert line > 0 and 0 <= J <= 8 and 1 <= len(fields) <= 7
+        for n,token in enumerate(fields,6):
+            kind = check_archive_field(rows.get((t,u,J),{}).get(n,0.), token)
+            placeholders += kind == 'placeholder'
+            nonzero += kind == 'nonzero'
+        for n in range(6+len(fields),13):          # omitted trailing fields
+            assert check_archive_field(rows.get((t,u,J),{}).get(n,0.), None) == 'absent'
+            absent += 1
+    visible = {k for k,v in rows.items() if any(abs(x)>1e-6 for x in v.values())}
+    archived = {(t,u,J) for t,u,J,_,_,_,_ in fixture['cn_rows']}
+    assert {k for k in visible if k[2] <= 8} == archived   # exact rowset, 0 extras
+    # casimir's writer loops J=0..8 only, so the J9/10 rows are counted here and
+    # certified elsewhere by the independent factorial oracle, not by this fixture.
+    assert sum(k[2] > 8 for k in visible) == 735
+    assert (len(fixture['cn_rows']), nonzero, placeholders, absent) == (10029,15877,50155,4171)
+    assert len(fixture['cn_rows']) == manifest['counts']['cn_rows']

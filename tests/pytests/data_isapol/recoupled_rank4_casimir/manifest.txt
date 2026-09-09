@@ -1,0 +1,25 @@
+{
+  "fixture_sha256": "f5243b7c6e9228c57dc69a93b4b50b0f1d54003f59fb6a9b883ac16545108cb3",
+  "compressed_bytes": 191728,
+  "uncompressed_bytes": 897841,
+  "source_sha256": {
+    "rank4_casimir.data": "3b31b33826f8e30e4ad8fa39d16e99310fc38aaabfc1bb8fcc426d770d3b75d2",
+    "rank4_casimir.out": "49997c167a4ee904e36756726d23458972ab7defc4515df775aa6de2a389d681"
+  },
+  "casimir_sha256": "d1e47d942e9f731ed13d0c7738bacbc44802d53962bf153f7e836eba7693c807",
+  "casimir_source_sha256": "3f6d4bc31c046d2440f5e0e7489be18d6a4c5aac09afa3bab25074c3062637ec",
+  "license_sha256": "d9656075e6c442f7fe7371538440ce7e53fa81a7f5ce9b8df4a3ff29e3f9d1b9",
+  "license_git_object": "b40ae4f^:LICENSE",
+  "authors": [
+    "Alston J. Misquitta",
+    "Anthony J. Stone"
+  ],
+  "alpha_write_precision": "g14.6, six significant figures, \"i\" suffix marks a pure imaginary recoupled component",
+  "cn_write_precision": "fixed-width seven significant figures; J=0..8 only; trailing below-threshold fields omitted",
+  "counts": {
+    "deck_entries": 300,
+    "alpha_components": 369,
+    "alpha_declared_zero": 10,
+    "cn_rows": 10029
+  }
+}

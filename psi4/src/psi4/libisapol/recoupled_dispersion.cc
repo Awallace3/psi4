@@ -26,8 +26,14 @@ void finite(std::complex<double> z) {
 bool has(const IsaAnisotropicSite& s, int l) {
     return std::find(s.ranks.begin(), s.ranks.end(), l) != s.ranks.end();
 }
+// A quadruple contributes only if both sites declare all four ranks AND both
+// ordered pairs are among the recoupling tables upstream actually defines
+// (la+lap<=6).  (3,4),(4,3),(4,4) are skipped by casimir.f90's
+// "if (j1+j2>6) cycle" and its alpha_c is never initialized there, so those
+// quadruples are reported as missing coverage rather than summed as zero.
 bool present(const IsaAnisotropicSite& a, const IsaAnisotropicSite& b, const Quad& q) {
-    return has(a,q[0]) && has(a,q[1]) && has(b,q[2]) && has(b,q[3]);
+    return has(a,q[0]) && has(a,q[1]) && has(b,q[2]) && has(b,q[3]) &&
+           realcg_defined(q[0],q[1]) && realcg_defined(q[2],q[3]);
 }
 Quad quad(const RecouplingTerm& t) { return {{t.la,t.lap,t.lb,t.lbp}}; }
 std::size_t count(const RecouplingBlock& block, const IsaAnisotropicSite& a,
@@ -49,9 +55,8 @@ IsaRecoupledModel::IsaRecoupledModel(const IsaAnisotropicModel& local) : source_
     nfrequency_ = freq.size();
     std::size_t elements=0, work=0;
     for (const auto& site : input) {
-        for (int l : site.ranks) if (l > 3)
-            throw std::invalid_argument("recoupled: declared rank 4 unsupported; no silent truncation");
         for (int l : site.ranks) for (int p : site.ranks) {
+            if (!realcg_defined(l,p)) continue;   // no table upstream; no block, no charge
             charge(elements, freq.size(), (l+p+1)*(l+p+1)-(l-p)*(l-p), 8000000);
             charge(work, freq.size(), realcg_terms(l,p).size(), 100000000);
         }
@@ -63,6 +68,7 @@ IsaRecoupledModel::IsaRecoupledModel(const IsaAnisotropicModel& local) : source_
         for (int l : site.ranks) {
             int offset_p=0;
             for (int p : site.ranks) {
+                if (!realcg_defined(l,p)) { offset_p+=2*p+1; continue; }
                 IsaRecoupledBlock block;
                 block.la=l; block.lap=p;
                 block.first_component=(l-p)*(l-p)+1;
@@ -87,7 +93,7 @@ IsaRecoupledModel::IsaRecoupledModel(const IsaAnisotropicModel& local) : source_
 }
 std::complex<double> IsaRecoupledModel::value(std::size_t site, std::size_t f,
                                              int l, int p, int t) const {
-    if (site>=sites_.size() || f>=nfrequency_ || l<1 || l>3 || p<1 || p>3 || t<1 || t>81)
+    if (site>=sites_.size() || f>=nfrequency_ || l<1 || l>4 || p<1 || p>4 || t<1 || t>81)
         throw std::invalid_argument("recoupled: invalid tensor index");
     for (const auto& b : sites_[site]) if (b.la==l && b.lap==p) {
         if (t<b.first_component || t>b.last_component) return {};

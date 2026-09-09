@@ -12,8 +12,14 @@ struct RealCGTerm {
     int la, lap, k, q, v, p, denominator, r, s;
     std::complex<double> value() const;
 };
+/// True for the ordered rank pairs upstream actually defines: 1<=la,lap<=4 with
+/// la+lap<=6.  casimir.f90 read_cg and recouple both execute
+/// "if (j1+j2>6) cycle", so realcg_3_4/4_3/4_4 are never read and alpha_c is
+/// left uninitialized for (3,4),(4,3),(4,4).  Those three pairs are therefore
+/// structurally absent here, never silently zero-valued data.
+bool realcg_defined(int la, int lap);
 /// Shipped numerical records, sorted by (la,lap,v,k,q) for deterministic sums.
-/// Only declared ranks 1..3; rank four is explicitly rejected.
+/// Throws unless realcg_defined(la,lap).
 std::vector<RealCGTerm> realcg_terms(int la, int lap);
 } }
 #endif

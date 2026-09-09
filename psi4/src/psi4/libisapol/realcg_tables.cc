@@ -15,9 +15,13 @@ std::complex<double> RealCGTerm::value() const {
     const double x = (double(p) / denominator) * std::sqrt(double(std::abs(r)) / s);
     return r > 0 ? std::complex<double>(x, 0.) : std::complex<double>(0., x);
 }
+bool realcg_defined(int la, int lap) {
+    return la >= 1 && la <= 4 && lap >= 1 && lap <= 4 && la + lap <= 6;
+}
 std::vector<RealCGTerm> realcg_terms(int la, int lap) {
-    if (la < 1 || la > 3 || lap < 1 || lap > 3)
-        throw std::invalid_argument("realcg: only ranks 1..3 supported; rank 4 is not initialized/validated");
+    if (!realcg_defined(la, lap))
+        throw std::invalid_argument("realcg: ordered pair undefined upstream; ranks 1..4 with "
+                                    "la+lap<=6 only (casimir.f90 skips j1+j2>6)");
     std::vector<RealCGTerm> out;
     for (const auto& t : realcg_detail::records)
         if (t.la == la && t.lap == lap) out.push_back(t);
