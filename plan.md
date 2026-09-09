@@ -282,13 +282,46 @@ remains between it and the `777f904` target, in dependency order:
    remaining sites. Per-parameter penalties enter as `s*(z−α)²`, i.e.
    `c(k,k)+=s`, `rhs(k)+=s*α`, solved by DSYSV — which is what psi4's existing
    `isa_pfit_solve`/`data_rows` (`row[k]=f_i^T M_k f_j`) already computes.
-   *Status:* the T functions this needs now exist and are bitwise-certified
-   against CamCASP's own compiled `solidh`
-   (`isa_irregular_solid_harmonics`/`isa_t_functions`, SPEC §6,
-   `.pi/audit/t-functions/`). What is still missing is the driver that builds
-   the `IsaPfitProblem` — site typing/COPY equivalences, rank limits, anchors
-   and weights — plus its numeric comparison against a CamCASP `process` +
-   `pfit` run on an affordable case.
+   *Status:* **the refinement stage now exists and is matched numerically
+   against CamCASP `pfit`.** `psi4/driver/procrouting/isapol_refine.py` builds
+   the `IsaPfitProblem` from sites, types/COPY equivalences, local frames, rank
+   limits, anchors and weights, transcribing `write_pfit_local_symm`
+   (variable order = first appearance of each type, reference site
+   `indices(1)`, `lim==0` contributes nothing, cutoff tested on the *reference
+   site alone*, upper triangle of `(lim+1)²`, name `<label>_<row>_<col>_A`),
+   `weights` (all seven types, the mis-documented `10.0e-3`/`10.0e-2`
+   literals, the `/(1+ω²)` scaling) and `read_penalties`
+   (`s*(z−a)²`, anchor as initial guess). The T functions are the
+   bitwise-certified `isa_t_functions` (SPEC §6, `.pi/audit/t-functions/`).
+   *Numeric oracle:* three formatted-`Lattice` `pfit` inputs — the reference
+   L2H1 shape (55 parameters, 17 channels, 40 points), a rank-4 oxygen model
+   whose cutoff excludes 234 of 325 component pairs (101 parameters, 33
+   channels, 30 points), and a Tang–Toennies damped case (b=1.5, weight type
+   5) — were run through `.pi/camcasp-build/x86-64/gfortran/pfit`. Every
+   fitted parameter agrees with `refine(...)` to the last printed digit:
+   max |Δ| 4.998e-09 / 4.961e-09 / 4.969e-09 against `f15.8` print rounding
+   (5e-09), relative 1.6e-09 / 5.6e-10 / 1.7e-09; `R.m.s.` and max |residual|
+   match every printed digit. `pfit`'s `f15.8` — not the algebra — sets that
+   floor, and `Print Polarizabilities` (`g16.8`) is no better; raising it would
+   mean modifying the reference tree, which is out of bounds. Committed as
+   `tests/pytests/test_isapol_refine.py` (27 tests, 9.6 s), with inputs built
+   from dyadic rationals and integer directions so no NumPy `Generator` stream
+   stability is assumed. The damped case independently certifies
+   `isa_t_function_damping` against CamCASP's `T_functions` staging, and the
+   rank-4 case exercises rank-3/4 T rows and the cutoff-exclusion branch.
+   *Measured cost, not worked around:* `pfit.cc::data_rows` is an
+   O(np·nc²) dense triple loop per data row — for the L2H1 model
+   (np=55, nc=17) that is 15,895 `finite`-guarded operations per point pair,
+   measured at a marginal **1.441 ms/pair** and linear in pair count
+   (0.332 s/210 pairs → 4.699 s/3240 pairs). `parameter_tensors[k]` carries
+   one or two nonzeros, so ~99.7% of the inner loops multiply exact zeros; the
+   kernel is certified as-is and was not rewritten. A 500-point cloud projects
+   to 180 s per sweep and a 1000-point cloud to 721 s; `MAX_POINTS = 512`
+   caps a single refinement at 131,328 pairs (~190 s), so a CamCASP-scale
+   2000-point lattice (2,001,000 pairs, ~2,883 s projected) is **refused by the
+   driver rather than silently attempted**. What remains for this item is the
+   end-to-end comparison against the reference `Cn` potential (item 6), which
+   additionally needs the constrained-NN response of item 1.
 4. **Resolve the large-response resource blocker honestly** (section 4:
    nOV=435 × 173,460 grid rows ⇒ ALDA work 3.28e10 vs the 2e9 limit). The
    npoint-RHS solve in the prerequisite bounds only the *new* work; it does not

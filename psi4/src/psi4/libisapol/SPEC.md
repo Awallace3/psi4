@@ -369,6 +369,67 @@ Details: `pfit.h`, `lw_localization.h`, [SUPPLIED_PROPERTIES.md](SUPPLIED_PROPER
 and pre-compaction SPEC §6. Legacy PFIT leg-B gate is 3e−8 absolute/1e−8 relative;
 do not transfer it to other targets or a new native endpoint.
 
+### Distributed-model refinement driver
+
+`psi4/driver/procrouting/isapol_refine.py` builds the `IsaPfitProblem` that
+stands between raw per-frequency polarizabilities and refined distributed
+tensors. It owns only the *model and penalty construction*; the arithmetic stays
+in the certified `isa_pfit_solve`, and the interaction functions are the
+bitwise-certified `isa_t_functions` (§6, `.pi/audit/t-functions/`).
+
+Construction is transcribed from CamCASP's `write_pfit_local_symm`
+(`src/tools/process_data.F90:2100-2230`, MIT, attribution in the module
+docstring): one set of variables per unique **site type** in order of first
+appearance, read off that type's **first** site (`indices(1)`), over the upper
+triangle of `(lim+1)²` components; `lim == 0` contributes nothing; a component
+pair survives iff the *reference site's* anchor exceeds `cutoff` in magnitude,
+so a large value at an equivalent site does not rescue it; remaining sites of
+the type become `COPY` and share the variable in their own local axes. Penalty
+strengths come from `weights` (all seven types, including the mis-documented
+`10.0e-3`/`10.0e-2` literals and the `/(1+ω²)` frequency scaling) and enter as
+`strengths[k]·(z[k]−anchors[k])²` with the anchor as initial guess, matching
+`read_penalties` (`src/pfit/process.F90:520-659`).
+
+Frames are local-to-global **by column**, the same contract as `isa_t_functions`
+and as CamCASP's `Axes` direction cosines, and are required proper orthogonal to
+1e-12. Bounds are declared, not adjustable: `MAX_RANK 4`, `MAX_SITES 64`,
+`MAX_POINTS 512`, `MAX_PARAMETERS 4096`. `refine()` requires an explicit
+`target_origin`, `source_id` and `generation_record`, and enforces the same
+origin/representation pairing as `pfit.cc`: a `NativeDirectActualPointResponse`
+target must be `native_point_charge_ov_operators` with no auxiliary basis named.
+A non-`Solved` status is returned, never repaired.
+
+**Numeric parity with CamCASP `pfit`.** Three formatted-`Lattice` inputs
+carrying the same sites, axes, `.pdef` `COPY` model, point cloud, point-to-point
+responses and penalty anchors/strengths were run through upstream's own
+`pfit`: the reference L2H1 water shape (55 parameters, 17 channels, 40 points),
+a rank-4 oxygen model whose cutoff excludes 234 of 325 component pairs (101
+parameters, 33 channels, 30 points), and a Tang–Toennies damped case (b=1.5,
+weight type 5). Every fitted parameter agrees to the last printed digit —
+max |Δ| 4.998e-09 / 4.961e-09 / 4.969e-09, relative 1.6e-09 / 5.6e-10 /
+1.7e-09 — as do `R.m.s.` and max |residual| to all printed digits. `pfit`
+prints with `f15.8`, so **5e-09 absolute is the oracle's resolution, not the
+algebra's error**; `Print Polarizabilities` (`g16.8`) is no better and raising
+it would require modifying the reference tree. Recorded in
+`tests/pytests/test_isapol_refine.py`, whose inputs are dyadic rationals and
+integer directions so no NumPy `Generator` stream stability is assumed. The
+damped case independently certifies `isa_t_function_damping` against
+`T_functions`' Tang–Toennies staging; the rank-4 case exercises rank-3/4 T rows
+and the cutoff-exclusion branch.
+
+**Measured cost.** `pfit.cc::data_rows` is an O(np·nc²) dense triple loop per
+data row: 15,895 `finite`-guarded operations per point pair for the L2H1 model,
+a marginal 1.441 ms/pair, linear in pair count. `parameter_tensors[k]` holds one
+or two nonzeros, so ~99.7% of those operations multiply exact zeros; the kernel
+is certified as-is and was not rewritten to make a demo cheaper. A 500-point
+cloud projects to 180 s per sweep, 1000 points to 721 s, and `MAX_POINTS 512`
+caps one refinement at 131,328 pairs (~190 s) — a CamCASP-scale 2000-point
+lattice (~2,883 s) is refused by the driver rather than silently attempted.
+
+This is the refinement *stage*, not end-to-end parity: the historical target
+additionally needs the constrained-NN distributed response on the reference
+point lattice (plan §5 items 1 and 6).
+
 ### Error-bounded ALDA quadrature row screening
 
 `IsaAldaGridScreen` (`native_response.h`) reports, per caller quadrature row, the
