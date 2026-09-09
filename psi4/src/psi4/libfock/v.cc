@@ -987,8 +987,8 @@ std::vector<SharedMatrix> VBase::compute_fock_derivatives() {
     throw PSIEXCEPTION("VBase: compute_fock_derivatives not implemented for this Vx instance.");
 }
 void VBase::set_grac_shift(double grac_shift) {
-    // Well this is a flaw in my plan
     if (!grac_initialized_) {
+        const int old_ansatz = functional_->ansatz();
         double grac_alpha = options_.get_double("DFT_GRAC_ALPHA");
         double grac_beta = options_.get_double("DFT_GRAC_BETA");
         auto grac_x_func = std::make_shared<LibXCFunctional>(options_.get_str("DFT_GRAC_X_FUNC"), functional_->is_unpolarized());
@@ -1017,6 +1017,15 @@ void VBase::set_grac_shift(double grac_shift) {
             functional_workers_[i]->set_grac_c_functional(grac_c_func->build_worker());
             functional_workers_[i]->allocate();
             functional_workers_[i]->set_lock(true);
+        }
+        // HF installs GRAC after initialize() has built the CPU point workers.
+        // An LDA base functional now needs GGA density gradients for GRAC. Leaving
+        // the workers at the old ansatz passes missing gradient data to LibXC.
+        if (functional_->ansatz() != old_ansatz) {
+            for (auto& worker : point_workers_) {
+                worker->set_ansatz(functional_->ansatz());
+            }
+            clear_collocation_cache();
         }
         grac_initialized_ = true;
     }
@@ -1063,6 +1072,15 @@ void VBase::finalize() { grid_.reset();
     }
 #endif
 }
+void VBase::clear_collocation_cache() {
+    // A worker may still reference a map owned by the old cache. Reset it to
+    // its owned collocation buffers before destroying any cached maps.
+    for (auto& worker : point_workers_) {
+        worker->set_cache_map(&cache_map_);
+    }
+    cache_map_.clear();
+    cache_map_deriv_ = -1;
+}
 void VBase::build_collocation_cache(size_t memory) {
     // No cuEST guard here, deliberately: this is called on every SCF init
     // (scf_iterator.py), and it degrades safely under cuEST.  With an empty CPU
@@ -1086,7 +1104,7 @@ void VBase::build_collocation_cache(size_t memory) {
     if (stride == 0) {
         stride = 1;
     }
-    cache_map_.clear();
+    clear_collocation_cache();
 
     // Effectively zero blocks saved.
     if (stride > grid_->blocks().size()) {

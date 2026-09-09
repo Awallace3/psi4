@@ -576,9 +576,10 @@ try:
     elif route == 'sap_guess':
         psi4.set_options({'guess': 'sap'})
         psi4.energy('b3lyp', molecule=mol)
-    elif route == 'grac':
-        psi4.set_options({'dft_grac_shift': 0.5})
-        psi4.energy('b3lyp', molecule=mol)
+    elif route == 'grac_gradient':
+        psi4.set_options({'dft_grac_shift': 0.136, 'cuest_xc': True})
+        _, wfn = psi4.energy('b3lyp', molecule=mol, return_wfn=True)
+        wfn.V_potential().compute_gradient()
     else:
         raise SystemExit('unknown route ' + route)
 except Exception as exc:
@@ -595,7 +596,8 @@ else:
     pytest.param('tdscf', 'XC response kernel', id='tdscf'),
     pytest.param('polarizability', 'XC response kernel', id='polarizability'),
     pytest.param('sap_guess', 'SAP guess', id='sap_guess'),
-    pytest.param('grac', 'GRAC asymptotic correction', id='grac'),
+    # GRAC SCF energies are supported; analytic gradients are not.
+    pytest.param('grac_gradient', 'cuEST analytic gradients with GRAC', id='grac_gradient'),
 ])
 def test_cuest_unsupported_route(route, expected, tmp_path):
     """Unimplemented cuEST DFT paths raise a clear error instead of segfaulting."""
@@ -623,7 +625,8 @@ def test_cuest_unsupported_route(route, expected, tmp_path):
     )
 
     # And the error must be the informative cuEST guard, naming the operation.
-    assert 'has no cuEST implementation' in proc.stdout, f"unexpected error:\n{proc.stdout}"
+    if route != 'grac_gradient':
+        assert 'has no cuEST implementation' in proc.stdout, f"unexpected error:\n{proc.stdout}"
     assert expected in proc.stdout, (
         f"cuEST '{route}' raised, but not from the expected guard "
         f"(wanted {expected!r}).\nstdout:\n{proc.stdout}"
