@@ -15,6 +15,7 @@ from psi4 import core
 from .isapol_native_partition import PartitionRecipe, NativePartitionResult, native_partition
 from .isapol_native_response import NativeWavefunctionResponse, native_response_from_wavefunction
 from .sapt.fdds_response import FDDSFullOVResponse
+from .isapol_native_correction import validate_correction, functional_definition
 from . import isapol_lw as lw
 
 
@@ -74,6 +75,7 @@ def _context(wfn):
     meta = (b.nbf(), wfn.nalpha(), wfn.nbeta(), tuple(wfn.doccpi()), tuple(wfn.soccpi()),
             tuple((m.Z(i), m.x(i), m.y(i), m.z(i)) for i in range(m.natom())), shells)
     h = hashlib.sha256(json.dumps(meta).encode())
+    h.update(repr(functional_definition(wfn.functional(), include_cutoffs=True)).encode())
     for obj in (wfn.Ca(), wfn.Cb(), wfn.epsilon_a(), wfn.epsilon_b(), wfn.Da(), wfn.Db()):
         a = np.asarray(obj, dtype='<f8')
         if not np.isfinite(a).all():
@@ -82,8 +84,8 @@ def _context(wfn):
     return h.hexdigest()
 
 
-def _policy(kernel, exact_exchange, local_scale, grid, density_cutoff):
-    h = hashlib.sha256(repr((kernel, exact_exchange, local_scale, density_cutoff)).encode())
+def _policy(kernel, exact_exchange, local_scale, grid, density_cutoff, correction=None):
+    h = hashlib.sha256(repr((kernel, exact_exchange, local_scale, density_cutoff, correction)).encode())
     if grid is not None:
         a = np.asarray(grid)
         if a.dtype.kind not in 'fiu' or not np.isfinite(a).all():
@@ -102,6 +104,10 @@ class NativeContext:
     response: NativeWavefunctionResponse
     wavefunction_sha256: str
     policy_sha256: str
+
+    @property
+    def correction_provenance(self):
+        return self.response.correction_provenance
 
 
 @dataclass(frozen=True)
@@ -128,6 +134,7 @@ class NativeProperties:
     failures: tuple
     diagnostics: dict
     model: str
+    correction_provenance: object
     comparison_status: str = 'not_measured_no_reference'
 
     def require_local(self):
@@ -148,7 +155,8 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                       exact_exchange, local_scale, response_grid, frequencies=(0.,),
                       quadrature=None, partner=None, pair_self=False, max_order=12,
                       density_cutoff=1.e-10, max_bytes=512*1024**2, max_nov=512,
-                      response_context=None, response_basis='fitted_auxiliary'):
+                      response_context=None, response_basis='fitted_auxiliary',
+                      scf_correction='NONE', expected_grac_shift=None):
     """Return all owned stages, with strict production LW (1e-6) or failures.
 
     Explicit ``response_basis='direct_ov'`` integrates actual occupied/virtual
@@ -189,12 +197,17 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
             raise ValueError('partner must be accepted LW model with identical nodes')
         if not partner.metadata.production_postcondition_passed:
             raise ValueError('partner must pass production LW')
+    correction = validate_correction(wfn, scf_correction=scf_correction,
+                                     expected_grac_shift=expected_grac_shift)
+    if correction.policy == 'FIXED_GRAC' and kernel == 'no_local':
+        raise ValueError('FIXED_GRAC admission requires an explicit ALDA response policy; no GRAC kernel derivative')
     context_hash = _context(wfn)
-    policy_hash = _policy(kernel, exact_exchange, local_scale, response_grid, density_cutoff)
+    policy_hash = _policy(kernel, exact_exchange, local_scale, response_grid, density_cutoff, correction)
     if response_context is not None:
         if (not isinstance(response_context, NativeContext)
                 or response_context.wavefunction_sha256 != context_hash
-                or response_context.policy_sha256 != policy_hash):
+                or response_context.policy_sha256 != policy_hash
+                or response_context.correction_provenance != correction):
             raise ValueError('native response context mismatch (state/basis/geometry/policy)')
     partition = native_partition(wfn, recipe, caller_converged=caller_converged)
     context, fit, adapted, distributed, tensors, local, dispersion = response_context, None, None, None, None, None, None
@@ -203,7 +216,9 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
     def result():
         return NativeProperties(partition, context, fit, adapted, freq, quadrature, tuple(responses),
             distributed, tensors, local, dispersion, tuple(failures), diagnostics,
-            f'native {kernel}; exact_exchange={exact_exchange}; local_scale={local_scale}; Drho-C ISA-A; {response_basis}; no PFIT')
+            f'native {kernel}; exact_exchange={exact_exchange}; local_scale={local_scale}; Drho-C ISA-A; {response_basis}; no PFIT'
+            + ('; ' + correction.response_description if correction.policy == 'FIXED_GRAC' else ''),
+            correction)
     try:
         q = partition.require_q()
         stage = 'context'
@@ -212,7 +227,8 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
         if context is None:
             response = native_response_from_wavefunction(wfn, caller_converged=True, kernel=kernel,
                 exact_exchange=exact_exchange, local_scale=local_scale, grid=response_grid,
-                density_cutoff=density_cutoff, max_bytes=max_bytes, max_nov=max_nov)
+                density_cutoff=density_cutoff, max_bytes=max_bytes, max_nov=max_nov,
+                scf_correction=scf_correction, expected_grac_shift=expected_grac_shift)
             context = NativeContext(response, context_hash, policy_hash)
         provider = context.response.provider
         c = np.asarray(provider.orbitals())

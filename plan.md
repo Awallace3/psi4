@@ -2,7 +2,31 @@
 
 **Start here:** read `psi4/src/psi4/libisapol/SPEC.md`, then this plan. The spec owns scientific/API contracts; this file owns execution state. Preserve unrelated uncommitted work. User authorized committing and continuing; checkpoint `f996942ad6` contains the validated native/performance/recoupled implementation. No pushes, resets or reference-tree edits.
 
-## Accepted independent lower-J subset (latest)
+## Current direction: matched native protocol (user decision)
+
+Odd normalization investigation is explicitly DEFERRED. Six raw-identity tests
+pass within1801 integrated regressions34.85s (`.pi/audit/odd-j-parent-regressions.log`),
+but5341 production odd rows remain numerically uncertified. Parent checked only
+RRF public metadata/README (GPL plus conflicting redistribution wording), no
+executable source. User chose native protocol work instead. See ODD_J_VALIDATION.md.
+
+Protocol investigation led to explicit fixed-GRAC SCF-input admission (not new
+GRACkernel). Source worker completed; parent build/staging passed. Independent
+review caught missing underlyingLibXC densitycutoffs in seal/context; parent fixed
+state snapshots and added mutation/restoration test. Initialtest assumedcombinedXC
+was inx-list; corrected tocombinedx/c-list. Final1847tests pass35.78s.
+
+Real public fixedGRAC water strictLW/9pair endpoint PASS30.2651s/578396KiB,
+30iterations,energy-76.33871950327045, explicitshift.06490004527520865Eh. NoGRAC
+baseline outputs allbitwise29.6120s/582816KiB; tmpinputhash unchanged. See
+NATIVE_FIXED_GRAC.md and `.pi/audit/native-fixed-grac-{water.json,regressions-v2.log}`.
+Stillgeneratedcc-pVDZ/noPFIT; no aVTZ/fullprotocol claim. Molecular/SAPT task
+bbbe420b0 PASSED:3 tests99.05s and4 tests113.29s. All builds/tests/endpoints for
+this admission increment accepted; no active background tasks. Next native step:
+establish exactMAIN/AUX/AtomAux reference recipe and required partition/PFIT
+integration, preserving resourcebounds/grids and raw scientific comparisons.
+
+## Accepted independent lower-J subset (prior increment)
 
 Parent1795 regressions passed34.18s in `.pi/audit/lower-j-parent-regressions-v2.log`.
 40 new tests validate even L+H+J, strictly J<n-2, rank<=3 C6..C12 using exact

@@ -318,6 +318,13 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     options.add_str("ATOMIC_RESPONSE_LOCALIZATION", "LW", "LW LS");
     /*- Explicit generated demonstration basis recipe, not a CamCASP preset. -*/
     options.add_str("ATOMIC_PROPERTY_RECIPE", "GENERATED_JKFIT_ISA_A", "GENERATED_JKFIT_ISA_A");
+    /*- Opt-in acceptance of already-converged canonical fixed-GRAC PBE0 SCF orbitals.
+        Does not run SCF or add a GRAC response kernel. -*/
+    options.add_str("ATOMIC_SCF_ASYMPTOTIC_CORRECTION", "NONE", "NONE FIXED_GRAC");
+    /*- Expected fixed GRAC shift in Hartree, explicitly positive for FIXED_GRAC.
+        Zero is an undeclared sentinel, not an automatically computed IP/HOMO shift.
+        The supported profile fixes alpha=0.5, beta=40, X=LB*0.75, C=VWN*1. -*/
+    options.add_double("ATOMIC_SCF_EXPECTED_GRAC_SHIFT", 0.0);
     /*- Dedicated ISA quadrature radial resolution. -*/
     options.add_int("ATOMIC_PROPERTY_RADIAL_POINTS", 160);
     /*- Dedicated ISA quadrature angular resolution. -*/

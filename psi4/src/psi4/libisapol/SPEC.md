@@ -2,6 +2,26 @@
 
 ## 1. Objectives and current status
 
+### Accepted explicit fixed-GRAC SCF-input admission (latest)
+
+New opt-in `ATOMIC_SCF_ASYMPTOTIC_CORRECTION=FIXED_GRAC` and positive exact
+`ATOMIC_SCF_EXPECTED_GRAC_SHIFT` admit supported already-converged canonicalPBE0
+with actualLB*.75/VWN*1,alpha.5,beta40 and no component tweaks. NONE remains
+default. Owned correction metadata enters response-context reuse checks; seals
+now include GRAC components and actual underlying LibXC cutoffs. No ambientoption
+inference, hiddenSCF, postSCFenergyshift or GRACkernel derivative. See
+NATIVE_FIXED_GRAC.md.1847 integrated tests pass35.78s,3 molecular99.05s and4 SAPT
+113.29s. Public fixedGRAC generatedcc-pVDZ endpoint passes strictLW/9pairs in
+30.2651s/578396KiB,30iterations,energy-76.33871950327045Eh at explicitshift
+.06490004527520865Eh. DefaultnoGRAC outputs remain allbitwisebaseline in29.6120s.
+This closes an admission prerequisite, NOT matchedaVTZ/AUX/AtomAux/PFIT parity.
+
+Odd normalization work was deferred by user choice; six raw-identity tests pass
+but5341 odd coefficient rows remain uncertified. RRF metadata/README only was
+inspected, not executable source. See ODD_J_VALIDATION.md. Next native work needs
+exact reference basis prescriptions and explicit partition/refinement integration,
+without relaxing dense resource bounds or scientific grids/tolerances.
+
 ### Accepted independent lower-J even-parity subset
 
 Parent1795 ISA/FDDS regressions pass34.18s, including40 new cases against the

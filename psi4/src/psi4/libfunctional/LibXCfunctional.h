@@ -93,6 +93,7 @@ class LibXCFunctional : public Functional {
     void set_density_cutoff(double cut) override;
     void set_omega(double omega);
     void set_tweak(std::map<std::string, double>, bool);
+    std::map<std::string, double> get_tweak() const { return user_tweakers_; }
     // Name, Kind, Coefficient for each functional in the superfunctional
     std::vector<std::tuple<std::string, int, double>> get_mix_data();
 

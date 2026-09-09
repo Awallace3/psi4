@@ -11,6 +11,7 @@ import numpy as np
 
 from psi4 import core
 from .sapt.fdds_response import FDDSFullOVResponse
+from .isapol_native_correction import validate_correction
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,7 @@ class NativeWavefunctionResponse:
     provider: object
     _response: FDDSFullOVResponse = field(repr=False)
     coordinate_declaration: str
+    correction_provenance: object
     caller_converged: bool = True
     convergence_evidence: str = "caller declaration only; restricted metadata, density and orthonormality checked"
 
@@ -41,7 +43,8 @@ def native_response_from_wavefunction(wavefunction, *, caller_converged, kernel,
                                      exact_exchange, local_scale, grid=None,
                                      density_cutoff=1.e-10, max_bytes=512*1024**2,
                                      max_nov=512, transition_legs=None,
-                                     representation=None):
+                                     representation=None, scf_correction='NONE',
+                                     expected_grac_shift=None):
     """Construct native operators ONCE; return a reusable frequency provider.
 
     Explicit kernels:
@@ -64,11 +67,20 @@ def native_response_from_wavefunction(wavefunction, *, caller_converged, kernel,
     D.T @ R_OV @ D; all interactions are already in H1, so remaining coupling=0.
     No metric factors, fit regularization, or normalization are inferred here.
 
+    scf_correction defaults to NONE and rejects attached GRAC. FIXED_GRAC
+    requires an explicit positive expected_grac_shift, canonical PBE0 and the
+    current successful SCF seal. Only the canonical .5/40 LB*.75/VWN*1 profile
+    is supported. This accepts SCF inputs, not a GRAC kernel derivative.
+
     C++ holds private snapshots of basis/molecule, orbitals, energies, density,
     grid and policy. Current support excludes open shell, non-C1, fractional or
     non-Aufbau occupations, complex state, ECP, and dense resources above
     hard caps. Caller must not concurrently mutate inputs during construction.
     """
+    correction = validate_correction(wavefunction, scf_correction=scf_correction,
+                                     expected_grac_shift=expected_grac_shift)
+    if correction.policy == 'FIXED_GRAC' and kernel == 'no_local':
+        raise ValueError('FIXED_GRAC admission requires an explicit ALDA response policy; no GRAC kernel derivative')
     if not isinstance(caller_converged, (bool, np.bool_)) or not caller_converged:
         raise ValueError("caller_converged must explicitly be True (declaration, not a verified seal)")
     for name, value in (("exact_exchange", exact_exchange), ("local_scale", local_scale),
@@ -127,4 +139,11 @@ def native_response_from_wavefunction(wavefunction, *, caller_converged, kernel,
         h1_baseline=provider.h1().to_array(), h2=provider.h2().to_array(),
         transition_legs=legs, coupling=np.zeros((legs.shape[1], legs.shape[1])),
         representation=representation)
-    return NativeWavefunctionResponse(provider, response, declaration)
+    if correction.policy == 'FIXED_GRAC':
+        if validate_correction(wavefunction, scf_correction=scf_correction,
+                               expected_grac_shift=expected_grac_shift) != correction:
+            raise ValueError('SCF correction changed during native response construction')
+    return NativeWavefunctionResponse(provider, response, declaration, correction,
+        convergence_evidence=('verified current SCF seal; ' + correction.response_description
+                              if correction.policy == 'FIXED_GRAC' else
+                              'caller declaration only; restricted metadata, density and orthonormality checked'))

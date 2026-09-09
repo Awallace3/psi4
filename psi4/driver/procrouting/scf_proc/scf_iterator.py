@@ -67,9 +67,10 @@ def _scf_state_signature(wfn):
         'name', 'x_alpha', 'x_beta', 'x_omega', 'c_alpha', 'c_omega',
         'c_os_alpha', 'c_ss_alpha', 'vv10_b', 'vv10_c', 'grac_shift',
         'grac_alpha', 'grac_beta'))
-    component_state = tuple((f.name(), f.alpha(), f.omega(),
-                             tuple(f.get_mix_data()) if isinstance(f, core.LibXCFunctional) else ())
-                            for f in (*functional.x_functionals(), *functional.c_functionals()))
+    from ..isapol_native_correction import component_definition, correction_state
+    component_state = (tuple(component_definition(f, include_cutoff=True) for f in
+                             (*functional.x_functionals(), *functional.c_functionals())),
+                       correction_state(functional))
     digest.update(repr((functional_state, component_state)).encode())
     digest.update(repr((wfn.energy(), wfn.nalpha(), wfn.nbeta(),
                         wfn.basisset().name(), wfn.basisset().nbf(),

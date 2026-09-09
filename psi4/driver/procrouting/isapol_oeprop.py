@@ -3,7 +3,9 @@
 
 GENERATED_JKFIT_ISA_A is a deliberately modest, self-contained H/O recipe, NOT
 modern CamCASP ISA-Pol. Density: lambda1000 Drho-C, ordinary ISA-A. Response:
-direct occupied-fast OV, Slater/PW92 ALDA + 25% exact exchange, no GRAC, no PFIT.
+direct occupied-fast OV, Slater/PW92 ALDA + 25% exact exchange, no GRAC by
+DEFAULT, no PFIT. FIXED_GRAC is a separate explicit SCF-input acceptance policy,
+not a generated matched preset or a GRAC response kernel.
 The response grid and tensor localization are not density partition policies.
 """
 from dataclasses import dataclass
@@ -12,6 +14,8 @@ import numpy as np
 from psi4 import core
 from . import isapol_native_partition as p
 from . import isapol_native as n
+from .isapol_native_correction import (functional_definition as _functional_definition,
+                                       validate_correction, require_scf_seal)
 
 TASKS = frozenset(('ATOMIC_PARTITION', 'ATOMIC_POLARIZABILITIES', 'ATOMIC_DISPERSION'))
 
@@ -64,6 +68,7 @@ class AtomicPropertyResult:
     partition: object
     properties: object
     scf_commutator_maxabs: float
+    correction_provenance: object = None
 
     @property
     def atomic_scalars(self):
@@ -87,41 +92,18 @@ def atomic_property_result(wfn):
     return result
 
 
-def _functional_definition(functional):
-    """Effective PBE0 definition, independent of current SCF/DFT options.
-
-    Require the canonical full LibXC representation (not a name-only custom
-    functional). Mix data also checks the internal semilocal scales, which a
-    LibXC PBEH tweak can change independently of SuperFunctional.x_alpha().
-    """
-    scalar_keys = ('x_alpha', 'x_beta', 'x_omega', 'c_alpha', 'c_omega',
-                   'c_os_alpha', 'c_ss_alpha', 'vv10_b', 'vv10_c',
-                   'grac_shift', 'grac_alpha', 'grac_beta', 'ansatz',
-                   'is_libxc_func', 'needs_vv10', 'needs_grac', 'is_x_lrc', 'is_c_lrc')
-    components = []
-    for group in (functional.x_functionals(), functional.c_functionals()):
-        entries = []
-        for component in group:
-            if not isinstance(component, core.LibXCFunctional):
-                raise ValueError('Supported PBE0 requires canonical LibXC components')
-            entries.append((component.name(), component.alpha(), component.omega(),
-                            component.is_gga(), component.is_meta(), component.is_lrc(),
-                            tuple(component.get_mix_data()),
-                            tuple(sorted(component.query_libxc('XC_HYB_CAM_COEF').items()))))
-        components.append(tuple(entries))
-    return tuple(getattr(functional, key)() for key in scalar_keys), tuple(components)
+def _validate_pbe0(wfn, *, scf_correction='NONE', expected_grac_shift=None):
+    return validate_correction(wfn, scf_correction=scf_correction,
+                               expected_grac_shift=expected_grac_shift, require_canonical=True)
 
 
-def _validate_pbe0(wfn):
-    # Direct unmodified C++ LibXC factory: no ambient options, registry lookup,
-    # mutating global option stash, or custom definition used as its own oracle.
-    canonical = core.SuperFunctional.XC_build('XC_HYB_GGA_XC_PBEH', True)
-    functional = wfn.functional()
-    if (functional.name().upper() != 'PBE0' or functional.x_alpha() != .25
-            or _functional_definition(functional) != _functional_definition(canonical)
-            or getattr(wfn, '_disp_functor', None) is not None):
-        raise ValueError('Ordinary atomic response requires unmodified canonical PBE0 '
-                         '(25% exact exchange, no range separation, dispersion or GRAC)')
+def _correction_options():
+    policy = core.get_global_option('ATOMIC_SCF_ASYMPTOTIC_CORRECTION')
+    shift = core.get_global_option('ATOMIC_SCF_EXPECTED_GRAC_SHIFT')
+    # NONE's zero sentinel is not a fixed-shift declaration. Nonzero mismatches
+    # still fail, including a leftover declaration from another request.
+    return dict(scf_correction=policy,
+                expected_grac_shift=None if policy == 'NONE' and shift == 0 else shift)
 
 
 def validate_request(wfn, tasks):
@@ -137,21 +119,11 @@ def validate_request(wfn, tasks):
         raise ValueError('Native atomic properties require an actual restricted C1 wavefunction')
     if wfn.nalpha() != wfn.nbeta() or wfn.nalpha() < 1:
         raise ValueError('Restricted closed-shell wavefunction required')
-    if tasks != ('ATOMIC_PARTITION',):
-        _validate_pbe0(wfn)
+    validate_correction(wfn, **_correction_options(),
+                        require_canonical=tasks != ('ATOMIC_PARTITION',))
     if not np.isfinite(wfn.energy()) or wfn.energy() == 0:
         raise ValueError('A converged SCF wavefunction is required; oeprop never runs SCF')
-    from .scf_proc.scf_iterator import _scf_state_signature
-    evidence = getattr(wfn, '_scf_convergence_evidence', None)
-    if evidence is None:
-        raise ValueError('Successful SCF convergence evidence is required; oeprop never runs SCF')
-    diagnostics, signature, basis = evidence
-    iteration, delta_e, gradient_norm, e_threshold, d_threshold, rms_norm = diagnostics
-    if (iteration < 0 or not np.all(np.isfinite((delta_e, gradient_norm, e_threshold, d_threshold)))
-            or not (abs(delta_e) < e_threshold and 0 <= gradient_norm < d_threshold)):
-        raise ValueError('SCF convergence stopping diagnostics are inconsistent')
-    if basis != wfn.basisset() or signature != _scf_state_signature(wfn):
-        raise ValueError('SCF convergence evidence is stale: wavefunction state has changed')
+    require_scf_seal(wfn)
     S, D, F = map(np.asarray, (wfn.S(), wfn.Da(), wfn.Fa()))
     residual = float(np.max(np.abs(F @ D @ S - S @ D @ F)))
     if not np.isfinite(residual) or residual > 2e-7:
@@ -165,9 +137,11 @@ def run(wfn, tasks):
         wfn._native_atomic_property_result = None
     tasks = tuple(tasks)
     residual = validate_request(wfn, tasks)
+    correction_options = _correction_options()
     keys = ('PARTITION_SCHEME', 'ATOMIC_RESPONSE_LOCALIZATION', 'ATOMIC_PROPERTY_RECIPE',
             'ATOMIC_PROPERTY_RADIAL_POINTS', 'ATOMIC_PROPERTY_SPHERICAL_POINTS',
-            'ATOMIC_RESPONSE_RADIAL_POINTS', 'ATOMIC_RESPONSE_SPHERICAL_POINTS')
+            'ATOMIC_RESPONSE_RADIAL_POINTS', 'ATOMIC_RESPONSE_SPHERICAL_POINTS',
+            'ATOMIC_SCF_ASYMPTOTIC_CORRECTION', 'ATOMIC_SCF_EXPECTED_GRAC_SHIFT')
     options = tuple((k, core.get_global_option(k)) for k in keys)
     effective = dict(options)
     recipe = generated_recipe(wfn, int(effective['ATOMIC_PROPERTY_RADIAL_POINTS']),
@@ -193,9 +167,10 @@ def run(wfn, tasks):
         properties = n.native_properties(wfn, recipe, bonds=bonds, frames=None, caller_converged=True,
             kernel='alda_slater_pw92', exact_exchange=.25, local_scale=.75, response_grid=response_grid,
             frequencies=quad.frequencies if quad else (0.,), quadrature=quad, pair_self=dispersion,
-            response_basis='direct_ov')
+            response_basis='direct_ov', **correction_options)
         partition = properties.partition
-    result = AtomicPropertyResult(tasks, options, partition, properties, residual)
+    correction = validate_correction(wfn, **correction_options)
+    result = AtomicPropertyResult(tasks, options, partition, properties, residual, correction)
     wfn._native_atomic_property_result = result
     partition.require_q()
     wfn.set_variable('ISA ITERATIONS', float(partition.trajectory.state.iteration))

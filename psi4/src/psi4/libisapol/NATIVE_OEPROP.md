@@ -1,5 +1,13 @@
 # Native wavefunction-first atomic properties
 
+**Fixed-GRAC opt-in:** the default demonstration below remains no-GRAC. An
+explicit `ATOMIC_SCF_ASYMPTOTIC_CORRECTION=FIXED_GRAC` plus positive, exactly
+matching `ATOMIC_SCF_EXPECTED_GRAC_SHIFT` now admits a supported already-converged
+fixed-GRAC PBE0 state. See NATIVE_FIXED_GRAC.md for actual-component validation,
+SCF sealing and immutable correction provenance. This never configures/runs SCF
+or supplies GRAC response derivatives. The real public strict-LW endpoint passed;
+it is not matched aVTZ/PFIT protocol parity.
+
 `psi4.oeprop(wfn, 'ATOMIC_PARTITION', 'ATOMIC_POLARIZABILITIES',
 'ATOMIC_DISPERSION')` returns **None**, as before. Access the owned result with
 `psi4.atomic_property_result(wfn)`. Each request replaces the wavefunction's
@@ -63,7 +71,9 @@ unsupported. Density-screening thresholds are not functional identity checks.
   coefficients, centres, all grids, and controller options are in `result.partition.recipe`.
 - The ordinary response policy is explicitly native direct-OV Slater/PW92 ALDA
   with exact_exchange=.25 and local_scale=.75 (C++ multiplies the local primitive
-  by 4). **No GRAC/asymptotic correction, no reference-kernel parity, no PFIT**.
+  by 4). **By default no GRAC/asymptotic correction; no reference-kernel parity or PFIT.**
+The explicit fixed-GRAC opt-in only changes admissible SCF input; ALDA remains
+a separately declared response model, not the derivative of the GRAC correction.
   This does not infer or reproduce a CamCASP protocol from the SCF method name.
 - ISA uses dedicated runtime IsaGrid quadrature, default 160 radial / 590 angular,
   configurable with `ATOMIC_PROPERTY_RADIAL_POINTS` and
