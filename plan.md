@@ -12,7 +12,10 @@
 **Accepted code checkpoint:** `86b548c492`, plus `c07dafd37d`, which
 adds the bounded native direct-OV point-charge response prerequisite (section 3),
 plus `8d4841ce68`, which closes the response right-hand-side factor 4 against
-Psi4's own CPHF dipole polarizability and against perturbed-SCF energy curvature,
+Psi4's own CPHF dipole polarizability and against perturbed-SCF energy
+curvature, plus `061fb83e8c`, which closes the `a` and `b` kernel scalings against
+Psi4's Davidson TDSCF and against matched-functional perturbed-SCF energy
+curvature.
 All prior execution history remains in Git (section 8).
 No implementation/build/test background tasks are pending. Old task IDs and
 “in progress” paragraphs in historical documents are not current instructions.
@@ -325,6 +328,11 @@ Background terminal notifications are authoritative; do not poll to wait.
   of perturbed SCF total energies, plus the SPEC §8 absolute-gate paragraph and
   the section 3/6 records here. No scientific code path changed; the factor was
   mutated in the staged copy only, and restored.
+- `061fb83e8c`: closed the `a` and `b` kernel scalings — test layer 6 (6 tests)
+  against Psi4's Davidson `tdscf_excitations` via `sqrt(eig(H2·H1))` and
+  against matched-functional perturbed-SCF total-energy curvature, plus the
+  SPEC §8 paragraph and the section 3/6 records here. No scientific code path
+  changed; the provider call was mutated in the staged copy only, and restored.
 
 The pre-compaction 3,505-line plan and 1,724-line SPEC are preserved exactly:
 
