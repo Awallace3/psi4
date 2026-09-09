@@ -9,8 +9,10 @@
    [NATIVE_OEPROP.md](psi4/src/psi4/libisapol/NATIVE_OEPROP.md): working public API.
 4. Read the stage-specific contracts linked from SPEC before changing that stage.
 
-**Accepted code checkpoint:** `86b548c492` plus `c07dafd37d`, which
-adds the bounded native direct-OV point-charge response prerequisite (section 3).
+**Accepted code checkpoint:** `86b548c492`, plus `c07dafd37d`, which
+adds the bounded native direct-OV point-charge response prerequisite (section 3),
+plus `8d4841ce68`, which closes the response right-hand-side factor 4 against
+Psi4's own CPHF dipole polarizability and against perturbed-SCF energy curvature.
 All prior execution history remains in Git (section 8).
 No implementation/build/test background tasks are pending. Old task IDs and
 “in progress” paragraphs in historical documents are not current instructions.
@@ -277,6 +279,12 @@ Background terminal notifications are authoritative; do not poll to wait.
   prerequisite — `point_response.{h,cc}`, `isapol_native_point_response.py`,
   the `NativeDirectActualPointResponse` PFIT origin, 20 new tests in
   `tests/pytests/test_isapol_native_point_response.py`, and SPEC §6/§8.
+- `8d909a53b0`: recorded that commit's SHA in this handoff; no code changed.
+- `8d4841ce68`: closed the shared right-hand-side factor 4 — test layer 5
+  (2 tests) against Psi4's `Wavefunction.cphf_solve` and against the curvature
+  of perturbed SCF total energies, plus the SPEC §8 absolute-gate paragraph and
+  the section 3/6 records here. No scientific code path changed; the factor was
+  mutated in the staged copy only, and restored.
 
 The pre-compaction 3,505-line plan and 1,724-line SPEC are preserved exactly:
 
