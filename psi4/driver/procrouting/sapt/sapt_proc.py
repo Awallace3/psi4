@@ -1257,12 +1257,24 @@ def sapt_dft(
             "data from the SAPT0 segment. Call energy('sapt(dft)') instead of sapt_dft() directly."
         )
     if induction_type == "NONE" and delta_hf and "Delta HF Correction" not in data:
-        raise ValidationError(
-            "SAPT_DFT_INDUCTION_TYPE=NONE with delta HF needs the total SAPT0 induction produced "
-            "by the SAPT(DFT) delta HF segment, which sapt_dft() does not run. Call "
-            "energy('sapt(dft)') instead of sapt_dft() directly, or supply that total as "
-            "'Delta HF Correction' in `data`."
-        )
+        # For SAPT(DFT) the delta HF segment owns the SAPT0 terms, so the
+        # correction can only come from there. For SAPT(HF) the SAPT0
+        # electrostatics and exchange are computed below in this very function,
+        # so only the total HF interaction energy has to be handed in.
+        if do_dft:
+            raise ValidationError(
+                "SAPT_DFT_INDUCTION_TYPE=NONE with delta HF needs the total SAPT0 induction "
+                "produced by the SAPT(DFT) delta HF segment, which sapt_dft() does not run. "
+                "Call energy('sapt(dft)') instead of sapt_dft() directly, or supply that "
+                "total as 'Delta HF Correction' in `data`."
+            )
+        if "DHF VALUE" not in data:
+            raise ValidationError(
+                "SAPT_DFT_INDUCTION_TYPE=NONE with delta HF needs the total HF interaction "
+                "energy produced by the delta HF segment, which sapt_dft() does not run. "
+                "Call energy('sapt(dft)') instead of sapt_dft() directly, or supply it as "
+                "'DHF VALUE' in `data`."
+            )
 
     core.timer_on("SAPT(DFT):Build JK")
     if print_header:
@@ -1350,6 +1362,14 @@ def sapt_dft(
 
     if induction_type == "NONE":
         if delta_hf:
+            if "Delta HF Correction" not in data:
+                # SAPT(HF): the delta HF segment computed only the HF dimer and
+                # monomer energies, so build the induction-carrying correction
+                # here from the electrostatics and exchange just computed. This
+                # is the same expression the SAPT(DFT) delta HF segment uses.
+                data["Delta HF Correction"] = data["DHF VALUE"] - (
+                    data["Elst10,r"] + data["Exch10"]
+                )
             core.set_variable("SAPT(DFT) Delta HF", data["Delta HF Correction"])
     elif delta_hf and "Delta HF Correction" not in data:
         total_sapt = (
