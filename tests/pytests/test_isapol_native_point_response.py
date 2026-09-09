@@ -49,8 +49,12 @@ is exercised, because the fixture basis has none.
 This file certifies the *prerequisite* only: a direct-OV point-charge response
 of an actual native wavefunction. It makes no claim about the historical
 constrained-NN/distributed fitted-propagator target, its point lattice, frame,
-anchoring or refinement, and the PFIT test below is an interface check with an
-explicitly synthetic caller-declared model.
+anchoring or refinement. The PFIT tests below are interface and wiring checks:
+the earlier ones use an explicitly synthetic caller-declared problem, and the
+refinement tests at the end feed the *real* native targets computed here into
+the real ``isapol_refine`` driver under a model whose sites, ranks, anchors and
+point lattice are likewise declared by this file. That the refinement improves
+on its own anchors is a statement about this declared model, not about parity.
 """
 import math
 from contextlib import contextmanager
@@ -64,6 +68,7 @@ from psi4.driver.p4util import OptionsState
 from psi4.driver.procrouting.isapol_native_response import native_response_from_wavefunction
 from psi4.driver.procrouting.response.scf_response import tdscf_excitations
 from psi4.driver.procrouting import isapol_native_point_response as npr
+from psi4.driver.procrouting import isapol_refine as R
 
 
 @contextmanager
@@ -897,3 +902,108 @@ def test_target_provenance_and_batch_input_guards(water, response):
             out.batch("label", 0, bad)
     assert out.batch("label", 1, fields).targets == pytest.approx(
         list(out.packed_targets[1]), abs=0.)
+
+
+# ----------------------------------------------------------------------------
+# Refinement stage on native targets: caller-owned points, caller-owned model
+# ----------------------------------------------------------------------------
+#: A deterministic golden-angle shell DECLARED BY THIS TEST. The historical
+#: point lattice is a missing artifact, so nothing here is read from, or
+#: inferred from, a reference potential, and no parameter count is borrowed
+#: from another track.
+def _shell(radius, count):
+    k = np.arange(count)
+    z = 1. - (2. * k + 1.) / count
+    rho = np.sqrt(np.maximum(0., 1. - z * z))
+    phi = np.pi * (3. - np.sqrt(5.)) * k
+    return radius * np.stack([rho * np.cos(phi), rho * np.sin(phi), z], axis=1)
+
+
+LATTICE = np.concatenate([_shell(4.5, 14), _shell(6.0, 14)], axis=0)
+IDENTITY = ((1., 0., 0.), (0., 1., 0.), (0., 0., 1.))
+
+
+def declared_dipole_model(wfn, *, weight_coefficient=1.e-3):
+    """One rank-1 site per nucleus with isotropic anchors declared here.
+
+    The anchors are round numbers chosen by this test, not a computed or
+    reference distributed polarizability: what is being certified is that the
+    refinement stage consumes native direct-OV targets under the declared
+    provenance, not that this model is the right model.
+    """
+    molecule = wfn.molecule()
+    sites, anchors = [], []
+    for atom in range(molecule.natom()):
+        kind = molecule.symbol(atom)
+        sites.append(R.RefinementSite(label=f'{kind}{atom + 1}', site_type=kind,
+                                      origin_bohr=(molecule.x(atom), molecule.y(atom),
+                                                   molecule.z(atom)),
+                                      frame=IDENTITY, rank_limit=1))
+        anchors.append(np.diag([0., 4., 4., 4.]) if kind == 'O' else np.diag([0., 1., 1., 1.]))
+    model = R.refinement_model(sites, anchors, frequency_au=0., cutoff=1.e-4, weight_type=3,
+                               weight_coefficient=weight_coefficient,
+                               provenance='test-declared isotropic rank-1 anchors; '
+                                          'not a computed distributed polarizability')
+    return model, anchors
+
+
+def refine_native(model, out, **kwargs):
+    return R.refine(model, LATTICE, np.asarray(out.packed_targets[0]),
+                    target_origin=core.IsaPfitTargetOrigin.NativeDirectActualPointResponse,
+                    response_representation=out.representation,
+                    source_id='native direct-OV point response, this test',
+                    generation_record=out.generation_record, **kwargs)
+
+
+def test_refinement_stage_consumes_native_direct_point_targets(water, response):
+    """The refinement fits the native targets: it must beat its own anchors."""
+    out = npr.native_point_charge_response(response, water, LATTICE)
+    model, anchors = declared_dipole_model(water)
+    fields = R.channel_fields(LATTICE, model)
+    targets = np.asarray(out.packed_targets[0])
+    result = refine_native(model, out)
+    assert result.status == core.IsaPfitStatus.Solved
+    assert result.diagnostics.numerical_rank == model.parameter_count
+    assert result.refinement_status == 'PFIT_refined_against_point_to_point_response'
+
+    def residual_rms(tensors):
+        predicted = R.pack_lower_triangle(R.point_to_point_response(fields, model, tensors))
+        return float(np.sqrt(np.mean((predicted - targets)**2)))
+
+    assert residual_rms(result.refined_tensors) < residual_rms(anchors)
+    assert residual_rms(result.refined_tensors) == pytest.approx(result.diagnostics.data_rms,
+                                                                rel=1.e-10)
+    # COPY equivalence survives the native path: the two hydrogens share one block.
+    assert np.array_equal(result.refined_tensors[1], result.refined_tensors[2])
+    for tensor in result.refined_tensors:
+        assert np.array_equal(tensor, tensor.T)
+        assert np.array_equal(tensor[0], np.zeros(4))  # monopole below the cutoff
+
+
+def test_penalty_holds_the_declared_anchors_against_native_targets(water, response):
+    """The strengths[k]*(z-anchor)**2 term reaches the native-target path."""
+    out = npr.native_point_charge_response(response, water, LATTICE)
+    free, _ = declared_dipole_model(water)
+    pinned, anchors = declared_dipole_model(water, weight_coefficient=1.e12)
+    assert free.anchors == pinned.anchors and free.strengths != pinned.strengths
+    moved = refine_native(free, out)
+    held = refine_native(pinned, out)
+    assert moved.anchor_shift_maxabs > 1.e-3 > held.anchor_shift_maxabs
+    for tensor, anchor in zip(held.refined_tensors, anchors):
+        assert np.max(np.abs(tensor - anchor)) < 1.e-6
+
+
+def test_refinement_rejects_a_mislabelled_native_target_origin(water, response):
+    out = npr.native_point_charge_response(response, water, LATTICE)
+    model, _ = declared_dipole_model(water)
+    targets = np.asarray(out.packed_targets[0])
+    common = dict(source_id='x', generation_record=out.generation_record)
+    with pytest.raises(ValueError, match='response_representation'):
+        R.refine(model, LATTICE, targets, response_representation='fitted_density_coefficients',
+                 target_origin=core.IsaPfitTargetOrigin.NativeDirectActualPointResponse, **common)
+    with pytest.raises(ValueError, match='auxiliary_basis_id'):
+        R.refine(model, LATTICE, targets, response_representation=out.representation,
+                 auxiliary_basis_id='aug-cc-pvtz-jkfit',
+                 target_origin=core.IsaPfitTargetOrigin.NativeDirectActualPointResponse, **common)
+    with pytest.raises(ValueError, match='target_origin'):
+        R.refine(model, LATTICE, targets, response_representation=out.representation, **common)

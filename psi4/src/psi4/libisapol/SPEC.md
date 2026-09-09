@@ -430,6 +430,43 @@ This is the refinement *stage*, not end-to-end parity: the historical target
 additionally needs the constrained-NN distributed response on the reference
 point lattice (plan §5 items 1 and 6).
 
+**The stage runs on the intended protocol.** `.pi/audit/avtz-grac-refinement-demo.py`
+drives PBE0/aug-cc-pVTZ with the reference fixed-GRAC shift 0.06490004527520865 Eh,
+`scf_type pk`, DFT 99/590, the full unpruned `IsaGrid(99,590)` response quadrature
+admitted by `SHARED_SWEEP`, ISA-A with strict LW, then refines the LW local
+tensors against this script's own native direct-OV point-charge targets
+(`.pi/audit/avtz-grac-refinement-demo.json`). E = −76.37966827740793, SCF 2.58 s,
+properties 25.53 s, peak RSS 1,492,476 KiB, nbf 92, nOV 435. The model is
+**caller-declared** — ranks 2/1/1 on O/H, 17 channels, 17 parameters
+(21 non-symmetric), cutoff 1e-4, weight type 3, coefficient 1e-3, no damping,
+anchor SHA256 `f15a69d2…d117ee67` — because the historical `.pdef`, point
+lattice and per-frequency `pfit` inputs are missing artifacts (plan §4); nothing
+is read from, or inferred from, the reference `Cn` potential, and no parameter
+count is borrowed from the dispersion track.
+
+Two 150-point golden-angle lattices are declared and **both** are reported,
+because a refined model is a property of the lattice it was refined on and a
+single choice must not be presented as canonical:
+
+| shells (bohr) | target min diag | target max\|·\| | reciprocity | rank | data rms | max residual | anchor shift max\|Δ\| (rel) | refined isotropic α (O, H, H) |
+|---|---|---|---|---|---|---|---|---|
+| 4.5/6.0/7.5 | 2.794e-03 | 4.947e-02 | 1.0e-16 | 17/17 | 4.047e-04 | 3.741e-03 | 2.852 (0.962) | 7.21270, 1.07847, 1.07847 |
+| 7.5/9.0/10.5 | 7.385e-04 | 4.576e-03 | 1.7e-17 | 17/17 | 8.749e-05 | 6.844e-04 | 0.246 (0.355) | 7.10176, 1.38061, 1.38061 |
+
+against anchors 7.10885 / 1.38106 / 1.38106. Both solve at full numerical rank.
+The far lattice barely moves the anchors (O isotropic 0.1%, H 0.03%); the near
+lattice, whose inner 4.5-bohr shell sits inside the density, moves H isotropic
+by −22% — the refinement is doing what it is asked to do, and what it is asked
+to do depends entirely on where the caller puts the probes.
+
+`tests/pytests/test_isapol_native_point_response.py` certifies the same wiring
+at the cheap sto-3g fixture: refining a test-declared isotropic rank-1 model
+against real `native_point_charge_response` targets solves at full rank, beats
+its own anchors in the packed-target rms (which reproduces the solver's
+`data_rms`), preserves `COPY` equivalence and symmetry, holds the parameters at
+the anchors under a large penalty coefficient, and refuses a mislabelled origin,
+representation or auxiliary-basis claim.
+
 ### Error-bounded ALDA quadrature row screening
 
 `IsaAldaGridScreen` (`native_response.h`) reports, per caller quadrature row, the

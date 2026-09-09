@@ -359,6 +359,28 @@ remains between it and the `777f904` target, in dependency order:
    driver rather than silently attempted**. What remains for this item is the
    end-to-end comparison against the reference `Cn` potential (item 6), which
    additionally needs the constrained-NN response of item 1.
+   *Run on the intended protocol:* the refinement stage now runs at the end of
+   the PBE0/aug-cc-pVTZ + reference-GRAC (0.06490004527520865 Eh) demo,
+   `.pi/audit/avtz-grac-refinement-demo.py` →
+   `.pi/audit/avtz-grac-refinement-demo.json` (E = −76.37966827740793,
+   properties 25.53 s, peak RSS 1,492,476 KiB, nbf 92, nOV 435). The sites,
+   ranks (2/1/1), cutoff, weights and point lattices are **declared by the
+   script**, per item 2 — the historical `.pdef` and lattice are missing, so
+   nothing is inferred from the reference `Cn` potential and no parameter count
+   is borrowed from the dispersion track. Two 150-point golden-angle lattices
+   are reported rather than one, because a refined model is a property of its
+   lattice: 4.5/6.0/7.5 bohr gives rank 17/17, data rms 4.047e-04, anchor shift
+   max|Δ| 2.852 (0.962 relative), refined isotropic α 7.21270/1.07847/1.07847;
+   7.5/9.0/10.5 bohr gives rank 17/17, data rms 8.749e-05, shift 0.246 (0.355),
+   refined isotropic α 7.10176/1.38061/1.38061, against anchors
+   7.10885/1.38106/1.38106. This is a **staged demo, not a parity claim**: the
+   historical target still needs item 1's constrained-NN distributed response
+   on the reference lattice. Committed coverage of the same wiring at the cheap
+   sto-3g fixture (real native direct-OV targets, full-rank solve, residual
+   beating the anchors and reproducing the solver's `data_rms`, COPY/symmetry
+   preservation, penalty holding the anchors, and refusal of a mislabelled
+   origin/representation/auxiliary claim) is in
+   `tests/pytests/test_isapol_native_point_response.py`.
 4. **Resolve the large-response resource blocker honestly** (section 4:
    nOV=435 × 173,460 grid rows ⇒ ALDA work 3.28e10 vs the 2e9 limit). The
    npoint-RHS solve in the prerequisite bounds only the *new* work; it does not
