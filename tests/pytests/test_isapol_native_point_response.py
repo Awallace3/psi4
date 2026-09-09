@@ -15,12 +15,20 @@ integrals that ``point_response.cc`` drives, with the same charge-inclusive
 convention. Layer 2 below therefore certifies the AO->MO transform and the
 ``t = a*nocc+i`` packing, not the kernel itself.
 
-Two normalizations are deliberately **not** closed here. (a) The overall factor
-4 in the shared full-OV right-hand side is written identically in the code and
-in layer 3's re-derivation, and cancels exactly in layer 4's ratio, so no test
-in this file would notice a global rescaling of the response; an absolute
-oracle (Psi4's own CPHF dipole polarizability against a matched exchange/kernel
-configuration) is the missing check. (b) No shell of angular momentum above p
+The overall factor 4 in the shared full-OV right-hand side is closed by layer
+5, and no longer by assertion. Layers 1 to 4 cannot see it: it is written
+identically in the code and in layer 3's re-derivation, and it cancels in layer
+4's ratio. Layer 5 configures the native response at exact_exchange=1 with no
+local kernel, where H1/H2 are the closed-shell (A+B)/(A-B) matrices and the
+omega=0 limit is coupled-perturbed Hartree-Fock, then checks the resulting
+dipole polarizability twice: against Psi4's own iterative
+``Wavefunction.cphf_solve`` on the same SCF (a different solver with its own
+independently written restricted prefactor), and against the curvature of
+perturbed SCF **total energies**, which involves no response theory, no orbital
+Hessian and no prefactor at all. Rescaling the right-hand side by 0.5, 2 or
+even 1.125 fails both.
+
+One normalization remains **not** closed: no shell of angular momentum above p
 is exercised, because the fixture basis has none.
 
 This file certifies the *prerequisite* only: a direct-OV point-charge response
@@ -345,6 +353,122 @@ def test_far_field_limit_and_first_order_convergence(water, response, omega):
         # Doubling R must halve the relative error: the residue is the O(1/R)
         # quadrupole/penetration term, not an unconverged or mis-signed solve.
         assert coarse / fine == pytest.approx(2., rel=0.02)
+
+
+# ----------------------------------------------------------------------------
+# Layer 5: absolute normalization of the shared right-hand side
+# ----------------------------------------------------------------------------
+@contextmanager
+def finite_field_settings(basis):
+    """``scf_settings`` plus a uniform dipole perturbation, tightened for h^-2.
+
+    The energy convergence is one decade tighter than elsewhere in this file
+    because the curvature below divides a difference of total energies by
+    h^2 ~ 1.6e-5.
+    """
+    saved = OptionsState(["BASIS"], ["PUREAM"], ["SCF_TYPE"], ["SCF", "REFERENCE"],
+                         ["SCF", "E_CONVERGENCE"], ["SCF", "D_CONVERGENCE"],
+                         ["PERTURB_H"], ["PERTURB_WITH"], ["PERTURB_DIPOLE"])
+    try:
+        psi4.set_options({"basis": basis, "puream": True, "scf_type": "pk",
+                          "reference": "rhf", "e_convergence": 1.e-12,
+                          "d_convergence": 1.e-12, "perturb_h": True,
+                          "perturb_with": "dipole"})
+        yield
+    finally:
+        saved.restore()
+
+
+def perturbed_scf_energy(molecule, field):
+    """Total RHF energy in a uniform dipole perturbation. No response theory."""
+    psi4.set_options({"perturb_dipole": [float(component) for component in field]})
+    return psi4.energy("scf", molecule=molecule)
+
+
+@pytest.fixture(scope="module")
+def cphf_water():
+    """Water/STO-3G together with Psi4's own CPHF dipole polarizability of it.
+
+    ``psi4.properties`` reaches the iterative ``Wavefunction.cphf_solve`` in the
+    HF module. That path shares no code with the native full-OV operators, with
+    ``FDDSFullOVResponse`` or with ``numpy.linalg.solve``, and it carries its own
+    independently written restricted prefactor, so its 3x3 tensor fixes an
+    absolute scale for our response rather than restating our own convention.
+    """
+    with scf_settings("sto-3g"):
+        _, wfn = psi4.properties("scf", properties=["DIPOLE_POLARIZABILITIES"],
+                                 molecule=_water(0.586), return_wfn=True)
+    alpha = np.array([[psi4.variable(f"DIPOLE POLARIZABILITY {a}{b}") for b in "XYZ"]
+                      for a in "XYZ"])
+    return wfn, alpha
+
+
+@pytest.fixture(scope="module")
+def tdhf_alpha(cphf_water):
+    """alpha = -D^T C D from the native static response at exact_exchange=1.
+
+    At a=1 with no local kernel, H1 = Delta + 4V - (X+Y) is the closed-shell
+    (A+B) matrix and H2 = Delta - (X-Y) is (A-B), so the omega=0 limit of the
+    native solve is coupled-perturbed Hartree-Fock. Once the orbitals, the
+    dipole integrals and the OV packing are fixed -- and layers 1 to 4 fix
+    them -- the factor 4 in the shared right-hand side is the only remaining
+    free scale in this tensor, which is what makes it testable here.
+    """
+    wfn = cphf_water[0]
+    legs = dipole_legs(wfn)
+    response = native_response_from_wavefunction(
+        wfn, caller_converged=True, kernel="no_local", exact_exchange=1.0,
+        local_scale=0.0, transition_legs=legs,
+        representation="supplied_transition_leg_coordinates")
+    return -np.asarray(response.at_frequency(0.).raw_coupled)
+
+
+def test_static_tdhf_response_matches_psi4_cphf_dipole_polarizability(cphf_water, tdhf_alpha):
+    """The whole 3x3 tensor, against a different Psi4 solver on the same SCF."""
+    cphf = cphf_water[1]
+    assert np.max(np.abs(cphf - cphf.T)) < 1.e-9
+    np.testing.assert_allclose(tdhf_alpha, cphf, rtol=0., atol=1.e-9)
+    # Sensitivity, stated rather than assumed: a global rescaling of the
+    # right-hand side moves every element by that factor, so the comparison
+    # above actually discriminates the prefactor instead of merely being green.
+    assert float(np.trace(tdhf_alpha) / np.trace(cphf)) == pytest.approx(1., abs=1.e-10)
+    for wrong in (0.5, 2., 4.):
+        assert not np.allclose(tdhf_alpha * wrong, cphf, rtol=1.e-3, atol=1.e-3)
+
+
+def test_static_tdhf_response_matches_finite_field_energy_curvature(cphf_water, tdhf_alpha):
+    """alpha_kk = -d^2 E/dlambda_k^2 from perturbed SCF total energies alone.
+
+    This is the absolute oracle: no response theory, no orbital Hessian and no
+    prefactor of any kind enters it. Nor does a field sign convention -- a
+    central second difference is even in lambda, so the result is unchanged if
+    Psi4's ``perturb_dipole`` lambda is minus the physical field, which by the
+    induced-dipole direction it is. Two step sizes give the O(h^2) ratio, and
+    one Richardson step removes that leading error; asserting the ratio means
+    an unconverged SCF or a mis-scaled field cannot pass by coincidence.
+
+    Only the diagonal is taken. The off-diagonals cost four energies each and
+    are already covered by the CPHF comparison above.
+    """
+    molecule = _water(0.586)
+    curvature = {}
+    with finite_field_settings("sto-3g"):
+        reference = perturbed_scf_energy(molecule, (0., 0., 0.))
+        for h in (0.008, 0.004):
+            curvature[h] = np.array([
+                -(perturbed_scf_energy(molecule, np.eye(3)[k] * h)
+                  - 2. * reference
+                  + perturbed_scf_energy(molecule, -np.eye(3)[k] * h)) / h ** 2
+                for k in range(3)])
+    native = np.diag(tdhf_alpha)
+    assert np.min(native) > 0.
+    extrapolated = (4. * curvature[0.004] - curvature[0.008]) / 3.
+    # Value first, so a rescaled right-hand side reports its own factor here
+    # rather than showing up only as a degraded convergence ratio below.
+    np.testing.assert_allclose(extrapolated, native, rtol=1.e-6, atol=1.e-8)
+    coarse = np.max(np.abs(curvature[0.008] - native))
+    fine = np.max(np.abs(curvature[0.004] - native))
+    assert coarse / fine == pytest.approx(4., rel=0.05)
 
 
 # ----------------------------------------------------------------------------

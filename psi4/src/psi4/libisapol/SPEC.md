@@ -438,18 +438,33 @@ doubling of R rather than meet a fixed threshold, with alpha built in-test from
 independent dipole OV legs. Reciprocity defect is asserted **<1e−12** and
 reported, never symmetrized.
 
-Two normalizations are deliberately not closed by those gates, and must not be
-described as if they were. `core.ExternalPotential.computePotentialMatrix`
-reaches the same `libint2::Operator::nuclear` integrals the C++ drives, so the
-MO-transform gate certifies the AO→MO transform and OV packing, **not** the
-kernel; only the analytic oracle pins the kernel. And the overall factor 4 in
-the shared full-OV right-hand side is written identically in code and in the
-re-derivation, and cancels in the far-field ratio, so no gate here would detect
-a global rescaling of the response — an absolute oracle (Psi4's own CPHF dipole
-polarizability against a matched exchange/kernel configuration) is the missing
-check. No shell above p is exercised. These certify the prerequisite only; they
-are not matched-protocol acceptance and must not be conflated with the legacy
-PFIT leg-B gate.
+The right-hand-side factor 4 has its own absolute gate, because none of the
+above can see it. Configured at `exact_exchange=1`, `kernel='no_local'`, H1/H2
+are the closed-shell (A+B)/(A−B) matrices and the ω=0 native solve is
+coupled-perturbed Hartree-Fock, so `alpha = -D^T C D` from dipole OV legs must
+equal (i) the 3×3 tensor from Psi4's own iterative `Wavefunction.cphf_solve`
+via `psi4.properties`, at **atol1e−9** on the full tensor — a different solver
+carrying its own independently written restricted prefactor — and (ii) the
+curvature of *perturbed SCF total energies*,
+`alpha_kk = −d²E/dλ_k²`, at **rtol1e−6/atol1e−8** after one Richardson step
+over h=8e−3 and 4e−3, with the h-halving error ratio itself asserted
+**=4 ±5%**. Gate (ii) involves no response theory, no orbital Hessian and no
+prefactor, and a central second difference is even in λ, so it is also
+independent of Psi4's `perturb_dipole` sign convention. Measured: 2.1e−14 on
+(i), 5.0e−9 on (ii). Verified discriminating by mutation: replacing the factor
+with 2.0, 8.0 or 4.5 fails both gates.
+
+What those gates still do not cover must not be described as if they did.
+`core.ExternalPotential.computePotentialMatrix` reaches the same
+`libint2::Operator::nuclear` integrals the C++ drives, so the MO-transform gate
+certifies the AO→MO transform and OV packing, **not** the kernel; only the
+analytic oracle pins the kernel. No shell above p is exercised, because the
+fixture basis has none. The factor-4 gate is absolute at `exact_exchange=1`
+with no local kernel; it does not by itself certify the separate `a` and `b`
+scalings of the hybrid/ALDA kernels away from that configuration, which remain
+covered only by the pre-existing native-response gates. These certify the
+prerequisite only; they are not matched-protocol acceptance and must not be
+conflated with the legacy PFIT leg-B gate.
 
 [PROVISIONAL_ACCEPTANCE.md](PROVISIONAL_ACCEPTANCE.md) owns exact opt-in policy;
 its historical milestone statuses do not supersede current capability above.

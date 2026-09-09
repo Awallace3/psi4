@@ -62,16 +62,18 @@ No implementation/build/test background tasks are pending. Old task IDs and
 
 ### Latest verified evidence (local paths relative to worktree)
 
-- **1,915 ISA/FDDS tests passed in 36.93 s** (1,895 prior + 20 new point-response
-  tests): `.pi/audit/native-point-response-regressions.log`. The 20 are the 19
-  originally written plus the second analytic-oracle test added when the review
+- **1,917 ISA/FDDS tests passed in 39.10 s** (1,895 prior + 22 new point-response
+  tests): `.pi/audit/native-point-response-regressions.log`. The 22 are the 19
+  originally written, plus the second analytic-oracle test added when the review
   forced the s-only oracle to be generalized to p shells (the single s-block test
   became one full-basis pure test and one Cartesian test that assumes no pure
-  ordering). Run from `/tmp` against the staged tree with `OMP_NUM_THREADS=1`
+  ordering), plus the 2 layer-5 tests that close the right-hand-side factor 4.
+  Run from `/tmp` against the staged tree with `OMP_NUM_THREADS=1`
   over `tests/pytests/test_isapol*.py` + `test_fdds*.py` minus the slow
   `test_isapol_oeprop_water.py`, which is run separately below. The new file
-  alone is 20 passed in 1.68 s. Previous 1,895-test/36.79 s run:
-  `.pi/audit/reference-basis-regressions-v1.log`.
+  alone is 22 passed in 3.96 s; it was 20 passed in 1.68 s before layer 5, which
+  runs five extra SCFs. Previous 1,915-test/36.93 s and 1,895-test/36.79 s runs
+  are superseded in that log and in `.pi/audit/reference-basis-regressions-v1.log`.
 - Point-response test boundary is mutation-checked, not just green: on the staged
   module, flipping the target sign, symmetrizing the packed triangle, packing the
   upper triangle instead, dropping the orbital context check and leaving the
@@ -93,9 +95,29 @@ No implementation/build/test background tasks are pending. Old task IDs and
   provenance/convergence strings are hashed into the context digest and
   documented as unverified; and the new PFIT origin is appended to
   `IsaPfitTargetOrigin` so existing enumerator values are unchanged.
-  Two normalizations remain deliberately open and are labelled in SPEC §8: the
-  shared factor 4 has no absolute oracle (Psi4's own CPHF dipole polarizability
-  is the missing check), and no shell above p is exercised.
+  Of the two normalizations that review left open, **the factor 4 is now
+  closed** (see the next bullet); no shell above p is exercised, and that stays
+  labelled in SPEC §8.
+- **Factor-4 normalization closed absolutely** (test layer 5, 2 new tests). At
+  `exact_exchange=1`/`kernel='no_local'` the native H1/H2 are the closed-shell
+  (A+B)/(A−B) matrices, so the ω=0 solve *is* coupled-perturbed Hartree-Fock and
+  `alpha = -D^T C D` from dipole OV legs acquires an absolute scale. Water/STO-3G
+  agrees with Psi4's own iterative `Wavefunction.cphf_solve` (reached through
+  `psi4.properties`, a different solver with its own independently written
+  restricted prefactor) to **2.1e−14** on the full 3×3 tensor, and with the
+  curvature of *perturbed SCF total energies* to **5.0e−9** (rel 1.2e−7) after
+  one Richardson step over h=8e−3 and 4e−3, the h-halving error ratio measuring
+  **4.001**. The energy-curvature oracle is the stronger of the two: it uses no
+  response theory, no orbital Hessian and no prefactor at all, and because a
+  central second difference is even in λ it does not inherit Psi4's
+  `perturb_dipole` sign convention either. Confirmed discriminating by mutating
+  the staged solver's `-4.0 * h2.dot(legs)` to −2.0, −8.0 and −4.5: all three
+  fail both tests, so even a 12.5% error is caught, not just a factor of two.
+  The staged file was restored and its SHA256 re-verified after each mutation.
+  Cross-check at cc-pVDZ (nbf=24, nov=95) also matched CPHF to 2.1e−13; STO-3G
+  is what the committed test uses, because the native construction is 0.02 s
+  there against 5.08 s at cc-pVDZ. This does **not** certify the separate `a`
+  and `b` kernel scalings away from that configuration.
 - Default water demo after the point-response commit: **29.5248 s / 590,992 KiB**,
   31 ISA iterations, energy `-76.33875890072267 Eh`, and every saved array
   (`scalars`, `local`, `global_tensors`, `coefficients`) **bitwise equal** to
@@ -200,6 +222,11 @@ trace, hashes and separate ISA candidates). Its portable conclusions are in
   fitted versus direct response and strict recorded-input LW defects retain
   distinct gates. See SPEC/PROVISIONAL_ACCEPTANCE.md; no blanket tolerance waiver.
 - Full native SCF/PFIT/GRAC matched protocol and modern ISA preset are not closed.
+- Point-response coverage: no shell above p is exercised by the analytic ESP
+  oracle (the fixture basis has none). The right-hand-side factor 4 is closed
+  (section 3), but only at `exact_exchange=1` with no local kernel; the separate
+  `a` and `b` hybrid/ALDA kernel scalings away from that configuration still
+  rest on the pre-existing native-response gates.
 
 ## 7. Build and test commands
 
