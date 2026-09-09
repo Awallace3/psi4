@@ -1,8 +1,21 @@
 # libisapol implementation handoff
 
-**Start here:** read `psi4/src/psi4/libisapol/SPEC.md`, then this plan. The spec owns scientific/API contracts; this file owns execution state. Preserve existing uncommitted work. No commits, resets, pushes or reference-tree edits were performed.
+**Start here:** read `psi4/src/psi4/libisapol/SPEC.md`, then this plan. The spec owns scientific/API contracts; this file owns execution state. Preserve unrelated uncommitted work. User authorized committing and continuing; checkpoint `f996942ad6` contains the validated native/performance/recoupled implementation. No pushes, resets or reference-tree edits.
 
-## Accepted performance and rank<=3 recoupled parity
+## Accepted independent high-J followup
+
+Parent1755 regressions pass24.71s (`.pi/audit/high-j-parent-regressions-v2.log`).
+14 new tests independently validate all735 J9/C11 and J10/C12 rows,7 blocks,
+26 ordered rank quadruples/11 reciprocal classes using factorial CG/electrostatics
+and documented Sbar normalization, not production table expectations. Source review
+found no scientific must-fix; parent checked cited dissertation eqs4.3–4.6 directly.
+Added isolation-case completeness assertion and corrected static-weight wording.
+No production algorithm changes or rebuild required. See HIGH_J_VALIDATION.md.
+Literal411 high-J archive rows remain unverified; general lower-J second-stage
+oracle, rank4 support and matched native basis/GRAC/PFIT remain open. No active
+background tasks. tmp/ and orient_replacement.md remain untouched/uncommitted.
+
+## Accepted performance and rank<=3 recoupled parity (prior checkpoint)
 
 FINAL: worker completed; parent built/staged and independently reviewed the engine.
 31 focused tests passed1.94s, including exact6285 archive rows/10457nonzero values/

@@ -2,6 +2,17 @@
 
 ## 1. Objectives and current status
 
+### Independent maximal-J validation after checkpoint f996942ad6
+
+All735 J9/C11 and J10/C12 coefficient rows now have table-independent
+factorial/electrostatic synthetic-input validation across7 blocks,26 ordered
+quadruples and11 reciprocal classes. Parent1755 ISA/FDDS tests pass24.71s,
+including14 new high-J cases; independent review found no scientific must-fix.
+No production algorithm changes. See HIGH_J_VALIDATION.md for Sbar normalization,
+external mathematical source and precise certification limits. This does not
+numerically compare the archive's411 visible high-J rows or derive a general
+lower-J second-stage oracle. Rank4 and native-SCF/PFIT/GRAC parity remain open.
+
 ### Accepted OpenMP / bounded-memory followup
 
 Final staged performance build passes1710 ISA/FDDS tests in24.06s. Relative to

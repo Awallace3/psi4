@@ -18,7 +18,11 @@ same threshold. A mutation test detects an erroneous visible omitted field.
 Acceptance: **shipped rank <= 3 recoupled C6-C12 matches the archived L3 table to
 write precision**. This is NOT full native SCF/PFIT/GRAC protocol parity. The
 411 visible J9/10 rows are counted, not numerically certified by the archive.
-Rank4 is rejected; rank3 C12 remains structurally partial.
+A subsequent independent factorial/electrostatic oracle validates all735 maximal-J
+rows on synthetic mixed-rank inputs (26 ordered quadruples,11 reciprocal classes);
+1755 integrated tests pass24.71s. See HIGH_J_VALIDATION.md for the independence
+boundary and limits; this is not a literal high-J archive comparison or a general
+lower-J second-stage oracle. Rank4 is rejected; rank3 C12 remains structurally partial.
 
 Evidence: `.pi/audit/recoupled-parity-tests-v1.log` and
 `recoupled-parity-regressions-v2.log`. The final integrated core also reproduces
