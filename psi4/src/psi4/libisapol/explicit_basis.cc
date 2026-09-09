@@ -4,6 +4,7 @@
  */
 #include "explicit_basis.h"
 #include "isa_fit.h"
+#include "parallel_work.h"
 #include "psi4/libmints/matrix.h"
 #include <cmath>
 #include <complex>
@@ -33,12 +34,15 @@ const std::vector<std::array<int, 3>>& basis_cartesian_powers(int l) {
 double basis_cartesian_factor(int l, const std::array<int, 3>& p) {
     return std::sqrt(df(2*l-1)/(df(2*p[0]-1)*df(2*p[1]-1)*df(2*p[2]-1)));
 }
-std::vector<double> angular(int l, IsaBasisRepresentation rep, double x, double y, double z) {
-    std::vector<double> out;
+std::array<double,15> angular(int l, IsaBasisRepresentation rep, double x, double y, double z) {
+    // Both representations' l=0 recurrence is exactly the constant one.
+    if (l == 0) return {1.0};
+    std::array<double,15> out{};
+    int index = 0;
     if (rep == IsaBasisRepresentation::Cartesian) {
         for (auto p : basis_cartesian_powers(l))
-            out.push_back(basis_cartesian_factor(l,p) *
-                          std::pow(x,p[0])*std::pow(y,p[1])*std::pow(z,p[2]));
+            out[index++] = basis_cartesian_factor(l,p) *
+                          std::pow(x,p[0])*std::pow(y,p[1])*std::pow(z,p[2]);
         return out;
     }
     // Unnormalized regular associated harmonics, with no Condon--Shortley phase:
@@ -59,11 +63,30 @@ std::vector<double> angular(int l, IsaBasisRepresentation rep, double x, double 
         h[m] = value*std::sqrt((m ? 2.0 : 1.0)*factorial(l-m)/factorial(l+m));
     }
     if (l == 1) return {h[1].real(),h[1].imag(),h[0].real()};
-    for (int m = l; m > 0; --m) out.push_back(h[m].imag());
-    out.push_back(h[0].real());
-    for (int m = 1; m <= l; ++m) out.push_back(h[m].real());
+    for (int m = l; m > 0; --m) out[index++] = h[m].imag();
+    out[index++] = h[0].real();
+    for (int m = 1; m <= l; ++m) out[index++] = h[m].real();
     return out;
 }
+}
+std::vector<double> isa_regular_multipoles(int rank, const std::array<double,3>& r) {
+    basis_require(rank >= 0 && rank <= 4, "Multipole rank must be between 0 and 4");
+    for (double v : r) basis_require(std::isfinite(v), "Multipole displacement must be finite");
+    std::vector<double> result;
+    for (int l = 0; l <= rank; ++l) {
+        auto a = angular(l, IsaBasisRepresentation::Spherical, r[0], r[1], r[2]);
+        if (l == 1) {
+            result.insert(result.end(), {a[2], a[0], a[1]});
+        } else {
+            result.push_back(a[l]);
+            for (int m = 1; m <= l; ++m) {
+                result.push_back(a[l+m]);
+                result.push_back(a[l-m]);
+            }
+        }
+    }
+    for (double v : result) basis_require(std::isfinite(v), "Nonfinite regular multipole");
+    return result;
 }
 const std::vector<std::array<int,3>>& IsaExplicitBasis::cartesian_powers(int l) {
     return basis_cartesian_powers(l);
@@ -106,11 +129,22 @@ std::shared_ptr<Matrix> IsaExplicitBasis::evaluate_screened(const std::vector<st
         active[site] = true;
     }
     for (auto p : points) for (double v : p) basis_require(std::isfinite(v), "Points must be finite");
+    basis_require(points.size() <= std::numeric_limits<size_t>::max()/sizeof(double)/static_cast<size_t>(nfunction_),
+                  "Explicit basis sample byte size overflow");
     auto result = std::make_shared<Matrix>("Explicit ISA basis samples", static_cast<int>(points.size()),nfunction_);
+    std::vector<int> starts;
     int column = 0;
     for (const auto& s : shells_) {
-        const int n = count(s.l,representation_);
-        if (active[s.centre]) for (size_t i = 0; i < points.size(); ++i) {
+        starts.push_back(column);
+        column += count(s.l,representation_);
+    }
+    auto output = result->pointer();
+    detail::parallel_work(points.size(),256,[&](size_t i) {
+        for (size_t shell = 0; shell < shells_.size(); ++shell) {
+            const auto& s = shells_[shell];
+            if (!active[s.centre]) continue;
+            const int n = count(s.l,representation_);
+            const int column = starts[shell];
             double x = points[i][0]-centres_[s.centre][0], y = points[i][1]-centres_[s.centre][1],
                    z = points[i][2]-centres_[s.centre][2];
             const double r2 = x*x+y*y+z*z;
@@ -122,11 +156,10 @@ std::shared_ptr<Matrix> IsaExplicitBasis::evaluate_screened(const std::vector<st
             for (int k = 0; k < n; ++k) {
                 double value = radial*values[k];
                 basis_require(std::isfinite(value), "Nonfinite basis sample");
-                result->set(i,column+k,value);
+                output[i][column+k] = value;
             }
         }
-        column += n;
-    }
+    });
     return result;
 }
 std::shared_ptr<Matrix> IsaExplicitBasis::overlap(double w_eps, bool s_block_only) const {
@@ -230,11 +263,25 @@ IsaFixedDensity::IsaFixedDensity(const IsaExplicitBasis& basis, const std::vecto
 }
 std::vector<double> IsaFixedDensity::evaluate(const std::vector<std::array<double,3>>& points,
                                              const std::vector<int>& sites) const {
-    auto samples = basis_.evaluate_screened(points,sites);
+    // Bound AUX scratch independently of the molecular point count. Even
+    // screened zero columns participate in the original ordered k contraction.
+    basis_require(points.size() <= static_cast<size_t>(std::numeric_limits<int>::max()), "Too many density points");
+    constexpr size_t scratch_bytes = 8 * 1024 * 1024;
+    const size_t row_bytes = sizeof(double)*static_cast<size_t>(basis_.nfunction());
+    basis_require(row_bytes <= scratch_bytes, "Density sample row exceeds 8 MiB scratch budget");
+    const size_t blocksize = std::min(size_t(4096),scratch_bytes/row_bytes);
     std::vector<double> density(points.size(),0.0);
-    for (size_t i = 0; i < points.size(); ++i) {
-        for (int k = 0; k < basis_.nfunction(); ++k) density[i] += samples->get(i,k)*coefficients_[k];
-        basis_require(std::isfinite(density[i]), "Nonfinite density sample");
+    // Validate the screening policy even for an empty point set.
+    if (points.empty()) basis_.evaluate_screened({},sites);
+    for (size_t start = 0; start < points.size(); start += blocksize) {
+        const size_t count = std::min(blocksize,points.size()-start);
+        std::vector<std::array<double,3>> block(points.begin()+start,points.begin()+start+count);
+        auto samples = basis_.evaluate_screened(block,sites);
+        auto phi = samples->pointer();
+        detail::parallel_work(count,256,[&](size_t i) {
+            for (int k = 0; k < basis_.nfunction(); ++k) density[start+i] += phi[i][k]*coefficients_[k];
+            basis_require(std::isfinite(density[start+i]), "Nonfinite density sample");
+        });
     }
     return density;
 }

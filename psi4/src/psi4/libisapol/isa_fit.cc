@@ -8,6 +8,7 @@
  * num_integrals.F90:622-870. No CamCASP source is linked into this module.
  */
 #include "isa_fit.h"
+#include "parallel_work.h"
 
 #include <algorithm>
 #include <cmath>
@@ -26,14 +27,16 @@ void require(bool ok, const std::string& message) {
 }
 void finite_vector(const std::vector<double>& v, size_t n, const std::string& name) {
     require(v.size() == n, name + " has the wrong size");
-    for (double x : v) require(std::isfinite(x), name + " contains a nonfinite value");
+    for (double x : v)
+        if (!std::isfinite(x)) require(false, name + " contains a nonfinite value");
 }
 void finite_matrix(const std::shared_ptr<Matrix>& m, int rows, int cols, const std::string& name) {
     require(m && m->nirrep() == 1 && m->symmetry() == 0, name + " must be a C1 matrix");
     require(m->nrow() == rows && m->ncol() == cols, name + " has the wrong dimensions");
+    auto values = m->pointer();
     for (int i = 0; i < rows; ++i)
         for (int j = 0; j < cols; ++j)
-            require(std::isfinite(m->get(i, j)), name + " contains a nonfinite value");
+            if (!std::isfinite(values[i][j])) require(false, name + " contains a nonfinite value");
 }
 double symmetric_metric(const std::shared_ptr<Matrix>& m, int n) {
     finite_matrix(m, n, n, "overlap");
@@ -90,6 +93,7 @@ IsaAFitResult isa_a_fit_step(const IsaAFitData& d, const IsaAFitOptions& o) {
 
     auto phi = d.basis_values->pointer();
     auto rhs = out.rhs->pointer();
+    std::vector<double> partition_density(np), tail_weights(np);
     for (size_t p = 0; p < np; ++p) {
         double rho_a = 0.0;
         if (std::abs(d.shape_sum[p]) > o.density_cutoff) {
@@ -98,8 +102,14 @@ IsaAFitResult isa_a_fit_step(const IsaAFitData& d, const IsaAFitOptions& o) {
         } else {
             ++out.excluded_points;
         }
-        const double tail_weight = o.w_eps > 0.0 ? std::exp(std::min(o.w_eps * d.radius_squared[p], 230.0)) : 1.0;
-        for (int k = 0; k < n; ++k) {
+        partition_density[p] = rho_a;
+        tail_weights[p] = o.w_eps > 0.0 ? std::exp(std::min(o.w_eps * d.radius_squared[p], 230.0)) : 1.0;
+    }
+    // Independent functions; each RHS sees every point in its original order.
+    // Population and denominator diagnostics above retain serial point order.
+    detail::parallel_work(nf,np >= 256 ? 1 : nf+1,[&](size_t k) {
+        for (size_t p = 0; p < np; ++p) {
+            const double rho_a = partition_density[p], tail_weight = tail_weights[p];
             double term;
             if (d.angular_momenta[k] == 0) {
                 // Damping survives the denominator cutoff, just as in the source.
@@ -110,7 +120,7 @@ IsaAFitResult isa_a_fit_step(const IsaAFitData& d, const IsaAFitOptions& o) {
             }
             rhs[k][0] += term;
         }
-    }
+    });
     finite_matrix(out.metric, n, n, "modified metric");
     finite_matrix(out.rhs, n, 1, "accumulated RHS");
     require(std::isfinite(out.population), "population overflow");

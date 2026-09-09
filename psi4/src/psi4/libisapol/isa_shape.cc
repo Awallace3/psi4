@@ -3,6 +3,7 @@
  * ISA Func-1/Fit-3 equations; see SPEC.md and CamCASP stockholder.F90.
  */
 #include "isa_shape.h"
+#include "parallel_work.h"
 #include "psi4/libmints/matrix.h"
 #include <algorithm>
 #include <cmath>
@@ -116,11 +117,16 @@ IsaTailFitResult IsaGaussianShape::fit_tail(double cutoff, const IsaExponentialT
 }
 std::vector<double> IsaGaussianShape::sample(const std::vector<std::array<double,3>>& points,
                                             const IsaExponentialTail& tail, bool apply_tail) const {
+    return sample_counted(points,tail,apply_tail,nullptr);
+}
+std::vector<double> IsaGaussianShape::sample_counted(const std::vector<std::array<double,3>>& points,
+        const IsaExponentialTail& tail, bool apply_tail, int* clipped) const {
     shape_tail_valid(tail);
     const bool active = apply_tail && tail.defined;
-    std::vector<double> samples;
-    samples.reserve(points.size());
-    for (auto p : points) {
+    std::vector<double> samples(points.size());
+    std::vector<unsigned char> negative(clipped && !active ? points.size() : 0);
+    detail::parallel_work(points.size(),256,[&](size_t i) {
+        const auto& p = points[i];
         double r2 = 0.0;
         for (int axis = 0; axis < 3; ++axis) {
             shape_require(std::isfinite(p[axis]), "Shape sample points must be finite");
@@ -129,10 +135,14 @@ std::vector<double> IsaGaussianShape::sample(const std::vector<std::array<double
         shape_require(std::isfinite(r2), "Nonfinite shape sample distance");
         const double r = std::sqrt(r2);
         double w = active && r > tail.cutoff ? tail.amplitude*std::exp(-tail.exponent*r) : value_squared(r2);
-        if (!active) w = std::max(w,0.0);
+        if (!active) {
+            if (clipped) negative[i] = w < 0.0;
+            w = std::max(w,0.0);
+        }
         shape_require(std::isfinite(w), "Nonfinite shape sample");
-        samples.push_back(w);
-    }
+        samples[i] = w;
+    });
+    if (clipped) *clipped = static_cast<int>(std::count(negative.begin(),negative.end(),1));
     return samples;
 }
 } }

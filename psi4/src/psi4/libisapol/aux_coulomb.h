@@ -4,7 +4,9 @@
 #ifndef PSI4_LIBISAPOL_AUX_COULOMB_H
 #define PSI4_LIBISAPOL_AUX_COULOMB_H
 #include "explicit_basis.h"
+#include <string>
 namespace psi { namespace isapol {
+class IsaOvFitResult;
 struct IsaDrhoCResult {
     std::shared_ptr<Matrix> coulomb_metric, metric;
     std::vector<double> charges, raw_rhs, rhs, coefficients;
@@ -32,6 +34,10 @@ class IsaAuxCoulomb {
     /// Penalty enters each occupied pair diagonal before tracing. No rescaling.
     IsaDrhoCResult fit_drho_c(const IsaExplicitBasis& orbital,
                              const Matrix& occupied_coefficients, double charge_penalty=1000.) const;
+    /// Native-integral/supplied-MAIN-orbital OV fit; no SCF or response construction.
+    IsaOvFitResult fit_ov(const IsaExplicitBasis& orbital, const Matrix& occupied,
+                         const Matrix& virtuals, const std::string& provenance,
+                         double charge_penalty=1.0) const;
    private:
     IsaExplicitBasis basis_;
 };

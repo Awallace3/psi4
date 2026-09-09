@@ -35,6 +35,7 @@ __all__ = [
     "libint2_configuration",
     "libint2_print_out",
     "oeprop",
+    "atomic_property_result",
     "set_memory",
 ]
 
@@ -70,10 +71,26 @@ def oeprop(wfn: core.Wavefunction, *args: List[str], **kwargs):
     >>> oeprop(wfn, 'DIPOLE', 'QUADRUPOLE', title='H3O+ SCF')
 
     """
+    from ..procrouting.isapol_oeprop import TASKS, run, validate_request
+    # Reserve the whole ATOMIC_* namespace. Invalidate the latest native result
+    # at request entry, including rejected names, policies, and mixed requests.
+    atomic_names = tuple(prop.upper() for prop in args
+                         if isinstance(prop, str) and prop.upper().startswith('ATOMIC_'))
+    if atomic_names and isinstance(wfn, core.Wavefunction):
+        wfn._native_atomic_property_result = None
+    if any(not isinstance(prop, str) for prop in args):
+        raise ValidationError('oeprop property names must be strings')
+    unknown = tuple(prop for prop in atomic_names if prop not in TASKS)
+    if unknown:
+        raise ValidationError('Unknown native atomic property request: ' + ', '.join(unknown))
+    native = tuple(prop.upper() for prop in args if prop.upper() in TASKS)
+    ordinary = tuple(prop for prop in args if prop.upper() not in TASKS)
+    if native:
+        validate_request(wfn, native)
     oe = core.OEProp(wfn)
     if 'title' in kwargs:
         oe.set_title(kwargs['title'])
-    for prop in args:
+    for prop in ordinary:
         oe.add(prop.upper())
 
         # If we're doing MBIS, we want the free-atom volumes
@@ -84,7 +101,20 @@ def oeprop(wfn: core.Wavefunction, *args: List[str], **kwargs):
             core.print_out("  Computing free-atom volumes\n")
             free_atom_volumes(wfn)
 
-    oe.compute()
+    if ordinary or not native:
+        oe.compute()
+    if native:
+        run(wfn, native)
+
+
+def atomic_property_result(wfn):
+    """Access the owned latest native atomic oeprop result, including diagnostics.
+
+    ``oeprop`` continues to return None. Large labeled tensors live here rather
+    than in padded QCVariables. No calculation or hidden SCF is performed.
+    """
+    from ..procrouting.isapol_oeprop import atomic_property_result as accessor
+    return accessor(wfn)
 
 
 def cubeprop(wfn: core.Wavefunction, **kwargs):

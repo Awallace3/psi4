@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "claim": "Historical supplied NL4 to native LW L3 output agreement; production postcondition fails",
+  "source_sha256": {
+    "psi4/src/psi4/libisapol/lw_localization.cc": "9ec12784df43b9d96cfb836029b08af725360ef0a832fb80116feee7dc523830",
+    "psi4/src/psi4/libisapol/lw_localization.h": "57bcc563ea2f2851ebdcfbdd0a25ee6f82f481340815e3342080dfaf85870c9a",
+    "psi4/src/psi4/libisapol/multipole_transform.cc": "c69f255e11f9729bc02a6f8b2ddf20d40c02d50406b8a7585c5bd5db2f69eac4",
+    "psi4/src/psi4/libisapol/multipole_transform.h": "4d46f6416eecf5ae3aa1a8da2e1c4c741488b76c5c0a27d344a5abf163301aff",
+    "psi4/src/export_isapol.cc": "2638d3cc8da5ff5bfc51113ce75339433af2de4d0428107e44ee146bf035b2b9",
+    "tests/pytests/test_isapol_lw_hermetic.py": "f99a994fcb6c51dbc2609d3df3c58d36eb6cd8741672b024f59e6afba4ae110a",
+    "tests/pytests/data_isapol/oracle/extract_lw_hermetic.py": "1fd3144bdd0fa0590409031e5d2cdcba1291895bfe0de2d43533ece1dd0dc73b",
+    "tests/pytests/data_isapol/orient_local/lw-hermetic-water.json": "b86d411e5fd81fc20358370ee211ba5b9bd997c57f8918c32ce0334c93ad7f49"
+  },
+  "extension_path": "/home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/build_camcasp_psi4_joint/stage/lib/psi4/core.cpython-313-x86_64-linux-gnu.so",
+  "extension_sha256": "40c589ae23394166d0a8a949348670896a6e6fcbbb3c8c4b4ed23ea7c05c0b72",
+  "built_staged_identical": true,
+  "build": {
+    "configured_core_build": "passed",
+    "canonical_install": "passed",
+    "logs_sha256": {
+      "lw-transfer-build-resume-v1.log": "3c7c18895ec385dd23e25d7be3221ce8c17f65bd14f52d25bf1dbdaa3d49c822",
+      "lw-transfer-install-resume-v1.log": "55eef70dc034b9544cebb1081b6e08132f59ed44dd58f4e1ad004a84ed842a6c",
+      "lw-transfer-tests-resume-v1.log": "2aff674398f3847a2abe550f329efd80036311d646d046e79badaa095adf900c",
+      "lw-transfer-tests-resume-v2.log": "3f6f6bb73cec6a2b5d42bc364816a625111b825bbc967886b8af6e66215a9521",
+      "lw-transfer-combined-resume-v1.log": "b12514917d103f5b7678d577736bb1febbb195c5aae79fe20719e968d1cd4e76",
+      "lw-hermetic-tests-v1.log": "7687f6b39324b5e3ac95b3d5a998c12bf9ea8015041c76271a74fb97a0001704",
+      "lw-hermetic-diagnostic-v2.log": "f2f25e060189c4cc3c7066b83b41f81c5c7e40d39041c3a9866f54bc055345bd"
+    }
+  },
+  "tests": {
+    "graph_translation_transfer": {
+      "passed": 72,
+      "seconds": 1.65
+    },
+    "combined_pre_hermetic": {
+      "passed": 1224,
+      "seconds": 13.76
+    },
+    "historical_fixture_diagnostic": {
+      "passed": 27,
+      "seconds": 1.36,
+      "junit_format_warnings": 1
+    }
+  },
+  "advisory": {
+    "transfer_answer_sha256": "ca1591275f6c056101adfe0bf37447f609374d8c50d00a4955e79fe9b377dbf2",
+    "hermetic_answer_sha256": "a34b797a2307bb742864316f2828690c0704ca0dbd8c01e47fd8d97acd1c8197",
+    "findings": "No numerical must-fix; stale fixture README corrected after review"
+  },
+  "conventions": {
+    "input_rank": 4,
+    "working_rank": 3,
+    "local_ranks": [
+      1,
+      2,
+      3
+    ],
+    "explicit_bonds": [
+      [
+        0,
+        1
+      ],
+      [
+        0,
+        2
+      ]
+    ],
+    "H1_local_to_global": [
+      [
+        -1,
+        0,
+        0
+      ],
+      [
+        0,
+        -1,
+        0
+      ],
+      [
+        0,
+        0,
+        1
+      ]
+    ],
+    "output_atol": 1e-11,
+    "output_rtol": 0
+  },
+  "acceptance": {
+    "production_postcondition_tolerance": 1e-06,
+    "production_postcondition_passed": false,
+    "historical_diagnostic_tolerance": 0.001,
+    "historical_diagnostic_user_authorized": true,
+    "historical_output_comparison_passed": true
+  },
+  "metrics": {
+    "site_maxabs": {
+      "O": 6.252776074688882e-13,
+      "H1": 5.60440582830779e-13,
+      "H2": 5.089262344881718e-13
+    },
+    "residuals": {
+      "off_site": 2.201454e-11,
+      "charge_sum": 0.000701099999999899,
+      "reciprocity": 5.771383371211414e-12,
+      "molecular_sum": 3.979039320256561e-13,
+      "local_charge": 0.0007011000000002321
+    },
+    "entries": 675
+  },
+  "limitations": [
+    "Supplied external distributed response, not native wavefunction generation",
+    "Static historical snapshot only; no dynamic LW-to-Cn molecular acceptance",
+    "No rank4 working-space localization, automatic bonds, PFIT or native end-to-end acceptance",
+    "Source and log identities describe this checkpoint, not future builds"
+  ]
+}

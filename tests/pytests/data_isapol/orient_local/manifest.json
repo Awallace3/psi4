@@ -1,0 +1,175 @@
+{
+  "schema": 1,
+  "units": "atomic",
+  "geometry_units": "bohr",
+  "components": "real_Racah_10_11c_11s",
+  "frame_convention": "local_to_global_columns",
+  "molecule": "H2O",
+  "track": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O",
+  "tensor_origin": "imported_ORIENT_localized_and_external_PFIT_refined",
+  "authority": "external_manifest",
+  "header_index_base": 0,
+  "grid": {
+    "n": 10,
+    "beta": 0.5
+  },
+  "global_frame_sites": [
+    "O"
+  ],
+  "sites": [
+    {
+      "label": "O",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "frame": [
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "ranks": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "label": "H1",
+      "origin": [
+        -1.45365196,
+        0,
+        -1.12168732
+      ],
+      "frame": [
+        [
+          -1,
+          0,
+          0
+        ],
+        [
+          0,
+          -1,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "ranks": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "label": "H2",
+      "origin": [
+        1.45365196,
+        0,
+        -1.12168732
+      ],
+      "frame": [
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "ranks": [
+        1,
+        2,
+        3
+      ]
+    }
+  ],
+  "files": [
+    {
+      "name": "H2O_ref_wt4_L3_0f10.pol",
+      "sha256": "05271ab9d29d61934ce361d7096756885f9a2070b675f1e2f7e0218c7e13df02",
+      "sections": {
+        "0": 0,
+        "1": 1,
+        "2": 2,
+        "3": 3,
+        "4": 4,
+        "5": 5,
+        "6": 6,
+        "7": 7,
+        "8": 8,
+        "9": 9,
+        "10": 10
+      }
+    }
+  ],
+  "provenance_sources": [
+    {
+      "name": "H2O.ornt",
+      "sha256": "a5a54f61f97ff5b17020df549b75f9f989c0c0e7aa1478f03470d41ace917ad2",
+      "role": "recipe"
+    },
+    {
+      "name": "H2O.axes",
+      "sha256": "ea23f1d6464f2bb39573ce27295948183ffcd4888ead896a0a9ce39a4b4f0c71",
+      "role": "axes"
+    },
+    {
+      "name": "H2O.sites",
+      "sha256": "0ee502d6b1ea8b3ee45e092131acb8703c9f17ebb97b8515531ffef3fcd49282",
+      "role": "sites"
+    },
+    {
+      "name": "H2O.pdef",
+      "sha256": "7cadf5080a2e3c8eb508a090eb7114e6adb2e92d4ccf51f94d8d59c70f8bacb2",
+      "role": "pdef"
+    },
+    {
+      "name": "H2O_ref_wt4_L3_casimir.data",
+      "sha256": "28b90cd1a87c3bd9920d0e6cc150f731fe6b03d5eff91c0c7f5e72e2eb11b77a",
+      "role": "independent_casimir_data"
+    },
+    {
+      "name": "pot_isotropic_excerpt.json",
+      "sha256": "884525b8424e33c14567ff78546c621e2fa1370b3bb1e36870bdf32f3171ef31",
+      "role": "independent_pot_excerpt"
+    },
+    {
+      "name": "frequency_header_excerpt.json",
+      "sha256": "e562125d901f8bd3b54dcfc34fdc3287a36e6290b71e2e9f9ac885cf769858b3",
+      "role": "independent_frequency_headers"
+    }
+  ],
+  "warnings": [
+    "Imported ORIENT 5.0.10 (d8d8610) localized and external PFIT-refined numerical output; not new Psi4 wavefunction response.",
+    "External localization input reports sum-rule failures at 1e-7; this import does not correct them.",
+    "All refined raw headers report INDEX 0/FREQSQ 0, including dynamic tensors. Hashed enclosing-section manifest authority is explicit.",
+    "O global identity is explicitly declared: unrotated Molecule H2O at 0 0 0; no O axes override. H1/H2 frames follow global-Z/from-to recipe.",
+    "Historical H2O track only, not H2O-isagrid or cDF output_2; no full native or unrestricted C12 agreement.",
+    "Unrefined H2O_L3 indices7..10 FREQSQ headers fail canonical-grid cross-check at literal printed precision (likely re-serialization precision, not a replacement grid); retained as separate failed numerical comparisons."
+  ]
+}

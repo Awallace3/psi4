@@ -26,11 +26,14 @@
 # @END LICENSE
 #
 
-"""Single-system FDDS coupling from supplied auxiliary intermediates.
+"""Shared single-system FDDS coupling and explicit-orbital construction.
 
-This shares the SAPT(DFT) numerical policy; it constructs neither orbitals nor
-integrals. Responses are in the Coulomb auxiliary representation, NOT CamCASP
-C_DF coefficient space. No quadrature weight or dispersion prefactor is included.
+The legacy numerical kernel accepts supplied auxiliary intermediates; its optional
+monomer provider constructs Psi4 intermediates but never performs SCF. Those
+responses are Coulomb-auxiliary, not CamCASP C_DF coefficient responses. The separate
+FDDSFullOVResponse route accepts supplied operators and explicitly declared
+transition-leg coordinates, including fitted-density coefficients.
+No quadrature weight or dispersion prefactor is included.
 """
 
 from dataclasses import dataclass
@@ -125,6 +128,96 @@ def solve_fdds_response(*, metric, metric_inv, W, uncoupled, x_alpha=0.0,
     amplitude = np.linalg.pinv(metric - XSW, rcond=1.e-13)
     coupled = X + XSW.dot(amplitude).dot(X)
     return FDDSFrequencyResponse(_symmetrize(U), _symmetrize(coupled), U, coupled)
+
+
+@dataclass(frozen=True)
+class FDDSFullOVFrequencyResponse:
+    """Owned raw results in explicitly declared transition-leg coordinates.
+
+    The baseline already includes the supplied Coulomb/exchange operators. It is
+    not ordinary uncoupled FDDS. No historical symmetrization is applied here.
+    """
+
+    omega: float
+    raw_baseline: np.ndarray
+    raw_coupled: np.ndarray
+    representation: str
+    method: str = "full_ov_effective_baseline"
+
+
+class FDDSFullOVResponse:
+    """Explicit supplied-operator route; never selected by legacy SAPT callers.
+
+    For transition legs D (OV rows, declared-coordinate columns), define
+    H1 = H1_baseline + 4 D coupling D^T. The effective baseline is
+    U = D^T solve(H2 H1_baseline + omega^2 I, -4 H2 D).
+    The existing auxiliary coupling helper adds the remaining interaction.
+
+    Full-OV solves use unregularized numpy.linalg.solve; singular baselines raise
+    LinAlgError without fallback. Auxiliary coupling retains the helper's 1e-13
+    pseudoinverse cutoff. Exact full-coupled equivalence requires its denominator
+    to be nonsingular and untruncated. No SCF, integrals, fit, kernel, coordinate
+    transformation or orbital-order inference is performed by this class.
+
+    Inputs must already use one consistent OV order. Allowed representations are
+    'fitted_density_coefficients', 'fdds_coulomb_auxiliary', and
+    'supplied_transition_leg_coordinates'; the caller must choose explicitly.
+    This route does not change the inherited projected-hybrid FDDS algorithm.
+    """
+
+    def __init__(self, *, h1_baseline, h2, transition_legs, coupling, representation):
+        allowed = ("fitted_density_coefficients", "fdds_coulomb_auxiliary",
+                   "supplied_transition_leg_coordinates")
+        if not isinstance(representation, str) or representation not in allowed:
+            raise ValueError("representation must explicitly identify transition-leg coordinates")
+        h1 = _square(h1_baseline, "h1_baseline").copy()
+        h2 = _square(h2, "h2", h1.shape).copy()
+        legs = np.asarray(transition_legs)
+        if np.iscomplexobj(legs):
+            raise ValueError("transition_legs must be real")
+        legs = np.asarray(legs, dtype=float)
+        if (legs.ndim != 2 or legs.shape[0] != h1.shape[0] or legs.shape[1] == 0
+                or not np.isfinite(legs).all()):
+            raise ValueError("transition_legs must be finite with shape (nov, ncoordinates)")
+        self._legs = legs.copy()
+        n = legs.shape[1]
+        self._coupling = _square(coupling, "coupling", (n, n)).copy()
+        self._representation = representation
+        self._identity_ov = np.eye(h1.shape[0])
+        self._identity_coordinates = np.eye(n)
+        # Owned products only. Do not retain caller arrays or assume symmetry.
+        with np.errstate(over="raise", invalid="raise"):
+            self._baseline_product = h2.dot(h1)
+            self._rhs = -4.0 * h2.dot(self._legs)
+        if not np.isfinite(self._baseline_product).all() or not np.isfinite(self._rhs).all():
+            raise ValueError("nonfinite full-OV baseline products")
+
+    @property
+    def representation(self):
+        return self._representation
+
+    def at_frequency(self, omega):
+        """Return independent raw responses at finite imaginary magnitude omega."""
+        if (not np.isscalar(omega) or np.asarray(omega).dtype.kind not in "iuf"
+                or not np.isfinite(omega) or omega < 0):
+            raise ValueError("frequency must be finite, real and nonnegative")
+        omega = float(omega)
+        omega2 = omega * omega
+        if not np.isfinite(omega2):
+            raise ValueError("squared frequency must be finite")
+        with np.errstate(over="raise", invalid="raise"):
+            operator = self._baseline_product + omega2 * self._identity_ov
+            solution = np.linalg.solve(operator, self._rhs)
+            baseline = self._legs.T.dot(solution)
+        response = solve_fdds_response(
+            metric=self._identity_coordinates, metric_inv=self._identity_coordinates,
+            W=self._coupling, uncoupled=baseline)
+        if not np.isfinite(response.raw_coupled).all():
+            raise ValueError("nonfinite full-OV coupled response")
+        # Do not expose the auxiliary helper's fixed label for artificial identity
+        # coordinates, or call this exchange-containing baseline 'uncoupled'.
+        return FDDSFullOVFrequencyResponse(
+            omega, baseline.copy(), response.raw_coupled.copy(), self._representation)
 
 
 def _compute_fxc(PQrho, half_Saux, halfp_Saux, x_alpha, rho_thresh=1.e-8):

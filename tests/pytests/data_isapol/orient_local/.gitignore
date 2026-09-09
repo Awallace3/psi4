@@ -1,0 +1,14 @@
+# Bounded, user-authorized numerical/configuration fixtures only.
+!.gitignore
+!manifest.json
+!manifest.json.sha256
+!frequency_header_excerpt.json
+!pot_isotropic_excerpt.json
+!placement_b_example.json
+!H2O_ref_wt4_L3_0f10.pol
+!H2O_ref_wt4_L3_casimir.data
+!H2O.ornt
+!H2O.axes
+!H2O.sites
+!H2O.pdef
+!README.md

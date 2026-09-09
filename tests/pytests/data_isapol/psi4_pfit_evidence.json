@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "scope": "Supplied-input single-frequency PFIT numerical objective",
+  "native_verified": false,
+  "reference_parity_verified": false,
+  "built_staged_core_sha256": "1854a6b5cc29b2b5d50042c28a0ceb60b7af281a23787d805096534020f66f8d",
+  "source_sha256": {
+    "psi4/src/psi4/libisapol/pfit.h": "89e451300ff5346b00233fc5bec6d77d2c434429949621625551ae3d076a124d",
+    "psi4/src/psi4/libisapol/pfit.cc": "937fec322e571b870d8e79c1b6116083b8ccacbf2bf0ff212b2ff81be84c5d05",
+    "psi4/src/export_isapol.cc": "b4e6b4ce739ddf455777bcac1c8346a2b50e2651d94283dd91d95f89273c9e3f",
+    "psi4/src/psi4/libisapol/CMakeLists.txt": "16c2f89b0379518a93b3786a9c1a8df155f9f556e0e27b32ef2a8fd5f933365d",
+    "tests/pytests/test_isapol_pfit.py": "26a6836c78e82dd62be44e8932f48c1d6e54ee031ca8595ef9f0a07b4fca5d68",
+    "tests/pytests/test_isapol_pfit_review.py": "197d57c21d43b657838d530b47ed731667e674727b0cd45a12a361013152ef25"
+  },
+  "focused_tests": {
+    "passed": 102,
+    "seconds": 1.45,
+    "log_sha256": "98149741340f55790ff2b49c97ec870ae801288e851c4923f8977a773f31bb9a"
+  },
+  "combined_tests": {
+    "passed": 882,
+    "seconds": 5.69,
+    "log_sha256": "da4185fc7002187a0989b0805151cb7046e9025b9e6bf81f371fe236d7b1b18d"
+  },
+  "regression_reproduction": {
+    "expected_failures": 6,
+    "log_sha256": "b76a5d983409350c5876f49cb0e8f57bba927db288d04e06bcd542c5f6064790"
+  },
+  "independent_review_answer_sha256": "fa8516824777756d60d80ce771b4e477a4fcd9585627cfdb067c3242e792b74b",
+  "limitations": [
+    "Caller-supplied targets/model/fields; no native target generation or localization",
+    "Strict computed-eigenvalue PSD policy; no pseudoinverse or hidden regularization",
+    "Numerical-buffer budget excludes caller inputs and container/getter overhead",
+    "No new property driver registration; no native/reference/end-to-end acceptance"
+  ]
+}

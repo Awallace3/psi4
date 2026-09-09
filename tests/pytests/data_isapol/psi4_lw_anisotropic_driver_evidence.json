@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "scope": "synthetic supplied nonlocal LW to explicit-placement anisotropic dispersion; not molecular dynamic/native acceptance",
+  "files": {
+    "psi4/driver/procrouting/isapol_lw.py": "3205333cbd2e300b63c41f7707db9adcf5daddea742afacee6e53dbf6dccdefc",
+    "tests/pytests/test_isapol_lw_anisotropic_driver.py": "ebf22f6cc15252056fab11dbe9018d11fe39774a59352800405f87ad95087fa8",
+    "tests/pytests/test_isapol_lw_driver.py": "38fa46716669176f5eac29ab142089655e15572ecb982cf66b0130b2aa7c97b9",
+    ".pi/audit/lw-anisotropic-parent-installed-v2.log": "49e72a97c3629faae82749511296d70ee893bcc8557de5f499a8cdc6691638c9",
+    ".pi/audit/lw-anisotropic-parent-combined-v2.log": "83e56aeddc36b80225b273f1d016f63c53fb2d5c48ffcb46670014f637aeb486"
+  },
+  "staged_module_sha256": "3205333cbd2e300b63c41f7707db9adcf5daddea742afacee6e53dbf6dccdefc",
+  "staged_core_sha256": "40c589ae23394166d0a8a949348670896a6e6fcbbb3c8c4b4ed23ea7c05c0b72",
+  "checks": {
+    "installed_adapter_tests": {
+      "passed": 52,
+      "seconds": 1.33
+    },
+    "combined_isapol_fdds_tests": {
+      "passed": 1387,
+      "seconds": 14.71
+    },
+    "source_staged_module_identical": true,
+    "git_diff_check": "passed"
+  },
+  "review": {
+    "task": "dff5cb1a64ea4dc7438354d299be96552",
+    "answer_sha256": "3a2a499c3d9ab5382999b80babcfe038ea17730d7c687dad4aa7d9a290807184",
+    "outcome": "no must-fix within trusted factory boundary",
+    "subsequent_change": "test-only deterministic raw_local getter guard replaces backend-dependent asymmetry assertion; full rerun passed"
+  },
+  "policies": {
+    "production_lw_postcondition": 1e-06,
+    "historical_exception": "unchanged exact static input identity only",
+    "anisotropic_symmetry": "exact; no repair or fallback",
+    "quadrature": "explicit dynamic CP weights including Jacobian and 1/(2*pi) once"
+  },
+  "limitations": [
+    "Synthetic on-site input chain, no actual molecular dynamic response acceptance",
+    "No native generation, PFIT, oeprop registration or recoupled coefficients",
+    "Manually reconstructed LocalProperties outside trusted factory boundary",
+    "Rank1-3 unrestricted anisotropic coverage complete only through C8",
+    "Local audit logs are development artifacts, not portable runtime dependencies"
+  ]
+}

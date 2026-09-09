@@ -3,3 +3,17 @@
 !camcasp_isa_production_evidence.json
 !camcasp_isa_provider_evidence.json
 !camcasp_isa_basis_*.json
+!psi4_supplied_properties_evidence.json
+!psi4_multipole_transform_evidence.json
+!camcasp_response_cache_v9_evidence.json
+!psi4_pfit_evidence.json
+!psi4_anisotropic_dispersion_evidence.json
+!psi4_provisional_acceptance_evidence.json
+!psi4_orient_bridge_evidence.json
+!lw_translation_reference.json
+!psi4_lw_localization_evidence.json
+!psi4_lw_driver_evidence.json
+!orient_local/lw-hermetic-water.json
+!psi4_lw_anisotropic_driver_evidence.json
+!orient_local/lw-dynamic-water.json
+!psi4_lw_dynamic_evidence.json

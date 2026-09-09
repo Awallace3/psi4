@@ -1,0 +1,243 @@
+{
+  "schema_version": 1,
+  "scope": "bounded historical dynamic numeric import and strict production rejection; NOT molecular acceptance",
+  "files": {
+    "tests/pytests/data_isapol/orient_local/lw-dynamic-water.json": "132283408a5906e523231df9f99b1dcec2b88a29eb773b0c867e541a7eeced20",
+    "tests/pytests/data_isapol/oracle/extract_lw_dynamic.py": "ca67d79b078fb36f2bb9d1861ad7b4ba4d6daa6886c554edc0890f4d2cc1b966",
+    "tests/pytests/test_isapol_lw_dynamic.py": "252d43e8d616cdb5e2c0c7317f25f7b121481cf552615a989b08439f856a7282",
+    ".pi/audit/lw-dynamic-parent-measurement-v1.json": "16cd7dff91a18a80f4c820dea59b5c1c759f2d9cbf0431edd1e27a8adbe0c614",
+    ".pi/audit/lw-dynamic-parent-portable-v1.log": "6b1a15710a29d91ce7666dfb835185f0d53f08edcbfa64a433d440c992793336",
+    ".pi/audit/lw-dynamic-parent-combined-v1.log": "f7d699d7599c874780a4af264d5f2bf286b7d5342ed372692ef7498f7492d1fb"
+  },
+  "core_sha256": "40c589ae23394166d0a8a949348670896a6e6fcbbb3c8c4b4ed23ea7c05c0b72",
+  "literal_entries": 63000,
+  "production_tolerance": 1e-06,
+  "output_comparison_atol": 1e-11,
+  "output_comparison_rtol": 0,
+  "measured_output_entries": 0,
+  "expected_output_entries": 6750,
+  "molecular_gate": "BLOCKED",
+  "dispersion": null,
+  "nodes": [
+    {
+      "index": 1,
+      "status": "strict_rejected",
+      "worst_input_charge": {
+        "site": "H1",
+        "axis": "column",
+        "component": 12,
+        "terms": [
+          "0.3425922E+00",
+          "-0.5534322E+00",
+          "0.2101389E+00"
+        ],
+        "sum": "-0.0007011"
+      },
+      "nonlocal_header_agrees": true,
+      "L3_header_agrees": true,
+      "exception": "\nFatal Error: localize_lw: postcondition exceeds residual tolerance (off-site=2.20137e-11, charge-sum=0.0007011, reciprocity=5.76073e-12, molecular-sum=3.97904e-13, local-charge=0.0007011)\nError occurred in file: /home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/psi4/src/psi4/libisapol/lw_localization.cc on line: 567\nThe most recent 5 function calls were:\n\npsi::PsiException::PsiException(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, char const*, int)\n",
+      "local_output": null,
+      "output_error": null
+    },
+    {
+      "index": 2,
+      "status": "strict_rejected",
+      "worst_input_charge": {
+        "site": "H1",
+        "axis": "column",
+        "component": 12,
+        "terms": [
+          "0.3423555E+00",
+          "-0.5519155E+00",
+          "0.2088599E+00"
+        ],
+        "sum": "-0.0007001"
+      },
+      "nonlocal_header_agrees": true,
+      "L3_header_agrees": true,
+      "exception": "\nFatal Error: localize_lw: postcondition exceeds residual tolerance (off-site=2.1989e-11, charge-sum=0.0007001, reciprocity=5.73763e-12, molecular-sum=2.27374e-13, local-charge=0.0007001)\nError occurred in file: /home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/psi4/src/psi4/libisapol/lw_localization.cc on line: 567\nThe most recent 5 function calls were:\n\npsi::PsiException::PsiException(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, char const*, int)\n",
+      "local_output": null,
+      "output_error": null
+    },
+    {
+      "index": 3,
+      "status": "strict_rejected",
+      "worst_input_charge": {
+        "site": "H1",
+        "axis": "column",
+        "component": 12,
+        "terms": [
+          "0.3408978E+00",
+          "-0.5428760E+00",
+          "0.2012842E+00"
+        ],
+        "sum": "-0.0006940"
+      },
+      "nonlocal_header_agrees": true,
+      "L3_header_agrees": true,
+      "exception": "\nFatal Error: localize_lw: postcondition exceeds residual tolerance (off-site=2.18364e-11, charge-sum=0.000694, reciprocity=5.56888e-12, molecular-sum=3.97904e-13, local-charge=0.000694)\nError occurred in file: /home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/psi4/src/psi4/libisapol/lw_localization.cc on line: 567\nThe most recent 5 function calls were:\n\npsi::PsiException::PsiException(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, char const*, int)\n",
+      "local_output": null,
+      "output_error": null
+    },
+    {
+      "index": 4,
+      "status": "strict_rejected",
+      "worst_input_charge": {
+        "site": "H1",
+        "axis": "column",
+        "component": 12,
+        "terms": [
+          "0.3354123E+00",
+          "-0.5125124E+00",
+          "0.1764274E+00"
+        ],
+        "sum": "-0.0006727"
+      },
+      "nonlocal_header_agrees": true,
+      "L3_header_agrees": true,
+      "exception": "\nFatal Error: localize_lw: postcondition exceeds residual tolerance (off-site=2.12564e-11, charge-sum=0.0006727, reciprocity=5.0111e-12, molecular-sum=3.41061e-13, local-charge=0.0006727)\nError occurred in file: /home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/psi4/src/psi4/libisapol/lw_localization.cc on line: 567\nThe most recent 5 function calls were:\n\npsi::PsiException::PsiException(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, char const*, int)\n",
+      "local_output": null,
+      "output_error": null
+    },
+    {
+      "index": 5,
+      "status": "strict_rejected",
+      "worst_input_charge": {
+        "site": "H1",
+        "axis": "column",
+        "component": 12,
+        "terms": [
+          "0.3195360E+00",
+          "-0.4441015E+00",
+          "0.1239470E+00"
+        ],
+        "sum": "-0.0006185"
+      },
+      "nonlocal_header_agrees": true,
+      "L3_header_agrees": true,
+      "exception": "\nFatal Error: localize_lw: postcondition exceeds residual tolerance (off-site=1.95084e-11, charge-sum=0.0006185, reciprocity=3.78009e-12, molecular-sum=2.84217e-13, local-charge=0.0006185)\nError occurred in file: /home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/psi4/src/psi4/libisapol/lw_localization.cc on line: 567\nThe most recent 5 function calls were:\n\npsi::PsiException::PsiException(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, char const*, int)\n",
+      "local_output": null,
+      "output_error": null
+    },
+    {
+      "index": 6,
+      "status": "strict_rejected",
+      "worst_input_charge": {
+        "site": "H1",
+        "axis": "column",
+        "component": 12,
+        "terms": [
+          "0.2843318E+00",
+          "-0.3427914E+00",
+          "0.5794920E-01"
+        ],
+        "sum": "-0.00051040"
+      },
+      "nonlocal_header_agrees": true,
+      "L3_header_agrees": true,
+      "exception": "\nFatal Error: localize_lw: postcondition exceeds residual tolerance (off-site=1.53587e-11, charge-sum=0.0005104, reciprocity=2.03926e-12, molecular-sum=2.27374e-13, local-charge=0.0005104)\nError occurred in file: /home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/psi4/src/psi4/libisapol/lw_localization.cc on line: 567\nThe most recent 5 function calls were:\n\npsi::PsiException::PsiException(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, char const*, int)\n",
+      "local_output": null,
+      "output_error": null
+    },
+    {
+      "index": 7,
+      "status": "strict_rejected",
+      "worst_input_charge": {
+        "site": "H1",
+        "axis": "column",
+        "component": 12,
+        "terms": [
+          "0.2227380E+00",
+          "-0.2370958E+00",
+          "0.1401415E-01"
+        ],
+        "sum": "-0.00034365"
+      },
+      "nonlocal_header_agrees": true,
+      "L3_header_agrees": false,
+      "exception": "\nFatal Error: localize_lw: postcondition exceeds residual tolerance (off-site=9.05406e-12, charge-sum=0.00034365, reciprocity=8.63754e-13, molecular-sum=9.9476e-14, local-charge=0.00034365)\nError occurred in file: /home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/psi4/src/psi4/libisapol/lw_localization.cc on line: 567\nThe most recent 5 function calls were:\n\npsi::PsiException::PsiException(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, char const*, int)\n",
+      "local_output": null,
+      "output_error": null
+    },
+    {
+      "index": 8,
+      "status": "strict_rejected",
+      "worst_input_charge": {
+        "site": "O",
+        "axis": "column",
+        "component": 9,
+        "terms": [
+          "-0.1442420E+00",
+          "0.7220658E-01",
+          "0.7220658E-01"
+        ],
+        "sum": "0.00017116"
+      },
+      "nonlocal_header_agrees": true,
+      "L3_header_agrees": false,
+      "exception": "\nFatal Error: localize_lw: postcondition exceeds residual tolerance (off-site=4.11252e-12, charge-sum=0.00017116, reciprocity=3.83693e-13, molecular-sum=9.23706e-14, local-charge=0.00017116)\nError occurred in file: /home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/psi4/src/psi4/libisapol/lw_localization.cc on line: 567\nThe most recent 5 function calls were:\n\npsi::PsiException::PsiException(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, char const*, int)\n",
+      "local_output": null,
+      "output_error": null
+    },
+    {
+      "index": 9,
+      "status": "strict_rejected",
+      "worst_input_charge": {
+        "site": "O",
+        "axis": "column",
+        "component": 12,
+        "terms": [
+          "0.1477993E+00",
+          "-0.7392969E-01",
+          "-0.7392969E-01"
+        ],
+        "sum": "-0.00006008"
+      },
+      "nonlocal_header_agrees": true,
+      "L3_header_agrees": false,
+      "exception": "\nFatal Error: localize_lw: postcondition exceeds residual tolerance (off-site=9.8255e-13, charge-sum=6.008e-05, reciprocity=3.90799e-14, molecular-sum=1.24345e-14, local-charge=6.008e-05)\nError occurred in file: /home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/psi4/src/psi4/libisapol/lw_localization.cc on line: 567\nThe most recent 5 function calls were:\n\npsi::PsiException::PsiException(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, char const*, int)\n",
+      "local_output": null,
+      "output_error": null
+    },
+    {
+      "index": 10,
+      "status": "strict_rejected",
+      "worst_input_charge": {
+        "site": "O",
+        "axis": "column",
+        "component": 12,
+        "terms": [
+          "0.7501674E-02",
+          "-0.3752332E-02",
+          "-0.3752332E-02"
+        ],
+        "sum": "-0.000002990"
+      },
+      "nonlocal_header_agrees": true,
+      "L3_header_agrees": false,
+      "exception": "\nFatal Error: localize_lw: postcondition exceeds residual tolerance (off-site=3.93489e-14, charge-sum=2.99e-06, reciprocity=3.05311e-16, molecular-sum=3.88578e-16, local-charge=2.99e-06)\nError occurred in file: /home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/psi4/src/psi4/libisapol/lw_localization.cc on line: 567\nThe most recent 5 function calls were:\n\npsi::PsiException::PsiException(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, char const*, int)\n",
+      "local_output": null,
+      "output_error": null
+    }
+  ],
+  "verification": {
+    "portable_tests": 71,
+    "prohibited_python_io_process_attempts": 0,
+    "combined_tests": 1458,
+    "combined_seconds": 14.92
+  },
+  "review": {
+    "task": "d468bf5c8ac42af0f40aa9306516b5cdf",
+    "answer_sha256": "0406163cc9d9bd770775fad2799ae2f7efc533359c84862efca0ef26fc45bc60",
+    "outcome": "no must-fix for bounded import/strict rejection"
+  },
+  "limitations": [
+    "Chosen CasimirGrid(10,0.5), not certified exact producer quadrature",
+    "Historical shell generator commands unverified",
+    "Four unrefined L3 header failures retained",
+    "No candidate local tensors exposed by strict exceptions",
+    "No dynamic tolerance exception or fixture repair authorized",
+    "Python portability audit is not native syscall sandbox",
+    "Local audit artifacts not portable runtime dependencies"
+  ]
+}

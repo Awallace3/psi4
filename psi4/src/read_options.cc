@@ -312,6 +312,21 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- Tolerance for pseudoinversion of grid point overlap matrix (Parrish 2012 eq. 30) !expert -*/
     options.add_double("LS_THC_S_EPSILON", 1.0E-10);
 
+    /*- Atomic density partition policy, separate from tensor localization. -*/
+    options.add_str("PARTITION_SCHEME", "ISA_A", "ISA_A MBIS");
+    /*- Distributed tensor localization policy for native atomic response. -*/
+    options.add_str("ATOMIC_RESPONSE_LOCALIZATION", "LW", "LW LS");
+    /*- Explicit generated demonstration basis recipe, not a CamCASP preset. -*/
+    options.add_str("ATOMIC_PROPERTY_RECIPE", "GENERATED_JKFIT_ISA_A", "GENERATED_JKFIT_ISA_A");
+    /*- Dedicated ISA quadrature radial resolution. -*/
+    options.add_int("ATOMIC_PROPERTY_RADIAL_POINTS", 160);
+    /*- Dedicated ISA quadrature angular resolution. -*/
+    options.add_int("ATOMIC_PROPERTY_SPHERICAL_POINTS", 590);
+    /*- Dedicated native ALDA response radial resolution, separate from ISA and SCF. -*/
+    options.add_int("ATOMIC_RESPONSE_RADIAL_POINTS", 99);
+    /*- Dedicated native ALDA response angular resolution, separate from ISA and SCF. -*/
+    options.add_int("ATOMIC_RESPONSE_SPHERICAL_POINTS", 590);
+
     /// MBIS Options (libmints/oeprop.cc)
 
     /*- Maximum Number of MBIS Iterations -*/

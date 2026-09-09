@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "profile": "provisional-1e-3",
+  "strict_threshold": 1e-09,
+  "provisional_threshold": 0.001,
+  "comparisons": [
+    {
+      "stage": "raw-tail",
+      "report": ".pi/audit/provisional-parent-trajectory-v2.json",
+      "report_sha256": "ee895c89fbb87d877546e8e2d9731d0f302233b5fc21d3cff9ad1b7da41e4b7a",
+      "strict_passed": false,
+      "provisional_passed": true,
+      "selected_profile": "provisional-1e-3",
+      "selected_profile_passed": true,
+      "errors": {
+        "deltas": {
+          "max_absolute": 8.104628079763643e-15,
+          "max_scaled": 8.104628079763643e-15
+        },
+        "max_delta": {
+          "max_absolute": 4.9960036108132044e-15,
+          "max_scaled": 4.9960036108132044e-15
+        },
+        "history_max_delta": {
+          "max_absolute": 4.9960036108132044e-15,
+          "max_scaled": 4.9960036108132044e-15
+        },
+        "next_controls": {
+          "max_absolute": 0.0,
+          "max_scaled": 0.0
+        },
+        "history_controls": {
+          "max_absolute": 0.0,
+          "max_scaled": 0.0
+        },
+        "atom1_D": {
+          "max_absolute": 1.9340795631705987e-10,
+          "max_scaled": 2.812407757679048e-11
+        },
+        "atom1_W": {
+          "max_absolute": 1.9340795631705987e-10,
+          "max_scaled": 2.812407757679048e-11
+        },
+        "atom1_charge": {
+          "max_absolute": 3.197708764446361e-10,
+          "max_scaled": 3.6305710114977744e-11
+        },
+        "atom1_history_charge": {
+          "max_absolute": 3.197708764446361e-10,
+          "max_scaled": 3.6305710114977744e-11
+        },
+        "atom1_cutoff": {
+          "max_absolute": 0.0,
+          "max_scaled": 0.0
+        },
+        "atom1_tail": {
+          "max_absolute": 1.6357202348160627e-07,
+          "max_scaled": 2.3588804665973028e-08
+        },
+        "atom2_D": {
+          "max_absolute": 1.8402682155915784e-10,
+          "max_scaled": 1.8402682155915784e-10
+        },
+        "atom2_W": {
+          "max_absolute": 1.8402682155915784e-10,
+          "max_scaled": 1.8402682155915784e-10
+        },
+        "atom2_charge": {
+          "max_absolute": 5.058820029546496e-11,
+          "max_scaled": 5.058820029546496e-11
+        },
+        "atom2_history_charge": {
+          "max_absolute": 5.058820029546496e-11,
+          "max_scaled": 5.058820029546496e-11
+        },
+        "atom2_cutoff": {
+          "max_absolute": 0.0,
+          "max_scaled": 0.0
+        },
+        "atom2_tail": {
+          "max_absolute": 2.4427939115945208e-09,
+          "max_scaled": 9.102135660528141e-10
+        },
+        "atom3_D": {
+          "max_absolute": 2.0729571531541424e-10,
+          "max_scaled": 2.0729571531541424e-10
+        },
+        "atom3_W": {
+          "max_absolute": 2.0729571531541424e-10,
+          "max_scaled": 2.0729571531541424e-10
+        },
+        "atom3_charge": {
+          "max_absolute": 2.575513136093832e-10,
+          "max_scaled": 2.575513136093832e-10
+        },
+        "atom3_history_charge": {
+          "max_absolute": 2.575513136093832e-10,
+          "max_scaled": 2.575513136093832e-10
+        },
+        "atom3_cutoff": {
+          "max_absolute": 0.0,
+          "max_scaled": 0.0
+        },
+        "atom3_tail": {
+          "max_absolute": 7.592402262446285e-10,
+          "max_scaled": 2.829017775349731e-10
+        }
+      },
+      "tightening_todo": 9,
+      "scope": "Retained exported-fixed-density trajectory recomparison; no fresh controller execution"
+    },
+    {
+      "stage": "native-drho",
+      "report": ".pi/audit/provisional-parent-drho-v1.json",
+      "report_sha256": "5b5e8bee403e34e385c7566de0c45db1ffe7f616fca8768793d13f0103347320",
+      "strict_passed": false,
+      "provisional_passed": false,
+      "selected_profile": "provisional-1e-3",
+      "selected_profile_passed": false,
+      "errors": {
+        "metric": {
+          "max_absolute": 2.9103830456733704e-10,
+          "max_scaled": 6.935511861624798e-16
+        },
+        "rhs": {
+          "max_absolute": 8.731149137020111e-11,
+          "max_scaled": 4.261279366058036e-16
+        },
+        "coefficients": {
+          "max_absolute": 0.04458958227804288,
+          "max_scaled": 0.0012802188514176112
+        },
+        "fitted_electrons": {
+          "max_absolute": 8.840927989695047e-12,
+          "max_scaled": 8.840927975918142e-13
+        },
+        "sampled_density": {
+          "max_absolute": 0.00014250481785893498,
+          "max_scaled": 6.130116422102165e-07
+        }
+      },
+      "tightening_todo": 10,
+      "scope": "Fresh native C++ Drho-C fit with supplied reference molecular inputs"
+    },
+    {
+      "stage": "native-ov",
+      "report": ".pi/audit/provisional-parent-ov-v1.json",
+      "report_sha256": "8bcf0fffe1175de9998bec5d210c0a1bfd1477ad010d0d73b67fd3b1cb43ab84",
+      "strict_passed": false,
+      "provisional_passed": true,
+      "selected_profile": "provisional-1e-3",
+      "selected_profile_passed": true,
+      "errors": {
+        "metric": {
+          "max_absolute": 1.7905676941154525e-12,
+          "max_scaled": 1.597559351988609e-14
+        },
+        "coefficients": {
+          "max_absolute": 0.0009040851995152366,
+          "max_scaled": 2.3019798321950356e-05
+        },
+        "sampled_transition_density": {
+          "max_absolute": 5.895789788880419e-06,
+          "max_scaled": 5.0303437185125854e-08
+        }
+      },
+      "tightening_todo": 11,
+      "scope": "Fresh native-integral + supplied-C NumPy transition-fit diagnostic"
+    }
+  ],
+  "current_comparator_sha256": {
+    "provisional_acceptance.py": "7c882eea8bd65aaa7e93677d97acb8f465e38a9b18e8d5b059e1190dc18c4528",
+    "compare_isa_trajectory.py": "3f0a0a0f6e50543cf1bc76f078cad0c87e48bb004d148fbe40af8315b5de6107",
+    "compare_native_drho.py": "794b67c898f388fea73610f663f8c73d8b8ecef9fd7a9af3f953457e316d858e",
+    "compare_native_ov.py": "8022fcfd6929c303c7a9cbaaa8ce5eaf8e69eb98e6d329cdb984df09c66123e8"
+  },
+  "provenance_note": "Each measurement report preserves its own before/after source/input/core hashes; current comparator hashes are not retroactive execution attestations.",
+  "combined_tests": {
+    "passed": 1061,
+    "seconds": 6.3,
+    "log_sha256": "88faef4ecb134bdddcd5c0fc4555001f21c5b58751ecdf3b680c58b072abd255"
+  },
+  "source_review_answer_sha256": "13ca2c234cc7922fc1bec64807d4d6023dc6dc0c546f2da9f96e6c9dae0d0879",
+  "review_followup": "Custom-tolerance compatibility finding fixed and regression-tested after review; no second independent review claimed.",
+  "end_to_end_passed": false,
+  "remaining_todos": [
+    9,
+    10,
+    11,
+    12
+  ],
+  "limitations": [
+    "Only explicit forward-error allowlists relaxed; structural/solver/provenance checks unchanged",
+    "Native Drho coefficient error remains above1e-3",
+    "Production C++ OV/native response/localization integration is not certified",
+    "Custom-tolerance legacy reports are not named-profile certificates"
+  ]
+}

@@ -119,7 +119,8 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
         if (is_hybrid_ && nov < static_cast<size_t>(auxiliary_->nbf()))
             throw PSIEXCEPTION("FDDS_Monomer: hybrid QR requires nov >= naux; no alternate rank policy is applied");
         for (const auto& key : matrix_cache_check) matrix_cache_[key] = matrix_cache_.at(key)->clone();
-        for (const auto& key : vector_cache_check) vector_cache_[key] = vector_cache_.at(key)->clone();
+        for (const auto& key : vector_cache_check)
+            vector_cache_[key] = std::make_shared<Vector>(*vector_cache_.at(key));
     }
 
     // ==> Form Metric <==

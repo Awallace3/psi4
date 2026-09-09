@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "event_schema": 8,
+  "observer_validated": true,
+  "validation_basis": "Specific witnessed fresh attempt6 serial build, traced/untraced runs, 35 byte-identical artifacts, strict replay",
+  "scope": "Adapted response-only H2O old/internal reference; bounded fixed-geometry monomer cache provenance",
+  "reader_observer_validated": false,
+  "reader_structural_provenance_complete": true,
+  "reference_commit": "63b16a22b9bae597fe81ecdb8b8d91c21868c814",
+  "source_sha256": {
+    "src/df_Smat.F90": "6d73f2a840245746f1d934833e5104822ec7afe7c218c9721d6a712f88bf14de",
+    "src/densfit_prop.F90": "97031bf4ccef2b137b5504950753def7a3bc542663b9ac9a30e706e35932b9eb",
+    "src/prop_utilities.F90": "d7da0e5dbb38ac2bd71a8baa9596c2f623f26b6c75e3dab59eefe4c53beeb69e",
+    "src/polarizability.F90": "b0f4fed2e0622684a7758ed48dc1abbd61cfe6337672a01e37eec56329f443f7",
+    "Makefile_body": "d9fce8eca3fd552e01cb0e9f3eae4ccf02398b09cce6e6396bb9924dc37902b8",
+    "src/df_data.f90": "97a725247ef0462bbfe82e4a6078c165102f36400e79d4dc2f7574bbf993c123",
+    "src/df_utilities.F90": "ace9446355cfb5a106d4a411e1dc50b5bf65de70a1e56d494ebe0afa4a626c5b",
+    "src/df_monomer.F90": "91f7507a4e78a1d78d7bb2b248df2ed70d001d217f5412b32dc4d567488fd5b1",
+    "src/df_integrals.F90": "349fc86f5e7975c3e5e5603865b3ef0adc3a34cc0776c316a37dbce9a517164c",
+    "src/molecular_orbitals.F90": "636931336c96906c91085cab82a22ea5a37da2048f1766861ca908a7ea1acdbc",
+    "src/matrix_operations_types.F90": "c15be38b26a1f35ced931665b91be3bdba96de23ab19812669d8cc84c12956e5",
+    "src/num_integrals.F90": "d219e62508f61f792c43c1c6142b180657b5d8ed23dff8bab77578aaf4b180a6",
+    "src/function_expansion_operations.F90": "fa0cbe36a863fd28bf07ed4a719337b6babb786c77f8fee080e4a5b146e0a2f0",
+    "src/df_integral_utilities.F90": "0a39ab4a39670b64baf973497a8f56c8e463c2e12d3d4995a9f6b186c243157d",
+    "src/df_integrals_for_df.F90": "17e371995e8c0d53c87defeb58504f863e46576004a45a0b15a553712cc71737",
+    "src/df_int_operations.F90": "06d8587b77fbe2b44602c3973df8b33c5ecc30db1591b56b5c379d7e2cd51154"
+  },
+  "instrumented_sha256": {
+    "src/df_Smat.F90": "3a80cf788e6d198482506cab5833dc2f2a1ea77a1c6ef08e78cc931b03d86b0f",
+    "src/densfit_prop.F90": "3cd80a0610d4330c0c8e07aa0330726c2b9cd0dd3173917d4144257d9d2f5701",
+    "src/prop_utilities.F90": "356d91e78242fce6e6025dd5a3ae9b4012dbd3308a3767734692c02268737d2a",
+    "src/polarizability.F90": "86a8c1b7d4952ec1061be14b026e0cecf108db3b542d0da768c61502c65f8859",
+    "Makefile_body": "f63e1911b2b8ed26867de97c62f653dbd7f94e7b1ef91aa94dd074829c23de3f",
+    "src/df_data.f90": "dacd113cde4ed5d31409076701cf6289cd9fcaa31ae46dd067e48916acfbe150",
+    "src/df_utilities.F90": "8d113f4675a30dce19f29f4159cfae24a36b9d9297046c064f88aff0d25af0e7",
+    "src/df_monomer.F90": "6c43fdc3db6941210fbfd2cdca89b64485670444f85b34c1162436bfc6c5727f",
+    "src/df_integrals.F90": "b7594e557a037f04fb5428797dc4c67cb56d5f0f97db013a2516c572a9add943",
+    "src/molecular_orbitals.F90": "ea17223e9c47678d3ac86a28c31cdca4fc81b489f6bfc4bd13c2138758c9ec18",
+    "src/matrix_operations_types.F90": "5207799489a4f8ac9d229e635837460cbfa5536287f86d425c04e17099e72353",
+    "src/num_integrals.F90": "20043fba354221f6fc4883a41d343b67c2adfce2f9d6f5518c57917cbcde24a5",
+    "src/function_expansion_operations.F90": "9bbbe4dfd44e80a387b9a1f00efd67b2d255dd757e9244691f83032ede4ca71e",
+    "src/df_integral_utilities.F90": "943679f8dba8ccae7d2c02d25f18f8d21227535ac6c248a17376d598b9df2cae",
+    "src/df_integrals_for_df.F90": "ca83ac1fc223490a33bd4be15bd8da1cafb038db08467c0489564991cab91b2e",
+    "src/df_int_operations.F90": "7e9dede2a2d01e1bb461018d14147689d12178d435397fdc0daf9089db4b6207"
+  },
+  "capture_sha256": "89afb263234679d95334feda3b26a08da0d58ec4add612140981592b763a999f",
+  "scaffold_sha256": "3876b7a6fde482851e5288abbbbee2f632f64720ac35807659eaece4ca3cc128",
+  "serializer_sha256": "12b63add003f183ffd63322a0b08c8f9d8299cc80fabb22ea63da60094023439",
+  "build_log_sha256": "a488248a10aebd4254e028da4258159500b5e32dd5c14fb5d546b1f02943ec24",
+  "legacy_build_log_sha256": "40c2cd9390c527b5fce758a9b621bd3344022561a9ea4839b0d7bc02b949560a",
+  "inherited_gaussint_compile_prefix": "gfortran -O1 -std=legacy -DG77 -DCADPAC -DGAMESS -DSAPT2002 -DSIGNED_INTEGER -DERF  -DF2003",
+  "build": {
+    "serial": true,
+    "FFLAGS": "-O2 -DG77 -DCADPAC -DGAMESS -DSAPT2002 -DSIGNED_INTEGER -DERF -DF2003 -fno-backslash -fimplicit-none -fallow-argument-mismatch -ffp-contract=off",
+    "FFLAGS2": "-O2 -DG77 -DCADPAC -DGAMESS -DSAPT2002 -DSIGNED_INTEGER -DERF -DF2003 -fallow-argument-mismatch -ffp-contract=off",
+    "LIBS": "-llapack -lblas",
+    "LDFLAGS": ""
+  },
+  "executable_sha256": "5e566929e964370f7f095e8137468bac80df063b005658affa1b98e0c8254ff3",
+  "runner_sha256": "e927ad09e129d48c820110abf892fb83ac019462e8cd6f651e2dd2ba5a36f0d6",
+  "verifier_sha256": "1eda2d73f41751662761012358bc8bbbcfd8c4749b0e7f9ce26c142d9f27aa88",
+  "reader_sha256": "c5487165229abd92c675c998c6844d0289f0235c18b02fa83b216d8e3d8d1e80",
+  "cache_reader_sha256": "85ce363a2023a8657c5e69d4256f3d067f4c7806e5e379b1d92f84647e3d7580",
+  "input_sha256": {
+    "H2O-A-asc.movecs": "75e27de1847aa98519cd210a98302f21e75a4f640d0f180731a781dcf96f4513",
+    "H2O-A.basis": "662784ae2140e256471ac51253c220f0affe3b8ece8237df22179734b5b8ba54",
+    "H2O-response.cks": "875363bbe0955c5799079947a17492b899496e4fcbc81e275bf3695d3521e8ae"
+  },
+  "tool_sha256": {
+    "python": "c4385d6d0ac636a97235ced6897b29668f3725a8a57ee98a6ad63c9023f5bfb1",
+    "gfortran": "7199ab4ac9d00e062d4788573af2fa0606f00449e551f25db798eb8b5307c2ad",
+    "make": "d78b8f1d099fbcfb6f2f49ab87223b9b68fb3956642f92d6ec6de812e8afa965"
+  },
+  "event_count": 4855,
+  "event_counts": {
+    "ORBITALS": 1,
+    "CACHE_CHECK": 34,
+    "METRIC_REQUEST": 10,
+    "METRIC_BUILD_BEGIN": 2,
+    "J": 2,
+    "METRIC_J_LINK": 2,
+    "METRIC_BUILD_END": 2,
+    "METRIC_END": 2,
+    "SOLVE_BEGIN": 2,
+    "FIT_BEGIN": 1,
+    "FIT_A": 1,
+    "FIT_RHS_BLOCK": 1,
+    "FIT_END": 1,
+    "SOLVE_END": 2,
+    "FIT_METADATA": 22,
+    "OO_ROW": 30,
+    "OV_ROW": 870,
+    "VV_ROW": 3828,
+    "KERNEL_DENSITY": 1,
+    "NUMERICAL_KERNEL_POLICY": 1,
+    "KERNEL_SOURCE": 1,
+    "KERNEL": 1,
+    "PROJECTION": 1,
+    "KERNEL_OVOV_RAW": 1,
+    "DIAGONAL_ENERGIES": 2,
+    "DSD_REQUEST": 4,
+    "DSD_COMPLETE": 2,
+    "HESSIAN_TENSOR": 4,
+    "H1": 1,
+    "H2": 1,
+    "POLICY": 11,
+    "CDF": 11
+  },
+  "disabled_event_count": 0,
+  "artifact_sha256": {
+    "TMP_D____a": "035f5e51358b95598a18e98f3b62ef6c9f2665e22274c29c683808dd61eec9c1",
+    "TMP_D_c__a": "cba9cad51d5d9ae37513607a1fa4b9f48640d8e58eec9e7d5362d5d9d41b8cc6",
+    "TMP_Doo__a": "71aa8a6c63cccec5dfa5c8cf098658a68e440618c85cae8021dd2097ea607f38",
+    "TMP_Dooc_a": "6e72c4163a567cafb80f9e11e8c88c9b59b8ff8042530df383b745dc10edbed2",
+    "TMP_Dov__a": "209a6e87962d3957fcd1a38c2c8010dc044013bb16bc24ab5312214a945275ac",
+    "TMP_Dovc_a": "740eea905b54513edf403bf17d19e33187a1e9bd2662916c1641e718c0a1d213",
+    "TMP_DrhoCa": "bf586796e2ca358bbaf640376264ac46840f0537abc7c8b575cae158e5c4e0c7",
+    "TMP_Drho_a": "3772c8a8e533e3595ff48af1849488fa5267ba40e0c5e168069f4df05f14f249",
+    "TMP_Dvv__a": "8ddafd97457de7b42995185567039a40b384979b8969e2b77c72bfda7d2e3c26",
+    "TMP_Memory_usage.dat": "5ca9db14b1db875b32086fbb9dd1980d6fe3a91e57fa4e224bd4bf8f817eb9a6",
+    "TMP_S____a": "278ec053b4faacaa42701ef8713b361dd8bc02b4bd729e0e81fd1e51cad4456c",
+    "TMP_TAO__a": "e2c771d80ab0afd2fb4fee0f8eb548674b123277d6d51ede2dd29f994d46597b",
+    "TMP_T____a": "2880c7a6ac8eacb2bef9ab277307895cbac32100de99ef0a6e256541aa4ccb4c",
+    "TMP____003": "2a788017a1d8303599f58f83fd2b2e30c27c71446179bb6d566ce6ed69d9b429",
+    "TMP____004": "885951c1c10edcf4c3eb50cc20b4dee807386b2fd0a7ac1004ed801fd2275aaf",
+    "TMP____005": "0343ab6842e1ddb781f00d1494eaf4b4abcfa4b3710855b8b5d6c9c1b018a95f",
+    "TMP____006": "42dd4becefcc7277fd7c9bd1d4c1f249dbd9c878d314006a8c95a03064bc95ca",
+    "TMP____007": "d13c558243a84b834bb320837d9c7bb2876fdc48a9d76c8a38f4189ae6d93253",
+    "TMP____008": "972cbf1648b324022ef5ffd9e1339eeb71fa6068413bf5deef41b809cf252302",
+    "TMP____009": "d4d940482185882483399ee88e9089d3e60d278dc424eb46679ac846b944d71e",
+    "TMP____010": "c37e94782a26d29085a3b014fdec93fa3a1b63a88b00cb207e8c91643dab767a",
+    "TMP____011": "f50772ee0ee62390f211edcf5b3b99a5a2cb228a3bd0955731cf69dd99ebda5d",
+    "TMP____012": "d354fdba7898ad20acce768e6e214dc5e13fddaa1f14cb60cb4f93126f4a0587",
+    "TMP____013": "5b830cfa897fdcd7d61574c8b1ed0bd4f902e0ae366084d9c8c4d5686d5bcdf3",
+    "TMP____014": "a1ad6a47ed89eb9c5940cf8d03f9555eb8110f591aab5df13c8d7af05d488888",
+    "TMP____015": "f66dd6b224f60ad8b4e33e83e9eac2068d4cf1b53a0fb2f5207fe12a471b36d4",
+    "TMP____016": "8753e3f34b6528bc8602c0ad0ddbcc143b6178c5416d38440bb6e53624cebdd0",
+    "TMP____017": "c908f2befd7a96ad796dd5da0978d01391126f19f23fef37489d171f83ce4e57",
+    "TMP____018": "05c4e48d0df8d9d13437347ff529320535834c9fc88b2373a791a5a43b2cb330",
+    "TMP____019": "5210500c14d814ca31d56286bdd9cfdb2d4b43f18f2044a6904ea29372da371b",
+    "TMP____020": "9db0fab8c88645fdd3cfeb3b951a69de53127ba3218f15d315f874013bfcce72",
+    "TMP____021": "efd69bf5b8e94158fca30c0e46708d78338247a7962b551f7976d3963e7f2298",
+    "data-summary.data": "318404ef4c2cdea662b718407773791d67b39dc9fd016038ed5efec9ff8cf2d0",
+    "pol_out_fmtA.pol": "26afef6f5e7dbf0de93468f90ed6da009e2e5b722ac2c8ea099eb2eeb1b0dd8b",
+    "warnings.log": "e1fc449d3bc17b4b8bba3d15edc7886c2c8bc02165a20034289b5854497221b2"
+  },
+  "trace_comparison_sha256": "7d3aeb512fb07eb1b4b92c2dee8186e67e064d0c77caf758bb7409deb65149e4",
+  "replay_sha256": "dcbb7d3127b01ca00f765021ab3b792184c2b2bba7de5f26363eb970ce5cdbf2",
+  "scaled_tolerance": 1e-09,
+  "metric_generations": 2,
+  "tensor_generations": 2,
+  "consumers": [
+    {
+      "cached": false,
+      "generation": 4786,
+      "metric_route": "DF_SC",
+      "producer_j": 12
+    },
+    {
+      "cached": false,
+      "generation": 4794,
+      "metric_route": "DF_SC",
+      "producer_j": 12
+    },
+    {
+      "cached": true,
+      "generation": 4786,
+      "metric_route": "DF_SC",
+      "producer_j": 12
+    },
+    {
+      "cached": true,
+      "generation": 4794,
+      "metric_route": "DF_SC",
+      "producer_j": 12
+    }
+  ],
+  "density_reconstruction": [
+    {
+      "density_serial": 4774,
+      "source_start": 493,
+      "max_absolute": 0.0,
+      "max_scaled": 0.0
+    }
+  ],
+  "h1_error": {
+    "max_absolute": 0.0,
+    "max_scaled": 0.0
+  },
+  "h2_error": {
+    "max_absolute": 0.0,
+    "max_scaled": 0.0
+  },
+  "raw_fit_errors": [
+    {
+      "max_absolute": 0.0,
+      "max_scaled": 0.0
+    }
+  ],
+  "max_cdf_scaled_error": 5.644276459242761e-19,
+  "limitations": [
+    "No native fit, tail, localization, numerical quadrature, or end-to-end acceptance",
+    "Guard/source tests do not imply runtime coverage of every unsupported branch",
+    "Reference run selects molecule A; B mapping and rebuilds covered by source/synthetic tests",
+    "Not universal filesystem/reference-object mutation tracking; pinned bounded call path only",
+    "Prior schema7/v8 evidence remains separate and cache-incomplete"
+  ],
+  "event_manifest_note": "All event hashes retained in parent evidence, identified by the SHA256 below.",
+  "parent_evidence_sha256": "12da28db95f459cf3207abc6b34fdbdd83aeb39195765c835e62a14c2ddcbee8",
+  "independent_review_answer_sha256": "8ba2b8f731bc7058ad1c0efa001192f59673a3ad12e4f286b35c11dbc7e0a287",
+  "worker_status": "Timed out during handoff; parent independently verified preserved artifacts.",
+  "combined_tests": {
+    "passed": 882,
+    "seconds": 5.69,
+    "log_sha256": "da4185fc7002187a0989b0805151cb7046e9025b9e6bf81f371fe236d7b1b18d"
+  }
+}

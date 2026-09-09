@@ -1,0 +1,31 @@
+{
+  "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_ref_wt4_L3_C12.pot",
+  "source_sha256": "ebb436c8ccc3ac62e805996b4fb26c7e3af1db18c3489317c943418214e2b38c",
+  "convention": "00 00 0 rotational scalar; compare only isotropic even orders; C12 rank3 partial",
+  "rows": [
+    {
+      "pair": [
+        "O",
+        "O"
+      ],
+      "line": 18,
+      "text": "    00   00   0   17.25559         0.0          346.4240         0.0          7484.441         0.0          127231.0"
+    },
+    {
+      "pair": [
+        "H",
+        "O"
+      ],
+      "line": 999,
+      "text": "    00   00   0   5.382332         0.0          83.90759         0.0          1523.525         0.0          20293.77"
+    },
+    {
+      "pair": [
+        "H",
+        "H"
+      ],
+      "line": 2841,
+      "text": "    00   00   0   1.698678         0.0          18.32833         0.0          291.4843         0.0          3216.541"
+    }
+  ]
+}

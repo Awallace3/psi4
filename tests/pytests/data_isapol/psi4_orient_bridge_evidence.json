@@ -1,0 +1,574 @@
+{
+  "schema_version": 1,
+  "scope": "Supplied external ORIENT localized/refined tensors to atomic summaries and computed C_n",
+  "computed_status": "available",
+  "native_verified": false,
+  "wavefunction_first": false,
+  "artifact": ".pi/audit/orient-bridge-supplied-properties-v3.json",
+  "artifact_sha256": "308b73d9bc2f86374ba8cbe8a250efe2972de1c0a22909b3ef27db53b8d011c3",
+  "core_sha256": "cf2af5507e01cbc3583bf92b17e9a29072961b6063883622a7401f0362bf72de",
+  "source_sha256": {
+    "psi4/driver/procrouting/isapol_supplied.py": "629ea3d9d856b7715d17c07be9b92457b0cce591d034ca41d6d9b2cefcaa249a",
+    "tests/pytests/data_isapol/oracle/run_supplied_local_properties.py": "a742942af758d1430ea84e502d3f1906c2233e8cce2867b7bffa7d094b7e9d4d",
+    "tests/pytests/test_isapol_orient_import.py": "556da55c78822bffbbfd25d083d7e9b518424c271ec9ee3bdcea1c293551dae1",
+    "tests/pytests/test_isapol_supplied_driver.py": "27206d2cbec949ac339f223f429a197d680b705b3ef78afbb524d600f09db3a3"
+  },
+  "manifest_sha256": "dea5868b6f9bb9ec2ed77ace9d3dd0ce7cf6238c7394af1de4fa8778d5f275f0",
+  "focused_tests": {
+    "passed": 54,
+    "seconds": 6.55,
+    "log_sha256": "f60bbbca0ba212b87fcf35038880ed4983cabe46455273a7454243779c362308"
+  },
+  "combined_tests": {
+    "passed": 1152,
+    "seconds": 13.67,
+    "log_sha256": "8be39f64d0c3706fed964e915bac6834ac41856273cbfe598113fec1823e0bd5"
+  },
+  "review_answer_sha256": "94c88fde7541eae29d840390fd2a181f5890768b8bc4ce82d0b778bb5ce70117",
+  "isotropic_pairs": 9,
+  "anisotropic_pairs": 9,
+  "static_atomic_scalars": {
+    "O": [
+      6.129740498218001,
+      22.472039481722202,
+      150.1788804736037
+    ],
+    "H1": [
+      1.7335580596856666,
+      3.8934647022055997,
+      20.27965969697386
+    ],
+    "H2": [
+      1.7335580596856666,
+      3.8934647022055997,
+      20.27965969697386
+    ]
+  },
+  "oo_isotropic": [
+    {
+      "order": 6,
+      "value": 17.25558575556027,
+      "included": [
+        [
+          1,
+          1
+        ]
+      ],
+      "missing": [],
+      "unrestricted_complete": true,
+      "declared_model_complete": true,
+      "energy": null
+    },
+    {
+      "order": 8,
+      "value": 346.4239586717264,
+      "included": [
+        [
+          1,
+          2
+        ],
+        [
+          2,
+          1
+        ]
+      ],
+      "missing": [],
+      "unrestricted_complete": true,
+      "declared_model_complete": true,
+      "energy": null
+    },
+    {
+      "order": 10,
+      "value": 7484.441267944163,
+      "included": [
+        [
+          1,
+          3
+        ],
+        [
+          2,
+          2
+        ],
+        [
+          3,
+          1
+        ]
+      ],
+      "missing": [],
+      "unrestricted_complete": true,
+      "declared_model_complete": true,
+      "energy": null
+    },
+    {
+      "order": 12,
+      "value": 127231.00898599371,
+      "included": [
+        [
+          2,
+          3
+        ],
+        [
+          3,
+          2
+        ]
+      ],
+      "missing": [
+        [
+          1,
+          4
+        ],
+        [
+          4,
+          1
+        ]
+      ],
+      "unrestricted_complete": false,
+      "declared_model_complete": true,
+      "energy": null
+    }
+  ],
+  "comparisons": [
+    {
+      "name": "serialized_casimir_data:O",
+      "max_absolute_error": 4.7700012828499894e-08,
+      "tolerance": 5.000083650642965e-08,
+      "agreement": true,
+      "convention": "local real Racah; ten dynamic nodes; per-token half-place plus input rounding",
+      "checked_points": 2250,
+      "max_printed_units": 0.9978807138214467,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "serialized_casimir_data:H1",
+      "max_absolute_error": 4.818001997364263e-09,
+      "tolerance": 5.000574667225344e-09,
+      "agreement": true,
+      "convention": "local real Racah; ten dynamic nodes; per-token half-place plus input rounding",
+      "checked_points": 2250,
+      "max_printed_units": 0.9929890571728743,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "serialized_casimir_data:H2",
+      "max_absolute_error": 4.818001997364263e-09,
+      "tolerance": 5.000574667225344e-09,
+      "agreement": true,
+      "convention": "local real Racah; ten dynamic nodes; per-token half-place plus input rounding",
+      "checked_points": 2250,
+      "max_printed_units": 0.9929890571728743,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_L3_000.pol",
+      "max_absolute_error": 0.0,
+      "tolerance": 5e-08,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.0,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_NL4_000.pol",
+      "max_absolute_error": 0.0,
+      "tolerance": 5e-08,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.0,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_L3_001.pol",
+      "max_absolute_error": 1.3166741003221784e-08,
+      "tolerance": 5e-08,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.2633348200644357,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_NL4_001.pol",
+      "max_absolute_error": 3.2589967779560886e-12,
+      "tolerance": 5e-12,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.6517993555912177,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_L3_002.pol",
+      "max_absolute_error": 1.7023136299242417e-08,
+      "tolerance": 5e-08,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.34046272598484834,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_NL4_002.pol",
+      "max_absolute_error": 2.3136299300008378e-11,
+      "tolerance": 5e-10,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.04627259860001676,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_L3_003.pol",
+      "max_absolute_error": 7.645625504232312e-10,
+      "tolerance": 5e-08,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.015291251008464624,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_NL4_003.pol",
+      "max_absolute_error": 2.3543745078513645e-10,
+      "tolerance": 5e-10,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.47087490157027284,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_L3_004.pol",
+      "max_absolute_error": 3.4475953855639396e-08,
+      "tolerance": 5e-08,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.6895190771127879,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_NL4_004.pol",
+      "max_absolute_error": 4.475953857552284e-09,
+      "tolerance": 5e-09,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.8951907715104568,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_L3_005.pol",
+      "max_absolute_error": 1.1542495959027121e-08,
+      "tolerance": 5e-08,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.23084991918054243,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_NL4_005.pol",
+      "max_absolute_error": 1.1542495959027121e-08,
+      "tolerance": 5e-08,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.23084991918054243,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_L3_006.pol",
+      "max_absolute_error": 2.8095405613104418e-08,
+      "tolerance": 5e-08,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.5619081122620884,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_NL4_006.pol",
+      "max_absolute_error": 2.8095405613104418e-08,
+      "tolerance": 5e-08,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.5619081122620884,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_L3_007.pol",
+      "max_absolute_error": 8.356942093890041e-08,
+      "tolerance": 5e-08,
+      "agreement": false,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 1.6713884187780081,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_NL4_007.pol",
+      "max_absolute_error": 8.356942093890041e-08,
+      "tolerance": 5e-07,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.16713884187780081,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_L3_008.pol",
+      "max_absolute_error": 2.824704647963472e-07,
+      "tolerance": 5e-08,
+      "agreement": false,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 5.649409295926944,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_NL4_008.pol",
+      "max_absolute_error": 2.824704647963472e-07,
+      "tolerance": 5e-07,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.5649409295926944,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_L3_009.pol",
+      "max_absolute_error": 4.619550551865359e-06,
+      "tolerance": 5e-08,
+      "agreement": false,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 92.39101103730718,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_NL4_009.pol",
+      "max_absolute_error": 4.619550551865359e-06,
+      "tolerance": 5e-06,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.9239101103730717,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_L3_010.pol",
+      "max_absolute_error": 1.6744486401876202e-06,
+      "tolerance": 5e-08,
+      "agreement": false,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 33.488972803752404,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "frequency_header:H2O_NL4_010.pol",
+      "max_absolute_error": 1.6744486401876202e-06,
+      "tolerance": 0.0005,
+      "agreement": true,
+      "convention": "FREQSQ/FREQ2=-xi^2, literal printed precision",
+      "checked_points": 1,
+      "max_printed_units": 0.0033488972803752404,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "pot:O-O:C6",
+      "max_absolute_error": 4.24443973301436e-06,
+      "tolerance": 5e-06,
+      "agreement": true,
+      "convention": "00 00 0 rotational scalar; compare only isotropic even orders; C12 rank3 partial",
+      "checked_points": 1,
+      "max_printed_units": 0.8488879466028719,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "pot:O-O:C8",
+      "max_absolute_error": 4.13282735962639e-05,
+      "tolerance": 5e-05,
+      "agreement": true,
+      "convention": "00 00 0 rotational scalar; compare only isotropic even orders; C12 rank3 partial",
+      "checked_points": 1,
+      "max_printed_units": 0.826565471925278,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "pot:O-O:C10",
+      "max_absolute_error": 0.00026794416316988645,
+      "tolerance": 0.0005,
+      "agreement": true,
+      "convention": "00 00 0 rotational scalar; compare only isotropic even orders; C12 rank3 partial",
+      "checked_points": 1,
+      "max_printed_units": 0.5358883263397729,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "pot:O-O:C12",
+      "max_absolute_error": 0.008985993714304641,
+      "tolerance": 0.05,
+      "agreement": true,
+      "convention": "00 00 0 rotational scalar; compare only isotropic even orders; C12 rank3 partial",
+      "checked_points": 1,
+      "max_printed_units": 0.17971987428609282,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "pot:H-O:C6",
+      "max_absolute_error": 4.7437271000205783e-07,
+      "tolerance": 5e-07,
+      "agreement": true,
+      "convention": "00 00 0 rotational scalar; compare only isotropic even orders; C12 rank3 partial",
+      "checked_points": 1,
+      "max_printed_units": 0.9487454200041157,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "pot:H-O:C8",
+      "max_absolute_error": 5.692699716064453e-07,
+      "tolerance": 5e-06,
+      "agreement": true,
+      "convention": "00 00 0 rotational scalar; compare only isotropic even orders; C12 rank3 partial",
+      "checked_points": 1,
+      "max_printed_units": 0.11385399432128905,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "pot:H-O:C10",
+      "max_absolute_error": 0.00016044949529714359,
+      "tolerance": 0.0005,
+      "agreement": true,
+      "convention": "00 00 0 rotational scalar; compare only isotropic even orders; C12 rank3 partial",
+      "checked_points": 1,
+      "max_printed_units": 0.32089899059428717,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "pot:H-O:C12",
+      "max_absolute_error": 0.004127994670852786,
+      "tolerance": 0.005,
+      "agreement": true,
+      "convention": "00 00 0 rotational scalar; compare only isotropic even orders; C12 rank3 partial",
+      "checked_points": 1,
+      "max_printed_units": 0.8255989341705572,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "pot:H-H:C6",
+      "max_absolute_error": 2.541160819546917e-07,
+      "tolerance": 5e-07,
+      "agreement": true,
+      "convention": "00 00 0 rotational scalar; compare only isotropic even orders; C12 rank3 partial",
+      "checked_points": 1,
+      "max_printed_units": 0.5082321639093834,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "pot:H-H:C8",
+      "max_absolute_error": 3.648166792658003e-06,
+      "tolerance": 5e-06,
+      "agreement": true,
+      "convention": "00 00 0 rotational scalar; compare only isotropic even orders; C12 rank3 partial",
+      "checked_points": 1,
+      "max_printed_units": 0.7296333585316005,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "pot:H-H:C10",
+      "max_absolute_error": 6.3040757822818705e-06,
+      "tolerance": 5e-05,
+      "agreement": true,
+      "convention": "00 00 0 rotational scalar; compare only isotropic even orders; C12 rank3 partial",
+      "checked_points": 1,
+      "max_printed_units": 0.1260815156456374,
+      "availability": "available",
+      "reason": null
+    },
+    {
+      "name": "pot:H-H:C12",
+      "max_absolute_error": 0.0003585868012123683,
+      "tolerance": 0.0005,
+      "agreement": true,
+      "convention": "00 00 0 rotational scalar; compare only isotropic even orders; C12 rank3 partial",
+      "checked_points": 1,
+      "max_printed_units": 0.7171736024247366,
+      "availability": "available",
+      "reason": null
+    }
+  ],
+  "numerical_agreement": false,
+  "limitations": [
+    "TODO: implement and independently validate internal localization and refinement.",
+    "TODO: correct native density/transition-fit/response discrepancies before wavefunction-first claims.",
+    "TODO: tighten numerical reference comparisons independently; never suppress valid supplied C_n.",
+    "TODO: supply missing ranks for unrestricted completeness; rank-3 isotropic C12 is partial.",
+    "TODO: audit external sum rules/passivity and high-rank reference conventions; no clipping or repair."
+  ],
+  "native_ov": {
+    "scope": "native-integral/supplied-orbital C++ OV fit; not native SCF/H1/H2/response",
+    "strict_passed": false,
+    "provisional_passed": true,
+    "errors": {
+      "metric": {
+        "max_absolute": 1.7905676941154525e-12,
+        "max_scaled": 1.597559351988609e-14
+      },
+      "coefficients": {
+        "max_absolute": 0.0009040851995152366,
+        "max_scaled": 2.3019798321950356e-05
+      },
+      "sampled_transition_density": {
+        "max_absolute": 5.895789788880419e-06,
+        "max_scaled": 5.0303437185125854e-08
+      }
+    },
+    "cpp_report_sha256": "590b4457305bb2f737e30acd1fb0f9df22444ae2caad544826322826653fadeb",
+    "numpy_report_sha256": "92416896a9c233d7d7891aac22bd1b365c24090759bd80b434433aae7ed3290a",
+    "same_input_lineage": true,
+    "coefficient_values_bitwise_equal_in_common_layout": true,
+    "cpp_coefficient_file_sha256": "ca6a1b4c4cab1256796269cb98e03c591e2bb101cc1091ee09423dde89fc0872",
+    "numpy_coefficient_file_sha256": "ba3142ddba3eb8c742adb7e2823376ef42cf760e1ced8411d4d4a43034dbf51e",
+    "note": "NPY file hashes can differ due to storage layout; value bytes verified after common-layout conversion.",
+    "review_answer_sha256": "21f85008850dc9030003370c2ee9fb341fe71cb2fe91b62699dae3fa276b09bc"
+  }
+}

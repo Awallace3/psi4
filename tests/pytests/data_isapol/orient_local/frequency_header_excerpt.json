@@ -1,0 +1,159 @@
+{
+  "note": "Numerical header excerpts only; NL4 distributed tensors are not local inputs. Test against canonical core grid at printed precision; retain discrepancies.",
+  "rows": [
+    {
+      "canonical_index": 0,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_L3_000.pol",
+      "sha256": "9c027937ffe3eb8c80c67015dc927983ca70464bd7e265e0f417eb59a5114172",
+      "header": "ALPHA  H2O  SITE-NAMES  O  O  RANK 1 TO 3 INDEX   1 FREQSQ       0.0000000",
+      "freqsq_token": "0.0000000"
+    },
+    {
+      "canonical_index": 0,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_NL4_000.pol",
+      "sha256": "9b6130f42fc50b50b80d5860f13cc6b5b198002c4c74a1b3500893481502c166",
+      "header": "ALPHA INDEX 001  SITE-LABELS  O  O  SITE-INDICES     1     1  RANK  0 :   4   BY     0 :   4   FREQ2  0.0000000E+00  CARTSPHER S",
+      "freqsq_token": "0.0000000E+00"
+    },
+    {
+      "canonical_index": 1,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_L3_001.pol",
+      "sha256": "b7d2668ad273a60013b4391986fe93cb3af6f2ed903b6f0084b8732d96dfa639",
+      "header": "ALPHA  H2O  SITE-NAMES  O  O  RANK 1 TO 3 INDEX   2 FREQSQ      -0.0000437",
+      "freqsq_token": "-0.0000437"
+    },
+    {
+      "canonical_index": 1,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_NL4_001.pol",
+      "sha256": "c6a0e3c4224c1f80b16436abf924d35575cbd3c56f2ab3d1d76118ff89135d10",
+      "header": "ALPHA INDEX 002  SITE-LABELS  O  O  SITE-INDICES     1     1  RANK  0 :   4   BY     0 :   4   FREQ2 -0.4368683E-04  CARTSPHER S",
+      "freqsq_token": "-0.4368683E-04"
+    },
+    {
+      "canonical_index": 2,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_L3_002.pol",
+      "sha256": "b7815409c73f61459f9e96c438fd93245a0840119aeabd8efd929553281ebaca",
+      "header": "ALPHA  H2O  SITE-NAMES  O  O  RANK 1 TO 3 INDEX   3 FREQSQ      -0.0013086",
+      "freqsq_token": "-0.0013086"
+    },
+    {
+      "canonical_index": 2,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_NL4_002.pol",
+      "sha256": "73a08e4903e06cb5d927fb4184b3f859a6277e7381fc289e2faf20dbb0b6ba21",
+      "header": "ALPHA INDEX 003  SITE-LABELS  O  O  SITE-INDICES     1     1  RANK  0 :   4   BY     0 :   4   FREQ2 -0.1308617E-02  CARTSPHER S",
+      "freqsq_token": "-0.1308617E-02"
+    },
+    {
+      "canonical_index": 3,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_L3_003.pol",
+      "sha256": "c2db1c6953f310a0f6f1796c7fb1c5915845862ad44f1cbaf84acdb997f95597",
+      "header": "ALPHA  H2O  SITE-NAMES  O  O  RANK 1 TO 3 INDEX   4 FREQSQ      -0.0091102",
+      "freqsq_token": "-0.0091102"
+    },
+    {
+      "canonical_index": 3,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_NL4_003.pol",
+      "sha256": "98db2ae03edbb1f05580260efedd1fa0f214e6fa1a7ee6009dc6937cf0efefc5",
+      "header": "ALPHA INDEX 004  SITE-LABELS  O  O  SITE-INDICES     1     1  RANK  0 :   4   BY     0 :   4   FREQ2 -0.9110199E-02  CARTSPHER S",
+      "freqsq_token": "-0.9110199E-02"
+    },
+    {
+      "canonical_index": 4,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_L3_004.pol",
+      "sha256": "492f21d12a4ab9efdd1302f872a90f2d947c87a8acf4590075312f8d72ee97c8",
+      "header": "ALPHA  H2O  SITE-NAMES  O  O  RANK 1 TO 3 INDEX   5 FREQSQ      -0.0390632",
+      "freqsq_token": "-0.0390632"
+    },
+    {
+      "canonical_index": 4,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_NL4_004.pol",
+      "sha256": "459ea7e39101118b3e5b488ac092a8e213ab5d31bf9282830a87ffa439c1997d",
+      "header": "ALPHA INDEX 005  SITE-LABELS  O  O  SITE-INDICES     1     1  RANK  0 :   4   BY     0 :   4   FREQ2 -0.3906323E-01  CARTSPHER S",
+      "freqsq_token": "-0.3906323E-01"
+    },
+    {
+      "canonical_index": 5,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_L3_005.pol",
+      "sha256": "4d38a23bbaab04fe3ae7affcac2410aa414205a19107cbd0dbe6de34f362af42",
+      "header": "ALPHA  H2O  SITE-NAMES  O  O  RANK 1 TO 3 INDEX   6 FREQSQ      -0.1372089",
+      "freqsq_token": "-0.1372089"
+    },
+    {
+      "canonical_index": 5,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_NL4_005.pol",
+      "sha256": "17f40e34390a18c5af961de69d7a4949051216572b609fdb00c6a271c8926142",
+      "header": "ALPHA INDEX 006  SITE-LABELS  O  O  SITE-INDICES     1     1  RANK  0 :   4   BY     0 :   4   FREQ2 -0.1372089E+00  CARTSPHER S",
+      "freqsq_token": "-0.1372089E+00"
+    },
+    {
+      "canonical_index": 6,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_L3_006.pol",
+      "sha256": "229d521ab3db40ee21d91d6d95a251c031ae6e5e2b0e8ddaafd6df0353c52a51",
+      "header": "ALPHA  H2O  SITE-NAMES  O  O  RANK 1 TO 3 INDEX   7 FREQSQ      -0.4555098",
+      "freqsq_token": "-0.4555098"
+    },
+    {
+      "canonical_index": 6,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_NL4_006.pol",
+      "sha256": "95e025e76dea91c96d67bae9f74abad6cbed88a8796eb5dfeb3fe83efcaf0179",
+      "header": "ALPHA INDEX 007  SITE-LABELS  O  O  SITE-INDICES     1     1  RANK  0 :   4   BY     0 :   4   FREQ2 -0.4555098E+00  CARTSPHER S",
+      "freqsq_token": "-0.4555098E+00"
+    },
+    {
+      "canonical_index": 7,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_L3_007.pol",
+      "sha256": "2ecd931a06564ab003ae6b87095201e0b184a7c2742da8345555338a66e5ebca",
+      "header": "ALPHA  H2O  SITE-NAMES  O  O  RANK 1 TO 3 INDEX   8 FREQSQ      -1.5999700",
+      "freqsq_token": "-1.5999700"
+    },
+    {
+      "canonical_index": 7,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_NL4_007.pol",
+      "sha256": "e823953775aea762aa58934a6b8bbbb8b94e76e83ad6ba2145bedceb7f450d2e",
+      "header": "ALPHA INDEX 008  SITE-LABELS  O  O  SITE-INDICES     1     1  RANK  0 :   4   BY     0 :   4   FREQ2 -0.1599970E+01  CARTSPHER S",
+      "freqsq_token": "-0.1599970E+01"
+    },
+    {
+      "canonical_index": 8,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_L3_008.pol",
+      "sha256": "291b83dd7188550cb5f002b5df6bb431f00dea4a263c722d9a87edd52a99c91b",
+      "header": "ALPHA  H2O  SITE-NAMES  O  O  RANK 1 TO 3 INDEX   9 FREQSQ      -6.8604430",
+      "freqsq_token": "-6.8604430"
+    },
+    {
+      "canonical_index": 8,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_NL4_008.pol",
+      "sha256": "1339fafaf4be1197866372f7edd42ff82ad9ec9f14e4043695546ccaf8dc6dbc",
+      "header": "ALPHA INDEX 009  SITE-LABELS  O  O  SITE-INDICES     1     1  RANK  0 :   4   BY     0 :   4   FREQ2 -0.6860443E+01  CARTSPHER S",
+      "freqsq_token": "-0.6860443E+01"
+    },
+    {
+      "canonical_index": 9,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_L3_009.pol",
+      "sha256": "e77e1a75173bb49b5cecb9926fd1ea3551b5000607bf08017078bdb5d4d270dd",
+      "header": "ALPHA  H2O  SITE-NAMES  O  O  RANK 1 TO 3 INDEX  10 FREQSQ     -47.7603400",
+      "freqsq_token": "-47.7603400"
+    },
+    {
+      "canonical_index": 9,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_NL4_009.pol",
+      "sha256": "961cc92e59351c090ef3c1c62ac14d69e0f75ee499c326bd449feaf95a50ad34",
+      "header": "ALPHA INDEX 010  SITE-LABELS  O  O  SITE-INDICES     1     1  RANK  0 :   4   BY     0 :   4   FREQ2 -0.4776034E+02  CARTSPHER S",
+      "freqsq_token": "-0.4776034E+02"
+    },
+    {
+      "canonical_index": 10,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_L3_010.pol",
+      "sha256": "4ed720049c1509729c3bc059e728ea762ffb4d5198bcadb7a8127dda8ccd606e",
+      "header": "ALPHA  H2O  SITE-NAMES  O  O  RANK 1 TO 3 INDEX  11 FREQSQ   -1430.6370000",
+      "freqsq_token": "-1430.6370000"
+    },
+    {
+      "canonical_index": 10,
+      "source": "/home/awallace43/gits/camcasp_psi4/.camcasp-reference/work/H2O/H2O_NL4_010.pol",
+      "sha256": "3e206d893d6295e8fba73d7a45f9cc2f0a99b091ff88768738f7257cc3e00e4e",
+      "header": "ALPHA INDEX 011  SITE-LABELS  O  O  SITE-INDICES     1     1  RANK  0 :   4   BY     0 :   4   FREQ2 -0.1430637E+04  CARTSPHER S",
+      "freqsq_token": "-0.1430637E+04"
+    }
+  ]
+}

@@ -34,6 +34,9 @@ class IsaGaussianShape {
     std::vector<double> sample(const std::vector<std::array<double,3>>& points,
                                const IsaExponentialTail& tail, bool apply_tail) const;
    private:
+    friend class IsaASweep;
+    std::vector<double> sample_counted(const std::vector<std::array<double,3>>& points,
+                                     const IsaExponentialTail& tail, bool apply_tail, int* clipped) const;
     double value_squared(double r2) const;
     IsaExplicitBasis basis_;
     std::vector<double> coefficients_;

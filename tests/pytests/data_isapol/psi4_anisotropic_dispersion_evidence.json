@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "scope": "Supplied-local orientation-resolved direct Coulomb dispersion",
+  "native_verified": false,
+  "localization_verified": false,
+  "recoupled_coefficient_parity_verified": false,
+  "source_sha256": {
+    "psi4/src/psi4/libisapol/anisotropic_dispersion.h": "34038e70a17864bcef5b91ca5b20774c48e39531f34d54c1bacca1bb48bf7395",
+    "psi4/src/psi4/libisapol/anisotropic_dispersion.cc": "0e516d3d5f7c01505ded32d1ae4fccca0191b53cce3c5b6b10ffff12ef5b240b",
+    "psi4/src/export_isapol.cc": "f51c0a9998dbfbcd6f4c6199b303bb9bb71237f5427ba0910438d3b9b115d6ce",
+    "psi4/src/psi4/libisapol/CMakeLists.txt": "4ce01384847e460606537832300965452e902f89018bd171ad9d3bf85c23c3bf",
+    "tests/pytests/test_isapol_anisotropic_dispersion.py": "3a1753ec5873d4338e0e539a47844c00cbd36a7f11cc4dfcbaf32426efbf7ec0",
+    "psi4/src/psi4/libisapol/ANISOTROPIC_CONTRACT.md": "5050a9bab23610c255be9d03452c90d5838fbfb1ec457cf4b0b27654516c2136"
+  },
+  "built_staged_core_sha256": "0ab8c722bf541c709e160bc4ea86be34d7e54e9a03e9e28066fbff021c38cf82",
+  "focused_tests": {
+    "passed": 120,
+    "seconds": 1.57,
+    "log_sha256": "451d70301eb8929642cf78e313ab9402c22807fb57f9b6d4ed7672ddc046e331"
+  },
+  "combined_tests": {
+    "passed": 1002,
+    "seconds": 6.11,
+    "log_sha256": "2ffbe6d77b52353e1b620e66058e482b1780aa0e7f24136ea52d5c5a0b5c4f8f"
+  },
+  "build_log_sha256": "a519317bc72754f99a5e61056daaeeb1af687f8c0de39ab903302b97c38a1f0f",
+  "install_log_sha256": "6c4275eebb07108adcd803f9ab974593c6b00a83074847304bc47315de02baae",
+  "independent_review_answer_sha256": "835cefde174dc998a03cab6dbdbb0aee0271085322fb96eacc60c156ddfbfa36",
+  "limitations": [
+    "No native response/localization or historical-reference parity",
+    "Explicit energy truncation; rank4 is not unrestricted anisotropic C10-C12 completeness",
+    "High-rank off-axis element oracle coverage is indirect",
+    "Independent orientation-average test uses state-specific diagonal dipole B cubature",
+    "Storage limits are not execution-time limits; conservative intermediate overflow rejection; final underflow permitted"
+  ]
+}

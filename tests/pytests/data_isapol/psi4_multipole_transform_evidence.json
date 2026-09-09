@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "claim": "independent_polynomial_transform_invariants",
+  "source_sha256": {
+    "psi4/src/psi4/libisapol/multipole_transform.h": "4d46f6416eecf5ae3aa1a8da2e1c4c741488b76c5c0a27d344a5abf163301aff",
+    "psi4/src/psi4/libisapol/multipole_transform.cc": "c69f255e11f9729bc02a6f8b2ddf20d40c02d50406b8a7585c5bd5db2f69eac4",
+    "psi4/src/export_isapol.cc": "5487929941faa76ebf749c449a190f84a7df5e16784933aac4f806501550858a",
+    "psi4/src/psi4/libisapol/CMakeLists.txt": "27e63e69e51e47eed5a935a14b49a5a83e18424bccfd410e47244cd08c31d22f",
+    "tests/pytests/test_isapol_transform.py": "70e31cdb434375a55488e2fac792d75eb8686b2dc4878b07630fd27f1825f95e"
+  },
+  "extension_path": "build_camcasp_psi4_joint/stage/lib/psi4/core.cpython-313-x86_64-linux-gnu.so",
+  "extension_sha256": "d0133d0b8d2b11f4d23daa060eec7b4e84113e260dc6d6929c78e012b4b480f2",
+  "built_staged_identical": true,
+  "tests": {
+    "passed": 665,
+    "seconds": 4.29,
+    "transform_cases": 26,
+    "log": ".pi/audit/multipole-transform-tests-v2.log",
+    "log_sha256": "cbe49d5f4dc19c591a776dad41acc27028753670498caa172efb5d1ea2168bde",
+    "command": "python -P -m pytest tests/pytests/test_isapol*.py tests/pytests/test_fdds*.py -q"
+  },
+  "build": {
+    "command": "bash build.sh",
+    "compilation_installation": "passed",
+    "script_status": 1,
+    "inherited_script_failures": [
+      "optional stubgen unavailable",
+      "unmatched psi.* cleanup glob"
+    ]
+  },
+  "advisory": {
+    "answer_sha256": "da08e64a7a07f36a821b0bdb22a9d043b6ab65b3a70d4b4a70507d2cc4a25dac",
+    "result": "no must-fix defect; recommended edge tests added"
+  },
+  "conventions": {
+    "components": "00,10,11c,11s,...",
+    "normalization": "real Racah; no Condon-Shortley phase",
+    "ranks": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "translation": "R(x+d)=T(d)R(x); d=source-target in bohr",
+    "rotation": "R(F*x)=D(F)R(x); proper orthogonal local-to-global Cartesian frame"
+  },
+  "limitations": [
+    "No localization or ORIENT parity acceptance",
+    "No copied ORIENT code or external translation tables",
+    "Rejected localization draft is outside source tree and was never compiled or bound",
+    "Earlier SAPT/GRAC results belong to preceding extension; not rerun for this transform-only extension",
+    "Cross-platform success is not established",
+    "Native density/OV/tail and end-to-end gates remain open"
+  ]
+}

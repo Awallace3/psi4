@@ -39,6 +39,13 @@ class IsaASweep {
                                        const std::vector<IsaExponentialTail>& tails,
                                        const std::vector<bool>& apply_tail, const IsaAFitOptions& options) const;
    private:
+    friend class IsaAController;
+    // Controller-only immutable preparation. Never exposed through expert data
+    // getters; an empty vector selects bounded, uncached evaluation.
+    std::vector<IsaAFitData> prepare(const std::vector<IsaNoTailGrid>& grids, size_t max_bytes) const;
+    IsaNoTailSweepResult run_prepared(const IsaSweepState& old, const std::vector<IsaNoTailGrid>& grids,
+        const std::vector<IsaExponentialTail>& tails, const std::vector<bool>& apply_tail,
+        const IsaAFitOptions& options, const std::vector<IsaAFitData>& prepared) const;
     std::vector<IsaExplicitBasis> shapes_;
     std::vector<IsaAFitProvider> providers_;
     std::vector<IsaShapeMap> maps_;

@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "claim": "analytic_invariant_and_supplied_operator_software_validation",
+  "native_end_to_end_accepted": false,
+  "stages": [
+    "supplied partition -> molecular AUX multipoles",
+    "supplied coefficient operator -> distributed response",
+    "supplied local scalar models -> isotropic dispersion C6-C12 with explicit rank coverage"
+  ],
+  "source_sha256": {
+    "psi4/src/psi4/libisapol/partitioned_response.h": "2dd5430f8aab2f021640747073d7c15654ef10dd23221f0d90c0f05d775955a6",
+    "psi4/src/psi4/libisapol/partitioned_response.cc": "c5cbb000c27b3e87dbf709a56897c015d8cb236d4c3df75e8ae2edbcddd1c5e7",
+    "psi4/src/psi4/libisapol/isotropic_dispersion.h": "a8bc4998756e43f303f703b46d4a753c2503fec32c09f5d421bebe390d33fcc5",
+    "psi4/src/psi4/libisapol/isotropic_dispersion.cc": "19368ae380adf9b4814967f69daa8a5bdacda4a255a03f74cd4b5792986fba99",
+    "psi4/src/psi4/libisapol/explicit_basis.h": "5209604231c27ca67560a79f18e2ed81c65da0707af063e498275e63f53277f3",
+    "psi4/src/psi4/libisapol/explicit_basis.cc": "dc179d6a6ba67f2f91065d2e862e54d0ae6c13cf4b7bfdd0168f7e39bfe8225c",
+    "psi4/src/psi4/libisapol/CMakeLists.txt": "4f7714f52a452529b350b459ad9d9788998dd0ff8fb7d9df13f57c0e3b4872ec",
+    "psi4/src/export_isapol.cc": "b029565dc30c074ec9c51695e4a59ec24b4ff5a728cefffc7973fe7d346aa7fd",
+    "tests/pytests/test_isapol_partitioned_response.py": "765a4ac37d11fbfcaa6cab7b2ddc0fad0f4993da588a12ae7f9be5e003c3563e",
+    "tests/pytests/test_isapol_isotropic_dispersion.py": "d52c119123bb65a9073274841f1b2829a1e58c3723890daac31fea6428d2ce98",
+    "tests/pytests/test_isapol_supplied_chain.py": "870d8eb23474e0768dcbce12df7bef55689df30d2d8a25f67971010cb1290e5c"
+  },
+  "staged_extension_path": "build_camcasp_psi4_joint/stage/lib/psi4/core.cpython-313-x86_64-linux-gnu.so",
+  "staged_extension_sha256": "68f7ab116d1bcc8b9f82549126e726d7479c8510a9807b6554b5104e13d9b1e9",
+  "built_staged_identical": true,
+  "tests": {
+    "command": "python -P -m pytest tests/pytests/test_isapol*.py tests/pytests/test_fdds*.py -q",
+    "passed": 639,
+    "seconds": 4.16,
+    "log": ".pi/audit/supplied-properties-final-tests-v1.log",
+    "log_sha256": "dd36d2ba0aba5f0e11b86b1eb7ea6b5d033cc30e1208ee15841aa35b986d4308"
+  },
+  "grac": {
+    "passed": 4,
+    "seconds": 50.31,
+    "log": ".pi/audit/supplied-properties-grac-v1.log",
+    "log_sha256": "fe059f5e888dc6a5c47d0c5a65bdbb357c53c928160ad27aec67baf95f576d10"
+  },
+  "sapt": [
+    {
+      "case": "sapt-dft1",
+      "exit_code": 0,
+      "elapsed_seconds": 18.748292136006057,
+      "command": [
+        "/home/awallace43/miniconda3/envs/p4_ci/bin/python",
+        "/home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/build_camcasp_psi4_joint/stage/bin/psi4",
+        "-i",
+        "input.dat",
+        "-o",
+        "output.dat",
+        "-n",
+        "1"
+      ],
+      "input_sha256": "74afd4c28d0a58984aed5f32fb9ffb2dd587906129355df9f683454cd7a16dfb",
+      "output_sha256": "7a24ee5073d7aa4d7b8a160b37d456705cd284bb56595fb01e1ac83d2ccead93"
+    },
+    {
+      "case": "sapt-dft2",
+      "exit_code": 0,
+      "elapsed_seconds": 74.54606083384715,
+      "command": [
+        "/home/awallace43/miniconda3/envs/p4_ci/bin/python",
+        "/home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/build_camcasp_psi4_joint/stage/bin/psi4",
+        "-i",
+        "input.dat",
+        "-o",
+        "output.dat",
+        "-n",
+        "1"
+      ],
+      "input_sha256": "169538b7e9d77aa2d8a7b41d93a9ec85864a27183c67c74be53eb166b3bae82b",
+      "output_sha256": "de12040360f9f5cd50b48e9bab9d225150363c8cce569b84ab6ea13216d4cd30"
+    },
+    {
+      "case": "sapt-dft-api",
+      "exit_code": 0,
+      "elapsed_seconds": 9.906067883130163,
+      "command": [
+        "/home/awallace43/miniconda3/envs/p4_ci/bin/python",
+        "/home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/build_camcasp_psi4_joint/stage/bin/psi4",
+        "-i",
+        "input.dat",
+        "-o",
+        "output.dat",
+        "-n",
+        "1"
+      ],
+      "input_sha256": "10cfee1d1d0fbd65af6d3f0aaea9bdc81204df68784707a6b2dbb3446d81d4c8",
+      "output_sha256": "c4617c536f8fddd16d1d3016b99d398014829af74e1f80a38361fdb582ee3d62"
+    },
+    {
+      "case": "sapt-dft-lrc",
+      "exit_code": 0,
+      "elapsed_seconds": 6.535660971188918,
+      "command": [
+        "/home/awallace43/miniconda3/envs/p4_ci/bin/python",
+        "/home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/build_camcasp_psi4_joint/stage/bin/psi4",
+        "-i",
+        "input.dat",
+        "-o",
+        "output.dat",
+        "-n",
+        "1"
+      ],
+      "input_sha256": "7ac216bb31233ec89a85e5946ea81099b031b795753894f75351e985a3c01d78",
+      "output_sha256": "2cf3cf3e9dfde6a45f84d1aa7f5bd91d9a47c7bf39a264de8dfdae09a913d23e"
+    }
+  ],
+  "environment": {
+    "conda_environment": "p4_ci",
+    "staged_pythonpath": "build_camcasp_psi4_joint/stage/lib",
+    "OMP_NUM_THREADS": 1,
+    "OPENBLAS_NUM_THREADS": 1,
+    "MKL_NUM_THREADS": 1
+  },
+  "build": {
+    "command": "bash build.sh",
+    "compilation_and_installation": "passed",
+    "script_exit": 1,
+    "script_only_failures": [
+      "optional stubgen unavailable",
+      "unmatched psi.* cleanup glob"
+    ],
+    "log": ".pi/audit/isotropic-dispersion-build-v1.log",
+    "log_sha256": "a6932621295cba02b69da543c6f66b931f34119ed70ed5ae3ec663cdbc1cf759"
+  },
+  "advisory_reviews": [
+    {
+      "scope": "partitioned response",
+      "answer_sha256": "e786e738c735feab4a34a815da5dbeb44c270ba3087e27c479f061cef2ee1217"
+    },
+    {
+      "scope": "isotropic dispersion",
+      "answer_sha256": "dfe2b8d0025ea0e712fd8137456c4aea5ee486fdcc51fcfedd2aed5729b28d9a"
+    }
+  ],
+  "limitations": [
+    "No production molecular Q/alpha reference comparison",
+    "Synthetic composed Lorentz C6 test is not native wavefunction-to-property parity",
+    "No native partition/DF/kernel/localization/PFIT generation in these additions",
+    "No anisotropic dispersion engine or public property registration",
+    "Existing native Drho-C, OV fitting and raw-tail parameter parity failures remain unchanged",
+    "Full response cache provenance remains open"
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "claim": "Installed expert supplied-nonlocal LW static properties and synthetic supplied-frequency isotropic dispersion adapter",
+  "source_sha256": {
+    "psi4/driver/procrouting/isapol_lw.py": "8b1005b994b0c843f78e10588f655d299183211daea3e6b7ea17ada50464ea3c",
+    "tests/pytests/test_isapol_lw_driver.py": "f3d04069f301d0581540d7e21e60d359c5a7f24fc170192eece171eefdaf29d1"
+  },
+  "staged_module_path": "/home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/build_camcasp_psi4_joint/stage/lib/psi4/driver/procrouting/isapol_lw.py",
+  "source_staged_identical": true,
+  "runtime": {
+    "core_path": "/home/awallace43/gits/psi4__worktrees/camcasp-psi4-joint/build_camcasp_psi4_joint/stage/lib/psi4/core.cpython-313-x86_64-linux-gnu.so",
+    "core_sha256": "40c589ae23394166d0a8a949348670896a6e6fcbbb3c8c4b4ed23ea7c05c0b72",
+    "driver_sha256": "8b1005b994b0c843f78e10588f655d299183211daea3e6b7ea17ada50464ea3c",
+    "fixture_sha256": "b86d411e5fd81fc20358370ee211ba5b9bd997c57f8918c32ce0334c93ad7f49",
+    "python": "3.13.13 | packaged by conda-forge | (main, Apr  8 2026, 02:00:33) [GCC 14.3.0]"
+  },
+  "artifact": {
+    "path": ".pi/audit/lw-driver-water-static-parent-v1.json",
+    "sha256": "f296ec8f1cec724845df14d43a3a414f30d6b777b2e8937619d43826dd15b2f5"
+  },
+  "tests": {
+    "combined_passed": 1335,
+    "seconds": 14.4,
+    "log_sha256": "994467a8825de3d1d18754c4471e0abc34dc797cacf964adc93de62bd2fefb56"
+  },
+  "advisory": {
+    "answer_sha256": "4f73ad2c970809d82a228b406b11abb403d0ff7a89a7c91a88d4641dfb7e6ad8",
+    "must_fix": [],
+    "scope": "factory-produced supplied-input workflow; no runtime execution by reviewer"
+  },
+  "water_comparison": {
+    "entries": 675,
+    "atol": 1e-11,
+    "rtol": 0,
+    "site_maxabs": {
+      "O": 6.252776074688882e-13,
+      "H1": 5.60440582830779e-13,
+      "H2": 5.089262344881718e-13
+    },
+    "passed": true,
+    "expected_original_source_sha256": "9c027937ffe3eb8c80c67015dc927983ca70464bd7e265e0f417eb59a5114172"
+  },
+  "water_labels": [
+    "O",
+    "H1",
+    "H2"
+  ],
+  "water_static_rank_scalars": [
+    [
+      6.127427953741659,
+      25.10959715312576,
+      166.85593563432514
+    ],
+    [
+      1.7289320737992027,
+      2.6315804950077673,
+      8.576074963976186
+    ],
+    [
+      1.7289324071325358,
+      2.631579473333071,
+      8.576070303334141
+    ]
+  ],
+  "water_residuals": {
+    "off_site": 2.201454e-11,
+    "charge_sum": 0.000701099999999899,
+    "reciprocity": 5.771383371211414e-12,
+    "molecular_sum": 3.979039320256561e-13,
+    "local_charge": 0.0007011000000002321
+  },
+  "production_postcondition_passed": false,
+  "historical_diagnostic_tolerance": 0.001,
+  "production_default_tolerance": 1e-06,
+  "limitations": [
+    "Supplied external nonlocal tensors; not a native wavefunction prediction",
+    "Historical diagnostic does not accept production postcondition",
+    "No dynamic molecular LW-to-Cn acceptance from this static fixture",
+    "No anisotropic adapter, native PFIT or oeprop registration",
+    "Public result constructors are trusted containers; factory is validated input boundary"
+  ]
+}

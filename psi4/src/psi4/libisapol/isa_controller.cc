@@ -46,6 +46,12 @@ IsaAController::IsaAController(const std::vector<IsaExplicitBasis>& atomic,
         atomic_sizes_.push_back(atomic[a].nfunction());
         overlaps_.push_back(shape[a].overlap());
     }
+    prepared_ = sweep_.prepare(grids_,options_.cache_max_bytes);
+}
+std::shared_ptr<IsaAController> IsaAController::without_prepared_cache() const {
+    auto snapshot = std::make_shared<IsaAController>(*this);
+    snapshot->prepared_.clear();
+    return snapshot;
 }
 void IsaAController::validate(const IsaAControllerState& state) const {
     const size_t n = shapes_.size();
@@ -85,7 +91,7 @@ IsaAControllerStep IsaAController::step(const IsaAControllerState& old) const {
     std::vector<bool> apply(shapes_.size(),false);
     for (size_t a = 0; a < shapes_.size(); ++a) apply[a] = old.apply_tails && options_.tail_allowed[a];
     IsaAControllerStep result;
-    result.raw_sweep = sweep_.run_with_tails(old.coefficients,grids_,old.tails,apply,active);
+    result.raw_sweep = sweep_.run_prepared(old.coefficients,grids_,old.tails,apply,active,prepared_);
     result.next = old;
     result.next.iteration = old.iteration+1;
     result.next.coefficients = result.raw_sweep.next;

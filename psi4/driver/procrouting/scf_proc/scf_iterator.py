@@ -28,6 +28,7 @@
 """
 The SCF iteration functions
 """
+import hashlib
 import numpy as np
 
 from psi4 import core
@@ -53,12 +54,43 @@ from ..solvent.efp import get_qm_atoms_opts, modify_Fock_induced, modify_Fock_pe
 #    self.iterations(e_conv=1.e-5, d_conv=1.e-4)
 
 
+def _scf_state_signature(wfn):
+    """Snapshot identity for native-property eligibility, not a convergence test.
+
+    Only used for restricted C1 SCF. Store bytes, never views of mutable matrices.
+    A deserialized or arbitrary external wavefunction receives no inferred seal.
+    """
+    digest = hashlib.sha256()
+    mol = wfn.molecule()
+    functional = wfn.functional()
+    functional_state = tuple(getattr(functional, key)() for key in (
+        'name', 'x_alpha', 'x_beta', 'x_omega', 'c_alpha', 'c_omega',
+        'c_os_alpha', 'c_ss_alpha', 'vv10_b', 'vv10_c', 'grac_shift',
+        'grac_alpha', 'grac_beta'))
+    component_state = tuple((f.name(), f.alpha(), f.omega(),
+                             tuple(f.get_mix_data()) if isinstance(f, core.LibXCFunctional) else ())
+                            for f in (*functional.x_functionals(), *functional.c_functionals()))
+    digest.update(repr((functional_state, component_state)).encode())
+    digest.update(repr((wfn.energy(), wfn.nalpha(), wfn.nbeta(),
+                        wfn.basisset().name(), wfn.basisset().nbf(),
+                        tuple(mol.Z(i) for i in range(mol.natom())))).encode())
+    for value in (mol.geometry(), wfn.S(), wfn.H(), wfn.Da(), wfn.Db(),
+                  wfn.Fa(), wfn.Fb(), wfn.Ca(), wfn.Cb(),
+                  wfn.epsilon_a(), wfn.epsilon_b()):
+        array = np.asarray(value)
+        digest.update(repr(array.shape).encode())
+        digest.update(array.tobytes())
+    return digest.hexdigest()
+
+
 def scf_compute_energy(self):
     """Base class Wavefunction requires this function. Here it is
     simply a wrapper around initialize(), iterations(), finalize_energy(). It
     returns the SCF energy computed by finalize_energy().
 
     """
+    self._scf_convergence_evidence = None
+    self._scf_stopping_diagnostics = None
     if core.get_option('SCF', 'DF_SCF_GUESS') and (core.get_global_option('SCF_TYPE') == 'DIRECT'):
         # speed up DIRECT algorithm (recomputes full (non-DF) integrals
         #   each iter) by first converging via fast DF iterations, then
@@ -97,6 +129,12 @@ def scf_compute_energy(self):
         core.print_out("  Energy and wave function converged.\n\n")
 
     scf_energy = self.finalize_energy()
+    # Finalization can rerun SCF (stability analysis). Use the latest iterator's
+    # evidence only. Fixed-count/COSX and external optimizer exits are not seals.
+    if (self._scf_stopping_diagnostics is not None and self.nirrep() == 1
+            and self.same_a_b_orbs() and self.nalpha() == self.nbeta()):
+        self._scf_convergence_evidence = (
+            self._scf_stopping_diagnostics, _scf_state_signature(self), self.basisset())
     return scf_energy
 
 
@@ -132,6 +170,8 @@ def initialize_jk(self, memory, jk=None):
 def scf_initialize(self):
     """Specialized initialization, compute integrals and does everything to prepare for iterations"""
 
+    self._scf_convergence_evidence = None
+    self._scf_stopping_diagnostics = None
     # Figure out memory distributions
 
     # Get memory in terms of doubles
@@ -263,6 +303,8 @@ def scf_initialize(self):
 
 def scf_iterate(self, e_conv=None, d_conv=None):
 
+    self._scf_convergence_evidence = None
+    self._scf_stopping_diagnostics = None
     is_dfjk = core.get_global_option('SCF_TYPE').endswith('DF')
     verbose = core.get_option('SCF', "PRINT")
     reference = core.get_option('SCF', "REFERENCE")
@@ -577,8 +619,12 @@ def scf_iterate(self, e_conv=None, d_conv=None):
             if scf_iter_post_screening >= scf_maxiter_post_screening and scf_maxiter_post_screening > 0:
                 break
 
-        # Call any postiteration callbacks
-        if not ((self.iteration_ == 0) and self.sad_) and _converged(Ediff, Dnorm, e_conv=e_conv, d_conv=d_conv):
+        # Resolve the exact thresholds at this stopping test. Preserve the
+        # existing per-iteration option semantics (including user callbacks).
+        stopping_e_conv = core.get_option('SCF', 'E_CONVERGENCE') if e_conv is None else e_conv
+        stopping_d_conv = core.get_option('SCF', 'D_CONVERGENCE') if d_conv is None else d_conv
+        if not ((self.iteration_ == 0) and self.sad_) and _converged(
+                Ediff, Dnorm, e_conv=stopping_e_conv, d_conv=stopping_d_conv):
 
             if early_screening:
 
@@ -603,6 +649,9 @@ def scf_iterate(self, e_conv=None, d_conv=None):
                     core.print_out("  Energy and wave function converged with early screening.\n")
                     core.print_out("  Continuing SCF iterations with tighter screening.\n\n")
             else:
+                self._scf_stopping_diagnostics = (
+                    self.iteration_, float(Ediff), float(Dnorm), float(stopping_e_conv), float(stopping_d_conv),
+                    bool(core.get_option('SCF', 'DIIS_RMS_ERROR')))
                 break
 
         if self.iteration_ >= core.get_option('SCF', 'MAXITER'):

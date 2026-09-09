@@ -9,6 +9,8 @@
 namespace psi {
 class Matrix;
 namespace isapol {
+/// Racah regular real multipoles through rank 4, ordered 00,10,11c,11s,...
+std::vector<double> isa_regular_multipoles(int rank, const std::array<double,3>& displacement);
 enum class IsaBasisRole { MolecularAux, AtomAux, Shape, Orbital };
 enum class IsaBasisRepresentation { Cartesian, Spherical };
 /// Zero-based centre; effective coefficients include ALL normalization factors.
@@ -90,6 +92,7 @@ class IsaAFitProvider {
     /// Assembly and frozen solve with identical options; no retained mutable samples.
     IsaAFitResult fit(const IsaAFitSamples& samples, const IsaAFitOptions& options) const;
    private:
+    friend class IsaASweep;
     IsaExplicitBasis atomic_;
     IsaFixedDensity density_;
     std::array<double, 3> centre_;

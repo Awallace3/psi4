@@ -9,6 +9,9 @@ namespace psi { namespace isapol {
 /// subiterations or self-consistent postconvergence tail loop are implemented.
 struct IsaAControllerOptions {
     IsaAFitOptions fit;
+    // Performance only: zero forces the independent uncached path. Hard ceiling
+    // is 192 MiB; admission includes conservative point-workspace headroom.
+    size_t cache_max_bytes = 192 * 1024 * 1024;
     double convergence = 1.e-9;
     double w_eps_activation = 1.e-5, positive_activation = 1.e-5, tail_activation = 1.e-5;
     double mixing = 0.0;
@@ -46,6 +49,10 @@ class IsaAController {
                    const std::vector<IsaExplicitBasis>& shape,
                    const std::vector<std::vector<int>>& shell_maps, const IsaFixedDensity& density,
                    const std::vector<IsaNoTailGrid>& grids, const IsaAControllerOptions& options);
+    /// Inspect the actual performance-policy decision without exposing cached buffers.
+    bool prepared_cache_enabled() const { return !prepared_.empty(); }
+    /// Independent rerunnable snapshot, omitting transient preparation. The original is unchanged.
+    std::shared_ptr<IsaAController> without_prepared_cache() const;
     IsaAControllerState initialize(const IsaSweepState& coefficients) const;
     IsaAControllerStep step(const IsaAControllerState& old) const;
     IsaAControllerResult run(const IsaAControllerState& initial) const;
@@ -57,6 +64,7 @@ class IsaAController {
     std::vector<std::shared_ptr<Matrix>> overlaps_;
     std::vector<IsaNoTailGrid> grids_;
     IsaAControllerOptions options_;
+    std::vector<IsaAFitData> prepared_;
 };
 } }
 #endif
