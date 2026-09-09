@@ -12,7 +12,7 @@
 **Accepted code checkpoint:** `86b548c492`, plus `c07dafd37d`, which
 adds the bounded native direct-OV point-charge response prerequisite (section 3),
 plus `8d4841ce68`, which closes the response right-hand-side factor 4 against
-Psi4's own CPHF dipole polarizability and against perturbed-SCF energy curvature.
+Psi4's own CPHF dipole polarizability and against perturbed-SCF energy curvature,
 All prior execution history remains in Git (section 8).
 No implementation/build/test background tasks are pending. Old task IDs and
 “in progress” paragraphs in historical documents are not current instructions.
@@ -64,18 +64,22 @@ No implementation/build/test background tasks are pending. Old task IDs and
 
 ### Latest verified evidence (local paths relative to worktree)
 
-- **1,917 ISA/FDDS tests passed in 39.10 s** (1,895 prior + 22 new point-response
-  tests): `.pi/audit/native-point-response-regressions.log`. The 22 are the 19
+- **1,923 ISA/FDDS tests passed in 46.28 s** (1,895 prior + 28 new point-response
+  tests): `.pi/audit/native-point-response-regressions.log`. The 28 are the 19
   originally written, plus the second analytic-oracle test added when the review
   forced the s-only oracle to be generalized to p shells (the single s-block test
   became one full-basis pure test and one Cartesian test that assumes no pure
-  ordering), plus the 2 layer-5 tests that close the right-hand-side factor 4.
-  Run from `/tmp` against the staged tree with `OMP_NUM_THREADS=1`
+  ordering), plus the 2 layer-5 tests that close the right-hand-side factor 4,
+  plus the 6 layer-6 tests that close the `a`/`b` kernel scalings (4 spectrum
+  points and 2 finite-field points). Run from `/tmp` against the staged tree
+  with `OMP_NUM_THREADS=1`
   over `tests/pytests/test_isapol*.py` + `test_fdds*.py` minus the slow
   `test_isapol_oeprop_water.py`, which is run separately below. The new file
-  alone is 22 passed in 3.96 s; it was 20 passed in 1.68 s before layer 5, which
-  runs five extra SCFs. Previous 1,915-test/36.93 s and 1,895-test/36.79 s runs
-  are superseded in that log and in `.pi/audit/reference-basis-regressions-v1.log`.
+  alone is 28 passed in 10.57 s; it was 22 passed in 3.96 s before layer 6 and
+  20 passed in 1.68 s before layer 5. Each layer costs SCFs, not solves: layer 6
+  runs 4 DFT SCFs plus 24 perturbed ones. Previous 1,917-test/39.10 s,
+  1,915-test/36.93 s and 1,895-test/36.79 s runs are superseded in that log and
+  in `.pi/audit/reference-basis-regressions-v1.log`.
 - Point-response test boundary is mutation-checked, not just green: on the staged
   module, flipping the target sign, symmetrizing the packed triangle, packing the
   upper triangle instead, dropping the orbital context check and leaving the
@@ -119,7 +123,40 @@ No implementation/build/test background tasks are pending. Old task IDs and
   Cross-check at cc-pVDZ (nbf=24, nov=95) also matched CPHF to 2.1e−13; STO-3G
   is what the committed test uses, because the native construction is 0.02 s
   there against 5.08 s at cc-pVDZ. This does **not** certify the separate `a`
-  and `b` kernel scalings away from that configuration.
+  and `b` kernel scalings away from that configuration; the bullet below does.
+- **`a`/`b` kernel scalings closed absolutely** (test layer 6, 6 new tests).
+  The pre-existing ALDA gates re-derive the written `H1=Δ+4V−a(X+Y)+4bL` and
+  use only complementary `(a,1−a)` pairs, so they can neither see a wrong
+  overall factor on `L` nor separate the two scalings from their sum. The new
+  gate builds a **matched** custom functional (`x_hf` by `a`, `LDA_X` and its
+  LDA correlation partner by `b`; LibXC names unprefixed — the builder adds
+  `XC_`) whose CPKS kernel *is* the native operators at `(a,b)`, then closes
+  both scalings twice:
+  - `sqrt(eig(H2·H1))` — the eigenvalues of `(A−B)(A+B)` are Ω² — against
+    Psi4's independent Davidson `tdscf_excitations`: **7.2e−14 … 1.8e−13**
+    over `(0.25,0.75,pw92)`, `(0.5,0.5,vwn)`, `(0.3,0.9,slater)` and
+    `(0,1,pw92)`, max imaginary part exactly 0. This is the **only** oracle in
+    the track that reaches `H2`: at ω=0 the solve collapses to `−4·H1⁻¹D` and
+    `H2` cancels identically, so layer 5 and every polarizability gate are
+    blind to it. `(0.3,0.9)` is deliberately non-complementary and breaks the
+    `b=1−a` degeneracy.
+  - Perturbed matched-RKS **total-energy** curvature: **1.9e−9** (rel 4.1e−8,
+    h-halving ratio 4.0000) at `(0.25,0.75,pw92)` and **9.4e−9** (rel 2.9e−7,
+    ratio 4.0009) at `(0.3,0.9,slater)`. Absolute: no response theory, no
+    orbital Hessian, no prefactor, no field sign convention.
+  The coarse (50,25) grid costs nothing here, which is what makes this cheap
+  enough to commit: the second difference of the grid-discretized `E_xc` is the
+  grid-discretized `f_xc`, and the native `L` uses the SCF's own grid, so the
+  quadrature error cancels between the two sides. Confirmed against
+  (590,99)/168,883 rows, which agrees no better (1.3e−8/1.1e−8). Grid size is
+  not free, though: (74,35) makes Psi4's Becke pruning emit 832 negative
+  weights (min −92.15), which the provider's grid guard rejects, correctly.
+  Confirmed discriminating by mutating the staged provider call to
+  `local_scale*1.01` and to `exact_exchange+0.001`: each fails all six layer-6
+  tests. In-test controls resolve `a` to 0.001 (spectrum moves 6e−4), `b` to
+  1% (1e−4), `b` halved (6e−3…1.2e−2), and `a` **in `H2` alone** to 0.001
+  (3e−4), against a 1e−13 baseline. The staged file was restored and its
+  SHA256 re-verified after the mutations. Whole layer costs 7.9 s.
 - Default water demo after the point-response commit: **29.5248 s / 590,992 KiB**,
   31 ISA iterations, energy `-76.33875890072267 Eh`, and every saved array
   (`scalars`, `local`, `global_tensors`, `coefficients`) **bitwise equal** to
@@ -225,10 +262,13 @@ trace, hashes and separate ISA candidates). Its portable conclusions are in
   distinct gates. See SPEC/PROVISIONAL_ACCEPTANCE.md; no blanket tolerance waiver.
 - Full native SCF/PFIT/GRAC matched protocol and modern ISA preset are not closed.
 - Point-response coverage: no shell above p is exercised by the analytic ESP
-  oracle (the fixture basis has none). The right-hand-side factor 4 is closed
-  (section 3), but only at `exact_exchange=1` with no local kernel; the separate
-  `a` and `b` hybrid/ALDA kernel scalings away from that configuration still
-  rest on the pre-existing native-response gates.
+  oracle (the fixture basis has none), and neither the factor-4 nor the `a`/`b`
+  gate touches that. The right-hand-side factor 4 and the `a`/`b` kernel
+  scalings are both closed absolutely (section 3). What remains open there is
+  narrower: `b` is anchored against an *energy* at only two of the four `(a,b)`
+  points, the other two resting on the excitation-energy gate; and both gates
+  are ω=0 or excitation-energy statements about the operators, so no
+  frequency-dependent propagator convention is certified by them.
 
 ## 7. Build and test commands
 

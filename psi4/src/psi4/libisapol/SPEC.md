@@ -454,15 +454,49 @@ independent of Psi4's `perturb_dipole` sign convention. Measured: 2.1e−14 on
 (i), 5.0e−9 on (ii). Verified discriminating by mutation: replacing the factor
 with 2.0, 8.0 or 4.5 fails both gates.
 
+The `a` and `b` kernel scalings have their own absolute gate, away from that
+corner. The pre-existing ALDA gates re-derive the written
+`H1=Δ+4V−a(X+Y)+4bL` and use only complementary `(a,1−a)` pairs, so they can
+neither see a wrong overall factor on `L` nor separate the two scalings from
+their sum. The gate instead builds a **matched** custom functional —
+`x_hf` scaled by `a`, `LDA_X` and its LDA correlation partner by `b`, LibXC
+names unprefixed — whose CPKS kernel *is* the native operators at `(a,b)`, and
+compares (i) `sqrt(eig(H2·H1))` against Psi4's Davidson `tdscf_excitations`
+(`scf_products.py`: `twoel_Hx_full`, `onel_Hx`, `compute_Vx`; requires
+`save_jk`), at **atol1e−11**, measured 7e−14…1.8e−13 over
+`(0.25,0.75,pw92)`, `(0.5,0.5,vwn)`, `(0.3,0.9,slater)` and `(0,1,pw92)`;
+and (ii) perturbed matched-RKS total-energy curvature, at
+**rtol1e−5/atol1e−9** with the same asserted h-halving ratio **=4 ±5%**,
+measured 1.9e−9 (rel 4.1e−8, ratio 4.0000) at `(0.25,0.75,pw92)` and 9.4e−9
+(rel 2.9e−7, ratio 4.0009) at `(0.3,0.9,slater)`. Gate (i) is the only one
+anywhere in this track that reaches **H2**: at ω=0 the solve
+`(H2·H1+ω²)X = −4·H2·D` collapses to `−4·H1⁻¹D` and H2 cancels identically, so
+no static polarizability can see it. `(0.3,0.9)` is deliberately
+non-complementary. Gate (ii) is absolute — no response theory, no orbital
+Hessian, no prefactor, no field sign convention — and is *not* degraded by the
+coarse (50,25) grid: the second difference of the grid-discretized `E_xc` is
+the grid-discretized `f_xc`, and the native `L` is built on the SCF's own grid,
+so the quadrature error cancels between the two sides rather than entering as
+an error; checked against (590,99)/168,883 rows, which agrees no better.
+Grid size is not free, though: (74,35) makes Psi4's Becke pruning emit 832
+negative weights (min −92.15), which the provider's grid guard rejects,
+correctly. Verified discriminating by mutation of the staged provider call:
+`local_scale*1.01` or `exact_exchange+0.001` fails all six layer-6 tests, and
+in-test controls resolve `a` to 0.001 (spectrum moves 6e−4), `b` to 1%
+(1e−4), and `a` **in H2 alone** to 0.001 (3e−4), against a 1e−13 baseline.
+
 What those gates still do not cover must not be described as if they did.
 `core.ExternalPotential.computePotentialMatrix` reaches the same
 `libint2::Operator::nuclear` integrals the C++ drives, so the MO-transform gate
 certifies the AO→MO transform and OV packing, **not** the kernel; only the
 analytic oracle pins the kernel. No shell above p is exercised, because the
-fixture basis has none. The factor-4 gate is absolute at `exact_exchange=1`
-with no local kernel; it does not by itself certify the separate `a` and `b`
-scalings of the hybrid/ALDA kernels away from that configuration, which remain
-covered only by the pre-existing native-response gates. These certify the
+fixture basis has none, and neither the factor-4 nor the `a`/`b` gate touches
+that. The `a`/`b` gate covers the three ALDA kernel names at four `(a,b)`
+points including the shipped `isapol_oeprop` default `(0.25,0.75,pw92)`, but
+`b` is anchored absolutely against an *energy* only at `(0.25,0.75,pw92)` and
+`(0.3,0.9,slater)`; the remaining two points rest on the excitation-energy
+gate alone. Both gates are ω=0 or excitation-energy statements about the
+operators, not about frequency-dependent propagator conventions. These certify the
 prerequisite only; they are not matched-protocol acceptance and must not be
 conflated with the legacy PFIT leg-B gate.
 

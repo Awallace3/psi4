@@ -28,6 +28,21 @@ perturbed SCF **total energies**, which involves no response theory, no orbital
 Hessian and no prefactor at all. Rescaling the right-hand side by 0.5, 2 or
 even 1.125 fails both.
 
+The separate ``a`` (scaled exact exchange) and ``b`` (local ALDA) scalings are
+closed by layer 6, away from layer 5's a=1, b=0 corner and including the
+shipped ``isapol_oeprop`` default a=0.25, b=0.75. The pre-existing gates in
+``test_isapol_native_response.py`` re-derive the written formula, so they
+cannot see a wrong overall factor on L, and they use only complementary
+(a, 1-a) pairs, which cannot separate the two scalings from their sum. Layer 6
+uses a matched custom functional -- Hartree-Fock exchange scaled by a, LDA
+exchange and correlation by b -- whose CPKS kernel *is* the native operators
+at (a, b), and checks two things against it: perturbed-SCF total-energy
+curvature, and sqrt(eig(H2 H1)) against Psi4's Davidson ``tdscf_excitations``.
+The second reaches **H2**, which no static-response gate in this file can:
+at omega = 0, H2 cancels identically out of the solve. A non-complementary
+(a, b) = (0.3, 0.9) breaks the b = 1-a degeneracy. Perturbing local_scale by
+1% or exact_exchange by 0.001 in the provider call fails every layer-6 test.
+
 One normalization remains **not** closed: no shell of angular momentum above p
 is exercised, because the fixture basis has none.
 
@@ -47,6 +62,7 @@ import psi4
 from psi4 import core
 from psi4.driver.p4util import OptionsState
 from psi4.driver.procrouting.isapol_native_response import native_response_from_wavefunction
+from psi4.driver.procrouting.response.scf_response import tdscf_excitations
 from psi4.driver.procrouting import isapol_native_point_response as npr
 
 
@@ -469,6 +485,198 @@ def test_static_tdhf_response_matches_finite_field_energy_curvature(cphf_water, 
     coarse = np.max(np.abs(curvature[0.008] - native))
     fine = np.max(np.abs(curvature[0.004] - native))
     assert coarse / fine == pytest.approx(4., rel=0.05)
+
+
+# ----------------------------------------------------------------------------
+# Layer 6: absolute normalization of the a and b kernel scalings
+# ----------------------------------------------------------------------------
+#: LibXC correlation piece of each native ALDA kernel name, unprefixed: the
+#: superfunctional builder prepends the ``XC_`` itself.
+ALDA_CORRELATION = {"alda_slater": None, "alda_slater_pw92": "LDA_C_PW",
+                    "alda_slater_vwn": "LDA_C_VWN"}
+
+#: Grid used both by the matched SCF and by the native local kernel. Small on
+#: purpose, and legitimately so: see ``test_ab_scalings_match_finite_field...``.
+#: Not every size is usable -- (74, 35) makes Psi4's Becke pruning emit 832
+#: negative weights (min -92.15), which the native provider's grid guard
+#: rejects, correctly. (26, 20), (50, 25), (110, 50), (194, 60) and (302, 75)
+#: are all nonnegative.
+AB_GRID = {"dft_spherical_points": 50, "dft_radial_points": 25}
+
+#: (a, b, kernel) probes for the spectrum gate. (0.3, 0.9) is deliberately
+#: **not** complementary: every pre-existing native-response gate uses
+#: b = 1 - a, which cannot separate the two scalings from their sum.
+AB_POINTS = [(0.25, 0.75, "alda_slater_pw92"), (0.5, 0.5, "alda_slater_vwn"),
+             (0.3, 0.9, "alda_slater"), (0.0, 1.0, "alda_slater_pw92")]
+
+
+@contextmanager
+def ab_settings(basis, field=None):
+    """RKS settings whose CPKS response is the native operators at (a, b).
+
+    ``save_jk`` is required by ``RHF::twoel_Hx``, which the TDSCF solver drives.
+    """
+    saved = OptionsState(["BASIS"], ["PUREAM"], ["SCF_TYPE"], ["SCF", "REFERENCE"],
+                         ["SCF", "E_CONVERGENCE"], ["SCF", "D_CONVERGENCE"],
+                         ["SCF", "SAVE_JK"], ["SCF", "DFT_SPHERICAL_POINTS"],
+                         ["SCF", "DFT_RADIAL_POINTS"], ["PERTURB_H"],
+                         ["PERTURB_WITH"], ["PERTURB_DIPOLE"])
+    try:
+        options = {"basis": basis, "puream": True, "scf_type": "pk",
+                   "reference": "rks", "e_convergence": 1.e-12,
+                   "d_convergence": 1.e-12, "save_jk": True, **AB_GRID}
+        options.update({"perturb_h": False} if field is None else
+                       {"perturb_h": True, "perturb_with": "dipole",
+                        "perturb_dipole": [float(c) for c in field]})
+        psi4.set_options(options)
+        yield
+    finally:
+        saved.restore()
+
+
+def matched_functional(a, b, kernel):
+    """The functional whose CPKS kernel is Delta + 4V - a(X+Y) + 4bL exactly.
+
+    Scaling Hartree-Fock exchange by ``a`` and *both* LDA exchange and its LDA
+    correlation partner by ``b`` reproduces the native operators' two scalings
+    at the level of the SCF itself, so the perturbed total energies below are a
+    matched oracle and not merely a nearby functional.
+    """
+    correlation = ALDA_CORRELATION[kernel]
+    return {"name": "ISAPOL_AB_PROBE", "x_hf": {"alpha": a},
+            "x_functionals": {"LDA_X": {"alpha": b}},
+            "c_functionals": ({correlation: {"alpha": b}} if correlation else {})}
+
+
+def scf_grid(wfn):
+    """The SCF's own quadrature, as native [x, y, z, w] rows."""
+    blocks = wfn.V_potential().grid().blocks()
+    return np.column_stack([np.concatenate([np.asarray(getattr(block, m)())
+                                            for block in blocks])
+                            for m in ("x", "y", "z", "w")])
+
+
+def ab_operators(wfn, kernel, a, b, grid):
+    provider = native_response_from_wavefunction(
+        wfn, caller_converged=True, kernel=kernel, exact_exchange=a,
+        local_scale=b, grid=grid).provider
+    return np.asarray(provider.h1().to_array()), np.asarray(provider.h2().to_array())
+
+
+def ab_polarizability(wfn, kernel, a, b, grid):
+    """-D^T C D at omega = 0, the static dipole polarizability."""
+    response = native_response_from_wavefunction(
+        wfn, caller_converged=True, kernel=kernel, exact_exchange=a,
+        local_scale=b, grid=grid, transition_legs=dipole_legs(wfn),
+        representation="supplied_transition_leg_coordinates")
+    return -np.asarray(response.at_frequency(0.).raw_coupled)
+
+
+@pytest.fixture(scope="module")
+def ab_scf_cache():
+    """Matched-functional SCFs, shared between the two gates below."""
+    return {}
+
+
+def ab_wavefunction(cache, a, b, kernel):
+    key = (a, b, kernel)
+    if key not in cache:
+        molecule = _water(0.586)
+        with ab_settings("sto-3g"):
+            energy, wfn = psi4.energy("scf", dft_functional=matched_functional(a, b, kernel),
+                                      molecule=molecule, return_wfn=True)
+        cache[key] = (molecule, energy, wfn, scf_grid(wfn))
+    return cache[key]
+
+
+@pytest.mark.parametrize("a,b,kernel", AB_POINTS)
+def test_ab_scalings_match_psi4_tdscf_excitation_energies(ab_scf_cache, a, b, kernel):
+    """sqrt(eig(H2 H1)) against Psi4's Davidson TDSCF on the same SCF.
+
+    This is the only oracle in this file that reaches **H2**. At omega = 0 the
+    native solve (H2 H1 + omega^2) X = -4 H2 D collapses to -4 H1^-1 D and H2
+    cancels identically, so no static polarizability -- layer 5's included --
+    can see H2 at all. The product H2 H1 = (A-B)(A+B) instead has eigenvalues
+    Omega^2, the squared singlet excitation energies, and Psi4's own
+    ``tdscf_excitations`` computes those through ``scf_products.py``
+    (``twoel_Hx_full``, ``onel_Hx``, ``compute_Vx``) and a Davidson solver, a
+    wholly separate code path with its own independently written prefactors.
+
+    Matching to ~1e-13 therefore pins both scalings absolutely, in both
+    operators, and the checks at the end measure by how much rather than
+    assuming: a change of 0.001 in ``a`` moves the spectrum by ~6e-4, a 1%
+    change in ``b`` by ~1e-4, against a ~1e-13 baseline. The final check
+    perturbs ``a`` in H2 *only*, leaving H1 exact, which no static-response
+    gate anywhere in this track can do.
+    """
+    _, _, wfn, grid = ab_wavefunction(ab_scf_cache, a, b, kernel)
+    excitations = tdscf_excitations(wfn, states=4, triplets="NONE", tda=False,
+                                    r_convergence=1.e-9, verbose=0)
+    reference = np.array(sorted(state["EXCITATION ENERGY"] for state in excitations))
+
+    def spectrum(a1, b1, a2=None, b2=None):
+        """Omegas from H1 built at (a1, b1) and H2 built at (a2, b2)."""
+        h1 = ab_operators(wfn, kernel, a1, b1, grid)[0]
+        h2 = ab_operators(wfn, kernel, a1 if a2 is None else a2,
+                          b1 if b2 is None else b2, grid)[1]
+        eigenvalues = np.linalg.eigvals(h2 @ h1)
+        assert np.max(np.abs(eigenvalues.imag)) < 1.e-10
+        assert np.min(eigenvalues.real) > 0.
+        return np.sqrt(np.sort(eigenvalues.real))[:len(reference)]
+
+    np.testing.assert_allclose(spectrum(a, b), reference, rtol=0., atol=1.e-11)
+    assert np.max(np.abs(spectrum(a + 0.001, b) - reference)) > 1.e-4
+    assert np.max(np.abs(spectrum(a, b * 0.99) - reference)) > 3.e-5
+    assert np.max(np.abs(spectrum(a, b * 0.5) - reference)) > 1.e-3
+    assert np.max(np.abs(spectrum(a, b, a2=a + 0.001) - reference)) > 5.e-5
+
+
+@pytest.mark.parametrize("a,b,kernel", [(0.25, 0.75, "alda_slater_pw92"),
+                                        (0.3, 0.9, "alda_slater")])
+def test_ab_scalings_match_finite_field_energy_curvature(ab_scf_cache, a, b, kernel):
+    """alpha_kk = -d^2 E/dlambda_k^2 from perturbed matched-RKS total energies.
+
+    Layer 5's absolute oracle, moved off a = 1, b = 0: no response theory, no
+    orbital Hessian, no prefactor and no field sign convention enters a central
+    second difference of total energies. Because the SCF uses the matched
+    functional, what it measures is the (a, b)-scaled kernel, so the two
+    scalings are anchored to an energy and not to another response code.
+
+    The coarse grid does not degrade this. The second difference of the
+    grid-discretized E_xc *is* the grid-discretized f_xc, and the native local
+    kernel is built on the SCF's own grid, so the quadrature error cancels
+    between the two sides instead of entering as an error. Checked, not
+    assumed: (590, 99) with 168,883 rows agrees no better than the 3,682 rows
+    used here.
+
+    The correlated (0.25, 0.75) point matters separately -- it is the shipped
+    ``isapol_oeprop`` default -- because it is the only place a *correlation*
+    second derivative is anchored absolutely rather than re-derived.
+    """
+    molecule, reference_energy, wfn, grid = ab_wavefunction(ab_scf_cache, a, b, kernel)
+    functional = matched_functional(a, b, kernel)
+
+    def energy(field):
+        with ab_settings("sto-3g", field=field):
+            return psi4.energy("scf", dft_functional=functional, molecule=molecule)
+
+    curvature = {}
+    for h in (0.008, 0.004):
+        curvature[h] = np.array([
+            -(energy(np.eye(3)[k] * h) - 2. * reference_energy
+              + energy(-np.eye(3)[k] * h)) / h ** 2 for k in range(3)])
+    extrapolated = (4. * curvature[0.004] - curvature[0.008]) / 3.
+
+    native = np.diag(ab_polarizability(wfn, kernel, a, b, grid))
+    assert np.min(native) > 0.
+    np.testing.assert_allclose(extrapolated, native, rtol=1.e-5, atol=1.e-9)
+    coarse = np.max(np.abs(curvature[0.008] - native))
+    fine = np.max(np.abs(curvature[0.004] - native))
+    assert coarse / fine == pytest.approx(4., rel=0.05)
+    # Each scaling separately, so a compensating error in the pair cannot pass.
+    for wrong_a, wrong_b in ((a, b * 0.5), (a * 0.5, b)):
+        wrong = np.diag(ab_polarizability(wfn, kernel, wrong_a, wrong_b, grid))
+        assert not np.allclose(wrong, extrapolated, rtol=1.e-4, atol=1.e-6)
 
 
 # ----------------------------------------------------------------------------
