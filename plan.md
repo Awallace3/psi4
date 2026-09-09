@@ -9,7 +9,7 @@
    [NATIVE_OEPROP.md](psi4/src/psi4/libisapol/NATIVE_OEPROP.md): working public API.
 4. Read the stage-specific contracts linked from SPEC before changing that stage.
 
-**Accepted code checkpoint:** `86b548c492` plus this handoff's own commit, which
+**Accepted code checkpoint:** `86b548c492` plus `c07dafd37d`, which
 adds the bounded native direct-OV point-charge response prerequisite (section 3).
 All prior execution history remains in Git (section 8).
 No implementation/build/test background tasks are pending. Old task IDs and
@@ -246,7 +246,7 @@ Background terminal notifications are authoritative; do not poll to wait.
 - `d52fb16a19`: explicit fixed-GRAC admission; deferred odd raw identities.
 - `1a097ec9f6`: corrected non-ISA basis manifest, packaging and preflight.
 - `86b548c492`: compacted SPEC/handoff only; no scientific code changed.
-- This handoff's own commit: bounded native direct-OV point-charge response
+- `c07dafd37d`: bounded native direct-OV point-charge response
   prerequisite — `point_response.{h,cc}`, `isapol_native_point_response.py`,
   the `NativeDirectActualPointResponse` PFIT origin, 20 new tests in
   `tests/pytests/test_isapol_native_point_response.py`, and SPEC §6/§8.
