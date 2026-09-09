@@ -224,20 +224,39 @@ void alda_rows(const std::shared_ptr<BasisSet>& basis, const SharedMatrix& c, in
     }
 }
 SharedMatrix local_kernel(std::shared_ptr<BasisSet> basis, SharedMatrix c, int no,
-                          SharedMatrix grid, const std::string& kernel, double cutoff) {
+                          SharedMatrix grid, const std::string& kernel, double cutoff,
+                          bool blocked_blas3) {
     const int nv=c->ncol()-no, nov=no*nv;
     auto local=std::make_shared<Matrix>(nov,nov);
     alda_rows(basis,c,no,grid,kernel,cutoff,[&](int,int count,const Matrix& orbitals,
               const std::vector<double>& factors,const std::vector<unsigned char>& included) {
-        Matrix transitions(count,nov);
+        auto transitions=std::make_shared<Matrix>(count,nov);
         for(int p=0;p<count;++p)
             for(int a=0;a<nv;++a) for(int i=0;i<no;++i)
-                transitions.set(p,a*no+i,orbitals.get(p,i)*orbitals.get(p,no+a));
+                transitions->set(p,a*no+i,orbitals.get(p,i)*orbitals.get(p,no+a));
+        auto tr=transitions->pointer();
+        if(blocked_blas3) {
+            // Same rows, same global block order, same inclusion mask and the
+            // same left-associated factor*tr(p,t) scaling of the LEFT factor as
+            // the accumulator below; the excluded rows are exact zeros so they
+            // contribute nothing. One rank-count update per block, accumulating
+            // into the same L. Only BLAS's summation order over the points
+            // inside a block differs from the accumulator, so this agrees with
+            // it to rounding and is NOT claimed to be bitwise identical.
+            auto scaled=std::make_shared<Matrix>(count,nov);
+            auto sc=scaled->pointer();
+            for(int p=0;p<count;++p) {
+                if(!included[p]) continue;
+                const double factor=factors[p];
+                for(int t=0;t<nov;++t) sc[p][t]=factor*tr[p][t];
+            }
+            local->gemm(true,false,1.0,scaled,transitions,1.0);
+            return;
+        }
         // LibXC, BasisFunctions and BLAS stay outside worker regions. Neither
         // triangular mirroring nor a reduction: every ordered (t,u) retains
         // global point order and the original left-associated product.
         auto output=local->pointer();
-        auto tr=transitions.pointer();
         detail::parallel_work(static_cast<size_t>(nov),8,[&](size_t t) {
             for(int p=0;p<count;++p) {
                 if(!included[p]) continue;
@@ -325,9 +344,12 @@ OwnedState own_restricted_state(const std::shared_ptr<Wavefunction>& wfn, const 
 
 NativeResponseProvider::NativeResponseProvider(std::shared_ptr<Wavefunction> wfn,bool caller_converged,
         const std::string& kernel,double exact_exchange,double local_scale,SharedMatrix grid,
-        double density_cutoff,std::size_t max_bytes,std::size_t max_nov)
-    : kernel_(kernel),a_(exact_exchange),b_(local_scale),cutoff_(density_cutoff) {
+        double density_cutoff,std::size_t max_bytes,std::size_t max_nov,const std::string& algorithm)
+    : kernel_(kernel),algorithm_(algorithm),a_(exact_exchange),b_(local_scale),cutoff_(density_cutoff) {
     require_native(wfn && caller_converged,"explicit wavefunction and caller convergence declaration required");
+    require_native(algorithm=="ordered_pairwise" || algorithm=="shared_sweep",
+                   "unsupported named response algorithm (no inference)");
+    const bool shared_sweep = algorithm=="shared_sweep";
     require_native(kernel=="no_local" || kernel=="alda_slater" || kernel=="alda_slater_pw92" ||
                    kernel=="alda_slater_vwn","unsupported kernel (no functional inference)");
     require_native(std::isfinite(a_) && a_>=0 && a_<=1 && std::isfinite(b_) && b_>=0 && b_<=1,
@@ -349,7 +371,13 @@ NativeResponseProvider::NativeResponseProvider(std::shared_ptr<Wavefunction> wfn
         require_native(grid && grid->nirrep()==1 && grid->ncol()==4 && grid->nrow()>0,
                        "ALDA requires explicit grid rows [x,y,z,weight] in bohr");
         np=grid->nrow();
-        require_native(np<=1000000 && mul(np,mul(nov,nov))<=2000000000ULL,"ALDA work resource limit");
+        // Two separately calibrated limits on the SAME np*nov^2 accumulation:
+        // 2e9 for the hand accumulator it was measured against, 6.4e10 for the
+        // blocked BLAS3 primitive, which performs the identical flop count at a
+        // measured order-of-magnitude higher rate. Neither authorizes the other
+        // and no caller option raises either.
+        require_native(np<=1000000 && mul(np,mul(nov,nov))<=(shared_sweep?64000000000ULL:2000000000ULL),
+                       "ALDA work resource limit");
     }
     // Before snapshots, integral engines, dense operators or AO JK allocation.
     // Conservative tensor envelope: outputs/copies, one-transition JK scratch,
@@ -358,6 +386,9 @@ NativeResponseProvider::NativeResponseProvider(std::shared_ptr<Wavefunction> wfn
     auto elements=add(mul(12,mul(nov,nov)),mul(64,mul(nbf,nbf)));
     elements=add(elements,mul(16,mul(128,add(nbf,add(nmo,nov)))));
     elements=add(elements,mul(4,np));
+    // shared_sweep holds one J and one K AO operator per (b,j) transition at
+    // once; that is exactly what buys the single ordered quartet sweep.
+    if(shared_sweep) elements=add(elements,mul(2,mul(nov,mul(nbf,nbf))));
     planned_bytes_=add(mul(elements,sizeof(double)),16ULL*1024*1024);
     if (kernel!="no_local") {
         planned_bytes_=add(planned_bytes_,mul(128,sizeof(double)+sizeof(unsigned char)));
@@ -387,9 +418,10 @@ NativeResponseProvider::NativeResponseProvider(std::shared_ptr<Wavefunction> wfn
     // backend switch is also unavailable. Use the SAME native Libint shell data
     // and engine as libmints/eribase.cc, but explicitly pin precision and visit
     // all ordered quartets. No global option mutation, sieve or alternate backend.
+    const int ns=basis_->nshell();
+    if(!shared_sweep) {
     libint2::Engine engine(libint2::Operator::coulomb,basis_->max_nprimitive(),basis_->max_am(),0);
     engine.set_precision(1.e-15);
-    const int ns=basis_->nshell();
     for(int b=0;b<nvir_;++b) for(int j=0;j<nocc_;++j) {
         auto J=std::make_shared<Matrix>(nbf,nbf), K=std::make_shared<Matrix>(nbf,nbf);
         for(int s0=0;s0<ns;++s0) for(int s1=0;s1<ns;++s1)
@@ -419,9 +451,69 @@ NativeResponseProvider::NativeResponseProvider(std::shared_ptr<Wavefunction> wfn
             v_->set(t,u,j_ov->get(i,a)); x_->set(t,u,k_ov->get(i,a)); y_->set(t,u,k_vo->get(a,i));
         }
     }
+    } else {
+    // The identical ordered quartet sweep, identical engine and pinned
+    // precision, visited ONCE with every (b,j) transition updated inside it.
+    // For each element of each J_(b,j) and K_(b,j) the addends still arrive in
+    // the original s0,s1,s2,s3 then m,n,r,s order, each one the same
+    // left-associated eri*co(rho,j)*cv(sigma,b), so V, X and Y come out
+    // bitwise identical to the ordered_pairwise arrangement above. Work is
+    // split over s0 only: shell s0 owns rows mu of BOTH J and K, so workers
+    // write disjoint output rows and nothing is reduced or reordered. Each
+    // worker builds its own engine; no global option or sieve is touched.
+    std::vector<SharedMatrix> js(nov), ks(nov);
+    std::vector<double**> jp(nov), kp(nov);
+    for(std::size_t u=0;u<nov;++u) {
+        js[u]=std::make_shared<Matrix>(nbf,nbf); ks[u]=std::make_shared<Matrix>(nbf,nbf);
+        jp[u]=js[u]->pointer(); kp[u]=ks[u]->pointer();
+    }
+    double** cop=co->pointer(); double** cvp=cv->pointer();
+    detail::parallel_work(static_cast<std::size_t>(ns),2,[&](std::size_t shell0) {
+        const int s0=static_cast<int>(shell0);
+        libint2::Engine engine(libint2::Operator::coulomb,basis_->max_nprimitive(),basis_->max_am(),0);
+        engine.set_precision(1.e-15);
+        const auto& sh0=basis_->shell(s0);
+        for(int s1=0;s1<ns;++s1) for(int s2=0;s2<ns;++s2) for(int s3=0;s3<ns;++s3) {
+            engine.compute(basis_->l2_shell(s0),basis_->l2_shell(s1),basis_->l2_shell(s2),basis_->l2_shell(s3));
+            const double* buf=engine.results()[0];
+            if(!buf) continue; // engine precision zero; no external shell screening
+            const auto& sh1=basis_->shell(s1); const auto& sh2=basis_->shell(s2);
+            const auto& sh3=basis_->shell(s3);
+            std::size_t index=0;
+            for(int m=0;m<sh0.nfunction();++m) for(int n=0;n<sh1.nfunction();++n)
+            for(int r=0;r<sh2.nfunction();++r) for(int s=0;s<sh3.nfunction();++s,++index) {
+                const int mu=sh0.function_index()+m, nu=sh1.function_index()+n;
+                const int rho=sh2.function_index()+r, sigma=sh3.function_index()+s;
+                const double eri=buf[index];
+                require_native(std::isfinite(eri),"nonfinite ERI");
+                // J_mn=(mn|rs) C_rj C_sb; K_mr=(mn|rs) C_nj C_sb.
+                const double* co_rho=cop[rho]; const double* co_nu=cop[nu];
+                const double* cv_sigma=cvp[sigma];
+                for(int b=0;b<nvir_;++b) {
+                    const double cvb=cv_sigma[b]; const int base=b*nocc_;
+                    for(int j=0;j<nocc_;++j) {
+                        double* jrow=jp[base+j][mu]; double* krow=kp[base+j][mu];
+                        jrow[nu]+=eri*co_rho[j]*cvb;
+                        krow[rho]+=eri*co_nu[j]*cvb;
+                    }
+                }
+            }
+        }
+    });
+    for(int b=0;b<nvir_;++b) for(int j=0;j<nocc_;++j) {
+        const int u=b*nocc_+j;
+        auto j_ov=linalg::triplet(co,js[u],cv,true,false,false);
+        auto k_ov=linalg::triplet(co,ks[u],cv,true,false,false);
+        auto k_vo=linalg::triplet(cv,ks[u],co,true,false,false);
+        for(int a=0;a<nvir_;++a) for(int i=0;i<nocc_;++i) {
+            int t=a*nocc_+i;
+            v_->set(t,u,j_ov->get(i,a)); x_->set(t,u,k_ov->get(i,a)); y_->set(t,u,k_vo->get(a,i));
+        }
+    }
+    }
     symmetric(v_,"Coulomb"); symmetric(x_,"exchange direct"); symmetric(y_,"exchange transpose");
     local_=kernel=="no_local" ? std::make_shared<Matrix>(nov,nov) :
-        local_kernel(basis_,c_,nocc_,grid_,kernel,cutoff_);
+        local_kernel(basis_,c_,nocc_,grid_,kernel,cutoff_,shared_sweep);
     h1_=std::make_shared<Matrix>(nov,nov); h2_=std::make_shared<Matrix>(nov,nov);
     for(int t=0;t<static_cast<int>(nov);++t) for(int u=0;u<static_cast<int>(nov);++u) {
         double gap=t==u ? eps_->get(nocc_+t/nocc_)-eps_->get(t%nocc_) : 0;

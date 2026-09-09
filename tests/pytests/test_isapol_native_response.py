@@ -429,7 +429,8 @@ def test_preflight_real_dimensions_before_snapshot_or_provider(water, monkeypatc
     nov = water.nalpha() * (water.nmo() - water.nalpha())
     with pytest.raises(ValueError, match='NativeResponseProvider: dense OV resource limit'):
         make(water, kernel='alda_slater', local_scale=1., grid=np.ones((7, 4)), max_nov=nov-1)
-    assert calls == [((water.basisset().nbf(), water.nmo(), water.nalpha(), 7), {'max_nov': nov-1})]
+    assert calls == [((water.basisset().nbf(), water.nmo(), water.nalpha(), 7),
+                      {'max_nov': nov-1, 'algorithm': 'ordered_pairwise'})]
 
 
 def test_small_native_default_preflight_is_observational(water, monkeypatch):
@@ -451,3 +452,64 @@ def test_small_native_default_preflight_is_observational(water, monkeypatch):
     np.testing.assert_array_equal(model.at_frequency(.4).raw_coupled, baseline)
     assert len(calls) == 1 and calls[0].passes and calls[0].grid_rows == 0
     assert model.coordinate_declaration.startswith('identity direct OV')
+
+
+def test_shared_sweep_reproduces_ordered_pairwise(water):
+    # The same ordered quartet sweep and the same ordered quadrature, arranged
+    # to visit the sweep once. V/X/Y must be bitwise identical because every
+    # addend arrives in the same order as the same left-associated product;
+    # the blocked BLAS3 local primitive only reorders summation inside a
+    # 128-row block, so it is checked against the independent oracle and
+    # against the accumulator at rounding level, never claimed bitwise.
+    grid, local = grid_and_local(water, "alda_slater_pw92")
+    policy = dict(kernel="alda_slater_pw92", exact_exchange=.25, local_scale=.75, grid=grid)
+    pairwise = make(water, **policy).provider
+    sweep = make(water, algorithm="shared_sweep", **policy).provider
+    assert pairwise.algorithm == "ordered_pairwise" and sweep.algorithm == "shared_sweep"
+    for name in ("coulomb", "exchange_direct", "exchange_transpose"):
+        np.testing.assert_array_equal(getattr(sweep, name)().np, getattr(pairwise, name)().np)
+    np.testing.assert_allclose(sweep.local_primitive().np, local, rtol=2.e-9, atol=2.e-11)
+    for name in ("local_primitive", "h1", "h2"):
+        reference = getattr(pairwise, name)().np
+        np.testing.assert_allclose(getattr(sweep, name)().np, reference,
+                                   rtol=1.e-13, atol=1.e-13*max(1., np.abs(reference).max()))
+    # Holding one J and one K AO operator per transition is what buys the
+    # single sweep, and it is declared in the same gated envelope.
+    nov = pairwise.nocc*pairwise.nvir
+    assert (sweep.planned_bytes - pairwise.planned_bytes
+            == 2*nov*water.basisset().nbf()**2*np.dtype(float).itemsize)
+
+
+def test_shared_sweep_only_moves_its_own_alda_gate(water):
+    from psi4.driver.procrouting.isapol_response_preflight import (
+        ALDA_WORK_LIMITS, estimate_response_work)
+    assert ALDA_WORK_LIMITS == {"ordered_pairwise": 2_000_000_000,
+                                "shared_sweep": 64_000_000_000}
+    # aug-cc-pVTZ water dimensions of the reference protocol on the full
+    # unpruned IsaGrid(99,590): rejected by the accumulator's calibrated
+    # limit, admitted by the blocked primitive's own calibrated limit.
+    dimensions = dict(nbf=92, nmo=92, nocc=5, grid_rows=173460)
+    pairwise = estimate_response_work(**dimensions)
+    sweep = estimate_response_work(**dimensions, algorithm="shared_sweep")
+    assert pairwise.alda_work == sweep.alda_work == 32_822_968_500
+    assert pairwise.ao_work == sweep.ao_work == 31_163_093_760
+    assert pairwise.failures == ("ALDA work resource limit",) and not pairwise.passes
+    assert sweep.failures == () and sweep.passes
+    assert (pairwise.max_grid_rows, sweep.max_grid_rows) == (10569, 338221)
+    # Every other limit is identical; no caller argument raises either limit.
+    for name in ("nbf_limit", "native_nov_limit", "ao_work_limit", "grid_rows_limit"):
+        assert getattr(pairwise, name) == getattr(sweep, name)
+    with pytest.raises(TypeError):
+        estimate_response_work(**dimensions, alda_work_limit=10**12)
+
+
+@pytest.mark.parametrize("name", ["", "ordered", "shared", "blas3", None, 3, True])
+def test_unknown_response_algorithm_is_never_inferred(water, name):
+    from psi4.driver.procrouting.isapol_response_preflight import estimate_response_work
+    with pytest.raises(ValueError, match="algorithm"):
+        make(water, algorithm=name)
+    with pytest.raises(ValueError, match="algorithm"):
+        estimate_response_work(2, 2, 1, 0, algorithm=name)
+    args = [water, True, "no_local", .0, .0, None, 1.e-10, 512*1024**2, 512, name]
+    with pytest.raises((ValueError, RuntimeError, TypeError)):
+        core.NativeResponseProvider(*args)

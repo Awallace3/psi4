@@ -12,7 +12,7 @@ import numpy as np
 from psi4 import core
 from .sapt.fdds_response import FDDSFullOVResponse
 from .isapol_native_correction import validate_correction
-from .isapol_response_preflight import estimate_response_work
+from .isapol_response_preflight import ALDA_WORK_LIMITS, estimate_response_work
 
 
 @dataclass(frozen=True)
@@ -144,7 +144,8 @@ def native_response_from_wavefunction(wavefunction, *, caller_converged, kernel,
                                      density_cutoff=1.e-10, max_bytes=512*1024**2,
                                      max_nov=512, transition_legs=None,
                                      representation=None, scf_correction='NONE',
-                                     expected_grac_shift=None):
+                                     expected_grac_shift=None,
+                                     algorithm='ordered_pairwise'):
     """Construct native operators ONCE; return a reusable frequency provider.
 
     Explicit kernels:
@@ -172,6 +173,16 @@ def native_response_from_wavefunction(wavefunction, *, caller_converged, kernel,
     current successful SCF seal. Only the canonical .5/40 LB*.75/VWN*1 profile
     is supported. This accepts SCF inputs, not a GRAC kernel derivative.
 
+    ``algorithm`` names which arrangement of the identical ordered nbf^4 quartet
+    sweep and the identical ordered ALDA quadrature is used, and therefore which
+    calibrated ALDA work limit applies (see ``ALDA_WORK_LIMITS``). Both produce
+    the same operators from the same inputs: ``shared_sweep`` visits the quartet
+    sweep once instead of once per transition, which leaves the Coulomb and both
+    exchange operators bitwise identical, and evaluates the local primitive as
+    one blocked DGEMM per 128-row block, which agrees with the shipped hand
+    accumulator to rounding rather than bitwise. It is not a screening,
+    quadrature-coarsening or tolerance change and it raises no other limit.
+
     C++ holds private snapshots of basis/molecule, orbitals, energies, density,
     grid and policy. Current support excludes open shell, non-C1, fractional or
     non-Aufbau occupations, complex state, ECP, and dense resources above
@@ -193,6 +204,8 @@ def native_response_from_wavefunction(wavefunction, *, caller_converged, kernel,
             raise ValueError(f"{name} must be a positive integer")
     if kernel not in ("no_local", "alda_slater", "alda_slater_pw92", "alda_slater_vwn"):
         raise ValueError("unsupported explicit native kernel")
+    if algorithm not in ALDA_WORK_LIMITS:
+        raise ValueError("unsupported explicit native response algorithm")
     if not 0 <= exact_exchange <= 1 or not 0 <= local_scale <= 1 or density_cutoff <= 0:
         raise ValueError("exchange/local scales must be in [0,1] and density cutoff positive")
     if kernel == "no_local" and (local_scale != 0 or grid is not None):
@@ -232,12 +245,12 @@ def native_response_from_wavefunction(wavefunction, *, caller_converged, kernel,
             and wavefunction.soccpi()[0] == 0):
         estimate_response_work(basis.nbf(), wavefunction.nmo(), wavefunction.nalpha(),
                                0 if points is None else points.shape[0],
-                               max_nov=max_nov).require_pass()
+                               max_nov=max_nov, algorithm=algorithm).require_pass()
     if points is not None:
         native_grid = core.Matrix.from_array(np.array(points, dtype=float, copy=True))
     provider = core.NativeResponseProvider(
         wavefunction, True, kernel, float(exact_exchange), float(local_scale),
-        native_grid, float(density_cutoff), int(max_bytes), int(max_nov))
+        native_grid, float(density_cutoff), int(max_bytes), int(max_nov), str(algorithm))
     nov = provider.nocc * provider.nvir
     if legs is None:
         legs = np.eye(nov)

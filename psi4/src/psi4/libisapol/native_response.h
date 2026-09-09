@@ -34,13 +34,37 @@ namespace isapol {
  * The caller declares convergence. Metadata/density/orthonormality are checked,
  * but neither SCF convergence nor a GRAC/grid provenance seal is asserted.
  * All getters return copies. No mutable Wavefunction or Options is retained.
+ *
+ * Two explicitly named algorithms produce the same operators from the same
+ * ordered quadrature and the same ordered nbf^4 shell-quartet sweep. They are
+ * separately gated because their measured cost per unit of gated work differs;
+ * neither gate ever authorizes the other.
+ *   * "ordered_pairwise" (default): the shipped, calibrated arrangement. The
+ *     ordered quartet sweep is re-run once per (b,j) transition, and the local
+ *     ALDA primitive is the hand accumulator. Gates: nov*nbf^4 <= 6.4e10 and
+ *     grid_rows*nov^2 <= 2e9.
+ *   * "shared_sweep": the ordered quartet sweep is visited ONCE with every
+ *     (b,j) transition updated inside it, parallel over the s0 shell (which
+ *     owns rows mu of both J and K, so workers never share an output element
+ *     and no reduction reorders a sum). Every addend of every output element
+ *     still arrives in the original s0,s1,s2,s3 then m,n,r,s order as the same
+ *     left-associated eri*co(rho,j)*cv(sigma,b), so coulomb(),
+ *     exchange_direct() and exchange_transpose() are BITWISE identical to
+ *     ordered_pairwise. Its ALDA local primitive is instead one blocked DGEMM
+ *     per 128-row block over the identical global point order and the identical
+ *     left-associated factor*tr(p,t) row scaling; only BLAS's summation order
+ *     within a block differs, so local_primitive() agrees to rounding rather
+ *     than bitwise. Gates: the same nov*nbf^4 <= 6.4e10 (this sweep does
+ *     strictly less integral work), grid_rows*nov^2 <= 6.4e10 measured against
+ *     the BLAS3 rate, and 2*nov*nbf^2 extra workspace doubles.
  */
 class NativeResponseProvider {
  public:
     NativeResponseProvider(std::shared_ptr<Wavefunction> wfn, bool caller_converged,
                            const std::string& kernel, double exact_exchange,
                            double local_scale, std::shared_ptr<Matrix> grid, double density_cutoff,
-                           std::size_t max_bytes, std::size_t max_nov);
+                           std::size_t max_bytes, std::size_t max_nov,
+                           const std::string& algorithm = "ordered_pairwise");
     std::shared_ptr<Matrix> h1() const;
     std::shared_ptr<Matrix> h2() const;
     std::shared_ptr<Matrix> coulomb() const;
@@ -53,6 +77,7 @@ class NativeResponseProvider {
     int nocc() const { return nocc_; }
     int nvir() const { return nvir_; }
     const std::string& kernel() const { return kernel_; }
+    const std::string& algorithm() const { return algorithm_; }
     double exact_exchange() const { return a_; }
     double local_scale() const { return b_; }
     double density_cutoff() const { return cutoff_; }
@@ -62,7 +87,7 @@ class NativeResponseProvider {
     std::shared_ptr<Matrix> c_, da_, grid_, v_, x_, y_, local_, h1_, h2_;
     std::shared_ptr<Vector> eps_;
     int nocc_ = 0, nvir_ = 0;
-    std::string kernel_;
+    std::string kernel_, algorithm_;
     double a_, b_, cutoff_;
     std::size_t planned_bytes_ = 0;
 };

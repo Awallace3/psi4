@@ -333,6 +333,12 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     options.add_int("ATOMIC_RESPONSE_RADIAL_POINTS", 99);
     /*- Dedicated native ALDA response angular resolution, separate from ISA and SCF. -*/
     options.add_int("ATOMIC_RESPONSE_SPHERICAL_POINTS", 590);
+    /*- Named native response algorithm. Both arrangements evaluate the same ordered
+        shell-quartet sweep and the same ordered ALDA quadrature; SHARED_SWEEP visits
+        the sweep once for all transitions and accumulates the local primitive with a
+        blocked BLAS3 update, so it carries its own separately calibrated ALDA work
+        limit. It relaxes no other limit and coarsens no quadrature. -*/
+    options.add_str("ATOMIC_RESPONSE_ALGORITHM", "ORDERED_PAIRWISE", "ORDERED_PAIRWISE SHARED_SWEEP");
 
     /// MBIS Options (libmints/oeprop.cc)
 

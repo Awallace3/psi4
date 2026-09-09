@@ -457,6 +457,81 @@ contribution norm — 6.94% of the isotropic dipole polarizability at cc-pVDZ,
 where the full primitive is affordable. Screening does **not** make that demo
 affordable; see plan §4.
 
+### Two named native response algorithms
+
+`NativeResponseProvider` takes an explicit `algorithm` string and accepts exactly
+two values, `ordered_pairwise` (default) and `shared_sweep`. Nothing is inferred:
+an unknown, empty or abbreviated name is rejected in the constructor, in
+`estimate_response_work`, in `native_response_from_wavefunction`, and by the
+public `ATOMIC_RESPONSE_ALGORITHM` option's own choice list. The name is part of
+`isapol_native._policy`'s hash, so a context built under one arrangement is never
+reused under the other.
+
+Both arrangements evaluate the *same* ordered nbf⁴ shell-quartet sweep and the
+*same* ordered ALDA quadrature. They differ only in how that work is arranged:
+
+- `ordered_pairwise` re-runs the quartet sweep once per `(b,j)` transition pair
+  and accumulates the local primitive with the hand triple loop. This is the
+  shipped, calibrated arrangement and is unchanged.
+- `shared_sweep` visits the quartet sweep **once**, updating every `(b,j)`
+  transition inside it, parallel over the outer shell `s0` only — shell `s0` owns
+  rows `mu` of both J and K, so workers write disjoint output rows and there is no
+  reduction and no reordering. Each worker builds its own `libint2::Engine` at
+  `set_precision(1.e-15)`. Its ALDA local primitive is one blocked DGEMM per
+  128-row block with the identical left-factor scaling.
+
+**Agreement.** `coulomb()`, `exchange_direct()` and `exchange_transpose()` are
+**bitwise identical** between the two, because every addend arrives in the same
+`s0,s1,s2,s3` then `m,n,r,s` order as the same left-associated
+`eri*co(rho,j)*cv(sigma,b)`. `local_primitive()` agrees **to rounding, not
+bitwise**: the DGEMM reorders summation inside a 128-row block. Measured, cc-pVDZ
+(nbf=24, nOV=95, 4000 rows): V/X/Y bitwise, L max|d| 4.235e-22 (rel 2.730e-16),
+H1 rel 2.398e-26. aug-cc-pVDZ (nbf=41, nOV=180): V/X/Y bitwise, L rel 2.016e-16,
+H1 rel 1.946e-26. `test_shared_sweep_reproduces_ordered_pairwise` asserts the
+bitwise operators, checks L against the independent analytic/LibXC oracle, and
+checks L/H1/H2 against the accumulator at 1e-13 — never claiming bitwise for L.
+
+**Separate gates, neither authorizing the other.** Both keep the same
+`nOV·nbf⁴ ≤ 6.4e10` AO limit, the same `nbf ≤ 256`, `nOV ≤ 512` and
+`grid_rows ≤ 1e6`. The ALDA `grid_rows·nOV²` limit is per algorithm,
+`ALDA_WORK_LIMITS = {"ordered_pairwise": 2e9, "shared_sweep": 6.4e10}`, because
+the *measured rate* per unit of gated work differs: 9.08 GFLOP/s for the
+accumulator versus 104 GFLOP/s for the blocked update, i.e. both limits are
+≈0.5 s of accumulation at the same wall-clock budget. Measured end-to-end,
+4000 rows: cc-pVDZ 5.05 s → 0.16 s (31.8×), aug-cc-pVDZ 33.78 s → 1.93 s
+(17.5×). No caller argument raises either limit; asking for the faster primitive
+is asking for a different primitive, and `estimate_response_work` is still called
+on the real dimensions on both paths. `shared_sweep` declares its extra
+`2·nOV·nbf²` doubles of J/K workspace in the same gated `planned_bytes_`
+envelope, asserted exactly by the test.
+
+**What this unblocks, measured.** At the reference protocol's dimensions
+(PBE0/aug-cc-pVTZ water, fixed GRAC 0.06490004527520865, `scf_type pk`, DFT
+99/590, full unpruned `IsaGrid(99,590)` = 173,460 rows, nbf=nmo=92, nOV=435,
+16 threads): `ao_work` 31,163,093,760 and `alda_work` 32,822,968,500 are the same
+for both, but `ordered_pairwise` fails its ALDA limit (`max_grid_rows` 10,569)
+while `shared_sweep` passes (`max_grid_rows` 338,221). The direct-API response
+then constructs in **15.29 s** with `planned_bytes` 113,886,352, giving
+α_iso **9.870961449318902** bohr³ (diag 10.389483143568143, 9.414895197052905,
+9.808506007335655; off-diagonals ≤1.07e-13) and L_maxabs 0.14909129325125306.
+The public `oeprop` endpoint at the same protocol completes with **zero stage
+failures** (strict LW 1e-6 passed, 37 ISA iterations) in 2.61 s SCF + **24.49 s**
+properties at **1,488,060 KiB** peak RSS, E=-76.37966827740807, atomic dipole
+α = 7.108845614906964, 1.3810579153027442, 1.381057910633834 bohr³ (summing to
+the molecular α_iso).
+
+Those two aVTZ costs are quoted separately on purpose. The ALDA accumulation the
+new gate covers is ≈0.6 s of the demo; the `ordered_pairwise` `(b,j)` quartet
+loop that `shared_sweep` replaces was separately measured at **953.9 s** with
+`no_local`. `shared_sweep` addresses that loop as well as the primitive, which is
+why the whole response is now seconds — but the two are never one number.
+
+This is a resource result and a demo at the reference protocol's basis and
+SCF-input policy. It is **not** a parity claim: the run above is still SPEC track
+1's generated H/O JKFIT/even-tempered recipe with ordinary ISA-A and direct-OV
+response, not the trace's constrained NN → distributed response → LW → PFIT path
+(plan §4, §5 items 1 and 6).
+
 ## 7. Dispersion coverage and oracle scope
 
 Scalar rank-l alpha is trace(alpha_ll)/(2l+1). Explicit CP weights already contain

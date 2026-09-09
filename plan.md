@@ -65,6 +65,14 @@ No implementation/build/test background tasks are pending. Old task IDs and
   targets under the separate `NativeDirectActualPointResponse` origin. It is
   **not** the historical constrained-NN/fitted-propagator target, and it infers
   no charge/multipole model, channel set or parameter count.
+- Two explicitly named native response algorithms, `ordered_pairwise` (default,
+  unchanged) and `shared_sweep`, selected by `ATOMIC_RESPONSE_ALGORITHM` on the
+  public path and by `algorithm=`/`response_algorithm=` on the driver APIs, and
+  folded into the native-context policy hash. Same ordered sweep and quadrature;
+  V/X/Y bitwise identical, L equal to rounding. Separately calibrated ALDA work
+  limits (2e9 vs 6.4e10 on `grid_rows*nOV**2`); neither authorizes the other and
+  no caller argument raises either. This is what makes the full unpruned
+  PBE0/aug-cc-pVTZ IsaGrid(99,590) response affordable (section 4).
 
 ### Latest verified evidence (local paths relative to worktree)
 
@@ -247,6 +255,35 @@ would remove ~0.6 s of a ~16-minute demo: closing item 4 needs the (b,j)-pair
 recomputation of the ordered nbf⁴ shell loop addressed as well, and the two
 costs must never be quoted as one.
 
+**Resolved, by that sanctioned route only.** `shared_sweep` is now the second
+explicitly named native response algorithm (SPEC §6 "Two named native response
+algorithms"): the ordered nbf⁴ quartet sweep visited **once** for all `(b,j)`
+transitions, parallel over `s0` only, plus a blocked-BLAS3 ALDA primitive. It
+addresses *both* aVTZ costs above, which are still quoted separately: the ≈0.6 s
+of accumulation the new gate covers, and the 953.9 s `(b,j)` quartet loop the
+single sweep removes. V/X/Y are bitwise identical to `ordered_pairwise`; L agrees
+to rounding (rel 2.7e-16 / 2.0e-16) and against the independent analytic oracle.
+It carries its **own measured** ALDA limit (`ALDA_WORK_LIMITS`, 6.4e10 vs the
+accumulator's 2e9, both ≈0.5 s at the measured 104 vs 9.08 GFLOP/s); every other
+limit is byte-identical, no grid was pruned or coarsened, no tolerance relaxed,
+no `max_bytes` raised, and `estimate_response_work` is still called on the real
+dimensions on both the direct and the public path. The accumulator's 2e9 stays in
+force for the accumulator.
+
+So the aVTZ blocker is cleared and the demo is **measured**: full unpruned
+173,460-row `IsaGrid(99,590)` at nbf=nmo=92, nOV=435, `ordered_pairwise`
+preflight still failing (`max_grid_rows` 10,569) and `shared_sweep` passing
+(338,221); direct-API response **15.29 s**, `planned_bytes` 113,886,352,
+α_iso **9.870961449318902** bohr³ (diag 10.389483143568143, 9.414895197052905,
+9.808506007335655). Through the public `oeprop` endpoint with
+`ATOMIC_RESPONSE_ALGORITHM SHARED_SWEEP` and the reference GRAC shift
+0.06490004527520865: E=-76.37966827740807, 2.61 s SCF + **24.49 s** properties,
+peak RSS **1,488,060 KiB**, 37 ISA iterations, **zero stage failures** (strict LW
+1e-6 passed), atomic dipole α = 7.108845614906964, 1.3810579153027442,
+1.381057910633834 bohr³. That is track 1's generated recipe and ISA-A at track
+2's basis and SCF-input policy — a resource and demo result, **not** parity;
+items 1 and 6 of section 5 still own the constrained-NN response path.
+
 Missing historical artifacts: generated CKS, actual SCF/basis export and versions,
 response grids/propagators, pre-refinement frequency tensors, actual point lattice
 and `.p2p` responses, `.pdef`, per-frequency PFIT data and refined tensors.
@@ -341,6 +378,15 @@ remains between it and the `777f904` target, in dependency order:
    **953.9 s** of quartet loop after a 5.3 s PBE0 SCF, so it passes every gate
    and is still the dominant wall clock — a BLAS3 ALDA primitive alone would not
    make the demo interactive.
+   *Status: closed.* `shared_sweep` (SPEC §6 "Two named native response
+   algorithms", section 4 "Resolved") is a second explicitly named algorithm with
+   its own **measured** ALDA gate that also visits the quartet sweep once for all
+   `(b,j)`, so it addresses both costs while still reporting them separately.
+   V/X/Y bitwise identical, L to rounding and against the analytic oracle.
+   Full unpruned 173,460-row aVTZ response: **15.29 s** direct API, α_iso
+   9.870961449318902 bohr³; **24.49 s** / 1,488,060 KiB through public `oeprop`
+   with zero stage failures. No limit raised, no grid pruned, no tolerance
+   relaxed. The accumulator's 2e9 limit stays in force for the accumulator.
 
 Each step needs its own independent oracle before it is wired to the next, and
 each must stay separately labelled in provenance; see the SPEC §8 note that the

@@ -187,9 +187,10 @@ void export_isapol(py::module& m) {
     });
     py::class_<NativeResponseProvider, std::shared_ptr<NativeResponseProvider>>(m, "NativeResponseProvider")
         .def(py::init<std::shared_ptr<Wavefunction>, bool, const std::string&, double, double,
-                      SharedMatrix, double, std::size_t, std::size_t>(),
+                      SharedMatrix, double, std::size_t, std::size_t, const std::string&>(),
              "wavefunction"_a, "caller_converged"_a, "kernel"_a, "exact_exchange"_a,
-             "local_scale"_a, "grid"_a, "density_cutoff"_a, "max_bytes"_a, "max_nov"_a)
+             "local_scale"_a, "grid"_a, "density_cutoff"_a, "max_bytes"_a, "max_nov"_a,
+             "algorithm"_a = "ordered_pairwise")
         .def("h1", &NativeResponseProvider::h1)
         .def("h2", &NativeResponseProvider::h2)
         .def("coulomb", &NativeResponseProvider::coulomb)
@@ -202,6 +203,7 @@ void export_isapol(py::module& m) {
         .def_property_readonly("nocc", &NativeResponseProvider::nocc)
         .def_property_readonly("nvir", &NativeResponseProvider::nvir)
         .def_property_readonly("kernel", &NativeResponseProvider::kernel)
+        .def_property_readonly("algorithm", &NativeResponseProvider::algorithm)
         .def_property_readonly("exact_exchange", &NativeResponseProvider::exact_exchange)
         .def_property_readonly("local_scale", &NativeResponseProvider::local_scale)
         .def_property_readonly("density_cutoff", &NativeResponseProvider::density_cutoff)

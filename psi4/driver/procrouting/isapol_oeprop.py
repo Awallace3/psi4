@@ -7,6 +7,9 @@ direct occupied-fast OV, Slater/PW92 ALDA + 25% exact exchange, no GRAC by
 DEFAULT, no PFIT. FIXED_GRAC is a separate explicit SCF-input acceptance policy,
 not a generated matched preset or a GRAC response kernel.
 The response grid and tensor localization are not density partition policies.
+ATOMIC_RESPONSE_ALGORITHM names the native response arrangement and therefore
+which calibrated ALDA work limit applies; it is not a screening, quadrature or
+tolerance policy and relaxes no other limit.
 """
 from dataclasses import dataclass
 import math
@@ -142,7 +145,8 @@ def run(wfn, tasks):
     keys = ('PARTITION_SCHEME', 'ATOMIC_RESPONSE_LOCALIZATION', 'ATOMIC_PROPERTY_RECIPE',
             'ATOMIC_PROPERTY_RADIAL_POINTS', 'ATOMIC_PROPERTY_SPHERICAL_POINTS',
             'ATOMIC_RESPONSE_RADIAL_POINTS', 'ATOMIC_RESPONSE_SPHERICAL_POINTS',
-            'ATOMIC_SCF_ASYMPTOTIC_CORRECTION', 'ATOMIC_SCF_EXPECTED_GRAC_SHIFT')
+            'ATOMIC_SCF_ASYMPTOTIC_CORRECTION', 'ATOMIC_SCF_EXPECTED_GRAC_SHIFT',
+            'ATOMIC_RESPONSE_ALGORITHM')
     options = tuple((k, core.get_global_option(k)) for k in keys)
     effective = dict(options)
     recipe = generated_recipe(wfn, int(effective['ATOMIC_PROPERTY_RADIAL_POINTS']),
@@ -165,14 +169,17 @@ def run(wfn, tasks):
         response_grid = np.column_stack((grid.x(), grid.y(), grid.z(), grid.w()))
         # Actual IsaGrid rows, before partition/response work. Do not infer a
         # response row count from SCF options or a historical basis alias.
+        # The named algorithm decides which calibrated ALDA limit applies, and
+        # nothing else; it is recorded in the request options above.
+        algorithm = str(effective['ATOMIC_RESPONSE_ALGORITHM']).lower()
         estimate_response_work(wfn.basisset().nbf(), wfn.nmo(), wfn.nalpha(),
-                               response_grid.shape[0]).require_pass()
+                               response_grid.shape[0], algorithm=algorithm).require_pass()
         dispersion = 'ATOMIC_DISPERSION' in tasks
         quad = n.Quadrature.from_casimir(core.CasimirGrid(10,.5)) if dispersion else None
         properties = n.native_properties(wfn, recipe, bonds=bonds, frames=None, caller_converged=True,
             kernel='alda_slater_pw92', exact_exchange=.25, local_scale=.75, response_grid=response_grid,
             frequencies=quad.frequencies if quad else (0.,), quadrature=quad, pair_self=dispersion,
-            response_basis='direct_ov', **correction_options)
+            response_basis='direct_ov', response_algorithm=algorithm, **correction_options)
         partition = properties.partition
     correction = validate_correction(wfn, **correction_options)
     result = AtomicPropertyResult(tasks, options, partition, properties, residual, correction)

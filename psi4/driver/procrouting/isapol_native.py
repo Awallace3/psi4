@@ -84,8 +84,13 @@ def _context(wfn):
     return h.hexdigest()
 
 
-def _policy(kernel, exact_exchange, local_scale, grid, density_cutoff, correction=None):
-    h = hashlib.sha256(repr((kernel, exact_exchange, local_scale, density_cutoff, correction)).encode())
+def _policy(kernel, exact_exchange, local_scale, grid, density_cutoff, correction=None,
+            algorithm='ordered_pairwise'):
+    # The named response algorithm is part of the policy: the two arrangements
+    # are separately gated, so a context built under one is not reusable under
+    # the other even though their operators agree.
+    h = hashlib.sha256(repr((kernel, exact_exchange, local_scale, density_cutoff, correction,
+                             algorithm)).encode())
     if grid is not None:
         a = np.asarray(grid)
         if a.dtype.kind not in 'fiu' or not np.isfinite(a).all():
@@ -156,7 +161,8 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                       quadrature=None, partner=None, pair_self=False, max_order=12,
                       density_cutoff=1.e-10, max_bytes=512*1024**2, max_nov=512,
                       response_context=None, response_basis='fitted_auxiliary',
-                      scf_correction='NONE', expected_grac_shift=None):
+                      scf_correction='NONE', expected_grac_shift=None,
+                      response_algorithm='ordered_pairwise'):
     """Return all owned stages, with strict production LW (1e-6) or failures.
 
     Explicit ``response_basis='direct_ov'`` integrates actual occupied/virtual
@@ -175,6 +181,10 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
     weights or PFIT. Explicit A/B pairing accepts a successful NativeProperties
     or LW LocalProperties; pair_self=True explicitly chooses this same model B.
     ``response_context`` permits reuse only under exact same state and policy.
+    ``response_algorithm`` names the native arrangement (see
+    ``isapol_native_response``); it is part of the policy hash and selects which
+    calibrated ALDA work limit applies. It changes no other limit and no
+    partition, fit, LW or PFIT stage.
     """
     if response_basis not in ('fitted_auxiliary', 'direct_ov'):
         raise ValueError('unsupported response_basis')
@@ -202,7 +212,8 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
     if correction.policy == 'FIXED_GRAC' and kernel == 'no_local':
         raise ValueError('FIXED_GRAC admission requires an explicit ALDA response policy; no GRAC kernel derivative')
     context_hash = _context(wfn)
-    policy_hash = _policy(kernel, exact_exchange, local_scale, response_grid, density_cutoff, correction)
+    policy_hash = _policy(kernel, exact_exchange, local_scale, response_grid, density_cutoff,
+                          correction, response_algorithm)
     if response_context is not None:
         if (not isinstance(response_context, NativeContext)
                 or response_context.wavefunction_sha256 != context_hash
@@ -216,7 +227,8 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
     def result():
         return NativeProperties(partition, context, fit, adapted, freq, quadrature, tuple(responses),
             distributed, tensors, local, dispersion, tuple(failures), diagnostics,
-            f'native {kernel}; exact_exchange={exact_exchange}; local_scale={local_scale}; Drho-C ISA-A; {response_basis}; no PFIT'
+            f'native {kernel}; exact_exchange={exact_exchange}; local_scale={local_scale}; '
+            f'{response_algorithm}; Drho-C ISA-A; {response_basis}; no PFIT'
             + ('; ' + correction.response_description if correction.policy == 'FIXED_GRAC' else ''),
             correction)
     try:
@@ -228,7 +240,8 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
             response = native_response_from_wavefunction(wfn, caller_converged=True, kernel=kernel,
                 exact_exchange=exact_exchange, local_scale=local_scale, grid=response_grid,
                 density_cutoff=density_cutoff, max_bytes=max_bytes, max_nov=max_nov,
-                scf_correction=scf_correction, expected_grac_shift=expected_grac_shift)
+                scf_correction=scf_correction, expected_grac_shift=expected_grac_shift,
+                algorithm=response_algorithm)
             context = NativeContext(response, context_hash, policy_hash)
         provider = context.response.provider
         c = np.asarray(provider.orbitals())

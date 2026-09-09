@@ -6,9 +6,21 @@ Mirrors native_response.cc's OV, direct-JK and ALDA guard order. Python integers
 are exact (no machine wrap); C++-int input bounds also bound the cost of this
 calculation. C++ remains authoritative for shell, workspace and state checks.
 Zero grid rows explicitly means gridless/no_local, not an estimated ALDA grid.
+
+``algorithm`` selects which of the two separately calibrated ALDA limits applies
+to the same ``grid_rows*nov**2`` accumulation, exactly as the native constructor
+does. It never relaxes any other limit, and no caller argument raises either
+limit; asking for the faster primitive is asking for a different primitive.
 """
 from dataclasses import dataclass
 from numbers import Integral
+
+#: Separately calibrated limits on the identical ``grid_rows*nov**2`` ALDA
+#: accumulation, keyed by the named native algorithm that performs it. The
+#: 2e9 entry is the measured budget of the shipped hand accumulator; the 6.4e10
+#: entry is the measured budget of the blocked BLAS3 primitive at the same
+#: wall-clock cost. Neither entry authorizes the other algorithm.
+ALDA_WORK_LIMITS = {"ordered_pairwise": 2_000_000_000, "shared_sweep": 64_000_000_000}
 
 
 @dataclass(frozen=True)
@@ -29,6 +41,7 @@ class ResponseWorkEstimate:
     ao_work_limit: int = 64_000_000_000
     alda_work_limit: int = 2_000_000_000
     grid_rows_limit: int = 1_000_000
+    algorithm: str = "ordered_pairwise"
     unchecked: tuple = ("shell max_am<=4 / max_nprimitive<=64", "workspace max_bytes",
                         "restricted C1 state, occupations, density and overlap",
                         "grid values and scientific integration accuracy")
@@ -43,7 +56,8 @@ class ResponseWorkEstimate:
             raise ValueError("NativeResponseProvider: " + self.failures[0])
 
 
-def estimate_response_work(nbf, nmo, nocc, grid_rows, *, max_nov=512):
+def estimate_response_work(nbf, nmo, nocc, grid_rows, *, max_nov=512,
+                           algorithm="ordered_pairwise"):
     """Assess explicit dimensions without allocating grids, matrices or integrals.
 
     ``grid_rows`` is caller-supplied, not inferred from options. Use zero ONLY
@@ -64,6 +78,9 @@ def estimate_response_work(nbf, nmo, nocc, grid_rows, *, max_nov=512):
         raise ValueError("NativeResponseProvider: invalid integer Aufbau occupations or empty OV space")
     if isinstance(max_nov, bool) or not isinstance(max_nov, Integral) or max_nov <= 0:
         raise ValueError("max_nov must be a positive integer")
+    if algorithm not in ALDA_WORK_LIMITS:
+        raise ValueError("NativeResponseProvider: unsupported named response algorithm (no inference)")
+    alda_limit = ALDA_WORK_LIMITS[algorithm]
     nov = nocc * (nmo - nocc)
     ao_work = nov * nbf**4
     alda_work = grid_rows * nov**2
@@ -72,9 +89,10 @@ def estimate_response_work(nbf, nmo, nocc, grid_rows, *, max_nov=512):
         failures.append("dense OV resource limit (maximum 512)")
     if nbf > 256 or ao_work > 64_000_000_000:
         failures.append("direct JK work resource limit")
-    if grid_rows > 1_000_000 or alda_work > 2_000_000_000:
+    if grid_rows > 1_000_000 or alda_work > alda_limit:
         failures.append("ALDA work resource limit")
     return ResponseWorkEstimate(nbf, nmo, nocc, grid_rows, nov, ao_work, alda_work,
-        min(1_000_000, 2_000_000_000 // nov**2), int(max_nov), tuple(failures),
+        min(1_000_000, alda_limit // nov**2), int(max_nov), tuple(failures),
         "explicit caller dimensions and supplied row count; exact integer arithmetic; "
-        "native_response.cc dimension guards only; zero rows means gridless")
+        "native_response.cc dimension guards only; zero rows means gridless",
+        alda_work_limit=alda_limit, algorithm=str(algorithm))

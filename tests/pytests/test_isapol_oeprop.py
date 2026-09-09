@@ -148,3 +148,36 @@ def test_static_request_no_quadrature_or_pfit(monkeypatch):
     w = psi4.core.Wavefunction.build(psi4.geometry('O\nH 1 1\nH 1 1 2 100\nsymmetry c1'),'cc-pvdz')
     with pytest.raises(Stop):
         api.run(w,('ATOMIC_POLARIZABILITIES',))
+
+
+@pytest.mark.parametrize('option,expected',[(None,'ordered_pairwise'),
+                                            ('ORDERED_PAIRWISE','ordered_pairwise'),
+                                            ('SHARED_SWEEP','shared_sweep')])
+def test_named_response_algorithm_reaches_preflight_and_factory(option,expected,monkeypatch):
+    # The public option only names the arrangement; it is recorded in the
+    # request options and forwarded to both gates, never inferred.
+    monkeypatch.setattr(api,'validate_request',lambda *a: 0.)
+    seen = []
+    original = api.estimate_response_work
+    def observe(*a,**kw):
+        seen.append(kw['algorithm'])
+        return original(*a,**kw)
+    monkeypatch.setattr(api,'estimate_response_work',observe)
+    class Stop(Exception): pass
+    def capture(*a,**kw):
+        assert kw['response_algorithm'] == expected
+        raise Stop
+    monkeypatch.setattr(api.n,'native_properties',capture)
+    old = psi4.core.get_global_option('ATOMIC_RESPONSE_ALGORITHM')
+    try:
+        if option is not None:
+            psi4.set_options({'ATOMIC_RESPONSE_ALGORITHM':option})
+        w = psi4.core.Wavefunction.build(psi4.geometry('O\nH 1 1\nH 1 1 2 100\nsymmetry c1'),'cc-pvdz')
+        with pytest.raises(Stop):
+            api.run(w,('ATOMIC_POLARIZABILITIES',))
+    finally:
+        psi4.core.set_global_option('ATOMIC_RESPONSE_ALGORITHM',old)
+    assert seen == [expected]
+    with pytest.raises(RuntimeError,match='not a valid choice'):
+        psi4.core.set_global_option('ATOMIC_RESPONSE_ALGORITHM','BLAS3')
+    assert psi4.core.get_global_option('ATOMIC_RESPONSE_ALGORITHM') == old
