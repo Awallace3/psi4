@@ -54,7 +54,8 @@ def render(evidence, paired=None):
     table = markdown({"complete": True, "rows": paired["rows"], "failures": [],
                       "accuracy_tolerance_hartree": paired["accuracy_tolerance_hartree"]})
     table = table.split("## Failed or incomplete measurements")[0]
-    text = [table, "## Protocol and hardware", "",
+    text = [table, "See [GPU utilization and bottleneck analysis](GPU_PROFILE.md) for sampled A100 activity, "
+            "native/mixed-precision controls, and the XC/GRAC host bottleneck.", "", "## Protocol and hardware", "",
             "Measured on Phoenix, 2026-09-09, allocation **13020320**: one NVIDIA A100-SXM4-80GB "
             "and eight AMD EPYC 7543 cores (affinity 8–15). The node was shared, not exclusively reserved.", "",
             "Three fresh-process measurements per backend and system/basis; identical eight-thread settings "

@@ -1,0 +1,66 @@
+import ctypes
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+import uuid
+
+import psi4
+import saptdft_cuest_grac as bench
+
+root = Path(__file__).resolve().parent
+psi4.core.be_quiet()
+counts = {}
+for system, bases in [('water', ['cc-pvdz', 'aug-cc-pvdz']), ('benzene', ['cc-pvdz', 'aug-cc-pvdz']), ('peptide', ['6-31+g**']), ('nanotube', ['6-31+g**']), ('protein157', ['6-31+g**'])]:
+    for basis in bases:
+        psi4.core.clean_options()
+        options = {'basis': basis}
+        if system in ('peptide', 'nanotube', 'protein157'):
+            options['puream'] = True
+        psi4.set_options(options)
+        mol = psi4.geometry(bench.geometry(system))
+        def nbf(m):
+            return psi4.core.BasisSet.build(m, 'BASIS', basis).nbf()
+        counts[system + '/' + basis] = {'monomer_a': nbf(mol.extract_subsets(1)), 'monomer_b': nbf(mol.extract_subsets(2)), 'dimer': nbf(mol), 'monomer_a_with_ghost_b': nbf(mol.extract_subsets(1, 2)), 'monomer_b_with_ghost_a': nbf(mol.extract_subsets(2, 1)), 'options': options}
+(root / 'basis-counts.json').write_text(json.dumps({'psi4_version': psi4.__version__, 'job_id': os.getenv('SLURM_JOB_ID'), 'step_id': os.getenv('SLURM_STEP_ID'), 'counts': counts}, indent=2) + '\n')
+print('BASIS_COUNTS_COMPLETE', flush=True)
+# Resolve the actual CUDA-visible device, not nvidia-smi's default physical index.
+runtime = ctypes.CDLL('libcudart.so')
+pci_bus_id = ctypes.create_string_buffer(32)
+assert runtime.cudaDeviceGetPCIBusId(pci_bus_id, len(pci_bus_id), 0) == 0
+gpu_uuid = subprocess.check_output(['nvidia-smi', '-i', pci_bus_id.value.decode(), '--query-gpu=uuid', '--format=csv,noheader'], text=True).strip()
+(root / 'cuda-device.json').write_text(json.dumps({'cuda_visible_devices': os.getenv('CUDA_VISIBLE_DEVICES'), 'mapped_device_uuid': gpu_uuid, 'driver': subprocess.check_output(['nvidia-smi', '-i', gpu_uuid, '--query-gpu=name,uuid,driver_version,memory.total', '--format=csv'], text=True)}, indent=2) + '\n')
+print('CUDA_DEVICE', gpu_uuid, flush=True)
+records = []
+for name, system, basis, extra in [
+    ('nanotube-native', 'nanotube', '6-31+g**', []),
+    ('nanotube-mixed', 'nanotube', '6-31+g**', ['--mixed-precision']),
+    ('benzene-native', 'benzene', 'aug-cc-pvdz', []),
+]:
+    cmd = [sys.executable, str(root/'saptdft_cuest_grac.py'), '--case', '--system', system, '--basis', basis, '--mode', 'gpu', '--threads', '8', '--output', str(root/name)] + extra
+    start = time.time()
+    print('START', name, start, flush=True)
+    with (root/(name+'-gpu.csv')).open('w') as telemetry, (root/(name+'-console.log')).open('w') as log, (root/(name+'-cpu.csv')).open('w') as cpu:
+        monitor = subprocess.Popen(['nvidia-smi', '-i', gpu_uuid, '--query-gpu=timestamp,uuid,name,utilization.gpu,utilization.memory,memory.used,power.draw,clocks.sm,clocks.mem', '--format=csv', '-lms', '200'], stdout=telemetry, stderr=subprocess.STDOUT)
+        process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
+        cpu.write('unix_time,process_cpu_ticks\n')
+        try:
+            while process.poll() is None:
+                try:
+                    fields = Path(f'/proc/{process.pid}/stat').read_text().split(') ', 1)[1].split()
+                    cpu.write(f'{time.time()},{int(fields[11])+int(fields[12])}\n')
+                except FileNotFoundError:
+                    pass
+                time.sleep(0.2)
+            rc = process.returncode
+        finally:
+            monitor.terminate()
+            monitor.wait(timeout=10)
+    records.append({'case': name, 'start_unix': start, 'end_unix': time.time(), 'returncode': rc, 'command': cmd, 'clock_ticks_per_second': os.sysconf('SC_CLK_TCK')})
+    (root/'profile-manifest.json').write_text(json.dumps(records, indent=2)+'\n')
+    print('END', name, rc, flush=True)
+    if rc:
+        raise SystemExit(rc)
+print('PROFILES_COMPLETE', flush=True)

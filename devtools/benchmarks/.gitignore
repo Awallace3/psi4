@@ -1,5 +1,7 @@
 # Frozen inputs and measured evidence are intentionally versioned.
 !/saptdft_suite_geometries.json
 !/results/phoenix-a100-20260909/**/*.json
+!/results/phoenix-a100-20260909/profile/**/timer.dat
+!/results/phoenix-a100-20260909/profile/profile-gpu.sh
 __pycache__/
 *.pyc

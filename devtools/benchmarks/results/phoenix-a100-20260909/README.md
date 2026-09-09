@@ -53,6 +53,8 @@ Accuracy threshold: 1.0e-06 Eh for every component and paired repeat.
 | nanotube / 6-31+g** | SAPT TOTAL ENERGY | -0.002551891711 | -0.002552026958 | 1.363e-07 |
 
 
+See [GPU utilization and bottleneck analysis](GPU_PROFILE.md) for sampled A100 activity, native/mixed-precision controls, and the XC/GRAC host bottleneck.
+
 ## Protocol and hardware
 
 Measured on Phoenix, 2026-09-09, allocation **13020320**: one NVIDIA A100-SXM4-80GB and eight AMD EPYC 7543 cores (affinity 8–15). The node was shared, not exclusively reserved.

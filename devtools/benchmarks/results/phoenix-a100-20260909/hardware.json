@@ -119,6 +119,17 @@
       "actual_partition": "cpu-medium",
       "submission_command": "sbatch --parsable protein157-cpu.sbatch",
       "partition_note": "Automatically remapped by Phoenix job-submit policy; no command-line override."
+    },
+    "13020320.11": {
+      "state": "FAILED",
+      "exit": "1:0",
+      "note": "Basis-count stage completed; telemetry setup used a nonexistent CUDA runtime UUID symbol. No utilization samples collected."
+    },
+    "13020320.12": {
+      "state": "COMPLETED",
+      "exit": "0:0",
+      "elapsed": "00:02:40",
+      "note": "Three successful A100 utilization/native-vs-mixed-allowed diagnostics, mapped by CUDA-visible PCI bus and UUID."
     }
   }
 }
