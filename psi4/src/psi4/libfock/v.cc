@@ -51,6 +51,7 @@
 #include "psi4/libpsi4util/PsiOutStream.h"
 #include "psi4/libpsi4util/process.h"
 
+#include <cmath>
 #include <cstdlib>
 #include <numeric>
 #include <sstream>
@@ -201,51 +202,87 @@ inline void evaluate_cuest_xc_component(
 // SuperFunctional keeps the shift, asymptotic blending, and XC energy convention
 // identical to the CPU RKS path. cuEST still builds the AO potential matrix.
 void evaluate_cuest_grac(const std::shared_ptr<SuperFunctional>& functional,
+                         const std::vector<std::shared_ptr<SuperFunctional>>& workers,
                          const SharedMatrix& density, size_t npoints, size_t ncomponents,
                          const double* weights, double* energy_density, double* potential) {
-    constexpr int block_size = 256;
-    auto worker = functional->build_worker();
-    worker->set_lock(false);
-    worker->set_max_points(block_size);
-    worker->set_deriv(1);
-    worker->allocate();
-    worker->set_lock(true);
-    std::map<std::string, SharedVector> inputs;
-    for (const auto& key : {"RHO_A", "RHO_AX", "RHO_AY", "RHO_AZ", "GAMMA_AA", "TAU_A"}) {
-        inputs[key] = std::make_shared<Vector>(key, block_size);
+    if (npoints == 0) return;
+    if (workers.empty()) throw PSIEXCEPTION("cuEST GRAC requires at least one functional worker.");
+    const size_t block_size = std::min<size_t>(256, workers.front()->max_points());
+    if (block_size == 0) throw PSIEXCEPTION("cuEST GRAC functional worker has zero max_points.");
+    for (const auto& worker : workers) {
+        if (worker->max_points() < block_size) {
+            throw PSIEXCEPTION("cuEST GRAC functional workers have inconsistent max_points.");
+        }
+    }
+    const size_t required_components = functional->is_meta() ? 5 : 4;
+    if (ncomponents < required_components || density->nrow() < required_components) {
+        throw PSIEXCEPTION("Invalid cuEST restricted GRAC density layout.");
+    }
+    auto density_values = density->pointer();
+
+    // A SuperFunctional owns mutable LibXC scratch, so each OpenMP thread needs
+    // both its own worker and its own input vectors. The output ranges are
+    // disjoint by block and need no reduction or synchronization.
+    const size_t nthreads = std::min(workers.size(), (npoints + block_size - 1) / block_size);
+    std::vector<std::map<std::string, SharedVector>> thread_inputs(nthreads);
+    for (size_t rank = 0; rank < nthreads; ++rank) {
+        for (const auto& key : {"RHO_A", "RHO_AX", "RHO_AY", "RHO_AZ", "GAMMA_AA", "TAU_A"}) {
+            thread_inputs[rank][key] = std::make_shared<Vector>(key, block_size);
+        }
     }
     const bool meta = functional->is_meta();
-    const char* gradients[] = {"RHO_AX", "RHO_AY", "RHO_AZ"};
-    for (size_t start = 0; start < npoints; start += block_size) {
-        const int count = std::min<size_t>(block_size, npoints - start);
-        for (int i = 0; i < count; ++i) {
-            const auto point = start + i;
-            // cuEST holds one-spin densities; Psi4's RKS functional inputs are spin-summed.
-            inputs.at("RHO_A")->pointer()[i] = 2.0 * density->pointer()[0][point];
-            double sigma = 0.0;
-            for (int axis = 0; axis < 3; ++axis) {
-                const double gradient = 2.0 * density->pointer()[axis + 1][point];
-                inputs.at(gradients[axis])->pointer()[i] = gradient;
-                sigma += gradient * gradient;
+
+#pragma omp parallel num_threads(nthreads)
+    {
+        size_t rank = 0;
+#ifdef _OPENMP
+        rank = omp_get_thread_num();
+#endif
+        auto& inputs = thread_inputs[rank];
+        auto* rho = inputs.at("RHO_A")->pointer();
+        auto* rho_x = inputs.at("RHO_AX")->pointer();
+        auto* rho_y = inputs.at("RHO_AY")->pointer();
+        auto* rho_z = inputs.at("RHO_AZ")->pointer();
+        auto* gamma = inputs.at("GAMMA_AA")->pointer();
+        auto* tau = inputs.at("TAU_A")->pointer();
+        double* input_gradients[] = {rho_x, rho_y, rho_z};
+
+#pragma omp for schedule(static)
+        for (size_t start = 0; start < npoints; start += block_size) {
+            const int count = std::min<size_t>(block_size, npoints - start);
+            for (int i = 0; i < count; ++i) {
+                const auto point = start + i;
+                // cuEST holds one-spin densities; Psi4's RKS functional inputs are spin-summed.
+                rho[i] = 2.0 * density_values[0][point];
+                double sigma = 0.0;
+                for (int axis = 0; axis < 3; ++axis) {
+                    const double gradient = 2.0 * density_values[axis + 1][point];
+                    input_gradients[axis][i] = gradient;
+                    sigma += gradient * gradient;
+                }
+                gamma[i] = sigma;
+                if (meta) tau[i] = 2.0 * density_values[4][point];
             }
-            inputs.at("GAMMA_AA")->pointer()[i] = sigma;
-            if (meta) inputs.at("TAU_A")->pointer()[i] = 2.0 * density->pointer()[4][point];
-        }
-        const auto& values = worker->compute_functional(inputs, count);
-        for (int i = 0; i < count; ++i) {
-            const auto point = start + i;
-            const double w = weights[point];
-            // SuperFunctional returns energy per volume (not LibXC's per particle).
-            // GRAC changes the potential, not the underlying XC energy expression.
-            energy_density[point] = values.at("V")->pointer()[i];
-            potential[ncomponents * point] = w * values.at("V_RHO_A")->pointer()[i];
-            for (int axis = 0; axis < 3; ++axis) {
-                potential[ncomponents * point + axis + 1] =
-                    4.0 * w * values.at("V_GAMMA_AA")->pointer()[i] * density->pointer()[axis + 1][point];
+            const auto& values = workers[rank]->compute_functional(inputs, count);
+            const auto* value = values.at("V")->pointer();
+            const auto* v_rho = values.at("V_RHO_A")->pointer();
+            const auto* v_gamma = values.at("V_GAMMA_AA")->pointer();
+            const auto* v_tau = meta ? values.at("V_TAU_A")->pointer() : nullptr;
+            for (int i = 0; i < count; ++i) {
+                const auto point = start + i;
+                const double w = weights[point];
+                // SuperFunctional returns energy per volume (not LibXC's per particle).
+                // GRAC changes the potential, not the underlying XC energy expression.
+                energy_density[point] = value[i];
+                potential[ncomponents * point] = w * v_rho[i];
+                for (int axis = 0; axis < 3; ++axis) {
+                    potential[ncomponents * point + axis + 1] =
+                        4.0 * w * v_gamma[i] * density_values[axis + 1][point];
+                }
+                // LibXCFunctional halves the tau derivative for CPU AO integration;
+                // cuEST expects the full LibXC derivative instead.
+                if (meta) potential[ncomponents * point + 4] = 2.0 * w * v_tau[i];
             }
-            // LibXCFunctional halves the tau derivative for CPU AO integration;
-            // cuEST expects the full LibXC derivative instead.
-            if (meta) potential[ncomponents * point + 4] = 2.0 * w * values.at("V_TAU_A")->pointer()[i];
         }
     }
 }
@@ -1009,7 +1046,24 @@ void VBase::set_grac_shift(double grac_shift) {
         functional_->set_grac_c_functional(grac_c_func);
         functional_->allocate();
         functional_->set_lock(true);
-        for (size_t i = 0; i < functional_workers_.size(); i++) {
+        const size_t workers_requiring_grac_setup = functional_workers_.size();
+#ifdef USING_cuEST
+        // The cuEST initialization path does not otherwise need CPU functional
+        // workers and returns before creating them. GRAC still evaluates the
+        // functional on host grid values, so cache one worker per thread here
+        // rather than constructing and allocating one on every SCF iteration.
+        if (use_cuest_xc()) {
+            functional_workers_.reserve(num_threads_);
+            while (functional_workers_.size() < num_threads_) {
+                // The parent is already configured: build_worker() clones its
+                // independent GRAC LibXC objects and allocates scratch once.
+                functional_workers_.push_back(functional_->build_worker());
+            }
+        }
+#endif
+        // Workers that existed before GRAC was installed still need promotion.
+        // Newly cloned workers already inherited the configured parent.
+        for (size_t i = 0; i < workers_requiring_grac_setup; i++) {
             functional_workers_[i]->set_lock(false);
             functional_workers_[i]->set_grac_alpha(grac_alpha);
             functional_workers_[i]->set_grac_beta(grac_beta);
@@ -1767,8 +1821,10 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
             rho_0 = h_rho_matrixT->pointer()[0];
             full_f = std::make_shared<Matrix>("GRAC energy density", 1, npoints);
             p_full_f = full_f->pointer()[0];
-            evaluate_cuest_grac(functional_, h_rho_matrixT, npoints, ncomponents,
+            timer_on("cuEST XC: GRAC Host Functional");
+            evaluate_cuest_grac(functional_, functional_workers_, h_rho_matrixT, npoints, ncomponents,
                                 p_weights, p_full_f, p_Vxc_grid);
+            timer_off("cuEST XC: GRAC Host Functional");
         } else switch (ansatz_type) {
             case CUEST_XCADVANCED_PARAMETERS_APPROXIMATION_LDA:
                 rho = std::make_shared<Matrix>("rho", 1, npoints);

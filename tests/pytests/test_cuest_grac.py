@@ -19,10 +19,11 @@ def test_cuest_grac_scf(functional, tmp_path):
     densities and orbital energies too: GRAC modifies the potential, not the
     underlying XC energy expression. Also require a nonzero shift effect.
     """
-    def run(gpu_xc, shift):
+    def run(gpu_xc, shift, threads=4):
         psi4.core.clean()
         psi4.core.clean_options()
-        psi4.core.set_output_file(str(tmp_path / f"{functional}-{gpu_xc}-{shift}.out"), False)
+        psi4.core.set_output_file(str(tmp_path / f"{functional}-{gpu_xc}-{shift}-{threads}.out"), False)
+        psi4.set_num_threads(threads)
         molecule = psi4.geometry("""
             0 1
             O 0.0 0.0 0.0
@@ -62,3 +63,10 @@ def test_cuest_grac_scf(functional, tmp_path):
     np.testing.assert_allclose(gpu[1], ref[1], atol=1.e-5, rtol=0)
     np.testing.assert_allclose(gpu[2], ref[2], atol=1.e-5, rtol=0)
     assert np.max(np.abs(gpu[2] - unshifted[2])) > 1.e-3
+    if functional == "pbe0":
+        # The cuEST GRAC host functional is block-parallel. Pin agreement with
+        # its serial execution so worker ownership/order cannot change results.
+        serial = run(True, 0.136, threads=1)
+        np.testing.assert_allclose(gpu[0], serial[0], atol=1.e-10, rtol=0)
+        np.testing.assert_allclose(gpu[1], serial[1], atol=1.e-10, rtol=0)
+        np.testing.assert_allclose(gpu[2], serial[2], atol=1.e-10, rtol=0)
