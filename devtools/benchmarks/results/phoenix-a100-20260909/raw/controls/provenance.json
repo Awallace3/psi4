@@ -1,0 +1,21 @@
+{
+  "tested_commit": "c7927d3ec9f992ef3906f4227404c99fe9413ae2",
+  "source_snapshot_base": "1a80ac08172ae55889c16a1a735e0bcf06db058c",
+  "source_patch_matches_commit": true,
+  "changed_file_sha256": {
+    "psi4/src/psi4/libfock/points.h": "1e3334b89f5a3748a8972af85f7b6b8e22ebe944b429492cae2a410b58b40c46",
+    "psi4/src/psi4/libfock/v.cc": "a95b5a89dc217b1eb3b97154260a1371f41e5d063c1f3b26a27ab796474c88a1",
+    "psi4/src/psi4/libfock/v.h": "17fe766b9f0023efd2780be7e61f588d9f9ba4caef0cbd3cafeef3a34679f1af",
+    "psi4/src/read_options.cc": "4f0430c12ba6ca1dc8ee3635e2c853b6b6f86ec0cd9b79557a8cf4bcc01ab2aa",
+    "tests/pytests/test_cuest.py": "34b16a36268a2f7b3c6a5e8e160a3c973a44f91afd39289f6cca125a45970d23",
+    "tests/pytests/test_cuest_grac.py": "34915ae82bd4e5e3fc79476807e0f8cac9f7414280057b91ae893298a4ff89fa",
+    "tests/pytests/test_grac_cpu.py": "b561eb2ac4ba41321c426821d0561947b21beca96a59432dd5d7dbd73d2cb050",
+    "tests/pytests/test_saptdft_cuest.py": "ec4c569008bdd14ac2dd18d06d86835aaa91d1e16d05fccc8c042a03113ed67b"
+  },
+  "allocation": "13020320",
+  "base_branch": "saptdft_ein_fi_option_d4",
+  "excluded_systems": [
+    "protein157"
+  ],
+  "geometry_source": "~/data/timing_test_suite/geometries/systems.py"
+}

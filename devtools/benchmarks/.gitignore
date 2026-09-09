@@ -1,0 +1,5 @@
+# Frozen inputs and measured evidence are intentionally versioned.
+!/saptdft_suite_geometries.json
+!/results/phoenix-a100-20260909/**/*.json
+__pycache__/
+*.pyc
