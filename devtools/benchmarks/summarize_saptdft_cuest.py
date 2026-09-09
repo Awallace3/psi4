@@ -67,6 +67,8 @@ def summarize(root, tolerance=1e-6):
                "components": components, "max_abs_delta_hartree": worst,
                "max_abs_delta_kcal_mol": worst * HARTREE_TO_KCAL_MOL,
                "accuracy_pass": worst <= tolerance}
+        row["nbf_monomer_a"] = cpu[0].get("nbf_monomer_a")
+        row["nbf_monomer_b"] = cpu[0].get("nbf_monomer_b")
         rows.append(row)
     marker = root / "COMPLETE.json"
     completion = json.loads(marker.read_text()) if marker.exists() else {}
@@ -85,17 +87,19 @@ def markdown(summary):
             "Status: " + ("complete" if summary["complete"] else "partial") + ".",
             "Wall time is the fresh-process `energy()` call, including backend initialization.",
             "Speedup is median CPU time / median GPU time; values below 1 mean GPU slowdown.", "",
-            "| System | Basis | nbf | CPU/GPU n | CPU median [range], s | GPU median [range], s | Speedup | Max component Δ, Eh | Accuracy |",
-            "|---|---|---:|---:|---:|---:|---:|---:|---|"]
+            "| System | Basis | MonA own nbf | MonB own nbf | Dimer nbf | CPU/GPU n | CPU median [range], s | GPU median [range], s | Speedup | Max component Δ, Eh | Accuracy |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|"]
     for row in summary["rows"]:
         c, g = row["wall_s"]["cpu"], row["wall_s"]["gpu"]
-        text.append(f"| {row['system']} | {row['basis']} | {row['nbf']} | "
+        text.append(f"| {row['system']} | {row['basis']} | {row.get('nbf_monomer_a') or '—'} | "
+                    f"{row.get('nbf_monomer_b') or '—'} | {row['nbf']} | "
                     f"{row['repeats']['cpu']}/{row['repeats']['gpu']} | "
                     f"{c['median']:.2f} [{c['min']:.2f}–{c['max']:.2f}] | "
                     f"{g['median']:.2f} [{g['min']:.2f}–{g['max']:.2f}] | "
                     f"{row['speedup']:.2f}× | {row['max_abs_delta_hartree']:.3e} | "
                     f"{'PASS' if row['accuracy_pass'] else 'FAIL'} |")
-    text += ["", f"Accuracy threshold: {summary['accuracy_tolerance_hartree']:.1e} Eh for every component and paired repeat.",
+    text += ["", "Monomer columns give each fragment's own-basis size. The SAPT monomer SCFs use the dimer basis (ghosted partner), so their actual SCF basis size is the dimer column.",
+             "", f"Accuracy threshold: {summary['accuracy_tolerance_hartree']:.1e} Eh for every component and paired repeat.",
              "", "## Component accuracy", "",
              "| System / basis | Component | CPU median, Eh | GPU median, Eh | Max paired absolute Δ, Eh |",
              "|---|---|---:|---:|---:|"]

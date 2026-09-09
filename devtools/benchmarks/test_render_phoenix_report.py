@@ -19,6 +19,11 @@ class ReportTests(unittest.TestCase):
         self.assertFalse(summary["source_campaigns"]["retry1"]["complete"])
         self.assertTrue(summary["source_campaigns"]["suite2"]["complete"])
 
+    def test_monomer_counts_are_measured_not_half_the_dimer(self):
+        summary = build_paired_summary(EVIDENCE)
+        row = next(r for r in summary["rows"] if r["system"] == "nanotube")
+        self.assertEqual((row["nbf_monomer_a"], row["nbf_monomer_b"], row["nbf"]), (56, 492, 548))
+
     def test_precomputed_summary_is_not_trusted(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = Path(directory)

@@ -34,6 +34,15 @@ def build_paired_summary(evidence):
     if any(row["paired_repeats"] != 3 or row["repeats"] != {"cpu": 3, "gpu": 3}
            for row in rows):
         raise ValueError("Every published paired row must contain three repeats per backend")
+    count_path = evidence / "basis-counts.json"
+    if count_path.exists():
+        counts = load(count_path)["counts"]
+        for row in rows:
+            count = counts[row["system"] + "/" + row["basis"]]
+            if count["dimer"] != row["nbf"]:
+                raise ValueError("Recomputed basis count differs from measured calculation")
+            row["nbf_monomer_a"] = count["monomer_a"]
+            row["nbf_monomer_b"] = count["monomer_b"]
     return {"repeats_per_backend": 3, "accuracy_tolerance_hartree": 1e-6, "rows": rows,
             "note": "Original-grid benzene threshold misses retained; independent grid controls reported separately.",
             "source_campaigns": {"retry1": {"complete": initial["complete"], "failures": initial["failures"]},
@@ -102,6 +111,12 @@ def render(evidence, paired=None):
              "SLURM sampled step MaxRSS was **5,570,940 KiB** (~5.31 GiB); requested host memory is not usage.", "",
              "| Component | GPU energy, Eh |", "|---|---:|"]
     text += [f"| {key} | {value:.12f} |" for key, value in p_gpu["components_hartree"].items()]
+    count_path = evidence / "basis-counts.json"
+    if count_path.exists():
+        count = load(count_path)["counts"]["protein157/6-31+g**"]
+        text += ["", "| System | MonA own nbf | MonB own nbf | Dimer / ghosted-monomer SCF nbf |",
+                 "|---|---:|---:|---:|",
+                 f"| Protein157 | {count['monomer_a']} | {count['monomer_b']} | {count['dimer']} |", ""]
     p_cpu_path = raw / "protein157-cpu/results/protein157-cpu-1/result.json"
     if p_cpu_path.exists():
         p_cpu = load(p_cpu_path)

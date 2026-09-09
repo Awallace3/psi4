@@ -81,7 +81,7 @@ def run_case(args):
         "SAPT_DFT_INDUCTION_TYPE": "NONE", "SAPT_DFT_DO_DHF": True,
         "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL", "SAPT_DFT_USE_EINSUMS": True,
         "USE_CUEST": args.mode == "gpu", "CUEST_XC": not args.cpu_xc,
-        "CUEST_MIXED_PRECISION": False, "E_CONVERGENCE": 9, "D_CONVERGENCE": 8,
+        "CUEST_MIXED_PRECISION": args.mixed_precision, "E_CONVERGENCE": 9, "D_CONVERGENCE": 8,
         "DFT_RADIAL_POINTS": args.radial_points, "DFT_SPHERICAL_POINTS": args.spherical_points, "MAXITER": 150,
     }
     if args.system in ("peptide", "nanotube", "protein157"):
@@ -98,6 +98,8 @@ def run_case(args):
         molecule = psi4.geometry(record["geometry"])
         psi4.set_options(options)
         record["nbf"] = psi4.core.BasisSet.build(molecule, "BASIS", args.basis).nbf()
+        record["nbf_monomer_a"] = psi4.core.BasisSet.build(molecule.extract_subsets(1), "BASIS", args.basis).nbf()
+        record["nbf_monomer_b"] = psi4.core.BasisSet.build(molecule.extract_subsets(2), "BASIS", args.basis).nbf()
         expected_nbf = {("peptide", "6-31+g**"): 250, ("nanotube", "6-31+g**"): 548,
                         ("protein157", "6-31+g**"): 1786}
         expected = expected_nbf.get((args.system, args.basis.lower()))
@@ -162,6 +164,8 @@ def campaign(args):
                                "--spherical-points", str(args.spherical_points)]
                     if args.cpu_xc:
                         command.append("--cpu-xc")
+                    if args.mixed_precision:
+                        command.append("--mixed-precision")
                     print(f"START {name}", flush=True)
                     started = time.perf_counter()
                     try:
@@ -192,6 +196,7 @@ def main():
     parser.add_argument("--shift", type=float, default=0.136)
     parser.add_argument("--case-timeout", type=int, default=1200)
     parser.add_argument("--cpu-xc", action="store_true", help="Diagnostic: GPU J/K with CPU XC")
+    parser.add_argument("--mixed-precision", action="store_true", help="Diagnostic: allow cuEST emulated mixed precision")
     parser.add_argument("--allow-protein157-cpu", action="store_true",
                         help="Explicit opt-in for a separately allocated protein157 CPU baseline")
     parser.add_argument("--radial-points", type=int, default=99)

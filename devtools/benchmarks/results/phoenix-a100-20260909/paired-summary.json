@@ -78,7 +78,9 @@
       },
       "max_abs_delta_hartree": 5.3274718921081377e-08,
       "max_abs_delta_kcal_mol": 3.343039085102726e-05,
-      "accuracy_pass": true
+      "accuracy_pass": true,
+      "nbf_monomer_a": 24,
+      "nbf_monomer_b": 24
     },
     {
       "system": "water",
@@ -156,7 +158,9 @@
       },
       "max_abs_delta_hartree": 3.555277380655475e-08,
       "max_abs_delta_kcal_mol": 2.230970239283553e-05,
-      "accuracy_pass": true
+      "accuracy_pass": true,
+      "nbf_monomer_a": 41,
+      "nbf_monomer_b": 41
     },
     {
       "system": "benzene",
@@ -234,7 +238,9 @@
       },
       "max_abs_delta_hartree": 1.5965739686551322e-06,
       "max_abs_delta_kcal_mol": 0.0010018652913736184,
-      "accuracy_pass": false
+      "accuracy_pass": false,
+      "nbf_monomer_a": 114,
+      "nbf_monomer_b": 114
     },
     {
       "system": "benzene",
@@ -312,7 +318,9 @@
       },
       "max_abs_delta_hartree": 1.7567184873723551e-06,
       "max_abs_delta_kcal_mol": 0.001102357494087951,
-      "accuracy_pass": false
+      "accuracy_pass": false,
+      "nbf_monomer_a": 192,
+      "nbf_monomer_b": 192
     },
     {
       "system": "peptide",
@@ -390,7 +398,9 @@
       },
       "max_abs_delta_hartree": 1.3877803834230762e-07,
       "max_abs_delta_kcal_mol": 8.708453385169018e-05,
-      "accuracy_pass": true
+      "accuracy_pass": true,
+      "nbf_monomer_a": 125,
+      "nbf_monomer_b": 125
     },
     {
       "system": "nanotube",
@@ -468,7 +478,9 @@
       },
       "max_abs_delta_hartree": 1.3856447367288638e-07,
       "max_abs_delta_kcal_mol": 8.69505199983032e-05,
-      "accuracy_pass": true
+      "accuracy_pass": true,
+      "nbf_monomer_a": 56,
+      "nbf_monomer_b": 492
     }
   ],
   "note": "Original-grid benzene threshold misses retained; independent grid controls reported separately.",
