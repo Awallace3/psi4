@@ -211,6 +211,31 @@ void export_isapol(py::module& m) {
             return "caller declaration only; restricted metadata, density and orthonormality checked";
         });
 
+    py::class_<IsaAldaGridScreen, std::shared_ptr<IsaAldaGridScreen>>(m, "IsaAldaGridScreen")
+        .def(py::init<std::shared_ptr<Wavefunction>, bool, const std::string&, SharedMatrix, double,
+                      std::size_t>(),
+             "wavefunction"_a, "caller_converged"_a, "kernel"_a, "grid"_a, "density_cutoff"_a,
+             "max_bytes"_a)
+        .def("values", &IsaAldaGridScreen::values)
+        .def("retained_rows", &IsaAldaGridScreen::retained_rows, "threshold"_a)
+        .def("retained", &IsaAldaGridScreen::retained, "threshold"_a)
+        .def("omitted_bound", &IsaAldaGridScreen::omitted_bound, "threshold"_a)
+        .def("omitted_count", &IsaAldaGridScreen::omitted_count, "threshold"_a)
+        .def("threshold_for_rows", &IsaAldaGridScreen::threshold_for_rows, "max_rows"_a)
+        .def_property_readonly("total", &IsaAldaGridScreen::total)
+        .def_property_readonly("maximum", &IsaAldaGridScreen::maximum)
+        .def_property_readonly("rows", &IsaAldaGridScreen::rows)
+        .def_property_readonly("exact_zero_rows", &IsaAldaGridScreen::exact_zero_rows)
+        .def_property_readonly("kernel", &IsaAldaGridScreen::kernel)
+        .def_property_readonly("density_cutoff", &IsaAldaGridScreen::density_cutoff)
+        .def_property_readonly("planned_bytes", &IsaAldaGridScreen::planned_bytes)
+        .def_property_readonly("bound_norms", [](const IsaAldaGridScreen&) {
+            return "omitted_bound bounds both maxabs and Frobenius deviation of the local primitive";
+        })
+        .def_property_readonly("quadrature_policy", [](const IsaAldaGridScreen&) {
+            return "row subset only: original coordinates, weights and order; no renormalization";
+        });
+
     py::class_<IsaPointChargeOperators, std::shared_ptr<IsaPointChargeOperators>>(m, "IsaPointChargeOperators")
         .def(py::init<std::shared_ptr<Wavefunction>, bool, SharedMatrix, std::size_t, std::size_t>(),
              "wavefunction"_a, "caller_converged"_a, "points_bohr"_a, "max_bytes"_a, "max_points"_a)

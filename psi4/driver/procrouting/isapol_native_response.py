@@ -40,6 +40,105 @@ class NativeWavefunctionResponse:
         return self._response.at_frequency(omega)
 
 
+@dataclass(frozen=True)
+class AldaGridScreen:
+    """One error-bounded ALDA quadrature row subset, with its own provenance.
+
+    ``rows`` are the retained zero-based indices into the ORIGINAL grid and
+    ``grid`` those rows verbatim: same coordinates, same weights, same order, no
+    renormalization and no radial/angular reduction. ``omitted_bound`` is an
+    upper bound on both the maxabs and the Frobenius deviation of the resulting
+    local primitive L relative to the same primitive on the full input grid; it
+    is exactly zero when only rows the primitive itself already skips are cut.
+
+    This is a row subset, not a licence: whatever grid is finally handed to
+    ``native_response_from_wavefunction`` still faces the unchanged
+    ``estimate_response_work`` ALDA gate in full.
+    """
+    grid: np.ndarray
+    rows: np.ndarray
+    values: np.ndarray
+    threshold: float
+    omitted_bound: float
+    omitted_rows: int
+    total: float
+    maximum: float
+    input_rows: int
+    exact_zero_rows: int
+    kernel: str
+    density_cutoff: float
+    provenance: str
+
+
+def screen_alda_grid(wavefunction, *, caller_converged, kernel, grid, threshold=None,
+                     max_rows=None, density_cutoff=1.e-10, max_bytes=512*1024**2):
+    """Bound each ALDA quadrature row's exact contribution and keep a subset.
+
+    Supply exactly one of ``threshold`` (drop rows whose bound is <= it) or
+    ``max_rows`` (keep at most that many, largest bound first; ties keep fewer).
+    ``threshold=0.0`` is lossless: it removes only the rows the local primitive
+    already skips, so ``omitted_bound`` is exactly 0.
+
+    Row p contributes factor(p)*tr_p tr_p^T to L with factor(p)=w(p)*fxc(p) and
+    tr_p(t)=phi_i(p)*phi_a(p); since tr_p is an occupied-by-virtual outer product,
+    its exact Frobenius norm is |factor(p)|*sum_i phi_i(p)^2*sum_a phi_a(p)^2, and
+    every element obeys the same bound. Screening therefore costs collocation
+    only (rows*nbf*nmo) and carries no nov^2 term. Nothing about the SCF, the
+    functional, the basis or the caller's quadrature is altered.
+    """
+    if not isinstance(caller_converged, (bool, np.bool_)) or not caller_converged:
+        raise ValueError("caller_converged must explicitly be True (declaration, not a verified seal)")
+    if kernel not in ("alda_slater", "alda_slater_pw92", "alda_slater_vwn"):
+        raise ValueError("row screening needs a named local kernel (no_local has no grid rows)")
+    if (threshold is None) == (max_rows is None):
+        raise ValueError("supply exactly one of threshold or max_rows")
+    if threshold is not None:
+        if (not np.isscalar(threshold) or np.asarray(threshold).dtype.kind not in "iuf"
+                or not np.isfinite(threshold) or threshold < 0):
+            raise ValueError("threshold must be a finite nonnegative real scalar")
+    else:
+        if (isinstance(max_rows, (bool, np.bool_)) or not isinstance(max_rows, (int, np.integer))
+                or max_rows <= 0):
+            raise ValueError("max_rows must be a positive integer")
+    for name, value in (("density_cutoff", density_cutoff),):
+        if (not np.isscalar(value) or np.asarray(value).dtype.kind not in "iuf"
+                or not np.isfinite(value) or value <= 0):
+            raise ValueError(f"{name} must be a finite positive real scalar")
+    if isinstance(max_bytes, (bool, np.bool_)) or not isinstance(max_bytes, (int, np.integer)) or max_bytes <= 0:
+        raise ValueError("max_bytes must be a positive integer")
+    points = np.asarray(grid)
+    if (np.iscomplexobj(points) or points.ndim != 2 or points.shape[1] != 4
+            or not points.shape[0] or points.shape[0] > 1000000
+            or not np.isfinite(points).all() or np.any(points[:, 3] < 0)):
+        raise ValueError("grid must be finite real nonempty [x,y,z,nonnegative weight] rows")
+    if points.size * 8 > max_bytes:
+        raise ValueError("grid snapshot resource limit")
+    points = np.array(points, dtype=float, copy=True)
+    screen = core.IsaAldaGridScreen(wavefunction, True, kernel,
+                                    core.Matrix.from_array(points), float(density_cutoff),
+                                    int(max_bytes))
+    if threshold is None:
+        threshold = screen.threshold_for_rows(int(max_rows))
+        chosen = f"max_rows={int(max_rows)} -> threshold={threshold!r}"
+    else:
+        threshold = float(threshold)
+        chosen = f"threshold={threshold!r}"
+    rows = np.asarray(screen.retained_rows(threshold), dtype=int)
+    kept = screen.retained(threshold).to_array()
+    if rows.size and not np.array_equal(kept, points[rows]):
+        raise ValueError("retained rows are not verbatim input rows")
+    return AldaGridScreen(
+        grid=kept, rows=rows, values=screen.values().to_array(), threshold=threshold,
+        omitted_bound=screen.omitted_bound(threshold), omitted_rows=screen.omitted_count(threshold),
+        total=screen.total, maximum=screen.maximum, input_rows=screen.rows,
+        exact_zero_rows=screen.exact_zero_rows, kernel=screen.kernel,
+        density_cutoff=screen.density_cutoff,
+        provenance=("exact per-row ALDA contribution bound; " + chosen
+                    + "; retained rows verbatim (coordinates, weights, order); "
+                      "omitted_bound bounds maxabs and Frobenius deviation of L; "
+                      "downstream nov^2 ALDA gate still applies in full"))
+
+
 def native_response_from_wavefunction(wavefunction, *, caller_converged, kernel,
                                      exact_exchange, local_scale, grid=None,
                                      density_cutoff=1.e-10, max_bytes=512*1024**2,

@@ -354,6 +354,33 @@ Details: `pfit.h`, `lw_localization.h`, [SUPPLIED_PROPERTIES.md](SUPPLIED_PROPER
 and pre-compaction SPEC §6. Legacy PFIT leg-B gate is 3e−8 absolute/1e−8 relative;
 do not transfer it to other targets or a new native endpoint.
 
+### Error-bounded ALDA quadrature row screening
+
+`IsaAldaGridScreen` (`native_response.h`) reports, per caller quadrature row, the
+**exact** norm of that row's contribution to the ALDA local primitive. Row p adds
+`factor(p)·tr_p tr_pᵀ` with `factor(p)=w(p)·fxc(p)` and `tr_p(t)=phi_i(p)phi_a(p)`;
+since `tr_p` is an occupied×virtual outer product that contribution is exactly
+rank one, so `‖factor(p) tr_p tr_pᵀ‖_F = |factor(p)|·o(p)·u(p)` with
+`o(p)=Σ_i phi_i(p)²`, `u(p)=Σ_a phi_a(p)²`, and every element obeys the same
+bound. `omitted_bound` therefore bounds the full-vs-pruned deviation of L in
+**both** maxabs and Frobenius norm. Rows the primitive already skips (`rho` below
+cutoff, or zero weight) have value exactly 0, so threshold 0 is **lossless**: the
+pruned primitive is bitwise the same doubles, and the bound is exactly 0.
+
+Retained rows are the input rows verbatim — same coordinates, same weights, same
+order, no renormalization, no radial/angular reduction, no AO screening. The
+class carries its **own** gate on `grid_rows·nbf·nmo` collocation work and
+deliberately no nOV² term, which is the entire reason it may examine a grid the
+primitive cannot yet afford. It grants no waiver: whatever row subset is finally
+passed still faces `estimate_response_work`'s unchanged nOV² ALDA limit in full.
+
+This is a screen, not a parity result. Measured for PBE0/aug-cc-pVTZ water on the
+public `IsaGrid(99,590)` grid, lossless screening still needs 12.8× the permitted
+ALDA work, and the 10,569 rows that limit does admit omit 53.6% of the total
+contribution norm — 6.94% of the isotropic dipole polarizability at cc-pVDZ,
+where the full primitive is affordable. Screening does **not** make that demo
+affordable; see plan §4.
+
 ## 7. Dispersion coverage and oracle scope
 
 Scalar rank-l alpha is trace(alpha_ll)/(2l+1). Explicit CP weights already contain

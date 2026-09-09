@@ -20,6 +20,7 @@
 #include "native_response.h"
 #include "parallel_work.h"
 #include <algorithm>
+#include <functional>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -165,10 +166,15 @@ class NativeCompleteBlock final : public BlockOPoints {
         local_nbf_=basis->nbf();
     }
 };
-SharedMatrix local_kernel(std::shared_ptr<BasisSet> basis, SharedMatrix c, int no,
-                          SharedMatrix grid, const std::string& kernel, double cutoff) {
-    const int nv=c->ncol()-no, nov=no*nv, blocksize=128;
-    auto local=std::make_shared<Matrix>(nov,nov);
+// One ALDA collocation policy, shared by the local primitive and by its row
+// screen. Rows are visited in the caller's original order in fixed 128-row
+// blocks; the callback sees this block's orbital values, the LibXC row weights
+// w*fxc and the same inclusion mask the primitive itself uses. Nothing here
+// renormalizes weights, drops AOs or alters the caller's quadrature.
+template <class Visit>
+void alda_rows(const std::shared_ptr<BasisSet>& basis, const SharedMatrix& c, int no,
+               const SharedMatrix& grid, const std::string& kernel, double cutoff, Visit visit) {
+    const int blocksize=128;
     auto f=SuperFunctional::blank();
     // This setter propagates to existing components: call before insertion so
     // LibXC retains the positive half-density threshold below.
@@ -197,14 +203,11 @@ SharedMatrix local_kernel(std::shared_ptr<BasisSet> basis, SharedMatrix c, int n
         auto orbitals=linalg::doublet(collocation.basis_value("PHI"),c,false,false);
         auto rho=std::make_shared<Vector>(count);
         std::vector<double> density(count);
-        Matrix transitions(count,nov);
         for(int p=0;p<count;++p) {
             double d=0;
             for(int i=0;i<no;++i) d+=2*std::pow(orbitals->get(p,i),2);
             require_native(std::isfinite(d),"nonfinite collocated density");
             density[p]=d; rho->set(p,std::max(d,cutoff));
-            for(int a=0;a<nv;++a) for(int i=0;i<no;++i)
-                transitions.set(p,a*no+i,orbitals->get(p,i)*orbitals->get(p,no+a));
         }
         std::map<std::string,SharedVector> input{{"RHO_A",rho}};
         auto& values=f->compute_functional(input,count,true);
@@ -217,6 +220,19 @@ SharedMatrix local_kernel(std::shared_ptr<BasisSet> basis, SharedMatrix c, int n
             require_native(std::isfinite(factors[p]),"nonfinite local kernel weight");
             included[p]=1;
         }
+        visit(start,count,*orbitals,factors,included);
+    }
+}
+SharedMatrix local_kernel(std::shared_ptr<BasisSet> basis, SharedMatrix c, int no,
+                          SharedMatrix grid, const std::string& kernel, double cutoff) {
+    const int nv=c->ncol()-no, nov=no*nv;
+    auto local=std::make_shared<Matrix>(nov,nov);
+    alda_rows(basis,c,no,grid,kernel,cutoff,[&](int,int count,const Matrix& orbitals,
+              const std::vector<double>& factors,const std::vector<unsigned char>& included) {
+        Matrix transitions(count,nov);
+        for(int p=0;p<count;++p)
+            for(int a=0;a<nv;++a) for(int i=0;i<no;++i)
+                transitions.set(p,a*no+i,orbitals.get(p,i)*orbitals.get(p,no+a));
         // LibXC, BasisFunctions and BLAS stay outside worker regions. Neither
         // triangular mirroring nor a reduction: every ordered (t,u) retains
         // global point order and the original left-associated product.
@@ -230,9 +246,80 @@ SharedMatrix local_kernel(std::shared_ptr<BasisSet> basis, SharedMatrix c, int n
                     output[t][u] += factor*tr[p][t]*tr[p][u];
             }
         });
-    }
+    });
     symmetric(local,"local kernel");
     return local;
+}
+// Shared restricted-C1 admission, split exactly where NativeResponseProvider
+// already interleaved its resource guards: dimensions first, then the numerical
+// state, then the owned deep snapshot. Messages are unchanged so both callers
+// report the identical native contract.
+struct RestrictedDims { int nbf=0,nmo=0,nocc=0,nvir=0; std::size_t nov=0; };
+RestrictedDims restricted_dims(const std::shared_ptr<Wavefunction>& wfn, bool caller_converged) {
+    require_native(wfn && caller_converged,"explicit wavefunction and caller convergence declaration required");
+    require_native(wfn->nirrep()==1 && wfn->same_a_b_orbs() && wfn->same_a_b_dens() &&
+                   wfn->nalpha()==wfn->nbeta() && wfn->soccpi()[0]==0,
+                   "only restricted closed-shell C1 wavefunctions are supported");
+    auto source=wfn->basisset();
+    require_native(source && source->molecule() && source->nbf()>0,"missing orbital basis/molecule");
+    RestrictedDims d;
+    d.nbf=source->nbf(); d.nmo=wfn->nmo(); d.nocc=wfn->nalpha(); d.nvir=d.nmo-d.nocc;
+    require_native(d.nocc>0 && d.nvir>0 && d.nmo<=d.nbf && wfn->doccpi()[0]==d.nocc,
+                   "invalid integer Aufbau occupations or empty OV space");
+    d.nov=mul(d.nocc,d.nvir);
+    return d;
+}
+void validate_restricted_state(const std::shared_ptr<Wavefunction>& wfn, const RestrictedDims& d) {
+    matrix_ok(wfn->Ca(),d.nbf,d.nmo,"Ca"); matrix_ok(wfn->Cb(),d.nbf,d.nmo,"Cb");
+    matrix_ok(wfn->Da(),d.nbf,d.nbf,"Da"); matrix_ok(wfn->Db(),d.nbf,d.nbf,"Db");
+    auto ea=wfn->epsilon_a(), eb=wfn->epsilon_b();
+    require_native(ea && eb && ea->nirrep()==1 && eb->nirrep()==1 && ea->dim()==d.nmo && eb->dim()==d.nmo,
+                   "orbital energy dimension/C1 mismatch");
+    for(int p=0;p<d.nmo;++p) {
+        require_native(std::isfinite(ea->get(p)) && ea->get(p)==eb->get(p),"energies must be finite and restricted");
+        for(int mu=0;mu<d.nbf;++mu)
+            require_native(wfn->Ca()->get(mu,p)==wfn->Cb()->get(mu,p),"alpha/beta orbitals differ");
+    }
+    for(int mu=0;mu<d.nbf;++mu) for(int nu=0;nu<d.nbf;++nu) {
+        double density=0;
+        for(int i=0;i<d.nocc;++i) density+=wfn->Ca()->get(mu,i)*wfn->Ca()->get(nu,i);
+        require_native(std::isfinite(density) && wfn->Da()->get(mu,nu)==wfn->Db()->get(mu,nu) &&
+                       std::abs(density-wfn->Da()->get(mu,nu))<=1.e-9*std::max(1.0,std::abs(density)),
+                       "density inconsistent with integer occupied orbitals (fractional occupations unsupported)");
+    }
+    for(int a=0;a<d.nvir;++a) for(int i=0;i<d.nocc;++i) {
+        double gap=ea->get(d.nocc+a)-ea->get(i);
+        require_native(std::isfinite(gap) && gap>0,"occupied-virtual gaps must be finite and positive");
+    }
+}
+struct OwnedState { std::shared_ptr<BasisSet> basis; SharedMatrix c, da; SharedVector eps; };
+OwnedState own_restricted_state(const std::shared_ptr<Wavefunction>& wfn, const RestrictedDims& d) {
+    OwnedState s;
+    s.c=wfn->Ca()->clone(); s.da=wfn->Da()->clone();
+    s.eps=std::make_shared<Vector>(*wfn->epsilon_a());
+    s.basis=snapshot_basis(wfn->basisset());
+    auto overlap=std::make_shared<Matrix>(d.nbf,d.nbf);
+    // Local serial engine: no OneBodyAOInt/global tolerance or Process threads.
+    // snapshot_basis has validated all shell dimensions and AO offsets before
+    // these ordered shell-pair buffers (and the ERI buffers below) are indexed.
+    libint2::Engine overlap_engine(libint2::Operator::overlap,s.basis->max_nprimitive(),s.basis->max_am(),0);
+    overlap_engine.set_precision(1.e-15);
+    for(int s0=0;s0<s.basis->nshell();++s0) for(int s1=0;s1<s.basis->nshell();++s1) {
+        const auto& sh0=s.basis->shell(s0); const auto& sh1=s.basis->shell(s1);
+        overlap_engine.compute(s.basis->l2_shell(s0),s.basis->l2_shell(s1));
+        const double* buf=overlap_engine.results()[0];
+        if(!buf) continue;
+        std::size_t index=0;
+        for(int m=0;m<sh0.nfunction();++m) for(int n=0;n<sh1.nfunction();++n,++index) {
+            require_native(std::isfinite(buf[index]), "nonfinite overlap integral");
+            overlap->set(sh0.function_index()+m,sh1.function_index()+n,buf[index]);
+        }
+    }
+    auto gram=linalg::triplet(s.c,overlap,s.c,true,false,false);
+    for(int p=0;p<d.nmo;++p) for(int q=0;q<d.nmo;++q)
+        require_native(std::isfinite(gram->get(p,q)) && std::abs(gram->get(p,q)-(p==q?1.0:0.0))<=1.e-8,
+                       "orbitals must be AO-overlap orthonormal");
+    return s;
 }
 } // namespace
 
@@ -248,16 +335,11 @@ NativeResponseProvider::NativeResponseProvider(std::shared_ptr<Wavefunction> wfn
     require_native(std::isfinite(cutoff_) && cutoff_>0 && std::nextafter(0.5*cutoff_,0.0)>0,
                    "density cutoff must be finite and positive with a positive LibXC half-cutoff");
     require_native(kernel!="no_local" || (b_==0 && !grid),"no_local requires local_scale=0 and no grid");
-    require_native(wfn->nirrep()==1 && wfn->same_a_b_orbs() && wfn->same_a_b_dens() &&
-                   wfn->nalpha()==wfn->nbeta() && wfn->soccpi()[0]==0,
-                   "only restricted closed-shell C1 wavefunctions are supported");
+    const auto dims=restricted_dims(wfn,caller_converged);
     auto source=wfn->basisset();
-    require_native(source && source->molecule() && source->nbf()>0,"missing orbital basis/molecule");
-    const int nbf=source->nbf(), nmo=wfn->nmo();
-    nocc_=wfn->nalpha(); nvir_=nmo-nocc_;
-    require_native(nocc_>0 && nvir_>0 && nmo<=nbf && wfn->doccpi()[0]==nocc_,
-                   "invalid integer Aufbau occupations or empty OV space");
-    const std::size_t nov=mul(nocc_,nvir_);
+    const int nbf=dims.nbf, nmo=dims.nmo;
+    nocc_=dims.nocc; nvir_=dims.nvir;
+    const std::size_t nov=dims.nov;
     require_native(max_nov>0 && nov<=max_nov && nov<=512,"dense OV resource limit (maximum 512)");
     require_native(source->max_am()<=4 && source->max_nprimitive()<=64 &&
                    nbf<=256 && mul(nov,mul(mul(nbf,nbf),mul(nbf,nbf)))<=64000000000ULL,
@@ -282,62 +364,21 @@ NativeResponseProvider::NativeResponseProvider(std::shared_ptr<Wavefunction> wfn
         planned_bytes_=add(planned_bytes_,mul(nov,sizeof(std::exception_ptr)+sizeof(size_t)));
     }
     require_native(max_bytes>0 && planned_bytes_<=max_bytes,"dense workspace byte resource limit");
-    matrix_ok(wfn->Ca(),nbf,nmo,"Ca"); matrix_ok(wfn->Cb(),nbf,nmo,"Cb");
-    matrix_ok(wfn->Da(),nbf,nbf,"Da"); matrix_ok(wfn->Db(),nbf,nbf,"Db");
-    auto ea=wfn->epsilon_a(), eb=wfn->epsilon_b();
-    require_native(ea && eb && ea->nirrep()==1 && eb->nirrep()==1 && ea->dim()==nmo && eb->dim()==nmo,
-                   "orbital energy dimension/C1 mismatch");
-    for(int p=0;p<nmo;++p) {
-        require_native(std::isfinite(ea->get(p)) && ea->get(p)==eb->get(p),"energies must be finite and restricted");
-        for(int mu=0;mu<nbf;++mu)
-            require_native(wfn->Ca()->get(mu,p)==wfn->Cb()->get(mu,p),"alpha/beta orbitals differ");
-    }
-    for(int mu=0;mu<nbf;++mu) for(int nu=0;nu<nbf;++nu) {
-        double density=0;
-        for(int i=0;i<nocc_;++i) density+=wfn->Ca()->get(mu,i)*wfn->Ca()->get(nu,i);
-        require_native(std::isfinite(density) && wfn->Da()->get(mu,nu)==wfn->Db()->get(mu,nu) &&
-                       std::abs(density-wfn->Da()->get(mu,nu))<=1.e-9*std::max(1.0,std::abs(density)),
-                       "density inconsistent with integer occupied orbitals (fractional occupations unsupported)");
-    }
-    for(int a=0;a<nvir_;++a) for(int i=0;i<nocc_;++i) {
-        double gap=ea->get(nocc_+a)-ea->get(i);
-        require_native(std::isfinite(gap) && gap>0,"occupied-virtual gaps must be finite and positive");
-    }
+    validate_restricted_state(wfn,dims);
     if(grid) {
         matrix_ok(grid,np,4,"grid");
         for(int p=0;p<np;++p) require_native(grid->get(p,3)>=0,"grid weights must be nonnegative");
     }
     require_native(std::isfinite(wfn->energy()),"wavefunction energy must be finite");
     // Complete owned scientific input snapshot before any integrals/collocation.
-    c_=wfn->Ca()->clone(); da_=wfn->Da()->clone(); eps_=std::make_shared<Vector>(*ea);
+    auto owned=own_restricted_state(wfn,dims);
+    c_=owned.c; da_=owned.da; eps_=owned.eps; basis_=owned.basis;
     if(grid) grid_=grid->clone();
-    basis_=snapshot_basis(source);
     auto co=std::make_shared<Matrix>(nbf,nocc_), cv=std::make_shared<Matrix>(nbf,nvir_);
     for(int mu=0;mu<nbf;++mu) {
         for(int i=0;i<nocc_;++i) co->set(mu,i,c_->get(mu,i));
         for(int a=0;a<nvir_;++a) cv->set(mu,a,c_->get(mu,nocc_+a));
     }
-    auto overlap=std::make_shared<Matrix>(nbf,nbf);
-    // Local serial engine: no OneBodyAOInt/global tolerance or Process threads.
-    // snapshot_basis has validated all shell dimensions and AO offsets before
-    // these ordered shell-pair buffers (and the ERI buffers below) are indexed.
-    libint2::Engine overlap_engine(libint2::Operator::overlap,basis_->max_nprimitive(),basis_->max_am(),0);
-    overlap_engine.set_precision(1.e-15);
-    for(int s0=0;s0<basis_->nshell();++s0) for(int s1=0;s1<basis_->nshell();++s1) {
-        const auto& sh0=basis_->shell(s0); const auto& sh1=basis_->shell(s1);
-        overlap_engine.compute(basis_->l2_shell(s0),basis_->l2_shell(s1));
-        const double* buf=overlap_engine.results()[0];
-        if(!buf) continue;
-        std::size_t index=0;
-        for(int m=0;m<sh0.nfunction();++m) for(int n=0;n<sh1.nfunction();++n,++index) {
-            require_native(std::isfinite(buf[index]), "nonfinite overlap integral");
-            overlap->set(sh0.function_index()+m,sh1.function_index()+n,buf[index]);
-        }
-    }
-    auto gram=linalg::triplet(c_,overlap,c_,true,false,false);
-    for(int p=0;p<nmo;++p) for(int q=0;q<nmo;++q)
-        require_native(std::isfinite(gram->get(p,q)) && std::abs(gram->get(p,q)-(p==q?1.0:0.0))<=1.e-8,
-                       "orbitals must be AO-overlap orthonormal");
 
     v_=std::make_shared<Matrix>(nov,nov); x_=std::make_shared<Matrix>(nov,nov);
     y_=std::make_shared<Matrix>(nov,nov);
@@ -398,4 +439,96 @@ SharedMatrix NativeResponseProvider::local_primitive() const { return local_->cl
 SharedMatrix NativeResponseProvider::orbitals() const { return c_->clone(); }
 SharedVector NativeResponseProvider::energies() const { return std::make_shared<Vector>(*eps_); }
 SharedMatrix NativeResponseProvider::density_alpha() const { return da_->clone(); }
+
+IsaAldaGridScreen::IsaAldaGridScreen(std::shared_ptr<Wavefunction> wfn,bool caller_converged,
+        const std::string& kernel,SharedMatrix grid,double density_cutoff,std::size_t max_bytes)
+    : kernel_(kernel),cutoff_(density_cutoff) {
+    require_native(wfn && caller_converged,"explicit wavefunction and caller convergence declaration required");
+    require_native(kernel=="alda_slater" || kernel=="alda_slater_pw92" || kernel=="alda_slater_vwn",
+                   "row screening needs a named local kernel (no_local has no grid rows)");
+    require_native(std::isfinite(cutoff_) && cutoff_>0 && std::nextafter(0.5*cutoff_,0.0)>0,
+                   "density cutoff must be finite and positive with a positive LibXC half-cutoff");
+    require_native(grid && grid->nirrep()==1 && grid->ncol()==4 && grid->nrow()>0,
+                   "ALDA requires explicit grid rows [x,y,z,weight] in bohr");
+    const auto dims=restricted_dims(wfn,caller_converged);
+    auto source=wfn->basisset();
+    np_=grid->nrow();
+    // Screening is collocation only: grid_rows*nbf*nmo, with no nov^2 term at
+    // all. That absence is the whole reason it can look at a grid the primitive
+    // cannot yet afford; it is a separate gate, not a waiver of the other one.
+    require_native(source->max_am()<=4 && source->max_nprimitive()<=64 && dims.nbf<=256,
+                   "ALDA screen basis resource limit");
+    require_native(np_<=1000000 && mul(np_,mul(dims.nbf,dims.nmo))<=64000000000ULL,
+                   "ALDA screen work resource limit");
+    auto elements=add(mul(16,mul(128,add(dims.nbf,dims.nmo))),mul(6,np_));
+    elements=add(elements,mul(64,mul(dims.nbf,dims.nbf)));
+    planned_bytes_=add(mul(elements,sizeof(double)),16ULL*1024*1024);
+    require_native(max_bytes>0 && planned_bytes_<=max_bytes,"dense workspace byte resource limit");
+    validate_restricted_state(wfn,dims);
+    matrix_ok(grid,np_,4,"grid");
+    for(int p=0;p<np_;++p) require_native(grid->get(p,3)>=0,"grid weights must be nonnegative");
+    require_native(std::isfinite(wfn->energy()),"wavefunction energy must be finite");
+    auto owned=own_restricted_state(wfn,dims);
+    grid_=grid->clone();
+    value_.assign(np_,0.);
+    const int no=dims.nocc, nv=dims.nvir;
+    alda_rows(owned.basis,owned.c,no,grid_,kernel_,cutoff_,[&](int start,int count,
+              const Matrix& orbitals,const std::vector<double>& factors,
+              const std::vector<unsigned char>& included) {
+        for(int p=0;p<count;++p) {
+            if(!included[p]) continue; // exactly the rows the primitive itself skips
+            double o=0,u=0;
+            for(int i=0;i<no;++i) o+=std::pow(orbitals.get(p,i),2);
+            for(int a=0;a<nv;++a) u+=std::pow(orbitals.get(p,no+a),2);
+            const double v=std::abs(factors[p])*o*u;
+            require_native(std::isfinite(v),"nonfinite ALDA row screen value");
+            value_[start+p]=v;
+        }
+    });
+    for(int p=0;p<np_;++p) {
+        total_+=value_[p];
+        maximum_=std::max(maximum_,value_[p]);
+        if(value_[p]==0.) ++zeros_;
+    }
+    require_native(std::isfinite(total_),"ALDA row screen total overflowed");
+    sorted_=value_;
+    std::sort(sorted_.begin(),sorted_.end(),std::greater<double>());
+}
+void IsaAldaGridScreen::check_threshold(double threshold) const {
+    require_native(std::isfinite(threshold) && threshold>=0,
+                   "ALDA row screen threshold must be finite and nonnegative");
+}
+SharedVector IsaAldaGridScreen::values() const {
+    auto v=std::make_shared<Vector>(np_);
+    for(int p=0;p<np_;++p) v->set(p,value_[p]);
+    return v;
+}
+std::vector<int> IsaAldaGridScreen::retained_rows(double threshold) const {
+    check_threshold(threshold);
+    std::vector<int> keep;
+    for(int p=0;p<np_;++p) if(value_[p]>threshold) keep.push_back(p);
+    return keep;
+}
+SharedMatrix IsaAldaGridScreen::retained(double threshold) const {
+    const auto keep=retained_rows(threshold);
+    require_native(!keep.empty(),"ALDA row screen retained no rows at this threshold");
+    auto out=std::make_shared<Matrix>(static_cast<int>(keep.size()),4);
+    for(std::size_t r=0;r<keep.size();++r)
+        for(int c=0;c<4;++c) out->set(static_cast<int>(r),c,grid_->get(keep[r],c));
+    return out;
+}
+double IsaAldaGridScreen::omitted_bound(double threshold) const {
+    check_threshold(threshold);
+    double bound=0;
+    for(int p=0;p<np_;++p) if(!(value_[p]>threshold)) bound+=value_[p];
+    return bound;
+}
+int IsaAldaGridScreen::omitted_count(double threshold) const {
+    return np_-static_cast<int>(retained_rows(threshold).size());
+}
+double IsaAldaGridScreen::threshold_for_rows(int max_rows) const {
+    require_native(max_rows>0,"ALDA row screen row target must be positive");
+    if(max_rows>=np_-zeros_) return 0.;
+    return sorted_[max_rows]; // largest omitted value; strict ">" keeps at most max_rows
+}
 } } // namespace psi::isapol

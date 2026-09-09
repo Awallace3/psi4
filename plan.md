@@ -215,6 +215,30 @@ Resource blocker: for expected nbf=nmo=92, nocc=5, nOV=435. The current public
 **32,822,968,500 > 2,000,000,000**. The 10,569-row ceiling is not a proposed grid.
 The preflight mirrors existing guards; C++ checks remain authoritative.
 
+Measured, on this branch (PBE0, that grid, `dft_radial_points` 99 /
+`dft_spherical_points` 590, `scf_type pk`): the blocker is now quantified and
+**row screening alone does not clear it**. `IsaAldaGridScreen` bounds each
+quadrature row's exact contribution (see SPEC §6); at aug-cc-pVTZ the actual SCF
+gives nbf=nmo=92, nOV=435 as expected, 37,958 of the 173,460 rows are exactly
+zero, and 135,502 survive lossless screening — still **12.8×** the permitted
+ALDA work. Keeping only the 10,569 rows the limit admits omits **53.6%** of the
+total contribution norm (bound 2.854 of total 5.326). A 1e-8-quality screen
+needs 113,834 rows, 10.8× over. At cc-pVDZ, where the full 173,460-row
+primitive is affordable (work 1.565e9 < 2e9), the same 10,569-row budget shifts
+the isotropic dipole polarizability by **6.94%** (5.585 → 5.198). So the
+remaining sanctioned route for the aVTZ demo is the other one: **a different
+response algorithm with its own gate**, not a coarser or screened grid.
+
+Measured throughput behind that statement: the shipped accumulator (hand
+triple loop, parallel over t) runs at **9.08 GFLOP/s** at nov=95, i.e. the 2e9
+limit is ≈**0.44 s** of accumulation. The identical np·nOV² contraction as a
+blocked BLAS3 update runs at **104 GFLOP/s** at nov=435, so the *full* unpruned
+aVTZ accumulation is ≈**0.63 s**. The flop count is the same; only the rate
+differs. A BLAS3 primitive may therefore carry its own, higher, *measured* work
+limit at the same wall-clock budget — that is a new algorithm with a new gate,
+not a raise of this one, which stays in force for the accumulator it was
+calibrated against.
+
 Missing historical artifacts: generated CKS, actual SCF/basis export and versions,
 response grids/propagators, pre-refinement frequency tensors, actual point lattice
 and `.p2p` responses, `.pdef`, per-frequency PFIT data and refined tensors.
@@ -245,6 +269,14 @@ remains between it and the `777f904` target, in dependency order:
    pruning or a different response algorithm with its own gate — **not** raising
    `max_bytes`/work limits, coarsening the scientific grid, or bypassing
    `estimate_response_work`.
+   *Status:* the grid-pruning half is now implemented, certified and
+   **measured insufficient** (section 4): lossless screening still leaves
+   12.8× the permitted work, and the admissible 10,569 rows cost 6.94% of the
+   cc-pVDZ isotropic polarizability. Remaining route: a BLAS3 local primitive
+   with its own measured gate. Two separate aVTZ costs must be reported, not
+   conflated — the ALDA accumulation and the direct JK quartet loop, which
+   recomputes the ordered nbf⁴ shell loop once per (b,j) pair (≈3.1e10
+   integral values, inside the unchanged 6.4e10 gate but not free).
 
 Each step needs its own independent oracle before it is wired to the next, and
 each must stay separately labelled in provenance; see the SPEC §8 note that the
