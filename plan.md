@@ -239,6 +239,14 @@ limit at the same wall-clock budget — that is a new algorithm with a new gate,
 not a raise of this one, which stays in force for the accumulator it was
 calibrated against.
 
+The *other* aVTZ cost is now measured too, and it is larger: with `no_local`
+(no ALDA rows at all, so the gate above is irrelevant) the direct-JK quartet
+loop at nOV=435 takes **953.9 s**, after a 5.3 s PBE0/aVTZ SCF
+(E=-76.3770293137793). It passes every existing gate. So a BLAS3 ALDA primitive
+would remove ~0.6 s of a ~16-minute demo: closing item 4 needs the (b,j)-pair
+recomputation of the ordered nbf⁴ shell loop addressed as well, and the two
+costs must never be quoted as one.
+
 Missing historical artifacts: generated CKS, actual SCF/basis export and versions,
 response grids/propagators, pre-refinement frequency tensors, actual point lattice
 and `.p2p` responses, `.pdef`, per-frequency PFIT data and refined tensors.
@@ -262,6 +270,25 @@ remains between it and the `777f904` target, in dependency order:
    borrow a parameter count from the dispersion track.
 3. **Add the refinement stage** that stands between raw per-frequency PFIT
    output and the reference refined tensors. There is currently no refinement.
+   *Oracle (decoded, MIT source, attribution recorded):* `bin/localize.py`
+   drives, per frequency tag 000..010, `process` → `<refine><tag>.data` →
+   `pfit` → `.pol`, concatenated to `<name>_ref_wt<W>_L<WSM>_0f10.pol`. The
+   reference `check/L2H1/H2O_ref_wt3_L2_Cn.pot` decodes to weight-type 3
+   (`coeff/(α²+1)`, then `/(1+ω²)` for ω≠0), `weight_coeff` 1e-3, `cutoff`
+   1e-4, SVD off, WSMLIMIT 2 (O) / HLIMIT 1 (H), symmetry ON
+   (`write_pfit_local_symm`). Model variables are one per unique *site type*
+   taken from that type's first site, over upper-triangle component pairs of
+   `(lim+1)²`, kept iff `|α_static| > cutoff`, with `COPY` for the type's
+   remaining sites. Per-parameter penalties enter as `s*(z−α)²`, i.e.
+   `c(k,k)+=s`, `rhs(k)+=s*α`, solved by DSYSV — which is what psi4's existing
+   `isa_pfit_solve`/`data_rows` (`row[k]=f_i^T M_k f_j`) already computes.
+   *Status:* the T functions this needs now exist and are bitwise-certified
+   against CamCASP's own compiled `solidh`
+   (`isa_irregular_solid_harmonics`/`isa_t_functions`, SPEC §6,
+   `.pi/audit/t-functions/`). What is still missing is the driver that builds
+   the `IsaPfitProblem` — site typing/COPY equivalences, rank limits, anchors
+   and weights — plus its numeric comparison against a CamCASP `process` +
+   `pfit` run on an affordable case.
 4. **Resolve the large-response resource blocker honestly** (section 4:
    nOV=435 × 173,460 grid rows ⇒ ALDA work 3.28e10 vs the 2e9 limit). The
    npoint-RHS solve in the prerequisite bounds only the *new* work; it does not
@@ -276,7 +303,11 @@ remains between it and the `777f904` target, in dependency order:
    with its own measured gate. Two separate aVTZ costs must be reported, not
    conflated — the ALDA accumulation and the direct JK quartet loop, which
    recomputes the ordered nbf⁴ shell loop once per (b,j) pair (≈3.1e10
-   integral values, inside the unchanged 6.4e10 gate but not free).
+   integral values, inside the unchanged 6.4e10 gate but not free). That second
+   cost is now **measured**: the aVTZ `no_local` build at nOV=435 takes
+   **953.9 s** of quartet loop after a 5.3 s PBE0 SCF, so it passes every gate
+   and is still the dominant wall clock — a BLAS3 ALDA primitive alone would not
+   make the demo interactive.
 
 Each step needs its own independent oracle before it is wired to the next, and
 each must stay separately labelled in provenance; see the SPEC §8 note that the

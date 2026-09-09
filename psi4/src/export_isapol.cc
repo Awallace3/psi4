@@ -42,6 +42,7 @@
 #include "psi4/libisapol/isotropic_dispersion.h"
 #include "psi4/libisapol/anisotropic_dispersion.h"
 #include "psi4/libisapol/multipole_transform.h"
+#include "psi4/libisapol/t_functions.h"
 #include "psi4/libisapol/lw_localization.h"
 #include "psi4/libisapol/aux_coulomb.h"
 #include "psi4/libisapol/ov_fit.h"
@@ -390,6 +391,19 @@ void export_isapol(py::module& m) {
           "R(x+d)=T(d)R(x); source-minus-target displacement in bohr, Racah 00,10,11c,11s,...");
     m.def("isa_multipole_rotation", &isa_multipole_rotation, "rank"_a, "frame"_a,
           "R(F x)=D(F)R(x); finite proper orthogonal local-to-global Cartesian frame");
+    m.def("isa_regular_multipoles", &isa_regular_multipoles, "rank"_a, "displacement"_a,
+          "r^k C_kq for every rank through rank, Racah 00,10,11c,11s,...; rank zero is 1");
+    m.def("isa_irregular_solid_harmonics", &isa_irregular_solid_harmonics, "rank"_a, "displacement"_a,
+          "r^(-k-1) C_kq for every rank through rank, Racah 00,10,11c,11s,...; rank zero is 1/r, "
+          "not 1, and the displacement (bohr) must be nonzero");
+    m.def("isa_t_function_damping", &isa_t_function_damping, "rank"_a, "br"_a,
+          "Tang-Toennies factor 1-exp(-br)*sum_{n<=rank+1} br^n/n! for a whole rank block; the "
+          "reference protocol leaves damping off, so this branch has no reference artifact behind it");
+    m.def("isa_t_functions", &isa_t_functions, "rank"_a, "point_bohr"_a, "site_bohr"_a, "frame"_a,
+          "damping"_a = 0.0,
+          "One pfit T row: unit-charge interaction functions for a site's multipole components in "
+          "the site's LOCAL axes. frame maps local to global Cartesian (columns are the local axes), "
+          "as in isa_multipole_rotation; damping is CamCASP's Damping keyword in bohr^-1");
     py::class_<IsaAnisotropicSite>(m, "IsaAnisotropicSite", "All declared-rank local response blocks; explicit local-to-global frame required")
         .def(py::init<>())
         .def_readwrite("label", &IsaAnisotropicSite::label)

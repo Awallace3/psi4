@@ -9,6 +9,7 @@ list(APPEND sources
   isotropic_dispersion.cc
   anisotropic_dispersion.cc
   multipole_transform.cc
+  t_functions.cc
   lw_localization.cc
   aux_coulomb.cc
   orbital_coulomb.cc

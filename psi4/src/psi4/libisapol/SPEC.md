@@ -249,6 +249,21 @@ Details: [SUPPLIED_PROPERTIES.md](SUPPLIED_PROPERTIES.md), native contracts,
 Translations: `R(x+d)=T(d)R(x)`; source→target d=Ra−Rb. Rotations:
 `R(F*x)=D(F)R(x)`, finite proper local-to-global F. They do not localize/truncate.
 
+`isa_irregular_solid_harmonics(rank, d)` gives `r^(-k-1) C_kq` for every k≤rank in
+the same Racah order `00,10,11c,11s,...`; rank0 is `1/r`, **not** 1, and d=0 is a
+rejected singularity, not zero. `isa_t_functions(rank, point, site, F, damping)` is
+one pfit T row: the displacement point−site rotated into the site's LOCAL axes by
+F (columns are the local axes, same contract as `isa_multipole_rotation`), then the
+irregular harmonics, then optional Tang–Toennies `1-e^(-br)*sum_{n≤k+1} br^n/n!`
+applied per whole rank block. Equivalently `t = D(F)^T R_irr(point−site)` (verified
+to 1.7e−18). The reference protocol leaves CamCASP's `Damping` at zero, so the damped
+branch carries algebra from source but **no reference artifact**. Bitwise agreement
+with CamCASP's own compiled `solidh` holds for 22751 components over 2045 points and
+for the reference water axes' T rows; it is a claim about non-contracting arithmetic
+only (§3.5.5) — Fortran built `-O2 -march=native` moves by ≤1.3e−13 relative, and for
+general (non signed-permutation) frames gfortran's `matmul` reduction order costs
+≤1.53e−12 relative on the frame contraction, not in the recursion.
+
 LW uses explicit graphs, negative graph Laplacian and componentwise pseudoinverse;
 rank0–3 workspace and rank1–3 local output, eigen cutoff1e−4, transfer omission1e−7.
 Keep Moore–Penrose and postcondition diagnostics. Equal elements do not establish
