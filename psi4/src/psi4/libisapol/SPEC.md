@@ -2,6 +2,26 @@
 
 ## 1. Objectives and current status
 
+### Traced reference basis and no-integral response preflight (latest)
+
+Important protocol correction: gate9's H2O properties CLT does NOT request ISA.
+Its traced/historical generator selects spherical MAINaug-cc-pVTZ92, ordinary
+Cartesian RI AUX246, same-AUX AtomAux fallback, constrained NN→LW→PFIT. ISA-A
+and A+DF templates are separate targets. Actual historical Psi4 MAIN export and
+run-specific grid/targets remain missing; native MAIN is span-equivalent to the
+full expected contractions, not literally contraction-identical.
+`isapol_reference_basis` now provides immutable self-contained expected data with
+hashes/notices, false historical-export verification, no ISA/PartitionRecipe
+registration. `isapol_response_preflight` mirrors existing dimensional guards
+before partition/provider work without changing C++ authority or scientificgrids.
+At92/92/5 and173460rows,nov435 implies32822968500 ALDA work (>2e9);10569rows is
+a resource bound, NOT a proposed replacementgrid. See NATIVE_REFERENCE_BASIS.md.
+Parent1895tests pass36.79s; defaultwater outputs allbitwisebaseline29.6536s;
+fixedGRAC publicendpoint passes30.0985s. Noticeinstallation byteverified and
+fixtureJSONgitexceptions added. No matchedlargeaVTZ/PFIT parity claim. Next needs
+actual constrainedNN/distributedresponse and nativePFIT target/model integration,
+not a fictitious ISA preset derived from this non-ISA reference.
+
 ### Accepted explicit fixed-GRAC SCF-input admission (latest)
 
 New opt-in `ATOMIC_SCF_ASYMPTOTIC_CORRECTION=FIXED_GRAC` and positive exact

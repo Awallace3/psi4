@@ -17,3 +17,5 @@
 !psi4_lw_anisotropic_driver_evidence.json
 !orient_local/lw-dynamic-water.json
 !psi4_lw_dynamic_evidence.json
+!h2o_props_psi4_basis/records.json
+!h2o_props_psi4_basis/manifest.json

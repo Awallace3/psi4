@@ -14,6 +14,7 @@ import numpy as np
 from psi4 import core
 from . import isapol_native_partition as p
 from . import isapol_native as n
+from .isapol_response_preflight import estimate_response_work
 from .isapol_native_correction import (functional_definition as _functional_definition,
                                        validate_correction, require_scf_seal)
 
@@ -162,6 +163,10 @@ def run(wfn, tasks):
         go.spherical_points = int(effective['ATOMIC_RESPONSE_SPHERICAL_POINTS'])
         grid = core.IsaGrid(mol.clone(), go)
         response_grid = np.column_stack((grid.x(), grid.y(), grid.z(), grid.w()))
+        # Actual IsaGrid rows, before partition/response work. Do not infer a
+        # response row count from SCF options or a historical basis alias.
+        estimate_response_work(wfn.basisset().nbf(), wfn.nmo(), wfn.nalpha(),
+                               response_grid.shape[0]).require_pass()
         dispersion = 'ATOMIC_DISPERSION' in tasks
         quad = n.Quadrature.from_casimir(core.CasimirGrid(10,.5)) if dispersion else None
         properties = n.native_properties(wfn, recipe, bonds=bonds, frames=None, caller_converged=True,

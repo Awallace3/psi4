@@ -412,3 +412,42 @@ def test_non_c1_and_unrestricted_rejected():
 def test_invalid_frequency(water, omega):
     with pytest.raises(ValueError):
         make(water).at_frequency(omega)
+
+
+def test_preflight_real_dimensions_before_snapshot_or_provider(water, monkeypatch):
+    from psi4.driver.procrouting import isapol_native_response as api
+    calls = []
+    original = api.estimate_response_work
+    def observe(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original(*args, **kwargs)
+    def forbidden(*args, **kwargs):
+        pytest.fail('native snapshot/provider entered after resource rejection')
+    monkeypatch.setattr(api, 'estimate_response_work', observe)
+    monkeypatch.setattr(core.Matrix, 'from_array', forbidden)
+    monkeypatch.setattr(core, 'NativeResponseProvider', forbidden)
+    nov = water.nalpha() * (water.nmo() - water.nalpha())
+    with pytest.raises(ValueError, match='NativeResponseProvider: dense OV resource limit'):
+        make(water, kernel='alda_slater', local_scale=1., grid=np.ones((7, 4)), max_nov=nov-1)
+    assert calls == [((water.basisset().nbf(), water.nmo(), water.nalpha(), 7), {'max_nov': nov-1})]
+
+
+def test_small_native_default_preflight_is_observational(water, monkeypatch):
+    from psi4.driver.procrouting import isapol_native_response as api
+    from types import SimpleNamespace
+    original = api.estimate_response_work
+    # Bypass only the new Python gate to model the previous small default path;
+    # both runs still use the real provider and every authoritative C++ guard.
+    monkeypatch.setattr(api, 'estimate_response_work',
+                        lambda *a, **k: SimpleNamespace(require_pass=lambda: None))
+    baseline = make(water).at_frequency(.4).raw_coupled.copy()
+    calls = []
+    def observe(*args, **kwargs):
+        result = original(*args, **kwargs)
+        calls.append(result)
+        return result
+    monkeypatch.setattr(api, 'estimate_response_work', observe)
+    model = make(water)
+    np.testing.assert_array_equal(model.at_frequency(.4).raw_coupled, baseline)
+    assert len(calls) == 1 and calls[0].passes and calls[0].grid_rows == 0
+    assert model.coordinate_declaration.startswith('identity direct OV')

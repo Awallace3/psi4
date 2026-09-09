@@ -2,7 +2,26 @@
 
 **Start here:** read `psi4/src/psi4/libisapol/SPEC.md`, then this plan. The spec owns scientific/API contracts; this file owns execution state. Preserve unrelated uncommitted work. User authorized committing and continuing; checkpoint `f996942ad6` contains the validated native/performance/recoupled implementation. No pushes, resets or reference-tree edits.
 
-## Current direction: matched native protocol (user decision)
+## Latest: traced non-ISA reference basis and preflight accepted
+
+Recovered failed basis investigation with saved `.pi/audit/matched-basis-trace-handoff.md`.
+Critical correction: gate9propertiesCLT/777f904 generator selects constrainedNN,
+CartesianRI AUX246 andnoISA, thenLW+PFIT; it is NOT an ISA-A preset. ExpectedMAIN92
+span matches nativebasis but fullcontractions differ (62 vs56 primitiveentries);
+historicalPsi4exportmissing. Shipped immutableexpectedmanifest hastrue source/data
+provenance and explicitfalsehistoricalverification, no recipe registration.
+
+Newpreflight usesactualdimensions/rows beforepartition/provider, retainsC++limits.
+435OV*173460rows =>32822968500 ALDAwork, rejectsunchanged2e9guard.10569rowlimit
+isnotagridrecommendation. Parent1895tests passed36.79s; normalwaterallbitwise
+29.6536s/594120KiB; fixedGRACstrictLW+9pairs30.0985s/588436KiB. Reviewed no
+numericaldefect; fixedfixtureJSONvisibility andNOTICEinstallation, byteverified.
+See NATIVE_REFERENCE_BASIS.md and `.pi/audit/reference-basis-regressions-v1.log`.
+Noactivebackgroundtasks. Next nativework: constrainedNN/distributedresponse and
+point-response/PFITtargets/modelintegration; missinghistoricalartifacts anddense
+resourceguardremainblockers. Keepallscientificgrids/tolerances, noORIENT/RRFsource.
+
+## Prior direction: matched native protocol (user decision)
 
 Odd normalization investigation is explicitly DEFERRED. Six raw-identity tests
 pass within1801 integrated regressions34.85s (`.pi/audit/odd-j-parent-regressions.log`),

@@ -1,0 +1,42 @@
+{
+  "records_sha256": "640afec4c49dc2dbc76819a985d3840d1cf0459a9c1192806339f396b4dd4938",
+  "records_format": "element -> main/aux -> ordered [l, exponents, source_coefficients]",
+  "counts": {
+    "O": {
+      "main_shells": 14,
+      "main_primitive_entries": 36,
+      "main_spherical_functions": 46,
+      "aux_shells": 28,
+      "aux_cartesian_functions": 136
+    },
+    "H": {
+      "main_shells": 9,
+      "main_primitive_entries": 13,
+      "main_spherical_functions": 23,
+      "aux_shells": 14,
+      "aux_cartesian_functions": 55
+    }
+  },
+  "sources_sha256": {
+    "tests/H2O_props/psi4/H2O-avtz.clt": "8c09be634edd593c5966522fac73d1a59a1fbc7fbb748e67a5539dfab5f63a11",
+    "tests/H2O_props/psi4/check/L2H1/H2O_ref_wt3_L2_Cn.pot": "25ffd1d2ac0e4202fb194cc7786df13a9d4953fa020a81b998400b375b5f2fac",
+    "bin/camcasp.py": "4e1e7c068b48278b0d76a6a4c0dda318539316f2e9db6dd8159f1df6feef4205",
+    "bin/runcamcasp.py": "db24d2a382107a1863bdb7e4e3aad0d9a350ab4b4f1a323ee7d89d96eda9c359",
+    "tests/test_H2O_props.py": "c82d212d83fd70a0e2add53960fe71a3caf898410d1f94dd081aae22fe936d6a",
+    "src/tools/cluster_file_interface.F90": "dc4bcc76e9e9c16e1677b93f0c783d0387152391514c974df064761e5f93cee5",
+    "basis/gamess_us/aug-cc-pVTZ/O": "67e3395ce4ab7053a4ff6f86d508bb74e97403f7194ac8828c599974265e3acc",
+    "basis/gamess_us/aug-cc-pVTZ/H": "8590af2f125999d2888ac3599a42e8735654b4e93fe4ecc8b18878dd672f80d0",
+    "basis/psi4/aug-cc-pvtz.gbs": "4e044373a426868d570392a535eed0f439c84ab796e901cd6e8f72e0ce8fd26f",
+    "basis/auxiliary/aug-cc-pVTZ/O": "c730aa433ce6c0d604bbc2616fb9b44631c2699f0223cc5e260864c43ca8c6ca",
+    "basis/auxiliary/aug-cc-pVTZ/H": "384e43bb427e911de6c900a071fc1e3adcc6970572afc3c5d05fed8f1c78e066",
+    "src/molecule_parser.F90": "3210d7d0e49d38f824ebc74bc4d295ced136ef5bf43bf631be04d264acc1585c",
+    "src/basis_operations.F90": "33f87d26c0b9198afc7a73a1b7c985c2dede96a3e313dfc9d82aa210c0599ab9",
+    "777f904:src/tools/cluster_file_interface.F90": "794389fe9b49fc408c859ed9aa2a78b3bfc3c47efbab6ed86b175e5d04887a60",
+    "Psi4:d52fb16a19:psi4/share/psi4/basis/aug-cc-pvtz.gbs": "235b70809d1f205815c72046ab7319b291c4fe826b93f83dea876502dbb0a53c",
+    "https://www.basissetexchange.org/api/basis/aug-cc-pvtz-rifit/format/json/?elements=1,8": "5b91e4286ce95bbca28bd04d17435c69adc29fb24f4482e3f8f5e1824ae10d4d",
+    "https://www.basissetexchange.org/api/basis/aug-cc-pvtz/format/json/?elements=1,8&version=0": "d5188d878e3e6b2a4938369a5838385f3c7e179202d6cc6270bf8dedc9cf7c3e"
+  },
+  "reference_revision": "777f90498868d33847de525612628b2dc8448523",
+  "data_license": "O/H numeric records independently verified in BSD-3-Clause MolSSI-BSE: MAIN aug-cc-pVTZ v0 (multiset exact), AUX aug-cc-pVTZ-RIFIT v1 (ordered exact). No whole CamCASP basis text copied.",
+  "native_main_comparison": "H exact contraction multiset. O native omits terms on separately present unit shells: 1.752 and .2384 from both contracted s shells, .7156 and .214 from contracted p. Same linear span; NOT literal contraction equivalence. Expected full MAIN 62 primitive entries; native 56."
+}

@@ -12,6 +12,7 @@ import numpy as np
 from psi4 import core
 from .sapt.fdds_response import FDDSFullOVResponse
 from .isapol_native_correction import validate_correction
+from .isapol_response_preflight import estimate_response_work
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,7 @@ def native_response_from_wavefunction(wavefunction, *, caller_converged, kernel,
             raise ValueError("transition coordinate resource limit")
         legs = np.array(legs, dtype=float, copy=True)
     native_grid = None
+    points = None
     if grid is not None:
         points = np.asarray(grid)
         if (np.iscomplexobj(points) or points.ndim != 2 or points.shape[1] != 4
@@ -122,6 +124,17 @@ def native_response_from_wavefunction(wavefunction, *, caller_converged, kernel,
             raise ValueError("grid must be finite real nonempty [x,y,z,nonnegative weight] rows")
         if points.size * 8 > max_bytes:
             raise ValueError("grid snapshot resource limit")
+    # Actual state dimensions and actual supplied rows, never SCF grid options.
+    # Leave unsupported-state diagnostics and all authoritative guards in C++.
+    basis = wavefunction.basisset()
+    if (basis is not None and wavefunction.nirrep() == 1
+            and wavefunction.same_a_b_orbs() and wavefunction.same_a_b_dens()
+            and wavefunction.nalpha() == wavefunction.nbeta()
+            and wavefunction.soccpi()[0] == 0):
+        estimate_response_work(basis.nbf(), wavefunction.nmo(), wavefunction.nalpha(),
+                               0 if points is None else points.shape[0],
+                               max_nov=max_nov).require_pass()
+    if points is not None:
         native_grid = core.Matrix.from_array(np.array(points, dtype=float, copy=True))
     provider = core.NativeResponseProvider(
         wavefunction, True, kernel, float(exact_exchange), float(local_scale),
