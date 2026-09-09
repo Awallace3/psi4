@@ -29,6 +29,7 @@
 #include "psi4/pybind11.h"
 
 #include "psi4/libisapol/native_response.h"
+#include "psi4/libisapol/point_response.h"
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libisapol/casimir_grid.h"
@@ -210,6 +211,23 @@ void export_isapol(py::module& m) {
             return "caller declaration only; restricted metadata, density and orthonormality checked";
         });
 
+    py::class_<IsaPointChargeOperators, std::shared_ptr<IsaPointChargeOperators>>(m, "IsaPointChargeOperators")
+        .def(py::init<std::shared_ptr<Wavefunction>, bool, SharedMatrix, std::size_t, std::size_t>(),
+             "wavefunction"_a, "caller_converged"_a, "points_bohr"_a, "max_bytes"_a, "max_points"_a)
+        .def("operators", &IsaPointChargeOperators::operators)
+        .def("points", &IsaPointChargeOperators::points)
+        .def_property_readonly("nocc", &IsaPointChargeOperators::nocc)
+        .def_property_readonly("nvir", &IsaPointChargeOperators::nvir)
+        .def_property_readonly("ntransition", &IsaPointChargeOperators::ntransition)
+        .def_property_readonly("npoint", &IsaPointChargeOperators::npoint)
+        .def_property_readonly("ov_order", &IsaPointChargeOperators::ov_order)
+        .def_property_readonly("representation", &IsaPointChargeOperators::representation)
+        .def_property_readonly("convention", &IsaPointChargeOperators::convention)
+        .def_property_readonly("minimum_nuclear_distance_bohr", &IsaPointChargeOperators::minimum_nuclear_distance_bohr)
+        .def_property_readonly("minimum_point_separation_bohr", &IsaPointChargeOperators::minimum_point_separation_bohr)
+        .def_property_readonly("maximum_absolute_element", &IsaPointChargeOperators::maximum_absolute_element)
+        .def_property_readonly("planned_bytes", &IsaPointChargeOperators::planned_bytes);
+
     // PFIT value containers: every property read is an independent snapshot,
     // including nested objects. Assign modified snapshots back explicitly.
 #define PFIT_CLASS(T) py::class_<T>(m, #T).def(py::init<>())
@@ -219,6 +237,7 @@ void export_isapol(py::module& m) {
         .value("Unspecified", IsaPfitTargetOrigin::Unspecified)
         .value("SuppliedActualPointResponse", IsaPfitTargetOrigin::SuppliedActualPointResponse)
         .value("SuppliedFittedPropagatorPointResponse", IsaPfitTargetOrigin::SuppliedFittedPropagatorPointResponse)
+        .value("NativeDirectActualPointResponse", IsaPfitTargetOrigin::NativeDirectActualPointResponse)
         .value("SyntheticAnalyticTest", IsaPfitTargetOrigin::SyntheticAnalyticTest);
     py::enum_<IsaPfitTargetConvention>(m, "IsaPfitTargetConvention")
         .value("Unspecified", IsaPfitTargetConvention::Unspecified)

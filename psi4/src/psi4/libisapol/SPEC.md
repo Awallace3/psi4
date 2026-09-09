@@ -278,7 +278,77 @@ linear-constraint policy: `s*(t^T p-a)^2` gives `s*t*t^T` and `s*a*t`; any sourc
 nonzero-LC inconsistency requires a named tested policy. Weight4 uses coefficient/
 (1+xi²) for rank≤1 pairs, zero otherwise. Track conditioning/identifiable observables,
 not unstable high-rank parameters alone. Targets/fields dominate work too; batching
-must not change the pair set. Existing solver APIs do not generate native targets.
+must not change the pair set. Native targets come only from the bounded direct-OV
+prerequisite below; no other solver API generates them.
+
+### Native direct-OV point-charge target prerequisite
+
+`IsaPointChargeOperators` (`point_response.h`) builds eagerly and immutably the
+restricted C1 point-charge OV coupling
+
+```text
+W(t,p) = + integral phi_i(r) phi_a(r) / |r - R_p| dr,   t = a*nocc + i
+```
+
+with the **positive** Coulomb kernel, i.e. exactly minus the charge-inclusive
+electron ESP operator oeprop obtains from `ElectrostaticInt::compute(result, C)`.
+Both conventions are admissible for a response leg because W enters the
+contraction twice; mixing them within one leg is a sign error, so the single
+convention is fixed and published in `convention()`. The class performs no
+response solve, frequency, fitted auxiliary metric, charge/multipole model,
+energy 1/2 or bare electrostatics, and holds no nuclear term. Geometry
+diagnostics (nearest nucleus, closest source pair, largest element, planned
+bytes) are recorded and never used to screen, repair or condition; exactly
+coincident source rows are rejected as duplicate **input**, not as a
+conditioning heuristic. Admission, shell/Libint validation and resource
+accounting follow `native_response.cc` in this module — restricted closed-shell
+C1, nov≤512, nbf≤256, max_am≤4, max_nprimitive≤64, npoint≤512, explicit byte
+envelope — and the operator itself is new native work with no CamCASP or ORIENT
+source consulted for it.
+
+`isapol_native_point_response.native_point_charge_response` reuses one existing
+native response's owned H1/H2 in a **second** shared full-OV solver whose
+transition legs are W, leaving the caller's response unmutated, and returns
+
+```text
+v(i*xi)_pq = -(W^T C(i*xi) W)_pq
+```
+
+in atomic units Eh/e², equal to `-d(phi_induced at R_p)/d(q at R_q)`.
+Frequencies are imaginary-axis magnitudes in hartree, xi≥0, xi=0 static, no
+quadrature weight applied. The npoint right-hand sides avoid only the nov×nov
+right-hand-side and solution blocks: the dominant cost is unchanged — one
+O(nov³) factorization of the same nov×nov operator plus the shared solver's own
+O(nov³) H2·H1 product, recomputed rather than reused, and O(nov²) dense
+workspace — and the saving vanishes at npoint = nov. What holds
+unconditionally is that this does **not** relax, bypass or re-tune the response
+work guard the supplied response already passed; the bound on the numpy side is
+the nov cap, and `max_bytes` covers the C++ dense envelope only. Context reuse
+is exact-equality only on occupation, dimension, orbitals and orbital energies —
+no tolerance can make a re-converged wavefunction the same physical state.
+`correction_provenance`, `caller_converged` and `convergence_evidence` are
+forwarded from the supplied response and hashed into the context digest; they
+are **not** re-verified here, and hashing a declaration is not validating it.
+The declared-`ov_order` equality check is hygiene between fixed literals — the
+`t = a*nocc+i` packing is verified only by the independent MO transform in the
+tests.
+
+Packed targets take the **computed** lower triangle at `i*(i+1)/2+j`, every j≤i
+once; the residual asymmetry is reported in `reciprocity_defects` and never
+averaged away, and `v_pp>0` (required by alpha positive definite) is recorded,
+not enforced. The origin enum is `NativeDirectActualPointResponse`, which
+`pfit.cc` accepts only with representation `native_point_charge_ov_operators`
+and **no** declared auxiliary basis, since there is no auxiliary fit to name. It
+must never be relabelled `SuppliedActualPointResponse` or
+`SuppliedFittedPropagatorPointResponse`. The model stays with the caller:
+`batch()` consumes the caller's design matrix and infers no channel, site,
+parameter count or convention, and nothing is derived from a final Cn or another
+track's parameter count.
+
+This is a **prerequisite, not the historical target**, which is a
+constrained-NN/distributed fitted-propagator quantity on a different point
+lattice, with refinement, anchoring, frame/point conventions and the large
+aVTZ response resource blocker all still unreproduced.
 
 Details: `pfit.h`, `lw_localization.h`, [SUPPLIED_PROPERTIES.md](SUPPLIED_PROPERTIES.md)
 and pre-compaction SPEC §6. Legacy PFIT leg-B gate is 3e−8 absolute/1e−8 relative;
@@ -355,6 +425,31 @@ strict scaled1e−9 gate though they passed their named1e−3 comparison. Native
 Drho-C1e−2 profile. These are prior scoped measurements, not fresh native protocol
 acceptance. Per-stage allowances imply no end-to-end bound. Strict response replay
 scaled1e−9 and default LW1e−6 remain separate from these forward profiles.
+
+The native point-charge prerequisite carries its own gates, transferable to
+nothing else: an analytic AO ESP oracle (`math.erf` only, no scipy; Boys F0–F2
+by series below 1 and upward recursion above) over **every** shell of the
+fixture basis, s and p, in both pure and Cartesian orderings, at
+**atol1e−13**; the owned W against an independent MO transform at
+**atol1e−13**; the bounded npoint-RHS solve against both the full nov-RHS
+contraction and explicit `np.linalg.solve` at **rtol2e−9/atol2e−12**; and a
+far-field `(R_p^T alpha R_q)/(R_p^3 R_q^3)` limit required to *halve* per
+doubling of R rather than meet a fixed threshold, with alpha built in-test from
+independent dipole OV legs. Reciprocity defect is asserted **<1e−12** and
+reported, never symmetrized.
+
+Two normalizations are deliberately not closed by those gates, and must not be
+described as if they were. `core.ExternalPotential.computePotentialMatrix`
+reaches the same `libint2::Operator::nuclear` integrals the C++ drives, so the
+MO-transform gate certifies the AO→MO transform and OV packing, **not** the
+kernel; only the analytic oracle pins the kernel. And the overall factor 4 in
+the shared full-OV right-hand side is written identically in code and in the
+re-derivation, and cancels in the far-field ratio, so no gate here would detect
+a global rescaling of the response — an absolute oracle (Psi4's own CPHF dipole
+polarizability against a matched exchange/kernel configuration) is the missing
+check. No shell above p is exercised. These certify the prerequisite only; they
+are not matched-protocol acceptance and must not be conflated with the legacy
+PFIT leg-B gate.
 
 [PROVISIONAL_ACCEPTANCE.md](PROVISIONAL_ACCEPTANCE.md) owns exact opt-in policy;
 its historical milestone statuses do not supersede current capability above.

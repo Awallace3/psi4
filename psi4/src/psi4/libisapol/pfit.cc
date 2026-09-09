@@ -135,12 +135,19 @@ IsaPfitResult isa_pfit_solve(const IsaPfitProblem& p,const IsaPfitOptions& o) {
     const auto& provenance=p.target_provenance;
     require(provenance.origin==IsaPfitTargetOrigin::SuppliedActualPointResponse ||
             provenance.origin==IsaPfitTargetOrigin::SuppliedFittedPropagatorPointResponse ||
+            provenance.origin==IsaPfitTargetOrigin::NativeDirectActualPointResponse ||
             provenance.origin==IsaPfitTargetOrigin::SyntheticAnalyticTest,"target origin must be declared");
     require(provenance.convention==IsaPfitTargetConvention::NegativeInducedPotentialPerUnitSourceChargeAtomicUnits,"wrong/unspecified target convention");
     text(provenance.source_id); text(provenance.generation_record); text(p.model.provenance);
     if(provenance.origin==IsaPfitTargetOrigin::SuppliedFittedPropagatorPointResponse) {
         require(provenance.response_representation=="fitted_density_coefficients","fitted target requires fitted_density_coefficients representation");
         text(provenance.auxiliary_basis_id);
+    }
+    // Native direct-OV point response carries no auxiliary fit, so an auxiliary
+    // basis identifier would be a false provenance claim rather than metadata.
+    if(provenance.origin==IsaPfitTargetOrigin::NativeDirectActualPointResponse) {
+        require(provenance.response_representation=="native_point_charge_ov_operators","native direct point target requires native_point_charge_ov_operators representation");
+        require(provenance.auxiliary_basis_id.empty(),"native direct point target must not declare an auxiliary basis");
     }
     size_t np=p.model.parameter_labels.size(), nc=p.model.channel_labels.size();
     require(np>0 && nc>0 && np<=static_cast<size_t>(std::numeric_limits<int>::max()/8),"invalid parameter/channel count");

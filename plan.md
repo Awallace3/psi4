@@ -9,9 +9,9 @@
    [NATIVE_OEPROP.md](psi4/src/psi4/libisapol/NATIVE_OEPROP.md): working public API.
 4. Read the stage-specific contracts linked from SPEC before changing that stage.
 
-**Accepted code checkpoint:** `1a097ec9f6a033428053354b294c5524e98b6137`.
-This handoff compacts the state at that checkpoint; no scientific code changed
-as part of compaction. All prior execution history remains in Git (section 8).
+**Accepted code checkpoint:** `86b548c492` plus this handoff's own commit, which
+adds the bounded native direct-OV point-charge response prerequisite (section 3).
+All prior execution history remains in Git (section 8).
 No implementation/build/test background tasks are pending. Old task IDs and
 “in progress” paragraphs in historical documents are not current instructions.
 
@@ -48,13 +48,69 @@ No implementation/build/test background tasks are pending. Old task IDs and
   representations, not interchangeable public end-to-end claims.
 - Hash/provenance-qualified expected reference basis manifest plus early
   dimensional response preflight. It is deliberately **not a PartitionRecipe**.
+- Bounded native **direct-OV point-charge response prerequisite** for PFIT:
+  `IsaPointChargeOperators` (C++) builds the positive-kernel point-charge OV
+  coupling `W(t,p)`, and `native_point_charge_response` reuses one native
+  response's owned H1/H2 in a second full-OV solver with W as legs to return
+  signed `v = -W^T C W = -d(phi_induced)/dq` in Eh/e² at caller-owned points and
+  imaginary frequencies. The npoint right-hand sides save only the nov×nov
+  RHS/solution blocks — the O(nov³) factorization remains, and no work guard is
+  relaxed. The owned PFIT solver accepts the packed lower-triangle
+  targets under the separate `NativeDirectActualPointResponse` origin. It is
+  **not** the historical constrained-NN/fitted-propagator target, and it infers
+  no charge/multipole model, channel set or parameter count.
 
 ### Latest verified evidence (local paths relative to worktree)
 
-- **1,895 ISA/FDDS tests passed in 36.79 s**:
+- **1,915 ISA/FDDS tests passed in 36.93 s** (1,895 prior + 20 new point-response
+  tests): `.pi/audit/native-point-response-regressions.log`. The 20 are the 19
+  originally written plus the second analytic-oracle test added when the review
+  forced the s-only oracle to be generalized to p shells (the single s-block test
+  became one full-basis pure test and one Cartesian test that assumes no pure
+  ordering). Run from `/tmp` against the staged tree with `OMP_NUM_THREADS=1`
+  over `tests/pytests/test_isapol*.py` + `test_fdds*.py` minus the slow
+  `test_isapol_oeprop_water.py`, which is run separately below. The new file
+  alone is 20 passed in 1.68 s. Previous 1,895-test/36.79 s run:
   `.pi/audit/reference-basis-regressions-v1.log`.
-- Final default water: **29.6536 s / 594,120 KiB**, all saved outputs bitwise
+- Point-response test boundary is mutation-checked, not just green: on the staged
+  module, flipping the target sign, symmetrizing the packed triangle, packing the
+  upper triangle instead, dropping the orbital context check and leaving the
+  returned arrays writable each fail the new file. Dropping `provider.kernel`
+  from the digest text list does **not** fail it, because kernel/model identity
+  already enters the digest through the hashed H1/H2; the test name says
+  "response model", not "kernel", for that reason.
+- An independent review of the scientific boundary confirmed the sign, units,
+  absence of any 1/2 or bare/nuclear term, the `t=a*nocc+i` ordering and the
+  libint2 charge convention, and found no defect in immutability, packing or
+  reciprocity handling. It also found three claim defects, all now corrected in
+  code/SPEC/plan: the boundedness wording overstated what npoint right-hand
+  sides save (the O(nov³) factorization remains);
+  `core.ExternalPotential.computePotentialMatrix` is the **same** libint2
+  `nuclear` engine, so that gate certifies the AO→MO transform and packing, not
+  the kernel; and "no screening" needed the libint2 precision-zero qualifier.
+  Acted on as well: the analytic oracle now covers every shell of the fixture
+  basis (s and p, pure and Cartesian) rather than the s block only; forwarded
+  provenance/convergence strings are hashed into the context digest and
+  documented as unverified; and the new PFIT origin is appended to
+  `IsaPfitTargetOrigin` so existing enumerator values are unchanged.
+  Two normalizations remain deliberately open and are labelled in SPEC §8: the
+  shared factor 4 has no absolute oracle (Psi4's own CPHF dipole polarizability
+  is the missing check), and no shell above p is exercised.
+- Default water demo after the point-response commit: **29.5248 s / 590,992 KiB**,
+  31 ISA iterations, energy `-76.33875890072267 Eh`, and every saved array
+  (`scalars`, `local`, `global_tensors`, `coefficients`) **bitwise equal** to
+  `native-water-baseline-t1` (max absolute error 0.0) under the unchanged
+  `<=1e-9` global-scaled equivalence policy:
+  `.pi/audit/native-point-response-water-comparison.json`. Preceding
+  post-preflight run for comparison: **29.6536 s / 594,120 KiB**, also bitwise
   baseline: `.pi/audit/native-water-post-preflight-comparison.json`.
+- Integrated runs at this commit: `test_isapol_oeprop_water.py` **3 passed /
+  97.22 s** (wall 1:38.13, peak RSS 664,832 KiB) and the four SAPT-DFT
+  regressions **4 passed / 112.72 s**:
+  `.pi/audit/native-point-response-integrated.log`. The uncommitted
+  `tmp/psi4_camcasp.py` demo still exits 0 and prints the same static atomic
+  dipole trace polarizabilities `[3.5492546180905062, 0.8756974686948751,
+  0.8756974684436827]` bohr³ and 3×3 site-pair Cn table.
 - Final fixed-GRAC public strict-LW/9-pair endpoint: **30.0985 s / 588,436 KiB**,
   30 ISA iterations, energy `-76.33871950327045 Eh`:
   `.pi/audit/native-fixed-grac-post-preflight-water.json`.
@@ -101,24 +157,33 @@ The final potential and a basis alias do not reconstruct these.
 
 ## 5. Immediate next implementation direction
 
-**Implement a bounded native point-response/PFIT prerequisite, not another basis
-alias or a large aVTZ run that bypasses the guard.** Before choosing the patch:
+The bounded point-charge prerequisite of the previous direction is **done** and
+committed (section 3, SPEC §6 "Native direct-OV point-charge target
+prerequisite"). It closes only the "native targets exist at all" gap. What
+remains between it and the `777f904` target, in dependency order:
 
-1. Inspect `pfit.h`, `native_response.{h,cc}`, `partitioned_response.{h,cc}` and
-   `isapol_native_response.py`, plus the target trace and PFIT provenance enums.
-2. Determine an explicit native point-charge coupling/response API from actual
-   wavefunction/response state. Preserve the target sign `-d(phi_induced)/dq`,
-   atomic units, no energy `1/2` or bare electrostatics. Direct-OV and the target's
-   constrained-NN/fitted-propagator origins must remain separately labelled.
-3. Define a small deterministic analytic/independent test boundary, owned inputs,
-   context invalidation, frequency conventions, work limits and target provenance
-   before wiring it into the existing PFIT solver. Do not infer targets/model
-   parameters from final Cn or reuse another track's parameter count.
-4. Keep the current demo operational. Parent-run focused + integrated tests and
-   default numerical comparison; independently review the scientific boundary.
-5. Only claim the implemented prerequisite. Full target still needs constrained
-   NN/distributed-response reproduction, point/model/frame/anchor conventions,
-   refinement and a justified solution to the large-response resource blocker.
+1. **Reproduce constrained NN → distributed response**, which is the trace's
+   actual partition/response path. The committed prerequisite deliberately
+   feeds direct-OV response; it does not become the target by relabelling.
+   Do not substitute ISA-A for constrained NN (section 4).
+2. **Pin the point/model/frame/anchor conventions from actual artifacts.** The
+   point lattice, `.pdef` model definition and per-frequency PFIT inputs are
+   among the *missing* artifacts (section 4). Until they exist, the caller still
+   owns points and model; do not infer either from the final `Cn` potential or
+   borrow a parameter count from the dispersion track.
+3. **Add the refinement stage** that stands between raw per-frequency PFIT
+   output and the reference refined tensors. There is currently no refinement.
+4. **Resolve the large-response resource blocker honestly** (section 4:
+   nOV=435 × 173,460 grid rows ⇒ ALDA work 3.28e10 vs the 2e9 limit). The
+   npoint-RHS solve in the prerequisite bounds only the *new* work; it does not
+   make the aVTZ response affordable. A justified answer means real grid
+   pruning or a different response algorithm with its own gate — **not** raising
+   `max_bytes`/work limits, coarsening the scientific grid, or bypassing
+   `estimate_response_work`.
+
+Each step needs its own independent oracle before it is wired to the next, and
+each must stay separately labelled in provenance; see the SPEC §8 note that the
+point-response gates are explicitly non-transferable.
 
 Useful local investigation: `.pi/audit/matched-basis-trace-handoff.md` (full exact
 trace, hashes and separate ISA candidates). Its portable conclusions are in
@@ -180,6 +245,11 @@ Background terminal notifications are authoritative; do not poll to wait.
 - `636c6db6e0`: independent even-parity lower-J oracle.
 - `d52fb16a19`: explicit fixed-GRAC admission; deferred odd raw identities.
 - `1a097ec9f6`: corrected non-ISA basis manifest, packaging and preflight.
+- `86b548c492`: compacted SPEC/handoff only; no scientific code changed.
+- This handoff's own commit: bounded native direct-OV point-charge response
+  prerequisite — `point_response.{h,cc}`, `isapol_native_point_response.py`,
+  the `NativeDirectActualPointResponse` PFIT origin, 20 new tests in
+  `tests/pytests/test_isapol_native_point_response.py`, and SPEC §6/§8.
 
 The pre-compaction 3,505-line plan and 1,724-line SPEC are preserved exactly:
 

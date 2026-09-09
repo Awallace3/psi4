@@ -13,8 +13,14 @@ struct IsaPfitMatrix {
     size_t rows = 0, cols = 0;
     std::vector<double> values;
 };
+/// NativeDirectActualPointResponse is this code's own direct-OV point-charge
+/// response. It is deliberately NOT interchangeable with the Supplied* origins:
+/// the historical target is a constrained-NN/fitted-propagator quantity.
+/// Appended, never inserted: the underlying values of the existing enumerators
+/// must not change for anything already compiled against this header.
 enum class IsaPfitTargetOrigin { Unspecified, SuppliedActualPointResponse,
-    SuppliedFittedPropagatorPointResponse, SyntheticAnalyticTest };
+    SuppliedFittedPropagatorPointResponse, SyntheticAnalyticTest,
+    NativeDirectActualPointResponse };
 enum class IsaPfitTargetConvention { Unspecified, NegativeInducedPotentialPerUnitSourceChargeAtomicUnits };
 struct IsaPfitTargetProvenance {
     IsaPfitTargetOrigin origin = IsaPfitTargetOrigin::Unspecified;
