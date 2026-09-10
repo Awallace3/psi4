@@ -449,7 +449,7 @@ remains between it and the `777f904` target, in dependency order:
    6.58e-9 (water) / 2.65e-8 (He). The raw-tail 2.36e-8 **meets** its
    requirement of 6.59e-8 (A=1.5176e1, α₃, water direct-OV) with a 2.8× margin
    and would first fail at a property tolerance of 3.6e-7 — the first of the
-   three recorded errors to pass. That comparison is against a sixth stage,
+   four recorded errors to pass. That comparison is against a separate stage,
    `raw_tail_parameters` (per-site joint amplitude/exponent, cutoff held fixed
    as supplied configuration), because the recorded number is a tail
    *parameter* error; it is apples-to-apples by an **identity**, since the
@@ -457,14 +457,33 @@ remains between it and the `777f904` target, in dependency order:
    bit-for-bit on that reference (1.63572023e-7 / max(1, 6.93430743)), which the
    test suite re-derives from the evidence file. Tail parameters are O(1) and
    share a scale, so A is a converged derivative: 1.5176e1 at eps 1e-6, 1e-8 and
-   1e-10 alike, all rows quoted. What stays open is the shape-sample *array*,
-   uncompared in both metrics: absolutely because no absolute requirement for it
-   is well posed, relatively because no error for it was ever recorded in that
-   metric. That is a missing measurement against a same-input reference, not a
-   mismatched association. It does not reopen TODO9's strict trajectory parity,
-   which is still FAIL, and the amplification was measured on the demo water
-   rather than on the comparator's own input.
-   Tests: `tests/pytests/test_isapol_budget.py` (19 quick + 1 long).
+   1e-10 alike, all rows quoted.
+   *The shape samples are anchored one step upstream by the same move.* A
+   seventh stage, `shape_coefficients`, probes the concatenated per-site ISA-A
+   coefficient vector W, holding the shipped tails fixed — which is the
+   algorithm's own boundary, since `IsaAController::step` fits iteration n+1's
+   tails from iteration n's coefficients and the final sampling never refits.
+   Here the regrouping is an *exact reconstruction* rather than a coincidence:
+   two of the three water sites have a clamped denominator, so their
+   coefficients cannot exceed one and the concatenated denominator is exactly
+   the unclamped site's, giving 2.07295715e-10 / max(1, 6.87695288) =
+   **3.0143541609579276e-11** — deliberately not the per-site maximum
+   2.5755e-10, which would overstate the array error 6.9×, because unlike the
+   tails the largest error and the largest coefficient sit on different sites.
+   That recorded error **meets** its requirement of 3.22e-8 (A=3.108e1, C12;
+   3.51e-8 at A=2.848e1 for α₃) with a 1.07e3× margin and would first fail at a
+   property tolerance of 9.4e-10; A converges to 8e-5 relative across eps 1e-6 →
+   1e-10, all 28 rows quoted, self-consistency exactly 0.0.
+   What stays open is the shape-sample *array itself*, uncompared in both
+   metrics: absolutely because no absolute requirement for it is well posed,
+   relatively because no error for it was ever recorded in that metric. That is
+   a missing measurement against a same-input reference, not a mismatched
+   association, and the coefficient stage measures the input that generates the
+   array, not the array. None of this reopens TODO9's strict trajectory parity,
+   which is still FAIL (the shape-coefficient rows belong to that same
+   comparison), and the amplifications were measured on the demo water rather
+   than on the comparator's own input.
+   Tests: `tests/pytests/test_isapol_budget.py` (22 quick + 1 long).
 
 Each step needs its own independent oracle before it is wired to the next, and
 each must stay separately labelled in provenance; see the SPEC §8 note that the
@@ -490,9 +509,11 @@ trace, hashes and separate ISA candidates). Its portable conclusions are in
   distinct gates. See SPEC/PROVISIONAL_ACCEPTANCE.md; no blanket tolerance waiver.
   These are now *property-anchored* (section 5 item 5): Drho-C misses its 1e-6
   requirement by ~6 orders and fitted-OV by ~4.5, while the raw-tail parameter
-  error meets its 6.59e-8 requirement with a 2.8× margin. The shape-sample
-  array stays uncompared in both metrics pending an elementwise-relative
-  measurement against a same-input reference. Meeting a requirement is *not* a
+  error meets its 6.59e-8 requirement with a 2.8× margin and the ISA-A
+  shape-coefficient error meets its 3.22e-8 requirement with a 1.07e3× margin.
+  The shape-sample array stays uncompared in both metrics pending an
+  elementwise-relative measurement against a same-input reference; only the
+  coefficients that generate it are anchored. Meeting a requirement is *not* a
   certification: the amplifications are directional lower bounds, so they bound
   nothing from above, and no stage is certified to a property tolerance.
 - The fitted-auxiliary response route is **rejected outright by strict

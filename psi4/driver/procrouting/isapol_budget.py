@@ -35,6 +35,14 @@ is therefore compared against that recorded number in exactly the metric it was
 recorded in, while the sampled shape array -- whose elements span many decades --
 is not.
 
+The sampled shape array is instead anchored one step upstream, at
+``shape_coefficients``: the reference comparison records a per-site error for the
+ISA-A shape coefficients W, and because every site but the largest has a clamped
+denominator there, the concatenated-array error in THIS module's metric is
+recovered exactly from those per-site records rather than merely bounded. The
+shipped (lagged) tails are held fixed across that probe, as the algorithm's own
+final sampling boundary does.
+
 This module is DIAGNOSTIC ONLY. It is not on the public property path, it
 produces no property values of its own, and it waives no gate: every rebuild
 runs the unrelaxed production LW policy, and a rebuild that the gate rejects is
@@ -57,8 +65,9 @@ from .isapol_native import NativeProperties
 
 #: Named intermediates, in chain order. Each is perturbed in place and every
 #: later stage is rebuilt; no earlier stage is touched.
-STAGES = ('drho_c_coefficients', 'raw_tail_parameters', 'partition_shape_samples',
-          'ov_transition_legs', 'coefficient_responses', 'distributed_site_tensors')
+STAGES = ('drho_c_coefficients', 'shape_coefficients', 'raw_tail_parameters',
+          'partition_shape_samples', 'ov_transition_legs', 'coefficient_responses',
+          'distributed_site_tensors')
 
 #: The default metric: always the property defect, and the input defect of an
 #: ``absolute``-geometry probe.
@@ -143,6 +152,7 @@ def sign_direction(seed_text, size):
 #: The restriction is part of the reported result: an amplification is a lower
 #: bound over the sampled directions *within* this manifold.
 RESTRICTIONS = {'drho_c_coefficients': 'regenerated_downstream_no_restriction',
+                'shape_coefficients': 'supplied_lagged_tails_held_fixed',
                 'raw_tail_parameters': 'positive_exponent_supplied_cutoff_held_fixed',
                 'partition_shape_samples': 'regenerated_downstream_no_restriction',
                 'ov_transition_legs': 'charge_neutral_transition_legs',
@@ -406,6 +416,47 @@ def _from_tails(chain, parameters, stage):
                                                    partition.grid_points.tolist()), stage)
 
 
+def _shape_coefficient_lengths(state):
+    """Per-site shape-coefficient counts of the shipped controller state."""
+    return tuple(len(v) for v in state.coefficients.shape_coefficients)
+
+
+def _from_shape_coefficients(chain, flat, stage):
+    """Perturbed ISA-A shape coefficients -> resampled final shapes.
+
+    The probed array is the per-site coefficient vectors concatenated in site
+    order, which is also the array the reference comparison's per-site records
+    reconstruct exactly, so one denominator covers the whole probe.
+
+    The shipped tails are carried through unchanged rather than refitted. That
+    is a documented property of the algorithm, not a convenience:
+    ``IsaAController::step`` fits iteration n+1's tails from iteration n's shape
+    coefficients (the source lag), and ``final_shape_samples`` samples the stored
+    final tails without refitting at that boundary. Refitting a tail from a
+    perturbed *final* W would therefore model a different algorithm rather than
+    perturb this one.
+    """
+    partition = chain.properties.partition
+    recipe = partition.recipe
+    state = partition.trajectory.state
+    lengths = _shape_coefficient_lengths(state)
+    values = np.asarray(flat, dtype=float)
+    if values.shape != (sum(lengths),):
+        raise ValueError('shape coefficients need one flat entry per shipped per-site '
+                         'coefficient, concatenated in site order')
+    surrogate = core.IsaAControllerState()
+    surrogate.tails, surrogate.apply_tails = state.tails, state.apply_tails
+    coefficients = core.IsaSweepState()
+    coefficients.atomic_coefficients = state.coefficients.atomic_coefficients
+    edges = np.cumsum((0,) + lengths)
+    coefficients.shape_coefficients = [values[a:b].tolist()
+                                       for a, b in zip(edges[:-1], edges[1:])]
+    surrogate.coefficients = coefficients
+    shapes = [s.shape.build('Shape') for s in recipe.sites]
+    return _from_shapes(chain, final_shape_samples(shapes, surrogate, recipe.sites,
+                                                   partition.grid_points.tolist()), stage)
+
+
 def _from_shapes(chain, shape_samples, stage):
     return _from_coupled(chain, [np.asarray(r.raw_coupled, dtype=float)
                                  for r in chain.properties.coefficient_responses], stage,
@@ -464,6 +515,10 @@ def reference_value(chain, stage):
     properties = chain.properties
     if stage == 'drho_c_coefficients':
         return np.array(properties.partition.drho.coefficients, dtype=float)
+    if stage == 'shape_coefficients':
+        state = properties.partition.trajectory.state
+        return np.concatenate([np.asarray(v, dtype=float)
+                               for v in state.coefficients.shape_coefficients])
     if stage == 'raw_tail_parameters':
         state = properties.partition.trajectory.state
         applied = _applied_tails(state, properties.partition.recipe.sites)
@@ -493,6 +548,8 @@ def rebuild(chain, stage, value):
     """Rebuild every stage downstream of ``stage`` from a supplied value."""
     if stage == 'drho_c_coefficients':
         return _from_drho(chain, value, stage)
+    if stage == 'shape_coefficients':
+        return _from_shape_coefficients(chain, value, stage)
     if stage == 'raw_tail_parameters':
         return _from_tails(chain, value, stage)
     if stage == 'partition_shape_samples':

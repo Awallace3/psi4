@@ -45,6 +45,11 @@ pytestmark = pytest.mark.quick
 #: ``PROVISIONAL_ACCEPTANCE.md`` TODO9 and the shipped evidence file.
 RECORDED_RAW_TAIL = 2.3588804665973028e-8
 
+#: The recorded ISA-A shape-coefficient error re-expressed in THIS module's
+#: metric on the concatenated per-site array.  Reconstructed exactly -- not
+#: bounded -- by :func:`test_recorded_shape_coefficient_error_is_this_modules_metric`.
+RECORDED_SHAPE_COEFFICIENT = 3.0143541609579276e-11
+
 
 def he_recipe(wfn):
     m = wfn.molecule(); c = (m.x(0), m.y(0), m.z(0))
@@ -207,7 +212,8 @@ def test_budget_measures_the_last_stage_and_reports_a_requirement(fitted):
     assert quoted['alpha_iso_rank1'].amplification == pytest.approx(1., rel=1e-6)
 
 
-@pytest.mark.parametrize('stage', ['partition_shape_samples', 'raw_tail_parameters'])
+@pytest.mark.parametrize('stage', ['partition_shape_samples', 'raw_tail_parameters',
+                                   'shape_coefficients'])
 def test_monatomic_partition_stages_are_structurally_insensitive(fitted, stage):
     """He has one site: Q cannot depend on the shapes, tails or Drho-C density."""
     budget = b.precision_budget(fitted, property_tolerances=1.e-6,
@@ -281,6 +287,62 @@ def test_recorded_joint_tail_error_is_this_modules_metric():
     assert min(denominators) > 1., 'clamped denominators would make this identity vacuous'
     regrouped = max(e['max_absolute'] for e in joint) / max(1., max(denominators))
     assert regrouped == RECORDED_RAW_TAIL == max(e['max_scaled'] for e in joint)
+
+
+def test_recorded_shape_coefficient_error_is_this_modules_metric():
+    """The recorded ISA-A W error is RECOVERED, not bounded, in this metric.
+
+    The comparator scales each site's shape-coefficient error by that site's own
+    largest coefficient, clamped at one.  Two of the three water sites are
+    clamped, so their coefficients cannot exceed one and the concatenated array's
+    single denominator is exactly the unclamped site's -- which makes the
+    regrouped error an identity rather than an inequality.  That is what licenses
+    comparing it against a requirement derived in the absolute geometry.
+    """
+    evidence = json.loads((Path(__file__).parent
+                           / 'data_isapol/psi4_provisional_acceptance_evidence.json').read_text())
+    shapes = [error for comparison in evidence['comparisons']
+              for name, error in (comparison.get('errors') or {}).items() if name.endswith('_W')]
+    assert len(shapes) == 3, 'three water sites carry shape coefficients in the reference'
+    denominators = [e['max_absolute'] / e['max_scaled'] for e in shapes]
+    clamped = [d for d in denominators if d == 1.]
+    assert len(clamped) == 2, 'the reconstruction needs every other site clamped'
+    regrouped = max(e['max_absolute'] for e in shapes) / max(1., max(denominators))
+    assert regrouped == RECORDED_SHAPE_COEFFICIENT
+    # Unlike the tails, the largest error and the largest coefficient sit on
+    # DIFFERENT sites, so the identity is not the per-site maximum: it is
+    # strictly smaller, and quoting the per-site number here would be wrong.
+    assert regrouped < max(e['max_scaled'] for e in shapes)
+
+
+def test_shape_coefficients_are_probed_with_the_lagged_tails_held_fixed(fitted):
+    """The probed array is the concatenated per-site W of the shipped state.
+
+    The tails are a separately probed intermediate, not a function of the probed
+    W: ``IsaAController::step`` fits iteration n+1's tails from iteration n's
+    coefficients, and the final sampling boundary re-uses the stored tails
+    without refitting.  Perturbing W therefore leaves the tail array alone.
+    """
+    state = fitted.properties.partition.trajectory.state
+    reference = b.reference_value(fitted, 'shape_coefficients')
+    lengths = b._shape_coefficient_lengths(state)
+    assert reference.shape == (sum(lengths),) and all(n > 0 for n in lengths)
+    np.testing.assert_allclose(reference, np.concatenate(
+        [np.asarray(v, dtype=float) for v in state.coefficients.shape_coefficients]),
+        rtol=0, atol=0)
+    assert b.RESTRICTIONS['shape_coefficients'] == 'supplied_lagged_tails_held_fixed'
+    assert 'shape_coefficients' not in b.RELATIVE_ELIGIBLE
+    with pytest.raises(ValueError, match='linear invariants'):
+        b.perturb(fitted, 'shape_coefficients', reference, 1.e-6, 0, 'relative')
+    with pytest.raises(ValueError, match='one flat entry per shipped'):
+        b.rebuild(fitted, 'shape_coefficients', reference[:-1])
+    tails = b.reference_value(fitted, 'raw_tail_parameters')
+    b.rebuild(fitted, 'shape_coefficients',
+              b.perturb(fitted, 'shape_coefficients', reference, 1.e-3, 0))
+    np.testing.assert_allclose(b.reference_value(fitted, 'shape_coefficients'), reference,
+                               rtol=0, atol=0)
+    np.testing.assert_allclose(b.reference_value(fitted, 'raw_tail_parameters'), tails,
+                               rtol=0, atol=0)
 
 
 def test_tail_parameters_are_probed_as_parameters_not_as_samples(fitted):
@@ -465,3 +527,25 @@ def test_water_partition_stages_are_measurable():
     for name, value in coarse.items():
         assert 1. < value < 1.e3, (name, value)
         assert fine[name] == pytest.approx(value, rel=1.e-3), name
+
+    # The same move anchors the shape samples one step upstream: the coefficients
+    # that generate them are O(1), share one scale, and have a recorded error
+    # this module's metric reconstructs exactly.  Their absolute amplification is
+    # likewise a converged derivative, unlike the sampled array's.
+    coefficients = [b.precision_budget(chain, property_tolerances=1.e-6, epsilon=eps,
+                                       directions=1, stages=('shape_coefficients',),
+                                       recorded_errors={'shape_coefficients':
+                                                        RECORDED_SHAPE_COEFFICIENT})
+                    for eps in (1.e-6, 1.e-10)]
+    for measured in coefficients:
+        assert {probe.status for probe in measured.probes} == {'measured'}
+        assert max(measured.self_consistency['shape_coefficients'].values()) == 0.
+        assert all(a.quoted for a in measured.amplifications)
+        assert all(r.satisfied is True and r.recorded_error == RECORDED_SHAPE_COEFFICIENT
+                   for r in measured.requirements)
+    coarse, fine = ({a.property_name: a.amplification for a in measured.amplifications}
+                    for measured in coefficients)
+    for name, value in coarse.items():
+        assert 1. < value < 1.e3, (name, value)
+        assert fine[name] == pytest.approx(value, rel=1.e-3), name
+    assert max(coarse.values()) < absolute_amplification

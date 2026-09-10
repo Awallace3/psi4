@@ -81,17 +81,38 @@ the shipped objects under the unrelaxed production LW policy. Evidence:
   are O(1) numbers sharing one scale, so the absolute geometry is their
   property-relevant error model and A is a converged derivative: 1.5176e1 at
   eps 1e-6, 1e-8 and 1e-10 alike, every row quoted.
+- The ISA-A shape coefficients W (recorded per site as `atom{i}_W`, absolute
+  metric) need **3.22e-8** (A=3.108e1, binding on C12; the tightest
+  polarizability row is alpha_iso_rank3 at A=2.848e1 needing 3.51e-8; water
+  direct-OV): **meets it, with a 1.07e3x margin**; it would first fail at a
+  property tolerance of 9.4e-10. The recorded number for the concatenated array
+  is **3.0143541609579276e-11**, which this module's metric *reconstructs
+  exactly* from the per-site records: two of the three sites have a clamped
+  denominator, so their coefficients cannot exceed one and the concatenated
+  array's single denominator is exactly the unclamped site's
+  (2.07295715e-10 / max(1, 6.87695288), re-derived from the evidence file in
+  `tests/pytests/test_isapol_budget.py`). It is deliberately *not* the per-site
+  maximum 2.5755e-10: unlike the tails, the largest error and the largest
+  coefficient sit on different sites here, so quoting the per-site number for
+  the concatenated array would overstate it by 6.9x. Across the probe the
+  shipped tails are held fixed, which is the algorithm's own final sampling
+  boundary (`IsaAController::step` fits iteration n+1's tails from iteration n's
+  coefficients), not a convenience. A converges as the tails' does: 3.108e1 at
+  eps 1e-6, 1e-8 and 1e-10 alike, all 28 rows quoted, self-consistency 0.0.
 - The shape-sample *array* itself remains **uncompared in both metrics**. The
   max-scaled metric is not a well-posed question for it: its elements span many
   decades and the max-scaled amplification diverges as the probe shrinks
   (5.6e4 -> 2.4e5 -> 6.3e5 over eps 1e-6 -> 1e-10) instead of converging. In the
   elementwise-relative metric, which does converge, the requirement is 1.03e-4
   -- but no error for that stage was ever recorded in that metric, and the
-  budget refuses to compare across metrics. That is now a missing measurement
-  against a same-input reference, not a mismatched association.
+  budget refuses to compare across metrics. That is a missing measurement
+  against a same-input reference, not a mismatched association; what the bullet
+  above measures is the coefficient input that generates the array, not the
+  array.
 
 No comparison here is a new provisional pass -- TODO9's raw-tail *strict*
-trajectory parity is still FAIL and this does not change it -- and none of these
+trajectory parity is still FAIL, the shape-coefficient rows belong to that same
+strict-FAIL comparison, and none of this changes either -- and none of these
 amplifications is a gate: each is a first-order directional lower bound, so
 meeting the derived precision is necessary and not sufficient, and the
 amplification was measured on the PBE0/cc-pVDZ demo water rather than on the

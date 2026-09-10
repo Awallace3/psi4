@@ -735,18 +735,24 @@ property tolerance. `psi4.driver.procrouting.isapol_budget` answers, for each
 named intermediate X and each property group Y, how precisely X must be known:
 it perturbs X, rebuilds the **whole** downstream through the shipped objects
 under the unrelaxed production LW policy, and reports the amplification
-`A = defect(Y)/defect(X)`; the required precision is `tolerance(Y)/A`. Six
-intermediates are named: `drho_c_coefficients`, `raw_tail_parameters`,
-`partition_shape_samples`, `ov_transition_legs`, `coefficient_responses`,
-`distributed_site_tensors`. `raw_tail_parameters` is the only one probed as raw
-parameters rather than as a sampled array — the per-site joint
-`(amplitude, exponent)` of the Func-1/Fit-3 exponential tail — because that is
-the form in which its error was recorded. The tail `cutoff` is supplied
-configuration, held fixed exactly as the trajectory comparator holds it fixed,
-and is outside the probed array. A rebuild builds a *surrogate* controller
-state carrying a copy of the shipped shape coefficients and tail switch, so the
-shipped state is never mutated, and a non-positive perturbed exponent is
-rejected rather than sampled.
+`A = defect(Y)/defect(X)`; the required precision is `tolerance(Y)/A`. Seven
+intermediates are named: `drho_c_coefficients`, `shape_coefficients`,
+`raw_tail_parameters`, `partition_shape_samples`, `ov_transition_legs`,
+`coefficient_responses`, `distributed_site_tensors`. Two are probed as raw
+parameters rather than as sampled arrays, each because that is the form in
+which its error was recorded. `raw_tail_parameters` is the per-site joint
+`(amplitude, exponent)` of the Func-1/Fit-3 exponential tail; its `cutoff` is
+supplied configuration, held fixed exactly as the trajectory comparator holds
+it fixed, and outside the probed array, and a non-positive perturbed exponent
+is rejected rather than sampled. `shape_coefficients` is the concatenated
+per-site ISA-A coefficient vector W from which the final shapes are sampled;
+across that probe the shipped tails are **held fixed**, which is the
+algorithm's own boundary and not a convenience — `IsaAController::step` fits
+iteration n+1's tails from iteration n's coefficients (the documented source
+lag) and the final sampling re-uses the stored tails without refitting, so
+refitting a tail from a perturbed *final* W would model a different algorithm.
+Both rebuilds build a *surrogate* controller state, so the shipped state is
+never mutated.
 
 Three disciplines make the number mean something. First, the unperturbed
 rebuild must reproduce every shipped property group at **exactly 0.0**, so the
@@ -793,6 +799,7 @@ Measured requirements at a 1e−6 property tolerance, evidence in
 | `drho_c_coefficients` | water direct-OV | relative | 3.64 (α₃) | 2.75e−7 | — | not measured |
 | `partition_shape_samples` | water direct-OV | relative | 9.75e−3 (α₃) | 1.03e−4 | — | not measured |
 | `raw_tail_parameters` | water direct-OV | absolute | 1.52e1 (α₃) | 6.59e−8 | 2.35888047e−8 | **yes**, 2.8× margin |
+| `shape_coefficients` | water direct-OV | absolute | 3.11e1 (C12) | 3.22e−8 | 3.01435416e−11 | **yes**, 1.07e3× margin |
 | `coefficient_responses` | water direct-OV | absolute | 2.50e1 (α₃) | 4.00e−8 | — | not measured |
 | `distributed_site_tensors` | water direct-OV | absolute | 1.52e2 (C12) | 6.58e−9 | — | not measured |
 | `ov_transition_legs` | He fitted | absolute | 1.61e3 (C10) | 6.21e−10 | 2.30197983e−5 | **no**, by ~4.5 orders |
@@ -825,15 +832,34 @@ error model, and the amplification is a converged derivative: A(α₃) = 1.5176e
 at eps = 1e−6, 1e−8 and 1e−10 alike (five figures), with every row quoted at
 every probe size. At a 1e−6 property tolerance the recorded tail error
 **meets** its requirement with a 2.8× margin; it would first fail at a property
-tolerance of 3.6e−7. The shape-sample *array* remains uncompared in both
-metrics — absolutely because no absolute requirement for that stage is well
-posed, relatively because no error was ever recorded in that metric — and that
-gap is now a missing measurement, not a mismatched association. Of the three
-recorded errors the budget can compare, one (raw tails) meets its requirement
-and two — Drho-C coefficients and fitted-OV coefficients — miss theirs by
-roughly six and four and a half orders of magnitude, so neither of those is
-anywhere near a 1e−6 property guarantee and the per-stage provisional profiles
-above must not be read as implying one.
+tolerance of 3.6e−7.
+
+The shape samples are anchored by the same move, one step upstream. The
+comparator records a per-site error for the ISA-A coefficients W, and there
+*two* of the three water sites have a clamped denominator, so their
+coefficients cannot exceed one and the concatenated array's single denominator
+is exactly the unclamped site's: `max(2.07295715e−10)/max(1,6.87695288) =
+3.01435416e−11`, again an identity re-derived from the shipped evidence file in
+the test suite rather than asserted. Note this is *not* the per-site maximum
+(2.07295715e−10): unlike the tails, the largest error and the largest
+coefficient sit on different sites, so quoting the per-site number for the
+concatenated array would be wrong by 6.9×. The coefficients are O(1) and share
+one scale, so the absolute geometry is again their error model, and the
+amplification converges: A(C12) = 3.108e1 at eps = 1e−6, 1e−8 and 1e−10 alike
+(agreeing to 8e−5 relative), A(α₃) = 2.848e1, all 28 rows quoted at every probe
+size, self-consistency exactly 0.0. At a 1e−6 property tolerance the recorded
+coefficient error **meets** its requirement with a 1.07e3× margin, and would
+first fail at a property tolerance of 9.4e−10. The shape-sample *array* itself
+remains uncompared in both metrics — absolutely because no absolute requirement
+for that stage is well posed, relatively because no error was ever recorded in
+that metric — and that gap is a missing measurement, not a mismatched
+association; what is now measured is the coefficient input that generates the
+array, not the array. Of the four recorded errors the budget can compare, two
+(raw tails, shape coefficients) meet their requirements and two — Drho-C
+coefficients and fitted-OV coefficients — miss theirs by roughly six and four
+and a half orders of magnitude, so neither of those is anywhere near a 1e−6
+property guarantee and the per-stage provisional profiles above must not be
+read as implying one.
 
 [PROVISIONAL_ACCEPTANCE.md](PROVISIONAL_ACCEPTANCE.md) owns exact opt-in policy;
 its historical milestone statuses do not supersede current capability above.
