@@ -403,6 +403,40 @@ def block_diagonal_tensor(model, per_site_tensors):
     return matrix
 
 
+def isotropic_scalars(result):
+    """``alpha_l = trace(alpha_ll)/(2l+1)`` per site of a refinement, l = 1..limit.
+
+    The dispersion kernel wants one scalar per site and rank, not a tensor, and
+    the reduction is a trace over the ``2l+1`` components of one rank in the
+    Racah packing this module uses everywhere (00 at index 0, then 10, 11c,
+    11s, 20, ...).  Doing it here keeps the convention in one place: the same
+    reduction that :func:`isapol_lw.supplied_nonlocal_properties` applies to the
+    unrefined localized tensors, applied to the refined ones.
+
+    Rank 0 is deliberately absent.  The charge-flow block is a refinement
+    variable but not a polarizability of a rank the Casimir-Polder sum runs
+    over, and the isotropic dispersion contract starts at rank 1.
+
+    Returns ``(ranks_per_site, scalars_per_site)``: for site ``s``,
+    ``ranks_per_site[s]`` is ``(1, ..., rank_limit)`` and ``scalars_per_site[s]``
+    the matching ``alpha_l``.  A site with ``rank_limit == 0`` yields two empty
+    tuples and cannot enter a dispersion model; that is reported, not repaired.
+    """
+    if not isinstance(result, RefinementResult):
+        raise ValueError('isotropic_scalars requires a RefinementResult')
+    ranks, scalars = [], []
+    for site, tensor in zip(result.model.sites, result.refined_tensors):
+        array = np.asarray(tensor, dtype=float)
+        if array.shape != (site.component_count,) * 2:
+            raise ValueError('refined tensor shape disagrees with the site rank limit')
+        site_ranks = tuple(range(1, site.rank_limit + 1))
+        ranks.append(site_ranks)
+        scalars.append(tuple(
+            float(np.trace(array[l * l:(l + 1) ** 2, l * l:(l + 1) ** 2]) / (2 * l + 1))
+            for l in site_ranks))
+    return tuple(ranks), tuple(scalars)
+
+
 def point_to_point_response(fields, model, per_site_tensors):
     """Forward map ``v(i,j) = sum_s T(i,s) . alpha_s . T(j,s)``.
 

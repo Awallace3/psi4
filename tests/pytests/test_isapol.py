@@ -385,6 +385,36 @@ def test_fit_points_bit_identical(reffit, name):
     assert np.array_equal(got, reffit[f"{name}_points"])
 
 
+def test_fit_points_reference_case_cloud(reffit):
+    """The cloud the H2O_props reference case's own refinement was fitted on.
+
+    `tests/H2O_props/psi4/H2O-avtz.clt` declares `Options Tests`, and the
+    `properties` run type's generated `SET Lattice` block therefore asks for
+    `Random 500` rather than the production `Random 2000`
+    (cluster_file_interface.F90::write_camcasp_1).  The 500 is what lets that
+    reference case be refined at all: it is inside
+    `isapol_native_point_response.MAXIMUM_POINTS`, which the 2000-point
+    production lattice is not and which is not raised for it.
+
+    The stored cloud comes from `oracle/make_lattice_oracle.sh`'s `latticedump`,
+    i.e. from CamCASP's own `generate_lattice` and `random.f90`; it was also
+    checked against those routines linked directly out of a built CamCASP, and
+    all three routes agree bitwise.
+    """
+    geom = reffit["ref500_geom"]
+    mol = _fit_molecule(geom)
+    options = psi4.core.FitPointsOptions()
+    options.npoints = 500
+    options.seed = 1
+    points = psi4.core.FitPoints(mol, options)
+
+    assert points.npoints() == 500
+    assert points.dmax() == reffit["ref500_dmax"]
+    assert np.array_equal(points.centre(), reffit["ref500_centre"])
+    got = np.column_stack([points.x(), points.y(), points.z()])
+    assert np.array_equal(got, reffit["ref500_points"])
+
+
 def test_fit_points_lie_in_the_shell(reffit):
     """Every accepted point is outside 2 R_vdW of all atoms and inside 4 of one."""
     geom = reffit["h2o_geom"]

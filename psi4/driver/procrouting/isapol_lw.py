@@ -439,12 +439,27 @@ class IsotropicDispersion:
 
 def isotropic_dispersion(model_a: LocalProperties, model_b: LocalProperties, *,
                          cp_weights: Sequence[float], quadrature_provenance: Provenance,
-                         max_order: int = 12) -> IsotropicDispersion:
+                         max_order: int = 12, site_ranks_a: Sequence[Sequence[int]] | None = None,
+                         site_ranks_b: Sequence[Sequence[int]] | None = None) -> IsotropicDispersion:
     """Explicit A/B local results and CP weights, no invented static quadrature.
 
     Site sets may differ; frequency grids must match exactly, as in the C++ contract.
     Weights include the Jacobian and1/(2*pi) exactly once. No interpolation, no
     anisotropic conversion, and no Python duplication of the C_n formula.
+
+    ``site_ranks_a``/``site_ranks_b`` declare, per site and in site order, which
+    ranks that site contributes; the default is every rank this module localizes,
+    ``(1, 2, 3)``, for every site. They exist because a rank limit is a property
+    of the model the caller declares -- CamCASP's per-site ``.pdef`` ``lim``, e.g.
+    L2 on O and H1 on H -- and not something to be inferred from a target. A
+    limited site drops the corresponding terms from the C_n sum, which the kernel
+    then reports through ``missing_rank_pairs`` and ``complete`` rather than
+    silently completing: an order whose every rank pair survives is comparable,
+    one with a missing pair is not, and that distinction must stay visible.
+
+    Only ranks 1..3 are declarable here, because that is what
+    :func:`supplied_nonlocal_properties` localizes; rank 4 needs a rank-4
+    localized tensor and is refused rather than zero-filled.
     """
     if not isinstance(model_a, LocalProperties) or not isinstance(model_b, LocalProperties):
         raise ValueError('dispersion requires typed LW local results')
@@ -458,17 +473,35 @@ def isotropic_dispersion(model_a: LocalProperties, model_b: LocalProperties, *,
     if np.any(weights < 0) or not np.any(weights > 0) or any(x == 0 and w != 0 for x,w in zip(model_a.frequencies, weights)):
         raise ValueError('CP weights require positive dynamic weight and zero static weight')
     from psi4 import core
-    def convert(model):
+    def validated_ranks(model, declared):
+        if declared is None:
+            return ((1,2,3),) * len(model.labels)
+        declared = tuple(tuple(r for r in site) for site in declared)
+        if len(declared) != len(model.labels):
+            raise ValueError('site_ranks must declare one rank tuple per site, in site order')
+        for site in declared:
+            if not site or any(type(r) is not int for r in site):
+                raise ValueError('each site must declare a non-empty tuple of integer ranks')
+            if any(r < 1 or r > 3 for r in site):
+                raise ValueError('declarable LW ranks are1..3; rank4 needs a rank-4 localized tensor')
+            if any(b <= a for a,b in zip(site, site[1:])):
+                raise ValueError('site ranks must be strictly increasing')
+        return declared
+    ranks_a, ranks_b = validated_ranks(model_a, site_ranks_a), validated_ranks(model_b, site_ranks_b)
+    def convert(model, per_site_ranks):
         sites = []
         origins, scalars = model.origins.array, model.atomic_scalars.array
         for j,label in enumerate(model.labels):
             site = core.IsaIsotropicSite()
-            site.label, site.origin, site.ranks = label, origins[j].tolist(), [1,2,3]
-            site.polarizabilities = core.Matrix.from_array(scalars[:,j,:])
+            site.label, site.origin = label, origins[j].tolist()
+            site.ranks = list(per_site_ranks[j])
+            site.polarizabilities = core.Matrix.from_array(
+                np.ascontiguousarray(scalars[:, j, [r-1 for r in per_site_ranks[j]]]))
             sites.append(site)
         provenance = f'Psi4_LW; source_sha256={model.provenance.source_sha256}; canonical_input_array_sha256={model.metadata.canonical_input_array_sha256}; policy={model.metadata.residual_policy}'
         return core.IsaIsotropicModel(list(model.frequencies), sites, provenance)
-    result = core.isa_isotropic_dispersion(convert(model_a), convert(model_b), weights.tolist(), max_order)
+    result = core.isa_isotropic_dispersion(convert(model_a, ranks_a), convert(model_b, ranks_b),
+                                           weights.tolist(), max_order)
     pairs = tuple(DispersionPair(p.site_a, p.site_b, model_a.labels[p.site_a], model_b.labels[p.site_b],
                   tuple(Coefficient(c.order, c.value, tuple(map(tuple,c.included_rank_pairs)),
                                     tuple(map(tuple,c.missing_rank_pairs)), c.complete) for c in p.coefficients)) for p in result.pairs)

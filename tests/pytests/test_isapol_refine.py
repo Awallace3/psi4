@@ -375,6 +375,43 @@ def test_excluded_components_are_zero_not_carried_over():
         assert refined_o[i, j] == 0.0
 
 
+def test_isotropic_scalars_reduce_each_rank_block():
+    """``alpha_l = trace(alpha_ll)/(2l+1)``, per site, rank1 upward.
+
+    This is the reduction the isotropic Casimir-Polder sum consumes, and it is
+    the same one ``isapol_lw`` applies to the *unrefined* localized tensors; the
+    point of having it here is that a refined model can be fed to the dispersion
+    kernel without the caller re-deriving the packing.  The expectation below is
+    recomputed from ``refined_tensors`` independently of the helper.
+    """
+    built = case('l2h1')
+    result = solve(built)
+    ranks, scalars = R.isotropic_scalars(result)
+    assert ranks == ((1, 2), (1,), (1,))
+    for site_ranks, site_scalars, tensor in zip(ranks, scalars, result.refined_tensors):
+        assert len(site_scalars) == len(site_ranks)
+        for l, value in zip(site_ranks, site_scalars):
+            block = np.asarray(tensor)[l * l:(l + 1) ** 2, l * l:(l + 1) ** 2]
+            assert block.shape == (2 * l + 1, 2 * l + 1)
+            assert value == np.trace(block) / (2 * l + 1)
+    # Rank0 is a refinement variable but not a polarizability the sum runs
+    # over, so no site reports it even though every tensor carries the block.
+    assert all(0 not in site_ranks for site_ranks in ranks)
+    assert result.refined_tensors[0][0, 0] != 0.0
+    # COPY-equivalent sites share one block, hence one set of scalars.
+    assert scalars[1] == scalars[2]
+    # The refinement moved the model: the scalars are not the anchors'.
+    anchor_o = built['anchors'][0]
+    assert scalars[0][0] != np.trace(anchor_o[1:4, 1:4]) / 3.0
+
+
+def test_isotropic_scalars_requires_a_refinement_result():
+    built = case('l2h1')
+    for bad in (built['model'], solve(built).refined_tensors, None):
+        with pytest.raises(ValueError):
+            R.isotropic_scalars(bad)
+
+
 # ---------------------------------------------------------------- input guards
 
 def test_refine_requires_declared_provenance():

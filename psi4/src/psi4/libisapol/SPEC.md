@@ -515,9 +515,11 @@ cloud projects to 180 s per sweep, 1000 points to 721 s, and `MAX_POINTS 512`
 caps one refinement at 131,328 pairs (~190 s) — a CamCASP-scale 2000-point
 lattice (~2,883 s) is refused by the driver rather than silently attempted.
 
-This is the refinement *stage*, not end-to-end parity: the historical target
-additionally needs the constrained-NN distributed response on the reference
-point lattice (plan §5 items 1 and 6).
+The refinement stage now also runs on the reference case's **own** point
+lattice, driven by the constrained-NN chain of plan §5 item 1; the end-to-end
+`Cn` comparison that consumes it is in §7. The two demos immediately below stay
+what they are — staged runs on caller-declared lattices — and are not restated
+as parity.
 
 **The stage runs on the intended protocol.** `.pi/audit/avtz-grac-refinement-demo.py`
 drives PBE0/aug-cc-pVTZ with the reference fixed-GRAC shift 0.06490004527520865 Eh,
@@ -630,6 +632,67 @@ its own anchors in the packed-target rms (which reproduces the solver's
 `data_rms`), preserves `COPY` equivalence and symmetry, holds the parameters at
 the anchors under a large penalty coefficient, and refuses a mislabelled origin,
 representation or auxiliary-basis claim.
+
+#### Refinement on the reference case's own 500-point lattice
+
+`.pi/audit/avtz-end-to-end-cn.py` → `.pi/audit/avtz-end-to-end-cn.json` refines
+all eleven Casimir nodes of both accepted aVTZ chains against native
+point-to-point response on CamCASP's own `Random 500 / Seed 1 / LoLim 2.0 /
+HiLim 4.0` cloud. That cloud is an **input** declaration read from CamCASP
+source — `cluster_file_interface.F90::write_camcasp_1` line 2438 emits
+`npts_grid = 500` for a `properties` run whose `.clt` declares `Options Tests`,
+2000 otherwise — and is never inferred from the `Cn` output (plan §5 item 2).
+It is reproduced **bitwise by three independent routes**: the in-tree oracle
+`latticedump` that `oracle/make_lattice_oracle.sh` builds out of CamCASP's own
+`generate_lattice`/`random.f90`, a standalone driver linked directly against the
+built CamCASP objects, and Psi4's own `core.FitPoints`
+(`libisapol/fit_points.cc`) — all three agreeing to
+`sha256 693d2c092b36f85171da0acd08702e6c1fd24deb95c7b1146a0d83487a2c80aa`,
+`dmax 12.235791546666666`, `centre (0, 0, −0.7477915466666666)`,
+`ncandidates 1327`. Locked by
+`test_isapol.py::test_fit_points_reference_case_cloud`; **no Python
+transcription of the lattice enters the repo** — the transcription survives only
+as one of the three certification routes. 500 < `MAXIMUM_POINTS = 512` is what
+makes this comparison possible at all, and the 2000-point production lattice
+stays **refused**, not accommodated. The targets remain this script's own
+`NativeDirectActualPointResponse` point-charge quantities and are declared as
+such; feeding them the reference's lattice does not turn them into the
+reference's `SuppliedFittedPropagatorPointResponse` target.
+
+Measured, per chain: 17 channels and 17 parameters at every node except
+ω = 37.82 au, where one component falls below the 1e-4 anchor cutoff
+(16 parameters, numerical rank 16); `IsaPfitStatus.Solved` at all eleven nodes;
+data rms 2.94e-05 → 7.27e-09 and max |residual| 8.74e-04 → 4.18e-07 from the
+static node to the last; anchor shift max|Δ| 0.36 at ω = 0 falling to 2.9e-04;
+49.4–52.9 s per node, 575 s per chain, `copy_anchor_discrepancy` 5.07e-13 /
+4.88e-11, `input-sum-rule` 6.299e-09 / 2.792e-07. All eleven nodes share **one**
+geometry-only `channel_fields` matrix, because `channel_fields` depends on the
+points, site origins, frames and `rank_limit` only and never on frequency — that
+is what makes 22 refinements at 500 points practical rather than projected.
+
+Static isotropic α per site moves from anchors 7.1241 / 1.3734 / 1.3734 to
+refined 7.1824 / 1.3390 / 1.3390 (`direct_ov`), and 7.1002 / 1.3697 / 1.3697 →
+7.1849 / 1.3374 / 1.3374 (`lambda=1000`). The two chains' **refined** models
+agree with each other far more closely than their anchors do, because the fit is
+driven by a point-to-point response the two chains nearly share.
+
+Two driver additions were needed for the Casimir–Polder consumer, and both are
+committed with tests. `isapol_refine.isotropic_scalars(result)` reduces a
+`RefinementResult` to `α_l = trace(α_ll)/(2l+1)` per site for l = 1…limit — rank
+0 is deliberately absent, so a nonzero charge-flow row cannot leak into a
+dispersion coefficient — encoded once instead of once per caller
+(`test_isapol_refine.py`, 2 tests, one of which recomputes every value straight
+from `refined_tensors`). `isapol_lw.isotropic_dispersion` accepts
+`site_ranks_a=` / `site_ranks_b=`, so a caller can **declare** the reference's
+per-site L2/H1 limit instead of the hardcoded uniform `[1,2,3]`; a limited
+site's dropped rank pairs are reported through `missing_rank_pairs` and
+`complete` rather than silently completed, and rank 4 is **refused** there
+rather than zero-filled, because `supplied_nonlocal_properties` localizes no
+rank-4 tensor (`test_isapol_lw_driver.py`, 3 tests). A declared limit is a model
+choice, not a post-hoc scaling of an unlimited result, and the tests pin the
+limited coefficients against `core.isa_isotropic_dispersion` called directly on
+the sliced scalars, plus the closed form
+`C_n = Σ binom(2l_a+2l_b, 2l_a) α_{l_a} α_{l_b} Σ_f w_f g_f²`.
 
 ### Error-bounded ALDA quadrature row screening
 
@@ -804,14 +867,19 @@ molecular C6.
 
 Printed isotropic orders are exactly the admissible `n = 2(l_a+l_b+1)`: O-O
 {6,8,10}, H-O {6,8}, H-H {6}, with the odd orders printed and identically zero on
-the isotropic row only. Our chain cannot yet declare those per-site limits at all
-— LW's workspace is uniform, so `native_properties` rejects `{O:2, H:1}` with
-`LW pipeline requires uniform explicit rank3 or rank4` before any compute — so it
-admits {6,8,10,12} everywhere and the two are **structurally different
-quantities**, never quoted as one.
+the isotropic row only. The dispersion side of our chain can now **declare** that
+per-site limit — `isotropic_dispersion(site_ranks_a=, site_ranks_b=)` and
+`RefinementSite.rank_limit`, §6 — but the **localization** cannot: LW's workspace
+is uniform, so `native_properties` still rejects `{O:2, H:1}` with
+`LW pipeline requires uniform explicit rank3 or rank4` before any compute
+(`isapol_native.py:217`). We therefore localize at uniform rank 3 and truncate
+afterwards. That is a **different model** from localizing under the restriction,
+is labelled as such everywhere below, and must never be quoted as agreement.
 
-Measured at PBE0/aug-cc-pVTZ with the reference GRAC shift and the matched
-Cartesian AUX (§6), uniform rank 3, against the psi4 row, per ordered site pair:
+The first comparison, kept only as the **superseded uniform-rank-3 baseline it
+is**, ran at PBE0/aug-cc-pVTZ with the reference GRAC shift and the matched
+Cartesian AUX (§6) against the psi4 row, per ordered site pair, with our side
+admitting {6,8,10,12} on every pair:
 
 | quantity | `direct_ov` | traced lambda1e3 NN | reference |
 | --- | --- | --- | --- |
@@ -822,11 +890,85 @@ Cartesian AUX (§6), uniform rank 3, against the psi4 row, per ordered site pair
 
 The molecular isotropic C6 total is the one partition-invariant number in that
 table, and both routes land inside the family's own nwchem/psi4 spread, the
-constrained-NN route closer. Every site split is far outside it, consistently:
+constrained-NN route closer. Every site split was far outside it, consistently:
 O-O too large and worsening with order (+159.7%/+177.8% at C10), H-H ~46% low.
-That is the signature of a different partition of the same molecular response,
-and it localizes the remaining gap to PFIT refinement plus the rank-limited
-model — not to a tolerance, and no tolerance against the reference is asserted.
+That localized the remaining gap to the two stages that chain had **not** applied
+— PFIT refinement and the rank-limited model — not to a tolerance, and no
+tolerance against the reference is asserted anywhere.
+
+**Both of those stages are now applied**, on the reference case's own lattice.
+`.pi/audit/avtz-end-to-end-cn.py` → `.pi/audit/avtz-end-to-end-cn.json` runs
+PBE0/aug-cc-pVTZ with the psi4 row's own fixed GRAC 0.06490004527520865 Eh →
+distributed response (both `direct_ov` and the constrained-NN λ=1000 route) → LW
+at all eleven Casimir nodes → PFIT refinement per node on the bitwise-reproduced
+`Random 500 / Seed 1` cloud (§6) → `Cn` at the reference's own rank limit,
+`O.ranks = [1,2]`, `H.ranks = [1]`. Each type pair is compared only over the
+orders the reference itself prints, which under those limits is exactly
+`n ≤ 2(l_a^max + l_b^max + 1)`. The kernel's `unrestricted_complete` flag is
+**not** the comparison gate — it reports which rank pairs a rank-4 model would
+have added, and the reference, being the restricted model, has none of them
+either.
+
+| quantity | `direct_ov` unrefined | `direct_ov` refined | `lambda1000` unrefined | `lambda1000` refined | reference (psi4 row) |
+| --- | --- | --- | --- | --- | --- |
+| molecular C6 (sum rule) | 46.8971 (**+0.600%**) | 46.8935 (**+0.592%**) | 46.7683 (**+0.324%**) | 46.8875 (**+0.579%**) | 46.61741 |
+| O-O C6 | 25.6093 (+32.88%) | 26.1627 (+35.75%) | 25.5236 (+32.43%) | 26.1606 (+35.74%) | 19.27258 |
+| O-O C8 | 503.088 (+22.63%) | 509.359 (+24.16%) | 508.264 (+23.89%) | 515.391 (+25.63%) | 410.2453 |
+| O-O C10 | 4641.37 (+13.02%) | 4656.24 (+13.38%) | 4758.35 (+15.87%) | 4773.23 (+16.23%) | 4106.707 |
+| H-O C6 | 4.51717 (−15.39%) | 4.42571 (−17.10%) | 4.50724 (−15.58%) | 4.42493 (−17.12%) | 5.338895 |
+| H-O C8 | 44.0216 (−23.23%) | 42.7349 (−25.47%) | 44.4947 (−22.40%) | 43.2014 (−24.66%) | 57.3419 |
+| H-H C6 | 0.804794 (−46.25%) | 0.757004 (−49.44%) | 0.803922 (−46.31%) | 0.756790 (−49.46%) | 1.497312 |
+
+Two results follow, and they point in opposite directions. **(i) The rank limit
+was most of the high-order discrepancy.** O-O C10 goes from +159.7% — where the
+uniform-rank-3 kernel adds the (1,3)/(3,1) terms the reference never had — to
+**+13.0%** once both sides run the same model, and H-O C8 changes sign,
++24.6% → −23.2%. Comparing at the reference's model instead of across models was
+worth an order of magnitude on C10. The same run's uniform-rank-3 row reproduces
+the superseded table above to every printed digit (25.60926 / 503.0882 /
+10666.26 / 4.517173 / 71.45023 / 0.8047943), which is an independent consistency
+check on the whole chain. **(ii) Refinement is not the missing piece, and that is
+now measured rather than assumed.** It leaves the partition-invariant sum rule
+alone (+0.600% → +0.592%) and moves every site-resolved row *slightly further*
+from the reference. The fit converges properly — `Solved` at all eleven nodes,
+data rms 2.9e-05, max |residual| 8.7e-04 over 125,250 packed targets — so this is
+not a failed refinement. It is what a fit does when its point-to-point response
+is nearly invariant to the O/H split: the split is set by the weight-3 penalty
+anchors, and the anchors are what disagree. Both chains' refined models nearly
+coincide (O-O C6 26.1627 vs 26.1606) although their anchors differ.
+
+**The whole site-resolved gap is one scalar.** Both models are separable to ~1%
+— `C6_ab ≈ K α_a α_b` with one common frequency shape per site, residual
+`C6_HO²/(C6_HH·C6_OO) − 1` = −1.22% for the reference against −0.99%/−1.10% for
+our unrefined/refined models — so the six site rows carry a single degree of
+freedom, `ρ = α_H/α_O = sqrt(C6_HH/C6_OO)`: reference **0.278732**, ours
+**0.177274** unrefined and **0.170102** refined, 0.636× and 0.610× the reference
+(`lambda1000`: 0.177474 / 0.170084). Our chain gives hydrogen too little
+polarizability and oxygen too much, by a factor ~1.6 in the ratio, while
+conserving the total to 0.6%. The multiplicity convention behind the sum rule is
+corroborated rather than assumed: all ordered pairs within a type are equal for
+the isotropic `Cn` (spread 0 to 7.9e-08), so per-ordered-pair and summed readings
+of the reference blocks differ by exactly 4×, and it is the +0.6% agreement under
+`{O-O: 1, H-O: 4, H-H: 4}` that selects the per-ordered-pair reading.
+
+**The leading structural candidate for ρ is the rank-limited localization, and it
+is a candidate, not a conclusion.** The reference header declares `WSM-Limit: 2`
+and `H-Limit: 1`, i.e. the limit applies to the localization as well as to the
+model, and a rank-limited localization is structurally absent from our
+implementation rather than merely unimplemented: `IsaLwLocalMatrix` is a fixed
+`15×15` (`IsaLwWorkingMatrix` `16×16`), "Real Racah order 00,10,11c,11s,… through
+rank 3", with no per-site limit anywhere in `lw_localization.{h,cc}` — hence the
+`isapol_native.py:217` refusal above (`.pi/audit/avtz-rank-limited.json`).
+Localizing at rank 3 and truncating afterwards is a **different least-squares
+problem** from localizing under the restriction, and the difference is exactly of
+the kind that redistributes polarizability between sites: with ranks 2 and 3
+unavailable on hydrogen, the localization must place that response somewhere, and
+the reference places it on hydrogen's dipole. This is not eliminated, not bounded
+and not absorbed into a tolerance; closing it needs a rank-limited LW path with
+its own gate. Upstream of every number above, the response-step asymptotic
+correction form (candidate 2, +1.36% on the H2O molecular polarizability, §6)
+also remains open — it is absorbed nowhere, and it cannot explain ρ, which is a
+partition ratio at fixed total.
 
 The 377 nonzero recoupled reference rows (O-O 258, H-O 86, H-H 33) are an
 explicitly **uncompared** track, because the native anisotropic product is
