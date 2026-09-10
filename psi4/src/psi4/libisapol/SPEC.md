@@ -952,11 +952,110 @@ to every printed digit -- nbf 92), LW accepts rank 4 with no failures:
 
 Because the translated molecular polarizability is partition-invariant, that
 6.4-6.8% excess is located in the **response step**, not in the partition and not
-in the refinement. Candidate causes, labelled and not absorbed: our
-`alda_slater_pw92` kernel with `exact_exchange=0.25, local_scale=0.75` against
-their CKS/`Hessians Internal`; our LB94-based GRAC form against theirs; the
-response/ISA grid (99/590 against their `Angular 100 / Radial 60`); and their
-`Eta = 0.0005` regularization, which we do not apply at all.
+in the refinement. Note also that the rows above are run at the *other* case's
+declared GRAC shift 0.06490004527520865 and `HOMO -0.3989`, which belong to
+`tests/H2O_props`; the reference row's own case (`examples/properties/H2O`,
+weight type 4) converges to `E_HOMO = -0.330596560344` with DALTON's printed
+`v_xc(inf) = 0.133203439656`. The two must not be quoted as one protocol.
+
+**Response step: closed on identical orbitals.** The excess is now assigned. The
+obstacle to assigning it was that no shipped case both exports usable MO vectors
+and prints a polarizability at admissible size, so the reference propagator was
+rebuilt from CamCASP's own MIT sources (`NAME=camcasp`, which alone pulls
+`prop_utilities.F90 densfit_prop.F90`) and certified by reproducing the shipped
+`examples/energies/He2/aTZ_MC/check/OUT/He2.out` **digit for digit on all 80
+numeric lines** (`E^{2}_{disp} = -13.108210 CM-1`, `E^{2}_{ind} = -0.26851267E-02
+CM-1`, ...). Build provenance: CamCASP 6.0.051, gfortran 14.3.0, serial `make`
+(the makefile is not parallel-safe -- separate `%.o`/`%.mod` rules compile the
+same source twice), `-fallow-argument-mismatch` prepended to `FFLAGS/FFLAGS2/FFLAGS3`
+to demote legacy-F77 rank mismatches in `gamint.F` to warnings. That flag is a
+compiler diagnostic setting, not a scientific tolerance, and the digit-for-digit
+certification above is what licenses it.
+
+Both codes were then run on the **same** orbitals: the shipped 15-digit DALTON
+set `examples/energies/He2/aTZ_MC/check/He2-A-asc.movecs` (23x23, PBE0), decoded
+into Psi4 at `max |C^T S_psi C - I| = 1.132e-14` using `PMAP = [2,0,1]` and
+`DMAP = [2,3,1,4,0]` from `basis_trans_mats.F90::init_basis_trans_mats(option=2)`.
+Decoding requires a `.gbs` reproducing DALTON's **6-primitive** first-S aug-cc-pVTZ
+contraction in DALTON's shell order: Psi4's shipped He block spans the same space
+(SCF energies agree to 1e-10) with a 4-primitive contraction, so its MO
+coefficients are not interchangeable. CamCASP's own `basis/gamess_us/aug-cc-pVTZ/He`
+is the 6-primitive form. This removes the asymptotic-correction form from the
+comparison entirely, and is an **external-orbital comparison track** -- it must be
+labelled as such wherever quoted. No gate is relaxed to run it:
+`validate_correction` calls `require_scf_seal` only on the `FIXED_GRAC` branch,
+and the `NONE` branch's assertion that the wavefunction carries no asymptotic
+correction is factually true here (the Psi4 functional object is plain PBE0; the
+AC lives entirely in the injected orbitals).
+
+At the reference's declared protocol (`Type CKS`, `Hessians Internal`, `DF with
+constraints`, `DF-TYPE-MONOMER NN`, `Eta = 0.0`, `Lambda = 1000.0`, `Quad 10`,
+`Beta 0.5`, AUX Cartesian `aug-cc-pVTZ-RI`), with CamCASP's own gates passing
+(orthonormality max difference `.00000`, `\int \rho(r) dr = 2.00000`):
+
+The reference's grid is refined row by row; our column is the single
+grid-invariant value our propagator returns over its own independent IsaGrid
+ladder (`(60,110)`, `(75,302)`, `(99,302)`, `(99,590)`, `(150,590)`, `(200,974)`
+= 6490 to 193826 points), and the rows are *not* pairwise grid-matched:
+
+| CamCASP response grid | atom points | CamCASP isotropic | ours (fitted lambda=1000) |
+| --- | --- | --- | --- |
+| `Angular 100 / Radial 60` (shipped) | 6490 | 1.416255 | 1.41637208 |
+| `Angular 302 / Radial 120` | 35938 | 1.416323 | 1.41637208 |
+| `Angular 590 / Radial 200` | 117410 | 1.416370 | 1.41637208 |
+| `Angular 974 / Radial 300` | 291226 | 1.416358 | 1.41637208 |
+| `Angular 1454 / Radial 400` | 580146 | 1.416352 | 1.41637208 |
+
+The shipped-grid difference is +1.171e-04 absolute / +8.27e-05 relative. It is
+**the reference's own quadrature error**: refining the reference's grid moves its
+answer 9.7e-05 toward ours, after which its last three rows oscillate within
++/-9e-06 of 1.41636. Our value is grid-converged -- identical to nine digits from
+6490 to 193826 points, and the falsification test confirms the grid is live, not
+a dead parameter (IsaGrid(10,6)/54 points gives 1.42171160, (15,26)/364 gives
+1.41538714, (30,50)/1450 gives 1.41636887). Against the reference's converged
+plateau the residual is **+2.0e-05 absolute / +1.4e-05 relative**, i.e. the size
+of the reference's own remaining grid noise, and ~4x the E13.7 print resolution
+(+/-5e-08). Both anisotropies are numerically zero (CamCASP `0.5669751E-14`).
+
+The residual is not the DF penalty: lambda in {1e2, 1e3, 1e4, 1e5, 1e6, 1e8} all
+give exactly 1.41637208, so the quadratic-penalty-versus-exact-Lagrange-constraint
+difference is not a source. `direct_ov` on the same orbitals gives 1.41129611
+(-3.50e-03 relative), so the reference's constrained-NN DF space is the correct
+comparison space, as declared.
+
+Because this is a same-input comparison it bounds candidates 1, 3, 4, 5, 6, 7 and
+the previously unmeasured 8 **in aggregate** at 1.4e-05 -- a stronger statement
+than eliminating them individually, and in particular the first measurement of
+candidate 8 (CamCASP builds `Ker_kk' = \int chi_k dv_xc/drho chi_k' dr` between
+*auxiliary* functions and forms `KerOVOV = Dov_c Ker Dov_c^T`,
+`prop_utilities.F90:329-441`, so its kernel never sees exact orbital products).
+What it does **not** bound is candidate 2, the asymptotic-correction form, which
+by elimination carries the whole +1.36% (H2O) / +1.67% (He) gap seen with Psi4
+GRAC orbitals. That gap is channel-resolved for He: alpha for a 1s^2 atom is
+carried entirely by the 1s->np channel, and at the declared shift our p-channel
+excitation is 0.58% low while the (irrelevant) lowest-s excitation is
+over-corrected by +0.146 au. The three reference AC forms are distinct and must
+not be interchanged -- `He_aTZ.dal` plain `.DFTAC 0.9036 3.0 4.0`; `H2O_aTZ_A.dal`
+`.DFTAC / MULTPOLE / TANH / 0.46380 0.46380 3.0 4.0`; `He2_A.dal`
+`.DFTAC / MULTPOLE / TANH / VARSHIFT / 0.90360 0.90360 3.5 4.7` -- against Psi4's
+LB94-based GRAC with alpha=0.5, beta=40. DALTON's relation is
+`v_xc(inf) = IP_declared - |E_HOMO|`, verified at every GRAC iteration.
+
+Two operational constraints on reproducing this. CamCASP's propagator reads the
+`.cks` on **stdin** (`bin/camcasp.py:1760`), and `src/precision.f90` sets
+`lchar = 80` while `free_format_reader.F90`'s `reada` truncates at 64 characters,
+so a long scratch path must be reached through a short symlink driven by the
+`CAMCASP` environment variable (`initialize.F90:22` uses
+`get_environment_variable`, bypassing `reada`). `src/tests` is on `Makefile_body`'s
+vpath, so `src/tests/test_routines.F90` is required to link.
+
+Artifacts: `$SP/he2_response.py`, `$SP/he2_gridscan.py`, `$SP/he_common.py`,
+`$SP/dalton_avtz_he.gbs`, `$SP/camcasp_run/he_same_orb.cks`. The Formamide and
+Benzene same-orbital routes are fully decoded (`max |C^T S_psi C - I| = 7.805e-13`
+for Formamide) but **blocked** by the declared hard caps (nov 1044 > 512,
+ao_work ~1.0e11 > 6.4e10); they are not quoted as agreement and the caps are not
+raised. The `examples/energy-scan/water2-B` cross-check is abandoned as
+precision-limited (~8 significant digits; signature assignment cost 8.728e-01).
 
 Coverage and spread. Under `L2` with rank 1 on hydrogen the admissible orders are
 O-O {6,8,10}, H-O {6,8}, H-H {6}, so the only **complete** molecular isotropic

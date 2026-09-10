@@ -786,10 +786,51 @@ trace, hashes and separate ISA candidates). Its portable conclusions are in
   C6 spread (section 5 item 6, SPEC §7).
 - The residual molecular-alpha excess of our rank-4 chain against that case,
   +6.75% (`direct_ov`) / +6.41% (traced NN), is localized to the **response
-  step** and remains open. Kernel (`alda_slater_pw92` + `exact_exchange=.25`
-  against CKS/`Hessians Internal`), GRAC form, response grid (99/590 against
-  `Angular 100 / Radial 60`) and their unapplied `Eta = 0.0005` are the
-  candidates; none is eliminated yet, and none may be absorbed into a tolerance.
+  step**, and the response step is now **closed on identical orbitals**: the
+  excess belongs to the asymptotic-correction form (candidate 2), not to the
+  propagator. Evidence, all external-orbital track and to be labelled as such:
+  - The reference propagator was rebuilt from CamCASP's MIT sources
+    (`NAME=camcasp`; serial `make` -- the makefile is not parallel-safe;
+    `-fallow-argument-mismatch` for `gamint.F`'s legacy-F77 rank mismatches;
+    `src/tests` is on the vpath) and **certified digit-for-digit on all 80
+    numeric lines** of the shipped `examples/energies/He2/aTZ_MC/check/OUT/He2.out`.
+    This was necessary because no shipped case both exports usable MO vectors and
+    prints a polarizability at admissible size.
+  - The shipped 15-digit DALTON orbitals `He2-A-asc.movecs` decode into Psi4 at
+    `max |C^T S_psi C - I| = 1.132e-14` (`PMAP = [2,0,1]`, `DMAP = [2,3,1,4,0]`),
+    once a `.gbs` reproducing DALTON's 6-primitive first-S aug-cc-pVTZ
+    contraction in DALTON's shell order is supplied. Psi4's shipped He block
+    spans the same space (1e-10 in energy) but its coefficients are not
+    interchangeable.
+  - On those same orbitals at the declared protocol (`CKS` / `Hessians Internal`
+    / `DF with constraints` / `NN` / `Eta = 0.0` / `Lambda = 1000`), CamCASP's
+    shipped grid gives 1.416255 and ours 1.41637208 (+8.27e-05 relative). That
+    difference is the **reference's own quadrature error**: refining its
+    `Angular`/`Radial` grid moves it 9.7e-05 toward ours (1.416255 -> 1.416323 ->
+    1.416370 -> 1.416358 -> 1.416352 over 6490 -> 580146 atom points), after which
+    it oscillates within +/-9e-06. Ours is grid-converged to nine digits from 6490
+    to 193826 points, with the grid confirmed live by falsification (54 points
+    gives 1.42171160, 1450 gives 1.41636887). Residual against the reference's
+    converged plateau: **+2.0e-05 absolute / +1.4e-05 relative**, the size of the
+    reference's own remaining grid noise.
+  - Not the DF penalty: lambda in {1e2 ... 1e8} all give exactly 1.41637208.
+    `direct_ov` on the same orbitals gives 1.41129611, so constrained-NN is the
+    correct comparison space, as declared.
+  - Being a same-input comparison, this bounds candidates 1, 3, 4, 5, 6, 7 and
+    the previously unmeasured 8 (auxiliary-space `KerOVOV = Dov_c Ker Dov_c^T`,
+    `prop_utilities.F90:329-441`) **in aggregate** at 1.4e-05. It does not bound
+    candidate 2, which by elimination carries the whole +1.36%/+1.67% gap seen
+    with Psi4 GRAC orbitals, and which is channel-resolved for He (the p channel
+    is 0.58% low at the declared shift). None of these is absorbed into a
+    tolerance; the aggregate bound is stated as a bound.
+- What remains open in the response step is therefore candidate 2 alone: Psi4's
+  LB94-based GRAC (alpha=0.5, beta=40) against DALTON's three distinct declared
+  Tozer-Handy forms (plain `.DFTAC`, `MULTPOLE TANH`, and `MULTPOLE TANH
+  VARSHIFT`), related by `v_xc(inf) = IP_declared - |E_HOMO|`. The AC-form
+  sensitivity band alone spans 1.85% of the admissible isotropic value, so the
+  observed gap sits inside it; that is a bound, not an explanation, and the H2O
+  same-orbital test needed to close it requires a 15-digit water movecs
+  (`examples/energy-scan/water2-B` carries only ~8 and is abandoned).
 - Per-site rank limits are still not declarable in the LW pipeline
   (`isapol_native.py:217` requires uniform explicit rank 3 or rank 4), so the
   reference's `L2`/rank-1-H model cannot be *fitted* natively. Closing that needs
@@ -837,6 +878,34 @@ done
 ```
 
 Inspect the configured install destination before using another build tree.
+
+### Rebuilding the reference CamCASP propagator (external-orbital track)
+
+The shipped `.pi/camcasp-build` tree has no `camcasp` binary, and
+`densfit_prop.F90`/`prop_utilities.F90` are only pulled by `NAME=camcasp`
+(`src/SRCS.list`). Build it *outside* the reference tree -- the reference tree
+must not be modified -- and drive it through a short path alias, because
+`src/precision.f90` sets `lchar = 80` while `free_format_reader.F90`'s `reada`
+truncates at 64 characters:
+
+```bash
+CAM="$ROOT/.pi/camcasp-build"
+CC="$SP/ccbuild"                       # $SP = session scratchpad
+rsync -a --exclude .git "$CAM/" "$CC/" # keep src/tests: it is on the vpath
+sed -i 's/^FFLAGS\(2\|3\)\? :=/&  -fallow-argument-mismatch/' \
+  "$CC/x86-64/gfortran/exe/Flags"      # gamint.F legacy-F77 rank mismatches
+ln -sfn "$CC" /tmp/ccb                 # name only; all real files stay in $SP
+cd "$CC" && PATH="$HOME/miniconda3/envs/p4_ci/bin:$PATH" make -j 1 NAME=camcasp \
+  LIBDIRS="-L/usr/lib/x86_64-linux-gnu" \
+  LIBS="-llapack -lblas -lpthread -lm -ldl" LDFLAGS=""
+# The propagator reads the .cks on STDIN (bin/camcasp.py:1760):
+CAMCASP=/tmp/ccb /tmp/ccb/bin/camcasp < job.cks > job.out
+```
+
+`make -j 1` is required: separate `%.o` and `%.mod` rules compile the same
+source twice. Certify any rebuild by reproducing
+`examples/energies/He2/aTZ_MC/check/OUT/He2.out` digit-for-digit before quoting
+a number from it.
 Do not install over a runtime used by active calculations. New Python requiring
 new bindings must be staged with its matching core. `--ignore` does not exclude
 files explicitly passed to pytest: filter the list first, as above.
