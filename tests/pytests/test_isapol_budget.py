@@ -22,6 +22,15 @@ the ISA-A exponential tail -- because that is the form its recorded error was
 recorded in.  The identity that makes the comparison apples-to-apples is proved
 here from the shipped evidence file itself, not asserted.
 
+For the same reason two intermediates carry a second input form.  Both are
+fitted expansion coefficients, and their reference comparison recorded the error
+on the coefficients AND the error on the field the coefficients expand to; the
+latter is what every downstream stage reads, and it is orders of magnitude
+smaller because the fit is ill-conditioned.  Both forms are measured, each is
+compared only against the error recorded in its own form, and the linearity that
+makes the second form a first-order derivative is measured here rather than
+assumed.
+
 He is monatomic, so w_a/sum(w) == 1 identically: its ISA weights, and therefore
 Q and every property, are exactly independent of the shape samples and of the
 Drho-C coefficients.  That degeneracy is asserted rather than hidden, and the
@@ -49,6 +58,17 @@ RECORDED_RAW_TAIL = 2.3588804665973028e-8
 #: metric on the concatenated per-site array.  Reconstructed exactly -- not
 #: bounded -- by :func:`test_recorded_shape_coefficient_error_is_this_modules_metric`.
 RECORDED_SHAPE_COEFFICIENT = 3.0143541609579276e-11
+
+#: The two errors the Drho-C reference comparison recorded, in the two forms it
+#: recorded them in: the fitted coefficient array, and the density that array
+#: expands to on the shipped grid.  A requirement derived in one form is only
+#: ever compared against the number recorded in that same form.
+RECORDED_DRHO_COEFFICIENTS = 1.2802188514176112e-3
+RECORDED_SAMPLED_DENSITY = 6.130116422102165e-7
+
+#: The same pair for the fitted OV transition legs.
+RECORDED_OV_COEFFICIENTS = 2.3019798321950356e-5
+RECORDED_SAMPLED_TRANSITION_DENSITY = 5.0303437185125854e-8
 
 
 def he_recipe(wfn):
@@ -455,6 +475,230 @@ def test_relative_budget_is_self_describing_and_refuses_a_mismatched_metric(fitt
         with pytest.raises(ValueError, match='geometry|metric'):
             b.precision_budget(fitted, property_tolerances=1.e-6, directions=1,
                                stages=('partition_shape_samples',), **bad)
+
+
+def evidence_errors(stage):
+    """The shipped reference comparison's own error dictionary for one stage."""
+    evidence = json.loads((Path(__file__).parent
+                           / 'data_isapol/psi4_provisional_acceptance_evidence.json').read_text())
+    return next(c['errors'] for c in evidence['comparisons'] if c['stage'] == stage)
+
+
+def test_a_sampled_form_is_declared_only_where_a_second_error_was_recorded(fitted):
+    """A form is a name the reference comparison used, not one this module coined.
+
+    Two intermediates are fitted expansion coefficients whose reference
+    comparison recorded BOTH the coefficient error and the error on the field
+    the coefficients expand to.  Those, and only those, are offered in a second
+    input form: inventing a sampled form anywhere else would derive a
+    requirement to compare against a number nobody measured.
+    """
+    assert b.PROBED_FORM == 'as_probed'
+    assert b.SAMPLED_FORMS == {'drho_c_coefficients': 'sampled_density',
+                               'ov_transition_legs': 'sampled_transition_density'}
+    for stage, comparison in (('drho_c_coefficients', 'native-drho'),
+                              ('ov_transition_legs', 'native-ov')):
+        errors = evidence_errors(comparison)
+        assert 'coefficients' in errors and b.SAMPLED_FORMS[stage] in errors
+    for stage in b.STAGES:
+        forms = b.input_forms(stage)
+        assert forms[0] == b.PROBED_FORM
+        assert forms[1:] == ((b.SAMPLED_FORMS[stage],) if stage in b.SAMPLED_FORMS else ())
+        if stage not in b.SAMPLED_FORMS:
+            with pytest.raises(ValueError, match='has no sampled form'):
+                b.sampled_defect(fitted, stage, np.zeros(1), np.zeros(1))
+    with pytest.raises(ValueError, match='unknown intermediate'):
+        b.input_forms('nonsense')
+    reference = b.reference_value(fitted, 'drho_c_coefficients')
+    for bad in (0, -1, 1024.):
+        with pytest.raises(ValueError, match='positive integer'):
+            b.sampled_defect(fitted, 'drho_c_coefficients', reference, reference, block=bad)
+
+
+def test_recorded_sampled_errors_are_this_modules_metric_on_the_sampled_field():
+    """The sampled numbers need no regrouping -- unlike the tails and W.
+
+    Each sampled comparison reports one max over the whole sampled field scaled
+    by that field's own largest magnitude, which is exactly ``sampled_defect``'s
+    metric; both denominators are recovered here and both exceed one, so neither
+    is clamped and the identity is not vacuous.  The comparators stream the OV
+    field in blocks and evaluate the density field in one shot, and the metric is
+    a max of maxima, so the block size cannot change either number -- asserted
+    directly by :func:`test_sampled_defect_is_block_independent_and_zero_without_a_perturbation`.
+    """
+    for stage, comparison, coefficients, sampled in (
+            ('drho_c_coefficients', 'native-drho',
+             RECORDED_DRHO_COEFFICIENTS, RECORDED_SAMPLED_DENSITY),
+            ('ov_transition_legs', 'native-ov',
+             RECORDED_OV_COEFFICIENTS, RECORDED_SAMPLED_TRANSITION_DENSITY)):
+        errors = evidence_errors(comparison)
+        assert errors['coefficients']['max_scaled'] == coefficients
+        assert errors[b.SAMPLED_FORMS[stage]]['max_scaled'] == sampled
+        for name in ('coefficients', b.SAMPLED_FORMS[stage]):
+            error = errors[name]
+            assert error['max_absolute'] / error['max_scaled'] > 1., (comparison, name)
+        # The coefficient error is the larger of the two by orders of magnitude:
+        # an ill-conditioned fit moves the coefficients far more than the field
+        # they represent.  That is precisely why the two are never interchanged,
+        # and why a requirement derived in one form may not be compared against
+        # the error recorded in the other.
+        assert sampled < coefficients / 100.
+
+
+def test_sampled_defect_is_block_independent_and_zero_without_a_perturbation(fitted):
+    for stage in b.SAMPLED_FORMS:
+        reference = b.reference_value(fitted, stage)
+        assert b.sampled_defect(fitted, stage, reference, reference) == 0.
+        value = b.perturb(fitted, stage, reference, 1.e-6, 0)
+        points = len(fitted.properties.partition.grid_points)
+        blocked = {b.sampled_defect(fitted, stage, value, reference, block=block)
+                   for block in (64, 1024, 4096, points)}
+        assert len(blocked) == 1 and min(blocked) > 0., (stage, blocked)
+        with pytest.raises(ValueError, match='identical shapes'):
+            b.sampled_defect(fitted, stage, value, reference[..., :1])
+
+
+def test_sampled_defect_scales_exactly_with_the_probe(fitted):
+    """The expansion is linear, and that is measured here rather than assumed.
+
+    Halving the probe halves the sampled defect exactly, so the ratio between
+    the two forms is a property of the expansion map alone -- the same number at
+    both probe sizes.  This is what licenses reading a sampled-form
+    amplification as a converged first-order derivative whenever the probed-form
+    one is.
+    """
+    for stage in b.SAMPLED_FORMS:
+        reference = b.reference_value(fitted, stage)
+        for direction in (0, 1):
+            values = [b.perturb(fitted, stage, reference, epsilon, direction)
+                      for epsilon in (1.e-6, 5.e-7)]
+            probed = [b.scaled_max(value, reference) for value in values]
+            sampled = [b.sampled_defect(fitted, stage, value, reference) for value in values]
+            assert probed[0] / probed[1] == pytest.approx(2., rel=1.e-9)
+            assert sampled[0] / sampled[1] == pytest.approx(2., rel=1.e-9)
+            assert sampled[0] / probed[0] == pytest.approx(sampled[1] / probed[1], rel=1.e-8)
+            # On this chain the sampled field moves further than the max-scaled
+            # coefficient array does, in every direction: the ratio is measured,
+            # not bounded a priori.
+            assert sampled[0] / probed[0] > 1.
+
+
+def test_sampled_form_amplification_inherits_the_probed_forms_linearity(fitted):
+    """One rebuild, two input forms: only the denominator of the ratio changes.
+
+    The property defects are identical between the two forms -- the same probe
+    produced them -- so the linearity defect is inherited and the ratio of the
+    two amplifications is the ratio of the two input defects, one single number
+    shared by every property group.  The requirement rows are then compared
+    against the error recorded in their own form, and the outcome is asserted as
+    measured: in the coefficient form every group misses, and in the sampled form
+    -- the field the response actually reads -- some groups close and some do
+    not.  Neither result is quoted as the other.
+    """
+    recorded = {'ov_transition_legs': {b.PROBED_FORM: RECORDED_OV_COEFFICIENTS,
+                                       'sampled_transition_density':
+                                       RECORDED_SAMPLED_TRANSITION_DENSITY}}
+    budget = b.precision_budget(fitted, property_tolerances=1.e-6, epsilon=1.e-6, directions=1,
+                                stages=('ov_transition_legs',), recorded_errors=recorded)
+    assert {probe.status for probe in budget.probes} == {'measured'}
+    assert max(budget.self_consistency['ov_transition_legs'].values()) == 0.
+    perturbed = [probe for probe in budget.probes if probe.epsilon > 0.]
+    assert perturbed and all(set(probe.sampled_defects) == {'sampled_transition_density'}
+                             for probe in perturbed)
+    assert all(probe.sampled_defects == {} for probe in budget.probes if probe.epsilon == 0.)
+    forms = {}
+    for amplification in budget.amplifications:
+        forms.setdefault(amplification.input_form, {})[amplification.property_name] = amplification
+    assert set(forms) == {b.PROBED_FORM, 'sampled_transition_density'}
+    probed, sampled = forms[b.PROBED_FORM], forms['sampled_transition_density']
+    assert set(probed) == set(sampled)
+    ratios = []
+    for name, row in probed.items():
+        assert row.amplification > 0. and sampled[name].amplification > 0.
+        assert sampled[name].linearity_defect == pytest.approx(row.linearity_defect, rel=1.e-6)
+        assert sampled[name].quoted is row.quoted is True
+        ratios.append(row.amplification / sampled[name].amplification)
+    assert max(ratios) == pytest.approx(min(ratios), rel=1.e-12)
+    full = max(perturbed, key=lambda probe: probe.epsilon)
+    assert max(ratios) == pytest.approx(
+        full.sampled_defects['sampled_transition_density'] / full.input_defect, rel=1.e-9)
+
+    requirements = {(r.input_form, r.property_name): r for r in budget.requirements}
+    assert {form for form, _ in requirements} == {b.PROBED_FORM, 'sampled_transition_density'}
+    for (form, _), requirement in requirements.items():
+        assert requirement.recorded_error == (RECORDED_OV_COEFFICIENTS if form == b.PROBED_FORM
+                                              else RECORDED_SAMPLED_TRANSITION_DENSITY)
+        assert requirement.note == (b.PrecisionRequirement.note if form == b.PROBED_FORM
+                                    else b.SAMPLED_NOTE)
+        assert 'sampled field' in requirement.note or form == b.PROBED_FORM
+        assert requirement.required_precision == pytest.approx(
+            1.e-6 / requirement.amplification, rel=1e-12)
+    assert all(requirement.satisfied is False for (form, _), requirement in requirements.items()
+               if form == b.PROBED_FORM)
+    closure = {name: requirement.satisfied for (form, name), requirement in requirements.items()
+               if form == 'sampled_transition_density'}
+    assert set(closure.values()) == {True, False}
+    assert closure['alpha_iso_rank1'] is True and closure['C10'] is False
+
+
+def test_a_bare_recorded_error_names_the_probed_array_only(fitted):
+    """The two numbers may not be swapped, and a bare float is not ambiguous."""
+    bare = {'ov_transition_legs': RECORDED_OV_COEFFICIENTS}
+    keyed = {'ov_transition_legs': {'sampled_transition_density':
+                                    RECORDED_SAMPLED_TRANSITION_DENSITY}}
+    assert b._recorded_for({}, 'ov_transition_legs', b.PROBED_FORM) is None
+    assert b._recorded_for(bare, 'ov_transition_legs', b.PROBED_FORM) == RECORDED_OV_COEFFICIENTS
+    assert b._recorded_for(bare, 'ov_transition_legs', 'sampled_transition_density') is None
+    assert b._recorded_for(keyed, 'ov_transition_legs', b.PROBED_FORM) is None
+    assert b._recorded_for(keyed, 'ov_transition_legs', 'sampled_transition_density') \
+        == RECORDED_SAMPLED_TRANSITION_DENSITY
+    budget = b.precision_budget(fitted, property_tolerances=1.e-6, epsilon=1.e-6, directions=1,
+                                stages=('ov_transition_legs',), recorded_errors=bare)
+    for requirement in budget.requirements:
+        if requirement.input_form == b.PROBED_FORM:
+            assert requirement.recorded_error == RECORDED_OV_COEFFICIENTS
+            assert requirement.satisfied is False
+        else:
+            assert requirement.recorded_error is None and requirement.satisfied is None
+    for stage in ('ov_transition_legs', 'raw_tail_parameters'):
+        with pytest.raises(ValueError, match='does not measure'):
+            b.precision_budget(fitted, property_tolerances=1.e-6, directions=1, stages=(stage,),
+                               recorded_errors={stage: {'sampled_density': 1.e-8}})
+    # A sampled field's error is a max over the grid in the absolute metric;
+    # there is no elementwise-relative sampled number for it to be compared to.
+    with pytest.raises(ValueError, match='cannot be compared'):
+        b.precision_budget(fitted, property_tolerances=1.e-6, directions=1,
+                           stages=('drho_c_coefficients',), geometry='relative',
+                           recorded_error_metric='relative',
+                           recorded_errors={'drho_c_coefficients':
+                                            {'sampled_density': RECORDED_SAMPLED_DENSITY}})
+    relative = b.precision_budget(fitted, property_tolerances=1.e-6, epsilon=1.e-6, directions=1,
+                                  stages=('drho_c_coefficients',), geometry='relative')
+    assert all(probe.sampled_defects == {} for probe in relative.probes)
+    assert {a.input_form for a in relative.amplifications} <= {b.PROBED_FORM}
+    assert {r.input_form for r in relative.requirements} <= {b.PROBED_FORM}
+
+
+def test_monatomic_drho_is_insensitive_in_both_input_forms(fitted):
+    """He's ISA weight is identically one, so the density it reads cannot matter.
+
+    The sampled form is the better anchor, not a way to manufacture sensitivity:
+    the probe moves the sampled density measurably and moves no property at all,
+    so both forms report an infinite requirement rather than a small one.
+    """
+    recorded = {'drho_c_coefficients': {b.PROBED_FORM: RECORDED_DRHO_COEFFICIENTS,
+                                        'sampled_density': RECORDED_SAMPLED_DENSITY}}
+    budget = b.precision_budget(fitted, property_tolerances=1.e-6, epsilon=1.e-6, directions=1,
+                                stages=('drho_c_coefficients',), recorded_errors=recorded)
+    assert {probe.status for probe in budget.probes} == {'measured'}
+    moved = [probe.sampled_defects['sampled_density'] for probe in budget.probes
+             if probe.epsilon > 0.]
+    assert moved and min(moved) > 0.
+    assert {a.amplification for a in budget.amplifications} == {0.}
+    assert {a.input_form for a in budget.amplifications} == {b.PROBED_FORM, 'sampled_density'}
+    for requirement in budget.requirements:
+        assert requirement.required_precision == float('inf')
+        assert requirement.satisfied is True and 'structurally insensitive' in requirement.note
 
 
 @pytest.mark.long

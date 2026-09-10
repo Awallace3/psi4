@@ -65,8 +65,40 @@ the shipped objects under the unrelaxed production LW policy. Evidence:
 
 - TODO10 (Drho-C, 0.0012802188514176112, absolute metric) needs **2.78e-9**
   (A=3.60e2, binding on alpha_iso_rank3, water direct-OV): **misses by ~6 orders**.
+  Measured in the second form the same comparison recorded -- the sampled
+  density, 6.130116422102165e-07, which is what downstream physics actually
+  reads -- the requirement is **8.98e-9** (A=1.11e2, same binding property, same
+  run): still a **miss, now by 68x**, the loosest group being alpha_iso_rank1 at
+  14.3x. **No** property group closes in either form. That recorded sampled
+  error supports Drho-C-induced property defects of 1.43e-5 to 6.83e-5 in the
+  max-scaled metric, not 1e-6.
 - TODO11 (fitted OV, 2.3019798321950356e-5, absolute metric) needs **6.21e-10**
-  (A=1.61e3, binding on C10, He fitted chain): **misses by ~4.5 orders**.
+  (A=1.61e3, binding on C10, He fitted chain): **misses by ~4.5 orders**. In the
+  sampled transition density (5.0303437185125854e-08) the requirement is
+  **1.38e-8** (A=7.24e1, binding on C10, same run): **four of the seven property
+  groups are satisfied** (alpha_iso_rank1 at 0.60x of its requirement,
+  alpha_iso_rank2 0.14x, C6 0.21x, C8 0.31x) and the remaining three miss by
+  1.93x-3.64x. The binding C10 row's coverage is itself structurally partial, so
+  the polarizability row alpha_iso_rank3 (A=3.978e1, requiring 2.51e-8, failing
+  by 2.00x) is quoted beside it. The stage is therefore **still unsatisfied at
+  1e-6**, by a small factor rather than a large one.
+- The second input form is not a relabelling of the first. A stage whose
+  reference comparison recorded both a coefficient error and an error on the
+  field those coefficients expand to is probed **once** and reported **twice**,
+  the second row dividing the same property defect by the defect the same
+  perturbation induces in the sampled field, with the comparator's own sampler
+  and metric. A bare recorded number names the probed array alone and the budget
+  refuses to compare it against a sampled-form requirement. The two recorded
+  numbers differ by three orders of magnitude because the recorded coefficient
+  error lies near the null space of its own expansion map; that is a property of
+  the recorded error, not of the map, and a generic probe reaches a generic image
+  direction. Linearity is measured rather than assumed -- the sampled/probed
+  defect ratio is eps-independent to 6-7 digits over eps 1e-6, 1e-8 and 1e-10 in
+  every direction -- so the sampled row inherits the probed row's linearity
+  defect and the two are quoted or withheld together. The measurement remains a
+  lower bound over the **range** of that stage's expansion map, not over
+  arbitrary sampled fields: `IsaFixedDensity` has no tabulated constructor, so a
+  sampled-density *stage* cannot be perturbed freely.
 - TODO9 (raw tails, 2.3588804665973028e-8, absolute metric) needs **6.59e-8**
   (A=1.5176e1, binding on alpha_iso_rank3, water direct-OV): **meets it, with a
   2.8x margin**; it would first fail at a property tolerance of 3.6e-7. This is
@@ -112,8 +144,9 @@ the shipped objects under the unrelaxed production LW policy. Evidence:
 
 No comparison here is a new provisional pass -- TODO9's raw-tail *strict*
 trajectory parity is still FAIL, the shape-coefficient rows belong to that same
-strict-FAIL comparison, and none of this changes either -- and none of these
-amplifications is a gate: each is a first-order directional lower bound, so
+strict-FAIL comparison, the four groups the sampled OV form closes are a
+requirement met and not a comparison passed, and none of this changes either --
+and none of these amplifications is a gate: each is a first-order directional lower bound, so
 meeting the derived precision is necessary and not sufficient, and the
 amplification was measured on the PBE0/cc-pVDZ demo water rather than on the
 comparator's own input. What they do establish is that the per-stage provisional

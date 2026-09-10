@@ -790,12 +790,52 @@ and asking for it there raises. The two metrics are not commensurable, and
 against a requirement derived in the other rather than performing the
 comparison silently.
 
+Two intermediates are additionally reported in a **second input form**, because
+their reference comparison recorded two errors and not one. Drho-C records the
+error on its auxiliary coefficients (1.28021885e−3 scaled) *and* on the density
+those coefficients sample to (6.13011642e−7); the fitted-OV route records its
+coefficients (2.30197983e−5) *and* the sampled transition density
+(5.03034372e−8). Such a stage is probed **once** and reported **twice**: one
+property defect divided by the probed array's own defect (`as_probed`) and by
+the defect that same perturbation induces in the sampled field
+(`sampled_density`, `sampled_transition_density`), computed with the sampler and
+the metric the comparator itself used — `IsaFixedDensity` on the shipped ISA
+grid, and the screened auxiliary samples contracted with the fitted legs, both
+streamed in blocks so the point count sets no array size here. A bare recorded
+number names the probed array alone: `precision_budget` refuses to compare it
+against a sampled-form requirement, refuses a sampled-form recorded error
+outside the absolute metric, and offers no sampled form in the relative
+geometry.
+
+The two recorded numbers differ by three orders of magnitude because the
+recorded coefficient error lies close to the null space of its own expansion
+map. That is a property of the recorded error, not of the map: an amplification
+is a property of the *image* direction, a generic coefficient probe reaches a
+generic image direction, and the measured sampled-form amplification is
+therefore not depressed by the same cancellation. It is a measured directional
+lower bound over the **range** of that stage's own expansion map — the subspace
+any coefficient error inhabits — and not a bound over arbitrary sampled fields.
+`IsaFixedDensity` has no tabulated constructor, so a sampled-density *stage*
+cannot be perturbed freely, and the induced defect of the coefficient probe is
+the honest construction rather than a chosen one.
+
+Linearity of the expansion is measured here, not assumed: the sampled/probed
+defect ratio is eps-independent to 6–7 digits across eps = 1e−6, 1e−8 and 1e−10
+in every direction (water Drho-C 4.414114, 1.202447, 1.159737, 3.229728; He
+fitted-OV 22.238682, 13.048567, 14.731959, 14.403853), so a sampled-form
+amplification inherits the probed-form linearity defect exactly and the two
+forms are quoted or withheld together — including the one He direction whose C8
+row exceeds the tolerance in both forms at once. Adding the second form did not
+disturb the first: the re-measured probed-form water rows reproduce the earlier
+run to 4.4e−6 relative, and the He rows reproduce it bit-for-bit.
+
 Measured requirements at a 1e−6 property tolerance, evidence in
 `.pi/audit/property-anchored-budget.json`:
 
 | stage | chain | metric | binding A | required | recorded | meets |
 |---|---|---|---|---|---|---|
 | `drho_c_coefficients` | water direct-OV | absolute | 3.60e2 (α₃) | 2.78e−9 | 1.28021885e−3 | **no**, by ~6 orders |
+| `drho_c_coefficients` → `sampled_density` | water direct-OV | absolute | 1.11e2 (α₃) | 8.98e−9 | 6.13011642e−7 | **no**, by 68× |
 | `drho_c_coefficients` | water direct-OV | relative | 3.64 (α₃) | 2.75e−7 | — | not measured |
 | `partition_shape_samples` | water direct-OV | relative | 9.75e−3 (α₃) | 1.03e−4 | — | not measured |
 | `raw_tail_parameters` | water direct-OV | absolute | 1.52e1 (α₃) | 6.59e−8 | 2.35888047e−8 | **yes**, 2.8× margin |
@@ -803,6 +843,7 @@ Measured requirements at a 1e−6 property tolerance, evidence in
 | `coefficient_responses` | water direct-OV | absolute | 2.50e1 (α₃) | 4.00e−8 | — | not measured |
 | `distributed_site_tensors` | water direct-OV | absolute | 1.52e2 (C12) | 6.58e−9 | — | not measured |
 | `ov_transition_legs` | He fitted | absolute | 1.61e3 (C10) | 6.21e−10 | 2.30197983e−5 | **no**, by ~4.5 orders |
+| `ov_transition_legs` → `sampled_transition_density` | He fitted | absolute | 7.24e1 (C10) | 1.38e−8 | 5.03034372e−8 | **no**, by 3.6×; 4 of 7 groups **yes** |
 | `coefficient_responses` | He fitted | absolute | 2.28e5 (α₃) | 4.39e−12 | — | not measured |
 | `distributed_site_tensors` | He fitted | absolute | 3.78e1 (C12) | 2.65e−8 | — | not measured |
 
@@ -854,12 +895,30 @@ remains uncompared in both metrics — absolutely because no absolute requiremen
 for that stage is well posed, relatively because no error was ever recorded in
 that metric — and that gap is a missing measurement, not a mismatched
 association; what is now measured is the coefficient input that generates the
-array, not the array. Of the four recorded errors the budget can compare, two
-(raw tails, shape coefficients) meet their requirements and two — Drho-C
-coefficients and fitted-OV coefficients — miss theirs by roughly six and four
-and a half orders of magnitude, so neither of those is anywhere near a 1e−6
-property guarantee and the per-stage provisional profiles above must not be
-read as implying one.
+array, not the array.
+
+What the second input form buys is four to five orders of the apparent gap, and
+not the stage. On He fitted-OV it **closes four of the seven property groups**
+at a 1e−6 tolerance (α₁ at 0.60× of its requirement, α₂ 0.14×, C6 0.21×, C8
+0.31×) and misses the other three by 1.93×–3.64×, against 3.7e4× for the probed
+form; the binding row is C10, whose coverage is itself structurally partial, so
+the α₃ row (A = 3.978e1, requiring 2.51e−8, failing by 2.00×) is quoted beside
+it. On water Drho-C it closes **none**: the miss runs from 14.3× (α₁) to 68.3×
+(α₃), against 3.6e5× for the probed form, and the recorded sampled-density error
+supports Drho-C-induced property defects of 1.43e−5 to 6.83e−5 in the max-scaled
+metric — not 1e−6. Both sampled-form binding rows therefore remain
+**unsatisfied**, and the comparison is still made on the PBE0/cc-pVDZ demo water
+and the compact He model rather than on the comparator's own input, because the
+exported reference carries no orbitals and a same-input property chain is not
+constructible.
+
+Of the six recorded errors the budget can compare, two (raw tails, shape
+coefficients) meet their requirements outright; the two coefficient arrays —
+Drho-C and fitted-OV — miss theirs by roughly six and four and a half orders of
+magnitude in the form they were recorded in as coefficients, and the two sampled
+fields those coefficients expand to miss by 68× and 3.6×. Neither stage carries
+a 1e−6 property guarantee in either form, and the per-stage provisional profiles
+above must not be read as implying one.
 
 [PROVISIONAL_ACCEPTANCE.md](PROVISIONAL_ACCEPTANCE.md) owns exact opt-in policy;
 its historical milestone statuses do not supersede current capability above.

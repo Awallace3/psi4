@@ -448,8 +448,8 @@ remains between it and the `777f904` target, in dependency order:
    4.00e-8 (water) / 4.39e-12 (He fitted) and `distributed_site_tensors`
    6.58e-9 (water) / 2.65e-8 (He). The raw-tail 2.36e-8 **meets** its
    requirement of 6.59e-8 (A=1.5176e1, α₃, water direct-OV) with a 2.8× margin
-   and would first fail at a property tolerance of 3.6e-7 — the first of the
-   four recorded errors to pass. That comparison is against a separate stage,
+   and would first fail at a property tolerance of 3.6e-7 — the first recorded
+   error to pass. That comparison is against a separate stage,
    `raw_tail_parameters` (per-site joint amplitude/exponent, cutoff held fixed
    as supplied configuration), because the recorded number is a tail
    *parameter* error; it is apples-to-apples by an **identity**, since the
@@ -483,7 +483,39 @@ remains between it and the `777f904` target, in dependency order:
    which is still FAIL (the shape-coefficient rows belong to that same
    comparison), and the amplifications were measured on the demo water rather
    than on the comparator's own input.
-   Tests: `tests/pytests/test_isapol_budget.py` (22 quick + 1 long).
+   *Two input forms, where two errors were recorded.* Drho-C and fitted-OV each
+   recorded a coefficient error **and** an error on the field those coefficients
+   expand to (sampled density 6.13011642e-7; sampled transition density
+   5.03034372e-8). Those stages are now probed **once** and reported **twice**,
+   the second row dividing the same property defect by the defect the same
+   perturbation induces in the sampled field, using the comparator's own sampler
+   and metric (`IsaFixedDensity` on the shipped ISA grid; screened auxiliary
+   samples contracted with the fitted legs; both streamed in blocks, so the point
+   count sets no array size). A bare recorded number names the probed array alone
+   and is refused against a sampled-form requirement, as is any sampled-form
+   error outside the absolute metric. Linearity is measured, not assumed: the
+   sampled/probed defect ratio is eps-independent to 6-7 digits over eps 1e-6,
+   1e-8 and 1e-10 in every direction (water 4.414114 / 1.202447 / 1.159737 /
+   3.229728; He 22.238682 / 13.048567 / 14.731959 / 14.403853), so the sampled
+   row inherits the probed row's linearity defect and the two are quoted or
+   withheld together.
+   *What the sampled form closes, and what it does not.* On He fitted-OV it
+   satisfies **four of the seven** property groups at 1e-6 (α₁ at 0.60× of its
+   requirement, α₂ 0.14×, C6 0.21×, C8 0.31×) and misses the other three by
+   1.93×–3.64× (binding C10 needs 1.38e-8 at A=7.24e1; α₃ needs 2.51e-8 at
+   A=3.978e1), against ~3.7e4× for the coefficient form. On water Drho-C it
+   closes **none**: 14.3× (α₁) to 68.3× (α₃) short of 8.98e-9 at A=1.11e2,
+   against ~3.6e5× for the coefficient form. The second form therefore removes
+   four to five orders of the apparent gap and leaves one to two; both binding
+   rows stay **unsatisfied**, and the recorded sampled-density error supports
+   Drho-C-induced property defects of 1.43e-5 to 6.83e-5 in the max-scaled
+   metric, not 1e-6. It remains a lower bound over the **range** of each stage's
+   own expansion map — `IsaFixedDensity` has no tabulated constructor, so a
+   sampled-density *stage* cannot be perturbed freely — and the two recorded
+   numbers differ by three orders because the recorded coefficient error sits
+   near that map's null space, which is a property of the recorded error and not
+   of the map.
+   Tests: `tests/pytests/test_isapol_budget.py` (29 quick + 1 long).
 
 Each step needs its own independent oracle before it is wired to the next, and
 each must stay separately labelled in provenance; see the SPEC §8 note that the
@@ -511,6 +543,11 @@ trace, hashes and separate ISA candidates). Its portable conclusions are in
   requirement by ~6 orders and fitted-OV by ~4.5, while the raw-tail parameter
   error meets its 6.59e-8 requirement with a 2.8× margin and the ISA-A
   shape-coefficient error meets its 3.22e-8 requirement with a 1.07e3× margin.
+  In the second form those two comparisons also recorded — the sampled density
+  and the sampled transition density, which is what every downstream stage
+  actually reads — the misses shrink to 68× (water Drho-C, **no** property group
+  closing) and 3.6× (He fitted-OV, four of seven groups closing), narrowing the
+  gap by four to five orders without closing either stage.
   The shape-sample array stays uncompared in both metrics pending an
   elementwise-relative measurement against a same-input reference; only the
   coefficients that generate it are anchored. Meeting a requirement is *not* a

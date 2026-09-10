@@ -43,6 +43,21 @@ recovered exactly from those per-site records rather than merely bounded. The
 shipped (lagged) tails are held fixed across that probe, as the algorithm's own
 final sampling boundary does.
 
+Two intermediates carry a SECOND recorded error, measured not on the raw array
+but on the sampled field that array expands to: Drho-C records both its
+auxiliary coefficients and the density those coefficients sample to, and the
+fitted OV route records both its coefficients and the sampled transition
+density. The sampled form is the one the downstream physics actually reads -- a
+coefficient error that the expansion map annihilates changes no property at all
+-- and the two recorded numbers differ by three orders of magnitude precisely
+because the recorded coefficient error lies close to that null space. Each such
+stage is therefore probed once and reported twice: the property defect is
+divided by the probed array's own defect AND by the defect its perturbation
+induces in the sampled field, computed with the same sampler and the same metric
+the reference comparison used. The sampled-form amplification is a lower bound
+over the range of that stage's own expansion map, which is the subspace any
+coefficient error inhabits, and is only offered in the absolute geometry.
+
 This module is DIAGNOSTIC ONLY. It is not on the public property path, it
 produces no property values of its own, and it waives no gate: every rebuild
 runs the unrelaxed production LW policy, and a rebuild that the gate rejects is
@@ -83,6 +98,23 @@ RELATIVE_METRIC = 'max(abs(actual-reference)/abs(reference)) over the reference 
 #: by the largest; ``relative`` moves every element by the same fraction OF
 #: ITSELF and so leaves an exact zero exactly zero.
 GEOMETRIES = ('absolute', 'relative')
+
+#: Label for the form of the probed array itself.
+PROBED_FORM = 'as_probed'
+
+#: Intermediates whose reference comparison ALSO records the error on the sampled
+#: field the probed array expands to, named exactly as that comparison names it.
+#: The expansion is linear, so a sampled-form defect scales exactly with the
+#: probe and its amplification inherits the probed form's linearity.
+SAMPLED_FORMS = {'drho_c_coefficients': 'sampled_density',
+                 'ov_transition_legs': 'sampled_transition_density'}
+
+
+def input_forms(stage):
+    """The forms one stage's input defect can be measured in, probed form first."""
+    if stage not in STAGES:
+        raise ValueError(f'unknown intermediate {stage!r}')
+    return (PROBED_FORM,) + ((SAMPLED_FORMS[stage],) if stage in SAMPLED_FORMS else ())
 
 
 def _finite_pair(actual, reference):
@@ -564,6 +596,61 @@ def rebuild(chain, stage, value):
 
 
 # ---------------------------------------------------------------------------
+# Sampled forms: the same defect, measured on the field the array expands to
+# ---------------------------------------------------------------------------
+def _density_sites(chain):
+    """The auxiliary centres the shipped chain samples its fixed density over.
+
+    Read back from the caller's own recipe, exactly as ``_from_drho`` declares
+    them for the ISA-A grids; nothing is inferred from the reference comparison.
+    """
+    return list(range(len(chain.properties.partition.recipe.auxiliary.centres)))
+
+
+def sampled_defect(chain, stage, value, reference, block=1024):
+    """Defect the perturbation induces in this stage's sampled field.
+
+    Same sampler and same metric as the reference comparison: the Drho-C form
+    expands the coefficients through ``IsaFixedDensity`` on the shipped ISA grid,
+    and the OV form contracts the screened auxiliary samples with the fitted
+    transition coefficients. Both stream the grid in blocks and keep only the two
+    maxima the metric needs, so the point count sets no array size here.
+
+    The value is a defect of the SAMPLED FIELD, not of the probed array: it is
+    the quantity every downstream stage actually reads, and a perturbation the
+    expansion map annihilates has a sampled defect of zero however large the
+    coefficient move was.
+    """
+    if stage not in SAMPLED_FORMS:
+        raise ValueError(f'{stage} has no sampled form: its probed array is what the '
+                         'reference comparison recorded, and inventing a second form '
+                         'would compare against a number nobody measured')
+    if type(block) is not int or block <= 0:
+        raise ValueError('block must be a positive integer point count')
+    partition = chain.properties.partition
+    points, sites = partition.grid_points, _density_sites(chain)
+    a, r = _finite_pair(value, reference)
+    largest_delta = largest_reference = 0.
+    if SAMPLED_FORMS[stage] == 'sampled_density':
+        actual = core.IsaFixedDensity(partition.auxiliary, a.tolist())
+        base = core.IsaFixedDensity(partition.auxiliary, r.tolist())
+    for offset in range(0, len(points), block):
+        chunk = points[offset:offset + block].tolist()
+        if SAMPLED_FORMS[stage] == 'sampled_density':
+            sampled = np.asarray(actual.evaluate(chunk, sites))
+            shipped = np.asarray(base.evaluate(chunk, sites))
+            delta = sampled - shipped
+        else:
+            phi = np.asarray(partition.auxiliary.evaluate_screened(chunk, sites))
+            delta, shipped = phi @ (a - r).T, phi @ r.T
+        largest_delta = max(largest_delta, float(np.max(np.abs(delta))))
+        largest_reference = max(largest_reference, float(np.max(np.abs(shipped))))
+    if not (np.isfinite(largest_delta) and np.isfinite(largest_reference)):
+        raise ValueError('sampled defect requires finite samples')
+    return largest_delta / max(1., largest_reference)
+
+
+# ---------------------------------------------------------------------------
 # Properties of interest
 # ---------------------------------------------------------------------------
 def property_groups(local, dispersion=None):
@@ -598,6 +685,10 @@ class StageProbe:
     message: str = ''
     restriction: str = 'none'
     geometry: str = 'absolute'
+    #: Defect induced in this stage's sampled field, keyed by that field's name.
+    #: Empty for a stage with no sampled form, for an unperturbed probe, and for
+    #: any probe outside the absolute geometry.
+    sampled_defects: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -612,6 +703,7 @@ class StageAmplification:
     direction: int
     restriction: str = 'none'
     geometry: str = 'absolute'
+    input_form: str = PROBED_FORM
 
 
 @dataclass(frozen=True)
@@ -627,6 +719,13 @@ class PrecisionRequirement:
     note: str = 'measured directional lower bound; necessary, not sufficient'
     restriction: str = 'none'
     geometry: str = 'absolute'
+    input_form: str = PROBED_FORM
+
+
+#: The note a sampled-form requirement carries in place of the probed-form one.
+SAMPLED_NOTE = ('measured directional lower bound on the sampled field, in the form and '
+                'metric the recorded error was recorded in; the sampled directions are '
+                'those the probed array can reach, not arbitrary sampled fields')
 
 
 @dataclass(frozen=True)
@@ -652,6 +751,19 @@ def _defects(baseline, local, dispersion):
     return {name: scaled_max(rebuilt[name], baseline[name]) for name in baseline}
 
 
+def _recorded_for(recorded, stage, form):
+    """The recorded error to compare against, or None if none was supplied.
+
+    A bare number names the probed array's own form only: comparing it against a
+    sampled-form requirement would silently swap the array the error was measured
+    on, which is exactly the confusion the two recorded numbers exist to avoid.
+    """
+    error = recorded.get(stage)
+    if isinstance(error, dict):
+        return error.get(form)
+    return error if form == PROBED_FORM else None
+
+
 def _probe(chain, stage, baseline, epsilon, direction, reference, geometry='absolute'):
     """One rebuild at one probe size, in one restricted direction.
 
@@ -674,9 +786,12 @@ def _probe(chain, stage, baseline, epsilon, direction, reference, geometry='abso
         return StageProbe(stage, direction, epsilon, input_defect, {},
                           'rebuild_rejected:' + type(exc).__name__, str(exc),
                           restriction, geometry)
+    sampled = {}
+    if stage in SAMPLED_FORMS and geometry == 'absolute' and epsilon > 0.:
+        sampled[SAMPLED_FORMS[stage]] = sampled_defect(chain, stage, value, reference)
     return StageProbe(stage, direction, epsilon, input_defect,
                       _defects(baseline, local, dispersion), 'measured', '',
-                      restriction, geometry)
+                      restriction, geometry, sampled)
 
 
 def precision_budget(chain, *, property_tolerances, stages=STAGES, epsilon=1.e-6,
@@ -687,8 +802,11 @@ def precision_budget(chain, *, property_tolerances, stages=STAGES, epsilon=1.e-6
     ``property_tolerances`` is a single float applied to every property group or
     a mapping from group name to tolerance. ``recorded_errors`` optionally maps a
     stage to its measured error so the report states whether the recorded error
-    already meets the derived requirement. Every rebuild runs the production LW
-    policy; a rejected rebuild is recorded as rejected and quotes nothing.
+    already meets the derived requirement. For a stage with a sampled form that
+    entry may instead be a mapping from form name to error, which is the only way
+    to compare against a sampled-form requirement: a bare number is taken to name
+    the probed array alone. Every rebuild runs the production LW policy; a
+    rejected rebuild is recorded as rejected and quotes nothing.
 
     ``geometry`` selects the probe geometry, and with it the metric the derived
     requirement is stated in. ``recorded_error_metric`` names the metric the
@@ -724,6 +842,16 @@ def precision_budget(chain, *, property_tolerances, stages=STAGES, epsilon=1.e-6
     recorded = dict(recorded_errors or {})
     if set(recorded) - set(STAGES):
         raise ValueError('recorded error named for an unknown intermediate')
+    for stage, error in recorded.items():
+        if not isinstance(error, dict):
+            continue
+        if set(error) - set(input_forms(stage)):
+            raise ValueError(f'recorded error for {stage} named in a form this module '
+                             'does not measure')
+        if geometry != 'absolute' and set(error) - {PROBED_FORM}:
+            raise ValueError('a sampled-form recorded error is measured in the absolute '
+                             'metric only and cannot be compared against a '
+                             f'{geometry}-geometry requirement')
     if recorded and recorded_error_metric != geometry:
         raise ValueError(f'recorded errors measured in the {recorded_error_metric} metric '
                          f'cannot be compared against a {geometry}-geometry requirement')
@@ -744,33 +872,44 @@ def precision_budget(chain, *, property_tolerances, stages=STAGES, epsilon=1.e-6
             if full.status != 'measured' or half.status != 'measured':
                 continue
             for name in baseline:
-                a = full.property_defects[name] / full.input_defect
-                b = half.property_defects[name] / half.input_defect
-                scale = max(a, b)
-                linearity = 0. if scale == 0. else abs(a - b) / scale
-                amplifications.append(StageAmplification(stage, name, epsilon, a, b, linearity,
-                                                         linearity <= linearity_tolerance,
-                                                         direction, full.restriction, geometry))
+                for form in input_forms(stage):
+                    if form == PROBED_FORM:
+                        big, small = full.input_defect, half.input_defect
+                    else:
+                        big = full.sampled_defects.get(form)
+                        small = half.sampled_defects.get(form)
+                    if big is None or small is None or big <= 0. or small <= 0.:
+                        continue
+                    a = full.property_defects[name] / big
+                    b = half.property_defects[name] / small
+                    scale = max(a, b)
+                    linearity = 0. if scale == 0. else abs(a - b) / scale
+                    amplifications.append(StageAmplification(
+                        stage, name, epsilon, a, b, linearity,
+                        linearity <= linearity_tolerance, direction,
+                        full.restriction, geometry, form))
 
     requirements = []
     insensitive = ('no property change in any probed direction: this property is '
                    'structurally insensitive to this intermediate in this molecule')
     for stage in stages:
         for name in baseline:
-            candidates = [a for a in amplifications if a.stage == stage and a.property_name == name]
-            quotable = [a for a in candidates if a.quoted]
-            if not quotable:
-                continue
-            best = max(quotable, key=lambda a: a.amplification)
-            required = (float('inf') if best.amplification == 0.
-                        else tolerances[name] / best.amplification)
-            error = recorded.get(stage)
-            requirements.append(PrecisionRequirement(
-                stage, name, tolerances[name], best.amplification, required, True,
-                None if error is None else float(error),
-                None if error is None else bool(float(error) <= required),
-                insensitive if best.amplification == 0. else PrecisionRequirement.note,
-                best.restriction, geometry))
+            for form in input_forms(stage):
+                quotable = [a for a in amplifications if a.stage == stage
+                            and a.property_name == name and a.input_form == form and a.quoted]
+                if not quotable:
+                    continue
+                best = max(quotable, key=lambda a: a.amplification)
+                required = (float('inf') if best.amplification == 0.
+                            else tolerances[name] / best.amplification)
+                error = _recorded_for(recorded, stage, form)
+                note = (insensitive if best.amplification == 0. else
+                        PrecisionRequirement.note if form == PROBED_FORM else SAMPLED_NOTE)
+                requirements.append(PrecisionRequirement(
+                    stage, name, tolerances[name], best.amplification, required, True,
+                    None if error is None else float(error),
+                    None if error is None else bool(float(error) <= required),
+                    note, best.restriction, geometry, form))
     scale = {name: float(np.max(np.abs(v))) for name, v in baseline.items()}
     return PrecisionBudget(METRIC if geometry == 'absolute' else RELATIVE_METRIC,
                            float(epsilon), int(directions), float(linearity_tolerance),
