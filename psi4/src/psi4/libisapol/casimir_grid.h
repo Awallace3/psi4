@@ -43,7 +43,11 @@
 namespace psi {
 namespace isapol {
 
-/// Most imaginary frequencies CamCASP will accept (`MAXF`, casimir.f90:40).
+/// Highest Gauss-Legendre *order* CamCASP will accept (`MAXF`, casimir.f90:40).
+/// This bounds `n_freq`, i.e. the number of **dynamic** nodes; a grid built at
+/// this order carries `kMaxCasimirFrequencies + 1` = 11 frequencies, because the
+/// static point is index 0.  CamCASP's own `Quad 10` case names its output `f11`
+/// for exactly that reason.  The name is kept for traceability to `MAXF`.
 constexpr int kMaxCasimirFrequencies = 10;
 
 /// Default quadrature scale, CamCASP's `omega0` (casimir.f90:82).  This is the same
@@ -78,7 +82,10 @@ constexpr double kIsaPolOmega0 = 0.5;
 /// we reject it instead.
 class CasimirGrid {
    public:
-    /// @param n_freq number of imaginary frequencies; even, in [2, kMaxCasimirFrequencies]
+    /// @param n_freq Gauss-Legendre order, i.e. the number of **dynamic**
+    ///   frequencies; even, in [2, kMaxCasimirFrequencies].  The grid then holds
+    ///   `n_freq + 1` frequencies, index 0 being the static point, so a caller
+    ///   iterating the nodes wants `k = 0 ... n_freq()` inclusive.
     /// @param omega0 quadrature scale in hartree
     explicit CasimirGrid(int n_freq, double omega0 = kCasimirOmega0);
 

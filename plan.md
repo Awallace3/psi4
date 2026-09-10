@@ -658,11 +658,69 @@ remains between it and the `777f904` target, in dependency order:
    tolerance is asserted against the reference anywhere in that test: what is
    asserted is where our totals sit relative to the family's own internal spread,
    which the model mismatch cannot explain away.
-   Newly available and directly comparable at the *polarizability* level rather
-   than the dispersion level:
-   `.pi/camcasp-build/examples/properties/H2O/output_2/H2O_aTZ_ref_wt4_L2_casimir.{data,out}`
-   carries localized recoupled per-site components at 10 frequencies against the
-   `H2O_aTZ.pdef` model (O: 13 declared variables, H1: 4, `H2 H2 COPY H1 H1`).
+   *The polarizability-level follow-on is now done as well*, on a **second**
+   reference case that must never be conflated with the L2H1 one above:
+   `.pi/camcasp-build/examples/properties/H2O` (weight type 4, prefix `H2O_aTZ`,
+   `Scf-code DALTON`, PBE0/aug-cc-pVTZ, CKS with `Hessians Internal`,
+   `DF-TYPE-MONOMER NN`, and **bond** axes `H1  z from O to H1   x from H2 to H1`
+   against the other case's `z global Z`). Decoded by
+   `tests/pytests/data_isapol/oracle/read_local_pol.py` into
+   `camcasp_local_pol_h2o_atz_wt4.json` and measured by
+   `tests/pytests/test_isapol_camcasp_local_pol_oracle.py` (9 tests, no SCF,
+   1.3 s). Full write-up in SPEC §7 "Closed Casimir-Polder oracle on a second
+   reference case"; the load-bearing results:
+   - **The Casimir-Polder step is closed against the reference.** Its printed
+     refined local tensors in, reduced to per-rank isotropic scalars, and our own
+     `isa_isotropic_dispersion` reproduces every `C_n` it prints — worst relative
+     **2.03e-7**, at printed precision. Both inputs are the reference's, so what
+     is under test is ours alone. The `(-1)^l sqrt(2l+1)` recoupling convention
+     that reduction rests on is separately measured against the same file's own
+     `00(l l)` rows, 40 entries, worst **3.14e-6**, sign included.
+   - **Retract any note claiming a Casimir grid coverage gap.** `Quad 10` /
+     `Beta 0.5` is 11 frequencies (the reference names its own file `f11`), and
+     `core.CasimirGrid(10, .5)` *is* that grid: `n_freq()` is the Gauss-Legendre
+     order and the object holds `n_freq + 1` nodes, index 0 static
+     (`casimir_grid.h:120` and the `n_freq` parameter doc above it, whose wording
+     is tightened in this commit for exactly this reason). An earlier
+     "static + 9 dynamic" reading was an off-by-one in a probe loop, not a cap.
+   - **The reference is internally inconsistent by 0.26% on a
+     partition-invariant number**: molecular isotropic alpha is 9.247357 from its
+     rank-4 distributed tensor translated to the origin, 9.271584 from its
+     refined local tensors rotated by the declared axes and summed. That is its
+     own refinement's distortion — same order as the 0.024 anchor movement our
+     constrained-NN refinement makes — and it is compounded by the refinement
+     lattice being 500 `Random`/`Seed 1` points in `LoLim 2.0`..`HiLim 4.0`,
+     which is not reproducible without CamCASP's RNG. Its refined tensors
+     therefore cannot be matched exactly by construction, and this must be stated
+     wherever the comparison appears.
+   - **Our rank-4 chain's residual excess is in the response step**, not the
+     partition and not the refinement, because the translated molecular alpha is
+     partition-invariant: 9.870961 (`direct_ov`, +6.75%) and 9.839675 (traced
+     lambda=1000 NN, +6.41%) against its 9.247357, at the matched protocol
+     (E = -76.37966827740804, HOMO = -0.3989569916800326 reproducing its declared
+     `HOMO -0.3989` to every printed digit, nbf 92). Candidates to be labelled
+     and not absorbed: our `alda_slater_pw92` with `exact_exchange=.25,
+     local_scale=.75` against CKS/`Hessians Internal`; GRAC form; 99/590 against
+     `Angular 100 / Radial 60`; and their `Eta = 0.0005`, which we do not apply.
+   - The rank-4 reference quantity `H2O_aTZ_NL4_static.pol` (75 = 3x25, full
+     double precision) is symmetric to 5.81e-11 with
+     `sum_ab alpha^ab_{00,00} = -3.11e-12`, but its charge-flow sum rules close
+     only to **7.68e-7** — the level any comparison against it is limited to. The
+     translation sign is measured, not assumed (`+` leaves the C2v-forbidden xz
+     element at 7.03e-8, `-` at 2.07e-6).
+   - The 17 `.pdef` variables reproduce all 33 printed 9x9 blocks **exactly**
+     (`reconstruction_error == 0`), so the declared model is provably the fitted
+     model and 187 numbers replace 2673 losslessly. `H2 H2 COPY H1 H1` holds
+     bit-identically in local axes while the globalized dipole blocks differ by
+     `2|alpha_xz| = 0.46794962` — the reference's own confirmation of the
+     frame/COPY finding that `copy_anchor_discrepancy` measures.
+   - Only `n = 6` is a **complete** molecular isotropic total under `L2`/rank-1 H;
+     C8/C10 pair sums are structurally partial and labelled so. That total is
+     43.890270 here against 46.617408 for the other case's psi4 row — the same
+     property from the same code, **2.727138 apart** across declaration choices
+     (6.21% of this case's total, 5.85% of the other's), so the reference
+     family's own spread bounds what agreement with "the" reference number can
+     mean.
 
 Each step needs its own independent oracle before it is wired to the next, and
 each must stay separately labelled in provenance; see the SPEC §8 note that the
@@ -717,6 +775,27 @@ trace, hashes and separate ISA candidates). Its portable conclusions are in
   differently declared model and must never be compared against a recorded
   lambda1 number.
 - Full native SCF/PFIT/GRAC matched protocol and modern ISA preset are not closed.
+- The reference's refined local tensors cannot be matched exactly **by
+  construction**: `examples/properties/H2O` refines on 500 `Random` points with
+  `Seed 1` between `LoLim 2.0` and `HiLim 4.0`, and that lattice is not
+  reproducible without CamCASP's RNG. State this wherever a refined-tensor
+  comparison appears. What *is* closed against that case is the Casimir-Polder
+  step (worst 2.03e-7) and the recoupling convention (worst 3.14e-6); what is
+  bounded rather than closed is the polarizability, by the reference's own 0.26%
+  internal inconsistency and the family's 2.727138 (6.21%/5.85%) cross-protocol
+  C6 spread (section 5 item 6, SPEC §7).
+- The residual molecular-alpha excess of our rank-4 chain against that case,
+  +6.75% (`direct_ov`) / +6.41% (traced NN), is localized to the **response
+  step** and remains open. Kernel (`alda_slater_pw92` + `exact_exchange=.25`
+  against CKS/`Hessians Internal`), GRAC form, response grid (99/590 against
+  `Angular 100 / Radial 60`) and their unapplied `Eta = 0.0005` are the
+  candidates; none is eliminated yet, and none may be absorbed into a tolerance.
+- Per-site rank limits are still not declarable in the LW pipeline
+  (`isapol_native.py:217` requires uniform explicit rank 3 or rank 4), so the
+  reference's `L2`/rank-1-H model cannot be *fitted* natively. Closing that needs
+  either a rank-limited LW path with its own gate or an explicitly labelled
+  post-hoc truncation of reported components — a different model from fitting
+  under the restriction, and never quotable as agreement.
 - Point-response coverage: no shell above p is exercised by the analytic ESP
   oracle (the fixture basis has none), and neither the factor-4 nor the `a`/`b`
   gate touches that. The right-hand-side factor 4 and the `a`/`b` kernel

@@ -1,0 +1,1271 @@
+{
+ "case": "properties/H2O",
+ "dispersion": {
+  "admissible_orders": {
+   "H H": [
+    6
+   ],
+   "H O": [
+    6,
+    8
+   ],
+   "O O": [
+    6,
+    8,
+    10
+   ]
+  },
+  "census": {
+   "H H": {
+    "indices": [
+     "00",
+     "20",
+     "21c",
+     "22c"
+    ],
+    "isotropic_orders_printed_zero": [],
+    "j_values": [
+     0,
+     2,
+     4
+    ],
+    "nonzero_rows_per_order": {
+     "6": 33
+    },
+    "orders": [
+     6,
+     7,
+     8,
+     9,
+     10
+    ],
+    "printed_entries": 33,
+    "printed_zero": 0,
+    "recoupled_rows": 33,
+    "recoupled_rows_nonzero": 33
+   },
+   "H O": {
+    "indices": [
+     "00",
+     "10",
+     "20",
+     "21c",
+     "22c",
+     "22s",
+     "30",
+     "32c",
+     "40",
+     "42c",
+     "44c"
+    ],
+    "isotropic_orders_printed_zero": [
+     7
+    ],
+    "j_values": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "nonzero_rows_per_order": {
+     "6": 23,
+     "7": 33,
+     "8": 53
+    },
+    "orders": [
+     6,
+     7,
+     8,
+     9,
+     10
+    ],
+    "printed_entries": 225,
+    "printed_zero": 116,
+    "recoupled_rows": 86,
+    "recoupled_rows_nonzero": 86
+   },
+   "O O": {
+    "indices": [
+     "00",
+     "10",
+     "20",
+     "22c",
+     "22s",
+     "30",
+     "32c",
+     "40",
+     "42c",
+     "44c"
+    ],
+    "isotropic_orders_printed_zero": [
+     7,
+     9
+    ],
+    "j_values": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8
+    ],
+    "nonzero_rows_per_order": {
+     "10": 103,
+     "6": 16,
+     "7": 46,
+     "8": 95,
+     "9": 118
+    },
+    "orders": [
+     6,
+     7,
+     8,
+     9,
+     10
+    ],
+    "printed_entries": 1098,
+    "printed_zero": 720,
+    "recoupled_rows": 258,
+    "recoupled_rows_nonzero": 258
+   }
+  },
+  "isotropic": {
+   "H H": {
+    "6": 0.9829859
+   },
+   "H O": {
+    "6": 4.590924,
+    "7": 0.0,
+    "8": 44.65951
+   },
+   "O O": {
+    "10": 3894.995,
+    "6": 21.59463,
+    "7": 0.0,
+    "8": 422.2789,
+    "9": 0.0
+   }
+  },
+  "molecular_isotropic": {
+   "10": 3894.995,
+   "6": 43.890269599999996,
+   "8": 600.9169400000001
+  },
+  "molecular_isotropic_complete_orders": [
+   6
+  ],
+  "sha256": "9aaefa7238be44d69cf6b37ece901b8eb7e4bb869ff14917418d3b0923de723b",
+  "site_rank_limits": {
+   "H1": 1,
+   "H2": 1,
+   "O": 2
+  },
+  "source": "H2O_aTZ_ref_wt4_L2_casimir.out",
+  "type_multiplicity": {
+   "H H": 4,
+   "H O": 4,
+   "O O": 1
+  }
+ },
+ "distributed_static": {
+  "components_per_site": 25,
+  "dimension": 75,
+  "forbidden_xz_by_convention": {
+   "minus": 2.0687942772212864e-06,
+   "plus": 7.03403762042365e-08
+  },
+  "molecular_alpha": [
+   [
+    9.848795740093003,
+    -1.5722177570901822e-14,
+    -7.03403762042365e-08
+   ],
+   [
+    -1.5722177570905514e-14,
+    8.633545523547376,
+    -7.161823388549862e-15
+   ],
+   [
+    -7.034039446740525e-08,
+    -7.161823388531407e-15,
+    9.25973053868697
+   ]
+  ],
+  "molecular_alpha_isotropic": 9.24735726744245,
+  "printed_index": "001",
+  "rank": 4,
+  "residuals": {
+   "asymmetry_maxabs": 5.807088143683359e-11,
+   "charge_charge_total": -3.11178860457062e-12,
+   "sum_over_a_maxabs": 7.675323379086052e-07,
+   "sum_over_b_maxabs": 7.675286010089266e-07
+  },
+  "sha256": "4c72264110a0cbdcd93b2adefe9f39cbf46899fc0795f04d36126d0b3da885f6",
+  "site_count": 3,
+  "source": "H2O_aTZ_NL4_static.pol",
+  "translation_convention": "plus"
+ },
+ "grid": {
+  "beta": 0.5,
+  "dynamic_nodes": 10,
+  "frequency_count": 11,
+  "indices": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10
+  ],
+  "static_index": 0
+ },
+ "input": {
+  "axes": "Axes\n  H1  z from O to H1   x from H2 to H1\n  H2  z from O to H2   x from H1 to H2\nEnd\n",
+  "axes_sha256": "5c982dd169dfac011a1b3e6fcea943ce7efe348ecfe305c43d426277c3cb188e",
+  "axes_specs": {
+   "H1": [
+    "from O to H1",
+    "from H2 to H1"
+   ],
+   "H2": [
+    "from O to H2",
+    "from H1 to H2"
+   ]
+  },
+  "clt": {
+   "basis": "aVTZ",
+   "ip_ev": 12.62063,
+   "sites": [
+    {
+     "charge": 8.0,
+     "label": "O",
+     "type": "O",
+     "xyz": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    {
+     "charge": 1.0,
+     "label": "H1",
+     "type": "H",
+     "xyz": [
+      -1.45365196,
+      0.0,
+      -1.12168732
+     ]
+    },
+    {
+     "charge": 1.0,
+     "label": "H2",
+     "type": "H",
+     "xyz": [
+      1.45365196,
+      0.0,
+      -1.12168732
+     ]
+    }
+   ]
+  },
+  "clt_sha256": "1691eef5096cd40e68221273a5ff933ac9ffb9bc458ff0ce39d9cb2e7ebd342d",
+  "frames": [
+   [
+    [
+     1.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   [
+    [
+     -0.610905425288665,
+     0.0,
+     -0.7917035817481662
+    ],
+    [
+     0.0,
+     0.9999999999999999,
+     0.0
+    ],
+    [
+     0.7917035817481661,
+     0.0,
+     -0.610905425288665
+    ]
+   ],
+   [
+    [
+     0.610905425288665,
+     0.0,
+     0.7917035817481662
+    ],
+    [
+     0.0,
+     -0.9999999999999999,
+     0.0
+    ],
+    [
+     0.7917035817481661,
+     0.0,
+     -0.610905425288665
+    ]
+   ]
+  ]
+ },
+ "internal_inconsistency": {
+  "absolute": 0.02422716589088303,
+  "distributed": 9.24735726744245,
+  "refined": 9.271584433333333,
+  "relative": 0.002619901577305833
+ },
+ "model": {
+  "components": [
+   "00",
+   "10",
+   "11c",
+   "11s",
+   "20",
+   "21c",
+   "21s",
+   "22c",
+   "22s"
+  ],
+  "copies": [
+   [
+    [
+     "H2",
+     "H2"
+    ],
+    [
+     "H1",
+     "H1"
+    ]
+   ]
+  ],
+  "parameter_count": 17,
+  "pdef_sha256": "de8aa857e35c6e52fed5945ddb366779a91ce7748c58c747d9c8ec32dbdc1285",
+  "variables": [
+   [
+    "O",
+    "10",
+    "10",
+    "O_10_10_A"
+   ],
+   [
+    "O",
+    "10",
+    "20",
+    "O_10_20_A"
+   ],
+   [
+    "O",
+    "10",
+    "22c",
+    "O_10_22c_A"
+   ],
+   [
+    "O",
+    "11c",
+    "11c",
+    "O_11c_11c_A"
+   ],
+   [
+    "O",
+    "11c",
+    "21c",
+    "O_11c_21c_A"
+   ],
+   [
+    "O",
+    "11s",
+    "11s",
+    "O_11s_11s_A"
+   ],
+   [
+    "O",
+    "11s",
+    "21s",
+    "O_11s_21s_A"
+   ],
+   [
+    "O",
+    "20",
+    "20",
+    "O_20_20_A"
+   ],
+   [
+    "O",
+    "20",
+    "22c",
+    "O_20_22c_A"
+   ],
+   [
+    "O",
+    "21c",
+    "21c",
+    "O_21c_21c_A"
+   ],
+   [
+    "O",
+    "21s",
+    "21s",
+    "O_21s_21s_A"
+   ],
+   [
+    "O",
+    "22c",
+    "22c",
+    "O_22c_22c_A"
+   ],
+   [
+    "O",
+    "22s",
+    "22s",
+    "O_22s_22s_A"
+   ],
+   [
+    "H1",
+    "10",
+    "10",
+    "H1_10_10_A"
+   ],
+   [
+    "H1",
+    "10",
+    "11c",
+    "H1_10_11c_A"
+   ],
+   [
+    "H1",
+    "11c",
+    "11c",
+    "H1_11c_11c_A"
+   ],
+   [
+    "H1",
+    "11s",
+    "11s",
+    "H1_11s_11s_A"
+   ]
+  ]
+ },
+ "notice": "Decoded from printed CamCASP output data and input declarations of the shipped examples/properties/H2O case. CamCASP: Anthony Stone and Alston Misquitta, MIT License, Copyright (c) 2019 Anthony Stone; see h2o_props_psi4_basis/NOTICE for the retained notice in full. Only the .pdef model variables, the isotropic dispersion rows, the isotropic 00(ll) recoupled rows, a census of the remaining recoupled rows, the declared inputs and derived invariants of the rank-4 distributed tensor are extracted; no CamCASP source is read, run or transcribed, and no claim is made about ORIENT, RRF or bundled third-party basis databases.",
+ "prefix": "H2O_aTZ",
+ "protocol": {
+  "cks": [
+   {
+    "block": "",
+    "declarations": [
+     "TITLE H2O"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "TITLE Basis: aug-cc-pVTZ"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "TITLE CalculationType: PROPERTIES"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "MEMORY 2048 MB"
+    ]
+   },
+   {
+    "block": "SET Global_data",
+    "declarations": [
+     "Units Bohr cm-1",
+     "Scf-code DALTON",
+     "XC-func PBE0",
+     "Overwrite yes"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "MOLECULE H2O at 0.0 0.0 0.0"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "Charge 0"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "Echo No"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "Hessian format SAPT2006"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "MO-file H2O_aTZ-A-asc.movecs format ASCII-2"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "IP 0.463800 a.u."
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "Basis Main"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "Spherical"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "Units Bohr"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "Format GAMESS"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "O 8.0 0.00000000 0.00000000 0.00000000 TYPE O"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "#include-camcasp basis/gamess_us/aug-cc-pVTZ/O"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "---"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "H1 1.0 -1.45365196 0.00000000 -1.12168732 TYPE H"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "#include-camcasp basis/gamess_us/aug-cc-pVTZ/H"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "---"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "H2 1.0 1.45365196 0.00000000 -1.12168732 TYPE H"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "#include-camcasp basis/gamess_us/aug-cc-pVTZ/H"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "---"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "Basis Aux"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "Cartesian"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "Units Bohr"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "Format TURBOMOLE"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "O 8.0 0.00000000 0.00000000 0.00000000 TYPE O"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "Limit G"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "#include-camcasp basis/auxiliary/aug-cc-pVTZ/O"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "---"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "H1 1.0 -1.45365196 0.00000000 -1.12168732 TYPE H"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "Limit G"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "#include-camcasp basis/auxiliary/aug-cc-pVTZ/H"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "---"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "H2 1.0 1.45365196 0.00000000 -1.12168732 TYPE H"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "Limit G"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "#include-camcasp basis/auxiliary/aug-cc-pVTZ/H"
+    ]
+   },
+   {
+    "block": "",
+    "declarations": [
+     "---"
+    ]
+   },
+   {
+    "block": "SET QUAD",
+    "declarations": [
+     "Type Gauss-Legendre",
+     "Beta 0.5"
+    ]
+   },
+   {
+    "block": "BEGIN GRID",
+    "declarations": [
+     "Molecule H2O",
+     "Angular 100",
+     "Radial 60"
+    ]
+   },
+   {
+    "block": "SET Lattice",
+    "declarations": [
+     "Charge 1.0",
+     "LoLim 2.0",
+     "HiLim 4.0",
+     "Random 500",
+     "Seed 1"
+    ]
+   },
+   {
+    "block": "SET PROPAGATOR",
+    "declarations": [
+     "Type CKS",
+     "Hessians Internal",
+     "DF with constraints",
+     "DF-integrals"
+    ]
+   },
+   {
+    "block": "SET DF-INTEGRALS",
+    "declarations": [
+     "DF-TYPE-MONOMER NN"
+    ]
+   },
+   {
+    "block": "SET DF",
+    "declarations": [
+     "Solver LU (Options are LU and GELSS )"
+    ]
+   },
+   {
+    "block": "BEGIN DF",
+    "declarations": [
+     "Molecule H2O",
+     "Type NN",
+     "Eta = 0.0",
+     "Lambda = 1000.0",
+     "Print only normalization constraints"
+    ]
+   },
+   {
+    "block": "BEGIN Polarizability",
+    "declarations": [
+     "Molecule H2O",
+     "Invert No",
+     "Quad 10",
+     "Spherical",
+     "Rank 2",
+     "Calculate only total polarizabilities and perturbations",
+     "Print only static total pols upto rank 2",
+     "Pert-file H2O_aTZ_lim2.0_4.0_p2000_f11"
+    ]
+   },
+   {
+    "block": "BEGIN DF",
+    "declarations": [
+     "Molecule H2O",
+     "Type NN",
+     "Eta = 0.0005",
+     "Lambda = 1000.0",
+     "Print only normalization constraints"
+    ]
+   },
+   {
+    "block": "SET PROPAGATOR",
+    "declarations": [
+     "Type CKS",
+     "Hessians Internal",
+     "DF with constraints",
+     "DF-integrals"
+    ]
+   },
+   {
+    "block": "BEGIN Polarizability",
+    "declarations": [
+     "Molecule H2O",
+     "Invert No",
+     "Quad 10",
+     "Spherical",
+     "Rank 4",
+     "Calculate only distributed polarizabilities",
+     "Print only static distributed pols upto rank 1",
+     "Print pols for Orient",
+     "Pol-file H2O_aTZ_0.0005_1000_f11_NL4"
+    ]
+   },
+   {
+    "block": "BEGIN GRID",
+    "declarations": [
+     "Molecule H2O"
+    ]
+   },
+   {
+    "block": "BEGIN GDMA",
+    "declarations": [
+     "Molecule H2O",
+     "Bohr",
+     "Multipoles",
+     "Switch 4",
+     "Limit 4",
+     "Limit 1 H1",
+     "Radius H1 0.614",
+     "Limit 1 H2",
+     "Radius H2 0.614",
+     "Punch H2O_aTZ_DMA2_L4.mom",
+     "Start"
+    ]
+   }
+  ],
+  "cks_sha256": "6d0057dc9bc1018f64c5221bc81b021521354f4012f038d06410ce279211d406"
+ },
+ "recoupled_isotropic": {
+  "dynamic_indices": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10
+  ],
+  "rows": {
+   "H1": {
+    "00(11)": [
+     -2.39177,
+     -2.38209,
+     -2.32611,
+     -2.15349,
+     -1.79905,
+     -1.24332,
+     -0.601205,
+     -0.162819,
+     -0.0203502,
+     -0.000637856
+    ]
+   },
+   "H2": {
+    "00(11)": [
+     -2.39177,
+     -2.38209,
+     -2.32611,
+     -2.15349,
+     -1.79905,
+     -1.24332,
+     -0.601205,
+     -0.162819,
+     -0.0203502,
+     -0.000637856
+    ]
+   },
+   "O": {
+    "00(11)": [
+     -11.273,
+     -11.2263,
+     -10.9517,
+     -10.0677,
+     -8.18726,
+     -5.50871,
+     -2.92179,
+     -1.11927,
+     -0.227624,
+     -0.00931913
+    ],
+    "00(22)": [
+     52.0764,
+     51.9081,
+     50.8998,
+     47.4809,
+     39.864,
+     29.0222,
+     17.5542,
+     7.3049,
+     1.45201,
+     0.0529732
+    ]
+   }
+  },
+  "sha256": "9aaefa7238be44d69cf6b37ece901b8eb7e4bb869ff14917418d3b0923de723b",
+  "source": "H2O_aTZ_ref_wt4_L2_casimir.out"
+ },
+ "refined_local": {
+  "copy_local_discrepancy": 0.0,
+  "isotropic_by_rank": {
+   "H1": {
+    "1": [
+     1.3810829333333334,
+     1.3808881,
+     1.3753015333333334,
+     1.3429815999999999,
+     1.2433183666666665,
+     1.03868023,
+     0.71782938,
+     0.34710575666666665,
+     0.09400381066666667,
+     0.011749210666666668,
+     0.0003682661633333333
+    ],
+    "2": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "H2": {
+    "1": [
+     1.3810829333333334,
+     1.3808881,
+     1.3753015333333334,
+     1.3429815999999999,
+     1.2433183666666665,
+     1.03868023,
+     0.71782938,
+     0.34710575666666665,
+     0.09400381066666667,
+     0.011749210666666668,
+     0.0003682661633333333
+    ],
+    "2": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "O": {
+    "1": [
+     6.509418566666667,
+     6.508479433333334,
+     6.481486966666666,
+     6.3229547,
+     5.812577133333334,
+     4.7269188,
+     3.1804547,
+     1.6868987666666666,
+     0.6462111066666667,
+     0.13141871666666669,
+     0.005380400066666667
+    ],
+    "2": [
+     23.2918814,
+     23.289271799999998,
+     23.2140196,
+     22.763072799999996,
+     21.2340924,
+     17.827700800000002,
+     12.979121999999998,
+     7.8504881,
+     3.2668528,
+     0.649356594,
+     0.0236903486
+    ]
+   }
+  },
+  "molecular_alpha_isotropic": [
+   9.271584433333333,
+   9.270255633333333,
+   9.232090033333334,
+   9.008917899999998,
+   8.299213866666667,
+   6.804279259999999,
+   4.61611346,
+   2.38111028,
+   0.8342187280000001,
+   0.15491713799999998,
+   0.006116932393333334
+  ],
+  "molecular_alpha_static": [
+   [
+    9.916906409344877,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    8.632314899999999,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    9.265531990655122
+   ]
+  ],
+  "reconstruction_error": 0.0,
+  "sha256": "883c190680d4d70505fef7fa167a31b095a39b9c4d39c79d3e8f43fcc23160d2",
+  "site_labels": [
+   "O",
+   "H1",
+   "H2"
+  ],
+  "source": "H2O_aTZ_ref_wt4_L2_0f10.pol",
+  "values": {
+   "H1_10_10_A": [
+    1.6399147,
+    1.6396884,
+    1.6331782,
+    1.5947117,
+    1.468728,
+    1.1920495,
+    0.77172729,
+    0.34491219,
+    0.089935555,
+    0.011330077,
+    0.00034545535
+   ],
+   "H1_10_11c_A": [
+    -0.26821221,
+    -0.26813324,
+    -0.26587064,
+    -0.25286313,
+    -0.21446839,
+    -0.15023732,
+    -0.089338222,
+    -0.045759226,
+    -0.013263023,
+    -0.0011361401,
+    -2.3388093e-05
+   ],
+   "H1_11c_11c_A": [
+    1.2967801,
+    1.2966569,
+    1.293111,
+    1.2721011,
+    1.2022369,
+    1.0384962,
+    0.74546294,
+    0.37409297,
+    0.10309831,
+    0.012563842,
+    0.00039396223
+   ],
+   "H1_11s_11s_A": [
+    1.206554,
+    1.206319,
+    1.1996154,
+    1.162132,
+    1.0589902,
+    0.88549499,
+    0.63629791,
+    0.32231211,
+    0.088977567,
+    0.011353713,
+    0.00036538091
+   ],
+   "O_10_10_A": [
+    5.8969626,
+    5.8961411,
+    5.8725132,
+    5.733142,
+    5.2801797,
+    4.3126795,
+    2.9326016,
+    1.5745658,
+    0.61493938,
+    0.12863778,
+    0.0053282403
+   ],
+   "O_10_20_A": [
+    1.9242795,
+    1.9242888,
+    1.9245353,
+    1.9251757,
+    1.9165286,
+    1.8271103,
+    1.4587563,
+    0.74345843,
+    0.14434655,
+    -0.0012720694,
+    -0.0002965278
+   ],
+   "O_10_22c_A": [
+    -2.2614325,
+    -2.2609317,
+    -2.2465623,
+    -2.1632606,
+    -1.9088008,
+    -1.434908,
+    -0.86522914,
+    -0.36848958,
+    -0.076647471,
+    -0.0047870146,
+    -0.00012517399
+   ],
+   "O_11c_11c_A": [
+    7.4120862,
+    7.411196,
+    7.3855373,
+    7.2321201,
+    6.7106692,
+    5.5045401,
+    3.681168,
+    1.9036991,
+    0.69306851,
+    0.13410026,
+    0.005454996
+   ],
+   "O_11c_21c_A": [
+    -4.3213852,
+    -4.3204913,
+    -4.2947454,
+    -4.1415144,
+    -3.6315605,
+    -2.540503,
+    -1.2256315,
+    -0.43151226,
+    -0.11663145,
+    -0.017043231,
+    -0.00059742158
+   ],
+   "O_11s_11s_A": [
+    6.2192069,
+    6.2181012,
+    6.1864104,
+    6.003602,
+    5.4468825,
+    4.3635368,
+    2.9275945,
+    1.5824314,
+    0.63062543,
+    0.13151811,
+    0.0053579639
+   ],
+   "O_11s_21s_A": [
+    0.12570508,
+    0.12610314,
+    0.13746355,
+    0.20118043,
+    0.37581351,
+    0.62404165,
+    0.69579281,
+    0.37818185,
+    0.044686612,
+    -0.0076624919,
+    -0.00034753949
+   ],
+   "O_20_20_A": [
+    19.69102,
+    19.688681,
+    19.621325,
+    19.220823,
+    17.89001,
+    15.000028,
+    11.003074,
+    6.859318,
+    3.0280843,
+    0.63642036,
+    0.023492561
+   ],
+   "O_20_22c_A": [
+    6.9041448,
+    6.9026706,
+    6.8603343,
+    6.6134248,
+    5.8459193,
+    4.3908312,
+    2.6677132,
+    1.1758364,
+    0.27330077,
+    0.024302793,
+    0.00067446248
+   ],
+   "O_21c_21c_A": [
+    18.717318,
+    18.716123,
+    18.681468,
+    18.465598,
+    17.6408,
+    15.410172,
+    11.658076,
+    7.2738897,
+    3.0780743,
+    0.62061944,
+    0.022874349
+   ],
+   "O_21s_21s_A": [
+    30.665138,
+    30.660979,
+    30.54129,
+    29.832998,
+    27.516823,
+    22.619872,
+    15.924733,
+    9.1488459,
+    3.6003792,
+    0.68973906,
+    0.024982537
+   ],
+   "O_22c_22c_A": [
+    23.72607,
+    23.722709,
+    23.626086,
+    23.059045,
+    21.256112,
+    17.654013,
+    12.995833,
+    8.0446552,
+    3.3367514,
+    0.64744561,
+    0.023423876
+   ],
+   "O_22s_22s_A": [
+    23.659861,
+    23.657867,
+    23.599929,
+    23.2369,
+    21.866717,
+    18.454419,
+    13.313894,
+    7.9257317,
+    3.2909748,
+    0.6525585,
+    0.02367842
+   ]
+  }
+ },
+ "weight_label": "wt4_L2"
+}

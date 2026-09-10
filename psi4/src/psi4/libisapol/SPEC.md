@@ -836,6 +836,139 @@ row they do not vanish at odd orders (O-O 16/46/95/118/103 at n=6..10, H-O
 withholds their values by design. See
 `tests/pytests/test_isapol_reference_dispersion.py` (4 quick + 3 long).
 
+### Closed Casimir-Polder oracle on a second reference case
+
+`data_isapol/camcasp_local_pol_h2o_atz_wt4.json` decodes CamCASP's shipped
+`examples/properties/H2O` (`oracle/read_local_pol.py`; printed output text and the
+case's own input declarations only, nothing compiled, no source read, reference
+tree never written). It is **not** the `tests/H2O_props` case above and the two
+are never conflated: weight type **4**, prefix `H2O_aTZ`, `Scf-code DALTON`,
+`XC-func PBE0`/aug-cc-pVTZ, CKS propagator with `Hessians Internal` and `DF with
+constraints`, `DF-TYPE-MONOMER NN`, and -- decisively for any local tensor --
+bond axes, `H1  z from O to H1   x from H2 to H1`, against the other case's
+`z global Z`. The `.cks` declares **two** DF/Polarizability stages, `Eta = 0.0`/
+`Rank 2` for total polarizabilities and `Eta = 0.0005`, `Lambda = 1000`/`Rank 4`
+for the distributed stage, so the fixture keeps the protocol as an ordered list
+rather than a dict that would lose one of each.
+
+What the case adds is a **closed loop**: it prints refined local polarizabilities
+and, from those same numbers, dispersion coefficients. Reducing the printed local
+tensors to per-rank isotropic scalars `alpha_bar_l = tr(alpha_ll)/(2l+1)` and
+feeding them to our own `isa_isotropic_dispersion` on the declared grid
+reproduces every reference row it prints, worst **2.03e-7** relative:
+
+| pair | order | ours | reference | relative |
+| --- | --- | --- | --- | --- |
+| O-O | C6 / C8 / C10 | 21.594626 / 422.27894 / 3894.9955 | 21.59463 / 422.2789 / 3894.995 | 2.03e-7 / 1.03e-7 / 1.28e-7 |
+| H-O | C6 / C8 | 4.590924 / 44.659514 | 4.590924 / 44.65951 | 9.23e-9 / 9.52e-8 |
+| H-H | C6 | 0.98298589 | 0.9829859 | 9.90e-9 |
+
+Both sides of that comparison are the reference's, so what is under test is ours
+alone -- CP weights, the `(-1)^l sqrt(2l+1)` recoupling convention behind the
+isotropic reduction, the `n = 2(l_a+l_b+1)` bookkeeping and the pair assembly.
+It holds to the reference's printed precision and no SCF runs.
+
+That recoupling convention is itself measured rather than assumed, because the
+same `_casimir.out` prints its own `00(l l)` recoupled rows. Rebuilding them from
+the `.pdef` variables reproduces all 40 printed entries (O ranks 1 and 2, rank 1
+on each hydrogen, 10 dynamic nodes each) with worst relative **3.14e-6**, and the
+sign is part of the test: oxygen's `00(11)` is negative where `alpha_bar_1` is
+positive, which is the entire content of the `(-1)^l`. Those rows carry the
+dynamic nodes only -- `Quad 10` prints 10 columns, not 11 -- so the static point
+is not covered by that check; it is covered instead by the exact model
+reconstruction and the molecular-polarizability results below. Only the isotropic
+`00(l l)` diagonal is extracted; the anisotropic recoupled components stay the
+uncompared track they are for the other case.
+
+The declared quadrature is `Quad 10`, `Beta 0.5`, which the reference itself
+names `f11` in its pol-file: **11** nodes. `core.CasimirGrid(10, 0.5)` is exactly
+that grid -- `n_freq()` is the Gauss-Legendre *order* and the object carries
+`n_freq + 1` frequencies with index 0 the static point
+(`casimir_grid.h:120` and the `n_freq` parameter doc above it), the dynamic nodes
+coming in reciprocal pairs `omega(k)*omega(n_freq-k+1) = omega0^2`. There is no
+coverage gap against this reference grid; `kMaxCasimirFrequencies = 10` bounds the
+order, not the node count -- its name and the `n_freq` parameter comment both
+said "frequencies" and are corrected to say so, because that wording is what
+misread the grid as capped at static + 9 in the first place.
+
+Model, read from the input side. `H2O_aTZ.pdef` declares **17** free numbers per
+frequency: 13 on O (rank 2), 4 on H1 (rank 1), and `H2  H2  COPY  H1  H1`. The
+fixture carries those 17 variables per frequency rather than 2673 tensor
+elements, and the decoder asserts the rebuild reproduces the printed 9x9 blocks
+**exactly** (`reconstruction_error == 0`), which is simultaneously a lossless
+representation and a check that the declared model is the model the printed
+tensors were fitted under. The rank limits appear in the reference's own output as
+exact zeros -- the `00` row and column of every block, and everything above rank 1
+on hydrogen -- matching the `anchor[1:,1:]` construction of the refinement driver.
+
+The frame requirement of a `COPY` is independently confirmed by the reference's
+own output: the `H1 H1` and `H2 H2` printed blocks are **bit-identical** in local
+axes, while their globalized dipole blocks are related by the molecular plane's
+x mirror and differ by `2|alpha_xz| = 0.46794962`. A refinement pinning the two
+hydrogens on *global* anchors is left with exactly that as an irreducible
+residual, which is what `RefinementModel.copy_anchor_discrepancy` measures.
+
+Rank-4 reference quantity. `H2O_aTZ_NL4_static.pol` is a 75x75 = 3 sites x 25
+components static distributed polarizability at full double precision, the only
+rank-4 reference quantity available. Its symmetry defect is 5.81e-11 and
+`sum_ab alpha^ab_{00,00} = -3.11e-12`, but its charge-flow sum rules
+`sum_a alpha^ab_{00,u}` and `sum_b alpha^ab_{t,00}` close only to **7.68e-7** --
+a direct measurement of the reference's own `Eta = 0.0005, Lambda = 1000`
+constrained-NN fit quality, and the level any comparison against it is limited
+to. Translating it to the molecular polarizability,
+`alpha_ij = sum_ab [alpha^ab_{t_i t_j} + r_i(a) alpha^ab_{00,t_j} +
+r_j(b) alpha^ab_{t_i,00} + r_i(a) r_j(b) alpha^ab_{00,00}]`, the relative sign is
+**measured** rather than assumed: `+` leaves the C2v-forbidden xz element at
+7.03e-8 and `-` leaves 2.07e-6, so `+` is the convention. It gives
+diag(9.848796, 8.633546, 9.259731), isotropic **9.247357**.
+
+The reference pipeline is internally inconsistent at 0.26% and that bounds
+everything. The molecular polarizability is partition-invariant, so translating
+the distributed tensor and rotating-and-summing the refined local tensors by the
+declared axes must agree. They do not: the refined route gives
+diag(9.916906, 8.632315, 9.265532), isotropic **9.271584**, i.e. **0.024227
+(0.26%)** away from 9.247357. That is the reference refinement's own distortion,
+the same order as the 0.024 O-site anchor movement our constrained-NN refinement
+makes, and it is compounded by the refinement lattice being 500 `Random`/`Seed 1`
+points between `LoLim 2.0` and `HiLim 4.0` -- not reproducible without CamCASP's
+RNG, so its refined tensors cannot be matched exactly by construction. Reference
+`alpha_iso(i*omega)` from the refined local model, indices 0..10: 9.271584,
+9.270256, 9.232090, 9.008918, 8.299214, 6.804279, 4.616113, 2.381110, 0.834219,
+0.154917, 0.006117.
+
+Our own rank-4 chain at the matched protocol. `SiteRecipe.rank` is an `int` in
+`range(5)`, so rank 4 is reached by replacing every site's rank on the generated
+recipe; `o.generated_recipe` hardcodes 3. At PBE0/aug-cc-pVTZ, the reference GRAC
+shift 0.06490004527520865 Eh, IsaGrid(99,590), `aug-cc-pVTZ-JKFIT`,
+`shared_sweep`, static frequency, identity frames (E = -76.37966827740804,
+HOMO = -0.3989569916800326 -- matching the other case's declared `HOMO -0.3989`
+to every printed digit -- nbf 92), LW accepts rank 4 with no failures:
+
+| row | molecular alpha diag | isotropic | charge sum rule |
+| --- | --- | --- | --- |
+| `direct_ov` | 10.389483 / 9.414895 / 9.808506 | 9.870961 (+6.75%) | 1.05e-8 |
+| traced lambda1e3 NN | 10.395560 / 9.314226 / 9.809239 | 9.839675 (+6.41%) | 1.98e-6 |
+| reference (distributed) | 9.848796 / 8.633546 / 9.259731 | 9.247357 | 7.68e-7 |
+
+Because the translated molecular polarizability is partition-invariant, that
+6.4-6.8% excess is located in the **response step**, not in the partition and not
+in the refinement. Candidate causes, labelled and not absorbed: our
+`alda_slater_pw92` kernel with `exact_exchange=0.25, local_scale=0.75` against
+their CKS/`Hessians Internal`; our LB94-based GRAC form against theirs; the
+response/ISA grid (99/590 against their `Angular 100 / Radial 60`); and their
+`Eta = 0.0005` regularization, which we do not apply at all.
+
+Coverage and spread. Under `L2` with rank 1 on hydrogen the admissible orders are
+O-O {6,8,10}, H-O {6,8}, H-H {6}, so the only **complete** molecular isotropic
+total is `n = 6`; C8 and C10 summed over pairs are structurally partial and are
+labelled as such in the fixture (`molecular_isotropic_complete_orders == [6]`).
+That total is **43.890270** here against **46.617408** for the other case's psi4
+row -- the same property from the same code, 2.727138 apart across declaration
+choices, 6.21% of this case's total and 5.85% of the other's. The reference
+family's own spread, not ours, is therefore the honest bound on what agreement
+with "the" reference number can mean. See `tests/pytests/test_isapol_camcasp_local_pol_oracle.py`
+(9 tests, no SCF).
+
 Use explicit quadrature nodes/weights. Standalone/SAPT beta0.3, ISA reference beta0.5
 and actual root-generated response quadrature are not automatically interchangeable.
 
