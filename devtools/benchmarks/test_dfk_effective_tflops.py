@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from dfk_effective_tflops import case_rate, fill_aux, flops, scf_blocks
+from dfk_effective_tflops import case_rate, fill_aux, flops, markdown, scf_blocks, summarize
 
 RESTRICTED = """
   Nalpha       = 2
@@ -92,6 +92,41 @@ class FlopModelTests(unittest.TestCase):
             # 4 * naux * nbf^2 * nocc = 32000 flops over a 4 ms K kernel.
             self.assertAlmostEqual(record["k_kernel_tflops"], 32000 / 0.004 / 1e12)
             self.assertAlmostEqual(record["jk_timer_tflops"], 48000 / 0.5 / 1e12)
+
+
+class MarkdownTests(unittest.TestCase):
+    """The report splices this straight in, so it must be a table, not JSON."""
+
+    def payload(self, cases, failed=()):
+        return {"cases": list(cases) + list(failed), "summary": summarize(cases)}
+
+    def test_summary_becomes_a_table_row_per_case_family(self):
+        cases = [{"case": "water-cc-pvdz-gpu-1", "k_gflop": 3.0, "jk_timer_wall_s": 1.0,
+                  "jk_timer_tflops": 0.004, "k_kernel_tflops": 0.008},
+                 {"case": "water-cc-pvdz-gpu-2", "k_gflop": 3.0, "jk_timer_wall_s": 3.0,
+                  "jk_timer_tflops": 0.002, "k_kernel_tflops": 0.004}]
+        text = markdown(self.payload(cases))
+        self.assertTrue(text.startswith("| Case |"), text[:40])
+        row = next(line for line in text.splitlines() if line.startswith("| water"))
+        # Medians of the two repeats, not the first or the mean.
+        self.assertIn("| 2 |", row)
+        self.assertIn("| 2.00 |", row)
+        self.assertIn("| 0.00 | 0.01 |", row)
+
+    def test_cpu_arm_without_a_kernel_rate_gets_a_dash_not_a_zero(self):
+        cases = [{"case": "water-cc-pvdz-cpu-1", "k_gflop": 3.0, "jk_timer_wall_s": 1.0,
+                  "jk_timer_tflops": 0.004}]
+        row = next(line for line in markdown(self.payload(cases)).splitlines()
+                   if line.startswith("| water"))
+        self.assertTrue(row.rstrip().endswith("| — |"), row)
+
+    def test_a_case_that_failed_to_model_is_named_rather_than_dropped(self):
+        cases = [{"case": "water-cc-pvdz-cpu-1", "k_gflop": 3.0, "jk_timer_wall_s": 1.0,
+                  "jk_timer_tflops": 0.004}]
+        failed = [{"case": "nanotube-6-31+g**-cpu-2", "error": "ValueError: boom"}]
+        text = markdown(self.payload(cases, failed))
+        self.assertIn("nanotube-6-31+g**-cpu-2", text)
+        self.assertIn("ValueError: boom", text)
 
 
 if __name__ == "__main__":

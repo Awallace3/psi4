@@ -1,8 +1,8 @@
 # Provenance
 
-Everything in this directory derives from four Phoenix jobs run on 2026-09-10
-against one build. The raw per-case trees are not committed; `regenerate.sh`
-rebuilds every table here from them.
+Everything in this directory derives from the Phoenix jobs below, all run on
+2026-09-10 against one build. The raw per-case trees are not committed;
+`regenerate.sh` rebuilds every table here from them.
 
 ## Build
 
@@ -28,15 +28,40 @@ Every case asserts `grac_compute == "ITERATIVE"` in its own `result.json`.
 
 | Job | SLURM ID | Partition / QoS | Hardware | Purpose |
 |---|---|---|---|---|
-| A | 13060539 | gpu-h200 / embers | 1x NVIDIA H200 143771 MiB, driver 595.71.05; 8 cores of Intel Xeon Platinum 8562Y+ | Paired CPU/GPU, 6 cases x 3 repeats, alternating order |
+| A | 13060539 | gpu-h200 / embers | 1x NVIDIA H200 143771 MiB, driver 595.71.05; 8 cores of Intel Xeon Platinum 8562Y+ | Paired CPU/GPU, 6 cases x 3 repeats, alternating order. **PREEMPTED at 02:16:17** with three nanotube cases outstanding |
+| A2 | 13065746 | gpu-h200 / embers | same shape as A | The three nanotube cases job A did not reach: CPU repeats 2 and 3, GPU repeat 3 |
 | C | 13061073 | cpu-small / embers | 24 cores of Intel Xeon Gold 6226 | CPU-only 8 vs 24 thread scaling, same node |
-| D | 13063342 | cpu-small / embers | 24 cores of Intel Xeon Gold 6226 | protein157 CPU baseline |
 | B | 13060540 | gpu-h200 / embers | 1x NVIDIA H200 | protein157 GPU |
+| D2 | 13066284 | cpu-small / **inferno** | 24 cores of Intel Xeon Gold 6226 | protein157 CPU baseline |
 
 Jobs A and C ran the same six systems with the same driver, settings, and binary;
 they differ only in hardware and thread width. **They are different nodes with
 different CPUs**, which matters for how their numbers may be combined — see
 `CPU_BASELINE.md`.
+
+### Jobs A and A2 are one campaign
+
+Job A's preemption left `nanotube-6-31+g**-cpu-2` as a stub directory holding a
+`psi4.out` and no `result.json`, and `-cpu-3`/`-gpu-3` unstarted. Job A2 reran
+exactly those three with the same binary, settings, and node shape, writing its
+own run directory so job A's provenance metadata stays untouched. `regenerate.sh`
+presents the two trees as one through `merge_case_trees.py`, which symlinks
+rather than copies — so every case still points at the job that produced it — and
+which refuses if both trees claim a completed copy of the same case. The stub
+loses to A2's completed rerun; that is the only collision it resolves silently.
+
+Reading the nanotube row therefore means reading across two allocations. They are
+the same hardware shape but not the same physical node.
+
+### Why D2 is inferno and the rest is not
+
+The protein157 CPU baseline was attempted twice on embers and preempted both
+times: 13061074 at 01:06:40, and 13063342 at 01:15:19. The second had converged
+both GRAC shifts (monomer A 0.04531118, monomer B 0.05039562) in about 62 minutes
+and entered the 1786-function dimer SCF before it was killed. `psi4.energy()` has
+no interior checkpoint, so the run cannot be chunked into 8-hour pieces and a
+preemption at hour four costs all four hours. Inferno was requested and
+explicitly approved for this one job. Everything else here is embers.
 
 ## Settings, identical in both arms
 

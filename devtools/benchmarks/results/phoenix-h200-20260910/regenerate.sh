@@ -11,7 +11,16 @@ RAW=${1:?usage: regenerate.sh /path/to/iterative-campaign}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TOOLS=$HERE/../..
 
-A=$RAW/A-core6-h200-job13060539/results   # paired CPU/GPU, one H200 node, 8 threads
+# Job A was preempted with three nanotube cases outstanding; job A2 reran exactly
+# those. They are two job trees holding one campaign, so present them as one
+# directory of symlinks rather than copying either. The merge refuses if both
+# trees claim a completed copy of the same case.
+python "$TOOLS/merge_case_trees.py" \
+  "$RAW/A-core6-h200-job13060539/results" \
+  "$RAW/A2-nanotube-h200-job13065746/results" \
+  --output "$RAW/merged-paired"
+
+A=$RAW/merged-paired                      # paired CPU/GPU, one H200 node, 8 threads
 C=$RAW/C-cpu24-core6-job13061073/results  # CPU-only thread scaling, 8 vs 24, one node
 
 # Paired timings and backend accuracy. The manifest is rebuilt from the case

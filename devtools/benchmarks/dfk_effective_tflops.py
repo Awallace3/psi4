@@ -187,6 +187,33 @@ def summarize(records):
     return rows
 
 
+def markdown(payload):
+    """Render the summary as the report's two-denominator table.
+
+    Two rate columns, because there are two defensible denominators: `JK: JK` is
+    Psi4's timer around the whole J/K builder, K kernel is the contraction alone.
+    Reporting only the second flatters the GPU; only the first understates the
+    kernel. A case that failed to model is named, not dropped, because a missing
+    row and a zero rate are not the same claim.
+    """
+    out = ["| Case | Repeats | K GFLOP | `JK: JK` wall, s | `JK: JK` TF/s | K kernel TF/s |",
+           "|---|---:|---:|---:|---:|---:|"]
+    rate = lambda v: "—" if v is None else f"{v:.2f}"
+    for row in payload["summary"]:
+        out.append(f"| {row['family']} | {row['repeats']} | {row['k_gflop']:.1f} | "
+                   f"{row['median_jk_wall_s']:.2f} | {rate(row['median_jk_timer_tflops'])} | "
+                   f"{rate(row['median_k_kernel_tflops'])} |")
+    failed = [r for r in payload["cases"] if "error" in r]
+    if failed:
+        out += ["", "Not modeled:", ""]
+        out += [f"- `{r['case']}`: {r['error']}" for r in failed]
+    out += ["", "Medians over repeats. `JK: JK` covers J, K, host-side setup and any "
+                "transfer, so its rate is the whole builder's; the K kernel column exists "
+                "only for the GPU arm, where cuEST prints per-call kernel milliseconds. "
+                "A dash means the quantity is not available for that arm, not zero."]
+    return "\n".join(out)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -204,10 +231,11 @@ def main():
             records.append({"case": directory.name, "error": f"{type(error).__name__}: {error}"})
     payload = {"cases": records, "summary": summarize(
         [r for r in records if "error" not in r])}
-    text = json.dumps(payload, indent=2, sort_keys=True)
+    if not payload["summary"]:
+        raise SystemExit(f"no case with a modelable DF-K flop count under {root}")
     if args.output:
-        Path(args.output).write_text(text + "\n")
-    print(text)
+        Path(args.output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    print(markdown(payload))
     return 0
 
 
