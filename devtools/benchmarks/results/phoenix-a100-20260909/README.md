@@ -1,3 +1,13 @@
+> **Superseded.** These rows use a fixed GRAC shift
+> (`SAPT_DFT_GRAC_COMPUTE=NONE --shift 0.136`), so they time a calculation that
+> presumes the shift is already known — work a user must actually do before the
+> SAPT runs. Automatic GRAC changes the speedups in both directions. Quote
+> [`../phoenix-h200-20260910/`](../phoenix-h200-20260910/) instead. Kept because
+> it is the A100 data point and the fixed-shift comparison in that report is
+> against it.
+>
+> Everything below is `summarize_saptdft_cuest.py` output, unedited.
+
 # Phoenix cuEST GRAC timing and accuracy
 
 Status: complete.
