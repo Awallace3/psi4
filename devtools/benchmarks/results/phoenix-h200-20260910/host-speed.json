@@ -1,0 +1,30 @@
+{
+  "profiles": [
+    {
+      "status": "uncertified",
+      "tree": "/home/awallace43/gits/psi4__worktrees/saptdft-cuest/tmp/iterative-campaign/A-core6-h200-job13060539/results"
+    },
+    {
+      "status": "uncertified",
+      "tree": "/home/awallace43/gits/psi4__worktrees/saptdft-cuest/tmp/iterative-campaign/C-cpu24-core6-job13061073/results"
+    },
+    {
+      "status": "uncertified",
+      "tree": "/home/awallace43/gits/psi4__worktrees/saptdft-cuest/tmp/iterative-campaign/D2-protein157-cpu24-job13066284/results"
+    },
+    {
+      "status": "uncertified",
+      "tree": "/home/awallace43/gits/psi4__worktrees/saptdft-cuest/tmp/iterative-campaign/D-protein157-cpu24-job13063342/results"
+    }
+  ],
+  "spread": {},
+  "tolerance": 1.25,
+  "uncertified": [
+    "/home/awallace43/gits/psi4__worktrees/saptdft-cuest/tmp/iterative-campaign/A-core6-h200-job13060539/results",
+    "/home/awallace43/gits/psi4__worktrees/saptdft-cuest/tmp/iterative-campaign/C-cpu24-core6-job13061073/results",
+    "/home/awallace43/gits/psi4__worktrees/saptdft-cuest/tmp/iterative-campaign/D2-protein157-cpu24-job13066284/results",
+    "/home/awallace43/gits/psi4__worktrees/saptdft-cuest/tmp/iterative-campaign/D-protein157-cpu24-job13063342/results"
+  ],
+  "verdict": "uncertified",
+  "worst_ratio": 1.0
+}

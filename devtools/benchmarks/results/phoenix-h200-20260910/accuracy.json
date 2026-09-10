@@ -1,0 +1,270 @@
+{
+  "benzene-aug-cc-pvdz": {
+    "better_arm": [
+      "gpu"
+    ],
+    "component_deltas_eh": {
+      "SAPT DISP ENERGY": 0.0,
+      "SAPT ELST ENERGY": 1.4799812504406873e-06,
+      "SAPT EXCH ENERGY": 2.0774397985999504e-06,
+      "SAPT IND ENERGY": 8.204123283506171e-10,
+      "SAPT TOTAL ENERGY": 5.982789415825973e-07
+    },
+    "delta_exceeds_scatter": true,
+    "grac_compute": "ITERATIVE",
+    "max_component_delta_eh": 2.0774397985999504e-06,
+    "max_shift_delta_eh": 0.00011666000000000454,
+    "monomers": {
+      "A": {
+        "cation": 0.00011695000000599975,
+        "cpu_cation": -231.64983338,
+        "different_cation_solution": true,
+        "gpu_cation": -231.64995033,
+        "homo": 2.9999999984209325e-08,
+        "lower_cation_arm": "gpu",
+        "neutral": 3.199999980552093e-07,
+        "shift": 0.00011666000000000454
+      },
+      "B": {
+        "cation": 0.00011695000000599975,
+        "cpu_cation": -231.64983338,
+        "different_cation_solution": true,
+        "gpu_cation": -231.64995033,
+        "homo": 2.9999999984209325e-08,
+        "lower_cation_arm": "gpu",
+        "neutral": 3.199999980552093e-07,
+        "shift": 0.00011666000000000454
+      }
+    },
+    "repeats": {
+      "cpu": 3,
+      "gpu": 3
+    },
+    "run_to_run_scatter_eh": 1.2216452675850586e-10,
+    "solution_selection_differs": true,
+    "verdict": "exceeds tolerance because the arms converged to different cation SCF solutions; gpu found the lower one",
+    "within_tolerance": false
+  },
+  "benzene-cc-pvdz": {
+    "better_arm": [
+      "gpu"
+    ],
+    "component_deltas_eh": {
+      "SAPT DISP ENERGY": 0.0,
+      "SAPT ELST ENERGY": 1.5033274678444286e-06,
+      "SAPT EXCH ENERGY": 2.34057425036599e-06,
+      "SAPT IND ENERGY": 2.064755311170785e-11,
+      "SAPT TOTAL ENERGY": 8.372265286153702e-07
+    },
+    "delta_exceeds_scatter": true,
+    "grac_compute": "ITERATIVE",
+    "max_component_delta_eh": 2.34057425036599e-06,
+    "max_shift_delta_eh": 0.00011942000000000896,
+    "monomers": {
+      "A": {
+        "cation": 0.00011972000001492233,
+        "cpu_cation": -231.64267427,
+        "different_cation_solution": true,
+        "gpu_cation": -231.64279399,
+        "homo": 5.000000002919336e-08,
+        "lower_cation_arm": "gpu",
+        "neutral": 2.499999993688107e-07,
+        "shift": 0.00011942000000000896
+      },
+      "B": {
+        "cation": 0.00011972000001492233,
+        "cpu_cation": -231.64267427,
+        "different_cation_solution": true,
+        "gpu_cation": -231.64279399,
+        "homo": 5.000000002919336e-08,
+        "lower_cation_arm": "gpu",
+        "neutral": 2.499999993688107e-07,
+        "shift": 0.00011942000000000896
+      }
+    },
+    "repeats": {
+      "cpu": 3,
+      "gpu": 3
+    },
+    "run_to_run_scatter_eh": 8.93600644868986e-12,
+    "solution_selection_differs": true,
+    "verdict": "exceeds tolerance because the arms converged to different cation SCF solutions; gpu found the lower one",
+    "within_tolerance": false
+  },
+  "nanotube-6-31+g**": {
+    "better_arm": null,
+    "component_deltas_eh": {
+      "SAPT DISP ENERGY": 0.0,
+      "SAPT ELST ENERGY": 1.4521219782182015e-09,
+      "SAPT EXCH ENERGY": 9.279931680733489e-08,
+      "SAPT IND ENERGY": 1.880250004998585e-08,
+      "SAPT TOTAL ENERGY": 7.544893873556724e-08
+    },
+    "delta_exceeds_scatter": true,
+    "grac_compute": "ITERATIVE",
+    "max_component_delta_eh": 9.279931680733489e-08,
+    "max_shift_delta_eh": 1.9999999996411777e-08,
+    "monomers": {
+      "A": {
+        "cation": 9.000000034120603e-08,
+        "cpu_cation": -78.10514593,
+        "different_cation_solution": false,
+        "gpu_cation": -78.10514584,
+        "homo": 0.0,
+        "lower_cation_arm": "cpu",
+        "neutral": 8.000000661922968e-08,
+        "shift": 0.0
+      },
+      "B": {
+        "cation": 1.4500000133921276e-06,
+        "cpu_cation": -920.50815924,
+        "different_cation_solution": false,
+        "gpu_cation": -920.50815779,
+        "homo": 3.00000000119649e-08,
+        "lower_cation_arm": "cpu",
+        "neutral": 1.4899999314366141e-06,
+        "shift": 1.9999999996411777e-08
+      }
+    },
+    "repeats": {
+      "cpu": 1,
+      "gpu": 2
+    },
+    "run_to_run_scatter_eh": 6.283653458671878e-10,
+    "solution_selection_differs": false,
+    "verdict": "agrees within tolerance",
+    "within_tolerance": true
+  },
+  "peptide-6-31+g**": {
+    "better_arm": null,
+    "component_deltas_eh": {
+      "SAPT DISP ENERGY": 0.0,
+      "SAPT ELST ENERGY": 2.1069894273750833e-08,
+      "SAPT EXCH ENERGY": 2.6173334940343684e-08,
+      "SAPT IND ENERGY": 1.658307866025943e-11,
+      "SAPT TOTAL ENERGY": 4.723827403546599e-08
+    },
+    "delta_exceeds_scatter": true,
+    "grac_compute": "ITERATIVE",
+    "max_component_delta_eh": 4.723827403546599e-08,
+    "max_shift_delta_eh": 1.900000000110147e-07,
+    "monomers": {
+      "A": {
+        "cation": 4.000000330961484e-08,
+        "cpu_cation": -247.90888033,
+        "different_cation_solution": false,
+        "gpu_cation": -247.90888037,
+        "homo": 1.4999999997655777e-07,
+        "lower_cation_arm": "gpu",
+        "neutral": 5.999999075356754e-08,
+        "shift": 1.6999999999378623e-07
+      },
+      "B": {
+        "cation": 4.3000000005122274e-07,
+        "cpu_cation": -247.90760927,
+        "different_cation_solution": false,
+        "gpu_cation": -247.9076097,
+        "homo": 2.1000000000048757e-07,
+        "lower_cation_arm": "gpu",
+        "neutral": 4.199999921183917e-07,
+        "shift": 1.900000000110147e-07
+      }
+    },
+    "repeats": {
+      "cpu": 3,
+      "gpu": 3
+    },
+    "run_to_run_scatter_eh": 3.6939382629108675e-10,
+    "solution_selection_differs": false,
+    "verdict": "agrees within tolerance",
+    "within_tolerance": true
+  },
+  "water-aug-cc-pvdz": {
+    "better_arm": null,
+    "component_deltas_eh": {
+      "SAPT DISP ENERGY": 0.0,
+      "SAPT ELST ENERGY": 1.235228808127431e-08,
+      "SAPT EXCH ENERGY": 3.815831889353305e-08,
+      "SAPT IND ENERGY": 7.871828189287555e-14,
+      "SAPT TOTAL ENERGY": 5.051074287824864e-08
+    },
+    "delta_exceeds_scatter": true,
+    "grac_compute": "ITERATIVE",
+    "max_component_delta_eh": 5.051074287824864e-08,
+    "max_shift_delta_eh": 1.9999999989472883e-08,
+    "monomers": {
+      "A": {
+        "cation": 2.000000165480742e-08,
+        "cpu_cation": -75.89626289,
+        "different_cation_solution": false,
+        "gpu_cation": -75.89626287,
+        "homo": 9.999999994736442e-09,
+        "lower_cation_arm": "cpu",
+        "neutral": 2.000000165480742e-08,
+        "shift": 1.9999999989472883e-08
+      },
+      "B": {
+        "cation": 4.999999703159119e-08,
+        "cpu_cation": -75.89609084,
+        "different_cation_solution": false,
+        "gpu_cation": -75.89609079,
+        "homo": 9.999999994736442e-09,
+        "lower_cation_arm": "cpu",
+        "neutral": 4.000000330961484e-08,
+        "shift": 9.999999994736442e-09
+      }
+    },
+    "repeats": {
+      "cpu": 3,
+      "gpu": 3
+    },
+    "run_to_run_scatter_eh": 1.85418520814995e-12,
+    "solution_selection_differs": false,
+    "verdict": "agrees within tolerance",
+    "within_tolerance": true
+  },
+  "water-cc-pvdz": {
+    "better_arm": null,
+    "component_deltas_eh": {
+      "SAPT DISP ENERGY": 0.0,
+      "SAPT ELST ENERGY": 1.760133372386008e-08,
+      "SAPT EXCH ENERGY": 4.0830227589563894e-08,
+      "SAPT IND ENERGY": 1.1264773835950592e-13,
+      "SAPT TOTAL ENERGY": 5.843146189468684e-08
+    },
+    "delta_exceeds_scatter": true,
+    "grac_compute": "ITERATIVE",
+    "max_component_delta_eh": 5.843146189468684e-08,
+    "max_shift_delta_eh": 1.9999999989472883e-08,
+    "monomers": {
+      "A": {
+        "cation": 2.000000165480742e-08,
+        "cpu_cation": -75.8906766,
+        "different_cation_solution": false,
+        "gpu_cation": -75.89067658,
+        "homo": 9.999999994736442e-09,
+        "lower_cation_arm": "cpu",
+        "neutral": 2.000000165480742e-08,
+        "shift": 9.999999994736442e-09
+      },
+      "B": {
+        "cation": 4.999999703159119e-08,
+        "cpu_cation": -75.89046854,
+        "different_cation_solution": false,
+        "gpu_cation": -75.89046849,
+        "homo": 2.0000000044984034e-08,
+        "lower_cation_arm": "cpu",
+        "neutral": 4.000000330961484e-08,
+        "shift": 1.9999999989472883e-08
+      }
+    },
+    "repeats": {
+      "cpu": 3,
+      "gpu": 3
+    },
+    "run_to_run_scatter_eh": 3.949410243286877e-13,
+    "solution_selection_differs": false,
+    "verdict": "agrees within tolerance",
+    "within_tolerance": true
+  }
+}

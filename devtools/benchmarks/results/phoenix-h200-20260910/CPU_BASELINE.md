@@ -19,47 +19,100 @@ It is *not* the right comparison for "what does an H200 do relative to a CPU
 node," because gpu-h200 enforces a maximum 8:1 CPU:GPU ratio. One GPU buys eight
 cores, and eight cores of a 32-core socket is what the CPU arm gets.
 
-## Those eight cores are about half as fast as a mainstream Psi4 CPU node
+## Job A's eight cores were degraded, by a factor of about three
 
-Job C ran the identical binary, driver, geometries, and settings at eight
-threads on cpu-small (Xeon Gold 6226). Call counts are bit-identical. Job A's
-CPU arm burns roughly twice the CPU-seconds:
+This is the most consequential caveat in the directory, and it was not visible
+in job A's own tree.
 
-| Case | Total wall, A / C | `JK: JK` CPU-s | `RV: Form V` CPU-s | `UV: Form V` CPU-s |
-|---|---:|---:|---:|---:|
-| benzene aug-cc-pVDZ | 2.08× | 2.38× | 2.02× | 2.13× |
-| nanotube 6-31+G** | 2.16× | 2.09× | 2.01× | 2.05× |
-| peptide 6-31+G** | 2.03× | 2.49× | 2.06× | 1.90× |
-| water aug-cc-pVDZ | 1.89× | 1.63× | 1.90× | 1.44× |
+Job 13024192 (fixed shift) and job A / 13060539 (ITERATIVE) are both gpu-h200
+allocations of the **same** Xeon Platinum 8562Y+, in the same partition, running
+the **same** compiled `core.so` (sha256 `bc7b9620cd41…`, verified equal in both
+trees) on byte-identical geometries. The differing git hashes in the two
+provenance files are repo HEAD; the commits between them touched only benchmark
+scripts and markdown.
 
-(Repeat 1 of each; ratios are A over C, so above one means the GPU node's host
-cores are slower. Call counts match exactly in every row.)
+Compare phases that do provably identical work under both protocols — the dimer
+and monomer SCFs, one call each, with bit-identical iteration counts:
 
-The penalty is close to uniform across a DGEMM-bound kernel (`JK: JK`) and two
-grid-bound kernels (`RV`/`UV: Form V`), which rules out an effect specific to
-cache or memory bandwidth. Parallel utilization is the same in both jobs
-(`timer.dat` user/wall ≈ 13.2 at eight threads in each), so it is not thread
-starvation. The nominal clock favors the GPU node's CPU (2800 MHz max vs 2700),
-and both parts have AVX-512.
+| Phase (CPU arm, 1 call) | job 13024192 CPU-s | job A CPU-s | Ratio |
+|---|---:|---:|---:|
+| benzene aug `Dimer SCF` | 53.98 | 171.93 | 3.19× |
+| benzene aug `Monomer A SCF` | 19.58 | 58.15 | 2.97× |
+| peptide `Dimer SCF` | 20.03 | 69.48 | 3.47× |
+| peptide `Monomer A SCF` | 11.43 | 34.38 | 3.01× |
 
-Things checked and ruled out: NUMA placement (job A's mask `17,21,25,29,33,37,41,45`
-lies entirely inside one NUMA domain on a sub-NUMA-clustered node, i.e. already
-packed), binary and workload differences (same commit, same `core.so` sha256,
-same call counts), and co-tenancy heavy enough to explain a factor of two
-(24 of 64 CPUs allocated, CPULoad 3.16–6.24).
+The deficit is systematic: every case, both arms, every phase, and it spans a
+DGEMM-bound kernel (`JK: JK`) and grid-bound kernels (`RV`/`UV: Form V`) alike.
+
+**The GPU device is not affected.** cuEST's own per-call kernel timings are the
+same to within 1% across the two jobs — K median 2.05 vs 2.06 ms, K max 7.66 vs
+7.73 ms — so this is the host, not the accelerator. Consistently, the GPU arm's
+`Dimer SCF`, the most device-dominated phase, is the only one with a low ratio
+(1.10–2.05×): the part cuEST does was unaffected and the host part was not.
+
+Things checked and ruled out: NUMA placement (both jobs' masks lie wholly inside
+one NUMA domain of the four — job 13024192 on node1, job A on node2, both
+already packed), thread starvation (`timer.dat` user/wall matches to within 1%),
+binary and workload differences (identical `core.so` hash, identical geometry
+sha256, identical SCF iteration counts), and CPU oversubscription — job A's node
+was in fact the *less* loaded of the two (CPULoad 1.14 vs 18.69, CPUAlloc 32 vs
+56), which rules out contention for cores and points instead at clock or at
+memory pressure from a co-tenant (job A's node had 2048000 of 2063000 MB
+allocated). The one direct trace: `lscpu` reports the cores scaling at **68% of
+max on job A's node and 100% on job 13024192's**.
+
+An older, nominally slower CPU beats job A's allocation outright. Job C ran the
+identical binary and protocol at eight threads on cpu-small (Xeon Gold 6226,
+2.7 GHz Cascade Lake, which a healthy 8562Y+ should beat):
+
+| Case | job A 8T, s | job C 8T, s | A / C |
+|---|---:|---:|---:|
+| benzene aug-cc-pVDZ | 389.1 | 186.6 | 2.08× |
+| nanotube 6-31+G** | 1078.8 | 499.9 | 2.16× |
+| peptide 6-31+G** | 202.3 | 99.7 | 2.03× |
+| water aug-cc-pVDZ | 22.9 | 12.1 | 1.89× |
+
+### What this does to the headline speedups
+
+Job A's CPU arm is the denominator of every paired speedup in this report, so
+every one of them is inflated. The size of the inflation is bounded but not
+pinned, because **both** arms ran on the degraded host and they are not degraded
+equally — the GPU arm offloads the work the slow host would otherwise do:
+
+| Case | Same-host (job A, degraded) | vs job C 8 healthy cores | vs job C 24 healthy cores |
+|---|---:|---:|---:|
+| benzene aug-cc-pVDZ | 7.03× | 3.37× | 2.02× |
+| benzene cc-pVDZ | 3.05× | — | 0.97× |
+| nanotube 6-31+G** | 9.52× | 4.41× | 2.27× |
+| peptide 6-31+G** | 2.67× | 1.31× | 0.85× |
+| water aug-cc-pVDZ | 1.25× | 0.66× | 0.58× |
+| water cc-pVDZ | 0.97× | — | 0.46× |
+
+Both bounds are wrong in a known direction. The same-host column is **too high**:
+the CPU arm is degraded roughly three times and the GPU arm only about twice, so
+the ratio absorbs the difference. The middle column is **too low**: it is a
+cross-node ratio whose GPU numerator is still measured on the degraded host, so
+it charges the GPU arm for a slow host while giving the CPU arm a healthy one.
+
+**The true same-node speedup on a healthy gpu-h200 host lies between these two
+columns** — for benzene aug-cc-pVDZ, between about 3.4× and 7.0×. Nothing in
+the current data narrows it further. Quoting the same-host column alone, as the
+first draft of this report did, overstates the result.
+
+The repair is measurement, not arithmetic: `common.inc` now runs `cpu_probe.py`
+inside every allocation and writes `metadata/canary-<phase>-t<threads>.json`, so
+each tree records the throughput of the cores it actually got. `host_speed.py`
+reads those back, and `merge_case_trees.py` refuses to pool trees whose canaries
+disagree or are missing. A rerun of the paired campaign on a canary-verified
+host is what settles the range above.
 
 For calibration, a single-core microbenchmark on a cpu-small node (job 13064569,
 Gold 6226) gives 75.2 GF/s DGEMM per core — about 87% of the 86.4 GF/s AVX-512
 peak at 2.7 GHz — 594 GF/s across eight cores (74.3 per core, so near-linear),
-24.6 Miter/s on a serial scalar loop, and 9.18 GB/s on a memory-bound triad. The
-matching probe on a gpu-h200 node (job 13064568) has not run; without it the
-*cause* of the deficit is uncharacterized, though its size and uniformity are
-not in doubt.
-
-**What this means for the numbers.** Job A's speedups are correct as same-host
-ratios and should be read that way. A user replacing a CPU cluster node with an
-H200 node would see roughly half of them, because their CPU baseline would be
-about twice as fast per core as the eight cores attached to this GPU.
+24.6 Miter/s on a serial scalar loop, and 9.18 GB/s on a memory-bound triad.
+The matching probe on a gpu-h200 node (job 13064568) is queued and has not run;
+it will give the same three numbers for that node type, and the canary now
+captures them for every campaign tree regardless.
 
 ## NVIDIA's denominator: 56 cores of Xeon Platinum 8570
 
@@ -91,16 +144,22 @@ seven times faster on this workload.
 
 For any GPU number in this directory:
 
-1. **Same-host, 8 cores** — job A as measured. Defensible, and labeled as such.
-2. **Against a mainstream CPU node at the same width** — divide by ~2 using the
-   job A / job C ratio above. Defensible with the caveat that the cause of the
-   per-core deficit is not yet established.
-3. **Against a 56-core socket** — divide by the projected factor in
+1. **Same-host, 8 cores, on the host job A actually got** — job A as measured.
+   Defensible only as a statement about that allocation, which was degraded
+   about threefold. It is *not* the number a user would see on a healthy node
+   of the same type, and it is the one that must never be quoted bare.
+2. **Same-host, 8 cores, on a healthy host** — a range, not a number: between
+   the first and second columns of the bracket table above (e.g. 3.4×-7.0× for
+   benzene aug-cc-pVDZ). Pinning it needs a canary-verified rerun.
+3. **Against a mainstream CPU node at the same width** — the second column of
+   that table, read as a lower bound because its GPU numerator is still from the
+   degraded host.
+4. **Against a 56-core socket** — divide by the projected factor in
    `thread-scaling-dfk.md` (kernel claims) or `thread-scaling-total.md`
-   (end-to-end claims), on top of (2). Defensible only as a bound, since the
+   (end-to-end claims), on top of (3). Defensible only as a bound, since the
    projection is an unvalidated two-point fit.
 
-The indefensible one is quoting (1) as if it were (3), which is what a
+The indefensible one is quoting (1) as if it were (4), which is what a
 side-by-side with NVIDIA's published multipliers would do if the baselines were
 not stated.
 

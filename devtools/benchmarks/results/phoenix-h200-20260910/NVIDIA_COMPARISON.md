@@ -42,6 +42,15 @@ on one node and fits Amdahl's law to bound what 56 cores would give. See
 measurement: a two-point fit has no residual, and it assumes the serial fraction
 does not grow with width, which bandwidth contention makes optimistic.
 
+There is a second, larger baseline problem on our side, and it runs the other
+way. The eight cores our paired campaign actually got were degraded about
+threefold relative to another allocation of the same CPU model in the same
+partition — so our CPU denominator is not merely narrow, it is slow for its
+width. Every speedup in this directory is inflated by that, and none should be
+set beside a NVIDIA multiplier until the canary-verified rerun described in
+[`CPU_BASELINE.md`](CPU_BASELINE.md) replaces it. A too-slow baseline is exactly
+the criticism one would level at a vendor figure; it applies here first.
+
 ## Precision
 
 Figures 3-4 state "Emulated results use cuEST v0.1 with dynamic Ozaki threshold

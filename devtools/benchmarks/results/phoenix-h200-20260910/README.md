@@ -64,7 +64,84 @@ Speedup is median CPU wall / median GPU wall.
 results** (see item 0 above). The bracket table in
 [`CPU_BASELINE.md`](CPU_BASELINE.md) gives the defensible range for each case.
 
-<!-- PAIRED -->
+# Phoenix cuEST GRAC timing and accuracy
+
+Status: partial.
+Wall time is the fresh-process `energy()` call, including backend initialization.
+Speedup is median CPU time / median GPU time; values below 1 mean GPU slowdown.
+
+| System | Basis | MonA own nbf | MonB own nbf | Dimer nbf | CPU/GPU n | CPU median [range], s | GPU median [range], s | Speedup | Max component Δ, Eh | Accuracy |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| water | cc-pvdz | 24 | 24 | 48 | 3/3 | 17.87 [17.80–17.89] | 18.45 [18.41–18.55] | 0.97× | 5.843e-08 | PASS |
+| water | aug-cc-pvdz | 41 | 41 | 82 | 3/3 | 22.89 [22.87–22.98] | 18.29 [18.16–18.32] | 1.25× | 5.051e-08 | PASS |
+| benzene | cc-pvdz | 114 | 114 | 228 | 3/3 | 154.50 [153.45–154.66] | 50.67 [50.42–51.04] | 3.05× | 2.341e-06 | FAIL |
+| benzene | aug-cc-pvdz | 192 | 192 | 384 | 3/3 | 389.06 [388.81–389.29] | 55.32 [54.99–55.78] | 7.03× | 2.077e-06 | FAIL |
+| peptide | 6-31+g** | 125 | 125 | 250 | 3/3 | 202.34 [201.07–202.48] | 75.84 [75.78–76.21] | 2.67× | 4.754e-08 | PASS |
+| nanotube | 6-31+g** | 56 | 492 | 548 | 1/2 | 1078.82 [1078.82–1078.82] | 113.32 [113.19–113.45] | 9.52× | 9.268e-08 | PASS |
+
+Monomer columns give each fragment's own-basis size. The SAPT monomer SCFs use the dimer basis (ghosted partner), so their actual SCF basis size is the dimer column.
+
+Accuracy threshold: 1.0e-06 Eh for every component and paired repeat.
+
+## Component accuracy
+
+| System / basis | Component | CPU median, Eh | GPU median, Eh | Max paired absolute Δ, Eh |
+|---|---|---:|---:|---:|
+| water / cc-pvdz | SAPT DISP ENERGY | -0.003609757702 | -0.003609757702 | 0.000e+00 |
+| water / cc-pvdz | SAPT ELST ENERGY | -0.012689512780 | -0.012689530381 | 1.760e-08 |
+| water / cc-pvdz | SAPT EXCH ENERGY | 0.010830298358 | 0.010830257528 | 4.083e-08 |
+| water / cc-pvdz | SAPT IND ENERGY | -0.002618063773 | -0.002618063773 | 3.607e-13 |
+| water / cc-pvdz | SAPT TOTAL ENERGY | -0.008087035897 | -0.008087094328 | 5.843e-08 |
+| water / aug-cc-pvdz | SAPT DISP ENERGY | -0.003609757702 | -0.003609757702 | 0.000e+00 |
+| water / aug-cc-pvdz | SAPT ELST ENERGY | -0.011314630000 | -0.011314617647 | 1.235e-08 |
+| water / aug-cc-pvdz | SAPT EXCH ENERGY | 0.010087438972 | 0.010087477131 | 3.816e-08 |
+| water / aug-cc-pvdz | SAPT IND ENERGY | -0.002881098793 | -0.002881098793 | 1.429e-12 |
+| water / aug-cc-pvdz | SAPT TOTAL ENERGY | -0.007718047523 | -0.007717997012 | 5.051e-08 |
+| benzene / cc-pvdz | SAPT DISP ENERGY | -0.012457401202 | -0.012457401202 | 0.000e+00 |
+| benzene / cc-pvdz | SAPT ELST ENERGY | -0.002987010440 | -0.002988513767 | 1.503e-06 |
+| benzene / cc-pvdz | SAPT EXCH ENERGY | 0.011832611246 | 0.011834951820 | 2.341e-06 |
+| benzene / cc-pvdz | SAPT IND ENERGY | -0.001350650879 | -0.001350650899 | 2.224e-11 |
+| benzene / cc-pvdz | SAPT TOTAL ENERGY | -0.004962451275 | -0.004961614048 | 8.372e-07 |
+| benzene / aug-cc-pvdz | SAPT DISP ENERGY | -0.012457401202 | -0.012457401202 | 0.000e+00 |
+| benzene / aug-cc-pvdz | SAPT ELST ENERGY | -0.003435953786 | -0.003437433767 | 1.480e-06 |
+| benzene / aug-cc-pvdz | SAPT EXCH ENERGY | 0.012199781315 | 0.012201858754 | 2.077e-06 |
+| benzene / aug-cc-pvdz | SAPT IND ENERGY | -0.001451162542 | -0.001451161722 | 8.433e-10 |
+| benzene / aug-cc-pvdz | SAPT TOTAL ENERGY | -0.005144736215 | -0.005144137936 | 5.983e-07 |
+| peptide / 6-31+g** | SAPT DISP ENERGY | -0.007726268123 | -0.007726268123 | 0.000e+00 |
+| peptide / 6-31+g** | SAPT ELST ENERGY | -0.015531989909 | -0.015532010979 | 2.134e-08 |
+| peptide / 6-31+g** | SAPT EXCH ENERGY | 0.014757057567 | 0.014757031393 | 2.617e-08 |
+| peptide / 6-31+g** | SAPT IND ENERGY | -0.004728319097 | -0.004728319113 | 1.744e-11 |
+| peptide / 6-31+g** | SAPT TOTAL ENERGY | -0.013229519563 | -0.013229566801 | 4.754e-08 |
+| nanotube / 6-31+g** | SAPT DISP ENERGY | -0.027897956630 | -0.027897956630 | 0.000e+00 |
+| nanotube / 6-31+g** | SAPT ELST ENERGY | -0.024720720508 | -0.024720719056 | 1.272e-09 |
+| nanotube / 6-31+g** | SAPT EXCH ENERGY | 0.057773743032 | 0.057773835831 | 9.268e-08 |
+| nanotube / 6-31+g** | SAPT IND ENERGY | -0.006463905712 | -0.006463924514 | 1.882e-08 |
+| nanotube / 6-31+g** | SAPT TOTAL ENERGY | -0.001308839817 | -0.001308764368 | 7.513e-08 |
+
+## Failed or incomplete measurements
+
+```json
+[
+  {
+    "error": "missing result.json",
+    "name": "nanotube-6-31+g**-cpu-2",
+    "process_wall_s": 0.0,
+    "returncode": 1
+  },
+  {
+    "error": "missing result.json",
+    "name": "nanotube-6-31+g**-cpu-3",
+    "process_wall_s": 0.0,
+    "returncode": 1
+  },
+  {
+    "error": "missing result.json",
+    "name": "nanotube-6-31+g**-gpu-3",
+    "process_wall_s": 0.0,
+    "returncode": 1
+  }
+]
+```
 
 ## What automatic GRAC costs
 
@@ -74,7 +151,31 @@ cuEST accelerates them like any other DFT work. Their cost is measured *inside*
 each job, from Psi4's `SAPT(DFT):GRAC Shift Monomer A/B` phase timers, so it
 needs no comparison against a separate fixed-shift run:
 
-<!-- GRACCOST -->
+| System | Basis | Arm | Rep. | Total wall, s | GRAC A, s | GRAC B, s | GRAC total, s | % of wall |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| benzene | aug-cc-pvdz | cpu 8T | 3 | 389.06 | 78.5 | 76.6 | 154.76 | 39.8% |
+| benzene | aug-cc-pvdz | gpu 8T | 3 | 55.32 | 14.0 | 11.6 | 25.64 | 46.4% |
+| benzene | cc-pvdz | cpu 8T | 3 | 154.50 | 32.4 | 30.7 | 63.08 | 40.8% |
+| benzene | cc-pvdz | gpu 8T | 3 | 50.67 | 13.4 | 11.0 | 24.37 | 48.2% |
+| nanotube | 6-31+g** | cpu 8T | 1 | 1078.82 | 8.2 | 540.1 | 548.30 | 50.8% |
+| nanotube | 6-31+g** | gpu 8T | 2 | 113.32 | 7.2 | 50.8 | 57.98 | 51.2% |
+| peptide | 6-31+g** | cpu 8T | 3 | 202.34 | 56.8 | 46.8 | 103.70 | 51.2% |
+| peptide | 6-31+g** | gpu 8T | 3 | 75.84 | 26.1 | 19.7 | 45.87 | 60.5% |
+| water | aug-cc-pvdz | cpu 8T | 3 | 22.89 | 4.8 | 3.5 | 8.35 | 36.4% |
+| water | aug-cc-pvdz | gpu 8T | 3 | 18.29 | 5.3 | 2.9 | 8.22 | 44.9% |
+| water | cc-pvdz | cpu 8T | 3 | 17.87 | 3.8 | 2.7 | 6.51 | 36.4% |
+| water | cc-pvdz | gpu 8T | 3 | 18.45 | 5.5 | 3.3 | 8.86 | 47.8% |
+
+| System | Basis | GRAC phase speedup | Whole-calculation speedup | GRAC % of CPU wall | GRAC % of GPU wall |
+|---|---|---:|---:|---:|---:|
+| benzene | aug-cc-pvdz | 6.04× | 7.03× | 39.8% | 46.4% |
+| benzene | cc-pvdz | 2.59× | 3.05× | 40.8% | 48.2% |
+| nanotube | 6-31+g** | 9.46× | 9.52× | 50.8% | 51.2% |
+| peptide | 6-31+g** | 2.26× | 2.67× | 51.2% | 60.5% |
+| water | aug-cc-pvdz | 1.02× | 1.25× | 36.4% | 44.9% |
+| water | cc-pvdz | 0.73× | 0.97× | 36.4% | 47.8% |
+
+Medians over repeats, from Psi4's `SAPT(DFT):GRAC Shift Monomer A/B` phase timers. The second table pairs arms only at equal thread counts, so its ratios are accelerator speedups rather than baseline-width effects.
 
 Automatic GRAC is **36-51% of wall time on every case**, and a *larger* share of
 the GPU arm than of the CPU arm in every one, because the GPU removes the rest
@@ -85,7 +186,12 @@ calculation the device handles *least* well, which flatters the GPU.
 
 | System | Basis | Fixed-shift speedup (job 13024192) | ITERATIVE speedup (job 13060539) | GRAC % of CPU wall |
 |---|---|---:|---:|---:|
-<!-- FIXEDVSITER -->
+| water | cc-pvdz | 0.97× | 0.97× | 36% |
+| water | aug-cc-pvdz | 1.15× | 1.25× | 36% |
+| benzene | cc-pvdz | 2.90× | 3.05× | 41% |
+| benzene | aug-cc-pvdz | 6.09× | 7.03× | 40% |
+| peptide | 6-31+g** | 2.79× | 2.67× | 51% |
+| nanotube | 6-31+g** | 7.59× | 9.52× | 51% |
 
 **The two speedup columns are not comparable to each other.** Each is a valid
 same-host ratio within its own job, but the two jobs did not run at the same
@@ -101,7 +207,16 @@ them. Only the last column, measured within one job, is.
 This is the single most important result for reading NVIDIA's DF-K claims
 against a real SAPT(DFT) calculation.
 
-<!-- ATTRIBUTION -->
+| Case | CPU s | GPU s | Speedup | DF-K speedup | XC speedup | DF-K share of saving | XC share of saving | Max speedup from DF-K alone |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| benzene-aug-cc-pvdz | 389.1 | 55.3 | 7.03× | 24.7× | 11.1× | 7% | 80% | 1.07× |
+| benzene-cc-pvdz | 154.5 | 50.7 | 3.05× | 15.0× | 3.8× | 8% | 68% | 1.06× |
+| nanotube-6-31+g** | 1078.8 | 113.3 | 9.52× | 72.2× | 11.3× | 21% | 64% | 1.24× |
+| peptide-6-31+g** | 202.3 | 75.8 | 2.67× | 11.3× | 3.1× | 7% | 77% | 1.05× |
+| water-aug-cc-pvdz | 22.9 | 18.3 | 1.25× | 0.3× | 1.8× | -7% | 98% | 1.01× |
+| water-cc-pvdz | 17.9 | 18.4 | 0.97× | 0.1× | 1.0× | 66% | 22% | 1.00× |
+
+The last column is Amdahl's bound: the end-to-end speedup that would result if DF J/K took zero time and nothing else changed. A vendor DF-K speedup cannot produce more than this on this workload, whatever its magnitude.
 
 DF J/K is **0.3–19.2% of ITERATIVE SAPT(DFT) wall time** on these systems. Even
 an infinitely fast DF-K — J/K wall driven to zero, everything else unchanged —
@@ -124,7 +239,22 @@ unrestricted) divided by the kernel's own wall time. It is *effective* because
 the algorithm need not perform those FLOPs densely; it is the throughput a dense
 implementation would have needed to finish in that time.
 
-<!-- TFLOPS -->
+| Case | Repeats | K GFLOP | `JK: JK` wall, s | `JK: JK` TF/s | K kernel TF/s |
+|---|---:|---:|---:|---:|---:|
+| benzene-aug-cc-pvdz-cpu | 3 | 1343.4 | 23.95 | 0.06 | — |
+| benzene-aug-cc-pvdz-gpu | 3 | 1413.6 | 0.97 | 1.52 | 8.28 |
+| benzene-cc-pvdz-cpu | 3 | 373.3 | 8.81 | 0.04 | — |
+| benzene-cc-pvdz-gpu | 3 | 392.8 | 0.59 | 0.69 | 6.19 |
+| nanotube-6-31+g**-cpu | 1 | 16582.7 | 207.13 | 0.08 | — |
+| nanotube-6-31+g**-gpu | 2 | 17421.4 | 2.87 | 6.16 | 15.90 |
+| peptide-6-31+g**-cpu | 3 | 496.7 | 9.93 | 0.05 | — |
+| peptide-6-31+g**-gpu | 3 | 516.9 | 0.88 | 0.61 | 5.58 |
+| water-aug-cc-pvdz-cpu | 3 | 2.9 | 0.12 | 0.03 | — |
+| water-aug-cc-pvdz-gpu | 3 | 3.1 | 0.44 | 0.01 | 0.12 |
+| water-cc-pvdz-cpu | 3 | 0.8 | 0.05 | 0.02 | — |
+| water-cc-pvdz-gpu | 3 | 0.8 | 0.43 | 0.00 | 0.03 |
+
+Medians over repeats. `JK: JK` covers J, K, host-side setup and any transfer, so its rate is the whole builder's; the K kernel column exists only for the GPU arm, where cuEST prints per-call kernel milliseconds. A dash means the quantity is not available for that arm, not zero.
 
 Two columns, because there are two defensible denominators. `JK: JK` is Psi4's
 timer around the whole J/K builder, including the J half, host-side setup, and
@@ -160,7 +290,16 @@ seven-times-wider baseline is nowhere near seven times faster on this workload.
 
 ## Backend accuracy
 
-<!-- ACCURACY -->
+| Case | Max component Δ, Eh | Run-to-run scatter, Eh | Max GRAC shift Δ, Eh | Max neutral Δ, Eh | Max cation Δ, Eh | Within 1e-06 Eh | Interpretation |
+|---|---:|---:|---:|---:|---:|:--:|---|
+| benzene-aug-cc-pvdz | 2.08e-06 | 1.2e-10 | 1.17e-04 | 3.20e-07 | 1.17e-04 | no | exceeds tolerance because the arms converged to different cation SCF solutions; gpu found the lower one |
+| benzene-cc-pvdz | 2.34e-06 | 8.9e-12 | 1.19e-04 | 2.50e-07 | 1.20e-04 | no | exceeds tolerance because the arms converged to different cation SCF solutions; gpu found the lower one |
+| nanotube-6-31+g** | 9.28e-08 | 6.3e-10 | 2.00e-08 | 1.49e-06 | 1.45e-06 | yes | agrees within tolerance |
+| peptide-6-31+g** | 4.72e-08 | 3.7e-10 | 1.90e-07 | 4.20e-07 | 4.30e-07 | yes | agrees within tolerance |
+| water-aug-cc-pvdz | 5.05e-08 | 1.9e-12 | 2.00e-08 | 4.00e-08 | 5.00e-08 | yes | agrees within tolerance |
+| water-cc-pvdz | 5.84e-08 | 3.9e-13 | 2.00e-08 | 4.00e-08 | 5.00e-08 | yes | agrees within tolerance |
+
+The neutral and cation columns are the monomer SCF energies the GRAC shift is derived from. Where both agree to near machine precision, the arms solved the same problem the same way. Where the neutral agrees but the cation does not, the arms converged to different solutions of a near-degenerate open-shell SCF, and the component difference that follows is not a measure of GPU arithmetic error.
 
 Two benzene cases exceed the predeclared 1e-6 Eh per-component threshold. The
 cause is not arithmetic: **the two arms converged to different cation SCF

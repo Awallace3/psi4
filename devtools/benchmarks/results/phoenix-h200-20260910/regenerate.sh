@@ -14,11 +14,29 @@ TOOLS=$HERE/../..
 # Job A was preempted with three nanotube cases outstanding; job A2 reran exactly
 # those. They are two job trees holding one campaign, so present them as one
 # directory of symlinks rather than copying either. The merge refuses if both
-# trees claim a completed copy of the same case.
-python "$TOOLS/merge_case_trees.py" \
-  "$RAW/A-core6-h200-job13060539/results" \
-  "$RAW/A2-nanotube-h200-job13065746/results" \
-  --output "$RAW/merged-paired"
+# trees claim a completed copy of the same case, and also if their hosts did not
+# run at the same speed.
+#
+# Neither tree carries a host canary: both predate it. `merge_case_trees.py`
+# therefore refuses them by default, which is correct — job A's host turned out
+# to be degraded threefold and nothing in its tree said so. The override records
+# the reason inside the merged tree so it travels with the artifact. Drop the
+# flag once both trees come from canary-verified allocations.
+#
+# A2 is still queued at the time of writing, so it is included only if present:
+# regenerating from job A alone must stay possible, and must visibly produce a
+# campaign with the three preempted nanotube measurements missing rather than a
+# script that will not run. `--expect` below is what turns that absence into a
+# failure instead of a quiet gap in the table.
+TREES=("$RAW/A-core6-h200-job13060539/results")
+if [[ -d "$RAW/A2-nanotube-h200-job13065746/results" ]]; then
+  TREES+=("$RAW/A2-nanotube-h200-job13065746/results")
+else
+  echo "note: A2 (job 13065746) has not landed; nanotube cpu-2, cpu-3, gpu-3 will be missing" >&2
+fi
+python "$TOOLS/merge_case_trees.py" "${TREES[@]}" \
+  --output "$RAW/merged-paired" \
+  --allow-host-mismatch "both trees predate the host canary; see CPU_BASELINE.md"
 
 A=$RAW/merged-paired                      # paired CPU/GPU, one H200 node, 8 threads
 C=$RAW/C-cpu24-core6-job13061073/results  # CPU-only thread scaling, 8 vs 24, one node
@@ -41,6 +59,17 @@ python "$TOOLS/speedup_attribution.py" "$A" --output "$HERE/attribution.json" > 
 # rectangular-DGEMM FLOPs for the kernel divided by the kernel's own wall time.
 python "$TOOLS/dfk_effective_tflops.py" "$A" --output "$HERE/dfk-tflops.json" > "$HERE/dfk-tflops.md"
 
+# What automatic GRAC costs, measured inside each job from its own phase timers
+# rather than by differencing against a separate fixed-shift run. The
+# cross-job version of this quantity was confounded by the host deficit; this
+# one cannot be, because numerator and denominator come from one process.
+python "$TOOLS/grac_cost.py" "$A" --output "$HERE/grac-cost.json" > "$HERE/grac-cost.md"
+
+# Which host each tree actually ran on. Uncertified until the campaign is re-run
+# under the canary, and saying so in the report is the point.
+python "$TOOLS/host_speed.py" "$RAW"/*/results --output "$HERE/host-speed.json" \
+  > "$HERE/host-speed.md" || true
+
 # Whether an out-of-tolerance component is arithmetic or a different SCF solution.
 python "$TOOLS/iterative_accuracy.py" "$A" --output "$HERE/accuracy.json" > "$HERE/accuracy.md"
 
@@ -54,9 +83,11 @@ python "$TOOLS/thread_scaling.py" "$C" --timer 'JK: JK' \
 # The report itself. README.md is generated: the prose lives in
 # README.template.md and the tables are substituted, so a re-run cannot leave a
 # stale number in the narrative while the generated tables move.
-python "$HERE/fixed_vs_iterative.py" "$HERE/paired/summary.json" > "$HERE/fixed-vs-iterative.md"
+python "$HERE/fixed_vs_iterative.py" "$HERE/paired/summary.json" \
+  --grac-cost "$HERE/grac-cost.json" > "$HERE/fixed-vs-iterative.md"
 python "$TOOLS/splice.py" "$HERE/README.template.md" "$HERE/README.md" \
   --block "PAIRED=$HERE/paired/summary.md" \
+  --block "GRACCOST=$HERE/grac-cost.md" \
   --block "FIXEDVSITER=$HERE/fixed-vs-iterative.md" \
   --block "ATTRIBUTION=$HERE/attribution.md" \
   --block "TFLOPS=$HERE/dfk-tflops.md" \
