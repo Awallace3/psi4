@@ -13,6 +13,12 @@ inputs, so every extrapolated value is reported alongside the asymptote. Treat
 them as an upper bound on the correction, not a measurement: they assume the
 serial fraction is constant with width, which memory bandwidth contention makes
 optimistic.
+
+By default this scales total `energy()` wall time. `--timer` instead scales one
+Psi4 flat timer, which is what a vendor DF-K claim actually needs: a kernel
+speedup quoted against an N-core CPU run of the same kernel must be normalized by
+how that kernel scales, not by how the enclosing method scales. The two differ
+substantially here, so the choice is explicit rather than defaulted.
 """
 import argparse
 from collections import defaultdict
@@ -22,10 +28,31 @@ import re
 import statistics
 
 NAME = re.compile(r"^(?P<system>.+?)-(?P<basis>.+)-cpu(?P<threads>\d+)-(?P<repeat>\d+)$")
+TIMER_LINE = re.compile(r"^(.*?)\s*:\s*([\d.]+)u\s+([\d.]+)s\s+([\d.]+)w\s+(\d+) calls")
 
 
-def load(results):
-    """Group `<system>-<basis>-cpuN-<repeat>` case directories by case and width."""
+def timer_wall(path, name):
+    """Wall seconds for one flat Psi4 timer, or None if it is absent.
+
+    Only the flat section counts. The call-tree section below it repeats the same
+    timer names indented under `|`, and summing those would double-count.
+    """
+    for line in Path(path).read_text().splitlines():
+        if "|" in line:
+            continue
+        match = TIMER_LINE.match(line)
+        if match and match.group(1).strip() == name:
+            return float(match.group(4))
+    return None
+
+
+def load(results, timer=None):
+    """Group `<system>-<basis>-cpuN-<repeat>` case directories by case and width.
+
+    With `timer`, the measured quantity is that flat timer's wall time rather than
+    the whole `energy()` call. A run whose timer.dat lacks the timer is dropped
+    with a name, never silently treated as zero.
+    """
     cases = defaultdict(lambda: defaultdict(list))
     for path in sorted(Path(results).glob("*/result.json")):
         match = NAME.match(path.parent.name)
@@ -40,7 +67,13 @@ def load(results):
                              f"result.json says {record.get('threads')}")
         if record.get("mode") != "cpu":
             raise ValueError(f"{path.parent.name}: not a CPU run")
-        cases[(record["system"], record["basis"])][threads].append(record["wall_s"])
+        if timer is None:
+            measured = record["wall_s"]
+        else:
+            measured = timer_wall(path.parent / "timer.dat", timer)
+            if measured is None:
+                raise ValueError(f"{path.parent.name}: timer {timer!r} not in timer.dat")
+        cases[(record["system"], record["basis"])][threads].append(measured)
     return cases
 
 
@@ -60,8 +93,8 @@ def amdahl(narrow_threads, narrow_s, wide_threads, wide_s):
     return serial, parallel
 
 
-def analyze(results, target_threads=56):
-    cases = load(results)
+def analyze(results, target_threads=56, timer=None):
+    cases = load(results, timer)
     rows = []
     for (system, basis), widths in sorted(cases.items()):
         if len(widths) < 2:
@@ -87,6 +120,7 @@ def analyze(results, target_threads=56):
                         "asymptotic_speedup_vs_narrow": narrow_s / serial})
         rows.append(row)
     return {"target_threads": target_threads,
+            "measured_quantity": timer or "energy() wall time",
             "extrapolation_caveat": "Two-point Amdahl fit: no residual, assumes a "
                                     "width-independent serial fraction. Upper bound, not a "
                                     "measurement.",
@@ -95,7 +129,8 @@ def analyze(results, target_threads=56):
 
 def markdown(summary):
     target = summary["target_threads"]
-    text = ["| System | Basis | Narrow | Wide | Narrow median, s | Wide median, s | Measured speedup | Parallel eff. | "
+    text = [f"Scaling of **{summary['measured_quantity']}**.", "",
+            "| System | Basis | Narrow | Wide | Narrow median, s | Wide median, s | Measured speedup | Parallel eff. | "
             f"Projected {target}T, s | Projected speedup | Asymptote |",
             "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for row in summary["rows"]:
@@ -119,9 +154,12 @@ def main():
     parser.add_argument("results", type=Path)
     parser.add_argument("--target-threads", type=int, default=56,
                         help="width to extrapolate to (default 56, NVIDIA's quoted CPU baseline)")
+    parser.add_argument("--timer", metavar="NAME",
+                        help="scale this Psi4 flat timer (e.g. 'JK: JK') instead of total "
+                             "energy() wall time")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    summary = analyze(args.results, args.target_threads)
+    summary = analyze(args.results, args.target_threads, args.timer)
     if not summary["rows"]:
         raise SystemExit(f"no case had two thread widths under {args.results}")
     report = markdown(summary)

@@ -69,3 +69,55 @@ def test_thread_count_disagreement_between_name_and_record_is_fatal(tmp_path):
     write_case(tmp_path, "water", "cc-pvdz", 24, 1, 9.0, recorded_threads=8)
     with pytest.raises(ValueError, match="directory says 24 threads"):
         mod.analyze(tmp_path)
+
+
+TIMER_DAT = """
+Timers:
+
+RV: Form V                          :   1297.100u      0.000s     97.700w     40 calls
+JK: JK                              :    123.600u      0.000s      {jk}w    103 calls
+UV: Form V                          :    597.500u      0.000s     45.000w     26 calls
+
+Call tree:
+
+| | | JK: JK                        :      1.000u      0.000s      9999.000w    22 calls
+"""
+
+
+def write_timer(root, system, basis, threads, repeat, wall_s, jk_w):
+    write_case(root, system, basis, threads, repeat, wall_s)
+    (root / f"{system}-{basis}-cpu{threads}-{repeat}" / "timer.dat").write_text(
+        TIMER_DAT.format(jk=jk_w))
+
+
+def test_timer_scaling_uses_the_named_kernel_not_the_whole_calculation(tmp_path):
+    # Total wall halves, but the kernel barely moves: reporting the first as if
+    # it were the second is the error this option exists to prevent.
+    write_timer(tmp_path, "benzene", "aug-cc-pvdz", 8, 1, 200.0, 10.0)
+    write_timer(tmp_path, "benzene", "aug-cc-pvdz", 24, 1, 100.0, 9.0)
+
+    total = mod.analyze(tmp_path)["rows"][0]
+    kernel = mod.analyze(tmp_path, timer="JK: JK")["rows"][0]
+    assert total["measured_speedup"] == pytest.approx(2.0)
+    assert kernel["measured_speedup"] == pytest.approx(10.0 / 9.0)
+
+
+def test_timer_wall_ignores_the_call_tree_copy_of_the_same_name(tmp_path):
+    write_timer(tmp_path, "water", "cc-pvdz", 8, 1, 12.0, 4.0)
+    path = tmp_path / "water-cc-pvdz-cpu8-1" / "timer.dat"
+    # The tree section lists JK: JK again at 9999w; taking it would be a 2500x error.
+    assert mod.timer_wall(path, "JK: JK") == pytest.approx(4.0)
+
+
+def test_a_missing_timer_is_named_rather_than_counted_as_zero(tmp_path):
+    write_timer(tmp_path, "water", "cc-pvdz", 8, 1, 12.0, 4.0)
+    write_timer(tmp_path, "water", "cc-pvdz", 24, 1, 10.0, 3.0)
+    with pytest.raises(ValueError, match="timer 'DFT: nope' not in timer.dat"):
+        mod.analyze(tmp_path, timer="DFT: nope")
+
+
+def test_measured_quantity_is_recorded_in_the_summary(tmp_path):
+    write_timer(tmp_path, "water", "cc-pvdz", 8, 1, 12.0, 4.0)
+    write_timer(tmp_path, "water", "cc-pvdz", 24, 1, 10.0, 3.0)
+    assert mod.analyze(tmp_path)["measured_quantity"] == "energy() wall time"
+    assert mod.analyze(tmp_path, timer="JK: JK")["measured_quantity"] == "JK: JK"
