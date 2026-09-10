@@ -103,6 +103,19 @@ isolated same-host accelerator speedup.
 Do not compare these SAPT timings to the timing suite's historical RHF timings
 as if they measured the same method or hardware.
 
+## Recorded runs
+
+- [`results/phoenix-h200-20260910/`](results/phoenix-h200-20260910/) — H200,
+  `SAPT_DFT_GRAC_COMPUTE=ITERATIVE` throughout, with DF-K/XC attribution,
+  effective DF-K TFLOPS, CPU thread scaling, and a comparison against NVIDIA's
+  published cuEST figures. **Quote from this one.**
+- [`results/phoenix-a100-20260909/`](results/phoenix-a100-20260909/) — A100,
+  fixed GRAC shift. Superseded: it times a calculation that presumes the shift
+  is already known, so its speedups are not what a user pays.
+
+Its `regenerate.sh` rebuilds every table in a run directory from the raw case
+trees, so a table in a report is never transcribed by hand.
+
 ## Provenance to retain beside a run
 
 Record the source commit and any patch, staged binary path and hash, build flags,
