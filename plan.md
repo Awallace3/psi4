@@ -410,6 +410,50 @@ remains between it and the `777f904` target, in dependency order:
    with zero stage failures. No limit raised, no grid pruned, no tolerance
    relaxed. The accumulator's 2e9 limit stays in force for the accumulator.
 
+5. **Match intermediates to a precision that depends on the property of
+   interest.** *Status: the budget exists and is measured; the intermediates do
+   not meet it.* `psi4/driver/procrouting/isapol_budget.py` perturbs a named
+   intermediate and rebuilds the entire downstream through the shipped objects
+   under the **unrelaxed** production LW policy, reporting
+   `A = defect(property)/defect(intermediate)` and hence the required precision
+   `tolerance/A`. Three disciplines keep it honest: the unperturbed rebuild
+   reproduces every shipped property group at exactly 0.0 (the rebuild path *is*
+   the shipped computation); every probe direction is projected onto the
+   manifold the strict LW gate enforces, and a direction that cannot be
+   projected raises; and every amplification is measured at `eps` and `eps/2`
+   and withheld unless the two agree (25 of 112 water rows correctly withheld).
+   It is a first-order directional **lower bound**, labelled
+   `..._not_a_gate`, and meeting a requirement is necessary, not sufficient.
+   *Two geometries, because two error models.* The recorded-error metric
+   `max|Δ|/max(1,max|ref|)` is well posed only where elements share a scale.
+   For the shape samples, which span many decades, it is not: the absolute
+   amplification **rises** 5.6e4 → 2.4e5 → 6.3e5 as eps falls 1e-6 → 1e-10
+   (1.8e6 → 1.4e7 → 6.6e7 for α₃), linearity defect never under ~0.1. The
+   elementwise-relative geometry converges there (8.9e-4 → 7.8e-4;
+   9.8e-3 → 8.5e-3) and is offered only for the two stages whose downstream is
+   regenerated from scratch. The two metrics are **not** comparable and the
+   driver refuses to compare across them rather than doing it quietly.
+   *Two chains, neither substitutable.* Water PBE0/cc-pVDZ direct-OV is the only
+   non-degenerate partition measurement; the **fitted-auxiliary route on water
+   is rejected outright** by strict LW (charge-sum ≈4.1e-4 at every frequency),
+   which was **not** worked around — relaxing `residual_policy` is forbidden —
+   so fitted-OV is anchored on He, which is monatomic and therefore *exactly*
+   degenerate in the two partition stages (A=0, labelled structurally
+   insensitive, not offered as evidence).
+   *Result at a 1e-6 property tolerance* (`.pi/audit/property-anchored-budget.json`,
+   SPEC §8 "Property-anchored precision budget"): Drho-C needs 2.78e-9 and
+   records 1.28e-3 (**~6 orders short**); fitted OV needs 6.21e-10 and records
+   2.30e-5 (**~4.5 orders short**); relative requirements are 2.75e-7 for
+   Drho-C and 1.03e-4 for the shape samples; `coefficient_responses` needs
+   4.00e-8 (water) / 4.39e-12 (He fitted) and `distributed_site_tensors`
+   6.58e-9 (water) / 2.65e-8 (He). The raw-tail 2.36e-8 is **left uncompared in
+   both metrics** and stays open: absolutely because no absolute requirement for
+   that stage is well posed, relatively because it was not recorded in that
+   metric — and it is a joint-tail *parameter* error standing in for a *sample
+   array*, the loosest of the three associations. Closing it means re-measuring
+   the shape samples against the same-input reference elementwise-relatively.
+   Tests: `tests/pytests/test_isapol_budget.py` (16 quick + 1 long).
+
 Each step needs its own independent oracle before it is wired to the next, and
 each must stay separately labelled in provenance; see the SPEC §8 note that the
 point-response gates are explicitly non-transferable.
@@ -432,6 +476,16 @@ trace, hashes and separate ISA candidates). Its portable conclusions are in
 - Matched native ISA reference comparisons, raw tails/Drho/fitted-OV conditioning,
   fitted versus direct response and strict recorded-input LW defects retain
   distinct gates. See SPEC/PROVISIONAL_ACCEPTANCE.md; no blanket tolerance waiver.
+  These are now *property-anchored* (section 5 item 5): Drho-C misses its 1e-6
+  requirement by ~6 orders and fitted-OV by ~4.5, and the raw-tail indicator is
+  uncompared in both metrics pending an elementwise-relative re-measurement of
+  the shape samples against the same-input reference. No stage is certified to a
+  property tolerance, and the amplifications are directional lower bounds, so
+  they bound nothing from above.
+- The fitted-auxiliary response route is **rejected outright by strict
+  production LW on water** (charge-sum ~4.1e-4 at every frequency), so it has no
+  accepted multi-atom chain at all; every fitted-route statement here rests on
+  the monatomic He chain, where the partition stages are exactly degenerate.
 - Full native SCF/PFIT/GRAC matched protocol and modern ISA preset are not closed.
 - Point-response coverage: no shell above p is exercised by the analytic ESP
   oracle (the fixture basis has none), and neither the factor-4 nor the `a`/`b`

@@ -728,6 +728,91 @@ operators, not about frequency-dependent propagator conventions. These certify t
 prerequisite only; they are not matched-protocol acceptance and must not be
 conflated with the legacy PFIT leg-B gate.
 
+### Property-anchored precision budget
+
+A per-stage error becomes a scientific statement only once it is tied to a
+property tolerance. `psi4.driver.procrouting.isapol_budget` answers, for each
+named intermediate X and each property group Y, how precisely X must be known:
+it perturbs X, rebuilds the **whole** downstream through the shipped objects
+under the unrelaxed production LW policy, and reports the amplification
+`A = defect(Y)/defect(X)`; the required precision is `tolerance(Y)/A`. Five
+intermediates are named: `drho_c_coefficients`, `partition_shape_samples`,
+`ov_transition_legs`, `coefficient_responses`, `distributed_site_tensors`.
+
+Three disciplines make the number mean something. First, the unperturbed
+rebuild must reproduce every shipped property group at **exactly 0.0**, so the
+rebuild path *is* the shipped computation and not a re-implementation of it;
+this is asserted on both fixtures and every available stage. Second, a probe
+direction must preserve every structural invariant the strict LW gate enforces
+— charge-neutral OV legs, symmetric charge-null coefficient responses,
+reciprocal charge-sum-free pair tensors — so a measured defect is physics and
+not the gate refusing malformed input; a direction that cannot be projected
+onto its manifold raises rather than being probed. Third, each amplification is
+measured at `eps` and `eps/2` and is **withheld** unless the two agree to
+`linearity_tolerance`; on the water chain 25 of 112 rows are correctly withheld.
+Every quoted A is a *first-order directional lower bound*: meeting the
+requirement is necessary, not sufficient. The whole facility is labelled
+`diagnostic_only_first_order_directional_lower_bound_not_a_gate` and is not a
+gate.
+
+Two probe geometries exist because two error models do. The `absolute`
+geometry uses the recorded-error metric `max|actual−reference|/max(1,max|reference|)`,
+which is the right question only for an intermediate whose elements share a
+scale. The shape samples span many decades, and a max-scaled probe adds
+`eps·max(shape)` uniformly, swamping the exponentially small tail where
+`w_a/Σw` actually lives: measured on water, the absolute amplification for
+`alpha_iso_rank1` **rises** 5.6e4 → 2.4e5 → 6.3e5 as eps falls 1e−6 → 1e−8 →
+1e−10 (and 1.8e6 → 1.4e7 → 6.6e7 for `alpha_iso_rank3`), with a linearity
+defect never below ~0.1. That probe is not measuring a derivative and no
+absolute requirement for that stage is well posed. The `relative` geometry
+therefore probes `max(|actual−reference|/|reference|)` over the reference
+support, leaving exact zeros exactly zero, and converges: 8.9e−4 → 7.8e−4 and
+9.8e−3 → 8.5e−3 over the same eps range. It is offered **only** for the two
+stages whose downstream is regenerated from scratch; the restricted stages
+carry linear invariants an elementwise multiplicative probe does not preserve,
+and asking for it there raises. The two metrics are not commensurable, and
+`precision_budget` **refuses** to compare a recorded error measured in one
+against a requirement derived in the other rather than performing the
+comparison silently.
+
+Measured requirements at a 1e−6 property tolerance, evidence in
+`.pi/audit/property-anchored-budget.json`:
+
+| stage | chain | metric | binding A | required | recorded | meets |
+|---|---|---|---|---|---|---|
+| `drho_c_coefficients` | water direct-OV | absolute | 3.60e2 (α₃) | 2.78e−9 | 1.28021885e−3 | **no**, by ~6 orders |
+| `drho_c_coefficients` | water direct-OV | relative | 3.64 (α₃) | 2.75e−7 | — | not measured |
+| `partition_shape_samples` | water direct-OV | relative | 9.75e−3 (α₃) | 1.03e−4 | — | not measured |
+| `coefficient_responses` | water direct-OV | absolute | 2.50e1 (α₃) | 4.00e−8 | — | not measured |
+| `distributed_site_tensors` | water direct-OV | absolute | 1.52e2 (C12) | 6.58e−9 | — | not measured |
+| `ov_transition_legs` | He fitted | absolute | 1.61e3 (C10) | 6.21e−10 | 2.30197983e−5 | **no**, by ~4.5 orders |
+| `coefficient_responses` | He fitted | absolute | 2.28e5 (α₃) | 4.39e−12 | — | not measured |
+| `distributed_site_tensors` | He fitted | absolute | 3.78e1 (C12) | 2.65e−8 | — | not measured |
+
+Two chains are needed and neither substitutes for the other. Water
+(PBE0/cc-pVDZ, generated recipe, direct-OV, three sites) is the only
+non-degenerate partition measurement, but the **fitted-auxiliary route on water
+is rejected outright** by the strict production LW gate — charge-sum ≈4.1e−4 at
+every frequency — so the fitted-OV intermediate cannot be anchored there and is
+anchored on He instead. He is monatomic, so `w_a/Σw ≡ 1` and the two partition
+stages are *exactly* degenerate on it (A = 0); their "satisfied" rows on He are
+an artifact of that degeneracy and are labelled as structurally insensitive,
+not offered as evidence. The rejection was not worked around: relaxing the
+residual policy to admit it is forbidden and was not done.
+
+The shape-sample recorded error 2.35888047e−8 is left **uncompared in both
+metrics** — uncompared absolutely because no absolute requirement for that
+stage is well posed, and uncompared relatively because it was recorded in the
+other metric. It is additionally the loosest of the three associations: it is a
+joint-tail *parameter* error standing in for the sample array. Closing it needs
+the shape samples re-measured against the same-input reference in the
+elementwise-relative metric. What the budget does establish is that the two
+recorded errors it *can* compare — Drho-C coefficients and fitted-OV
+coefficients — miss their property-anchored requirements by roughly six and
+four and a half orders of magnitude respectively, so neither is anywhere near a
+1e−6 property guarantee, and the per-stage provisional profiles above must not
+be read as implying one.
+
 [PROVISIONAL_ACCEPTANCE.md](PROVISIONAL_ACCEPTANCE.md) owns exact opt-in policy;
 its historical milestone statuses do not supersede current capability above.
 

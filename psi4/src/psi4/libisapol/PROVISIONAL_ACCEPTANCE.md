@@ -55,6 +55,35 @@ These are prior measurements, not fresh provisional acceptance:
 - TODO12: tighten every newly provisional downstream property and end-to-end gate
   to its original strict target, with stage-specific error budgets and reruns.
 
+TODO12's "stage-specific error budgets" half is now **measured**, though not yet
+met. `psi4.driver.procrouting.isapol_budget` derives, per intermediate and per
+property group, the precision that intermediate must be known to for a stated
+property tolerance, by perturbing it and rebuilding the whole downstream through
+the shipped objects under the unrelaxed production LW policy. Evidence:
+`.pi/audit/property-anchored-budget.json`; specification: SPEC.md §8. Against a
+1e-6 property tolerance the historical indicators stand as:
+
+- TODO10 (Drho-C, 0.0012802188514176112, absolute metric) needs **2.78e-9**
+  (A=3.60e2, binding on alpha_iso_rank3, water direct-OV): **misses by ~6 orders**.
+- TODO11 (fitted OV, 2.3019798321950356e-5, absolute metric) needs **6.21e-10**
+  (A=1.61e3, binding on C10, He fitted chain): **misses by ~4.5 orders**.
+- TODO9 (raw tails, 2.3588804665973028e-8) is **left uncompared**. The
+  max-scaled metric it was recorded in is not a well-posed question for the
+  shape samples: their elements span many decades and the max-scaled
+  amplification diverges as the probe shrinks (5.6e4 -> 2.4e5 -> 6.3e5 over
+  eps 1e-6 -> 1e-10) instead of converging. In the elementwise-relative metric,
+  which does converge, the requirement is 1.03e-4 -- but the recorded error is
+  not in that metric and the budget refuses to compare across metrics. TODO9
+  additionally associates a joint-tail *parameter* error with a *sample array*;
+  closing it needs the shape samples re-measured against the same-input
+  reference elementwise-relatively.
+
+Neither comparison is a new provisional pass, and none of these amplifications
+is a gate: each is a first-order directional lower bound, so meeting the derived
+precision is necessary and not sufficient. What they do establish is that the
+per-stage provisional profiles above must not be read as implying any 1e-6
+end-to-end property bound. TODO12 remains open on the tightening half.
+
 ## Measured results before the Drho-C-only exception
 
 Task8's explicit profile is implemented. The combined ISA/FDDS suite passes
