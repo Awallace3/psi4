@@ -477,7 +477,11 @@ strengths come from `weights` (all seven types, including the mis-documented
 
 Frames are local-to-global **by column**, the same contract as `isa_t_functions`
 and as CamCASP's `Axes` direction cosines, and are required proper orthogonal to
-1e-12. Bounds are declared, not adjustable: `MAX_RANK 4`, `MAX_SITES 64`,
+1e-12. Because a `COPY` variable is shared in each site's own local axes, the
+model also reports `copy_anchor_discrepancy`, the largest gap between a
+variable's anchor and the same component at an equivalent site; it is zero
+exactly when the caller's frames really do make the type's sites equivalent (see
+below). Bounds are declared, not adjustable: `MAX_RANK 4`, `MAX_SITES 64`,
 `MAX_POINTS 512`, `MAX_PARAMETERS 4096`. `refine()` requires an explicit
 `target_origin`, `source_id` and `generation_record`, and enforces the same
 origin/representation pairing as `pfit.cc`: a `NativeDirectActualPointResponse`
@@ -543,6 +547,81 @@ The far lattice barely moves the anchors (O isotropic 0.1%, H 0.03%); the near
 lattice, whose inner 4.5-bohr shell sits inside the density, moves H isotropic
 by −22% — the refinement is doing what it is asked to do, and what it is asked
 to do depends entirely on where the caller puts the probes.
+
+**Refinement on the constrained-NN chain, and the frame its `COPY` needs.**
+The demo above anchors on ISA-A/oeprop, which is not the trace's path.
+`.pi/audit/avtz-nn-refinement.py` instead refines the **constrained-NN** chain's
+own LW local tensors — same protocol, plus the MAIN-matched `aug-cc-pVTZ-JKFIT`
+AUX and the traced `lambda=1000` — with the fit-free `direct_ov` row refined
+alongside it off the *same* native context, so only the anchor and penalty
+centre differ. E = −76.37966827740806, SCF 2.67 s, `direct_ov` 25.48 s,
+constrained NN a further 7.82 s, peak RSS 1,494,280 KiB, nbf 92, nOV 435,
+`input-sum-rule` 6.299e-09 / 2.792e-07. Targets are formed once per lattice and
+shared, and are declared for what they are: this script's own
+`NativeDirectActualPointResponse` point-charge quantities. Feeding
+constrained-NN anchors does not turn them into the reference's
+`SuppliedFittedPropagatorPointResponse` target.
+
+| anchors from | shells (bohr) | rank | data rms | max residual | anchor shift max\|Δ\| (rel) | refined isotropic α (O, H, H) |
+|---|---|---|---|---|---|---|
+| `direct_ov` | 4.5/6.0/7.5 | 17/17 | 3.593e-04 | 3.273e-03 | 2.278 (0.539) | 7.27406, 1.04740, 1.04740 |
+| `direct_ov` | 7.5/9.0/10.5 | 17/17 | 3.303e-05 | 3.798e-04 | 0.029 (0.038) | 7.12793, 1.36796, 1.36796 |
+| `lambda=1000` | 4.5/6.0/7.5 | 17/17 | 3.589e-04 | 3.267e-03 | 2.185 (0.538) | 7.27529, 1.04662, 1.04662 |
+| `lambda=1000` | 7.5/9.0/10.5 | 17/17 | 3.329e-05 | 3.817e-04 | 0.053 (0.038) | 7.12452, 1.36549, 1.36549 |
+
+against anchors 7.12410 / 1.37343 / 1.37343 (`direct_ov`) and 7.10024 /
+1.36972 / 1.36972 (`lambda=1000`). The **measured ordering** is that refinement
+dominates the response basis at the site level: the constrained-NN fit moves the
+anchors by 0.024 (O) and 0.0037 (H) in isotropic α, while refining on the near
+lattice moves them by ~0.15 (O) and ~0.33 (H). Where the two rows differ is not
+the dipole: sorted by the ranks each variable couples, the pure dipole variables
+move by at most 2.5e-03 of the largest anchor while the variables touching rank
+2 move by 2.0e-02 of it, eight times as much (forty times at PBE0/cc-pVDZ). The
+constrained-NN fit's site-level footprint is therefore a **quadrupole** effect,
+and a dipole-level agreement between the rows is not agreement of the localized
+model.
+
+Frames had to be declared to get here, and that is a structural finding, not a
+detail. A `COPY` equivalence is expressed in each site's **own local axes**, so
+declaring one commits the caller to sites whose local tensors coincide — and
+under global-identity frames (`frames=None`, LW's explicit default) water's two
+hydrogens are mirror images, with the in-plane `10,11c` dipole coupling carrying
+opposite signs (±0.703 at PBE0/cc-pVDZ). `refinement_model` reads the
+*reference* site's value and `refine` writes it to every site of the type with
+the same sign, exactly as CamCASP does, so in that frame the second hydrogen's
+own anchors are unreachable: a hard-pinned fit misses them by twice the
+coupling. `RefinementModel.copy_anchor_discrepancy` now **measures** that — the
+largest distance between a variable's anchor and the same component at any
+equivalent site — and it is reported, not repaired and not refused, because
+imposing the reference site's value is the transcribed behaviour. Under the
+frames used above it is 8.089e-09 / 7.497e-09, i.e. grid noise.
+
+The frames themselves come from the reference case's `H2O.axes` — `H1  z global
+Z x from H2 to H1`, `H2  z global Z x from H1 to H2` — which is an **input**
+artifact, already committed verbatim as the `axes` field of
+`tests/pytests/data_isapol/camcasp_cn_pot_h2o_l2h1.json`, and is rebuilt from
+the molecule's own geometry rather than imported as numbers; nothing is read
+from the reference `Cn` output, so plan §5 item 2's boundary holds. For this
+water that declaration is `diag(-1,-1,1)` on the first hydrogen and the identity
+elsewhere. Getting it right is worth a factor in fit quality, because the model
+can then actually represent both hydrogens: against the identity-frame run the
+data rms falls from 4.047e-04 to 3.593e-04 (near) and 8.749e-05 to 3.303e-05
+(far), and the anchor distortion the fit needs falls from 2.892 (0.962 relative)
+to 2.278 (0.539) and from 0.246 (0.354) to 0.029 (0.038).
+
+`tests/pytests/test_isapol_nn_refinement.py` carries this at PBE0/cc-pVDZ, whose
+default `cc-pVDZ-JKFIT` AUX is already MAIN-matched, for a fraction of the cost:
+it asserts that the anchors are the accepted constrained-NN chain's own and are
+distinguished by their digest, that both rows refine against one shared target
+set (re-deriving the targets from the NN context and comparing bitwise), that
+each refinement beats its *own* anchors in the packed-target rms, that `COPY`
+equivalence and symmetry survive, the rank ordering above, and that a
+`1e12` penalty coefficient holds the constrained-NN anchors to within
+`copy_anchor_discrepancy`. The frame failure itself is certified without an SCF
+by `test_isapol_refine.py::test_a_copy_equivalence_reports_how_far_its_sites_disagree`,
+which mirrors one hydrogen's rank-1 anchors, checks the reported discrepancy is
+exactly twice the flipped coupling, and shows a pinned fit missing the
+equivalent site's anchors by precisely that much.
 
 `tests/pytests/test_isapol_native_point_response.py` certifies the same wiring
 at the cheap sto-3g fixture: refining a test-declared isotropic rank-1 model

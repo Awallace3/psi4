@@ -30,9 +30,12 @@ pytestmark = [pytest.mark.smoke]
 
 IDENTITY = ((1., 0., 0.), (0., 1., 0.), (0., 0., 1.))
 #: H1's local frame is the C2v image of H2's, the signed permutation
-#: diag(-1,-1,1).  This is what CamCASP's own ``Axes`` section builds for
-#: ``H1 z global z x global -x``, and it is the frame that makes the two
-#: hydrogens share one set of variables with no sign changes.
+#: diag(-1,-1,1).  This is what the reference case's own ``H2O.axes`` builds --
+#: ``H1  z global Z x from H2 to H1`` at this geometry, committed verbatim as the
+#: ``axes`` field of ``data_isapol/camcasp_cn_pot_h2o_l2h1.json`` -- and it is
+#: the frame that makes the two hydrogens share one set of variables with no
+#: sign changes.  Leaving both in global axes instead is what
+#: ``test_a_copy_equivalence_reports_how_far_its_sites_disagree`` measures.
 H1_FRAME = ((-1., 0., 0.), (0., -1., 0.), (0., 0., 1.))
 #: ~/gits/CamCASP/tests/H2O_props/psi4/H2O-avtz.clt, bohr.
 O_ORIGIN = (0., 0., 0.)
@@ -211,6 +214,66 @@ def test_l2h1_model_shape():
     assert model.parameter_labels[-1] == 'H1_11s_11s_A'
     assert len(model.anchors) == len(model.strengths) == model.parameter_count
     assert model.anchor_sha256 and model.provenance
+    # H1's frame is the C2v image of H2's, so the two hydrogens' *local* tensors
+    # are the same array and the COPY declaration costs nothing at all.
+    assert model.copy_anchor_discrepancy == 0.0
+
+
+#: Racah ``00,10,11c,11s`` sign pattern of the mirror that maps one hydrogen of a
+#: planar molecule onto the other: in-plane ``11c`` flips, ``z`` and the
+#: out-of-plane ``11s`` do not.
+MIRROR = np.diag([1., 1., -1., 1.])
+
+
+def test_a_copy_equivalence_reports_how_far_its_sites_disagree():
+    """``copy_anchor_discrepancy``: what a COPY declaration costs in the wrong frame.
+
+    A COPY equivalence is written in each site's *own* local axes, so declaring
+    one commits the caller to sites whose local tensors coincide.  Leave two
+    mirror-image sites in global axes and they do not: the ``10,11c`` coupling
+    carries opposite signs.  CamCASP writes the reference site's value to every
+    site of the type regardless, so this module does too, and reports the
+    distance rather than symmetrizing the anchors or refusing the model.  A
+    penalty strong enough to pin the parameters to the anchors then misses the
+    *equivalent* site's own anchors by precisely that distance -- which is the
+    measurable statement that the frames, not the fit, are what was wrong.
+    """
+    built = case('l2h1')
+    anchor_o, anchor_h = built['anchors'][0], built['anchors'][1]
+    mirrored = MIRROR @ anchor_h @ MIRROR
+    global_axes = (R.RefinementSite('O', 'O', O_ORIGIN, IDENTITY, 2),
+                   R.RefinementSite('H1', 'H', H1_ORIGIN, IDENTITY, 1),
+                   R.RefinementSite('H2', 'H', H2_ORIGIN, IDENTITY, 1))
+    model = R.refinement_model(global_axes, [anchor_o, anchor_h, mirrored],
+                               cutoff=1.0e-4, weight_coefficient=1.0e12,
+                               provenance='mirror-image sites left in global axes')
+
+    # The variable list is unchanged -- a sign flip does not move |anchor| past
+    # the cutoff -- so the two models differ in the anchors alone.
+    assert model.parameter_labels == built['model'].parameter_labels
+    expected = max(abs(anchor_h[i, j] - mirrored[i, j])
+                   for i in range(4) for j in range(i, 4)
+                   if abs(anchor_h[i, j]) > 1.0e-4)
+    assert expected > 0.0
+    assert model.copy_anchor_discrepancy == expected
+    assert model.copy_anchor_discrepancy == 2.0 * abs(anchor_h[1, 2])
+
+    # Pinned hard, so the data term is irrelevant and the parameters sit on the
+    # anchors of the *reference* hydrogen, H1.
+    result = R.refine(model, built['points'], built['targets'], damping=0.0,
+                      target_origin=core.IsaPfitTargetOrigin.SyntheticAnalyticTest,
+                      source_id='test_isapol_refine',
+                      generation_record='pinned mirror-image COPY declaration')
+    assert result.status == core.IsaPfitStatus.Solved
+    assert result.anchor_shift_maxabs < 1.0e-6
+    assert np.max(np.abs(result.refined_tensors[1] - anchor_h)) < 1.0e-6
+    assert np.max(np.abs(result.refined_tensors[2] - mirrored)) == pytest.approx(
+        model.copy_anchor_discrepancy, abs=1.0e-6)
+    # Same anchors in each site's own local axes: nothing to report, and the
+    # equivalent site is then reproduced as exactly as the reference one.
+    matched = R.refinement_model(global_axes, [anchor_o, anchor_h, anchor_h.copy()],
+                                 cutoff=1.0e-4, provenance='matched local anchors')
+    assert matched.copy_anchor_discrepancy == 0.0
 
 
 def test_cutoff_drops_components_only_by_the_reference_site():

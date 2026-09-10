@@ -323,11 +323,41 @@ remains between it and the `777f904` target, in dependency order:
    table is in SPEC §6 and is measured by
    `tests/pytests/test_isapol_matched_auxiliary.py` under the untouched
    production policy — no tolerance, grid or penalty moved.
-   *What is still open in this item:* (a) the **refinement step on this chain**
-   — `.pi/audit/avtz-grac-refinement-demo.py` refines direct-OV point-charge
-   targets, which is not the constrained-NN path, so refinement has yet to be
-   driven from the accepted constrained-NN distributed response (point lattice
-   and model stay caller-declared, per item 2); and (b) the accepted matched
+   *Part (a), the refinement step on this chain, is now done.*
+   `.pi/audit/avtz-nn-refinement.py` refines the accepted constrained-NN chain's
+   **own** LW local tensors on that protocol, with the fit-free `direct_ov` row
+   refined alongside off the same native context, so the two refinements differ
+   in the anchor and penalty centre alone. Targets stay this script's own
+   `NativeDirectActualPointResponse` point-charge quantities and are declared as
+   such; the lattice and model stay caller-declared, per item 2. Two measured
+   orderings came out of it. First, **refinement dominates the response basis**
+   at the site level: the constrained-NN fit moves the anchors by 0.024 (O) /
+   0.0037 (H) in isotropic α, while refining on the near 4.5/6.0/7.5 lattice
+   moves them by ~0.15 (O) / ~0.33 (H) — consistent with item 6's finding that
+   the site-resolved dispersion splits, not the molecular C6, are what disagree.
+   Second, the two rows differ in the **quadrupole**, not the dipole: the pure
+   dipole variables move by ≤2.5e-3 of the largest anchor and the variables
+   touching rank 2 by 2.0e-2 of it (a factor 8 at aVTZ, 40 at cc-pVDZ), so a
+   dipole-level agreement between the rows must not be quoted as agreement of
+   the localized model.
+   *And a structural finding that had to be fixed first.* A `COPY` equivalence
+   is expressed in each site's own local axes, so under LW's explicit
+   `frames=None` identity default water's two hydrogens — mirror images, with
+   the in-plane `10,11c` coupling at ±0.703 — cannot share one variable set at
+   all: `refine` writes the reference site's value to both with the same sign,
+   as CamCASP does, and misses the second hydrogen's anchors by twice the
+   coupling. `RefinementModel.copy_anchor_discrepancy` now measures this and is
+   reported rather than repaired. The frames used are the reference case's
+   `H2O.axes` declaration, an **input** artifact already committed verbatim as
+   the `axes` field of `tests/pytests/data_isapol/camcasp_cn_pot_h2o_l2h1.json`
+   and rebuilt from the molecule's geometry, not read from the reference `Cn`
+   output — item 2's boundary is intact. Declaring them lets the model actually
+   represent both hydrogens: data rms 4.047e-4 → 3.593e-4 (near), 8.749e-5 →
+   3.303e-5 (far), and the anchor distortion the fit needs 2.892 (0.962 rel) →
+   2.278 (0.539) and 0.246 (0.354) → 0.029 (0.038). Committed coverage:
+   `tests/pytests/test_isapol_nn_refinement.py` at PBE0/cc-pVDZ, plus the
+   SCF-free `test_isapol_refine.py::test_a_copy_equivalence_reports_how_far_its_sites_disagree`.
+   *What is still open in this item:* (b) the accepted matched
    chain's remaining defect against `direct_ov` is concentrated in the **rank-3
    column** (O static scalar 177.75 vs 165.23; H 9.2370 vs 2.9586), a component
    the reference's `H-Limit 1` model does not carry at all, so it cannot be
@@ -593,8 +623,10 @@ remains between it and the `777f904` target, in dependency order:
    constrained-NN route is the closer of the two. Every site-resolved split is
    far outside it, in a consistent pattern — O-O too large and worsening with
    order, H-H ~46% too small — which localizes the disagreement to the two stages
-   our chain does not yet apply: PFIT refinement (item 1 part B, still on
-   direct-OV targets) and the rank-limited `.pdef` model.
+   our chain does not yet apply: PFIT refinement (item 1 part B now drives it
+   from the constrained-NN chain's own anchors, but against native direct-OV
+   point-charge targets on a caller-declared lattice, not the reference's) and
+   the rank-limited `.pdef` model.
    *A measured structural obstacle to the second of those.* Declaring the
    reference's per-site rank limits directly is currently **impossible**, not
    merely unimplemented: `native_properties` rejects non-uniform ranks with

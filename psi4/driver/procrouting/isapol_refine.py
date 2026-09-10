@@ -196,6 +196,17 @@ class RefinementModel:
     ``anchors[k]`` is the reference site's raw value, and ``strengths[k]`` the
     weight of the ``strengths[k]*(z-anchor)**2`` penalty term; both are the two
     numbers CamCASP prints on a ``Penalties`` line (process_data.F90:2273-2275).
+
+    ``copy_anchor_discrepancy`` is how far the COPY declaration is from the
+    caller's own anchors: the largest ``abs(anchor_tensors[s][row,col] -
+    anchors[k])`` over every variable and every *equivalent* site it occupies.
+    It is zero exactly when the caller's frames really do make each type's
+    sites equivalent.  A nonzero value means the reference site's value is
+    being imposed on sites whose own tensors disagree -- which is what CamCASP
+    does too, so it is measured and reported here rather than repaired or
+    refused.  A refinement whose penalty pins the parameters to the anchors
+    cannot then reproduce the equivalent sites' anchors, and misses them by up
+    to this much.
     """
     sites: tuple
     site_types: tuple
@@ -214,6 +225,7 @@ class RefinementModel:
     frequency_au: float
     nonsymmetric_parameter_count: int
     anchor_sha256: str
+    copy_anchor_discrepancy: float
     provenance: str
 
     @property
@@ -297,7 +309,7 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
     members = {t: tuple(i for i, s in enumerate(sites) if s.site_type == t) for t in ordered_types}
 
     parameter_labels, parameter_entries, anchors, strengths = [], [], [], []
-    nonsymmetric = 0
+    nonsymmetric, copy_discrepancy = 0, 0.0
     for site_type in ordered_types:
         reference = first[site_type]
         site = sites[reference]
@@ -320,6 +332,9 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
                                                 alpha=alpha, frequency=frequency_au,
                                                 rank1=rank1, rank2=rank2))
                 nonsymmetric += len(members[site_type])
+                for other in members[site_type]:
+                    copy_discrepancy = max(copy_discrepancy,
+                                           abs(float(tensors[other][row, col]) - alpha))
     if not parameter_labels:
         raise ValueError('no component of any reference site survives the cutoff')
     if len(parameter_labels) > MAX_PARAMETERS:
@@ -336,6 +351,7 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
         weight_coefficient=float(weight_coefficient), frequency_au=float(frequency_au),
         nonsymmetric_parameter_count=nonsymmetric,
         anchor_sha256=_anchor_hash(tensors),
+        copy_anchor_discrepancy=float(copy_discrepancy),
         provenance=provenance or 'caller-supplied raw local polarizabilities; '
                                  'CamCASP write_pfit_local_symm variable construction')
 
