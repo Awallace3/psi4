@@ -318,6 +318,11 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     options.add_str("ATOMIC_RESPONSE_LOCALIZATION", "LW", "LW LS");
     /*- Explicit generated demonstration basis recipe, not a CamCASP preset. -*/
     options.add_str("ATOMIC_PROPERTY_RECIPE", "GENERATED_JKFIT_ISA_A", "GENERATED_JKFIT_ISA_A");
+    /*- Declared Cartesian molecular auxiliary basis of the generated recipe, which also
+        carries its Drho-C/ISA-A density fit. It is never inferred from BASIS or from
+        DF_BASIS_SCF: naming it selects a partition, so a different name is a different
+        declared model, not a tuned one. The default is deliberately not MAIN-matched. -*/
+    options.add_str_i("ATOMIC_PROPERTY_AUXILIARY_BASIS", "cc-pVDZ-JKFIT");
     /*- Opt-in acceptance of already-converged canonical fixed-GRAC PBE0 SCF orbitals.
         Does not run SCF or add a GRAC response kernel. -*/
     options.add_str("ATOMIC_SCF_ASYMPTOTIC_CORRECTION", "NONE", "NONE FIXED_GRAC");

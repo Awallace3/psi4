@@ -249,7 +249,7 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
         return NativeProperties(partition, context, fit, adapted, freq, quadrature, tuple(responses),
             distributed, tensors, local, dispersion, tuple(failures), diagnostics,
             f'native {kernel}; exact_exchange={exact_exchange}; local_scale={local_scale}; '
-            f'{response_algorithm}; Drho-C ISA-A; {response_basis}'
+            f'{response_algorithm}; Drho-C ISA-A[{recipe.auxiliary.name}]; {response_basis}'
             + ('' if response_basis == 'direct_ov' else f' lambda={ov_charge_penalty!r}')
             + '; no PFIT'
             + ('; ' + correction.response_description if correction.policy == 'FIXED_GRAC' else ''),

@@ -65,7 +65,11 @@ unsupported. Density-screening thresholds are not functional identity checks.
   LS is rejected. This option does not select an orbital localization method.
 - `ATOMIC_PROPERTY_RECIPE=GENERATED_JKFIT_ISA_A` is a self-contained **H/O
   demonstration recipe**, not the modern CamCASP spherical AUX/AtomAux preset.
-  Molecular AUX comes from Psi4's shipped Cartesian cc-pVDZ-JKFIT; AtomAux and
+  Molecular AUX comes from a *declared* shipped Cartesian JKFIT set, named by
+  `ATOMIC_PROPERTY_AUXILIARY_BASIS` (default `cc-pVDZ-JKFIT`, deliberately not
+  MAIN-matched) and never inferred from `BASIS` or `DF_BASIS_SCF`; that same AUX
+  also carries the Drho-C/ISA-A density fit, so naming it selects a partition and
+  a different name is a different declared model, not a tuned one. AtomAux and
   Shape are separate even-tempered radial s roles. Their normalized primitive
   exponents are .1*2^k, k=0..16 for O and .2*2^k, k=0..10 for H. Effective
   coefficients, centres, all grids, and controller options are in `result.partition.recipe`.
@@ -109,6 +113,21 @@ constrained-NN route's own penalty (`input-sum-rule` 4.65e-7), and lambda1e4,
 where that residual reaches the quadrature floor `direct_ov` itself reports
 (2.33e-8 vs 2.28e-8). Any lambda other than the recorded one is a differently
 declared model; SPEC §6 has the measured table and the binding caveat.
+
+That lambda acceptance is **basis-dependent, and the dependence is in the
+declared AUX rather than in the penalty**. At PBE0/aug-cc-pVTZ with the reference
+GRAC shift the default cc-pVDZ-JKFIT AUX is far smaller than MAIN, and there the
+traced lambda1000 chain supplies `input-sum-rule` 6.65e-6 against the same strict
+1e-6 gate, rejected at 9 of 11 Casimir nodes; the MAIN-matched aug-cc-pVTZ-JKFIT
+AUX reports 2.79e-7 at that same traced lambda and passes every node. Raising
+lambda a decade does *not* close the gap it leaves against the fit-free route --
+the pair-tensor defect is identical to five digits at 1e3 and 1e4 (0.687 for the
+default AUX, 0.0791 for the matched one) -- so the fix is the declared AUX, never
+a tolerance, a grid or a penalty. The two AUX choices are two different declared
+models with different partitions and different dispersion: molecular isotropic C6
+is partition-invariant (46.8971254018 for `direct_ov` under both), while C8/C10
+totals are not. `tests/pytests/test_isapol_matched_auxiliary.py` measures all of
+this under the untouched production policy.
 
 Prior parent water attempts 1/2 failed strict LW even after grid refinement:
 the fitted OV analytic charge defect remained 6.0372e-5; the second grid's AUX

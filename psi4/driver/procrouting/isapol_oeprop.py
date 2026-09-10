@@ -24,10 +24,22 @@ from .isapol_native_correction import (functional_definition as _functional_defi
 TASKS = frozenset(('ATOMIC_PARTITION', 'ATOMIC_POLARIZABILITIES', 'ATOMIC_DISPERSION'))
 
 
-def generated_recipe(wfn, radial=160, angular=590):
+def generated_recipe(wfn, radial=160, angular=590, aux_basis='cc-pVDZ-JKFIT'):
     """Generate all effective Gaussian descriptors from shipped JKFIT and formulas.
 
-    Molecular AUX: Cartesian cc-pVDZ-JKFIT, unchanged effective contractions.
+    Molecular AUX: the Cartesian ``aux_basis`` JKFIT set, unchanged effective
+    contractions.  It is a *declared* argument, not inferred from MAIN, and its
+    default stays cc-pVDZ-JKFIT so this remains the same modest demo recipe it
+    has always been.  The default is deliberately NOT MAIN-matched, and that is
+    not free: the molecular AUX also carries the Drho-C/ISA-A density fit, so at
+    a MAIN much larger than cc-pVDZ the fitted-auxiliary (constrained NN)
+    response route can supply a charge-flow defect that strict production LW
+    then rejects.  Measured on PBE0/aug-cc-pVTZ water with the reference GRAC
+    shift, at the traced penalty lambda=1000: cc-pVDZ-JKFIT AUX gives
+    input-sum-rule 6.65e-06 against the 1e-6 gate (9 of 11 nodes rejected),
+    whereas aug-cc-pVTZ-JKFIT gives 2.79e-07 and passes every node.  Choosing
+    the MAIN-matched AUX is therefore declaring a different model, with its own
+    partition, and never a relaxation of the gate.
     AtomAux and Shape: normalized uncontracted even-tempered s Gaussians,
     exponents .1*2**k (O, k=0..16), .2*2**k (H, k=0..10). These separate roles
     are a compact radial ISA-A demonstration, not a claimed CamCASP basis alias.
@@ -36,14 +48,16 @@ def generated_recipe(wfn, radial=160, angular=590):
     if any(mol.Z(i) not in (1, 8) for i in range(mol.natom())):
         raise ValueError('GENERATED_JKFIT_ISA_A currently supports real H/O nuclei only')
     centres = tuple((mol.x(i), mol.y(i), mol.z(i)) for i in range(mol.natom()))
-    aux = core.BasisSet.build(mol, 'DF_BASIS_SCF', 'cc-pvdz-jkfit', puream=0)
+    aux = core.BasisSet.build(mol, 'DF_BASIS_SCF', aux_basis, puream=0)
     shells = []
     for j in range(aux.nshell()):
         s = aux.shell(j)
         shells.append(p.ShellRecipe(int(aux.shell_to_center(j)), int(s.am),
             tuple(s.exp(k) for k in range(s.nprimitive)), tuple(s.coef(k) for k in range(s.nprimitive))))
-    origin = 'runtime Psi4 shipped cc-pVDZ-JKFIT plus normalized even-tempered radial s recipe; NOT modern CamCASP preset'
-    auxiliary = p.BasisRecipe('cc-pVDZ-JKFIT Cartesian molecular AUX', origin, 'Cartesian', centres, tuple(shells))
+    origin = (f'runtime Psi4 shipped {aux_basis} plus normalized even-tempered radial s '
+              'recipe; NOT modern CamCASP preset')
+    auxiliary = p.BasisRecipe(f'{aux_basis} Cartesian molecular AUX', origin, 'Cartesian',
+                              centres, tuple(shells))
     sites = []
     for i, c in enumerate(centres):
         oxygen = mol.Z(i) == 8
@@ -117,6 +131,8 @@ def validate_request(wfn, tasks):
         raise ValueError('Only ISA_A has a validated native continuous-partition adapter; MBIS is unsupported here')
     if core.get_global_option('ATOMIC_PROPERTY_RECIPE') != 'GENERATED_JKFIT_ISA_A':
         raise ValueError('Unsupported atomic basis recipe')
+    if not str(core.get_global_option('ATOMIC_PROPERTY_AUXILIARY_BASIS')).strip():
+        raise ValueError('ATOMIC_PROPERTY_AUXILIARY_BASIS must name a declared molecular AUX')
     if core.get_global_option('ATOMIC_RESPONSE_LOCALIZATION') != 'LW':
         raise ValueError('Only LW distributed-tensor localization is supported; not a density partition')
     if not isinstance(wfn, core.Wavefunction) or wfn.nirrep() != 1 or not wfn.same_a_b_orbs():
@@ -143,6 +159,7 @@ def run(wfn, tasks):
     residual = validate_request(wfn, tasks)
     correction_options = _correction_options()
     keys = ('PARTITION_SCHEME', 'ATOMIC_RESPONSE_LOCALIZATION', 'ATOMIC_PROPERTY_RECIPE',
+            'ATOMIC_PROPERTY_AUXILIARY_BASIS',
             'ATOMIC_PROPERTY_RADIAL_POINTS', 'ATOMIC_PROPERTY_SPHERICAL_POINTS',
             'ATOMIC_RESPONSE_RADIAL_POINTS', 'ATOMIC_RESPONSE_SPHERICAL_POINTS',
             'ATOMIC_SCF_ASYMPTOTIC_CORRECTION', 'ATOMIC_SCF_EXPECTED_GRAC_SHIFT',
@@ -150,7 +167,8 @@ def run(wfn, tasks):
     options = tuple((k, core.get_global_option(k)) for k in keys)
     effective = dict(options)
     recipe = generated_recipe(wfn, int(effective['ATOMIC_PROPERTY_RADIAL_POINTS']),
-                              int(effective['ATOMIC_PROPERTY_SPHERICAL_POINTS']))
+                              int(effective['ATOMIC_PROPERTY_SPHERICAL_POINTS']),
+                              str(effective['ATOMIC_PROPERTY_AUXILIARY_BASIS']))
     core.print_out('\n  Native atomic properties: '+recipe.origin+'\n')
     properties = None
     if set(tasks) == {'ATOMIC_PARTITION'}:

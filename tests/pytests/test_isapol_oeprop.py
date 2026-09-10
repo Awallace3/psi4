@@ -71,6 +71,36 @@ def test_generated_recipe_is_self_contained():
     assert r.controller.convergence == 1e-9
 
 
+def test_declared_molecular_aux_is_an_argument_never_inferred_from_main():
+    """Naming the AUX names a partition: it also carries the Drho-C/ISA-A fit.
+
+    So it is a declared argument with an unchanged default, not something read
+    off BASIS or DF_BASIS_SCF.  Only the auxiliary moves; the site radial
+    recipe, grid and controller are untouched.
+    """
+    w = psi4.core.Wavefunction.build(psi4.geometry('O\nH 1 1\nH 1 1 2 100\nsymmetry c1'),'cc-pvdz')
+    default, matched = api.generated_recipe(w), api.generated_recipe(w, aux_basis='aug-cc-pVTZ-JKFIT')
+    assert default.auxiliary.name == 'cc-pVDZ-JKFIT Cartesian molecular AUX'
+    assert matched.auxiliary.name == 'aug-cc-pVTZ-JKFIT Cartesian molecular AUX'
+    assert 'aug-cc-pVTZ-JKFIT' in matched.origin and 'NOT modern CamCASP' in matched.origin
+    assert len(matched.auxiliary.shells) > len(default.auxiliary.shells)
+    assert default.name == matched.name and default.grid == matched.grid
+    assert default.controller == matched.controller
+    assert [[sh.exponents for sh in s.shape.shells] for s in default.sites] == \
+           [[sh.exponents for sh in s.shape.shells] for s in matched.sites]
+
+
+def test_undeclared_molecular_aux_is_rejected_before_any_compute():
+    old = psi4.core.get_global_option('ATOMIC_PROPERTY_AUXILIARY_BASIS')
+    assert old == 'cc-pVDZ-JKFIT'  # registered default, case preserved
+    try:
+        psi4.core.set_global_option('ATOMIC_PROPERTY_AUXILIARY_BASIS','   ')
+        with pytest.raises(ValueError, match='AUXILIARY_BASIS'):
+            api.validate_request(None,('ATOMIC_PARTITION',))
+    finally:
+        psi4.core.set_global_option('ATOMIC_PROPERTY_AUXILIARY_BASIS',old)
+
+
 @pytest.mark.parametrize('tasks', [
     ('ATOMIC_POLARIZABILITY',),
     ('ATOMIC_PARTITION', 'ATOMIC_POLARIZABILITY'),

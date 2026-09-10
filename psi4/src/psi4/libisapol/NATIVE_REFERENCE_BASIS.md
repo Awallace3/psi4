@@ -172,3 +172,20 @@ historical SCF/grid/target artifacts, PFIT targets/model conventions and
 refinement, and the modern grid's ALDA work bound. This patch supplies no large
 matched endpoint, numerical parity, ISA reinterpretation or scientific-grid
 convergence claim.
+
+**Update: the constrained-NN blocker is measured and removed at the gate CLT's
+own basis.** The obstacle was the generated demo recipe's *molecular* AUX, which
+also carries the Drho-C/ISA-A density fit and was hardcoded to Cartesian
+cc-pVDZ-JKFIT independently of MAIN. At MAIN=aug-cc-pVTZ with the manifest's
+fixed GRAC shift .06490004527520865 the traced penalty lambda=1000 then supplies
+a charge-flow defect strict production LW rejects (`input-sum-rule` 6.6463e-6,
+9 of 11 Casimir nodes); with a MAIN-matched aug-cc-pVTZ-JKFIT AUX the same
+traced lambda gives 2.7921e-7 and every node passes. This is **not** the
+reference AUX and no such claim is made: the manifest's reference AUX is
+ordinary aVTZ RI (spherical metadata not adopted), whereas this is Psi4's
+shipped Cartesian JKFIT set used in a demonstration recipe. The point is only
+that the AUX is a *declared* model choice — now `ATOMIC_PROPERTY_AUXILIARY_BASIS`
+and `generated_recipe(..., aux_basis=)`, default unchanged and never inferred
+from `BASIS` — so a different name is a different declared partition, not a
+tuned tolerance. Table and caveats in SPEC §6; measured by
+`tests/pytests/test_isapol_matched_auxiliary.py`.

@@ -300,6 +300,38 @@ remains between it and the `777f904` target, in dependency order:
    actual partition/response path. The committed prerequisite deliberately
    feeds direct-OV response; it does not become the target by relabelling.
    Do not substitute ISA-A for constrained NN (section 4).
+   *Status: the constrained-NN chain now runs and is accepted by strict
+   production LW on the intended protocol* — PBE0/aug-cc-pVTZ water with the
+   reference GRAC shift 0.06490004527520865, `shared_sweep`, 99/590 response
+   grid, 11 Casimir nodes, at the trace's own penalty lambda=1000. What was
+   actually blocking it was **not** the penalty but the recipe's declared
+   molecular AUX, which also carries the Drho-C/ISA-A density fit and was
+   hardcoded to Cartesian cc-pVDZ-JKFIT regardless of MAIN. At that AUX the
+   traced lambda supplies `input-sum-rule` 6.6463e-6 and LW rejects 9 of 11
+   nodes; with the MAIN-matched aug-cc-pVTZ-JKFIT it is 2.7921e-7 and every
+   node passes. Raising lambda a decade leaves the defect against the fit-free
+   route identical to five digits (0.687237 default AUX, 0.0791458 matched, at
+   both 1e3 and 1e4), so the AUX is the cause and the penalty is not. The AUX is
+   therefore now a **declared** argument — `generated_recipe(..., aux_basis=)`
+   and option `ATOMIC_PROPERTY_AUXILIARY_BASIS`, default unchanged and
+   deliberately not MAIN-matched, never inferred from `BASIS`/`DF_BASIS_SCF` —
+   and its name is carried in `NativeProperties.model` as `Drho-C ISA-A[<name>]`.
+   Naming it selects a partition, so the two AUX choices are two different
+   declared models and nothing is compared across them except the distance:
+   molecular isotropic C6 is partition-invariant for `direct_ov`
+   (46.8971254018 bit-identical under both), C8/C10 totals are not. The full
+   table is in SPEC §6 and is measured by
+   `tests/pytests/test_isapol_matched_auxiliary.py` under the untouched
+   production policy — no tolerance, grid or penalty moved.
+   *What is still open in this item:* (a) the **refinement step on this chain**
+   — `.pi/audit/avtz-grac-refinement-demo.py` refines direct-OV point-charge
+   targets, which is not the constrained-NN path, so refinement has yet to be
+   driven from the accepted constrained-NN distributed response (point lattice
+   and model stay caller-declared, per item 2); and (b) the accepted matched
+   chain's remaining defect against `direct_ov` is concentrated in the **rank-3
+   column** (O static scalar 177.75 vs 165.23; H 9.2370 vs 2.9586), a component
+   the reference's `H-Limit 1` model does not carry at all, so it cannot be
+   closed against the reference and must not be quoted as agreement.
 2. **Pin the point/model/frame/anchor conventions from actual artifacts.** The
    point lattice, `.pdef` model definition and per-frequency PFIT inputs are
    among the *missing* artifacts (section 4). Until they exist, the caller still

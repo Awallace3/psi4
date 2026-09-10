@@ -330,6 +330,41 @@ never be quoted against them, and must not be used to close the water fitted-OV
 budget row — that row stays unmeasurable at lambda1, now for a precisely
 understood reason. See `test_isapol_native_charge_penalty.py`.
 
+**The declared molecular AUX, not the penalty, is what decides acceptance at a
+larger MAIN.** The generated recipe's molecular AUX also carries the Drho-C/ISA-A
+density fit, so it is now a declared argument, `generated_recipe(..., aux_basis=)`
+and option `ATOMIC_PROPERTY_AUXILIARY_BASIS` (default `cc-pVDZ-JKFIT`,
+deliberately *not* MAIN-matched, never inferred from `BASIS`/`DF_BASIS_SCF`), and
+its name is carried in `NativeProperties.model` as `Drho-C ISA-A[<name>]` so two
+partitions cannot be confused. Measured at PBE0/aug-cc-pVTZ water with the
+reference GRAC shift .06490004527520865, nbf 92, E=−76.3796682774079, 99/590
+response grid, 173460 rows, `shared_sweep`, 11 Casimir nodes, ISA 37 iterations in
+every case, strict production LW throughout (`.pi/audit/avtz-aux-match.json`):
+
+| AUX (shells) | route | fitted charge | input-sum-rule | LW fail | pair defect vs `direct_ov` | C6 total |
+| --- | --- | --- | --- | --- | --- | --- |
+| cc-pVDZ-JKFIT (42) | `direct_ov` | 0 | 6.2779e−9 | 0 | 0 | 46.897125 |
+| cc-pVDZ-JKFIT | lambda1e3 | 1.8601e−6 | **6.6463e−6** | **9/11** | 0.687237 | — |
+| cc-pVDZ-JKFIT | lambda1e4 | 1.8605e−7 | 5.4480e−7 | 0 | 0.687237 | 42.129547 |
+| aug-cc-pVTZ-JKFIT (58) | `direct_ov` | 0 | 6.2986e−9 | 0 | 0 | 46.897125 |
+| aug-cc-pVTZ-JKFIT | **lambda1e3 (traced)** | 1.4438e−7 | **2.7921e−7** | **0** | 0.0791458 | 46.768291 |
+| aug-cc-pVTZ-JKFIT | lambda1e4 | 1.4440e−8 | 4.7555e−7 | 0 | 0.0791458 | 46.768425 |
+
+So at the larger MAIN the traced lambda1000 is rejected with the default AUX and
+accepted with the MAIN-matched one, and the naive reading — "the penalty is not
+converged" — is measurably wrong: the defect against the fit-free route is
+identical to five digits at 1e3 and 1e4 for each AUX, and 8.7× smaller for the
+matched AUX at the traced lambda itself. Choosing the AUX is therefore declaring
+a different model with its own partition, never a relaxation: `residual_policy`
+stays `production`, tolerance 1e−6, and no grid or penalty moves. The two AUX
+partitions are not comparable to each other except to report the distance:
+molecular isotropic C6 is partition-invariant for `direct_ov` (46.8971254018
+bit-identical under both), C8/C10 totals are not (825.9105/15805.9658 vs
+827.0344/15864.8357). The residual defect the accepted matched chain still
+carries against `direct_ov` is concentrated in the rank-3 column (O 177.75 vs
+165.23; H 9.2370 vs 2.9586) — a component the reference's `H-Limit 1` model does
+not carry at all. See `test_isapol_matched_auxiliary.py`.
+
 PFIT targets must declare actual point-charge response `-d(phi_induced)/dq`, charge,
 units, and native-direct versus fitted-propagator origin. Never silently substitute
 a truncated multipole reconstruction, bare electrostatics or energy factor1/2.
