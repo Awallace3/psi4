@@ -129,6 +129,46 @@ positive old coefficients under auto/non-auto ridge selection, and nonzero
 exponent-capped contributions. These synthetic samples are not a physical density
 or basis; their purpose is to reach branches the water fixture cannot.
 
+## `read_cn_pot.py` — the reference localized `Cn` potential
+
+The only tool here that compiles nothing and links nothing: it decodes printed
+CamCASP *output* text.
+
+```bash
+python tests/pytests/data_isapol/oracle/read_cn_pot.py /path/to/H2O_ref_wt3_L2_Cn.pot
+python tests/pytests/data_isapol/oracle/read_cn_pot.py --fixture /path/to/CamCASP/tests/H2O_props
+```
+
+The second form rewrites `../camcasp_cn_pot_h2o_l2h1.json` from every SCF
+back-end row of a `tests/H2O_props`-shaped directory.  It reads only; the
+reference tree is never written to.
+
+A `<name>_Cn.pot` carries one block per site **type** pair, because the model
+declares one variable set per type and `COPY`s the rest, so the printed O-H
+block stands for all four ordered site pairs.  Within a block the row
+`00 00 0` is the isotropic site-site `C_n` and every other row is a recoupled
+Stone component `C_n^{l_a k_a, l_b k_b, j}` in the local axes of `H2O.axes`.
+
+**The isotropic rows are extracted; the recoupled rows are only counted.** That
+asymmetry is deliberate and is the whole reason this script exists in this form.
+What our chain produces for the anisotropy is
+`orientation_resolved_scalars_not_recoupled_components` — a different
+representation, not a coarser one — so there is no defined comparison to make
+against those 377 nonzero components yet, and carrying their values would invite
+one anyway. The census records what is there (counts per order, indices, `j`
+values, how many printed entries are exactly zero) so the uncompared track stays
+sized and labelled. Re-run with an extraction if that representation is ever
+reconciled.
+
+The `.clt` inputs are decoded alongside because the three back-end directories
+differ in **two** declarations, `SCFcode` and `HOMO`, not one. Against the shared
+`I.P. 12.62063 eV` and CamCASP's own `27.21136` eV/Eh divisor — recovered exactly
+from the Psi4 row's `HOMO -0.3989` — those are three *different* GRAC shifts, and
+DALTON's is twice the other two. So the spread across the family is not SCF-code
+noise, and only the Psi4 row is the input a native chain reproduces.
+`../test_isapol_reference_dispersion.py` asserts that, and compares nothing
+against a tolerance the model mismatch would hide.
+
 ## Why the results are committed and the tool is not run at test time
 
 CamCASP is not redistributable and `atom_grids.F90` is GDMA's, under GPL-2-or-later.
@@ -137,6 +177,9 @@ No CamCASP *source* is checked in here: `stubs.f90` and `driver.f90` are ours, a
 directory.  The binaries they produce are local development tools and are never linked
 into, or shipped with, Psi4.  `parse_cncode.py` is the one exception to "results only":
 its output is numerical constants, which ship, with permission, in `libisapol`.
+`read_cn_pot.py` is at the other extreme — it needs no build and no source at
+all, only the `.pot`/`.clt`/`.axes` files a run already printed — and the notice
+for the values it decodes travels inside the fixture it writes.
 
 ## Build flags matter
 

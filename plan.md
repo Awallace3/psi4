@@ -551,6 +551,86 @@ remains between it and the `777f904` target, in dependency order:
    near that map's null space, which is a property of the recorded error and not
    of the map.
    Tests: `tests/pytests/test_isapol_budget.py` (29 quick + 1 long).
+6. **End-to-end match against the reference `Cn` potential.** *Status: the
+   reference structure is decoded and a first comparison exists; the models do
+   not yet coincide, and the gap is localized rather than closed.*
+   The reference family is
+   `.pi/camcasp-build/tests/H2O_props/{dalton,nwchem,psi4}/check/L2H1/H2O_ref_wt3_L2_Cn.pot`.
+   Their localization headers are byte-identical (`Limit: 2`, `WSM-Limit: 2`,
+   `H-Limit: 1`, `Loc algorithm: LW`, `Weight: 3`, `Weight coeff: 0.001`,
+   `SVD threshold: 0.0`, `Pol Cutoff: 0.0001`, `NoRefine?: False`,
+   `Model file: H2O.pdef`, `Axes file: H2O.axes`), and the `H2O.axes` files are
+   identical, so the family's spread is a **yardstick that has to be read
+   carefully**: molecular isotropic C6 45.0503 / 45.7307 / 46.6174 (3.5% wide),
+   O-O site C6 18.26039 / 18.76416 / 19.27258 (5.5%), O-O C10 3672.440 /
+   3891.527 / 4106.707 (11.8%); the separate aVTZ `wt4` example gives 43.8903.
+   The three `H2O-avtz.clt` inputs differ in **two** things, not one: `SCFcode`
+   *and* `HOMO` (−0.33187 / −0.3980 / −0.3989 against a shared
+   `I.P. 12.62063 eV`), so with CamCASP's own 27.21136 eV/Eh they declare GRAC
+   shifts 0.13193004527520863 / 0.06580004527520861 / **0.06490004527520865**.
+   Only the Psi4 row's shift is the one our chain declares, and the DALTON row
+   carries twice that shift — a different asymptotic correction, not just a
+   different SCF code. The defensible yardstick is therefore the nwchem/psi4
+   pair (1.9% on molecular C6), with DALTON reported but not counted as
+   back-end noise.
+   Per-pair order truncation in the reference is exactly the admissible
+   `n = 2(l_a+l_b+1)` at `Limit 2`/`H-Limit 1`: O-O {6,8,10}, H-O {6,8},
+   H-H {6}. Comparison of our accepted aVTZ chains (matched AUX, uniform rank 3)
+   against the Psi4-back-end reference, per **ordered site pair** as printed:
+
+   | quantity | `direct_ov` | `lambda1000` (traced NN) | reference (psi4 row) |
+   | --- | --- | --- | --- |
+   | molecular isotropic C6 | 46.89713 (**+0.600%**) | 46.76829 (**+0.324%**) | 46.61741 |
+   | O-O C6 | 25.60926 (+32.88%) | 25.52363 (+32.43%) | 19.27258 |
+   | O-O C8 | 503.0882 (+22.63%) | 508.2636 (+23.89%) | 410.2453 |
+   | O-O C10 | 10666.265 (+159.73%) | 11406.429 (+177.75%) | 4106.707 |
+   | H-O C6 | 4.51717 (−15.39%) | 4.50724 (−15.58%) | 5.338895 |
+   | H-O C8 | 71.45023 (+24.60%) | 72.39140 (+26.25%) | 57.3419 |
+   | H-H C6 | 0.80479 (−46.25%) | 0.80392 (−46.31%) | 1.497312 |
+
+   The one **partition-invariant** number, the molecular isotropic C6 total, is
+   inside the reference family's own nwchem/psi4 spread for both routes, and the
+   constrained-NN route is the closer of the two. Every site-resolved split is
+   far outside it, in a consistent pattern — O-O too large and worsening with
+   order, H-H ~46% too small — which localizes the disagreement to the two stages
+   our chain does not yet apply: PFIT refinement (item 1 part B, still on
+   direct-OV targets) and the rank-limited `.pdef` model.
+   *A measured structural obstacle to the second of those.* Declaring the
+   reference's per-site rank limits directly is currently **impossible**, not
+   merely unimplemented: `native_properties` rejects non-uniform ranks with
+   `LW pipeline requires uniform explicit rank3 or rank4` (`isapol_native.py:217`),
+   because LW's workspace is uniform rank0–3. So `{O: 2, H: 1}` fails before any
+   compute (`.pi/audit/avtz-rank-limited.json`), and our uniform rank 3 admits
+   `{6,8,10,12}` on every pair where the reference admits fewer — the order
+   totals are therefore **structurally different quantities** and were not
+   quoted against each other. Closing this needs either a rank-limited LW path
+   with its own gate, or an explicitly labelled post-hoc truncation of the
+   reported components (which is still a different model from fitting under the
+   restriction, and must be labelled as such — not as agreement).
+   The recoupled anisotropic track stays separate: 377 nonzero recoupled rows in
+   the L2H1 reference (O-O 258, H-O 86, H-H 33) have no counterpart, because
+   `AnisotropicDispersion.kind == 'orientation_resolved_scalars_not_recoupled_components'`
+   is a *different representation*, not a coarser one. Note that only the
+   **isotropic** row vanishes at the odd orders; the recoupled rows do not
+   (nonzero components per order: O-O 16/46/95/118/103 at n=6…10, H-O 23/33/53
+   at n=6…8, H-H 33 at n=6), so this track cannot be dismissed as zeros. The
+   committed fixture therefore carries a census of it and deliberately not its
+   values, so that no later test can start quoting a recoupled component against
+   an orientation-resolved scalar.
+   *Committed as of this item:* `tests/pytests/data_isapol/oracle/read_cn_pot.py`
+   (decodes printed `.pot`/`.clt`/`.axes` output only; compiles nothing, reads no
+   CamCASP source, never writes the reference tree),
+   `tests/pytests/data_isapol/camcasp_cn_pot_h2o_l2h1.json` (all three back-end
+   rows, with the MIT notice travelling inside it) and
+   `tests/pytests/test_isapol_reference_dispersion.py` (4 quick + 3 long). No
+   tolerance is asserted against the reference anywhere in that test: what is
+   asserted is where our totals sit relative to the family's own internal spread,
+   which the model mismatch cannot explain away.
+   Newly available and directly comparable at the *polarizability* level rather
+   than the dispersion level:
+   `.pi/camcasp-build/examples/properties/H2O/output_2/H2O_aTZ_ref_wt4_L2_casimir.{data,out}`
+   carries localized recoupled per-site components at 10 frequencies against the
+   `H2O_aTZ.pdef` model (O: 13 declared variables, H1: 4, `H2 H2 COPY H1 H1`).
 
 Each step needs its own independent oracle before it is wired to the next, and
 each must stay separately labelled in provenance; see the SPEC §8 note that the

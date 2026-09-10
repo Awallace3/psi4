@@ -1,0 +1,611 @@
+{
+ "axes": "Axes\n  H1  z global Z x from H2 to H1\n  H2  z global Z x from H1 to H2\nEnd\n",
+ "backends": {
+  "dalton": {
+   "axes_sha256": "ea23f1d6464f2bb39573ce27295948183ffcd4888ead896a0a9ce39a4b4f0c71",
+   "census": {
+    "H H": {
+     "indices": [
+      "00",
+      "20",
+      "21c",
+      "22c"
+     ],
+     "isotropic_orders_printed_zero": [],
+     "j_values": [
+      0,
+      2,
+      4
+     ],
+     "nonzero_rows_per_order": {
+      "6": 33
+     },
+     "orders": [
+      6,
+      7,
+      8,
+      9,
+      10
+     ],
+     "printed_entries": 33,
+     "printed_zero": 0,
+     "recoupled_rows": 33,
+     "recoupled_rows_nonzero": 33
+    },
+    "H O": {
+     "indices": [
+      "00",
+      "10",
+      "20",
+      "21c",
+      "22c",
+      "22s",
+      "30",
+      "32c",
+      "40",
+      "42c",
+      "44c"
+     ],
+     "isotropic_orders_printed_zero": [
+      7
+     ],
+     "j_values": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+     ],
+     "nonzero_rows_per_order": {
+      "6": 23,
+      "7": 33,
+      "8": 53
+     },
+     "orders": [
+      6,
+      7,
+      8,
+      9,
+      10
+     ],
+     "printed_entries": 225,
+     "printed_zero": 116,
+     "recoupled_rows": 86,
+     "recoupled_rows_nonzero": 86
+    },
+    "O O": {
+     "indices": [
+      "00",
+      "10",
+      "20",
+      "22c",
+      "22s",
+      "30",
+      "32c",
+      "40",
+      "42c",
+      "44c"
+     ],
+     "isotropic_orders_printed_zero": [
+      7,
+      9
+     ],
+     "j_values": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+     ],
+     "nonzero_rows_per_order": {
+      "10": 103,
+      "6": 16,
+      "7": 46,
+      "8": 95,
+      "9": 118
+     },
+     "orders": [
+      6,
+      7,
+      8,
+      9,
+      10
+     ],
+     "printed_entries": 1098,
+     "printed_zero": 720,
+     "recoupled_rows": 258,
+     "recoupled_rows_nonzero": 258
+    }
+   },
+   "header": {
+    "Axes file": "H2O.axes",
+    "H-Limit": "1",
+    "Isotropic?": "False",
+    "Limit": "2",
+    "Loc algorithm": "LW",
+    "Model file": "H2O.pdef",
+    "NoRefine?": "False",
+    "Pol Cutoff": "0.0001",
+    "Pol file format": "NEW",
+    "SVD threshold": "0.0",
+    "WSM-Limit": "2",
+    "Weight": "3",
+    "Weight coeff": "0.001"
+   },
+   "input": {
+    "basis": "aVTZ",
+    "grac_shift": 0.13193004527520863,
+    "homo": -0.33187,
+    "ip_ev": 12.62063,
+    "scfcode": "dalton",
+    "sha256": "41036fb0546624a768b97103af72a03ff6341f2c0bcedd0b8687d896bb2c93ee",
+    "sites": [
+     {
+      "charge": 8.0,
+      "label": "O",
+      "type": "O",
+      "xyz": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     {
+      "charge": 1.0,
+      "label": "H1",
+      "type": "H",
+      "xyz": [
+       -1.45365196,
+       0.0,
+       -1.12168732
+      ]
+     },
+     {
+      "charge": 1.0,
+      "label": "H2",
+      "type": "H",
+      "xyz": [
+       1.45365196,
+       0.0,
+       -1.12168732
+      ]
+     }
+    ]
+   },
+   "isotropic": {
+    "H H": {
+     "6": 1.496865
+    },
+    "H O": {
+     "6": 5.200611,
+     "7": 0.0,
+     "8": 54.24049
+    },
+    "O O": {
+     "10": 3672.44,
+     "6": 18.26039,
+     "7": 0.0,
+     "8": 377.1047,
+     "9": 0.0
+    }
+   },
+   "sha256": "75b4ba2c1adea4f12c3156632420ee366151cfb551f89273538f47ea19e00825"
+  },
+  "nwchem": {
+   "axes_sha256": "ea23f1d6464f2bb39573ce27295948183ffcd4888ead896a0a9ce39a4b4f0c71",
+   "census": {
+    "H H": {
+     "indices": [
+      "00",
+      "20",
+      "21c",
+      "22c"
+     ],
+     "isotropic_orders_printed_zero": [],
+     "j_values": [
+      0,
+      2,
+      4
+     ],
+     "nonzero_rows_per_order": {
+      "6": 33
+     },
+     "orders": [
+      6,
+      7,
+      8,
+      9,
+      10
+     ],
+     "printed_entries": 33,
+     "printed_zero": 0,
+     "recoupled_rows": 33,
+     "recoupled_rows_nonzero": 33
+    },
+    "H O": {
+     "indices": [
+      "00",
+      "10",
+      "20",
+      "21c",
+      "22c",
+      "22s",
+      "30",
+      "32c",
+      "40",
+      "42c",
+      "44c"
+     ],
+     "isotropic_orders_printed_zero": [
+      7
+     ],
+     "j_values": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+     ],
+     "nonzero_rows_per_order": {
+      "6": 23,
+      "7": 33,
+      "8": 53
+     },
+     "orders": [
+      6,
+      7,
+      8,
+      9,
+      10
+     ],
+     "printed_entries": 225,
+     "printed_zero": 116,
+     "recoupled_rows": 86,
+     "recoupled_rows_nonzero": 86
+    },
+    "O O": {
+     "indices": [
+      "00",
+      "10",
+      "20",
+      "22c",
+      "22s",
+      "30",
+      "32c",
+      "40",
+      "42c",
+      "44c"
+     ],
+     "isotropic_orders_printed_zero": [
+      7,
+      9
+     ],
+     "j_values": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+     ],
+     "nonzero_rows_per_order": {
+      "10": 103,
+      "6": 16,
+      "7": 46,
+      "8": 95,
+      "9": 118
+     },
+     "orders": [
+      6,
+      7,
+      8,
+      9,
+      10
+     ],
+     "printed_entries": 1098,
+     "printed_zero": 720,
+     "recoupled_rows": 258,
+     "recoupled_rows_nonzero": 258
+    }
+   },
+   "header": {
+    "Axes file": "H2O.axes",
+    "H-Limit": "1",
+    "Isotropic?": "False",
+    "Limit": "2",
+    "Loc algorithm": "LW",
+    "Model file": "H2O.pdef",
+    "NoRefine?": "False",
+    "Pol Cutoff": "0.0001",
+    "Pol file format": "NEW",
+    "SVD threshold": "0.0",
+    "WSM-Limit": "2",
+    "Weight": "3",
+    "Weight coeff": "0.001"
+   },
+   "input": {
+    "basis": "aVTZ",
+    "grac_shift": 0.06580004527520861,
+    "homo": -0.398,
+    "ip_ev": 12.62063,
+    "scfcode": "nwchem",
+    "sha256": "ef13f8401d5167bcc7ed6dd14ba4b0b0b224648f15e0da23528e3764af06c3c9",
+    "sites": [
+     {
+      "charge": 8.0,
+      "label": "O",
+      "type": "O",
+      "xyz": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     {
+      "charge": 1.0,
+      "label": "H1",
+      "type": "H",
+      "xyz": [
+       -1.45365196,
+       0.0,
+       -1.12168732
+      ]
+     },
+     {
+      "charge": 1.0,
+      "label": "H2",
+      "type": "H",
+      "xyz": [
+       1.45365196,
+       0.0,
+       -1.12168732
+      ]
+     }
+    ]
+   },
+   "isotropic": {
+    "H H": {
+     "6": 1.488211
+    },
+    "H O": {
+     "6": 5.253435,
+     "7": 0.0,
+     "8": 55.66056
+    },
+    "O O": {
+     "10": 3891.527,
+     "6": 18.76416,
+     "7": 0.0,
+     "8": 393.8576,
+     "9": 0.0
+    }
+   },
+   "sha256": "14d4842068f7b6071022868a19dde06a3edf7f89c8d82c789ba6c2f9fd59d5d4"
+  },
+  "psi4": {
+   "axes_sha256": "ea23f1d6464f2bb39573ce27295948183ffcd4888ead896a0a9ce39a4b4f0c71",
+   "census": {
+    "H H": {
+     "indices": [
+      "00",
+      "20",
+      "21c",
+      "22c"
+     ],
+     "isotropic_orders_printed_zero": [],
+     "j_values": [
+      0,
+      2,
+      4
+     ],
+     "nonzero_rows_per_order": {
+      "6": 33
+     },
+     "orders": [
+      6,
+      7,
+      8,
+      9,
+      10
+     ],
+     "printed_entries": 33,
+     "printed_zero": 0,
+     "recoupled_rows": 33,
+     "recoupled_rows_nonzero": 33
+    },
+    "H O": {
+     "indices": [
+      "00",
+      "10",
+      "20",
+      "21c",
+      "22c",
+      "22s",
+      "30",
+      "32c",
+      "40",
+      "42c",
+      "44c"
+     ],
+     "isotropic_orders_printed_zero": [
+      7
+     ],
+     "j_values": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+     ],
+     "nonzero_rows_per_order": {
+      "6": 23,
+      "7": 33,
+      "8": 53
+     },
+     "orders": [
+      6,
+      7,
+      8,
+      9,
+      10
+     ],
+     "printed_entries": 225,
+     "printed_zero": 116,
+     "recoupled_rows": 86,
+     "recoupled_rows_nonzero": 86
+    },
+    "O O": {
+     "indices": [
+      "00",
+      "10",
+      "20",
+      "22c",
+      "22s",
+      "30",
+      "32c",
+      "40",
+      "42c",
+      "44c"
+     ],
+     "isotropic_orders_printed_zero": [
+      7,
+      9
+     ],
+     "j_values": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+     ],
+     "nonzero_rows_per_order": {
+      "10": 103,
+      "6": 16,
+      "7": 46,
+      "8": 95,
+      "9": 118
+     },
+     "orders": [
+      6,
+      7,
+      8,
+      9,
+      10
+     ],
+     "printed_entries": 1098,
+     "printed_zero": 720,
+     "recoupled_rows": 258,
+     "recoupled_rows_nonzero": 258
+    }
+   },
+   "header": {
+    "Axes file": "H2O.axes",
+    "H-Limit": "1",
+    "Isotropic?": "False",
+    "Limit": "2",
+    "Loc algorithm": "LW",
+    "Model file": "H2O.pdef",
+    "NoRefine?": "False",
+    "Pol Cutoff": "0.0001",
+    "Pol file format": "NEW",
+    "SVD threshold": "0.0",
+    "WSM-Limit": "2",
+    "Weight": "3",
+    "Weight coeff": "0.001"
+   },
+   "input": {
+    "basis": "aVTZ",
+    "grac_shift": 0.06490004527520865,
+    "homo": -0.3989,
+    "ip_ev": 12.62063,
+    "scfcode": "psi4",
+    "sha256": "8c09be634edd593c5966522fac73d1a59a1fbc7fbb748e67a5539dfab5f63a11",
+    "sites": [
+     {
+      "charge": 8.0,
+      "label": "O",
+      "type": "O",
+      "xyz": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     {
+      "charge": 1.0,
+      "label": "H1",
+      "type": "H",
+      "xyz": [
+       -1.45365196,
+       0.0,
+       -1.12168732
+      ]
+     },
+     {
+      "charge": 1.0,
+      "label": "H2",
+      "type": "H",
+      "xyz": [
+       1.45365196,
+       0.0,
+       -1.12168732
+      ]
+     }
+    ]
+   },
+   "isotropic": {
+    "H H": {
+     "6": 1.497312
+    },
+    "H O": {
+     "6": 5.338895,
+     "7": 0.0,
+     "8": 57.3419
+    },
+    "O O": {
+     "10": 4106.707,
+     "6": 19.27258,
+     "7": 0.0,
+     "8": 410.2453,
+     "9": 0.0
+    }
+   },
+   "sha256": "25ffd1d2ac0e4202fb194cc7786df13a9d4953fa020a81b998400b375b5f2fac"
+  }
+ },
+ "ev_per_hartree": 27.21136,
+ "notice": "Decoded from printed CamCASP output data of the shipped tests/H2O_props case. CamCASP: Anthony Stone and Alston Misquitta, MIT License, Copyright (c) 2019 Anthony Stone; see h2o_props_psi4_basis/NOTICE for the retained notice in full. Only the isotropic 00 00 0 rows, the localization header records, the declared GRAC inputs and a census of the recoupled rows are extracted; no CamCASP source is read, run or transcribed, and no claim is made about ORIENT, RRF or bundled third-party basis databases.",
+ "shared_header": {
+  "Axes file": "H2O.axes",
+  "H-Limit": "1",
+  "Isotropic?": "False",
+  "Limit": "2",
+  "Loc algorithm": "LW",
+  "Model file": "H2O.pdef",
+  "NoRefine?": "False",
+  "Pol Cutoff": "0.0001",
+  "Pol file format": "NEW",
+  "SVD threshold": "0.0",
+  "WSM-Limit": "2",
+  "Weight": "3",
+  "Weight coeff": "0.001"
+ },
+ "source": "check/L2H1/H2O_ref_wt3_L2_Cn.pot"
+}

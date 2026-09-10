@@ -16,15 +16,19 @@ not a converged ISA-A property reference.
 | `camcasp_isa_fit_water.npz` | Frozen ISA-A fits for O/H1/H2 at three active option settings, on identical water grid/density/shape/basis samples. Includes modified metrics, RHS, solved coefficients and integrated populations from source-extracted Fortran arithmetic. |
 | `camcasp_isa_fit_water.json` | Water/edge fixture provenance, source/generator/data hashes, actual density/basis definitions and limitations. |
 | `camcasp_isa_fit_edges.npz` | Source-extracted synthetic fitting checks: signed samples, exact denominator cutoff with nonzero damping, automatic ridge eligibility and nonzero exponent-cap contributions. Not a physical density/basis. |
+| `camcasp_cn_pot_h2o_l2h1.json` | The decoded reference localized `Cn` potential for water at aVTZ under `Limit 2`/`H-Limit 1`, in all three shipped SCF back-end rows: the isotropic `00 00 0` site-site `C_n` in full, the 13 shared localization header records, the declared GRAC inputs of each row, and a *census* of the 377 recoupled Stone components. The recoupled values are deliberately not extracted — see `oracle/README.md`. |
 
 `oracle/griddump` emits the first two, linking directly against CamCASP's
 `src/atoms.f90` and `src/gdma/atom_grids.F90`; `oracle/freqdump` the third,
 generated from `src/casimir/casimir.f90`; `oracle/pranddump` and
 `oracle/latticedump` the next two, generated from `src/random.f90` and
-`src/lattice.F90`; `oracle/parse_cncode.py` the last, parsed from
-`src/casimir/c6code.f90 … c12code.f90`. See `oracle/README.md` for how to rebuild
-them and regenerate these files; you need a CamCASP checkout, which is why the
-results are committed rather than computed at test time.
+`src/lattice.F90`; `oracle/parse_cncode.py` `camcasp_recoupling.dat`, parsed from
+`src/casimir/c6code.f90 … c12code.f90`; and `oracle/read_cn_pot.py` the last row,
+which unlike all the others compiles nothing and only decodes printed CamCASP
+*output* text.
+See `oracle/README.md` for how to rebuild them and regenerate these files; you
+need a CamCASP checkout, which is why the results are committed rather than
+computed at test time.
 
 The grid is deliberately small. The full production grid (`n_r = 80`, `n_a = 590`,
 139 830 points) also matches bit for bit in every coordinate, but 4.5 MB of doubles

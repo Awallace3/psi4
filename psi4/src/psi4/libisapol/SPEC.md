@@ -708,6 +708,55 @@ Exact CP and table-term order is part of the contract.
   outside those dedicated numerical oracles. Reciprocal inputs cannot identify
   compensating errors inside unobservable ordered-term classes.
 
+### End-to-end comparison against the reference localized `Cn` potential
+
+`data_isapol/camcasp_cn_pot_h2o_l2h1.json` decodes the reference water `Cn.pot` in
+all three shipped SCF back-end rows (`oracle/read_cn_pot.py`; printed output text
+only, nothing compiled, no source read, reference tree never written). The
+localization header is byte-identical across the rows (`Limit 2`, `WSM-Limit 2`,
+`H-Limit 1`, `LW`, `Weight 3`/`0.001`, `SVD threshold 0.0`, `Pol Cutoff 1e-4`,
+`NoRefine? False`) and so is `H2O.axes`, but the `.clt` inputs differ in **two**
+declarations, `SCFcode` *and* `HOMO`: against the shared `I.P. 12.62063 eV` and
+CamCASP's own **27.21136** eV/Eh divisor those are three different GRAC shifts
+(0.13193 dalton / 0.06580 nwchem / **0.06490** psi4). The family spread is
+therefore not back-end noise; only the psi4 row declares our shift, DALTON
+declares twice it, and the defensible yardstick is the nwchem/psi4 pair, 1.9% on
+molecular C6.
+
+Printed isotropic orders are exactly the admissible `n = 2(l_a+l_b+1)`: O-O
+{6,8,10}, H-O {6,8}, H-H {6}, with the odd orders printed and identically zero on
+the isotropic row only. Our chain cannot yet declare those per-site limits at all
+— LW's workspace is uniform, so `native_properties` rejects `{O:2, H:1}` with
+`LW pipeline requires uniform explicit rank3 or rank4` before any compute — so it
+admits {6,8,10,12} everywhere and the two are **structurally different
+quantities**, never quoted as one.
+
+Measured at PBE0/aug-cc-pVTZ with the reference GRAC shift and the matched
+Cartesian AUX (§6), uniform rank 3, against the psi4 row, per ordered site pair:
+
+| quantity | `direct_ov` | traced lambda1e3 NN | reference |
+| --- | --- | --- | --- |
+| molecular isotropic C6 | 46.89713 (+0.600%) | 46.76829 (+0.324%) | 46.61741 |
+| O-O C6 / C8 / C10 | 25.60926 / 503.0882 / 10666.265 | 25.52363 / 508.2636 / 11406.429 | 19.27258 / 410.2453 / 4106.707 |
+| H-O C6 / C8 | 4.51717 / 71.45023 | 4.50724 / 72.39140 | 5.338895 / 57.3419 |
+| H-H C6 | 0.80479 | 0.80392 | 1.497312 |
+
+The molecular isotropic C6 total is the one partition-invariant number in that
+table, and both routes land inside the family's own nwchem/psi4 spread, the
+constrained-NN route closer. Every site split is far outside it, consistently:
+O-O too large and worsening with order (+159.7%/+177.8% at C10), H-H ~46% low.
+That is the signature of a different partition of the same molecular response,
+and it localizes the remaining gap to PFIT refinement plus the rank-limited
+model — not to a tolerance, and no tolerance against the reference is asserted.
+
+The 377 nonzero recoupled reference rows (O-O 258, H-O 86, H-H 33) are an
+explicitly **uncompared** track, because the native anisotropic product is
+`orientation_resolved_scalars_not_recoupled_components`. Unlike the isotropic
+row they do not vanish at odd orders (O-O 16/46/95/118/103 at n=6..10, H-O
+23/33/53 at n=6..8, H-H 33 at n=6), so the fixture carries a census of them and
+withholds their values by design. See
+`tests/pytests/test_isapol_reference_dispersion.py` (4 quick + 3 long).
+
 Use explicit quadrature nodes/weights. Standalone/SAPT beta0.3, ISA reference beta0.5
 and actual root-generated response quadrature are not automatically interchangeable.
 
