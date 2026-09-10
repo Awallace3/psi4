@@ -115,7 +115,11 @@ successfully, not that the parent allocation has ended.
 The reporting unit tests do not require Psi4:
 
 ```bash
-python -m unittest discover -s devtools/benchmarks -p 'test_*.py' -v
+python -m pytest devtools/benchmarks -q
 ```
+
+Use pytest, not `unittest discover`. Most of these tests are plain functions
+using `tmp_path`, which `unittest` does not collect: it reports `OK` after
+silently running only the minority written as `TestCase` classes.
 
 GRAC analytic gradients and cuEST XC response remain outside the supported scope.
