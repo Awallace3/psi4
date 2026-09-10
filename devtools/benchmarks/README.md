@@ -120,6 +120,9 @@ python -m pytest devtools/benchmarks -q
 
 Use pytest, not `unittest discover`. Most of these tests are plain functions
 using `tmp_path`, which `unittest` does not collect: it reports `OK` after
-silently running only the minority written as `TestCase` classes.
+silently running only the minority written as `TestCase` classes. The local
+`conftest.py` puts this directory on `sys.path`; without it the root
+`pytest.ini`'s `--import-mode=importlib` makes collection fail from anywhere
+but this directory.
 
 GRAC analytic gradients and cuEST XC response remain outside the supported scope.
