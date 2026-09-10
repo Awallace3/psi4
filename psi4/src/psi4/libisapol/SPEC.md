@@ -735,9 +735,18 @@ property tolerance. `psi4.driver.procrouting.isapol_budget` answers, for each
 named intermediate X and each property group Y, how precisely X must be known:
 it perturbs X, rebuilds the **whole** downstream through the shipped objects
 under the unrelaxed production LW policy, and reports the amplification
-`A = defect(Y)/defect(X)`; the required precision is `tolerance(Y)/A`. Five
-intermediates are named: `drho_c_coefficients`, `partition_shape_samples`,
-`ov_transition_legs`, `coefficient_responses`, `distributed_site_tensors`.
+`A = defect(Y)/defect(X)`; the required precision is `tolerance(Y)/A`. Six
+intermediates are named: `drho_c_coefficients`, `raw_tail_parameters`,
+`partition_shape_samples`, `ov_transition_legs`, `coefficient_responses`,
+`distributed_site_tensors`. `raw_tail_parameters` is the only one probed as raw
+parameters rather than as a sampled array — the per-site joint
+`(amplitude, exponent)` of the Func-1/Fit-3 exponential tail — because that is
+the form in which its error was recorded. The tail `cutoff` is supplied
+configuration, held fixed exactly as the trajectory comparator holds it fixed,
+and is outside the probed array. A rebuild builds a *surrogate* controller
+state carrying a copy of the shipped shape coefficients and tail switch, so the
+shipped state is never mutated, and a non-positive perturbed exponent is
+rejected rather than sampled.
 
 Three disciplines make the number mean something. First, the unperturbed
 rebuild must reproduce every shipped property group at **exactly 0.0**, so the
@@ -783,6 +792,7 @@ Measured requirements at a 1e−6 property tolerance, evidence in
 | `drho_c_coefficients` | water direct-OV | absolute | 3.60e2 (α₃) | 2.78e−9 | 1.28021885e−3 | **no**, by ~6 orders |
 | `drho_c_coefficients` | water direct-OV | relative | 3.64 (α₃) | 2.75e−7 | — | not measured |
 | `partition_shape_samples` | water direct-OV | relative | 9.75e−3 (α₃) | 1.03e−4 | — | not measured |
+| `raw_tail_parameters` | water direct-OV | absolute | 1.52e1 (α₃) | 6.59e−8 | 2.35888047e−8 | **yes**, 2.8× margin |
 | `coefficient_responses` | water direct-OV | absolute | 2.50e1 (α₃) | 4.00e−8 | — | not measured |
 | `distributed_site_tensors` | water direct-OV | absolute | 1.52e2 (C12) | 6.58e−9 | — | not measured |
 | `ov_transition_legs` | He fitted | absolute | 1.61e3 (C10) | 6.21e−10 | 2.30197983e−5 | **no**, by ~4.5 orders |
@@ -800,18 +810,30 @@ an artifact of that degeneracy and are labelled as structurally insensitive,
 not offered as evidence. The rejection was not worked around: relaxing the
 residual policy to admit it is forbidden and was not done.
 
-The shape-sample recorded error 2.35888047e−8 is left **uncompared in both
-metrics** — uncompared absolutely because no absolute requirement for that
-stage is well posed, and uncompared relatively because it was recorded in the
-other metric. It is additionally the loosest of the three associations: it is a
-joint-tail *parameter* error standing in for the sample array. Closing it needs
-the shape samples re-measured against the same-input reference in the
-elementwise-relative metric. What the budget does establish is that the two
-recorded errors it *can* compare — Drho-C coefficients and fitted-OV
-coefficients — miss their property-anchored requirements by roughly six and
-four and a half orders of magnitude respectively, so neither is anywhere near a
-1e−6 property guarantee, and the per-stage provisional profiles above must not
-be read as implying one.
+The recorded 2.35888047e−8 is a joint-tail **parameter** error, so it is
+compared against a parameter stage and not against the sample array it was
+previously read against. That comparison is apples-to-apples by an *identity*,
+not an approximation: the comparator scales each site's joint
+`(amplitude, exponent)` error by that site's own largest parameter, this module
+scales one array by its single largest, and on the shipped reference the site
+carrying the largest error also carries the largest parameter — so
+`max(1.63572023e−7)/max(1,6.93430743) = 2.35888047e−8` bit-for-bit. The
+identity is re-derived from `tests/pytests/data_isapol/psi4_provisional_acceptance_evidence.json`
+in the test suite rather than asserted. Because tail parameters are O(1)
+numbers sharing one scale, the absolute geometry *is* their property-relevant
+error model, and the amplification is a converged derivative: A(α₃) = 1.5176e1
+at eps = 1e−6, 1e−8 and 1e−10 alike (five figures), with every row quoted at
+every probe size. At a 1e−6 property tolerance the recorded tail error
+**meets** its requirement with a 2.8× margin; it would first fail at a property
+tolerance of 3.6e−7. The shape-sample *array* remains uncompared in both
+metrics — absolutely because no absolute requirement for that stage is well
+posed, relatively because no error was ever recorded in that metric — and that
+gap is now a missing measurement, not a mismatched association. Of the three
+recorded errors the budget can compare, one (raw tails) meets its requirement
+and two — Drho-C coefficients and fitted-OV coefficients — miss theirs by
+roughly six and four and a half orders of magnitude, so neither of those is
+anywhere near a 1e−6 property guarantee and the per-stage provisional profiles
+above must not be read as implying one.
 
 [PROVISIONAL_ACCEPTANCE.md](PROVISIONAL_ACCEPTANCE.md) owns exact opt-in policy;
 its historical milestone statuses do not supersede current capability above.

@@ -446,13 +446,25 @@ remains between it and the `777f904` target, in dependency order:
    2.30e-5 (**~4.5 orders short**); relative requirements are 2.75e-7 for
    Drho-C and 1.03e-4 for the shape samples; `coefficient_responses` needs
    4.00e-8 (water) / 4.39e-12 (He fitted) and `distributed_site_tensors`
-   6.58e-9 (water) / 2.65e-8 (He). The raw-tail 2.36e-8 is **left uncompared in
-   both metrics** and stays open: absolutely because no absolute requirement for
-   that stage is well posed, relatively because it was not recorded in that
-   metric — and it is a joint-tail *parameter* error standing in for a *sample
-   array*, the loosest of the three associations. Closing it means re-measuring
-   the shape samples against the same-input reference elementwise-relatively.
-   Tests: `tests/pytests/test_isapol_budget.py` (16 quick + 1 long).
+   6.58e-9 (water) / 2.65e-8 (He). The raw-tail 2.36e-8 **meets** its
+   requirement of 6.59e-8 (A=1.5176e1, α₃, water direct-OV) with a 2.8× margin
+   and would first fail at a property tolerance of 3.6e-7 — the first of the
+   three recorded errors to pass. That comparison is against a sixth stage,
+   `raw_tail_parameters` (per-site joint amplitude/exponent, cutoff held fixed
+   as supplied configuration), because the recorded number is a tail
+   *parameter* error; it is apples-to-apples by an **identity**, since the
+   comparator's per-site denominator and the budget's single denominator agree
+   bit-for-bit on that reference (1.63572023e-7 / max(1, 6.93430743)), which the
+   test suite re-derives from the evidence file. Tail parameters are O(1) and
+   share a scale, so A is a converged derivative: 1.5176e1 at eps 1e-6, 1e-8 and
+   1e-10 alike, all rows quoted. What stays open is the shape-sample *array*,
+   uncompared in both metrics: absolutely because no absolute requirement for it
+   is well posed, relatively because no error for it was ever recorded in that
+   metric. That is a missing measurement against a same-input reference, not a
+   mismatched association. It does not reopen TODO9's strict trajectory parity,
+   which is still FAIL, and the amplification was measured on the demo water
+   rather than on the comparator's own input.
+   Tests: `tests/pytests/test_isapol_budget.py` (19 quick + 1 long).
 
 Each step needs its own independent oracle before it is wired to the next, and
 each must stay separately labelled in provenance; see the SPEC §8 note that the
@@ -477,11 +489,12 @@ trace, hashes and separate ISA candidates). Its portable conclusions are in
   fitted versus direct response and strict recorded-input LW defects retain
   distinct gates. See SPEC/PROVISIONAL_ACCEPTANCE.md; no blanket tolerance waiver.
   These are now *property-anchored* (section 5 item 5): Drho-C misses its 1e-6
-  requirement by ~6 orders and fitted-OV by ~4.5, and the raw-tail indicator is
-  uncompared in both metrics pending an elementwise-relative re-measurement of
-  the shape samples against the same-input reference. No stage is certified to a
-  property tolerance, and the amplifications are directional lower bounds, so
-  they bound nothing from above.
+  requirement by ~6 orders and fitted-OV by ~4.5, while the raw-tail parameter
+  error meets its 6.59e-8 requirement with a 2.8× margin. The shape-sample
+  array stays uncompared in both metrics pending an elementwise-relative
+  measurement against a same-input reference. Meeting a requirement is *not* a
+  certification: the amplifications are directional lower bounds, so they bound
+  nothing from above, and no stage is certified to a property tolerance.
 - The fitted-auxiliary response route is **rejected outright by strict
   production LW on water** (charge-sum ~4.1e-4 at every frequency), so it has no
   accepted multi-atom chain at all; every fitted-route statement here rests on

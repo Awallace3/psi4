@@ -26,6 +26,15 @@ elementwise relative accuracy, so ``geometry='relative'`` probes
 instead. The two metrics are NOT interchangeable and a requirement derived in
 one is never compared against an error recorded in the other.
 
+One intermediate is probed as raw parameters rather than as a sampled array: the
+ISA-A exponential tail. Its recorded error is a joint (amplitude, exponent)
+error per site, and the site carrying the largest error also carries the largest
+parameter, so the trajectory comparator's per-site denominator and this module's
+single denominator coincide bit-for-bit on that reference. ``raw_tail_parameters``
+is therefore compared against that recorded number in exactly the metric it was
+recorded in, while the sampled shape array -- whose elements span many decades --
+is not.
+
 This module is DIAGNOSTIC ONLY. It is not on the public property path, it
 produces no property values of its own, and it waives no gate: every rebuild
 runs the unrelaxed production LW policy, and a rebuild that the gate rejects is
@@ -48,8 +57,8 @@ from .isapol_native import NativeProperties
 
 #: Named intermediates, in chain order. Each is perturbed in place and every
 #: later stage is rebuilt; no earlier stage is touched.
-STAGES = ('drho_c_coefficients', 'partition_shape_samples', 'ov_transition_legs',
-          'coefficient_responses', 'distributed_site_tensors')
+STAGES = ('drho_c_coefficients', 'raw_tail_parameters', 'partition_shape_samples',
+          'ov_transition_legs', 'coefficient_responses', 'distributed_site_tensors')
 
 #: The default metric: always the property defect, and the input defect of an
 #: ``absolute``-geometry probe.
@@ -134,6 +143,7 @@ def sign_direction(seed_text, size):
 #: The restriction is part of the reported result: an amplification is a lower
 #: bound over the sampled directions *within* this manifold.
 RESTRICTIONS = {'drho_c_coefficients': 'regenerated_downstream_no_restriction',
+                'raw_tail_parameters': 'positive_exponent_supplied_cutoff_held_fixed',
                 'partition_shape_samples': 'regenerated_downstream_no_restriction',
                 'ov_transition_legs': 'charge_neutral_transition_legs',
                 'coefficient_responses': 'symmetric_charge_null_preserving',
@@ -356,6 +366,46 @@ def _from_drho(chain, coefficients, stage):
     return _from_shapes(chain, final_shape_samples(shapes, trajectory.state, recipe.sites, points), stage)
 
 
+def _applied_tails(state, sites):
+    """Indices of the tails the shipped ``final_shape_samples`` actually applies."""
+    return tuple(i for i, (tail, site) in enumerate(zip(state.tails, sites))
+                 if bool(state.apply_tails and site.tail_allowed and tail.defined))
+
+
+def _from_tails(chain, parameters, stage):
+    """Perturbed joint (amplitude, exponent) tails -> resampled final shapes.
+
+    The cutoff is supplied configuration rather than a fitted intermediate -- the
+    trajectory comparator holds it fixed at the captured endpoint radius -- so it
+    is excluded from the probed array and carried through unchanged. The shipped
+    controller state is never mutated: a surrogate state carries a copy of the
+    shipped shape coefficients and tail switch alongside fresh tail objects.
+    """
+    partition = chain.properties.partition
+    recipe = partition.recipe
+    state = partition.trajectory.state
+    applied = _applied_tails(state, recipe.sites)
+    values = np.asarray(parameters, dtype=float)
+    if values.shape != (len(applied), 2):
+        raise ValueError('tail parameters need one (amplitude, exponent) row per applied tail')
+    if not np.all(values[:, 1] > 0.):
+        raise ValueError('a defined ISA-A tail requires a positive exponent')
+    surrogate = core.IsaAControllerState()
+    surrogate.coefficients, surrogate.apply_tails = state.coefficients, state.apply_tails
+    tails = []
+    for index, shipped in enumerate(state.tails):
+        tail = core.IsaExponentialTail()
+        tail.defined, tail.cutoff = shipped.defined, shipped.cutoff
+        pair = (values[applied.index(index)] if index in applied
+                else (shipped.amplitude, shipped.exponent))
+        tail.amplitude, tail.exponent = float(pair[0]), float(pair[1])
+        tails.append(tail)
+    surrogate.tails = tails
+    shapes = [s.shape.build('Shape') for s in recipe.sites]
+    return _from_shapes(chain, final_shape_samples(shapes, surrogate, recipe.sites,
+                                                   partition.grid_points.tolist()), stage)
+
+
 def _from_shapes(chain, shape_samples, stage):
     return _from_coupled(chain, [np.asarray(r.raw_coupled, dtype=float)
                                  for r in chain.properties.coefficient_responses], stage,
@@ -414,6 +464,15 @@ def reference_value(chain, stage):
     properties = chain.properties
     if stage == 'drho_c_coefficients':
         return np.array(properties.partition.drho.coefficients, dtype=float)
+    if stage == 'raw_tail_parameters':
+        state = properties.partition.trajectory.state
+        applied = _applied_tails(state, properties.partition.recipe.sites)
+        if not applied:
+            raise ValueError('no applied ISA-A tail: the shipped shape samples do not '
+                             'depend on any tail parameter here, so this probe would '
+                             'measure an identity, not a sensitivity')
+        return np.array([[state.tails[i].amplitude, state.tails[i].exponent]
+                         for i in applied], dtype=float)
     if stage == 'partition_shape_samples':
         return np.array(properties.partition.shape_samples, dtype=float)
     if stage == 'ov_transition_legs':
@@ -434,6 +493,8 @@ def rebuild(chain, stage, value):
     """Rebuild every stage downstream of ``stage`` from a supplied value."""
     if stage == 'drho_c_coefficients':
         return _from_drho(chain, value, stage)
+    if stage == 'raw_tail_parameters':
+        return _from_tails(chain, value, stage)
     if stage == 'partition_shape_samples':
         return _from_shapes(chain, value, stage)
     if stage == 'ov_transition_legs':

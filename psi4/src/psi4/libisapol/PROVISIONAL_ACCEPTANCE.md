@@ -67,22 +67,37 @@ the shipped objects under the unrelaxed production LW policy. Evidence:
   (A=3.60e2, binding on alpha_iso_rank3, water direct-OV): **misses by ~6 orders**.
 - TODO11 (fitted OV, 2.3019798321950356e-5, absolute metric) needs **6.21e-10**
   (A=1.61e3, binding on C10, He fitted chain): **misses by ~4.5 orders**.
-- TODO9 (raw tails, 2.3588804665973028e-8) is **left uncompared**. The
-  max-scaled metric it was recorded in is not a well-posed question for the
-  shape samples: their elements span many decades and the max-scaled
-  amplification diverges as the probe shrinks (5.6e4 -> 2.4e5 -> 6.3e5 over
-  eps 1e-6 -> 1e-10) instead of converging. In the elementwise-relative metric,
-  which does converge, the requirement is 1.03e-4 -- but the recorded error is
-  not in that metric and the budget refuses to compare across metrics. TODO9
-  additionally associates a joint-tail *parameter* error with a *sample array*;
-  closing it needs the shape samples re-measured against the same-input
-  reference elementwise-relatively.
+- TODO9 (raw tails, 2.3588804665973028e-8, absolute metric) needs **6.59e-8**
+  (A=1.5176e1, binding on alpha_iso_rank3, water direct-OV): **meets it, with a
+  2.8x margin**; it would first fail at a property tolerance of 3.6e-7. This is
+  a comparison against the `raw_tail_parameters` stage -- the per-site joint
+  (amplitude, exponent), which is the form the number was recorded in -- and not
+  against the shape-sample array it was previously read against. The two
+  metrics coincide bit-for-bit here by an identity, not an approximation: the
+  comparator's per-site denominator and the budget's single denominator agree
+  because the site with the largest error carries the largest parameter
+  (1.63572023e-7 / max(1, 6.93430743) = 2.3588804665973028e-8, re-derived from
+  the evidence file in `tests/pytests/test_isapol_budget.py`). Tail parameters
+  are O(1) numbers sharing one scale, so the absolute geometry is their
+  property-relevant error model and A is a converged derivative: 1.5176e1 at
+  eps 1e-6, 1e-8 and 1e-10 alike, every row quoted.
+- The shape-sample *array* itself remains **uncompared in both metrics**. The
+  max-scaled metric is not a well-posed question for it: its elements span many
+  decades and the max-scaled amplification diverges as the probe shrinks
+  (5.6e4 -> 2.4e5 -> 6.3e5 over eps 1e-6 -> 1e-10) instead of converging. In the
+  elementwise-relative metric, which does converge, the requirement is 1.03e-4
+  -- but no error for that stage was ever recorded in that metric, and the
+  budget refuses to compare across metrics. That is now a missing measurement
+  against a same-input reference, not a mismatched association.
 
-Neither comparison is a new provisional pass, and none of these amplifications
-is a gate: each is a first-order directional lower bound, so meeting the derived
-precision is necessary and not sufficient. What they do establish is that the
-per-stage provisional profiles above must not be read as implying any 1e-6
-end-to-end property bound. TODO12 remains open on the tightening half.
+No comparison here is a new provisional pass -- TODO9's raw-tail *strict*
+trajectory parity is still FAIL and this does not change it -- and none of these
+amplifications is a gate: each is a first-order directional lower bound, so
+meeting the derived precision is necessary and not sufficient, and the
+amplification was measured on the PBE0/cc-pVDZ demo water rather than on the
+comparator's own input. What they do establish is that the per-stage provisional
+profiles above must not be read as implying any 1e-6 end-to-end property bound.
+TODO12 remains open on the tightening half.
 
 ## Measured results before the Drho-C-only exception
 

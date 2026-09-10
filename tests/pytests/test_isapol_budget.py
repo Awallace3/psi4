@@ -17,12 +17,19 @@ only for an intermediate whose elements share a scale.  The elementwise-relative
 geometry is the right question for one spanning many decades, and the two are
 never compared against each other -- that refusal is asserted here.
 
+One intermediate is probed as raw parameters instead of as a sampled array --
+the ISA-A exponential tail -- because that is the form its recorded error was
+recorded in.  The identity that makes the comparison apples-to-apples is proved
+here from the shipped evidence file itself, not asserted.
+
 He is monatomic, so w_a/sum(w) == 1 identically: its ISA weights, and therefore
 Q and every property, are exactly independent of the shape samples and of the
 Drho-C coefficients.  That degeneracy is asserted rather than hidden, and the
 non-degenerate partition measurement is a separate water test.
 """
 from dataclasses import replace
+import json
+from pathlib import Path
 import numpy as np
 import pytest
 import psi4
@@ -33,6 +40,10 @@ from psi4.driver.procrouting import isapol_budget as b
 from psi4.driver.procrouting import isapol_oeprop as o
 
 pytestmark = pytest.mark.quick
+
+#: The provisionally recorded maximum joint-tail scaled error, from
+#: ``PROVISIONAL_ACCEPTANCE.md`` TODO9 and the shipped evidence file.
+RECORDED_RAW_TAIL = 2.3588804665973028e-8
 
 
 def he_recipe(wfn):
@@ -196,11 +207,12 @@ def test_budget_measures_the_last_stage_and_reports_a_requirement(fitted):
     assert quoted['alpha_iso_rank1'].amplification == pytest.approx(1., rel=1e-6)
 
 
-def test_monatomic_partition_stages_are_structurally_insensitive(fitted):
-    """He has one site: Q cannot depend on the shapes or on the Drho-C density."""
+@pytest.mark.parametrize('stage', ['partition_shape_samples', 'raw_tail_parameters'])
+def test_monatomic_partition_stages_are_structurally_insensitive(fitted, stage):
+    """He has one site: Q cannot depend on the shapes, tails or Drho-C density."""
     budget = b.precision_budget(fitted, property_tolerances=1.e-6,
-                                stages=('partition_shape_samples',), epsilon=1.e-6, directions=1,
-                                recorded_errors={'partition_shape_samples': 2.3588804665973028e-8})
+                                stages=(stage,), epsilon=1.e-6, directions=1,
+                                recorded_errors={stage: RECORDED_RAW_TAIL})
     assert {probe.status for probe in budget.probes} == {'measured'}
     assert {a.amplification for a in budget.amplifications} == {0.}
     for requirement in budget.requirements:
@@ -247,6 +259,58 @@ def test_budget_rejects_inputs_it_cannot_defend(fitted):
     with pytest.raises(ValueError):
         b.perturb(fitted, 'distributed_site_tensors',
                   b.reference_value(fitted, 'distributed_site_tensors'), 1.e-6, -1)
+
+
+def test_recorded_joint_tail_error_is_this_modules_metric():
+    """The recorded raw-tail number IS a ``scaled_max`` on the parameter array.
+
+    The trajectory comparator scales each site's joint (amplitude, exponent)
+    error by that site's own largest parameter; this module scales one array by
+    its single largest.  On the shipped reference the site with the largest error
+    also carries the largest parameter, so the two groupings coincide -- exactly,
+    not approximately -- and the recorded number may be compared against a
+    requirement derived in the absolute geometry.  Nothing else here may be.
+    """
+    evidence = json.loads((Path(__file__).parent
+                           / 'data_isapol/psi4_provisional_acceptance_evidence.json').read_text())
+    joint = [error for comparison in evidence['comparisons']
+             for name, error in (comparison.get('errors') or {}).items() if name.endswith('_tail')]
+    assert len(joint) == 3, 'three water sites carry a defined tail in the reference'
+    # Recover each site's denominator from the pair the comparator reported.
+    denominators = [e['max_absolute'] / e['max_scaled'] for e in joint]
+    assert min(denominators) > 1., 'clamped denominators would make this identity vacuous'
+    regrouped = max(e['max_absolute'] for e in joint) / max(1., max(denominators))
+    assert regrouped == RECORDED_RAW_TAIL == max(e['max_scaled'] for e in joint)
+
+
+def test_tail_parameters_are_probed_as_parameters_not_as_samples(fitted):
+    """The probed intermediate is (amplitude, exponent) per applied tail."""
+    state = fitted.properties.partition.trajectory.state
+    sites = fitted.properties.partition.recipe.sites
+    applied = b._applied_tails(state, sites)
+    assert applied and all(state.tails[i].defined and sites[i].tail_allowed for i in applied)
+    reference = b.reference_value(fitted, 'raw_tail_parameters')
+    assert reference.shape == (len(applied), 2)
+    np.testing.assert_allclose(reference, [[state.tails[i].amplitude, state.tails[i].exponent]
+                                           for i in applied], rtol=0, atol=0)
+    # The cutoff is supplied configuration, not a fitted intermediate: it is
+    # outside the probed array and its invariance is part of the restriction.
+    assert b.RESTRICTIONS['raw_tail_parameters'] == 'positive_exponent_supplied_cutoff_held_fixed'
+    assert 'raw_tail_parameters' not in b.RELATIVE_ELIGIBLE
+    with pytest.raises(ValueError, match='linear invariants'):
+        b.perturb(fitted, 'raw_tail_parameters', reference, 1.e-6, 0, 'relative')
+    with pytest.raises(ValueError, match='one \\(amplitude, exponent\\) row'):
+        b.rebuild(fitted, 'raw_tail_parameters', reference[:, :1])
+    negative = reference.copy()
+    negative[0, 1] = -negative[0, 1]
+    with pytest.raises(ValueError, match='positive exponent'):
+        b.rebuild(fitted, 'raw_tail_parameters', negative)
+    # A rebuild carries a surrogate state; the shipped tails stay untouched.
+    b.rebuild(fitted, 'raw_tail_parameters', b.perturb(fitted, 'raw_tail_parameters',
+                                                       reference, 1.e-3, 0))
+    np.testing.assert_allclose(b.reference_value(fitted, 'raw_tail_parameters'), reference,
+                               rtol=0, atol=0)
+    assert [state.tails[i].cutoff for i in applied] == [sites[i].tail_cutoff for i in applied]
 
 
 def test_budget_never_mutates_the_shipped_result(fitted):
@@ -320,11 +384,11 @@ def test_relative_budget_is_self_describing_and_refuses_a_mismatched_metric(fitt
     with pytest.raises(ValueError, match='cannot be compared'):
         b.precision_budget(fitted, property_tolerances=1.e-6, directions=1,
                            stages=('partition_shape_samples',), geometry='relative',
-                           recorded_errors={'partition_shape_samples': 2.3588804665973028e-8})
+                           recorded_errors={'partition_shape_samples': RECORDED_RAW_TAIL})
     with pytest.raises(ValueError, match='cannot be compared'):
         b.precision_budget(fitted, property_tolerances=1.e-6, directions=1,
                            stages=('partition_shape_samples',), recorded_error_metric='relative',
-                           recorded_errors={'partition_shape_samples': 2.3588804665973028e-8})
+                           recorded_errors={'partition_shape_samples': RECORDED_RAW_TAIL})
     for bad in dict(geometry='nonsense'), dict(recorded_error_metric='nonsense'):
         with pytest.raises(ValueError, match='geometry|metric'):
             b.precision_budget(fitted, property_tolerances=1.e-6, directions=1,
@@ -379,3 +443,25 @@ def test_water_partition_stages_are_measurable():
                                  if a.stage == 'partition_shape_samples')
     relative_amplification = max(a.amplification for a in relative.amplifications)
     assert absolute_amplification > 1.e4 > 1. > relative_amplification > 0.
+
+    # The raw tail parameters, by contrast, are O(1) numbers sharing one scale,
+    # so the absolute geometry IS their property-relevant error model: the
+    # amplification is a converged derivative (it survives halving the probe at
+    # two probe sizes four decades apart) and the recorded joint-tail error is
+    # compared in exactly the metric it was recorded in.
+    tails = [b.precision_budget(chain, property_tolerances=1.e-6, epsilon=eps, directions=1,
+                                stages=('raw_tail_parameters',),
+                                recorded_errors={'raw_tail_parameters': RECORDED_RAW_TAIL})
+             for eps in (1.e-6, 1.e-10)]
+    for measured in tails:
+        assert {probe.status for probe in measured.probes} == {'measured'}
+        assert max(measured.self_consistency['raw_tail_parameters'].values()) == 0.
+        assert all(a.quoted for a in measured.amplifications)
+        assert all(r.satisfied is True and r.recorded_error == RECORDED_RAW_TAIL
+                   for r in measured.requirements)
+    coarse, fine = ({a.property_name: a.amplification for a in measured.amplifications}
+                    for measured in tails)
+    assert set(coarse) == set(fine)
+    for name, value in coarse.items():
+        assert 1. < value < 1.e3, (name, value)
+        assert fine[name] == pytest.approx(value, rel=1.e-3), name
