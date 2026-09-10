@@ -106,7 +106,7 @@ not stated.
 
 ## protein157 has no same-host baseline at all
 
-The protein157 CPU measurement runs on cpu-small (job 13063342, 24 cores of Gold
+The protein157 CPU measurement runs on cpu-small (job 13066284, 24 cores of Gold
 6226) and the GPU measurement on gpu-h200 (job 13060540, 8 cores of Platinum
 8562Y+). **Different nodes, different CPU models, different core counts.** Any
 protein157 speedup is a cross-node ratio and is labeled so in the results table.
