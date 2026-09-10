@@ -99,7 +99,16 @@ using the C++ Gaussian and real Racah harmonic kernels. Columns are occupied-fas
 a transition-density fit, rather than repairing a fitted transition's charge.
 Raw quadrature charge errors and reciprocity are measured; no row is overwritten
 and no tensor is symmetrized. The default expert `fitted_auxiliary` route remains
-unchanged and retains finite lambda1 fit diagnostics/failures.
+unchanged and retains finite lambda1 fit diagnostics/failures. Its charge
+penalty is now a caller declaration, `ov_charge_penalty` (default 1.0;
+`direct_ov` accepts only the default), which converges that defect in the
+producer rather than repairing a fitted charge after the fact: the residual
+fitted charge falls as 1/lambda, and strict production LW accepts the water
+fitted chain at every declared lambda >= 1e3 — including lambda1000, the traced
+constrained-NN route's own penalty (`input-sum-rule` 4.65e-7), and lambda1e4,
+where that residual reaches the quadrature floor `direct_ov` itself reports
+(2.33e-8 vs 2.28e-8). Any lambda other than the recorded one is a differently
+declared model; SPEC §6 has the measured table and the binding caveat.
 
 Prior parent water attempts 1/2 failed strict LW even after grid refinement:
 the fitted OV analytic charge defect remained 6.0372e-5; the second grid's AUX

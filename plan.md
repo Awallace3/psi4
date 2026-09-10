@@ -435,11 +435,14 @@ remains between it and the `777f904` target, in dependency order:
    driver refuses to compare across them rather than doing it quietly.
    *Two chains, neither substitutable.* Water PBE0/cc-pVDZ direct-OV is the only
    non-degenerate partition measurement; the **fitted-auxiliary route on water
-   is rejected outright** by strict LW (charge-sum ≈4.1e-4 at every frequency),
-   which was **not** worked around — relaxing `residual_policy` is forbidden —
-   so fitted-OV is anchored on He, which is monatomic and therefore *exactly*
-   degenerate in the two partition stages (A=0, labelled structurally
-   insensitive, not offered as evidence).
+   is rejected at the recorded lambda1** by strict LW (charge-sum ≈4.1e-4 at
+   every frequency), which was **not** worked around — relaxing
+   `residual_policy` is forbidden — so fitted-OV is anchored on He, which is
+   monatomic and therefore *exactly* degenerate in the two partition stages
+   (A=0, labelled structurally insensitive, not offered as evidence). A
+   declared `ov_charge_penalty` >= 1e3 does earn strict-LW acceptance on water
+   (SPEC §6), but is a differently declared model: it does not close this row,
+   whose reference numbers are lambda1.
    *Result at a 1e-6 property tolerance* (`.pi/audit/property-anchored-budget.json`,
    SPEC §8 "Property-anchored precision budget"): Drho-C needs 2.78e-9 and
    records 1.28e-3 (**~6 orders short**); fitted OV needs 6.21e-10 and records
@@ -553,10 +556,22 @@ trace, hashes and separate ISA candidates). Its portable conclusions are in
   coefficients that generate it are anchored. Meeting a requirement is *not* a
   certification: the amplifications are directional lower bounds, so they bound
   nothing from above, and no stage is certified to a property tolerance.
-- The fitted-auxiliary response route is **rejected outright by strict
-  production LW on water** (charge-sum ~4.1e-4 at every frequency), so it has no
-  accepted multi-atom chain at all; every fitted-route statement here rests on
-  the monatomic He chain, where the partition stages are exactly degenerate.
+- The fitted-auxiliary response route is **rejected by strict production LW on
+  water at the recorded lambda1** (charge-sum ~4.1e-4 at every frequency), so it
+  has no accepted multi-atom chain *at that declared model*; every lambda1
+  fitted-route statement here rests on the monatomic He chain, where the
+  partition stages are exactly degenerate. The cause is now measured and is a
+  producer defect, not a gate: the penalty `A = J + lambda*q q^T` converges the
+  (already exactly zero) transition charge as 1/lambda, and strict production LW
+  **accepts** the water fitted chain at every declared lambda >= 1e3 — including
+  **lambda1000, which is the traced constrained-NN route's own exported penalty**
+  (`input-sum-rule` 4.65e-7, 2.1x under the gate); at lambda1e4 that residual
+  reaches the fit-free `direct_ov` route's own quadrature floor (2.33e-8 vs
+  2.28e-8), and the two accepted models differ by only 1.3e-7 in the raw
+  tensors — see SPEC §6 and
+  `tests/pytests/test_isapol_native_charge_penalty.py`. That chain is a
+  differently declared model and must never be compared against a recorded
+  lambda1 number.
 - Full native SCF/PFIT/GRAC matched protocol and modern ISA preset are not closed.
 - Point-response coverage: no shell above p is exercised by the analytic ESP
   oracle (the fixture basis has none), and neither the factor-4 nor the `a`/`b`

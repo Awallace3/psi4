@@ -162,7 +162,7 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                       density_cutoff=1.e-10, max_bytes=512*1024**2, max_nov=512,
                       response_context=None, response_basis='fitted_auxiliary',
                       scf_correction='NONE', expected_grac_shift=None,
-                      response_algorithm='ordered_pairwise'):
+                      response_algorithm='ordered_pairwise', ov_charge_penalty=1.):
     """Return all owned stages, with strict production LW (1e-6) or failures.
 
     Explicit ``response_basis='direct_ov'`` integrates actual occupied/virtual
@@ -171,6 +171,22 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
     density partition is unchanged. Its analytic OV charges are zero by the
     independently checked MO orthonormality; measured grid charges remain raw.
     The default fitted_auxiliary route and its lambda1 failures are unchanged.
+
+    ``ov_charge_penalty`` is the finite rank-1 penalty ``A += lambda*q q^T`` of
+    the transition fit, and it stays at the archived **lambda1** unless the
+    caller explicitly declares otherwise. It is not a tolerance: an OV
+    transition density has exactly zero charge by MO orthonormality, so the
+    penalty only enforces something the exact answer already satisfies, and the
+    fitted charge it leaves behind falls exactly as 1/lambda. Raising it
+    therefore converges the constraint rather than loosening a gate -- but it
+    also changes the fitted D, so a chain run at any other lambda is a
+    differently declared model and must never be compared against a recorded
+    lambda1 reference number. The traced constrained-NN route declares
+    ``lambda=1000``, and strict production LW accepts the water fitted chain at
+    every declared lambda >= 1e3 (SPEC section 6 has the measured table).
+    ``direct_ov`` forms no fit and accepts only the default. Recorded in the fit and result provenance, deliberately **not** in
+    the response policy hash: H1/H2 come from the orbitals and are independent
+    of it, so one native context serves every lambda.
 
     ``recipe.grid`` is the explicit ISA/Q grid policy; ``response_grid`` is None
     for no_local or explicit [x,y,z,w] for ALDA. Full H1/H2 already include all
@@ -188,6 +204,11 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
     """
     if response_basis not in ('fitted_auxiliary', 'direct_ov'):
         raise ValueError('unsupported response_basis')
+    if (type(ov_charge_penalty) is not float or not np.isfinite(ov_charge_penalty)
+            or ov_charge_penalty <= 0.):
+        raise ValueError('ov_charge_penalty must be an explicit finite positive float')
+    if response_basis == 'direct_ov' and ov_charge_penalty != 1.:
+        raise ValueError('direct_ov forms no transition fit; no charge penalty applies')
     if caller_converged is not True:
         raise ValueError('caller_converged must explicitly be True')
     if not isinstance(recipe, PartitionRecipe):
@@ -228,7 +249,9 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
         return NativeProperties(partition, context, fit, adapted, freq, quadrature, tuple(responses),
             distributed, tensors, local, dispersion, tuple(failures), diagnostics,
             f'native {kernel}; exact_exchange={exact_exchange}; local_scale={local_scale}; '
-            f'{response_algorithm}; Drho-C ISA-A; {response_basis}; no PFIT'
+            f'{response_algorithm}; Drho-C ISA-A; {response_basis}'
+            + ('' if response_basis == 'direct_ov' else f' lambda={ov_charge_penalty!r}')
+            + '; no PFIT'
             + ('; ' + correction.response_description if correction.policy == 'FIXED_GRAC' else ''),
             correction)
     try:
@@ -278,7 +301,8 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
             fit = partition.coulomb.fit_ov(partition.main.basis,
                 core.Matrix.from_array(full[:, :provider.nocc].copy()),
                 core.Matrix.from_array(full[:, provider.nocc:].copy()),
-                'native full-C verified AO-to-DALTON; occupied-fast; '+context_hash, 1.)
+                f'native full-C verified AO-to-DALTON; occupied-fast; lambda={ov_charge_penalty!r}; '
+                + context_hash, ov_charge_penalty)
             d = np.asarray(fit.coefficients)
             if d.shape != (provider.nocc*provider.nvir, partition.auxiliary.nfunction):
                 raise ValueError('native OV fit dimensions/order mismatch')

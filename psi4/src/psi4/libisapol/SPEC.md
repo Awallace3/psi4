@@ -280,6 +280,56 @@ exception is identity-pinned, not a dynamic/default waiver. Native generated wat
 passes strict checks without that exception. Format-B native comparisons retain
 their ~1e−7 print floor. See `test_isapol_lw_leg_a.py` and LW result policy fields.
 
+**Caller-declared OV charge penalty.** `fit_ov` solves `A D^T = T^T` with
+`A = J + lambda*q q^T`, a rank-1 penalty on the *total* fitted charge of the
+transition density. An OV transition density has exactly zero charge by MO
+orthonormality, so the penalty converges a constraint the exact answer already
+satisfies; it is **not** a tolerance and raising it relaxes no gate.
+`run_native_properties(..., ov_charge_penalty=...)` makes the value an explicit
+caller declaration (default 1.0; `direct_ov` forms no transition fit and accepts
+only the default), records it in fit/result provenance and in the model string,
+and deliberately keeps it **out** of the response policy hash — H1/H2 come from
+the orbitals, so one native context serves every lambda.
+
+Measured on water (PBE0/cc-pVDZ, generated recipe, 99/590 response grid,
+`shared_sweep`, strict production LW at every point,
+`.pi/audit/ov-charge-penalty-water.json`): the residual fitted transition charge
+falls as exactly 1/lambda (`lambda*charge` ≈ 1.5e−4 for lambda≥1e2; lambda1's
+1.2366e−4 is not yet asymptotic), and the LW `input-sum-rule` residual is
+proportional to that charge (≈3.35×) until it reaches a lambda-independent
+1.6e−8–3.9e−8 floor. That floor **equals the fit-free `direct_ov` route's own
+2.283e−8 on the identical grid**, so it is a property of the response quadrature
+and not of the constraint. Strict production LW therefore rejects lambda1 on 7/7
+nodes (4.14394e−4 … 3.03216e−6) and lambda1e2 on 5/7 (4.99918e−6 … 3.03369e−6),
+but **accepts** the water fitted-auxiliary chain at every declared lambda≥1e3.
+Two accepted lambdas are reported separately rather than as one "converged"
+claim, because they differ in *margin*, not in physics. **lambda1000 is the
+traced route's own value** — the exported constrained-NN state carries penalty
+`(1000, 0, 0)` and the replay oracle refuses anything else — and it passes with
+`input-sum-rule` 4.6538e−7, only 2.1× under the gate and still
+penalty-dominated (3.09× the fitted charge, 20× the quadrature floor).
+lambda1e4 reaches that floor: 2.3313e−8, 43× under the gate and 1.02× the
+fit-free route's own 2.2834e−8. Between them the model barely moves — raw
+tensors 1.345e−7 in the absolute metric, C6 total 18.199203613 vs
+18.199203034 — so the choice is a margin declaration. Intermediate decades
+interpolate monotonically (lambda2e3: 2.1298e−7; lambda5e3: 6.1518e−8). The
+algorithm-controlled residuals sat at machine level at every lambda (off-site
+≤5.7e−15, reciprocity ≤2.9e−14): only the supplied-input class ever failed, which
+is why this fixes the **producer** — `reported_input_sum_rule` was never used.
+Conditioning of `A` degrades linearly in lambda: lambda1e4 and lambda1e6 agree to
+5.7e−7 in the raw tensors and 4.7e−7 in the C6 total, while lambda1e8 deviates by
+7.3e−5; on He, where the constraint already holds to 4.86e−15 at lambda1, raising
+lambda only injects noise (atomic-scalar movement 7.6e−14 → 8.4e−12 → 1.18e−9 for
+1e2 → 1e4 → 1e6). Declared water values: **1000** to reproduce the traced
+route, **1e4** where the constraint is to be at the quadrature floor.
+
+A chain at any lambda other than the recorded one is a *differently declared
+model*. The archived recorded-input D and the `ov_transition_legs` error
+2.3019798321950356e−5 below are lambda1 numbers, so the lambda1e4 chain must
+never be quoted against them, and must not be used to close the water fitted-OV
+budget row — that row stays unmeasurable at lambda1, now for a precisely
+understood reason. See `test_isapol_native_charge_penalty.py`.
+
 PFIT targets must declare actual point-charge response `-d(phi_induced)/dq`, charge,
 units, and native-direct versus fitted-propagator origin. Never silently substitute
 a truncated multipole reconstruction, bare electrostatics or energy factor1/2.
@@ -850,13 +900,18 @@ Measured requirements at a 1e−6 property tolerance, evidence in
 Two chains are needed and neither substitutes for the other. Water
 (PBE0/cc-pVDZ, generated recipe, direct-OV, three sites) is the only
 non-degenerate partition measurement, but the **fitted-auxiliary route on water
-is rejected outright** by the strict production LW gate — charge-sum ≈4.1e−4 at
-every frequency — so the fitted-OV intermediate cannot be anchored there and is
-anchored on He instead. He is monatomic, so `w_a/Σw ≡ 1` and the two partition
+is rejected at the recorded lambda1** by the strict production LW gate —
+charge-sum ≈4.1e−4 at every frequency — so the fitted-OV intermediate cannot be
+anchored there and is anchored on He instead. Declaring a converged charge
+penalty (lambda≥1e3, §6) does make strict LW accept a water fitted chain, but
+that is a differently declared model and cannot be quoted against the lambda1
+numbers in this table. He is monatomic, so `w_a/Σw ≡ 1` and the two partition
 stages are *exactly* degenerate on it (A = 0); their "satisfied" rows on He are
 an artifact of that degeneracy and are labelled as structurally insensitive,
 not offered as evidence. The rejection was not worked around: relaxing the
-residual policy to admit it is forbidden and was not done.
+residual policy to admit it is forbidden and was not done; the accepting
+lambda converges the constraint in the producer instead, and leaves every gate
+at production strength.
 
 The recorded 2.35888047e−8 is a joint-tail **parameter** error, so it is
 compared against a parameter stage and not against the sample array it was

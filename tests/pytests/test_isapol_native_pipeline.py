@@ -192,3 +192,52 @@ def test_synthetic_LW_dispersion_no_anisotropic_conversion():
         frequencies=q.frequencies,tensors=raw,input_rank=3,provenance=prov)
     disp=n.lw.isotropic_dispersion(local,local,cp_weights=q.cp_weights,quadrature_provenance=q.provenance)
     assert disp.pairs[0].coefficients[0].value==pytest.approx(6*np.dot(q.cp_weights,alpha**2),rel=2e-14)
+
+
+@pytest.mark.parametrize('penalty',[1,0,0.,-0.,-1.,float('nan'),float('inf'),'1e4',None,(1.,),1+0j,
+                                    np.float64(1e4)])
+def test_bad_ov_charge_penalty_rejected_before_any_fit(helium,penalty):
+    with pytest.raises(ValueError,match='ov_charge_penalty must be an explicit finite positive float'):
+        run(helium,ov_charge_penalty=penalty)
+
+
+def test_direct_ov_forms_no_transition_fit_so_declares_no_penalty(helium,full):
+    with pytest.raises(ValueError,match='no charge penalty applies'):
+        run(helium,response_basis='direct_ov',ov_charge_penalty=1.e4)
+    r=run(helium,response_basis='direct_ov',response_context=full.context)
+    assert r.ov_fit is None and 'direct_ov' in r.model and 'lambda' not in r.model
+
+
+def test_actual_penalty_recorded_and_one_context_serves_every_lambda(helium,full):
+    """H1/H2 come from the orbitals, so the penalty is deliberately outside the
+    response policy hash: the same native context is reusable at every lambda."""
+    r=run(helium,frequencies=full.frequencies,quadrature=full.quadrature,pair_self=True,
+          response_context=full.context,ov_charge_penalty=1.e4)
+    assert not r.failures,r.failures
+    assert r.context is full.context
+    assert full.ov_fit.charge_penalty==1. and 'fitted_auxiliary lambda=1.0;' in full.model
+    assert r.ov_fit.charge_penalty==1.e4 and 'fitted_auxiliary lambda=10000.0;' in r.model
+    assert 'lambda=10000.0' in r.ov_fit.provenance and 'lambda=1.0' in full.ov_fit.provenance
+
+
+def test_actual_penalty_changes_the_declared_model_and_costs_conditioning(helium,full):
+    """He already satisfies the constraint at lambda1, so raising it only costs.
+
+    The fitted transition charge is exactly zero for an OV transition density by
+    MO orthonormality, and on this one-site AUX it is already at machine level at
+    the archived lambda1 -- so nothing here is repaired by a larger penalty,
+    while the conditioning of ``A = J + lambda q q^T`` degrades linearly in
+    lambda and moves the atomic tensors.  That movement is the reason a chain run
+    at another lambda is a differently declared model and must never be compared
+    against a recorded lambda1 number; it is measured, not assumed.
+    """
+    assert full.diagnostics['fitted_transition_charge_maxabs'] < 1e-13
+    base=full.atomic_scalars.array
+    moved=[]
+    for lam in (1.e2,1.e6):
+        r=run(helium,frequencies=full.frequencies,quadrature=full.quadrature,pair_self=True,
+              response_context=full.context,ov_charge_penalty=lam)
+        assert not r.failures,r.failures
+        assert r.local.metadata.production_postcondition_passed
+        moved.append(float(np.max(np.abs(r.atomic_scalars.array-base))))
+    assert 0. < moved[0] < 1e-11 and moved[0]*100 < moved[1] < 1e-6
