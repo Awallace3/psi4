@@ -25,9 +25,10 @@ results, failures, or an accuracy deviation exceeding the declared tolerance.
 - SAPT(DFT)-D4(I), PBE0, DF SCF, internal orbital optimizer.
 - `SAPT_DFT_INDUCTION_TYPE=NONE`, `SAPT_DFT_DO_DHF=True`: induction is assigned
   from delta-HF. This is not a response-based CPKS induction benchmark.
-- Both monomer GRAC shifts are fixed at 0.136 Eh. These are deliberately nonzero
-  test inputs, **not validated physical shifts for each molecule**. Automatic
-  ionization-potential/GRAC computation is excluded from the timed calculation.
+- `SAPT_DFT_GRAC_COMPUTE=ITERATIVE` is the default. Neutral and cation SCFs for
+  both monomers determine the GRAC shifts inside each timed `energy()` call.
+  `--grac-compute NONE --shift 0.136` is retained only for explicit fixed-shift
+  diagnostics and must be labeled as excluding automatic GRAC work.
 - 99 radial / 590 spherical DFT grid settings; SCF energy/density convergence
   1e-9 / 1e-8; 24 GiB Psi4 memory; equal thread counts.
 - Double precision (`CUEST_MIXED_PRECISION=False`) in the GPU arm.

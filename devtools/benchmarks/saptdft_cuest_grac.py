@@ -5,8 +5,10 @@ Run under the branch's PsiAPI environment, inside a GPU allocation:
   python saptdft_cuest_grac.py --output RUN --repeats 3
 Each calculation gets a fresh process; energy() wall time includes backend
 initialization but excludes Python import and molecule/basis construction.
-The idealized benzene geometry is NOT the published S22 geometry. Fixed GRAC
-shifts exercise the correction, not an ab initio ionization-potential model.
+The idealized benzene geometry is NOT the published S22 geometry. Automatic
+ITERATIVE GRAC is the default so required neutral/cation shift calculations are
+included in each fresh-process timing. Use --grac-compute NONE only for an
+explicit fixed-shift diagnostic.
 """
 import argparse
 import hashlib
@@ -65,7 +67,8 @@ def run_case(args):
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     record = {"system": args.system, "basis": args.basis, "mode": args.mode,
-              "threads": args.threads, "shift_hartree": args.shift,
+              "threads": args.threads, "grac_compute": args.grac_compute,
+              "shift_hartree": args.shift if args.grac_compute == "NONE" else None,
               "psi4_version": psi4.__version__, "psi4_module": psi4.__file__,
               "slurm_job_id": os.getenv("SLURM_JOB_ID"),
               "slurm_step_id": os.getenv("SLURM_STEP_ID"), "ok": False}
@@ -76,14 +79,15 @@ def run_case(args):
     psi4.set_num_threads(args.threads)
     options = {
         "basis": args.basis, "scf_type": "df", "reference": "rhf",
-        "SAPT_DFT_FUNCTIONAL": "pbe0", "SAPT_DFT_GRAC_SHIFT_A": args.shift,
-        "SAPT_DFT_GRAC_SHIFT_B": args.shift, "SAPT_DFT_GRAC_COMPUTE": "NONE",
+        "SAPT_DFT_FUNCTIONAL": "pbe0", "SAPT_DFT_GRAC_COMPUTE": args.grac_compute,
         "SAPT_DFT_INDUCTION_TYPE": "NONE", "SAPT_DFT_DO_DHF": True,
         "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL", "SAPT_DFT_USE_EINSUMS": True,
         "USE_CUEST": args.mode == "gpu", "CUEST_XC": not args.cpu_xc,
         "CUEST_MIXED_PRECISION": args.mixed_precision, "E_CONVERGENCE": 9, "D_CONVERGENCE": 8,
         "DFT_RADIAL_POINTS": args.radial_points, "DFT_SPHERICAL_POINTS": args.spherical_points, "MAXITER": 150,
     }
+    if args.grac_compute == "NONE":
+        options.update({"SAPT_DFT_GRAC_SHIFT_A": args.shift, "SAPT_DFT_GRAC_SHIFT_B": args.shift})
     if args.system in ("peptide", "nanotube", "protein157"):
         # Pople's generated auxiliary basis is Cartesian, unsupported by cuEST.
         # Psi4 propagates the primary basis's puream into fitting bases here.
@@ -110,6 +114,9 @@ def run_case(args):
         record["wall_s"] = time.perf_counter() - start
         record["returned_energy_hartree"] = energy
         record["components_hartree"] = {key: float(psi4.variable(key)) for key in COMPONENTS}
+        record["grac_shifts_hartree"] = {
+            label: float(psi4.variable(f"SAPT DFT GRAC SHIFT {label}")) for label in ("A", "B")
+        }
         psi4.core.close_outfile()
         text = (output / "psi4.out").read_text()
         gpu_builder = "cuESTJK: GPU-Accelerated" in text
@@ -160,6 +167,7 @@ def campaign(args):
                     command = [sys.executable, str(script), "--case", "--system", system,
                                "--basis", basis, "--mode", mode, "--output", str(directory),
                                "--threads", str(args.threads), "--memory", args.memory, "--shift", str(args.shift),
+                               "--grac-compute", args.grac_compute,
                                "--radial-points", str(args.radial_points),
                                "--spherical-points", str(args.spherical_points)]
                     if args.cpu_xc:
@@ -193,7 +201,9 @@ def main():
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--memory", default="24 GiB")
-    parser.add_argument("--shift", type=float, default=0.136)
+    parser.add_argument("--shift", type=float, default=0.136,
+                        help="fixed shift used only with --grac-compute NONE")
+    parser.add_argument("--grac-compute", choices=["NONE", "SINGLE", "ITERATIVE"], default="ITERATIVE")
     parser.add_argument("--case-timeout", type=int, default=1200)
     parser.add_argument("--cpu-xc", action="store_true", help="Diagnostic: GPU J/K with CPU XC")
     parser.add_argument("--mixed-precision", action="store_true", help="Diagnostic: allow cuEST emulated mixed precision")
