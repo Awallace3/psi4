@@ -81,6 +81,15 @@ struct PSI_API IsaLocalizationResiduals {
 };
 /// Owned LW result; local drops rank 0. refined_pairs is the LW workspace,
 /// NOT externally PFIT-refined data. No native-upstream or production acceptance claim.
+///
+/// localization_rank_limit is the rank the localization was DECLARED at (see
+/// isa_localize_lw's rank_limit). Every component of rank above it is identically
+/// zero in local and refined_pairs, in both index slots, because it was removed
+/// from the supplied input before any transfer and never re-entered the algebra.
+/// truncated_input_maxabs is the largest absolute supplied value so removed, i.e.
+/// how much of the caller's own data the declared limit discarded. It is a report
+/// on the declaration, not a residual, and it is deliberately NOT gated: choosing
+/// a limit below the rank of the supplied data is the caller's declaration.
 struct PSI_API IsaLocalizedResponse {
     double frequency;
     std::vector<IsaLwPosition> positions;
@@ -90,6 +99,8 @@ struct PSI_API IsaLocalizedResponse {
     std::vector<IsaLwWorkingMatrix> refined_pairs;
     std::vector<std::array<std::size_t, 2>> omitted_component_pairs;
     std::size_t omitted_transfer_count;
+    std::size_t localization_rank_limit = 3;
+    double truncated_input_maxabs = 0.0;
 };
 /// Resource policy: at most 256 sites, 1,000,000 retained transfers (including pending),
 /// and a conservative 768 MiB native workspace budget. Exceeding a cap throws;
@@ -115,8 +126,47 @@ PSI_API void isa_lw_validate_workspace(std::size_t site_count, std::size_t bond_
 ///                        the producer of the input, not this routine.
 /// Reporting the defect is not waiving it: the caller receives the measured value
 /// and every algorithm-controlled residual is still held to residual_tolerance.
+///
+/// rank_limit DECLARES the rank the localization is performed at, in 1..3, and
+/// defaults to 3, the full working space, for which this routine is unchanged.
+/// A declared limit L restricts the whole algorithm to the first (L+1)^2 real
+/// Racah components: the supplied blocks are truncated to that range in both
+/// index slots first (reported through truncated_input_maxabs), and the
+/// component-pair loop, the translated transfer application, the molecular-sum
+/// conservation check and the local output all run inside it.
+///
+/// That restriction is exact, not approximate, and relaxes no tolerance. The
+/// multipole translation matrix is rank-raising -- its (row, column) entry
+/// vanishes unless rank(row) >= rank(column) -- so on the leading (L+1)^2 index
+/// range the composition T_first * T(-d) = T_second still holds identically.
+/// Off-site annihilation, reciprocity, charge-sum transport and the molecular
+/// sum are therefore each conserved within the declared space, and every
+/// residual above is gated at exactly the same threshold as at rank 3.
+///
+/// A limited localization is a DIFFERENT MODEL from the rank-3 one and the two
+/// must never be quoted as agreeing. They are, however, exactly CONSISTENT, and
+/// that is a theorem about this algorithm rather than a numerical observation:
+///
+///   For any declared L, the localized blocks equal the rank-3 localized blocks
+///   restricted to the leading (L+1)^2 components, bitwise.
+///
+/// The component-pair loop is ordered first_component <= second_component, and a
+/// transfer for the pair (t, u) writes only into the u-th slot, with the target
+/// weight delta(target, t) + T(+-d)[target][t]. Translation is rank-raising, so
+/// that weight vanishes for rank(target) < rank(t); a pair with t outside the
+/// declared space therefore writes only outside it, and t <= u puts u outside
+/// too. No higher-rank pair can reach a component below the limit, and the
+/// screening decisions for the lower pairs read only lower components, so they
+/// are unchanged as well. Measured at 0.0 over the eleven recorded water
+/// frequencies and over random reciprocal input on unrelated graphs.
+///
+/// The practical consequence is a negative one and must be reported as such: a
+/// declared localization rank limit cannot change any rank <= L observable, so
+/// it cannot explain a disagreement in one. What the limit does buy is an
+/// honest, cheaper model whose higher components are absent by declaration
+/// rather than dropped afterwards, and a limit a consumer can check against.
 PSI_API IsaLocalizedResponse isa_localize_lw(const IsaSitePairResponse& response,
     const IsaBondGraph& graph, double residual_tolerance = 1.0e-6,
-    double input_sum_rule_tolerance = -1.0);
+    double input_sum_rule_tolerance = -1.0, int rank_limit = 3);
 } }
 #endif

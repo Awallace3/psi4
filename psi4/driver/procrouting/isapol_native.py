@@ -162,7 +162,8 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                       density_cutoff=1.e-10, max_bytes=512*1024**2, max_nov=512,
                       response_context=None, response_basis='fitted_auxiliary',
                       scf_correction='NONE', expected_grac_shift=None,
-                      response_algorithm='ordered_pairwise', ov_charge_penalty=1.):
+                      response_algorithm='ordered_pairwise', ov_charge_penalty=1.,
+                      localization_rank_limit=3):
     """Return all owned stages, with strict production LW (1e-6) or failures.
 
     Explicit ``response_basis='direct_ov'`` integrates actual occupied/virtual
@@ -201,6 +202,15 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
     ``isapol_native_response``); it is part of the policy hash and selects which
     calibrated ALDA work limit applies. It changes no other limit and no
     partition, fit, LW or PFIT stage.
+
+    ``localization_rank_limit`` declares the uniform rank the LW stage localizes
+    at, in 1..3 (default 3, the full space). It is the reference protocol's single
+    ``Limit``, and it is a SEPARATE declaration from ``recipe.sites[*].rank``: the
+    site rank is the rank of the distributed response fed in and still has to be a
+    uniform explicit 3 or 4, which this does not relax. The restriction is exact
+    rather than approximate and gates nothing differently; it also cannot change a
+    rank <= limit number, since it yields the rank-3 result restricted to the
+    declared space (see :func:`isapol_lw.supplied_nonlocal_properties`).
     """
     if response_basis not in ('fitted_auxiliary', 'direct_ov'):
         raise ValueError('unsupported response_basis')
@@ -215,6 +225,8 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
         raise TypeError('explicit PartitionRecipe required')
     if len(set(s.rank for s in recipe.sites)) != 1 or recipe.sites[0].rank not in (3, 4):
         raise ValueError('LW pipeline requires uniform explicit rank3 or rank4')
+    if type(localization_rank_limit) is not int or localization_rank_limit not in (1, 2, 3):
+        raise ValueError('localization_rank_limit must be explicit integer1,2 or3')
     freq = _frequencies(frequencies)
     if quadrature is not None and (not isinstance(quadrature, Quadrature) or freq != quadrature.frequencies):
         raise ValueError('requested nodes must exactly match complete authoritative quadrature')
@@ -342,7 +354,8 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
             'Psi4 native fitted response and IsaDistributedResponse', partition.provenance+'; '+context_hash)
         args = dict(labels=q.labels, origins=q.origins, bonds=bonds, frames=frames,
                     input_rank=rank, truncation=lw.TRUNCATE_RANK4 if rank == 4 else None,
-                    provenance=provenance, residual_policy='production')
+                    provenance=provenance, residual_policy='production',
+                    localization_rank_limit=localization_rank_limit)
         stage = 'LW'
         # Attempt EVERY node independently; never relax or hide a failed frequency.
         for k, xi in enumerate(freq):
@@ -354,6 +367,9 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
             local = lw.supplied_nonlocal_properties(frequencies=freq, tensors=raw, **args)
             if pair_self or partner is not None:
                 stage = 'dispersion'
+                # No site_ranks_* here: each side's rank set is read off that
+                # side's own model. `partner` is a separately declared model and
+                # may carry a different localization limit than this call's.
                 dispersion = lw.isotropic_dispersion(local, local if pair_self else partner,
                     cp_weights=quadrature.cp_weights, quadrature_provenance=quadrature.provenance,
                     max_order=max_order)

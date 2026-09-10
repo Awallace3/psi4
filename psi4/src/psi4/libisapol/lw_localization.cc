@@ -258,16 +258,21 @@ IsaLwWorkingMatrix translation_matrix(const IsaLwPosition& displacement) {
     return result;
 }
 
-IsaLwWorkingMatrix molecular_response(const IsaSitePairResponse& response) {
+// `components` is the declared working width (L+1)^2. Both the molecular index
+// range and the site-local one are restricted to it: translation is rank-raising,
+// so an unrestricted molecular row would receive contributions from inside the
+// declared space that the truncated transfer application never balances, and the
+// conservation law would then be measured on a quantity the algorithm does not own.
+IsaLwWorkingMatrix molecular_response(const IsaSitePairResponse& response, std::size_t components) {
     const std::size_t count = response.positions.size();
     std::vector<IsaLwWorkingMatrix> translations;
     for (const auto& position : response.positions) translations.push_back(translation_matrix(position));
     IsaLwWorkingMatrix result{};
     for (std::size_t a = 0; a < count; ++a) for (std::size_t b = 0; b < count; ++b) {
         const auto& block = response.blocks[a * count + b];
-        for (std::size_t row = 0; row < 16; ++row) for (std::size_t column = 0; column < 16; ++column)
-            for (std::size_t local_row = 0; local_row < 16; ++local_row)
-                for (std::size_t local_column = 0; local_column < 16; ++local_column) {
+        for (std::size_t row = 0; row < components; ++row) for (std::size_t column = 0; column < components; ++column)
+            for (std::size_t local_row = 0; local_row < components; ++local_row)
+                for (std::size_t local_column = 0; local_column < components; ++local_column) {
                     const double term = translations[a][row][local_row] * block[local_row][local_column] *
                                         translations[b][column][local_column];
                     require_finite(term, "molecular response product");
@@ -278,20 +283,24 @@ IsaLwWorkingMatrix molecular_response(const IsaSitePairResponse& response) {
     return result;
 }
 
-double matrix_max_difference(const IsaLwWorkingMatrix& first, const IsaLwWorkingMatrix& second) {
+double matrix_max_difference(const IsaLwWorkingMatrix& first, const IsaLwWorkingMatrix& second,
+                             std::size_t components) {
     double result = 0.0;
-    for (std::size_t row = 0; row < 16; ++row) for (std::size_t column = 0; column < 16; ++column)
+    for (std::size_t row = 0; row < components; ++row) for (std::size_t column = 0; column < components; ++column)
         result = std::max(result, finite_absolute(first[row][column] - second[row][column],
                                                    "molecular response residual"));
     return result;
 }
 
-IsaLocalizationResiduals localization_residuals(const IsaSitePairResponse& before, const IsaSitePairResponse& after) {
+// `before` must already be the truncated input: every residual here is a
+// before/after comparison, and the algorithm's input is what it was given.
+IsaLocalizationResiduals localization_residuals(const IsaSitePairResponse& before,
+                                                const IsaSitePairResponse& after, std::size_t components) {
     const std::size_t count = after.positions.size();
     IsaLocalizationResiduals residuals{};
     for (std::size_t a = 0; a < count; ++a) {
         const auto& local = after.blocks[a * count + a];
-        for (std::size_t component = 0; component < 16; ++component) {
+        for (std::size_t component = 0; component < components; ++component) {
             residuals.local_charge = std::max(
                 residuals.local_charge,
                 std::max(finite_absolute(local[0][component], "local charge residual"),
@@ -327,7 +336,8 @@ IsaLocalizationResiduals localization_residuals(const IsaSitePairResponse& befor
         for (std::size_t b = 0; b < count; ++b) {
             const auto& block = after.blocks[a * count + b];
             const auto& reciprocal = after.blocks[b * count + a];
-            for (std::size_t row = 0; row < 16; ++row) for (std::size_t column = 0; column < 16; ++column) {
+            for (std::size_t row = 0; row < components; ++row)
+                for (std::size_t column = 0; column < components; ++column) {
                 if (a != b) {
                     residuals.off_site = std::max(
                         residuals.off_site,
@@ -340,7 +350,8 @@ IsaLocalizationResiduals localization_residuals(const IsaSitePairResponse& befor
             }
         }
     }
-    residuals.molecular_sum = matrix_max_difference(molecular_response(before), molecular_response(after));
+    residuals.molecular_sum = matrix_max_difference(molecular_response(before, components),
+                                                    molecular_response(after, components), components);
     return residuals;
 }
 
@@ -364,8 +375,13 @@ void isa_lw_validate_workspace(std::size_t count, std::size_t edges) {
 }
 
 IsaLocalizedResponse isa_localize_lw(const IsaSitePairResponse& response, const IsaBondGraph& graph,
-                              double residual_tolerance, double input_sum_rule_tolerance) {
+                              double residual_tolerance, double input_sum_rule_tolerance, int rank_limit) {
     using namespace lw_transfer_private;
+    if (rank_limit < 1 || rank_limit > 3)
+        throw PSIEXCEPTION(
+            "localize_lw: declared rank_limit must be 1, 2 or 3; rank 4 needs a rank-4 working matrix");
+    // The declared working width. rank_limit 3 gives 16, the historical behaviour.
+    const std::size_t working_components = static_cast<std::size_t>((rank_limit + 1) * (rank_limit + 1));
     if (!std::isfinite(response.frequency))
         throw PSIEXCEPTION("localize_lw: response frequency must be finite");
     if (response.frequency < 0.0)
@@ -418,7 +434,27 @@ IsaLocalizedResponse isa_localize_lw(const IsaSitePairResponse& response, const 
         throw PSIEXCEPTION("localize_lw: input reciprocity exceeds residual tolerance");
     }
 
-    IsaSitePairResponse refined = response;
+    // Truncate to the declared space BEFORE any transfer, exactly as the reference
+    // protocol does (`Limit all rank {LIMIT}` precedes `Localise ... Limit {LIMIT}`).
+    // Truncation is symmetric in the two index slots, so the reciprocity just
+    // checked over the full space is inherited by the truncated data.
+    IsaSitePairResponse truncated = response;
+    double truncated_input_maxabs = 0.0;
+    if (working_components < 16) {
+        for (auto& block : truncated.blocks) {
+            for (std::size_t row = 0; row < 16; ++row) {
+                for (std::size_t column = 0; column < 16; ++column) {
+                    if (row < working_components && column < working_components) continue;
+                    truncated_input_maxabs = std::max(
+                        truncated_input_maxabs,
+                        finite_absolute(block[row][column], "truncated supplied component"));
+                    block[row][column] = 0.0;
+                }
+            }
+        }
+    }
+
+    IsaSitePairResponse refined = truncated;
     std::vector<IsaLwWorkingMatrix> positive_translations;
     std::vector<IsaLwWorkingMatrix> negative_translations;
     positive_translations.reserve(graph.bonds.size());
@@ -442,8 +478,10 @@ IsaLocalizedResponse isa_localize_lw(const IsaSitePairResponse& response, const 
     IsaLocalizedResponse result{};
     result.frequency = response.frequency;
     result.positions = response.positions;
-    for (std::size_t first_component = 0; first_component < 16; ++first_component) {
-        for (std::size_t second_component = first_component; second_component < 16; ++second_component) {
+    result.localization_rank_limit = static_cast<std::size_t>(rank_limit);
+    result.truncated_input_maxabs = truncated_input_maxabs;
+    for (std::size_t first_component = 0; first_component < working_components; ++first_component) {
+        for (std::size_t second_component = first_component; second_component < working_components; ++second_component) {
             double largest_candidate = 0.0;
             for (std::size_t a = 0; a < count; ++a) {
                 for (std::size_t b = 0; b < count; ++b) {
@@ -534,7 +572,10 @@ IsaLocalizedResponse isa_localize_lw(const IsaSitePairResponse& response, const 
                 const std::size_t second = bond[1];
                 const std::size_t fixed = transfer.fixed_site;
                 const double amount = transfer.amount;
-                for (std::size_t target = 0; target < 16; ++target) {
+                // Restricted to the declared space with the same exactness: the
+                // translation entries reached here have rank(target) <= rank(first_component)
+                // whenever target is dropped, and those are structurally zero.
+                for (std::size_t target = 0; target < working_components; ++target) {
                     const double at_first = (target == first_component ? 1.0 : 0.0) +
                                             negative_translations[transfer.edge][target][first_component];
                     const double at_second = (target == first_component ? 1.0 : 0.0) +
@@ -566,7 +607,7 @@ IsaLocalizedResponse isa_localize_lw(const IsaSitePairResponse& response, const 
         }
     }
 
-    result.residuals = localization_residuals(response, refined);
+    result.residuals = localization_residuals(truncated, refined, working_components);
     // Algorithm-controlled residuals: always held to residual_tolerance.
     const std::array<double, 4> owned_values{
         result.residuals.off_site, result.residuals.reciprocity,
@@ -605,8 +646,9 @@ IsaLocalizedResponse isa_localize_lw(const IsaSitePairResponse& response, const 
     result.local.resize(count);
     for (std::size_t site = 0; site < count; ++site) {
         const auto& working = refined.blocks[site * count + site];
-        for (std::size_t row = 1; row < 16; ++row) {
-            for (std::size_t column = 1; column < 16; ++column) {
+        // Components above the declared limit stay at the value-initialized zero.
+        for (std::size_t row = 1; row < working_components; ++row) {
+            for (std::size_t column = 1; column < working_components; ++column) {
                 result.local[site][row - 1][column - 1] = working[row][column];
             }
         }

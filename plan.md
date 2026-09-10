@@ -465,9 +465,11 @@ remains between it and the `777f904` target, in dependency order:
    `isapol_refine.isotropic_scalars` (the `trace(α_ll)/(2l+1)` reduction the
    Casimir–Polder sum consumes, encoded once instead of per caller) and
    `isapol_lw.isotropic_dispersion(site_ranks_a=..., site_ranks_b=...)`, so a
-   caller can declare the reference's L2/H1 rank limit instead of the
-   hardcoded uniform `[1,2,3]`; rank 4 is refused there rather than zero-filled,
-   because LW localizes no rank-4 tensor.
+   caller can declare the reference's L2/H1 rank limit per site; rank 4 is
+   refused there rather than zero-filled, because LW localizes no rank-4
+   tensor. (Item 6 later replaced that call's `None` default: it now follows the
+   model's own declared localization limit rather than a fixed `[1,2,3]`, so a
+   limited model cannot be scored `complete` on components it never had.)
    *Run on the intended protocol:* the refinement stage now runs at the end of
    the PBE0/aug-cc-pVTZ + reference-GRAC (0.06490004527520865 Eh) demo,
    `.pi/audit/avtz-grac-refinement-demo.py` →
@@ -726,28 +728,51 @@ remains between it and the `777f904` target, in dependency order:
    ratio, while conserving the total to 0.6%. Every one of the six site rows in
    the table above is that one number seen through `C6_ab ∝ α_a α_b`.
 
-   *The measured structural cause, and it is not the one previously suspected.*
-   The reference's header declares `WSM-Limit: 2` and `H-Limit: 1` — the rank
-   limit applies to the **localization** as well as to the model — and a
-   rank-limited localization is **structurally absent** from our implementation,
-   not merely unimplemented: `IsaLwLocalMatrix` is a fixed `15×15`
-   (`IsaLwWorkingMatrix` `16×16`), i.e. "Real Racah order 00,10,11c,11s,…
-   through rank 3" with no per-site limit anywhere in `lw_localization.{h,cc}`,
-   and `native_properties` therefore rejects `{O: 2, H: 1}` up front with
-   `LW pipeline requires uniform explicit rank3 or rank4`
-   (`isapol_native.py:217`, `.pi/audit/avtz-rank-limited.json`). Our chain
-   localizes at uniform rank 3 and applies the L2/H1 limit afterwards, at
-   `RefinementSite.rank_limit` and `IsaIsotropicSite.ranks`; the reference
-   *localizes under the restriction*. Those are different least-squares
-   problems, and the difference is exactly of the kind that redistributes
-   polarizability between sites — when rank 2 and 3 are unavailable on hydrogen,
-   the localization has to place that response somewhere, and the reference
-   places it on hydrogen's dipole. This is the leading candidate for ρ and it is
-   **a candidate, not a conclusion**: it is not eliminated, not bounded, and not
-   absorbed into a tolerance. Closing it needs a rank-limited LW path with its
-   own gate. Post-hoc truncation of a rank-3 localization is a *different
-   model*, is labelled as such throughout, and must never be quoted as
-   agreement.
+   *The candidate that was suspected here is now implemented and ELIMINATED,
+   and two claims made in this item were wrong.* `isa_localize_lw` takes a
+   declared `rank_limit` in 1..3 (default 3, reproducing the previous behaviour
+   bitwise), threaded through `supplied_nonlocal_properties` and
+   `native_properties`, restricting input truncation, the component-pair loop,
+   the transfer application, the conservation check and the local output to the
+   leading `(L+1)²` components with every residual on the unchanged `1e-6` gate.
+   Wrong claim 1: the limit reaching the localization is a **single uniform
+   integer**, not `WSM-Limit`/`H-Limit`. `write_orient_file_localize` emits only
+   `Limit all rank {LIMIT}` / `Localise {LOC} test 1e-7 Limit {LIMIT}` /
+   `Write/Print all local ranks 1 to {LIMIT}`; the per-site
+   `Limit rank to {HLIMIT} for sites +++` lines belong to
+   `write_process_file_for_pfit` and `write_process_file_for_casimir`, and
+   `{WSMLIMIT}` to the energy/display writers (`bin/localize.py` corroborates).
+   Wrong claim 2: localizing under the restriction is **not** a different
+   least-squares problem. For any declared `L` the localized blocks equal the
+   rank-3 ones restricted to `(L+1)²`, *bitwise* — the pair loop is ordered
+   `t ≤ u`, a transfer for `(t,u)` writes only into slot `u` with weight
+   `δ(target,t) + T(±d)[target][t]`, and translation is rank-raising, so a pair
+   with `t` outside the declared space writes only outside it. Measured at
+   exactly 0.0 over the eleven recorded water frequencies and two random
+   reciprocal graphs, and at the `Cn` level every coefficient complete at both
+   limits 3 and 2 (n=6 and n=8, so rank 2 is exercised) agrees to 0.000e+00,
+   with ρ flat to 0.000e+00 across limits 1, 2 and 3. A declared limit cannot
+   change any rank ≤ L number, and ρ is one, so the candidate is closed by
+   elimination and **ρ is untouched**. A limited localization is still a
+   different *model* from the rank-3 one and must never be quoted as agreeing
+   with it, even though the two are now proved exactly consistent.
+   `native_properties`'s uniform-site-rank refusal stays in force: the
+   localization limit is a separate declaration, not a relaxation of it.
+
+   *Where ρ actually lives now.* Running our LW localization and `Cn` kernel on
+   the reference's **own recorded distributed** pair response (`H2O_NL4_000.pol`,
+   same `wt4_L3` case, manifest-declared `CasimirGrid(10,0.5)`) gives
+   `α_H/α_O = 0.28216` and `sqrt(C6_HH/C6_OO) = 0.31294` — 1.12× the reference's
+   0.278732, against our native chain's 0.636×. Not a parity claim and not
+   quotable as one: it is our *unrefined* localization of the reference's
+   distributed input versus the reference's *refined* L3 value, and the fixture
+   README records unrefined indices 7..10 failing its literal seven-decimal
+   comparison. What it does establish is that the factor ~1.6 in ρ is not
+   created in the localization or in the isotropic `Cn` kernel. The surviving ρ
+   candidates are all in the **distributed response/partition step** that
+   produces those blocks — the constrained-NN partition and its site weights,
+   the response basis, and the AC form — and each needs its own gate. None is
+   eliminated yet and none may be absorbed into a tolerance.
    *Also still upstream of every number above:* the response-step AC form
    (candidate 2, +1.36% on the H2O molecular polarizability). It is not absorbed
    anywhere, and it cannot explain ρ, which is a partition ratio at fixed total.
@@ -943,12 +968,16 @@ trace, hashes and separate ISA candidates). Its portable conclusions are in
   observed gap sits inside it; that is a bound, not an explanation, and the H2O
   same-orbital test needed to close it requires a 15-digit water movecs
   (`examples/energy-scan/water2-B` carries only ~8 and is abandoned).
-- Per-site rank limits are still not declarable in the LW pipeline
-  (`isapol_native.py:217` requires uniform explicit rank 3 or rank 4), so the
-  reference's `L2`/rank-1-H model cannot be *fitted* natively. Closing that needs
-  either a rank-limited LW path with its own gate or an explicitly labelled
-  post-hoc truncation of reported components — a different model from fitting
-  under the restriction, and never quotable as agreement.
+- A **uniform** localization rank limit is now declarable
+  (`isa_localize_lw(..., rank_limit=)`,
+  `supplied_nonlocal_properties(localization_rank_limit=)`), which is what the
+  reference's localization actually takes; it is proved and measured to give the
+  rank-3 result restricted, bitwise, so it changes no rank ≤ L number. **Per-site**
+  limits remain undeclarable in the LW *fit* (`isapol_native.py` still requires a
+  uniform explicit rank 3 or 4), and that refusal stays: the reference's per-site
+  `H-Limit 1` reaches pfit and Casimir, not the localization, so a per-site
+  localization fit is not a reference-matching requirement — it would be a new
+  model needing its own gate and its own evidence.
 - Point-response coverage: no shell above p is exercised by the analytic ESP
   oracle (the fixture basis has none), and neither the factor-4 nor the `a`/`b`
   gate touches that. The right-hand-side factor 4 and the `a`/`b` kernel

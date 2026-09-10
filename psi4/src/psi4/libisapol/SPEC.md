@@ -951,24 +951,72 @@ the isotropic `Cn` (spread 0 to 7.9e-08), so per-ordered-pair and summed reading
 of the reference blocks differ by exactly 4×, and it is the +0.6% agreement under
 `{O-O: 1, H-O: 4, H-H: 4}` that selects the per-ordered-pair reading.
 
-**The leading structural candidate for ρ is the rank-limited localization, and it
-is a candidate, not a conclusion.** The reference header declares `WSM-Limit: 2`
-and `H-Limit: 1`, i.e. the limit applies to the localization as well as to the
-model, and a rank-limited localization is structurally absent from our
-implementation rather than merely unimplemented: `IsaLwLocalMatrix` is a fixed
-`15×15` (`IsaLwWorkingMatrix` `16×16`), "Real Racah order 00,10,11c,11s,… through
-rank 3", with no per-site limit anywhere in `lw_localization.{h,cc}` — hence the
-`isapol_native.py:217` refusal above (`.pi/audit/avtz-rank-limited.json`).
-Localizing at rank 3 and truncating afterwards is a **different least-squares
-problem** from localizing under the restriction, and the difference is exactly of
-the kind that redistributes polarizability between sites: with ranks 2 and 3
-unavailable on hydrogen, the localization must place that response somewhere, and
-the reference places it on hydrogen's dipole. This is not eliminated, not bounded
-and not absorbed into a tolerance; closing it needs a rank-limited LW path with
-its own gate. Upstream of every number above, the response-step asymptotic
-correction form (candidate 2, +1.36% on the H2O molecular polarizability, §6)
-also remains open — it is absorbed nowhere, and it cannot explain ρ, which is a
-partition ratio at fixed total.
+**The rank-limited localization was the leading candidate for ρ. It is now
+implemented, and it is ELIMINATED — by proof and by measurement, not bounded.**
+`isa_localize_lw` takes a declared `rank_limit` in 1..3 (default 3, the
+historical behaviour, reproduced bitwise), threaded through
+`supplied_nonlocal_properties(localization_rank_limit=...)` and
+`native_properties`. A declared `L` truncates the supplied blocks to the leading
+`(L+1)²` real Racah components in both index slots — reporting the discarded
+magnitude as `truncated_input_maxabs`, a report on the caller's declaration and
+deliberately not a gate — and then runs the component-pair loop, the translated
+transfer application, the molecular-sum conservation check and the local output
+inside that space, with every algorithm-controlled residual on the *unchanged*
+`1e-6` gate.
+
+Two prior claims here were wrong and are corrected. First, the limit reaching
+the localization is a **single uniform integer**, not the per-site
+`WSM-Limit`/`H-Limit`: `cluster_file_interface.F90::write_orient_file_localize`
+emits only `Limit all rank {LIMIT}`, `Localise {LOC} test 1e-7 Limit {LIMIT}` and
+`Write/Print all local ranks 1 to {LIMIT}`; the per-site
+`Limit rank to {HLIMIT} for sites +++` lines belong to
+`write_process_file_for_pfit` and `write_process_file_for_casimir`, and
+`{WSMLIMIT}` to the energy and display writers. `bin/localize.py` corroborates:
+only `LIMIT` and `LOC` reach the ORIENT localization. Second, localizing under
+the restriction is **not** a different least-squares problem from localizing at
+rank 3 and reading the low components:
+
+> For any declared `L`, the localized blocks equal the rank-3 localized blocks
+> restricted to the leading `(L+1)²` components, bitwise.
+
+The pair loop is ordered `first_component ≤ second_component`; a transfer for
+`(t,u)` writes only into slot `u`, with target weight
+`δ(target,t) + T(±d)[target][t]`, and multipole translation is rank-raising, so
+that weight vanishes for `rank(target) < rank(t)`. A pair whose `t` lies above
+the declared space therefore writes only above it, and `t ≤ u` puts `u` above it
+too, while the screening decisions for the lower pairs read only lower
+components. Measured at exactly **0.0** over the eleven recorded water
+frequencies and over random reciprocal input on a 4-site path and a 6-site
+branched graph, and at the `Cn` level: every coefficient that declared limits 3
+and 2 both report *complete* (all nine site pairs at `n=6` and `n=8`, so rank 2
+is exercised, not just rank 1) agrees to **0.000e+00**, and ρ itself is flat to
+**0.000e+00** across declared limits 1, 2 and 3. A declared limit cannot change
+any rank ≤ L observable, and ρ is one, so this candidate is closed by
+elimination — the number is untouched. What the limit does buy is an honest,
+cheaper model whose high components are absent *by declaration* rather than
+dropped after the fact, and a limit a consumer can check: `isotropic_dispersion`
+now refuses a declared rank above the model's own localization limit, and its
+`site_ranks=None` default is read off the model rather than fixed at `(1,2,3)`,
+so a limited model can never be scored `complete` on terms it never had.
+
+**ρ therefore remains open, and the candidate list moves upstream of LW.** One
+measurement relocates it: running our LW localization and `Cn` kernel on the
+*reference's own recorded distributed* pair response (`H2O_NL4_000.pol`, the same
+`wt4_L3` case, on the manifest's declared `CasimirGrid(10,0.5)` grid) gives
+`α_H/α_O = 0.28216` and `sqrt(C6_HH/C6_OO) = 0.31294`, i.e. **1.12×** the
+reference's 0.278732 rather than our native chain's 0.636×. That is not a parity
+claim and is not quotable as one — it compares our *unrefined* localization of
+the reference's distributed input against the reference's *refined* L3 value, and
+the fixture's own README records that unrefined indices 7..10 fail its literal
+seven-decimal comparison. It does say that neither the localization nor the
+isotropic `Cn` kernel is where the factor ~1.6 in ρ is created: fed the
+reference's partition, our chain reproduces the reference's partition ratio to
+~12%. The surviving candidates for ρ are therefore all in the **distributed
+response/partition step that produces those blocks** — the constrained-NN
+partition and its site weights, the response basis, and the asymptotic-correction
+form — and each needs its own gate. Candidate 2 (the response-step AC form,
++1.36% on the H2O molecular polarizability, §6) is absorbed nowhere and still
+cannot explain ρ by itself, which is a partition ratio at fixed total.
 
 The 377 nonzero recoupled reference rows (O-O 258, H-O 86, H-H 33) are an
 explicitly **uncompared** track, because the native anisotropic product is

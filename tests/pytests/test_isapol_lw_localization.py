@@ -496,4 +496,141 @@ def test_lw_source_is_pod_only_and_resource_bounded():
     assert "kIsaLwMaxWorkspaceBytes = 768 * 1024 * 1024" in header
     assert "result.transfers.size() + pending.size() >= kIsaLwMaxTransfers" in source
     assert source.index("isa_lw_validate_workspace(count, graph.bonds.size());") < source.index(
-        "IsaSitePairResponse refined = response;")
+        "IsaSitePairResponse truncated = response;") < source.index(
+        "IsaSitePairResponse refined = truncated;")
+
+
+def _random_reciprocal_blocks(count, seed):
+    """Full rank-3 reciprocal ordered-pair input: blocks[a*n+b][t][u] == blocks[b*n+a][u][t].
+
+    The rank-limit tests need input that is nonzero in EVERY component, including
+    the ones a declared limit discards, or the truncation would be a no-op and the
+    commutation claim would go untested.
+    """
+    generator = np.random.default_rng(seed)
+    raw = generator.normal(size=(count, count, 16, 16))
+    blocks = [[[0.0] * 16 for _ in range(16)] for _ in range(count * count)]
+    for a in range(count):
+        for b in range(count):
+            for row in range(16):
+                for column in range(16):
+                    blocks[a * count + b][row][column] = 0.5 * (raw[a, b, row, column] +
+                                                                raw[b, a, column, row])
+    return blocks
+
+
+def _limited_localize(positions, values, bonds, rank_limit, tolerance=1.0e-9):
+    # The supplied blocks generally break the charge-flow sum rule, which is a
+    # property of the caller's data and not of the limit under test, so it is
+    # measured and reported (infinity) rather than gated. The algorithm-controlled
+    # residuals stay on the same `tolerance` gate at every limit.
+    return psi4.core.isa_localize_lw(
+        _matrix(positions), [_matrix(block) for block in values], 0.0, bonds, tolerance,
+        float("inf"), rank_limit,
+    )
+
+
+def test_lw_declared_rank_limit_defaults_to_three_and_leaves_the_call_unchanged():
+    positions = [[0.0, 0.0, 0.0], [0.2, -0.3, 0.4], [-0.5, 0.1, 0.2]]
+    values = _random_reciprocal_blocks(3, 20260910)
+    bonds = [(0, 1), (1, 2)]
+    unlimited = _limited_localize(positions, values, bonds, 3)
+    for explicit in (3, None):
+        result = (unlimited if explicit is None else
+                  _limited_localize(positions, values, bonds, explicit))
+        assert result.localization_rank_limit == 3
+        # Nothing was discarded at the full working space, so this is exactly 0,
+        # not merely small: it is a report on the declaration, not a residual.
+        assert result.truncated_input_maxabs == 0.0
+        for site in range(3):
+            assert (np.asarray(result.local[site]) ==
+                    np.asarray(unlimited.local[site])).all()
+
+
+@pytest.mark.parametrize("rank_limit", [1, 2])
+def test_lw_declared_rank_limit_equals_rank_three_restricted_bitwise(rank_limit):
+    """A declared limit L gives the rank-3 result restricted to (L+1)^2, exactly.
+
+    This is a theorem about the algorithm, not a numerical observation. The pair
+    loop is ordered first_component <= second_component; a transfer for (t, u)
+    writes only into slot u with target weight delta(target, t) + T(+-d)[target][t],
+    and translation is rank-raising, so that weight vanishes for rank(target) <
+    rank(t). A pair whose t lies above the limit therefore writes only above it,
+    and t <= u puts u above it too, while the screening decisions for the pairs
+    below read only components below. Hence `abs=0.0`, not a tolerance.
+
+    The consequence is negative and is the point of the test: a declared
+    localization rank limit cannot change any rank <= L number, so it cannot
+    explain a disagreement in one.
+    """
+    positions = [[0.0, 0.0, 0.0], [0.2, -0.3, 0.4], [-0.5, 0.1, 0.2], [0.7, 0.4, -0.6]]
+    values = _random_reciprocal_blocks(4, 4090 + rank_limit)
+    bonds = [(0, 1), (1, 2), (2, 3)]
+    full = _limited_localize(positions, values, bonds, 3)
+    limited = _limited_localize(positions, values, bonds, rank_limit)
+    assert limited.localization_rank_limit == rank_limit
+    # local output has the 00 component removed, so rank <= L occupies [0, (L+1)^2 - 1).
+    width = (rank_limit + 1) ** 2 - 1
+    scale = max(abs(np.asarray(full.local[site])).max() for site in range(4))
+    assert scale > 1.0e-3  # the comparison would be vacuous on a null result
+    for site in range(4):
+        inside_full = np.asarray(full.local[site])[:width, :width]
+        inside_limited = np.asarray(limited.local[site])[:width, :width]
+        assert (inside_limited == inside_full).all()
+        outside = np.asarray(limited.local[site]).copy()
+        outside[:width, :width] = 0.0
+        # Above the declared limit the components are identically zero, by
+        # declaration rather than by truncation of a computed value.
+        assert (outside == 0.0).all()
+    # Truncating the input to the declared space by hand changes nothing either.
+    prepared = [[[value if row < (rank_limit + 1) ** 2 and column < (rank_limit + 1) ** 2 else 0.0
+                  for column, value in enumerate(entries)] for row, entries in enumerate(block)]
+                for block in values]
+    pretruncated = _limited_localize(positions, prepared, bonds, rank_limit)
+    for site in range(4):
+        assert (np.asarray(pretruncated.local[site]) == np.asarray(limited.local[site])).all()
+    assert pretruncated.truncated_input_maxabs == 0.0
+    assert limited.truncated_input_maxabs == pytest.approx(
+        max(abs(values[block][row][column])
+            for block in range(16) for row in range(16) for column in range(16)
+            if row >= (rank_limit + 1) ** 2 or column >= (rank_limit + 1) ** 2), abs=0.0)
+    # No tolerance was relaxed to achieve any of this: the same gate holds.
+    assert max(_residual_values(limited.residuals)[:1] +
+               _residual_values(limited.residuals)[2:4]) <= 1.0e-9
+
+
+def test_lw_declared_rank_limit_reports_and_does_not_gate_discarded_input():
+    """`truncated_input_maxabs` reports the caller's own declaration, not a defect.
+
+    The seed is a single rank-1/rank-3 charge-flow element on a diatomic, which is
+    the cleanest separator available: at rank 3 it localizes to a large result,
+    and at declared limit 2 its pair has second_component outside the declared
+    space, so the algorithm never sees it and the surviving space is exactly null.
+    """
+    positions = [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]]
+    values = [_working_l3_matrix() for _ in range(4)]
+    values[1][1][9] = values[2][9][1] = 5.0e3
+    for block in (0, 3):
+        values[block][1][9] = values[block][9][1] = -5.0e3
+    limited = _limited_localize(positions, values, [(0, 1)], 2)
+    assert limited.truncated_input_maxabs == pytest.approx(5.0e3, abs=0.0)
+    # Discarding 5000 does not fail the call; it is the caller's declaration.
+    assert max(abs(np.asarray(limited.local[site])).max() for site in range(2)) == 0.0
+    assert not limited.transfers
+    full = _limited_localize(positions, values, [(0, 1)], 3)
+    assert full.truncated_input_maxabs == 0.0
+    assert len(full.transfers) == 2
+    # The same seed does act at rank 3: 5000 lands on site 0's own (rank1, rank3)
+    # element, and the translation to site 1 raises it by an order of magnitude.
+    assert abs(np.asarray(full.local[0])).max() == pytest.approx(5.0e3, abs=0.0)
+    assert abs(np.asarray(full.local[1])).max() > 1.0e4
+    # The rank <= 2 window of that rank-3 result is itself null, which is the
+    # commutation theorem on a case where the two limits are visibly different.
+    for site in range(2):
+        assert (np.asarray(full.local[site])[:8, :8] == 0.0).all()
+
+
+@pytest.mark.parametrize("rank_limit", [0, 4, -1, 16])
+def test_lw_declared_rank_limit_out_of_range_fails_closed(rank_limit):
+    with pytest.raises(Exception, match="rank_limit"):
+        _limited_localize([[0.0, 0.0, 0.0]], [_working_l3_matrix()], [], rank_limit)

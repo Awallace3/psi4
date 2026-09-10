@@ -94,7 +94,11 @@ py::list matrix_copies(const std::vector<std::array<std::array<double, N>, N>>& 
 
 IsaLocalizedResponse localize(const Matrix& positions, const py::sequence& blocks,
                              double frequency, const py::sequence& bonds, double tolerance,
-                             double input_sum_rule_tolerance) {
+                             double input_sum_rule_tolerance, int rank_limit) {
+    // Declared, not inferred: the caller states the rank the localization runs at.
+    if (rank_limit < 1 || rank_limit > 3)
+        throw std::runtime_error(
+            "localize_lw: declared rank_limit must be 1, 2 or 3; rank 4 needs a rank-4 working matrix");
     if (!std::isfinite(frequency))
         throw std::runtime_error("localize_lw: response frequency must be finite");
     if (frequency < 0.0)
@@ -158,7 +162,7 @@ IsaLocalizedResponse localize(const Matrix& positions, const py::sequence& block
         for (std::size_t row = 0; row < 16; ++row)
             for (std::size_t column = 0; column < 16; ++column)
                 response.blocks[block][row][column] = (*checked[block])(row, column);
-    return isa_localize_lw(response, graph, tolerance, input_sum_rule_tolerance);
+    return isa_localize_lw(response, graph, tolerance, input_sum_rule_tolerance, rank_limit);
 }
 }  // namespace lw_binding_private
 }  // namespace
@@ -364,10 +368,16 @@ void export_isapol(py::module& m) {
         })
         .def_property_readonly("omitted_transfer_count", [](const IsaLocalizedResponse& r) {
             return r.omitted_transfer_count;
-        });
+        })
+        .def_property_readonly("localization_rank_limit", [](const IsaLocalizedResponse& r) {
+            return r.localization_rank_limit;
+        }, "Declared localization rank; every higher-rank component is identically zero")
+        .def_property_readonly("truncated_input_maxabs", [](const IsaLocalizedResponse& r) {
+            return r.truncated_input_maxabs;
+        }, "Largest supplied value the declared rank limit discarded; a report, not a residual");
     m.def("isa_localize_lw", &lw_binding_private::localize,
           "positions"_a, "blocks"_a, "frequency"_a, "bonds"_a, "residual_tolerance"_a = 1.0e-6,
-          "input_sum_rule_tolerance"_a = -1.0,
+          "input_sum_rule_tolerance"_a = -1.0, "rank_limit"_a = 3,
           "Supplied atomic-unit ordered-pair response; finite nonnegative frequency required. "
           "Positions: N x 3 Matrix in bohr; blocks: N*N single 16x16 Matrices, real Racah 00,10,11c,11s,... . "
           "Explicit zero-based graph; source-minus-target translations; local output ranks 1..3. "
@@ -378,6 +388,17 @@ void export_isapol(py::module& m) {
           "threshold, and infinity measures and reports the defect without gating it. LW transports such a "
           "defect exactly (measured <= 2.2e-16) and cannot repair it. At most 256 sites, 1000000 retained transfers, "
           "768 MiB native workspace budget (caller inputs/getter copies additional). "
+          "rank_limit declares the rank the localization runs at, in 1..3, default 3 (the full working "
+          "space, for which this routine is unchanged). A declared limit L truncates the supplied blocks "
+          "to the leading (L+1)^2 real Racah components in both index slots first -- reported through "
+          "truncated_input_maxabs -- and then runs the component-pair loop, the translated transfer "
+          "application, the molecular-sum conservation check and the local output inside that space. The "
+          "restriction is exact because multipole translation is rank-raising, so no tolerance is relaxed "
+          "and every residual is gated at the same threshold as at rank 3. A limited localization is a "
+          "DIFFERENT MODEL from the rank-3 one, but an exactly consistent one: because translation is "
+          "rank-raising and the pair loop is ordered, no pair above the limit can write below it, so the "
+          "result equals the rank-3 result restricted to the declared space, bitwise (measured 0.0). A "
+          "declared limit therefore cannot change any rank <= L observable. "
           "No solver fallback, native-upstream verification, external PFIT refinement, or parity claim.");
     m.def("isa_lw_graph_math",
           [](std::size_t site_count, const std::vector<std::array<std::size_t, 2>>& bonds) {

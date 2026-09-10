@@ -282,7 +282,7 @@ def test_literal_lorentz_integral_independent_formula():
     assert coefficient(r,6).value == direct.pairs[0].coefficients[0].value
 
 
-def ranked_lorentz(n, frequencies, alphas, omega):
+def ranked_lorentz(n, frequencies, alphas, omega, localization_rank_limit=3):
     """One site set whose three localized ranks carry three DIFFERENT scalars.
 
     `lorentz` above populates only the dipole block, so a rank limit would be
@@ -291,6 +291,8 @@ def ranked_lorentz(n, frequencies, alphas, omega):
     and only those.
     """
     q = request(n,frequencies)
+    if localization_rank_limit != 3:
+        q['localization_rank_limit'] = localization_rank_limit
     for k,xi in enumerate(frequencies):
         for s in range(n):
             for l,alpha in zip((1,2,3),alphas):
@@ -452,3 +454,110 @@ def test_nested_record_constructor_snapshots():
 def test_disconnected_inconsistent_flow_fails_no_fallback():
     q = request(2); q['tensors'][0,:,:,0,0] = [[-2,2],[2,-2]]
     with pytest.raises(RuntimeError): lw.supplied_nonlocal_properties(**q)
+
+
+def test_localization_rank_limit_is_recorded_and_defaults_to_three(water):
+    """The declared localization rank reaches Metadata, with what it discarded."""
+    q = water_request(water)
+    full = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',**q)
+    assert full.metadata.localization_rank_limit == 3
+    assert full.metadata.localization_truncated_input_maxabs == 0.0
+    assert not any('localization declared at rank' in w for w in full.warnings)
+    for limit in (1,2):
+        m = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
+                                            localization_rank_limit=limit,**q)
+        assert m.metadata.localization_rank_limit == limit
+        # The reference's own recorded distributed response is nonzero above
+        # rank 2, so a limit below 3 really does discard data here.
+        assert m.metadata.localization_truncated_input_maxabs > 1.0
+        # A declared restriction is announced on the record, not left implicit.
+        declared = [w for w in m.warnings if 'localization declared at rank' in w]
+        assert len(declared) == 1
+        assert 'absent by declaration, not computed and small' in declared[0]
+        assert 'cannot change any number at those ranks' in declared[0]
+
+
+@pytest.mark.parametrize('bad',[0,4,-1,'2',2.0,True,None])
+def test_localization_rank_limit_is_validated(bad):
+    q = request(1,[0.])
+    with pytest.raises(ValueError,match='localization_rank_limit'):
+        lw.supplied_nonlocal_properties(localization_rank_limit=bad,**q)
+
+
+def test_localization_rank_limit_restricts_the_model_without_moving_it(water):
+    """A declared limit yields the rank-3 model restricted, not a re-fit one.
+
+    Localizing under the restriction and localizing at rank3 then reading only
+    the low components are the SAME computation, because multipole translation is
+    rank-raising: a component pair above the limit writes only above it. So the
+    surviving scalars are bitwise equal, and the ones above the limit are zero by
+    declaration. `abs=0.0` is deliberate; a tolerance here would hide the point.
+    """
+    q = water_request(water)
+    full = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',**q)
+    reference = np.asarray(full.atomic_scalars.array)
+    for limit in (1,2):
+        m = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
+                                            localization_rank_limit=limit,**q)
+        scalars = np.asarray(m.atomic_scalars.array)
+        assert scalars.shape == reference.shape
+        assert (scalars[:,:,:limit] == reference[:,:,:limit]).all()
+        assert (scalars[:,:,limit:] == 0.0).all()
+    # The restriction is nonvacuous: rank2 and3 carry real weight here.
+    assert abs(reference[:,:,1]).max() > 1.0
+    assert abs(reference[:,:,2]).max() > 1.0
+
+
+def test_default_site_ranks_follow_the_model_localization_limit():
+    """`site_ranks=None` must mean "what this model has", not a fixed (1,2,3).
+
+    A fixed default would hand the C_n kernel the declared-absent zeros of a
+    limited model, which the kernel would then score `complete` -- reporting a
+    full order computed from terms the model never had.
+    """
+    frequencies, weights = [0,2], [0,.17]
+    full = ranked_lorentz(1,frequencies,(3,7,11),2)
+    limited = ranked_lorentz(1,frequencies,(3,7,11),2,localization_rank_limit=2)
+    implicit = lw.isotropic_dispersion(limited,limited,cp_weights=weights,quadrature_provenance=PROV)
+    explicit = lw.isotropic_dispersion(limited,limited,cp_weights=weights,quadrature_provenance=PROV,
+                                       site_ranks_a=[[1,2]],site_ranks_b=[[1,2]])
+    assert [c.value for c in implicit.pairs[0].coefficients] == \
+           [c.value for c in explicit.pairs[0].coefficients]
+    assert coefficient(implicit,10).included_rank_pairs == ((2,2),)
+    assert not coefficient(implicit,10).unrestricted_complete
+    # Declaring a rank the model was not localized at is refused, not zero-filled.
+    for ranks in ([[1,2,3]],[[3]],[[1,3]]):
+        with pytest.raises(ValueError,match='localization rank limit'):
+            lw.isotropic_dispersion(limited,full,cp_weights=weights,
+                                    quadrature_provenance=PROV,site_ranks_a=ranks)
+    # The same declaration against the unlimited model is accepted.
+    lw.isotropic_dispersion(full,full,cp_weights=weights,quadrature_provenance=PROV,
+                            site_ranks_a=[[1,2,3]])
+
+
+def test_localization_rank_limit_cannot_change_a_mutually_complete_coefficient():
+    """The negative result, at the C_n level: the limit moves no order it completes.
+
+    C6 reads only (1,1) and C8 reads (1,2)/(2,1), so both are complete at declared
+    limit2 and at rank3, and both are unchanged -- exactly. C10 needs (1,3) and
+    (3,1), which a limit-2 model does not have, so it is reported incomplete
+    rather than quietly reduced. A rank-limited localization therefore cannot
+    explain a disagreement in a rank <=L observable such as the O/H partition
+    ratio; it is eliminated as a candidate, not merely bounded.
+    """
+    frequencies, weights = [0,2], [0,.17]
+    full = ranked_lorentz(1,frequencies,(3,7,11),2)
+    limited = ranked_lorentz(1,frequencies,(3,7,11),2,localization_rank_limit=2)
+    a = lw.isotropic_dispersion(full,full,cp_weights=weights,quadrature_provenance=PROV)
+    b = lw.isotropic_dispersion(limited,limited,cp_weights=weights,quadrature_provenance=PROV)
+    compared = 0
+    for order in (6,8,10,12):
+        ca, cb = coefficient(a,order), coefficient(b,order)
+        if ca.unrestricted_complete and cb.unrestricted_complete:
+            assert cb.value == ca.value
+            assert cb.included_rank_pairs == ca.included_rank_pairs
+            compared += 1
+        else:
+            assert cb.value != ca.value or not ca.unrestricted_complete
+    assert compared == 2  # 6 and 8; 10 and 12 are incomplete at the limit
+    assert coefficient(b,10).missing_rank_pairs == ((1,3),(3,1))
