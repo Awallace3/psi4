@@ -17,6 +17,7 @@ from .isapol_native_response import NativeWavefunctionResponse, native_response_
 from .sapt.fdds_response import FDDSFullOVResponse
 from .isapol_native_correction import validate_correction, functional_definition
 from . import isapol_lw as lw
+from . import isapol_logging as lg
 
 
 @dataclass(frozen=True)
@@ -163,7 +164,7 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                       response_context=None, response_basis='fitted_auxiliary',
                       scf_correction='NONE', expected_grac_shift=None, ac_declaration=None,
                       response_algorithm='ordered_pairwise', ov_charge_penalty=1.,
-                      ov_metric_damping=0., localization_rank_limit=3):
+                      ov_metric_damping=0., localization_rank_limit=3, log=None):
     """Return all owned stages, with strict production LW (1e-6) or failures.
 
     Explicit ``response_basis='direct_ov'`` integrates actual occupied/virtual
@@ -275,6 +276,8 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                 or response_context.policy_sha256 != policy_hash
                 or response_context.correction_provenance != correction):
             raise ValueError('native response context mismatch (state/basis/geometry/policy)')
+    log = lg.silent() if log is None else log
+    log.stage('density partition (Drho-C ISA-A)', lg.partition_parameters(recipe))
     partition = native_partition(wfn, recipe, caller_converged=caller_converged)
     context, fit, adapted, distributed, tensors, local, dispersion = response_context, None, None, None, None, None, None
     responses, failures, diagnostics = [], [], {}
@@ -291,7 +294,14 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
             correction)
     try:
         q = partition.require_q()
+        lg.report_partition(log, None, partition)
         stage = 'context'
+        log.stage('native response context', lg.response_parameters(
+            kernel=kernel, exact_exchange=exact_exchange, local_scale=local_scale,
+            density_cutoff=density_cutoff, max_bytes=max_bytes, max_nov=max_nov,
+            response_algorithm=response_algorithm, response_basis=response_basis,
+            response_grid=response_grid, correction=correction,
+            ov_charge_penalty=ov_charge_penalty, ov_metric_damping=ov_metric_damping))
         if _context(wfn) != context_hash:
             raise ValueError('wavefunction context changed during partition')
         if context is None:
@@ -314,7 +324,14 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
             if error > 2.e-13:
                 raise ValueError(f'partition occupied adaptation mismatch: {error}')
         adapted = lw.ArraySnapshot.of(full)
+        lg.report_context(log, None, context, provider)
         stage = 'OV moments' if response_basis == 'direct_ov' else 'OV fit'
+        log.stage(stage, (('response_basis', response_basis),
+                          ('site multipole rank', recipe.sites[0].rank),
+                          ('density_cutoff', recipe.controller.density_cutoff))
+                  + ((('ov_charge_penalty (lambda)', ov_charge_penalty),
+                      ('ov_metric_damping (eta)', ov_metric_damping))
+                     if response_basis != 'direct_ov' else ()))
         if response_basis == 'direct_ov':
             total = np.sum(partition.shape_samples, axis=0)
             sites = []
@@ -347,10 +364,20 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
             transition_legs=d, coupling=np.zeros((d.shape[1], d.shape[1])),
             representation=('supplied_transition_leg_coordinates' if response_basis == 'direct_ov'
                             else 'fitted_density_coefficients'))
+        lg.report_ov_fit(log, fit, response_basis)
         stage = 'frequency response'
+        log.stage(stage, (('solver', 'FDDSFullOVResponse'),
+                          ('representation', solver.representation),
+                          ('nodes', len(freq)), ('frequencies [Eh]', freq)))
         for xi in freq:
             responses.append(solver.at_frequency(xi))
         stage = 'distributed response'
+        log.stage(stage, (('sites', len(recipe.sites)),
+                          ('site rank', recipe.sites[0].rank),
+                          ('components per site', (recipe.sites[0].rank+1)**2),
+                          ('transition coordinates',
+                           'direct_ov' if response_basis == 'direct_ov'
+                           else 'fitted_density_coefficients')))
         distributed = core.IsaDistributedResponse(q, freq,
             [core.Matrix.from_array(r.raw_coupled) for r in responses],
             'direct_ov' if response_basis == 'direct_ov' else 'fitted_density_coefficients',
@@ -373,6 +400,7 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
             raw_charge_sum_maxabs=[float(np.max(np.abs(a[:,: ,0,:16].sum(axis=0)))) for a in raw],
             analytic_charge_response_maxabs=[float(np.max(np.abs(analytic_q @ r.raw_coupled @ np.asarray(q.values).T))) for r in responses],
             quadrature_charge_response_maxabs=[float(np.max(np.abs((qsum-analytic_q) @ r.raw_coupled @ np.asarray(q.values).T))) for r in responses])
+        lg.report_response_diagnostics(log, diagnostics)
         provenance = lw.Provenance('fresh native distributed tensors', tensors.canonical_array_sha256,
             'Psi4 native fitted response and IsaDistributedResponse', partition.provenance+'; '+context_hash)
         args = dict(labels=q.labels, origins=q.origins, bonds=bonds, frames=frames,
@@ -380,6 +408,10 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                     provenance=provenance, residual_policy='production',
                     localization_rank_limit=localization_rank_limit)
         stage = 'LW'
+        log.stage(stage, lg.localization_parameters(
+            input_rank=rank, truncation=args['truncation'],
+            localization_rank_limit=localization_rank_limit,
+            residual_policy='production', bonds=bonds, frames=frames, frequencies=freq))
         # Attempt EVERY node independently; never relax or hide a failed frequency.
         for k, xi in enumerate(freq):
             try:
@@ -388,14 +420,23 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                 failures.append(StageFailure(stage, xi, type(exc).__name__, str(exc)))
         if not failures:
             local = lw.supplied_nonlocal_properties(frequencies=freq, tensors=raw, **args)
+            lg.report_localization(log, None, local)
+            lg.report_atomic_polarizabilities(log, None, local)
             if pair_self or partner is not None:
                 stage = 'dispersion'
+                log.stage(stage, lg.dispersion_parameters(
+                    max_order=max_order, pair_self=pair_self, partner=partner,
+                    quadrature=quadrature))
+                lg.report_quadrature(log, quadrature)
                 # No site_ranks_* here: each side's rank set is read off that
                 # side's own model. `partner` is a separately declared model and
                 # may carry a different localization limit than this call's.
                 dispersion = lw.isotropic_dispersion(local, local if pair_self else partner,
                     cp_weights=quadrature.cp_weights, quadrature_provenance=quadrature.provenance,
                     max_order=max_order)
+                lg.report_dispersion(log, None, dispersion)
     except Exception as exc:
         failures.append(StageFailure(stage, None, type(exc).__name__, str(exc)))
+    log.stage_end()
+    log.failures(failures)
     return result()

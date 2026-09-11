@@ -76,6 +76,7 @@ from numbers import Real
 import numpy as np
 from psi4 import core
 from .isapol_native_correction import require_scf_seal
+from . import isapol_logging as _lg
 
 AC_POLICY = 'DECLARED_MULTPOLE_AC'
 
@@ -425,7 +426,8 @@ class _AcKohnSham:
             Vm[np.ix_(local, local)] += phi.T @ ((correction*w)[:, None]*phi)
         return Vm
 
-    def run(self, guess_C, maxiter, energy_threshold, gradient_threshold, diis_subspace):
+    def run(self, guess_C, maxiter, energy_threshold, gradient_threshold, diis_subspace,
+            log=None):
         declaration = self.declaration
         nbf, nocc = self.nbf, self.nocc
         C = np.array(guess_C, dtype=float)
@@ -434,6 +436,9 @@ class _AcKohnSham:
         shift, spectrum, clamped, delta = 0., None, 0, float('inf')
         gradient, energy, F = float('inf'), float('nan'), None
         converged, iteration = False, 0
+        # Rows are written as they happen: this loop deliberately keeps no
+        # trajectory record, and the reporting must not add one.
+        rows = _lg.AcIterationLog(_lg.silent() if log is None else log)
         for iteration in range(maxiter):
             occupied = core.Matrix.from_array(C[:, :nocc])
             self.jk.C_left_add(occupied)
@@ -475,6 +480,9 @@ class _AcKohnSham:
             error = self.X.T @ (F @ Da @ self.S - self.S @ Da @ F) @ self.X
             gradient = float(np.abs(error).max())
             delta = energy - previous
+            rows.row(iteration=iteration, energy=energy,
+                     delta=delta if iteration else None, gradient=gradient, shift=shift,
+                     homo=spectrum[nocc-1], lumo=spectrum[nocc], clamped=clamped)
             if iteration and abs(delta) < energy_threshold and gradient < gradient_threshold:
                 converged = True
                 break
@@ -525,7 +533,8 @@ class _AcKohnSham:
 
 
 def declared_ac_orbitals(wfn, declaration, *, maxiter=200, energy_threshold=1.e-10,
-                         gradient_threshold=1.e-8, diis_subspace=10, shift_damping=.5):
+                         gradient_threshold=1.e-8, diis_subspace=10, shift_damping=.5,
+                         log=None):
     """Iterate the declared asymptotic correction from a sealed SCF wavefunction.
 
     Returns a producer record; nothing is applied to ``wfn`` and no seal is
@@ -553,9 +562,18 @@ def declared_ac_orbitals(wfn, declaration, *, maxiter=200, energy_threshold=1.e-
     require_scf_seal(wfn)
     if wfn.nalpha() != wfn.nbeta() or wfn.nirrep() != 1:
         raise ValueError('declared asymptotic correction supports restricted C1 only')
+    log = _lg.silent() if log is None else log
+    log.stage('declared MULTPOLE/Tozer-Handy asymptotic correction',
+              _lg.ac_parameters(declaration, maxiter=maxiter,
+                                energy_threshold=energy_threshold,
+                                gradient_threshold=gradient_threshold,
+                                diis_subspace=diis_subspace, shift_damping=shift_damping))
     driver = _AcKohnSham(wfn, declaration, shift_damping=shift_damping)
     C, spectrum, Da, F, convergence, converged = driver.run(
-        np.asarray(wfn.Ca()), maxiter, energy_threshold, gradient_threshold, diis_subspace)
+        np.asarray(wfn.Ca()), maxiter, energy_threshold, gradient_threshold, diis_subspace,
+        log=log)
+    _lg.report_ac_convergence(log, None, convergence, declaration, converged=converged)
+    log.stage_end()
     if not converged:
         raise ValueError('declared asymptotic-correction iteration did not converge; '
                          'no unconverged orbitals are returned')

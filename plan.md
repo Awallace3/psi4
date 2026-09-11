@@ -76,10 +76,38 @@ No implementation/build/test background tasks are pending. Old task IDs and
   limits (2e9 vs 6.4e10 on `grid_rows*nOV**2`); neither authorizes the other and
   no caller argument raises either. This is what makes the full unpruned
   PBE0/aug-cc-pVTZ IsaGrid(99,590) response affordable (section 4).
+- A reporting-only narrative and machine-readable surface: `isapol_logging`
+  (`StageLog`) plus the global int `ATOMIC_PROPERTY_PRINT` (default 1, read only
+  by `isapol_oeprop`). Every stage prints a banner with all of its tweakable
+  parameters enumerated from `dataclasses.fields`, its iteration table with
+  per-iteration metrics at verbosity 2, and its formatted property tables:
+  atomic and site-sum polarizabilities, per-site Cartesian tensors, LW residual
+  components as separate columns, the Casimir-Polder quadrature, and atomic,
+  ordered-pairwise, missing-rank and order-total dispersion coefficients. Large
+  intermediates are never printed at any verbosity. The same properties are
+  published as QCVariables at every verbosity including 0, with ` INCOMPLETE`
+  kept in the name of a structurally partial order. It computes no science,
+  mutates no record, reruns no stage and softens no refusal; neither
+  `_context` nor `_scf_state_signature` hashes variables, so it cannot disturb a
+  seal. See SPEC.md section 2.
 
 ### Latest verified evidence (local paths relative to worktree)
 
-- **Current suite total: 2,092 ISA/FDDS tests passed in 461.52 s, plus
+- **Current suite total: 2,237 ISA/FDDS tests passed in 523.62 s, plus
+  `test_isapol_oeprop_water.py` 3 passed in 99.48 s, exit 0**, run from `/tmp`
+  against the staged tree with `OMP_NUM_THREADS=1`. That is +44 over the 2,193
+  measured immediately before, all of them the new `test_isapol_logging.py`
+  (formatter, verbosity gating, wide/mismatched/elided-table refusals,
+  dataclass-enumerated parameter blocks, the `core.Matrix` wrap, the published
+  polarizability/localization/dispersion names and their shapes, the
+  ` INCOMPLETE` mark, publication at verbosity 0, the declared global option,
+  and the refusal to narrate a partition record that is not the owned
+  `NativePartitionResult`). The narrative itself was read verbatim at
+  `ATOMIC_PROPERTY_PRINT=3` on the production cc-pVDZ configuration
+  (`/tmp/claude-3170273/smoke_log.out`, 86 published variables): every banner,
+  parameter block, iteration table and property table renders, and no raw
+  tensor, grid, orbital matrix or fit-coefficient block appears anywhere in it.
+- **2,092 ISA/FDDS tests passed in 461.52 s, plus
   `test_isapol_oeprop_water.py` 3 passed in 99.12 s, exit 0**, run from `/tmp`
   against the staged tree with `OMP_NUM_THREADS=1` over
   `tests/pytests/test_isapol*.py` + `test_fdds*.py` (`oeprop_water` separately).

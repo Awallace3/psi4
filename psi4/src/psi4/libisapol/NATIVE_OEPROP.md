@@ -86,6 +86,13 @@ a separately declared response model, not the derivative of the GRAC correction.
   and `ATOMIC_RESPONSE_SPHERICAL_POINTS`. SCF grid options are separate from both.
   The denser ISA default exceeds the current ALDA work bound for cc-pVDZ water;
   the response grid is a separately recorded model policy, not an increased bound.
+- `ATOMIC_PROPERTY_PRINT` (default 1) is **reporting only**: 0 silent, 1 stage
+  banners with every tweakable parameter of the stage plus the final property
+  tables, 2 adds iteration tables and per-stage diagnostics, 3 adds per-frequency
+  detail. It selects nothing, relaxes no limit and changes no number. Large
+  intermediates are never printed at any level; they stay in
+  `psi4.atomic_property_result(wfn)`. Property QCVariables are published on the
+  wavefunction at every level, including 0.
 - The automatic H/O bond graph uses a distance less than 1.3 times the sum of
   covalent radii (H .31, O .66 angstrom), global frames. Other elements and
   unsupported native resource/state policies fail explicitly.

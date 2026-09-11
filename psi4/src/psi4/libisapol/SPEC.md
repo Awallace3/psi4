@@ -88,6 +88,41 @@ verifies the uncorrected seal and then deliberately invalidates it; `NONE` and
 `FIXED_GRAC` both refuse to describe such orbitals. Also not a response
 derivative.
 
+### Narrative and machine-readable reporting are not a policy
+
+`ATOMIC_PROPERTY_PRINT` (global int, default 1) selects only how much of the run
+is narrated to the output file: 0 silent, 1 stage banners with every tweakable
+parameter of that stage plus the final property tables, 2 adds the iteration
+tables and per-stage numerical diagnostics, 3 adds per-frequency detail. It
+selects no algorithm, admits no correction, relaxes no limit and changes no
+number; `isapol_oeprop` is the only module that reads it, and every stage below
+is narrated from records that stage already returns.
+
+`isapol_logging` computes no science. It reads only the record fields its caller
+owns, never mutates a record, never reruns a stage, never supplies a value a
+stage declined to produce and never reformats a refusal into a softer one: a
+refused AC run is narrated and then still refused, and a failed stage is printed
+verbatim from its own `StageFailure`. Stage parameter blocks are enumerated from
+`dataclasses.fields`, so a new knob appears in the output without a reporting
+change. Large intermediates -- raw response tensors, grids, orbital and fit
+coefficient blocks, the shape sample -- are **never** printed at any verbosity;
+they remain reachable only through `psi4.atomic_property_result(wfn)`. A table
+wider than `MAX_ROW_CELLS` is refused rather than truncated, and a long body
+keeps both ends and says how many rows it elided.
+
+Properties are additionally published as QCVariables on the wavefunction at
+every verbosity, including 0: ISA convergence and grid metrics, the response
+provider dimensions, LW residual maxima and rank limit, atomic and site-sum
+polarizabilities and their Cartesian tensors, and the atomic, ordered-pairwise
+and total dispersion coefficients. Names carry their own declaration: a
+structurally partial order keeps an explicit ` INCOMPLETE` suffix, and no
+incomparable pair of numbers is published under one name. Arrays are wrapped as
+`core.Matrix` because `p4util` reshapes a bare `ndarray` by variable name.
+Publication is confined to the module that owns the wavefunction; the record
+reporters are replayed there with a silent log. Neither `isapol_native._context`
+nor `_scf_state_signature` hashes variables, so publication cannot disturb an
+SCF seal or a mid-flight context re-check.
+
 Details: [NATIVE_OEPROP.md](NATIVE_OEPROP.md),
 [NATIVE_FIXED_GRAC.md](NATIVE_FIXED_GRAC.md),
 [NATIVE_DECLARED_AC.md](NATIVE_DECLARED_AC.md),

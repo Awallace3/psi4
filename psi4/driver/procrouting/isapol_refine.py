@@ -48,6 +48,8 @@ import numpy as np
 
 from psi4 import core
 
+from . import isapol_logging as _lg
+
 #: Racah component names, CamCASP ``comp_name`` (process_data.F90:1938-1942).
 COMPONENT_NAMES = ('00', '10', '11c', '11s',
                    '20', '21c', '21s', '22c', '22s',
@@ -601,7 +603,8 @@ class RefinementResult:
 
 
 def refine(model, points_bohr, packed_targets, *, target_origin=None, source_id,
-           generation_record, fields=None, damping=0.0, options=None, **provenance):
+           generation_record, fields=None, damping=0.0, options=None, log=None,
+           **provenance):
     """Solve the refinement and return the refined per-site local tensors.
 
     The solver is the owned ``core.isa_pfit_solve``.  The default here is
@@ -612,6 +615,7 @@ def refine(model, points_bohr, packed_targets, *, target_origin=None, source_id,
     rather than raised: a rank-deficient or ill-conditioned refinement is a
     result about the model, and is reported, not repaired.
     """
+    log = _lg.silent() if log is None else log
     problem = refinement_problem(model, points_bohr, packed_targets, fields=fields,
                                  damping=damping, target_origin=target_origin,
                                  source_id=source_id, generation_record=generation_record,
@@ -619,6 +623,9 @@ def refine(model, points_bohr, packed_targets, *, target_origin=None, source_id,
     if options is None:
         options = core.IsaPfitOptions()
         options.solver = core.IsaPfitSolver.NormalEquationsDSYSV
+    log.stage('point-to-point refinement (PFIT)', _lg.refine_parameters(
+        model=model, points=points_bohr, fields=fields, damping=damping,
+        options=options, source_id=source_id))
     result = core.isa_pfit_solve(problem, options)
     parameters = tuple(map(float, result.parameters))
 
@@ -630,8 +637,11 @@ def refine(model, points_bohr, packed_targets, *, target_origin=None, source_id,
     for tensor in refined:
         tensor.flags.writeable = False
     shift = max((abs(z - a) for z, a in zip(parameters, model.anchors)), default=0.0)
-    return RefinementResult(
+    refinement = RefinementResult(
         model=model, parameters=parameters, refined_tensors=tuple(refined),
         anchor_shift_maxabs=float(shift), status=result.status,
         diagnostics=result.diagnostics, result=result,
         refinement_status='PFIT_refined_against_point_to_point_response')
+    _lg.report_refinement(log, None, refinement, frequency=model.frequency_au)
+    log.stage_end()
+    return refinement

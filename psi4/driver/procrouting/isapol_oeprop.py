@@ -20,6 +20,7 @@ from . import isapol_native as n
 from .isapol_response_preflight import estimate_response_work
 from .isapol_native_correction import (functional_definition as _functional_definition,
                                        validate_correction, require_scf_seal)
+from . import isapol_logging as lg
 
 TASKS = frozenset(('ATOMIC_PARTITION', 'ATOMIC_POLARIZABILITIES', 'ATOMIC_DISPERSION'))
 
@@ -163,17 +164,26 @@ def run(wfn, tasks):
             'ATOMIC_PROPERTY_RADIAL_POINTS', 'ATOMIC_PROPERTY_SPHERICAL_POINTS',
             'ATOMIC_RESPONSE_RADIAL_POINTS', 'ATOMIC_RESPONSE_SPHERICAL_POINTS',
             'ATOMIC_SCF_ASYMPTOTIC_CORRECTION', 'ATOMIC_SCF_EXPECTED_GRAC_SHIFT',
-            'ATOMIC_RESPONSE_ALGORITHM')
+            'ATOMIC_RESPONSE_ALGORITHM', 'ATOMIC_PROPERTY_PRINT')
     options = tuple((k, core.get_global_option(k)) for k in keys)
     effective = dict(options)
     recipe = generated_recipe(wfn, int(effective['ATOMIC_PROPERTY_RADIAL_POINTS']),
                               int(effective['ATOMIC_PROPERTY_SPHERICAL_POINTS']),
                               str(effective['ATOMIC_PROPERTY_AUXILIARY_BASIS']))
     core.print_out('\n  Native atomic properties: '+recipe.origin+'\n')
+    # The logger is built here because this is the only module that reads
+    # ambient options; every stage below is narrated off records it already
+    # returns, so the verbosity cannot change a number.
+    log = lg.StageLog(int(effective['ATOMIC_PROPERTY_PRINT']))
+    lg.report_request(log, wfn, tasks=tasks, options=options, recipe=recipe,
+                      correction_options=correction_options, scf_residual=residual)
     properties = None
     if set(tasks) == {'ATOMIC_PARTITION'}:
+        log.stage('density partition (Drho-C ISA-A)', lg.partition_parameters(recipe))
         partition = p.native_partition(wfn, recipe, caller_converged=True)
+        partition_log = log
     else:
+        partition_log = lg.silent()  # native_properties already narrated this stage
         mol = wfn.molecule()
         radii = {1: .31, 8: .66}  # covalent radii in angstrom; explicit H/O graph policy
         bonds = tuple((i,j) for i in range(mol.natom()) for j in range(i)
@@ -190,27 +200,39 @@ def run(wfn, tasks):
         # The named algorithm decides which calibrated ALDA limit applies, and
         # nothing else; it is recorded in the request options above.
         algorithm = str(effective['ATOMIC_RESPONSE_ALGORITHM']).lower()
-        estimate_response_work(wfn.basisset().nbf(), wfn.nmo(), wfn.nalpha(),
-                               response_grid.shape[0], algorithm=algorithm).require_pass()
+        estimate = estimate_response_work(wfn.basisset().nbf(), wfn.nmo(), wfn.nalpha(),
+                                          response_grid.shape[0], algorithm=algorithm)
+        lg.report_work_estimate(log, estimate)
+        estimate.require_pass()
         dispersion = 'ATOMIC_DISPERSION' in tasks
         quad = n.Quadrature.from_casimir(core.CasimirGrid(10,.5)) if dispersion else None
         properties = n.native_properties(wfn, recipe, bonds=bonds, frames=None, caller_converged=True,
             kernel='alda_slater_pw92', exact_exchange=.25, local_scale=.75, response_grid=response_grid,
             frequencies=quad.frequencies if quad else (0.,), quadrature=quad, pair_self=dispersion,
-            response_basis='direct_ov', response_algorithm=algorithm, **correction_options)
+            response_basis='direct_ov', response_algorithm=algorithm, log=log,
+            **correction_options)
         partition = properties.partition
     correction = validate_correction(wfn, **correction_options)
     result = AtomicPropertyResult(tasks, options, partition, properties, residual, correction)
     wfn._native_atomic_property_result = result
     partition.require_q()
-    wfn.set_variable('ISA ITERATIONS', float(partition.trajectory.state.iteration))
-    wfn.set_variable('ISA DRHO FITTED ELECTRONS', float(partition.drho.fitted_electrons))
+    # Machine-readable surface. Arrays are wrapped as core.Matrix so that
+    # p4util's name-driven ndarray reshaping cannot re-interpret a labeled
+    # table; large intermediates stay in atomic_property_result(wfn).
+    lg.report_partition(partition_log, wfn, partition)
+    partition_log.stage_end()
     if properties is not None:
-        properties.require_local()
+        local = properties.require_local()
         if 'ATOMIC_DISPERSION' in tasks and properties.dispersion is None:
             raise RuntimeError('Native dispersion failed: '+repr(properties.failures))
-        for i, site in enumerate(recipe.sites):
-            wfn.set_variable(f'ATOM {site.label} DIPOLE POLARIZABILITY', float(result.atomic_scalars[0,i,0]))
-        core.print_out('  Static atomic dipole trace polarizabilities (bohr^3): '+
-                       repr(result.atomic_scalars[0,:,0].tolist())+'\n')
+        # native_properties narrated these stages with wfn=None on purpose: it
+        # is a pure function of its records. The wavefunction surface is owned
+        # here, so the same reporters are replayed silently to publish only the
+        # machine-readable names.
+        lg.report_context(lg.silent(), wfn, properties.context,
+                          properties.context.response.provider)
+        lg.report_localization(lg.silent(), wfn, local)
+        lg.report_atomic_polarizabilities(lg.silent(), wfn, local)
+        if properties.dispersion is not None:
+            lg.report_dispersion(lg.silent(), wfn, properties.dispersion)
     # Deliberately None, like ordinary oeprop.

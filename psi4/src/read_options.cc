@@ -345,6 +345,15 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         limit. It relaxes no other limit and coarsens no quadrature. -*/
     options.add_str("ATOMIC_RESPONSE_ALGORITHM", "ORDERED_PAIRWISE", "ORDERED_PAIRWISE SHARED_SWEEP");
 
+    /*- Verbosity of the native atomic-property narrative written to the output
+        file. 0 is silent, 1 prints each stage with every tweakable parameter of
+        that stage plus the final property tables, 2 adds the iteration tables
+        and per-stage numerical diagnostics, 3 adds per-frequency detail. This
+        control is reporting only: it selects nothing, relaxes no limit and
+        changes no result. Large intermediates are never printed at any level;
+        they remain available through the returned atomic property record. -*/
+    options.add_int("ATOMIC_PROPERTY_PRINT", 1);
+
     /// MBIS Options (libmints/oeprop.cc)
 
     /*- Maximum Number of MBIS Iterations -*/
