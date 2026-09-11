@@ -639,12 +639,28 @@ remains between it and the `777f904` target, in dependency order:
    declared aug-cc-pVTZ-RI auxiliary basis and the DF centre rule, our natively
    computed distributed blocks reproduce the reference's own recorded blocks
    through the identical chain to **−0.10% on ρ** and −0.16% on α_H/α_O.
-   Refinement was measured and eliminated as its cause earlier; the residual
-   1.12× against the *published* 0.278732 is downstream model declaration
-   (unrefined LW-L3 versus refined `wt4_L2`/`L3`) and is not quotable as parity.
+   The refinement stage has **now been run on those same distributed blocks**,
+   so the comparison is refined against refined rather than parked as a label:
+   on the reference's own declared `Random 500 / Seed 1` lattice (digest
+   re-asserted), its 17-variable `H2O_aTZ.pdef` set (which our cutoff reproduces
+   exactly, 17 = 17), weight 4 / coefficient 1e-5 and L2/H1 rank limits, at all
+   eleven Casimir nodes, refined ρ is **0.210440 against the refined `wt4_L2`
+   value 0.213354 — a ratio of 0.98634**, where the same chain unrefined gives
+   0.312637 (1.46534). The static α_H/α_O ratio is multiplied by 0.738100 by our
+   refinement against 0.737984 by the reference's own printed anchors and fitted
+   values, so the refinement *operator* agrees to 0.016%. Reported beside it, not
+   absorbed into it: the lattice seed moves ρ by 0.710% across seeds 1/2/3 (both
+   of the latter uncertified, differently declared models), rank 4 anchors are
+   bitwise inert in our truncation, substituting the reference's own anchors
+   gives 0.219158 and leaves the refined mean unchanged (so ~2/3 of the parameter
+   residual is target, ~1/3 anchors), and the remaining discrepancy is
+   low-frequency — the molecular mean ratio falls monotonically from 1.0415 at
+   ω = 0 to 0.9989 at ω = 37.8.
    The one unimplemented candidate left is the DALTON `.DFTAC MULTPOLE TANH`
    asymptotic-correction form, which is bracketed by the two gated policies at
-   ≲2% and still awaits its own gate rather than a widening of `FIXED_GRAC`.*
+   ≲2% (refined: `NONE` 0.210440, `FIXED_GRAC` 0.209245, both on the same side of
+   the reference) and still awaits its own gate rather than a widening of
+   `FIXED_GRAC`.*
    The reference family is
    `.pi/camcasp-build/tests/H2O_props/{dalton,nwchem,psi4}/check/L2H1/H2O_ref_wt3_L2_Cn.pot`.
    Their localization headers are byte-identical (`Limit: 2`, `WSM-Limit: 2`,

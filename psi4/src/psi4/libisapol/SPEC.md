@@ -1286,7 +1286,11 @@ coefficients (`C6_OO = 21.59463`, `C6_HO = 4.590924`, `C6_HH = 0.9829859`,
 sqrt-ratio 0.213353) are a third declaration again. Each `eta`, each `lambda` and
 each AC policy is a separately declared model and may only be read against a
 reference number recorded at the same declaration; the rows of the AC bracket
-table may not be quoted as agreeing with one another.
+table may not be quoted as agreeing with one another. *That downstream step has
+since been run*: the next subsection refines these same blocks on the reference's
+own declared lattice and closes ρ to 0.98634 of the refined `wt4_L2` value, so
+this paragraph's residual is superseded as a parking label — but the rest of it,
+and in particular the per-declaration rule, stands.
 
 **Still open, and still labelled.** 5,341 uncertified odd `L+H+J` rows;
 `(3,4)`/`(4,3)`/`(4,4)` structurally absent upstream; no shell above `p` in the
@@ -1295,6 +1299,246 @@ frequency-dependent propagator convention certified; C12 structurally partial;
 the shape-sample array uncompared in both metrics; and the DALTON tanh/multipole
 AC form itself unimplemented, awaiting its own policy rather than a widening of
 `validate_correction`.
+
+### The refinement stage, run on our own distributed blocks
+
+The subsection above had to park its residual ~1.12× against the *published*
+0.278732 behind a label: "our unrefined LW-L3 model read against the reference's
+refined `wt4_L2`/`L3` model". A label is not a result, and refinement is one of
+the reference's own stages, so the stage has now been **run on the newly closed
+distributed blocks** and the comparison below is refined against refined. That
+the stage's point cloud is *random* is no reason to omit it: the generator is a
+declared, bitwise-reproducible model input, and the cloud this case declares is
+already certified in this repository.
+
+**Every input of the stage is read off the reference's own declarations, never
+inferred from its `Cn` output.**
+
+| declared input | value | where it is declared |
+| --- | --- | --- |
+| lattice | `Charge 1.0 / LoLim 2.0 / HiLim 4.0 / Random 500 / Seed 1` | `output_1/H2O_aTZ.cks`, `SET Lattice` |
+| local axes | O global; H `z from O to H`, `x from the other H` | `examples/properties/H2O/H2O.axes` |
+| variable set | 17 parameters, 13 on O and 4 on H1, plus `H2 H2 COPY H1 H1` | `output_2/H2O_aTZ.pdef` |
+| rank limits | `Maximum rank 2`, `Limit rank to 1 for sites H1 H2` | `output_1/H2O_aTZ_casimir.prss` |
+| cutoff | `cutoff 0.0001` | `output_1/H2O_aTZ_casimir.prss` |
+| quadrature | `Gauss-Legendre / Beta 0.5`, static plus ten | `H2O_aTZ.cks`, `H2O_aTZ_casimir.prss` |
+| weight type | 4 | the shipped filename `H2O_aTZ_ref_wt4_L2_0f10.pol` |
+| weight coefficient | 1.0e-5 | the reference's own printed `Penalty` column (below) |
+| anchor fit | `Eta = 0.0005`, `Lambda = 1000.0`, `Rank 4` | `H2O_aTZ.cks`, second `BEGIN DF`/`BEGIN Polarizability` |
+| target fit | `Eta = 0.0`, `Rank 2`, supplied p2p perturbation file | `H2O_aTZ.cks`, first `BEGIN DF`/`BEGIN Polarizability` |
+
+The weight coefficient is the one number the archived inputs never state in
+words, and today's `bin/localize.py` defaults to `--weight 3 --weightcoeff
+1.0e-3`, which is not this run. It is therefore recovered from the reference's
+own printed output rather than assumed. `penalty_weight` already transcribes
+`process_data.F90:1810-1876`, where type 4 is `wt_coeff` when both component
+ranks are ≤ 1 and zero otherwise, divided by `1+ω²` at every nonzero frequency;
+inverting that against the reference's printed `Difference` and `Penalty`
+columns gives a coefficient of 1.0e-5 at **all 77** nonzero low-rank penalty
+entries across the eleven nodes, every one of them consistent with exactly
+1.0e-5 inside the rounding band of the 5-decimal `Difference` field. Away from
+that field's limit the recovery is sharp: 7.3e-5 relative at ω = 0 and ≤ 2.5e-4
+through ω = 0.675, degrading only where `Difference` is printed to one or two
+significant figures (the 11% outlier is a single `H1_10_11c` entry printed as
+`9e-05` at ω = 37.8, whose rounding band is `[9.98e-6, 1.25e-5]`).
+`process_data.F90:252,284` ships `weight_indx = 4` with `weight_coeff =
+1.0e-5_dp` as its own default, which is an independent confirmation.
+
+**The randomness is a declared input, not an incidental.** `core.FitPoints`
+transcribes CamCASP's `random.f90` Maclaren additive lagged-Fibonacci generator,
+including the published rounding and the rule that a rejected candidate still
+consumes three deviates. For this geometry — bit-identical to the L2H1 case, and
+re-verified inside the run against `output_1/H2O_aTZ_A.mol` at full printed
+precision — `Random 500 / Seed 1` reproduces
+`sha256 693d2c092b36f85171da0acd08702e6c1fd24deb95c7b1146a0d83487a2c80aa` from
+1327 candidates, with `dmax 12.235791546666666` about
+`centre (0, 0, −0.7477915466666666)`: the cloud already locked by
+`test_isapol.py::test_fit_points_reference_case_cloud`. The run re-asserts that
+digest before using the cloud and refuses to proceed without it. 500 points sit
+inside `MAXIMUM_POINTS = 512`; no cap, work limit, grid or tolerance moves, and
+the 2000-point production lattice stays refused.
+
+**The declared variable set closes exactly.** Generating the model from our own
+anchors at the declared `cutoff = 1e-4` yields **17** parameters at every node,
+and as a set — matched on (component row, component column, site type), since our
+site labels are `O1`/`H2` where the reference's are `O`/`H1` — they are
+*identical* to the 17 the reference declares in `H2O_aTZ.pdef`. Nothing extra
+clears the cutoff, so our anchors carry no C2v symmetry breaking above it, and
+the `H2 H2 COPY H1 H1` equivalence holds in them to
+`copy_anchor_discrepancy ≤ 2.17e-10`. The solver returns
+`IsaPfitStatus.Solved` with `numerical_rank = 17` at all eleven nodes
+(`normal_h_rcond = 4.007e-06`, `stationarity_inf ≤ 4.6e-18`,
+`backward_residual ≤ 1.9e-17`, `target_reciprocity_defect ≤ 2.6e-17`).
+
+**The fit statistics track the reference's own.** Ours is a fit on a different
+target (below), so this compares two fits and is not an oracle:
+
+| node | ω (au) | r.m.s. residual, % of target range | | Σ penalties | | target range | |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| | | ours | reference | ours | reference | ours | reference |
+| 0 | 0 | 0.1368 | 0.1300 | 1.8531e-05 | 1.6225e-05 | 0.018427 | 0.017595 |
+| 3 | 0.095447 | 0.1375 | 0.1310 | 1.7668e-05 | 1.5646e-05 | 0.017807 | 0.017079 |
+| 6 | 0.674915 | 0.1254 | 0.1230 | 5.2852e-06 | 5.2898e-06 | 0.008834 | 0.008731 |
+| 10 | 37.823762 | 0.0550 | 0.0560 | 1.9535e-13 | 1.9185e-13 | 0.000012 | 0.000012 |
+
+Our target range at ω = 0 exceeds the reference's by 4.7%, the same +4% scale the
+distributed blocks already carried; the fit's *relative* quality is the
+reference's to within a few per cent at every node, and the penalty sums agree to
+better than 2% from node 6 upward (0.09% at node 6, 1.8% at node 10).
+
+**The refined parameters, node 0.** `shift` is `fitted − anchor`:
+
+| variable | our anchor | our fitted | shift | ref anchor | ref fitted | shift |
+| --- | --- | --- | --- | --- | --- | --- |
+| O 10 10 | 5.59522 | 6.13725 | +0.542 | 5.36169 | 5.89696 | +0.535 |
+| O 10 20 | 2.29607 | 1.72163 | −0.574 | 2.37760 | 1.92428 | −0.453 |
+| O 10 22c | −3.59765 | −2.43930 | +1.158 | −3.24309 | −2.26143 | +0.982 |
+| O 11c 11c | 7.04686 | 7.71339 | +0.667 | 6.75713 | 7.41209 | +0.655 |
+| O 11c 21c | −5.19463 | −4.75953 | +0.435 | −4.61656 | −4.32139 | +0.295 |
+| O 11s 11s | 5.76911 | 6.60933 | +0.840 | 5.49533 | 6.21921 | +0.724 |
+| O 11s 21s | 0.19685 | −0.07179 | −0.269 | 0.39274 | 0.12571 | −0.267 |
+| O 20 20 | 17.95348 | 22.48235 | +4.529 | 16.71307 | 19.69102 | +2.978 |
+| O 20 22c | 6.99689 | 7.33312 | +0.336 | 6.37653 | 6.90414 | +0.528 |
+| O 21c 21c | 27.19912 | 20.32758 | −6.872 | 25.23747 | 18.71732 | −6.520 |
+| O 21s 21s | 28.04377 | 32.61910 | +4.575 | 26.11426 | 30.66514 | +4.551 |
+| O 22c 22c | 26.91437 | 26.39147 | −0.523 | 24.93603 | 23.72607 | −1.210 |
+| O 22s 22s | 25.89677 | 25.34462 | −0.552 | 24.51355 | 23.65986 | −0.854 |
+| H 10 10 | 1.72860 | 1.67116 | −0.057 | 1.70597 | 1.63991 | −0.066 |
+| H 10 11c | −0.21990 | −0.29996 | −0.080 | −0.19753 | −0.26821 | −0.071 |
+| H 11c 11c | 1.83614 | 1.30751 | −0.529 | 1.78889 | 1.29678 | −0.492 |
+| H 11s 11s | 1.62182 | 1.27553 | −0.346 | 1.56911 | 1.20655 | −0.363 |
+
+Every shift agrees in sign. Eleven of the seventeen agree in magnitude to better
+than 20%, including all four H variables and the large `O 21c 21c`/`O 21s 21s`
+rank-2 diagonals; the six that do not (`O 10 20`, `O 11c 21c`, `O 20 20`,
+`O 20 22c`, `O 22c 22c`, `O 22s 22s`, 27–57%) all couple a rank-2 O component,
+which is where the anchors themselves differ most.
+
+**The result: the refinement stage is where the remaining ρ gap was.** Carried
+through `core.isa_isotropic_dispersion` at the reference's own L2/H1 order
+truncation (`O.ranks = [1,2]`, `H.ranks = [1]`) and read against the reference's
+shipped refined artifacts (`output_2/H2O_aTZ_ref_wt4_L2_casimir.out` and
+`…_0f10.pol`), at AC `NONE`, rank 3, seed 1, λ = 1000, η = 5e-4,
+`aug-cc-pVTZ-RI` (`nbf 92`, `naux 246`, `nocc 5`, `nvir 87`,
+`E = −76.3796942070`):
+
+```
+                         ours refined     reference refined     ratio
+alpha_mol mean (w=0)          9.65612  /           9.27158  =  1.04147
+a1 O                          6.81999  /           6.50942  =  1.04771
+a1 H                          1.41806  /           1.38108  =  1.02678
+a1 H / a1 O                   0.207928 /           0.212166 =  0.98003   (-2.00%)
+C6 O-O                       22.758873 /          21.594630 =  1.05391
+C6 H-O                        4.773342 /           4.590924 =  1.03973
+C6 H-H                        1.007879 /           0.982986 =  1.02532
+C6 molecular                 45.88376  /          43.89027  =  1.04542
+rho = sqrt(C6_HH/C6_OO)       0.210440 /           0.213354 =  0.98634   (-1.37%)
+```
+
+Against the same chain **without** the refinement stage — the row the previous
+subsection had to park — ρ was 0.312637, a ratio of **1.46534**. Refinement moves
+ρ by a factor of 0.673 and lands it 1.37% below the reference. Equivalently, the
+static `a1 H / a1 O` ratio goes 0.281707 → 0.207928, a factor of **0.738100**,
+where the reference's own printed anchors and fitted values give
+0.287494 → 0.212166, a factor of **0.737984**: the refinement *operator* agrees
+with the reference's to **0.016%**, acting on anchors that differ from the
+reference's by ~4%. That is the closure the parked label was standing in for.
+
+The residual is a low-frequency effect, and the molecular mean shows it directly:
+
+| node | 0 | 2 | 4 | 6 | 8 | 10 |
+| --- | --- | --- | --- | --- | --- | --- |
+| ours / reference | 1.04147 | 1.04094 | 1.03053 | 1.00940 | 1.00105 | 0.99894 |
+
+The two models agree to 0.1% from ω ≈ 2.6 au upward and separate monotonically
+toward ω = 0, which is the signature of the static SCF/AC declaration rather than
+of the refinement.
+
+**Coverage, stated rather than absorbed.** `C6` is complete for all three pair
+types. Under the declared L2/H1 rank limits `C8 H-O` still misses the `(1,2)`
+term and `C10 O-O` the `(1,3)`/`(3,1)` terms, so those two rows carry
+`complete: false` and are reported with that flag rather than compared as
+closed: `C8 O-O` 454.652 / 422.279 = 1.0767, `C8 H-O` 47.498 / 44.660 = 1.0636
+(partial), `C10 O-O` 4271.06 / 3894.99 = 1.0965 (partial). `C10 H-O` and
+`C10 H-H` are structurally absent in this model on both sides and are not
+quoted.
+
+**Three decompositions, each a separately declared model.**
+
+*The anchor rank is inert here, which is a statement about our truncation and
+not a licence.* The reference declares its anchors at `Rank 4`; the run above is
+rank 3. Repeating it at `input_rank = 4` with `truncation = lw.TRUNCATE_RANK4`
+and `localization_rank_limit = 3` — verified live to be a genuinely different
+nonlocal input, its `harmonic_fit_residual` gaining an `l = 4` entry of
+1.137e-13 — reproduces every one of the 17 anchors, every fitted parameter,
+`raw_maxabs`, `input_sum_rule_max`, `off_site_max`, `molecular_sum_max` and ρ
+itself to **exactly 0.0**: `ρ = 0.21044026546310873` in both. Under our declared
+truncation the rank-4 nonlocal input therefore cannot reach the rank-≤2 local
+blocks the `.pdef` model uses. This does **not** make our rank-3 row the
+reference's rank-4 model; it bounds what the rank declaration can contribute to
+this observable in *our* chain.
+
+*Substituting the reference's own anchors separates target error from anchor
+error.* Feeding our target and our solver the reference's 17 printed `Anchor`
+values — and zero elsewhere, because outside its variable set the reference's
+model has no anchor at all — gives ρ = 0.219158 (+2.72%) where our own anchors
+give 0.210440 (−1.37%), while leaving the refined molecular mean essentially
+untouched at 9.65504 against 9.65612. So the refined *mean* is set almost
+entirely by the target, and the *H/O split* responds to both. At the parameter
+level the substitution recovers about a third of the gap —
+`max |fitted − ref fitted|` falls from 2.791 to 1.794 — so roughly one third of
+the parameter residual is anchors and two thirds target. Node-0 r.m.s. rises to
+2.6364e-05 from 2.5211e-05 and `penalty_sum` to 2.2366e-05, as expected when the
+penalty pulls toward a different model. A fit on borrowed anchors is a
+diagnostic decomposition and is never a parity row.
+
+*The AC form stays bracketed, not matched.* The reference's SCF uses DALTON's
+`.DFTAC MULTPOLE TANH 0.46380 0.46380 3.0 4.0`, which remains unimplemented and
+refused rather than approximated. Both gated policies were refined end to end:
+
+| declared AC | α_mol mean | a1 H / a1 O | C6 molecular | ρ | ρ / ρ_ref |
+| --- | --- | --- | --- | --- | --- |
+| `NONE` (gated) | 9.65612 | 0.207928 | 45.88376 | 0.210440 | 0.98634 |
+| canonical `FIXED_GRAC` | 9.85081 | 0.206682 | 46.83116 | 0.209245 | 0.98074 |
+| reference (tanh/multipole) | 9.27158 | 0.212166 | 43.89027 | 0.213354 | 1 |
+
+Both gated policies land on the *same side* of the reference and within 0.6% of
+each other, so the AC form does not explain the remaining 1.4%; it is bounded
+below it. The rows of this table may not be quoted as agreeing with one another.
+
+**The seed is part of the model declaration, and its sensitivity is measured,
+not absorbed.** Repeating the whole chain at `Seed 2` and `Seed 3` — each an
+*uncertified* cloud and a *differently declared model*, whose numbers may never
+be read against a reference value recorded at `Seed 1`:
+
+| seed | lattice sha256 (12) | candidates | a1 H / a1 O | C6 molecular | ρ |
+| --- | --- | --- | --- | --- | --- |
+| 1 (declared, certified) | `693d2c092b36` | 1327 | 0.207928 | 45.88376 | 0.210440 |
+| 2 (sensitivity only) | `462ee380a83c` | 1239 | 0.205833 | 45.72303 | 0.208950 |
+| 3 (sensitivity only) | `a9d90033eba8` | 1365 | 0.207453 | 45.85094 | 0.210063 |
+
+The span is 0.00149 in ρ, **0.710%** of the mean, and 0.351% in molecular C6.
+The unrefined ρ is seed-independent by construction — 0.31263685523262824 in all
+three, since the lattice enters only the target — which confirms the spread is
+the refinement's own lattice dependence and nothing upstream. That 0.710% is of
+the same order as the remaining 1.37% residual and must be reported beside it:
+the refined agreement is close to, but not inside, the lattice's own sampling
+spread. **It is a measured sensitivity and never a tolerance** — no comparison in
+this repository is widened by it, and no seed-2 or seed-3 number is substituted
+for the declared seed-1 one.
+
+**What is still not claimed.** Our refinement target is a
+`NativeDirectActualPointResponse` — an actual point-charge response that forms no
+auxiliary fit, so no `eta` enters it at all — whereas the reference's target is a
+supplied p2p set produced at `Eta = 0.0`. The two agree in carrying no `eta`, and
+that correspondence is recorded rather than asserted as an identity; the
+reference's *anchors* sit at `Eta = 0.0005`, and the target and anchor
+declarations are never quoted against each other. The reference case here is the
+**aVTZ `H2O_aTZ` properties example** (weight 4, coefficient 1e-5, O→H local
+axes, ρ_ref = 0.213354); it stays strictly separate from the **L2H1 family**
+(weight 3, coefficient 0.001, global-Z axes, ρ_ref = 0.278732), and no row of one
+may be read against a row of the other. The driver is `.pi/audit/refine-atz.py`;
+the per-node artifacts include every diagnostic quoted here.
 
 ### Closed Casimir-Polder oracle on a second reference case
 
