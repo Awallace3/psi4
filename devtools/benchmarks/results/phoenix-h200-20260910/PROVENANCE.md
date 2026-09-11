@@ -33,11 +33,26 @@ Every case asserts `grac_compute == "ITERATIVE"` in its own `result.json`.
 | C | 13061073 | cpu-small / embers | 24 cores of Intel Xeon Gold 6226 | CPU-only 8 vs 24 thread scaling, same node |
 | B | 13060540 | gpu-h200 / embers | 1x NVIDIA H200 | protein157 GPU |
 | D2 | 13066284 | cpu-small / **inferno** | 24 cores of Intel Xeon Gold 6226 | protein157 CPU baseline |
+| A3 | 13080182 | gpu-h200 / embers | same shape as A | **Canary-verified rerun of job A's full paired campaign.** Job A's protocol verbatim; the only changes are the host canary and a 3600s per-case timeout. Submitted because job A's host was degraded threefold, which bounds its speedups to a range rather than pinning them |
 
 Jobs A and C ran the same six systems with the same driver, settings, and binary;
 they differ only in hardware and thread width. **They are different nodes with
 different CPUs**, which matters for how their numbers may be combined — see
 `CPU_BASELINE.md`.
+
+### Why job A3 exists
+
+Job A's speedups are same-host ratios and are individually valid for the host it
+got, but that host ran its CPU work about three times slower than another
+gpu-h200 allocation of the same CPU model on the same binary. Both arms were
+degraded and not by the same factor, so no arithmetic recovers the healthy-host
+number from job A's tree — it is bounded, not known (3.4x-7.0x for benzene
+aug-cc-pVDZ; see `CPU_BASELINE.md`). Job A3 re-measures the whole paired
+campaign on an allocation that records its own throughput, before and after, via
+`common.inc`'s `host_canary`. Run `host_speed.py` on the A3 tree first: if its
+canary shows a healthy host, A3's speedups replace job A's throughout and the
+range collapses to a number; if it shows another degraded host, that is itself
+the finding, and A3 is resubmitted rather than averaged in.
 
 ### Jobs A and A2 are one campaign
 
