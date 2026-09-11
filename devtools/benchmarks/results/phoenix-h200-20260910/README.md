@@ -372,12 +372,13 @@ speedup:
   same-host ratio. It runs the CPU arm last on purpose: the GPU repeats are
   cheap and guarantee data if the long CPU arm is cut short, which is a real
   possibility — a 6 h per-case timeout inside an 8 h preemptible request, at the
-  8-core width gpu-h200's 8:1 CPU:GPU ratio imposes. That possibility has
-  already been realised once: the job was preempted and requeued on 2026-09-11,
-  came back to the same node and the same eight cores, re-ran the three GPU
-  repeats (489, 490, 492 s, against 486.24/486.57/488.21 first time — a 0.6%
-  spread that is just re-measurement), and is in the CPU arm again. **The GPU
-  side is settled at ~487 s; the same-host CPU arm has not landed yet.**
+  8-core width gpu-h200's 8:1 CPU:GPU ratio imposes. **That is what happened.**
+  The job was preempted twice, requeued onto the same node and the same eight
+  cores in between, and is now terminal. Its three GPU repeats landed (486.24,
+  486.57, 488.21 s); the CPU arm was killed 52 iterations into the GRAC monomer
+  A cation SCF, at 85 s per iteration and still converging. **There is no
+  same-host protein157 ratio, and on a preemptible queue there may never be
+  one.**
 - **Cross-node, 24 threads.** Job 13066284, 24 cores of Xeon Gold 6226 on
   cpu-small, is the wider CPU baseline. Against the gpu-h200 GPU arm it is a
   different node, a different CPU model, and a different core count, so that
@@ -395,9 +396,6 @@ by the cross-node comparison:
 |---|---:|---:|---:|---:|---:|
 | cpu 24T, Gold 6226 (job 13066284) | 8365.25 | 3403.2 | 107.5 | 3510.72 | 42.0% |
 | gpu 8T, H200 (job 13060540) | 486.57 | 271.8 | 20.2 | 292.24 | **60.1%** |
-
-The GPU row is the first attempt's median, which is the tree on hand; the
-requeued repeats agree to 0.6% and do not move the percentage.
 
 Automatic GRAC is 42% of the CPU run — the largest absolute GRAC cost measured
 anywhere in this campaign, and consistent with the 32-51% seen on the small

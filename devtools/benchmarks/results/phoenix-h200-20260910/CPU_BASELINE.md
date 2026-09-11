@@ -332,18 +332,21 @@ GPU measurement on gpu-h200 (job 13060540, Platinum 8562Y+). **Different nodes,
 different CPU models, different core counts.** That ratio is cross-node, is
 labeled so in the results table, and must not be pooled with the same-host rows.
 
-A same-host protein157 pair is possible, just not at 24 cores: job 13060540 also
-runs one 8-thread CPU repeat in its own allocation, after its three GPU repeats.
-If that arm survives the 8 h preemptible wall — it is the longest single case in
-the campaign and it runs last — protein157 gains a same-host 8-core ratio
-alongside the cross-node 24-core one. Until then the row carries only the
-cross-node number.
+A same-host protein157 pair was attempted and did not land. Job 13060540 ran
+one 8-thread CPU repeat in its own allocation after its three GPU repeats, on
+the theory that the cheap arm should be banked first. It was preempted twice —
+once before 2026-09-11 07:58, and again at 09:59:08 after 2:00:25 of its
+requeued segment — and is now terminal, with no CPU result. The GPU side is
+settled: three repeats at 486.24, 486.57 and 488.21 s of `energy()` wall
+(489/490/492 s of wrapper elapsed, the difference being process startup and
+imports), on a host whose canary certifies it.
 
-That job has been preempted and requeued once already, on 2026-09-11 at
-07:58, and it came back to the same node and the same eight cores (17, 21 …
-45), so its canary reads identically and the restart changes nothing about the
-host. It re-ran the three GPU repeats — 489, 490, 492 s against the first
-attempt's 486.24, 486.57, 488.21, a 0.6% spread that is just re-measurement —
-and is now in the CPU arm. The requeue is also the argument for why this arm
-may never land: it is a ~3 h single case with no interior checkpoint inside a
-preemptible request that has already been interrupted once.
+What the CPU arm did get through is diagnostic on its own. It was killed 52
+iterations into the *cation* UKS SCF of GRAC monomer A, at 84-85 s per
+iteration and still converging — about 74 minutes spent on one of the four SCFs
+GRAC needs, before the dimer SCF and the SAPT terms have started. At 24 cores
+the whole GRAC monomer A phase took 3403 s, so the 8-core arm is on track for
+several hours and cannot be chunked: `psi4.energy()` has no interior
+checkpoint, so a preemption at hour two costs both hours. That is the argument
+for why this arm may simply not be obtainable on a preemptible queue, and why
+the row carries only the cross-node number.
