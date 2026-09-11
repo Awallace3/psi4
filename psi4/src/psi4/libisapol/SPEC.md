@@ -1018,6 +1018,111 @@ form — and each needs its own gate. Candidate 2 (the response-step AC form,
 +1.36% on the H2O molecular polarizability, §6) is absorbed nowhere and still
 cannot explain ρ by itself, which is a partition ratio at fixed total.
 
+### The distributed response/partition candidates for ρ, measured
+
+Two of the three candidates named just above are now **measured rather than
+bounded, and neither is ρ**. Every run below shares one SCF (PBE0/aug-cc-pVTZ,
+the reference GRAC shift 0.06490004527520865, `IsaGrid(99,590)`,
+`shared_sweep`), one Casimir grid `CasimirGrid(10, .5)` and one production LW
+gate; only the one declared thing under test changes. No tolerance, grid,
+cutoff, work limit or `MAX_POINTS` was touched, and the refusals that appeared
+are kept as refusals.
+
+**Candidate 1a, the distribution rule.** CamCASP's `DistPolAlgorithm` defaults
+to `'DF'` (`polarizability.F90:219`) and the reference `H2O-avtz.clt` declares no
+override, so `dist_polarizabilities_DF` — which assigns each auxiliary function
+*entirely* to the centre it sits on, `centre = 0`, `isitdist = .true.` — is a
+real candidate against the stockholder `'ISA-GRID'` form our chain implements.
+The DF rule needs no new C++: `auxiliary_sites=[a]` already zeroes every function
+not centred on `a` (`explicit_basis.cc:145`) and `shape == shape_sum` makes the
+stockholder ratio identically 1, giving
+`Q(a,t,k) = Σ_p w_p R_t(r_p − R_a) χ_k(r_p)` for `k` on `a` and zero otherwise.
+It was then also formed **in closed form**, `Q(a,(l,m),k) = N_k Σ_i c_i Σ_q
+C_q^{lm} Π_d Γ((n_d+1)/2)/ζ_i^{(n_d+1)/2)}` with `n = q + p(k)`, to remove the
+molecular grid's quadrature error on `∫χ_k`. The three builds gate each other:
+the `isa_a` rebuild reproduces the chain's own `Q` **bitwise**, the GAMINT
+ordering/normalization reconstruction is 4.44e-16 against magnitude 2.88, and
+grid-DF versus analytic-DF differ by 2.78e-07 absolute / 6.65e-09 relative —
+exactly the grid's own charge-row error, which the analytic form drives to
+8.9e-15.
+
+The DF distribution is **not** the reference's rule, and it is not ρ. Its effect
+on ρ is basis-unstable and never large: +3.8% at cc-pVDZ-JKFIT AUX, −3.3% at
+cc-pVTZ-JKFIT, +7.0% at aug-cc-pVTZ-JKFIT, against the +57% needed. At the
+MAIN-matched AUX it is numerically hopeless: its static distributed blocks reach
+1.3e+03 while summing to ~9.8, its grid form is *rejected* by production LW
+(charge-sum 1.01e-05 against the unchanged 1e-6 gate) and its analytic form
+yields a **negative** hydrogen rank-3 scalar, −5.856. A rule that produces a
+negative site response is not a model to land; it is recorded here, gated, and
+not offered as a distribution algorithm.
+
+**Candidate 1b, the site weights.** The shipped `GENERATED_JKFIT_ISA_A` ladder is
+deliberately asymmetric — O exponents `.1*2**k` (k=0..16), H `.2*2**k` (k=0..10)
+— so H's most diffuse shape function is one octave tighter than O's and its
+stockholder weight decays faster, which is exactly the shape of the ρ defect.
+Five declared ladders were run as five separate models. The radial freedom moves
+ρ by **+0.53%** (0.177476 → 0.178421 at the H-matched-to-O ladder, 0.178236 at
+an intermediate one) and leaves the molecular rank-1 α identical to seven digits
+(9.8372) — partition invariance again. Two more diffuse ladders were *refused*
+by the integrator (`Nonintegrable or nonfinite weighted primitive overlap`); the
+refusal stands and nothing was widened to admit them.
+
+**Candidate 2, the response basis — in both of its readings.** The auxiliary set
+is a declared model input, not inferred from MAIN, and it matters enormously for
+the higher ranks and for the total, while being **inert for ρ**:
+
+| AUX (ISA-A) | H/O rank 1 | H/O rank 2 | H/O rank 3 | Σα rank 1 | ρ |
+| --- | --- | --- | --- | --- | --- |
+| cc-pVDZ-JKFIT (H lmax 2) | 0.19336 | 0.07203 | 0.00618 | 9.0062 | 0.177018 |
+| cc-pVTZ-JKFIT (H lmax 3) | 0.19292 | 0.07391 | −0.00676 | 9.0598 | 0.176664 |
+| aug-cc-pVTZ-JKFIT (H lmax 3) | 0.19292 | 0.09424 | **0.05212** | 9.8372 | 0.177476 |
+| **reference recorded blocks** | **0.28216** | **0.10480** | **0.05140** | **9.5853** | **0.278732** |
+
+Matching AUX to MAIN moves the rank-3 H/O ratio from −0.0068 to 0.05212 against
+the reference's 0.05140 (**+1.4%**), the rank-2 ratio to within −10%, and the
+molecular total from −5.5% to +2.6% of the reference — and moves ρ by 0.5%. The
+other reading gives the same verdict: on identical orbitals, grid, kernel,
+quadrature and partition, `direct_ov` and `fitted_auxiliary` give ρ = 0.177274
+and 0.177476, both gated (`input_sum_rule` 6.30e-09 and 7.78e-07 against the
+unchanged 1e-6). **The response basis closes the rank-2/rank-3 structure and
+does not touch ρ.**
+
+**ρ is already fully present in the distributed blocks, with the wrong sign.**
+The sharpest statement does not go through ρ at all. Comparing the *static
+distributed* tensors component by component — ours (ISA-A, MAIN-matched AUX)
+against the reference's own recorded `H2O_NL4_000` blocks, same component order,
+isotropic `(1/3)tr` of the dipole-dipole sub-block and the `00,00` entry:
+
+| | O-O dd | H-H dd | O-H dd | H-H' dd | Σ dd | O-O qq |
+| --- | --- | --- | --- | --- | --- | --- |
+| reference | 9.7680 | 4.2150 | **−2.2144** | −0.0671 | 9.2060 | 0.0352 |
+| ours, `fitted_auxiliary` | 4.7874 | 0.3159 | **+0.4144** | +0.0299 | 7.1367 | 0.5499 |
+| ours, `direct_ov` | 4.8075 | 0.3161 | **+0.4176** | — | — | 0.5499 |
+
+The O-H dipole-dipole cross block has the **opposite sign**, the reference's
+on-site hydrogen dipole response is **13×** ours, and its charge-charge response
+is **16× smaller**: our chain recovers 2.70 of its 9.837 molecular α from charge
+flow during localization where the reference recovers only 0.38 of 9.585. The
+reference's decomposition is strongly delocalized-then-cancelled; ours is nearly
+local already. That difference is present *before* any localization, and it is
+not reachable from the ISA-A stockholder weight by any of the knobs above.
+
+**Verdict.** ρ is **not closed**, and it is now much more tightly located. It is
+not in the LW localization (proved bitwise, §ρ above), not in the isotropic `Cn`
+kernel, not in the distribution rule, not in the site-weight radial ladder, and
+not in the response basis. Across λ ∈ {1e3 … 1e8}, three auxiliary sets, three
+shape ladders, two response bases and three localization rank limits, our
+rank-1 H/O ratio never leaves **0.1927–0.1934**, while rank 2 and rank 3 move
+freely and land on the reference. A quantity that is that invariant under
+everything we can declare is a property of the ISA-A stockholder weight itself,
+and the reference's 0.28216 is a **different partition**, not a differently
+converged one. The remaining candidate is therefore the one plan.md §5 item 1
+already names and forbids substituting for: the **constrained-NN partition**
+itself, which `PartitionRecipe` does not yet admit (`track` is validated to
+`explicit_cartesian_drho_c_isa_a` alone). Candidate 3, the AC form, is still
+untouched and still cannot produce +57% in a ratio at fixed total. None of this
+is absorbed into a tolerance, and no two rows above may be quoted as agreeing.
+
 The 377 nonzero recoupled reference rows (O-O 258, H-O 86, H-H 33) are an
 explicitly **uncompared** track, because the native anisotropic product is
 `orientation_resolved_scalars_not_recoupled_components`. Unlike the isotropic
