@@ -37,10 +37,12 @@ they appear:
    allocation of the same CPU model in the same partition, on the same binary
    and geometries — while the cuEST kernels were unaffected. The CPU arm is the
    denominator of every paired speedup below, so **every speedup in this report
-   is inflated**, and the true same-node figure is a range rather than a number.
-   Read [`CPU_BASELINE.md`](CPU_BASELINE.md) before quoting any of them. A
-   canary-verified rerun is what closes this; `common.inc` now measures host
-   throughput inside every allocation so it cannot recur silently.
+   is inflated**, and the true same-node figure is not recoverable from this
+   tree by arithmetic. Read [`CPU_BASELINE.md`](CPU_BASELINE.md) before quoting
+   any of them. A canary-verified rerun is what closes this; `common.inc` now
+   measures host throughput inside every allocation so it cannot recur
+   silently, and the two calibration probes there now give the healthy
+   throughput of both node types for comparison.
 1. Any row the generated tables mark with fewer than 3/3 repeats, or that
    appears in the "Failed or incomplete measurements" block of
    `paired/summary.md`, is short a run. The nanotube CPU arm in particular is
@@ -62,7 +64,8 @@ Speedup is median CPU wall / median GPU wall.
 
 **These are same-host ratios on a degraded host and are upper bounds, not
 results** (see item 0 above). The bracket table in
-[`CPU_BASELINE.md`](CPU_BASELINE.md) gives the defensible range for each case.
+[`CPU_BASELINE.md`](CPU_BASELINE.md) gives what can and cannot be said about
+each case; note that only the upper bound is secure.
 
 <!-- PAIRED -->
 

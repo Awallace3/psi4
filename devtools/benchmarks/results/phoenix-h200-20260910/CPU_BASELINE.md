@@ -88,16 +88,32 @@ equally — the GPU arm offloads the work the slow host would otherwise do:
 | water aug-cc-pVDZ | 1.25× | 0.66× | 0.58× |
 | water cc-pVDZ | 0.97× | — | 0.46× |
 
-Both bounds are wrong in a known direction. The same-host column is **too high**:
-the CPU arm is degraded roughly three times and the GPU arm only about twice, so
-the ratio absorbs the difference. The middle column is **too low**: it is a
-cross-node ratio whose GPU numerator is still measured on the degraded host, so
-it charges the GPU arm for a slow host while giving the CPU arm a healthy one.
+The same-host column is **too high**, and that direction is secure: the CPU arm
+is degraded roughly three times and the GPU arm only about twice, so the ratio
+absorbs the difference.
 
-**The true same-node speedup on a healthy gpu-h200 host lies between these two
-columns** — for benzene aug-cc-pVDZ, between about 3.4× and 7.0×. Nothing in
-the current data narrows it further. Quoting the same-host column alone, as the
-first draft of this report did, overstates the result.
+The middle column's direction is *not* secure, and an earlier version of this
+file got it wrong. That version called it a lower bound, reasoning that it
+"gives the CPU arm a healthy one." Two effects actually push it in opposite
+directions:
+
+- Its GPU numerator is still measured on the degraded host, which charges the
+  GPU arm for a slow host and pushes the ratio **down**.
+- Its CPU denominator is job C's Gold 6226, which the probes below show is
+  healthy but a **slower model** than a healthy 8562Y+ — by 1.13× on DGEMM per
+  core, 1.58× on triad, and 1.95× on a serial scalar loop. A healthy 8562Y+ CPU
+  arm would finish sooner than job C did, which pushes the true ratio **down**
+  relative to this column, i.e. this column is too **high** in that respect.
+
+Which effect dominates depends on what each case is bound by, and this data
+cannot say. So the honest statement is weaker than the one this file used to
+make: **the same-host column is an upper bound, and the middle column is an
+estimate of unknown sign.** For benzene aug-cc-pVDZ the true figure is below
+7.0× and plausibly near 3.4×, but 3.4× is not established as a floor.
+
+This is the kind of gap that arithmetic cannot close, and job 13080182 —
+running now, on a host its own canary certifies healthy — closes it by
+measurement.
 
 The repair is measurement, not arithmetic: `common.inc` now runs `cpu_probe.py`
 inside every allocation and writes `metadata/canary-<phase>-t<threads>.json`, so
@@ -106,13 +122,42 @@ reads those back, and `merge_case_trees.py` refuses to pool trees whose canaries
 disagree or are missing. A rerun of the paired campaign on a canary-verified
 host is what settles the range above.
 
-For calibration, a single-core microbenchmark on a cpu-small node (job 13064569,
-Gold 6226) gives 75.2 GF/s DGEMM per core — about 87% of the 86.4 GF/s AVX-512
-peak at 2.7 GHz — 594 GF/s across eight cores (74.3 per core, so near-linear),
-24.6 Miter/s on a serial scalar loop, and 9.18 GB/s on a memory-bound triad.
-The matching probe on a gpu-h200 node (job 13064568) is queued and has not run;
-it will give the same three numbers for that node type, and the canary now
-captures them for every campaign tree regardless.
+## What a healthy core of each node type actually does
+
+Both calibration probes have now run, so the two node types can be compared
+directly rather than by reputation. Eight threads, same probe, same build:
+
+| Probe | gpu-h200, Platinum 8562Y+ (job 13064568) | cpu-small, Gold 6226 (job 13064569) | Ratio |
+|---|---:|---:|---:|
+| DGEMM per core | 84.15 GF/s | 74.27 GF/s | 1.13× |
+| DGEMM, 8 cores | 673.2 GF/s | 594.1 GF/s | 1.13× |
+| STREAM triad | 14.52 GB/s | 9.19 GB/s | 1.58× |
+| Serial scalar loop | 47.91 Miter/s | 24.61 Miter/s | 1.95× |
+| Live clock | 2800 of 2800 MHz max | 2700 of 2700 MHz max | — |
+
+Both nodes were at their full rated clock, so these are the healthy figures for
+each type. The Gold 6226 reaches about 86% of its 86.4 GF/s AVX-512 peak at
+2.7 GHz and scales near-linearly to eight cores (74.3 per core against 75.2 on
+one).
+
+The spread across the three probes is the useful part: a healthy 8562Y+ core
+beats a healthy 6226 core by only 1.13× on dense DGEMM but by 1.95× on a serial
+scalar loop. **So "how much faster is the gpu-h200 node" has no single answer —
+it depends on what the phase is bound by**, and SAPT(DFT) with automatic GRAC
+spans both extremes: DF-K is DGEMM-bound, while the XC grid and the GRAC
+cation SCFs lean on bandwidth and serial work. That range, 1.13× to 1.95×, is
+why the middle column of the bracket table above cannot be signed.
+
+The probe on the gpu-h200 node ran while three of this campaign's jobs were
+resident on it. That is visible in the numbers and it is small: job 13080182's
+own start canary, taken on the same node under that load, reads 83.3 GF/s per
+core (1% below the solo probe) and 13.77 GB/s triad (5% below). DGEMM is nearly
+immune to the co-tenancy; bandwidth is mildly affected, as expected. Treat the
+triad figures as slight underestimates of a quiet node.
+
+For contrast, job A's degraded allocation was the same 8562Y+ model with
+`lscpu` reporting its cores scaling at **68% of max**. Nothing about the model
+was the problem.
 
 ## NVIDIA's denominator: 56 cores of Xeon Platinum 8570
 
@@ -148,12 +193,13 @@ For any GPU number in this directory:
    Defensible only as a statement about that allocation, which was degraded
    about threefold. It is *not* the number a user would see on a healthy node
    of the same type, and it is the one that must never be quoted bare.
-2. **Same-host, 8 cores, on a healthy host** — a range, not a number: between
-   the first and second columns of the bracket table above (e.g. 3.4×-7.0× for
-   benzene aug-cc-pVDZ). Pinning it needs a canary-verified rerun.
+2. **Same-host, 8 cores, on a healthy host** — not yet available. (1) is an
+   upper bound on it; the second column of the bracket table is an estimate
+   whose sign is unknown, for the reasons given with that table. Job 13080182
+   measures it directly.
 3. **Against a mainstream CPU node at the same width** — the second column of
-   that table, read as a lower bound because its GPU numerator is still from the
-   degraded host.
+   that table. Its two errors run in opposite directions, so read it as an
+   estimate, not as a bound in either direction.
 4. **Against a 56-core socket** — divide by the projected factor in
    `thread-scaling-dfk.md` (kernel claims) or `thread-scaling-total.md`
    (end-to-end claims), on top of (3). Defensible only as a bound, since the

@@ -46,8 +46,11 @@ Job A's speedups are same-host ratios and are individually valid for the host it
 got, but that host ran its CPU work about three times slower than another
 gpu-h200 allocation of the same CPU model on the same binary. Both arms were
 degraded and not by the same factor, so no arithmetic recovers the healthy-host
-number from job A's tree — it is bounded, not known (3.4x-7.0x for benzene
-aug-cc-pVDZ; see `CPU_BASELINE.md`). Job A3 re-measures the whole paired
+number from job A's tree. Job A's own figure (7.03x for benzene aug-cc-pVDZ) is
+an upper bound; the cross-node comparison against job C is an estimate whose
+sign is not determined, because a healthy 8562Y+ core beats job C's Gold 6226
+by anywhere from 1.13x to 1.95x depending on what the phase is bound by. See
+`CPU_BASELINE.md`. Job A3 re-measures the whole paired
 campaign on an allocation that records its own throughput, before and after, via
 `common.inc`'s `host_canary`. Run `host_speed.py` on the A3 tree first: if its
 canary shows a healthy host, A3's speedups replace job A's throughout and the
