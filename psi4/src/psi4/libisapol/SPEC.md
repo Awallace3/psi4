@@ -1121,7 +1121,9 @@ already names and forbids substituting for: the **constrained-NN partition**
 itself, which `PartitionRecipe` does not yet admit (`track` is validated to
 `explicit_cartesian_drho_c_isa_a` alone). Candidate 3, the AC form, is still
 untouched and still cannot produce +57% in a ratio at fixed total. None of this
-is absorbed into a tolerance, and no two rows above may be quoted as agreeing.
+is absorbed into a tolerance, and no two rows above may be quoted as agreeing. The remaining candidate named here is implemented and
+measured in the next subsection, which closes ρ; the measurements above stand as
+recorded, for the ISA-A track they were made on.
 
 The 377 nonzero recoupled reference rows (O-O 258, H-O 86, H-H 33) are an
 explicitly **uncompared** track, because the native anisotropic product is
@@ -1130,6 +1132,169 @@ row they do not vanish at odd orders (O-O 16/46/95/118/103 at n=6..10, H-O
 23/33/53 at n=6..8, H-H 33 at n=6), so the fixture carries a census of them and
 withholds their values by design. See
 `tests/pytests/test_isapol_reference_dispersion.py` (4 quick + 3 long).
+
+### ρ closed in the distributed response/partition step
+
+All three candidates named at the end of §7 above — the constrained-NN partition
+and its site weights, the response basis, and the asymptotic-correction form —
+are now addressed, each through its own gate, and **ρ is closed against the
+reference's own recorded distributed blocks**. Nothing below relaxes a tolerance,
+a work limit, a grid or `MAX_POINTS`; the one AC form the reference actually uses
+is still *not* implemented and is still refused rather than approximated.
+
+**Candidate 1, the partition and its two declared constants, are read off the
+reference itself.** CamCASP's constrained density fit
+(`df_Smat.F90::make_s_matrix_constraints`, `ConstraintType = 1`) forms
+
+```
+(Sc)_ij = <chi_j|chi_i> (1 - eta (1 - delta_mn)) + lambda I_i I_j + gamma I_i I_j delta_mn
+```
+
+where `m`, `n` are the owning centres of `chi_i`, `chi_j`. Our
+`ov_charge_penalty` is exactly `lambda` and our new `ov_metric_damping` is
+exactly `eta`; `df_parameters.F90` ships `ConstraintType=1, eta=0.0,
+lambda=1000.0, gamma=0.0`. The reference case does **not** use the shipped `eta`:
+`examples/properties/H2O/README` records its own output filename as
+`H2O_aTZ_0.0005_1000_f11_NL4.pol`, which encodes `eta = 0.0005`, `lambda = 1000`,
+11 frequencies and nonlocal rank 4. The two constants are therefore declared by
+the reference, not fitted by us.
+
+`eta` is implemented end to end — `IsaAuxCoulomb::fit_ov` (C++), the pybind
+property `offsite_metric_damping`, and the driver keyword `ov_metric_damping` —
+as a **model declaration, never a tolerance and never a conditioning repair**.
+It scales every Coulomb-metric element whose two AUX functions sit on *different*
+centres by `1-eta` before the charge penalty is added, in the implementation's
+own association `scale*J[k,l] + (lambda*q[k])*q[l]`. `eta >= 1` is refused
+outright rather than clamped, because the damped array must remain a metric;
+`eta < 0`, non-finite `eta`, integer/string/`np.float64` `eta`, and any `eta` at
+all under `direct_ov` (which forms no transition fit) are refused as well.
+`tests/pytests/test_isapol_ov_metric_damping.py` (24 tests) pins the exact
+algebraic form bitwise at `eta ∈ {0, 1e-12, 5e-4, .25, .9999}`, pins the default
+as bitwise identical to `eta = 0`, shows `eta` is inert on a single-centre AUX
+set and non-inert otherwise, and pins every refusal and every recorded string
+(`model`, fit provenance, the readback property). It never asserts that two
+different `eta` agree: a chain run at a different `eta` is a different model, as
+it is for `lambda`.
+
+The distribution rule is CamCASP's own `DistPolAlgorithm` default `'DF'`
+(`polarizability.F90:219`), whose `dist_polarizabilities_DF` (line 1593) assigns
+each auxiliary function *wholly* to the centre it sits on and forms
+`α^(a,b)_{t,u}(ω) = − factor · Qa(k,t) · C_{k,l}(ω) · Qb(l,u)`. It never forms a
+stockholder weight, so no ISA-A convergence is a prerequisite for this track and
+the site-weight ladder of the previous subsection does not enter it.
+
+**Candidate 2, the response basis, was the dominant term, and it is a declared
+input we had been reading wrongly.** `output_1/H2O_aTZ.cks` declares
+`Basis Aux` as `#include-camcasp basis/auxiliary/aug-cc-pVTZ/{O,H}` with
+`Cartesian` and `Limit G` — the **aug-cc-pVTZ-RI** fitting set (Weigend, Köhn,
+Hättig, *JCP* **116** (2002) 3175), *not* the MAIN orbital basis that the
+previous subsection's "MAIN-matched AUX" rows used. O is `(9s7p6d4f2g)` = 136
+Cartesian functions and H is `(5s4p3d2f)` = 55 each, totalling **246**, which is
+exactly the `naux = 246` our runs measure. Psi4's shipped
+`psi4/share/psi4/basis/aug-cc-pvtz-ri.gbs` was then compared shell by shell
+against the two CamCASP auxiliary files: identical shell composition and
+**bitwise identical exponents** in every shell of both elements, so this is the
+same declared basis and not a lookalike.
+
+Switching to it moves the static distributed blocks from 4.5–13× the reference
+down to 1.10–1.17×, with the charge-charge ratio uniform at ~1.162 — a pure
+scale, not a structure error, and in particular no sign inversion of the O–H
+dipole–dipole cross block:
+
+```
+REFERENCE H2O_aTZ_NL4_static.pol   (eta=5e-4, lambda=1000, rank 4)
+  dd  OO     9.1800  HH     3.9630  OH    -2.0162  HH2    -0.0709  sum     8.8995
+  qq  OO   0.032243  HH   0.061695  OH  -0.016122  HH2  -0.045573  sum -3.112e-12
+  qd  OO   0.240921  HH   0.280644  OH   0.114921  HH2   0.193748  maxabs   219.0661
+OURS  DF-centre, aug-cc-pVTZ-RI AUX (naux=246), eta=5e-4, lambda=1000, rank 3
+  dd  OO    10.1637  HH     4.3939  OH    -2.3604  HH2    -0.0649  sum     9.3802
+  qq  OO   0.037468  HH   0.071895  OH  -0.018734  HH2  -0.053161  sum -5.351e-12
+  qd  OO   0.292796  HH   0.323364  OH   0.133799  HH2   0.222787  maxabs   223.3539
+```
+
+The blocks are compared as *molecular* α by reassembly with charge flow, which is
+origin-independent given the distributed sum rules and exact regardless of rank
+truncation, since only `q` and `d` enter `μ`:
+
+```
+α_mol_{AB} = Σ_ab [ α^ab_{dA,dB} + R_aA α^ab_{q,dB} + α^ab_{dA,q} R_bB + R_aA α^ab_{qq} R_bB ]
+```
+
+**Candidate 3, the AC form, is the one the reference uses and we do not
+implement — so it is bracketed, not approximated.** `output_1/H2O_aTZ_A.dal`
+declares DALTON PBE0 with `.DFTAC MULTPOLE TANH / 0.46380 0.46380 3.0 4.0`: a
+*spatial* tanh switch to a multipole-asymptotic potential between 3 and 4 bohr.
+That is not Psi4's gradient-regulated GRAC, and
+`isapol_native_correction.py::validate_correction` admits only `'NONE'` and the
+canonical `'FIXED_GRAC'` at exactly `(shift, .5, 40.)` with `XC_GGA_X_LB` α=.75,
+`XC_LDA_C_VWN`, underlying canonical PBE0 and a current SCF seal. The DALTON form
+would need **its own declared policy**; it was not added by widening
+`FIXED_GRAC`, and three attempts to reach it by varying the GRAC β were deleted
+rather than accommodated, because a different β is a different AC form under the
+same rule. What is available instead is a measurement under the two policies that
+*are* gated — a sensitivity bracket across two separately declared models, never
+a parity claim between them:
+
+| model | α_mol iso | rank1 H/O | rank2 H/O | rank3 H/O | Σα rank 1 | ρ |
+| --- | --- | --- | --- | --- | --- | --- |
+| AC `NONE` (gated) | 9.59477 | 0.28171 | 0.10431 | 0.05128 | 9.5948 | 0.31264 |
+| AC canonical `FIXED_GRAC` | 9.78453 | 0.27907 | 0.10347 | 0.05505 | 9.7845 | 0.30978 |
+| reference `.pol` NL4 | 9.24736 | 0.28216 | 0.10480 | 0.05140 | 9.5853 | 0.278732 |
+
+(CamCASP's own printed exact undistributed total for this case is 9.281270, from
+`output_1/OUT/H2O_aTZ.out`; its `.pol` reassembles to 9.247357, so the
+reference's own distributed fit loses 0.37% of its own total. That 0.37% is the
+reference's, not ours, and neither number may be substituted for the other.)
+
+The honest reading of that bracket is a **hypothesis supported by the bracket,
+not a proof**: the reference does apply an AC, yet the gated `NONE` policy tracks
+it better than canonical GRAC does, which is consistent with DALTON's spatial
+tanh switch at 3–4 bohr barely reaching the valence region that sets α while
+GRAC's gradient-regulated switch does. What the bracket *establishes* is a bound:
+the AC-form choice moves these observables by ≲2%, so it can no longer hide a
+factor in ρ.
+
+**The parity result.** Our natively computed distributed blocks (DF centre rule,
+aug-cc-pVTZ-RI AUX, `lambda=1000`, `eta=5e-4`, gated `NONE` AC) run through the
+**identical** LW localization and Casimir–Polder chain, against the reference's
+**own recorded** distributed blocks run through that same chain:
+
+```
+                  ours          ref-blocks       ratio
+a1 O          6.137062   /     6.127428   =  1.00157   ( +0.16%)
+a1 H          1.728852   /     1.728932   =  0.99995   ( -0.00%)
+aH/aO         0.281707   /     0.282163   =  0.99838   ( -0.16%)
+C6_OO        17.267875   /    17.239234   =  1.00166   ( +0.17%)
+C6_HH         1.687793   /     1.688304   =  0.99970   ( -0.03%)
+rho           0.312637   /     0.312944   =  0.99902   ( -0.10%)
+```
+
+Against the ISA-A track above, whose rank-1 H/O ratio never left 0.1927–0.1934
+under λ ∈ {1e3…1e8}, three auxiliary sets, three shape ladders, two response
+bases and three localization rank limits, the constrained-NN/DF-centre partition
+on the reference's own declared AUX reaches 0.2817 against 0.2822. **The
+distributed response/partition step is no longer the source of the ρ gap**, and
+the previous subsection's verdict — that the reference's 0.28216 is a different
+partition rather than a differently converged one — is confirmed by
+reproducing that partition rather than by tightening the old one.
+
+**What the parity table is not.** The residual ~1.12× against the *published*
+0.278732 is entirely downstream of this step: it is our unrefined LW-L3 model
+read against the reference's refined `wt4_L2`/`L3` model, which §7 already
+declares not quotable as parity, and the recoupled `wt4_L2` file's own
+coefficients (`C6_OO = 21.59463`, `C6_HO = 4.590924`, `C6_HH = 0.9829859`,
+sqrt-ratio 0.213353) are a third declaration again. Each `eta`, each `lambda` and
+each AC policy is a separately declared model and may only be read against a
+reference number recorded at the same declaration; the rows of the AC bracket
+table may not be quoted as agreeing with one another.
+
+**Still open, and still labelled.** 5,341 uncertified odd `L+H+J` rows;
+`(3,4)`/`(4,3)`/`(4,4)` structurally absent upstream; no shell above `p` in the
+point-response gates; `b` energy-anchored at only two of four points; no
+frequency-dependent propagator convention certified; C12 structurally partial;
+the shape-sample array uncompared in both metrics; and the DALTON tanh/multipole
+AC form itself unimplemented, awaiting its own policy rather than a widening of
+`validate_correction`.
 
 ### Closed Casimir-Polder oracle on a second reference case
 

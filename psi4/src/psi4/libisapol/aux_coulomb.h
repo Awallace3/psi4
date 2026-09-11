@@ -35,9 +35,14 @@ class IsaAuxCoulomb {
     IsaDrhoCResult fit_drho_c(const IsaExplicitBasis& orbital,
                              const Matrix& occupied_coefficients, double charge_penalty=1000.) const;
     /// Native-integral/supplied-MAIN-orbital OV fit; no SCF or response construction.
+    /// ``offsite_metric_damping`` is the declared eta of the constrained fit: every
+    /// metric element whose two AUX functions sit on DIFFERENT centres is scaled by
+    /// (1-eta) before the charge penalty is added. It is a model declaration, not a
+    /// tolerance or a conditioning repair -- eta!=0 is a different fit and a
+    /// different partition, and its result may never be quoted against an eta=0 one.
     IsaOvFitResult fit_ov(const IsaExplicitBasis& orbital, const Matrix& occupied,
                          const Matrix& virtuals, const std::string& provenance,
-                         double charge_penalty=1.0) const;
+                         double charge_penalty=1.0, double offsite_metric_damping=0.0) const;
    private:
     IsaExplicitBasis basis_;
 };

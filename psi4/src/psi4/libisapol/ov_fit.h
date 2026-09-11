@@ -24,6 +24,9 @@ class IsaOvFitResult {
     int nvirtual() const { return nvirtual_; }
     int ntransition() const { return noccupied_ * nvirtual_; }
     double charge_penalty() const { return penalty_; }
+    /// Declared eta: off-centre metric elements were scaled by (1-eta). Zero is
+    /// the undamped fit; any other value is a separately declared model.
+    double offsite_metric_damping() const { return damping_; }
     /// ||A D^T - T^T||_F / (||A||_F ||D||_F + ||T||_F), long-double accumulation.
     double relative_backward_residual() const { return residual_; }
     int lapack_info() const { return info_; } // success is NOT a rank certificate
@@ -37,7 +40,7 @@ class IsaOvFitResult {
     std::shared_ptr<Matrix> j_, a_, t_, d_;
     std::vector<double> charges_;
     int nmain_=0, naux_=0, noccupied_=0, nvirtual_=0, info_=0;
-    double penalty_=0., residual_=0.;
+    double penalty_=0., damping_=0., residual_=0.;
     std::string provenance_;
 };
 } }

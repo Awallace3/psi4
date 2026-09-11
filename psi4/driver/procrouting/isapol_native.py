@@ -163,7 +163,7 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                       response_context=None, response_basis='fitted_auxiliary',
                       scf_correction='NONE', expected_grac_shift=None,
                       response_algorithm='ordered_pairwise', ov_charge_penalty=1.,
-                      localization_rank_limit=3):
+                      ov_metric_damping=0., localization_rank_limit=3):
     """Return all owned stages, with strict production LW (1e-6) or failures.
 
     Explicit ``response_basis='direct_ov'`` integrates actual occupied/virtual
@@ -188,6 +188,21 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
     ``direct_ov`` forms no fit and accepts only the default. Recorded in the fit and result provenance, deliberately **not** in
     the response policy hash: H1/H2 come from the orbitals and are independent
     of it, so one native context serves every lambda.
+
+    ``ov_metric_damping`` is the SECOND declared parameter of the same constrained
+    fit, the reference protocol's ``Eta``: every Coulomb-metric element whose two
+    AUX functions sit on different centres is scaled by ``1-eta`` before the charge
+    penalty is added, which is exactly ``ConstraintType = 1`` of the reference's
+    constrained density fitting. Unlike lambda it does **not** converge to
+    something the exact answer already satisfies -- it changes the fitted
+    transition density at every eta, deliberately, by making inter-site fitted
+    density more expensive. It is therefore a model declaration and never a
+    tolerance, a conditioning repair or a preconditioner: a chain run at any eta
+    other than a recorded one is a differently declared model and must never be
+    compared against a number recorded at a different eta, exactly as for lambda.
+    The default 0. is the undamped fit every committed number was measured at; the
+    traced reference polarizability step declares ``Eta = 0.0005, Lambda = 1000``.
+    ``direct_ov`` forms no fit, so it accepts only the default here too.
 
     ``recipe.grid`` is the explicit ISA/Q grid policy; ``response_grid`` is None
     for no_local or explicit [x,y,z,w] for ALDA. Full H1/H2 already include all
@@ -219,6 +234,11 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
         raise ValueError('ov_charge_penalty must be an explicit finite positive float')
     if response_basis == 'direct_ov' and ov_charge_penalty != 1.:
         raise ValueError('direct_ov forms no transition fit; no charge penalty applies')
+    if (type(ov_metric_damping) is not float or not np.isfinite(ov_metric_damping)
+            or not 0. <= ov_metric_damping < 1.):
+        raise ValueError('ov_metric_damping must be an explicit finite float in [0,1)')
+    if response_basis == 'direct_ov' and ov_metric_damping != 0.:
+        raise ValueError('direct_ov forms no transition fit; no metric damping applies')
     if caller_converged is not True:
         raise ValueError('caller_converged must explicitly be True')
     if not isinstance(recipe, PartitionRecipe):
@@ -262,7 +282,8 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
             distributed, tensors, local, dispersion, tuple(failures), diagnostics,
             f'native {kernel}; exact_exchange={exact_exchange}; local_scale={local_scale}; '
             f'{response_algorithm}; Drho-C ISA-A[{recipe.auxiliary.name}]; {response_basis}'
-            + ('' if response_basis == 'direct_ov' else f' lambda={ov_charge_penalty!r}')
+            + ('' if response_basis == 'direct_ov'
+               else f' lambda={ov_charge_penalty!r}; eta={ov_metric_damping!r}')
             + '; no PFIT'
             + ('; ' + correction.response_description if correction.policy == 'FIXED_GRAC' else ''),
             correction)
@@ -314,7 +335,7 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                 core.Matrix.from_array(full[:, :provider.nocc].copy()),
                 core.Matrix.from_array(full[:, provider.nocc:].copy()),
                 f'native full-C verified AO-to-DALTON; occupied-fast; lambda={ov_charge_penalty!r}; '
-                + context_hash, ov_charge_penalty)
+                f'eta={ov_metric_damping!r}; ' + context_hash, ov_charge_penalty, ov_metric_damping)
             d = np.asarray(fit.coefficients)
             if d.shape != (provider.nocc*provider.nvir, partition.auxiliary.nfunction):
                 raise ValueError('native OV fit dimensions/order mismatch')

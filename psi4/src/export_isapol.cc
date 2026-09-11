@@ -607,6 +607,7 @@ void export_isapol(py::module& m) {
         .def_property_readonly("nvirtual", &IsaOvFitResult::nvirtual)
         .def_property_readonly("ntransition", &IsaOvFitResult::ntransition)
         .def_property_readonly("charge_penalty", &IsaOvFitResult::charge_penalty)
+        .def_property_readonly("offsite_metric_damping", &IsaOvFitResult::offsite_metric_damping)
         .def_property_readonly("relative_backward_residual", &IsaOvFitResult::relative_backward_residual)
         .def_property_readonly("lapack_info", &IsaOvFitResult::lapack_info)
         .def_property_readonly("provenance", &IsaOvFitResult::provenance)
@@ -616,7 +617,7 @@ void export_isapol(py::module& m) {
     py::class_<IsaAuxCoulomb>(m, "IsaAuxCoulomb", "Native Libint2 Coulomb metric and analytic charges; explicit Cartesian molecular AUX only")
         .def(py::init<const IsaExplicitBasis&>(), "auxiliary"_a)
         .def("fit_ov", &IsaAuxCoulomb::fit_ov, "orbital"_a, "occupied"_a, "virtuals"_a,
-             "provenance"_a, "charge_penalty"_a=1.0)
+             "provenance"_a, "charge_penalty"_a=1.0, "offsite_metric_damping"_a=0.0)
         .def("charges", &IsaAuxCoulomb::charges)
         .def("metric", &IsaAuxCoulomb::metric)
         .def("three_center", &IsaAuxCoulomb::three_center, "orbital"_a)

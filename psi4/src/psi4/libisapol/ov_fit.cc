@@ -32,7 +32,7 @@ std::shared_ptr<Matrix> IsaOvFitResult::metric() const { return a_->clone(); }
 std::shared_ptr<Matrix> IsaOvFitResult::rhs() const { return t_->clone(); }
 std::shared_ptr<Matrix> IsaOvFitResult::coefficients() const { return d_->clone(); }
 IsaOvFitResult IsaAuxCoulomb::fit_ov(const IsaExplicitBasis& orbital, const Matrix& occupied,
-        const Matrix& virtuals, const std::string& provenance, double penalty) const {
+        const Matrix& virtuals, const std::string& provenance, double penalty, double damping) const {
     ov_require(basis_.role_==IsaBasisRole::MolecularAux &&
                basis_.representation_==IsaBasisRepresentation::Cartesian,
                "OV fit: requires Cartesian molecular AUX");
@@ -42,6 +42,11 @@ IsaOvFitResult IsaAuxCoulomb::fit_ov(const IsaExplicitBasis& orbital, const Matr
     ov_require(!provenance.empty() && provenance.find_first_not_of(" \t\r\n")!=std::string::npos,
                "OV fit: explicit supplied-orbital provenance required");
     ov_require(std::isfinite(penalty) && penalty>=0., "OV fit: penalty must be finite and nonnegative");
+    // eta is a declared model parameter of the constrained fit, never a repair: it
+    // must leave the damped metric a metric, so eta<1 is required outright and no
+    // value is silently clamped.
+    ov_require(std::isfinite(damping) && damping>=0. && damping<1.,
+               "OV fit: offsite metric damping must be finite in [0,1)");
     ov_require(occupied.nirrep()==1 && virtuals.nirrep()==1,
                "OV fit: coefficients require a single symmetry block");
     const int n=orbital.nfunction(), m=basis_.nfunction(), o=occupied.ncol(), v=virtuals.ncol();
@@ -65,18 +70,30 @@ IsaOvFitResult IsaAuxCoulomb::fit_ov(const IsaExplicitBasis& orbital, const Matr
     try {
         IsaOvFitResult result;
         result.nmain_=n; result.naux_=m; result.noccupied_=o; result.nvirtual_=v;
-        result.penalty_=penalty; result.provenance_=provenance;
+        result.penalty_=penalty; result.damping_=damping; result.provenance_=provenance;
         result.charges_=charges(); result.j_=metric();
+        // Zero-based owning centre of every AUX function, in stored shell order. The
+        // damping is site-resolved, so it needs the map the metric itself never sees.
+        std::vector<int> centre_of;
+        centre_of.reserve(static_cast<size_t>(m));
+        for (const auto& shell : basis_.shells_) {
+            const int width=(shell.l+1)*(shell.l+2)/2; // Cartesian MolecularAux, checked above
+            for (int c=0;c<width;++c) centre_of.push_back(shell.centre);
+        }
+        ov_require(static_cast<int>(centre_of.size())==m, "OV fit: AUX function/centre map mismatch");
         const auto b=three_center(orbital);
         ov_finite(*result.j_); ov_finite(*b);
-        result.a_=std::make_shared<Matrix>("OV A = J + (lambda q) q^T",m,m);
+        result.a_=std::make_shared<Matrix>("OV A = (1-eta offsite) J + (lambda q) q^T",m,m);
         result.t_=std::make_shared<Matrix>("OV T occupied-fast",static_cast<int>(nov),m);
         result.d_=std::make_shared<Matrix>("OV fitted density coefficients",static_cast<int>(nov),m);
         Matrix block("OV B[k]",n,n), left("OV Cocc^T B[k]",o,n), pair("OV L[k] Cvir",o,v);
         for (int k=0;k<m;++k) {
             const double pq=penalty*result.charges_[k];
             ov_require(std::isfinite(pq), "OV fit: nonfinite penalty charge product");
-            for (int l=0;l<m;++l) result.a_->set(k,l,result.j_->get(k,l)+pq*result.charges_[l]);
+            for (int l=0;l<m;++l) {
+                const double scale=(centre_of[k]==centre_of[l]) ? 1. : 1.-damping;
+                result.a_->set(k,l,scale*result.j_->get(k,l)+pq*result.charges_[l]);
+            }
             for (int mu=0;mu<n;++mu) for (int nu=0;nu<n;++nu) block.set(mu,nu,b->get(k,mu*n+nu));
             // Two explicit GEMMs. Never reassociate as B[k] @ Cvir first.
             left.gemm(true,false,1.,occupied,block,0.);
