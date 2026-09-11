@@ -25,6 +25,12 @@ No implementation/build/test background tasks are pending. Old task IDs and
 
 ## 2. User direction and boundaries
 
+- **2026-09-11 report review — current priority:** follow the **Psi4 SCF →
+  CamCASP** reference path, not DALTON as the primary acceptance target. The
+  detailed DALTON aTZ/wt4 and helium comparisons remain separately labelled
+  diagnostics. Add fresh, versioned Psi4-backed reference cases when the archived
+  settings no longer express the intended comparison; preserve the old fixtures.
+  See the dated requirements in SPEC §1 and the next-work checklist below.
 - Continue toward a matched **native** protocol. The user explicitly chose this
   instead of further investigating the odd-angular-normalization/RRF gap.
 - CamCASP MIT source may be inspected/transcoded with attribution and notices.
@@ -40,6 +46,58 @@ No implementation/build/test background tasks are pending. Old task IDs and
 - No hidden SCF, post-SCF orbital/energy repair, charge/symmetry repair, reduced
   scientific grids, relaxed tolerances or increased resource limits merely to
   make a reference run pass. Label incomplete coverage and comparison tracks.
+
+### Next work requested in the 2026-09-11 review (not implemented/run here)
+
+These requirements supersede any historical passage that treats matching DALTON
+as the primary goal or treats the present string-option restriction as permanent.
+
+1. **Freeze the primary reference declaration.** Start from
+   `CamCASP/tests/H2O_props/psi4/H2O-avtz.clt` (`SCFcode psi4`, PBE0/aVTZ,
+   I.P. 12.62063 eV, printed HOMO -0.3989) and inspect the effective generated
+   inputs. Use the actual converged Psi4 state and explicit current settings,
+   not a printed HOMO rounded to four decimals as an exact current-state record.
+   List any deliberate changes from archived wt3/global-axis/L2H1 inputs;
+   do not inherit the separate DALTON wt4/bond-axis settings silently.
+2. **Add, rather than overwrite, a fresh Psi4-backed CamCASP reference.**
+   Run in an isolated output directory, leaving the CamCASP source/reference
+   tree unchanged. Export the same Psi4 orbitals/energies/basis ordering to the
+   reference and native consumers; certify overlap/normalization and matching
+   physical state. Store source and executable versions/hashes, complete input
+   manifest, generation command, grids, fit metric/space, distributed and
+   point-response operands, local/refined tensors, Cn and raw logs. Use portable
+   fixtures/tests, not a dependency on ignored audit files. If an export,
+   executable or needed stage is unavailable, retain that blocker explicitly;
+   don't replace the reference stage with our own code and call it independent.
+3. **Expose a common explicit correction producer interface.** The MULTPOLE
+   implementation already exists; it is not necessary to invent/refit GRAC to
+   emulate it. Plan selectable NONE / FIXED_GRAC / DECLARED_MULTPOLE_AC with
+   companion validated parameters resolved into an immutable declaration before
+   orbital production. The existing `ATOMIC_SCF_ASYMPTOTIC_CORRECTION` option
+   currently admits only NONE/FIXED_GRAC and checks property-input state; merely
+   adding a string there does not make a new SCF producer. Specify whether the
+   new front end drives the already explicit post-SCF producer or integrates the
+   potential into core SCF; preserve honest seal, convergence and nonvariational
+   energy semantics. No hidden correction iterations inside property requests.
+4. **Gate each policy independently.** Keep legacy defaults and results; test
+   declaration resolution/refusals, state and provenance, convergence failures,
+   explicit-Python equivalence, and reporting. Update the tests that pin the
+   old option surface as part of the feature. Add a distinct MULTPOLE Psi4 →
+   CamCASP reference and optionally a NONE control, never a pooled tolerance
+   across policies. Compare fitted-propagator and direct-OV point targets on
+   shared inputs before calling the native target representation matched.
+5. **Report shared equations and distinct evidence accurately.** NN means full
+   N-by-N molecular-orbital pair space (`FULL`; N is the total MO count), not
+   a word acronym or fitting norm. Repeat each shared working equation in both
+   workflow columns; place rank identities/ratios underneath. Mark each
+   benchmark's SCF backend and declaration. Secondary DALTON discrepancies
+   (+2.144% static alpha, +2.520% C6, -0.776% rho at `398f653e8f`) are not
+   measured errors of the primary same-Psi4-input path.
+
+This checklist and the corresponding SPEC requirements are documentation-only.
+No new SCF option, CamCASP run or numerical fixture is claimed by this update.
+The subsequent `b10393a03d` change adds stage narration; it does not generate the
+fresh references requested here.
 
 ## 3. What works now
 

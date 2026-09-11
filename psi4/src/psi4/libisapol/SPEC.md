@@ -47,6 +47,51 @@ errors, signs, exclusions, rank coverage, conditioning and reference-print limit
 source hashes, literal/span distinctions, licensing and missing-artifact lists.
 `historical_scf_export_verified` remains false; use actual adapted orbitals.
 
+### User review clarification — 2026-09-11: primary Psi4 path and fresh references
+
+The primary acceptance target remains **Psi4 SCF → CamCASP properties** against
+**Psi4 SCF → native Psi4 properties**, starting from the same declared Psi4
+electronic state. The input
+`CamCASP/tests/H2O_props/psi4/H2O-avtz.clt` explicitly selects `SCFcode psi4`.
+Do not replace that target with the DALTON-backed
+`examples/properties/H2O/H2O_aTZ` case merely because the latter has more
+archived intermediate data. The latter's refined wt4 comparisons and the
+same-orbital helium test remain valuable **secondary diagnostics**, not primary
+Psi4-path acceptance. In particular, the DALTON spectrum RMS of 0.003236 Eh
+and refined alpha/C6/rho discrepancies of +2.144%/+2.520%/-0.776% do not measure
+the residual of a same-Psi4-input comparison.
+
+An old archived input is not automatically the current intended protocol.
+Preserve historical fixtures and introduce **additional, separately named,
+versioned references** when current options differ. Their required declaration
+includes SCF code/version and orbitals, effective functional and correction,
+orbital/AUX bases and ordering, geometry, grids, lambda/eta, fit space and
+distribution rule, frequency grid, localization rank, target representation,
+point cloud, axes, parameter set, penalty type/coefficient and final site ranks.
+Never carry the DALTON wt4/bond-axis parameters into the Psi4 wt3/global-axis
+family implicitly. Missing generated inputs or operands mean "not verified,"
+not permission to infer them from final Cn.
+
+**Next reference acceptance sequence (planned, not run by this documentation
+change):** freeze an explicit Psi4 fixed-GRAC baseline; export its actual state
+to an isolated CamCASP run; archive reference response/target/local/refined/Cn
+operands and compare each corresponding native stage on that state. Then add a
+separately declared MULTPOLE-corrected Psi4 reference when the public producer
+surface is ready; NONE can be a separate control. Do not overwrite the reference
+source tree. Required manifests, source/version hashes, normalization/ordering
+checks and raw outputs must make reruns independent of ignored `.pi/audit/`
+files. A fixture generated using the native kernel on both sides is an internal
+consistency test, not an independent CamCASP oracle.
+
+**Equation presentation requirement:** write the same working equation on both
+sides when the mathematical stage is shared. Put conservation identities,
+derived ratios and implementation diagnostics *below* it, not in place of the
+other side's equation. Explicitly identify different operands/representations
+even when the symbolic equation is identical. NN is CamCASP's `FULL` pair-space
+label: for N molecular orbitals, both orbital indices range over all N orbitals,
+rather than only occupied (O) or virtual (V) subsets. It is not an alternative
+expansion such as "nearest neighbour" and does not name the fitting metric.
+
 ## 2. Public lifecycle, provenance and fixed-GRAC admission
 
 `psi4.oeprop(wfn, 'ATOMIC_PARTITION', 'ATOMIC_POLARIZABILITIES',
@@ -87,6 +132,42 @@ orbitals are produced by a named, explicitly applied post-SCF iteration that
 verifies the uncorrected seal and then deliberately invalidates it; `NONE` and
 `FIXED_GRAC` both refuse to describe such orbitals. Also not a response
 derivative.
+
+### Planned common SCF correction selector — not a new implemented option
+
+**Yes: GRAC and MULTPOLE can be selectable alternatives in Psi4.** GRAC is
+itself an asymptotic correction, so the choices must be named NONE, FIXED_GRAC
+and DECLARED_MULTPOLE_AC, not an ambiguous "GRAC versus AC."
+The MULTPOLE numerical producer already exists in `isapol_native_ac.py`;
+what remains is a coherent, explicit **SCF-producer option/API surface** and
+its end-to-end tests. The present two-value C++ string option is a current
+implementation boundary, not a scientific prohibition on adding an option.
+
+The proposed selector must pair the selected policy with validated parameters:
+the GRAC shift/profile or all `AcDeclaration` fields (I.P., radii/table,
+switch and sharpness, multipole order/origin, FA scale and shift mode).
+Resolve these into one immutable effective declaration **before** producing
+orbitals. A selector alone must neither guess missing parameters nor relabel
+orbitals produced under another policy. Preserve existing NONE/FIXED_GRAC
+behavior, explicit opt-in, no stacked corrections, and the per-policy producer
+and convergence records.
+
+Integrating the MULTPOLE potential into a normal SCF input path needs an explicit
+convergence/energy contract: this is a potential correction without an energy
+functional, not a variational-energy minimum claim. If the existing named
+post-SCF producer is retained as the first supported route, label that route
+honestly; do not present it as an already integrated core SCF solver. Property
+evaluation must only validate/consume the declared state, never secretly run a
+correction iteration. No AC-kernel derivative is implied.
+
+Acceptance must test option-to-declaration resolution, missing/conflicting
+parameters and early refusals, stale-state/mislabel rejection, producer
+convergence/failure, unchanged legacy policies, equality with the existing
+explicit-Python MULTPOLE route for the same inputs, reporting/provenance, and
+independent Psi4-backed CamCASP references for each new policy. Existing tests
+that assert the *current* two-value option surface must be deliberately revised
+alongside implementation, not bypassed. Option names/default parameter values
+are not finalized here; no runtime API was widened in this documentation change.
 
 ### Narrative and machine-readable reporting are not a policy
 
