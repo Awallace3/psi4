@@ -79,6 +79,12 @@ per-order C6–C12 including odd orders, energies and ordered-rank coverage.
 Rank1–3 tensors provide unrestricted completeness only through C8; higher orders
 explicitly retain missing quadruples. These are orientation-resolved scalar
 coefficients, not recoupled coefficients or molecular/native acceptance.
+Both producers additionally take reporting-only `log=` and `wfn=`: each owns its
+own stage banner -- the isotropic one because only it knows which per-site ranks
+it resolved off each model, the oriented one because only it holds the two
+placements -- and publishes its coefficients as QCVariables, with an order that
+is not unrestricted-complete named ` INCOMPLETE`. Neither reads the wavefunction
+back, and neither makes a C_n a property of it.
 Independent review found no must-fix; final parent installed-import tests passed52
 and the combined suite passed1387 in14.71s, including a deterministic raw-local
 getter-access regression. No numerical policy changed. Bounded evidence:

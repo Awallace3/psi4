@@ -481,7 +481,8 @@ class IsotropicDispersion:
 def isotropic_dispersion(model_a: LocalProperties, model_b: LocalProperties, *,
                          cp_weights: Sequence[float], quadrature_provenance: Provenance,
                          max_order: int = 12, site_ranks_a: Sequence[Sequence[int]] | None = None,
-                         site_ranks_b: Sequence[Sequence[int]] | None = None) -> IsotropicDispersion:
+                         site_ranks_b: Sequence[Sequence[int]] | None = None,
+                         log=None, wfn=None) -> IsotropicDispersion:
     """Explicit A/B local results and CP weights, no invented static quadrature.
 
     Site sets may differ; frequency grids must match exactly, as in the C++ contract.
@@ -510,6 +511,14 @@ def isotropic_dispersion(model_a: LocalProperties, model_b: LocalProperties, *,
     a declared limit below 3 refuses the ranks above its own limit for the same
     reason: those components are absent by declaration, and reading their zeros
     would drop C_n terms while still reporting the order as complete.
+
+    ``log`` and ``wfn`` are reporting surfaces only. This stage owns its own
+    banner, node table and coefficient tables because it is the only place that
+    knows which per-site ranks it resolved; a caller that narrates the stage
+    itself would have to guess them. ``wfn`` is written to solely by the
+    reporting module, which publishes this stage's machine-readable variables on
+    it; passing one does not make the C_n a property of that wavefunction, and
+    nothing here reads it back or checks the two models against it.
     """
     if not isinstance(model_a, LocalProperties) or not isinstance(model_b, LocalProperties):
         raise ValueError('dispersion requires typed LW local results')
@@ -523,6 +532,12 @@ def isotropic_dispersion(model_a: LocalProperties, model_b: LocalProperties, *,
     if np.any(weights < 0) or not np.any(weights > 0) or any(x == 0 and w != 0 for x,w in zip(model_a.frequencies, weights)):
         raise ValueError('CP weights require positive dynamic weight and zero static weight')
     from psi4 import core
+    from . import isapol_logging as _lg
+    log = _lg.silent() if log is None else log
+    log.stage('isotropic dispersion coefficients (Casimir-Polder)', _lg.dispersion_parameters(
+        model_a=model_a, model_b=model_b, max_order=max_order, cp_weights=weights,
+        quadrature_provenance=quadrature_provenance,
+        site_ranks_a=site_ranks_a, site_ranks_b=site_ranks_b))
     def validated_ranks(model, declared):
         if declared is None:
             # Not (1,2,3): a model localized at a declared limit below 3 has
@@ -566,7 +581,10 @@ def isotropic_dispersion(model_a: LocalProperties, model_b: LocalProperties, *,
     pairs = tuple(DispersionPair(p.site_a, p.site_b, model_a.labels[p.site_a], model_b.labels[p.site_b],
                   tuple(Coefficient(c.order, c.value, tuple(map(tuple,c.included_rank_pairs)),
                                     tuple(map(tuple,c.missing_rank_pairs)), c.complete) for c in p.coefficients)) for p in result.pairs)
-    return IsotropicDispersion(model_a, model_b, tuple(map(float,weights)), quadrature_provenance, pairs)
+    record = IsotropicDispersion(model_a, model_b, tuple(map(float,weights)), quadrature_provenance, pairs)
+    _lg.report_dispersion(log, wfn, record)
+    log.stage_end()
+    return record
 
 
 @dataclass(frozen=True)
@@ -664,7 +682,8 @@ class AnisotropicDispersion:
 def anisotropic_dispersion(model_a: LocalProperties, model_b: LocalProperties, *,
                            placement_a: Placement, placement_b: Placement,
                            cp_weights: Sequence[float], quadrature_provenance: Provenance,
-                           max_order: int = 12) -> AnisotropicDispersion:
+                           max_order: int = 12, log=None,
+                           wfn=None) -> AnisotropicDispersion:
     """Expert adapter for trusted factory-produced LocalProperties (see that type).
 
     Both entire models require explicit placements, including an explicit identity
@@ -680,6 +699,14 @@ def anisotropic_dispersion(model_a: LocalProperties, model_b: LocalProperties, *
     quadrature is available. The historical static example cannot provide dynamic
     weights and remains unsupported. This is not molecular-frequency acceptance.
     Existing C++ model/pair budgets remain authoritative for core resources.
+
+    ``log`` and ``wfn`` are reporting surfaces only. The coefficients reported
+    and published are orientation-resolved scalars, named as such, and never as
+    isotropic C_n; their two completeness flags are both reported, and the
+    published name is marked INCOMPLETE on the unrestricted one, exactly as the
+    isotropic stage marks its own. Passing a wavefunction does not make this
+    adapter's result a property of it: the caller owns both placements, and
+    nothing here reads the wavefunction back.
     """
     if not isinstance(model_a, LocalProperties) or not isinstance(model_b, LocalProperties):
         raise ValueError('dispersion requires typed LW local results')
@@ -697,6 +724,13 @@ def anisotropic_dispersion(model_a: LocalProperties, model_b: LocalProperties, *
             or any(x == 0 and w != 0 for x,w in zip(model_a.frequencies, weights))):
         raise ValueError('CP weights require positive dynamic weight and zero static weight')
     from psi4 import core
+    from . import isapol_logging as _lg
+    log = _lg.silent() if log is None else log
+    log.stage('oriented (anisotropic) dispersion coefficients',
+              _lg.anisotropic_dispersion_parameters(
+                  model_a=model_a, model_b=model_b, placement_a=placement_a,
+                  placement_b=placement_b, max_order=max_order, cp_weights=weights,
+                  quadrature_provenance=quadrature_provenance))
 
     def convert(model, placement):
         raw = model.raw_global.array
@@ -734,6 +768,9 @@ def anisotropic_dispersion(model_a: LocalProperties, model_b: LocalProperties, *
               tuple(map(tuple,c.included_rank_quadruples)), tuple(map(tuple,c.missing_rank_quadruples)),
               c.declared_model_complete, c.unrestricted_complete) for c in p.coefficients),
         p.truncated_energy) for p in result.pairs)
-    return AnisotropicDispersion(model_a, model_b, placement_a, placement_b, placed_a, placed_b,
+    record = AnisotropicDispersion(model_a, model_b, placement_a, placement_b, placed_a, placed_b,
                                  tuple(result.frequencies), tuple(result.cp_weights), quadrature_provenance,
                                  result.max_order, pairs, result.truncated_energy)
+    _lg.report_anisotropic_dispersion(log, wfn, record)
+    log.stage_end()
+    return record

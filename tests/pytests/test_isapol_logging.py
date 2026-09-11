@@ -17,6 +17,7 @@ claim checkable:
 """
 
 import dataclasses
+import inspect
 
 import numpy as np
 import pytest
@@ -441,6 +442,331 @@ def test_reporting_at_verbosity_zero_still_publishes_every_variable(wfn):
 def test_print_option_is_a_declared_global_defaulting_to_one():
     psi4.core.clean_options()
     assert psi4.core.get_global_option('ATOMIC_PROPERTY_PRINT') == 1
+
+
+# ------------------------------------------------- dispersion parameters ----
+
+_SYNTHETIC = lw.Provenance('synthetic', '0' * 64, 'pytest reporting fixture',
+                           'Not molecular or native acceptance')
+
+
+def _factory(n=2, frequencies=(0., 1.)):
+    """A real factory LW model, so the producer-owned banners run the real stage.
+
+    Synthetic tensors: this pins the reporting surface, never a C_n value.
+    """
+    raw = np.zeros((len(frequencies), n, n, 16, 16))
+    block = np.diag(np.arange(1., 16.))
+    for f, xi in enumerate(frequencies):
+        for s in range(n):
+            raw[f, s, s, 1:, 1:] = block * (s + 1) / (1. + xi * xi)
+    return lw.supplied_nonlocal_properties(
+        labels=[f'S{s}' for s in range(n)], origins=[[0., 0., 3. * s] for s in range(n)],
+        bonds=[], frequencies=list(frequencies), tensors=raw, input_rank=3,
+        provenance=_SYNTHETIC)
+
+
+def _placement(t=(0., 0., 0.)):
+    return lw.Placement(np.eye(3), t)
+
+
+def _placed(n=3):
+    snap = lw.ArraySnapshot.of
+    return lw.PlacedGeometry(origins=snap(np.zeros((n, 3))),
+                             source_frames=snap(np.zeros((n, 3, 3))),
+                             component_frames=snap(np.zeros((n, 3, 3))),
+                             core_provenance='pytest placement')
+
+
+def _anisotropic(*, unrestricted_c7=False):
+    """Orders 6 and 7, with 7 complete in the declared model but not unrestricted.
+
+    That combination is the one the two flags exist to distinguish, so the
+    fixture carries it rather than making both flags agree.
+    """
+    model = _local_properties(n_freq=2)
+
+    def coefficients(scale):
+        return (lw.AnisotropicCoefficient(6, 2. * scale, -2. * scale / 64.,
+                                          ((1, 1, 1, 1),), (), True, True),
+                lw.AnisotropicCoefficient(7, .5 * scale, -.5 * scale / 128.,
+                                          ((1, 1, 1, 2), (1, 2, 1, 1)),
+                                          () if unrestricted_c7 else ((1, 1, 1, 5),),
+                                          True, unrestricted_c7))
+    pairs = []
+    for a, b in ((0, 1), (1, 0)):
+        coeffs = coefficients(1. + a + b)
+        pairs.append(lw.AnisotropicPair(a, b, model.labels[a], model.labels[b], 2. + a + b,
+                                        (0., 0., 2. + a + b), (0., 0., 1.), coeffs,
+                                        sum(c.energy for c in coeffs)))
+    return lw.AnisotropicDispersion(
+        model_a=model, model_b=model, placement_a=_placement(),
+        placement_b=_placement((0., 0., 2.)), placed_a=_placed(), placed_b=_placed(),
+        frequencies=model.frequencies, cp_weights=(0., .25), quadrature_provenance=None,
+        max_order=7, pairs=tuple(pairs),
+        truncated_energy=sum(p.truncated_energy for p in pairs))
+
+
+def test_dispersion_record_fields_name_only_declared_fields():
+    """The skip list is a partition of real fields, not a bag of stale names."""
+    declared = {f.name for f in dataclasses.fields(lw.IsotropicDispersion)}
+    declared |= {f.name for f in dataclasses.fields(lw.AnisotropicDispersion)}
+    assert set(lg.DISPERSION_RECORD_FIELDS) <= declared
+
+
+@pytest.mark.parametrize('record', ['isotropic', 'anisotropic'])
+def test_every_dispersion_record_field_is_skipped_or_narrated(record):
+    obj = _dispersion() if record == 'isotropic' else _anisotropic()
+    narrated = {name for name, _ in
+                lg.dataclass_parameters(obj, skip=lg.DISPERSION_RECORD_FIELDS)}
+    for field in dataclasses.fields(obj):
+        assert field.name in lg.DISPERSION_RECORD_FIELDS or field.name in narrated
+
+
+#: Each keyword-only knob of a producer, and a narrated name that carries it.
+#: Comparing the key set with the live signature is the point: a knob added to
+#: either producer later fails this test until its banner names it.
+_ISOTROPIC_KNOBS = {'max_order': 'max_order',
+                    'cp_weights': 'quadrature nodes',
+                    'quadrature_provenance': 'quadrature.description',
+                    'site_ranks_a': 'A.site_ranks',
+                    'site_ranks_b': 'B.site_ranks'}
+_ANISOTROPIC_KNOBS = {'max_order': 'max_order',
+                      'cp_weights': 'quadrature nodes',
+                      'quadrature_provenance': 'quadrature.description',
+                      'placement_a': 'A.placement.translation [bohr]',
+                      'placement_b': 'B.placement.translation [bohr]'}
+
+
+def _keyword_knobs(producer):
+    return {name for name, p in inspect.signature(producer).parameters.items()
+            if p.kind is p.KEYWORD_ONLY and name not in ('log', 'wfn')}
+
+
+def test_dispersion_parameters_narrate_every_producer_knob():
+    assert _keyword_knobs(lw.isotropic_dispersion) == set(_ISOTROPIC_KNOBS)
+    model = _local_properties()
+    names = {name for name, _ in lg.dispersion_parameters(
+        model_a=model, model_b=model, max_order=12, cp_weights=(1.,),
+        quadrature_provenance=model.provenance)}
+    for narrated in _ISOTROPIC_KNOBS.values():
+        assert narrated in names
+
+
+def test_anisotropic_parameters_narrate_every_producer_knob():
+    assert _keyword_knobs(lw.anisotropic_dispersion) == set(_ANISOTROPIC_KNOBS)
+    model = _local_properties()
+    names = {name for name, _ in lg.anisotropic_dispersion_parameters(
+        model_a=model, model_b=model, placement_a=_placement(),
+        placement_b=_placement((0., 0., 2.)), max_order=12, cp_weights=(1.,),
+        quadrature_provenance=model.provenance)}
+    for narrated in _ANISOTROPIC_KNOBS.values():
+        assert narrated in names
+    assert 'not declarable: ranks 1..3 of raw_global on every site' in dict(
+        lg.anisotropic_dispersion_parameters(
+            model_a=model, model_b=model, placement_a=_placement(),
+            placement_b=_placement(), max_order=12, cp_weights=(1.,),
+            quadrature_provenance=None))['site ranks']
+
+
+def test_dispersion_parameters_report_both_model_identities():
+    """A C_n is only as declared as the two models it contracts."""
+    model = _local_properties()
+    got = dict(lg.dispersion_parameters(model_a=model, model_b=model, max_order=12,
+                                        cp_weights=(1.,), quadrature_provenance=None))
+    for side in ('A.', 'B.'):
+        assert got[side + 'localization_rank_limit'] == 3
+        assert got[side + 'residual_policy'] == 'production'
+        assert got[side + 'canonical_input_array_sha256'] == '0' * 64
+    assert got['model B'].startswith('this same model')
+    assert got['CP weight sum'] == pytest.approx(1.)
+    assert got['quadrature.provenance'] == 'none declared with this record'
+
+
+def test_declared_site_ranks_resolve_from_the_model_when_undeclared():
+    """``None`` means every rank the model was localized at, not a fixed (1,2,3)."""
+    model = _local_properties()
+    default = dict(lg.declared_site_ranks(model, None, prefix='A.'))
+    assert 'read off' in default['A.site_ranks']
+    assert default['A.resolved site ranks'] == ((1, 2, 3),) * 3
+    declared = dict(lg.declared_site_ranks(model, ((1,), (1, 2), (1, 2, 3)), prefix='A.'))
+    assert declared['A.site_ranks'] == 'declared explicitly, per site'
+    assert declared['A.resolved site ranks'] == ((1,), (1, 2), (1, 2, 3))
+
+
+def test_absent_quadrature_provenance_is_reported_not_omitted():
+    log, cap = _log(2)
+    lg.report_quadrature(log, (0., 1.), (0., .25))
+    assert 'no quadrature provenance is declared on this record' in cap.text
+    assert lg.provenance_parameters(None, prefix='q.') == (
+        ('q.provenance', 'none declared with this record'),)
+
+
+def test_report_quadrature_needs_both_sequences():
+    log, cap = _log(3)
+    lg.report_quadrature(log, None, (0., .25))
+    lg.report_quadrature(log, (0., 1.), None)
+    assert cap.text == ''
+
+
+def test_comparability_table_precedes_the_rank_pair_inventory():
+    """The level-1 warning comes first; the inventory below it is the evidence."""
+    log, cap = _log(2)
+    lg.report_dispersion(log, None, _dispersion())
+    assert cap.text.index('Rank pairs absent from each order') < cap.text.index(
+        'Rank pairs entering each order')
+
+
+def test_rank_pair_inventory_is_level_two_only():
+    log1, cap1 = _log(1)
+    lg.report_dispersion(log1, None, _dispersion())
+    assert 'Rank pairs entering each order' not in cap1.text
+    log2, cap2 = _log(2)
+    lg.report_dispersion(log2, None, _dispersion())
+    assert 'Rank pairs entering each order (union over the ordered site pairs)' in cap2.text
+    assert 'not because its contribution was found small' in cap2.text
+
+
+def test_dispersion_narration_reports_the_quadrature_it_contracted():
+    log, cap = _log(2)
+    lg.report_dispersion(log, None, _dispersion())
+    assert 'Casimir-Polder quadrature' in cap.text
+    assert 'quadrature nodes' in cap.text
+
+
+def test_dispersion_publishes_the_quadrature_alongside_the_coefficients(wfn):
+    lg.report_dispersion(lg.silent(), wfn, _dispersion())
+    assert wfn.variable('ATOMIC DISPERSION SITE PAIRS') == pytest.approx(9.)
+    assert wfn.variable('ATOMIC DISPERSION MAX ORDER') == pytest.approx(12.)
+    assert wfn.variable('ATOMIC DISPERSION QUADRATURE NODES') == pytest.approx(1.)
+    assert np.asarray(wfn.variable('ATOMIC DISPERSION CP WEIGHTS')).shape == (1, 1)
+    assert np.asarray(wfn.variable('ATOMIC DISPERSION QUADRATURE FREQUENCIES')).shape == (1, 1)
+
+
+# --------------------------------------- oriented (anisotropic) dispersion ----
+
+def test_placement_parameters_identify_the_rotation_by_hash():
+    got = dict(lg.placement_parameters(_placement((0., 0., 2.)), prefix='B.placement.'))
+    assert got['B.placement.translation [bohr]'] == (0., 0., 2.)
+    assert got['B.placement.rotation'] == 'explicit identity'
+    assert got['B.placement.rotation trace'] == pytest.approx(3.)
+    assert len(got['B.placement.rotation_sha256']) == 64
+    assert got['B.placement.translation_sha256'] != got['B.placement.rotation_sha256']
+
+
+def test_anisotropic_tables_print_both_completeness_flags():
+    log, cap = _log(1)
+    lg.report_anisotropic_dispersion(log, None, _anisotropic())
+    assert 'Orientation-resolved dispersion coefficients (ordered A x B pairs)' in cap.text
+    assert 'declared complete' in cap.text and 'unrestricted complete' in cap.text
+    assert 'Placed site-pair geometry' in cap.text
+    assert 'truncated interaction energy [Eh]' in cap.text
+    assert 'no damping, no retardation' in cap.text
+    # An oriented scalar must never be readable as an isotropic C_n.
+    assert 'orientation_resolved_scalars_not_recoupled_components' in cap.text
+
+
+def test_anisotropic_energy_table_and_quadruple_counts_are_level_two():
+    log1, cap1 = _log(1)
+    lg.report_anisotropic_dispersion(log1, None, _anisotropic())
+    assert 'Orientation-resolved -C_n/R^n contributions' not in cap1.text
+    assert 'Rank quadruples entering each order' not in cap1.text
+    log2, cap2 = _log(2)
+    lg.report_anisotropic_dispersion(log2, None, _anisotropic())
+    assert 'Orientation-resolved -C_n/R^n contributions [Eh]' in cap2.text
+    assert 'Rank quadruples entering each order' in cap2.text
+    assert 'theoretical ranks 5..7 no rank-3 model can carry' in cap2.text
+    # Counts, never the quadruple lists themselves.
+    assert '(1, 1, 1, 2)' not in cap2.text
+
+
+def test_incomplete_anisotropic_order_is_published_only_as_incomplete(wfn):
+    """The name mark follows ``unrestricted_complete``, as the isotropic stage does."""
+    lg.report_anisotropic_dispersion(lg.silent(), wfn, _anisotropic())
+    assert wfn.has_variable('ATOMIC ANISOTROPIC DISPERSION C6 O1 H2')
+    assert wfn.has_variable('ATOMIC ANISOTROPIC DISPERSION C6 TOTAL')
+    assert wfn.has_variable('ATOMIC ANISOTROPIC DISPERSION C7 O1 H2 INCOMPLETE')
+    assert not wfn.has_variable('ATOMIC ANISOTROPIC DISPERSION C7 O1 H2')
+    assert wfn.has_variable('ATOMIC ANISOTROPIC DISPERSION C7 ENERGY O1 H2 INCOMPLETE')
+    assert wfn.has_variable('ATOMIC ANISOTROPIC DISPERSION C7 TOTAL INCOMPLETE')
+    assert wfn.has_variable('ATOMIC ANISOTROPIC DISPERSION C7 TOTAL ENERGY INCOMPLETE')
+    assert not wfn.has_variable('ATOMIC ANISOTROPIC DISPERSION C7 TOTAL')
+
+
+def test_complete_anisotropic_order_drops_the_incomplete_mark(wfn):
+    lg.report_anisotropic_dispersion(lg.silent(), wfn, _anisotropic(unrestricted_c7=True))
+    assert wfn.has_variable('ATOMIC ANISOTROPIC DISPERSION C7 TOTAL')
+    assert not wfn.has_variable('ATOMIC ANISOTROPIC DISPERSION C7 TOTAL INCOMPLETE')
+
+
+def test_anisotropic_variables_keep_their_declared_shapes(wfn):
+    record = _anisotropic()
+    lg.report_anisotropic_dispersion(lg.silent(), wfn, record)
+    assert wfn.variable('ATOMIC ANISOTROPIC DISPERSION TRUNCATED ENERGY') == pytest.approx(
+        record.truncated_energy)
+    assert wfn.variable('ATOMIC ANISOTROPIC DISPERSION MAX ORDER') == pytest.approx(7.)
+    assert wfn.variable('ATOMIC ANISOTROPIC DISPERSION SITE PAIRS') == pytest.approx(2.)
+    assert wfn.variable('ATOMIC ANISOTROPIC DISPERSION QUADRATURE NODES') == pytest.approx(2.)
+    for name in ('QUADRATURE FREQUENCIES', 'CP WEIGHTS', 'PAIR DISTANCES'):
+        assert np.asarray(wfn.variable(
+            'ATOMIC ANISOTROPIC DISPERSION ' + name)).shape == (1, 2)
+    assert wfn.variable('ATOMIC ANISOTROPIC DISPERSION PAIR ENERGY O1 H2') == pytest.approx(
+        record.pairs[0].truncated_energy)
+
+
+def test_anisotropic_narration_needs_no_wavefunction():
+    log, cap = _log(3)
+    lg.report_anisotropic_dispersion(log, None, _anisotropic())
+    assert 'Sum over all ordered site pairs' in cap.text
+    assert 'not printed' not in cap.text
+
+
+def test_empty_anisotropic_record_reports_nothing_it_does_not_have():
+    record = dataclasses.replace(_anisotropic(), pairs=(), truncated_energy=0.)
+    log, cap = _log(3)
+    lg.report_anisotropic_dispersion(log, None, record)
+    assert 'Orientation-resolved dispersion coefficients' not in cap.text
+    assert 'Rank quadruples entering each order' not in cap.text
+
+
+# ------------------------------------------------ producer-owned banners ----
+
+def test_isotropic_producer_owns_exactly_one_stage_banner():
+    """The producer, not the caller, narrates: only it knows the resolved ranks."""
+    log, cap = _log(2)
+    model = _factory()
+    record = lw.isotropic_dispersion(model, model, cp_weights=[0., .25],
+                                     quadrature_provenance=_SYNTHETIC, max_order=6, log=log)
+    assert cap.text.count('==> Stage: isotropic dispersion coefficients (Casimir-Polder)') == 1
+    assert 'A.resolved site ranks' in cap.text
+    assert 'Pairwise isotropic dispersion coefficients' in cap.text
+    assert [c.order for c in record.pairs[0].coefficients] == [6]
+
+
+def test_anisotropic_producer_owns_exactly_one_stage_banner():
+    log, cap = _log(2)
+    model = _factory()
+    lw.anisotropic_dispersion(model, model, placement_a=_placement(),
+                              placement_b=_placement((0., 0., 8.)), cp_weights=[0., .25],
+                              quadrature_provenance=_SYNTHETIC, max_order=7, log=log)
+    assert cap.text.count('==> Stage: oriented (anisotropic) dispersion coefficients') == 1
+    assert 'not declarable: ranks 1..3 of raw_global on every site' in cap.text
+    assert 'Orientation-resolved dispersion coefficients' in cap.text
+    assert 'A.placement.rotation_sha256' in cap.text
+
+
+def test_producers_are_silent_and_publish_nothing_by_default(wfn):
+    model = _factory()
+    lw.isotropic_dispersion(model, model, cp_weights=[0., .25],
+                            quadrature_provenance=_SYNTHETIC, max_order=6)
+    assert not wfn.has_variable('ATOMIC DISPERSION C6 TOTAL')
+    lw.isotropic_dispersion(model, model, cp_weights=[0., .25],
+                            quadrature_provenance=_SYNTHETIC, max_order=6, wfn=wfn)
+    assert wfn.has_variable('ATOMIC DISPERSION C6 TOTAL')
+    lw.anisotropic_dispersion(model, model, placement_a=_placement(),
+                              placement_b=_placement((0., 0., 8.)), cp_weights=[0., .25],
+                              quadrature_provenance=_SYNTHETIC, max_order=6, wfn=wfn)
+    assert wfn.has_variable('ATOMIC ANISOTROPIC DISPERSION TRUNCATED ENERGY')
 
 
 # ----------------------------------------------------------------- PFIT ----

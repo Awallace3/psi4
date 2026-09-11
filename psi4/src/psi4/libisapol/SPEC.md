@@ -221,6 +221,26 @@ publishes nothing: it creates no seal and applies nothing. Publication belongs t
 `apply_declared_ac(wfn, record, log=)`, the named mutation that owns the
 corrected state, and happens after each of its refusals.
 
+The two dispersion producers in `isapol_lw` own their banners on the same terms,
+because each holds something a caller would have to guess: `isotropic_dispersion`
+is the only place that knows which per-site ranks it resolved off each model --
+an undeclared `site_ranks_*` means every rank that model was actually localized
+at, read off its own limit, not a fixed `(1, 2, 3)` -- and `anisotropic_dispersion`
+is the only place that holds both placements, which it reports by hash rather than
+by matrix. Both take `log=` and `wfn=` as reporting surfaces only; nothing is read
+back, and passing a wavefunction does not make a C_n a property of it, because the
+caller owns the two models and, for the oriented adapter, the two placements. Each
+stage narrates the Casimir-Polder nodes its own record holds, and a record that
+declares no quadrature provenance is reported as the absence it is. Completeness
+is stated identically in both: an order missing a rank pair (or rank quadruple) is
+a different sum from the complete one rather than a noisier estimate of it, its
+evidence is the included/absent rank inventory tabulated beneath the coefficients,
+and its QCVariable name carries ` INCOMPLETE`. The oriented adapter's numbers are
+orientation-resolved scalars, published under `ATOMIC ANISOTROPIC DISPERSION`
+names and never as isotropic `C_n`; it reports both of its completeness flags and
+marks the name on `unrestricted_complete`, so the two stages mean the same thing
+by the same word.
+
 Details: [NATIVE_OEPROP.md](NATIVE_OEPROP.md),
 [NATIVE_FIXED_GRAC.md](NATIVE_FIXED_GRAC.md),
 [NATIVE_DECLARED_AC.md](NATIVE_DECLARED_AC.md),

@@ -274,14 +274,23 @@ def report_work_estimate(log, estimate):
     log.line()
 
 
-def report_quadrature(log, quadrature, level=2):
-    """Casimir-Polder nodes and weights: the complete authoritative node list."""
-    if quadrature is None:
+def report_quadrature(log, frequencies, cp_weights, provenance=None, level=2):
+    """Casimir-Polder nodes and weights: the complete authoritative node list.
+
+    The two sequences are taken directly rather than a ``Quadrature`` object so
+    that a stage narrates the grid its own record holds -- the nodes that were
+    actually contracted -- instead of a caller-side object that need not be the
+    one the record was built from.  A record may carry no provenance; that is
+    reported as the absence it is, not omitted.
+    """
+    if frequencies is None or cp_weights is None:
         return
     log.table('Casimir-Polder quadrature (CP weights already include 1/(2*pi)):',
               ('node', 'xi [Eh]', 'CP weight'),
-              [(i, f, w) for i, (f, w) in enumerate(zip(quadrature.frequencies, quadrature.cp_weights))],
-              level=level, note='provenance: ' + quadrature.provenance.description)
+              [(i, f, w) for i, (f, w) in enumerate(zip(frequencies, cp_weights))],
+              level=level,
+              note=('provenance: ' + provenance.description) if provenance is not None
+              else 'no quadrature provenance is declared on this record')
 
 
 # -------------------------------------------------------------- partition ----
@@ -545,12 +554,95 @@ def report_atomic_polarizabilities(log, wfn, local):
 
 # --------------------------------------------------------------- dispersion ----
 
-def dispersion_parameters(*, max_order, pair_self, partner, quadrature):
-    return (('max_order', max_order),
-            ('model B', 'this same model (pair_self)' if pair_self
-             else ('declared partner' if partner is not None else 'none')),
-            ('quadrature nodes', 0 if quadrature is None else len(quadrature.frequencies)),
-            ('CP weight convention', 'includes the Jacobian and 1/(2*pi) exactly once'))
+#: ``IsotropicDispersion``/``AnisotropicDispersion`` fields that ARE the result
+#: or one of its two source models rather than a knob of the stage.  They are
+#: narrated as counts, hashes and tables instead of being rendered into a
+#: parameter block, where a whole ``LocalProperties`` or the pair list would be
+#: a raw intermediate.  Every other declared field of either record is
+#: enumerated from the dataclass, so a field added to them later appears in the
+#: stage report without touching this module.
+DISPERSION_RECORD_FIELDS = ('model_a', 'model_b', 'pairs', 'frequencies', 'cp_weights',
+                            'quadrature_provenance', 'placement_a', 'placement_b',
+                            'placed_a', 'placed_b', 'truncated_energy')
+
+
+def provenance_parameters(provenance, *, prefix):
+    """A declared ``Provenance``, or the explicit fact that none was declared."""
+    if provenance is None:
+        return ((prefix + 'provenance', 'none declared with this record'),)
+    return dataclass_parameters(provenance, prefix=prefix)
+
+
+def dispersion_model_parameters(model, *, prefix):
+    """Declared identity of one localized model entering the contraction.
+
+    A C_n is only as declared as the two models it contracts, so each side's
+    rank limit, residual policy, postcondition verdict, refinement status and
+    input hashes belong in the banner.  The tensors themselves are not printed
+    here: the localization stage owns them.
+    """
+    m = model.metadata
+    return ((prefix + 'sites', len(model.labels)),
+            (prefix + 'labels', model.labels),
+            (prefix + 'frequency nodes', len(model.frequencies)),
+            (prefix + 'localization_rank_limit', m.localization_rank_limit),
+            (prefix + 'mode', m.mode),
+            (prefix + 'tensor_origin', m.tensor_origin),
+            (prefix + 'residual_policy', m.residual_policy),
+            (prefix + 'residual_tolerance', m.residual_tolerance),
+            (prefix + 'production_postcondition_passed', m.production_postcondition_passed),
+            (prefix + 'refinement_status', m.refinement_status),
+            (prefix + 'wavefunction_status', m.wavefunction_status),
+            (prefix + 'native_verified', m.native_verified),
+            (prefix + 'source_sha256', model.provenance.source_sha256),
+            (prefix + 'canonical_input_array_sha256', m.canonical_input_array_sha256))
+
+
+def declared_site_ranks(model, declared, *, prefix):
+    """The per-site rank declaration exactly as the producer resolves it.
+
+    ``None`` does not mean ``(1, 2, 3)``: it means every rank the model was
+    actually localized at, read off that model's own limit.  Which of the two
+    happened decides whether an order comes out complete, so the resolved
+    tuples are printed rather than the argument as it was passed.
+    """
+    limit = int(model.metadata.localization_rank_limit)
+    if declared is None:
+        return ((prefix + 'site_ranks', 'not declared: ranks 1..%d on every site, read off '
+                 "this model's own localization rank limit" % limit),
+                (prefix + 'resolved site ranks',
+                 (tuple(range(1, limit + 1)),) * len(model.labels)))
+    return ((prefix + 'site_ranks', 'declared explicitly, per site'),
+            (prefix + 'resolved site ranks', tuple(tuple(site) for site in declared)))
+
+
+def cp_weight_parameters(cp_weights):
+    """The quadrature knob as a count and a sum; the node list is tabulated."""
+    weights = () if cp_weights is None else tuple(float(w) for w in cp_weights)
+    return (('quadrature nodes', len(weights)),
+            ('CP weight sum', float(np.sum(weights)) if weights else 0.),
+            ('CP weight convention', 'includes the Jacobian and 1/(2*pi) exactly once'),
+            ('static node weight', 'zero by construction; a nonzero one is refused'))
+
+
+def dispersion_parameters(*, model_a, model_b, max_order, cp_weights, quadrature_provenance,
+                          site_ranks_a=None, site_ranks_b=None):
+    """Every tweakable input of the isotropic C_n contraction.
+
+    The knobs are ``max_order``, the CP weights and the two per-site rank
+    declarations; the rest of the block is the declared identity of the two
+    models and of the quadrature, without which a C_n is not interpretable.
+    """
+    return ((('max_order', max_order),
+             ('admitted max_order values', '6, 8, 10, 12; odd orders are refused here'),
+             ('model B', 'this same model (pair_self)' if model_b is model_a
+              else 'a separately declared partner model'))
+            + cp_weight_parameters(cp_weights)
+            + declared_site_ranks(model_a, site_ranks_a, prefix='A.')
+            + declared_site_ranks(model_b, site_ranks_b, prefix='B.')
+            + dispersion_model_parameters(model_a, prefix='A.')
+            + dispersion_model_parameters(model_b, prefix='B.')
+            + provenance_parameters(quadrature_provenance, prefix='quadrature.'))
 
 
 def report_dispersion(log, wfn, dispersion):
@@ -564,9 +656,11 @@ def report_dispersion(log, wfn, dispersion):
     labels_a = dispersion.model_a.labels
     labels_b = dispersion.model_b.labels
     orders = tuple(c.order for c in dispersion.pairs[0].coefficients) if dispersion.pairs else ()
-    log.items((('units', dispersion.units), ('origin', dispersion.origin),
-               ('anisotropic status', dispersion.anisotropic_status),
-               ('site pairs', len(dispersion.pairs)), ('orders', orders)))
+    log.items(dataclass_parameters(dispersion, skip=DISPERSION_RECORD_FIELDS)
+              + (('site pairs', len(dispersion.pairs)), ('orders', orders),
+                 ('quadrature nodes', len(dispersion.cp_weights))))
+    report_quadrature(log, dispersion.model_a.frequencies, dispersion.cp_weights,
+                      dispersion.quadrature_provenance)
     same = [p for p in dispersion.pairs
             if p.site_a == p.site_b and labels_a[p.site_a] == labels_b[p.site_b]]
     if same:
@@ -588,6 +682,7 @@ def report_dispersion(log, wfn, dispersion):
         log.table('Rank pairs absent from each order (these orders are not comparable '
                   'with complete ones):', ('order', 'missing (la, lb)'),
                   [(n, tuple(sorted(missing[n]))) for n in sorted(missing)])
+    report_rank_pair_inventory(log, dispersion)
     totals = _dispersion_totals(dispersion, orders)
     log.table('Sum over all ordered site pairs:', ('order', 'sum', 'complete'),
               [(n, totals[n][0], totals[n][1]) for n in orders],
@@ -609,6 +704,38 @@ def report_dispersion(log, wfn, dispersion):
         value, complete = totals[n]
         key = f'ATOMIC DISPERSION C{n} TOTAL'
         _set(wfn, key if complete else key + ' INCOMPLETE', float(value))
+    _set(wfn, 'ATOMIC DISPERSION SITE PAIRS', float(len(dispersion.pairs)))
+    _set(wfn, 'ATOMIC DISPERSION MAX ORDER', float(max(orders)) if orders else 0.)
+    _set(wfn, 'ATOMIC DISPERSION QUADRATURE NODES', float(len(dispersion.cp_weights)))
+    if dispersion.cp_weights:
+        _set(wfn, 'ATOMIC DISPERSION QUADRATURE FREQUENCIES',
+             _matrix(np.asarray(dispersion.model_a.frequencies, dtype=float).reshape(1, -1)))
+        _set(wfn, 'ATOMIC DISPERSION CP WEIGHTS',
+             _matrix(np.asarray(dispersion.cp_weights, dtype=float).reshape(1, -1)))
+
+
+def report_rank_pair_inventory(log, dispersion, level=2):
+    """Which ``(la, lb)`` rank pairs each order actually contracted, and which are absent.
+
+    The union over the ordered site pairs, so a rank limited on one site alone
+    still shows up.  This is the evidence behind the ``complete`` column: an
+    order missing a rank pair is a different sum from the complete one, not a
+    noisier estimate of it.
+    """
+    included, missing = {}, {}
+    for p in dispersion.pairs:
+        for c in p.coefficients:
+            included.setdefault(c.order, set()).update(c.included_rank_pairs)
+            missing.setdefault(c.order, set()).update(c.missing_rank_pairs)
+    orders = sorted(set(included) | set(missing))
+    if not orders:
+        return
+    log.table('Rank pairs entering each order (union over the ordered site pairs):',
+              ('order', 'included (la, lb)', 'missing (la, lb)'),
+              [(n, tuple(sorted(included.get(n, ()))), tuple(sorted(missing.get(n, ()))))
+               for n in orders], level=level,
+              note='a rank pair is absent because a site was localized below that rank, '
+                   'not because its contribution was found small')
 
 
 def _dispersion_totals(dispersion, orders):
@@ -622,6 +749,170 @@ def _dispersion_totals(dispersion, orders):
                     value += float(c.value)
                     complete = complete and bool(c.unrestricted_complete)
         totals[n] = (value, complete)
+    return totals
+
+
+# --------------------------------------------- oriented (anisotropic) C_n ----
+
+def placement_parameters(placement, *, prefix):
+    """One whole-model placement, by its declared hashes rather than its matrix.
+
+    A placement is an explicit input even when it is the identity, so it is
+    enumerated either way; the rotation is identified by hash because printing
+    a 3x3 per model in the banner is noise, and the hash is what the core
+    provenance string carries.
+    """
+    rotation = placement.rotation.array
+    return ((prefix + 'translation [bohr]', tuple(map(float, placement.translation.array))),
+            (prefix + 'rotation', 'explicit identity' if np.array_equal(rotation, np.eye(3))
+             else 'explicit proper rotation'),
+            (prefix + 'rotation trace', float(np.trace(rotation))),
+            (prefix + 'rotation_sha256', placement.rotation.canonical_array_sha256),
+            (prefix + 'translation_sha256', placement.translation.canonical_array_sha256))
+
+
+def anisotropic_dispersion_parameters(*, model_a, model_b, placement_a, placement_b,
+                                      max_order, cp_weights, quadrature_provenance):
+    """Every tweakable input of the orientation-resolved C_n contraction.
+
+    Ranks are not declarable at this adapter -- it contracts ranks 1..3 of
+    ``raw_global`` on every site -- and odd orders are admitted here, unlike the
+    isotropic stage, so both facts are stated rather than left to be inferred
+    from an absent knob.  The reciprocity requirement is a parameter of the
+    stage in the sense that matters: it is exact, and there is no policy that
+    loosens it.
+    """
+    return ((('max_order', max_order),
+             ('admitted max_order range', '6..12 inclusive, odd orders included'),
+             ('site ranks', 'not declarable: ranks 1..3 of raw_global on every site'),
+             ('reciprocity policy', 'exact equality required; no repair, no tolerance, '
+                                    'no isotropic fallback'),
+             ('model B', 'this same model' if model_b is model_a
+              else 'a separately declared partner model'))
+            + cp_weight_parameters(cp_weights)
+            + placement_parameters(placement_a, prefix='A.placement.')
+            + placement_parameters(placement_b, prefix='B.placement.')
+            + dispersion_model_parameters(model_a, prefix='A.')
+            + dispersion_model_parameters(model_b, prefix='B.')
+            + provenance_parameters(quadrature_provenance, prefix='quadrature.'))
+
+
+def report_anisotropic_dispersion(log, wfn, dispersion):
+    """Stage exit for the oriented C_n adapter: geometry, C_n, energies, totals.
+
+    These are orientation-resolved *scalars*, not recoupled ``C_n(t, u, J)``
+    components; the record says so and the variable names carry the distinction,
+    so an oriented scalar can never be read back as an isotropic C_n.  Each
+    coefficient carries two completeness flags -- complete within the declared
+    rank-3 model, and complete against the unrestricted rank sum -- and both are
+    printed.  The ``INCOMPLETE`` name mark follows ``unrestricted_complete``,
+    the same convention the isotropic stage uses, so the two publications mean
+    the same thing by the same word.
+    """
+    orders = tuple(c.order for c in dispersion.pairs[0].coefficients) if dispersion.pairs else ()
+    log.items(dataclass_parameters(dispersion, skip=DISPERSION_RECORD_FIELDS)
+              + (('site pairs', len(dispersion.pairs)), ('orders', orders),
+                 ('quadrature nodes', len(dispersion.cp_weights)),
+                 ('truncated interaction energy [Eh]', float(dispersion.truncated_energy)),
+                 ('energy convention', 'sum of -C_n/R^n through max_order; no damping, no '
+                                       'retardation, and no positivity guarantee')))
+    report_quadrature(log, dispersion.frequencies, dispersion.cp_weights,
+                      dispersion.quadrature_provenance)
+    log.table('Placed site-pair geometry (R = B - A; direction is the unit vector along it):',
+              ('A', 'B', 'R [bohr]', 'ex', 'ey', 'ez', 'pair energy [Eh]'),
+              [(p.label_a, p.label_b, p.distance) + tuple(p.direction) + (p.truncated_energy,)
+               for p in dispersion.pairs])
+    if orders:
+        log.table('Orientation-resolved dispersion coefficients (ordered A x B pairs):',
+                  ('A', 'B') + tuple('C%d' % n for n in orders)
+                  + ('declared complete', 'unrestricted complete'),
+                  [(p.label_a, p.label_b) + tuple(c.value for c in p.coefficients)
+                   + (all(c.declared_model_complete for c in p.coefficients),
+                      all(c.unrestricted_complete for c in p.coefficients))
+                   for p in dispersion.pairs])
+        log.table('Orientation-resolved -C_n/R^n contributions [Eh]:',
+                  ('A', 'B') + tuple('E%d' % n for n in orders) + ('pair total',),
+                  [(p.label_a, p.label_b) + tuple(c.energy for c in p.coefficients)
+                   + (p.truncated_energy,) for p in dispersion.pairs], level=2)
+    report_rank_quadruple_inventory(log, dispersion)
+    totals = _anisotropic_totals(dispersion, orders)
+    log.table('Sum over all ordered site pairs:',
+              ('order', 'sum C_n', 'sum -C_n/R^n [Eh]', 'declared complete',
+               'unrestricted complete'),
+              [(n,) + totals[n] for n in orders],
+              note='an incomplete sum is not comparable with a complete reference and is '
+                   'published only under an INCOMPLETE-marked variable name')
+    if wfn is None:
+        return
+    for p in dispersion.pairs:
+        for c in p.coefficients:
+            mark = '' if c.unrestricted_complete else ' INCOMPLETE'
+            _set(wfn, f'ATOMIC ANISOTROPIC DISPERSION C{c.order} '
+                      f'{p.label_a} {p.label_b}' + mark, float(c.value))
+            _set(wfn, f'ATOMIC ANISOTROPIC DISPERSION C{c.order} ENERGY '
+                      f'{p.label_a} {p.label_b}' + mark, float(c.energy))
+        _set(wfn, f'ATOMIC ANISOTROPIC DISPERSION PAIR ENERGY '
+                  f'{p.label_a} {p.label_b}', float(p.truncated_energy))
+    for n in orders:
+        value, energy, _declared, unrestricted = totals[n]
+        mark = '' if unrestricted else ' INCOMPLETE'
+        _set(wfn, f'ATOMIC ANISOTROPIC DISPERSION C{n} TOTAL' + mark, float(value))
+        _set(wfn, f'ATOMIC ANISOTROPIC DISPERSION C{n} TOTAL ENERGY' + mark, float(energy))
+    _set(wfn, 'ATOMIC ANISOTROPIC DISPERSION TRUNCATED ENERGY',
+         float(dispersion.truncated_energy))
+    _set(wfn, 'ATOMIC ANISOTROPIC DISPERSION MAX ORDER', float(dispersion.max_order))
+    _set(wfn, 'ATOMIC ANISOTROPIC DISPERSION SITE PAIRS', float(len(dispersion.pairs)))
+    _set(wfn, 'ATOMIC ANISOTROPIC DISPERSION QUADRATURE NODES',
+         float(len(dispersion.cp_weights)))
+    if dispersion.cp_weights:
+        _set(wfn, 'ATOMIC ANISOTROPIC DISPERSION QUADRATURE FREQUENCIES',
+             _matrix(np.asarray(dispersion.frequencies, dtype=float).reshape(1, -1)))
+        _set(wfn, 'ATOMIC ANISOTROPIC DISPERSION CP WEIGHTS',
+             _matrix(np.asarray(dispersion.cp_weights, dtype=float).reshape(1, -1)))
+    if dispersion.pairs:
+        _set(wfn, 'ATOMIC ANISOTROPIC DISPERSION PAIR DISTANCES',
+             _matrix(np.asarray([p.distance for p in dispersion.pairs],
+                                dtype=float).reshape(1, -1)))
+
+
+def report_rank_quadruple_inventory(log, dispersion, level=2):
+    """How many ordered ``(la, la', lb, lb')`` quadruples each order contracted.
+
+    The quadruple lists are bulk rather than a property -- the unrestricted set
+    reaches theoretical ranks 5..7, so a single order can name hundreds -- and
+    they are reported as counts.  What matters for comparability is already in
+    the two completeness columns beside them.
+    """
+    included, missing = {}, {}
+    for p in dispersion.pairs:
+        for c in p.coefficients:
+            included.setdefault(c.order, set()).update(c.included_rank_quadruples)
+            missing.setdefault(c.order, set()).update(c.missing_rank_quadruples)
+    orders = sorted(set(included) | set(missing))
+    if not orders:
+        return
+    log.table('Rank quadruples entering each order (union over the ordered site pairs):',
+              ('order', 'included', 'missing'),
+              [(n, len(included.get(n, ())), len(missing.get(n, ()))) for n in orders],
+              level=level,
+              note='the missing set counts unrestricted ranks, including the theoretical '
+                   'ranks 5..7 no rank-3 model can carry; an explicit zero block is included, '
+                   'not missing')
+
+
+def _anisotropic_totals(dispersion, orders):
+    """Per-order sums of C_n and of -C_n/R^n, with both completeness flags kept."""
+    totals = {}
+    for n in orders:
+        value, energy, declared, unrestricted = 0., 0., True, True
+        for p in dispersion.pairs:
+            for c in p.coefficients:
+                if c.order == n:
+                    value += float(c.value)
+                    energy += float(c.energy)
+                    declared = declared and bool(c.declared_model_complete)
+                    unrestricted = unrestricted and bool(c.unrestricted_complete)
+        totals[n] = (value, energy, declared, unrestricted)
     return totals
 
 

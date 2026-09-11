@@ -423,18 +423,17 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
             lg.report_localization(log, None, local)
             lg.report_atomic_polarizabilities(log, None, local)
             if pair_self or partner is not None:
+                # The producer owns this stage's banner, its node table and its
+                # coefficient tables: it is the only place that knows which
+                # per-site ranks it resolved off each model. `stage` is still
+                # named here for StageFailure attribution.
                 stage = 'dispersion'
-                log.stage(stage, lg.dispersion_parameters(
-                    max_order=max_order, pair_self=pair_self, partner=partner,
-                    quadrature=quadrature))
-                lg.report_quadrature(log, quadrature)
                 # No site_ranks_* here: each side's rank set is read off that
                 # side's own model. `partner` is a separately declared model and
                 # may carry a different localization limit than this call's.
                 dispersion = lw.isotropic_dispersion(local, local if pair_self else partner,
                     cp_weights=quadrature.cp_weights, quadrature_provenance=quadrature.provenance,
-                    max_order=max_order)
-                lg.report_dispersion(log, None, dispersion)
+                    max_order=max_order, log=log)
     except Exception as exc:
         failures.append(StageFailure(stage, None, type(exc).__name__, str(exc)))
     log.stage_end()
