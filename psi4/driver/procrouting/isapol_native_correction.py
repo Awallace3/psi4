@@ -70,22 +70,41 @@ def _finite(value):
     return isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value)
 
 
+POLICIES = ('NONE', 'FIXED_GRAC', 'DECLARED_MULTPOLE_AC')
+
+
 def validate_correction(wfn, *, scf_correction='NONE', expected_grac_shift=None,
-                        require_canonical=False):
-    """Accept only NONE or canonical fixed GRAC (.5,40, LB*.75,VWN*1).
+                        ac_declaration=None, require_canonical=False):
+    """Accept only NONE, canonical fixed GRAC (.5,40, LB*.75,VWN*1), or the
+    separately declared MULTPOLE/Tozer-Handy correction.
 
     FIXED_GRAC always requires underlying canonical PBE0 and a current SCF seal.
     NONE preserves the expert producer's non-PBE0 support, not GRAC admission.
     Expected shift is a positive finite Hartree value, compared exactly. It is
     never calculated from an IP/HOMO or inferred from a method/option name.
+    DECLARED_MULTPOLE_AC is a DIFFERENT asymptotic-correction form, not a GRAC
+    profile: it requires its own explicit AcDeclaration and its own producer
+    record, it was not reached by widening FIXED_GRAC or by refitting a GRAC
+    beta, and it carries its own provenance type. Its underlying functional must
+    be unmodified canonical PBE0 with no GRAC attachment, because the correction
+    is applied outside the functional. See ``isapol_native_ac``.
     """
-    if scf_correction not in ('NONE', 'FIXED_GRAC'):
+    if scf_correction not in POLICIES:
         raise ValueError('unsupported native SCF asymptotic correction policy')
-    if scf_correction == 'NONE':
-        if expected_grac_shift is not None:
-            raise ValueError('NONE requires no expected GRAC shift declaration')
-    elif not _finite(expected_grac_shift) or expected_grac_shift <= 0:
-        raise ValueError('FIXED_GRAC requires an explicit positive finite expected GRAC shift')
+    if scf_correction == 'FIXED_GRAC':
+        if not _finite(expected_grac_shift) or expected_grac_shift <= 0:
+            raise ValueError('FIXED_GRAC requires an explicit positive finite expected GRAC shift')
+    elif expected_grac_shift is not None:
+        raise ValueError(f'{scf_correction} requires no expected GRAC shift declaration')
+    if ac_declaration is not None and scf_correction != 'DECLARED_MULTPOLE_AC':
+        raise ValueError(f'{scf_correction} requires no asymptotic-correction declaration')
+    if (scf_correction != 'DECLARED_MULTPOLE_AC'
+            and getattr(wfn, '_declared_ac_evidence', None) is not None):
+        # Closes the mislabel: orbitals carrying a declared AC must never be
+        # admitted under a policy whose provenance reports no correction, or a
+        # GRAC one. Staleness of the SCF seal alone does not cover NONE.
+        raise ValueError(f'{scf_correction} cannot describe orbitals that carry a declared '
+                         'asymptotic correction; use DECLARED_MULTPOLE_AC')
     if not callable(getattr(wfn, 'functional', None)):
         raise ValueError('actual SCF functional state is required for native correction admission')
     functional = wfn.functional()
@@ -94,7 +113,7 @@ def validate_correction(wfn, *, scf_correction='NONE', expected_grac_shift=None,
     shift, alpha, beta, components = correction_state(functional)
     if not all(_finite(v) for v in (shift, alpha, beta)):
         raise ValueError('actual GRAC controls must be finite')
-    if scf_correction == 'NONE':
+    if scf_correction != 'FIXED_GRAC':
         if (shift, alpha, beta, components) != (0., .5, 40., (None, None)) or functional.needs_grac():
             raise ValueError('unmodified canonical PBE0/native NONE policy rejects GRAC state')
     else:
@@ -105,7 +124,7 @@ def validate_correction(wfn, *, scf_correction='NONE', expected_grac_shift=None,
         if ((shift, alpha, beta) != (float(expected_grac_shift), .5, 40.)
                 or components != expected_components or not functional.needs_grac()):
             raise ValueError('fixed GRAC correction mismatch: expected shift/.5/40 and canonical LB*.75/VWN*1')
-    if require_canonical or scf_correction == 'FIXED_GRAC':
+    if require_canonical or scf_correction != 'NONE':
         canonical = core.SuperFunctional.XC_build('XC_HYB_GGA_XC_PBEH', True)
         scalars, groups, attachments = functional_definition(canonical)
         if scf_correction == 'FIXED_GRAC':
@@ -118,6 +137,12 @@ def validate_correction(wfn, *, scf_correction='NONE', expected_grac_shift=None,
                 or functional_definition(functional) != (scalars, groups, attachments)
                 or getattr(wfn, '_disp_functor', None) is not None):
             raise ValueError('Atomic response requires unmodified canonical PBE0 underlying the declared correction')
+    if scf_correction == 'DECLARED_MULTPOLE_AC':
+        # Delegated, never inlined: the declared form owns its admission rules,
+        # its own non-seal convergence record and its own provenance type, so a
+        # run can never report AC orbitals as "no SCF asymptotic correction".
+        from .isapol_native_ac import validate_declared_ac
+        return validate_declared_ac(wfn, ac_declaration)
     if scf_correction == 'FIXED_GRAC':
         require_scf_seal(wfn)
     return CorrectionProvenance(scf_correction, float(shift), float(alpha), float(beta), components)

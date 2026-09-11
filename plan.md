@@ -7,6 +7,9 @@
    the corrected historical target and present resource blocker.
 3. [NATIVE_FIXED_GRAC.md](psi4/src/psi4/libisapol/NATIVE_FIXED_GRAC.md) and
    [NATIVE_OEPROP.md](psi4/src/psi4/libisapol/NATIVE_OEPROP.md): working public API.
+   [NATIVE_DECLARED_AC.md](psi4/src/psi4/libisapol/NATIVE_DECLARED_AC.md): the
+   third AC policy, why each of its declared fields is fixed by the reference's
+   own printed spectrum, and exactly how much of the residual it closes.
 4. Read the stage-specific contracts linked from SPEC before changing that stage.
 
 **Accepted code checkpoint:** `86b548c492`, plus `c07dafd37d`, which
@@ -653,14 +656,41 @@ remains between it and the `777f904` target, in dependency order:
    of the latter uncertified, differently declared models), rank 4 anchors are
    bitwise inert in our truncation, substituting the reference's own anchors
    gives 0.219158 and leaves the refined mean unchanged (so ~2/3 of the parameter
-   residual is target, ~1/3 anchors), and the remaining discrepancy is
-   low-frequency — the molecular mean ratio falls monotonically from 1.0415 at
+   residual is target, ~1/3 anchors), and the remaining discrepancy was
+   low-frequency — the molecular mean ratio falling monotonically from 1.0415 at
    ω = 0 to 0.9989 at ω = 37.8.
-   The one unimplemented candidate left is the DALTON `.DFTAC MULTPOLE TANH`
-   asymptotic-correction form, which is bracketed by the two gated policies at
-   ≲2% (refined: `NONE` 0.210440, `FIXED_GRAC` 0.209245, both on the same side of
-   the reference) and still awaits its own gate rather than a widening of
-   `FIXED_GRAC`.*
+   **That low-frequency residual is now attacked at its cause and roughly halved,
+   not relabelled.** The last unimplemented candidate, DALTON's
+   `.DFTAC MULTPOLE TANH 0.46380 0.46380 3.0 4.0`, is implemented as its own
+   gated policy `DECLARED_MULTPOLE_AC` — Fermi-Amaldi long-range exchange with a
+   Tozer-Handy variational shift, spliced pointwise over 3→4 Bragg-Slater radii,
+   `c_FA = 1 − a_x = 0.75` — and **not** by widening `FIXED_GRAC`, whose C++
+   option surface is deliberately still `"NONE FIXED_GRAC"` because a string
+   cannot carry a declaration. Every field of the declaration that the input file
+   does not state was fixed against **DALTON's own printed eigenvalue spectrum**
+   for this case (14-row bracket; r.m.s. 0.020674 uncorrected → 0.003236, 84% of
+   the +0.02196 gap error, with `fa_scale`, the shift, the Bragg table and
+   `b1/b2` determined and the join form, `tanh_k`, multipole order and origin
+   moving the r.m.s. by ≤ 0.0002 — so the survivor is not attributable to an
+   undetermined field). Refined end to end on the identical lattice, model,
+   target and anchors: ρ = **0.211698 against 0.213354, a ratio of 0.99224**,
+   where `NONE` gives 0.210440 (0.98634) — **43% of the residual closed** — and
+   the static α excess falls from +4.147% to +2.144%. At the parameter level,
+   where no ratio can hide it, `max |our refined O1 diagonal − the reference's
+   own printed refined O1 diagonal|` falls from 2.7913 to 1.4913 (46.6% removed). The monotone shape survives
+   (1.02144 at ω = 0 → 0.99876 at ω = 37.8, same sign, same crossing near ω ≈ 7).
+   What remains is decomposed rather than absorbed: an uncoupled sensitivity (an
+   independent-particle derivative, never a coupled or parity number) shows the
+   surviving 0.00352 Eh gap deficit is worth only 0.533%, so ≈0.5 of the
+   remaining 2.14 points is eigenvalue residual and **≈1.5 points is not an
+   asymptotic-correction effect at all**. Those 1.5 points are a new, separately
+   labelled open candidate: the uncorrected DALTON-versus-Psi4 PBE0 difference
+   itself (a near-uniform +0.0021 Eh offset on every occupied eigenvalue at
+   ΔE = −5.03e-05) plus `.DFTELS 0.01`, which has **no counterpart** in our
+   implementation. It is not closable from our side of the comparison.
+   `NONE`, `FIXED_GRAC` and `DECLARED_MULTPOLE_AC` are three separately declared
+   models and no two of their rows may be quoted as agreeing; the first two stay
+   the bracket they were rather than becoming a series with the third.*
    The reference family is
    `.pi/camcasp-build/tests/H2O_props/{dalton,nwchem,psi4}/check/L2H1/H2O_ref_wt3_L2_Cn.pot`.
    Their localization headers are byte-identical (`Limit: 2`, `WSM-Limit: 2`,
@@ -1066,6 +1096,17 @@ trace, hashes and separate ISA candidates). Its portable conclusions are in
 
 ## 6. Still-open numerical/coverage gaps
 
+- **The uncorrected DALTON-versus-Psi4 PBE0 eigenvalue offset.** Now that the
+  reference's declared AC form is implemented under its own gate and has closed
+  43% of the refined ρ residual, the piece that is left is not an
+  asymptotic-correction effect: ≈1.5 of the remaining 2.14 percentage points of
+  static-α excess survives any change to the declaration. At this geometry
+  DALTON's *uncorrected* PBE0/aug-cc-pVTZ spectrum sits a near-uniform +0.0021 Eh
+  above ours on every occupied orbital at ΔE = −5.03e-05, and the reference also
+  declares `.DFTELS 0.01`, a grid-accuracy control with **no counterpart in our
+  implementation**. This is a new candidate, replacing the closed candidate 2. It
+  is not closable from our side of the comparison, it may not be absorbed into a
+  tolerance, and DALTON's source is not to be read to chase it.
 - Odd `L+H+J`, strict lower-J normalization: **5,341 coefficient rows uncertified**.
   Six raw-identity tests do not close this; 182 reciprocal classes in 80 blocks
   survive, so the channels are not absent/zero. User deferred this investigation.
@@ -1122,7 +1163,10 @@ trace, hashes and separate ISA candidates). Its portable conclusions are in
   +6.75% (`direct_ov`) / +6.41% (traced NN), is localized to the **response
   step**, and the response step is now **closed on identical orbitals**: the
   excess belongs to the asymptotic-correction form (candidate 2), not to the
-  propagator. Evidence, all external-orbital track and to be labelled as such:
+  propagator. Candidate 2 has since been **implemented** under its own gate and
+  measured: it carries about half the gap, not all of it, so the elimination
+  argument was right in direction and overstated in size (item 6 below).
+  Evidence, all external-orbital track and to be labelled as such:
   - The reference propagator was rebuilt from CamCASP's MIT sources
     (`NAME=camcasp`; serial `make` -- the makefile is not parallel-safe;
     `-fallow-argument-mismatch` for `gamint.F`'s legacy-F77 rank mismatches;

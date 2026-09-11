@@ -144,7 +144,7 @@ def native_response_from_wavefunction(wavefunction, *, caller_converged, kernel,
                                      density_cutoff=1.e-10, max_bytes=512*1024**2,
                                      max_nov=512, transition_legs=None,
                                      representation=None, scf_correction='NONE',
-                                     expected_grac_shift=None,
+                                     expected_grac_shift=None, ac_declaration=None,
                                      algorithm='ordered_pairwise'):
     """Construct native operators ONCE; return a reusable frequency provider.
 
@@ -172,6 +172,10 @@ def native_response_from_wavefunction(wavefunction, *, caller_converged, kernel,
     requires an explicit positive expected_grac_shift, canonical PBE0 and the
     current successful SCF seal. Only the canonical .5/40 LB*.75/VWN*1 profile
     is supported. This accepts SCF inputs, not a GRAC kernel derivative.
+    DECLARED_MULTPOLE_AC is a separate asymptotic-correction form with its own
+    explicit ac_declaration and its own producer record; it is not a GRAC
+    profile and no GRAC parameter imitates it. It likewise accepts SCF inputs,
+    not an asymptotic-correction kernel derivative.
 
     ``algorithm`` names which arrangement of the identical ordered nbf^4 quartet
     sweep and the identical ordered ALDA quadrature is used, and therefore which
@@ -189,9 +193,11 @@ def native_response_from_wavefunction(wavefunction, *, caller_converged, kernel,
     hard caps. Caller must not concurrently mutate inputs during construction.
     """
     correction = validate_correction(wavefunction, scf_correction=scf_correction,
-                                     expected_grac_shift=expected_grac_shift)
-    if correction.policy == 'FIXED_GRAC' and kernel == 'no_local':
-        raise ValueError('FIXED_GRAC admission requires an explicit ALDA response policy; no GRAC kernel derivative')
+                                     expected_grac_shift=expected_grac_shift,
+                                     ac_declaration=ac_declaration)
+    if correction.policy != 'NONE' and kernel == 'no_local':
+        raise ValueError(f'{correction.policy} admission requires an explicit ALDA response '
+                         'policy; no asymptotic-correction kernel derivative')
     if not isinstance(caller_converged, (bool, np.bool_)) or not caller_converged:
         raise ValueError("caller_converged must explicitly be True (declaration, not a verified seal)")
     for name, value in (("exact_exchange", exact_exchange), ("local_scale", local_scale),
@@ -264,11 +270,19 @@ def native_response_from_wavefunction(wavefunction, *, caller_converged, kernel,
         h1_baseline=provider.h1().to_array(), h2=provider.h2().to_array(),
         transition_legs=legs, coupling=np.zeros((legs.shape[1], legs.shape[1])),
         representation=representation)
-    if correction.policy == 'FIXED_GRAC':
+    if correction.policy != 'NONE':
         if validate_correction(wavefunction, scf_correction=scf_correction,
-                               expected_grac_shift=expected_grac_shift) != correction:
+                               expected_grac_shift=expected_grac_shift,
+                               ac_declaration=ac_declaration) != correction:
             raise ValueError('SCF correction changed during native response construction')
+    if correction.policy == 'FIXED_GRAC':
+        evidence = 'verified current SCF seal; ' + correction.response_description
+    elif correction.policy == 'DECLARED_MULTPOLE_AC':
+        # Deliberately not called a seal: the declared AC iteration is not
+        # Psi4's SCF, and applying it invalidates the seal it started from.
+        evidence = ('verified current declared asymptotic-correction record, not an SCF seal; '
+                    + correction.response_description)
+    else:
+        evidence = 'caller declaration only; restricted metadata, density and orthonormality checked'
     return NativeWavefunctionResponse(provider, response, declaration, correction,
-        convergence_evidence=('verified current SCF seal; ' + correction.response_description
-                              if correction.policy == 'FIXED_GRAC' else
-                              'caller declaration only; restricted metadata, density and orthonormality checked'))
+        convergence_evidence=evidence)

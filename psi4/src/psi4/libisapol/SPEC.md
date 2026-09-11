@@ -78,8 +78,19 @@ cutoffs; canonical functional identity remains distinct from numerical cutoffs.
 Owned correction provenance enters context reuse. NONE rejects undeclared GRAC.
 This is **ALDA using fixed-GRAC SCF orbitals**, not a GRAC response derivative.
 
+`DECLARED_MULTPOLE_AC` is the third policy: the reference's own Fermi-Amaldi /
+Tozer-Handy `MULTPOLE TANH` form, reachable **only** through an explicit
+`AcDeclaration` passed in Python. The C++ string option stays
+`"NONE FIXED_GRAC"` because a string cannot carry the declaration, and the policy
+was not reached by widening `FIXED_GRAC` or by refitting a GRAC beta. Its
+orbitals are produced by a named, explicitly applied post-SCF iteration that
+verifies the uncorrected seal and then deliberately invalidates it; `NONE` and
+`FIXED_GRAC` both refuse to describe such orbitals. Also not a response
+derivative.
+
 Details: [NATIVE_OEPROP.md](NATIVE_OEPROP.md),
 [NATIVE_FIXED_GRAC.md](NATIVE_FIXED_GRAC.md),
+[NATIVE_DECLARED_AC.md](NATIVE_DECLARED_AC.md),
 [SUPPLIED_PROPERTIES.md](SUPPLIED_PROPERTIES.md).
 
 ## 3. Explicit bases, grids and bounded execution
@@ -1220,8 +1231,11 @@ truncation, since only `q` and `d` enter `μ`:
 α_mol_{AB} = Σ_ab [ α^ab_{dA,dB} + R_aA α^ab_{q,dB} + α^ab_{dA,q} R_bB + R_aA α^ab_{qq} R_bB ]
 ```
 
-**Candidate 3, the AC form, is the one the reference uses and we do not
-implement — so it is bracketed, not approximated.** `output_1/H2O_aTZ_A.dal`
+**Candidate 3, the AC form, is the one the reference uses. It has since been
+implemented under its own gate (below, and
+[NATIVE_DECLARED_AC.md](NATIVE_DECLARED_AC.md)); the bracket recorded here
+predates that and is kept because it is what the bracket actually measured, not
+because the form is still unimplemented.** `output_1/H2O_aTZ_A.dal`
 declares DALTON PBE0 with `.DFTAC MULTPOLE TANH / 0.46380 0.46380 3.0 4.0`: a
 *spatial* tanh switch to a multipole-asymptotic potential between 3 and 4 bohr.
 That is not Psi4's gradient-regulated GRAC, and
@@ -1492,19 +1506,82 @@ the parameter residual is anchors and two thirds target. Node-0 r.m.s. rises to
 penalty pulls toward a different model. A fit on borrowed anchors is a
 diagnostic decomposition and is never a parity row.
 
-*The AC form stays bracketed, not matched.* The reference's SCF uses DALTON's
-`.DFTAC MULTPOLE TANH 0.46380 0.46380 3.0 4.0`, which remains unimplemented and
-refused rather than approximated. Both gated policies were refined end to end:
+*The AC form is now implemented as its own declared policy and refined end to
+end.* The reference's SCF uses DALTON's `.DFTAC MULTPOLE TANH 0.46380 0.46380
+3.0 4.0`. That is a third asymptotic correction, not a GRAC profile, so it was
+given its own gate, `DECLARED_MULTPOLE_AC`
+([NATIVE_DECLARED_AC.md](NATIVE_DECLARED_AC.md)) — `FIXED_GRAC` was **not**
+widened to reach it, and the C++ string option was deliberately left at
+`"NONE FIXED_GRAC"` because a string cannot carry the declaration. All three
+gated policies were refined end to end on the identical lattice, model, target
+and anchors:
 
 | declared AC | α_mol mean | a1 H / a1 O | C6 molecular | ρ | ρ / ρ_ref |
 | --- | --- | --- | --- | --- | --- |
 | `NONE` (gated) | 9.65612 | 0.207928 | 45.88376 | 0.210440 | 0.98634 |
 | canonical `FIXED_GRAC` | 9.85081 | 0.206682 | 46.83116 | 0.209245 | 0.98074 |
+| `DECLARED_MULTPOLE_AC` | 9.47036 | 0.209512 | 44.99622 | 0.211698 | **0.99224** |
 | reference (tanh/multipole) | 9.27158 | 0.212166 | 43.89027 | 0.213354 | 1 |
 
-Both gated policies land on the *same side* of the reference and within 0.6% of
-each other, so the AC form does not explain the remaining 1.4%; it is bounded
-below it. The rows of this table may not be quoted as agreeing with one another.
+The declared form moves ρ the right way and by a real amount — the residual falls
+from **−1.366% to −0.776%**, 43% of it closed — and it is the first row that is
+the reference's *own* declared form rather than a bracket around it. It does not
+close the residual. Each row is a separately declared model and **no two rows of
+this table may be quoted as agreeing**; the first two remain a bracket and the
+third is not a member of that bracket. The same closure shows up directly at the
+parameter level, where no ratio or sum can hide it: `max |our refined O1
+diagonal − the reference's own printed refined O1 diagonal|` falls from **2.7913
+to 1.4913**, 46.6% of it removed, and the rank-1 isotropic H/O ratio moves from
+0.207928 to 0.209512 against the reference's 0.212166.
+
+*Where the remaining discrepancy is, measured rather than inferred.* The residual
+that was previously described as "low-frequency" is halved and its shape is
+unchanged, which is what identifies what is left. Molecular mean α(iω) at the
+eleven declared Casimir nodes, ours over the reference's own refined value:
+
+| node | ω (au) | ratio, `NONE` | ratio, `DECLARED_MULTPOLE_AC` | reference α_mol (au) |
+| --- | --- | --- | --- | --- |
+| 0 | 0 | 1.04147 | **1.02144** | 9.27158 |
+| 1 | 0.0066096 | 1.04146 | 1.02143 | 9.27026 |
+| 2 | 0.0361748 | 1.04094 | 1.02123 | 9.23209 |
+| 3 | 0.0954474 | 1.03807 | 1.02007 | 9.00892 |
+| 4 | 0.197644 | 1.03053 | 1.01684 | 8.29921 |
+| 5 | 0.370417 | 1.01944 | 1.01158 | 6.80428 |
+| 6 | 0.674915 | 1.00940 | 1.00620 | 4.61611 |
+| 7 | 1.2649 | 1.00357 | 1.00249 | 2.38111 |
+| 8 | 2.61924 | 1.00105 | 1.00068 | 0.83422 |
+| 9 | 6.91089 | 0.99987 | 0.99970 | 0.15492 |
+| 10 | 37.8238 | 0.99894 | 0.99876 | 0.00612 |
+
+The static excess falls from +4.147% to +2.144%; the monotone fall through unity
+near ω ≈ 7 survives, with the same sign and the same crossing. So the low
+frequencies are where the correction acts — as they must be, since α(iω) at large
+ω is set by the core and at small ω by the tail — and the declared form removes
+about half of what is there.
+
+The half that remains is **not** the surviving eigenvalue deficit. Against
+DALTON's printed AC spectrum our declared-AC gap is still 0.00352 Eh narrow
+(down from 0.02196 uncorrected, 84% closed). An *uncoupled* static α — an
+independent-particle derivative, never a coupled-response or parity number —
+gives the sensitivity: applying a uniform +0.00352 shift to every virtual
+eigenvalue lowers it by only 0.533%, while the declared AC itself lowers it by
+1.584% (11.205063 → 11.027541 au, against the 1.92% actually observed in the
+coupled refined chain, so the uncoupled model tracks the coupled one to within a
+third of a percentage point). Splitting orbital shape from eigenvalues —
+AC orbitals with uncorrected eigenvalues give 11.308439, uncorrected orbitals
+with AC eigenvalues give 10.937382 — shows the effect is almost entirely
+eigenvalue-driven, and that the AC's change of orbital *shape* raises α slightly.
+
+Therefore of the original +4.147%: ≈2.0 points are the declared AC (now applied),
+≈0.5 points are the eigenvalue residual the AC still leaves (bounded, and the
+14-row bracket showed it is not attributable to any undetermined field of the
+declaration), and the remaining **≈1.5 points are not an asymptotic-correction
+effect at all**. That last piece is a new, separately labelled candidate: the
+uncorrected DALTON-versus-Psi4 PBE0 difference itself, which at this geometry is
+a near-uniform +0.0021 Eh offset on every occupied eigenvalue at ΔE = −5.03e-05,
+together with the `.DFTELS 0.01` grid declaration that **has no counterpart in
+our implementation**. It is recorded as open, not absorbed into a tolerance, and
+it is not closable from our side of the comparison.
 
 **The seed is part of the model declaration, and its sensitivity is measured,
 not absorbed.** Repeating the whole chain at `Seed 2` and `Seed 3` — each an
@@ -1735,7 +1812,12 @@ candidate 8 (CamCASP builds `Ker_kk' = \int chi_k dv_xc/drho chi_k' dr` between
 `prop_utilities.F90:329-441`, so its kernel never sees exact orbital products).
 What it does **not** bound is candidate 2, the asymptotic-correction form, which
 by elimination carries the whole +1.36% (H2O) / +1.67% (He) gap seen with Psi4
-GRAC orbitals. That gap is channel-resolved for He: alpha for a 1s^2 atom is
+GRAC orbitals. For H2O that inference has now been tested rather than left as an
+inference: implementing the declared `MULTPOLE/TANH` form under its own gate
+closes 43% of the refined ρ residual and 48% of the static α excess, so the
+elimination argument was right in direction but **overstated in magnitude** —
+candidate 2 carries about half the gap, not all of it, and the remainder is now
+a separately labelled candidate (below). That gap is channel-resolved for He: alpha for a 1s^2 atom is
 carried entirely by the 1s->np channel, and at the declared shift our p-channel
 excitation is 0.58% low while the (irrelevant) lowest-s excitation is
 over-corrected by +0.146 au. The three reference AC forms are distinct and must

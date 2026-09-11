@@ -161,7 +161,7 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                       quadrature=None, partner=None, pair_self=False, max_order=12,
                       density_cutoff=1.e-10, max_bytes=512*1024**2, max_nov=512,
                       response_context=None, response_basis='fitted_auxiliary',
-                      scf_correction='NONE', expected_grac_shift=None,
+                      scf_correction='NONE', expected_grac_shift=None, ac_declaration=None,
                       response_algorithm='ordered_pairwise', ov_charge_penalty=1.,
                       ov_metric_damping=0., localization_rank_limit=3):
     """Return all owned stages, with strict production LW (1e-6) or failures.
@@ -261,9 +261,11 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
         if not partner.metadata.production_postcondition_passed:
             raise ValueError('partner must pass production LW')
     correction = validate_correction(wfn, scf_correction=scf_correction,
-                                     expected_grac_shift=expected_grac_shift)
-    if correction.policy == 'FIXED_GRAC' and kernel == 'no_local':
-        raise ValueError('FIXED_GRAC admission requires an explicit ALDA response policy; no GRAC kernel derivative')
+                                     expected_grac_shift=expected_grac_shift,
+                                     ac_declaration=ac_declaration)
+    if correction.policy != 'NONE' and kernel == 'no_local':
+        raise ValueError(f'{correction.policy} admission requires an explicit ALDA response '
+                         'policy; no asymptotic-correction kernel derivative')
     context_hash = _context(wfn)
     policy_hash = _policy(kernel, exact_exchange, local_scale, response_grid, density_cutoff,
                           correction, response_algorithm)
@@ -285,7 +287,7 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
             + ('' if response_basis == 'direct_ov'
                else f' lambda={ov_charge_penalty!r}; eta={ov_metric_damping!r}')
             + '; no PFIT'
-            + ('; ' + correction.response_description if correction.policy == 'FIXED_GRAC' else ''),
+            + ('; ' + correction.response_description if correction.policy != 'NONE' else ''),
             correction)
     try:
         q = partition.require_q()
@@ -297,7 +299,7 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                 exact_exchange=exact_exchange, local_scale=local_scale, grid=response_grid,
                 density_cutoff=density_cutoff, max_bytes=max_bytes, max_nov=max_nov,
                 scf_correction=scf_correction, expected_grac_shift=expected_grac_shift,
-                algorithm=response_algorithm)
+                ac_declaration=ac_declaration, algorithm=response_algorithm)
             context = NativeContext(response, context_hash, policy_hash)
         provider = context.response.provider
         c = np.asarray(provider.orbitals())
