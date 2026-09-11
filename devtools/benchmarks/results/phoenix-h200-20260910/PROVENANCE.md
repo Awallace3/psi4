@@ -31,8 +31,8 @@ Every case asserts `grac_compute == "ITERATIVE"` in its own `result.json`.
 | A | 13060539 | gpu-h200 / embers | 1x NVIDIA H200 143771 MiB, driver 595.71.05; 8 cores of Intel Xeon Platinum 8562Y+ | Paired CPU/GPU, 6 cases x 3 repeats, alternating order. **PREEMPTED at 02:16:17** with three nanotube cases outstanding |
 | A2 | 13065746 | gpu-h200 / embers | same shape as A, **canary-verified healthy** | The three nanotube cases job A did not reach: CPU repeats 2 and 3, GPU repeat 3. Reported separately, not merged into A — see below |
 | C | 13061073 | cpu-small / embers | 24 cores of Intel Xeon Gold 6226 | CPU-only 8 vs 24 thread scaling, same node |
-| B | 13060540 | gpu-h200 / embers | 1x NVIDIA H200 | protein157 GPU |
-| D2 | 13066284 | cpu-small / **inferno** | 24 cores of Intel Xeon Gold 6226 | protein157 CPU baseline |
+| B | 13060540 | gpu-h200 / embers | 1x NVIDIA H200; 8 cores of Platinum 8562Y+, **canary-verified** | protein157: 3 GPU repeats (done: 486.24, 486.57, 488.21 s) then one 8-thread CPU repeat in the same allocation. Running |
+| D2 | 13066284 | cpu-small / **inferno** | 24 cores of Intel Xeon Gold 6226 | protein157 CPU baseline. **COMPLETED 02:20:03**, 8365.25 s |
 | A3 | 13080182 | gpu-h200 / embers | same shape as A | **Canary-verified rerun of job A's full paired campaign.** Job A's protocol verbatim; the only changes are the host canary and a 3600s per-case timeout. Submitted because job A's host was degraded threefold, which bounds its speedups to a range rather than pinning them |
 
 Jobs A and C ran the same six systems with the same driver, settings, and binary;

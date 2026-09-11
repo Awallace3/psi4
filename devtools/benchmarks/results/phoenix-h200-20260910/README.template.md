@@ -212,12 +212,14 @@ DF-K dominates.
 protein157 is measured two ways, and only one of them is an accelerator
 speedup:
 
-- **Same-host, 8 threads.** Job 13060540 (queued) runs three GPU repeats and
-  then one 8-thread CPU repeat in the same gpu-h200 allocation. That pair is a
-  genuine same-host ratio. It runs the CPU arm last on purpose: the GPU repeats
-  are cheap and guarantee data if the long CPU arm is cut short, which is a real
+- **Same-host, 8 threads.** Job 13060540 runs three GPU repeats and then one
+  8-thread CPU repeat in the same gpu-h200 allocation. That pair is a genuine
+  same-host ratio. It runs the CPU arm last on purpose: the GPU repeats are
+  cheap and guarantee data if the long CPU arm is cut short, which is a real
   possibility — a 6 h per-case timeout inside an 8 h preemptible request, at the
-  8-core width gpu-h200's 8:1 CPU:GPU ratio imposes.
+  8-core width gpu-h200's 8:1 CPU:GPU ratio imposes. **The three GPU repeats
+  have landed** (486.24, 486.57, 488.21 s) on a host its own canary certifies
+  healthy; the CPU arm is still running.
 - **Cross-node, 24 threads.** Job 13066284, 24 cores of Xeon Gold 6226 on
   cpu-small, is the wider CPU baseline. Against the gpu-h200 GPU arm it is a
   different node, a different CPU model, and a different core count, so that
@@ -228,21 +230,43 @@ So the 24-thread number answers "how does an H200 compare to a mainstream CPU
 node" and the 8-thread number answers "what does adding cuEST to this node do."
 Neither substitutes for the other.
 
-What the CPU arm already establishes stands on its own, because it is a
-within-job decomposition:
+Both arms decompose within their own job, so the GRAC share is not confounded
+by the cross-node comparison:
 
 | Arm | Wall, s | GRAC A, s | GRAC B, s | GRAC total, s | GRAC % of wall |
 |---|---:|---:|---:|---:|---:|
-| cpu 24T (job 13066284) | 8365.25 | 3403.2 | 107.5 | 3510.72 | 42.0% |
+| cpu 24T, Gold 6226 (job 13066284) | 8365.25 | 3403.2 | 107.5 | 3510.72 | 42.0% |
+| gpu 8T, H200 (job 13060540) | 486.57 | 271.8 | 20.2 | 292.24 | **60.1%** |
 
-Automatic GRAC is 42% of the run — the largest absolute GRAC cost measured
+Automatic GRAC is 42% of the CPU run — the largest absolute GRAC cost measured
 anywhere in this campaign, and consistent with the 36-51% seen on the small
 cases. The A/B asymmetry (3403 s against 107 s) is the monomer size ratio
 showing through: GRAC runs a neutral RKS and a doublet-cation UKS SCF per
 monomer, so it scales with each monomer separately, and monomer A carries 1344
 of the 1786 functions.
 
-The interaction energy is -0.01665095 Eh (-10.45 kcal/mol).
+**On the GPU, GRAC's share rises to 60%.** Splitting the cross-node ratio by
+phase shows why:
+
+| Phase | cpu 24T, s | gpu 8T, s | Ratio |
+|---|---:|---:|---:|
+| Everything except GRAC | 4854.5 | 194.3 | **24.98×** |
+| GRAC monomer A | 3403.2 | 271.8 | 12.52× |
+| GRAC monomer B | 107.5 | 20.2 | 5.32× |
+| Total | 8365.3 | 486.6 | 17.19× |
+
+These are cross-node ratios, not accelerator speedups — different node,
+different CPU model, 24 cores against 8 — so the absolute values carry the
+baseline with them. The *relative* pattern does not: the dimer SCF and the SAPT
+terms accelerate about twice as well as the GRAC monomer SCFs, measured at the
+same widths against the same baseline. GRAC is what protein157 ends up bound
+by, and it is the part cuEST helps least. That makes the GRAC host-functional
+path, not DF-K, the next thing worth optimizing at this size.
+
+The interaction energy agrees across the two arms: -0.01665095 Eh on 24 CPU
+cores against -0.01665056 Eh on the H200, a difference of 3.9e-07 Eh, inside
+the 1e-06 Eh gate. Both GRAC shifts agree to 1e-08 Eh (monomer A 0.04531118,
+monomer B 0.05039562). -10.45 kcal/mol.
 
 ## Reproduce
 

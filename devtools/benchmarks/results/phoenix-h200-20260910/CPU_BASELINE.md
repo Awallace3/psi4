@@ -204,6 +204,36 @@ For contrast, job A's degraded allocation was the same 8562Y+ model with
 `lscpu` reporting its cores scaling at **68% of max**. Nothing about the model
 was the problem.
 
+## The canary found a second, smaller effect: serial throughput varies by allocation
+
+Three jobs ran on the same physical node, `atl1-1-02-012-9-0`, at the same
+clock, on the same probe binary:
+
+| Job | Cores it got | DGEMM/core | Triad | Serial scalar loop |
+|---|---|---:|---:|---:|
+| A2 (13065746) | 0, 4, 8 … 28 | 83.5 GF/s | 13.8 GB/s | 47.6 Miter/s |
+| A3 (13080182) | 0, 4, 8 … 28 | 83.3 GF/s | 13.8 GB/s | 47.7 Miter/s |
+| B (13060540) | 17, 21, 25 … 45 | **84.3 GF/s** | **14.5 GB/s** | **35.0 Miter/s** |
+
+Job B has the *best* DGEMM and the *best* bandwidth on the node and is 1.36×
+slower on a dependent-chain scalar loop. The figure is not noise: B measures
+34.95 at one thread and 35.01 at eight, A2 measures 47.67 and 47.63. It is
+reproducible within a job and different between jobs, so it is a property of
+the core set the allocation got — B's cores come from a different NUMA domain —
+rather than of the node or the moment. The mechanism is not determined here.
+
+`host_speed.py` rates the campaign `uncertified` at a worst pairwise ratio of
+1.36×, and that entire spread is this one probe. That is the guard working as
+intended: it is reporting a real difference between allocations that DGEMM
+alone would have called identical.
+
+It has a signed consequence for one number. protein157's GPU arm spends 60% of
+its wall inside GRAC, which carries serial host-side work, and that arm ran on
+job B's cores. Slower serial throughput makes that wall longer, so the
+cross-node ratio of 17.19× against job 13066284 is an **underestimate**. By how
+much is not known; the 1.36× applies to the serial fraction of the 60%, not to
+the whole run.
+
 ## NVIDIA's denominator: 56 cores of Xeon Platinum 8570
 
 NVIDIA's Figure 2 DF-K comparison is against PSI4 v1.9.1 on 56 cores. We cannot
