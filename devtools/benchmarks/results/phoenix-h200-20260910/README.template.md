@@ -192,13 +192,24 @@ The largest case in the campaign: 157 atoms, 1786 basis functions in 6-31+G**
 a size a workstation can already run, and a DF-K claim is only interesting where
 DF-K dominates.
 
-**Its two arms ran on different nodes, so its ratio is not an accelerator
-speedup.** The CPU arm is job 13066284, 24 cores of Xeon Gold 6226 on cpu-small;
-the GPU arm is job 13060540, 8 cores of Xeon Platinum 8562Y+ on gpu-h200, and it
-is still queued. gpu-h200's 8:1 CPU:GPU ratio makes a same-host 24-core pair
-impossible, so no arrangement of these queues produces a same-host protein157
-number. When the GPU arm lands, its row is labeled cross-node in the results
-table and is not pooled with the same-host rows.
+protein157 is measured two ways, and only one of them is an accelerator
+speedup:
+
+- **Same-host, 8 threads.** Job 13060540 (queued) runs three GPU repeats and
+  then one 8-thread CPU repeat in the same gpu-h200 allocation. That pair is a
+  genuine same-host ratio. It runs the CPU arm last on purpose: the GPU repeats
+  are cheap and guarantee data if the long CPU arm is cut short, which is a real
+  possibility — a 6 h per-case timeout inside an 8 h preemptible request, at the
+  8-core width gpu-h200's 8:1 CPU:GPU ratio imposes.
+- **Cross-node, 24 threads.** Job 13066284, 24 cores of Xeon Gold 6226 on
+  cpu-small, is the wider CPU baseline. Against the gpu-h200 GPU arm it is a
+  different node, a different CPU model, and a different core count, so that
+  ratio is labeled cross-node in the results table and is not pooled with the
+  same-host rows. What gpu-h200 cannot give is a same-host *24-core* pair.
+
+So the 24-thread number answers "how does an H200 compare to a mainstream CPU
+node" and the 8-thread number answers "what does adding cuEST to this node do."
+Neither substitutes for the other.
 
 What the CPU arm already establishes stands on its own, because it is a
 within-job decomposition:

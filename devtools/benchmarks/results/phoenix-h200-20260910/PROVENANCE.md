@@ -108,3 +108,30 @@ Anyone extending this campaign should either pass `--einsums:no-attach-debugger`
 or have the launcher kill a case as soon as that marker appears in its log. Do
 not raise the per-case timeout to accommodate it: that converts a fast failure
 into a slow one.
+
+## Observed failure mode: protein157 in aug-cc-pVDZ does not fit an A100
+
+Jobs 12904893 and 12904894 (gpu-a100, an earlier bench tree at
+`bench/saptdft_cuest`, not this campaign) both died within 25 s:
+
+```
+Failed to allocate device buffer: out of memory
+  requested 127.215 GiB; device has 78.631 GiB free of 79.251 GiB total
+```
+
+This is deterministic, not a transient or a contention artifact — the request
+exceeds the card. protein157 in aug-cc-pVDZ is nbf 2491 / naux 9182
+(`results/probe/probe.protein157.aug-cc-pvdz.json`), and 80 GB is simply the
+wrong card for it.
+
+It does not threaten job B (13060540), which runs protein157 in **6-31+G\*\***
+(nbf 1786) on an **H200** (143771 MiB). The aux basis is `def2-universal-jkfit`
+and depends on the atoms, not the orbital basis, so naux is unchanged between
+the two and the buffer ratio is driven by nbf alone: a `naux·nbf²` allocation
+scales to ~65 GiB and a `naux·nbf·nocc` one to ~91 GiB. Both fit, the second
+without much room. The exact allocation model was not derived — neither candidate
+reproduces 127.215 GiB exactly, so these are bounds on the scaling rather than a
+prediction — but both point the same way and the margin is real.
+
+The practical rule: protein157 needs an H200, and the basis is what decides
+whether it fits at all.

@@ -165,9 +165,14 @@ not stated.
 
 ## protein157 has no same-host baseline at all
 
-The protein157 CPU measurement runs on cpu-small (job 13066284, 24 cores of Gold
-6226) and the GPU measurement on gpu-h200 (job 13060540, 8 cores of Platinum
-8562Y+). **Different nodes, different CPU models, different core counts.** Any
-protein157 speedup is a cross-node ratio and is labeled so in the results table.
-It is not an isolated accelerator speedup and must not be pooled with the
-same-host rows.
+The 24-core CPU measurement runs on cpu-small (job 13066284, Gold 6226) and the
+GPU measurement on gpu-h200 (job 13060540, Platinum 8562Y+). **Different nodes,
+different CPU models, different core counts.** That ratio is cross-node, is
+labeled so in the results table, and must not be pooled with the same-host rows.
+
+A same-host protein157 pair is possible, just not at 24 cores: job 13060540 also
+runs one 8-thread CPU repeat in its own allocation, after its three GPU repeats.
+If that arm survives the 8 h preemptible wall — it is the longest single case in
+the campaign and it runs last — protein157 gains a same-host 8-core ratio
+alongside the cross-node 24-core one. Until then the row carries only the
+cross-node number.
