@@ -441,3 +441,299 @@ def test_reporting_at_verbosity_zero_still_publishes_every_variable(wfn):
 def test_print_option_is_a_declared_global_defaulting_to_one():
     psi4.core.clean_options()
     assert psi4.core.get_global_option('ATOMIC_PROPERTY_PRINT') == 1
+
+
+# ----------------------------------------------------------------- PFIT ----
+
+def _refinement(*, masked=False):
+    """A small solved refinement: two site types, rank 1, eight points.
+
+    Built through ``isapol_refine`` rather than faked, because the reporters
+    read the solver's own diagnostics, batch records and parameter labels; a
+    double would pin the double's field names instead of the binding's.
+    """
+    from psi4.driver.procrouting import isapol_refine as R
+    identity = ((1., 0., 0.), (0., 1., 0.), (0., 0., 1.))
+    sites = (R.RefinementSite('O', 'O', (0., 0., -.13), identity, 1),
+             R.RefinementSite('H1', 'H', (-1.45, 0., 1.02), identity, 1),
+             R.RefinementSite('H2', 'H', (1.45, 0., 1.02), identity, 1))
+
+    def block(n, offset):
+        b = np.array([[(((3*i + 5*k + offset) % 19) - 9)/8. for k in range(n)]
+                      for i in range(n)])
+        return b @ b.T/8. + np.eye(n)*(n/4.)
+
+    anchor_o, anchor_h = block(4, 7), block(4, 11)
+    if masked:
+        anchor_o = np.diag(np.diag(anchor_o))
+    model = R.refinement_model(sites, [anchor_o, anchor_h, anchor_h.copy()],
+                               provenance='test_isapol_logging refinement')
+    rng = np.random.default_rng(20260911)
+    points = np.asarray(4. + 2.*rng.random((8, 3)))
+    fields = R.channel_fields(points, model)
+    source = [anchor_o + block(4, 3)/8., anchor_h + block(4, 5)/8.]
+    response = R.point_to_point_response(fields, model, [source[0], source[1], source[1]])
+    return R.refine(model, points, R.pack_lower_triangle(response), fields=fields,
+                    target_origin=core.IsaPfitTargetOrigin.SyntheticAnalyticTest,
+                    source_id='test_isapol_logging',
+                    generation_record='forward map of a perturbed local model')
+
+
+def test_pfit_option_fields_match_the_binding():
+    """Options are a pybind object, so the list is written out; it must be whole."""
+    declared = {name for name, value in vars(core.IsaPfitOptions).items()
+                if isinstance(value, property)}
+    assert set(lg.PFIT_OPTION_FIELDS) == declared
+
+
+def test_pfit_diagnostic_keys_cover_every_bound_diagnostic():
+    """Narrated metrics plus the two bulk records account for all of them."""
+    declared = {name for name, value in vars(core.IsaPfitDiagnostics).items()
+                if isinstance(value, property)}
+    assert set(lg.PFIT_DIAGNOSTIC_KEYS) | set(lg.PFIT_DIAGNOSTIC_BULK_KEYS) == declared
+    assert not set(lg.PFIT_DIAGNOSTIC_KEYS) & set(lg.PFIT_DIAGNOSTIC_BULK_KEYS)
+
+
+def test_refine_parameters_cover_every_model_knob_and_solver_control():
+    from psi4.driver.procrouting import isapol_refine as R
+    refinement = _refinement()
+    options = core.IsaPfitOptions()
+    names = dict(lg.refine_parameters(model=refinement.model, points=((0., 0., 0.),),
+                                      fields=None, damping=0., options=options,
+                                      source_id='id'))
+    structure = set(lg.REFINEMENT_STRUCTURE_FIELDS)
+    for field in dataclasses.fields(R.RefinementModel):
+        if field.name in structure:
+            # narrated as a count or a table, never as the variable list itself
+            assert names.get(field.name) != getattr(refinement.model, field.name)
+            continue
+        assert field.name in names, field.name
+        assert names[field.name] == getattr(refinement.model, field.name)
+    assert names['sites'] == len(refinement.model.sites)
+    assert names['site types'] == refinement.model.site_types
+    for name in lg.PFIT_OPTION_FIELDS:
+        assert 'options.' + name in names
+    assert names['fit points'] == 1 and names['packed target rows'] == 1
+    assert names['T-function fields'] == 'generated from the fit points'
+
+
+def test_refine_parameters_report_the_lattice_by_count_not_by_value():
+    refinement = _refinement()
+    text = '\n'.join('%s %s' % (k, lg._fmt(v)) for k, v in lg.refine_parameters(
+        model=refinement.model, points=np.zeros((8, 3)), fields=object(), damping=1.5,
+        options=core.IsaPfitOptions(), source_id='id'))
+    assert 'fit points 8' in text and 'packed target rows 36' in text
+    assert 'caller-supplied' in text
+    assert 'not printed' not in text
+
+
+def test_refinement_model_tables_show_sites_and_copy_equivalence():
+    log, cap = _log(1)
+    refinement = _refinement()
+    lg.report_refinement_model(log, refinement.model)
+    assert 'Refinement sites' in cap.text
+    assert 'COPY equivalence' in cap.text
+    # the two hydrogens share one variable set, read off the first of them
+    assert '(H1, H2)' in cap.text
+    assert 'Declared site frames' not in cap.text
+
+
+def test_declared_site_frames_are_level_three_only():
+    log, cap = _log(3)
+    lg.report_refinement_model(log, _refinement().model)
+    assert 'Declared site frames' in cap.text
+
+
+def test_refinement_batch_table_is_level_two_and_names_its_batch():
+    refinement = _refinement()
+    log, cap = _log(1)
+    lg.report_refinement_batches(log, refinement.result)
+    assert 'Fit residuals per data batch' not in cap.text
+    log, cap = _log(2)
+    lg.report_refinement_batches(log, refinement.result)
+    assert 'Fit residuals per data batch' in cap.text
+    assert 'refinement' in cap.text
+
+
+def test_refinement_narration_shows_anchors_shifts_and_refined_isotropics():
+    log, cap = _log(1)
+    refinement = _refinement()
+    lg.report_refinement(log, None, refinement, frequency=0.)
+    assert 'Refined variables against their anchors' in cap.text
+    assert 'penalty strength' in cap.text
+    assert 'Refined atomic isotropic polarizabilities' in cap.text
+    assert 'rank 0 is a refinement variable' in cap.text
+    assert 'free parameters' in cap.text
+    # the bulk of the stage never reaches the narrative
+    assert 'not printed' not in cap.text.replace('higher virtual orbitals not printed', '')
+
+
+def test_refinement_isotropics_come_from_the_refinement_module(wfn):
+    """The Racah reduction has one home; reporting reads it, never restates it."""
+    from psi4.driver.procrouting import isapol_refine as R
+    refinement = _refinement()
+    ranks, scalars = R.isotropic_scalars(refinement)
+    lg.report_refinement(lg.silent(), wfn, refinement)
+    for site, site_ranks, site_scalars in zip(refinement.model.sites, ranks, scalars):
+        for rank, value in zip(site_ranks, site_scalars):
+            key = 'ATOM %s REFINED ISOTROPIC POLARIZABILITY RANK %d' % (site.label, rank)
+            assert wfn.variable(key) == pytest.approx(float(value), rel=0, abs=0)
+
+
+def test_refinement_variables_are_published_with_declared_shapes(wfn):
+    refinement = _refinement()
+    lg.report_refinement(lg.silent(), wfn, refinement, frequency=.5)
+    n = refinement.model.parameter_count
+    assert np.asarray(wfn.variable('ATOMIC REFINEMENT PARAMETERS XI 0.50000000')).shape == (1, n)
+    assert np.asarray(wfn.variable('ATOMIC REFINEMENT ANCHORS XI 0.50000000')).shape == (1, n)
+    assert wfn.variable('ATOMIC REFINEMENT STATUS XI 0.50000000') == 1.
+    assert wfn.variable('ATOMIC REFINEMENT NUMERICAL RANK XI 0.50000000') == float(n)
+    assert wfn.has_variable('ATOMIC REFINEMENT DATA MAX RESIDUAL XI 0.50000000')
+    assert wfn.has_variable('ATOMIC REFINEMENT COPY ANCHOR DISCREPANCY XI 0.50000000')
+    assert not wfn.has_variable('ATOMIC REFINEMENT PARAMETERS')
+
+
+def test_unsolved_refinement_marks_the_properties_but_not_the_diagnostics(wfn):
+    """A rank-deficient fit still returns numbers; its properties say so."""
+    refinement = _refinement()
+    unsolved = dataclasses.replace(refinement, status=core.IsaPfitStatus.RankDeficient)
+    lg.report_refinement(lg.silent(), wfn, unsolved)
+    assert wfn.variable('ATOMIC REFINEMENT STATUS') == 0.
+    assert wfn.has_variable('ATOMIC REFINEMENT DATA RMS')
+    assert wfn.has_variable('ATOMIC REFINEMENT PARAMETERS RANKDEFICIENT')
+    assert not wfn.has_variable('ATOMIC REFINEMENT PARAMETERS')
+    assert wfn.has_variable('ATOM O REFINED ISOTROPIC POLARIZABILITY RANK 1 RANKDEFICIENT')
+    assert not wfn.has_variable('ATOM O REFINED ISOTROPIC POLARIZABILITY RANK 1')
+
+
+def test_refine_publishes_only_when_handed_a_wavefunction(wfn):
+    """``refine`` takes no wavefunction by default, so expert callers are unchanged."""
+    import inspect
+    from psi4.driver.procrouting import isapol_refine as R
+    signature = inspect.signature(R.refine)
+    assert signature.parameters['wfn'].default is None
+    _refinement()  # solved with no wavefunction at all
+    assert not wfn.variables()
+
+
+# ------------------------------------------------- declared AC iterations ----
+
+def _declaration():
+    from psi4.driver.procrouting import isapol_native_ac as ac
+    return ac.AcDeclaration(ionization_potential=.46380)
+
+
+def _convergence(**kwargs):
+    from psi4.driver.procrouting import isapol_native_ac as ac
+    fields = dict(iterations=17, delta_energy=1.e-11, orbital_gradient=2.e-9,
+                  energy_threshold=1.e-10, gradient_threshold=1.e-8, shift=.164933,
+                  shift_clamped=0, homo=-.298867, lumo=.075810, energy=-76.338427,
+                  reference_energy=-76.338456, grid_points=66202)
+    fields.update(kwargs)
+    return ac.AcConvergence(**fields)
+
+
+def test_ac_parameters_cover_every_declaration_field_and_its_limits():
+    from psi4.driver.procrouting import isapol_native_ac as ac
+    names = dict(lg.ac_parameters(_declaration(), maxiter=200, energy_threshold=1.e-10,
+                                  gradient_threshold=1.e-8, diis_subspace=10,
+                                  shift_damping=.5,
+                                  max_energy_threshold=ac.MAX_ENERGY_THRESHOLD,
+                                  max_gradient_threshold=ac.MAX_GRADIENT_THRESHOLD))
+    for field in dataclasses.fields(ac.AcDeclaration):
+        assert field.name in names
+    assert names['label'] == _declaration().label()
+    # the declared thresholds are shown against the loosest ones admission takes
+    assert names['loosest admitted energy_threshold'] == ac.MAX_ENERGY_THRESHOLD
+    assert names['loosest admitted gradient_threshold'] == ac.MAX_GRADIENT_THRESHOLD
+    assert names['energy_threshold'] <= names['loosest admitted energy_threshold']
+
+
+def test_ac_splice_reports_the_grid_it_was_given():
+    log, cap = _log(1)
+    lg.report_ac_splice(log, exact_exchange=.25, fermi_amaldi_scale=.075, electrons=10,
+                        occupied=5, basis_functions=24, origin_bohr=(0., 0., .1),
+                        bragg_radii=(1.134, .661, .661), grid_points=66202,
+                        grid_blocks=553, active_blocks=288, active_points=15598)
+    assert 'the SCF exchange-correlation grid, unchanged' in cap.text
+    assert 'points with f > 0' in cap.text
+    assert '0.235612' in cap.text  # 15598/66202, the corrected fraction
+
+
+def test_ac_iteration_rows_are_level_two_and_keep_no_history():
+    log, cap = _log(1)
+    rows = lg.AcIterationLog(log)
+    rows.row(iteration=0, energy=-76.3, delta=None, gradient=1.e-3, shift=.16,
+             homo=-.3, lumo=.07, clamped=0)
+    assert cap.text == ''
+    log, cap = _log(2)
+    rows = lg.AcIterationLog(log)
+    for i in range(3):
+        rows.row(iteration=i, energy=-76.3, delta=None if not i else 1.e-5,
+                 gradient=1.e-3, shift=.16, homo=-.3, lumo=.07, clamped=0)
+    assert 'Tozer-Handy shift; DIIS' in cap.text
+    assert cap.text.count('max|[F,D]|') == 1  # one header for the whole loop
+    assert len([line for line in cap.text.splitlines() if line.strip()]) == 5
+    assert not hasattr(rows, 'history')
+
+
+def test_ac_spectrum_prints_the_occupied_set_and_publishes_the_whole_vector(wfn):
+    log, cap = _log(1)
+    energies = np.arange(-19., 5., 1.)
+    lg.report_ac_spectrum(log, wfn, energies, 5)
+    assert 'Corrected orbital energies' in cap.text
+    assert 'gap' in cap.text
+    assert '%d higher virtual orbitals not printed' % (energies.size - 15) in cap.text
+    published = np.asarray(wfn.variable('ATOMIC DECLARED AC ORBITAL ENERGIES'))
+    assert published.shape == (1, energies.size)
+    assert np.array_equal(published.ravel(), energies)
+
+
+def test_ac_spectrum_refuses_a_spectrum_without_a_virtual():
+    with pytest.raises(ValueError, match='occupied set and one virtual'):
+        lg.report_ac_spectrum(lg.silent(), None, np.arange(5.), 5)
+
+
+def test_ac_convergence_publishes_the_iteration_metrics(wfn):
+    lg.report_ac_convergence(lg.silent(), wfn, _convergence(), _declaration(),
+                             converged=True)
+    assert wfn.variable('ATOMIC DECLARED AC CONVERGED') == 1.
+    assert wfn.variable('ATOMIC DECLARED AC ITERATIONS') == 17.
+    assert wfn.variable('ATOMIC DECLARED AC GAP') == pytest.approx(.075810 + .298867)
+    assert wfn.variable('ATOMIC DECLARED AC DECLARED IP') == .46380
+    for key in ('SHIFT', 'SHIFT CLAMP HITS', 'HOMO', 'LUMO', 'DELTA ENERGY',
+                'ORBITAL GRADIENT', 'ENERGY NOT VARIATIONAL', 'REFERENCE SCF ENERGY',
+                'GRID POINTS'):
+        assert wfn.has_variable('ATOMIC DECLARED AC ' + key)
+
+
+def test_unconverged_ac_is_narrated_but_never_published_unmarked(wfn):
+    """The producer reports before it refuses; the refusal is not reformatted."""
+    log, cap = _log(1)
+    lg.report_ac_convergence(log, wfn, _convergence(orbital_gradient=1.e-3),
+                             _declaration(), converged=False)
+    assert 'converged' in cap.text and 'false' in cap.text
+    assert wfn.variable('ATOMIC DECLARED AC CONVERGED') == 0.
+    assert wfn.has_variable('ATOMIC DECLARED AC SHIFT UNCONVERGED')
+    assert not wfn.has_variable('ATOMIC DECLARED AC SHIFT')
+
+
+def test_ac_convergence_narration_shows_the_shift_fixed_point():
+    log, cap = _log(1)
+    lg.report_ac_convergence(log, None, _convergence(), _declaration(), converged=True)
+    assert 'I + eps_HOMO' in cap.text
+    assert 'energy (not variational)' in cap.text
+    assert 'plain SCF reference energy' in cap.text
+    assert 'energy above plain SCF' in cap.text
+
+
+def test_ac_application_parameters_name_the_mutation_and_its_cost():
+    from psi4.driver.procrouting import isapol_native_ac as ac
+    record = ac.DeclaredAcOrbitals(_declaration(), np.zeros((24, 24)), np.zeros(24),
+                                   np.zeros((24, 24)), np.zeros((24, 24)),
+                                   _convergence(), 5)
+    names = dict(lg.ac_application_parameters(record))
+    assert names['basis functions'] == 24 and names['occupied orbitals'] == 5
+    assert 'epsilon_a' in names['replaced state']
+    assert 'not a variational minimum' in names['energy replaced by']
+    assert 'invalidated' in names['SCF seal']

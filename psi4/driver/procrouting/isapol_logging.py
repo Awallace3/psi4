@@ -627,70 +627,237 @@ def _dispersion_totals(dispersion, orders):
 
 # ------------------------------------------------------------------- PFIT ----
 
-def refine_parameters(*, model, points, fields, damping, options, source_id):
-    return (('model provenance', model.provenance),
-            ('frequency [Eh]', model.frequency_au),
-            ('parameters', model.parameter_count),
-            ('component cutoff', model.cutoff),
-            ('weight_type', model.weight_type),
-            ('weight_coefficient', model.weight_coefficient),
-            ('nonsymmetric parameters', model.nonsymmetric_parameter_count),
-            ('COPY anchor discrepancy', model.copy_anchor_discrepancy),
-            ('fit points', 0 if points is None else len(points)),
-            ('fields', 'all' if fields is None else tuple(fields)),
-            ('damping', damping), ('source_id', source_id),
-            ('solver', getattr(options, 'solver', None)),
-            ('qr_chunk_rows', getattr(options, 'qr_chunk_rows', None)),
-            ('maximum_work_bytes', getattr(options, 'maximum_work_bytes', None)),
-            ('rank_relative_tolerance', getattr(options, 'rank_relative_tolerance', None)),
-            ('minimum_solver_rcond', getattr(options, 'minimum_solver_rcond', None)),
-            ('penalty convention', 'strengths[k]*(z[k]-anchors[k])**2, CamCASP read_penalties'))
+#: ``RefinementModel`` fields that ARE the variable list rather than a knob of
+#: it.  They are narrated as structure -- counts, the site and COPY tables, the
+#: parameter table -- instead of being rendered into the parameter block, where
+#: a tuple of site dataclasses or of every anchor would be a raw intermediate.
+#: Every other field is still enumerated from the dataclass, so a knob added to
+#: the model later appears in the banner without touching this module.
+REFINEMENT_STRUCTURE_FIELDS = ('sites', 'site_types', 'reference_sites', 'equivalent_sites',
+                               'channel_offsets', 'channel_labels', 'parameter_labels',
+                               'parameter_entries', 'anchors', 'strengths')
+
+#: Declared fields of ``core.IsaPfitOptions``.  The solver's options are a
+#: pybind object rather than a dataclass, so this list cannot be derived from
+#: the object; the test suite checks it against the binding instead.
+PFIT_OPTION_FIELDS = ('solver', 'qr_chunk_rows', 'maximum_work_bytes',
+                      'rank_relative_tolerance', 'minimum_solver_rcond',
+                      'retain_pair_predictions')
 
 
-PFIT_DIAGNOSTIC_KEYS = ('data_rows', 'augmented_rows', 'numerical_rank', 'free_indices',
-                        'batches', 'data_sse', 'data_rms', 'data_max_residual',
+def pfit_option_parameters(options, *, prefix='options.'):
+    """Every declared solver control, including ones the caller left at default."""
+    return tuple((prefix + name, getattr(options, name, None)) for name in PFIT_OPTION_FIELDS)
+
+
+def refine_parameters(*, model, points, fields, damping, options, source_id,
+                      generation_record=None, target_origin=None, target_convention=None,
+                      label=None, response_representation='', auxiliary_basis_id=''):
+    """Every tweakable input of the point-to-point refinement stage.
+
+    The model's own knobs come from ``dataclasses.fields``; the lattice, the
+    solver controls and the target's provenance tags are the caller's arguments
+    at this call site.  Points and packed targets are reported as counts: they
+    are the stage's bulk data, and the lattice is identified by its provenance
+    rather than by printing it.
+    """
+    npoint = 0 if points is None else len(points)
+    return (dataclass_parameters(model, skip=REFINEMENT_STRUCTURE_FIELDS)
+            + (('parameters', model.parameter_count),
+               ('sites', len(model.sites)),
+               ('site types', model.site_types),
+               ('fit points', npoint),
+               ('packed target rows', npoint * (npoint + 1) // 2),
+               ('T-function fields', 'generated from the fit points'
+                if fields is None else 'caller-supplied'),
+               ('damping', damping),
+               ('target origin', target_origin),
+               ('target convention', target_convention),
+               ('response representation', response_representation),
+               ('auxiliary basis id', auxiliary_basis_id),
+               ('source_id', source_id),
+               ('generation record', generation_record),
+               ('batch label', label))
+            + pfit_option_parameters(options)
+            + (('penalty convention',
+                'strengths[k]*(z[k]-anchors[k])**2, CamCASP read_penalties'),))
+
+
+def report_refinement_model(log, model, level=1):
+    """The declared structure being refined: sites, COPY types, variable counts.
+
+    This is the model, not an intermediate: which sites exist, where they sit,
+    how far each goes in rank, and which of them share one set of variables.
+    The declared local axes follow at level 3.
+    """
+    log.table('Refinement sites (declared origins; local axes are tabulated at level 3):',
+              ('site', 'type', 'rank limit', 'components', 'x [bohr]', 'y [bohr]', 'z [bohr]'),
+              [(s.label, s.site_type, s.rank_limit, s.component_count) + tuple(s.origin_bohr)
+               for s in model.sites], level=level)
+    owned = {}
+    for entries in model.parameter_entries:
+        owned[entries[0][0]] = owned.get(entries[0][0], 0) + 1
+    log.table('COPY equivalence (one variable set per type, read off its reference site):',
+              ('type', 'reference site', 'equivalent sites', 'variables'),
+              [(site_type, model.sites[reference].label,
+                tuple(model.sites[i].label for i in members), owned.get(reference, 0))
+               for site_type, reference, members in zip(model.site_types, model.reference_sites,
+                                                        model.equivalent_sites)], level=level)
+    log.table('Declared site frames (local-to-global columns, one row each):',
+              ('site', 'row', 'x', 'y', 'z'),
+              [(s.label, i) + tuple(s.frame[i]) for s in model.sites for i in range(3)],
+              level=3)
+
+
+#: Every declared field of ``core.IsaPfitDiagnostics`` except the two that are
+#: bulk rather than a metric: ``batches`` is a per-batch record and gets its own
+#: table, and ``free_indices`` is a variable list reported as its length.  Read
+#: with ``hasattr`` so a build whose binding lacks one of them narrates the rest.
+PFIT_DIAGNOSTIC_BULK_KEYS = ('batches', 'free_indices')
+PFIT_DIAGNOSTIC_KEYS = ('data_rows', 'augmented_rows', 'numerical_rank', 'work_budget_bytes',
+                        'data_sse', 'data_rms', 'data_max_residual',
                         'matrix_objective', 'lc_objective', 'total_objective',
-                        'stationarity_inf', 'backward_residual', 'normal_h_rcond',
-                        'qr_r_rcond', 'rank_smallest', 'rank_largest',
-                        'penalty_min_eigenvalue', 'penalty_asymmetry',
+                        'objective_available', 'stationarity_inf', 'backward_residual',
+                        'normal_h_rcond', 'normal_h_norm1', 'condition_estimate_available',
+                        'qr_r_rcond', 'qr_discarded_rhs_sse', 'rank_smallest', 'rank_largest',
+                        'penalty_min_eigenvalue', 'penalty_asymmetry', 'penalty_correction_max',
                         'rank_method', 'psd_policy', 'lapack_info', 'native_verified')
 
 
+def report_refinement_batches(log, result, level=2):
+    """Per-batch fit residuals.
+
+    PFIT is one linear least-squares solve, not an iteration, so it has no
+    iteration trajectory to print.  What it does report per block of data is
+    this table; the objective breakdown beside it is the rest of the metrics.
+    """
+    batches = tuple(result.diagnostics.batches)
+    if not batches:
+        return
+    labels = tuple(result.batch_labels)
+    log.table('Fit residuals per data batch (one linear solve; no iteration trajectory exists):',
+              ('batch', 'points', 'rows', 'sse', 'rms', 'max residual'),
+              [(labels[i] if i < len(labels) else i, b.points, b.rows, b.sse, b.rms,
+                b.max_residual) for i, b in enumerate(batches)], level=level)
+
+
+def _refined_isotropics(refinement):
+    """``(ranks, scalars)`` per site, reduced by the refinement module's own rule.
+
+    Imported at call time because ``isapol_refine`` imports this module.  The
+    Racah trace convention is deliberately NOT restated here: it lives in
+    ``isapol_refine.isotropic_scalars``, and reporting reads it.
+    """
+    from . import isapol_refine as _refine
+    return _refine.isotropic_scalars(refinement)
+
+
 def report_refinement(log, wfn, refinement, *, frequency=None):
-    """PFIT status, objective breakdown and the refined parameters by label."""
-    diagnostics = refinement.diagnostics
+    """Stage exit for PFIT: fit quality, the refined variables, the refined props.
+
+    A status other than ``Solved`` does not stop the solver from returning
+    numbers, so the refined *properties* are published under a name carrying
+    that status instead of the plain one.  The fit diagnostics keep plain names,
+    because they describe the attempt rather than claim a result.
+    """
+    diagnostics, result, model = refinement.diagnostics, refinement.result, refinement.model
+    solved = str(refinement.status).rsplit('.', 1)[-1] == 'Solved'
     log.items((('status', str(refinement.status)),
                ('refinement status', refinement.refinement_status),
                ('anchor shift maxabs', float(refinement.anchor_shift_maxabs)),
-               ('penalty convention', refinement.penalty_convention))
+               ('COPY anchor discrepancy', float(model.copy_anchor_discrepancy)),
+               ('penalty convention', refinement.penalty_convention),
+               ('free parameters', len(tuple(diagnostics.free_indices))),
+               ('fixed parameters',
+                model.parameter_count - len(tuple(diagnostics.free_indices))))
               + tuple((k, getattr(diagnostics, k)) for k in PFIT_DIAGNOSTIC_KEYS
                       if hasattr(diagnostics, k)))
-    result = refinement.result
-    labels = tuple(result.parameter_labels)
+    report_refinement_batches(log, result)
+    labels, units = tuple(result.parameter_labels), tuple(result.parameter_units)
     values = np.asarray(refinement.parameters, dtype=float).ravel()
-    if len(labels) == len(values):
-        log.table('Refined parameters:', ('parameter', 'value', 'unit'),
-                  list(zip(labels, values.tolist(), tuple(result.parameter_units))))
+    aligned = len(labels) == len(values) == len(model.anchors) == len(units)
+    if aligned:
+        log.table('Refined variables against their anchors:',
+                  ('parameter', 'unit', 'anchor', 'refined', 'shift', 'penalty strength'),
+                  [(labels[k], units[k], float(model.anchors[k]), float(values[k]),
+                    float(values[k] - model.anchors[k]), float(model.strengths[k]))
+                   for k in range(len(labels))])
+    ranks, scalars = _refined_isotropics(refinement)
+    rows = [(site.label, rank, 'bohr^%d' % (2 * rank + 1), value)
+            for site, site_ranks, site_scalars in zip(model.sites, ranks, scalars)
+            for rank, value in zip(site_ranks, site_scalars)]
+    if rows:
+        log.table('Refined atomic isotropic polarizabilities, trace(alpha_ll)/(2l+1):',
+                  ('site', 'rank', 'unit', 'alpha'), rows,
+                  note='frequency %s Eh; rank 0 is a refinement variable (charge flow), '
+                       'not a polarizability of a rank the dispersion sum runs over'
+                       % _fmt(float(model.frequency_au)))
     if wfn is None:
         return
     tag = '' if frequency is None else ' XI %.8f' % float(frequency)
-    _set(wfn, 'ATOMIC REFINEMENT STATUS' + tag,
-         1. if str(refinement.status).endswith('Solved') else 0.)
+    mark = '' if solved else ' ' + str(refinement.status).rsplit('.', 1)[-1].upper()
+    _set(wfn, 'ATOMIC REFINEMENT STATUS' + tag, 1. if solved else 0.)
+    _set(wfn, 'ATOMIC REFINEMENT NUMERICAL RANK' + tag, float(diagnostics.numerical_rank))
     _set(wfn, 'ATOMIC REFINEMENT DATA RMS' + tag, float(diagnostics.data_rms))
+    _set(wfn, 'ATOMIC REFINEMENT DATA MAX RESIDUAL' + tag, float(diagnostics.data_max_residual))
+    _set(wfn, 'ATOMIC REFINEMENT MATRIX OBJECTIVE' + tag, float(diagnostics.matrix_objective))
     _set(wfn, 'ATOMIC REFINEMENT TOTAL OBJECTIVE' + tag, float(diagnostics.total_objective))
-    if len(labels) == len(values):
-        _set(wfn, 'ATOMIC REFINEMENT PARAMETERS' + tag, _matrix(values.reshape(1, -1)))
+    _set(wfn, 'ATOMIC REFINEMENT ANCHOR SHIFT MAXABS' + tag,
+         float(refinement.anchor_shift_maxabs))
+    _set(wfn, 'ATOMIC REFINEMENT COPY ANCHOR DISCREPANCY' + tag,
+         float(model.copy_anchor_discrepancy))
+    if aligned:
+        _set(wfn, 'ATOMIC REFINEMENT PARAMETERS' + tag + mark, _matrix(values.reshape(1, -1)))
+        _set(wfn, 'ATOMIC REFINEMENT ANCHORS' + tag,
+             _matrix(np.asarray(model.anchors, dtype=float).reshape(1, -1)))
+    for site, site_ranks, site_scalars in zip(model.sites, ranks, scalars):
+        for rank, value in zip(site_ranks, site_scalars):
+            _set(wfn, 'ATOM %s REFINED ISOTROPIC POLARIZABILITY RANK %d%s%s'
+                 % (site.label, rank, tag, mark), float(value))
 
 
 # --------------------------------------------------- declared AC iterations ----
 
 def ac_parameters(declaration, *, maxiter, energy_threshold, gradient_threshold,
-                  diis_subspace, shift_damping):
+                  diis_subspace, shift_damping, max_energy_threshold=None,
+                  max_gradient_threshold=None):
+    """The declared AC model plus the iteration controls, against their limits.
+
+    Every field of the declaration is part of the model's identity, so the block
+    is enumerated from its dataclass rather than written out.  The thresholds
+    are printed beside the loosest values admission accepts, so that a reader
+    can see the declared ones were not relaxed to reach convergence.
+    """
     return (dataclass_parameters(declaration)
             + (('label', declaration.label()), ('maxiter', maxiter),
                ('energy_threshold', energy_threshold),
                ('gradient_threshold', gradient_threshold),
+               ('loosest admitted energy_threshold', max_energy_threshold),
+               ('loosest admitted gradient_threshold', max_gradient_threshold),
                ('diis_subspace', diis_subspace), ('shift_damping', shift_damping)))
+
+
+def report_ac_splice(log, *, exact_exchange, fermi_amaldi_scale, electrons, occupied,
+                     basis_functions, origin_bohr, bragg_radii, grid_points, grid_blocks,
+                     active_blocks, active_points, level=1):
+    """Where the declared correction actually acts, in the stage's own numbers.
+
+    Each of these is read off the constructed driver.  The grid is the SCF's own
+    exchange-correlation grid, unchanged and not rebuilt, and the active counts
+    come from the exact ``f > 0`` screen rather than from a tolerance.
+    """
+    log.line('Splice geometry (the SCF exchange-correlation grid, unchanged):', level=level)
+    log.items((('exact exchange a_x', exact_exchange),
+               ('Fermi-Amaldi coefficient c_FA/N', fermi_amaldi_scale),
+               ('electrons N', electrons), ('occupied orbitals', occupied),
+               ('basis functions', basis_functions),
+               ('multipole origin [bohr]', tuple(origin_bohr)),
+               ('Bragg-Slater radii [bohr]', tuple(bragg_radii)),
+               ('grid points', grid_points), ('grid blocks', grid_blocks),
+               ('blocks with f > 0', active_blocks), ('points with f > 0', active_points),
+               ('fraction of grid corrected',
+                0. if not grid_points else active_points / float(grid_points))), level=level)
+    log.line(level=level)
 
 
 AC_ITERATION_HEADERS = ('iter', 'energy [Eh]', 'dE', 'max|[F,D]|', 'shift [Eh]',
@@ -730,8 +897,44 @@ class AcIterationLog:
                        level=self._level, indent=4)
 
 
+#: Virtual orbitals printed above the LUMO.  The rest of the virtual spectrum is
+#: bulk; the full vector is published as one array instead.
+AC_SPECTRUM_VIRTUALS = 10
+
+
+def report_ac_spectrum(log, wfn, energies, nocc, *, mark='', level=1):
+    """Orbital energies of the corrected potential: the occupied set and the gap.
+
+    The eigenvalues are what an asymptotic correction is for, so they are this
+    stage's property rather than an intermediate.  Only the low-lying virtuals
+    are printed; the full vector is published once as a machine-readable array.
+    """
+    energies = np.asarray(energies, dtype=float).ravel()
+    nocc = int(nocc)
+    if nocc < 1 or energies.size <= nocc:
+        raise ValueError('orbital energies must cover the occupied set and one virtual')
+    stop = min(energies.size, nocc + AC_SPECTRUM_VIRTUALS)
+    log.table('Corrected orbital energies (HOMO %s, LUMO %s, gap %s Eh):'
+              % (_fmt(float(energies[nocc - 1])), _fmt(float(energies[nocc])),
+                 _fmt(float(energies[nocc] - energies[nocc - 1]))),
+              ('orbital', 'occupation', 'energy [Eh]'),
+              [(i + 1, 2. if i < nocc else 0., float(energies[i])) for i in range(stop)],
+              level=level,
+              note=('%d higher virtual orbitals not printed' % (energies.size - stop))
+              if energies.size > stop else None)
+    _set(wfn, 'ATOMIC DECLARED AC ORBITAL ENERGIES' + mark, _matrix(energies.reshape(1, -1)))
+
+
 def report_ac_convergence(log, wfn, convergence, declaration, *, converged):
-    log.items((('converged', bool(converged)),
+    """Stage exit for the declared AC: what the iteration actually achieved.
+
+    A refused run is narrated too -- the producer reports before it refuses --
+    so an unconverged record's variables carry an ``UNCONVERGED`` mark rather
+    than the names a converged run publishes.  Nothing here softens a refusal:
+    this reports what the loop did and decides no admission.
+    """
+    log.items((('declaration', declaration.label()),
+               ('converged', bool(converged)),
                ('iterations', int(convergence.iterations)),
                ('delta energy', float(convergence.delta_energy)),
                ('orbital gradient', float(convergence.orbital_gradient)),
@@ -742,12 +945,45 @@ def report_ac_convergence(log, wfn, convergence, declaration, *, converged):
                ('HOMO', float(convergence.homo)), ('LUMO', float(convergence.lumo)),
                ('gap', float(convergence.lumo - convergence.homo)),
                ('declared IP', float(declaration.ionization_potential)),
+               ('I + eps_HOMO', float(declaration.ionization_potential + convergence.homo)),
                ('energy (not variational)', float(convergence.energy)),
                ('plain SCF reference energy', float(convergence.reference_energy)),
+               ('energy above plain SCF',
+                float(convergence.energy - convergence.reference_energy)),
                ('grid points', int(convergence.grid_points))))
     if wfn is None:
         return
-    _set(wfn, 'ATOMIC DECLARED AC ITERATIONS', float(convergence.iterations))
-    _set(wfn, 'ATOMIC DECLARED AC SHIFT', float(convergence.shift))
-    _set(wfn, 'ATOMIC DECLARED AC HOMO', float(convergence.homo))
-    _set(wfn, 'ATOMIC DECLARED AC LUMO', float(convergence.lumo))
+    mark = '' if converged else ' UNCONVERGED'
+    _set(wfn, 'ATOMIC DECLARED AC CONVERGED', 1. if converged else 0.)
+    for key, value in (('ITERATIONS', float(convergence.iterations)),
+                       ('SHIFT', float(convergence.shift)),
+                       ('SHIFT CLAMP HITS', float(convergence.shift_clamped)),
+                       ('HOMO', float(convergence.homo)),
+                       ('LUMO', float(convergence.lumo)),
+                       ('GAP', float(convergence.lumo - convergence.homo)),
+                       ('DELTA ENERGY', float(convergence.delta_energy)),
+                       ('ORBITAL GRADIENT', float(convergence.orbital_gradient)),
+                       ('DECLARED IP', float(declaration.ionization_potential)),
+                       ('ENERGY NOT VARIATIONAL', float(convergence.energy)),
+                       ('REFERENCE SCF ENERGY', float(convergence.reference_energy)),
+                       ('GRID POINTS', float(convergence.grid_points))):
+        _set(wfn, 'ATOMIC DECLARED AC ' + key + mark, value)
+
+
+def ac_application_parameters(record):
+    """What applying a declared-AC record replaces, and what that costs.
+
+    The application has no tweakable input of its own: its parameters are the
+    identity of the record being applied, and the two consequences the module
+    docstring is explicit about -- a non-variational energy and an invalidated
+    SCF seal -- are stated here rather than left for a reader to infer.
+    """
+    return (('declaration', record.declaration.label()),
+            ('basis functions', int(np.asarray(record.orbitals).shape[0])),
+            ('occupied orbitals', int(record.nocc)),
+            ('Tozer-Handy shift', float(record.convergence.shift)),
+            ('iterations', int(record.convergence.iterations)),
+            ('replaced state', 'Ca, Cb, Da, Db, Fa, Fb, epsilon_a, epsilon_b, energy'),
+            ('energy replaced by', 'the plain functional at the corrected density, '
+                                   'which is not a variational minimum'),
+            ('SCF seal', 'verified, then deliberately invalidated by this mutation'))

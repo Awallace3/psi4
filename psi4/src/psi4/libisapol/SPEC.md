@@ -204,6 +204,23 @@ reporters are replayed there with a silent log. Neither `isapol_native._context`
 nor `_scf_state_signature` hashes variables, so publication cannot disturb an
 SCF seal or a mid-flight context re-check.
 
+The two expert stages that no production driver calls are narrated on the same
+terms. `isapol_refine.refine` takes an optional `wfn=`: it publishes the PFIT fit
+diagnostics, the refined variable vector against its anchors and the refined
+per-site isotropic polarizabilities, reduced by `isotropic_scalars` rather than
+re-derived in the reporter, while the fit points, the packed targets, the
+T-function fields, the refined tensors and the solver's predictions stay
+unprinted. A non-`Solved` status is still returned rather than raised, so the
+refined *properties* carry that status in their variable names (e.g.
+` RANKDEFICIENT`) while the fit diagnostics keep plain names, because they
+describe the attempt and claim no result. For the declared AC, the producer
+`declared_ac_orbitals` narrates the splice geometry read off its constructed
+driver -- the SCF grid it reuses unchanged, and the exact `f > 0` active-point
+count -- plus the per-iteration table and the corrected orbital spectrum, but
+publishes nothing: it creates no seal and applies nothing. Publication belongs to
+`apply_declared_ac(wfn, record, log=)`, the named mutation that owns the
+corrected state, and happens after each of its refusals.
+
 Details: [NATIVE_OEPROP.md](NATIVE_OEPROP.md),
 [NATIVE_FIXED_GRAC.md](NATIVE_FIXED_GRAC.md),
 [NATIVE_DECLARED_AC.md](NATIVE_DECLARED_AC.md),
@@ -613,7 +630,10 @@ below). Bounds are declared, not adjustable: `MAX_RANK 4`, `MAX_SITES 64`,
 `target_origin`, `source_id` and `generation_record`, and enforces the same
 origin/representation pairing as `pfit.cc`: a `NativeDirectActualPointResponse`
 target must be `native_point_charge_ov_operators` with no auxiliary basis named.
-A non-`Solved` status is returned, never repaired.
+A non-`Solved` status is returned, never repaired. `refine()` also takes an
+optional `wfn=` for publication only; passing one does not make the refinement a
+property of that wavefunction, because the caller still owns the points, the
+target response and the model, and nothing reads the wavefunction back.
 
 **Numeric parity with CamCASP `pfit`.** Three formatted-`Lattice` inputs
 carrying the same sites, axes, `.pdef` `COPY` model, point cloud, point-to-point

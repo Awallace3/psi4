@@ -96,15 +96,27 @@ counterpart in our implementation at all.
   a different `label()`.
 - `splice_weight` refuses an element absent from the declared Bragg table —
   "no fallback radius is substituted".
-- `declared_ac_orbitals(wfn, declaration)` **verifies the uncorrected SCF seal
-  and manufactures none**, refuses every bad argument before entering the
+- `declared_ac_orbitals(wfn, declaration, log=)` **verifies the uncorrected SCF
+  seal and manufactures none**, refuses every bad argument before entering the
   iteration, returns nothing unless the iteration converged inside thresholds at
   least as tight as `1e-8`/`1e-6`, and **applies nothing**: the wavefunction's
-  `_scf_state_signature` is bit-identical afterwards.
-- `apply_declared_ac(wfn, record)` is the explicit, named mutation. It refuses a
-  record from a different SCF state, a mismatched basis/occupation, and
+  `_scf_state_signature` is bit-identical afterwards. With a log it narrates the
+  declaration and iteration controls against those admission limits, the splice
+  geometry read off its constructed driver (the reused SCF grid, the Bragg radii,
+  the multipole origin and the exact `f > 0` active-point count), the
+  per-iteration DIIS table, the corrected orbital spectrum and the convergence
+  record — a refused run included, since reporting precedes the refusal and
+  never softens it — but it publishes **no** QCVariable, because it owns no
+  corrected wavefunction.
+- `apply_declared_ac(wfn, record, log=)` is the explicit, named mutation. It
+  refuses a record from a different SCF state, a mismatched basis/occupation, and
   composition with an existing correction. It deliberately invalidates the SCF
   seal, which is correct: the state is no longer the one Psi4's SCF converged.
+  This is also where the stage's QCVariables are published — iterations, shift
+  and clamp hits, HOMO/LUMO/gap, the declared IP, the non-variational energy
+  against its plain-SCF reference, the grid points and the full orbital-energy
+  vector — after every refusal above has passed, so a wavefunction never carries
+  declared-AC variables without the orbitals they describe.
 - `validate_declared_ac` re-derives the provenance from a *current* record and
   refuses a stale signature or a doctored convergence record (iterations,
   clamping, thresholds, sub-minimum energy, or a shift off its own fixed point).

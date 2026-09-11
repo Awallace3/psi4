@@ -567,11 +567,30 @@ def declared_ac_orbitals(wfn, declaration, *, maxiter=200, energy_threshold=1.e-
               _lg.ac_parameters(declaration, maxiter=maxiter,
                                 energy_threshold=energy_threshold,
                                 gradient_threshold=gradient_threshold,
-                                diis_subspace=diis_subspace, shift_damping=shift_damping))
+                                diis_subspace=diis_subspace, shift_damping=shift_damping,
+                                max_energy_threshold=MAX_ENERGY_THRESHOLD,
+                                max_gradient_threshold=MAX_GRADIENT_THRESHOLD))
     driver = _AcKohnSham(wfn, declaration, shift_damping=shift_damping)
+    # Read off the constructed driver, not recomputed for reporting: these are
+    # the radii, origin and grid the splice actually used.
+    table = BRAGG_SLATER_TABLES[declaration.bragg_table]
+    _lg.report_ac_splice(
+        log, exact_exchange=driver.ax,
+        fermi_amaldi_scale=declaration.fa_scale/driver.nelec,
+        electrons=driver.nelec, occupied=driver.nocc, basis_functions=driver.nbf,
+        origin_bohr=driver.origin,
+        bragg_radii=tuple(table[driver.mol.Z(i)] for i in range(driver.mol.natom())),
+        grid_points=driver.grid.npoints(), grid_blocks=len(driver.f),
+        active_blocks=len(driver.active),
+        active_points=int(sum(int((f > 0.).sum()) for f in driver.f)))
     C, spectrum, Da, F, convergence, converged = driver.run(
         np.asarray(wfn.Ca()), maxiter, energy_threshold, gradient_threshold, diis_subspace,
         log=log)
+    # The pristine wavefunction is narrated but deliberately not written to: it
+    # carries no correction yet, and this producer creates no seal.  Publication
+    # belongs to ``apply_declared_ac``, which owns the corrected state.
+    _lg.report_ac_spectrum(log, None, spectrum, driver.nocc,
+                           mark='' if converged else ' UNCONVERGED')
     _lg.report_ac_convergence(log, None, convergence, declaration, converged=converged)
     log.stage_end()
     if not converged:
@@ -585,13 +604,19 @@ def declared_ac_orbitals(wfn, declaration, *, maxiter=200, energy_threshold=1.e-
                               np.ascontiguousarray(F), convergence, int(driver.nocc))
 
 
-def apply_declared_ac(wfn, record):
+def apply_declared_ac(wfn, record, *, log=None):
     """Replace ``wfn``'s orbitals with the declared-AC ones and record the fact.
 
     This is an explicit, named mutation.  It invalidates the SCF seal, which is
     correct: the state is no longer the one Psi4's SCF converged.  The energy is
     replaced by the plain functional evaluated at the corrected density, which is
     not a variational minimum and is labelled as such in the record.
+
+    This is also where the stage's machine-readable variables are published,
+    because this is the point that owns a wavefunction the correction actually
+    describes.  They are published after every refusal below has passed, and
+    after the mutation, so a wavefunction never carries declared-AC variables it
+    does not carry the orbitals for.
     """
     from .scf_proc.scf_iterator import _scf_state_signature
     if not isinstance(record, DeclaredAcOrbitals):
@@ -615,6 +640,16 @@ def apply_declared_ac(wfn, record):
         wfn.V_potential().set_D([wfn.Da()])
     wfn._declared_ac_evidence = (record.declaration, record.convergence,
                                  _scf_state_signature(wfn), wfn.basisset())
+    log = _lg.silent() if log is None else log
+    log.stage('declared asymptotic correction applied to the wavefunction',
+              _lg.ac_application_parameters(record))
+    # ``converged=True`` is not an assumption: ``declared_ac_orbitals`` refuses
+    # to return an unconverged record, and ``validate_declared_ac`` re-checks
+    # the convergence diagnostics at admission.
+    _lg.report_ac_spectrum(log, wfn, record.energies, record.nocc)
+    _lg.report_ac_convergence(log, wfn, record.convergence, record.declaration,
+                              converged=True)
+    log.stage_end()
     return wfn
 
 

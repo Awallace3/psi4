@@ -603,7 +603,7 @@ class RefinementResult:
 
 
 def refine(model, points_bohr, packed_targets, *, target_origin=None, source_id,
-           generation_record, fields=None, damping=0.0, options=None, log=None,
+           generation_record, fields=None, damping=0.0, options=None, log=None, wfn=None,
            **provenance):
     """Solve the refinement and return the refined per-site local tensors.
 
@@ -614,6 +614,12 @@ def refine(model, points_bohr, packed_targets, *, target_origin=None, source_id,
     accurate and not what upstream does.  A non-``Solved`` status is returned
     rather than raised: a rank-deficient or ill-conditioned refinement is a
     result about the model, and is reported, not repaired.
+
+    ``wfn`` is optional and is written to only by the reporting module, which
+    publishes this stage's machine-readable variables on it.  Passing one does
+    not make the refinement a property of that wavefunction: the caller owns
+    the points, the target response and the model, and nothing here reads the
+    wavefunction back or checks it against the targets it was given.
     """
     log = _lg.silent() if log is None else log
     problem = refinement_problem(model, points_bohr, packed_targets, fields=fields,
@@ -625,7 +631,12 @@ def refine(model, points_bohr, packed_targets, *, target_origin=None, source_id,
         options.solver = core.IsaPfitSolver.NormalEquationsDSYSV
     log.stage('point-to-point refinement (PFIT)', _lg.refine_parameters(
         model=model, points=points_bohr, fields=fields, damping=damping,
-        options=options, source_id=source_id))
+        options=options, source_id=source_id, generation_record=generation_record,
+        target_origin=target_origin, target_convention=TARGET_CONVENTION,
+        label=provenance.get('label', 'refinement'),
+        response_representation=provenance.get('response_representation', ''),
+        auxiliary_basis_id=provenance.get('auxiliary_basis_id', '')))
+    _lg.report_refinement_model(log, model)
     result = core.isa_pfit_solve(problem, options)
     parameters = tuple(map(float, result.parameters))
 
@@ -642,6 +653,6 @@ def refine(model, points_bohr, packed_targets, *, target_origin=None, source_id,
         anchor_shift_maxabs=float(shift), status=result.status,
         diagnostics=result.diagnostics, result=result,
         refinement_status='PFIT_refined_against_point_to_point_response')
-    _lg.report_refinement(log, None, refinement, frequency=model.frequency_au)
+    _lg.report_refinement(log, wfn, refinement, frequency=model.frequency_au)
     log.stage_end()
     return refinement
