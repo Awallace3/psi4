@@ -1,4 +1,4 @@
-# cuEST SAPT(DFT) on an H200, with automatic GRAC — Phoenix, 2026-09-10
+# cuEST SAPT(DFT) on an H200, with automatic GRAC — Phoenix, 2026-09-10/11
 
 Every measurement here uses `SAPT_DFT_GRAC_COMPUTE=ITERATIVE`: both monomers'
 GRAC shifts are determined from neutral and doublet-cation SCFs *inside* the
@@ -20,44 +20,43 @@ Contents:
   generated tables. `regenerate.sh` rebuilds all of them from the raw case
   trees.
 - `host-speed.md` — the throughput each tree's own allocation measured, and
-  whether those trees may be pooled. Every tree in this report predates the
-  canary and so reads `uncertified`; that is the finding, not a gap.
+  whether those trees may be pooled. The paired tree is certified healthy; the
+  aggregate verdict stays `uncertified` because the older trees predate the
+  canary and cannot be vouched for retroactively.
 
 ## Status
 
 Six paired cases (water, benzene, peptide, nanotube; two bases each for
-water and benzene), three repeats per arm, CPU and GPU on the same node.
-protein157 runs separately in its own allocations and is reported at the bottom.
+water and benzene), three repeats per arm, CPU and GPU on the same node, all
+36 measurements complete with a zero exit code and an asserted
+`grac_compute == "ITERATIVE"`. protein157 runs separately in its own
+allocations and is reported at the bottom.
 
-Three things in this report are *not* clean measurements and are labeled where
-they appear:
+The paired campaign is **job 13080182**, run on a gpu-h200 node that measured
+its own CPU throughput before and after the whole campaign and read healthy
+both times (83.3 then 84.2 GF/s per core, 47.6 Miter/s serial both, all cores
+at 2800 MHz). An earlier attempt at the same campaign, job 13060539, landed on
+a host running about threefold slow; it is **retired, not corrected**, and its
+numbers appear in this directory only where they are labeled as the retired
+tree. [`CPU_BASELINE.md`](CPU_BASELINE.md) has the detection, the cost, and the
+canary that now prevents a silent recurrence.
 
-0. **The paired campaign's host was degraded about threefold.** Job 13060539's
-   gpu-h200 allocation ran its CPU work at roughly a third the speed of another
-   allocation of the same CPU model in the same partition, on the same binary
-   and geometries — while the cuEST kernels were unaffected. The CPU arm is the
-   denominator of every paired speedup below, so **every speedup in this report
-   is inflated**, and the true same-node figure is not recoverable from this
-   tree by arithmetic. Read [`CPU_BASELINE.md`](CPU_BASELINE.md) before quoting
-   any of them. A canary-verified rerun is what closes this; `common.inc` now
-   measures host throughput inside every allocation so it cannot recur
-   silently, and the two calibration probes there now give the healthy
-   throughput of both node types for comparison.
+Two things here are still not clean measurements, and are labeled where they
+appear:
 
-   One case has since been re-measured on a certified-healthy host (job
-   13065746, `nanotube-6-31+G**`): the CPU arm was degraded 3.06×, the GPU arm
-   2.44×, and the same-host speedup falls from **9.52× to 7.58×**. The
-   inflation is real but smaller than the CPU deficit alone suggests, because
-   the GPU arm was degraded too. That is one case; the other five are still
-   only bounded.
-1. Any row the generated tables mark with fewer than 3/3 repeats, or that
-   appears in the "Failed or incomplete measurements" block of
-   `paired/summary.md`, is short a run. The nanotube CPU arm in particular is
-   prone to it: Einsums parks a failed process on a debugger-attach prompt
-   instead of exiting, so the case burns its timeout rather than failing fast
-   (see [`PROVENANCE.md`](PROVENANCE.md)).
-2. Two benzene cases fail the 1e-6 Eh accuracy gate. The cause is a cation-SCF
-   solution difference, not an arithmetic disagreement; see "Backend accuracy".
+1. **Two benzene cases fail the 1e-6 Eh accuracy gate.** The cause is a
+   cation-SCF solution difference, not an arithmetic disagreement; see "Backend
+   accuracy". This reproduced identically on the healthy host, which is itself
+   evidence it is a property of the protocol rather than of a machine.
+2. **protein157's numbers are cross-node**, and its GPU arm ran on an
+   allocation whose serial throughput is 1.36× below the rest of the node (see
+   `CPU_BASELINE.md`). Its ratio is an underestimate by an unquantified amount.
+
+One failure mode worth knowing about did not bite this time but will again: the
+nanotube CPU arm can hang rather than fail, because Einsums parks a failed
+process on a debugger-attach prompt instead of exiting, so the case burns its
+timeout (see [`PROVENANCE.md`](PROVENANCE.md)). Job 13080182 finished all three
+nanotube CPU repeats in 349 s each; job 13060539 lost one to this.
 
 Everything else — the attribution, the TFLOPS table, the thread scaling — is
 derived from the same case trees by `regenerate.sh`, so nothing here is
@@ -66,20 +65,17 @@ transcribed by hand.
 ## Paired timings, automatic GRAC
 
 Median of three fresh-process `energy()` calls per arm, CPU/GPU order alternating
-by repeat, both arms on the same gpu-h200 node (job 13060539) at eight threads.
-Speedup is median CPU wall / median GPU wall.
+by repeat, both arms on the same canary-healthy gpu-h200 node (job 13080182) at
+eight threads. Speedup is median CPU wall / median GPU wall.
 
-**These are same-host ratios on a degraded host and are upper bounds, not
-results** (see item 0 above). The bracket table in
-[`CPU_BASELINE.md`](CPU_BASELINE.md) gives what can and cannot be said about
-each case; note that only the upper bound is secure. On the one case
-re-measured on a healthy host the bound was 1.26× high — and the cross-node
-estimate, which looks like the conservative choice, was 1.72× **low**.
+These are same-host accelerator ratios and they are the headline result of this
+directory. They are *not* comparable to a vendor figure quoted against a
+56-core socket; [`CPU_BASELINE.md`](CPU_BASELINE.md) gives the same GPU arm
+against three other baselines, and the 56-core projection, in one table.
 
-The nanotube row below is job 13060539's degraded measurement, not job
-13065746's healthy one. The two are deliberately not pooled: they are repeats
-of the same case on different-speed hosts, and a median across them is a number
-neither machine produced.
+Repeat spread is tight enough to read the medians as the measurement: 0.3% on
+the nanotube CPU arm, 0.4% on its GPU arm, 4% on the widest case
+(benzene aug-cc-pVDZ CPU).
 
 <!-- PAIRED -->
 
@@ -93,25 +89,27 @@ needs no comparison against a separate fixed-shift run:
 
 <!-- GRACCOST -->
 
-Automatic GRAC is **36-51% of wall time on every case**, and a *larger* share of
-the GPU arm than of the CPU arm in every one, because the GPU removes the rest
-of the calculation faster than it removes GRAC. The GRAC phase speedup is below
-the whole-calculation speedup in all six paired cases. So the fixed-shift
-protocol did not merely omit a preliminary step — it omitted the part of the
-calculation the device handles *least* well, which flatters the GPU.
+Automatic GRAC is **32-51% of the CPU wall and 43-61% of the GPU wall**, on
+every case — a *larger* share of the GPU arm than of the CPU arm in all six,
+because the GPU removes the rest of the calculation faster than it removes
+GRAC. The GRAC phase speedup is below the whole-calculation speedup in all six
+paired cases. So the fixed-shift protocol did not merely omit a preliminary
+step: it omitted the part of the calculation the device handles *least* well,
+which flatters the GPU.
 
-| System | Basis | Fixed-shift speedup (job 13024192) | ITERATIVE speedup (job 13060539) | GRAC % of CPU wall |
+| System | Basis | Fixed-shift speedup (job 13024192) | ITERATIVE speedup (job 13080182) | GRAC % of CPU wall |
 |---|---|---:|---:|---:|
 <!-- FIXEDVSITER -->
 
-**The two speedup columns are not comparable to each other.** Each is a valid
-same-host ratio within its own job, but the two jobs did not run at the same
-host speed: job 13060539's allocation was 3.2-3.5× slower per CPU-second than
-job 13024192's, on the same CPU model, same partition, same `core.so`, and
-byte-identical geometries (see [`CPU_BASELINE.md`](CPU_BASELINE.md)). Differencing
-the columns mixes the protocol change with a factor-of-three hardware change, so
-no statement of the form "benzene gains, peptide loses" is supportable from
-them. Only the last column, measured within one job, is.
+**The two speedup columns are still not safely comparable to each other**, but
+for a weaker reason than before. Each is a valid same-host ratio within its own
+job. Job 13080182 is canary-certified healthy and job 13024192's CPU phases run
+at the same speed as a healthy host to within the resolution of the phase
+comparison in [`CPU_BASELINE.md`](CPU_BASELINE.md), so unlike the retired job
+13060539 the two are probably on comparable hardware — but "probably" is doing
+work there, because 13024192 predates the canary and its host speed is
+unmeasured, not confirmed. Read differences between the columns as suggestive.
+Only the last column, measured within one job, is unconditional.
 
 ## Where the saving comes from: XC, not DF J/K
 
@@ -120,13 +118,19 @@ against a real SAPT(DFT) calculation.
 
 <!-- ATTRIBUTION -->
 
-DF J/K is **0.3–19.2% of ITERATIVE SAPT(DFT) wall time** on these systems. Even
+DF J/K is **0.3–20.9% of ITERATIVE SAPT(DFT) wall time** on these systems. Even
 an infinitely fast DF-K — J/K wall driven to zero, everything else unchanged —
-caps the end-to-end speedup at the "max from DF-K alone" column: 1.00× to 1.24×.
-The rest comes overwhelmingly from XC, which is 62–98% of the saving on every
-case where there is a saving. This attribution is a *within-job* decomposition
-of where one calculation's time goes, so unlike the speedups it is unaffected by
-the host deficit: a slow host inflates numerator and denominator together.
+caps the end-to-end speedup at the "max from DF-K alone" column: 1.00× to
+1.26×. The rest comes overwhelmingly from XC, which is 62–78% of the saving on
+the four cases with a substantial one. (water aug-cc-pVDZ reads over 100%
+because its GPU J/K is *slower* than the CPU's, so XC has to cover a deficit as
+well as produce the saving.)
+
+This attribution is a *within-job* decomposition of where one calculation's
+time goes, so it was never affected by the host deficit — a slow host inflates
+numerator and denominator together. That prediction is now checkable: the same
+decomposition on the retired degraded tree gave the same shape, which is why
+this section survived the rerun unchanged in substance.
 
 A DF-K kernel speedup is therefore a claim about a minority of this workload.
 That does not make it wrong; it makes it not an end-to-end claim, and the two
@@ -152,10 +156,16 @@ flatter the GPU; reporting only the first would understate the kernel.
 For scale: NVIDIA's spec sheet gives the H200 SXM 34 TFLOP/s of FP64 on the
 vector units and 67 TFLOP/s with FP64 tensor cores. We did not measure device
 peak, so treat those as the vendor's numbers, not ours. The nanotube K kernel at
-15.9 TF/s is the only case that gets within striking distance of the vector
+16.1 TF/s is the only case that gets within striking distance of the vector
 figure; everything smaller is dominated by per-call overhead, and the two water
-cases run the kernel *slower* than the CPU does because a 0.4 s launch cost
+cases run the kernel *slower* than the CPU does because a 0.2 s launch cost
 cannot be amortized over 3 GFLOP of work.
+
+The CPU column is worth reading too, now that it comes from a healthy host:
+0.05–0.23 TF/s on eight cores, against the 0.67 TF/s those eight cores reach on
+a dense DGEMM probe. DF-K on the CPU runs at a third of dense-DGEMM throughput
+at best, so the CPU denominator of a DF-K TFLOPS comparison is not a
+peak-FLOPS question either.
 
 Note also that our GPU arm runs `CUEST_MIXED_PRECISION=False`. NVIDIA's
 effective-TFLOPS figures are annotated "Emulated results use cuEST v0.1 with
@@ -166,14 +176,34 @@ interchangeable.
 ## Normalizing to a wider CPU baseline
 
 Our CPU arm is eight cores. NVIDIA's is 56. The correction between them is not
-7× — see [`CPU_BASELINE.md`](CPU_BASELINE.md) for the measured 8→24 scaling, the
-projection to 56, and the separate finding that the eight cores attached to this
-GPU are themselves about half as fast per core as a mainstream Psi4 CPU node.
+7×, and it is not one number either: on nanotube, DF-K scales 1.79× from 8 to
+24 threads (60% parallel efficiency) and projects to 2.31× at 56, with a 2.96×
+asymptote, while total `energy()` scales 1.94× measured and projects to 2.66×,
+asymptote 3.68×. A seven-times-wider baseline is nowhere near seven times
+faster on this workload, and **a DF-K claim and an end-to-end claim need
+different corrections.**
 
-The short version: on nanotube, DF-K scales 1.79× from 8 to 24 threads (60%
-parallel efficiency) and projects to 2.31× at 56, with a 2.96× asymptote. Total
-`energy()` scales 1.94× measured and projects to 2.66×, asymptote 3.68×. A
-seven-times-wider baseline is nowhere near seven times faster on this workload.
+Carrying the projection through gives the H200 against a 56-core Gold 6226
+socket, the closest shape here to NVIDIA's baseline:
+
+| Case | Same-host, 8 healthy cores | vs 24 Gold 6226 cores | vs 56T projected | vs 56T asymptote |
+|---|---:|---:|---:|---:|
+| benzene aug-cc-pVDZ | 5.85× | 5.03× | **4.07×** | 3.34× |
+| nanotube 6-31+G** | 7.56× | 5.64× | **4.12×** | 2.98× |
+| peptide 6-31+G** | 2.23× | 2.26× | **1.91×** | 1.64× |
+| water aug-cc-pVDZ | 1.06× | 1.43× | **1.38×** | 1.34× |
+
+The last column is the floor: an infinitely wide CPU socket, zero contention.
+It does not reach 1× on any case, so the H200 advantage on the two large cases
+survives any core count. The 56-thread column is the one to set beside a
+vendor figure, with the caveat that it is a two-point Amdahl fit with no
+residual and a different CPU model from NVIDIA's Platinum 8570.
+
+One further warning from [`CPU_BASELINE.md`](CPU_BASELINE.md): the Gold 6226
+and the healthy 8562Y+ build DF-K at the *same* speed (72.89 s against 72.17 s
+on nanotube at 8 threads) while differing 1.44× on the whole calculation. The
+CPU baseline correction for a kernel claim is not the correction for an
+end-to-end claim even before the width changes.
 
 ## Backend accuracy
 
@@ -202,6 +232,11 @@ two different states.
 `iterative_accuracy.py` exits zero here because both misses are explained by a
 cation-SCF disagreement it can identify. An unexplained miss would fail.
 
+This reproduced **exactly** on the healthy host: the retired degraded tree and
+job 13080182 report the same cation energies to all printed digits and the same
+2.34e-06 / 2.08e-06 Eh component deltas. Host speed does not select the SCF
+solution; the backend does.
+
 ## protein157
 
 The largest case in the campaign: 157 atoms, 1786 basis functions in 6-31+G**
@@ -217,9 +252,12 @@ speedup:
   same-host ratio. It runs the CPU arm last on purpose: the GPU repeats are
   cheap and guarantee data if the long CPU arm is cut short, which is a real
   possibility — a 6 h per-case timeout inside an 8 h preemptible request, at the
-  8-core width gpu-h200's 8:1 CPU:GPU ratio imposes. **The three GPU repeats
-  have landed** (486.24, 486.57, 488.21 s) on a host its own canary certifies
-  healthy; the CPU arm is still running.
+  8-core width gpu-h200's 8:1 CPU:GPU ratio imposes. That possibility has
+  already been realised once: the job was preempted and requeued on 2026-09-11,
+  came back to the same node and the same eight cores, re-ran the three GPU
+  repeats (489, 490, 492 s, against 486.24/486.57/488.21 first time — a 0.6%
+  spread that is just re-measurement), and is in the CPU arm again. **The GPU
+  side is settled at ~487 s; the same-host CPU arm has not landed yet.**
 - **Cross-node, 24 threads.** Job 13066284, 24 cores of Xeon Gold 6226 on
   cpu-small, is the wider CPU baseline. Against the gpu-h200 GPU arm it is a
   different node, a different CPU model, and a different core count, so that
@@ -238,8 +276,11 @@ by the cross-node comparison:
 | cpu 24T, Gold 6226 (job 13066284) | 8365.25 | 3403.2 | 107.5 | 3510.72 | 42.0% |
 | gpu 8T, H200 (job 13060540) | 486.57 | 271.8 | 20.2 | 292.24 | **60.1%** |
 
+The GPU row is the first attempt's median, which is the tree on hand; the
+requeued repeats agree to 0.6% and do not move the percentage.
+
 Automatic GRAC is 42% of the CPU run — the largest absolute GRAC cost measured
-anywhere in this campaign, and consistent with the 36-51% seen on the small
+anywhere in this campaign, and consistent with the 32-51% seen on the small
 cases. The A/B asymmetry (3403 s against 107 s) is the monomer size ratio
 showing through: GRAC runs a neutral RKS and a doublet-cation UKS SCF per
 monomer, so it scales with each monomer separately, and monomer A carries 1344

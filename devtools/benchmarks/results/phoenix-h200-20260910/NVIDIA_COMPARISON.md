@@ -12,7 +12,7 @@ one of them is comparable to a SAPT(DFT) wall-time ratio.
 | Headline | "50X speedups over traditional CPU-based quantum chemistry methods" — unqualified | not stated | No: no method, system, or baseline is attached |
 | Figure 1 | "End-to-End cuEST Speedup", measured "using cuEST library calls driven by a lightweight example SCF procedure" | "state-of-the-art tensor-compressed CPU code" | No: an SCF, in a driver written for the benchmark, not a production correlated method |
 | Figure 2 | DF-K speedup, "Both codes run 20 RHF iterations" | **PSI4 v1.9.1**, "56x cores of Intel Xeon Platinum 8570" | Yes, against our DF-K timer — same kernel, same reference code |
-| Figures 3-4 | "DF-K performance in effective TFLOPS"; "Emulated results use cuEST v0.1 with dynamic Ozaki threshold scheme" | none (absolute rate) | Yes, against our effective DF-K TFLOPS |
+| Figures 3-4 | "DF-K performance in effective TFLOPS"; "Emulated results use cuEST v0.1 with dynamic Ozaki threshold scheme" | none (absolute rate) | Yes, against our effective DF-K TFLOPS in `dfk-tflops.md` — 16.1 TF/s at the K kernel on our largest paired case, native FP64 |
 
 Figure 1's "end-to-end" is end-to-end *of an SCF*. Our end-to-end is a
 SAPT(DFT)-D4(I) interaction energy: two monomer SCFs in the dimer basis, four more
@@ -38,18 +38,41 @@ This association cannot allocate 56 cores on one Phoenix node: 32, 48, 56, 64, a
 "CPU count per node can not be satisfied". 24 is the largest shape that actually
 runs. Rather than assume a linear correction, the campaign measured 8 -> 24 scaling
 on one node and fits Amdahl's law to bound what 56 cores would give. See
-`thread-scaling.md`. The projection is an upper bound on the correction, not a
+`thread-scaling-total.md` and `thread-scaling-dfk.md`. The projection is an upper bound on the correction, not a
 measurement: a two-point fit has no residual, and it assumes the serial fraction
 does not grow with width, which bandwidth contention makes optimistic.
 
-There is a second, larger baseline problem on our side, and it runs the other
-way. The eight cores our paired campaign actually got were degraded about
+There was a second baseline problem on our side, and it has been fixed rather
+than caveated. The eight cores the first paired campaign got were degraded about
 threefold relative to another allocation of the same CPU model in the same
-partition — so our CPU denominator is not merely narrow, it is slow for its
-width. Every speedup in this directory is inflated by that, and none should be
-set beside a NVIDIA multiplier until the canary-verified rerun described in
-[`CPU_BASELINE.md`](CPU_BASELINE.md) replaces it. A too-slow baseline is exactly
-the criticism one would level at a vendor figure; it applies here first.
+partition, which inflated every speedup in it by 1.12-1.26×. That tree is
+retired. The paired numbers here come from job 13080182, whose allocation
+measured its own throughput before and after the campaign and read healthy both
+times. A too-slow baseline is exactly the criticism one would level at a vendor
+figure, so it had to be removed from ours before any of these numbers could sit
+beside one; [`CPU_BASELINE.md`](CPU_BASELINE.md) has the detection and the cost.
+
+Normalized to NVIDIA's width, the end-to-end SAPT(DFT) ratios become:
+
+| Case | Same-host, 8 cores | vs 24 cores measured | vs 56 cores projected |
+|---|---:|---:|---:|
+| benzene aug-cc-pVDZ | 5.85× | 5.03× | **4.07×** |
+| nanotube 6-31+G** | 7.56× | 5.64× | **4.12×** |
+| peptide 6-31+G** | 2.23× | 2.26× | **1.91×** |
+| water aug-cc-pVDZ | 1.06× | 1.43× | **1.38×** |
+
+Those are still not Figure 2's quantity — they are whole-method wall times, not
+DF-K — but they are the honest form of the comparison NVIDIA's core count
+invites.
+
+One finding here cuts directly against doing that correction uniformly. The
+Gold 6226 of our wider baseline and the healthy Platinum 8562Y+ of the paired
+node differ by 1.44-1.57× on total SAPT(DFT) wall at the same eight threads,
+but build DF-K at the *same* speed: 72.89 s against 72.17 s on nanotube (1.01×)
+and 9.55 s against 9.61 s on benzene aug-cc-pVDZ (0.99×). So a DF-K claim and an
+end-to-end claim do not share a CPU-baseline correction even before the core
+count changes, and a single scalar cannot convert between our baseline and
+NVIDIA's for both quantities at once.
 
 ## Precision
 

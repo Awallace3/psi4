@@ -11,32 +11,23 @@ RAW=${1:?usage: regenerate.sh /path/to/iterative-campaign}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TOOLS=$HERE/../..
 
-# Job A was preempted with three nanotube cases outstanding, and job A2 reran
-# exactly those. The plan was to present the two trees as one campaign through
-# `merge_case_trees.py`. **That plan is dead, and A2 is deliberately not merged
-# here.**
+# The paired table is job A3 (13080182) and nothing else.
 #
-# A2 landed carrying a host canary, and it reads healthy: 83.5 GF/s per core,
-# all cores at 2800 MHz. Job A has no canary and its host was later shown to be
-# degraded about threefold. A2's three cases are repeats 2 and 3 of a case job A
-# measured at repeat 1, so merging would put both hosts inside one row and take
-# a median across them:
+# Jobs A and A2 are not merged in, and A is not used at all. A ran the same six
+# cases on a gpu-h200 host that was later shown to be running its CPU work about
+# threefold slow, and it carries no canary because it predates one. A2 reran
+# three of A's cases on a healthy host and so measures a different machine; its
+# repeat indices are 2 and 3, which the summarizer cannot place anyway. Pooling
+# any two of these takes a median across machines and reports a number none of
+# them produced. A3 re-ran the whole campaign, 6 cases x 3 repeats, on a host
+# that certifies its own speed before and after — 83.3 then 84.2 GF/s per core,
+# scalar 47.6 both ways — so the merge here has one input and needs no override.
 #
-#   nanotube cpu   job A 1078.82 s   |  A2 349.31, 356.15 s
-#   nanotube gpu   job A 113.19, 113.45 s  |  A2 46.51 s
-#
-# A median of those is a number neither machine produced. `merge_case_trees.py`
-# would in fact have refused — its host guard is exactly for this — and the
-# right response is to stop merging, not to override it. So the paired table
-# below is job A alone: one host, uniformly degraded, uniformly caveated.
-#
-# A2 is reported separately, in CPU_BASELINE.md, as what it actually is: the
-# first same-host paired measurement in this campaign taken on a host certified
-# healthy by its own canary. Job A3 (13080182) re-measures all six cases that
-# way and retires both trees.
-python "$TOOLS/merge_case_trees.py" "$RAW/A-core6-h200-job13060539/results" \
-  --output "$RAW/merged-paired" \
-  --allow-host-mismatch "job A predates the host canary, so its host speed is unmeasured; see CPU_BASELINE.md"
+# A and A2 remain in RAW and in host-speed.md, because the comparison between
+# them is what established the deficit. They are documented in CPU_BASELINE.md
+# as a measurement of the host, not of cuEST.
+python "$TOOLS/merge_case_trees.py" "$RAW/A3-core6-h200-job13080182/results" \
+  --output "$RAW/merged-paired"
 
 A=$RAW/merged-paired                      # paired CPU/GPU, one H200 node, 8 threads
 C=$RAW/C-cpu24-core6-job13061073/results  # CPU-only thread scaling, 8 vs 24, one node
@@ -65,8 +56,10 @@ python "$TOOLS/dfk_effective_tflops.py" "$A" --output "$HERE/dfk-tflops.json" > 
 # one cannot be, because numerator and denominator come from one process.
 python "$TOOLS/grac_cost.py" "$A" --output "$HERE/grac-cost.json" > "$HERE/grac-cost.md"
 
-# Which host each tree actually ran on. Uncertified until the campaign is re-run
-# under the canary, and saying so in the report is the point.
+# Which host each tree actually ran on. The paired tree (A3) is certified on its
+# own; this table spans every tree in the campaign, including the pre-canary
+# ones, so its aggregate verdict stays uncertified. That is the honest reading:
+# the older trees' hosts are unmeasured and cannot be retroactively vouched for.
 python "$TOOLS/host_speed.py" "$RAW"/*/results --output "$HERE/host-speed.json" \
   > "$HERE/host-speed.md" || true
 

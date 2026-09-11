@@ -15,6 +15,21 @@
       "tree": "/home/awallace43/gits/psi4__worktrees/saptdft-cuest/tmp/iterative-campaign/A2-nanotube-h200-job13065746/results"
     },
     {
+      "dgemm_gflops_per_core": 83.3288969662769,
+      "job": "13080182",
+      "live_mhz": 2800.0,
+      "node": "atl1-1-02-012-9-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 47.64831071207657,
+      "status": "measured",
+      "stream_gb_s": 13.77040835655836,
+      "threads": 8,
+      "tree": "/home/awallace43/gits/psi4__worktrees/saptdft-cuest/tmp/iterative-campaign/A3-core6-h200-job13080182/results"
+    },
+    {
       "status": "uncertified",
       "tree": "/home/awallace43/gits/psi4__worktrees/saptdft-cuest/tmp/iterative-campaign/A-core6-h200-job13060539/results"
     },
@@ -46,9 +61,9 @@
     }
   ],
   "spread": {
-    "dgemm_gflops_per_core": 1.0089531325134111,
+    "dgemm_gflops_per_core": 1.011277151511506,
     "live_mhz": 1.0,
-    "scalar_miter_s": 1.3606851670205957,
+    "scalar_miter_s": 1.3611103869819359,
     "stream_gb_s": 1.0559969020850357,
     "threads": 1.0
   },
@@ -60,5 +75,5 @@
     "/home/awallace43/gits/psi4__worktrees/saptdft-cuest/tmp/iterative-campaign/D-protein157-cpu24-job13063342/results"
   ],
   "verdict": "uncertified",
-  "worst_ratio": 1.3606851670205957
+  "worst_ratio": 1.3611103869819359
 }

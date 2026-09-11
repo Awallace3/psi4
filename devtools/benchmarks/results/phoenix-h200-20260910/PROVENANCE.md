@@ -1,8 +1,8 @@
 # Provenance
 
-Everything in this directory derives from the Phoenix jobs below, all run on
-2026-09-10 against one build. The raw per-case trees are not committed;
-`regenerate.sh` rebuilds every table here from them.
+Everything in this directory derives from the Phoenix jobs below, run on
+2026-09-10 and 2026-09-11 against one build. The raw per-case trees are not
+committed; `regenerate.sh` rebuilds every table here from them.
 
 ## Build
 
@@ -28,38 +28,44 @@ Every case asserts `grac_compute == "ITERATIVE"` in its own `result.json`.
 
 | Job | SLURM ID | Partition / QoS | Hardware | Purpose |
 |---|---|---|---|---|
-| A | 13060539 | gpu-h200 / embers | 1x NVIDIA H200 143771 MiB, driver 595.71.05; 8 cores of Intel Xeon Platinum 8562Y+ | Paired CPU/GPU, 6 cases x 3 repeats, alternating order. **PREEMPTED at 02:16:17** with three nanotube cases outstanding |
-| A2 | 13065746 | gpu-h200 / embers | same shape as A, **canary-verified healthy** | The three nanotube cases job A did not reach: CPU repeats 2 and 3, GPU repeat 3. Reported separately, not merged into A — see below |
+| A | 13060539 | gpu-h200 / embers | 1x NVIDIA H200 143771 MiB, driver 595.71.05; 8 cores of Intel Xeon Platinum 8562Y+ | Paired CPU/GPU, 6 cases x 3 repeats, alternating order. **PREEMPTED at 02:16:17** with three nanotube cases outstanding, and later shown to have run on a threefold-degraded host. **RETIRED** — superseded by A3, kept only as evidence of the degradation |
+| A2 | 13065746 | gpu-h200 / embers | same shape as A, **canary-verified healthy** | The three nanotube cases job A did not reach: CPU repeats 2 and 3, GPU repeat 3. The first healthy same-host measurement in this campaign, and now the independent check on A3. Not merged — see below |
 | C | 13061073 | cpu-small / embers | 24 cores of Intel Xeon Gold 6226 | CPU-only 8 vs 24 thread scaling, same node |
-| B | 13060540 | gpu-h200 / embers | 1x NVIDIA H200; 8 cores of Platinum 8562Y+, **canary-verified** | protein157: 3 GPU repeats (done: 486.24, 486.57, 488.21 s) then one 8-thread CPU repeat in the same allocation. Running |
+| B | 13060540 | gpu-h200 / embers | 1x NVIDIA H200; 8 cores of Platinum 8562Y+, **canary-verified** | protein157: 3 GPU repeats then one 8-thread CPU repeat in the same allocation. **Preempted and requeued 2026-09-11 07:58:43**; came back to the same node and the same eight cores with an identical canary and re-ran the GPU repeats (489, 490, 492 s, against 486.24/486.57/488.21 before). Running the CPU arm |
 | D2 | 13066284 | cpu-small / **inferno** | 24 cores of Intel Xeon Gold 6226 | protein157 CPU baseline. **COMPLETED 02:20:03**, 8365.25 s |
-| A3 | 13080182 | gpu-h200 / embers | same shape as A | **Canary-verified rerun of job A's full paired campaign.** Job A's protocol verbatim; the only changes are the host canary and a 3600s per-case timeout. Submitted because job A's host was degraded threefold, which bounds its speedups to a range rather than pinning them |
+| A3 | 13080182 | gpu-h200 / embers | same shape as A, **canary-verified healthy** | Rerun of job A's full paired campaign, 6 cases x 3 repeats. **COMPLETED 00:39:28**, exit 0:0, 36/36 cases rc=0. This is the paired table |
 
-Jobs A and C ran the same six systems with the same driver, settings, and binary;
-they differ only in hardware and thread width. **They are different nodes with
-different CPUs**, which matters for how their numbers may be combined — see
+Jobs A3 and C ran the same six systems with the same driver, settings, and
+binary; they differ only in hardware and thread width. **They are different nodes
+with different CPUs**, which matters for how their numbers may be combined — see
 `CPU_BASELINE.md`.
 
-### Why job A3 exists
+### Why job A3 exists, and what it found
 
-Job A's speedups are same-host ratios and are individually valid for the host it
-got, but that host ran its CPU work about three times slower than another
+Job A's speedups were same-host ratios and were individually valid for the host
+it got, but that host ran its CPU work about three times slower than another
 gpu-h200 allocation of the same CPU model on the same binary. Both arms were
-degraded and not by the same factor, so no arithmetic recovers the healthy-host
-number from job A's tree. Job A's own figure (7.03x for benzene aug-cc-pVDZ) is
-an upper bound; the cross-node comparison against job C is an estimate whose
-sign is not determined, because a healthy 8562Y+ core beats job C's Gold 6226
-by anywhere from 1.13x to 1.95x depending on what the phase is bound by. Job A2
-has since measured one case both ways and found the cross-node estimate the
-worse of the two: 4.41x against a true 7.58x, while job A's same-host figure
-was 9.52x. See `CPU_BASELINE.md`. Job A3 re-measures the whole paired
-campaign on an allocation that records its own throughput, before and after, via
-`common.inc`'s `host_canary`. Run `host_speed.py` on the A3 tree first: if its
-canary shows a healthy host, A3's speedups replace job A's throughout and the
-range collapses to a number; if it shows another degraded host, that is itself
-the finding, and A3 is resubmitted rather than averaged in.
+degraded and not by the same factor, so no arithmetic recovered the healthy-host
+number from job A's tree: its figures were an upper bound, and the cross-node
+comparison against job C was an estimate whose sign was not determined. Job A3
+re-measured the whole paired campaign on an allocation that records its own
+throughput, before and after, via `common.inc`'s `host_canary`.
 
-### Job A2 is not a continuation of job A, and is not merged into it
+The canary reads healthy at both ends — 83.3 then 84.2 GF/s per core, scalar
+47.6 Miter/s both ways, 2800 MHz — against 84.15 GF/s from the solo gpu-h200
+probe, so the host is within 1% of a node doing nothing else. All 36 cases
+returned rc=0 with `grac_compute == "ITERATIVE"` asserted in their own
+`result.json`, 3 repeats everywhere, repeat spread 0.3-4%.
+
+So the planned replacement happened: **A3's speedups replace job A's
+throughout**, and every range in the report collapses to a measurement. Job A's
+numbers are retired, not corrected, and must not be quoted; the direct A/A3
+comparison puts its CPU-side deficit at 2.89-3.19x, inside the 2.97-3.47x that
+had been inferred from a completely different job pair. A3 also confirms A2
+independently: 7.56x against 7.58x on nanotube, from separate jobs on separate
+days with separate canaries.
+
+### Why neither job A nor job A2 is merged into the paired table
 
 Job A's preemption left `nanotube-6-31+g**-cpu-2` as a stub directory holding a
 `psi4.out` and no `result.json`, and `-cpu-3`/`-gpu-3` unstarted. Job A2 reran
@@ -78,10 +84,13 @@ take a median across them:
 | gpu | 113.19 s, 113.45 s | 46.51 s |
 
 A median of those is a number neither machine produced, and `merge_case_trees.py`
-would have refused it — that guard is exactly for this. So `regenerate.sh` builds
-the paired table from **job A alone**: one host, uniformly degraded, uniformly
-caveated. A2 is reported on its own in `CPU_BASELINE.md`, as the first
-same-host paired measurement in this campaign whose host is certified healthy.
+would have refused it — that guard is exactly for this. A2's repeat indices are 2
+and 3 besides, which the summarizer cannot place on their own. So `regenerate.sh`
+builds the paired table from **job A3 alone**: one host, certified healthy before
+and after, all six cases at all three repeats. A and A2 stay in RAW and in
+`host-speed.md`, because the comparison between them is what established the
+deficit in the first place, and A2 is reported in `CPU_BASELINE.md` as the
+independent check on A3's headline number.
 
 A2's CPU repeat reproduces job A's returned energy to 1e-15 Eh and its GPU
 repeat to 1e-12 Eh, with identical GRAC shifts, so the two trees differ in host
@@ -102,14 +111,15 @@ explicitly approved for this one job. Everything else here is embers.
 `SAPT_DFT_GRAC_COMPUTE=ITERATIVE` for every case, with no exceptions: both GRAC
 shifts are determined by neutral and doublet-cation SCFs inside the timed
 `energy()` call. PBE0, DF SCF, 99/590 grid, SCF convergence 1e-9/1e-8, 112 GiB
-Psi4 memory, 8 threads (job A) or 8 and 24 (job C),
+Psi4 memory, 8 threads (jobs A/A2/A3/B) or 8 and 24 (job C),
 `SAPT_DFT_INDUCTION_TYPE=NONE` with `SAPT_DFT_DO_DHF=True`,
 `CUEST_MIXED_PRECISION=False`. The arms differ only in `USE_CUEST`.
 
 ## Observed failure mode: a hung case is not a slow case
 
 `nanotube-6-31+g**-cpu-2` in job A stopped producing output after 40 s and stayed
-alive. Its log ends with
+alive — it did not recur in A3, whose three nanotube CPU repeats all finished
+near 349 s, so this is intermittent rather than case-specific. Its log ends with
 
 ```
 PID: 2116552 on atl1-1-02-012-23-0 ready for attaching debugger. Once attached set i = 1 and continue
