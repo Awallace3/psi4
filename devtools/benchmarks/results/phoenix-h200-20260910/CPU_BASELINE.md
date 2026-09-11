@@ -79,14 +79,17 @@ every one of them is inflated. The size of the inflation is bounded but not
 pinned, because **both** arms ran on the degraded host and they are not degraded
 equally — the GPU arm offloads the work the slow host would otherwise do:
 
-| Case | Same-host (job A, degraded) | vs job C 8 healthy cores | vs job C 24 healthy cores |
-|---|---:|---:|---:|
-| benzene aug-cc-pVDZ | 7.03× | 3.37× | 2.02× |
-| benzene cc-pVDZ | 3.05× | — | 0.97× |
-| nanotube 6-31+G** | 9.52× | 4.41× | 2.27× |
-| peptide 6-31+G** | 2.67× | 1.31× | 0.85× |
-| water aug-cc-pVDZ | 1.25× | 0.66× | 0.58× |
-| water cc-pVDZ | 0.97× | — | 0.46× |
+| Case | Same-host (job A, degraded) | vs job C 8 healthy cores | vs job C 24 healthy cores | Same-host, measured healthy |
+|---|---:|---:|---:|---:|
+| benzene aug-cc-pVDZ | 7.03× | 3.37× | 2.02× | — |
+| benzene cc-pVDZ | 3.05× | — | 0.97× | — |
+| nanotube 6-31+G** | 9.52× | 4.41× | 2.27× | **7.58×** |
+| peptide 6-31+G** | 2.67× | 1.31× | 0.85× | — |
+| water aug-cc-pVDZ | 1.25× | 0.66× | 0.58× | — |
+| water cc-pVDZ | 0.97× | — | 0.46× | — |
+
+The last column is what the first three were trying to estimate. It exists for
+one row so far (job A2, below); job 13080182 fills in the rest.
 
 The same-host column is **too high**, and that direction is secure: the CPU arm
 is degraded roughly three times and the GPU arm only about twice, so the ratio
@@ -108,12 +111,8 @@ directions:
 Which effect dominates depends on what each case is bound by, and this data
 cannot say. So the honest statement is weaker than the one this file used to
 make: **the same-host column is an upper bound, and the middle column is an
-estimate of unknown sign.** For benzene aug-cc-pVDZ the true figure is below
-7.0× and plausibly near 3.4×, but 3.4× is not established as a floor.
-
-This is the kind of gap that arithmetic cannot close, and job 13080182 —
-running now, on a host its own canary certifies healthy — closes it by
-measurement.
+estimate of unknown sign.** The next section measures both for one case, and
+finds the middle column was the worse of the two.
 
 The repair is measurement, not arithmetic: `common.inc` now runs `cpu_probe.py`
 inside every allocation and writes `metadata/canary-<phase>-t<threads>.json`, so
@@ -121,6 +120,52 @@ each tree records the throughput of the cores it actually got. `host_speed.py`
 reads those back, and `merge_case_trees.py` refuses to pool trees whose canaries
 disagree or are missing. A rerun of the paired campaign on a canary-verified
 host is what settles the range above.
+
+## One case has now been measured on a healthy host
+
+Job A2 (13065746) reran `nanotube-6-31+G**` on a gpu-h200 node whose own canary
+reads healthy — 83.5 GF/s per core against the solo probe's 84.15, every core at
+2800 MHz. Same binary, same geometry, same settings, same node shape; the only
+variable is the host. That it is the same problem and not a different one is
+checkable from the energies: A2's CPU repeat reproduces job A's to 1e-15 Eh
+(−0.001308839817 both) and its GPU repeat to 1e-12 Eh, with identical GRAC
+shifts (0.09676767 / 0.04612867 Eh). This is a controlled experiment on the
+host, not a re-measurement of the science.
+
+| `nanotube-6-31+G**`, 8 threads | Job A, degraded host | Job A2, healthy host | A / A2 |
+|---|---:|---:|---:|
+| CPU arm, s | 1078.82 (n=1) | 352.73 (n=2) | **3.06×** |
+| GPU arm, s | 113.32 (n=2) | 46.51 (n=1) | **2.44×** |
+| Same-host speedup | 9.52× | **7.58×** | 1.26× |
+
+Three things follow, and the third is the one worth carrying forward.
+
+**The degradation was about threefold on the CPU arm, as inferred — 3.06×
+against the 2.97–3.47× phase ratios in the table above.** The inference method
+is sound; it can be used on the remaining cases.
+
+**The GPU arm was degraded too, by 2.44×.** That is the quantity no amount of
+reasoning about job A's tree could supply, and it is large. A GPU run that
+spends most of its wall time on the host is not insulated by the accelerator.
+
+**The cross-node middle column was wrong by more than the same-host column
+was.** For this case it said 4.41×; the truth is 7.58×, so it was low by 1.72×,
+while the same-host figure was high by only 1.26×. Both errors were real and
+they ran in opposite directions, exactly as the previous section argued — but
+the degraded-GPU-numerator effect swamped the slower-Gold-6226 effect, and the
+column that looked conservative was the more misleading of the two. Anyone who
+had quoted 4.41× as a floor would have understated the result by nearly a
+factor of two.
+
+The consistency check runs the other way too. A healthy 8562Y+ at 8 threads
+(352.73 s) beats job C's Gold 6226 at 8 threads (499.9 s) by 1.42× on this case
+— inside the 1.13×–1.95× band the probes below give, and about where a mixed
+DGEMM/bandwidth/serial workload should land. The probe calibration and the
+campaign agree.
+
+One case is one case. It does not license rescaling the other five rows, whose
+GPU arms may be degraded by more or less than 2.44× depending on how much of
+their wall time is host-side. Job 13080182 measures all six the same way.
 
 ## What a healthy core of each node type actually does
 
@@ -193,13 +238,16 @@ For any GPU number in this directory:
    Defensible only as a statement about that allocation, which was degraded
    about threefold. It is *not* the number a user would see on a healthy node
    of the same type, and it is the one that must never be quoted bare.
-2. **Same-host, 8 cores, on a healthy host** — not yet available. (1) is an
-   upper bound on it; the second column of the bracket table is an estimate
-   whose sign is unknown, for the reasons given with that table. Job 13080182
-   measures it directly.
+2. **Same-host, 8 cores, on a healthy host** — measured for
+   `nanotube-6-31+G**` only, at **7.58×** (job A2). For the other five cases it
+   is not yet available: (1) is an upper bound on it, and the second column of
+   the bracket table is an estimate whose sign is unknown. On the one case where
+   both were checkable, (1) was high by 1.26× and the second column was low by
+   1.72×. Job 13080182 measures the rest.
 3. **Against a mainstream CPU node at the same width** — the second column of
-   that table. Its two errors run in opposite directions, so read it as an
-   estimate, not as a bound in either direction.
+   that table. Its two errors run in opposite directions and do not cancel; on
+   the one case now measured it was the less accurate of the two columns. Read
+   it as an estimate, not as a bound in either direction.
 4. **Against a 56-core socket** — divide by the projected factor in
    `thread-scaling-dfk.md` (kernel claims) or `thread-scaling-total.md`
    (end-to-end claims), on top of (3). Defensible only as a bound, since the

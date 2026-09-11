@@ -1,6 +1,20 @@
 {
   "profiles": [
     {
+      "dgemm_gflops_per_core": 83.52083644631746,
+      "job": "13065746",
+      "live_mhz": 2800.0,
+      "node": "atl1-1-02-012-9-0.pace.gatech.edu",
+      "phases": [
+        "start"
+      ],
+      "scalar_miter_s": 47.63342506207148,
+      "status": "measured",
+      "stream_gb_s": 13.762177129607638,
+      "threads": 8,
+      "tree": "/home/awallace43/gits/psi4__worktrees/saptdft-cuest/tmp/iterative-campaign/A2-nanotube-h200-job13065746/results"
+    },
+    {
       "status": "uncertified",
       "tree": "/home/awallace43/gits/psi4__worktrees/saptdft-cuest/tmp/iterative-campaign/A-core6-h200-job13060539/results"
     },

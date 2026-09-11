@@ -11,32 +11,32 @@ RAW=${1:?usage: regenerate.sh /path/to/iterative-campaign}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TOOLS=$HERE/../..
 
-# Job A was preempted with three nanotube cases outstanding; job A2 reran exactly
-# those. They are two job trees holding one campaign, so present them as one
-# directory of symlinks rather than copying either. The merge refuses if both
-# trees claim a completed copy of the same case, and also if their hosts did not
-# run at the same speed.
+# Job A was preempted with three nanotube cases outstanding, and job A2 reran
+# exactly those. The plan was to present the two trees as one campaign through
+# `merge_case_trees.py`. **That plan is dead, and A2 is deliberately not merged
+# here.**
 #
-# Neither tree carries a host canary: both predate it. `merge_case_trees.py`
-# therefore refuses them by default, which is correct — job A's host turned out
-# to be degraded threefold and nothing in its tree said so. The override records
-# the reason inside the merged tree so it travels with the artifact. Drop the
-# flag once both trees come from canary-verified allocations.
+# A2 landed carrying a host canary, and it reads healthy: 83.5 GF/s per core,
+# all cores at 2800 MHz. Job A has no canary and its host was later shown to be
+# degraded about threefold. A2's three cases are repeats 2 and 3 of a case job A
+# measured at repeat 1, so merging would put both hosts inside one row and take
+# a median across them:
 #
-# A2 is still queued at the time of writing, so it is included only if present:
-# regenerating from job A alone must stay possible, and must visibly produce a
-# campaign with the three preempted nanotube measurements missing rather than a
-# script that will not run. `--expect` below is what turns that absence into a
-# failure instead of a quiet gap in the table.
-TREES=("$RAW/A-core6-h200-job13060539/results")
-if [[ -d "$RAW/A2-nanotube-h200-job13065746/results" ]]; then
-  TREES+=("$RAW/A2-nanotube-h200-job13065746/results")
-else
-  echo "note: A2 (job 13065746) has not landed; nanotube cpu-2, cpu-3, gpu-3 will be missing" >&2
-fi
-python "$TOOLS/merge_case_trees.py" "${TREES[@]}" \
+#   nanotube cpu   job A 1078.82 s   |  A2 349.31, 356.15 s
+#   nanotube gpu   job A 113.19, 113.45 s  |  A2 46.51 s
+#
+# A median of those is a number neither machine produced. `merge_case_trees.py`
+# would in fact have refused — its host guard is exactly for this — and the
+# right response is to stop merging, not to override it. So the paired table
+# below is job A alone: one host, uniformly degraded, uniformly caveated.
+#
+# A2 is reported separately, in CPU_BASELINE.md, as what it actually is: the
+# first same-host paired measurement in this campaign taken on a host certified
+# healthy by its own canary. Job A3 (13080182) re-measures all six cases that
+# way and retires both trees.
+python "$TOOLS/merge_case_trees.py" "$RAW/A-core6-h200-job13060539/results" \
   --output "$RAW/merged-paired" \
-  --allow-host-mismatch "both trees predate the host canary; see CPU_BASELINE.md"
+  --allow-host-mismatch "job A predates the host canary, so its host speed is unmeasured; see CPU_BASELINE.md"
 
 A=$RAW/merged-paired                      # paired CPU/GPU, one H200 node, 8 threads
 C=$RAW/C-cpu24-core6-job13061073/results  # CPU-only thread scaling, 8 vs 24, one node

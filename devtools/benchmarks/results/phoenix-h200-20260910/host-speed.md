@@ -1,5 +1,6 @@
 | Tree | Node | Threads | DGEMM GF/s per core | Triad GB/s | Scalar Miter/s | Live MHz |
 |---|---|---:|---:|---:|---:|---:|
+| A2-nanotube-h200-job13065746 | atl1-1-02-012-9-0.pace.gatech.edu | 8 | 83.5 | 13.8 | 47.6 | 2800.0 |
 | A-core6-h200-job13060539 | — | — | — | — | — | — |
 | C-cpu24-core6-job13061073 | — | — | — | — | — | — |
 | D2-protein157-cpu24-job13066284 | — | — | — | — | — | — |

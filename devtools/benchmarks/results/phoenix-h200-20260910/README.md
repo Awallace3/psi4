@@ -43,6 +43,13 @@ they appear:
    measures host throughput inside every allocation so it cannot recur
    silently, and the two calibration probes there now give the healthy
    throughput of both node types for comparison.
+
+   One case has since been re-measured on a certified-healthy host (job
+   13065746, `nanotube-6-31+G**`): the CPU arm was degraded 3.06×, the GPU arm
+   2.44×, and the same-host speedup falls from **9.52× to 7.58×**. The
+   inflation is real but smaller than the CPU deficit alone suggests, because
+   the GPU arm was degraded too. That is one case; the other five are still
+   only bounded.
 1. Any row the generated tables mark with fewer than 3/3 repeats, or that
    appears in the "Failed or incomplete measurements" block of
    `paired/summary.md`, is short a run. The nanotube CPU arm in particular is
@@ -65,7 +72,14 @@ Speedup is median CPU wall / median GPU wall.
 **These are same-host ratios on a degraded host and are upper bounds, not
 results** (see item 0 above). The bracket table in
 [`CPU_BASELINE.md`](CPU_BASELINE.md) gives what can and cannot be said about
-each case; note that only the upper bound is secure.
+each case; note that only the upper bound is secure. On the one case
+re-measured on a healthy host the bound was 1.26× high — and the cross-node
+estimate, which looks like the conservative choice, was 1.72× **low**.
+
+The nanotube row below is job 13060539's degraded measurement, not job
+13065746's healthy one. The two are deliberately not pooled: they are repeats
+of the same case on different-speed hosts, and a median across them is a number
+neither machine produced.
 
 # Phoenix cuEST GRAC timing and accuracy
 

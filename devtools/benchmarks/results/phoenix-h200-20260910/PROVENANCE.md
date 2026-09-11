@@ -29,7 +29,7 @@ Every case asserts `grac_compute == "ITERATIVE"` in its own `result.json`.
 | Job | SLURM ID | Partition / QoS | Hardware | Purpose |
 |---|---|---|---|---|
 | A | 13060539 | gpu-h200 / embers | 1x NVIDIA H200 143771 MiB, driver 595.71.05; 8 cores of Intel Xeon Platinum 8562Y+ | Paired CPU/GPU, 6 cases x 3 repeats, alternating order. **PREEMPTED at 02:16:17** with three nanotube cases outstanding |
-| A2 | 13065746 | gpu-h200 / embers | same shape as A | The three nanotube cases job A did not reach: CPU repeats 2 and 3, GPU repeat 3 |
+| A2 | 13065746 | gpu-h200 / embers | same shape as A, **canary-verified healthy** | The three nanotube cases job A did not reach: CPU repeats 2 and 3, GPU repeat 3. Reported separately, not merged into A — see below |
 | C | 13061073 | cpu-small / embers | 24 cores of Intel Xeon Gold 6226 | CPU-only 8 vs 24 thread scaling, same node |
 | B | 13060540 | gpu-h200 / embers | 1x NVIDIA H200 | protein157 GPU |
 | D2 | 13066284 | cpu-small / **inferno** | 24 cores of Intel Xeon Gold 6226 | protein157 CPU baseline |
@@ -49,27 +49,43 @@ degraded and not by the same factor, so no arithmetic recovers the healthy-host
 number from job A's tree. Job A's own figure (7.03x for benzene aug-cc-pVDZ) is
 an upper bound; the cross-node comparison against job C is an estimate whose
 sign is not determined, because a healthy 8562Y+ core beats job C's Gold 6226
-by anywhere from 1.13x to 1.95x depending on what the phase is bound by. See
-`CPU_BASELINE.md`. Job A3 re-measures the whole paired
+by anywhere from 1.13x to 1.95x depending on what the phase is bound by. Job A2
+has since measured one case both ways and found the cross-node estimate the
+worse of the two: 4.41x against a true 7.58x, while job A's same-host figure
+was 9.52x. See `CPU_BASELINE.md`. Job A3 re-measures the whole paired
 campaign on an allocation that records its own throughput, before and after, via
 `common.inc`'s `host_canary`. Run `host_speed.py` on the A3 tree first: if its
 canary shows a healthy host, A3's speedups replace job A's throughout and the
 range collapses to a number; if it shows another degraded host, that is itself
 the finding, and A3 is resubmitted rather than averaged in.
 
-### Jobs A and A2 are one campaign
+### Job A2 is not a continuation of job A, and is not merged into it
 
 Job A's preemption left `nanotube-6-31+g**-cpu-2` as a stub directory holding a
 `psi4.out` and no `result.json`, and `-cpu-3`/`-gpu-3` unstarted. Job A2 reran
 exactly those three with the same binary, settings, and node shape, writing its
-own run directory so job A's provenance metadata stays untouched. `regenerate.sh`
-presents the two trees as one through `merge_case_trees.py`, which symlinks
-rather than copies — so every case still points at the job that produced it — and
-which refuses if both trees claim a completed copy of the same case. The stub
-loses to A2's completed rerun; that is the only collision it resolves silently.
+own run directory. The plan was to present the two trees as one campaign through
+`merge_case_trees.py`.
 
-Reading the nanotube row therefore means reading across two allocations. They are
-the same hardware shape but not the same physical node.
+That plan did not survive A2's canary, which reads **healthy**. A2's three cases
+are repeats 2 and 3 of a case job A measured at repeat 1 on a host later shown
+to be degraded threefold, so merging would place both hosts inside one row and
+take a median across them:
+
+| `nanotube-6-31+g**` | job A (degraded) | job A2 (healthy) |
+|---|---|---|
+| cpu | 1078.82 s | 349.31 s, 356.15 s |
+| gpu | 113.19 s, 113.45 s | 46.51 s |
+
+A median of those is a number neither machine produced, and `merge_case_trees.py`
+would have refused it — that guard is exactly for this. So `regenerate.sh` builds
+the paired table from **job A alone**: one host, uniformly degraded, uniformly
+caveated. A2 is reported on its own in `CPU_BASELINE.md`, as the first
+same-host paired measurement in this campaign whose host is certified healthy.
+
+A2's CPU repeat reproduces job A's returned energy to 1e-15 Eh and its GPU
+repeat to 1e-12 Eh, with identical GRAC shifts, so the two trees differ in host
+speed and in nothing else.
 
 ### Why D2 is inferno and the rest is not
 
