@@ -328,6 +328,14 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
                     "ROBUST TREUTLER NONE FLAT P_GAUSSIAN D_GAUSSIAN P_SLATER D_SLATER LOG_GAUSSIAN LOG_SLATER NONE");
     /*- Maximum Radial Moment to Calculate -*/
     options.add_int("MAX_RADIAL_MOMENT", 4);
+    /*- Accelerate the MBIS stockholder iteration with Anderson mixing on the shell populations
+        and widths. Switching this off converges to the same fixed point, just more slowly. -*/
+    options.add_bool("MBIS_ANDERSON", true);
+    /*- Pro-atom density below which an atom is dropped from a grid block in the MBIS stockholder
+        sweep. The cost of the sweep is O(natom * npoints) unscreened, and npoints itself grows with
+        natom, so this is what keeps MBIS from being quadratic in system size. Set to 0 to disable
+        screening entirely. !expert -*/
+    options.add_double("MBIS_SCREENING_THRESHOLD", 1.0e-14);
     /*- Persistent on-disk cache for the MBIS free-atom reference volumes that
     :psivar:`MBIS VOLUME RATIOS` divides by.  A free-atom volume is a property of an element, a
     level of theory, the basis that element is given, and the grid/convergence settings -- never of
