@@ -52,7 +52,12 @@ def test_lw_two_site_charge_flow_localizes_to_full_rank3_fixture():
     result = _lw_localize([[0.0, 0.0, 0.0], [0.2, -0.3, 0.4]], values, [(0, 1)])
     local = result.local
     assert len(local) == 2
-    assert local[0].shape == (15, 15)
+    # The core storage is rank-4 wide; a rank-3 declaration leaves every component
+    # above rank 3 identically zero rather than absent, and the leading 15x15 is
+    # bitwise what the rank-3-wide storage produced.
+    assert local[0].shape == (24, 24)
+    assert all(local[s].get(r, c) == 0.0 for s in (0, 1)
+               for r in range(24) for c in range(24) if r >= 15 or c >= 15)
     assert local[0].get(0, 0) == pytest.approx(-0.16, abs=1.0e-11)
     assert local[0].get(0, 1) == pytest.approx(-0.08, abs=1.0e-11)
     assert local[0].get(0, 2) == pytest.approx(0.12, abs=1.0e-11)
@@ -94,6 +99,20 @@ def test_lw_rejects_postcondition_residual():
 def _matrix_values(matrix):
     rows, columns = matrix.shape
     return [[matrix.get(row, column) for column in range(columns)] for row in range(rows)]
+
+
+def _local_rank3_values(matrix):
+    """Leading 15x15 of a 24-wide local block, after asserting the rest is zero.
+
+    A rank-3 declaration has no rank-4 components; in the rank-4-wide storage they
+    are identically zero rather than absent, and these rank-3 oracles compare
+    against exactly what the 15-wide storage produced, bitwise.
+    """
+    values = _matrix_values(matrix)
+    assert len(values) == len(values[0]) == 24
+    assert all(values[row][column] == 0.0 for row in range(24) for column in range(24)
+               if row >= 15 or column >= 15)
+    return [row[:15] for row in values[:15]]
 
 
 def _matmul(first, second):
@@ -152,7 +171,15 @@ def _common_origin_response(positions, blocks, origin):
 
 
 def _assert_refined_invariants(result, positions, original, tolerance):
-    refined = [_matrix_values(block) for block in result.refined_pairs]
+    # The workspace is rank-4 wide (25) while these are rank-3 declarations, so
+    # every component above rank 3 must be identically zero -- not small -- and the
+    # leading 16 must be exactly what the rank-3-wide storage produced. The oracle
+    # below is a rank-3 oracle and reads only that leading block.
+    stored = [_matrix_values(block) for block in result.refined_pairs]
+    assert all(len(block) == len(block[0]) == 25 for block in stored)
+    assert all(block[row][column] == 0.0 for block in stored
+               for row in range(25) for column in range(25) if row >= 16 or column >= 16)
+    refined = [[row[:16] for row in block[:16]] for block in stored]
     count = len(positions)
     assert max(abs(refined[a * count + b][row][column])
                for a in range(count) for b in range(count) if a != b
@@ -187,7 +214,7 @@ def test_lw_refined_workspace_matches_full_two_site_oracle_and_reversed_edge():
     for bonds in ([(0, 1)], [(1, 0)]):
         result = _lw_localize(positions, values, bonds)
         for site in range(2):
-            _assert_matrix_close(_matrix_values(result.local[site]), expected[site], 2.0e-11)
+            _assert_matrix_close(_local_rank3_values(result.local[site]), expected[site], 2.0e-11)
         _assert_refined_invariants(result, positions, values, 2.0e-10)
 
 
@@ -217,7 +244,7 @@ def test_lw_co_axis_aligned_charge_flow_has_closed_local_cartesian_oracle():
     ]
 
     for site in range(2):
-        _assert_matrix_close(_matrix_values(result.local[site]), expected[site], 3.0e-11)
+        _assert_matrix_close(_local_rank3_values(result.local[site]), expected[site], 3.0e-11)
     assert result.local[0].get(0, 3) == pytest.approx(
         -0.5 * charge_flow * bond_length**3, abs=3.0e-11)
     assert result.local[1].get(0, 3) == pytest.approx(
@@ -416,9 +443,10 @@ def test_lw_block_collection_rejects_invalid_structure(blocks):
         psi4.core.isa_localize_lw(_matrix([[0.0, 0.0, 0.0]]), blocks, 0.0, [])
 
 
-@pytest.mark.parametrize("rows,cols", [(15, 15), (16, 15), (15, 16), (17, 17)])
+@pytest.mark.parametrize("rows,cols", [(15, 15), (16, 15), (15, 16), (17, 17),
+                                       (24, 24), (25, 24), (24, 25), (26, 26)])
 def test_lw_block_dimensions(rows, cols):
-    with pytest.raises(RuntimeError, match="16 by 16"):
+    with pytest.raises(RuntimeError, match="16 by 16 or 25 by 25"):
         psi4.core.isa_localize_lw(_matrix([[0.0, 0.0, 0.0]]),
                                   [psi4.core.Matrix(rows, cols)], 0.0, [])
 
@@ -486,12 +514,13 @@ def test_lw_source_is_pod_only_and_resource_bounded():
                       "IsaGrid", "IsaFit", "IsaPfit", "SCF", "real_to_complex", "binomial",
                       "regular_harmonics", "complex_index"):
         assert forbidden not in source
-    assert source.count("isa_multipole_translation(3, displacement)") == 1
+    assert source.count("isa_multipole_translation(static_cast<int>(kIsaLwMaxRank), displacement)") == 1
     assert "translation_matrix(position)" in source  # molecular origin shifts use the same seam
     assert "kElementTransferThreshold = 1.0e-7" in source
     assert "largest_candidate < kElementTransferThreshold" in source
     assert "std::abs(amount) <= kElementTransferThreshold" in source
     assert "kIsaLwGraphMaxSites = 256" in header
+    assert "kIsaLwMaxRank = 4" in header
     assert "kIsaLwMaxTransfers = 1000000" in header
     assert "kIsaLwMaxWorkspaceBytes = 768 * 1024 * 1024" in header
     assert "result.transfers.size() + pending.size() >= kIsaLwMaxTransfers" in source
@@ -500,20 +529,21 @@ def test_lw_source_is_pod_only_and_resource_bounded():
         "IsaSitePairResponse refined = truncated;")
 
 
-def _random_reciprocal_blocks(count, seed):
-    """Full rank-3 reciprocal ordered-pair input: blocks[a*n+b][t][u] == blocks[b*n+a][u][t].
+def _random_reciprocal_blocks(count, seed, width=16):
+    """Full reciprocal ordered-pair input: blocks[a*n+b][t][u] == blocks[b*n+a][u][t].
 
-    The rank-limit tests need input that is nonzero in EVERY component, including
-    the ones a declared limit discards, or the truncation would be a no-op and the
-    commutation claim would go untested.
+    `width` DECLARES the rank of the generated data, 16 for rank 3 and 25 for
+    rank 4; it is not a storage choice. The rank-limit tests need input that is
+    nonzero in EVERY component, including the ones a declared limit discards, or
+    the truncation would be a no-op and the commutation claim would go untested.
     """
     generator = np.random.default_rng(seed)
-    raw = generator.normal(size=(count, count, 16, 16))
-    blocks = [[[0.0] * 16 for _ in range(16)] for _ in range(count * count)]
+    raw = generator.normal(size=(count, count, width, width))
+    blocks = [[[0.0] * width for _ in range(width)] for _ in range(count * count)]
     for a in range(count):
         for b in range(count):
-            for row in range(16):
-                for column in range(16):
+            for row in range(width):
+                for column in range(width):
                     blocks[a * count + b][row][column] = 0.5 * (raw[a, b, row, column] +
                                                                 raw[b, a, column, row])
     return blocks
@@ -597,6 +627,75 @@ def test_lw_declared_rank_limit_equals_rank_three_restricted_bitwise(rank_limit)
     # No tolerance was relaxed to achieve any of this: the same gate holds.
     assert max(_residual_values(limited.residuals)[:1] +
                _residual_values(limited.residuals)[2:4]) <= 1.0e-9
+
+
+def test_lw_declared_rank_limit_four_is_a_new_model_extending_rank_three_bitwise():
+    """Limit 4 localizes the rank-4 rows; limit 3 on the SAME data is its restriction.
+
+    The theorem of the preceding test at L' = 4: translation is rank-raising, so a
+    component pair above the declared limit writes only above it. Localizing the
+    full rank-4 input at limit 4 and then reading ranks 1..3 is therefore bitwise
+    the same computation as truncating to rank 3 first and localizing at limit 3.
+
+    That exact consistency is NOT an agreement claim between the two models. The
+    limit-4 result carries a rank-4 local tensor the limit-3 model does not have at
+    all, and the two may never be quoted as agreeing on anything but their shared
+    leading components.
+    """
+    positions = [[0.0, 0.0, 0.0], [0.2, -0.3, 0.4], [-0.5, 0.1, 0.2], [0.7, 0.4, -0.6]]
+    values = _random_reciprocal_blocks(4, 20260911, width=25)
+    bonds = [(0, 1), (1, 2), (2, 3)]
+    four = _limited_localize(positions, values, bonds, 4)
+    three = _limited_localize(positions, values, bonds, 3)
+    assert four.localization_rank_limit == 4
+    assert three.localization_rank_limit == 3
+    # Limit 4 is the full working space, so it discards nothing; limit 3 discards
+    # the caller's real rank-4 data, which is what makes the comparison nonvacuous.
+    assert four.truncated_input_maxabs == 0.0
+    assert three.truncated_input_maxabs > 1.0e-3
+    for site in range(4):
+        wide, narrow = np.asarray(four.local[site]), np.asarray(three.local[site])
+        assert wide.shape == narrow.shape == (24, 24)
+        assert (wide[:15, :15] == narrow[:15, :15]).all()
+        # Ranks 1..3 are shared; rank 4 exists only in the limit-4 model, where it
+        # is a computed number rather than the limit-3 model's declared zero.
+        assert (narrow[15:, :] == 0.0).all() and (narrow[:, 15:] == 0.0).all()
+        assert abs(wide[15:, 15:]).max() > 1.0e-3
+    # No tolerance was relaxed to reach rank 4: the same gate holds.
+    assert max(_residual_values(four.residuals)[:1] +
+               _residual_values(four.residuals)[2:4]) <= 1.0e-9
+
+
+def test_lw_rank_four_cannot_be_declared_on_rank_three_blocks():
+    """The supplied width declares the caller's rank; rank 4 is not inferred into.
+
+    A rank-3 caller must not get a rank-4 localization by accident of the widened
+    storage: the rank-4 components of 16-wide input do not exist, and zero-filling
+    them would declare a model the caller never supplied.
+    """
+    positions = [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]]
+    narrow = _random_reciprocal_blocks(2, 20260912)
+    with pytest.raises(Exception, match="rank 4 localization requires 25 by 25"):
+        _limited_localize(positions, narrow, [(0, 1)], 4)
+    with pytest.raises(Exception, match="rank_limit must be 1, 2, 3 or 4"):
+        _limited_localize(positions, _random_reciprocal_blocks(2, 20260913, width=25), [(0, 1)], 5)
+    # Zero-extending by hand to the full width is the caller DECLARING rank 4, and
+    # is accepted. Its ranks 1..3 reproduce the rank-3 localization bitwise, but its
+    # rank-4 block is NOT zero: translation is rank-raising, so transferring a
+    # rank <= 3 source to a displaced site generates genuine rank-4 components.
+    # Declaring rank 4 on rank-3 data therefore still yields a different model, not
+    # a padded copy of the rank-3 one -- which is why the declaration is required.
+    widened = [[[block[row][column] if row < 16 and column < 16 else 0.0
+                 for column in range(25)] for row in range(25)] for block in narrow]
+    four = _limited_localize(positions, widened, [(0, 1)], 4)
+    three = _limited_localize(positions, narrow, [(0, 1)], 3)
+    assert four.localization_rank_limit == 4
+    assert four.truncated_input_maxabs == 0.0
+    for site in range(2):
+        wide, narrow_local = np.asarray(four.local[site]), np.asarray(three.local[site])
+        assert (wide[:15, :15] == narrow_local[:15, :15]).all()
+        assert (narrow_local[15:, :] == 0.0).all()
+        assert abs(wide[15:, 15:]).max() > 1.0
 
 
 def test_lw_declared_rank_limit_reports_and_does_not_gate_discarded_input():

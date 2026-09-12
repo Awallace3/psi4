@@ -62,6 +62,19 @@ def _frequencies(values):
     return tuple(map(float, a))
 
 
+def _rank4_truncation(rank, localization_rank_limit):
+    """The rank4 rows either reach LW and are localized, or they do not.
+
+    Rank3 input carries no rank4 rows and declares nothing. Rank4 input must say
+    which of the two models it is: discarded (ranks1..3 local, C12 structurally
+    partial) or retained (ranks1..4 local, C12 complete). The two are different
+    models and must never be quoted as agreeing.
+    """
+    if rank != 4:
+        return None
+    return lw.RETAIN_RANK4 if localization_rank_limit == 4 else lw.TRUNCATE_RANK4
+
+
 def _context(wfn):
     """Exact context fingerprint, including effective basis and actual full state."""
     if not isinstance(wfn, core.Wavefunction) or wfn.nirrep() != 1:
@@ -220,13 +233,17 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
     partition, fit, LW or PFIT stage.
 
     ``localization_rank_limit`` declares the uniform rank the LW stage localizes
-    at, in 1..3 (default 3, the full space). It is the reference protocol's single
-    ``Limit``, and it is a SEPARATE declaration from ``recipe.sites[*].rank``: the
-    site rank is the rank of the distributed response fed in and still has to be a
-    uniform explicit 3 or 4, which this does not relax. The restriction is exact
-    rather than approximate and gates nothing differently; it also cannot change a
-    rank <= limit number, since it yields the rank-3 result restricted to the
-    declared space (see :func:`isapol_lw.supplied_nonlocal_properties`).
+    at, in 1..4 (default 3). It is the reference protocol's single ``Limit``, and it
+    is a SEPARATE declaration from ``recipe.sites[*].rank``: the site rank is the
+    rank of the distributed response fed in and still has to be a uniform explicit 3
+    or 4, which this does not relax. A limit of 4 additionally requires site rank 4,
+    since rank-4 local tensors cannot be localized out of a rank-3 distributed
+    response; that pairing is what makes the C12 (1,4)/(4,1) rank pairs available,
+    and it is a different model from the rank-3 one rather than a refinement of it.
+    Below the site rank the restriction is exact rather than approximate and gates
+    nothing differently; it also cannot change a rank <= limit number, since it
+    yields the higher-limit result restricted to the declared space (see
+    :func:`isapol_lw.supplied_nonlocal_properties`).
     """
     if response_basis not in ('fitted_auxiliary', 'direct_ov'):
         raise ValueError('unsupported response_basis')
@@ -246,8 +263,10 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
         raise TypeError('explicit PartitionRecipe required')
     if len(set(s.rank for s in recipe.sites)) != 1 or recipe.sites[0].rank not in (3, 4):
         raise ValueError('LW pipeline requires uniform explicit rank3 or rank4')
-    if type(localization_rank_limit) is not int or localization_rank_limit not in (1, 2, 3):
-        raise ValueError('localization_rank_limit must be explicit integer1,2 or3')
+    if type(localization_rank_limit) is not int or localization_rank_limit not in (1, 2, 3, 4):
+        raise ValueError('localization_rank_limit must be explicit integer1,2,3 or4')
+    if localization_rank_limit > recipe.sites[0].rank:
+        raise ValueError('localization_rank_limit exceeds the site rank of the distributed response')
     freq = _frequencies(frequencies)
     if quadrature is not None and (not isinstance(quadrature, Quadrature) or freq != quadrature.frequencies):
         raise ValueError('requested nodes must exactly match complete authoritative quadrature')
@@ -397,14 +416,14 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
             charge_reference=('orthogonal direct OV (zero analytically)' if fit is None else 'native AUX integrals'),
             ov_backward_residual=None if fit is None else fit.relative_backward_residual,
             response_basis=response_basis,
-            raw_charge_sum_maxabs=[float(np.max(np.abs(a[:,: ,0,:16].sum(axis=0)))) for a in raw],
+            raw_charge_sum_maxabs=[float(np.max(np.abs(a[:,: ,0,:m].sum(axis=0)))) for a in raw],
             analytic_charge_response_maxabs=[float(np.max(np.abs(analytic_q @ r.raw_coupled @ np.asarray(q.values).T))) for r in responses],
             quadrature_charge_response_maxabs=[float(np.max(np.abs((qsum-analytic_q) @ r.raw_coupled @ np.asarray(q.values).T))) for r in responses])
         lg.report_response_diagnostics(log, diagnostics)
         provenance = lw.Provenance('fresh native distributed tensors', tensors.canonical_array_sha256,
             'Psi4 native fitted response and IsaDistributedResponse', partition.provenance+'; '+context_hash)
         args = dict(labels=q.labels, origins=q.origins, bonds=bonds, frames=frames,
-                    input_rank=rank, truncation=lw.TRUNCATE_RANK4 if rank == 4 else None,
+                    input_rank=rank, truncation=_rank4_truncation(rank, localization_rank_limit),
                     provenance=provenance, residual_policy='production',
                     localization_rank_limit=localization_rank_limit)
         stage = 'LW'

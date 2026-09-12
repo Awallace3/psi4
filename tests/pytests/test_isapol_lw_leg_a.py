@@ -114,7 +114,13 @@ def test_leg_a_recorded_localization(chain, index, record_property):
 
     # Rank 0 is dropped on output, and the comparison is in each site's local frame.
     actual_global = np.array([np.asarray(block) for block in result.local])
-    assert actual_global.shape == (3, 15, 15)
+    # The core workspace is rank-4 wide. This is a rank-3 declaration, so every
+    # component above rank 3 is identically zero -- not small -- and the recorded
+    # 15-wide numbers are compared against the leading block, bitwise unchanged by
+    # the widening.
+    assert actual_global.shape == (3, 24, 24)
+    assert (actual_global[:, 15:, :] == 0.0).all() and (actual_global[:, :, 15:] == 0.0).all()
+    actual_global = actual_global[:, :15, :15]
     rotations = [_rotation(s['frame']) for s in chain['sites']]
     actual = np.array([d.T @ a @ d for d, a in zip(rotations, actual_global)])
     errors = np.abs(actual - record['expected'])

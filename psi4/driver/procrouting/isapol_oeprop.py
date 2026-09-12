@@ -25,7 +25,7 @@ from . import isapol_logging as lg
 TASKS = frozenset(('ATOMIC_PARTITION', 'ATOMIC_POLARIZABILITIES', 'ATOMIC_DISPERSION'))
 
 
-def generated_recipe(wfn, radial=160, angular=590, aux_basis='cc-pVDZ-JKFIT'):
+def generated_recipe(wfn, radial=160, angular=590, aux_basis='cc-pVDZ-JKFIT', rank=3):
     """Generate all effective Gaussian descriptors from shipped JKFIT and formulas.
 
     Molecular AUX: the Cartesian ``aux_basis`` JKFIT set, unchanged effective
@@ -66,7 +66,8 @@ def generated_recipe(wfn, radial=160, angular=590, aux_basis='cc-pVDZ-JKFIT'):
         radial_shells = tuple(p.ShellRecipe(0, 0, (a,), ((2*a/math.pi)**.75,)) for a in exps)
         atom = p.BasisRecipe('even-tempered radial AtomAux', origin, 'Spherical', (c,), radial_shells)
         shape = p.BasisRecipe('even-tempered s Shape', origin, 'Spherical', (c,), radial_shells)
-        sites.append(p.SiteRecipe(f'{mol.symbol(i)}{i+1}', c, atom, shape, tuple(range(len(exps))), 3, 1.5, True))
+        sites.append(p.SiteRecipe(f'{mol.symbol(i)}{i+1}', c, atom, shape, tuple(range(len(exps))),
+                                  rank, 1.5, True))
     return p.PartitionRecipe('GENERATED_JKFIT_ISA_A', origin, 'explicit_cartesian_drho_c_isa_a',
         auxiliary, tuple(sites), p.GridRecipe(radial, angular, 3, 1., 'native_tabulated_bragg_slater',
         'all_sites_unscreened_full_molecular_grid'),
@@ -136,6 +137,17 @@ def validate_request(wfn, tasks):
         raise ValueError('ATOMIC_PROPERTY_AUXILIARY_BASIS must name a declared molecular AUX')
     if core.get_global_option('ATOMIC_RESPONSE_LOCALIZATION') != 'LW':
         raise ValueError('Only LW distributed-tensor localization is supported; not a density partition')
+    # Two separate declarations, validated as one statement: the localization cannot
+    # run above the rank of the distributed response it is given.
+    rank = core.get_global_option('ATOMIC_MULTIPOLE_RANK')
+    limit = core.get_global_option('ATOMIC_LOCALIZATION_RANK_LIMIT')
+    if rank not in (3, 4):
+        raise ValueError('ATOMIC_MULTIPOLE_RANK must be a declared 3 or 4')
+    if limit not in (1, 2, 3, 4):
+        raise ValueError('ATOMIC_LOCALIZATION_RANK_LIMIT must be a declared 1, 2, 3 or 4')
+    if limit > rank:
+        raise ValueError('ATOMIC_LOCALIZATION_RANK_LIMIT exceeds ATOMIC_MULTIPOLE_RANK; rank-4 local '
+                         'tensors cannot be localized out of a rank-3 distributed response')
     if not isinstance(wfn, core.Wavefunction) or wfn.nirrep() != 1 or not wfn.same_a_b_orbs():
         raise ValueError('Native atomic properties require an actual restricted C1 wavefunction')
     if wfn.nalpha() != wfn.nbeta() or wfn.nalpha() < 1:
@@ -164,12 +176,14 @@ def run(wfn, tasks):
             'ATOMIC_PROPERTY_RADIAL_POINTS', 'ATOMIC_PROPERTY_SPHERICAL_POINTS',
             'ATOMIC_RESPONSE_RADIAL_POINTS', 'ATOMIC_RESPONSE_SPHERICAL_POINTS',
             'ATOMIC_SCF_ASYMPTOTIC_CORRECTION', 'ATOMIC_SCF_EXPECTED_GRAC_SHIFT',
-            'ATOMIC_RESPONSE_ALGORITHM', 'ATOMIC_PROPERTY_PRINT')
+            'ATOMIC_RESPONSE_ALGORITHM', 'ATOMIC_MULTIPOLE_RANK',
+            'ATOMIC_LOCALIZATION_RANK_LIMIT', 'ATOMIC_PROPERTY_PRINT')
     options = tuple((k, core.get_global_option(k)) for k in keys)
     effective = dict(options)
     recipe = generated_recipe(wfn, int(effective['ATOMIC_PROPERTY_RADIAL_POINTS']),
                               int(effective['ATOMIC_PROPERTY_SPHERICAL_POINTS']),
-                              str(effective['ATOMIC_PROPERTY_AUXILIARY_BASIS']))
+                              str(effective['ATOMIC_PROPERTY_AUXILIARY_BASIS']),
+                              int(effective['ATOMIC_MULTIPOLE_RANK']))
     core.print_out('\n  Native atomic properties: '+recipe.origin+'\n')
     # The logger is built here because this is the only module that reads
     # ambient options; every stage below is narrated off records it already
@@ -210,6 +224,7 @@ def run(wfn, tasks):
             kernel='alda_slater_pw92', exact_exchange=.25, local_scale=.75, response_grid=response_grid,
             frequencies=quad.frequencies if quad else (0.,), quadrature=quad, pair_self=dispersion,
             response_basis='direct_ov', response_algorithm=algorithm, log=log,
+            localization_rank_limit=int(effective['ATOMIC_LOCALIZATION_RANK_LIMIT']),
             **correction_options)
         partition = properties.partition
     correction = validate_correction(wfn, **correction_options)

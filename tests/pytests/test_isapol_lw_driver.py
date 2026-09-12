@@ -25,11 +25,14 @@ spec.loader.exec_module(lw)
 PROV = lw.Provenance('synthetic', hashlib.sha256(b'synthetic').hexdigest(), 'analytic test', 'Supplied synthetic, not native.')
 
 
-def request(n=1, frequencies=(0.,), rank=3):
+def request(n=1, frequencies=(0.,), rank=3, retain=False):
+    # `retain` declares that the rank4 rows reach LW rather than being dropped at
+    # the boundary. It is the caller's statement about the MODEL, not a storage
+    # detail: retained rank4 input and a rank4 localization are the same decision.
     return dict(labels=[f'S{i}' for i in range(n)], origins=np.zeros((n,3)), bonds=[],
                 frequencies=list(frequencies), tensors=np.zeros((len(frequencies),n,n,(rank+1)**2,(rank+1)**2)),
                 input_rank=rank, provenance=PROV,
-                truncation=lw.TRUNCATE_RANK4 if rank == 4 else None)
+                truncation=(lw.RETAIN_RANK4 if retain else lw.TRUNCATE_RANK4) if rank == 4 else None)
 
 
 @pytest.fixture(scope='module')
@@ -42,10 +45,11 @@ def water():
     return f
 
 
-def water_request(f):
+def water_request(f, retain=False):
     return dict(labels=[s['label'] for s in f['sites']], origins=[s['origin'][:] for s in f['sites']],
                 frames=np.array([s['frame'] for s in f['sites']], dtype=float), bonds=[p[:] for p in f['bonds_zero_based']],
-                frequencies=[f['frequency']], input_rank=4, truncation=lw.TRUNCATE_RANK4,
+                frequencies=[f['frequency']], input_rank=4,
+                truncation=lw.RETAIN_RANK4 if retain else lw.TRUNCATE_RANK4,
                 tensors=np.array([s['values'] for s in f['distributed']['sections']], dtype=float).reshape(1,3,3,25,25),
                 provenance=lw.Provenance(f['distributed']['filename'], f['distributed']['sha256'],
                                          'archived external numeric input', 'portable historical unrefined water fixture'))
@@ -122,7 +126,8 @@ def test_frames_scalars_asymmetry_and_ownership():
     'freq_shape','tensor_shape','tensor_nan','tensor_inf','tensor_complex','tensor_bool','tensor_strings','ragged_tensor',
     'origin_shape','origin_nan','frame_shape','frame_nan','frame_reflection','frame_scale','frame_shear',
     'self_edge','duplicate_edge','reverse_edge','range_edge','negative_edge','bool_edge','float_edge','edge_shape',
-    'no_provenance','bad_policy','too_many_sites','too_many_frequencies','input_budget','native_budget','generator'])
+    'no_provenance','bad_policy','too_many_sites','too_many_frequencies','input_budget','native_budget','generator',
+    'extra_retain','retain_without_limit4','limit4_without_retain','limit4_on_rank3'])
 def test_invalid_boundaries(fault):
     q = request(2)
     if fault == 'empty_labels': q['labels'] = []
@@ -132,6 +137,10 @@ def test_invalid_boundaries(fault):
     elif fault.startswith('rank'): q['input_rank'] = {'rank2':2,'rank5':5,'rank_float':3.,'rank_bool':True}[fault]
     elif fault == 'missing_truncation': q = request(rank=4); q['truncation'] = None
     elif fault == 'extra_truncation': q['truncation'] = lw.TRUNCATE_RANK4
+    elif fault == 'extra_retain': q['truncation'] = lw.RETAIN_RANK4
+    elif fault == 'retain_without_limit4': q = request(rank=4,retain=True)
+    elif fault == 'limit4_without_retain': q = request(rank=4); q['localization_rank_limit'] = 4
+    elif fault == 'limit4_on_rank3': q['localization_rank_limit'] = 4
     elif fault == 'wrong_truncation': q = request(rank=4); q['truncation'] = 'truncate'
     elif fault == 'empty_freq': q['frequencies'] = []
     elif fault == 'negative_freq': q['frequencies'] = [-1.]
@@ -164,7 +173,13 @@ def test_invalid_boundaries(fault):
     elif fault == 'bad_policy': q['residual_policy'] = 'arbitrary_1e-3'
     elif fault == 'too_many_sites': q['labels'] = ['x']*257
     elif fault == 'too_many_frequencies': q['frequencies'] = [0]*4097
+    # 200 bondless sites still clear the (rank4-wide) native workspace mirror at
+    # 799046400 of 805306368 bytes, so this fault still reaches and trips the 64MiB
+    # INPUT guard, as it did before the widening; the reason has not silently moved.
     elif fault == 'input_budget': q['labels'] = [str(i) for i in range(200)]; q['frequencies'] = [0,1]
+    # The complete 256-site graph exceeded the 768MiB core budget at the rank3 width
+    # and exceeds it by more at the rank4 width. The budget is NOT raised to keep
+    # the old admissible site count: it falls from256 to about174 and is reported.
     elif fault == 'native_budget':
         q['labels'] = [str(i) for i in range(256)]; q['bonds'] = [[i,j] for i in range(256) for j in range(i+1,256)]
     elif fault == 'generator': q['frequencies'] = iter([0.])
@@ -283,19 +298,22 @@ def test_literal_lorentz_integral_independent_formula():
 
 
 def ranked_lorentz(n, frequencies, alphas, omega, localization_rank_limit=3):
-    """One site set whose three localized ranks carry three DIFFERENT scalars.
+    """One site set whose localized ranks carry DIFFERENT scalars, one per rank.
 
     `lorentz` above populates only the dipole block, so a rank limit would be
     invisible in it: ranks2 and3 already contribute zero. Here each rank l
     gets its own magnitude, so dropping a rank changes a C_n that includes it
-    and only those.
+    and only those. `alphas` declares how many ranks the input carries; a
+    limit4 model needs a rank4 input whose rank4 rows are retained, which is
+    a different declaration from the rank3 one, not a wider copy of it.
     """
-    q = request(n,frequencies)
+    rank4 = localization_rank_limit == 4
+    q = request(n,frequencies,rank=4 if rank4 else 3,retain=rank4)
     if localization_rank_limit != 3:
         q['localization_rank_limit'] = localization_rank_limit
     for k,xi in enumerate(frequencies):
         for s in range(n):
-            for l,alpha in zip((1,2,3),alphas):
+            for l,alpha in zip(range(1,len(alphas)+1),alphas):
                 # Full Racah packing, 00 at index0, as `lorentz` above; leaving
                 # the charge-flow row zero is what keeps LW's own sum rules
                 # satisfied, so this input needs no relaxed tolerance.
@@ -477,7 +495,7 @@ def test_localization_rank_limit_is_recorded_and_defaults_to_three(water):
         assert 'cannot change any number at those ranks' in declared[0]
 
 
-@pytest.mark.parametrize('bad',[0,4,-1,'2',2.0,True,None])
+@pytest.mark.parametrize('bad',[0,5,-1,'2',2.0,True,None])
 def test_localization_rank_limit_is_validated(bad):
     q = request(1,[0.])
     with pytest.raises(ValueError,match='localization_rank_limit'):
@@ -506,6 +524,84 @@ def test_localization_rank_limit_restricts_the_model_without_moving_it(water):
     # The restriction is nonvacuous: rank2 and3 carry real weight here.
     assert abs(reference[:,:,1]).max() > 1.0
     assert abs(reference[:,:,2]).max() > 1.0
+
+
+def test_rank4_localization_is_a_different_model_and_exactly_consistent(water):
+    """Limit4 localizes the retained rank4 rows; limit3 is its leading restriction.
+
+    These are two MODELS, not two accuracies of one: the limit4 result carries a
+    rank4 local tensor the limit3 model does not have at all, and the two may never
+    be quoted as agreeing. What they ARE is exactly consistent, and that is the
+    theorem stated in lw_localization.h: multipole translation is rank-raising, so
+    no rank4 component can write into a rank<=3 one. `== 0.0` is deliberate; a
+    tolerance would hide the point.
+    """
+    r3 = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
+                                         **water_request(water))
+    r4 = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
+                                         localization_rank_limit=4,
+                                         **water_request(water,retain=True))
+    assert r3.raw_local.shape == (1,3,15,15)
+    assert r4.raw_local.shape == (1,3,24,24)
+    a3, a4 = np.asarray(r3.raw_local.array), np.asarray(r4.raw_local.array)
+    assert (a4[...,:15,:15] == a3).all()
+    assert (np.asarray(r4.atomic_scalars.array)[...,:3] ==
+            np.asarray(r3.atomic_scalars.array)).all()
+    # Nonvacuous: the retained rank4 rows carry real weight, and the rank4 local
+    # scalar exists only in the limit4 model.
+    assert np.abs(a4[...,15:,15:]).max() > 1.0
+    assert np.asarray(r4.atomic_scalars.array).shape == (1,3,4)
+    assert np.abs(np.asarray(r4.atomic_scalars.array)[:,:,3]).min() > 1.0
+    # The record says which model this is, on both the metadata and the warnings.
+    assert r4.metadata.localization_rank_limit == 4
+    assert r4.metadata.output_ranks == (1,2,3,4)
+    assert r4.metadata.local_components[-1] == '44s'
+    assert 'rank1..4 local' in r4.metadata.coverage
+    assert 'DIFFERENT model' in r4.metadata.coverage
+    # Retained rank4 discards nothing at the boundary; the truncating model does.
+    assert r4.metadata.discarded_rank4_entry_count == 0
+    assert r3.metadata.discarded_rank4_entry_count > 0
+    assert r4.metadata.truncation == lw.RETAIN_RANK4
+    declared = [w for w in r4.warnings if 'localization declared at rank4' in w]
+    assert len(declared) == 1
+    assert 'must never be quoted as agreeing' in declared[0]
+
+
+def test_rank4_localization_completes_c12():
+    """C12 needs (1,4)/(4,1), which a rank1..3 localization does not have at all.
+
+    This is the structural point of the rank4 model: not a better C12, but the
+    first C12 whose four rank pairs are all present. The rank3 C12 is a partial
+    sum over (2,3)/(3,2) and is marked incomplete; the two are different
+    quantities and are never compared by value here.
+    """
+    frequencies, weights = [0,2], [0,.17]
+    three = ranked_lorentz(1,frequencies,(3,7,11),2)
+    four = ranked_lorentz(1,frequencies,(3,7,11,13),2,localization_rank_limit=4)
+    assert four.metadata.localization_rank_limit == 4
+    a = lw.isotropic_dispersion(three,three,cp_weights=weights,quadrature_provenance=PROV)
+    b = lw.isotropic_dispersion(four,four,cp_weights=weights,quadrature_provenance=PROV)
+    c3, c4 = coefficient(a,12), coefficient(b,12)
+    assert c3.included_rank_pairs == ((2,3),(3,2))
+    assert c3.missing_rank_pairs == ((1,4),(4,1))
+    assert not c3.unrestricted_complete
+    assert c4.included_rank_pairs == ((1,4),(2,3),(3,2),(4,1))
+    assert c4.missing_rank_pairs == ()
+    assert c4.unrestricted_complete
+    # The orders that were already mutually complete are untouched, bitwise: the
+    # rank4 model adds terms, it does not move the ones the rank3 model had.
+    for order in (6,8,10):
+        assert coefficient(a,order).unrestricted_complete
+        assert coefficient(b,order).unrestricted_complete
+        assert coefficient(b,order).value == coefficient(a,order).value
+    # Declaring rank4 against a rank1..3 model is refused, not zero-filled.
+    with pytest.raises(ValueError,match='localization rank limit'):
+        lw.isotropic_dispersion(three,three,cp_weights=weights,quadrature_provenance=PROV,
+                                site_ranks_a=[[1,2,3,4]])
+    # Rank5 is not declarable at all.
+    with pytest.raises(ValueError,match='declarable LW ranks are1..4'):
+        lw.isotropic_dispersion(four,four,cp_weights=weights,quadrature_provenance=PROV,
+                                site_ranks_a=[[1,2,3,5]])
 
 
 def test_default_site_ranks_follow_the_model_localization_limit():

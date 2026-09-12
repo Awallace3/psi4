@@ -495,7 +495,7 @@ def report_tensor_diagnostics(log, local, level=3):
 
 # --------------------------------------------------- atomic polarizability ----
 
-RANK_UNITS = {1: 'bohr^3', 2: 'bohr^5', 3: 'bohr^7'}
+RANK_UNITS = {1: 'bohr^3', 2: 'bohr^5', 3: 'bohr^7', 4: 'bohr^9'}
 
 
 def report_atomic_polarizabilities(log, wfn, local):
@@ -509,13 +509,15 @@ def report_atomic_polarizabilities(log, wfn, local):
     scalars = local.atomic_scalars.array
     labels, freq = local.labels, local.frequencies
     limit = int(local.metadata.localization_rank_limit)
-    ranks = tuple(r for r in (1, 2, 3) if r <= limit)
+    ranks = tuple(range(1, limit + 1))
     log.table('Static atomic isotropic polarizabilities, trace(alpha_ll)/(2l+1):',
               ('site',) + tuple('alpha_%d [%s]' % (r, RANK_UNITS[r]) for r in ranks),
               [(labels[i],) + tuple(float(scalars[0, i, r - 1]) for r in ranks)
                for i in range(len(labels))],
               note=('ranks %d..3 absent by declaration (localization_rank_limit=%d)'
-                    % (limit + 1, limit)) if limit < 3 else None)
+                    % (limit + 1, limit)) if limit < 3 else
+                   ('ranks 1..4 localized: a DIFFERENT model from the rank-3 one, '
+                    'not a more accurate one') if limit == 4 else None)
     if len(freq) > 1:
         log.table('Frequency-dependent atomic isotropic polarizabilities:',
                   ('xi [Eh]', 'site') + tuple('alpha_%d' % r for r in ranks),

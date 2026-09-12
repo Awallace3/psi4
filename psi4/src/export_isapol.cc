@@ -96,9 +96,8 @@ IsaLocalizedResponse localize(const Matrix& positions, const py::sequence& block
                              double frequency, const py::sequence& bonds, double tolerance,
                              double input_sum_rule_tolerance, int rank_limit) {
     // Declared, not inferred: the caller states the rank the localization runs at.
-    if (rank_limit < 1 || rank_limit > 3)
-        throw std::runtime_error(
-            "localize_lw: declared rank_limit must be 1, 2 or 3; rank 4 needs a rank-4 working matrix");
+    if (rank_limit < 1 || rank_limit > static_cast<int>(kIsaLwMaxRank))
+        throw std::runtime_error("localize_lw: declared rank_limit must be 1, 2, 3 or 4");
     if (!std::isfinite(frequency))
         throw std::runtime_error("localize_lw: response frequency must be finite");
     if (frequency < 0.0)
@@ -117,7 +116,8 @@ IsaLocalizedResponse localize(const Matrix& positions, const py::sequence& block
     const std::size_t bond_count = py::len(bonds);
     isa_lw_validate_workspace(count, bond_count);
     if (py::len(blocks) != count * count)
-        throw std::runtime_error("localize_lw: expected one 16 by 16 block for every ordered site pair");
+        throw std::runtime_error(
+            "localize_lw: expected one 16 by 16 or 25 by 25 block for every ordered site pair");
     IsaBondGraph graph{count, {}};
     graph.bonds.reserve(bond_count);
     for (std::size_t edge = 0; edge < bond_count; ++edge) {
@@ -143,11 +143,29 @@ IsaLocalizedResponse localize(const Matrix& positions, const py::sequence& block
         for (std::size_t axis = 0; axis < 3; ++axis)
             if (!std::isfinite(positions(site, axis)))
                 throw std::runtime_error("localize_lw: site positions must be finite");
+    // The supplied block width DECLARES the rank of the caller's data: 16 for rank 3,
+    // 25 for rank 4. It is not a storage detail to be inferred away -- a rank-3 caller
+    // may not silently declare a rank-4 localization on data that has no rank-4
+    // components. Rank-3 input is zero-extended into the wider working matrix, which
+    // leaves every rank <= 3 declaration bitwise unchanged by the widening.
+    if (checked.empty() || !checked.front())
+        throw std::runtime_error("localize_lw: expected 16 by 16 or 25 by 25 single-block matrices");
+    const int supplied_width = checked.front()->nrow();
+    if (supplied_width != 16 && supplied_width != static_cast<int>(kIsaLwWorkingComponents))
+        throw std::runtime_error("localize_lw: expected 16 by 16 or 25 by 25 single-block matrices");
+    const auto width = static_cast<std::size_t>(supplied_width);
+    const int supplied_rank = supplied_width == 16 ? 3 : static_cast<int>(kIsaLwMaxRank);
+    if (rank_limit > supplied_rank)
+        throw std::runtime_error(
+            "localize_lw: declared rank_limit exceeds the rank of the supplied blocks; "
+            "rank 4 localization requires 25 by 25 supplied blocks");
     for (const auto& matrix : checked) {
-        if (!matrix || matrix->nirrep() != 1 || matrix->nrow() != 16 || matrix->ncol() != 16)
-            throw std::runtime_error("localize_lw: expected 16 by 16 single-block matrices");
-        for (std::size_t row = 0; row < 16; ++row)
-            for (std::size_t column = 0; column < 16; ++column)
+        if (!matrix || matrix->nirrep() != 1 || matrix->nrow() != supplied_width ||
+            matrix->ncol() != supplied_width)
+            throw std::runtime_error(
+                "localize_lw: expected 16 by 16 or 25 by 25 single-block matrices, all the same width");
+        for (std::size_t row = 0; row < width; ++row)
+            for (std::size_t column = 0; column < width; ++column)
                 if (!std::isfinite((*matrix)(row, column)))
                     throw std::runtime_error("localize_lw: response values must be finite");
     }
@@ -157,10 +175,11 @@ IsaLocalizedResponse localize(const Matrix& positions, const py::sequence& block
     for (std::size_t site = 0; site < count; ++site)
         for (std::size_t axis = 0; axis < 3; ++axis)
             response.positions[site][axis] = positions(site, axis);
+    // Value-initialized: components the supplied width does not reach stay at zero.
     response.blocks.resize(count * count);
     for (std::size_t block = 0; block < checked.size(); ++block)
-        for (std::size_t row = 0; row < 16; ++row)
-            for (std::size_t column = 0; column < 16; ++column)
+        for (std::size_t row = 0; row < width; ++row)
+            for (std::size_t column = 0; column < width; ++column)
                 response.blocks[block][row][column] = (*checked[block])(row, column);
     return isa_localize_lw(response, graph, tolerance, input_sum_rule_tolerance, rank_limit);
 }
@@ -360,7 +379,7 @@ void export_isapol(py::module& m) {
         })
         .def_property_readonly("refined_pairs", [](const IsaLocalizedResponse& r) {
             return lw_binding_private::matrix_copies(r.refined_pairs);
-        }, "Full 16x16 LW workspace; NOT externally PFIT-refined pairs")
+        }, "Full 25x25 LW workspace; NOT externally PFIT-refined pairs")
         .def_property_readonly("transfers", [](const IsaLocalizedResponse& r) { return r.transfers; })
         .def_property_readonly("residuals", [](const IsaLocalizedResponse& r) { return r.residuals; })
         .def_property_readonly("omitted_component_pairs", [](const IsaLocalizedResponse& r) {
@@ -379,25 +398,31 @@ void export_isapol(py::module& m) {
           "positions"_a, "blocks"_a, "frequency"_a, "bonds"_a, "residual_tolerance"_a = 1.0e-6,
           "input_sum_rule_tolerance"_a = -1.0, "rank_limit"_a = 3,
           "Supplied atomic-unit ordered-pair response; finite nonnegative frequency required. "
-          "Positions: N x 3 Matrix in bohr; blocks: N*N single 16x16 Matrices, real Racah 00,10,11c,11s,... . "
-          "Explicit zero-based graph; source-minus-target translations; local output ranks 1..3. "
+          "Positions: N x 3 Matrix in bohr; blocks: N*N single 16x16 (rank 3) or 25x25 (rank 4) "
+          "Matrices, all the same width, real Racah 00,10,11c,11s,... . The width declares the rank of "
+          "the supplied data and rank_limit may not exceed it; rank-3 blocks are zero-extended. "
+          "Explicit zero-based graph; source-minus-target translations; local output is 24x24 with "
+          "ranks above the declared limit identically zero. "
           "residual_tolerance is a postcondition gate, not iteration; it always holds the "
           "algorithm-controlled residuals off_site, reciprocity, molecular_sum and charge_sum_transport. "
           "input_sum_rule_tolerance gates the supplied data's charge-flow sum-rule defect separately: "
           "negative inherits residual_tolerance (one combined gate), positive finite sets an explicit "
           "threshold, and infinity measures and reports the defect without gating it. LW transports such a "
           "defect exactly (measured <= 2.2e-16) and cannot repair it. At most 256 sites, 1000000 retained transfers, "
-          "768 MiB native workspace budget (caller inputs/getter copies additional). "
-          "rank_limit declares the rank the localization runs at, in 1..3, default 3 (the full working "
-          "space, for which this routine is unchanged). A declared limit L truncates the supplied blocks "
+          "768 MiB native workspace budget (caller inputs/getter copies additional). The budget is unchanged "
+          "by the rank-4 widening and the 25x25 working matrix therefore lowers the largest admissible graph "
+          "from 256 to about 174 sites; that cost is reported, not hidden by raising the budget. "
+          "rank_limit declares the rank the localization runs at, in 1..4, default 3 (for which this "
+          "routine is unchanged; 4 is the full working space). A declared limit L truncates the supplied blocks "
           "to the leading (L+1)^2 real Racah components in both index slots first -- reported through "
           "truncated_input_maxabs -- and then runs the component-pair loop, the translated transfer "
           "application, the molecular-sum conservation check and the local output inside that space. The "
           "restriction is exact because multipole translation is rank-raising, so no tolerance is relaxed "
-          "and every residual is gated at the same threshold as at rank 3. A limited localization is a "
-          "DIFFERENT MODEL from the rank-3 one, but an exactly consistent one: because translation is "
+          "and every residual is gated at the same threshold as at the full rank. A localization at one limit is a "
+          "DIFFERENT MODEL from one at another, but an exactly consistent one: because translation is "
           "rank-raising and the pair loop is ordered, no pair above the limit can write below it, so the "
-          "result equals the rank-3 result restricted to the declared space, bitwise (measured 0.0). A "
+          "result at L equals the result at any higher L' restricted to the declared space, bitwise "
+          "(measured 0.0). A "
           "declared limit therefore cannot change any rank <= L observable. "
           "No solver fallback, native-upstream verification, external PFIT refinement, or parity claim.");
     m.def("isa_lw_graph_math",

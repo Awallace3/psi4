@@ -8,8 +8,12 @@ The explicit array axes are frequency,response_site,potential_site,response_comp
 potential_component; both site axes follow labels. Origins are bohr; frequencies
 are nonnegative imaginary-axis magnitudes in atomic units. Frames are proper
 local-to-global Cartesian columns; frames=None explicitly defaults every site to
-identity. Rank4 requires truncation='discard_rank4_rows_and_columns': exactly the
-first16 rows/columns enter LW, including rank0. Output contains ranks1..3 only.
+identity. Rank4 input requires an explicit truncation declaration, and the two are
+different models: 'discard_rank4_rows_and_columns' sends exactly the first16 rows/
+columns to LW, including rank0, and outputs ranks1..3; 'retain_rank4_rows_and_columns'
+sends all25 and outputs ranks1..4, which is the only way to obtain the C12 (1,4)/(4,1)
+rank pairs. The second is not a more accurate version of the first and the two must
+never be quoted as agreeing.
 
 Owned arrays are immutable byte snapshots; .array returns a defensive copy.
 Core imports are lazy and package-relative, with no dependency on isapol_supplied.
@@ -27,6 +31,10 @@ import numpy as np
 NumericArray = Union[np.ndarray, list, tuple]
 
 TRUNCATE_RANK4 = 'discard_rank4_rows_and_columns'
+RETAIN_RANK4 = 'retain_rank4_rows_and_columns'
+# Working/local widths of the core LW matrices, by declared localization rank limit.
+_LOCAL_WIDTH = {1: 15, 2: 15, 3: 15, 4: 24}
+_INPUT_WIDTH = {TRUNCATE_RANK4: 16, RETAIN_RANK4: 25, None: 16}
 PRODUCTION_TOLERANCE = 1e-6
 MAX_INPUT_BYTES = 64 * 1024 * 1024
 MAX_FREQUENCIES = 4096
@@ -220,7 +228,21 @@ class Metadata:
         components = tuple(c for l in range(self.input_rank+1) for c in [f'{l}0'] +
                            [f'{l}{m}{s}' for m in range(1,l+1) for s in 'cs'])
         object.__setattr__(self, 'input_components', components)
-        object.__setattr__(self, 'local_components', components[1:16])
+        # The stored local width follows the declared localization rank limit, so the
+        # descriptive fields never claim a rank the arrays do not carry. Limits1..3
+        # keep the historical15-wide output (ranks above the limit are identical
+        # zeros inside it); limit4 is 24 wide.
+        width = _LOCAL_WIDTH[self.localization_rank_limit]
+        object.__setattr__(self, 'local_components', components[1:width+1])
+        if self.localization_rank_limit == 4:
+            object.__setattr__(self, 'output_ranks', (1, 2, 3, 4))
+            object.__setattr__(self, 'output_axes',
+                'raw_global/raw_local: frequency,site,response_component,potential_component; ranks1..4')
+            object.__setattr__(self, 'scalar_axes',
+                'frequency,site,rank; trace(alpha_ll)/(2*l+1), ranks1,2,3,4')
+            object.__setattr__(self, 'coverage',
+                'rank0..4 working; rank1..4 local; C12 (1,4)/(4,1) available -- a DIFFERENT model '
+                'from the rank1..3 localization, not a more accurate one')
         object.__setattr__(self, 'output_ranks', tuple(self.output_ranks))
 
 
@@ -280,16 +302,19 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
             order, and recording failed production acceptance independently of any
             comparison.
     ``localization_rank_limit`` declares the rank the localization itself runs at,
-    in1..3, default3 (the full space, for which this routine is unchanged). It is
+    in1..4, default3 (for which this routine is unchanged). Limit4 requires
+    ``truncation=RETAIN_RANK4`` and is the only way to obtain rank-4 local tensors,
+    hence the C12 (1,4)/(4,1) rank pairs; it is a different model from the rank-3
+    one, not a more accurate one. Limits below3 restrict the space further. It is
     the reference protocol's uniform ``Limit`` -- the ORIENT input template applies
     ``Limit all rank {LIMIT}`` to the pair data and then ``Localise ... Limit
     {LIMIT}``, and the per-site ``WSM-Limit``/``H-Limit`` reach the pfit stage, not
     the localization -- so it is a single integer and not a per-site vector.
 
     It relaxes nothing: the gate is unchanged, and because multipole translation is
-    rank-raising the restriction is exact. A declared limit L yields precisely the
-    rank-3 result restricted to ranks1..L, bitwise, so it cannot change any
-    rank <= L number. Ranks above L are identically zero, and
+    rank-raising the restriction is exact. For any two declared limits L < L', the
+    result at L is precisely the result at L' restricted to ranks1..L, bitwise, so a
+    limit cannot change any rank <= L number. Ranks above L are identically zero, and
     :func:`isotropic_dispersion` refuses to declare them rather than reading those
     zeros as physics.
 
@@ -307,15 +332,23 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
         raise ValueError('labels must be unique')
     if type(input_rank) is not int or input_rank not in (3, 4):
         raise ValueError('input_rank must be explicit integer3 or4')
-    if truncation != (TRUNCATE_RANK4 if input_rank == 4 else None):
+    if input_rank == 4:
+        if truncation not in (TRUNCATE_RANK4, RETAIN_RANK4):
+            raise ValueError('rank4 input requires an explicit discard/retain rank4 declaration')
+    elif truncation is not None:
         raise ValueError('exact rank4 truncation declaration required only for rank4')
     if not isinstance(provenance, Provenance):
         raise ValueError('explicit typed Provenance required')
     if residual_policy not in ('production', 'historical_water_diagnostic',
                               'reported_input_sum_rule'):
         raise ValueError('unsupported residual policy')
-    if type(localization_rank_limit) is not int or localization_rank_limit not in (1,2,3):
-        raise ValueError('localization_rank_limit must be explicit integer1,2 or3')
+    if type(localization_rank_limit) is not int or localization_rank_limit not in (1,2,3,4):
+        raise ValueError('localization_rank_limit must be explicit integer1,2,3 or4')
+    # The truncation declaration and the localization limit are one statement, not two:
+    # rank4 rows either reach LW and are localized, or they do not and cannot be.
+    if (truncation == RETAIN_RANK4) != (localization_rank_limit == 4):
+        raise ValueError('localization_rank_limit4 requires retained rank4 input, and retained '
+                         'rank4 input requires localization_rank_limit4')
     edges = _length(bonds, 'bonds', n*(n-1)//2)
     graph, seen = [], set()
     for edge in bonds:
@@ -327,8 +360,10 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
         seen.add((min(a,b), max(a,b)))
         graph.append((a,b))
     graph = tuple(graph)
-    # IsaLwWorkingMatrix=2048, local=1800, position=24, transfer<=48 bytes.
-    native_bytes = 3*n*n*2048 + (2*edges+n)*2048 + n*(1800+24) + 16*n*n*8 + 4*1000000*48
+    # IsaLwWorkingMatrix=25*25*8=5000, local=24*24*8=4608, position=24, transfer<=48 bytes.
+    # The core budget is unchanged by the rank4 widening, so the admissible site count
+    # falls from256 to about174; that cost is mirrored here, not relaxed.
+    native_bytes = 3*n*n*5000 + (2*edges+n)*5000 + n*(4608+24) + 16*n*n*8 + 4*1000000*48
     if native_bytes > 768*1024*1024:
         raise ValueError('native workspace exceeds768MiB resource limit')
     nf = _length(frequencies, 'frequencies', MAX_FREQUENCIES)
@@ -356,10 +391,17 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
     ):
         raise ValueError('historical_water_diagnostic requires the exact approved water identity (full tensors, geometry, frames, frequency, ordered bonds, source hash)')
     from psi4 import core
-    rotations = [np.asarray(core.isa_multipole_rotation(3, f.tolist()))[1:16,1:16].copy() for f in frame]
+    # The frame rotation is built at the rank the localization runs at, never wider:
+    # a rotation block for a rank the model does not carry would have nothing to act on.
+    rotation_rank = 4 if localization_rank_limit == 4 else 3
+    width = _LOCAL_WIDTH[localization_rank_limit]
+    input_width = _INPUT_WIDTH[truncation]
+    output_ranks = tuple(range(1, rotation_rank+1))
+    rotations = [np.asarray(core.isa_multipole_rotation(rotation_rank, f.tolist()))[1:width+1,1:width+1].copy()
+                 for f in frame]
     globals_, locals_, scalars, dipoles, fd, td, warnings = [], [], [], [], [], [], []
     truncated_maxabs = 0.0
-    if localization_rank_limit < 3:
+    if localization_rank_limit < rotation_rank:
         # A frame rotation must not mix a retained rank with a discarded one.
         # isa_multipole_rotation is block diagonal in rank; check, do not assume.
         keep = (localization_rank_limit+1)**2 - 1
@@ -367,7 +409,8 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
             if np.any(d[:keep,keep:]) or np.any(d[keep:,:keep]):
                 raise ValueError('frame rotation mixes ranks across the declared localization limit')
     for k, xi in enumerate(freq):
-        blocks = [core.Matrix.from_array(raw[k,a,b,:16,:16].copy()) for a in range(n) for b in range(n)]
+        blocks = [core.Matrix.from_array(raw[k,a,b,:input_width,:input_width].copy())
+                  for a in range(n) for b in range(n)]
         args = (core.Matrix.from_array(pos), blocks, float(xi), graph)
         # Never catch/retry a failed production request with relaxed tolerance.
         if historical:
@@ -384,10 +427,13 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
             raise ValueError('core reported a different localization rank limit')
         truncated_maxabs = max(truncated_maxabs, float(result.truncated_input_maxabs))
         residuals = Residuals(*(float(getattr(result.residuals, name)) for name in Residuals.__dataclass_fields__))
-        g = np.array([np.asarray(a) for a in result.local])
+        # Core always returns the full 24-wide local block; slicing to the declared
+        # width keeps a rank<=3 model's arrays byte-identical to the rank-3 pipeline.
+        g = np.array([np.asarray(a)[:width,:width] for a in result.local])
         with np.errstate(over='raise', invalid='raise'):
             local = np.array([d.T @ a @ d for d,a in zip(rotations,g)])
-            scalar = np.array([[np.trace(a[l*l-1:(l+1)**2-1,l*l-1:(l+1)**2-1])/(2*l+1) for l in (1,2,3)] for a in local])
+            scalar = np.array([[np.trace(a[l*l-1:(l+1)**2-1,l*l-1:(l+1)**2-1])/(2*l+1)
+                                for l in output_ranks] for a in local])
             xyz = g[:,:3,:3][:,[1,2,0],:][:,:,[1,2,0]].copy()
             input_error = float(np.max(np.abs(raw[k]-raw[k].transpose(1,0,3,2))))
             for axes, arrays in (('global',g), ('site_local',local)):
@@ -419,15 +465,20 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
         warnings.append('Supplied charge-flow sum-rule defect reported, not gated: the algorithm-controlled '
                         'postconditions held at the production tolerance, the input sum rule is a property of '
                         'the supplied producer, and no native prediction or external parity is claimed.')
-    if localization_rank_limit < 3:
+    if localization_rank_limit == 4:
+        warnings.append(
+            'localization declared at rank4: the local tensors carry ranks1..4 and the C12 (1,4)/(4,1) '
+            'rank pairs become available. This is a DIFFERENT model from the rank1..3 localization, not '
+            'a more accurate one, and the two must never be quoted as agreeing.')
+    if localization_rank_limit < rotation_rank:
         warnings.append(
             f'localization declared at rank {localization_rank_limit}: ranks '
-            f'{localization_rank_limit+1}..3 are absent by declaration, not computed and small; '
+            f'{localization_rank_limit+1}..{rotation_rank} are absent by declaration, not computed and small; '
             f'{truncated_maxabs:g} of supplied magnitude was truncated before localizing. The '
             f'restriction is exact (translation is rank-raising), so this equals the rank-3 '
             f'localization restricted to ranks 1..{localization_rank_limit} and cannot change any '
             f'number at those ranks.')
-    metadata = Metadata(input_rank, truncation, nf*n*n*(m*m-256), raw_hash, residual_policy,
+    metadata = Metadata(input_rank, truncation, nf*n*n*(m*m-input_width*input_width), raw_hash, residual_policy,
                         1e-3 if historical else PRODUCTION_TOLERANCE,
                         False if historical else all(d.production_postcondition_passed for d in fd),
                         HISTORICAL_FIXTURE_SHA256 if historical else None,
@@ -492,7 +543,8 @@ def isotropic_dispersion(model_a: LocalProperties, model_b: LocalProperties, *,
     ``site_ranks_a``/``site_ranks_b`` declare, per site and in site order, which
     ranks that site contributes; the default is every rank the model was actually
     localized at -- ``1..model.metadata.localization_rank_limit`` -- for every
-    site, which is ``(1, 2, 3)`` for the default rank-3 localization. The default
+    site, which is ``(1, 2, 3)`` for the default rank-3 localization and
+    ``(1, 2, 3, 4)`` for a rank-4 one. The default
     is read off the model rather than fixed at ``(1, 2, 3)`` because a model
     localized at a declared lower limit holds identical zeros above it: a fixed
     default would feed those zeros to the C_n kernel, which would then report the
@@ -505,12 +557,13 @@ def isotropic_dispersion(model_a: LocalProperties, model_b: LocalProperties, *,
     silently completing: an order whose every rank pair survives is comparable,
     one with a missing pair is not, and that distinction must stay visible.
 
-    Only ranks 1..3 are declarable here, because that is what
-    :func:`supplied_nonlocal_properties` localizes; rank 4 needs a rank-4
-    localized tensor and is refused rather than zero-filled. A model localized at
-    a declared limit below 3 refuses the ranks above its own limit for the same
-    reason: those components are absent by declaration, and reading their zeros
-    would drop C_n terms while still reporting the order as complete.
+    Ranks 1..4 are declarable, but only up to what the supplied model was actually
+    localized at: a rank exceeding ``model.metadata.localization_rank_limit`` is
+    refused rather than zero-filled, because those components are absent by
+    declaration, and reading their zeros would drop C_n terms while still reporting
+    the order as complete. Rank 4 therefore requires a model built with
+    ``localization_rank_limit=4``; it is the rank pairs (1,4) and (4,1) that make
+    C12 structurally complete, and a rank-3 model is not silently promoted to one.
 
     ``log`` and ``wfn`` are reporting surfaces only. This stage owns its own
     banner, node table and coefficient tables because it is the only place that
@@ -550,8 +603,8 @@ def isotropic_dispersion(model_a: LocalProperties, model_b: LocalProperties, *,
         for site in declared:
             if not site or any(type(r) is not int for r in site):
                 raise ValueError('each site must declare a non-empty tuple of integer ranks')
-            if any(r < 1 or r > 3 for r in site):
-                raise ValueError('declarable LW ranks are1..3; rank4 needs a rank-4 localized tensor')
+            if any(r < 1 or r > 4 for r in site):
+                raise ValueError('declarable LW ranks are1..4')
             # Above the model's own declared localization limit the scalars are
             # identically zero by declaration. Reading them would silently drop
             # terms from the C_n sum while reporting the order as complete.

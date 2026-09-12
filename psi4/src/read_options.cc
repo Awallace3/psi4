@@ -344,6 +344,23 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         blocked BLAS3 update, so it carries its own separately calibrated ALDA work
         limit. It relaxes no other limit and coarsens no quadrature. -*/
     options.add_str("ATOMIC_RESPONSE_ALGORITHM", "ORDERED_PAIRWISE", "ORDERED_PAIRWISE SHARED_SWEEP");
+    /*- Declared uniform site multipole rank of the distributed response, 3 or 4. It is a
+        model declaration, never inferred from a target coefficient: rank 4 is what makes
+        the C12 rank pairs (1,4) and (4,1) exist at all, so a rank-3 and a rank-4 C12 are
+        not the same quantity and must never be quoted as agreeing. Rank 4 costs a 25x25
+        rather than 16x16 LW working matrix per site pair, which at the unchanged 768 MiB
+        native workspace budget lowers the largest admissible graph from 256 to about 174
+        sites. -*/
+    options.add_int("ATOMIC_MULTIPOLE_RANK", 3);
+    /*- Declared uniform rank the LW localization itself runs at, 1 to 4, and a SEPARATE
+        declaration from ATOMIC_MULTIPOLE_RANK: it is the reference protocol's single
+        ``Limit``. It may not exceed the site rank, because rank-4 local tensors cannot be
+        localized out of a rank-3 distributed response. Below the site rank the restriction
+        is exact rather than approximate -- multipole translation is rank-raising, so the
+        result equals the unrestricted one restricted to the declared space, bitwise -- and
+        it therefore relaxes no tolerance and cannot change any number at a retained rank.
+        A localization at one limit is a different model from one at another. -*/
+    options.add_int("ATOMIC_LOCALIZATION_RANK_LIMIT", 3);
 
     /*- Verbosity of the native atomic-property narrative written to the output
         file. 0 is silent, 1 prints each stage with every tweakable parameter of

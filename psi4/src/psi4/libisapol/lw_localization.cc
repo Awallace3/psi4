@@ -248,10 +248,10 @@ constexpr double kElementTransferThreshold = 1.0e-7;
 // The sole translation seam, including molecular origin shifts.
 IsaLwWorkingMatrix translation_matrix(const IsaLwPosition& displacement) {
     for (double value : displacement) require_finite(value, "translation displacement");
-    const auto matrix = isa_multipole_translation(3, displacement);
+    const auto matrix = isa_multipole_translation(static_cast<int>(kIsaLwMaxRank), displacement);
     IsaLwWorkingMatrix result{};
-    for (std::size_t row = 0; row < 16; ++row)
-        for (std::size_t column = 0; column < 16; ++column) {
+    for (std::size_t row = 0; row < kIsaLwWorkingComponents; ++row)
+        for (std::size_t column = 0; column < kIsaLwWorkingComponents; ++column) {
             result[row][column] = (*matrix)(row, column);
             require_finite(result[row][column], "translation matrix");
         }
@@ -377,10 +377,10 @@ void isa_lw_validate_workspace(std::size_t count, std::size_t edges) {
 IsaLocalizedResponse isa_localize_lw(const IsaSitePairResponse& response, const IsaBondGraph& graph,
                               double residual_tolerance, double input_sum_rule_tolerance, int rank_limit) {
     using namespace lw_transfer_private;
-    if (rank_limit < 1 || rank_limit > 3)
-        throw PSIEXCEPTION(
-            "localize_lw: declared rank_limit must be 1, 2 or 3; rank 4 needs a rank-4 working matrix");
-    // The declared working width. rank_limit 3 gives 16, the historical behaviour.
+    if (rank_limit < 1 || rank_limit > static_cast<int>(kIsaLwMaxRank))
+        throw PSIEXCEPTION("localize_lw: declared rank_limit must be 1, 2, 3 or 4");
+    // The declared working width. rank_limit 3 gives 16, the historical behaviour;
+    // rank_limit 4 gives 25, the full storage width.
     const std::size_t working_components = static_cast<std::size_t>((rank_limit + 1) * (rank_limit + 1));
     if (!std::isfinite(response.frequency))
         throw PSIEXCEPTION("localize_lw: response frequency must be finite");
@@ -419,8 +419,8 @@ IsaLocalizedResponse isa_localize_lw(const IsaSitePairResponse& response, const 
     double input_reciprocity = 0.0;
     for (std::size_t a = 0; a < count; ++a) {
         for (std::size_t b = 0; b < count; ++b) {
-            for (std::size_t row = 0; row < 16; ++row) {
-                for (std::size_t column = 0; column < 16; ++column) {
+            for (std::size_t row = 0; row < kIsaLwWorkingComponents; ++row) {
+                for (std::size_t column = 0; column < kIsaLwWorkingComponents; ++column) {
                     input_reciprocity = std::max(
                         input_reciprocity,
                         finite_absolute(response.blocks[a * count + b][row][column] -
@@ -440,10 +440,10 @@ IsaLocalizedResponse isa_localize_lw(const IsaSitePairResponse& response, const 
     // checked over the full space is inherited by the truncated data.
     IsaSitePairResponse truncated = response;
     double truncated_input_maxabs = 0.0;
-    if (working_components < 16) {
+    if (working_components < kIsaLwWorkingComponents) {
         for (auto& block : truncated.blocks) {
-            for (std::size_t row = 0; row < 16; ++row) {
-                for (std::size_t column = 0; column < 16; ++column) {
+            for (std::size_t row = 0; row < kIsaLwWorkingComponents; ++row) {
+                for (std::size_t column = 0; column < kIsaLwWorkingComponents; ++column) {
                     if (row < working_components && column < working_components) continue;
                     truncated_input_maxabs = std::max(
                         truncated_input_maxabs,

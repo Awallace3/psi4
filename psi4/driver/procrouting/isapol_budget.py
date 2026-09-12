@@ -526,12 +526,18 @@ def _from_coupled(chain, coupled, stage, partition=None):
 def _from_raw(chain, raw, stage):
     """Perturbed distributed tensors -> unrelaxed production LW -> dispersion."""
     local = chain.local
+    # The perturbed re-localization must be the SAME model as the chain's own, so the
+    # declared localization rank limit is read off it rather than defaulted: a limit-4
+    # chain re-localized at the default 3 would be a different model whose difference
+    # is not the perturbation being measured.
+    limit = int(local.metadata.localization_rank_limit)
     result = lw.supplied_nonlocal_properties(
         labels=local.labels, origins=np.asarray(local.origins.array),
         frames=np.asarray(local.frames.array), bonds=local.bonds,
         frequencies=chain.frequencies, tensors=np.asarray(raw, dtype=float),
-        input_rank=chain.rank, truncation=lw.TRUNCATE_RANK4 if chain.rank == 4 else None,
-        provenance=_rebuild_provenance(chain, stage), residual_policy='production')
+        input_rank=chain.rank, truncation=local.metadata.truncation,
+        provenance=_rebuild_provenance(chain, stage), residual_policy='production',
+        localization_rank_limit=limit)
     dispersion = None
     if chain.pair_self or chain.partner is not None:
         quadrature = chain.properties.quadrature

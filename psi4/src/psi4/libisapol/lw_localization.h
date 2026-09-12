@@ -39,13 +39,22 @@ PSI_API Matrix isa_lw_graph_operator(const IsaBondGraph& graph);
 /// Optional diagnostics are copied only on success. No localization/parity claim.
 PSI_API std::pair<Matrix, std::vector<double>> isa_lw_graph_pseudoinverse(
     const IsaBondGraph& graph, IsaLwGraphDiagnostics* diagnostics = nullptr);
-using IsaLwLocalMatrix = std::array<std::array<double, 15>, 15>;
-using IsaLwWorkingMatrix = std::array<std::array<double, 16>, 16>;
+/// Storage width of the LW algebra. The working space carries the real Racah
+/// components through rank 4, (4+1)^2 = 25; the local output drops rank 0, hence 24.
+/// These are storage widths, NOT a declaration: the rank the localization actually
+/// runs at is rank_limit below, and every component above it is identically zero.
+/// A rank-3 declaration therefore occupies the leading 16/15 of these and is
+/// bitwise unchanged by the widening.
+constexpr std::size_t kIsaLwMaxRank = 4;
+constexpr std::size_t kIsaLwWorkingComponents = (kIsaLwMaxRank + 1) * (kIsaLwMaxRank + 1);
+constexpr std::size_t kIsaLwLocalComponents = kIsaLwWorkingComponents - 1;
+using IsaLwLocalMatrix = std::array<std::array<double, kIsaLwLocalComponents>, kIsaLwLocalComponents>;
+using IsaLwWorkingMatrix = std::array<std::array<double, kIsaLwWorkingComponents>, kIsaLwWorkingComponents>;
 using IsaLwPosition = std::array<double, 3>;
 /// Supplied atomic-unit response, not a native producer or an externally refined model.
 /// Explicit finite nonnegative frequency; NaN sentinel makes missing identity fail closed.
 /// Positions in bohr; N*N ordered blocks: response coordinate first, potential second.
-/// Real Racah order 00,10,11c,11s,... through rank 3.
+/// Real Racah order 00,10,11c,11s,... through rank 4.
 struct PSI_API IsaSitePairResponse {
     double frequency = std::numeric_limits<double>::quiet_NaN();
     std::vector<IsaLwPosition> positions;
@@ -105,6 +114,14 @@ struct PSI_API IsaLocalizedResponse {
 /// Resource policy: at most 256 sites, 1,000,000 retained transfers (including pending),
 /// and a conservative 768 MiB native workspace budget. Exceeding a cap throws;
 /// no transfers are silently discarded. Caller-owned inputs/getter copies are additional.
+///
+/// The 768 MiB budget is unchanged by the rank-4 widening, and the widening is
+/// therefore not free: the per-pair working matrix grew from 16x16 to 25x25, so the
+/// workspace estimate grew from about 8320*N^2 to about 20128*N^2 bytes and the
+/// largest admissible site count fell from the 256-site graph cap to about 174.
+/// That is a real, reported loss of capacity, not an accounting change, and the
+/// budget is deliberately NOT raised to hide it. A caller needing more sites needs
+/// a different storage scheme with its own gate, not a larger number here.
 constexpr std::size_t kIsaLwMaxTransfers = 1000000;
 constexpr std::size_t kIsaLwMaxWorkspaceBytes = 768 * 1024 * 1024;
 /// Shared preallocation guard for the POD entry point and bounded Python conversion.
@@ -127,8 +144,9 @@ PSI_API void isa_lw_validate_workspace(std::size_t site_count, std::size_t bond_
 /// Reporting the defect is not waiving it: the caller receives the measured value
 /// and every algorithm-controlled residual is still held to residual_tolerance.
 ///
-/// rank_limit DECLARES the rank the localization is performed at, in 1..3, and
-/// defaults to 3, the full working space, for which this routine is unchanged.
+/// rank_limit DECLARES the rank the localization is performed at, in 1..4, and
+/// defaults to 3, for which this routine is unchanged. 4 is the full working
+/// space; 3 and below restrict it.
 /// A declared limit L restricts the whole algorithm to the first (L+1)^2 real
 /// Racah components: the supplied blocks are truncated to that range in both
 /// index slots first (reported through truncated_input_maxabs), and the
@@ -143,12 +161,14 @@ PSI_API void isa_lw_validate_workspace(std::size_t site_count, std::size_t bond_
 /// sum are therefore each conserved within the declared space, and every
 /// residual above is gated at exactly the same threshold as at rank 3.
 ///
-/// A limited localization is a DIFFERENT MODEL from the rank-3 one and the two
-/// must never be quoted as agreeing. They are, however, exactly CONSISTENT, and
+/// A localization at one declared limit is a DIFFERENT MODEL from one at another
+/// limit and the two must never be quoted as agreeing. In particular a rank-4
+/// localization is not a more accurate rank-3 one: it carries components the
+/// rank-3 model does not have at all. They are, however, exactly CONSISTENT, and
 /// that is a theorem about this algorithm rather than a numerical observation:
 ///
-///   For any declared L, the localized blocks equal the rank-3 localized blocks
-///   restricted to the leading (L+1)^2 components, bitwise.
+///   For any two declared limits L < L', the localized blocks at L equal the
+///   localized blocks at L' restricted to the leading (L+1)^2 components, bitwise.
 ///
 /// The component-pair loop is ordered first_component <= second_component, and a
 /// transfer for the pair (t, u) writes only into the u-th slot, with the target

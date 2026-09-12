@@ -225,7 +225,13 @@ def test_lw_historical_diagnostic_all_675_entries(fixture, record_property):
     assert result.frequency == 0.0
     np.testing.assert_array_equal(result.positions, [s["origin"] for s in fixture["sites"]])
     actual_global = np.array([np.asarray(block) for block in result.local])
-    assert actual_global.shape == (3, 15, 15)
+    # The core workspace is rank-4 wide. This is a rank-3 declaration, so every
+    # component above rank 3 is identically zero -- not small -- and the recorded
+    # 15-wide numbers are compared against the leading block, bitwise unchanged by
+    # the widening.
+    assert actual_global.shape == (3, 24, 24)
+    assert (actual_global[:, 15:, :] == 0.0).all() and (actual_global[:, :, 15:] == 0.0).all()
+    actual_global = actual_global[:, :15, :15]
     actual = np.array([_rotation(s["frame"]).T @ a @ _rotation(s["frame"])
                        for s, a in zip(fixture["sites"], actual_global)])
     errors = np.abs(actual - expected)
