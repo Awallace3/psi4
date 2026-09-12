@@ -90,8 +90,12 @@ def generated_recipe(wfn, radial=160, angular=590, aux_basis='cc-pVDZ-JKFIT', ra
     return p.PartitionRecipe(name, origin, 'explicit_cartesian_drho_c_isa_a',
         auxiliary, tuple(sites), p.GridRecipe(radial, angular, 3, 1., 'native_tabulated_bragg_slater',
         'all_sites_unscreened_full_molecular_grid'),
+        # w_eps_activation / positive_activation / tail_activation are CamCASP's
+        # declared wEps_EpsNorm = 1e-5, PositiveW_EpsNorm = 1e-5 and
+        # TailFix_EpsNorm = 1e-6.  The tail threshold is a declared model
+        # parameter: a run at 1e-5 is a different model, not a looser one.
         p.ControllerRecipe(1e-9, 120, .17, .001, .2, True, 0., True, 1e-36,
-                           1e-5, 1e-5, 1e-5, 0., 20, 20, True), 'strict1e-9')
+                           1e-5, 1e-5, 1e-6, 0., 20, 20, True), 'strict1e-9')
 
 
 @dataclass(frozen=True)

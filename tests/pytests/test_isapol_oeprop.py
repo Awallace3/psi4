@@ -236,6 +236,14 @@ def test_declared_tail_policy_is_a_model_parameter_never_a_tolerance():
     assert default.auxiliary.shells == slater.auxiliary.shells
     assert default.auxiliary.centres == slater.auxiliary.centres and default.grid == slater.grid
     assert default.controller == slater.controller and default.track == slater.track
+    # The three activation thresholds are declared model parameters carrying
+    # CamCASP's declared module defaults (stockholder.F90): wEps_EpsNorm and
+    # PositiveW_EpsNorm are 1e-5, TailFix_EpsNorm is 1e-6.  They are pinned here
+    # because a run at another value is a different model, not a looser one.
+    assert default.controller.w_eps_activation == 1e-5
+    assert default.controller.positive_activation == 1e-5
+    assert default.controller.tail_activation == 1e-6
+    assert default.controller.tail_iteration_limit == 20
     assert [[sh.exponents for sh in s.shape.shells] for s in default.sites] == \
            [[sh.exponents for sh in s.shape.shells] for s in slater.sites]
     with pytest.raises(ValueError, match='Unknown declared tail policy'):

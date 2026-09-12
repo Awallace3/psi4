@@ -13,7 +13,10 @@ struct IsaAControllerOptions {
     // is 192 MiB; admission includes conservative point-workspace headroom.
     size_t cache_max_bytes = 192 * 1024 * 1024;
     double convergence = 1.e-9;
-    double w_eps_activation = 1.e-5, positive_activation = 1.e-5, tail_activation = 1.e-5;
+    // Activation thresholds follow CamCASP's declared module defaults:
+    // wEps_EpsNorm = 1e-5, PositiveW_EpsNorm = 1e-5, TailFix_EpsNorm = 1e-6
+    // (stockholder.F90). These are declared model parameters, not tolerances.
+    double w_eps_activation = 1.e-5, positive_activation = 1.e-5, tail_activation = 1.e-6;
     double mixing = 0.0;
     int mixing_skip = 20, tail_iteration_limit = 20, max_iterations = 120;
     bool fix_tails = true;
