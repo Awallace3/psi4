@@ -37,23 +37,49 @@ __global__ void prepare_inputs_kernel(std::size_t npoints, std::size_t ncomponen
     if (ncomponents >= 5) tau[point] = 2.0 * values[4];
 }
 
-__global__ void accumulate_kernel(std::size_t npoints, double scale, bool has_exc, bool has_gamma, bool has_tau,
-                                  const double* f, const double* f_rho, const double* f_gamma, const double* f_tau,
-                                  double* full_f, double* full_f_rho, double* full_f_gamma, double* full_f_tau) {
+__global__ void prepare_inputs_polarized_kernel(std::size_t npoints, std::size_t ncomponents,
+                                                const double* density_a, const double* density_b, double* rho,
+                                                double* gamma, double* tau) {
+    const std::size_t point = blockIdx.x * blockDim.x + threadIdx.x;
+    if (point >= npoints) return;
+
+    const double* a = density_a + ncomponents * point;
+    const double* b = density_b + ncomponents * point;
+    rho[2 * point + 0] = a[0];
+    rho[2 * point + 1] = b[0];
+    if (ncomponents >= 4) {
+        gamma[3 * point + 0] = a[1] * a[1] + a[2] * a[2] + a[3] * a[3];
+        gamma[3 * point + 1] = a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+        gamma[3 * point + 2] = b[1] * b[1] + b[2] * b[2] + b[3] * b[3];
+    }
+    if (ncomponents >= 5) {
+        tau[2 * point + 0] = a[4];
+        tau[2 * point + 1] = b[4];
+    }
+}
+
+// One thread per grid point, so the all-or-nothing finiteness rule of the host
+// path -- reject a point outright rather than accumulate half of it -- carries
+// over unchanged across however many spin components the field has.
+__global__ void accumulate_kernel(std::size_t npoints, double scale, bool has_exc, std::size_t nrho,
+                                  std::size_t ngamma, std::size_t ntau, const double* f, const double* f_rho,
+                                  const double* f_gamma, const double* f_tau, double* full_f, double* full_f_rho,
+                                  double* full_f_gamma, double* full_f_tau) {
     const std::size_t point = blockIdx.x * blockDim.x + threadIdx.x;
     if (point >= npoints) return;
 
     // f holds nothing for a potential-only functional; it was never written.
-    bool finite = isfinite(f_rho[point]);
-    if (has_exc) finite = finite && isfinite(f[point]);
-    if (has_gamma) finite = finite && isfinite(f_gamma[point]);
-    if (has_tau) finite = finite && isfinite(f_tau[point]);
+    bool finite = true;
+    if (has_exc) finite = isfinite(f[point]);
+    for (std::size_t i = 0; finite && i < nrho; ++i) finite = isfinite(f_rho[nrho * point + i]);
+    for (std::size_t i = 0; finite && i < ngamma; ++i) finite = isfinite(f_gamma[ngamma * point + i]);
+    for (std::size_t i = 0; finite && i < ntau; ++i) finite = isfinite(f_tau[ntau * point + i]);
     if (!finite) return;
 
     if (has_exc) full_f[point] += scale * f[point];
-    full_f_rho[point] += scale * f_rho[point];
-    if (has_gamma) full_f_gamma[point] += scale * f_gamma[point];
-    if (has_tau) full_f_tau[point] += scale * f_tau[point];
+    for (std::size_t i = 0; i < nrho; ++i) full_f_rho[nrho * point + i] += scale * f_rho[nrho * point + i];
+    for (std::size_t i = 0; i < ngamma; ++i) full_f_gamma[ngamma * point + i] += scale * f_gamma[ngamma * point + i];
+    for (std::size_t i = 0; i < ntau; ++i) full_f_tau[ntau * point + i] += scale * f_tau[ntau * point + i];
 }
 
 __global__ void apply_grac_kernel(std::size_t npoints, double alpha, double beta, double shift, const double* rho,
@@ -87,6 +113,37 @@ __global__ void pack_potential_kernel(std::size_t npoints, std::size_t ncomponen
     if (ncomponents >= 5) values[4] = weight * v_tau[point];
 }
 
+__global__ void pack_potential_polarized_kernel(std::size_t npoints, std::size_t ncomponents,
+                                                const double* density_a, const double* density_b,
+                                                const double* weights, const double* v_rho, const double* v_gamma,
+                                                const double* v_tau, double* potential_a, double* potential_b) {
+    const std::size_t point = blockIdx.x * blockDim.x + threadIdx.x;
+    if (point >= npoints) return;
+
+    const double weight = weights[point];
+    const double* a = density_a + ncomponents * point;
+    const double* b = density_b + ncomponents * point;
+    double* out_a = potential_a + ncomponents * point;
+    double* out_b = potential_b + ncomponents * point;
+    out_a[0] = weight * v_rho[2 * point + 0];
+    out_b[0] = weight * v_rho[2 * point + 1];
+    if (ncomponents >= 4) {
+        // The cross term sigma_ab is shared, so each spin's gradient potential
+        // picks up the other spin's density gradient.
+        const double v_aa = v_gamma[3 * point + 0];
+        const double v_ab = v_gamma[3 * point + 1];
+        const double v_bb = v_gamma[3 * point + 2];
+        for (int k = 1; k <= 3; ++k) {
+            out_a[k] = weight * (2.0 * v_aa * a[k] + v_ab * b[k]);
+            out_b[k] = weight * (2.0 * v_bb * b[k] + v_ab * a[k]);
+        }
+    }
+    if (ncomponents >= 5) {
+        out_a[4] = weight * v_tau[2 * point + 0];
+        out_b[4] = weight * v_tau[2 * point + 1];
+    }
+}
+
 inline int blocks(std::size_t npoints) { return static_cast<int>((npoints + block_size - 1) / block_size); }
 
 }  // namespace
@@ -97,10 +154,19 @@ cudaError_t cuest_xc_prepare_inputs(std::size_t npoints, std::size_t ncomponents
     return cudaGetLastError();
 }
 
-cudaError_t cuest_xc_accumulate(std::size_t npoints, double scale, bool has_exc, bool has_gamma, bool has_tau,
-                                const double* f, const double* f_rho, const double* f_gamma, const double* f_tau,
-                                double* full_f, double* full_f_rho, double* full_f_gamma, double* full_f_tau) {
-    accumulate_kernel<<<blocks(npoints), block_size>>>(npoints, scale, has_exc, has_gamma, has_tau, f, f_rho,
+cudaError_t cuest_xc_prepare_inputs_polarized(std::size_t npoints, std::size_t ncomponents,
+                                              const double* density_a, const double* density_b, double* rho,
+                                              double* gamma, double* tau) {
+    prepare_inputs_polarized_kernel<<<blocks(npoints), block_size>>>(npoints, ncomponents, density_a, density_b,
+                                                                     rho, gamma, tau);
+    return cudaGetLastError();
+}
+
+cudaError_t cuest_xc_accumulate(std::size_t npoints, double scale, bool has_exc, std::size_t nrho,
+                                std::size_t ngamma, std::size_t ntau, const double* f, const double* f_rho,
+                                const double* f_gamma, const double* f_tau, double* full_f, double* full_f_rho,
+                                double* full_f_gamma, double* full_f_tau) {
+    accumulate_kernel<<<blocks(npoints), block_size>>>(npoints, scale, has_exc, nrho, ngamma, ntau, f, f_rho,
                                                        f_gamma, f_tau, full_f, full_f_rho, full_f_gamma,
                                                        full_f_tau);
     return cudaGetLastError();
@@ -118,6 +184,16 @@ cudaError_t cuest_xc_pack_potential(std::size_t npoints, std::size_t ncomponents
                                    const double* v_tau, double* potential) {
     pack_potential_kernel<<<blocks(npoints), block_size>>>(npoints, ncomponents, density, weights, v_rho, v_gamma,
                                                            v_tau, potential);
+    return cudaGetLastError();
+}
+
+cudaError_t cuest_xc_pack_potential_polarized(std::size_t npoints, std::size_t ncomponents, const double* density_a,
+                                              const double* density_b, const double* weights, const double* v_rho,
+                                              const double* v_gamma, const double* v_tau, double* potential_a,
+                                              double* potential_b) {
+    pack_potential_polarized_kernel<<<blocks(npoints), block_size>>>(npoints, ncomponents, density_a, density_b,
+                                                                     weights, v_rho, v_gamma, v_tau, potential_a,
+                                                                     potential_b);
     return cudaGetLastError();
 }
 

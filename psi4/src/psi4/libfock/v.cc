@@ -197,10 +197,13 @@ inline void check_cuest_xc_cuda(cudaError_t status, const std::string& operation
     }
 }
 
-void evaluate_cuest_xc_component_device(const std::shared_ptr<Functional>& component, size_t npoints,
-                                        const double* rho, const double* gamma, const double* tau, double* f,
-                                        double* f_rho, double* f_gamma, double* f_tau, double* full_f,
-                                        double* full_f_rho, double* full_f_gamma, double* full_f_tau) {
+// nrho/ngamma/ntau are the components per point of the LibXC fields: 1/1/1 for an
+// unpolarized evaluation, 2/3/2 for a polarized one.
+void evaluate_cuest_xc_component_device(const std::shared_ptr<Functional>& component, size_t npoints, size_t nrho,
+                                        size_t ngamma, size_t ntau, const double* rho, const double* gamma,
+                                        const double* tau, double* f, double* f_rho, double* f_gamma,
+                                        double* f_tau, double* full_f, double* full_f_rho, double* full_f_gamma,
+                                        double* full_f_tau) {
     auto* libxc_component = static_cast<LibXCFunctional*>(component.get());
     auto* xc_functional = libxc_component->xc_functional_device();
 
@@ -217,9 +220,9 @@ void evaluate_cuest_xc_component_device(const std::shared_ptr<Functional>& compo
     } else {
         xc_lda_exc_vxc(xc_functional, npoints, rho, f_out, f_rho);
     }
-    check_cuest_xc_cuda(cuest_xc_accumulate(npoints, component->alpha(), has_exc, component->is_gga(),
-                                             component->is_meta(), f, f_rho, f_gamma, f_tau, full_f, full_f_rho,
-                                             full_f_gamma, full_f_tau),
+    check_cuest_xc_cuda(cuest_xc_accumulate(npoints, component->alpha(), has_exc, nrho,
+                                             component->is_gga() ? ngamma : 0, component->is_meta() ? ntau : 0, f,
+                                             f_rho, f_gamma, f_tau, full_f, full_f_rho, full_f_gamma, full_f_tau),
                         "CUDA LibXC accumulation");
 }
 
@@ -248,9 +251,9 @@ void evaluate_cuest_xc_device(const std::shared_ptr<SuperFunctional>& functional
     const auto evaluate_components = [&](const std::vector<std::shared_ptr<Functional>>& components, double* out_f,
                                          double* out_f_rho, double* out_f_gamma, double* out_f_tau) {
         for (const auto& component : components) {
-            evaluate_cuest_xc_component_device(component, npoints, rho.get(), gamma.get(), tau.get(), f.get(),
-                                                f_rho.get(), f_gamma.get(), f_tau.get(), out_f, out_f_rho,
-                                                out_f_gamma, out_f_tau);
+            evaluate_cuest_xc_component_device(component, npoints, 1, 1, 1, rho.get(), gamma.get(), tau.get(),
+                                                f.get(), f_rho.get(), f_gamma.get(), f_tau.get(), out_f,
+                                                out_f_rho, out_f_gamma, out_f_tau);
         }
     };
     evaluate_components(functional->x_functionals(), full_f.get(), full_f_rho.get(), full_f_gamma.get(),
@@ -293,6 +296,66 @@ void evaluate_cuest_xc_device(const std::shared_ptr<SuperFunctional>& functional
                         "CUDA LibXC density download");
     check_cuest_xc_cuda(cudaMemcpy(host_f.data(), full_f.get(), npoints * sizeof(double), cudaMemcpyDeviceToHost),
                         "CUDA LibXC energy download");
+}
+
+// Spin-polarized counterpart of the above, for UKS. There is no GRAC branch because
+// UV::compute_V rejects GRAC before reaching here. Only the energy density and the
+// two spin densities come back to the host, for the Exc and <rho> quadratures.
+void evaluate_cuest_xc_device_polarized(const std::shared_ptr<SuperFunctional>& functional, size_t npoints,
+                                        size_t ncomponents, const double* density_a, const double* density_b,
+                                        const double* weights, double* potential_a, double* potential_b,
+                                        std::vector<double>& host_rho_a, std::vector<double>& host_rho_b,
+                                        std::vector<double>& host_f) {
+    const bool gga = ncomponents >= 4;
+    const bool meta = ncomponents >= 5;
+    const size_t nrho = 2, ngamma = 3, ntau = 2;
+    CuestXCDeviceBuffer rho(nrho * npoints), gamma(gga ? ngamma * npoints : 0), tau(meta ? ntau * npoints : 0);
+    CuestXCDeviceBuffer f(npoints), f_rho(nrho * npoints), f_gamma(gga ? ngamma * npoints : 0),
+        f_tau(meta ? ntau * npoints : 0);
+    CuestXCDeviceBuffer full_f(npoints), full_f_rho(nrho * npoints), full_f_gamma(gga ? ngamma * npoints : 0),
+        full_f_tau(meta ? ntau * npoints : 0);
+
+    check_cuest_xc_cuda(cuest_xc_prepare_inputs_polarized(npoints, ncomponents, density_a, density_b, rho.get(),
+                                                          gamma.get(), tau.get()),
+                        "CUDA LibXC input preparation");
+    check_cuest_xc_cuda(cudaMemset(full_f.get(), 0, npoints * sizeof(double)), "CUDA LibXC energy initialization");
+    check_cuest_xc_cuda(cudaMemset(full_f_rho.get(), 0, nrho * npoints * sizeof(double)),
+                        "CUDA LibXC density-potential initialization");
+    if (gga)
+        check_cuest_xc_cuda(cudaMemset(full_f_gamma.get(), 0, ngamma * npoints * sizeof(double)),
+                            "CUDA LibXC gradient-potential initialization");
+    if (meta)
+        check_cuest_xc_cuda(cudaMemset(full_f_tau.get(), 0, ntau * npoints * sizeof(double)),
+                            "CUDA LibXC tau-potential initialization");
+
+    for (const auto& components : {functional->x_functionals(), functional->c_functionals()}) {
+        for (const auto& component : components) {
+            evaluate_cuest_xc_component_device(component, npoints, nrho, ngamma, ntau, rho.get(), gamma.get(),
+                                                tau.get(), f.get(), f_rho.get(), f_gamma.get(), f_tau.get(),
+                                                full_f.get(), full_f_rho.get(), full_f_gamma.get(),
+                                                full_f_tau.get());
+        }
+    }
+
+    check_cuest_xc_cuda(cuest_xc_pack_potential_polarized(npoints, ncomponents, density_a, density_b, weights,
+                                                          full_f_rho.get(), full_f_gamma.get(), full_f_tau.get(),
+                                                          potential_a, potential_b),
+                        "CUDA LibXC potential packing");
+    check_cuest_xc_cuda(cudaDeviceSynchronize(), "CUDA LibXC evaluation");
+
+    std::vector<double> interleaved_rho(nrho * npoints);
+    host_f.resize(npoints);
+    check_cuest_xc_cuda(cudaMemcpy(interleaved_rho.data(), rho.get(), nrho * npoints * sizeof(double),
+                                   cudaMemcpyDeviceToHost),
+                        "CUDA LibXC density download");
+    check_cuest_xc_cuda(cudaMemcpy(host_f.data(), full_f.get(), npoints * sizeof(double), cudaMemcpyDeviceToHost),
+                        "CUDA LibXC energy download");
+    host_rho_a.resize(npoints);
+    host_rho_b.resize(npoints);
+    for (size_t point = 0; point < npoints; ++point) {
+        host_rho_a[point] = interleaved_rho[2 * point + 0];
+        host_rho_b[point] = interleaved_rho[2 * point + 1];
+    }
 }
 #endif
 
@@ -1949,6 +2012,7 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         rho_0 = gpu_rho.data();
         p_full_f = gpu_f.data();
 #else
+        timer_on("cuEST XC: Host Functional");
         // Copy the density and its derivatives to host, then transpose it for easier access.
         SharedMatrix h_rho_matrix = std::make_shared<Matrix>("rho", npoints, ncomponents);
         err = cudaMemcpy(h_rho_matrix->pointer()[0], d_rho, npoints * ncomponents * sizeof(double), cudaMemcpyDeviceToHost);
@@ -2173,6 +2237,7 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in RV::compute_V");
         }
+        timer_off("cuEST XC: Host Functional");
 #endif
 
         // => Compute the potential matrix from its grid representation <= //
@@ -4334,6 +4399,32 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
         temporary_workspace = nullptr;
         CHECK_CUEST(cuestParametersDestroy(CUEST_XCDENSITYCOMPUTE_PARAMETERS, density_compute_parameters));
 
+        double* d_Vxc_grid_a = nullptr;
+        double* d_Vxc_grid_b = nullptr;
+        double* p_full_f = nullptr;
+        double* rho_0_a = nullptr;
+        double* rho_0_b = nullptr;
+#ifdef USING_Libxc_CUDA
+        std::vector<double> gpu_rho_a;
+        std::vector<double> gpu_rho_b;
+        std::vector<double> gpu_f;
+        err = cudaMalloc(reinterpret_cast<void**>(&d_Vxc_grid_a), npoints * ncomponents * sizeof(double));
+        if (err != cudaSuccess) {
+            throw PSIEXCEPTION("cudaMalloc failed for CUDA LibXC alpha potential");
+        }
+        err = cudaMalloc(reinterpret_cast<void**>(&d_Vxc_grid_b), npoints * ncomponents * sizeof(double));
+        if (err != cudaSuccess) {
+            throw PSIEXCEPTION("cudaMalloc failed for CUDA LibXC beta potential");
+        }
+        timer_on("cuEST XC: CUDA LibXC Functional");
+        evaluate_cuest_xc_device_polarized(functional_, npoints, ncomponents, d_rho_a, d_rho_b, d_weights,
+                                           d_Vxc_grid_a, d_Vxc_grid_b, gpu_rho_a, gpu_rho_b, gpu_f);
+        timer_off("cuEST XC: CUDA LibXC Functional");
+        rho_0_a = gpu_rho_a.data();
+        rho_0_b = gpu_rho_b.data();
+        p_full_f = gpu_f.data();
+#else
+        timer_on("cuEST XC: Host Functional");
         // Copy the density and its derivatives to host, then transpose it for easier access.
         SharedMatrix h_rho_a_matrix = std::make_shared<Matrix>("rho_a", npoints, ncomponents);
         SharedMatrix h_rho_b_matrix = std::make_shared<Matrix>("rho_b", npoints, ncomponents);
@@ -4352,16 +4443,14 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
         SharedMatrix h_Vxc_grid_b = std::make_shared<Matrix>("Vxc_grid_b", npoints, ncomponents);
         double* p_Vxc_grid_a = h_Vxc_grid_a->pointer()[0];
         double* p_Vxc_grid_b = h_Vxc_grid_b->pointer()[0];
-        double* d_Vxc_grid_a;
-        double* d_Vxc_grid_b;
         SharedMatrix rho, gamma, tau;
         double* p_rho, *p_gamma, *p_tau;
         SharedMatrix f, f_rho, f_gamma, f_tau;
         double* p_f, *p_f_rho, *p_f_gamma, *p_f_tau;
         SharedMatrix full_f, full_f_rho, full_f_gamma, full_f_tau;
-        double *p_full_f, *p_full_f_rho, *p_full_f_gamma, *p_full_f_tau;
-        double *rho_0_a, *rho_x_a, *rho_y_a, *rho_z_a, *tau_0_a;
-        double *rho_0_b, *rho_x_b, *rho_y_b, *rho_z_b, *tau_0_b;
+        double *p_full_f_rho, *p_full_f_gamma, *p_full_f_tau;
+        double *rho_x_a, *rho_y_a, *rho_z_a, *tau_0_a;
+        double *rho_x_b, *rho_y_b, *rho_z_b, *tau_0_b;
         switch (ansatz_type) {
             case CUEST_XCADVANCED_PARAMETERS_APPROXIMATION_LDA:
                 rho = std::make_shared<Matrix>("rho", npoints, 2);
@@ -4628,6 +4717,8 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
             throw PSIEXCEPTION("cudaMemcpy failed in UV::compute_V");
         }
 
+        timer_off("cuEST XC: Host Functional");
+#endif
         // => Compute the potential matrix from its grid representation <= //
         cuestXCPotentialComputeParameters_t potential_compute_parameters;
         CHECK_CUEST(cuestParametersCreate(CUEST_XCPOTENTIALCOMPUTE_PARAMETERS, &potential_compute_parameters));
