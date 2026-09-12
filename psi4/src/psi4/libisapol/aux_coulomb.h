@@ -13,17 +13,23 @@ struct IsaDrhoCResult {
     double charge_penalty=0., relative_residual=0., fitted_electrons=0.;
 };
 /// Native molecular-AUX integrals from explicit effective coefficients.
-/// Initial scope: Cartesian GAMINT S-G AUX only. Not a DF solve or basis recipe.
+/// Scope: Cartesian GAMINT or spherical DALTON S-G AUX. The two are DIFFERENT
+/// declared bases even when built from one exponent set -- a spherical shell
+/// spans 2l+1 functions, a Cartesian one (l+1)(l+2)/2 -- so they give different
+/// fits, different partitions, and results that may never be quoted as agreeing.
+/// Not a DF solve or basis recipe.
 /// Psi4 owns Libint2 global initialization. No global ordering/normalization changes.
 class IsaAuxCoulomb {
    public:
     explicit IsaAuxCoulomb(const IsaExplicitBasis& auxiliary);
     /// Analytic integrals of AUX functions, including all even Cartesian powers.
     std::vector<double> charges() const;
-    /// Fresh Coulomb metric from raw Cartesian Libint2 shells and true unit shells.
+    /// Fresh Coulomb metric from raw Cartesian Libint2 shells and true unit shells,
+    /// harmonically contracted afterwards when the declared AUX is spherical.
     /// Precision zero, no additional shell screening. No coefficient renormalization.
     std::shared_ptr<Matrix> metric() const;
-    /// Native (AUX|MAIN MAIN), rows AUX, column mu*nmain+nu (nu fastest).
+    /// Native (AUX|MAIN MAIN), rows AUX in the declared AUX representation,
+    /// column mu*nmain+nu (nu fastest).
     /// MAIN must be explicit DALTON spherical Orbital S-G. No MO/charge factors.
     std::shared_ptr<Matrix> three_center(const IsaExplicitBasis& orbital) const;
     /// 2 sum_occ C_i^T B_k C_i BEFORE solving; every spatial occupation is 2.

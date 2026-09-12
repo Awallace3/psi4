@@ -639,7 +639,7 @@ void export_isapol(py::module& m) {
         .def_property_readonly("representation", &IsaOvFitResult::representation)
         .def_property_readonly("order", &IsaOvFitResult::order)
         .def_property_readonly("solver", &IsaOvFitResult::solver);
-    py::class_<IsaAuxCoulomb>(m, "IsaAuxCoulomb", "Native Libint2 Coulomb metric and analytic charges; explicit Cartesian molecular AUX only")
+    py::class_<IsaAuxCoulomb>(m, "IsaAuxCoulomb", "Native Libint2 Coulomb metric and analytic charges; explicit Cartesian or spherical molecular AUX (different declared bases)")
         .def(py::init<const IsaExplicitBasis&>(), "auxiliary"_a)
         .def("fit_ov", &IsaAuxCoulomb::fit_ov, "orbital"_a, "occupied"_a, "virtuals"_a,
              "provenance"_a, "charge_penalty"_a=1.0, "offsite_metric_damping"_a=0.0)

@@ -211,3 +211,32 @@ def test_named_response_algorithm_reaches_preflight_and_factory(option,expected,
     with pytest.raises(RuntimeError,match='not a valid choice'):
         psi4.core.set_global_option('ATOMIC_RESPONSE_ALGORITHM','BLAS3')
     assert psi4.core.get_global_option('ATOMIC_RESPONSE_ALGORITHM') == old
+
+
+def test_declared_tail_policy_is_a_model_parameter_never_a_tolerance():
+    """``W-TAILS R1-Multiplier = 1.5`` is 1.5*R_Slater, not a flat 1.5 bohr.
+
+    The two cutoffs are different declared models, so each gets its own recipe
+    name and the demo default is left exactly where it was -- byte-identical
+    origin, flat cutoff on every site -- rather than being silently retuned.
+    """
+    from psi4.driver.procrouting import isapol_native_partition as native
+    w = psi4.core.Wavefunction.build(psi4.geometry('O\nH 1 1\nH 1 1 2 100\nsymmetry c1'),'cc-pvdz')
+    default, slater = api.generated_recipe(w), api.generated_recipe(w, tail_policy='bragg_slater_1.5')
+    assert default.name == 'GENERATED_JKFIT_ISA_A'
+    assert [s.tail_cutoff for s in default.sites] == [1.5, 1.5, 1.5]
+    assert slater.name == 'GENERATED_JKFIT_BRAGG_SLATER_TAIL_ISA_A'
+    assert slater.sites[0].tail_cutoff == native.bragg_slater_tail_cutoff(8, 1.5)
+    assert [s.tail_cutoff for s in slater.sites[1:]] == [native.bragg_slater_tail_cutoff(1, 1.5)]*2
+    assert slater.sites[0].tail_cutoff != slater.sites[1].tail_cutoff
+    # Only the cutoff moves; the declaration is visible in the origin, and the
+    # default recipe's provenance text is untouched.
+    assert 'bragg_slater_1.5 W-TAILS cutoff' in slater.origin
+    assert 'W-TAILS' not in default.origin
+    assert default.auxiliary.shells == slater.auxiliary.shells
+    assert default.auxiliary.centres == slater.auxiliary.centres and default.grid == slater.grid
+    assert default.controller == slater.controller and default.track == slater.track
+    assert [[sh.exponents for sh in s.shape.shells] for s in default.sites] == \
+           [[sh.exponents for sh in s.shape.shells] for s in slater.sites]
+    with pytest.raises(ValueError, match='Unknown declared tail policy'):
+        api.generated_recipe(w, tail_policy='1.5')

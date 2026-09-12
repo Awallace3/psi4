@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LGPL-3.0-only
  */
 #include "aux_coulomb.h"
+#include "harmonic_transform.h"
 #include "psi4/libmints/matrix.h"
 #include <libint2.hpp>
 #include <libint2/cgshell_ordering.h>
@@ -20,14 +21,23 @@ double aux_factor(int l, const std::array<int,3>& p) {
 }
 IsaAuxCoulomb::IsaAuxCoulomb(const IsaExplicitBasis& auxiliary) : basis_(auxiliary) {
     aux_int_require(basis_.role_==IsaBasisRole::MolecularAux,"Coulomb provider requires molecular AUX role");
-    aux_int_require(basis_.representation_==IsaBasisRepresentation::Cartesian,
-                    "Initial native Coulomb provider requires Cartesian GAMINT AUX");
+    aux_int_require(basis_.representation_==IsaBasisRepresentation::Cartesian ||
+                    basis_.representation_==IsaBasisRepresentation::Spherical,
+                    "Coulomb provider requires a Cartesian GAMINT or spherical DALTON AUX");
 }
 std::vector<double> IsaAuxCoulomb::charges() const {
+    const bool pure=basis_.representation_==IsaBasisRepresentation::Spherical;
     std::vector<double> q;
     const double pi=std::acos(-1.);
     for (const auto& shell:basis_.shells_) {
-        for (const auto& power:IsaExplicitBasis::cartesian_powers(shell.l)) {
+        const auto& powers=IsaExplicitBasis::cartesian_powers(shell.l);
+        // Raw monomial integrals first, in Libint standard indexing, so a spherical
+        // row is the same combination the grid evaluation uses. A harmonic row of
+        // l>0 cancels to roundoff rather than to an imposed zero; that residue is
+        // the integral this basis actually has and is never clipped.
+        std::vector<double> raw(pure ? powers.size() : 0,0.);
+        for (size_t k=0;k<powers.size();++k) {
+            const auto& power=powers[k];
             double value=0.;
             if (!(power[0]%2 || power[1]%2 || power[2]%2)) {
                 for (size_t p=0;p<shell.exponents.size();++p) {
@@ -37,8 +47,16 @@ std::vector<double> IsaAuxCoulomb::charges() const {
                         moment*=aux_df(power[axis]-1)/std::pow(2*a,power[axis]/2);
                     value+=shell.coefficients[p]*moment;
                 }
-                value*=aux_factor(shell.l,power);
+                if (!pure) value*=aux_factor(shell.l,power);
             }
+            aux_int_require(std::isfinite(value),"Nonfinite AUX charge integral");
+            if (pure) raw[libint2::INT_CARTINDEX(shell.l,power[0],power[1])]=value;
+            else q.push_back(value);
+        }
+        if (!pure) continue;
+        for (const auto& row:isa_dalton_transform(shell.l)) {
+            double value=0.;
+            for (const auto& e:row) value+=e.second*raw[e.first];
             aux_int_require(std::isfinite(value),"Nonfinite AUX charge integral");
             q.push_back(value);
         }
@@ -46,8 +64,10 @@ std::vector<double> IsaAuxCoulomb::charges() const {
     return q;
 }
 std::shared_ptr<Matrix> IsaAuxCoulomb::metric() const {
+    const bool pure=basis_.representation_==IsaBasisRepresentation::Spherical;
     std::vector<libint2::Shell> shells;
     std::vector<int> offsets;
+    std::vector<IsaHarmonicTransform> transforms;
     size_t max_nprim=0;
     int max_l=0, offset=0;
     for (const auto& s:basis_.shells_) {
@@ -57,7 +77,8 @@ std::shared_ptr<Matrix> IsaAuxCoulomb::metric() const {
         shells.emplace_back(exponents,libint2::svector<libint2::Shell::Contraction>{{s.l,false,coefficients}},
                             basis_.centres_[s.centre],false);
         offsets.push_back(offset);
-        offset+=(s.l+1)*(s.l+2)/2;
+        offset+=IsaExplicitBasis::shell_size(s.l,basis_.representation_);
+        transforms.push_back(pure ? isa_dalton_transform(s.l) : IsaHarmonicTransform{});
         max_nprim=std::max(max_nprim,s.exponents.size()); max_l=std::max(max_l,s.l);
     }
     constexpr auto op=libint2::Operator::coulomb;
@@ -74,6 +95,21 @@ std::shared_ptr<Matrix> IsaAuxCoulomb::metric() const {
         const int la=basis_.shells_[a].l,lb=basis_.shells_[b].l;
         const auto& pa=IsaExplicitBasis::cartesian_powers(la);
         const auto& pb=IsaExplicitBasis::cartesian_powers(lb);
+        if (pure) {
+            // Both indices carry raw monomials into their own harmonic rows; the
+            // GAMINT factor is a Cartesian function's own normalization and has no
+            // place here. Pair blocks are small, so contract them directly.
+            for (size_t i=0;i<transforms[a].size();++i) for (size_t j=0;j<transforms[b].size();++j) {
+                if (a==b && j>i) continue;
+                double value=0.;
+                for (const auto& x:transforms[a][i]) for (const auto& y:transforms[b][j])
+                    value+=x.second*y.second*block[x.first*pb.size()+y.first];
+                aux_int_require(std::isfinite(value),"Nonfinite AUX Coulomb integral");
+                result->set(offsets[a]+i,offsets[b]+j,value);
+                result->set(offsets[b]+j,offsets[a]+i,value);
+            }
+            continue;
+        }
         for (size_t i=0;i<pa.size();++i) for (size_t j=0;j<pb.size();++j) {
             if (a==b && j>i) continue;
             const int ii=libint2::INT_CARTINDEX(la,pa[i][0],pa[i][1]);

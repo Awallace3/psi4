@@ -91,6 +91,9 @@ std::vector<double> isa_regular_multipoles(int rank, const std::array<double,3>&
 const std::vector<std::array<int,3>>& IsaExplicitBasis::cartesian_powers(int l) {
     return basis_cartesian_powers(l);
 }
+int IsaExplicitBasis::shell_size(int l, IsaBasisRepresentation representation) {
+    return count(l,representation);
+}
 IsaExplicitBasis::IsaExplicitBasis(IsaBasisRole role, IsaBasisRepresentation representation,
         const std::vector<std::array<double,3>>& centres, const std::vector<IsaGaussianShell>& shells)
     : role_(role), representation_(representation), centres_(centres), shells_(shells) {

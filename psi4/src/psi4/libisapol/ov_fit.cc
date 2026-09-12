@@ -33,9 +33,8 @@ std::shared_ptr<Matrix> IsaOvFitResult::rhs() const { return t_->clone(); }
 std::shared_ptr<Matrix> IsaOvFitResult::coefficients() const { return d_->clone(); }
 IsaOvFitResult IsaAuxCoulomb::fit_ov(const IsaExplicitBasis& orbital, const Matrix& occupied,
         const Matrix& virtuals, const std::string& provenance, double penalty, double damping) const {
-    ov_require(basis_.role_==IsaBasisRole::MolecularAux &&
-               basis_.representation_==IsaBasisRepresentation::Cartesian,
-               "OV fit: requires Cartesian molecular AUX");
+    ov_require(basis_.role_==IsaBasisRole::MolecularAux,
+               "OV fit: requires a molecular AUX role");
     ov_require(orbital.role_==IsaBasisRole::Orbital &&
                orbital.representation_==IsaBasisRepresentation::Spherical,
                "OV fit: MAIN requires DALTON spherical Orbital basis");
@@ -77,7 +76,8 @@ IsaOvFitResult IsaAuxCoulomb::fit_ov(const IsaExplicitBasis& orbital, const Matr
         std::vector<int> centre_of;
         centre_of.reserve(static_cast<size_t>(m));
         for (const auto& shell : basis_.shells_) {
-            const int width=(shell.l+1)*(shell.l+2)/2; // Cartesian MolecularAux, checked above
+            // Representation-correct width: a spherical AUX shell stores 2l+1.
+            const int width=IsaExplicitBasis::shell_size(shell.l,basis_.representation_);
             for (int c=0;c<width;++c) centre_of.push_back(shell.centre);
         }
         ov_require(static_cast<int>(centre_of.size())==m, "OV fit: AUX function/centre map mismatch");

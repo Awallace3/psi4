@@ -240,3 +240,42 @@ no_reorient
     assert a.global_overlap_residual < 2e-11
     assert a.transformed_orthonormality_residual < 2e-9
     assert max(d.rank for d in a.diagnostics) == {'cc-pvdz':1, 'cc-pvtz':2, 'cc-pvqz':3, 'cc-pv5z':4}[basis_name]
+
+
+def test_bragg_slater_tail_cutoff_is_a_declared_multiplier_not_a_length():
+    """W-TAILS R1-Multiplier = 1.5 is 1.5*R_Slater, not 1.5 bohr.
+
+    CamCASP ``src/stockholder.F90::shape_function_tail_fit1`` sets the Func-1
+    cutoff to ``AtomProp(Z)%Rslater * w_tail_r1_multiplier``, so the same
+    declaration gives a different cutoff on every element.  A flat cutoff shared
+    by O and H is a DIFFERENT declared model, which is exactly why the two
+    values below are required to differ rather than to agree.
+    """
+    o = native.bragg_slater_tail_cutoff(8, 1.5)
+    h = native.bragg_slater_tail_cutoff(1, 1.5)
+    assert o == pytest.approx(1.5*0.60/0.529177249, rel=0, abs=0)
+    assert h == pytest.approx(1.5*0.50/0.529177249, rel=0, abs=0)
+    assert abs(o - h) > .28 and abs(o - 1.5) > .2 and abs(h - 1.5) > .08
+    # The source table's two deliberate departures are transcribed, not repaired:
+    # hydrogen is twice the Slater value and each inert gas takes the preceding
+    # halogen's radius.
+    assert native.BRAGG_SLATER_RADII_ANGSTROM[1] == 0.50
+    for rare, halogen in ((10, 9), (18, 17), (36, 35), (54, 53)):
+        assert native.BRAGG_SLATER_RADII_ANGSTROM[rare] == native.BRAGG_SLATER_RADII_ANGSTROM[halogen]
+    # Undefined radii are refused, never defaulted, and neither is a bad multiplier.
+    for Z in (55, 83, 84, -1, 8.0):
+        with pytest.raises(ValueError, match='Bragg-Slater|declare a cutoff'):
+            native.bragg_slater_tail_cutoff(Z, 1.5)
+    for m in (0., -1., np.inf, np.nan):
+        with pytest.raises(ValueError, match='multiplier'):
+            native.bragg_slater_tail_cutoff(8, m)
+
+
+def test_scaled_cutoff_reaches_the_controller_per_site(helium):
+    """A per-site cutoff must survive into the controller options unaltered."""
+    r = recipe(helium)
+    sites = tuple(replace(s, tail_cutoff=native.bragg_slater_tail_cutoff(2, 1.5)) for s in r.sites)
+    assert controls().build(sites).tail_cutoffs == [native.bragg_slater_tail_cutoff(2, 1.5)]
+    # Helium is one of the inert gases that take the preceding halogen's radius,
+    # so its cutoff is fluorine's and not 1.5 bohr.
+    assert sites[0].tail_cutoff != 1.5

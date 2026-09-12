@@ -168,9 +168,46 @@ def test_native_drho_rejects_invalid_penalty(penalty):
         core.IsaAuxCoulomb(aux).fit_drho_c(main,core.Matrix.from_array(np.ones((1,1))),penalty)
 
 
-def test_native_aux_rejects_wrong_role_and_representation():
+def test_native_aux_rejects_wrong_role():
     shells=[(0,0,[1.],[1.])]
     with pytest.raises(ValueError,match='molecular AUX'):
         core.IsaAuxCoulomb(basis(shells,[[0.,0.,0.]],role=core.IsaBasisRole.AtomAux))
-    with pytest.raises(ValueError,match='Cartesian'):
-        core.IsaAuxCoulomb(basis(shells,[[0.,0.,0.]],representation=core.IsaBasisRepresentation.Spherical))
+    # A spherical molecular AUX is a supported DIFFERENT declared basis, not a
+    # rejected one: it spans 2l+1 per shell where the Cartesian one spans
+    # (l+1)(l+2)/2, so its fits may never be quoted against Cartesian ones.
+    core.IsaAuxCoulomb(basis(shells,[[0.,0.,0.]],representation=core.IsaBasisRepresentation.Spherical))
+
+
+@pytest.mark.parametrize('l',[0,1,2,3])
+def test_spherical_aux_metric_and_charges_contract_the_cartesian_ones(l):
+    """A spherical AUX shell is a fixed linear combination of its Cartesian one.
+
+    The combination is read off the *samples* of the two declared bases, then
+    required to carry the Coulomb metric, the analytic charges and the
+    three-centre integrals -- so integrals and grid values of a spherical shell
+    are shown to share one convention, and the GAMINT mixed-component factor is
+    shown never to reach a transformed index. The two bases remain DIFFERENT
+    declared bases: the spherical one spans 2l+1 of the (l+1)(l+2)/2 Cartesian
+    functions, and their fits may never be quoted as agreeing.
+    """
+    A=[.2,.5,-.3]; B=[.1,-.4,.7]
+    shells=[(0,l,[.8],[1.]),(1,l,[1.3],[1.])]
+    centres=[A,B]
+    cb=basis(shells,centres)
+    sb=basis(shells,centres,representation=core.IsaBasisRepresentation.Spherical)
+    rng=np.random.default_rng(20260912)
+    points=(np.array(centres)[rng.integers(0,2,600)]+rng.normal(scale=.9,size=(600,3))).tolist()
+    cart_values=cb.evaluate(points).np
+    sph_values=sb.evaluate(points).np
+    M,*_=np.linalg.lstsq(cart_values,sph_values,rcond=None)
+    assert np.max(np.abs(cart_values@M-sph_values))<1e-12*max(1.,np.max(np.abs(sph_values)))
+    cart=core.IsaAuxCoulomb(cb); sph=core.IsaAuxCoulomb(sb)
+    jc=cart.metric().np; qc=np.asarray(cart.charges())
+    np.testing.assert_allclose(sph.metric().np,M.T@jc@M,rtol=1e-11,atol=1e-12)
+    np.testing.assert_allclose(np.asarray(sph.charges()),M.T@qc,rtol=1e-11,atol=1e-12)
+    main=basis([(0,0,[.9],[.4]),(1,0,[1.3],[-.7])],centres,
+               role=core.IsaBasisRole.Orbital,representation=core.IsaBasisRepresentation.Spherical)
+    bc=cart.three_center(main).np
+    np.testing.assert_allclose(sph.three_center(main).np,M.T@bc,rtol=1e-11,atol=1e-12)
+    if l:   # Only l=0 rows of a spherical AUX carry charge; l>0 cancels exactly.
+        assert np.max(np.abs(np.asarray(sph.charges())))<1e-13

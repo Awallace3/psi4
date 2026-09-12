@@ -2,75 +2,19 @@
  * SPDX-License-Identifier: LGPL-3.0-only
  */
 #include "aux_coulomb.h"
+#include "harmonic_transform.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libqt/qt.h"
 #include <libint2.hpp>
 #include <libint2/cgshell_ordering.h>
 #include <algorithm>
 #include <cmath>
-#include <complex>
 #include <limits>
-#include <map>
 #include <stdexcept>
 namespace psi { namespace isapol {
 namespace {
-using Powers=std::array<int,3>;
-using Polynomial=std::map<Powers,std::complex<double>>;
-using Transform=std::vector<std::vector<std::pair<int,double>>>;
 void orbital_require(bool ok,const char* message) { if (!ok) throw std::invalid_argument(message); }
 double orbital_df(int n) { double v=1.; for (;n>0;n-=2) v*=n; return v; }
-double orbital_fac(int n) { double v=1.; for (;n>1;--n) v*=n; return v; }
-Polynomial shift(const Polynomial& p,int axis) {
-    Polynomial out;
-    for (const auto& term:p) { auto key=term.first; ++key[axis]; out[key]+=term.second; }
-    return out;
-}
-Polynomial combine(const Polynomial& a,std::complex<double> x,const Polynomial& b,std::complex<double> y) {
-    Polynomial out;
-    for (const auto& term:a) out[term.first]+=x*term.second;
-    for (const auto& term:b) out[term.first]+=y*term.second;
-    return out;
-}
-Polynomial times_r2(const Polynomial& p) {
-    Polynomial out;
-    for (int axis=0;axis<3;++axis) out=combine(out,1.,shift(shift(p,axis),axis),1.);
-    return out;
-}
-Transform dalton_transform(int l) {
-    // Symbolic regular-harmonic recurrence, not Libint's runtime SH transform.
-    // No Condon--Shortley phase; rows sin(l..1), m0, cos(1..l), with p=x,y,z.
-    std::vector<Polynomial> h(l+1);
-    for (int m=0;m<=l;++m) {
-        Polynomial prev{{Powers{{0,0,0}},orbital_df(2*m-1)}};
-        for (int k=0;k<m;++k) prev=combine(shift(prev,0),1.,shift(prev,1),{0.,1.});
-        Polynomial value=prev;
-        if (l>m) {
-            value=combine(shift(prev,2),double(2*m+1),{},0.);
-            for (int n=m+2;n<=l;++n) {
-                auto next=combine(shift(value,2),double(2*n-1)/double(n-m),
-                                  times_r2(prev),-double(n+m-1)/double(n-m));
-                prev=value; value=next;
-            }
-        }
-        const double scale=std::sqrt((m?2.:1.)*orbital_fac(l-m)/orbital_fac(l+m));
-        h[m]=combine(value,scale,{},0.);
-    }
-    Transform rows;
-    auto append=[&](int m,bool imaginary) {
-        rows.emplace_back();
-        for (const auto& term:h[m]) {
-            const double c=imaginary?term.second.imag():term.second.real();
-            if (c!=0.) rows.back().emplace_back(libint2::INT_CARTINDEX(l,term.first[0],term.first[1]),c);
-        }
-    };
-    if (l==1) { append(1,false); append(1,true); append(0,false); }
-    else {
-        for (int m=l;m>0;--m) append(m,true);
-        append(0,false);
-        for (int m=1;m<=l;++m) append(m,false);
-    }
-    return rows;
-}
 libint2::Shell raw_shell(const IsaGaussianShell& s,const std::array<double,3>& centre) {
     libint2::svector<double> a(s.exponents.begin(),s.exponents.end()),c(s.coefficients.begin(),s.coefficients.end());
     return libint2::Shell(a,{{s.l,false,c}},centre,false);
@@ -83,18 +27,24 @@ std::shared_ptr<Matrix> IsaAuxCoulomb::three_center(const IsaExplicitBasis& orbi
     orbital_require(n<=std::numeric_limits<int>::max()/n,"MAIN pair dimension overflow");
     std::vector<libint2::Shell> aux,main;
     std::vector<int> ao,mo;
-    std::vector<Transform> transforms;
+    std::vector<IsaHarmonicTransform> transforms;
+    // A spherical molecular AUX is a DIFFERENT declared basis from the Cartesian
+    // GAMINT one built from the same exponents, never a normalization variant of
+    // it: it spans 2l+1 rather than (l+1)(l+2)/2 functions per shell.
+    const bool pure=basis_.representation_==IsaBasisRepresentation::Spherical;
+    std::vector<IsaHarmonicTransform> aux_transforms;
     size_t max_prim=0; int max_l=0,offset=0;
     for (const auto& s:basis_.shells_) {
-        ao.push_back(offset); offset+=(s.l+1)*(s.l+2)/2;
+        ao.push_back(offset); offset+=IsaExplicitBasis::shell_size(s.l,basis_.representation_);
         aux.push_back(raw_shell(s,basis_.centres_[s.centre]));
+        aux_transforms.push_back(pure ? isa_dalton_transform(s.l) : IsaHarmonicTransform{});
         max_prim=std::max(max_prim,s.exponents.size()); max_l=std::max(max_l,s.l);
     }
     offset=0;
     for (const auto& s:orbital.shells_) {
         mo.push_back(offset); offset+=2*s.l+1;
         main.push_back(raw_shell(s,orbital.centres_[s.centre]));
-        transforms.push_back(dalton_transform(s.l));
+        transforms.push_back(isa_dalton_transform(s.l));
         max_prim=std::max(max_prim,s.exponents.size()); max_l=std::max(max_l,s.l);
     }
     constexpr auto op=libint2::Operator::coulomb;
@@ -110,22 +60,50 @@ std::shared_ptr<Matrix> IsaAuxCoulomb::three_center(const IsaExplicitBasis& orbi
         const int la=basis_.shells_[a].l;
         const auto& powers=IsaExplicitBasis::cartesian_powers(la);
         const int nb=main[b].cartesian_size(),nc=main[c].cartesian_size();
+        const size_t ri=transforms[b].size(),rj=transforms[c].size();
+        // Raw AUX monomial index -> (spherical row, coefficient). Built per shell
+        // triple so the Cartesian path allocates nothing and keeps its arithmetic.
+        std::vector<std::vector<std::pair<int,double>>> rows_of;
+        std::vector<double> acc;
+        if (pure) {
+            rows_of.assign(powers.size(),{});
+            for (size_t r=0;r<aux_transforms[a].size();++r)
+                for (const auto& e:aux_transforms[a][r]) rows_of[e.first].emplace_back(int(r),e.second);
+            acc.assign(aux_transforms[a].size()*ri*rj,0.);
+        }
         for (size_t k=0;k<powers.size();++k) {
             const auto& p=powers[k];
             const int raw=libint2::INT_CARTINDEX(la,p[0],p[1]);
-            const double factor=std::sqrt(orbital_df(2*la-1)/(orbital_df(2*p[0]-1)*orbital_df(2*p[1]-1)*orbital_df(2*p[2]-1)));
-            for (size_t i=0;i<transforms[b].size();++i) for (size_t j=0;j<transforms[c].size();++j) {
+            // The GAMINT mixed-component factor belongs to a Cartesian AUX function
+            // alone; a harmonic row is a combination of RAW monomials.
+            const double factor=pure ? 1. :
+                std::sqrt(orbital_df(2*la-1)/(orbital_df(2*p[0]-1)*orbital_df(2*p[1]-1)*orbital_df(2*p[2]-1)));
+            for (size_t i=0;i<ri;++i) for (size_t j=0;j<rj;++j) {
                 if (b==c && j>i) continue;
                 double value=0.;
                 for (const auto& x:transforms[b][i]) for (const auto& y:transforms[c][j])
                     value+=x.second*y.second*block[(raw*nb+x.first)*nc+y.first];
                 value*=factor;
                 orbital_require(std::isfinite(value),"Nonfinite native three-centre integral");
+                if (pure) {
+                    for (const auto& e:rows_of[raw]) acc[(e.first*ri+i)*rj+j]+=e.second*value;
+                    continue;
+                }
                 const int mu=mo[b]+i,nu=mo[c]+j;
                 result->set(ao[a]+k,mu*n+nu,value);
                 result->set(ao[a]+k,nu*n+mu,value);
             }
         }
+        if (!pure) continue;
+        for (size_t r=0;r<aux_transforms[a].size();++r)
+            for (size_t i=0;i<ri;++i) for (size_t j=0;j<rj;++j) {
+                if (b==c && j>i) continue;
+                const double value=acc[(r*ri+i)*rj+j];
+                orbital_require(std::isfinite(value),"Nonfinite native three-centre integral");
+                const int mu=mo[b]+i,nu=mo[c]+j;
+                result->set(ao[a]+r,mu*n+nu,value);
+                result->set(ao[a]+r,nu*n+mu,value);
+            }
     }
     return result;
 }

@@ -1,4 +1,4 @@
-"""Explicit adapted Cartesian Drho-C / ordinary ISA-A partition through Q.
+"""Explicit adapted Cartesian or spherical Drho-C / ordinary ISA-A partition through Q.
 
 No default basis recipe, hidden SCF, reference-file I/O, AO-density substitute,
 charge rescaling, or reference-parity assertion. Effective shell coefficients
@@ -81,6 +81,45 @@ class BasisRecipe:
         return core.IsaExplicitBasis(getattr(core.IsaBasisRole, role),
                                     getattr(core.IsaBasisRepresentation, self.representation),
                                     self.centres, shells)
+
+
+#: Bragg-Slater radii in Angstrom, transcribed from CamCASP (MIT) ``src/atoms.f90``.
+#: Source data: Slater, JCP (1964) 41, 3199.  That table records two deliberate
+#: departures which are kept verbatim here rather than "corrected": the inert
+#: gases take the radius of the preceding halogen, and the hydrogen entry is
+#: twice the Slater value.  Entries recorded as 0.00 are undefined in the source
+#: table and stay undefined here -- they are refused, never defaulted.
+BRAGG_SLATER_RADII_ANGSTROM = {
+    0: 0.65, 1: 0.50, 2: 0.50, 3: 1.45, 4: 1.05, 5: 0.85, 6: 0.70, 7: 0.65, 8: 0.60, 9: 0.50,
+    10: 0.50, 11: 1.80, 12: 1.50, 13: 1.25, 14: 1.10, 15: 1.00, 16: 1.00, 17: 1.00, 18: 1.00,
+    19: 2.20, 20: 1.80, 21: 1.60, 22: 1.40, 23: 1.35, 24: 1.40, 25: 1.40, 26: 1.40, 27: 1.35,
+    28: 1.35, 29: 1.35, 30: 1.35, 31: 1.30, 32: 1.25, 33: 1.15, 34: 1.15, 35: 1.15, 36: 1.15,
+    37: 2.35, 38: 2.00, 39: 1.80, 40: 1.55, 41: 1.45, 42: 1.45, 43: 1.35, 44: 1.30, 45: 1.35,
+    46: 1.40, 47: 1.60, 48: 1.55, 49: 1.55, 50: 1.45, 51: 1.45, 52: 1.40, 53: 1.40, 54: 1.40}
+
+#: CamCASP ``src/parameters.f90`` bohr radius, used so a transcribed cutoff is
+#: comparable digit-for-digit with a cutoff the reference itself computed.
+_CAMCASP_BOHR_ANGSTROM = 0.529177249
+
+
+def bragg_slater_tail_cutoff(Z, multiplier):
+    """Func-1 tail cutoff r1 = multiplier * R_Slater(Z), in bohr.
+
+    The ISA W-TAILS cutoff is a *declared model parameter*, and CamCASP declares
+    it as a multiplier on the site's Bragg-Slater radius, not as an absolute
+    length: ``src/stockholder.F90::shape_function_tail_fit1`` (MIT) computes
+    ``r1 = AtomProp(Z)%Rslater * w_tail_r1_multiplier`` before matching w and w'
+    there.  So ``R1-Multiplier = 1.5`` means 1.700753 bohr on O and 1.417294
+    bohr on H, and a single flat cutoff shared by both sites is a DIFFERENT
+    declared model whose numbers may never be quoted as agreeing with these.
+
+    Refuses any Z whose source radius is undefined rather than substituting a
+    default, and refuses a nonpositive multiplier.
+    """
+    if type(Z) is not int or Z not in BRAGG_SLATER_RADII_ANGSTROM:
+        raise ValueError(f'No transcribed Bragg-Slater radius for Z={Z}; declare a cutoff instead')
+    _finite(multiplier, 'Bragg-Slater tail multiplier', np.finfo(float).tiny)
+    return multiplier * BRAGG_SLATER_RADII_ANGSTROM[Z] / _CAMCASP_BOHR_ANGSTROM
 
 
 @dataclass(frozen=True)
@@ -192,21 +231,43 @@ class PartitionRecipe:
     grid: GridRecipe
     controller: ControllerRecipe
     drho_profile: str
+    atomic_initialization: str = 'zero_atomic_D0'
 
     def __post_init__(self):
         _text(self.name, 'recipe name')
         _text(self.origin, 'recipe origin')
         object.__setattr__(self, 'sites', tuple(self.sites))
-        if self.track != 'explicit_cartesian_drho_c_isa_a':
-            raise ValueError('Only explicitly adapted Cartesian Drho-C/ISA-A supported; no modern preset')
-        if self.auxiliary.representation != 'Cartesian':
-            raise ValueError('Molecular AUX must explicitly be Cartesian')
+        # The molecular AUX representation is a declared model parameter, not a
+        # storage detail: a spherical shell spans 2l+1 functions where the
+        # Cartesian one spans (l+1)(l+2)/2, so the same exponents give a
+        # different AUX, a different Drho-C fit and a different partition. The
+        # track name must therefore state which one this recipe is, and a
+        # spherical-AUX number may never be quoted against a Cartesian-AUX one.
+        tracks = {'explicit_cartesian_drho_c_isa_a': 'Cartesian',
+                  'explicit_spherical_drho_c_isa_a': 'Spherical'}
+        if self.track not in tracks:
+            raise ValueError('Only explicitly adapted Cartesian/spherical Drho-C/ISA-A supported; no modern preset')
+        if self.auxiliary.representation != tracks[self.track]:
+            raise ValueError(f'Track {self.track} requires a {tracks[self.track]} molecular AUX, '
+                             f'not {self.auxiliary.representation}')
         if not self.sites or len({s.label for s in self.sites}) != len(self.sites):
             raise ValueError('Unique nonempty site labels required')
         def signatures(b):
             return [(b.centres[s.centre], s.l, s.exponents, s.coefficients) for s in b.shells]
-        if signatures(self.auxiliary) == [v for site in self.sites for v in signatures(site.atomic)]:
-            raise ValueError('Distinct AtomAux required: identical AUX/AtomAux initialization needs separate unconstrained Drho bookkeeping')
+        # An AtomAux set that concatenates *exactly* into the molecular AUX is a
+        # different initialization branch, not merely a different basis: the
+        # atomic D0/D start from the molecular Drho block on that site instead of
+        # zero (see ``drho_partitioned_initialization``). The recipe must declare
+        # which branch it is, and the declaration must match the bases, so an
+        # identical-AUX model can never be run through the zero-D0 branch (or the
+        # reverse) by accident. Two recipes differing in this field are different
+        # declared models whose numbers may not be quoted as agreeing.
+        identical = signatures(self.auxiliary) == [v for site in self.sites for v in signatures(site.atomic)]
+        if self.atomic_initialization not in ('zero_atomic_D0', 'drho_partitioned_atomic_D0'):
+            raise ValueError('Declare zero_atomic_D0 or drho_partitioned_atomic_D0 atomic initialization')
+        if identical != (self.atomic_initialization == 'drho_partitioned_atomic_D0'):
+            raise ValueError('drho_partitioned_atomic_D0 requires, and identical AUX/AtomAux requires, '
+                             'an AtomAux concatenating exactly into the molecular AUX')
         if self.drho_profile not in ('strict1e-9', 'Drho1e-2'):
             raise ValueError('Declare strict1e-9 or user-authorized Drho1e-2 comparison profile')
 
@@ -419,7 +480,8 @@ def one_gto_initialization(sites):
     does not infer initial atomic density from w0; no previous negative ridge
     coefficients exist. For the supported distinct-basis branch, source
     initialize_D0 zeros D/D0; initialize_w0 separately chooses the unit GTO.
-    Identical molecular/atomic AUX initialization is not supported here.
+    Identical molecular/atomic AUX is the other branch: see
+    ``drho_partitioned_initialization``.
     """
     initial = core.IsaSweepState()
     initial.atomic_coefficients = [[0.] * s.atomic.build('AtomAux').nfunction for s in sites]
@@ -430,6 +492,44 @@ def one_gto_initialization(sites):
         w[k] = 1.
         shapes.append(w)
     initial.shape_coefficients = shapes
+    return initial
+
+
+def drho_partitioned_initialization(sites, auxiliary, coefficients):
+    """Atomic D0/D from the molecular Drho block on each site; w0 as ONE-GTO.
+
+    Transcribed with attribution from CamCASP (MIT) ``src/stockholder.F90``
+    ``initialize_D0``: when the atomic AUX sets are the AUX1 subsets of, or are
+    identical to, the molecular AUX, ``D0(1:naux) = D(1:naux) = DFrho(first:last)``
+    over that site's function range; otherwise both stay zero. Only the exact
+    identical-basis case is supported here, so ``first:last`` is unambiguous.
+    ``DFrho`` is the density expansion actually being partitioned -- the same
+    coefficient vector handed to ``IsaFixedDensity`` -- not a second fit.
+    This is a declared initialization branch, not a convergence aid.
+    """
+    if len(coefficients) != sum(2*s.l+1 if auxiliary.representation == 'Spherical'
+                                else (s.l+1)*(s.l+2)//2 for s in auxiliary.shells):
+        raise ValueError('Drho coefficient count does not match the molecular AUX')
+    initial = core.IsaSweepState()
+    atomic, offset, cursor = [], 0, 0
+    for site in sites:
+        basis = site.atomic.build('AtomAux')
+        width = 0
+        for shell in site.atomic.shells:
+            if (auxiliary.centres[auxiliary.shells[cursor].centre], auxiliary.shells[cursor].l,
+                auxiliary.shells[cursor].exponents, auxiliary.shells[cursor].coefficients) != \
+               (site.atomic.centres[shell.centre], shell.l, shell.exponents, shell.coefficients):
+                raise ValueError('AtomAux must concatenate exactly into the molecular AUX in order')
+            width += 2*shell.l+1 if auxiliary.representation == 'Spherical' else (shell.l+1)*(shell.l+2)//2
+            cursor += 1
+        if width != basis.nfunction:
+            raise ValueError('AtomAux block width does not match its native function count')
+        atomic.append([float(c) for c in coefficients[offset:offset+width]])
+        offset += width
+    if cursor != len(auxiliary.shells) or offset != len(coefficients):
+        raise ValueError('Site AtomAux blocks do not tile the molecular AUX')
+    initial.atomic_coefficients = atomic
+    initial.shape_coefficients = one_gto_initialization(sites).shape_coefficients
     return initial
 
 
@@ -520,7 +620,10 @@ def native_partition(wfn, recipe, *, caller_converged):
     density = core.IsaFixedDensity(auxiliary, drho.coefficients)
     samples = density.evaluate(pts.tolist(), list(range(len(geometry))))
     controller = core.IsaAController(atomic, shapes, [s.shell_map for s in recipe.sites], density, grids, options)
-    initial = controller.initialize(one_gto_initialization(recipe.sites))
+    declared = (drho_partitioned_initialization(recipe.sites, recipe.auxiliary, drho.coefficients)
+               if recipe.atomic_initialization == 'drho_partitioned_atomic_D0'
+               else one_gto_initialization(recipe.sites))
+    initial = controller.initialize(declared)
     trajectory = controller.run(initial)
     # Iteration-only caches need not overlap the much larger final-Q and response
     # workspaces. Preserve a fully owned, rerunnable controller, not its cache.
@@ -528,7 +631,8 @@ def native_partition(wfn, recipe, *, caller_converged):
     provenance = (f'native restricted C1 wfn; caller declares SCF converged; {recipe.name}; '
                   f'recipe origin: {recipe.origin}; actual MAIN effective coef + validated shell collocation; '
                   f'Drho-C lambda1000 unrescaled; {recipe.drho_profile} comparisons not evaluated; '
-                  'ordinary ISA-A; full molecular IsaGrid/all sites unscreened (no screening parity); '
+                  f'ordinary ISA-A; atomic initialization {recipe.atomic_initialization}; '
+                  'full molecular IsaGrid/all sites unscreened (no screening parity); '
                   'stored final tails; global Cartesian axes/bohr/atomic units; no reference orbitals or density')
     sampled_shapes, q = (), None
     if trajectory.state.converged:

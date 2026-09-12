@@ -11,6 +11,7 @@ list(APPEND sources
   multipole_transform.cc
   t_functions.cc
   lw_localization.cc
+  harmonic_transform.cc
   aux_coulomb.cc
   orbital_coulomb.cc
   ov_fit.cc
@@ -26,7 +27,7 @@ list(APPEND sources
   )
 
 # Keep the heavy Libint2 engine implementation out of the Gaussian-kernel unity TU.
-set_source_files_properties(aux_coulomb.cc orbital_coulomb.cc PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+set_source_files_properties(aux_coulomb.cc orbital_coulomb.cc harmonic_transform.cc PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 set_source_files_properties(native_response.cc point_response.cc PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 psi4_add_module(lib isapol sources)
 

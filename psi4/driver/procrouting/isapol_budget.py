@@ -73,7 +73,8 @@ from dataclasses import dataclass, field
 import hashlib
 import numpy as np
 from psi4 import core
-from .isapol_native_partition import one_gto_initialization, final_shape_samples
+from .isapol_native_partition import (one_gto_initialization, drho_partitioned_initialization,
+                                      final_shape_samples)
 from .sapt.fdds_response import FDDSFullOVResponse
 from . import isapol_lw as lw
 from .isapol_native import NativeProperties
@@ -402,7 +403,13 @@ def _from_drho(chain, coefficients, stage):
         grids.append(grid)
     controller = core.IsaAController(atomic, shapes, [s.shell_map for s in recipe.sites],
                                      density, grids, recipe.controller.build(recipe.sites))
-    trajectory = controller.run(controller.initialize(one_gto_initialization(recipe.sites)))
+    # Same declared branch as the partition being perturbed, and partitioned from
+    # the *perturbed* DFrho actually being expanded, not the unperturbed one.
+    declared = (drho_partitioned_initialization(recipe.sites, recipe.auxiliary,
+                                               np.asarray(coefficients, dtype=float).tolist())
+               if recipe.atomic_initialization == 'drho_partitioned_atomic_D0'
+               else one_gto_initialization(recipe.sites))
+    trajectory = controller.run(controller.initialize(declared))
     if not trajectory.state.converged:
         raise RuntimeError(f'perturbed ISA-A did not converge: {trajectory.termination}')
     return _from_shapes(chain, final_shape_samples(shapes, trajectory.state, recipe.sites, points), stage)

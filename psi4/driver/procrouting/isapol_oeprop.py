@@ -25,7 +25,8 @@ from . import isapol_logging as lg
 TASKS = frozenset(('ATOMIC_PARTITION', 'ATOMIC_POLARIZABILITIES', 'ATOMIC_DISPERSION'))
 
 
-def generated_recipe(wfn, radial=160, angular=590, aux_basis='cc-pVDZ-JKFIT', rank=3):
+def generated_recipe(wfn, radial=160, angular=590, aux_basis='cc-pVDZ-JKFIT', rank=3,
+                     tail_policy='flat_1.5_bohr'):
     """Generate all effective Gaussian descriptors from shipped JKFIT and formulas.
 
     Molecular AUX: the Cartesian ``aux_basis`` JKFIT set, unchanged effective
@@ -44,6 +45,17 @@ def generated_recipe(wfn, radial=160, angular=590, aux_basis='cc-pVDZ-JKFIT', ra
     AtomAux and Shape: normalized uncontracted even-tempered s Gaussians,
     exponents .1*2**k (O, k=0..16), .2*2**k (H, k=0..10). These separate roles
     are a compact radial ISA-A demonstration, not a claimed CamCASP basis alias.
+    ``tail_policy`` declares the Func-1 W-TAILS cutoff and, like the AUX and the
+    grid, is a model parameter rather than a tolerance, so each value gets its
+    own recipe name and the two are never quoted as agreeing.  The default
+    ``flat_1.5_bohr`` is this demo's own long-standing absolute cutoff, shared by
+    every site.  ``bragg_slater_1.5`` is instead what a CamCASP
+    ``W-TAILS R1-Multiplier = 1.5`` declaration means -- 1.5*R_Slater, hence a
+    different cutoff on each element; see
+    ``isapol_native_partition.bragg_slater_tail_cutoff``.  On PBE0/cc-pVDZ water
+    the choice is not cosmetic: the r**4-weighted site multipoles and therefore
+    C8/C10 move by percent, because the cutoff sets where the Gaussian shape is
+    replaced by its fitted exponential.
     """
     mol = wfn.molecule()
     if any(mol.Z(i) not in (1, 8) for i in range(mol.natom())):
@@ -55,8 +67,14 @@ def generated_recipe(wfn, radial=160, angular=590, aux_basis='cc-pVDZ-JKFIT', ra
         s = aux.shell(j)
         shells.append(p.ShellRecipe(int(aux.shell_to_center(j)), int(s.am),
             tuple(s.exp(k) for k in range(s.nprimitive)), tuple(s.coef(k) for k in range(s.nprimitive))))
+    name = {'flat_1.5_bohr': 'GENERATED_JKFIT_ISA_A',
+            'bragg_slater_1.5': 'GENERATED_JKFIT_BRAGG_SLATER_TAIL_ISA_A'}.get(tail_policy)
+    if name is None:
+        raise ValueError(f'Unknown declared tail policy {tail_policy!r}')
     origin = (f'runtime Psi4 shipped {aux_basis} plus normalized even-tempered radial s '
               'recipe; NOT modern CamCASP preset')
+    if tail_policy != 'flat_1.5_bohr':   # keep the default recipe's origin text byte-identical
+        origin += f'; {tail_policy} W-TAILS cutoff'
     auxiliary = p.BasisRecipe(f'{aux_basis} Cartesian molecular AUX', origin, 'Cartesian',
                               centres, tuple(shells))
     sites = []
@@ -66,9 +84,10 @@ def generated_recipe(wfn, radial=160, angular=590, aux_basis='cc-pVDZ-JKFIT', ra
         radial_shells = tuple(p.ShellRecipe(0, 0, (a,), ((2*a/math.pi)**.75,)) for a in exps)
         atom = p.BasisRecipe('even-tempered radial AtomAux', origin, 'Spherical', (c,), radial_shells)
         shape = p.BasisRecipe('even-tempered s Shape', origin, 'Spherical', (c,), radial_shells)
+        cutoff = 1.5 if tail_policy == 'flat_1.5_bohr' else p.bragg_slater_tail_cutoff(int(mol.Z(i)), 1.5)
         sites.append(p.SiteRecipe(f'{mol.symbol(i)}{i+1}', c, atom, shape, tuple(range(len(exps))),
-                                  rank, 1.5, True))
-    return p.PartitionRecipe('GENERATED_JKFIT_ISA_A', origin, 'explicit_cartesian_drho_c_isa_a',
+                                  rank, cutoff, True))
+    return p.PartitionRecipe(name, origin, 'explicit_cartesian_drho_c_isa_a',
         auxiliary, tuple(sites), p.GridRecipe(radial, angular, 3, 1., 'native_tabulated_bragg_slater',
         'all_sites_unscreened_full_molecular_grid'),
         p.ControllerRecipe(1e-9, 120, .17, .001, .2, True, 0., True, 1e-36,
