@@ -69,6 +69,9 @@
 #include <xc.h>
 #include <cublas_v2.h>
 #include "psi4/libfock/cuESTCommon.h"
+#ifdef USING_Libxc_CUDA
+#include "psi4/libfock/cuest_xc_gpu.h"
+#endif
 extern cublasHandle_t cublas_handle;
 extern cuestHandle_t cuest_handle;
 #endif
@@ -160,7 +163,138 @@ inline void validate_cuest_xc_components(const std::shared_ptr<SuperFunctional>&
 
     validate(functional->x_functionals());
     validate(functional->c_functionals());
+    if (functional->grac_x_functional()) validate({functional->grac_x_functional()});
+    if (functional->grac_c_functional()) validate({functional->grac_c_functional()});
 }
+
+#ifdef USING_Libxc_CUDA
+class CuestXCDeviceBuffer {
+   public:
+    CuestXCDeviceBuffer() = default;
+    explicit CuestXCDeviceBuffer(size_t count) { allocate(count); }
+    CuestXCDeviceBuffer(const CuestXCDeviceBuffer&) = delete;
+    CuestXCDeviceBuffer& operator=(const CuestXCDeviceBuffer&) = delete;
+    ~CuestXCDeviceBuffer() {
+        if (pointer_) cudaFree(pointer_);
+    }
+
+    void allocate(size_t count) {
+        if (count == 0) return;
+        const auto status = cudaMalloc(reinterpret_cast<void**>(&pointer_), count * sizeof(double));
+        if (status != cudaSuccess) {
+            throw PSIEXCEPTION("CUDA LibXC allocation failed: " + std::string(cudaGetErrorString(status)));
+        }
+    }
+    double* get() const { return pointer_; }
+
+   private:
+    double* pointer_ = nullptr;
+};
+
+inline void check_cuest_xc_cuda(cudaError_t status, const std::string& operation) {
+    if (status != cudaSuccess) {
+        throw PSIEXCEPTION(operation + " failed: " + std::string(cudaGetErrorString(status)));
+    }
+}
+
+void evaluate_cuest_xc_component_device(const std::shared_ptr<Functional>& component, size_t npoints,
+                                        const double* rho, const double* gamma, const double* tau, double* f,
+                                        double* f_rho, double* f_gamma, double* f_tau, double* full_f,
+                                        double* full_f_rho, double* full_f_gamma, double* full_f_tau) {
+    auto* libxc_component = static_cast<LibXCFunctional*>(component.get());
+    auto* xc_functional = libxc_component->xc_functional_device();
+
+    // A potential-only functional (the GRAC exchange model LB94, say) carries no
+    // energy density, and LibXC calls exit(1) if one is asked for. Passing a null
+    // zk asks for the derivatives alone, as the CPU path does.
+    const bool has_exc = libxc_component->has_exc();
+    double* const f_out = has_exc ? f : nullptr;
+
+    if (component->is_meta()) {
+        xc_mgga_exc_vxc(xc_functional, npoints, rho, gamma, nullptr, tau, f_out, f_rho, f_gamma, nullptr, f_tau);
+    } else if (component->is_gga()) {
+        xc_gga_exc_vxc(xc_functional, npoints, rho, gamma, f_out, f_rho, f_gamma);
+    } else {
+        xc_lda_exc_vxc(xc_functional, npoints, rho, f_out, f_rho);
+    }
+    check_cuest_xc_cuda(cuest_xc_accumulate(npoints, component->alpha(), has_exc, component->is_gga(),
+                                             component->is_meta(), f, f_rho, f_gamma, f_tau, full_f, full_f_rho,
+                                             full_f_gamma, full_f_tau),
+                        "CUDA LibXC accumulation");
+}
+
+void evaluate_cuest_xc_device(const std::shared_ptr<SuperFunctional>& functional, size_t npoints,
+                              size_t ncomponents, const double* density, const double* weights, double* potential,
+                              std::vector<double>& host_rho, std::vector<double>& host_f) {
+    const bool gga = ncomponents >= 4;
+    const bool meta = ncomponents >= 5;
+    CuestXCDeviceBuffer rho(npoints), gamma(gga ? npoints : 0), tau(meta ? npoints : 0);
+    CuestXCDeviceBuffer f(npoints), f_rho(npoints), f_gamma(gga ? npoints : 0), f_tau(meta ? npoints : 0);
+    CuestXCDeviceBuffer full_f(npoints), full_f_rho(npoints), full_f_gamma(gga ? npoints : 0),
+        full_f_tau(meta ? npoints : 0);
+
+    check_cuest_xc_cuda(cuest_xc_prepare_inputs(npoints, ncomponents, density, rho.get(), gamma.get(), tau.get()),
+                        "CUDA LibXC input preparation");
+    check_cuest_xc_cuda(cudaMemset(full_f.get(), 0, npoints * sizeof(double)), "CUDA LibXC energy initialization");
+    check_cuest_xc_cuda(cudaMemset(full_f_rho.get(), 0, npoints * sizeof(double)),
+                        "CUDA LibXC density-potential initialization");
+    if (gga)
+        check_cuest_xc_cuda(cudaMemset(full_f_gamma.get(), 0, npoints * sizeof(double)),
+                            "CUDA LibXC gradient-potential initialization");
+    if (meta)
+        check_cuest_xc_cuda(cudaMemset(full_f_tau.get(), 0, npoints * sizeof(double)),
+                            "CUDA LibXC tau-potential initialization");
+
+    const auto evaluate_components = [&](const std::vector<std::shared_ptr<Functional>>& components, double* out_f,
+                                         double* out_f_rho, double* out_f_gamma, double* out_f_tau) {
+        for (const auto& component : components) {
+            evaluate_cuest_xc_component_device(component, npoints, rho.get(), gamma.get(), tau.get(), f.get(),
+                                                f_rho.get(), f_gamma.get(), f_tau.get(), out_f, out_f_rho,
+                                                out_f_gamma, out_f_tau);
+        }
+    };
+    evaluate_components(functional->x_functionals(), full_f.get(), full_f_rho.get(), full_f_gamma.get(),
+                        full_f_tau.get());
+    evaluate_components(functional->c_functionals(), full_f.get(), full_f_rho.get(), full_f_gamma.get(),
+                        full_f_tau.get());
+
+    if (functional->needs_grac()) {
+        if (!gga) throw PSIEXCEPTION("CUDA LibXC GRAC requires a GGA density layout.");
+        CuestXCDeviceBuffer grac_f(npoints), grac_v_rho(npoints), unused_gamma(npoints), unused_tau(meta ? npoints : 0);
+        check_cuest_xc_cuda(cudaMemset(grac_f.get(), 0, npoints * sizeof(double)),
+                            "CUDA LibXC GRAC energy initialization");
+        check_cuest_xc_cuda(cudaMemset(grac_v_rho.get(), 0, npoints * sizeof(double)),
+                            "CUDA LibXC GRAC potential initialization");
+        check_cuest_xc_cuda(cudaMemset(unused_gamma.get(), 0, npoints * sizeof(double)),
+                            "CUDA LibXC GRAC gradient initialization");
+        if (meta)
+            check_cuest_xc_cuda(cudaMemset(unused_tau.get(), 0, npoints * sizeof(double)),
+                                "CUDA LibXC GRAC tau initialization");
+        if (functional->grac_x_functional())
+            evaluate_components({functional->grac_x_functional()}, grac_f.get(), grac_v_rho.get(),
+                                unused_gamma.get(), unused_tau.get());
+        if (functional->grac_c_functional())
+            evaluate_components({functional->grac_c_functional()}, grac_f.get(), grac_v_rho.get(),
+                                unused_gamma.get(), unused_tau.get());
+        check_cuest_xc_cuda(cuest_xc_apply_grac(npoints, functional->grac_alpha(), functional->grac_beta(),
+                                                functional->grac_shift(), rho.get(), gamma.get(), grac_v_rho.get(),
+                                                full_f_rho.get(), full_f_gamma.get()),
+                            "CUDA LibXC GRAC");
+    }
+
+    check_cuest_xc_cuda(cuest_xc_pack_potential(npoints, ncomponents, density, weights, full_f_rho.get(),
+                                                full_f_gamma.get(), full_f_tau.get(), potential),
+                        "CUDA LibXC potential packing");
+    check_cuest_xc_cuda(cudaDeviceSynchronize(), "CUDA LibXC evaluation");
+
+    host_rho.resize(npoints);
+    host_f.resize(npoints);
+    check_cuest_xc_cuda(cudaMemcpy(host_rho.data(), rho.get(), npoints * sizeof(double), cudaMemcpyDeviceToHost),
+                        "CUDA LibXC density download");
+    check_cuest_xc_cuda(cudaMemcpy(host_f.data(), full_f.get(), npoints * sizeof(double), cudaMemcpyDeviceToHost),
+                        "CUDA LibXC energy download");
+}
+#endif
 
 // Ensures that cuEST uses the appropriate LibXC component for mixed rung (GGA+metaGGA) functionals
 inline void evaluate_cuest_xc_component(
@@ -1799,6 +1933,22 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         cuest_common::freeWorkspace(temporary_workspace);
         temporary_workspace = nullptr;
 
+        double* d_Vxc_grid = nullptr;
+        double* p_full_f = nullptr;
+        double* rho_0 = nullptr;
+#ifdef USING_Libxc_CUDA
+        std::vector<double> gpu_rho;
+        std::vector<double> gpu_f;
+        err = cudaMalloc(reinterpret_cast<void**>(&d_Vxc_grid), npoints * ncomponents * sizeof(double));
+        if (err != cudaSuccess) {
+            throw PSIEXCEPTION("cudaMalloc failed for CUDA LibXC potential");
+        }
+        timer_on("cuEST XC: CUDA LibXC Functional");
+        evaluate_cuest_xc_device(functional_, npoints, ncomponents, d_rho, d_weights, d_Vxc_grid, gpu_rho, gpu_f);
+        timer_off("cuEST XC: CUDA LibXC Functional");
+        rho_0 = gpu_rho.data();
+        p_full_f = gpu_f.data();
+#else
         // Copy the density and its derivatives to host, then transpose it for easier access.
         SharedMatrix h_rho_matrix = std::make_shared<Matrix>("rho", npoints, ncomponents);
         err = cudaMemcpy(h_rho_matrix->pointer()[0], d_rho, npoints * ncomponents * sizeof(double), cudaMemcpyDeviceToHost);
@@ -1809,14 +1959,13 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
 
         SharedMatrix h_Vxc_grid = std::make_shared<Matrix>("Vxc_grid", npoints, ncomponents);
         double* p_Vxc_grid = h_Vxc_grid->pointer()[0];
-        double* d_Vxc_grid;
         SharedMatrix rho, gamma, tau;
         double* p_rho, *p_gamma, *p_tau;
         SharedMatrix f, f_rho, f_gamma, f_tau;
         double* p_f, *p_f_rho, *p_f_gamma, *p_f_tau;
         SharedMatrix full_f, full_f_rho, full_f_gamma, full_f_tau;
-        double *p_full_f, *p_full_f_rho, *p_full_f_gamma, *p_full_f_tau;
-        double *rho_0, *rho_x, *rho_y, *rho_z, *tau_0;
+        double *p_full_f_rho, *p_full_f_gamma, *p_full_f_tau;
+        double *rho_x, *rho_y, *rho_z, *tau_0;
         if (functional_->needs_grac()) {
             rho_0 = h_rho_matrixT->pointer()[0];
             full_f = std::make_shared<Matrix>("GRAC energy density", 1, npoints);
@@ -2024,6 +2173,7 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         if (err != cudaSuccess) {
             throw PSIEXCEPTION("cudaMemcpy failed in RV::compute_V");
         }
+#endif
 
         // => Compute the potential matrix from its grid representation <= //
         cuestXCPotentialComputeParameters_t potential_compute_parameters;
@@ -2066,9 +2216,15 @@ void RV::compute_V(std::vector<SharedMatrix> ret) {
         double Exc = 0.0;
         double integrated_density = 0.0;
         for (int point = 0; point < npoints; point++) {
+#ifdef USING_Libxc_CUDA
+            // CUDA LibXC returns energy per particle and gpu_rho is spin-summed.
+            Exc += p_weights[point] * p_full_f[point] * rho_0[point];
+            integrated_density += p_weights[point] * rho_0[point];
+#else
             Exc += p_weights[point] * p_full_f[point] *
                    (functional_->needs_grac() ? 1.0 : 2.0 * rho_0[point]);
             integrated_density += 2 * p_weights[point] * rho_0[point];
+#endif
         }  
         quad_values_["FUNCTIONAL"] = Exc;
         quad_values_["RHO_A"] = integrated_density;

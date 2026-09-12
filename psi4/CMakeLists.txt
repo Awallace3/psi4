@@ -265,6 +265,16 @@ get_property(_loc TARGET Libxc::xc PROPERTY LOCATION)
 list(APPEND _addons ${_loc})
 message(STATUS "${Cyan}Using Libxc${ColourReset}: ${_loc} (version ${Libxc_VERSION})")
 
+# A CUDA-enabled Libxc is installed outside the conda prefix, but that prefix
+# also ships a plain Libxc whose xc.h predates the host/device dispatch API.
+# CMake passes an imported target's includes as -isystem, and GCC discards any
+# -I that duplicates an -isystem directory, so while Libxc::xc stays SYSTEM the
+# conda entry shadows the device header. Dropping SYSTEM emits a plain -I, which
+# gcc searches ahead of every -isystem directory.
+if(Libxc_ENABLE_CUDA)
+    set_target_properties(Libxc::xc PROPERTIES SYSTEM FALSE)
+endif()
+
 if(APPLE)
     set(PRE_LIBRARY_OPTION -Wl,-all_load)
 elseif(UNIX)

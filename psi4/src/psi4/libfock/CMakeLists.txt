@@ -27,6 +27,10 @@ list(APPEND sources
   wrapper.cc
   )
 
+if(Libxc_ENABLE_CUDA AND TARGET cuEST::cuEST)
+  list(APPEND sources cuest_xc_gpu.cu)
+endif()
+
 psi4_add_module(lib fock sources)
 if (psi4_ENABLE_PRECOMPILE_HEADERS)
     target_precompile_headers(fock REUSE_FROM psio)

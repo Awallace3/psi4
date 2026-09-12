@@ -9,6 +9,14 @@ target_link_libraries(psi4_required_deps
     gau2grid::gg    # Required for DFT grid generation
 )
 
+if(Libxc_ENABLE_CUDA)
+  if(Libxc_VERSION VERSION_LESS 7.1.0)
+    message(FATAL_ERROR "CUDA LibXC integration requires LibXC 7.1.0 or newer for explicit host/device dispatch")
+  endif()
+  enable_language(CUDA)
+  target_compile_definitions(psi4_required_deps INTERFACE USING_Libxc_CUDA)
+endif()
+
 set (CMAKE_OPTIMIZE_DEPENDENCIES ON)
 
 # Create interface library for common optional dependencies to avoid repeating if(TARGET...) blocks
