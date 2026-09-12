@@ -204,6 +204,9 @@ class Metadata:
     production_postcondition_passed: bool
     historical_fixture_sha256: Optional[str]
     localization_rank_limit: int = 3
+    # Largest supplied magnitude discarded above the declared limit, counting BOTH
+    # the rank4 rows this module drops at the boundary and the ranks core drops
+    # inside the working block. Core's own measurement sees only the second.
     localization_truncated_input_maxabs: float = 0.0
     mode: str = 'supplied_nonlocal'
     tensor_origin: str = 'Psi4_LW'
@@ -400,7 +403,14 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
     rotations = [np.asarray(core.isa_multipole_rotation(rotation_rank, f.tolist()))[1:width+1,1:width+1].copy()
                  for f in frame]
     globals_, locals_, scalars, dipoles, fd, td, warnings = [], [], [], [], [], [], []
+    # The rank4 rows and columns are dropped HERE, at the boundary, before core is
+    # handed a block, so core's own truncation measurement never sees them and
+    # reports zero for every discard_rank4 model. Measure them on this side; a
+    # declared discard must report its own magnitude, not inherit a vacuous zero.
     truncated_maxabs = 0.0
+    if input_width < m:
+        truncated_maxabs = max(float(np.max(np.abs(raw[:,:,:,input_width:,:]))),
+                               float(np.max(np.abs(raw[:,:,:,:input_width,input_width:]))))
     if localization_rank_limit < rotation_rank:
         # A frame rotation must not mix a retained rank with a discarded one.
         # isa_multipole_rotation is block diagonal in rank; check, do not assume.
@@ -470,14 +480,18 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
             'localization declared at rank4: the local tensors carry ranks1..4 and the C12 (1,4)/(4,1) '
             'rank pairs become available. This is a DIFFERENT model from the rank1..3 localization, not '
             'a more accurate one, and the two must never be quoted as agreeing.')
-    if localization_rank_limit < rotation_rank:
+    # Anything the supplied model carries above the declared limit is discarded,
+    # whether core drops it or the boundary slice above already has. Gate the
+    # announcement on the input rank so a rank4 input localized at rank3 -- where
+    # rotation_rank is also 3 -- is not silently exempted from saying so.
+    if localization_rank_limit < input_rank:
         warnings.append(
             f'localization declared at rank {localization_rank_limit}: ranks '
-            f'{localization_rank_limit+1}..{rotation_rank} are absent by declaration, not computed and small; '
+            f'{localization_rank_limit+1}..{input_rank} are absent by declaration, not computed and small; '
             f'{truncated_maxabs:g} of supplied magnitude was truncated before localizing. The '
-            f'restriction is exact (translation is rank-raising), so this equals the rank-3 '
-            f'localization restricted to ranks 1..{localization_rank_limit} and cannot change any '
-            f'number at those ranks.')
+            f'restriction is exact (translation is rank-raising), so this equals the '
+            f'rank-{input_rank} localization restricted to ranks 1..{localization_rank_limit} and '
+            f'cannot change any number at those ranks.')
     metadata = Metadata(input_rank, truncation, nf*n*n*(m*m-input_width*input_width), raw_hash, residual_policy,
                         1e-3 if historical else PRODUCTION_TOLERANCE,
                         False if historical else all(d.production_postcondition_passed for d in fd),

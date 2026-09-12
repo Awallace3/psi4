@@ -479,8 +479,18 @@ def test_localization_rank_limit_is_recorded_and_defaults_to_three(water):
     q = water_request(water)
     full = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',**q)
     assert full.metadata.localization_rank_limit == 3
-    assert full.metadata.localization_truncated_input_maxabs == 0.0
-    assert not any('localization declared at rank' in w for w in full.warnings)
+    # This request is a rank4 input discarded at the rank3 boundary. The drop
+    # happens in the driver, before core is handed a block, so core's own
+    # measurement is structurally blind to it -- but a declared discard that
+    # reports zero reads as "nothing was thrown away", which is the opposite of
+    # what happened. The reported magnitude is the real one, and rank3 is not
+    # exempted from announcing the restriction just because it is the default.
+    assert full.metadata.discarded_rank4_entry_count > 0
+    assert full.metadata.localization_truncated_input_maxabs == pytest.approx(123.4503, abs=1e-9)
+    declared = [w for w in full.warnings if 'localization declared at rank' in w]
+    assert len(declared) == 1
+    assert 'ranks 4..4 are absent by declaration' in declared[0]
+    assert '123.45' in declared[0]
     for limit in (1,2):
         m = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
                                             localization_rank_limit=limit,**q)
@@ -562,6 +572,13 @@ def test_rank4_localization_is_a_different_model_and_exactly_consistent(water):
     assert r4.metadata.discarded_rank4_entry_count == 0
     assert r3.metadata.discarded_rank4_entry_count > 0
     assert r4.metadata.truncation == lw.RETAIN_RANK4
+    # What r3 discarded is the same rank4 weight asserted nonvacuous above, and
+    # its magnitude is reported rather than left at the boundary unmeasured.
+    assert r4.metadata.localization_truncated_input_maxabs == 0.0
+    assert r3.metadata.localization_truncated_input_maxabs == pytest.approx(123.4503, abs=1e-9)
+    truncated = [w for w in r3.warnings if 'localization declared at rank 3' in w]
+    assert len(truncated) == 1 and '123.45' in truncated[0]
+    assert not any('localization declared at rank 4' in w for w in r4.warnings)
     declared = [w for w in r4.warnings if 'localization declared at rank4' in w]
     assert len(declared) == 1
     assert 'must never be quoted as agreeing' in declared[0]
