@@ -146,6 +146,67 @@ __global__ void pack_potential_polarized_kernel(std::size_t npoints, std::size_t
 
 inline int blocks(std::size_t npoints) { return static_cast<int>((npoints + block_size - 1) / block_size); }
 
+// A fixed launch shape for the quadrature reduction: the partial count does not
+// track npoints, so the summation tree -- and therefore the sum -- is the same on
+// every call for a given grid.
+constexpr int reduce_block_size = 256;
+constexpr int reduce_nblocks = 256;
+// reduce_finish_kernel gathers one partial per thread of a single block, so the
+// block has to be wide enough to hold them all.
+static_assert(reduce_nblocks <= reduce_block_size, "the final reduction would drop partials");
+
+template <int NV>
+__device__ void reduce_within_block(double (&acc)[NV], double* out_base) {
+    __shared__ double shared[NV][reduce_block_size];
+    for (int v = 0; v < NV; ++v) shared[v][threadIdx.x] = acc[v];
+    __syncthreads();
+    for (int stride = reduce_block_size / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            for (int v = 0; v < NV; ++v) shared[v][threadIdx.x] += shared[v][threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        for (int v = 0; v < NV; ++v) out_base[NV * blockIdx.x + v] = shared[v][0];
+    }
+}
+
+__global__ void reduce_rks_kernel(std::size_t npoints, const double* weights, const double* full_f,
+                                  const double* rho, double* partials) {
+    double acc[2] = {0.0, 0.0};
+    const std::size_t stride = static_cast<std::size_t>(gridDim.x) * blockDim.x;
+    for (std::size_t point = blockIdx.x * blockDim.x + threadIdx.x; point < npoints; point += stride) {
+        const double weighted_rho = weights[point] * rho[point];
+        acc[0] += weighted_rho * full_f[point];
+        acc[1] += weighted_rho;
+    }
+    reduce_within_block<2>(acc, partials);
+}
+
+__global__ void reduce_uks_kernel(std::size_t npoints, const double* weights, const double* full_f,
+                                  const double* rho, double* partials) {
+    double acc[3] = {0.0, 0.0, 0.0};
+    const std::size_t stride = static_cast<std::size_t>(gridDim.x) * blockDim.x;
+    for (std::size_t point = blockIdx.x * blockDim.x + threadIdx.x; point < npoints; point += stride) {
+        const double weight = weights[point];
+        const double rho_a = rho[2 * point + 0];
+        const double rho_b = rho[2 * point + 1];
+        acc[0] += weight * full_f[point] * (rho_a + rho_b);
+        acc[1] += weight * rho_a;
+        acc[2] += weight * rho_b;
+    }
+    reduce_within_block<3>(acc, partials);
+}
+
+template <int NV>
+__global__ void reduce_finish_kernel(const double* partials, double* out) {
+    double acc[NV];
+    for (int v = 0; v < NV; ++v) {
+        acc[v] = (threadIdx.x < reduce_nblocks) ? partials[NV * threadIdx.x + v] : 0.0;
+    }
+    reduce_within_block<NV>(acc, out);
+}
+
 }  // namespace
 
 cudaError_t cuest_xc_prepare_inputs(std::size_t npoints, std::size_t ncomponents, const double* density,
@@ -194,6 +255,26 @@ cudaError_t cuest_xc_pack_potential_polarized(std::size_t npoints, std::size_t n
     pack_potential_polarized_kernel<<<blocks(npoints), block_size>>>(npoints, ncomponents, density_a, density_b,
                                                                      weights, v_rho, v_gamma, v_tau, potential_a,
                                                                      potential_b);
+    return cudaGetLastError();
+}
+
+std::size_t cuest_xc_reduce_scratch(std::size_t nvalues) { return nvalues * reduce_nblocks; }
+
+cudaError_t cuest_xc_reduce_rks(std::size_t npoints, const double* weights, const double* full_f, const double* rho,
+                                double* scratch, double* out) {
+    reduce_rks_kernel<<<reduce_nblocks, reduce_block_size>>>(npoints, weights, full_f, rho, scratch);
+    const auto status = cudaGetLastError();
+    if (status != cudaSuccess) return status;
+    reduce_finish_kernel<2><<<1, reduce_block_size>>>(scratch, out);
+    return cudaGetLastError();
+}
+
+cudaError_t cuest_xc_reduce_uks(std::size_t npoints, const double* weights, const double* full_f, const double* rho,
+                                double* scratch, double* out) {
+    reduce_uks_kernel<<<reduce_nblocks, reduce_block_size>>>(npoints, weights, full_f, rho, scratch);
+    const auto status = cudaGetLastError();
+    if (status != cudaSuccess) return status;
+    reduce_finish_kernel<3><<<1, reduce_block_size>>>(scratch, out);
     return cudaGetLastError();
 }
 

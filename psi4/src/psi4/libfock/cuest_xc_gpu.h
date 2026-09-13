@@ -38,6 +38,22 @@ cudaError_t cuest_xc_pack_potential_polarized(std::size_t npoints, std::size_t n
                                               const double* v_gamma, const double* v_tau, double* potential_a,
                                               double* potential_b);
 
+// Doubles of device scratch cuest_xc_reduce_* needs; nvalues is 2 for RKS, 3 for UKS.
+std::size_t cuest_xc_reduce_scratch(std::size_t nvalues);
+
+// Quadrature sums done on the device, so only the handful of resulting scalars
+// crosses the bus instead of the energy density and the density over the whole
+// grid. The reduction runs over a fixed block count and a fixed tree, so a given
+// grid gives the same sum every time rather than whatever order atomics landed in.
+//
+// RKS out: {Exc, integrated density}, with rho spin-summed as prepare_inputs leaves it.
+cudaError_t cuest_xc_reduce_rks(std::size_t npoints, const double* weights, const double* full_f, const double* rho,
+                                double* scratch, double* out);
+
+// UKS out: {Exc, integrated alpha density, integrated beta density}, rho interleaved as rho[2p+s].
+cudaError_t cuest_xc_reduce_uks(std::size_t npoints, const double* weights, const double* full_f, const double* rho,
+                                double* scratch, double* out);
+
 }  // namespace psi
 
 #endif
