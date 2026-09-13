@@ -533,14 +533,25 @@ def drho_partitioned_initialization(sites, auxiliary, coefficients):
     return initial
 
 
-def final_shape_samples(shapes, state, sites, points):
-    """Stored final Func-1/Fit-3 tails only; never fit tails at this boundary."""
+def final_shape_samples(shapes, state, sites, points, *, tails=None):
+    """Stored final Func-1/Fit-3 tails only; never fit tails at this boundary.
+
+    ``tails`` selects WHICH stored tails. The controller stores two sets and they
+    are not the same numbers: ``state.tails`` is the last in-loop fit, which by the
+    documented source lag came from the second-to-last shape, while
+    ``trajectory.final_tails`` is CamCASP's postconvergence refit from the final
+    shape (``IsaAControllerResult::final_tails``).  Downstream sampling must use the
+    latter, so ``native_partition`` passes it explicitly; the default is the state's
+    own tails, which keeps the surrogate states the precision budget builds
+    self-consistent with whatever tails they carry.
+    """
     n = len(sites)
-    if not n or any(len(v) != n for v in (shapes, state.coefficients.shape_coefficients, state.tails)):
+    tails = state.tails if tails is None else tails
+    if not n or any(len(v) != n for v in (shapes, state.coefficients.shape_coefficients, tails)):
         raise ValueError('Final shape/site/state dimensions must match exactly')
     return tuple(_owned(core.IsaGaussianShape(b, c).sample(
         points, tail, bool(state.apply_tails and site.tail_allowed)))
-        for b, c, tail, site in zip(shapes, state.coefficients.shape_coefficients, state.tails, sites))
+        for b, c, tail, site in zip(shapes, state.coefficients.shape_coefficients, tails, sites))
 
 
 @dataclass(frozen=True)
@@ -633,10 +644,12 @@ def native_partition(wfn, recipe, *, caller_converged):
                   f'Drho-C lambda1000 unrescaled; {recipe.drho_profile} comparisons not evaluated; '
                   f'ordinary ISA-A; atomic initialization {recipe.atomic_initialization}; '
                   'full molecular IsaGrid/all sites unscreened (no screening parity); '
-                  'stored final tails; global Cartesian axes/bohr/atomic units; no reference orbitals or density')
+                  'postconvergence-refit final tails; global Cartesian axes/bohr/atomic units; '
+                  'no reference orbitals or density')
     sampled_shapes, q = (), None
     if trajectory.state.converged:
-        sampled_shapes = final_shape_samples(shapes, trajectory.state, recipe.sites, pts.tolist())
+        sampled_shapes = final_shape_samples(shapes, trajectory.state, recipe.sites, pts.tolist(),
+                                             tails=trajectory.final_tails)
         total = np.sum(sampled_shapes, axis=0)
         qsites = []
         for i, site in enumerate(recipe.sites):

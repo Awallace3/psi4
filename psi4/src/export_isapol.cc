@@ -778,7 +778,11 @@ void export_isapol(py::module& m) {
     py::class_<IsaAControllerResult>(m, "IsaAControllerResult")
         .def_property_readonly("state", [](const IsaAControllerResult& r) { return r.state; })
         .def_readonly("history", &IsaAControllerResult::history)
-        .def_readonly("termination", &IsaAControllerResult::termination);
+        .def_readonly("termination", &IsaAControllerResult::termination)
+        .def_readonly("final_tails", &IsaAControllerResult::final_tails,
+                      "Postconvergence refit from the FINAL shapes; the tails downstream stages sample. "
+                      "state.tails is the lagged restart cursor, not these.")
+        .def_readonly("final_tail_fits", &IsaAControllerResult::final_tail_fits);
     py::class_<IsaAController, std::shared_ptr<IsaAController>>(m, "IsaAController", "Explicit-input ordinary-A controller, not native wavefunction-to-property parity")
         .def(py::init<const std::vector<IsaExplicitBasis>&, const std::vector<IsaExplicitBasis>&,
                      const std::vector<std::vector<int>>&, const IsaFixedDensity&,

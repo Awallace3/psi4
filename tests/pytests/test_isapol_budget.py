@@ -366,14 +366,20 @@ def test_shape_coefficients_are_probed_with_the_lagged_tails_held_fixed(fitted):
 
 
 def test_tail_parameters_are_probed_as_parameters_not_as_samples(fitted):
-    """The probed intermediate is (amplitude, exponent) per applied tail."""
-    state = fitted.properties.partition.trajectory.state
+    """The probed intermediate is (amplitude, exponent) per applied tail.
+
+    The probed tails are the postconvergence refit the shipped samples carry,
+    never the lagged in-loop ``state.tails`` restart cursor.
+    """
+    trajectory = fitted.properties.partition.trajectory
+    state = trajectory.state
+    tails = list(trajectory.final_tails)
     sites = fitted.properties.partition.recipe.sites
-    applied = b._applied_tails(state, sites)
-    assert applied and all(state.tails[i].defined and sites[i].tail_allowed for i in applied)
+    applied = b._applied_tails(tails, state.apply_tails, sites)
+    assert applied and all(tails[i].defined and sites[i].tail_allowed for i in applied)
     reference = b.reference_value(fitted, 'raw_tail_parameters')
     assert reference.shape == (len(applied), 2)
-    np.testing.assert_allclose(reference, [[state.tails[i].amplitude, state.tails[i].exponent]
+    np.testing.assert_allclose(reference, [[tails[i].amplitude, tails[i].exponent]
                                            for i in applied], rtol=0, atol=0)
     # The cutoff is supplied configuration, not a fitted intermediate: it is
     # outside the probed array and its invariance is part of the restriction.
@@ -392,7 +398,7 @@ def test_tail_parameters_are_probed_as_parameters_not_as_samples(fitted):
                                                        reference, 1.e-3, 0))
     np.testing.assert_allclose(b.reference_value(fitted, 'raw_tail_parameters'), reference,
                                rtol=0, atol=0)
-    assert [state.tails[i].cutoff for i in applied] == [sites[i].tail_cutoff for i in applied]
+    assert [tails[i].cutoff for i in applied] == [sites[i].tail_cutoff for i in applied]
 
 
 def test_budget_never_mutates_the_shipped_result(fitted):
@@ -775,12 +781,22 @@ def test_water_partition_stages_are_measurable():
     # The same move anchors the shape samples one step upstream: the coefficients
     # that generate them are O(1), share one scale, and have a recorded error
     # this module's metric reconstructs exactly.  Their absolute amplification is
-    # likewise a converged derivative, unlike the sampled array's.
+    # likewise a converged derivative, unlike the sampled array's -- but only
+    # down to a floor the tails put there.  The probed map now contains the
+    # postconvergence tail refit, whose Fit-3 exponent is itself a FIXED 1e-8
+    # finite difference of the shape (isa_shape.cc, mirroring CamCASP), so b
+    # carries ~1e-8 relative quantization as a function of these coefficients.
+    # The two probe sizes therefore bracket one decade ABOVE that floor instead
+    # of four decades down through it: measured amplifications hold to ~3e-4
+    # relative over 1e-3..1e-7 and then degrade at 1e-8 and below, where the
+    # probe resolves the refit's own difference step rather than the derivative.
+    # That floor is a declared property of the modelled algorithm; it is not a
+    # tolerance and probing beneath it would measure quantization, not physics.
     coefficients = [b.precision_budget(chain, property_tolerances=1.e-6, epsilon=eps,
                                        directions=1, stages=('shape_coefficients',),
                                        recorded_errors={'shape_coefficients':
                                                         RECORDED_SHAPE_COEFFICIENT})
-                    for eps in (1.e-6, 1.e-10)]
+                    for eps in (1.e-6, 1.e-7)]
     for measured in coefficients:
         assert {probe.status for probe in measured.probes} == {'measured'}
         assert max(measured.self_consistency['shape_coefficients'].values()) == 0.

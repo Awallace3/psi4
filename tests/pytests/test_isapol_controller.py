@@ -74,6 +74,47 @@ def test_controller_premixing_diagnostics_and_old_shape_tail_lag():
     assert step.next.apply_tails
 
 
+def test_controller_postconvergence_tail_refit_uses_the_final_shape():
+    """``run`` closes the in-loop source lag once, exactly as CamCASP does.
+
+    CamCASP leaves its ISA iteration with ``update_w0`` (w0 := w) and then calls
+    ``analysis_and_tail_tests`` -> ``shape_function_tail_analysis`` with
+    iteration = -1 on both loop exits, whose ``shape_function_tail_fit1`` stores
+    ``w_Tail_FuncParams``. That stored refit -- not the lagged in-loop fit kept in
+    ``state.tails`` for restarts -- is what every downstream stage reads.
+    """
+    options = core.IsaAControllerOptions()
+    options.tail_cutoffs = [1.5]
+    options.fix_tails = False  # the refit is ungated: it runs with the fix off too
+    controller, state, shape, _ = fixture(options)
+    # Stop after a single sweep, so the final shape and the lagged fit's source
+    # shape are far apart and the two stored tail sets stay distinguishable.
+    options.convergence = controller.step(controller.initialize(state)).deltas[0]*1.01
+    controller, state, shape, _ = fixture(options)
+    result = controller.run(controller.initialize(state))
+    assert result.termination == 'converged' and result.state.iteration == 1
+    final = result.state.coefficients.shape_coefficients[0]
+    expected = core.IsaGaussianShape(shape, final).fit_tail(1.5, result.state.tails[0])
+    assert result.final_tails[0].amplitude == expected.tail.amplitude
+    assert result.final_tails[0].exponent == expected.tail.exponent
+    assert result.final_tails[0].cutoff == 1.5 and result.final_tails[0].defined
+    assert len(result.final_tail_fits) == 1
+    assert result.final_tail_fits[0].tail.exponent == result.final_tails[0].exponent
+    # The restart cursor keeps the lagged fit, taken from the shape one iteration
+    # back: the two stored sets are different numbers and must stay separable.
+    stale = core.IsaGaussianShape(shape, state.shape_coefficients[0]).fit_tail(1.5)
+    assert result.state.tails[0].exponent == stale.tail.exponent
+    assert result.state.tails[0].exponent != result.final_tails[0].exponent
+
+
+def test_controller_without_tail_cutoffs_reports_the_state_tails_as_final():
+    controller, state, _, _ = fixture()  # fix_tails False, no cutoffs
+    result = controller.run(controller.initialize(state))
+    assert not result.final_tail_fits
+    assert len(result.final_tails) == len(result.state.tails)
+    assert not any(t.defined for t in result.final_tails)
+
+
 def test_controller_activation_not_latched_and_tail_iteration_strictness():
     options = core.IsaAControllerOptions()
     options.fit.w_eps, options.fit.positive_lambda = .17, .001

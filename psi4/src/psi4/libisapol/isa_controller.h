@@ -5,8 +5,12 @@
 #define PSI4_LIBISAPOL_ISA_CONTROLLER_H
 #include "isa_sweep.h"
 namespace psi { namespace isapol {
-/// Explicit ordinary-A, W-convergence controller. No DIIS, symmetry, decoupled
-/// subiterations or self-consistent postconvergence tail loop are implemented.
+/// Explicit ordinary-A, W-convergence controller. No DIIS, symmetry or decoupled
+/// subiterations are implemented, and neither is CamCASP's self-consistent
+/// postconvergence tail LOOP (perform_tail_iterations / Tail-Iterations, driven by
+/// num_tail_iterations, which the reference protocol never enables). The SINGLE
+/// postconvergence tail refit that CamCASP always performs IS implemented; see
+/// IsaAControllerResult::final_tails.
 struct IsaAControllerOptions {
     IsaAFitOptions fit;
     // Performance only: zero forces the independent uncached path. Hard ceiling
@@ -42,9 +46,24 @@ struct IsaAControllerStep {
     std::vector<IsaTailFitResult> tail_fits;
 };
 struct IsaAControllerResult {
+    /// Restart cursor. Its tails are the LAST IN-LOOP fit, which by the documented
+    /// source lag came from the second-to-last shape, so they are NOT the tails any
+    /// downstream stage should sample. Use final_tails for that.
     IsaAControllerState state;
     std::vector<IsaAControllerStep> history;
     std::string termination;
+    /// Postconvergence tail refit from the FINAL shape coefficients: the tails
+    /// downstream stages must use. CamCASP leaves its iteration with update_w0
+    /// (w0 := w) and then calls analysis_and_tail_tests -> shape_function_tail_analysis
+    /// with iteration = -1 (stockholder.F90:1353 and :1401, so on both the converged
+    /// and the nonconverged exit), whose shape_function_tail_fit1 WRITES
+    /// mol%atoms(i)%w_Tail_FuncParams (:4710-4713). That stored refit, not the in-loop
+    /// one, is what create_ISA_RhoFuncExpansions and every later stage read. The refit
+    /// is ungated: it runs whether or not the tail fix was active. Its previous-exponent
+    /// fallback is the in-loop tail, matching CamCASP's w_Tail_Defined/w_Tail_FuncParams(2)
+    /// revert. Empty tail_cutoffs leaves these equal to state.tails.
+    std::vector<IsaExponentialTail> final_tails;
+    std::vector<IsaTailFitResult> final_tail_fits;
 };
 class IsaAController {
    public:

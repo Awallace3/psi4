@@ -140,6 +140,18 @@ IsaAControllerResult IsaAController::run(const IsaAControllerState& initial) con
         result.history.push_back(std::move(iteration));
     }
     result.termination = result.state.converged ? "converged" : "max_iterations";
+    // Postconvergence refit. The loop's own fits lag one iteration behind by
+    // construction; CamCASP closes that lag once, after w0 := w, by refitting from
+    // the final shape and STORING the result for every downstream stage. Do not fold
+    // this back into step(): the in-loop lag is the recurrence and must stay.
+    result.final_tails = result.state.tails;
+    if (!options_.tail_cutoffs.empty())
+        for (size_t a = 0; a < shapes_.size(); ++a) {
+            auto tail = IsaGaussianShape(shapes_[a],result.state.coefficients.shape_coefficients[a])
+                            .fit_tail(options_.tail_cutoffs[a],result.state.tails[a]);
+            result.final_tails[a] = tail.tail;
+            result.final_tail_fits.push_back(std::move(tail));
+        }
     return result;
 }
 } }

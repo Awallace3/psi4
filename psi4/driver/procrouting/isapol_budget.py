@@ -412,13 +412,30 @@ def _from_drho(chain, coefficients, stage):
     trajectory = controller.run(controller.initialize(declared))
     if not trajectory.state.converged:
         raise RuntimeError(f'perturbed ISA-A did not converge: {trajectory.termination}')
-    return _from_shapes(chain, final_shape_samples(shapes, trajectory.state, recipe.sites, points), stage)
+    return _from_shapes(chain, final_shape_samples(shapes, trajectory.state, recipe.sites, points,
+                                                   tails=trajectory.final_tails), stage)
 
 
-def _applied_tails(state, sites):
-    """Indices of the tails the shipped ``final_shape_samples`` actually applies."""
-    return tuple(i for i, (tail, site) in enumerate(zip(state.tails, sites))
-                 if bool(state.apply_tails and site.tail_allowed and tail.defined))
+def _applied_tails(tails, apply_tails, sites):
+    """Indices of the tails the shipped ``final_shape_samples`` actually applies.
+
+    ``tails`` is the trajectory's ``final_tails`` -- the postconvergence refit that
+    downstream sampling uses -- not the lagged ``state.tails`` restart cursor.
+    """
+    return tuple(i for i, (tail, site) in enumerate(zip(tails, sites))
+                 if bool(apply_tails and site.tail_allowed and tail.defined))
+
+
+def _refit_final_tails(recipe, state, coefficients, shapes):
+    """CamCASP's postconvergence tail refit, reapplied to a perturbed final shape.
+
+    ``IsaAController::run`` refits every tail from the FINAL shape coefficients once
+    the loop exits, so the tails the shipped samples carry are a function of the very
+    coefficients this probe perturbs. The in-loop tails stay the fallback exponent
+    source, exactly as in ``run``.
+    """
+    return [core.IsaGaussianShape(b, c).fit_tail(site.tail_cutoff, previous).tail
+            for b, c, site, previous in zip(shapes, coefficients, recipe.sites, state.tails)]
 
 
 def _from_tails(chain, parameters, stage):
@@ -433,7 +450,8 @@ def _from_tails(chain, parameters, stage):
     partition = chain.properties.partition
     recipe = partition.recipe
     state = partition.trajectory.state
-    applied = _applied_tails(state, recipe.sites)
+    shipped_tails = list(partition.trajectory.final_tails)
+    applied = _applied_tails(shipped_tails, state.apply_tails, recipe.sites)
     values = np.asarray(parameters, dtype=float)
     if values.shape != (len(applied), 2):
         raise ValueError('tail parameters need one (amplitude, exponent) row per applied tail')
@@ -442,7 +460,7 @@ def _from_tails(chain, parameters, stage):
     surrogate = core.IsaAControllerState()
     surrogate.coefficients, surrogate.apply_tails = state.coefficients, state.apply_tails
     tails = []
-    for index, shipped in enumerate(state.tails):
+    for index, shipped in enumerate(shipped_tails):
         tail = core.IsaExponentialTail()
         tail.defined, tail.cutoff = shipped.defined, shipped.cutoff
         pair = (values[applied.index(index)] if index in applied
@@ -467,13 +485,15 @@ def _from_shape_coefficients(chain, flat, stage):
     order, which is also the array the reference comparison's per-site records
     reconstruct exactly, so one denominator covers the whole probe.
 
-    The shipped tails are carried through unchanged rather than refitted. That
-    is a documented property of the algorithm, not a convenience:
-    ``IsaAController::step`` fits iteration n+1's tails from iteration n's shape
-    coefficients (the source lag), and ``final_shape_samples`` samples the stored
-    final tails without refitting at that boundary. Refitting a tail from a
-    perturbed *final* W would therefore model a different algorithm rather than
-    perturb this one.
+    The tails ARE refitted from the perturbed coefficients, because the shipped
+    algorithm fits them from the final coefficients too: ``IsaAController::step``
+    fits iteration n+1's tails from iteration n's shape coefficients (the source
+    lag), but ``IsaAController::run`` then closes that lag once, postconvergence,
+    by refitting from the final shape -- CamCASP's own
+    ``analysis_and_tail_tests`` -> ``shape_function_tail_fit1`` write. Carrying the
+    shipped tails through unchanged would therefore model an algorithm without
+    that refit, rather than perturb this one. Nothing is refitted at the
+    ``final_shape_samples`` boundary itself; the refit happens where ``run`` does it.
     """
     partition = chain.properties.partition
     recipe = partition.recipe
@@ -484,7 +504,7 @@ def _from_shape_coefficients(chain, flat, stage):
         raise ValueError('shape coefficients need one flat entry per shipped per-site '
                          'coefficient, concatenated in site order')
     surrogate = core.IsaAControllerState()
-    surrogate.tails, surrogate.apply_tails = state.tails, state.apply_tails
+    surrogate.apply_tails = state.apply_tails
     coefficients = core.IsaSweepState()
     coefficients.atomic_coefficients = state.coefficients.atomic_coefficients
     edges = np.cumsum((0,) + lengths)
@@ -492,6 +512,7 @@ def _from_shape_coefficients(chain, flat, stage):
                                        for a, b in zip(edges[:-1], edges[1:])]
     surrogate.coefficients = coefficients
     shapes = [s.shape.build('Shape') for s in recipe.sites]
+    surrogate.tails = _refit_final_tails(recipe, state, coefficients.shape_coefficients, shapes)
     return _from_shapes(chain, final_shape_samples(shapes, surrogate, recipe.sites,
                                                    partition.grid_points.tolist()), stage)
 
@@ -565,13 +586,15 @@ def reference_value(chain, stage):
         return np.concatenate([np.asarray(v, dtype=float)
                                for v in state.coefficients.shape_coefficients])
     if stage == 'raw_tail_parameters':
-        state = properties.partition.trajectory.state
-        applied = _applied_tails(state, properties.partition.recipe.sites)
+        trajectory = properties.partition.trajectory
+        tails = list(trajectory.final_tails)
+        applied = _applied_tails(tails, trajectory.state.apply_tails,
+                                 properties.partition.recipe.sites)
         if not applied:
             raise ValueError('no applied ISA-A tail: the shipped shape samples do not '
                              'depend on any tail parameter here, so this probe would '
                              'measure an identity, not a sensitivity')
-        return np.array([[state.tails[i].amplitude, state.tails[i].exponent]
+        return np.array([[tails[i].amplitude, tails[i].exponent]
                          for i in applied], dtype=float)
     if stage == 'partition_shape_samples':
         return np.array(properties.partition.shape_samples, dtype=float)

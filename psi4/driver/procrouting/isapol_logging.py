@@ -337,6 +337,7 @@ def report_partition(log, wfn, partition):
                ('MAIN adaptation method', partition.main.method)))
     report_partition_iterations(log, partition)
     report_shape_charges(log, partition)
+    report_shape_tails(log, partition)
     _set(wfn, 'ISA ITERATIONS', float(state.iteration))
     _set(wfn, 'ISA CONVERGED', 1. if state.converged else 0.)
     _set(wfn, 'ISA MAX DELTA', float(state.max_delta))
@@ -349,6 +350,11 @@ def report_partition(log, wfn, partition):
         # Per-site populations are a property, not an intermediate: they are
         # published even at verbosity 0, where the printed table is suppressed.
         _set(wfn, 'ISA SHAPE CHARGES', _matrix(charges.reshape(1, -1)))
+    # The sampled tails are the postconvergence refit, never the lagged in-loop fit.
+    tails = np.array([[float(t.defined), t.cutoff, t.amplitude, t.exponent]
+                      for t in trajectory.final_tails], dtype=float)
+    if tails.shape == (len(partition.recipe.sites), 4):
+        _set(wfn, 'ISA W TAILS', _matrix(tails))
 
 
 def report_partition_iterations(log, partition, level=2):
@@ -385,6 +391,29 @@ def report_shape_charges(log, partition, level=2):
               ('site', 'q_shape'), list(zip(labels, charges.tolist())), level=level,
               note='sum %s over %d sites' % (_fmt(float(charges.sum())), len(labels)))
 
+
+def report_shape_tails(log, partition, level=2):
+    """Per-site Func-1 W-tails actually sampled: the postconvergence refit.
+
+    Both stored sets are printed because they are different numbers and only one
+    of them is used. ``trajectory.final_tails`` is the refit from the converged
+    shape, which is what ``final_shape_samples`` samples and therefore what every
+    later stage sees; ``state.tails`` is the last in-loop fit, one iteration stale
+    by the deliberate source lag. Printing only one would leave a reader unable to
+    tell which of the two a number came from.
+    """
+    trajectory = partition.trajectory
+    labels = [s.label for s in partition.recipe.sites]
+    final, lagged = list(trajectory.final_tails), list(trajectory.state.tails)
+    if len(final) != len(labels) or len(lagged) != len(labels):
+        return
+    rows = [(label, bool(t.defined), float(t.cutoff), float(t.amplitude), float(t.exponent),
+             float(p.amplitude), float(p.exponent))
+            for label, t, p in zip(labels, final, lagged)]
+    log.table('ISA-A W-tails, Func-1 A exp(-b r) (postconvergence refit from the '
+              'converged shape; in-loop columns are the lagged fit, not used downstream):',
+              ('site', 'defined', 'r1 [bohr]', 'A', 'b', 'A (in-loop)', 'b (in-loop)'),
+              rows, level=level)
 
 # --------------------------------------------------------------- response ----
 
