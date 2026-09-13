@@ -14,6 +14,7 @@ import numpy as np
 from psi4 import core
 from .isapol_native_partition import PartitionRecipe, NativePartitionResult, native_partition
 from .isapol_native_response import NativeWavefunctionResponse, native_response_from_wavefunction
+from .isapol_native_propagator import PropagatorDeclaration, propagator_operators
 from .sapt.fdds_response import FDDSFullOVResponse
 from .isapol_native_correction import validate_correction, functional_definition
 from . import isapol_lw as lw
@@ -99,12 +100,16 @@ def _context(wfn):
 
 
 def _policy(kernel, exact_exchange, local_scale, grid, density_cutoff, correction=None,
-            algorithm='ordered_pairwise'):
+            algorithm='ordered_pairwise', propagator=None):
     # The named response algorithm is part of the policy: the two arrangements
     # are separately gated, so a context built under one is not reusable under
-    # the other even though their operators agree.
+    # the other even though their operators agree. The propagator declaration is
+    # likewise part of it: a context built under the exact-orbital propagator
+    # holds different H1/H2 than one built under a density-fitted, AUX-projected
+    # or smoothed declaration, and the two are different models, not variants.
     h = hashlib.sha256(repr((kernel, exact_exchange, local_scale, density_cutoff, correction,
-                             algorithm)).encode())
+                             algorithm,
+                             None if propagator is None else propagator.name)).encode())
     if grid is not None:
         a = np.asarray(grid)
         if a.dtype.kind not in 'fiu' or not np.isfinite(a).all():
@@ -177,7 +182,8 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                       response_context=None, response_basis='fitted_auxiliary',
                       scf_correction='NONE', expected_grac_shift=None, ac_declaration=None,
                       response_algorithm='ordered_pairwise', ov_charge_penalty=1.,
-                      ov_metric_damping=0., localization_rank_limit=3, log=None):
+                      ov_metric_damping=0., localization_rank_limit=3, propagator=None,
+                      log=None):
     """Return all owned stages, with strict production LW (1e-6) or failures.
 
     Explicit ``response_basis='direct_ov'`` integrates actual occupied/virtual
@@ -244,6 +250,20 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
     nothing differently; it also cannot change a rank <= limit number, since it
     yields the higher-limit result restricted to the declared space (see
     :func:`isapol_lw.supplied_nonlocal_properties`).
+
+    ``propagator`` is an explicit
+    :class:`isapol_native_propagator.PropagatorDeclaration` naming how H1/H2 are
+    built, or None. None is not a default declaration: it means the propagator
+    module is not entered at all and the provider's own exact-orbital H1/H2 are
+    used unchanged, so every number recorded without it stays bitwise what it was.
+    Supplying one declares a DIFFERENT MODEL along up to four independent axes
+    (density-fitted two-electron operators, an AUX-metric kernel projection, a
+    fitted-density kernel argument, and CamCASP's declared kernel smoothing); its
+    numbers may never be quoted as agreeing with the exact-orbital ones or with
+    each other across declarations. An AUX-metric projection needs the fitted
+    transition density and therefore ``response_basis='fitted_auxiliary'``, and a
+    rebuilt kernel needs the explicit ``response_grid`` it is integrated on rather
+    than an inferred one.
     """
     if response_basis not in ('fitted_auxiliary', 'direct_ov'):
         raise ValueError('unsupported response_basis')
@@ -257,6 +277,15 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
         raise ValueError('ov_metric_damping must be an explicit finite float in [0,1)')
     if response_basis == 'direct_ov' and ov_metric_damping != 0.:
         raise ValueError('direct_ov forms no transition fit; no metric damping applies')
+    if propagator is not None:
+        if not isinstance(propagator, PropagatorDeclaration):
+            raise TypeError('propagator must be None or an explicit PropagatorDeclaration')
+        if propagator.kernel_projection == 'auxiliary_metric' and response_basis != 'fitted_auxiliary':
+            raise ValueError('auxiliary_metric kernel projection requires the fitted_auxiliary '
+                             'response basis; direct_ov forms no AUX transition density')
+        if propagator.rebuilds_kernel and response_grid is None:
+            raise ValueError('a rebuilt ALDA kernel requires the explicit response_grid it is '
+                             'integrated on; none is inferred')
     if caller_converged is not True:
         raise ValueError('caller_converged must explicitly be True')
     if not isinstance(recipe, PartitionRecipe):
@@ -288,7 +317,7 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                          'policy; no asymptotic-correction kernel derivative')
     context_hash = _context(wfn)
     policy_hash = _policy(kernel, exact_exchange, local_scale, response_grid, density_cutoff,
-                          correction, response_algorithm)
+                          correction, response_algorithm, propagator)
     if response_context is not None:
         if (not isinstance(response_context, NativeContext)
                 or response_context.wavefunction_sha256 != context_hash
@@ -308,6 +337,7 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
             f'{response_algorithm}; Drho-C ISA-A[{recipe.auxiliary.name}]; {response_basis}'
             + ('' if response_basis == 'direct_ov'
                else f' lambda={ov_charge_penalty!r}; eta={ov_metric_damping!r}')
+            + ('' if propagator is None else '; propagator ' + propagator.name)
             + '; no PFIT'
             + ('; ' + correction.response_description if correction.policy != 'NONE' else ''),
             correction)
@@ -379,13 +409,27 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                 raise ValueError('native OV fit dimensions/order mismatch')
         if _context(wfn) != context_hash:
             raise ValueError('wavefunction changed during native fit')
-        solver = FDDSFullOVResponse(h1_baseline=np.asarray(provider.h1()), h2=np.asarray(provider.h2()),
+        lg.report_ov_fit(log, fit, response_basis)
+        if propagator is None:
+            h1_baseline, h2_operator = np.asarray(provider.h1()), np.asarray(provider.h2())
+        else:
+            stage = 'propagator'
+            operators = propagator_operators(partition, provider, full, d,
+                declaration=propagator, kernel=kernel, exact_exchange=exact_exchange,
+                local_scale=local_scale, grid=response_grid, density_cutoff=density_cutoff,
+                max_bytes=max_bytes)
+            h1_baseline, h2_operator = operators.h1, operators.h2
+            log.stage(stage, lg.propagator_parameters(propagator, operators.work))
+            lg.report_propagator(log, operators)
+            diagnostics.update(('propagator_' + k, v) for k, v in operators.diagnostics.items())
+        solver = FDDSFullOVResponse(h1_baseline=h1_baseline, h2=h2_operator,
             transition_legs=d, coupling=np.zeros((d.shape[1], d.shape[1])),
             representation=('supplied_transition_leg_coordinates' if response_basis == 'direct_ov'
                             else 'fitted_density_coefficients'))
-        lg.report_ov_fit(log, fit, response_basis)
         stage = 'frequency response'
         log.stage(stage, (('solver', 'FDDSFullOVResponse'),
+                          ('propagator', 'provider exact-orbital H1/H2' if propagator is None
+                           else propagator.name),
                           ('representation', solver.representation),
                           ('nodes', len(freq)), ('frequencies [Eh]', freq)))
         for xi in freq:

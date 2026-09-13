@@ -437,6 +437,57 @@ def response_parameters(*, kernel, exact_exchange, local_scale, density_cutoff, 
     return tuple(items)
 
 
+def propagator_parameters(declaration, estimate=None):
+    """Every declared propagator axis, stated separately, plus its own work gate.
+
+    The four axes are printed individually rather than as one name, because a
+    reader comparing two runs has to be able to see which one of them moved.
+    """
+    smoothing = declaration.smoothing
+    items = [('two-electron operators', declaration.two_electron),
+             ('ALDA kernel projection', declaration.kernel_projection),
+             ('ALDA kernel density', declaration.kernel_density),
+             ('kernel smoothing', 'none' if smoothing is None else smoothing.declaration)]
+    if smoothing is not None:
+        items.append(('Kernel_Smooth_Method code', smoothing.method_code))
+    items.append(('AUX shell-pair screen', 'not replicated; all supplied rows integrated'))
+    if estimate is not None:
+        items.append(('naux / nov / grid rows', (estimate.naux, estimate.nov, estimate.grid_rows)))
+        items += [(name + ' work / limit', (work, limit)) for name, work, limit in estimate.limits]
+        items += [('workspace bytes / max', (estimate.bytes_required, estimate.max_bytes)),
+                  ('passes', estimate.passes)]
+    return tuple(items)
+
+
+def report_propagator(log, operators):
+    """Print the measured departure of every rebuilt operator from the exact one.
+
+    These are diagnostics of the declared substitution, never a parity claim and
+    never operands: the numbers below say how far this model is from the shipped
+    one, not that either is right.
+    """
+    log.line('Declared propagator rebuild (different model, not a refinement):')
+    log.items((('H1/H2 assembly identity residual',
+                operators.diagnostics['assembly_identity_residual_maxabs']),))
+    named = (('df_coulomb_relative_maxabs_deviation', '(ia|jb) DF vs exact, relative maxabs'),
+             ('df_exchange_direct_relative_maxabs_deviation', '(ij|ab) DF vs exact, relative maxabs'),
+             ('df_exchange_transpose_relative_maxabs_deviation', '(ib|aj) DF vs exact, relative maxabs'),
+             ('aux_kernel_relative_maxabs_deviation', 'ALDA L rebuilt vs exact, relative maxabs'),
+             ('kernel_rows', 'kernel quadrature rows'),
+             ('kernel_floored_rows', 'rows with density raised to the floor'),
+             ('kernel_capped_rows', 'rows with |fxc| above F-MAX'),
+             ('kernel_skipped_rows', 'rows contributing zero'),
+             ('fitted_density_deviation_maxabs', 'fitted minus exact density, maxabs'),
+             ('fitted_density_deviation_weighted_l1', 'fitted minus exact density, weighted L1'),
+             ('fitted_density_electrons', 'fitted monomer electrons'),
+             ('fitted_density_relative_residual', 'Drho-C relative residual'))
+    rows = [(label, operators.diagnostics[key]) for key, label in named
+            if key in operators.diagnostics]
+    if rows:
+        log.items(tuple(rows))
+    log.line()
+
+
 def report_context(log, wfn, context, provider):
     log.items((('nocc / nvir / nov', (provider.nocc, provider.nvir, provider.nocc * provider.nvir)),
                ('wavefunction context sha256', context.wavefunction_sha256[:16] + '...'),
