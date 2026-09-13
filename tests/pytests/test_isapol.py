@@ -157,6 +157,67 @@ def test_grid_weights_sum(refgrid, h2o):
     assert _ulps(got, want) <= 2, f"{got!r} != {want!r}"
 
 
+def test_grid_option_defaults_are_the_camcasp_module_defaults():
+    """CamCASP ``src/parameters.f90:189-197`` declares the grid module defaults.
+
+        par_num_radial_points    = 80
+        par_num_angular_points   = 590
+        par_becke_smoothing      = 3
+        par_radius_scaling       = 1.0_dp
+        par_integration_grid_type = 1   (Lebedev)
+
+    ``src/types_secondary.F90:136-138`` initialises ``NumRadPoints``,
+    ``NumAngPoints``, ``BeckeSmoothPar``, ``RadiusScaling`` and ``GridType`` from
+    them, and ``num_integration_grid.F90:438-442`` copies them straight into the
+    ``atom_grids`` module before ``make_grid``.  These are declared model
+    parameters, not tolerances: a grid declared at any other value is a
+    different model.  Only Lebedev (GridType 1) is implemented here, which is
+    why there is no grid-type knob to pin.
+    """
+    opts = psi4.core.IsaGridOptions()
+    assert opts.radial_points == 80
+    assert opts.spherical_points == 590
+    assert opts.becke_smoothing == 3
+    assert opts.radius_scaling == 1.0
+
+
+def test_grid_reproduces_the_reference_protocol_summary(h2o):
+    """The isa-pol protocol's own ``SET GRID { Angular 400 / Radial 100 }``.
+
+    CamCASP's reference run of this molecule (water.out, "Integration grid
+    summary") reports
+
+        Total number of points =       128898
+        Number of angular points          434
+        Number of radial  points          100
+        Atom     Total   Angular    Radial
+        O1           42966       434       100
+
+    so 400 is rounded *up* to the tabulated Lebedev size 434 by ``Lbdv()``, and
+    each atom carries 42966 = 99 x 434 points because the Euler-MacLaurin map
+    emits ``n_r - 1`` shells.  The ``refgrid`` fixture already compares the
+    points themselves one by one, but only on a small (8/110) grid; this pins
+    the shape of the production grid against the reference's own published
+    summary.
+    """
+    opts = psi4.core.IsaGridOptions()
+    opts.radial_points = 100
+    opts.spherical_points = 400
+    grid = psi4.core.IsaGrid(h2o, opts)
+
+    assert grid.spherical_points() == 434
+    assert grid.radial_points() == 100
+    assert grid.npoints() == 128898
+    assert [grid.atom_npoints(a) for a in range(3)] == [42966, 42966, 42966]
+    assert [grid.atom_start(a) for a in range(4)] == [0, 42966, 85932, 128898]
+
+    # num_integration_grid.F90:433 defaults every site's radius to
+    # AtomProp(Z)%Rslater, and rscale multiplies it, so alpha is the tabulated
+    # Bragg-Slater radius itself at the declared RadiusScaling = 1.
+    for a, Z in enumerate((8, 1, 1)):
+        assert grid.alpha(a) == psi4.core.isapol_slater_radius(Z)
+
+
 def test_grid_integrates_atomic_gaussians(h2o):
     """A reference-free check that the assembled grid is actually a quadrature.
 

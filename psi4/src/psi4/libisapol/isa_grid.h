@@ -51,6 +51,16 @@ namespace isapol {
 /// Knobs of the ISA integration grid. Defaults are the CamCASP grid MODULE
 /// defaults (80/590), not the isa-pol-from-isa-A method preset (100/400 requested,
 /// 434 actual angular points). Select the preset explicitly when comparing it.
+///
+/// The four defaults below are CamCASP's own, declared in src/parameters.f90:189-197
+/// as par_num_radial_points = 80, par_num_angular_points = 590,
+/// par_becke_smoothing = 3 and par_radius_scaling = 1.0_dp, carried into
+/// src/types_secondary.F90:136-138 and copied into the atom_grids module by
+/// src/num_integration_grid.F90:438-442 immediately before make_grid.  CamCASP's
+/// fifth knob, par_integration_grid_type = 1, selects Lebedev, which is the only
+/// angular rule implemented here, so it has no counterpart.  All of these are
+/// declared model parameters: a grid declared at any other value is a different
+/// model, never a looser one.
 struct IsaGridOptions {
     /// CamCASP's `n_r` (its `NumRadPoints`), *not* the number of shells: the
     /// Euler-MacLaurin map generates shells i = 1 ... n_r - 1, so n_r = 80 gives
@@ -67,6 +77,10 @@ struct IsaGridOptions {
     int becke_smoothing = 3;
 
     /// Multiplies the Bragg-Slater radius that sets the radial scale, `rscale`.
+    /// CamCASP's construct_molecular_integration_grid defaults every site's radius
+    /// to AtomProp(Z)%Rslater (num_integration_grid.F90:433) and only its
+    /// density_overlap.F90 dimer path ever supplies radii explicitly, so the ISA
+    /// grid reached from df_integrals.F90:1945 is always the tabulated one.
     double radius_scaling = 1.0;
 };
 
