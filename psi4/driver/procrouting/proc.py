@@ -1715,6 +1715,43 @@ def _set_external_potentials_to_wavefunction(external_potential: Union[List, Dic
     #   `set_potential_variable("C", total_ep)` is needed for the FSAPT procedure.
 
 
+def _seed_scf_orbitals(scf_wfn, old_wfn, scf_molecule, source):
+    """Hand the occupied orbitals of ``old_wfn`` to ``scf_wfn`` as its SCF guess,
+    projecting between basis sets when they differ. ``source`` only names the
+    origin for the output file.
+
+    """
+    Ca_occ = old_wfn.Ca_subset("SO", "OCC")
+    Cb_occ = old_wfn.Cb_subset("SO", "OCC")
+
+    if old_wfn.molecule().schoenflies_symbol() != scf_molecule.schoenflies_symbol():
+        raise ValidationError("Cannot compute projection of different symmetries.")
+
+    if old_wfn.basisset().name() == scf_wfn.basisset().name():
+        core.print_out(f"  Reading orbitals from {source}, no projection.\n\n")
+        scf_wfn.guess_Ca(Ca_occ)
+        scf_wfn.guess_Cb(Cb_occ)
+    else:
+        core.print_out(f"  Reading orbitals from {source}, projecting to new basis.\n\n")
+        core.print_out("  Computing basis projection from %s to %s\n\n" % (old_wfn.basisset().name(), scf_wfn.basisset().name()))
+
+        pCa = scf_wfn.basis_projection(Ca_occ, old_wfn.nalphapi(), old_wfn.basisset(), scf_wfn.basisset())
+        pCb = scf_wfn.basis_projection(Cb_occ, old_wfn.nbetapi(), old_wfn.basisset(), scf_wfn.basisset())
+        scf_wfn.guess_Ca(pCa)
+        scf_wfn.guess_Cb(pCb)
+
+    # Strip off headers to only get R, RO, U, CU. A changed reference means the
+    # guess carries the wrong occupations, so let the iterator restore them.
+    old_ref = old_wfn.name().replace("KS", "").replace("HF", "")
+    new_ref = scf_wfn.name().replace("KS", "").replace("HF", "")
+    # hf.cc takes the occupations from the column counts of the guess, which are the
+    # donor's. Same reference but a different electron count -- an ionized monomer
+    # seeded from its neutral, say -- would otherwise silently solve for the donor's
+    # charge, so key the reset on the occupations themselves as well.
+    if old_ref != new_ref or (old_wfn.nalpha(), old_wfn.nbeta()) != (scf_wfn.nalpha(), scf_wfn.nbeta()):
+        scf_wfn.reset_occ_ = True
+
+
 def scf_helper(name, post_scf=True, **kwargs):
     """Function serving as helper to SCF, choosing whether to cast
     up or just run SCF with a standard guess. This preserves
@@ -1753,6 +1790,12 @@ def scf_helper(name, post_scf=True, **kwargs):
     # Grab a few kwargs
     use_c1 = kwargs.get('use_c1', False)
     scf_molecule = kwargs.get('molecule', core.get_active_molecule())
+    # An in-memory wavefunction to start from, bypassing the scratch-file round trip
+    # that GUESS READ needs. Announcing it as READ up front keeps the driver from
+    # building SAD atomic basis sets for a guess that is about to be overwritten.
+    guess_wfn = kwargs.pop('guess_wfn', None)
+    if guess_wfn is not None:
+        core.set_local_option('SCF', 'GUESS', 'READ')
     read_orbitals = core.get_option('SCF', 'GUESS') == "READ"
     do_timer = kwargs.pop("do_timer", True)
     ref_wfn = kwargs.pop('ref_wfn', None)
@@ -1945,33 +1988,12 @@ def scf_helper(name, post_scf=True, **kwargs):
     # The wfn from_file routine adds the npy suffix if needed, but we add it here so that
     # we can use os.path.isfile to query whether the file exists before attempting to read
     read_filename = scf_wfn.get_scratch_filename(180) + '.npy'
-    if ((core.get_option('SCF', 'GUESS') == 'READ') and os.path.isfile(read_filename)):
+    if guess_wfn is not None:
+        _seed_scf_orbitals(scf_wfn, guess_wfn, scf_molecule, "a previous computation")
+
+    elif ((core.get_option('SCF', 'GUESS') == 'READ') and os.path.isfile(read_filename)):
         old_wfn = core.Wavefunction.from_file(read_filename)
-
-        Ca_occ = old_wfn.Ca_subset("SO", "OCC")
-        Cb_occ = old_wfn.Cb_subset("SO", "OCC")
-
-        if old_wfn.molecule().schoenflies_symbol() != scf_molecule.schoenflies_symbol():
-            raise ValidationError("Cannot compute projection of different symmetries.")
-
-        if old_wfn.basisset().name() == scf_wfn.basisset().name():
-            core.print_out(f"  Reading orbitals from file {read_filename}, no projection.\n\n")
-            scf_wfn.guess_Ca(Ca_occ)
-            scf_wfn.guess_Cb(Cb_occ)
-        else:
-            core.print_out(f"  Reading orbitals from file {read_filename}, projecting to new basis.\n\n")
-            core.print_out("  Computing basis projection from %s to %s\n\n" % (old_wfn.basisset().name(), scf_wfn.basisset().name()))
-
-            pCa = scf_wfn.basis_projection(Ca_occ, old_wfn.nalphapi(), old_wfn.basisset(), scf_wfn.basisset())
-            pCb = scf_wfn.basis_projection(Cb_occ, old_wfn.nbetapi(), old_wfn.basisset(), scf_wfn.basisset())
-            scf_wfn.guess_Ca(pCa)
-            scf_wfn.guess_Cb(pCb)
-
-        # Strip off headers to only get R, RO, U, CU
-        old_ref = old_wfn.name().replace("KS", "").replace("HF", "")
-        new_ref = scf_wfn.name().replace("KS", "").replace("HF", "")
-        if old_ref != new_ref:
-            scf_wfn.reset_occ_ = True
+        _seed_scf_orbitals(scf_wfn, old_wfn, scf_molecule, f"file {read_filename}")
 
     elif (core.get_option('SCF', 'GUESS') == 'READ') and not os.path.isfile(read_filename):
         core.print_out(f"\n !!!  Unable to find file {read_filename}, defaulting to SAD guess. !!!\n\n")
