@@ -1,0 +1,81 @@
+{
+ "correction": "Supersedes the sentence carried in commit eb49a236ea, which asserted that the reference's printed C6/C8/C10 were 8.400508 / 81.842910 / 700.674100 and were NOT the Casimir integral of its own L3 localized file. Those three constants are a hand transcription error: they appear in no reference file, no tracked file and no CamCASP output anywhere on this machine. The printed row is 8.367451 / 81.67585 / 701.1518 / 4950.050, and it IS the Casimir integral of water_L3_0f10.pol to <=3.2e-7 relative on all four orders and all three type-pairs. The printed and integrated columns remain distinct reference quantities and are still quoted separately; their numerical agreement is a measurement, not a definition.",
+ "declared": {
+  "isa_grid": "100 radial / 400 spherical (434 Lebedev, 128898 points)",
+  "localization": "LW rank-limited to 3",
+  "note": "A DIFFERENT declared model from the exact-orbital-propagator REFIT model; the two sets of numbers may never be quoted as agreeing with each other.",
+  "postconvergence_tail_refit": true,
+  "propagator": "density_fitted",
+  "response_grid": "100 radial / 400 spherical",
+  "response_rank": 4,
+  "tail_activation": 1e-06
+ },
+ "isotropic_cn": {
+  "H2-H2": {
+   "10": 3.545047041029574,
+   "12": 33.54689851566208,
+   "6": 0.4255734496917153,
+   "8": 1.1613911518341342
+  },
+  "H2-H3": {
+   "10": 3.545047037620763,
+   "12": 33.54689856855644,
+   "6": 0.42557345002557223,
+   "8": 1.1613911551649931
+  },
+  "H2-O1": {
+   "10": 67.65732012570554,
+   "12": 326.0873201464389,
+   "6": 1.859025829471265,
+   "8": 11.727058240146544
+  },
+  "H3-H2": {
+   "10": 3.545047037620763,
+   "12": 33.54689856855644,
+   "6": 0.42557345002557223,
+   "8": 1.1613911551649934
+  },
+  "H3-H3": {
+   "10": 3.5450470342119527,
+   "12": 33.54689862145081,
+   "6": 0.42557345035942923,
+   "8": 1.161391158495852
+  },
+  "H3-O1": {
+   "10": 67.65732023605906,
+   "12": 326.08732067295773,
+   "6": 1.8590258308685965,
+   "8": 11.727058259735962
+  },
+  "O1-H2": {
+   "10": 67.65732012570554,
+   "12": 326.0873201464389,
+   "6": 1.859025829471265,
+   "8": 11.727058240146544
+  },
+  "O1-H3": {
+   "10": 67.65732023605906,
+   "12": 326.08732067295773,
+   "6": 1.859025830868596,
+   "8": 11.72705825973596
+  },
+  "O1-O1": {
+   "10": 701.1699539809053,
+   "12": 4950.20144548234,
+   "6": 8.367503651782993,
+   "8": 81.67726315252271
+  }
+ },
+ "model": "REFERENCE_AUX_ATOMAUX_SLATER_TAIL_REFSCF_TAILACT1e-6_REFIT_DFPROP_ISA_A",
+ "reference": {
+  "fixture": "camcasp_casimir_h2o_vdz_l3.json",
+  "printed_row": "00 00 0 of each type-pair block of water_L3_casimir.out"
+ },
+ "schema_version": 1,
+ "withdrawn_constants": {
+  "C10": 700.6741,
+  "C6": 8.400508,
+  "C8": 81.84291,
+  "note": "Recorded ONLY so the error stays traceable. These values are not a reference quantity and must never be used in any comparison."
+ }
+}

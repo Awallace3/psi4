@@ -180,6 +180,11 @@ its output is numerical constants, which ship, with permission, in `libisapol`.
 `read_cn_pot.py` is at the other extreme — it needs no build and no source at
 all, only the `.pot`/`.clt`/`.axes` files a run already printed — and the notice
 for the values it decodes travels inside the fixture it writes.
+`read_casimir_out.py` is the same kind of tool for the CASIMIR stage: it decodes
+`<prefix>_casimir.out`, `<prefix>_casimir.data` and the `<prefix>_0f10.pol` that
+stage read, and writes `../camcasp_casimir_h2o_vdz_l3.json`.  It carries the
+printed table and the localized polarizabilities as SEPARATE entries on purpose,
+so a test can measure their relation instead of a fixture asserting one.
 
 ## Build flags matter
 
