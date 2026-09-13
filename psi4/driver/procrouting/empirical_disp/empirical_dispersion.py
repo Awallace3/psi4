@@ -27,6 +27,7 @@
 #
 
 import collections
+import functools
 from typing import Dict, List, Union
 
 import numpy as np
@@ -60,6 +61,22 @@ _obsolete_engines = {
 }
 
 
+def _mctc_gcp_new_enough() -> bool:
+    """Whether an mctc-gcp at least as new as 2.3.0 is on PATH, matching the gate
+    ``qcengine.testing`` applies to the same program.
+
+    """
+    from qcelemental.util import parse_version, which
+
+    if not which("mctc-gcp", return_bool=True):
+        return False
+    try:
+        return parse_version(qcng.get_program("mctc-gcp").get_version()) >= parse_version("2.3.0")
+    except Exception:
+        return False
+
+
+@functools.lru_cache(maxsize=1)
 def _capable_engines_for_disp()-> Dict[str, List[str]]:
     """Invert _engine_can_do dictionary and check program detection.
 
@@ -67,21 +84,21 @@ def _capable_engines_for_disp()-> Dict[str, List[str]]:
     capable engines, where the engine in the first element is available, if any are.
 
     """
-    try:
-        from qcengine.testing import _programs as _programs_qcng
-    except ModuleNotFoundError:
-        # _programs_qcng is up-to-date with current harnesses but it requires pytest present, so let's provide a workaround
-        from qcelemental.util import which, which_import
-        _programs_qcng = {
-            "dftd3": which("dftd3", return_bool=True),
-            "dftd4": which_import("dftd4", return_bool=True),
-            "s-dftd3": which_import("dftd3", return_bool=True),
-            "mctc-gcp": which("mctc-gcp", return_bool=True),
-            "gcp": which("gcp", return_bool=True),
-            "mp2d": which("mp2d", return_bool=True),
-        }
+    # ``qcengine.testing`` answers this too, but importing it requires pytest and
+    # probes every harness qcengine knows about, several by shelling out for a
+    # version, when these six are the only external engines _engine_can_do names.
+    # On a shared filesystem that one import cost seconds and dominated the price
+    # of a dispersion correction, which is otherwise milliseconds.
+    from qcelemental.util import which, which_import
 
-    programs_disp = {k: v for k, v in _programs_qcng.items() if k in _engine_can_do}
+    programs_disp = {
+        "dftd3": which("dftd3", return_bool=True),
+        "dftd4": which_import("dftd4", return_bool=True),
+        "s-dftd3": which_import("dftd3", return_bool=True),
+        "mctc-gcp": _mctc_gcp_new_enough(),
+        "gcp": which("gcp", return_bool=True),
+        "mp2d": which("mp2d", return_bool=True),
+    }
     programs_disp["libdisp"] = True
     programs_disp["nl"] = True
 
