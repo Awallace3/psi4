@@ -190,6 +190,46 @@ numerics, not native protocol parity. (3,4), (4,3), (4,4) remain uncovered by
 construction, so C11 and C12 lose the quadruples that need them; rank-3 C12
 stays structurally partial; the odd `L+H+J` normalization question is unchanged.
 
+### The same boundary, measured on the primary reference run
+
+The paragraphs above read the boundary off `casimir.f90`, on a synthetic deck.
+It is also **measured**, on the primary acceptance case itself, without reading
+any source. A rank-4 localization of the same reference response (`localize.py
+water --limit 4 --hlimit 4 --norefine` over that run's own
+`water_ISA-GRID_f11_NL4_fmtB.pol`) was decoded into
+`tests/pytests/data_isapol/camcasp_casimir_h2o_vdz_l4.json`. Its
+`Recoupled polarizabilities` section prints single-site components for exactly
+the 13 ordered pairs with `la+lap<=6` and for no others -- (1,4), (4,1), (2,4),
+(4,2) present; (3,4), (4,3), (4,4) absent -- confirming the `j1+j2>6` cycle from
+output data alone.
+
+That settles what the **isotropic** C12 `INCOMPLETE` mark means. The isotropic
+sum at order `n` contracts the `L=0` component `00(l l)`, which exists only for
+`la==lap`, so at `n=12` it needs (1,4), (2,3), (3,2), (4,1) and the (1,4)/(4,1)
+terms require `00(44)`. `00(44)` has `la+lap=8` and is therefore never built:
+the only `L=0` components either run prints are `00(11)`, `00(22)`, `00(33)`.
+Accordingly the reference's printed isotropic C6/C8/C10/C12 rows are identical
+between the rank-3 and rank-4 runs on all three type pairs even though the
+recoupled row census grows in every block. Psi4's mark on rank-3 C12 names a
+term the reference's own CASIMIR omits as well: a shared protocol truncation,
+not a native-versus-CamCASP gap.
+
+The truncation cannot be lifted with the shipped executable. Raising
+`Dispersion 12 water` to 14, 16 or 18 in the decoded deck exits `STOP 9` with
+`Dispersion coefficients only up to C12`, so no CamCASP-produced `00(44)`, and
+hence no reference (1,4)/(4,1) contribution, exists to compare against at all.
+
+None of this relaxes the marking convention. `unrestricted_complete` still
+reports the unrestricted rank sum, the `INCOMPLETE` name mark still follows it,
+and the gap is still real: supplying the rank-4 file's own rank 4 moves O1-O1
+C12 by more than 10% and drives H2-H2 negative, because an unrefined rank-4 LW
+site tensor is indefinite. Those numbers belong to a **different declared
+model** from anything CamCASP printed and are recorded in
+`tests/pytests/test_isapol_casimir_rank4_truncation.py` to bound the truncation,
+never as a reference comparison. The rank-3 and rank-4 localizations are
+likewise different declared models; where their decoded numbers coincide, that
+is a measurement about the two files and not a statement that the models agree.
+
 ## Independent runtime example (no CamCASP files)
 
 ```python

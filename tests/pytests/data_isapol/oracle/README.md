@@ -186,6 +186,34 @@ stage read, and writes `../camcasp_casimir_h2o_vdz_l3.json`.  It carries the
 printed table and the localized polarizabilities as SEPARATE entries on purpose,
 so a test can measure their relation instead of a fixture asserting one.
 
+It takes an optional second argument, the run prefix.  `water_L4` decodes a
+rank-4 localization of the SAME reference response into a SEPARATE fixture,
+`../camcasp_casimir_h2o_vdz_l4.json`, which
+`test_isapol_casimir_rank4_truncation.py` uses to measure where CASIMIR stops
+building single-site recoupled blocks.  The rank-3 and rank-4 localizations are
+different declared models and never share a file.  Reproducing the rank-4 run
+needs the external CamCASP and ORIENT executables and a writable scratch
+directory — the reference tree is never written to:
+
+```bash
+mkdir -p "$W" && cd "$W"
+cp "$REF"/water.ornt "$REF"/water.axes "$REF"/water.sites "$REF"/water_casimir.prss .
+mkdir -p bin && ln -s "$CCBUILD"/{process,casimir} bin/ && ln -s "$ORIENT" bin/orient
+# PYTHONDONTWRITEBYTECODE is required: without it the import leaves a
+# __pycache__ in the CamCASP tree, which the reference-tree cleanliness guard
+# in test_isapol_response_cache_anchors.py correctly fails on.
+PYTHONDONTWRITEBYTECODE=1 \
+  CAMCASP=$CAMCASP PYTHONPATH=$CAMCASP/bin PATH=$W/bin:$PATH \
+  python3 "$CAMCASP"/bin/localize.py water --limit 4 --hlimit 4 --norefine \
+  --polfile "$REF"/OUT/water_ISA-GRID_f11_NL4_fmtB.pol --verbosity 2
+python3 read_casimir_out.py --fixture "$W" water_L4
+```
+
+`--norefine` skips PFIT and the `.p2p` split, so no new response calculation is
+run: the rank-4 file is localized from the same `water_NL4_0NN.pol` blocks the
+rank-3 file came from, which is what makes the two comparable as a controlled
+pair.  `read_casimir_out.py` itself still reads only printed output data.
+
 ## Build flags matter
 
 Do not add `-ffast-math`, `-march=native`, or `-fdefault-real-8`.  Each one silently

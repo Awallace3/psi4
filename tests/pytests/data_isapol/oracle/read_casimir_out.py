@@ -25,8 +25,11 @@ Psi4's own Casimir assembly returns when fed CamCASP's own localized
 polarizabilities.  Nothing here merges the two -- they stay separate fixture
 entries, and their agreement is a measurement the test makes, not a definition.
 
-    ./read_casimir_out.py <run-dir>              # decode to stdout
-    ./read_casimir_out.py --fixture <run-dir>    # rewrite the committed fixture
+    ./read_casimir_out.py <run-dir> [prefix]              # decode to stdout
+    ./read_casimir_out.py --fixture <run-dir> [prefix]    # rewrite the fixture
+
+`prefix` selects the localization: `water_L3` (default) or `water_L4`.  These
+name two DIFFERENT declared models and are written to two different fixtures.
 """
 import hashlib
 import json
@@ -40,7 +43,18 @@ ORDERS = (6, 7, 8, 9, 10, 11, 12)
 ISOTROPIC_ROW = ('00', '00', '0')
 
 #: Racah component widths by rank; the localized file drops rank 0 entirely.
-RANK_SLICE = {1: slice(0, 3), 2: slice(3, 8), 3: slice(8, 15)}
+#: A `Limit all rank n` localization writes ranks 1..n, so the matrix width is
+#: sum_{l=1..n} (2l+1) -- 15 at n=3, 24 at n=4.  A rank-4 localization is a
+#: DIFFERENT declared model from the rank-3 one; the two fixtures are separate
+#: files and their numbers are never quoted as agreeing, even where the decoded
+#: bytes coincide.  That coincidence is a measurement about the files.
+RANK_SLICE = {1: slice(0, 3), 2: slice(3, 8), 3: slice(8, 15), 4: slice(15, 24)}
+
+#: Localized matrix width by highest written rank.
+RANK_WIDTH = {1: 3, 2: 8, 3: 15, 4: 24}
+
+#: `LK(la lb)` header of a single-site recoupled polarizability component.
+RECOUPLED_HEADER = re.compile(r'^(\d\d[cs]?)\((\d)(\d)\)\s*(all zero)?\s*$')
 
 NOTICE = (
     'Decoded from printed CamCASP output data of a run of the shipped '
@@ -88,13 +102,46 @@ def read_dispersion(path):
     return blocks
 
 
+def read_recoupled_inventory(path):
+    """`{label: {'type': t, 'pairs': [[la, lb], ...], 'isotropic_pairs': [...]}}`.
+
+    The `Recoupled polarizabilities` section of `<prefix>_casimir.out` prints one
+    single-site component per `LK(la lb)` header.  Which `(la, lb)` are present is
+    a structural property of the run, not a numerical one: CASIMIR builds the
+    single-site table only where the recoupling it needs for the declared
+    `Dispersion` order exists, so a pair absent here contributes nothing to any
+    printed coefficient no matter what the localized file holds at that rank.
+    `isotropic_pairs` keeps the `L=0` (`00(la lb)`) subset, which is the only part
+    the isotropic `00 00 0` row can draw on.
+    """
+    sites, site = {}, None
+    for line in open(path):
+        fields = line.split()
+        if len(fields) == 4 and fields[0] == 'Site' and fields[2] == 'type':
+            site = sites.setdefault(fields[1], {'type': fields[3], 'pairs': [], 'isotropic_pairs': []})
+            continue
+        match = RECOUPLED_HEADER.match(line.rstrip('\n'))
+        if site is None or match is None:
+            continue
+        lk, pair = match.group(1), [int(match.group(2)), int(match.group(3))]
+        if pair not in site['pairs']:
+            site['pairs'].append(pair)
+        if lk == '00' and pair not in site['isotropic_pairs']:
+            site['isotropic_pairs'].append(pair)
+    for site in sites.values():
+        site['pairs'].sort()
+        site['isotropic_pairs'].sort()
+    return sites
+
+
 def read_local_pol(path):
     """`(labels, freqsq, {label: {rank: [abar per frequency]}})` from `<p>_0f10.pol`."""
-    labels, freqsq, blocks, rows = [], [], {}, None
+    labels, freqsq, blocks, rows, ranks = [], [], {}, None, set()
     for line in open(path):
         if line.startswith('ALPHA'):
             fields = line.split()
             label = fields[3]
+            ranks.add(int(fields[fields.index('TO') + 1]))
             index, fsq = int(fields[fields.index('INDEX') + 1]), float(fields[-1])
             if label not in labels:
                 labels.append(label)
@@ -108,16 +155,23 @@ def read_local_pol(path):
             continue
         if rows is not None and line.strip():
             rows[-1].append([float(f) for f in line.split()])
+    if len(ranks) != 1:
+        raise ValueError('%s: mixed `RANK 1 TO n` declarations %r' % (path, sorted(ranks)))
+    top = ranks.pop()
+    if top not in RANK_WIDTH:
+        raise ValueError('%s: unsupported localization rank %d' % (path, top))
+    width, present = RANK_WIDTH[top], [l for l in sorted(RANK_SLICE) if l <= top]
     isotropic = {}
     for label in labels:
-        per_rank = isotropic.setdefault(label, {str(l): [] for l in RANK_SLICE})
+        per_rank = isotropic.setdefault(label, {str(l): [] for l in present})
         for matrix in blocks[label]:
-            assert len(matrix) == 15 and all(len(r) == 15 for r in matrix), label
-            for rank, cut in RANK_SLICE.items():
+            assert len(matrix) == width and all(len(r) == width for r in matrix), label
+            for rank in present:
+                cut = RANK_SLICE[rank]
                 rows_l = matrix[cut]
                 trace = sum(row[cut][i] for i, row in enumerate(rows_l))
                 per_rank[str(rank)].append(trace / (2 * rank + 1))
-    return labels, freqsq, isotropic
+    return labels, freqsq, isotropic, top
 
 
 def read_declared(path):
@@ -137,7 +191,7 @@ def build(rundir, prefix='water_L3'):
     rundir = pathlib.Path(rundir)
     out, pol, data = (rundir / ('%s_casimir.out' % prefix), rundir / ('%s_0f10.pol' % prefix),
                       rundir / ('%s_casimir.data' % prefix))
-    labels, freqsq, isotropic = read_local_pol(pol)
+    labels, freqsq, isotropic, top = read_local_pol(pol)
     declared = read_declared(data)
     beta, nfreq = declared['Frequencies'].split()
     return {
@@ -148,8 +202,10 @@ def build(rundir, prefix='water_L3'):
                  'printed_dynamic_count': len(freqsq) - 1,
                  'frequencies_squared': freqsq},
         'localized': {'source': pol.name, 'sha256': sha256(pol),
-                      'site_labels': labels, 'ranks': sorted(RANK_SLICE),
+                      'site_labels': labels,
+                      'ranks': [l for l in sorted(RANK_SLICE) if l <= top],
                       'isotropic_by_rank': isotropic},
+        'recoupled': {'source': out.name, 'sites': read_recoupled_inventory(out)},
         'dispersion': {'source': out.name, 'sha256': sha256(out),
                        'declared': declared, 'data_sha256': sha256(data),
                        'blocks': read_dispersion(out)},
@@ -158,12 +214,15 @@ def build(rundir, prefix='water_L3'):
 
 def main(argv):
     fixture = '--fixture' in argv
-    rundir = [a for a in argv[1:] if not a.startswith('--')][0]
-    payload = build(rundir)
+    positional = [a for a in argv[1:] if not a.startswith('--')]
+    rundir = positional[0]
+    prefix = positional[1] if len(positional) > 1 else 'water_L3'
+    payload = build(rundir, prefix)
     if not fixture:
         print(json.dumps(payload, indent=1, sort_keys=True))
         return 0
-    target = pathlib.Path(__file__).resolve().parent.parent / 'camcasp_casimir_h2o_vdz_l3.json'
+    target = (pathlib.Path(__file__).resolve().parent.parent
+              / ('camcasp_casimir_h2o_vdz_%s.json' % prefix.rsplit('_', 1)[-1].lower()))
     target.write_text(json.dumps(payload, indent=1, sort_keys=True) + '\n')
     print('wrote %s (%d bytes)' % (target, target.stat().st_size))
     return 0

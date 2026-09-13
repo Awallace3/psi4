@@ -4,7 +4,7 @@
   "blocks": {
    "H H": {
     "census": {
-     "exact_zeros": 17029,
+     "exact_zeros": 20456,
      "j_values": [
       0,
       1,
@@ -25,8 +25,8 @@
       11,
       12
      ],
-     "printed_values": 22732,
-     "rows": 3466
+     "printed_values": 26862,
+     "rows": 4082
     },
     "isotropic": {
      "10": 3.545284,
@@ -40,7 +40,7 @@
    },
    "H O": {
     "census": {
-     "exact_zeros": 14021,
+     "exact_zeros": 17981,
      "j_values": [
       0,
       1,
@@ -61,8 +61,8 @@
       11,
       12
      ],
-     "printed_values": 18249,
-     "rows": 2770
+     "printed_values": 23055,
+     "rows": 3489
     },
     "isotropic": {
      "10": 67.66126,
@@ -76,7 +76,7 @@
    },
    "O O": {
     "census": {
-     "exact_zeros": 10522,
+     "exact_zeros": 13659,
      "j_values": [
       0,
       1,
@@ -97,8 +97,8 @@
       11,
       12
      ],
-     "printed_values": 13563,
-     "rows": 2055
+     "printed_values": 17395,
+     "rows": 2631
     },
     "isotropic": {
      "10": 701.1518,
@@ -111,7 +111,7 @@
     }
    }
   },
-  "data_sha256": "67f07a7a5a4b027e27d0994960e0758afa10f107e16a4af5fa9970c5e537e974",
+  "data_sha256": "c3d6704c57141187e022ace7cba6580ce574be636f0ece2b4497cf57cff0fa3a",
   "declared": {
    "Frequencies": "0.5 10",
    "Print": "nonzero",
@@ -131,8 +131,8 @@
     }
    ]
   },
-  "sha256": "1678ef8cc5e249e6c56b8bac748314318f8c8e99c4d492ba8a647a7165805cb0",
-  "source": "water_L3_casimir.out"
+  "sha256": "fa0f7d0947a7887555ed31fe494d00603b92a9d98c3cdf2b4c8172b993c31f5b",
+  "source": "water_L4_casimir.out"
  },
  "grid": {
   "beta": 0.5,
@@ -194,6 +194,19 @@
      0.6064121656648572,
      0.15973548027285714,
      0.006279620620571428
+    ],
+    "4": [
+     -18.60523249901289,
+     -18.600883739202,
+     -18.475911247517,
+     -17.739899477846333,
+     -15.366857126116555,
+     -10.48547037735,
+     -4.381852420102,
+     0.03527479105888885,
+     1.4297724306483335,
+     0.5830091000045555,
+     0.025146131558999998
     ]
    },
    "H3": {
@@ -235,6 +248,19 @@
      0.6063465361482857,
      0.1597198871754286,
      0.0062790171918571435
+    ],
+    "4": [
+     -18.599538715673223,
+     -18.595196487699443,
+     -18.470262957582445,
+     -17.73449363180211,
+     -15.36222566521511,
+     -10.482387766751,
+     -4.380572128783556,
+     0.0354564204873333,
+     1.4296656403535557,
+     0.5829580150344444,
+     0.02514387596233333
     ]
    },
    "O1": {
@@ -276,24 +302,38 @@
      4.087261113612857,
      0.936064646793857,
      0.03529232386257143
+    ],
+    "4": [
+     -55.01824060081812,
+     -55.00389418240967,
+     -54.590847550017,
+     -52.13627645450211,
+     -44.00178444758933,
+     -26.578587826068443,
+     -4.733641628027112,
+     8.845349848407666,
+     9.20402333742589,
+     2.8065807760087775,
+     0.113444817537
     ]
    }
   },
   "ranks": [
    1,
    2,
-   3
+   3,
+   4
   ],
-  "sha256": "717944d7e5e469487f306ef5657a465103f7da22c80961d4b387bb81281ab686",
+  "sha256": "4c8e99c9f4e862217e235f6432a172e60b11479b77f989b79451f90d8bab31d1",
   "site_labels": [
    "O1",
    "H2",
    "H3"
   ],
-  "source": "water_L3_0f10.pol"
+  "source": "water_L4_0f10.pol"
  },
  "notice": "Decoded from printed CamCASP output data of a run of the shipped tests/H2O_props/psi4 declaration (SCFcode psi4, cc-pVDZ Type MC, PBE0, AC NONE, ALDA+CHF, DF-TYPE-MONOMER NN, Angular 400 Radial 100). CamCASP: Anthony Stone and Alston Misquitta, MIT License, Copyright (c) 2019 Anthony Stone; see h2o_props_psi4_basis/NOTICE for the retained notice in full. Only the isotropic 00 00 0 rows, a census of the recoupled rows, the rank isotropics of the localized polarizability file and the declared stage settings are extracted; no CamCASP source is read, run or transcribed, and no claim is made about ORIENT, RRF or bundled third-party basis databases.",
- "prefix": "water_L3",
+ "prefix": "water_L4",
  "recoupled": {
   "sites": {
    "H2": {
@@ -325,6 +365,10 @@
       3
      ],
      [
+      1,
+      4
+     ],
+     [
       2,
       1
      ],
@@ -337,6 +381,10 @@
       3
      ],
      [
+      2,
+      4
+     ],
+     [
       3,
       1
      ],
@@ -347,6 +395,14 @@
      [
       3,
       3
+     ],
+     [
+      4,
+      1
+     ],
+     [
+      4,
+      2
      ]
     ],
     "type": "H"
@@ -380,6 +436,10 @@
       3
      ],
      [
+      1,
+      4
+     ],
+     [
       2,
       1
      ],
@@ -392,6 +452,10 @@
       3
      ],
      [
+      2,
+      4
+     ],
+     [
       3,
       1
      ],
@@ -402,6 +466,14 @@
      [
       3,
       3
+     ],
+     [
+      4,
+      1
+     ],
+     [
+      4,
+      2
      ]
     ],
     "type": "H"
@@ -435,6 +507,10 @@
       3
      ],
      [
+      1,
+      4
+     ],
+     [
       2,
       1
      ],
@@ -447,6 +523,10 @@
       3
      ],
      [
+      2,
+      4
+     ],
+     [
       3,
       1
      ],
@@ -457,11 +537,19 @@
      [
       3,
       3
+     ],
+     [
+      4,
+      1
+     ],
+     [
+      4,
+      2
      ]
     ],
     "type": "O"
    }
   },
-  "source": "water_L3_casimir.out"
+  "source": "water_L4_casimir.out"
  }
 }
