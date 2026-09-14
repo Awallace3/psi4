@@ -1180,7 +1180,11 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
          options ("LEVEL_SHIFT", "LEVEL_SHIFT_CUTOFF") to attempt to converge
          the neutral/cation calculations. "ITERATIVE" will try 3 times to
          converge the cation before failing the SAPT(DFT) computation. -*/
-        options.add_str("SAPT_DFT_GRAC_COMPUTE", "NONE", "NONE SINGLE ITERATIVE");
+    options.add_str("SAPT_DFT_GRAC_COMPUTE", "NONE", "NONE SINGLE ITERATIVE");
+    /*- Compute or echo monomer GRAC shifts and stop before SAPT energies.
+    Requires SINGLE or ITERATIVE and a non-HF functional. The returned dimer
+    wavefunction has CURRENT ENERGY zero, not an interaction energy. -*/
+    options.add_bool("SAPT_DFT_GRAC_SHIFT_ONLY", false);
         /*- To ensure that the GRAC shift is computed with a sufficiently large
           basis set, the user can specify a larger basis set for the GRAC
           calculation, which can be different from the basis set used for the

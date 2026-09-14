@@ -173,6 +173,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     mon_a_shift = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_A")
     mon_b_shift = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_B")
     grac_compute = core.get_option("SAPT", "SAPT_DFT_GRAC_COMPUTE")
+    shift_only = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_ONLY")
 
     if (
         not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_A")
@@ -305,6 +306,12 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     sapt_dft_D3_IE = core.get_option("SAPT", "SAPT_DFT_D3_IE")
     do_dft = sapt_dft_functional != "HF"
+    if shift_only and grac_compute == "NONE":
+        raise ValidationError("SAPT_DFT_GRAC_SHIFT_ONLY=true contradicts SAPT_DFT_GRAC_COMPUTE=NONE.")
+    if shift_only and not do_dft:
+        raise ValidationError("SAPT_DFT_GRAC_SHIFT_ONLY requires a non-HF SAPT_DFT_FUNCTIONAL.")
+    if not do_dft:
+        do_mon_grac_shift_A = do_mon_grac_shift_B = False
 
     if do_fsapt and (sapt_dft_D4_IE or sapt_dft_D3_IE):
         dispersion_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
@@ -390,18 +397,18 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     # fmt: on
     core.print_out("\n")
     core.print_out("   Required computations:\n")
-    if run_hf_segment:
+    if run_hf_segment and not shift_only:
         core.print_out("     HF   (Dimer)\n")
         core.print_out("     HF   (Monomer A)\n")
         core.print_out("     HF   (Monomer B)\n")
-    if do_dft:
+    if do_dft and not shift_only:
         core.print_out("     DFT  (Monomer A)\n")
         core.print_out("     DFT  (Monomer B)\n")
     if do_mon_grac_shift_A:
         core.print_out("     GRAC (Monomer A)\n")
     if do_mon_grac_shift_B:
         core.print_out("     GRAC (Monomer B)\n")
-    if do_delta_dft:
+    if do_delta_dft and not shift_only:
         core.print_out("     Delta DFT Correction:\n")
         core.print_out("       DFT (Dimer)\n")
         core.print_out("       DFT (Monomer A: No Asymptotic Correction)\n")
@@ -444,6 +451,16 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             core.print_out(f"   Monomer {label} GRAC shift supplied by the user (not computed).\n")
     core.print_out("   Monomer A GRAC Shift    %12.6f\n" % mon_a_shift)
     core.print_out("   Monomer B GRAC Shift    %12.6f\n" % mon_b_shift)
+    data["SAPT DFT GRAC SHIFT ONLY"] = float(shift_only)  # P::e SAPT
+    core.set_variable("SAPT DFT GRAC SHIFT ONLY", float(shift_only))  # P::e SAPT
+    if shift_only:
+        wfn = core.Wavefunction.build(sapt_dimer, core.get_global_option("BASIS"))
+        for key, value in data.items():
+            wfn.set_variable(key, value)
+        core.set_variable("CURRENT ENERGY", 0.0)
+        wfn.set_variable("CURRENT ENERGY", 0.0)
+        core.print_out("\n   SAPT(DFT) stopped early by request: GRAC shifts only; no interaction energy computed.\n")
+        return wfn
     core.print_out("\n")
     # Save integrals
     # We want to try to re-use itegrals for the dimer and monomer SCF's. If we
