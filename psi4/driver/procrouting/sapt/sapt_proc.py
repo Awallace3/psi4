@@ -383,8 +383,6 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
     core.print_out("  ==> Algorithm <==\n\n")
     core.print_out("   SAPT DFT Functional     %12s\n" % str(sapt_dft_functional))
-    core.print_out("   Monomer A GRAC Shift    %12.6f\n" % mon_a_shift)
-    core.print_out("   Monomer B GRAC Shift    %12.6f\n" % mon_b_shift)
     # fmt: off
     core.print_out("   Delta HF                %12s\n" % ("True" if do_delta_hf else "False"))
     core.print_out("   Induction Type          %12s\n" % induction_type)
@@ -417,18 +415,35 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         mon_a_shift = compute_GRAC_shift(
             monomerA_mon_only_bf,
             grac_compute,
-            "Monomer A",
+            "A",
+            results=data,
         )
     if do_mon_grac_shift_B:
         core.print_out("     GRAC (Monomer B)\n")
         mon_b_shift = compute_GRAC_shift(
             monomerB_mon_only_bf,
             grac_compute,
-            "Monomer B",
+            "B",
+            results=data,
         )
 
     core.set_variable("SAPT DFT GRAC SHIFT A", mon_a_shift)  # P::e SAPT
     core.set_variable("SAPT DFT GRAC SHIFT B", mon_b_shift)  # P::e SAPT
+    data["SAPT DFT GRAC SHIFT A"] = mon_a_shift
+    data["SAPT DFT GRAC SHIFT B"] = mon_b_shift
+    core.print_out("\n  ==> SAPT(DFT) GRAC Shifts <==\n\n")
+    core.print_out("   Monomer   E(monomer) [Eh]   E(ionized) [Eh]     HOMO [Eh]     IP [Eh]   GRAC shift [Eh]\n")
+    for label, shift, computed in (("A", mon_a_shift, do_mon_grac_shift_A),
+                                    ("B", mon_b_shift, do_mon_grac_shift_B)):
+        if computed:
+            values = [data[f"SAPT DFT GRAC {quantity} {label}"] for quantity in
+                      ("MONOMER ENERGY", "IONIZED MONOMER ENERGY", "HOMO", "IP")]
+            core.print_out(f"         {label} {values[0]:18.8f} {values[1]:18.8f} {values[2]:13.8f} {values[3]:11.8f} {shift:17.8f}\n")
+        else:
+            core.print_out(f"         {label} {'':63s} {shift:17.8f}\n")
+            core.print_out(f"   Monomer {label} GRAC shift supplied by the user (not computed).\n")
+    core.print_out("   Monomer A GRAC Shift    %12.6f\n" % mon_a_shift)
+    core.print_out("   Monomer B GRAC Shift    %12.6f\n" % mon_b_shift)
     core.print_out("\n")
     # Save integrals
     # We want to try to re-use itegrals for the dimer and monomer SCF's. If we
@@ -984,6 +999,7 @@ def compute_GRAC_shift(
     sapt_dft_grac_convergence_tier: str,
     label: str,
     jk_obj: core.JK | None = None,
+    results: dict | None = None,
 ) -> float:
     """Compute the GRAC (gradient-regulated asymptotic correction) shift for a monomer.
 
@@ -1021,6 +1037,8 @@ def compute_GRAC_shift(
         ["BASIS"],
     )
 
+    monomer_label = label
+    label = f"Monomer {label}"
     core.timer_on("SAPT(DFT):GRAC Shift " + label)
     try:
         dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
@@ -1107,6 +1125,17 @@ def compute_GRAC_shift(
             )
         core.print_out(f" GRAC shift {label}: {grac:.8f}\n")
         core.print_out(f" {E_given = :.8f}, {E_cation = :.8f}, {HOMO = :.8f}\n")
+        intermediates = {
+            f"SAPT DFT GRAC MONOMER ENERGY {monomer_label}": E_given,  # P::e SAPT
+            f"SAPT DFT GRAC IONIZED MONOMER ENERGY {monomer_label}": E_cation,  # P::e SAPT
+            f"SAPT DFT GRAC HOMO {monomer_label}": HOMO,  # P::e SAPT
+            f"SAPT DFT GRAC IP {monomer_label}": E_cation - E_given,  # P::e SAPT
+        }
+        for key, value in intermediates.items():
+            core.set_variable(key, value)
+            wfn_given.set_variable(key, value)
+        if results is not None:
+            results.update(intermediates)
         return grac
     finally:
         optstash.restore()
