@@ -174,6 +174,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     mon_b_shift = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_B")
     grac_compute = core.get_option("SAPT", "SAPT_DFT_GRAC_COMPUTE")
     shift_only = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_ONLY")
+    grac_use_ext_pot = core.get_option("SAPT", "SAPT_DFT_GRAC_USE_EXT_POT")
 
     if (
         not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_A")
@@ -345,6 +346,11 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     )
     if do_ext_potential:
         kwargs["external_potentials"] = {}
+    if grac_use_ext_pot and external_potentials.get("C"):
+        core.print_out(
+            "\n   Warning: SAPT_DFT_GRAC_USE_EXT_POT excludes C from GRAC shifts. "
+            "Place charges belonging in the shift in A/B; the consuming monomer DFT still includes C.\n"
+        )
 
 
     if (
@@ -366,8 +372,17 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
 
     if do_mon_grac_shift_A or do_mon_grac_shift_B:
-        monomerA_mon_only_bf = sapt_dimer.extract_subsets(1)
-        monomerB_mon_only_bf = sapt_dimer.extract_subsets(2)
+        grac_dimer = sapt_dimer
+        if grac_use_ext_pot and getattr(sapt_dimer, "_initial_cartesian", None) is not None:
+            # Embedding coordinates are in the original input frame, just as
+            # in scf_helper. Do not derive a shift in a reoriented QM frame.
+            grac_dimer = sapt_dimer.clone()
+            grac_dimer.set_geometry(sapt_dimer._initial_cartesian)
+            grac_dimer.fix_com(True)
+            grac_dimer.fix_orientation(True)
+            grac_dimer.update_geometry()
+        monomerA_mon_only_bf = grac_dimer.extract_subsets(1)
+        monomerB_mon_only_bf = grac_dimer.extract_subsets(2)
 
     # Print out the title and some information
     core.print_out("\n")
@@ -424,6 +439,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             grac_compute,
             "A",
             results=data,
+            external_potentials=external_potentials.get("A") if grac_use_ext_pot else None,
         )
     if do_mon_grac_shift_B:
         core.print_out("     GRAC (Monomer B)\n")
@@ -432,6 +448,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             grac_compute,
             "B",
             results=data,
+            external_potentials=external_potentials.get("B") if grac_use_ext_pot else None,
         )
 
     core.set_variable("SAPT DFT GRAC SHIFT A", mon_a_shift)  # P::e SAPT
@@ -448,7 +465,10 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             core.print_out(f"         {label} {values[0]:18.8f} {values[1]:18.8f} {values[2]:13.8f} {values[3]:11.8f} {shift:17.8f}\n")
         else:
             core.print_out(f"         {label} {'':63s} {shift:17.8f}\n")
-            core.print_out(f"   Monomer {label} GRAC shift supplied by the user (not computed).\n")
+            if do_dft:
+                core.print_out(f"   Monomer {label} GRAC shift supplied by the user (not computed).\n")
+            else:
+                core.print_out(f"   Monomer {label} GRAC shift not applicable for HF.\n")
     core.print_out("   Monomer A GRAC Shift    %12.6f\n" % mon_a_shift)
     core.print_out("   Monomer B GRAC Shift    %12.6f\n" % mon_b_shift)
     data["SAPT DFT GRAC SHIFT ONLY"] = float(shift_only)  # P::e SAPT
@@ -1017,6 +1037,7 @@ def compute_GRAC_shift(
     label: str,
     jk_obj: core.JK | None = None,
     results: dict | None = None,
+    external_potentials: dict | None = None,
 ) -> float:
     """Compute the GRAC (gradient-regulated asymptotic correction) shift for a monomer.
 
@@ -1035,6 +1056,10 @@ def compute_GRAC_shift(
         Label identifying the monomer (e.g., ``'A'`` or ``'B'``).
     jk_obj : core.JK or None, optional
         Pre-built JK object, by default None.
+    results : dict or None, optional
+        Destination for computed intermediate QCVariables.
+    external_potentials : dict or None, optional
+        Monomer's own normalized potential, applied to both charge states.
 
     Returns
     -------
@@ -1050,12 +1075,15 @@ def compute_GRAC_shift(
         ["SCF", "LEVEL_SHIFT"],
         ["SCF", "LEVEL_SHIFT_CUTOFF"],
         ["SCF", "SCF_INITIAL_ACCELERATOR"],
-        ["ORBITAL_OPTIMIZER_PACKAGE"],
+        ["SCF", "ORBITAL_OPTIMIZER_PACKAGE"],
         ["BASIS"],
     )
 
     monomer_label = label
     label = f"Monomer {label}"
+    scf_kwargs = {}
+    if external_potentials is not None:
+        scf_kwargs["external_potentials"] = construct_external_potential_in_field_C([external_potentials])
     core.timer_on("SAPT(DFT):GRAC Shift " + label)
     try:
         dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
@@ -1099,6 +1127,7 @@ def compute_GRAC_shift(
                     dft_functional.lower(),
                     molecule=mol_given,
                     jk=jk_obj,
+                    **scf_kwargs,
                 )
                 # We don't want to keep re-computing JK objects if we can avoid it
                 if jk_obj is None:
@@ -1114,6 +1143,7 @@ def compute_GRAC_shift(
                     dft_functional.lower(),
                     molecule=mol_cation,
                     jk=jk_obj,
+                    **scf_kwargs,
                 )
             except ConvergenceError:
                 if len(grac_options) == 1:
@@ -1134,6 +1164,8 @@ def compute_GRAC_shift(
             if grac >= 1 or grac <= -1:
                 raise ValueError(
                     f"The computed GRAC shift ({grac} [E_h]) for {label} exceeds the bounds of -1 < x < 1 and should not be used to approximate the ionization potential."
+                    + (" Try disabling SAPT_DFT_GRAC_USE_EXT_POT."
+                       if core.get_option("SAPT", "SAPT_DFT_GRAC_USE_EXT_POT") else "")
                 )
             break
         if grac is None:
@@ -1142,17 +1174,22 @@ def compute_GRAC_shift(
             )
         core.print_out(f" GRAC shift {label}: {grac:.8f}\n")
         core.print_out(f" {E_given = :.8f}, {E_cation = :.8f}, {HOMO = :.8f}\n")
-        intermediates = {
-            f"SAPT DFT GRAC MONOMER ENERGY {monomer_label}": E_given,  # P::e SAPT
-            f"SAPT DFT GRAC IONIZED MONOMER ENERGY {monomer_label}": E_cation,  # P::e SAPT
-            f"SAPT DFT GRAC HOMO {monomer_label}": HOMO,  # P::e SAPT
-            f"SAPT DFT GRAC IP {monomer_label}": E_cation - E_given,  # P::e SAPT
-        }
-        for key, value in intermediates.items():
+        def set_variable(key, value):
             core.set_variable(key, value)
             wfn_given.set_variable(key, value)
-        if results is not None:
-            results.update(intermediates)
+            if results is not None:
+                results[key] = value
+
+        if monomer_label == "A":
+            set_variable("SAPT DFT GRAC MONOMER ENERGY A", E_given)  # P::e SAPT
+            set_variable("SAPT DFT GRAC IONIZED MONOMER ENERGY A", E_cation)  # P::e SAPT
+            set_variable("SAPT DFT GRAC HOMO A", HOMO)  # P::e SAPT
+            set_variable("SAPT DFT GRAC IP A", E_cation - E_given)  # P::e SAPT
+        elif monomer_label == "B":
+            set_variable("SAPT DFT GRAC MONOMER ENERGY B", E_given)  # P::e SAPT
+            set_variable("SAPT DFT GRAC IONIZED MONOMER ENERGY B", E_cation)  # P::e SAPT
+            set_variable("SAPT DFT GRAC HOMO B", HOMO)  # P::e SAPT
+            set_variable("SAPT DFT GRAC IP B", E_cation - E_given)  # P::e SAPT
         return grac
     finally:
         optstash.restore()

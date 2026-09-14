@@ -568,6 +568,18 @@ convergence tier, and external-potential settings match before reusing shifts.
 With GRAC basis ``AUTO``, this includes the orbital basis.
 Psi4 provides no persistent cache or dataset orchestration.
 
+By default the GRAC SCFs use no external potential.
+|sapt__sapt_dft_grac_use_ext_pot| includes only A in monomer A's shift
+and B in monomer B's shift, never C. With nonempty C a warning explains
+that the consuming monomer DFT still sees C+A or C+B.
+Charges needed in a shift may be copied into A/B as well as C.
+All field unions deduplicate exactly equal point/diffuse rows, including
+within a fragment; to specify two equal charges at one site, sum them
+into one row. Matrix operators are always summed, not deduplicated.
+When reusing shifts with this option, the A/B payload must also match.
+Strong embedding fields may yield unphysical IPs; this option does not
+validate the physical appropriateness of including MM charges in ionization.
+
 
 The dispersion term needs to be computed with orbital response for good
 accuracy, and it is recommended to enable |sapt__sapt_dft_do_hybrid| (set to
