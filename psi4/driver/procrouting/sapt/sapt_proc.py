@@ -411,26 +411,6 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     if do_ext_potential:
         kwargs["external_potentials"] = {}
 
-    def construct_external_potential_in_field_C(potentials):
-        """Combine normalized point, diffuse, and matrix potentials."""
-        combined = {}
-        for potential in potentials:
-            if not potential:
-                continue
-            for mode, values in potential.items():
-                if mode == "matrix":
-                    matrix = np.asarray(values)
-                    if mode in combined:
-                        if np.asarray(combined[mode]).shape != matrix.shape:
-                            raise ValidationError(
-                                "SAPT(DFT): external-potential matrices must have identical dimensions before combination."
-                            )
-                        combined[mode] = (np.asarray(combined[mode]) + matrix).tolist()
-                    else:
-                        combined[mode] = matrix.tolist()
-                else:
-                    combined.setdefault(mode, []).extend(values)
-        return combined
 
     if (
         do_dft
@@ -931,6 +911,39 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         dimer_wfn.set_variable(k, v)
 
     return dimer_wfn
+
+
+def construct_external_potential_in_field_C(potentials):
+    """Union exact point/diffuse rows; sum opaque matrix operators.
+
+    Identical rows are redundant, including within one fragment. To place
+    two equal charges at one site, sum their charges into a single row.
+    """
+    combined = {}
+    seen = {}
+    for potential in potentials:
+        if not potential:
+            continue
+        for mode, values in potential.items():
+            if mode == "matrix":
+                matrix = np.asarray(values)
+                if mode in combined:
+                    if np.asarray(combined[mode]).shape != matrix.shape:
+                        raise ValidationError(
+                            "SAPT(DFT): external-potential matrices must have identical dimensions before combination."
+                        )
+                    combined[mode] = (np.asarray(combined[mode]) + matrix).tolist()
+                else:
+                    combined[mode] = matrix.tolist()
+            else:
+                rows = combined.setdefault(mode, [])
+                keys = seen.setdefault(mode, set())
+                for row in values:
+                    key = tuple(row)
+                    if key not in keys:
+                        keys.add(key)
+                        rows.append(row)
+    return combined
 
 
 sapt_dft_grac_convergence_tier_options = {
