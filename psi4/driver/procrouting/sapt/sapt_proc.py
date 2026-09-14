@@ -1008,93 +1008,95 @@ def compute_GRAC_shift(
     )
 
     core.timer_on("SAPT(DFT):GRAC Shift " + label)
-    dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
-    grac_basis = core.get_option("SAPT", "SAPT_DFT_GRAC_BASIS")
-    if grac_basis != "AUTO":
-        core.set_global_option("BASIS", grac_basis)
-
-    core.print_out(
-        f"Computing GRAC shift for {label} using {sapt_dft_grac_convergence_tier}..."
-    )
-    grac_options = sapt_dft_grac_convergence_tier_options[
-        sapt_dft_grac_convergence_tier
-    ]
-    grac = None
-    for options in grac_options:
-        for key, val in options.items():
-            core.set_local_option("SCF", key, val)
-        core.set_local_option("SCF", "ORBITAL_OPTIMIZER_PACKAGE", "INTERNAL")
-        # Need to get the initial and cation to estimate ionization energy for
-        # GRAC shift
-        mol_qcel_dict = molecule.to_schema(dtype=3)
-        del mol_qcel_dict["fragment_charges"]
-        del mol_qcel_dict["fragment_multiplicities"]
-        del mol_qcel_dict["molecular_multiplicity"]
-
-        mol_given = core.Molecule.from_schema(mol_qcel_dict)
-        mol_qcel_dict["molecular_charge"] += 1
-        mol_cation = core.Molecule.from_schema(mol_qcel_dict)
+    try:
+        dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
+        grac_basis = core.get_option("SAPT", "SAPT_DFT_GRAC_BASIS")
+        if grac_basis != "AUTO":
+            core.set_global_option("BASIS", grac_basis)
 
         core.print_out(
-            f"\n\n  ==> GRAC {label} Given Molecule: charge={mol_given.molecular_charge()} mult={mol_given.multiplicity()} <==\n\n"
+            f"Computing GRAC shift for {label} using {sapt_dft_grac_convergence_tier}..."
         )
-        try:
-            if mol_given.multiplicity() != 1:
-                core.set_local_option("SCF", "REFERENCE", "UHF")
-            else:
-                core.set_local_option("SCF", "REFERENCE", "RHF")
-            # Set SAVE_JK=True so we can reuse the JK object for the cation calc
-            core.set_local_option("SCF", "SAVE_JK", True)
-            wfn_given = run_scf(
-                dft_functional.lower(),
-                molecule=mol_given,
-                jk=jk_obj,
-            )
-            # We don't want to keep re-computing JK objects if we can avoid it
-            if jk_obj is None:
-                jk_obj = wfn_given.jk()
-            if mol_cation.multiplicity() != 1:
-                core.set_local_option("SCF", "REFERENCE", "UHF")
-            else:
-                core.set_local_option("SCF", "REFERENCE", "RHF")
-            core.print_out(
-                f"\n\n  ==> GRAC {label} Electron Removed Molecule: charge={mol_cation.molecular_charge()} mult={mol_cation.multiplicity()} <==\n\n"
-            )
-            wfn_cation = run_scf(
-                dft_functional.lower(),
-                molecule=mol_cation,
-                jk=jk_obj,
-            )
-        except ConvergenceError:
-            if len(grac_options) == 1:
-                raise Exception(
-                    "Convergence error in GRAC shift calculation, please try a different convergence tier."
-                )
-            else:
-                core.print_out("Convergence error, trying next GRAC iteration...")
-            continue
-        occ_given = wfn_given.epsilon_a_subset(basis="SO", subset="OCC").to_array(
-            dense=True
-        )
-        HOMO = np.amax(occ_given)
+        grac_options = sapt_dft_grac_convergence_tier_options[
+            sapt_dft_grac_convergence_tier
+        ]
+        grac = None
+        for options in grac_options:
+            for key, val in options.items():
+                core.set_local_option("SCF", key, val)
+            core.set_local_option("SCF", "ORBITAL_OPTIMIZER_PACKAGE", "INTERNAL")
+            # Need to get the initial and cation to estimate ionization energy for
+            # GRAC shift
+            mol_qcel_dict = molecule.to_schema(dtype=3)
+            del mol_qcel_dict["fragment_charges"]
+            del mol_qcel_dict["fragment_multiplicities"]
+            del mol_qcel_dict["molecular_multiplicity"]
 
-        E_given = wfn_given.energy()
-        E_cation = wfn_cation.energy()
-        grac = E_cation - E_given + HOMO
-        if grac >= 1 or grac <= -1:
-            raise ValueError(
-                f"The computed GRAC shift ({grac} [E_h]) for {label} exceeds the bounds of -1 < x < 1 and should not be used to approximate the ionization potential."
+            mol_given = core.Molecule.from_schema(mol_qcel_dict)
+            mol_qcel_dict["molecular_charge"] += 1
+            mol_cation = core.Molecule.from_schema(mol_qcel_dict)
+
+            core.print_out(
+                f"\n\n  ==> GRAC {label} Given Molecule: charge={mol_given.molecular_charge()} mult={mol_given.multiplicity()} <==\n\n"
             )
-        break
-    if grac is None:
-        raise ValueError(
-            "Failed to converge the input monomer or its cation for computing the GRAC shift for Monomer" + label
-        )
-    core.print_out(f" GRAC shift {label}: {grac:.8f}\n")
-    core.print_out(f" {E_given = :.8f}, {E_cation = :.8f}, {HOMO = :.8f}\n")
-    optstash.restore()
-    core.timer_off("SAPT(DFT):GRAC Shift " + label)
-    return grac
+            try:
+                if mol_given.multiplicity() != 1:
+                    core.set_local_option("SCF", "REFERENCE", "UHF")
+                else:
+                    core.set_local_option("SCF", "REFERENCE", "RHF")
+                # Set SAVE_JK=True so we can reuse the JK object for the cation calc
+                core.set_local_option("SCF", "SAVE_JK", True)
+                wfn_given = run_scf(
+                    dft_functional.lower(),
+                    molecule=mol_given,
+                    jk=jk_obj,
+                )
+                # We don't want to keep re-computing JK objects if we can avoid it
+                if jk_obj is None:
+                    jk_obj = wfn_given.jk()
+                if mol_cation.multiplicity() != 1:
+                    core.set_local_option("SCF", "REFERENCE", "UHF")
+                else:
+                    core.set_local_option("SCF", "REFERENCE", "RHF")
+                core.print_out(
+                    f"\n\n  ==> GRAC {label} Electron Removed Molecule: charge={mol_cation.molecular_charge()} mult={mol_cation.multiplicity()} <==\n\n"
+                )
+                wfn_cation = run_scf(
+                    dft_functional.lower(),
+                    molecule=mol_cation,
+                    jk=jk_obj,
+                )
+            except ConvergenceError:
+                if len(grac_options) == 1:
+                    raise Exception(
+                        "Convergence error in GRAC shift calculation, please try a different convergence tier."
+                    )
+                else:
+                    core.print_out("Convergence error, trying next GRAC iteration...")
+                continue
+            occ_given = wfn_given.epsilon_a_subset(basis="SO", subset="OCC").to_array(
+                dense=True
+            )
+            HOMO = np.amax(occ_given)
+
+            E_given = wfn_given.energy()
+            E_cation = wfn_cation.energy()
+            grac = E_cation - E_given + HOMO
+            if grac >= 1 or grac <= -1:
+                raise ValueError(
+                    f"The computed GRAC shift ({grac} [E_h]) for {label} exceeds the bounds of -1 < x < 1 and should not be used to approximate the ionization potential."
+                )
+            break
+        if grac is None:
+            raise ValueError(
+                "Failed to converge the input monomer or its cation for computing the GRAC shift for Monomer" + label
+            )
+        core.print_out(f" GRAC shift {label}: {grac:.8f}\n")
+        core.print_out(f" {E_given = :.8f}, {E_cation = :.8f}, {HOMO = :.8f}\n")
+        return grac
+    finally:
+        optstash.restore()
+        core.timer_off("SAPT(DFT):GRAC Shift " + label)
 
 
 def sapt_dft_header(
