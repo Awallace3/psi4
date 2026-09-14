@@ -329,6 +329,35 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             "(like SAPT(DFT)-D4(I)) or with SAPT_DFT_FUNCTIONAL=HF."
         )
 
+    raw_external_potentials = kwargs.pop("external_potentials", None)
+    do_ext_potential = raw_external_potentials is not None
+    external_potentials = (
+        validate_external_potential(raw_external_potentials)
+        if do_ext_potential
+        else {}
+    )
+    if do_ext_potential:
+        kwargs["external_potentials"] = {}
+
+
+    if (
+        do_dft
+        and (
+            (not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_A"))
+            or (not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_B"))
+        )
+        and grac_compute == "NONE"
+    ):
+        raise ValidationError(
+            'SAPT(DFT): User must set both "SAPT_DFT_GRAC_SHIFT_A" and "_B".  Or, to automatically compute the GRAC shift, set SAPT_DFT_GRAC_COMPUTE to "ITERATIVE" or "SINGLE".'
+        )
+
+    if core.get_option("SCF", "REFERENCE") != "RHF":
+        raise ValidationError(
+            "SAPT(DFT) currently only supports restricted references."
+        )
+
+
     if do_mon_grac_shift_A or do_mon_grac_shift_B:
         monomerA_mon_only_bf = sapt_dimer.extract_subsets(1)
         monomerB_mon_only_bf = sapt_dimer.extract_subsets(2)
@@ -401,34 +430,6 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     core.set_variable("SAPT DFT GRAC SHIFT A", mon_a_shift)  # P::e SAPT
     core.set_variable("SAPT DFT GRAC SHIFT B", mon_b_shift)  # P::e SAPT
     core.print_out("\n")
-    raw_external_potentials = kwargs.pop("external_potentials", None)
-    do_ext_potential = raw_external_potentials is not None
-    external_potentials = (
-        validate_external_potential(raw_external_potentials)
-        if do_ext_potential
-        else {}
-    )
-    if do_ext_potential:
-        kwargs["external_potentials"] = {}
-
-
-    if (
-        do_dft
-        and (
-            (not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_A"))
-            or (not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_B"))
-        )
-        and grac_compute == "NONE"
-    ):
-        raise ValidationError(
-            'SAPT(DFT): User must set both "SAPT_DFT_GRAC_SHIFT_A" and "_B".  Or, to automatically compute the GRAC shift, set SAPT_DFT_GRAC_COMPUTE to "ITERATIVE" or "SINGLE".'
-        )
-
-    if core.get_option("SCF", "REFERENCE") != "RHF":
-        raise ValidationError(
-            "SAPT(DFT) currently only supports restricted references."
-        )
-
     # Save integrals
     # We want to try to re-use itegrals for the dimer and monomer SCF's. If we
     # are using Disk based DF (DISK_DF) then we can use the DF_INTS_IO option.
