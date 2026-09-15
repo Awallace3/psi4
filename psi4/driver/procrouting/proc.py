@@ -1873,6 +1873,13 @@ def scf_helper(name, post_scf=True, **kwargs):
         elif p4util.no.match(str(cast)):
             cast = False
 
+    # Cast-up exists to manufacture a guess; an in-memory one from the caller is
+    # already better than a small-basis SCF, and the two cannot both seed the same
+    # run (see the cast/read conflict below). The caller's guess wins.
+    if cast and guess_wfn is not None:
+        core.print_out("  Ignoring BASIS_GUESS cast-up: orbitals were supplied from a previous computation.\n\n")
+        cast = False
+
     if cast:
 
         # A user can set "BASIS_GUESS" to True and we default to 3-21G
