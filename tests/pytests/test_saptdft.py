@@ -224,6 +224,39 @@ def test_grac_error_restores_options(grac_dimer, monkeypatch):
 
 
 @pytest.mark.saptdft
+def test_grac_seed_ion_controls_cation_guess(grac_dimer, monkeypatch):
+    monomer = grac_dimer.extract_subsets(1)
+    real_run_scf = sapt_proc.run_scf
+    seeded = []
+    def spy(*args, **kwargs):
+        seeded.append("guess_wfn" in kwargs)
+        return real_run_scf(*args, **kwargs)
+    monkeypatch.setattr(sapt_proc, "run_scf", spy)
+
+    # On by default: the neutral starts from SAD, the cation from the neutral.
+    seed_shift = sapt_proc.compute_GRAC_shift(monomer, "SINGLE", "A")
+    assert seeded == [False, True]
+
+    seeded.clear()
+    psi4.set_options({"sapt_dft_grac_seed_ion": False})
+    sad_shift = sapt_proc.compute_GRAC_shift(monomer, "SINGLE", "A")
+    assert seeded == [False, False]
+
+    # The water cation has one SCF solution here, so the guess must not move the
+    # shift. Larger delocalized cations are where the two can disagree.
+    assert seed_shift == pytest.approx(sad_shift, abs=1e-6, rel=0)
+
+
+@pytest.mark.saptdft
+def test_grac_seed_ion_overrides_cast_up(grac_dimer):
+    # BASIS_GUESS cast-up and an orbital guess both seed the same SCF, which
+    # scf_helper rejects outright; the supplied orbitals must win instead.
+    psi4.set_options({"basis_guess": "3-21g"})
+    shift = sapt_proc.compute_GRAC_shift(grac_dimer.extract_subsets(1), "SINGLE", "A")
+    assert -1 < shift < 1
+
+
+@pytest.mark.saptdft
 def test_grac_only_schema_wfn_variables(grac_dimer):
     result = psi4.schema_wrapper.run_qcschema({
         "schema_name": "qcschema_input",
