@@ -294,7 +294,15 @@ def test_lw_disconnected_components_accept_zero_and_reject_inconsistent_flow():
         _lw_localize(positions, inconsistent, [(0, 1)])
 
 
-def test_lw_historical_omission_threshold_boundaries_and_diagnostics():
+def test_lw_component_pair_skip_stays_absolute_at_its_boundary():
+    """The *pair* skip is still the absolute ``kElementTransferThreshold``.
+
+    A component pair whose largest off-site candidate is below the constant is
+    skipped whole and reported in ``omitted_component_pairs``; that test is
+    deliberately left absolute, because a pair with nothing in it to move has
+    no scale of its own to be relative to.  Only the per-transfer cut inside a
+    live pair is scale-relative.
+    """
     def localize_with_amplitude(amplitude):
         values = [_working_l3_matrix() for _ in range(4)]
         values[1][1][1] = amplitude
@@ -303,15 +311,89 @@ def test_lw_historical_omission_threshold_boundaries_and_diagnostics():
 
     candidate_below = localize_with_amplitude(math.nextafter(1.0e-7, 0.0))
     candidate_equal = localize_with_amplitude(1.0e-7)
-    transfer_equal = localize_with_amplitude(4.0e-7)
-    transfer_above = localize_with_amplitude(4.1e-7)
+    unit = localize_with_amplitude(1.0)
     assert (1, 1) in map(tuple, candidate_below.omitted_component_pairs)
     assert (1, 1) not in map(tuple, candidate_equal.omitted_component_pairs)
-    assert candidate_equal.omitted_transfer_count > candidate_below.omitted_transfer_count
-    assert not any(transfer[2:4] == (1, 1) for transfer in _transfer_values(candidate_equal.transfers))
-    assert not any(transfer[2:4] == (1, 1) for transfer in _transfer_values(transfer_equal.transfers))
-    assert any(transfer[2:4] == (1, 1) for transfer in _transfer_values(transfer_above.transfers))
-    assert transfer_above.refined_pairs[1].get(1, 1) == pytest.approx(0.0, abs=1.0e-12)
+    assert not _transfer_values(candidate_below.transfers)
+    # The absolute pair skip is what makes the live-pair count amplitude
+    # dependent: the translated pairs cross the constant one after another.
+    assert (len(candidate_below.omitted_component_pairs)
+            > len(candidate_equal.omitted_component_pairs)
+            > len(unit.omitted_component_pairs))
+
+    # Inside the live pair the cut is relative, so the boundary amplitude's own
+    # transfers -- 2.5e-8, a quarter of the absolute constant -- are carried out
+    # rather than dropped, and the off-site entry they exist to remove goes to
+    # zero instead of being left at its full 1e-7.
+    boundary = [t for t in _transfer_values(candidate_equal.transfers) if t[2:4] == (1, 1)]
+    assert len(boundary) == 2
+    assert all(abs(t[5]) == pytest.approx(2.5e-8, rel=1.0e-12) for t in boundary)
+    assert all(abs(t[5]) < 1.0e-7 for t in boundary)
+    assert candidate_equal.omitted_transfer_count == 0
+    assert candidate_equal.refined_pairs[1].get(1, 1) == pytest.approx(0.0, abs=1.0e-20)
+    assert candidate_below.refined_pairs[1].get(1, 1) == pytest.approx(1.0e-7, rel=1.0e-12)
+
+
+def test_lw_relative_transfer_cut_is_invariant_under_a_uniform_input_scale():
+    """The per-transfer cut is ``min(threshold, threshold * largest_candidate)``.
+
+    Written absolutely, the cut decided which transfers to drop by comparing
+    them against a fixed constant, so shrinking the whole input eventually put
+    *every* transfer below it and the per-bond identity
+    ``sum_over_fixed_sites amount = 0`` -- the invariant behind
+    ``charge_sum_transport`` -- broke.  Taken relative to the pair's own largest
+    off-site candidate, the decision depends on the input's shape and not its
+    magnitude: the same transfers are dropped at every scale, and the retained
+    ones keep the postcondition even when they are individually smaller than
+    the absolute constant.
+
+    The chain below supplies that shape.  Bond 0-1 carries a charge flow
+    ``g``, bond 1-2 carries ``t = 1e-9 * g``, so the 1-2 transfers sit nine
+    decades under the pair's scale and are dropped at every magnitude, while
+    the 0-1 transfers are kept at every magnitude.
+    """
+    positions = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.1, 0.3, -0.2]]
+
+    def localize_at_scale(scale, g=1.0, t=1.0e-9):
+        flow = [[-g, g, 0.0], [g, -(g + t), t], [0.0, t, -t]]
+        values = [_working_l3_matrix() for _ in range(9)]
+        for first in range(3):
+            for second in range(3):
+                values[3 * first + second][0][0] = scale * flow[first][second]
+        return _lw_localize(positions, values, [(0, 1), (1, 2)], 1.0e-3)
+
+    def shape(result):
+        return sorted(transfer[:5] for transfer in _transfer_values(result.transfers))
+
+    scales = (1.0, 1.0e-2, 1.0e-4, 1.0e-5)
+    results = [localize_at_scale(scale) for scale in scales]
+    reference = shape(results[0])
+    assert results[0].omitted_transfer_count == 56
+    assert len(reference) == 28
+    for scale, result in zip(scales, results):
+        assert shape(result) == reference, scale
+        assert result.omitted_transfer_count == results[0].omitted_transfer_count
+        assert len(result.omitted_component_pairs) == len(results[0].omitted_component_pairs)
+        # the identity the absolute cut broke
+        assert result.residuals.charge_sum_transport == pytest.approx(0.0, abs=1.0e-15)
+        assert max(_residual_values(result.residuals)) < 1.0e-8
+        # amplitudes track the input scale exactly
+        amplitudes = [abs(transfer[5]) for transfer in _transfer_values(result.transfers)]
+        assert max(amplitudes) == pytest.approx(0.25 * scale, rel=1.0e-12)
+        assert min(amplitudes) == pytest.approx(5.859375e-03 * scale, rel=1.0e-12)
+
+    # At the smallest scale the retained transfers are themselves below the
+    # absolute constant the source still names: an absolute cut would have
+    # dropped every one of them, which is exactly how the benzene NL4 series'
+    # highest Casimir node lost 18 of its 144 charge-charge transfers.
+    smallest = [abs(transfer[5]) for transfer in _transfer_values(results[-1].transfers)]
+    assert min(smallest) < 1.0e-7
+    assert min(smallest) == pytest.approx(5.859375e-08, rel=1.0e-12)
+
+    # `std::min` keeps the relative cut from ever being looser: at unit scale
+    # the two coincide, so nothing the absolute cut retained is now dropped.
+    unit = localize_at_scale(1.0)
+    assert shape(unit) == reference
 
 
 def test_lw_finite_inputs_that_overflow_derived_math_fail_closed():
@@ -517,8 +599,13 @@ def test_lw_source_is_pod_only_and_resource_bounded():
     assert source.count("isa_multipole_translation(static_cast<int>(kIsaLwMaxRank), displacement)") == 1
     assert "translation_matrix(position)" in source  # molecular origin shifts use the same seam
     assert "kElementTransferThreshold = 1.0e-7" in source
+    # the component-pair skip is absolute; the per-transfer cut is relative to
+    # the pair's own scale, and `std::min` keeps it from ever being looser
     assert "largest_candidate < kElementTransferThreshold" in source
-    assert "std::abs(amount) <= kElementTransferThreshold" in source
+    assert ("std::min(kElementTransferThreshold, kElementTransferThreshold * largest_candidate)"
+            in source)
+    assert "std::abs(amount) <= transfer_threshold" in source
+    assert "std::abs(amount) <= kElementTransferThreshold" not in source
     assert "kIsaLwGraphMaxSites = 256" in header
     assert "kIsaLwMaxRank = 4" in header
     assert "kIsaLwMaxTransfers = 1000000" in header

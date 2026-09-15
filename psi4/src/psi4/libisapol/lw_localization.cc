@@ -496,6 +496,28 @@ IsaLocalizedResponse isa_localize_lw(const IsaSitePairResponse& response, const 
                 result.omitted_component_pairs.push_back({first_component, second_component});
                 continue;
             }
+            // The per-bond identity  sum_over_fixed_sites amount(edge, fixed) = 0  is
+            // what makes the charge-sum an invariant of the transfer step (see
+            // `charge_sum_transport` below): for the (0, 0) component pair the two
+            // updates of a single transfer land on the same summed slot at two
+            // DIFFERENT first-slot sites, so they cancel in the sum only through that
+            // identity, amplified by the charge->rank-l translation coefficient.
+            // Dropping individual transfers therefore breaks the invariant, and an
+            // ABSOLUTE drop threshold breaks it hardest where the response itself is
+            // small: measured on CamCASP's benzene NL4 series, the highest Casimir
+            // node (omega = 37.8 au, largest charge-charge candidate 1.77e-05) lost 18
+            // of 144 charge-charge transfers of magnitude 3.3e-07 .. 4.4e-06 and its
+            // per-bond sum came out at -2.34e-07 instead of zero, which the rank-2,
+            // rank-3 and rank-4 translation coefficients turned into transport
+            // residuals of 8.6e-07, 1.62e-06 and 3.12e-06 against a 1e-06
+            // postcondition.  The cut is therefore taken relative to the pair's own
+            // scale, and `std::min` keeps it from ever being LOOSER than the absolute
+            // cut it replaces: every transfer the absolute threshold retained is still
+            // retained, and small-scale pairs retain more.  Numbers move, so this is a
+            // different declared localization from the absolute-cut one.
+            const double transfer_threshold =
+                std::min(kElementTransferThreshold, kElementTransferThreshold * largest_candidate);
+            require_finite(transfer_threshold, "relative transfer threshold");
             std::vector<PendingTransfer> pending;
             const double symmetry_factor = first_component == second_component ? 0.5 : 1.0;
             for (std::size_t fixed_site = 0; fixed_site < count; ++fixed_site) {
@@ -556,7 +578,7 @@ IsaLocalizedResponse isa_localize_lw(const IsaSitePairResponse& response, const 
                     const auto& bond = graph.bonds[edge];
                     const double amount = 0.5 * (potential[bond[1]] - potential[bond[0]]);
                     require_finite(amount, "bond transfer amount");
-                    if (std::abs(amount) <= kElementTransferThreshold) {
+                    if (std::abs(amount) <= transfer_threshold) {
                         ++result.omitted_transfer_count;
                     } else {
                         if (result.transfers.size() + pending.size() >= kIsaLwMaxTransfers)

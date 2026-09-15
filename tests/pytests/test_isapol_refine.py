@@ -412,6 +412,114 @@ def test_isotropic_scalars_requires_a_refinement_result():
             R.isotropic_scalars(bad)
 
 
+# ------------------------------------------------------- declared variable list
+
+def test_declared_variables_replay_the_cutoff_list_exactly():
+    """A ``.pdef`` that names exactly what the cutoff would have kept.
+
+    ``declared_variables`` is how a supplied ``.pdef`` variable list enters the
+    model instead of being derived from ``cutoff``.  Handed the cutoff's own
+    list back, it must reproduce the cutoff-derived model term for term --
+    labels, entries, anchors and strengths -- so that the only thing the option
+    can change is which variables exist, never what a variable means.
+    """
+    built = case('rank4')
+    derived = built['model']
+    replayed = R.refinement_model(derived.sites, built['anchors'], cutoff=1.0e-4,
+                                  weight_type=3, weight_coefficient=1.0e-3,
+                                  provenance='declared replay of the cutoff list',
+                                  declared_variables=derived.parameter_labels)
+    assert replayed.parameter_labels == derived.parameter_labels
+    assert replayed.parameter_entries == derived.parameter_entries
+    assert replayed.anchors == derived.anchors
+    assert replayed.strengths == derived.strengths
+    assert replayed.nonsymmetric_parameter_count == derived.nonsymmetric_parameter_count
+    # Every declared variable cleared the cutoff, so none is unpenalized, and
+    # the declared list is what records that this model was declared at all --
+    # the anchor hash cannot, because the supplied tensors are the same ones.
+    assert replayed.unpenalized_variables == ()
+    assert replayed.declared_variables == tuple(derived.parameter_labels)
+    assert derived.declared_variables == ()
+    assert replayed.anchor_sha256 == derived.anchor_sha256
+
+
+def test_declared_variables_add_free_parameters_the_cutoff_dropped():
+    """The extra variables of a ``.pdef`` with no ``Penalties`` line for them.
+
+    ``output_2``'s benzene ``.pdef`` names more variables than its ``Penalties``
+    block anchors; the surplus ones are free parameters.  This is the state
+    ``declared_variables`` has to be able to express: anchor 0.0, strength 0.0,
+    listed in ``unpenalized_variables``, and placed in component-scan order
+    rather than in the order they were declared.  The cutoff is unchanged and
+    still recorded -- it is what decides which variables are *anchored* -- so
+    this is a different declared model, not a loosened cutoff.
+    """
+    built = case('rank4')
+    derived = built['model']
+    dropped = tuple(f'O_{R.COMPONENT_NAMES[i]}_{R.COMPONENT_NAMES[j]}_A'
+                    for i in range(25) for j in range(i, 25)
+                    if f'O_{R.COMPONENT_NAMES[i]}_{R.COMPONENT_NAMES[j]}_A'
+                    not in derived.parameter_labels)
+    assert len(dropped) > 3
+    # declared last, so the component-scan ordering below is a real assertion
+    extra = dropped[:3]
+    wide = R.refinement_model(derived.sites, built['anchors'], cutoff=1.0e-4,
+                              weight_type=3, weight_coefficient=1.0e-3,
+                              provenance='declared list with free parameters',
+                              declared_variables=tuple(derived.parameter_labels) + extra)
+    assert wide.parameter_count == derived.parameter_count + 3
+    assert wide.unpenalized_variables == extra
+    assert wide.cutoff == derived.cutoff
+    assert wide.weight_coefficient == derived.weight_coefficient
+    positions = [wide.parameter_labels.index(name) for name in extra]
+    assert positions == sorted(positions)
+    assert max(positions) < wide.parameter_labels.index(derived.parameter_labels[-1])
+    for index in positions:
+        assert wide.anchors[index] == 0.0
+        assert wide.strengths[index] == 0.0
+    # Unpenalized means unpenalized: the surplus parameters answer to the data
+    # term alone, so they move off zero and the data residual falls.
+    solved = R.refine(wide, built['points'], built['targets'], damping=built['damping'],
+                      target_origin=core.IsaPfitTargetOrigin.SyntheticAnalyticTest,
+                      source_id='test_isapol_refine',
+                      generation_record='declared variable list with free parameters')
+    assert solved.status == core.IsaPfitStatus.Solved
+    assert all(solved.parameters[index] != 0.0 for index in positions)
+    assert solved.diagnostics.data_sse < solve(built).diagnostics.data_sse
+
+
+def test_declared_variables_refuse_to_omit_a_penalized_variable():
+    """A declared list short of a variable the cutoff keeps would leave that
+    anchor unfitted while the model still advertised the ``Penalties`` block as
+    covering the fit, so it is refused and the missing names are reported."""
+    built = case('rank4')
+    derived = built['model']
+    with pytest.raises(ValueError, match='declared_variables omits'):
+        R.refinement_model(derived.sites, built['anchors'], cutoff=1.0e-4,
+                           provenance='short declared list',
+                           declared_variables=derived.parameter_labels[1:])
+
+
+@pytest.mark.parametrize('declared,pattern', [
+    ((), 'at least one'),
+    (('O_00_00_A', 'O_00_00_A'), 'must not repeat'),
+    (('O_00_00',), 'is not a <site>'),
+    (('X_00_00_A',), 'names no single reference site'),
+    # H2 is an equivalent site; the COPY declaration means it carries no
+    # variables of its own, so naming it is a refusal, not a synonym for H1.
+    (('H2_00_00_A',), 'names no single reference site'),
+    (('O_00_zz_A',), 'does not name two multipole components'),
+    (('O_11c_10_A',), 'is below the diagonal'),
+    (('H1_00_20_A',), "outside site H1's rank limit"),
+])
+def test_declared_variables_reject_malformed_names(declared, pattern):
+    built = case('l2h1')
+    with pytest.raises(ValueError, match=pattern):
+        R.refinement_model(built['model'].sites, built['anchors'], cutoff=1.0e-4,
+                           provenance='malformed declared list',
+                           declared_variables=declared)
+
+
 # ---------------------------------------------------------------- input guards
 
 def test_refine_requires_declared_provenance():

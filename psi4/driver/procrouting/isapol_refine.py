@@ -209,6 +209,16 @@ class RefinementModel:
     refused.  A refinement whose penalty pins the parameters to the anchors
     cannot then reproduce the equivalent sites' anchors, and misses them by up
     to this much.
+
+    ``declared_variables`` is empty when the variable list was derived from the
+    cutoff, and is the caller's own ``.pdef`` variable list when one was
+    supplied.  ``unpenalized_variables`` names the declared variables the
+    cutoff screens out, which are free parameters carrying anchor 0 and
+    strength 0 -- CamCASP's own split, where ``.pdef`` sets the variable list
+    and the ``Penalties`` block ``process`` writes covers only the above-cutoff
+    subset.  A model with a nonempty ``declared_variables`` is a DIFFERENT
+    DECLARED MODEL from the cutoff-derived one, even where the two share every
+    penalized variable.
     """
     sites: tuple
     site_types: tuple
@@ -229,6 +239,8 @@ class RefinementModel:
     anchor_sha256: str
     copy_anchor_discrepancy: float
     provenance: str
+    declared_variables: tuple = ()
+    unpenalized_variables: tuple = ()
 
     @property
     def parameter_count(self):
@@ -274,8 +286,54 @@ def _anchor_hash(tensors):
     return digest.hexdigest()
 
 
+def _validated_declared_variables(declared, sites, ordered_types, first):
+    """Resolve a ``.pdef`` variable list to ``{(site_type, row, col): label}``.
+
+    Each label is ``<reference site>_<component>_<component>_A``, the name
+    CamCASP's ``.pdef`` and ``pfit`` both print, and names a component of that
+    type's reference site with ``row <= col``.  A label for a non-reference
+    site is refused: the ``COPY`` declaration means the equivalent sites do not
+    carry variables of their own.
+    """
+    if declared is None:
+        return None
+    declared = tuple(declared)
+    if not declared:
+        raise ValueError('declared_variables must name at least one variable')
+    if len(set(declared)) != len(declared):
+        raise ValueError('declared_variables must not repeat a variable')
+    reference_labels = {sites[first[t]].label: t for t in ordered_types}
+    index_of = {name: i for i, name in enumerate(COMPONENT_NAMES)}
+    resolved = {}
+    for label in declared:
+        if not isinstance(label, str) or not label.endswith('_A'):
+            raise ValueError(f'declared variable {label!r} is not a <site>_<i>_<j>_A name')
+        owners = [(name, t) for name, t in reference_labels.items()
+                  if label.startswith(name + '_')]
+        if len(owners) != 1:
+            raise ValueError(f'declared variable {label!r} names no single reference '
+                             f'site; the reference sites are '
+                             f'{sorted(reference_labels)}')
+        name, site_type = owners[0]
+        parts = label[len(name) + 1:-2].split('_')
+        if len(parts) != 2 or any(q not in index_of for q in parts):
+            raise ValueError(f'declared variable {label!r} does not name two '
+                             'multipole components')
+        row, col = index_of[parts[0]], index_of[parts[1]]
+        if row > col:
+            raise ValueError(f'declared variable {label!r} is below the diagonal; '
+                             'CamCASP names the upper triangle')
+        site = sites[first[site_type]]
+        if site.rank_limit == 0 or col >= site.component_count:
+            raise ValueError(f'declared variable {label!r} is outside site {name}\'s '
+                             f'rank limit {site.rank_limit}')
+        resolved[(site_type, row, col)] = label
+    return resolved
+
+
 def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
-                     weight_type=3, weight_coefficient=1e-3, provenance=''):
+                     weight_type=3, weight_coefficient=1e-3, provenance='',
+                     declared_variables=None):
     """Build the variable list CamCASP's ``.pdef`` plus ``Penalties`` block encodes.
 
     ``anchor_tensors[s]`` is site ``s``'s raw local polarizability at
@@ -287,6 +345,16 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
     rescue a component the reference site screens out.  Type order, and hence
     parameter order, is first appearance in ``sites``
     (``list_unique_types_mol``, molecule_operations_cluster.F90:964-983).
+
+    ``declared_variables`` supplies the variable list explicitly, as a
+    ``.pdef`` does, instead of deriving it from the cutoff.  It must name every
+    variable the cutoff would have produced -- a declared list that omits a
+    penalized variable would misrepresent the ``Penalties`` block as covering
+    the fit -- and may name more; the extra ones are free parameters with
+    anchor 0.0 and strength 0.0, exactly the state a ``.pdef`` variable with no
+    ``Penalties`` line is in.  Supplying it is a different declared model, not
+    a relaxation of the cutoff: the cutoff still decides which variables are
+    anchored and penalized, and is recorded unchanged on the model.
     """
     sites = _validated_sites(sites)
     tensors = _validated_anchor_tensors(sites, anchor_tensors)
@@ -309,9 +377,11 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
             first[site.site_type] = index
             ordered_types.append(site.site_type)
     members = {t: tuple(i for i, s in enumerate(sites) if s.site_type == t) for t in ordered_types}
+    declared = _validated_declared_variables(declared_variables, sites, ordered_types, first)
 
     parameter_labels, parameter_entries, anchors, strengths = [], [], [], []
     nonsymmetric, copy_discrepancy = 0, 0.0
+    unpenalized, missing = [], []
     for site_type in ordered_types:
         reference = first[site_type]
         site = sites[reference]
@@ -323,20 +393,38 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
             for col in range(row, site.component_count):
                 rank2 = component_rank(col)
                 alpha = float(tensor[row, col])
-                if not abs(alpha) > cutoff:
+                penalized = abs(alpha) > cutoff
+                label = (f'{site.label}_{COMPONENT_NAMES[row]}'
+                         f'_{COMPONENT_NAMES[col]}_A')
+                if declared is not None and (site_type, row, col) not in declared:
+                    # A variable the cutoff keeps but the declared list omits
+                    # would leave a penalized anchor out of the fit entirely.
+                    if penalized:
+                        missing.append(label)
                     continue
-                parameter_labels.append(f'{site.label}_{COMPONENT_NAMES[row]}'
-                                        f'_{COMPONENT_NAMES[col]}_A')
+                if declared is None and not penalized:
+                    continue
+                parameter_labels.append(label)
                 parameter_entries.append(tuple((s, row, col) for s in members[site_type]))
-                anchors.append(alpha)
+                anchors.append(alpha if penalized else 0.0)
                 strengths.append(penalty_weight(weight_type=weight_type,
                                                 weight_coefficient=weight_coefficient,
                                                 alpha=alpha, frequency=frequency_au,
-                                                rank1=rank1, rank2=rank2))
+                                                rank1=rank1, rank2=rank2)
+                                 if penalized else 0.0)
                 nonsymmetric += len(members[site_type])
-                for other in members[site_type]:
-                    copy_discrepancy = max(copy_discrepancy,
-                                           abs(float(tensors[other][row, col]) - alpha))
+                if penalized:
+                    for other in members[site_type]:
+                        copy_discrepancy = max(copy_discrepancy,
+                                               abs(float(tensors[other][row, col]) - alpha))
+                else:
+                    unpenalized.append(label)
+    if missing:
+        raise ValueError('declared_variables omits variables the cutoff keeps, whose '
+                         f'anchors would then go unfitted: {missing}')
+    if declared is not None and len(parameter_labels) != len(declared):
+        raise ValueError('declared_variables names a variable the component scan does '
+                         'not reach')
     if not parameter_labels:
         raise ValueError('no component of any reference site survives the cutoff')
     if len(parameter_labels) > MAX_PARAMETERS:
@@ -355,7 +443,9 @@ def refinement_model(sites, anchor_tensors, *, frequency_au=0.0, cutoff=1e-4,
         anchor_sha256=_anchor_hash(tensors),
         copy_anchor_discrepancy=float(copy_discrepancy),
         provenance=provenance or 'caller-supplied raw local polarizabilities; '
-                                 'CamCASP write_pfit_local_symm variable construction')
+                                 'CamCASP write_pfit_local_symm variable construction',
+        declared_variables=() if declared is None else tuple(declared_variables),
+        unpenalized_variables=tuple(unpenalized))
 
 
 def _validated_points(points_bohr):

@@ -11,11 +11,24 @@
 
 namespace psi { namespace isapol {
 namespace {
-void require(bool ok, const std::string& what) {
-    if (!ok) throw std::invalid_argument("PFIT: " + what);
+[[noreturn]] void fail(const std::string& what) {
+    throw std::invalid_argument("PFIT: " + what);
 }
-double finite(double x) {
-    require(std::isfinite(x), "nonfinite input or numerical intermediate (overflow)");
+// The checks below are on the hot path of `data_rows`, which evaluates
+// `finite` three times per (parameter, channel, channel) triple.  The message
+// must therefore not be materialised unless it is actually thrown: taking a
+// `const std::string&` here made every *passing* check heap-allocate, which
+// dominated the assembly of a several-hundred-point fit.  Nothing about the
+// policy changes -- every value is still checked, with the same message, and
+// the arithmetic and its summation order are untouched.
+inline void require(bool ok, const char* what) {
+    if (!ok) fail(what);
+}
+inline void require(bool ok, const std::string& what) {
+    if (!ok) fail(what);
+}
+inline double finite(double x) {
+    if (!std::isfinite(x)) fail("nonfinite input or numerical intermediate (overflow)");
     return x;
 }
 size_t add(size_t a, size_t b) {
