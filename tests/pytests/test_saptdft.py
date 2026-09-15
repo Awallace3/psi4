@@ -127,12 +127,33 @@ def test_grac_field_union(mode, row):
     distinct = row.copy()
     distinct[-1] = np.nextafter(distinct[-1], np.inf)
     combine = sapt_proc.construct_external_potential_in_field_C
+    # Rows are never dropped: two equal rows are two equal charges, and the
+    # dimer field has to stay the sum of the monomer fields.
     assert combine([{mode: [row, row]}, {mode: [row.copy(), distinct]}]) == {
-        mode: [row, distinct]}
+        mode: [row, row, row, distinct]}
     assert combine([{"matrix": [[1., 2.], [2., 3.]]}] * 2) == {
         "matrix": [[2., 4.], [4., 6.]]}
     with pytest.raises(psi4.ValidationError, match="identical dimensions"):
         combine([{"matrix": [[1.]]}, {"matrix": np.eye(2)}])
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize("mode,row", [
+    ("points", [0.1, 1.0, 2.0, 3.0]),
+    ("diffuse", [0.1, 1.0, 2.0, 3.0, 0.5]),
+])
+def test_drop_rows_carried_by(mode, row):
+    distinct = row.copy()
+    distinct[-1] = np.nextafter(distinct[-1], np.inf)
+    drop = sapt_proc.drop_rows_carried_by
+    # A copy of a C row is trimmed from A; a near-miss is a different charge.
+    assert drop({mode: [row.copy(), distinct]}, {mode: [row]}) == {mode: [distinct]}
+    assert drop({mode: [distinct]}, {mode: [row]}) == {mode: [distinct]}
+    # No reference field means nothing to trim against.
+    assert drop({mode: [row]}, None) == {mode: [row]}
+    assert drop(None, {mode: [row]}) is None
+    # Matrix operators are opaque and pass through.
+    assert drop({"matrix": [[1.]]}, {"matrix": [[1.]]}) == {"matrix": [[1.]]}
 
 
 @pytest.mark.saptdft
@@ -150,15 +171,38 @@ def test_grac_only_external_potential(grac_dimer):
                embedded.variable("SAPT DFT GRAC SHIFT A")) > 1e-8
     assert vacuum.variable("SAPT DFT GRAC SHIFT B") == pytest.approx(
         embedded.variable("SAPT DFT GRAC SHIFT B"), abs=1e-10, rel=0)
-    # Duplicate A rows have the same meaning as a single row, and C must
-    # never enter either monomer's ionization calculation.
-    repeated = {"A": {"points": potential["A"]["points"] * 2},
-                "C": {"points": [[-0.2, 0., -4., 0.]]}}
+    # C must never enter either monomer's ionization calculation, including
+    # when the same charge is copied into A so that it does reach the shift.
+    copied = {"A": potential["A"],
+              "C": {"points": potential["A"]["points"] + [[-0.2, 0., -4., 0.]]}}
     _, with_c = psi4.energy("sapt(dft)", molecule=grac_dimer,
-                           external_potentials=repeated, return_wfn=True)
+                           external_potentials=copied, return_wfn=True)
     for label in ("A", "B"):
         key = f"SAPT DFT GRAC SHIFT {label}"
         assert with_c.variable(key) == pytest.approx(embedded.variable(key), abs=1e-10, rel=0)
+    # Two equal rows are two charges, so doubling A really does move the shift.
+    psi4.core.clean_variables()
+    doubled = {"A": {"points": potential["A"]["points"] * 2}}
+    _, twice = psi4.energy("sapt(dft)", molecule=grac_dimer,
+                          external_potentials=doubled, return_wfn=True)
+    assert abs(twice.variable("SAPT DFT GRAC SHIFT A") -
+               embedded.variable("SAPT DFT GRAC SHIFT A")) > 1e-8
+
+
+@pytest.mark.saptdft
+@pytest.mark.extern
+def test_dimer_field_is_sum_of_monomer_fields(grac_dimer):
+    # The dimer field must carry every monomer charge, including one written
+    # into both A and B, or the embedding fails to cancel in the decomposition.
+    shared = [0.1, 0., 4., 0.]
+    potential = {"A": {"points": [shared, [0.2, 1., 4., 0.]]},
+                 "B": {"points": [shared, [-0.2, -1., 4., 0.]]}}
+    psi4.set_options({"sapt_dft_grac_shift_a": 0.1, "sapt_dft_grac_shift_b": 0.1,
+                      "sapt_dft_do_disp": False})
+    _, dimer_wfn = psi4.energy("sapt(dft)", molecule=grac_dimer,
+                              external_potentials=potential, return_wfn=True)
+    charges = dimer_wfn.potential_variable("C").getCharges()
+    assert len(charges) == 4
 
 
 @pytest.mark.saptdft

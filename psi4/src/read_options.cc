@@ -1187,9 +1187,10 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     options.add_bool("SAPT_DFT_GRAC_SHIFT_ONLY", false);
     /*- Include only each monomer's own A/B external potential in its GRAC
     SCFs; C is always excluded. Charges needed in both the shift and the
-    environment may be repeated in A/B and C: identical point/diffuse rows
-    are deduplicated in field unions (sum colocated charges into one row).
-    Matrix operators are instead summed without deduplication. -*/
+    environment may be repeated in A/B and C: a point/diffuse row exactly
+    equal to a C row is trimmed from A/B before that monomer's SCF, so it is
+    not counted twice. Rows shared between A and B are never trimmed, since
+    the dimer field must stay the sum of the monomer fields. -*/
     options.add_bool("SAPT_DFT_GRAC_USE_EXT_POT", false);
         /*- To ensure that the GRAC shift is computed with a sufficiently large
           basis set, the user can specify a larger basis set for the GRAC

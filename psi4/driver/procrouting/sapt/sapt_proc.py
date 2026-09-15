@@ -504,6 +504,11 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         ext_pot_C = [np.array(x) for x in ext_pot_C]
     ext_pot_A = external_potentials.get("A")
     ext_pot_B = external_potentials.get("B")
+    # A charge may be copied into A/B to reach a GRAC shift while it also sits
+    # in C. Trim those copies once, here, so every union below stays additive
+    # and the dimer field remains the sum of the two monomer fields.
+    ext_pot_A_not_in_C = drop_rows_carried_by(ext_pot_A, ext_pot_C)
+    ext_pot_B_not_in_C = drop_rows_carried_by(ext_pot_B, ext_pot_C)
     if run_hf_segment:
         core.set_global_option("DF_INTS_IO", "SAVE")
         core.timer_on("SAPT(DFT):Dimer SCF")
@@ -513,7 +518,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         if do_ext_potential:
             kwargs["external_potentials"]["C"] = (
                 construct_external_potential_in_field_C(
-                    [ext_pot_C, ext_pot_A, ext_pot_B]
+                    [ext_pot_C, ext_pot_A_not_in_C, ext_pot_B_not_in_C]
                 )
             )
         hf_wfn_dimer = scf_helper(
@@ -530,7 +535,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         if do_ext_potential and (ext_pot_A is not None or ext_pot_C is not None):
             kwargs["external_potentials"] = {}
             kwargs["external_potentials"]["C"] = (
-                construct_external_potential_in_field_C([ext_pot_C, ext_pot_A])
+                construct_external_potential_in_field_C([ext_pot_C, ext_pot_A_not_in_C])
             )
         hf_wfn_A = scf_helper(
             "SCF",
@@ -550,7 +555,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         if do_ext_potential and (ext_pot_B is not None or ext_pot_C is not None):
             kwargs["external_potentials"] = {}
             kwargs["external_potentials"]["C"] = (
-                construct_external_potential_in_field_C([ext_pot_C, ext_pot_B])
+                construct_external_potential_in_field_C([ext_pot_C, ext_pot_B_not_in_C])
             )
         hf_wfn_B = scf_helper(
             "SCF",
@@ -737,7 +742,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         if do_ext_potential and (ext_pot_A is not None or ext_pot_C is not None):
             kwargs["external_potentials"] = {}
             kwargs["external_potentials"]["C"] = (
-                construct_external_potential_in_field_C([ext_pot_C, ext_pot_A])
+                construct_external_potential_in_field_C([ext_pot_C, ext_pot_A_not_in_C])
             )
         elif do_ext_potential:
             kwargs["external_potentials"] = {}
@@ -766,7 +771,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         if do_ext_potential and (ext_pot_B is not None or ext_pot_C is not None):
             kwargs["external_potentials"] = {}
             kwargs["external_potentials"]["C"] = (
-                construct_external_potential_in_field_C([ext_pot_C, ext_pot_B])
+                construct_external_potential_in_field_C([ext_pot_C, ext_pot_B_not_in_C])
             )
         wfn_B = scf_helper(
             sapt_dft_functional,
@@ -834,13 +839,15 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         monomer_b_dft_kwargs = {}
         if do_ext_potential:
             dimer_dft_kwargs["external_potentials"] = {
-                "C": construct_external_potential_in_field_C([ext_pot_C, ext_pot_A, ext_pot_B])
+                "C": construct_external_potential_in_field_C(
+                    [ext_pot_C, ext_pot_A_not_in_C, ext_pot_B_not_in_C]
+                )
             }
             monomer_a_dft_kwargs["external_potentials"] = {
-                "C": construct_external_potential_in_field_C([ext_pot_C, ext_pot_A])
+                "C": construct_external_potential_in_field_C([ext_pot_C, ext_pot_A_not_in_C])
             }
             monomer_b_dft_kwargs["external_potentials"] = {
-                "C": construct_external_potential_in_field_C([ext_pot_C, ext_pot_B])
+                "C": construct_external_potential_in_field_C([ext_pot_C, ext_pot_B_not_in_C])
             }
 
         run_scf(
@@ -966,14 +973,39 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     return dimer_wfn
 
 
-def construct_external_potential_in_field_C(potentials):
-    """Union exact point/diffuse rows; sum opaque matrix operators.
+def drop_rows_carried_by(potential, reference):
+    """Drop point/diffuse rows of *potential* that *reference* already carries.
 
-    Identical rows are redundant, including within one fragment. To place
-    two equal charges at one site, sum their charges into a single row.
+    Used to copy a charge into A/B (so it enters that monomer's GRAC shift)
+    while it also sits in the environment field C, without charging the
+    consuming monomer twice. Only rows that are exactly equal to a reference
+    row are removed, and only against C: rows shared between A and B must be
+    left alone, since A and B partition the field the dimer sees.
+
+    Matrix operators are opaque and pass through untouched.
+    """
+    if not potential or not reference:
+        return potential
+    trimmed = {}
+    for mode, values in potential.items():
+        if mode == "matrix":
+            trimmed[mode] = values
+            continue
+        carried = {tuple(row) for row in reference.get(mode, [])}
+        trimmed[mode] = [row for row in values if tuple(row) not in carried]
+    return trimmed
+
+
+def construct_external_potential_in_field_C(potentials):
+    """Concatenate point/diffuse rows; sum opaque matrix operators.
+
+    Rows are never dropped here. The field the dimer sees has to equal the
+    sum of the fields the monomers see or the embedding contribution fails
+    to cancel in the SAPT decomposition, and two equal rows mean two equal
+    charges. Use :py:func:`drop_rows_carried_by` to remove a monomer's rows
+    that C already carries before combining.
     """
     combined = {}
-    seen = {}
     for potential in potentials:
         if not potential:
             continue
@@ -989,13 +1021,7 @@ def construct_external_potential_in_field_C(potentials):
                 else:
                     combined[mode] = matrix.tolist()
             else:
-                rows = combined.setdefault(mode, [])
-                keys = seen.setdefault(mode, set())
-                for row in values:
-                    key = tuple(row)
-                    if key not in keys:
-                        keys.add(key)
-                        rows.append(row)
+                combined.setdefault(mode, []).extend(values)
     return combined
 
 

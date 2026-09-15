@@ -572,10 +572,12 @@ By default the GRAC SCFs use no external potential.
 |sapt__sapt_dft_grac_use_ext_pot| includes only A in monomer A's shift
 and B in monomer B's shift, never C. With nonempty C a warning explains
 that the consuming monomer DFT still sees C+A or C+B.
-Charges needed in a shift may be copied into A/B as well as C.
-All field unions deduplicate exactly equal point/diffuse rows, including
-within a fragment; to specify two equal charges at one site, sum them
-into one row. Matrix operators are always summed, not deduplicated.
+Charges needed in a shift may be copied into A/B as well as C. A copy that
+is exactly equal to a C row is trimmed from A/B before that monomer's SCF,
+so the consuming monomer is not charged twice, while the shift still sees
+it. Rows shared between A and B are never trimmed, since A and B partition
+the field the dimer sees, and two equal rows anywhere else mean two equal
+charges. Matrix operators are summed, never trimmed.
 When reusing shifts with this option, the A/B payload must also match.
 Strong embedding fields may yield unphysical IPs; this option does not
 validate the physical appropriateness of including MM charges in ionization.
