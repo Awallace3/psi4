@@ -1165,14 +1165,19 @@ def compute_GRAC_shift(
                 core.print_out(
                     f"\n\n  ==> GRAC {label} Electron Removed Molecule: charge={mol_cation.molecular_charge()} mult={mol_cation.multiplicity()} <==\n\n"
                 )
-                # Same geometry and basis as the neutral, one electron short: its
-                # converged orbitals are a far better start than a fresh SAD guess.
+                cation_kwargs = dict(scf_kwargs)
+                if core.get_option("SAPT", "SAPT_DFT_GRAC_SEED_CATION"):
+                    # Same geometry and basis as the neutral, one electron short,
+                    # so its converged orbitals start much closer than a fresh SAD
+                    # guess.  Opt-in: that same closeness can hold the cation in
+                    # the neutral's state, which is what the convergence tiers
+                    # above are there to break out of.
+                    cation_kwargs["guess_wfn"] = wfn_given
                 wfn_cation = run_scf(
                     dft_functional.lower(),
                     molecule=mol_cation,
                     jk=jk_obj,
-                    guess_wfn=wfn_given,
-                    **scf_kwargs,
+                    **cation_kwargs,
                 )
             except ConvergenceError:
                 if len(grac_options) == 1:

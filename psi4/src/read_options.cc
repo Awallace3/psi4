@@ -1238,6 +1238,13 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     not counted twice. Rows shared between A and B are never trimmed, since
     the dimer field must stay the sum of the monomer fields. -*/
     options.add_bool("SAPT_DFT_GRAC_USE_EXT_POT", false);
+    /*- Seed the GRAC cation SCF with the converged neutral monomer's orbitals
+    instead of a fresh SAD guess. Same geometry and basis, one electron fewer,
+    so the neutral orbitals are a much closer start and the cation converges in
+    noticeably fewer iterations. Off by default: the neutral's occupied set can
+    bias the cation toward the same state the tiered convergence fallbacks in
+    |sapt__sapt_dft_grac_compute| exist to escape. -*/
+    options.add_bool("SAPT_DFT_GRAC_SEED_CATION", false);
         /*- To ensure that the GRAC shift is computed with a sufficiently large
           basis set, the user can specify a larger basis set for the GRAC
           calculation, which can be different from the basis set used for the
