@@ -31,8 +31,6 @@
  * coefficients, ported with permission from CamCASP 6.0 by Alston J. Misquitta
  * and Anthony J. Stone (http://gitlab.com/anthonyjstone/camcasp).  Numerical
  * conventions follow the CamCASP source, referenced inline by file and line.
- *
- * See SPEC.md in this directory for the full specification.
  */
 
 #ifndef PSI4_LIBISAPOL_RECOUPLING_TABLES_H
@@ -63,7 +61,7 @@ constexpr int kNumSphericalComponents = (kMaxDispersionRank + 1) * (kMaxDispersi
 ///
 /// CamCASP writes each anisotropic dispersion coefficient as a sum of
 /// Casimir-Polder integrals over pairs of recoupled distributed polarizabilities
-/// (casimir.f90:397-435, and SPEC.md 9.3):
+/// (casimir.f90:397-435):
 ///
 ///     C_n(t, u, J) = sum_terms  coefficient * i^ipow
 ///                              * (1/2pi) int alpha^A_{t(la la')}(iw)

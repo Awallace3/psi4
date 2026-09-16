@@ -5,7 +5,7 @@ They do not generate a partition, Drho-C, transition fits or a response kernel.
 The LW stage localizes explicitly supplied nonlocal tensors; the PFIT stage fits
 parameters only from explicit supplied inputs.
 No new `oeprop` task or energy method is registered.
-See `SPEC.md` for the still-open native and end-to-end acceptance gates.
+The native and end-to-end acceptance gates remain open; they are out of scope here.
 
 ## Supplied nonlocal tensors through Psi4 LW
 

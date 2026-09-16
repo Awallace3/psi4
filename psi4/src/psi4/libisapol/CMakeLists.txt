@@ -41,7 +41,7 @@ target_link_libraries(isapol
 # compiler must not be free to re-associate it.  Without this, GCC contracts
 # `r*x + c` (isa_grid.cc) into an FMA on any host that has one, which shifts
 # grid coordinates by ~1 ulp relative to the CamCASP reference and makes our own
-# results depend on the -march the user happened to build with.  See SPEC.md 3.5.5.
+# results depend on the -march the user happened to build with.
 include(CheckCXXCompilerFlag)
 check_cxx_compiler_flag("-ffp-contract=off" HAVE_FFP_CONTRACT_OFF)
 if(HAVE_FFP_CONTRACT_OFF)

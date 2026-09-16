@@ -31,8 +31,6 @@
  * coefficients, ported with permission from CamCASP 6.0 by Alston J. Misquitta
  * and Anthony J. Stone (http://gitlab.com/anthonyjstone/camcasp).  Numerical
  * conventions follow the CamCASP source, referenced inline by file and line.
- *
- * See SPEC.md in this directory for the full specification.
  */
 
 #ifndef PSI4_LIBISAPOL_FIT_POINTS_H
@@ -51,7 +49,7 @@ namespace isapol {
 /// `dprand` (src/random.f90).
 ///
 /// Reimplemented here rather than linked because the fit-point cloud has to be
-/// reproduced draw for draw: the point-response refinement of SPEC.md 12 fits to
+/// reproduced draw for draw: the point-response refinement fits to
 /// the potential sampled at these points, so a single extra or missing draw
 /// changes every subsequent point and every fitted coefficient.  The generator
 /// itself is published --- N. M. Maclaren, "A Limited Portable Fortran-77 Random

@@ -45,6 +45,5 @@ tracked.
 
 The grid is deliberately small. The full production grid (`n_r = 80`, `n_a = 590`,
 139 830 points) also matches bit for bit in every coordinate, but 4.5 MB of doubles
-does not belong in a test fixture. See `psi4/src/psi4/libisapol/SPEC.md` §3.5.5 for
-what was measured on it and for the one remaining 1-ulp difference (the association
-of the `4π` factor in the quadrature weights).
+does not belong in a test fixture. One 1-ulp difference remains on that grid: the
+association of the `4π` factor in the quadrature weights.

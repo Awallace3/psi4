@@ -31,8 +31,6 @@
  * coefficients, ported with permission from CamCASP 6.0 by Alston J. Misquitta
  * and Anthony J. Stone (http://gitlab.com/anthonyjstone/camcasp).  Numerical
  * conventions follow the CamCASP source, referenced inline by file and line.
- *
- * See SPEC.md in this directory for the full specification.
  */
 
 #include "isa_grid.h"

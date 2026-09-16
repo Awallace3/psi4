@@ -174,3 +174,7 @@ fsapt
 /psi4/src/psi4/libisapol/oracle/
 /agent_scratch/
 /CLAUDE.md
+# The libisapol development specification: dated execution updates and
+# measured-candidate records for work still in progress, not a shipped
+# API document.  Kept on disk, off the commit history.
+/psi4/src/psi4/libisapol/SPEC.md

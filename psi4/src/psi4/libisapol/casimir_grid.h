@@ -31,8 +31,6 @@
  * coefficients, ported with permission from CamCASP 6.0 by Alston J. Misquitta
  * and Anthony J. Stone (http://gitlab.com/anthonyjstone/camcasp).  Numerical
  * conventions follow the CamCASP source, referenced inline by file and line.
- *
- * See SPEC.md in this directory for the full specification.
  */
 
 #ifndef PSI4_LIBISAPOL_CASIMIR_GRID_H
@@ -53,7 +51,7 @@ constexpr int kMaxCasimirFrequencies = 10;
 /// Default quadrature scale, CamCASP's `omega0` (casimir.f90:82).  This is the same
 /// parameter that `quadrature.f90` calls `Beta`, and it is 0.3 only in the standalone
 /// `casimir` program; the ISA-Pol protocols set `SET QUAD / Beta 0.5`, so the Psi4
-/// keyword default is kIsaPolOmega0 below.  See SPEC.md 9.1.
+/// keyword default is kIsaPolOmega0 below.
 constexpr double kCasimirOmega0 = 0.3;
 
 /// Quadrature scale used by the ISA-Pol protocols (`methods/isa-pol-from-isa-A`).
@@ -113,7 +111,7 @@ class CasimirGrid {
     ///     sum_k cp_weight(k) alpha_A(i w_k) alpha_B(i w_k);
     ///
     /// the remaining rank-dependent factors that turn `cpint` into a dispersion
-    /// coefficient are the recoupling coefficients of SPEC.md 9.3, not part of
+    /// coefficient are the recoupling coefficients of recoupling_tables.h, not part of
     /// the quadrature.  Zero at k = 0.
     double cp_weight(int k) const;
 

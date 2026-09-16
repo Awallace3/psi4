@@ -4,7 +4,7 @@ The oracle tables below are the bit patterns printed by CamCASP 6.0's
 ``src/pfit/shift.f90::solidh`` and the three lines of
 ``src/pfit/process.F90::T_functions`` that build a T row, compiled with
 ``gfortran -O0 -ffp-contract=off`` -- the same non-contracting arithmetic
-libisapol is built with (see libisapol/CMakeLists.txt and SPEC.md 3.5.5).  With
+libisapol is built with (see libisapol/CMakeLists.txt).  With
 ``-O2 -march=native`` the Fortran contracts into FMAs and its own output moves
 by up to 1.3e-13 relative, so the bitwise claim is against a non-contracting
 build only.

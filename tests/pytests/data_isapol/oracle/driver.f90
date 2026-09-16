@@ -5,7 +5,7 @@
 !     n_r  n_a  k_mu  rscale
 !     Z x y z            (ns lines, coordinates in bohr)
 !
-! Writes `radii.dat`  -- AtomProp for Z = 0 .. max_atoms (SPEC.md gate 5)
+! Writes `radii.dat`  -- AtomProp for Z = 0 .. max_atoms (gate 5)
 !        `grid.dat`   -- ns, ng; ns+1 atom offsets; ng lines of x y z w (gate 5b)
 !
 ! See make_oracle.sh for how to build this.
@@ -22,7 +22,7 @@ character(200) :: arg
 call init_atoms
 
 ! Element table, exactly as the grid sees it.  Written with 17 significant digits
-! so that the float32 rounding of the Fortran literals (SPEC.md 3.5.3) is visible.
+! so that the float32 rounding of the Fortran literals is visible.
 open(newunit=u, file='radii.dat', status='replace')
 write(u,'(i0)') max_atoms
 do i = 0, max_atoms

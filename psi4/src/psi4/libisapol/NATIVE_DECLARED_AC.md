@@ -155,7 +155,7 @@ it is closed. The static molecular α excess falls from +4.147% to +2.144%, and
 at the parameter level `max |our refined O1 diagonal − the reference's own printed
 refined O1 diagonal|` falls from 2.7913 to 1.4913, 46.6% removed.
 
-It does not close the residual, and SPEC.md records where the rest is: about 0.5
+It does not close the residual, and the rest is accounted for as follows: about 0.5
 percentage points is the eigenvalue deficit the AC still leaves, and about 1.5
 points is not an asymptotic-correction effect at all but the uncorrected
 DALTON-versus-Psi4 PBE0 difference (a near-uniform +0.0021 Eh offset on every

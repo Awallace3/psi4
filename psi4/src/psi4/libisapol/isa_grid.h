@@ -31,8 +31,6 @@
  * coefficients, ported with permission from CamCASP 6.0 by Alston J. Misquitta
  * and Anthony J. Stone (http://gitlab.com/anthonyjstone/camcasp).  Numerical
  * conventions follow the CamCASP source, referenced inline by file and line.
- *
- * See SPEC.md in this directory for the full specification.
  */
 
 #ifndef PSI4_LIBISAPOL_ISA_GRID_H
@@ -65,7 +63,7 @@ struct IsaGridOptions {
     /// CamCASP's `n_r` (its `NumRadPoints`), *not* the number of shells: the
     /// Euler-MacLaurin map generates shells i = 1 ... n_r - 1, so n_r = 80 gives
     /// 79 shells.  Named to match CamCASP's input so a Psi4 job can mirror a
-    /// CamCASP one keyword for keyword (SPEC.md 3.5.4).
+    /// CamCASP one keyword for keyword.
     int radial_points = 80;
 
     /// Requested Lebedev order.  Rounded *up* to the next tabulated size, exactly
@@ -100,7 +98,7 @@ struct IsaGridOptions {
 ///      of them (its suppression block is commented out).
 ///
 /// None of the three changes a converged integral, but all three move it at the
-/// 1e-8...1e-10 level, which is the level this port is held to.  See SPEC.md 3.5.
+/// 1e-8...1e-10 level, which is the level this port is held to.
 ///
 /// The Lebedev tables themselves are Psi4's -- they are bit-identical to
 /// CamCASP's, both deriving from Laikov's -- reached through the

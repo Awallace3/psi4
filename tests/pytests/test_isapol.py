@@ -4,8 +4,9 @@ The whole point of this module is that it reproduces another code's arithmetic, 
 the tolerances here are deliberately absurd: element data and grid coordinates are
 compared *bit for bit*, and quadrature weights to within one unit in the last place.
 If one of these starts failing by a few ulp, do not relax the tolerance -- something
-re-associated a floating-point expression.  See psi4/src/psi4/libisapol/SPEC.md
-sections 3.5.3 and 3.5.5, which document the two times that has already happened.
+re-associated a floating-point expression.  That has already happened twice: the
+element table's single-precision Fortran literals, and gfortran contracting
+`r*x + c` into an FMA under `-march=native`.
 
 Reference data lives in data_isapol/; its README says how to regenerate it.
 """
@@ -77,7 +78,7 @@ def test_element_symbols(atomprop):
     ],
 )
 def test_atomprop_bit_identical(atomprop, column, getter):
-    """CamCASP stores these as *single-precision* Fortran literals (SPEC.md 3.5.3).
+    """CamCASP stores these as *single-precision* Fortran literals.
 
     Transcribing them as `double` gets you 4e-8 relative error, which is eight
     orders of magnitude too large.  Hence the exact comparison.
@@ -129,7 +130,7 @@ def test_grid_matches_camcasp(refgrid, h2o):
 
     # Psi4's Lebedev generators enumerate the octahedral sign patterns in a
     # different order than CamCASP's gen_oh, so compare shell by shell after
-    # sorting.  Nothing physical depends on the order (SPEC.md 3.5.5).
+    # sorting.  Nothing physical depends on the order.
     def canonical(block):
         key = np.round(block[:, :3], 12) + 0.0  # +0.0 folds -0.0 onto 0.0
         return block[np.lexsort((key[:, 2], key[:, 1], key[:, 0]))]
@@ -251,7 +252,7 @@ def test_grid_integrates_atomic_gaussians(h2o):
 
 
 # ---------------------------------------------------------------------------
-# Gate 3 -- Casimir imaginary-frequency quadrature (SPEC.md 9.1)
+# Gate 3 -- Casimir imaginary-frequency quadrature
 # ---------------------------------------------------------------------------
 
 
@@ -350,7 +351,7 @@ def test_casimir_polder_single_pole():
 
 # --- Fit points: the random cloud the point-response refinement samples on ----
 #
-# Gates 1 and 2 of SPEC.md 15.  Both are bit-exact and stay that way: the
+# Gates 1 and 2 of the fit-point stage.  Both are bit-exact and stay that way: the
 # refinement fits to the potential at these points, so a single extra or missing
 # deviate shifts every later point and every fitted coefficient.
 #
@@ -561,7 +562,7 @@ def test_vdw_radius_tables_are_distinct():
 
 # --- Recoupling tables: the anisotropic dispersion coefficients ---------------
 #
-# Gate 4 of SPEC.md 15.  CamCASP's c6code.f90 ... c12code.f90 are machine-generated
+# Gate 4 of the recoupling stage.  CamCASP's c6code.f90 ... c12code.f90 are machine-generated
 # Fortran fragments; `oracle/parse_cncode.py` reduces them to a fixture and to the
 # table libisapol compiles in, so the two cannot drift apart silently.
 #
@@ -839,7 +840,7 @@ def test_recoupling_is_symmetric_under_exchange():
 
 
 def test_recoupling_c6_closed_forms():
-    """The eight C_6 blocks, against the closed forms in SPEC.md 9.3."""
+    """The eight C_6 blocks, against their closed forms."""
     want = {
         (0, 0, 0): 2.0,
         (0, 2, 2): -np.sqrt(2.0),

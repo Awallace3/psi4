@@ -8,8 +8,8 @@ module parameters
   use precision
   implicit none
   real(dp), parameter :: pi = 3.1415926535897932384626433832795028841968_dp
-  ! Values copied from CamCASP src/parameters.f90; see SPEC.md 3.5.3 on why
-  ! a_o must be CamCASP's constant and not the modern CODATA one.
+  ! Values copied from CamCASP src/parameters.f90.  a_o must be CamCASP's own
+  ! constant, not the modern CODATA one.
   real(dp), parameter :: a_o = 0.529177249_dp
   real(dp), parameter :: au2kJ = 2625.49962_dp
 end module parameters

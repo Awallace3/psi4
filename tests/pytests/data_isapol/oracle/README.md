@@ -99,9 +99,9 @@ It rewrites two files in place:
 * `psi4/src/psi4/libisapol/recoupling_data.inc`, the generated C++ table.
 
 The C++ table is committed, so this only needs re-running if CamCASP's tables
-change.  See
-SPEC.md §9.3 for why the coefficients are transcribed rather than re-derived, and for
-the invariants the tests check them against.
+change.  The coefficients are transcribed rather than re-derived because CamCASP's
+own `c*code.f90` are machine-generated Fortran fragments, not a closed formula;
+`../test_isapol.py` holds them to the invariants and to the closed C_6 forms.
 
 ## `make_isa_fit_fixture.py` — frozen water ISA-A fitting update
 
@@ -227,9 +227,8 @@ changes the answer, and two of them cost a day each to find:
 
 * `-fdefault-real-8` would promote the element table's literals to double precision.
   CamCASP does not use it, so `R_Slater(O)` is really `0.60000002384185791` Å.
-  See SPEC.md §3.5.3.
 * `-march=native` lets gfortran contract `r*x + c` into an FMA, which moves grid
-  points by 1 ulp relative to a stock CamCASP build.  See SPEC.md §3.5.5.
+  points by 1 ulp relative to a stock CamCASP build.
 
 `freqdump`, `pranddump` and `latticedump` are pure double precision and do no
 contractible arithmetic, so they are insensitive to all of the above; the flag

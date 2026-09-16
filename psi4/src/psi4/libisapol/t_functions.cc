@@ -7,8 +7,6 @@
  * and local-axis convention follow src/pfit/shift.f90::solidh and
  * src/pfit/process.F90::T_functions, referenced inline by line.  No CamCASP
  * source is linked into this module.
- *
- * See SPEC.md in this directory for the full specification.
  */
 #include "t_functions.h"
 #include <cmath>

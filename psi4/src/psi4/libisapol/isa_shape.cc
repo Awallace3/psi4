@@ -1,6 +1,6 @@
 /* Psi4: Copyright (c) 2007-2026 The Psi4 Developers.
  * SPDX-License-Identifier: LGPL-3.0-only
- * ISA Func-1/Fit-3 equations; see SPEC.md and CamCASP stockholder.F90.
+ * ISA Func-1/Fit-3 equations; see CamCASP stockholder.F90.
  */
 #include "isa_shape.h"
 #include "parallel_work.h"

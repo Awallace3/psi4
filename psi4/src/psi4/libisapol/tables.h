@@ -31,8 +31,6 @@
  * coefficients, ported with permission from CamCASP 6.0 by Alston J. Misquitta
  * and Anthony J. Stone (http://gitlab.com/anthonyjstone/camcasp).  Numerical
  * conventions follow the CamCASP source, referenced inline by file and line.
- *
- * See SPEC.md in this directory for the full specification.
  */
 
 #ifndef PSI4_LIBISAPOL_TABLES_H
@@ -85,7 +83,7 @@ const ElementData& element_data(int Z);
 ///   * hydrogen's radius is *twice* Slater's value (0.50 A, not 0.25),
 ///   * the inert gases take the radius of the preceding halogen,
 ///   * the dummy site (Z = 0) is given a non-zero radius, 0.65 A.
-/// This is the radial scale factor `alpha` of the integration grid (SPEC.md 3.5.3),
+/// This is the radial scale factor `alpha` of the integration grid,
 /// so it must agree with CamCASP exactly; it differs from Psi4's GetBSRadius() for
 /// H, He, Ne and (by rounding) Ti, Cr, Mn, Fe.
 ///

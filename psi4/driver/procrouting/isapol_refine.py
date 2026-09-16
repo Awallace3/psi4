@@ -18,7 +18,7 @@ inline by file and line:
 * ``src/pfit/process.F90::setup``/``solve`` is the least-squares problem that
   :func:`refinement_problem` hands to the owned C++ solver; the fields are
   ``core.isa_t_functions``, which is bitwise certified against CamCASP's own
-  compiled ``solidh`` (see ``libisapol/SPEC.md`` section 6).
+  compiled ``solidh``.
 
 No CamCASP source is executed, linked or vendored here.
 

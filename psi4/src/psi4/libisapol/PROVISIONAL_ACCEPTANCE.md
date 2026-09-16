@@ -60,7 +60,7 @@ met. `psi4.driver.procrouting.isapol_budget` derives, per intermediate and per
 property group, the precision that intermediate must be known to for a stated
 property tolerance, by perturbing it and rebuilding the whole downstream through
 the shipped objects under the unrelaxed production LW policy. Evidence:
-`.pi/audit/property-anchored-budget.json`; specification: SPEC.md §8. Against a
+`.pi/audit/property-anchored-budget.json`. Against a
 1e-6 property tolerance the historical indicators stand as:
 
 - TODO10 (Drho-C, 0.0012802188514176112, absolute metric) needs **2.78e-9**

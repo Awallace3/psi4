@@ -5,7 +5,7 @@
  *
  * ISA-A numerical conventions follow CamCASP by Alston J. Misquitta and
  * Anthony J. Stone. Independently implemented from the fitting equations;
- * see SPEC.md and CamCASP stockholder.F90 / num_integrals.F90.
+ * see CamCASP stockholder.F90 / num_integrals.F90.
  */
 #ifndef PSI4_LIBISAPOL_ISA_FIT_H
 #define PSI4_LIBISAPOL_ISA_FIT_H
