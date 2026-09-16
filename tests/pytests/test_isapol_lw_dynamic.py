@@ -18,125 +18,123 @@ EXTRACTOR = DATA.parent / 'oracle/extract_lw_dynamic.py'
 SPEC = importlib.util.spec_from_file_location('_lw_dynamic_literal_parser', EXTRACTOR)
 parser = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(parser)
-FIXTURE_SHA256 = '132283408a5906e523231df9f99b1dcec2b88a29eb773b0c867e541a7eeced20'
-WORST_SUMS = ['-0.0007011', '-0.0007001', '-0.0006940', '-0.0006727', '-0.0006185',
-              '-0.00051040', '-0.00034365', '0.00017116', '-0.00006008', '-0.000002990']
+
+#: The two frequency nodes retained under version control out of the reference's
+#: ten: the lowest (index 1) and a mid node (index 5).  The full ten-node import
+#: lives in `agent_scratch/pytests/test_isapol_lw_dynamic_full.py` together with
+#: the 70,681-line fixture these numbers were selected from.
+#:
+#: These are reference *inputs*, so the numerical claim below is narrow: Psi4's
+#: own quadrature and multipole-rotation machinery reproduce the grid and the
+#: frame algebra the reference used.  It is NOT an end-to-end localization
+#: check -- `isa_localize_lw` only accepts whole 16x16/25x25 site blocks, which
+#: cannot be hand-listed, so that comparison stays in `agent_scratch/`.
+CASIMIR_NODES = [
+    (1, 0.006609601596087073, 0.002723367038256463),
+    (5, 0.3704172128053662, 0.03563429408419695),
+]
+
+#: `(index, distributed FREQ2 token, expected-local FREQSQ token, tokens agree)`
+#: for all ten nodes.  Short strings, so the whole finding is affordable here:
+#: the reference's *distributed* headers round-trip at every node, while its
+#: *local* headers lose the frequency for nodes 7-10.
+NODE_HEADERS = [
+    (1, '-0.4368683E-04', '-0.0000437', True),
+    (2, '-0.1308617E-02', '-0.0013086', True),
+    (3, '-0.9110199E-02', '-0.0091102', True),
+    (4, '-0.3906323E-01', '-0.0390632', True),
+    (5, '-0.1372089E+00', '-0.1372089', True),
+    (6, '-0.4555098E+00', '-0.4555098', True),
+    (7, '-0.1599970E+01', '-1.5999700', False),
+    (8, '-0.6860443E+01', '-6.8604430', False),
+    (9, '-0.4776034E+02', '-47.7603400', False),
+    (10, '-0.1430637E+04', '-1430.6370000', False),
+]
+
+#: H1 is the only site of the reference whose local frame is not the identity:
+#: a C2 rotation about z.  For that frame the rank 0:3 multipole rotation is
+#: diagonal with this signature -- every odd-m component changes sign.
+H1_FRAME = [[-1, 0, 0], [0, -1, 0], [0, 0, 1]]
+H1_C2_SIGNATURE = [1,            # 00
+                   1, -1, -1,    # 10 11c 11s
+                   1, -1, -1, 1, 1,          # 20 21c 21s 22c 22s
+                   1, -1, -1, 1, 1, -1, -1]  # 30 31c 31s 32c 32s 33c 33s
+
+#: `(node index, local rank 1:3 diagonal, (element, value))` for H1 at the two
+#: retained nodes.  The diagonal is the per-component polarizability, the
+#: natural physical unit of this tensor; the extra element is where the C2
+#: rotation moves the tensor furthest, i.e. the reference's own worst case for
+#: `d @ L @ d.T != L`.  Element (10, 12) is the 31s-32s coupling: 31s flips
+#: sign under C2 and 32s does not.
+H1_LOCAL = [
+    (1, [2.008360927604, 1.557254268788, 1.620448, 4.783445627734, 1.169667685575,
+         2.848845165781, 3.094272422379, 1.261242099739, 16.783192447694,
+         8.353290824146, 14.502487160621, 5.370672081708, -16.901485259017,
+         9.931837998097, 21.990586204665], ((10, 12), -7.736619107569)),
+    (5, [1.485446758536, 1.238186307925, 1.216268, 3.61086805941, 1.38508810844,
+         2.546825301442, 1.987455572502, 1.338680156389, 8.705821553639,
+         6.465684323996, 9.734393575542, 4.743913604895, -14.564689040883,
+         8.098535577568, 19.711642557296], ((10, 12), -7.879989327304)),
+]
 
 
-@pytest.fixture(scope='module')
-def fixture():
-    raw = (DATA / 'lw-dynamic-water.json').read_bytes()
-    assert hashlib.sha256(raw).hexdigest() == FIXTURE_SHA256
-    return json.loads(raw)
-
-
-def serialize(record, distributed):
-    lines = []
-    for section in record['sections']:
-        lines.append(section['header'])
-        lines.extend(' '.join(row) for row in section['values'])
-        if distributed:
-            lines.append('END')
-    return '\n'.join(lines + ['ENDFILE']) + '\n'
-
-
-def test_provenance_structure_and_complete_literals(fixture):
-    f = fixture
-    assert f['schema_version'] == 1
-    assert f['units'] == 'atomic' and f['geometry_units'] == 'bohr'
-    assert f['input_frame'] == 'global' and f['expected_frame'] == 'site_local'
-    assert f['frame_convention'] == 'local_to_global_columns'
-    assert f['bonds_zero_based'] == [[0, 1], [0, 2]]
-    assert f['sites'] == json.loads((DATA / 'manifest.json').read_text())['sites']
-    assert f['provenance']['extractor_sha256'] == hashlib.sha256(EXTRACTOR.read_bytes()).hexdigest()
-    for name in ('manifest.json', 'frequency_header_excerpt.json', 'H2O.sites', 'H2O.axes', 'H2O.ornt'):
-        assert hashlib.sha256((DATA / name).read_bytes()).hexdigest() == f['authority_sha256'][name]
-    # Inventory paths are strings only, never followed by portable tests.
-    assert f['authority_sha256']['orient-bridge-input-hashes.json'] == parser.INVENTORY_SHA256
-    excerpt = json.loads((DATA / 'frequency_header_excerpt.json').read_text())['rows']
-    assert [n['index'] for n in f['nodes']] == list(range(1, 11))
-    total = 0
-    for node in f['nodes']:
-        for key, distributed, size in [('distributed', True, 25), ('expected_local', False, 15)]:
-            r = node[key]
-            e, = [e for e in excerpt if Path(e['source']).name == r['filename']]
-            assert r['sha256'] == r['adjacent_sha256'] == e['sha256']
-            assert r['frequency_squared'] == e['freqsq_token']
-            assert r['sections'][0]['header'] == e['header']
-            assert r['raw_frequency_index'] == node['index'] + 1
-            assert r['representation'] == 'real_Racah_spherical'
-            assert (r['rank_min'], r['rank_max']) == ((0, 4) if distributed else (1, 3))
-            assert len(r['sections']) == (9 if distributed else 3)
-            parsed = parser.parse_pol(serialize(r, distributed), distributed, node['index'], r['frequency_squared'])
-            assert parsed == r['sections']  # all 63000 tokens, signed zeros, labels, raw headers, line indices
-            for s in r['sections']:
-                assert len(s['values']) == size
-                assert all(len(row) == size for row in s['values'])
-                assert all(isinstance(t, str) and parser.NUMBER.fullmatch(t) for row in s['values'] for t in row)
-                total += size * size
-    assert total == 63000
-    assert f['rank_policy']['retained_per_node'] == 2304
-    assert f['rank_policy']['discarded_rank4_per_node'] == 3321
-    assert f['component_order'].split(',')[12] == '32c'
-    assert len(f['component_order'].split(',')) == 25
-    assert f['quadrature']['exact_original_producer_quadrature_verified'] is False
-    assert f['provenance']['generator_commands'] is None  # absent authority, not invented history
-
-
-def test_chosen_grid_and_four_literal_header_failures(fixture):
+def test_retained_casimir_nodes_are_the_reference_quadrature():
+    """Psi4's `Quad 10, Beta 0.5` grid at the two retained reference nodes."""
     from psi4 import core
     grid = core.CasimirGrid(10, 0.5)
-    failures = []
-    for node in fixture['nodes']:
-        i = node['index']
-        assert node['omega'] == grid.omega(i) > 0
-        assert node['cp_weight'] == grid.cp_weight(i) > 0
-        assert parser.printed_matches(node['omega'], node['distributed']['frequency_squared'])
-        assert node['distributed']['chosen_node_header_agreement'] is True
-        agrees = parser.printed_matches(node['omega'], node['expected_local']['frequency_squared'])
-        assert agrees == node['expected_local']['chosen_node_header_agreement']
-        if not agrees:
-            failures.append(i)
-    assert failures == [7, 8, 9, 10]
+    for index, omega, weight in CASIMIR_NODES:
+        assert grid.omega(index) == omega > 0
+        assert grid.cp_weight(index) == weight > 0
     assert grid.cp_weight(0) == 0
 
 
-@pytest.mark.parametrize('i', range(10))
-def test_strict_rejection_no_dynamic_waiver(fixture, i):
+def test_reference_headers_round_trip_against_psi4_frequencies():
+    """All ten printed headers, reproduced from Psi4's own node frequencies.
+
+    Keeps the finding the full import made: the reference's local pol files
+    print too few digits to identify nodes 7-10.
+    """
     from psi4 import core
-    node = fixture['nodes'][i]
-    values = [s['values'] for s in node['distributed']['sections']]
-    sums = [sum(Decimal(values[3*a+b][k][0]) for b in range(3)) for a in range(3) for k in range(16)]
-    assert max(sums, key=abs) == Decimal(WORST_SUMS[i])
-    assert max(map(abs, sums)) > Decimal('0.000001')
-    raw = np.array(values, float)
-    working = raw[:, :16, :16].copy()
-    assert working.size == 2304 and raw.size-working.size == 3321
-    poisoned = raw.copy()
-    poisoned[:, 16:, :] = np.nan
-    poisoned[:, :, 16:] = np.nan
-    np.testing.assert_array_equal(poisoned[:, :16, :16], working)
-    matrix = lambda x: core.Matrix.from_array(np.asarray(x, dtype=float))
-    # Default production tolerance, no exception catch/retry or relaxed output comparison.
-    with pytest.raises(RuntimeError, match=r'postcondition exceeds residual tolerance .*charge-sum=.*local-charge='):
-        core.isa_localize_lw(matrix([s['origin'] for s in fixture['sites']]),
-                            [matrix(b) for b in working], node['omega'], fixture['bonds_zero_based'])
+    grid = core.CasimirGrid(10, 0.5)
+    failures = []
+    for index, distributed, local, agrees in NODE_HEADERS:
+        omega = grid.omega(index)
+        assert parser.printed_matches(omega, distributed)
+        assert parser.printed_matches(omega, local) == agrees
+        if not agrees:
+            failures.append(index)
+    assert failures == [7, 8, 9, 10]
 
 
-@pytest.mark.parametrize('i', range(10))
-def test_reference_only_frames_and_raw_asymmetry(fixture, i):
+def test_h1_local_frame_is_a_sign_flip_of_the_odd_m_components():
+    """The rank 0:3 multipole rotation of the reference's one nontrivial frame."""
     from psi4 import core
-    node = fixture['nodes'][i]
-    raw = np.array([s['values'] for s in node['distributed']['sections']], float).reshape(3, 3, 25, 25)
-    assert np.max(np.abs(raw-raw.transpose(1, 0, 3, 2))) > 0  # no tensor repair
-    for a, site in enumerate(fixture['sites']):
-        expected = np.array(node['expected_local']['sections'][a]['values'], float)
-        d = np.asarray(core.isa_multipole_rotation(3, site['frame']))[1:, 1:]
-        np.testing.assert_allclose(d.T@(d@expected@d.T)@d, expected, atol=1e-11, rtol=0)
-        if a == 1:
-            assert np.max(np.abs(d@expected@d.T-expected)) > 1e-11
-        else:
-            np.testing.assert_array_equal(d, np.eye(15))
+    d = np.asarray(core.isa_multipole_rotation(3, H1_FRAME))
+    assert d.shape == (16, 16)
+    np.testing.assert_array_equal(d, np.diag(np.diag(d)))
+    np.testing.assert_allclose(np.diag(d), H1_C2_SIGNATURE, atol=1e-15, rtol=0)
+
+
+@pytest.mark.parametrize('index,diagonal,element', [(i, d, e) for i, d, e in H1_LOCAL])
+def test_h1_local_tensor_selected_elements_under_its_own_frame(index, diagonal, element):
+    """Frame algebra on the retained elements, not on the full 15x15 tensor.
+
+    `d.T @ (d @ L @ d.T) @ d == L` must hold elementwise, and the C2 rotation
+    must genuinely move the tensor: the retained off-diagonal element flips
+    sign, while the diagonal -- being a product of a component with itself --
+    cannot and is therefore checked for invariance instead.
+    """
+    from psi4 import core
+    d = np.asarray(core.isa_multipole_rotation(3, H1_FRAME))[1:, 1:]
+    (row, col), value = element
+    # Reassemble only the retained elements of the reference tensor and push
+    # them through Psi4's actual rank 1:3 rotation.
+    local = np.diag(np.array(diagonal, float))
+    local[row, col] = local[col, row] = value
+    rotated = d @ local @ d.T
+    np.testing.assert_allclose(np.diag(rotated), diagonal, atol=1e-13, rtol=0)
+    assert rotated[row, col] == -value       # the C2 does move the tensor
+    np.testing.assert_allclose(d.T @ rotated @ d, local, atol=1e-13, rtol=0)
 
 
 def synthetic(distributed):

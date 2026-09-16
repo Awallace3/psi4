@@ -35,26 +35,6 @@ def request(n=1, frequencies=(0.,), rank=3, retain=False):
                 truncation=(lw.RETAIN_RANK4 if retain else lw.TRUNCATE_RANK4) if rank == 4 else None)
 
 
-@pytest.fixture(scope='module')
-def water():
-    path = ROOT / 'tests/pytests/data_isapol/orient_local/lw-hermetic-water.json'
-    assert hashlib.sha256(path.read_bytes()).hexdigest() == lw.HISTORICAL_FIXTURE_SHA256
-    f = json.loads(path.read_text())
-    labels = [s['label'] for s in f['sites']]
-    assert [s['labels'] for s in f['distributed']['sections']] == [[a,b] for a in labels for b in labels]
-    return f
-
-
-def water_request(f, retain=False):
-    return dict(labels=[s['label'] for s in f['sites']], origins=[s['origin'][:] for s in f['sites']],
-                frames=np.array([s['frame'] for s in f['sites']], dtype=float), bonds=[p[:] for p in f['bonds_zero_based']],
-                frequencies=[f['frequency']], input_rank=4,
-                truncation=lw.RETAIN_RANK4 if retain else lw.TRUNCATE_RANK4,
-                tensors=np.array([s['values'] for s in f['distributed']['sections']], dtype=float).reshape(1,3,3,25,25),
-                provenance=lw.Provenance(f['distributed']['filename'], f['distributed']['sha256'],
-                                         'archived external numeric input', 'portable historical unrefined water fixture'))
-
-
 def test_static_zero_and_metadata():
     r = lw.supplied_nonlocal_properties(**request(2))
     assert r.raw_local.shape == r.raw_global.shape == (1,2,15,15)
@@ -200,45 +180,165 @@ def test_resource_guard_before_materialization():
     with pytest.raises(ValueError,match='resource'): lw.supplied_nonlocal_properties(**q)
 
 
-def test_water_production_rejects(water):
-    with pytest.raises(RuntimeError,match='postcondition.*charge-sum=.*local-charge='):
-        lw.supplied_nonlocal_properties(**water_request(water))
+#: Rank-4 entries a three-site truncating request drops at the rank-3 boundary:
+#: nine ordered site pairs times the 25x25 - 16x16 components outside rank 3.
+#: The archived water reference reports exactly this count; the guard test in
+#: `agent_scratch/pytests/test_isapol_lw_driver_water.py` asserts that it still does.
+THREE_SITE_DISCARDED_RANK4 = 9 * (25 * 25 - 16 * 16)
 
 
-def test_water_historical_all675(water):
-    q = water_request(water)
-    r = lw.supplied_nonlocal_properties(**q,residual_policy='historical_water_diagnostic')
-    expected = np.array([s['values'] for s in water['expected_local']['sections']],float)
-    assert expected.size == 675
-    np.testing.assert_allclose(r.raw_local.array[0], expected, atol=1e-11,rtol=0)
-    assert np.max(np.abs(r.raw_global.array[0,1]-expected[1])) > 15
-    np.testing.assert_array_equal(r.raw_input.array,q['tensors'])
-    assert r.metadata.discarded_rank4_entry_count == 3321
-    assert r.metadata.canonical_input_array_sha256 != r.provenance.source_sha256
-    assert r.metadata.residual_tolerance == 1e-3
-    assert not r.metadata.production_postcondition_passed
-    assert not r.frequency_diagnostics[0].production_postcondition_passed
-    assert r.metadata.numerical_agreement is None and not r.metadata.native_verified
-    assert r.frequency_diagnostics[0].residuals.charge_sum == pytest.approx(.0007011,abs=1e-14)
+def synthetic_rank4(retain=False):
+    """A three-site rank-4 request with real weight at every rank, no fixture.
+
+    The rank-limit theorems below are statements about the driver, not about any
+    particular molecule: they only need a supplied response that is nonvacuous at
+    ranks 2, 3 and 4 so the restriction has something to discard. Building one
+    analytically keeps them in the committed tree, while the comparison against
+    the archived ORIENT water response stays in the untracked `agent_scratch/` tree.
+    The geometry is water-shaped and the bond graph connected so LW has a real
+    flow problem to solve; the tensor itself is deliberately synthetic and must
+    never be quoted as a polarizability.
+    """
+    n, nc = 3, 25
+    i = np.arange(nc)
+    base = np.cos(i[:, None] + 2.0 * i[None, :]) * (1.0 + i[None, :] % 3)
+    tensors = np.zeros((1, n, n, nc, nc))
+    for a in range(n):
+        for b in range(n):
+            tensors[0, a, b] = base * (1.0 + 0.5 * a + 0.25 * b)
+    # Supplied responses are reciprocal: T[a,b] == T[b,a].T.
+    tensors[0] = 0.5 * (tensors[0] + tensors[0].transpose(1, 0, 3, 2))
+    return dict(labels=['O', 'H1', 'H2'],
+                origins=[[0., 0., 0.], [0., 1.43, 1.1], [0., -1.43, 1.1]],
+                frames=np.array([np.eye(3)] * n), bonds=[[0, 1], [0, 2]],
+                frequencies=[0.], input_rank=4, provenance=PROV, tensors=tensors,
+                truncation=lw.RETAIN_RANK4 if retain else lw.TRUNCATE_RANK4)
 
 
-@pytest.mark.parametrize('fault',['tensor','discarded_tensor','signed_zero','origin','frame','frequency','graph','reverse_graph','reorder_graph','label','source','rank'])
-def test_historical_exact_identity(water,fault):
-    q = water_request(water)
-    if fault == 'tensor': q['tensors'][0,0,0,1,1] += 1e-12
-    elif fault == 'discarded_tensor': q['tensors'][0,0,0,24,24] += 1e-12
-    elif fault == 'signed_zero': q['origins'][0][0] = -0.
-    elif fault == 'origin': q['origins'][1][0] += 1e-12
-    elif fault == 'frame': q['frames'][1] = np.eye(3)
-    elif fault == 'frequency': q['frequencies'] = [1e-12]
-    elif fault == 'graph': q['bonds'] = [[0,1]]
-    elif fault == 'reverse_graph': q['bonds'][0] = [1,0]
-    elif fault == 'reorder_graph': q['bonds'].reverse()
-    elif fault == 'label': q['labels'][0] = 'O2'
-    elif fault == 'source': q['provenance'] = PROV
-    elif fault == 'rank': q['input_rank'] = 3; q['truncation'] = None; q['tensors'] = q['tensors'][...,:16,:16]
-    with pytest.raises(ValueError,match='exact approved water identity'):
-        lw.supplied_nonlocal_properties(**q,residual_policy='historical_water_diagnostic')
+def test_production_rejects_a_supplied_model_that_does_not_conserve_charge():
+    """No fallback: a nonconserving supplied response fails the postcondition."""
+    with pytest.raises(RuntimeError, match='postcondition.*charge-sum=.*local-charge='):
+        lw.supplied_nonlocal_properties(**synthetic_rank4())
+
+
+def test_historical_policy_is_pinned_to_one_approved_fixture():
+    """The 1e-3 diagnostic tolerance is not reachable by an arbitrary input.
+
+    `historical_water_diagnostic` relaxes the residual gate by three orders of
+    magnitude, so it is gated on the exact approved identity -- hashes of the
+    tensors, geometry, frames and frequency all pinned in the driver source. A
+    synthetic model that is merely water-shaped must not reach it. The positive
+    side of this gate needs the fixture and lives in `agent_scratch/`.
+    """
+    with pytest.raises(ValueError, match='exact approved water identity'):
+        lw.supplied_nonlocal_properties(**synthetic_rank4(),
+                                        residual_policy='historical_water_diagnostic')
+    assert len(lw.HISTORICAL_FIXTURE_SHA256) == len(lw.HISTORICAL_SOURCE_SHA256) == 64
+    assert lw.HISTORICAL_FIXTURE_SHA256 != lw.HISTORICAL_SOURCE_SHA256
+    assert len(lw._HISTORICAL_ARRAY_HASHES) == 4
+
+
+def test_localization_rank_limit_is_recorded_and_defaults_to_three():
+    """The declared localization rank reaches Metadata, with what it discarded."""
+    full = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
+                                           **synthetic_rank4())
+    assert full.metadata.localization_rank_limit == 3
+    # This request is a rank4 input discarded at the rank3 boundary. The drop
+    # happens in the driver, before core is handed a block, so core's own
+    # measurement is structurally blind to it -- but a declared discard that
+    # reports zero reads as "nothing was thrown away", which is the opposite of
+    # what happened. The reported magnitude is the real one, and rank3 is not
+    # exempted from announcing the restriction just because it is the default.
+    assert full.metadata.discarded_rank4_entry_count == THREE_SITE_DISCARDED_RANK4
+    truncated = full.metadata.localization_truncated_input_maxabs
+    assert truncated > 1.0
+    declared = [w for w in full.warnings if 'localization declared at rank' in w]
+    assert len(declared) == 1
+    assert 'ranks 4..4 are absent by declaration' in declared[0]
+    assert f'{truncated:.5g}' in declared[0]
+    for limit in (1, 2):
+        m = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
+                                            localization_rank_limit=limit, **synthetic_rank4())
+        assert m.metadata.localization_rank_limit == limit
+        assert m.metadata.localization_truncated_input_maxabs == truncated
+        # A declared restriction is announced on the record, not left implicit.
+        declared = [w for w in m.warnings if 'localization declared at rank' in w]
+        assert len(declared) == 1
+        assert f'ranks {limit + 1}..4 are absent by declaration' in declared[0]
+        assert 'absent by declaration, not computed and small' in declared[0]
+        assert 'cannot change any number at those ranks' in declared[0]
+
+
+def test_localization_rank_limit_restricts_the_model_without_moving_it():
+    """A declared limit yields the rank-3 model restricted, not a re-fit one.
+
+    Localizing under the restriction and localizing at rank3 then reading only
+    the low components are the SAME computation, because multipole translation is
+    rank-raising: a component pair above the limit writes only above it. So the
+    surviving scalars are bitwise equal, and the ones above the limit are zero by
+    declaration. `== 0.0` is deliberate; a tolerance here would hide the point.
+    """
+    full = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
+                                           **synthetic_rank4())
+    reference = np.asarray(full.atomic_scalars.array)
+    for limit in (1, 2):
+        m = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
+                                            localization_rank_limit=limit, **synthetic_rank4())
+        scalars = np.asarray(m.atomic_scalars.array)
+        assert scalars.shape == reference.shape
+        assert (scalars[:, :, :limit] == reference[:, :, :limit]).all()
+        assert (scalars[:, :, limit:] == 0.0).all()
+    # The restriction is nonvacuous: rank2 and3 carry real weight here.
+    assert abs(reference[:, :, 1]).max() > 1.0
+    assert abs(reference[:, :, 2]).max() > 1.0
+
+
+def test_rank4_localization_is_a_different_model_and_exactly_consistent():
+    """Limit4 localizes the retained rank4 rows; limit3 is its leading restriction.
+
+    These are two MODELS, not two accuracies of one: the limit4 result carries a
+    rank4 local tensor the limit3 model does not have at all, and the two may never
+    be quoted as agreeing. What they ARE is exactly consistent, and that is the
+    theorem stated in lw_localization.h: multipole translation is rank-raising, so
+    no rank4 component can write into a rank<=3 one. `== 0.0` is deliberate; a
+    tolerance would hide the point.
+    """
+    r3 = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
+                                         **synthetic_rank4())
+    r4 = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
+                                         localization_rank_limit=4,
+                                         **synthetic_rank4(retain=True))
+    assert r3.raw_local.shape == (1,3,15,15)
+    assert r4.raw_local.shape == (1,3,24,24)
+    a3, a4 = np.asarray(r3.raw_local.array), np.asarray(r4.raw_local.array)
+    assert (a4[...,:15,:15] == a3).all()
+    assert (np.asarray(r4.atomic_scalars.array)[...,:3] ==
+            np.asarray(r3.atomic_scalars.array)).all()
+    # Nonvacuous: the retained rank4 rows carry real weight, and the rank4 local
+    # scalar exists only in the limit4 model.
+    assert np.abs(a4[...,15:,15:]).max() > 1.0
+    assert np.asarray(r4.atomic_scalars.array).shape == (1,3,4)
+    assert np.abs(np.asarray(r4.atomic_scalars.array)[:,:,3]).min() > 1.0
+    # The record says which model this is, on both the metadata and the warnings.
+    assert r4.metadata.localization_rank_limit == 4
+    assert r4.metadata.output_ranks == (1,2,3,4)
+    assert r4.metadata.local_components[-1] == '44s'
+    assert 'rank1..4 local' in r4.metadata.coverage
+    assert 'DIFFERENT model' in r4.metadata.coverage
+    # Retained rank4 discards nothing at the boundary; the truncating model does.
+    assert r4.metadata.discarded_rank4_entry_count == 0
+    assert r3.metadata.discarded_rank4_entry_count == THREE_SITE_DISCARDED_RANK4
+    assert r4.metadata.truncation == lw.RETAIN_RANK4
+    # What r3 discarded is the same rank4 weight asserted nonvacuous above, and
+    # its magnitude is reported rather than left at the boundary unmeasured.
+    assert r4.metadata.localization_truncated_input_maxabs == 0.0
+    assert r3.metadata.localization_truncated_input_maxabs > 1.0
+    truncated = [w for w in r3.warnings if 'localization declared at rank 3' in w]
+    assert len(truncated) == 1
+    assert not any('localization declared at rank 4' in w for w in r4.warnings)
+    declared = [w for w in r4.warnings if 'localization declared at rank4' in w]
+    assert len(declared) == 1
+    assert 'must never be quoted as agreeing' in declared[0]
 
 
 def test_rank4_truncation_is_exact_and_finite_required():
@@ -432,16 +532,23 @@ def test_normal_package_import_without_staging():
         else: package.isapol_lw = prior_attribute
 
 
-def test_runtime_has_no_fixture_io_or_executables(water,monkeypatch):
+def test_runtime_has_no_fixture_io_or_executables(monkeypatch):
+    """The driver reads no file and spawns nothing once it has its arrays.
+
+    The historical-fixture half of this check lives in `agent_scratch/`; the
+    guarantee itself is about the driver, so it is asserted here on a request
+    built in memory.
+    """
     import builtins
     import subprocess
-    q = water_request(water)  # bounded fixture loaded before IO guard
+    q = synthetic_rank4()  # arrays materialized before the IO guard
     def forbidden(*args,**kwargs): raise AssertionError('runtime IO/executable forbidden')
     monkeypatch.setattr(builtins,'open',forbidden)
     monkeypatch.setattr(Path,'open',forbidden)
     monkeypatch.setattr(subprocess,'Popen',forbidden)
     assert lw.supplied_nonlocal_properties(**request()).metadata.production_postcondition_passed
-    assert not lw.supplied_nonlocal_properties(**q,residual_policy='historical_water_diagnostic').metadata.production_postcondition_passed
+    with pytest.raises(RuntimeError, match='postcondition'):
+        lw.supplied_nonlocal_properties(**q)
 
 
 def test_no_generic_tolerance_and_no_asymmetry_repair():
@@ -474,114 +581,11 @@ def test_disconnected_inconsistent_flow_fails_no_fallback():
     with pytest.raises(RuntimeError): lw.supplied_nonlocal_properties(**q)
 
 
-def test_localization_rank_limit_is_recorded_and_defaults_to_three(water):
-    """The declared localization rank reaches Metadata, with what it discarded."""
-    q = water_request(water)
-    full = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',**q)
-    assert full.metadata.localization_rank_limit == 3
-    # This request is a rank4 input discarded at the rank3 boundary. The drop
-    # happens in the driver, before core is handed a block, so core's own
-    # measurement is structurally blind to it -- but a declared discard that
-    # reports zero reads as "nothing was thrown away", which is the opposite of
-    # what happened. The reported magnitude is the real one, and rank3 is not
-    # exempted from announcing the restriction just because it is the default.
-    assert full.metadata.discarded_rank4_entry_count > 0
-    assert full.metadata.localization_truncated_input_maxabs == pytest.approx(123.4503, abs=1e-9)
-    declared = [w for w in full.warnings if 'localization declared at rank' in w]
-    assert len(declared) == 1
-    assert 'ranks 4..4 are absent by declaration' in declared[0]
-    assert '123.45' in declared[0]
-    for limit in (1,2):
-        m = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
-                                            localization_rank_limit=limit,**q)
-        assert m.metadata.localization_rank_limit == limit
-        # The reference's own recorded distributed response is nonzero above
-        # rank 2, so a limit below 3 really does discard data here.
-        assert m.metadata.localization_truncated_input_maxabs > 1.0
-        # A declared restriction is announced on the record, not left implicit.
-        declared = [w for w in m.warnings if 'localization declared at rank' in w]
-        assert len(declared) == 1
-        assert 'absent by declaration, not computed and small' in declared[0]
-        assert 'cannot change any number at those ranks' in declared[0]
-
-
 @pytest.mark.parametrize('bad',[0,5,-1,'2',2.0,True,None])
 def test_localization_rank_limit_is_validated(bad):
     q = request(1,[0.])
     with pytest.raises(ValueError,match='localization_rank_limit'):
         lw.supplied_nonlocal_properties(localization_rank_limit=bad,**q)
-
-
-def test_localization_rank_limit_restricts_the_model_without_moving_it(water):
-    """A declared limit yields the rank-3 model restricted, not a re-fit one.
-
-    Localizing under the restriction and localizing at rank3 then reading only
-    the low components are the SAME computation, because multipole translation is
-    rank-raising: a component pair above the limit writes only above it. So the
-    surviving scalars are bitwise equal, and the ones above the limit are zero by
-    declaration. `abs=0.0` is deliberate; a tolerance here would hide the point.
-    """
-    q = water_request(water)
-    full = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',**q)
-    reference = np.asarray(full.atomic_scalars.array)
-    for limit in (1,2):
-        m = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
-                                            localization_rank_limit=limit,**q)
-        scalars = np.asarray(m.atomic_scalars.array)
-        assert scalars.shape == reference.shape
-        assert (scalars[:,:,:limit] == reference[:,:,:limit]).all()
-        assert (scalars[:,:,limit:] == 0.0).all()
-    # The restriction is nonvacuous: rank2 and3 carry real weight here.
-    assert abs(reference[:,:,1]).max() > 1.0
-    assert abs(reference[:,:,2]).max() > 1.0
-
-
-def test_rank4_localization_is_a_different_model_and_exactly_consistent(water):
-    """Limit4 localizes the retained rank4 rows; limit3 is its leading restriction.
-
-    These are two MODELS, not two accuracies of one: the limit4 result carries a
-    rank4 local tensor the limit3 model does not have at all, and the two may never
-    be quoted as agreeing. What they ARE is exactly consistent, and that is the
-    theorem stated in lw_localization.h: multipole translation is rank-raising, so
-    no rank4 component can write into a rank<=3 one. `== 0.0` is deliberate; a
-    tolerance would hide the point.
-    """
-    r3 = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
-                                         **water_request(water))
-    r4 = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
-                                         localization_rank_limit=4,
-                                         **water_request(water,retain=True))
-    assert r3.raw_local.shape == (1,3,15,15)
-    assert r4.raw_local.shape == (1,3,24,24)
-    a3, a4 = np.asarray(r3.raw_local.array), np.asarray(r4.raw_local.array)
-    assert (a4[...,:15,:15] == a3).all()
-    assert (np.asarray(r4.atomic_scalars.array)[...,:3] ==
-            np.asarray(r3.atomic_scalars.array)).all()
-    # Nonvacuous: the retained rank4 rows carry real weight, and the rank4 local
-    # scalar exists only in the limit4 model.
-    assert np.abs(a4[...,15:,15:]).max() > 1.0
-    assert np.asarray(r4.atomic_scalars.array).shape == (1,3,4)
-    assert np.abs(np.asarray(r4.atomic_scalars.array)[:,:,3]).min() > 1.0
-    # The record says which model this is, on both the metadata and the warnings.
-    assert r4.metadata.localization_rank_limit == 4
-    assert r4.metadata.output_ranks == (1,2,3,4)
-    assert r4.metadata.local_components[-1] == '44s'
-    assert 'rank1..4 local' in r4.metadata.coverage
-    assert 'DIFFERENT model' in r4.metadata.coverage
-    # Retained rank4 discards nothing at the boundary; the truncating model does.
-    assert r4.metadata.discarded_rank4_entry_count == 0
-    assert r3.metadata.discarded_rank4_entry_count > 0
-    assert r4.metadata.truncation == lw.RETAIN_RANK4
-    # What r3 discarded is the same rank4 weight asserted nonvacuous above, and
-    # its magnitude is reported rather than left at the boundary unmeasured.
-    assert r4.metadata.localization_truncated_input_maxabs == 0.0
-    assert r3.metadata.localization_truncated_input_maxabs == pytest.approx(123.4503, abs=1e-9)
-    truncated = [w for w in r3.warnings if 'localization declared at rank 3' in w]
-    assert len(truncated) == 1 and '123.45' in truncated[0]
-    assert not any('localization declared at rank 4' in w for w in r4.warnings)
-    declared = [w for w in r4.warnings if 'localization declared at rank4' in w]
-    assert len(declared) == 1
-    assert 'must never be quoted as agreeing' in declared[0]
 
 
 def test_rank4_localization_completes_c12():

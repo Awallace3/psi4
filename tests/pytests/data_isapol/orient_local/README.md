@@ -52,7 +52,16 @@ remain explicit TODOs.
 
 ## Hermetic LW localization input/output (strict checkpoint, currently blocked)
 
-`lw-hermetic-water.json` and its adjacent SHA256 contain literal decimal tokens
+`lw-hermetic-water.json` is a 7,159-line fixture and is **not committed**: it and
+its adjacent SHA256 live in the untracked local scratch tree, together with the
+test that compares all 675 expected entries. Localization couples all nine
+site-pair blocks, so no subset of the input reproduces a single output entry and
+there is no element-wise slice of that comparison to keep in the repository; what
+it measured is recorded as literals in the committed
+`../../test_isapol_lw_hermetic.py` and re-derived from the fixture by a guard test
+on the scratch side, so a regenerated fixture cannot leave those literals stale.
+
+The fixture and its adjacent SHA256 contain literal decimal tokens
 from ONLY `H2O_NL4_000.pol` (SHA256
 `9b6130f42fc50b50b80d5860f13cc6b5b198002c4c74a1b3500893481502c166`)
 and unrefined `H2O_L3_000.pol` (SHA256
@@ -83,7 +92,7 @@ using `D(F)^T A D(F)` with the ranks 1..3 block of `isa_multipole_rotation(3,F)`
 H1 has F=diag(-1,-1,1), O/H2 identity. The runtime test never opens reference paths
 or invokes extraction tools. Malformed-parser tests use portable literals only.
 
-`test_isapol_lw_hermetic.py` keeps the default **1e-6 postcondition** distinct from
+The scratch-side comparison keeps the default **1e-6 postcondition** distinct from
 **1e-11 absolute, rtol=0 over all 675 expected entries**. The production default
 still FAILS and its rejection has a dedicated regression. Exact decimal input
 charge sums already reach7.011e-4 at H1/H2 component32c; this is not an output
@@ -91,15 +100,27 @@ error and is not fixed by rotating H1. User explicitly authorized a separate
 **historical-only1e-3 diagnostic**, not a production-default change or automatic
 retry. Under that policy all675 output entries PASS: maximum absolute errors
 O6.252776074688882e-13, H1 5.60440582830779e-13, H2 5.089262344881718e-13.
-The27 tests also include fixture-only and candidate-output negative H1 frame
-controls; omitting the rotation produces a difference greater than15.
+It also includes fixture-only and candidate-output negative H1 frame controls;
+omitting the rotation produces a difference greater than15.
 No reference values, kernel defaults, or1e-11 comparison thresholds changed;
 no xfail/skip was added. Measured residuals are off_site2.201454e-11,
 charge_sum0.000701099999999899, reciprocity5.771383371211414e-12,
 molecular_sum3.979039320256561e-13, local_charge0.0007011000000002321.
 
+The committed `../../test_isapol_lw_hermetic.py` carries 37 tests that need no
+fixture: the reviewed `.pol` dialect is exercised on synthetic documents built in
+the test file (round-trip, whitespace runs, eleven malformed-section faults, the
+required pair sequence, and that the distributed and local dialects are not
+interchangeable); the local frames are derived from the recorded origins rather
+than asserted; the rank-3 rotation of those frames is checked as an exact theorem
+(bitwise `diag((-1)^m)`, an involution); rank-4 truncation is pinned by count
+(5625 - 2304 = 3321) with NaN poisoning; and the measured residuals, per-site
+maxima, charge-flow terms and transfer counts above are pinned as literals. One
+test cross-checks them against `../../test_isapol_lw_leg_a.py`, since the hermetic
+run and leg A index 000 are the same supplied input captured twice.
+
 Scope: native LW processing of supplied nonlocal tensors with historical output
 agreement, NOT production postcondition acceptance, native end-to-end water
 properties, fresh wavefunction generation, or native PFIT. The initial strict
-failure is retained in `.pi/audit/lw-hermetic-resume-handoff.md`; subsequent
-user-authorized measurements are in `lw-hermetic-diagnostic-v2.log`.
+failure and the subsequent user-authorized measurements are retained in the local
+audit tree, which is not part of this repository.

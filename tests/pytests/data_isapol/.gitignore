@@ -1,14 +1,10 @@
 # Keep the fixtures the tests read visible despite the repository-wide JSON ignore.
+# Large end-to-end fixtures are untracked and live in a local scratch tree.
 !.gitignore
-!camcasp_isa_basis_*.json
 !psi4_provisional_acceptance_evidence.json
-!lw_translation_reference.json
-!orient_local/lw-hermetic-water.json
 !psi4_lw_anisotropic_driver_evidence.json
-!orient_local/lw-dynamic-water.json
 !h2o_props_psi4_basis/records.json
 !h2o_props_psi4_basis/manifest.json
 !camcasp_cn_pot_h2o_l2h1.json
-!camcasp_local_pol_h2o_atz_wt4.json
 !camcasp_casimir_h2o_vdz_l3.json
 !psi4_primary_casimir_residual_evidence.json

@@ -75,7 +75,7 @@ python -P tests/pytests/data_isapol/oracle/reconstruct_isa_basis.py \
   .pi/audit/basis-water-first/isapol-checkpoint.dat \
   --report .pi/audit/basis-water-first/basis-audit.json \
   --sample-count 97 \
-  --fixture-output tests/pytests/data_isapol/camcasp_isa_basis_first.json
+  --fixture-output "$SCRATCH/camcasp_isa_basis_first.json"
 ```
 
 Repeat for activated oxygen and hydrogen. The audit measures 97 deterministic
@@ -90,6 +90,12 @@ and coefficient vectors, and only selected basis/density/shape samples. Export i
 limited to 513 selected points and happens only after successful audit. These are
 **basis-descriptor audit fixtures**, not complete frozen-fit replay fixtures.
 Companion `camcasp_isa_basis_evidence.json` supplies producer/protocol provenance.
+These four fixtures total roughly 63,000 lines and are **not** committed: pass a
+`--fixture-output` under a local scratch directory (`$SCRATCH` above), which is
+where the full replay test reads them from. The committed
+`../../test_isapol_basis.py` instead pins selected descriptor elements, one per
+regime of the 97-point radial grid, which are exact submatrices of this
+comparison.
 Unit tests use `load_fixture()` and `audit()` without CamCASP or SciPy.
 
 Source cross-references (local CamCASP, not redistributed):

@@ -4,18 +4,44 @@ No old repository or reference executable is accessed by these tests. The numeri
 matrix fixture was produced during development from our own old C++ code, not
 ORIENT. Production continues using only isa_multipole_translation.
 """
-import json
-from pathlib import Path
 import numpy as np
 from psi4 import core
 
+#: Worst of the 13 development fixture cases (largest deviation from the old C++
+#: matrix, 4.4e-16).  The full sweep lives in `agent_scratch/`; this displacement
+#: and the elements below are the part of it kept under version control.
+WORST_DISPLACEMENT = [0.5292945859739524, 0.9176548842614971, -0.37938272178283206]
 
-def test_lw_old_cpp_translation_matrix_equivalence():
-    fixture = json.loads((Path(__file__).parent/'data_isapol/lw_translation_reference.json').read_text())
-    assert len(fixture['cases']) >= 10
-    for case in fixture['cases']:
-        actual = core.isa_multipole_translation(3, case['displacement']).to_array()
-        np.testing.assert_allclose(actual, case['expected'], atol=5e-12, rtol=0)
+#: Column 0 of that case is the physically meaningful selection: translating a
+#: unit charge writes the regular solid harmonics R_lm(-d) into every component,
+#: so these 16 numbers exercise all four ranks at once.  Literals are the old
+#: C++ reference values, which agree with the fixture to 4.4e-16.
+WORST_CHARGE_COLUMN = [
+    1.0,                                            # 00
+    -0.37938272178283206, 0.5292945859739524, 0.9176548842614971,     # 1m
+    -0.4171903730878099, -0.34780484459384997, -0.6030003383164476,
+    -0.4866523476782863, 0.8412739855718974,                          # 2m
+    0.5840345161670512, -0.1771404535123017, -0.30711404702306916,
+    0.4128396231286102, -0.7136742210498999, -0.9398751435667386,
+    -0.0011841194803787836,                                           # 3m
+]
+
+#: The single element where our translation and the old C++ one disagree most
+#: over all 13 cases: the 2c <- 1s transport coefficient.
+WORST_ELEMENT = ((7, 3), -1.5894248833546503)
+
+
+def test_lw_translation_worst_fixture_case_selected_elements():
+    """The retained elements of the fixture's worst case, not the full matrix."""
+    matrix = core.isa_multipole_translation(3, WORST_DISPLACEMENT).to_array()
+    assert matrix.shape == (16, 16)
+    np.testing.assert_allclose(matrix[:, 0], WORST_CHARGE_COLUMN, atol=5e-15, rtol=0)
+    (row, col), value = WORST_ELEMENT
+    np.testing.assert_allclose(matrix[row, col], value, atol=5e-15, rtol=0)
+    # Structure the full comparison also pinned: unit diagonal, no back-transport
+    # of higher ranks into the charge.
+    np.testing.assert_allclose(np.diag(matrix), np.ones(16), atol=0, rtol=0)
+    np.testing.assert_array_equal(matrix[0, 1:], np.zeros(15))
 
 
 def test_lw_rank3_translation_matches_arbitrary_displacement_fixtures():

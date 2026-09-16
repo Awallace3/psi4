@@ -50,7 +50,7 @@ What the fixture carries, and what it deliberately does not.
     `read_cn_pot.py`.  Re-run this script if that changes.
 
     ./read_local_pol.py <case-dir>              # decode to stdout
-    ./read_local_pol.py --fixture <case-dir>    # rewrite ../camcasp_local_pol_h2o_atz_wt4.json
+    ./read_local_pol.py --fixture <case-dir>    # rewrite the scratch camcasp_local_pol fixture
 """
 import hashlib
 import json
@@ -613,8 +613,10 @@ if __name__ == '__main__':
     fixture = decode(args[-1])
     fixture['internal_inconsistency'] = internal_inconsistency(fixture)
     if args[0] == '--fixture':
-        out = (pathlib.Path(__file__).resolve().parent.parent
-               / 'camcasp_local_pol_h2o_atz_wt4.json')
+        # Large fixture: written to the local scratch tree, not the tracked one.
+        out = (pathlib.Path(__file__).resolve().parents[4] / 'agent_scratch' / 'pytests'
+               / 'data_isapol' / 'camcasp_local_pol_h2o_atz_wt4.json')
+        out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(fixture, indent=1, sort_keys=True) + '\n')
         print(out)
     else:

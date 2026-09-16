@@ -50,8 +50,11 @@ Also generated rather than written.  `make_lattice_oracle.sh` lifts the whole of
 table, and the three numerically relevant fragments of `src/lattice.F90` — the
 radii/centre/`dmax` setup, the `RANDOM` draw loop and `subroutine add` — and wraps
 them in a driver with stubs for the surrounding CamCASP type system.  Between them
-they produced `../camcasp_prand.dat` and `../camcasp_fit_points.npz`; the
-reformatting is done by `make_fixtures.py`.
+they produced `camcasp_prand.dat` and `../camcasp_fit_points.npz`; the
+reformatting is done by `make_fixtures.py`.  `camcasp_prand.dat` is a 1,040-line
+stream that is **not** committed: `make_fixtures.py` writes it into the untracked
+local scratch tree, alongside the test that replays the whole stream.  Only
+`../camcasp_fit_points.npz` lands in this directory.
 
 ```
 CAMCASP=~/gits/CamCASP ./make_lattice_oracle.sh   # builds both into ./oracle-build
@@ -63,7 +66,7 @@ echo "1 40" | ./oracle-build/pranddump            # seed, count
 1.0  0.0 -1.43191407 0.98633103
 1.0  0.0  1.43191407 0.98633103
 IN
-./make_fixtures.py                                 # rewrites both fixtures in ../
+./make_fixtures.py                                 # npz into ../, prand into scratch
 ```
 
 `latticedump`'s first input line is `seed  npoints  lolim  hilim`, the second the
@@ -79,7 +82,7 @@ CamCASP's `SET Lattice` block reaches this code with `seed = 1`: `RANDOM nlat` s
 Not a Fortran program: `src/casimir/c6code.f90 … c12code.f90` are themselves generated
 Fortran, so the oracle is a parser rather than a build.  `parse_cncode.py` reduces the
 393 `(L1, L2, J)` blocks to their exact root-rational-fraction coefficients and writes
-both `../camcasp_recoupling.dat` and the table `libisapol` compiles in.  It asserts as
+both `camcasp_recoupling.dat` and the table `libisapol` compiles in.  It asserts as
 it goes — order conservation, the triangle rule, that every loop bound is exactly a
 rank's component range, and that it consumed every character of every right-hand side
 — so a file it cannot account for is an error, not a silent partial parse.
@@ -90,10 +93,13 @@ CAMCASP=~/gits/CamCASP ./parse_cncode.py
 
 It rewrites two files in place:
 
-* `../camcasp_recoupling.dat`, the committed fixture;
+* `camcasp_recoupling.dat`, the 5,071-line fixture — **not** committed; it is
+  written into the untracked local scratch tree with the test that compares all
+  393 blocks, while `../test_isapol.py` keeps selected blocks and the invariants;
 * `psi4/src/psi4/libisapol/recoupling_data.inc`, the generated C++ table.
 
-Both are committed, so this only needs re-running if CamCASP's tables change.  See
+The C++ table is committed, so this only needs re-running if CamCASP's tables
+change.  See
 SPEC.md §9.3 for why the coefficients are transcribed rather than re-derived, and for
 the invariants the tests check them against.
 

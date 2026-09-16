@@ -112,7 +112,8 @@ native wavefunction-to-property parity.
 The v2 follow-up exports full density/basis/shape descriptors, validates independent
 reconstruction, adds activated H1 replay and provides three portable bounded basis
 fixtures. Its maximum H1 replay residual is 7.9801e-17. See
-`BASIS_RECONSTRUCTION.md` and `../camcasp_isa_basis_evidence.json`. Large full-fit
+`BASIS_RECONSTRUCTION.md` and the uncommitted `camcasp_isa_basis_evidence.json`
+(see there for where the basis fixtures are written). Large full-fit
 streams still remain local; bounded basis fixtures are not full replay fixtures.
 
 ## Full exported-input provider reconstruction

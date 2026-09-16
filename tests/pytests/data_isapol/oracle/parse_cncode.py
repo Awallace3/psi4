@@ -25,7 +25,7 @@ carried in p, and `ip` the power of i to fold in.  That is what this script emit
 
 It writes two files, and is the only thing that ever reads CamCASP for them:
 
-  * `../camcasp_recoupling.dat`, the committed fixture `test_isapol.py` holds
+  * `agent_scratch/pytests/data_isapol/camcasp_recoupling.dat`, the local fixture
     `libisapol` to;
   * `psi4/src/psi4/libisapol/recoupling_data.inc`, the generated table that
     `recoupling_tables.cc` compiles in.
@@ -120,7 +120,10 @@ def parse(n):
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DAT = os.path.join(HERE, os.pardir, "camcasp_recoupling.dat")
+# The 5,071-line fixture is kept out of version control, in the untracked local
+# scratch tree; the generated C++ table below stays committed.
+DAT = os.path.join(HERE, *([os.pardir] * 4), "agent_scratch", "pytests",
+                   "data_isapol", "camcasp_recoupling.dat")
 INC = os.path.join(HERE, *([os.pardir] * 4), "psi4", "src", "psi4", "libisapol",
                    "recoupling_data.inc")
 

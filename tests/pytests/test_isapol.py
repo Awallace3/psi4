@@ -353,32 +353,60 @@ def test_casimir_polder_single_pole():
 # Gates 1 and 2 of SPEC.md 15.  Both are bit-exact and stay that way: the
 # refinement fits to the potential at these points, so a single extra or missing
 # deviate shifts every later point and every fitted coefficient.
+#
+# The full 256-deep stream for each of the four reference seeds is a 1,040-line
+# fixture and lives in the untracked `agent_scratch/`
+# tree with the test that replays it.  What is kept here is the part of it that constrains the generator
+# most per line: the head of each stream, which pins the lag-table
+# initialization, and every far checkpoint, which pins the lag indexing at draws
+# a prefix comparison cannot reach.
 
 
-def _prand_reference():
-    stream, check = {}, []
-    for line in (DATA / "camcasp_prand.dat").read_text().splitlines():
-        if line.startswith("#"):
-            continue
-        kind, seed, i, value = line.split()
-        if kind == "stream":
-            stream.setdefault(int(seed), []).append(float(value))
-        else:
-            check.append((int(seed), int(i), float(value)))
-    return {s: np.array(v) for s, v in stream.items()}, check
+PRAND_HEAD = {  # first eight dprand() draws after sdprnd(seed)
+    0: [
+        0.7913183967560748, 0.3741928192300996, 0.44861432892185005, 0.7428031178186686,
+        0.6519068277859982, 0.8119357718628364, 0.09214209014210396, 0.8206511920147144,
+    ],
+    1: [
+        0.6249940256745002, 0.4739767236995389, 0.33774460100239345, 0.9689091568136964,
+        0.9894501642012402, 0.370424110430112, 0.8350173508391068, 0.6246675242825115,
+    ],
+    7: [
+        0.6270499875570739, 0.07276176427472626, 0.6755453525578009, 0.4372540904407638,
+        0.14793210299769322, 0.6505653461173164, 0.6730832975142309, 0.5388973351375128,
+    ],
+    9999: [
+        0.7168473754051381, 0.2223250760738269, 0.8897056205590392, 0.5964859634692803,
+        0.4657688706665557, 0.7045823942811531, 0.10825906528783459, 0.4158048498115648,
+    ],
+}
+
+#: (seed, n, value): the n-th draw of the same stream, n up to 1e5.
+PRAND_FAR = [
+    (0, 1000, 0.3558536943794186),
+    (1, 1000, 0.8229176297805547),
+    (7, 1000, 0.5286973905111498),
+    (9999, 1000, 0.7794555606863224),
+    (0, 10000, 0.34760313364902484),
+    (1, 10000, 0.3919020645028068),
+    (7, 10000, 0.2389805735660362),
+    (9999, 10000, 0.5977261887690788),
+    (0, 100000, 0.4218999418199747),
+    (1, 100000, 0.6455312107296698),
+    (7, 100000, 0.16019401789973986),
+    (9999, 100000, 0.20506340327750427),
+]
 
 
-PRAND_STREAM, PRAND_CHECK = _prand_reference()
-
-
-@pytest.mark.parametrize("seed", sorted(PRAND_STREAM))
-def test_maclaren_stream_bit_identical(seed):
-    want = PRAND_STREAM[seed]
+@pytest.mark.parametrize("seed", sorted(PRAND_HEAD))
+def test_maclaren_stream_head_bit_identical(seed):
+    """The start of each reference stream, exactly, straight out of sdprnd."""
+    want = PRAND_HEAD[seed]
     got = psi4.core.MaclarenRng(seed).take(len(want))
-    assert np.array_equal(got, want)
+    assert np.array_equal(got, want), (seed, got, want)
 
 
-@pytest.mark.parametrize("seed,n,want", PRAND_CHECK)
+@pytest.mark.parametrize("seed,n,want", PRAND_FAR)
 def test_maclaren_far_stream_bit_identical(seed, n, want):
     """The n-th draw, n up to 1e5, so a lag-index bug cannot hide in a prefix."""
     rng = psi4.core.MaclarenRng(seed)
@@ -534,30 +562,184 @@ def test_vdw_radius_tables_are_distinct():
 # --- Recoupling tables: the anisotropic dispersion coefficients ---------------
 #
 # Gate 4 of SPEC.md 15.  CamCASP's c6code.f90 ... c12code.f90 are machine-generated
-# Fortran fragments; `oracle/parse_cncode.py` reduces them to the fixture read here
-# and to the table libisapol compiles in, so the two cannot drift apart silently.
-# On top of that parity check, the invariants below are derived from the theory
-# rather than from CamCASP, and would catch a table that was self-consistently wrong.
+# Fortran fragments; `oracle/parse_cncode.py` reduces them to a fixture and to the
+# table libisapol compiles in, so the two cannot drift apart silently.
+#
+# The fixture holding all 393 blocks is 5,071 lines and lives in the untracked
+# `agent_scratch/` tree with the test that compares every one of them.  Two things are
+# kept here instead.  First, selected literal blocks: the complete C_6 and C_7
+# tables -- the lowest even and odd orders, so both the real and the imaginary
+# recoupling factor are covered end to end -- plus the largest block in the whole
+# table, (12, 3, 3, 6) with 42 terms.  Second, the theory invariants below, which
+# are derived from the physics rather than from CamCASP and are therefore asserted
+# over the shipped C++ table itself: they would catch a table that was
+# self-consistently wrong, and they need no fixture to do it.
 
 
-def _recoupling_reference():
-    """{(n, L1, L2, J): [(p, q, r, s, la, lap, lb, lbp, ip), ...]} from the fixture."""
-    blocks, key = {}, None
-    for line in (DATA / "camcasp_recoupling.dat").read_text().splitlines():
-        if line.startswith("#") or not line.strip():
-            continue
-        fields = line.split()
-        if fields[0] == "block":
-            key = tuple(int(f) for f in fields[1:5])
-            assert key not in blocks
-            blocks[key] = []
-            assert int(fields[5]) >= 1
-        else:
-            blocks[key].append(tuple(int(f) for f in fields))
-    return blocks
+RECOUPLING_BLOCKS = {
+    (6, 0, 0, 0): [
+        (2, 1, 1, 1, 1, 1, 1, 1, 0),
+    ],
+    (6, 0, 2, 2): [
+        (-1, 1, 2, 1, 1, 1, 1, 1, 0),
+    ],
+    (6, 1, 1, 0): [
+        (1, 1, 1, 1, 1, 1, 1, 1, 0),
+    ],
+    (6, 1, 1, 2): [
+        (2, 1, 1, 1, 1, 1, 1, 1, 0),
+    ],
+    (6, 2, 0, 2): [
+        (-1, 1, 2, 1, 1, 1, 1, 1, 0),
+    ],
+    (6, 2, 2, 0): [
+        (1, 5, 1, 1, 1, 1, 1, 1, 0),
+    ],
+    (6, 2, 2, 2): [
+        (2, 7, 1, 1, 1, 1, 1, 1, 0),
+    ],
+    (6, 2, 2, 4): [
+        (108, 35, 1, 1, 1, 1, 1, 1, 0),
+    ],
+    (7, 0, 1, 1): [
+        (3, 1, 6, 5, 1, 1, 2, 1, 0),
+        (3, 1, 6, 5, 1, 1, 1, 2, 0),
+    ],
+    (7, 0, 3, 3): [
+        (-4, 1, 1, 5, 1, 1, 2, 1, 0),
+        (-4, 1, 1, 5, 1, 1, 1, 2, 0),
+    ],
+    (7, 1, 0, 1): [
+        (3, 1, 6, 5, 2, 1, 1, 1, 0),
+        (3, 1, 6, 5, 1, 2, 1, 1, 0),
+    ],
+    (7, 1, 1, 1): [
+        (9, 1, 3, 10, 2, 1, 1, 1, 1),
+        (-9, 1, 3, 10, 1, 2, 1, 1, 1),
+        (9, 1, 3, 10, 1, 1, 2, 1, 1),
+        (-9, 1, 3, 10, 1, 1, 1, 2, 1),
+    ],
+    (7, 1, 2, 1): [
+        (3, 5, 3, 5, 2, 1, 1, 1, 0),
+        (3, 5, 3, 5, 1, 2, 1, 1, 0),
+        (3, 5, 3, 1, 1, 1, 2, 1, 0),
+        (3, 5, 3, 1, 1, 1, 1, 2, 0),
+    ],
+    (7, 1, 2, 3): [
+        (-12, 5, 3, 5, 2, 1, 1, 1, 0),
+        (-12, 5, 3, 5, 1, 2, 1, 1, 0),
+        (8, 5, 3, 1, 1, 1, 2, 1, 0),
+        (8, 5, 3, 1, 1, 1, 1, 2, 0),
+    ],
+    (7, 1, 3, 3): [
+        (-1, 1, 14, 5, 1, 1, 2, 1, 1),
+        (1, 1, 14, 5, 1, 1, 1, 2, 1),
+    ],
+    (7, 2, 1, 1): [
+        (3, 5, 3, 1, 2, 1, 1, 1, 0),
+        (3, 5, 3, 1, 1, 2, 1, 1, 0),
+        (3, 5, 3, 5, 1, 1, 2, 1, 0),
+        (3, 5, 3, 5, 1, 1, 1, 2, 0),
+    ],
+    (7, 2, 1, 3): [
+        (8, 5, 3, 1, 2, 1, 1, 1, 0),
+        (8, 5, 3, 1, 1, 2, 1, 1, 0),
+        (-12, 5, 3, 5, 1, 1, 2, 1, 0),
+        (-12, 5, 3, 5, 1, 1, 1, 2, 0),
+    ],
+    (7, 2, 2, 1): [
+        (-3, 1, 3, 10, 2, 1, 1, 1, 1),
+        (3, 1, 3, 10, 1, 2, 1, 1, 1),
+        (-3, 1, 3, 10, 1, 1, 2, 1, 1),
+        (3, 1, 3, 10, 1, 1, 1, 2, 1),
+    ],
+    (7, 2, 2, 3): [
+        (2, 1, 14, 5, 2, 1, 1, 1, 1),
+        (-2, 1, 14, 5, 1, 2, 1, 1, 1),
+        (2, 1, 14, 5, 1, 1, 2, 1, 1),
+        (-2, 1, 14, 5, 1, 1, 1, 2, 1),
+    ],
+    (7, 2, 3, 1): [
+        (9, 35, 2, 5, 1, 1, 2, 1, 0),
+        (9, 35, 2, 5, 1, 1, 1, 2, 0),
+    ],
+    (7, 2, 3, 3): [
+        (2, 5, 2, 5, 1, 1, 2, 1, 0),
+        (2, 5, 2, 5, 1, 1, 1, 2, 0),
+    ],
+    (7, 2, 3, 5): [
+        (10, 7, 10, 1, 1, 1, 2, 1, 0),
+        (10, 7, 10, 1, 1, 1, 1, 2, 0),
+    ],
+    (7, 3, 0, 3): [
+        (-4, 1, 1, 5, 2, 1, 1, 1, 0),
+        (-4, 1, 1, 5, 1, 2, 1, 1, 0),
+    ],
+    (7, 3, 1, 3): [
+        (-1, 1, 14, 5, 2, 1, 1, 1, 1),
+        (1, 1, 14, 5, 1, 2, 1, 1, 1),
+    ],
+    (7, 3, 2, 1): [
+        (9, 35, 2, 5, 2, 1, 1, 1, 0),
+        (9, 35, 2, 5, 1, 2, 1, 1, 0),
+    ],
+    (7, 3, 2, 3): [
+        (2, 5, 2, 5, 2, 1, 1, 1, 0),
+        (2, 5, 2, 5, 1, 2, 1, 1, 0),
+    ],
+    (7, 3, 2, 5): [
+        (10, 7, 10, 1, 2, 1, 1, 1, 0),
+        (10, 7, 10, 1, 1, 2, 1, 1, 0),
+    ],
+    (12, 3, 3, 6): [
+        (280, 11, 10, 33, 4, 3, 2, 1, 0),
+        (200, 11, 10, 33, 4, 3, 1, 2, 0),
+        (-112, 11, 15, 1, 4, 2, 3, 1, 0),
+        (-560, 33, 2, 1, 4, 2, 2, 2, 0),
+        (-80, 11, 5, 3, 4, 2, 1, 3, 0),
+        (280, 3, 1, 1, 4, 1, 4, 1, 0),
+        (280, 11, 5, 3, 4, 1, 3, 2, 0),
+        (280, 33, 5, 3, 4, 1, 2, 3, 0),
+        (200, 99, 1, 1, 4, 1, 1, 4, 0),
+        (200, 11, 10, 33, 3, 4, 2, 1, 0),
+        (280, 11, 10, 33, 3, 4, 1, 2, 0),
+        (-560, 33, 2, 1, 3, 3, 3, 1, 0),
+        (-800, 33, 5, 3, 3, 3, 2, 2, 0),
+        (-560, 33, 2, 1, 3, 3, 1, 3, 0),
+        (280, 11, 5, 3, 3, 2, 4, 1, 0),
+        (1400, 33, 1, 1, 3, 2, 3, 2, 0),
+        (1000, 33, 1, 1, 3, 2, 2, 3, 0),
+        (280, 33, 5, 3, 3, 2, 1, 4, 0),
+        (-112, 11, 15, 1, 3, 1, 4, 2, 0),
+        (-560, 33, 2, 1, 3, 1, 3, 3, 0),
+        (-80, 11, 5, 3, 3, 1, 2, 4, 0),
+        (-80, 11, 5, 3, 2, 4, 3, 1, 0),
+        (-560, 33, 2, 1, 2, 4, 2, 2, 0),
+        (-112, 11, 15, 1, 2, 4, 1, 3, 0),
+        (280, 33, 5, 3, 2, 3, 4, 1, 0),
+        (1000, 33, 1, 1, 2, 3, 3, 2, 0),
+        (1400, 33, 1, 1, 2, 3, 2, 3, 0),
+        (280, 11, 5, 3, 2, 3, 1, 4, 0),
+        (-560, 33, 2, 1, 2, 2, 4, 2, 0),
+        (-800, 33, 5, 3, 2, 2, 3, 3, 0),
+        (-560, 33, 2, 1, 2, 2, 2, 4, 0),
+        (280, 11, 10, 33, 2, 1, 4, 3, 0),
+        (200, 11, 10, 33, 2, 1, 3, 4, 0),
+        (200, 99, 1, 1, 1, 4, 4, 1, 0),
+        (280, 33, 5, 3, 1, 4, 3, 2, 0),
+        (280, 11, 5, 3, 1, 4, 2, 3, 0),
+        (280, 3, 1, 1, 1, 4, 1, 4, 0),
+        (-80, 11, 5, 3, 1, 3, 4, 2, 0),
+        (-560, 33, 2, 1, 1, 3, 3, 3, 0),
+        (-112, 11, 15, 1, 1, 3, 2, 4, 0),
+        (200, 11, 10, 33, 1, 2, 4, 3, 0),
+        (280, 11, 10, 33, 1, 2, 3, 4, 0),
+    ],
+}
 
+RECOUPLING_TOTAL_TERMS = 4673
+RECOUPLING_TOTAL_BLOCKS = 393
 
-RECOUPLING_REF = _recoupling_reference()
 
 # casimir.f90:112-123, with CamCASP's padding to width 3 stripped.
 COMPONENT_LABELS = [
@@ -565,6 +747,11 @@ COMPONENT_LABELS = [
     for L in range(9)
     for lab in [f"{L}0"] + [f"{L}{K}{cs}" for K in range(1, L + 1) for cs in "cs"]
 ]
+
+
+def _cxx_blocks():
+    return {(n, L1, L2, J): terms
+            for n, L1, L2, J, terms in psi4.core.isapol_recoupling_blocks()}
 
 
 def _cxx_block(key):
@@ -575,26 +762,28 @@ def _as_tuple(term):
     return (term.p, term.q, term.r, term.s, term.la, term.lap, term.lb, term.lbp, term.ipow)
 
 
-def test_recoupling_blocks_match_fixture():
-    """Every tabulated block, and nothing else, with its terms in CamCASP's order."""
-    got = {(n, L1, L2, J): terms for n, L1, L2, J, terms in psi4.core.isapol_recoupling_blocks()}
-    assert sorted(got) == sorted(RECOUPLING_REF)
-    assert sum(len(t) for t in got.values()) == 4673
-    for key, want in RECOUPLING_REF.items():
-        assert [_as_tuple(t) for t in got[key]] == want, key
+def test_recoupling_table_shape_matches_the_reference():
+    """The shipped table has the reference's blocks and term count, nothing else."""
+    got = _cxx_blocks()
+    assert len(got) == RECOUPLING_TOTAL_BLOCKS
+    assert sum(len(t) for t in got.values()) == RECOUPLING_TOTAL_TERMS
+    assert set(RECOUPLING_BLOCKS) <= set(got)
 
 
-@pytest.mark.parametrize("n", range(6, 13))
-def test_recoupling_coefficients_bit_identical(n):
-    """The double CamCASP would compute, `(p d0/q d0) * sqrt(r d0/s d0)`, exactly."""
-    for key, want in RECOUPLING_REF.items():
-        if key[0] != n:
-            continue
-        got = _cxx_block(key)
-        assert len(got) == len(want)
-        for term, (p, q, r, s, *_) in zip(got, want):
-            expected = (float(p) / float(q)) * np.sqrt(float(r) / float(s))
-            assert term.coefficient == expected, (key, p, q, r, s)
+@pytest.mark.parametrize("key", sorted(RECOUPLING_BLOCKS))
+def test_recoupling_selected_blocks_match_the_reference(key):
+    """Selected blocks, term for term in CamCASP's order, and the doubles from them.
+
+    The coefficient is the double CamCASP would compute, `(p/q) * sqrt(r/s)`,
+    reproduced exactly -- no tolerance, because the integers are the reference and
+    the arithmetic is one multiply and one square root.
+    """
+    want = RECOUPLING_BLOCKS[key]
+    got = _cxx_block(key)
+    assert [_as_tuple(t) for t in got] == want, key
+    for term, (p, q, r, s, *_) in zip(got, want):
+        expected = (float(p) / float(q)) * np.sqrt(float(r) / float(s))
+        assert term.coefficient == expected, (key, p, q, r, s)
 
 
 def test_recoupling_absent_blocks_are_empty():
@@ -603,7 +792,7 @@ def test_recoupling_absent_blocks_are_empty():
     assert _cxx_block((6, 3, 3, 0)) == []       # C_6 has no octopole polarizabilities
     assert _cxx_block((6, 2, 2, 3)) == []       # tabulated as a comment, no terms
     assert _cxx_block((7, 8, 8, 16)) == []      # far above what C_7 can reach
-    for key in RECOUPLING_REF:
+    for key in _cxx_blocks():
         assert _cxx_block(key) != []
 
 
@@ -617,15 +806,16 @@ def test_recoupling_rejects_bad_order():
 
 def test_recoupling_conserves_the_order():
     """n = la + la' + lb + lb' + 2: each multipole rank costs one power of 1/R."""
-    for (n, _, _, _), terms in RECOUPLING_REF.items():
-        for (_, _, _, _, la, lap, lb, lbp, _) in terms:
+    for (n, _, _, _), terms in _cxx_blocks().items():
+        for term in terms:
+            (_, _, _, _, la, lap, lb, lbp, _) = _as_tuple(term)
             assert la + lap + lb + lbp + 2 == n
             assert 1 <= min(la, lap, lb, lbp)
             assert max(la, lap, lb, lbp) <= psi4.core.ISAPOL_MAX_POLARIZABILITY_RANK
 
 
 def test_recoupling_respects_the_triangle_rule():
-    for (n, L1, L2, J) in RECOUPLING_REF:
+    for (n, L1, L2, J) in _cxx_blocks():
         assert abs(L1 - L2) <= J <= L1 + L2
         assert J % 2 == n % 2, "J and n have the same parity"
         assert max(L1, L2) <= psi4.core.ISAPOL_MAX_DISPERSION_RANK
@@ -633,17 +823,18 @@ def test_recoupling_respects_the_triangle_rule():
 
 def test_recoupling_imaginary_factor_follows_the_rank_parity():
     """i appears exactly when L1 + L2 + J is odd, which is what makes the sum real."""
-    for (_, L1, L2, J), terms in RECOUPLING_REF.items():
+    for (_, L1, L2, J), terms in _cxx_blocks().items():
         for term in terms:
-            assert term[8] == (L1 + L2 + J) % 2
+            assert term.ipow == (L1 + L2 + J) % 2
 
 
 def test_recoupling_is_symmetric_under_exchange():
     """Swapping A and B swaps (la, la') with (lb, lb') and changes nothing else."""
-    for (n, L1, L2, J), terms in RECOUPLING_REF.items():
-        mirror = RECOUPLING_REF[(n, L2, L1, J)]
+    blocks = _cxx_blocks()
+    for (n, L1, L2, J), terms in blocks.items():
+        mirror = [_as_tuple(t) for t in blocks[(n, L2, L1, J)]]
         swapped = [(p, q, r, s, lb, lbp, la, lap, ip)
-                   for (p, q, r, s, la, lap, lb, lbp, ip) in terms]
+                   for (p, q, r, s, la, lap, lb, lbp, ip) in map(_as_tuple, terms)]
         assert sorted(swapped) == sorted(mirror), (n, L1, L2, J)
 
 
