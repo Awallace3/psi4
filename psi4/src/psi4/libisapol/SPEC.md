@@ -2,8 +2,7 @@
 
 This is the authoritative compact specification at accepted code checkpoint
 `1a097ec9f6a033428053354b294c5524e98b6137`.
-Execution state, exact build/test commands and next-agent steps live in
-[plan.md](../../../../plan.md). Stage-specific details are linked below.
+Stage-specific details are linked below.
 The pre-compaction SPEC is preserved at `git show 1a097ec9f6:psi4/src/psi4/libisapol/SPEC.md`.
 Its historical status paragraphs are superseded here; its detailed source-audit
 chronology remains available. No numerical code changed during compaction.
@@ -1283,8 +1282,8 @@ rank-1 H/O ratio never leaves **0.1927–0.1934**, while rank 2 and rank 3 move
 freely and land on the reference. A quantity that is that invariant under
 everything we can declare is a property of the ISA-A stockholder weight itself,
 and the reference's 0.28216 is a **different partition**, not a differently
-converged one. The remaining candidate is therefore the one plan.md §5 item 1
-already names and forbids substituting for: the **constrained-NN partition**
+converged one. The remaining candidate is therefore one that must never be
+silently substituted for: the **constrained-NN partition**
 itself, which `PartitionRecipe` does not yet admit (`track` is validated to
 `explicit_cartesian_drho_c_isa_a` alone). Candidate 3, the AC form, is still
 untouched and still cannot produce +57% in a ratio at fixed total. None of this

@@ -178,7 +178,7 @@ def test_work_estimate_refuses_rather_than_wrapping_and_reports_every_limit():
 
 
 def test_sampling_and_accumulation_are_gated_as_two_separate_costs():
-    """plan.md section 4: the two costs must never be quoted as one number.
+    """The two costs must never be quoted as one number.
 
     At water's naux=99 the sampling term is 22x smaller than the accumulation
     term yet measured 4.6x slower, which is exactly why a single combined limit

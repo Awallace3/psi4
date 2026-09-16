@@ -164,3 +164,11 @@ pytest_output.log
 AGENTS.md
 profile.txt
 fsapt
+
+# libisapol/CamCASP development scratch — agent handoff notes, local oracle
+# drivers and CamCASP run trees. Not part of the shipped tree; see
+# tests/pytests/data_isapol/oracle/ for the committed provenance kit.
+/plan.md
+/orient_replacement.md
+/tmp/
+/psi4/src/psi4/libisapol/oracle/

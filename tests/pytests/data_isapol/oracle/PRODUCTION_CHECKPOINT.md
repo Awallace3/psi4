@@ -61,7 +61,7 @@ This is source/compiler dependent, not a promise that every CamCASP revision
 builds unchanged. Record actual command/compiler, linked libraries, executable
 hash and logs. The Git ceiling prevents the scratch build from reporting the
 parent Psi4 repository's revision as CamCASP provenance; use the captured source
-hashes, not ambient VCS strings. `plan.md` records current evidence/blockers.
+hashes, not ambient VCS strings.
 
 ## Capture and replay
 
@@ -104,10 +104,10 @@ The local adapted reference compiled and converged in 53 iterations. First and
 activated oxygen checkpoints (68,310 points / 109 functions) passed C++ replay.
 Largest observed coefficient absolute error was 2.8911e-12; largest normalized
 solve residual was 5.3526e-17. Seven final shape/tail files were byte-identical
-across early-traced, activated-traced and untraced runs. See
-`../camcasp_isa_production_evidence.json` and root `plan.md` for precise errors,
-hashes, artifact paths and limitations. These are production sampled-kernel
-checks, not native wavefunction-to-property parity.
+across early-traced, activated-traced and untraced runs. The per-artifact
+hashes and paths behind these numbers stay in the local run tree, which needs a
+CamCASP checkout to reproduce. These are production sampled-kernel checks, not
+native wavefunction-to-property parity.
 
 The v2 follow-up exports full density/basis/shape descriptors, validates independent
 reconstruction, adds activated H1 replay and provides three portable bounded basis
@@ -133,16 +133,15 @@ python -P tests/pytests/data_isapol/oracle/replay_isa_checkpoint.py \
   --report .pi/audit/basis-water-activated/provider-replay.json
 ```
 
-Use the staged environment from `plan.md`. Choose a **new report path**, preserving
+Use the staged Psi4 environment. Choose a **new report path**, preserving
 existing sample-only evidence. Full streams contain 68,310 points; the portable
 97-point descriptor fixtures are not complete fitting inputs. This replay still
 uses **captured quadrature, old coefficients, screened/tail-processed shape and
 shape-sum samples and a supplied density neighbour list**. It does not reconstruct
 active tails, generate Drho-C coefficients/basis recipes, execute a controller, or
 establish end-to-end parity. The current captures belong to the adapted legacy
-reference track, not a future CamCASP Libint2 branch. See `plan.md` for measured
-results and any blockers; the existing scaled tolerance is not a scientific error
-budget for unrelated protocols.
+reference track, not a future CamCASP Libint2 branch. The existing scaled
+tolerance is not a scientific error budget for unrelated protocols.
 
 ## Whole-sweep controller transition capture (in development)
 
@@ -184,8 +183,8 @@ reconstructing a C++ controller step. It compares full fitted/mixed states, save
 charges, deltas/flags, next controls and defined tail parameters. The source's
 stale saved-A gate versus the deterministic C++ tail policy remains an explicit
 limitation. This is **one exported-input controller transition**, not independent
-native generation or end-to-end parity. See `plan.md` for actual build/run/test
-status; capture scaffolding alone is not a passing production gate.
+native generation or end-to-end parity. Capture scaffolding alone is not a
+passing production gate.
 
 ## Full C++ controller trajectory from exported initial inputs
 

@@ -2,7 +2,7 @@
 
 This is opt-in development validation of **exported** CamCASP representations,
 not a native Psi4 basis/DF provider. Read `PRODUCTION_CHECKPOINT.md` for producer
-setup and `plan.md` for current measured evidence.
+setup.
 
 ## Checkpoint v2
 
@@ -68,7 +68,7 @@ shape-basis mapping remain testable in the active-tail state.
 
 ## Run and retain bounded fixtures
 
-With the staged environment selected as in `plan.md`:
+With the staged Psi4 environment selected:
 
 ```bash
 python -P tests/pytests/data_isapol/oracle/reconstruct_isa_basis.py \
