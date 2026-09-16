@@ -1,4 +1,4 @@
-"""Table-independent even-(L+H+J) lower-J oracle; LOWER_J_VALIDATION.md.
+"""Table-independent even-(L+H+J) lower-J oracle.
 
 Expected values use only factorial angular algebra and synthetic arrays.
 CamCASP interface conventions: Alston J. Misquitta and Anthony J. Stone,

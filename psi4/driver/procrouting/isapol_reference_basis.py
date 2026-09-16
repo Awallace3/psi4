@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 """Expected basis for a traced NON-ISA properties protocol, not a preset.
 
-Self-contained O/H numeric records only. See NATIVE_REFERENCE_BASIS.md and
-isapol_reference_basis.NOTICE for source/data attribution and license notices.
+Self-contained O/H numeric records only. See isapol_reference_basis.NOTICE for
+source/data attribution and license notices.
 No runtime file reads, SCF, options, registry, or historical export inference.
 Actual orbital MAIN must still come from adapt_main(wavefunction).
 """

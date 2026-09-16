@@ -225,8 +225,8 @@ def test_production_slice_weighted_metric_touches_only_the_s_block(tag):
     The unweighted metric of normalized primitives has a unit diagonal; switching
     on the production `w_eps` with `s_block_only` lifts the two s diagonals -- the
     diffuse oxygen s by a factor of 5.5 -- and leaves all 24 (or 15) higher-l
-    diagonals at one. This is the scope claim from PRODUCTION_CHECKPOINT.md,
-    checked against the production numbers rather than asserted in prose.
+    diagonals at one. That scope claim is checked here against the production
+    numbers rather than asserted in prose.
     """
     basis, want, blocks = sliced_basis(tag)
     s0, s1 = want['s_functions']

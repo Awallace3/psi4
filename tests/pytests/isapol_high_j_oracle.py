@@ -1,4 +1,4 @@
-"""Independent maximal-J dispersion oracle; see HIGH_J_VALIDATION.md.
+"""Independent maximal-J dispersion oracle.
 
 Only factorial angular algebra and supplied arrays enter expected values.
 No Psi4 import, table access, numerical reference files, or audit imports.

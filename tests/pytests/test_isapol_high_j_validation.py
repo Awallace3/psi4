@@ -1,6 +1,5 @@
 """Numerical J9/C11 and J10/C12 tests, independent of both shipped tables.
 
-See psi4/src/psi4/libisapol/HIGH_J_VALIDATION.md for the derivation and limits.
 No home-tree or fixture reads; production calls occur only as actual-under-test.
 """
 import math

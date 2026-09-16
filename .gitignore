@@ -178,3 +178,27 @@ fsapt
 # measured-candidate records for work still in progress, not a shipped
 # API document.  Kept on disk, off the commit history.
 /psi4/src/psi4/libisapol/SPEC.md
+
+# The libisapol contract and validation write-ups: derivations, measured
+# candidate tables and open acceptance gates for work still in progress.  The
+# durable statements live in the header doc comments beside the code.
+/psi4/src/psi4/libisapol/*.md
+
+# Oracle regeneration tooling that no committed test executes.  Every one of
+# these needs an external CamCASP checkout to run at all, so a Psi4 clone can
+# neither use them nor verify them.  The oracle scripts the committed suite
+# does importlib-load stay tracked and are deliberately NOT listed here.
+/tests/pytests/data_isapol/oracle/BASIS_RECONSTRUCTION.md
+/tests/pytests/data_isapol/oracle/PRODUCTION_CHECKPOINT.md
+/tests/pytests/data_isapol/oracle/README.md
+/tests/pytests/data_isapol/oracle/compare_native_drho.py
+/tests/pytests/data_isapol/oracle/driver.f90
+/tests/pytests/data_isapol/oracle/generate_rank4_casimir.py
+/tests/pytests/data_isapol/oracle/generate_recoupled_portable.py
+/tests/pytests/data_isapol/oracle/make_fixtures.py
+/tests/pytests/data_isapol/oracle/make_isa_fit_fixture.py
+/tests/pytests/data_isapol/oracle/prepare_isa_water_run.py
+/tests/pytests/data_isapol/oracle/read_casimir_out.py
+/tests/pytests/data_isapol/oracle/read_local_pol.py
+/tests/pytests/data_isapol/oracle/run_isa_controller.py
+/tests/pytests/data_isapol/oracle/stubs.f90

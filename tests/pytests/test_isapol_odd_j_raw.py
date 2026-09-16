@@ -1,6 +1,6 @@
 """Raw-B identities ONLY: not an oracle for production odd-J coefficients.
 
-See ODD_J_VALIDATION.md. No Psi4, tables, archives, or home-tree reads.
+No Psi4, tables, archives, or home-tree reads.
 CamCASP conventions: Misquitta / Stone, MIT notice in RECOUPLED_CAMCASP_LICENSE.
 New implementation: Copyright (c) 2026 The Psi4 Developers, LGPL-3.0-only.
 """

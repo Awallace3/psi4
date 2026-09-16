@@ -50,8 +50,8 @@ from psi4.driver.procrouting import isapol_oeprop as o
 
 pytestmark = pytest.mark.quick
 
-#: The provisionally recorded maximum joint-tail scaled error, from
-#: ``PROVISIONAL_ACCEPTANCE.md`` TODO9 and the shipped evidence file.
+#: The provisionally recorded maximum joint-tail scaled error, from the
+#: shipped evidence file.
 RECORDED_RAW_TAIL = 2.3588804665973028e-8
 
 #: The recorded ISA-A shape-coefficient error re-expressed in THIS module's

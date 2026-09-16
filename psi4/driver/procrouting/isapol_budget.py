@@ -11,8 +11,8 @@ by the input defect. The property defect always uses the recorded-error metric
 
 because a property group shares one scale and is compared against a tolerance
 stated in that same scale. The input defect uses it too by default, so that a
-required precision is directly comparable to the intermediate errors recorded in
-``PROVISIONAL_ACCEPTANCE.md``. That metric divides by the largest
+required precision is directly comparable to the recorded intermediate errors.
+That metric divides by the largest
 element, which is the right question for an intermediate whose elements share a
 scale and the wrong one for an intermediate spanning many decades: a max-scaled
 probe of tabulated shape samples is dominated by the tail, where the shipped
