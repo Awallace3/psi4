@@ -96,7 +96,6 @@ foreach(dir_name
   libdiis
   libdisp
   libdpd
-  libfilesystem
   libfock
   libfunctional
   libiwl

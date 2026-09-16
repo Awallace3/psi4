@@ -1226,7 +1226,18 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
          options ("LEVEL_SHIFT", "LEVEL_SHIFT_CUTOFF") to attempt to converge
          the neutral/cation calculations. "ITERATIVE" will try 3 times to
          converge the cation before failing the SAPT(DFT) computation. -*/
-        options.add_str("SAPT_DFT_GRAC_COMPUTE", "NONE", "NONE SINGLE ITERATIVE");
+    options.add_str("SAPT_DFT_GRAC_COMPUTE", "NONE", "NONE SINGLE ITERATIVE");
+    /*- Compute or echo monomer GRAC shifts and stop before SAPT energies.
+    Requires SINGLE or ITERATIVE and a non-HF functional. The returned dimer
+    wavefunction has CURRENT ENERGY zero, not an interaction energy. -*/
+    options.add_bool("SAPT_DFT_GRAC_SHIFT_ONLY", false);
+    /*- Include only each monomer's own A/B external potential in its GRAC
+    SCFs; C is always excluded. Charges needed in both the shift and the
+    environment may be repeated in A/B and C: a point/diffuse row exactly
+    equal to a C row is trimmed from A/B before that monomer's SCF, so it is
+    not counted twice. Rows shared between A and B are never trimmed, since
+    the dimer field must stay the sum of the monomer fields. -*/
+    options.add_bool("SAPT_DFT_GRAC_USE_EXT_POT", false);
         /*- To ensure that the GRAC shift is computed with a sufficiently large
           basis set, the user can specify a larger basis set for the GRAC
           calculation, which can be different from the basis set used for the
@@ -1560,7 +1571,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
             forcibly select a sub-algorithm (usually only for debugging or profiling).
             Presently, ``SCF_TYPE=DF``, ``SCF_TYPE=MEM_DF``, and ``SCF_TYPE=DISK_DF``
 	        can have ``INCORE`` and ``OUT_OF_CORE`` selected; and ``SCF_TYPE=PK``  can have ``INCORE``,
-	        ``OUT_OF_CORE``, ``YOSHIMINE_OUT_OF_CORE``, and ``REORDER_OUT_OF_CORE`` selected. !expert -*/
+	        ``OUT_OF_CORE``, ``YOSHIMINE_OUT_OF_CORE``, and ``REORDER_OUT_OF_CORE`` selected.
+	        ``SCF_TYPE=CD`` has no out-of-core sub-algorithm, so it accepts only ``AUTO`` and
+	        ``INCORE``; any other value raises an exception. !expert -*/
 	    options.add_str("SCF_SUBTYPE", "AUTO", "AUTO INCORE OUT_OF_CORE YOSHIMINE_OUT_OF_CORE REORDER_OUT_OF_CORE");
         /*- Keep JK object for later use? -*/
         options.add_bool("SAVE_JK", false);
