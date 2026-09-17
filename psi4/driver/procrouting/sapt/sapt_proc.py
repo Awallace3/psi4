@@ -131,8 +131,8 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
     # Build SAPT cache
     if einsums_available and use_einsums:
+        # einsums v2 bootstraps its runtime lazily; there is no initialize().
         jk_terms = sapt_jk_terms_ein
-        ein.initialize()
     else:
         # If einsums is not available, need to conditionally stop einsums
         # without adding einsums_available and use_einsums to every check.
