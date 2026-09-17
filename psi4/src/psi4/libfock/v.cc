@@ -697,8 +697,16 @@ void VBase::set_D(std::vector<SharedMatrix> Dvec) {
     }
 }
 void VBase::initialize() {
+    // VBase is the only consumer of the GPU-resident cuEST grid (via DFTGrid::cuest_grid()), so it
+    // is the only place that asks DFTGrid for one. Every other DFTGrid client integrates on the
+    // host and gets a host grid, even when USE_CUEST is on.
+    //
+    // The request must track use_cuest_xc() exactly, not USE_CUEST alone: with USE_CUEST on but
+    // CUEST_XC off the quadrature runs on the host, and a GPU-only grid would leave it with an
+    // empty blocks() list.
+    const bool use_cuest = use_cuest_xc();
     timer_on("V: Grid");
-    grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, options_);
+    grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, options_, use_cuest);
     timer_off("V: Grid");
     if (functional_->needs_vv10()) {
         timer_on("V: VV10 Grid");
@@ -709,7 +717,8 @@ void VBase::initialize() {
         opt_int_map["DFT_RADIAL_POINTS"] = options_.get_int("DFT_VV10_RADIAL_POINTS");
         opt_int_map["DFT_SPHERICAL_POINTS"] = options_.get_int("DFT_VV10_SPHERICAL_POINTS");
 
-        vv10_grid_ = std::make_shared<DFTGrid>(primary_->molecule(), primary_, opt_int_map, opt_map, options_);
+        vv10_grid_ =
+            std::make_shared<DFTGrid>(primary_->molecule(), primary_, opt_int_map, opt_map, options_, use_cuest);
         timer_off("V: VV10 Grid");
     }
 #ifdef USING_cuEST
