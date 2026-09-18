@@ -168,14 +168,27 @@ def compute_free_atom_volume(element: str, theory: str, basis: Optional[str] = N
     atom = _atomic_molecule(symbol, symbol, multiplicity)
     basis_hash = free_atom_cache.basis_content_hash(
         psi4.core.BasisSet.build(atom, "ORBITAL", blockname, quiet=True), 0)
+
+    optstash = optproc.OptionsState(["SCF", 'REFERENCE'], ["SCF", 'SCF_PROPERTIES'], ['SCF_TYPE'])
+    psi4.core.set_local_option("SCF", "SCF_PROPERTIES", [])
+
+    # Resolve SCF_TYPE before the key is built, exactly as the procedure that will run the atomic
+    # SCF is about to (proc_util.scf_set_reference_local and its callers all promote an unset
+    # SCF_TYPE to DF).  Called from a molecule, this function's in-job counterpart inherits that
+    # promotion from the parent job and keys on DF; called on its own it would key on the raw
+    # default PK while still *computing* with DF, and the entries it wrote could never be found by
+    # the jobs they were meant to serve.  A route that resolves to something other than DF -- a few
+    # conventional post-HF ones do -- merely gets a miss, which is the safe direction.
+    if not psi4.core.has_global_option_changed('SCF_TYPE'):
+        psi4.core.set_global_option('SCF_TYPE', 'DF')
+
     key = free_atom_cache.build_key(symbol, Z, multiplicity, reference, theory, basis_hash, salt=salt)
 
     record = free_atom_cache.lookup(key)
     if record is not None:
+        optstash.restore()
         return record["value"]
 
-    optstash = optproc.OptionsState(["SCF", 'REFERENCE'], ["SCF", 'SCF_PROPERTIES'])
-    psi4.core.set_local_option("SCF", "SCF_PROPERTIES", [])
     _computing_free_atom_volumes = True
     try:
         volume = _run_free_atom(symbol, symbol, multiplicity, reference, blockname, theory, basis_hash, key)

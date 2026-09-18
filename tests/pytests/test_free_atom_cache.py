@@ -138,6 +138,47 @@ def test_prewarm_is_reused_by_a_molecule(cache_dir):
     assert wfn.scalar_variable("MBIS FREE ATOM H VOLUME") == warmed["H"]
 
 
+def test_prewarm_is_reused_with_scf_type_left_at_its_default(cache_dir):
+    """The same round trip with SCF_TYPE unset, which is how anyone would actually run it.
+
+    Every other test here sets SCF_TYPE explicitly, and that hid a real failure: a job promotes an
+    unset SCF_TYPE to DF before asking for free-atom volumes, so its key records DF, while
+    prewarm() read the raw default PK and wrote entries under it -- entries that no job could find,
+    and that were labelled with an algorithm they had not been computed with.
+    """
+    psi4.set_options({name: value for name, value in BASE_OPTIONS.items() if name != "scf_type"})
+    warmed = fac.prewarm(["O", "H"], "pbe", basis="cc-pvdz")
+
+    entries = fac.list_entries()
+    assert len(entries) == 2
+    assert {entry["key"]["options"]["SCF_TYPE"] for entry in entries} == {"DF"}, \
+        "an entry has to be keyed on the algorithm that produced it"
+    # Resolving it must not leave it resolved behind prewarm's back, or the next job in the process
+    # would silently be a DF job.
+    assert not psi4.core.has_global_option_changed("SCF_TYPE")
+
+    fac.clear(memory_only=True)
+    psi4.core.clean()
+    psi4.core.clean_variables()
+
+    atomic_runs = []
+    wrapped = prop_util._run_free_atom
+
+    def counting(*args, **kwargs):
+        atomic_runs.append(args[0])
+        return wrapped(*args, **kwargs)
+
+    prop_util._run_free_atom = counting
+    try:
+        _water()
+        _, wfn = psi4.energy("pbe", return_wfn=True)
+    finally:
+        prop_util._run_free_atom = wrapped
+
+    assert atomic_runs == [], f"prewarmed entries missed; recomputed {atomic_runs}"
+    assert wfn.scalar_variable("MBIS FREE ATOM O VOLUME") == warmed["O"]
+
+
 def test_off_mode_does_not_write(cache_dir, monkeypatch):
     monkeypatch.setenv("PSI4_FREE_ATOM_CACHE", "OFF")
     psi4.set_options(BASE_OPTIONS)
