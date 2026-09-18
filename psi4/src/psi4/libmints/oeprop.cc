@@ -2235,12 +2235,14 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
     wfn_->set_array_variable("MBIS VALENCE CHARGES", valence_charges);
 
     // Volume ratios divide each atom's <r^3> by that of the isolated neutral atom, whose value the
-    // driver has already deposited as "MBIS FREE ATOM <symbol> VOLUME" (see
+    // driver has already deposited as "MBIS FREE ATOM <label> VOLUME" (see
     // p4util.free_atom_volumes).  Two things that look like details but are not:
     //
-    //  * The key is the *element symbol*, which is what free_atom_volumes stores.  mol->label()
-    //    is the user's input label and is only the same string when no custom label was given;
-    //    on "O1 / H1 / H2" input it turned this lookup into a hard error.
+    //  * The key is the *input label*, not the element symbol.  The two differ only when the user
+    //    labelled the atom ("O1"), and it is exactly then that they must not be conflated: a
+    //    label is what `assign O1 aug-cc-pvtz` attaches a basis to, so two atoms of one element
+    //    can carry different bases and hence genuinely different free-atom volumes.  The driver
+    //    emits one variable per label for that reason.
     //  * A one-atom input is not exempt.  It is only a *free* atom when it is neutral and in its
     //    reference multiplicity; a bare anion or a non-reference spin state has a perfectly
     //    meaningful, non-unit ratio.  Skipping the single-atom case left MBIS VOLUME RATIOS
@@ -2249,7 +2251,7 @@ std::tuple<SharedMatrix, SharedMatrix, SharedMatrix, SharedMatrix> PopulationAna
     if (free_atom_volumes) {
         volume_ratios->zero();
         for (int a = 0; a < num_atoms; ++a) {
-            double free_atom = wfn_->scalar_variable("MBIS FREE ATOM " + mol->symbol(a) + " VOLUME");
+            double free_atom = wfn_->scalar_variable("MBIS FREE ATOM " + mol->label(a) + " VOLUME");
             double vr = rmoms[1]->get(a, 0) / free_atom;
             volume_ratios->set(a, 0, vr);
         }

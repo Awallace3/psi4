@@ -33,6 +33,9 @@ Miscellaneous tools for driver and users.
 from .exceptions import *
 from .fchk import *
 from .fcidump import *
+# Module, not a star import: its API is deliberately qualified (free_atom_cache.clear(),
+# free_atom_cache.path()) because those names are far too generic to sit in p4util itself.
+from . import free_atom_cache
 from .inpsight import *
 from .numpy_helper import *
 from .optproc import *

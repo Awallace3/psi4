@@ -328,6 +328,18 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
                     "ROBUST TREUTLER NONE FLAT P_GAUSSIAN D_GAUSSIAN P_SLATER D_SLATER LOG_GAUSSIAN LOG_SLATER NONE");
     /*- Maximum Radial Moment to Calculate -*/
     options.add_int("MAX_RADIAL_MOMENT", 4);
+    /*- Persistent on-disk cache for the MBIS free-atom reference volumes that
+    :psivar:`MBIS VOLUME RATIOS` divides by.  A free-atom volume is a property of an element, a
+    level of theory, the basis that element is given, and the grid/convergence settings -- never of
+    the molecule -- so the same handful of numbers are otherwise recomputed by every job in a large
+    dataset.  ``READ`` consults the cache but never adds to it, which is what workers sharing a
+    prewarmed directory want; ``WRITE`` recomputes every volume and refreshes the entry, which is
+    how to repair a cache you suspect.  See |globals__mbis_free_atom_cache_path|. -*/
+    options.add_str("MBIS_FREE_ATOM_CACHE", "READWRITE", "OFF READ WRITE READWRITE");
+    /*- Directory holding the |globals__mbis_free_atom_cache| entries.  An empty value defers to
+    the :envvar:`PSI4_FREE_ATOM_CACHE_PATH` environment variable, and failing that to
+    ``$XDG_CACHE_HOME/psi4/free_atom_volumes`` (i.e. ``~/.cache/psi4/free_atom_volumes``). -*/
+    options.add_str_i("MBIS_FREE_ATOM_CACHE_PATH", "");
 
     /*- PCM boolean for pcmsolver module -*/
     options.add_bool("PCM", false);

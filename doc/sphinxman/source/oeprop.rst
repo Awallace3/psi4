@@ -201,3 +201,53 @@ controlled with the keywords |globals__mbis_radial_points|, |globals__mbis_spher
 .. note::
    MBIS is not supported for basis sets that use effective core potentials (ECPs).
    Please use all-electron basis sets for MBIS calculations. See `this issue at denspart <https://github.com/theochem/denspart/issues/19>`_
+
+.. _`sec:oeprop_mbis_free_atom_cache`:
+
+Caching the free-atom volumes
+"""""""""""""""""""""""""""""
+
+Asking for ``MBIS_VOLUME_RATIOS`` runs one extra SCF per distinct element, on an isolated atom, to
+get the volume the ratio divides by. That cost depends on how many elements are present and not at
+all on how large the molecule is, so it is a small fraction of a big calculation and a large one of
+a small calculation --- 8% of a seven-atom PBE0/aug-cc-pVTZ job, 25% of CH\ :sub:`3`\ Br at
+HF/aug-cc-pVTZ. Repeated across a dataset, a finite-difference frequency, or a geometry
+optimization, it is the same handful of numbers computed over and over.
+
+A free-atom volume is a property of an element, a level of theory, the basis that element is given,
+and the grid and convergence settings. It is never a property of the molecule, so |PSIfour| keeps
+the ones it has computed in ``~/.cache/psi4/free_atom_volumes`` and reuses them. This is on by
+default and needs no attention; the controls exist for the cases where it does.
+
+Set |globals__mbis_free_atom_cache_path| (or :envvar:`PSI4_FREE_ATOM_CACHE_PATH`) to put the cache
+somewhere shared, such as a project directory on a cluster filesystem. Entries are one small JSON
+file each, written atomically, so any number of jobs may read and write the directory at once
+without locking. Set |globals__mbis_free_atom_cache| (or :envvar:`PSI4_FREE_ATOM_CACHE`) to
+``READ`` for workers that should consult a prepared cache but not add to it, to ``WRITE`` to
+recompute and refresh every entry, or to ``OFF`` to disable reuse entirely.
+
+Each entry records the full provenance of its number --- element, spin state, reference, method, a
+hash of the contracted functions the element was given, every grid and convergence setting, and
+every option the input changed --- and a cached value is used only when all of it matches the
+current calculation. Nothing is keyed on the *name* of a basis, because two ``basis {}`` blocks can
+share a name and differ; a run whose basis cannot be identified this way (an ECP-bearing basis,
+which MBIS rejects anyway) simply recomputes. A damaged, truncated, or hand-edited entry is
+likewise ignored rather than trusted or raised on.
+
+.. warning::
+   Reusing a free-atom volume changes results by the amount to which the reference SCF was itself
+   converged --- typically :math:`10^{-11}` in a volume ratio at |globals__d_convergence| of
+   :math:`10^{-8}`, since the cached atom was not converged from the same starting guess. If that
+   matters, or to guarantee that a whole dataset was divided by identical references, prewarm the
+   cache once and run the campaign against it:
+
+   .. code-block:: python
+
+      from psi4.driver.p4util import free_atom_cache
+
+      psi4.set_options({"basis": "aug-cc-pvtz", "scf_type": "df", "d_convergence": 8})
+      free_atom_cache.prewarm(["H", "C", "N", "O", "S", "Cl"], "pbe0")
+
+   ``free_atom_cache`` also offers ``list_entries()``, ``clear()``, and ``path()`` for inspecting
+   and managing the directory.
+

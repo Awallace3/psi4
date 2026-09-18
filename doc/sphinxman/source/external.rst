@@ -627,6 +627,22 @@ These environment variables will influence |PSIfours| behavior.
    Likewise to run Grimme's dftd3 program (see :ref:`dftd3 <sec:dftd3>`), the 
    ``dftd3`` executable must be in :envvar:`PATH`.
 
+.. envvar:: PSI4_FREE_ATOM_CACHE
+
+   Whether to reuse cached MBIS free-atom reference volumes: ``OFF``, ``READ``, ``WRITE``, or
+   ``READWRITE`` (the default). Overrides |globals__mbis_free_atom_cache|, so that a queue script
+   can make its workers read-only without editing any input.
+   See :ref:`sec:oeprop_mbis_free_atom_cache`.
+
+.. envvar:: PSI4_FREE_ATOM_CACHE_PATH
+
+   Directory holding the cached MBIS free-atom volumes. Overrides
+   |globals__mbis_free_atom_cache_path|, and defaults to
+   ``$XDG_CACHE_HOME/psi4/free_atom_volumes`` (i.e. ``~/.cache/psi4/free_atom_volumes``). Point
+   several jobs at one directory to share the references between them; entries are written
+   atomically and need no locking.
+   See :ref:`sec:oeprop_mbis_free_atom_cache`.
+
 .. envvar:: PSI_SCRATCH
 
    Directory where scratch files are written. Overrides settings in |psirc|.

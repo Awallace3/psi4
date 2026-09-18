@@ -1083,7 +1083,12 @@ PSI Variables by Alpha
    Free-atom volume [a0^3] for atom n, computed using the MBIS charge
    partitioning scheme. Free atom densities are computed at the same
    level of theory as the parent MBIS calculation, with UHF turned on
-   as needed.
+   as needed. Here *n* is the atom's input label rather than its element
+   symbol, since a label is what a per-atom basis assignment attaches to
+   and two atoms of one element may therefore have different free-atom
+   volumes. Setting this variable before the MBIS pass runs suppresses
+   the corresponding atomic calculation; see
+   :ref:`sec:oeprop_mbis_free_atom_cache`.
 
 .. psivar:: MBIS RADIAL MOMENTS <R^3>
 
