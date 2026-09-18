@@ -155,8 +155,8 @@ def setup_fisapt_object(
         "ZC",
         "ZC_orig",
     ]
-    # When not using einsums, we are using localization from the FISAPT
-    # object
+    # Localization comes from the FISAPT object, which does not hand back the
+    # per-fragment nuclear charges, so rebuild them from the molecule here.
     if "ZA" not in cache:
         mol = wfn.molecule()
         natoms = mol.natom()

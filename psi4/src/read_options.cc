@@ -1202,11 +1202,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         /*- Induction treatment for SAPT(DFT). ``CPKS`` computes DFT response,
         ``CPHF`` reuses the SAPT0 induction terms computed from HF orbitals
         (adding the Delta-HF correction only when |sapt__sapt_dft_do_dhf| is
-        true), and ``NONE`` omits second-order induction. ``CPHF`` and ``NONE``
-        are unavailable with F-SAPT. -*/
+        true), and ``NONE`` omits second-order induction. ``NONE`` is
+        unavailable with F-SAPT. -*/
         options.add_str("SAPT_DFT_INDUCTION_TYPE", "CPKS", "CPKS CPHF NONE");
-        /*- Enables SAPT(DFT) to be run with PyEinsums if available -*/
-        options.add_bool("SAPT_DFT_USE_EINSUMS", true);
         /*- Enables the hybrid xc kernel in dispersion? !expert -*/
         options.add_bool("SAPT_DFT_DO_HYBRID", true);
         /*- Compute the Delta-DFT correction? -*/
@@ -1246,10 +1244,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_double("SAPT_FDDS_V2_RHO_CUTOFF", 1.e-6);
         /*- Which MP2 Exch-Disp module to use? !expert -*/
         options.add_str("SAPT_DFT_MP2_DISP_ALG", "SAPT", "FISAPT SAPT");
-        /*- FSAPT localization through SAPT(DFT)? Set SAPTDFT for PyEinsums
-         f-terms or use an FISAPT object (C++ side) for f-terms.
-        -*/
-        options.add_str("SAPT_DFT_DO_FSAPT", "NONE", "NONE SAPTDFT FISAPT");
+        /*- Partition SAPT(DFT) into fragment contributions (F-SAPT)? ``FISAPT``
+        computes the f-terms with an FISAPT object on the C++ side. -*/
+        options.add_str("SAPT_DFT_DO_FSAPT", "NONE", "NONE FISAPT");
         /*- Interior option to clean up printing !expert -*/
         options.add_bool("SAPT_QUIET", false);
     }
