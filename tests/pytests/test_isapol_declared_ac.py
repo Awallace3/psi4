@@ -408,15 +408,49 @@ def test_response_factory_routes_the_declared_policy(fresh):
     assert 'seal' not in owned.response_description
 
 
-# ---------------------------------------------------- the surface that stays fixed
-def test_the_grac_policy_and_option_surface_were_not_widened():
+# ------------------------------------------- the surface, and what it cannot be
+def test_the_option_surface_was_widened_only_together_with_its_declaration():
+    """A policy string alone would not have been an exposure.
+
+    This file originally pinned the option surface CLOSED, because a C++ string
+    cannot carry a declaration object and a bare third keyword would have named
+    a model no caller could specify.  The surface is now open, and what keeps
+    that honest is the companion surface it was opened with: the eleven
+    ATOMIC_AC_* declaration options and the three producer controls, resolved by
+    ``isapol_ac_options`` into one frozen ``AcDeclaration`` before any orbital
+    is produced.  So what is pinned here is no longer the absence of the
+    keyword but the presence of the declaration alongside it -- and, below, that
+    the keyword still does not make anything run.
+    """
     assert correction.POLICIES == ('NONE', 'FIXED_GRAC', 'DECLARED_MULTPOLE_AC')
-    # The C++ option cannot carry a declaration object, so it is deliberately
-    # NOT widened: the declared form is reachable only through the explicit
-    # Python ac_declaration argument.
-    opts = (ROOT / 'psi4/src/read_options.cc').read_text()
-    assert 'options.add_str("ATOMIC_SCF_ASYMPTOTIC_CORRECTION", "NONE", "NONE FIXED_GRAC")' in opts
-    assert 'DECLARED_MULTPOLE_AC' not in opts
+    opts = ' '.join((ROOT / 'psi4/src/read_options.cc').read_text().split())
+    assert ' '.join('options.add_str("ATOMIC_SCF_ASYMPTOTIC_CORRECTION", "NONE", '
+                    '"NONE FIXED_GRAC DECLARED_MULTPOLE_AC")'.split()) in opts
+    from psi4.driver.procrouting import isapol_ac_options as aco
+    assert len(aco.DECLARATION_OPTIONS) == 11 and len(aco.PRODUCER_OPTIONS) == 3
+    for name in aco.KEYS:
+        assert f'"{name}"' in opts, f'{name} is read but never declared'
+
+
+def test_the_policy_keyword_still_does_not_produce_anything():
+    """`plan.md`: "No hidden correction iterations inside property requests."
+
+    Source-level, because it is a claim about what CANNOT happen rather than
+    about one request: the property path may resolve the declaration and may
+    verify it, but the two functions that iterate the correction and mutate a
+    wavefunction are not reachable from it at all.  They are reached only from
+    the separately named ``psi4.atomic_asymptotic_correction`` producer.
+    """
+    prop = (ROOT / 'psi4/driver/procrouting/isapol_oeprop.py').read_text()
+    assert 'declared_ac_orbitals' not in prop
+    assert 'apply_declared_ac' not in prop
+    # What it does use: the resolver and the policy name, neither of which runs.
+    assert 'aco.declaration()' in prop and 'aco.AC_POLICY' in prop
+    front = ast.parse((ROOT / 'psi4/driver/procrouting/isapol_ac_options.py').read_text())
+    # And the front end is the ONLY caller, through exactly one entry point.
+    called = {n.func.id for n in ast.walk(front)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    assert {'declared_ac_orbitals', 'apply_declared_ac'} <= called
     # No GRAC control, LibXC tweak, option write or SCF driver call inside the
     # AC module: the correction is applied outside the functional, by name.
     tree = ast.parse(SOURCE.read_text())

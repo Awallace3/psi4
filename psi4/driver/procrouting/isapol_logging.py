@@ -252,7 +252,11 @@ def report_request(log, wfn, *, tasks, options, recipe, correction_options, scf_
                ('site labels', tuple(s.label for s in recipe.sites)),
                ('distributed site rank', recipe.sites[0].rank),
                ('requested tasks', tuple(tasks)))
-              + tuple((k, v) for k, v in sorted(dict(correction_options).items()))
+              # A declaration is reported by its own canonical label rather than
+              # by a dataclass repr, so the narrated model name is the same string
+              # the producer and the provenance record print.
+              + tuple((k, v.label() if hasattr(v, 'label') else v)
+                      for k, v in sorted(dict(correction_options).items()))
               + (('maxabs(FDS-SDF) prerequisite', scf_residual),))
     log.line()
     log.line('Requested options (ambient globals; this is the only stage that reads them):')
@@ -727,21 +731,19 @@ def dispersion_parameters(*, model_a, model_b, max_order, cp_weights, quadrature
             + provenance_parameters(quadrature_provenance, prefix='quadrature.'))
 
 
-def report_dispersion(log, wfn, dispersion):
-    """Atomic (same-site) and pairwise isotropic C_n tables, completeness kept visible.
+def _dispersion_tables(log, dispersion, *, labels_a, labels_b, frequencies, orders):
+    """The tables every isotropic C_n record shares, refined or not.
 
-    An order with a missing rank pair is NOT comparable with a complete one; the
-    ``complete`` column carries that, the total is withheld unless every
-    contributing coefficient is complete, and an incomplete coefficient's
-    QCVariable name says so.
+    Both producers contract the same owned C++ kernel against the same
+    quadrature and differ only in where their per-site scalars came from, so the
+    node list, the two coefficient tables and the completeness evidence are
+    written once, here.  What must NOT be shared is the variable *name*: an
+    unrefined and a refined C_n are numbers about two different models, and one
+    name for both would let a later reader mistake one for the other.  Returns
+    the same-site pair list and the per-order totals, which the publishing half
+    needs and would otherwise recompute.
     """
-    labels_a = dispersion.model_a.labels
-    labels_b = dispersion.model_b.labels
-    orders = tuple(c.order for c in dispersion.pairs[0].coefficients) if dispersion.pairs else ()
-    log.items(dataclass_parameters(dispersion, skip=DISPERSION_RECORD_FIELDS)
-              + (('site pairs', len(dispersion.pairs)), ('orders', orders),
-                 ('quadrature nodes', len(dispersion.cp_weights))))
-    report_quadrature(log, dispersion.model_a.frequencies, dispersion.cp_weights,
+    report_quadrature(log, frequencies, dispersion.cp_weights,
                       dispersion.quadrature_provenance)
     same = [p for p in dispersion.pairs
             if p.site_a == p.site_b and labels_a[p.site_a] == labels_b[p.site_b]]
@@ -770,30 +772,63 @@ def report_dispersion(log, wfn, dispersion):
               [(n, totals[n][0], totals[n][1]) for n in orders],
               note='an incomplete sum is not comparable with a complete reference and is '
                    'published only under an INCOMPLETE-marked variable name')
+    return same, totals
+
+
+def _publish_dispersion(wfn, dispersion, *, labels_a, labels_b, frequencies, orders,
+                        same, totals, stem, atom_stem):
+    """Machine-readable C_n under the naming stem its producer owns.
+
+    ``stem`` is a property of the producing model, not a formatting choice.  The
+    refined and the unrefined coefficient of the same order on the same site
+    pair are different numbers about different models, so they are published
+    under different names and never overwrite one another.
+    """
     if wfn is None:
         return
     for p in dispersion.pairs:
         a, b = labels_a[p.site_a], labels_b[p.site_b]
         for c in p.coefficients:
-            key = f'ATOMIC DISPERSION C{c.order} {a} {b}'
+            key = f'{stem} C{c.order} {a} {b}'
             _set(wfn, key if c.unrestricted_complete else key + ' INCOMPLETE', float(c.value))
-    for i, p in enumerate(same):
+    for p in same:
         label = labels_a[p.site_a]
         for c in p.coefficients:
-            key = f'ATOM {label} C{c.order} DISPERSION COEFFICIENT'
+            key = f'ATOM {label} C{c.order} {atom_stem}'
             _set(wfn, key if c.unrestricted_complete else key + ' INCOMPLETE', float(c.value))
     for n in orders:
         value, complete = totals[n]
-        key = f'ATOMIC DISPERSION C{n} TOTAL'
+        key = f'{stem} C{n} TOTAL'
         _set(wfn, key if complete else key + ' INCOMPLETE', float(value))
-    _set(wfn, 'ATOMIC DISPERSION SITE PAIRS', float(len(dispersion.pairs)))
-    _set(wfn, 'ATOMIC DISPERSION MAX ORDER', float(max(orders)) if orders else 0.)
-    _set(wfn, 'ATOMIC DISPERSION QUADRATURE NODES', float(len(dispersion.cp_weights)))
+    _set(wfn, f'{stem} SITE PAIRS', float(len(dispersion.pairs)))
+    _set(wfn, f'{stem} MAX ORDER', float(max(orders)) if orders else 0.)
+    _set(wfn, f'{stem} QUADRATURE NODES', float(len(dispersion.cp_weights)))
     if dispersion.cp_weights:
-        _set(wfn, 'ATOMIC DISPERSION QUADRATURE FREQUENCIES',
-             _matrix(np.asarray(dispersion.model_a.frequencies, dtype=float).reshape(1, -1)))
-        _set(wfn, 'ATOMIC DISPERSION CP WEIGHTS',
+        _set(wfn, f'{stem} QUADRATURE FREQUENCIES',
+             _matrix(np.asarray(frequencies, dtype=float).reshape(1, -1)))
+        _set(wfn, f'{stem} CP WEIGHTS',
              _matrix(np.asarray(dispersion.cp_weights, dtype=float).reshape(1, -1)))
+
+
+def report_dispersion(log, wfn, dispersion):
+    """Atomic (same-site) and pairwise isotropic C_n tables, completeness kept visible.
+
+    An order with a missing rank pair is NOT comparable with a complete one; the
+    ``complete`` column carries that, the total is withheld unless every
+    contributing coefficient is complete, and an incomplete coefficient's
+    QCVariable name says so.
+    """
+    labels_a, labels_b = dispersion.model_a.labels, dispersion.model_b.labels
+    frequencies = dispersion.model_a.frequencies
+    orders = tuple(c.order for c in dispersion.pairs[0].coefficients) if dispersion.pairs else ()
+    log.items(dataclass_parameters(dispersion, skip=DISPERSION_RECORD_FIELDS)
+              + (('site pairs', len(dispersion.pairs)), ('orders', orders),
+                 ('quadrature nodes', len(dispersion.cp_weights))))
+    same, totals = _dispersion_tables(log, dispersion, labels_a=labels_a, labels_b=labels_b,
+                                      frequencies=frequencies, orders=orders)
+    _publish_dispersion(wfn, dispersion, labels_a=labels_a, labels_b=labels_b,
+                        frequencies=frequencies, orders=orders, same=same, totals=totals,
+                        stem='ATOMIC DISPERSION', atom_stem='DISPERSION COEFFICIENT')
 
 
 def report_rank_pair_inventory(log, dispersion, level=2):
@@ -832,6 +867,83 @@ def _dispersion_totals(dispersion, orders):
                     complete = complete and bool(c.unrestricted_complete)
         totals[n] = (value, complete)
     return totals
+
+
+#: Fields of a refined C_n record that are reported as counts, resolved tuples
+#: or tables rather than in the parameter block: the pair list and the two grids
+#: are bulk, and the site inventory has its own row.  Every other declared field
+#: is enumerated from the dataclass, so one added later appears in the stage
+#: report without touching this module.
+REFINED_DISPERSION_RECORD_FIELDS = ('pairs', 'frequencies', 'cp_weights',
+                                    'quadrature_provenance', 'labels', 'origins_bohr',
+                                    'site_ranks')
+
+
+def refined_dispersion_parameters(*, refinements, max_order, cp_weights,
+                                  quadrature_provenance, site_ranks, resolved_site_ranks,
+                                  anchor_sha256):
+    """Every tweakable input of the refined isotropic C_n contraction.
+
+    The knobs are ``max_order``, the CP weights and the per-site rank
+    declaration.  The rest of the block is the declared identity of the
+    refinement the scalars were read off -- its penalty scheme, its variable
+    count, its anchor hash and its solver verdict at every node -- because a
+    refined C_n is a number about that refinement and not about the
+    localization the unrefined one comes from.  A non-``Solved`` node still
+    returns numbers, so its status is named here rather than inferred from the
+    coefficients.
+    """
+    first = refinements[0].model
+    return ((('max_order', max_order),
+             ('admitted max_order values', '6, 8, 10, 12; odd orders are refused here'),
+             ('model B', 'this same refined model (pair_self)'),
+             ('scalar origin', 'PFIT-refined local tensors, trace(alpha_ll)/(2l+1); rank 0 '
+                               'is a refinement variable (charge flow), not a dispersion rank'),
+             ('refinement nodes', len(refinements)),
+             ('sites', len(first.sites)),
+             ('labels', tuple(s.label for s in first.sites)),
+             ('site types', first.site_types),
+             ('declared rank limits', tuple(s.rank_limit for s in first.sites)),
+             ('site_ranks', 'not declared: ranks 1..rank_limit on every site, read off '
+                            "each site's own declared refinement rank limit"
+                            if site_ranks is None else 'declared explicitly, per site'),
+             ('resolved site ranks', tuple(tuple(s) for s in resolved_site_ranks)),
+             ('weight_type', first.weight_type),
+             ('weight_coefficient', first.weight_coefficient),
+             ('cutoff', first.cutoff),
+             ('variables per node', first.parameter_count),
+             ('anchor sha256 over all nodes', anchor_sha256),
+             ('solver status per node',
+              tuple(str(r.status).rsplit('.', 1)[-1] for r in refinements)),
+             ('anchor shift maxabs', max(float(r.anchor_shift_maxabs) for r in refinements)),
+             ('refinement provenance', first.provenance))
+            + cp_weight_parameters(cp_weights)
+            + provenance_parameters(quadrature_provenance, prefix='quadrature.'))
+
+
+def report_refined_dispersion(log, wfn, dispersion):
+    """Refined isotropic C_n, under names that cannot collide with the unrefined ones.
+
+    Same kernel, same quadrature, different model: the per-site scalars here
+    come from the PFIT refinement rather than from the localization, so every
+    variable name carries ``REFINED``.  Comparing the two is comparing two
+    models, which is exactly why they are not permitted to share a name.
+    """
+    labels = tuple(dispersion.labels)
+    orders = tuple(c.order for c in dispersion.pairs[0].coefficients) if dispersion.pairs else ()
+    log.items(dataclass_parameters(dispersion, skip=REFINED_DISPERSION_RECORD_FIELDS)
+              + (('sites', len(labels)), ('labels', labels),
+                 ('resolved site ranks', tuple(tuple(s) for s in dispersion.site_ranks)),
+                 ('site pairs', len(dispersion.pairs)), ('orders', orders),
+                 ('quadrature nodes', len(dispersion.cp_weights))))
+    same, totals = _dispersion_tables(log, dispersion, labels_a=labels, labels_b=labels,
+                                      frequencies=dispersion.frequencies, orders=orders)
+    _publish_dispersion(wfn, dispersion, labels_a=labels, labels_b=labels,
+                        frequencies=dispersion.frequencies, orders=orders, same=same,
+                        totals=totals, stem='ATOMIC REFINED DISPERSION',
+                        atom_stem='REFINED DISPERSION COEFFICIENT')
+    _set(wfn, 'ATOMIC REFINED DISPERSION ANCHOR SHIFT MAXABS',
+         float(dispersion.anchor_shift_maxabs))
 
 
 # --------------------------------------------- oriented (anisotropic) C_n ----
@@ -996,6 +1108,83 @@ def _anisotropic_totals(dispersion, orders):
                     unrestricted = unrestricted and bool(c.unrestricted_complete)
         totals[n] = (value, energy, declared, unrestricted)
     return totals
+
+
+# ------------------------------------------- refinement lattice and targets ----
+
+def refinement_lattice_parameters(*, npoints, seed, lower_limit, upper_limit, maximum_points,
+                                  generator, declared_by):
+    """The declared fit-point cloud: counts, cutoffs and the generator's identity.
+
+    ``lower_limit`` and ``upper_limit`` are multiples of the van der Waals
+    radius, not bohr, and are named that way here because the number 2.0 read as
+    bohr is a different shell entirely.  The seed is part of the model: the
+    cloud is a pseudorandom sample, so the same seed is the only thing that
+    makes two refinements comparable point-for-point.
+    """
+    return (('points requested', npoints),
+            ('maximum points', maximum_points),
+            ('seed', seed),
+            ('lower limit', lower_limit),
+            ('upper limit', upper_limit),
+            ('limit units', 'multiples of the van der Waals radius, not bohr'),
+            ('inner rejection', 'closer than lower_limit*R_vdW(k) to any atom k'),
+            ('outer rejection', 'farther than upper_limit*R_vdW(k) from every atom k'),
+            ('generator', generator),
+            ('declared by', declared_by))
+
+
+def report_refinement_lattice(log, wfn, lattice):
+    """The cloud that was actually accepted, by its own hash.
+
+    The points themselves are bulk and are identified by their SHA-256 rather
+    than printed: a refinement is only reproducible against the same cloud, and
+    the hash is what says whether two runs had one.
+    """
+    log.items((('points accepted', lattice.npoints),
+               ('candidates drawn', lattice.ncandidates),
+               ('acceptance ratio', (float(lattice.npoints) / lattice.ncandidates)
+                if lattice.ncandidates else 0.),
+               ('dmax [bohr]', lattice.dmax),
+               ('centre [bohr]', tuple(lattice.centre_bohr)),
+               ('points sha256', lattice.sha256),
+               ('seed', lattice.seed),
+               ('lower limit [R_vdW]', lattice.lower_limit),
+               ('upper limit [R_vdW]', lattice.upper_limit),
+               ('generator', lattice.generator),
+               ('declared by', lattice.declared_by)))
+    if wfn is None:
+        return
+    _set(wfn, 'ATOMIC REFINEMENT FIT POINTS', float(lattice.npoints))
+    _set(wfn, 'ATOMIC REFINEMENT FIT POINT CANDIDATES', float(lattice.ncandidates))
+    _set(wfn, 'ATOMIC REFINEMENT FIT POINT SEED', float(lattice.seed))
+
+
+def report_refinement_targets(log, targets, level=1):
+    """The point-to-point response the refinement is fitted to.
+
+    This is the stage's data, not its model, and it is reported as its declared
+    provenance plus per-node scale and defect: the packed target rows are bulk,
+    and a reciprocity defect is the only thing that says whether the response
+    matrix the fit consumes is the symmetric object the model assumes.
+    """
+    log.items((('points', targets.npoint),
+               ('frequency nodes', len(targets.frequencies_au)),
+               ('packed rows per node', targets.npoint * (targets.npoint + 1) // 2),
+               ('convention', targets.convention),
+               ('representation', targets.representation),
+               ('generation record', targets.generation_record),
+               ('context sha256', targets.context_sha256),
+               ('correction provenance', targets.correction_provenance),
+               ('caller converged', targets.caller_converged),
+               ('convergence evidence', targets.convergence_evidence)))
+    log.table('Point-to-point response targets per node:',
+              ('node', 'xi [Eh]', 'max |v|', 'min diagonal', 'reciprocity defect'),
+              [(i, f, targets.maximum_absolute_values[i], targets.minimum_diagonals[i],
+                targets.reciprocity_defects[i])
+               for i, f in enumerate(targets.frequencies_au)], level=level,
+              note='a reciprocity defect is a property of the produced response, not a '
+                   'tolerance the refinement may relax')
 
 
 # ------------------------------------------------------------------- PFIT ----

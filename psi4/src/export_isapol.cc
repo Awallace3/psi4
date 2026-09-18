@@ -561,6 +561,9 @@ void export_isapol(py::module& m) {
         .def(py::init<const IsaExplicitBasis&, const std::vector<IsaMultipoleSite>&, const std::string&, double,
          std::shared_ptr<Matrix>, int>(), "orbital"_a, "sites"_a, "provenance"_a,
          "denominator_cutoff"_a, "orbitals"_a, "nocc"_a)
+        .def(py::init<std::shared_ptr<Matrix>, const std::vector<IsaMultipoleSite>&,
+         const std::string&, const std::string&>(), "values"_a, "sites"_a,
+         "representation"_a, "provenance"_a)
     .def_property_readonly("representation", &IsaPartitionedMultipoles::representation)
     .def_property_readonly("values", &IsaPartitionedMultipoles::values)
         .def_property_readonly("offsets", &IsaPartitionedMultipoles::offsets)

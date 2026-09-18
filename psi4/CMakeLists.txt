@@ -335,9 +335,11 @@ if(NOT ENABLE_CYTHONIZE)
       )
 endif()
 
-# Embedded reference-basis data retain their notices in both Python and
-# Cythonized installations; the Python-only directory filter excludes them.
+# Embedded reference-basis data and transcribed reference protocol text retain
+# their notices in both Python and Cythonized installations; the Python-only
+# directory filter excludes them.
 install(FILES driver/procrouting/isapol_reference_basis.NOTICE
+              driver/procrouting/isapol_modern_preset.NOTICE
         DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}${PYMOD_INSTALL_LIBDIR}/psi4/driver/procrouting)
 
 install(FILES header.py

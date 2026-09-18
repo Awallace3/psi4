@@ -18,6 +18,7 @@ from .isapol_native_propagator import PropagatorDeclaration, propagator_operator
 from .sapt.fdds_response import FDDSFullOVResponse
 from .isapol_native_correction import validate_correction, functional_definition
 from . import isapol_lw as lw
+from . import isapol_df_multipoles as dfm
 from . import isapol_logging as lg
 
 
@@ -183,7 +184,7 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                       scf_correction='NONE', expected_grac_shift=None, ac_declaration=None,
                       response_algorithm='ordered_pairwise', ov_charge_penalty=1.,
                       ov_metric_damping=0., localization_rank_limit=3, propagator=None,
-                      log=None):
+                      distribution='isa_a', log=None):
     """Return all owned stages, with strict production LW (1e-6) or failures.
 
     Explicit ``response_basis='direct_ov'`` integrates actual occupied/virtual
@@ -223,6 +224,25 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
     The default 0. is the undamped fit every committed number was measured at; the
     traced reference polarizability step declares ``Eta = 0.0005, Lambda = 1000``.
     ``direct_ov`` forms no fit, so it accepts only the default here too.
+
+    ``distribution`` names WHICH DISTRIBUTED-MULTIPOLE MODEL the site response is
+    formed in, and it is a model declaration, never a variant of one model. The
+    default ``isa_a`` is the converged Drho-C stockholder shape partition, whose
+    Q assigns each grid point to sites by the ratio ``shape_a/sum_b shape_b``.
+    ``df_centre_analytic`` and ``df_centre_grid`` are instead CamCASP's
+    ``DistPolAlgorithm = 'DF'`` rule, which charges each auxiliary function
+    WHOLLY to the centre it sits on and forms no stockholder weight at all (see
+    ``isapol_df_multipoles``). The two rules assign the same molecular density to
+    sites by different rules, so their site multipoles, site polarizabilities and
+    dispersion coefficients may never be quoted as agreeing or disagreeing: they
+    are answers to different questions. Because the DF rule has no denominator it
+    needs no ISA-A fixed point, so a DF-centre request does not demand
+    ``partition.require_q()`` here -- the partition is still run and narrated, but
+    its convergence is not made a precondition of a model that never uses it. The
+    DF rule does need AUX columns for a function to have a centre at all, so it
+    refuses ``direct_ov``; and because it is basis-sensitive in a way the
+    stockholder rule is not, a negative static site isotropic response is refused
+    outright rather than propagated into a polarizability or a C6.
 
     ``recipe.grid`` is the explicit ISA/Q grid policy; ``response_grid`` is None
     for no_local or explicit [x,y,z,w] for ALDA. Full H1/H2 already include all
@@ -296,6 +316,13 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
         raise ValueError('localization_rank_limit must be explicit integer1,2,3 or4')
     if localization_rank_limit > recipe.sites[0].rank:
         raise ValueError('localization_rank_limit exceeds the site rank of the distributed response')
+    if distribution not in dfm.DISTRIBUTIONS:
+        raise ValueError(f'distribution must be one of {dfm.DISTRIBUTIONS}, not {distribution!r}')
+    if distribution in dfm.DF_CENTRE_DISTRIBUTIONS and response_basis == 'direct_ov':
+        raise ValueError('The DF-centre rule charges each auxiliary function to its own centre, '
+                         'so it needs AUX columns; direct_ov has occupied-virtual product '
+                         'columns and no centre for a function to sit on. Declare '
+                         "response_basis='fitted_auxiliary'.")
     freq = _frequencies(frequencies)
     if quadrature is not None and (not isinstance(quadrature, Quadrature) or freq != quadrature.frequencies):
         raise ValueError('requested nodes must exactly match complete authoritative quadrature')
@@ -334,7 +361,8 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
         return NativeProperties(partition, context, fit, adapted, freq, quadrature, tuple(responses),
             distributed, tensors, local, dispersion, tuple(failures), diagnostics,
             f'native {kernel}; exact_exchange={exact_exchange}; local_scale={local_scale}; '
-            f'{response_algorithm}; Drho-C ISA-A[{recipe.auxiliary.name}]; {response_basis}'
+            f'{response_algorithm}; Drho-C ISA-A[{recipe.auxiliary.name}]; '
+            f'distribution={distribution}; {response_basis}'
             + ('' if response_basis == 'direct_ov'
                else f' lambda={ov_charge_penalty!r}; eta={ov_metric_damping!r}')
             + ('' if propagator is None else '; propagator ' + propagator.name)
@@ -342,7 +370,27 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
             + ('; ' + correction.response_description if correction.policy != 'NONE' else ''),
             correction)
     try:
-        q = partition.require_q()
+        if distribution == 'isa_a':
+            q = partition.require_q()
+        else:
+            # The DF rule forms no stockholder denominator, so the ISA-A fixed
+            # point is not a precondition of it. The partition still ran and is
+            # still reported; it is simply not this model's operand.
+            stage = 'DF-centre distributed multipoles'
+            declared = dfm.df_centre_multipoles(distribution, recipe.auxiliary, recipe.sites,
+                recipe.sites[0].rank,
+                **(dict(points=partition.grid_points, weights=partition.grid_weights)
+                   if distribution == 'df_centre_grid' else {}))
+            q = declared.partition()
+            log.stage(stage, (('rule', "CamCASP DistPolAlgorithm='DF'"),
+                              ('form', declared.form), ('AUX', recipe.auxiliary.name),
+                              ('site rank', recipe.sites[0].rank),
+                              ('ISA-A fixed point used', False))
+                      + tuple(sorted(declared.diagnostics.items(), key=lambda kv: kv[0])))
+            diagnostics.update(('distribution_' + k, v) for k, v in declared.diagnostics.items())
+            diagnostics.update(distribution_provenance=declared.provenance,
+                               distribution_isa_a_converged=partition.converged)
+        diagnostics.update(distribution=distribution)
         lg.report_partition(log, None, partition)
         stage = 'context'
         log.stage('native response context', lg.response_parameters(
@@ -450,6 +498,15 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
         raw = np.array([np.asarray(distributed.at_index(k)).reshape(n,m,n,m).transpose(0,2,1,3)
                         for k in range(len(freq))])
         tensors = lw.ArraySnapshot.of(raw)
+        if distribution in dfm.DF_CENTRE_DISTRIBUTIONS:
+            # alpha^(aa) = Qa (-C) Qa^T with -C(i xi) positive semidefinite, so a
+            # negative site isotropic scalar cannot happen for a sound (rule, AUX)
+            # pair. When it does, the declared auxiliary set is wrong for this
+            # rule, and the number must not reach a polarizability or a C_n.
+            for k, xi in enumerate(freq):
+                scalars = dfm.site_isotropic_gate(raw[k], rank, labels=tuple(q.labels))
+                diagnostics.update((f'distribution_site_isotropic[xi={xi!r}][{a} rank{l}]', v)
+                                   for (a, l), v in scalars.items())
         qsum = np.asarray(q.values)[list(q.offsets[:-1])].sum(axis=0)
         analytic_q = (np.zeros(d.shape[1]) if response_basis == 'direct_ov' else np.asarray(fit.charges))
         # Charge origin diagnostics ONLY, never replacement operands for output.

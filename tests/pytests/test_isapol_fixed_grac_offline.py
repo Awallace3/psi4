@@ -131,11 +131,27 @@ def test_no_mutating_admission_or_hidden_scf_source():
                  'set_grac_shift', 'set_grac_alpha', 'set_grac_beta', 'compute_energy'}
     assert not [n.func.attr for n in ast.walk(tree) if isinstance(n, ast.Call)
                 and isinstance(n.func, ast.Attribute) and n.func.attr in forbidden]
-    opts = (ROOT / 'psi4/src/read_options.cc').read_text()
+    # Whitespace-collapsed, because clang-format wraps the longer declarations;
+    # what is pinned is that each value list is CLOSED, so no undeclared model
+    # can be smuggled in through a free-form string option.
+    opts = ' '.join((ROOT / 'psi4/src/read_options.cc').read_text().split())
     for declaration in [
-        'options.add_str("ATOMIC_SCF_ASYMPTOTIC_CORRECTION", "NONE", "NONE FIXED_GRAC")',
+        'options.add_str("ATOMIC_SCF_ASYMPTOTIC_CORRECTION", "NONE", '
+        '"NONE FIXED_GRAC DECLARED_MULTPOLE_AC")',
         'options.add_double("ATOMIC_SCF_EXPECTED_GRAC_SHIFT", 0.0)',
-        'options.add_str("ATOMIC_PROPERTY_RECIPE", "GENERATED_JKFIT_ISA_A", "GENERATED_JKFIT_ISA_A")',
+        # The declared-correction companions are closed the same way. Only the
+        # string-valued ones can be pinned here; the numeric ones are pinned
+        # against the AcDeclaration field defaults in test_isapol_ac_options.py,
+        # which is the drift guard that keeps the two surfaces one model.
+        'options.add_str("ATOMIC_AC_JOIN", "TANH", "NONE LINEAR TANH TANH_RAW")',
+        'options.add_str("ATOMIC_AC_BRAGG_TABLE", "PSI4", "PSI4 CAMCASP")',
+        'options.add_str("ATOMIC_AC_MULTIPOLE_ORIGIN", "NUCCHARGE", "NUCCHARGE COM ATOM0")',
+        'options.add_str("ATOMIC_AC_SHIFT_MODE", "VARIATIONAL", "NONE VARIATIONAL FIXED")',
+        'options.add_str("ATOMIC_PROPERTY_RECIPE", "GENERATED_JKFIT_ISA_A", '
+        '"GENERATED_JKFIT_ISA_A GENERATED_JKFIT_BRAGG_SLATER_TAIL_ISA_A")',
         'options.add_str("ATOMIC_RESPONSE_LOCALIZATION", "LW", "LW LS")',
+        # The propagator declaration is closed the same way: NONE is the shipped
+        # model and the two named propagators are the only alternatives.
+        'options.add_str("ATOMIC_RESPONSE_PROPAGATOR", "NONE", "NONE EXACT_ORBITAL CAMCASP_DF")',
     ]:
-        assert declaration in opts
+        assert ' '.join(declaration.split()) in opts

@@ -248,3 +248,76 @@ def test_declared_tail_policy_is_a_model_parameter_never_a_tolerance():
            [[sh.exponents for sh in s.shape.shells] for s in slater.sites]
     with pytest.raises(ValueError, match='Unknown declared tail policy'):
         api.generated_recipe(w, tail_policy='1.5')
+
+
+def test_refinement_option_defaults_are_the_declared_reference_model():
+    """The nine refinement options name one model, so their defaults are pinned.
+
+    ``LOWER_LIMIT``/``UPPER_LIMIT`` are multiples of the van der Waals radius,
+    not bohr, and the point count is the protocol's ``Random 500`` rather than
+    the C++ ``FitPointsOptions`` production default of 2000, which the
+    point-response cap refuses.
+    """
+    assert api._refinement_options() == {
+        'npoints': 500, 'seed': 1, 'lower_limit': 2.0, 'upper_limit': 4.0,
+        'weight_type': 4, 'weight_coefficient': 1.e-3, 'cutoff': 1.e-4,
+        'rank_limit': 2, 'hydrogen_rank_limit': 1}
+    assert api.REFINEMENT_TASKS < api.TASKS
+    assert set(api.REFINEMENT_KEYS) == {'ATOMIC_REFINEMENT_' + n for n in
+        ('POINTS','SEED','LOWER_LIMIT','UPPER_LIMIT','WEIGHT_TYPE','WEIGHT_COEFFICIENT',
+         'CUTOFF','RANK_LIMIT','HYDROGEN_RANK_LIMIT')}
+
+
+@pytest.mark.parametrize('option,value',[
+    ('ATOMIC_REFINEMENT_POINTS',0),('ATOMIC_REFINEMENT_POINTS',513),
+    ('ATOMIC_REFINEMENT_SEED',0),
+    ('ATOMIC_REFINEMENT_WEIGHT_TYPE',7),('ATOMIC_REFINEMENT_WEIGHT_TYPE',-1),
+    ('ATOMIC_REFINEMENT_WEIGHT_COEFFICIENT',0.),
+    ('ATOMIC_REFINEMENT_WEIGHT_COEFFICIENT',-1.e-3),
+    ('ATOMIC_REFINEMENT_CUTOFF',0.),
+    ('ATOMIC_REFINEMENT_LOWER_LIMIT',0.),('ATOMIC_REFINEMENT_LOWER_LIMIT',4.),
+    ('ATOMIC_REFINEMENT_UPPER_LIMIT',1.),
+    ('ATOMIC_REFINEMENT_RANK_LIMIT',0),('ATOMIC_REFINEMENT_RANK_LIMIT',5),
+    ('ATOMIC_REFINEMENT_HYDROGEN_RANK_LIMIT',0),
+])
+def test_bad_refinement_option_is_refused_not_clamped(option,value):
+    """A mis-declared model is rejected; nothing here is a tolerance to relax."""
+    old = psi4.core.get_global_option(option)
+    try:
+        psi4.core.set_global_option(option,value)
+        with pytest.raises(ValueError,match=option.split('ATOMIC_REFINEMENT_')[1].split('_')[0]):
+            api._refinement_options()
+        with pytest.raises(ValueError):
+            api.validate_request(None,('ATOMIC_REFINED_DISPERSION',))
+    finally:
+        psi4.core.set_global_option(option,old)
+
+
+def test_refinement_rank_limit_cannot_exceed_the_localization():
+    """A rank never localized cannot be refined, whichever type asks for it."""
+    for option in ('ATOMIC_REFINEMENT_RANK_LIMIT','ATOMIC_REFINEMENT_HYDROGEN_RANK_LIMIT'):
+        old = psi4.core.get_global_option(option)
+        loc = psi4.core.get_global_option('ATOMIC_LOCALIZATION_RANK_LIMIT')
+        try:
+            psi4.core.set_global_option('ATOMIC_LOCALIZATION_RANK_LIMIT',1)
+            psi4.core.set_global_option(option,2)
+            with pytest.raises(ValueError,match='ATOMIC_LOCALIZATION_RANK_LIMIT'):
+                api._refinement_options()
+        finally:
+            psi4.core.set_global_option(option,old)
+            psi4.core.set_global_option('ATOMIC_LOCALIZATION_RANK_LIMIT',loc)
+
+
+def test_refinement_options_are_read_only_for_a_refinement_request(monkeypatch):
+    """An unrefined request neither validates nor records them: they did not apply."""
+    class Sentinel(Exception): pass
+    monkeypatch.setattr(api,'_refinement_options',lambda: (_ for _ in ()).throw(Sentinel()))
+    for tasks in (('ATOMIC_PARTITION',),('ATOMIC_POLARIZABILITIES',),('ATOMIC_DISPERSION',)):
+        # Reaches the wavefunction requirement, which is downstream of where the
+        # refinement options would have been read.
+        with pytest.raises(ValueError,match='restricted C1'):
+            api.validate_request(None,tasks)
+    for tasks in (('ATOMIC_REFINED_POLARIZABILITIES',),('ATOMIC_REFINED_DISPERSION',),
+                  ('ATOMIC_DISPERSION','ATOMIC_REFINED_DISPERSION')):
+        with pytest.raises(Sentinel):
+            api.validate_request(None,tasks)

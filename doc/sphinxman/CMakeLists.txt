@@ -54,7 +54,7 @@ if(PERL_FOUND AND SPHINX_FOUND AND SPHINX_STUFF_FOUND)
     diatomic.rst documentation.rst energy.rst external.rst fchk.rst
     freq.rst gdma.rst glossary_psivariables.rst index.rst intercalls.rst
     interfacing.rst introduction.rst methods.rst notes_c.rst notes_py.rst
-    oeprop.rst opt.rst optking.rst plugins.rst prog_corelibs.rst prop.rst
+    oeprop.rst isapol.rst opt.rst optking.rst plugins.rst prog_corelibs.rst prop.rst
     psithonfunc.rst psithoninput.rst quickaddalias.rst mp2f12.rst
     basissets_tables.rst quickadddatabase.rst sapt.rst sowreap.rst
     testsuite.rst tutorial.rst dft_byfunctional.rst scf.rst mrcc.rst

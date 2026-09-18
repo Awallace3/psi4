@@ -1,0 +1,53 @@
+MODERN ISA-POL PRESET DECLARATION TEXT / SOURCE NOTICES
+
+isapol_modern_preset.py records, verbatim and line by line, the contents of
+two CamCASP method templates and their cluster templates:
+
+    methods/isa-pol-from-isa-A        methods/isa-pol-from-isa-A.clt_tmpl
+    methods/isa-pol-from-isa-A+DF     methods/isa-pol-from-isa-A+DF.clt_tmpl
+
+at CamCASP revision 63b16a22b9bae597fe81ecdb8b8d91c21868c814. The sha256 of
+each file is pinned in the module (SOURCE_SHA256) and checked against the
+reference tree by tests/pytests/test_isapol_modern_preset.py when that tree is
+present, so a stale transcription is detectable rather than silent.
+
+What is reproduced here is CamCASP keyword/declaration text -- the input
+protocol -- together with this branch's statement of which declarations it
+honours, which it provably cannot change under the same preset, and which it
+does not honour at all (isapol_modern_preset.GAPS). No CamCASP algorithm,
+source code or numerical result is reproduced in this module: it contains no
+computation, reads no files and imports nothing from psi4.core.
+
+The module emits no option for an unhonourable declaration, and its A+DF
+manifest refuses to emit options at all, because ISA-A and ISA-A+DF are
+different partitions and substituting one for the other would misstate which
+model produced a number.
+
+CamCASP permitted source-derived declaration provenance: Anthony Stone /
+Alston Misquitta. The applicable notice retained from the owned CamCASP
+fixture is reproduced in full below. It is not a license assertion about
+ORIENT, RRF, or third-party basis databases; the basis names appearing in the
+declaration text (aVTZ, Type MC, ISA-set2) are names only, and no basis data
+is reproduced here -- see isapol_reference_basis.NOTICE for that.
+
+MIT License
+
+Copyright (c) 2019 Anthony Stone
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

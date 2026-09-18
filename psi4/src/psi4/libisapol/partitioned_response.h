@@ -35,6 +35,16 @@ class IsaPartitionedMultipoles {
     IsaPartitionedMultipoles(const IsaExplicitBasis& orbital,
         const std::vector<IsaMultipoleSite>& sites, const std::string& provenance,
         double denominator_cutoff, std::shared_ptr<Matrix> orbitals, int nocc);
+    /// Supplied Q values with NO sampling of any kind: a closed-form or otherwise
+    /// externally declared multipole matrix, e.g. the DF-centre rule evaluated
+    /// analytically. The caller owns the model. Nothing here quadratures, forms a
+    /// stockholder denominator, renormalizes or reorders: the rows must already be
+    /// the concatenated (site, Racah component) axes the declared sites imply, and
+    /// the sites must carry no samples, so a supplied Q can never be mistaken for a
+    /// sampled one. There is no denominator cutoff because no denominator exists.
+    IsaPartitionedMultipoles(std::shared_ptr<Matrix> values,
+        const std::vector<IsaMultipoleSite>& sites, const std::string& representation,
+        const std::string& provenance);
     std::string representation() const { return representation_; }
     std::shared_ptr<Matrix> values() const;
     std::vector<int> offsets() const { return offsets_; }
@@ -48,6 +58,7 @@ class IsaPartitionedMultipoles {
     double denominator_cutoff() const { return cutoff_; }
  private:
     friend class IsaDistributedResponse;
+    void declare_sites(const std::vector<IsaMultipoleSite>& sites);
     std::shared_ptr<Matrix> q_;
     std::vector<int> offsets_, ranks_;
     std::vector<std::string> labels_, components_;

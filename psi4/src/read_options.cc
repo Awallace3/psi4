@@ -316,20 +316,103 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     options.add_str("PARTITION_SCHEME", "ISA_A", "ISA_A MBIS");
     /*- Distributed tensor localization policy for native atomic response. -*/
     options.add_str("ATOMIC_RESPONSE_LOCALIZATION", "LW", "LW LS");
-    /*- Explicit generated demonstration basis recipe, not a CamCASP preset. -*/
-    options.add_str("ATOMIC_PROPERTY_RECIPE", "GENERATED_JKFIT_ISA_A", "GENERATED_JKFIT_ISA_A");
+    /*- Explicit generated demonstration basis recipe, not a CamCASP preset. The two
+        names differ in exactly one declaration, the Func-1 ``W-TAILS`` cutoff beyond
+        which each site's Gaussian ISA-A shape is replaced by its fitted exponential
+        tail, and the name is the model: GENERATED_JKFIT_ISA_A declares this demo's
+        own absolute 1.5 bohr cutoff, shared by every site, while
+        GENERATED_JKFIT_BRAGG_SLATER_TAIL_ISA_A declares what a CamCASP
+        ``W-TAILS R1-Multiplier = 1.5`` declaration means, 1.5*R_Slater and hence a
+        different cutoff on each element. That is not a cosmetic difference and not a
+        tolerance: on PBE0/cc-pVDZ water the r**4-weighted site multipoles and
+        therefore C8/C10 move by percent, so numbers recorded under the two names may
+        never be quoted as agreeing. Everything else about the two recipes -- the
+        molecular AUX, the AtomAux and Shape sets, the grid and the controller -- is
+        identical. -*/
+    options.add_str("ATOMIC_PROPERTY_RECIPE", "GENERATED_JKFIT_ISA_A",
+                    "GENERATED_JKFIT_ISA_A GENERATED_JKFIT_BRAGG_SLATER_TAIL_ISA_A");
     /*- Declared Cartesian molecular auxiliary basis of the generated recipe, which also
         carries its Drho-C/ISA-A density fit. It is never inferred from BASIS or from
         DF_BASIS_SCF: naming it selects a partition, so a different name is a different
         declared model, not a tuned one. The default is deliberately not MAIN-matched. -*/
     options.add_str_i("ATOMIC_PROPERTY_AUXILIARY_BASIS", "cc-pVDZ-JKFIT");
-    /*- Opt-in acceptance of already-converged canonical fixed-GRAC PBE0 SCF orbitals.
-        Does not run SCF or add a GRAC response kernel. -*/
-    options.add_str("ATOMIC_SCF_ASYMPTOTIC_CORRECTION", "NONE", "NONE FIXED_GRAC");
+    /*- Which SCF asymptotic correction the caller DECLARES the incoming orbitals
+        already carry. This is an acceptance policy, never a producer: no value of it
+        runs SCF, runs an asymptotic-correction iteration, or adds a response kernel
+        inside a property request. The three values are three DIFFERENT MODELS, not
+        three tolerances, and numbers recorded under any two of them may never be
+        quoted as agreeing. NONE admits unmodified canonical orbitals and refuses both
+        any GRAC state and any orbitals that carry a declared correction. FIXED_GRAC
+        admits already-converged canonical fixed-GRAC orbitals, whose profile is fixed
+        at alpha=0.5, beta=40, X=LB*0.75, C=VWN*1 and whose shift must be declared in
+        ATOMIC_SCF_EXPECTED_GRAC_SHIFT. DECLARED_MULTPOLE_AC admits the separately
+        implemented Fermi-Amaldi multipole/Tozer-Handy correction, which is NOT a GRAC
+        profile and was not reached by widening FIXED_GRAC; it requires orbitals
+        produced beforehand by an explicit psi4.atomic_asymptotic_correction(wfn) call,
+        and the ATOMIC_AC_* declaration read here must be the same one that produced
+        them. -*/
+    options.add_str("ATOMIC_SCF_ASYMPTOTIC_CORRECTION", "NONE", "NONE FIXED_GRAC DECLARED_MULTPOLE_AC");
     /*- Expected fixed GRAC shift in Hartree, explicitly positive for FIXED_GRAC.
         Zero is an undeclared sentinel, not an automatically computed IP/HOMO shift.
         The supported profile fixes alpha=0.5, beta=40, X=LB*0.75, C=VWN*1. -*/
     options.add_double("ATOMIC_SCF_EXPECTED_GRAC_SHIFT", 0.0);
+    /*- Declared vertical ionization potential in Hartree of the DECLARED_MULTPOLE_AC
+        correction. It is a declared INPUT, exactly as the reference protocol supplies
+        it, and is never computed from a HOMO eigenvalue, a Delta-SCF or a method name.
+        Zero is an undeclared sentinel: DECLARED_MULTPOLE_AC refuses it rather than
+        substituting an estimate. -*/
+    options.add_double("ATOMIC_AC_IONIZATION_POTENTIAL", 0.0);
+    /*- How the DECLARED_MULTPOLE_AC asymptotic branch is joined to the density-functional
+        potential. Every form vanishes IDENTICALLY inside ATOMIC_AC_SPLICE_LOWER, because
+        the asymptotic branch is a multipole expansion with a pole at its origin; TANH_RAW
+        is the unmodified tanh that does not, and is therefore a separate declared variant
+        rather than the same model computed differently. NONE declares no asymptotic branch
+        at all and is refused by the producer as being the NONE policy under another name. -*/
+    options.add_str("ATOMIC_AC_JOIN", "TANH", "NONE LINEAR TANH TANH_RAW");
+    /*- Inner splice radius of DECLARED_MULTPOLE_AC, in BRAGG-SLATER RADII and not bohr.
+        The join is identically zero inside it. -*/
+    options.add_double("ATOMIC_AC_SPLICE_LOWER", 3.0);
+    /*- Outer splice radius of DECLARED_MULTPOLE_AC, in BRAGG-SLATER RADII and not bohr.
+        Must be strictly greater than ATOMIC_AC_SPLICE_LOWER. -*/
+    options.add_double("ATOMIC_AC_SPLICE_UPPER", 4.0);
+    /*- Sharpness of the DECLARED_MULTPOLE_AC tanh join. Part of the model's identity,
+        not a convergence control. -*/
+    options.add_double("ATOMIC_AC_TANH_SHARPNESS", 1.0);
+    /*- Which Bragg-Slater radius table the DECLARED_MULTPOLE_AC splice coordinate is
+        measured in. The two tables differ for hydrogen, so they are different models.
+        PSI4 is this program's own cubature table; CAMCASP is the reference tree's
+        rslater_ang table converted with that file's own bohr. -*/
+    options.add_str("ATOMIC_AC_BRAGG_TABLE", "PSI4", "PSI4 CAMCASP");
+    /*- Fraction of the Fermi-Amaldi potential carried by the DECLARED_MULTPOLE_AC
+        asymptotic branch. For a global hybrid the derivation is 1 - a_x, which is 0.75
+        for PBE0 because the a_x fraction of exchange is already asymptotically correct;
+        it is carried as a declared field so that another value is reported rather than
+        hidden. -*/
+    options.add_double("ATOMIC_AC_FERMI_AMALDI_SCALE", 0.75);
+    /*- Highest multipole order retained in the DECLARED_MULTPOLE_AC Fermi-Amaldi
+        potential, 0 through 3. -*/
+    options.add_int("ATOMIC_AC_MULTIPOLE_ORDER", 2);
+    /*- Expansion origin of the DECLARED_MULTPOLE_AC multipole potential. -*/
+    options.add_str("ATOMIC_AC_MULTIPOLE_ORIGIN", "NUCCHARGE", "NUCCHARGE COM ATOM0");
+    /*- How the Tozer-Handy constant of DECLARED_MULTPOLE_AC is set. VARIATIONAL
+        recomputes I + eps_HOMO from the current HOMO each iteration, which is what makes
+        the declaration ionization-potential-driven rather than shift-driven. FIXED holds
+        ATOMIC_AC_SHIFT_VALUE instead, and NONE adds no constant; all three are separate
+        declared models. -*/
+    options.add_str("ATOMIC_AC_SHIFT_MODE", "VARIATIONAL", "NONE VARIATIONAL FIXED");
+    /*- The held Tozer-Handy constant in Hartree, used only under
+        ATOMIC_AC_SHIFT_MODE FIXED. -*/
+    options.add_double("ATOMIC_AC_SHIFT_VALUE", 0.0);
+    /*- Iteration ceiling of the DECLARED_MULTPOLE_AC producer. Reaching it is a
+        failure, never a returned unconverged record. -*/
+    options.add_int("ATOMIC_AC_MAXITER", 200);
+    /*- Energy change the DECLARED_MULTPOLE_AC producer must reach. Admission refuses a
+        record converged more loosely than 1.0e-8, so this is bounded from above by the
+        validator rather than by a warning. -*/
+    options.add_double("ATOMIC_AC_E_CONVERGENCE", 1.0e-10);
+    /*- Orbital-gradient norm the DECLARED_MULTPOLE_AC producer must reach. Admission
+        refuses a record converged more loosely than 1.0e-6. -*/
+    options.add_double("ATOMIC_AC_D_CONVERGENCE", 1.0e-8);
     /*- Dedicated ISA quadrature radial resolution. -*/
     options.add_int("ATOMIC_PROPERTY_RADIAL_POINTS", 160);
     /*- Dedicated ISA quadrature angular resolution. -*/
@@ -361,6 +444,133 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         it therefore relaxes no tolerance and cannot change any number at a retained rank.
         A localization at one limit is a different model from one at another. -*/
     options.add_int("ATOMIC_LOCALIZATION_RANK_LIMIT", 3);
+
+    /*- Declared distributed-multipole model the site response is formed in. This is a
+        MODEL DECLARATION, not a variant of one model, and the choices are answers to
+        different questions: ISA_A is the converged Drho-C stockholder shape partition,
+        which assigns each grid point to sites by the ratio of that site's ISA-A shape to
+        the sum of all of them, while DF_CENTRE_ANALYTIC and DF_CENTRE_GRID are CamCASP's
+        ``DistPolAlgorithm = DF`` rule, which charges each auxiliary fitting
+        function WHOLLY to the centre it sits on and forms no stockholder weight at all.
+        Site multipoles, site polarizabilities and dispersion coefficients from the two
+        rules may never be quoted as agreeing or disagreeing with each other. The two
+        DF_CENTRE forms are the SAME rule: ANALYTIC evaluates it in closed form and so
+        carries no quadrature error whatever, GRID evaluates it on the molecular ISA
+        quadrature and carries that grid's error (measured 2.8e-07 absolute / 6.6e-09
+        relative against the closed form on water/cc-pVDZ-JKFIT). Because the DF rule
+        needs a centre for each fitting function to sit on, it requires AUX columns and
+        refuses ATOMIC_RESPONSE_BASIS = DIRECT_OV. It is also basis-sensitive in a way the
+        stockholder rule is not -- on a MAIN-matched JKFIT auxiliary set it can give a
+        NEGATIVE site isotropic response, which is refused outright rather than reported --
+        so it is sound only on a proper RI auxiliary set such as aug-cc-pVTZ-RI. -*/
+    options.add_str("ATOMIC_MULTIPOLE_DISTRIBUTION", "ISA_A",
+                    "ISA_A DF_CENTRE_ANALYTIC DF_CENTRE_GRID");
+    /*- Declared coordinates the frequency-dependent response is expressed in. DIRECT_OV
+        integrates actual occupied/virtual orbital products against the same converged
+        ISA-A shapes and forms no transition-density fit at all; FITTED_AUXILIARY fits the
+        transition densities into the molecular AUX set under the constrained fit declared
+        by ATOMIC_OV_CHARGE_PENALTY and ATOMIC_OV_METRIC_DAMPING. They are separate
+        declarations, not an approximation and its exact limit. FITTED_AUXILIARY is
+        required by ATOMIC_MULTIPOLE_DISTRIBUTION = DF_CENTRE_*, which has no meaning
+        without auxiliary columns. -*/
+    options.add_str("ATOMIC_RESPONSE_BASIS", "DIRECT_OV", "DIRECT_OV FITTED_AUXILIARY");
+    /*- The reference protocol's ``Lambda``: the finite rank-1 charge penalty
+        ``A += lambda q q^T`` of the constrained transition-density fit. An OV transition
+        density has exactly zero charge by MO orthonormality, so this penalty only enforces
+        something the exact answer already satisfies and the fitted charge it leaves behind
+        falls as 1/lambda -- raising it converges the constraint rather than loosening a
+        gate. It nonetheless changes the fitted transition density, so a chain run at one
+        lambda is a differently declared model from one run at another and their numbers
+        may not be compared. The traced reference polarizability step declares 1000.
+        Ignored by, and required to stay at its default under,
+        ATOMIC_RESPONSE_BASIS = DIRECT_OV, which forms no fit. -*/
+    options.add_double("ATOMIC_OV_CHARGE_PENALTY", 1.0);
+    /*- The reference protocol's ``Eta``, its ``ConstraintType = 1``: every Coulomb-metric
+        element whose two auxiliary functions sit on different centres is scaled by
+        ``1-eta`` before the charge penalty is added. Unlike ATOMIC_OV_CHARGE_PENALTY this
+        does NOT converge to something the exact answer already satisfies -- it changes the
+        fitted transition density at every eta, deliberately, by making inter-site fitted
+        density more expensive. It is therefore a model declaration and never a tolerance,
+        a conditioning repair or a preconditioner. The default 0 is the undamped fit every
+        recorded number was measured at; the traced reference step declares 0.0005.
+        Ignored by, and required to stay at its default under,
+        ATOMIC_RESPONSE_BASIS = DIRECT_OV. -*/
+    options.add_double("ATOMIC_OV_METRIC_DAMPING", 0.0);
+    /*- Declared propagator the frequency-dependent response is built from, i.e. how the
+        H1/H2 operators themselves are assembled. NONE is the shipped path and is not a
+        declaration at all: the propagator module is not entered, and H1/H2 are taken
+        verbatim from the native response provider's exact orbital-product two-electron
+        integrals and exact-density ALDA accumulator. EXACT_ORBITAL declares that same
+        model explicitly, reassembling H1/H2 from the provider's own operators and
+        checking the identity rather than assuming it; it changes no number and exists so
+        that a run can state its propagator instead of implying it by an absent argument.
+        CAMCASP_DF is the reference protocol's own declaration, ``SET PROPAGATOR Type CKS
+        Hessians Internal DF with constraints DF-integrals`` together with its
+        ``KERNEL-INTEGRAL-PARAMETERS``: the two-electron operators are density fitted in
+        the molecular AUX basis, the ALDA kernel is built as an naux x naux matrix and
+        projected through the fitted transition density instead of accumulated over
+        orbital products, ``fxc`` is evaluated at the constrained Drho-C fitted density
+        instead of the exact orbital density, and the kernel is floored at RHO-EPS=1e-8
+        and capped by the Fermi-Dirac limiter at F-MAX=1000 (FD-DELTA=0.01, FD-ALPHA=1).
+        Those are four independent MODEL declarations, none of them a refinement or a
+        tolerance of the shipped ones, so a CAMCASP_DF number may never be quoted as
+        agreeing with a NONE or EXACT_ORBITAL number. CAMCASP_DF needs an AUX expansion of
+        each transition density to project its kernel through, so it requires
+        ATOMIC_RESPONSE_BASIS = FITTED_AUXILIARY. It is a DIFFERENT ALGORITHM from the
+        shipped accumulator and carries its own separately measured work limits, which
+        authorize nothing in and replace nothing of the native ALDA limits. Not
+        replicated under it, and labelled rather than approximated: the reference's
+        ``KERNEL-INTEGRAL-CUTOFF`` AUX shell-pair screen and its constrained propagator
+        metric. -*/
+    options.add_str("ATOMIC_RESPONSE_PROPAGATOR", "NONE", "NONE EXACT_ORBITAL CAMCASP_DF");
+
+    /*- Number of accepted points on the random refinement lattice, the reference
+        protocol's ``SET Lattice ... Random N``. The cloud is a declared, bitwise
+        reproducible model input, not a sample size to be converged: Psi4's
+        generator reproduces CamCASP's Maclaren lagged-Fibonacci draw
+        draw-for-draw, so a run at a different count is a differently declared
+        model and may never be quoted against a number recorded at another count.
+        Capped at the 512-point refinement limit; the 2000-point production
+        lattice stays refused. -*/
+    options.add_int("ATOMIC_REFINEMENT_POINTS", 500);
+    /*- Seed of the refinement lattice generator, the protocol's ``Seed``. A run at
+        any other seed is a DIFFERENT declared model, never a repeat measurement of
+        the same one, so its numbers may not be averaged with or compared against a
+        number recorded at another seed. -*/
+    options.add_int("ATOMIC_REFINEMENT_SEED", 1);
+    /*- Inner radius of the refinement lattice shell, the protocol's ``LoLim``, in
+        MULTIPLES OF THE VAN DER WAALS RADIUS and not in bohr. Points closer than
+        this to any nucleus are rejected. -*/
+    options.add_double("ATOMIC_REFINEMENT_LOWER_LIMIT", 2.0);
+    /*- Outer radius of the refinement lattice shell, the protocol's ``HiLim``, in
+        MULTIPLES OF THE VAN DER WAALS RADIUS and not in bohr. A point is kept only
+        if it lies inside this radius of at least one nucleus. Must exceed
+        ATOMIC_REFINEMENT_LOWER_LIMIT. -*/
+    options.add_double("ATOMIC_REFINEMENT_UPPER_LIMIT", 4.0);
+    /*- Declared PFIT point weighting, the reference protocol's ``weight`` index.
+        It selects which points the refinement objective believes, so it is a model
+        declaration and not a tolerance: two refinements at different weight types
+        are different models. -*/
+    options.add_int("ATOMIC_REFINEMENT_WEIGHT_TYPE", 4);
+    /*- Declared PFIT anchor penalty coefficient, the protocol's ``weightcoeff``.
+        It scales how strongly each refined rank-1 variable is held to its
+        unrefined anchor, hence how underdetermined the remaining variables are;
+        the shipped CamCASP default moved from 1e-5 to 1e-3 between releases and
+        alone it shifts site-pair C6 by tens of percent, so it is recorded with
+        every refined number and never treated as a convergence knob. -*/
+    options.add_double("ATOMIC_REFINEMENT_WEIGHT_COEFFICIENT", 1.0e-3);
+    /*- Declared PFIT solver rank/conditioning cutoff, the protocol's
+        ``with cutoff``. -*/
+    options.add_double("ATOMIC_REFINEMENT_CUTOFF", 1.0e-4);
+    /*- Declared uniform rank the refinement runs at, the protocol's ``Limit rank
+        to``, 1 to 4. It may not exceed ATOMIC_LOCALIZATION_RANK_LIMIT: a variable
+        cannot be refined at a rank the local tensors were never localized at. -*/
+    options.add_int("ATOMIC_REFINEMENT_RANK_LIMIT", 2);
+    /*- Declared refinement rank on hydrogen sites, the protocol's ``Limit rank to
+        1 for sites H1 H2``, 1 to 4. Separate from ATOMIC_REFINEMENT_RANK_LIMIT
+        because the reference variable sets are per element, and equally bounded by
+        ATOMIC_LOCALIZATION_RANK_LIMIT. -*/
+    options.add_int("ATOMIC_REFINEMENT_HYDROGEN_RANK_LIMIT", 1);
 
     /*- Verbosity of the native atomic-property narrative written to the output
         file. 0 is silent, 1 prints each stage with every tweakable parameter of

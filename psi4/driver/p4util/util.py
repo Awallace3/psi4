@@ -36,6 +36,7 @@ __all__ = [
     "libint2_print_out",
     "oeprop",
     "atomic_property_result",
+    "atomic_asymptotic_correction",
     "set_memory",
 ]
 
@@ -115,6 +116,28 @@ def atomic_property_result(wfn):
     """
     from ..procrouting.isapol_oeprop import atomic_property_result as accessor
     return accessor(wfn)
+
+
+def atomic_asymptotic_correction(wfn):
+    """Produce and apply the declared SCF asymptotic correction, in place.
+
+    This is the explicit producer of the DECLARED_MULTPOLE_AC policy, and the
+    only way that policy's orbitals come into existence: a native property
+    request never runs the correction iteration itself. The model is read from
+    the ``ATOMIC_AC_*`` options and resolved into one immutable declaration
+    before any orbital is produced.
+
+    ``ATOMIC_SCF_ASYMPTOTIC_CORRECTION`` must already be DECLARED_MULTPOLE_AC, so
+    that the model produced here is the model a later property request admits.
+
+    This MUTATES *wfn*: its orbitals, density, Fock matrix, eigenvalues and energy
+    are replaced, and its successful-SCF seal is deliberately invalidated, because
+    the state is no longer the one SCF converged and the reported energy is the
+    plain functional evaluated at the corrected density -- above the SCF minimum
+    and not a variational one. Returns *wfn*.
+    """
+    from ..procrouting.isapol_ac_options import run
+    return run(wfn)
 
 
 def cubeprop(wfn: core.Wavefunction, **kwargs):
