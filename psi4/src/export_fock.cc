@@ -39,6 +39,7 @@
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libpsi4util/process.h"
+#include "psi4/libpsi4util/memory_ledger.h"
 #include "psi4/libscf_solver/sad.h"
 
 using namespace psi;
@@ -46,6 +47,13 @@ namespace py = pybind11;
 using namespace pybind11::literals;
 
 void export_fock(py::module &m) {
+    m.def("memory_committed", &MemoryClaim::committed,
+          "Number of doubles the large, long-lived buffers of this process are holding right now: the "
+          "in-core density-fitted integrals of every live JK object and the DFT collocation cache of every "
+          "live V object. get_memory() describes an empty process, so a driver that keeps earlier "
+          "wavefunctions alive -- SAPT(DFT), or a GRAC shift holding the neutral while the cation runs -- "
+          "must subtract this before dividing the SCF memory budget, or each SCF claims the whole budget again.");
+
     py::class_<JK, std::shared_ptr<JK>>(m, "JK", "docstring")
         .def_static("build_JK",
                     [](std::shared_ptr<BasisSet> basis, std::shared_ptr<BasisSet> aux) {
@@ -177,6 +185,31 @@ void export_fock(py::module &m) {
         .def("set_MO_core", &DFHelper::set_MO_core)
         .def("get_MO_core", &DFHelper::get_MO_core)
         .def("add_space", &DFHelper::add_space)
+        .def("add_disk_tensor", &DFHelper::add_disk_tensor)
+        .def("write_disk_tensor", 
+             py::overload_cast<std::string, SharedMatrix>(&DFHelper::write_disk_tensor),
+             "name"_a, "M"_a)
+        .def("write_disk_tensor", 
+             py::overload_cast<std::string, SharedMatrix, std::vector<size_t>>(&DFHelper::write_disk_tensor),
+             "name"_a, "M"_a, "a1"_a)
+        .def("write_disk_tensor", 
+             py::overload_cast<std::string, SharedMatrix, std::vector<size_t>, std::vector<size_t>>(&DFHelper::write_disk_tensor),
+             "name"_a, "M"_a, "a1"_a, "a2"_a)
+        .def("write_disk_tensor", 
+             py::overload_cast<std::string, SharedMatrix, std::vector<size_t>, std::vector<size_t>, std::vector<size_t>>(&DFHelper::write_disk_tensor),
+             "name"_a, "M"_a, "a1"_a, "a2"_a, "a3"_a)
+        .def("fill_tensor", 
+             py::overload_cast<std::string, SharedMatrix>(&DFHelper::fill_tensor),
+             "name"_a, "M"_a)
+        .def("fill_tensor", 
+             py::overload_cast<std::string, SharedMatrix, std::vector<size_t>>(&DFHelper::fill_tensor),
+             "name"_a, "M"_a, "a1"_a)
+        .def("fill_tensor", 
+             py::overload_cast<std::string, SharedMatrix, std::vector<size_t>, std::vector<size_t>>(&DFHelper::fill_tensor),
+             "name"_a, "M"_a, "a1"_a, "a2"_a)
+        .def("fill_tensor", 
+             py::overload_cast<std::string, SharedMatrix, std::vector<size_t>, std::vector<size_t>, std::vector<size_t>>(&DFHelper::fill_tensor),
+             "name"_a, "M"_a, "a1"_a, "a2"_a, "a3"_a)
         .def("initialize", &DFHelper::initialize)
         .def("print_header", &DFHelper::print_header)
         .def("add_transformation", &DFHelper::add_transformation, "name"_a, "key1"_a, "key2"_a, "order"_a = "Qpq")
