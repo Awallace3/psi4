@@ -164,6 +164,8 @@ def test_read_mode_does_not_write(cache_dir, monkeypatch):
     pytest.param({"mbis_radial_points": 99}, id="mbis_radial_points"),
     pytest.param({"mbis_spherical_points": 590}, id="mbis_spherical_points"),
     pytest.param({"mbis_d_convergence": 6}, id="mbis_d_convergence"),
+    pytest.param({"mbis_screening_threshold": 1.0e-10}, id="mbis_screening_threshold"),
+    pytest.param({"mbis_anderson": False}, id="mbis_anderson"),
     pytest.param({"d_convergence": 6}, id="d_convergence"),
     pytest.param({"e_convergence": 8}, id="e_convergence"),
     pytest.param({"dft_spherical_points": 590}, id="dft_spherical_points"),

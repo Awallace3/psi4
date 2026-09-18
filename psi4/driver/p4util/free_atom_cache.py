@@ -111,6 +111,13 @@ _KEY_OPTIONS = (
     "MBIS_MAXITER",
     "MBIS_D_CONVERGENCE",
     "MAX_RADIAL_MOMENT",
+    # MBIS_SCREENING_THRESHOLD drops an atom from a grid block once its pro-atom density falls
+    # below it, so it is an approximation control and moves the number outright.  MBIS_ANDERSON
+    # only accelerates the iteration towards the same fixed point, and so should reach the same
+    # answer to within MBIS_D_CONVERGENCE -- "should" is not "does", and an entry is meant to
+    # record the settings that produced it, so it is keyed on too.
+    "MBIS_SCREENING_THRESHOLD",
+    "MBIS_ANDERSON",
     # DFT grid and range-separation/dispersion knobs.
     "DFT_SPHERICAL_POINTS",
     "DFT_RADIAL_POINTS",
