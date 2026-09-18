@@ -346,7 +346,10 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     options.add_str("MBIS_FREE_ATOM_CACHE", "READWRITE", "OFF READ WRITE READWRITE");
     /*- Directory holding the |globals__mbis_free_atom_cache| entries.  An empty value defers to
     the :envvar:`PSI4_FREE_ATOM_CACHE_PATH` environment variable, and failing that to
-    ``$XDG_CACHE_HOME/psi4/free_atom_volumes`` (i.e. ``~/.cache/psi4/free_atom_volumes``). -*/
+    ``free_atom_volumes`` inside this |PSIfour| installation (:envvar:`PSIDATADIR`, so the conda
+    prefix for a conda install and ``<objdir>/stage/share/psi4`` for a build), which is where
+    uninstalling |PSIfour| will take it with it.  An installation that cannot be written to gets
+    no cache until this is set to a directory that can. -*/
     options.add_str_i("MBIS_FREE_ATOM_CACHE_PATH", "");
 
     /*- PCM boolean for pcmsolver module -*/

@@ -216,11 +216,16 @@ optimization, it is the same handful of numbers computed over and over.
 
 A free-atom volume is a property of an element, a level of theory, the basis that element is given,
 and the grid and convergence settings. It is never a property of the molecule, so |PSIfour| keeps
-the ones it has computed in ``~/.cache/psi4/free_atom_volumes`` and reuses them. This is on by
+the ones it has computed in ``free_atom_volumes`` inside its own installation directory
+(``$CONDA_PREFIX/share/psi4/free_atom_volumes`` for a conda install) and reuses them. Living
+inside the installation is deliberate: the cache is derived data, and uninstalling |PSIfour|
+should take it along rather than leave it behind in the user's home directory. This is on by
 default and needs no attention; the controls exist for the cases where it does.
 
 Set |globals__mbis_free_atom_cache_path| (or :envvar:`PSI4_FREE_ATOM_CACHE_PATH`) to put the cache
-somewhere shared, such as a project directory on a cluster filesystem. Entries are one small JSON
+somewhere shared, such as a project directory on a cluster filesystem, or somewhere writable if
+|PSIfour| is installed read-only --- an installation that cannot be written to simply says so once
+and computes the volumes. Entries are one small JSON
 file each, written atomically, so any number of jobs may read and write the directory at once
 without locking. Set |globals__mbis_free_atom_cache| (or :envvar:`PSI4_FREE_ATOM_CACHE`) to
 ``READ`` for workers that should consult a prepared cache but not add to it, to ``WRITE`` to

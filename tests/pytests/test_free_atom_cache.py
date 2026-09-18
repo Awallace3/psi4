@@ -9,6 +9,7 @@ of the tests below therefore assert that something does *not* hit.
 import json
 import multiprocessing
 import os
+from pathlib import Path
 
 import pytest
 
@@ -38,6 +39,21 @@ def cache_dir(tmp_path, monkeypatch):
     fac.clear()
     yield fac.path()
     fac.clear()
+
+
+def test_default_path_is_inside_the_installation(monkeypatch):
+    """With nothing set, the cache lives under PSIDATADIR and not in a user-wide cache directory.
+
+    The point is uninstallability: these entries are derived data belonging to one psi4, so they
+    have to sit where removing that psi4 removes them too.
+    """
+    monkeypatch.delenv("PSI4_FREE_ATOM_CACHE_PATH", raising=False)
+    psi4.core.clean_options()
+
+    default = fac.path()
+    assert default == Path(psi4.core.get_datadir()) / "free_atom_volumes"
+    assert Path.home() / ".cache" not in default.parents, \
+        "the default must not be a user-wide cache directory that no uninstall would clean up"
 
 
 @pytest.fixture(autouse=True)

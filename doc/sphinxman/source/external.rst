@@ -637,8 +637,10 @@ These environment variables will influence |PSIfours| behavior.
 .. envvar:: PSI4_FREE_ATOM_CACHE_PATH
 
    Directory holding the cached MBIS free-atom volumes. Overrides
-   |globals__mbis_free_atom_cache_path|, and defaults to
-   ``$XDG_CACHE_HOME/psi4/free_atom_volumes`` (i.e. ``~/.cache/psi4/free_atom_volumes``). Point
+   |globals__mbis_free_atom_cache_path|, and defaults to ``free_atom_volumes`` inside the
+   |PSIfour| installation itself --- ``$CONDA_PREFIX/share/psi4/free_atom_volumes`` for a conda
+   install, ``<objdir>/stage/share/psi4/free_atom_volumes`` for a build --- so that removing
+   |PSIfour| removes its cache. Point
    several jobs at one directory to share the references between them; entries are written
    atomically and need no locking.
    See :ref:`sec:oeprop_mbis_free_atom_cache`.

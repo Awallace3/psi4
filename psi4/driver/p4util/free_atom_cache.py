@@ -257,7 +257,7 @@ def path() -> Path:
     """Return the directory holding the cache, without creating it.
 
     :envvar:`PSI4_FREE_ATOM_CACHE_PATH`, else |globals__mbis_free_atom_cache_path|, else
-    ``$XDG_CACHE_HOME/psi4/free_atom_volumes``.
+    :func:`_install_cache_dir`.
     """
     candidate = os.environ.get("PSI4_FREE_ATOM_CACHE_PATH")
     if not candidate:
@@ -267,8 +267,30 @@ def path() -> Path:
             candidate = ""
     if candidate:
         return Path(candidate).expanduser()
-    xdg = os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")
-    return Path(xdg) / "psi4" / "free_atom_volumes"
+    return _install_cache_dir()
+
+
+def _install_cache_dir() -> Path:
+    """``<PSIDATADIR>/free_atom_volumes``: inside the installation that wrote the entries.
+
+    An entry is only ever reused by a psi4 of the same series (the key records it), and it is
+    derived data that costs one atomic SCF to regenerate, so it belongs inside the installation it
+    came from -- under the conda prefix for a conda install, under ``<objdir>/stage`` for a build
+    -- where removing psi4 removes it too.  A user-wide location such as ``~/.cache/psi4`` would
+    outlive every psi4 that ever wrote to it, and nothing would ever clean it up.
+
+    An installation nobody can write to therefore gets no cache rather than one somewhere
+    unaffiliated: :func:`store` says so once and the calculation proceeds unaffected, and a shared
+    or writable directory is one option away.
+    """
+    try:
+        datadir = core.get_datadir()
+    except Exception:
+        datadir = ""
+    if not datadir:
+        # Nothing to anchor on; this file's own package directory is the same installation.
+        datadir = str(Path(__file__).resolve().parents[2])
+    return Path(datadir) / "free_atom_volumes"
 
 
 # ==> Key construction <==
@@ -534,7 +556,8 @@ def store(key: Optional[Dict[str, Any]], value: float, extras: Optional[Dict[str
             os.fsync(handle.fileno())
         os.replace(temporary, entry)
     except Exception as exc:
-        _warn_once(f"could not write the free-atom cache entry {entry} ({exc})")
+        _warn_once(f"could not write the free-atom cache entry {entry} ({exc}); "
+                   "set MBIS_FREE_ATOM_CACHE_PATH to a writable directory to keep one")
         try:
             temporary.unlink()
         except Exception:

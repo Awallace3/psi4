@@ -20,8 +20,8 @@ import numpy as np
 import os
 
 # Keep this test's free-atom cache inside its own working directory. The cache is on by default
-# and would otherwise write into the user's ~/.cache while the suite runs, and the second half of
-# this test needs a directory whose contents it controls.
+# and would otherwise write into the installation's own share directory while the suite runs, and
+# the second half of this test needs a directory whose contents it controls.
 os.environ["PSI4_FREE_ATOM_CACHE"] = "READWRITE"
 os.environ["PSI4_FREE_ATOM_CACHE_PATH"] = os.path.join(os.getcwd(), "free_atom_cache")
 
