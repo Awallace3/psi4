@@ -235,8 +235,30 @@ message(STATUS "Psi4 install: ${CMAKE_INSTALL_PREFIX}")
 set(Python_ADDITIONAL_VERSIONS 3.13 3.12 3.11 3.10)  # adjust with CMake minimum FindPythonInterp
 find_package(Python 3.10 COMPONENTS Interpreter Development NumPy REQUIRED)
 message(STATUS "${Cyan}Found Python ${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}${ColourReset}: ${Python_EXECUTABLE} (found version ${Python_VERSION}; NumPy version: ${Python_NumPy_VERSION})")
+set(_psi4_CUDAToolkit_ROOT_ARG "")
 if (ENABLE_cuEST)
     find_package(CUDAToolkit REQUIRED)
+    # CUDAToolkit_ROOT is an *input* hint to FindCUDAToolkit, never a result
+    # variable, so after a successful find it is still empty unless the user set
+    # it.  Forwarding it empty to psi4-core below does not mean "absent" -- it
+    # defines the cache entry as the empty string, and FindCUDAToolkit then
+    # searches *only* under it with no fallback to PATH or CUDA_PATH.  The
+    # subproject's find_package(CUDAToolkit REQUIRED) in FindcuEST.cmake would
+    # die with "Could not find nvcc executable in path specified by variable
+    # CUDAToolkit_ROOT=".  Recover the root from the nvcc we did find (its
+    # grandparent directory; CUDAToolkit_BIN_DIR is wrong for conda toolkits,
+    # where it points into targets/<arch>/bin) and forward it only when non-empty,
+    # which also pins psi4-core to the same toolkit instead of letting it
+    # rediscover a different one.
+    if (NOT CUDAToolkit_ROOT AND CUDAToolkit_NVCC_EXECUTABLE)
+        get_filename_component(_psi4_nvcc_bindir "${CUDAToolkit_NVCC_EXECUTABLE}" DIRECTORY)
+        get_filename_component(CUDAToolkit_ROOT "${_psi4_nvcc_bindir}" DIRECTORY)
+        unset(_psi4_nvcc_bindir)
+    endif()
+    if (CUDAToolkit_ROOT)
+        set(_psi4_CUDAToolkit_ROOT_ARG "-DCUDAToolkit_ROOT=${CUDAToolkit_ROOT}")
+    endif()
+    message(STATUS "${Cyan}Found CUDAToolkit ${CUDAToolkit_VERSION}${ColourReset}: ${CUDAToolkit_ROOT}")
 endif()
 set(STAGED_INSTALL_PREFIX ${CMAKE_BINARY_DIR}/stage)
 message(STATUS "Psi4 staging: ${STAGED_INSTALL_PREFIX}")
@@ -303,7 +325,7 @@ ExternalProject_Add(psi4-core
               -DCMAKE_CUDA_HOST_COMPILER=${CMAKE_CUDA_HOST_COMPILER}
               -DCMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}
               -DCMAKE_CUDA_FLAGS=${CMAKE_CUDA_FLAGS}
-              -DCUDAToolkit_ROOT=${CUDAToolkit_ROOT}
+              ${_psi4_CUDAToolkit_ROOT_ARG}
               -DCMAKE_CXX_STANDARD=${psi4_CXX_STANDARD}
               -DCMAKE_CXX_STANDARD_REQUIRED=ON
               -DCMAKE_CXX_EXTENSIONS=OFF
