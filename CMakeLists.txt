@@ -142,6 +142,7 @@ option(ENABLE_cct3 "Enables cct3 plugin (requires Fortran; can also be added at 
 option(ENABLE_gpu_dfcc "Enables GPU_DFCC plugin for gpu-accelerated df-cc (requires CUDA; can also be added at runtime)" OFF)
 option(ENABLE_mdi "Enables MolSSI driver interface" OFF)
 option(ENABLE_BrianQC "Enables the BrianQC GPU module (requires CUDA; requires separate installation and licensing of the BrianQC module)" OFF)
+option(ENABLE_cuEST "Enables the cuEST GPU module (requires CUDA; requires separate installation and licensing of the cuEST module)" OFF)
 # These options are relevant to pasture, expert only
 option(ENABLE_ccsort "Enables ccsort plugin installed from psi4pasture" OFF)
 option(ENABLE_transqt2 "Enables transqt2 plugin installed from psi4pasture" OFF)
@@ -234,6 +235,31 @@ message(STATUS "Psi4 install: ${CMAKE_INSTALL_PREFIX}")
 set(Python_ADDITIONAL_VERSIONS 3.13 3.12 3.11 3.10)  # adjust with CMake minimum FindPythonInterp
 find_package(Python 3.10 COMPONENTS Interpreter Development NumPy REQUIRED)
 message(STATUS "${Cyan}Found Python ${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}${ColourReset}: ${Python_EXECUTABLE} (found version ${Python_VERSION}; NumPy version: ${Python_NumPy_VERSION})")
+set(_psi4_CUDAToolkit_ROOT_ARG "")
+if (ENABLE_cuEST)
+    find_package(CUDAToolkit REQUIRED)
+    # CUDAToolkit_ROOT is an *input* hint to FindCUDAToolkit, never a result
+    # variable, so after a successful find it is still empty unless the user set
+    # it.  Forwarding it empty to psi4-core below does not mean "absent" -- it
+    # defines the cache entry as the empty string, and FindCUDAToolkit then
+    # searches *only* under it with no fallback to PATH or CUDA_PATH.  The
+    # subproject's find_package(CUDAToolkit REQUIRED) in FindcuEST.cmake would
+    # die with "Could not find nvcc executable in path specified by variable
+    # CUDAToolkit_ROOT=".  Recover the root from the nvcc we did find (its
+    # grandparent directory; CUDAToolkit_BIN_DIR is wrong for conda toolkits,
+    # where it points into targets/<arch>/bin) and forward it only when non-empty,
+    # which also pins psi4-core to the same toolkit instead of letting it
+    # rediscover a different one.
+    if (NOT CUDAToolkit_ROOT AND CUDAToolkit_NVCC_EXECUTABLE)
+        get_filename_component(_psi4_nvcc_bindir "${CUDAToolkit_NVCC_EXECUTABLE}" DIRECTORY)
+        get_filename_component(CUDAToolkit_ROOT "${_psi4_nvcc_bindir}" DIRECTORY)
+        unset(_psi4_nvcc_bindir)
+    endif()
+    if (CUDAToolkit_ROOT)
+        set(_psi4_CUDAToolkit_ROOT_ARG "-DCUDAToolkit_ROOT=${CUDAToolkit_ROOT}")
+    endif()
+    message(STATUS "${Cyan}Found CUDAToolkit ${CUDAToolkit_VERSION}${ColourReset}: ${CUDAToolkit_ROOT}")
+endif()
 set(STAGED_INSTALL_PREFIX ${CMAKE_BINARY_DIR}/stage)
 message(STATUS "Psi4 staging: ${STAGED_INSTALL_PREFIX}")
 message(STATUS "CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
@@ -277,7 +303,8 @@ ExternalProject_Add(psi4-core
            brianqc_external
            integratorxx_external
            gauxc_external
-
+           cuest_external
+ 
    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/psi4
    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${STAGED_INSTALL_PREFIX}
               -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
@@ -294,6 +321,11 @@ ExternalProject_Add(psi4-core
               -DCMAKE_C_FLAGS_RELEASE=${CMAKE_C_FLAGS_RELEASE}
               -DCMAKE_C_FLAGS_RELWITHDEBINFO=${CMAKE_C_FLAGS_RELWITHDEBINFO}
               -DCMAKE_C_FLAGS_MINSIZEREL=${CMAKE_C_FLAGS_MINSIZEREL}
+              -DCMAKE_CUDA_COMPILER=${CMAKE_CUDA_COMPILER}
+              -DCMAKE_CUDA_HOST_COMPILER=${CMAKE_CUDA_HOST_COMPILER}
+              -DCMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}
+              -DCMAKE_CUDA_FLAGS=${CMAKE_CUDA_FLAGS}
+              ${_psi4_CUDAToolkit_ROOT_ARG}
               -DCMAKE_CXX_STANDARD=${psi4_CXX_STANDARD}
               -DCMAKE_CXX_STANDARD_REQUIRED=ON
               -DCMAKE_CXX_EXTENSIONS=OFF
@@ -335,6 +367,7 @@ ExternalProject_Add(psi4-core
               -DENABLE_PCMSolver=${ENABLE_PCMSolver}
               -DENABLE_mdi=${ENABLE_mdi}
               -DENABLE_BrianQC=${ENABLE_BrianQC}
+              -DENABLE_cuEST=${ENABLE_cuEST}
               -DENABLE_OpenOrbitalOptimizer=${ENABLE_OpenOrbitalOptimizer}
               -DENABLE_OPENMP=${ENABLE_OPENMP}
               -DTargetLAPACK_DIR=${TargetLAPACK_DIR}
@@ -359,6 +392,7 @@ ExternalProject_Add(psi4-core
               -Dsimint_DIR=${simint_DIR}
               -DLibxc_DIR=${Libxc_DIR}
               -DBrianQC_DIR=${BrianQC_DIR}
+              -DcuEST_ROOT=${cuEST_ROOT}
               -DFortran_ENABLED=${Fortran_ENABLED}
               -DLIBC_INTERJECT=${LIBC_INTERJECT}
               -DRESTRICT_KEYWORD=${RESTRICT_KEYWORD}

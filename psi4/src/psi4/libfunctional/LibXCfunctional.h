@@ -32,6 +32,7 @@
 #include "psi4/libfunctional/functional.h"
 #include "psi4/libmints/typedefs.h"
 
+#include <vector>
 #include <map>
 
 struct xc_func_type;
@@ -47,6 +48,21 @@ class LibXCFunctional : public Functional {
    private:
     std::string xc_func_name_;
     std::unique_ptr<xc_func_type> xc_functional_;
+#ifdef USING_Libxc_CUDA
+    // Initialized on demand. xc_func_init_flags(XC_FLAGS_ON_DEVICE) talks to the
+    // CUDA driver and aborts the process where there is none, so a CUDA-enabled
+    // Libxc build would otherwise be unable to run DFT on CPU-only hardware.
+    // The setters below record what they applied to the host functional and
+    // replay it, in order, when the device functional is first asked for.
+    struct DeviceSetting {
+        enum class Kind { DensityThreshold, Omega, ExtParams } kind;
+        double value = 0.0;
+        std::vector<double> params;
+    };
+    std::unique_ptr<xc_func_type> xc_functional_device_;
+    std::vector<DeviceSetting> device_settings_;
+    int device_polar_value_ = 1;
+#endif
     int func_id_;
     bool user_omega_;
     bool exc_; // Can we compute functional at a point?
@@ -107,9 +123,16 @@ class LibXCFunctional : public Functional {
     double vv10_b() { return vv10_b_; }
     double vv10_c() { return vv10_c_; }
     double density_cutoff() { return density_cutoff_; }
+    // False for potential-only functionals (e.g. LB94), whose LibXC entry has no
+    // XC_FLAGS_HAVE_EXC. Asking those for an energy density aborts the process.
+    bool has_exc() const { return exc_; }
 
     // Get libxc provenance stamp
     static std::string xclib_description();
+    const xc_func_type* xc_functional() { return xc_functional_.get(); }
+#ifdef USING_Libxc_CUDA
+    const xc_func_type* xc_functional_device();
+#endif
 };
 }  // namespace psi
 

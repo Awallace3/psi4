@@ -76,10 +76,21 @@ LibXCFunctional::LibXCFunctional(std::string xc_name, bool unpolarized) {
 
     xc_functional_ = std::make_unique<xc_func_type>();
 
+#ifdef USING_Libxc_CUDA
+    // A CUDA-enabled LibXC defaults to device arrays. Psi4's general DFT paths
+    // still use host arrays, so select the backend explicitly and keep a
+    // separately initialized device functional for the cuEST path.
+    if (xc_func_init_flags(xc_functional_.get(), func_id_, polar_value, XC_FLAGS_ON_HOST) != 0) {
+#else
     if (xc_func_init(xc_functional_.get(), func_id_, polar_value) != 0) {
+#endif
         outfile->Printf("Functional '%s' not found\n", xc_name.c_str());
         throw PSIEXCEPTION("Could not find required LibXC functional");
     }
+#ifdef USING_Libxc_CUDA
+    // The matching device functional is built lazily; see xc_functional_device().
+    device_polar_value_ = polar_value;
+#endif
 
     // Extract citation information
     xclib_description_ = xclib_description();
@@ -190,7 +201,38 @@ LibXCFunctional::LibXCFunctional(std::string xc_name, bool unpolarized) {
         needs_vv10_ = true;
     }
 }  // namespace psi
-LibXCFunctional::~LibXCFunctional() { xc_func_end(xc_functional_.get()); }
+LibXCFunctional::~LibXCFunctional() {
+#ifdef USING_Libxc_CUDA
+    if (xc_functional_device_) xc_func_end(xc_functional_device_.get());
+#endif
+    xc_func_end(xc_functional_.get());
+}
+#ifdef USING_Libxc_CUDA
+const xc_func_type* LibXCFunctional::xc_functional_device() {
+    if (xc_functional_device_) return xc_functional_device_.get();
+
+    auto device = std::make_unique<xc_func_type>();
+    if (xc_func_init_flags(device.get(), func_id_, device_polar_value_, XC_FLAGS_ON_DEVICE) != 0) {
+        outfile->Printf("Functional '%s' has no CUDA LibXC implementation\n", xc_func_name_.c_str());
+        throw PSIEXCEPTION("Could not initialize required CUDA LibXC functional");
+    }
+    for (auto& setting : device_settings_) {
+        switch (setting.kind) {
+            case DeviceSetting::Kind::DensityThreshold:
+                xc_func_set_dens_threshold(device.get(), setting.value);
+                break;
+            case DeviceSetting::Kind::Omega:
+                xc_func_set_ext_params_name(device.get(), "_omega", setting.value);
+                break;
+            case DeviceSetting::Kind::ExtParams:
+                xc_func_set_ext_params(device.get(), setting.params.data());
+                break;
+        }
+    }
+    xc_functional_device_ = std::move(device);
+    return xc_functional_device_.get();
+}
+#endif
 std::shared_ptr<Functional> LibXCFunctional::build_polarized() {
     if (!unpolarized_) {
         throw PSIEXCEPTION("LibXCFunctional: Trying to build_polarized_functional from a polarized functional. Are you sure you meant to?");
@@ -260,6 +302,9 @@ void LibXCFunctional::set_density_cutoff(double cut) {
     density_cutoff_ = cut;
     if (density_cutoff_ > 0) {
         xc_func_set_dens_threshold(xc_functional_.get(), cut);
+#ifdef USING_Libxc_CUDA
+        device_settings_.push_back({DeviceSetting::Kind::DensityThreshold, cut, {}});
+#endif
     }
 }
 double LibXCFunctional::query_density_cutoff() { return xc_functional_->dens_threshold; }
@@ -277,6 +322,9 @@ void LibXCFunctional::set_omega(double omega) {
 
     if (match) {
         xc_func_set_ext_params_name(xc_functional_.get(), "_omega", omega);
+#ifdef USING_Libxc_CUDA
+        device_settings_.push_back({DeviceSetting::Kind::Omega, omega, {}});
+#endif
     } else {
         std::ostringstream oss;
         oss << "LibXCfunctional: set_omega is not defined for functional " << xc_func_name_ << "!\n";
@@ -353,6 +401,9 @@ void LibXCFunctional::set_tweak(std::map<std::string, double> values, bool quiet
     }
 
     xc_func_set_ext_params(xc_functional_.get(), tweakers_list.data());
+#ifdef USING_Libxc_CUDA
+    device_settings_.push_back({DeviceSetting::Kind::ExtParams, 0.0, tweakers_list});
+#endif
     user_tweakers_ = tweakers_dict;
 }
 std::vector<std::tuple<std::string, int, double>> LibXCFunctional::get_mix_data() {
