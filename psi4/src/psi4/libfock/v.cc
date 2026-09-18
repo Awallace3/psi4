@@ -4450,31 +4450,41 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
         cuest_common::freeWorkspace(temporary_workspace);
         temporary_workspace = nullptr;
 
-        CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
-            cuest_handle,
-            cuest_xcint_plan_,
-            ansatz_type,
-            density_compute_parameters,
-            &variable_buffersize_descriptor,
-            &temporary_workspace_descriptor,
-            d_Cocc_noccs_[1],
-            d_Coccs_AO_ + d_Cocc_noccs_[0] * nbf,
-            d_rho_b
-            ));
-        temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCDensityCompute(
-            cuest_handle,
-            cuest_xcint_plan_,
-            ansatz_type,
-            density_compute_parameters,
-            &variable_buffersize_descriptor,
-            temporary_workspace,
-            d_Cocc_noccs_[1],
-            d_Coccs_AO_ + d_Cocc_noccs_[0] * nbf,
-            d_rho_b
-            ));
-        cuest_common::freeWorkspace(temporary_workspace);
-        temporary_workspace = nullptr;
+        if (d_Cocc_noccs_[1] == 0) {
+            // No beta electrons (a hydrogen atom -- every MBIS free-atom reference run
+            // hits this) leaves an empty beta Cocc block, and cuEST rejects a
+            // zero-column coefficient matrix: cuestXCDensityComputeWorkspaceQuery
+            // returns status 3.  The answer is analytic, so supply rho_b = 0 directly.
+            if (cudaMemset(d_rho_b, 0, npoints * ncomponents * sizeof(double)) != cudaSuccess) {
+                throw PSIEXCEPTION("cudaMemset failed zeroing the beta density in UV");
+            }
+        } else {
+            CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
+                cuest_handle,
+                cuest_xcint_plan_,
+                ansatz_type,
+                density_compute_parameters,
+                &variable_buffersize_descriptor,
+                &temporary_workspace_descriptor,
+                d_Cocc_noccs_[1],
+                d_Coccs_AO_ + d_Cocc_noccs_[0] * nbf,
+                d_rho_b
+                ));
+            temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
+            CHECK_CUEST(cuestXCDensityCompute(
+                cuest_handle,
+                cuest_xcint_plan_,
+                ansatz_type,
+                density_compute_parameters,
+                &variable_buffersize_descriptor,
+                temporary_workspace,
+                d_Cocc_noccs_[1],
+                d_Coccs_AO_ + d_Cocc_noccs_[0] * nbf,
+                d_rho_b
+                ));
+            cuest_common::freeWorkspace(temporary_workspace);
+            temporary_workspace = nullptr;
+        }
         CHECK_CUEST(cuestParametersDestroy(CUEST_XCDENSITYCOMPUTE_PARAMETERS, density_compute_parameters));
 
         double* d_Vxc_grid_a = nullptr;
@@ -6256,31 +6266,41 @@ SharedMatrix UV::compute_gradient() {
         temporary_workspace = nullptr;
 
         int nbf = primary_->nbf();
-        CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
-            cuest_handle,
-            cuest_xcint_plan_,
-            ansatz_type,
-            density_compute_parameters,
-            &variable_buffersize_descriptor,
-            &temporary_workspace_descriptor,
-            d_Cocc_noccs_[1],
-            d_Coccs_AO_ + d_Cocc_noccs_[0] * nbf,
-            d_rho_b
-            ));
-        temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
-        CHECK_CUEST(cuestXCDensityCompute(
-            cuest_handle,
-            cuest_xcint_plan_,
-            ansatz_type,
-            density_compute_parameters,
-            &variable_buffersize_descriptor,
-            temporary_workspace,
-            d_Cocc_noccs_[1],
-            d_Coccs_AO_ + d_Cocc_noccs_[0] * nbf,
-            d_rho_b
-            ));
-        cuest_common::freeWorkspace(temporary_workspace);
-        temporary_workspace = nullptr;
+        if (d_Cocc_noccs_[1] == 0) {
+            // No beta electrons (a hydrogen atom -- every MBIS free-atom reference run
+            // hits this) leaves an empty beta Cocc block, and cuEST rejects a
+            // zero-column coefficient matrix: cuestXCDensityComputeWorkspaceQuery
+            // returns status 3.  The answer is analytic, so supply rho_b = 0 directly.
+            if (cudaMemset(d_rho_b, 0, npoints * ncomponents * sizeof(double)) != cudaSuccess) {
+                throw PSIEXCEPTION("cudaMemset failed zeroing the beta density in UV");
+            }
+        } else {
+            CHECK_CUEST(cuestXCDensityComputeWorkspaceQuery(
+                cuest_handle,
+                cuest_xcint_plan_,
+                ansatz_type,
+                density_compute_parameters,
+                &variable_buffersize_descriptor,
+                &temporary_workspace_descriptor,
+                d_Cocc_noccs_[1],
+                d_Coccs_AO_ + d_Cocc_noccs_[0] * nbf,
+                d_rho_b
+                ));
+            temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
+            CHECK_CUEST(cuestXCDensityCompute(
+                cuest_handle,
+                cuest_xcint_plan_,
+                ansatz_type,
+                density_compute_parameters,
+                &variable_buffersize_descriptor,
+                temporary_workspace,
+                d_Cocc_noccs_[1],
+                d_Coccs_AO_ + d_Cocc_noccs_[0] * nbf,
+                d_rho_b
+                ));
+            cuest_common::freeWorkspace(temporary_workspace);
+            temporary_workspace = nullptr;
+        }
         CHECK_CUEST(cuestParametersDestroy(CUEST_XCDENSITYCOMPUTE_PARAMETERS, density_compute_parameters));
 
         // Copy the density and its derivatives to host, then transpose it for easier access.
