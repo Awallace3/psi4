@@ -60,6 +60,11 @@ import einsums.graph as cg
 # it again at 128, where the work arrays stop fitting in cache.
 FDISP_BLOCK = 64
 
+# Nuclear centers per batch in the F-SAPT nuclear-ESP transform.  The AO
+# buffer is nbf * NESP_BLOCK * nbf doubles, so 24 keeps it around 60 MB at
+# nbf ~ 600 while still amortizing the backtransform over enough centers.
+NESP_BLOCK = 24
+
 _EIN_TENSORS = (ein.RuntimeTensorD, ein.RuntimeTensorViewD)
 
 
@@ -1940,30 +1945,72 @@ def find(
     dfh.add_disk_tensor("WBar", (nB + nb1 + 1, na, nr))
     dfh.add_disk_tensor("WAbs", (nA + na1 + 1, nb, ns))
 
-    # Nuclear Contribution to ESPs
-    ext_pot = core.ExternalPotential()
-    ZA = cache["ZA"].np
-    for A in range(nA):
-        ext_pot.clear()
-        atom_pos = mol.xyz(A)
-        ext_pot.addCharge(ZA[A], atom_pos[0], atom_pos[1], atom_pos[2])
-        Vtemp = ext_pot.computePotentialMatrix(dimer_wfn.basisset())
-        Vbs = core.Matrix.from_array(
-            chain_gemm_einsums([Cocc_B, Vtemp, Cvir_B], ["T", "N", "N"])
-        )
-        dfh.write_disk_tensor("WAbs", Vbs, (A, A + 1))
+    core.timer_on("FIND:nucESP")
+    # Nuclear contribution to the ESPs, one batch of centers at a time.  Two
+    # things differ from the naive per-center loop:
+    #
+    #   1. The integrals come from MintsHelper.ao_multipole_potential(0, R),
+    #      whose order-0 component is minus the AO potential of a +1 point
+    #      charge at R (verified against ExternalPotential to 9e-16).  It builds
+    #      one integral object and one nbf x nbf matrix, where
+    #      ExternalPotential::computePotentialMatrix rebuilds an IntegralFactory
+    #      plus one PotentialInt and one nbf x nbf matrix per OpenMP thread on
+    #      every call -- 2.2x more wall time per center in isolation, and 3.3x
+    #      (nanotube) to 3.7x (peptide) inside find().  Centers with zero
+    #      charge, which the link-atom bookkeeping can produce, are skipped
+    #      instead of contributing an integral pass that scales to zero.
+    #   2. The centers are accumulated in (n, A, m) layout, so the occ/vir
+    #      backtransform for a whole batch is two GEMMs inside one graph_block
+    #      instead of a chain_gemm_einsums triple product per center, and the
+    #      batch reaches disk in a single write.
+    mints = core.MintsHelper(dimer_wfn.basisset())
+    nn = _arr(Cocc_A).shape[0]
 
-    ZB = cache["ZB"].np
-    for B in range(nB):
-        ext_pot.clear()
-        atom_pos = mol.xyz(B)
-        ext_pot.addCharge(ZB[B], atom_pos[0], atom_pos[1], atom_pos[2])
-        Vtemp = ext_pot.computePotentialMatrix(dimer_wfn.basisset())
-        Var = core.Matrix.from_array(
-            chain_gemm_einsums([Cocc_A, Vtemp, Cvir_A], ["T", "N", "N"])
-        )
-        dfh.write_disk_tensor("WBar", Var, (B, B + 1))
+    def nuclear_esp(ncenter, Z, Cocc, Cvir, no, nv, tensor_name):
+        """ESP of each of the first *ncenter* nuclei in one monomer's occ/vir
+        basis, written into the disk tensor *tensor_name*."""
+        for A0 in range(0, ncenter, NESP_BLOCK):
+            A1 = min(A0 + NESP_BLOCK, ncenter)
+            nblk = A1 - A0
 
+            core.timer_on("FIND:nucESP:int")
+            VnAm = np.zeros((nn, nblk, nn))
+            for A in range(A0, A1):
+                if Z[A] == 0.0:
+                    continue
+                p = mol.xyz(A)
+                V = _arr(mints.ao_multipole_potential(0, [p[0], p[1], p[2]])[0])
+                np.multiply(V, -Z[A], out=VnAm[:, A - A0, :])
+            core.timer_off("FIND:nucESP:int")
+
+            core.timer_on("FIND:nucESP:xform")
+            T_V = _ein(VnAm, name="VnAm")
+            T_Co = _ein(Cocc, name="Cocc")
+            T_Cv = _ein(Cvir, name="Cvir")
+            T_W = _ein_zeros(no, nblk, nv, name="Wblk")
+            with graph_block("find_nucesp") as blk:
+                T = blk.tensor(no, nblk, nn, name="T")
+                # Merging a tensor's *trailing* axes into a reshape_view gives a
+                # faithful GEMM operand; merging the leading ones does not (the
+                # same leading-index view defect as einsums' batched_gemm), so
+                # the second contraction keeps the center axis explicit and lets
+                # einsums batch it.
+                ein.einsum("ij <- ki ; kj", T.reshape_view([no, nblk * nn]),
+                           T_Co, T_V.reshape_view([nn, nblk * nn]))
+                ein.einsum("bAs <- bAm ; ms", T_W, T, T_Cv)
+            Wblk = np.ascontiguousarray(
+                np.transpose(np.asarray(T_W), (1, 0, 2))
+            ).reshape(nblk * no, nv)
+            core.timer_off("FIND:nucESP:xform")
+
+            core.timer_on("FIND:nucESP:write")
+            dfh.write_disk_tensor(tensor_name, core.Matrix.from_array(Wblk), (A0, A1))
+            core.timer_off("FIND:nucESP:write")
+
+    nuclear_esp(nA, cache["ZA"].np, Cocc_B, Cvir_B, nb, ns, "WAbs")
+    nuclear_esp(nB, cache["ZB"].np, Cocc_A, Cvir_A, na, nr, "WBar")
+    core.timer_off("FIND:nucESP")
+    core.timer_on("FIND:dfhxform")
     dfh.add_space("a", core.Matrix.from_array(Cocc_A))
     dfh.add_space("r", core.Matrix.from_array(Cvir_A))
     dfh.add_space("b", core.Matrix.from_array(Cocc_B))
@@ -1974,6 +2021,8 @@ def find(
 
     dfh.transform()
 
+    core.timer_off("FIND:dfhxform")
+    core.timer_on("FIND:elecESP")
     RaC = cache["Vlocc0A"]  # na x nQ
     RbD = cache["Vlocc0B"]  # nb x nQ
 
@@ -1997,11 +2046,8 @@ def find(
             row_view = core.Matrix.from_array(T1Br.np[B : B + 1, :])
             dfh.write_disk_tensor("WBar", row_view, (nB + B, nB + B + 1), (A, A + 1))
 
-    xA = core.Matrix("xA", na, nr)
-    xB = core.Matrix("xB", nb, ns)
-    wB = core.Matrix("wB", na, nr)
-    wA = core.Matrix("wA", nb, ns)
-
+    core.timer_off("FIND:elecESP")
+    core.timer_on("FIND:pots")
     uAT = core.Matrix("uAT", nb, ns)
     wAT = core.Matrix("wAT", nb, ns)
     uBT = core.Matrix("uBT", na, nr)
@@ -2121,6 +2167,7 @@ def find(
         uBT = build_exch_ind_pot_AB(mapA)
         uAT = build_exch_ind_pot_BA(mapA)
 
+    core.timer_off("FIND:pots")
     wBT.name = "wBT"
     uBT.name = "uBT"
     wAT.name = "wAT"
@@ -2166,6 +2213,7 @@ def find(
     # sIndu_AB = 0.0
     # sIndu_BA = 0.0
 
+    core.timer_on("FIND:uncAB")
     # ==> A <- B Uncoupled <==
     if dimer_wfn.has_potential_variable("B"):
         Var = core.triplet(Cocc_A, cache["VB_extern"], Cvir_A, True, False, False)
@@ -2175,34 +2223,46 @@ def find(
         Var.zero()
         dfh.write_disk_tensor("WBar", Var, (nB + nb1, nB + nb1 + 1))
 
-    for B in range(nB + nb1 + 1):  # add one for external potential
-        # ESP
-        dfh.fill_tensor("WBar", wB, [B, B + 1])
-        # Uncoupled
-        for a in range(na):
-            for r in range(nr):
-                # fill_tensor wB as (1, na, nr), so we take first index only
-                xA.np[a, r] = wB.np[0, a, r] / (eps_occ_A.np[a] - eps_vir_A.np[r])
+    # Every (a, r) amplitude for every ESP source B at once.  The ESP tensor
+    # comes off disk in one read instead of one read per B, the orbital-energy
+    # denominator is one elementwise pass, the backtransform by Uocc_A is one
+    # GEMM over the whole B axis, and the two "zip up" dots become one
+    # contraction each -- in place of nBt * (na * nr) scalar divisions and
+    # nBt * 2 * na python-level dots.
+    nBt = nB + nb1 + 1
+    WBar_all = core.Matrix("WBar_all", nBt * na, nr)
+    dfh.fill_tensor("WBar", WBar_all)
+    # (B, a, r) -> (a, B, r), so a is the leading (GEMM-contracted) axis
+    WaBr = np.ascontiguousarray(np.transpose(WBar_all.np, (1, 0, 2)))
+    denomA = 1.0 / (_arr(eps_occ_A)[:, None] - _arr(eps_vir_A)[None, :])
 
-        x2A = core.doublet(Uocc_A, xA, True, False)
-        x2Ap = x2A.np
+    T_WaBr = _ein(WaBr, name="WaBr")
+    T_denA = _ein(denomA, name="denomA")
+    T_UoccA = _ein(Uocc_A, name="UoccA")
+    T_wBT = _ein(wBT, name="wBT")
+    T_uBT = _ein(uBT, name="uBT")
+    T_JAB = _ein_zeros(na, nBt, name="JAB")
+    T_KAB = _ein_zeros(na, nBt, name="KAB")
 
-        for a in range(na):
-            Jval = 2.0 * np.dot(x2Ap[a, :], wBT.np[a, :])
-            Kval = 2.0 * np.dot(x2Ap[a, :], uBT.np[a, :])
-            Ind20u_AB += Jval
-            ExchInd20u_AB_termsp[a, B] = Kval
-            ExchInd20u_AB += Kval
-            Ind20u_AB_termsp[a, B] = Jval
-            # if core.get_option("SAPT", "SSAPT0_SCALE"):
-            #     sExchInd20u_AB_termsp[a, B] = Kval
-            #     sExchInd20u_AB += Kval
-            #     sIndu_AB_termsp[a, B] = Jval + Kval
-            #     sIndu_AB += Jval + Kval
+    with graph_block("find_uncAB") as blk:
+        xA = blk.tensor(na, nBt, nr, name="xA")
+        x2A = blk.tensor(na, nBt, nr, name="x2A")
+        ein.einsum("aBr <- aBr ; ar", xA, T_WaBr, T_denA)
+        ein.einsum("ij <- ki ; kj", x2A.reshape_view([na, nBt * nr]),
+                   T_UoccA, xA.reshape_view([na, nBt * nr]))
+        ein.einsum("aB <- aBr ; ar", T_JAB, x2A, T_wBT, ab_pf=2.0, c_pf=0.0)
+        ein.einsum("aB <- aBr ; ar", T_KAB, x2A, T_uBT, ab_pf=2.0, c_pf=0.0)
 
-            Indu_AB_terms.np[a, B] = Jval + Kval
-            Indu_AB += Jval + Kval
+    Jmat, Kmat = np.asarray(T_JAB), np.asarray(T_KAB)
+    Ind20u_AB_termsp[:, :] = Jmat
+    ExchInd20u_AB_termsp[:, :] = Kmat
+    Indu_AB_terms.np[:, :] = Jmat + Kmat
+    Ind20u_AB = float(Jmat.sum())
+    ExchInd20u_AB = float(Kmat.sum())
+    Indu_AB = Ind20u_AB + ExchInd20u_AB
 
+    core.timer_off("FIND:uncAB")
+    core.timer_on("FIND:uncBA")
     # ==> B <- A Uncoupled <==
     if dimer_wfn.has_potential_variable("A"):
         Vbs = core.triplet(Cocc_B, cache["VA_extern"], Cvir_B, True, False, False)
@@ -2212,31 +2272,40 @@ def find(
         Vbs.zero()
         dfh.write_disk_tensor("WAbs", Vbs, (nA + na1, nA + na1 + 1))
 
-    for A in range(nA + na1 + 1):
-        dfh.fill_tensor("WAbs", wA, [A, A + 1])
-        for b in range(nb):
-            for s in range(ns):
-                xB.np[b, s] = wA.np[0, b, s] / (eps_occ_B.np[b] - eps_vir_B.np[s])
+    # Same batched form as A <- B, with the monomer labels swapped.  This is
+    # the larger of the two at F-SAPT sizes (nAt * nb * ns amplitudes).
+    nAt = nA + na1 + 1
+    WAbs_all = core.Matrix("WAbs_all", nAt * nb, ns)
+    dfh.fill_tensor("WAbs", WAbs_all)
+    WbAs = np.ascontiguousarray(np.transpose(WAbs_all.np, (1, 0, 2)))
+    denomB = 1.0 / (_arr(eps_occ_B)[:, None] - _arr(eps_vir_B)[None, :])
 
-        x2B = core.doublet(Uocc_B, xB, True, False)
-        x2Bp = x2B.np
+    T_WbAs = _ein(WbAs, name="WbAs")
+    T_denB = _ein(denomB, name="denomB")
+    T_UoccB = _ein(Uocc_B, name="UoccB")
+    T_wAT = _ein(wAT, name="wAT")
+    T_uAT = _ein(uAT, name="uAT")
+    T_JBA = _ein_zeros(nb, nAt, name="JBA")
+    T_KBA = _ein_zeros(nb, nAt, name="KBA")
 
-        for b in range(nb):
-            Jval = 2.0 * np.dot(x2Bp[b, :], wAT.np[b, :])
-            Kval = 2.0 * np.dot(x2Bp[b, :], uAT.np[b, :])
-            Ind20u_BA_termsp[A, b] = Jval
-            Ind20u_BA += Jval
-            ExchInd20u_BA_termsp[A, b] = Kval
-            ExchInd20u_BA += Kval
-            # if core.get_option("SAPT", "SSAPT0_SCALE"):
-            #     sExchInd20u_BA_termsp[A, b] = Kval
-            #     sExchInd20u_BA += Kval
-            #     sIndu_BA_termsp[A, b] = Jval + Kval
-            #     sIndu_BA += Jval + Kval
+    with graph_block("find_uncBA") as blk:
+        xB = blk.tensor(nb, nAt, ns, name="xB")
+        x2B = blk.tensor(nb, nAt, ns, name="x2B")
+        ein.einsum("bAs <- bAs ; bs", xB, T_WbAs, T_denB)
+        ein.einsum("ij <- ki ; kj", x2B.reshape_view([nb, nAt * ns]),
+                   T_UoccB, xB.reshape_view([nb, nAt * ns]))
+        ein.einsum("bA <- bAs ; bs", T_JBA, x2B, T_wAT, ab_pf=2.0, c_pf=0.0)
+        ein.einsum("bA <- bAs ; bs", T_KBA, x2B, T_uAT, ab_pf=2.0, c_pf=0.0)
 
-            Indu_BA_terms.np[A, b] = Jval + Kval
-            Indu_BA += Jval + Kval
+    Jmat, Kmat = np.asarray(T_JBA).T, np.asarray(T_KBA).T
+    Ind20u_BA_termsp[:, :] = Jmat
+    ExchInd20u_BA_termsp[:, :] = Kmat
+    Indu_BA_terms.np[:, :] = Jmat + Kmat
+    Ind20u_BA = float(Jmat.sum())
+    ExchInd20u_BA = float(Kmat.sum())
+    Indu_BA = Ind20u_BA + ExchInd20u_BA
 
+    core.timer_off("FIND:uncBA")
     if do_print:
         core.print_out(
             f"    Ind20,u (A<-B)          = {Ind20u_AB * 1000:18.8f} [mEh]\n"
