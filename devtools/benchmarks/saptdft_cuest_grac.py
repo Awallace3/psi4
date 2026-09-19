@@ -20,6 +20,8 @@ import subprocess
 import sys
 import time
 
+import process_memory
+
 COMPONENTS = [f"SAPT {term} ENERGY" for term in ("ELST", "EXCH", "IND", "DISP", "TOTAL")]
 WATER = """0 1
 O -0.702196054 -0.056060256 0.009942262
@@ -61,6 +63,12 @@ def atomic_json(path, value):
     temporary.replace(path)
 
 
+def _memory_committed(psi4):
+    """Doubles held by live JK and collocation-cache buffers, or None on a build without the ledger."""
+    getter = getattr(psi4.core, "memory_committed", None)
+    return None if getter is None else getter()
+
+
 def run_case(args):
     import psi4
 
@@ -98,6 +106,10 @@ def run_case(args):
     record["options"] = options
     record["geometry"] = geometry(args.system)
     start = None
+    sampler = None
+    ledger_before = None
+    rss_before = process_memory.host_rss_mib()
+    peak_reset_ok = False
     try:
         molecule = psi4.geometry(record["geometry"])
         psi4.set_options(options)
@@ -109,6 +121,13 @@ def run_case(args):
         expected = expected_nbf.get((args.system, args.basis.lower()))
         if expected is not None and record["nbf"] != expected:
             raise ValueError(f"Basis count {record['nbf']} differs from suite reference {expected}")
+        # Memory is measured over exactly the region that is timed, so a footprint
+        # can be read against the wall time beside it. The device sampler is started
+        # first and stopped last: cuEST allocates its workspace inside energy().
+        sampler = process_memory.DeviceMemorySampler().start() if args.mode == "gpu" else None
+        ledger_before = _memory_committed(psi4)
+        rss_before = process_memory.host_rss_mib()
+        peak_reset_ok = process_memory.reset_host_peak_rss()
         start = time.perf_counter()
         energy = psi4.energy("sapt(dft)-d4(i)", molecule=molecule)
         record["wall_s"] = time.perf_counter() - start
@@ -133,6 +152,17 @@ def run_case(args):
             record.setdefault("wall_s", time.perf_counter() - start)
         record["error"] = f"{type(exc).__name__}: {exc}"
     finally:
+        # A case that failed still spent memory, and a failure caused by memory is
+        # exactly the case whose footprint is worth having.
+        if sampler is not None:
+            record["device_memory"] = sampler.stop()
+        # glibc keeps the freed caches in its arenas, so the resident set does not
+        # fall on free alone and an untrimmed "after" reading says nothing.
+        release = getattr(psi4.core, "release_freed_memory", None)
+        if release is not None:
+            release()
+        record["host_memory"] = process_memory.host_report(
+            peak_reset_ok, rss_before, ledger_before, _memory_committed(psi4))
         psi4.core.close_outfile()
         psi4.core.clean()
         atomic_json(output / "result.json", record)

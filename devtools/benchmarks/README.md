@@ -47,6 +47,36 @@ CPU/GPU order alternates between repeats. Report medians **and ranges**; speedup
 is median CPU wall time divided by median GPU wall time. A value below one is a
 GPU slowdown and must not be omitted.
 
+## Memory
+
+Each case records host and device memory over the same region it times, so a
+footprint can be read against the speedup beside it.
+
+Host memory is the kernel's `VmHWM` high-water mark, which is exact rather than
+sampled. `/proc/self/clear_refs` resets that mark immediately before
+`energy()`, so the reported peak is the timed region's alone and not a process
+that has already imported Psi4 and built three basis sets. The write is a silent
+no-op on a kernel without `CONFIG_PROC_PAGE_MONITOR`; `peak_covers_timed_region_only`
+records whether the mark actually moved, and the summary labels an unreset peak
+`whole process`. A `whole process` figure is not comparable with a `timed region`
+one. The end-of-case resident size is read after `psi4.core.release_freed_memory()`,
+because glibc keeps the released collocation cache in its arenas and an untrimmed
+reading says nothing about what was returned.
+
+Device memory has no kernel high-water mark. It is polled from NVML through
+`nvidia-smi` on a background thread at 0.5 s, so it is a **sampled peak** and a
+spike shorter than the interval is missed; the sample count and interval travel
+with every figure. Per-process accounting is preferred so another tenant on a
+shared GPU cannot inflate the number. Where the driver refuses it — MIG, some
+virtualized setups, consumer cards — the sampler falls back to device-wide use
+and marks the source `device-wide`, which counts every process on the card. The
+summarizer refuses to take a median across mixed sources, and reports a quantity
+absent rather than pooled if only some repeats recorded it.
+
+`python process_memory.py` prints what this host will report, which is the quick
+way to find out whether per-process accounting is available before spending an
+allocation.
+
 Accuracy is backend agreement, not accuracy against experiment or a higher-level
 method. Compare electrostatics, exchange, induction, dispersion, and total energy
 for each matched repeat; the threshold is 1e-6 Eh per component. Use the focused
