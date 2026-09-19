@@ -1,0 +1,5 @@
+{
+  "cuda_visible_devices": "0",
+  "mapped_device_uuid": "GPU-7027904a-5a89-6206-de14-6fceedb9846c",
+  "driver": "name, uuid, driver_version, memory.total [MiB]\nNVIDIA A100-SXM4-80GB, GPU-7027904a-5a89-6206-de14-6fceedb9846c, 595.71.05, 81920 MiB\n"
+}

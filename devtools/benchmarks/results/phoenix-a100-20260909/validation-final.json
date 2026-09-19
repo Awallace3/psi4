@@ -1,0 +1,47 @@
+{
+  "base_commit": "664becddb66f57c2e932073403f0e4de27154244",
+  "allocation": "13020320",
+  "step": "13020320.5",
+  "account": "gts-cs207-chemx",
+  "qos": "embers",
+  "node": "atl1-1-01-002-28-0",
+  "gpu": "NVIDIA A100-SXM4-80GB",
+  "slurm_step_state": "COMPLETED",
+  "slurm_step_exit": "0:0",
+  "pytest": [
+    {
+      "name": "pytest",
+      "errors": "0",
+      "failures": "0",
+      "skipped": "0",
+      "tests": "51",
+      "time": "129.577",
+      "timestamp": "2026-09-09T06:16:48.684375-04:00",
+      "hostname": "atl1-1-01-002-28-0.pace.gatech.edu"
+    }
+  ],
+  "tested_modules": [
+    "test_grac_cpu.py",
+    "test_cuest_grac.py",
+    "test_saptdft_cuest.py",
+    "test_cuest_jk.py",
+    "test_cuest_gemm.py",
+    "test_cuest.py"
+  ],
+  "sha256": {
+    "psi4/src/psi4/libfock/v.cc": "a95b5a89dc217b1eb3b97154260a1371f41e5d063c1f3b26a27ab796474c88a1",
+    "psi4/src/psi4/libfock/v.h": "17fe766b9f0023efd2780be7e61f588d9f9ba4caef0cbd3cafeef3a34679f1af",
+    "psi4/src/psi4/libfock/points.h": "1e3334b89f5a3748a8972af85f7b6b8e22ebe944b429492cae2a410b58b40c46",
+    "tests/pytests/test_cuest.py": "34b16a36268a2f7b3c6a5e8e160a3c973a44f91afd39289f6cca125a45970d23",
+    "tests/pytests/test_grac_cpu.py": "b561eb2ac4ba41321c426821d0561947b21beca96a59432dd5d7dbd73d2cb050"
+  },
+  "limitations": [
+    "Not the full Psi4 suite",
+    "GRAC analytic gradients and cuEST response remain unsupported"
+  ],
+  "earlier_failures": [
+    "Original SIGSEGV in CPU LDA GRAC reference fixed by point-worker ansatz promotion",
+    "Cache-rebuild SIGSEGV fixed by resetting worker map pointers before cache invalidation",
+    "Obsolete GRAC rejection test updated to analytic-gradient rejection"
+  ]
+}

@@ -1,0 +1,143 @@
+
+Host: atl1-1-01-002-28-0.pace.gatech.edu
+
+Timers On : Wed Sep  9 07:10:33 2026
+Timers Off: Wed Sep  9 07:11:33 2026
+
+Wall Time:       60.04 seconds
+
+                                                       Time (seconds)
+Module                                       User      System        Wall        Calls
+SAPT(DFT) Energy                    :    247.183u      8.950s     57.313w      1 calls
+SAPT(DFT):Dimer SCF                 :     23.783u      1.617s      3.292w      1 calls
+HF: Form core H                     :      0.050u      0.017s      0.036w      5 calls
+HF: Form S/X                        :      1.167u      0.117s      0.096w      5 calls
+HF: Guess                           :      2.283u      0.117s      0.184w      5 calls
+SAD Guess                           :      2.167u      0.117s      0.173w      5 calls
+HF: Form G                          :    162.950u      4.717s     44.195w     63 calls
+JK: D                               :      0.533u      0.017s      0.039w     67 calls
+JK: USO2AO                          :      0.033u      0.000s      0.002w     67 calls
+JK: JK                              :     38.350u      1.650s      3.007w     67 calls
+JK: AO2USO                          :      0.000u      0.000s      0.000w     67 calls
+HF: Form F                          :      0.200u      0.017s      0.020w     63 calls
+HF: Form D                          :      0.400u      0.017s      0.033w     63 calls
+HF: DIIS                            :     12.517u      0.917s      1.018w     58 calls
+HF: Form C                          :     12.717u      0.767s      1.019w     58 calls
+SAPT(DFT):Monomer A SCF             :     15.050u      0.633s      1.781w      1 calls
+SAPT(DFT):Monomer B SCF             :     22.150u      0.900s      2.358w      1 calls
+SAPT(HF):elst                       :      0.000u      0.000s      0.000w      1 calls
+SAPT(HF):exch                       :      2.167u      0.083s      0.170w      1 calls
+SAPT(DFT): Monomer A DFT            :     69.633u      2.117s     19.279w      1 calls
+V: Grid                             :      2.317u      0.083s      0.182w      2 calls
+build grid                          :      2.317u      0.083s      0.181w      2 calls
+RV: Form V                          :    127.133u      3.117s     41.380w     27 calls
+SAPT(DFT): Monomer B DFT            :    101.083u      3.067s     27.308w      1 calls
+SAPT(DFT):D4 Interaction Energy     :      2.500u      0.117s      2.074w      1 calls
+SAPT(DFT):Build JK                  :      4.750u      0.167s      0.576w      1 calls
+SAPT(DFT):elst                      :      0.017u      0.000s      0.000w      1 calls
+SAPT(DFT):exch                      :      1.967u      0.083s      0.155w      1 calls
+SAPT(DFT):ind                       :      0.000u      0.000s      0.000w      1 calls
+
+--------------------------------------------------------------------------------------
+SAPT(DFT) Energy                    :    247.183u      8.950s     57.313w      1 calls
+| SAPT(DFT):Dimer SCF               :     23.783u      1.617s      3.292w      1 calls
+| | HF: Form core H                 :      0.017u      0.017s      0.014w      1 calls
+| | HF: Form S/X                    :      0.283u      0.033s      0.023w      1 calls
+| | HF: Guess                       :      0.483u      0.033s      0.041w      1 calls
+| | | SAD Guess                     :      0.450u      0.033s      0.038w      1 calls
+| | HF: Form G                      :      8.933u      0.417s      0.705w     14 calls
+| | | JK: D                         :      0.100u      0.000s      0.008w     14 calls
+| | | JK: USO2AO                    :      0.017u      0.000s      0.000w     14 calls
+| | | JK: JK                        :      8.700u      0.400s      0.687w     14 calls
+| | | JK: AO2USO                    :      0.000u      0.000s      0.000w     14 calls
+| | HF: Form F                      :      0.033u      0.000s      0.004w     14 calls
+| | HF: Form D                      :      0.117u      0.000s      0.008w     14 calls
+| | HF: DIIS                        :      2.833u      0.200s      0.232w     13 calls
+| | HF: Form C                      :      2.900u      0.233s      0.232w     13 calls
+| SAPT(DFT):Monomer A SCF           :     15.050u      0.633s      1.781w      1 calls
+| | HF: Form core H                 :      0.017u      0.000s      0.005w      1 calls
+| | HF: Form S/X                    :      0.217u      0.017s      0.018w      1 calls
+| | HF: Guess                       :      0.433u      0.017s      0.035w      1 calls
+| | | SAD Guess                     :      0.417u      0.017s      0.032w      1 calls
+| | HF: Form G                      :      4.017u      0.150s      0.314w      9 calls
+| | | JK: D                         :      0.033u      0.000s      0.004w      9 calls
+| | | JK: USO2AO                    :      0.000u      0.000s      0.000w      9 calls
+| | | JK: JK                        :      3.900u      0.150s      0.304w      9 calls
+| | | JK: AO2USO                    :      0.000u      0.000s      0.000w      9 calls
+| | HF: Form F                      :      0.050u      0.000s      0.003w      9 calls
+| | HF: Form D                      :      0.017u      0.017s      0.004w      9 calls
+| | HF: DIIS                        :      1.667u      0.117s      0.134w      8 calls
+| | HF: Form C                      :      1.800u      0.083s      0.144w      8 calls
+| SAPT(DFT):Monomer B SCF           :     22.150u      0.900s      2.358w      1 calls
+| | HF: Form core H                 :      0.000u      0.000s      0.005w      1 calls
+| | HF: Form S/X                    :      0.217u      0.017s      0.017w      1 calls
+| | HF: Guess                       :      0.483u      0.017s      0.037w      1 calls
+| | | SAD Guess                     :      0.450u      0.017s      0.035w      1 calls
+| | HF: Form G                      :      7.867u      0.333s      0.614w     13 calls
+| | | JK: D                         :      0.100u      0.000s      0.007w     13 calls
+| | | JK: USO2AO                    :      0.017u      0.000s      0.000w     13 calls
+| | | JK: JK                        :      7.633u      0.333s      0.598w     13 calls
+| | | JK: AO2USO                    :      0.000u      0.000s      0.000w     13 calls
+| | HF: Form F                      :      0.017u      0.000s      0.003w     13 calls
+| | HF: Form D                      :      0.100u      0.000s      0.007w     13 calls
+| | HF: DIIS                        :      2.617u      0.183s      0.208w     12 calls
+| | HF: Form C                      :      2.617u      0.133s      0.209w     12 calls
+| JK: D                             :      0.033u      0.000s      0.002w      1 calls
+| JK: USO2AO                        :      0.000u      0.000s      0.000w      1 calls
+| JK: JK                            :      1.583u      0.033s      0.122w      1 calls
+| JK: AO2USO                        :      0.000u      0.000s      0.000w      1 calls
+| SAPT(HF):elst                     :      0.000u      0.000s      0.000w      1 calls
+| SAPT(HF):exch                     :      2.167u      0.083s      0.170w      1 calls
+| | JK: D                           :      0.017u      0.000s      0.001w      1 calls
+| | JK: USO2AO                      :      0.000u      0.000s      0.000w      1 calls
+| | JK: JK                          :      1.550u      0.050s      0.119w      1 calls
+| | JK: AO2USO                      :      0.000u      0.000s      0.000w      1 calls
+| SAPT(DFT): Monomer A DFT          :     69.633u      2.117s     19.279w      1 calls
+| | V: Grid                         :      1.467u      0.050s      0.115w      1 calls
+| | | build grid                    :      1.467u      0.050s      0.115w      1 calls
+| | HF: Form core H                 :      0.017u      0.000s      0.008w      1 calls
+| | HF: Form S/X                    :      0.250u      0.033s      0.021w      1 calls
+| | HF: Guess                       :      0.450u      0.017s      0.035w      1 calls
+| | | SAD Guess                     :      0.417u      0.017s      0.032w      1 calls
+| | HF: Form G                      :     56.850u      1.500s     17.215w     11 calls
+| | | RV: Form V                    :     52.267u      1.250s     16.854w     11 calls
+| | | JK: D                         :      0.067u      0.000s      0.004w     11 calls
+| | | JK: USO2AO                    :      0.000u      0.000s      0.000w     11 calls
+| | | JK: JK                        :      4.050u      0.200s      0.321w     11 calls
+| | | JK: AO2USO                    :      0.000u      0.000s      0.000w     11 calls
+| | HF: Form F                      :      0.000u      0.017s      0.004w     11 calls
+| | HF: Form D                      :      0.083u      0.000s      0.005w     11 calls
+| | HF: DIIS                        :      2.117u      0.183s      0.173w     10 calls
+| | HF: Form C                      :      2.167u      0.133s      0.178w     10 calls
+| SAPT(DFT): Monomer B DFT          :    101.083u      3.067s     27.308w      1 calls
+| | V: Grid                         :      0.850u      0.033s      0.067w      1 calls
+| | | build grid                    :      0.850u      0.033s      0.066w      1 calls
+| | HF: Form core H                 :      0.000u      0.000s      0.005w      1 calls
+| | HF: Form S/X                    :      0.200u      0.017s      0.017w      1 calls
+| | HF: Guess                       :      0.433u      0.033s      0.036w      1 calls
+| | | SAD Guess                     :      0.433u      0.033s      0.035w      1 calls
+| | HF: Form G                      :     85.283u      2.317s     25.347w     16 calls
+| | | RV: Form V                    :     74.867u      1.867s     24.526w     16 calls
+| | | JK: D                         :      0.133u      0.017s      0.008w     16 calls
+| | | JK: USO2AO                    :      0.000u      0.000s      0.000w     16 calls
+| | | JK: JK                        :      8.383u      0.383s      0.658w     16 calls
+| | | JK: AO2USO                    :      0.000u      0.000s      0.000w     16 calls
+| | HF: Form F                      :      0.100u      0.000s      0.005w     16 calls
+| | HF: Form D                      :      0.083u      0.000s      0.009w     16 calls
+| | HF: DIIS                        :      3.283u      0.233s      0.271w     15 calls
+| | HF: Form C                      :      3.233u      0.183s      0.256w     15 calls
+| SAPT(DFT):D4 Interaction Energy   :      2.500u      0.117s      2.074w      1 calls
+| SAPT(DFT):Build JK                :      4.750u      0.167s      0.576w      1 calls
+| | JK: D                           :      0.033u      0.000s      0.002w      1 calls
+| | JK: USO2AO                      :      0.000u      0.000s      0.000w      1 calls
+| | JK: JK                          :      1.217u      0.050s      0.095w      1 calls
+| | JK: AO2USO                      :      0.000u      0.000s      0.000w      1 calls
+| SAPT(DFT):elst                    :      0.017u      0.000s      0.000w      1 calls
+| SAPT(DFT):exch                    :      1.967u      0.083s      0.155w      1 calls
+| | JK: D                           :      0.017u      0.000s      0.001w      1 calls
+| | JK: USO2AO                      :      0.000u      0.000s      0.000w      1 calls
+| | JK: JK                          :      1.333u      0.050s      0.103w      1 calls
+| | JK: AO2USO                      :      0.000u      0.000s      0.000w      1 calls
+| SAPT(DFT):ind                     :      0.000u      0.000s      0.000w      1 calls
+
+**************************************************************************************
