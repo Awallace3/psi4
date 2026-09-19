@@ -33,6 +33,7 @@
 #define LIBFOCK_DFT_H
 #include "psi4/libmints/typedefs.h"
 #include "psi4/pragma.h"
+#include "psi4/libpsi4util/memory_ledger.h"
 #include <vector>
 #include <map>
 #include <unordered_map>
@@ -106,6 +107,9 @@ class PSI_API VBase {
     // Caches collocation grids
     std::unordered_map<size_t, std::map<std::string, SharedMatrix>> cache_map_;
     int cache_map_deriv_;
+    /// What the cache above is costing the process right now, reported so that an SCF
+    /// started while this V is alive is not handed the same memory a second time.
+    MemoryClaim cache_claim_;
 
     /// AO2USO matrix (if not C1)
     SharedMatrix AO2USO_;

@@ -39,6 +39,7 @@
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libpsi4util/process.h"
+#include "psi4/libpsi4util/memory_ledger.h"
 #include "psi4/libscf_solver/sad.h"
 
 using namespace psi;
@@ -46,6 +47,20 @@ namespace py = pybind11;
 using namespace pybind11::literals;
 
 void export_fock(py::module &m) {
+    m.def("memory_committed", &MemoryClaim::committed,
+          "Number of doubles the large, long-lived buffers of this process are holding right now: the "
+          "in-core density-fitted integrals of every live JK object and the DFT collocation cache of every "
+          "live V object. get_memory() describes an empty process, so a driver that keeps earlier "
+          "wavefunctions alive -- SAPT(DFT), or a GRAC shift holding the neutral while the cation runs -- "
+          "must subtract this before dividing the SCF memory budget, or each SCF claims the whole budget again.");
+
+    m.def("release_freed_memory", &release_freed_memory,
+          "Hand memory that has already been freed back to the operating system. The big caches are "
+          "made of many small allocations, which glibc keeps in its arenas after the free, so a "
+          "driver that drops a wavefunction or finalizes a JK object sees memory_committed() fall "
+          "while the resident set does not move. Call this once after dropping something large; it "
+          "walks every arena, so it does not belong in a loop.");
+
     py::class_<JK, std::shared_ptr<JK>>(m, "JK", "docstring")
         .def_static("build_JK",
                     [](std::shared_ptr<BasisSet> basis, std::shared_ptr<BasisSet> aux) {

@@ -704,6 +704,9 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             sapt_jk.finalize()
 
             del hf_wfn_A, hf_wfn_B, sapt_jk
+            # The DFT segment below allocates its own caches; without this the arenas these
+            # wavefunctions leave behind are still resident when it does.
+            core.release_freed_memory()
 
         else:
             wfn_A = hf_wfn_A
@@ -1180,6 +1183,12 @@ def compute_GRAC_shift(
                     **cation_kwargs,
                 )
             except ConvergenceError:
+                # A failed attempt's wavefunctions are still bound in this
+                # function's scope, so without dropping them here they stay
+                # resident -- grid data, collocation cache and all -- while the
+                # next convergence tier allocates its own from the full budget.
+                wfn_given = None
+                wfn_cation = None
                 if len(grac_options) == 1:
                     raise Exception(
                         "Convergence error in GRAC shift calculation, please try a different convergence tier."
@@ -1662,6 +1671,7 @@ def sapt_dft(
     if cleanup_jk:
         core.print_out("\n   => Finalizing SAPT JK object to free memory <= \n\n")
         sapt_jk.finalize()
+        core.release_freed_memory()
 
     if do_disp:
         # Hybrid xc kernel check
