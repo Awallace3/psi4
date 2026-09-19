@@ -4912,6 +4912,30 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
                 &vv10_b,
                 sizeof(double));
             double Evv10 = 0.0;
+
+            // With no beta electrons (any hydrogen atom) d_Cocc_noccs_[1] is 0 and
+            // cuEST rejects the zero-column beta block: this query returns status 3.
+            // Unlike the beta grid density, the term cannot simply be skipped -- VV10
+            // is a functional of the TOTAL density, which is rho_a here, not zero.
+            // Pass one explicitly zeroed beta column instead: C_b C_b^T is then exactly
+            // the zero density matrix, so cuEST sees rho = rho_a, which is the answer.
+            uint64_t nocc_b_vv10 = d_Cocc_noccs_[1];
+            double *d_Cocc_b_vv10 = d_Coccs_AO_ + nbf_ * d_Cocc_noccs_[0];
+            double *d_Cocc_b_zero = nullptr;
+            if (nocc_b_vv10 == 0) {
+                // d_Coccs_AO_ + nbf_ * nocc_a is one past the end of the allocation when
+                // there is no beta block, so a separate buffer is required, not a cast.
+                if (cudaMalloc((void**)&d_Cocc_b_zero, nbf_ * sizeof(double)) != cudaSuccess) {
+                    throw PSIEXCEPTION("cudaMalloc failed for the zeroed VV10 beta column in UV");
+                }
+                if (cudaMemset(d_Cocc_b_zero, 0, nbf_ * sizeof(double)) != cudaSuccess) {
+                    cudaFree(d_Cocc_b_zero);
+                    throw PSIEXCEPTION("cudaMemset failed zeroing the VV10 beta column in UV");
+                }
+                d_Cocc_b_vv10 = d_Cocc_b_zero;
+                nocc_b_vv10 = 1;
+            }
+
             CHECK_CUEST(cuestNonlocalXCPotentialUKSComputeWorkspaceQuery(
                 cuest_handle,
                 cuest_vv10_xcint_plan_,
@@ -4919,9 +4943,9 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
                 &variable_buffersize_descriptor,
                 &temporary_workspace_descriptor,
                 d_Cocc_noccs_[0],
-                d_Cocc_noccs_[1],
+                nocc_b_vv10,
                 d_Coccs_AO_,
-                d_Coccs_AO_ + nbf_ * d_Cocc_noccs_[0],
+                d_Cocc_b_vv10,
                 &Evv10,
                 d_Vxc_a));
 
@@ -4933,13 +4957,16 @@ void UV::compute_V(std::vector<SharedMatrix> ret) {
                 &variable_buffersize_descriptor,
                 temporary_workspace,
                 d_Cocc_noccs_[0],
-                d_Cocc_noccs_[1],
+                nocc_b_vv10,
                 d_Coccs_AO_,
-                d_Coccs_AO_ + nbf_ * d_Cocc_noccs_[0],
+                d_Cocc_b_vv10,
                 &Evv10,
                 d_Vxc_a));
 
             cuest_common::freeWorkspace(temporary_workspace);
+            if (d_Cocc_b_zero) {
+                cudaFree(d_Cocc_b_zero);
+            }
             CHECK_CUEST(cuestParametersDestroy(CUEST_NONLOCALXCPOTENTIALUKSCOMPUTE_PARAMETERS, vv10_potential_compute_parameters));
 
             // Add the VV10 contribution to Vxc
@@ -6629,6 +6656,21 @@ SharedMatrix UV::compute_gradient() {
         ));
         cuest_common::freeWorkspace(temporary_workspace);
         
+        if (d_Cocc_noccs_[1] == 0) {
+            // No beta electrons: cuEST rejects the zero-column beta block and this
+            // query returns status 3.  Skipping it is exact rather than an
+            // approximation -- this call contracts dE/drho_b against drho_b/dR, and
+            // an empty C_b makes rho_b identically zero at every geometry, so both
+            // outputs are zero.  They must be zeroed explicitly: cudaMalloc leaves
+            // them uninitialised and both consumers below are purely additive
+            // (grad->add(grad_tmp), then cublasDaxpy into the alpha grid gradient).
+            if (cudaMemset(d_Vxc_grad_atom_b, 0, 3 * natom * sizeof(double)) != cudaSuccess) {
+                throw PSIEXCEPTION("cudaMemset failed zeroing the beta atomic gradient in UV");
+            }
+            if (cudaMemset(d_Vxc_grad_grid_b, 0, 3 * npoints * sizeof(double)) != cudaSuccess) {
+                throw PSIEXCEPTION("cudaMemset failed zeroing the beta grid gradient in UV");
+            }
+        } else {
         CHECK_CUEST(cuestXCDerivativeComputeWorkspaceQuery(
             cuest_handle,
             cuest_xcint_plan_,
@@ -6657,6 +6699,7 @@ SharedMatrix UV::compute_gradient() {
             d_Vxc_grad_grid_b
         ));
         cuest_common::freeWorkspace(temporary_workspace);
+        }
         CHECK_CUEST(cuestParametersDestroy(CUEST_XCDERIVATIVECOMPUTE_PARAMETERS, derivative_compute_parameters));
 
         for (int point = 0; point < npoints; point++) {
@@ -6752,6 +6795,28 @@ SharedMatrix UV::compute_gradient() {
                 CUEST_NONLOCALXCDERIVATIVEUKSCOMPUTE_PARAMETERS_VV10_B,
                 &vv10_b,
                 sizeof(double));
+            // Same zero-beta problem, and the same remedy, as the VV10 energy in
+            // UV::compute_V: cuEST rejects the empty beta block with status 3, and
+            // the term cannot be dropped because VV10 is a functional of the TOTAL
+            // density, which is rho_a here rather than zero.  One explicitly zeroed
+            // beta column gives C_b C_b^T == 0, so cuEST sees exactly rho = rho_a.
+            uint64_t nocc_b_vv10 = d_Cocc_noccs_[1];
+            double *d_Cocc_b_vv10 = d_Coccs_AO_ + nbf_ * d_Cocc_noccs_[0];
+            double *d_Cocc_b_zero = nullptr;
+            if (nocc_b_vv10 == 0) {
+                // That address is one past the end of the allocation when there is
+                // no beta block, so this needs its own buffer, not a cast.
+                if (cudaMalloc((void**)&d_Cocc_b_zero, nbf_ * sizeof(double)) != cudaSuccess) {
+                    throw PSIEXCEPTION("cudaMalloc failed for the zeroed VV10 beta column in UV::compute_gradient");
+                }
+                if (cudaMemset(d_Cocc_b_zero, 0, nbf_ * sizeof(double)) != cudaSuccess) {
+                    cudaFree(d_Cocc_b_zero);
+                    throw PSIEXCEPTION("cudaMemset failed zeroing the VV10 beta column in UV::compute_gradient");
+                }
+                d_Cocc_b_vv10 = d_Cocc_b_zero;
+                nocc_b_vv10 = 1;
+            }
+
             CHECK_CUEST(cuestNonlocalXCDerivativeUKSComputeWorkspaceQuery(
                 cuest_handle,
                 cuest_vv10_xcint_plan_,
@@ -6759,9 +6824,9 @@ SharedMatrix UV::compute_gradient() {
                 &variable_buffersize_descriptor,
                 &temporary_workspace_descriptor,
                 d_Cocc_noccs_[0],
-                d_Cocc_noccs_[1],
+                nocc_b_vv10,
                 d_Coccs_AO_,
-                d_Coccs_AO_ + nbf_ * d_Cocc_noccs_[0],
+                d_Cocc_b_vv10,
                 d_Vxc_grad_atom_a));
 
             temporary_workspace = cuest_common::allocateWorkspace(&temporary_workspace_descriptor);
@@ -6772,12 +6837,15 @@ SharedMatrix UV::compute_gradient() {
                 &variable_buffersize_descriptor,
                 temporary_workspace,
                 d_Cocc_noccs_[0],
-                d_Cocc_noccs_[1],
+                nocc_b_vv10,
                 d_Coccs_AO_,
-                d_Coccs_AO_ + nbf_ * d_Cocc_noccs_[0],
+                d_Cocc_b_vv10,
                 d_Vxc_grad_atom_a));
 
             cuest_common::freeWorkspace(temporary_workspace);
+            if (d_Cocc_b_zero) {
+                cudaFree(d_Cocc_b_zero);
+            }
             CHECK_CUEST(cuestParametersDestroy(CUEST_NONLOCALXCDERIVATIVEUKSCOMPUTE_PARAMETERS, vv10_derivative_compute_parameters));
 
             // Add the VV10 contribution to the Vxc gradient

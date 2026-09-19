@@ -759,3 +759,136 @@ def test_cuest_unsupported_route(route, expected, tmp_path):
         f"cuEST '{route}' raised, but not from the expected guard "
         f"(wanted {expected!r}).\nstdout:\n{proc.stdout}"
     )
+
+
+# ===========================================================================
+# Systems with no beta electrons
+# ===========================================================================
+#
+# cuEST returns status 3 for any zero-column coefficient matrix, so every
+# entry point that is handed the beta block verbatim dies on a system with
+# Nbeta == 0. That is not an exotic case: it is the hydrogen atom, and so it
+# is *every* MBIS free-atom reference run on any molecule containing H.
+#
+# The sites block each other sequentially -- each one has to be fixed before
+# the next is even reachable -- so the cases below are chosen to light up one
+# each:
+#
+#   UV::compute_V density        cuestXCDensityCompute          (pbe0 energy)
+#   UV::compute_V VV10           cuestNonlocalXCPotentialUKS    (b97m-v energy)
+#   cuESTJKGrad unrestricted     cuestDFSymmetricDerivative     (pbe0 gradient)
+#   UV::compute_gradient         cuestXCDerivativeCompute       (pbe0 gradient)
+#   UV::compute_gradient VV10    cuestNonlocalXCDerivativeUKS   (b97m-v gradient)
+#
+# H2+ carries a genuinely nonzero gradient, which matters: a fix that returned
+# zeros would sail through the single-atom cases, whose gradient is exactly
+# zero by translational invariance no matter what the XC code does.
+#
+# Li is the Nbeta == 1 control. It is paired with pbe0 rather than b97m-v
+# because Li/b97m-v/cc-pvdz does not reach SCF convergence on either engine.
+
+__zero_beta_geoms = {
+    "H": """
+0 2
+H 0.0 0.0 0.0
+symmetry c1
+no_reorient
+no_com
+""",
+    "H2p": """
+1 2
+H 0.0 0.0 0.0
+H 0.0 0.0 1.5
+symmetry c1
+no_reorient
+no_com
+""",
+    # Nbeta == 1 control: same code paths, non-empty beta block.
+    "Li": """
+0 2
+Li 0.0 0.0 0.0
+symmetry c1
+no_reorient
+no_com
+""",
+}
+
+
+@pytest.mark.quick
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.parametrize("geom,method,driver", [
+    pytest.param("H",   "pbe0",   "energy",   id='H_pbe0_energy'),
+    pytest.param("H",   "pbe0",   "gradient", id='H_pbe0_gradient'),
+    pytest.param("H2p", "pbe0",   "gradient", id='H2p_pbe0_gradient'),
+    pytest.param("H",   "b97m-v", "energy",   id='H_b97m-v_energy'),
+    pytest.param("Li",  "pbe0",   "gradient", id='Li_pbe0_gradient'),
+])
+def test_cuest_zero_beta(geom, method, driver):
+    """UKS with an empty beta block must match the host, not raise cuEST status 3."""
+    psi4.core.set_num_threads(4)
+    options = {
+        'scf_type': 'df',
+        'basis': 'cc-pvdz',
+        'puream': True,
+        'reference': 'uks',
+        'dft_nuclear_scheme': 'stratmann',  # To get cuEST and Psi4 to agree exactly
+        'e_convergence': 10,
+        'd_convergence': 8,
+        'cuest_mixed_precision': False,
+    }
+    run = psi4.gradient if driver == 'gradient' else psi4.energy
+
+    psi4.set_options({**options, 'use_cuest': True})
+    cuest = run(method, molecule=psi4.geometry(__zero_beta_geoms[geom]), return_wfn=True)
+
+    psi4.set_options({**options, 'use_cuest': False})
+    host = run(method, molecule=psi4.geometry(__zero_beta_geoms[geom]), return_wfn=True)
+
+    tid = f'{geom}/{method} {driver}'
+    assert compare_values(host[1].energy(), cuest[1].energy(), 5e-6, f'{tid} energy')
+    if driver == 'gradient':
+        assert compare_values(np.array(host[0]), np.array(cuest[0]), 5e-5, f'{tid} gradient')
+
+
+# psi4 has no host-side UKS VV10 gradient at all (v.cc throws "V: UKS cannot
+# compute VV10 gradient contribution"), so there is nothing to compare cuEST
+# against -- except that a lone atom's forces vanish by translational
+# invariance whatever the functional. That is a real check here: the term this
+# exercises is the VV10 one, and it is only correct at Nbeta == 0 if the code
+# feeds cuEST rho = rho_a rather than either rho = 0 or a doubled RKS density.
+@pytest.mark.quick
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.parametrize("geom", ["H", "H2p"])
+def test_cuest_zero_beta_vv10_gradient(geom):
+    """The UKS VV10 gradient path must survive an empty beta block."""
+    psi4.core.set_num_threads(4)
+    psi4.set_options({
+        'scf_type': 'df',
+        'basis': 'cc-pvdz',
+        'puream': True,
+        'reference': 'uks',
+        'dft_nuclear_scheme': 'stratmann',
+        'e_convergence': 10,
+        'd_convergence': 8,
+        'cuest_mixed_precision': False,
+        'use_cuest': True,
+    })
+    G = np.array(psi4.gradient('b97m-v', molecule=psi4.geometry(__zero_beta_geoms[geom])))
+
+    # Translational invariance holds for any molecule and any functional, and it
+    # is all we have: psi4's host side refuses UKS VV10 gradients outright ("V:
+    # UKS cannot compute VV10 gradient contribution"), so there is no reference
+    # to difference against.
+    assert compare_values(np.zeros(3), G.sum(axis=0), 1e-6, f'{geom}/b97m-v net force')
+
+    if geom == "H":
+        # One atom: every component vanishes, not just the sum.
+        assert compare_values(np.zeros_like(G), G, 1e-6, f'{geom}/b97m-v single-atom gradient')
+    else:
+        # H2+ is off its equilibrium bond length on purpose. Without this the
+        # zero-beta handling could "pass" by contributing nothing at all, which
+        # is exactly the wrong answer -- VV10 reads the total density, and at
+        # Nbeta == 0 that is rho_a, not zero.
+        assert np.abs(G).max() > 1e-4, f'{geom}/b97m-v gradient is suspiciously zero:\n{G}'

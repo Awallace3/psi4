@@ -3286,6 +3286,15 @@ void cuESTJKGrad::compute_gradient() {
         cudaMemcpy(d_C, Ca_row_major.data(), sizeof(double) * na * nao, cudaMemcpyHostToDevice);
         cudaMemcpy(d_C + na * nao, Cb_row_major.data(), sizeof(double) * nb * nao, cudaMemcpyHostToDevice);
 
+        // A system with no beta electrons (any hydrogen atom, so every MBIS free-atom
+        // reference run) leaves nocc[1] == 0, and cuEST rejects a zero-column
+        // coefficient matrix: cuestDFSymmetricDerivativeComputeWorkspaceQuery returns
+        // status 3.  The beta exchange term is identically zero there, so hand cuEST
+        // the alpha block alone.  nocc.data() then reads only nocc[0], and the
+        // coefficient scale is unchanged, which makes this exactly the two-matrix call
+        // with a zero term dropped rather than an approximation.
+        const uint64_t num_coefficient_matrices = (nb == 0) ? 1 : 2;
+
         std::shared_ptr<cuESTJK> cuest_jk = std::dynamic_pointer_cast<cuESTJK>(jk_);
         cuestDFIntPlan_t cuest_df_plan = cuest_jk->cuest_df_plan();
         
@@ -3296,7 +3305,7 @@ void cuESTJKGrad::compute_gradient() {
             0.5,
             d_D,
             0.5 * x_alpha_,
-            2,
+            num_coefficient_matrices,
             nocc.data(),
             d_C,
             d_grad);
@@ -3312,7 +3321,7 @@ void cuESTJKGrad::compute_gradient() {
             0.5,
             d_D,
             0.5 * x_alpha_,
-            2,
+            num_coefficient_matrices,
             nocc.data(),
             d_C,
             d_grad));
