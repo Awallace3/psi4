@@ -1,12 +1,14 @@
 list(APPEND sources
   exceptions
   fcidump
+  free_atom_cache
   fchk
   inpsight
   numpy_helper
   optproc
   p4regex
   procutil
+  prop_util
   python_helpers
   solvers
   testing

@@ -328,6 +328,29 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
                     "ROBUST TREUTLER NONE FLAT P_GAUSSIAN D_GAUSSIAN P_SLATER D_SLATER LOG_GAUSSIAN LOG_SLATER NONE");
     /*- Maximum Radial Moment to Calculate -*/
     options.add_int("MAX_RADIAL_MOMENT", 4);
+    /*- Accelerate the MBIS stockholder iteration with Anderson mixing on the shell populations
+        and widths. Switching this off converges to the same fixed point, just more slowly. -*/
+    options.add_bool("MBIS_ANDERSON", true);
+    /*- Pro-atom density below which an atom is dropped from a grid block in the MBIS stockholder
+        sweep. The cost of the sweep is O(natom * npoints) unscreened, and npoints itself grows with
+        natom, so this is what keeps MBIS from being quadratic in system size. Set to 0 to disable
+        screening entirely. !expert -*/
+    options.add_double("MBIS_SCREENING_THRESHOLD", 1.0e-14);
+    /*- Persistent on-disk cache for the MBIS free-atom reference volumes that
+    :psivar:`MBIS VOLUME RATIOS` divides by.  A free-atom volume is a property of an element, a
+    level of theory, the basis that element is given, and the grid/convergence settings -- never of
+    the molecule -- so the same handful of numbers are otherwise recomputed by every job in a large
+    dataset.  ``READ`` consults the cache but never adds to it, which is what workers sharing a
+    prewarmed directory want; ``WRITE`` recomputes every volume and refreshes the entry, which is
+    how to repair a cache you suspect.  See |globals__mbis_free_atom_cache_path|. -*/
+    options.add_str("MBIS_FREE_ATOM_CACHE", "READWRITE", "OFF READ WRITE READWRITE");
+    /*- Directory holding the |globals__mbis_free_atom_cache| entries.  An empty value defers to
+    the :envvar:`PSI4_FREE_ATOM_CACHE_PATH` environment variable, and failing that to
+    ``free_atom_volumes`` inside this |PSIfour| installation (:envvar:`PSIDATADIR`, so the conda
+    prefix for a conda install and ``<objdir>/stage/share/psi4`` for a build), which is where
+    uninstalling |PSIfour| will take it with it.  An installation that cannot be written to gets
+    no cache until this is set to a directory that can. -*/
+    options.add_str_i("MBIS_FREE_ATOM_CACHE_PATH", "");
 
     /*- PCM boolean for pcmsolver module -*/
     options.add_bool("PCM", false);
