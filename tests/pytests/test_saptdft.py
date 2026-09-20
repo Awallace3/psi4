@@ -706,10 +706,20 @@ def test_saptdft_auto_grac(
     SAPT_DFT_GRAC_COMPUTE, refA, refB, gracA, gracB, geometry, grac_basis
 ):
     """
-    For SAPT(DFT), one must compute a GRAC shift for each monomer. Ideally,
-    this GRAC shift should be close to the experimental Ionization Potential
-    (IP) of the monomer. Basis set incompleteness prevents this here.
-    e.g., aug-DZ H2O has a shift of 0.1306, compared to 0.1307 experimental IP.
+    For SAPT(DFT), one must compute a GRAC shift for each monomer.  The shift
+    is IP + eps_HOMO (sapt_proc.py), i.e. the amount by which the functional's
+    HOMO eigenvalue misses -IP, *not* the IP itself.  The exact functional
+    obeys Koopmans (eps_HOMO = -IP) and so needs a shift of zero; a large
+    shift means a badly placed HOMO.
+
+    The shift is therefore functional-specific.  Global hybrids suffer from
+    self-interaction error and need a big one: PBE0/aug-cc-pVTZ H2O gives
+    IP = 0.4631 and eps_HOMO = -0.3337, hence a shift of 0.1294 (the ~0.136
+    that the PBE0 tests below hard-code).  Range-separated functionals are
+    near-Koopmans by construction, so they need much less: wB97M-V/def2-TZVPD
+    H2O gives IP = 0.4657, eps_HOMO = -0.4277, and a shift of only 0.0381.
+    All three reproduce the 0.4638 (12.62 eV) experimental IP of water to
+    better than 0.1 eV; it is only eps_HOMO that moves.
     """
     mol_dimer = psi4.geometry(_sapt_testing_mols[geometry])
     psi4.set_options(
