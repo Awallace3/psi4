@@ -829,6 +829,9 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     sapt_jk = wfn_B.jk()
     wfn_A.set_jk(sapt_jk)
 
+    # Bound unconditionally: the VV10 branch below checks it even when the
+    # delta-DFT segment is skipped.
+    dft_wfn_dimer = None
     if do_delta_dft and do_dft:
         optstash2 = p4util.OptionsState(
             ["SCF_TYPE"],
@@ -867,7 +870,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                 "C": construct_external_potential_in_field_C([ext_pot_C, ext_pot_B_not_in_C])
             }
 
-        run_scf(
+        dft_wfn_dimer = run_scf(
             sapt_dft_functional.lower(),
             molecule=sapt_dimer,
             jk=sapt_jk,
@@ -1474,38 +1477,61 @@ def sapt_dft(
     if print_header:
         sapt_dft_header()
 
+    # SAPT exchange terms are expectation values of the exact 1/r12 operator, so
+    # they always use the full K. wK is needed only for the CPKS kernel of an
+    # LRC monomer (RHF::twoel_Hx_full applies -x_alpha*K - x_beta*wK).
+    lrc_A = wfn_A.functional().is_x_lrc()
+    omega_A = wfn_A.functional().x_omega() if lrc_A else 0.0
+    lrc_B = wfn_B.functional().is_x_lrc()
+    omega_B = wfn_B.functional().x_omega() if lrc_B else 0.0
+
+    def _build_sapt_jk(omega):
+        jk_new = core.JK.build(dimer_wfn.basisset())
+        jk_new.set_do_J(True)
+        jk_new.set_do_K(True)
+        if omega:
+            jk_new.set_do_wK(True)
+            jk_new.set_omega(omega)
+        # SAPT reads J(), K() and wK() separately; wcombine folds x_alpha*K +
+        # x_beta*wK into wK() and zeroes K(), which would silently destroy the
+        # exchange terms.
+        jk_new.set_wcombine(False)
+        jk_new.initialize()
+        jk_new.print_header()
+        return jk_new
+
     if sapt_jk is None:
         core.print_out("\n   => Building SAPT JK object <= \n\n")
-        sapt_jk = core.JK.build(dimer_wfn.basisset())
-        sapt_jk.set_do_J(True)
-        sapt_jk.set_do_K(True)
-        if wfn_A.functional().is_x_lrc():
-            sapt_jk.set_do_wK(True)
-            sapt_jk.set_omega(wfn_A.functional().x_omega())
-        sapt_jk.initialize()
-        sapt_jk.print_header()
-        if wfn_B.functional().is_x_lrc() and (
-            wfn_A.functional().x_omega() != wfn_B.functional().x_omega()
-        ):
-            core.print_out("   => Monomer B: Building SAPT JK object <= \n\n")
-            core.print_out("      Reason: MonomerA Omega != MonomerB Omega\n\n")
-            sapt_jk_B = core.JK.build(dimer_wfn.basisset())
-            sapt_jk_B.set_do_J(True)
-            sapt_jk_B.set_do_K(True)
-            sapt_jk_B.set_do_wK(True)
-            sapt_jk_B.set_omega(wfn_B.functional().x_omega())
-            sapt_jk_B.initialize()
-            sapt_jk_B.print_header()
-
+        sapt_jk = _build_sapt_jk(omega_A)
     else:
-        sapt_jk.set_do_K(True)
+        # A JK handed down from the monomer SCF. Per jk.h, set_do_X() only takes
+        # effect before initialize() -- calling set_do_wK() on a live object
+        # leaves the erf-attenuated 3-index tensors unbuilt. So validate the
+        # reused object and rebuild it if it cannot supply what we need.
+        reusable = (not lrc_A) or (
+            sapt_jk.get_do_wK() and abs(sapt_jk.get_omega() - omega_A) < 1.0e-12
+        )
+        if not reusable:
+            core.print_out("\n   => Rebuilding SAPT JK object <= \n\n")
+            core.print_out(
+                "      Reason: reused JK lacks wK at omega = %.4f\n\n" % omega_A
+            )
+            sapt_jk = _build_sapt_jk(omega_A)
+            wfn_A.set_jk(sapt_jk)
+            wfn_B.set_jk(sapt_jk)
+        elif sapt_jk.get_wcombine():
+            raise ValidationError(
+                "SAPT(DFT) cannot use a JK object with WCOMBINE enabled: it folds "
+                "x_alpha*K + x_beta*wK into wK() and zeroes K(), but SAPT needs the "
+                "full 1/r12 exchange matrix. Set WCOMBINE to false."
+            )
 
-    sapt_jk.set_do_J(True)
-    sapt_jk.set_do_K(True)
-
-    if wfn_A.functional().is_x_lrc():
-        sapt_jk.set_do_wK(True)
-        sapt_jk.set_omega(wfn_A.functional().x_omega())
+    # Monomer B needs its own JK whenever its omega differs from the one sapt_jk
+    # was built with -- including the case where A is not range separated at all.
+    if lrc_B and omega_B != omega_A and sapt_jk_B is None:
+        core.print_out("   => Monomer B: Building SAPT JK object <= \n\n")
+        core.print_out("      Reason: MonomerA Omega != MonomerB Omega\n\n")
+        sapt_jk_B = _build_sapt_jk(omega_B)
 
     use_einsums = core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS")
 

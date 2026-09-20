@@ -38,20 +38,6 @@ from .sapt_util import print_sapt_var
 import einsums as ein
 
 
-def _effective_K(K, wK, x_alpha, x_beta):
-    """
-    Build effective exchange matrix for LC hybrid functionals.
-    K_eff = x_alpha * K + x_beta * wK
-    where K is the full 1/r12 exchange and wK is the erf(omega*r12)/r12 exchange.
-    For non-LRC functionals (x_beta=0), returns K unchanged.
-    """
-    if x_beta == 0.0:
-        return K.clone()
-    K_eff = K.clone()
-    K_eff.scale(x_alpha)
-    K_eff.axpy(x_beta, wK)
-    return K_eff
-
 # Equations come from https://doi.org/10.1063/5.0090688
 def localization(
     cache: dict,
@@ -737,17 +723,11 @@ def build_sapt_jk_cache(
     cache["J_O"] = jk.J()[2].clone()
 
     # Build effective K matrices for LC hybrid functionals
-    is_lrc = wfn_A.functional().is_x_lrc()
-    x_alpha = wfn_A.functional().x_alpha() if is_lrc else 1.0
-    x_beta = wfn_A.functional().x_beta() if is_lrc else 0.0
-    cache["is_x_lrc"] = is_lrc
-    cache["x_alpha"] = x_alpha
-    cache["x_beta"] = x_beta
 
-    cache["K_A"] = _effective_K(jk.K()[0], jk.wK()[0] if is_lrc else None, x_alpha, x_beta)
-    cache["K_B"] = _effective_K(jk.K()[1], jk.wK()[1] if is_lrc else None, x_alpha, x_beta)
+    cache["K_A"] = jk.K()[0].clone()
+    cache["K_B"] = jk.K()[1].clone()
     # K_O needs transpose
-    K_O_raw = _effective_K(jk.K()[2], jk.wK()[2] if is_lrc else None, x_alpha, x_beta)
+    K_O_raw = jk.K()[2].clone()
     K_O = K_O_raw.clone().transpose()
     cache["K_O"] = core.Matrix.from_array(K_O.np)
     cache["K_O"].name = "K_O"
@@ -2944,12 +2924,7 @@ def exchange(cache: dict, jk: core.JK, do_print: bool = True) -> dict:
     jk.compute()
 
     JT_A, JT_AB, Jij = jk.J()
-    is_lrc = cache.get("is_x_lrc", False)
-    _xa = cache.get("x_alpha", 1.0)
-    _xb = cache.get("x_beta", 0.0)
-    KT_A = _effective_K(jk.K()[0], jk.wK()[0] if is_lrc else None, _xa, _xb)
-    KT_AB = _effective_K(jk.K()[1], jk.wK()[1] if is_lrc else None, _xa, _xb)
-    Kij = _effective_K(jk.K()[2], jk.wK()[2] if is_lrc else None, _xa, _xb)
+    KT_A, KT_AB, Kij = jk.K()
 
     # Eq. 6: E^(1)_exch(S^2) — three-term S^2 exchange
     Exch_s2 = 0.0
@@ -3094,12 +3069,7 @@ def induction(
     jk.compute()
 
     J_Ot, J_P_B, J_P_A = jk.J()
-    is_lrc = cache.get("is_x_lrc", False)
-    _xa = cache.get("x_alpha", 1.0)
-    _xb = cache.get("x_beta", 0.0)
-    K_Ot = _effective_K(jk.K()[0], jk.wK()[0] if is_lrc else None, _xa, _xb)
-    K_P_B = _effective_K(jk.K()[1], jk.wK()[1] if is_lrc else None, _xa, _xb)
-    K_P_A = _effective_K(jk.K()[2], jk.wK()[2] if is_lrc else None, _xa, _xb)
+    K_Ot, K_P_B, K_P_A = jk.K()
 
     # Save for later usage in find()
     cache["J_P_A"] = J_P_A
@@ -3367,12 +3337,7 @@ def induction(
         jk.compute()
 
         J_AA_inf, J_BB_inf, J_AB_inf = jk.J()
-        is_lrc = cache.get("is_x_lrc", False)
-        _xa = cache.get("x_alpha", 1.0)
-        _xb = cache.get("x_beta", 0.0)
-        K_AA_inf = _effective_K(jk.K()[0], jk.wK()[0] if is_lrc else None, _xa, _xb)
-        K_BB_inf = _effective_K(jk.K()[1], jk.wK()[1] if is_lrc else None, _xa, _xb)
-        K_AB_inf = _effective_K(jk.K()[2], jk.wK()[2] if is_lrc else None, _xa, _xb)
+        K_AA_inf, K_BB_inf, K_AB_inf = jk.K()
 
         # A <- B
         EX_AA_inf = V_B.clone()

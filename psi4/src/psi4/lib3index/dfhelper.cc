@@ -1446,7 +1446,10 @@ void DFHelper::grab_AO(const size_t start, const size_t stop, double* Mp) {
 }
 void DFHelper::prepare_metric_core() {
     timer_on("DFH: metric construction");
-    FittingMetric J(aux_, true);
+    // When the 3-index integrals are erf-attenuated, the fitting metric must be
+    // attenuated with the same omega. Mixing (ar|w|R) with a plain Coulomb J^-1
+    // yields an effective range separation of omega/sqrt(2), not omega.
+    FittingMetric J(aux_, use_omega_eri_ ? omega_ : 0.0, true);
     J.form_fitting_metric();
     metrics_[1.0] = J.get_metric();
     timer_off("DFH: metric construction");
@@ -1475,7 +1478,9 @@ double* DFHelper::metric_prep_core(double m_pow) {
 }
 void DFHelper::prepare_metric() {
     // construct metric
-    FittingMetric J(aux_, true);
+    // See prepare_metric_core(): the metric has to carry the same omega as the
+    // 3-index integrals, otherwise the fit reproduces erf(omega*r/sqrt(2))/r.
+    FittingMetric J(aux_, use_omega_eri_ ? omega_ : 0.0, true);
     J.form_fitting_metric();
     auto metric = J.get_metric();
     auto Mp = metric->pointer()[0];

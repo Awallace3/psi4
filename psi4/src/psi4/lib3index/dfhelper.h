@@ -375,7 +375,7 @@ class PSI_API DFHelper {
     bool do_wK_ = false;
     bool use_omega_eri_ = false;
     bool wcombine_ = false;
-    double omega_;
+    double omega_ = 0.0;
     double omega_alpha_;
     double omega_beta_;
     bool debug_ = false;

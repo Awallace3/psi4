@@ -1905,13 +1905,17 @@ def test_wb97m_v_sapt_dft():
     )
     psi4.set_options(
         {
-            "basis": "aug-cc-pvtz",
+            "basis": "def2-TZVPD",
             "e_convergence": 1e-8,
             "d_convergence": 1e-8,
             "freeze_core": True,
             "scf_type": "df",
-            "sapt_dft_grac_shift_a": 0.136,
-            "sapt_dft_grac_shift_b": 0.136,
+            # 0.136 is a PBE0-scale shift.  An LC hybrid already has its HOMO
+            # near -IP, so hard-coding 0.136 over-shifts it, contracts the
+            # monomer density, and drives Exch1 ~10% below the correlated
+            # (SAPT2+3(CCD)) value.  Let the driver compute the shift instead.
+            "SAPT_DFT_GRAC_COMPUTE": "ITERATIVE",
+            "SAPT_DFT_GRAC_BASIS": "def2-TZVPD",
             "SAPT_DFT_FUNCTIONAL": "wb97m-v",
         }
     )
@@ -1971,12 +1975,14 @@ def test_wb97_sapt_dft():
     )
     psi4.set_options(
         {
-            "basis": "aug-cc-pvtz",
+            "basis": "def2-TZVPD",
             "e_convergence": 1e-8,
             "d_convergence": 1e-8,
             "scf_type": "df",
-            "sapt_dft_grac_shift_a": 0.136,
-            "sapt_dft_grac_shift_b": 0.136,
+            # see test_wb97m_v_sapt_dft: an LC hybrid needs its own GRAC shift,
+            # not the PBE0-scale 0.136 this test used to hard-code.
+            "SAPT_DFT_GRAC_COMPUTE": "ITERATIVE",
+            "SAPT_DFT_GRAC_BASIS": "def2-TZVPD",
             "SAPT_DFT_FUNCTIONAL": "wb97",
             # "SAPT_DFT_FUNCTIONAL": "pbe0",
         }

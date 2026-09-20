@@ -1918,7 +1918,12 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
             }
 
             // ===> Compute tau_k for meta-GGA <=== //
-            // τk = 0.5 * Σ_i Σ_mn (Dk+Dk^T)_mn ∂ᵢφ_m ∂ᵢφ_n
+            // τk = 1/4 * Σ_i Σ_mn (Dk+Dk^T)_mn ∂ᵢφ_m ∂ᵢφ_n = 1/2 * dτ/dλ
+            //
+            // N.B. the leading 1/2 on the derivative is deliberate and matches rho_k and
+            // gamma_k above, both of which hold 1/2 d(.)/dλ rather than the full derivative.
+            // compute_Vx_full is defined to return 1/2 dV/dλ, so carrying the 1/2 on every
+            // perturbed density quantity keeps the LSDA/GGA/meta rows on one convention.
             // Reuse Tp as scratch since rho_k and gamma_k are already extracted
             if (ansatz >= 2) {
                 for (int P = 0; P < npoints; P++) tau_k[P] = 0.0;
@@ -1930,9 +1935,9 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
                             Dx_localp[0], max_functions, 0.0, Tp[0], max_functions);
                     C_DGEMM('N', 'T', npoints, nlocal, nlocal, 1.0, phi_w[i][0], coll_funcs,
                             Dx_localp[0], max_functions, 1.0, Tp[0], max_functions);
-                    // tau_k += 0.5 * ∂ᵢφ · Tp
+                    // tau_k += 0.25 * ∂ᵢφ · Tp
                     for (int P = 0; P < npoints; P++) {
-                        tau_k[P] += 0.5 * C_DDOT(nlocal, phi_w[i][P], 1, Tp[P], 1);
+                        tau_k[P] += 0.25 * C_DDOT(nlocal, phi_w[i][P], 1, Tp[P], 1);
                     }
                 }
             }
@@ -2020,9 +2025,27 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
                     max_functions);
 
 
+            // ===> Add the adjoint to complete the LDA and GGA contributions  <===
+            for (int m = 0; m < nlocal; m++) {
+                for (int n = 0; n <= m; n++) {
+                    Vx_localp[m][n] = Vx_localp[n][m] = Vx_localp[m][n] + Vx_localp[n][m];
+                }
+            }
+
             // ===> Meta-GGA contribution: τ W-type block <=== //
-            // Vx += Σ_i ∂ᵢφᵀ · [w * v2_tau_val * ∂ᵢφ]
+            // Vx += 1/2 Σ_i ∂ᵢφᵀ · [w * v2_tau_val * ∂ᵢφ]
             // where v2_tau_val = v2_rho_tau * rho_k + v2_gamma_tau * gamma_k + v2_tau_tau * tau_k
+            //
+            // N.B. this block MUST come after the adjoint above. ∂ᵢφ_m ∂ᵢφ_n is already
+            // symmetric in (m, n), so running it through the adjoint would double it.
+            // dft_integrators::rks_integrator places its τ term after its own adjoint for the
+            // same reason; compute_V and this routine therefore agree term by term.
+            //
+            // The leading 1/2 matches the 1/2 carried by the ρ-row terms: V_TAU_A is stored
+            // as 1/2 ∂f/∂τ (LibXCfunctional.cc) while the second derivatives from xc_mgga_fxc
+            // are stored bare, so d(V_TAU_A)/dλ = 1/2 (f_τρ dρ + f_τγ dγ + f_ττ dτ)
+            //                                     = (f_τρ ρk + f_τγ γk + f_ττ τk),
+            // and Vx returns 1/2 dV/dλ.
             if (ansatz >= 2) {
                 auto v2_rho_tau = vals["V_RHO_A_TAU_A"]->pointer();
                 auto v2_gamma_tau = vals["V_GAMMA_AA_TAU_A"]->pointer();
@@ -2034,18 +2057,11 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
                         std::fill(Tp[P], Tp[P] + nlocal, 0.0);
                         if (rho_a[P] < v2_rho_cutoff_) continue;
                         double v2_tau_val = v2_rho_tau[P] * rho_k[P] + v2_gamma_tau[P] * gamma_k[P] + v2_tau_tau[P] * tau_k[P];
-                        C_DAXPY(nlocal, w[P] * v2_tau_val, phi_w[idir][P], 1, Tp[P], 1);
+                        C_DAXPY(nlocal, 0.5 * w[P] * v2_tau_val, phi_w[idir][P], 1, Tp[P], 1);
                     }
                     // Accumulate ∂ᵢφᵀ · T into Vx_local (beta=1.0 to add to existing)
                     C_DGEMM('T', 'N', nlocal, nlocal, npoints, 1.0, phi_w[idir][0], coll_funcs,
                             Tp[0], max_functions, 1.0, Vx_localp[0], max_functions);
-                }
-            }
-
-            // ===> Add the adjoint to complete the LDA and GGA contributions  <===
-            for (int m = 0; m < nlocal; m++) {
-                for (int n = 0; n <= m; n++) {
-                    Vx_localp[m][n] = Vx_localp[n][m] = Vx_localp[m][n] + Vx_localp[n][m];
                 }
             }
 
