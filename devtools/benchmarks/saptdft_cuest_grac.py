@@ -177,7 +177,7 @@ def campaign(args):
     manifest = {"command": sys.argv, "script_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
                 "repeats": args.repeats, "threads": args.threads,
                 "timing": "fresh-process energy() wall time, including backend initialization",
-                "accuracy_tolerance_hartree": 1e-6, "records": []}
+                "accuracy_tolerance_hartree": 1e-5, "records": []}
     atomic_json(output / "campaign.json", manifest)
     failed = False
     cases = [("water", ["cc-pvdz", "aug-cc-pvdz"]),

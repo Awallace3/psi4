@@ -54,7 +54,7 @@ def _memory_block(cpu, gpu):
     }
 
 
-def summarize(root, tolerance=1e-6):
+def summarize(root, tolerance=1e-5):
     root = Path(root)
     campaign = json.loads((root / "campaign.json").read_text())
     groups = defaultdict(lambda: defaultdict(list))

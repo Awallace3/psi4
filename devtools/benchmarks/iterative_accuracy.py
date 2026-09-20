@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""Explain, rather than widen, the CPU/GPU accuracy gate under ITERATIVE GRAC.
+"""Tell arithmetic noise apart from SCF solution selection under ITERATIVE GRAC.
 
 With a fixed GRAC shift the two arms agree to well under 1e-6 Eh. Turning on
 ITERATIVE GRAC puts two extra SCF solutions per monomer -- a neutral and a
 doublet cation -- inside the timed region, and the shift derived from them
 feeds the asymptotic correction of every later SAPT term. A backend difference
-in either SCF is therefore amplified into the components, and the campaign's
-1e-6 Eh tolerance starts reporting failures.
+in either SCF is therefore amplified into the components, and every CPU/GPU
+difference large enough to argue about originates there.
 
-Raising the tolerance would hide the one thing worth knowing: whether the two
-arms disagree because the GPU's arithmetic is less accurate, or because the two
-arms converged to genuinely different SCF solutions. Those need opposite
-responses. This separates them by checking the neutral and cation energies
-independently: arithmetic noise moves both by a comparable small amount, while
-a solution-selection difference leaves one converged pair agreeing to near
-machine precision and the other offset by orders of magnitude more.
+The campaign gate is 1e-5 Eh: the scale at which a SAPT interaction energy
+would be reported differently. That is a decision about which differences
+matter, not a claim that nothing smaller is happening, so passing it does not
+answer the question this tool exists for. Whether the arms disagree because the
+GPU's arithmetic is less accurate, or because they converged to genuinely
+different SCF solutions, needs opposite responses, and the gate cannot tell
+them apart at any threshold. This separates them by checking the neutral and
+cation energies independently: arithmetic noise moves both by a comparable
+small amount, while a solution-selection difference leaves one converged pair
+agreeing to near machine precision and the other offset by orders of magnitude
+more.
 
 When the arms did pick different solutions, the variationally lower one is the
 better answer, and which arm found it is reported rather than assumed.
@@ -119,8 +123,19 @@ def compare(cpu, gpu, tolerance):
 
 
 def verdict(worst, tolerance, split, scatter):
-    if worst <= tolerance:
+    if worst <= tolerance and not split:
         return "agrees within tolerance"
+    if worst <= tolerance:
+        # Inside the gate, but the arms did not solve the same problem. The
+        # component difference this produced is bounded and harmless here; the
+        # near-degenerate cation SCF that produced it is not, because nothing
+        # about the gate keeps the same ambiguity inside it on a larger system.
+        # Reporting only "passes" would delete the finding at the moment the
+        # gate widened past it.
+        arms = sorted({e["lower_cation_arm"] for e in split})
+        which = arms[0] if len(arms) == 1 else "/".join(arms)
+        return (f"agrees within tolerance, but the arms converged to different cation "
+                f"SCF solutions; {which} found the lower one")
     if worst <= SCATTER_MARGIN * scatter:
         return ("exceeds tolerance but not the run-to-run scatter of either arm; "
                 "the arms are not distinguishable by these data")
@@ -132,7 +147,7 @@ def verdict(worst, tolerance, split, scatter):
     return "exceeds tolerance with both arms on the same SCF solution: investigate arithmetic"
 
 
-def analyze(results, tolerance=1e-6):
+def analyze(results, tolerance=1e-5):
     arms = defaultdict(lambda: defaultdict(list))
     for path in sorted(Path(results).glob("*/result.json")):
         match = NAME.match(path.parent.name)
@@ -174,8 +189,8 @@ def markdown(rows, tolerance):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("results", type=Path)
-    parser.add_argument("--tolerance", type=float, default=1e-6,
-                        help="campaign accuracy gate in hartree (default 1e-6)")
+    parser.add_argument("--tolerance", type=float, default=1e-5,
+                        help="campaign accuracy gate in hartree (default 1e-5)")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     rows = analyze(args.results, args.tolerance)

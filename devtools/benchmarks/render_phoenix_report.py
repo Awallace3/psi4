@@ -19,10 +19,19 @@ def deltas(reference, result):
             for key, value in reference["components_hartree"].items()}
 
 
+# The 2026-09-09 A100 campaign predeclared a 1e-6 Eh component gate and published
+# two benzene rows as missing it. Later campaigns gate at 1e-5, and summarize()
+# now defaults there, but a past report's threshold is a record of what that
+# campaign committed to before it ran -- not a parameter to be updated. So this
+# renderer states 1e-6 explicitly instead of inheriting the current default, and
+# its benzene rows keep failing whatever later campaigns decide.
+A100_2026_09_09_GATE = 1e-6
+
+
 def build_paired_summary(evidence):
     """Rebuild the six complete paired groups, retaining original accuracy misses."""
-    initial = summarize(evidence / "raw/retry1/results")
-    suite = summarize(evidence / "raw/suite2/results")
+    initial = summarize(evidence / "raw/retry1/results", tolerance=A100_2026_09_09_GATE)
+    suite = summarize(evidence / "raw/suite2/results", tolerance=A100_2026_09_09_GATE)
     rows = initial["rows"] + suite["rows"]
     expected = {(system, basis) for system in ("water", "benzene")
                 for basis in ("cc-pvdz", "aug-cc-pvdz")}
@@ -43,7 +52,7 @@ def build_paired_summary(evidence):
                 raise ValueError("Recomputed basis count differs from measured calculation")
             row["nbf_monomer_a"] = count["monomer_a"]
             row["nbf_monomer_b"] = count["monomer_b"]
-    return {"repeats_per_backend": 3, "accuracy_tolerance_hartree": 1e-6, "rows": rows,
+    return {"repeats_per_backend": 3, "accuracy_tolerance_hartree": A100_2026_09_09_GATE, "rows": rows,
             "note": "Original-grid benzene threshold misses retained; independent grid controls reported separately.",
             "source_campaigns": {"retry1": {"complete": initial["complete"], "failures": initial["failures"]},
                                  "suite2": {"complete": suite["complete"], "failures": suite["failures"]}}}

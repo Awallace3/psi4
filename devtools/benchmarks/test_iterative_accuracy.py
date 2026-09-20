@@ -25,21 +25,39 @@ def write_case(root, stem, mode, repeat, total, *, shift=0.075, cation=-231.6426
     return directory
 
 
-def test_a_different_cation_solution_is_named_rather_than_called_gpu_error(tmp_path):
-    # Neutrals agree to 2.5e-7; cations differ by 1.2e-4 -- the benzene signature.
+def benzene_signature(tmp_path):
+    """Neutrals agree to 2.5e-7; cations differ by 1.2e-4 -- the real benzene case."""
     write_case(tmp_path, "benzene-cc-pvdz", "cpu", 1, -0.004962451,
                shift=0.07513675, cation=-231.64267427)
-    # ELST is the term that breaches the gate at 1.503e-6; TOTAL alone stays under it.
+    # ELST is the largest component difference this produces, at 1.503e-6.
     write_case(tmp_path, "benzene-cc-pvdz", "gpu", 1, -0.004962451 + 1.503e-6,
                shift=0.07501733, cation=-231.64279399)
 
-    row = mod.analyze(tmp_path)["benzene-cc-pvdz"]
+
+def test_a_different_cation_solution_is_named_rather_than_called_gpu_error(tmp_path):
+    benzene_signature(tmp_path)
+
+    row = mod.analyze(tmp_path, tolerance=1e-6)["benzene-cc-pvdz"]
     assert not row["within_tolerance"]
     assert row["solution_selection_differs"]
     # The GPU cation is the lower of the two, so the GPU has the better solution.
     assert row["better_arm"] == ["gpu"]
     assert "different cation SCF solutions" in row["verdict"]
     assert row["monomers"]["A"]["different_cation_solution"]
+
+
+def test_a_solution_difference_survives_a_gate_wide_enough_to_pass_it(tmp_path):
+    # At the campaign's 1e-5 gate this case passes. The gate moved; the fact
+    # that the two arms converged to different cation SCF solutions did not,
+    # and the verdict has to keep saying so or widening the gate would silently
+    # retire the finding.
+    benzene_signature(tmp_path)
+
+    row = mod.analyze(tmp_path)["benzene-cc-pvdz"]
+    assert row["within_tolerance"]
+    assert row["solution_selection_differs"] and row["better_arm"] == ["gpu"]
+    assert "agrees within tolerance, but" in row["verdict"]
+    assert "different cation SCF solutions" in row["verdict"]
 
 
 def test_matching_solutions_within_tolerance_are_reported_as_agreement(tmp_path):
@@ -75,10 +93,11 @@ def test_repeats_are_reduced_by_median_and_their_scatter_recorded(tmp_path):
 
 
 def test_a_delta_buried_in_run_to_run_scatter_is_not_called_a_disagreement(tmp_path):
-    # 5e-6 apart, but each arm wanders by 4e-5 between repeats on its own.
-    for repeat, total in enumerate([-0.001, -0.00104], start=1):
+    # 5e-5 apart, past the 1e-5 gate, but each arm wanders by 4e-4 between
+    # repeats on its own, so the gap between them is not a measurement.
+    for repeat, total in enumerate([-0.001, -0.0014], start=1):
         write_case(tmp_path, "water-cc-pvdz", "cpu", repeat, total)
-    for repeat, total in enumerate([-0.001005, -0.001045], start=1):
+    for repeat, total in enumerate([-0.00105, -0.00145], start=1):
         write_case(tmp_path, "water-cc-pvdz", "gpu", repeat, total)
 
     row = mod.analyze(tmp_path)["water-cc-pvdz"]

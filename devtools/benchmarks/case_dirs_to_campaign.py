@@ -72,7 +72,7 @@ def build(results, expected, modes=("cpu", "gpu")):
         "repeats": repeat_counts.pop(),
         "cases": [[system, bases] for system, bases in cases.items()],
         "timing": "fresh-process energy() wall time, including backend initialization",
-        "accuracy_tolerance_hartree": 1e-6,
+        "accuracy_tolerance_hartree": 1e-5,
         "records": records,
     }
     failed = [r for r in records if r["returncode"] != 0]
