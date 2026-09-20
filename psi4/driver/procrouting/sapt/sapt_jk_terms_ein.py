@@ -60,6 +60,13 @@ import einsums.graph as cg
 # it again at 128, where the work arrays stop fitting in cache.
 FDISP_BLOCK = 64
 
+# Size, in doubles, of one fdisp0 DF staging matrix.  The staging matrices only
+# carry a slab of a DF tensor from disk into the packed Q-major buffers, so
+# they want to be large enough that fill_tensor's per-call cost disappears and
+# small enough to stay out of the resident high-water mark.  1 M doubles is
+# 8 MB each, eight of them live at once.
+STAGE_DOUBLES = 1_000_000
+
 # Nuclear centers per batch in the F-SAPT nuclear-ESP transform.  The AO
 # buffer is nbf * NESP_BLOCK * nbf doubles, so 24 keeps it around 60 MB at
 # nbf ~ 600 while still amortizing the backtransform over enough centers.
@@ -1470,6 +1477,12 @@ class graph_block:
                 self.g.optimize()
             self.g.set_executor(cg.SequentialExecutor())
             self.g.execute()
+        # Release the Graph as soon as it has run.  optimize()'s free pass
+        # drops most intermediates at their last consumer, but the ones it
+        # declines stay alive as long as the Graph does, which otherwise means
+        # until the enclosing function returns.  Measured on peptide/aug-cc-
+        # pVDZ this recovers 20 MB at fdisp0_setup and 7 MB at induction_jk_C.
+        self.g = None
         return False
 
 
@@ -2714,9 +2727,7 @@ def fdisp0(
 
     # Calculate overhead for work arrays
     overhead = 0
-    overhead += (
-        2 * (2 * na * ns + 2 * nb * nr + 2 * na * nr + 2 * nb * ns)
-    )  # S and Q matrices, plus the packed copies the r,s loop contracts
+    overhead += 2 * na * ns + 2 * nb * nr + 2 * na * nr + 2 * nb * ns  # S and Q
     # E_disp20 and E_exch_disp20 thread work and final
     overhead += 2 * na * nb * (nT + 1)
     # sE_exch_disp20 thread work and final
@@ -2749,11 +2760,13 @@ def fdisp0(
         raise Exception("Too little static memory for fdisp0")
 
     # Calculate cost per r or s virtual orbital
-    # Each r needs: Aar, Bbr, Cbr, Dar (each is na x nQ or nb x nQ), and a
-    # second copy of the same data packed Q-major for the block GEMMs.  The
-    # same holds for each s, hence the factor of 4.
+    # Each r contributes two Q-major columns each to AFar (na wide) and BCbr
+    # (nb wide), i.e. 2*nQ*(na+nb) doubles; the same holds for each s.  The DF
+    # tensors are read into small staging matrices (STAGE_DOUBLES below) and
+    # copied straight into those columns, so there is no second full-size copy
+    # to pay for -- hence the factor of 2, for the r side and the s side.
     cost_r = 2 * na * nQ + 2 * nb * nQ
-    max_r_l = rem // (4 * cost_r)
+    max_r_l = rem // (2 * cost_r)
     max_s_l = max_r_l
     max_r = min(max_r_l, nr)
     max_s = min(max_s_l, ns)
@@ -2919,16 +2932,25 @@ def fdisp0(
         return a if a.ndim == 2 else a.reshape(-1, a.shape[-1])
 
     # => Main r,s loop <= //
-    # Block buffers, sized for a full block (the trailing block may be short)
-    Aar = core.Matrix("Aar block", max_r * na, nQ)
-    Far = core.Matrix("Far block", max_r * na, nQ)
-    Bbr = core.Matrix("Bbr block", max_r * nb, nQ)
-    Cbr = core.Matrix("Cbr block", max_r * nb, nQ)
+    # The DF tensors are read off disk into staging matrices and copied
+    # immediately into the packed buffers above.  Staging a whole max_r block
+    # at once would hold a second, full-size copy of every DF tensor for the
+    # entire loop -- at nanotube/aug-cc-pVDZ that is ~5 GB of resident memory
+    # that is dead the moment the pack finishes.  Reading STAGE_R virtuals at
+    # a time bounds it at a few tens of MB instead, at no measurable cost:
+    # fill_tensor's per-call overhead is negligible against a slab this size.
+    STAGE_R = max(1, min(max_r, STAGE_DOUBLES // (nQ * max(na, nb))))
+    STAGE_S = max(1, min(max_s, STAGE_DOUBLES // (nQ * max(na, nb))))
 
-    Abs = core.Matrix("Abs block", max_s * nb, nQ)
-    Fbs = core.Matrix("Fbs block", max_s * nb, nQ)
-    Bas = core.Matrix("Bas block", max_s * na, nQ)
-    Cas = core.Matrix("Cas block", max_s * na, nQ)
+    Aar = core.Matrix("Aar stage", STAGE_R * na, nQ)
+    Far = core.Matrix("Far stage", STAGE_R * na, nQ)
+    Bbr = core.Matrix("Bbr stage", STAGE_R * nb, nQ)
+    Cbr = core.Matrix("Cbr stage", STAGE_R * nb, nQ)
+
+    Abs = core.Matrix("Abs stage", STAGE_S * nb, nQ)
+    Fbs = core.Matrix("Fbs stage", STAGE_S * nb, nQ)
+    Bas = core.Matrix("Bas stage", STAGE_S * na, nQ)
+    Cas = core.Matrix("Cas stage", STAGE_S * na, nQ)
     core.timer_off("F-SAPT Disp Setup")
 
     core.timer_on("F-SAPT Disp Compute")
@@ -2936,19 +2958,21 @@ def fdisp0(
         nrblock = min(max_r, nr - rstart)
         rsl = slice(rstart, rstart + nrblock)
 
-        dfh.fill_tensor("Aar", Aar, [rstart, rstart + nrblock], [0, na], [0, nQ])
-        dfh.fill_tensor("Far", Far, [rstart, rstart + nrblock], [0, na], [0, nQ])
-        dfh.fill_tensor("Bbr", Bbr, [rstart, rstart + nrblock], [0, nb], [0, nQ])
-        dfh.fill_tensor("Cbr", Cbr, [rstart, rstart + nrblock], [0, nb], [0, nQ])
-
         # Pack the r side of the block once per DF block.
         M, Nr = nrblock * na, nrblock * nb
-        AFarn[:M, 0:nQ] = _np2(Aar)[:M]
-        AFarn[:M, nQ:2 * nQ] = _np2(Far)[:M]
+        for c0 in range(0, nrblock, STAGE_R):
+            c1 = min(c0 + STAGE_R, nrblock)
+            r0, r1, nc = rstart + c0, rstart + c1, c1 - c0
+            dfh.fill_tensor("Aar", Aar, [r0, r1], [0, na], [0, nQ])
+            dfh.fill_tensor("Far", Far, [r0, r1], [0, na], [0, nQ])
+            dfh.fill_tensor("Bbr", Bbr, [r0, r1], [0, nb], [0, nQ])
+            dfh.fill_tensor("Cbr", Cbr, [r0, r1], [0, nb], [0, nQ])
+            AFarn[c0 * na:c1 * na, 0:nQ] = _np2(Aar)[:nc * na]
+            AFarn[c0 * na:c1 * na, nQ:2 * nQ] = _np2(Far)[:nc * na]
+            BCbrn[c0 * nb:c1 * nb, 0:nQ] = _np2(Bbr)[:nc * nb]
+            BCbrn[c0 * nb:c1 * nb, nQ:2 * nQ] = _np2(Cbr)[:nc * nb]
         AFarn[:M, 2 * nQ] = Qarn[:, rsl].T.reshape(-1)
         AFarn[:M, 2 * nQ + 1] = SBarn[:, rsl].T.reshape(-1)
-        BCbrn[:Nr, 0:nQ] = _np2(Bbr)[:Nr]
-        BCbrn[:Nr, nQ:2 * nQ] = _np2(Cbr)[:Nr]
         BCbrn[:Nr, 2 * nQ] = Qbrn[:, rsl].T.reshape(-1)
         BCbrn[:Nr, 2 * nQ + 1] = Sbrn[:, rsl].T.reshape(-1)
 
@@ -2956,18 +2980,20 @@ def fdisp0(
             nsblock = min(max_s, ns - sstart)
             ssl = slice(sstart, sstart + nsblock)
 
-            dfh.fill_tensor("Abs", Abs, [sstart, sstart + nsblock], [0, nb], [0, nQ])
-            dfh.fill_tensor("Fbs", Fbs, [sstart, sstart + nsblock], [0, nb], [0, nQ])
-            dfh.fill_tensor("Bas", Bas, [sstart, sstart + nsblock], [0, na], [0, nQ])
-            dfh.fill_tensor("Cas", Cas, [sstart, sstart + nsblock], [0, na], [0, nQ])
-
             N, Ms = nsblock * nb, nsblock * na
-            FAbsn[:N, 0:nQ] = _np2(Fbs)[:N]
-            FAbsn[:N, nQ:2 * nQ] = _np2(Abs)[:N]
+            for c0 in range(0, nsblock, STAGE_S):
+                c1 = min(c0 + STAGE_S, nsblock)
+                s0, s1, nc = sstart + c0, sstart + c1, c1 - c0
+                dfh.fill_tensor("Abs", Abs, [s0, s1], [0, nb], [0, nQ])
+                dfh.fill_tensor("Fbs", Fbs, [s0, s1], [0, nb], [0, nQ])
+                dfh.fill_tensor("Bas", Bas, [s0, s1], [0, na], [0, nQ])
+                dfh.fill_tensor("Cas", Cas, [s0, s1], [0, na], [0, nQ])
+                FAbsn[c0 * nb:c1 * nb, 0:nQ] = _np2(Fbs)[:nc * nb]
+                FAbsn[c0 * nb:c1 * nb, nQ:2 * nQ] = _np2(Abs)[:nc * nb]
+                BCasn[c0 * na:c1 * na, 0:nQ] = _np2(Bas)[:nc * na]
+                BCasn[c0 * na:c1 * na, nQ:2 * nQ] = _np2(Cas)[:nc * na]
             FAbsn[:N, 2 * nQ] = SAbsn[:, ssl].T.reshape(-1)
             FAbsn[:N, 2 * nQ + 1] = Qbsn[:, ssl].T.reshape(-1)
-            BCasn[:Ms, 0:nQ] = _np2(Bas)[:Ms]
-            BCasn[:Ms, nQ:2 * nQ] = _np2(Cas)[:Ms]
             BCasn[:Ms, 2 * nQ] = Sasn[:, ssl].T.reshape(-1)
             BCasn[:Ms, 2 * nQ + 1] = Qasn[:, ssl].T.reshape(-1)
 
