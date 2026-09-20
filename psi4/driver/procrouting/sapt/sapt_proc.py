@@ -1508,14 +1508,19 @@ def sapt_dft(
         # effect before initialize() -- calling set_do_wK() on a live object
         # leaves the erf-attenuated 3-index tensors unbuilt. So validate the
         # reused object and rebuild it if it cannot supply what we need.
-        reusable = (not lrc_A) or (
+        # A functional with x_alpha = 0 (wB97, wB97X-D3, ...) carries no full K
+        # at all: its SCF JK was built with do_K = False. SAPT exchange needs
+        # the full 1/r12 K regardless of the functional, so that object cannot
+        # be reused either.
+        has_K = sapt_jk.get_do_K()
+        has_wK = (not lrc_A) or (
             sapt_jk.get_do_wK() and abs(sapt_jk.get_omega() - omega_A) < 1.0e-12
         )
+        reusable = has_K and has_wK
         if not reusable:
+            reason = "lacks K" if not has_K else "lacks wK at omega = %.4f" % omega_A
             core.print_out("\n   => Rebuilding SAPT JK object <= \n\n")
-            core.print_out(
-                "      Reason: reused JK lacks wK at omega = %.4f\n\n" % omega_A
-            )
+            core.print_out("      Reason: reused JK %s\n\n" % reason)
             sapt_jk = _build_sapt_jk(omega_A)
             wfn_A.set_jk(sapt_jk)
             wfn_B.set_jk(sapt_jk)
