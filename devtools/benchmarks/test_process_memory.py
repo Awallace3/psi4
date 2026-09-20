@@ -31,7 +31,11 @@ def stub_nvidia_smi(directory, compute_apps, gpu="%s, A100-SXM4-80GB, 81920" % U
 
 class HostMemoryTests(unittest.TestCase):
     def test_peak_is_at_least_current(self):
-        self.assertGreaterEqual(host_peak_rss_mib(), host_rss_mib())
+        # Read the current size first. The process grows between the two reads
+        # -- allocating the two strings alone can fault a page in -- so sampling
+        # the peak first races against its own invariant.
+        current = host_rss_mib()
+        self.assertGreaterEqual(host_peak_rss_mib(), current)
 
     def test_peak_reset_reports_whether_it_took(self):
         # Either outcome is legitimate -- the kernel may not support the reset --
