@@ -69,6 +69,30 @@ def key(row):
     return (row.get("system"), row.get("basis"))
 
 
+def delta_scatter(row):
+    """Half-range of the repeats behind this case's worst CPU-vs-GPU delta.
+
+    The worst delta is itself a measurement: it is a difference of two sums
+    whose reduction order depends on thread scheduling, so it moves a little
+    between repeats of one build. `summarize_saptdft_cuest.py` keeps every
+    repeat's paired delta, so the scatter is available rather than assumed.
+    Returns None when the component that attained the maximum cannot be
+    identified, which is treated as "no scatter measured" rather than as zero.
+    """
+    worst = row.get("max_abs_delta_hartree")
+    if not isinstance(worst, (int, float)):
+        return None
+    for stats in (row.get("components") or {}).values():
+        if stats.get("max_abs_delta_hartree") != worst:
+            continue
+        deltas = [abs(d) for d in (stats.get("paired_deltas_hartree") or [])
+                  if isinstance(d, (int, float))]
+        if not deltas:
+            return None
+        return (max(deltas) - min(deltas)) / 2.0
+    return None
+
+
 def compare(control, treatment):
     """Pair two summaries case by case. Cases present in only one are named."""
     c_rows = {key(r): r for r in control.get("rows", [])}
@@ -90,14 +114,27 @@ def compare(control, treatment):
                  "speedup": {"control": c.get("speedup"), "treatment": t.get("speedup")},
                  "max_abs_delta_hartree": {"control": c.get("max_abs_delta_hartree"),
                                            "treatment": t.get("max_abs_delta_hartree")}}
-        # A build that was supposed to touch only memory must reproduce the
-        # CPU-vs-GPU disagreement exactly. A change here is the headline, not a
-        # footnote, so it is surfaced separately from the timing table.
+        # A build that was supposed to touch only memory must not move the
+        # CPU-vs-GPU disagreement. That claim is judged the same way as every
+        # timing here -- against the repeats' own scatter -- because exact
+        # bit-equality is the wrong bar: the delta is a difference of two
+        # threaded reductions and moves in its last digits between repeats of
+        # one build. A drift that clears the scatter is the headline, so it is
+        # surfaced separately from the timing table; one inside it is reported
+        # as reproduced and the size of the wobble is kept in the JSON.
         cd, td = (entry["max_abs_delta_hartree"]["control"],
                   entry["max_abs_delta_hartree"]["treatment"])
-        if isinstance(cd, (int, float)) and isinstance(td, (int, float)) and cd != td:
+        c_scatter, t_scatter = delta_scatter(c), delta_scatter(t)
+        noise = (c_scatter or 0.0) + (t_scatter or 0.0)
+        entry["max_abs_delta_hartree"].update(
+            {"scatter_control": c_scatter, "scatter_treatment": t_scatter,
+             "noise_band": noise,
+             "scatter_measured": c_scatter is not None and t_scatter is not None})
+        if isinstance(cd, (int, float)) and isinstance(td, (int, float)) \
+                and abs(td - cd) > noise:
             numeric_drift.append({"system": k[0], "basis": k[1],
-                                  "control": cd, "treatment": td})
+                                  "control": cd, "treatment": td,
+                                  "noise_band": noise})
         rows.append(entry)
     return {"rows": rows,
             "control_only": sorted(f"{s}:{b}" for s, b in set(c_rows) - set(t_rows)),
@@ -134,12 +171,15 @@ def markdown(payload, control_label, treatment_label):
             f"{cell(row['cpu_host_peak_mib'])} | {cell(row['gpu_host_peak_mib'])} | "
             f"{cell(row['gpu_device_peak_mib'])} |")
     if payload["identical_numerics"]:
-        out += ["", "Every case reproduced its CPU-vs-GPU energy difference exactly, "
-                    "so the two builds are numerically identical on this suite."]
+        out += ["", "Every case reproduced its CPU-vs-GPU energy difference to within "
+                    "that case's own repeat-to-repeat scatter, so the two builds agree "
+                    "numerically on this suite."]
     else:
-        out += ["", "**The two builds do not agree numerically.** A build intended to "
-                    "change only memory must reproduce these exactly:", ""]
-        out += [f"- {d['system']}/{d['basis']}: {d['control']:.6e} → {d['treatment']:.6e} Eh"
+        out += ["", "**The two builds do not agree numerically.** These cases moved by "
+                    "more than their own repeats do, which a change to memory "
+                    "accounting cannot explain:", ""]
+        out += [f"- {d['system']}/{d['basis']}: {d['control']:.6e} → {d['treatment']:.6e} Eh "
+                f"(scatter ±{d['noise_band']:.1e})"
                 for d in payload["numeric_drift"]]
     for name, missing in (("control", payload["treatment_only"]),
                           ("treatment", payload["control_only"])):

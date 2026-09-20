@@ -11,8 +11,8 @@ def stats(median, spread=0.0):
 
 def row(system="benzene", basis="aug-cc-pvdz", nbf=384, cpu=120.0, gpu=20.0,
         cpu_spread=0.5, gpu_spread=0.1, cpu_host=14900.0, gpu_host=1279.0,
-        device=2878.0, delta=2.077e-06):
-    return {
+        device=2878.0, delta=2.077e-06, delta_repeats=None):
+    built = {
         "system": system, "basis": basis, "nbf": nbf,
         "wall_s": {"cpu": stats(cpu, cpu_spread), "gpu": stats(gpu, gpu_spread)},
         "speedup": cpu / gpu,
@@ -23,6 +23,14 @@ def row(system="benzene", basis="aug-cc-pvdz", nbf=384, cpu=120.0, gpu=20.0,
             "device_peak_mib": stats(device, 400.0),
         },
     }
+    if delta_repeats is not None:
+        built["components"] = {
+            "SAPT EXCH ENERGY": {"max_abs_delta_hartree": 0.0,
+                                 "paired_deltas_hartree": [0.0, 0.0, 0.0]},
+            "SAPT DISP ENERGY": {"max_abs_delta_hartree": delta,
+                                 "paired_deltas_hartree": list(delta_repeats)},
+        }
+    return built
 
 
 def summary(*rows):
@@ -72,6 +80,35 @@ def test_identical_numerics_is_asserted_not_assumed():
     assert not moved["identical_numerics"]
     assert moved["numeric_drift"][0]["treatment"] == pytest.approx(3.0e-06)
     assert "do not agree numerically" in mod.markdown(moved, "c", "t")
+
+
+def test_a_numeric_move_inside_the_repeats_own_scatter_is_not_a_disagreement():
+    # The CPU-vs-GPU delta is a difference of two threaded reductions, so its
+    # last digits move between repeats of a single build. Demanding exact
+    # equality across builds would report that wobble as a correctness change.
+    control = row(delta=5.0e-08, delta_repeats=[4.0e-08, 5.0e-08, 6.0e-08])
+    treatment = row(delta=5.04e-08, delta_repeats=[4.1e-08, 5.04e-08, 6.1e-08])
+    payload = mod.compare(summary(control), summary(treatment))
+    assert payload["identical_numerics"]
+    assert payload["rows"][0]["max_abs_delta_hartree"]["scatter_measured"] is True
+    assert "within" in mod.markdown(payload, "c", "t")
+
+
+def test_a_numeric_move_beyond_the_scatter_is_still_caught():
+    control = row(delta=5.0e-08, delta_repeats=[4.99e-08, 5.0e-08, 5.01e-08])
+    treatment = row(delta=9.0e-08, delta_repeats=[8.99e-08, 9.0e-08, 9.01e-08])
+    payload = mod.compare(summary(control), summary(treatment))
+    assert not payload["identical_numerics"]
+    assert payload["numeric_drift"][0]["noise_band"] == pytest.approx(2.0e-10)
+    assert "scatter" in mod.markdown(payload, "c", "t")
+
+
+def test_without_per_repeat_deltas_the_comparison_stays_exact():
+    # No `components` block means the scatter was never measured, and the
+    # honest fallback is the strict test rather than an invented tolerance.
+    payload = mod.compare(summary(row(delta=5.0e-08)), summary(row(delta=5.000001e-08)))
+    assert not payload["identical_numerics"]
+    assert payload["rows"][0]["max_abs_delta_hartree"]["scatter_measured"] is False
 
 
 def test_cases_present_in_only_one_job_are_named_rather_than_dropped():
