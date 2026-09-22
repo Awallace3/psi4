@@ -356,7 +356,7 @@ void DFHelper::prepare_sparsity() {
     size_t screen_threads = (nthreads_ == 1 ? 1 : 2);  // TODO: Replace screen_threads with nthreads_?
     auto rifactory = std::make_shared<IntegralFactory>(primary_, primary_, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(screen_threads);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    eri[0] = std::shared_ptr<TwoBodyAOInt>(use_omega_eri_ ? rifactory->erf_eri(omega_) : rifactory->eri());
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
 #pragma omp parallel num_threads(screen_threads) if (nbf_ > 1000)
     {
@@ -465,7 +465,7 @@ void DFHelper::prepare_AO() {
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    eri[0] = std::shared_ptr<TwoBodyAOInt>(use_omega_eri_ ? rifactory->erf_eri(omega_) : rifactory->eri());
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
     for(int rank = 1; rank < nthreads_; rank++) {
         eri[rank] = std::shared_ptr<TwoBodyAOInt>(eri.front()->clone());
@@ -537,7 +537,7 @@ void DFHelper::prepare_AO_wK() {
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    eri[0] = std::shared_ptr<TwoBodyAOInt>(use_omega_eri_ ? rifactory->erf_eri(omega_) : rifactory->eri());
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
 #pragma omp parallel num_threads(nthreads_)
     {
@@ -569,7 +569,7 @@ void DFHelper::prepare_AO_core() {
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
     auto rifactory = std::make_shared<IntegralFactory>(aux_, zero, primary_, primary_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    eri[0] = std::shared_ptr<TwoBodyAOInt>(use_omega_eri_ ? rifactory->erf_eri(omega_) : rifactory->eri());
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
 #pragma omp parallel num_threads(nthreads_)
     {
@@ -647,7 +647,7 @@ void DFHelper::prepare_AO_wK_core() {
     std::vector<std::shared_ptr<TwoBodyAOInt>> eri(nthreads_);
     std::vector<std::shared_ptr<TwoBodyAOInt>> weri(nthreads_);
 
-    eri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->eri());
+    eri[0] = std::shared_ptr<TwoBodyAOInt>(use_omega_eri_ ? rifactory->erf_eri(omega_) : rifactory->eri());
     if (!(eri.front()->sieve_initialized())) eri.front()->initialize_sieve();
 
     weri[0] = std::shared_ptr<TwoBodyAOInt>(rifactory->erf_eri(omega_));
@@ -1457,7 +1457,10 @@ void DFHelper::grab_AO(const size_t start, const size_t stop, double* Mp) {
 }
 void DFHelper::prepare_metric_core() {
     timer_on("DFH: metric construction");
-    FittingMetric J(aux_, true);
+    // When the 3-index integrals are erf-attenuated, the fitting metric must be
+    // attenuated with the same omega. Mixing (ar|w|R) with a plain Coulomb J^-1
+    // yields an effective range separation of omega/sqrt(2), not omega.
+    FittingMetric J(aux_, use_omega_eri_ ? omega_ : 0.0, true);
     J.form_fitting_metric();
     metrics_[1.0] = J.get_metric();
     timer_off("DFH: metric construction");
@@ -1486,7 +1489,9 @@ double* DFHelper::metric_prep_core(double m_pow) {
 }
 void DFHelper::prepare_metric() {
     // construct metric
-    FittingMetric J(aux_, true);
+    // See prepare_metric_core(): the metric has to carry the same omega as the
+    // 3-index integrals, otherwise the fit reproduces erf(omega*r/sqrt(2))/r.
+    FittingMetric J(aux_, use_omega_eri_ ? omega_ : 0.0, true);
     J.form_fitting_metric();
     auto metric = J.get_metric();
     auto Mp = metric->pointer()[0];

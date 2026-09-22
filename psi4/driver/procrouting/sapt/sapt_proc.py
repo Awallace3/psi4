@@ -35,6 +35,7 @@ from ...constants import constants
 from ...p4util.exceptions import ValidationError
 from ..empirical_disp import edisp_interaction_energy
 from .. import proc_util
+from ..dft import build_superfunctional
 from ..proc import (
     _set_external_potentials_to_wavefunction,
     run_scf,
@@ -188,7 +189,10 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         do_mon_grac_shift_B = True
 
     sapt_dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
+    sapt_sup = build_superfunctional(sapt_dft_functional.lower(), True, npoints=1, deriv=1)[0]
+    functional_needs_vv10 = sapt_sup.needs_vv10()
     e_disp_param_name = None
+    do_vv10 = False
     supported_functionals_edisp = ["hf", "pbe0", "b3lyp"]
 
     # SAPT_DFT_D4_IE and SAPT_DFT_D3_IE control whether to run -D3/-D4.
@@ -301,6 +305,19 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             )
         # # Re-prepare options after local option changes
         # core.prepare_options_for_module("SAPT")
+    elif "-VV10" in name.upper():
+        core.print_out(r"DFT-VV10(SAPT): $\Delta$-DFT+VV10 for dispersion")
+        core.set_global_option("SAPT_DFT_DO_DISP", 0)
+        core.set_global_option("SAPT_DFT_DO_DDFT", 1)
+        do_vv10 = True
+
+
+    if functional_needs_vv10 and "-VV10" not in name.upper():
+        raise ValidationError(
+            "SAPT(DFT): functionals with an intrinsic VV10 term (for example, wb97m-v) "
+            "are not supported through plain SAPT(DFT) because VV10 conflicts with the "
+            "natural FDDS dispersion model. Use DFT-VV10(SAPT) instead."
+        )
 
     do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
     do_disp = core.get_option("SAPT", "SAPT_DFT_DO_DISP")
@@ -815,6 +832,9 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     sapt_jk = wfn_B.jk()
     wfn_A.set_jk(sapt_jk)
 
+    # Bound unconditionally: the VV10 branch below checks it even when the
+    # delta-DFT segment is skipped.
+    dft_wfn_dimer = None
     if do_delta_dft and do_dft:
         optstash2 = p4util.OptionsState(
             ["SCF_TYPE"],
@@ -853,7 +873,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                 "C": construct_external_potential_in_field_C([ext_pot_C, ext_pot_B_not_in_C])
             }
 
-        run_scf(
+        dft_wfn_dimer = run_scf(
             sapt_dft_functional.lower(),
             molecule=sapt_dimer,
             jk=sapt_jk,
@@ -940,6 +960,52 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             data=data,
         )
         core.timer_off("SAPT(DFT):D3 Interaction Energy")
+    elif do_vv10:
+        core.print_out("\n")
+        core.print_out(
+            "         ---------------------------------------------------------\n"
+        )
+        core.print_out(
+            "         " + "SAPT(DFT): VV10 Interaction Energy".center(58) + "\n"
+        )
+        core.print_out("\n")
+        core.timer_on("SAPT(DFT):VV10 Interaction Energy")
+        if dft_wfn_dimer is None:
+            raise ValidationError(
+                "SAPT(DFT): DFT-VV10(SAPT) requires delta-DFT wavefunctions "
+                "(set SAPT_DFT_DO_DDFT=True or use DFT-VV10(SAPT) method name)."
+            )
+
+        # VV10 is a nonlocal density functional; its energy changes when the
+        # basis is extended with ghost atoms.  Using bare monomer wavefunctions
+        # (monomer basis) against a dimer wavefunction (full dimer basis) would
+        # produce large BSSE artefacts.  Instead, run CP-corrected monomer SCFs
+        # in the full dimer basis so the supermolecular subtraction is
+        # internally consistent.
+        core.print_out(
+            "         VV10: running CP-corrected monomer SCFs in dimer basis\n\n"
+        )
+        core.timer_on("SAPT(DFT):VV10 Monomer A CP")
+        monomerA_cp = sapt_dimer.extract_subsets(1, 2)
+        dft_wfn_monomerA_cp = run_scf(
+            sapt_dft_functional.lower(), molecule=monomerA_cp, jk=sapt_jk
+        )
+        core.timer_off("SAPT(DFT):VV10 Monomer A CP")
+
+        core.timer_on("SAPT(DFT):VV10 Monomer B CP")
+        monomerB_cp = sapt_dimer.extract_subsets(2, 1)
+        dft_wfn_monomerB_cp = run_scf(
+            sapt_dft_functional.lower(), molecule=monomerB_cp, jk=sapt_jk
+        )
+        core.timer_off("SAPT(DFT):VV10 Monomer B CP")
+
+        edisp_interaction_energy.sapt_dft_vv10_interaction_energy(
+            dimer_wfn=dft_wfn_dimer,
+            monomerA_wfn=dft_wfn_monomerA_cp,
+            monomerB_wfn=dft_wfn_monomerB_cp,
+            data=data,
+        )
+        core.timer_off("SAPT(DFT):VV10 Interaction Energy")
 
     core.set_global_option("SAVE_JK", False)
     core.set_global_option("DFT_GRAC_SHIFT", 0.0)
@@ -1414,38 +1480,66 @@ def sapt_dft(
     if print_header:
         sapt_dft_header()
 
+    # SAPT exchange terms are expectation values of the exact 1/r12 operator, so
+    # they always use the full K. wK is needed only for the CPKS kernel of an
+    # LRC monomer (RHF::twoel_Hx_full applies -x_alpha*K - x_beta*wK).
+    lrc_A = wfn_A.functional().is_x_lrc()
+    omega_A = wfn_A.functional().x_omega() if lrc_A else 0.0
+    lrc_B = wfn_B.functional().is_x_lrc()
+    omega_B = wfn_B.functional().x_omega() if lrc_B else 0.0
+
+    def _build_sapt_jk(omega):
+        jk_new = core.JK.build(dimer_wfn.basisset())
+        jk_new.set_do_J(True)
+        jk_new.set_do_K(True)
+        if omega:
+            jk_new.set_do_wK(True)
+            jk_new.set_omega(omega)
+        # SAPT reads J(), K() and wK() separately; wcombine folds x_alpha*K +
+        # x_beta*wK into wK() and zeroes K(), which would silently destroy the
+        # exchange terms.
+        jk_new.set_wcombine(False)
+        jk_new.initialize()
+        jk_new.print_header()
+        return jk_new
+
     if sapt_jk is None:
         core.print_out("\n   => Building SAPT JK object <= \n\n")
-        sapt_jk = core.JK.build(dimer_wfn.basisset())
-        sapt_jk.set_do_J(True)
-        sapt_jk.set_do_K(True)
-        if wfn_A.functional().is_x_lrc():
-            sapt_jk.set_do_wK(True)
-            sapt_jk.set_omega(wfn_A.functional().x_omega())
-        sapt_jk.initialize()
-        sapt_jk.print_header()
-        if wfn_B.functional().is_x_lrc() and (
-            wfn_A.functional().x_omega() != wfn_B.functional().x_omega()
-        ):
-            core.print_out("   => Monomer B: Building SAPT JK object <= \n\n")
-            core.print_out("      Reason: MonomerA Omega != MonomerB Omega\n\n")
-            sapt_jk_B = core.JK.build(dimer_wfn.basisset())
-            sapt_jk_B.set_do_J(True)
-            sapt_jk_B.set_do_K(True)
-            sapt_jk_B.set_do_wK(True)
-            sapt_jk_B.set_omega(wfn_B.functional().x_omega())
-            sapt_jk_B.initialize()
-            sapt_jk_B.print_header()
-
+        sapt_jk = _build_sapt_jk(omega_A)
     else:
-        sapt_jk.set_do_K(True)
+        # A JK handed down from the monomer SCF. Per jk.h, set_do_X() only takes
+        # effect before initialize() -- calling set_do_wK() on a live object
+        # leaves the erf-attenuated 3-index tensors unbuilt. So validate the
+        # reused object and rebuild it if it cannot supply what we need.
+        # A functional with x_alpha = 0 (wB97, wB97X-D3, ...) carries no full K
+        # at all: its SCF JK was built with do_K = False. SAPT exchange needs
+        # the full 1/r12 K regardless of the functional, so that object cannot
+        # be reused either.
+        has_K = sapt_jk.get_do_K()
+        has_wK = (not lrc_A) or (
+            sapt_jk.get_do_wK() and abs(sapt_jk.get_omega() - omega_A) < 1.0e-12
+        )
+        reusable = has_K and has_wK
+        if not reusable:
+            reason = "lacks K" if not has_K else "lacks wK at omega = %.4f" % omega_A
+            core.print_out("\n   => Rebuilding SAPT JK object <= \n\n")
+            core.print_out("      Reason: reused JK %s\n\n" % reason)
+            sapt_jk = _build_sapt_jk(omega_A)
+            wfn_A.set_jk(sapt_jk)
+            wfn_B.set_jk(sapt_jk)
+        elif sapt_jk.get_wcombine():
+            raise ValidationError(
+                "SAPT(DFT) cannot use a JK object with WCOMBINE enabled: it folds "
+                "x_alpha*K + x_beta*wK into wK() and zeroes K(), but SAPT needs the "
+                "full 1/r12 exchange matrix. Set WCOMBINE to false."
+            )
 
-    sapt_jk.set_do_J(True)
-    sapt_jk.set_do_K(True)
-
-    if wfn_A.functional().is_x_lrc():
-        sapt_jk.set_do_wK(True)
-        sapt_jk.set_omega(wfn_A.functional().x_omega())
+    # Monomer B needs its own JK whenever its omega differs from the one sapt_jk
+    # was built with -- including the case where A is not range separated at all.
+    if lrc_B and omega_B != omega_A and sapt_jk_B is None:
+        core.print_out("   => Monomer B: Building SAPT JK object <= \n\n")
+        core.print_out("      Reason: MonomerA Omega != MonomerB Omega\n\n")
+        sapt_jk_B = _build_sapt_jk(omega_B)
 
     use_einsums = core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS")
 
@@ -1653,22 +1747,10 @@ def sapt_dft(
         is_x_hybrid = wfn_B.functional().is_x_hybrid()
         is_x_lrc = wfn_B.functional().is_x_lrc()
         hybrid_specified = core.has_option_changed("SAPT", "SAPT_DFT_DO_HYBRID")
-        if is_x_lrc:
-            if do_hybrid:
-                if hybrid_specified:
-                    raise ValidationError(
-                        "SAPT(DFT): Hybrid xc kernel not yet implemented for range-separated funtionals."
-                    )
-                else:
-                    core.print_out(
-                        "Warning: Hybrid xc kernel not yet implemented for range-separated funtionals; hybrid kernel capability is turned off.\n"
-                    )
-            is_hybrid = False
+        if do_hybrid:
+            is_hybrid = is_x_hybrid
         else:
-            if do_hybrid:
-                is_hybrid = is_x_hybrid
-            else:
-                is_hybrid = False
+            is_hybrid = False
 
         # Dispersion
         core.timer_on("SAPT(DFT):disp")
@@ -1686,10 +1768,13 @@ def sapt_dft(
             core.timer_on("FDDS disp")
             core.print_out("\n")
             x_alpha = wfn_B.functional().x_alpha()
+            x_beta = wfn_B.functional().x_beta() if is_x_lrc else 0.0
+            omega = wfn_B.functional().x_omega() if is_x_lrc else 0.0
             if not is_hybrid:
                 x_alpha = 0.0
+                x_beta = 0.0
             fdds_disp = sapt_mp2.df_fdds_dispersion(
-                primary_basis, aux_basis, cache, is_hybrid, x_alpha
+                primary_basis, aux_basis, cache, is_hybrid, x_alpha, x_beta, is_x_lrc, omega
             )
             data.update(fdds_disp)
             nfrozen_A = 0

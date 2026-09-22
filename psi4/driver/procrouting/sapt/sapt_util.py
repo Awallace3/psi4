@@ -224,18 +224,38 @@ def print_sapt_dft_summary(
         empirical_disp_key = "D4 IE"
     elif "D3 IE" in data:
         empirical_disp_key = "D3 IE"
+    elif "VV10 IE" in data:
+        empirical_disp_key = "VV10 IE"
+
+    empirical_disp_label = empirical_disp_key
+    if empirical_disp_key in {"D3 IE", "D4 IE"}:
+        empirical_disp_label = f"G{empirical_disp_key}"
 
     if empirical_disp_key and not do_disp and do_delta_dft:
-        disp = (
-            data[empirical_disp_key]
-            + data["Delta DFT Correction"]
-            - data.get("Delta HF Correction", 0.0)
-        )
-        ret += print_sapt_var("Dispersion", disp) + "\n"
-        ret += print_sapt_var("  delta DFT,r (2)", data["Delta DFT Correction"]) + "\n"
         subtract_delta_hf_for_total_dispersion = -data.get("Delta HF Correction", 0.0)
-        ret += print_sapt_var("  -delta HF,r (2)", subtract_delta_hf_for_total_dispersion) + "\n"
-        ret += print_sapt_var(f"  G{empirical_disp_key}", data[empirical_disp_key]) + "\n"
+
+        if empirical_disp_key == "VV10 IE":
+            # For VV10-native functionals, Delta DFT already reconstructs the
+            # full CP-corrected supermolecular interaction energy, which
+            # includes VV10. Keep the VV10 interaction energy visible in the
+            # dispersion breakdown, but subtract it from the displayed delta-DFT
+            # contribution so the total is not double counted.
+            delta_dft_no_vv10 = data["Delta DFT Correction"] - data[empirical_disp_key]
+            disp = data["Delta DFT Correction"] - data.get("Delta HF Correction", 0.0)
+            ret += print_sapt_var("Dispersion", disp) + "\n"
+            ret += print_sapt_var("  delta DFT,r (2) excl. VV10", delta_dft_no_vv10) + "\n"
+            ret += print_sapt_var("  -delta HF,r (2)", subtract_delta_hf_for_total_dispersion) + "\n"
+            ret += print_sapt_var(f"  {empirical_disp_label}", data[empirical_disp_key]) + "\n"
+        else:
+            disp = (
+                data[empirical_disp_key]
+                + data["Delta DFT Correction"]
+                - data.get("Delta HF Correction", 0.0)
+            )
+            ret += print_sapt_var("Dispersion", disp) + "\n"
+            ret += print_sapt_var("  delta DFT,r (2)", data["Delta DFT Correction"]) + "\n"
+            ret += print_sapt_var("  -delta HF,r (2)", subtract_delta_hf_for_total_dispersion) + "\n"
+            ret += print_sapt_var(f"  {empirical_disp_label}", data[empirical_disp_key]) + "\n"
     elif empirical_disp_key and not do_disp:
         disp = data[empirical_disp_key]
         ret += print_sapt_var("Dispersion", disp) + "\n"
@@ -248,6 +268,10 @@ def print_sapt_dft_summary(
         ret += "      ---------------" + "\n"
         ret += print_sapt_var(f"  {empirical_disp_key}", data[empirical_disp_key]) + "\n"
 
+
+    if empirical_disp_key is not None:
+        core.set_variable(empirical_disp_key, data[empirical_disp_key])
+        dimer_wfn.set_variable(empirical_disp_key, data[empirical_disp_key])
 
     ret += "\n"
     core.set_variable("SAPT DISP ENERGY", disp)

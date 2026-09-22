@@ -462,6 +462,7 @@ class PSI_API JK {
     */
     virtual void set_do_wK(bool do_wK) { do_wK_ = do_wK; }
     bool get_do_wK() {return do_wK_;}
+    bool get_do_K() {return do_K_;}
     /**
     * Set to combine wK integral tensors
     * @param wcombine do we combine wK matrices?

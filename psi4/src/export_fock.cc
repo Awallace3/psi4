@@ -81,6 +81,8 @@ void export_fock(py::module &m) {
         .def("set_do_J", &JK::set_do_J)
         .def("set_do_K", &JK::set_do_K)
         .def("set_do_wK", &JK::set_do_wK)
+        .def("get_do_wK", &JK::get_do_wK, "Are range-separated exchange (wK) matrices built?")
+        .def("get_do_K", &JK::get_do_K, "Are full 1/r12 exchange (K) matrices built?")
         .def("set_omega", &JK::set_omega, "Dampening term for range separated DFT", "omega"_a)
         .def("get_omega", &JK::get_omega, "Dampening term for range separated DFT")
         .def("set_wcombine", &JK::set_wcombine, "Are Exchange terms in one Matrix", "wcombine"_a )
