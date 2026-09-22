@@ -92,6 +92,9 @@ class PSI_API DFHelper {
     /// Returns the number of doubles in the *screened* AO integrals
     size_t get_AO_size() { return big_skips_[nbf_]; }
 
+    /// Returns the in-core AO integrals currently held, in doubles, as reported to the memory ledger
+    size_t get_AO_held() const { return core_claim_.held(); }
+
     /// Returns the size of the in-core version in doubles
     size_t get_core_size() {
         AO_core(false);
@@ -117,6 +120,18 @@ class PSI_API DFHelper {
     /// metric contraction step, like SAPT(DFT), can call this to free
     /// up memory for storing intermediates during metric contraction.
     void set_release_core_AO_before_metric(bool release) { release_core_AO_before_metric_ = release; }
+
+    /// Sets the flag to unlink each tensor's pre-metric scratch copy as soon as
+    /// the metric has been folded into it, instead of holding every one of them
+    /// until clear_all().  A disk-backed transform otherwise keeps two full
+    /// copies of every tensor on scratch, which doubles the disk a large job
+    /// needs.
+    ///
+    /// Off by default only to keep the extra unlink off callers that do not need
+    /// the space.  A caller that transforms the same name again must re-register
+    /// it with add_transformation() first -- which it should be doing anyway, so
+    /// that sizes_ describes the spaces actually being transformed.
+    void set_release_pre_metric_tensors(bool release) { release_pre_metric_tensors_ = release; }
 
     ///
     /// Sets the MO integrals to in-core. (Defaults to FALSE)
@@ -354,6 +369,7 @@ class PSI_API DFHelper {
     bool AO_core_ = true;
     bool MO_core_ = false;
     bool release_core_AO_before_metric_ = false;
+    bool release_pre_metric_tensors_ = false;
     size_t nthreads_ = 1;
     double cutoff_ = 1e-12;
     double condition_ = 1e-12;
