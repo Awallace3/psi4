@@ -2527,7 +2527,32 @@ def fdisp0(
     K_B = cache["K_B"]
     K_O = cache["K_O"]
 
-    aux_basis = dimer_wfn.get_basisset("DF_BASIS_SCF")
+    # Dispersion fits an MP2-like (ar|bs) amplitude, so it takes the RI
+    # auxiliary basis that FISAPT::fdisp takes, not the JKFIT DF_BASIS_SCF set
+    # that the electrostatics, exchange and induction terms above share.  Built
+    # exactly as the FISAPT branch of the SAPT(DFT) driver builds it, so the two
+    # F-SAPT(DFT) dispersion routes fit in the same basis and their energies are
+    # comparable.  Aside from being the right fitting set, RIFIT is roughly a
+    # third smaller than JKFIT, and that factor lands on every DF transformation
+    # below as well as on the (r,s) blocking -- at 1555 primary functions it is
+    # the difference between reading the DF tensors once and reading them four
+    # times.
+    #
+    # Leave puream alone.  BasisSet.build defaults to -1, "use the fitting set's
+    # own angular momentum convention", which is what the driver's DF_BASIS_SAPT
+    # build does and therefore what FISAPT::fdisp fits in.  Forcing the RI set to
+    # follow the orbital basis instead silently rebuilds it in the orbital
+    # basis's convention: with a Cartesian orbital basis such as 6-31G** that
+    # turns the spherical cc-pvdz-ri into a Cartesian one, 2800 functions into
+    # 3234, which both perturbs the fitted dispersion and puts 15% more work
+    # through every DF transformation and block GEMM than the C++ route does.
+    aux_basis = core.BasisSet.build(
+        mol,
+        "DF_BASIS_MP2",
+        core.get_option("DFMP2", "DF_BASIS_MP2"),
+        "RIFIT",
+        core.get_global_option("BASIS"),
+    )
     nQ = aux_basis.nbf()
 
     # => Auxiliary C and V matrices <= #
@@ -2667,8 +2692,7 @@ def fdisp0(
     # All should have same number of rows (AO basis)
     nrows = orbital_spaces[0].shape[0]
 
-    # Initialize DFHelper
-    aux_basis = dimer_wfn.get_basisset("DF_BASIS_SCF")
+    # Initialize DFHelper on the RI basis selected above
     dfh = core.DFHelper(dimer_basis, aux_basis)
 
     # Set memory: total available minus space needed for orbital matrices
