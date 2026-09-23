@@ -225,17 +225,12 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
     if (round1_algo == "AUTO") round1_algo = "STORE";
     if (round1_algo == "LEGACY") round1_algo = (is_hybrid_ ? "DIRECT" : "DIRECT_iaQ");
     if (round1_algo == "DIRECT_IAQ") round1_algo = "DIRECT_iaQ";
-    if (round1_algo == "DIRECT_iaQ" && is_hybrid_) {
-        // DFHelper::filename_maker() gives every DIRECT_iaQ transformation the
-        // (p,q,Q) final layout and ignores the requested op, so the "Qpq"
-        // tensors the hybrid path needs for the QR factorisation come out
-        // transposed.  That is why LEGACY uses DIRECT for hybrids; say so
-        // rather than handing back a silently mis-shaped tensor.
-        throw PSIEXCEPTION(
-            "SAPT_FDDS_DISP_DF_ALGORITHM DIRECT_IAQ cannot be used with a hybrid functional: DFHelper's "
-            "DIRECT_iaQ layout cannot produce the (Q|ar) ordering the QR factorization requires. Use STORE "
-            "(default), DIRECT, or LEGACY.");
-    }
+    // DFHelper::filename_maker() gives every DIRECT_iaQ transformation the
+    // (p,q,Q) final layout and ignores the requested op, which is why the hybrid
+    // round used to need DIRECT: it asked for a "Qpq" tensor.  It no longer does
+    // -- every transformation below is "pqQ" -- so DIRECT_iaQ is legal for
+    // hybrids too.  LEGACY still maps to DIRECT there, because its job is to
+    // reproduce what this code did before, not to be the best available choice.
     // The hybrid second round only ever had a dense option; give it the sparse
     // one when it is available and leave it alone otherwise.
     std::string round2_algo = (round1_algo == "STORE" ? "STORE" : "DIRECT_iaQ");
@@ -264,8 +259,12 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
     if (is_hybrid_) {
         dfh_->add_transformation("raQ", "r", "a", "pqQ");
         dfh_->add_transformation("sbQ", "s", "b", "pqQ");
-        dfh_->add_transformation("Qar", "a", "r", "Qpq");
-        dfh_->add_transformation("Qbs", "b", "s", "Qpq");
+        // (Q|ar) used to be transformed a third time, into its own scratch file,
+        // purely so QR() could read it column-major.  It holds exactly the same
+        // numbers as (ar|Q), which is transformed here anyway and outlives the
+        // whole method, so QR() transposes that instead.  One fewer MO transform
+        // per monomer, and 37 GiB of scratch never written on a protein-sized
+        // dimer.
     }
 
     // transform
@@ -1070,17 +1069,17 @@ SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
 
     // => Configuration <= //
 
-    std::string Qar_name, QarQ_name, QraQ_name;
+    std::string arQ_name, QarQ_name, QraQ_name;
     SharedVector eps_occ, eps_vir;
     
     if (monomer == "A") {
-        Qar_name = "Qar";
+        arQ_name = "arQ";
         QarQ_name = "QarQ";
         QraQ_name = "QraQ";
         eps_occ = vector_cache_["eps_occ_A"];
         eps_vir = vector_cache_["eps_vir_A"];
     } else if (monomer == "B") {
-        Qar_name = "Qbs";
+        arQ_name = "bsQ";
         QarQ_name = "QbsQ";
         QraQ_name = "QsbQ";
         eps_occ = vector_cache_["eps_occ_B"];
@@ -1097,6 +1096,11 @@ SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
     size_t naux = auxiliary_->nbf();    
     size_t nov = nocc * nvir;
 
+    int nthread = 1;
+#ifdef _OPENMP
+    nthread = Process::environment.get_n_threads();
+#endif
+
     // => Meomry Check <= //
 
     size_t doubles = available_doubles();
@@ -1107,12 +1111,32 @@ SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
 
     // => Tensor Slices <= //
 
+    // DGEQRF wants (ar|Q) column-major, which is (Q|ar) row-major.  Rather than
+    // keep a second, transposed copy of the same integrals on disk, read (ar|Q)
+    // a block of occupieds at a time -- that is a contiguous read, since a is
+    // its leading index -- and scatter each block into place.  The blocking is
+    // only here to bound the read buffer; it does not change what is built.
     auto Qar = std::make_shared<Matrix>("Qar", naux, nov); 
-    dfh_->fill_tensor(Qar_name, Qar, {0, naux});
-    // QR is the only consumer of (Q|ar), and it has just read the whole thing
-    // into core.  On a protein-sized dimer the two monomers' copies are 37 GiB
-    // of scratch that would otherwise sit untouched until the calculation ends.
-    dfh_->release_tensor(Qar_name);
+    double** Qarp_fill = Qar->pointer();
+    {
+        // Q (nov * naux) is allocated below and the check above already reserved
+        // it, so that much of the budget is what this buffer may borrow.
+        size_t per_occ = nvir * naux;
+        size_t maxa = (per_occ ? (nov * naux) / per_occ : nocc);
+        maxa = (maxa < 1 ? 1 : (maxa > nocc ? nocc : maxa));
+        auto blk = std::make_shared<Matrix>("arQ block", maxa * nvir, naux);
+        double** blkp = blk->pointer();
+        for (size_t astart = 0; astart < nocc; astart += maxa) {
+            size_t na = (astart + maxa >= nocc ? nocc - astart : maxa);
+            dfh_->fill_tensor(arQ_name, blk, {astart, astart + na});
+#pragma omp parallel for num_threads(nthread) schedule(static)
+            for (size_t Q = 0; Q < naux; Q++) {
+                for (size_t ar = 0; ar < na * nvir; ar++) {
+                    Qarp_fill[Q][astart * nvir + ar] = blkp[ar][Q];
+                }
+            }
+        }
+    }
 
     // => Target <= //
     auto Q = std::make_shared<Matrix>("Q", nov, naux);

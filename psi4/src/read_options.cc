@@ -1254,9 +1254,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         are the older paths, which write every transformed tensor twice and,
         for DIRECT_IAQ, store the AO integrals densely.  LEGACY reproduces the
         pre-screening choice exactly: DIRECT for the first round of a hybrid
-        functional, DIRECT_IAQ otherwise.  DIRECT_IAQ cannot be requested for a
-        hybrid functional at all: its layout cannot express the (Q|ar) ordering
-        the QR factorization needs.  AUTO picks STORE. !expert -*/
+        functional, DIRECT_IAQ otherwise.  AUTO picks STORE. !expert -*/
         options.add_str("SAPT_FDDS_DISP_DF_ALGORITHM", "AUTO", "AUTO STORE DIRECT DIRECT_IAQ LEGACY");
         /*- FSAPT localization through SAPT(DFT)? Set SAPTDFT for PyEinsums
          f-terms or use an FISAPT object (C++ side) for f-terms.
