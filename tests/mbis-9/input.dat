@@ -1,0 +1,151 @@
+#! MBIS volume ratios for one-atom inputs
+#
+# A one-atom input used to be treated as a free atom by fiat: MBIS VOLUME RATIOS was skipped
+# entirely, so a caller that asked for it got a successful calculation with the answer missing.
+# But "one atom" and "free atom" are not the same claim. The ratio is 1 only for a neutral atom
+# in its reference multiplicity; an ion has a genuinely different volume from the neutral atom
+# it is compared against, and that number is the whole point of asking.
+#
+# Pinned here: the ratio is produced at all, it is 1 for the neutral reference atoms (the value
+# the old short-circuit assumed), and it is not 1 for an anion.
+#
+# The second half pins a separate lookup bug at the same site. The free-atom volumes are stored
+# under the element symbol, but were read back under the input label, so any molecule written
+# with custom labels ("O1", "H1", ...) died with "MBIS FREE ATOM O1 VOLUME was not set".
+#
+# The third half checks that the free-atom volume cache is honest: that a hit reproduces the
+# computation it replaced exactly, and that changing something the volume depends on misses.
+
+import numpy as np
+import os
+
+# Keep this test's free-atom cache inside its own working directory. The cache is on by default
+# and would otherwise write into the installation's own share directory while the suite runs, and
+# the second half of this test needs a directory whose contents it controls.
+os.environ["PSI4_FREE_ATOM_CACHE"] = "READWRITE"
+os.environ["PSI4_FREE_ATOM_CACHE_PATH"] = os.path.join(os.getcwd(), "free_atom_cache")
+
+set {
+  scf_type df
+  d_convergence 8
+  e_convergence 10
+  mbis_radial_points 75
+  mbis_spherical_points 302
+  scf_properties ['MBIS_CHARGES', 'MBIS_VOLUME_RATIOS']
+}
+
+# Neutral atoms in their reference states: closed shell (Ne) and open shell (O, triplet, UKS).
+for label, mol_str, reference in (("Ne", "0 1\nNe 0.0 0.0 0.0\n", "rhf"),
+                                  ("O",  "0 3\nO  0.0 0.0 0.0\n", "uhf")):
+    atom = psi4.geometry(mol_str + "symmetry c1\nno_reorient\nno_com\n")
+    psi4.set_options({"reference": reference})
+    e, wfn = energy('pbe/cc-pvdz', return_wfn=True, molecule=atom)
+    vr = np.array(wfn.array_variable('MBIS VOLUME RATIOS'))
+    compare_values(1.0, vr[0, 0], 4, "free %s: volume ratio is 1" % label)              #TEST
+
+# An anion is a one-atom input but not a free atom: it is compared against the neutral atom and
+# must come out larger. The old code reported nothing at all here.
+anion = psi4.geometry("""
+-1 1
+Cl 0.0 0.0 0.0
+symmetry c1
+no_reorient
+no_com
+""")
+psi4.set_options({"reference": "rhf"})
+e, wfn = energy('pbe/cc-pvdz', return_wfn=True, molecule=anion)
+vr_anion = np.array(wfn.array_variable('MBIS VOLUME RATIOS'))[0, 0]
+compare(True, vr_anion > 1.2, "Cl- is more diffuse than free Cl (ratio %.4f)" % vr_anion)  #TEST
+
+# Custom atom labels must not break the free-atom lookup, and must give the same ratios as the
+# identical molecule written with bare element symbols.
+psi4.set_options({"reference": "rhf"})
+ratios = {}
+for key, first, second, third in (("plain", "O", "H", "H"), ("labeled", "O1", "H1", "H2")):
+    mol = psi4.geometry("""
+    0 1
+    %s 0.000000 0.000000 0.000000
+    %s 0.000000 0.000000 1.810000
+    %s 0.000000 1.810000 0.000000
+    symmetry c1
+    no_reorient
+    no_com
+    units bohr
+    """ % (first, second, third))
+    e, wfn = energy('pbe/cc-pvdz', return_wfn=True, molecule=mol)
+    ratios[key] = np.array(wfn.array_variable('MBIS VOLUME RATIOS'))
+
+compare_values(ratios["plain"], ratios["labeled"], 6,                                   #TEST
+               "labeled atoms give the same volume ratios as bare symbols")             #TEST
+
+
+# ==> The free-atom volume cache <==
+#
+# A free-atom volume depends on the element, the level of theory, the basis that element carries,
+# and the grid and convergence settings -- never on the molecule that asked for it -- so it is
+# cached between jobs. Two properties matter, and only the second is about speed:
+#
+#   * a hit is indistinguishable from the computation it replaced, and
+#   * anything that would make it distinguishable produces a miss instead.
+#
+# Both are checked by counting the atomic SCFs that actually run, which is the only thing that
+# distinguishes a hit from a recomputation that agrees. Note that the cache has to be warmed
+# deliberately: written instead as "call twice and compare", this would compare two cold runs and
+# would pass just as well with the cache ripped out.
+
+fac = psi4.driver.p4util.free_atom_cache
+prop_util = psi4.driver.p4util.prop_util
+
+atomic_runs = []
+_uncounted_run_free_atom = prop_util._run_free_atom
+
+def _counting_run_free_atom(*args, **kwargs):
+    atomic_runs.append(args[0])
+    return _uncounted_run_free_atom(*args, **kwargs)
+
+prop_util._run_free_atom = _counting_run_free_atom
+
+water = psi4.geometry("""
+0 1
+O 0.000000 0.000000 0.000000
+H 0.000000 0.000000 1.810000
+H 0.000000 1.810000 0.000000
+symmetry c1
+no_reorient
+no_com
+units bohr
+""")
+psi4.set_options({"reference": "rhf"})
+
+fac.clear()
+del atomic_runs[:]
+e, wfn = energy('pbe/cc-pvdz', return_wfn=True, molecule=water)
+cold_ratios = np.array(wfn.array_variable('MBIS VOLUME RATIOS'))
+compare(True, sorted(atomic_runs) == ["H", "O"],                                        #TEST
+        "empty cache: one free-atom computation per element")                           #TEST
+compare(2, len(fac.list_entries()), "empty cache: one entry written per element")       #TEST
+
+# Clearing only the in-memory half is what forces the next run to go through the files, which is
+# the path a separate job would take.
+fac.clear(memory_only=True)
+del atomic_runs[:]
+e, wfn = energy('pbe/cc-pvdz', return_wfn=True, molecule=water)
+warm_ratios = np.array(wfn.array_variable('MBIS VOLUME RATIOS'))
+compare(True, atomic_runs == [], "warm cache: no free-atom computation runs")           #TEST
+compare(True, np.array_equal(cold_ratios, warm_ratios),                                 #TEST
+        "warm cache: ratios are bit-for-bit the ones it replaced")                      #TEST
+
+# The other half of the bargain: a setting the volume depends on has to miss. A stale hit here
+# would be a systematic bias across every job sharing the cache, so the cache is built to prefer
+# a spurious miss in every doubtful case.
+fac.clear(memory_only=True)
+psi4.set_options({"mbis_radial_points": 99})
+del atomic_runs[:]
+energy('pbe/cc-pvdz', molecule=water)
+compare(True, sorted(atomic_runs) == ["H", "O"],                                        #TEST
+        "changed integration grid: recomputed rather than reused")                      #TEST
+compare(4, len(fac.list_entries()),                                                     #TEST
+        "changed integration grid: stored alongside, not over, the old entries")        #TEST
+
+prop_util._run_free_atom = _uncounted_run_free_atom
+fac.clear()
