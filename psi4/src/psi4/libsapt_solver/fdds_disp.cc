@@ -212,15 +212,42 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
     size_t max_MO = 0;
     for (auto& mat : Cstack_vec) max_MO = std::max(max_MO, (size_t)mat->ncol());
 
+    // The FDDS transforms dominate SAPT(DFT)'s memory and scratch footprint, so
+    // which DFHelper storage algorithm they use matters more here than anywhere
+    // else.  STORE is the only one that both keeps the AO integrals in the
+    // Schwarz-screened sparse layout -- DIRECT_iaQ stores them densely, which on
+    // a protein-sized dimer is a third explicit zeros -- and folds the fitting
+    // metric into the AO integrals, so each transformed tensor is written once,
+    // in final form, instead of being written, read back, contracted with the
+    // metric and written again.  Both rounds below want exactly that, so STORE
+    // is the default; the older paths stay reachable for comparison.
+    std::string round1_algo = options.get_str("SAPT_FDDS_DISP_DF_ALGORITHM");
+    if (round1_algo == "AUTO") round1_algo = "STORE";
+    if (round1_algo == "LEGACY") round1_algo = (is_hybrid_ ? "DIRECT" : "DIRECT_iaQ");
+    if (round1_algo == "DIRECT_IAQ") round1_algo = "DIRECT_iaQ";
+    if (round1_algo == "DIRECT_iaQ" && is_hybrid_) {
+        // DFHelper::filename_maker() gives every DIRECT_iaQ transformation the
+        // (p,q,Q) final layout and ignores the requested op, so the "Qpq"
+        // tensors the hybrid path needs for the QR factorisation come out
+        // transposed.  That is why LEGACY uses DIRECT for hybrids; say so
+        // rather than handing back a silently mis-shaped tensor.
+        throw PSIEXCEPTION(
+            "SAPT_FDDS_DISP_DF_ALGORITHM DIRECT_IAQ cannot be used with a hybrid functional: DFHelper's "
+            "DIRECT_iaQ layout cannot produce the (Q|ar) ordering the QR factorization requires. Use STORE "
+            "(default), DIRECT, or LEGACY.");
+    }
+    // The hybrid second round only ever had a dense option; give it the sparse
+    // one when it is available and leave it alone otherwise.
+    std::string round2_algo = (round1_algo == "STORE" ? "STORE" : "DIRECT_iaQ");
+
     // Build DFHelper
     dfh_ = std::make_shared<DFHelper>(primary_, auxiliary_);
     dfh_->set_memory(doubles);
-    if (is_hybrid_) {
-        dfh_->set_method("DIRECT");
-    } else {
-        dfh_->set_method("DIRECT_iaQ");
-    }
+    dfh_->set_method(round1_algo);
     dfh_->set_nthreads(nthread);
+    // Power zero: this round wants the bare three-index integrals, and DFHelper
+    // now recognises that as "no metric" rather than building and contracting an
+    // identity.
     dfh_->set_metric_pow(0.0);
     dfh_->initialize();
     dfh_->print_header();
@@ -243,11 +270,12 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
 
     // transform
     dfh_->set_release_core_AO_before_metric(true);
-    // Every name here is transformed exactly once -- the hybrid second round
-    // below starts from clear_transformations() -- so the pre-metric scratch
-    // copies can go as soon as the metric is folded into them.  That halves the
-    // scratch this transform needs, which is what a protein-sized dimer runs
-    // out of.  The flag is sticky, so it covers the second round too.
+    // Only the DIRECT/DIRECT_iaQ paths produce pre-metric scratch at all.  Every
+    // name here is transformed exactly once -- the hybrid second round below
+    // starts from clear_transformations() -- so those copies can go as soon as
+    // the metric is folded into them.  That halves the scratch those paths need,
+    // which is what a protein-sized dimer runs out of.  The flag is sticky, so
+    // it covers the second round too.
     dfh_->set_release_pre_metric_tensors(true);
     dfh_->transform();
 
@@ -259,7 +287,7 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
         // Clear transformations to avoid overwriting pqQ tensors 
         dfh_->clear_spaces();
         dfh_->clear_transformations();
-        dfh_->set_method("DIRECT_iaQ");
+        dfh_->set_method(round2_algo);
         dfh_->set_metric_pow(-0.5);
         dfh_->initialize();
 
@@ -891,6 +919,12 @@ void FDDS_Dispersion::form_X(std::string monomer) {
         dfh_->write_disk_tensor(XarQ_name, XarQ, {astart, astart + nablock});
         dfh_->write_disk_tensor(QXarQ_name, QXarQ, {astart, astart + nablock});
     }
+
+    // (ar|R) and (ar|Q|Q) exist only to build X; form_aux_matrices() reads
+    // (ar|Q), X and Y but never these.  Give the scratch back now rather than
+    // holding it through form_Y, which is where the footprint peaks.
+    dfh_->release_tensor(arR_name);
+    dfh_->release_tensor(QarQ_name);
 }
 
 void FDDS_Dispersion::form_Y(std::string monomer) {
@@ -1022,6 +1056,14 @@ void FDDS_Dispersion::form_Y(std::string monomer) {
         dfh_->write_disk_tensor(YarQ_name, YarQ, {astart, astart + nablock});
         dfh_->write_disk_tensor(QYarQ_name, QYarQ, {astart, astart + nablock});
     }
+
+    // Likewise for Y's inputs.  (rr|R) and (ss|R) are the two largest tensors
+    // the whole method produces -- 283 and 322 GiB on a protein-sized dimer --
+    // and this is their last read.
+    dfh_->release_tensor(aaR_name);
+    dfh_->release_tensor(rrR_name);
+    dfh_->release_tensor(raQ_name);
+    dfh_->release_tensor(QraQ_name);
 }
 
 SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
@@ -1067,6 +1109,10 @@ SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
 
     auto Qar = std::make_shared<Matrix>("Qar", naux, nov); 
     dfh_->fill_tensor(Qar_name, Qar, {0, naux});
+    // QR is the only consumer of (Q|ar), and it has just read the whole thing
+    // into core.  On a protein-sized dimer the two monomers' copies are 37 GiB
+    // of scratch that would otherwise sit untouched until the calculation ends.
+    dfh_->release_tensor(Qar_name);
 
     // => Target <= //
     auto Q = std::make_shared<Matrix>("Q", nov, naux);

@@ -483,15 +483,18 @@ void DFHelper::prepare_AO() {
     double* Fp = F.get();
 
     // grab metric
-    double* metp;
-    if (!hold_met_) {
-        metric = std::unique_ptr<double[]>(new double[naux_ * naux_]);
-        metp = metric.get();
-        std::string filename = return_metfile(mpower_);
-        get_tensor_(std::get<0>(files_[filename]), metp, 0, naux_ - 1, 0, naux_ - 1);
+    const bool fold_metric = !metric_is_identity();
+    double* metp = nullptr;
+    if (fold_metric) {
+        if (!hold_met_) {
+            metric = std::unique_ptr<double[]>(new double[naux_ * naux_]);
+            metp = metric.get();
+            std::string filename = return_metfile(mpower_);
+            get_tensor_(std::get<0>(files_[filename]), metp, 0, naux_ - 1, 0, naux_ - 1);
 
-    } else
-        metp = metric_prep_core(mpower_);
+        } else
+            metp = metric_prep_core(mpower_);
+    }
 
     // prepare files
     AO_filename_maker(1);
@@ -518,17 +521,21 @@ void DFHelper::prepare_AO() {
 
         // loop and contract
         timer_on("DFH: AO-Met. Contraction");
+        double* outp = Mp;
+        if (fold_metric) {
+            outp = Fp;
 #pragma omp parallel for num_threads(nthreads_) schedule(guided)
-        for (size_t j = 0; j < block_size; j++) {
-            size_t mi = small_skips_[begin + j];
-            size_t skips = big_skips_[begin + j] - big_skips_[begin];
-            C_DGEMM('N', 'N', naux_, mi, naux_, 1.0, metp, naux_, &Mp[skips], mi, 0.0, &Fp[skips], mi);
+            for (size_t j = 0; j < block_size; j++) {
+                size_t mi = small_skips_[begin + j];
+                size_t skips = big_skips_[begin + j] - big_skips_[begin];
+                C_DGEMM('N', 'N', naux_, mi, naux_, 1.0, metp, naux_, &Mp[skips], mi, 0.0, &Fp[skips], mi);
+            }
         }
         timer_off("DFH: AO-Met. Contraction");
         timer_off("DFH: Total Workflow");
 
         // put
-        put_tensor_AO(putf, Fp, size, count, op);
+        put_tensor_AO(putf, outp, size, count, op);
         count += size;
     }
 }
@@ -595,7 +602,11 @@ void DFHelper::prepare_AO_core() {
     double* ppq = Ppq_.get();
 
     // outfile->Printf("\n    ==> Begin AO Blocked Construction <==\n\n");
-    if (direct_iaQ_ || direct_) {
+    // STORE folds the metric into the AO tensor here, but only if there is a
+    // metric to fold.  With J^0 the symmetric two-pass build below would cost
+    // a full naux^2 x big_skips_ GEMM to multiply by the identity, so fall
+    // through to the same one-shot build the direct methods use.
+    if (direct_iaQ_ || direct_ || metric_is_identity()) {
         timer_on("DFH: AO Construction");
         if (direct_iaQ_) {
             compute_dense_Qpq_blocking_Q(0, Qshells_ - 1, &Ppq_[0], eri);
@@ -1816,6 +1827,29 @@ void DFHelper::clear_transformations() {
     transf_core_.clear();
 }
 
+void DFHelper::release_tensor(std::string name) {
+    // MO_core_ keeps the transformed tensor in RAM rather than on disk; there
+    // is no file to unlink, just a buffer to give back to the allocator.
+    transf_core_.erase(name);
+
+    auto entry = files_.find(name);
+    if (entry == files_.end()) return;
+
+    const std::string& pre_metric = std::get<0>(entry->second);
+    const std::string& final_file = std::get<1>(entry->second);
+
+    // ~StreamStruct() closes the handle and std::remove()s the file, so
+    // dropping the last reference here is what actually frees the scratch.
+    file_streams_.erase(pre_metric);
+    file_streams_.erase(final_file);
+
+    sizes_.erase(pre_metric);
+    sizes_.erase(final_file);
+    tsizes_.erase(final_file);
+    transf_.erase(name);
+    files_.erase(entry);
+}
+
 void DFHelper::clear_all() {
     // invokes destructors, eliminating all files.
     file_streams_.clear();
@@ -2121,7 +2155,7 @@ void DFHelper::transform() {
         update_core_claim();
     }
 
-    if (direct_iaQ_ || direct_) {
+    if (needs_metric_pass()) {
         // prepare metric
         std::unique_ptr<double[]> metric;
         double* metp;
@@ -2276,7 +2310,7 @@ void DFHelper::put_transformations_pQq(int begin, int end, int rblock_size, int 
     int lblock_size = rblock_size;
     std::string putf, op;
     if (!MO_core_) {
-        putf = (!direct_ ? std::get<1>(files_[order_[ind]]) : std::get<0>(files_[order_[ind]]));
+        putf = (!needs_metric_pass() ? std::get<1>(files_[order_[ind]]) : std::get<0>(files_[order_[ind]]));
         op = "wb";
         bcount = 0;
     } else {
