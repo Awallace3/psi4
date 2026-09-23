@@ -1,0 +1,592 @@
+#
+# @BEGIN LICENSE
+#
+# Psi4: an open-source quantum chemistry software package
+#
+# Copyright (c) 2007-2026 The Psi4 Developers.
+#
+# The copyrights for code used from other parties are included in
+# the corresponding files.
+#
+# This file is part of Psi4.
+#
+# Psi4 is free software; you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as published by
+# the Free Software Foundation, version 3.
+#
+# Psi4 is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License along
+# with Psi4; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# @END LICENSE
+#
+
+import collections
+from typing import Dict, List, Optional, Union
+
+import numpy as np
+import qcengine as qcng
+from qcelemental.models.v2 import AtomicInput
+
+from psi4 import core
+
+from ... import p4util
+from ...p4util.exceptions import ValidationError, UpgradeHelper
+from .xdm_params import available_xdm_bases, get_xdm_bj_params, normalize_xdm_model
+
+_engine_can_do = collections.OrderedDict([
+    # engine order establishes default for each disp
+    ("libdisp",  ["d1", "d2",                                                                                                               "chg", "das2009", "das2010",]),
+    ("s-dftd3",  [            "d3zero2b", "d3bj2b", "d3mzero2b", "d3mbj2b", "d3zeroatm", "d3bjatm", "d3mzeroatm", "d3mbjatm",                                           ]),
+    ("dftd3",    [      "d2", "d3zero2b", "d3bj2b", "d3mzero2b", "d3mbj2b",                                                                                             ]),
+    ("nl",       [                                                                                                                          "nl",                       ]),
+    ("mp2d",     [                                                                                                                          "dmp2",                     ]),
+    ("dftd4",    [                                                                                                            "d4bjeeqatm", "d4bjeeqtwo"                ]),
+    ("mctc-gcp", [                                                                                                                          "3c",                       ]),
+    ("gcp",      [                                                                                                                          "3c",                       ]),
+]) # yapf: disable
+_install_dftd3python = " Allow the default dispersion engine to run by removing 'engine=' and installing `conda install dftd3-python -c conda-forge`."
+_obsolete_engines = {
+    ("dftd3", "d2"): ("engine='dftd3'", "engine='libdisp'", "1.10",
+                      " Allow the default (internal) dispersion engine to run by removing 'engine='."),
+    ("dftd3", "d3zero2b"): ("engine='dftd3'", "engine='s-dftd3'", "1.10", _install_dftd3python),
+    ("dftd3", "d3bj2b"): ("engine='dftd3'", "engine='s-dftd3'", "1.10", _install_dftd3python),
+    ("dftd3", "d3mzero2b"): ("engine='dftd3'", "engine='s-dftd3'", "1.10", _install_dftd3python),
+    ("dftd3", "d3mbj2b"): ("engine='dftd3'", "engine='s-dftd3'", "1.10", _install_dftd3python),
+    ("gcp", "3c"):
+    ("engine='gcp'", "engine='mctc-gcp'", "1.10",
+     " Allow the default dispersion engine to run by removing 'engine=' and installing `conda install gcp-correction -c conda-forge`."
+     ),
+}
+
+
+def _capable_engines_for_disp() -> Dict[str, List[str]]:
+    """Invert _engine_can_do dictionary and check program detection.
+
+    Returns a dictionary with keys all dispersion levels and values a list of all
+    capable engines, where the engine in the first element is available, if any are.
+
+    """
+    try:
+        from qcengine.testing import _programs as _programs_qcng
+    except ModuleNotFoundError:
+        # _programs_qcng is up-to-date with current harnesses but it requires pytest present, so let's provide a workaround
+        from qcelemental.util import which, which_import
+        _programs_qcng = {
+            "dftd3": which("dftd3", return_bool=True),
+            "dftd4": which_import("dftd4", return_bool=True),
+            "s-dftd3": which_import("dftd3", return_bool=True),
+            "mctc-gcp": which("mctc-gcp", return_bool=True),
+            "gcp": which("gcp", return_bool=True),
+            "mp2d": which("mp2d", return_bool=True),
+        }
+
+    programs_disp = {k: v for k, v in _programs_qcng.items() if k in _engine_can_do}
+    programs_disp["libdisp"] = True
+    programs_disp["nl"] = True
+
+    capable = collections.defaultdict(list)
+    capable_sorted_by_available = collections.defaultdict(list)
+    for eng, disps in _engine_can_do.items():
+        for disp in disps:
+            capable[disp].append(eng)
+    for disp, engines in capable.items():
+        capable_sorted_by_available[disp] = sorted(engines, key=lambda x: programs_disp[x], reverse=True)
+
+    return capable_sorted_by_available
+
+
+class EmpiricalDispersion():
+    """Lightweight unification of empirical dispersion calculation modes.
+
+    Attributes
+    ----------
+    dashlevel : str
+        {"d1", "d2", "chg", "das2009", "das2010", "nl", "dmp2", "d3zero2b", "d3bj2b", "d3mzero2b", "d3mbj2b", "d3zeroatm", "d3bjatm", "d3mzeroatm", "d3mbjatm", "d4bjeeqatm", "d4bjeeqtwo"}
+        Name of dispersion correction to be applied. Resolved
+        from `name_hint` and/or `level_hint` into a key of
+        `empirical_dispersion_resources.dashcoeff`.
+    dashparams : dict
+        Complete set of parameter values defining the flexible parts
+        of :py:attr:`dashlevel`. Number and parameter names vary by
+        :py:attr:`dashlevel`. Resolved into a complete set (keys of
+        dashcoeff[dashlevel]['default']) from `name_hint` and/or
+        `dashcoeff_supplement` and/or user `param_tweaks`.
+    fctldash : str
+        If :py:attr:`dashparams` for :py:attr:`dashlevel` corresponds to a defined,
+        named, untweaked "functional-dashlevel" set, then that
+        functional. Otherwise, empty string.
+    description : str
+        Tagline for dispersion :py:attr:`dashlevel`.
+    dashlevel_citation : str
+        Literature reference for dispersion :py:attr:`dashlevel` in general,
+        *not necessarily* for :py:attr:`dashparams`.
+    dashparams_citation : str
+        Literature reference for dispersion parameters, if :py:attr:`dashparams`
+        corresponds to a defined, named, untweaked "functional-dashlevel"
+        set with a citation. Otherwise, empty string.
+    dashcoeff_supplement : dict
+        See description in `qcengine.programs.empirical_dispersion_resources.from_arrays`. Used
+        here to "bless" the dispersion definitions attached to
+        the procedures/dft/<rung>_functionals-defined dictionaries
+        as legit, non-custom, and of equal validity to
+        `qcengine.programs.empirical_dispersion_resources.dashcoeff` itself for purposes of
+        validating :py:attr:`fctldash`.
+    engine : str
+        {'libdisp', "s-dftd3", 'dftd3', 'nl', 'mp2d', "dftd4"}
+        Compute engine for dispersion. One of Psi4's internal libdisp
+        library, external Grimme or Beran projects, or nl.
+    disp : Dispersion
+        Only present for :py:attr:`engine` `=libdisp`. Psi4 class instance prepared
+        to compute dispersion.
+    ordered_params : list
+        Fixed-order list of relevant parameters for :py:attr:`dashlevel`. Matches
+        :rst:psivar:`DISPERSION CORRECTION ENERGY` ordering. Used for printing.
+
+    Parameters
+    ----------
+    name_hint
+        Name of functional (func only, func & disp, or disp only) for
+        which to compute dispersion (e.g., blyp, BLYP-D2, blyp-d3bj,
+        blyp-d3(bj), hf+d). Any or all parameters initialized from
+        ``dashcoeff[dashlevel][functional-without-dashlevel]`` or
+        ``dashcoeff_supplement[dashlevel][functional-with-dashlevel]``
+        can be overwritten via `param_tweaks`.
+    level_hint
+        Name of dispersion correction to be applied (e.g., d, D2,
+        d3(bj), das2010). Must be key in `dashcoeff` or "alias" or
+        "formal" to one.
+    param_tweaks
+        Values for the same keys as `dashcoeff[dashlevel]['default']`
+        (and same order if list) used to override any or all values
+        initialized by `name_hint`.  Extra parameters will error.
+    engine
+        Override which code computes dispersion. See above for allowed
+        values. Formerly (pre Nov 2022) only relevant for -D2, which can be computed by
+        libdisp or dftd3. Later (post Nov 2022, pre Jun 2025) also relevant for -D3 variants,
+        which can be computed by dftd3 executable or simple-dftd3 Python module.
+        Now (post Jun 2025) irrelevant as each dispersion level only available from one code;
+        `dftd3` is no-op.
+    gcp_engine
+        Override which code computes the gcp correction. Relevant between
+        Nov 2022 and Jun 2025 when could use either the classic gcp or mctc-gcp executables.
+        Now (post Jun 2025), `gcp` is no-op.
+    save_pairwise_disp
+        Whether to request atomic pairwise analysis.
+
+    """
+
+    def __init__(self,
+                 *,
+                 name_hint: str = None,
+                 level_hint: str = None,
+                 param_tweaks: Union[Dict, List] = None,
+                 engine: str = None,
+                 gcp_engine: str = None,
+                 save_pairwise_disp: bool = False):
+        from ..dft import dashcoeff_supplement
+        self.dashcoeff_supplement = dashcoeff_supplement
+        self.save_pairwise_disp = save_pairwise_disp
+
+        resolved = qcng.programs.empirical_dispersion_resources.from_arrays(
+            name_hint=name_hint,
+            level_hint=level_hint,
+            param_tweaks=param_tweaks,
+            dashcoeff_supplement=self.dashcoeff_supplement)
+        self.fctldash = resolved['fctldash']
+        self.dashlevel = resolved['dashlevel']
+        self.dashparams = resolved['dashparams']
+        self.description = qcng.programs.empirical_dispersion_resources.dashcoeff[self.dashlevel]['description']
+        self.ordered_params = qcng.programs.empirical_dispersion_resources.dashcoeff[self.dashlevel]['default'].keys()
+        self.dashlevel_citation = qcng.programs.empirical_dispersion_resources.dashcoeff[self.dashlevel]['citation']
+        self.dashparams_citation = resolved['dashparams_citation']
+
+        capable_engines_for_disp = _capable_engines_for_disp()
+        if engine is None:
+            self.engine = capable_engines_for_disp[self.dashlevel][0]
+        else:
+            if self.dashlevel in _engine_can_do[engine]:
+                self.engine = engine
+            else:
+                raise ValidationError(f"This little engine ({engine}) can't ({self.dashlevel})")
+        if (key := (self.engine, self.dashlevel)) in _obsolete_engines:
+            raise UpgradeHelper(*_obsolete_engines[key])
+
+        if self.engine == 'libdisp':
+            self.disp = core.Dispersion.build(self.dashlevel, **resolved['dashparams'])
+
+        gcp_dashlevel = "3c"
+        if gcp_engine is None:
+            self.gcp_engine = capable_engines_for_disp[gcp_dashlevel][0]
+        else:
+            if gcp_dashlevel in _engine_can_do[gcp_engine]:
+                self.gcp_engine = gcp_engine
+            else:
+                raise ValidationError(f"This little engine ({engine}) can't ({gcp_dashlevel})")
+            if (key := (self.gcp_engine, gcp_dashlevel)) in _obsolete_engines:
+                raise UpgradeHelper(*_obsolete_engines[key])
+
+    def print_out(self):
+        """Format dispersion parameters of `self` for output file."""
+
+        text = []
+        text.append("   => {}: Empirical Dispersion <=".format(
+            (self.fctldash.upper() if self.fctldash.upper() else 'Custom')))
+        text.append('')
+        text.append(self.description)
+        text.append(self.dashlevel_citation.rstrip())
+        if self.dashparams_citation:
+            text.append("    Parametrisation from:{}".format(self.dashparams_citation.rstrip()))
+        text.append('')
+        for op in self.ordered_params:
+            text.append("    %6s = %14.6f" % (op, self.dashparams[op]))
+        text.append('\n')
+
+        core.print_out('\n'.join(text))
+
+    def compute_energy(self, molecule: core.Molecule, wfn: core.Wavefunction = None) -> float:
+        """Compute dispersion energy based on engine, dispersion level, and parameters in `self`.
+
+        Parameters
+        ----------
+        molecule
+            System for which to compute empirical dispersion correction.
+        wfn
+            Location to set QCVariables
+
+        Returns
+        -------
+        float
+            Dispersion energy [Eh].
+
+        Notes
+        -----
+        :psivar:`DISPERSION CORRECTION ENERGY`
+            Disp always set. Overridden in SCF finalization, but that only changes for "-3C" methods.
+        :psivar:`fctl DISPERSION CORRECTION ENERGY`
+            Set if :py:attr:`fctldash` nonempty.
+
+        """
+        if self.engine in ["s-dftd3", 'dftd3', 'mp2d', "dftd4"]:
+            resi = AtomicInput(
+                **{
+                    "specification": {
+                        'driver': 'energy',
+                        'model': {
+                            'method': self.fctldash,
+                            'basis': '(auto)',
+                        },
+                        'keywords': {
+                            'level_hint': self.dashlevel,
+                            'params_tweaks': self.dashparams,
+                            'dashcoeff_supplement': self.dashcoeff_supplement,
+                            'pair_resolved': self.save_pairwise_disp,
+                            'apply_qcengine_aliases': True,  # for s-dftd3
+                            'verbose': 1,
+                        },
+                    },
+                    'molecule': molecule.to_schema(dtype=3),
+                    'provenance': p4util.provenance_stamp(__name__),
+                })
+            jobrec = qcng.compute(resi,
+                                  self.engine,
+                                  raise_error=True,
+                                  return_version=2,
+                                  task_config={
+                                      "scratch_directory": core.IOManager.shared_object().get_default_path(),
+                                      "ncores": core.get_num_threads()
+                                  })
+
+            dashd_part = float(jobrec.extras['qcvars']['DISPERSION CORRECTION ENERGY'])
+            if wfn is not None:
+                for k, qca in jobrec.extras['qcvars'].items():
+                    if ("CURRENT" not in k) and ("PAIRWISE" not in k):
+                        wfn.set_variable(k, float(qca) if isinstance(qca, str) else qca)
+
+                # Pass along the pairwise dispersion decomposition if we need it
+                if self.save_pairwise_disp is True:
+                    wfn.set_variable("PAIRWISE DISPERSION CORRECTION ANALYSIS",
+                                     jobrec.extras['qcvars']["2-BODY PAIRWISE DISPERSION CORRECTION ANALYSIS"])
+
+            if self.fctldash in ['hf3c', 'pbeh3c', 'r2scan3c', 'b973c']:
+                jobrec = qcng.compute(resi,
+                                      self.gcp_engine,
+                                      raise_error=True,
+                                      return_version=2,
+                                      task_config={
+                                          "scratch_directory": core.IOManager.shared_object().get_default_path(),
+                                          "ncores": core.get_num_threads()
+                                      })
+                gcp_part = jobrec.return_result
+                dashd_part += gcp_part
+
+            return dashd_part
+
+        else:
+            ene = self.disp.compute_energy(molecule)
+            core.set_variable('DISPERSION CORRECTION ENERGY', ene)
+            if self.fctldash:
+                core.set_variable(f"{self.fctldash} DISPERSION CORRECTION ENERGY", ene)
+            return ene
+
+    def compute_gradient(self, molecule: core.Molecule, wfn: core.Wavefunction = None) -> core.Matrix:
+        """Compute dispersion gradient based on engine, dispersion level, and parameters in `self`.
+
+        Parameters
+        ----------
+        molecule
+            System for which to compute empirical dispersion correction.
+        wfn
+            Location to set QCVariables
+
+        Returns
+        -------
+        Matrix
+            (nat, 3) dispersion gradient [Eh/a0].
+
+        """
+        if self.engine in ["s-dftd3", 'dftd3', 'mp2d', "dftd4"]:
+            resi = AtomicInput(
+                **{
+                    "specification": {
+                        'driver': 'gradient',
+                        'model': {
+                            'method': self.fctldash,
+                            'basis': '(auto)',
+                        },
+                        'keywords': {
+                            'level_hint': self.dashlevel,
+                            'params_tweaks': self.dashparams,
+                            'dashcoeff_supplement': self.dashcoeff_supplement,
+                            'apply_qcengine_aliases': True,  # for s-dftd3
+                            'verbose': 1,
+                        },
+                    },
+                    'molecule': molecule.to_schema(dtype=3),
+                    'provenance': p4util.provenance_stamp(__name__),
+                })
+            jobrec = qcng.compute(resi,
+                                  self.engine,
+                                  raise_error=True,
+                                  return_version=2,
+                                  task_config={
+                                      "scratch_directory": core.IOManager.shared_object().get_default_path(),
+                                      "ncores": core.get_num_threads()
+                                  })
+
+            dashd_part = core.Matrix.from_array(jobrec.extras['qcvars']['DISPERSION CORRECTION GRADIENT'])
+            if wfn is not None:
+                for k, qca in jobrec.extras['qcvars'].items():
+                    if "CURRENT" not in k:
+                        wfn.set_variable(k, float(qca) if isinstance(qca, str) else qca)
+
+            if self.fctldash in ['hf3c', 'pbeh3c', 'r2scan3c', 'b973c']:
+                jobrec = qcng.compute(resi,
+                                      self.gcp_engine,
+                                      raise_error=True,
+                                      return_version=2,
+                                      task_config={
+                                          "scratch_directory": core.IOManager.shared_object().get_default_path(),
+                                          "ncores": core.get_num_threads()
+                                      })
+                gcp_part = core.Matrix.from_array(jobrec.return_result)
+                dashd_part.add(gcp_part)
+
+            return dashd_part
+        else:
+            return self.disp.compute_gradient(molecule)
+
+    def compute_hessian(self, molecule: core.Molecule, wfn: core.Wavefunction = None) -> core.Matrix:
+        """Compute dispersion Hessian based on engine, dispersion level, and parameters in `self`.
+        Uses finite difference, as no dispersion engine has analytic second derivatives.
+
+        Parameters
+        ----------
+        molecule
+            System for which to compute empirical dispersion correction.
+        wfn
+            Location to set QCVariables
+
+        Returns
+        -------
+        Matrix
+            (3*nat, 3*nat) dispersion Hessian [Eh/a0/a0].
+
+        """
+        from psi4.driver.driver_findif import assemble_hessian_from_gradients, hessian_from_gradients_geometries
+
+        optstash = p4util.OptionsState(['PRINT'], ['PARENT_SYMMETRY'])
+        core.set_global_option('PRINT', 0)
+
+        core.print_out("\n\n   Analytical Dispersion Hessians are not supported by any engine.\n")
+        core.print_out("       Computing the Hessian through finite difference of gradients.\n\n")
+
+        # Setup the molecule
+        molclone = molecule.clone()
+        molclone.reinterpret_coordentry(False)
+        molclone.fix_orientation(True)
+        molclone.fix_com(True)
+
+        # Record undisplaced symmetry for projection of diplaced point groups
+        core.set_global_option("PARENT_SYMMETRY", molecule.schoenflies_symbol())
+
+        findif_meta_dict = hessian_from_gradients_geometries(molclone, -1)
+        for displacement in findif_meta_dict["displacements"].values():
+            geom_array = np.reshape(displacement["geometry"], (-1, 3))
+            molclone.set_geometry(core.Matrix.from_array(geom_array))
+            molclone.update_geometry()
+            displacement["gradient"] = self.compute_gradient(molclone).np.ravel().tolist()
+
+        H = assemble_hessian_from_gradients(findif_meta_dict, -1)
+        if wfn is not None:
+            wfn.set_variable('DISPERSION CORRECTION HESSIAN', H)
+        optstash.restore()
+        return core.Matrix.from_array(H)
+
+
+class XDMDispersionFunctor():
+    """Lightweight wrapper for XDM (exchange-hole dipole moment) dispersion correction.
+
+    Unlike other empirical dispersion corrections (D2, D3, D4), XDM requires a
+    converged wavefunction (electron density), so it must be computed post-SCF.
+
+    Attributes
+    ----------
+    engine : str
+        Always 'xdm'.
+    fctldash : str
+        Functional name with -XDM(<model>) suffix.
+    dashlevel : str
+        Always 'xdm'.
+
+    Parameters
+    ----------
+    functional_name
+        Name of the DFT functional (used for free-atom volume lookup).
+    basis_name
+        Name of the basis set (used for BJ parameter lookup together with functional).
+    a1
+        Explicit a1 BJ damping parameter (overrides lookup).
+    a2_ang
+        Explicit a2 BJ damping parameter in angstrom (overrides lookup).
+    model
+        XDM damping-parameter model label (``kb49`` or ``los-ii``).
+
+    """
+
+    def __init__(self,
+                 functional_name: str,
+                 basis_name: Optional[str] = None,
+                 a1: Optional[float] = None,
+                 a2_ang: Optional[float] = None,
+                 model: str = "kb49",
+                 expected_x_omega: Optional[float] = None,
+                 expected_x_beta: Optional[float] = None):
+        self._xdm_model = normalize_xdm_model(model)
+        self.engine = "xdm"
+        self.fctldash = f"{functional_name}-xdm({self._xdm_model})"
+        self.dashlevel = f"xdm({self._xdm_model})"
+        self._functional_name = functional_name
+        self._basis_name = basis_name
+        self._a1 = a1
+        self._a2_ang = a2_ang
+        self._expected_x_omega = expected_x_omega
+        self._expected_x_beta = expected_x_beta
+
+        if (a1 is None) != (a2_ang is None):
+            raise ValidationError("XDM explicit damping parameters a1 and a2_ang must be provided together.")
+
+        if a1 is not None and a2_ang is not None:
+            self.xdm = core.XDMDispersion.build(functional_name, a1, a2_ang)
+            return
+
+        if basis_name is None:
+            raise ValidationError("XDM requires a basis name or explicit a1, a2 parameters.")
+
+        try:
+            fitted_a1, fitted_a2_ang = get_xdm_bj_params(functional_name, basis_name, model=self._xdm_model)
+        except KeyError:
+            lookup_key = f"{functional_name.lower()}/{basis_name.lower()}"
+            fitted_bases = available_xdm_bases(functional_name, self._xdm_model)
+            hint = (f" Bases fitted for {functional_name.lower()} with model {self._xdm_model}: {fitted_bases}."
+                    if fitted_bases else
+                    f" No basis is fitted for {functional_name.lower()} with model {self._xdm_model}.")
+            raise ValidationError("XDMDispersion: No fitted BJ parameters for "
+                                  f"{lookup_key} with model {self._xdm_model}. "
+                                  "Provide [a1, a2] through XDM_DISPERSION_PARAMETERS." + hint)
+
+        self.xdm = core.XDMDispersion.build(functional_name, fitted_a1, fitted_a2_ang)
+
+    def print_out(self):
+        """Format XDM dispersion parameters for output file."""
+        text = []
+        text.append("   => {}: XDM Dispersion <=".format(self.fctldash.upper()))
+        text.append('')
+        text.append('    Exchange-Hole Dipole Moment (XDM) with Becke-Johnson Damping')
+        text.append('    A. D. Becke and E. R. Johnson, J. Chem. Phys. 127, 154108 (2007)')
+        text.append('')
+        text.append("    %6s = %14.6f" % ("a1", self.xdm.a1()))
+        text.append("    %6s = %14.6f [bohr]" % ("a2", self.xdm.a2()))
+        text.append("    NOTE: XDM requires a converged density and is computed post-SCF.")
+        text.append('\n')
+        core.print_out('\n'.join(text))
+
+    def compute_energy(self, molecule: core.Molecule, wfn: core.Wavefunction = None) -> float:
+        """Compute XDM dispersion energy from a converged wavefunction.
+
+        Parameters
+        ----------
+        molecule
+            System (unused for XDM, but kept for API compatibility).
+        wfn
+            Converged wavefunction with density matrix. Required.
+
+        Returns
+        -------
+        float
+            Dispersion energy [Eh].
+
+        """
+        if wfn is None:
+            raise ValidationError("XDM dispersion requires a converged wavefunction (density matrix).")
+
+        functional = wfn.functional()
+        if functional is None:
+            raise ValidationError("XDM dispersion requires a DFT wavefunction with functional metadata.")
+        range_mismatch = (self._expected_x_omega is not None and abs(functional.x_omega() - self._expected_x_omega)
+                          >= 1.0e-10) or (self._expected_x_beta is not None
+                                          and abs(functional.x_beta() - self._expected_x_beta) >= 1.0e-10)
+        if range_mismatch or (self._expected_x_omega is None and functional.is_x_lrc()):
+            raise ValidationError(
+                "XDM does not support modified range-separation parameters or unknown range-separated functionals.")
+        ene = self.xdm.compute_energy(wfn, functional.x_alpha())
+        core.set_variable('DISPERSION CORRECTION ENERGY', ene)
+        if self.fctldash:
+            core.set_variable(f"{self.fctldash.upper()} DISPERSION CORRECTION ENERGY", ene)
+
+        # Copy XDM coefficient arrays from process environment to wavefunction
+        for var_name in [
+                'XDM C6 COEFFICIENTS', 'XDM C8 COEFFICIENTS', 'XDM C10 COEFFICIENTS', 'XDM RC COEFFICIENTS',
+                'XDM PAIRWISE ENERGY'
+        ]:
+            if core.has_array_variable(var_name):
+                wfn.set_array_variable(var_name, core.array_variable(var_name))
+
+        return ene
+
+    def compute_gradient(self, molecule: core.Molecule, wfn: core.Wavefunction = None) -> core.Matrix:
+        """Reject analytic XDM derivatives.
+
+        Every XDM ingredient (moments, Hirshfeld volumes, polarizabilities, C6/C8/C10,
+        R_vdW) is a functional of the converged density, so an analytic gradient needs
+        the response of all of them. Differentiating only the pair distances R_ij is not
+        the derivative of the energy. XDM gradients are obtained instead by finite
+        differences of the full XDM energy via psi4.gradient().
+        """
+        raise NotImplementedError("Analytic XDM gradients are not implemented. XDM gradients are evaluated by "
+                                  "finite differences of the XDM-corrected energy; call psi4.gradient() instead.")

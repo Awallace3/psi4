@@ -31,6 +31,7 @@ calls for each of the *name* values of the energy(), optimize(),
 response(), and frequency() function. *name* can be assumed lowercase by here.
 
 """
+import math
 import os
 import re
 import shutil
@@ -58,7 +59,9 @@ from ..p4util.exceptions import (
 
 #from psi4.driver.molutil import *
 from ..qcdb.basislist import corresponding_basis
-from . import dft, empirical_dispersion, mcscf, proc_util, response, solvent
+from . import dft, mcscf, proc_util, response, solvent
+from .dft import dft_builder
+from .empirical_disp import empirical_dispersion
 from .proc_data import method_algorithm_type
 from .roa import run_roa
 
@@ -1386,18 +1389,106 @@ def select_mrcc(name, **kwargs):
         return func(name, **kwargs)
 
 
+def _without_xdm_dispersion(name):
+    if isinstance(name, str):
+        return re.sub(r"-xdm(?:\([^)]*\))?$", "", name, flags=re.IGNORECASE)
+    if isinstance(name, dict):
+        dispersion = name.get("dispersion")
+        if isinstance(dispersion, dict) and str(dispersion.get("type", "")).lower() == "xdm":
+            guess_name = dict(name)
+            guess_name.pop("dispersion")
+            return guess_name
+        return name
+    if callable(name):
+
+        def guess_functional(*args, **kwargs):
+            result = name(*args, **kwargs)
+            if isinstance(result, (list, tuple)) and len(result) > 1:
+                dispersion = result[1]
+                if isinstance(dispersion, dict) and str(dispersion.get("type", "")).lower() == "xdm":
+                    return result[0]
+            return result
+
+        return guess_functional
+    return name
+
+
+def _reference_xdm_superfunctional(functional_name, restricted):
+    normalized_name = functional_name.lower()
+    candidates = [normalized_name]
+    for definition in dft_builder.dict_functionals.values():
+        dispersion = definition.get("dispersion")
+        if not isinstance(dispersion, dict) or dispersion.get("type") != "xdm":
+            continue
+        base_aliases = [
+            re.sub(r"-xdm(?:\([^)]*\))?$", "", alias, flags=re.IGNORECASE)
+            for alias in dft_builder.get_functional_aliases(definition)
+        ]
+        if normalized_name in base_aliases:
+            candidates.extend(base_aliases)
+
+    for candidate in candidates:
+        definition = dft_builder.functionals.get(candidate)
+        if definition is not None and "dispersion" not in definition:
+            npoints = core.get_option("SCF", "DFT_BLOCK_MAX_POINTS")
+            return dft_builder.build_superfunctional_from_dictionary(definition, npoints, 1, restricted)[0]
+    return None
+
+
 def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwargs):
 
     if core.has_option_changed("SCF", "DFT_DISPERSION_PARAMETERS"):
-        modified_disp_params = core.get_option("SCF", "DFT_DISPERSION_PARAMETERS")
+        modified_dft_disp_params = core.get_option("SCF", "DFT_DISPERSION_PARAMETERS")
     else:
-        modified_disp_params = None
+        modified_dft_disp_params = None
+
+    if core.has_option_changed("SCF", "XDM_DISPERSION_PARAMETERS"):
+        modified_xdm_params = core.get_option("SCF", "XDM_DISPERSION_PARAMETERS")
+        if len(modified_xdm_params) != 2:
+            raise ValidationError("XDM_DISPERSION_PARAMETERS must contain exactly two values: [a1, a2_angstrom].")
+        try:
+            modified_xdm_params = [float(value) for value in modified_xdm_params]
+        except (TypeError, ValueError):
+            raise ValidationError("XDM_DISPERSION_PARAMETERS values must be finite numbers.")
+        if not all(math.isfinite(value) for value in modified_xdm_params):
+            raise ValidationError("XDM_DISPERSION_PARAMETERS values must be finite numbers.")
+    else:
+        modified_xdm_params = None
 
     # Figure out functional
     superfunc, disp_type = dft.build_superfunctional(name, restricted)
 
     if disp_type:
-        if isinstance(name, dict):
+        if disp_type["type"] == "xdm":
+            basis_name = core.get_global_option("BASIS")
+            xdm_model = "kb49"
+            if "params" in disp_type:
+                xdm_model = str(disp_type["params"].get("xdm_model", xdm_model)).lower()
+
+            func_name = re.sub(r"-xdm(?:\([^)]*\))?$", "", superfunc.name(), flags=re.IGNORECASE)
+            reference_superfunc = _reference_xdm_superfunctional(func_name, restricted)
+            if modified_xdm_params is None:
+                if reference_superfunc is None or abs(superfunc.x_alpha() - reference_superfunc.x_alpha()) >= 1.0e-10:
+                    raise ValidationError(
+                        "Automatic XDM damping parameters require the fitted functional's exact-exchange fraction. "
+                        "Provide [a1, a2] through XDM_DISPERSION_PARAMETERS for modified exchange.")
+
+            expected_x_omega = reference_superfunc.x_omega() if reference_superfunc is not None else None
+            expected_x_beta = reference_superfunc.x_beta() if reference_superfunc is not None else None
+            if modified_xdm_params is not None:
+                _disp_functor = empirical_dispersion.XDMDispersionFunctor(functional_name=func_name,
+                                                                          a1=float(modified_xdm_params[0]),
+                                                                          a2_ang=float(modified_xdm_params[1]),
+                                                                          model=xdm_model,
+                                                                          expected_x_omega=expected_x_omega,
+                                                                          expected_x_beta=expected_x_beta)
+            else:
+                _disp_functor = empirical_dispersion.XDMDispersionFunctor(functional_name=func_name,
+                                                                          basis_name=basis_name,
+                                                                          model=xdm_model,
+                                                                          expected_x_omega=expected_x_omega,
+                                                                          expected_x_beta=expected_x_beta)
+        elif isinstance(name, dict):
             # user dft_functional={} spec - type for lookup, dict val for param defs,
             #   name & citation discarded so only param matches to existing defs will print labels
             _disp_functor = empirical_dispersion.EmpiricalDispersion(name_hint='',
@@ -1409,7 +1500,7 @@ def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwar
             # dft/*functionals.py spec - name & type for lookup, option val for param tweaks
             _disp_functor = empirical_dispersion.EmpiricalDispersion(name_hint=superfunc.name(),
                                                                      level_hint=disp_type["type"],
-                                                                     param_tweaks=modified_disp_params,
+                                                                     param_tweaks=modified_dft_disp_params,
                                                                      save_pairwise_disp=save_pairwise_disp,
                                                                      engine=kwargs.get('engine', None))
 
@@ -1908,10 +1999,11 @@ def scf_helper(name, post_scf=True, **kwargs):
             core.print_out("         " + banner.center(58))
         if cast:
             core.print_out("         " + "SCF Castup computation".center(58))
-        ref_wfn = scf_wavefunction_factory(name, base_wfn, core.get_option('SCF', 'REFERENCE'), **kwargs)
+        cast_name = _without_xdm_dispersion(name)
+        ref_wfn = scf_wavefunction_factory(cast_name, base_wfn, core.get_option('SCF', 'REFERENCE'), **kwargs)
 
         # Compute additive correction: dftd3, mp2d, dftd4, etc.
-        if hasattr(ref_wfn, "_disp_functor"):
+        if hasattr(ref_wfn, "_disp_functor") and ref_wfn._disp_functor.engine != "xdm":
             disp_energy = ref_wfn._disp_functor.compute_energy(ref_wfn.molecule())
             ref_wfn.set_variable("-D Energy", disp_energy)
         ref_wfn.compute_energy()
@@ -2003,7 +2095,7 @@ def scf_helper(name, post_scf=True, **kwargs):
         scf_wfn.basisset().print_detail_out()
 
     # Compute additive correction: dftd3, mp2d, dftd4, etc.
-    if hasattr(scf_wfn, "_disp_functor"):
+    if hasattr(scf_wfn, "_disp_functor") and scf_wfn._disp_functor.engine != 'xdm':
         disp_energy = scf_wfn._disp_functor.compute_energy(scf_wfn.molecule(), scf_wfn)
         scf_wfn.set_variable("-D Energy", disp_energy)
 
@@ -2045,6 +2137,18 @@ def scf_helper(name, post_scf=True, **kwargs):
         scf_wfn.set_jk(jk_obj)
 
     e_scf = scf_wfn.compute_energy()
+
+    if hasattr(scf_wfn, "_disp_functor") and scf_wfn._disp_functor.engine == 'xdm':
+        xdm_energy = scf_wfn._disp_functor.compute_energy(scf_wfn.molecule(), scf_wfn)
+        scf_wfn.set_variable("XDM ENERGY", xdm_energy)
+        scf_wfn.set_variable("DISPERSION CORRECTION ENERGY", xdm_energy)
+        e_scf += xdm_energy
+        scf_wfn.set_energy(e_scf)
+        if scf_wfn.functional().needs_xc():
+            e_dft = scf_wfn.variable("DFT TOTAL ENERGY") + xdm_energy
+            for obj in [core, scf_wfn]:
+                obj.set_variable("DFT TOTAL ENERGY", e_dft)  # P::e SCF
+
     for obj in [core, scf_wfn]:
         # set_variable("SCF TOTAL ENERGY")  # P::e SCF
         for pv in ["SCF TOTAL ENERGY", "CURRENT ENERGY", "CURRENT REFERENCE ENERGY"]:
