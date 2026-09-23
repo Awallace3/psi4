@@ -1246,6 +1246,18 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_double("SAPT_FDDS_V2_RHO_CUTOFF", 1.e-6);
         /*- Which MP2 Exch-Disp module to use? !expert -*/
         options.add_str("SAPT_DFT_MP2_DISP_ALG", "SAPT", "FISAPT SAPT");
+        /*- DFHelper storage algorithm for the FDDS dispersion three-index
+        transformations.  STORE keeps the AO integrals in the Schwarz-screened
+        sparse layout and folds the fitting metric into them before the MO
+        transform, so no unscreened AO block is ever held and no pre-metric
+        copy of a transformed tensor is ever written.  DIRECT and DIRECT_IAQ
+        are the older paths, which write every transformed tensor twice and,
+        for DIRECT_IAQ, store the AO integrals densely.  LEGACY reproduces the
+        pre-screening choice exactly: DIRECT for the first round of a hybrid
+        functional, DIRECT_IAQ otherwise.  DIRECT_IAQ cannot be requested for a
+        hybrid functional at all: its layout cannot express the (Q|ar) ordering
+        the QR factorization needs.  AUTO picks STORE. !expert -*/
+        options.add_str("SAPT_FDDS_DISP_DF_ALGORITHM", "AUTO", "AUTO STORE DIRECT DIRECT_IAQ LEGACY");
         /*- FSAPT localization through SAPT(DFT)? Set SAPTDFT for PyEinsums
          f-terms or use an FISAPT object (C++ side) for f-terms.
         -*/
