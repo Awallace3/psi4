@@ -1870,6 +1870,28 @@ void DFHelper::release_tensor(std::string name) {
     files_.erase(entry);
 }
 
+void DFHelper::release_AO() {
+    Ppq_.reset();
+    wPpq_.reset();
+    m1Ppq_.reset();
+    update_core_claim();
+
+    // Only AO_names_[1] is ever opened -- prepare_AO() writes there and
+    // transform() reads there -- but a repeated initialize() pushes fresh
+    // names onto the list, so walk all of them rather than assume a length.
+    // The names themselves stay: several call sites index AO_names_[1]
+    // directly, and prepare_AO() writes back to that same slot, so emptying
+    // the vector would turn a later initialize() into an out-of-range read.
+    for (const auto& name : AO_names_) {
+        file_streams_.erase(name);
+        sizes_.erase(name);
+    }
+
+    // The AO integrals are what initialize() exists to build, so the object is
+    // no longer initialized.  add_space() checks built_ and will say so.
+    built_ = false;
+}
+
 void DFHelper::clear_all() {
     // invokes destructors, eliminating all files.
     file_streams_.clear();
@@ -1954,6 +1976,13 @@ void DFHelper::print_order() {
 void DFHelper::transform() {
     if (debug_) {
         outfile->Printf("Entering DFHelper::transform\n");
+    }
+
+    // The three-index AO integrals are the only input to a transform, so
+    // running one after release_AO() gave them back would read a file that
+    // ~StreamStruct has already unlinked.  Say so instead.
+    if (!built_) {
+        throw PSIEXCEPTION("DFHelper:transform: the AO integrals are gone, call initialize() first.");
     }
 
     timer_on("DFH: transform()");
@@ -3180,6 +3209,9 @@ void DFHelper::compute_JK(std::vector<SharedMatrix> Cleft, std::vector<SharedMat
     size_t totsb = std::get<1>(info);
 
     // prep stream, blocking
+    if (!built_) {
+        throw PSIEXCEPTION("DFHelper:compute_JK: the AO integrals are gone, call initialize() first.");
+    }
     if (!direct_ && !AO_core_) stream_check(AO_names_[1], "rb");
 
     std::vector<std::vector<double>> C_buffers(nthreads_);

@@ -344,6 +344,17 @@ class PSI_API DFHelper {
     /// never added.
     void release_tensor(std::string name);
 
+    /// Give back the three-index AO integrals.
+    ///
+    /// They are only ever read by transform(); once the last transform is
+    /// done they are dead weight, and they are the single largest thing
+    /// DFHelper owns -- on a protein-sized dimer the Schwarz-screened sparse
+    /// AO tensor is a couple of hundred GiB whether it is in core or on
+    /// scratch.  Releasing them drops the in-core buffers and unlinks the
+    /// out-of-core file, and marks the object uninitialized so that a caller
+    /// that does want to transform again has to call initialize() first.
+    void release_AO();
+
     /// get sizes, shapes of tensors
     size_t get_space_size(std::string key);
     size_t get_tensor_size(std::string key);
