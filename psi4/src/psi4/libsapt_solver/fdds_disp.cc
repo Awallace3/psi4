@@ -280,53 +280,69 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
 
     // transformations specific for hybrid functional
 
-    if (is_hybrid_) {
-        // Contracted 3-index integrals to reproduce 4-index ERI
+    // The hybrid second round transforms (aa|R), (ar|R), (rr|R) for A and the
+    // same three for B, and QR()/form_X()/form_Y() then consume one monomer's
+    // set and release it.  Nothing ever reads the two sets together, so
+    // transforming both in one pass only makes them coexist on scratch: on a
+    // protein-sized dimer (rr|R) and (ss|R) alone are 283 and 322 GiB.  Doing
+    // one monomer at a time costs a second AO integral build and metric fold
+    // and takes roughly a third off the scratch high-water mark.
+    bool split_monomers = is_hybrid_ && options.get_bool("SAPT_FDDS_DISP_SPLIT_MONOMERS");
+
+    auto round2_transform = [&](const std::vector<std::string>& monomers) {
         // Clear spaces to re-order spaces and transformations in DFHelper
-        // Clear transformations to avoid overwriting pqQ tensors 
+        // Clear transformations to avoid overwriting pqQ tensors
         dfh_->clear_spaces();
         dfh_->clear_transformations();
         dfh_->set_method(round2_algo);
         dfh_->set_metric_pow(-0.5);
         dfh_->initialize();
 
-        dfh_->add_space("a", Cstack_vec[0]);
-        dfh_->add_space("r", Cstack_vec[1]);
-        dfh_->add_space("b", Cstack_vec[2]);
-        dfh_->add_space("s", Cstack_vec[3]);
-
-        dfh_->add_transformation("aaR", "a", "a", "pqQ");
-        dfh_->add_transformation("arR", "a", "r", "pqQ");
-        dfh_->add_transformation("rrR", "r", "r", "pqQ");
-        dfh_->add_transformation("bbR", "b", "b", "pqQ");
-        dfh_->add_transformation("bsR", "b", "s", "pqQ");
-        dfh_->add_transformation("ssR", "s", "s", "pqQ");
+        for (const auto& monomer : monomers) {
+            bool is_A = (monomer == "A");
+            std::string o = (is_A ? "a" : "b");
+            std::string v = (is_A ? "r" : "s");
+            dfh_->add_space(o, Cstack_vec[is_A ? 0 : 2]);
+            dfh_->add_space(v, Cstack_vec[is_A ? 1 : 3]);
+            dfh_->add_transformation(o + o + "R", o, o, "pqQ");
+            dfh_->add_transformation(o + v + "R", o, v, "pqQ");
+            dfh_->add_transformation(v + v + "R", v, v, "pqQ");
+        }
         dfh_->set_release_core_AO_before_metric(true);
         dfh_->transform();
-    }
+        dfh_->clear_spaces();
+    };
 
-    dfh_->clear_spaces();
-
-    if (is_hybrid_) {
+    auto round2_consume = [&](const std::string& monomer) {
         // QR Factorization of (ar|Q)
         timer_on("FDDS: QR");
-        R_A_ = QR("A");
-        R_B_ = QR("B");
+        (monomer == "A" ? R_A_ : R_B_) = QR(monomer);
         timer_off("FDDS: QR");
 
         // form (ar|(Q)X|Q) = (ar'|a'r) (a'r'|(Q)|Q)
         timer_on("FDDS: Form X");
-        form_X("A");
-        form_X("B");
+        form_X(monomer);
         timer_off("FDDS: Form X");
 
         // form (ar|(Q)Y|Q) = (aa'|rr') (a'r'|(Q)|Q)
         timer_on("FDDS: Form Y");
-        form_Y("A");
-        form_Y("B");
+        form_Y(monomer);
         timer_off("FDDS: Form Y");
-    }
+    };
 
+    if (split_monomers) {
+        for (std::string monomer : {"A", "B"}) {
+            round2_transform({monomer});
+            round2_consume(monomer);
+        }
+    } else if (is_hybrid_) {
+        // Contracted 3-index integrals to reproduce 4-index ERI
+        round2_transform({"A", "B"});
+        round2_consume("A");
+        round2_consume("B");
+    } else {
+        dfh_->clear_spaces();
+    }
 }
 
 FDDS_Dispersion::~FDDS_Dispersion() {}
