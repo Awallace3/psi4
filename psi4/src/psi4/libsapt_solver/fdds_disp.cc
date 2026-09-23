@@ -289,14 +289,21 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
     // and takes roughly a third off the scratch high-water mark.
     bool split_monomers = is_hybrid_ && options.get_bool("SAPT_FDDS_DISP_SPLIT_MONOMERS");
 
-    auto round2_transform = [&](const std::vector<std::string>& monomers) {
+    auto round2_transform = [&](const std::vector<std::string>& monomers, bool rebuild_ao) {
         // Clear spaces to re-order spaces and transformations in DFHelper
         // Clear transformations to avoid overwriting pqQ tensors
         dfh_->clear_spaces();
         dfh_->clear_transformations();
         dfh_->set_method(round2_algo);
         dfh_->set_metric_pow(-0.5);
-        dfh_->initialize();
+        // initialize() rebuilds the AO integrals.  The first pass has to: this
+        // round folds a different metric power into them than round one did.
+        // A second pass only has to when the first pass gave the in-core copy
+        // back before the metric contraction -- if the AO integrals are on
+        // disk they are still there, still folded against this round's metric,
+        // and rebuilding them means paying for the whole three-index integral
+        // build and rewriting the file for nothing.
+        if (rebuild_ao) dfh_->initialize();
 
         for (const auto& monomer : monomers) {
             bool is_A = (monomer == "A");
@@ -330,18 +337,32 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
         timer_off("FDDS: Form Y");
     };
 
+    // transform() is the only consumer of the three-index AO integrals, so once
+    // the last one has run they are dead weight -- and they are the biggest
+    // single thing DFHelper owns, a couple of hundred GiB on a protein-sized
+    // dimer in core or on scratch.  QR/X/Y read only MO tensors, and their
+    // blocking asks DFHelper how much memory is free, so handing the AO
+    // integrals back here both lowers the high-water mark and buys those loops
+    // bigger blocks.
     if (split_monomers) {
+        bool rebuild_ao = true;
         for (std::string monomer : {"A", "B"}) {
-            round2_transform({monomer});
+            round2_transform({monomer}, rebuild_ao);
+            // Only the in-core AO integrals are handed back before the metric
+            // contraction, so only they have to be rebuilt for monomer B.
+            rebuild_ao = dfh_->get_AO_core();
+            if (monomer == "B") dfh_->release_AO();
             round2_consume(monomer);
         }
     } else if (is_hybrid_) {
         // Contracted 3-index integrals to reproduce 4-index ERI
-        round2_transform({"A", "B"});
+        round2_transform({"A", "B"}, true);
+        dfh_->release_AO();
         round2_consume("A");
         round2_consume("B");
     } else {
         dfh_->clear_spaces();
+        dfh_->release_AO();
     }
 }
 
