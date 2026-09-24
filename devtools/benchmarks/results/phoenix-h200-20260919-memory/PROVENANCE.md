@@ -12,10 +12,21 @@ That question has exactly one honest control, and it is *not* the previous
 campaign. It is the merge commit's own first parent, so that the two arms differ
 in the Psi4 binary and in nothing else — same worktree layout, same compiler and
 flags, same driver file by sha256, same geometries by sha256, same partition,
-same thread count, same GPU model, same run directory structure. The two arms
-are M1 (treatment) and M3 (control); M2 is a separate CPU-only measurement that
-exists only to normalize the CPU baseline for thread count and is never
-differenced against either.
+same thread count, same GPU model, same run directory structure. The reported
+arms are M4 (treatment) and M5 (control), both against libcuest 0.2.2.2. M1 and
+M3 are the same two builds against libcuest 0.2.1.2. They are kept as the
+controls of the two library-swap tables. M2 is a separate CPU-only measurement
+that exists only to normalize the CPU baseline for thread count and is never
+differenced against anything.
+
+## libcuest
+
+M1/M3 ran against libcuest 0.2.1.2. M4/M5/P* ran against **0.2.2.2** (`cuest
+0.2.2.2` in `metadata/conda-packages.json`). The bump keeps the soname and
+changes only `CUEST_VER_PATCH` in the headers, so nothing was rebuilt: M4/M5
+load the byte-identical `core*.so` pinned below. `common.inc` asserts the
+version and checks that the linked `libcuest.so` resolves inside the campaign
+environment.
 
 ## Builds
 
@@ -62,6 +73,17 @@ and no inferno approval exists.
 | 13358750 | M2 CPU-only, 8 vs 24 threads | cpu-small | `atl1-1-02-008-2-2` | 00:41:38 | 0 | 22 |
 | 13367034 | control build | cpu-small | `atl1-1-02-006-14-1` | 00:16:30 | 0 | — |
 | 13367763 | M3 paired CPU/GPU, 8 threads | gpu-h200 | `atl1-1-02-012-9-0` | 00:40:00 | 0 | 36 |
+| 13395711 | M4 paired CPU/GPU, 8 threads, libcuest 0.2.2.2 | gpu-h200 | `atl1-1-02-012-2-0` | 00:39:13 | 0 | 36 |
+| 13395712 | M5 control paired CPU/GPU, libcuest 0.2.2.2 | gpu-h200 | `atl1-1-03-019-2-0` | 00:37:53 | 0 | 36 |
+| 13395715 | P3 protein157 CPU | gpu-h200 | `atl1-1-03-019-2-0` | 03:29:44 | 0 | 1 |
+| 13429862 | P1 protein157 GPU ×3 + CPU | gpu-h200 | `atl1-1-03-020-18-0` | 01:54:36 | preempted | 3 of 4 (GPU) |
+
+Kept but not used: 13376151/13376152/13376153 (preempted on
+`atl1-1-02-012-23-0`, 24.5 GF/s per core, marked `metadata/DEGRADED-HOST`;
+13376152's marker was written after the fact on 2026-09-23 with the same fields
+as 13376151's). 13395713 (host gate, exit 75, `atl1-1-02-014-9-0`).
+13395714, 13429863, 13480138, 13480139 (protein157 slices preempted before their
+CPU case finished).
 
 Two earlier attempts are kept rather than deleted, under
 `memory-campaign-20260919/failed/`:
@@ -79,7 +101,7 @@ added afterwards was checked with `grep -nE '^(BUILD|HOST)='` before submission.
 
 ## Measurement settings
 
-Identical in M1 and M3:
+Identical in M1, M3, M4, M5 and the P* jobs:
 
 - `SAPT_DFT_GRAC_COMPUTE=ITERATIVE`, automatic GRAC shifts for both monomers.
 - 8 OpenMP threads, 112 GiB Psi4 memory, 128 GiB SLURM allocation.
@@ -111,12 +133,15 @@ M2 differs only in having no GPU arm and in running 8 against 24 threads.
 
 ## Attribution rules used in the report
 
-1. A difference between M1 and M3 is attributable to the merge.
+1. A difference between M4 and M5 is attributable to the merge. A difference
+   between M1 and M4, or M3 and M5, is attributable to libcuest. The first pass
+   read M1 vs M3 as the merge; the M3→M5 table shows that reading does not hold
+   on 0.2.2.2 (see the README).
 2. A difference between this campaign and `phoenix-h200-20260910` is **not**
    attributable to the merge. `e971d2957b`, that campaign's build, and
    `d91b5f8e81` are 55 commits apart, including `52431fc2c0`, `60322c4275`, and
    `4a6164ef71`, which move the XC quadrature onto the device — and XC supplies
-   65–78% of the GPU saving on every substantial case. The README reports that
+   66–79% of the GPU saving on every substantial six-case entry. The README reports that
    difference as a level and names the confound.
 3. A median difference is reported as a change only when it exceeds the combined
    half-range of both arms' repeats. `build_delta.py` applies this mechanically
@@ -141,10 +166,16 @@ CAMPAIGN=/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-cam
 sbatch "$CAMPAIGN/jobM1-core6-h200.sbatch"      # treatment, gpu-h200, ~40 min
 sbatch "$CAMPAIGN/jobM2-cpu24-core6.sbatch"     # thread scaling, cpu-small, ~45 min
 sbatch "$CAMPAIGN/jobM3-premerge-core6-h200.sbatch"  # control, gpu-h200, ~40 min
+sbatch "$CAMPAIGN/jobM4-core6-h200-cuest022.sbatch"          # treatment, libcuest 0.2.2.2
+sbatch "$CAMPAIGN/jobM5-premerge-core6-h200-cuest022.sbatch" # control, libcuest 0.2.2.2
+sbatch "$CAMPAIGN/jobP1-protein157-h200.sbatch"   # protein157 GPU x3 + CPU; CPU ~3.5 h, embers may preempt
+sbatch "$CAMPAIGN/jobP3-protein157-h200.sbatch"   # protein157 CPU
 
 # Then, from a checkout of the benchmarks branch with the trees at $RAW:
 devtools/benchmarks/results/phoenix-h200-20260919-memory/regenerate.sh "$RAW"
 ```
 
-`regenerate.sh` fails rather than skipping a table if the control tree is
-missing, because the report's central claim is the M1-vs-M3 difference.
+`regenerate.sh` fails rather than skipping a table if any tree it uses is missing,
+degraded, or not COMPLETED. The one exception is protein157's GPU run, which
+comes from a tree that is FAILED only because its CPU case was preempted.
+`regenerate.sh` checks that case's own `rc=0` and `ok` instead.

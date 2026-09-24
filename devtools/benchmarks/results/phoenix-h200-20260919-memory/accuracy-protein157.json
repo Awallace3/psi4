@@ -1,0 +1,46 @@
+{
+  "protein157-6-31+g**": {
+    "better_arm": null,
+    "component_deltas_eh": {
+      "SAPT DISP ENERGY": 0.0,
+      "SAPT ELST ENERGY": 4.703238118963782e-07,
+      "SAPT EXCH ENERGY": 8.928761131843377e-07,
+      "SAPT IND ENERGY": 7.1016258706979585e-09,
+      "SAPT TOTAL ENERGY": 4.1545067541726155e-07
+    },
+    "delta_exceeds_scatter": true,
+    "grac_compute": "ITERATIVE",
+    "max_component_delta_eh": 8.928761131843377e-07,
+    "max_shift_delta_eh": 9.999999994736442e-09,
+    "monomers": {
+      "A": {
+        "cation": 9.010000212583691e-06,
+        "cpu_cation": -2888.3324799,
+        "different_cation_solution": false,
+        "gpu_cation": -2888.33247089,
+        "homo": 7.800000000057761e-07,
+        "lower_cation_arm": "cpu",
+        "neutral": 8.240000170189887e-06,
+        "shift": 0.0
+      },
+      "B": {
+        "cation": 6.900000926179928e-07,
+        "cpu_cation": -772.00089906,
+        "different_cation_solution": false,
+        "gpu_cation": -772.00089837,
+        "homo": 2.1999999999522402e-07,
+        "lower_cation_arm": "cpu",
+        "neutral": 8.900000239009387e-07,
+        "shift": 9.999999994736442e-09
+      }
+    },
+    "repeats": {
+      "cpu": 1,
+      "gpu": 1
+    },
+    "run_to_run_scatter_eh": 0.0,
+    "solution_selection_differs": false,
+    "verdict": "agrees within tolerance",
+    "within_tolerance": true
+  }
+}

@@ -44,17 +44,214 @@
       "stream_gb_s": 14.616547479037441,
       "threads": 8,
       "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/M3-premerge-core6-h200-job13367763/results"
+    },
+    {
+      "dgemm_gflops_per_core": 24.50657139855904,
+      "drifted_during_run": {
+        "dgemm_gflops_per_core": 1.002606418239257,
+        "live_mhz": 2.25001,
+        "scalar_miter_s": 1.0011877475898647,
+        "stream_gb_s": 1.2148870480331728
+      },
+      "job": "13376151",
+      "live_mhz": 1800.008,
+      "node": "atl1-1-02-012-23-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 13.436115647713413,
+      "status": "measured",
+      "stream_gb_s": 4.157347287969667,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/M4-core6-h200-cuest022-job13376151/results"
+    },
+    {
+      "dgemm_gflops_per_core": 84.87395795175388,
+      "drifted_during_run": {
+        "dgemm_gflops_per_core": 1.0006804618822385,
+        "live_mhz": 1.0,
+        "scalar_miter_s": 1.3302905806259055,
+        "stream_gb_s": 1.001436812192553
+      },
+      "job": "13395711",
+      "live_mhz": 2800.0,
+      "node": "atl1-1-02-012-2-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 47.37148290842219,
+      "status": "measured",
+      "stream_gb_s": 14.541760663083766,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/M4-core6-h200-cuest022-job13395711/results"
+    },
+    {
+      "dgemm_gflops_per_core": 24.464580223700967,
+      "drifted_during_run": {
+        "dgemm_gflops_per_core": 1.003539667648781,
+        "live_mhz": 2.250050625,
+        "scalar_miter_s": 1.0013493599611865,
+        "stream_gb_s": 1.0022029527770004
+      },
+      "job": "13376152",
+      "live_mhz": 1800.0405,
+      "node": "atl1-1-02-012-23-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 9.983619032097282,
+      "status": "measured",
+      "stream_gb_s": 4.937957060717148,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/M5-premerge-core6-h200-cuest022-job13376152/results"
+    },
+    {
+      "dgemm_gflops_per_core": 84.15457912945844,
+      "job": "13395712",
+      "live_mhz": 2800.0,
+      "node": "atl1-1-03-019-2-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 47.046589578090234,
+      "status": "measured",
+      "stream_gb_s": 12.090277765692841,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/M5-premerge-core6-h200-cuest022-job13395712/results"
+    },
+    {
+      "dgemm_gflops_per_core": 24.424433384888992,
+      "job": "13376153",
+      "live_mhz": 800.0,
+      "node": "atl1-1-02-012-23-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 13.417156581156776,
+      "status": "measured",
+      "stream_gb_s": 5.075313754261331,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/P1-protein157-h200-job13376153/results"
+    },
+    {
+      "dgemm_gflops_per_core": 24.5657093420411,
+      "job": "13395713",
+      "live_mhz": 2800.0,
+      "node": "atl1-1-02-014-9-0.pace.gatech.edu",
+      "phases": [
+        "start"
+      ],
+      "scalar_miter_s": 13.475439986223332,
+      "status": "measured",
+      "stream_gb_s": 5.2086079445486355,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/P1-protein157-h200-job13395713/results"
+    },
+    {
+      "dgemm_gflops_per_core": 84.10476428128746,
+      "job": "13429862",
+      "live_mhz": 2800.0,
+      "node": "atl1-1-03-020-18-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 35.1137638609409,
+      "status": "measured",
+      "stream_gb_s": 12.086599220434364,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/P1-protein157-h200-job13429862/results"
+    },
+    {
+      "dgemm_gflops_per_core": 84.15747091968754,
+      "job": "13480138",
+      "live_mhz": 2800.0,
+      "node": "atl1-1-03-020-11-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 47.34277806644661,
+      "status": "measured",
+      "stream_gb_s": 11.990795045694135,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/P1-protein157-h200-job13480138/results"
+    },
+    {
+      "dgemm_gflops_per_core": 83.31206227146642,
+      "job": "13395714",
+      "live_mhz": 2800.0,
+      "node": "atl1-1-02-012-2-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 47.32216680609835,
+      "status": "measured",
+      "stream_gb_s": 14.623000440411706,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/P2-protein157-h200-job13395714/results"
+    },
+    {
+      "dgemm_gflops_per_core": 84.19100411635905,
+      "job": "13429863",
+      "live_mhz": 2797.157,
+      "node": "atl1-1-03-018-14-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 35.055433383016464,
+      "status": "measured",
+      "stream_gb_s": 12.021177361910205,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/P2-protein157-h200-job13429863/results"
+    },
+    {
+      "dgemm_gflops_per_core": 84.26804686722959,
+      "job": "13480139",
+      "live_mhz": 2800.0,
+      "node": "atl1-1-03-020-11-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 47.48370626776639,
+      "status": "measured",
+      "stream_gb_s": 11.792199962935028,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/P2-protein157-h200-job13480139/results"
+    },
+    {
+      "dgemm_gflops_per_core": 84.21880648715887,
+      "job": "13395715",
+      "live_mhz": 2800.0,
+      "node": "atl1-1-03-019-2-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 47.50176306707498,
+      "status": "measured",
+      "stream_gb_s": 11.995285621341084,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/P3-protein157-h200-job13395715/results"
     }
   ],
   "spread": {
-    "dgemm_gflops_per_core": 1.1009556441690396,
-    "live_mhz": 2.3333333333333335,
-    "scalar_miter_s": 1.9209944314921434,
-    "stream_gb_s": 1.5689210347109324,
+    "dgemm_gflops_per_core": 3.4749611839210175,
+    "live_mhz": 3.5,
+    "scalar_miter_s": 4.757970322621192,
+    "stream_gb_s": 3.5173872730640148,
     "threads": 1.0
   },
   "tolerance": 1.25,
   "uncertified": [],
   "verdict": "mismatched",
-  "worst_ratio": 2.3333333333333335
+  "worst_ratio": 4.757970322621192
 }

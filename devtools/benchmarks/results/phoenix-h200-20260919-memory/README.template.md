@@ -30,96 +30,156 @@ Contents:
 - `premerge-delta.md` — the controlled A/B: this build against its own first
   parent. **This is the only table here that isolates the merge.**
 - `attribution-premerge.md` — the same phase decomposition on the control arm.
+- `cuest-delta.md` — the second one-variable A/B: the same `core.so` against
+  libcuest 0.2.1.2 and 0.2.2.2. `premerge-cuest-delta.md` is the same swap on
+  the control build, and it is the table that retracts the first pass's GPU
+  claim (see below).
+- `protein157/summary.md`, `accuracy-protein157.md`,
+  `attribution-protein157.md` — the 157-atom case, one CPU run and one GPU run.
 - `paired/summary.md` — the paired timings and the memory tables.
 - `attribution.md`, `dfk-tflops.md`, `grac-cost.md`, `accuracy.md`,
   `thread-scaling-*.md`, `host-speed.md` — generated the same way as in the
   2026-09-10 directory. `regenerate.sh` rebuilds all of them from the raw trees.
 
-`protein157` is deliberately absent. It needs its own allocations and, on the
-CPU side, an inferno approval that does not exist; it is held until the six
-paired cases confirm the merged build.
+`protein157` (157 atoms, 1786 basis functions) is reported as **one CPU run
+and one GPU run**, in its own tables, and is never pooled into the six-case
+medians. Its 8-thread CPU arm takes 3.5 h. Embers preempted it in five of six
+attempts, and SAPT(DFT) has no checkpoint to resume from. The CPU run that
+finished is cpu-3 of P3 (job 13395715). Its partner is gpu-3 of P1 (job
+13429862). That tree is marked FAILED only because its own CPU case was
+preempted at 5342 s, after all three of its GPU cases had returned rc=0.
+`regenerate.sh` checks that GPU case individually and relinks both runs as
+repeat 1 in `protein157-single-pair/`. `SOURCES.txt` there records the original
+names. This is the one speedup in the directory that crosses two allocations,
+so the two hosts' canaries are quoted beside it.
 
 ## Status
 
-Three jobs, all COMPLETED with exit code 0 on `--qos=embers`:
+All jobs ran on `--qos=embers`. No inferno job was submitted.
 
-| Job | Arm | Build | Partition | Elapsed | Cases |
-|---|---|---|---|---:|---:|
-| 13358747 | M1 — paired CPU/GPU, 8 threads | merge `ee6161a3b6` | gpu-h200 | 00:37:23 | 36 |
-| 13358750 | M2 — CPU-only, 8 vs 24 threads | merge `ee6161a3b6` | cpu-small | 00:41:38 | 22 |
-| 13367763 | M3 — paired CPU/GPU, 8 threads | **pre-merge control `d91b5f8e81`** | gpu-h200 | 00:40:00 | 36 |
+| Job | Arm | Build | libcuest | Partition | Elapsed | State | Used |
+|---|---|---|---|---|---:|---|---|
+| 13358747 | M1 — paired CPU/GPU, 8 threads | merge `ee6161a3b6` | 0.2.1.2 | gpu-h200 | 00:37:23 | COMPLETED | `cuest-delta.md` control |
+| 13358750 | M2 — CPU-only, 8 vs 24 threads | merge `ee6161a3b6` | — | cpu-small | 00:41:38 | COMPLETED | thread scaling |
+| 13367763 | M3 — paired CPU/GPU, 8 threads | pre-merge `d91b5f8e81` | 0.2.1.2 | gpu-h200 | 00:40:00 | COMPLETED | `premerge-cuest-delta.md` control |
+| 13395711 | **M4 — paired CPU/GPU, 8 threads** | merge `ee6161a3b6` | 0.2.2.2 | gpu-h200 | 00:39:13 | COMPLETED | paired tables (A) |
+| 13395712 | **M5 — paired CPU/GPU, 8 threads** | pre-merge `d91b5f8e81` | 0.2.2.2 | gpu-h200 | 00:37:53 | COMPLETED | `premerge-delta.md` control (B) |
+| 13395715 | P3 — protein157 CPU | merge `ee6161a3b6` | 0.2.2.2 | gpu-h200 | 03:29:44 | COMPLETED | protein157 CPU |
+| 13429862 | P1 — protein157 GPU ×3 + CPU | merge `ee6161a3b6` | 0.2.2.2 | gpu-h200 | 01:54:36 | PREEMPTED | protein157 GPU (gpu-3) |
 
-M1 verified itself in-job: `cases=36 failed=0`, `without_host_memory=none`,
-`gpu_cases_without_device_memory=none`. Its host canary read 84.28 GF/s per core
-at the start and 84.31 at the end, against 83.3 / 84.2 for the 2026-09-10
-campaign — the same class of host, steady throughout.
+Trees kept but not used:
 
-M3 verified itself the same way and then verified that it is the *other* build:
-`cases=36 failed=0`, `without_host_memory=none`,
-`gpu_cases_without_device_memory=none`, and
-`cases_with_a_ledger_reading=none (expected)`. That last line is the point of the
-arm. The ledger reading comes from `psi4.core.memory_committed()`, which the
-merge adds; a control binary that reported one would not be the control. Both
-`merge_case_trees.py` passes print `host speed: matched`, so M1 and M3 are being
-differenced across comparable hosts.
+- 13376151 (M4), 13376152 (M5), 13376153 (P1) were preempted on
+  `atl1-1-02-012-23-0`, which read 24.5 GF/s per core against the 70 GF/s gate.
+  They carry `metadata/DEGRADED-HOST`.
+- 13395713 (P1) failed the host-speed gate at start-up (exit 75, 24.6 GF/s per
+  core on `atl1-1-02-014-9-0`). Both nodes are now excluded in the P1/P2 scripts.
+- 13395714, 13429863, 13480139 (P2) and 13480138 (P1) were preempted before
+  their CPU case finished. 13480138's three GPU runs completed at 417.6–419.8 s
+  and 13429862's at 419.3–507.3 s. They are consistent with the one reported here, but
+  they are not reported because no CPU run pairs with them.
+
+M4 and M5 verified themselves in-job: `cases=36 failed=0`, host memory on every
+case, and device memory on every GPU case. M5 additionally verified that it is
+the control build (`cases_with_a_ledger_reading=none (expected)`). Their
+canaries read 84.9 and 84.2 GF/s per core, the same host class as M1/M3 (84.3 /
+84.2).
 
 ## Read this before reading any speedup number here
 
-Two comparisons are available here and only one of them is attributable.
+**The controlled A/B is M4 against M5.** M5 runs `d91b5f8e81`, the merge
+commit's own first parent. It was built from the same worktree with the same
+compiler flags, measured by the byte-identical driver, on the same partition,
+against the same libcuest 0.2.2.2, and it ran concurrently with M4. M4 minus M5
+is the merge and nothing else.
 
-**The controlled A/B is M1 against M3**, and it is the next section. M3 runs
-`d91b5f8e81` — the merge commit's own first parent, built from the same worktree
-with the same compiler flags, measured by the byte-identical driver, on the same
-partition, three days later. M1 minus M3 is the merge and nothing else.
+**This replaces the first pass's M1-vs-M3 comparison, and it retracts that
+comparison's headline.** The first pass reported that the merge made the GPU arm
+17–29% faster. M4 vs M5 shows no such effect: GPU wall time moves by at most 1%.
+`premerge-cuest-delta.md` shows where the gap went. On the control build, the
+libcuest swap alone makes the GPU arm 16–28% faster (benzene cc-pVDZ
+22.50→16.47 s, benzene aug-cc-pVDZ 26.46→19.04 s, nanotube 52.44→39.23 s,
+peptide 28.77→24.13 s). On the merged build the same swap moves nothing
+(`cuest-delta.md`). This directory cannot tell apart two explanations:
 
-**The comparison against the [2026-09-10 campaign](../phoenix-h200-20260910/) is
-not**, even though it is the tempting one: same protocol, same partition, same
-six cases, and every speedup higher (2.55→3.01×, 5.85→6.56×, 2.23→2.68×,
-7.56→8.50×). Two things sit between the two directories. `e971d2957b`, the
-2026-09-10 build, and `d91b5f8e81` are **55 commits apart**, and they include
-both the work that moved the XC quadrature onto the device (`52431fc2c0`,
-`60322c4275`, `4a6164ef71`) and changes to the GRAC protocol that the GPU arm
-spends half its wall time in (`303f07ab2c`, `dc4a74cb98`). This campaign also
-instruments what the earlier one did not: a `/proc/self/clear_refs` reset and a
-0.5 s `nvidia-smi` poll alongside every timed region.
+- M3's GPU arm was slow for a reason its CPU canary does not see. No GPU canary
+  exists.
+- The merge and libcuest 0.2.2.2 remove the same GPU cost, so it shows up only
+  on the build/library combination that has neither.
 
-The control arm makes that tangle a measurement rather than a worry, and the
-answer is not the simple one. On the GPU side M3 reads **slower** than the
-2026-09-10 build on three of the four substantial cases — benzene cc-pVDZ 22.50 s
-against 19.55, benzene aug-cc-pVDZ 26.46 against 22.15, nanotube 52.44 against
-45.63 — while its CPU arms are 1–6% *faster* than them. So those 55 commits moved the
-GPU arm in both directions at once, and their net is not something this directory
-can decompose. Read the cross-campaign numbers as a level; read the next section
-for an effect.
+Either way, on the library the branch now ships, the merge is a host-memory
+change and not a GPU-speed change.
+
+**The comparison against the [2026-09-10 campaign](../phoenix-h200-20260910/)
+is not attributable.** It uses the same protocol, partition and six cases, and
+every speedup is higher (2.55→2.99×, 5.85→6.43×, 2.23→2.71×, 7.56→8.26×). But
+`e971d2957b` (the 2026-09-10 build) and `d91b5f8e81` are 55 commits apart. They
+include the move of the XC quadrature onto the device (`52431fc2c0`,
+`60322c4275`, `4a6164ef71`) and GRAC-protocol changes (`303f07ab2c`,
+`dc4a74cb98`), and the libcuest version differs too. Read the cross-campaign
+numbers as a level, not an effect.
 
 ## The controlled A/B: what the merge actually did
 
 <!-- PREMERGE -->
 
-The merge is a large, one-sided win on the GPU arm and a smaller one on host
-memory:
+The merge is a host-memory win and nothing else measurable:
 
-- **GPU wall time falls 17–29%** on the four substantial cases — nanotube
-  52.44→38.54 s, benzene aug-cc-pVDZ 26.46→18.88 s, benzene cc-pVDZ
-  22.50→16.34 s, peptide 28.77→23.78 s. Every one of those clears its scatter.
-- **CPU wall time does not move**: 2–4% either way, and inside the scatter on
-  the smallest case. The speedup column is therefore the GPU column, and it
-  rises 2.14→3.01×, 2.18→2.68×, 4.60→6.56×, and 6.46→8.50×.
-- **CPU host peak falls 6–15%** where there is enough of it to matter: the
-  nanotube drops 31656→27044 MiB, 4.5 GiB off a job that had been the reason
-  for the 112 GiB request, and benzene aug-cc-pVDZ 16466→14900 MiB. This is the
-  ledger doing what it was written for — the monomer SCFs stop being handed
-  memory the dimer JK and the collocation cache are already holding.
-- **GPU host peak is flat**, 1–3% up on a 0.9–1.9 GiB base. The GPU arm was
-  never the one over-committing the host.
+- **CPU host peak falls 7–15%** on the four substantial cases. The nanotube
+  drops 31688→27051 MiB, 4.5 GiB off the job that set the 112 GiB request.
+  Benzene aug-cc-pVDZ drops 16521→14893 MiB, benzene cc-pVDZ 7964→7423, and
+  peptide 7796→7297. This is the ledger doing what it was written for: the
+  monomer SCFs stop being handed memory that the dimer JK and the collocation
+  cache already hold.
+- **GPU wall time does not move**: within scatter or +1% on every case.
+- **CPU wall time reads 0–7% slower** on M4 (3–7% on the four cases that clear
+  scatter). Same-build reruns on different nodes move 1–3% (M1→M4 in
+  `cuest-delta.md`), so a CPU cost of a few percent from the merge cannot be
+  ruled out. The merge does change what the CPU arm allocates.
+- **GPU host peak is flat** at 0.9–1.9 GiB. The GPU arm was never the one
+  over-committing the host.
 
-The device column is the weakest evidence in this directory and should not be
-read as a result. It is a 0.5 s sample, its scatter across three identical
-repeats is ±166 to ±4767 MiB, and only one case — benzene aug-cc-pVDZ,
-3734→2878 MiB — moves further than its own repeats do. In particular the
-nanotube's 5386→8914 MiB is **not** a measured increase: the band on that case is
-±4767 MiB, which is to say the poll never resolved it at all. Sizing a device
-against these numbers needs a real allocator hook, not this.
+The device column is the weakest evidence in this directory. It is a 0.5 s
+sample, and its scatter across three identical repeats reaches ±1764 MiB on the
+nanotube. Two cases, benzene cc-pVDZ and peptide at ~3140→2800 MiB, move further
+than their own repeats. That is suggestive, not a measurement to size a device
+against.
+
+## The second A/B: the libcuest bump, 0.2.1.2 to 0.2.2.2
+
+<!-- CUESTDELTA -->
+
+This one is cleaner than any other comparison in this directory, because the
+thing under test is the only thing that moved. libcuest 0.2.2.2 keeps the soname
+and changes one header line, `CUEST_VER_PATCH`, so ninja had nothing to rebuild:
+M4 and M5 loaded the **byte-identical `core.so`** that M1 and M3 loaded, against
+a different shared object. The sha256 of the staged binary is pinned in
+`PROVENANCE.md` and asserted in-job, and `common.inc` additionally checks that
+the linked `libcuest.so` resolves inside the campaign environment — installed is
+not linked, and a stale RPATH would have made this table a comparison of nothing.
+
+The CPU arms are the control for the control: they never enter cuEST, so any
+movement in a CPU column here is host or noise, not the library.
+
+`cuest-delta.md` is generated **without** `--require-identical-numerics`. The
+other delta table asserts the two builds agree to the last bit; this one cannot,
+because changing the GPU library is exactly the kind of change that may reorder
+a reduction. It did so once: water cc-pVDZ's CPU-vs-GPU difference moves
+5.843224e-08→5.843170e-08 Eh, 5e-13 Eh against a scatter of ±4.9e-13. That is
+reduction order, not a different calculation.
+
+On the merged build, 0.2.2.2 changes nothing measurable. GPU wall moves 1–4%,
+in the same direction as the CPU arm, which cuEST never touches. The nanotube
+device sample reads 8914→5386 MiB, but that is inside its own scatter.
+
+The same swap on the control build is a different story:
+
+<!-- PREMERGECUESTDELTA -->
+
+The CPU arm is flat here too (within 1% on all but the nanotube, which reads 5%
+*faster*), so this is the GPU arm alone. It is the table behind the retraction
+above. The `do not agree numerically` line is benzene aug-cc-pVDZ moving in the
+fourteenth significant digit, 3e-14 against a scatter that small.
 
 ## Paired timings, automatic GRAC — post-merge build
 
@@ -130,8 +190,8 @@ threads, 112 GiB, `SAPT_DFT_GRAC_COMPUTE=ITERATIVE`. Speedup is median CPU wall
 
 <!-- PAIRED -->
 
-Repeat spread is tight: 0.1% on the nanotube arms, under 1% everywhere except
-the smallest water case.
+Repeat spread is tight: under 1% on the nanotube arms, and under 2% everywhere
+except the two water cases.
 
 The memory table is new in this campaign. Two things about it are easy to
 misread:
@@ -141,25 +201,58 @@ misread:
   through `/proc/self/clear_refs` before the `energy()` call. The device figure
   is a 0.5 s poll of per-process NVML accounting, so a spike shorter than the
   interval is missed and a device peak is a lower bound in a way the host peak
-  is not. The `benzene aug-cc-pVDZ` device range (2878–3734 MiB across three
-  identical repeats) is that sampling, not three different calculations.
+  is not. The nanotube device range (5386–8914 MiB across three identical
+  repeats) is that sampling, not three different calculations.
 - **The CPU and GPU host columns are not two measurements of one number.** The
   GPU arm holds one to two GiB on the host for every case, including the
   nanotube, because the DF integrals and the collocation grid live on the
   device; the CPU arm holds 27 GiB on the same case. The interesting comparison
   is down a column, not across.
 
+## protein157: one CPU run, one GPU run
+
+<!-- PROTEIN157 -->
+
+**29.8× end to end, n=1 per arm.** 12494 s on eight Xeon 8562Y+ cores against
+419 s on one H200. The other five completed GPU runs of the same build and
+input (jobs 13429862 and 13480138) took 417.6–507.3 s. Their median with this
+one is 419.6 s, so the speedup is the same 29.8× taken against it. The two slow
+runs, at 493 and 507 s, are gpu-1 and gpu-2 of 13429862. The CPU side has no
+scatter to quote. The two hosts read 84.2 (P3) and 84.1
+(P1 job 13429862) GF/s per core at start-up.
+
+The memory columns matter more than the speedup here. The CPU arm peaks at
+142 GiB of host memory, over the 112 GiB Psi4 was told it had. The GPU arm holds
+5.3 GiB on the host and a sampled ~46–54 GiB on the device across the three GPU
+runs of that job. A 157-atom SAPT(DFT) fits on one H200 with room to spare. The
+CPU arm overshoots its `memory 112 GiB` setting by 30 GiB and survived only
+because the SLURM allocation was 192 GiB. That overshoot is a memory-accounting
+finding in its own right: something on the CPU path allocates outside the
+budget. This campaign does not identify what.
+
+<!-- PROTEIN157ACC -->
+
+The largest component difference is 8.9e-07 Eh (exchange), and the GRAC shifts
+agree to 1e-8. The three GPU runs of that job agree with this CPU run to the
+same 8.93e-07.
+
+<!-- PROTEIN157ATTR -->
+
+At this size DF J/K becomes worth accelerating: it is 48% of the saving, against
+5–16% for the six smaller cases, and a perfect DF-K alone would cap the speedup
+at 1.88×. XC still supplies 43%, so neither phase alone explains the 29.8×.
+
 ## What automatic GRAC costs
 
 <!-- GRACCOST -->
 
-Automatic GRAC remains 34–52% of the CPU wall and 45–59% of the GPU wall — a
-larger share of the GPU arm in five of six cases, because the device removes
+Automatic GRAC remains 34–52% of the CPU wall and 45–59% of the GPU wall. It is
+a larger share of the GPU arm in five of six cases, because the device removes
 everything else faster than it removes GRAC. Unchanged in substance from the
 2026-09-10 campaign, which is the expected result: nothing in the memory merge
 touches the GRAC protocol.
 
-| System | Basis | Fixed-shift speedup (job 13024192) | ITERATIVE speedup (job 13358747) | GRAC % of CPU wall |
+| System | Basis | Fixed-shift speedup (job 13024192) | ITERATIVE speedup (job 13395711) | GRAC % of CPU wall |
 |---|---|---:|---:|---:|
 <!-- FIXEDVSITER -->
 
@@ -171,9 +264,10 @@ column is measured within one job and is unconditional.
 
 <!-- ATTRIBUTION -->
 
-DF J/K is 6–17% of ITERATIVE SAPT(DFT) wall time on the four substantial cases.
-Driving J/K to zero — an infinitely fast DF-K, everything else unchanged — caps
-the end-to-end speedup at 1.00–1.18×. XC supplies 65–78% of the saving.
+DF J/K supplies 5–16% of the saving on the four substantial cases. Driving J/K
+to zero (an infinitely fast DF-K, everything else unchanged) caps the end-to-end
+speedup at 1.04–1.18×. XC supplies 66–79% of the saving. protein157 is the
+exception, above.
 
 This is a within-job decomposition, so unlike the cross-campaign speedup it is
 not confounded by the build difference: it says where *this* build's time goes.
@@ -183,19 +277,12 @@ moved, phase by phase:
 
 <!-- ATTRIBUTIONPRE -->
 
-Both device phases got faster and neither dominates the change. Against the
-control the GPU XC phase speeds up on all four substantial cases — nanotube
-7.3→10.6×, benzene aug-cc-pVDZ 7.1→10.3×, benzene cc-pVDZ 2.6→3.8×, peptide
-2.5→3.2× — and DF-K on three of them (7.6→13.6×, 5.3→7.8×, 24.6→27.7×, against
-peptide 7.8→6.4×). The CPU arms move by 2–4%, so each of those ratios is the
-device phase getting faster rather than the baseline getting slower. The shares
-barely shift: XC supplies 63–81% of the saving before the merge and 65–78%
-after.
-
-A change spread across both kernels like that is what an allocation-level change
-looks like. None of the three merged commits touches the arithmetic of either
-phase; they change how much memory the process believes is free and which
-collocation blocks are worth caching, and every phase that allocates sees it.
+Neither device phase moves. XC speedups are within 0.2× of the control's on
+every substantial case (nanotube 10.4→10.5×, benzene aug-cc-pVDZ 10.1→10.4×,
+benzene cc-pVDZ 3.7→3.8×, peptide 3.1→3.3×). The DF-K ratios read 5–11% lower
+on M4 (28.2→26.7×, 14.0→12.6×, 8.1→7.2×, 6.2→5.9×). That tracks M4's slightly
+slower CPU denominator, not a slower device kernel. XC's share of the saving
+is 68–81% before the merge and 66–79% after.
 
 ## DF-K in effective TFLOPS
 
@@ -213,23 +300,32 @@ comparable with NVIDIA's emulated-FP64 figures.
 <!-- ACCURACY -->
 
 **The merge did not change the arithmetic.** `premerge-delta.md` compares every
-case's CPU-vs-GPU disagreement between M3 and M1 against that case's own
-repeat-to-repeat scatter, and none of them clears it: the two benzene cases are
-bit-identical across the builds and the rest move in the twelfth or thirteenth
-significant digit (2e-13 to 5e-11 Eh), which is the reduction order of a threaded
-sum, not a different calculation. Reaching further back, every case also
-reproduces the 2026-09-10 figure to the printed digits — 5.843e-08, 5.051e-08,
-2.341e-06, 2.077e-06, 9.285e-08, with only peptide moving 4.767e-08 → 4.724e-08
-— so fifty-five commits including a rewrite of where the XC quadrature is
-evaluated left the CPU-vs-GPU disagreement where it was.
+case's CPU-vs-GPU difference between M5 and M4 against that case's own
+repeat-to-repeat scatter, and none of them clears it. Reaching further back,
+every case also reproduces the 2026-09-10 figure to within 1e-10 Eh: 5.843e-08,
+5.051e-08, 2.341e-06, 2.077e-06, 9.28e-08 and 4.72e-08. Fifty-five commits,
+including a rewrite of where the XC quadrature is evaluated, and a libcuest
+bump left the CPU-vs-GPU difference where it was.
 
-The two benzene FAILs are the same pre-existing cation-SCF solution difference
-documented in the [2026-09-10 report](../phoenix-h200-20260910/README.md#backend-accuracy):
-the benzene cation is Jahn–Teller degenerate, the two arms reproducibly converge
-to different broken-symmetry solutions ~1e-4 Eh apart, and the ~2e-6 Eh
-component difference follows from the different GRAC shift. It is a property of
-the ITERATIVE protocol on a degenerate cation, not a regression and not a cuEST
-defect.
+**The gate here is 1e-5 Eh**, the scale at which a SAPT interaction energy would
+be reported differently, and every case passes it. The two benzene cases are the
+closest: ~2e-6 Eh on their largest component, which failed the 1e-6 gate the
+[2026-09-10 report](../phoenix-h200-20260910/README.md#backend-accuracy)
+predeclared and is published there as a FAIL. That report keeps its own
+threshold; a past campaign's gate is a record of what it committed to, not a
+parameter a later campaign gets to update, so `render_phoenix_report.py` pins
+1e-6 in its own constant rather than inheriting this default.
+
+Widening a gate normally means deleting a finding, and here it would have. Those
+two benzene numbers are not noise: the benzene cation is Jahn–Teller degenerate,
+the two arms reproducibly converge to different broken-symmetry solutions ~1e-4
+Eh apart, and the ~2e-6 Eh component difference follows from the different GRAC
+shift that implies. It is a property of the ITERATIVE protocol on a degenerate
+cation, not a regression and not a cuEST defect — but it is also not something a
+wider gate should be allowed to silence. `iterative_accuracy.py`'s `verdict()`
+used to short-circuit on “within tolerance”; it now reports the solution split
+alongside the pass and names which arm found the variationally lower cation, so
+the Interpretation column above still says so.
 
 ## Thread scaling of the CPU baseline
 
@@ -252,17 +348,14 @@ different corrections, and neither is the core-count ratio.
 
 <!-- HOSTSPEED -->
 
-The aggregate verdict is `mismatched`, and that is expected rather than a
-problem: M1/M3 run on a gpu-h200 node (Xeon Platinum 8562Y+) and M2 on a
-cpu-small node (Xeon Gold 6226), which is the whole point of M2. The 2.33× that
-trips the tolerance is the live-clock column — 2800 MHz against 1200 MHz, the
-latter against a 2700 MHz maximum, so the cpu-small node was reading idle-clocked
-at canary time. The work-rate columns are much closer (1.10× on DGEMM, 1.55× on
-triad, 1.92× on the scalar loop). **Nothing pools the two trees.** Every speedup
-in this directory is computed within a single job's tree, and the paired merge
-reports `host speed: matched`. The M1-vs-M3 comparison in `premerge-delta.md` is
-the one place two trees are differenced, and the two hosts' canaries must be
-read together with it.
+The aggregate verdict is `mismatched`, and it is expected. The table lists every
+tree, including the four that ran on nodes reading 24.4–24.6 GF/s per core and
+were dropped for it, and M2 on a cpu-small node (Xeon Gold 6226), whose
+difference is the point of M2. Every tree a reported number comes from reads
+84.1–84.9 GF/s per core. Each paired merge reports `host speed: matched`, and
+every six-case speedup is computed within a single job's tree. Two comparisons
+reach across trees: the A/B deltas, and protein157's single pair. Read their
+hosts' rows together with them.
 
 ## Reproduce
 

@@ -5,14 +5,14 @@
     ],
     "component_deltas_eh": {
       "SAPT DISP ENERGY": 0.0,
-      "SAPT ELST ENERGY": 1.479980767271627e-06,
-      "SAPT EXCH ENERGY": 2.0774397978349374e-06,
-      "SAPT IND ENERGY": 8.23843916697431e-10,
-      "SAPT TOTAL ENERGY": 5.982845512238211e-07
+      "SAPT ELST ENERGY": 1.479982216778808e-06,
+      "SAPT EXCH ENERGY": 2.077439788979174e-06,
+      "SAPT IND ENERGY": 7.913474736609416e-10,
+      "SAPT TOTAL ENERGY": 5.982479175555e-07
     },
     "delta_exceeds_scatter": true,
     "grac_compute": "ITERATIVE",
-    "max_component_delta_eh": 2.0774397978349374e-06,
+    "max_component_delta_eh": 2.077439788979174e-06,
     "max_shift_delta_eh": 0.00011666000000000454,
     "monomers": {
       "A": {
@@ -40,10 +40,10 @@
       "cpu": 3,
       "gpu": 3
     },
-    "run_to_run_scatter_eh": 5.970898775409239e-11,
+    "run_to_run_scatter_eh": 1.530009920841513e-10,
     "solution_selection_differs": true,
-    "verdict": "exceeds tolerance because the arms converged to different cation SCF solutions; gpu found the lower one",
-    "within_tolerance": false
+    "verdict": "agrees within tolerance, but the arms converged to different cation SCF solutions; gpu found the lower one",
+    "within_tolerance": true
   },
   "benzene-cc-pvdz": {
     "better_arm": [
@@ -51,14 +51,14 @@
     ],
     "component_deltas_eh": {
       "SAPT DISP ENERGY": 0.0,
-      "SAPT ELST ENERGY": 1.503327752061523e-06,
-      "SAPT EXCH ENERGY": 2.3405742515421324e-06,
-      "SAPT IND ENERGY": 4.581172247108967e-12,
-      "SAPT TOTAL ENERGY": 8.372423162122944e-07
+      "SAPT ELST ENERGY": 1.503327496266138e-06,
+      "SAPT EXCH ENERGY": 2.3405742499843507e-06,
+      "SAPT IND ENERGY": 4.39034746058109e-12,
+      "SAPT TOTAL ENERGY": 8.372420223102389e-07
     },
     "delta_exceeds_scatter": true,
     "grac_compute": "ITERATIVE",
-    "max_component_delta_eh": 2.3405742515421324e-06,
+    "max_component_delta_eh": 2.3405742499843507e-06,
     "max_shift_delta_eh": 0.00011942000000000896,
     "monomers": {
       "A": {
@@ -86,23 +86,23 @@
       "cpu": 3,
       "gpu": 3
     },
-    "run_to_run_scatter_eh": 8.478273638701239e-12,
+    "run_to_run_scatter_eh": 2.601425325154949e-11,
     "solution_selection_differs": true,
-    "verdict": "exceeds tolerance because the arms converged to different cation SCF solutions; gpu found the lower one",
-    "within_tolerance": false
+    "verdict": "agrees within tolerance, but the arms converged to different cation SCF solutions; gpu found the lower one",
+    "within_tolerance": true
   },
   "nanotube-6-31+g**": {
     "better_arm": null,
     "component_deltas_eh": {
       "SAPT DISP ENERGY": 0.0,
-      "SAPT ELST ENERGY": 1.5727437130408362e-09,
-      "SAPT EXCH ENERGY": 9.271391902127002e-08,
-      "SAPT IND ENERGY": 1.8379566119053337e-08,
-      "SAPT TOTAL ENERGY": 7.62701454007364e-08
+      "SAPT ELST ENERGY": 1.700129814707907e-09,
+      "SAPT EXCH ENERGY": 9.275968702177062e-08,
+      "SAPT IND ENERGY": 1.863473245156122e-08,
+      "SAPT TOTAL ENERGY": 7.582316487175778e-08
     },
     "delta_exceeds_scatter": true,
     "grac_compute": "ITERATIVE",
-    "max_component_delta_eh": 9.271391902127002e-08,
+    "max_component_delta_eh": 9.275968702177062e-08,
     "max_shift_delta_eh": 1.9999999996411777e-08,
     "monomers": {
       "A": {
@@ -130,7 +130,7 @@
       "cpu": 3,
       "gpu": 3
     },
-    "run_to_run_scatter_eh": 6.35111518931808e-10,
+    "run_to_run_scatter_eh": 1.5807017916813493e-09,
     "solution_selection_differs": false,
     "verdict": "agrees within tolerance",
     "within_tolerance": true
@@ -139,14 +139,14 @@
     "better_arm": null,
     "component_deltas_eh": {
       "SAPT DISP ENERGY": 0.0,
-      "SAPT ELST ENERGY": 2.1008929707022617e-08,
-      "SAPT EXCH ENERGY": 2.6173202969520526e-08,
-      "SAPT IND ENERGY": 1.5080998949645874e-11,
-      "SAPT TOTAL ENERGY": 4.719768693060844e-08
+      "SAPT ELST ENERGY": 2.0973743630747776e-08,
+      "SAPT EXCH ENERGY": 2.617329721357753e-08,
+      "SAPT IND ENERGY": 1.3463265224888943e-11,
+      "SAPT TOTAL ENERGY": 4.7172747387122516e-08
     },
     "delta_exceeds_scatter": true,
     "grac_compute": "ITERATIVE",
-    "max_component_delta_eh": 4.719768693060844e-08,
+    "max_component_delta_eh": 4.7172747387122516e-08,
     "max_shift_delta_eh": 1.900000000110147e-07,
     "monomers": {
       "A": {
@@ -174,7 +174,7 @@
       "cpu": 3,
       "gpu": 3
     },
-    "run_to_run_scatter_eh": 2.6003021957876626e-10,
+    "run_to_run_scatter_eh": 3.3424880571675253e-10,
     "solution_selection_differs": false,
     "verdict": "agrees within tolerance",
     "within_tolerance": true
@@ -183,14 +183,14 @@
     "better_arm": null,
     "component_deltas_eh": {
       "SAPT DISP ENERGY": 0.0,
-      "SAPT ELST ENERGY": 1.235231650298374e-08,
-      "SAPT EXCH ENERGY": 3.815831917282353e-08,
-      "SAPT IND ENERGY": 3.0864893973969743e-13,
-      "SAPT TOTAL ENERGY": 5.051034110067909e-08
+      "SAPT ELST ENERGY": 1.2352334266552134e-08,
+      "SAPT EXCH ENERGY": 3.815831920231383e-08,
+      "SAPT IND ENERGY": 1.3672916965301596e-13,
+      "SAPT TOTAL ENERGY": 5.051050664013623e-08
     },
     "delta_exceeds_scatter": true,
     "grac_compute": "ITERATIVE",
-    "max_component_delta_eh": 5.051034110067909e-08,
+    "max_component_delta_eh": 5.051050664013623e-08,
     "max_shift_delta_eh": 1.9999999989472883e-08,
     "monomers": {
       "A": {
@@ -218,7 +218,7 @@
       "cpu": 3,
       "gpu": 3
     },
-    "run_to_run_scatter_eh": 9.637724646127666e-13,
+    "run_to_run_scatter_eh": 1.4797017777734567e-12,
     "solution_selection_differs": false,
     "verdict": "agrees within tolerance",
     "within_tolerance": true
@@ -227,14 +227,14 @@
     "better_arm": null,
     "component_deltas_eh": {
       "SAPT DISP ENERGY": 0.0,
-      "SAPT ELST ENERGY": 1.760133727657376e-08,
-      "SAPT EXCH ENERGY": 4.0830226552199256e-08,
-      "SAPT IND ENERGY": 1.1146986111931767e-13,
-      "SAPT TOTAL ENERGY": 5.8431675489453716e-08
+      "SAPT ELST ENERGY": 1.7601344382001116e-08,
+      "SAPT EXCH ENERGY": 4.083022664760905e-08,
+      "SAPT IND ENERGY": 9.285974766903848e-15,
+      "SAPT TOTAL ENERGY": 5.8431561743635396e-08
     },
     "delta_exceeds_scatter": true,
     "grac_compute": "ITERATIVE",
-    "max_component_delta_eh": 5.8431675489453716e-08,
+    "max_component_delta_eh": 5.8431561743635396e-08,
     "max_shift_delta_eh": 1.9999999989472883e-08,
     "monomers": {
       "A": {
@@ -262,7 +262,7 @@
       "cpu": 3,
       "gpu": 3
     },
-    "run_to_run_scatter_eh": 4.843521417274843e-13,
+    "run_to_run_scatter_eh": 2.782912789101033e-13,
     "solution_selection_differs": false,
     "verdict": "agrees within tolerance",
     "within_tolerance": true
