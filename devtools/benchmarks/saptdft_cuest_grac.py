@@ -40,7 +40,7 @@ no_com
 
 
 def geometry(system):
-    if system in ("peptide", "nanotube", "protein157"):
+    if system in ("peptide", "nanotube", "protein83", "protein157"):
         return json.loads(Path(__file__).with_name("saptdft_suite_geometries.json").read_text())[system]
     if system == "water":
         return WATER
@@ -96,7 +96,7 @@ def run_case(args):
     }
     if args.grac_compute == "NONE":
         options.update({"SAPT_DFT_GRAC_SHIFT_A": args.shift, "SAPT_DFT_GRAC_SHIFT_B": args.shift})
-    if args.system in ("peptide", "nanotube", "protein157"):
+    if args.system in ("peptide", "nanotube", "protein83", "protein157"):
         # Pople's generated auxiliary basis is Cartesian, unsupported by cuEST.
         # Psi4 propagates the primary basis's puream into fitting bases here.
         # Explicitly use spherical orbital AND fitting bases in both arms;
@@ -117,7 +117,7 @@ def run_case(args):
         record["nbf_monomer_a"] = psi4.core.BasisSet.build(molecule.extract_subsets(1), "BASIS", args.basis).nbf()
         record["nbf_monomer_b"] = psi4.core.BasisSet.build(molecule.extract_subsets(2), "BASIS", args.basis).nbf()
         expected_nbf = {("peptide", "6-31+g**"): 250, ("nanotube", "6-31+g**"): 548,
-                        ("protein157", "6-31+g**"): 1786}
+                        ("protein83", "6-31+g**"): 922, ("protein157", "6-31+g**"): 1786}
         expected = expected_nbf.get((args.system, args.basis.lower()))
         if expected is not None and record["nbf"] != expected:
             raise ValueError(f"Basis count {record['nbf']} differs from suite reference {expected}")
@@ -244,7 +244,7 @@ def main():
     parser.add_argument("--systems", nargs="+", choices=["water", "benzene", "peptide", "nanotube"],
                         default=["water", "benzene", "peptide", "nanotube"])
     parser.add_argument("--case", action="store_true")
-    parser.add_argument("--system", choices=["water", "benzene", "peptide", "nanotube", "protein157"], default="water")
+    parser.add_argument("--system", choices=["water", "benzene", "peptide", "nanotube", "protein83", "protein157"], default="water")
     parser.add_argument("--basis", default="cc-pvdz")
     parser.add_argument("--mode", choices=["cpu", "gpu"], default="cpu")
     args = parser.parse_args()
