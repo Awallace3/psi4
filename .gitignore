@@ -164,3 +164,4 @@ pytest_output.log
 AGENTS.md
 profile.txt
 fsapt
+tmp/
