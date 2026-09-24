@@ -69,6 +69,40 @@ std::array<double,15> angular(int l, IsaBasisRepresentation rep, double x, doubl
     return out;
 }
 }
+std::shared_ptr<Matrix> IsaExplicitBasis::screening_s_overlap(std::size_t max_bytes) const {
+    const auto n = shells_.size();
+    basis_require(max_bytes > 0 && max_bytes <= 512UL*1024*1024 &&
+                  n > 0 && n <= max_bytes/sizeof(double)/n,
+                  "Shell screening matrix byte resource limit");
+    auto result = std::make_shared<Matrix>("Signed shell normalized-s surrogate",
+                                          static_cast<int>(n), static_cast<int>(n));
+    for (std::size_t i=0; i<n; ++i) {
+        const auto& a = shells_[i];
+        for (std::size_t j=i; j<n; ++j) {
+            const auto& b = shells_[j];
+            double r2 = 0.;
+            for (int xyz=0; xyz<3; ++xyz) {
+                const double d = centres_[a.centre][xyz]-centres_[b.centre][xyz];
+                r2 += d*d;
+            }
+            basis_require(std::isfinite(r2), "Nonfinite shell screening distance");
+            double value = 0.;
+            for (std::size_t p=0; p<a.exponents.size(); ++p)
+                for (std::size_t q=0; q<b.exponents.size(); ++q) {
+                    const double alpha = a.exponents[p], beta = b.exponents[q];
+                    const double sum = alpha+beta;
+                    basis_require(std::isfinite(sum), "Nonfinite shell screening exponent sum");
+                    const double overlap = std::pow(4.*(alpha/sum)*(beta/sum), .75) *
+                                           std::exp(-(alpha/sum)*beta*r2);
+                    value += a.coefficients[p]*b.coefficients[q]*overlap;
+                    basis_require(std::isfinite(value), "Nonfinite shell screening contraction");
+                }
+            result->set(i,j,value);
+            result->set(j,i,value);
+        }
+    }
+    return result;
+}
 std::vector<double> isa_regular_multipoles(int rank, const std::array<double,3>& r) {
     basis_require(rank >= 0 && rank <= 4, "Multipole rank must be between 0 and 4");
     for (double v : r) basis_require(std::isfinite(v), "Multipole displacement must be finite");

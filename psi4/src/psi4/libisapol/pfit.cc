@@ -139,7 +139,14 @@ IsaPfitMatrix IsaPfitResult::effective_penalty_matrix() const {
 std::vector<double> IsaPfitResult::effective_penalty_rhs() const {
     auto v=matrix_rhs_; for(size_t i=0;i<v.size();++i) v[i]=finite(v[i]+lc_rhs_[i]); return v;
 }
-IsaPfitResult isa_pfit_solve(const IsaPfitProblem& p,const IsaPfitOptions& o) {
+namespace detail {
+struct IsaPfitSolverImpl {
+    using Consumer = std::function<void(size_t,size_t,const std::vector<double>&,double)>;
+    using Replay = std::function<void(size_t,const Consumer&)>;
+    template<class Problem>
+    static IsaPfitResult solve(const Problem& p, const IsaPfitOptions& o,
+                              const std::vector<IsaPfitCloudRows>& clouds,
+                              const Replay& replay, size_t source_bytes) {
     require(o.solver==IsaPfitSolver::StreamingQR || o.solver==IsaPfitSolver::NormalEquationsDSYSV,"unknown solver");
     require(o.qr_chunk_rows>0 && o.qr_chunk_rows<=static_cast<size_t>(std::numeric_limits<int>::max()),"invalid QR chunk rows");
     require(finite(o.rank_relative_tolerance)>0 && o.rank_relative_tolerance<1,"invalid rank tolerance");
@@ -149,10 +156,12 @@ IsaPfitResult isa_pfit_solve(const IsaPfitProblem& p,const IsaPfitOptions& o) {
     require(provenance.origin==IsaPfitTargetOrigin::SuppliedActualPointResponse ||
             provenance.origin==IsaPfitTargetOrigin::SuppliedFittedPropagatorPointResponse ||
             provenance.origin==IsaPfitTargetOrigin::NativeDirectActualPointResponse ||
+            provenance.origin==IsaPfitTargetOrigin::NativeFittedPointResponse ||
             provenance.origin==IsaPfitTargetOrigin::SyntheticAnalyticTest,"target origin must be declared");
     require(provenance.convention==IsaPfitTargetConvention::NegativeInducedPotentialPerUnitSourceChargeAtomicUnits,"wrong/unspecified target convention");
     text(provenance.source_id); text(provenance.generation_record); text(p.model.provenance);
-    if(provenance.origin==IsaPfitTargetOrigin::SuppliedFittedPropagatorPointResponse) {
+    if(provenance.origin==IsaPfitTargetOrigin::SuppliedFittedPropagatorPointResponse ||
+       provenance.origin==IsaPfitTargetOrigin::NativeFittedPointResponse) {
         require(provenance.response_representation=="fitted_density_coefficients","fitted target requires fitted_density_coefficients representation");
         text(provenance.auxiliary_basis_id);
     }
@@ -166,21 +175,17 @@ IsaPfitResult isa_pfit_solve(const IsaPfitProblem& p,const IsaPfitOptions& o) {
     require(np>0 && nc>0 && np<=static_cast<size_t>(std::numeric_limits<int>::max()/8),"invalid parameter/channel count");
     labels(p.model.parameter_labels); labels(p.model.channel_labels);
     require(p.model.parameter_units.size()==np,"parameter units dimension mismatch"); for(const auto& s:p.model.parameter_units) text(s);
-    require(p.model.parameter_tensors.size()==np && p.model.fixed.size()==np,"model dimension mismatch");
+    require(p.model.fixed.size()==np,"model dimension mismatch");
     vector_shape(p.model.fixed_values,np); vector_shape(p.penalty.anchor,np);
     matrix_shape(p.penalty.matrix,np,np); symmetric(p.penalty.matrix);
-    for(const auto& k:p.model.parameter_tensors) { matrix_shape(k,nc,nc); symmetric(k); }
     for(const auto& l:p.linear_penalties) {
         vector_shape(l.coefficients,np); finite(l.target); require(finite(l.strength)>=0,"negative LC strength");
     }
     size_t rows=0; std::set<std::string> batch_names;
-    for(const auto& b:p.batches) {
+    for(const auto& b:clouds) {
         text(b.label); require(batch_names.insert(b.label).second,"duplicate batch label");
-        size_t n=b.points_bohr.size(); require(n>0,"empty physical batch");
-        size_t pairs=mul(n,add(n,1))/2;
-        require(b.targets.size()==pairs,"wrong packed triangular target count"); values(b.targets);
-        matrix_shape(b.fields,n,nc); for(const auto& xyz:b.points_bohr) for(double x:xyz) finite(x);
-        rows=add(rows,pairs);
+        require(b.points>0 && b.full_row_count>0,"empty physical cloud");
+        rows=add(rows,b.full_row_count);
     }
     require(rows>0,"empty data not supported");
     size_t nf=0; for(bool fixed:p.model.fixed) if(!fixed) ++nf;
@@ -191,18 +196,18 @@ IsaPfitResult isa_pfit_solve(const IsaPfitProblem& p,const IsaPfitOptions& o) {
     size_t scalars=add(mul(40,mul(np,np)),mul(64,np));
     if(o.solver==IsaPfitSolver::StreamingQR && nf) scalars=add(scalars,mul(o.qr_chunk_rows,add(nf,1)));
     if(o.retain_pair_predictions) scalars=add(scalars,rows);
-    scalars=add(scalars,mul(16,p.batches.size()));
-    Budget budget{mul(scalars,sizeof(double)),o.maximum_work_bytes};
+    scalars=add(scalars,mul(16,clouds.size()));
+    Budget budget{add(mul(scalars,sizeof(double)),source_bytes),o.maximum_work_bytes};
     require(budget.base<=budget.limit,"kernel numerical buffers exceed maximum_work_bytes");
     IsaPfitResult out; auto& d=out.diagnostics_; out.settings_=o; out.frequency_=p.frequency_au;
     out.provenance_=provenance; out.model_provenance_=p.model.provenance;
     out.parameter_labels_=p.model.parameter_labels; out.parameter_units_=p.model.parameter_units;
     out.channel_labels_=p.model.channel_labels;
-    for(const auto& b:p.batches) out.batch_labels_.push_back(b.label);
+    for(const auto& b:clouds) out.batch_labels_.push_back(b.label);
     d.data_rows=rows; d.augmented_rows=add(add(rows,np),p.linear_penalties.size());
     d.work_budget_bytes=budget.base; budget.peak=&d.work_budget_bytes;
     for(size_t i=0;i<np;++i) if(!p.model.fixed[i]) d.free_indices.push_back(i);
-    for(const auto& b:p.batches) d.batches.push_back({b.points_bohr.size(),b.targets.size(),0,0,0});
+    for(const auto& b:clouds) d.batches.push_back({b.points,b.full_row_count,0,0,0});
     out.normal_=zeros(nf); out.rhs_.assign(nf,0); out.penalty_=zeros(np); out.lc_=zeros(np);
     out.matrix_rhs_.assign(np,0); out.lc_rhs_.assign(np,0);
     auto eigvec=column(p.penalty.matrix); auto eigval=eigen(eigvec,static_cast<int>(np),budget);
@@ -247,7 +252,7 @@ IsaPfitResult isa_pfit_solve(const IsaPfitProblem& p,const IsaPfitOptions& o) {
         }
         if(nf && o.solver==IsaPfitSolver::StreamingQR) qr.push(free_row,y);
     };
-    data_rows(p,[&](size_t,size_t,const std::vector<double>& a,double y){append(a,y);});
+    replay(0,[&](size_t,size_t,const std::vector<double>& a,double y){append(a,y);});
     for(size_t k=0;k<np;++k) {
         std::copy(root.begin()+k*np,root.begin()+(k+1)*np,a.begin()); append(a,dot(a,p.penalty.anchor));
     }
@@ -310,8 +315,8 @@ IsaPfitResult isa_pfit_solve(const IsaPfitProblem& p,const IsaPfitOptions& o) {
     }
     out.parameters_=p.model.fixed_values;
     for(size_t i=0;i<nf;++i) out.parameters_[d.free_indices[i]]=x[i];
-    if(o.retain_pair_predictions) {out.predictions_.resize(p.batches.size()); for(size_t b=0;b<p.batches.size();++b) out.predictions_[b].resize(p.batches[b].targets.size());}
-    data_rows(p,[&](size_t b,size_t k,const std::vector<double>& row,double target) {
+    if(o.retain_pair_predictions) {out.predictions_.resize(clouds.size()); for(size_t b=0;b<clouds.size();++b) out.predictions_[b].resize(clouds[b].full_row_count);}
+    replay(1,[&](size_t b,size_t k,const std::vector<double>& row,double target) {
         double pred=dot(row,out.parameters_), residual=finite(pred-target);
         auto& bd=d.batches[b]; bd.sse=finite(bd.sse+finite(residual*residual)); bd.max_residual=std::max(bd.max_residual,std::abs(residual));
         if(o.retain_pair_predictions) out.predictions_[b][k]=pred;
@@ -329,5 +334,68 @@ IsaPfitResult isa_pfit_solve(const IsaPfitProblem& p,const IsaPfitOptions& o) {
     }
     d.total_objective=finite(finite(d.data_sse+d.matrix_objective)+d.lc_objective); d.objective_available=true;
     return out;
+}
+};
+} // namespace detail
+
+IsaPfitResult isa_pfit_solve(const IsaPfitProblem& p,const IsaPfitOptions& o) {
+    const size_t np=p.model.parameter_labels.size(), nc=p.model.channel_labels.size();
+    require(p.model.parameter_tensors.size()==np,"model dimension mismatch");
+    for(const auto& k:p.model.parameter_tensors) { matrix_shape(k,nc,nc); symmetric(k); }
+    std::vector<IsaPfitCloudRows> clouds;
+    for(const auto& b:p.batches) {
+        size_t n=b.points_bohr.size();
+        require(n>0,"empty physical batch");
+        size_t pairs=mul(n,add(n,1))/2;
+        require(b.targets.size()==pairs,"wrong packed triangular target count"); values(b.targets);
+        matrix_shape(b.fields,n,nc);
+        for(const auto& xyz:b.points_bohr) for(double x:xyz) finite(x);
+        clouds.push_back({b.label,n,pairs,0});
+    }
+    return detail::IsaPfitSolverImpl::solve(p,o,clouds,
+        [&](size_t,const detail::IsaPfitSolverImpl::Consumer& consume){data_rows(p,consume);},0);
+}
+
+IsaPfitResult isa_pfit_solve_rows(const IsaPfitRowProblem& input,const IsaPfitRowSource& input_source,
+                                const IsaPfitOptions& options) {
+    // Native callbacks receive the same immutability guarantee as Python
+    // producers, even when they retain references to the caller's declarations.
+    const auto p=input;
+    const auto o=options;
+    const auto source=input_source;
+    size_t n=p.cloud.points, next_n=add(n,1);
+    require(n>0,"empty row cloud");
+    const size_t rows=(n%2)?mul(n,next_n/2):mul(n/2,next_n);
+    require(rows==p.cloud.full_row_count,"wrong complete-cloud packed row count");
+    const size_t capacity=p.cloud.maximum_block_rows, np=p.model.parameter_labels.size();
+    require(capacity>0,"row block capacity must be positive");
+    require(source.begin_pass && source.next && source.finish_pass,"incomplete row source");
+    size_t payload=mul(capacity,add(np,1));
+    size_t bytes=mul(add(payload,np),sizeof(double));
+    std::array<unsigned char,32> first_digest{};
+    auto replay=[&](size_t pass,const detail::IsaPfitSolverImpl::Consumer& consume) {
+        // The common solver admits this workspace before invoking the source.
+        std::vector<double> design(mul(capacity,np)), targets(capacity), row(np);
+        source.begin_pass(pass);
+        size_t expected=0;
+        while(true) {
+            auto block=source.next(capacity,np,design.data(),targets.data());
+            require(block.packed_start==expected,"row source gap, duplicate or reordered start");
+            if(!block.rows) {
+                require(expected==rows,"row source ended before complete cloud");
+                break;
+            }
+            require(block.rows<=capacity && block.rows<=rows-expected,"excess/oversized row block");
+            for(size_t i=0;i<block.rows;++i) {
+                for(size_t k=0;k<np;++k) row[k]=finite(design[i*np+k]);
+                consume(0,expected+i,row,finite(targets[i]));
+            }
+            expected=add(expected,block.rows);
+        }
+        auto digest=source.finish_pass();
+        if(!pass) first_digest=digest;
+        else require(digest==first_digest,"row source replay content changed");
+    };
+    return detail::IsaPfitSolverImpl::solve(p,o,{p.cloud},replay,bytes);
 }
 }} // namespace psi::isapol

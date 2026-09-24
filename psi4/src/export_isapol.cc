@@ -27,6 +27,7 @@
  */
 
 #include "psi4/pybind11.h"
+#include <cstring>
 
 #include "psi4/libisapol/native_response.h"
 #include "psi4/libisapol/point_response.h"
@@ -208,6 +209,24 @@ void export_isapol(py::module& m) {
         return 0;  // no supported thread-local override in this build
 #endif
     });
+    py::class_<NativeRestrictedState, std::shared_ptr<NativeRestrictedState>>(m, "NativeRestrictedState")
+        .def(py::init<std::shared_ptr<Wavefunction>, bool, std::size_t>(),
+             "wavefunction"_a, "caller_converged"_a, "max_bytes"_a)
+        .def("orbitals", &NativeRestrictedState::orbitals)
+        .def("energies", &NativeRestrictedState::energies)
+        .def("density_alpha", &NativeRestrictedState::density_alpha)
+        .def("basis_snapshot", &NativeRestrictedState::basis_snapshot)
+        .def_property_readonly("nbf", &NativeRestrictedState::nbf)
+        .def_property_readonly("nmo", &NativeRestrictedState::nmo)
+        .def_property_readonly("nocc", &NativeRestrictedState::nocc)
+        .def_property_readonly("nvir", &NativeRestrictedState::nvir)
+        .def_property_readonly("nov", &NativeRestrictedState::nov)
+        .def_property_readonly("planned_bytes", &NativeRestrictedState::planned_bytes)
+        .def_property_readonly("ov_order", [](const NativeRestrictedState&) { return "occupied_fast: t=a*nocc+i"; })
+        .def_property_readonly("caller_converged", [](const NativeRestrictedState&) { return true; })
+        .def_property_readonly("convergence_evidence", [](const NativeRestrictedState&) {
+            return "caller declaration only; restricted metadata, density and orthonormality checked";
+        });
     py::class_<NativeResponseProvider, std::shared_ptr<NativeResponseProvider>>(m, "NativeResponseProvider")
         .def(py::init<std::shared_ptr<Wavefunction>, bool, const std::string&, double, double,
                       SharedMatrix, double, std::size_t, std::size_t, const std::string&>(),
@@ -289,6 +308,7 @@ void export_isapol(py::module& m) {
         .value("SuppliedActualPointResponse", IsaPfitTargetOrigin::SuppliedActualPointResponse)
         .value("SuppliedFittedPropagatorPointResponse", IsaPfitTargetOrigin::SuppliedFittedPropagatorPointResponse)
         .value("NativeDirectActualPointResponse", IsaPfitTargetOrigin::NativeDirectActualPointResponse)
+        .value("NativeFittedPointResponse", IsaPfitTargetOrigin::NativeFittedPointResponse)
         .value("SyntheticAnalyticTest", IsaPfitTargetOrigin::SyntheticAnalyticTest);
     py::enum_<IsaPfitTargetConvention>(m, "IsaPfitTargetConvention")
         .value("Unspecified", IsaPfitTargetConvention::Unspecified)
@@ -319,6 +339,17 @@ void export_isapol(py::module& m) {
     PFIT_CLASS(IsaPfitProblem) PFIT_FIELD(IsaPfitProblem, frequency_au) PFIT_FIELD(IsaPfitProblem, target_provenance)
         PFIT_FIELD(IsaPfitProblem, model) PFIT_FIELD(IsaPfitProblem, batches)
         PFIT_FIELD(IsaPfitProblem, penalty) PFIT_FIELD(IsaPfitProblem, linear_penalties);
+    PFIT_CLASS(IsaPfitRowModel)
+        PFIT_FIELD(IsaPfitRowModel, channel_labels) PFIT_FIELD(IsaPfitRowModel, parameter_labels)
+        PFIT_FIELD(IsaPfitRowModel, parameter_units) PFIT_FIELD(IsaPfitRowModel, fixed)
+        PFIT_FIELD(IsaPfitRowModel, fixed_values) PFIT_FIELD(IsaPfitRowModel, provenance);
+    PFIT_CLASS(IsaPfitCloudRows)
+        PFIT_FIELD(IsaPfitCloudRows, label) PFIT_FIELD(IsaPfitCloudRows, points)
+        PFIT_FIELD(IsaPfitCloudRows, full_row_count) PFIT_FIELD(IsaPfitCloudRows, maximum_block_rows);
+    PFIT_CLASS(IsaPfitRowProblem)
+        PFIT_FIELD(IsaPfitRowProblem, frequency_au) PFIT_FIELD(IsaPfitRowProblem, target_provenance)
+        PFIT_FIELD(IsaPfitRowProblem, model) PFIT_FIELD(IsaPfitRowProblem, cloud)
+        PFIT_FIELD(IsaPfitRowProblem, penalty) PFIT_FIELD(IsaPfitRowProblem, linear_penalties);
     PFIT_CLASS(IsaPfitOptions) PFIT_FIELD(IsaPfitOptions, solver) PFIT_FIELD(IsaPfitOptions, qr_chunk_rows)
         PFIT_FIELD(IsaPfitOptions, maximum_work_bytes) PFIT_FIELD(IsaPfitOptions, rank_relative_tolerance)
         PFIT_FIELD(IsaPfitOptions, minimum_solver_rcond) PFIT_FIELD(IsaPfitOptions, retain_pair_predictions);
@@ -347,6 +378,73 @@ void export_isapol(py::module& m) {
         PFIT_GET(parameter_labels) PFIT_GET(parameter_units) PFIT_GET(channel_labels) PFIT_GET(batch_labels);
     m.def("isa_pfit_solve", &isa_pfit_solve, "problem"_a, "options"_a = IsaPfitOptions(),
           "Supplied single-frequency PFIT; v=-d(phi_induced)/dq in Eh/e^2. Caller provenance is not native verification.");
+    m.def("isa_pfit_solve_rows", [](IsaPfitRowProblem p, py::function factory, IsaPfitOptions options) {
+        // Value-copy declarations before callbacks; never release the GIL on
+        // this binding. Producer arrays remain producer-owned budget items.
+        py::object iterator, design_hash, target_hash;
+        py::object sha256=py::module_::import("hashlib").attr("sha256");
+        size_t expected=0;
+        IsaPfitRowSource source;
+        source.begin_pass=[&](size_t) {
+            const auto dimensions=std::to_string(p.cloud.points)+":"+
+                                  std::to_string(p.model.parameter_labels.size());
+            design_hash=sha256(py::bytes("design:"+dimensions));
+            target_hash=sha256(py::bytes("targets:"+dimensions));
+            expected=0;
+            iterator=py::iter(factory());
+        };
+        source.next=[&](size_t capacity,size_t np,double* design,double* targets) {
+            PyObject* raw=PyIter_Next(iterator.ptr());
+            if(!raw) {
+                if(PyErr_Occurred()) throw py::error_already_set();
+                return IsaPfitRowBlockInfo{expected,0};
+            }
+            auto item=py::reinterpret_steal<py::object>(raw);
+            if(!py::isinstance<py::tuple>(item) || py::len(item)!=3)
+                throw py::value_error("PFIT row source must yield (start, design, targets)");
+            auto tuple=py::reinterpret_borrow<py::tuple>(item);
+            if(!PyLong_Check(tuple[0].ptr()) || PyBool_Check(tuple[0].ptr()))
+                throw py::value_error("PFIT packed start must be an integer");
+            size_t start=py::cast<size_t>(tuple[0]);
+            if(!py::isinstance<py::array>(tuple[1]) || !py::isinstance<py::array>(tuple[2]))
+                throw py::value_error("PFIT rows require NumPy arrays, not converted lists");
+            auto a=py::reinterpret_borrow<py::array>(tuple[1]);
+            auto b=py::reinterpret_borrow<py::array>(tuple[2]);
+            if(!a.dtype().is(py::dtype::of<double>()) || !b.dtype().is(py::dtype::of<double>()) ||
+               !(a.flags()&py::array::c_style) || !(b.flags()&py::array::c_style) ||
+               a.ndim()!=2 || b.ndim()!=1 || a.shape(1)!=static_cast<py::ssize_t>(np) ||
+               a.shape(0)!=b.shape(0) || a.shape(0)<=0 ||
+               static_cast<size_t>(a.shape(0))>capacity)
+                throw py::value_error("PFIT row block must be bounded contiguous native float64 arrays");
+            size_t count=static_cast<size_t>(a.shape(0));
+            if(start!=expected || expected>p.cloud.full_row_count ||
+               count>p.cloud.full_row_count-expected)
+                throw py::value_error("PFIT row source has gap, duplicate or excess rows");
+            const size_t design_bytes=count*np*sizeof(double), target_bytes=count*sizeof(double);
+            std::memcpy(design,a.data(),design_bytes);
+            std::memcpy(targets,b.data(),target_bytes);
+            // Digest the copied bytes actually consumed by C++; separate
+            // streams make identity independent of computational partition.
+            design_hash.attr("update")(py::memoryview::from_memory(
+                reinterpret_cast<const char*>(design),static_cast<py::ssize_t>(design_bytes)));
+            target_hash.attr("update")(py::memoryview::from_memory(
+                reinterpret_cast<const char*>(targets),static_cast<py::ssize_t>(target_bytes)));
+            expected+=count;
+            return IsaPfitRowBlockInfo{start,count};
+        };
+        source.finish_pass=[&]() {
+            std::string joined=py::cast<std::string>(design_hash.attr("digest")())+
+                               py::cast<std::string>(target_hash.attr("digest")());
+            std::string digest=py::cast<std::string>(sha256(py::bytes(joined)).attr("digest")());
+            std::array<unsigned char,32> result{};
+            if(digest.size()!=result.size()) throw py::value_error("PFIT invalid replay digest");
+            std::memcpy(result.data(),digest.data(),result.size());
+            return result;
+        };
+        return isa_pfit_solve_rows(p,source,options);
+    }, "problem"_a, "block_factory"_a, "options"_a=IsaPfitOptions(),
+       "One complete supplied cloud; bounded float64 blocks and content-verified replay. "
+       "Problem/options are snapshotted; producer memory is external to the kernel budget.");
 #undef PFIT_GET
 #undef PFIT_FIELD
 #undef PFIT_CLASS
@@ -606,7 +704,11 @@ void export_isapol(py::module& m) {
         .def(py::init<IsaBasisRole, IsaBasisRepresentation, const std::vector<std::array<double,3>>&,
                      const std::vector<IsaGaussianShell>&>(), "role"_a, "representation"_a, "centres"_a, "shells"_a)
         .def_property_readonly("nfunction", &IsaExplicitBasis::nfunction)
-        .def_property_readonly("role", &IsaExplicitBasis::role)
+    .def_property_readonly("role", &IsaExplicitBasis::role)
+    .def("shell_layout", &IsaExplicitBasis::shell_layout,
+         "Fresh shell-order [function_offset, function_count, centre, angular_momentum] rows")
+    .def("screening_s_overlap", &IsaExplicitBasis::screening_s_overlap,
+         "max_bytes"_a=512UL*1024*1024)
         .def("overlap", &IsaExplicitBasis::overlap, "w_eps"_a = 0.0, "s_block_only"_a = true,
              "New co-centred AtomAux/Shape metric before damping/ridge; no exponent cap")
         .def("evaluate", &IsaExplicitBasis::evaluate, "points"_a,
@@ -648,7 +750,11 @@ void export_isapol(py::module& m) {
              "provenance"_a, "charge_penalty"_a=1.0, "offsite_metric_damping"_a=0.0)
         .def("charges", &IsaAuxCoulomb::charges)
         .def("metric", &IsaAuxCoulomb::metric)
+        .def("point_potentials", &IsaAuxCoulomb::point_potentials,
+             "points"_a, "max_bytes"_a=512UL*1024*1024)
         .def("three_center", &IsaAuxCoulomb::three_center, "orbital"_a)
+        .def("three_center_shell_block", &IsaAuxCoulomb::three_center_shell_block,
+             "orbital"_a, "first_shell"_a, "shell_count"_a, "max_bytes"_a=512UL*1024*1024)
         .def("closed_shell_rhs", &IsaAuxCoulomb::closed_shell_rhs, "orbital"_a, "occupied_coefficients"_a)
         .def("fit_drho_c", &IsaAuxCoulomb::fit_drho_c, "orbital"_a, "occupied_coefficients"_a, "charge_penalty"_a=1000.);
     py::class_<IsaShapeMap>(m, "IsaShapeMap", "Validated zero-based shape-shell to AtomAux-shell map; exact descriptors")

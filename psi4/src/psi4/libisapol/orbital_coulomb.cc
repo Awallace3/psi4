@@ -20,6 +20,32 @@ libint2::Shell raw_shell(const IsaGaussianShell& s,const std::array<double,3>& c
     return libint2::Shell(a,{{s.l,false,c}},centre,false);
 }
 }
+std::shared_ptr<Matrix> IsaAuxCoulomb::three_center_shell_block(const IsaExplicitBasis& orbital,
+        std::size_t first_shell, std::size_t shell_count, std::size_t max_bytes) const {
+    orbital_require(orbital.role_==IsaBasisRole::Orbital &&
+                    orbital.representation_==IsaBasisRepresentation::Spherical,
+                    "Three-centre MAIN requires DALTON spherical Orbital basis");
+    orbital_require(first_shell < basis_.shells_.size() && shell_count > 0 &&
+                    shell_count <= basis_.shells_.size()-first_shell,
+                    "Invalid AUX shell block range");
+    std::size_t rows=0;
+    for (std::size_t s=first_shell;s<first_shell+shell_count;++s) {
+        rows+=IsaExplicitBasis::shell_size(basis_.shells_[s].l,basis_.representation_);
+        orbital_require(rows<=512,"AUX shell block resource limit (maximum 512 functions)");
+    }
+    const int n=orbital.nfunction();
+    orbital_require(n>0 && n<=std::numeric_limits<int>::max()/n,"MAIN pair dimension overflow");
+    orbital_require(max_bytes>0 && max_bytes<=512UL*1024*1024 &&
+                    rows<=max_bytes/sizeof(double)/n/n,
+                    "AUX shell block matrix byte resource limit");
+    // Reuse the exact integral/transform kernel with only selected AUX shells.
+    // This neither computes discarded AUX rows nor changes arithmetic within
+    // a retained shell triple; all MAIN functions and both pair orders remain.
+    std::vector<IsaGaussianShell> selected(basis_.shells_.begin()+first_shell,
+                                          basis_.shells_.begin()+first_shell+shell_count);
+    IsaExplicitBasis subset(IsaBasisRole::MolecularAux,basis_.representation_,basis_.centres_,selected);
+    return IsaAuxCoulomb(subset).three_center(orbital);
+}
 std::shared_ptr<Matrix> IsaAuxCoulomb::three_center(const IsaExplicitBasis& orbital) const {
     orbital_require(orbital.role_==IsaBasisRole::Orbital && orbital.representation_==IsaBasisRepresentation::Spherical,
                     "Three-centre MAIN requires DALTON spherical Orbital basis");

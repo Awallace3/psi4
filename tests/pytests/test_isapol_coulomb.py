@@ -21,6 +21,426 @@ def boys0(t):
     return 1. if t==0 else sqrt(pi)*erf(sqrt(t))/(2*sqrt(t))
 
 
+@pytest.mark.parametrize("representation,width", [
+    (core.IsaBasisRepresentation.Cartesian, 6),
+    (core.IsaBasisRepresentation.Spherical, 5)])
+def test_native_shell_layout_preserves_centres_and_representation(representation, width):
+    auxiliary = basis([(1, 2, [.7], [.5]), (0, 0, [.8], [.6]),
+                       (1, 1, [.9], [.4])], [[0., 0., 0.], [.2, -.3, .4]],
+                      representation=representation)
+    expected = [[0, width, 1, 2], [width, 1, 0, 0], [width+1, 3, 1, 1]]
+    layout = auxiliary.shell_layout()
+    assert layout == expected
+    layout[0][2] = 0
+    assert auxiliary.shell_layout() == expected
+
+
+@pytest.mark.parametrize("representation", [
+    core.IsaBasisRepresentation.Cartesian, core.IsaBasisRepresentation.Spherical])
+def test_alda_shell_screen_uses_effective_coefficients_and_signed_sum(representation):
+    aux = basis([(0, 4, [1.], [2.]), (1, 2, [1.], [-.5]),
+                 (0, 1, [1., 1.], [1., -1.])],
+                [[0., 0., 0.], [2., 0., 0.]], representation=representation)
+    # Equal exponents: normalized-s overlap is exp(-R²/2). The screen
+    # deliberately uses stored effective coefficients, not unit shell norms.
+    expected = np.array([[4., -exp(-2.), 0.],
+                         [-exp(-2.), .25, 0.], [0., 0., 0.]])
+    screened = aux.screening_s_overlap(max_bytes=9*8)
+    np.testing.assert_allclose(screened, expected, atol=1e-15, rtol=1e-15)
+    np.asarray(screened)[:] = 0.
+    np.testing.assert_allclose(aux.screening_s_overlap(), expected, atol=1e-15, rtol=1e-15)
+    with pytest.raises(ValueError, match="byte resource"):
+        aux.screening_s_overlap(max_bytes=9*8-1)
+
+
+@pytest.mark.parametrize("cutoff", [0., exp(-2.), np.nextafter(exp(-2.), np.inf)])
+def test_screened_alda_kernel_keeps_cutoff_equality_and_all_grid_rows(cutoff):
+    from psi4.driver.procrouting.isapol_auxiliary_kernel import screened_auxiliary_kernel
+    from psi4.driver.procrouting.isapol_native_propagator import KernelSmoothing
+    aux = basis([(0, 0, [1.], [1.]), (1, 0, [1.], [1.])],
+                [[0., 0., 0.], [2., 0., 0.]])
+    grid = np.array([[0., 0., 0., .2], [.5, .1, 0., .3],
+                     [1., 0., .2, .4], [2., 0., 0., .1]])
+    # Negative fitted density must be floored, not clipped in coefficient
+    # space and not dropped from quadrature. Analytic Slater-only fxc oracle.
+    density = np.array([-.2, -.1])
+    smoothing = KernelSmoothing(1.e-3, 400., .1, .1, "FD")
+    chi = np.asarray(aux.evaluate(grid[:, :3].tolist()))
+    fxc = -(3/pi)**(1/3)/3 * smoothing.rho_epsilon**(-2/3)
+    scalar = smoothing.limit(np.array([fxc]))[0]
+    expected = chi.T @ ((grid[:, 3]*scalar)[:, None]*chi)
+    if cutoff > exp(-2.):
+        expected[0, 1] = expected[1, 0] = 0.
+    result = screened_auxiliary_kernel(
+        aux, density, grid, smoothing=smoothing, cutoff=cutoff,
+        kernel="alda_slater", block_rows=3)
+    np.testing.assert_allclose(result.matrix, expected, atol=1.e-12, rtol=1.e-12)
+    assert result.grid_rows == 4
+    assert result.floored_rows == 4
+    assert result.retained_shell_pairs == (2 if cutoff > exp(-2.) else 3)
+    with pytest.raises(ValueError):
+        result.matrix.setflags(write=True)
+
+
+@pytest.mark.parametrize("representation,widths", [
+    (core.IsaBasisRepresentation.Cartesian, [1, 15, 6, 3]),
+    (core.IsaBasisRepresentation.Spherical, [1, 9, 5, 3])])
+@pytest.mark.parametrize("block_rows", [1, 3, 8])
+def test_screened_alda_mixed_shell_blocks_and_constant_cap(representation, widths, block_rows):
+    from psi4.driver.procrouting.isapol_auxiliary_kernel import screened_auxiliary_kernel
+    from psi4.driver.procrouting.isapol_native_propagator import KernelSmoothing
+    centres = np.array([[0., 0., 0.], [6., 0., 0.], [1., 0., 0.]])
+    sites = [0, 1, 0, 2]
+    aux = basis([(site, l, [1.], [1.]) for site, l in zip(sites, [0, 4, 2, 1])],
+                centres.tolist(), representation=representation)
+    grid = np.array([[0., .2, .3, 0.], [.5, .1, 0., -.3],
+                     [1., 0., .2, .4], [2., .1, 0., .1],
+                     [6., .3, .2, .2], [5., .1, -.1, .3],
+                     [1., -.2, .4, .5]])
+    coefficients = np.linspace(-.2, 10., sum(widths))
+    original = coefficients.copy()
+    chi = np.asarray(aux.evaluate(grid[:, :3].tolist()))
+    rho = chi @ coefficients
+    floor, fmax, cutoff = .01, .4, exp(-2.)
+    fxc = -(3/pi)**(1/3)/3 * np.maximum(rho, floor)**(-2/3)
+    # Independent CONSTANT smoothing formula; no production smoothing helper.
+    expected = chi.T @ ((grid[:, 3]*np.clip(fxc, -fmax, fmax))[:, None]*chi)
+    offsets = np.cumsum([0]+widths)
+    for i, j in itertools.product(range(4), repeat=2):
+        distance = centres[sites[i]]-centres[sites[j]]
+        if exp(-np.dot(distance, distance)/2) < cutoff:
+            expected[offsets[i]:offsets[i+1], offsets[j]:offsets[j+1]] = 0.
+    result = screened_auxiliary_kernel(
+        aux, coefficients, grid, smoothing=KernelSmoothing(floor, fmax, .1, .1, "CONSTANT"),
+        cutoff=cutoff, kernel="alda_slater", block_rows=block_rows)
+    np.testing.assert_allclose(result.matrix, expected, atol=2e-13, rtol=2e-12)
+    assert result.floored_rows == np.count_nonzero(rho < floor)
+    assert result.capped_rows == np.count_nonzero(np.abs(fxc) > fmax)
+    np.testing.assert_array_equal(coefficients, original)
+    coefficients[:] = 0.
+    grid[:] = 0.
+    np.testing.assert_allclose(result.matrix, expected, atol=2e-13, rtol=2e-12)
+
+
+def test_screened_alda_budget_and_total_work_refusals(monkeypatch):
+    from psi4.driver.procrouting.isapol_auxiliary_kernel import screened_auxiliary_kernel
+    from psi4.driver.procrouting.isapol_native_propagator import KernelSmoothing, PROPAGATOR_WORK_LIMITS
+    aux = basis([(0, 0, [1.], [1.]), (0, 1, [1.], [1.])], [[0., 0., 0.]])
+    density = np.ones(4)
+    grid = np.ones((5, 4))
+    kwargs = dict(smoothing=KernelSmoothing(.01, .4, .1, .1, "CONSTANT"),
+                  cutoff=0., kernel="alda_slater", block_rows=3)
+    result = screened_auxiliary_kernel(aux, density, grid, **kwargs)
+    exact = screened_auxiliary_kernel(aux, density, grid, **kwargs, max_bytes=result.planned_bytes)
+    np.testing.assert_array_equal(result.matrix, exact.matrix)
+    with pytest.raises(ValueError, match="byte resource"):
+        screened_auxiliary_kernel(aux, density, grid, **kwargs, max_bytes=result.planned_bytes-1)
+    monkeypatch.setitem(PROPAGATOR_WORK_LIMITS, "kernel_sampling", 20)
+    monkeypatch.setitem(PROPAGATOR_WORK_LIMITS, "auxiliary_metric_kernel", 65)
+    screened_auxiliary_kernel(aux, density, grid, **kwargs)  # 5*(1+3+9) units
+    monkeypatch.setitem(PROPAGATOR_WORK_LIMITS, "auxiliary_metric_kernel", 64)
+    for block in (1, 3, 5):
+        with pytest.raises(ValueError, match="auxiliary_metric_kernel work"):
+            screened_auxiliary_kernel(aux, density, grid, **(kwargs | dict(block_rows=block)))
+    monkeypatch.setitem(PROPAGATOR_WORK_LIMITS, "kernel_sampling", 19)
+    with pytest.raises(ValueError, match="kernel_sampling work"):
+        screened_auxiliary_kernel(aux, density, grid, **kwargs)
+
+
+def test_screened_pw92_kernel_matches_analytic_unpolarized_derivatives():
+    from psi4.driver.procrouting.isapol_auxiliary_kernel import screened_auxiliary_kernel
+    from psi4.driver.procrouting.isapol_native_propagator import KernelSmoothing
+    aux = basis([(0, 0, [1.], [1.])], [[0., 0., 0.]])
+    grid = np.array([[0., 0., 0., .2], [.5, 0., 0., .3], [1., 0., 0., .4]])
+    chi = np.exp(-grid[:, 0]**2)
+    rho = .7*chi
+    rs = (3/(4*pi*rho))**(1/3)
+    # Published unpolarized PW92 energy, differentiated analytically in rs.
+    # f_c = rs/(9*rho) * (rs*e_c''(rs) - 2*e_c'(rs)).
+    # Original PW92 table-I A, also CamCASP dft_Sx_PW92c.F90:147;
+    # .0310907 belongs to the modified parameterization, not XC_LDA_C_PW.
+    A, alpha = .031091, .21370
+    b1, b2, b3, b4 = 7.5957, 3.5876, 1.6382, .49294
+    q = 2*A*(b1*np.sqrt(rs)+b2*rs+b3*rs**1.5+b4*rs**2)
+    dq = 2*A*(b1/(2*np.sqrt(rs))+b2+1.5*b3*np.sqrt(rs)+2*b4*rs)
+    ddq = 2*A*(-b1/(4*rs**1.5)+.75*b3/np.sqrt(rs)+2*b4)
+    logarithm = np.log1p(1/q)
+    dl = -dq/(q*(q+1))
+    ddl = -ddq/(q*(q+1))+dq**2*(2*q+1)/(q*q*(q+1)**2)
+    de = -2*A*(alpha*logarithm+(1+alpha*rs)*dl)
+    dde = -2*A*(2*alpha*dl+(1+alpha*rs)*ddl)
+    correlation = rs/(9*rho)*(rs*dde-2*de)
+    exchange = -(3/pi)**(1/3)/3*rho**(-2/3)
+    expected = np.dot(grid[:, 3]*chi**2, exchange+correlation)
+    result = screened_auxiliary_kernel(
+        aux, np.array([.7]), grid, smoothing=KernelSmoothing(1.e-8, 400., .1, .1, "CONSTANT"),
+        cutoff=0., kernel="alda_slater_pw92", block_rows=2)
+    np.testing.assert_allclose(result.matrix, [[expected]], atol=2e-12, rtol=2e-11)
+    assert result.floored_rows == result.capped_rows == 0
+
+
+@pytest.mark.parametrize("representation", [
+    core.IsaBasisRepresentation.Cartesian, core.IsaBasisRepresentation.Spherical])
+def test_three_center_shell_blocks_reassemble_full_integrals(representation):
+    centres = [[0., 0., 0.], [.2, -.3, .4]]
+    auxiliary = basis([(0, 0, [.8], [.6]), (1, 2, [.7], [.5]),
+                       (0, 1, [.9], [.4])], centres, representation=representation)
+    main = basis([(0, 0, [1.1], [.7]), (1, 1, [.6], [.3])], centres,
+                 role=core.IsaBasisRole.Orbital,
+                 representation=core.IsaBasisRepresentation.Spherical)
+    provider = core.IsaAuxCoulomb(auxiliary)
+    whole = np.asarray(provider.three_center(main))
+    chunks = [np.asarray(provider.three_center_shell_block(main, i, 1)) for i in range(3)]
+    np.testing.assert_array_equal(np.concatenate(chunks), whole)
+    np.testing.assert_array_equal(provider.three_center_shell_block(main, 1, 2),
+                                   np.concatenate(chunks[1:]))
+
+
+@pytest.mark.parametrize("representation", [
+    core.IsaBasisRepresentation.Cartesian, core.IsaBasisRepresentation.Spherical])
+def test_mo_shell_blocks_match_full_native_integral_transformation(representation):
+    from psi4.driver.procrouting.isapol_factorized_response import mo_three_center_shell
+    centres = [[0., 0., 0.], [.2, -.3, .4]]
+    auxiliary = basis([(0, 0, [.8], [.6]), (1, 4, [.7], [.5]),
+                       (0, 1, [.9], [.4])], centres, representation=representation)
+    main = basis([(0, 0, [1.1], [.7]), (1, 1, [.6], [.3])], centres,
+                 role=core.IsaBasisRole.Orbital,
+                 representation=core.IsaBasisRepresentation.Spherical)
+    provider = core.IsaAuxCoulomb(auxiliary)
+    # Rectangular and noncontiguous; coefficients are explicitly in MAIN order.
+    coefficients = np.array([[1., .2, -.1], [.3, .8, .2],
+                             [0., -.4, .7], [.1, .2, .3]])[:, ::-1]
+    ao = np.asarray(provider.three_center(main)).reshape(-1, 4, 4)
+    expected = np.einsum("mp,Pmn,nq->Ppq", coefficients, ao, coefficients)
+    blocks = [mo_three_center_shell(provider, main, coefficients, i) for i in range(3)]
+    np.testing.assert_allclose(np.concatenate(blocks), expected, atol=2e-13, rtol=2e-13)
+    coefficients[:] = 0.
+    np.testing.assert_allclose(np.concatenate(blocks), expected, atol=2e-13, rtol=2e-13)
+
+
+def test_mo_shell_transform_resource_and_input_contracts():
+    from psi4.driver.procrouting.isapol_factorized_response import mo_three_center_shell
+    aux = basis([(0, 0, [.8], [.6])], [[0., 0., 0.]])
+    main = basis([(0, 0, [1.1], [.7])], [[.2, 0., 0.]],
+                 role=core.IsaBasisRole.Orbital,
+                 representation=core.IsaBasisRepresentation.Spherical)
+    provider = core.IsaAuxCoulomb(aux)
+    coefficients = np.ones((1, 1))
+    # The documented conservative ledger reserves 24 AO, 18 MO and
+    # four coefficient/workspace doubles even for a one-function shell.
+    admitted_bytes = 46*8
+    result = mo_three_center_shell(provider, main, coefficients, 0,
+                                   max_bytes=admitted_bytes)
+    np.testing.assert_array_equal(result.ravel(), provider.three_center(main).np.ravel())
+    with pytest.raises(ValueError, match="byte resource"):
+        mo_three_center_shell(provider, main, coefficients, 0, max_bytes=admitted_bytes-1)
+    for index in (-1, True, 0.5):
+        with pytest.raises(ValueError, match="shell_index"):
+            mo_three_center_shell(provider, main, coefficients, index)
+    with pytest.raises(ValueError, match="range"):
+        mo_three_center_shell(provider, main, coefficients, 1)
+    for bad in (np.ones((2, 1)), np.ones((1, 0)), np.ones(1),
+                np.ones((1, 1), dtype=np.float32), np.full((1, 1), np.nan)):
+        with pytest.raises(ValueError, match="coefficients"):
+            mo_three_center_shell(provider, main, bad, 0)
+    with pytest.raises(ValueError, match="Orbital"):
+        mo_three_center_shell(provider, aux, coefficients, 0)
+    for budget in (0, True, 512*1024**2+1):
+        with pytest.raises(ValueError, match="max_bytes"):
+            mo_three_center_shell(provider, main, coefficients, 0, max_bytes=budget)
+    result[:] = 0.
+    assert mo_three_center_shell(provider, main, coefficients, 0)[0, 0, 0] > 0.
+
+
+def test_mo_shell_budget_includes_native_spherical_accumulation():
+    from psi4.driver.procrouting.isapol_factorized_response import mo_three_center_shell
+    aux = basis([(0, 4, [.8], [.6])], [[0., 0., 0.]],
+                representation=core.IsaBasisRepresentation.Spherical)
+    main = basis([(0, 4, [1.1], [.7])], [[.2, 0., 0.]],
+                 role=core.IsaBasisRole.Orbital,
+                 representation=core.IsaBasisRepresentation.Spherical)
+    # Old ledger admits 10800 bytes. Native AO output plus spherical
+    # accumulation alone need 2*9*9*9*8 = 11664, before MO work.
+    with pytest.raises(ValueError, match="byte resource"):
+        mo_three_center_shell(core.IsaAuxCoulomb(aux), main, np.ones((9, 1)),
+                              0, max_bytes=10800)
+
+
+@pytest.mark.parametrize("representation", [
+    core.IsaBasisRepresentation.Cartesian, core.IsaBasisRepresentation.Spherical])
+@pytest.mark.parametrize("exchange", [0., .25, 1.])
+def test_streamed_plain_df_operators_match_full_native_contractions(representation, exchange):
+    from psi4.driver.procrouting.isapol_factorized_response import factorized_projected_response
+    from psi4.driver.procrouting.isapol_native_factors import native_plain_df_operators
+    aux = basis([(0, 0, [.8], [.6]), (0, 2, [.7], [.5])], [[0., 0., 0.]],
+                representation=representation)
+    main = basis([(0, 0, [1.1], [.7]), (0, 2, [.6], [.3])], [[.2, 0., 0.]],
+                 role=core.IsaBasisRole.Orbital,
+                 representation=core.IsaBasisRepresentation.Spherical)
+    coefficients = np.random.default_rng(75).normal(scale=.1, size=(6, 5))[:, ::-1]
+    energies = np.array([-1., -.8, .2, .6, 1.])
+    provider = core.IsaAuxCoulomb(aux)
+    na = aux.nfunction
+    ao = np.asarray(provider.three_center(main)).reshape(na, 6, 6)
+    mo = np.einsum("mp,Pmn,nq->Ppq", coefficients, ao, coefficients)
+    dual = np.linalg.solve(provider.metric().np, mo.reshape(na, -1)).reshape(mo.shape)
+    gaps = (energies[2:, None]-energies[None, :2]).ravel()
+    h1, h2 = np.diag(gaps), np.diag(gaps)
+    for a, i, b, j in itertools.product(range(3), range(2), range(3), range(2)):
+        v = sum(mo[p, i, 2+a]*dual[p, j, 2+b] for p in range(na))
+        x = sum(mo[p, i, j]*dual[p, 2+a, 2+b] for p in range(na))
+        y = sum(mo[p, i, 2+b]*dual[p, j, 2+a] for p in range(na))
+        h1[2*a+i, 2*b+j] += 4*v-exchange*(x+y)
+        h2[2*a+i, 2*b+j] -= exchange*(x-y)
+    # Neither six OV nor nine VV columns is divisible by four.
+    streamed = native_plain_df_operators(
+        aux, main, coefficients, energies, nocc=2, shell_count=2,
+        exact_exchange=exchange, tile_columns=4)
+    expected_density = 2*sum(dual[:, i, i] for i in range(2))
+    np.testing.assert_allclose(streamed.plain_density_coefficients, expected_density,
+                               atol=2e-12, rtol=2e-12)
+    with pytest.raises(ValueError):
+        streamed.plain_density_coefficients.setflags(write=True)
+    coefficients[:] = 0.
+    energies[:] = 0.
+    np.testing.assert_allclose(streamed.apply_h1(np.eye(6)), h1, atol=2e-12, rtol=2e-12)
+    np.testing.assert_allclose(streamed.apply_h2(np.eye(6)), h2, atol=2e-12, rtol=2e-12)
+    legs = np.arange(12., dtype=float).reshape(6, 2)/12
+    response = factorized_projected_response(streamed, legs, .7, restart=6)
+    expected = legs.T @ np.linalg.solve(h2 @ h1+.7**2*np.eye(6), -4*h2 @ legs)
+    np.testing.assert_allclose(response.response, expected, atol=2e-11, rtol=2e-11)
+    assert max(response.relative_residuals) <= 1e-10
+
+
+def test_streamed_plain_df_admission_and_shell_coverage():
+    from psi4.driver.procrouting.isapol_native_factors import native_plain_df_operators
+    aux = basis([(0, 0, [.8], [.6]), (0, 1, [.7], [.5])], [[0., 0., 0.]])
+    main = basis([(0, 0, [1.1], [.7]), (0, 1, [.6], [.3])], [[.2, 0., 0.]],
+                 role=core.IsaBasisRole.Orbital,
+                 representation=core.IsaBasisRepresentation.Spherical)
+    coeff = np.eye(4)
+    energies = np.array([-1., -.8, .2, .6])
+    kwargs = dict(nocc=2, shell_count=2, exact_exchange=.25, tile_columns=1)
+    ops = native_plain_df_operators(aux, main, coeff, energies, **kwargs)
+    budget = ops.construction_planned_bytes
+    exact = native_plain_df_operators(aux, main, coeff, energies, **kwargs, max_bytes=budget)
+    np.testing.assert_array_equal(exact.apply_h1(np.eye(4)), ops.apply_h1(np.eye(4)))
+    with pytest.raises(ValueError, match="byte resource"):
+        native_plain_df_operators(aux, main, coeff, energies, **kwargs, max_bytes=budget-1)
+    for change, message in [
+        (dict(shell_count=1), "coverage"), (dict(shell_count=3), "range"),
+        (dict(nocc=True), "nocc"), (dict(nocc=4), "nocc"),
+        (dict(tile_columns=0), "tile_columns"), (dict(tile_columns=709), "tile_columns"),
+        (dict(exact_exchange=np.nan), "exchange"), (dict(max_bytes=True), "max_bytes"),
+    ]:
+        with pytest.raises(ValueError, match=message):
+            native_plain_df_operators(aux, main, coeff, energies, **(kwargs | change))
+    for bad in (np.full(4, np.nan), np.zeros(4)):
+        with pytest.raises(ValueError, match="finite|gaps"):
+            native_plain_df_operators(aux, main, coeff, bad, **kwargs)
+    with pytest.raises(ValueError, match="finite"):
+        native_plain_df_operators(aux, main, coeff*np.nan, energies, **kwargs)
+
+
+@pytest.mark.parametrize("representation", [
+    core.IsaBasisRepresentation.Cartesian, core.IsaBasisRepresentation.Spherical])
+@pytest.mark.parametrize("penalty,damping", [(0., 0.), (1000., 0.), (1000., .0005)])
+def test_tiled_constrained_ov_matches_native_fit(representation, penalty, damping):
+    from psi4.driver.procrouting.isapol_native_factors import (
+        native_plain_df_operators, native_constrained_ov)
+    centres = [[0., 0., 0.], [.6, -.4, .3]]
+    # Deliberately interleave owning centres; the d-shell width depends on
+    # representation and must not come from a separate caller-provided map.
+    aux = basis([(1, 2, [.7], [.5]), (0, 0, [.8], [.6]), (1, 0, [.9], [.4])],
+                centres, representation=representation)
+    main = basis([(0, 0, [1.1], [.7]), (1, 2, [.6], [.3])], centres,
+                 role=core.IsaBasisRole.Orbital,
+                 representation=core.IsaBasisRepresentation.Spherical)
+    coefficients = np.random.default_rng(38).normal(scale=.1, size=(6, 5))[:, ::-1]
+    ops = native_plain_df_operators(
+        aux, main, coefficients, np.array([-1., -.8, .2, .6, 1.]),
+        nocc=2, shell_count=3, exact_exchange=.25, tile_columns=4)
+    original_h1 = ops.apply_h1(np.eye(6))
+    original_h2 = ops.apply_h2(np.eye(6))
+    expected = core.IsaAuxCoulomb(aux).fit_ov(
+        main, core.Matrix.from_array(coefficients[:, :2]),
+        core.Matrix.from_array(coefficients[:, 2:]), "synthetic explicit coefficient test",
+        penalty, damping)
+    fitted = native_constrained_ov(ops, charge_penalty=penalty,
+                                   offsite_metric_damping=damping, tile_columns=4)
+    np.testing.assert_allclose(fitted.coefficients, expected.coefficients.np,
+                               atol=2e-11, rtol=2e-10)
+    assert fitted.relative_backward_residual <= 1.e-10
+    assert fitted.charge_penalty == penalty
+    assert fitted.offsite_metric_damping == damping
+    with pytest.raises(ValueError):
+        fitted.coefficients.setflags(write=True)
+    np.testing.assert_array_equal(ops.apply_h1(np.eye(6)), original_h1)
+    np.testing.assert_array_equal(ops.apply_h2(np.eye(6)), original_h2)
+    if penalty == 0.:
+        exact = native_constrained_ov(
+            ops, charge_penalty=penalty, offsite_metric_damping=damping,
+            tile_columns=4, max_bytes=fitted.planned_bytes)
+        np.testing.assert_array_equal(exact.coefficients, fitted.coefficients)
+        with pytest.raises(ValueError, match="byte resource"):
+            native_constrained_ov(
+                ops, charge_penalty=penalty, offsite_metric_damping=damping,
+                tile_columns=4, max_bytes=fitted.planned_bytes-1)
+        defaults = dict(charge_penalty=penalty, offsite_metric_damping=damping)
+        for change, message in [
+            (dict(charge_penalty=-1.), "charge_penalty"),
+            (dict(charge_penalty=np.nan), "charge_penalty"),
+            (dict(offsite_metric_damping=-.1), "offsite_metric_damping"),
+            (dict(offsite_metric_damping=1.), "offsite_metric_damping"),
+            (dict(tile_columns=True), "tile_columns"),
+            (dict(tile_columns=709), "tile_columns"),
+            (dict(max_bytes=True), "max_bytes"),
+        ]:
+            with pytest.raises(ValueError, match=message):
+                native_constrained_ov(ops, **(defaults | change))
+
+
+def test_constrained_ov_rejects_arbitrary_non_native_factors():
+    from psi4.driver.procrouting.isapol_factorized_response import FactorizedDFOperators
+    from psi4.driver.procrouting.isapol_native_factors import native_constrained_ov
+    zero = np.zeros((1, 1, 1))
+    ops = FactorizedDFOperators(np.ones(1), zero, zero, zero, zero, exact_exchange=0.)
+    with pytest.raises(ValueError, match="native plain-DF"):
+        native_constrained_ov(ops, charge_penalty=1000., offsite_metric_damping=0.)
+
+
+def test_three_center_shell_block_admission_and_owned_output():
+    aux = basis([(0, 0, [.8], [.6]), (0, 2, [.7], [.5])], [[0., 0., 0.]])
+    main = basis([(0, 0, [1.1], [.7])], [[.2, 0., 0.]],
+                 role=core.IsaBasisRole.Orbital,
+                 representation=core.IsaBasisRepresentation.Spherical)
+    provider = core.IsaAuxCoulomb(aux)
+    # Six Cartesian d rows, one MAIN pair, eight bytes each.
+    expected = np.asarray(provider.three_center_shell_block(main, 1, 1, 48)).copy()
+    with pytest.raises(ValueError, match="byte resource"):
+        provider.three_center_shell_block(main, 1, 1, 47)
+    for start, count in [(0, 0), (2, 1), (1, 2)]:
+        with pytest.raises(ValueError, match="range"):
+            provider.three_center_shell_block(main, start, count)
+    with pytest.raises((TypeError, OverflowError)):
+        provider.three_center_shell_block(main, -1, 1)
+    with pytest.raises(ValueError, match="Orbital"):
+        provider.three_center_shell_block(aux, 0, 1)
+    value = provider.three_center_shell_block(main, 1, 1)
+    np.asarray(value)[:] = 0.
+    np.testing.assert_array_equal(provider.three_center_shell_block(main, 1, 1), expected)
+
+
+def test_three_center_shell_block_rejects_excessive_aux_rows():
+    # Admission only: no expensive integrals are evaluated.
+    aux = basis([(0, 0, [1.+i/1000], [1.]) for i in range(513)], [[0., 0., 0.]])
+    main = basis([(0, 0, [1.], [1.])], [[.2, 0., 0.]],
+                 role=core.IsaBasisRole.Orbital,
+                 representation=core.IsaBasisRepresentation.Spherical)
+    with pytest.raises(ValueError, match="maximum 512 functions"):
+        core.IsaAuxCoulomb(aux).three_center_shell_block(main, 0, 513)
+
+
 def ss(a,b,A,B):
     t=a*b/(a+b)*sum((x-y)**2 for x,y in zip(A,B))
     return 2*pi**2.5/(a*b*sqrt(a+b))*boys0(t)

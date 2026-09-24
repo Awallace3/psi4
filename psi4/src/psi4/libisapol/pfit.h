@@ -5,6 +5,7 @@
 #define PSI4_LIBISAPOL_PFIT_H
 #include <array>
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <vector>
 namespace psi { namespace isapol {
@@ -16,11 +17,15 @@ struct IsaPfitMatrix {
 /// NativeDirectActualPointResponse is this code's own direct-OV point-charge
 /// response. It is deliberately NOT interchangeable with the Supplied* origins:
 /// the historical target is a constrained-NN/fitted-propagator quantity.
+/// NativeFittedPointResponse contracts native AUX coefficient responses with
+/// exact AUX Coulomb point potentials. It requires a declared AUX identity and
+/// fitted_density_coefficients representation; it is not a supplied target or
+/// a certification of CamCASP parity.
 /// Appended, never inserted: the underlying values of the existing enumerators
 /// must not change for anything already compiled against this header.
 enum class IsaPfitTargetOrigin { Unspecified, SuppliedActualPointResponse,
     SuppliedFittedPropagatorPointResponse, SyntheticAnalyticTest,
-    NativeDirectActualPointResponse };
+    NativeDirectActualPointResponse, NativeFittedPointResponse };
 enum class IsaPfitTargetConvention { Unspecified, NegativeInducedPotentialPerUnitSourceChargeAtomicUnits };
 struct IsaPfitTargetProvenance {
     IsaPfitTargetOrigin origin = IsaPfitTargetOrigin::Unspecified;
@@ -53,6 +58,37 @@ struct IsaPfitProblem {
     IsaPfitMatrixPenalty penalty;
     std::vector<IsaPfitLinearPenalty> linear_penalties;
 };
+/// Metadata for supplied design rows: no fabricated fields or channel tensors.
+struct IsaPfitRowModel {
+    std::vector<std::string> channel_labels, parameter_labels, parameter_units;
+    std::vector<bool> fixed;
+    std::vector<double> fixed_values;
+    std::string provenance;
+};
+struct IsaPfitCloudRows {
+    std::string label;
+    size_t points = 0, full_row_count = 0, maximum_block_rows = 256;
+};
+struct IsaPfitRowProblem {
+    double frequency_au = 0;
+    IsaPfitTargetProvenance target_provenance;
+    IsaPfitRowModel model;
+    IsaPfitCloudRows cloud;
+    IsaPfitMatrixPenalty penalty;
+    std::vector<IsaPfitLinearPenalty> linear_penalties;
+};
+struct IsaPfitRowBlockInfo { size_t packed_start = 0, rows = 0; };
+/// Native callbacks are trusted bounded-buffer producers. Destinations are
+/// borrowed only during next(), never retained or overrun. rows=0 denotes EOF.
+/// finish_pass must digest actual row/target content, independently of block
+/// partition. Successful fits require identical assembly/residual digests.
+/// The Python adapter computes digests itself and checks arrays before copying.
+struct IsaPfitRowSource {
+    std::function<void(size_t)> begin_pass;
+    std::function<IsaPfitRowBlockInfo(size_t, size_t, double*, double*)> next;
+    std::function<std::array<unsigned char, 32>()> finish_pass;
+};
+namespace detail { struct IsaPfitSolverImpl; }
 enum class IsaPfitSolver { NormalEquationsDSYSV, StreamingQR };
 enum class IsaPfitStatus { Solved, AllFixed, RankDeficient, IllConditioned, NumericalFailure };
 struct IsaPfitOptions {
@@ -106,6 +142,7 @@ class IsaPfitResult {
     std::vector<std::string> batch_labels() const { return batch_labels_; }
     std::vector<std::vector<double>> predictions() const { return predictions_; }
  private:
+    friend struct detail::IsaPfitSolverImpl;
     friend IsaPfitResult isa_pfit_solve(const IsaPfitProblem&, const IsaPfitOptions&);
     IsaPfitStatus status_ = IsaPfitStatus::NumericalFailure;
     IsaPfitMatrix normal_, penalty_, lc_;
@@ -121,5 +158,12 @@ class IsaPfitResult {
 /// Supplied declaration only: v=-d(phi_induced)/dq, Eh/e^2, no energy 1/2 or bare electrostatics.
 /// No native target generation, localization, pruning, scaling or regularization.
 IsaPfitResult isa_pfit_solve(const IsaPfitProblem&, const IsaPfitOptions& = IsaPfitOptions());
+/// One complete cloud, all N(N+1)/2 supplied rows, one global penalty and solve.
+/// At most two traversals; failed rank/conditioning fits retain old early-return
+/// semantics. Kernel budget includes bounded destination blocks, not producer
+/// storage or snapshotted problem metadata. Problem/options/source functions are
+/// copied before callbacks; no native/provenance certification is inferred.
+IsaPfitResult isa_pfit_solve_rows(const IsaPfitRowProblem&, const IsaPfitRowSource&,
+                                const IsaPfitOptions& = IsaPfitOptions());
 }} // namespace psi::isapol
 #endif

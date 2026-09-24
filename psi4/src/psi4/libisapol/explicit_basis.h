@@ -29,6 +29,28 @@ class IsaExplicitBasis {
     int nfunction() const { return nfunction_; }
     int ncentre() const { return static_cast<int>(centres_.size()); }
     IsaBasisRole role() const { return role_; }
+    /// Fresh shell-order rows: zero-based function offset, function count,
+    /// zero-based owning centre, angular momentum. Counts use the declared
+    /// representation; no independent caller map or coordinate matching.
+    std::vector<std::array<int, 4>> shell_layout() const {
+        std::vector<std::array<int, 4>> rows;
+        rows.reserve(shells_.size());
+        int offset = 0;
+        for (const auto& shell : shells_) {
+            const int count = shell_size(shell.l, representation_);
+            rows.push_back({offset, count, shell.centre, shell.l});
+            offset += count;
+        }
+        return rows;
+    }
+    /// Signed shell-pair normalized-s surrogate using STORED effective
+    /// coefficients, literally as in CamCASP screening_s_ovr. This is not the
+    /// physical angular overlap and is not renormalized to unit self-overlap.
+    /// Sum signed primitive products first; an ALDA caller skips only when
+    /// abs(result) < its declared cutoff (equality retained).
+    /// Fresh nshell-by-nshell matrix; max_bytes bounds returned numeric storage,
+    /// not caller basis descriptors. Positive budget at most 512 MiB.
+    std::shared_ptr<Matrix> screening_s_overlap(std::size_t max_bytes = 512UL*1024*1024) const;
     /// Co-centred AtomAux/Shape metric, before damping/ridge. No grid exponent cap.
     /// All primitive pairs must be integrable under the selected weighting.
     std::shared_ptr<Matrix> overlap(double w_eps = 0.0, bool s_block_only = true) const;

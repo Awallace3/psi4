@@ -32,6 +32,7 @@
 #include "psi4/libfunctional/LibXCfunctional.h"
 #include "psi4/libfunctional/superfunctional.h"
 #include "psi4/libmints/basisset.h"
+#include "psi4/libmints/coordentry.h"
 #include "psi4/libmints/gshell.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/molecule.h"
@@ -105,10 +106,34 @@ void validate_shells(const std::shared_ptr<BasisSet>& basis) {
 // and a deep molecule clone, then verify effective coefficients. Both are needed:
 // BasisFunctions uses effective coefficients, BasisSet::update_l2_shells uses
 // original coefficients with Libint normalization. No basis name resolution.
-std::shared_ptr<BasisSet> snapshot_basis(const std::shared_ptr<BasisSet>& source) {
+std::shared_ptr<BasisSet> snapshot_basis(const std::shared_ptr<BasisSet>& source,
+                                       bool bounded_geometry = false) {
     require_native(!source->has_ECP(), "ECP basis snapshots are not supported");
     validate_shells(source);
-    auto mol = std::make_shared<Molecule>(source->molecule()->clone());
+    std::shared_ptr<Molecule> mol;
+    if (bounded_geometry) {
+        // Do not clone unbounded comments, variable maps, provenance, labels,
+        // connectivity or dummy centres. Only basis-bearing physical/ghost
+        // centres in their original order and bohr coordinates are needed.
+        const auto original = source->molecule();
+        mol = std::make_shared<Molecule>();
+        mol->set_units(Molecule::Bohr);
+        mol->set_com_fixed(true); mol->set_orientation_fixed(true);
+        mol->set_molecular_charge(original->molecular_charge());
+        mol->set_multiplicity(original->multiplicity());
+        for (int atom=0; atom<original->natom(); ++atom) {
+            const auto& symbol = original->atom_entry(atom)->symbol();
+            require_native(!symbol.empty() && symbol.size() <= 3,
+                           "bounded state requires a short atomic symbol");
+            require_native(std::isfinite(original->x(atom)) && std::isfinite(original->y(atom)) &&
+                           std::isfinite(original->z(atom)), "molecular coordinates must be finite");
+            mol->add_atom(original->Z(atom), original->x(atom), original->y(atom), original->z(atom),
+                          symbol, original->mass(atom), original->charge(atom),
+                          "NATIVE_STATE_"+std::to_string(atom));
+        }
+    } else {
+        mol = std::make_shared<Molecule>(source->molecule()->clone());
+    }
     for (int atom=0;atom<mol->natom();++atom)
         require_native(std::isfinite(mol->x(atom)) && std::isfinite(mol->y(atom)) && std::isfinite(mol->z(atom)),
                        "molecular coordinates must be finite");
@@ -312,11 +337,25 @@ void validate_restricted_state(const std::shared_ptr<Wavefunction>& wfn, const R
     }
 }
 struct OwnedState { std::shared_ptr<BasisSet> basis; SharedMatrix c, da; SharedVector eps; };
-OwnedState own_restricted_state(const std::shared_ptr<Wavefunction>& wfn, const RestrictedDims& d) {
+OwnedState own_restricted_state(const std::shared_ptr<Wavefunction>& wfn, const RestrictedDims& d,
+                               bool bounded_geometry = false) {
     OwnedState s;
-    s.c=wfn->Ca()->clone(); s.da=wfn->Da()->clone();
-    s.eps=std::make_shared<Vector>(*wfn->epsilon_a());
-    s.basis=snapshot_basis(wfn->basisset());
+    if (bounded_geometry) {
+        // Copy numerical state only: caller-controlled matrix/vector names
+        // and Dimension metadata are not bounded by scientific dimensions.
+        s.c=std::make_shared<Matrix>(d.nbf,d.nmo);
+        s.da=std::make_shared<Matrix>(d.nbf,d.nbf);
+        s.eps=std::make_shared<Vector>(d.nmo);
+        for(int mu=0;mu<d.nbf;++mu) {
+            for(int p=0;p<d.nmo;++p) s.c->set(mu,p,wfn->Ca()->get(mu,p));
+            for(int nu=0;nu<d.nbf;++nu) s.da->set(mu,nu,wfn->Da()->get(mu,nu));
+        }
+        for(int p=0;p<d.nmo;++p) s.eps->set(p,wfn->epsilon_a()->get(p));
+    } else {
+        s.c=wfn->Ca()->clone(); s.da=wfn->Da()->clone();
+        s.eps=std::make_shared<Vector>(*wfn->epsilon_a());
+    }
+    s.basis=snapshot_basis(wfn->basisset(), bounded_geometry);
     auto overlap=std::make_shared<Matrix>(d.nbf,d.nbf);
     // Local serial engine: no OneBodyAOInt/global tolerance or Process threads.
     // snapshot_basis has validated all shell dimensions and AO offsets before
@@ -341,6 +380,31 @@ OwnedState own_restricted_state(const std::shared_ptr<Wavefunction>& wfn, const 
     return s;
 }
 } // namespace
+
+NativeRestrictedState::NativeRestrictedState(std::shared_ptr<Wavefunction> wfn,
+        bool caller_converged, std::size_t max_bytes) {
+    auto d = restricted_dims(wfn, caller_converged);
+    require_native(max_bytes > 0 && max_bytes <= 512ULL*1024*1024,
+                   "state byte budget must be positive and at most 512 MiB");
+    auto source = wfn->basisset();
+    planned_bytes_ = add(mul(mul(64, mul(d.nbf, d.nbf)), sizeof(double)),
+                         16ULL*1024*1024);
+    planned_bytes_ = add(planned_bytes_, mul(source->nshell(), 16*1024));
+    planned_bytes_ = add(planned_bytes_, mul(source->molecule()->natom(), 4*1024));
+    require_native(planned_bytes_ <= max_bytes, "restricted state byte resource limit exceeded");
+    validate_restricted_state(wfn, d);
+    require_native(std::isfinite(wfn->energy()), "nonfinite wavefunction energy");
+    auto owned = own_restricted_state(wfn, d, true);
+    basis_ = std::move(owned.basis);
+    c_ = std::move(owned.c); da_ = std::move(owned.da); eps_ = std::move(owned.eps);
+    nbf_ = d.nbf; nmo_ = d.nmo; nocc_ = d.nocc; nvir_ = d.nvir; nov_ = d.nov;
+}
+SharedMatrix NativeRestrictedState::orbitals() const { return c_->clone(); }
+SharedVector NativeRestrictedState::energies() const { return std::make_shared<Vector>(*eps_); }
+SharedMatrix NativeRestrictedState::density_alpha() const { return da_->clone(); }
+std::shared_ptr<BasisSet> NativeRestrictedState::basis_snapshot() const {
+    return snapshot_basis(basis_, true);
+}
 
 NativeResponseProvider::NativeResponseProvider(std::shared_ptr<Wavefunction> wfn,bool caller_converged,
         const std::string& kernel,double exact_exchange,double local_scale,SharedMatrix grid,

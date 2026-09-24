@@ -342,7 +342,8 @@ def _geometry(manifest, sources):
     """Narrow configuration check, not an ORIENT interpreter.
 
     Unrotated Molecule at 0 0 0 establishes global O when explicitly declared;
-    axes supports only the observed global-Z/from-to recipe. Unknown axes fail.
+    Axes supports global-Z or explicit from-to z, with from-to x.
+    Unknown axes fail; absent sites still require explicit global declarations.
     """
     byrole = {s.role: s.text for s in sources}
     st, recipe, axes = byrole["sites"], byrole["recipe"], byrole["axes"]
@@ -377,6 +378,16 @@ def _geometry(manifest, sources):
     if lines[0:1] != ["Axes"] or lines[-1:] != ["End"]:
         raise ValueError("unsupported axes grammar")
     for line in lines[1:-1]:
+        bond = re.fullmatch(r"(\S+)\s+z from (\S+) to (\S+) x from (\S+) to (\S+)", line)
+        if bond:
+            if any(x not in expected for x in bond.groups()) or bond[1] in derived:
+                raise ValueError("unsupported/duplicate axes directive")
+            from .isapol_geometry import _frame_from_directions
+            with np.errstate(over="ignore", invalid="ignore"):
+                z = np.array(expected[bond[3]]) - expected[bond[2]]
+                x = np.array(expected[bond[5]]) - expected[bond[4]]
+            derived[bond[1]] = _frame_from_directions(z, x)
+            continue
         m = re.fullmatch(r"(\S+)\s+z global Z x from (\S+) to (\S+)", line)
         if not m or any(x not in expected for x in m.groups()) or m[1] in derived:
             raise ValueError("unsupported/duplicate axes directive")

@@ -27,6 +27,43 @@ class Wavefunction;
 class Matrix;
 class Vector;
 namespace isapol {
+/** Owned restricted-C1 state admission without dense response construction.
+ * Reuses the native occupation, finite-energy/gap, density, basis and
+ * independently evaluated overlap checks. Caller convergence is a declaration,
+ * not an SCF or correction-policy seal. No Wavefunction/Options is retained;
+ * All getters return copies and the retained reconstructed basis is private.
+ * Basis copies retain scientific centre/shell data but not comments, arbitrary
+ * labels, variables, dummy centres or provenance metadata from the molecule.
+ * Concurrent mutation during construction is unsupported.
+ *
+ * The state-only envelope is 64*nbf^2 doubles, 16 KiB per shell (bounded
+ * primitives), 4 KiB per atom and 16 MiB fixed engine allowance, <=512 MiB.
+ * It excludes caller storage and is not a process-RSS guarantee. No nov^2
+ * operators, ERIs, grids or frequency solver are constructed. Admission here
+ * does not authorize any response backend's independent work/resource limits.
+ */
+class NativeRestrictedState {
+ public:
+    NativeRestrictedState(std::shared_ptr<Wavefunction> wfn, bool caller_converged,
+                          std::size_t max_bytes);
+    std::shared_ptr<Matrix> orbitals() const;
+    std::shared_ptr<Vector> energies() const;
+    std::shared_ptr<Matrix> density_alpha() const;
+    std::shared_ptr<BasisSet> basis_snapshot() const;
+    int nbf() const { return nbf_; }
+    int nmo() const { return nmo_; }
+    int nocc() const { return nocc_; }
+    int nvir() const { return nvir_; }
+    std::size_t nov() const { return nov_; }
+    std::size_t planned_bytes() const { return planned_bytes_; }
+ private:
+    std::shared_ptr<BasisSet> basis_;
+    std::shared_ptr<Matrix> c_, da_;
+    std::shared_ptr<Vector> eps_;
+    int nbf_ = 0, nmo_ = 0, nocc_ = 0, nvir_ = 0;
+    std::size_t nov_ = 0, planned_bytes_ = 0;
+};
+
 /** Immutable, eager, restricted C1 native full-OV producer; no frequency solver.
  * Real AO/MO context, atomic units, t=a*nocc+i (occupied fast).
  * V=(ia|jb), X=(ij|ab), Y=(ib|aj), L=int w fxc(rho) ia jb.

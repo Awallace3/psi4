@@ -15,6 +15,23 @@ from .isapol_native_correction import validate_correction
 from .isapol_response_preflight import ALDA_WORK_LIMITS, estimate_response_work
 
 
+def native_restricted_state_from_wavefunction(wavefunction, *, caller_converged,
+                                            max_bytes=512*1024**2):
+    """Validate and own a restricted C1 state without constructing operators.
+
+    State-only admission, not SCF convergence verification or correction/kernel
+    policy certification. Native basis/density/overlap checks remain mandatory.
+    Existing dense response limits are neither invoked nor relaxed.
+    """
+    if not isinstance(caller_converged, (bool, np.bool_)) or not caller_converged:
+        raise ValueError("explicit true caller_converged declaration required")
+    if (isinstance(max_bytes, (bool, np.bool_))
+            or not isinstance(max_bytes, (int, np.integer))
+            or not 0 < max_bytes <= 512*1024**2):
+        raise ValueError("max_bytes must be a positive integer at most 512 MiB")
+    return core.NativeRestrictedState(wavefunction, True, int(max_bytes))
+
+
 @dataclass(frozen=True)
 class NativeWavefunctionResponse:
     """Owned native operators and one reusable shared solver.

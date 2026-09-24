@@ -573,6 +573,7 @@ def _parameter_tensor(model, entries):
 #: message in Python rather than a bare ValueError out of C++.
 ORIGIN_REPRESENTATIONS = {
     'NativeDirectActualPointResponse': ('native_point_charge_ov_operators', False),
+    'NativeFittedPointResponse': ('fitted_density_coefficients', True),
     'SuppliedFittedPropagatorPointResponse': ('fitted_density_coefficients', True),
 }
 

@@ -271,6 +271,57 @@ Refined coefficients are published under their own variable names and returned
 through their own accessor, so a refined and an unrefined number can never
 overwrite or be mistaken for one another.
 
+Explicit fitted-density targets
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The public ``ATOMIC_REFINED_*`` tasks still use direct-OV point-charge
+targets from the original context provider's operators, not from an optional
+rebuilt propagator. Do not interpret that default as rebuilt-propagator target
+equivalence. A separate Python producer accepts an explicitly selected native
+fitted-AUX calculation:
+
+.. code-block:: python
+
+   from psi4.driver.procrouting.isapol_native_fitted_point_response import (
+       native_fitted_point_response,
+   )
+   targets = native_fitted_point_response(
+       target_properties, wfn, points_bohr,
+       charge_penalty=1000.0, metric_damping=0.0,
+   )
+
+Here ``target_properties`` is the result of ``native_properties`` with
+``response_basis='fitted_auxiliary'``. The required penalty and damping must
+match that calculation exactly; the producer does not refit. If the anchors
+use a different damping, compute the target calculation separately.
+
+The producer evaluates exact AUX Coulomb potentials and contracts
+:math:`v=-B^T C_{\mathrm{AUX}} B` at every retained frequency. It uses the
+retained coefficient responses, including any declared propagator rebuild,
+not the original context provider's operators. Targets carry the distinct
+``NativeFittedPointResponse`` PFIT origin and an AUX identity. Neither this
+origin nor the fitted representation certifies agreement with CamCASP.
+
+The Python refinement orchestrator can select that target calculation
+separately from the accepted localization used as anchors:
+
+.. code-block:: python
+
+   from psi4.driver.procrouting.isapol_native_refinement import native_refinement
+   refined = native_refinement(
+       anchor_properties, wfn,
+       site_types=("O", "H", "H"), rank_limits={"O": 2, "H": 1},
+       fitted_target_properties=target_properties,
+       target_charge_penalty=1000.0, target_metric_damping=0.0,
+   )
+
+Target and anchor results must share the exact wavefunction state, response
+policy and frequency grid. Their fit damping may differ. The anchor
+localization must pass its production gates; target localization is not an
+operand of the fit and need not have passed. Supplying fit declarations
+without a target calculation is refused. Omitting all three new arguments
+preserves the direct-OV target route.
+
 
 Keywords
 ^^^^^^^^
@@ -308,6 +359,29 @@ here.  The groups are:
 * **Refinement** |w---w| the ``ATOMIC_REFINEMENT_*`` family.
 
 * **Reporting** |w---w| |globals__atomic_property_print|.
+
+Explicit bond-defined local frames
+---------------------------------
+
+The lower-level ``isapol_geometry.frames_from_axis_pairs(origins, declarations)``
+helper constructs local-to-global column frames ``[x, y, z]``. Each declaration
+is ``(site, (z_from, z_to), (x_from, x_to))`` with zero-based site indices.
+Every site must be declared exactly once; neither bonds nor symmetry are
+inferred. The declared x direction is projected perpendicular to z.
+Coincident endpoints and numerically collinear directions (sine of the angle
+at most 64 times float64 epsilon) are rejected without fallback axes.
+
+Pass these frames explicitly to the native or supplied-nonlocal property API.
+The supplied-local file reader also accepts
+``site z from A to B x from C to D`` in its narrow axes grammar, in addition
+to the existing global-Z form. Sites without axes still require explicit
+global-frame declarations in the manifest.
+
+Frame support alone does not enable native benzene calculations: carbon
+partition policy and response/refinement resource limits remain unchanged.
+
+Independent model declarations
+------------------------------
 
 Two distinctions are easy to confuse and are genuinely independent:
 

@@ -124,4 +124,64 @@ std::shared_ptr<Matrix> IsaAuxCoulomb::metric() const {
     }
     return result;
 }
+std::shared_ptr<Matrix> IsaAuxCoulomb::point_potentials(const Matrix& points, size_t max_bytes) const {
+    aux_int_require(points.nirrep()==1 && points.ncol()==3 && points.nrow()>0,
+                    "AUX point potentials require nonempty npoint x 3 coordinates");
+    const int npoint=points.nrow(), naux=basis_.nfunction();
+    aux_int_require(npoint<=512, "AUX point potential resource limit (maximum 512 points)");
+    aux_int_require(max_bytes>0 && static_cast<size_t>(naux)<=max_bytes/sizeof(double)/npoint,
+                    "AUX point potential matrix byte resource limit");
+    for (int p=0;p<npoint;++p) for (int axis=0;axis<3;++axis)
+        aux_int_require(std::isfinite(points.get(p,axis)), "Nonfinite AUX potential point");
+    const bool pure=basis_.representation_==IsaBasisRepresentation::Spherical;
+    size_t max_nprim=0;
+    int max_l=0;
+    std::vector<libint2::Shell> shells;
+    for (const auto& s:basis_.shells_) {
+        shells.emplace_back(libint2::svector<double>(s.exponents.begin(),s.exponents.end()),
+            libint2::svector<libint2::Shell::Contraction>{{s.l,false,
+                libint2::svector<double>(s.coefficients.begin(),s.coefficients.end())}},
+            basis_.centres_[s.centre],false);
+        max_nprim=std::max(max_nprim,s.exponents.size());
+        max_l=std::max(max_l,s.l);
+    }
+    // A true unit shell makes a two-function nuclear integral a one-function
+    // AUX potential. Libint's nuclear operator includes a minus sign: use a
+    // negative unit source to obtain the declared positive Coulomb kernel.
+    libint2::Engine engine(libint2::Operator::nuclear,max_nprim,max_l,0,0.0);
+    engine.set(libint2::CartesianShellNormalization::standard);
+    auto result=std::make_shared<Matrix>("Explicit AUX positive point potentials",naux,npoint);
+    for (int p=0;p<npoint;++p) {
+        engine.set_params(std::vector<std::pair<double,std::array<double,3>>>{
+            {-1.,{points.get(p,0),points.get(p,1),points.get(p,2)}}});
+        int offset=0;
+        for (size_t s=0;s<shells.size();++s) {
+            engine.compute(shells[s],libint2::Shell::unit());
+            const auto* block=engine.results()[0];
+            const int l=basis_.shells_[s].l;
+            if (block) {
+                if (pure) {
+                    const auto transform=isa_dalton_transform(l);
+                    for (size_t i=0;i<transform.size();++i) {
+                        double value=0.;
+                        for (const auto& term:transform[i]) value+=term.second*block[term.first];
+                        aux_int_require(std::isfinite(value),"Nonfinite AUX point potential integral");
+                        result->set(offset+i,p,value);
+                    }
+                } else {
+                    const auto& powers=IsaExplicitBasis::cartesian_powers(l);
+                    for (size_t i=0;i<powers.size();++i) {
+                        const auto& power=powers[i];
+                        const double value=block[libint2::INT_CARTINDEX(l,power[0],power[1])]*
+                                           aux_factor(l,power);
+                        aux_int_require(std::isfinite(value),"Nonfinite AUX point potential integral");
+                        result->set(offset+i,p,value);
+                    }
+                }
+            }
+            offset+=IsaExplicitBasis::shell_size(l,basis_.representation_);
+        }
+    }
+    return result;
+}
 } }

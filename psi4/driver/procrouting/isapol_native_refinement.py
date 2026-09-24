@@ -15,8 +15,8 @@ The chain is CamCASP's own, in CamCASP's order:
 1. the fit-point cloud, ``core.FitPoints`` over the certified Maclaren draw
    (``SET Lattice / LoLim / HiLim / Random / Seed / END``),
 2. the point-to-point response on that cloud,
-   ``isapol_native_point_response.native_point_charge_response``, which is what
-   CamCASP's ``localize`` writes to a ``.p2p`` file,
+   direct-OV by default, or exact AUX potentials contracted with an explicitly
+   selected fitted target calculation (distinct from the anchor calculation),
 3. one ``pfit`` solve per frequency against those targets, anchored on the
    localized tensors, and
 4. ``casimir`` over the refined tensors.
@@ -50,6 +50,8 @@ from psi4 import core
 from . import isapol_logging as _lg
 from . import isapol_refine as _refine
 from .isapol_native_point_response import MAXIMUM_POINTS, native_point_charge_response
+from .isapol_native_fitted_point_response import native_fitted_point_response
+from .isapol_native import NativeProperties
 
 
 #: CamCASP's declared lattice, as ``H2O_aTZ.cks`` writes it.  The C++ defaults
@@ -227,7 +229,9 @@ def native_refinement(properties, wfn, *, site_types, rank_limits,
                       lower_limit=DEFAULT_LOWER_LIMIT, upper_limit=DEFAULT_UPPER_LIMIT,
                       weight_type=4, weight_coefficient=1.0e-3, cutoff=1.0e-4,
                       damping=0.0, dispersion=False, max_order=12, site_ranks=None,
-                      declared_variables=None, options=None, log=None, source_id=None):
+                      declared_variables=None, options=None, log=None, source_id=None,
+                      fitted_target_properties=None, target_charge_penalty=None,
+                      target_metric_damping=None):
     """Refine an accepted native result on its own frequency grid.
 
     Every node is refined against the *same* cloud and the same T-function
@@ -241,7 +245,32 @@ def native_refinement(properties, wfn, *, site_types, rank_limits,
     invent a set for a grid it did not choose.  The refined coefficients come
     back on the result under their own names and are never mixed with the
     unrefined ones in ``properties.dispersion`` -- the two are different models.
+
+    By default targets remain direct-OV. To select fitted targets, pass a
+    separate ``fitted_target_properties`` result and explicitly declare its
+    ``target_charge_penalty`` and ``target_metric_damping``. No fit is inferred
+    from the anchors or recomputed here. Target and anchor calculations must
+    share the exact state, response policy and frequency grid; their fit
+    damping may differ. Target localization need not have passed: coefficient
+    responses are its operands. Anchor localization MUST pass as before.
     """
+    fitted = fitted_target_properties is not None
+    if not fitted and (target_charge_penalty is not None or target_metric_damping is not None):
+        raise ValueError('target fit declarations require fitted_target_properties')
+    if fitted:
+        if not isinstance(fitted_target_properties, NativeProperties):
+            raise TypeError('fitted_target_properties must be a native target calculation')
+        if target_charge_penalty is None or target_metric_damping is None:
+            raise ValueError('fitted targets require explicit target charge penalty and metric damping')
+        if properties.context is None or fitted_target_properties.context is None:
+            raise ValueError('target and anchor require completed native response contexts')
+        if (properties.context.wavefunction_sha256 !=
+                fitted_target_properties.context.wavefunction_sha256):
+            raise ValueError('target and anchor wavefunction contexts differ')
+        if properties.context.policy_sha256 != fitted_target_properties.context.policy_sha256:
+            raise ValueError('target and anchor response policies differ')
+        if tuple(properties.frequencies) != tuple(fitted_target_properties.frequencies):
+            raise ValueError('target and anchor frequency grids differ')
     local = properties.require_local()
     frequencies = tuple(float(x) for x in properties.frequencies)
     if tuple(float(x) for x in local.frequencies) != frequencies:
@@ -258,18 +287,25 @@ def native_refinement(properties, wfn, *, site_types, rank_limits,
     log.stage('point-to-point response targets', (
         ('points', lattice.npoints), ('points sha256', lattice.sha256),
         ('frequency nodes', len(frequencies)),
-        ('producer', 'isapol_native_point_response.native_point_charge_response'),
-        ('reused context', 'the accepted native response; H1/H2 are not recomputed'),
+        ('producer', 'isapol_native_fitted_point_response.native_fitted_point_response' if fitted
+         else 'isapol_native_point_response.native_point_charge_response'),
+        ('reused context', 'selected target coefficient responses; no refit' if fitted else
+         'the accepted native response; H1/H2 are not recomputed'),
         ('maximum points', MAXIMUM_POINTS)))
-    targets = native_point_charge_response(response, wfn, points, frequencies=frequencies)
+    targets = (native_fitted_point_response(
+        fitted_target_properties, wfn, points, charge_penalty=target_charge_penalty,
+        metric_damping=target_metric_damping) if fitted else
+        native_point_charge_response(response, wfn, points, frequencies=frequencies))
     _lg.report_refinement_targets(log, targets)
     log.stage_end()
 
     declared_source = source_id if source_id is not None else (
-        f'native {properties.distributed.partition.representation} actual point-charge '
+        f'native {properties.distributed.partition.representation} '
+        f'{"fitted AUX point-charge" if fitted else "actual point-charge"} '
         f'response on a Random {lattice.npoints}/Seed {lattice.seed} lattice '
         f'(sha256={lattice.sha256}); anchors from the accepted native localization '
         f'at rank limit {local.metadata.localization_rank_limit}')
+    target_provenance = targets.target_provenance(declared_source)
     fields, refinements = None, []
     for node, frequency in enumerate(frequencies):
         model = _refine.refinement_model(
@@ -283,7 +319,8 @@ def native_refinement(properties, wfn, *, site_types, rank_limits,
             fields = _refine.channel_fields(points, model, damping=damping)
         refinements.append(_refine.refine(
             model, points, targets.packed_targets[node], damping=damping, fields=fields,
-            target_origin=core.IsaPfitTargetOrigin.NativeDirectActualPointResponse,
+            target_origin=target_provenance.origin,
+            auxiliary_basis_id=target_provenance.auxiliary_basis_id,
             response_representation=targets.representation, source_id=declared_source,
             generation_record=targets.generation_record, options=options, log=log, wfn=wfn))
 
