@@ -7,6 +7,7 @@ Numerical shell collocation is a *verified representation change*, not a fit of
 orbitals/density or a repair of their normalization. See ``adapt_main``.
 """
 from dataclasses import dataclass
+import functools
 import math
 import numpy as np
 from psi4 import core
@@ -319,20 +320,26 @@ def _directions(n, phase):
     return np.column_stack((np.sqrt(1-z*z)*np.cos(angle), np.sqrt(1-z*z)*np.sin(angle), z))
 
 
+@functools.lru_cache(maxsize=None)
+def _dalton_terms(l):
+    """Per-m (norm, ((c, k, r2 power), ...)) of the Legendre-derivative harmonics."""
+    from numpy.polynomial import Legendre, Polynomial
+    p = Legendre.basis(l).convert(kind=Polynomial)
+    return tuple((math.sqrt(math.factorial(l-m)/math.factorial(l+m)*(2 if m else 1)),
+                  tuple((c, k, (l-m-k)//2) for k, c in enumerate(p.deriv(m).coef) if c != 0))
+                 for m in range(l+1))
+
+
 def _dalton_polynomials(l, xyz):
     """Independent Legendre-derivative solid harmonics, no reference data."""
-    from numpy.polynomial import Legendre, Polynomial
     r2 = np.sum(xyz*xyz, axis=1)
     z = xyz[:, 2]
     xy = xyz[:, 0] + 1j*xyz[:, 1]
     components = []
-    p = Legendre.basis(l).convert(kind=Polynomial)
-    for m in range(l+1):
+    for m, (norm, terms) in enumerate(_dalton_terms(l)):
         radial = np.zeros(len(xyz))
-        for k, c in enumerate(p.deriv(m).coef):
-            if c != 0:
-                radial += c * z**k * r2**((l-m-k)//2)
-        norm = math.sqrt(math.factorial(l-m)/math.factorial(l+m)*(2 if m else 1))
+        for c, k, power in terms:
+            radial += c * z**k * r2**power
         components.append(norm * radial * xy**m)
     if l == 1:
         return np.column_stack((components[1].real, components[1].imag, components[0].real))
@@ -361,15 +368,16 @@ def explicit_main_overlap(recipe):
                 ix = np.array(list(product(range(n), repeat=3)))
                 quadrature[n] = (x[ix], np.prod(w[ix], axis=1))
             nodes, weights = quadrature[n]
-            block = np.zeros((2*a.l+1, 2*b.l+1))
+            # All primitive pairs of the shell pair share one evaluation.
+            points, scaled = [], []
             for alpha, ca in zip(a.exponents, a.coefficients):
                 for beta, cb in zip(b.exponents, b.coefficients):
                     p = alpha+beta
-                    centre = (alpha*A+beta*B)/p
-                    points = centre + nodes/math.sqrt(p)
-                    va, vb = _dalton_polynomials(a.l, points-A), _dalton_polynomials(b.l, points-B)
-                    factor = ca*cb*math.exp(-alpha*beta/p*np.dot(A-B, A-B))/p**1.5
-                    block += factor * (va.T @ (weights[:, None]*vb))
+                    points.append((alpha*A+beta*B)/p + nodes/math.sqrt(p))
+                    scaled.append(ca*cb*math.exp(-alpha*beta/p*np.dot(A-B, A-B))/p**1.5 * weights)
+            points, scaled = np.concatenate(points), np.concatenate(scaled)
+            va, vb = _dalton_polynomials(a.l, points-A), _dalton_polynomials(b.l, points-B)
+            block = va.T @ (scaled[:, None]*vb)
             S[offsets[i]:offsets[i+1], offsets[j]:offsets[j+1]] = block
             S[offsets[j]:offsets[j+1], offsets[i]:offsets[i+1]] = block.T
     return _owned(S)
