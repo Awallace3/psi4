@@ -260,6 +260,9 @@ def _kernel(auxiliary, density, grid, smoothing, cutoff, ledger):
     mask = np.abs(np.asarray(auxiliary.screening_s_overlap())) >= cutoff
     functional = _superfunctional('alda_slater_pw92', smoothing.rho_epsilon, block)
     result = np.zeros((n, n))
+    # The kernel is symmetric: accumulate only its block upper triangle, in
+    # column panels wide enough to keep the GEMMs threaded, then mirror.
+    edges = np.linspace(0, n, 5).astype(int)
     with np.errstate(over='raise', invalid='raise', divide='raise'):
         for begin in range(0, rows, block):
             part = grid[begin:begin+block]
@@ -268,8 +271,11 @@ def _kernel(auxiliary, density, grid, smoothing, cutoff, ledger):
             values = functional.compute_functional(
                 {'RHO_A': core.Vector.from_array(np.maximum(rho, smoothing.rho_epsilon))}, len(part), True)
             fxc = np.asarray(values['V_RHO_A_RHO_A'])[:len(part)]
-            weights = part[:, 3]*smoothing.limit(fxc)
-            result += chi.T @ (weights[:, None]*chi)
+            weighted = (part[:, 3]*smoothing.limit(fxc))[:, None]*chi
+            for start, end in zip(edges[:-1], edges[1:]):
+                result[:end, start:end] += chi[:, :end].T @ weighted[:, start:end]
+    result = np.triu(result)
+    result += np.triu(result, 1).T
     for i, (offset, count, _, _) in enumerate(layout):
         for j, (other, width, _, _) in enumerate(layout):
             if not mask[i, j]:

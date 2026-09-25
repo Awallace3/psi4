@@ -6,6 +6,7 @@
 #include "isa_fit.h"
 #include "parallel_work.h"
 #include "psi4/libmints/matrix.h"
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <limits>
@@ -177,6 +178,11 @@ std::shared_ptr<Matrix> IsaExplicitBasis::evaluate_screened(const std::vector<st
     }
     auto output = result->pointer();
     detail::parallel_work(points.size(),256,[&](size_t i) {
+        // The angular factor depends only on (centre, l): evaluate it once per
+        // point for each, instead of once per shell. Same arithmetic, same bits.
+        std::array<double,15> values[5];
+        int cached_centre = -1;
+        bool cached[5] = {};
         for (size_t shell = 0; shell < shells_.size(); ++shell) {
             const auto& s = shells_[shell];
             if (!active[s.centre]) continue;
@@ -189,9 +195,16 @@ std::shared_ptr<Matrix> IsaExplicitBasis::evaluate_screened(const std::vector<st
             double radial = 0;
             for (size_t p = 0; p < s.exponents.size(); ++p)
                 radial += s.coefficients[p]*std::exp(-s.exponents[p]*r2);
-            auto values = angular(s.l,representation_,x,y,z);
+            if (s.centre != cached_centre) {
+                cached_centre = s.centre;
+                std::fill(std::begin(cached),std::end(cached),false);
+            }
+            if (!cached[s.l]) {
+                values[s.l] = angular(s.l,representation_,x,y,z);
+                cached[s.l] = true;
+            }
             for (int k = 0; k < n; ++k) {
-                double value = radial*values[k];
+                double value = radial*values[s.l][k];
                 basis_require(std::isfinite(value), "Nonfinite basis sample");
                 output[i][column+k] = value;
             }
