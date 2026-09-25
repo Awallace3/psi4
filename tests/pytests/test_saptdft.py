@@ -7,10 +7,122 @@ import qcelemental as qcel
 from pathlib import Path
 from pprint import pprint as pp
 from addons import uusing
+from psi4.driver.driver_findif import FiniteDifferenceComputer
+from psi4.driver.task_base import AtomicComputer
 from psi4.driver.procrouting.sapt import sapt_proc
 
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
 pytestmark = [pytest.mark.psi, pytest.mark.api]
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize(
+    "method",
+    [
+        "sapt(dft)",
+        "sapt(dft)-d4(i)",
+        "sapt(dft)-d4(s)",
+        "sapt(dft)-d3(i)",
+        "sapt(dft)-d3(s)",
+        "dft-d3(sapt)",
+        "dft-d4(sapt)",
+    ],
+)
+def test_saptdft_gradient_findif_routing(method):
+    """SAPT(DFT) gradients route through finite differences of energies."""
+    mol = psi4.geometry("""
+    0 1
+    He 0.0 0.0 -2.0
+    --
+    0 1
+    Ne 0.0 0.0  2.0
+    units bohr
+    symmetry c1
+    no_reorient
+    no_com
+    """)
+    psi4.set_options({"basis": "sto-3g", "sapt_dft_grac_shift_only": False})
+
+    plan = psi4.gradient(method, molecule=mol, return_plan=True)
+
+    assert isinstance(plan, FiniteDifferenceComputer)
+    assert plan.driver == "gradient"
+    assert plan.method == method
+    assert plan.metameta["mode"] == "1_0"
+    assert len(plan.task_list) == 3
+    assert all(isinstance(task, AtomicComputer) for task in plan.task_list.values())
+    assert all(task.driver == "energy" for task in plan.task_list.values())
+
+
+@pytest.mark.saptdft
+def test_only_saptdft_gradients_are_unblocked():
+    """Other SAPT gradients and SAPT(DFT) Hessians remain unsupported."""
+    mol = psi4.geometry("""
+    0 1
+    He 0.0 0.0 -2.0
+    --
+    0 1
+    Ne 0.0 0.0  2.0
+    units bohr
+    """)
+    psi4.set_options({"basis": "sto-3g", "sapt_dft_grac_shift_only": False})
+
+    with pytest.raises(psi4.ValidationError, match="does not have an associated gradient"):
+        psi4.gradient("sapt0", molecule=mol, return_plan=True)
+    with pytest.raises(psi4.ValidationError, match="does not have an associated Hessian"):
+        psi4.hessian("sapt(dft)", molecule=mol, return_plan=True)
+    with pytest.raises(psi4.MissingMethodError, match="requested derivative level"):
+        psi4.gradient("sapt(dft)", molecule=mol, dertype=1, return_plan=True)
+
+    psi4.set_options({"sapt_dft_grac_shift_only": True})
+    try:
+        with pytest.raises(psi4.ValidationError, match="does not compute an interaction energy"):
+            psi4.gradient("sapt(dft)", molecule=mol, return_plan=True)
+    finally:
+        psi4.set_options({"sapt_dft_grac_shift_only": False})
+
+
+@pytest.mark.saptdft
+def test_saptdft_gradient_findif_end_to_end():
+    """Assemble a SAPT(DFT) interaction-energy gradient and its wavefunction variables."""
+    psi4.core.clean_options()
+    psi4.core.clean_variables()
+    mol = psi4.geometry("""
+    0 1
+    He 0.0 0.0 -2.0
+    --
+    0 1
+    Ne 0.0 0.0  2.0
+    units bohr
+    symmetry c1
+    no_reorient
+    no_com
+    """)
+    psi4.set_options({
+        "basis": "6-31g",
+        "sapt_dft_functional": "hf",
+        "sapt_dft_do_dhf": False,
+        "sapt_dft_use_einsums": False,
+        "e_convergence": 1e-10,
+        "d_convergence": 1e-10,
+    })
+
+    try:
+        gradient, wfn = psi4.gradient("sapt(dft)", molecule=mol, return_wfn=True)
+        gradient = np.asarray(gradient)
+
+        assert gradient.shape == (2, 3)
+        assert np.isfinite(gradient).all()
+        assert np.allclose(gradient, [[0.0, 0.0, 0.00813807], [0.0, 0.0, -0.00813807]], atol=2e-5)
+        assert np.allclose(gradient.sum(axis=0), 0.0, atol=1e-10)
+        assert np.allclose(np.asarray(wfn.gradient()), gradient, atol=1e-12)
+        assert np.allclose(np.asarray(wfn.variable("CURRENT GRADIENT")), gradient, atol=1e-12)
+        assert wfn.energy() == pytest.approx(wfn.variable("CURRENT ENERGY"))
+        assert psi4.core.variable("FINDIF NUMBER") == 3
+    finally:
+        psi4.core.clean_options()
+        psi4.core.clean_variables()
+        psi4.core.clean()
 
 
 @pytest.fixture

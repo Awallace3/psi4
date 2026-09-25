@@ -597,9 +597,15 @@ def gradient(name, **kwargs):
     lowername = driver_util.upgrade_interventions(name)
     _filter_renamed_methods("gradient", lowername)
 
-    # * Prevent methods that do not have associated derivatives
-    if lowername in energy_only_methods:
+    # * Prevent methods that do not have associated derivatives. SAPT(DFT)
+    #   methods are an explicit exception: their gradients are evaluated by
+    #   finite differences of interaction energies.
+    if lowername in energy_only_methods and lowername not in finite_difference_gradient_methods:
         raise ValidationError(f"`gradient('{name}')` does not have an associated gradient.")
+    if lowername in finite_difference_gradient_methods and core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_ONLY"):
+        raise ValidationError(
+            "SAPT_DFT_GRAC_SHIFT_ONLY does not compute an interaction energy and cannot be used for a gradient."
+        )
 
     # * Avert pydantic anger at incomplete modelchem spec
     userbas = core.get_global_option('BASIS') or kwargs.get('basis')

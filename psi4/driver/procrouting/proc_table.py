@@ -244,7 +244,16 @@ procedures = {
         'cvs-adc(3)'   : proc.run_adcc_property,
     }} # yapf: disable
 
-# Will only allow energy to be run for the following methods
+# SAPT(DFT) has no analytic gradient, but its interaction energy is suitable for
+# the driver's finite-difference-of-energies route. Keep the explicit allowlist
+# separate from the broad SAPT energy-only classification so other SAPT methods
+# remain rejected by gradient().
+finite_difference_gradient_methods = {
+    name for name, procedure in procedures['energy'].items() if procedure is sapt.run_sapt_dft
+}
+
+# Will only allow energy to be run for the following methods, except for the
+# finite-difference gradient methods explicitly listed above.
 energy_only_methods = [x for x in procedures['energy'].keys() if 'sapt' in x]
 energy_only_methods += ['efp', 'cphf', 'tdhf', 'cis']
 

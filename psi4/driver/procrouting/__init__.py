@@ -30,4 +30,5 @@ from . import dft, diis, libcubeprop, response, scf_proc
 from .empirical_disp.empirical_dispersion import EmpiricalDispersion
 from .empirical_disp import empirical_dispersion
 from .proc import scf_helper, scf_wavefunction_factory
-from .proc_table import energy_only_methods, hooks, integrated_basis_methods, procedures
+from .proc_table import (energy_only_methods, finite_difference_gradient_methods, hooks, integrated_basis_methods,
+                         procedures)

@@ -149,6 +149,15 @@ For SAPT(DFT), the SAPT expansion is truncated at the same level of SAPT0, but t
 
 .. math:: \chi_{coup}\left(\mathbf{r},\mathbf{r}'|\omega\right) = \chi_0\left(\mathbf{r},\mathbf{r}'|\omega\right) + \int d\omega d\mathbf{r}_1 d\mathbf{r}_2 \chi_0\left(\mathbf{r},\mathbf{r}_1|\omega\right)\left[\frac{1}{r_{12}} + f_{xc}\left(\mathbf{r}_1,\mathbf{r}_2,\omega\right)\right]\chi\left(\mathbf{r}_2,\mathbf{r}'|\omega\right)
 
+SAPT(DFT) gradients are available through finite differences of the complete
+interaction energy. Calling ``gradient("sapt(dft)")`` automatically selects
+this route and honors the usual |findif__points| and |findif__disp_size|
+settings. The SAPT(DFT)-D3 and SAPT(DFT)-D4 variants use the same route, so
+the empirical dispersion contribution is included in each displaced energy.
+Analytic SAPT(DFT) gradients and SAPT(DFT) Hessians are not available.
+The |sapt__sapt_dft_grac_shift_only| diagnostic mode does not define an
+interaction-energy surface and therefore cannot be used with ``gradient()``.
+
 
 The :math:`\delta_{HF}^{(2)}` and :math:`\delta_{HF}^{(3)}` terms take into
 account higher-order induction effects and are included in the definition
