@@ -132,8 +132,7 @@ def _assemble(store, dimensions, tiles, exact_exchange, local_scale):
     store.ledger.admit('dense operator assembly', plan, 8*p*n*n+2*n*p*p)
     oo = store.load('oo')
     x = _exchange_x(oo, (store.load(f'dualvv{i}') for i in range(tiles[1])), nv)
-    store.save('x', x)
-    del x, oo
+    del oo
     dual = np.empty((p, no*nv))
     start = 0
     for i in range(tiles[0]):
@@ -145,27 +144,27 @@ def _assemble(store, dimensions, tiles, exact_exchange, local_scale):
     del tile
     ov = store.load('ov')
     v, y = _gram_terms(ov, dual.reshape(p, no, nv))
-    store.save('v', v)
-    store.save('y', y)
-    del ov, dual, v, y
-    h = store.load('x')
-    h *= -exact_exchange
-    y, v = store.load('y'), store.load('v')
-    for a in range(0, n, 32):
-        h[a:a+32] += 4*v[a:a+32]-exact_exchange*y[a:a+32]
+    del ov, dual
+    # x, v and y are combined in place (three n x n buffers, no checkpoints):
+    # h1 = -cx x + (4v - cx y) + K in v's buffer, h2 = -cx x + cx y in x's.
+    x *= -exact_exchange
+    for a in range(0, n, 512):
+        v[a:a+512] = x[a:a+512]+(4*v[a:a+512]-exact_exchange*y[a:a+512])
+        x[a:a+512] += exact_exchange*y[a:a+512]
+    h = v
     del y, v
     d, k = store.load('target'), store.load('kernel')
-    for a in range(0, n, 32):
-        h[a:a+32] += (4*local_scale)*(d[a:a+32] @ k) @ d.T
-    h.flat[::n+1] += store.load('gaps')
+    dk = d @ k
+    del k
+    for a in range(0, n, 512):
+        h[a:a+512] += (4*local_scale)*dk[a:a+512] @ d.T
+    del d, dk
+    gaps = store.load('gaps')
+    h.flat[::n+1] += gaps
     store.save('h1', h)
-    del h, d, k
-    h, y = store.load('x'), store.load('y')
-    h *= -exact_exchange
-    h += exact_exchange*y
-    del y
-    h.flat[::n+1] += store.load('gaps')
-    store.save('h2', h)
+    del h
+    x.flat[::n+1] += gaps
+    store.save('h2', x)
 
 
 def _minimum_eigenvalue(a):
@@ -237,7 +236,7 @@ class _H2H1Response:
         self.matrix = self.legs = self.rhs = None
 
     def solve(self, omega):
-        p, q, n, block = self.p, self.q, self.n, 128
+        p, q, n, block = self.p, self.q, self.n, 512
         self.ledger.admit('frequency response', 8*(n*n+2*n*(p+q)+3*n*block+p*p+q*q+16*n)+8*1024**2,
                           int(2*n**3/3+6*n*n*(p+q)))
         shifted = self.matrix.copy()
