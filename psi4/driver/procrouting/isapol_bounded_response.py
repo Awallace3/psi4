@@ -182,34 +182,65 @@ def _stability(store, n):
     return result
 
 
+class _H2H1Response:
+    """The original (unsymmetrized) H2 H1 product and H2-applied legs, formed once.
+
+    Neither depends on the frequency, so the loop retains them instead of
+    reloading and re-multiplying H1/H2 per node. Each node factors its own
+    shifted copy and gates the residual against the same shifted operator.
+    """
+    def __init__(self, store, dimensions, q):
+        p, no, nv = dimensions
+        n = no*nv
+        self.ledger, self.p, self.q, self.n = store.ledger, p, q, n
+        self.retained = 8*(n*n+2*n*(p+q))
+        self.ledger.admit('H2H1 response operator', self.retained+8*(2*n*n+n*(p+q))+8*1024**2,
+                          int(2*n**3+2*n*n*(p+q)))
+        h1, h2 = store.load('h1'), store.load('h2')
+        self.matrix = h2 @ h1
+        del h1
+        d, anchor = store.load('target'), store.load('anchor')
+        self.legs = np.column_stack((d, anchor))
+        del d, anchor
+        self.rhs = -4*(h2 @ self.legs)
+        del h2
+        self.ledger.reserved += self.retained
+
+    def close(self):
+        self.ledger.reserved -= self.retained
+        self.matrix = self.legs = self.rhs = None
+
+    def solve(self, omega):
+        p, q, n, block = self.p, self.q, self.n, 128
+        self.ledger.admit('frequency response', 8*(n*n+2*n*(p+q)+3*n*block+p*p+q*q+16*n)+8*1024**2,
+                          int(2*n**3/3+6*n*n*(p+q)))
+        shifted = self.matrix.copy()
+        shifted.flat[::n+1] += omega*omega
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', LinAlgWarning)
+            lu, piv = lu_factor(shifted, overwrite_a=True, check_finite=True)
+        del shifted
+        solved = lu_solve((lu, piv), self.rhs)
+        del lu, piv
+        worst = 0.
+        for begin in range(0, p+q, block):
+            x, rhs = solved[:, begin:begin+block], self.rhs[:, begin:begin+block]
+            residual = self.matrix @ x+omega*omega*x-rhs
+            relative = np.linalg.norm(residual, axis=0)/np.maximum(
+                np.linalg.norm(rhs, axis=0), np.finfo(float).tiny)
+            worst = max(worst, float(np.max(relative)))
+        if not np.isfinite(solved).all() or worst > 1e-10:
+            raise ValueError('original H2H1 response residual gate')
+        legs = self.legs
+        return legs[:, :p].T @ solved[:, :p], -legs[:, p:].T @ solved[:, p:], worst
+
+
 def _frequency(store, dimensions, q, omega):
-    p, no, nv = dimensions
-    n = no*nv
-    planned = 8*(3*n*n+4*n*(p+q)+p*p+q*q+16*n)+8*1024**2
-    store.ledger.admit('frequency response', planned, int(2*n**3+2*n**3/3+8*n*n*(p+q)))
-    h1, h2 = store.load('h1'), store.load('h2')
-    matrix = h2 @ h1
-    del h1
-    matrix.flat[::n+1] += omega*omega
-    d, anchor = store.load('target'), store.load('anchor')
-    legs = np.column_stack((d, anchor))
-    del d, anchor
-    rhs = -4*(h2 @ legs)
-    del h2
-    with warnings.catch_warnings():
-        warnings.simplefilter('error', LinAlgWarning)
-        lu, piv = lu_factor(matrix, check_finite=True)
-    solved = lu_solve((lu, piv), rhs)
-    del lu, piv
-    worst = 0.
-    for begin in range(0, p+q, 32):
-        residual = matrix @ solved[:, begin:begin+32]-rhs[:, begin:begin+32]
-        relative = np.linalg.norm(residual, axis=0)/np.maximum(
-            np.linalg.norm(rhs[:, begin:begin+32], axis=0), np.finfo(float).tiny)
-        worst = max(worst, float(np.max(relative)))
-    if not np.isfinite(solved).all() or worst > 1e-10:
-        raise ValueError('original H2H1 response residual gate')
-    return legs[:, :p].T @ solved[:, :p], -legs[:, p:].T @ solved[:, p:], worst
+    response = _H2H1Response(store, dimensions, q)
+    try:
+        return response.solve(omega)
+    finally:
+        response.close()
 
 
 def _kernel(auxiliary, density, grid, smoothing, cutoff, ledger):

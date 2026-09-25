@@ -21,7 +21,7 @@ from psi4 import core
 
 from . import isapol_lw as lw, isapol_refine as refine
 from .isapol_bounded_response import (
-    BoundedResources, _Ledger, _Store, _assemble, _frequency, _kernel, _stability,
+    BoundedResources, _H2H1Response, _Ledger, _Store, _assemble, _kernel, _stability,
 )
 from .isapol_df_multipoles import df_centre_multipoles
 from .isapol_native import Quadrature, _context
@@ -345,10 +345,11 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution,
         packed = np.empty((row_count, nf))
         local_tensors, models, diagnostics = [], [], []
         frames = [s.frame for s in sites]
+        response = _H2H1Response(store, (p, no, nv), q)
         for node, omega in enumerate(quadrature.frequencies, 1):
             tag = f'node {node}/{nf}, omega={omega:.12g} au'
             log.stage('Original H2H1 response: ' + tag, (('RHS', p+q),))
-            coefficient, raw, residual = _frequency(store, (p, no, nv), q, omega)
+            coefficient, raw, residual = response.solve(omega)
             log.items((('relative response residual', residual),))
             log.stage('Production LW localization: ' + tag,
                       (('rank limit', localization_rank_limit), ('bonds', len(bonds))))
@@ -390,6 +391,7 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution,
             _pack_targets(packed, node-1, coefficient, store.load('potentials'), ledger)
             models.append(model)
             del coefficient, model
+        response.close()
         log.stage('Complete-cloud PFIT',
                   (('parameters', models[0].parameter_count), ('rows per pass', row_count),
                    ('frequencies', nf), ('passes', 2), ('weight type', weight_type),
