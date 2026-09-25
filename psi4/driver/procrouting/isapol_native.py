@@ -184,7 +184,7 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
                       scf_correction='NONE', expected_grac_shift=None, ac_declaration=None,
                       response_algorithm='ordered_pairwise', ov_charge_penalty=1.,
                       ov_metric_damping=0., localization_rank_limit=3, propagator=None,
-                      distribution='isa_a', log=None):
+                      distribution='isa_a', log=None, local_frames=None):
     """Return all owned stages, with strict production LW (1e-6) or failures.
 
     Explicit ``response_basis='direct_ov'`` integrates actual occupied/virtual
@@ -284,7 +284,14 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
     transition density and therefore ``response_basis='fitted_auxiliary'``, and a
     rebuilt kernel needs the explicit ``response_grid`` it is integrated on rather
     than an inferred one.
+
+    ``local_frames`` is an alternative to ``frames``: one explicit
+    :class:`isapol_geometry.LocalFrame` per site (axis-pair or Tinker-style
+    atom-defined recipe), resolved against the partition's site origins at the
+    LW stage. Declaring both is refused before any work is done.
     """
+    if frames is not None and local_frames is not None:
+        raise ValueError('declare frames or local_frames, not both')
     if response_basis not in ('fitted_auxiliary', 'direct_ov'):
         raise ValueError('unsupported response_basis')
     if (type(ov_charge_penalty) is not float or not np.isfinite(ov_charge_penalty)
@@ -524,6 +531,7 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
         provenance = lw.Provenance('fresh native distributed tensors', tensors.canonical_array_sha256,
             'Psi4 native fitted response and IsaDistributedResponse', partition.provenance+'; '+context_hash)
         args = dict(labels=q.labels, origins=q.origins, bonds=bonds, frames=frames,
+                    local_frames=local_frames,
                     input_rank=rank, truncation=_rank4_truncation(rank, localization_rank_limit),
                     provenance=provenance, residual_policy='production',
                     localization_rank_limit=localization_rank_limit)
@@ -531,7 +539,8 @@ def native_properties(wfn, recipe, *, bonds, frames, caller_converged, kernel,
         log.stage(stage, lg.localization_parameters(
             input_rank=rank, truncation=args['truncation'],
             localization_rank_limit=localization_rank_limit,
-            residual_policy='production', bonds=bonds, frames=frames, frequencies=freq))
+            residual_policy='production', bonds=bonds,
+            frames=frames if local_frames is None else local_frames, frequencies=freq))
         # Attempt EVERY node independently; never relax or hide a failed frequency.
         for k, xi in enumerate(freq):
             try:

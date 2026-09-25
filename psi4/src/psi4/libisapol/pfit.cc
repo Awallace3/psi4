@@ -95,7 +95,7 @@ template<class F> void data_rows(const IsaPfitProblem& p, F consume) {
             for(size_t k=0;k<np;++k) for(size_t u=0;u<nc;++u) for(size_t v=0;v<nc;++v)
                 row[k]=finite(row[k]+finite(finite(batch.fields.values[i*nc+u]*p.model.parameter_tensors[k].values[u*nc+v])*
                                                batch.fields.values[j*nc+v]));
-            consume(b,packed,row,batch.targets[packed]); ++packed;
+            consume(b,packed,1,row.data(),&batch.targets[packed]); ++packed;
         }
     }
 }
@@ -141,12 +141,14 @@ std::vector<double> IsaPfitResult::effective_penalty_rhs() const {
 }
 namespace detail {
 struct IsaPfitSolverImpl {
-    using Consumer = std::function<void(size_t,size_t,const std::vector<double>&,double)>;
+    // A consumer receives `rows` consecutive packed rows of one batch starting
+    // at `start`: row-major design[rows][np] and targets[rows], all finite.
+    using Consumer = std::function<void(size_t,size_t,size_t,const double*,const double*)>;
     using Replay = std::function<void(size_t,const Consumer&)>;
     template<class Problem>
     static IsaPfitResult solve(const Problem& p, const IsaPfitOptions& o,
                               const std::vector<IsaPfitCloudRows>& clouds,
-                              const Replay& replay, size_t source_bytes) {
+                              const Replay& replay, size_t source_bytes, size_t block_rows) {
     require(o.solver==IsaPfitSolver::StreamingQR || o.solver==IsaPfitSolver::NormalEquationsDSYSV,"unknown solver");
     require(o.qr_chunk_rows>0 && o.qr_chunk_rows<=static_cast<size_t>(std::numeric_limits<int>::max()),"invalid QR chunk rows");
     require(finite(o.rank_relative_tolerance)>0 && o.rank_relative_tolerance<1,"invalid rank tolerance");
@@ -197,6 +199,8 @@ struct IsaPfitSolverImpl {
     if(o.solver==IsaPfitSolver::StreamingQR && nf) scalars=add(scalars,mul(o.qr_chunk_rows,add(nf,1)));
     if(o.retain_pair_predictions) scalars=add(scalars,rows);
     scalars=add(scalars,mul(16,clouds.size()));
+    require(block_rows>0,"row block capacity must be positive");
+    scalars=add(scalars,mul(block_rows,add(nf,2)));
     Budget budget{add(mul(scalars,sizeof(double)),source_bytes),o.maximum_work_bytes};
     require(budget.base<=budget.limit,"kernel numerical buffers exceed maximum_work_bytes");
     IsaPfitResult out; auto& d=out.diagnostics_; out.settings_=o; out.frequency_=p.frequency_au;
@@ -241,24 +245,35 @@ struct IsaPfitSolverImpl {
         }
     }
     Givens qr(o.solver==IsaPfitSolver::StreamingQR?nf:0, o.solver==IsaPfitSolver::StreamingQR && nf?o.qr_chunk_rows:1);
-    std::vector<double> free_row(nf);
-    auto append=[&](const std::vector<double>& a,double target) {
-        double y=target;
-        for(size_t k=0;k<np;++k) if(p.model.fixed[k]) y=finite(y-finite(a[k]*p.model.fixed_values[k]));
-        for(size_t i=0;i<nf;++i) free_row[i]=a[d.free_indices[i]];
-        for(size_t i=0;i<nf;++i) {
-            out.rhs_[i]=finite(out.rhs_[i]+finite(free_row[i]*y));
-            for(size_t j=0;j<nf;++j) out.normal_.values[i*nf+j]=finite(out.normal_.values[i*nf+j]+finite(free_row[i]*free_row[j]));
+    // Blocks are accumulated with BLAS; overflow anywhere in a product
+    // propagates to a nonfinite sum, so checking the accumulators per block
+    // enforces the same finiteness policy as checking every operation.
+    std::vector<double> free_rows(mul(block_rows,nf)), y(block_rows), free_row(nf);
+    auto append=[&](const double* design,const double* targets,size_t count) {
+        require(count<=block_rows,"row block exceeds declared capacity");
+        for(size_t r=0;r<count;++r) {
+            const double* a=design+r*np; double* f=free_rows.data()+r*nf; y[r]=targets[r];
+            for(size_t k=0;k<np;++k) if(p.model.fixed[k]) y[r]=finite(y[r]-finite(a[k]*p.model.fixed_values[k]));
+            for(size_t i=0;i<nf;++i) f[i]=a[d.free_indices[i]];
         }
-        if(nf && o.solver==IsaPfitSolver::StreamingQR) qr.push(free_row,y);
+        if(!nf) return;
+        int n=static_cast<int>(nf), m=static_cast<int>(count);
+        C_DSYRK('L','T',n,m,1.,free_rows.data(),n,1.,out.normal_.values.data(),n);
+        C_DGEMV('T',m,n,1.,free_rows.data(),n,y.data(),1,1.,out.rhs_.data(),1);
+        values(out.normal_.values); values(out.rhs_);
+        if(o.solver==IsaPfitSolver::StreamingQR) for(size_t r=0;r<count;++r) {
+            std::copy(free_rows.begin()+r*nf,free_rows.begin()+(r+1)*nf,free_row.begin()); qr.push(free_row,y[r]);
+        }
     };
-    replay(0,[&](size_t,size_t,const std::vector<double>& a,double y){append(a,y);});
+    replay(0,[&](size_t,size_t,size_t count,const double* design,const double* targets){append(design,targets,count);});
     for(size_t k=0;k<np;++k) {
-        std::copy(root.begin()+k*np,root.begin()+(k+1)*np,a.begin()); append(a,dot(a,p.penalty.anchor));
+        std::copy(root.begin()+k*np,root.begin()+(k+1)*np,a.begin()); double t=dot(a,p.penalty.anchor); append(a.data(),&t,1);
     }
     for(const auto& l:p.linear_penalties) {
-        double y=lc_row(l); append(a,y);
+        double t=lc_row(l); append(a.data(),&t,1);
     }
+    // DSYRK fills the lower triangle only.
+    for(size_t i=0;i<nf;++i) for(size_t j=0;j<i;++j) out.normal_.values[j*nf+i]=out.normal_.values[i*nf+j];
     std::vector<double> x;
     if(!nf) out.status_=IsaPfitStatus::AllFixed;
     else {
@@ -316,10 +331,16 @@ struct IsaPfitSolverImpl {
     out.parameters_=p.model.fixed_values;
     for(size_t i=0;i<nf;++i) out.parameters_[d.free_indices[i]]=x[i];
     if(o.retain_pair_predictions) {out.predictions_.resize(clouds.size()); for(size_t b=0;b<clouds.size();++b) out.predictions_[b].resize(clouds[b].full_row_count);}
-    replay(1,[&](size_t b,size_t k,const std::vector<double>& row,double target) {
-        double pred=dot(row,out.parameters_), residual=finite(pred-target);
-        auto& bd=d.batches[b]; bd.sse=finite(bd.sse+finite(residual*residual)); bd.max_residual=std::max(bd.max_residual,std::abs(residual));
-        if(o.retain_pair_predictions) out.predictions_[b][k]=pred;
+    replay(1,[&](size_t b,size_t start,size_t count,const double* design,const double* targets) {
+        require(count<=block_rows,"row block exceeds declared capacity");
+        C_DGEMV('N',static_cast<int>(count),static_cast<int>(np),1.,const_cast<double*>(design),static_cast<int>(np),
+                out.parameters_.data(),1,0.,y.data(),1);
+        auto& bd=d.batches[b];
+        for(size_t r=0;r<count;++r) {
+            double pred=finite(y[r]), residual=finite(pred-targets[r]);
+            bd.sse=finite(bd.sse+finite(residual*residual)); bd.max_residual=std::max(bd.max_residual,std::abs(residual));
+            if(o.retain_pair_predictions) out.predictions_[b][start+r]=pred;
+        }
     });
     for(auto& bd:d.batches) {bd.rms=std::sqrt(bd.sse/bd.rows); d.data_sse=finite(d.data_sse+bd.sse); d.data_max_residual=std::max(d.data_max_residual,bd.max_residual);}
     d.data_rms=std::sqrt(d.data_sse/rows);
@@ -353,7 +374,7 @@ IsaPfitResult isa_pfit_solve(const IsaPfitProblem& p,const IsaPfitOptions& o) {
         clouds.push_back({b.label,n,pairs,0});
     }
     return detail::IsaPfitSolverImpl::solve(p,o,clouds,
-        [&](size_t,const detail::IsaPfitSolverImpl::Consumer& consume){data_rows(p,consume);},0);
+        [&](size_t,const detail::IsaPfitSolverImpl::Consumer& consume){data_rows(p,consume);},0,1);
 }
 
 IsaPfitResult isa_pfit_solve_rows(const IsaPfitRowProblem& input,const IsaPfitRowSource& input_source,
@@ -375,7 +396,7 @@ IsaPfitResult isa_pfit_solve_rows(const IsaPfitRowProblem& input,const IsaPfitRo
     std::array<unsigned char,32> first_digest{};
     auto replay=[&](size_t pass,const detail::IsaPfitSolverImpl::Consumer& consume) {
         // The common solver admits this workspace before invoking the source.
-        std::vector<double> design(mul(capacity,np)), targets(capacity), row(np);
+        std::vector<double> design(mul(capacity,np)), targets(capacity);
         source.begin_pass(pass);
         size_t expected=0;
         while(true) {
@@ -386,16 +407,15 @@ IsaPfitResult isa_pfit_solve_rows(const IsaPfitRowProblem& input,const IsaPfitRo
                 break;
             }
             require(block.rows<=capacity && block.rows<=rows-expected,"excess/oversized row block");
-            for(size_t i=0;i<block.rows;++i) {
-                for(size_t k=0;k<np;++k) row[k]=finite(design[i*np+k]);
-                consume(0,expected+i,row,finite(targets[i]));
-            }
+            for(size_t i=0;i<mul(block.rows,np);++i) finite(design[i]);
+            for(size_t i=0;i<block.rows;++i) finite(targets[i]);
+            consume(0,expected,block.rows,design.data(),targets.data());
             expected=add(expected,block.rows);
         }
         auto digest=source.finish_pass();
         if(!pass) first_digest=digest;
         else require(digest==first_digest,"row source replay content changed");
     };
-    return detail::IsaPfitSolverImpl::solve(p,o,{p.cloud},replay,bytes);
+    return detail::IsaPfitSolverImpl::solve(p,o,{p.cloud},replay,bytes,capacity);
 }
 }} // namespace psi::isapol

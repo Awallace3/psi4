@@ -8,7 +8,9 @@ The explicit array axes are frequency,response_site,potential_site,response_comp
 potential_component; both site axes follow labels. Origins are bohr; frequencies
 are nonnegative imaginary-axis magnitudes in atomic units. Frames are proper
 local-to-global Cartesian columns; frames=None explicitly defaults every site to
-identity. Rank4 input requires an explicit truncation declaration, and the two are
+identity. local_frames= instead takes one isapol_geometry.LocalFrame per site
+(axis-pair or Tinker-style atom-defined recipes), resolved against the origins;
+callers pass frames or local_frames, never both. Rank4 input requires an explicit truncation declaration, and the two are
 different models: 'discard_rank4_rows_and_columns' sends exactly the first16 rows/
 columns to LW, including rank0, and outputs ranks1..3; 'retain_rank4_rows_and_columns'
 sends all25 and outputs ranks1..4, which is the only way to obtain the C12 (1,4)/(4,1)
@@ -287,6 +289,7 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
                                 bonds: Sequence[Sequence[int]], frequencies: Sequence[float],
                                 tensors: NumericArray, input_rank: int, provenance: Provenance,
                                 frames: Optional[NumericArray] = None,
+                                local_frames: Optional[Sequence] = None,
                                 truncation: Optional[str] = None,
                                 residual_policy: str = 'production',
                                 localization_rank_limit: int = 3) -> LocalProperties:
@@ -320,6 +323,13 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
     limit cannot change any rank <= L number. Ranks above L are identically zero, and
     :func:`isotropic_dispersion` refuses to declare them rather than reading those
     zeros as physics.
+
+    ``local_frames`` declares every site's frame recipe explicitly (see
+    :class:`isapol_geometry.LocalFrame`) and is resolved here against ``origins``
+    to the same proper matrices ``frames`` would carry; the stored ``frames``
+    are those matrices. It is mutually exclusive with ``frames``. Resolved
+    chirality handedness is not stored: call
+    :func:`isapol_geometry.resolve_local_frames` directly when it is needed.
 
     Input storage is capped at64MiB, frequencies at4096, sites at256. Conservative
     native workspace admission mirrors the current768MiB core budget, which core
@@ -377,6 +387,11 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
     if np.any(freq < 0) or np.any(freq[1:] <= freq[:-1]):
         raise ValueError('frequencies must be strictly increasing nonnegative')
     pos = _array(origins, (n,3), 'origins')
+    if local_frames is not None:
+        if frames is not None:
+            raise ValueError('declare frames or local_frames, not both')
+        from .isapol_geometry import resolve_local_frames
+        frames = resolve_local_frames(pos, local_frames).frames
     frame = _array(np.tile(np.eye(3), (n,1,1)) if frames is None else frames, (n,3,3), 'frames')
     for f in frame:
         with np.errstate(over='raise', invalid='raise'):
