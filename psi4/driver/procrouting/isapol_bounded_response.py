@@ -13,7 +13,9 @@ import hashlib
 import warnings
 
 import numpy as np
-from scipy.linalg import LinAlgWarning, eigvalsh, lu_factor, lu_solve
+from numpy.linalg import LinAlgError
+from scipy.linalg import LinAlgWarning, cho_factor, cho_solve, eigvalsh, lu_factor, lu_solve
+from scipy.sparse.linalg import LinearOperator, eigsh
 
 
 @dataclass(frozen=True)
@@ -166,6 +168,30 @@ def _assemble(store, dimensions, tiles, exact_exchange, local_scale):
     store.save('h2', h)
 
 
+def _minimum_eigenvalue(a):
+    """Lowest eigenvalue of a symmetric matrix; nonpositive whenever it is not SPD.
+
+    A successful Cholesky factorization is the positive-definiteness
+    certificate; shift-invert Lanczos on that factor then converges the
+    reported minimum to machine precision in a few O(n^2) solves, instead of
+    a dense O(n^3) tridiagonal reduction.
+    """
+    n = len(a)
+    if n <= 64:
+        return float(eigvalsh(a, subset_by_index=[0, 0])[0])
+    try:
+        factor = cho_factor(a, lower=True, check_finite=True)
+    except LinAlgError:
+        return 0.
+    inverse = LinearOperator((n, n), dtype=float,
+                             matvec=lambda v: cho_solve(factor, v, check_finite=False))
+    # A seeded generic start: a symmetric one (e.g. all ones) can be exactly
+    # orthogonal to the lowest mode of a symmetric molecule.
+    start = np.random.default_rng(0).standard_normal(n)
+    largest = eigsh(inverse, k=1, which='LA', tol=0, v0=start, return_eigenvectors=False)[0]
+    return float(1/largest) if largest > 0 else 0.
+
+
 def _stability(store, n):
     store.ledger.admit('operator stability', 32*n*n+1024**2, 4*n**3)
     result = {}
@@ -174,7 +200,7 @@ def _stability(store, n):
         asym = max(float(np.max(np.abs(h[i]-h[:, i]))) for i in range(n))
         scale = float(np.max(np.abs(h)))
         diagnostic = (h+h.T)*.5
-        minimum = float(eigvalsh(diagnostic, subset_by_index=[0, 0], overwrite_a=True)[0])
+        minimum = _minimum_eigenvalue(diagnostic)
         if asym > 1e-10*max(1., scale) or minimum <= 0 or not np.isfinite(minimum):
             raise ValueError(f'{name} reciprocity/stability gate')
         result[name] = dict(max_asymmetry=asym, minimum_symmetric_eigenvalue=minimum)

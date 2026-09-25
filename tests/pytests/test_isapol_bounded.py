@@ -84,6 +84,18 @@ def test_response_uses_distinct_target_and_anchor_legs(tmp_path, omega):
     assert backend._stability(store, 6)['h1']['minimum_symmetric_eigenvalue'] > 0
 
 
+def test_minimum_eigenvalue_finds_modes_orthogonal_to_symmetric_starts():
+    n = 120
+    q, _ = np.linalg.qr(np.random.default_rng(3).normal(size=(n, n)))
+    q[:, 0] -= q[:, 0].mean()  # lowest mode orthogonal to the all-ones vector
+    q, _ = np.linalg.qr(q)
+    values = np.linspace(.2, 30., n)
+    a = (q*values)@q.T
+    a = (a+a.T)*.5
+    assert abs(backend._minimum_eigenvalue(a)-values[0]) < 1e-12
+    assert backend._minimum_eigenvalue(a-.3*np.eye(n)) <= 0
+
+
 def test_instability_is_not_repaired(tmp_path):
     store = backend._Store(tmp_path, ledger())
     store.save('h1', np.diag([-1., 1.]))
