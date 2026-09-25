@@ -378,16 +378,20 @@ void export_isapol(py::module& m) {
         PFIT_GET(parameter_labels) PFIT_GET(parameter_units) PFIT_GET(channel_labels) PFIT_GET(batch_labels);
     m.def("isa_pfit_solve", &isa_pfit_solve, "problem"_a, "options"_a = IsaPfitOptions(),
           "Supplied single-frequency PFIT; v=-d(phi_induced)/dq in Eh/e^2. Caller provenance is not native verification.");
-    m.def("isa_pfit_solve_rows", [](IsaPfitRowProblem p, py::function factory, IsaPfitOptions options) {
-        // Value-copy declarations before callbacks; never release the GIL on
-        // this binding. Producer arrays remain producer-owned budget items.
+    // Value-copy declarations before callbacks; never release the GIL on
+    // these bindings. Producer arrays remain producer-owned budget items. The
+    // multi-problem source yields targets[rows][problems] (`matrix`).
+    auto solve_rows=[](std::vector<IsaPfitRowProblem> ps, py::function factory, IsaPfitOptions options, bool matrix) {
+        if(ps.empty()) throw py::value_error("PFIT requires at least one row problem");
+        const auto& p=ps.front(); const size_t nt=ps.size();
         py::object iterator, design_hash, target_hash;
         py::object sha256=py::module_::import("hashlib").attr("sha256");
         size_t expected=0;
         IsaPfitRowSource source;
         source.begin_pass=[&](size_t) {
-            const auto dimensions=std::to_string(p.cloud.points)+":"+
-                                  std::to_string(p.model.parameter_labels.size());
+            auto dimensions=std::to_string(p.cloud.points)+":"+
+                            std::to_string(p.model.parameter_labels.size());
+            if(matrix) dimensions+=":"+std::to_string(nt);
             design_hash=sha256(py::bytes("design:"+dimensions));
             target_hash=sha256(py::bytes("targets:"+dimensions));
             expected=0;
@@ -412,7 +416,8 @@ void export_isapol(py::module& m) {
             auto b=py::reinterpret_borrow<py::array>(tuple[2]);
             if(!a.dtype().is(py::dtype::of<double>()) || !b.dtype().is(py::dtype::of<double>()) ||
                !(a.flags()&py::array::c_style) || !(b.flags()&py::array::c_style) ||
-               a.ndim()!=2 || b.ndim()!=1 || a.shape(1)!=static_cast<py::ssize_t>(np) ||
+               a.ndim()!=2 || b.ndim()!=(matrix?2:1) || (matrix && b.shape(1)!=static_cast<py::ssize_t>(nt)) ||
+               a.shape(1)!=static_cast<py::ssize_t>(np) ||
                a.shape(0)!=b.shape(0) || a.shape(0)<=0 ||
                static_cast<size_t>(a.shape(0))>capacity)
                 throw py::value_error("PFIT row block must be bounded contiguous native float64 arrays");
@@ -420,7 +425,7 @@ void export_isapol(py::module& m) {
             if(start!=expected || expected>p.cloud.full_row_count ||
                count>p.cloud.full_row_count-expected)
                 throw py::value_error("PFIT row source has gap, duplicate or excess rows");
-            const size_t design_bytes=count*np*sizeof(double), target_bytes=count*sizeof(double);
+            const size_t design_bytes=count*np*sizeof(double), target_bytes=count*nt*sizeof(double);
             std::memcpy(design,a.data(),design_bytes);
             std::memcpy(targets,b.data(),target_bytes);
             // Digest the copied bytes actually consumed by C++; separate
@@ -441,10 +446,19 @@ void export_isapol(py::module& m) {
             std::memcpy(result.data(),digest.data(),result.size());
             return result;
         };
-        return isa_pfit_solve_rows(p,source,options);
+        return isa_pfit_solve_rows_multi(ps,source,options);
+    };
+    m.def("isa_pfit_solve_rows", [solve_rows](IsaPfitRowProblem p, py::function factory, IsaPfitOptions options) {
+        return solve_rows({p},factory,options,false).front();
     }, "problem"_a, "block_factory"_a, "options"_a=IsaPfitOptions(),
        "One complete supplied cloud; bounded float64 blocks and content-verified replay. "
        "Problem/options are snapshotted; producer memory is external to the kernel budget.");
+    m.def("isa_pfit_solve_rows_multi", [solve_rows](std::vector<IsaPfitRowProblem> ps, py::function factory,
+                                                    IsaPfitOptions options) {
+        return solve_rows(ps,factory,options,true);
+    }, "problems"_a, "block_factory"_a, "options"_a=IsaPfitOptions(),
+       "Several problems over one shared cloud and model; blocks yield (start, design, targets[rows, problems]). "
+       "The design is traversed at most twice for all problems.");
 #undef PFIT_GET
 #undef PFIT_FIELD
 #undef PFIT_CLASS

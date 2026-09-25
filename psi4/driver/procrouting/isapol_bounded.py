@@ -61,46 +61,53 @@ def _matrix(a):
     return result
 
 
-def _stream_fit(model, points, coefficient, potentials, ledger, source):
-    npoint, naux = len(points), len(coefficient)
+def _pack_targets(packed, column, coefficient, potentials, ledger):
+    """Store one frequency's packed lower-triangle point-response targets."""
+    naux, npoint = potentials.shape
+    ledger.admit('point-response targets', 8*(2*npoint*npoint+naux*npoint)+8*1024**2,
+                 2*naux*naux*npoint+2*naux*npoint*npoint)
+    targets = -(potentials.T @ coefficient) @ potentials
+    start = 0
+    for i in range(npoint):
+        packed[start:start+i+1, column] = targets[i, :i+1]
+        start += i+1
+
+
+def _stream_fit(models, points, packed, ledger, source):
+    """One complete-cloud PFIT per frequency over a single shared design.
+
+    The design rows depend only on the sites, channels and points, so every
+    frequency is solved from the same two row traversals; column ``t`` of
+    ``packed`` holds the targets of ``models[t]``.
+    """
+    npoint, nt = len(points), len(models)
+    model = models[0]
     channels, count = model.channel_count, model.parameter_count
     if count > 64:
         raise ValueError('bounded refinement supports at most 64 parameters')
     row_count = npoint*(npoint+1)//2
-    # Full target/packed overlap, AUX operands, copied fields, row producer and
-    # C++ solver workspaces. No per-block or per-frequency allowance reset.
+    # Copied fields, row producer and C++ solver workspaces on top of the
+    # retained packed targets. No per-block allowance reset.
     chunk = PackedDesignRows.MAX_CHUNK
-    plan = (8*(3*npoint*npoint+row_count+3*naux*npoint+naux*naux
-               +5*npoint*channels+npoint*channels*count+2*chunk*npoint*count
-               +16*count*count+4096*(8*count+32)) + 8*1024**2)
-    work = (2*naux*naux*npoint+2*naux*npoint*npoint
-            +2*((row_count+chunk*npoint)*2*channels*count+row_count*(4*count+8))
-            +2*row_count*count*count)
+    plan = (8*(5*npoint*channels+npoint*channels*count+2*chunk*npoint*count
+               +16*count*count*nt+4096*(8*count+32*nt)) + 8*1024**2)
+    work = (2*((row_count+chunk*npoint)*2*channels*count+row_count*(4*count+8))
+            +2*row_count*count*count+4*row_count*count*nt)
     ledger.admit('complete-cloud refinement', plan, work)
     fields = np.empty((npoint, channels))
     for start in range(0, npoint, 256):
         fields[start:start+256] = refine.channel_fields(points[start:start+256], model)
-    targets = -(potentials.T @ coefficient) @ potentials
-    packed = np.concatenate([targets[i, :i+1] for i in range(npoint)])
-    del targets
     rows = PackedDesignRows(model, fields, block_rows=4096, max_passes=2,
                             max_bytes=ledger.resources.max_bytes-ledger.reserved)
-    problem = core.IsaPfitRowProblem()
-    problem.frequency_au = model.frequency_au
     declaration = core.IsaPfitRowModel()
     declaration.channel_labels = list(model.channel_labels)
     declaration.parameter_labels = list(model.parameter_labels)
     declaration.parameter_units = ['atomic_units']*count
     declaration.fixed, declaration.fixed_values = [False]*count, [0.]*count
     declaration.provenance = model.provenance
-    problem.model = declaration
     cloud = core.IsaPfitCloudRows()
     cloud.label, cloud.points, cloud.full_row_count = 'complete native cloud', npoint, row_count
     cloud.maximum_block_rows = 4096
-    problem.cloud = cloud
-    penalty = core.IsaPfitMatrixPenalty()
-    penalty.matrix, penalty.anchor = _matrix(np.diag(model.strengths)), list(model.anchors)
-    problem.penalty = penalty
     provenance = core.IsaPfitTargetProvenance()
     provenance.origin = core.IsaPfitTargetOrigin.NativeFittedPointResponse
     provenance.convention = core.IsaPfitTargetConvention.NegativeInducedPotentialPerUnitSourceChargeAtomicUnits
@@ -108,24 +115,36 @@ def _stream_fit(model, points, coefficient, potentials, ledger, source):
     provenance.response_representation = 'fitted_density_coefficients'
     provenance.auxiliary_basis_id = source['auxiliary_sha256']
     provenance.generation_record = source['model']
-    problem.target_provenance = provenance
+    problems = []
+    for m in models:
+        if m.parameter_labels != model.parameter_labels or m.channel_labels != model.channel_labels:
+            raise ValueError('frequency nodes must share one refinement model')
+        problem = core.IsaPfitRowProblem()
+        problem.frequency_au = m.frequency_au
+        problem.model, problem.cloud, problem.target_provenance = declaration, cloud, provenance
+        penalty = core.IsaPfitMatrixPenalty()
+        penalty.matrix, penalty.anchor = _matrix(np.diag(m.strengths)), list(m.anchors)
+        problem.penalty = penalty
+        problems.append(problem)
     def blocks():
         for start, design in rows.blocks():
             yield start, design, packed[start:start+len(design)].copy()
     options = core.IsaPfitOptions()
     options.solver = core.IsaPfitSolver.NormalEquationsDSYSV
-    result = core.isa_pfit_solve_rows(problem, blocks, options)
-    if result.status != core.IsaPfitStatus.Solved:
-        raise ValueError(f'PFIT did not solve: {result.status}')
-    parameters = tuple(result.parameters)
-    tensors = [np.zeros((s.component_count, s.component_count)) for s in model.sites]
-    for value, entries in zip(parameters, model.parameter_entries):
-        for site, i, j in entries:
-            tensors[site][i, j] = tensors[site][j, i] = value
-    tensors = tuple(np.frombuffer(t.tobytes(), dtype=float).reshape(t.shape) for t in tensors)
-    return refine.RefinementResult(
-        model, parameters, tensors, max(abs(a-b) for a, b in zip(parameters, model.anchors)),
-        result.status, result.diagnostics, result, 'PFIT_refined_against_point_to_point_response')
+    results = []
+    for m, result in zip(models, core.isa_pfit_solve_rows_multi(problems, blocks, options)):
+        if result.status != core.IsaPfitStatus.Solved:
+            raise ValueError(f'PFIT did not solve: {result.status}')
+        parameters = tuple(result.parameters)
+        tensors = [np.zeros((s.component_count, s.component_count)) for s in m.sites]
+        for value, entries in zip(parameters, m.parameter_entries):
+            for site, i, j in entries:
+                tensors[site][i, j] = tensors[site][j, i] = value
+        tensors = tuple(np.frombuffer(t.tobytes(), dtype=float).reshape(t.shape) for t in tensors)
+        results.append(refine.RefinementResult(
+            m, parameters, tensors, max(abs(a-b) for a, b in zip(parameters, m.anchors)),
+            result.status, result.diagnostics, result, 'PFIT_refined_against_point_to_point_response'))
+    return results
 
 
 def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution,
@@ -319,7 +338,12 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution,
         store.save('potentials', b)
         del b, provider
         source['lattice_sha256'] = hashlib.sha256(points.tobytes()).hexdigest()
-        local_tensors, results, diagnostics = [], [], []
+        # Every node's packed targets are retained for one shared-design PFIT.
+        row_count = len(points)*(len(points)+1)//2
+        ledger.reserved += 8*row_count*nf
+        ledger.admit('retained point-response targets', 0)
+        packed = np.empty((row_count, nf))
+        local_tensors, models, diagnostics = [], [], []
         frames = [s.frame for s in sites]
         for node, omega in enumerate(quadrature.frequencies, 1):
             tag = f'node {node}/{nf}, omega={omega:.12g} au'
@@ -363,14 +387,18 @@ def bounded_properties(wfn, auxiliary_recipe, *, caller_converged, distribution,
             # small model; do not carry full nonlocal/LW input snapshots into
             # that phase's independently planned workspace.
             del raw, tensors, local, anchors
-            log.stage('Complete-cloud PFIT: ' + tag,
-                      (('parameters', model.parameter_count), ('rows per pass', len(points)*(len(points)+1)//2),
-                       ('passes', 2), ('weight type', weight_type),
-                       ('weight coefficient', weight_coefficient), ('cutoff', cutoff)))
-            results.append(_stream_fit(model, points, coefficient, store.load('potentials'), ledger, source))
-            log.items((('solver status', str(results[-1].status)),
-                       ('maximum parameter change from anchor', max(abs(a-b) for a, b in zip(results[-1].parameters, model.anchors)))))
+            _pack_targets(packed, node-1, coefficient, store.load('potentials'), ledger)
+            models.append(model)
             del coefficient, model
+        log.stage('Complete-cloud PFIT',
+                  (('parameters', models[0].parameter_count), ('rows per pass', row_count),
+                   ('frequencies', nf), ('passes', 2), ('weight type', weight_type),
+                   ('weight coefficient', weight_coefficient), ('cutoff', cutoff)))
+        results = _stream_fit(models, points, packed, ledger, source)
+        del packed
+        for node, result in enumerate(results, 1):
+            log.items(((f'node {node} solver status', str(result.status)),
+                       (f'node {node} maximum parameter change from anchor', result.anchor_shift_maxabs)))
         log.stage('Casimir-Polder dispersion', (('maximum order', max_order), ('nodes', nf)))
         dispersion = refine.refined_isotropic_dispersion(results, cp_weights=quadrature.cp_weights,
             quadrature_provenance=quadrature.provenance, max_order=max_order)

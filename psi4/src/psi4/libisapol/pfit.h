@@ -165,5 +165,11 @@ IsaPfitResult isa_pfit_solve(const IsaPfitProblem&, const IsaPfitOptions& = IsaP
 /// copied before callbacks; no native/provenance certification is inferred.
 IsaPfitResult isa_pfit_solve_rows(const IsaPfitRowProblem&, const IsaPfitRowSource&,
                                 const IsaPfitOptions& = IsaPfitOptions());
+/// Several problems over one shared cloud and model (e.g. one per frequency):
+/// the design is traversed at most twice in total and the source writes
+/// targets[rows][problems]. Each result equals its lone isa_pfit_solve_rows
+/// fit, except that the data rhs of more than one problem is one DGEMM.
+std::vector<IsaPfitResult> isa_pfit_solve_rows_multi(const std::vector<IsaPfitRowProblem>&, const IsaPfitRowSource&,
+                                                   const IsaPfitOptions& = IsaPfitOptions());
 }} // namespace psi::isapol
 #endif

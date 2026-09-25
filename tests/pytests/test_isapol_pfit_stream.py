@@ -296,3 +296,44 @@ def test_design_work_is_global_and_failed_pass_is_not_refunded(monkeypatch):
     assert source.passes_used == 1
     with pytest.raises(RuntimeError, match="pass budget"):
         source.blocks()
+
+
+@pytest.mark.parametrize("solver", ["NormalEquationsDSYSV", "StreamingQR"])
+def test_shared_design_problems_match_their_lone_fits(solver):
+    from psi4 import core
+    problem, design, targets = row_fixture()
+    second, _, _ = row_fixture()
+    second.frequency_au = .4
+    prior = second.penalty
+    prior.anchor = [.3, .05]
+    second.penalty = prior
+    stacked = np.column_stack((targets, 2*targets[::-1]+.3))
+    options = core.IsaPfitOptions()
+    options.solver = getattr(core.IsaPfitSolver, solver)
+    options.retain_pair_predictions = True
+    passes = []
+
+    def blocks():
+        passes.append(1)
+        for start in range(0, 6, 2):
+            yield start, design[start:start+2].copy(), stacked[start:start+2].copy()
+
+    results = core.isa_pfit_solve_rows_multi([problem, second], blocks, options)
+    assert len(passes) == 2 and [r.frequency_au for r in results] == [0., .4]
+    for t, (p, result) in enumerate(zip([problem, second], results)):
+        def lone():
+            for start in range(0, 6, 2):
+                yield start, design[start:start+2].copy(), stacked[start:start+2, t].copy()
+        alone = core.isa_pfit_solve_rows(p, lone, options)
+        np.testing.assert_allclose(result.parameters, alone.parameters, rtol=1e-14, atol=1e-15)
+        np.testing.assert_allclose(result.predictions, alone.predictions, rtol=1e-14, atol=1e-15)
+        assert result.diagnostics.data_sse == pytest.approx(alone.diagnostics.data_sse, rel=1e-13)
+        assert result.diagnostics.total_objective == pytest.approx(alone.diagnostics.total_objective, rel=1e-13)
+    assert not np.allclose(results[0].parameters, results[1].parameters)
+    model = second.model
+    model.parameter_labels = ["a", "c"]
+    second.model = model
+    with pytest.raises(Exception, match="share one model"):
+        core.isa_pfit_solve_rows_multi([problem, second], blocks, options)
+    with pytest.raises(Exception):
+        core.isa_pfit_solve_rows_multi([problem, problem], lambda: iter([(0, design, targets)]), options)

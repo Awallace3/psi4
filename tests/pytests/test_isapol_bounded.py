@@ -92,23 +92,34 @@ def test_instability_is_not_repaired(tmp_path):
 
 
 def test_streamed_fit_equals_dense_fit_with_same_native_targets():
+    """One shared-design multi-frequency fit reproduces each node's dense fit."""
     site = refine.RefinementSite('A', 'A', (0., 0., 0.), np.eye(3), 1)
-    anchor = np.diag([0., 2., 3., 4.])
-    model = refine.refinement_model([site], [anchor], frequency_au=0., cutoff=1e-4,
-                                    weight_type=4, weight_coefficient=1e-5, provenance='synthetic identity')
     rng = np.random.default_rng(811)
     points = rng.normal(size=(19, 3))+[4., 4., 4.]
     potentials = rng.normal(size=(7, len(points)))
-    coefficient = -np.eye(7)
     source = dict(state_sha256='synthetic-state', auxiliary_sha256='synthetic-aux', model='synthetic-equation')
-    streamed = driver._stream_fit(model, points, coefficient, potentials, ledger(), source)
-    targets = -(potentials.T @ coefficient) @ potentials
-    dense = refine.refine(model, points, targets[np.tril_indices(len(points))],
-        target_origin=core.IsaPfitTargetOrigin.NativeFittedPointResponse,
-        source_id=source['state_sha256'], auxiliary_basis_id=source['auxiliary_sha256'],
-        response_representation='fitted_density_coefficients', generation_record=source['model'])
-    np.testing.assert_allclose(streamed.parameters, dense.parameters, rtol=1e-11, atol=1e-11)
-    assert streamed.status == core.IsaPfitStatus.Solved
+    models, coefficients = [], [-np.eye(7), -np.diag(rng.random(7)+.5)]
+    for omega, scale in [(0., 1.), (.6, .7)]:
+        anchor = scale*np.diag([0., 2., 3., 4.])
+        models.append(refine.refinement_model([site], [anchor], frequency_au=omega, cutoff=1e-4,
+            weight_type=4, weight_coefficient=1e-5,
+            declared_variables=models[0].parameter_labels if models else None, provenance='synthetic identity'))
+    row_count = len(points)*(len(points)+1)//2
+    packed = np.empty((row_count, 2))
+    for t, coefficient in enumerate(coefficients):
+        driver._pack_targets(packed, t, coefficient, potentials, ledger())
+    streamed = driver._stream_fit(models, points, packed, ledger(), source)
+    assert len(streamed) == 2
+    for model, coefficient, fit in zip(models, coefficients, streamed):
+        targets = -(potentials.T @ coefficient) @ potentials
+        dense = refine.refine(model, points, targets[np.tril_indices(len(points))],
+            target_origin=core.IsaPfitTargetOrigin.NativeFittedPointResponse,
+            source_id=source['state_sha256'], auxiliary_basis_id=source['auxiliary_sha256'],
+            response_representation='fitted_density_coefficients', generation_record=source['model'])
+        np.testing.assert_allclose(fit.parameters, dense.parameters, rtol=1e-11, atol=1e-11)
+        assert fit.status == core.IsaPfitStatus.Solved
+        assert fit.result.frequency_au == model.frequency_au
+    assert not np.allclose(streamed[0].parameters, streamed[1].parameters)
 
 
 def test_dense_kernel_is_the_same_screened_integral():
@@ -178,10 +189,11 @@ def test_live_small_molecule_driver_completes_and_cleans_checkpoints(small_water
     text = ''.join(messages)
     for name in ('Native plain-DF factors', 'anchor constrained OV fit', 'target constrained OV fit',
                  'Full-grid ALDA kernel', 'H1/H2 assembly', 'Response stability checks',
-                 'Native point cloud and Coulomb potentials', 'Casimir-Polder dispersion'):
+                 'Native point cloud and Coulomb potentials', 'Complete-cloud PFIT',
+                 'Casimir-Polder dispersion'):
         assert f'Stage complete: {name}' in text
     for node in range(1, 4):
-        for name in ('Original H2H1 response', 'Production LW localization', 'Complete-cloud PFIT'):
+        for name in ('Original H2H1 response', 'Production LW localization'):
             assert f'Stage complete: {name}: node {node}/3' in text
     assert 'relative response residual' in text
     assert 'maximum localization residual' in text
