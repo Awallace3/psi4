@@ -60,6 +60,37 @@ def test_gradient(inp):
     assert compare_values(findif_gradient, analytic_gradient, 5, "analytic vs. findif gradient")
     assert compare_values(reference_gradient, analytic_gradient.np, 5, "analytic vs. reference gradient")
 
+@pytest.mark.findif
+@pytest.mark.dft
+@pytest.mark.gradient
+@pytest.mark.parametrize("inp", [
+    pytest.param({"mol": "O\nH 1 0.958\nH 1 0.958 2 104.5\n", "reference": "rks"}, id="vv10-rks-h2o"),
+    pytest.param({"mol": "0 2\nN\nH 1 1.024\nH 1 1.024 2 103.3\n", "reference": "uks"}, id="vv10-uks-nh2"),
+])
+def test_vv10_gradient_findif(inp):
+    """Analytic VV10 gradient (fixed VV10 grid) against psi4's finite difference of energies.
+
+    The NLC part of these gradients is 2-3e-4 Eh/a0, so dropping or mis-scaling it fails the 1e-5
+    check. The observed analytic-vs-findif error is ~2e-6, set by the 99/590 local XC grid.
+    """
+    psi4.geometry(inp["mol"])
+    psi4.set_options({
+        "basis": "cc-pvdz",
+        "scf_type": "df",
+        "reference": inp["reference"],
+        "e_convergence": 1e-10,
+        "d_convergence": 1e-10,
+        "dft_radial_points": 99,
+        "dft_spherical_points": 590,
+        "points": 3,
+    })
+
+    analytic_gradient = psi4.gradient("vv10", dertype=1)
+    findif_gradient = psi4.gradient("vv10", dertype=0)
+
+    assert compare_values(findif_gradient, analytic_gradient, 5, "VV10 analytic vs. findif gradient")
+
+
 def test_gradient_ref():
     h2o = psi4.geometry("""
         O
