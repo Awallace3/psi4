@@ -944,6 +944,189 @@ void VBase::prepare_vv10_cache(DFTGrid& nlgrid, SharedMatrix D,
         offset += csize;
     }
 }
+std::map<std::string, double> VBase::vv10_partition(SharedMatrix DA, SharedMatrix DB, SharedMatrix DAB) {
+    timer_on("V: VV10 Partition");
+
+    std::map<std::string, std::string> opt_map;
+    opt_map["DFT_PRUNING_SCHEME"] = "FLAT";
+    std::map<std::string, int> opt_int_map;
+    opt_int_map["DFT_RADIAL_POINTS"] = options_.get_int("DFT_VV10_RADIAL_POINTS");
+    opt_int_map["DFT_SPHERICAL_POINTS"] = options_.get_int("DFT_VV10_SPHERICAL_POINTS");
+    DFTGrid nlgrid = DFTGrid(primary_->molecule(), primary_, opt_int_map, opt_map, options_);
+
+    const auto& blocks = nlgrid.blocks();
+    std::vector<size_t> offset(blocks.size() + 1, 0);
+    for (size_t Q = 0; Q < blocks.size(); Q++) offset[Q + 1] = offset[Q] + blocks[Q]->npoints();
+    const size_t ngrid = offset.back();
+
+    // => Unsieved densities and gradients of A, B and AB on one grid <= //
+    std::vector<double> gw(ngrid), gx(ngrid), gy(ngrid), gz(ngrid);
+    std::vector<std::vector<double>> rho(3, std::vector<double>(ngrid));
+    std::vector<std::vector<double>> drho(9, std::vector<double>(ngrid));
+    const SharedMatrix Ds[3] = {DA, DB, DAB};
+    for (int d = 0; d < 3; d++) {
+        std::vector<std::shared_ptr<RKSFunctions>> workers;
+        for (size_t t = 0; t < num_threads_; t++) {
+            auto worker = std::make_shared<RKSFunctions>(primary_, nlgrid.max_points(), nlgrid.max_functions());
+            worker->set_ansatz(1);
+            worker->set_pointers(Ds[d]);
+            workers.push_back(worker);
+        }
+        int rank = 0;
+#pragma omp parallel for private(rank) schedule(guided) num_threads(num_threads_)
+        for (size_t Q = 0; Q < blocks.size(); Q++) {
+#ifdef _OPENMP
+            rank = omp_get_thread_num();
+#endif
+            auto block = blocks[Q];
+            workers[rank]->compute_points(block);
+            const double* r = workers[rank]->point_value("RHO_A")->pointer();
+            const double* rx = workers[rank]->point_value("RHO_AX")->pointer();
+            const double* ry = workers[rank]->point_value("RHO_AY")->pointer();
+            const double* rz = workers[rank]->point_value("RHO_AZ")->pointer();
+            for (size_t p = 0; p < block->npoints(); p++) {
+                const size_t P = offset[Q] + p;
+                rho[d][P] = r[p];
+                drho[3 * d][P] = rx[p];
+                drho[3 * d + 1][P] = ry[p];
+                drho[3 * d + 2][P] = rz[p];
+                if (d == 0) {
+                    gw[P] = block->w()[p];
+                    gx[P] = block->x()[p];
+                    gy[P] = block->y()[p];
+                    gz[P] = block->z()[p];
+                }
+            }
+        }
+    }
+
+    // => Aligned point set: keep a point if the sum or the dimer density passes the cutoff <= //
+    // Each density is zeroed below the cutoff, and its omega_0/kappa are set to a harmless 1,
+    // so every piece reproduces the single-density sieve of vv10_nlc exactly.
+    const double cut = vv10_rho_cutoff_;
+    const double Wp_pref = (4.0 / 3.0) * M_PI;
+    const double Wg_pref = functional_->vv10_c();
+    const double kappa_pref = (1.5 * functional_->vv10_b() * M_PI) / std::pow(9.0 * M_PI, 1.0 / 6.0);
+    auto params = [&](double r, double gam, double& w0, double& kappa) {
+        if (r < cut) {
+            w0 = 1.0;
+            kappa = 1.0;
+            return;
+        }
+        const double Wg_tmp = gam / (r * r);
+        w0 = std::sqrt(Wp_pref * r + Wg_pref * Wg_tmp * Wg_tmp);
+        kappa = kappa_pref * std::pow(r, 1.0 / 6.0);
+    };
+    auto gamma = [&](int d, size_t P) {
+        return drho[3 * d][P] * drho[3 * d][P] + drho[3 * d + 1][P] * drho[3 * d + 1][P] +
+               drho[3 * d + 2][P] * drho[3 * d + 2][P];
+    };
+
+    // Densities are premultiplied by the grid weight. Suffix = mask/param set:
+    // own (A with A, B with B), S (sum-density params), D (dimer-density params).
+    std::vector<double> X, Y, Z, rA, rB, sA, sB, dA, dB, dAB;
+    std::vector<double> w0A, kA, w0B, kB, w0S, kS, w0D, kD;
+    for (size_t P = 0; P < ngrid; P++) {
+        const double ra = rho[0][P], rb = rho[1][P], rab = rho[2][P], rs = ra + rb;
+        if (rs < cut && rab < cut) continue;
+        const double w = gw[P];
+        X.push_back(gx[P]);
+        Y.push_back(gy[P]);
+        Z.push_back(gz[P]);
+        rA.push_back(ra < cut ? 0.0 : w * ra);
+        rB.push_back(rb < cut ? 0.0 : w * rb);
+        sA.push_back(rs < cut ? 0.0 : w * ra);
+        sB.push_back(rs < cut ? 0.0 : w * rb);
+        dA.push_back(rab < cut ? 0.0 : w * ra);
+        dB.push_back(rab < cut ? 0.0 : w * rb);
+        dAB.push_back(rab < cut ? 0.0 : w * rab);
+
+        double w0, kappa;
+        params(ra, gamma(0, P), w0, kappa);
+        w0A.push_back(w0);
+        kA.push_back(kappa);
+        params(rb, gamma(1, P), w0, kappa);
+        w0B.push_back(w0);
+        kB.push_back(kappa);
+        const double sx = drho[0][P] + drho[3][P], sy = drho[1][P] + drho[4][P], sz = drho[2][P] + drho[5][P];
+        params(rs, sx * sx + sy * sy + sz * sz, w0, kappa);
+        w0S.push_back(w0);
+        kS.push_back(kappa);
+        params(rab, gamma(2, P), w0, kappa);
+        w0D.push_back(w0);
+        kD.push_back(kappa);
+    }
+    const size_t npoints = X.size();
+
+    // => One fused double sum over every kernel <= //
+    double K_A = 0.0, K_B = 0.0, K_cross = 0.0;
+    double KS_AA = 0.0, KS_BB = 0.0, KS_AB = 0.0;
+    double KD_AA = 0.0, KD_BB = 0.0, KD_AB = 0.0, KD_DD = 0.0;
+#pragma omp parallel for schedule(guided) num_threads(num_threads_) \
+    reduction(+ : K_A, K_B, K_cross, KS_AA, KS_BB, KS_AB, KD_AA, KD_BB, KD_AB, KD_DD)
+    for (size_t i = 0; i < npoints; i++) {
+        double tAA = 0.0, tBB = 0.0, tAB = 0.0, uA = 0.0, uB = 0.0, vA = 0.0, vB = 0.0, vD = 0.0;
+#pragma omp simd reduction(+ : tAA, tBB, tAB, uA, uB, vA, vB, vD)
+        for (size_t j = 0; j < npoints; j++) {
+            const double d_x = X[i] - X[j];
+            const double d_y = Y[i] - Y[j];
+            const double d_z = Z[i] - Z[j];
+            const double R2 = d_x * d_x + d_y * d_y + d_z * d_z;
+            const double gAi = w0A[i] * R2 + kA[i], gAj = w0A[j] * R2 + kA[j];
+            const double gBi = w0B[i] * R2 + kB[i], gBj = w0B[j] * R2 + kB[j];
+            const double gSi = w0S[i] * R2 + kS[i], gSj = w0S[j] * R2 + kS[j];
+            const double gDi = w0D[i] * R2 + kD[i], gDj = w0D[j] * R2 + kD[j];
+            tAA += rA[j] * (-1.5 / (gAi * gAj * (gAi + gAj)));
+            tBB += rB[j] * (-1.5 / (gBi * gBj * (gBi + gBj)));
+            tAB += rB[j] * (-1.5 / (gAi * gBj * (gAi + gBj)));
+            const double phiS = -1.5 / (gSi * gSj * (gSi + gSj));
+            uA += sA[j] * phiS;
+            uB += sB[j] * phiS;
+            const double phiD = -1.5 / (gDi * gDj * (gDi + gDj));
+            vA += dA[j] * phiD;
+            vB += dB[j] * phiD;
+            vD += dAB[j] * phiD;
+        }
+        K_A += rA[i] * tAA;
+        K_B += rB[i] * tBB;
+        K_cross += rA[i] * tAB;
+        KS_AA += sA[i] * uA;
+        KS_BB += sB[i] * uB;
+        KS_AB += sA[i] * uB;
+        KD_AA += dA[i] * vA;
+        KD_BB += dB[i] * vB;
+        KD_AB += dA[i] * vB;
+        KD_DD += dAB[i] * vD;
+    }
+
+    double N_A = 0.0, N_B = 0.0, N_S = 0.0, N_D = 0.0;
+    for (size_t i = 0; i < npoints; i++) {
+        N_A += rA[i];
+        N_B += rB[i];
+        N_S += sA[i] + sB[i];
+        N_D += dAB[i];
+    }
+
+    std::map<std::string, double> ret;
+    ret["BETA"] = functional_->vv10_beta();
+    ret["NPOINTS"] = static_cast<double>(npoints);
+    ret["N A"] = N_A;
+    ret["N B"] = N_B;
+    ret["N SUM"] = N_S;
+    ret["N DIMER"] = N_D;
+    ret["K A"] = K_A;
+    ret["K B"] = K_B;
+    ret["K CROSS"] = K_cross;
+    ret["K SUM AA"] = KS_AA;
+    ret["K SUM BB"] = KS_BB;
+    ret["K SUM AB"] = KS_AB;
+    ret["K DIMER AA"] = KD_AA;
+    ret["K DIMER BB"] = KD_BB;
+    ret["K DIMER AB"] = KD_AB;
+    ret["K DIMER DIMER"] = KD_DD;
+    timer_off("V: VV10 Partition");
+    return ret;
+}
 double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
     timer_on("V: VV10");
     timer_on("Setup");

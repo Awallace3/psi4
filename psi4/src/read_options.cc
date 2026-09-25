@@ -1211,6 +1211,18 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("SAPT_DFT_DO_HYBRID", true);
         /*- Compute the Delta-DFT correction? -*/
         options.add_bool("SAPT_DFT_DO_DDFT", false);
+        /*- Split the VV10 interaction energy of DFT-VV10(SAPT) by physical origin.
+        The frozen-density non-additive remainder of the VV10 kernel moves from
+        dispersion to exchange. Dispersion keeps the rest of delta DFT - delta HF:
+        the intermolecular VV10 kernel over the frozen monomer densities, the
+        VV10 density relaxation, and the non-VV10 residual. Induction and the
+        total are unchanged. !expert -*/
+        options.add_bool("SAPT_DFT_VV10_SPLIT", false);
+        /*- Compute the analytic nuclear gradient of the delta DFT dimer energy right after the
+        dimer DFT SCF, and store it as the matrix variable SAPT(DFT) DFT DIMER GRADIENT on the
+        globals and the dimer wavefunction. Requires SAPT_DFT_DO_DDFT; functionals with VV10 are
+        rejected because Psi4 has no analytic VV10 gradient. !expert -*/
+        options.add_bool("SAPT_DFT_DDFT_GRADIENT", false);
         /*- Do SAPT(DFT) Dispersion? Might turn off if using Delte-DFT correction and SAPT_DFT_D4_IE -*/
         options.add_bool("SAPT_DFT_DO_DISP", true);
         /*- Compute -D3 dispersion in SAPT(DFT) for SAPT(DFT)-D3? !expert -*/
