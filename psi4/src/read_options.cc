@@ -1220,8 +1220,8 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("SAPT_DFT_VV10_SPLIT", false);
         /*- Compute the analytic nuclear gradient of the delta DFT dimer energy right after the
         dimer DFT SCF, and store it as the matrix variable SAPT(DFT) DFT DIMER GRADIENT on the
-        globals and the dimer wavefunction. Requires SAPT_DFT_DO_DDFT; functionals with VV10 are
-        rejected because Psi4 has no analytic VV10 gradient. !expert -*/
+        globals and the dimer wavefunction. Requires SAPT_DFT_DO_DDFT. VV10 functionals use the
+        fixed-grid analytic VV10 gradient. !expert -*/
         options.add_bool("SAPT_DFT_DDFT_GRADIENT", false);
         /*- Do SAPT(DFT) Dispersion? Might turn off if using Delte-DFT correction and SAPT_DFT_D4_IE -*/
         options.add_bool("SAPT_DFT_DO_DISP", true);

@@ -2295,21 +2295,51 @@ no_com
 
 
 @pytest.mark.saptdft
-def test_saptdft_ddft_gradient_rejects_vv10():
+def test_saptdft_ddft_gradient_vv10():
+    """
+    DFT-VV10(SAPT) with SAPT_DFT_DDFT_GRADIENT: the wb97m-v delta DFT dimer
+    gradient, which includes the analytic VV10 term, must match a plain
+    analytic wb97m-v dimer gradient in the same basis.
+    """
+    molecule = psi4.geometry(
+        _sapt_testing_mols["neutral_water_dimer"]
+        + """
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    options = {
+        "basis": "cc-pvdz",
+        "scf_type": "df",
+        "e_convergence": 1e-10,
+        "d_convergence": 1e-10,
+        # Coarse grids keep the O(N^2) VV10 kernel cheap; both sides share them.
+        "dft_radial_points": 50,
+        "dft_spherical_points": 110,
+        "dft_vv10_radial_points": 30,
+        "dft_vv10_spherical_points": 110,
+    }
     psi4.core.clean()
     psi4.core.clean_variables()
-    psi4.geometry(_sapt_testing_mols["neutral_water_dimer"])
+    psi4.set_options(options)
+    reference = psi4.gradient("wb97m-v", molecule=molecule, dertype=1)
+
+    psi4.core.clean()
+    psi4.core.clean_variables()
     psi4.set_options(
         {
-            "basis": "cc-pvdz",
+            **options,
             "sapt_dft_functional": "wb97m-v",
             "sapt_dft_grac_shift_a": 0.136,
             "sapt_dft_grac_shift_b": 0.136,
             "sapt_dft_ddft_gradient": True,
         }
     )
-    with pytest.raises(psi4.ValidationError, match="no analytic VV10 gradient"):
-        psi4.energy("dft-vv10(sapt)")
+    _, wfn = psi4.energy("dft-vv10(sapt)", molecule=molecule, return_wfn=True)
+    grad = wfn.variable("SAPT(DFT) DFT DIMER GRADIENT")
+    assert compare_values(reference, grad, 6, "delta DFT wb97m-v dimer gradient")
+    assert compare_values(grad, psi4.core.variable("SAPT(DFT) DFT DIMER GRADIENT"), 12, "core gradient")
 
 if __name__ == "__main__":
     psi4.set_memory("32 GB")

@@ -334,12 +334,6 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             "SAPT_DFT_DDFT_GRADIENT requires the delta DFT dimer SCF: set SAPT_DFT_DO_DDFT "
             "and a non-HF SAPT_DFT_FUNCTIONAL."
         )
-    if do_ddft_gradient and functional_needs_vv10:
-        # Fail before any SCF: RV::compute_gradient throws for VV10 functionals.
-        raise ValidationError(
-            f"SAPT_DFT_DDFT_GRADIENT: Psi4 has no analytic VV10 gradient, so the "
-            f"{sapt_dft_functional} dimer gradient is unavailable."
-        )
     if not do_dft:
         do_mon_grac_shift_A = do_mon_grac_shift_B = False
 
