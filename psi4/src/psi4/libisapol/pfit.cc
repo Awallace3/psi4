@@ -215,8 +215,8 @@ struct IsaPfitSolverImpl {
     }
     require(rows>0,"empty data not supported");
     size_t nf=0; for(bool fixed:model.fixed) if(!fixed) ++nf;
-    std::vector<size_t> free_indices;
-    for(size_t i=0;i<np;++i) if(!model.fixed[i]) free_indices.push_back(i);
+    std::vector<size_t> free_indices, fixed_indices;
+    for(size_t i=0;i<np;++i) (model.fixed[i]?fixed_indices:free_indices).push_back(i);
     // Conservative numeric payload budget: all persistent result buffers, small
     // LAPACK copies/factors/diagnostics, integer arrays (charged as doubles), and
     // QR buffer. No input numerical copy is made; input is consumed synchronously.
@@ -294,11 +294,13 @@ struct IsaPfitSolverImpl {
         require(count<=block_rows,"row block exceeds declared capacity");
         for(size_t r=0;r<count;++r) {
             const double* row=design+r*np; double* f=free_rows.data()+r*nf;
+            // Only fixed parameters shift the targets, in ascending order as before.
             for(size_t t=0;t<width;++t) {
                 double& v=y[r*width+t]; v=targets[r*width+t];
-                for(size_t k=0;k<np;++k) if(model.fixed[k]) v=finite(v-finite(row[k]*model.fixed_values[k]));
+                for(size_t k:fixed_indices) v=finite(v-finite(row[k]*model.fixed_values[k]));
             }
-            for(size_t i=0;i<nf;++i) f[i]=row[free_indices[i]];
+            if(nf==np) std::copy(row,row+np,f);
+            else for(size_t i=0;i<nf;++i) f[i]=row[free_indices[i]];
         }
     };
     std::vector<double> normal(mul(nf,nf),0.), rhs(mul(nf,nt),0.);
