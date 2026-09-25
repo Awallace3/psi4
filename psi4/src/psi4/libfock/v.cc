@@ -1214,16 +1214,46 @@ double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
     return vv10_e;
 }
 SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
-    /* Not yet finished, missing several components*/
-    throw PSIEXCEPTION("V: Cannot compute VV10 gradient contribution.");
-
-    timer_on("V: VV10");
+    // Nuclear gradient of the VV10 nonlocal energy of vv10_nlc for the RKS alpha density D,
+    //
+    //   E = sum_i w_i rho_i beta + 1/2 sum_ij w_i rho_i w_j rho_j Phi_ij,
+    //   Phi_ij = -1.5 / (g_i g_j (g_i + g_j)),   g_i = W0(rho_i, gamma_i) R_ij^2 + kappa(rho_i),
+    //
+    // on the fixed VV10 grid, i.e. the same approximation as the local XC gradient of
+    // RV::compute_gradient: points and weights are held in space and only the basis functions
+    // move with their nuclei. Then
+    //
+    //   dE/dX_A = sum_i w_i (v_rho_i drho_i/dX_A + v_gamma_i dgamma_i/dX_A),
+    //
+    // where v_rho/v_gamma are the VV10 kernel potential that the SCF already builds in
+    // compute_vv10_kernel, and the contraction with basis-function derivatives is
+    // rks_gradient_integrator. This is the exact derivative of the discrete energy with the grid
+    // held fixed, and it converges to the exact functional derivative as the grid is refined.
+    //
+    // The explicit R dependence of Phi does not appear. Phi depends only on the separations of
+    // grid points, and a space-fixed grid does not move with the nuclei. That term appears only
+    // if the grid points follow their parent atoms, and then it cannot be taken on its own:
+    //  - Summed over all atoms, sum_i sum_j dPhi_ij/dr_i vanishes because Phi_ij is symmetric
+    //    under i <-> j. The double sum is translation invariant.
+    //  - For atom A, only pairs with i on A and j off A survive. Pairs with both points on A
+    //    cancel. That makes the per-atom term depend on how points are assigned to atoms. In the
+    //    continuum it is exactly cancelled by the point-motion density term and the
+    //    partition-weight derivatives. Adding it without both of those gives an error set by
+    //    the partition, and that error does not vanish as the grid is refined.
+    //
+    // Pairs are sieved as in vv10_nlc: the right-hand (cached) points pass vv10_rho_cutoff_, the
+    // left-hand points pass compute_vv10_kernel's internal 1e-12. v_rho is the symmetric-pair
+    // derivative, so it is exact for pairs where both points pass the cutoff. The asymmetric
+    // sliver below the cutoff is O(vv10_rho_cutoff_).
+    //
+    // Returns half the RKS gradient, like the local loop of RV::compute_gradient; the caller
+    // scales the sum by 2.
+    timer_on("V: VV10 Gradient");
     timer_on("Setup");
 
-    // => VV10 Grid and Cache <=
+    // => VV10 Grid and Cache (identical to vv10_nlc) <=
     std::map<std::string, std::string> opt_map;
     opt_map["DFT_PRUNING_SCHEME"] = "FLAT";
-    // opt_map["DFT_NUCLEAR_SCHEME"] = "BECKE";
 
     std::map<std::string, int> opt_int_map;
     opt_int_map["DFT_RADIAL_POINTS"] = options_.get_int("DFT_VV10_RADIAL_POINTS");
@@ -1232,7 +1262,10 @@ SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
     DFTGrid nlgrid = DFTGrid(primary_->molecule(), primary_, opt_int_map, opt_map, options_);
     std::vector<std::map<std::string, SharedVector>> vv10_cache;
     std::vector<std::shared_ptr<PointFunctions>> nl_point_workers;
-    prepare_vv10_cache(nlgrid, D, vv10_cache, nl_point_workers, 2);
+    prepare_vv10_cache(nlgrid, D, vv10_cache, nl_point_workers);
+
+    // GGA gradient terms need second basis-function derivatives; densities stay GGA-level.
+    for (auto& worker : nl_point_workers) worker->set_deriv(2);
 
     timer_off("Setup");
 
@@ -1242,9 +1275,6 @@ SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
     const int max_points = nlgrid.max_points();
     const int natom = primary_->molecule()->natom();
 
-    // VV10 temps
-    std::vector<double> vv10_exc(num_threads_);
-
     // Per thread temporaries
     std::vector<SharedMatrix> G_local, U_local;
     for (size_t i = 0; i < num_threads_; i++) {
@@ -1252,78 +1282,34 @@ SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
         U_local.push_back(std::make_shared<Matrix>("U Temp", max_points, max_functions));
     }
 
-// => Compute the kernel <=
 #pragma omp parallel for private(rank) schedule(guided) num_threads(num_threads_)
     for (size_t Q = 0; Q < nlgrid.blocks().size(); Q++) {
-// Get thread info
 #ifdef _OPENMP
         rank = omp_get_thread_num();
 #endif
-
-        // Get per rank-workers
         std::shared_ptr<BlockOPoints> block = nlgrid.blocks()[Q];
         std::shared_ptr<SuperFunctional> fworker = functional_workers_[rank];
         std::shared_ptr<PointFunctions> pworker = nl_point_workers[rank];
-        const std::vector<int>& function_map = block->functions_local_to_global();
-        const int nlocal = function_map.size();
-        const int npoints = block->npoints();
-        double** Tp = pworker->scratch()[0]->pointer();
 
-        // Compute Rho, Phi, etc
         pworker->compute_points(block);
 
-        // Updates the vals map and returns the energy
-        std::map<std::string, SharedVector> vals = fworker->values();
-
+        // Fills V_RHO_A and V_GAMMA_AA with the VV10 kernel potential for this block
         parallel_timer_on("Kernel", rank);
-        vv10_exc[rank] += fworker->compute_vv10_kernel(pworker->point_values(), vv10_cache, block, npoints, true);
+        fworker->compute_vv10_kernel(pworker->point_values(), vv10_cache, block);
         parallel_timer_off("Kernel", rank);
 
+        // GGA ansatz: the VV10 kernel has no tau dependence, even inside a meta-GGA functional
         parallel_timer_on("V_xc gradient", rank);
-
-        // => LSDA and GGA gradient contributions <= //
-        dft_integrators::rks_gradient_integrator(primary_, block, fworker, pworker, G_local[rank], U_local[rank]);
-
-        // => Grid gradient contributions <= //
-        double** Gp = G_local[rank]->pointer();
-        const double* x_grid = fworker->vv_value("GRID_WX")->pointer();
-        const double* y_grid = fworker->vv_value("GRID_WY")->pointer();
-        const double* z_grid = fworker->vv_value("GRID_WZ")->pointer();
-        double** phi = pworker->basis_value("PHI")->pointer();
-        double** phi_x = pworker->basis_value("PHI_X")->pointer();
-        double** phi_y = pworker->basis_value("PHI_Y")->pointer();
-        double** phi_z = pworker->basis_value("PHI_Z")->pointer();
-
-        // These terms are incorrect until they are able to isolate blocks on a single atom due to
-        // the requirement of the sum to not include blocks on the same atom
-        for (int P = 0; P < npoints; P++) {
-            std::fill(Tp[P], Tp[P] + nlocal, 0.0);
-            C_DAXPY(nlocal, z_grid[P], phi[P], 1, Tp[P], 1);
-        }
-        for (int ml = 0; ml < nlocal; ml++) {
-            int A = primary_->function_to_center(function_map[ml]);
-            // Gp[A][0] += C_DDOT(npoints, &Tp[0][ml], max_functions, &phi_x[0][ml], max_functions);
-            // Gp[A][1] += C_DDOT(npoints, &Tp[0][ml], max_functions, &phi_y[0][ml], max_functions);
-            Gp[A][2] += C_DDOT(npoints, &Tp[0][ml], max_functions, &phi_z[0][ml], max_functions);
-            // printf("Value %d %16.15lf\n", A, C_DDOT(npoints, &Tp[0][ml], max_functions, &phi_z[0][ml],
-            // max_functions));
-        }
-
-        // printf("--\n");
-
+        dft_integrators::rks_gradient_integrator(primary_, block, fworker, pworker, G_local[rank], U_local[rank], 1);
         parallel_timer_off("V_xc gradient", rank);
     }
 
-    // Sum up the matrix
-    auto G = std::make_shared<Matrix>("XC Gradient", natom, 3);
+    auto G = std::make_shared<Matrix>("VV10 Gradient", natom, 3);
     for (auto const& val : G_local) {
         G->add(val);
     }
-    G->print();
-    G->zero();
 
-    double vv10_e = std::accumulate(vv10_exc.begin(), vv10_exc.end(), 0.0);
-    timer_off("V: VV10");
+    timer_off("V: VV10 Gradient");
     return G;
 }
 
@@ -2285,10 +2271,6 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
 SharedMatrix RV::compute_gradient() {
     // => Validation <= //
     if ((D_AO_.size() != 1)) throw PSIEXCEPTION("V: RKS should have only one D Matrix");
-
-    if (functional_->needs_vv10()) {
-        throw PSIEXCEPTION("V: RKS cannot compute VV10 gradient contribution.");
-    }
 
     // => Setup <= //
     int natom = primary_->molecule()->natom();
@@ -4062,10 +4044,6 @@ SharedMatrix UV::compute_gradient() {
     // => Validation <= //
     if ((D_AO_.size() != 2)) throw PSIEXCEPTION("V: UKS should have two D Matrices");
 
-    if (functional_->needs_vv10()) {
-        throw PSIEXCEPTION("V: UKS cannot compute VV10 gradient contribution.");
-    }
-
     // => Setup <= //
 
     // Build the target gradient Matrix
@@ -4413,6 +4391,17 @@ SharedMatrix UV::compute_gradient() {
 
     for (size_t i = 0; i < num_threads_; i++) {
         point_workers_[i]->set_deriv(old_deriv);
+    }
+
+    // VV10 depends only on the total density; compute_V evaluates it on the RKS-like
+    // Ds = (Da + Db) / 2, for which vv10_nlc_gradient returns half the gradient.
+    if (functional_->needs_vv10()) {
+        auto Ds = D_AO_[0]->clone();
+        Ds->add(D_AO_[1]);
+        Ds->scale(0.5);
+        auto G_vv10 = vv10_nlc_gradient(Ds);
+        G_vv10->scale(2.0);
+        G->add(G_vv10);
     }
 
     return G;
