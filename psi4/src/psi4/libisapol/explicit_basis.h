@@ -49,7 +49,7 @@ class IsaExplicitBasis {
     /// Sum signed primitive products first; an ALDA caller skips only when
     /// abs(result) < its declared cutoff (equality retained).
     /// Fresh nshell-by-nshell matrix; max_bytes bounds returned numeric storage,
-    /// not caller basis descriptors. Positive budget at most 512 MiB.
+    /// not caller basis descriptors. Positive budget.
     std::shared_ptr<Matrix> screening_s_overlap(std::size_t max_bytes = 512UL*1024*1024) const;
     /// Co-centred AtomAux/Shape metric, before damping/ridge. No grid exponent cap.
     /// All primitive pairs must be integrable under the selected weighting.

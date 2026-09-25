@@ -47,7 +47,7 @@ class IsaAuxCoulomb {
      * first_shell is zero-based; shell_count must be positive and entirely in
      * range. At most 512 AUX functions may occur in one block. MAIN columns
      * remain mu*nmain+nu with every MAIN function retained. No full AUX tensor
-     * is formed or sliced. max_bytes (<=512 MiB) bounds the returned matrix,
+     * is formed or sliced. max_bytes bounds the returned matrix,
      * not caller basis storage, copied shell descriptors or Libint workspace.
      * A streaming consumer must account those and its other live buffers.
      */

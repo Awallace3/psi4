@@ -35,7 +35,7 @@ std::shared_ptr<Matrix> IsaAuxCoulomb::three_center_shell_block(const IsaExplici
     }
     const int n=orbital.nfunction();
     orbital_require(n>0 && n<=std::numeric_limits<int>::max()/n,"MAIN pair dimension overflow");
-    orbital_require(max_bytes>0 && max_bytes<=512UL*1024*1024 &&
+    orbital_require(max_bytes>0 &&
                     rows<=max_bytes/sizeof(double)/n/n,
                     "AUX shell block matrix byte resource limit");
     // Reuse the exact integral/transform kernel with only selected AUX shells.

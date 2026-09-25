@@ -37,7 +37,7 @@ namespace isapol {
  * Concurrent mutation during construction is unsupported.
  *
  * The state-only envelope is 64*nbf^2 doubles, 16 KiB per shell (bounded
- * primitives), 4 KiB per atom and 16 MiB fixed engine allowance, <=512 MiB.
+ * primitives), 4 KiB per atom and 16 MiB fixed engine allowance, within max_bytes.
  * It excludes caller storage and is not a process-RSS guarantee. No nov^2
  * operators, ERIs, grids or frequency solver are constructed. Admission here
  * does not authorize any response backend's independent work/resource limits.

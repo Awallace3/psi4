@@ -71,7 +71,7 @@ std::array<double,15> angular(int l, IsaBasisRepresentation rep, double x, doubl
 }
 std::shared_ptr<Matrix> IsaExplicitBasis::screening_s_overlap(std::size_t max_bytes) const {
     const auto n = shells_.size();
-    basis_require(max_bytes > 0 && max_bytes <= 512UL*1024*1024 &&
+    basis_require(max_bytes > 0 &&
                   n > 0 && n <= max_bytes/sizeof(double)/n,
                   "Shell screening matrix byte resource limit");
     auto result = std::make_shared<Matrix>("Signed shell normalized-s surrogate",

@@ -41,8 +41,8 @@ def mo_three_center_shell(coulomb, main, coefficients, shell_index, *,
         raise ValueError("MAIN must have Orbital role")
     if type(shell_index) is not int or shell_index < 0:
         raise ValueError("shell_index must be a nonnegative integer")
-    if type(max_bytes) is not int or not 0 < max_bytes <= 512*1024**2:
-        raise ValueError("max_bytes must be a positive integer at most 512 MiB")
+    if type(max_bytes) is not int or max_bytes <= 0:
+        raise ValueError("max_bytes must be a positive integer")
     nao = main.nfunction
     if (not isinstance(coefficients, np.ndarray) or coefficients.dtype != np.float64
             or coefficients.ndim != 2 or coefficients.shape[0] != nao
@@ -83,7 +83,7 @@ class FactorizedDFOperators:
     have shapes (nov,nkernel) and (nkernel,nkernel); no grid is inferred.
     RHS blocks are finite float64 arrays (nov,nrhs), at most 64 columns.
     Admission accounts owned snapshots, conversion/validation buffers and
-    explicit action temporaries under at most 512 MiB. Caller storage and
+    explicit action temporaries under the caller's max_bytes. Caller storage and
     implementation-specific BLAS workspace are not a process-RSS guarantee.
     Auxiliary terms and RHS columns are processed sequentially.
     Overflow fails closed as ``FloatingPointError`` for NumPy arithmetic or
@@ -95,8 +95,8 @@ class FactorizedDFOperators:
     def __init__(self, gaps, oo, ov, dual_ov, dual_vv, *, exact_exchange,
                  local_scale=0., kernel_legs=None, auxiliary_kernel=None,
                  max_bytes=MAX_BYTES):
-        if type(max_bytes) is not int or not 0 < max_bytes <= self.MAX_BYTES:
-            raise ValueError("max_bytes must be a positive integer at most 512 MiB")
+        if type(max_bytes) is not int or max_bytes <= 0:
+            raise ValueError("max_bytes must be a positive integer")
         # Require array inputs so dimensions can be admitted before conversion.
         operands = (gaps, oo, ov, dual_ov, dual_vv)
         if any(not isinstance(a, np.ndarray) or a.dtype != np.float64 for a in operands):
@@ -229,8 +229,8 @@ class KernelCorrectedDFOperators(FactorizedDFOperators):
         if (not isinstance(plain, FactorizedDFOperators)
                 or isinstance(plain, KernelCorrectedDFOperators) or plain._nkernel):
             raise ValueError("plain factorized operators without a kernel required")
-        if type(max_bytes) is not int or not 0 < max_bytes <= self.MAX_BYTES:
-            raise ValueError("max_bytes must be a positive integer at most 512 MiB")
+        if type(max_bytes) is not int or max_bytes <= 0:
+            raise ValueError("max_bytes must be a positive integer")
         for value in (kernel_storage_bytes, kernel_workspace_bytes, kernel_work_per_rhs):
             if type(value) is not int or value < 0:
                 raise ValueError("kernel resource declarations must be nonnegative integers")
@@ -375,8 +375,8 @@ def factorized_projected_response(operators, legs, frequency, *, restart=20,
         raise ValueError("max_actions must be an integer in [1,10000]")
     if budget is not None and not isinstance(budget, FactorizedResponseBudget):
         raise ValueError("budget must be a FactorizedResponseBudget")
-    if type(max_bytes) is not int or not 0 < max_bytes <= operators.MAX_BYTES:
-        raise ValueError("solver max_bytes must be positive and at most 512 MiB")
+    if type(max_bytes) is not int or max_bytes <= 0:
+        raise ValueError("solver max_bytes must be positive")
     if (not isinstance(frequency, Real) or not np.isfinite(frequency) or frequency < 0):
         raise ValueError("frequency must be finite and nonnegative")
     if type(static_h1) is not bool or (static_h1 and frequency != 0):

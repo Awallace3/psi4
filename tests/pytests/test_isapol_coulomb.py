@@ -245,7 +245,7 @@ def test_mo_shell_transform_resource_and_input_contracts():
             mo_three_center_shell(provider, main, bad, 0)
     with pytest.raises(ValueError, match="Orbital"):
         mo_three_center_shell(provider, aux, coefficients, 0)
-    for budget in (0, True, 512*1024**2+1):
+    for budget in (0, True, -1):
         with pytest.raises(ValueError, match="max_bytes"):
             mo_three_center_shell(provider, main, coefficients, 0, max_bytes=budget)
     result[:] = 0.

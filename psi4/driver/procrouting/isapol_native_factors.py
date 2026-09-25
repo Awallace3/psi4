@@ -64,8 +64,8 @@ def native_plain_df_operators(auxiliary, main, coefficients, energies, *,
             or not isinstance(main, core.IsaExplicitBasis)
             or main.role != core.IsaBasisRole.Orbital):
         raise ValueError("explicit MolecularAux and Orbital bases required")
-    if type(max_bytes) is not int or not 0 < max_bytes <= FactorizedDFOperators.MAX_BYTES:
-        raise ValueError("max_bytes must be positive and at most 512 MiB")
+    if type(max_bytes) is not int or max_bytes <= 0:
+        raise ValueError("max_bytes must be positive")
     if type(tile_columns) is not int or not 1 <= tile_columns <= 708:
         raise ValueError("tile_columns must be an integer in [1,708]")
     nao, naux = main.nfunction, auxiliary.nfunction
@@ -225,8 +225,8 @@ def native_constrained_ov(operators, *, charge_penalty, offsite_metric_damping,
         raise ValueError("offsite_metric_damping must be finite in [0,1)")
     if type(tile_columns) is not int or not 1 <= tile_columns <= 708:
         raise ValueError("tile_columns must be an integer in [1,708]")
-    if type(max_bytes) is not int or not 0 < max_bytes <= FactorizedDFOperators.MAX_BYTES:
-        raise ValueError("max_bytes must be positive and at most 512 MiB")
+    if type(max_bytes) is not int or max_bytes <= 0:
+        raise ValueError("max_bytes must be positive")
     naux, nov, no = operators.naux, operators.nov, operators.nocc
     width = min(tile_columns, nov)
     planned = (operators._storage + 16*naux*nov + 24*naux*naux

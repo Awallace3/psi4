@@ -40,8 +40,8 @@ class PackedDesignRows:
             raise ValueError("block_rows must be an integer in [1,4096]")
         if type(max_passes) is not int or not 1 <= max_passes <= 2:
             raise ValueError("max_passes must be 1 or 2")
-        if type(max_bytes) is not int or not 0 < max_bytes <= self.MAX_BYTES:
-            raise ValueError("max_bytes must be a positive integer at most 512 MiB")
+        if type(max_bytes) is not int or max_bytes <= 0:
+            raise ValueError("max_bytes must be a positive integer")
         if (not isinstance(fields, np.ndarray) or fields.dtype != np.float64
                 or fields.ndim != 2 or fields.shape[0] < 1
                 or fields.shape[1] != model.channel_count or model.parameter_count < 1):

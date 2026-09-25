@@ -65,6 +65,12 @@ def oeprop(wfn: core.Wavefunction, *args: List[str], **kwargs):
     :type title: str
     :param title: label prepended to all psivars computed
 
+    :param atomic_backend: optional explicit ``BOUNDED_DF`` backend for the two
+        ATOMIC_REFINED_* tasks. Requires ``preset='water'`` or ``'benzene'``;
+        kwargs override changed Psi4 options and preset defaults. This model
+        does not run SCF or change the legacy backend when omitted. Access the
+        owned BoundedProperties result with :func:`atomic_property_result`.
+
     :examples:
 
     >>> # [1] Moments with specific label
@@ -77,10 +83,17 @@ def oeprop(wfn: core.Wavefunction, *args: List[str], **kwargs):
     # at request entry, including rejected names, policies, and mixed requests.
     atomic_names = tuple(prop.upper() for prop in args
                          if isinstance(prop, str) and prop.upper().startswith('ATOMIC_'))
-    if atomic_names and isinstance(wfn, core.Wavefunction):
+    if (atomic_names or 'atomic_backend' in kwargs) and isinstance(wfn, core.Wavefunction):
         wfn._native_atomic_property_result = None
     if any(not isinstance(prop, str) for prop in args):
         raise ValidationError('oeprop property names must be strings')
+    if 'atomic_backend' in kwargs:
+        if kwargs['atomic_backend'] != 'BOUNDED_DF':
+            raise ValidationError('Unknown atomic_backend; supported explicit backend is BOUNDED_DF')
+        from ..procrouting.isapol_bounded_oeprop import run as run_bounded
+        run_bounded(wfn, tuple(prop.upper() for prop in args),
+                    **{k:v for k,v in kwargs.items() if k != 'atomic_backend'})
+        return
     unknown = tuple(prop for prop in atomic_names if prop not in TASKS)
     if unknown:
         raise ValidationError('Unknown native atomic property request: ' + ', '.join(unknown))
@@ -470,4 +483,3 @@ def libint2_print_out() -> None:
     core.print_out(f"    Onebody   basis highest AM E, G, H:  {', '.join(('-' if d is None else str(d)) for d in ams['onebody'])}\n")
     # excluding sph_emultipole
     core.print_out(f"    Solid Harmonics ordering:            {core.libint2_solid_harmonics_ordering()}\n")
-

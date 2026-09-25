@@ -56,8 +56,8 @@ def screened_auxiliary_kernel(auxiliary, density_coefficients, grid, *,
         raise ValueError("cutoff must be finite and nonnegative")
     if type(block_rows) is not int or not 1 <= block_rows <= 512:
         raise ValueError("block_rows must be an integer in [1,512]")
-    if type(max_bytes) is not int or not 0 < max_bytes <= 512*1024**2:
-        raise ValueError("max_bytes must be positive and at most 512 MiB")
+    if type(max_bytes) is not int or max_bytes <= 0:
+        raise ValueError("max_bytes must be positive")
     naux = auxiliary.nfunction
     if (not isinstance(density_coefficients, np.ndarray)
             or density_coefficients.dtype != np.float64

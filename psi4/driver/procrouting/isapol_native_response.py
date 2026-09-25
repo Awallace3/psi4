@@ -27,8 +27,8 @@ def native_restricted_state_from_wavefunction(wavefunction, *, caller_converged,
         raise ValueError("explicit true caller_converged declaration required")
     if (isinstance(max_bytes, (bool, np.bool_))
             or not isinstance(max_bytes, (int, np.integer))
-            or not 0 < max_bytes <= 512*1024**2):
-        raise ValueError("max_bytes must be a positive integer at most 512 MiB")
+            or max_bytes <= 0):
+        raise ValueError("max_bytes must be a positive integer")
     return core.NativeRestrictedState(wavefunction, True, int(max_bytes))
 
 

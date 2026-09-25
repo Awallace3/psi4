@@ -384,8 +384,7 @@ OwnedState own_restricted_state(const std::shared_ptr<Wavefunction>& wfn, const 
 NativeRestrictedState::NativeRestrictedState(std::shared_ptr<Wavefunction> wfn,
         bool caller_converged, std::size_t max_bytes) {
     auto d = restricted_dims(wfn, caller_converged);
-    require_native(max_bytes > 0 && max_bytes <= 512ULL*1024*1024,
-                   "state byte budget must be positive and at most 512 MiB");
+    require_native(max_bytes > 0, "state byte budget must be positive");
     auto source = wfn->basisset();
     planned_bytes_ = add(mul(mul(64, mul(d.nbf, d.nbf)), sizeof(double)),
                          16ULL*1024*1024);
