@@ -220,7 +220,9 @@ def _kernel(auxiliary, density, grid, smoothing, cutoff, ledger):
     """
     from psi4 import core
     from .isapol_native_propagator import _superfunctional
-    n, rows, block = auxiliary.nfunction, len(grid), 64
+    # Blocks of at least 256 points let the C++ basis sampling thread, and
+    # the Gram GEMM sees a deep contraction.
+    n, rows, block = auxiliary.nfunction, len(grid), 2048
     ledger.admit('full-grid AUX kernel',
                  8*(4*n*n+8*block*n+64*block)+2*grid.nbytes, 2*rows*n*n)
     layout = auxiliary.shell_layout()

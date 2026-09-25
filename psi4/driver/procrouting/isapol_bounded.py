@@ -69,10 +69,12 @@ def _stream_fit(model, points, coefficient, potentials, ledger, source):
     row_count = npoint*(npoint+1)//2
     # Full target/packed overlap, AUX operands, copied fields, row producer and
     # C++ solver workspaces. No per-block or per-frequency allowance reset.
+    chunk = PackedDesignRows.MAX_CHUNK
     plan = (8*(3*npoint*npoint+row_count+3*naux*npoint+naux*naux
-               +5*npoint*channels+16*count*count+4096*(8*count+32)) + 8*1024**2)
+               +5*npoint*channels+npoint*channels*count+2*chunk*npoint*count
+               +16*count*count+4096*(8*count+32)) + 8*1024**2)
     work = (2*naux*naux*npoint+2*naux*npoint*npoint
-            +2*row_count*(6*sum(map(len, model.parameter_entries))+4*count+8)
+            +2*((row_count+chunk*npoint)*2*channels*count+row_count*(4*count+8))
             +2*row_count*count*count)
     ledger.admit('complete-cloud refinement', plan, work)
     fields = np.empty((npoint, channels))

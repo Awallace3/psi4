@@ -8,7 +8,7 @@ from .isapol_refine import RefinementModel
 
 
 class PackedDesignRows:
-    """Replay exact sparse-entry contractions for one complete point cloud.
+    """Replay deterministic per-point design contractions for one complete cloud.
 
     Supplied fields have shape (npoint, model.channel_count) and already
     include the caller's frames and damping. Parameters retain model order,
@@ -16,14 +16,16 @@ class PackedDesignRows:
     weight or half-factor is introduced.
 
     Blocks are computational only: (start, rows) follows global packed order
-    i*(i+1)//2+j, j<=i, including cross-block point pairs. Fields and entry
-    indices are snapshotted. Returned blocks are independent and mutable.
+    i*(i+1)//2+j, j<=i, including cross-block point pairs. Used field channels
+    and their per-point entry contraction are snapshotted, and each replay
+    pass reproduces the previous one bit for bit. Returned blocks are independent and mutable.
     Retaining old blocks is the consumer's budget responsibility.
 
-    Admission covers input/snapshot overlap, validation and bounded row
-    workspaces; it does not cover target generation, solver state, or runtime
+    Admission covers input/snapshot overlap, validation, the contraction and
+    bounded row workspaces; it does not cover target generation, solver state, or runtime
     overhead. Arithmetic is conservatively bounded across all declared passes.
-    Requesting a pass charges it immediately, even if iteration is abandoned;
+    Nonfinite rows fail as ``FloatingPointError``. Requesting a pass charges
+    it immediately, even if iteration is abandoned;
     the object has no reset. This supplies design rows only: replayable target
     provenance and one global PFIT solve remain separate contracts. Existing
     dense point/batch gates are not changed.
@@ -31,6 +33,7 @@ class PackedDesignRows:
 
     MAX_BYTES = 512*1024**2
     MAX_WORK = 64_000_000_000
+    MAX_CHUNK = 64
 
     def __init__(self, model, fields, *, block_rows=256, max_passes=2,
                  max_bytes=MAX_BYTES):
@@ -61,11 +64,6 @@ class PackedDesignRows:
             raise ValueError("model site widths must match channel count")
         row_count = npoint*(npoint+1)//2
         block = min(block_rows, row_count)
-        # Reserve every declared iterator's block workspace, even if callers
-        # interleave replay passes. Retained output histories remain external.
-        planned = 3*fields.nbytes + max_passes*8*block*(2*nparam+12)
-        if planned > max_bytes:
-            raise ValueError("packed design byte resource limit exceeded")
         indices = []
         for entries in model.parameter_entries:
             pairs = []
@@ -82,15 +80,45 @@ class PackedDesignRows:
                     raise ValueError("invalid model channel offset")
                 pairs.append((offset+row, offset+col))
             indices.append(tuple(pairs))
-        # Two products for tensor off-diagonal entries, accumulations and
-        # conservative indexing overhead. Charge the entire replay contract.
-        work = row_count*(6*sum(map(len, indices))+4*nparam+8)
+        # Expanded (left, right) channel terms per parameter. Tensor
+        # off-diagonal entries contribute both orderings.
+        terms = [(parameter, row, col) for parameter, pairs in enumerate(indices)
+                 for r, c in pairs for row, col in (((r, c), (c, r)) if r != c else ((r, c),))]
+        used = sorted({col for _, _, col in terms})
+        position = {channel: k for k, channel in enumerate(used)}
+        # A pass evaluates `chunk` points' runs as one BLAS product; the chunk
+        # is tied to the block size so small blocks keep a small workspace.
+        chunk = max(1, min(self.MAX_CHUNK, 16*block//npoint))
+        # Caller input and its isfinite mask, the owned used-channel fields,
+        # the point contraction H, one chunk product per declared pass, and
+        # one shared block plus each yielded copy.
+        planned = (fields.nbytes + fields.size + 8*npoint*(len(used)*(nparam+1)+1)
+                   + max_passes*8*(npoint*chunk*nparam+block*(2*nparam+12)) + 256)
+        if planned > max_bytes:
+            raise ValueError("packed design byte resource limit exceeded")
+        # Dense (used channels x parameters) products, including the unused
+        # j > i corner of the widest possible chunk, plus writes. H is formed
+        # once. Charge the entire replay contract.
+        work = ((row_count+self.MAX_CHUNK*npoint)*2*len(used)*nparam
+                + row_count*(4*nparam+8))
         if max_passes*work > self.MAX_WORK:
             raise ValueError("packed design replay work resource limit exceeded")
         if not np.isfinite(fields).all():
             raise ValueError("fields must be finite")
-        self._fields = np.frombuffer(fields.tobytes(), dtype=np.float64).reshape(fields.shape)
-        self._indices = tuple(indices)
+        # Row (i, j) of parameter p is F[j] @ H[:, i, p] with
+        # H[b, i, p] = sum of F[i, a] over the terms (p, a, b). The operands are
+        # owned and shared, and each pass's product buffer is 64-byte aligned,
+        # so replay passes repeat the BLAS result bit for bit.
+        self._fields = _aligned((npoint, len(used)))
+        self._fields[:] = fields[:, used]
+        self._contraction = _aligned((len(used), npoint, nparam))
+        self._contraction[:] = 0.
+        with np.errstate(over="raise", invalid="raise"):
+            for parameter, row, col in terms:
+                self._contraction[position[col], :, parameter] += fields[:, row]
+        self._products = [_aligned((npoint*chunk*nparam,)) for _ in range(max_passes)]
+        self._chunk = chunk
+        self._block = np.empty((block, nparam))
         self.row_count, self.parameter_count = row_count, nparam
         self.planned_bytes, self.planned_work = planned, max_passes*work
         self._block_rows, self._max_passes = block, max_passes
@@ -105,27 +133,42 @@ class PackedDesignRows:
         if self._passes_used >= self._max_passes:
             raise RuntimeError("packed design replay pass budget exhausted")
         self._passes_used += 1
-        return self._iterate()
+        return self._iterate(self._products[self._passes_used-1])
 
-    def _iterate(self):
+    def _iterate(self, products):
+        # Point i owns the contiguous packed run j = 0..i; a block may split a
+        # run or span several. Each block is filled before it is yielded, so
+        # interleaved passes can share the block buffer.
+        fields, contraction, buffer = self._fields, self._contraction, self._block
+        npoint, nparam = len(fields), self.parameter_count
         i = j = 0
-        fields = self._fields
+        first = last = 0
         for start in range(0, self.row_count, self._block_rows):
             count = min(self._block_rows, self.row_count-start)
-            left = np.empty(count, dtype=np.int64)
-            right = np.empty(count, dtype=np.int64)
-            for k in range(count):
-                left[k], right[k] = i, j
-                j += 1
+            k = 0
+            while k < count:
+                if i >= last:
+                    first, last = i, min(i+self._chunk, npoint)
+                    width = (last-first)*nparam
+                    product = products[:last*width].reshape(last, width)
+                    with np.errstate(over="raise", invalid="raise"):
+                        np.matmul(fields[:last], contraction[:, first:last].reshape(-1, width),
+                                  out=product)
+                n = min(i+1-j, count-k)
+                column = (i-first)*nparam
+                buffer[k:k+n] = product[j:j+n, column:column+nparam]
+                k, j = k+n, j+n
                 if j > i:
                     i, j = i+1, 0
-            result = np.zeros((count, self.parameter_count))
-            with np.errstate(over="raise", invalid="raise"):
-                for parameter, entries in enumerate(self._indices):
-                    for row, col in entries:
-                        result[:, parameter] += fields[left, row]*fields[right, col]
-                        if row != col:
-                            result[:, parameter] += fields[left, col]*fields[right, row]
+            result = buffer[:count].copy()
             if not np.isfinite(result).all():
-                raise ValueError("nonfinite packed design row")
+                raise FloatingPointError("overflow in packed design row")
             yield start, result
+
+
+def _aligned(shape):
+    """Uninitialized float64 array whose data starts on a 64-byte boundary."""
+    size = int(np.prod(shape))
+    raw = np.empty(size+8)
+    offset = (-raw.ctypes.data % 64)//8
+    return raw[offset:offset+size].reshape(shape)

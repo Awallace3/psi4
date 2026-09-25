@@ -218,6 +218,31 @@ def test_design_admission_replay_and_benzene_pair_count():
     assert full.planned_bytes < 200_000
 
 
+def test_design_chunked_products_replay_bit_for_bit():
+    from psi4.driver.procrouting import isapol_refine as R
+    from psi4.driver.procrouting.isapol_pfit_stream import PackedDesignRows
+    frame = tuple(map(tuple, np.eye(3)))
+    sites = tuple(R.RefinementSite(f"C{k}", "C", (float(k), 0., 0.), frame, 2) for k in range(2))
+    anchor = np.diag(np.linspace(2., 1., 9))
+    anchor[0, 4] = anchor[4, 0] = anchor[1, 3] = anchor[3, 1] = .5
+    model = R.refinement_model(sites, [anchor, anchor.copy()], cutoff=1.e-4,
+                               provenance="chunked replay test")
+    fields = np.random.default_rng(7).normal(size=(70, model.channel_count))
+    pairs = [(i, j) for i in range(70) for j in range(i+1)]
+    expected = np.zeros((len(pairs), model.parameter_count))
+    for p, entries in enumerate(model.parameter_entries):
+        for site, a, b in entries:
+            a, b = model.channel_offsets[site]+a, model.channel_offsets[site]+b
+            for k, (i, j) in enumerate(pairs):
+                expected[k, p] += fields[i, a]*fields[j, b]+(fields[i, b]*fields[j, a] if a != b else 0.)
+    source = PackedDesignRows(model, fields, block_rows=256)
+    assert 1 < source._chunk < 70  # several products, each spanning several blocks
+    first, second = list(source.blocks()), list(source.blocks())
+    for (s1, d1), (s2, d2) in zip(first, second):
+        assert s1 == s2 and d1.tobytes() == d2.tobytes()
+    np.testing.assert_allclose(np.concatenate([d for _, d in first]), expected, rtol=1e-13, atol=1e-13)
+
+
 @pytest.mark.parametrize("block_rows", [0, True, 4097])
 def test_design_refuses_invalid_block_sizes(block_rows):
     from psi4.driver.procrouting import isapol_refine as R
