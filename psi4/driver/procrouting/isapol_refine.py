@@ -23,7 +23,7 @@ inline by file and line:
 No CamCASP source is executed, linked or vendored here.
 
 What this module deliberately does not do: it does not generate the target
-response (see ``isapol_native_point_response``), does not localize, does not
+response (see ``isapol_bounded``), does not localize, does not
 choose rank limits or site types for the caller, does not symmetrize or repair
 the anchor tensors, and does not iterate the fit.  Components excluded by the
 cutoff are absent from the model and therefore exactly zero in the refined

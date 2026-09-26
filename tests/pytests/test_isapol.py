@@ -481,10 +481,7 @@ def test_fit_points_reference_case_cloud(reffit):
     `tests/H2O_props/psi4/H2O-avtz.clt` declares `Options Tests`, and the
     `properties` run type's generated `SET Lattice` block therefore asks for
     `Random 500` rather than the production `Random 2000`
-    (cluster_file_interface.F90::write_camcasp_1).  The 500 is what lets that
-    reference case be refined at all: it is inside
-    `isapol_native_point_response.MAXIMUM_POINTS`, which the 2000-point
-    production lattice is not and which is not raised for it.
+    (cluster_file_interface.F90::write_camcasp_1).
 
     The stored cloud comes from `oracle/make_lattice_oracle.sh`'s `latticedump`,
     i.e. from CamCASP's own `generate_lattice` and `random.f90`; it was also

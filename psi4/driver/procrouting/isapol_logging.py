@@ -31,7 +31,7 @@ Large intermediates are not printable from here.  :meth:`StageLog.table` elides
 long tables (and says so) and refuses a row wider than :data:`MAX_ROW_CELLS`, so
 raw response tensors, grids, transition-fit coefficients, orbital matrices and
 density samples cannot reach the output file by accident.  Those remain
-available in full through ``isapol_oeprop.atomic_property_result(wfn)``, which
+available in full through ``psi4.atomic_property_result(wfn)``, which
 is where this pipeline has always said large labeled tensors live.
 
 Every quantity printed here is either a field of a stage record or an explicitly

@@ -16,9 +16,10 @@ What this module does, and what it deliberately does not
   single point of truth shared by the producer and by property admission.
 * :func:`run` drives the ALREADY EXPLICIT POST-SCF PRODUCER. It does not integrate
   the correction potential into Psi4's own SCF, and it is not reachable from a
-  property request: ``isapol_oeprop`` only ever *admits* orbitals that a prior
-  explicit call produced, which is what keeps "no hidden correction iterations
-  inside property requests" literally true rather than merely intended.
+  property request: admission (``isapol_native_correction.validate_correction``)
+  only ever *verifies* orbitals that a prior explicit call produced, which is
+  what keeps "no hidden correction iterations inside property requests"
+  literally true rather than merely intended.
 * The choice is recorded rather than left implicit: the front end drives the
   post-SCF producer. Integrating the potential into core SCF would put a
   non-variational energy behind Psi4's own SCF seal, and the seal is the evidence
@@ -88,8 +89,7 @@ PRODUCER_OPTIONS = (
     ('ATOMIC_AC_D_CONVERGENCE', 'gradient_threshold', float),
 )
 
-#: Recorded by ``isapol_oeprop`` only under DECLARED_MULTPOLE_AC. Listing them on
-#: a NONE or FIXED_GRAC request would read as though they had applied to it.
+#: Every option that makes up a DECLARED_MULTPOLE_AC declaration or its producer.
 KEYS = tuple(name for name, _, _ in DECLARATION_OPTIONS + PRODUCER_OPTIONS)
 
 

@@ -1,30 +1,23 @@
 # Psi4 Developers; SPDX-License-Identifier: LGPL-3.0-only
-"""The DF-centre distributed-multipole declaration: one rule, two forms, gated.
+"""The DF-centre distributed-multipole rule: one rule, two forms, gated.
 
-``ATOMIC_MULTIPOLE_DISTRIBUTION`` names which *model* distributes the response,
-not how accurately one model is solved.  ``ISA_A`` charges each grid point to a
-site by the stockholder ratio ``shape_a / sum_b shape_b``; ``DF_CENTRE_*`` is
-CamCASP's ``DistPolAlgorithm = DF``, which charges every auxiliary function
-*wholly* to the centre it sits on.  They answer different questions, so their
-site multipoles, site polarizabilities and C_n are never quoted as agreeing --
-the last test here measures how far apart they are on one wavefunction precisely
-so that the declaration cannot be mistaken for a tolerance.
-
-``DF_CENTRE_ANALYTIC`` and ``DF_CENTRE_GRID`` *are* the same rule.  Nothing is
-approximated in the closed form and nothing is modelled differently in the grid
-form; the only thing between them is the molecular quadrature, which is what
+The DF-centre rule is CamCASP's ``DistPolAlgorithm = DF``, which charges every
+auxiliary function *wholly* to the centre it sits on.  ``DF_CENTRE_ANALYTIC``
+and ``DF_CENTRE_GRID`` *are* the same rule.  Nothing is approximated in the
+closed form and nothing is modelled differently in the grid form; the only
+thing between them is the molecular quadrature, which is what
 ``test_the_two_forms_are_one_rule_...`` shows by refining the grid and watching
-the gap fall.  Every number here is cheap and SCF-free except the two public
-runs at the end.  The full aug-cc-pVTZ-RI comparison against the archived
-reference protocol lives in the gitignored
-``agent_scratch/pytests/test_isapol_df_centre_public_full.py``, which also
-guards every literal recorded below.
+the gap fall.  Every number here is cheap and SCF-free.  The full
+aug-cc-pVTZ-RI comparison against the archived reference protocol lives in the
+gitignored ``agent_scratch/pytests/test_isapol_df_centre_public_full.py``,
+which also guards every literal recorded below.
 """
+from types import SimpleNamespace
 import numpy as np
 import pytest
 import psi4
 from psi4 import core
-from psi4.driver.procrouting import isapol_oeprop as api
+from psi4.driver.procrouting.isapol_native_partition import BasisRecipe, ShellRecipe
 from psi4.driver.procrouting import isapol_df_multipoles as dfm
 
 #: The shipped Racah evaluator recovers exactly; these are the measured residuals
@@ -51,9 +44,18 @@ def declared():
     """An AUX recipe and its sites with no SCF at all: the rule needs neither."""
     core.be_quiet()
     wfn = core.Wavefunction.build(psi4.geometry('O\nH 1 1\nH 1 1 2 100\nsymmetry c1'), 'cc-pvdz')
-    recipe = api.generated_recipe(wfn)
-    assert recipe.auxiliary.name == 'cc-pVDZ-JKFIT Cartesian molecular AUX'
-    return wfn, recipe
+    mol = wfn.molecule()
+    centres = tuple((mol.x(i), mol.y(i), mol.z(i)) for i in range(mol.natom()))
+    aux = core.BasisSet.build(mol, 'DF_BASIS_SCF', 'cc-pVDZ-JKFIT', puream=0)
+    shells = []
+    for j in range(aux.nshell()):
+        s = aux.shell(j)
+        shells.append(ShellRecipe(int(aux.shell_to_center(j)), int(s.am),
+            tuple(s.exp(k) for k in range(s.nprimitive)), tuple(s.coef(k) for k in range(s.nprimitive))))
+    auxiliary = BasisRecipe('cc-pVDZ-JKFIT Cartesian molecular AUX', 'Psi4 shipped basis',
+                            'Cartesian', centres, tuple(shells))
+    sites = tuple(SimpleNamespace(label=f'{mol.symbol(i)}{i+1}', origin=c) for i, c in enumerate(centres))
+    return wfn, SimpleNamespace(auxiliary=auxiliary, sites=sites)
 
 
 @pytest.fixture(scope='module')
@@ -280,135 +282,3 @@ def test_the_dispatcher_refuses_a_form_handed_the_wrong_operands(declared):
     with pytest.raises(ValueError, match='Supplied harmonic expansion is rank 2'):
         dfm.analytic_df_centre_multipoles(recipe.auxiliary, recipe.sites, 3,
                                           expansion=dfm.harmonic_expansion(2))
-
-
-def test_the_public_options_are_declared_together_and_refused_together():
-    """``lambda``/``eta`` belong to the fit; the DF rule needs the fit's columns.
-
-    The DF-centre rule charges a *function* to a centre, so occupied-virtual
-    product columns have no centre for it to sit on: ``DIRECT_OV`` is refused
-    rather than silently promoted to the fitted route.  And ``DIRECT_OV`` forms
-    no fit at all, so declaring a penalty or a damping under it is a
-    contradiction, not an ignorable option.
-    """
-    base = {'ATOMIC_MULTIPOLE_DISTRIBUTION': 'ISA_A', 'ATOMIC_RESPONSE_BASIS': 'DIRECT_OV',
-            'ATOMIC_OV_CHARGE_PENALTY': 1., 'ATOMIC_OV_METRIC_DAMPING': 0.}
-    assert api._distribution_options(base) == dict(
-        distribution='isa_a', response_basis='direct_ov',
-        ov_charge_penalty=1., ov_metric_damping=0.)
-    assert api._distribution_options(dict(
-        base, ATOMIC_MULTIPOLE_DISTRIBUTION='DF_CENTRE_GRID',
-        ATOMIC_RESPONSE_BASIS='FITTED_AUXILIARY', ATOMIC_OV_CHARGE_PENALTY=1000.,
-        ATOMIC_OV_METRIC_DAMPING=5.e-4)) == dict(
-            distribution='df_centre_grid', response_basis='fitted_auxiliary',
-            ov_charge_penalty=1000., ov_metric_damping=5.e-4)
-    with pytest.raises(ValueError, match='no centre for a function to sit on'):
-        api._distribution_options(dict(base, ATOMIC_MULTIPOLE_DISTRIBUTION='DF_CENTRE_ANALYTIC'))
-    for contradiction in ({'ATOMIC_OV_CHARGE_PENALTY': 1000.},
-                          {'ATOMIC_OV_METRIC_DAMPING': 5.e-4}):
-        with pytest.raises(ValueError, match='forms no transition-density fit'):
-            api._distribution_options(dict(base, **contradiction))
-
-
-def test_the_four_options_default_to_the_previously_hard_coded_model():
-    """Adding the declaration must not move the public path's existing default.
-
-    Before these options existed the public path was ``ISA_A`` with fit-free
-    ``DIRECT_OV`` columns; those are exactly the defaults, so every existing
-    result is the same model it was.
-    """
-    psi4.core.clean_options()
-    assert psi4.core.get_global_option('ATOMIC_MULTIPOLE_DISTRIBUTION') == 'ISA_A'
-    assert psi4.core.get_global_option('ATOMIC_RESPONSE_BASIS') == 'DIRECT_OV'
-    assert psi4.core.get_global_option('ATOMIC_OV_CHARGE_PENALTY') == 1.
-    assert psi4.core.get_global_option('ATOMIC_OV_METRIC_DAMPING') == 0.
-    with pytest.raises(Exception, match='not a valid choice'):
-        psi4.set_options({'atomic_multipole_distribution': 'stockholder'})
-    psi4.core.clean_options()
-
-
-@pytest.fixture(scope='module')
-def public_models():
-    """One PBE0/cc-pVDZ water endpoint run twice: the two declared distributions.
-
-    Both are complete public ``oeprop`` runs -- options in, wavefunction
-    variables out -- because the point of the declaration is that it reaches the
-    public path, not that the module can be called directly.
-    """
-    out = {}
-    for name, extra in (('isa_a', {}),
-                        ('df_centre_analytic',
-                         {'atomic_multipole_distribution': 'df_centre_analytic',
-                          'atomic_response_basis': 'fitted_auxiliary',
-                          'atomic_ov_charge_penalty': 1000.,
-                          'atomic_ov_metric_damping': 5.e-4})):
-        psi4.core.clean_options()
-        psi4.core.be_quiet()
-        mol = psi4.geometry('0 1\nO 0. 0. 0.\nH -1.45365196 0. -1.12168732\n'
-                            'H 1.45365196 0. -1.12168732\nunits bohr\nsymmetry c1\n'
-                            'no_com\nno_reorient\n')
-        psi4.set_options(dict({'basis': 'cc-pvdz', 'reference': 'rks', 'scf_type': 'pk',
-                               'e_convergence': 1e-10, 'd_convergence': 1e-10,
-                               'atomic_property_print': 0}, **extra))
-        _, wfn = psi4.energy('pbe0', molecule=mol, return_wfn=True)
-        assert psi4.oeprop(wfn, 'ATOMIC_POLARIZABILITIES') is None
-        out[name] = psi4.atomic_property_result(wfn)
-    psi4.core.clean_options()
-    return out
-
-
-def test_the_public_path_runs_the_declared_df_centre_rule(public_models):
-    """The declaration reaches the model string, the gates and the diagnostics.
-
-    The ISA-A partition still runs and is still reported under a DF-centre
-    declaration -- ``oeprop`` publishes a converged Drho-C partition either way
-    -- but it is not this model's operand, and the diagnostics say so.
-    """
-    result = public_models['df_centre_analytic']
-    properties = result.properties
-    assert not properties.failures
-    assert 'distribution=df_centre_analytic' in properties.model
-    assert 'fitted_auxiliary lambda=1000.0; eta=0.0005' in properties.model
-    diagnostics = properties.diagnostics
-    assert diagnostics['distribution'] == 'df_centre_analytic'
-    assert diagnostics['distribution_isa_a_converged'] is True
-    assert result.partition.converged
-    assert 'DistPolAlgorithm=DF' in diagnostics['distribution_provenance']
-    assert diagnostics['distribution_harmonic_residuals'] == HARMONIC_RESIDUALS
-    # The charge row is a pure Gaussian moment, so it does not depend on where
-    # the molecule sits and is the same number the SCF-free fixture measured.
-    assert diagnostics['distribution_charge_row_error'] == CHARGE_ROW_ERROR
-    # The convention check evaluates the built basis on points drawn about the
-    # molecule's own centres, so its residual moves with the geometry; only its
-    # bound is a claim about the model.
-    assert diagnostics['distribution_convention_error'] < dfm.CONVENTION_TOLERANCE
-    # Every site/rank static isotropic scalar is published and every one passed.
-    gate = {k: v for k, v in diagnostics.items() if 'site_isotropic' in k}
-    assert len(gate) == 9 and min(gate.values()) > 0.
-    assert set(gate) == {f'distribution_site_isotropic[xi=0.0][{a} rank{l}]'
-                         for a in ('O1', 'H2', 'H3') for l in (1, 2, 3)}
-    # The stockholder run declares no distribution diagnostics at all.
-    plain = public_models['isa_a'].properties.diagnostics
-    assert plain['distribution'] == 'isa_a'
-    assert not [k for k in plain if k.startswith('distribution_')]
-    assert 'distribution=isa_a; direct_ov' in public_models['isa_a'].properties.model
-
-
-def test_the_two_distributions_are_different_models_not_two_tolerances(public_models):
-    """How far apart the declarations are on one identical wavefunction.
-
-    12% on oxygen and 22% on hydrogen: this is a model choice with visible
-    consequences, which is why the two are published from separate declarations
-    and never compared for agreement.
-    """
-    scalars = {}
-    for name, result in public_models.items():
-        labels = result.properties.require_local().labels
-        assert tuple(labels) == ('O1', 'H2', 'H3')
-        scalars[name] = np.array(result.atomic_scalars)[0, :, 0]
-    relative = np.abs(scalars['df_centre_analytic']-scalars['isa_a'])/np.abs(scalars['isa_a'])
-    assert relative[0] > .1 and relative[1] > .2 and relative[2] > .2
-    # Both are sound models of their own: positive, and the two hydrogens agree.
-    for values in scalars.values():
-        assert (values > 0.).all()
-        assert abs(values[1]-values[2]) < 1.e-8*values[1]

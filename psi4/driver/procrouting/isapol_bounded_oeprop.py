@@ -11,7 +11,7 @@ is cyclic C1..C6 then H1..H6. Changing geometry does not remove the explicitly
 selected COPY constraints.
 
 Precedence: explicit kwargs > explicitly changed Psi4 options > preset values.
-Unchanged legacy defaults do not leak into this separately selected model.
+Unchanged option defaults do not leak into the preset.
 """
 import numpy as np
 from psi4 import core
@@ -49,11 +49,6 @@ def settings(preset, overrides):
     """Resolve only documented inputs; reject typos instead of ignoring them."""
     if preset not in ('water', 'benzene'):
         raise ValueError("bounded preset must be 'water' or 'benzene'")
-    for option, expected in (('ATOMIC_MULTIPOLE_DISTRIBUTION', 'DF_CENTRE_ANALYTIC'),
-                             ('ATOMIC_RESPONSE_BASIS', 'FITTED_AUXILIARY'),
-                             ('ATOMIC_RESPONSE_LOCALIZATION', 'LW'), ('ATOMIC_MULTIPOLE_RANK', 4)):
-        if core.has_global_option_changed(option) and core.get_global_option(option) != expected:
-            raise ValueError(f'BOUNDED_DF requires {option}={expected}; explicitly changed option conflicts')
     # CamCASP defaults. CIF = src/tools/cluster_file_interface.F90.
     values = dict(
         auxiliary_basis='aug-cc-pVTZ-RI',  # CIF aux aug-cc-pVTZ, Cartesian, limit G
@@ -134,12 +129,22 @@ def preset_sites(molecule, preset, rank_limit=2, hydrogen_rank_limit=2):
     return sites, bonds
 
 
+def atomic_property_result(wfn):
+    """Return the owned latest atomic oeprop result (oeprop itself returns None).
+
+    No property calculation is performed. Raises if no result is attached.
+    """
+    result = getattr(wfn, '_native_atomic_property_result', None)
+    if result is None:
+        raise ValueError('No native atomic property result on this wavefunction')
+    return result
+
+
 def run(wfn, tasks, *, preset, **kwargs):
     """Run explicit BOUNDED_DF oeprop tasks and attach the owned result on success.
 
     The two supported refined tasks execute the full common chain. Read its
-    BoundedProperties record with psi4.atomic_property_result(wfn). Legacy
-    ATOMIC_* requests without atomic_backend='BOUNDED_DF' are unchanged.
+    BoundedProperties record with psi4.atomic_property_result(wfn).
     """
     if not tasks or any(task not in TASKS for task in tasks) or len(set(tasks)) != len(tasks):
         raise ValueError('BOUNDED_DF accepts only ATOMIC_REFINED_POLARIZABILITIES and ATOMIC_REFINED_DISPERSION')

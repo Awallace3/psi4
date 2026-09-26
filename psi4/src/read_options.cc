@@ -312,25 +312,6 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- Tolerance for pseudoinversion of grid point overlap matrix (Parrish 2012 eq. 30) !expert -*/
     options.add_double("LS_THC_S_EPSILON", 1.0E-10);
 
-    /*- Atomic density partition policy, separate from tensor localization. -*/
-    options.add_str("PARTITION_SCHEME", "ISA_A", "ISA_A MBIS");
-    /*- Distributed tensor localization policy for native atomic response. -*/
-    options.add_str("ATOMIC_RESPONSE_LOCALIZATION", "LW", "LW LS");
-    /*- Explicit generated demonstration basis recipe, not a CamCASP preset. The two
-        names differ in exactly one declaration, the Func-1 ``W-TAILS`` cutoff beyond
-        which each site's Gaussian ISA-A shape is replaced by its fitted exponential
-        tail, and the name is the model: GENERATED_JKFIT_ISA_A declares this demo's
-        own absolute 1.5 bohr cutoff, shared by every site, while
-        GENERATED_JKFIT_BRAGG_SLATER_TAIL_ISA_A declares what a CamCASP
-        ``W-TAILS R1-Multiplier = 1.5`` declaration means, 1.5*R_Slater and hence a
-        different cutoff on each element. That is not a cosmetic difference and not a
-        tolerance: on PBE0/cc-pVDZ water the r**4-weighted site multipoles and
-        therefore C8/C10 move by percent, so numbers recorded under the two names may
-        never be quoted as agreeing. Everything else about the two recipes -- the
-        molecular AUX, the AtomAux and Shape sets, the grid and the controller -- is
-        identical. -*/
-    options.add_str("ATOMIC_PROPERTY_RECIPE", "GENERATED_JKFIT_ISA_A",
-                    "GENERATED_JKFIT_ISA_A GENERATED_JKFIT_BRAGG_SLATER_TAIL_ISA_A");
     /*- Declared Cartesian molecular auxiliary basis of the generated recipe, which also
         carries its Drho-C/ISA-A density fit. It is never inferred from BASIS or from
         DF_BASIS_SCF: naming it selects a partition, so a different name is a different
@@ -413,28 +394,10 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     /*- Orbital-gradient norm the DECLARED_MULTPOLE_AC producer must reach. Admission
         refuses a record converged more loosely than 1.0e-6. -*/
     options.add_double("ATOMIC_AC_D_CONVERGENCE", 1.0e-8);
-    /*- Dedicated ISA quadrature radial resolution. -*/
-    options.add_int("ATOMIC_PROPERTY_RADIAL_POINTS", 160);
-    /*- Dedicated ISA quadrature angular resolution. -*/
-    options.add_int("ATOMIC_PROPERTY_SPHERICAL_POINTS", 590);
     /*- Dedicated native ALDA response radial resolution, separate from ISA and SCF. -*/
     options.add_int("ATOMIC_RESPONSE_RADIAL_POINTS", 99);
     /*- Dedicated native ALDA response angular resolution, separate from ISA and SCF. -*/
     options.add_int("ATOMIC_RESPONSE_SPHERICAL_POINTS", 590);
-    /*- Named native response algorithm. Both arrangements evaluate the same ordered
-        shell-quartet sweep and the same ordered ALDA quadrature; SHARED_SWEEP visits
-        the sweep once for all transitions and accumulates the local primitive with a
-        blocked BLAS3 update, so it carries its own separately calibrated ALDA work
-        limit. It relaxes no other limit and coarsens no quadrature. -*/
-    options.add_str("ATOMIC_RESPONSE_ALGORITHM", "ORDERED_PAIRWISE", "ORDERED_PAIRWISE SHARED_SWEEP");
-    /*- Declared uniform site multipole rank of the distributed response, 3 or 4. It is a
-        model declaration, never inferred from a target coefficient: rank 4 is what makes
-        the C12 rank pairs (1,4) and (4,1) exist at all, so a rank-3 and a rank-4 C12 are
-        not the same quantity and must never be quoted as agreeing. Rank 4 costs a 25x25
-        rather than 16x16 LW working matrix per site pair, which at the unchanged 768 MiB
-        native workspace budget lowers the largest admissible graph from 256 to about 174
-        sites. -*/
-    options.add_int("ATOMIC_MULTIPOLE_RANK", 3);
     /*- Declared uniform rank the LW localization itself runs at, 1 to 4, and a SEPARATE
         declaration from ATOMIC_MULTIPOLE_RANK: it is the reference protocol's single
         ``Limit``. It may not exceed the site rank, because rank-4 local tensors cannot be
@@ -445,35 +408,6 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         A localization at one limit is a different model from one at another. -*/
     options.add_int("ATOMIC_LOCALIZATION_RANK_LIMIT", 3);
 
-    /*- Declared distributed-multipole model the site response is formed in. This is a
-        MODEL DECLARATION, not a variant of one model, and the choices are answers to
-        different questions: ISA_A is the converged Drho-C stockholder shape partition,
-        which assigns each grid point to sites by the ratio of that site's ISA-A shape to
-        the sum of all of them, while DF_CENTRE_ANALYTIC and DF_CENTRE_GRID are CamCASP's
-        ``DistPolAlgorithm = DF`` rule, which charges each auxiliary fitting
-        function WHOLLY to the centre it sits on and forms no stockholder weight at all.
-        Site multipoles, site polarizabilities and dispersion coefficients from the two
-        rules may never be quoted as agreeing or disagreeing with each other. The two
-        DF_CENTRE forms are the SAME rule: ANALYTIC evaluates it in closed form and so
-        carries no quadrature error whatever, GRID evaluates it on the molecular ISA
-        quadrature and carries that grid's error (measured 2.8e-07 absolute / 6.6e-09
-        relative against the closed form on water/cc-pVDZ-JKFIT). Because the DF rule
-        needs a centre for each fitting function to sit on, it requires AUX columns and
-        refuses ATOMIC_RESPONSE_BASIS = DIRECT_OV. It is also basis-sensitive in a way the
-        stockholder rule is not -- on a MAIN-matched JKFIT auxiliary set it can give a
-        NEGATIVE site isotropic response, which is refused outright rather than reported --
-        so it is sound only on a proper RI auxiliary set such as aug-cc-pVTZ-RI. -*/
-    options.add_str("ATOMIC_MULTIPOLE_DISTRIBUTION", "ISA_A",
-                    "ISA_A DF_CENTRE_ANALYTIC DF_CENTRE_GRID");
-    /*- Declared coordinates the frequency-dependent response is expressed in. DIRECT_OV
-        integrates actual occupied/virtual orbital products against the same converged
-        ISA-A shapes and forms no transition-density fit at all; FITTED_AUXILIARY fits the
-        transition densities into the molecular AUX set under the constrained fit declared
-        by ATOMIC_OV_CHARGE_PENALTY and ATOMIC_OV_METRIC_DAMPING. They are separate
-        declarations, not an approximation and its exact limit. FITTED_AUXILIARY is
-        required by ATOMIC_MULTIPOLE_DISTRIBUTION = DF_CENTRE_*, which has no meaning
-        without auxiliary columns. -*/
-    options.add_str("ATOMIC_RESPONSE_BASIS", "DIRECT_OV", "DIRECT_OV FITTED_AUXILIARY");
     /*- The reference protocol's ``Lambda``: the finite rank-1 charge penalty
         ``A += lambda q q^T`` of the constrained transition-density fit. An OV transition
         density has exactly zero charge by MO orthonormality, so this penalty only enforces
@@ -496,33 +430,6 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         Ignored by, and required to stay at its default under,
         ATOMIC_RESPONSE_BASIS = DIRECT_OV. -*/
     options.add_double("ATOMIC_OV_METRIC_DAMPING", 0.0);
-    /*- Declared propagator the frequency-dependent response is built from, i.e. how the
-        H1/H2 operators themselves are assembled. NONE is the shipped path and is not a
-        declaration at all: the propagator module is not entered, and H1/H2 are taken
-        verbatim from the native response provider's exact orbital-product two-electron
-        integrals and exact-density ALDA accumulator. EXACT_ORBITAL declares that same
-        model explicitly, reassembling H1/H2 from the provider's own operators and
-        checking the identity rather than assuming it; it changes no number and exists so
-        that a run can state its propagator instead of implying it by an absent argument.
-        CAMCASP_DF is the reference protocol's own declaration, ``SET PROPAGATOR Type CKS
-        Hessians Internal DF with constraints DF-integrals`` together with its
-        ``KERNEL-INTEGRAL-PARAMETERS``: the two-electron operators are density fitted in
-        the molecular AUX basis, the ALDA kernel is built as an naux x naux matrix and
-        projected through the fitted transition density instead of accumulated over
-        orbital products, ``fxc`` is evaluated at the constrained Drho-C fitted density
-        instead of the exact orbital density, and the kernel is floored at RHO-EPS=1e-8
-        and capped by the Fermi-Dirac limiter at F-MAX=1000 (FD-DELTA=0.01, FD-ALPHA=1).
-        Those are four independent MODEL declarations, none of them a refinement or a
-        tolerance of the shipped ones, so a CAMCASP_DF number may never be quoted as
-        agreeing with a NONE or EXACT_ORBITAL number. CAMCASP_DF needs an AUX expansion of
-        each transition density to project its kernel through, so it requires
-        ATOMIC_RESPONSE_BASIS = FITTED_AUXILIARY. It is a DIFFERENT ALGORITHM from the
-        shipped accumulator and carries its own separately measured work limits, which
-        authorize nothing in and replace nothing of the native ALDA limits. Not
-        replicated under it, and labelled rather than approximated: the reference's
-        ``KERNEL-INTEGRAL-CUTOFF`` AUX shell-pair screen and its constrained propagator
-        metric. -*/
-    options.add_str("ATOMIC_RESPONSE_PROPAGATOR", "NONE", "NONE EXACT_ORBITAL CAMCASP_DF");
 
     /*- Number of accepted points on the random refinement lattice, the reference
         protocol's ``SET Lattice ... Random N``. The cloud is a declared, bitwise

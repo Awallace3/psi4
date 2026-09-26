@@ -42,7 +42,6 @@ import psi4
 from psi4 import core
 from psi4.driver.procrouting import isapol_ac_options as aco
 from psi4.driver.procrouting import isapol_native_ac as ac
-from psi4.driver.procrouting import isapol_oeprop as api
 
 pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick]
 ROOT = pathlib.Path(__file__).parents[2]
@@ -197,36 +196,6 @@ def test_producing_requires_declaring():
             aco.run(None)
         with pytest.raises(ValueError, match='requires declaring it'):
             aco.run(None)
-
-
-def test_only_one_companion_declaration_is_ever_forwarded():
-    """The two corrections' companions are not composable: a request carries the
-    declaration of the policy it names and nothing from the other."""
-    psi4.set_options({aco.POLICY_OPTION: 'DECLARED_MULTPOLE_AC',
-                      'atomic_ac_ionization_potential': IP})
-    opts = api._correction_options()
-    assert opts['scf_correction'] == 'DECLARED_MULTPOLE_AC'
-    assert isinstance(opts['ac_declaration'], ac.AcDeclaration)
-    assert opts['expected_grac_shift'] is None
-
-    core.clean_options()
-    psi4.set_options({aco.POLICY_OPTION: 'FIXED_GRAC',
-                      'atomic_scf_expected_grac_shift': .06,
-                      'atomic_ac_ionization_potential': IP})
-    opts = api._correction_options()
-    assert 'ac_declaration' not in opts, 'a GRAC request must not carry an AC declaration'
-    assert opts['expected_grac_shift'] == .06
-
-    core.clean_options()
-    opts = api._correction_options()
-    assert opts == {'scf_correction': 'NONE', 'expected_grac_shift': None}
-
-
-def test_a_stale_grac_shift_cannot_pass_unnoticed_under_another_policy():
-    """A leftover nonzero shift is forwarded, so it fails loudly outside
-    FIXED_GRAC rather than being dropped as inapplicable."""
-    psi4.set_options({aco.POLICY_OPTION: 'NONE', 'atomic_scf_expected_grac_shift': .06})
-    assert api._correction_options()['expected_grac_shift'] == .06
 
 
 def test_the_producer_module_reads_no_options():

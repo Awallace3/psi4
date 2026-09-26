@@ -147,11 +147,5 @@ def test_no_mutating_admission_or_hidden_scf_source():
         'options.add_str("ATOMIC_AC_BRAGG_TABLE", "PSI4", "PSI4 CAMCASP")',
         'options.add_str("ATOMIC_AC_MULTIPOLE_ORIGIN", "NUCCHARGE", "NUCCHARGE COM ATOM0")',
         'options.add_str("ATOMIC_AC_SHIFT_MODE", "VARIATIONAL", "NONE VARIATIONAL FIXED")',
-        'options.add_str("ATOMIC_PROPERTY_RECIPE", "GENERATED_JKFIT_ISA_A", '
-        '"GENERATED_JKFIT_ISA_A GENERATED_JKFIT_BRAGG_SLATER_TAIL_ISA_A")',
-        'options.add_str("ATOMIC_RESPONSE_LOCALIZATION", "LW", "LW LS")',
-        # The propagator declaration is closed the same way: NONE is the shipped
-        # model and the two named propagators are the only alternatives.
-        'options.add_str("ATOMIC_RESPONSE_PROPAGATOR", "NONE", "NONE EXACT_ORBITAL CAMCASP_DF")',
     ]:
         assert ' '.join(declaration.split()) in opts

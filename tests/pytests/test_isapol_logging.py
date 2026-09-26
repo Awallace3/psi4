@@ -226,19 +226,6 @@ def test_dataclass_parameters_skip_is_explicit():
     assert [name for name, _ in got] == ['convergence', 'max_iterations']
 
 
-def test_partition_parameters_cover_the_whole_controller_and_grid(wfn):
-    """The recipe's own dataclasses, so a new knob appears without a code change."""
-    from psi4.driver.procrouting.isapol_oeprop import generated_recipe
-    recipe = generated_recipe(wfn, 50, 110, 'cc-pVDZ-JKFIT')
-    names = [name for name, _ in lg.partition_parameters(recipe)]
-    for field in dataclasses.fields(recipe.controller):
-        assert 'controller.' + field.name in names
-    for field in dataclasses.fields(recipe.grid):
-        assert 'grid.' + field.name in names
-    assert 'drho_profile' in names
-    assert 'site tail cutoffs [bohr]' in names
-
-
 # ------------------------------------------------------------ QCVariables ----
 
 def test_set_is_a_noop_without_a_wavefunction():

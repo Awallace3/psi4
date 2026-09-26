@@ -465,37 +465,3 @@ def test_factorized_actions_refuse_invalid_rhs_and_return_owned_results():
     np.testing.assert_array_equal(ops.apply_h1(np.eye(2)), np.diag([1., 2.]))
 
 
-def test_factorized_actions_match_small_native_df_integral_operators():
-    import psi4
-    from psi4.driver.procrouting.isapol_factorized_response import FactorizedDFOperators
-    from psi4.driver.procrouting.isapol_oeprop import generated_recipe
-    from psi4.driver.procrouting.isapol_native_partition import native_partition
-    from psi4.driver.procrouting.isapol_native_propagator import _df_two_electron
-
-    psi4.core.be_quiet()
-    molecule = psi4.geometry("0 1\nO 0 0 0\nH .757 0 .586\nH -.757 0 .586\n"
-                             "symmetry c1\nno_com\nno_reorient")
-    psi4.set_options(dict(basis="sto-3g", reference="rhf", scf_type="pk",
-                          e_convergence=1e-11, d_convergence=1e-11))
-    _, wfn = psi4.energy("hf", molecule=molecule, return_wfn=True)
-    partition = native_partition(wfn, generated_recipe(wfn), caller_converged=True)
-    full = partition.main.transform @ np.asarray(wfn.Ca())
-    nocc, nvir = wfn.nalpha(), wfn.nmo()-wfn.nalpha()
-    naux, nao = partition.auxiliary.nfunction, partition.main.basis.nfunction
-    ao = np.asarray(partition.coulomb.three_center(partition.main.basis)).reshape(naux, nao, nao)
-    mo = np.array([full.T @ block @ full for block in ao])
-    metric = np.asarray(partition.coulomb.metric())
-    dual = np.linalg.solve(metric, mo.reshape(naux, -1)).reshape(mo.shape)
-    energies = np.asarray(wfn.epsilon_a())
-    gaps = (energies[nocc:, None]-energies[None, :nocc]).ravel()
-    operators = FactorizedDFOperators(
-        gaps, mo[:, :nocc, :nocc], mo[:, :nocc, nocc:],
-        dual[:, :nocc, nocc:], dual[:, nocc:, nocc:], exact_exchange=.25)
-    # Existing dense plain-DF implementation is an independent assembly route,
-    # not a CamCASP numerical reference.
-    v, x, y = _df_two_electron(partition, full, nocc, nvir)
-    rhs = np.eye(nocc*nvir)
-    np.testing.assert_allclose(operators.apply_h1(rhs),
-                               np.diag(gaps)+4*v-.25*(x+y), atol=2e-11, rtol=2e-11)
-    np.testing.assert_allclose(operators.apply_h2(rhs),
-                               np.diag(gaps)-.25*(x-y), atol=2e-11, rtol=2e-11)

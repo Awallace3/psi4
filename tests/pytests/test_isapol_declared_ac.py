@@ -433,19 +433,13 @@ def test_the_option_surface_was_widened_only_together_with_its_declaration():
 
 
 def test_the_policy_keyword_still_does_not_produce_anything():
-    """`plan.md`: "No hidden correction iterations inside property requests."
+    """No hidden correction iterations inside property requests.
 
     Source-level, because it is a claim about what CANNOT happen rather than
-    about one request: the property path may resolve the declaration and may
-    verify it, but the two functions that iterate the correction and mutate a
-    wavefunction are not reachable from it at all.  They are reached only from
-    the separately named ``psi4.atomic_asymptotic_correction`` producer.
+    about one request: the two functions that iterate the correction and mutate
+    a wavefunction are reached only from the separately named
+    ``psi4.atomic_asymptotic_correction`` producer.
     """
-    prop = (ROOT / 'psi4/driver/procrouting/isapol_oeprop.py').read_text()
-    assert 'declared_ac_orbitals' not in prop
-    assert 'apply_declared_ac' not in prop
-    # What it does use: the resolver and the policy name, neither of which runs.
-    assert 'aco.declaration()' in prop and 'aco.AC_POLICY' in prop
     front = ast.parse((ROOT / 'psi4/driver/procrouting/isapol_ac_options.py').read_text())
     # And the front end is the ONLY caller, through exactly one entry point.
     called = {n.func.id for n in ast.walk(front)

@@ -23,51 +23,6 @@ def test_explicit_ring_bond_frames_are_radial_and_tangential():
     np.testing.assert_allclose(np.linalg.det(frames), 1., atol=1e-14)
 
 
-def test_ring_frames_recover_anisotropic_local_refinement_anchors():
-    from psi4.driver.procrouting.isapol_geometry import frames_from_axis_pairs
-    from psi4.driver.procrouting.isapol_lw import Provenance, supplied_nonlocal_properties
-    from psi4.driver.procrouting.isapol_native_refinement import anchor_tensors, refinement_sites
-
-    theta = np.arange(6)*np.pi/3
-    radial = np.column_stack((np.cos(theta), np.sin(theta), np.zeros(6)))
-    tangent = np.column_stack((-np.sin(theta), np.cos(theta), np.zeros(6)))
-    normal = np.array([0., 0., 1.])
-    origins = np.concatenate((2*radial, 3*radial))
-    declarations = [(site, (i, i+6), (i, (i+1) % 6))
-                    for i in range(6) for site in (i, i+6)]
-    frames = frames_from_axis_pairs(origins, declarations)
-    blocks = np.zeros((1, 12, 12, 16, 16))
-    for site in range(12):
-        i = site % 6
-        scale = 1. if site < 6 else .5
-        # Independent Cartesian dyad construction, not the frame helper.
-        cartesian = scale*(2*np.outer(radial[i], radial[i]) +
-                           3*np.outer(tangent[i], tangent[i]) + 5*np.outer(normal, normal) +
-                           .4*(np.outer(radial[i], tangent[i]) +
-                               np.outer(tangent[i], radial[i])))
-        blocks[0, site, site, 1:4, 1:4] = cartesian[np.ix_([2, 0, 1], [2, 0, 1])]
-    kwargs = dict(labels=tuple(f"S{i}" for i in range(12)), origins=origins,
-                  bonds=tuple((i, (i+1) % 6) for i in range(6)) +
-                        tuple((i, i+6) for i in range(6)),
-                  frequencies=(0.,), tensors=blocks, input_rank=3,
-                  localization_rank_limit=1,
-                  provenance=Provenance("analytic ring", "0"*64, "synthetic",
-                                        "exact charge-free anisotropic local dipoles"))
-    local = supplied_nonlocal_properties(frames=frames, **kwargs)
-    sites = refinement_sites(local, site_types=("C",)*6+("H",)*6,
-                             rank_limits={"C": 1, "H": 1})
-    anchors = anchor_tensors(local, sites, 0)
-    for i, anchor in enumerate(anchors):
-        np.testing.assert_array_equal(sites[i].frame, frames[i])
-        np.testing.assert_array_equal(sites[i].origin_bohr, origins[i])
-        expected = np.diag([0., 2., 3., 5.])
-        expected[1, 2] = expected[2, 1] = .4
-        expected *= 1. if i < 6 else .5
-        np.testing.assert_allclose(anchor, expected, atol=1e-12)
-    wrong = supplied_nonlocal_properties(frames=None, **kwargs)
-    assert not np.allclose(wrong.raw_local.array, local.raw_local.array)
-
-
 def test_bond_frames_transform_covariantly():
     from psi4.driver.procrouting.isapol_geometry import frames_from_axis_pairs
     origins = np.array([[0., 0., 0.], [0., 0., 2.], [3., 0., 1.]])

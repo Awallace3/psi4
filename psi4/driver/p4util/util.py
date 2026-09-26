@@ -68,7 +68,7 @@ def oeprop(wfn: core.Wavefunction, *args: List[str], **kwargs):
     :param atomic_backend: optional explicit ``BOUNDED_DF`` backend for the two
         ATOMIC_REFINED_* tasks. Requires ``preset='water'`` or ``'benzene'``;
         kwargs override changed Psi4 options and preset defaults. This model
-        does not run SCF or change the legacy backend when omitted. Access the
+        does not run SCF. ATOMIC_* properties are refused without it. Access the
         owned BoundedProperties result with :func:`atomic_property_result`.
 
     :examples:
@@ -78,9 +78,8 @@ def oeprop(wfn: core.Wavefunction, *args: List[str], **kwargs):
     >>> oeprop(wfn, 'DIPOLE', 'QUADRUPOLE', title='H3O+ SCF')
 
     """
-    from ..procrouting.isapol_oeprop import TASKS, run, validate_request
-    # Reserve the whole ATOMIC_* namespace. Invalidate the latest native result
-    # at request entry, including rejected names, policies, and mixed requests.
+    # Reserve the whole ATOMIC_* namespace. Invalidate the latest atomic result
+    # at request entry, including rejected names and mixed requests.
     atomic_names = tuple(prop.upper() for prop in args
                          if isinstance(prop, str) and prop.upper().startswith('ATOMIC_'))
     if (atomic_names or 'atomic_backend' in kwargs) and isinstance(wfn, core.Wavefunction):
@@ -94,17 +93,13 @@ def oeprop(wfn: core.Wavefunction, *args: List[str], **kwargs):
         run_bounded(wfn, tuple(prop.upper() for prop in args),
                     **{k:v for k,v in kwargs.items() if k != 'atomic_backend'})
         return
-    unknown = tuple(prop for prop in atomic_names if prop not in TASKS)
-    if unknown:
-        raise ValidationError('Unknown native atomic property request: ' + ', '.join(unknown))
-    native = tuple(prop.upper() for prop in args if prop.upper() in TASKS)
-    ordinary = tuple(prop for prop in args if prop.upper() not in TASKS)
-    if native:
-        validate_request(wfn, native)
+    if atomic_names:
+        raise ValidationError("ATOMIC_* properties require atomic_backend='BOUNDED_DF': "
+                              + ', '.join(atomic_names))
     oe = core.OEProp(wfn)
     if 'title' in kwargs:
         oe.set_title(kwargs['title'])
-    for prop in ordinary:
+    for prop in args:
         oe.add(prop.upper())
 
         # If we're doing MBIS, we want the free-atom volumes
@@ -115,19 +110,16 @@ def oeprop(wfn: core.Wavefunction, *args: List[str], **kwargs):
             core.print_out("  Computing free-atom volumes\n")
             free_atom_volumes(wfn)
 
-    if ordinary or not native:
-        oe.compute()
-    if native:
-        run(wfn, native)
+    oe.compute()
 
 
 def atomic_property_result(wfn):
-    """Access the owned latest native atomic oeprop result, including diagnostics.
+    """Access the owned latest atomic oeprop result, including diagnostics.
 
     ``oeprop`` continues to return None. Large labeled tensors live here rather
     than in padded QCVariables. No calculation or hidden SCF is performed.
     """
-    from ..procrouting.isapol_oeprop import atomic_property_result as accessor
+    from ..procrouting.isapol_bounded_oeprop import atomic_property_result as accessor
     return accessor(wfn)
 
 
@@ -483,3 +475,4 @@ def libint2_print_out() -> None:
     core.print_out(f"    Onebody   basis highest AM E, G, H:  {', '.join(('-' if d is None else str(d)) for d in ams['onebody'])}\n")
     # excluding sph_emultipole
     core.print_out(f"    Solid Harmonics ordering:            {core.libint2_solid_harmonics_ordering()}\n")
+

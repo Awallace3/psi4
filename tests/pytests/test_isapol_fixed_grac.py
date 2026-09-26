@@ -1,10 +1,9 @@
 """Requires rebuilt core getters. One fresh small genuine fixed-GRAC water SCF.
 
 No reference tables, orbital repair, inferred shift, or GRAC response derivative.
-The modest real endpoint is the native ALDA producer, not a matched atomic preset.
 """
 from contextlib import contextmanager
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 import numpy as np
 import pytest
@@ -13,8 +12,6 @@ from psi4 import core
 from psi4.driver.p4util import OptionsState
 from psi4.driver.procrouting import isapol_native_correction as correction
 from psi4.driver.procrouting import isapol_native as native
-from psi4.driver.procrouting import isapol_native_response as response
-from psi4.driver.procrouting import isapol_oeprop as api
 from psi4.driver.procrouting.scf_proc.scf_iterator import _scf_state_signature
 
 SHIFT = .06490004527520865  # caller supplied example, never an API default
@@ -50,26 +47,9 @@ def water():
     return w
 
 
-@pytest.fixture(autouse=True)
-def public_defaults():
-    with options({'PARTITION_SCHEME': 'ISA_A', 'ATOMIC_RESPONSE_LOCALIZATION': 'LW',
-                  'ATOMIC_PROPERTY_RECIPE': 'GENERATED_JKFIT_ISA_A',
-                  'ATOMIC_SCF_ASYMPTOTIC_CORRECTION': 'NONE',
-                  'ATOMIC_SCF_EXPECTED_GRAC_SHIFT': 0.}):
-        yield
-
-
-def test_defaults_reject_actual_grac_before_partition(water, monkeypatch):
-    monkeypatch.setattr(api, 'generated_recipe', lambda *a: pytest.fail('partition entered'))
-    monkeypatch.setattr(psi4, 'energy', lambda *a, **k: pytest.fail('hidden SCF'))
-    water._native_atomic_property_result = object()
+def test_default_policy_rejects_actual_grac(water):
     with pytest.raises(ValueError, match='NONE.*GRAC'):
-        psi4.oeprop(water, 'ATOMIC_POLARIZABILITIES')
-    with pytest.raises(ValueError, match='No native'):
-        api.atomic_property_result(water)
-    with pytest.raises(ValueError, match='NONE.*GRAC'):
-        response.native_response_from_wavefunction(water, caller_converged=True,
-            kernel='alda_slater_pw92', exact_exchange=.25, local_scale=.75, grid=np.ones((1, 4)))
+        correction.validate_correction(water)
 
 
 @pytest.mark.parametrize('shift', [None, 0., -.01, float('nan'), float('inf'), True, '0.06', SHIFT + 1e-8])
@@ -158,13 +138,13 @@ def test_canonical_none_and_owned_tweak_getter():
     f = core.SuperFunctional.XC_build('XC_HYB_GGA_XC_PBEH', True)
     f.set_name('PBE0')
     w = SimpleNamespace(functional=lambda: f)
-    assert api._validate_pbe0(w).policy == 'NONE'
+    assert correction.validate_correction(w, require_canonical=True).policy == 'NONE'
     component = f.c_functionals()[0]
     original = component.get_tweak()
     copied = component.get_tweak()
     copied['_beta'] = .4
     assert component.get_tweak() == original
-    assert api._validate_pbe0(w).policy == 'NONE'
+    assert correction.validate_correction(w, require_canonical=True).policy == 'NONE'
     with pytest.raises(ValueError, match='NONE'):
         correction.validate_correction(w, expected_grac_shift=SHIFT)
 
@@ -182,62 +162,17 @@ def test_missing_and_stale_seal(water):
         water._scf_convergence_evidence = saved
 
 
-def test_fresh_grac_native_alda_endpoint_and_ownership(water, monkeypatch):
+def test_fixed_grac_provenance_is_owned_and_ignores_ambient_options(water, monkeypatch):
     before = _scf_state_signature(water)
-    threads = core.get_num_threads()
     monkeypatch.setattr(psi4, 'energy', lambda *a, **k: pytest.fail('hidden SCF'))
-    # Independent small quadrature, not a production/matched integration claim.
-    go = core.IsaGridOptions()
-    go.radial_points, go.spherical_points = 12, 50
-    grid = core.IsaGrid(water.molecule().clone(), go)
-    points = np.column_stack((grid.x(), grid.y(), grid.z(), grid.w()))
-    result = response.native_response_from_wavefunction(water, caller_converged=True,
-        kernel='alda_slater_pw92', exact_exchange=.25, local_scale=.75, grid=points, **DECLARATION)
-    assert np.isfinite(result.at_frequency(.4).raw_coupled).all()
-    np.testing.assert_array_equal(np.asarray(result.provider.orbitals()), np.asarray(water.Ca()))
-    np.testing.assert_array_equal(np.asarray(result.provider.energies()), np.asarray(water.epsilon_a()))
-    owned = result.correction_provenance
+    owned = correction.validate_correction(water, **DECLARATION)
     assert owned.policy == 'FIXED_GRAC' and owned.shift == SHIFT
     assert 'no GRAC kernel derivative' in owned.response_description
     with pytest.raises(FrozenInstanceError):
         owned.shift = .1
     assert _scf_state_signature(water) == before
-    assert core.get_num_threads() == threads
     # The policy declaration is independent of ambient SCF DFT settings.
     with options({('SCF', 'DFT_GRAC_SHIFT'): .2,
                   'ATOMIC_SCF_ASYMPTOTIC_CORRECTION': 'FIXED_GRAC',
                   'ATOMIC_SCF_EXPECTED_GRAC_SHIFT': SHIFT}):
-        assert api.validate_request(water, ('ATOMIC_POLARIZABILITIES',)) < 2e-7
         assert correction.validate_correction(water, **DECLARATION) == owned
-    # Reuse must reject even a factory-shaped context with mismatched correction
-    # provenance, before partitioning. No second native response construction.
-    context = native.NativeContext(replace(result, correction_provenance=replace(owned, shift=SHIFT+.01)),
-        native._context(water), native._policy('alda_slater_pw92', .25, .75, points, 1e-10, owned))
-    recipe = api.generated_recipe(water, 12, 50)
-    monkeypatch.setattr(native, 'native_partition', lambda *a, **k: pytest.fail('partition entered'))
-    with pytest.raises(ValueError, match='context mismatch'):
-        native.native_properties(water, recipe, bonds=((0, 1), (0, 2)), frames=None,
-            caller_converged=True, kernel='alda_slater_pw92', exact_exchange=.25,
-            local_scale=.75, response_grid=points, response_context=context, **DECLARATION)
-    assert native._policy('alda_slater_pw92', .25, .75, points, 1e-10, owned) != native._policy(
-        'alda_slater_pw92', .25, .75, points, 1e-10, replace(owned, shift=SHIFT+.01))
-
-
-def test_public_none_return_owned_result_and_invalidation(water, monkeypatch):
-    # Only orchestration is doubled; real corrected SCF admission/seal is exercised.
-    partition = SimpleNamespace(require_q=lambda: None,
-        trajectory=SimpleNamespace(state=SimpleNamespace(iteration=1)),
-        drho=SimpleNamespace(fitted_electrons=10.))
-    monkeypatch.setattr(api.p, 'native_partition', lambda *a, **k: partition)
-    monkeypatch.setattr(psi4, 'energy', lambda *a, **k: pytest.fail('hidden SCF'))
-    with options({'ATOMIC_SCF_ASYMPTOTIC_CORRECTION': 'FIXED_GRAC',
-                  'ATOMIC_SCF_EXPECTED_GRAC_SHIFT': SHIFT}):
-        assert psi4.oeprop(water, 'ATOMIC_PARTITION') is None
-        owned = api.atomic_property_result(water)
-        assert owned.correction_provenance.shift == SHIFT
-        core.set_global_option('ATOMIC_SCF_EXPECTED_GRAC_SHIFT', SHIFT + .01)
-        with pytest.raises(ValueError, match='correction mismatch'):
-            psi4.oeprop(water, 'ATOMIC_PARTITION')
-        assert owned.correction_provenance.shift == SHIFT
-        with pytest.raises(ValueError, match='No native'):
-            api.atomic_property_result(water)

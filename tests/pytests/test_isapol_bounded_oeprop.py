@@ -47,14 +47,6 @@ def test_explicit_options_and_keyword_precedence():
     assert v['npoints'] == 32 and v['weight_coefficient'] == .0002
 
 
-@pytest.mark.parametrize('option,value', [('atomic_multipole_distribution','ISA_A'),
-    ('atomic_response_basis','DIRECT_OV'), ('atomic_response_localization','LS'), ('atomic_multipole_rank',3)])
-def test_conflicting_explicit_model_is_not_silently_ignored(option, value):
-    psi4.set_options({option:value})
-    with pytest.raises(ValueError, match='conflicts'):
-        api.settings('water', {})
-
-
 def test_bad_keywords_and_preset_fail():
     with pytest.raises(TypeError, match='npointz'):
         api.settings('water', {'npointz':32})
@@ -95,6 +87,8 @@ def test_public_dispatch_owned_result_and_unchanged_return(water, monkeypatch):
 
 
 @pytest.mark.parametrize('tasks,kwargs', [
+    (('ATOMIC_REFINED_DISPERSION',), {}),
+    (('DIPOLE', 'ATOMIC_PARTITION'), {}),
     (('ATOMIC_PARTITION',), {'atomic_backend':'BOUNDED_DF', 'preset':'water'}),
     (('DIPOLE','ATOMIC_REFINED_DISPERSION'), {'atomic_backend':'BOUNDED_DF', 'preset':'water'}),
     (('ATOMIC_REFINED_DISPERSION',), {'atomic_backend':'typo', 'preset':'water'}),
