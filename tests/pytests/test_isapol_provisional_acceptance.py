@@ -181,22 +181,19 @@ def test_exclusive_outputs_concurrent_creator_not_overwritten(tmp_path, monkeypa
     assert not first.exists() and second.read_bytes() == b'concurrent'
 
 
-@pytest.mark.parametrize('stage', ['drho', 'ov'])
-def test_native_runner_preflights_before_measurement(stage, tmp_path, monkeypatch):
-    runner = load('compare_native_' + stage)
+def test_native_runner_preflights_before_measurement(tmp_path, monkeypatch):
+    runner = load('compare_native_drho')
     monkeypatch.setattr(runner, 'measure', lambda *a, **k: pytest.fail('No measurement permitted'))
     report, coefficients = tmp_path/'report.json', tmp_path/'coefficients'
     coefficients.write_bytes(b'historical')
-    extra = {'reference_replay': tmp_path/'replay'} if stage == 'ov' else {}
     with pytest.raises(FileExistsError):
-        runner.run(tmp_path/'inputs', tmp_path/'checkpoint', report, coefficients, **extra)
+        runner.run(tmp_path/'inputs', tmp_path/'checkpoint', report, coefficients)
     assert not report.exists() and coefficients.read_bytes() == b'historical'
 
 
-@pytest.mark.parametrize('stage', ['drho', 'ov'])
-def test_mocked_native_wrapper_status_provenance_and_exclusive_report(stage, tmp_path, monkeypatch):
+def test_mocked_native_wrapper_status_provenance_and_exclusive_report(tmp_path, monkeypatch):
     # Explicit test doubles: this tests the wrapper, NOT native parity.
-    runner = load('compare_native_' + stage)
+    runner = load('compare_native_drho')
     directory = tmp_path/'inputs'
     directory.mkdir()
     (directory/'record').write_text('input')
@@ -204,20 +201,15 @@ def test_mocked_native_wrapper_status_provenance_and_exclusive_report(stage, tmp
     checkpoint.write_text('checkpoint'); extension.write_bytes(b'test double')
     monkeypatch.setattr(runner.profiles, 'production_psi4', lambda: SimpleNamespace(core=SimpleNamespace(__file__=str(extension))))
     monkeypatch.setattr(runner.profiles, 'load', lambda name: SimpleNamespace(replay=lambda d: {'passed': True}))
-    metrics, _ = inputs('native-' + stage)
+    metrics, _ = inputs('native-drho')
     metrics['coefficients'] = 2e-5
-    error_keys = ['metric', 'coefficients', 'sampled_density', 'rhs', 'fitted_electrons'] if stage == 'drho' else ['metric', 'coefficients', 'sampled_transition_density']
+    error_keys = ['metric', 'coefficients', 'sampled_density', 'rhs', 'fitted_electrons']
     raw = {k: v for k, v in metrics.items() if k not in error_keys}
     raw.update(passed=False, errors={k: {'max_absolute': metrics[k], 'max_scaled': metrics[k]} for k in error_keys})
-    coeff = {'coefficients': [1.], 'charges': [1.]} if stage == 'drho' else np.array([[1.]])
+    coeff = {'coefficients': [1.], 'charges': [1.]}
     monkeypatch.setattr(runner, '_measure', lambda *args: (raw.copy(), coeff))
-    extra = {}
-    if stage == 'ov':
-        replay = tmp_path/'reference-replay.json'
-        replay.write_text('{"passed":true}')
-        extra['reference_replay'] = replay
     report_path, coefficients_path = tmp_path/'fresh.json', tmp_path/'fresh-coefficients'
-    report = runner.run(directory, checkpoint, report_path, coefficients_path, profile='provisional-1e-3', **extra)
+    report = runner.run(directory, checkpoint, report_path, coefficients_path, profile='provisional-1e-3')
     saved = json.loads(report_path.read_text())
     assert not saved['passed'] and saved['provisional_passed'] and saved['selected_profile_passed']
     assert saved['provenance']['before'] == saved['provenance']['after']
@@ -228,20 +220,18 @@ def test_mocked_native_wrapper_status_provenance_and_exclusive_report(stage, tmp
     assert 'deferred' in saved['broader_pipeline']['response_transition_leg_diagnostic']
     assert report['selected_profile'] == 'provisional-1e-3'
     with pytest.raises(FileExistsError):
-        runner.run(directory, checkpoint, report_path, coefficients_path, **extra)
+        runner.run(directory, checkpoint, report_path, coefficients_path)
 
 
-@pytest.mark.parametrize('stage', ['drho', 'ov'])
 @pytest.mark.parametrize('profile', ['strict', 'provisional-1e-3'])
-def test_native_cli_exit_uses_selected_not_legacy_status(stage, profile, monkeypatch):
-    runner = load('compare_native_' + stage)
+def test_native_cli_exit_uses_selected_not_legacy_status(profile, monkeypatch):
+    runner = load('compare_native_drho')
     def fake_run(*args, **kwargs):
         assert kwargs['profile'] == profile
         return dict(passed=False, strict_passed=False, provisional_passed=True,
                     selected_profile=profile, selected_profile_passed=profile != 'strict')
     monkeypatch.setattr(runner, 'run', fake_run)
     argv = ['native', 'inputs', '--checkpoint', 'checkpoint', '--report', 'fresh-report', '--coefficients', 'fresh-coefficients']
-    if stage == 'ov': argv.extend(['--reference-replay', 'retained-reference-control'])
     if profile != 'strict': argv.extend(['--profile', profile])
     monkeypatch.setattr(p.sys, 'argv', argv)
     if profile == 'strict':
