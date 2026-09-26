@@ -84,15 +84,9 @@ summarized in the table below.
    +------------------------------------+----------------------------------+---------------------------------------------------------------------------------------------+
    | Hirshfeld volume ratios            | MBIS_VOLUME_RATIOS               | Generate the AIM to free atom volume ratios                                                 |
    +------------------------------------+----------------------------------+---------------------------------------------------------------------------------------------+
-   | ISA-A atomic density partition     | ATOMIC_PARTITION                 | Iterated-stockholder partition only. See :ref:`ISA-Pol <sec:isapol>`                        |
+   | Refined site polarizabilities      | ATOMIC_REFINED_POLARIZABILITIES  | Needs ``atomic_backend='BOUNDED_DF'``. See :ref:`ISA-Pol <sec:isapol>`                      |
    +------------------------------------+----------------------------------+---------------------------------------------------------------------------------------------+
-   | Distributed polarizabilities       | ATOMIC_POLARIZABILITIES          | Static distributed site polarizabilities. See :ref:`ISA-Pol <sec:isapol>`                   |
-   +------------------------------------+----------------------------------+---------------------------------------------------------------------------------------------+
-   | Distributed dispersion C6/C8/C10   | ATOMIC_DISPERSION                | Casimir--Polder site-pair coefficients. See :ref:`ISA-Pol <sec:isapol>`                     |
-   +------------------------------------+----------------------------------+---------------------------------------------------------------------------------------------+
-   | Refined site polarizabilities      | ATOMIC_REFINED_POLARIZABILITIES  | PFIT-refined; a different model. See :ref:`ISA-Pol <sec:isapol>`                            |
-   +------------------------------------+----------------------------------+---------------------------------------------------------------------------------------------+
-   | Refined dispersion coefficients    | ATOMIC_REFINED_DISPERSION        | PFIT-refined; a different model. See :ref:`ISA-Pol <sec:isapol>`                            |
+   | Refined dispersion coefficients    | ATOMIC_REFINED_DISPERSION        | Needs ``atomic_backend='BOUNDED_DF'``. See :ref:`ISA-Pol <sec:isapol>`                      |
    +------------------------------------+----------------------------------+---------------------------------------------------------------------------------------------+
 
 There are two ways the computation of one-electron properties can be requested. 
