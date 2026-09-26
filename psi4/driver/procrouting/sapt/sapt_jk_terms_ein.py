@@ -56,9 +56,14 @@ import einsums.graph as cg
 
 # Edge of the (r,s) compute block in fdisp0, in virtual orbitals.  The block
 # GEMMs gain throughput up to about this edge (135 GF/s at nanotube dimensions
-# on 24 threads, against 42 GF/s for a pair-at-a-time batched kernel) and lose
-# it again at 128, where the work arrays stop fitting in cache.
-FDISP_BLOCK = 64
+# on 24 threads, against 42 GF/s for a pair-at-a-time batched kernel), but the
+# block's elementwise stages -- the denominator, the division, and the two
+# passes of the localization -- are bandwidth-bound, and they set the optimum
+# well below the point where the GEMMs stop improving.  Sweeping the edge over
+# a whole block iteration at protein83 dimensions puts the minimum at 24 with a
+# flat bottom from 20 to 32; 64 costs 6-17% more, and below 16 the GEMMs get
+# too skinny to feed the cores and the cost climbs steeply.
+FDISP_BLOCK = 24
 
 # Size, in doubles, of one fdisp0 DF staging matrix.  The staging matrices only
 # carry a slab of a DF tensor from disk into the packed Q-major buffers, so
@@ -2766,9 +2771,9 @@ def fdisp0(
     # V[(r,a),(s,b)] (see the main loop below), which needs nine work arrays of
     # nrb*na x nsb*nb doubles: V, T, I, T2, V2 and the energy denominator, plus
     # W, IW, W2 for the (s,a) x (r,b) half of the exchange term.  Those GEMMs
-    # saturate at a block edge of about FDISP_BLOCK virtuals and lose ground
-    # past it, so FDISP_BLOCK caps the compute block independently of how much
-    # of the DF tensors memory lets us hold at once.
+    # are only part of the block's cost, so FDISP_BLOCK caps the compute block
+    # at the whole-kernel optimum, independently of how much of the DF tensors
+    # memory lets us hold at once.
     blk_r = min(FDISP_BLOCK, nr)
     blk_s = min(FDISP_BLOCK, ns)
     overhead += 9 * blk_r * blk_s * na * nb
