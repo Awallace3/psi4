@@ -2341,6 +2341,36 @@ no_com
     assert compare_values(reference, grad, 6, "delta DFT wb97m-v dimer gradient")
     assert compare_values(grad, psi4.core.variable("SAPT(DFT) DFT DIMER GRADIENT"), 12, "core gradient")
 
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize("options, message", [
+    ({"dft_vv10_postscf": True}, "post-SCF VV10"),
+    ({"sapt_dft_functional": "dsd-blyp-nl"}, "double-hybrid"),
+    ({"scf_type": "cd"}, "SCF_TYPE=CD"),
+])
+def test_saptdft_ddft_gradient_unsupported(options, message, monkeypatch):
+    """Reject unsupported dimer derivatives before starting any SCFs."""
+    from psi4.driver.procrouting.sapt import sapt_proc
+
+    psi4.geometry("He 0 0 0\n--\nHe 0 0 3")
+    psi4.set_options({
+        "basis": "sto-3g",
+        "sapt_dft_functional": "vv10",
+        "sapt_dft_ddft_gradient": True,
+        "sapt_dft_grac_shift_a": 0.1,
+        "sapt_dft_grac_shift_b": 0.1,
+        **options,
+    })
+
+    def unexpected_scf(*args, **kwargs):
+        pytest.fail("Unsupported dimer gradients must be rejected before SCF")
+
+    monkeypatch.setattr(sapt_proc, "scf_helper", unexpected_scf)
+    monkeypatch.setattr(sapt_proc, "run_scf", unexpected_scf)
+    with pytest.raises(psi4.ValidationError, match=message):
+        psi4.energy("dft-vv10(sapt)")
+
+
 if __name__ == "__main__":
     psi4.set_memory("32 GB")
     psi4.set_num_threads(12)

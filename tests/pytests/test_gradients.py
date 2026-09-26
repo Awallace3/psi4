@@ -63,15 +63,17 @@ def test_gradient(inp):
 @pytest.mark.findif
 @pytest.mark.dft
 @pytest.mark.gradient
+@pytest.mark.parametrize("method", ["vv10", "wb97m-v"])
 @pytest.mark.parametrize("inp", [
-    pytest.param({"mol": "O\nH 1 0.958\nH 1 0.958 2 104.5\n", "reference": "rks"}, id="vv10-rks-h2o"),
-    pytest.param({"mol": "0 2\nN\nH 1 1.024\nH 1 1.024 2 103.3\n", "reference": "uks"}, id="vv10-uks-nh2"),
+    pytest.param({"mol": "O\nH 1 0.958\nH 1 0.958 2 104.5\n", "reference": "rks"}, id="rks-h2o"),
+    pytest.param({"mol": "0 2\nN\nH 1 1.024\nH 1 1.024 2 103.3\n", "reference": "uks"}, id="uks-nh2"),
 ])
-def test_vv10_gradient_findif(inp):
-    """Analytic VV10 gradient (fixed VV10 grid) against psi4's finite difference of energies.
+def test_vv10_gradient_findif(inp, method):
+    """GGA and hybrid meta-GGA VV10 gradients against finite differences of energies.
 
-    The NLC part of these gradients is 2-3e-4 Eh/a0, so dropping or mis-scaling it fails the 1e-5
-    check. The observed analytic-vs-findif error is ~2e-6, set by the 99/590 local XC grid.
+    The analytic gradients use fixed grids, so agreement with displaced, atom-centered
+    energy grids is quadrature-limited. The meta-GGA cases also exercise the GGA-only
+    VV10 contraction without reusing the local functional's tau potential.
     """
     psi4.geometry(inp["mol"])
     psi4.set_options({
@@ -82,13 +84,34 @@ def test_vv10_gradient_findif(inp):
         "d_convergence": 1e-10,
         "dft_radial_points": 99,
         "dft_spherical_points": 590,
+        "dft_vv10_radial_points": 50,
+        "dft_vv10_spherical_points": 146,
         "points": 3,
+        "disp_size": 0.005,
     })
 
-    analytic_gradient = psi4.gradient("vv10", dertype=1)
-    findif_gradient = psi4.gradient("vv10", dertype=0)
+    analytic_gradient = psi4.gradient(method, dertype=1)
+    findif_gradient = psi4.gradient(method, dertype=0)
 
-    assert compare_values(findif_gradient, analytic_gradient, 5, "VV10 analytic vs. findif gradient")
+    assert compare_values(findif_gradient, analytic_gradient, 5, f"{method} analytic vs. findif gradient")
+
+
+@pytest.mark.dft
+@pytest.mark.gradient
+def test_vv10_postscf_gradient_rejected():
+    """Post-SCF VV10 needs orbital response, even through the direct SCF gradient API."""
+    psi4.geometry("H\nH 1 0.8")
+    psi4.set_options({
+        "basis": "sto-3g",
+        "dft_vv10_postscf": True,
+        "dft_radial_points": 30,
+        "dft_spherical_points": 110,
+        "dft_vv10_radial_points": 20,
+        "dft_vv10_spherical_points": 50,
+    })
+    _, wfn = psi4.energy("vv10", return_wfn=True)
+    with pytest.raises(RuntimeError, match="post-SCF VV10"):
+        psi4.core.scfgrad(wfn)
 
 
 def test_gradient_ref():

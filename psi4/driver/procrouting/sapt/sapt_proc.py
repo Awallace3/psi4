@@ -334,6 +334,19 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             "SAPT_DFT_DDFT_GRADIENT requires the delta DFT dimer SCF: set SAPT_DFT_DO_DDFT "
             "and a non-HF SAPT_DFT_FUNCTIONAL."
         )
+    if do_ddft_gradient:
+        if sapt_sup.is_c_hybrid() or sapt_sup.is_c_lrc():
+            raise ValidationError(
+                "SAPT_DFT_DDFT_GRADIENT does not support double-hybrid or long-range "
+                "correlation functionals: core.scfgrad omits their correlation derivative."
+            )
+        if functional_needs_vv10 and core.get_option("SCF", "DFT_VV10_POSTSCF"):
+            raise ValidationError(
+                "SAPT_DFT_DDFT_GRADIENT does not support post-SCF VV10. "
+                "Set DFT_VV10_POSTSCF=false for a self-consistent analytic gradient."
+            )
+        if core.get_option("SCF", "SCF_TYPE") == "CD":
+            raise ValidationError("SAPT_DFT_DDFT_GRADIENT does not support SCF_TYPE=CD.")
     if not do_dft:
         do_mon_grac_shift_A = do_mon_grac_shift_B = False
 
