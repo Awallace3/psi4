@@ -30,7 +30,6 @@
 #include <cstring>
 
 #include "psi4/libisapol/native_response.h"
-#include "psi4/libisapol/point_response.h"
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libmints/vector.h"
 #include "psi4/libisapol/casimir_grid.h"
@@ -46,7 +45,6 @@
 #include "psi4/libisapol/t_functions.h"
 #include "psi4/libisapol/lw_localization.h"
 #include "psi4/libisapol/aux_coulomb.h"
-#include "psi4/libisapol/ov_fit.h"
 #include "psi4/libisapol/isa_sweep.h"
 #include "psi4/libisapol/isa_shape.h"
 #include "psi4/libisapol/isa_controller.h"
@@ -227,76 +225,6 @@ void export_isapol(py::module& m) {
         .def_property_readonly("convergence_evidence", [](const NativeRestrictedState&) {
             return "caller declaration only; restricted metadata, density and orthonormality checked";
         });
-    py::class_<NativeResponseProvider, std::shared_ptr<NativeResponseProvider>>(m, "NativeResponseProvider")
-        .def(py::init<std::shared_ptr<Wavefunction>, bool, const std::string&, double, double,
-                      SharedMatrix, double, std::size_t, std::size_t, const std::string&>(),
-             "wavefunction"_a, "caller_converged"_a, "kernel"_a, "exact_exchange"_a,
-             "local_scale"_a, "grid"_a, "density_cutoff"_a, "max_bytes"_a, "max_nov"_a,
-             "algorithm"_a = "ordered_pairwise")
-        .def("h1", &NativeResponseProvider::h1)
-        .def("h2", &NativeResponseProvider::h2)
-        .def("coulomb", &NativeResponseProvider::coulomb)
-        .def("exchange_direct", &NativeResponseProvider::exchange_direct)
-        .def("exchange_transpose", &NativeResponseProvider::exchange_transpose)
-        .def("local_primitive", &NativeResponseProvider::local_primitive)
-        .def("orbitals", &NativeResponseProvider::orbitals)
-        .def("energies", &NativeResponseProvider::energies)
-        .def("density_alpha", &NativeResponseProvider::density_alpha)
-        .def_property_readonly("nocc", &NativeResponseProvider::nocc)
-        .def_property_readonly("nvir", &NativeResponseProvider::nvir)
-        .def_property_readonly("kernel", &NativeResponseProvider::kernel)
-        .def_property_readonly("algorithm", &NativeResponseProvider::algorithm)
-        .def_property_readonly("exact_exchange", &NativeResponseProvider::exact_exchange)
-        .def_property_readonly("local_scale", &NativeResponseProvider::local_scale)
-        .def_property_readonly("density_cutoff", &NativeResponseProvider::density_cutoff)
-        .def_property_readonly("planned_bytes", &NativeResponseProvider::planned_bytes)
-        .def_property_readonly("ov_order", [](const NativeResponseProvider&) { return "occupied_fast: t=a*nocc+i"; })
-        .def_property_readonly("caller_converged", [](const NativeResponseProvider&) { return true; })
-        .def_property_readonly("convergence_evidence", [](const NativeResponseProvider&) {
-            return "caller declaration only; restricted metadata, density and orthonormality checked";
-        });
-
-    py::class_<IsaAldaGridScreen, std::shared_ptr<IsaAldaGridScreen>>(m, "IsaAldaGridScreen")
-        .def(py::init<std::shared_ptr<Wavefunction>, bool, const std::string&, SharedMatrix, double,
-                      std::size_t>(),
-             "wavefunction"_a, "caller_converged"_a, "kernel"_a, "grid"_a, "density_cutoff"_a,
-             "max_bytes"_a)
-        .def("values", &IsaAldaGridScreen::values)
-        .def("retained_rows", &IsaAldaGridScreen::retained_rows, "threshold"_a)
-        .def("retained", &IsaAldaGridScreen::retained, "threshold"_a)
-        .def("omitted_bound", &IsaAldaGridScreen::omitted_bound, "threshold"_a)
-        .def("omitted_count", &IsaAldaGridScreen::omitted_count, "threshold"_a)
-        .def("threshold_for_rows", &IsaAldaGridScreen::threshold_for_rows, "max_rows"_a)
-        .def_property_readonly("total", &IsaAldaGridScreen::total)
-        .def_property_readonly("maximum", &IsaAldaGridScreen::maximum)
-        .def_property_readonly("rows", &IsaAldaGridScreen::rows)
-        .def_property_readonly("exact_zero_rows", &IsaAldaGridScreen::exact_zero_rows)
-        .def_property_readonly("kernel", &IsaAldaGridScreen::kernel)
-        .def_property_readonly("density_cutoff", &IsaAldaGridScreen::density_cutoff)
-        .def_property_readonly("planned_bytes", &IsaAldaGridScreen::planned_bytes)
-        .def_property_readonly("bound_norms", [](const IsaAldaGridScreen&) {
-            return "omitted_bound bounds both maxabs and Frobenius deviation of the local primitive";
-        })
-        .def_property_readonly("quadrature_policy", [](const IsaAldaGridScreen&) {
-            return "row subset only: original coordinates, weights and order; no renormalization";
-        });
-
-    py::class_<IsaPointChargeOperators, std::shared_ptr<IsaPointChargeOperators>>(m, "IsaPointChargeOperators")
-        .def(py::init<std::shared_ptr<Wavefunction>, bool, SharedMatrix, std::size_t, std::size_t>(),
-             "wavefunction"_a, "caller_converged"_a, "points_bohr"_a, "max_bytes"_a, "max_points"_a)
-        .def("operators", &IsaPointChargeOperators::operators)
-        .def("points", &IsaPointChargeOperators::points)
-        .def_property_readonly("nocc", &IsaPointChargeOperators::nocc)
-        .def_property_readonly("nvir", &IsaPointChargeOperators::nvir)
-        .def_property_readonly("ntransition", &IsaPointChargeOperators::ntransition)
-        .def_property_readonly("npoint", &IsaPointChargeOperators::npoint)
-        .def_property_readonly("ov_order", &IsaPointChargeOperators::ov_order)
-        .def_property_readonly("representation", &IsaPointChargeOperators::representation)
-        .def_property_readonly("convention", &IsaPointChargeOperators::convention)
-        .def_property_readonly("minimum_nuclear_distance_bohr", &IsaPointChargeOperators::minimum_nuclear_distance_bohr)
-        .def_property_readonly("minimum_point_separation_bohr", &IsaPointChargeOperators::minimum_point_separation_bohr)
-        .def_property_readonly("maximum_absolute_element", &IsaPointChargeOperators::maximum_absolute_element)
-        .def_property_readonly("planned_bytes", &IsaPointChargeOperators::planned_bytes);
 
     // PFIT value containers: every property read is an independent snapshot,
     // including nested objects. Assign modified snapshots back explicitly.
@@ -689,17 +617,6 @@ void export_isapol(py::module& m) {
         .def_property_readonly("denominator_cutoff", &IsaPartitionedMultipoles::denominator_cutoff)
         .def_property_readonly("frame", [](const IsaPartitionedMultipoles&) { return "global_cartesian"; })
         .def_property_readonly("units", [](const IsaPartitionedMultipoles&) { return "atomic_units"; });
-    py::class_<IsaDistributedResponse>(m, "IsaDistributedResponse",
-            "Raw -Q C_DF Q^T; site/component axes from partition, atomic units; no symmetrization")
-        .def(py::init<const IsaPartitionedMultipoles&, const std::vector<double>&,
-             const std::vector<std::shared_ptr<Matrix>>&, const std::string&, const std::string&>(),
-             "partition"_a, "frequencies"_a, "coefficient_responses"_a, "representation"_a, "provenance"_a)
-        .def("at_index", &IsaDistributedResponse::at_index, "index"_a)
-        .def_property_readonly("frequencies", &IsaDistributedResponse::frequencies)
-        .def_property_readonly("reciprocity_errors", &IsaDistributedResponse::reciprocity_errors)
-        .def_property_readonly("partition", &IsaDistributedResponse::partition)
-        .def_property_readonly("provenance", &IsaDistributedResponse::provenance)
-        .def_property_readonly("units", [](const IsaDistributedResponse&) { return "atomic_units"; });
     py::enum_<IsaBasisRole>(m, "IsaBasisRole")
         .value("MolecularAux", IsaBasisRole::MolecularAux)
         .value("AtomAux", IsaBasisRole::AtomAux)
@@ -739,29 +656,8 @@ void export_isapol(py::module& m) {
         .def_readonly("charge_penalty", &IsaDrhoCResult::charge_penalty)
         .def_readonly("relative_residual", &IsaDrhoCResult::relative_residual)
         .def_readonly("fitted_electrons", &IsaDrhoCResult::fitted_electrons);
-    py::class_<IsaOvFitResult>(m, "IsaOvFitResult", "Owned native-integral/supplied-orbital OV fit; not native SCF/response")
-        .def_property_readonly("coulomb_metric", &IsaOvFitResult::coulomb_metric)
-        .def_property_readonly("metric", &IsaOvFitResult::metric)
-        .def_property_readonly("rhs", &IsaOvFitResult::rhs)
-        .def_property_readonly("coefficients", &IsaOvFitResult::coefficients)
-        .def_property_readonly("charges", &IsaOvFitResult::charges)
-        .def_property_readonly("nmain", &IsaOvFitResult::nmain)
-        .def_property_readonly("naux", &IsaOvFitResult::naux)
-        .def_property_readonly("noccupied", &IsaOvFitResult::noccupied)
-        .def_property_readonly("nvirtual", &IsaOvFitResult::nvirtual)
-        .def_property_readonly("ntransition", &IsaOvFitResult::ntransition)
-        .def_property_readonly("charge_penalty", &IsaOvFitResult::charge_penalty)
-        .def_property_readonly("offsite_metric_damping", &IsaOvFitResult::offsite_metric_damping)
-        .def_property_readonly("relative_backward_residual", &IsaOvFitResult::relative_backward_residual)
-        .def_property_readonly("lapack_info", &IsaOvFitResult::lapack_info)
-        .def_property_readonly("provenance", &IsaOvFitResult::provenance)
-        .def_property_readonly("representation", &IsaOvFitResult::representation)
-        .def_property_readonly("order", &IsaOvFitResult::order)
-        .def_property_readonly("solver", &IsaOvFitResult::solver);
     py::class_<IsaAuxCoulomb>(m, "IsaAuxCoulomb", "Native Libint2 Coulomb metric and analytic charges; explicit Cartesian or spherical molecular AUX (different declared bases)")
         .def(py::init<const IsaExplicitBasis&>(), "auxiliary"_a)
-        .def("fit_ov", &IsaAuxCoulomb::fit_ov, "orbital"_a, "occupied"_a, "virtuals"_a,
-             "provenance"_a, "charge_penalty"_a=1.0, "offsite_metric_damping"_a=0.0)
         .def("charges", &IsaAuxCoulomb::charges)
         .def("metric", &IsaAuxCoulomb::metric)
         .def("point_potentials", &IsaAuxCoulomb::point_potentials,

@@ -33,11 +33,6 @@ def q(sites, aux=None, **kwargs):
     return core.IsaPartitionedMultipoles(aux or basis(), sites, "synthetic explicit partition", **kwargs)
 
 
-def response(partition, matrices, frequencies=None, representation="fitted_density_coefficients"):
-    return core.IsaDistributedResponse(partition, frequencies or list(range(len(matrices))),
-        [core.Matrix.from_array(np.asarray(c)) for c in matrices], representation, "synthetic coefficient response")
-
-
 def poly2(points):
     x, y, z = np.asarray(points).T
     return np.array([np.ones_like(x), z, x, y, .5*(2*z*z-x*x-y*y),
@@ -101,7 +96,7 @@ def test_dipole_rotation_covariance():
     np.testing.assert_allclose(after, transform @ before, atol=2e-15)
 
 
-def test_partition_unity_translation_and_charge_flow():
+def test_partition_unity_and_charge_flow_translation():
     points = np.array([[.2, -.3, .7], [-.4, .8, -.1], [.6, .2, -.5]])
     origins = np.array([[.1, .3, -.2], [-.7, .4, .1]])
     weights = np.array([.2, .6, -.1])  # signed partition retained
@@ -115,8 +110,6 @@ def test_partition_unity_translation_and_charge_flow():
         translate[1:, 4*a] = origins[a, [2, 0, 1]]
     global_q = q([site(rank=1, points=points)]).values.np
     np.testing.assert_allclose(translate @ part.values.np, global_q, atol=2e-15)
-    alpha = response(part, [[[-2.]]]).at_index(0).np
-    np.testing.assert_allclose(translate @ alpha @ translate.T, 2*global_q@global_q.T, atol=1e-14)
     assert not np.allclose(part.values.np[1:4]+part.values.np[5:8], global_q[1:4])
     assert part.negative_ratios == [1, 0]
 
@@ -130,30 +123,6 @@ def test_rigid_translation_and_site_permutation():
     ab, ba = q([a, b]), q([b, a])
     permutation = list(range(4, 13))+list(range(4))
     np.testing.assert_array_equal(ba.values.np, ab.values.np[permutation])
-
-
-def test_raw_contraction_frequency_and_ownership():
-    aux = basis([(0, 0, 0), (.6, .2, -.1)])
-    s = site(neighbours=(0, 1))
-    part = q([s], aux)
-    original_q = part.values.np.copy()
-    c = np.array([[-2., .3], [.1, -1.]])  # intentionally nonreciprocal
-    source = core.Matrix.from_array(c)
-    out = core.IsaDistributedResponse(part, [0., .7], [source, source],
-                                     "fitted_density_coefficients", "raw operator")
-    expected = -original_q @ c @ original_q.T
-    np.testing.assert_allclose(out.at_index(0).np, expected, atol=2e-15)
-    assert out.reciprocity_errors[0] > 0
-    assert out.frequencies == [0., .7]
-    source.np[:] = 100
-    part.values.np[:] = 50
-    out.at_index(0).np[:] = 20
-    out.partition.values.np[:] = 90
-    s.rank = 0
-    np.testing.assert_array_equal(part.values.np, original_q)
-    np.testing.assert_allclose(out.at_index(1).np, expected, atol=2e-15)
-    with pytest.raises(IndexError):
-        out.at_index(2)
 
 
 def test_gaussian_integrated_moments_through_rank_four():
@@ -174,22 +143,6 @@ def test_gaussian_integrated_moments_through_rank_four():
     expected = np.zeros(25)
     expected[0] = 1.2*(np.pi/.7)**1.5
     np.testing.assert_allclose(actual, expected, atol=2e-14)
-
-
-def test_charge_flow_sum_rule_and_frequency_limit():
-    aux = basis([(0, 0, 0), (.6, .2, -.1)])
-    sites = [site("A", rank=1, ratio=[.2, .4, .6], neighbours=(0, 1)),
-             site("B", rank=1, ratio=[.8, .6, .4], neighbours=(0, 1))]
-    part = q(sites, aux)
-    total_charge_leg = part.values.np[[0, 4]].sum(axis=0)
-    neutral_transition = np.array([-total_charge_leg[1], total_charge_leg[0]])
-    c = -np.outer(neutral_transition, neutral_transition)
-    out = response(part, [c, c/(1+1.e6)], [0., 1000.])
-    alpha = out.at_index(0).np
-    np.testing.assert_allclose(alpha[[0, 4]].sum(axis=0), 0., atol=3e-14)
-    np.testing.assert_allclose(alpha[:, [0, 4]].sum(axis=1), 0., atol=3e-14)
-    np.testing.assert_allclose(out.at_index(1).np, alpha/(1+1.e6), atol=1e-19)
-    assert out.reciprocity_errors[0] < 1e-14
 
 
 def test_screening_and_denominator_diagnostics():
@@ -244,18 +197,6 @@ def test_invalid_partition_contracts():
         core.IsaPartitionedMultipoles(basis(), [site()], "")
 
 
-@pytest.mark.parametrize("frequency", [-1., np.inf, np.nan])
-def test_invalid_frequency(frequency):
-    with pytest.raises(ValueError):
-        response(q([site()]), [[[-1.]]], [frequency])
-
-
-@pytest.mark.parametrize("matrix", [[[np.nan]], [[np.inf]], np.eye(2)])
-def test_invalid_response_matrix(matrix):
-    with pytest.raises(ValueError):
-        response(q([site()]), [matrix])
-
-
 @pytest.mark.parametrize("kind", ["ratio", "weight", "harmonic", "accumulation"])
 def test_finite_partition_overflow(kind):
     s = site(rank=4, points=[[0., 0., 0.], [0., 0., 0.]])
@@ -271,17 +212,6 @@ def test_finite_partition_overflow(kind):
     s.samples = sam
     with pytest.raises(ValueError, match="[Nn]onfinite"):
         q([s], denominator_cutoff=0.)
-
-
-@pytest.mark.parametrize("coefficient", [1.e120, 1.e250])
-def test_finite_response_gemm_overflow(coefficient):
-    s = site(rank=0, points=[[0., 0., 0.]])
-    sam = s.samples
-    sam.weights = [1.e100]
-    s.samples = sam
-    part = q([s])
-    with pytest.raises(ValueError, match="Nonfinite"):
-        response(part, [[[coefficient]]])
 
 
 def test_partial_auxiliary_screening():
@@ -303,27 +233,3 @@ def test_cartesian_p_auxiliary_quadrature():
     p = np.array(s.samples.points)
     values = p*(1.2*np.exp(-.7*np.sum(p*p, axis=1)))[:, None]
     np.testing.assert_allclose(q([s], aux).values.np, poly2(p)@values, atol=2e-15)
-
-
-def test_null_symmetry_and_provenance_errors():
-    part = q([site()])
-    kwargs = ("fitted_density_coefficients", "explicit")
-    with pytest.raises(ValueError, match="Null"):
-        core.IsaDistributedResponse(part, [0.], [None], *kwargs)
-    dims = core.Dimension.from_list([1, 1])
-    matrix = core.Matrix("symmetry blocks", dims, dims)
-    with pytest.raises(ValueError, match="symmetry block"):
-        core.IsaDistributedResponse(part, [0.], [matrix], *kwargs)
-    with pytest.raises(ValueError, match="provenance"):
-        core.IsaDistributedResponse(part, [0.], [core.Matrix.from_array(np.ones((1, 1)))],
-                                    "fitted_density_coefficients", "")
-
-
-def test_wrong_representation_and_frequency_count():
-    part = q([site()])
-    with pytest.raises(ValueError, match="no implicit metric"):
-        response(part, [[[-1.]]], representation="fdds_coulomb_auxiliary")
-    with pytest.raises(ValueError):
-        response(part, [[[-1.]]], [0., 1.])
-    with pytest.raises(ValueError):
-        core.IsaDistributedResponse(part, [], [], "fitted_density_coefficients", "empty")

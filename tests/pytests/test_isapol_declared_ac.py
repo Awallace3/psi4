@@ -23,7 +23,6 @@ from psi4 import core
 from psi4.driver.p4util import OptionsState
 from psi4.driver.procrouting import isapol_native_ac as ac
 from psi4.driver.procrouting import isapol_native_correction as correction
-from psi4.driver.procrouting import isapol_native_response as response
 from psi4.driver.procrouting.scf_proc.scf_iterator import _scf_state_signature
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -381,33 +380,6 @@ def test_validator_refuses_a_malformed_or_absent_record(pristine):
 
 
 # ------------------------------------------------------------------- the routing
-def test_response_factory_routes_the_declared_policy(fresh):
-    produced = ac.declared_ac_orbitals(fresh, DECL)
-    ac.apply_declared_ac(fresh, produced)
-    kwargs = dict(caller_converged=True, kernel='alda_slater_pw92', exact_exchange=.25,
-                  local_scale=.75, scf_correction='DECLARED_MULTPOLE_AC')
-    with pytest.raises(ValueError, match='requires an explicit ALDA response'):
-        response.native_response_from_wavefunction(
-            fresh, **{**kwargs, 'kernel': 'no_local', 'local_scale': 0.},
-            ac_declaration=DECL)
-    with pytest.raises(TypeError, match='explicit AcDeclaration'):
-        response.native_response_from_wavefunction(fresh, grid=np.ones((1, 4)), **kwargs)
-    # An independent small quadrature; not a production integration claim.
-    go = core.IsaGridOptions()
-    go.radial_points, go.spherical_points = 12, 50
-    grid = core.IsaGrid(fresh.molecule().clone(), go)
-    points = np.column_stack((grid.x(), grid.y(), grid.z(), grid.w()))
-    result = response.native_response_from_wavefunction(fresh, grid=points,
-                                                        ac_declaration=DECL, **kwargs)
-    assert np.isfinite(result.at_frequency(.4).raw_coupled).all()
-    np.testing.assert_array_equal(np.asarray(result.provider.orbitals()), produced.orbitals)
-    np.testing.assert_array_equal(np.asarray(result.provider.energies()), produced.energies)
-    owned = result.correction_provenance
-    assert owned == ac.validate_declared_ac(fresh, DECL)
-    assert 'not an SCF seal' in result.convergence_evidence
-    assert 'seal' not in owned.response_description
-
-
 # ------------------------------------------- the surface, and what it cannot be
 def test_the_option_surface_was_widened_only_together_with_its_declaration():
     """A policy string alone would not have been an exposure.

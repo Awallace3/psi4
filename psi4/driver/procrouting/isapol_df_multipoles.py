@@ -303,14 +303,7 @@ class DFCentreMultipoles:
         return out
 
     def partition(self):
-        """The Q as a ``core.IsaPartitionedMultipoles`` supplied-values record.
-
-        Going through the shipped class rather than keeping the array loose means
-        the DF-centre rule reaches ``IsaDistributedResponse`` -- and therefore the
-        same ``-Q C Q^T`` arithmetic, the same finiteness checks and the same
-        reciprocity diagnostic -- as the stockholder rule, with no second
-        implementation of the contraction anywhere.
-        """
+        """The Q as a ``core.IsaPartitionedMultipoles`` supplied-values record."""
         return core.IsaPartitionedMultipoles(core.Matrix.from_array(self.values),
                                              self.sites(), self.representation,
                                              self.provenance)

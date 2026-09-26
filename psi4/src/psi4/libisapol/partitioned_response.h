@@ -57,7 +57,6 @@ class IsaPartitionedMultipoles {
     std::string provenance() const { return provenance_; }
     double denominator_cutoff() const { return cutoff_; }
  private:
-    friend class IsaDistributedResponse;
     void declare_sites(const std::vector<IsaMultipoleSite>& sites);
     std::shared_ptr<Matrix> q_;
     std::vector<int> offsets_, ranks_;
@@ -67,27 +66,6 @@ class IsaPartitionedMultipoles {
     std::string provenance_;
     double cutoff_;
     std::string representation_ = "fitted_density_coefficients";
-};
-/// Alpha=-Q response Q^T in atomic units. Input representation MUST explicitly
-/// match Q: fitted_density_coefficients or direct_ov. No metric/sign/spin
-/// conversion, neutrality repair, or symmetrization.
-/// Output matrices use the partition's concatenated (site,component) axes.
-class IsaDistributedResponse {
- public:
-    IsaDistributedResponse(const IsaPartitionedMultipoles& partition,
-        const std::vector<double>& frequencies,
-        const std::vector<std::shared_ptr<Matrix>>& coefficient_responses,
-        const std::string& representation, const std::string& provenance);
-    std::shared_ptr<Matrix> at_index(size_t index) const;
-    std::vector<double> frequencies() const { return frequencies_; }
-    std::vector<double> reciprocity_errors() const { return reciprocity_; }
-    std::string provenance() const { return provenance_; }
-    IsaPartitionedMultipoles partition() const { return partition_; }
- private:
-    IsaPartitionedMultipoles partition_;
-    std::vector<double> frequencies_, reciprocity_;
-    std::vector<std::shared_ptr<Matrix>> alpha_;
-    std::string provenance_;
 };
 } }
 #endif

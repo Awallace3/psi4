@@ -92,7 +92,6 @@ def test_default_log_is_silent_and_still_accepts_every_call():
     log.table('t', ('h',), [(1,)])
     log.stage('s', (('p', 1),))
     log.stage_end()
-    log.failures(())
     assert [name for name, _ in log.stages] == ['s']
 
 
@@ -140,20 +139,6 @@ def test_stage_banner_lists_parameters_and_closes_the_previous_stage():
 def test_stage_end_without_an_open_stage_is_a_noop():
     log, cap = _log(1)
     log.stage_end()
-    assert cap.text == ''
-
-
-def test_failures_are_printed_verbatim():
-    from psi4.driver.procrouting.isapol_native import StageFailure
-    log, cap = _log(1)
-    log.failures((StageFailure('LW', .5, 'RuntimeError', 'postcondition exceeds tolerance'),))
-    assert 'postcondition exceeds tolerance' in cap.text
-    assert 'no stage was retried or relaxed' in cap.text
-
-
-def test_no_failures_prints_nothing():
-    log, cap = _log(1)
-    log.failures(())
     assert cap.text == ''
 
 

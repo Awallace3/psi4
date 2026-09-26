@@ -8,8 +8,7 @@ two-electron operators and a screened fitted-density ALDA kernel with eta-zero
 kernel/target legs; separately fitted anchor legs enter production LW. This
 declared DF-centre model does NOT perform or infer an ISA-A partition.
 
-Existing native_properties/ATOMIC_REFINED defaults and resource limits are
-unchanged. This opt-in Python route has its own cumulative resource admission.
+The route has its own cumulative resource admission.
 """
 from dataclasses import dataclass
 import hashlib

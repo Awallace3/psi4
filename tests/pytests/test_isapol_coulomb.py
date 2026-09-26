@@ -219,7 +219,7 @@ def test_streamed_plain_df_admission_and_shell_coverage():
 @pytest.mark.parametrize("representation", [
     core.IsaBasisRepresentation.Cartesian, core.IsaBasisRepresentation.Spherical])
 @pytest.mark.parametrize("penalty,damping", [(0., 0.), (1000., 0.), (1000., .0005)])
-def test_tiled_constrained_ov_matches_native_fit(representation, penalty, damping):
+def test_tiled_constrained_ov_matches_dense_fit(representation, penalty, damping):
     from psi4.driver.procrouting.isapol_native_factors import (
         native_plain_df_operators, native_constrained_ov)
     centres = [[0., 0., 0.], [.6, -.4, .3]]
@@ -236,13 +236,19 @@ def test_tiled_constrained_ov_matches_native_fit(representation, penalty, dampin
         nocc=2, shell_count=3, exact_exchange=.25, tile_columns=4)
     original_h1 = ops.apply_h1(np.eye(6))
     original_h2 = ops.apply_h2(np.eye(6))
-    expected = core.IsaAuxCoulomb(aux).fit_ov(
-        main, core.Matrix.from_array(coefficients[:, :2]),
-        core.Matrix.from_array(coefficients[:, 2:]), "synthetic explicit coefficient test",
-        penalty, damping)
+    # Dense reference: A = (1-eta offsite) J + lambda q q^T, occupied-fast RHS.
+    integrals = core.IsaAuxCoulomb(aux)
+    q = np.asarray(integrals.charges())
+    centre = np.concatenate([[c]*w for _, w, c, _ in aux.shell_layout()])
+    metric = np.where(centre[:, None] == centre[None, :], 1., 1.-damping)*integrals.metric().np
+    metric += penalty*np.outer(q, q)
+    b = integrals.three_center(main).np.reshape(len(q), 6, 6)
+    occ, vir = coefficients[:, :2], coefficients[:, 2:]
+    rhs = np.array([(occ.T @ block @ vir).T.reshape(-1) for block in b]).T
+    expected = np.linalg.solve(metric, rhs.T).T
     fitted = native_constrained_ov(ops, charge_penalty=penalty,
                                    offsite_metric_damping=damping, tile_columns=4)
-    np.testing.assert_allclose(fitted.coefficients, expected.coefficients.np,
+    np.testing.assert_allclose(fitted.coefficients, expected,
                                atol=2e-11, rtol=2e-10)
     assert fitted.relative_backward_residual <= 1.e-10
     assert fitted.charge_penalty == penalty

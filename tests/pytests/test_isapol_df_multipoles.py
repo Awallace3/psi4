@@ -191,25 +191,6 @@ def test_the_supplied_values_record_carries_the_declared_axes(declared, analytic
     assert all(site.samples is None or not site.samples.points for site in analytic.sites())
 
 
-def test_the_df_centre_q_reaches_the_shipped_minus_q_c_qt(analytic):
-    """``alpha = -Q C Q^T`` through the shipped class, bitwise against numpy.
-
-    ``-C(i xi)`` is positive semidefinite, which is why a negative site
-    isotropic scalar is a broken model rather than an unconverged one; that is
-    the premise ``site_isotropic_gate`` enforces, so it is checked here.
-    """
-    q = analytic.values
-    rng = np.random.default_rng(3)
-    legs = rng.normal(size=(q.shape[1], 4))
-    coupled = legs @ legs.T
-    response = core.IsaDistributedResponse(analytic.partition(), [0.],
-                                           [core.Matrix.from_array(coupled)],
-                                           dfm.REPRESENTATION, 'reduced in-repo probe')
-    np.testing.assert_array_equal(np.asarray(response.at_index(0)), -(q @ coupled) @ q.T)
-    assert tuple(response.frequencies) == (0.,)
-    assert max(response.reciprocity_errors) < 1.e-14
-
-
 def test_the_site_isotropic_gate_refuses_a_negative_static_site(analytic):
     """A negative site response must not reach a polarizability or a C_n.
 

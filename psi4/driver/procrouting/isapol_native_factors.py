@@ -199,7 +199,7 @@ def native_constrained_ov(operators, *, charge_penalty, offsite_metric_damping,
     """Fit retained raw native OV integrals against the declared damped metric.
 
     A[P,Q] = (1-eta*(1-same_centre))*J[P,Q] + lambda*q[P]*q[Q].
-    Zero target charge is the declared OV constraint, as in native ``fit_ov``.
+    Zero target charge is the declared OV constraint.
     The returned matrix is (nov,naux), row a*nocc+i; the unchanged plain
     factors continue to serve the two-electron operators. This does not attach
     kernel legs or rebuild Hessians when fitting a different eta.

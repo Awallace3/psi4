@@ -1,6 +1,5 @@
 list(APPEND sources
   native_response.cc
-  point_response.cc
   casimir_grid.cc
   pfit.cc
   fit_points.cc
@@ -14,7 +13,6 @@ list(APPEND sources
   harmonic_transform.cc
   aux_coulomb.cc
   orbital_coulomb.cc
-  ov_fit.cc
   isa_grid.cc
   isa_fit.cc
   isa_sweep.cc
@@ -28,7 +26,7 @@ list(APPEND sources
 
 # Keep the heavy Libint2 engine implementation out of the Gaussian-kernel unity TU.
 set_source_files_properties(aux_coulomb.cc orbital_coulomb.cc harmonic_transform.cc PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
-set_source_files_properties(native_response.cc point_response.cc PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+set_source_files_properties(native_response.cc PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 psi4_add_module(lib isapol sources)
 
 target_link_libraries(isapol

@@ -3,8 +3,7 @@
 
 Faithfully refactored from .pi/audit/measure-native-ov-fit.py; equations, multiplication
 association, screening and original forward/backward metrics are unchanged.
-Opt-in --producer cpp measures the bound native-integral/supplied-orbital C++ fit;
-NumPy remains the default/control. Neither producer supplies native SCF/H1/H2.
+The OV fit is a NumPy solve; nothing here supplies native SCF/H1/H2.
 """
 import argparse
 import importlib.util
@@ -21,10 +20,7 @@ ORIGINAL_SOURCE = 'measure-native-ov-fit.py'
 ORIGINAL_SHA256 = '79f16d0298db0475ce16022d97e2699306810f6f11be4878b7107de2c7bbbea0'
 
 
-def _producer_identity(producer):
-    profiles.require(producer in ('numpy', 'cpp'), 'Unknown OV producer')
-    return dict(producer=producer,
-                producer_api=('psi4.core.IsaAuxCoulomb.fit_ov' if producer == 'cpp' else 'numpy.linalg.solve'),
+PRODUCER = dict(producer='numpy', producer_api='numpy.linalg.solve',
                 representation='fitted_density_coefficients')
 
 
@@ -40,37 +36,17 @@ def _basis_identity(descriptor):
             for key, value in descriptor.items()}
 
 
-def _fit(p, main, occ, vir, penalty, psi4, producer, provenance):
-    """Select the actual producer; CPP operands are measured, never re-solved."""
-    _producer_identity(producer)
-    if producer == 'cpp':
-        result = p.fit_ov(main, psi4.core.Matrix.from_array(occ),
-                          psi4.core.Matrix.from_array(vir), provenance, penalty)
-        profiles.require(result.representation == 'fitted_density_coefficients' and result.lapack_info == 0,
-                         'Invalid C++ OV result representation/solve status')
-        profiles.require(result.provenance == provenance and result.charge_penalty == penalty and
-                         result.nmain == occ.shape[0] and result.noccupied == occ.shape[1] and
-                         result.nvirtual == vir.shape[1] and result.ntransition == occ.shape[1]*vir.shape[1] and
-                         result.order == 'p=a+noccupied*r; occupied-fast', 'C++ OV result identity mismatch')
-        q = np.asarray(result.charges).copy()
-        j, A, rhs, d = (getattr(result, key).np.copy() for key in ('coulomb_metric', 'metric', 'rhs', 'coefficients'))
-        m, nov = len(q), occ.shape[1]*vir.shape[1]
-        profiles.require(result.naux == m and j.shape == A.shape == (m,m) and
-                         rhs.shape == d.shape == (nov,m), 'C++ OV result dimensions mismatch')
-        profiles.require(all(np.isfinite(x).all() for x in (q,j,A,rhs,d)), 'Nonfinite C++ OV operands')
-        return q, j, A, rhs, d, dict(lapack_info=result.lapack_info, solver=result.solver,
-                                    relative_backward_residual=result.relative_backward_residual,
-                                    provenance=result.provenance)
+def _fit(p, main, occ, vir, penalty):
     q=np.asarray(p.charges());j=p.metric().np.copy()
     b=p.three_center(main).np.copy().reshape(len(q),occ.shape[0],occ.shape[0])
     # Fixed before measurement: left-associated Cocc.T @ B[k] @ Cvir, no spin factor.
     rhs=np.asarray([(occ.T@block@vir).T.reshape(-1) for block in b]).T
     A=j+(penalty*q[:,None])*q[None,:]
     d=np.linalg.solve(A,rhs.T).T
-    return q, j, A, rhs, d, None
+    return q, j, A, rhs, d
 
 
-def _measure(directory, checkpoint, psi4, r, producer='numpy'):
+def _measure(directory, checkpoint, psi4, r):
     events,snapshots,projection,policy,paths=r.associate(directory)
     orb=next(x for x in events if x['kind']=='ORBITALS')
     state=next(x for x in events if x['kind']=='DIAGONAL_ENERGIES')
@@ -89,8 +65,7 @@ def _measure(directory, checkpoint, psi4, r, producer='numpy'):
                           MAIN=_basis_identity(state['bases']['MAIN']),
                           AUX=_basis_identity(state['bases']['AUX']),
                           reference_D=_array_identity(snapshots[0]['d']['matrix']))
-    provenance = json.dumps(input_identity, sort_keys=True, allow_nan=False)
-    q,j,A,rhs,d,cpp_diagnostics = _fit(p,main,occ,vir,penalty,psi4,producer,provenance)
+    q,j,A,rhs,d = _fit(p,main,occ,vir,penalty)
     fit_time=time.perf_counter()-start
     reference=snapshots[0]['d']['matrix']
     def error(a,b):
@@ -132,23 +107,18 @@ def _measure(directory, checkpoint, psi4, r, producer='numpy'):
            'No rescaling, symmetrization, regularization or tolerance changes','No native response/end-to-end acceptance'])
     report['passed']=all(e['max_scaled']<=1e-9 for e in errors.values()) and pointwise<=1e-9 and residual<=1e-9 and report['relative_abs_weighted_density_l2']<=1e-9
 
-    report.update(_producer_identity(producer))
+    report.update(PRODUCER)
     report['compared_input_lineage'] = input_identity
     report['operand_identity'] = {key:_array_identity(x) for key,x in zip(('q','J','A','T','D'), (q,j,A,rhs,d))}
-    if producer == 'cpp':
-        report['cpp_diagnostics'] = cpp_diagnostics
-        report['scope'] = 'native-integral/supplied-orbital C++ OV fit; not native SCF/H1/H2/response'
-        report['limitations'][0] = 'Supplied MAIN orbitals; no native SCF or reference-forward acceptance inferred from LU success'
     return report, d
 
 
-def measure(directory, checkpoint, *, reference_replay, profile='strict', producer='numpy'):
+def measure(directory, checkpoint, *, reference_replay, profile='strict'):
     """Execute a fresh measurement. No output side effects; returns report, coefficients.
 
     Reference replay remains strict and is independently recomputed. Production
     comparisons require an installed/staged Psi4 extension, never a source shim.
     """
-    identity = _producer_identity(producer)
     profiles.require(profile in profiles.PROFILES, 'Unknown profile')
     directory, checkpoint = Path(directory).resolve(strict=True), Path(checkpoint).resolve(strict=True)
     reference_replay = Path(reference_replay).resolve(strict=True)
@@ -160,12 +130,7 @@ def measure(directory, checkpoint, *, reference_replay, profile='strict', produc
     r = profiles.load('replay_response')
     validation = r.replay(directory)
     profiles.require(validation['passed'] is True, 'Strict reference replay failed')
-    # Keep the legacy default call shape for existing test doubles.
-    report, coefficients = (_measure(directory, checkpoint, psi4, r) if producer == 'numpy' else
-                            _measure(directory, checkpoint, psi4, r, producer='cpp'))
-    if producer == 'cpp':
-        profiles.require(report.get('producer_api') == identity['producer_api'] and
-                         'cpp_diagnostics' in report, 'C++ OV producer was not executed')
+    report, coefficients = _measure(directory, checkpoint, psi4, r)
     # Fail closed on nonfinite diagnostics as well as acceptance metrics.
     profiles.json_bytes(report)
     metrics = {k: v['max_scaled'] for k, v in report['errors'].items()}
@@ -189,24 +154,17 @@ def measure(directory, checkpoint, *, reference_replay, profile='strict', produc
                   broader_pipeline=dict(status='missing-implementation', passed=False,
                                         missing_implementations=['native SCF', "production C++ OV API",  'native response operator producers', 'published localization'],
                                         response_transition_leg_diagnostic='deferred: dimensional/representation bridge through captured H1/H2 not proven here'))
-    report.update(identity)
-    if producer == 'cpp':
-        report['scope'] = 'native-integral/supplied-orbital C++ OV fit; not native SCF/H1/H2/response'
-        report['broader_pipeline']['missing_implementations'].remove('production C++ OV API')
+    report.update(PRODUCER)
     return report, coefficients
 
 
-def run(directory, checkpoint, report_path, coefficients_path, *, reference_replay, profile='strict', producer='numpy'):
+def run(directory, checkpoint, report_path, coefficients_path, *, reference_replay, profile='strict'):
     """Preflight both destinations before measuring; write exclusively, never overwrite."""
     profiles.preflight([report_path, coefficients_path])
     # Outputs inside input directories would change the snapshotted lineage.
     for path in (report_path, coefficients_path):
         profiles.require(not Path(path).resolve().is_relative_to(Path(directory).resolve()), 'Output must be outside reference input directory')
-    _producer_identity(producer)
-    kwargs = dict(reference_replay=reference_replay, profile=profile)
-    if producer != 'numpy':
-        kwargs['producer'] = producer
-    report, coefficients = measure(directory, checkpoint, **kwargs)
+    report, coefficients = measure(directory, checkpoint, reference_replay=reference_replay, profile=profile)
     buffer = io.BytesIO()
     np.save(buffer, coefficients, allow_pickle=False)
     coefficient_payload = buffer.getvalue()
@@ -227,11 +185,9 @@ def main():
     parser.add_argument('--report', type=Path, required=True)
     parser.add_argument('--coefficients', type=Path, required=True)
     parser.add_argument('--profile', choices=profiles.PROFILES, default='strict')
-    parser.add_argument('--producer', choices=('numpy', 'cpp'), default='numpy',
-                        help='NumPy control (default) or bound native-integral/supplied-orbital C++ fit')
     args = parser.parse_args()
     report = run(args.directory, args.checkpoint, args.report, args.coefficients, reference_replay=args.reference_replay,
-                 profile=args.profile, producer=args.producer)
+                 profile=args.profile)
     print(json.dumps(report, indent=2, allow_nan=False))
     if not report['selected_profile_passed']:
         raise SystemExit('Selected native comparison profile failed; fresh evidence retained')

@@ -189,15 +189,6 @@ class StageLog:
         self._open, self._started = None, None
         self.line('Stage complete: %s (%.2f s)' % (name, seconds), level=level)
 
-    def failures(self, records, level=1):
-        """Print recorded stage failures verbatim; never summarize them away."""
-        records = tuple(records)
-        if not records:
-            return
-        self.table('Recorded stage failures (no stage was retried or relaxed):',
-                   ('stage', 'frequency', 'exception', 'message'),
-                   [(f.stage, f.frequency, f.exception_type, f.message) for f in records],
-                   level=level)
 
 
 def silent():

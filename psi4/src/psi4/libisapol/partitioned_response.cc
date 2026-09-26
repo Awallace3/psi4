@@ -149,36 +149,4 @@ IsaPartitionedMultipoles::IsaPartitionedMultipoles(const IsaExplicitBasis& auxil
     property_finite(*q_);
 }
 std::shared_ptr<Matrix> IsaPartitionedMultipoles::values() const { return q_->clone(); }
-IsaDistributedResponse::IsaDistributedResponse(const IsaPartitionedMultipoles& partition,
-        const std::vector<double>& frequencies, const std::vector<std::shared_ptr<Matrix>>& responses,
-        const std::string& representation, const std::string& provenance)
-    : partition_(partition), frequencies_(frequencies), provenance_(provenance) {
-    property_require(representation == partition.representation_, "Distributed response representation must match partition columns; no implicit metric conversion");
-    property_require(!provenance.empty(), "Explicit response provenance is required");
-    property_require(!frequencies.empty() && frequencies.size() == responses.size(), "Frequency/response dimensions disagree");
-    const int n = partition.q_->nrow(), k = partition.q_->ncol();
-    for (size_t f = 0; f < frequencies.size(); ++f) {
-        property_require(std::isfinite(frequencies[f]) && frequencies[f] >= 0, "Imaginary frequencies must be finite and nonnegative");
-        property_require(responses[f] != nullptr, "Null coefficient response");
-        property_finite(*responses[f]);
-        property_require(responses[f]->nrow() == k && responses[f]->ncol() == k, "Coefficient response AUX dimensions disagree");
-        auto qc = std::make_shared<Matrix>("Q C_DF", n, k);
-        qc->gemm(false, false, 1.0, partition.q_, responses[f], 0.0);
-        property_finite(*qc);
-        auto alpha = std::make_shared<Matrix>("Distributed multipole response", n, n);
-        alpha->gemm(false, true, -1.0, qc, partition.q_, 0.0);
-        property_finite(*alpha);
-        double scale = 1.0, defect = 0.0;
-        for (int i = 0; i < n; ++i) for (int j = 0; j < n; ++j) {
-            scale = std::max(scale, std::abs(alpha->get(i,j)));
-            defect = std::max(defect, std::abs(alpha->get(i,j)-alpha->get(j,i)));
-        }
-        property_require(std::isfinite(defect), "Nonfinite reciprocity diagnostic");
-        reciprocity_.push_back(defect/scale); alpha_.push_back(alpha);
-    }
-}
-std::shared_ptr<Matrix> IsaDistributedResponse::at_index(size_t index) const {
-    if (index >= alpha_.size()) throw std::out_of_range("Distributed response frequency index out of range");
-    return alpha_[index]->clone();
-}
 } }
