@@ -944,6 +944,189 @@ void VBase::prepare_vv10_cache(DFTGrid& nlgrid, SharedMatrix D,
         offset += csize;
     }
 }
+std::map<std::string, double> VBase::vv10_partition(SharedMatrix DA, SharedMatrix DB, SharedMatrix DAB) {
+    timer_on("V: VV10 Partition");
+
+    std::map<std::string, std::string> opt_map;
+    opt_map["DFT_PRUNING_SCHEME"] = "FLAT";
+    std::map<std::string, int> opt_int_map;
+    opt_int_map["DFT_RADIAL_POINTS"] = options_.get_int("DFT_VV10_RADIAL_POINTS");
+    opt_int_map["DFT_SPHERICAL_POINTS"] = options_.get_int("DFT_VV10_SPHERICAL_POINTS");
+    DFTGrid nlgrid = DFTGrid(primary_->molecule(), primary_, opt_int_map, opt_map, options_);
+
+    const auto& blocks = nlgrid.blocks();
+    std::vector<size_t> offset(blocks.size() + 1, 0);
+    for (size_t Q = 0; Q < blocks.size(); Q++) offset[Q + 1] = offset[Q] + blocks[Q]->npoints();
+    const size_t ngrid = offset.back();
+
+    // => Unsieved densities and gradients of A, B and AB on one grid <= //
+    std::vector<double> gw(ngrid), gx(ngrid), gy(ngrid), gz(ngrid);
+    std::vector<std::vector<double>> rho(3, std::vector<double>(ngrid));
+    std::vector<std::vector<double>> drho(9, std::vector<double>(ngrid));
+    const SharedMatrix Ds[3] = {DA, DB, DAB};
+    for (int d = 0; d < 3; d++) {
+        std::vector<std::shared_ptr<RKSFunctions>> workers;
+        for (size_t t = 0; t < num_threads_; t++) {
+            auto worker = std::make_shared<RKSFunctions>(primary_, nlgrid.max_points(), nlgrid.max_functions());
+            worker->set_ansatz(1);
+            worker->set_pointers(Ds[d]);
+            workers.push_back(worker);
+        }
+        int rank = 0;
+#pragma omp parallel for private(rank) schedule(guided) num_threads(num_threads_)
+        for (size_t Q = 0; Q < blocks.size(); Q++) {
+#ifdef _OPENMP
+            rank = omp_get_thread_num();
+#endif
+            auto block = blocks[Q];
+            workers[rank]->compute_points(block);
+            const double* r = workers[rank]->point_value("RHO_A")->pointer();
+            const double* rx = workers[rank]->point_value("RHO_AX")->pointer();
+            const double* ry = workers[rank]->point_value("RHO_AY")->pointer();
+            const double* rz = workers[rank]->point_value("RHO_AZ")->pointer();
+            for (size_t p = 0; p < block->npoints(); p++) {
+                const size_t P = offset[Q] + p;
+                rho[d][P] = r[p];
+                drho[3 * d][P] = rx[p];
+                drho[3 * d + 1][P] = ry[p];
+                drho[3 * d + 2][P] = rz[p];
+                if (d == 0) {
+                    gw[P] = block->w()[p];
+                    gx[P] = block->x()[p];
+                    gy[P] = block->y()[p];
+                    gz[P] = block->z()[p];
+                }
+            }
+        }
+    }
+
+    // => Aligned point set: keep a point if the sum or the dimer density passes the cutoff <= //
+    // Each density is zeroed below the cutoff, and its omega_0/kappa are set to a harmless 1,
+    // so every piece reproduces the single-density sieve of vv10_nlc exactly.
+    const double cut = vv10_rho_cutoff_;
+    const double Wp_pref = (4.0 / 3.0) * M_PI;
+    const double Wg_pref = functional_->vv10_c();
+    const double kappa_pref = (1.5 * functional_->vv10_b() * M_PI) / std::pow(9.0 * M_PI, 1.0 / 6.0);
+    auto params = [&](double r, double gam, double& w0, double& kappa) {
+        if (r < cut) {
+            w0 = 1.0;
+            kappa = 1.0;
+            return;
+        }
+        const double Wg_tmp = gam / (r * r);
+        w0 = std::sqrt(Wp_pref * r + Wg_pref * Wg_tmp * Wg_tmp);
+        kappa = kappa_pref * std::pow(r, 1.0 / 6.0);
+    };
+    auto gamma = [&](int d, size_t P) {
+        return drho[3 * d][P] * drho[3 * d][P] + drho[3 * d + 1][P] * drho[3 * d + 1][P] +
+               drho[3 * d + 2][P] * drho[3 * d + 2][P];
+    };
+
+    // Densities are premultiplied by the grid weight. Suffix = mask/param set:
+    // own (A with A, B with B), S (sum-density params), D (dimer-density params).
+    std::vector<double> X, Y, Z, rA, rB, sA, sB, dA, dB, dAB;
+    std::vector<double> w0A, kA, w0B, kB, w0S, kS, w0D, kD;
+    for (size_t P = 0; P < ngrid; P++) {
+        const double ra = rho[0][P], rb = rho[1][P], rab = rho[2][P], rs = ra + rb;
+        if (rs < cut && rab < cut) continue;
+        const double w = gw[P];
+        X.push_back(gx[P]);
+        Y.push_back(gy[P]);
+        Z.push_back(gz[P]);
+        rA.push_back(ra < cut ? 0.0 : w * ra);
+        rB.push_back(rb < cut ? 0.0 : w * rb);
+        sA.push_back(rs < cut ? 0.0 : w * ra);
+        sB.push_back(rs < cut ? 0.0 : w * rb);
+        dA.push_back(rab < cut ? 0.0 : w * ra);
+        dB.push_back(rab < cut ? 0.0 : w * rb);
+        dAB.push_back(rab < cut ? 0.0 : w * rab);
+
+        double w0, kappa;
+        params(ra, gamma(0, P), w0, kappa);
+        w0A.push_back(w0);
+        kA.push_back(kappa);
+        params(rb, gamma(1, P), w0, kappa);
+        w0B.push_back(w0);
+        kB.push_back(kappa);
+        const double sx = drho[0][P] + drho[3][P], sy = drho[1][P] + drho[4][P], sz = drho[2][P] + drho[5][P];
+        params(rs, sx * sx + sy * sy + sz * sz, w0, kappa);
+        w0S.push_back(w0);
+        kS.push_back(kappa);
+        params(rab, gamma(2, P), w0, kappa);
+        w0D.push_back(w0);
+        kD.push_back(kappa);
+    }
+    const size_t npoints = X.size();
+
+    // => One fused double sum over every kernel <= //
+    double K_A = 0.0, K_B = 0.0, K_cross = 0.0;
+    double KS_AA = 0.0, KS_BB = 0.0, KS_AB = 0.0;
+    double KD_AA = 0.0, KD_BB = 0.0, KD_AB = 0.0, KD_DD = 0.0;
+#pragma omp parallel for schedule(guided) num_threads(num_threads_) \
+    reduction(+ : K_A, K_B, K_cross, KS_AA, KS_BB, KS_AB, KD_AA, KD_BB, KD_AB, KD_DD)
+    for (size_t i = 0; i < npoints; i++) {
+        double tAA = 0.0, tBB = 0.0, tAB = 0.0, uA = 0.0, uB = 0.0, vA = 0.0, vB = 0.0, vD = 0.0;
+#pragma omp simd reduction(+ : tAA, tBB, tAB, uA, uB, vA, vB, vD)
+        for (size_t j = 0; j < npoints; j++) {
+            const double d_x = X[i] - X[j];
+            const double d_y = Y[i] - Y[j];
+            const double d_z = Z[i] - Z[j];
+            const double R2 = d_x * d_x + d_y * d_y + d_z * d_z;
+            const double gAi = w0A[i] * R2 + kA[i], gAj = w0A[j] * R2 + kA[j];
+            const double gBi = w0B[i] * R2 + kB[i], gBj = w0B[j] * R2 + kB[j];
+            const double gSi = w0S[i] * R2 + kS[i], gSj = w0S[j] * R2 + kS[j];
+            const double gDi = w0D[i] * R2 + kD[i], gDj = w0D[j] * R2 + kD[j];
+            tAA += rA[j] * (-1.5 / (gAi * gAj * (gAi + gAj)));
+            tBB += rB[j] * (-1.5 / (gBi * gBj * (gBi + gBj)));
+            tAB += rB[j] * (-1.5 / (gAi * gBj * (gAi + gBj)));
+            const double phiS = -1.5 / (gSi * gSj * (gSi + gSj));
+            uA += sA[j] * phiS;
+            uB += sB[j] * phiS;
+            const double phiD = -1.5 / (gDi * gDj * (gDi + gDj));
+            vA += dA[j] * phiD;
+            vB += dB[j] * phiD;
+            vD += dAB[j] * phiD;
+        }
+        K_A += rA[i] * tAA;
+        K_B += rB[i] * tBB;
+        K_cross += rA[i] * tAB;
+        KS_AA += sA[i] * uA;
+        KS_BB += sB[i] * uB;
+        KS_AB += sA[i] * uB;
+        KD_AA += dA[i] * vA;
+        KD_BB += dB[i] * vB;
+        KD_AB += dA[i] * vB;
+        KD_DD += dAB[i] * vD;
+    }
+
+    double N_A = 0.0, N_B = 0.0, N_S = 0.0, N_D = 0.0;
+    for (size_t i = 0; i < npoints; i++) {
+        N_A += rA[i];
+        N_B += rB[i];
+        N_S += sA[i] + sB[i];
+        N_D += dAB[i];
+    }
+
+    std::map<std::string, double> ret;
+    ret["BETA"] = functional_->vv10_beta();
+    ret["NPOINTS"] = static_cast<double>(npoints);
+    ret["N A"] = N_A;
+    ret["N B"] = N_B;
+    ret["N SUM"] = N_S;
+    ret["N DIMER"] = N_D;
+    ret["K A"] = K_A;
+    ret["K B"] = K_B;
+    ret["K CROSS"] = K_cross;
+    ret["K SUM AA"] = KS_AA;
+    ret["K SUM BB"] = KS_BB;
+    ret["K SUM AB"] = KS_AB;
+    ret["K DIMER AA"] = KD_AA;
+    ret["K DIMER BB"] = KD_BB;
+    ret["K DIMER AB"] = KD_AB;
+    ret["K DIMER DIMER"] = KD_DD;
+    timer_off("V: VV10 Partition");
+    return ret;
+}
 double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
     timer_on("V: VV10");
     timer_on("Setup");
@@ -1031,16 +1214,46 @@ double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
     return vv10_e;
 }
 SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
-    /* Not yet finished, missing several components*/
-    throw PSIEXCEPTION("V: Cannot compute VV10 gradient contribution.");
-
-    timer_on("V: VV10");
+    // Nuclear gradient of the VV10 nonlocal energy of vv10_nlc for the RKS alpha density D,
+    //
+    //   E = sum_i w_i rho_i beta + 1/2 sum_ij w_i rho_i w_j rho_j Phi_ij,
+    //   Phi_ij = -1.5 / (g_i g_j (g_i + g_j)),   g_i = W0(rho_i, gamma_i) R_ij^2 + kappa(rho_i),
+    //
+    // on the fixed VV10 grid, i.e. the same approximation as the local XC gradient of
+    // RV::compute_gradient: points and weights are held in space and only the basis functions
+    // move with their nuclei. Then
+    //
+    //   dE/dX_A = sum_i w_i (v_rho_i drho_i/dX_A + v_gamma_i dgamma_i/dX_A),
+    //
+    // where v_rho/v_gamma are the VV10 kernel potential that the SCF already builds in
+    // compute_vv10_kernel, and the contraction with basis-function derivatives is
+    // rks_gradient_integrator. This is the exact derivative of the discrete energy with the grid
+    // held fixed, and it converges to the exact functional derivative as the grid is refined.
+    //
+    // The explicit R dependence of Phi does not appear. Phi depends only on the separations of
+    // grid points, and a space-fixed grid does not move with the nuclei. That term appears only
+    // if the grid points follow their parent atoms, and then it cannot be taken on its own:
+    //  - Summed over all atoms, sum_i sum_j dPhi_ij/dr_i vanishes because Phi_ij is symmetric
+    //    under i <-> j. The double sum is translation invariant.
+    //  - For atom A, only pairs with i on A and j off A survive. Pairs with both points on A
+    //    cancel. That makes the per-atom term depend on how points are assigned to atoms. In the
+    //    continuum it is exactly cancelled by the point-motion density term and the
+    //    partition-weight derivatives. Adding it without both of those gives an error set by
+    //    the partition, and that error does not vanish as the grid is refined.
+    //
+    // Pairs are sieved as in vv10_nlc: the right-hand (cached) points pass vv10_rho_cutoff_, the
+    // left-hand points pass compute_vv10_kernel's internal 1e-12. v_rho is the symmetric-pair
+    // derivative, so it is exact for pairs where both points pass the cutoff. The asymmetric
+    // sliver below the cutoff is O(vv10_rho_cutoff_).
+    //
+    // Returns half the RKS gradient, like the local loop of RV::compute_gradient; the caller
+    // scales the sum by 2.
+    timer_on("V: VV10 Gradient");
     timer_on("Setup");
 
-    // => VV10 Grid and Cache <=
+    // => VV10 Grid and Cache (identical to vv10_nlc) <=
     std::map<std::string, std::string> opt_map;
     opt_map["DFT_PRUNING_SCHEME"] = "FLAT";
-    // opt_map["DFT_NUCLEAR_SCHEME"] = "BECKE";
 
     std::map<std::string, int> opt_int_map;
     opt_int_map["DFT_RADIAL_POINTS"] = options_.get_int("DFT_VV10_RADIAL_POINTS");
@@ -1049,7 +1262,10 @@ SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
     DFTGrid nlgrid = DFTGrid(primary_->molecule(), primary_, opt_int_map, opt_map, options_);
     std::vector<std::map<std::string, SharedVector>> vv10_cache;
     std::vector<std::shared_ptr<PointFunctions>> nl_point_workers;
-    prepare_vv10_cache(nlgrid, D, vv10_cache, nl_point_workers, 2);
+    prepare_vv10_cache(nlgrid, D, vv10_cache, nl_point_workers);
+
+    // GGA gradient terms need second basis-function derivatives; densities stay GGA-level.
+    for (auto& worker : nl_point_workers) worker->set_deriv(2);
 
     timer_off("Setup");
 
@@ -1059,9 +1275,6 @@ SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
     const int max_points = nlgrid.max_points();
     const int natom = primary_->molecule()->natom();
 
-    // VV10 temps
-    std::vector<double> vv10_exc(num_threads_);
-
     // Per thread temporaries
     std::vector<SharedMatrix> G_local, U_local;
     for (size_t i = 0; i < num_threads_; i++) {
@@ -1069,78 +1282,34 @@ SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
         U_local.push_back(std::make_shared<Matrix>("U Temp", max_points, max_functions));
     }
 
-// => Compute the kernel <=
 #pragma omp parallel for private(rank) schedule(guided) num_threads(num_threads_)
     for (size_t Q = 0; Q < nlgrid.blocks().size(); Q++) {
-// Get thread info
 #ifdef _OPENMP
         rank = omp_get_thread_num();
 #endif
-
-        // Get per rank-workers
         std::shared_ptr<BlockOPoints> block = nlgrid.blocks()[Q];
         std::shared_ptr<SuperFunctional> fworker = functional_workers_[rank];
         std::shared_ptr<PointFunctions> pworker = nl_point_workers[rank];
-        const std::vector<int>& function_map = block->functions_local_to_global();
-        const int nlocal = function_map.size();
-        const int npoints = block->npoints();
-        double** Tp = pworker->scratch()[0]->pointer();
 
-        // Compute Rho, Phi, etc
         pworker->compute_points(block);
 
-        // Updates the vals map and returns the energy
-        std::map<std::string, SharedVector> vals = fworker->values();
-
+        // Fills V_RHO_A and V_GAMMA_AA with the VV10 kernel potential for this block
         parallel_timer_on("Kernel", rank);
-        vv10_exc[rank] += fworker->compute_vv10_kernel(pworker->point_values(), vv10_cache, block, npoints, true);
+        fworker->compute_vv10_kernel(pworker->point_values(), vv10_cache, block);
         parallel_timer_off("Kernel", rank);
 
+        // GGA ansatz: the VV10 kernel has no tau dependence, even inside a meta-GGA functional
         parallel_timer_on("V_xc gradient", rank);
-
-        // => LSDA and GGA gradient contributions <= //
-        dft_integrators::rks_gradient_integrator(primary_, block, fworker, pworker, G_local[rank], U_local[rank]);
-
-        // => Grid gradient contributions <= //
-        double** Gp = G_local[rank]->pointer();
-        const double* x_grid = fworker->vv_value("GRID_WX")->pointer();
-        const double* y_grid = fworker->vv_value("GRID_WY")->pointer();
-        const double* z_grid = fworker->vv_value("GRID_WZ")->pointer();
-        double** phi = pworker->basis_value("PHI")->pointer();
-        double** phi_x = pworker->basis_value("PHI_X")->pointer();
-        double** phi_y = pworker->basis_value("PHI_Y")->pointer();
-        double** phi_z = pworker->basis_value("PHI_Z")->pointer();
-
-        // These terms are incorrect until they are able to isolate blocks on a single atom due to
-        // the requirement of the sum to not include blocks on the same atom
-        for (int P = 0; P < npoints; P++) {
-            std::fill(Tp[P], Tp[P] + nlocal, 0.0);
-            C_DAXPY(nlocal, z_grid[P], phi[P], 1, Tp[P], 1);
-        }
-        for (int ml = 0; ml < nlocal; ml++) {
-            int A = primary_->function_to_center(function_map[ml]);
-            // Gp[A][0] += C_DDOT(npoints, &Tp[0][ml], max_functions, &phi_x[0][ml], max_functions);
-            // Gp[A][1] += C_DDOT(npoints, &Tp[0][ml], max_functions, &phi_y[0][ml], max_functions);
-            Gp[A][2] += C_DDOT(npoints, &Tp[0][ml], max_functions, &phi_z[0][ml], max_functions);
-            // printf("Value %d %16.15lf\n", A, C_DDOT(npoints, &Tp[0][ml], max_functions, &phi_z[0][ml],
-            // max_functions));
-        }
-
-        // printf("--\n");
-
+        dft_integrators::rks_gradient_integrator(primary_, block, fworker, pworker, G_local[rank], U_local[rank], 1);
         parallel_timer_off("V_xc gradient", rank);
     }
 
-    // Sum up the matrix
-    auto G = std::make_shared<Matrix>("XC Gradient", natom, 3);
+    auto G = std::make_shared<Matrix>("VV10 Gradient", natom, 3);
     for (auto const& val : G_local) {
         G->add(val);
     }
-    G->print();
-    G->zero();
 
-    double vv10_e = std::accumulate(vv10_exc.begin(), vv10_exc.end(), 0.0);
-    timer_off("V: VV10");
+    timer_off("V: VV10 Gradient");
     return G;
 }
 
@@ -2102,10 +2271,6 @@ void RV::compute_Vx_full(std::vector<SharedMatrix> Dx, std::vector<SharedMatrix>
 SharedMatrix RV::compute_gradient() {
     // => Validation <= //
     if ((D_AO_.size() != 1)) throw PSIEXCEPTION("V: RKS should have only one D Matrix");
-
-    if (functional_->needs_vv10()) {
-        throw PSIEXCEPTION("V: RKS cannot compute VV10 gradient contribution.");
-    }
 
     // => Setup <= //
     int natom = primary_->molecule()->natom();
@@ -3879,10 +4044,6 @@ SharedMatrix UV::compute_gradient() {
     // => Validation <= //
     if ((D_AO_.size() != 2)) throw PSIEXCEPTION("V: UKS should have two D Matrices");
 
-    if (functional_->needs_vv10()) {
-        throw PSIEXCEPTION("V: UKS cannot compute VV10 gradient contribution.");
-    }
-
     // => Setup <= //
 
     // Build the target gradient Matrix
@@ -4230,6 +4391,17 @@ SharedMatrix UV::compute_gradient() {
 
     for (size_t i = 0; i < num_threads_; i++) {
         point_workers_[i]->set_deriv(old_deriv);
+    }
+
+    // VV10 depends only on the total density; compute_V evaluates it on the RKS-like
+    // Ds = (Da + Db) / 2, for which vv10_nlc_gradient returns half the gradient.
+    if (functional_->needs_vv10()) {
+        auto Ds = D_AO_[0]->clone();
+        Ds->add(D_AO_[1]);
+        Ds->scale(0.5);
+        auto G_vv10 = vv10_nlc_gradient(Ds);
+        G_vv10->scale(2.0);
+        G->add(G_vv10);
     }
 
     return G;

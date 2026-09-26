@@ -102,6 +102,14 @@ void SCFDeriv::common_init()
 }
 SharedMatrix SCFDeriv::compute_gradient()
 {
+    // A post-SCF VV10 energy is not stationary with respect to the SCF orbitals.
+    // The ordinary SCF gradient has no response term for that extra energy.
+    if (functional_->needs_vv10() && options_.get_bool("DFT_VV10_POSTSCF")) {
+        throw PSIEXCEPTION(
+            "Analytic gradients for post-SCF VV10 are not implemented. "
+            "Use finite differences of energies (dertype=0), or set DFT_VV10_POSTSCF=false.");
+    }
+
     // => Echo <= //
 
     outfile->Printf( "\n");

@@ -277,6 +277,9 @@ void export_functional(py::module &m) {
         .def("compute_Vx", &VBase::compute_Vx, "doctsring")
         .def("compute_gradient", &VBase::compute_gradient, "Compute the DFT nuclear gradient contribution.")
         .def("compute_hessain", &VBase::compute_hessian, "Compute the DFT nuclear Hessian contribution.")
+        .def("vv10_partition", &VBase::vv10_partition,
+             "Every VV10 double-sum piece of the RKS alpha AO densities DA, DB and DAB on one aligned VV10 grid.",
+             "DA"_a, "DB"_a, "DAB"_a)
 
         .def("set_print", &VBase::set_print, "Sets the print level of the object.")
         .def("set_debug", &VBase::set_debug, "Sets the debug level of the object.")

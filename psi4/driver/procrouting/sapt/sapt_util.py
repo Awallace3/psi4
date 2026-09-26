@@ -167,13 +167,29 @@ def print_sapt_dft_summary(
     core.set_variable("SAPT ELST ENERGY", elst)
     dimer_wfn.set_variable("SAPT ELST ENERGY", elst)
 
+    # SAPT_DFT_VV10_SPLIT: only the frozen-density VV10 non-additive term
+    # moves to exchange. The rest of delta DFT - delta HF, i.e. the VV10
+    # cross and relaxation terms plus the non-VV10 residual, stays dispersion.
+    vv10_split = "SAPT(DFT) VV10 CROSS" in data and not do_disp and do_delta_dft
+    if vv10_split:
+        vv10_nonadd = data["SAPT(DFT) VV10 NONADD"]
+        vv10_relax = data["SAPT(DFT) VV10 RELAX (SCF)"]
+        delta_dft_no_vv10 = data["Delta DFT Correction"] - data["VV10 IE"]
+        data["SAPT(DFT) VV10 DELTA DFT EXCL VV10"] = delta_dft_no_vv10
+        data["SAPT(DFT) VV10 RESIDUAL"] = delta_dft_no_vv10 - data.get("Delta HF Correction", 0.0)
+
     # Exchange
-    ret += print_sapt_var("Exchange", data["Exch10"]) + "\n"
+    exch = data["Exch10"]
+    if vv10_split:
+        exch += vv10_nonadd
+    ret += print_sapt_var("Exchange", exch) + "\n"
     ret += print_sapt_var("  Exch1", data["Exch10"]) + "\n"
     ret += print_sapt_var("  Exch1(S^2)", data["Exch10(S^2)"]) + "\n"
+    if vv10_split:
+        ret += print_sapt_var("  VV10 non-additive", vv10_nonadd) + "\n"
     ret += "\n"
-    core.set_variable("SAPT EXCH ENERGY", data["Exch10"])
-    dimer_wfn.set_variable("SAPT EXCH ENERGY", data["Exch10"])
+    core.set_variable("SAPT EXCH ENERGY", exch)
+    dimer_wfn.set_variable("SAPT EXCH ENERGY", exch)
 
     # Induction
     if induction_type == "NONE":
@@ -240,12 +256,20 @@ def print_sapt_dft_summary(
             # includes VV10. Keep the VV10 interaction energy visible in the
             # dispersion breakdown, but subtract it from the displayed delta-DFT
             # contribution so the total is not double counted.
-            delta_dft_no_vv10 = data["Delta DFT Correction"] - data[empirical_disp_key]
-            disp = data["Delta DFT Correction"] - data.get("Delta HF Correction", 0.0)
-            ret += print_sapt_var("Dispersion", disp) + "\n"
-            ret += print_sapt_var("  delta DFT,r (2) excl. VV10", delta_dft_no_vv10) + "\n"
-            ret += print_sapt_var("  -delta HF,r (2)", subtract_delta_hf_for_total_dispersion) + "\n"
-            ret += print_sapt_var(f"  {empirical_disp_label}", data[empirical_disp_key]) + "\n"
+            if vv10_split:
+                disp = data["Delta DFT Correction"] - data.get("Delta HF Correction", 0.0) - vv10_nonadd
+                ret += print_sapt_var("Dispersion", disp) + "\n"
+                ret += print_sapt_var("  delta DFT,r (2) excl. VV10", delta_dft_no_vv10) + "\n"
+                ret += print_sapt_var("  -delta HF,r (2)", subtract_delta_hf_for_total_dispersion) + "\n"
+                ret += print_sapt_var("  VV10 cross (A-B)", data["SAPT(DFT) VV10 CROSS"]) + "\n"
+                ret += print_sapt_var("  VV10 relaxation", vv10_relax) + "\n"
+            else:
+                delta_dft_no_vv10 = data["Delta DFT Correction"] - data[empirical_disp_key]
+                disp = data["Delta DFT Correction"] - data.get("Delta HF Correction", 0.0)
+                ret += print_sapt_var("Dispersion", disp) + "\n"
+                ret += print_sapt_var("  delta DFT,r (2) excl. VV10", delta_dft_no_vv10) + "\n"
+                ret += print_sapt_var("  -delta HF,r (2)", subtract_delta_hf_for_total_dispersion) + "\n"
+                ret += print_sapt_var(f"  {empirical_disp_label}", data[empirical_disp_key]) + "\n"
         else:
             disp = (
                 data[empirical_disp_key]
@@ -277,8 +301,22 @@ def print_sapt_dft_summary(
     core.set_variable("SAPT DISP ENERGY", disp)
     dimer_wfn.set_variable("SAPT DISP ENERGY", disp)
 
+    if vv10_split:
+        # Split and unsplit components side by side, for recombination after the fact
+        split_vars = {
+            "SAPT(DFT) VV10 SPLIT EXCH ENERGY": exch,
+            "SAPT(DFT) VV10 SPLIT IND ENERGY": ind,
+            "SAPT(DFT) VV10 SPLIT DISP ENERGY": disp,
+            "SAPT(DFT) VV10 UNSPLIT EXCH ENERGY": exch - vv10_nonadd,
+            "SAPT(DFT) VV10 UNSPLIT DISP ENERGY": disp + vv10_nonadd,
+        }
+        for key, value in split_vars.items():
+            data[key] = value
+            core.set_variable(key, value)
+            dimer_wfn.set_variable(key, value)
+
     # Total energy
-    total = data["Elst10,r"] + extern_extern_IE + data["Exch10"] + ind + disp
+    total = elst + exch + ind + disp
     ret += print_sapt_var("Total %-17s" % name, total, start_spacer="    ") + "\n"
     core.set_variable("SAPT(DFT) TOTAL ENERGY", total)
     core.set_variable("SAPT TOTAL ENERGY", total)

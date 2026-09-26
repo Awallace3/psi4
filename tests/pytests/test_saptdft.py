@@ -2175,6 +2175,202 @@ def test_dft_vv10_sapt():
     assert VV10_IE < 0.0, f"VV10 IE should be negative for water dimer, got {VV10_IE}"
 
 
+
+@pytest.mark.saptdft
+def test_dft_vv10_sapt_split():
+    """
+    SAPT_DFT_VV10_SPLIT reassigns the VV10 interaction energy without moving
+    the total: only the frozen-density non-additive remainder moves from
+    dispersion to exchange. Induction is untouched, and dispersion keeps the
+    rest of delta DFT - delta HF, including the monomer-monomer VV10 kernel.
+    """
+    geom = """
+  O -2.930978458   -0.216411437    0.000000000
+  H -3.655219777    1.440921844    0.000000000
+  H -1.133225297    0.076934530    0.000000000
+   --
+  O  2.552311356    0.210645882    0.000000000
+  H  3.175492012   -0.706268134   -1.433472544
+  H  3.175492012   -0.706268134    1.433472544
+  units bohr
+"""
+    options = {
+        "basis": "aug-cc-pvdz",
+        "e_convergence": 1e-8,
+        "d_convergence": 1e-8,
+        "scf_type": "df",
+        "sapt_dft_grac_shift_a": 0.136,
+        "sapt_dft_grac_shift_b": 0.136,
+        "SAPT_DFT_FUNCTIONAL": "wb97m-v",
+    }
+    keys = ["SAPT ELST ENERGY", "SAPT EXCH ENERGY", "SAPT IND ENERGY", "SAPT DISP ENERGY", "SAPT TOTAL ENERGY"]
+    results = {}
+    for split in [False, True]:
+        psi4.core.clean()
+        psi4.core.clean_variables()
+        psi4.core.clean_options()
+        psi4.geometry(geom)
+        psi4.set_options({**options, "SAPT_DFT_VV10_SPLIT": split})
+        _, wfn = psi4.energy("dft-vv10(sapt)", return_wfn=True)
+        results[split] = {k: psi4.core.variable(k) for k in keys}
+
+    v = {k[len("SAPT(DFT) VV10 "):]: val for k, val in psi4.core.variables().items() if k.startswith("SAPT(DFT) VV10 ")}
+    for k, val in v.items():
+        assert compare_values(val, wfn.variable("SAPT(DFT) VV10 " + k), 12, f"wfn {k}")
+    cross = psi4.core.variable("SAPT(DFT) VV10 CROSS")
+    nonadd = psi4.core.variable("SAPT(DFT) VV10 NONADD")
+    relax = psi4.core.variable("SAPT(DFT) VV10 RELAX")
+    ie_grid = psi4.core.variable("SAPT(DFT) VV10 IE (GRID)")
+    ie_scf = psi4.core.variable("VV10 IE")
+    off, on = results[False], results[True]
+
+    # The split only moves energy between components.
+    assert compare_values(off["SAPT TOTAL ENERGY"], on["SAPT TOTAL ENERGY"], 10, "TOTAL invariant")
+    assert compare_values(off["SAPT ELST ENERGY"], on["SAPT ELST ENERGY"], 10, "ELST invariant")
+    assert compare_values(off["SAPT EXCH ENERGY"] + nonadd, on["SAPT EXCH ENERGY"], 10, "EXCH += NONADD")
+    assert compare_values(off["SAPT IND ENERGY"], on["SAPT IND ENERGY"], 10, "IND invariant")
+    assert compare_values(off["SAPT DISP ENERGY"] - nonadd, on["SAPT DISP ENERGY"], 10, "DISP -= NONADD")
+    # The grid re-evaluation composes exactly and reproduces the SCF VV10 IE.
+    assert compare_values(ie_grid, cross + nonadd + relax, 12, "CROSS + NONADD + RELAX")
+    assert compare_values(ie_scf, ie_grid, 6, "grid VV10 IE vs SCF VV10 IE")
+    assert compare_values(-0.000988, cross, 5, "VV10 cross")
+    # Sub-terms and recombination ingredients compose exactly.
+    nonadd_parts = v["NONADD BETA"] + v["NONADD INTRA A"] + v["NONADD INTRA B"] + v["NONADD CROSS DAMPING"]
+    assert compare_values(nonadd, nonadd_parts, 12, "NONADD sub-terms")
+    relax_parts = v["RELAX BETA"] + v["RELAX PARAM"] + v["RELAX DENSITY"]
+    assert compare_values(relax, relax_parts, 12, "RELAX sub-terms")
+    assert compare_values(v["CROSS SUM PARAMS"], cross + v["NONADD CROSS DAMPING"], 12, "sum-param cross")
+    assert compare_values(ie_scf, cross + nonadd + v["RELAX (SCF)"], 12, "SCF RELAX closes the SCF IE")
+    assert compare_values(v["GRID ERROR"], ie_scf - ie_grid, 12, "grid error")
+    assert compare_values(on["SAPT DISP ENERGY"], v["SPLIT DISP ENERGY"], 12, "split disp psivar")
+    assert compare_values(off["SAPT DISP ENERGY"], v["UNSPLIT DISP ENERGY"], 10, "unsplit disp psivar")
+    assert compare_values(off["SAPT EXCH ENERGY"], v["UNSPLIT EXCH ENERGY"], 10, "unsplit exch psivar")
+    residual = v["DELTA DFT EXCL VV10"] - psi4.core.variable("SAPT(DFT) Delta HF")
+    assert compare_values(v["RESIDUAL"], residual, 12, "non-VV10 residual")
+    assert compare_values(on["SAPT DISP ENERGY"], residual + cross + v["RELAX (SCF)"], 10, "DISP composition")
+
+
+
+@pytest.mark.saptdft
+def test_saptdft_ddft_gradient():
+    """
+    SAPT_DFT_DDFT_GRADIENT stores the analytic gradient of the delta DFT dimer
+    energy, which must match a plain dimer DFT gradient in the same basis.
+    """
+    molecule = psi4.geometry(
+        _sapt_testing_mols["neutral_water_dimer"]
+        + """
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    options = {
+        "basis": "cc-pvdz",
+        "scf_type": "df",
+        "e_convergence": 1e-10,
+        "d_convergence": 1e-10,
+    }
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.set_options(options)
+    reference = psi4.gradient("pbe0", molecule=molecule)
+
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.set_options(
+        {
+            **options,
+            "sapt_dft_functional": "pbe0",
+            "sapt_dft_grac_shift_a": 0.1307,
+            "sapt_dft_grac_shift_b": 0.1307,
+            "sapt_dft_do_ddft": True,
+            "sapt_dft_ddft_gradient": True,
+        }
+    )
+    _, wfn = psi4.energy("sapt(dft)", molecule=molecule, return_wfn=True)
+    grad = wfn.variable("SAPT(DFT) DFT DIMER GRADIENT")
+    assert compare_values(reference, grad, 6, "delta DFT dimer gradient")
+    assert compare_values(grad, psi4.core.variable("SAPT(DFT) DFT DIMER GRADIENT"), 12, "core gradient")
+
+
+@pytest.mark.saptdft
+def test_saptdft_ddft_gradient_vv10():
+    """
+    DFT-VV10(SAPT) with SAPT_DFT_DDFT_GRADIENT: the wb97m-v delta DFT dimer
+    gradient, which includes the analytic VV10 term, must match a plain
+    analytic wb97m-v dimer gradient in the same basis.
+    """
+    molecule = psi4.geometry(
+        _sapt_testing_mols["neutral_water_dimer"]
+        + """
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    options = {
+        "basis": "cc-pvdz",
+        "scf_type": "df",
+        "e_convergence": 1e-10,
+        "d_convergence": 1e-10,
+        # Coarse grids keep the O(N^2) VV10 kernel cheap; both sides share them.
+        "dft_radial_points": 50,
+        "dft_spherical_points": 110,
+        "dft_vv10_radial_points": 30,
+        "dft_vv10_spherical_points": 110,
+    }
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.set_options(options)
+    reference = psi4.gradient("wb97m-v", molecule=molecule, dertype=1)
+
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.set_options(
+        {
+            **options,
+            "sapt_dft_functional": "wb97m-v",
+            "sapt_dft_grac_shift_a": 0.136,
+            "sapt_dft_grac_shift_b": 0.136,
+            "sapt_dft_ddft_gradient": True,
+        }
+    )
+    _, wfn = psi4.energy("dft-vv10(sapt)", molecule=molecule, return_wfn=True)
+    grad = wfn.variable("SAPT(DFT) DFT DIMER GRADIENT")
+    assert compare_values(reference, grad, 6, "delta DFT wb97m-v dimer gradient")
+    assert compare_values(grad, psi4.core.variable("SAPT(DFT) DFT DIMER GRADIENT"), 12, "core gradient")
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize("options, message", [
+    ({"dft_vv10_postscf": True}, "post-SCF VV10"),
+    ({"sapt_dft_functional": "dsd-blyp-nl"}, "double-hybrid"),
+    ({"scf_type": "cd"}, "SCF_TYPE=CD"),
+])
+def test_saptdft_ddft_gradient_unsupported(options, message, monkeypatch):
+    """Reject unsupported dimer derivatives before starting any SCFs."""
+    from psi4.driver.procrouting.sapt import sapt_proc
+
+    psi4.geometry("He 0 0 0\n--\nHe 0 0 3")
+    psi4.set_options({
+        "basis": "sto-3g",
+        "sapt_dft_functional": "vv10",
+        "sapt_dft_ddft_gradient": True,
+        "sapt_dft_grac_shift_a": 0.1,
+        "sapt_dft_grac_shift_b": 0.1,
+        **options,
+    })
+
+    def unexpected_scf(*args, **kwargs):
+        pytest.fail("Unsupported dimer gradients must be rejected before SCF")
+
+    monkeypatch.setattr(sapt_proc, "scf_helper", unexpected_scf)
+    monkeypatch.setattr(sapt_proc, "run_scf", unexpected_scf)
+    with pytest.raises(psi4.ValidationError, match=message):
+        psi4.energy("dft-vv10(sapt)")
+
+
 if __name__ == "__main__":
     psi4.set_memory("32 GB")
     psi4.set_num_threads(12)
