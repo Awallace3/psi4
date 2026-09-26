@@ -2877,6 +2877,13 @@ def fdisp0(
     ebn = _arr(eps_occ_B)  # occupied energies of B (index b)
     ern = eps_vir_A.np  # virtual energies for monomer A (index r)
     esn = eps_vir_B.np  # virtual energies for monomer B (index s)
+    # The same four vectors as einsums tensors: the block energy denominator
+    # is built straight out of them by linalg.outer_sum below.  outer_sum
+    # takes its vectors as one homogeneous sequence, so the two full-range
+    # operands are sliced into views to match the blocked r and s ones.
+    ea_t, eb_t = _ein(ean, name="eps_a"), _ein(ebn, name="eps_b")
+    er_t, es_t = _ein(ern, name="eps_r"), _ein(esn, name="eps_s")
+    ea_v, eb_v = ea_t[:], eb_t[:]
 
     # => Work arrays for the blocked (r,s) kernel <= //
     #
@@ -2934,7 +2941,7 @@ def fdisp0(
                 IW=_ein_zeros(Ms, Nr, name="IWsr"),
                 W2=_ein_zeros(Ms, Nr, name="W2sr"),
             )
-            b["Dn"] = np.asarray(b["D"]).reshape(na, nrb, nb, nsb, order="F")
+            b["Dv"] = b["D"].reshape_view([na, nrb, nb, nsb])
             b["T2v"] = b["T2"].reshape_view([na, nrb, nb, nsb])
             b["V2v"] = b["V2"].reshape_view([na, nrb, nb, nsb])
             b["W2v"] = b["W2"].reshape_view([na, nsb, nb, nrb])
@@ -3051,15 +3058,14 @@ def fdisp0(
                                     FAbs[nQ:2 * nQ, sb0:sb1], 0.0, V,
                                     trans_a=True)
 
-                    # Amplitudes T = V / (ea + eb - er - es), built as
-                    # reciprocals so the division is one elementwise product.
-                    np.divide(
-                        1.0,
-                        (ean[:, None, None, None] + ebn[None, None, :, None]
-                         - ern[None, rr, None, None] - esn[None, None, None, ss]),
-                        out=b["Dn"],
-                    )
-                    ein.linalg.direct_product(1.0, V, D, 0.0, T)
+                    # Amplitudes T = V / (ea + eb - er - es).  outer_sum is
+                    # einsums' own MP2-denominator primitive and builds the
+                    # rank-4 denominator in one threaded pass; numpy's
+                    # broadcast form has to materialise a full-block temporary
+                    # first and runs single-threaded, which cost twice as much.
+                    ein.linalg.outer_sum(b["Dv"], [ea_v, er_t[rr], eb_v, es_t[ss]],
+                                         [1.0, -1.0, 1.0, -1.0])
+                    ein.linalg.direct_division(1.0, V, D, 0.0, T)
 
                     # Transform to localized orbital basis and accumulate
                     _to_lo(T, I, T2, nrb, nsb)
