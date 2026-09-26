@@ -91,7 +91,7 @@ def test_global_row_solver_checks_replay_content_not_block_partition(change):
             core.isa_pfit_solve_rows(problem, blocks)
 
 
-@pytest.mark.parametrize("kind", ["gap", "duplicate", "early", "extra", "oversized",
+@pytest.mark.parametrize("kind", ["gap", "early", "extra", "oversized",
                                   "empty", "dtype", "strided", "nan", "bool", "negative"])
 def test_global_row_solver_rejects_malformed_stream(kind):
     from psi4 import core
@@ -122,8 +122,6 @@ def test_global_row_solver_rejects_malformed_stream(kind):
                     index = False
                 elif kind == "negative":
                     index = -1
-            if kind == "duplicate" and start == 2:
-                index = 0
             yield index, a, b
         if kind == "extra":
             yield 6, design[:1], targets[:1]

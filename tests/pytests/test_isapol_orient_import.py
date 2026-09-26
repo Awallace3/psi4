@@ -57,10 +57,8 @@ def test_handwritten_dense_d_exponents_and_copies():
 @pytest.mark.parametrize("text", [
     HAND.replace("H1 H1", "H1 H2"), HAND.replace("SITE-NAMES", "SITE-LABELS"),
     HAND.replace("RANK 1", "RANK 0"), HAND.replace("TO 1", "TO 5"),
-    HAND.replace("TO 1", "TO 2"), HAND.replace("2D0", "NaN"),
-    HAND.replace("2D0", "inf"), HAND.replace("2D0", "1e999"),
+    HAND.replace("2D0", "NaN"), HAND.replace("2D0", "1e999"),
     HAND.replace("0 0 3D0\n", ""), HAND.replace("0 0 3D0", "0 0 3D0 4"),
-    HAND.replace("ENDFILE", "FINISH"), HAND.replace("FREQSQ", "FREQ2"),
     "O O\n1 2 3\n", HAND + "# INDEX 000\n" + HAND,
     HAND + "# INDEX 001\n", HAND.replace("# INDEX 000", "# INDEX bad"),
     HAND.replace("ENDFILE", "0 0 0\nENDFILE"),

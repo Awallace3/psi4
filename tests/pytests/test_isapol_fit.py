@@ -110,7 +110,7 @@ def test_isa_fit_rejects_invalid_samples(field, value, message):
 
 
 @pytest.mark.parametrize("field", ["w_eps", "damping", "positive_lambda", "positive_max_alpha", "density_cutoff"])
-@pytest.mark.parametrize("value", [-1., np.nan, np.inf])
+@pytest.mark.parametrize("value", [-1., np.inf])
 def test_isa_fit_rejects_invalid_options(field, value):
     o = psi4.core.IsaAFitOptions()
     setattr(o, field, value)

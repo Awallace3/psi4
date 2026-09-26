@@ -143,8 +143,9 @@ def test_lower_j_algebra_standalone_import_and_direct_float_sum():
     from pathlib import Path
     script = ('import sys; sys.path.insert(0,'+repr(str(Path(__file__).parent))+'); '
               'import isapol_lower_j_oracle as o; '
-              'assert not any(k=="psi4" or k.startswith("psi4.") for k in sys.modules); '
-              'assert o.factor(1,1,1,1,0,0,0)>0')
+              'assert o.factor(1,1,1,1,0,0,0)>0; '
+              'assert o.reciprocal_raw_exact((1,2),(1,3),2,2,3)[0]; '
+              'assert not any(k=="psi4" or k.startswith("psi4.") for k in sys.modules)')
     subprocess.run([sys.executable,'-I','-c',script],check=True)
     with pytest.raises(AssertionError):
         overlap(4,1,1,1,3,2,3)

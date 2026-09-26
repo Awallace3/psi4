@@ -62,15 +62,12 @@ def _log(verbosity):
     (1.e-9, '1.000000e-09'),
     (1.e7, '1.000000e+07'),
     (float('inf'), 'inf'),
+    (float('nan'), 'nan'),  # reported, not hidden
     ((1, 2.5, None), '(1, 2.500000, none)'),
     ('ISA_A', 'ISA_A'),
 ])
 def test_fmt_renders_each_cell_kind(value, want):
     assert lg._fmt(value) == want
-
-
-def test_fmt_nan_is_reported_not_hidden():
-    assert lg._fmt(float('nan')) == 'nan'
 
 
 def test_fmt_never_expands_bulk_data():
@@ -648,9 +645,6 @@ def test_producers_are_silent_and_publish_nothing_by_default(wfn):
                               placement_b=_placement((0., 0., 8.)), cp_weights=[0., .25],
                               quadrature_provenance=_SYNTHETIC, max_order=6, wfn=wfn)
     assert wfn.has_variable('ATOMIC ANISOTROPIC DISPERSION TRUNCATED ENERGY')
-
-
-# ----------------------------------------------------------------- PFIT ----
 
 
 # ------------------------------------------------- declared AC iterations ----

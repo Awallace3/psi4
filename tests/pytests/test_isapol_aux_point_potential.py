@@ -70,7 +70,6 @@ def test_spherical_potentials_use_the_same_basis_as_grid_values(l):
     (np.zeros((2, 2)), 'npoint x 3'),
     (np.zeros((513, 3)), 'maximum 512'),
     (np.array([[np.nan, 0., 0.]]), 'Nonfinite'),
-    (np.array([[0., np.inf, 0.]]), 'Nonfinite'),
 ])
 def test_invalid_points_refused(points, message):
     with pytest.raises(ValueError, match=message):

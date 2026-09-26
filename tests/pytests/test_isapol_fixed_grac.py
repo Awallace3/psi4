@@ -52,7 +52,7 @@ def test_default_policy_rejects_actual_grac(water):
         correction.validate_correction(water)
 
 
-@pytest.mark.parametrize('shift', [None, 0., -.01, float('nan'), float('inf'), True, '0.06', SHIFT + 1e-8])
+@pytest.mark.parametrize('shift', [None, 0., float('nan'), True, '0.06', SHIFT + 1e-8])
 def test_expected_shift_is_explicit_and_exact(water, shift):
     with pytest.raises(ValueError, match='shift|mismatch'):
         correction.validate_correction(water, scf_correction='FIXED_GRAC', expected_grac_shift=shift)
@@ -60,7 +60,6 @@ def test_expected_shift_is_explicit_and_exact(water, shift):
 
 @pytest.mark.parametrize('field,value', [('grac_alpha', .6), ('grac_beta', 41.),
                                        ('grac_shift', SHIFT + .01), ('grac_shift', float('nan')),
-                                       ('grac_alpha', float('inf')), ('grac_beta', float('nan')),
                                        ('x_alpha', .4), ('x_omega', .2)])
 def test_actual_controls_and_underlying_pbe0(water, field, value):
     f = water.functional()

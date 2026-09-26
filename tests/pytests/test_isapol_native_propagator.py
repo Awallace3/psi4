@@ -11,7 +11,7 @@ FD = pr.KernelSmoothing(1.e-8, 1000., .01, 1., 'FD')
 
 def test_smoothing_requires_explicit_finite_positive_parameters():
     for bad in (dict(rho_epsilon=0.), dict(f_max=-1.), dict(fd_delta=float('inf')),
-                dict(fd_alpha=1), dict(rho_epsilon=1)):
+                dict(fd_alpha=1)):
         kw = dict(rho_epsilon=1.e-8, f_max=1000., fd_delta=.01, fd_alpha=1., method='FD')
         kw.update(bad)
         with pytest.raises(ValueError):

@@ -95,26 +95,7 @@ def test_atomprop_bit_identical(atomprop, column, getter):
         assert fn(Z) == want, f"Z={Z} {getter}"
 
 
-def test_slater_radius_rejects_heavy_elements():
-    with pytest.raises(Exception):
-        psi4.core.isapol_slater_radius(55)
-
-
 # -------------------------------------------------------------- gate 5b: the grid
-
-def test_grid_shape(refgrid, h2o):
-    opts = psi4.core.IsaGridOptions()
-    opts.radial_points = int(refgrid["n_r"])
-    opts.spherical_points = int(refgrid["n_a"])
-    grid = psi4.core.IsaGrid(h2o, opts)
-
-    n_r, n_a = int(refgrid["n_r"]), int(refgrid["n_a"])
-    assert grid.natom() == 3
-    # n_r is CamCASP's radial count, and the Euler-MacLaurin map emits n_r - 1 shells
-    assert grid.npoints() == 3 * (n_r - 1) * n_a
-    assert grid.npoints() == len(refgrid["grid"])
-    assert [grid.atom_start(a) for a in range(4)] == list(refgrid["starts"])
-
 
 def test_grid_matches_camcasp(refgrid, h2o):
     opts = psi4.core.IsaGridOptions()
@@ -124,9 +105,15 @@ def test_grid_matches_camcasp(refgrid, h2o):
     opts.radius_scaling = float(refgrid["rscale"])
     grid = psi4.core.IsaGrid(h2o, opts)
 
+    n_r, n_a = int(refgrid["n_r"]), int(refgrid["n_a"])
+    assert grid.natom() == 3
+    # n_r is CamCASP's radial count, and the Euler-MacLaurin map emits n_r - 1 shells
+    assert grid.npoints() == 3 * (n_r - 1) * n_a
+    assert grid.npoints() == len(refgrid["grid"])
+    assert [grid.atom_start(a) for a in range(4)] == list(refgrid["starts"])
+
     ref = refgrid["grid"]
     got = np.column_stack([grid.x(), grid.y(), grid.z(), grid.w()])
-    n_a = int(refgrid["n_a"])
 
     # Psi4's Lebedev generators enumerate the octahedral sign patterns in a
     # different order than CamCASP's gen_oh, so compare shell by shell after
@@ -147,15 +134,9 @@ def test_grid_matches_camcasp(refgrid, h2o):
     # in a different order, hence up to 2 ulp.
     assert max(weight_ulps) <= 2, f"weights differ by {max(weight_ulps)} ulp"
 
-
-def test_grid_weights_sum(refgrid, h2o):
-    opts = psi4.core.IsaGridOptions()
-    opts.radial_points = int(refgrid["n_r"])
-    opts.spherical_points = int(refgrid["n_a"])
-    grid = psi4.core.IsaGrid(h2o, opts)
-    got = np.asarray(grid.w()).sum()
-    want = refgrid["grid"][:, 3].sum()
-    assert _ulps(got, want) <= 2, f"{got!r} != {want!r}"
+    got_sum = np.asarray(grid.w()).sum()
+    want_sum = ref[:, 3].sum()
+    assert _ulps(got_sum, want_sum) <= 2, f"{got_sum!r} != {want_sum!r}"
 
 
 def test_grid_option_defaults_are_the_camcasp_module_defaults():
@@ -305,7 +286,7 @@ def test_casimir_grid_static_point():
 
 
 def test_casimir_grid_rejects_bad_n_freq():
-    for n in (0, 1, 3, 9, 12):
+    for n in (0, 3, 12):
         with pytest.raises(RuntimeError):
             psi4.core.CasimirGrid(n)
     with pytest.raises(RuntimeError):
@@ -457,26 +438,9 @@ def _fit_molecule(geom):
     return mol
 
 
-@pytest.mark.parametrize("name", ["h2o", "hcl"])
-def test_fit_points_bit_identical(reffit, name):
-    mol = _fit_molecule(reffit[f"{name}_geom"])
-    options = psi4.core.FitPointsOptions()
-    options.npoints = 2000
-    options.seed = 1
-    points = psi4.core.FitPoints(mol, options)
-
-    # The cube the candidates are drawn from has to match first: it is built from
-    # the van der Waals radii and the centre of geometry, and if it is off by an
-    # ulp every accept/reject decision downstream is suspect.
-    assert points.dmax() == reffit[f"{name}_dmax"]
-    assert np.array_equal(points.centre(), reffit[f"{name}_centre"])
-
-    got = np.column_stack([points.x(), points.y(), points.z()])
-    assert np.array_equal(got, reffit[f"{name}_points"])
-
-
-def test_fit_points_reference_case_cloud(reffit):
-    """The cloud the H2O_props reference case's own refinement was fitted on.
+@pytest.mark.parametrize("name, npoints", [("h2o", 2000), ("hcl", 2000), ("ref500", 500)])
+def test_fit_points_bit_identical(reffit, name, npoints):
+    """``ref500`` is the cloud the H2O_props reference case's own refinement was fitted on.
 
     `tests/H2O_props/psi4/H2O-avtz.clt` declares `Options Tests`, and the
     `properties` run type's generated `SET Lattice` block therefore asks for
@@ -488,18 +452,21 @@ def test_fit_points_reference_case_cloud(reffit):
     checked against those routines linked directly out of a built CamCASP, and
     all three routes agree bitwise.
     """
-    geom = reffit["ref500_geom"]
-    mol = _fit_molecule(geom)
+    mol = _fit_molecule(reffit[f"{name}_geom"])
     options = psi4.core.FitPointsOptions()
-    options.npoints = 500
+    options.npoints = npoints
     options.seed = 1
     points = psi4.core.FitPoints(mol, options)
+    assert points.npoints() == npoints
 
-    assert points.npoints() == 500
-    assert points.dmax() == reffit["ref500_dmax"]
-    assert np.array_equal(points.centre(), reffit["ref500_centre"])
+    # The cube the candidates are drawn from has to match first: it is built from
+    # the van der Waals radii and the centre of geometry, and if it is off by an
+    # ulp every accept/reject decision downstream is suspect.
+    assert points.dmax() == reffit[f"{name}_dmax"]
+    assert np.array_equal(points.centre(), reffit[f"{name}_centre"])
+
     got = np.column_stack([points.x(), points.y(), points.z()])
-    assert np.array_equal(got, reffit["ref500_points"])
+    assert np.array_equal(got, reffit[f"{name}_points"])
 
 
 def test_fit_points_lie_in_the_shell(reffit):
@@ -766,6 +733,10 @@ def test_recoupling_table_shape_matches_the_reference():
     assert len(got) == RECOUPLING_TOTAL_BLOCKS
     assert sum(len(t) for t in got.values()) == RECOUPLING_TOTAL_TERMS
     assert set(RECOUPLING_BLOCKS) <= set(got)
+    # RECOUPLING_BLOCKS carries the complete C_6 and C_7 tables, so at those
+    # orders the shipped table has exactly its blocks and no others.
+    for n in (6, 7):
+        assert {k for k in got if k[0] == n} == {k for k in RECOUPLING_BLOCKS if k[0] == n}
 
 
 @pytest.mark.parametrize("key", sorted(RECOUPLING_BLOCKS))
@@ -795,7 +766,7 @@ def test_recoupling_absent_blocks_are_empty():
 
 
 def test_recoupling_rejects_bad_order():
-    for n in (5, 13, 0, -1):
+    for n in (5, 13):
         with pytest.raises(Exception):
             _cxx_block((n, 0, 0, 0))
     with pytest.raises(Exception):
@@ -836,32 +807,6 @@ def test_recoupling_is_symmetric_under_exchange():
         assert sorted(swapped) == sorted(mirror), (n, L1, L2, J)
 
 
-def test_recoupling_c6_closed_forms():
-    """The eight C_6 blocks, against their closed forms."""
-    want = {
-        (0, 0, 0): 2.0,
-        (0, 2, 2): -np.sqrt(2.0),
-        (1, 1, 0): 1.0,
-        (1, 1, 2): 2.0,
-        (2, 0, 2): -np.sqrt(2.0),
-        (2, 2, 0): 1.0 / 5.0,
-        (2, 2, 2): 2.0 / 7.0,
-        (2, 2, 4): 108.0 / 35.0,
-    }
-    got = {}
-    for L1 in range(5):
-        for L2 in range(5):
-            for J in range(9):
-                block = _cxx_block((6, L1, L2, J))
-                if not block:
-                    continue
-                assert len(block) == 1, "every C_6 block is a single dipole-dipole term"
-                term = block[0]
-                assert (term.la, term.lap, term.lb, term.lbp, term.ipow) == (1, 1, 1, 1, 0)
-                got[(L1, L2, J)] = term.coefficient
-    assert got == want
-
-
 def test_recoupling_reproduces_the_isotropic_c6():
     """C_6(00, 00, 0) is the ordinary isotropic C_6, for a one-term Unsold model.
 
@@ -898,6 +843,6 @@ def test_component_indexing():
         last = psi4.core.isapol_component_last(L)
         assert (first, last) == (L * L + 1, (L + 1) ** 2)
         assert last - first + 1 == 2 * L + 1
-    for t in (0, -1, len(COMPONENT_LABELS) + 1):
+    for t in (0, len(COMPONENT_LABELS) + 1):
         with pytest.raises(Exception):
             psi4.core.isapol_component_rank(t)

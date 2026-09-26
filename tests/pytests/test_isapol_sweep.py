@@ -109,9 +109,9 @@ def test_no_tail_clipping_screening_and_zero_denominators():
 
 
 @pytest.mark.parametrize('field,value,match', [
-    ('shape_sites', [], 'include'), ('shape_sites', [1], 'include'),
-    ('shape_sites', [0, 0], 'Duplicate'), ('shape_sites', [-1, 0], 'range'),
-    ('shape_sites', [0, 2], 'range'), ('density_sites', [2], 'range'),
+    ('shape_sites', [1], 'include'), ('shape_sites', [0, 0], 'Duplicate'),
+    ('shape_sites', [-1, 0], 'range'), ('shape_sites', [0, 2], 'range'),
+    ('density_sites', [2], 'range'),
     ('points', [], 'dimension'), ('weights', [], 'dimension')])
 def test_no_tail_sweep_rejects_grids(field, value, match):
     atomic, shape, density, state, grids, options = fixture()

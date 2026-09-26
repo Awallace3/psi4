@@ -10,8 +10,7 @@ defaults are two independent spellings of the same model, and if they drift the
 branch has two models sharing one name.  ``test_every_option_default_is_the_
 declaration_field_default`` is the guard against exactly that.
 
-These tests also hold the front end to the three things ``plan.md`` item 3 asks
-of it.
+These tests also hold the front end to three requirements.
 
 *The policy is an acceptance declaration; the producer is a named call.*  No
 option runs the correction.  ``run()`` refuses before it looks at a
@@ -134,12 +133,11 @@ def test_an_undeclared_ionization_potential_is_refused_not_inferred():
     from the HOMO would make the declared model depend on the orbitals it is
     supposed to correct."""
     psi4.set_options({aco.POLICY_OPTION: 'DECLARED_MULTPOLE_AC'})
-    with pytest.raises(ValueError, match='ATOMIC_AC_IONIZATION_POTENTIAL'):
+    with pytest.raises(ValueError) as refused:
         aco.declaration()
-    with pytest.raises(ValueError, match='undeclared sentinel'):
-        aco.declaration()
-    with pytest.raises(ValueError, match='never computed from a HOMO'):
-        aco.declaration()
+    for part in ('ATOMIC_AC_IONIZATION_POTENTIAL', 'undeclared sentinel',
+                 'never computed from a HOMO'):
+        assert part in str(refused.value)
 
 
 @pytest.mark.parametrize('opts,message', [
@@ -177,7 +175,7 @@ def test_join_none_is_refused_as_a_policy_confusion_not_a_bad_value():
         aco.run(None)
 
 
-@pytest.mark.parametrize('value', [2.7, 2.0, True, '2'])
+@pytest.mark.parametrize('value', [2.7, 2.0, True])
 def test_a_count_is_never_truncated_into_a_different_model(value):
     """A truncating `int()` would turn a mis-declared 2.7 into 2 silently, and
     the multipole order is part of the model's identity."""
@@ -192,10 +190,10 @@ def test_producing_requires_declaring():
     for value in ['NONE', 'FIXED_GRAC']:
         psi4.set_options({aco.POLICY_OPTION: value,
                           'atomic_ac_ionization_potential': IP})
-        with pytest.raises(ValueError, match=f'{aco.POLICY_OPTION} is {value}'):
+        with pytest.raises(ValueError) as refused:
             aco.run(None)
-        with pytest.raises(ValueError, match='requires declaring it'):
-            aco.run(None)
+        assert f'{aco.POLICY_OPTION} is {value}' in str(refused.value)
+        assert 'requires declaring it' in str(refused.value)
 
 
 def test_the_producer_module_reads_no_options():

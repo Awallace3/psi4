@@ -155,14 +155,3 @@ def test_odd_raw_reciprocal_synthetic_phase_and_compression():
         count += 1
     assert count == 182 and len(blocks) == 80
     assert orders == {0, 1} and witnesses == {'A imaginary', 'B imaginary'}
-
-
-def test_odd_raw_standalone_import():
-    import subprocess
-    import sys
-    from pathlib import Path
-    script = ('import sys; sys.path.insert(0,'+repr(str(Path(__file__).parent))+'); '
-              'from isapol_lower_j_oracle import reciprocal_raw_exact; '
-              'assert reciprocal_raw_exact((1,2),(1,3),2,2,3)[0]; '
-              'assert not any(k=="psi4" or k.startswith("psi4.") for k in sys.modules)')
-    subprocess.run([sys.executable, '-I', '-c', script], check=True)

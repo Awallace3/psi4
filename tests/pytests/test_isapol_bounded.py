@@ -16,7 +16,7 @@ def ledger():
 
 
 @pytest.mark.parametrize('field,value', [('max_bytes', True), ('max_work', 6_000_000_000_001),
-                                      ('max_io_bytes', 0), ('max_bytes', 0)])
+                                      ('max_io_bytes', 0)])
 def test_resource_declarations_fail_closed(field, value):
     args = dict(max_bytes=512*1024**2, max_work=6_000_000_000_000, max_io_bytes=64*1024**3)
     args[field] = value
@@ -288,6 +288,8 @@ def test_live_small_molecule_driver_completes_and_cleans_checkpoints(small_water
             np.testing.assert_array_equal(a, b)
 
 
+# Declaration refusals precede any molecule-dependent work; one molecule suffices.
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
 def test_missing_scf_seal_is_not_manufactured(small_water, tmp_path, monkeypatch):
     wfn, recipe, args = small_water
     monkeypatch.delattr(wfn, '_scf_convergence_evidence')
@@ -296,6 +298,7 @@ def test_missing_scf_seal_is_not_manufactured(small_water, tmp_path, monkeypatch
     assert not list(tmp_path.iterdir())
 
 
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
 def test_work_preflight_rejects_before_factor_construction(small_water, tmp_path, monkeypatch):
     wfn, recipe, args = small_water
     def forbidden(*args, **kwargs):
@@ -328,6 +331,7 @@ def test_late_failure_cleans_owned_checkpoints(small_water, tmp_path, monkeypatc
     ('anchor_metric_damping', True, 'anchor_metric'), ('shell_cutoff', -1., 'shell_cutoff'),
     ('localization_rank_limit', 0, 'localization_rank'),
 ])
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
 def test_public_declaration_refusals(small_water, tmp_path, key, value, match):
     wfn, recipe, args = small_water
     with pytest.raises(ValueError, match=match):

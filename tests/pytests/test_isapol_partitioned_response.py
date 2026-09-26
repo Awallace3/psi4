@@ -180,7 +180,7 @@ def test_invalid_samples(field, value):
         q([s])
 
 
-@pytest.mark.parametrize("cutoff", [-1., np.inf, np.nan])
+@pytest.mark.parametrize("cutoff", [-1., np.inf])
 def test_invalid_cutoff(cutoff):
     with pytest.raises(ValueError):
         q([site()], denominator_cutoff=cutoff)

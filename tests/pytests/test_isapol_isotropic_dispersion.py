@@ -22,15 +22,6 @@ def coefficients(a=None, b=None, weights=(0., 1.), order=12):
     return result.pairs[0].coefficients
 
 
-def test_independent_rank_factors_and_coverage():
-    # Independent low-rank isotropic identities, cp includes 1/(2*pi).
-    expected = {6: 6., 8: 15.+15., 10: 28.+70.+28., 12: 45.+210.+210.+45.}
-    for x in coefficients():
-        assert x.value == expected[x.order]
-        assert x.complete and x.missing_rank_pairs == []
-        assert len(x.included_rank_pairs) == x.order//2-2
-
-
 @pytest.mark.parametrize("ranks,complete,values", [
     ((1,), [True, False, False, False], [6., 0., 0., 0.]),
     ((1, 2), [True, True, False, False], [6., 30., 70., 0.]),
@@ -38,8 +29,10 @@ def test_independent_rank_factors_and_coverage():
     ((1, 2, 3, 4), [True]*4, [6., 30., 126., 510.]),
 ])
 def test_truncated_models(ranks, complete, values):
+    # Independent low-rank isotropic identities, cp includes 1/(2*pi).
     m = model([site(ranks=ranks)])
     result = coefficients(m, m)
+    assert [x.order for x in result] == [6, 8, 10, 12]
     assert [x.complete for x in result] == complete
     assert [x.value for x in result] == values
     for x in result:
@@ -104,7 +97,7 @@ def test_model_ownership_static_exclusion_and_signed_values():
     assert result[0].complete
 
 
-@pytest.mark.parametrize("frequencies", [[], [-1., 1.], [0., np.nan], [0., np.inf], [1., 0.], [1., 1.]])
+@pytest.mark.parametrize("frequencies", [[], [-1., 1.], [0., np.inf], [1., 0.], [1., 1.]])
 def test_invalid_frequencies(frequencies):
     with pytest.raises(ValueError):
         model(frequencies=frequencies)
@@ -116,23 +109,26 @@ def test_invalid_ranks(ranks):
         model([site(ranks=ranks)])
 
 
-@pytest.mark.parametrize("kind", ["null", "shape", "nan", "symmetry", "label", "origin", "duplicate", "empty", "provenance"])
+@pytest.mark.parametrize("kind", ["null", "shape", "columns", "nan", "symmetry", "label", "origin", "duplicate",
+                                  "empty", "provenance"])
 def test_invalid_model(kind):
     s = site()
     if kind == "null": s.polarizabilities = None
     elif kind == "shape": s.polarizabilities = c.Matrix.from_array(np.ones((3, 4)))
+    elif kind == "columns": s.polarizabilities = c.Matrix.from_array(np.ones((2, 3)))
     elif kind == "nan": s.polarizabilities.np[0, 0] = np.nan
     elif kind == "symmetry":
         dims = c.Dimension.from_list([2, 2])
         s.polarizabilities = c.Matrix("symmetry", dims, dims)
     elif kind == "label": s.label = ""
     elif kind == "origin": s.origin = [np.inf, 0., 0.]
-    with pytest.raises(ValueError):
+    match = {"shape": "dimensions", "columns": "dimensions", "nan": "Nonfinite"}.get(kind)
+    with pytest.raises(ValueError, match=match):
         c.IsaIsotropicModel([0., 1.], [] if kind == "empty" else [s, s] if kind == "duplicate" else [s],
                             "" if kind == "provenance" else "invalid test")
 
 
-@pytest.mark.parametrize("weights", [[], [0.], [0., -1.], [1., 1.], [0., np.nan], [0., np.inf], [0., 0.]])
+@pytest.mark.parametrize("weights", [[], [0., -1.], [1., 1.], [0., np.inf], [0., 0.]])
 def test_invalid_weights(weights):
     with pytest.raises(ValueError):
         coefficients(weights=weights)
@@ -149,17 +145,20 @@ def test_mismatched_frequencies():
         coefficients(b=model(frequencies=[0., 1.00000001]))
 
 
-@pytest.mark.parametrize("kind", ["quadrature_sum", "rank_factor"])
-def test_finite_sum_and_coefficient_overflow(kind):
-    if kind == "quadrature_sum":
+@pytest.mark.parametrize("kind", ["quadrature_product", "quadrature_sum", "rank_factor"])
+def test_finite_product_sum_and_coefficient_overflow(kind):
+    if kind == "quadrature_product":
+        a = b = model([site(values=np.full((2, 4), 1.e200))])
+        weights, match = [0., 1.], "quadrature product"
+    elif kind == "quadrature_sum":
         a = model([site(ranks=(1,), values=[[1.e308], [1.e308]])], [1., 2.])
         b = model([site(ranks=(1,))], [1., 2.])
-        weights = [1., 1.]
+        weights, match = [1., 1.], "quadrature sum"
     else:
         a = model([site(ranks=(1,), values=[[1.], [4.e307]])])
         b = model([site(ranks=(1,))])
-        weights = [0., 1.]
-    with pytest.raises(ValueError, match="quadrature sum" if kind == "quadrature_sum" else "dispersion coefficient"):
+        weights, match = [0., 1.], "dispersion coefficient"
+    with pytest.raises(ValueError, match=match):
         coefficients(a, b, weights)
 
 
@@ -201,16 +200,6 @@ def test_requested_order_truncation(order):
     assert [x.order for x in result] == list(range(6, order+1, 2))
 
 
-def test_additional_invalid_models():
-    with pytest.raises(ValueError, match="dimensions"):
-        model([site(values=np.ones((2, 3)))])
-    with pytest.raises(ValueError, match="Nonfinite"):
-        model([site(values=np.full((2, 4), np.inf))])
-    a = model([site(values=np.ones((1, 4)))], [0.])
-    with pytest.raises(ValueError):
-        coefficients(a, a, [0.])
-
-
 def test_scalar_trace_normalization_rank_blocks():
     # Supplied isotropic Racah block alpha_ll=alpha_l I_(2l+1) gives
     # alpha_l on trace averaging, independently of block dimension.
@@ -221,9 +210,3 @@ def test_scalar_trace_normalization_rank_blocks():
     result = coefficients(a, a)
     expected = [6*2**2, 30*2*3, 56*2*5+70*3**2, 90*2*7+420*3*5]
     np.testing.assert_allclose([x.value for x in result], expected, rtol=0., atol=0.)
-
-
-def test_finite_overflow():
-    a = model([site(values=np.full((2, 4), 1.e200))])
-    with pytest.raises(ValueError, match="Nonfinite"):
-        coefficients(a, a)

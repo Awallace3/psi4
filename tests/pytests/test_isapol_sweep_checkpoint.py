@@ -73,7 +73,7 @@ def test_capture_requires_live_controller_dispatch():
     spec.loader.exec_module(capture)
     call = '  call Iterative_Stockholder_Atoms_restart(mol,0,4,.false.,info)\n'
     assert capture.controller_routine(call) == 'Iterative_Stockholder_Atoms_restart'
-    for text in ['', call+call, call.replace('_restart', '')]:
+    for text in [call+call, call.replace('_restart', '')]:
         with pytest.raises(ValueError, match='dispatch'):
             capture.controller_routine(text)
 

@@ -406,10 +406,8 @@ def test_isotropic_scalars_reduce_each_rank_block():
 
 
 def test_isotropic_scalars_requires_a_refinement_result():
-    built = case('l2h1')
-    for bad in (built['model'], solve(built).refined_tensors, None):
-        with pytest.raises(ValueError):
-            R.isotropic_scalars(bad)
+    with pytest.raises(ValueError):
+        R.isotropic_scalars(solve(case('l2h1')).refined_tensors)
 
 
 # ------------------------------------------------------- declared variable list

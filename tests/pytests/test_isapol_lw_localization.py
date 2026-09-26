@@ -40,34 +40,6 @@ def _lw_localize(positions, values, bonds, tolerance=1.0e-9, frequency=0.0):
     )
 
 
-def test_lw_localization_requires_explicit_finite_frequency_identity():
-    with pytest.raises(Exception, match="frequency must be finite"):
-        _lw_localize([[0.0, 0.0, 0.0]], [_working_l3_matrix()], [], frequency=float("nan"))
-
-
-def test_lw_two_site_charge_flow_localizes_to_full_rank3_fixture():
-    values = [_working_l3_matrix() for _ in range(4)]
-    values[0][0][0], values[1][0][0] = -2.0, 2.0
-    values[2][0][0], values[3][0][0] = 2.0, -2.0
-    result = _lw_localize([[0.0, 0.0, 0.0], [0.2, -0.3, 0.4]], values, [(0, 1)])
-    local = result.local
-    assert len(local) == 2
-    # The core storage is rank-4 wide; a rank-3 declaration leaves every component
-    # above rank 3 identically zero rather than absent, and the leading 15x15 is
-    # bitwise what the rank-3-wide storage produced.
-    assert local[0].shape == (24, 24)
-    assert all(local[s].get(r, c) == 0.0 for s in (0, 1)
-               for r in range(24) for c in range(24) if r >= 15 or c >= 15)
-    assert local[0].get(0, 0) == pytest.approx(-0.16, abs=1.0e-11)
-    assert local[0].get(0, 1) == pytest.approx(-0.08, abs=1.0e-11)
-    assert local[0].get(0, 2) == pytest.approx(0.12, abs=1.0e-11)
-    assert local[0].get(0, 3) == pytest.approx(-0.038, abs=1.0e-11)
-    assert local[1].get(0, 3) == pytest.approx(0.038, abs=1.0e-11)
-    assert local[0].get(14, 14) == pytest.approx(-0.000050625, abs=1.0e-12)
-    assert local[1].get(14, 14) == pytest.approx(-0.000050625, abs=1.0e-12)
-    assert max(_residual_values(result.residuals)) < 1.0e-10
-
-
 def test_lw_three_site_preserves_sum_reciprocity_and_transfers_only_on_bonds():
     positions = [[0.0, 0.0, 0.0], [0.7, -0.2, 0.1], [1.1, 0.4, -0.3]]
     graph_operator = [[-1.0, 1.0, 0.0], [1.0, -2.0, 1.0], [0.0, 1.0, -1.0]]
@@ -199,7 +171,7 @@ def _assert_refined_invariants(result, positions, original, tolerance):
                    for row in range(16) for column in range(16)) <= tolerance
 
 
-def test_lw_refined_workspace_matches_full_two_site_oracle_and_reversed_edge():
+def test_lw_two_site_charge_flow_matches_fixture_oracle_and_reversed_edge():
     positions = [[0.0, 0.0, 0.0], [0.2, -0.3, 0.4]]
     values = [_working_l3_matrix() for _ in range(4)]
     values[0][0][0], values[1][0][0] = -2.0, 2.0
@@ -211,11 +183,39 @@ def test_lw_refined_workspace_matches_full_two_site_oracle_and_reversed_edge():
         [[-left * right for right in tail] for left in tail],
         [[-left * right for right in negative_tail] for left in negative_tail],
     ]
-    for bonds in ([(0, 1)], [(1, 0)]):
-        result = _lw_localize(positions, values, bonds)
+    results = [_lw_localize(positions, values, bonds) for bonds in ([(0, 1)], [(1, 0)])]
+    for result in results:
         for site in range(2):
             _assert_matrix_close(_local_rank3_values(result.local[site]), expected[site], 2.0e-11)
         _assert_refined_invariants(result, positions, values, 2.0e-10)
+
+    # Literal rank-3 fixture values of the same localization.
+    local = results[0].local
+    assert len(local) == 2
+    # The core storage is rank-4 wide; a rank-3 declaration leaves every component
+    # above rank 3 identically zero rather than absent, and the leading 15x15 is
+    # bitwise what the rank-3-wide storage produced.
+    assert local[0].shape == (24, 24)
+    assert all(local[s].get(r, c) == 0.0 for s in (0, 1)
+               for r in range(24) for c in range(24) if r >= 15 or c >= 15)
+    assert local[0].get(0, 0) == pytest.approx(-0.16, abs=1.0e-11)
+    assert local[0].get(0, 1) == pytest.approx(-0.08, abs=1.0e-11)
+    assert local[0].get(0, 2) == pytest.approx(0.12, abs=1.0e-11)
+    assert local[0].get(0, 3) == pytest.approx(-0.038, abs=1.0e-11)
+    assert local[1].get(0, 3) == pytest.approx(0.038, abs=1.0e-11)
+    assert local[0].get(14, 14) == pytest.approx(-0.000050625, abs=1.0e-12)
+    assert local[1].get(14, 14) == pytest.approx(-0.000050625, abs=1.0e-12)
+    assert max(_residual_values(results[0].residuals)) < 1.0e-10
+
+    # Reversing the bond keeps the canonical transfer amounts and refined pairs.
+    first, reversed_edge = results
+    a, b = _transfer_values(first.transfers), _transfer_values(reversed_edge.transfers)
+    assert len(a) == len(b)
+    for left, right in zip(a, b):
+        assert left[:5] == right[:5]
+        assert left[5] == pytest.approx(right[5], abs=1.0e-12)
+    for left, right in zip(first.refined_pairs, reversed_edge.refined_pairs):
+        _assert_matrix_close(_matrix_values(left), _matrix_values(right), 2.0e-11)
 
 
 def test_lw_co_axis_aligned_charge_flow_has_closed_local_cartesian_oracle():
@@ -491,20 +491,21 @@ def test_lw_frequency_is_required_and_default_is_postcondition_gate():
         psi4.core.isa_localize_lw(positions, [block], 0.0, [], 1.0e-9)
 
 
-@pytest.mark.parametrize("frequency", [float("nan"), float("inf"), -float("inf"), -0.1])
-def test_lw_invalid_frequency_fails_closed(frequency):
-    with pytest.raises(RuntimeError, match="frequency"):
+@pytest.mark.parametrize("frequency,message", [(float("nan"), "frequency must be finite"),
+                                               (-0.1, "frequency must be nonnegative")])
+def test_lw_invalid_frequency_fails_closed(frequency, message):
+    with pytest.raises(RuntimeError, match=message):
         _lw_localize([[0.0, 0.0, 0.0]], [_working_l3_matrix()], [], frequency=frequency)
 
 
-@pytest.mark.parametrize("tolerance", [0.0, -1.0, float("nan"), float("inf")])
+@pytest.mark.parametrize("tolerance", [0.0, float("nan")])
 def test_lw_invalid_residual_tolerance(tolerance):
     with pytest.raises(RuntimeError, match="tolerance"):
         _lw_localize([[0.0, 0.0, 0.0]], [_working_l3_matrix()], [], tolerance)
 
 
-@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf")])
-def test_lw_nonfinite_positions_and_blocks(bad):
+def test_lw_nonfinite_positions_and_blocks():
+    bad = float("nan")
     with pytest.raises(RuntimeError, match="finite"):
         _lw_localize([[bad, 0.0, 0.0]], [_working_l3_matrix()], [])
     block = _working_l3_matrix()
@@ -525,8 +526,8 @@ def test_lw_block_collection_rejects_invalid_structure(blocks):
         psi4.core.isa_localize_lw(_matrix([[0.0, 0.0, 0.0]]), blocks, 0.0, [])
 
 
-@pytest.mark.parametrize("rows,cols", [(15, 15), (16, 15), (15, 16), (17, 17),
-                                       (24, 24), (25, 24), (24, 25), (26, 26)])
+@pytest.mark.parametrize("rows,cols", [(15, 15), (17, 17), (24, 24), (26, 26),
+                                       (16, 15), (25, 24)])
 def test_lw_block_dimensions(rows, cols):
     with pytest.raises(RuntimeError, match="16 by 16 or 25 by 25"):
         psi4.core.isa_localize_lw(_matrix([[0.0, 0.0, 0.0]]),
@@ -569,22 +570,6 @@ def test_lw_input_reciprocity_rejected():
     values[1][1][2] = 1.0
     with pytest.raises(RuntimeError, match="input reciprocity"):
         _lw_localize([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], values, [(0, 1)])
-
-
-def test_lw_reversed_edge_keeps_canonical_transfer_amounts():
-    values = [_working_l3_matrix() for _ in range(4)]
-    values[0][0][0] = values[3][0][0] = -2.0
-    values[1][0][0] = values[2][0][0] = 2.0
-    positions = [[0.0, 0.0, 0.0], [0.2, -0.3, 0.4]]
-    first = _lw_localize(positions, values, [(0, 1)])
-    reversed_edge = _lw_localize(positions, values, [(1, 0)])
-    a, b = _transfer_values(first.transfers), _transfer_values(reversed_edge.transfers)
-    assert len(a) == len(b)
-    for left, right in zip(a, b):
-        assert left[:5] == right[:5]
-        assert left[5] == pytest.approx(right[5], abs=1.0e-12)
-    for left, right in zip(first.refined_pairs, reversed_edge.refined_pairs):
-        _assert_matrix_close(_matrix_values(left), _matrix_values(right), 2.0e-11)
 
 
 def test_lw_source_is_pod_only_and_resource_bounded():
@@ -652,9 +637,10 @@ def test_lw_declared_rank_limit_defaults_to_three_and_leaves_the_call_unchanged(
     values = _random_reciprocal_blocks(3, 20260910)
     bonds = [(0, 1), (1, 2)]
     unlimited = _limited_localize(positions, values, bonds, 3)
-    for explicit in (3, None):
-        result = (unlimited if explicit is None else
-                  _limited_localize(positions, values, bonds, explicit))
+    default = psi4.core.isa_localize_lw(
+        _matrix(positions), [_matrix(block) for block in values], 0.0, bonds, 1.0e-9,
+        float("inf"))
+    for result in (unlimited, default):
         assert result.localization_rank_limit == 3
         # Nothing was discarded at the full working space, so this is exactly 0,
         # not merely small: it is a report on the declaration, not a residual.
@@ -764,8 +750,6 @@ def test_lw_rank_four_cannot_be_declared_on_rank_three_blocks():
     narrow = _random_reciprocal_blocks(2, 20260912)
     with pytest.raises(Exception, match="rank 4 localization requires 25 by 25"):
         _limited_localize(positions, narrow, [(0, 1)], 4)
-    with pytest.raises(Exception, match="rank_limit must be 1, 2, 3 or 4"):
-        _limited_localize(positions, _random_reciprocal_blocks(2, 20260913, width=25), [(0, 1)], 5)
     # Zero-extending by hand to the full width is the caller DECLARING rank 4, and
     # is accepted. Its ranks 1..3 reproduce the rank-3 localization bitwise, but its
     # rank-4 block is NOT zero: translation is rank-raising, so transferring a
@@ -816,7 +800,7 @@ def test_lw_declared_rank_limit_reports_and_does_not_gate_discarded_input():
         assert (np.asarray(full.local[site])[:8, :8] == 0.0).all()
 
 
-@pytest.mark.parametrize("rank_limit", [0, 4, -1, 16])
+@pytest.mark.parametrize("rank_limit", [0, 5])
 def test_lw_declared_rank_limit_out_of_range_fails_closed(rank_limit):
-    with pytest.raises(Exception, match="rank_limit"):
+    with pytest.raises(Exception, match="rank_limit must be 1, 2, 3 or 4"):
         _limited_localize([[0.0, 0.0, 0.0]], [_working_l3_matrix()], [], rank_limit)

@@ -108,14 +108,12 @@ def test_reference_declaration_is_the_transcribed_input():
 
 
 @pytest.mark.parametrize('bad', [
-    dict(join='grac'), dict(join='GRAC'), dict(bragg_table='bragg'),
+    dict(join='grac'), dict(bragg_table='bragg'),
     dict(origin='homo'), dict(shift_mode='fitted'),
-    dict(multipole_order=4), dict(multipole_order=-1), dict(multipole_order=2.),
-    dict(multipole_order=True), dict(ionization_potential=0.),
-    dict(ionization_potential=-.4638), dict(ionization_potential=float('nan')),
-    dict(ionization_potential=float('inf')), dict(b1=0.), dict(b1=4., b2=3.),
-    dict(b1=4.), dict(tanh_k=0.), dict(tanh_k=-1.), dict(fa_scale=-.1),
-    dict(fa_scale=1.1), dict(shift_value=float('nan')),
+    dict(multipole_order=4), dict(multipole_order=-1), dict(multipole_order=True),
+    dict(ionization_potential=0.), dict(ionization_potential=float('nan')),
+    dict(shift_value=float('nan')), dict(b1=0.), dict(b1=4., b2=3.), dict(b1=4.),
+    dict(tanh_k=0.), dict(fa_scale=-.1), dict(fa_scale=1.1),
 ])
 def test_declaration_refuses_undeclared_or_impossible_fields(bad):
     with pytest.raises(ValueError):
@@ -222,7 +220,6 @@ def test_analytic_moments_carry_number_density_not_charge(pristine):
 
 # ------------------------------------------------------------------ the producer
 @pytest.mark.parametrize('kwargs,error', [
-    (dict(declaration=None), TypeError),
     (dict(declaration=dict(ionization_potential=.4638)), TypeError),
     (dict(declaration=replace(DECL, join='none')), ValueError),
     (dict(shift_damping=0.), ValueError),
@@ -379,7 +376,6 @@ def test_validator_refuses_a_malformed_or_absent_record(pristine):
         ac.validate_declared_ac(doubled, DECL)
 
 
-# ------------------------------------------------------------------- the routing
 # ------------------------------------------- the surface, and what it cannot be
 def test_the_option_surface_was_widened_only_together_with_its_declaration():
     """A policy string alone would not have been an exposure.

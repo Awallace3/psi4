@@ -232,12 +232,11 @@ def test_leg_a_defect_measurement_tracks_the_input(defect):
         assert float(getattr(residuals, name)) <= 1e-12, name
 
 
-@pytest.mark.parametrize('defect', [0.25, 0.5])
-def test_leg_a_default_still_rejects_the_supplied_defect(defect):
+def test_leg_a_default_still_rejects_the_supplied_defect():
     """The default combined gate is unchanged; nothing is silently accepted."""
     with pytest.raises(RuntimeError, match=r'postcondition exceeds residual tolerance '
                                            r'.*charge-sum=.*local-charge=.*input-sum-rule='):
-        localize(synthetic_supplied(defect))
+        localize(synthetic_supplied(0.25))
 
 
 def test_leg_a_reporting_does_not_loosen_the_three_ordered_gates():

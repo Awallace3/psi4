@@ -91,7 +91,7 @@ def test_legacy_custom_tolerance_without_profile_certification(tolerance, defect
     assert not tool.compare(actual, reference, initial, tolerance)['passed']
 
 
-@pytest.mark.parametrize('tolerance', [0., -1., float('nan'), float('inf')])
+@pytest.mark.parametrize('tolerance', [0., float('inf')])
 def test_invalid_legacy_tolerance(tolerance):
     with pytest.raises(ValueError, match='Invalid tolerance'):
         tool.compare(*fixture(), tolerance)

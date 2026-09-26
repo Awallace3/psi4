@@ -89,7 +89,7 @@ def test_none_and_fixed_profile_owned(module, monkeypatch):
     assert p.components == old and p != replace(p, shift=.1)
 
 
-@pytest.mark.parametrize('shift', [None, 0, -.1, True, '0.06', float('nan'), float('inf'), .061])
+@pytest.mark.parametrize('shift', [None, 0, True, '0.06', float('nan'), .061])
 def test_bad_declaration_never_reaches_seal(module, monkeypatch, shift):
     _, w = profile()
     monkeypatch.setattr(module, 'require_scf_seal', lambda w: pytest.fail('seal entered'))

@@ -15,7 +15,7 @@ measured is recorded below as literals and re-derived by the scratch guard.
 
 *What is here.*  The parser's contract is tested on synthetic documents built to the
 reviewed dialect, which needs no fixture and is a stronger statement than parsing the
-one recorded file: the eleven-fault matrix, the pair sequence, the dialect separation
+one recorded file: the fault matrix, the pair sequence, the dialect separation
 and whitespace insensitivity all become claims about what the parser accepts rather
 than about what one document happens to contain.  The local-frame rule is derived
 from the site geometry instead of being read back from the fixture, and the rank-4
@@ -174,7 +174,7 @@ def test_pol_dialect_ignores_whitespace_runs(extractor, distributed):
 @pytest.mark.parametrize('distributed', [True, False])
 @pytest.mark.parametrize('fault', FAULTS)
 def test_pol_dialect_rejects_malformed_sections(extractor, distributed, fault):
-    """The eleven-fault matrix, on a synthetic document rather than the fixture."""
+    """The fault matrix, on a synthetic document rather than the fixture."""
     text, _ = synthetic_pol(distributed)
     lines = text.splitlines()
     if fault == 'label':

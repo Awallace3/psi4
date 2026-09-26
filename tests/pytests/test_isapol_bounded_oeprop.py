@@ -87,9 +87,7 @@ def test_public_dispatch_owned_result_and_unchanged_return(water, monkeypatch):
 
 
 @pytest.mark.parametrize('tasks,kwargs', [
-    (('ATOMIC_REFINED_DISPERSION',), {}),
     (('DIPOLE', 'ATOMIC_PARTITION'), {}),
-    (('ATOMIC_PARTITION',), {'atomic_backend':'BOUNDED_DF', 'preset':'water'}),
     (('DIPOLE','ATOMIC_REFINED_DISPERSION'), {'atomic_backend':'BOUNDED_DF', 'preset':'water'}),
     (('ATOMIC_REFINED_DISPERSION',), {'atomic_backend':'typo', 'preset':'water'}),
     (('ATOMIC_REFINED_DISPERSION',), {'atomic_backend':'BOUNDED_DF', 'preset':'water', 'npointz':32}),

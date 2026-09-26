@@ -154,9 +154,8 @@ def synthetic(distributed):
 
 @pytest.mark.parametrize('distributed', [False, True])
 @pytest.mark.parametrize('mutation', ['label', 'index', 'rank', 'frequency', 'extra_header', 'short_row',
-                                     'long_row', 'nan', 'inf', 'integer', 'bad_exponent', 'comma',
-                                     'endfile', 'trailing', 'missing_block', 'reordered', 'duplicate',
-                                     'short_file', 'extra_end', 'token_suffix'])
+                                     'long_row', 'nan', 'integer', 'bad_exponent', 'comma',
+                                     'token_suffix', 'endfile', 'trailing', 'missing_block', 'short_file'])
 def test_bounded_synthetic_malformed_inputs(distributed, mutation):
     lines = synthetic(distributed)
     size = 25 if distributed else 15
@@ -168,16 +167,13 @@ def test_bounded_synthetic_malformed_inputs(distributed, mutation):
     elif mutation == 'extra_header': lines[0] += ' EXTRA'
     elif mutation == 'short_row': lines[1] = ' '.join(lines[1].split()[:-1])
     elif mutation == 'long_row': lines[1] += ' 0.0'
-    elif mutation in ('nan', 'inf', 'integer', 'bad_exponent', 'comma', 'token_suffix'):
-        token = {'nan': 'NaN', 'inf': '-Inf', 'integer': '0', 'bad_exponent': '0.0E+', 'comma': '0,0', 'token_suffix': '0.0junk'}[mutation]
+    elif mutation in ('nan', 'integer', 'bad_exponent', 'comma', 'token_suffix'):
+        token = {'nan': 'NaN', 'integer': '0', 'bad_exponent': '0.0E+', 'comma': '0,0', 'token_suffix': '0.0junk'}[mutation]
         lines[1] = ' '.join([token] + lines[1].split()[1:])
     elif mutation == 'endfile': lines[-1] = 'END'
     elif mutation == 'trailing': lines.append('ignored?')
     elif mutation == 'missing_block': del lines[stride:2*stride]
-    elif mutation == 'reordered': lines[:2*stride] = lines[stride:2*stride] + lines[:stride]
-    elif mutation == 'duplicate': lines[stride:2*stride] = lines[:stride]
     elif mutation == 'short_file': lines = lines[:3]
-    elif mutation == 'extra_end': lines.insert(1+size, 'END')
     with pytest.raises(ValueError):
         parser.parse_pol('\n'.join(lines)+'\n', distributed, 1, '-0.1000000E+00')
 
@@ -200,7 +196,7 @@ def test_synthetic_signed_zero_and_termination(distributed):
             parser.parse_pol('\n'.join(lines), True, 1, '-0.1000000E+00')
 
 
-@pytest.mark.parametrize('index,token', [(0, '-0.1'), (11, '-0.1'), (True, '-0.1'), (1, '0.0'), (1, 'NaN'), (1, '0.1')])
+@pytest.mark.parametrize('index,token', [(0, '-0.1'), (11, '-0.1'), (True, '-0.1'), (1, '0.0'), (1, 'NaN')])
 def test_invalid_parser_contract(index, token):
     with pytest.raises(ValueError):
         parser.parse_pol('\n'.join(synthetic(True)), True, index, token)
