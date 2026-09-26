@@ -168,56 +168,6 @@ def test_the_grid_form_may_declare_a_charge_row_tolerance_and_be_refused(declare
                                       charge_tolerance=1.e-12)
 
 
-def test_the_supplied_values_record_carries_the_declared_axes(declared, analytic):
-    """``DFCentreMultipoles.partition()`` round-trips bitwise and declares its axes.
-
-    Going through the shipped ``IsaPartitionedMultipoles`` is what puts the
-    DF-centre Q on the same ``-Q C Q^T`` path as the stockholder Q, so there is
-    no second contraction anywhere; that only works if the values survive the
-    trip unchanged.
-    """
-    _, recipe = declared
-    partition = analytic.partition()
-    np.testing.assert_array_equal(np.asarray(partition.values), analytic.values)
-    assert tuple(partition.labels) == ('O1', 'H2', 'H3') == analytic.labels
-    assert tuple(partition.offsets) == (0, 16, 32, 48)
-    assert tuple(partition.ranks) == (3, 3, 3)
-    assert tuple(partition.components)[:5] == ('00', '10', '11c', '11s', '20')
-    assert partition.representation == dfm.REPRESENTATION == 'fitted_density_coefficients'
-    assert 'DistPolAlgorithm=DF' in partition.provenance
-    np.testing.assert_array_equal(np.asarray(partition.origins),
-                                  np.asarray(recipe.auxiliary.centres))
-    # The sites it declares carry no samples: nothing was integrated.
-    assert all(site.samples is None or not site.samples.points for site in analytic.sites())
-
-
-def test_the_site_isotropic_gate_refuses_a_negative_static_site(analytic):
-    """A negative site response must not reach a polarizability or a C_n.
-
-    Measured on hydrogen at rank 3 with a MAIN-matched JKFIT auxiliary set, the
-    DF rule can charge enough of a diffuse function's moment to a light centre
-    to drive the site's own static response negative.  The refusal names the
-    site, the rank, the value and the alternative declarations; it does not
-    tighten anything, because there is nothing here to converge.
-    """
-    labels, m, rank = analytic.labels, 16, 3
-    rng = np.random.default_rng(7)
-    root = rng.normal(size=(3*m, 3*m))
-    psd = (root @ root.T).reshape(3, m, 3, m).transpose(0, 2, 1, 3)
-    scalars = dfm.site_isotropic_gate(psd, rank, labels=labels)
-    assert set(scalars) == {(a, l) for a in labels for l in (1, 2, 3)}
-    assert min(scalars.values()) > 0.
-    broken = psd.copy()
-    broken[1, 1, 1:4, 1:4] *= -1.
-    with pytest.raises(RuntimeError) as excinfo:
-        dfm.site_isotropic_gate(broken, rank, labels=labels)
-    message = str(excinfo.value)
-    assert 'site H2 rank 1' in message and 'aug-cc-pVTZ-RI' in message
-    assert '1 of 9 site/rank scalars are negative' in message
-    with pytest.raises(ValueError, match='site,site,component,component'):
-        dfm.site_isotropic_gate(np.zeros((3, 3, 9, 9)), rank, labels=labels)
-
-
 @pytest.mark.parametrize('kwargs,pattern', [
     (dict(rank=0), 'rank must be an integer 1 to 4, not 0'),
     (dict(rank=5), 'rank must be an integer 1 to 4, not 5'),
@@ -248,7 +198,6 @@ def test_the_dispatcher_refuses_a_form_handed_the_wrong_operands(declared):
     """The closed form samples nothing and the grid form integrates something."""
     wfn, recipe = declared
     points, weights = _grid(wfn, 50, 110)
-    assert dfm.DISTRIBUTIONS == ('isa_a', 'df_centre_analytic', 'df_centre_grid')
     assert dfm.DF_CENTRE_DISTRIBUTIONS == ('df_centre_analytic', 'df_centre_grid')
     with pytest.raises(ValueError, match='Unknown DF-centre distribution'):
         dfm.df_centre_multipoles('isa_a', recipe.auxiliary, recipe.sites, 3)

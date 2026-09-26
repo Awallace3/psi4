@@ -56,13 +56,10 @@ WHERE THIS RULE IS SOUND.  The DF rule is basis-sensitive in a way the
 stockholder rule is not, because a function's whole moment is charged to its own
 centre with no partition to damp it.  On the reference's own declared
 aug-cc-pVTZ-RI auxiliary set it is well behaved and reaches the reference's site
-ratio (``SPEC.md`` section 7).  On a MAIN-matched JKFIT auxiliary set it is
-numerically hopeless: static distributed blocks reach 1.3e+03 while summing to
-about 9.8, and the closed form yields a NEGATIVE hydrogen rank-3 scalar.  A
-negative site response is a broken model, so ``site_isotropic_gate`` refuses it
-here rather than letting it propagate into a polarizability or a C6.  That
-refusal is a property of the declared (rule, auxiliary basis) pair; it is never
-worked around by loosening the gate.
+ratio.  On a MAIN-matched JKFIT auxiliary set it is numerically hopeless: static
+distributed blocks reach 1.3e+03 while summing to about 9.8, and the closed form
+yields a NEGATIVE hydrogen rank-3 scalar.  That is a property of the declared
+(rule, auxiliary basis) pair, not something a tolerance can repair.
 """
 import math
 from dataclasses import dataclass, field
@@ -113,10 +110,6 @@ REPRESENTATION = 'fitted_density_coefficients'
 
 #: The DF-centre forms this module produces, as the public path names them.
 DF_CENTRE_DISTRIBUTIONS = ('df_centre_analytic', 'df_centre_grid')
-#: Every distributed-multipole rule the pipeline can declare.  ``isa_a`` is the
-#: shipped stockholder shape partition and lives in ``isapol_native_partition``;
-#: it is listed here only so one tuple names the whole choice.
-DISTRIBUTIONS = ('isa_a',) + DF_CENTRE_DISTRIBUTIONS
 
 
 def df_centre_multipoles(distribution, auxiliary, sites, rank, *, points=None, weights=None):
@@ -293,21 +286,6 @@ class DFCentreMultipoles:
     provenance: str
     diagnostics: dict = field(default_factory=dict)
 
-    def sites(self):
-        """The declared ``IsaMultipoleSite`` axes, carrying no samples."""
-        out = []
-        for label, origin in zip(self.labels, self.origins):
-            site = core.IsaMultipoleSite()
-            site.label, site.origin, site.rank = label, list(origin), self.rank
-            out.append(site)
-        return out
-
-    def partition(self):
-        """The Q as a ``core.IsaPartitionedMultipoles`` supplied-values record."""
-        return core.IsaPartitionedMultipoles(core.Matrix.from_array(self.values),
-                                             self.sites(), self.representation,
-                                             self.provenance)
-
 
 def _declared_axes(auxiliary, sites, rank):
     """Refuse anything but an exact site-to-auxiliary-centre correspondence."""
@@ -451,35 +429,3 @@ def grid_df_centre_multipoles(auxiliary, sites, rank, points, weights, *,
                                'on the charge row'))
 
 
-def site_isotropic_gate(raw, rank, *, labels):
-    """Refuse a DF-centre static response with a negative site isotropic scalar.
-
-    On a MAIN-matched auxiliary set the DF rule can charge so much of a diffuse
-    function's moment to a light centre that the site's own static rank-1
-    isotropic response comes out negative -- measured as -5.856 on hydrogen at
-    rank 3.  That is not a badly converged number to be tightened, it is a
-    broken model, and it must not reach a polarizability or a C6.  ``raw`` is the
-    static distributed tensor with axes ``(site, site, component, component)``.
-    """
-    raw = np.asarray(raw)
-    m = (rank+1)**2
-    if raw.ndim != 4 or raw.shape[:2] != (len(labels),)*2 or raw.shape[2:] != (m, m):
-        raise ValueError('Site isotropic gate needs a (site,site,component,component) '
-                         'static distributed tensor matching the declared rank')
-    scalars = {}
-    for i, label in enumerate(labels):
-        for l in range(1, rank+1):
-            lo = l*l
-            trace = float(np.trace(raw[i, i, lo:lo+2*l+1, lo:lo+2*l+1]))/(2*l+1)
-            scalars[(label, l)] = trace
-    negative = {k: v for k, v in scalars.items() if v < 0}
-    if negative:
-        worst = min(negative, key=negative.get)
-        raise RuntimeError(
-            f'The DF-centre rule on this auxiliary basis gives a negative static site '
-            f'isotropic response: site {worst[0]} rank {worst[1]} is {negative[worst]!r}. '
-            f'A negative site response is a broken model, not an unconverged one; declare '
-            f'a proper RI auxiliary set (the reference case uses aug-cc-pVTZ-RI) or the '
-            f'stockholder ISA-A rule instead. {len(negative)} of {len(scalars)} site/rank '
-            f'scalars are negative.')
-    return scalars

@@ -260,14 +260,6 @@ class _H2H1Response:
         return legs[:, :p].T @ solved[:, :p], -legs[:, p:].T @ solved[:, p:], worst
 
 
-def _frequency(store, dimensions, q, omega):
-    response = _H2H1Response(store, dimensions, q)
-    try:
-        return response.solve(omega)
-    finally:
-        response.close()
-
-
 def _kernel(auxiliary, density, grid, smoothing, cutoff, ledger):
     """Complete weighted Gram integration, then the exact fixed shell mask.
 

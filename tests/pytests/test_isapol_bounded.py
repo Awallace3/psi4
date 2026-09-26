@@ -77,7 +77,11 @@ def test_response_uses_distinct_target_and_anchor_legs(tmp_path, omega):
     d, anchor = rng.normal(size=(6, 4)), rng.normal(size=(6, 3))
     for name, value in [('h1', h1), ('h2', h2), ('target', d), ('anchor', anchor)]:
         store.save(name, value)
-    coefficient, raw, residual = backend._frequency(store, (4, 2, 3), 3, omega)
+    response = backend._H2H1Response(store, (4, 2, 3), 3)
+    try:
+        coefficient, raw, residual = response.solve(omega)
+    finally:
+        response.close()
     effective = h1+omega**2*np.linalg.inv(h2)
     np.testing.assert_allclose(coefficient, -4*d.T@np.linalg.solve(effective, d), atol=1e-12)
     np.testing.assert_allclose(raw, 4*anchor.T@np.linalg.solve(effective, anchor), atol=1e-12)

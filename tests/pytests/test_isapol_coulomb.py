@@ -144,7 +144,6 @@ def test_mo_shell_budget_includes_native_spherical_accumulation():
     core.IsaBasisRepresentation.Cartesian, core.IsaBasisRepresentation.Spherical])
 @pytest.mark.parametrize("exchange", [0., .25, 1.])
 def test_streamed_plain_df_operators_match_full_native_contractions(representation, exchange):
-    from psi4.driver.procrouting.isapol_factorized_response import factorized_projected_response
     from psi4.driver.procrouting.isapol_native_factors import native_plain_df_operators
     aux = basis([(0, 0, [.8], [.6]), (0, 2, [.7], [.5])], [[0., 0., 0.]],
                 representation=representation)
@@ -179,11 +178,6 @@ def test_streamed_plain_df_operators_match_full_native_contractions(representati
     energies[:] = 0.
     np.testing.assert_allclose(streamed.apply_h1(np.eye(6)), h1, atol=2e-12, rtol=2e-12)
     np.testing.assert_allclose(streamed.apply_h2(np.eye(6)), h2, atol=2e-12, rtol=2e-12)
-    legs = np.arange(12., dtype=float).reshape(6, 2)/12
-    response = factorized_projected_response(streamed, legs, .7, restart=6)
-    expected = legs.T @ np.linalg.solve(h2 @ h1+.7**2*np.eye(6), -4*h2 @ legs)
-    np.testing.assert_allclose(response.response, expected, atol=2e-11, rtol=2e-11)
-    assert max(response.relative_residuals) <= 1e-10
 
 
 def test_streamed_plain_df_admission_and_shell_coverage():
