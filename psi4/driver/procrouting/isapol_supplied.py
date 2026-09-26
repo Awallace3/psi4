@@ -47,6 +47,33 @@ def _frame(value):
     return f
 
 
+def _frame_from_directions(z, x):
+    """Proper local-to-global frame from a z direction and an x reference direction."""
+    def unit(vector):
+        vector = np.asarray(vector, dtype=float)
+        scale = np.max(np.abs(vector))
+        if vector.shape != (3,) or not np.isfinite(scale) or scale == 0:
+            raise ValueError("degenerate or nonfinite axis direction")
+        vector = vector/scale
+        return vector/np.linalg.norm(vector)
+
+    z, x = unit(z), unit(x)
+    # Avoid cancellation in x - z*(z.x) for nearly parallel directions.
+    y = np.cross(z, x)
+    length = np.linalg.norm(y)
+    if length <= 64*np.finfo(float).eps:
+        raise ValueError("degenerate collinear axis directions")
+    y /= length
+    x = np.cross(y, z)
+    x /= np.linalg.norm(x)
+    y = np.cross(z, x)
+    frame = np.column_stack((x, y, z))
+    if (not np.allclose(frame.T @ frame, np.eye(3), atol=1e-12, rtol=0)
+            or abs(np.linalg.det(frame)-1.) > 1e-12):
+        raise ValueError("axis directions do not define a proper rotation")
+    return frame
+
+
 def _number(token):
     if not re.fullmatch(NUMBER, token):
         raise ValueError("unknown numeric syntax or nonfinite value: " + token)
@@ -382,7 +409,6 @@ def _geometry(manifest, sources):
         if bond:
             if any(x not in expected for x in bond.groups()) or bond[1] in derived:
                 raise ValueError("unsupported/duplicate axes directive")
-            from .isapol_geometry import _frame_from_directions
             with np.errstate(over="ignore", invalid="ignore"):
                 z = np.array(expected[bond[3]]) - expected[bond[2]]
                 x = np.array(expected[bond[5]]) - expected[bond[4]]

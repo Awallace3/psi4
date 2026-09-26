@@ -1,6 +1,7 @@
 # Copyright (c) 2007-2026 The Psi4 Developers.
 # SPDX-License-Identifier: LGPL-3.0-only
 """Small independent bounded-backend identities, not large reference fixtures."""
+import itertools
 import numpy as np
 import pytest
 from psi4 import core
@@ -134,23 +135,80 @@ def test_streamed_fit_equals_dense_fit_with_same_native_targets():
     assert not np.allclose(streamed[0].parameters, streamed[1].parameters)
 
 
-def test_dense_kernel_is_the_same_screened_integral():
-    from psi4.driver.procrouting.isapol_native_partition import BasisRecipe, ShellRecipe
+def _aux_basis(centres, shells, representation=core.IsaBasisRepresentation.Cartesian):
+    """Unit-exponent, unit-coefficient AUX shells given as (centre, l)."""
+    data = []
+    for centre, l in shells:
+        shell = core.IsaGaussianShell()
+        shell.centre, shell.l, shell.exponents, shell.coefficients = centre, l, [1.], [1.]
+        data.append(shell)
+    return core.IsaExplicitBasis(core.IsaBasisRole.MolecularAux, representation, centres, data)
+
+
+def _slater_pw92_fxc(rho):
+    """Independent unpolarized Slater + PW92 kernel, analytic in rs.
+
+    f_c = rs/(9*rho) * (rs*e_c''(rs) - 2*e_c'(rs)), original PW92 table-I A
+    (also CamCASP dft_Sx_PW92c.F90:147); .0310907 belongs to the modified
+    parameterization, not XC_LDA_C_PW.
+    """
+    rs = (3/(4*np.pi*rho))**(1/3)
+    A, alpha = .031091, .21370
+    b1, b2, b3, b4 = 7.5957, 3.5876, 1.6382, .49294
+    q = 2*A*(b1*np.sqrt(rs)+b2*rs+b3*rs**1.5+b4*rs**2)
+    dq = 2*A*(b1/(2*np.sqrt(rs))+b2+1.5*b3*np.sqrt(rs)+2*b4*rs)
+    ddq = 2*A*(-b1/(4*rs**1.5)+.75*b3/np.sqrt(rs)+2*b4)
+    dl = -dq/(q*(q+1))
+    ddl = -ddq/(q*(q+1))+dq**2*(2*q+1)/(q*q*(q+1)**2)
+    de = -2*A*(alpha*np.log1p(1/q)+(1+alpha*rs)*dl)
+    dde = -2*A*(2*alpha*dl+(1+alpha*rs)*ddl)
+    return -(3/np.pi)**(1/3)/3*rho**(-2/3) + rs/(9*rho)*(rs*dde-2*de)
+
+
+@pytest.mark.parametrize('cutoff', [0., np.exp(-2.), np.nextafter(np.exp(-2.), np.inf)])
+def test_kernel_floors_caps_and_screens_the_full_grid(cutoff):
+    """Every grid row enters; the mask keeps shell pairs at exactly the cutoff."""
     from psi4.driver.procrouting.isapol_native_propagator import KernelSmoothing
-    from psi4.driver.procrouting.isapol_auxiliary_kernel import screened_auxiliary_kernel
-    recipe = BasisRecipe('two-centre test', 'synthetic', 'Cartesian',
-        ((0., 0., 0.), (2., 0., 0.)),
-        (ShellRecipe(0, 0, (1.,), (1.,)), ShellRecipe(1, 1, (.7,), (.8,))))
-    auxiliary = recipe.build('MolecularAux')
-    rng = np.random.default_rng(601)
-    grid = np.column_stack((rng.normal(size=(129, 3)), rng.random(129)))
-    density = np.array([1., .1, -.1, .2])
-    smoothing = KernelSmoothing(1e-8, 400., .1, .1, 'FD')
-    for cutoff in (0., .8):
-        actual = backend._kernel(auxiliary, density, grid, smoothing, cutoff, ledger())
-        expected = screened_auxiliary_kernel(auxiliary, density, grid,
-            smoothing=smoothing, cutoff=cutoff, block_rows=64).matrix
-        np.testing.assert_allclose(actual, expected, rtol=2e-14, atol=2e-13)
+    # Equal unit exponents: the normalized-s screen of the pair is exp(-R**2/2).
+    aux = _aux_basis([[0., 0., 0.], [2., 0., 0.]], [(0, 0), (1, 0)])
+    grid = np.array([[0., 0., 0., .2], [.5, .1, 0., .3], [1., 0., .2, .4],
+                     [2., 0., 0., .1], [3.5, 0., 0., .25]])
+    density = np.array([.3, -.05])
+    smoothing = KernelSmoothing(1e-3, 2., .1, .1, 'CONSTANT')
+    chi = np.asarray(aux.evaluate(grid[:, :3].tolist()))
+    rho = chi @ density
+    assert (rho < smoothing.rho_epsilon).any()  # negative rows are floored, not dropped
+    fxc = _slater_pw92_fxc(np.maximum(rho, smoothing.rho_epsilon))
+    assert (np.abs(fxc) > smoothing.f_max).any()  # and the cap is active
+    expected = chi.T @ ((grid[:, 3]*np.clip(fxc, -smoothing.f_max, smoothing.f_max))[:, None]*chi)
+    if cutoff > np.exp(-2.):
+        expected[0, 1] = expected[1, 0] = 0.
+    actual = backend._kernel(aux, density, grid, smoothing, cutoff, ledger())
+    np.testing.assert_allclose(actual, expected, rtol=1e-11, atol=1e-13)
+
+
+@pytest.mark.parametrize('representation,widths', [
+    (core.IsaBasisRepresentation.Cartesian, [1, 15, 6, 3]),
+    (core.IsaBasisRepresentation.Spherical, [1, 9, 5, 3])])
+def test_kernel_screens_whole_mixed_shell_blocks(representation, widths):
+    from psi4.driver.procrouting.isapol_native_propagator import KernelSmoothing
+    centres = np.array([[0., 0., 0.], [6., 0., 0.], [1., 0., 0.]])
+    sites = [0, 1, 0, 2]
+    aux = _aux_basis(centres.tolist(), list(zip(sites, [0, 4, 2, 1])), representation)
+    grid = np.array([[0., .2, .3, .1], [.5, .1, 0., .3], [1., 0., .2, .4], [2., .1, 0., .1],
+                     [6., .3, .2, .2], [5., .1, -.1, .3], [1., -.2, .4, .5]])
+    density = np.linspace(.1, 2., sum(widths))
+    smoothing = KernelSmoothing(1e-3, 400., .1, .1, 'CONSTANT')
+    chi = np.asarray(aux.evaluate(grid[:, :3].tolist()))
+    fxc = _slater_pw92_fxc(np.maximum(chi @ density, smoothing.rho_epsilon))
+    expected = chi.T @ ((grid[:, 3]*np.clip(fxc, -400., 400.))[:, None]*chi)
+    offsets = np.cumsum([0]+widths)
+    for i, j in itertools.product(range(4), repeat=2):
+        distance = centres[sites[i]]-centres[sites[j]]
+        if np.exp(-distance @ distance/2) < np.exp(-2.):
+            expected[offsets[i]:offsets[i+1], offsets[j]:offsets[j+1]] = 0.
+    actual = backend._kernel(aux, density, grid, smoothing, np.exp(-2.), ledger())
+    np.testing.assert_allclose(actual, expected, rtol=1e-11, atol=1e-12)
 
 
 @pytest.fixture(scope='module', params=('water', 'ammonia'))
