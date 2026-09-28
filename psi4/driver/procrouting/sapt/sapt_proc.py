@@ -328,6 +328,25 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         raise ValidationError("SAPT_DFT_GRAC_SHIFT_ONLY=true contradicts SAPT_DFT_GRAC_COMPUTE=NONE.")
     if shift_only and not do_dft:
         raise ValidationError("SAPT_DFT_GRAC_SHIFT_ONLY requires a non-HF SAPT_DFT_FUNCTIONAL.")
+    do_ddft_gradient = core.get_option("SAPT", "SAPT_DFT_DDFT_GRADIENT")
+    if do_ddft_gradient and not (do_delta_dft and do_dft):
+        raise ValidationError(
+            "SAPT_DFT_DDFT_GRADIENT requires the delta DFT dimer SCF: set SAPT_DFT_DO_DDFT "
+            "and a non-HF SAPT_DFT_FUNCTIONAL."
+        )
+    if do_ddft_gradient:
+        if sapt_sup.is_c_hybrid() or sapt_sup.is_c_lrc():
+            raise ValidationError(
+                "SAPT_DFT_DDFT_GRADIENT does not support double-hybrid or long-range "
+                "correlation functionals: core.scfgrad omits their correlation derivative."
+            )
+        if functional_needs_vv10 and core.get_option("SCF", "DFT_VV10_POSTSCF"):
+            raise ValidationError(
+                "SAPT_DFT_DDFT_GRADIENT does not support post-SCF VV10. "
+                "Set DFT_VV10_POSTSCF=false for a self-consistent analytic gradient."
+            )
+        if core.get_option("SCF", "SCF_TYPE") == "CD":
+            raise ValidationError("SAPT_DFT_DDFT_GRADIENT does not support SCF_TYPE=CD.")
     if not do_dft:
         do_mon_grac_shift_A = do_mon_grac_shift_B = False
 
@@ -879,6 +898,20 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         data["DFT DIMER ENERGY"] = core.variable("CURRENT ENERGY")
         core.timer_off("SAPT(DFT):Dimer DFT")
 
+        if do_ddft_gradient:
+            # Analytic gradient of the delta DFT dimer energy, at the same
+            # GRAC-free options as its SCF.
+            core.timer_on("SAPT(DFT):Dimer DFT Gradient")
+            if hasattr(dft_wfn_dimer, "_disp_functor"):
+                disp_grad = dft_wfn_dimer._disp_functor.compute_gradient(dft_wfn_dimer.molecule(), dft_wfn_dimer)
+                dft_wfn_dimer.set_variable("-D Gradient", disp_grad)
+            dft_dimer_grad = core.scfgrad(dft_wfn_dimer)
+            dft_wfn_dimer.set_gradient(dft_dimer_grad)
+            for wfn in [dft_wfn_dimer, dimer_wfn]:
+                wfn.set_variable("SAPT(DFT) DFT DIMER GRADIENT", dft_dimer_grad)  # P::e SAPT
+            core.set_variable("SAPT(DFT) DFT DIMER GRADIENT", dft_dimer_grad)
+            core.timer_off("SAPT(DFT):Dimer DFT Gradient")
+
         core.timer_on("SAPT(DFT):Monomer A DFT")
         run_scf(
             sapt_dft_functional.lower(),
@@ -982,6 +1015,9 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         core.print_out(
             "         VV10: running CP-corrected monomer SCFs in dimer basis\n\n"
         )
+        # The monomer B GRAC shift is still set globally here, and the dimer
+        # SCF ran unshifted; the CP monomers must match the dimer.
+        core.set_global_option("DFT_GRAC_SHIFT", 0.0)
         core.timer_on("SAPT(DFT):VV10 Monomer A CP")
         monomerA_cp = sapt_dimer.extract_subsets(1, 2)
         dft_wfn_monomerA_cp = run_scf(
@@ -1002,6 +1038,13 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             monomerB_wfn=dft_wfn_monomerB_cp,
             data=data,
         )
+        if core.get_option("SAPT", "SAPT_DFT_VV10_SPLIT"):
+            edisp_interaction_energy.sapt_dft_vv10_split(
+                dimer_wfn=dft_wfn_dimer,
+                monomerA_wfn=dft_wfn_monomerA_cp,
+                monomerB_wfn=dft_wfn_monomerB_cp,
+                data=data,
+            )
         core.timer_off("SAPT(DFT):VV10 Interaction Energy")
 
     core.set_global_option("SAVE_JK", False)
