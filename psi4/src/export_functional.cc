@@ -336,7 +336,8 @@ void export_functional(py::module &m) {
         .def("R_B", &sapt::FDDS_Dispersion::R_B, "Obtains the QR factor R for monomer B (not inverted).");
 
     py::class_<sapt::FDDS_Monomer, std::shared_ptr<sapt::FDDS_Monomer>>(m, "FDDS_Monomer",
-        "Native single-monomer FDDS intermediates. C1 AO coefficients and orbital energies in atomic units; no kernel is implied.")
+        "Native single-monomer FDDS intermediates. C1 AO coefficients and orbital energies in atomic units; "
+        "no kernel is implied.")
         .def(py::init<std::shared_ptr<BasisSet>, std::shared_ptr<BasisSet>, SharedMatrix, SharedMatrix,
                       SharedVector, SharedVector, bool>(),
              py::arg("primary"), py::arg("auxiliary"), py::arg("Cocc"), py::arg("Cvir"),

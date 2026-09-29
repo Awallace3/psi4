@@ -575,8 +575,9 @@ to preserve the existing auxiliary-sized interfaces and exact reconstruction.
 This corrects a bug. Earlier versions gave invalid dimensions to LAPACK's
 ``DORGQR`` for such wide inputs and read ``R`` out of bounds. Hybrid-kernel
 SAPT(DFT) coupled dispersion from those inputs was therefore wrong and changed
-from run to run; such results now differ from earlier versions. Inputs with at least as many
-occupied-virtual pairs as auxiliary functions give results identical to before.
+from run to run; such results now differ from earlier versions. Inputs with at
+least as many occupied-virtual pairs as auxiliary functions give results
+identical to before.
 All shapes retain SAPT's ``numpy.linalg.pinv(R, rcond=1.e-13).T`` policy,
 without a new rank threshold.
 The QR step still holds two occupied-virtual by auxiliary arrays in memory.
