@@ -1,0 +1,66 @@
+{
+  "protein83-6-31+g**": {
+    "amdahl_bound_from_dfk_alone": 1.3138889912843241,
+    "cpu": {
+      "jk_s": 247.043,
+      "other_s": 196.07868365290756,
+      "total_s": 1034.082389273215,
+      "xc_s": 590.883
+    },
+    "dfk_share_of_cpu_time": 0.23890069356430044,
+    "gpu": {
+      "jk_s": 7.615,
+      "other_s": 38.50336098627001,
+      "total_s": 122.63136098627001,
+      "xc_s": 76.371
+    },
+    "jk_saved_s": 239.428,
+    "jk_share_of_saving": 0.2626888253667346,
+    "jk_speedup": 32.441628365068944,
+    "other_saved_s": 157.57532266663753,
+    "other_share_of_saving": 0.17288402533573016,
+    "other_speedup": 5.092508254612569,
+    "repeats": {
+      "cpu": 3,
+      "gpu": 3
+    },
+    "saved_s": 911.4510282869451,
+    "speedup": 8.432446488047967,
+    "xc_saved_s": 514.5120000000001,
+    "xc_share_of_cpu_time": 0.5714080484585864,
+    "xc_share_of_saving": 0.5644976899823303,
+    "xc_speedup": 7.73700750284794
+  },
+  "protein83-aug-cc-pvdz": {
+    "amdahl_bound_from_dfk_alone": 1.1798141290278785,
+    "cpu": {
+      "jk_s": 735.172,
+      "other_s": 413.5417526006379,
+      "total_s": 4823.682752600638,
+      "xc_s": 3674.969
+    },
+    "dfk_share_of_cpu_time": 0.1524088622129305,
+    "gpu": {
+      "jk_s": 21.8875,
+      "other_s": 94.83848074836655,
+      "total_s": 374.22848074836656,
+      "xc_s": 257.5025
+    },
+    "jk_saved_s": 713.2845,
+    "jk_share_of_saving": 0.1603083111815116,
+    "jk_speedup": 33.588669331810394,
+    "other_saved_s": 318.7032718522713,
+    "other_share_of_saving": 0.07162749685246181,
+    "other_speedup": 4.360484787792855,
+    "repeats": {
+      "cpu": 2,
+      "gpu": 2
+    },
+    "saved_s": 4449.454271852272,
+    "speedup": 12.889673022626278,
+    "xc_saved_s": 3417.4665,
+    "xc_share_of_cpu_time": 0.761859597424536,
+    "xc_share_of_saving": 0.7680641919660265,
+    "xc_speedup": 14.271585712760071
+  }
+}

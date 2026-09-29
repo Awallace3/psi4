@@ -89,6 +89,7 @@ one_tree() {
 M4=$(one_tree M4-core6-h200-cuest022)
 M5=$(one_tree M5-premerge-core6-h200-cuest022)
 P3=$(one_tree P3-protein157-h200)
+P83=$(one_tree Q1-protein83-h200)
 
 # Within every case in the paired tree, both arms ran in one allocation.
 python "$TOOLS/merge_case_trees.py" "$M4" --output "$RAW/merged-paired"
@@ -116,6 +117,34 @@ cat > "$P157/SOURCES.txt" <<SRC
 protein157 single pair: one CPU run, one GPU run, from two allocations.
 cpu-1 <- $P3/$P157_CPU_CASE  (job 13395715, tree COMPLETED)
 gpu-1 <- $P157_GPU_TREE/results/$P157_GPU_CASE  (job 13429862, tree FAILED: its cpu-1 was preempted; the gpu case rc=0)
+SRC
+
+# protein83/aug-cc-pVDZ: the same kind of hand-curated pair. The GPU arm is
+# gpu-1 and gpu-2 of Q2 job 13543644, a tree marked FAILED because embers
+# preempted its CPU arm; all three of its GPU cases returned rc=0. The CPU arm
+# was preempted twice more (Q3 13579177, Q4 13671730) before it finished on
+# inferno as Q5 job 13673420, which ran two CPU repeats. The pair keeps two
+# repeats per arm so the summarizer pairs repeat for repeat; Q2's gpu-3 is left
+# out, not because it failed but because it has no CPU partner.
+P83A_GPU_TREE=$RAW/Q2-protein83-aug-h200-job13543644
+P83A=$RAW/protein83-aug-pair
+mkdir -p "$P83A"
+Q5=$(one_tree Q5-protein83-aug-cpu-h200-inferno)
+[ -e "$P83A_GPU_TREE/metadata/DEGRADED-HOST" ] && { echo "protein83 aug GPU tree is degraded" >&2; exit 1; }
+for r in 1 2; do
+  case_name="protein83-aug-cc-pvdz-gpu-$r"
+  grep -qxF "$case_name rc=0" <(awk '{print $1, $2}' "$P83A_GPU_TREE/metadata/case-status.txt") \
+    || { echo "$case_name did not return rc=0" >&2; exit 1; }
+  python -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["ok"] else 1)' \
+    "$P83A_GPU_TREE/results/$case_name/result.json" \
+    || { echo "$case_name reports ok=false" >&2; exit 1; }
+  ln -sfn "$P83A_GPU_TREE/results/$case_name" "$P83A/$case_name"
+  ln -sfn "$Q5/protein83-aug-cc-pvdz-cpu-$r" "$P83A/protein83-aug-cc-pvdz-cpu-$r"
+done
+cat > "$P83A/SOURCES.txt" <<SRC
+protein83 aug-cc-pVDZ pair: two CPU runs, two GPU runs, from two allocations.
+cpu-1, cpu-2 <- $Q5  (job 13673420, qos inferno, tree COMPLETED)
+gpu-1, gpu-2 <- $P83A_GPU_TREE/results  (job 13543644, tree FAILED: its CPU arm was preempted; the gpu cases rc=0)
 SRC
 
 # M5 is the control arm: the merge's own first parent, d91b5f8e81, built from
@@ -151,6 +180,22 @@ python "$TOOLS/iterative_accuracy.py" "$P157" --output "$HERE/accuracy-protein15
   > "$HERE/accuracy-protein157.md"
 python "$TOOLS/speedup_attribution.py" "$P157" --output "$HERE/attribution-protein157.json" \
   > "$HERE/attribution-protein157.md"
+
+# protein83, both bases. 6-31+G** is one allocation with n=3 per arm, like the
+# six-case tree; aug-cc-pVDZ is the curated pair above.
+python "$TOOLS/case_dirs_to_campaign.py" "$P83" --force --expect 'protein83:6-31+g**:3'
+python "$TOOLS/summarize_saptdft_cuest.py" "$P83" --output "$HERE/protein83" || true
+python "$TOOLS/case_dirs_to_campaign.py" "$P83A" --force --expect protein83:aug-cc-pvdz:2
+python "$TOOLS/summarize_saptdft_cuest.py" "$P83A" --output "$HERE/protein83-aug" || true
+# The accuracy and attribution tools glob case directories rather than reading
+# a manifest, so both bases can share one directory of symlinks and one table.
+P83ALL=$RAW/protein83-both-bases
+mkdir -p "$P83ALL"
+for d in "$P83"/protein83-* "$P83A"/protein83-*; do ln -sfn "$(readlink -f "$d")" "$P83ALL/$(basename "$d")"; done
+python "$TOOLS/iterative_accuracy.py" "$P83ALL" --output "$HERE/accuracy-protein83.json" \
+  > "$HERE/accuracy-protein83.md"
+python "$TOOLS/speedup_attribution.py" "$P83ALL" --output "$HERE/attribution-protein83.json" \
+  > "$HERE/attribution-protein83.md"
 
 # The control arm, reduced by the same summarizer so the two are comparable term
 # by term, then differenced. --require-identical-numerics is deliberate: a memory
@@ -251,4 +296,8 @@ python "$TOOLS/splice.py" "$HERE/README.template.md" "$HERE/README.md" \
   --block "HOSTSPEED=$HERE/host-speed.md" \
   --block "PROTEIN157=$HERE/protein157/summary.md" \
   --block "PROTEIN157ACC=$HERE/accuracy-protein157.md" \
-  --block "PROTEIN157ATTR=$HERE/attribution-protein157.md"
+  --block "PROTEIN157ATTR=$HERE/attribution-protein157.md" \
+  --block "PROTEIN83=$HERE/protein83/summary.md" \
+  --block "PROTEIN83AUG=$HERE/protein83-aug/summary.md" \
+  --block "PROTEIN83ACC=$HERE/accuracy-protein83.md" \
+  --block "PROTEIN83ATTR=$HERE/attribution-protein83.md"

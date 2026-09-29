@@ -63,8 +63,9 @@ which the M3 job checks for explicitly. The `peak_rss_mib` column is the kernel'
 
 ## Jobs
 
-All on `--qos=embers`, account `gts-cs207-chemx`. No inferno job was submitted
-and no inferno approval exists.
+Account `gts-cs207-chemx`. Every job ran on `--qos=embers` except 13508396 and
+13673420. Both ran on `--qos=inferno` with the user's explicit approval, given
+separately for each job, after embers had preempted the same CPU arm repeatedly.
 
 | Job | Arm | Partition | Node | Elapsed | Exit | Cases |
 |---|---|---|---|---:|---:|---:|
@@ -77,6 +78,24 @@ and no inferno approval exists.
 | 13395712 | M5 control paired CPU/GPU, libcuest 0.2.2.2 | gpu-h200 | `atl1-1-03-019-2-0` | 00:37:53 | 0 | 36 |
 | 13395715 | P3 protein157 CPU | gpu-h200 | `atl1-1-03-019-2-0` | 03:29:44 | 0 | 1 |
 | 13429862 | P1 protein157 GPU ×3 + CPU | gpu-h200 | `atl1-1-03-020-18-0` | 01:54:36 | preempted | 3 of 4 (GPU) |
+| 13508276 | P4 protein157 aug-cc-pVDZ GPU | gpu-h200 | `atl1-1-03-019-2-0` | 00:09:55 | rc=1 (device OOM) | 0 of 1 |
+| 13508396 | P5 protein157 aug-cc-pVDZ CPU, **inferno** | gpu-h200 | `atl1-1-03-020-11-0` | 07:14:45 | 0 | 1 |
+| 13537526 | Q1 protein83 6-31+G** paired CPU/GPU ×3 | gpu-h200 | `atl1-1-03-019-2-0` | 00:59:36 | 0 | 6 |
+| 13543644 | Q2 protein83 aug-cc-pVDZ GPU ×3 + CPU | gpu-h200 | `atl1-1-02-012-9-0` | 01:06:26 | preempted | 3 of 4 (GPU) |
+| 13579177 | Q3 protein83 aug-cc-pVDZ CPU | gpu-h200 | `atl1-1-02-012-2-0` | 01:06:50 | preempted | 0 |
+| 13671730 | Q4 protein83 aug-cc-pVDZ CPU | gpu-h200 | `atl1-1-03-018-14-0` | 01:21:52 | preempted | 0 |
+| 13673420 | Q5 protein83 aug-cc-pVDZ CPU ×2, **inferno** | gpu-h200 | `atl1-1-03-018-14-0` | 02:42:24 | 0 | 2 |
+
+The Q jobs run the same `core.so` as M4 and P1–P5, but the driver and
+geometry file come from `protein83-driver/` in the campaign directory, which is
+commit 11332e9179 of this branch: it adds `protein83` from the timing suite and
+nothing else. Each Q tree records both hashes in
+`metadata/sha256-protein83-driver.txt`:
+
+```
+98dc98b87b6a68c38616c37abdc4705c3230bb67abe7530dc9c22a2fd1059f8f  saptdft_cuest_grac.py
+bf028fe7cec54cb1d871af28a07c98cc2067c4f875f43977a0e684f4c11844e6  saptdft_suite_geometries.json
+```
 
 Kept but not used: 13376151/13376152/13376153 (preempted on
 `atl1-1-02-012-23-0`, 24.5 GF/s per core, marked `metadata/DEGRADED-HOST`;

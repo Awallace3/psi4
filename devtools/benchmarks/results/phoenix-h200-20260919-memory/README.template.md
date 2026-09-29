@@ -36,6 +36,9 @@ Contents:
   claim (see below).
 - `protein157/summary.md`, `accuracy-protein157.md`,
   `attribution-protein157.md` — the 157-atom case, one CPU run and one GPU run.
+- `protein83/summary.md`, `protein83-aug/summary.md`, `accuracy-protein83.md`,
+  `attribution-protein83.md` — the 83-atom case from the timing suite, in
+  6-31+G** and aug-cc-pVDZ.
 - `paired/summary.md` — the paired timings and the memory tables.
 - `attribution.md`, `dfk-tflops.md`, `grac-cost.md`, `accuracy.md`,
   `thread-scaling-*.md`, `host-speed.md` — generated the same way as in the
@@ -53,9 +56,24 @@ repeat 1 in `protein157-single-pair/`. `SOURCES.txt` there records the original
 names. This is the one speedup in the directory that crosses two allocations,
 so the two hosts' canaries are quoted beside it.
 
+`protein83` (83 atoms, from `~/data/timing_test_suite`) was added afterwards in
+two bases, 6-31+G** (922 basis functions) and aug-cc-pVDZ (1293). The 6-31+G**
+pair is one allocation with three repeats per arm, like the six-case tree. The
+aug-cc-pVDZ pair crosses two allocations, like protein157: embers preempted its
+CPU arm three times, and it finished on inferno. `protein157` at aug-cc-pVDZ
+has a CPU result and no GPU result, because the GPU arm does not fit on one
+H200 (see below).
+
+**Every build in this directory links CPU-only LibXC.** The GPU arm's XC
+functional evaluation runs on the host (`cuEST XC: Host Functional` in every
+GPU timer file). These speedups are therefore host-LibXC numbers, not the
+CUDA-LibXC configuration.
+
 ## Status
 
-All jobs ran on `--qos=embers`. No inferno job was submitted.
+Every job ran on `--qos=embers` except 13508396 (P5) and 13673420 (Q5). Both
+ran on `--qos=inferno` with the user's explicit approval, given separately for
+each job, after embers had preempted the same CPU arm repeatedly.
 
 | Job | Arm | Build | libcuest | Partition | Elapsed | State | Used |
 |---|---|---|---|---|---:|---|---|
@@ -66,6 +84,11 @@ All jobs ran on `--qos=embers`. No inferno job was submitted.
 | 13395712 | **M5 — paired CPU/GPU, 8 threads** | pre-merge `d91b5f8e81` | 0.2.2.2 | gpu-h200 | 00:37:53 | COMPLETED | `premerge-delta.md` control (B) |
 | 13395715 | P3 — protein157 CPU | merge `ee6161a3b6` | 0.2.2.2 | gpu-h200 | 03:29:44 | COMPLETED | protein157 CPU |
 | 13429862 | P1 — protein157 GPU ×3 + CPU | merge `ee6161a3b6` | 0.2.2.2 | gpu-h200 | 01:54:36 | PREEMPTED | protein157 GPU (gpu-3) |
+| 13537526 | Q1 — protein83 6-31+G** paired ×3 | merge `ee6161a3b6` | 0.2.2.2 | gpu-h200 | 00:59:36 | COMPLETED | protein83 6-31+G** |
+| 13543644 | Q2 — protein83 aug GPU ×3 + CPU | merge `ee6161a3b6` | 0.2.2.2 | gpu-h200 | 01:06:26 | PREEMPTED | protein83 aug GPU (gpu-1, gpu-2) |
+| 13673420 | Q5 — protein83 aug CPU ×2, **inferno** | merge `ee6161a3b6` | — | gpu-h200 | 02:42:24 | COMPLETED | protein83 aug CPU |
+| 13508396 | P5 — protein157 aug CPU, **inferno** | merge `ee6161a3b6` | — | gpu-h200 | 07:14:45 | COMPLETED | protein157 aug CPU (unpaired) |
+| 13508276 | P4 — protein157 aug GPU | merge `ee6161a3b6` | 0.2.2.2 | gpu-h200 | 00:09:55 | COMPLETED, case rc=1 | the device OOM below |
 
 Trees kept but not used:
 
@@ -78,6 +101,12 @@ Trees kept but not used:
   their CPU case finished. 13480138's three GPU runs completed at 417.6–419.8 s
   and 13429862's at 419.3–507.3 s. They are consistent with the one reported here, but
   they are not reported because no CPU run pairs with them.
+- 13579177 (Q3) and 13671730 (Q4), both protein83 aug-cc-pVDZ CPU, were
+  preempted at 3902 s and 4815 s, as was Q2's own CPU case at 2756 s. Each
+  failed on a missing scratch file, because preemption wipes the job's `/tmp`,
+  while the batch step itself reported COMPLETED.
+- Q2's gpu-3 completed (375.7 s, same energies) and is left out only because
+  Q5 ran two CPU repeats, not three, and the summarizer pairs repeat for repeat.
 
 M4 and M5 verified themselves in-job: `cases=36 failed=0`, host memory on every
 case, and device memory on every GPU case. M5 additionally verified that it is
@@ -242,6 +271,60 @@ At this size DF J/K becomes worth accelerating: it is 48% of the saving, against
 5–16% for the six smaller cases, and a perfect DF-K alone would cap the speedup
 at 1.88×. XC still supplies 43%, so neither phase alone explains the 29.8×.
 
+## protein83: two bases
+
+6-31+G**, job 13537526, one allocation, n=3 per arm:
+
+<!-- PROTEIN83 -->
+
+aug-cc-pVDZ, n=2 per arm: GPU from job 13543644 (canary 84.1 GF/s per core) and
+CPU from inferno job 13673420 (84.2):
+
+<!-- PROTEIN83AUG -->
+
+**8.4× at 922 basis functions, 12.9× at 1293.** Together with protein157's 29.8×
+at 1786, the speedup grows with system size on every case this directory has run
+above 500 functions. The GPU arm's repeats spread by 1.7% (6-31+G**) and 0.4%
+(aug). The CPU arm's spread is 0.3% and 1.0%.
+
+Memory follows the same pattern as protein157, and the host-to-host comparison
+understates it. At 6-31+G** the CPU arm peaks at 57.3 GiB of host memory; the
+GPU arm holds 2.4 GiB on the host and a sampled 15.6 GiB on the device. At
+aug-cc-pVDZ it is 105.0 GiB against 3.1 GiB + 23.5 GiB. Counting the device
+figure, the GPU arm needs 3.2× and 4.0× less memory in total.
+
+Both bases give the same dispersion to every printed digit, on both arms. That
+is expected: `-D4(I)` does not depend on the orbital basis.
+
+<!-- PROTEIN83ACC -->
+
+<!-- PROTEIN83ATTR -->
+
+Exchange is again the largest difference, 1.6e-07 and 2.0e-07 Eh, far inside
+1e-5. The attribution follows the trend protein157 started. DF-K alone would cap
+the speedup at 1.31× and 1.18×, and XC supplies 56% and 77% of the saving,
+because the host-LibXC GPU arm still speeds XC up 7.7× and 14.3×.
+
+## protein157 at aug-cc-pVDZ: the CPU arm finishes, the GPU arm does not fit
+
+2491 basis functions (A 1874, B 617). The CPU arm is P5, inferno job 13508396,
+on a host reading 84.3 GF/s per core. It took **25929 s (7.2 h)** at eight
+threads with `memory 360 GiB`, and peaked at 350.5 GiB VmHWM. SAPT TOTAL is
+-0.016708364 Eh (-10.48 kcal/mol), and the GRAC shifts are A 0.044868,
+B 0.049762 Eh. It is unpaired, so it has no table here and no speedup.
+
+The GPU arm, P4 job 13508276, stopped at the dimer delta-HF with
+
+```
+Failed to allocate device buffer: out of memory
+  requested 62.062 GiB; device has 38.464 GiB free of 139.803 GiB total
+```
+
+About 101 GiB was already held on the device at that point, so the dimer SCF
+alone wanted ~163 GiB, more than one H200's 140 GiB. That is a bound on this
+code path, not a measured peak for the whole calculation. The job's batch state
+is COMPLETED because the harness records the case's rc=1 rather than exiting on it.
+
 ## What automatic GRAC costs
 
 <!-- GRACCOST -->
@@ -353,9 +436,9 @@ tree, including the four that ran on nodes reading 24.4–24.6 GF/s per core and
 were dropped for it, and M2 on a cpu-small node (Xeon Gold 6226), whose
 difference is the point of M2. Every tree a reported number comes from reads
 84.1–84.9 GF/s per core. Each paired merge reports `host speed: matched`, and
-every six-case speedup is computed within a single job's tree. Two comparisons
-reach across trees: the A/B deltas, and protein157's single pair. Read their
-hosts' rows together with them.
+every six-case speedup is computed within a single job's tree. Three comparisons
+reach across trees: the A/B deltas, protein157's single pair, and the
+protein83 aug-cc-pVDZ pair. Read their hosts' rows together with them.
 
 ## Reproduce
 

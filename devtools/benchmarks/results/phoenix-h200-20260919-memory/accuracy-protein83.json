@@ -1,0 +1,90 @@
+{
+  "protein83-6-31+g**": {
+    "better_arm": null,
+    "component_deltas_eh": {
+      "SAPT DISP ENERGY": 0.0,
+      "SAPT ELST ENERGY": 8.277743290818762e-08,
+      "SAPT EXCH ENERGY": 1.5764529972140534e-07,
+      "SAPT IND ENERGY": 6.179316659055134e-10,
+      "SAPT TOTAL ENERGY": 7.424215964051128e-08
+    },
+    "delta_exceeds_scatter": true,
+    "grac_compute": "ITERATIVE",
+    "max_component_delta_eh": 1.5764529972140534e-07,
+    "max_shift_delta_eh": 1.7000000000072513e-07,
+    "monomers": {
+      "A": {
+        "cation": 1.4800000371906208e-06,
+        "cpu_cation": -990.31467665,
+        "different_cation_solution": false,
+        "gpu_cation": -990.31467517,
+        "homo": 1.8999999995550354e-07,
+        "lower_cation_arm": "cpu",
+        "neutral": 1.4500000133921276e-06,
+        "shift": 1.7000000000072513e-07
+      },
+      "B": {
+        "cation": 6.900000926179928e-07,
+        "cpu_cation": -772.00089906,
+        "different_cation_solution": false,
+        "gpu_cation": -772.00089837,
+        "homo": 2.1999999999522402e-07,
+        "lower_cation_arm": "cpu",
+        "neutral": 8.900000239009387e-07,
+        "shift": 9.999999994736442e-09
+      }
+    },
+    "repeats": {
+      "cpu": 3,
+      "gpu": 3
+    },
+    "run_to_run_scatter_eh": 4.5065462472848594e-09,
+    "solution_selection_differs": false,
+    "verdict": "agrees within tolerance",
+    "within_tolerance": true
+  },
+  "protein83-aug-cc-pvdz": {
+    "better_arm": null,
+    "component_deltas_eh": {
+      "SAPT DISP ENERGY": 0.0,
+      "SAPT ELST ENERGY": 3.926004410459427e-08,
+      "SAPT EXCH ENERGY": 2.030422128372275e-07,
+      "SAPT IND ENERGY": 1.5557842687752288e-10,
+      "SAPT TOTAL ENERGY": 2.4214667851494426e-07
+    },
+    "delta_exceeds_scatter": true,
+    "grac_compute": "ITERATIVE",
+    "max_component_delta_eh": 2.4214667851494426e-07,
+    "max_shift_delta_eh": 1.3000000000096268e-07,
+    "monomers": {
+      "A": {
+        "cation": 1.2100000503778574e-06,
+        "cpu_cation": -990.394807,
+        "different_cation_solution": false,
+        "gpu_cation": -990.39480579,
+        "homo": 1.900000000110147e-07,
+        "lower_cation_arm": "cpu",
+        "neutral": 1.13999999484804e-06,
+        "shift": 1.3000000000096268e-07
+      },
+      "B": {
+        "cation": 6.899999789311551e-07,
+        "cpu_cation": -772.04717346,
+        "different_cation_solution": false,
+        "gpu_cation": -772.04717277,
+        "homo": 2.699999999966618e-07,
+        "lower_cation_arm": "cpu",
+        "neutral": 9.399999498782563e-07,
+        "shift": 1.0000000001675335e-08
+      }
+    },
+    "repeats": {
+      "cpu": 2,
+      "gpu": 2
+    },
+    "run_to_run_scatter_eh": 4.096702508477046e-10,
+    "solution_selection_differs": false,
+    "verdict": "agrees within tolerance",
+    "within_tolerance": true
+  }
+}

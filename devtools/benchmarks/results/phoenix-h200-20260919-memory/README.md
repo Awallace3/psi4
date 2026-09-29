@@ -36,6 +36,9 @@ Contents:
   claim (see below).
 - `protein157/summary.md`, `accuracy-protein157.md`,
   `attribution-protein157.md` — the 157-atom case, one CPU run and one GPU run.
+- `protein83/summary.md`, `protein83-aug/summary.md`, `accuracy-protein83.md`,
+  `attribution-protein83.md` — the 83-atom case from the timing suite, in
+  6-31+G** and aug-cc-pVDZ.
 - `paired/summary.md` — the paired timings and the memory tables.
 - `attribution.md`, `dfk-tflops.md`, `grac-cost.md`, `accuracy.md`,
   `thread-scaling-*.md`, `host-speed.md` — generated the same way as in the
@@ -53,9 +56,24 @@ repeat 1 in `protein157-single-pair/`. `SOURCES.txt` there records the original
 names. This is the one speedup in the directory that crosses two allocations,
 so the two hosts' canaries are quoted beside it.
 
+`protein83` (83 atoms, from `~/data/timing_test_suite`) was added afterwards in
+two bases, 6-31+G** (922 basis functions) and aug-cc-pVDZ (1293). The 6-31+G**
+pair is one allocation with three repeats per arm, like the six-case tree. The
+aug-cc-pVDZ pair crosses two allocations, like protein157: embers preempted its
+CPU arm three times, and it finished on inferno. `protein157` at aug-cc-pVDZ
+has a CPU result and no GPU result, because the GPU arm does not fit on one
+H200 (see below).
+
+**Every build in this directory links CPU-only LibXC.** The GPU arm's XC
+functional evaluation runs on the host (`cuEST XC: Host Functional` in every
+GPU timer file). These speedups are therefore host-LibXC numbers, not the
+CUDA-LibXC configuration.
+
 ## Status
 
-All jobs ran on `--qos=embers`. No inferno job was submitted.
+Every job ran on `--qos=embers` except 13508396 (P5) and 13673420 (Q5). Both
+ran on `--qos=inferno` with the user's explicit approval, given separately for
+each job, after embers had preempted the same CPU arm repeatedly.
 
 | Job | Arm | Build | libcuest | Partition | Elapsed | State | Used |
 |---|---|---|---|---|---:|---|---|
@@ -66,6 +84,11 @@ All jobs ran on `--qos=embers`. No inferno job was submitted.
 | 13395712 | **M5 — paired CPU/GPU, 8 threads** | pre-merge `d91b5f8e81` | 0.2.2.2 | gpu-h200 | 00:37:53 | COMPLETED | `premerge-delta.md` control (B) |
 | 13395715 | P3 — protein157 CPU | merge `ee6161a3b6` | 0.2.2.2 | gpu-h200 | 03:29:44 | COMPLETED | protein157 CPU |
 | 13429862 | P1 — protein157 GPU ×3 + CPU | merge `ee6161a3b6` | 0.2.2.2 | gpu-h200 | 01:54:36 | PREEMPTED | protein157 GPU (gpu-3) |
+| 13537526 | Q1 — protein83 6-31+G** paired ×3 | merge `ee6161a3b6` | 0.2.2.2 | gpu-h200 | 00:59:36 | COMPLETED | protein83 6-31+G** |
+| 13543644 | Q2 — protein83 aug GPU ×3 + CPU | merge `ee6161a3b6` | 0.2.2.2 | gpu-h200 | 01:06:26 | PREEMPTED | protein83 aug GPU (gpu-1, gpu-2) |
+| 13673420 | Q5 — protein83 aug CPU ×2, **inferno** | merge `ee6161a3b6` | — | gpu-h200 | 02:42:24 | COMPLETED | protein83 aug CPU |
+| 13508396 | P5 — protein157 aug CPU, **inferno** | merge `ee6161a3b6` | — | gpu-h200 | 07:14:45 | COMPLETED | protein157 aug CPU (unpaired) |
+| 13508276 | P4 — protein157 aug GPU | merge `ee6161a3b6` | 0.2.2.2 | gpu-h200 | 00:09:55 | COMPLETED, case rc=1 | the device OOM below |
 
 Trees kept but not used:
 
@@ -78,6 +101,12 @@ Trees kept but not used:
   their CPU case finished. 13480138's three GPU runs completed at 417.6–419.8 s
   and 13429862's at 419.3–507.3 s. They are consistent with the one reported here, but
   they are not reported because no CPU run pairs with them.
+- 13579177 (Q3) and 13671730 (Q4), both protein83 aug-cc-pVDZ CPU, were
+  preempted at 3902 s and 4815 s, as was Q2's own CPU case at 2756 s. Each
+  failed on a missing scratch file, because preemption wipes the job's `/tmp`,
+  while the batch step itself reported COMPLETED.
+- Q2's gpu-3 completed (375.7 s, same energies) and is left out only because
+  Q5 ran two CPU repeats, not three, and the summarizer pairs repeat for repeat.
 
 M4 and M5 verified themselves in-job: `cases=36 failed=0`, host memory on every
 case, and device memory on every GPU case. M5 additionally verified that it is
@@ -400,6 +429,148 @@ At this size DF J/K becomes worth accelerating: it is 48% of the saving, against
 5–16% for the six smaller cases, and a perfect DF-K alone would cap the speedup
 at 1.88×. XC still supplies 43%, so neither phase alone explains the 29.8×.
 
+## protein83: two bases
+
+6-31+G**, job 13537526, one allocation, n=3 per arm:
+
+# Phoenix cuEST GRAC timing and accuracy
+
+Status: complete.
+Wall time is the fresh-process `energy()` call, including backend initialization.
+Speedup is median CPU time / median GPU time; values below 1 mean GPU slowdown.
+
+| System | Basis | MonA own nbf | MonB own nbf | Dimer nbf | CPU/GPU n | CPU median [range], s | GPU median [range], s | Speedup | Max component Δ, Eh | Accuracy |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| protein83 | 6-31+g** | 480 | 442 | 922 | 3/3 | 1034.08 [1031.20–1034.22] | 122.63 [121.99–124.13] | 8.43× | 1.577e-07 | PASS |
+
+## Memory
+
+Host memory is the kernel's `VmHWM` high-water mark over the timed region, so it is exact rather than sampled. Device memory is polled and is a **sampled** peak: a spike shorter than the interval is missed.
+A blank cell means that quantity was not recorded for every repeat of that arm.
+
+| System | Basis | CPU host peak, MiB | GPU host peak, MiB | GPU device peak, MiB | Device accounting | Poll, s | Peak scope |
+|---|---|---:|---:|---:|---|---:|---|
+| protein83 | 6-31+g** | 58694 [58677–58708] | 2413 [2410–2414] | 15964 [15208–15964] | per-process | 0.5 | timed region |
+
+`whole process` means the kernel did not honor the high-water-mark reset, so that figure also covers Python imports and basis construction and is not comparable with a `timed region` one.
+
+Monomer columns give each fragment's own-basis size. The SAPT monomer SCFs use the dimer basis (ghosted partner), so their actual SCF basis size is the dimer column.
+
+Accuracy threshold: 1.0e-05 Eh for every component and paired repeat.
+
+## Component accuracy
+
+| System / basis | Component | CPU median, Eh | GPU median, Eh | Max paired absolute Δ, Eh |
+|---|---|---:|---:|---:|
+| protein83 / 6-31+g** | SAPT DISP ENERGY | -0.008907212504 | -0.008907212504 | 0.000e+00 |
+| protein83 / 6-31+g** | SAPT ELST ENERGY | -0.003161457193 | -0.003161374415 | 8.533e-08 |
+| protein83 / 6-31+g** | SAPT EXCH ENERGY | 0.006854774451 | 0.006854616806 | 1.577e-07 |
+| protein83 / 6-31+g** | SAPT IND ENERGY | -0.001337604635 | -0.001337604017 | 6.262e-10 |
+| protein83 / 6-31+g** | SAPT TOTAL ENERGY | -0.006551499881 | -0.006551574123 | 7.621e-08 |
+
+## Failed or incomplete measurements
+
+```json
+[]
+```
+
+aug-cc-pVDZ, n=2 per arm: GPU from job 13543644 (canary 84.1 GF/s per core) and
+CPU from inferno job 13673420 (84.2):
+
+# Phoenix cuEST GRAC timing and accuracy
+
+Status: complete.
+Wall time is the fresh-process `energy()` call, including backend initialization.
+Speedup is median CPU time / median GPU time; values below 1 mean GPU slowdown.
+
+| System | Basis | MonA own nbf | MonB own nbf | Dimer nbf | CPU/GPU n | CPU median [range], s | GPU median [range], s | Speedup | Max component Δ, Eh | Accuracy |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| protein83 | aug-cc-pvdz | 676 | 617 | 1293 | 2/2 | 4823.68 [4798.93–4848.44] | 374.23 [373.57–374.89] | 12.89× | 2.424e-07 | PASS |
+
+## Memory
+
+Host memory is the kernel's `VmHWM` high-water mark over the timed region, so it is exact rather than sampled. Device memory is polled and is a **sampled** peak: a spike shorter than the interval is missed.
+A blank cell means that quantity was not recorded for every repeat of that arm.
+
+| System | Basis | CPU host peak, MiB | GPU host peak, MiB | GPU device peak, MiB | Device accounting | Poll, s | Peak scope |
+|---|---|---:|---:|---:|---|---:|---|
+| protein83 | aug-cc-pvdz | 107472 [107468–107477] | 3138 [3137–3139] | 24034 [24034–24034] | per-process | 0.5 | timed region |
+
+`whole process` means the kernel did not honor the high-water-mark reset, so that figure also covers Python imports and basis construction and is not comparable with a `timed region` one.
+
+Monomer columns give each fragment's own-basis size. The SAPT monomer SCFs use the dimer basis (ghosted partner), so their actual SCF basis size is the dimer column.
+
+Accuracy threshold: 1.0e-05 Eh for every component and paired repeat.
+
+## Component accuracy
+
+| System / basis | Component | CPU median, Eh | GPU median, Eh | Max paired absolute Δ, Eh |
+|---|---|---:|---:|---:|
+| protein83 / aug-cc-pvdz | SAPT DISP ENERGY | -0.008907212504 | -0.008907212504 | 0.000e+00 |
+| protein83 / aug-cc-pvdz | SAPT ELST ENERGY | -0.003081713896 | -0.003081753156 | 3.935e-08 |
+| protein83 / aug-cc-pvdz | SAPT EXCH ENERGY | 0.006849220184 | 0.006849017141 | 2.030e-07 |
+| protein83 / aug-cc-pvdz | SAPT IND ENERGY | -0.001395878982 | -0.001395878826 | 2.697e-10 |
+| protein83 / aug-cc-pvdz | SAPT TOTAL ENERGY | -0.006535585198 | -0.006535827345 | 2.424e-07 |
+
+## Failed or incomplete measurements
+
+```json
+[]
+```
+
+**8.4× at 922 basis functions, 12.9× at 1293.** Together with protein157's 29.8×
+at 1786, the speedup grows with system size on every case this directory has run
+above 500 functions. The GPU arm's repeats spread by 1.7% (6-31+G**) and 0.4%
+(aug). The CPU arm's spread is 0.3% and 1.0%.
+
+Memory follows the same pattern as protein157, and the host-to-host comparison
+understates it. At 6-31+G** the CPU arm peaks at 57.3 GiB of host memory; the
+GPU arm holds 2.4 GiB on the host and a sampled 15.6 GiB on the device. At
+aug-cc-pVDZ it is 105.0 GiB against 3.1 GiB + 23.5 GiB. Counting the device
+figure, the GPU arm needs 3.2× and 4.0× less memory in total.
+
+Both bases give the same dispersion to every printed digit, on both arms. That
+is expected: `-D4(I)` does not depend on the orbital basis.
+
+| Case | Max component Δ, Eh | Run-to-run scatter, Eh | Max GRAC shift Δ, Eh | Max neutral Δ, Eh | Max cation Δ, Eh | Within 1e-05 Eh | Interpretation |
+|---|---:|---:|---:|---:|---:|:--:|---|
+| protein83-6-31+g** | 1.58e-07 | 4.5e-09 | 1.70e-07 | 1.45e-06 | 1.48e-06 | yes | agrees within tolerance |
+| protein83-aug-cc-pvdz | 2.42e-07 | 4.1e-10 | 1.30e-07 | 1.14e-06 | 1.21e-06 | yes | agrees within tolerance |
+
+The neutral and cation columns are the monomer SCF energies the GRAC shift is derived from. Where both agree to near machine precision, the arms solved the same problem the same way. Where the neutral agrees but the cation does not, the arms converged to different solutions of a near-degenerate open-shell SCF, and the component difference that follows is not a measure of GPU arithmetic error.
+
+| Case | CPU s | GPU s | Speedup | DF-K speedup | XC speedup | DF-K share of saving | XC share of saving | Max speedup from DF-K alone |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| protein83-6-31+g** | 1034.1 | 122.6 | 8.43× | 32.4× | 7.7× | 26% | 56% | 1.31× |
+| protein83-aug-cc-pvdz | 4823.7 | 374.2 | 12.89× | 33.6× | 14.3× | 16% | 77% | 1.18× |
+
+The last column is Amdahl's bound: the end-to-end speedup that would result if DF J/K took zero time and nothing else changed. A vendor DF-K speedup cannot produce more than this on this workload, whatever its magnitude.
+
+Exchange is again the largest difference, 1.6e-07 and 2.0e-07 Eh, far inside
+1e-5. The attribution follows the trend protein157 started. DF-K alone would cap
+the speedup at 1.31× and 1.18×, and XC supplies 56% and 77% of the saving,
+because the host-LibXC GPU arm still speeds XC up 7.7× and 14.3×.
+
+## protein157 at aug-cc-pVDZ: the CPU arm finishes, the GPU arm does not fit
+
+2491 basis functions (A 1874, B 617). The CPU arm is P5, inferno job 13508396,
+on a host reading 84.3 GF/s per core. It took **25929 s (7.2 h)** at eight
+threads with `memory 360 GiB`, and peaked at 350.5 GiB VmHWM. SAPT TOTAL is
+-0.016708364 Eh (-10.48 kcal/mol), and the GRAC shifts are A 0.044868,
+B 0.049762 Eh. It is unpaired, so it has no table here and no speedup.
+
+The GPU arm, P4 job 13508276, stopped at the dimer delta-HF with
+
+```
+Failed to allocate device buffer: out of memory
+  requested 62.062 GiB; device has 38.464 GiB free of 139.803 GiB total
+```
+
+About 101 GiB was already held on the device at that point, so the dimer SCF
+alone wanted ~163 GiB, more than one H200's 140 GiB. That is a bound on this
+code path, not a measured peak for the whole calculation. The job's batch state
+is COMPLETED because the harness records the case's rc=1 rather than exiting on it.
+
 ## What automatic GRAC costs
 
 | System | Basis | Arm | Rep. | Total wall, s | GRAC A, s | GRAC B, s | GRAC total, s | % of wall |
@@ -610,6 +781,13 @@ different corrections, and neither is the core-count ratio.
 | P2-protein157-h200-job13429863 | atl1-1-03-018-14-0.pace.gatech.edu | 8 | 84.2 | 12.0 | 35.1 | 2797.2 |
 | P2-protein157-h200-job13480139 | atl1-1-03-020-11-0.pace.gatech.edu | 8 | 84.3 | 11.8 | 47.5 | 2800.0 |
 | P3-protein157-h200-job13395715 | atl1-1-03-019-2-0.pace.gatech.edu | 8 | 84.2 | 12.0 | 47.5 | 2800.0 |
+| P4-protein157-aug-gpu-h200-job13508276 | atl1-1-03-019-2-0.pace.gatech.edu | 8 | 84.1 | 12.0 | 47.2 | 2728.3 |
+| P5-protein157-aug-cpu-h200-job13508396 | atl1-1-03-020-11-0.pace.gatech.edu | 8 | 84.3 | 12.0 | 47.1 | 2800.0 |
+| Q1-protein83-h200-job13537526 | atl1-1-03-019-2-0.pace.gatech.edu | 8 | 84.3 | 12.0 | 35.6 | 2800.0 |
+| Q2-protein83-aug-h200-job13543644 | atl1-1-02-012-9-0.pace.gatech.edu | 8 | 84.1 | 14.5 | 47.2 | 2800.0 |
+| Q3-protein83-aug-cpu-h200-job13579177 | atl1-1-02-012-2-0.pace.gatech.edu | 8 | 84.3 | 14.6 | 47.3 | 2800.0 |
+| Q4-protein83-aug-cpu-h200-job13671730 | atl1-1-03-018-14-0.pace.gatech.edu | 8 | 84.4 | 11.9 | 47.2 | 2800.0 |
+| Q5-protein83-aug-cpu-h200-inferno-job13673420 | atl1-1-03-018-14-0.pace.gatech.edu | 8 | 84.2 | 11.8 | 47.3 | 2800.0 |
 
 Verdict: **mismatched** (worst pairwise ratio 4.76×, tolerance 1.25×).
 
@@ -624,9 +802,9 @@ tree, including the four that ran on nodes reading 24.4–24.6 GF/s per core and
 were dropped for it, and M2 on a cpu-small node (Xeon Gold 6226), whose
 difference is the point of M2. Every tree a reported number comes from reads
 84.1–84.9 GF/s per core. Each paired merge reports `host speed: matched`, and
-every six-case speedup is computed within a single job's tree. Two comparisons
-reach across trees: the A/B deltas, and protein157's single pair. Read their
-hosts' rows together with them.
+every six-case speedup is computed within a single job's tree. Three comparisons
+reach across trees: the A/B deltas, protein157's single pair, and the
+protein83 aug-cc-pVDZ pair. Read their hosts' rows together with them.
 
 ## Reproduce
 

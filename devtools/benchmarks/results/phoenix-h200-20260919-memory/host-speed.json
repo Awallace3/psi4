@@ -241,6 +241,111 @@
       "stream_gb_s": 11.995285621341084,
       "threads": 8,
       "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/P3-protein157-h200-job13395715/results"
+    },
+    {
+      "dgemm_gflops_per_core": 84.13060416474742,
+      "job": "13508276",
+      "live_mhz": 2728.326,
+      "node": "atl1-1-03-019-2-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 47.16327773479573,
+      "status": "measured",
+      "stream_gb_s": 12.035317351189814,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/P4-protein157-aug-gpu-h200-job13508276/results"
+    },
+    {
+      "dgemm_gflops_per_core": 84.29394844044351,
+      "job": "13508396",
+      "live_mhz": 2800.0,
+      "node": "atl1-1-03-020-11-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 47.12852004567829,
+      "status": "measured",
+      "stream_gb_s": 12.007177610950933,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/P5-protein157-aug-cpu-h200-job13508396/results"
+    },
+    {
+      "dgemm_gflops_per_core": 84.2979071074609,
+      "job": "13537526",
+      "live_mhz": 2800.0,
+      "node": "atl1-1-03-019-2-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 35.586505863762476,
+      "status": "measured",
+      "stream_gb_s": 11.953388084714696,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/Q1-protein83-h200-job13537526/results"
+    },
+    {
+      "dgemm_gflops_per_core": 84.08105578164604,
+      "job": "13543644",
+      "live_mhz": 2800.0,
+      "node": "atl1-1-02-012-9-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 47.232510824415755,
+      "status": "measured",
+      "stream_gb_s": 14.535648048453462,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/Q2-protein83-aug-h200-job13543644/results"
+    },
+    {
+      "dgemm_gflops_per_core": 84.31124001155712,
+      "job": "13579177",
+      "live_mhz": 2800.0,
+      "node": "atl1-1-02-012-2-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 47.33477668324069,
+      "status": "measured",
+      "stream_gb_s": 14.605646070491579,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/Q3-protein83-aug-cpu-h200-job13579177/results"
+    },
+    {
+      "dgemm_gflops_per_core": 84.37009888006423,
+      "job": "13671730",
+      "live_mhz": 2800.0,
+      "node": "atl1-1-03-018-14-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 47.24852365940809,
+      "status": "measured",
+      "stream_gb_s": 11.93469251455005,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/Q4-protein83-aug-cpu-h200-job13671730/results"
+    },
+    {
+      "dgemm_gflops_per_core": 84.17685953520979,
+      "job": "13673420",
+      "live_mhz": 2800.0,
+      "node": "atl1-1-03-018-14-0.pace.gatech.edu",
+      "phases": [
+        "end",
+        "start"
+      ],
+      "scalar_miter_s": 47.33586620242617,
+      "status": "measured",
+      "stream_gb_s": 11.751440445163661,
+      "threads": 8,
+      "tree": "/storage/project/r-cs207-0/awallace43/runs/psi4-cuest-timing/memory-campaign-20260919/Q5-protein83-aug-cpu-h200-inferno-job13673420/results"
     }
   ],
   "spread": {

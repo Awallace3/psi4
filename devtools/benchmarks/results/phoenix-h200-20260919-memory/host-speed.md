@@ -15,6 +15,13 @@
 | P2-protein157-h200-job13429863 | atl1-1-03-018-14-0.pace.gatech.edu | 8 | 84.2 | 12.0 | 35.1 | 2797.2 |
 | P2-protein157-h200-job13480139 | atl1-1-03-020-11-0.pace.gatech.edu | 8 | 84.3 | 11.8 | 47.5 | 2800.0 |
 | P3-protein157-h200-job13395715 | atl1-1-03-019-2-0.pace.gatech.edu | 8 | 84.2 | 12.0 | 47.5 | 2800.0 |
+| P4-protein157-aug-gpu-h200-job13508276 | atl1-1-03-019-2-0.pace.gatech.edu | 8 | 84.1 | 12.0 | 47.2 | 2728.3 |
+| P5-protein157-aug-cpu-h200-job13508396 | atl1-1-03-020-11-0.pace.gatech.edu | 8 | 84.3 | 12.0 | 47.1 | 2800.0 |
+| Q1-protein83-h200-job13537526 | atl1-1-03-019-2-0.pace.gatech.edu | 8 | 84.3 | 12.0 | 35.6 | 2800.0 |
+| Q2-protein83-aug-h200-job13543644 | atl1-1-02-012-9-0.pace.gatech.edu | 8 | 84.1 | 14.5 | 47.2 | 2800.0 |
+| Q3-protein83-aug-cpu-h200-job13579177 | atl1-1-02-012-2-0.pace.gatech.edu | 8 | 84.3 | 14.6 | 47.3 | 2800.0 |
+| Q4-protein83-aug-cpu-h200-job13671730 | atl1-1-03-018-14-0.pace.gatech.edu | 8 | 84.4 | 11.9 | 47.2 | 2800.0 |
+| Q5-protein83-aug-cpu-h200-inferno-job13673420 | atl1-1-03-018-14-0.pace.gatech.edu | 8 | 84.2 | 11.8 | 47.3 | 2800.0 |
 
 Verdict: **mismatched** (worst pairwise ratio 4.76×, tolerance 1.25×).
 
