@@ -241,6 +241,12 @@ jobs:
           :
           # sed -i "s;#- dpcpp_linux-64;- clangdev ${{ matrix.cfg.llvm-version }};g" env_p4build.yaml
         fi
+        if [[ "${{ runner.os }}" == "macOS" ]]; then
+          # conda QCFractal 0.70 emits LOWER(name) Computed columns without STORED; SQLAlchemy 2.1
+          #   leaves them VIRTUAL on PostgreSQL 18, which rejects their unique constraints.
+          #   Drop once a QCFractal release includes MolSSI/QCFractal#1038 (Linux uses QCFractal main).
+          echo "  - sqlalchemy<2.1" >> env_p4build.yaml
+        fi
         echo "  - pygments" >> env_p4build.yaml
         echo "::group::View Env Spec File for Conda (Edited)"
         printf "\n<<<  env_p4build.yaml  >>>\n"
