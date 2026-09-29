@@ -1031,40 +1031,39 @@ double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
     return vv10_e;
 }
 SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
-    // Nuclear gradient of the VV10 nonlocal energy of vv10_nlc for the RKS alpha density D,
+    // Fixed-grid VV10 gradient: w_i are quadrature weights, D is an RKS alpha density,
+    // rho = 2 sum_mn D_mn phi_m phi_n is the total density, gamma = |grad rho|^2,
+    // and R_ij = |r_i - r_j|.
     //
-    //   E = sum_i w_i rho_i beta + 1/2 sum_ij w_i rho_i w_j rho_j Phi_ij,
-    //   Phi_ij = -1.5 / (g_i g_j (g_i + g_j)),   g_i = W0(rho_i, gamma_i) R_ij^2 + kappa(rho_i),
+    // 1. Energy and kernel (b, C, beta are functional parameters):
+    //    E = beta sum_i w_i rho_i + (1/2) sum_ij w_i rho_i w_j rho_j Phi_ij
+    //    Phi_ij = -3 / [2 g_ij g_ji (g_ij + g_ji)],  g_ij = W0_i R_ij^2 + kappa_i
+    //    W0 = sqrt(4*pi*rho/3 + C*gamma^2/rho^4)
+    //    kappa = [1.5*b*pi / (9*pi)^(1/6)] rho^(1/6)
     //
-    // on the fixed VV10 grid, i.e. the same approximation as the local XC gradient of
-    // RV::compute_gradient: points and weights are held in space and only the basis functions
-    // move with their nuclei. Then
+    // 2. Chain-rule potentials, reused from compute_vv10_kernel:
+    //    F_i = sum_j w_j rho_j Phi_ij
+    //    t_ij = -w_j rho_j Phi_ij [1/g_ij + 1/(g_ij + g_ji)]
+    //    U_i = sum_j t_ij,  W_i = sum_j t_ij R_ij^2
+    //    v_rho   = beta + F + rho (kappa_rho U + W0_rho W)
+    //    v_gamma = rho W0_gamma W
+    //    kappa_rho = kappa/(6*rho),  W0_gamma = C*gamma/(W0*rho^4)
+    //    W0_rho = [4*pi/3 - 4*C*gamma^2/rho^5] / (2*W0)
+    //    Subscripts rho/gamma denote partial derivatives; quantities are pointwise.
     //
-    //   dE/dX_A = sum_i w_i (v_rho_i drho_i/dX_A + v_gamma_i dgamma_i/dX_A),
+    // 3. Nuclear derivative at fixed D, contracted by rks_gradient_integrator:
+    //    dE/dX_A = sum_i w_i [v_rho_i (d rho_i/dX_A) + v_gamma_i (d gamma_i/dX_A)]
+    //    d gamma/dX_A = 2 grad rho . grad(d rho/dX_A)
+    //    d rho/dX_A = 4 sum_{m on A,n} D_mn phi_n (d phi_m/dX_A)
+    //    d phi_m/dX_A = -d phi_m/dx for a basis function centered on A.
+    //    The integrator returns half this gradient; both callers multiply by 2.
+    //    UKS supplies D = (Da + Db)/2, so the same equations use its total density.
     //
-    // where v_rho/v_gamma are the VV10 kernel potential that the SCF already builds in
-    // compute_vv10_kernel, and the contraction with basis-function derivatives is
-    // rks_gradient_integrator. This is the exact derivative of the discrete energy with the grid
-    // held fixed, and it converges to the exact functional derivative as the grid is refined.
-    //
-    // The explicit R dependence of Phi does not appear. Phi depends only on the separations of
-    // grid points, and a space-fixed grid does not move with the nuclei. That term appears only
-    // if the grid points follow their parent atoms, and then it cannot be taken on its own:
-    //  - Summed over all atoms, sum_i sum_j dPhi_ij/dr_i vanishes because Phi_ij is symmetric
-    //    under i <-> j. The double sum is translation invariant.
-    //  - For atom A, only pairs with i on A and j off A survive. Pairs with both points on A
-    //    cancel. That makes the per-atom term depend on how points are assigned to atoms. In the
-    //    continuum it is exactly cancelled by the point-motion density term and the
-    //    partition-weight derivatives. Adding it without both of those gives an error set by
-    //    the partition, and that error does not vanish as the grid is refined.
-    //
-    // Pairs are sieved as in vv10_nlc: the right-hand (cached) points pass vv10_rho_cutoff_, the
-    // left-hand points pass compute_vv10_kernel's internal 1e-12. v_rho is the symmetric-pair
-    // derivative, so it is exact for pairs where both points pass the cutoff. The asymmetric
-    // sliver below the cutoff is O(vv10_rho_cutoff_).
-    //
-    // Returns half the RKS gradient, like the local loop of RV::compute_gradient; the caller
-    // scales the sum by 2.
+    // Approximation: r_i and w_i are fixed, as in the local XC gradient. Thus dR_ij/dX_A=0;
+    // moving-grid derivatives require point-motion, weight, and kernel-distance terms together.
+    // Energy finite differences rebuild the grid, so agreement is quadrature-limited.
+    // Screening follows vv10_nlc (cached rho >= vv10_rho_cutoff_, outer rho >= 1e-12);
+    // the symmetric-pair potentials above neglect the residual from asymmetric screening.
     timer_on("V: VV10 Gradient");
     timer_on("Setup");
 
