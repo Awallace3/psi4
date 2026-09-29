@@ -220,6 +220,9 @@ class LebedevGridMgr {
         MassPoint const *grid;
     };
     static GridData grids_[];
+
+    friend int lebedev_npoints_at_least(int npoints);
+    friend const MassPoint *lebedev_sphere(int npoints);
 };
 
 const MassPoint *LebedevGridMgr::nonstandard18PointGrid_;
@@ -275,6 +278,25 @@ static class MagicInitializer {
     MagicInitializer() { LebedevGridMgr::Initialize(); }
 } s_magic;
 
+// ==> Public Lebedev accessors (declared in cubature.h) <==
+
+int lebedev_npoints_at_least(int npoints) {
+    int best = -1;
+    for (int i = 0; LebedevGridMgr::grids_[i].mkGridFn != nullptr; i++) {
+        int n = LebedevGridMgr::grids_[i].npoints;
+        if (n < 6) continue;  // the 1-point "grid" is not a usable sphere
+        if (n >= npoints && (best < 0 || n < best)) best = n;
+    }
+    return best;
+}
+
+const MassPoint* lebedev_sphere(int npoints) {
+    if (npoints < 6) return nullptr;
+    for (int i = 0; LebedevGridMgr::grids_[i].mkGridFn != nullptr; i++)
+        if (LebedevGridMgr::grids_[i].npoints == npoints) return LebedevGridMgr::grids_[i].grid;
+    return nullptr;
+}
+
 bool LebedevGridMgr::isUsableOrder(int order) { return findGridByOrder(order) != nullptr; }
 
 const MassPoint *LebedevGridMgr::findGridByOrder(int order) {
@@ -329,6 +351,23 @@ inline MassPoint LebedevGridMgr::MASSPOINT(double x, double y, double z, double 
     return mp;
 }
 
+namespace {
+/// x - y, with the multiplication that produced `y` forced to round first.
+///
+/// The Lebedev-Laikov octahedral generators derive their last coordinate from
+/// the others, e.g. b = sqrt(1 - 2a^2).  Written plainly, GCC and Clang are free
+/// to contract that into an FMA on any host that has one (-ffp-contract=fast is
+/// the default), which rounds differently and moves the resulting point by 1 ulp.
+/// The grid would then silently depend on the -march the binary was built with,
+/// and would not reproduce reference grids from codes built without FMA.  Passing
+/// the subtrahend through a volatile forces it to memory, which no compiler may
+/// contract across.  The generators run once per grid, so the cost is nil.
+inline double sub_no_fma(double x, double y) {
+    volatile const double yy = y;
+    return x - yy;
+}
+}  // namespace
+
 int LebedevGridMgr::addPoints1(MassPoint point[], double v) {
     const double w = 4.0 * M_PI * v;
     // clang-format off
@@ -380,7 +419,7 @@ int LebedevGridMgr::addPoints3(MassPoint point[], double v) {
 
 int LebedevGridMgr::addPoints4(MassPoint point[], double v, double a) {
     const double w = 4.0 * M_PI * v;
-    const double b = sqrt(1 - 2 * a * a);
+    const double b = sqrt(sub_no_fma(1, 2 * a * a));
     // clang-format off
     point[0]  = MASSPOINT( a,  a,  b, w);
     point[1]  = MASSPOINT(-a,  a,  b, w);
@@ -412,7 +451,7 @@ int LebedevGridMgr::addPoints4(MassPoint point[], double v, double a) {
 
 int LebedevGridMgr::addPoints5(MassPoint point[], double v, double a) {
     const double w = 4.0 * M_PI * v;
-    const double b = sqrt(1 - a * a);
+    const double b = sqrt(sub_no_fma(1, a * a));
     // clang-format off
     point[0]  = MASSPOINT( a,  b,  0, w);
     point[1]  = MASSPOINT(-a,  b,  0, w);
@@ -444,7 +483,7 @@ int LebedevGridMgr::addPoints5(MassPoint point[], double v, double a) {
 
 int LebedevGridMgr::addPoints6(MassPoint point[], double v, double a, double b) {
     const double w = 4.0 * M_PI * v;
-    const double c = sqrt(1 - a * a - b * b);
+    const double c = sqrt(sub_no_fma(sub_no_fma(1, a * a), b * b));
     // clang-format off
     point[0]  = MASSPOINT( a,  b,  c, w);
     point[1]  = MASSPOINT(-a,  b,  c, w);
