@@ -40,6 +40,8 @@ Contents:
   `attribution-protein83.md` — the 83-atom case from the timing suite, in
   6-31+G** and aug-cc-pVDZ.
 - `paired/summary.md` — the paired timings and the memory tables.
+- `head/summary.md`, `head-delta.md` — the same six cases re-timed on the
+  rebased PR head `9317f406b2` (H1), and the difference from M4.
 - `attribution.md`, `dfk-tflops.md`, `grac-cost.md`, `accuracy.md`,
   `thread-scaling-*.md`, `host-speed.md` — generated the same way as in the
   2026-09-10 directory. `regenerate.sh` rebuilds all of them from the raw trees.
@@ -71,9 +73,10 @@ CUDA-LibXC configuration.
 
 ## Status
 
-Every job ran on `--qos=embers` except 13508396 (P5) and 13673420 (Q5). Both
-ran on `--qos=inferno` with the user's explicit approval, given separately for
-each job, after embers had preempted the same CPU arm repeatedly.
+Every job ran on `--qos=embers` except 13508396 (P5), 13673420 (Q5) and
+13721630 (H1). Each ran on `--qos=inferno` with the user's explicit approval,
+given separately for each job. P5 and Q5 moved after embers had preempted the
+same CPU arm repeatedly; H1 was one allocation for the head re-timing.
 
 | Job | Arm | Build | libcuest | Partition | Elapsed | State | Used |
 |---|---|---|---|---|---:|---|---|
@@ -89,6 +92,7 @@ each job, after embers had preempted the same CPU arm repeatedly.
 | 13673420 | Q5 — protein83 aug CPU ×2, **inferno** | merge `ee6161a3b6` | — | gpu-h200 | 02:42:24 | COMPLETED | protein83 aug CPU |
 | 13508396 | P5 — protein157 aug CPU, **inferno** | merge `ee6161a3b6` | — | gpu-h200 | 07:14:45 | COMPLETED | protein157 aug CPU (unpaired) |
 | 13508276 | P4 — protein157 aug GPU | merge `ee6161a3b6` | 0.2.2.2 | gpu-h200 | 00:09:55 | COMPLETED, case rc=1 | the device OOM below |
+| 13721630 | **H1 — paired CPU/GPU, 8 threads, inferno** | PR head `9317f406b2` | 0.2.2.2 | gpu-h200 | 00:38:49 | COMPLETED | head tables |
 
 Trees kept but not used:
 
@@ -237,6 +241,50 @@ misread:
   nanotube, because the DF integrals and the collocation grid live on the
   device; the CPU arm holds 27 GiB on the same case. The interesting comparison
   is down a column, not across.
+
+## The PR head, re-timed: H1 on `9317f406b2`
+
+H1 (job 13721630) is M4 with only the binary changed. The build is PR #12's
+head after its rebase onto `saptdft_ein_fi_option_d4` (`9317f406b2`), in its
+own worktree against the same env: libcuest 0.2.2.2 and CPU-only LibXC 7.0.0.
+The driver, memory sampler and geometries are M4's, checked by sha256 inside
+the job. It has the same six cases, three repeats, alternating arm order, 8
+threads and 112 GiB. It verified itself in-job: `cases=36 failed=0`, memory on
+every case, and a host at 84.2 GF/s per core. Between M4's source
+(`3e107987f7`) and this head sit the four `e841049701` fixes and the base's
+seven SCF-reserve commits.
+
+<!-- HEAD -->
+
+<!-- HEADDELTA -->
+
+**The speedups carry over.** Water and benzene are within 0.05× of M4. The
+nanotube rises from 8.26× to 8.54×, because its CPU arm is slower and its GPU
+arm is not. Peptide falls from 2.71× to 2.50×. CPU/GPU agreement passes on
+every case. The nanotube's line above is its CPU-vs-GPU delta moving by
+7.7e-11 Eh, a change of 0.08% in a delta that is still 9.3e-08; its cause was
+not investigated. CPU host peaks are 1–3% lower on every case.
+
+Two wall-time moves exceed their repeat scatter, and they have different
+causes:
+
+- **peptide GPU, +8% (24.2 → 26.3 s), unexplained.** It runs the same 114 SCF
+  iterations and the same number of XC calls, but each host-side XC call is
+  slower: `cuEST XC: Host Functional` by 8%, `UV: Form V` by 18%. No source
+  change between M4's build and the head touches the XC path. They are all in
+  DFHelper, FISAPT, MemDFJK, FDDS and the Python SCF budget. The node is not an
+  obvious cause either. H1's node ran STREAM triad at 11.96 GB/s against M4's
+  14.54, but M5 ran on the same node at 12.09 GB/s and its peptide GPU arm took
+  24.1 s. Telling a build effect from allocation-to-allocation variance would
+  need a second H1 allocation.
+- **nanotube CPU, +4.4% (322.9 → 337.2 s).** Split between XC `Form V`
+  (+8.8 s) and DF J/K (+5.6 s). Part of this is the head: when a GRAC cation
+  SCF reuses the neutral's JK, its working budget now takes the remainder
+  first, and the collocation cache fills to 74–99% instead of 100%. benzene
+  aug-cc-pVDZ shows the same partial fill (95–99%) and a 1% slowdown. With one
+  allocation, H1 cannot say how much of the nanotube's 14 s is the partial
+  cache and how much is the same unexplained host-side slowdown seen on
+  peptide's GPU arm.
 
 ## protein157: one CPU run, one GPU run
 
@@ -436,9 +484,9 @@ tree, including the four that ran on nodes reading 24.4–24.6 GF/s per core and
 were dropped for it, and M2 on a cpu-small node (Xeon Gold 6226), whose
 difference is the point of M2. Every tree a reported number comes from reads
 84.1–84.9 GF/s per core. Each paired merge reports `host speed: matched`, and
-every six-case speedup is computed within a single job's tree. Three comparisons
-reach across trees: the A/B deltas, protein157's single pair, and the
-protein83 aug-cc-pVDZ pair. Read their hosts' rows together with them.
+every six-case speedup is computed within a single job's tree. Four comparisons
+reach across trees: the A/B deltas, M4 against H1, protein157's single pair,
+and the protein83 aug-cc-pVDZ pair. Read their hosts' rows together with them.
 
 ## Reproduce
 

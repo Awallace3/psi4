@@ -1,0 +1,657 @@
+{
+  "complete": true,
+  "requested_repeats": 3,
+  "accuracy_tolerance_hartree": 1e-05,
+  "rows": [
+    {
+      "system": "water",
+      "basis": "cc-pvdz",
+      "nbf": 48,
+      "repeats": {
+        "cpu": 3,
+        "gpu": 3
+      },
+      "paired_repeats": 3,
+      "wall_s": {
+        "cpu": {
+          "median": 6.22431730106473,
+          "min": 6.123477017041296,
+          "max": 6.469267155043781
+        },
+        "gpu": {
+          "median": 6.763065238017589,
+          "min": 6.652989491354674,
+          "max": 6.775825252290815
+        }
+      },
+      "speedup": 0.9203396806045333,
+      "components": {
+        "SAPT DISP ENERGY": {
+          "cpu_median_hartree": -0.0036097577023286556,
+          "gpu_median_hartree": -0.0036097577023286556,
+          "max_abs_delta_hartree": 0.0,
+          "paired_deltas_hartree": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "SAPT ELST ENERGY": {
+          "cpu_median_hartree": -0.01268951277957342,
+          "gpu_median_hartree": -0.012689530380921354,
+          "max_abs_delta_hartree": 1.7601372803710547e-08,
+          "paired_deltas_hartree": [
+            -1.760133727657376e-08,
+            -1.7601326618432722e-08,
+            -1.7601372803710547e-08
+          ]
+        },
+        "SAPT EXCH ENERGY": {
+          "cpu_median_hartree": 0.010830298358097314,
+          "gpu_median_hartree": 0.010830257527871612,
+          "max_abs_delta_hartree": 4.083022625035737e-08,
+          "paired_deltas_hartree": [
+            -4.083022625035737e-08,
+            -4.083022576983897e-08,
+            -4.0830224656146497e-08
+          ]
+        },
+        "SAPT IND ENERGY": {
+          "cpu_median_hartree": -0.0026180637727145767,
+          "gpu_median_hartree": -0.002618063772864398,
+          "max_abs_delta_hartree": 2.6475002745662835e-13,
+          "paired_deltas_hartree": [
+            -1.4982112772621292e-13,
+            -2.6475002745662835e-13,
+            -1.010563160930289e-13
+          ]
+        },
+        "SAPT TOTAL ENERGY": {
+          "cpu_median_hartree": -0.008087035896529447,
+          "gpu_median_hartree": -0.008087094328242795,
+          "max_abs_delta_hartree": 5.843181713829915e-08,
+          "paired_deltas_hartree": [
+            -5.8431713348058856e-08,
+            -5.843181713829915e-08,
+            -5.8431698516173136e-08
+          ]
+        }
+      },
+      "max_abs_delta_hartree": 5.843181713829915e-08,
+      "max_abs_delta_kcal_mol": 3.666651884100533e-05,
+      "accuracy_pass": true,
+      "memory": {
+        "host_peak_rss_mib": {
+          "cpu": {
+            "peak_rss_mib": {
+              "median": 1076.10546875,
+              "min": 1073.14453125,
+              "max": 1080.2734375
+            },
+            "peak_covers_timed_region_only": true
+          },
+          "gpu": {
+            "peak_rss_mib": {
+              "median": 912.71875,
+              "min": 911.90625,
+              "max": 918.75390625
+            },
+            "peak_covers_timed_region_only": true
+          }
+        },
+        "device_peak_mib": {
+          "median": 774.0,
+          "min": 756.0,
+          "max": 774.0
+        },
+        "device_source": "per-process",
+        "device_sample_interval_s": 0.5,
+        "device_measurement": "sampled peak: a spike shorter than the sample interval is missed"
+      },
+      "nbf_monomer_a": 24,
+      "nbf_monomer_b": 24
+    },
+    {
+      "system": "water",
+      "basis": "aug-cc-pvdz",
+      "nbf": 82,
+      "repeats": {
+        "cpu": 3,
+        "gpu": 3
+      },
+      "paired_repeats": 3,
+      "wall_s": {
+        "cpu": {
+          "median": 7.788118910044432,
+          "min": 7.765597272198647,
+          "max": 7.802794616669416
+        },
+        "gpu": {
+          "median": 6.82178117102012,
+          "min": 6.78660239931196,
+          "max": 7.484750266186893
+        }
+      },
+      "speedup": 1.14165475479182,
+      "components": {
+        "SAPT DISP ENERGY": {
+          "cpu_median_hartree": -0.0036097577023286556,
+          "gpu_median_hartree": -0.0036097577023286556,
+          "max_abs_delta_hartree": 0.0,
+          "paired_deltas_hartree": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "SAPT ELST ENERGY": {
+          "cpu_median_hartree": -0.011314629999695569,
+          "gpu_median_hartree": -0.011314617647400382,
+          "max_abs_delta_hartree": 1.235231650298374e-08,
+          "paired_deltas_hartree": [
+            1.2352295186701667e-08,
+            1.235231650298374e-08,
+            1.235225965956488e-08
+          ]
+        },
+        "SAPT EXCH ENERGY": {
+          "cpu_median_hartree": 0.010087438972297316,
+          "gpu_median_hartree": 0.010087477130617303,
+          "max_abs_delta_hartree": 3.815832018590204e-08,
+          "paired_deltas_hartree": [
+            3.815831894384003e-08,
+            3.815832018590204e-08,
+            3.81583198580393e-08
+          ]
+        },
+        "SAPT IND ENERGY": {
+          "cpu_median_hartree": -0.0028810987932400296,
+          "gpu_median_hartree": -0.0028810987927138446,
+          "max_abs_delta_hartree": 7.007502217382111e-13,
+          "paired_deltas_hartree": [
+            7.007502217382111e-13,
+            4.578282197797989e-13,
+            3.4208920418610234e-13
+          ]
+        },
+        "SAPT TOTAL ENERGY": {
+          "cpu_median_hartree": -0.00771804752297049,
+          "gpu_median_hartree": -0.007717997011861304,
+          "max_abs_delta_hartree": 5.0511314880763436e-08,
+          "paired_deltas_hartree": [
+            5.0511314880763436e-08,
+            5.051109451710556e-08,
+            5.051092160680837e-08
+          ]
+        }
+      },
+      "max_abs_delta_hartree": 5.0511314880763436e-08,
+      "max_abs_delta_kcal_mol": 3.16963286350635e-05,
+      "accuracy_pass": true,
+      "memory": {
+        "host_peak_rss_mib": {
+          "cpu": {
+            "peak_rss_mib": {
+              "median": 1456.8515625,
+              "min": 1453.46875,
+              "max": 1462.31640625
+            },
+            "peak_covers_timed_region_only": true
+          },
+          "gpu": {
+            "peak_rss_mib": {
+              "median": 946.97265625,
+              "min": 944.35546875,
+              "max": 947.00390625
+            },
+            "peak_covers_timed_region_only": true
+          }
+        },
+        "device_peak_mib": {
+          "median": 780.0,
+          "min": 764.0,
+          "max": 780.0
+        },
+        "device_source": "per-process",
+        "device_sample_interval_s": 0.5,
+        "device_measurement": "sampled peak: a spike shorter than the sample interval is missed"
+      },
+      "nbf_monomer_a": 41,
+      "nbf_monomer_b": 41
+    },
+    {
+      "system": "benzene",
+      "basis": "cc-pvdz",
+      "nbf": 228,
+      "repeats": {
+        "cpu": 3,
+        "gpu": 3
+      },
+      "paired_repeats": 3,
+      "wall_s": {
+        "cpu": {
+          "median": 49.76229956187308,
+          "min": 49.55273450072855,
+          "max": 50.00691949715838
+        },
+        "gpu": {
+          "median": 16.427792765200138,
+          "min": 16.24034379888326,
+          "max": 16.64401748823002
+        }
+      },
+      "speedup": 3.029153111018492,
+      "components": {
+        "SAPT DISP ENERGY": {
+          "cpu_median_hartree": -0.012457401201590541,
+          "gpu_median_hartree": -0.012457401201590541,
+          "max_abs_delta_hartree": 0.0,
+          "paired_deltas_hartree": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "SAPT ELST ENERGY": {
+          "cpu_median_hartree": -0.0029870104399662978,
+          "gpu_median_hartree": -0.002988513768030998,
+          "max_abs_delta_hartree": 1.503328149965455e-06,
+          "paired_deltas_hartree": [
+            -1.5033272404707532e-06,
+            -1.503328149965455e-06,
+            -1.5033280647003266e-06
+          ]
+        },
+        "SAPT EXCH ENERGY": {
+          "cpu_median_hartree": 0.01183261124560852,
+          "gpu_median_hartree": 0.011834951819874293,
+          "max_abs_delta_hartree": 2.3405742676715913e-06,
+          "paired_deltas_hartree": [
+            2.3405742676715913e-06,
+            2.3405742675692426e-06,
+            2.3405742505880345e-06
+          ]
+        },
+        "SAPT IND ENERGY": {
+          "cpu_median_hartree": -0.0013506508789277363,
+          "gpu_median_hartree": -0.0013506508865468152,
+          "max_abs_delta_hartree": 1.1915126871264725e-11,
+          "paired_deltas_hartree": [
+            -1.1915126871264725e-11,
+            -7.506174501403784e-12,
+            -3.351806679430247e-12
+          ]
+        },
+        "SAPT TOTAL ENERGY": {
+          "cpu_median_hartree": -0.004962451274876056,
+          "gpu_median_hartree": -0.004961614036407748,
+          "max_abs_delta_hartree": 8.372428340810284e-07,
+          "paired_deltas_hartree": [
+            8.372351120739668e-07,
+            8.372386114292862e-07,
+            8.372428340810284e-07
+          ]
+        }
+      },
+      "max_abs_delta_hartree": 2.3405742676715913e-06,
+      "max_abs_delta_kcal_mol": 0.0014687325277122256,
+      "accuracy_pass": true,
+      "memory": {
+        "host_peak_rss_mib": {
+          "cpu": {
+            "peak_rss_mib": {
+              "median": 7276.421875,
+              "min": 7238.58203125,
+              "max": 7279.265625
+            },
+            "peak_covers_timed_region_only": true
+          },
+          "gpu": {
+            "peak_rss_mib": {
+              "median": 1189.6640625,
+              "min": 1187.6953125,
+              "max": 1192.82421875
+            },
+            "peak_covers_timed_region_only": true
+          }
+        },
+        "device_peak_mib": {
+          "median": null,
+          "min": null,
+          "max": null
+        },
+        "device_source": "per-process",
+        "device_sample_interval_s": 0.5,
+        "device_measurement": "sampled peak: a spike shorter than the sample interval is missed"
+      },
+      "nbf_monomer_a": 114,
+      "nbf_monomer_b": 114
+    },
+    {
+      "system": "benzene",
+      "basis": "aug-cc-pvdz",
+      "nbf": 384,
+      "repeats": {
+        "cpu": 3,
+        "gpu": 3
+      },
+      "paired_repeats": 3,
+      "wall_s": {
+        "cpu": {
+          "median": 125.06495362706482,
+          "min": 124.9772899611853,
+          "max": 125.19654093682766
+        },
+        "gpu": {
+          "median": 19.292957132216543,
+          "min": 19.174259171355516,
+          "max": 19.444384509697556
+        }
+      },
+      "speedup": 6.48241494396024,
+      "components": {
+        "SAPT DISP ENERGY": {
+          "cpu_median_hartree": -0.012457401201590541,
+          "gpu_median_hartree": -0.012457401201590541,
+          "max_abs_delta_hartree": 0.0,
+          "paired_deltas_hartree": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "SAPT ELST ENERGY": {
+          "cpu_median_hartree": -0.003435953786322443,
+          "gpu_median_hartree": -0.0034374337687097523,
+          "max_abs_delta_hartree": 1.4799841210333398e-06,
+          "paired_deltas_hartree": [
+            -1.4799841210333398e-06,
+            -1.4799785503782914e-06,
+            -1.4799823304656456e-06
+          ]
+        },
+        "SAPT EXCH ENERGY": {
+          "cpu_median_hartree": 0.012199781314523123,
+          "gpu_median_hartree": 0.012201858754297532,
+          "max_abs_delta_hartree": 2.077439810503623e-06,
+          "paired_deltas_hartree": [
+            2.0774397744092316e-06,
+            2.0774397723084814e-06,
+            2.077439810503623e-06
+          ]
+        },
+        "SAPT IND ENERGY": {
+          "cpu_median_hartree": -0.0014511625428625004,
+          "gpu_median_hartree": -0.0014511617069554537,
+          "max_abs_delta_hartree": 8.395967896618339e-10,
+          "paired_deltas_hartree": [
+            7.999216549564592e-10,
+            8.395967896618339e-10,
+            8.363209551970341e-10
+          ]
+        },
+        "SAPT TOTAL ENERGY": {
+          "cpu_median_hartree": -0.005144736215835733,
+          "gpu_median_hartree": -0.005144137922910425,
+          "max_abs_delta_hartree": 5.983008187198519e-07,
+          "paired_deltas_hartree": [
+            5.982555750308483e-07,
+            5.983008187198519e-07,
+            5.982938009931743e-07
+          ]
+        }
+      },
+      "max_abs_delta_hartree": 2.077439810503623e-06,
+      "max_abs_delta_kcal_mol": 0.0013036131628868745,
+      "accuracy_pass": true,
+      "memory": {
+        "host_peak_rss_mib": {
+          "cpu": {
+            "peak_rss_mib": {
+              "median": 14764.1015625,
+              "min": 14763.765625,
+              "max": 14789.66796875
+            },
+            "peak_covers_timed_region_only": true
+          },
+          "gpu": {
+            "peak_rss_mib": {
+              "median": 1278.765625,
+              "min": 1278.48046875,
+              "max": 1281.734375
+            },
+            "peak_covers_timed_region_only": true
+          }
+        },
+        "device_peak_mib": {
+          "median": 3608.0,
+          "min": 3222.0,
+          "max": 3734.0
+        },
+        "device_source": "per-process",
+        "device_sample_interval_s": 0.5,
+        "device_measurement": "sampled peak: a spike shorter than the sample interval is missed"
+      },
+      "nbf_monomer_a": 192,
+      "nbf_monomer_b": 192
+    },
+    {
+      "system": "peptide",
+      "basis": "6-31+g**",
+      "nbf": 250,
+      "repeats": {
+        "cpu": 3,
+        "gpu": 3
+      },
+      "paired_repeats": 3,
+      "wall_s": {
+        "cpu": {
+          "median": 65.74588440498337,
+          "min": 65.70963656902313,
+          "max": 65.8533768481575
+        },
+        "gpu": {
+          "median": 26.283680432010442,
+          "min": 25.778081487864256,
+          "max": 26.382287274114788
+        }
+      },
+      "speedup": 2.501395669265275,
+      "components": {
+        "SAPT DISP ENERGY": {
+          "cpu_median_hartree": -0.007726268123174744,
+          "gpu_median_hartree": -0.007726268123174744,
+          "max_abs_delta_hartree": 0.0,
+          "paired_deltas_hartree": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "SAPT ELST ENERGY": {
+          "cpu_median_hartree": -0.015531989909419508,
+          "gpu_median_hartree": -0.015532010943132946,
+          "max_abs_delta_hartree": 2.107319119204476e-08,
+          "paired_deltas_hartree": [
+            -2.10336850159365e-08,
+            -2.107319119204476e-08,
+            -2.1029848085163394e-08
+          ]
+        },
+        "SAPT EXCH ENERGY": {
+          "cpu_median_hartree": 0.014757057566710648,
+          "gpu_median_hartree": 0.014757031393506322,
+          "max_abs_delta_hartree": 2.6173338678672775e-08,
+          "paired_deltas_hartree": [
+            -2.6173204326074284e-08,
+            -2.6173123663167375e-08,
+            -2.6173338678672775e-08
+          ]
+        },
+        "SAPT IND ENERGY": {
+          "cpu_median_hartree": -0.00472831909686704,
+          "gpu_median_hartree": -0.004728319105997279,
+          "max_abs_delta_hartree": 1.1026235480215973e-11,
+          "paired_deltas_hartree": [
+            -1.1026235480215973e-11,
+            -6.110206091092252e-12,
+            -8.391266848040146e-12
+          ]
+        },
+        "SAPT TOTAL ENERGY": {
+          "cpu_median_hartree": -0.013229519562745384,
+          "gpu_median_hartree": -0.013229566780609414,
+          "max_abs_delta_hartree": 4.725242506130323e-08,
+          "paired_deltas_hartree": [
+            -4.7217915577491e-08,
+            -4.725242506130323e-08,
+            -4.721157803068421e-08
+          ]
+        }
+      },
+      "max_abs_delta_hartree": 4.725242506130323e-08,
+      "max_abs_delta_kcal_mol": 2.9651344398424436e-05,
+      "accuracy_pass": true,
+      "memory": {
+        "host_peak_rss_mib": {
+          "cpu": {
+            "peak_rss_mib": {
+              "median": 7137.765625,
+              "min": 7128.64453125,
+              "max": 7138.78125
+            },
+            "peak_covers_timed_region_only": true
+          },
+          "gpu": {
+            "peak_rss_mib": {
+              "median": 1161.609375,
+              "min": 1161.3125,
+              "max": 1161.8671875
+            },
+            "peak_covers_timed_region_only": true
+          }
+        },
+        "device_peak_mib": {
+          "median": 3150.0,
+          "min": 3028.0,
+          "max": 3150.0
+        },
+        "device_source": "per-process",
+        "device_sample_interval_s": 0.5,
+        "device_measurement": "sampled peak: a spike shorter than the sample interval is missed"
+      },
+      "nbf_monomer_a": 125,
+      "nbf_monomer_b": 125
+    },
+    {
+      "system": "nanotube",
+      "basis": "6-31+g**",
+      "nbf": 548,
+      "repeats": {
+        "cpu": 3,
+        "gpu": 3
+      },
+      "paired_repeats": 3,
+      "wall_s": {
+        "cpu": {
+          "median": 337.2097242246382,
+          "min": 336.27295197406784,
+          "max": 339.12852392392233
+        },
+        "gpu": {
+          "median": 39.487534740008414,
+          "min": 39.371498932130635,
+          "max": 41.09988574218005
+        }
+      },
+      "speedup": 8.539649953963329,
+      "components": {
+        "SAPT DISP ENERGY": {
+          "cpu_median_hartree": -0.02789795662954519,
+          "gpu_median_hartree": -0.02789795662954519,
+          "max_abs_delta_hartree": 0.0,
+          "paired_deltas_hartree": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "SAPT ELST ENERGY": {
+          "cpu_median_hartree": -0.02472072051040186,
+          "gpu_median_hartree": -0.024720718830337773,
+          "max_abs_delta_hartree": 1.867704213509569e-09,
+          "paired_deltas_hartree": [
+            1.867704213509569e-09,
+            1.6776766642578878e-09,
+            1.5613750292686746e-09
+          ]
+        },
+        "SAPT EXCH ENERGY": {
+          "cpu_median_hartree": 0.05777374303173972,
+          "gpu_median_hartree": 0.05777383584187049,
+          "max_abs_delta_hartree": 9.286653383094867e-08,
+          "paired_deltas_hartree": [
+            9.28013416320872e-08,
+            9.286653383094867e-08,
+            9.281032063712669e-08
+          ]
+        },
+        "SAPT IND ENERGY": {
+          "cpu_median_hartree": -0.006463905715115625,
+          "gpu_median_hartree": -0.006463924190882431,
+          "max_abs_delta_hartree": 1.8667293197327517e-08,
+          "paired_deltas_hartree": [
+            -1.8475766805359228e-08,
+            -1.8204200410987248e-08,
+            -1.8667293197327517e-08
+          ]
+        },
+        "SAPT TOTAL ENERGY": {
+          "cpu_median_hartree": -0.0013088398234760365,
+          "gpu_median_hartree": -0.0013087636301969963,
+          "max_abs_delta_hartree": 7.634001008421931e-08,
+          "paired_deltas_hartree": [
+            7.619327904023754e-08,
+            7.634001008421931e-08,
+            7.570440246906784e-08
+          ]
+        }
+      },
+      "max_abs_delta_hartree": 9.286653383094867e-08,
+      "max_abs_delta_kcal_mol": 5.827462980232169e-05,
+      "accuracy_pass": true,
+      "memory": {
+        "host_peak_rss_mib": {
+          "cpu": {
+            "peak_rss_mib": {
+              "median": 26762.1640625,
+              "min": 26756.765625,
+              "max": 26763.32421875
+            },
+            "peak_covers_timed_region_only": true
+          },
+          "gpu": {
+            "peak_rss_mib": {
+              "median": 1933.70703125,
+              "min": 1932.92578125,
+              "max": 1935.9453125
+            },
+            "peak_covers_timed_region_only": true
+          }
+        },
+        "device_peak_mib": {
+          "median": 8914.0,
+          "min": 3402.0,
+          "max": 9974.0
+        },
+        "device_source": "per-process",
+        "device_sample_interval_s": 0.5,
+        "device_measurement": "sampled peak: a spike shorter than the sample interval is missed"
+      },
+      "nbf_monomer_a": 56,
+      "nbf_monomer_b": 492
+    }
+  ],
+  "failures": [],
+  "all_pass": true
+}

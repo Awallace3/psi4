@@ -40,6 +40,8 @@ Contents:
   `attribution-protein83.md` — the 83-atom case from the timing suite, in
   6-31+G** and aug-cc-pVDZ.
 - `paired/summary.md` — the paired timings and the memory tables.
+- `head/summary.md`, `head-delta.md` — the same six cases re-timed on the
+  rebased PR head `9317f406b2` (H1), and the difference from M4.
 - `attribution.md`, `dfk-tflops.md`, `grac-cost.md`, `accuracy.md`,
   `thread-scaling-*.md`, `host-speed.md` — generated the same way as in the
   2026-09-10 directory. `regenerate.sh` rebuilds all of them from the raw trees.
@@ -71,9 +73,10 @@ CUDA-LibXC configuration.
 
 ## Status
 
-Every job ran on `--qos=embers` except 13508396 (P5) and 13673420 (Q5). Both
-ran on `--qos=inferno` with the user's explicit approval, given separately for
-each job, after embers had preempted the same CPU arm repeatedly.
+Every job ran on `--qos=embers` except 13508396 (P5), 13673420 (Q5) and
+13721630 (H1). Each ran on `--qos=inferno` with the user's explicit approval,
+given separately for each job. P5 and Q5 moved after embers had preempted the
+same CPU arm repeatedly; H1 was one allocation for the head re-timing.
 
 | Job | Arm | Build | libcuest | Partition | Elapsed | State | Used |
 |---|---|---|---|---|---:|---|---|
@@ -89,6 +92,7 @@ each job, after embers had preempted the same CPU arm repeatedly.
 | 13673420 | Q5 — protein83 aug CPU ×2, **inferno** | merge `ee6161a3b6` | — | gpu-h200 | 02:42:24 | COMPLETED | protein83 aug CPU |
 | 13508396 | P5 — protein157 aug CPU, **inferno** | merge `ee6161a3b6` | — | gpu-h200 | 07:14:45 | COMPLETED | protein157 aug CPU (unpaired) |
 | 13508276 | P4 — protein157 aug GPU | merge `ee6161a3b6` | 0.2.2.2 | gpu-h200 | 00:09:55 | COMPLETED, case rc=1 | the device OOM below |
+| 13721630 | **H1 — paired CPU/GPU, 8 threads, inferno** | PR head `9317f406b2` | 0.2.2.2 | gpu-h200 | 00:38:49 | COMPLETED | head tables |
 
 Trees kept but not used:
 
@@ -348,6 +352,137 @@ misread:
   nanotube, because the DF integrals and the collocation grid live on the
   device; the CPU arm holds 27 GiB on the same case. The interesting comparison
   is down a column, not across.
+
+## The PR head, re-timed: H1 on `9317f406b2`
+
+H1 (job 13721630) is M4 with only the binary changed. The build is PR #12's
+head after its rebase onto `saptdft_ein_fi_option_d4` (`9317f406b2`), in its
+own worktree against the same env: libcuest 0.2.2.2 and CPU-only LibXC 7.0.0.
+The driver, memory sampler and geometries are M4's, checked by sha256 inside
+the job. It has the same six cases, three repeats, alternating arm order, 8
+threads and 112 GiB. It verified itself in-job: `cases=36 failed=0`, memory on
+every case, and a host at 84.2 GF/s per core. Between M4's source
+(`3e107987f7`) and this head sit the four `e841049701` fixes and the base's
+seven SCF-reserve commits.
+
+# Phoenix cuEST GRAC timing and accuracy
+
+Status: complete.
+Wall time is the fresh-process `energy()` call, including backend initialization.
+Speedup is median CPU time / median GPU time; values below 1 mean GPU slowdown.
+
+| System | Basis | MonA own nbf | MonB own nbf | Dimer nbf | CPU/GPU n | CPU median [range], s | GPU median [range], s | Speedup | Max component Δ, Eh | Accuracy |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| water | cc-pvdz | 24 | 24 | 48 | 3/3 | 6.22 [6.12–6.47] | 6.76 [6.65–6.78] | 0.92× | 5.843e-08 | PASS |
+| water | aug-cc-pvdz | 41 | 41 | 82 | 3/3 | 7.79 [7.77–7.80] | 6.82 [6.79–7.48] | 1.14× | 5.051e-08 | PASS |
+| benzene | cc-pvdz | 114 | 114 | 228 | 3/3 | 49.76 [49.55–50.01] | 16.43 [16.24–16.64] | 3.03× | 2.341e-06 | PASS |
+| benzene | aug-cc-pvdz | 192 | 192 | 384 | 3/3 | 125.06 [124.98–125.20] | 19.29 [19.17–19.44] | 6.48× | 2.077e-06 | PASS |
+| peptide | 6-31+g** | 125 | 125 | 250 | 3/3 | 65.75 [65.71–65.85] | 26.28 [25.78–26.38] | 2.50× | 4.725e-08 | PASS |
+| nanotube | 6-31+g** | 56 | 492 | 548 | 3/3 | 337.21 [336.27–339.13] | 39.49 [39.37–41.10] | 8.54× | 9.287e-08 | PASS |
+
+## Memory
+
+Host memory is the kernel's `VmHWM` high-water mark over the timed region, so it is exact rather than sampled. Device memory is polled and is a **sampled** peak: a spike shorter than the interval is missed.
+A blank cell means that quantity was not recorded for every repeat of that arm.
+
+| System | Basis | CPU host peak, MiB | GPU host peak, MiB | GPU device peak, MiB | Device accounting | Poll, s | Peak scope |
+|---|---|---:|---:|---:|---|---:|---|
+| water | cc-pvdz | 1076 [1073–1080] | 913 [912–919] | 774 [756–774] | per-process | 0.5 | timed region |
+| water | aug-cc-pvdz | 1457 [1453–1462] | 947 [944–947] | 780 [764–780] | per-process | 0.5 | timed region |
+| benzene | cc-pvdz | 7276 [7239–7279] | 1190 [1188–1193] | — | per-process | 0.5 | timed region |
+| benzene | aug-cc-pvdz | 14764 [14764–14790] | 1279 [1278–1282] | 3608 [3222–3734] | per-process | 0.5 | timed region |
+| peptide | 6-31+g** | 7138 [7129–7139] | 1162 [1161–1162] | 3150 [3028–3150] | per-process | 0.5 | timed region |
+| nanotube | 6-31+g** | 26762 [26757–26763] | 1934 [1933–1936] | 8914 [3402–9974] | per-process | 0.5 | timed region |
+
+`whole process` means the kernel did not honor the high-water-mark reset, so that figure also covers Python imports and basis construction and is not comparable with a `timed region` one.
+
+Monomer columns give each fragment's own-basis size. The SAPT monomer SCFs use the dimer basis (ghosted partner), so their actual SCF basis size is the dimer column.
+
+Accuracy threshold: 1.0e-05 Eh for every component and paired repeat.
+
+## Component accuracy
+
+| System / basis | Component | CPU median, Eh | GPU median, Eh | Max paired absolute Δ, Eh |
+|---|---|---:|---:|---:|
+| water / cc-pvdz | SAPT DISP ENERGY | -0.003609757702 | -0.003609757702 | 0.000e+00 |
+| water / cc-pvdz | SAPT ELST ENERGY | -0.012689512780 | -0.012689530381 | 1.760e-08 |
+| water / cc-pvdz | SAPT EXCH ENERGY | 0.010830298358 | 0.010830257528 | 4.083e-08 |
+| water / cc-pvdz | SAPT IND ENERGY | -0.002618063773 | -0.002618063773 | 2.648e-13 |
+| water / cc-pvdz | SAPT TOTAL ENERGY | -0.008087035897 | -0.008087094328 | 5.843e-08 |
+| water / aug-cc-pvdz | SAPT DISP ENERGY | -0.003609757702 | -0.003609757702 | 0.000e+00 |
+| water / aug-cc-pvdz | SAPT ELST ENERGY | -0.011314630000 | -0.011314617647 | 1.235e-08 |
+| water / aug-cc-pvdz | SAPT EXCH ENERGY | 0.010087438972 | 0.010087477131 | 3.816e-08 |
+| water / aug-cc-pvdz | SAPT IND ENERGY | -0.002881098793 | -0.002881098793 | 7.008e-13 |
+| water / aug-cc-pvdz | SAPT TOTAL ENERGY | -0.007718047523 | -0.007717997012 | 5.051e-08 |
+| benzene / cc-pvdz | SAPT DISP ENERGY | -0.012457401202 | -0.012457401202 | 0.000e+00 |
+| benzene / cc-pvdz | SAPT ELST ENERGY | -0.002987010440 | -0.002988513768 | 1.503e-06 |
+| benzene / cc-pvdz | SAPT EXCH ENERGY | 0.011832611246 | 0.011834951820 | 2.341e-06 |
+| benzene / cc-pvdz | SAPT IND ENERGY | -0.001350650879 | -0.001350650887 | 1.192e-11 |
+| benzene / cc-pvdz | SAPT TOTAL ENERGY | -0.004962451275 | -0.004961614036 | 8.372e-07 |
+| benzene / aug-cc-pvdz | SAPT DISP ENERGY | -0.012457401202 | -0.012457401202 | 0.000e+00 |
+| benzene / aug-cc-pvdz | SAPT ELST ENERGY | -0.003435953786 | -0.003437433769 | 1.480e-06 |
+| benzene / aug-cc-pvdz | SAPT EXCH ENERGY | 0.012199781315 | 0.012201858754 | 2.077e-06 |
+| benzene / aug-cc-pvdz | SAPT IND ENERGY | -0.001451162543 | -0.001451161707 | 8.396e-10 |
+| benzene / aug-cc-pvdz | SAPT TOTAL ENERGY | -0.005144736216 | -0.005144137923 | 5.983e-07 |
+| peptide / 6-31+g** | SAPT DISP ENERGY | -0.007726268123 | -0.007726268123 | 0.000e+00 |
+| peptide / 6-31+g** | SAPT ELST ENERGY | -0.015531989909 | -0.015532010943 | 2.107e-08 |
+| peptide / 6-31+g** | SAPT EXCH ENERGY | 0.014757057567 | 0.014757031394 | 2.617e-08 |
+| peptide / 6-31+g** | SAPT IND ENERGY | -0.004728319097 | -0.004728319106 | 1.103e-11 |
+| peptide / 6-31+g** | SAPT TOTAL ENERGY | -0.013229519563 | -0.013229566781 | 4.725e-08 |
+| nanotube / 6-31+g** | SAPT DISP ENERGY | -0.027897956630 | -0.027897956630 | 0.000e+00 |
+| nanotube / 6-31+g** | SAPT ELST ENERGY | -0.024720720510 | -0.024720718830 | 1.868e-09 |
+| nanotube / 6-31+g** | SAPT EXCH ENERGY | 0.057773743032 | 0.057773835842 | 9.287e-08 |
+| nanotube / 6-31+g** | SAPT IND ENERGY | -0.006463905715 | -0.006463924191 | 1.867e-08 |
+| nanotube / 6-31+g** | SAPT TOTAL ENERGY | -0.001308839823 | -0.001308763630 | 7.634e-08 |
+
+## Failed or incomplete measurements
+
+```json
+[]
+```
+
+Control: `M4 (3e107987f7 source)` → Treatment: `head 9317f406b2 (H1)`. A `~` marks a difference inside the combined run-to-run scatter of the two jobs, which is not a measured change.
+
+| System | Basis | nbf | CPU wall s | GPU wall s | Speedup | CPU host peak MiB | GPU host peak MiB | GPU device peak MiB |
+|---|---|---:|---|---|---|---|---|---|
+| water | cc-pvdz | 48 | 6.31 → 6.22 (~) | 6.92 → 6.76 (~) | 0.91× → 0.92× | 1112.52 → 1076.11 (0.97×) | 911.02 → 912.72 (~) | 774.00 → 774.00 (~) |
+| water | aug-cc-pvdz | 82 | 7.96 → 7.79 (0.98×) | 7.00 → 6.82 (~) | 1.14× → 1.14× | 1506.60 → 1456.85 (0.97×) | 944.31 → 946.97 (~) | 792.00 → 780.00 (~) |
+| benzene | cc-pvdz | 228 | 49.70 → 49.76 (~) | 16.64 → 16.43 (~) | 2.99× → 3.03× | 7422.93 → 7276.42 (0.98×) | 1191.74 → 1189.66 (~) | — |
+| peptide | 6-31+g** | 250 | 65.63 → 65.75 (~) | 24.24 → 26.28 (1.08×) | 2.71× → 2.50× | 7297.37 → 7137.77 (0.98×) | 1162.11 → 1161.61 (~) | 2802.00 → 3150.00 (1.12×) |
+| benzene | aug-cc-pvdz | 384 | 123.81 → 125.06 (1.01×) | 19.26 → 19.29 (~) | 6.43× → 6.48× | 14893.33 → 14764.10 (0.99×) | 1279.71 → 1278.77 (~) | 3218.00 → 3608.00 (~) |
+| nanotube | 6-31+g** | 548 | 322.91 → 337.21 (1.04×) | 39.07 → 39.49 (~) | 8.26× → 8.54× | 27051.21 → 26762.16 (0.99×) | 1933.54 → 1933.71 (~) | 5386.00 → 8914.00 (~) |
+
+**The two builds do not agree numerically.** These cases moved by more than their own repeats do, which a change to memory accounting cannot explain:
+
+- nanotube/6-31+g**: 9.278977e-08 → 9.286653e-08 Eh (scatter ±7.1e-11)
+
+**The speedups carry over.** Water and benzene are within 0.05× of M4. The
+nanotube rises from 8.26× to 8.54×, because its CPU arm is slower and its GPU
+arm is not. Peptide falls from 2.71× to 2.50×. CPU/GPU agreement passes on
+every case. The nanotube's line above is its CPU-vs-GPU delta moving by
+7.7e-11 Eh, a change of 0.08% in a delta that is still 9.3e-08; its cause was
+not investigated. CPU host peaks are 1–3% lower on every case.
+
+Two wall-time moves exceed their repeat scatter, and they have different
+causes:
+
+- **peptide GPU, +8% (24.2 → 26.3 s), unexplained.** It runs the same 114 SCF
+  iterations and the same number of XC calls, but each host-side XC call is
+  slower: `cuEST XC: Host Functional` by 8%, `UV: Form V` by 18%. No source
+  change between M4's build and the head touches the XC path. They are all in
+  DFHelper, FISAPT, MemDFJK, FDDS and the Python SCF budget. The node is not an
+  obvious cause either. H1's node ran STREAM triad at 11.96 GB/s against M4's
+  14.54, but M5 ran on the same node at 12.09 GB/s and its peptide GPU arm took
+  24.1 s. Telling a build effect from allocation-to-allocation variance would
+  need a second H1 allocation.
+- **nanotube CPU, +4.4% (322.9 → 337.2 s).** Split between XC `Form V`
+  (+8.8 s) and DF J/K (+5.6 s). Part of this is the head: when a GRAC cation
+  SCF reuses the neutral's JK, its working budget now takes the remainder
+  first, and the collocation cache fills to 74–99% instead of 100%. benzene
+  aug-cc-pVDZ shows the same partial fill (95–99%) and a 1% slowdown. With one
+  allocation, H1 cannot say how much of the nanotube's 14 s is the partial
+  cache and how much is the same unexplained host-side slowdown seen on
+  peptide's GPU arm.
 
 ## protein157: one CPU run, one GPU run
 
@@ -766,6 +901,7 @@ different corrections, and neither is the core-count ratio.
 
 | Tree | Node | Threads | DGEMM GF/s per core | Triad GB/s | Scalar Miter/s | Live MHz |
 |---|---|---:|---:|---:|---:|---:|
+| H1-core6-h200-job13721630 | atl1-1-03-019-2-0.pace.gatech.edu | 8 | 84.2 | 12.0 | 47.3 | 2800.0 |
 | M1-core6-h200-job13358747 | atl1-1-02-014-9-0.pace.gatech.edu | 8 | 84.3 | 14.4 | 47.4 | 2800.0 |
 | M2-cpu24-core6-job13358750 | atl1-1-02-008-2-2.pace.gatech.edu | 8 | 76.5 | 9.3 | 24.7 | 1200.0 |
 | M3-premerge-core6-h200-job13367763 | atl1-1-02-012-9-0.pace.gatech.edu | 8 | 84.2 | 14.6 | 47.3 | 2800.0 |
@@ -802,9 +938,9 @@ tree, including the four that ran on nodes reading 24.4–24.6 GF/s per core and
 were dropped for it, and M2 on a cpu-small node (Xeon Gold 6226), whose
 difference is the point of M2. Every tree a reported number comes from reads
 84.1–84.9 GF/s per core. Each paired merge reports `host speed: matched`, and
-every six-case speedup is computed within a single job's tree. Three comparisons
-reach across trees: the A/B deltas, protein157's single pair, and the
-protein83 aug-cc-pVDZ pair. Read their hosts' rows together with them.
+every six-case speedup is computed within a single job's tree. Four comparisons
+reach across trees: the A/B deltas, M4 against H1, protein157's single pair,
+and the protein83 aug-cc-pVDZ pair. Read their hosts' rows together with them.
 
 ## Reproduce
 

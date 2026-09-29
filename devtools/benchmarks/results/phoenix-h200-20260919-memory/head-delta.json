@@ -1,0 +1,388 @@
+{
+  "control_label": "M4 (3e107987f7 source)",
+  "control_only": [],
+  "identical_numerics": false,
+  "numeric_drift": [
+    {
+      "basis": "6-31+g**",
+      "control": 9.278976505211478e-08,
+      "noise_band": 7.121461753634151e-11,
+      "system": "nanotube",
+      "treatment": 9.286653383094867e-08
+    }
+  ],
+  "rows": [
+    {
+      "basis": "cc-pvdz",
+      "cpu_host_peak_mib": {
+        "control": 1112.51953125,
+        "delta": -36.4140625,
+        "noise_band": 12.431640625,
+        "ratio": 0.9672688330612174,
+        "resolved": true,
+        "scatter_measured": true,
+        "treatment": 1076.10546875
+      },
+      "cpu_wall_s": {
+        "control": 6.309308864874765,
+        "delta": -0.08499156381003559,
+        "noise_band": 0.5980741394450888,
+        "ratio": 0.9865291800369449,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 6.22431730106473
+      },
+      "gpu_device_peak_mib": {
+        "control": 774.0,
+        "delta": 0.0,
+        "noise_band": 954.0,
+        "ratio": 1.0,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 774.0
+      },
+      "gpu_host_peak_mib": {
+        "control": 911.015625,
+        "delta": 1.703125,
+        "noise_band": 7.255859375,
+        "ratio": 1.0018694794614527,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 912.71875
+      },
+      "gpu_wall_s": {
+        "control": 6.916265569860116,
+        "delta": -0.1532003318425268,
+        "noise_band": 0.28546233801171184,
+        "ratio": 0.9778492699137888,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 6.763065238017589
+      },
+      "max_abs_delta_hartree": {
+        "control": 5.843170356248373e-08,
+        "noise_band": 2.1713447012627896e-13,
+        "scatter_control": 1.5782340712089393e-13,
+        "scatter_measured": true,
+        "scatter_treatment": 5.931106300538502e-14,
+        "treatment": 5.843181713829915e-08
+      },
+      "nbf": 48,
+      "nbf_agrees": true,
+      "speedup": {
+        "control": 0.9122421343057788,
+        "treatment": 0.9203396806045333
+      },
+      "system": "water"
+    },
+    {
+      "basis": "aug-cc-pvdz",
+      "cpu_host_peak_mib": {
+        "control": 1506.6015625,
+        "delta": -49.75,
+        "noise_band": 9.693359375,
+        "ratio": 0.9669786616194352,
+        "resolved": true,
+        "scatter_measured": true,
+        "treatment": 1456.8515625
+      },
+      "cpu_wall_s": {
+        "control": 7.960285613080487,
+        "delta": -0.17216670303605497,
+        "noise_band": 0.10399053269065917,
+        "ratio": 0.978371793249083,
+        "resolved": true,
+        "scatter_measured": true,
+        "treatment": 7.788118910044432
+      },
+      "gpu_device_peak_mib": {
+        "control": 792.0,
+        "delta": -12.0,
+        "noise_band": 939.0,
+        "ratio": 0.9848484848484849,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 780.0
+      },
+      "gpu_host_peak_mib": {
+        "control": 944.30859375,
+        "delta": 2.6640625,
+        "noise_band": 3.11328125,
+        "ratio": 1.0028211778624407,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 946.97265625
+      },
+      "gpu_wall_s": {
+        "control": 7.003213849849999,
+        "delta": -0.18143267882987857,
+        "noise_band": 0.4731338864658028,
+        "ratio": 0.9740929403671195,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 6.82178117102012
+      },
+      "max_abs_delta_hartree": {
+        "control": 5.051074362764918e-08,
+        "noise_band": 8.491115796593895e-13,
+        "scatter_control": 6.524746021252525e-13,
+        "scatter_measured": true,
+        "scatter_treatment": 1.96636977534137e-13,
+        "treatment": 5.0511314880763436e-08
+      },
+      "nbf": 82,
+      "nbf_agrees": true,
+      "speedup": {
+        "control": 1.136661793249536,
+        "treatment": 1.14165475479182
+      },
+      "system": "water"
+    },
+    {
+      "basis": "cc-pvdz",
+      "cpu_host_peak_mib": {
+        "control": 7422.92578125,
+        "delta": -146.50390625,
+        "noise_band": 28.44921875,
+        "ratio": 0.9802633206140815,
+        "resolved": true,
+        "scatter_measured": true,
+        "treatment": 7276.421875
+      },
+      "cpu_wall_s": {
+        "control": 49.700535716023296,
+        "delta": 0.06176384584978223,
+        "noise_band": 0.26730770734138787,
+        "ratio": 1.0012427199216258,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 49.76229956187308
+      },
+      "gpu_device_peak_mib": null,
+      "gpu_host_peak_mib": {
+        "control": 1191.73828125,
+        "delta": -2.07421875,
+        "noise_band": 6.77734375,
+        "ratio": 0.9982595014504154,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 1189.6640625
+      },
+      "gpu_wall_s": {
+        "control": 16.635939247906208,
+        "delta": -0.20814648270606995,
+        "noise_band": 0.22730418818537146,
+        "ratio": 0.9874881436145984,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 16.427792765200138
+      },
+      "max_abs_delta_hartree": {
+        "control": 2.3405742644328625e-06,
+        "noise_band": 3.0736697909095057e-14,
+        "scatter_control": 2.2194919513385258e-14,
+        "scatter_measured": true,
+        "scatter_treatment": 8.541778395709798e-15,
+        "treatment": 2.3405742676715913e-06
+      },
+      "nbf": 228,
+      "nbf_agrees": true,
+      "speedup": {
+        "control": 2.9875401067167626,
+        "treatment": 3.029153111018492
+      },
+      "system": "benzene"
+    },
+    {
+      "basis": "6-31+g**",
+      "cpu_host_peak_mib": {
+        "control": 7297.37109375,
+        "delta": -159.60546875,
+        "noise_band": 11.603515625,
+        "ratio": 0.9781283606521398,
+        "resolved": true,
+        "scatter_measured": true,
+        "treatment": 7137.765625
+      },
+      "cpu_wall_s": {
+        "control": 65.6276827850379,
+        "delta": 0.11820161994546652,
+        "noise_band": 0.6604661880992353,
+        "ratio": 1.0018010939123454,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 65.74588440498337
+      },
+      "gpu_device_peak_mib": {
+        "control": 2802.0,
+        "delta": 348.0,
+        "noise_band": 235.0,
+        "ratio": 1.1241970021413277,
+        "resolved": true,
+        "scatter_measured": true,
+        "treatment": 3150.0
+      },
+      "gpu_host_peak_mib": {
+        "control": 1162.109375,
+        "delta": -0.5,
+        "noise_band": 1.904296875,
+        "ratio": 0.9995697478991596,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 1161.609375
+      },
+      "gpu_wall_s": {
+        "control": 24.23513916414231,
+        "delta": 2.0485412678681314,
+        "noise_band": 0.47942702914588153,
+        "ratio": 1.084527728683279,
+        "resolved": true,
+        "scatter_measured": true,
+        "treatment": 26.283680432010442
+      },
+      "max_abs_delta_hartree": {
+        "control": 4.72660920351059e-08,
+        "noise_band": 1.8776160314037948e-10,
+        "scatter_control": 1.6733808783087056e-10,
+        "scatter_measured": true,
+        "scatter_treatment": 2.0423515309508922e-11,
+        "treatment": 4.725242506130323e-08
+      },
+      "nbf": 250,
+      "nbf_agrees": true,
+      "speedup": {
+        "control": 2.7079556812340875,
+        "treatment": 2.501395669265275
+      },
+      "system": "peptide"
+    },
+    {
+      "basis": "aug-cc-pvdz",
+      "cpu_host_peak_mib": {
+        "control": 14893.33203125,
+        "delta": -129.23046875,
+        "noise_band": 23.884765625,
+        "ratio": 0.9913229310621128,
+        "resolved": true,
+        "scatter_measured": true,
+        "treatment": 14764.1015625
+      },
+      "cpu_wall_s": {
+        "control": 123.80982226599008,
+        "delta": 1.2551313610747457,
+        "noise_band": 0.24951984931249171,
+        "ratio": 1.0101375750170956,
+        "resolved": true,
+        "scatter_measured": true,
+        "treatment": 125.06495362706482
+      },
+      "gpu_device_peak_mib": {
+        "control": 3218.0,
+        "delta": 390.0,
+        "noise_band": 684.0,
+        "ratio": 1.1211932877563704,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 3608.0
+      },
+      "gpu_host_peak_mib": {
+        "control": 1279.70703125,
+        "delta": -0.94140625,
+        "noise_band": 2.052734375,
+        "ratio": 0.9992643579920941,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 1278.765625
+      },
+      "gpu_wall_s": {
+        "control": 19.264538062969223,
+        "delta": 0.028419069247320294,
+        "noise_band": 0.24846190318930894,
+        "ratio": 1.0014752011781662,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 19.292957132216543
+      },
+      "max_abs_delta_hartree": {
+        "control": 2.077439818696722e-06,
+        "noise_band": 4.528061953168461e-14,
+        "scatter_control": 2.6183048784655938e-14,
+        "scatter_measured": true,
+        "scatter_treatment": 1.909757074702867e-14,
+        "treatment": 2.077439810503623e-06
+      },
+      "nbf": 384,
+      "nbf_agrees": true,
+      "speedup": {
+        "control": 6.42682538565409,
+        "treatment": 6.48241494396024
+      },
+      "system": "benzene"
+    },
+    {
+      "basis": "6-31+g**",
+      "cpu_host_peak_mib": {
+        "control": 27051.2109375,
+        "delta": -289.046875,
+        "noise_band": 15.7890625,
+        "ratio": 0.9893148267680947,
+        "resolved": true,
+        "scatter_measured": true,
+        "treatment": 26762.1640625
+      },
+      "cpu_wall_s": {
+        "control": 322.9147429189179,
+        "delta": 14.294981305720285,
+        "noise_band": 1.8714184169657528,
+        "ratio": 1.0442685929310749,
+        "resolved": true,
+        "scatter_measured": true,
+        "treatment": 337.2097242246382
+      },
+      "gpu_device_peak_mib": {
+        "control": 5386.0,
+        "delta": 3528.0,
+        "noise_band": 5050.0,
+        "ratio": 1.6550315633122912,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 8914.0
+      },
+      "gpu_host_peak_mib": {
+        "control": 1933.53515625,
+        "delta": 0.171875,
+        "noise_band": 3.5390625,
+        "ratio": 1.0000888915825732,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 1933.70703125
+      },
+      "gpu_wall_s": {
+        "control": 39.07019791495986,
+        "delta": 0.41733682504855096,
+        "noise_band": 1.0172994680469856,
+        "ratio": 1.010681717711206,
+        "resolved": false,
+        "scatter_measured": true,
+        "treatment": 39.487534740008414
+      },
+      "max_abs_delta_hartree": {
+        "control": 9.278976505211478e-08,
+        "noise_band": 7.121461753634151e-11,
+        "scatter_control": 3.861851810560424e-11,
+        "scatter_measured": true,
+        "scatter_treatment": 3.259609943073727e-11,
+        "treatment": 9.286653383094867e-08
+      },
+      "nbf": 548,
+      "nbf_agrees": true,
+      "speedup": {
+        "control": 8.264988665319118,
+        "treatment": 8.539649953963329
+      },
+      "system": "nanotube"
+    }
+  ],
+  "treatment_label": "head 9317f406b2 (H1)",
+  "treatment_only": []
+}

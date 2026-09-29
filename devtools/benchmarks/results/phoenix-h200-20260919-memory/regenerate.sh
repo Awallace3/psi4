@@ -90,6 +90,7 @@ M4=$(one_tree M4-core6-h200-cuest022)
 M5=$(one_tree M5-premerge-core6-h200-cuest022)
 P3=$(one_tree P3-protein157-h200)
 P83=$(one_tree Q1-protein83-h200)
+H1=$(one_tree H1-core6-h200)
 
 # Within every case in the paired tree, both arms ran in one allocation.
 python "$TOOLS/merge_case_trees.py" "$M4" --output "$RAW/merged-paired"
@@ -239,6 +240,21 @@ python "$TOOLS/build_delta.py" "$HERE/premerge-cuest0212/summary.json" "$HERE/pr
   --control-label "pre-merge, libcuest 0.2.1.2 (M3)" --treatment-label "pre-merge, libcuest 0.2.2.2 (M5)" \
   --output "$HERE/premerge-cuest-delta.json" > "$HERE/premerge-cuest-delta.md"
 
+# The PR head re-timed: M4's six cases, driver and env, on a build of the
+# rebased head 9317f406b2 (job 13721630, one allocation). No
+# --require-identical-numerics: between M4's source and this head sit commits
+# that change how the SCF budget is split, and the nanotube's CPU-vs-GPU delta
+# moves by 7.7e-11 Eh. Printing that is the point of the table.
+python "$TOOLS/merge_case_trees.py" "$H1" --output "$RAW/merged-head"
+python "$TOOLS/case_dirs_to_campaign.py" "$RAW/merged-head" --force \
+  --expect water:cc-pvdz:3 --expect water:aug-cc-pvdz:3 \
+  --expect benzene:cc-pvdz:3 --expect benzene:aug-cc-pvdz:3 \
+  --expect peptide:6-31+g**:3 --expect nanotube:6-31+g**:3
+python "$TOOLS/summarize_saptdft_cuest.py" "$RAW/merged-head" --output "$HERE/head" || true
+python "$TOOLS/build_delta.py" "$HERE/paired/summary.json" "$HERE/head/summary.json" \
+  --control-label "M4 (3e107987f7 source)" --treatment-label "head 9317f406b2 (H1)" \
+  --output "$HERE/head-delta.json" > "$HERE/head-delta.md"
+
 # Where the GPU saving actually comes from, and how much of it DF-K could ever
 # explain on its own.
 python "$TOOLS/speedup_attribution.py" "$A" --output "$HERE/attribution.json" > "$HERE/attribution.md"
@@ -282,6 +298,8 @@ python "$HERE/fixed_vs_iterative.py" "$HERE/paired/summary.json" \
   --grac-cost "$HERE/grac-cost.json" > "$HERE/fixed-vs-iterative.md"
 python "$TOOLS/splice.py" "$HERE/README.template.md" "$HERE/README.md" \
   --block "PAIRED=$HERE/paired/summary.md" \
+  --block "HEAD=$HERE/head/summary.md" \
+  --block "HEADDELTA=$HERE/head-delta.md" \
   --block "GRACCOST=$HERE/grac-cost.md" \
   --block "FIXEDVSITER=$HERE/fixed-vs-iterative.md" \
   --block "ATTRIBUTION=$HERE/attribution.md" \

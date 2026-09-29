@@ -63,9 +63,10 @@ which the M3 job checks for explicitly. The `peak_rss_mib` column is the kernel'
 
 ## Jobs
 
-Account `gts-cs207-chemx`. Every job ran on `--qos=embers` except 13508396 and
-13673420. Both ran on `--qos=inferno` with the user's explicit approval, given
-separately for each job, after embers had preempted the same CPU arm repeatedly.
+Account `gts-cs207-chemx`. Every job ran on `--qos=embers` except 13508396,
+13673420 and 13721630. Each ran on `--qos=inferno` with the user's explicit
+approval, given separately for each job. The first two moved after embers had
+preempted the same CPU arm repeatedly; 13721630 is the single head re-timing.
 
 | Job | Arm | Partition | Node | Elapsed | Exit | Cases |
 |---|---|---|---|---:|---:|---:|
@@ -85,6 +86,8 @@ separately for each job, after embers had preempted the same CPU arm repeatedly.
 | 13579177 | Q3 protein83 aug-cc-pVDZ CPU | gpu-h200 | `atl1-1-02-012-2-0` | 01:06:50 | preempted | 0 |
 | 13671730 | Q4 protein83 aug-cc-pVDZ CPU | gpu-h200 | `atl1-1-03-018-14-0` | 01:21:52 | preempted | 0 |
 | 13673420 | Q5 protein83 aug-cc-pVDZ CPU ×2, **inferno** | gpu-h200 | `atl1-1-03-018-14-0` | 02:42:24 | 0 | 2 |
+| 13720971 | head build (`9317f406b2`) | cpu-small | `atl1-1-02-009-28-2` | 00:16:18 | 0 | — |
+| 13721630 | H1 head paired CPU/GPU ×3, **inferno** | gpu-h200 | `atl1-1-03-019-2-0` | 00:38:49 | 0 | 36 |
 
 The Q jobs run the same `core.so` as M4 and P1–P5, but the driver and
 geometry file come from `protein83-driver/` in the campaign directory, which is
@@ -198,3 +201,23 @@ devtools/benchmarks/results/phoenix-h200-20260919-memory/regenerate.sh "$RAW"
 degraded, or not COMPLETED. The one exception is protein157's GPU run, which
 comes from a tree that is FAILED only because its CPU case was preempted.
 `regenerate.sh` checks that case's own `rc=0` and `ok` instead.
+
+## H1: the PR head re-timing
+
+H1 measures PR #12's head after its rebase, `9317f406b2`
+(`v1.11-713-g9317f406b2`). The build is a separate worktree,
+`gits/psi4.saptdft_cuest_head`, so the `ee6161a3b6` checkout above is
+untouched. It uses the same `build.sh` and env (`p4cuest_sapt`, libcuest
+0.2.2.2, CPU-only LibXC 7.0.0). The harness is in
+`runs/psi4-cuest-timing/head-9317f406b2-20260929/` (`common.inc`,
+`jobH1-core6-h200-head.sbatch`). It is M4's harness with `ROOT`, `P4BUILD`,
+`CAMPAIGN` and `EXPECTED_COMMIT` changed. The head has no `devtools/benchmarks`,
+so the driver files are staged from the benchmarks checkout and checked in-job
+against M4's sha256.
+
+| File | sha256 |
+|---|---|
+| `core.cpython-313-x86_64-linux-gnu.so` (head) | `d3b168fc318dbf21c3935940e3f386edd7f67d76f0c87cf8d45ab71cc562ff29` |
+| `saptdft_cuest_grac.py` | `b3e83a931587ca9416a92be5faea1554108dd291cbadc0a3214c3723e3a1f2df` |
+| `process_memory.py` | `714aecccbbb05eb126b7a9f126c53ed4415d7f623775b31aa776c2e4e5b8f36d` |
+| `saptdft_suite_geometries.json` | `17640f5394055437a1286546d83224614acee6237deb7ed2329f0f14546e45cd` |
