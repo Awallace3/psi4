@@ -69,6 +69,12 @@ class FDDS_Dispersion {
     // QR factorization result
     SharedMatrix R_A_, R_B_;
 
+    bool single_monomer_;
+    FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
+                    std::map<std::string, SharedMatrix> matrix_cache,
+                    std::map<std::string, SharedVector> vector_cache, bool is_hybrid, bool single_monomer);
+    void check_monomer(const std::string& monomer, bool needs_hybrid = false) const;
+
    public:
     /**
      * Constructs the FDDS_Dispersion object.
@@ -155,9 +161,10 @@ class FDDS_Dispersion {
     void form_Y(std::string monomer);
 
     /**
-     * Performs QR factorization and store (R^t)^-1 into R_A_ or R_B_
+     * Performs QR factorization of the occupied-virtual three-index integrals.
+     * Economy factors are zero-padded to naux columns/rows; the caller handles rank deficiency by pseudoinverse.
      * @param monomer Monomer "A" or "B"
-     * @return (R^t)^-1
+     * @return R (not inverted)
      */
     SharedMatrix QR(std::string monomer);
 
@@ -165,6 +172,24 @@ class FDDS_Dispersion {
     void print_tensor_pqQ(std::string tensor_name, std::string file_name, std::tuple<size_t, size_t, size_t> dimensions);
 
 };  // End FDDS_Dispersion
+
+/// One monomer, using the same integral preparation and response intermediates as SAPT.
+class FDDS_Monomer : public FDDS_Dispersion {
+   public:
+    FDDS_Monomer(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
+                 SharedMatrix Cocc, SharedMatrix Cvir, SharedVector eps_occ, SharedVector eps_vir, bool is_hybrid)
+        : FDDS_Dispersion(primary, auxiliary, {{"Cocc_A", Cocc}, {"Cvir_A", Cvir}},
+                          {{"eps_occ_A", eps_occ}, {"eps_vir_A", eps_vir}}, is_hybrid, true) {}
+
+    SharedMatrix form_unc_amplitude(double omega) { return FDDS_Dispersion::form_unc_amplitude("A", omega); }
+    std::map<std::string, SharedMatrix> form_aux_matrices(double omega) {
+        return FDDS_Dispersion::form_aux_matrices("A", omega);
+    }
+    SharedMatrix R() {
+        check_monomer("A", true);
+        return R_A_;
+    }
+};
 }  // namespace sapt
 }  // namespace psi
 
