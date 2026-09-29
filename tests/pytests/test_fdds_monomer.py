@@ -160,6 +160,60 @@ def test_hybrid_qr_supported_shapes(orbitals, nocc, nvir):
     np.testing.assert_allclose(actual_y, expected_y, atol=1.e-11, rtol=1.e-11)
 
 
+def test_wide_hybrid_response_matches_qr_free_reference(orbitals):
+    """Wide (ar|P) (nov=2 < naux=7): Q-bearing terms against an oracle with no QR.
+
+    For any valid Q R = A of full-row-rank A, Q pinv(R)^T = pinv(A)^T, and the driver uses
+    Q only through K @ pinv(R)^T. Every operand below comes from Mints. The pre-fix QR
+    (invalid DORGQR, out-of-bounds R copy) missed this oracle by O(1).
+    Uses only the two-monomer API.
+    """
+    nocc, nvir, omega, x_alpha = 1, 2, 0.4, 0.25
+    data = native_inputs(orbitals, nocc=nocc, nvir=nvir)
+    primary, auxiliary, co, cv, eo, ev = data
+    naux, nbf, nov = auxiliary.nbf(), primary.nbf(), nocc * nvir
+    zero = psi4.core.BasisSet.zero_ao_basis_set()
+    mints = psi4.core.MintsHelper(primary)
+    ao = mints.ao_eri(auxiliary, zero, primary, primary).np.reshape(naux, nbf, nbf)
+    metric = mints.ao_eri(auxiliary, zero, auxiliary, zero).np.reshape(naux, naux)
+    eig, vectors = np.linalg.eigh(metric)
+    half_inv = (vectors / np.sqrt(eig)) @ vectors.T
+    A = np.einsum("Pmn,mi,na->iaP", ao, co.np, cv.np).reshape(nov, naux)
+    assert np.linalg.matrix_rank(A) == nov and np.linalg.cond(A) < 10
+    B = A @ half_inv
+    oo = np.einsum("Pmn,mi,nj->ijP", ao, co.np, co.np) @ half_inv
+    vv = np.einsum("Pmn,ma,nb->abP", ao, cv.np, cv.np) @ half_inv
+    Vx = B @ B.T                                                           # (ia|jb)
+    Vy = np.einsum("ijP,abP->iajb", oo, vv).reshape(nov, nov)              # (ij|ab)
+    QRt = np.linalg.pinv(A).T                                              # Q pinv(R)^T
+    delta = (ev.np[None, :] - eo.np[:, None]).ravel()
+    lam = -4.0 / (delta**2 + omega**2)
+    LDA, Yp = (delta * lam)[:, None] * A, (Vy - Vx) @ A
+    ref = {"K1LD": LDA.T @ (Vx + Vy) @ QRt, "K2LD": LDA.T @ (Vy - Vx) @ QRt,
+           "K21L": (lam[:, None] * Yp).T @ (Vx + Vy) @ QRt}
+    kernel = metric + 0.03 * mints.ao_overlap(auxiliary, auxiliary).np  # Explicit test policy.
+    exchange = dict(ref, K2L=A.T @ (lam[:, None] * Yp), amp=LDA.T @ A)  # amp is already negative.
+    expected = fdds_coupled_amplitudes(exchange["amp"], metric, np.linalg.inv(metric), kernel,
+                                       exchange=exchange, x_alpha=x_alpha, Rtinv=np.eye(naux))
+
+    runs = []
+    for _ in range(2):
+        pair = dimer(data, data, True)
+        rtinv = np.linalg.pinv(pair.R_A().np, rcond=1.e-13).T
+        aux = {k: v.to_array() for k, v in pair.form_aux_matrices("A", omega).items()}
+        assert all(np.isfinite(v).all() for v in [rtinv, *aux.values()])
+        for key, value in ref.items():
+            np.testing.assert_allclose(aux[key] @ rtinv, value, atol=1.e-11, rtol=1.e-11)
+        for key in ("K2L", "amp"):
+            np.testing.assert_allclose(aux[key], exchange[key], atol=1.e-11, rtol=1.e-11)
+        result = fdds_coupled_amplitudes(aux["amp"], pair.metric().np, pair.metric_inv().np, kernel,
+                                         exchange=aux, x_alpha=x_alpha, Rtinv=rtinv)
+        np.testing.assert_allclose(result, expected, atol=1.e-11, rtol=1.e-11)
+        runs.append(result)
+        del pair
+    np.testing.assert_array_equal(runs[0], runs[1])
+
+
 @pytest.mark.parametrize("zero_rank", [False, True])
 def test_rank_deficiency_retains_pseudoinverse_policy(orbitals, zero_rank):
     data = native_inputs(orbitals, zero_virtual=zero_rank)
