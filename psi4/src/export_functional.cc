@@ -332,8 +332,24 @@ void export_functional(py::module &m) {
              "Debug only: prints formatted 3-index intermediate to file.")
         .def("form_aux_matrices", &sapt::FDDS_Dispersion::form_aux_matrices,
              "Forms the uncoupled amplitudes and other matrices for either monomer.")
-        .def("R_A", &sapt::FDDS_Dispersion::R_A, "Obtains (R^t)^-1 for monomer A.")
-        .def("R_B", &sapt::FDDS_Dispersion::R_B, "Obtains (R^t)^-1 for monomer B.");
+        .def("R_A", &sapt::FDDS_Dispersion::R_A, "Obtains the QR factor R for monomer A (not inverted).")
+        .def("R_B", &sapt::FDDS_Dispersion::R_B, "Obtains the QR factor R for monomer B (not inverted).");
+
+    py::class_<sapt::FDDS_Monomer, std::shared_ptr<sapt::FDDS_Monomer>>(m, "FDDS_Monomer",
+        "Native single-monomer FDDS intermediates. C1 AO coefficients and orbital energies in atomic units; no kernel is implied.")
+        .def(py::init<std::shared_ptr<BasisSet>, std::shared_ptr<BasisSet>, SharedMatrix, SharedMatrix,
+                      SharedVector, SharedVector, bool>(),
+             py::arg("primary"), py::arg("auxiliary"), py::arg("Cocc"), py::arg("Cvir"),
+             py::arg("eps_occ"), py::arg("eps_vir"), py::arg("is_hybrid"))
+        .def("metric", &sapt::FDDS_Monomer::metric)
+        .def("metric_inv", &sapt::FDDS_Monomer::metric_inv)
+        .def("aux_overlap", &sapt::FDDS_Monomer::aux_overlap)
+        .def("project_densities", &sapt::FDDS_Monomer::project_densities)
+        .def("form_unc_amplitude", &sapt::FDDS_Monomer::form_unc_amplitude,
+             "Positive uncoupled amplitude at imaginary frequency omega (atomic units).")
+        .def("form_aux_matrices", &sapt::FDDS_Monomer::form_aux_matrices,
+             "Hybrid intermediates; amp has the negative response sign.")
+        .def("R", &sapt::FDDS_Monomer::R, "QR factor R, not inverted; hybrid preparation only.");
 
      py::class_<NumIntHelper, std::shared_ptr<NumIntHelper>>(m, "NumIntHelper",
                                                              "Computes numerical integrals using a DFT grid.")

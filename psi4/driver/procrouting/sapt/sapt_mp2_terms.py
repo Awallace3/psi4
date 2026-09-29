@@ -44,6 +44,42 @@ def _symmetrize(mat):
     return tmp
 
 
+def fdds_coupled_amplitudes(unc, metric, metric_inv, kernel, *, exchange=None, x_alpha=0.0, Rtinv=None):
+    """Return symmetric (uncoupled, coupled) native FDDS response arrays.
+
+    All arrays are naux by naux in the same auxiliary basis, in atomic units.
+    ``unc`` has the negative response sign (negate ``form_unc_amplitude``;
+    hybrid ``form_aux_matrices()["amp"]`` already has this sign).
+    ``kernel`` is explicitly supplied as J + fxc; no kernel model is selected here.
+    For hybrids, supply K1LD/K2LD/K2L/K21L and pinv(R).T using rcond=1.e-13.
+    Inputs are borrowed, never modified; returned arrays are newly allocated.
+    """
+    shape = np.shape(metric)
+    if len(shape) != 2 or shape[0] == 0 or shape[0] != shape[1]:
+        raise ValueError("FDDS metric must be a nonempty square array")
+    arrays = [unc, metric, metric_inv, kernel]
+    if exchange is not None:
+        arrays += [exchange[k] for k in ("K1LD", "K2LD", "K2L", "K21L")] + [Rtinv]
+    elif Rtinv is not None or x_alpha != 0.0:
+        raise ValueError("FDDS exact exchange requires hybrid intermediates")
+    if any(np.shape(a) != shape for a in arrays):
+        raise ValueError("FDDS arrays must all have the metric's naux by naux shape")
+    if not np.isfinite(x_alpha) or any(not np.isfinite(a).all() for a in arrays):
+        raise ValueError("FDDS inputs must be finite")
+
+    X = unc.copy()
+    if exchange is not None:
+        X = X - x_alpha * exchange["K2L"]
+        K = -x_alpha * exchange["K1LD"] - x_alpha * exchange["K2LD"] + x_alpha * x_alpha * exchange["K21L"]
+        KRS = K.dot(Rtinv).dot(metric)
+    XSW = X.dot(metric_inv).dot(kernel)
+    if exchange is not None:
+        XSW += 0.25 * KRS
+    amplitude = np.linalg.pinv(metric - XSW, rcond=1.e-13)
+    coupled = X + XSW.dot(amplitude).dot(X)
+    return _symmetrize(unc), _symmetrize(coupled)
+
+
 def _compute_fxc(PQrho, half_Saux, halfp_Saux, x_alpha, rho_thresh=1.e-8):
     """
     Computes the gridless (P|fxc|Q) ALDA tensor.
@@ -166,67 +202,19 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, leg_points
         omega = leg_lambda * (1.0 - point) / (1.0 + point)
         lambda_scale = ((2.0 * leg_lambda) / (point + 1.0)**2)
 
-        # Monomer A
-        if is_hybrid:
-            aux_dict = fdds_obj.form_aux_matrices("A", omega)
-            aux_dict = {k: v.to_array() for k, v in aux_dict.items()}
-            X_A_uc = aux_dict["amp"].copy()
-            X_A = X_A_uc - x_alpha * aux_dict["K2L"]
-
-            # K matrices
-            K_A = -x_alpha * aux_dict["K1LD"] - x_alpha * aux_dict["K2LD"] + x_alpha * x_alpha * aux_dict["K21L"]
-            KRS_A = K_A.dot(Rtinv_A).dot(metric)
-        else:
-            X_A = fdds_obj.form_unc_amplitude("A", omega)
-            X_A.scale(-1.0)
-            X_A = X_A.to_array()
-            X_A_uc = X_A.copy()
-
-        # Coupled A
-        XSW_A = X_A.dot(metric_inv).dot(W_A)
-        if is_hybrid:
-            XSW_A += 0.25 * KRS_A
-
-        amplitude = np.linalg.pinv(metric - XSW_A, rcond=1.e-13)
-        X_A_coupled = X_A + XSW_A.dot(amplitude).dot(X_A)
-
-        del X_A, XSW_A, amplitude
-        if is_hybrid:
-            del K_A, KRS_A, aux_dict
-
-        # Monomer B
-        if is_hybrid:
-            aux_dict = fdds_obj.form_aux_matrices("B", omega)
-            aux_dict = {k: v.to_array() for k, v in aux_dict.items()}
-            X_B_uc = aux_dict["amp"].copy()
-            X_B = X_B_uc - x_alpha * aux_dict["K2L"]
-
-            # K matrices
-            K_B = -x_alpha * aux_dict["K1LD"] - x_alpha * aux_dict["K2LD"] + x_alpha * x_alpha * aux_dict["K21L"]
-            KRS_B = K_B.dot(Rtinv_B).dot(metric)
-        else:
-            X_B = fdds_obj.form_unc_amplitude("B", omega)
-            X_B.scale(-1.0)
-            X_B = X_B.to_array()
-            X_B_uc = X_B.copy()
-
-        # Coupled B
-        XSW_B = X_B.dot(metric_inv).dot(W_B)
-        if is_hybrid:
-            XSW_B += 0.25 * KRS_B
-
-        amplitude = np.linalg.pinv(metric - XSW_B, rcond=1.e-13)
-        X_B_coupled = X_B + XSW_B.dot(amplitude).dot(X_B)
-
-        del X_B, XSW_B, amplitude
-        if is_hybrid:
-            del K_B, KRS_B, aux_dict
-
-        # Make sure the results are symmetrized
-        X_A_uc = _symmetrize(X_A_uc)
-        X_B_uc = _symmetrize(X_B_uc)
-        X_A_coupled = _symmetrize(X_A_coupled)
-        X_B_coupled = _symmetrize(X_B_coupled)
+        responses = []
+        for monomer, W, Rtinv in (("A", W_A, Rtinv_A if is_hybrid else None),
+                                  ("B", W_B, Rtinv_B if is_hybrid else None)):
+            if is_hybrid:
+                aux = {k: v.to_array() for k, v in fdds_obj.form_aux_matrices(monomer, omega).items()}
+                responses.append(fdds_coupled_amplitudes(
+                    aux["amp"], metric, metric_inv, W, exchange=aux, x_alpha=x_alpha, Rtinv=Rtinv))
+                del aux
+            else:
+                unc = fdds_obj.form_unc_amplitude(monomer, omega)
+                unc.scale(-1.0)
+                responses.append(fdds_coupled_amplitudes(unc.to_array(), metric, metric_inv, W))
+        (X_A_uc, X_A_coupled), (X_B_uc, X_B_coupled) = responses
 
         # Combine
         tmp_uc = metric_inv.dot(X_A_uc).dot(metric_inv)

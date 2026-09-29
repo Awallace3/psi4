@@ -555,7 +555,45 @@ scaling and using the uncoupled exchange-dispersion energy directly.
              an older version of |PSIfour| to produce a different value of
              exchange-dispersion energy from the latest version.
 
-Basic Keywords for SAPT(DFT) 
+Native single-monomer FDDS interface
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``core.FDDS_Monomer(primary, auxiliary, Cocc, Cvir, eps_occ, eps_vir,
+is_hybrid)`` prepares only one monomer using the same integral and DFHelper
+implementation as ``core.FDDS_Dispersion``. Coefficients must be C1 AO
+matrices, with nonempty occupied and virtual spaces and matching orbital
+energies. Inputs are retained by shared ownership and should not be mutated
+while the object is in use; matrices returned by native accessors are borrowed.
+Orbital energies and nonnegative imaginary frequencies are in atomic units.
+
+``form_unc_amplitude(omega)`` returns the positive uncoupled amplitude;
+``form_aux_matrices(omega)`` requires hybrid preparation and returns the
+negative-sign ``amp`` plus the native exchange intermediates.
+``R()`` returns the QR factor itself, not its inverse. For occupied-virtual
+spaces smaller than the auxiliary basis, economy QR factors are zero-padded
+to preserve the existing auxiliary-sized interfaces and exact reconstruction.
+All shapes retain SAPT's ``numpy.linalg.pinv(R, rcond=1.e-13).T`` policy,
+without a new rank threshold.
+The QR step still holds two occupied-virtual by auxiliary arrays in memory.
+
+The Python helper
+``psi4.driver.procrouting.sapt.sapt_mp2_terms.fdds_coupled_amplitudes``
+accepts negative-sign uncoupled response, Coulomb metric, inverse metric,
+and an explicit ``J + fxc`` kernel. It returns newly allocated symmetric
+uncoupled and coupled response arrays; hybrid calls additionally supply
+exchange intermediates, exact-exchange fraction and the transposed
+pseudoinverse of ``R``. For example, for nonhybrid preparation::
+
+    from psi4.driver.procrouting.sapt.sapt_mp2_terms import fdds_coupled_amplitudes
+    unc, coupled = fdds_coupled_amplitudes(
+        -monomer.form_unc_amplitude(omega).to_array(),
+        monomer.metric().to_array(), monomer.metric_inv().to_array(), kernel)
+
+This helper does not choose an XC kernel, perform frequency quadrature,
+construct constrained fitting legs, or produce atomic polarizabilities.
+The SAPT driver continues to use its gridless Slater/VWN kernel.
+
+Basic Keywords for SAPT(DFT)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. include:: autodir_options_c/sapt__sapt_dft_grac_shift_a.rst
