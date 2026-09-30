@@ -34,13 +34,25 @@ GRID_CONVERGENCE = {
     (75, 302): (2.27e-07, 3.64e-07, 3.00e-07, 1.37e-06),
     (99, 590): (9.95e-09, 4.62e-09, 9.00e-10, 9.24e-09),
 }
+#: Water, r(OH) = 1 A and HOH = 100 deg, in Psi4's C2v centre-of-mass frame (bohr),
+#: from the closed form (y, z) = r (sin 50, cos 50) with z shifted by the centre of
+#: mass. Fixed here because libmints' z-matrix conversion varies by an ulp with
+#: compile flags, which the exact literals above would see.
+WATER_BOHR = """units bohr
+no_com
+no_reorient
+symmetry c1
+O 0.0  0.0                -0.13594216160241693
+H 0.0 -1.447614197423726   1.0787503775428258
+H 0.0  1.447614197423726   1.0787503775428258
+"""
 
 
 @pytest.fixture(scope='module')
 def declared():
     """An AUX recipe and its sites with no SCF at all: the rule needs neither."""
     core.be_quiet()
-    wfn = core.Wavefunction.build(psi4.geometry('O\nH 1 1\nH 1 1 2 100\nsymmetry c1'), 'cc-pvdz')
+    wfn = core.Wavefunction.build(psi4.geometry(WATER_BOHR), 'cc-pvdz')
     mol = wfn.molecule()
     centres = tuple((mol.x(i), mol.y(i), mol.z(i)) for i in range(mol.natom()))
     aux = core.BasisSet.build(mol, 'DF_BASIS_SCF', 'cc-pVDZ-JKFIT', puream=0)
