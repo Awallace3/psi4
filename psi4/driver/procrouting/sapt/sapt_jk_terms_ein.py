@@ -38,10 +38,17 @@ from .sapt_util import print_sapt_var
 import einsums as ein
 
 
-# Edge of the (r,s) compute block in fdisp0, in virtual orbitals.  The block
-# GEMMs gain throughput with the edge, and the block's nine work arrays cost
-# 9 * FDISP_BLOCK**2 * na * nb doubles.
-FDISP_BLOCK = 64
+# Edge of the (r,s) compute block in fdisp0, in virtual orbitals.  Swept over
+# the whole block kernel (_Fdisp0Block) on 24 threads at peptide, nanotube and
+# protein83 dimensions: 48 is within 1% of the minimum at nanotube and
+# protein83 (flat from 20 to 48 there) and 10% off it at peptide, where the
+# curve is still falling; 24 -- the einsums v2 port's optimum -- costs 10% at
+# nanotube and 40% at peptide.  Here the elementwise stages are numpy, single-threaded
+# and cheap next to the GEMMs, so they do not pull the optimum down the way
+# v2's anti-scaling elementwise kernels do.  The price is memory: the nine
+# work arrays are 9 * FDISP_BLOCK**2 * na * nb doubles, 0.88 GB at protein83
+# against 0.22 GB at 24.
+FDISP_BLOCK = 48
 
 # Size, in doubles, of one fdisp0 DF staging matrix.  The staging matrices only
 # carry a slab of a DF tensor from disk into the packed buffers, so they want
