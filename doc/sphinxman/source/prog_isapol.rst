@@ -79,7 +79,8 @@ Distributed moments (Q)
      independent of how the shapes were obtained.
    * ``isapol_df_multipoles.analytic_df_centre_multipoles`` produces CamCASP's
      DF-centre rule in closed form: every auxiliary function belongs wholly to
-     its own centre.
+     its own centre. Its provenance string reads "no stockholder fixed point";
+     the candidate's "no ISA-A fixed point" was reworded with the same meaning.
    * ``isapol_distribution.DistributedMoments`` is the owned, immutable,
      validated Q contract. ``analytic_df_moments`` wraps the analytic DF-centre
      producer without changing any element. ``validate_for`` checks the site,
@@ -98,8 +99,10 @@ Deferred to later stages
    * Response: the orbital constructor
      ``IsaPartitionedMultipoles(orbital, sites, provenance, denominator_cutoff,
      orbitals, nocc)``, which gives direct occupied-fast (``a*nocc+i``) OV
-     columns with representation ``'direct_ov'``, and ``'direct_ov'`` as a
-     supplied-Q representation. Also ``IsaExplicitBasis.screening_s_overlap``
+     columns with representation ``'direct_ov'``, and the unsampled supplied-Q
+     constructor ``IsaPartitionedMultipoles(values, sites, representation,
+     provenance)``, which takes a finished Q (``'fitted_density_coefficients'``
+     or ``'direct_ov'`` columns) and sites without samples, as given. Also ``IsaExplicitBasis.screening_s_overlap``
      (CamCASP's signed ``screening_s_ovr`` shell surrogate for ALDA screening)
      and ``shell_layout``.
    * Point-response fitting: ``isapol_vdw_radius`` (``vdw_radius``), the

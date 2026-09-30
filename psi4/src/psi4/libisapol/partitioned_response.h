@@ -29,13 +29,6 @@ class IsaPartitionedMultipoles {
     IsaPartitionedMultipoles(const IsaExplicitBasis& auxiliary,
         const std::vector<IsaMultipoleSite>& sites, const std::string& provenance,
         double denominator_cutoff = 1.e-36);
-    /// Supplied, unsampled Q (e.g. the analytic DF-centre rule), used as given: no
-    /// quadrature, denominator, renormalization or reordering. Rows must already
-    /// be the concatenated (site, Racah component) axes, and sites must carry no
-    /// samples.
-    IsaPartitionedMultipoles(std::shared_ptr<Matrix> values,
-        const std::vector<IsaMultipoleSite>& sites, const std::string& representation,
-        const std::string& provenance);
     std::string representation() const { return representation_; }
     std::shared_ptr<Matrix> values() const;
     std::vector<int> offsets() const { return offsets_; }

@@ -19,8 +19,7 @@ void property_finite(const Matrix& m) {
         property_require(std::isfinite(m.get(i,j)), "Nonfinite response or multipole matrix");
 }
 }
-/// Row axes implied by the declared sites, shared by every constructor so a
-/// supplied Q is laid out identically to a sampled one.
+/// Row axes implied by the declared sites.
 void IsaPartitionedMultipoles::declare_sites(const std::vector<IsaMultipoleSite>& sites) {
     property_require(!sites.empty(), "Partitioned multipoles require sites");
     std::set<std::string> seen;
@@ -41,32 +40,6 @@ void IsaPartitionedMultipoles::declare_sites(const std::vector<IsaMultipoleSite>
             }
         }
     }
-}
-IsaPartitionedMultipoles::IsaPartitionedMultipoles(std::shared_ptr<Matrix> values,
-        const std::vector<IsaMultipoleSite>& sites, const std::string& representation,
-        const std::string& provenance)
-    : provenance_(provenance), cutoff_(0.0) {
-    property_require(!provenance.empty(), "Explicit partition provenance is required");
-    property_require(representation == "fitted_density_coefficients",
-                     "Supplied Q must declare fitted_density_coefficients columns");
-    property_require(values != nullptr, "Supplied Q matrix is required");
-    property_finite(*values);
-    declare_sites(sites);
-    property_require(values->nrow() == offsets_.back(),
-                     "Supplied Q rows must be the concatenated (site, component) axes of the declared sites");
-    property_require(values->ncol() > 0, "Supplied Q needs at least one column");
-    for (const auto& site : sites)
-        property_require(site.samples.points.empty() && site.samples.weights.empty() &&
-                         site.samples.shape.empty() && site.samples.shape_sum.empty() &&
-                         site.samples.auxiliary_sites.empty(),
-                         "A supplied Q carries no samples; clear them rather than leaving them unused");
-    representation_ = representation;
-    q_ = values->clone();
-    // No quadrature ran, so no point was excluded and no stockholder ratio was
-    // formed. These are zero because the rule has no denominator, not because a
-    // sampled one happened to be clean.
-    excluded_.assign(sites.size(), 0);
-    negative_.assign(sites.size(), 0);
 }
 IsaPartitionedMultipoles::IsaPartitionedMultipoles(const IsaExplicitBasis& auxiliary,
         const std::vector<IsaMultipoleSite>& sites, const std::string& provenance, double cutoff)

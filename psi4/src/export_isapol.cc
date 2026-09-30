@@ -95,9 +95,6 @@ void export_isapol(py::module& m) {
             "Supplied-partition Racah Q; global axes, bohr origins, atomic units; owned snapshots")
         .def(py::init<const IsaExplicitBasis&, const std::vector<IsaMultipoleSite>&, const std::string&, double>(),
             "auxiliary"_a, "sites"_a, "provenance"_a, "denominator_cutoff"_a=1.e-36)
-        .def(py::init<std::shared_ptr<Matrix>, const std::vector<IsaMultipoleSite>&,
-         const std::string&, const std::string&>(), "values"_a, "sites"_a,
-         "representation"_a, "provenance"_a)
     .def_property_readonly("representation", &IsaPartitionedMultipoles::representation)
     .def_property_readonly("values", &IsaPartitionedMultipoles::values)
         .def_property_readonly("offsets", &IsaPartitionedMultipoles::offsets)
