@@ -7,10 +7,7 @@ checked against an independent grid oracle: the same rule integrated natively
 by ``IsaPartitionedMultipoles`` with ``auxiliary_sites=[a]`` and a unit
 stockholder ratio.  Only the molecular quadrature separates the two, which
 ``test_the_closed_form_matches_the_grid_oracle_...`` shows by refining the grid
-and watching the gap fall.  Every number here is cheap and SCF-free.  The full
-aug-cc-pVTZ-RI comparison against the archived reference protocol lives in the
-gitignored ``agent_scratch/pytests/test_isapol_df_centre_public_full.py``,
-which also guards every literal recorded below.
+and watching the gap fall.  Every number here is cheap and SCF-free.
 """
 from types import SimpleNamespace
 import numpy as np

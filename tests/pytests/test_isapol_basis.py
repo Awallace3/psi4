@@ -85,10 +85,7 @@ def test_density_neighbour_screening_and_translation():
 #: angular momentum present.  Evaluation and overlap are per-function and pairwise
 #: quantities, so the values below are exactly the corresponding submatrices of
 #: the full 97x109 (oxygen) and 97x49 (hydrogen) descriptor comparison -- this is
-#: production parity on selected elements, not a reduced-accuracy substitute.  The
-#: descriptors themselves and the complete replay live in the untracked
-#: `agent_scratch/` tree; `test_isapol_basis_production.py` there re-derives every number
-#: below from the fixture, so a regenerated fixture cannot leave these stale.
+#: production parity on selected elements, not a reduced-accuracy substitute.
 #:
 #: Four points, one per regime of the 97-point radial grid:
 #:   cusp    r ~ 1e-4  -- the tight s function is everything, and R_lm ~ r^l kills
