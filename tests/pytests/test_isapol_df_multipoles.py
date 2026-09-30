@@ -24,7 +24,10 @@ HARMONIC_RESIDUALS = (6.661338147750939e-16, 1.3322676295501878e-15,
 #: cc-pVDZ-JKFIT water AUX: 42 shells, 131 Cartesian functions, 3 sites.
 NFUNCTION = 131
 #: GAMINT convention check and the closed-form charge row, both on that AUX.
-CONVENTION = (6.661338147750939e-16, 2.643465579626019)
+#: The CONVENTION magnitude is for the fixed Cartesian water below; the old
+#: 2.643465579626019 came from the z-matrix geometry, whose H coordinates were
+#: one ulp asymmetric.
+CONVENTION = (6.661338147750939e-16, 2.6434655796260205)
 CHARGE_ROW_ERROR = 7.105427357601002e-15
 CHARGE_ROW_MAGNITUDE = 10.197510192046527
 #: Grid-vs-closed-form maximum relative difference per rank, by (radial, spherical).
