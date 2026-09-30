@@ -2216,18 +2216,23 @@ class _Fdisp0Block:
     tens, so pair-at-a-time BLAS spends most of its time on call overhead.
     The whole compute block is therefore held as one matrix,
 
-    .. math:: V[(r,a),(s,b)] = \sum_Q  X[(r,a),Q] Y[(s,b),Q] ,
+    .. math:: V[(s,b),(r,a)] = \sum_Q  Y[(s,b),Q] X[(r,a),Q] ,
 
     which turns a block's worth of tiny GEMMs into one big one.  The four
     exchange DF terms and the four rank-1 (V,J,K) updates ride in the same
     GEMM by concatenating them along Q with two extra columns (see fdisp0 for
     the packing), so Disp20 costs one GEMM per block and Exch-Disp20 two.
 
-    Every block matrix is row-major with the occupied index running fastest
-    within each virtual, i.e. V viewed as rank 4 is V[r,a,s,b].  The nine work
-    arrays are allocated once, flat, at the full block size; a short trailing
-    block takes their leading elements, which is again a contiguous row-major
-    matrix, so no block shape needs buffers of its own.
+    The block matrices are row-major with (s,b) on the rows and (r,a) on the
+    columns, i.e. V viewed as rank 4 is V[s,b,r,a] with a fastest.  That is
+    the memory order of the einsums v2 port's column-major V[(r,a),(s,b)], so
+    the two kernels issue the same GEMMs on the same layouts.  It matters: for
+    na << nb (nanotube, na=8, nb=78) the DF GEMM runs 1.7x faster into this
+    orientation than into its transpose, in the same MKL.
+
+    The nine work arrays are allocated once, flat, at the full block size; a
+    short trailing block takes their leading elements, which is again a
+    contiguous row-major matrix, so no block shape needs buffers of its own.
 
     Calling the object accumulates the block's Disp20 and Exch-Disp20 into
     ``E_disp`` and ``E_exch`` (both na x nb, still in the LO basis).  With
@@ -2239,8 +2244,8 @@ class _Fdisp0Block:
     def __init__(self, UA, UB, ea, eb, nQ, blk_r, blk_s, profile=False):
         self.UA, self.UB = UA, UB
         self.na, self.nb = ea.shape[0], eb.shape[0]
-        # ea + eb, the occupied half of every block's energy denominator
-        self.eab = ea[:, None] + eb[None, :]
+        # eb + ea, the occupied half of every block's energy denominator (b, a)
+        self.eba = eb[:, None] + ea[None, :]
         self.nQ = nQ
         nwork = blk_r * blk_s * self.na * self.nb
         self.work = {k: np.zeros(nwork) for k in self._WORK}
@@ -2251,18 +2256,18 @@ class _Fdisp0Block:
     def _blk(self, name, nrow, ncol):
         return self.work[name][: nrow * ncol].reshape(nrow, ncol)
 
-    def _to_lo(self, X, I, Y, nx):
-        """Y[(x,a),(y,b)] = sum_a' UA[a',a] sum_b' X[(x,a'),(y,b')] UB[b',b].
+    def _to_lo(self, X, I, Y, ny, n_row, U_row, U_col):
+        """Y[(y,i),(x,j)] = sum_i' U_row[i',i] sum_j' X[(y,i'),(x,j')] U_col[j',j].
 
-        b' is the fastest index of the row-major block, so its contraction is
-        one GEMM over every row at once; the a' contraction is one GEMM per x,
-        each over the contiguous na-row panel that x owns.
+        j' is the fastest index of the row-major block, so its contraction is
+        one GEMM over every row at once; the i' contraction is one GEMM per y,
+        each over the contiguous n_row-row panel that y owns.
         """
-        na, nb = self.na, self.nb
-        _gemm("N", "N", 1.0, X.reshape(-1, nb), self.UB, 0.0, I.reshape(-1, nb))
-        for x in range(nx):
-            _gemm("T", "N", 1.0, self.UA, I[x * na:(x + 1) * na], 0.0,
-                  Y[x * na:(x + 1) * na])
+        n_col = U_col.shape[0]
+        _gemm("N", "N", 1.0, X.reshape(-1, n_col), U_col, 0.0, I.reshape(-1, n_col))
+        for y in range(ny):
+            _gemm("T", "N", 1.0, U_row, I[y * n_row:(y + 1) * n_row], 0.0,
+                  Y[y * n_row:(y + 1) * n_row])
 
     def _tick(self, name, t0):
         t1 = time.perf_counter()
@@ -2277,64 +2282,65 @@ class _Fdisp0Block:
         the block's virtual orbital energies.
         """
         na, nb, nQ = self.na, self.nb, self.nQ
+        UA, UB = self.UA, self.UB
         nrb, nsb = er.shape[0], es.shape[0]
         prof = self.times is not None
         t = time.perf_counter() if prof else None
 
-        Mb, Nb = nrb * na, nsb * nb
-        V, T, I = self._blk("V", Mb, Nb), self._blk("T", Mb, Nb), self._blk("I", Mb, Nb)
-        T2, V2, D = self._blk("T2", Mb, Nb), self._blk("V2", Mb, Nb), self._blk("D", Mb, Nb)
-        W, IW = self._blk("W", nsb * na, nrb * nb), self._blk("IW", nsb * na, nrb * nb)
-        W2 = self._blk("W2", nsb * na, nrb * nb)
-        T2v = T2.reshape(nrb, na, nsb, nb)
-        V2v = V2.reshape(nrb, na, nsb, nb)
-        W2v = W2.reshape(nsb, na, nrb, nb)
+        Nb, Mb = nsb * nb, nrb * na
+        V, T, I = self._blk("V", Nb, Mb), self._blk("T", Nb, Mb), self._blk("I", Nb, Mb)
+        T2, V2, D = self._blk("T2", Nb, Mb), self._blk("V2", Nb, Mb), self._blk("D", Nb, Mb)
+        W, IW = self._blk("W", nrb * nb, nsb * na), self._blk("IW", nrb * nb, nsb * na)
+        W2 = self._blk("W2", nrb * nb, nsb * na)
+        T2v = T2.reshape(nsb, nb, nrb, na)
+        V2v = V2.reshape(nsb, nb, nrb, na)
+        W2v = W2.reshape(nrb, nb, nsb, na)
 
         # => Amplitudes, Disp20 <= //
 
-        # V[(r,a),(s,b)] = sum_Q Aar[(r,a),Q] Abs[(s,b),Q]
-        _gemm("N", "T", 1.0, AFar_r[:, 0:nQ], FAbs_s[:, nQ:2 * nQ], 0.0, V)
+        # V[(s,b),(r,a)] = sum_Q Abs[(s,b),Q] Aar[(r,a),Q]
+        _gemm("N", "T", 1.0, FAbs_s[:, nQ:2 * nQ], AFar_r[:, 0:nQ], 0.0, V)
         if prof: t = self._tick("gemm V", t)
 
-        # Amplitudes T = V / ((ea + eb) - (er + es)).  einsums v1 has neither
+        # Amplitudes T = V / ((eb + ea) - (es + er)).  einsums v1 has neither
         # an outer-sum primitive nor an elementwise division, so both steps
         # are numpy: the denominator is one broadcast subtraction written
         # straight into the D work array, with no block-sized temporary, and
         # the amplitudes one division pass into T.
-        np.subtract(self.eab[None, :, None, :],
-                    (er[:, None] + es[None, :])[:, None, :, None],
-                    out=D.reshape(nrb, na, nsb, nb))
+        np.subtract(self.eba[None, :, None, :],
+                    (es[:, None] + er[None, :])[:, None, :, None],
+                    out=D.reshape(nsb, nb, nrb, na))
         if prof: t = self._tick("denominator", t)
         np.divide(V, D, out=T)
         if prof: t = self._tick("amplitudes", t)
 
         # Transform to localized orbital basis and accumulate
-        self._to_lo(T, I, T2, nrb)
-        self._to_lo(V, I, V2, nrb)
+        self._to_lo(T, I, T2, nsb, nb, UB, UA)
+        self._to_lo(V, I, V2, nsb, nb, UB, UA)
         if prof: t = self._tick("to_lo", t)
-        self.E_disp += 4.0 * np.einsum("rasb,rasb->ab", T2v, V2v)
+        self.E_disp += 4.0 * np.einsum("sbra,sbra->ab", T2v, V2v)
         if prof: t = self._tick("reduce", t)
 
         # => Exch-Disp20 <= //
 
-        # (r,a) x (s,b) half: Aar.Fbs + Far.Abs + Qar.SAbs + SBar.Qbs
-        _gemm("N", "T", 1.0, AFar_r, FAbs_s, 0.0, V)
+        # (s,b) x (r,a) half: Fbs.Aar + Abs.Far + SAbs.Qar + Qbs.SBar
+        _gemm("N", "T", 1.0, FAbs_s, AFar_r, 0.0, V)
         if prof: t = self._tick("gemm X", t)
-        self._to_lo(V, I, V2, nrb)
+        self._to_lo(V, I, V2, nsb, nb, UB, UA)
         if prof: t = self._tick("to_lo", t)
-        self.E_exch -= 2.0 * np.einsum("rasb,rasb->ab", T2v, V2v)
+        self.E_exch -= 2.0 * np.einsum("sbra,sbra->ab", T2v, V2v)
         if prof: t = self._tick("reduce", t)
 
-        # (s,a) x (r,b) half: Bas.Bbr + Cas.Cbr + Sas.Qbr + Qas.Sbr.  The
+        # (r,b) x (s,a) half: Bbr.Bas + Cbr.Cas + Qbr.Sas + Sbr.Qas.  The
         # localization is linear and the energy contraction elementwise, so
         # this half stays in its own layout and is reduced against T2 through
-        # a transposed index map rather than permuted into the (r,a) x (s,b)
+        # a transposed index map rather than permuted into the (s,b) x (r,a)
         # one.
-        _gemm("N", "T", 1.0, BCas_s, BCbr_r, 0.0, W)
+        _gemm("N", "T", 1.0, BCbr_r, BCas_s, 0.0, W)
         if prof: t = self._tick("gemm W", t)
-        self._to_lo(W, IW, W2, nsb)
+        self._to_lo(W, IW, W2, nrb, nb, UB, UA)
         if prof: t = self._tick("to_lo", t)
-        self.E_exch -= 2.0 * np.einsum("rasb,sarb->ab", T2v, W2v)
+        self.E_exch -= 2.0 * np.einsum("sbra,rbsa->ab", T2v, W2v)
         if prof: t = self._tick("reduce W", t)
 
 
