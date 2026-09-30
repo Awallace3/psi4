@@ -65,7 +65,8 @@ struct MassPoint {
 //
 // Exposed for modules that must assemble their own atomic grids rather than going
 // through DFTGrid -- currently libisapol, which needs unrotated spheres to match
-// CamCASP bit-for-bit.  The weights carry the 4*pi factor, i.e. they sum to 4*pi.
+// CamCASP (bit-for-bit only as verified on the local non-FMA build).  The weights
+// carry the 4*pi factor, i.e. they sum to 4*pi.
 
 /// Smallest tabulated Lebedev grid size >= npoints, or -1 if npoints exceeds the
 /// largest tabulated grid.  Grids of fewer than 6 points are not considered.

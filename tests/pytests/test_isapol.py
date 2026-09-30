@@ -230,22 +230,3 @@ def test_grid_integrates_atomic_gaussians(h2o):
     # radial map is only so good on a tight Gaussian sitting on hydrogen's
     # 0.94 a0 Slater radius.
     assert np.isclose(np.dot(w, f), h2o.natom(), rtol=0, atol=1e-6)
-
-
-def test_vdw_radius_tables_are_distinct():
-    """MODULE radii is double precision; AtomProp's copy is float32-rounded.
-
-    Both cite Bondi (1964) and agree to seven digits, but only one of them is
-    what the lattice generator uses.  If this ever starts passing as an equality,
-    someone has collapsed the two tables and broken fit-point parity.
-    """
-    for Z in (1, 6, 7, 8, 17):
-        double = psi4.core.isapol_vdw_radius(Z)
-        single = psi4.core.isapol_vdw_radius_bondi(Z)
-        assert double != single
-        assert abs(double - single) < 1e-6 * double
-
-    # Elements MODULE radii leaves out fall back on vdwdef rather than throwing.
-    assert psi4.core.isapol_vdw_radius(4) == 2.5
-    assert psi4.core.isapol_vdw_radius(92) == 2.5
-    assert psi4.core.isapol_vdw_radius(0) == 0.0

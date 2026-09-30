@@ -358,10 +358,11 @@ namespace {
 /// the others, e.g. b = sqrt(1 - 2a^2).  Written plainly, GCC and Clang are free
 /// to contract that into an FMA on any host that has one (-ffp-contract=fast is
 /// the default), which rounds differently and moves the resulting point by 1 ulp.
-/// The grid would then silently depend on the -march the binary was built with,
-/// and would not reproduce reference grids from codes built without FMA.  Passing
-/// the subtrahend through a volatile forces it to memory, which no compiler may
-/// contract across.  The generators run once per grid, so the cost is nil.
+/// Passing the subtrahend through a volatile forces it to memory, which no
+/// compiler may contract across.  Every Lebedev grid (DFTGrid included) goes
+/// through here, so on FMA-contracting builds points can move by up to 1 ulp
+/// relative to earlier builds.  Agreement with the CamCASP reference was checked
+/// only on a non-FMA build.  The generators run once per grid, so the cost is nil.
 inline double sub_no_fma(double x, double y) {
     volatile const double yy = y;
     return x - yy;

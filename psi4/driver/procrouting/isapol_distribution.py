@@ -14,7 +14,7 @@ import hashlib
 import numpy as np
 
 from .isapol_basis import BasisRecipe, _owned
-from .isapol_df_multipoles import df_centre_multipoles
+from .isapol_df_multipoles import analytic_df_centre_multipoles
 
 CONVENTION = 'site-major real Racah 00,10,11c,11s,...; global axes; bohr; density moments'
 
@@ -116,7 +116,7 @@ class DistributedMoments:
 
 def analytic_df_moments(auxiliary, sites, rank):
     """Wrap the existing analytic producer without altering a single Q element."""
-    result = df_centre_multipoles('df_centre_analytic', auxiliary, sites, rank)
+    result = analytic_df_centre_multipoles(auxiliary, sites, rank)
     return DistributedMoments(result.values, result.labels, result.origins, rank, auxiliary,
                               'df_centre_analytic', result.provenance, True,
                               diagnostics=tuple(result.diagnostics.items()))

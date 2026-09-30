@@ -5,24 +5,15 @@ CamCASP's distributed-polarizability default is ``'DF'``
 assigns each auxiliary function **wholly** to the centre that function sits on
 (``centre = 0``, ``isitdist = .true.``) and then forms
 ``alpha^(a,b)_{t,u}(w) = - Qa(k,t) C_{k,l}(w) Qb(l,u)``.  No stockholder
-weight is formed.  This is a different declared model from the ISA-A partition
-of ``isapol_native_partition``; their site properties must not be quoted as
-agreeing.
+weight is formed.  This is a different declared model from a stockholder
+(ISA/MBIS) partition; their site properties must not be quoted as agreeing.
 
-``grid``
-    ``Q(a,t,k) = sum_p w_p R_t(r_p - R_a) chi_k(r_p)`` for ``k`` on ``a``, zero
-    otherwise, on the caller's quadrature.  The shipped sampling constructor
-    computes it with ``auxiliary_sites=[a]`` and ``shape == shape_sum``.  It
-    inherits grid error, worst on the charge row (``int(chi_k)`` of diffuse
-    functions).
+Every factor is co-centred, so the rule is produced in closed form:
 
-``analytic``
-    the same rule in closed form, since every factor is co-centred:
+    Q(a,(l,m),k) = N_k sum_i c_i sum_q C_q^{lm}
+                   prod_d Gamma((n_d+1)/2) / zeta_i**((n_d+1)/2)
 
-        Q(a,(l,m),k) = N_k sum_i c_i sum_q C_q^{lm}
-                       prod_d Gamma((n_d+1)/2) / zeta_i**((n_d+1)/2)
-
-    with ``n = q + p(k)`` and odd powers vanishing.  No quadrature error.
+with ``n = q + p(k)`` and odd powers vanishing.  No quadrature error.
 
 ``C^{lm}`` is recovered from ``core.isa_regular_multipoles`` and the Cartesian
 convention from ``IsaExplicitBasis.evaluate``; both recoveries are gated and
@@ -65,30 +56,8 @@ CONVENTION_SEED = 20260911
 HARMONIC_TOLERANCE = 1.0e-10
 CONVENTION_TOLERANCE = 1.0e-10
 
-#: DF-centre Q has AUX columns; the rule is undefined for direct-OV columns.
+#: DF-centre Q has fitted-density AUX columns.
 REPRESENTATION = 'fitted_density_coefficients'
-
-
-#: The DF-centre forms this module produces, as the public path names them.
-DF_CENTRE_DISTRIBUTIONS = ('df_centre_analytic', 'df_centre_grid')
-
-
-def df_centre_multipoles(distribution, auxiliary, sites, rank, *, points=None, weights=None):
-    """Produce the named DF-centre Q.
-
-    Only ``df_centre_grid`` takes ``points``/``weights``; a grid passed to the
-    closed form, or missing from the grid form, is refused.
-    """
-    if distribution == 'df_centre_analytic':
-        if points is not None or weights is not None:
-            raise ValueError('The closed-form DF-centre rule samples nothing; do not hand it a grid')
-        return analytic_df_centre_multipoles(auxiliary, sites, rank)
-    if distribution == 'df_centre_grid':
-        if points is None or weights is None:
-            raise ValueError('The grid DF-centre rule needs the molecular quadrature it integrates on')
-        return grid_df_centre_multipoles(auxiliary, sites, rank, points, weights)
-    raise ValueError(f'Unknown DF-centre distribution {distribution!r}; '
-                     f'expected one of {DF_CENTRE_DISTRIBUTIONS}')
 
 
 def double_factorial(n):
@@ -211,8 +180,8 @@ def verify_cartesian_convention(basis, built, *, seed=CONVENTION_SEED,
 def closed_form_charge_rows(basis, nsite):
     """``int chi_k`` per auxiliary function, charged wholly to its own centre.
 
-    Independent rank-0 cross-check of both forms (``R_00 = 1``), from Gaussian
-    moments without the harmonic expansion.
+    Independent rank-0 cross-check of the closed form (``R_00 = 1``), from
+    Gaussian moments without the harmonic expansion.
     """
     rows = np.zeros((nsite, sum(len(CARTESIAN_POWERS[s.l]) for s in basis.shells)))
     column = 0
@@ -314,8 +283,8 @@ def analytic_df_centre_multipoles(auxiliary, sites, rank, *, expansion=None,
     return DFCentreMultipoles('analytic', rank, q, labels, origins, REPRESENTATION,
         f'DF-centre rule in closed form; CamCASP dist_polarizabilities_DF '
         f'(DistPolAlgorithm=DF); every auxiliary function wholly on its own centre; '
-        f'rank {rank}; AUX {auxiliary.name}; no grid, no stockholder weight, no ISA-A '
-        f'fixed point; harmonic coefficients recovered from the shipped Racah '
+        f'rank {rank}; AUX {auxiliary.name}; no grid, no stockholder weight, no '
+        f'stockholder fixed point; harmonic coefficients recovered from the shipped Racah '
         f'evaluator at seed {expansion.seed}',
         dict(harmonic_residuals=expansion.residuals,
              harmonic_residual_max=expansion.residual_max,
@@ -325,53 +294,3 @@ def analytic_df_centre_multipoles(auxiliary, sites, rank, *, expansion=None,
              charge_row_error=charge_error,
              charge_row_magnitude=charge_magnitude,
              quadrature_defect='none; nothing is sampled'))
-
-
-def grid_df_centre_multipoles(auxiliary, sites, rank, points, weights, *,
-                              charge_tolerance=None):
-    """The DF-centre rule on the caller's molecular quadrature.
-
-    The shipped sampling constructor with ``auxiliary_sites=[a]`` and a unit
-    stockholder ratio, so ``denominator_cutoff`` is zero: nothing may be excluded.
-    """
-    labels, origins = _declared_axes(auxiliary, sites, rank)
-    built = auxiliary.build('MolecularAux')
-    points = np.ascontiguousarray(points, dtype=float)
-    weights = np.ascontiguousarray(weights, dtype=float)
-    if points.ndim != 2 or points.shape[1] != 3 or points.shape[0] != weights.shape[0]:
-        raise ValueError('DF-centre grid needs matching (npoint,3) points and (npoint,) weights')
-    unit = np.ones(points.shape[0])
-    declared = []
-    for i, site in enumerate(sites):
-        samples = core.IsaMultipoleSamples()
-        samples.points, samples.weights = points.tolist(), weights.tolist()
-        samples.shape, samples.shape_sum = unit.tolist(), unit.tolist()
-        samples.auxiliary_sites = [i]
-        item = core.IsaMultipoleSite()
-        item.label, item.origin, item.rank = site.label, list(site.origin), rank
-        item.samples = samples
-        declared.append(item)
-    partition = core.IsaPartitionedMultipoles(built, declared,
-        f'DF-centre rule on the supplied molecular quadrature; CamCASP '
-        f'dist_polarizabilities_DF (DistPolAlgorithm=DF); every auxiliary function '
-        f'wholly on its own centre; rank {rank}; AUX {auxiliary.name}; '
-        f'{points.shape[0]} points; stockholder ratio identically one', 0.)
-    values = np.asarray(partition.values)
-    m = (rank+1)**2
-    charge = closed_form_charge_rows(auxiliary, len(sites))
-    charge_error = float(np.max(np.abs(values[[i*m for i in range(len(sites))]]-charge)))
-    if charge_tolerance is not None:
-        magnitude = float(np.max(np.abs(charge)))
-        if not np.isfinite(charge_error) or charge_error > charge_tolerance*max(magnitude, 1.0):
-            raise RuntimeError(f'Grid DF-centre charge row is {charge_error!r} from the '
-                               f'closed-form Gaussian moment, beyond the declared '
-                               f'{charge_tolerance!r}')
-    return DFCentreMultipoles('grid', rank, values, labels, origins, REPRESENTATION,
-        partition.provenance,
-        dict(grid_points=int(points.shape[0]),
-             charge_row_error=charge_error,
-             charge_row_magnitude=float(np.max(np.abs(charge))),
-             excluded_denominators=tuple(partition.excluded_denominators),
-             negative_ratios=tuple(partition.negative_ratios),
-             quadrature_defect='the molecular grid error, worst in relative terms '
-                               'on the charge row'))

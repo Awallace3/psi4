@@ -47,7 +47,7 @@ class Molecule;
 namespace isapol {
 
 /// Knobs of the ISA integration grid. Defaults are the CamCASP grid MODULE
-/// defaults (80/590), not the isa-pol-from-isa-A method preset (100/400 requested,
+/// defaults (80/590), not a method preset's grid (e.g. 100/400 requested,
 /// 434 actual angular points). Select the preset explicitly when comparing it.
 ///
 /// Defaults are src/parameters.f90:189-197. Only Lebedev
@@ -85,7 +85,8 @@ struct IsaGridOptions {
 ///      of them (its suppression block is commented out).
 ///
 /// Each moves integrals at the 1e-8...1e-10 level this port is held to. The
-/// Lebedev tables are Psi4's, bit-identical to CamCASP's (lebedev_sphere()).
+/// Lebedev tables are Psi4's (lebedev_sphere()), bit-identical to CamCASP's on
+/// the verified non-FMA build.
 class IsaGrid {
    public:
     IsaGrid(std::shared_ptr<Molecule> molecule, const IsaGridOptions& options);

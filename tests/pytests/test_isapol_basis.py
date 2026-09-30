@@ -453,15 +453,19 @@ def test_cpp_overlap_scope_and_integrability():
         cpp_basis(huge).overlap()
 
 
-def test_recipe_module_is_independent_of_isa_iteration():
-    """Import the foundation in a fresh process, without loading ISA iteration."""
+def test_recipe_module_loads_no_other_isapol_driver_module():
+    """In a fresh process the recipe module builds a basis on its own."""
     import subprocess
     import sys
     subprocess.run([sys.executable, '-c', """
 import sys
+import numpy as np
 from psi4.driver.procrouting import isapol_basis as basis
-assert 'psi4.driver.procrouting.isapol_native_partition' not in sys.modules
 shell = basis.ShellRecipe(0, 0, (1.,), (1.,))
 recipe = basis.BasisRecipe('one s', 'test', 'Spherical', ((0., 0., 0.),), (shell,))
-assert recipe.build('MolecularAux').nfunction == 1
+built = recipe.build('MolecularAux')
+assert built.nfunction == 1
+np.testing.assert_allclose(built.evaluate([[0., 0., 0.], [1., 0., 0.]]).np[:, 0], [1., np.exp(-1.)])
+loaded = {m for m in sys.modules if m.startswith('psi4.driver.procrouting.isapol_')}
+assert loaded == {'psi4.driver.procrouting.isapol_basis'}, loaded
 """], check=True)

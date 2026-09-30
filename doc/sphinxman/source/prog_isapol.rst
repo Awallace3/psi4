@@ -35,8 +35,9 @@ ISA-Pol distribution building blocks (libisapol)
 ``libisapol`` ports parts of CamCASP 6.0 (A. J. Misquitta and A. J. Stone,
 https://gitlab.com/anthonyjstone/camcasp) with permission. Most of it
 reproduces CamCASP's arithmetic bit for bit, so the library builds with
-``-ffp-contract=off``. This section covers the building blocks
-used for distributed moments. No end-user property keyword uses them yet.
+``-ffp-contract=off``. That agreement was verified only on the local non-FMA
+build; cross-platform bitwise identity is not claimed. This section covers the
+building blocks used for distributed moments. No end-user property keyword uses them yet.
 Units are bohr and atomic units throughout, on global Cartesian axes.
 
 Explicit bases
@@ -44,19 +45,22 @@ Explicit bases
    ``ShellRecipe``/``BasisRecipe`` descriptors, whose shell coefficients already
    include normalization. ``BasisRecipe.build(role)`` returns an owned
    ``psi4.core.IsaExplicitBasis``, Cartesian GAMINT or spherical DALTON,
-   S through G. Its methods include ``evaluate``, ``evaluate_screened``, the
-   co-centred ``overlap`` and ``shell_layout``. ``adapt_main(wfn,
-   caller_converged=True)`` converts a restricted closed-shell C1 wavefunction's
-   MAIN basis and occupied orbitals into that convention and checks the result.
+   S through G. Its methods are ``evaluate``, ``evaluate_screened`` and the
+   co-centred ``overlap``. ``adapt_main(wfn, caller_converged=True)`` converts
+   a restricted closed-shell C1 wavefunction's MAIN basis and occupied orbitals
+   into that convention and checks the result.
    It fits no density and renormalizes nothing.
 
 Atom tables and integration grid
    ``psi4.core.IsaGrid`` (with ``IsaGridOptions``) is CamCASP's
    atom-centred Becke/Euler--MacLaurin/Lebedev grid. It uses unrotated
    Lebedev spheres, which come from ``lebedev_npoints_at_least`` and
-   ``lebedev_sphere`` in ``libfock/cubature.h``. The ``isapol_*`` element
-   functions (Slater, Bondi, Grimme and covalent radii, Grimme C6, symbol)
-   reproduce CamCASP's ``AtomProp`` table.
+   ``lebedev_sphere`` in ``libfock/cubature.h``. The shared Lebedev generator
+   now rounds each product before subtracting (``sub_no_fma``). ``libfock`` is
+   not built with ``-ffp-contract=off``, so on FMA-contracting builds this can
+   move every Psi4 DFT/``DFTGrid`` Lebedev coordinate by up to 1 ulp relative to
+   previous builds. The ``isapol_*`` element functions (Slater, Bondi, Grimme
+   and covalent radii, Grimme C6, symbol) reproduce CamCASP's ``AtomProp`` table.
 
 Distributed moments (Q)
    Q maps fitted-density coefficients of a declared response auxiliary basis to
@@ -66,15 +70,16 @@ Distributed moments (Q)
 
    * ``psi4.core.IsaPartitionedMultipoles`` integrates Q on
      caller-supplied quadrature. For each site the caller gives points, weights,
-     a ``shape`` and a ``shape_sum`` (via ``IsaMultipoleSamples`` and
-     ``IsaMultipoleSite``). The stockholder ratio ``shape/shape_sum`` is formed
-     natively, and points whose denominator is at or below ``denominator_cutoff``
-     are excluded and counted. This is independent of how the shapes were
-     obtained.
-   * ``isapol_df_multipoles.df_centre_multipoles`` produces CamCASP's DF-centre
-     rule, in which every auxiliary function belongs wholly to its own centre.
-     ``'df_centre_analytic'`` is the closed form; ``'df_centre_grid'`` uses the
-     caller's quadrature.
+     a ``shape``, a ``shape_sum`` and ``auxiliary_sites`` (via
+     ``IsaMultipoleSamples`` and ``IsaMultipoleSite``). ``auxiliary_sites`` lists
+     the zero-based AUX centres to collocate and is required: an empty list
+     deliberately gives all-zero columns. The stockholder ratio
+     ``shape/shape_sum`` is formed natively, and points whose denominator is at
+     or below ``denominator_cutoff`` are excluded and counted. This is
+     independent of how the shapes were obtained.
+   * ``isapol_df_multipoles.analytic_df_centre_multipoles`` produces CamCASP's
+     DF-centre rule in closed form: every auxiliary function belongs wholly to
+     its own centre.
    * ``isapol_distribution.DistributedMoments`` is the owned, immutable,
      validated Q contract. ``analytic_df_moments`` wraps the analytic DF-centre
      producer without changing any element. ``validate_for`` checks the site,
@@ -84,3 +89,19 @@ Distributed moments (Q)
 The ISA and MBIS partitions (density partitions, not orbital rotations),
 response, Lamb--Wilkinson localization, point-response fitting and dispersion
 are built on top of these blocks and are added separately.
+
+Deferred to later stages
+   These candidate APIs have no consumer here. Each is added, from candidate
+   ``4189ded9cc8f319c8bc21bbe78960f0fab7e2eff``, with the stage that uses and
+   tests it.
+
+   * Response: the orbital constructor
+     ``IsaPartitionedMultipoles(orbital, sites, provenance, denominator_cutoff,
+     orbitals, nocc)``, which gives direct occupied-fast (``a*nocc+i``) OV
+     columns with representation ``'direct_ov'``, and ``'direct_ov'`` as a
+     supplied-Q representation. Also ``IsaExplicitBasis.screening_s_overlap``
+     (CamCASP's signed ``screening_s_ovr`` shell surrogate for ALDA screening)
+     and ``shell_layout``.
+   * Point-response fitting: ``isapol_vdw_radius`` (``vdw_radius``), the
+     double-precision ``MODULE radii`` Bondi table that the fit-point lattice
+     reads. ``isapol_vdw_radius_bondi`` is the float32 ``AtomProp`` copy.

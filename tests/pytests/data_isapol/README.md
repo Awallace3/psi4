@@ -14,7 +14,8 @@ CamCASP checkout, which is why the results are committed rather than computed
 at test time. The regeneration tooling is not tracked and is not needed by the
 retained tests.
 
-The grid is deliberately small. The full production grid (`n_r = 80`, `n_a = 590`,
-139 830 points) also matches bit for bit in every coordinate, but 4.5 MB of doubles
-does not belong in a test fixture. One 1-ulp difference remains on that grid: the
-association of the `4π` factor in the quadrature weights.
+The grid is deliberately small. On the local non-FMA build, the full production grid
+(`n_r = 80`, `n_a = 590`, 139 830 points) also matches bit for bit in every coordinate,
+but 4.5 MB of doubles does not belong in a test fixture. One 1-ulp difference remains
+on that grid: the association of the `4π` factor in the quadrature weights. No
+cross-platform bitwise identity is claimed.

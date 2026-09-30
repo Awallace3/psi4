@@ -1,13 +1,13 @@
 # Psi4 Developers; SPDX-License-Identifier: LGPL-3.0-only
-"""The DF-centre distributed-multipole rule: one rule, two forms, gated.
+"""The DF-centre distributed-multipole rule in closed form, gated.
 
 The DF-centre rule is CamCASP's ``DistPolAlgorithm = DF``, which charges every
-auxiliary function *wholly* to the centre it sits on.  ``DF_CENTRE_ANALYTIC``
-and ``DF_CENTRE_GRID`` *are* the same rule.  Nothing is approximated in the
-closed form and nothing is modelled differently in the grid form; the only
-thing between them is the molecular quadrature, which is what
-``test_the_two_forms_are_one_rule_...`` shows by refining the grid and watching
-the gap fall.  Every number here is cheap and SCF-free.  The full
+auxiliary function *wholly* to the centre it sits on.  The closed form is
+checked against an independent grid oracle: the same rule integrated natively
+by ``IsaPartitionedMultipoles`` with ``auxiliary_sites=[a]`` and a unit
+stockholder ratio.  Only the molecular quadrature separates the two, which
+``test_the_closed_form_matches_the_grid_oracle_...`` shows by refining the grid
+and watching the gap fall.  Every number here is cheap and SCF-free.  The full
 aug-cc-pVTZ-RI comparison against the archived reference protocol lives in the
 gitignored ``agent_scratch/pytests/test_isapol_df_centre_public_full.py``,
 which also guards every literal recorded below.
@@ -71,13 +71,30 @@ def _grid(wfn, radial, spherical):
     return np.column_stack((grid.x(), grid.y(), grid.z())), np.asarray(grid.w())
 
 
+def _grid_oracle(recipe, rank, points, weights):
+    """DF-centre Q on the grid: site ``a`` collocates only its own AUX centre."""
+    unit = np.ones(points.shape[0]).tolist()
+    declared = []
+    for i, site in enumerate(recipe.sites):
+        samples = core.IsaMultipoleSamples()
+        samples.points, samples.weights = points.tolist(), weights.tolist()
+        samples.shape, samples.shape_sum = unit, unit
+        samples.auxiliary_sites = [i]
+        item = core.IsaMultipoleSite()
+        item.label, item.origin, item.rank = site.label, list(site.origin), rank
+        item.samples = samples
+        declared.append(item)
+    return core.IsaPartitionedMultipoles(recipe.auxiliary.build('MolecularAux'), declared,
+                                         'DF-centre grid oracle', 0.)
+
+
 def test_harmonic_expansion_recovers_the_shipped_racah_evaluator():
     """The closed form's only non-elementary input, recovered and then gated.
 
     The Cartesian monomial coefficients of the Racah regular harmonics are not
     hard-coded: they are least-squares recovered from the shipped
     ``core.isa_regular_multipoles`` at a declared seed, so the closed form and
-    the grid form are expanding the *same* harmonics by construction.  The
+    the grid oracle are expanding the *same* harmonics by construction.  The
     residual is therefore a precondition, not a diagnostic.
     """
     expansion = dfm.harmonic_expansion(3)
@@ -125,7 +142,7 @@ def test_the_charge_row_is_checked_against_an_independent_gaussian_moment(declar
                                           charge_tolerance=1.e-18)
 
 
-def test_the_two_forms_are_one_rule_with_only_quadrature_between_them(declared, analytic):
+def test_the_closed_form_matches_the_grid_oracle_up_to_quadrature(declared, analytic):
     """Refine the grid and the gap falls: there is no second model here.
 
     Each rank is followed separately because a single maximum would hide which
@@ -136,15 +153,14 @@ def test_the_two_forms_are_one_rule_with_only_quadrature_between_them(declared, 
     m, previous = 16, None
     for (radial, spherical), recorded in GRID_CONVERGENCE.items():
         points, weights = _grid(wfn, radial, spherical)
-        grid = dfm.grid_df_centre_multipoles(recipe.auxiliary, recipe.sites, 3, points, weights)
-        assert grid.form == 'grid' and grid.rank == 3
-        assert grid.diagnostics['grid_points'] == points.shape[0]
-        assert grid.diagnostics['negative_ratios'] == (0, 0, 0)
-        assert not grid.diagnostics['excluded_denominators'][0]
+        grid = _grid_oracle(recipe, 3, points, weights)
+        assert grid.negative_ratios == [0, 0, 0]
+        assert grid.excluded_denominators == [0, 0, 0]
+        values = grid.values.np
         measured = []
         for l in range(4):
             rows = [i*m + l*l + t for i in range(3) for t in range(2*l+1)]
-            difference = float(np.abs(grid.values[rows]-analytic.values[rows]).max())
+            difference = float(np.abs(values[rows]-analytic.values[rows]).max())
             measured.append(difference/float(np.abs(analytic.values[rows]).max()))
         # The recorded table, to the digits it records, and strictly decreasing.
         np.testing.assert_allclose(measured, recorded, rtol=5.e-2, atol=0)
@@ -152,20 +168,6 @@ def test_the_two_forms_are_one_rule_with_only_quadrature_between_them(declared, 
             assert all(a < b for a, b in zip(measured, previous))
         previous = measured
     assert max(previous) < 1.e-8
-
-
-def test_the_grid_form_may_declare_a_charge_row_tolerance_and_be_refused(declared):
-    """The grid form carries quadrature error, so its tolerance is the caller's.
-
-    It defaults to ``None`` -- reported, not enforced -- because the honest
-    number depends on the grid the caller declared; asking for the closed form's
-    accuracy from a 16k-point grid is refused rather than rounded away.
-    """
-    wfn, recipe = declared
-    points, weights = _grid(wfn, 50, 110)
-    with pytest.raises(RuntimeError, match='from the closed-form Gaussian moment'):
-        dfm.grid_df_centre_multipoles(recipe.auxiliary, recipe.sites, 3, points, weights,
-                                      charge_tolerance=1.e-12)
 
 
 @pytest.mark.parametrize('kwargs,pattern', [
@@ -194,21 +196,8 @@ def test_the_rule_refuses_anything_but_an_exact_site_to_centre_correspondence(
         dfm.analytic_df_centre_multipoles(recipe.auxiliary, sites, **kwargs)
 
 
-def test_the_dispatcher_refuses_a_form_handed_the_wrong_operands(declared):
-    """The closed form samples nothing and the grid form integrates something."""
-    wfn, recipe = declared
-    points, weights = _grid(wfn, 50, 110)
-    assert dfm.DF_CENTRE_DISTRIBUTIONS == ('df_centre_analytic', 'df_centre_grid')
-    with pytest.raises(ValueError, match='Unknown DF-centre distribution'):
-        dfm.df_centre_multipoles('isa_a', recipe.auxiliary, recipe.sites, 3)
-    with pytest.raises(ValueError, match='samples nothing; do not hand it a grid'):
-        dfm.df_centre_multipoles('df_centre_analytic', recipe.auxiliary, recipe.sites, 3,
-                                 points=points, weights=weights)
-    with pytest.raises(ValueError, match='needs the molecular quadrature'):
-        dfm.df_centre_multipoles('df_centre_grid', recipe.auxiliary, recipe.sites, 3)
-    with pytest.raises(ValueError, match=r'matching \(npoint,3\) points'):
-        dfm.df_centre_multipoles('df_centre_grid', recipe.auxiliary, recipe.sites, 3,
-                                 points=points, weights=weights[:-1])
+def test_a_supplied_expansion_of_the_wrong_rank_is_refused(declared):
+    _, recipe = declared
     with pytest.raises(ValueError, match='Supplied harmonic expansion is rank 2'):
         dfm.analytic_df_centre_multipoles(recipe.auxiliary, recipe.sites, 3,
                                           expansion=dfm.harmonic_expansion(2))

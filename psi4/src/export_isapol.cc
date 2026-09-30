@@ -95,9 +95,6 @@ void export_isapol(py::module& m) {
             "Supplied-partition Racah Q; global axes, bohr origins, atomic units; owned snapshots")
         .def(py::init<const IsaExplicitBasis&, const std::vector<IsaMultipoleSite>&, const std::string&, double>(),
             "auxiliary"_a, "sites"_a, "provenance"_a, "denominator_cutoff"_a=1.e-36)
-        .def(py::init<const IsaExplicitBasis&, const std::vector<IsaMultipoleSite>&, const std::string&, double,
-         std::shared_ptr<Matrix>, int>(), "orbital"_a, "sites"_a, "provenance"_a,
-         "denominator_cutoff"_a, "orbitals"_a, "nocc"_a)
         .def(py::init<std::shared_ptr<Matrix>, const std::vector<IsaMultipoleSite>&,
          const std::string&, const std::string&>(), "values"_a, "sites"_a,
          "representation"_a, "provenance"_a)
@@ -133,10 +130,6 @@ void export_isapol(py::module& m) {
                      const std::vector<IsaGaussianShell>&>(), "role"_a, "representation"_a, "centres"_a, "shells"_a)
         .def_property_readonly("nfunction", &IsaExplicitBasis::nfunction)
     .def_property_readonly("role", &IsaExplicitBasis::role)
-    .def("shell_layout", &IsaExplicitBasis::shell_layout,
-         "Fresh shell-order [function_offset, function_count, centre, angular_momentum] rows")
-    .def("screening_s_overlap", &IsaExplicitBasis::screening_s_overlap,
-         "max_bytes"_a=512UL*1024*1024)
         .def("overlap", &IsaExplicitBasis::overlap, "w_eps"_a = 0.0, "s_block_only"_a = true,
              "New co-centred AtomAux/Shape metric before damping/ridge; no exponent cap")
         .def("evaluate", &IsaExplicitBasis::evaluate, "points"_a,
@@ -172,8 +165,6 @@ void export_isapol(py::module& m) {
           "CamCASP Bragg-Slater radius in bohr (a_o = 0.529177249)");
     m.def("isapol_vdw_radius_bondi", &vdw_radius_bondi, "Z"_a,
           "Bondi van der Waals radius in bohr, from AtomProp (float32-rounded)");
-    m.def("isapol_vdw_radius", &vdw_radius, "Z"_a,
-          "Bondi van der Waals radius in bohr, from MODULE radii (double); used by the fit points");
     m.def("isapol_vdw_radius_grimme", &vdw_radius_grimme, "Z"_a, "Grimme van der Waals radius in bohr");
     m.def("isapol_c6_grimme", &c6_grimme, "Z"_a, "Grimme C6 coefficient in atomic units");
     m.def("isapol_covalent_radius", &covalent_radius, "Z"_a, "Covalent radius in bohr");

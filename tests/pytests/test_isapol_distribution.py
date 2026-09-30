@@ -4,6 +4,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 from psi4 import core
+from psi4.driver.procrouting import isapol_df_multipoles as dfm
 from psi4.driver.procrouting import isapol_distribution as dist
 from psi4.driver.procrouting.isapol_basis import BasisRecipe, ShellRecipe
 
@@ -19,7 +20,7 @@ def small_q():
 
 def test_df_contract_preserves_analytic_values_and_contraction(small_q):
     aux, sites, q = small_q
-    old = dist.df_centre_multipoles('df_centre_analytic', aux, sites, 1)
+    old = dfm.analytic_df_centre_multipoles(aux, sites, 1)
     np.testing.assert_array_equal(q.values, old.values)
     fit = np.arange(12.).reshape(3, 4)
     np.testing.assert_array_equal(q.anchor_legs(fit), fit @ old.values.T)
@@ -56,3 +57,26 @@ def test_column_and_density_identity_not_just_dimensions(small_q):
         q.anchor_legs(np.ones((3, 3)))
     with pytest.raises(ValueError, match='coefficient'):
         q.anchor_legs(np.full((3, 4), np.inf))
+
+
+def test_distribution_loads_only_basis_and_df_centre_modules():
+    """In a fresh process the Q contract is produced and contracted on its own."""
+    import subprocess
+    import sys
+    subprocess.run([sys.executable, '-c', """
+import sys
+import numpy as np
+from psi4 import core
+from psi4.driver.procrouting import isapol_distribution as dist
+from psi4.driver.procrouting.isapol_basis import BasisRecipe, ShellRecipe
+aux = BasisRecipe('s', 'unit primitive test', 'Cartesian', ((0., 0., 0.),),
+                  (ShellRecipe(0, 0, (1.,), (1.,)),))
+site = core.IsaMultipoleSite()
+site.label, site.origin, site.rank = 'X', [0., 0., 0.], 1
+q = dist.analytic_df_moments(aux, [site], 1)
+np.testing.assert_allclose(q.values[:, 0], [np.pi**1.5, 0., 0., 0.], rtol=1e-14, atol=0)
+np.testing.assert_allclose(q.anchor_legs(np.array([[2.]])), [[2*np.pi**1.5, 0., 0., 0.]], rtol=1e-14)
+loaded = {m for m in sys.modules if m.startswith('psi4.driver.procrouting.isapol_')}
+assert loaded == {'psi4.driver.procrouting.' + m for m in
+                  ('isapol_basis', 'isapol_df_multipoles', 'isapol_distribution')}, loaded
+"""], check=True)

@@ -84,24 +84,8 @@ double slater_radius(int Z);
 
 /// Bondi van der Waals radius in bohr, from `AtomProp` (already in bohr there).
 ///
-/// The float32-rounded copy; not vdw_radius() below. Use only where CamCASP
-/// reads `AtomProp(Z)%RvdwBondi`.
+/// The float32-rounded copy. Use only where CamCASP reads `AtomProp(Z)%RvdwBondi`.
 double vdw_radius_bondi(int Z);
-
-/// Fallback van der Waals radius for elements MODULE radii does not tabulate
-/// (atoms.f90:190, `vdwdef`), in bohr.
-constexpr double kVdwRadiusDefault = 2.5;
-
-/// Highest atomic number in MODULE radii's van der Waals table (atoms.f90:193).
-constexpr int kMaxVdwRadiusZ = 82;
-
-/// Bondi van der Waals radius in bohr, from `MODULE radii` (atoms.f90:191-211).
-///
-/// The double-precision (`d0`) copy, ~1e-8 relative from vdw_radius_bondi().
-/// Untabulated elements and Z outside [0, kMaxVdwRadiusZ] get kVdwRadiusDefault;
-/// nothing throws. The fit-point lattice uses this table (lattice.F90:6); the
-/// float32 copy can flip an accept/reject decision there.
-double vdw_radius(int Z);
 
 /// Grimme van der Waals radius in bohr.
 double vdw_radius_grimme(int Z);
