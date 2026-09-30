@@ -1,3 +1,5 @@
+# Copyright (c) 2007-2026 The Psi4 Developers.
+# SPDX-License-Identifier: LGPL-3.0-only
 """DF-centre distributed multipoles: CamCASP's ``DistPolAlgorithm = 'DF'`` rule.
 
 CamCASP's distributed-polarizability default is ``'DF'``
