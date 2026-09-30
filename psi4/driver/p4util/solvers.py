@@ -208,7 +208,9 @@ def cg_solver_ein(
     printer: Optional[Callable] = None,
     printlvl: int = 1,
     maxiter: int = 20,
-    rcond: float = 1.e-6) -> List[np.ndarray]:
+    rcond: float = 1.e-6,
+    axpy: Optional[Callable] = None,
+    dot: Optional[Callable] = None) -> List[np.ndarray]:
     """
     Solves the :math:`Ax = b` linear equations via Conjugate Gradient. The `A` matrix must be a hermitian, positive definite matrix.
 
@@ -231,6 +233,10 @@ def cg_solver_ein(
         The maximum number of iterations this function will take.
     rcond
         The residual norm for convergence.
+    axpy
+        ``axpy(alpha, X, Y)`` computing ``Y += alpha * X`` in place. Defaults to :py:func:`einsums.core.axpy`.
+    dot
+        ``dot(X, Y)`` returning the full contraction of two vectors. Defaults to :py:func:`einsums.core.dot`.
 
     Returns
     -------
@@ -243,7 +249,10 @@ def cg_solver_ein(
     it is advantageous to do so.
 
     """
-    import einsums as ein
+    if axpy is None or dot is None:
+        import einsums as ein
+        axpy = axpy or ein.core.axpy
+        dot = dot or ein.core.dot
 
     tstart = time.time()
     if printlvl:
@@ -274,16 +283,16 @@ def cg_solver_ein(
     r_vec = []  # Residual vectors
     for x in range(nrhs):
         tmp_r = rhs_vec[x].copy()
-        ein.core.axpy(-1.0, Ax_vec[x], tmp_r)
+        axpy(-1.0, Ax_vec[x], tmp_r)
         r_vec.append(tmp_r)
 
     z_vec = preconditioner(r_vec, active_mask)
     p_vec = [x.copy() for x in z_vec]
 
     # First RMS
-    grad_dot = [ein.core.dot(x, x) for x in rhs_vec]
+    grad_dot = [dot(x, x) for x in rhs_vec]
 
-    resid = [(ein.core.dot(r_vec[x], r_vec[x]) / grad_dot[x])**0.5 for x in range(nrhs)]
+    resid = [(dot(r_vec[x], r_vec[x]) / grad_dot[x])**0.5 for x in range(nrhs)]
 
     if printer:
         resid = printer(0, x_vec, r_vec)
@@ -301,22 +310,22 @@ def cg_solver_ein(
 
         # Build old RZ so we can discard vectors
         for x in active:
-            rz_old[x] = ein.core.dot(r_vec[x], z_vec[x])
+            rz_old[x] = dot(r_vec[x], z_vec[x])
 
         # Build Hx product
         Ap_vec = hx_function(p_vec, active_mask)
 
         # Update x and r
         for x in active:
-            alpha[x] = rz_old[x] / ein.core.dot(Ap_vec[x], p_vec[x])
+            alpha[x] = rz_old[x] / dot(Ap_vec[x], p_vec[x])
             if np.isnan(alpha)[0]:
                 core.print_out("CG: Alpha is NaN for vector %d. Stopping vector." % x)
                 active_mask[x] = False
                 continue
 
-            ein.core.axpy(alpha[x], p_vec[x], x_vec[x])
-            ein.core.axpy(-alpha[x], Ap_vec[x], r_vec[x])
-            resid[x] = (ein.core.dot(r_vec[x], r_vec[x]) / grad_dot[x])**0.5
+            axpy(alpha[x], p_vec[x], x_vec[x])
+            axpy(-alpha[x], Ap_vec[x], r_vec[x])
+            resid[x] = (dot(r_vec[x], r_vec[x]) / grad_dot[x])**0.5
 
         # Print out or compute the resid function
         if printer:
@@ -340,9 +349,9 @@ def cg_solver_ein(
         # Update p
         z_vec = preconditioner(r_vec, active_mask)
         for x in active:
-            beta = ein.core.dot(r_vec[x], z_vec[x]) / rz_old[x]
+            beta = dot(r_vec[x], z_vec[x]) / rz_old[x]
             p_vec[x] = p_vec[x] * beta
-            ein.core.axpy(1.0, z_vec[x], p_vec[x])
+            axpy(1.0, z_vec[x], p_vec[x])
 
     if printlvl:
         core.print_out("   -----------------------------------------------------\n")

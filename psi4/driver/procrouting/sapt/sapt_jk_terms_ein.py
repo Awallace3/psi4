@@ -56,10 +56,62 @@ STAGE_DOUBLES = 1_000_000
 NESP_BLOCK = 24
 
 
+# Dense-algebra backend for this module.  Every GEMM, axpy and dot below goes
+# through _gemm/_axpy/_dot, which hand psi4's numpy buffers either to einsums
+# v1 (ein.core.*, the default) or to numpy -- both land in the same MKL, so the
+# switch isolates what the einsums layer itself costs or buys.  Everything
+# else in the module is numpy either way.  The switch exists for benchmarking
+# the two libraries on identical algorithms; there is no psi4 option for it.
+_BACKENDS = ("einsums", "numpy")
+_backend = "einsums"
+
+
+def set_backend(name: str) -> None:
+    """Select the dense-algebra backend, ``"einsums"`` (default) or ``"numpy"``."""
+    global _backend
+    if name not in _BACKENDS:
+        raise ValueError(f"unknown backend {name!r}; expected one of {_BACKENDS}")
+    _backend = name
+
+
+def get_backend() -> str:
+    """The dense-algebra backend currently selected by :func:`set_backend`."""
+    return _backend
+
+
 def _gemm(trans_a: str, trans_b: str, alpha: float, A: np.ndarray, B: np.ndarray,
           beta: float, C: np.ndarray) -> None:
     """C = alpha op(A) op(B) + beta C, in place on numpy buffers (views allowed)."""
-    ein.core.gemm(trans_a, trans_b, alpha, A, B, beta, C)
+    if _backend == "einsums":
+        ein.core.gemm(trans_a, trans_b, alpha, A, B, beta, C)
+        return
+    opA = A.T if trans_a == "T" else A
+    opB = B.T if trans_b == "T" else B
+    if beta == 0.0:
+        np.matmul(opA, opB, out=C)
+        if alpha != 1.0:
+            C *= alpha
+    else:
+        if beta != 1.0:
+            C *= beta
+        C += alpha * (opA @ opB)
+
+
+def _axpy(alpha: float, X: np.ndarray, Y: np.ndarray) -> None:
+    """Y += alpha X, in place."""
+    if _backend == "einsums":
+        ein.core.axpy(alpha, X, Y)
+    elif alpha == 1.0:
+        Y += X
+    else:
+        Y += alpha * X
+
+
+def _dot(X: np.ndarray, Y: np.ndarray) -> float:
+    """sum_ij X_ij Y_ij."""
+    if _backend == "einsums":
+        return ein.core.dot(X, Y)
+    return float(np.vdot(X, Y))
 
 
 # Equations come from https://doi.org/10.1063/5.0090688
@@ -806,9 +858,9 @@ def electrostatics(cache: dict, do_print: bool = True) -> tuple[dict, float]:
         core.print_out("\n  ==> E10 Electrostatics <== \n\n")
 
     # Eq. 4
-    Elst10 = 2.0 * ein.core.dot(cache["D_A"].np, cache["V_B"].np)
-    Elst10 += 2.0 * ein.core.dot(cache["D_B"].np, cache["V_A"].np)
-    Elst10 += 4.0 * ein.core.dot(cache["D_B"].np, cache["J_A"].np)
+    Elst10 = 2.0 * _dot(cache["D_A"].np, cache["V_B"].np)
+    Elst10 += 2.0 * _dot(cache["D_B"].np, cache["V_A"].np)
+    Elst10 += 4.0 * _dot(cache["D_B"].np, cache["J_A"].np)
     Elst10 += cache["nuclear_repulsion_energy"]
 
     if do_print:
@@ -1199,10 +1251,10 @@ def fexch(
     dfh.transform()
 
     W_A = V_A.clone()
-    ein.core.axpy(2.0, J_A.np, W_A.np)
+    _axpy(2.0, J_A.np, W_A.np)
     W_A.name = "W_A"
     W_B = V_B.clone()
-    ein.core.axpy(2.0, J_B.np, W_B.np)
+    _axpy(2.0, J_B.np, W_B.np)
     W_B.name = "W_B"
 
     WAbs = chain_gemm_einsums([LoccB, W_A, CvirB], ["T", "N", "N"])
@@ -1329,7 +1381,7 @@ def build_ind_pot(vars: dict) -> core.Matrix:
         Induction potential in the occupied-virtual MO block.
     """
     w_B = vars["V_B"].clone()
-    ein.core.axpy(2.0, vars["J_B"].np, w_B.np)
+    _axpy(2.0, vars["J_B"].np, w_B.np)
     return chain_gemm_einsums(
         [vars["Cocc_A"], w_B, vars["Cvir_A"]],
         ["T", "N", "N"],
@@ -1397,9 +1449,9 @@ def build_exch_ind_pot_AB(vars: dict) -> core.Matrix:
     # Exch-Ind Potential A
     EX_A = K_B.clone()
     EX_A.scale(-1.0)
-    ein.core.axpy(-2.0, J_O.np, EX_A.np)
-    ein.core.axpy(1.0, K_O.np, EX_A.np)
-    ein.core.axpy(2.0, J_P_B.np, EX_A.np)
+    _axpy(-2.0, J_O.np, EX_A.np)
+    _axpy(1.0, K_O.np, EX_A.np)
+    _axpy(2.0, J_P_B.np, EX_A.np)
 
     # Apply all the axpy operations to EX_A
     S_DB, S_DB_VA, S_DB_VA_DB_S = chain_gemm_einsums(
@@ -1412,20 +1464,20 @@ def build_exch_ind_pot_AB(vars: dict) -> core.Matrix:
         [S_DB, S, D_A, V_B],
         return_tensors=[False, True, True],
     )
-    ein.core.axpy(-1.0, S_DB_VA.np, EX_A.np)
-    ein.core.axpy(-2.0, S_DB_JA.np, EX_A.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([S_DB, K_A]).np, EX_A.np)
-    ein.core.axpy(1.0, S_DB_S_DA_VB.np, EX_A.np)
-    ein.core.axpy(2.0, chain_gemm_einsums([S_DB_S_DA, J_B]).np, EX_A.np)
-    ein.core.axpy(1.0, S_DB_VA_DB_S.np, EX_A.np)
-    ein.core.axpy(2.0, S_DB_JA_DB_S.np, EX_A.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([S_DB, K_O], ["N", "T"]).np, EX_A.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([V_B, D_B, S]).np, EX_A.np)
-    ein.core.axpy(-2.0, chain_gemm_einsums([J_B, D_B, S]).np, EX_A.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([K_B, D_B, S]).np, EX_A.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([V_B, D_A, S, D_B, S]).np, EX_A.np)
-    ein.core.axpy(2.0, chain_gemm_einsums([J_B, D_A, S, D_B, S]).np, EX_A.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([K_O, D_B, S]).np, EX_A.np)
+    _axpy(-1.0, S_DB_VA.np, EX_A.np)
+    _axpy(-2.0, S_DB_JA.np, EX_A.np)
+    _axpy(1.0, chain_gemm_einsums([S_DB, K_A]).np, EX_A.np)
+    _axpy(1.0, S_DB_S_DA_VB.np, EX_A.np)
+    _axpy(2.0, chain_gemm_einsums([S_DB_S_DA, J_B]).np, EX_A.np)
+    _axpy(1.0, S_DB_VA_DB_S.np, EX_A.np)
+    _axpy(2.0, S_DB_JA_DB_S.np, EX_A.np)
+    _axpy(-1.0, chain_gemm_einsums([S_DB, K_O], ["N", "T"]).np, EX_A.np)
+    _axpy(-1.0, chain_gemm_einsums([V_B, D_B, S]).np, EX_A.np)
+    _axpy(-2.0, chain_gemm_einsums([J_B, D_B, S]).np, EX_A.np)
+    _axpy(1.0, chain_gemm_einsums([K_B, D_B, S]).np, EX_A.np)
+    _axpy(1.0, chain_gemm_einsums([V_B, D_A, S, D_B, S]).np, EX_A.np)
+    _axpy(2.0, chain_gemm_einsums([J_B, D_A, S, D_B, S]).np, EX_A.np)
+    _axpy(-1.0, chain_gemm_einsums([K_O, D_B, S]).np, EX_A.np)
 
     EX_A_MO = chain_gemm_einsums(
         [vars["Cocc_A"], EX_A, vars["Cvir_A"]],
@@ -1468,9 +1520,9 @@ def build_exch_ind_pot_BA(vars: dict) -> core.Matrix:
 
     EX_B = K_A.clone()
     EX_B.scale(-1.0)
-    ein.core.axpy(-2.0, J_O.np, EX_B.np)
-    ein.core.axpy(1.0, K_O.np, EX_B.np.T)
-    ein.core.axpy(2.0, J_P_A.np, EX_B.np)
+    _axpy(-2.0, J_O.np, EX_B.np)
+    _axpy(1.0, K_O.np, EX_B.np.T)
+    _axpy(2.0, J_P_A.np, EX_B.np)
 
     S_DA, S_DA_VB, S_DA_VB_DA_S = chain_gemm_einsums(
         [S, D_A, V_B, D_A, S], return_tensors=[True, True, False, True]
@@ -1484,20 +1536,20 @@ def build_exch_ind_pot_BA(vars: dict) -> core.Matrix:
     )
 
     # Apply all the axpy operations to EX_B
-    ein.core.axpy(-1.0, S_DA_VB.np, EX_B.np)
-    ein.core.axpy(-2.0, S_DA_JB.np, EX_B.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([S_DA, K_B]).np, EX_B.np)
-    ein.core.axpy(1.0, S_DA_S_DB_VA.np, EX_B.np)
-    ein.core.axpy(2.0, chain_gemm_einsums([S_DA_S_DB, J_A]).np, EX_B.np)
-    ein.core.axpy(1.0, S_DA_VB_DA_S.np, EX_B.np)
-    ein.core.axpy(2.0, S_DA_JB_DA_S.np, EX_B.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([S_DA, K_O]).np, EX_B.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([V_A, D_A, S]).np, EX_B.np)
-    ein.core.axpy(-2.0, chain_gemm_einsums([J_A, D_A, S]).np, EX_B.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([K_A, D_A, S]).np, EX_B.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([V_A, D_B, S, D_A, S]).np, EX_B.np)
-    ein.core.axpy(2.0, chain_gemm_einsums([J_A, D_B, S, D_A, S]).np, EX_B.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([K_O, D_A, S], ["T", "N", "N"]).np, EX_B.np)
+    _axpy(-1.0, S_DA_VB.np, EX_B.np)
+    _axpy(-2.0, S_DA_JB.np, EX_B.np)
+    _axpy(1.0, chain_gemm_einsums([S_DA, K_B]).np, EX_B.np)
+    _axpy(1.0, S_DA_S_DB_VA.np, EX_B.np)
+    _axpy(2.0, chain_gemm_einsums([S_DA_S_DB, J_A]).np, EX_B.np)
+    _axpy(1.0, S_DA_VB_DA_S.np, EX_B.np)
+    _axpy(2.0, S_DA_JB_DA_S.np, EX_B.np)
+    _axpy(-1.0, chain_gemm_einsums([S_DA, K_O]).np, EX_B.np)
+    _axpy(-1.0, chain_gemm_einsums([V_A, D_A, S]).np, EX_B.np)
+    _axpy(-2.0, chain_gemm_einsums([J_A, D_A, S]).np, EX_B.np)
+    _axpy(1.0, chain_gemm_einsums([K_A, D_A, S]).np, EX_B.np)
+    _axpy(1.0, chain_gemm_einsums([V_A, D_B, S, D_A, S]).np, EX_B.np)
+    _axpy(2.0, chain_gemm_einsums([J_A, D_B, S, D_A, S]).np, EX_B.np)
+    _axpy(-1.0, chain_gemm_einsums([K_O, D_A, S], ["T", "N", "N"]).np, EX_B.np)
 
     EX_B_MO = chain_gemm_einsums(
         [vars["Cocc_B"], EX_B, vars["Cvir_B"]],
@@ -2415,11 +2467,11 @@ def fdisp0(
     # => Auxiliary C matrices <= //
     # Cr1 = (I - D_B * S) * Cvir_A
     Cr1 = chain_gemm_einsums([D_B, S, Cvir_A])
-    ein.core.axpy(-1.0, Cvir_A.np, Cr1.np)
+    _axpy(-1.0, Cvir_A.np, Cr1.np)
 
     # Cs1 = (I - D_A * S) * Cvir_B
     Cs1 = chain_gemm_einsums([D_A, S, Cvir_B])
-    ein.core.axpy(-1.0, Cvir_B.np, Cs1.np)
+    _axpy(-1.0, Cvir_B.np, Cs1.np)
 
     # Ca2 = D_B * S * Cocc_A
     Ca2 = chain_gemm_einsums([D_B, S, Cocc_A])
@@ -2962,8 +3014,8 @@ def chain_gemm_einsums(
             # Initialize output as psi4.core.Matrix with zeros
             C = core.Matrix(A_size, B_size)
             C.zero()
-            # Use ein.core.gemm to write to C.np
-            ein.core.gemm(
+            # Write the product straight into C.np
+            _gemm(
                 T1, T2, prefactors_AB[i], A.np, B.np, prefactors_C[i], C.np,
             )
             computed_tensors.append(C)
@@ -3037,21 +3089,21 @@ def exchange(cache: dict, jk: core.JK, do_print: bool = True) -> dict:
 
     # Eq. 10: h^A = V^A + 2*J^A - K^A
     h_A = cache["V_A"].clone()
-    ein.core.axpy(2.0, cache["J_A"].np, h_A.np)
-    ein.core.axpy(-1.0, cache["K_A"].np, h_A.np)
+    _axpy(2.0, cache["J_A"].np, h_A.np)
+    _axpy(-1.0, cache["K_A"].np, h_A.np)
 
     # Eq. 10: h^B = V^B + 2*J^B - K^B
     h_B = cache["V_B"].clone()
-    ein.core.axpy(2.0, cache["J_B"].np, h_B.np)
-    ein.core.axpy(-1.0, cache["K_B"].np, h_B.np)
+    _axpy(2.0, cache["J_B"].np, h_B.np)
+    _axpy(-1.0, cache["K_B"].np, h_B.np)
 
     # Eq. 8: omega^A = V^A + 2*J^A
     w_A = cache["V_A"].clone()
-    ein.core.axpy(2.0, cache["J_A"].np, w_A.np)
+    _axpy(2.0, cache["J_A"].np, w_A.np)
 
     # Eq. 8: omega^B = V^B + 2*J^B
     w_B = cache["V_B"].clone()
-    ein.core.axpy(2.0, cache["J_B"].np, w_B.np)
+    _axpy(2.0, cache["J_B"].np, w_B.np)
 
     # Build inverse exchange metric
     nocc_A = cache["Cocc_A"].shape[1]
@@ -3116,11 +3168,11 @@ def exchange(cache: dict, jk: core.JK, do_print: bool = True) -> dict:
     # Save some intermediate tensors to avoid recomputation in the next
     # steps
     DA_S_DB_S_PA = chain_gemm_einsums([D_A, S, D_B, S, P_A])
-    Exch_s2 -= 2.0 * ein.core.dot(w_B.np, DA_S_DB_S_PA.np)
+    Exch_s2 -= 2.0 * _dot(w_B.np, DA_S_DB_S_PA.np)
 
     DB_S_DA_S_PB = chain_gemm_einsums([D_B, S, D_A, S, P_B])
-    Exch_s2 -= 2.0 * ein.core.dot(w_A.np, DB_S_DA_S_PB.np)
-    Exch_s2 -= 2.0 * ein.core.dot(Kij.np, chain_gemm_einsums([P_A, S, D_B]).np)
+    Exch_s2 -= 2.0 * _dot(w_A.np, DB_S_DA_S_PB.np)
+    Exch_s2 -= 2.0 * _dot(Kij.np, chain_gemm_einsums([P_A, S, D_B]).np)
 
     if do_print:
         core.print_out(print_sapt_var("Exch10(S^2) ", Exch_s2, short=True))
@@ -3128,14 +3180,14 @@ def exchange(cache: dict, jk: core.JK, do_print: bool = True) -> dict:
 
     # Eq. 9: E^(1)_exch(S^inf) — full inverse-overlap exchange
     Exch10 = 0.0
-    Exch10 -= 2.0 * ein.core.dot(D_A.np, cache["K_B"].np)
-    Exch10 += 2.0 * ein.core.dot(T_AA.np, h_B.np)
-    Exch10 += 2.0 * ein.core.dot(T_BB.np, h_A.np)
-    Exch10 += 2.0 * ein.core.dot(T_AB.np, h_A.np + h_B.np)
-    Exch10 += 4.0 * ein.core.dot(T_BB.np, JT_AB.np - 0.5 * KT_AB.np)
-    Exch10 += 4.0 * ein.core.dot(T_AA.np, JT_AB.np - 0.5 * KT_AB.np.T)
-    Exch10 += 4.0 * ein.core.dot(T_BB.np, JT_A.np - 0.5 * KT_A.np)
-    Exch10 += 4.0 * ein.core.dot(T_AB.np, JT_AB.np - 0.5 * KT_AB.np.T)
+    Exch10 -= 2.0 * _dot(D_A.np, cache["K_B"].np)
+    Exch10 += 2.0 * _dot(T_AA.np, h_B.np)
+    Exch10 += 2.0 * _dot(T_BB.np, h_A.np)
+    Exch10 += 2.0 * _dot(T_AB.np, h_A.np + h_B.np)
+    Exch10 += 4.0 * _dot(T_BB.np, JT_AB.np - 0.5 * KT_AB.np)
+    Exch10 += 4.0 * _dot(T_AA.np, JT_AB.np - 0.5 * KT_AB.np.T)
+    Exch10 += 4.0 * _dot(T_BB.np, JT_A.np - 0.5 * KT_A.np)
+    Exch10 += 4.0 * _dot(T_AB.np, JT_AB.np - 0.5 * KT_AB.np.T)
 
     if do_print:
         core.set_variable("Exch10", Exch10)
@@ -3262,9 +3314,9 @@ def induction(
     # Eq. 17: exchange-induction potential for A due to B
     EX_A = K_B.clone()
     EX_A.scale(-1.0)
-    ein.core.axpy(-2.0, J_O.np, EX_A.np)
-    ein.core.axpy(1.0, K_O.np, EX_A.np)
-    ein.core.axpy(2.0, J_P_B.np, EX_A.np)
+    _axpy(-2.0, J_O.np, EX_A.np)
+    _axpy(1.0, K_O.np, EX_A.np)
+    _axpy(2.0, J_P_B.np, EX_A.np)
 
     # Apply all the axpy operations to EX_A
     S_DB, S_DB_VA, S_DB_VA_DB_S = chain_gemm_einsums(
@@ -3277,20 +3329,20 @@ def induction(
         [S_DB, S, D_A, V_B],
         return_tensors=[False, True, True],
     )
-    ein.core.axpy(-1.0, S_DB_VA.np, EX_A.np)
-    ein.core.axpy(-2.0, S_DB_JA.np, EX_A.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([S_DB, K_A]).np, EX_A.np)
-    ein.core.axpy(1.0, S_DB_S_DA_VB.np, EX_A.np)
-    ein.core.axpy(2.0, chain_gemm_einsums([S_DB_S_DA, J_B]).np, EX_A.np)
-    ein.core.axpy(1.0, S_DB_VA_DB_S.np, EX_A.np)
-    ein.core.axpy(2.0, S_DB_JA_DB_S.np, EX_A.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([S_DB, K_O], ["N", "T"]).np, EX_A.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([V_B, D_B, S]).np, EX_A.np)
-    ein.core.axpy(-2.0, chain_gemm_einsums([J_B, D_B, S]).np, EX_A.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([K_B, D_B, S]).np, EX_A.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([V_B, D_A, S, D_B, S]).np, EX_A.np)
-    ein.core.axpy(2.0, chain_gemm_einsums([J_B, D_A, S, D_B, S]).np, EX_A.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([K_O, D_B, S]).np, EX_A.np)
+    _axpy(-1.0, S_DB_VA.np, EX_A.np)
+    _axpy(-2.0, S_DB_JA.np, EX_A.np)
+    _axpy(1.0, chain_gemm_einsums([S_DB, K_A]).np, EX_A.np)
+    _axpy(1.0, S_DB_S_DA_VB.np, EX_A.np)
+    _axpy(2.0, chain_gemm_einsums([S_DB_S_DA, J_B]).np, EX_A.np)
+    _axpy(1.0, S_DB_VA_DB_S.np, EX_A.np)
+    _axpy(2.0, S_DB_JA_DB_S.np, EX_A.np)
+    _axpy(-1.0, chain_gemm_einsums([S_DB, K_O], ["N", "T"]).np, EX_A.np)
+    _axpy(-1.0, chain_gemm_einsums([V_B, D_B, S]).np, EX_A.np)
+    _axpy(-2.0, chain_gemm_einsums([J_B, D_B, S]).np, EX_A.np)
+    _axpy(1.0, chain_gemm_einsums([K_B, D_B, S]).np, EX_A.np)
+    _axpy(1.0, chain_gemm_einsums([V_B, D_A, S, D_B, S]).np, EX_A.np)
+    _axpy(2.0, chain_gemm_einsums([J_B, D_A, S, D_B, S]).np, EX_A.np)
+    _axpy(-1.0, chain_gemm_einsums([K_O, D_B, S]).np, EX_A.np)
 
     EX_A_MO_1 = chain_gemm_einsums(
         [cache["Cocc_A"], EX_A, cache["Cvir_A"]],
@@ -3321,9 +3373,9 @@ def induction(
     # Eq. 17: exchange-induction potential for B due to A
     EX_B = K_A.clone()
     EX_B.scale(-1.0)
-    ein.core.axpy(-2.0, J_O.np, EX_B.np)
-    ein.core.axpy(1.0, K_O.np, EX_B.np.T)
-    ein.core.axpy(2.0, J_P_A.np, EX_B.np)
+    _axpy(-2.0, J_O.np, EX_B.np)
+    _axpy(1.0, K_O.np, EX_B.np.T)
+    _axpy(2.0, J_P_A.np, EX_B.np)
     cache["J_P_A"] = J_P_A
     cache["J_P_B"] = J_P_B
 
@@ -3339,20 +3391,20 @@ def induction(
     )
 
     # Apply all the axpy operations to EX_B
-    ein.core.axpy(-1.0, S_DA_VB.np, EX_B.np)
-    ein.core.axpy(-2.0, S_DA_JB.np, EX_B.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([S_DA, K_B]).np, EX_B.np)
-    ein.core.axpy(1.0, S_DA_S_DB_VA.np, EX_B.np)
-    ein.core.axpy(2.0, chain_gemm_einsums([S_DA_S_DB, J_A]).np, EX_B.np)
-    ein.core.axpy(1.0, S_DA_VB_DA_S.np, EX_B.np)
-    ein.core.axpy(2.0, S_DA_JB_DA_S.np, EX_B.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([S_DA, K_O]).np, EX_B.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([V_A, D_A, S]).np, EX_B.np)
-    ein.core.axpy(-2.0, chain_gemm_einsums([J_A, D_A, S]).np, EX_B.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([K_A, D_A, S]).np, EX_B.np)
-    ein.core.axpy(1.0, chain_gemm_einsums([V_A, D_B, S, D_A, S]).np, EX_B.np)
-    ein.core.axpy(2.0, chain_gemm_einsums([J_A, D_B, S, D_A, S]).np, EX_B.np)
-    ein.core.axpy(-1.0, chain_gemm_einsums([K_O, D_A, S], ["T", "N", "N"]).np, EX_B.np)
+    _axpy(-1.0, S_DA_VB.np, EX_B.np)
+    _axpy(-2.0, S_DA_JB.np, EX_B.np)
+    _axpy(1.0, chain_gemm_einsums([S_DA, K_B]).np, EX_B.np)
+    _axpy(1.0, S_DA_S_DB_VA.np, EX_B.np)
+    _axpy(2.0, chain_gemm_einsums([S_DA_S_DB, J_A]).np, EX_B.np)
+    _axpy(1.0, S_DA_VB_DA_S.np, EX_B.np)
+    _axpy(2.0, S_DA_JB_DA_S.np, EX_B.np)
+    _axpy(-1.0, chain_gemm_einsums([S_DA, K_O]).np, EX_B.np)
+    _axpy(-1.0, chain_gemm_einsums([V_A, D_A, S]).np, EX_B.np)
+    _axpy(-2.0, chain_gemm_einsums([J_A, D_A, S]).np, EX_B.np)
+    _axpy(1.0, chain_gemm_einsums([K_A, D_A, S]).np, EX_B.np)
+    _axpy(1.0, chain_gemm_einsums([V_A, D_B, S, D_A, S]).np, EX_B.np)
+    _axpy(2.0, chain_gemm_einsums([J_A, D_B, S, D_A, S]).np, EX_B.np)
+    _axpy(-1.0, chain_gemm_einsums([K_O, D_A, S], ["T", "N", "N"]).np, EX_B.np)
 
     EX_B_MO_1 = chain_gemm_einsums(
         [cache["Cocc_B"], EX_B, cache["Cvir_B"]],
@@ -3364,12 +3416,12 @@ def induction(
     # Eq. 8: omega^A = V^A + 2*J^A
     w_A = V_A.clone()
     w_A.name = "w_A"
-    ein.core.axpy(2.0, J_A.np, w_A.np)
+    _axpy(2.0, J_A.np, w_A.np)
 
     # Eq. 8: omega^B = V^B + 2*J^B
     w_B = V_B.clone()
     w_B.name = "w_B"
-    ein.core.axpy(2.0, J_B.np, w_B.np)
+    _axpy(2.0, J_B.np, w_B.np)
 
     w_B_MOA_1 = chain_gemm_einsums(
         [cache["Cocc_A"], w_B, cache["Cvir_A"]],
@@ -3426,10 +3478,10 @@ def induction(
             unc_x_A_MOB.np[r, a] /= eps_occ_B.np[r] - eps_vir_B.np[a]
 
     # Eq. 14: E^(2)_ind(A<-B) = 2 * x^A . omega_tilde^B
-    unc_ind_ab = 2.0 * ein.core.dot(unc_x_B_MOA.np, w_B_MOA.np)
-    unc_ind_ba = 2.0 * ein.core.dot(unc_x_A_MOB.np, w_A_MOB.np)
-    unc_indexch_ab = 2.0 * ein.core.dot(unc_x_B_MOA.np, EX_A_MO.np)
-    unc_indexch_ba = 2.0 * ein.core.dot(unc_x_A_MOB.np, EX_B_MO.np)
+    unc_ind_ab = 2.0 * _dot(unc_x_B_MOA.np, w_B_MOA.np)
+    unc_ind_ba = 2.0 * _dot(unc_x_A_MOB.np, w_A_MOB.np)
+    unc_indexch_ab = 2.0 * _dot(unc_x_B_MOA.np, EX_A_MO.np)
+    unc_indexch_ba = 2.0 * _dot(unc_x_A_MOB.np, EX_B_MO.np)
 
     ret = {}
     ret["Ind20,u (A<-B)"] = unc_ind_ab
@@ -3652,10 +3704,10 @@ def induction(
         x_B_MOA = core.Matrix.from_array(x_B_MOA)
         x_A_MOB = core.Matrix.from_array(x_A_MOB)
 
-        ind_ab = 2.0 * ein.core.dot(x_B_MOA.np, w_B_MOA.np)
-        ind_ba = 2.0 * ein.core.dot(x_A_MOB.np, w_A_MOB.np)
-        indexch_ab = 2.0 * ein.core.dot(x_B_MOA.np, EX_A_MO.np)
-        indexch_ba = 2.0 * ein.core.dot(x_A_MOB.np, EX_B_MO.np)
+        ind_ab = 2.0 * _dot(x_B_MOA.np, w_B_MOA.np)
+        ind_ba = 2.0 * _dot(x_A_MOB.np, w_A_MOB.np)
+        indexch_ab = 2.0 * _dot(x_B_MOA.np, EX_A_MO.np)
+        indexch_ba = 2.0 * _dot(x_A_MOB.np, EX_B_MO.np)
 
         ret["Ind20,r (A<-B)"] = ind_ab
         ret["Ind20,r (A->B)"] = ind_ba
@@ -3783,6 +3835,8 @@ def _sapt_cpscf_solve(
         cache["wfn_B"].set_jk(jk)
 
     def setup_P_X(eps_occ, eps_vir, name="P_X"):
+        if _backend == "numpy":
+            return eps_occ.np[:, None] - eps_vir.np[None, :]
         P_X = ein.utils.tensor_factory(
             name, [eps_occ.shape[0], eps_vir.shape[0]], np.float64, "einsums"
         )
@@ -3855,7 +3909,7 @@ def _sapt_cpscf_solve(
     )
     core.print_out("   " + ("-" * sep_size) + "\n")
 
-    start_resid = [ein.core.dot(rhsA, rhsA), ein.core.dot(rhsB, rhsB)]
+    start_resid = [_dot(rhsA, rhsA), _dot(rhsB, rhsB)]
 
     def pfunc(niter, x_vec, r_vec):
         if niter == 0:
@@ -3863,14 +3917,14 @@ def _sapt_cpscf_solve(
         else:
             niter = "%5d" % niter
         # Compute IndAB
-        valA = (ein.core.dot(r_vec[0], r_vec[0]) / start_resid[0]) ** 0.5
+        valA = (_dot(r_vec[0], r_vec[0]) / start_resid[0]) ** 0.5
         if valA < conv:
             cA = "*"
         else:
             cA = " "
 
         # Compute IndBA
-        valB = (ein.core.dot(r_vec[1], r_vec[1]) / start_resid[1]) ** 0.5
+        valB = (_dot(r_vec[1], r_vec[1]) / start_resid[1]) ** 0.5
         if valB < conv:
             cB = "*"
         else:
@@ -3891,6 +3945,8 @@ def _sapt_cpscf_solve(
         rcond=conv,
         printlvl=0,
         printer=pfunc,
+        axpy=_axpy,
+        dot=_dot,
     )
     core.print_out("   " + ("-" * sep_size) + "\n")
 
