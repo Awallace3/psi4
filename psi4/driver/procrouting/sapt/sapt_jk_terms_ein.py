@@ -38,6 +38,18 @@ from .sapt_util import print_sapt_var
 import einsums as ein
 
 
+# Edge of the (r,s) compute block in fdisp0, in virtual orbitals.  The block
+# GEMMs gain throughput with the edge, and the block's nine work arrays cost
+# 9 * FDISP_BLOCK**2 * na * nb doubles.
+FDISP_BLOCK = 64
+
+
+def _gemm(trans_a: str, trans_b: str, alpha: float, A: np.ndarray, B: np.ndarray,
+          beta: float, C: np.ndarray) -> None:
+    """C = alpha op(A) op(B) + beta C, in place on numpy buffers (views allowed)."""
+    ein.core.gemm(trans_a, trans_b, alpha, A, B, beta, C)
+
+
 # Equations come from https://doi.org/10.1063/5.0090688
 def localization(
     cache: dict,
@@ -2091,6 +2103,134 @@ def find(
     return cache
 
 
+class _Fdisp0Block:
+    r"""The matricized fdisp0 kernel: one (r,s) compute block at a time.
+
+    A single (r,s) pair does only O(na*nb*nQ) flops, with na and nb in the
+    tens, so pair-at-a-time BLAS spends most of its time on call overhead.
+    The whole compute block is therefore held as one matrix,
+
+    .. math:: V[(r,a),(s,b)] = \sum_Q  X[(r,a),Q] Y[(s,b),Q] ,
+
+    which turns a block's worth of tiny GEMMs into one big one.  The four
+    exchange DF terms and the four rank-1 (V,J,K) updates ride in the same
+    GEMM by concatenating them along Q with two extra columns (see fdisp0 for
+    the packing), so Disp20 costs one GEMM per block and Exch-Disp20 two.
+
+    Every block matrix is row-major with the occupied index running fastest
+    within each virtual, i.e. V viewed as rank 4 is V[r,a,s,b].  The nine work
+    arrays are allocated once, flat, at the full block size; a short trailing
+    block takes their leading elements, which is again a contiguous row-major
+    matrix, so no block shape needs buffers of its own.
+
+    Calling the object accumulates the block's Disp20 and Exch-Disp20 into
+    ``E_disp`` and ``E_exch`` (both na x nb, still in the LO basis).  With
+    ``profile=True`` the wall time of each stage is summed into ``times``.
+    """
+
+    _WORK = ("V", "T", "I", "T2", "V2", "D", "W", "IW", "W2")
+
+    def __init__(self, UA, UB, ea, eb, nQ, blk_r, blk_s, profile=False):
+        self.UA, self.UB = UA, UB
+        self.ea, self.eb = ea, eb
+        self.na, self.nb = ea.shape[0], eb.shape[0]
+        self.nQ = nQ
+        nwork = blk_r * blk_s * self.na * self.nb
+        self.work = {k: np.zeros(nwork) for k in self._WORK}
+        self.E_disp = np.zeros((self.na, self.nb))
+        self.E_exch = np.zeros((self.na, self.nb))
+        self.times = {} if profile else None
+
+    def _blk(self, name, nrow, ncol):
+        return self.work[name][: nrow * ncol].reshape(nrow, ncol)
+
+    def _to_lo(self, X, I, Y, nx):
+        """Y[(x,a),(y,b)] = sum_a' UA[a',a] sum_b' X[(x,a'),(y,b')] UB[b',b].
+
+        b' is the fastest index of the row-major block, so its contraction is
+        one GEMM over every row at once; the a' contraction is one GEMM per x,
+        each over the contiguous na-row panel that x owns.
+        """
+        na, nb = self.na, self.nb
+        _gemm("N", "N", 1.0, X.reshape(-1, nb), self.UB, 0.0, I.reshape(-1, nb))
+        for x in range(nx):
+            _gemm("T", "N", 1.0, self.UA, I[x * na:(x + 1) * na], 0.0,
+                  Y[x * na:(x + 1) * na])
+
+    def _tick(self, name, t0):
+        t1 = time.perf_counter()
+        self.times[name] = self.times.get(name, 0.0) + (t1 - t0)
+        return t1
+
+    def __call__(self, AFar_r, BCbr_r, FAbs_s, BCas_s, er, es):
+        """Accumulate one block.
+
+        ``AFar_r``/``BCbr_r`` are the block's rows of the packed r-side
+        buffers, ``FAbs_s``/``BCas_s`` those of the s side, and ``er``/``es``
+        the block's virtual orbital energies.
+        """
+        na, nb, nQ = self.na, self.nb, self.nQ
+        nrb, nsb = er.shape[0], es.shape[0]
+        prof = self.times is not None
+        t = time.perf_counter() if prof else None
+
+        Mb, Nb = nrb * na, nsb * nb
+        V, T, I = self._blk("V", Mb, Nb), self._blk("T", Mb, Nb), self._blk("I", Mb, Nb)
+        T2, V2, D = self._blk("T2", Mb, Nb), self._blk("V2", Mb, Nb), self._blk("D", Mb, Nb)
+        W, IW = self._blk("W", nsb * na, nrb * nb), self._blk("IW", nsb * na, nrb * nb)
+        W2 = self._blk("W2", nsb * na, nrb * nb)
+        T2v = T2.reshape(nrb, na, nsb, nb)
+        V2v = V2.reshape(nrb, na, nsb, nb)
+        W2v = W2.reshape(nsb, na, nrb, nb)
+
+        # => Amplitudes, Disp20 <= //
+
+        # V[(r,a),(s,b)] = sum_Q Aar[(r,a),Q] Abs[(s,b),Q]
+        _gemm("N", "T", 1.0, AFar_r[:, 0:nQ], FAbs_s[:, nQ:2 * nQ], 0.0, V)
+        if prof: t = self._tick("gemm V", t)
+
+        # Amplitudes T = V / (ea + eb - er - es), built as reciprocals so the
+        # division is one elementwise product.
+        np.divide(
+            1.0,
+            (self.ea[None, :, None, None] + self.eb[None, None, None, :]
+             - er[:, None, None, None] - es[None, None, :, None]),
+            out=D.reshape(nrb, na, nsb, nb),
+        )
+        if prof: t = self._tick("denominator", t)
+        ein.core.direct_product(1.0, V, D, 0.0, T)
+        if prof: t = self._tick("amplitudes", t)
+
+        # Transform to localized orbital basis and accumulate
+        self._to_lo(T, I, T2, nrb)
+        self._to_lo(V, I, V2, nrb)
+        if prof: t = self._tick("to_lo", t)
+        self.E_disp += 4.0 * np.einsum("rasb,rasb->ab", T2v, V2v)
+        if prof: t = self._tick("reduce", t)
+
+        # => Exch-Disp20 <= //
+
+        # (r,a) x (s,b) half: Aar.Fbs + Far.Abs + Qar.SAbs + SBar.Qbs
+        _gemm("N", "T", 1.0, AFar_r, FAbs_s, 0.0, V)
+        if prof: t = self._tick("gemm X", t)
+        self._to_lo(V, I, V2, nrb)
+        if prof: t = self._tick("to_lo", t)
+        self.E_exch -= 2.0 * np.einsum("rasb,rasb->ab", T2v, V2v)
+        if prof: t = self._tick("reduce", t)
+
+        # (s,a) x (r,b) half: Bas.Bbr + Cas.Cbr + Sas.Qbr + Qas.Sbr.  The
+        # localization is linear and the energy contraction elementwise, so
+        # this half stays in its own layout and is reduced against T2 through
+        # a transposed index map rather than permuted into the (r,a) x (s,b)
+        # one.
+        _gemm("N", "T", 1.0, BCas_s, BCbr_r, 0.0, W)
+        if prof: t = self._tick("gemm W", t)
+        self._to_lo(W, IW, W2, nsb)
+        if prof: t = self._tick("to_lo", t)
+        self.E_exch -= 2.0 * np.einsum("rasb,sarb->ab", T2v, W2v)
+        if prof: t = self._tick("reduce W", t)
+
+
 def fdisp0(
     cache: dict,
     scalars: dict,
@@ -2444,10 +2584,7 @@ def fdisp0(
 
     # Calculate overhead for work arrays
     overhead = 0
-    overhead += 5 * nT * na * nb  # Tab, Vab, T2ab, V2ab, Iab work arrays
-    overhead += (
-        2 * na * ns + 2 * nb * nr + 2 * na * nr + 2 * nb * ns
-    )  # S and Q matrices
+    overhead += 2 * na * ns + 2 * nb * nr + 2 * na * nr + 2 * nb * ns  # S and Q
     # E_disp20 and E_exch_disp20 thread work and final
     overhead += 2 * na * nb * (nT + 1)
     # sE_exch_disp20 thread work and final
@@ -2456,8 +2593,19 @@ def fdisp0(
     overhead += 1 * (snA + snfa + sna) * (snB + snfb + snb)  # sDisp_AB
     overhead += 12 * nn * nn  # D, V, J, K, P, C matrices for A and B
 
-    # Available memory for dispersion calculation
     total_memory = core.get_memory() // 8  # Convert bytes to doubles
+
+    # The (r,s) pairs of a compute block are contracted as one matrix
+    # V[(r,a),(s,b)] (see the main loop below), which needs nine work arrays of
+    # nrb*na x nsb*nb doubles: V, T, I, T2, V2 and the energy denominator, plus
+    # W, IW, W2 for the (s,a) x (r,b) half of the exchange term.  FDISP_BLOCK
+    # caps the compute block independently of how much of the DF tensors
+    # memory lets us hold at once.
+    blk_r = min(FDISP_BLOCK, nr)
+    blk_s = min(FDISP_BLOCK, ns)
+    overhead += 9 * blk_r * blk_s * na * nb
+
+    # Available memory for dispersion calculation
     rem = total_memory - overhead
 
     core.print_out(
@@ -2470,14 +2618,19 @@ def fdisp0(
     # Calculate cost per r or s virtual orbital
     # Each r needs: Aar, Bbr, Cbr, Dar (each is na x nQ or nb x nQ)
     cost_r = 2 * na * nQ + 2 * nb * nQ
-    # Factor of 2 because we hold both r and s slices
-    max_r_l = rem // (2 * cost_r)
+    # Factor of 4: both r and s slices, each held once as read off disk and
+    # once packed into the concatenated buffers the block GEMMs contract.
+    max_r_l = rem // (4 * cost_r)
     max_s_l = max_r_l
     max_r = min(max_r_l, nr)
     max_s = min(max_s_l, ns)
 
     if max_r < 1 or max_s < 1:
         raise Exception("Too little dynamic memory for fdisp0")
+
+    # The compute block never exceeds the DF block that feeds it.
+    blk_r = min(blk_r, max_r)
+    blk_s = min(blk_s, max_s)
 
     nrblocks = (nr + max_r - 1) // max_r  # Ceiling division
     nsblocks = (ns + max_s - 1) // max_s
@@ -2487,7 +2640,10 @@ def fdisp0(
     )
     core.print_out(f"    {nr} values of r processed in {nrblocks} blocks of {max_r}\n")
     core.print_out(
-        f"    {ns} values of s processed in {nsblocks} blocks of {max_s}\n\n"
+        f"    {ns} values of s processed in {nsblocks} blocks of {max_s}\n"
+    )
+    core.print_out(
+        f"    (r,s) contracted in compute blocks of {blk_r} x {blk_s}\n\n"
     )
 
     # => Compute Far = Dar + Ear and Fbs = Dbs + Ebs
@@ -2535,172 +2691,125 @@ def fdisp0(
         # Write Fbs back to disk (Dbs now contains Dbs + Ebs)
         dfh.write_disk_tensor("Fbs", Dbs, (sstart, sstart + nsblock))
 
-    E_disp20_comp = core.Matrix("E_disp20", na, nb)
-    E_exch_disp20_comp = core.Matrix("E_exch_disp20", na, nb)
-
-    # => MO to LO Transformation
-    Uaocc_A = cache["Uaocc0A"]
-    Uaocc_B = cache["Uaocc0B"]
-    UAp = Uaocc_A.np
-    UBp = Uaocc_B.np
-
     # In the dispersion formula: indices a,b are occupied and r,s are virtual
-    eap = eps_occ_A  # occupied energies for monomer A (index a)
-    ebp = eps_occ_B  # occupied energies for monomer B (index b)
-    erp = eps_vir_A  # virtual energies for monomer A (index r)
-    esp = eps_vir_B  # virtual energies for monomer B (index s)
+    ern = eps_vir_A.np  # virtual energies for monomer A (index r)
+    esn = eps_vir_B.np  # virtual energies for monomer B (index s)
 
-    # => Work arrays for inner loop
-    Tab = core.Matrix("Tab", na, nb)
-    Vab = core.Matrix("Vab", na, nb)
-    T2ab = core.Matrix("T2ab", na, nb)
-    V2ab = core.Matrix("V2ab", na, nb)
-    Iab = core.Matrix("Iab", na, nb)
+    # => The blocked (r,s) kernel, with its work arrays <= //
+    kernel = _Fdisp0Block(
+        cache["Uaocc0A"].np,  # MO to LO transformation
+        cache["Uaocc0B"].np,
+        eps_occ_A.np,  # occupied energies for monomer A (index a)
+        eps_occ_B.np,  # occupied energies for monomer B (index b)
+        nQ, blk_r, blk_s,
+    )
+
+    # => Packed DF buffers <= //
+    #
+    # The kernel contracts concatenations of the DF tensors along Q with two
+    # extra columns for the rank-1 (V,J,K) terms:
+    #
+    #     AFar = [Aar | Far | Qar | SBar]   FAbs = [Fbs | Abs | SAbs | Qbs]
+    #     BCas = [Bas | Cas | Sas | Qas]    BCbr = [Bbr | Cbr | Qbr | Sbr]
+    #
+    # The buffers are row-major (n, nk) with the orbital index a (or b) running
+    # fastest within each virtual, which is the order fill_tensor delivers, so
+    # every pack is a straight row copy and every block operand a plain strided
+    # view.
+    nk = 2 * nQ + 2
+    AFar = np.zeros((max_r * na, nk))
+    BCbr = np.zeros((max_r * nb, nk))
+    FAbs = np.zeros((max_s * nb, nk))
+    BCas = np.zeros((max_s * na, nk))
+
+    Sasn, Qasn = Sas.np, Qas.np
+    SAbsn, Qbsn = SAbs.np, Qbs.np
+    Qarn, SBarn = Qar.np, SBar.np
+    Qbrn, Sbrn = Qbr.np, Sbr.np
+
+    def _np2(m):
+        """A DF block's numpy buffer as (nrow, nQ); fill_tensor may leave it 3-D."""
+        a = m.np
+        return a if a.ndim == 2 else a.reshape(-1, a.shape[-1])
 
     # => Main r,s loop <= //
-    # Allocate and fill r-block tensors
-    Aar = core.Matrix("Aar block", nrblock * na, nQ)
-    Far = core.Matrix("Far block", nrblock * na, nQ)
-    Bbr = core.Matrix("Bbr block", nrblock * nb, nQ)
-    Cbr = core.Matrix("Cbr block", nrblock * nb, nQ)
+    # Block buffers, sized for a full block (the trailing block may be short)
+    Aar = core.Matrix("Aar block", max_r * na, nQ)
+    Far = core.Matrix("Far block", max_r * na, nQ)
+    Bbr = core.Matrix("Bbr block", max_r * nb, nQ)
+    Cbr = core.Matrix("Cbr block", max_r * nb, nQ)
 
-    # Allocate and fill s-block tensors
-    Abs = core.Matrix("Abs block", nsblock * nb, nQ)
-    Fbs = core.Matrix("Fbs block", nsblock * nb, nQ)
-    Bas = core.Matrix("Bas block", nsblock * na, nQ)
-    Cas = core.Matrix("Cas block", nsblock * na, nQ)
+    Abs = core.Matrix("Abs block", max_s * nb, nQ)
+    Fbs = core.Matrix("Fbs block", max_s * nb, nQ)
+    Bas = core.Matrix("Bas block", max_s * na, nQ)
+    Cas = core.Matrix("Cas block", max_s * na, nQ)
     core.timer_off("F-SAPT Disp Setup")
 
     core.timer_on("F-SAPT Disp Compute")
     for rstart in range(0, nr, max_r):
         nrblock = min(max_r, nr - rstart)
+        rsl = slice(rstart, rstart + nrblock)
 
         dfh.fill_tensor("Aar", Aar, [rstart, rstart + nrblock], [0, na], [0, nQ])
         dfh.fill_tensor("Far", Far, [rstart, rstart + nrblock], [0, na], [0, nQ])
         dfh.fill_tensor("Bbr", Bbr, [rstart, rstart + nrblock], [0, nb], [0, nQ])
         dfh.fill_tensor("Cbr", Cbr, [rstart, rstart + nrblock], [0, nb], [0, nQ])
 
-        # Get numpy pointers for r-block tensors and reshape to 3D
-        # Tensors are stored as 2D with shape (nrblock * nX, nQ) and need to be (nrblock, nX, nQ)
-        Aarp = Aar.np.reshape(nrblock, na, nQ)
-        Farp = Far.np.reshape(nrblock, na, nQ)
-        Bbrp = Bbr.np.reshape(nrblock, nb, nQ)
-        Cbrp = Cbr.np.reshape(nrblock, nb, nQ)
+        # Pack the r side of the block once per DF block.
+        M, Nr = nrblock * na, nrblock * nb
+        AFar[:M, 0:nQ] = _np2(Aar)[:M]
+        AFar[:M, nQ:2 * nQ] = _np2(Far)[:M]
+        AFar[:M, 2 * nQ] = Qarn[:, rsl].T.reshape(-1)
+        AFar[:M, 2 * nQ + 1] = SBarn[:, rsl].T.reshape(-1)
+        BCbr[:Nr, 0:nQ] = _np2(Bbr)[:Nr]
+        BCbr[:Nr, nQ:2 * nQ] = _np2(Cbr)[:Nr]
+        BCbr[:Nr, 2 * nQ] = Qbrn[:, rsl].T.reshape(-1)
+        BCbr[:Nr, 2 * nQ + 1] = Sbrn[:, rsl].T.reshape(-1)
 
         for sstart in range(0, ns, max_s):
             nsblock = min(max_s, ns - sstart)
+            ssl = slice(sstart, sstart + nsblock)
 
             dfh.fill_tensor("Abs", Abs, [sstart, sstart + nsblock], [0, nb], [0, nQ])
             dfh.fill_tensor("Fbs", Fbs, [sstart, sstart + nsblock], [0, nb], [0, nQ])
             dfh.fill_tensor("Bas", Bas, [sstart, sstart + nsblock], [0, na], [0, nQ])
             dfh.fill_tensor("Cas", Cas, [sstart, sstart + nsblock], [0, na], [0, nQ])
 
-            # Get numpy pointers for s-block tensors and reshape to 3D
-            # Tensors are stored as 2D with shape (nsblock * nX, nQ) and need to be (nsblock, nX, nQ)
-            Absp = Abs.np.reshape(nsblock, nb, nQ)
-            Fbsp = Fbs.np.reshape(nsblock, nb, nQ)
-            Basp = Bas.np.reshape(nsblock, na, nQ)
-            Casp = Cas.np.reshape(nsblock, na, nQ)
-
-            nrs = nrblock * nsblock
+            N, Ms = nsblock * nb, nsblock * na
+            FAbs[:N, 0:nQ] = _np2(Fbs)[:N]
+            FAbs[:N, nQ:2 * nQ] = _np2(Abs)[:N]
+            FAbs[:N, 2 * nQ] = SAbsn[:, ssl].T.reshape(-1)
+            FAbs[:N, 2 * nQ + 1] = Qbsn[:, ssl].T.reshape(-1)
+            BCas[:Ms, 0:nQ] = _np2(Bas)[:Ms]
+            BCas[:Ms, nQ:2 * nQ] = _np2(Cas)[:Ms]
+            BCas[:Ms, 2 * nQ] = Sasn[:, ssl].T.reshape(-1)
+            BCas[:Ms, 2 * nQ + 1] = Qasn[:, ssl].T.reshape(-1)
 
             # => RS inner loop <= //
-            for rs in range(nrs):
-                r = rs // nsblock
-                s = rs % nsblock
+            for r0 in range(0, nrblock, blk_r):
+                nrb = min(blk_r, nrblock - r0)
+                ra0, ra1 = r0 * na, (r0 + nrb) * na
+                rb0, rb1 = r0 * nb, (r0 + nrb) * nb
+                rr = slice(rstart + r0, rstart + r0 + nrb)
 
-                # Get pointers to work arrays and energy matrices
-                Tabp = Tab.np
-                Vabp = Vab.np
-                T2abp = T2ab.np
-                V2abp = V2ab.np
-                Iabp = Iab.np
-                E_disp20Tp = E_disp20_comp.np
-                E_exch_disp20Tp = E_exch_disp20_comp.np
+                for s0 in range(0, nsblock, blk_s):
+                    nsb = min(blk_s, nsblock - s0)
+                    sb0, sb1 = s0 * nb, (s0 + nsb) * nb
+                    sa0, sa1 = s0 * na, (s0 + nsb) * na
+                    ss = slice(sstart + s0, sstart + s0 + nsb)
 
-                # => Amplitudes, Disp20 <= //
-
-                # Vab = Aar[r] @ Abs[s].T
-                # Extract slices for r-th and s-th orbitals
-                # Store these as we need them for Exch-Disp20 too
-                Aar_r = Aarp[r, :, :]
-                Abs_s = Absp[s, :, :]
-                # Use einsum to match C++ DGEMM('N', 'T', ...) more closely
-                np.einsum("aQ,bQ->ab", Aar_r, Abs_s, out=Vabp, optimize=True)
-
-                # Compute amplitudes Tab[a,b] = Vab[a,b] / (ea + eb - er - es)
-                for a in range(na):
-                    for b in range(nb):
-                        Tabp[a, b] = Vabp[a, b] / (
-                            eap.np[a]
-                            + ebp.np[b]
-                            - erp.np[r + rstart]
-                            - esp.np[s + sstart]
-                        )
-
-                # Transform to localized orbital basis
-                # T2ab = UA.T @ Tab @ UB
-                Iabp[:, :] = Tabp @ UBp
-                T2abp[:, :] = UAp.T @ Iabp
-
-                # V2ab = UA.T @ Vab @ UB
-                Iabp[:, :] = Vabp @ UBp
-                V2abp[:, :] = UAp.T @ Iabp
-
-                # Accumulate Disp20
-                for a in range(na):
-                    for b in range(nb):
-                        E_disp20Tp[a, b] += 4.0 * T2abp[a, b] * V2abp[a, b]
-
-                # => Exch-Disp20 <= //
-
-                # > Q1-Q3 < //
-                # Vab = Bas[s] @ Bbr[r].T + Cas[s] @ Cbr[r].T + Aar[r] @ Fbs[s].T + Far[r] @ Abs[s].T
-                # Extract slices for r-th and s-th orbitals
-                Bas_s = Basp[s, :, :]
-                Bbr_r = Bbrp[r, :, :]
-                Cas_s = Casp[s, :, :]
-                Cbr_r = Cbrp[r, :, :]
-                Far_r = Farp[r, :, :]
-                Fbs_s = Fbsp[s, :, :]
-
-                Vabp[:, :] = Bas_s @ Bbr_r.T
-                Vabp[:, :] += Cas_s @ Cbr_r.T
-                Vabp[:, :] += Aar_r @ Fbs_s.T
-                Vabp[:, :] += Far_r @ Abs_s.T
-
-                # > V,J,K < //
-                # Add outer product contributions using DGER equivalent
-                # C_DGER(na, nb, 1.0, &Sasp[0][s + sstart], ns, &Qbrp[0][r + rstart], nr, Vabp[0], nb);
-                Vabp[:, :] += np.outer(Sas.np[:, s + sstart], Qbr.np[:, r + rstart])
-
-                # C_DGER(na, nb, 1.0, &Qasp[0][s + sstart], ns, &Sbrp[0][r + rstart], nr, Vabp[0], nb);
-                Vabp[:, :] += np.outer(Qas.np[:, s + sstart], Sbr.np[:, r + rstart])
-
-                # C_DGER(na, nb, 1.0, &Qarp[0][r + rstart], nr, &SAbsp[0][s + sstart], ns, Vabp[0], nb);
-                Vabp[:, :] += np.outer(Qar.np[:, r + rstart], SAbs.np[:, s + sstart])
-
-                # C_DGER(na, nb, 1.0, &SBarp[0][r + rstart], nr, &Qbsp[0][s + sstart], ns, Vabp[0], nb);
-                Vabp[:, :] += np.outer(SBar.np[:, r + rstart], Qbs.np[:, s + sstart])
-
-                # Transform to localized orbital basis
-                Iabp[:, :] = Vabp @ UBp
-                V2abp[:, :] = UAp.T @ Iabp
-
-                # Accumulate ExchDisp20
-                for a in range(na):
-                    for b in range(nb):
-                        E_exch_disp20Tp[a, b] -= 2.0 * T2abp[a, b] * V2abp[a, b]
+                    kernel(AFar[ra0:ra1], BCbr[rb0:rb1],
+                           FAbs[sb0:sb1], BCas[sa0:sa1], ern[rr], esn[ss])
 
     core.timer_off("F-SAPT Disp Compute")
     # => Accumulate thread results <= //
     E_disp20 = core.Matrix("E_disp20", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
     E_exch_disp20 = core.Matrix("E_exch_disp20", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
 
-    for a in range(na):
-        for b in range(nb):
-            E_disp20.np[a + nfa + nA, b + nfb + nB] = E_disp20_comp.np[a, b]
-            E_exch_disp20.np[a + nfa + nA, b + nfb + nB] = E_exch_disp20_comp.np[a, b]
+    ablock = slice(nfa + nA, nfa + nA + na)
+    bblock = slice(nfb + nB, nfb + nB + nb)
+    E_disp20.np[ablock, bblock] = kernel.E_disp
+    E_exch_disp20.np[ablock, bblock] = kernel.E_exch
 
     # Store energy matrices and scalars
     Disp_AB = core.Matrix("Disp_AB", nA + nfa + na1 + 1, nB + nfb + nb1 + 1)
