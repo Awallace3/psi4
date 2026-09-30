@@ -2176,8 +2176,9 @@ class _Fdisp0Block:
 
     def __init__(self, UA, UB, ea, eb, nQ, blk_r, blk_s, profile=False):
         self.UA, self.UB = UA, UB
-        self.ea, self.eb = ea, eb
         self.na, self.nb = ea.shape[0], eb.shape[0]
+        # ea + eb, the occupied half of every block's energy denominator
+        self.eab = ea[:, None] + eb[None, :]
         self.nQ = nQ
         nwork = blk_r * blk_s * self.na * self.nb
         self.work = {k: np.zeros(nwork) for k in self._WORK}
@@ -2233,16 +2234,16 @@ class _Fdisp0Block:
         _gemm("N", "T", 1.0, AFar_r[:, 0:nQ], FAbs_s[:, nQ:2 * nQ], 0.0, V)
         if prof: t = self._tick("gemm V", t)
 
-        # Amplitudes T = V / (ea + eb - er - es), built as reciprocals so the
-        # division is one elementwise product.
-        np.divide(
-            1.0,
-            (self.ea[None, :, None, None] + self.eb[None, None, None, :]
-             - er[:, None, None, None] - es[None, None, :, None]),
-            out=D.reshape(nrb, na, nsb, nb),
-        )
+        # Amplitudes T = V / ((ea + eb) - (er + es)).  einsums v1 has neither
+        # an outer-sum primitive nor an elementwise division, so both steps
+        # are numpy: the denominator is one broadcast subtraction written
+        # straight into the D work array, with no block-sized temporary, and
+        # the amplitudes one division pass into T.
+        np.subtract(self.eab[None, :, None, :],
+                    (er[:, None] + es[None, :])[:, None, :, None],
+                    out=D.reshape(nrb, na, nsb, nb))
         if prof: t = self._tick("denominator", t)
-        ein.core.direct_product(1.0, V, D, 0.0, T)
+        np.divide(V, D, out=T)
         if prof: t = self._tick("amplitudes", t)
 
         # Transform to localized orbital basis and accumulate
