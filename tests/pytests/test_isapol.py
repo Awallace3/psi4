@@ -11,6 +11,7 @@ element table's single-precision Fortran literals, and gfortran contracting
 Reference data lives in data_isapol/; its README says how to regenerate it.
 """
 
+import math
 import pathlib
 
 import numpy as np
@@ -230,3 +231,122 @@ def test_grid_integrates_atomic_gaussians(h2o):
     # radial map is only so good on a tight Gaussian sitting on hydrogen's
     # 0.94 a0 Slater radius.
     assert np.isclose(np.dot(w, f), h2o.natom(), rtol=0, atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Gate 3 -- Casimir imaginary-frequency quadrature
+# ---------------------------------------------------------------------------
+
+
+def _casimir_reference():
+    """{(omega0, n_freq): {k: (omega, tm1sq, weight)}} from the committed fixture."""
+    ref = {}
+    for line in (DATA / "camcasp_casimir_freq.dat").read_text().splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        omega0, n_freq, k, omega, tm1sq, weight = line.split()
+        ref.setdefault((float(omega0), int(n_freq)), {})[int(k)] = (
+            float(omega),
+            float(tm1sq),
+            float(weight),
+        )
+    return ref
+
+
+CASIMIR_REF = _casimir_reference()
+
+
+@pytest.mark.parametrize("key", sorted(CASIMIR_REF))
+def test_casimir_grid_bit_identical(key):
+    """Every frequency, Jacobian and weight matches CamCASP's `frequencies` exactly.
+
+    The quadrature is 6 lines of arithmetic over a literal table, so there is no
+    excuse for anything less than bit parity here, and getting it means downstream
+    C_n differences can never be blamed on the frequency grid.
+    """
+    omega0, n_freq = key
+    grid = psi4.core.CasimirGrid(n_freq, omega0)
+
+    assert grid.n_freq() == n_freq
+    assert grid.omega0() == omega0
+
+    for k, (omega, tm1sq, weight) in CASIMIR_REF[key].items():
+        assert _ulps(grid.omega(k), omega) == 0, f"omega({k})"
+        assert _ulps(grid.tm1sq(k), tm1sq) == 0, f"tm1sq({k})"
+        assert _ulps(grid.weight(k), weight) == 0, f"weight({k})"
+
+
+def test_casimir_grid_static_point():
+    """Index 0 is the static point: zero frequency, and outside the quadrature."""
+    grid = psi4.core.CasimirGrid(10)
+    assert grid.omega(0) == 0.0
+    assert grid.weight(0) == 0.0
+    assert grid.cp_weight(0) == 0.0
+    assert grid.wsq(0) == 0.0
+    assert len(grid.omegas()) == 11
+
+
+def test_casimir_grid_rejects_bad_n_freq():
+    for n in (0, 3, 12):
+        with pytest.raises(RuntimeError):
+            psi4.core.CasimirGrid(n)
+    with pytest.raises(RuntimeError):
+        psi4.core.CasimirGrid(10).omega(11)
+
+
+def test_casimir_grid_rejects_bad_omega0():
+    for omega0 in (0.0, -0.3, math.nan, math.inf, -math.inf):
+        with pytest.raises(RuntimeError, match="omega0"):
+            psi4.core.CasimirGrid(10, omega0)
+
+
+def test_grid_rejects_bad_atom_index(h2o):
+    opts = psi4.core.IsaGridOptions()
+    opts.radial_points = 4
+    opts.spherical_points = 6
+    grid = psi4.core.IsaGrid(h2o, opts)
+    n = grid.natom()
+    assert grid.atom_start(n) == grid.npoints()
+    assert grid.atom_start(n - 1) + grid.atom_npoints(n - 1) == grid.npoints()
+    assert grid.alpha(n - 1) > 0.0
+    for get, bad in ((grid.atom_start, (-1, n + 1)), (grid.atom_npoints, (-1, n)), (grid.alpha, (-1, n))):
+        for A in bad:
+            with pytest.raises(RuntimeError):
+                get(A)
+
+
+def test_casimir_grid_ordering():
+    """Frequencies come out ascending, and symmetric about omega0 in log scale.
+
+    The two halves of the Gauss-Legendre rule map to omega0(1-t)/(1+t) and
+    omega0(1+t)/(1-t), which are reciprocals scaled by omega0^2, so the pairing is
+    exact.  This is what makes the unpacking in the constructor checkable without
+    reference data.
+    """
+    grid = psi4.core.CasimirGrid(10)
+    w = np.array([grid.omega(k) for k in range(1, 11)])
+    assert (np.diff(w) > 0).all()
+    assert np.allclose(w[:5] * w[::-1][:5], grid.omega0() ** 2, rtol=1e-15, atol=0)
+    assert np.allclose([grid.weight(k) for k in range(1, 6)],
+                       [grid.weight(k) for k in range(10, 5, -1)], rtol=0, atol=0)
+
+
+def test_casimir_polder_single_pole():
+    """C_6 for a one-term Unsold model, against its closed form.
+
+    alpha(iw) = a w1^2 / (w1^2 + w^2) gives C_6 = (3/2) a_A a_B w1A w1B / (w1A + w1B).
+    `cp_weight` carries the Gauss-Legendre weight, the Jacobian of the omega mapping
+    and the 1/(2 pi) of the Casimir-Polder formula, so the isotropic C_6 is
+    6 * sum_k cp_weight(k) alpha_A alpha_B -- this test pins that factor down.
+    """
+    grid = psi4.core.CasimirGrid(10)
+    w = np.array([grid.omega(k) for k in range(1, 11)])
+    cw = np.array([grid.cp_weight(k) for k in range(1, 11)])
+
+    for (aA, w1A), (aB, w1B) in [((1.38, 0.85), (1.38, 0.85)), ((10.6, 0.55), (1.38, 0.85))]:
+        alpha_A = aA * w1A**2 / (w1A**2 + w**2)
+        alpha_B = aB * w1B**2 / (w1B**2 + w**2)
+        exact = 1.5 * aA * aB * w1A * w1B / (w1A + w1B)
+        # 1e-4 is the accuracy of a 10-point rule on this integrand, not a parity
+        # tolerance; the grid itself is bit-identical to CamCASP (test above).
+        assert np.isclose(6.0 * np.dot(cw, alpha_A * alpha_B), exact, rtol=1e-4, atol=0)

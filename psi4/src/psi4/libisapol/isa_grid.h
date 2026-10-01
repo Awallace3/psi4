@@ -106,17 +106,18 @@ class IsaGrid {
 
     /// Index of the first point belonging to atom A.  Points are laid out
     /// atom-major, then radial shell, then angular point -- CamCASP's order.
-    int atom_start(int A) const { return start_[A]; }
-    int atom_npoints(int A) const { return start_[A + 1] - start_[A]; }
+    int atom_start(int A) const;
+    int atom_npoints(int A) const;
 
     /// Radial scale factor used for atom A (bohr), i.e. rscale * R_Slater(Z_A).
-    double alpha(int A) const { return alpha_[A]; }
+    double alpha(int A) const;
 
     void print_header() const;
 
    private:
     void build_radial(double alpha, std::vector<double>& r, std::vector<double>& wr) const;
     void apply_becke();
+    void check_atom(int A, int end) const;
 
     std::shared_ptr<Molecule> molecule_;
     IsaGridOptions options_;

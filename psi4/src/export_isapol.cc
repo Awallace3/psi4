@@ -26,9 +26,12 @@
  * @END LICENSE
  */
 
+#include "psi4/libisapol/casimir_grid.h"
 #include "psi4/libisapol/isa_grid.h"
 #include "psi4/libisapol/explicit_basis.h"
 #include "psi4/libisapol/partitioned_response.h"
+#include "psi4/libisapol/multipole_transform.h"
+#include "psi4/libisapol/lw_localization.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libisapol/tables.h"
 #include "psi4/libmints/molecule.h"
@@ -52,6 +55,115 @@ namespace {
 py::array_t<double> grid_column(const IsaGrid& grid, const double* data) {
     return py::array_t<double>(static_cast<py::ssize_t>(grid.npoints()), data);
 }
+
+
+namespace lw_binding_private {
+
+template <std::size_t N>
+py::list matrix_copies(const std::vector<std::array<std::array<double, N>, N>>& blocks) {
+    py::list result;
+    for (const auto& block : blocks) {
+        auto matrix = std::make_shared<Matrix>(N, N);
+        for (std::size_t row = 0; row < N; ++row)
+            for (std::size_t column = 0; column < N; ++column)
+                (*matrix)(row, column) = block[row][column];
+        result.append(matrix);
+    }
+    return result;
+}
+
+IsaLocalizedResponse localize(const Matrix& positions, const py::sequence& blocks,
+                             double frequency, const py::sequence& bonds, double tolerance,
+                             double input_sum_rule_tolerance, int rank_limit) {
+    // Declared, not inferred: the caller states the rank the localization runs at.
+    if (rank_limit < 1 || rank_limit > static_cast<int>(kIsaLwMaxRank))
+        throw std::runtime_error("localize_lw: declared rank_limit must be 1, 2, 3 or 4");
+    if (!std::isfinite(frequency))
+        throw std::runtime_error("localize_lw: response frequency must be finite");
+    if (frequency < 0.0)
+        throw std::runtime_error("localize_lw: response frequency must be nonnegative");
+    if (!std::isfinite(tolerance) || tolerance <= 0.0)
+        throw std::runtime_error("localize_lw: residual tolerance must be finite and positive");
+    // Negative inherits `tolerance`; positive finite gates separately; infinity reports only.
+    if (std::isnan(input_sum_rule_tolerance) || input_sum_rule_tolerance == 0.0)
+        throw std::runtime_error(
+            "localize_lw: input sum-rule tolerance must be positive or infinite, or negative to inherit");
+    if (positions.nirrep() != 1 || positions.ncol() != 3 || positions.nrow() <= 0)
+        throw std::runtime_error("localize_lw: positions must be an N by 3 single-block matrix");
+    const auto count = static_cast<std::size_t>(positions.nrow());
+    // Do not use automatic vector conversion on unbounded Python collections.
+    // Check all lengths and the native budget before allocating owned input arrays.
+    const std::size_t bond_count = py::len(bonds);
+    isa_lw_validate_workspace(count, bond_count);
+    if (py::len(blocks) != count * count)
+        throw std::runtime_error(
+            "localize_lw: expected one 16 by 16 or 25 by 25 block for every ordered site pair");
+    IsaBondGraph graph{count, {}};
+    graph.bonds.reserve(bond_count);
+    for (std::size_t edge = 0; edge < bond_count; ++edge) {
+        const auto bond = py::cast<py::sequence>(bonds[edge]);
+        if (py::len(bond) != 2)
+            throw std::runtime_error("localize_lw: each bond must contain two site indices");
+        graph.bonds.push_back({py::cast<std::size_t>(bond[0]), py::cast<std::size_t>(bond[1])});
+    }
+    // Reuse the validated graph helper; reject invalid edges before response allocation.
+    isa_lw_graph_operator(graph);
+    std::vector<std::shared_ptr<Matrix>> checked;
+    checked.reserve(count * count);
+    // Indexed, bounded access also prevents dishonest custom sequence iterators
+    // from growing these vectors beyond the validated lengths.
+    for (std::size_t block = 0; block < count * count; ++block)
+        checked.push_back(py::cast<std::shared_ptr<Matrix>>(blocks[block]));
+    // Finish Python callbacks before inspecting/copying matrices: a custom
+    // sequence may mutate a Matrix already returned by an earlier __getitem__.
+    if (positions.nirrep() != 1 || positions.ncol() != 3 ||
+        positions.nrow() != static_cast<int>(count))
+        throw std::runtime_error("localize_lw: positions changed dimensions during conversion");
+    for (std::size_t site = 0; site < count; ++site)
+        for (std::size_t axis = 0; axis < 3; ++axis)
+            if (!std::isfinite(positions(site, axis)))
+                throw std::runtime_error("localize_lw: site positions must be finite");
+    // The supplied block width DECLARES the rank of the caller's data: 16 for rank 3,
+    // 25 for rank 4. It is not a storage detail to be inferred away -- a rank-3 caller
+    // may not silently declare a rank-4 localization on data that has no rank-4
+    // components. Rank-3 input is zero-extended into the wider working matrix, which
+    // leaves every rank <= 3 declaration bitwise unchanged by the widening.
+    if (checked.empty() || !checked.front())
+        throw std::runtime_error("localize_lw: expected 16 by 16 or 25 by 25 single-block matrices");
+    const int supplied_width = checked.front()->nrow();
+    if (supplied_width != 16 && supplied_width != static_cast<int>(kIsaLwWorkingComponents))
+        throw std::runtime_error("localize_lw: expected 16 by 16 or 25 by 25 single-block matrices");
+    const auto width = static_cast<std::size_t>(supplied_width);
+    const int supplied_rank = supplied_width == 16 ? 3 : static_cast<int>(kIsaLwMaxRank);
+    if (rank_limit > supplied_rank)
+        throw std::runtime_error(
+            "localize_lw: declared rank_limit exceeds the rank of the supplied blocks; "
+            "rank 4 localization requires 25 by 25 supplied blocks");
+    for (const auto& matrix : checked) {
+        if (!matrix || matrix->nirrep() != 1 || matrix->nrow() != supplied_width ||
+            matrix->ncol() != supplied_width)
+            throw std::runtime_error(
+                "localize_lw: expected 16 by 16 or 25 by 25 single-block matrices, all the same width");
+        for (std::size_t row = 0; row < width; ++row)
+            for (std::size_t column = 0; column < width; ++column)
+                if (!std::isfinite((*matrix)(row, column)))
+                    throw std::runtime_error("localize_lw: response values must be finite");
+    }
+    IsaSitePairResponse response;
+    response.frequency = frequency;
+    response.positions.resize(count);
+    for (std::size_t site = 0; site < count; ++site)
+        for (std::size_t axis = 0; axis < 3; ++axis)
+            response.positions[site][axis] = positions(site, axis);
+    // Value-initialized: components the supplied width does not reach stay at zero.
+    response.blocks.resize(count * count);
+    for (std::size_t block = 0; block < checked.size(); ++block)
+        for (std::size_t row = 0; row < width; ++row)
+            for (std::size_t column = 0; column < width; ++column)
+                response.blocks[block][row][column] = (*checked[block])(row, column);
+    return isa_localize_lw(response, graph, tolerance, input_sum_rule_tolerance, rank_limit);
+}
+}  // namespace lw_binding_private
 }  // namespace
 
 void export_isapol(py::module& m) {
@@ -76,6 +188,95 @@ void export_isapol(py::module& m) {
         return 0;  // no supported thread-local override in this build
 #endif
     });
+    py::class_<IsaBondTransfer>(m, "IsaBondTransfer")
+        .def_readonly("first", &IsaBondTransfer::first)
+        .def_readonly("second", &IsaBondTransfer::second)
+        .def_readonly("first_component", &IsaBondTransfer::first_component)
+        .def_readonly("second_component", &IsaBondTransfer::second_component)
+        .def_readonly("fixed_site", &IsaBondTransfer::fixed_site)
+        .def_readonly("amount", &IsaBondTransfer::amount);
+    py::class_<IsaLocalizationResiduals>(m, "IsaLocalizationResiduals")
+        .def_readonly("off_site", &IsaLocalizationResiduals::off_site)
+        .def_readonly("charge_sum", &IsaLocalizationResiduals::charge_sum)
+        .def_readonly("reciprocity", &IsaLocalizationResiduals::reciprocity)
+        .def_readonly("molecular_sum", &IsaLocalizationResiduals::molecular_sum)
+        .def_readonly("local_charge", &IsaLocalizationResiduals::local_charge)
+        .def_readonly("input_sum_rule", &IsaLocalizationResiduals::input_sum_rule)
+        .def_readonly("charge_sum_transport", &IsaLocalizationResiduals::charge_sum_transport);
+    py::class_<IsaLocalizedResponse>(m, "IsaLocalizedResponse",
+        "Owned supplied-response LW localization, not native-upstream verification or PFIT refinement")
+        .def_property_readonly("frequency", [](const IsaLocalizedResponse& r) { return r.frequency; })
+        .def_property_readonly("positions", [](const IsaLocalizedResponse& r) {
+            auto matrix = std::make_shared<Matrix>(r.positions.size(), 3);
+            for (std::size_t site = 0; site < r.positions.size(); ++site)
+                for (std::size_t axis = 0; axis < 3; ++axis) (*matrix)(site, axis) = r.positions[site][axis];
+            return matrix;
+        })
+        .def_property_readonly("local", [](const IsaLocalizedResponse& r) {
+            return lw_binding_private::matrix_copies(r.local);
+        })
+        .def_property_readonly("refined_pairs", [](const IsaLocalizedResponse& r) {
+            return lw_binding_private::matrix_copies(r.refined_pairs);
+        }, "Full 25x25 LW workspace; NOT externally PFIT-refined pairs")
+        .def_property_readonly("transfers", [](const IsaLocalizedResponse& r) { return r.transfers; })
+        .def_property_readonly("residuals", [](const IsaLocalizedResponse& r) { return r.residuals; })
+        .def_property_readonly("omitted_component_pairs", [](const IsaLocalizedResponse& r) {
+            return r.omitted_component_pairs;
+        })
+        .def_property_readonly("omitted_transfer_count", [](const IsaLocalizedResponse& r) {
+            return r.omitted_transfer_count;
+        })
+        .def_property_readonly("localization_rank_limit", [](const IsaLocalizedResponse& r) {
+            return r.localization_rank_limit;
+        }, "Declared localization rank; every higher-rank component is identically zero")
+        .def_property_readonly("truncated_input_maxabs", [](const IsaLocalizedResponse& r) {
+            return r.truncated_input_maxabs;
+        }, "Largest supplied value the declared rank limit discarded; a report, not a residual");
+    m.def("isa_localize_lw", &lw_binding_private::localize,
+          "positions"_a, "blocks"_a, "frequency"_a, "bonds"_a, "residual_tolerance"_a = 1.0e-6,
+          "input_sum_rule_tolerance"_a = -1.0, "rank_limit"_a = 3,
+          "Supplied atomic-unit ordered-pair response; finite nonnegative frequency required. "
+          "Positions: N x 3 Matrix in bohr; blocks: N*N single 16x16 (rank 3) or 25x25 (rank 4) "
+          "Matrices, all the same width, real Racah 00,10,11c,11s,... . The width declares the rank of "
+          "the supplied data and rank_limit may not exceed it; rank-3 blocks are zero-extended. "
+          "Explicit zero-based graph; source-minus-target translations; local output is 24x24 with "
+          "ranks above the declared limit identically zero. "
+          "residual_tolerance is a postcondition gate, not iteration; it always holds the "
+          "algorithm-controlled residuals off_site, reciprocity, molecular_sum and charge_sum_transport. "
+          "input_sum_rule_tolerance gates the supplied data's charge-flow sum-rule defect separately: "
+          "negative inherits residual_tolerance (one combined gate), positive finite sets an explicit "
+          "threshold, and infinity measures and reports the defect without gating it. LW transports such a "
+          "defect exactly (measured <= 2.2e-16) and cannot repair it. At most 256 sites, 1000000 retained transfers, "
+          "768 MiB native workspace budget (caller inputs/getter copies additional). The budget is unchanged "
+          "by the rank-4 widening and the 25x25 working matrix therefore lowers the largest admissible graph "
+          "from 256 to about 174 sites; that cost is reported, not hidden by raising the budget. "
+          "rank_limit declares the rank the localization runs at, in 1..4, default 3 (for which this "
+          "routine is unchanged; 4 is the full working space). A declared limit L truncates the supplied blocks "
+          "to the leading (L+1)^2 real Racah components in both index slots first -- reported through "
+          "truncated_input_maxabs -- and then runs the component-pair loop, the translated transfer "
+          "application, the molecular-sum conservation check and the local output inside that space. The "
+          "restriction is exact because multipole translation is rank-raising, so no tolerance is relaxed "
+          "and every residual is gated at the same threshold as at the full rank. A localization at one limit is a "
+          "DIFFERENT MODEL from one at another, but an exactly consistent one: because translation is "
+          "rank-raising and the pair loop is ordered, no pair above the limit can write below it, so the "
+          "result at L equals the result at any higher L' restricted to the declared space, bitwise "
+          "(measured 0.0). A "
+          "declared limit therefore cannot change any rank <= L observable. "
+          "No solver fallback, native-upstream verification, external PFIT refinement, or parity claim.");
+    m.def("isa_lw_graph_math",
+          [](std::size_t site_count, const std::vector<std::array<std::size_t, 2>>& bonds) {
+              IsaBondGraph graph{site_count, bonds};
+              auto operator_matrix = std::make_shared<Matrix>(isa_lw_graph_operator(graph));
+              auto inverse_and_values = isa_lw_graph_pseudoinverse(graph);
+              auto pseudoinverse = std::make_shared<Matrix>(std::move(inverse_and_values.first));
+              return py::make_tuple(operator_matrix, pseudoinverse, inverse_and_values.second);
+          }, "site_count"_a, "bonds"_a,
+          "Owned (negative Laplacian, pseudoinverse, eigenvalues); explicit undirected zero-based edges, "
+          "1..256 sites. Dimensionless graph math only, not localization or ORIENT parity.");
+    m.def("isa_multipole_translation", &isa_multipole_translation, "rank"_a, "displacement"_a,
+          "R(x+d)=T(d)R(x); source-minus-target displacement in bohr, Racah 00,10,11c,11s,...");
+    m.def("isa_multipole_rotation", &isa_multipole_rotation, "rank"_a, "frame"_a,
+          "R(F x)=D(F)R(x); finite proper orthogonal local-to-global Cartesian frame");
     m.def("isa_regular_multipoles", &isa_regular_multipoles, "rank"_a, "displacement"_a,
           "r^k C_kq for every rank through rank, Racah 00,10,11c,11s,...; rank zero is 1");
     py::class_<IsaMultipoleSamples>(m, "IsaMultipoleSamples")
@@ -157,6 +358,18 @@ void export_isapol(py::module& m) {
         .def("y", [](const IsaGrid& g) { return grid_column(g, g.y()); })
         .def("z", [](const IsaGrid& g) { return grid_column(g, g.z()); })
         .def("w", [](const IsaGrid& g) { return grid_column(g, g.w()); });
+
+    py::class_<CasimirGrid, std::shared_ptr<CasimirGrid>>(
+        m, "CasimirGrid", "Gauss-Legendre quadrature on the imaginary frequency axis")
+        .def(py::init<int, double>(), "n_freq"_a, "omega0"_a = kCasimirOmega0)
+        .def("n_freq", &CasimirGrid::n_freq)
+        .def("omega0", &CasimirGrid::omega0)
+        .def("omega", &CasimirGrid::omega, "k"_a, "Imaginary frequency k in hartree; k = 0 is the static point")
+        .def("tm1sq", &CasimirGrid::tm1sq, "k"_a, "(1 - t_k)^2 for the mapped Gauss-Legendre root")
+        .def("weight", &CasimirGrid::weight, "k"_a, "Raw Gauss-Legendre weight of point k")
+        .def("wsq", &CasimirGrid::wsq, "k"_a, "-omega_k^2")
+        .def("cp_weight", &CasimirGrid::cp_weight, "k"_a, "Weight of point k in the Casimir-Polder integral")
+        .def("omegas", [](const CasimirGrid& g) { return py::array_t<double>(g.omegas().size(), g.omegas().data()); });
 
     m.def("isapol_slater_radius", &slater_radius, "Z"_a,
           "CamCASP Bragg-Slater radius in bohr (a_o = 0.529177249)");

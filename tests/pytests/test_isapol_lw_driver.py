@@ -1,0 +1,396 @@
+# Psi4 Developers; SPDX-License-Identifier: LGPL-3.0-only
+"""Hermetic supplied-LW driver tests. Only staged core and portable fixture IO.
+
+Run with PYTHONPATH=<build>/stage/lib python -P -m pytest ...
+The new module is source-loaded, registered for dataclasses, without staging it.
+"""
+from dataclasses import FrozenInstanceError
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+import numpy as np
+import pytest
+import psi4
+
+pytestmark = [pytest.mark.psi, pytest.mark.api]
+ROOT = Path(__file__).resolve().parents[2]
+MODULE = ROOT / 'psi4/driver/procrouting/isapol_lw.py'
+spec = importlib.util.spec_from_file_location('psi4.driver.procrouting._lw_driver_test_source', MODULE)
+lw = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = lw
+spec.loader.exec_module(lw)
+PROV = lw.Provenance('synthetic', hashlib.sha256(b'synthetic').hexdigest(), 'analytic test', 'Supplied synthetic, not native.')
+
+
+def request(n=1, frequencies=(0.,), rank=3, retain=False):
+    # `retain` declares that the rank4 rows reach LW rather than being dropped at
+    # the boundary. It is the caller's statement about the MODEL, not a storage
+    # detail: retained rank4 input and a rank4 localization are the same decision.
+    return dict(labels=[f'S{i}' for i in range(n)], origins=np.zeros((n,3)), bonds=[],
+                frequencies=list(frequencies), tensors=np.zeros((len(frequencies),n,n,(rank+1)**2,(rank+1)**2)),
+                input_rank=rank, provenance=PROV,
+                truncation=(lw.RETAIN_RANK4 if retain else lw.TRUNCATE_RANK4) if rank == 4 else None)
+
+
+def test_static_zero_and_metadata():
+    r = lw.supplied_nonlocal_properties(**request(2))
+    assert r.raw_local.shape == r.raw_global.shape == (1,2,15,15)
+    assert r.atomic_scalars.shape == (1,2,3)
+    assert r.global_dipoles.shape == (1,2,3,3)
+    assert not np.any(r.raw_local.array)
+    assert len(r.frequency_diagnostics) == 1
+    assert r.frequency_diagnostics[0].residuals.maximum == 0
+    # Four algorithm-controlled residuals, plus the supplied input's sum-rule defect
+    # and the two names that reproduce it after localization.
+    assert tuple(r.frequency_diagnostics[0].residuals.__dataclass_fields__) == (
+        'off_site', 'charge_sum', 'reciprocity', 'molecular_sum', 'local_charge',
+        'input_sum_rule', 'charge_sum_transport')
+    assert r.frequency_diagnostics[0].residuals.algorithm_maximum == 0
+    m = r.metadata
+    assert (m.mode,m.tensor_origin,m.wavefunction_status,m.refinement_status) == ('supplied_nonlocal','Psi4_LW','no_native_wavefunction','no_PFIT')
+    assert m.production_postcondition_passed and m.residual_tolerance == 1e-6
+    assert m.numerical_agreement is None and not m.native_verified
+    assert m.discarded_rank4_entry_count == 0
+
+
+def test_analytic_charge_flow():
+    q = request(2)
+    q['origins'][1] = [.2,-.3,.4]
+    q['bonds'] = [[0,1]]
+    q['tensors'][0,:,:,0,0] = [[-2,2],[2,-2]]
+    r = lw.supplied_nonlocal_properties(**q)
+    a = r.raw_global.array[0]
+    np.testing.assert_allclose(a[0,0,:4], [-.16,-.08,.12,-.038], atol=1e-14,rtol=0)
+    assert a[1,0,3] == pytest.approx(.038, abs=1e-14)
+    np.testing.assert_allclose(a[:,14,14], -.000050625, atol=1e-14,rtol=0)
+    assert r.frequency_diagnostics[0].residuals.maximum < 1e-10
+    assert any('indefinite' in w for w in r.warnings)
+    np.testing.assert_allclose(r.global_dipoles.array[0,0], -np.outer([.2,-.3,.4],[.2,-.3,.4]), atol=1e-14)
+
+
+def test_frames_scalars_asymmetry_and_ownership():
+    q = request()
+    q['frames'] = [[[0.,-1.,0.],[1.,0.,0.],[0.,0.,1.]]]
+    q['tensors'][0,0,0,1:4,1:4] = [[3,1e-8,0],[0,6,0],[0,0,9]]
+    q['tensors'] = q['tensors'].tolist()  # deeply nested caller ownership
+    before = np.array(q['tensors'])
+    r = lw.supplied_nonlocal_properties(**q)
+    np.testing.assert_array_equal(r.raw_input.array, before)
+    np.testing.assert_array_equal(r.raw_global.array[0,0], before[0,0,0,1:,1:])
+    assert r.raw_global.array[0,0,0,1] == 1e-8 and r.raw_global.array[0,0,1,0] == 0
+    d = np.asarray(psi4.core.isa_multipole_rotation(3,q['frames'][0]))[1:,1:]
+    np.testing.assert_allclose(r.raw_local.array[0,0], d.T@before[0,0,0,1:,1:]@d, atol=1e-14)
+    np.testing.assert_array_equal(r.atomic_scalars.array[0,0], [6,0,0])
+    np.testing.assert_array_equal(r.global_dipoles.array[0,0], [[6,0,0],[0,9,0],[1e-8,0,3]])
+    q['labels'][0] = 'changed'; q['frames'][0][0][0] = 999
+    q['origins'][0,0] = 999; q['frequencies'][0] = 9; q['tensors'][0][0][0][1][1] = 999
+    for field in ('raw_input','raw_global','raw_local','atomic_scalars','global_dipoles','origins','frames'):
+        s = getattr(r,field)
+        copy = s.array; copy.fill(100)
+        assert not np.all(s.array == 100)
+    np.testing.assert_array_equal(r.raw_input.array,before)
+    assert r.labels == ('S0',) and r.frequencies == (0.,)
+    assert any('asymmetric' in w for w in r.warnings)
+    with pytest.raises(FrozenInstanceError): r.labels = ('bad',)
+    with pytest.raises(FrozenInstanceError): r.provenance.producer = 'bad'
+    with pytest.raises(TypeError): r.raw_input.data[0] = 1
+    with pytest.raises(FrozenInstanceError): r.frequency_diagnostics[0].residuals.off_site = 10
+
+
+@pytest.mark.parametrize('fault', ['empty_labels','duplicate_labels','bad_label','label_string','rank2','rank5','rank_bool',
+    'missing_truncation','extra_truncation','empty_freq','negative_freq','nan_freq','unordered_freq','duplicate_freq',
+    'freq_shape','tensor_shape','tensor_nan','tensor_complex','tensor_strings','ragged_tensor',
+    'origin_shape','origin_nan','frame_shape','frame_nan','frame_reflection','frame_shear',
+    'self_edge','duplicate_edge','reverse_edge','range_edge','negative_edge','bool_edge','edge_shape',
+    'no_provenance','bad_policy','too_many_sites','too_many_frequencies','input_budget','native_budget','generator',
+    'retain_without_limit4','limit4_without_retain'])
+def test_invalid_boundaries(fault):
+    q = request(2)
+    if fault == 'empty_labels': q['labels'] = []
+    elif fault == 'duplicate_labels': q['labels'] = ['S','S']
+    elif fault == 'bad_label': q['labels'][0] = ' '
+    elif fault == 'label_string': q['labels'] = 'SS'
+    elif fault.startswith('rank'): q['input_rank'] = {'rank2':2,'rank5':5,'rank_bool':True}[fault]
+    elif fault == 'missing_truncation': q = request(rank=4); q['truncation'] = None
+    elif fault == 'extra_truncation': q['truncation'] = lw.TRUNCATE_RANK4
+    elif fault == 'retain_without_limit4': q = request(rank=4,retain=True)
+    elif fault == 'limit4_without_retain': q = request(rank=4); q['localization_rank_limit'] = 4
+    elif fault == 'empty_freq': q['frequencies'] = []
+    elif fault == 'negative_freq': q['frequencies'] = [-1.]
+    elif fault == 'nan_freq': q['frequencies'] = [np.nan]
+    elif fault == 'unordered_freq': q['frequencies'] = [1.,0.]
+    elif fault == 'duplicate_freq': q['frequencies'] = [0.,0.]
+    elif fault == 'freq_shape': q['frequencies'] = [[0.]]
+    elif fault == 'tensor_shape': q['tensors'] = np.zeros((1,4,16,16))
+    elif fault == 'tensor_nan': q['tensors'][0,0,0,0,0] = np.nan
+    elif fault == 'tensor_complex': q['tensors'] = q['tensors'].astype(complex)
+    elif fault == 'tensor_strings': q['tensors'] = q['tensors'].astype(str).tolist()
+    elif fault == 'ragged_tensor': q['tensors'] = q['tensors'].tolist(); q['tensors'][0][0][0].pop()
+    elif fault == 'origin_shape': q['origins'] = [[0,0,0]]
+    elif fault == 'origin_nan': q['origins'][0,0] = np.nan
+    elif fault.startswith('frame'):
+        q['frames'] = np.tile(np.eye(3),(2,1,1))
+        if fault == 'frame_shape': q['frames'] = np.eye(3)
+        elif fault == 'frame_nan': q['frames'][0,0,0] = np.nan
+        elif fault == 'frame_reflection': q['frames'][0,0,0] = -1
+        elif fault == 'frame_shear': q['frames'][0,0,1] = .01
+    elif fault.endswith('edge') or fault == 'edge_shape':
+        q = request(3)
+        q['bonds'] = {'self_edge':[[0,0]],'duplicate_edge':[[0,1],[0,1]],'reverse_edge':[[0,1],[1,0]],
+                      'range_edge':[[0,3]],'negative_edge':[[-1,0]],'bool_edge':[[False,1]],
+                      'edge_shape':[[0,1,2]]}[fault]
+    elif fault == 'no_provenance': q['provenance'] = {'producer':'fake'}
+    elif fault == 'bad_policy': q['residual_policy'] = 'arbitrary_1e-3'
+    elif fault == 'too_many_sites': q['labels'] = ['x']*257
+    elif fault == 'too_many_frequencies': q['frequencies'] = [0]*4097
+    # 200 bondless sites still clear the (rank4-wide) native workspace mirror at
+    # 799046400 of 805306368 bytes, so this fault still reaches and trips the 64MiB
+    # INPUT guard, as it did before the widening; the reason has not silently moved.
+    elif fault == 'input_budget': q['labels'] = [str(i) for i in range(200)]; q['frequencies'] = [0,1]
+    # The complete 256-site graph exceeded the 768MiB core budget at the rank3 width
+    # and exceeds it by more at the rank4 width. The budget is NOT raised to keep
+    # the old admissible site count: it falls from256 to about174 and is reported.
+    elif fault == 'native_budget':
+        q['labels'] = [str(i) for i in range(256)]; q['bonds'] = [[i,j] for i in range(256) for j in range(i+1,256)]
+    elif fault == 'generator': q['frequencies'] = iter([0.])
+    with pytest.raises(ValueError): lw.supplied_nonlocal_properties(**q)
+
+
+@pytest.mark.parametrize('field,value', [('source_name',''),('source_sha256','bad'),('producer',' '),('description',[])])
+def test_provenance_required(field,value):
+    q = dict(source_name='s',source_sha256='0'*64,producer='p',description='d'); q[field] = value
+    with pytest.raises(ValueError): lw.Provenance(**q)
+
+
+def test_resource_guard_before_materialization():
+    class Exploding(list):
+        def __iter__(self): raise AssertionError('should not materialize tensors')
+    q = request(); q['labels'] = [str(i) for i in range(200)]; q['frequencies'] = [0,1]
+    q['tensors'] = Exploding()
+    with pytest.raises(ValueError,match='resource'): lw.supplied_nonlocal_properties(**q)
+
+
+#: Rank-4 entries a three-site truncating request drops at the rank-3 boundary:
+#: nine ordered site pairs times the 25x25 - 16x16 components outside rank 3.
+#: The archived water reference reports exactly this count.
+THREE_SITE_DISCARDED_RANK4 = 9 * (25 * 25 - 16 * 16)
+
+
+def synthetic_rank4(retain=False):
+    """A three-site rank-4 request with real weight at every rank, no fixture.
+
+    The rank-limit theorems below are statements about the driver, not about any
+    particular molecule: they only need a supplied response that is nonvacuous at
+    ranks 2, 3 and 4 so the restriction has something to discard. Building one
+    analytically keeps them in the committed tree.
+    The geometry is water-shaped and the bond graph connected so LW has a real
+    flow problem to solve; the tensor itself is deliberately synthetic and must
+    never be quoted as a polarizability.
+    """
+    n, nc = 3, 25
+    i = np.arange(nc)
+    base = np.cos(i[:, None] + 2.0 * i[None, :]) * (1.0 + i[None, :] % 3)
+    tensors = np.zeros((1, n, n, nc, nc))
+    for a in range(n):
+        for b in range(n):
+            tensors[0, a, b] = base * (1.0 + 0.5 * a + 0.25 * b)
+    # Supplied responses are reciprocal: T[a,b] == T[b,a].T.
+    tensors[0] = 0.5 * (tensors[0] + tensors[0].transpose(1, 0, 3, 2))
+    return dict(labels=['O', 'H1', 'H2'],
+                origins=[[0., 0., 0.], [0., 1.43, 1.1], [0., -1.43, 1.1]],
+                frames=np.array([np.eye(3)] * n), bonds=[[0, 1], [0, 2]],
+                frequencies=[0.], input_rank=4, provenance=PROV, tensors=tensors,
+                truncation=lw.RETAIN_RANK4 if retain else lw.TRUNCATE_RANK4)
+
+
+def test_production_rejects_a_supplied_model_that_does_not_conserve_charge():
+    """No fallback: a nonconserving supplied response fails the postcondition."""
+    with pytest.raises(RuntimeError, match='postcondition.*charge-sum=.*local-charge='):
+        lw.supplied_nonlocal_properties(**synthetic_rank4())
+
+
+def test_localization_rank_limit_is_recorded_and_defaults_to_three():
+    """The declared localization rank reaches Metadata, with what it discarded."""
+    full = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
+                                           **synthetic_rank4())
+    assert full.metadata.localization_rank_limit == 3
+    # This request is a rank4 input discarded at the rank3 boundary. The drop
+    # happens in the driver, before core is handed a block, so core's own
+    # measurement is structurally blind to it -- but a declared discard that
+    # reports zero reads as "nothing was thrown away", which is the opposite of
+    # what happened. The reported magnitude is the real one, and rank3 is not
+    # exempted from announcing the restriction just because it is the default.
+    assert full.metadata.discarded_rank4_entry_count == THREE_SITE_DISCARDED_RANK4
+    truncated = full.metadata.localization_truncated_input_maxabs
+    assert truncated > 1.0
+    declared = [w for w in full.warnings if 'localization declared at rank' in w]
+    assert len(declared) == 1
+    assert 'ranks 4..4 are absent by declaration' in declared[0]
+    assert f'{truncated:.5g}' in declared[0]
+    for limit in (1, 2):
+        m = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
+                                            localization_rank_limit=limit, **synthetic_rank4())
+        assert m.metadata.localization_rank_limit == limit
+        assert m.metadata.localization_truncated_input_maxabs == truncated
+        # A declared restriction is announced on the record, not left implicit.
+        declared = [w for w in m.warnings if 'localization declared at rank' in w]
+        assert len(declared) == 1
+        assert f'ranks {limit + 1}..4 are absent by declaration' in declared[0]
+        assert 'absent by declaration, not computed and small' in declared[0]
+        assert 'cannot change any number at those ranks' in declared[0]
+
+
+def test_localization_rank_limit_restricts_the_model_without_moving_it():
+    """A declared limit yields the rank-3 model restricted, not a re-fit one.
+
+    Localizing under the restriction and localizing at rank3 then reading only
+    the low components are the SAME computation, because multipole translation is
+    rank-raising: a component pair above the limit writes only above it. So the
+    surviving scalars are bitwise equal, and the ones above the limit are zero by
+    declaration. `== 0.0` is deliberate; a tolerance here would hide the point.
+    """
+    full = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
+                                           **synthetic_rank4())
+    reference = np.asarray(full.atomic_scalars.array)
+    for limit in (1, 2):
+        m = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
+                                            localization_rank_limit=limit, **synthetic_rank4())
+        scalars = np.asarray(m.atomic_scalars.array)
+        assert scalars.shape == reference.shape
+        assert (scalars[:, :, :limit] == reference[:, :, :limit]).all()
+        assert (scalars[:, :, limit:] == 0.0).all()
+    # The restriction is nonvacuous: rank2 and3 carry real weight here.
+    assert abs(reference[:, :, 1]).max() > 1.0
+    assert abs(reference[:, :, 2]).max() > 1.0
+
+
+def test_rank4_localization_is_a_different_model_and_exactly_consistent():
+    """Limit4 localizes the retained rank4 rows; limit3 is its leading restriction.
+
+    These are two MODELS, not two accuracies of one: the limit4 result carries a
+    rank4 local tensor the limit3 model does not have at all, and the two may never
+    be quoted as agreeing. What they ARE is exactly consistent, and that is the
+    theorem stated in lw_localization.h: multipole translation is rank-raising, so
+    no rank4 component can write into a rank<=3 one. `== 0.0` is deliberate; a
+    tolerance would hide the point.
+    """
+    r3 = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
+                                         **synthetic_rank4())
+    r4 = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',
+                                         localization_rank_limit=4,
+                                         **synthetic_rank4(retain=True))
+    assert r3.raw_local.shape == (1,3,15,15)
+    assert r4.raw_local.shape == (1,3,24,24)
+    a3, a4 = np.asarray(r3.raw_local.array), np.asarray(r4.raw_local.array)
+    assert (a4[...,:15,:15] == a3).all()
+    assert (np.asarray(r4.atomic_scalars.array)[...,:3] ==
+            np.asarray(r3.atomic_scalars.array)).all()
+    # Nonvacuous: the retained rank4 rows carry real weight, and the rank4 local
+    # scalar exists only in the limit4 model.
+    assert np.abs(a4[...,15:,15:]).max() > 1.0
+    assert np.asarray(r4.atomic_scalars.array).shape == (1,3,4)
+    assert np.abs(np.asarray(r4.atomic_scalars.array)[:,:,3]).min() > 1.0
+    # The record says which model this is, on both the metadata and the warnings.
+    assert r4.metadata.localization_rank_limit == 4
+    assert r4.metadata.output_ranks == (1,2,3,4)
+    assert r4.metadata.local_components[-1] == '44s'
+    assert 'rank1..4 local' in r4.metadata.coverage
+    assert 'DIFFERENT model' in r4.metadata.coverage
+    # Retained rank4 discards nothing at the boundary; the truncating model does.
+    assert r4.metadata.discarded_rank4_entry_count == 0
+    assert r3.metadata.discarded_rank4_entry_count == THREE_SITE_DISCARDED_RANK4
+    assert r4.metadata.truncation == lw.RETAIN_RANK4
+    # What r3 discarded is the same rank4 weight asserted nonvacuous above, and
+    # its magnitude is reported rather than left at the boundary unmeasured.
+    assert r4.metadata.localization_truncated_input_maxabs == 0.0
+    assert r3.metadata.localization_truncated_input_maxabs > 1.0
+    truncated = [w for w in r3.warnings if 'localization declared at rank 3' in w]
+    assert len(truncated) == 1
+    assert not any('localization declared at rank 4' in w for w in r4.warnings)
+    declared = [w for w in r4.warnings if 'localization declared at rank4' in w]
+    assert len(declared) == 1
+    assert 'must never be quoted as agreeing' in declared[0]
+
+
+def test_rank4_truncation_is_exact_and_finite_required():
+    q = request(rank=4)
+    q['tensors'][0,0,0,1:4,1:4] = np.eye(3)*2
+    q['tensors'][...,16:,:] = 321
+    q['tensors'][...,:,16:] = 654
+    r = lw.supplied_nonlocal_properties(**q)
+    np.testing.assert_array_equal(r.raw_global.array[0,0],q['tensors'][0,0,0,1:16,1:16])
+    assert r.metadata.discarded_rank4_entry_count == 369
+    q['tensors'][...,24,24] = np.nan
+    with pytest.raises(ValueError,match='finite'): lw.supplied_nonlocal_properties(**q)
+
+
+def test_normal_package_import_without_staging():
+    # Exercise normal Python package resolution with source added to the installed
+    # package search path in memory only; no __init__, install, or staging writes.
+    import importlib
+    package = importlib.import_module('psi4.driver.procrouting')
+    name = 'psi4.driver.procrouting.isapol_lw'
+    old_path = package.__path__
+    previous = sys.modules.pop(name, None)
+    prior_attribute = getattr(package, 'isapol_lw', None)
+    try:
+        package.__path__ = [str(MODULE.parent)] + list(old_path)
+        module = importlib.import_module(name)
+        assert Path(module.__file__).resolve() == MODULE
+        q = request()
+        q['provenance'] = module.Provenance('s','0'*64,'test','synthetic')
+        assert module.supplied_nonlocal_properties(**q).metadata.tensor_origin == 'Psi4_LW'
+    finally:
+        package.__path__ = old_path
+        sys.modules.pop(name,None)
+        if previous is not None: sys.modules[name] = previous
+        if prior_attribute is None: delattr(package, 'isapol_lw')
+        else: package.isapol_lw = prior_attribute
+
+
+def test_runtime_has_no_fixture_io_or_executables(monkeypatch):
+    """The driver reads no file and spawns nothing once it has its arrays.
+
+    The guarantee is about the driver, so it is asserted here on a request
+    built in memory.
+    """
+    import builtins
+    import subprocess
+    q = synthetic_rank4()  # arrays materialized before the IO guard
+    def forbidden(*args,**kwargs): raise AssertionError('runtime IO/executable forbidden')
+    monkeypatch.setattr(builtins,'open',forbidden)
+    monkeypatch.setattr(Path,'open',forbidden)
+    monkeypatch.setattr(subprocess,'Popen',forbidden)
+    assert lw.supplied_nonlocal_properties(**request()).metadata.production_postcondition_passed
+    with pytest.raises(RuntimeError, match='postcondition'):
+        lw.supplied_nonlocal_properties(**q)
+
+
+def test_no_generic_tolerance_and_no_asymmetry_repair():
+    with pytest.raises(TypeError): lw.supplied_nonlocal_properties(**request(),residual_tolerance=1e-3)
+    q = request(); q['tensors'][0,0,0,1,2] = 2e-6
+    with pytest.raises(RuntimeError): lw.supplied_nonlocal_properties(**q)
+
+
+def test_nested_record_constructor_snapshots():
+    from dataclasses import replace
+    r = lw.supplied_nonlocal_properties(**request())
+    bonds = [[0,1]]; warnings = ['test']
+    changed = replace(r, bonds=bonds, warnings=warnings)
+    bonds[0][0] = 5; warnings[0] = 'changed'
+    assert changed.bonds == ((0,1),) and changed.warnings == ('test',)
+
+
+def test_disconnected_inconsistent_flow_fails_no_fallback():
+    q = request(2); q['tensors'][0,:,:,0,0] = [[-2,2],[2,-2]]
+    with pytest.raises(RuntimeError): lw.supplied_nonlocal_properties(**q)
+
+
+@pytest.mark.parametrize('bad',[0,5,True,None])
+def test_localization_rank_limit_is_validated(bad):
+    q = request(1,[0.])
+    with pytest.raises(ValueError,match='localization_rank_limit'):
+        lw.supplied_nonlocal_properties(localization_rank_limit=bad,**q)
