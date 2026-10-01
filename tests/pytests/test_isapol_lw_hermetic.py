@@ -189,7 +189,7 @@ def test_recorded_asymmetric_pair_survives_the_parser(extractor):
     for (section, row, col), printed in ASYMMETRIC_PAIR.items():
         assert sections[section]['values'][row][col] == printed
     upper, lower = (float(ASYMMETRIC_PAIR[key]) for key in ((0, 0, 2), (0, 2, 0)))
-    assert upper != lower and abs(upper - lower) == pytest.approx(1.3e-15, rel=0.1)
+    assert upper != lower and abs(upper - lower) == pytest.approx(1.3e-14, rel=0.1, abs=0)
 
 
 def test_rank3_rotation_of_the_recorded_frames_is_exact():

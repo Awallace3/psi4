@@ -11,6 +11,7 @@ element table's single-precision Fortran literals, and gfortran contracting
 Reference data lives in data_isapol/; its README says how to regenerate it.
 """
 
+import math
 import pathlib
 
 import numpy as np
@@ -291,6 +292,12 @@ def test_casimir_grid_rejects_bad_n_freq():
             psi4.core.CasimirGrid(n)
     with pytest.raises(RuntimeError):
         psi4.core.CasimirGrid(10).omega(11)
+
+
+def test_casimir_grid_rejects_bad_omega0():
+    for omega0 in (0.0, -0.3, math.nan, math.inf, -math.inf):
+        with pytest.raises(RuntimeError, match="omega0"):
+            psi4.core.CasimirGrid(10, omega0)
 
 
 def test_grid_rejects_bad_atom_index(h2o):

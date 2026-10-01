@@ -76,7 +76,7 @@ class CasimirGrid {
     ///   frequencies; even, in [2, kMaxCasimirFrequencies].  The grid then holds
     ///   `n_freq + 1` frequencies, index 0 being the static point, so a caller
     ///   iterating the nodes wants `k = 0 ... n_freq()` inclusive.
-    /// @param omega0 quadrature scale in hartree
+    /// @param omega0 quadrature scale in hartree; finite and positive
     explicit CasimirGrid(int n_freq, double omega0 = kCasimirOmega0);
 
     int n_freq() const { return n_freq_; }

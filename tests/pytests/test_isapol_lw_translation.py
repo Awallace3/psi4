@@ -13,7 +13,7 @@ from psi4 import core
 WORST_DISPLACEMENT = [0.5292945859739524, 0.9176548842614971, -0.37938272178283206]
 
 #: Column 0 of that case is the physically meaningful selection: translating a
-#: unit charge writes the regular solid harmonics R_lm(-d) into every component,
+#: unit charge writes the regular solid harmonics R_lm(d) into every component,
 #: so these 16 numbers exercise all four ranks at once.  Literals are the old
 #: C++ reference values, which agree with the fixture to 4.4e-16.
 WORST_CHARGE_COLUMN = [

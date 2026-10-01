@@ -327,11 +327,11 @@ def test_lw_component_pair_skip_stays_absolute_at_its_boundary():
     # zero instead of being left at its full 1e-7.
     boundary = [t for t in _transfer_values(candidate_equal.transfers) if t[2:4] == (1, 1)]
     assert len(boundary) == 2
-    assert all(abs(t[5]) == pytest.approx(2.5e-8, rel=1.0e-12) for t in boundary)
+    assert all(abs(t[5]) == pytest.approx(2.5e-8, rel=1.0e-12, abs=0) for t in boundary)
     assert all(abs(t[5]) < 1.0e-7 for t in boundary)
     assert candidate_equal.omitted_transfer_count == 0
     assert candidate_equal.refined_pairs[1].get(1, 1) == pytest.approx(0.0, abs=1.0e-20)
-    assert candidate_below.refined_pairs[1].get(1, 1) == pytest.approx(1.0e-7, rel=1.0e-12)
+    assert candidate_below.refined_pairs[1].get(1, 1) == pytest.approx(1.0e-7, rel=1.0e-12, abs=0)
 
 
 def test_lw_relative_transfer_cut_is_invariant_under_a_uniform_input_scale():
@@ -379,8 +379,8 @@ def test_lw_relative_transfer_cut_is_invariant_under_a_uniform_input_scale():
         assert max(_residual_values(result.residuals)) < 1.0e-8
         # amplitudes track the input scale exactly
         amplitudes = [abs(transfer[5]) for transfer in _transfer_values(result.transfers)]
-        assert max(amplitudes) == pytest.approx(0.25 * scale, rel=1.0e-12)
-        assert min(amplitudes) == pytest.approx(5.859375e-03 * scale, rel=1.0e-12)
+        assert max(amplitudes) == pytest.approx(0.25 * scale, rel=1.0e-12, abs=0)
+        assert min(amplitudes) == pytest.approx(5.859375e-03 * scale, rel=1.0e-12, abs=0)
 
     # At the smallest scale the retained transfers are themselves below the
     # absolute constant the source still names: an absolute cut would have
@@ -388,7 +388,7 @@ def test_lw_relative_transfer_cut_is_invariant_under_a_uniform_input_scale():
     # highest Casimir node lost 18 of its 144 charge-charge transfers.
     smallest = [abs(transfer[5]) for transfer in _transfer_values(results[-1].transfers)]
     assert min(smallest) < 1.0e-7
-    assert min(smallest) == pytest.approx(5.859375e-08, rel=1.0e-12)
+    assert min(smallest) == pytest.approx(5.859375e-08, rel=1.0e-12, abs=0)
 
     # `std::min` keeps the relative cut from ever being looser: at unit scale
     # the two coincide, so nothing the absolute cut retained is now dropped.
