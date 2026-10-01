@@ -37,6 +37,21 @@ from ...p4util import solvers
 from .sapt_util import print_sapt_var
 import einsums as ein
 import einsums.graph as cg
+import einsums.rc
+
+# Turn off einsums' profiler unless the user chose a setting (``None`` is
+# einsums' "unset").  Builds ship with EINSUMS_WITH_PROFILER=ON and record by
+# default; the batch-dot einsums in fdisp0 open one zone per (a,b) pair, and the
+# single consumer thread draining them slows the MKL GEMMs that follow.  At
+# protein83 that is 42 ms of a 184 ms dispersion block.  The runtime reads
+# einsums.rc once, on first use, so this must run at import.  Leave both alone
+# when ``--einsums:profile:*`` was given on the command line: einsums rejects an
+# rc setting and a flag that disagree.
+if not any(o.startswith("--einsums:profile:") for o in getattr(ein, "cli_options", [])):
+    if einsums.rc.profile_disable is None:
+        einsums.rc.profile_disable = True
+    if einsums.rc.profile_report is None:
+        einsums.rc.profile_report = False
 
 
 # --------------------------------------------------------------------------
