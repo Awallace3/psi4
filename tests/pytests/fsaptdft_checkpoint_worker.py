@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import traceback
@@ -118,6 +119,42 @@ _SCENARIO_OPTIONS = {
     },
     "disp": {"sapt_dft_do_ddft": False, "sapt_dft_do_disp": True},
     "lrc": {"sapt_dft_functional": "wb97x", "dft_radial_points": 50, "dft_spherical_points": 110},
+    # The production specs of the checkpointing use case. A value of None drops
+    # the base option, so GRAC runs instead of using the pinned 0.0 shifts.
+    # sapt(dft)-d4(i): delta HF supplies induction and GRAC runs the full ladder.
+    "prod_d4i": {
+        "sapt_dft_functional": "pbe0",
+        "sapt_dft_do_ddft": False,
+        "sapt_dft_induction_type": "NONE",
+        "sapt_dft_grac_compute": "ITERATIVE",
+        "sapt_dft_grac_shift_a": None,
+        "sapt_dft_grac_shift_b": None,
+    },
+    # sapt0-d4(i): the same route with an HF "functional", so no GRAC and the
+    # HF monomers double as the SAPT monomers.
+    "sapt0_d4i": {
+        "sapt_dft_functional": "hf",
+        "sapt_dft_do_ddft": False,
+        "sapt_dft_induction_type": "NONE",
+        "sapt_dft_grac_shift_a": None,
+        "sapt_dft_grac_shift_b": None,
+    },
+    "grac_shift_only": {
+        "sapt_dft_functional": "pbe0",
+        "sapt_dft_do_ddft": False,
+        "sapt_dft_grac_compute": "SINGLE",
+        "sapt_dft_grac_shift_only": True,
+        "sapt_dft_grac_shift_a": None,
+        "sapt_dft_grac_shift_b": None,
+    },
+    # Monomer B's shift pinned, so only monomer A runs GRAC.
+    "grac_pinned_b": {
+        "sapt_dft_functional": "pbe0",
+        "sapt_dft_do_ddft": False,
+        "sapt_dft_grac_compute": "SINGLE",
+        "sapt_dft_grac_shift_a": None,
+        "sapt_dft_grac_shift_b": 0.05,
+    },
 }
 
 
@@ -149,12 +186,15 @@ def _configure(scenario, name):
     if "-d3" in name.lower() or "-d4" in name.lower():
         options["sapt_dft_functional"] = "pbe0"
     options.update(_SCENARIO_OPTIONS.get(scenario, {}))
+    options = {key: value for key, value in options.items() if value is not None}
     psi4.set_options(options)
     sapt_dimer, monomer_a, monomer_b = proc_util.prepare_sapt_molecule(mol, "dimer")
     return mol, {
         "dimer": _molecule_signature(sapt_dimer),
         "monomer_a": _molecule_signature(monomer_a),
         "monomer_b": _molecule_signature(monomer_b),
+        "monomer_a_charge": sapt_dimer.extract_subsets(1).molecular_charge(),
+        "monomer_b_charge": sapt_dimer.extract_subsets(2).molecular_charge(),
     }
 
 
@@ -236,6 +276,8 @@ def _install_restart_guards(
         "SAPT(DFT):exch": "exch",
         "SAPT(DFT):ind": "ind",
         "SAPT(DFT):disp": "disp",
+        "SAPT(DFT):GRAC Shift Monomer A": "grac_monomer_a",
+        "SAPT(DFT):GRAC Shift Monomer B": "grac_monomer_b",
     }
 
     def boom(message):
@@ -304,7 +346,14 @@ def _install_restart_guards(
         molecule = kwargs.get("molecule")
         if molecule is None:
             boom("run_scf called without molecule during checkpoint restart")
-        stage = _classify_run_scf_stage(molecule)
+        if current_context["name"] in ("grac_monomer_a", "grac_monomer_b"):
+            # GRAC rebuilds its molecules, so tell neutral from electron-removed by charge.
+            grac_stage = current_context["name"]
+            neutral_charge = molecule_signatures[f"monomer_{grac_stage[-1]}_charge"]
+            stage = f"{grac_stage}_neutral" if molecule.molecular_charge() == neutral_charge else grac_stage
+            summary.setdefault("grac_scf_calls", []).append(stage)
+        else:
+            stage = _classify_run_scf_stage(molecule)
         if stage in completed_stages:
             boom(f"run_scf replayed completed checkpoint stage {stage}")
         current_stage["name"] = stage
@@ -530,8 +579,12 @@ def run(
     forbid_fsapt_stages=None,
     qcschema_protocols=None,
     qcschema_extras=None,
+    kill_after=None,
 ):
     """Run this worker in a fresh interpreter; return (CompletedProcess, summary dict).
+
+    With ``kill_after`` the worker SIGKILLs itself after committing that stage and
+    the summary is None.
 
     Tests drive SAPT(DFT) through here rather than in-process so a restart cannot be
     satisfied by Psi4 state left in memory by an earlier run.
@@ -547,6 +600,7 @@ def run(
             command.append(flag)
     for flag, value in [
         ("--stop-after", stop_after),
+        ("--kill-after", kill_after),
         ("--qcschema-protocols-json", None if qcschema_protocols is None else json.dumps(qcschema_protocols)),
         ("--qcschema-extras-json", None if qcschema_extras is None else json.dumps(qcschema_extras)),
     ]:
@@ -559,6 +613,8 @@ def run(
 
     completed = subprocess.run(command, check=False, capture_output=True, text=True, env=dict(os.environ))
     output_lines = [line for line in completed.stdout.splitlines() if line.strip()]
+    if kill_after is not None and completed.returncode == -signal.SIGKILL:
+        return completed, None
     if not output_lines:
         raise AssertionError(completed.stderr or completed.stdout or "checkpoint worker produced no output")
     return completed, json.loads(output_lines[-1])
@@ -573,7 +629,8 @@ def main():
     parser.add_argument(
         "--scenario",
         default="default",
-        choices=["default", "disp", "localization", "fsapt_einsums", "fsapt_fisapt", "lrc", "raw_identity"],
+        choices=["default", "disp", "localization", "fsapt_einsums", "fsapt_fisapt", "lrc", "raw_identity",
+                 "prod_d4i", "sapt0_d4i", "grac_shift_only", "grac_pinned_b"],
     )
     parser.add_argument("--guard-jk", action="store_true")
     parser.add_argument("--count-jk-builds", action="store_true")
@@ -581,6 +638,7 @@ def main():
     parser.add_argument("--capture-fsapt", action="store_true")
     parser.add_argument("--forbid-banner", action="append", default=[])
     parser.add_argument("--forbid-fsapt-stage", action="append", default=[])
+    parser.add_argument("--kill-after", help="SIGKILL this process right after committing the stage")
     parser.add_argument("--qcschema-protocols-json")
     parser.add_argument("--qcschema-extras-json")
     args = parser.parse_args()
@@ -606,6 +664,17 @@ def main():
         )
     if args.forbid_fsapt_stage:
         _install_fsapt_guards(args.forbid_fsapt_stage)
+    if args.kill_after:
+        # A walltime or OOM kill: no exception handler, no lock release, no
+        # status update. The manifest commit is the last thing that happens.
+        original_commit = saptdft_checkpoint.CheckpointSession.commit
+
+        def commit_then_die(session, stage, *commit_args, **commit_kwargs):
+            original_commit(session, stage, *commit_args, **commit_kwargs)
+            if stage == args.kill_after:
+                os.kill(os.getpid(), signal.SIGKILL)
+
+        saptdft_checkpoint.CheckpointSession.commit = commit_then_die
 
     kwargs = {"molecule": mol}
     if args.checkpoint_dir:

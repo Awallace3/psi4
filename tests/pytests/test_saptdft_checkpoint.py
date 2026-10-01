@@ -21,7 +21,7 @@ import numpy as np
 import psi4
 import pytest
 import qcelemental as qcel
-from addons import using
+from addons import using, uusing
 from fsaptdft_checkpoint_worker import run as _run_fsaptdft_checkpoint_worker
 from psi4 import compare_values
 from psi4 import core
@@ -61,6 +61,37 @@ _CHECKPOINT_SCENARIOS = {
     "default": {},
     "disp": {"sapt_dft_do_ddft": False, "sapt_dft_do_disp": True},
     "lrc": {"sapt_dft_functional": "wb97x"},
+    # None drops the base option (the pinned GRAC shifts), as in the worker.
+    "prod_d4i": {
+        "sapt_dft_functional": "pbe0",
+        "sapt_dft_do_ddft": False,
+        "sapt_dft_induction_type": "NONE",
+        "sapt_dft_grac_compute": "ITERATIVE",
+        "sapt_dft_grac_shift_a": None,
+        "sapt_dft_grac_shift_b": None,
+    },
+    "sapt0_d4i": {
+        "sapt_dft_functional": "hf",
+        "sapt_dft_do_ddft": False,
+        "sapt_dft_induction_type": "NONE",
+        "sapt_dft_grac_shift_a": None,
+        "sapt_dft_grac_shift_b": None,
+    },
+    "grac_shift_only": {
+        "sapt_dft_functional": "pbe0",
+        "sapt_dft_do_ddft": False,
+        "sapt_dft_grac_compute": "SINGLE",
+        "sapt_dft_grac_shift_only": True,
+        "sapt_dft_grac_shift_a": None,
+        "sapt_dft_grac_shift_b": None,
+    },
+    "grac_pinned_b": {
+        "sapt_dft_functional": "pbe0",
+        "sapt_dft_do_ddft": False,
+        "sapt_dft_grac_compute": "SINGLE",
+        "sapt_dft_grac_shift_a": None,
+        "sapt_dft_grac_shift_b": 0.05,
+    },
     "localization": {
         "sapt_dft_do_dhf": False,
         "sapt_dft_do_ddft": False,
@@ -132,7 +163,9 @@ def _saptdft_checkpoint_identity_inputs(molecule, function_kwargs=None, method="
 def _build_checkpoint_identity(*, name="sapt(dft)", options=None, molecule=None, function_kwargs=None):
     """Configure options and return (molecule, function_kwargs, atomic_input, identity)."""
     core.clean_options()
-    psi4.set_options(options if options is _IDENTITY_OPTIONS else {**_CHECKPOINT_BASE_OPTIONS, **(options or {})})
+    if options is not _IDENTITY_OPTIONS:
+        options = {**_CHECKPOINT_BASE_OPTIONS, **(options or {})}
+    psi4.set_options({key: value for key, value in options.items() if value is not None})
     molecule = molecule if molecule is not None else _saptdft_checkpoint_molecule()
     function_kwargs = (
         function_kwargs
@@ -200,7 +233,7 @@ def _seed_checkpoint(mod, path, identity, **commit):
 # driver computes -D3/-D4 before the scalar SAPT terms and finishes the F-SAPT
 # partition before dispersion.
 _EXECUTION_ORDER = (
-    "grac_monomer_a", "grac_monomer_b",
+    "grac_monomer_a_neutral", "grac_monomer_a", "grac_monomer_b_neutral", "grac_monomer_b",
     "hf_dimer_scf", "hf_monomer_a_scf", "hf_monomer_b_scf",
     "hf_sapt_elst", "hf_sapt_exch", "hf_sapt_ind",
     "dimer_localization_scf",
@@ -217,6 +250,7 @@ _EXECUTION_ORDER = (
 # Shorthand for the stage groups that travel together, so a selection can be
 # written as one readable string instead of a fifteen-element list.
 _STAGE_GROUPS = {
+    "grac*": ["grac_monomer_a_neutral", "grac_monomer_a", "grac_monomer_b_neutral", "grac_monomer_b"],
     "hf*": ["hf_dimer_scf", "hf_monomer_a_scf", "hf_monomer_b_scf"],
     "hfsapt*": ["hf_sapt_elst", "hf_sapt_exch", "hf_sapt_ind"],
     "loc": ["dimer_localization_scf"],
@@ -750,7 +784,7 @@ def test_saptdft_checkpoint_rehydrate_roundtrip(
         artifact = reopened._manifest["artifacts"]["dimer_scf"]
         assert artifact["kind"] == "scf_snapshot"
         source = reopened.restore_scf_snapshot("dimer_scf")
-        loaded = core.Wavefunction.from_file(str(reopened._validate_artifact("dimer_scf", artifact)))
+        loaded = core.Wavefunction.from_file(mod._load_scf_snapshot_data(reopened._validate_artifact("dimer_scf", artifact)))
     else:
         source = mod.capture_scf_snapshot(wfn, reference=reference, method=method)
         snapshot_path = tmp_path / f"{reference.lower()}_snapshot.npy"
@@ -971,6 +1005,27 @@ def test_saptdft_checkpoint_stage_dependencies():
                       "sapt_dft_do_disp": True, "sapt_dft_do_fsapt": "fisapt"},
                      "loc dft* scalar disp fsapt* fsapt_disp fsapt_final final",
                      id="fsapt-disp-conditional"),
+        # The production specs of the checkpointing use case.
+        pytest.param("sapt(dft)-d4(i)", _CHECKPOINT_SCENARIOS["prod_d4i"],
+                     "grac* hf* hf_sapt_elst hf_sapt_exch dft* elst exch d4 final",
+                     id="prod-d4i-dhf-induction-none-grac"),
+        pytest.param("sapt(dft)-d4(i)", _CHECKPOINT_SCENARIOS["sapt0_d4i"],
+                     "hf* elst exch d4 final", id="sapt0-d4i"),
+        pytest.param("sapt(dft)", _CHECKPOINT_SCENARIOS["grac_shift_only"],
+                     "grac* final", id="grac-shift-only"),
+        pytest.param("sapt(dft)", _CHECKPOINT_SCENARIOS["grac_pinned_b"],
+                     "grac_monomer_a_neutral grac_monomer_a hf* hfsapt* dft* scalar final",
+                     id="grac-one-shift-pinned"),
+        # Explicit shifts pin GRAC off even when they equal the 0.0 default.
+        pytest.param("sapt(dft)", {"sapt_dft_grac_compute": "ITERATIVE"},
+                     "hf* hfsapt* dft* ddft* scalar final", id="grac-both-pinned-at-default"),
+        # CPHF runs the SAPT0 segment for its induction even without delta HF.
+        pytest.param("sapt(dft)", {"sapt_dft_induction_type": "CPHF", "sapt_dft_do_dhf": False,
+                                   "sapt_dft_do_ddft": False},
+                     "hf* hfsapt* dft* elst exch final", id="cphf-no-dhf"),
+        pytest.param("sapt(dft)", {"sapt_dft_induction_type": "CPHF", "sapt_dft_functional": "hf",
+                                   "sapt_dft_do_dhf": False, "sapt_dft_do_ddft": False},
+                     "dft* scalar final", id="cphf-hf-functional"),
     ],
 )
 def test_saptdft_checkpoint_selected_stages(tmp_path, name, options, expected):
@@ -1564,3 +1619,194 @@ def test_saptdft_checkpoint_env_var_stop_and_restart(tmp_path, monkeypatch, stop
     psi4.core.clean_options()
 
 
+
+
+# --- production specs, crash resume, locks and operator status -------------
+#
+# The configurations the checkpointing use case exists for (PLA15
+# sapt(dft)-d4(i) and sapt0-d4(i), the GRAC two-stage workflow), resumed in a
+# fresh process after a clean stop at every stage and after a SIGKILL.
+
+
+def _production_stop_cases():
+    cases = []
+    for scenario, name in [("prod_d4i", "sapt(dft)-d4(i)"), ("sapt0_d4i", "sapt(dft)-d4(i)")]:
+        for stage in _selected_stages(scenario=scenario, name=name):
+            if stage != "final":
+                cases.append(pytest.param(scenario, name, stage, id=f"{scenario}-{stage}"))
+    return cases
+
+
+@pytest.fixture(scope="module")
+def production_reference(tmp_path_factory):
+    cache = {}
+
+    def get(scenario, name):
+        if (scenario, name) not in cache:
+            checkpoint_dir = tmp_path_factory.mktemp(f"saptdft-{scenario}-reference")
+            cache[(scenario, name)] = _worker(checkpoint_dir=checkpoint_dir, mode="reference",
+                                              scenario=scenario, name=name)
+        return cache[(scenario, name)]
+
+    return get
+
+
+def _assert_production_restart_matches(reference, restarted, label):
+    _assert_energies_match(reference, restarted, label, ("current_energy", "sapt_total_energy"))
+    # Every published scalar, including the GRAC energies, HOMOs and IPs.
+    _assert_scalar_qcvars_match(reference, restarted, label)
+
+
+@pytest.mark.saptdft
+@uusing("dftd4")
+@pytest.mark.parametrize(("scenario", "name", "stop_stage"), _production_stop_cases())
+def test_saptdft_checkpoint_production_spec_restart_after_each_stage(
+    tmp_path, production_reference, scenario, name, stop_stage
+):
+    """A production spec stopped after any stage resumes in a new process to the same result."""
+    reference = production_reference(scenario, name)
+    checkpoint_dir = tmp_path / stop_stage
+    stopped = _worker(expect="stopped", checkpoint_dir=checkpoint_dir, mode="stop",
+                      stop_after=stop_stage, scenario=scenario, name=name)
+    _assert_stop_result(stopped, stop_stage=stop_stage,
+                        expected_stages=_stages_through(stop_stage, scenario=scenario, name=name))
+
+    restarted = _worker(checkpoint_dir=checkpoint_dir, mode="restart_with_guards", scenario=scenario,
+                        name=name, forbid_banners=_banners_through(stop_stage, scenario=scenario, name=name))
+    _assert_production_restart_matches(reference, restarted, f"{scenario} restart after {stop_stage}")
+    if stop_stage == "grac_monomer_a_neutral":
+        # Only the electron-removed SCF of monomer A is left to run for it.
+        assert restarted["grac_scf_calls"][0] == "grac_monomer_a"
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize("scenario", ["grac_shift_only", "grac_pinned_b"])
+def test_saptdft_checkpoint_grac_workflow_restart(tmp_path, scenario):
+    """GRAC-only and pinned-shift runs checkpoint only the GRAC stages they run."""
+    reference = _worker(checkpoint_dir=tmp_path / "reference", mode="reference", scenario=scenario)
+    checkpoint_dir = tmp_path / "stopped"
+    _worker(expect="stopped", checkpoint_dir=checkpoint_dir, mode="stop",
+            stop_after="grac_monomer_a", scenario=scenario)
+    restarted = _worker(checkpoint_dir=checkpoint_dir, mode="restart_with_guards", scenario=scenario)
+    grac_scf_calls = restarted.get("grac_scf_calls", [])
+    assert "grac_monomer_a" not in grac_scf_calls
+    assert "grac_monomer_a_neutral" not in grac_scf_calls
+    _assert_scalar_qcvars_match(reference, restarted, f"{scenario} restart")
+    for label in ("A",) if scenario == "grac_pinned_b" else ("A", "B"):
+        for quantity in ("SHIFT", "MONOMER ENERGY", "IONIZED MONOMER ENERGY", "HOMO", "IP"):
+            assert f"SAPT DFT GRAC {quantity} {label}" in restarted["qcvars"]
+
+    # A completed run hands back its stored result without any SCF.
+    replayed = _worker(checkpoint_dir=checkpoint_dir, mode="restart_with_guards", scenario=scenario,
+                       guard_jk=True)
+    assert replayed["guarded_call_count"] == 0
+    assert "grac_scf_calls" not in replayed
+    _assert_scalar_qcvars_match(reference, replayed, f"{scenario} replay")
+
+
+@pytest.mark.saptdft
+@uusing("dftd4")
+@pytest.mark.parametrize("kill_stage", ["grac_monomer_a_neutral", "hf_monomer_a_scf", "monomer_b_dft_scf", "d4"])
+def test_saptdft_checkpoint_sigkill_resume(tmp_path, production_reference, kill_stage):
+    """A SIGKILLed run (walltime, OOM) leaves its lock behind; the next one breaks it and resumes."""
+    scenario, name = "prod_d4i", "sapt(dft)-d4(i)"
+    reference = production_reference(scenario, name)
+    checkpoint_dir = tmp_path / kill_stage
+    killed, _ = _run_fsaptdft_checkpoint_worker(checkpoint_dir=checkpoint_dir, mode="reference",
+                                                scenario=scenario, name=name, kill_after=kill_stage)
+    assert killed.returncode == -9
+    assert (checkpoint_dir / "saptdft_state.lock").exists()
+    killed_status = json.loads((checkpoint_dir / "saptdft_status.json").read_text())
+    assert killed_status["completed_stages"][-1] == kill_stage
+    assert killed_status["attempts"][-1]["outcome"] == "running"
+
+    restarted = _worker(checkpoint_dir=checkpoint_dir, mode="restart_with_guards", scenario=scenario,
+                        name=name, forbid_banners=_banners_through(kill_stage, scenario=scenario, name=name))
+    _assert_production_restart_matches(reference, restarted, f"resume after SIGKILL at {kill_stage}")
+
+    status = json.loads((checkpoint_dir / "saptdft_status.json").read_text())
+    assert [attempt["outcome"] for attempt in status["attempts"]] == ["lost", "complete"]
+    assert status["attempts"][1]["broken_locks"][0]["pid"] == killed_status["attempts"][0]["pid"]
+    assert status["state"] == "complete" and status["next_stage"] is None
+    assert not (checkpoint_dir / "saptdft_state.lock").exists()
+
+
+def _write_foreign_lock(mod, path, identity, **owner):
+    path.mkdir(parents=True, exist_ok=True)
+    lock = {"pid": 4242, "hostname": "some-other-node", "slurm_job_id": "999999",
+            "boot_id": "elsewhere", "process_start_ticks": 1, "job_identity_sha256": identity["sha256"]}
+    lock.update(owner)
+    (path / mod.SAPTDFT_LOCK_FILENAME).write_text(json.dumps(lock))
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize(
+    ("owner", "slurm_state", "breaks"),
+    [
+        pytest.param({}, False, True, id="other-host-job-finished"),
+        pytest.param({}, True, False, id="other-host-job-running"),
+        pytest.param({}, None, False, id="other-host-slurm-unreachable"),
+        pytest.param({"slurm_job_id": None}, False, False, id="other-host-no-job-recorded"),
+        pytest.param({"hostname": None, "pid": 1}, False, False, id="legacy-lock-live-pid"),
+        pytest.param({"hostname": None, "pid": 2**22 + 12345}, False, True, id="legacy-lock-dead-pid"),
+    ],
+)
+def test_saptdft_checkpoint_cross_host_lock(tmp_path, monkeypatch, checkpoint_identity, owner, slurm_state, breaks):
+    """A lock from another node is broken only once its SLURM job is provably gone."""
+    mod, _, _, _, identity = checkpoint_identity
+    monkeypatch.delenv("PSI4_CHECKPOINT_BREAK_LOCK", raising=False)
+    monkeypatch.setattr(mod, "_slurm_job_active", lambda job_id: slurm_state)
+    _write_foreign_lock(mod, tmp_path, identity, **owner)
+
+    checkpoint = mod.SAPTDFTCheckpoint(tmp_path, identity)
+    if breaks:
+        checkpoint.open()
+        lock = json.loads((tmp_path / mod.SAPTDFT_LOCK_FILENAME).read_text())
+        assert lock["pid"] == os.getpid()
+        checkpoint.close()
+        assert not (tmp_path / mod.SAPTDFT_LOCK_FILENAME).exists()
+    else:
+        with pytest.raises(VE, match="lock .* is held"):
+            checkpoint.open()
+        # An operator who knows the writer is gone can still take over.
+        monkeypatch.setenv("PSI4_CHECKPOINT_BREAK_LOCK", "1")
+        checkpoint.open()
+        checkpoint.close()
+
+
+@pytest.mark.saptdft
+def test_saptdft_checkpoint_same_host_lock_pid_reuse(tmp_path, checkpoint_identity):
+    """A dead owner on this host, or its PID reused by another process, is stale."""
+    mod, _, _, _, identity = checkpoint_identity
+    here = mod._lock_owner_metadata()
+    # This very process holds the PID, but it started at a different time.
+    _write_foreign_lock(mod, tmp_path, identity, hostname=here["hostname"], boot_id=here["boot_id"],
+                        pid=os.getpid(), process_start_ticks=here["process_start_ticks"] + 1)
+    checkpoint = mod.SAPTDFTCheckpoint(tmp_path, identity)
+    checkpoint.open()
+    checkpoint.close()
+
+    # The live owner itself still excludes a second writer.
+    first = mod.SAPTDFTCheckpoint(tmp_path, identity).open()
+    with pytest.raises(VE, match="live PID"):
+        mod.SAPTDFTCheckpoint(tmp_path, identity).open()
+    first.close()
+
+
+@pytest.mark.saptdft
+def test_saptdft_checkpoint_nonconvergence_is_a_hard_failure(tmp_path):
+    """An SCF that hits MAXITER fails the job and names the stage; it is not a retryable state."""
+    molecule = _saptdft_checkpoint_molecule()
+    core.clean_options()
+    psi4.set_options({**_CHECKPOINT_BASE_OPTIONS, "maxiter": 2, "fail_on_maxiter": True})
+    with pytest.raises(psi4.driver.p4util.exceptions.SCFConvergenceError):
+        psi4.energy("sapt(dft)", molecule=molecule, checkpoint_dir=str(tmp_path))
+    core.clean_options()
+
+    status = json.loads((tmp_path / "saptdft_status.json").read_text())
+    assert status["state"] == "failed"
+    # The failing SCF is the first stage not yet complete (the tiny dimer converges in time).
+    assert status["last_error"]["stage"] == status["next_stage"]
+    assert status["last_error"]["stage"] in ("hf_dimer_scf", "hf_monomer_a_scf", "hf_monomer_b_scf")
+    assert status["last_error"]["type"] == "SCFConvergenceError"
+    assert not (tmp_path / "saptdft_state.lock").exists()

@@ -1366,6 +1366,7 @@ class SAPTDFTCheckpoint:
             )
 
         _prevalidate_scf_snapshot_structure(snapshot_data)
+        snapshot_data = _compact_scf_snapshot(snapshot_data)
 
         suffix = f"{_safe_artifact_stem(name)}--{uuid.uuid4().hex}.npy"
         tmp_path = self.path / f".{suffix}.tmp"
@@ -1436,7 +1437,60 @@ def _load_scf_snapshot_data(snapshot: Any) -> dict[str, Any]:
     if not isinstance(loaded, Mapping):
         raise ValidationError(f"SCF snapshot {snapshot!r} must deserialize to a mapping.")
 
-    return dict(loaded)
+    return _expand_scf_snapshot(loaded)
+
+
+# Rehydration rebuilds H, S, the Lagrangian and AO->SO from the basis, so a
+# stored snapshot only needs the SCF state; restricted beta blocks alias alpha.
+_SCF_SNAPSHOT_REBUILT_MATRICES = ("H", "S", "X", "aotoso")
+_SCF_SNAPSHOT_BETA_ALIASES = (("Cb", "Ca"), ("Db", "Da"), ("Fb", "Fa"))
+_SCF_SNAPSHOT_ALIASED_KEY = "aliased_beta_matrices"
+
+
+def _matrix_payload_equal(left: Any, right: Any) -> bool:
+    if left is None or right is None:
+        return False
+    if isinstance(left, (list, tuple)) or isinstance(right, (list, tuple)):
+        if not isinstance(left, (list, tuple)) or not isinstance(right, (list, tuple)) or len(left) != len(right):
+            return False
+        return all(_matrix_payload_equal(lhs, rhs) for lhs, rhs in zip(left, right))
+    return np.array_equal(np.asarray(left), np.asarray(right))
+
+
+def _compact_scf_snapshot(snapshot_data: Mapping[str, Any]) -> dict[str, Any]:
+    compact = dict(snapshot_data)
+    matrices = dict(compact["matrix"])
+    for field_name in _SCF_SNAPSHOT_REBUILT_MATRICES:
+        if field_name in matrices:
+            matrices[field_name] = None
+    aliased = []
+    for beta_name, alpha_name in _SCF_SNAPSHOT_BETA_ALIASES:
+        if _matrix_payload_equal(matrices.get(beta_name), matrices.get(alpha_name)):
+            matrices[beta_name] = None
+            aliased.append(beta_name)
+    compact["matrix"] = matrices
+    metadata = compact.get(_SCF_SNAPSHOT_METADATA_KEY)
+    if isinstance(metadata, Mapping):
+        compact[_SCF_SNAPSHOT_METADATA_KEY] = {**metadata, _SCF_SNAPSHOT_ALIASED_KEY: aliased}
+    return compact
+
+
+def _expand_scf_snapshot(snapshot_data: Mapping[str, Any]) -> dict[str, Any]:
+    expanded = dict(snapshot_data)
+    metadata = expanded.get(_SCF_SNAPSHOT_METADATA_KEY)
+    if not isinstance(metadata, Mapping) or _SCF_SNAPSHOT_ALIASED_KEY not in metadata:
+        return expanded
+    matrices = dict(expanded.get("matrix", {}))
+    aliases = dict(_SCF_SNAPSHOT_BETA_ALIASES)
+    for beta_name in metadata[_SCF_SNAPSHOT_ALIASED_KEY]:
+        if beta_name not in aliases:
+            raise ValidationError(f"SCF snapshot aliases unknown beta matrix {beta_name!r}.")
+        matrices[beta_name] = matrices.get(aliases[beta_name])
+    expanded["matrix"] = matrices
+    metadata = dict(metadata)
+    del metadata[_SCF_SNAPSHOT_ALIASED_KEY]
+    expanded[_SCF_SNAPSHOT_METADATA_KEY] = metadata
+    return expanded
 
 
 def _prevalidate_scf_snapshot_structure(snapshot_data: Mapping[str, Any]) -> None:
@@ -2111,6 +2165,33 @@ class CheckpointSession:
         """
         snapshot = self.checkpoint.restore_scf_snapshot(stage)
         return rehydrate_scf_wavefunction(snapshot, method=method, reference=reference, molecule=molecule)
+
+    def commit_final(self, dimer_wfn, *, scalars) -> None:
+        """Commit ``final`` with the result a restart has to hand back.
+
+        Matrix QCVariables (F-SAPT partitions, pairwise dispersion) are stored as
+        arrays because the manifest only holds scalars. The wavefunction itself is
+        stored only when it has orbitals to keep; the bare ``Wavefunction.build``
+        dimer of a run without an HF dimer has nothing to serialize.
+        """
+        arrays = {}
+        for key, value in dimer_wfn.variables().items():
+            if isinstance(value, core.Matrix):
+                arrays[f"final.qcvar.{key}"] = np.asarray(value.np)
+        wavefunctions = {"dimer_wfn": dimer_wfn} if isinstance(dimer_wfn, core.HF) else None
+        self.commit("final", scalars=scalars, arrays=arrays, wavefunctions=wavefunctions)
+
+    def restore_final(self, molecule, basis: str):
+        """Rebuild the dimer wavefunction :meth:`commit_final` stored, variables included."""
+        if "dimer_wfn" in self.checkpoint._manifest["completed_stages"]["final"].get("artifacts", []):
+            dimer_wfn = self.restore_wavefunction("dimer_wfn")
+        else:
+            dimer_wfn = core.Wavefunction.build(molecule, basis)
+        prefix = "final.qcvar."
+        for name in self.checkpoint._manifest["completed_stages"]["final"].get("artifacts", []):
+            if name.startswith(prefix):
+                dimer_wfn.set_variable(name[len(prefix):], core.Matrix.from_array(self.checkpoint.restore_array(name)))
+        return dimer_wfn
 
     def restore_wavefunction(self, name: str):
         """Load a full serialized wavefunction artifact (used for the final result)."""

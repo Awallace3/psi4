@@ -138,14 +138,14 @@ def _sapt_summary_qcvariables():
     }
 
 
-def _replay_final_checkpoint(ckpt, data):
+def _replay_final_checkpoint(ckpt, data, molecule):
     """Return the stored result of a run whose ``final`` stage is complete.
 
     The stored wavefunction carries the matrix QCVariables (F-SAPT partitions,
     pairwise dispersion) that the manifest cannot hold; the manifest carries the
     scalars the summary published straight to Psi4.
     """
-    dimer_wfn = ckpt.restore_wavefunction("dimer_wfn")
+    dimer_wfn = ckpt.restore_final(molecule, core.get_global_option("BASIS"))
     for k, v in dimer_wfn.variables().items():
         core.set_variable(k, v)
     for k, v in data.items():
@@ -591,7 +591,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             core.set_variable("SAPT(DFT) Delta DFT", restored_scalars["Delta DFT Correction"])
         if ckpt.done("final"):
             # Everything was computed by an earlier run; replay the stored result.
-            return _replay_final_checkpoint(ckpt, data)
+            return _replay_final_checkpoint(ckpt, data, sapt_dimer)
 
         core.print_out("   Beginning setup computations\n")
 
@@ -645,7 +645,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             core.set_variable("CURRENT ENERGY", 0.0)
             wfn.set_variable("CURRENT ENERGY", 0.0)
             core.print_out("\n   SAPT(DFT) stopped early by request: GRAC shifts only; no interaction energy computed.\n")
-            ckpt.commit("final", scalars={**data, "CURRENT ENERGY": 0.0}, wavefunctions={"dimer_wfn": wfn})
+            ckpt.commit_final(wfn, scalars={**data, "CURRENT ENERGY": 0.0})
             return wfn
         core.print_out("\n")
         # Save integrals
@@ -1216,11 +1216,7 @@ def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         # The per-component QCVariables are published by the summary printer rather
         # than collected in `data`, so store them alongside it; a "final" restart has
         # nothing else to republish them from.
-        ckpt.commit(
-            "final",
-            scalars={**data, **_sapt_summary_qcvariables()},
-            wavefunctions={"dimer_wfn": dimer_wfn},
-        )
+        ckpt.commit_final(dimer_wfn, scalars={**data, **_sapt_summary_qcvariables()})
         return dimer_wfn
 
 
