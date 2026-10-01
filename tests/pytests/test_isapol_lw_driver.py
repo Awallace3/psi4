@@ -212,23 +212,6 @@ def test_production_rejects_a_supplied_model_that_does_not_conserve_charge():
         lw.supplied_nonlocal_properties(**synthetic_rank4())
 
 
-def test_historical_policy_is_pinned_to_one_approved_fixture():
-    """The 1e-3 diagnostic tolerance is not reachable by an arbitrary input.
-
-    `historical_water_diagnostic` relaxes the residual gate by three orders of
-    magnitude, so it is gated on the exact approved identity -- hashes of the
-    tensors, geometry, frames and frequency all pinned in the driver source. A
-    synthetic model that is merely water-shaped must not reach it. The positive
-    side of this gate needs the fixture and is not exercised here.
-    """
-    with pytest.raises(ValueError, match='exact approved water identity'):
-        lw.supplied_nonlocal_properties(**synthetic_rank4(),
-                                        residual_policy='historical_water_diagnostic')
-    assert len(lw.HISTORICAL_FIXTURE_SHA256) == len(lw.HISTORICAL_SOURCE_SHA256) == 64
-    assert lw.HISTORICAL_FIXTURE_SHA256 != lw.HISTORICAL_SOURCE_SHA256
-    assert len(lw._HISTORICAL_ARRAY_HASHES) == 4
-
-
 def test_localization_rank_limit_is_recorded_and_defaults_to_three():
     """The declared localization rank reaches Metadata, with what it discarded."""
     full = lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule',

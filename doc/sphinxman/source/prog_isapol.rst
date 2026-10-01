@@ -133,8 +133,6 @@ LW localization, multipole transforms and frequency grid
      - ``production`` (the default): one combined 1e-6 gate.
      - ``reported_input_sum_rule``: 1e-6 on what LW controls. The supplied
        sum-rule defect is measured and reported, not gated.
-     - ``historical_water_diagnostic``: a 1e-3 gate, admitted only for one
-       pinned water input.
 
      ``localization_rank_limit`` (1 to 4, default 3) declares the
      localization rank. Different limits give different models, but the

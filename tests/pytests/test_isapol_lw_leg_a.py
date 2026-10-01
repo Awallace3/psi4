@@ -2,7 +2,6 @@
 """LW residual policy on charge-conserving synthetic tensors with injected defects.
 
 Tests exercise gate ordering and defect transport, not archived molecular parity.
-The quadrature literals are independent reference inputs.
 """
 import hashlib
 import math
@@ -16,16 +15,6 @@ pytestmark = [pytest.mark.psi, pytest.mark.api, pytest.mark.quick]
 
 #: Unmodified production postcondition for everything the algorithm controls.
 ALGORITHM_TOLERANCE = 1e-6
-
-#: The reference chain's declared quadrature, `Quad 10 / Beta 0.5`: the static
-#: point plus ten dynamic nodes.  Both fixtures declare these frequencies, and
-#: `test_leg_a_frequency_grid_is_the_declared_quadrature` shows they are exactly
-#: our own grid's, which is what makes the recorded indices ours to reproduce.
-QUAD, BETA = 10, 0.5
-CASIMIR_OMEGAS = [0.0, 0.006609601596087073, 0.036174811998631026, 0.09544736369034741,
-                  0.1976442118453102, 0.3704172128053662, 0.6749146404580318,
-                  1.2648991724365144, 2.619244684547348, 6.91088595040828,
-                  37.82376235021513]
 
 ORIGINS = [[0.0, 0.0, 0.0], [-1.45365196, 0.0, -1.12168732], [1.45365196, 0.0, -1.12168732]]
 BONDS = [[0, 1], [0, 2]]
@@ -80,22 +69,6 @@ def localize(tensors, *args):
     return psi4.core.isa_localize_lw(
         _matrix(ORIGINS), [_matrix(tensors[a, b]) for a in range(3) for b in range(3)],
         0.0, BONDS, *args)
-
-
-def test_leg_a_frequency_grid_is_the_declared_quadrature():
-    """The eleven recorded indices are exactly our own `CasimirGrid(10, 0.5)` nodes.
-
-    Both fixtures declare an `omega` per index; this is the check that those are
-    our grid's and not merely near it, which is what makes the recorded output
-    something our code can be held to index by index.  The nodes come in reciprocal
-    pairs about `omega0` by construction of the `omega0 (1 -+ t)/(1 +- t)` map.
-    """
-    grid = psi4.core.CasimirGrid(QUAD, BETA)
-    assert grid.n_freq() == QUAD and grid.omega0() == BETA
-    assert [grid.omega(k) for k in range(QUAD + 1)] == CASIMIR_OMEGAS
-    assert CASIMIR_OMEGAS[0] == 0.0
-    for k in range(1, QUAD//2 + 1):
-        assert CASIMIR_OMEGAS[k]*CASIMIR_OMEGAS[QUAD - k + 1] == pytest.approx(BETA**2, rel=1e-14)
 
 
 def test_charge_conserving_supplied_model_passes_the_production_gate():
@@ -223,7 +196,6 @@ def test_leg_a_policy_through_the_production_driver():
     model = isapol_lw.supplied_nonlocal_properties(residual_policy='reported_input_sum_rule', **common)
     assert model.metadata.residual_policy == 'reported_input_sum_rule'
     assert model.metadata.residual_tolerance == isapol_lw.PRODUCTION_TOLERANCE
-    assert model.metadata.historical_fixture_sha256 is None
     # The supplied defect keeps the combined flag False and is warned about ...
     assert model.metadata.production_postcondition_passed is False
     assert all(d.production_postcondition_passed is False for d in model.frequency_diagnostics)

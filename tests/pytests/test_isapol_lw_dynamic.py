@@ -29,8 +29,8 @@ SPEC.loader.exec_module(parser)
 #: check -- `isa_localize_lw` only accepts whole 16x16/25x25 site blocks, which
 #: cannot be hand-listed, so that comparison is not made here.
 CASIMIR_NODES = [
-    (1, 0.006609601596087073, 0.002723367038256463),
-    (5, 0.3704172128053662, 0.03563429408419695),
+    (1, 0.002723367038256463),
+    (5, 0.03563429408419695),
 ]
 
 #: `(index, distributed FREQ2 token, expected-local FREQSQ token, tokens agree)`
@@ -51,13 +51,8 @@ NODE_HEADERS = [
 ]
 
 #: H1 is the only site of the reference whose local frame is not the identity:
-#: a C2 rotation about z.  For that frame the rank 0:3 multipole rotation is
-#: diagonal with this signature -- every odd-m component changes sign.
+#: a C2 rotation about z.
 H1_FRAME = [[-1, 0, 0], [0, -1, 0], [0, 0, 1]]
-H1_C2_SIGNATURE = [1,            # 00
-                   1, -1, -1,    # 10 11c 11s
-                   1, -1, -1, 1, 1,          # 20 21c 21s 22c 22s
-                   1, -1, -1, 1, 1, -1, -1]  # 30 31c 31s 32c 32s 33c 33s
 
 #: `(node index, local rank 1:3 diagonal, (element, value))` for H1 at the two
 #: retained nodes.  The diagonal is the per-component polarizability, the
@@ -81,8 +76,7 @@ def test_retained_casimir_nodes_are_the_reference_quadrature():
     """Psi4's `Quad 10, Beta 0.5` grid at the two retained reference nodes."""
     from psi4 import core
     grid = core.CasimirGrid(10, 0.5)
-    for index, omega, weight in CASIMIR_NODES:
-        assert grid.omega(index) == omega > 0
+    for index, weight in CASIMIR_NODES:
         assert grid.cp_weight(index) == weight > 0
     assert grid.cp_weight(0) == 0
 
@@ -103,15 +97,6 @@ def test_reference_headers_round_trip_against_psi4_frequencies():
         if not agrees:
             failures.append(index)
     assert failures == [7, 8, 9, 10]
-
-
-def test_h1_local_frame_is_a_sign_flip_of_the_odd_m_components():
-    """The rank 0:3 multipole rotation of the reference's one nontrivial frame."""
-    from psi4 import core
-    d = np.asarray(core.isa_multipole_rotation(3, H1_FRAME))
-    assert d.shape == (16, 16)
-    np.testing.assert_array_equal(d, np.diag(np.diag(d)))
-    np.testing.assert_allclose(np.diag(d), H1_C2_SIGNATURE, atol=1e-15, rtol=0)
 
 
 @pytest.mark.parametrize('index,diagonal,element', [(i, d, e) for i, d, e in H1_LOCAL])

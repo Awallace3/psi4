@@ -45,15 +45,6 @@ _INPUT_WIDTH = {TRUNCATE_RANK4: 16, RETAIN_RANK4: 25, None: 16}
 PRODUCTION_TOLERANCE = 1e-6
 MAX_INPUT_BYTES = 64 * 1024 * 1024
 MAX_FREQUENCIES = 4096
-HISTORICAL_FIXTURE_SHA256 = 'b86d411e5fd81fc20358370ee211ba5b9bd997c57f8918c32ce0334c93ad7f49'
-HISTORICAL_SOURCE_SHA256 = '9b6130f42fc50b50b80d5860f13cc6b5b198002c4c74a1b3500893481502c166'
-# Canonical little-endian float64, C order, INCLUDING discarded rank4 and signed zeros.
-_HISTORICAL_ARRAY_HASHES = (
-    'd756966bfcff85ba02b05c279bba6a88eb5e177a224e6e3742d14953e826cec1',
-    '7693a87f99b542e76639c9c9d53420c2ffceec8638181dd568eb1aa1852e006c',
-    '99ffae29f099ca7f7fb81f914e8dc3f525e6bddd3ddcc87429c9acef9ab0930b',
-    'af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc',
-)
 
 
 def _text(value, name):
@@ -209,7 +200,6 @@ class Metadata:
     residual_policy: str
     residual_tolerance: float
     production_postcondition_passed: bool
-    historical_fixture_sha256: Optional[str]
     localization_rank_limit: int = 3
     # Largest supplied magnitude discarded above the declared limit, both at this
     # boundary (rank-4 rows) and inside core; core reports only the latter.
@@ -304,9 +294,6 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
             reciprocity, molecular_sum, charge_sum_transport); the supplied
             charge-flow sum-rule defect, which LW transports exactly, is measured,
             warned about and reported.
-      historical_water_diagnostic - the only relaxed gate (1e-3), admitted only
-            for the pinned water input/geometry/frame/frequency bytes and exact
-            labels/bond order; it records failed production acceptance.
     ``localization_rank_limit`` (1..4, default 3) is the protocol's single
     ``Limit`` applied to the whole localization (per-site ``WSM-Limit``/``H-Limit``
     belong to PFIT). Limit 4 requires ``truncation=RETAIN_RANK4``. Translation is
@@ -331,8 +318,7 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
         raise ValueError('exact rank4 truncation declaration required only for rank4')
     if not isinstance(provenance, Provenance):
         raise ValueError('explicit typed Provenance required')
-    if residual_policy not in ('production', 'historical_water_diagnostic',
-                              'reported_input_sum_rule'):
+    if residual_policy not in ('production', 'reported_input_sum_rule'):
         raise ValueError('unsupported residual policy')
     if type(localization_rank_limit) is not int or localization_rank_limit not in (1,2,3,4):
         raise ValueError('localization_rank_limit must be explicit integer1,2,3 or4')
@@ -372,15 +358,7 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
                 raise ValueError('frames must be proper local-to-global rotations')
     raw = _array(tensors, (nf,n,n,m,m), 'tensors')
     raw_hash = _hash(raw)
-    historical = residual_policy == 'historical_water_diagnostic'
     reported_sum_rule = residual_policy == 'reported_input_sum_rule'
-    if historical and not (
-        input_rank == 4 and labels == ('O','H1','H2') and graph == ((0,1),(0,2))
-        and raw.shape == (1,3,3,25,25)
-        and (raw_hash, _hash(pos), _hash(frame), _hash(freq)) == _HISTORICAL_ARRAY_HASHES
-        and provenance.source_sha256 == HISTORICAL_SOURCE_SHA256
-    ):
-        raise ValueError('historical_water_diagnostic requires the exact approved water identity (full tensors, geometry, frames, frequency, ordered bonds, source hash)')
     from psi4 import core
     # The frame rotation is built at the rank the localization runs at, never wider:
     # a rotation block for a rank the model does not carry would have nothing to act on.
@@ -408,9 +386,7 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
                   for a in range(n) for b in range(n)]
         args = (core.Matrix.from_array(pos), blocks, float(xi), graph)
         # Never catch/retry a failed production request with relaxed tolerance.
-        if historical:
-            result = core.isa_localize_lw(*args, 1e-3, -1.0, localization_rank_limit)
-        elif reported_sum_rule:
+        if reported_sum_rule:
             # Production 1e-6 on everything LW controls; the supplied data's own
             # charge-flow sum-rule defect is measured and reported, not gated.
             result = core.isa_localize_lw(*args, PRODUCTION_TOLERANCE, math.inf,
@@ -454,8 +430,6 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
                 f'{PRODUCTION_TOLERANCE:g}; reported not gated, transported by LW at '
                 f'{residuals.charge_sum_transport:g} and not repaired')
         globals_.append(g); locals_.append(local); scalars.append(scalar); dipoles.append(xyz)
-    if historical:
-        warnings.append('Historical diagnostic only: production postcondition failed; no native prediction or external parity claim.')
     if reported_sum_rule:
         warnings.append('Supplied charge-flow sum-rule defect reported, not gated: the algorithm-controlled '
                         'postconditions held at the production tolerance, the input sum rule is a property of '
@@ -476,9 +450,7 @@ def supplied_nonlocal_properties(*, labels: Sequence[str], origins: NumericArray
             f'rank-{input_rank} localization restricted to ranks 1..{localization_rank_limit} and '
             f'cannot change any number at those ranks.')
     metadata = Metadata(input_rank, truncation, nf*n*n*(m*m-input_width*input_width), raw_hash, residual_policy,
-                        1e-3 if historical else PRODUCTION_TOLERANCE,
-                        False if historical else all(d.production_postcondition_passed for d in fd),
-                        HISTORICAL_FIXTURE_SHA256 if historical else None,
+                        PRODUCTION_TOLERANCE, all(d.production_postcondition_passed for d in fd),
                         localization_rank_limit, truncated_maxabs)
     return LocalProperties(labels, ArraySnapshot.of(pos), ArraySnapshot.of(frame), tuple(map(float,freq)), graph,
                            provenance, ArraySnapshot.of(raw), ArraySnapshot.of(globals_), ArraySnapshot.of(locals_),
