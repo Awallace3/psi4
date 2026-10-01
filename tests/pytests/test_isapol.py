@@ -293,6 +293,21 @@ def test_casimir_grid_rejects_bad_n_freq():
         psi4.core.CasimirGrid(10).omega(11)
 
 
+def test_grid_rejects_bad_atom_index(h2o):
+    opts = psi4.core.IsaGridOptions()
+    opts.radial_points = 4
+    opts.spherical_points = 6
+    grid = psi4.core.IsaGrid(h2o, opts)
+    n = grid.natom()
+    assert grid.atom_start(n) == grid.npoints()
+    assert grid.atom_start(n - 1) + grid.atom_npoints(n - 1) == grid.npoints()
+    assert grid.alpha(n - 1) > 0.0
+    for get, bad in ((grid.atom_start, (-1, n + 1)), (grid.atom_npoints, (-1, n)), (grid.alpha, (-1, n))):
+        for A in bad:
+            with pytest.raises(RuntimeError):
+                get(A)
+
+
 def test_casimir_grid_ordering():
     """Frequencies come out ascending, and symmetric about omega0 in log scale.
 

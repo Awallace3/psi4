@@ -3,8 +3,9 @@
 """Opt-in, bounded numerical extraction; no executables, imports of Psi4, or fitting.
 
 CLI requires an explicitly authorized source directory containing precisely the two
-named inputs. Only those paths are opened, never enumerated. Pytest uses the static
-JSON, not this CLI. Decimal strings preserve every printed token including -0.
+named inputs. Only those paths are opened, never enumerated. Pytest tests the parser
+on synthetic documents and never runs this CLI. Decimal strings preserve every
+printed token including -0.
 Hashes establish identity, not correctness of the external numerical producer.
 """
 import argparse
