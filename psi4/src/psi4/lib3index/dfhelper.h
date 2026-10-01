@@ -88,6 +88,11 @@ class PSI_API DFHelper {
     ///
     void set_subalgo(std::string subalgo) { subalgo_ = subalgo; }
 
+    /// Directory for this instance's files; empty (default) uses the PSIO default path.
+    void set_scratch_path(const std::string& path) {
+        scratch_path_ = (path.empty() || path.back() == '/') ? path : path + "/";
+    }
+
     /// Returns the number of doubles in the *screened* AO integrals
     size_t get_AO_size() { return big_skips_[nbf_]; }
 
@@ -336,6 +341,8 @@ class PSI_API DFHelper {
     std::shared_ptr<BasisSet> aux_;
     size_t nbf_;
     size_t naux_;
+
+    std::string scratch_path_;
 
     // => memory in doubles <=
     size_t memory_ = 256000000;

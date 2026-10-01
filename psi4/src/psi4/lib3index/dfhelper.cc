@@ -108,7 +108,7 @@ void DFHelper::AO_filename_maker(size_t i) {
 }
 
 std::string DFHelper::start_filename(std::string start) {
-    std::string name = PSIOManager::shared_object()->get_default_path();
+    std::string name = scratch_path_.empty() ? PSIOManager::shared_object()->get_default_path() : scratch_path_;
     std::string safe_mol = primary_->molecule()->name();
     safe_mol.erase(std::remove(safe_mol.begin(), safe_mol.end(), '/'), safe_mol.end());
     name += start + "." + std::to_string(SYSTEM_GETPID());

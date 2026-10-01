@@ -40,7 +40,16 @@
 #include "psi4/libpsi4util/process.h"
 #include "psi4/lib3index/dfhelper.h"
 
+#include <filesystem>
 #include <iomanip>
+#include <limits>
+#include <system_error>
+
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 // OMP
 #ifdef _OPENMP
@@ -51,57 +60,30 @@ namespace psi {
 
 namespace sapt {
 
-FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
-                                 std::map<std::string, SharedMatrix> matrix_cache,
-                                 std::map<std::string, SharedVector> vector_cache, 
-                                 bool is_hybrid)
-    : FDDS_Dispersion(primary, auxiliary, matrix_cache, vector_cache, is_hybrid, false) {}
+namespace {
 
-FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
-                               std::map<std::string, SharedMatrix> matrix_cache,
-                               std::map<std::string, SharedVector> vector_cache, bool is_hybrid, bool single_monomer)
-    : primary_(primary), auxiliary_(auxiliary), matrix_cache_(matrix_cache), vector_cache_(vector_cache),
-      is_hybrid_(is_hybrid), single_monomer_(single_monomer) {
-    if (!primary_ || !auxiliary_ || primary_->nbf() == 0 || auxiliary_->nbf() == 0) {
-        throw PSIEXCEPTION("FDDS: nonempty primary and auxiliary bases are required.");
-    }
-    const std::vector<std::string> monomers = single_monomer_ ? std::vector<std::string>{"A"}
-                                                           : std::vector<std::string>{"A", "B"};
-    for (const auto& monomer : monomers) {
-        for (const std::string space : {"occ", "vir"}) {
-            const auto ck = "C" + space + "_" + monomer;
-            const auto ek = "eps_" + space + "_" + monomer;
-            if (!matrix_cache_.count(ck) || !matrix_cache_.at(ck) ||
-                !vector_cache_.count(ek) || !vector_cache_.at(ek)) {
-                throw PSIEXCEPTION("FDDS: missing orbital data: " + ck + " / " + ek);
-            }
-            const auto& C = matrix_cache_.at(ck);
-            const auto& eps = vector_cache_.at(ek);
-            if (C->nirrep() != 1 || eps->nirrep() != 1 || C->nrow() != primary_->nbf() ||
-                C->ncol() == 0 || C->ncol() != eps->dim(0)) {
-                throw PSIEXCEPTION("FDDS: orbital dimensions must be C1, nbf by nmo, with matching nonempty energies.");
-            }
-            for (int p = 0; p < C->nrow(); ++p)
-                for (int i = 0; i < C->ncol(); ++i)
-                    if (!std::isfinite(C->get(p, i)))
-                        throw PSIEXCEPTION("FDDS: orbital coefficients must be finite.");
-            for (int i = 0; i < eps->dim(0); ++i)
-                if (!std::isfinite(eps->get(i)))
-                    throw PSIEXCEPTION("FDDS: orbital energies must be finite.");
-        }
-    }
+// Existing directory the process may create files in, checked without creating anything.
+// POSIX asks access(W_OK | X_OK); Windows _access(.., 2) on a directory reports existence only,
+// so the read-only attribute is checked there as well.
+bool writable_directory(const std::string& path) {
+    if (path.empty()) return false;
+    std::error_code ec;
+    if (!std::filesystem::is_directory(std::filesystem::path(path), ec) || ec) return false;
+#ifdef _WIN32
+    const auto perms = std::filesystem::status(std::filesystem::path(path), ec).permissions();
+    if (ec || (perms & std::filesystem::perms::owner_write) == std::filesystem::perms::none) return false;
+    return _access(path.c_str(), 2) == 0;
+#else
+    return access(path.c_str(), W_OK | X_OK) == 0;
+#endif
+}
 
-    // ==> Form Metric <==
-   
-    timer_on("Form JS");
+// (P|Q) over one auxiliary basis, filled symmetrically; the legacy constructor loop.
+SharedMatrix form_coulomb_metric(std::shared_ptr<BasisSet> auxiliary_, size_t nthread) {
     size_t naux = auxiliary_->nbf();
-    metric_ = std::make_shared<Matrix>("Inv Coulomb Metric", naux, naux);
+    auto metric = std::make_shared<Matrix>("Inv Coulomb Metric", naux, naux);
 
     std::shared_ptr<BasisSet> zero = BasisSet::zero_ao_basis_set();
-    size_t nthread = 1;
-#ifdef _OPENMP
-    nthread = omp_get_max_threads();
-#endif
 
     // ==> (P|Q) Metric <==
     IntegralFactory metric_factory(auxiliary_, zero, auxiliary_, zero);
@@ -113,7 +95,7 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
         metric_buff[thread] = metric_ints[thread]->buffer();
     }
 
-    double** metricp = metric_->pointer();
+    double** metricp = metric->pointer();
 
 #pragma omp parallel for schedule(dynamic) num_threads(nthread)
     for (size_t MU = 0; MU < auxiliary_->nshell(); ++MU) {
@@ -144,19 +126,47 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
             }
         }
     }
+    return metric;
+}
 
-    metric_ints.clear();
-    metric_buff.clear();
+SharedMatrix form_aux_overlap(std::shared_ptr<BasisSet> auxiliary) {
+    IntegralFactory factory(auxiliary);
+    std::shared_ptr<OneBodyAOInt> overlap(factory.ao_overlap());
+    auto S = std::make_shared<Matrix>("Auxiliary Overlap", auxiliary->nbf(), auxiliary->nbf());
+    overlap->compute(S);
+    return S;
+}
+
+}  // namespace
+
+FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
+                                 std::map<std::string, SharedMatrix> matrix_cache,
+                                 std::map<std::string, SharedVector> vector_cache,
+                                 bool is_hybrid)
+    : FDDS_Dispersion(primary, auxiliary, matrix_cache, vector_cache, is_hybrid, false) {}
+
+FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
+                               std::map<std::string, SharedMatrix> matrix_cache,
+                               std::map<std::string, SharedVector> vector_cache, bool is_hybrid, bool single_monomer)
+    : primary_(primary), auxiliary_(auxiliary), matrix_cache_(matrix_cache), vector_cache_(vector_cache),
+      is_hybrid_(is_hybrid), single_monomer_(single_monomer), naux_(auxiliary ? auxiliary->nbf() : 0) {
+    validate_orbitals();
+
+    // ==> Form Metric <==
+
+    timer_on("Form JS");
+    size_t metric_threads = 1;
+#ifdef _OPENMP
+    metric_threads = omp_get_max_threads();
+#endif
+    metric_ = form_coulomb_metric(auxiliary_, metric_threads);
 
     metric_inv_ = metric_->clone();
     metric_inv_->power(-1.0, 1.e-12);
 
     // ==> Form Aux overlap <==
 
-    IntegralFactory factory(auxiliary_);
-    std::shared_ptr<OneBodyAOInt> overlap(factory.ao_overlap());
-    aux_overlap_ = std::make_shared<Matrix>("Auxiliary Overlap", naux, naux);
-    overlap->compute(aux_overlap_);
+    aux_overlap_ = form_aux_overlap(auxiliary_);
     timer_off("Form JS");
 
     // ==> Form 3-index object <==
@@ -170,7 +180,11 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
         Cstack_vec.push_back(matrix_cache_["Cvir_B"]);
     }
 
-    size_t doubles = Process::environment.get_memory() * 0.8 / sizeof(double);
+    size_t nthread = 1;
+#ifdef _OPENMP
+    nthread = omp_get_max_threads();
+#endif
+    size_t doubles = budget_doubles();
     size_t max_MO = 0;
     for (auto& mat : Cstack_vec) max_MO = std::max(max_MO, (size_t)mat->ncol());
 
@@ -266,7 +280,56 @@ FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_
 
 }
 
+FDDS_Dispersion::FDDS_Dispersion(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
+                                 std::map<std::string, SharedMatrix> matrix_cache,
+                                 std::map<std::string, SharedVector> vector_cache, bool is_hybrid, Deferred)
+    : primary_(primary), auxiliary_(auxiliary), matrix_cache_(matrix_cache), vector_cache_(vector_cache),
+      is_hybrid_(is_hybrid), single_monomer_(true), naux_(auxiliary ? auxiliary->nbf() : 0) {
+    validate_orbitals();
+}
+
+void FDDS_Dispersion::validate_orbitals() const {
+    if (!primary_ || !auxiliary_ || primary_->nbf() == 0 || auxiliary_->nbf() == 0) {
+        throw PSIEXCEPTION("FDDS: nonempty primary and auxiliary bases are required.");
+    }
+    const std::vector<std::string> monomers = single_monomer_ ? std::vector<std::string>{"A"}
+                                                           : std::vector<std::string>{"A", "B"};
+    for (const auto& monomer : monomers) {
+        for (const std::string space : {"occ", "vir"}) {
+            const auto ck = "C" + space + "_" + monomer;
+            const auto ek = "eps_" + space + "_" + monomer;
+            if (!matrix_cache_.count(ck) || !matrix_cache_.at(ck) ||
+                !vector_cache_.count(ek) || !vector_cache_.at(ek)) {
+                throw PSIEXCEPTION("FDDS: missing orbital data: " + ck + " / " + ek);
+            }
+            const auto& C = matrix_cache_.at(ck);
+            const auto& eps = vector_cache_.at(ek);
+            if (C->nirrep() != 1 || eps->nirrep() != 1 || C->nrow() != primary_->nbf() ||
+                C->ncol() == 0 || C->ncol() != eps->dim(0)) {
+                throw PSIEXCEPTION("FDDS: orbital dimensions must be C1, nbf by nmo, with matching nonempty energies.");
+            }
+            for (int p = 0; p < C->nrow(); ++p)
+                for (int i = 0; i < C->ncol(); ++i)
+                    if (!std::isfinite(C->get(p, i)))
+                        throw PSIEXCEPTION("FDDS: orbital coefficients must be finite.");
+            for (int i = 0; i < eps->dim(0); ++i)
+                if (!std::isfinite(eps->get(i)))
+                    throw PSIEXCEPTION("FDDS: orbital energies must be finite.");
+        }
+    }
+
+}
+
 FDDS_Dispersion::~FDDS_Dispersion() {}
+
+size_t FDDS_Dispersion::budget_doubles() const {
+    if (work_doubles_) return work_doubles_;
+    return Process::environment.get_memory() * 0.8 / sizeof(double);
+}
+
+int FDDS_Dispersion::blocking_threads() const {
+    return nthread_ ? nthread_ : Process::environment.get_n_threads();
+}
 
 void FDDS_Dispersion::check_monomer(const std::string& monomer, bool needs_hybrid) const {
     if (monomer != "A" && (monomer != "B" || single_monomer_)) {
@@ -318,7 +381,7 @@ std::vector<SharedMatrix> FDDS_Dispersion::project_densities(std::vector<SharedM
     }
 
     // Check on memory real quick
-    size_t doubles = Process::environment.get_memory() * 0.8 / sizeof(double);
+    size_t doubles = budget_doubles();
     size_t mem_size = nbf2 * auxiliary_->max_nprimitive() * nthread;
     if (mem_size > doubles) {
         std::stringstream message;
@@ -505,10 +568,10 @@ SharedMatrix FDDS_Dispersion::form_unc_amplitude(std::string monomer, double ome
     // Sizes
     size_t nocc = eps_occ->dim(0);
     size_t nvir = eps_vir->dim(0);
-    size_t naux = auxiliary_->nbf();
+    size_t naux = naux_;
 
     // Check on memory real quick
-    size_t doubles = Process::environment.get_memory() * 0.8 / sizeof(double);
+    size_t doubles = budget_doubles();
     size_t mem_size = 2 * naux * nvir + naux * naux + nvir * nocc;
     if (mem_size > doubles) {
         std::stringstream message;
@@ -625,12 +688,12 @@ std::map<std::string, SharedMatrix> FDDS_Dispersion::form_aux_matrices(std::stri
 
     size_t nocc = eps_occ->dim(0);
     size_t nvir = eps_vir->dim(0);
-    size_t naux = auxiliary_->nbf();
+    size_t naux = naux_;
     size_t nov = nocc * nvir;
 
     // => Blocking <= //
 
-    size_t doubles = Process::environment.get_memory() * 0.8 / sizeof(double);
+    size_t doubles = budget_doubles();
     long long int rem = doubles - 2 * nocc * nvir - 6 * naux * naux;
     if (rem < 0)
         throw PSIEXCEPTION("Too little static memory for FDDS_Dispersion::form_aux_matrices()");
@@ -777,21 +840,25 @@ void FDDS_Dispersion::form_X(std::string monomer) {
         throw PSIEXCEPTION("FDDS_Dispersion::form_X: Monomer must be A or B!");
     }
 
+    exchange_X(arR_name, {arQ_name, QarQ_name}, {XarQ_name, QXarQ_name}, eps_occ->dim(0), eps_vir->dim(0));
+}
+
+void FDDS_Dispersion::exchange_X(const std::string& arR_name, const std::array<std::string, 2>& in,
+                                 const std::array<std::string, 2>& out, size_t nocc, size_t nvir) {
+    const std::string &arQ_name = in[0], &QarQ_name = in[1], &XarQ_name = out[0], &QXarQ_name = out[1];
 
     // => Sizing <= //
 
-    size_t nocc = eps_occ->dim(0);
-    size_t nvir = eps_vir->dim(0);
-    size_t naux = auxiliary_->nbf();    
+    size_t naux = naux_;
 
     // => Blocking <= //
     
     int nthread = 1;
 #ifdef _OPENMP
-    nthread = Process::environment.get_n_threads();
+    nthread = blocking_threads();
 #endif
 
-    size_t doubles = Process::environment.get_memory() * 0.8 / sizeof(double);
+    size_t doubles = budget_doubles();
     long long int rem = doubles - nthread * nvir * nvir;
     if (rem < 0) 
         throw PSIEXCEPTION("Too little static memory for FDDS_Dispersion::form_X()");
@@ -899,22 +966,27 @@ void FDDS_Dispersion::form_Y(std::string monomer) {
         throw PSIEXCEPTION("FDDS_Dispersion::form_Y: Monomer must be A or B!");
     }
 
+    exchange_Y(aaR_name, rrR_name, {raQ_name, QraQ_name}, {YarQ_name, QYarQ_name}, eps_occ->dim(0),
+               eps_vir->dim(0));
+}
+
+void FDDS_Dispersion::exchange_Y(const std::string& aaR_name, const std::string& rrR_name,
+                                 const std::array<std::string, 2>& in_ra, const std::array<std::string, 2>& out,
+                                 size_t nocc, size_t nvir) {
+    const std::string &raQ_name = in_ra[0], &QraQ_name = in_ra[1], &YarQ_name = out[0], &QYarQ_name = out[1];
 
     // => Sizing <= //
 
-    size_t nocc = eps_occ->dim(0);
-    size_t nvir = eps_vir->dim(0);
-    size_t nbf = primary_->nbf();
-    size_t naux = auxiliary_->nbf();    
+    size_t naux = naux_;
 
     // => Blocking <= //
     
     int nthread = 1;
 #ifdef _OPENMP
-    nthread = Process::environment.get_n_threads();
+    nthread = blocking_threads();
 #endif
 
-    size_t doubles = Process::environment.get_memory() * 0.8 / sizeof(double);
+    size_t doubles = budget_doubles();
     long long int rem = doubles - nthread * nocc * nvir;
     if (rem < 0) 
         throw PSIEXCEPTION("Too little static memory for FDDS_Dispersion::form_Y()");
@@ -1023,13 +1095,13 @@ SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
     size_t nocc = eps_occ->dim(0);
     size_t nvir = eps_vir->dim(0);
     size_t nbf = primary_->nbf();
-    size_t naux = auxiliary_->nbf();    
+    size_t naux = naux_;
     size_t nov = nocc * nvir;
     size_t nq = std::min(nov, naux);
 
     // => Meomry Check <= //
 
-    size_t doubles = Process::environment.get_memory() * 0.8 / sizeof(double);
+    size_t doubles = budget_doubles();
     size_t req_mem = 2 * nov * naux + naux * naux + naux; 
     if (doubles < req_mem) 
         throw PSIEXCEPTION("Too little static memory for FDDS_Dispersion::QR()");
@@ -1037,10 +1109,19 @@ SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
     // => Tensor Slices <= //
 
     auto Qar = std::make_shared<Matrix>("Qar", naux, nov); 
-    dfh_->fill_tensor(Qar_name, Qar, {0, naux});
+    auto Q = std::make_shared<Matrix>("Q", nov, naux);
+    if (qr_from_arQ_) {
+        // Declared path: only the (ar|Q) stream exists; transpose it through the Q buffer.
+        dfh_->fill_tensor("arQ", Q, {0, nocc});
+        double** Qsrc = Q->pointer();
+        double** Qdst = Qar->pointer();
+        for (size_t row = 0; row < nov; row++)
+            for (size_t col = 0; col < naux; col++) Qdst[col][row] = Qsrc[row][col];
+    } else {
+        dfh_->fill_tensor(Qar_name, Qar, {0, naux});
+    }
 
     // => Target <= //
-    auto Q = std::make_shared<Matrix>("Q", nov, naux);
     auto tau = std::make_shared<Vector>("tau", nq);
     auto R = std::make_shared<Matrix>("R", naux, naux);
 
@@ -1135,6 +1216,597 @@ void FDDS_Dispersion::print_tensor_pqQ(std::string tensor_name, std::string file
     for (size_t row = 0; row < np * nq; row++)
         for (size_t col = 0; col < nQ; col++)
             Mout->Printf("%.15e\n", Mp[row][col]); 
+}
+
+// ==> Declared-basis FDDS_Monomer path <== //
+
+namespace {
+
+size_t cmul(size_t a, size_t b) {
+    size_t r;
+    if (__builtin_mul_overflow(a, b, &r)) throw PSIEXCEPTION("FDDS: resource size overflows size_t.");
+    return r;
+}
+size_t cadd(std::initializer_list<size_t> terms) {
+    size_t r = 0;
+    for (size_t t : terms)
+        if (__builtin_add_overflow(r, t, &r)) throw PSIEXCEPTION("FDDS: resource size overflows size_t.");
+    return r;
+}
+size_t cmax(std::initializer_list<size_t> terms) { return std::max(terms); }
+
+// LAPACK workspace queries use dimensions only; the dummy arrays are never read.
+size_t lwork_syev(size_t n) {
+    double w, dummy = 0.0, a = 0.0;
+    C_DSYEV('V', 'U', n, &a, n, &dummy, &w, -1);
+    return (size_t)w;
+}
+size_t lwork_qr(size_t m, size_t n) {
+    double w1 = 0.0, w2 = 0.0, a = 0.0, tau = 0.0;
+    size_t k = std::min(m, n);
+    C_DGEQRF(m, n, &a, m, &tau, &w1, -1);
+    C_DORGQR(m, k, k, &a, m, &tau, &w2, -1);
+    return (size_t)std::max(w1, w2);
+}
+size_t lwork_gesdd(char jobz, size_t n) {
+    double w = 0.0, a = 0.0, s = 0.0, u = 0.0, vt = 0.0;
+    std::vector<int> iwork(8 * n);
+    C_DGESDD(jobz, n, n, &a, n, &s, &u, n, &vt, n, &w, -1, iwork.data());
+    return (size_t)w;
+}
+
+// Singular values of a square row-major matrix, descending; U and V (= V^T rows) on request.
+SharedVector square_svd(const SharedMatrix& A, SharedMatrix U = nullptr, SharedMatrix V = nullptr) {
+    int n = A->rowspi()[0];
+    auto work_A = A->clone();
+    auto S = std::make_shared<Vector>(n);
+    std::vector<int> iwork(8L * n);
+    char jobz = U ? 'S' : 'N';
+    double* Up = U ? U->pointer()[0] : nullptr;
+    double* Vp = V ? V->pointer()[0] : nullptr;
+    double lwork;
+    // The column-major view of A is A^T, so LAPACK's U and VT are the row-major V and U.
+    C_DGESDD(jobz, n, n, work_A->pointer()[0], n, S->pointer(), Vp, n, Up, n, &lwork, -1, iwork.data());
+    std::vector<double> work((size_t)lwork);
+    int info = C_DGESDD(jobz, n, n, work_A->pointer()[0], n, S->pointer(), Vp, n, Up, n, work.data(),
+                        (int)lwork, iwork.data());
+    if (info != 0) throw PSIEXCEPTION("FDDS: DGESDD failed.");
+    return S;
+}
+
+bool all_finite(const Matrix& M) {
+    for (int i = 0; i < M.rowspi()[0]; i++)
+        for (int j = 0; j < M.colspi()[0]; j++)
+            if (!std::isfinite(M.get(i, j))) return false;
+    return true;
+}
+
+SharedMatrix symmetrized(const SharedMatrix& M) {
+    auto S = M->clone();
+    S->add(M->transpose());
+    S->scale(0.5);
+    return S;
+}
+
+// Numerical storage in doubles for one declared monomer; see sapt.rst for the stage list.
+struct Ledger {
+    size_t resident = 0, memory = 0, disk = 0;
+    std::map<std::string, size_t> stages;  // transient working sets, doubles
+    std::map<std::string, size_t> files;   // disk, doubles
+    size_t dfh_extra = 0;                   // raw-DFHelper storage it does not count in its own memory
+};
+
+Ledger declared_ledger(const BasisSet& primary, const BasisSet& auxiliary, size_t o, size_t v, size_t pd, bool hyb,
+                       const std::string& subalgo, size_t t) {
+    const size_t N = primary.nbf(), pr = auxiliary.nbf(), n = cmul(o, v), pd2 = cmul(pd, pd), pr2 = cmul(pr, pr);
+    const size_t T = cmul(pd, pr), big = std::max(o, v), eig_d = lwork_syev(pd), eig_r = lwork_syev(pr);
+    Ledger L;
+    L.resident = cadd({cmul(N, o), cmul(N, v), o, v, cmul(4, pd2), pd, hyb ? cmul(2, pd2) : 0});
+
+    // J_r, S_r, T J_r; then eigen check / Matrix::power (two n^2 copies, eigenvalues, work); dgecon.
+    L.stages["metric"] = cadd({T, cmax({cadd({cmul(2, pr2), T}), cadd({cmul(3, pd2), pd, eig_d}), cmul(5, pd)})});
+
+    // Raw DIRECT_iaQ DFHelper at metric power 0: its memory share must admit the metric, one
+    // auxiliary shell of dense AOs with the worst half/final transforms, and one metric-contraction
+    // row; DFHelper additionally holds C buffers, sparsity masks and the power(0) transient.
+    const size_t wtmp = hyb ? big : std::min(o, v), wfinal = hyb ? cmul(big, big) : n;
+    const size_t qmax = auxiliary.max_function_per_shell(), nshell = primary.nshell();
+    size_t dfh_min = cmax({pr2, cmul(qmax, cadd({cmul(N, N), cmul(wtmp, N), cmul(2, wfinal)})),
+                           cadd({pr2, cmul(cmul(2, pr), big)})});
+    if (subalgo == "INCORE")
+        dfh_min = cmax({dfh_min, cadd({cmul(pr, cmul(N, N)), pr2, cmul(t, cmul(N, N)),
+                                       cmul(3, cmul(qmax, cmul(N, N)))})});
+    L.dfh_extra = cadd({T, cmul(t, cmul(N, wtmp)), cmul(2, cadd({cmul(nshell, nshell), cmul(N, N)})), cmul(5, N),
+                        cmul(3, pr2), pr, eig_r});
+    L.stages["raw_dfhelper"] = cadd({L.dfh_extra, dfh_min});
+
+    // Declared pass: T, J_d^-1/2 (or its power() transient), one first-index block of raw/T/out rows.
+    L.stages["declared_pass"] =
+        cadd({T, pd2, cmax({cmul(big, cadd({pr, cmul(2, pd)})), cadd({cmul(2, pd2), pd, eig_d})})});
+
+    const size_t ov = n;
+    if (hyb) {
+        const size_t k = std::max(size_t{1}, v / o) + 1;
+        L.stages["qr"] = cmax({cadd({cmul(2, cmul(n, pd)), std::min(n, pd), lwork_qr(n, pd)}),
+                               cadd({cmul(2, cmul(n, pd)), pd2, pd}),
+                               cadd({cmul(3, pd2), cmul(9, pd), lwork_gesdd('S', pd)})});
+        L.stages["form_X"] = cadd({cmul(t, cmul(v, v)), cmul(6, cmul(v, pd))});
+        L.stages["form_Y"] = cadd({cmul(t, ov), cmul(cadd({cmul(k, k), cmul(4, k), 1}), cmul(o, pd))});
+        L.stages["dyson_diagnostic"] = cmax({cadd({cmul(2, ov), cmul(6, pd2), cmul(7, cmul(v, pd))}), cmul(7, pd2),
+                                            cadd({cmul(2, pd2), cmul(9, pd), lwork_gesdd('N', pd)})});
+    } else {
+        L.stages["dyson_diagnostic"] = cmax({cadd({cmul(2, cmul(pd, v)), pd2, ov}), cmul(3, pd2),
+                                            cadd({cmul(2, pd2), cmul(9, pd), lwork_gesdd('N', pd)})});
+    }
+    // S2 blocks; then its J - J A admission SVD (chi0, A, the matrix and its copy); then the solve.
+    L.stages["s2_response"] = cmax({cadd({cmul(2, ov), cmul(5, pd2), cmul(hyb ? 8 : 3, cmul(v, pd))}),
+                                    cadd({cmul(4, pd2), cmul(9, pd), lwork_gesdd('N', pd)}), cadd({cmul(5, pd2), pd})});
+
+    // Disk: DIRECT_iaQ keeps a pre-metric and a final file per transform plus two metric files.
+    const size_t npr = cmul(n, pr), npd = cmul(n, pd);
+    size_t raw = cadd({cmul(2, npr), cmul(2, pr2)});
+    size_t pass = cmul(3, npd);
+    size_t later = 0;
+    if (hyb) {
+        raw = cadd({raw, cmul(2, npr), cmul(2, cmul(cmul(o, o), pr)), cmul(2, cmul(cmul(v, v), pr))});
+        pass = cadd({cmul(7, npd), cmul(cmul(o, o), pd), cmul(cmul(v, v), pd)});
+        later = cmul(10, npd);  // QarQ, QraQ, X/Y of (B, Q) and of (b, b_t)
+    }
+    L.files["raw_peak"] = raw;
+    L.files["steady"] = cadd({pass, later});
+    L.disk = cmax({cadd({raw, pass}), cadd({pass, later})});
+
+    size_t peak = 0;
+    for (const auto& kv : L.stages) peak = std::max(peak, kv.second);
+    L.memory = cadd({L.resident, peak});
+    return L;
+}
+
+
+}  // namespace
+
+std::map<std::string, size_t> FDDS_Monomer::requirement(std::shared_ptr<BasisSet> primary,
+                                                        std::shared_ptr<BasisSet> auxiliary, size_t nocc, size_t nvir,
+                                                        size_t naux, bool is_hybrid, const std::string& subalgo,
+                                                        size_t nthread) {
+    if (!primary || !auxiliary || !nocc || !nvir || !naux || !nthread)
+        throw PSIEXCEPTION("FDDS: requirement needs bases and nonzero dimensions and threads.");
+    if (subalgo != "INCORE" && subalgo != "OUT_OF_CORE")
+        throw PSIEXCEPTION("FDDS: subalgo must be INCORE or OUT_OF_CORE.");
+    auto L = declared_ledger(*primary, *auxiliary, nocc, nvir, naux, is_hybrid, subalgo, nthread);
+    std::map<std::string, size_t> ret{{"memory_bytes", cmul(L.memory, sizeof(double))},
+                                      {"disk_bytes", cmul(L.disk, sizeof(double))},
+                                      {"resident_bytes", cmul(L.resident, sizeof(double))}};
+    for (const auto& kv : L.stages) ret["stage:" + kv.first] = cmul(kv.second, sizeof(double));
+    for (const auto& kv : L.files) ret["disk:" + kv.first] = cmul(kv.second, sizeof(double));
+    return ret;
+}
+
+FDDS_Monomer::FDDS_Monomer(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
+                           SharedMatrix Cocc, SharedMatrix Cvir, SharedVector eps_occ, SharedVector eps_vir,
+                           bool is_hybrid, const FDDSResources& resources, SharedMatrix aux_transform)
+    : FDDS_Dispersion(primary, auxiliary, {{"Cocc_A", Cocc}, {"Cvir_A", Cvir}},
+                      {{"eps_occ_A", eps_occ}, {"eps_vir_A", eps_vir}}, is_hybrid, Deferred{}) {
+    // The inputs are borrowed until prepare_declared has validated and admitted them, then copied.
+    declared_ = true;
+    prepare_declared(resources, aux_transform);
+}
+
+const FDDSModel& FDDS_Monomer::model() const {
+    if (!declared_) throw PSIEXCEPTION("FDDS: model() is available on the declared path only.");
+    return model_;
+}
+
+std::vector<SharedMatrix> FDDS_Monomer::project_densities(std::vector<SharedMatrix> dens) {
+    // A raw-auxiliary (SAPT gridless-kernel) operation outside the declared storage ledger.
+    if (declared_) throw PSIEXCEPTION("FDDS: project_densities is unavailable on the declared path.");
+    return FDDS_Dispersion::project_densities(dens);
+}
+
+void FDDS_Monomer::prepare_declared(const FDDSResources& res, SharedMatrix T) {
+    // ==> Validate: nothing below allocates beyond the copies before admission <== //
+    const size_t pr = auxiliary_->nbf();
+    const auto eo = vector_cache_.at("eps_occ_A"), ev = vector_cache_.at("eps_vir_A");
+    const size_t nocc = eo->dim(0), nvir = ev->dim(0);
+    if (T) {
+        if (T->nirrep() != 1 || T->colspi()[0] != (int)pr || T->rowspi()[0] < 1)
+            throw PSIEXCEPTION("FDDS: aux_transform must be C1 with naux_declared >= 1 rows and raw naux columns.");
+        if (!all_finite(*T)) throw PSIEXCEPTION("FDDS: aux_transform must be finite.");
+    }
+    has_transform_ = (bool)T;
+    naux_ = T ? T->rowspi()[0] : pr;
+    const size_t pd = naux_;
+    if (res.subalgo != "INCORE" && res.subalgo != "OUT_OF_CORE")
+        throw PSIEXCEPTION("FDDS: subalgo must be INCORE or OUT_OF_CORE.");
+    if (!writable_directory(res.scratch_dir))
+        throw PSIEXCEPTION("FDDS: scratch_dir must be an existing writable directory.");
+    double homo = eo->get(0), lumo = ev->get(0);
+    for (size_t i = 0; i < nocc; i++) homo = std::max(homo, eo->get(i));
+    for (size_t a = 0; a < nvir; a++) lumo = std::min(lumo, ev->get(a));
+    if (!(lumo - homo > 0.0))
+        throw PSIEXCEPTION("FDDS: the declared path requires every virtual energy above every occupied energy.");
+
+    if (res.nthread < 1) throw PSIEXCEPTION("FDDS: nthread must be at least 1.");
+    nthread_ = res.nthread;
+
+    // ==> Admission, in bytes, before any integral or file <== //
+    const auto L = declared_ledger(*primary_, *auxiliary_, nocc, nvir, pd, is_hybrid_, res.subalgo, nthread_);
+    model_.naux_raw = pr;
+    model_.naux = pd;
+    model_.nocc = nocc;
+    model_.nthread = nthread_;
+    model_.nvir = nvir;
+    model_.is_hybrid = is_hybrid_;
+    model_.memory_bytes = res.memory_bytes;
+    model_.disk_bytes = res.disk_bytes;
+    model_.required_memory_bytes = cmul(L.memory, sizeof(double));
+    model_.required_disk_bytes = cmul(L.disk, sizeof(double));
+    if (res.memory_bytes < model_.required_memory_bytes)
+        throw PSIEXCEPTION("FDDS: memory_bytes " + std::to_string(res.memory_bytes) + " is below the required " +
+                           std::to_string(model_.required_memory_bytes) + " bytes.");
+    if (res.disk_bytes < model_.required_disk_bytes)
+        throw PSIEXCEPTION("FDDS: disk_bytes " + std::to_string(res.disk_bytes) + " is below the required " +
+                           std::to_string(model_.required_disk_bytes) + " bytes.");
+    work_doubles_ = res.memory_bytes / sizeof(double) - L.resident;
+
+    // Admitted: own the orbital data and T (both are in the ledger).
+    for (const auto& key : {"Cocc_A", "Cvir_A"}) matrix_cache_[key] = matrix_cache_[key]->clone();
+    for (const auto& key : {"eps_occ_A", "eps_vir_A"})
+        vector_cache_[key] = std::make_shared<Vector>(*vector_cache_[key]);
+    if (T) T = T->clone();
+
+    // ==> Declared metric: T is applied before every power, factorization and QR <== //
+    auto J = form_coulomb_metric(auxiliary_, nthread_);
+    auto S = form_aux_overlap(auxiliary_);
+    if (T) {
+        J = symmetrized(linalg::triplet(T, J, T, false, false, true));
+        S = symmetrized(linalg::triplet(T, S, T, false, false, true));
+    }
+    metric_ = J;
+    aux_overlap_ = S;
+
+    // Native T1/T2 rule on J_d: |lambda| < 1e-12 max|lambda| is dropped; a kept negative lambda
+    // would make power(-1/2)^2 differ from power(-1), so it is refused.
+    {
+        auto evecs = std::make_shared<Matrix>(pd, pd);
+        auto evals = std::make_shared<Vector>(pd);
+        J->diagonalize(evecs, evals, ascending);
+        double lmax = std::max(std::fabs(evals->get(0)), std::fabs(evals->get(pd - 1)));
+        model_.metric_min_kept = 1.0;
+        for (size_t i = 0; i < pd; i++) {
+            double ratio = std::fabs(evals->get(i)) / lmax;
+            if (ratio < metric_cutoff) {
+                model_.metric_dropped++;
+                model_.metric_max_dropped = std::max(model_.metric_max_dropped, ratio);
+            } else if (evals->get(i) < 0.0) {
+                throw PSIEXCEPTION("FDDS: the declared metric has a kept negative eigenvalue.");
+            } else {
+                model_.metric_min_kept = std::min(model_.metric_min_kept, ratio);
+            }
+        }
+        if (!(lmax > 0.0) || !std::isfinite(lmax))
+            throw PSIEXCEPTION("FDDS: the declared metric is zero or nonfinite.");
+    }
+    metric_inv_ = J->clone();
+    metric_inv_->power(-1.0, metric_cutoff);
+
+    // Full J_d^-1 enters only through LU solves (b = B_d J_d^-1), never an explicit inverse.
+    metric_lu_ = J->clone();
+    metric_ipiv_.assign(pd, 0);
+    double anorm = 0.0;
+    for (size_t j = 0; j < pd; j++) {
+        double col = 0.0;
+        for (size_t i = 0; i < pd; i++) col += std::fabs(J->get(i, j));
+        anorm = std::max(anorm, col);
+    }
+    if (C_DGETRF(pd, pd, metric_lu_->pointer()[0], pd, metric_ipiv_.data()) != 0)
+        throw PSIEXCEPTION("FDDS: the declared metric is singular to working precision.");
+    {
+        std::vector<double> work(4 * pd);
+        std::vector<int> iwork(pd);
+        C_DGECON('1', pd, metric_lu_->pointer()[0], pd, anorm, &model_.metric_lu_rcond, work.data(), iwork.data());
+    }
+
+    // ==> Raw integrals in a private scratch path, then the declared streams <== //
+    std::vector<SharedMatrix> C = {matrix_cache_["Cocc_A"], matrix_cache_["Cvir_A"]};
+    auto raw = std::make_shared<DFHelper>(primary_, auxiliary_);
+    raw->set_scratch_path(res.scratch_dir);
+    raw->set_subalgo(res.subalgo);
+    raw->set_memory(work_doubles_ - L.dfh_extra);
+    raw->set_method("DIRECT_iaQ");
+    raw->set_nthreads(nthread_);
+    raw->set_metric_pow(0.0);
+    raw->initialize();
+    raw->print_header();
+    raw->add_space("a", C[0]);
+    raw->add_space("r", C[1]);
+    raw->add_transformation("arQ", "a", "r", "pqQ");
+    if (is_hybrid_) {
+        raw->add_transformation("raQ", "r", "a", "pqQ");
+        raw->add_transformation("aaQ", "a", "a", "pqQ");
+        raw->add_transformation("rrQ", "r", "r", "pqQ");
+    }
+    raw->set_release_core_AO_before_metric(true);
+    raw->transform();
+
+    dfh_ = std::make_shared<DFHelper>(primary_, auxiliary_);
+    dfh_->set_scratch_path(res.scratch_dir);
+    SharedMatrix half_inv;
+    if (is_hybrid_) {
+        half_inv = J->clone();
+        half_inv->power(-0.5, metric_cutoff);
+    }
+    declared_pass(raw, T, half_inv);
+    raw.reset();  // removes the raw files
+    T.reset();
+    half_inv.reset();
+
+    if (is_hybrid_) {
+        qr_from_arQ_ = true;
+        timer_on("FDDS: QR");
+        R_A_ = QR("A");
+        timer_off("FDDS: QR");
+        // numpy.linalg.pinv(R, rcond=1e-13).T = U S^+ V^T for R = U S V^T. The SVD factors are
+        // scoped so they are released before form_X/form_Y block from the whole work budget.
+        {
+            auto U = std::make_shared<Matrix>(pd, pd);
+            auto V = std::make_shared<Matrix>(pd, pd);
+            auto sv = square_svd(R_A_, U, V);
+            double cut = r_rcond * sv->get(0);
+            for (size_t k = 0; k < pd; k++) {
+                double s = sv->get(k);
+                bool keep = s > cut;
+                model_.qr_rank += keep;
+                U->scale_column(0, k, keep ? 1.0 / s : 0.0);
+            }
+            Rtinv_ = linalg::doublet(U, V);
+        }
+
+        timer_on("FDDS: Form X");
+        form_X("A");
+        exchange_X("arR", {"b_ar", "bt_ar"}, {"Xb", "Xbt"}, nocc, nvir);
+        timer_off("FDDS: Form X");
+        timer_on("FDDS: Form Y");
+        form_Y("A");
+        exchange_Y("aaR", "rrR", {"b_ra", "bt_ra"}, {"Yb", "Ybt"}, nocc, nvir);
+        timer_off("FDDS: Form Y");
+    }
+}
+
+void FDDS_Monomer::declared_pass(std::shared_ptr<DFHelper> raw, const SharedMatrix& T, const SharedMatrix& half_inv) {
+    // Streams raw (xy|P_r) blocks of the first index into declared tensors: B_d = B_r T^T, then
+    // B_d, B_d J_d^-1 (LU solve), B_d J^+_d or B_d J_d^-1/2 (DFHelper's metric_pow -1/2 on J_d).
+    enum Kind { Declared, Solve, Plus, Half };
+    struct Job {
+        std::string raw;
+        size_t n1, n2;
+        std::vector<std::pair<std::string, Kind>> out;
+    };
+    const size_t o = model_.nocc, v = model_.nvir, pr = model_.naux_raw, pd = naux_;
+    std::vector<Job> jobs = {{"arQ", o, v, {{"arQ", Declared}, {"b_ar", Solve}, {"bt_ar", Plus}}}};
+    if (is_hybrid_) {
+        jobs[0].out.push_back({"arR", Half});
+        jobs.push_back({"raQ", v, o, {{"raQ", Declared}, {"b_ra", Solve}, {"bt_ra", Plus}}});
+        jobs.push_back({"aaQ", o, o, {{"aaR", Half}}});
+        jobs.push_back({"rrQ", v, v, {{"rrR", Half}}});
+    }
+    const size_t fixed = cadd({cmul(pd, pr), cmul(pd, pd)});
+    for (const auto& job : jobs) {
+        size_t per = cmul(job.n2, cadd({pr, cmul(2, pd)}));
+        size_t block = std::min(job.n1, (work_doubles_ - fixed) / per);
+        if (block < 1) throw PSIEXCEPTION("FDDS: declared pass exceeds the admitted work budget.");
+        auto in = std::make_shared<Matrix>("raw", block * job.n2, pr);
+        auto Bd = T ? std::make_shared<Matrix>("declared", block * job.n2, pd) : in;
+        auto out = std::make_shared<Matrix>("out", block * job.n2, pd);
+        for (const auto& target : job.out) dfh_->add_disk_tensor(target.first, std::make_tuple(job.n1, job.n2, pd));
+        for (size_t start = 0; start < job.n1; start += block) {
+            size_t nb = std::min(block, job.n1 - start), rows = nb * job.n2;
+            raw->fill_tensor(job.raw, in, {start, start + nb});
+            if (T) C_DGEMM('N', 'T', rows, pd, pr, 1.0, in->pointer()[0], pr, T->pointer()[0], pr, 0.0,
+                           Bd->pointer()[0], pd);
+            for (const auto& target : job.out) {
+                SharedMatrix dst = out;
+                if (target.second == Declared) {
+                    dst = Bd;
+                } else if (target.second == Solve) {
+                    C_DCOPY(rows * pd, Bd->pointer()[0], 1, out->pointer()[0], 1);
+                    // The row-major rows are column-major right-hand sides of the symmetric J_d.
+                    if (C_DGETRS('N', pd, rows, metric_lu_->pointer()[0], pd, metric_ipiv_.data(), out->pointer()[0],
+                                 pd) != 0)
+                        throw PSIEXCEPTION("FDDS: DGETRS failed.");
+                } else {
+                    const auto& M = target.second == Plus ? metric_inv_ : half_inv;
+                    C_DGEMM('N', 'N', rows, pd, pd, 1.0, Bd->pointer()[0], pd, M->pointer()[0], pd, 0.0,
+                            out->pointer()[0], pd);
+                }
+                dfh_->write_disk_tensor(target.first, dst, {start, start + nb});
+            }
+        }
+    }
+}
+
+double FDDS_Monomer::native_dyson_ratio(double omega, double x_alpha, const SharedMatrix& W) {
+    // J_d - XSW in the verbatim fdds_coupled_amplitudes order; the SVD is only a diagnostic.
+    SharedMatrix X, KRS;
+    if (is_hybrid_) {
+        auto aux = FDDS_Dispersion::form_aux_matrices("A", omega);
+        X = aux["amp"]->clone();
+        X->axpy(-x_alpha, aux["K2L"]);
+        auto K = aux["K1LD"]->clone();
+        K->scale(-x_alpha);
+        K->axpy(-x_alpha, aux["K2LD"]);
+        K->axpy(x_alpha * x_alpha, aux["K21L"]);
+        aux.clear();
+        KRS = linalg::doublet(linalg::doublet(K, Rtinv_), metric_);
+    } else {
+        X = FDDS_Dispersion::form_unc_amplitude("A", omega);
+        X->scale(-1.0);
+    }
+    auto XSW = linalg::doublet(linalg::doublet(X, metric_inv_), W);
+    X.reset();
+    if (KRS) XSW->axpy(0.25, KRS);
+    KRS.reset();
+    auto M = metric_->clone();
+    M->subtract(XSW);
+    XSW.reset();
+    if (!all_finite(*M)) return std::numeric_limits<double>::quiet_NaN();
+    auto sv = square_svd(M);
+    return sv->get(naux_ - 1) / sv->get(0);
+}
+
+FDDSResponse FDDS_Monomer::form_coefficient_response(double omega, double x_alpha, SharedMatrix W) {
+    if (!declared_) throw PSIEXCEPTION("FDDS: form_coefficient_response requires the declared constructor.");
+    if (!std::isfinite(omega) || omega < 0.0)
+        throw PSIEXCEPTION("FDDS: imaginary frequency must be finite and nonnegative.");
+    if (!std::isfinite(x_alpha) || (!is_hybrid_ && x_alpha != 0.0))
+        throw PSIEXCEPTION("FDDS: x_alpha must be finite, and zero unless hybrid.");
+    const size_t p = naux_, o = model_.nocc, v = model_.nvir;
+    if (!W || W->nirrep() != 1 || W->rowspi()[0] != (int)p || W->colspi()[0] != (int)p || !all_finite(*W))
+        throw PSIEXCEPTION("FDDS: kernel must be a finite C1 naux by naux matrix in the declared basis.");
+
+    FDDSResponse ret;
+    ret.omega = omega;
+    ret.x_alpha = x_alpha;
+    // Dual admission (empirical, not an accuracy or sign certificate): both formations of J_d - XSW
+    // must keep sigma_min/sigma_max > 2e-13. Either check refuses; the native one runs first.
+    auto refuse = [&](const std::string& check, double ratio, const std::string& other) {
+        std::stringstream msg;
+        msg << "FDDS: Dyson admission refused by the " << check << " check: sigma_min/sigma_max = "
+            << std::setprecision(5) << ratio << " <= " << dyson_refusal << " at omega = " << omega << "; " << other
+            << ".";
+        throw PSIEXCEPTION(msg.str());
+    };
+    ret.native_dyson_ratio = native_dyson_ratio(omega, x_alpha, W);
+    if (!(ret.native_dyson_ratio > dyson_refusal))
+        refuse("native J - XSW", ret.native_dyson_ratio, "the S2 J - J*A check was not evaluated");
+
+    // ==> S2: chi0, chi0_in and Kc streamed over occupied blocks <== //
+    const double* eoccp = vector_cache_["eps_occ_A"]->pointer();
+    const double* evirp = vector_cache_["eps_vir_A"]->pointer();
+    std::vector<double> Lar(o * v), LDar(o * v);
+    for (size_t i = 0; i < o; i++)
+        for (size_t a = 0; a < v; a++) {
+            double val = evirp[a] - eoccp[i];
+            double ll = -4.0 / (val * val + omega * omega);
+            Lar[i * v + a] = ll;
+            LDar[i * v + a] = val * ll;
+            // The native non-hybrid amplitude zeroes 4D/(D^2+w^2) < 1e-14 (form_unc_amplitude).
+            if (!is_hybrid_ && 4.0 * val / (val * val + omega * omega) < 1.e-14) {
+                LDar[i * v + a] = 0.0;
+                ret.masked_transitions++;
+            }
+        }
+    const size_t nstream = is_hybrid_ ? 8 : 3;
+    const size_t fixed = cadd({cmul(2, o * v), cmul(5, p * p)});
+    size_t maxo = std::min(o, (work_doubles_ - fixed) / cmul(nstream, v * p));
+    if (maxo < 1) throw PSIEXCEPTION("FDDS: response exceeds the admitted work budget.");
+    std::vector<SharedMatrix> buf(nstream);
+    for (auto& m : buf) m = std::make_shared<Matrix>(maxo * v, p);
+    auto &b = buf[0], &bt = buf[1], &lDb = buf[2];
+    auto chi0 = std::make_shared<Matrix>("chi0", p, p);
+    auto chi0in = std::make_shared<Matrix>("chi0_in", p, p);
+    SharedMatrix K1, K2, K21;
+    if (is_hybrid_) {
+        K1 = std::make_shared<Matrix>(p, p);
+        K2 = std::make_shared<Matrix>(p, p);
+        K21 = std::make_shared<Matrix>(p, p);
+    }
+    auto gemm_tn = [p](size_t rows, double alpha, const SharedMatrix& A, const SharedMatrix& B, SharedMatrix& C) {
+        C_DGEMM('T', 'N', p, p, rows, alpha, A->pointer()[0], p, B->pointer()[0], p, 1.0, C->pointer()[0], p);
+    };
+    auto scale_rows = [p, v](SharedMatrix& M, const std::vector<double>& f, size_t astart, size_t rows) {
+        double** Mp = M->pointer();
+        for (size_t r = 0; r < rows; r++) C_DSCAL(p, f[astart * v + r], Mp[r], 1);
+    };
+    for (size_t astart = 0; astart < o; astart += maxo) {
+        size_t nb = std::min(maxo, o - astart), rows = nb * v;
+        dfh_->fill_tensor("b_ar", b, {astart, astart + nb});
+        dfh_->fill_tensor("bt_ar", bt, {astart, astart + nb});
+        lDb->copy(b);
+        scale_rows(lDb, LDar, astart, rows);
+        gemm_tn(rows, 1.0, lDb, b, chi0);
+        gemm_tn(rows, 1.0, lDb, bt, chi0in);
+        if (!is_hybrid_) continue;
+        auto &Ymb = buf[3], &Ymbt = buf[4], &Xtmp = buf[5], &EpQ = buf[6], &EmQ = buf[7];
+        // E_- b = (Y - X) b; E_+Q = (X + Y)Q and E_-Q = (Y - X)Q exactly as form_aux_matrices combines them.
+        dfh_->fill_tensor("Yb", Ymb, {astart, astart + nb});
+        dfh_->fill_tensor("Xb", Xtmp, {astart, astart + nb});
+        Ymb->axpy(-1.0, Xtmp);
+        dfh_->fill_tensor("Ybt", Ymbt, {astart, astart + nb});
+        dfh_->fill_tensor("Xbt", Xtmp, {astart, astart + nb});
+        Ymbt->axpy(-1.0, Xtmp);
+        dfh_->fill_tensor("QXarQ", EpQ, {astart, astart + nb});
+        dfh_->fill_tensor("QYarQ", EmQ, {astart, astart + nb});
+        EpQ->axpy(1.0, EmQ);
+        EmQ->scale(2.0);
+        EmQ->axpy(-1.0, EpQ);
+        gemm_tn(rows, 1.0, lDb, EpQ, K1);
+        gemm_tn(rows, 1.0, lDb, EmQ, K2);
+        scale_rows(Ymb, Lar, astart, rows);   // l E_- b
+        scale_rows(Ymbt, Lar, astart, rows);  // l E_- b_t
+        gemm_tn(rows, -x_alpha, b, Ymb, chi0);
+        gemm_tn(rows, -x_alpha, b, Ymbt, chi0in);
+        gemm_tn(rows, 1.0, Ymb, EpQ, K21);
+    }
+    buf.clear();
+    std::vector<double>().swap(Lar);
+    std::vector<double>().swap(LDar);
+
+    // A = chi0_in W + 1/4 Kc pinv(R)^T J_d, Kc = -a(K1 + K2) + a^2 K21 (= J_d^-1 Kx). Kc is
+    // combined first so that at most four p x p matrices are live from here on.
+    if (is_hybrid_) {
+        K1->add(K2);
+        K1->scale(-x_alpha);
+        K1->axpy(x_alpha * x_alpha, K21);
+        K2.reset();
+        K21.reset();
+    }
+    auto A = linalg::doublet(chi0in, W);
+    chi0in.reset();
+    if (is_hybrid_) {
+        auto KR = linalg::doublet(K1, Rtinv_);
+        K1.reset();
+        A->gemm(false, false, 0.25, KR, metric_, 1.0);
+    }
+    {
+        auto JA = linalg::doublet(metric_, A);
+        JA->scale(-1.0);
+        JA->add(metric_);
+        ret.s2_dyson_ratio = std::numeric_limits<double>::quiet_NaN();
+        if (all_finite(*JA)) {
+            auto sv = square_svd(JA);
+            ret.s2_dyson_ratio = sv->get(p - 1) / sv->get(0);
+        }
+    }
+    if (!(ret.s2_dyson_ratio > dyson_refusal)) {
+        std::stringstream other;
+        other << "the native J - XSW check passed with " << std::setprecision(5) << ret.native_dyson_ratio;
+        refuse("S2 J - J*A", ret.s2_dyson_ratio, other.str());
+    }
+    A->scale(-1.0);
+    for (size_t i = 0; i < p; i++) A->add(0, i, i, 1.0);  // I - A
+
+    // (I - A) chi = chi0: the row-major I - A is column-major (I - A)^T, so solve with 'T' and a
+    // column-major chi0 (row-major chi0^T); the result is chi in column-major, i.e. chi^T here.
+    auto lu = A->clone();
+    std::vector<int> ipiv(p);
+    if (C_DGETRF(p, p, lu->pointer()[0], p, ipiv.data()) != 0)
+        throw PSIEXCEPTION("FDDS: I - A is singular to working precision.");
+    auto chiT = chi0->transpose();
+    if (C_DGETRS('T', p, p, lu->pointer()[0], p, ipiv.data(), chiT->pointer()[0], p) != 0)
+        throw PSIEXCEPTION("FDDS: DGETRS failed.");
+    lu.reset();
+    {
+        auto resid = linalg::doublet(A, chiT, false, true);
+        resid->subtract(chi0);
+        double norm0 = chi0->rms();
+        ret.solve_residual = norm0 > 0.0 ? resid->rms() / norm0 : resid->rms();
+    }
+    chi0.reset();
+    A.reset();
+    ret.response = symmetrized(chiT);
+    ret.response->set_name("FDDS coefficient response");
+    return ret;
 }
 
 }  // namespace sapt

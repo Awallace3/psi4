@@ -342,14 +342,85 @@ void export_functional(py::module &m) {
                       SharedVector, SharedVector, bool>(),
              py::arg("primary"), py::arg("auxiliary"), py::arg("Cocc"), py::arg("Cvir"),
              py::arg("eps_occ"), py::arg("eps_vir"), py::arg("is_hybrid"))
-        .def("metric", &sapt::FDDS_Monomer::metric)
-        .def("metric_inv", &sapt::FDDS_Monomer::metric_inv)
-        .def("aux_overlap", &sapt::FDDS_Monomer::aux_overlap)
+        .def("metric", &sapt::FDDS_Monomer::metric,
+             "Borrowed, read-only view of the instance's (declared) Coulomb metric; later responses use it.")
+        .def("metric_inv", &sapt::FDDS_Monomer::metric_inv,
+             "Borrowed, read-only view of the instance's truncated metric inverse; later responses use it.")
+        .def("aux_overlap", &sapt::FDDS_Monomer::aux_overlap,
+             "Borrowed, read-only view of the instance's (declared) auxiliary overlap.")
         .def("project_densities", &sapt::FDDS_Monomer::project_densities)
         .def("form_unc_amplitude", &sapt::FDDS_Monomer::form_unc_amplitude,
              "Positive uncoupled amplitude at imaginary frequency omega (atomic units).")
         .def("form_aux_matrices", &sapt::FDDS_Monomer::form_aux_matrices,
              "Hybrid intermediates; amp has the negative response sign.")
+        .def(py::init([](std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary, SharedMatrix Cocc,
+                         SharedMatrix Cvir, SharedVector eps_occ, SharedVector eps_vir, bool is_hybrid,
+                         size_t memory_bytes, size_t disk_bytes, std::string scratch_dir, size_t nthread,
+                         std::string subalgo, SharedMatrix aux_transform) {
+                 sapt::FDDSResources res{memory_bytes, disk_bytes, scratch_dir, subalgo, nthread};
+                 return std::make_shared<sapt::FDDS_Monomer>(primary, auxiliary, Cocc, Cvir, eps_occ, eps_vir,
+                                                             is_hybrid, res, aux_transform);
+             }),
+             py::arg("primary"), py::arg("auxiliary"), py::arg("Cocc"), py::arg("Cvir"), py::arg("eps_occ"),
+             py::arg("eps_vir"), py::arg("is_hybrid"), py::kw_only(), py::arg("memory_bytes"),
+             py::arg("disk_bytes"), py::arg("scratch_dir"), py::arg("nthread"), py::arg("subalgo") = "OUT_OF_CORE",
+             py::arg("aux_transform") = nullptr,
+             "Declared-basis path with explicit per-instance resources in bytes, a frozen OpenMP thread count "
+             "and a caller-owned scratch directory. aux_transform (naux_declared x naux_raw) maps the raw "
+             "auxiliary basis before any metric power, factorization or QR; None is the identity. "
+             "Inputs are copied.")
+        .def_static("requirement", &sapt::FDDS_Monomer::requirement, py::arg("primary"), py::arg("auxiliary"),
+                    py::arg("nocc"), py::arg("nvir"), py::arg("naux"), py::arg("is_hybrid"),
+                    py::arg("subalgo"), py::arg("nthread"),
+                    "Declared-path accounted memory and peak disk in bytes, with per-stage terms.")
+        .def("model",
+             [](const sapt::FDDS_Monomer& m) {
+                 const auto& d = m.model();
+                 py::dict r;
+                 r["naux_raw"] = d.naux_raw;
+                 r["naux"] = d.naux;
+                 r["nocc"] = d.nocc;
+                 r["nvir"] = d.nvir;
+                 r["is_hybrid"] = d.is_hybrid;
+                 r["metric_cutoff"] = sapt::FDDS_Monomer::metric_cutoff;
+                 r["metric_dropped"] = d.metric_dropped;
+                 r["metric_max_dropped"] = d.metric_max_dropped;
+                 r["metric_min_kept"] = d.metric_min_kept;
+                 r["metric_lu_rcond"] = d.metric_lu_rcond;
+                 r["qr_rank"] = d.qr_rank;
+                 r["nthread"] = d.nthread;
+                 r["r_rcond"] = sapt::FDDS_Monomer::r_rcond;
+                 r["dyson_rcond"] = sapt::FDDS_Monomer::dyson_rcond;
+                 r["dyson_refusal"] = sapt::FDDS_Monomer::dyson_refusal;
+                 r["operator_metric"] = "native: J+ = power(J_d,-1,1e-12), exchange power(J_d,-1/2,1e-12)";
+                 r["coefficient_metric"] = "full J_d^-1 folded into b = B_d J_d^-1 (not SAPT's J+)";
+                 r["response_sign"] = "symmetrized; NSD not enforced";
+                 r["memory_bytes"] = d.memory_bytes;
+                 r["disk_bytes"] = d.disk_bytes;
+                 r["required_memory_bytes"] = d.required_memory_bytes;
+                 r["required_disk_bytes"] = d.required_disk_bytes;
+                 return r;
+             },
+             "Declared-path construction record: truncations, QR rank, refusal policy and conventions.")
+        .def(
+            "form_coefficient_response",
+            [](sapt::FDDS_Monomer& m, double omega, double x_alpha, SharedMatrix kernel) {
+                auto res = m.form_coefficient_response(omega, x_alpha, kernel);
+                py::dict r;
+                r["response"] = res.response;
+                r["omega"] = res.omega;
+                r["x_alpha"] = res.x_alpha;
+                r["native_dyson_ratio"] = res.native_dyson_ratio;
+                r["s2_dyson_ratio"] = res.s2_dyson_ratio;
+                r["solve_residual"] = res.solve_residual;
+                r["masked_transitions"] = res.masked_transitions;
+                return r;
+            },
+            py::arg("omega"), py::arg("x_alpha"), py::arg("kernel"),
+            "Declared coefficient response sym((I - A)^-1 chi0) for the explicit kernel (J + fxc) in the "
+            "declared basis; refuses unless both the natively formed J - XSW and the S2-formed J - J*A "
+            "have sigma_min/sigma_max > 2e-13. Admission and a small solve_residual are not an accuracy or "
+            "sign certificate; inspect model() metric resolution.")
         .def("R", &sapt::FDDS_Monomer::R, "QR factor R, not inverted; hybrid preparation only.");
 
      py::class_<NumIntHelper, std::shared_ptr<NumIntHelper>>(m, "NumIntHelper",
