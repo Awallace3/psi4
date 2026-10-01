@@ -2806,6 +2806,8 @@ class NuclearWeightMgr {
     ~NuclearWeightMgr();
     double GetStratmannCutoff(int A) const;
     double computeNuclearWeight(MassPoint mp, int A, double stratmannCutoff) const;
+    void computeLogWeightGradient(MassPoint mp, int A, double stratmannCutoff, double *grad,
+                                  double *grad_point = nullptr) const;
 };
 
 const char *NuclearWeightMgr::nuclearschemenames[] = {"NAIVE", "BECKE", "TREUTLER", "STRATMANN",
@@ -2980,6 +2982,133 @@ double NuclearWeightMgr::computeNuclearWeight(MassPoint mp, int A, double stratm
     return numerator / denominator;
 }
 
+// Gradient of ln P_A(r) with respect to all nuclear coordinates, for a grid point r that belongs to
+// atom A and moves rigidly with it (r = R_A + u, u fixed). grad has 3 * natom entries (atom-major).
+// The quadrature weight is w = w_quad * P_A(r), so dw/dR = w * grad; w_quad does not depend on R.
+//
+//   P_A = p_A / Z,  Z = sum_B p_B,  p_B = prod_{C != B} s(nu_BC),  nu = mu + a_BC (1 - mu^2)
+//   d ln P_A = sum_B (delta_AB - P_B) d ln p_B,   d ln p_B = sum_{C != B} [s'(nu_BC) / s(nu_BC)] dnu_BC
+//   dnu = (1 - 2 a mu) dmu,  mu_BC = (r_B - r_C) / R_BC,  r_B = |r - R_B|
+//   dr_B = e_B . (dR_A - dR_B),  dR_BC = e_BC . (dR_B - dR_C)
+//
+// Pieces that are constant in R (a clamped SBECKE mu, a Stratmann step outside |nu| < 0.64, a point
+// inside the Stratmann cutoff) contribute zero, matching the piecewise definitions in computeNuclearWeight.
+void NuclearWeightMgr::computeLogWeightGradient(MassPoint mp, int A, double stratmannCutoff, double *grad,
+                                                double *grad_point) const {
+    const int natom = molecule_->natom();
+    std::fill(grad, grad + 3 * natom, 0.0);
+    if (grad_point) std::fill(grad_point, grad_point + 3, 0.0);
+    if (scheme_ == STRATMANN && distToAtom(mp, A) <= stratmannCutoff) return;
+
+    std::vector<double> dist(natom);
+    std::vector<Vector3> e(natom);  // unit vectors from each nucleus to the point
+    for (int l = 0; l < natom; l++) {
+        dist[l] = distToAtom(mp, l);
+        e[l] = Vector3(mp.x - molecule_->x(l), mp.y - molecule_->y(l), mp.z - molecule_->z(l)) / dist[l];
+    }
+
+    // mu, the step function and its log-derivative factor for every ordered pair
+    std::vector<double> mu(natom * natom, 0.0), dmu_fac(natom * natom, 0.0), s(natom * natom, 1.0),
+        dlns(natom * natom, 0.0);
+    std::vector<double> p(natom, 1.0);
+    for (int B = 0; B < natom; B++) {
+        for (int C = 0; C < natom; C++) {
+            if (B == C) continue;
+            const double inv = inv_dist_[B][C];
+            double m = (dist[B] - dist[C]) * inv;
+            bool r_dependent = true;  // does mu carry the 1/R_BC factor?
+            bool constant = false;    // is mu locally constant (clamped)?
+            if (scheme_ == SBECKE) {
+                const double invRCut = 1.0 / 5.0;
+                if (inv < invRCut) {
+                    m = (dist[B] - dist[C]) * invRCut;
+                    r_dependent = false;
+                }
+                if (m <= -1.0 || m >= 1.0) {
+                    m = (m <= -1.0) ? -1.0 : 1.0;
+                    constant = true;
+                }
+            }
+            const double a = amatrix_[B][C];
+            const double nu = m + a * (1 - m * m);
+            double sv, dsv;  // s(nu), ds/dnu
+            if (scheme_ == STRATMANN) {
+                const double sa = 0.64;
+                if (nu < -sa) {
+                    sv = 1.0, dsv = 0.0;
+                } else if (nu > sa) {
+                    sv = 0.0, dsv = 0.0;
+                } else {
+                    const double x = nu / sa, x2 = x * x;
+                    sv = (1 - x * (35 + x2 * (-35 + x2 * (21 + x2 * -5))) / 16) / 2;
+                    dsv = -(35 + x2 * (-105 + x2 * (105 + x2 * -35))) / (32 * sa);
+                }
+            } else {
+                // s = (1 - f(f(f(nu)))) / 2 with f(x) = x (3 - x^2) / 2, f'(x) = 3 (1 - x^2) / 2
+                const double f1 = nu * (3 - nu * nu) / 2;
+                const double f2 = f1 * (3 - f1 * f1) / 2;
+                const double f3 = f2 * (3 - f2 * f2) / 2;
+                sv = (1 - f3) / 2;
+                dsv = -0.5 * (1.5 * (1 - f2 * f2)) * (1.5 * (1 - f1 * f1)) * (1.5 * (1 - nu * nu));
+            }
+            const int BC = B * natom + C;
+            mu[BC] = m;
+            s[BC] = sv;
+            p[B] *= sv;
+            dlns[BC] = (sv > 0.0 && !constant) ? dsv / sv * (1 - 2 * a * m) : 0.0;
+            dmu_fac[BC] = r_dependent ? inv : 0.0;  // 1/R_BC multiplies the R_BC-derivative term
+        }
+    }
+    double Z = 0.0;
+    for (int B = 0; B < natom; B++) Z += p[B];
+    if (p[A] == 0.0 || Z == 0.0) return;  // zero weight: the point carries nothing
+
+    auto add = [&](int atom, const Vector3 &v, double c) {
+        grad[3 * atom + 0] += c * v[0];
+        grad[3 * atom + 1] += c * v[1];
+        grad[3 * atom + 2] += c * v[2];
+    };
+    for (int B = 0; B < natom; B++) {
+        if (p[B] == 0.0) continue;  // d p_B = 0 wherever p_B vanishes on an open set
+        const double coefB = (B == A ? 1.0 : 0.0) - p[B] / Z;
+        if (coefB == 0.0) continue;
+        for (int C = 0; C < natom; C++) {
+            if (B == C) continue;
+            const int BC = B * natom + C;
+            const double t = coefB * dlns[BC];
+            if (t == 0.0) continue;
+            // mu = (r_B - r_C) * k with k = 1/R_BC (or 1/RCut for a far SBECKE pair)
+            const double k = (dmu_fac[BC] != 0.0) ? dmu_fac[BC] : 1.0 / 5.0;
+            if (grad_point) {
+                // the point's own motion, d mu / dr = (e_B - e_C) k
+                for (int c = 0; c < 3; c++) grad_point[c] += t * k * (e[B][c] - e[C][c]);
+            }
+            // dr_B = e_B . (dR_A - dR_B)
+            add(A, e[B], t * k);
+            add(B, e[B], -t * k);
+            // -dr_C = -e_C . (dR_A - dR_C)
+            add(A, e[C], -t * k);
+            add(C, e[C], t * k);
+            // -mu/R_BC dR_BC,  dR_BC = e_BC . (dR_B - dR_C)
+            if (dmu_fac[BC] != 0.0) {
+                const Vector3 eBC = (molecule_->xyz(B) - molecule_->xyz(C)) * dmu_fac[BC];
+                add(B, eBC, -t * mu[BC] * dmu_fac[BC]);
+                add(C, eBC, t * mu[BC] * dmu_fac[BC]);
+            }
+        }
+    }
+}
+
+void MolecularGrid::nuclear_weight_log_gradient(int A, size_t npoints, const double *x, const double *y,
+                                                const double *z, double **grad, double **grad_point) const {
+    NuclearWeightMgr nuc(molecule_, options_.nucscheme);
+    const double stratmannCutoff = nuc.GetStratmannCutoff(A);
+    for (size_t P = 0; P < npoints; P++) {
+        MassPoint mp = {x[P], y[P], z[P], 1.0};
+        nuc.computeLogWeightGradient(mp, A, stratmannCutoff, grad[P], grad_point ? grad_point[P] : nullptr);
+    }
+}
+
 class OrientationMgr {
     // "Local" vector, matrix, atom, and molecule definitions.
     // It makes some of the code easier to read.
@@ -2996,6 +3125,7 @@ class OrientationMgr {
     ///// These are the only member variables in the whole class! /////
     std::shared_ptr<Molecule> molecule_;
     LMatrix rotation_;
+    std::shared_ptr<Matrix> gradient_;  // (dQ/dX) Q^T per nuclear coordinate, see MolecularGrid
     ///// Everything else is to set these up /////
 
     struct LAtom {
@@ -3133,6 +3263,8 @@ class OrientationMgr {
         MassPoint newmp = {newpos.x, newpos.y, newpos.z, mp.w};
         return newmp;
     }
+
+    std::shared_ptr<Matrix> gradient() const { return gradient_; }
 
     // Or we could use Matrix like smart people
     std::shared_ptr<Matrix> orientation() const {
@@ -3566,6 +3698,33 @@ OrientationMgr::OrientationMgr(std::shared_ptr<Molecule> mol) {
     } else {  // Three distinct eigenvalues
         symtype = ASYMMETRIC;
         // Q is fine the way it is.
+
+        // Its columns v_k are eigenvectors of Iq, so first-order perturbation theory gives
+        //   dv_k = sum_{l != k} v_l (v_l^T dIq v_k) / (lambda_k - lambda_l),
+        //   W = dQ Q^T = sum_{k != l} v_l v_k^T (v_l^T dIq v_k) / (lambda_k - lambda_l),
+        // with dIq/dX_Ac = q_A (e_c d_A^T + d_A e_c^T), d_A = R_A - center. The eigenvector signs are
+        // discrete choices and do not enter W.
+        const double V[3][3] = {{Q.xx, Q.xy, Q.xz}, {Q.yx, Q.yy, Q.yz}, {Q.zx, Q.zy, Q.zz}};  // V[a][k]
+        const double lam[3] = {evals.x, evals.y, evals.z};
+        gradient_ = std::make_shared<Matrix>("Orientation gradient", 3 * mol->natom(), 9);
+        double **Wp = gradient_->pointer();
+        for (int A = 0; A < mol->natom(); A++) {
+            const double q = mol->true_atomic_number(A);
+            const double d[3] = {mol->x(A) - center.x, mol->y(A) - center.y, mol->z(A) - center.z};
+            for (int c = 0; c < 3; c++) {
+                for (int k = 0; k < 3; k++) {
+                    for (int l = 0; l < 3; l++) {
+                        if (l == k) continue;
+                        // v_l^T dIq v_k = q (v_lc (d.v_k) + (v_l.d) v_kc)
+                        const double dlv = d[0] * V[0][l] + d[1] * V[1][l] + d[2] * V[2][l];
+                        const double dkv = d[0] * V[0][k] + d[1] * V[1][k] + d[2] * V[2][k];
+                        const double c_lk = q * (V[c][l] * dkv + dlv * V[c][k]) / (lam[k] - lam[l]);
+                        for (int a = 0; a < 3; a++)
+                            for (int b = 0; b < 3; b++) Wp[3 * A + c][3 * a + b] += c_lk * V[a][l] * V[b][k];
+                    }
+                }
+            }
+        }
     }
 
     if (Process::environment.options.get_int("DEBUG") > 0) {
@@ -3733,6 +3892,7 @@ void MolecularGrid::buildGridFromOptions(MolecularGridOptions const &opt) {
 
     // RMP: Like, I want to keep this info, yo?
     orientation_ = std_orientation.orientation();
+    orientation_gradient_ = std_orientation.gradient();
     radial_grids_.clear();
     spherical_grids_.clear();
 

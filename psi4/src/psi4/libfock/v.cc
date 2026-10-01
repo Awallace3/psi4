@@ -1031,7 +1031,7 @@ double VBase::vv10_nlc(SharedMatrix D, SharedMatrix ret) {
     return vv10_e;
 }
 SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
-    // Fixed-grid VV10 gradient: w_i are quadrature weights, D is an RKS alpha density,
+    // Moving-grid VV10 gradient: w_i are quadrature weights, D is an RKS alpha density,
     // rho = 2 sum_mn D_mn phi_m phi_n is the total density, gamma = |grad rho|^2,
     // and R_ij = |r_i - r_j|.
     //
@@ -1059,17 +1059,32 @@ SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
     //    The integrator returns half this gradient; both callers multiply by 2.
     //    UKS supplies D = (Da + Db)/2, so the same equations use its total density.
     //
-    // Approximation: r_i and w_i are fixed, as in the local XC gradient. Thus dR_ij/dX_A=0;
-    // moving-grid derivatives require point-motion, weight, and kernel-distance terms together.
-    // Energy finite differences rebuild the grid, so agreement is quadrature-limited.
+    // 4. Moving grid. The VV10 grid is atom-centered: a point r_i owned by atom A(i) sits at R_A + u_i
+    //    and carries w_i = w_quad_i P_A(r_i; {R}), P the nuclear partition weight. The energy that finite
+    //    differences see moves with the atoms, so the exact derivative of the discrete E adds, per point i,
+    //    a) point motion of the density:  d rho_i/dX_A(i) += d rho/dx (r_i), d gamma_i += 2 (H grad rho)_x,
+    //       H the density Hessian. Summed with the basis-function term this is exactly translation-invariant.
+    //    b) explicit distance dependence of Phi: dE/dr_i = w_i rho_i sum_j w_j rho_j dPhi_ij/dr_i, the
+    //       GRID_W* output of compute_vv10_kernel(do_grad). Both ends of a pair move, and each point's
+    //       share goes to its own parent atom.
+    //    c) weights: sum_i (dE/dw_i) w_i d ln P_A(i)(r_i)/dX, with dE/dw_i = rho_i (beta + F_i) (DE_DW).
+    //    a) and b) belong to A(i), so the grid is blocked per atom (DFT_BLOCK_SCHEME ATOMIC); blocking
+    //    only groups the points and weights that vv10_nlc uses.
+    //    d) orientation: every atomic grid is turned by the standard-orientation matrix Q({R}), so a
+    //    point also moves by dr_i = W (r_i - R_A(i)) dX with W = (dQ/dX) Q^T (MolecularGrid::
+    //    orientation_gradient). With F_i = dE/dr_i at fixed nuclei (a + b + w_i dE/dw_i d ln P/dr_i),
+    //    dE/dX += sum_ab W_ab M_ab, M_ab = sum_i F_i,a (r_i - R_A(i))_b. Q is not smooth for degenerate
+    //    charge moments (symmetric and spherical tops); there W is unavailable and d) is skipped.
+    //    Terms a)-d) are computed at full size and halved to match the integrator's convention.
     // Screening follows vv10_nlc (cached rho >= vv10_rho_cutoff_, outer rho >= 1e-12);
     // the symmetric-pair potentials above neglect the residual from asymmetric screening.
     timer_on("V: VV10 Gradient");
     timer_on("Setup");
 
-    // => VV10 Grid and Cache (identical to vv10_nlc) <=
+    // => VV10 Grid and Cache (the vv10_nlc grid, blocked per atom) <=
     std::map<std::string, std::string> opt_map;
     opt_map["DFT_PRUNING_SCHEME"] = "FLAT";
+    opt_map["DFT_BLOCK_SCHEME"] = "ATOMIC";
 
     std::map<std::string, int> opt_int_map;
     opt_int_map["DFT_RADIAL_POINTS"] = options_.get_int("DFT_VV10_RADIAL_POINTS");
@@ -1080,7 +1095,7 @@ SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
     std::vector<std::shared_ptr<PointFunctions>> nl_point_workers;
     prepare_vv10_cache(nlgrid, D, vv10_cache, nl_point_workers);
 
-    // GGA gradient terms need second basis-function derivatives; densities stay GGA-level.
+    // GGA gradient terms and the density Hessian need second basis-function derivatives
     for (auto& worker : nl_point_workers) worker->set_deriv(2);
 
     timer_off("Setup");
@@ -1090,12 +1105,24 @@ SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
     const int max_functions = nlgrid.max_functions();
     const int max_points = nlgrid.max_points();
     const int natom = primary_->molecule()->natom();
+    // The kernel writes per-point outputs into the functional workers' max_points buffers
+    if (max_points > functional_workers_[0]->max_points()) {
+        throw PSIEXCEPTION("V: VV10 gradient grid blocks exceed the functional's DFT_BLOCK_MAX_POINTS buffers.");
+    }
 
     // Per thread temporaries
-    std::vector<SharedMatrix> G_local, U_local;
+    std::vector<SharedMatrix> G_local, U_local, T0_local, TX_local, TY_local, TZ_local, dlnP_local, dlnPr_local,
+        M_local;
     for (size_t i = 0; i < num_threads_; i++) {
         G_local.push_back(std::make_shared<Matrix>("G Temp", natom, 3));
         U_local.push_back(std::make_shared<Matrix>("U Temp", max_points, max_functions));
+        T0_local.push_back(std::make_shared<Matrix>("phi D", max_points, max_functions));
+        TX_local.push_back(std::make_shared<Matrix>("phi_x D", max_points, max_functions));
+        TY_local.push_back(std::make_shared<Matrix>("phi_y D", max_points, max_functions));
+        TZ_local.push_back(std::make_shared<Matrix>("phi_z D", max_points, max_functions));
+        dlnP_local.push_back(std::make_shared<Matrix>("dlnP", max_points, 3 * natom));
+        dlnPr_local.push_back(std::make_shared<Matrix>("dlnP/dr", max_points, 3));
+        M_local.push_back(std::make_shared<Matrix>("Grid torque", 3, 3));
     }
 
 #pragma omp parallel for private(rank) schedule(guided) num_threads(num_threads_)
@@ -1106,23 +1133,120 @@ SharedMatrix VBase::vv10_nlc_gradient(SharedMatrix D) {
         std::shared_ptr<BlockOPoints> block = nlgrid.blocks()[Q];
         std::shared_ptr<SuperFunctional> fworker = functional_workers_[rank];
         std::shared_ptr<PointFunctions> pworker = nl_point_workers[rank];
+        const size_t A = block->parent_atom();
+        const int npoints = block->npoints();
+        const int nlocal = block->functions_local_to_global().size();
+        const double* w = block->w();
 
         pworker->compute_points(block);
 
-        // Fills V_RHO_A and V_GAMMA_AA with the VV10 kernel potential for this block
+        // V_RHO_A, V_GAMMA_AA, the explicit-distance force GRID_W* and DE_DW for this block
         parallel_timer_on("Kernel", rank);
-        fworker->compute_vv10_kernel(pworker->point_values(), vv10_cache, block);
+        fworker->compute_vv10_kernel(pworker->point_values(), vv10_cache, block, -1, true);
         parallel_timer_off("Kernel", rank);
 
-        // GGA ansatz: the VV10 kernel has no tau dependence, even inside a meta-GGA functional
+        // Basis-function motion. GGA ansatz: the VV10 kernel has no tau dependence.
         parallel_timer_on("V_xc gradient", rank);
         dft_integrators::rks_gradient_integrator(primary_, block, fworker, pworker, G_local[rank], U_local[rank], 1);
         parallel_timer_off("V_xc gradient", rank);
+
+        parallel_timer_on("Grid gradient", rank);
+        double** Gp = G_local[rank]->pointer();
+        const double* v_rho = fworker->value("V_RHO_A")->pointer();
+        const double* v_gamma = fworker->value("V_GAMMA_AA")->pointer();
+        const double* rho_x = pworker->point_value("RHO_AX")->pointer();
+        const double* rho_y = pworker->point_value("RHO_AY")->pointer();
+        const double* rho_z = pworker->point_value("RHO_AZ")->pointer();
+        const double* f_x = fworker->vv_value("GRID_WX")->pointer();
+        const double* f_y = fworker->vv_value("GRID_WY")->pointer();
+        const double* f_z = fworker->vv_value("GRID_WZ")->pointer();
+        const double* de_dw = fworker->vv_value("DE_DW")->pointer();
+
+        // a) Density Hessian, rho = 2 phi D phi:  rho_ab = 4 [phi_ab . (D phi) + phi_b . (D phi_a)]
+        const int coll = pworker->basis_value("PHI")->ncol();
+        double** Dp = pworker->D_scratch()[0]->pointer();
+        double** phi = pworker->basis_value("PHI")->pointer();
+        double** phi_a[3] = {pworker->basis_value("PHI_X")->pointer(), pworker->basis_value("PHI_Y")->pointer(),
+                             pworker->basis_value("PHI_Z")->pointer()};
+        double** phi_ab[3][3];
+        phi_ab[0][0] = pworker->basis_value("PHI_XX")->pointer();
+        phi_ab[0][1] = phi_ab[1][0] = pworker->basis_value("PHI_XY")->pointer();
+        phi_ab[0][2] = phi_ab[2][0] = pworker->basis_value("PHI_XZ")->pointer();
+        phi_ab[1][1] = pworker->basis_value("PHI_YY")->pointer();
+        phi_ab[1][2] = phi_ab[2][1] = pworker->basis_value("PHI_YZ")->pointer();
+        phi_ab[2][2] = pworker->basis_value("PHI_ZZ")->pointer();
+        double** T0 = T0_local[rank]->pointer();
+        double** Ta[3] = {TX_local[rank]->pointer(), TY_local[rank]->pointer(), TZ_local[rank]->pointer()};
+        C_DGEMM('N', 'N', npoints, nlocal, nlocal, 1.0, phi[0], coll, Dp[0], max_functions, 0.0, T0[0],
+                max_functions);
+        for (int a = 0; a < 3; a++) {
+            C_DGEMM('N', 'N', npoints, nlocal, nlocal, 1.0, phi_a[a][0], coll, Dp[0], max_functions, 0.0,
+                    Ta[a][0], max_functions);
+        }
+
+        // c) d ln P_A / dR for every point of this block, and d ln P_A / dr for d)
+        double** dlnP = dlnP_local[rank]->pointer();
+        double** dlnPr = dlnPr_local[rank]->pointer();
+        nlgrid.nuclear_weight_log_gradient(A, npoints, block->x(), block->y(), block->z(), dlnP, dlnPr);
+        double** Mp = M_local[rank]->pointer();
+        const double* px[3] = {block->x(), block->y(), block->z()};
+        const Vector3 RA = primary_->molecule()->xyz(A);
+
+        double own[3] = {0.0, 0.0, 0.0};
+        for (int P = 0; P < npoints; P++) {
+            const double grad_rho[3] = {rho_x[P], rho_y[P], rho_z[P]};
+            double H[3][3];
+            for (int a = 0; a < 3; a++) {
+                for (int b = a; b < 3; b++) {
+                    H[a][b] = H[b][a] =
+                        4.0 * (C_DDOT(nlocal, phi_ab[a][b][P], 1, T0[P], 1) + C_DDOT(nlocal, phi_a[b][P], 1, Ta[a][P], 1));
+                }
+            }
+            const double f_expl[3] = {f_x[P], f_y[P], f_z[P]};
+            double F[3];
+            for (int a = 0; a < 3; a++) {
+                const double Hg = H[a][0] * grad_rho[0] + H[a][1] * grad_rho[1] + H[a][2] * grad_rho[2];
+                // a) point motion of rho and gamma, and b) explicit distance dependence
+                const double f = w[P] * (v_rho[P] * grad_rho[a] + v_gamma[P] * 2.0 * Hg) + f_expl[a];
+                own[a] += f;
+                F[a] = f + de_dw[P] * w[P] * dlnPr[P][a];
+            }
+            // d) torque tensor of the point forces about the parent atom
+            for (int a = 0; a < 3; a++)
+                for (int b = 0; b < 3; b++) Mp[a][b] += F[a] * (px[b][P] - RA[b]);
+            // c) grid-weight derivatives, spread over all atoms
+            const double c = 0.5 * de_dw[P] * w[P];
+            for (int B = 0; B < natom; B++) {
+                Gp[B][0] += c * dlnP[P][3 * B + 0];
+                Gp[B][1] += c * dlnP[P][3 * B + 1];
+                Gp[B][2] += c * dlnP[P][3 * B + 2];
+            }
+        }
+        for (int a = 0; a < 3; a++) Gp[A][a] += 0.5 * own[a];
+        parallel_timer_off("Grid gradient", rank);
     }
 
     auto G = std::make_shared<Matrix>("VV10 Gradient", natom, 3);
     for (auto const& val : G_local) {
         G->add(val);
+    }
+
+    // d) grid orientation, halved like a)-c)
+    auto W = nlgrid.orientation_gradient();
+    if (W) {
+        auto M = std::make_shared<Matrix>("Grid torque", 3, 3);
+        for (auto const& val : M_local) M->add(val);
+        double** Mp = M->pointer();
+        double** Wp = W->pointer();
+        double** Gp = G->pointer();
+        for (int A = 0; A < natom; A++) {
+            for (int c = 0; c < 3; c++) {
+                double t = 0.0;
+                for (int a = 0; a < 3; a++)
+                    for (int b = 0; b < 3; b++) t += Wp[3 * A + c][3 * a + b] * Mp[a][b];
+                Gp[A][c] += 0.5 * t;
+            }
+        }
     }
 
     timer_off("V: VV10 Gradient");
