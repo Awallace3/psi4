@@ -1,6 +1,9 @@
 list(APPEND sources
+  casimir_grid.cc
   explicit_basis.cc
   partitioned_response.cc
+  multipole_transform.cc
+  lw_localization.cc
   isa_grid.cc
   tables.cc
   )

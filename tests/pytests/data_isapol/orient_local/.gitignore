@@ -1,0 +1,9 @@
+# Bounded, user-authorized numerical/configuration fixtures only.
+!.gitignore
+!manifest.json
+!manifest.json.sha256
+!frequency_header_excerpt.json
+!H2O.ornt
+!H2O.axes
+!H2O.sites
+!README.md
