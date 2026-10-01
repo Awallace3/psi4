@@ -82,6 +82,7 @@ foreach(dir_name
   libdpd
   libfock
   libfunctional
+  libisapol
   libiwl
   libmints
   libmoinfo

@@ -53,6 +53,7 @@ target_sources(core
     export_dpd.cc
     export_fock.cc
     export_functional.cc
+    export_isapol.cc
     export_misc.cc
     export_oeprop.cc
     export_pcm.cc

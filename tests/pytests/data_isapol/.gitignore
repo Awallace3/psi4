@@ -1,0 +1,3 @@
+# Keep the fixtures the tests read visible despite the repository-wide ignores.
+!.gitignore
+!camcasp_grid_h2o.npz
