@@ -667,14 +667,24 @@ def test_declared_resources_and_private_scratch(orbitals, tmp_path):
 
 @pytest.mark.parametrize("hybrid", [False, True])
 def test_declared_pass_charges_the_live_raw_dfhelper(orbitals, hybrid, tmp_path):
-    """The raw DFHelper keeps its Schwarz mask/function index (nshell^2 + N^2) and skip arrays (5N) through the
-    declared pass; that stage and its blocks are budgeted with them, and one byte short is refused."""
+    """The raw DFHelper keeps its Schwarz shell mask and function index (nshell^2 + N^2), skip arrays (5N + 3)
+    and shell offsets through the declared pass. Every other declared-pass term depends only on nocc, nvir and
+    the auxiliary dimensions, so between two primary bases the stage moves by exactly that retained storage."""
+    primary, auxiliary = orbitals[:2]
+    larger = psi4.core.BasisSet.build(primary.molecule(), "ORBITAL", "aug-cc-pvdz")
+
+    def stage(basis):
+        req = psi4.core.FDDS_Monomer.requirement(basis, auxiliary, 5, 19, auxiliary.nbf(), hybrid, "OUT_OF_CORE", 1)
+        n, nshell = basis.nbf(), basis.nshell()
+        return req["stage:declared_pass"], 8 * (n * n + nshell * nshell + 5 * n + nshell)
+
+    (small, retained_small), (large, retained_large) = stage(primary), stage(larger)
+    assert retained_large > retained_small
+    assert large - small == retained_large - retained_small
+
+    # Additional coverage, not evidence of the retained charge: one byte short is refused before any file,
+    # and the minimal budget matches a generous one.
     data = native_inputs(orbitals)
-    primary, auxiliary = data[:2]
-    n, nshell, pr = primary.nbf(), primary.nshell(), auxiliary.nbf()
-    req = psi4.core.FDDS_Monomer.requirement(primary, auxiliary, 5, 19, pr, hybrid, "OUT_OF_CORE", 1)
-    assert req["stage:declared_pass"] >= 8 * (n * n + nshell * nshell + 5 * n + 2 * pr * pr)
-    assert req["memory_bytes"] >= req["resident_bytes"] + req["stage:declared_pass"]
     with pytest.raises(RuntimeError, match="memory_bytes"):
         declared(data, hybrid, tmp_path, extra=-1)
     assert os.listdir(tmp_path) == []
