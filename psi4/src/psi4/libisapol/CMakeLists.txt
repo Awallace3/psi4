@@ -1,18 +1,26 @@
 list(APPEND sources
+  native_response.cc
   casimir_grid.cc
   explicit_basis.cc
   partitioned_response.cc
   multipole_transform.cc
   lw_localization.cc
+  harmonic_transform.cc
+  aux_coulomb.cc
+  orbital_coulomb.cc
   isa_grid.cc
   tables.cc
   )
 
+# Keep the heavy Libint2 engine implementation out of the Gaussian-kernel unity TU.
+set_source_files_properties(aux_coulomb.cc orbital_coulomb.cc harmonic_transform.cc PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+set_source_files_properties(native_response.cc PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 psi4_add_module(lib isapol sources)
 
 target_link_libraries(isapol
   PRIVATE
     fock
+    Libint2::cxx
   )
 
 # This module exists to reproduce another code's arithmetic bit for bit, so the

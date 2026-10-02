@@ -26,12 +26,17 @@
  * @END LICENSE
  */
 
+#include "psi4/libisapol/native_response.h"
+#include "psi4/libmints/wavefunction.h"
+#include "psi4/libmints/vector.h"
+#include "psi4/libmints/basisset.h"
 #include "psi4/libisapol/casimir_grid.h"
 #include "psi4/libisapol/isa_grid.h"
 #include "psi4/libisapol/explicit_basis.h"
 #include "psi4/libisapol/partitioned_response.h"
 #include "psi4/libisapol/multipole_transform.h"
 #include "psi4/libisapol/lw_localization.h"
+#include "psi4/libisapol/aux_coulomb.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libisapol/tables.h"
 #include "psi4/libmints/molecule.h"
@@ -188,6 +193,24 @@ void export_isapol(py::module& m) {
         return 0;  // no supported thread-local override in this build
 #endif
     });
+    py::class_<NativeRestrictedState, std::shared_ptr<NativeRestrictedState>>(m, "NativeRestrictedState")
+        .def(py::init<std::shared_ptr<Wavefunction>, bool, std::size_t>(),
+             "wavefunction"_a, "caller_converged"_a, "max_bytes"_a)
+        .def("orbitals", &NativeRestrictedState::orbitals)
+        .def("energies", &NativeRestrictedState::energies)
+        .def("density_alpha", &NativeRestrictedState::density_alpha)
+        .def("basis_snapshot", &NativeRestrictedState::basis_snapshot)
+        .def_property_readonly("nbf", &NativeRestrictedState::nbf)
+        .def_property_readonly("nmo", &NativeRestrictedState::nmo)
+        .def_property_readonly("nocc", &NativeRestrictedState::nocc)
+        .def_property_readonly("nvir", &NativeRestrictedState::nvir)
+        .def_property_readonly("nov", &NativeRestrictedState::nov)
+        .def_property_readonly("planned_bytes", &NativeRestrictedState::planned_bytes)
+        .def_property_readonly("ov_order", [](const NativeRestrictedState&) { return "occupied_fast: t=a*nocc+i"; })
+        .def_property_readonly("caller_converged", [](const NativeRestrictedState&) { return true; })
+        .def_property_readonly("convergence_evidence", [](const NativeRestrictedState&) {
+            return "caller declaration only; restricted metadata, density and orthonormality checked";
+        });
     py::class_<IsaBondTransfer>(m, "IsaBondTransfer")
         .def_readonly("first", &IsaBondTransfer::first)
         .def_readonly("second", &IsaBondTransfer::second)
@@ -328,12 +351,42 @@ void export_isapol(py::module& m) {
                      const std::vector<IsaGaussianShell>&>(), "role"_a, "representation"_a, "centres"_a, "shells"_a)
         .def_property_readonly("nfunction", &IsaExplicitBasis::nfunction)
     .def_property_readonly("role", &IsaExplicitBasis::role)
+    .def("shell_layout", &IsaExplicitBasis::shell_layout,
+         "Fresh shell-order [function_offset, function_count, centre, angular_momentum] rows")
+    .def("screening_s_overlap", &IsaExplicitBasis::screening_s_overlap,
+         "max_bytes"_a=512UL*1024*1024)
         .def("overlap", &IsaExplicitBasis::overlap, "w_eps"_a = 0.0, "s_block_only"_a = true,
              "New co-centred AtomAux/Shape metric before damping/ridge; no exponent cap")
         .def("evaluate", &IsaExplicitBasis::evaluate, "points"_a,
              "Return new (point,function) Matrix; no retained input views")
         .def("evaluate_screened", &IsaExplicitBasis::evaluate_screened, "points"_a, "sites"_a,
              "Unique zero-based active sites without padding; empty means no sites");
+    py::class_<IsaDrhoCResult>(m, "IsaDrhoCResult", "Native explicit-input finite-penalty Drho-C result; no charge rescaling")
+        .def_readonly("coulomb_metric", &IsaDrhoCResult::coulomb_metric)
+        .def_readonly("metric", &IsaDrhoCResult::metric)
+        .def_readonly("charges", &IsaDrhoCResult::charges)
+        .def_readonly("raw_rhs", &IsaDrhoCResult::raw_rhs)
+        .def_readonly("rhs", &IsaDrhoCResult::rhs)
+        .def_readonly("coefficients", &IsaDrhoCResult::coefficients)
+        .def_readonly("charge_penalty", &IsaDrhoCResult::charge_penalty)
+        .def_readonly("relative_residual", &IsaDrhoCResult::relative_residual)
+        .def_readonly("fitted_electrons", &IsaDrhoCResult::fitted_electrons);
+    py::class_<IsaAuxCoulomb>(m, "IsaAuxCoulomb", "Native Libint2 Coulomb metric and analytic charges; explicit Cartesian or spherical molecular AUX (different declared bases)")
+        .def(py::init<const IsaExplicitBasis&>(), "auxiliary"_a)
+        .def("charges", &IsaAuxCoulomb::charges)
+        .def("metric", &IsaAuxCoulomb::metric)
+        .def("point_potentials", &IsaAuxCoulomb::point_potentials,
+             "points"_a, "max_bytes"_a=512UL*1024*1024)
+        .def("three_center", &IsaAuxCoulomb::three_center, "orbital"_a)
+        .def("three_center_shell_block", &IsaAuxCoulomb::three_center_shell_block,
+             "orbital"_a, "first_shell"_a, "shell_count"_a, "max_bytes"_a=512UL*1024*1024)
+        .def("closed_shell_rhs", &IsaAuxCoulomb::closed_shell_rhs, "orbital"_a, "occupied_coefficients"_a)
+        .def("fit_drho_c", &IsaAuxCoulomb::fit_drho_c, "orbital"_a, "occupied_coefficients"_a, "charge_penalty"_a=1000.)
+        .def("native_auxiliary", &IsaAuxCoulomb::native_auxiliary,
+             "(raw Cartesian BasisSet, T): fresh caller-owned copies of the twin behind metric() and the "
+             "declared map, metric = T J_raw T^T. The BasisSet is a read-only input (e.g. FDDS_Monomer with "
+             "aux_transform=T, or IntegralFactory); do not modify it. Its ghost-centre molecule is not "
+             "update_geometry()-safe, so do not pass it to MintsHelper(basis), which empties it.");
     py::class_<IsaGridOptions>(m, "IsaGridOptions", "Options controlling the ISA integration grid")
         .def(py::init<>())
         .def_readwrite("radial_points", &IsaGridOptions::radial_points,

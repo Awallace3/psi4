@@ -143,9 +143,63 @@ LW localization, multipole transforms and frequency grid
      ``cp_weight`` includes the mapping Jacobian and the 1/(2 pi) of the
      Casimir--Polder integral. The ISA-Pol protocols use ``omega0=0.5``.
 
+Bounded DF response
+   ``psi4.driver.procrouting.isapol_bounded_response.BoundedResponse`` computes
+   the plain-DF PBE0 response of one sealed, restricted, closed-shell C1
+   wavefunction at the declared quadrature nodes, under explicit
+   ``BoundedResources`` (bytes, arithmetic work, cumulative I/O). Use it as a
+   context manager: enter (seal, state, complete preflight, private scratch),
+   ``prepare(provider)``, ``solve(omega)`` per node, then ``release()``. Leaving
+   the context removes the private scratch directory, on failure too. Each
+   ``FrequencyResponse`` holds owned arrays: ``target_response`` (p x p, in
+   response-AUX coefficient space) and ``nonlocal_response`` (site-major real
+   Racah, rank 4). ``provider(ledger)`` returns ``DistributedMoments``; the
+   default is the analytic DF-centre Q.
+
+   * ``response='reference_h2h1'`` (the default) is the reference model:
+     constrained OV fits, the fitted-density Slater/PW92 ALDA kernel, H1/H2 with
+     reciprocity/stability gates and the H2H1 residual gate.
+   * ``response='native_fdds'`` must be explicit and needs
+     ``fdds=NativeFDDSOptions(nthread, disk_bytes, subalgo)``. Each node is solved
+     by the native declared-AUX ``FDDS_Monomer`` (:ref:`sec:sapt`) on the Psi4
+     AO-order orbitals, with W = J_d + 0.75 K and x_alpha = 0.25. K is the same
+     kernel, grid, smoothing and shell mask as the reference. J_d is the native
+     instance's own metric; its maximum difference from ``IsaAuxCoulomb.metric()``
+     is recorded in ``provenance``. The target is chi and the nonlocal response
+     is -Q chi Q^T. Both are symmetrized, but negative or positive
+     semidefiniteness is not enforced. ``residual`` is native ``solve_residual``.
+     Q, the native memory and W stay reserved for the whole sweep; native
+     scratch is capped by ``disk_bytes`` and lives in the private directory. The
+     cumulative native I/O and arithmetic charged to the budget are
+     source-derived conservative estimates (native has no counters). Libint
+     integral generation has no arithmetic estimate.
+   * Before any response, an instance whose ``metric_lu_rcond`` is below
+     ``FDDS_METRIC_RCOND_CUTOFF`` (1e-14) is refused, and the value and cutoff are
+     reported. This heuristic separated the sampled epsilon-level metrics
+     (<= 1.13e-15, 10-100% wrong) from the declared recipes (>= 5.77e-14). It is
+     not an accuracy or forward-error bound. The native dual Dyson admission
+     (> 2e-13) is unchanged, and its refusals propagate.
+   * There is no molecular accuracy proof for the FDDS route. The toy recipes
+     (PBE0/sto-3g, Cartesian aug-cc-pVTZ-RI) are admitted at every node. The
+     declared molecular water recipe (PBE0/aug-cc-pVTZ) passes the metric guard,
+     but every node is refused by the dual Dyson admission on the MKL paths
+     tested.
+   * For the downstream LW stage the runner exposes ``lw_residual_policy``:
+     ``production`` for the reference, and ``reported_input_sum_rule`` for FDDS.
+     With FDDS, ``local_charge`` is report-only and the rank-0 remainder does not
+     enter local tensors, PFIT or C6. The LW orientation dependence above
+     applies to both.
+   * ``IsaAuxCoulomb.native_auxiliary()`` returns fresh copies of the raw
+     Cartesian twin and the declared map T (J_d = T J_raw T^T). The returned basis
+     is a read-only integral input; ``MintsHelper(basis)`` empties its ghost-centre
+     molecule.
+   * Every restricted C1 SCF now records a convergence seal (the stopping
+     diagnostics and a SHA-256 of the final state, streamed without full-matrix
+     copies). The seal changes no SCF arithmetic.
+
 The ISA and MBIS partitions (density partitions, not orbital rotations),
-response, point-response fitting and dispersion are built on top of these
-blocks and are added separately.
+point-response fitting and dispersion are built on top of these blocks and
+are added separately.
 
 Deferred to later stages
    These candidate APIs have no consumer here. Each is added, from candidate
@@ -158,9 +212,7 @@ Deferred to later stages
      columns with representation ``'direct_ov'``, and the unsampled supplied-Q
      constructor ``IsaPartitionedMultipoles(values, sites, representation,
      provenance)``, which takes a finished Q (``'fitted_density_coefficients'``
-     or ``'direct_ov'`` columns) and sites without samples, as given. Also ``IsaExplicitBasis.screening_s_overlap``
-     (CamCASP's signed ``screening_s_ovr`` shell surrogate for ALDA screening)
-     and ``shell_layout``.
+     or ``'direct_ov'`` columns) and sites without samples, as given.
    * Dispersion: the ``isapol_lw.Coefficient`` and ``DispersionPair``
      result records.
    * Point-response fitting: ``isapol_vdw_radius`` (``vdw_radius``), the

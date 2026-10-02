@@ -63,6 +63,7 @@ void export_functional(py::module &m) {
         .def("is_gga", &Functional::is_gga, "docstring")
         .def("is_meta", &Functional::is_meta, "docstring")
         .def("is_lrc", &Functional::is_lrc, "docstring")
+        .def("is_unpolarized", &Functional::is_unpolarized, "Whether this component uses unpolarized LibXC densities.")
         .def("set_name", &Functional::set_name, "docstring")
         .def("set_description", &Functional::set_description, "docstring")
         .def("set_citation", &Functional::set_citation, "docstring")
@@ -152,6 +153,10 @@ void export_functional(py::module &m) {
         .def("c_ss_alpha", &SuperFunctional::c_ss_alpha, "Amount of OS MP2 correlation.")
         .def("vv10_b", &SuperFunctional::vv10_b, "The VV10 b parameter.")
         .def("vv10_c", &SuperFunctional::vv10_c, "The VV10 c parameter.")
+        .def("grac_x_functional", &SuperFunctional::grac_x_functional,
+             "Actual attached GRAC exchange component, or None; no attachment setter.")
+        .def("grac_c_functional", &SuperFunctional::grac_c_functional,
+             "Actual attached GRAC correlation component, or None; no attachment setter.")
         .def("grac_shift", &SuperFunctional::grac_shift, "Shift of the bulk potenital.")
         .def("grac_alpha", &SuperFunctional::grac_alpha, "GRAC Alpha.")
         .def("grac_beta", &SuperFunctional::grac_beta, "GRAC Beta.")
@@ -200,6 +205,7 @@ void export_functional(py::module &m) {
     py::class_<LibXCFunctional, std::shared_ptr<LibXCFunctional>, Functional>(m, "LibXCFunctional", "docstring")
         .def(py::init<std::string, bool>())
         .def("get_mix_data", &LibXCFunctional::get_mix_data, "docstring")
+        .def("get_tweak", &LibXCFunctional::get_tweak, "Owned copy of explicitly applied LibXC parameter overrides.")
         .def("set_tweak", tweak_set1(&LibXCFunctional::set_tweak), "tweaks"_a, "quiet"_a = false,
             "Set all tweaks on a LibXC functional through a list. Deprecated in v1.4")
         .def("set_tweak", tweak_set2(&LibXCFunctional::set_tweak), "tweaks"_a, "quiet"_a = false,
