@@ -2989,22 +2989,27 @@ def fdisp0(
             b["T2v"] = b["T2"].reshape_view([na, nrb, nb, nsb])
             b["V2v"] = b["V2"].reshape_view([na, nrb, nb, nsb])
             b["W2v"] = b["W2"].reshape_view([na, nsb, nb, nrb])
+            # The contract-b operands of _to_lo with the column index split
+            # into (b, y); b is the faster half of a column-major column index.
+            for k, rows, ncol in (("T", M, nsb), ("V", M, nsb), ("I", M, nsb),
+                                  ("W", Ms, nrb), ("IW", Ms, nrb)):
+                b[k + "3"] = b[k].reshape_view([rows, nb, ncol])
             _bufs[key] = b
         return _bufs[key]
 
-    def _to_lo(X, I, Y, nrow_blk, ncol_blk):
+    def _to_lo(b, x, i, y, nrow_blk, ncol_blk):
         """Y[(x,a),(y,b)] = sum_a' UA[a',a] sum_b' X[(x,a'),(y,b')] UB[b',b].
 
-        The b' contraction runs over the contiguous column blocks of one y at
-        a time; the a' contraction is one GEMM over the whole block, since a'
-        is the fastest index of the column-major buffer.
+        The b' contraction is one einsum over all column blocks: Einsums runs
+        it as a single gemm_batch, one (rows x b')(b' x b) GEMM per y against
+        the same UB, which costs one Python dispatch instead of ncol_blk.  The
+        a' contraction is one GEMM over the whole block, since a' is the
+        fastest index of the column-major buffer.
         """
-        for y in range(ncol_blk):
-            ein.linalg.gemm(1.0, X[:, y * nb:(y + 1) * nb], UB, 0.0,
-                            I[:, y * nb:(y + 1) * nb])
+        ein.einsum("mcy <- mby ; bc", b[i + "3"], b[x + "3"], UB, c_pf=0.0, ab_pf=1.0)
         ncol = nrow_blk * ncol_blk * nb
-        ein.linalg.gemm(1.0, UA, I.reshape_view([na, ncol]), 0.0,
-                        Y.reshape_view([na, ncol]), trans_a=True)
+        ein.linalg.gemm(1.0, UA, b[i].reshape_view([na, ncol]), 0.0,
+                        b[y].reshape_view([na, ncol]), trans_a=True)
 
     def _np2(m):
         """A DF block's numpy buffer as (nrow, nQ); fill_tensor may leave it 3-D."""
@@ -3112,8 +3117,8 @@ def fdisp0(
                     ein.linalg.direct_division(1.0, V, D, 0.0, T)
 
                     # Transform to localized orbital basis and accumulate
-                    _to_lo(T, I, T2, nrb, nsb)
-                    _to_lo(V, I, V2, nrb, nsb)
+                    _to_lo(b, "T", "I", "T2", nrb, nsb)
+                    _to_lo(b, "V", "I", "V2", nrb, nsb)
                     ein.einsum("ab <- arbs ; arbs", E_disp20_comp,
                                b["T2v"], b["V2v"], c_pf=1.0, ab_pf=4.0)
 
@@ -3122,7 +3127,7 @@ def fdisp0(
                     # (r,a) x (s,b) half: Aar.Fbs + Far.Abs + Qar.SAbs + SBar.Qbs
                     ein.linalg.gemm(1.0, AFar[:, ra0:ra1], FAbs[:, sb0:sb1],
                                     0.0, V, trans_a=True)
-                    _to_lo(V, I, V2, nrb, nsb)
+                    _to_lo(b, "V", "I", "V2", nrb, nsb)
                     ein.einsum("ab <- arbs ; arbs", E_exch_disp20_comp,
                                b["T2v"], b["V2v"], c_pf=1.0, ab_pf=-2.0)
 
@@ -3133,7 +3138,7 @@ def fdisp0(
                     # than permuted into the (r,a) x (s,b) one.
                     ein.linalg.gemm(1.0, BCas[:, sa0:sa1], BCbr[:, rb0:rb1],
                                     0.0, W, trans_a=True)
-                    _to_lo(W, IW, W2, nsb, nrb)
+                    _to_lo(b, "W", "IW", "W2", nsb, nrb)
                     ein.einsum("ab <- arbs ; asbr", E_exch_disp20_comp,
                                b["T2v"], b["W2v"], c_pf=1.0, ab_pf=-2.0)
 
