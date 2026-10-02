@@ -171,8 +171,10 @@ Bounded DF response
      Q, the native memory and W stay reserved for the whole sweep; native
      scratch is capped by ``disk_bytes`` and lives in the private directory. The
      cumulative native I/O and arithmetic charged to the budget are
-     source-derived conservative estimates (native has no counters). Libint
-     integral generation has no arithmetic estimate.
+     source-derived estimates of the modeled tensor payload and dense/streamed
+     operations, charged at admission (native has no counters). They are not
+     measured, and not proven bounds. Libint integral generation has no
+     arithmetic estimate.
    * Before any response, an instance whose ``metric_lu_rcond`` is below
      ``FDDS_METRIC_RCOND_CUTOFF`` (1e-14) is refused, and the value and cutoff are
      reported. This heuristic separated the sampled epsilon-level metrics
@@ -191,8 +193,10 @@ Bounded DF response
      applies to both.
    * ``IsaAuxCoulomb.native_auxiliary()`` returns fresh copies of the raw
      Cartesian twin and the declared map T (J_d = T J_raw T^T). The returned basis
-     is a read-only integral input; ``MintsHelper(basis)`` empties its ghost-centre
-     molecule.
+     is a read-only integral input (e.g. ``FDDS_Monomer`` or ``IntegralFactory``),
+     not a general ``BasisSet``: ``MintsHelper(basis)`` empties its ghost-centre
+     molecule and then fails. Only that caller-owned copy is affected. Each call
+     builds a new twin, and the runner uses its own private copy.
    * Every restricted C1 SCF now records a convergence seal (the stopping
      diagnostics and a SHA-256 of the final state, streamed without full-matrix
      copies). The seal changes no SCF arithmetic.

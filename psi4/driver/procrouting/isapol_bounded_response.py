@@ -64,7 +64,9 @@ class NativeFDDSOptions:
     """Explicit native FDDS resources: OpenMP threads and peak scratch bytes.
 
     ``disk_bytes`` is the native instance's peak private scratch size, enforced
-    by native; cumulative native file I/O is charged to ``max_io_bytes``.
+    by native. ``max_io_bytes`` is charged a source-derived estimate of the
+    native tensor-file traffic at admission (see ``_native_fdds_estimates``),
+    not a measured count.
     """
     nthread: int
     disk_bytes: int
@@ -85,10 +87,14 @@ def _native_fdds_estimates(nbf, no, nv, pr, pd, requirement):
     Read from ``fdds_disp.cc`` (declared hybrid path): every native file is
     counted as written once and read once per pass, with the worst-case outer
     blocking of one occupied index per block for the exchange_X/exchange_Y
-    re-reads, so these overestimate the blocked native passes. They are
-    estimates, not proofs: native exposes no I/O or arithmetic counter, the
-    DFHelper raw-file traffic is bounded by twice its declared files, and AO
-    integral generation (Libint2) has no arithmetic estimate at all.
+    re-reads. They are estimates, not proofs or bounds: native exposes no I/O
+    or arithmetic counter. DFHelper raw-file traffic is estimated as one write
+    and one read of ``disk:raw_peak`` (its per-file traffic is not modeled),
+    and only tensor payload is counted, not file headers, logging, or
+    stdio buffering (DFHelper flushes the tail of a file it wrote at its next
+    file access, which can be in a later stage). Arithmetic covers the modeled
+    dense and streamed operations only; AO integral generation (Libint2) has
+    no arithmetic estimate at all.
     """
     n = no*nv
     npd, npr = n*pd, n*pr
