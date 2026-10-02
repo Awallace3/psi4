@@ -620,24 +620,36 @@ unchanged::
   the same as transforming a raw-basis response afterwards.
 - ``memory_bytes`` and ``disk_bytes`` cap this instance's accounted numerical
   storage and its peak scratch. ``requirement`` returns the minimum of each,
-  with per-stage terms.
+  with per-stage terms; ``integral:*`` terms are the integral-object storage
+  inside the ``metric`` and ``raw_dfhelper`` stages.
+- Accounted storage includes the Psi4-owned storage of the integral objects:
+  ERI screening values, pair lists, blocks and zero buffers, libint2 shell-pair
+  data, the integral factories' spherical-transform tables and their setup
+  scratch, and the auxiliary overlap buffers. These are bounded from the basis
+  dimensions and primitive counts for every ``SCREENING`` choice. Vectors
+  grown element by element are charged at twice their final length (the
+  libstdc++, libc++ and MSVC growth factors are 2, 2 and 1.5) plus one old
+  buffer while growing.
 - The memory cap is not a process-memory cap. It does not count:
 
-  - BLAS/LAPACK internals;
-  - the integral objects created and destroyed inside each integral pass:
-    libint2 engine scratch, libint2 shell-pair data, ERI screening values
-    and pair lists, and the integral factories' spherical-transform tables;
-  - bookkeeping such as tensor names, stream records and timers.
+  - BLAS/LAPACK internals and ``libint2::Engine`` scratch;
+  - allocator overhead and bookkeeping such as tensor names, stream records,
+    timers and the one-function dummy basis sets;
+  - the per-thread engines and list headers of the auxiliary-overlap shell-pair
+    builder, which uses the process thread count (``set_num_threads``). Its
+    pair lists are charged independently of that count.
 
-  In tested builds with ``MAX_AM_ERI = 5`` these added about 20 MB of engine
-  scratch, 0.2 MB (water) to 2.5 MB (benzene, cc-pVDZ) of other integral-object
-  storage, and about 40 kB of bookkeeping.
-- ``nthread`` fixes the OpenMP threads used for integrals and blocking for the
+  In tested builds with ``MAX_AM_ERI = 5`` the engine scratch was about 20 MB.
+- ``nthread`` fixes the OpenMP threads used for ERIs and blocking for the
   instance's lifetime. BLAS threading stays with the vendor library.
+- Every ERI on this path is computed by Libint2, whatever ``INTEGRAL_PACKAGE``
+  says. The raw DFHelper is given the instance's own Coulomb metric instead of
+  forming its own. Integral screening still follows ``INTS_TOLERANCE`` and
+  ``SCREENING``.
 - Admission uses checked byte arithmetic. It runs after input validation and
   before any copy, integral or file.
 - Global memory, options, threads and the PSIO scratch path are neither read
-  for these decisions nor modified.
+  for these resource decisions nor modified.
 - Scratch files go in the caller's existing writable ``scratch_dir``. They
   are removed when the instance is destroyed, and the directory itself is
   kept.

@@ -663,3 +663,59 @@ def test_declared_resources_and_private_scratch(orbitals, tmp_path):
     assert os.listdir(tmp_path) == [] and tmp_path.is_dir()
     assert (psi4.core.get_memory(), psio.get_default_path(), psi4.core.get_global_option("SCF_SUBTYPE"),
             psi4.core.has_global_option_changed("SCF_SUBTYPE"), psi4.core.get_num_threads(), watched()) == before
+
+
+def test_declared_integral_storage_is_charged(orbitals):
+    primary, auxiliary = orbitals[:2]
+
+    def req(aux=auxiliary, t=1):
+        return psi4.core.FDDS_Monomer.requirement(primary, aux, 5, 19, aux.nbf(), True, "OUT_OF_CORE", t)
+
+    base = req()
+    assert base["stage:metric"] > base["integral:metric"] > 0
+    assert base["stage:raw_dfhelper"] > base["integral:dfhelper"] > 0
+    assert base["memory_bytes"] >= base["resident_bytes"] + base["stage:raw_dfhelper"]
+    # One (Q0|P0) object per instance thread in the metric pass; at many threads the (Q0|mn) clones
+    # set the DFHelper pass. Both grow affinely, to the double each total is rounded up to.
+    metric = [req(t=t)["integral:metric"] for t in (1, 2, 3)]
+    dfh = [req(t=t)["integral:dfhelper"] for t in (8, 9, 10)]
+    for a, b, c in (metric, dfh):
+        assert b > a and abs((c - b) - (b - a)) <= 8
+    # The same auxiliary shells with twice the primitives: only the integral storage grows (at eight
+    # threads, where the auxiliary-dependent (Q0|mn) pass rather than (mn|mn) sets the DFHelper term).
+    six = psi4.core.BasisSet.build(auxiliary.molecule(), "ORBITAL", "sto-6g")
+    assert (six.nbf(), six.nshell(), six.max_am()) == (auxiliary.nbf(), auxiliary.nshell(), auxiliary.max_am())
+    assert six.nprimitive() == 2 * auxiliary.nprimitive()
+    base, more = req(t=8), req(aux=six, t=8)
+    assert more.keys() == base.keys()
+    for key in base:
+        if key.startswith("integral:"):
+            assert more[key] > base[key], key
+        elif key in ("memory_bytes", "stage:metric", "stage:raw_dfhelper"):
+            assert more[key] >= base[key], key
+        else:
+            assert more[key] == base[key], key
+    with pytest.raises(RuntimeError, match="overflows"):
+        req(t=2**62)
+
+
+def test_declared_integrals_are_instance_local(orbitals, tmp_path):
+    data = native_inputs(orbitals)
+    mono = declared(data, False, tmp_path)
+    # The raw DFHelper is given this metric in place of the FittingMetric it would form.
+    fitting = psi4.core.FittingMetric(data[1], True)
+    fitting.form_fitting_metric()
+    np.testing.assert_array_equal(mono.metric().np, fitting.get_metric().np)
+    kernel = psi4.core.Matrix.from_array(mono.metric().np + 0.03 * mono.aux_overlap().np)
+    expected = mono.form_coefficient_response(0.4, 0.0, kernel)["response"].np
+
+    # Every ERI on the declared path is Libint2, whatever INTEGRAL_PACKAGE says.
+    psi4.set_options({"integral_package": "simint"})
+    try:
+        if not psi4.addons("simint"):  # then IntegralFactory::eri() has no engine to return
+            with pytest.raises(RuntimeError, match="No ERI object"):
+                psi4.core.FittingMetric(data[1], True).form_fitting_metric()
+        other = declared(data, False, tmp_path)
+        np.testing.assert_array_equal(other.form_coefficient_response(0.4, 0.0, kernel)["response"].np, expected)
+    finally:
+        psi4.core.clean_options()

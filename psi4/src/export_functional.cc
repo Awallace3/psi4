@@ -372,7 +372,7 @@ void export_functional(py::module &m) {
         .def_static("requirement", &sapt::FDDS_Monomer::requirement, py::arg("primary"), py::arg("auxiliary"),
                     py::arg("nocc"), py::arg("nvir"), py::arg("naux"), py::arg("is_hybrid"),
                     py::arg("subalgo"), py::arg("nthread"),
-                    "Declared-path accounted memory and peak disk in bytes, with per-stage terms.")
+                    "Declared-path accounted memory and peak disk in bytes, with per-stage and integral:* terms.")
         .def("model",
              [](const sapt::FDDS_Monomer& m) {
                  const auto& d = m.model();

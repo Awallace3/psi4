@@ -42,6 +42,7 @@
 namespace psi {
 
 class BasisSet;
+class IntegralFactory;
 class Matrix;
 class TwoBodyAOInt;
 
@@ -92,6 +93,15 @@ class PSI_API DFHelper {
     void set_scratch_path(const std::string& path) {
         scratch_path_ = (path.empty() || path.back() == '/') ? path : path + "/";
     }
+
+    /// Opt-in replacement for the FittingMetric (P|Q) of the power-1 metric file. The C1
+    /// naux x naux matrix is written in its place when that file is first formed, then released.
+    /// Unsupported with hold_met(true). Defaults to unset (FittingMetric).
+    void set_fitting_metric(SharedMatrix metric) { supplied_metric_ = metric; }
+
+    /// Opt-in: build this instance's ERI objects as Libint2ERI regardless of INTEGRAL_PACKAGE,
+    /// with the same INTS_TOLERANCE threshold. Defaults to false (IntegralFactory::eri()).
+    void set_libint2_eri(bool libint2) { libint2_eri_ = libint2; }
 
     /// Returns the number of doubles in the *screened* AO integrals
     size_t get_AO_size() { return big_skips_[nbf_]; }
@@ -343,6 +353,9 @@ class PSI_API DFHelper {
     size_t naux_;
 
     std::string scratch_path_;
+    SharedMatrix supplied_metric_;
+    bool libint2_eri_ = false;
+    std::shared_ptr<TwoBodyAOInt> make_eri(IntegralFactory& factory) const;
 
     // => memory in doubles <=
     size_t memory_ = 256000000;

@@ -32,6 +32,7 @@
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/integral.h"
+#include "psi4/libmints/eri.h"
 #include "psi4/libpsi4util/exception.h"
 #include "psi4/libsapt_solver/fdds_disp.h"
 #include "psi4/libmints/3coverlap.h"
@@ -78,8 +79,9 @@ bool writable_directory(const std::string& path) {
 #endif
 }
 
-// (P|Q) over one auxiliary basis, filled symmetrically; the legacy constructor loop.
-SharedMatrix form_coulomb_metric(std::shared_ptr<BasisSet> auxiliary_, size_t nthread) {
+// (P|Q) over one auxiliary basis, filled symmetrically; the legacy constructor loop. The declared
+// path asks for Libint2ERI directly (IntegralFactory::eri()'s arguments), whatever INTEGRAL_PACKAGE says.
+SharedMatrix form_coulomb_metric(std::shared_ptr<BasisSet> auxiliary_, size_t nthread, bool libint2 = false) {
     size_t naux = auxiliary_->nbf();
     auto metric = std::make_shared<Matrix>("Inv Coulomb Metric", naux, naux);
 
@@ -91,7 +93,10 @@ SharedMatrix form_coulomb_metric(std::shared_ptr<BasisSet> auxiliary_, size_t nt
     std::vector<std::shared_ptr<TwoBodyAOInt>> metric_ints(nthread);
     std::vector<const double*> metric_buff(nthread);
     for (size_t thread = 0; thread < nthread; thread++) {
-        metric_ints[thread] = std::shared_ptr<TwoBodyAOInt>(metric_factory.eri());
+        metric_ints[thread] = libint2 ? std::make_shared<Libint2ERI>(
+                                            &metric_factory,
+                                            Process::environment.options.get_double("INTS_TOLERANCE"), 0, true, false)
+                                      : std::shared_ptr<TwoBodyAOInt>(metric_factory.eri());
         metric_buff[thread] = metric_ints[thread]->buffer();
     }
 
@@ -1289,11 +1294,135 @@ SharedMatrix symmetrized(const SharedMatrix& M) {
 }
 
 // Numerical storage in doubles for one declared monomer; see sapt.rst for the stage list.
+// ==> Integral-object storage, bytes <== //
+// Psi4-owned storage of the Libint2 integral objects on the declared path, from basis dimensions
+// and primitive counts only. A vector grown by push_back/emplace_back/resize(size() + 1) is charged
+// at capacity <= 2 * count: libstdc++ and libc++ double the capacity and MSVC grows it by half; copies
+// and resizes from empty allocate exactly. A growth step briefly also holds the old buffer (fewer
+// than count elements). Objects are built one at a time, so each pass adds its largest such buffer.
+// Not bounded here: libint2::Engine scratch, allocator headers, names and the O(1) dummy basis.
+size_t grown(size_t count, size_t elem) { return cmul(cmul(2, count), elem); }
+size_t tri(size_t n) { return cmul(n, cadd({n, 1})) / 2; }
+size_t ncart_of(size_t l) { return (l + 1) * (l + 2) / 2; }
+constexpr size_t kPair = sizeof(std::pair<int, int>);
+constexpr size_t kPrim = sizeof(libint2::ShellPair::PrimPairData);
+// make_shared<ShellPair> adds a control block of a vtable pointer and two counters (libstdc++,
+// libc++, MSVC), padded to the object's alignment: within four pointers.
+constexpr size_t kShellPair = sizeof(libint2::ShellPair) + 4 * sizeof(void*);
+// Per listed pair: its single-pair ShellPairBlock and the ShellPair pointer.
+constexpr size_t kListed = sizeof(ShellPairBlock) + kPair + sizeof(std::shared_ptr<libint2::ShellPair>);
+
+// TwoBodyAOInt::create_sieve_pair_info on one basis, CSAM (the largest screening): function and
+// shell pair values, exchange values and function roots, both reverse maps, the grown function and
+// shell pair lists and adjacency rows, and the shell_pairs_ copy.
+size_t sieve_bytes(const BasisSet& b) {
+    const size_t N = b.nbf(), S = b.nshell();
+    return cadd({cmul(cadd({cmul(N, N), cmul(2, cmul(S, S)), N}), sizeof(double)),
+                 cmul(cadd({tri(N), tri(S)}), sizeof(long int)), grown(tri(N), kPair),
+                 cmul(cadd({N, S}), sizeof(std::vector<int>)), grown(cadd({cmul(N, N), cmul(S, S)}), sizeof(int)),
+                 grown(tri(S), kPair), cmul(tri(S), kPair)});
+}
+
+// ShellPair data (primitive pairs <= nprim1 * nprim2, grown) over the triangular shell pairs of b,
+// or over b's shells paired with the unit shell; and the largest single primitive-pair list.
+size_t shellpairs_bytes(const BasisSet& b, bool unit) {
+    size_t r = 0;
+    for (int P = 0; P < b.nshell(); P++)
+        for (int Q = 0; Q <= (unit ? 0 : P); Q++) {
+            const size_t np = cmul(b.l2_shell(P).nprim(), unit ? 1 : b.l2_shell(Q).nprim());
+            r = cadd({r, kShellPair, grown(np, kPrim)});
+        }
+    return r;
+}
+size_t max_primpairs_bytes(const BasisSet& b) {
+    size_t m = 0;
+    for (int P = 0; P < b.nshell(); P++) m = std::max(m, (size_t)b.l2_shell(P).nprim());
+    return cmul(cmul(m, m), kPrim);
+}
+
+// One Libint2ERI: (mn|mn) ('p') sieves the bra and copies it to the ket; (Q0|mn) ('q') grows a unit
+// bra list and sieves the ket; (Q0|P0) ('m') grows two unit lists. Clones copy everything but share the ShellPairs.
+struct EriBytes {
+    size_t own;    // sieve, pair lists, blocks, pointers, zero_vec_ and buffer list; also a clone
+    size_t pairs;  // ShellPair data, built once by the constructed object
+};
+EriBytes eri_bytes(const BasisSet& p, const BasisSet& a, char kind) {
+    const size_t sp = tri(p.nshell()), sa = a.nshell(), mf = p.max_function_per_shell();
+    const size_t mq = a.max_function_per_shell(), mf2 = cmul(mf, mf), mf4 = cmul(mf2, mf2);
+    if (kind == 'p')
+        return {cadd({sieve_bytes(p), cmul(sp, kPair), cmul(cmul(2, sp), kListed), cmul(mf4, sizeof(double)),
+                      sizeof(double*)}),
+                cmul(2, shellpairs_bytes(p, false))};
+    if (kind == 'q')
+        return {cadd({sieve_bytes(p), grown(sa, kPair), cmul(cadd({sa, sp}), kListed),
+                      cmul(cmax({cmul(mq, mf2), cmul(mq, mq), mf4}), sizeof(double)), sizeof(double*)}),
+                cadd({shellpairs_bytes(a, true), shellpairs_bytes(p, false)})};
+    if (kind != 'm') throw PSIEXCEPTION("FDDS: unknown integral kind.");
+    return {cadd({cmul(2, grown(sa, kPair)), cmul(cmul(2, sa), kListed), cmul(cmul(mq, mq), sizeof(double)),
+                  sizeof(double*)}),
+            cmul(2, shellpairs_bytes(a, true))};
+}
+
+// IntegralFactory::set_basis builds SphericalTransform and ISphericalTransform tables for l = 0..8.
+// Charged: both tables (copied entries hold exactly their components); the outer vectors grown to
+// nine entries, plus one reallocation's old entries and component copies; the temporary being
+// appended (grown components with an old buffer) and its copy; and the l = 8 ISphericalTransform
+// scratch: two ncart^2 blocks with row pointers, invert_matrix's column and ludcmp's scale vector,
+// and the pivot index.
+constexpr size_t kFactoryMaxAm = 8;
+size_t factory_bytes() {
+    const size_t csz = sizeof(SphericalTransformComponent);
+    const size_t esz = std::max(sizeof(SphericalTransform), sizeof(ISphericalTransform));
+    size_t comps = 0, top = 0;
+    for (size_t l = 0; l <= kFactoryMaxAm; l++) {
+        comps += (2 * l + 1) * ncart_of(l);
+        top = std::max(top, (2 * l + 1) * ncart_of(l));
+    }
+    const size_t nc = ncart_of(kFactoryMaxAm), entries = kFactoryMaxAm + 1;
+    return cadd({cmul(cmul(2, comps), csz), cmul(2, grown(entries, esz)), cmul(entries, esz), cmul(comps, csz),
+                 grown(top, csz), cmul(cmul(2, top), csz), cmul(cmul(2, cadd({cmul(nc, nc), nc})), sizeof(double)),
+                 cmul(cmul(2, nc), sizeof(double)), cmul(nc, sizeof(int))});
+}
+
+// The aux overlap OneBodyAOInt: tformbuf_ and target_ (ncart_of(L)^2 each) and its shell pair list.
+// build_shell_pair_list_no_spdata keeps every pair (threshold 0): per-thread lists totalling P pairs
+// (<= 2P capacity), thread 0 merging all P (<= 2P plus an old buffer < P), and the returned copy.
+size_t overlap_bytes(const BasisSet& a) {
+    const size_t nc = ncart_of(a.max_am());
+    return cadd({factory_bytes(), cmul(cmul(2, cmul(nc, nc)), sizeof(double)), cmul(cmul(6, tri(a.nshell())), kPair),
+                 sizeof(double*)});
+}
+
+// The declared metric pass: one factory, nthread separately constructed (Q0|P0) objects.
+size_t coulomb_pass_bytes(const BasisSet& p, const BasisSet& a, size_t t) {
+    const auto e = eri_bytes(p, a, 'm');
+    return cadd({factory_bytes(), cmul(t, cadd({e.own, e.pairs})),
+                 cmax({cmul(a.nshell(), kPair), max_primpairs_bytes(a)}), kListed});
+}
+
+// Raw DFHelper: prepare_sparsity's (mn|mn) object and its clone (two screening threads when t > 1),
+// then prepare_AO_core's (INCORE) and transform()'s (Q0|mn) object with t - 1 clones; each set is
+// released before the next is built.
+size_t dfhelper_pass_bytes(const BasisSet& p, const BasisSet& a, size_t t) {
+    const auto m = eri_bytes(p, a, 'p'), q = eri_bytes(p, a, 'q');
+    const size_t screen = t == 1 ? 1 : 2;
+    const size_t N = p.nbf();
+    return cadd({factory_bytes(),
+                 cmax({cadd({m.pairs, cmul(screen, m.own)}), cadd({q.pairs, cmul(t, q.own)})}),
+                 cmax({cmul(tri(N), kPair), cmul(tri(p.nshell()), kPair), cmul(a.nshell(), kPair),
+                       cmul(N, sizeof(int)), max_primpairs_bytes(p), max_primpairs_bytes(a)}),
+                 kListed});
+}
+
+size_t doubles_for(size_t bytes) { return bytes / sizeof(double) + (bytes % sizeof(double) != 0); }
+
 struct Ledger {
     size_t resident = 0, memory = 0, disk = 0;
-    std::map<std::string, size_t> stages;  // transient working sets, doubles
-    std::map<std::string, size_t> files;   // disk, doubles
-    size_t dfh_extra = 0;                   // raw-DFHelper storage it does not count in its own memory
+    std::map<std::string, size_t> stages;     // transient working sets, doubles
+    std::map<std::string, size_t> files;      // disk, doubles
+    std::map<std::string, size_t> integrals;  // integral-object storage inside stages, doubles
+    size_t dfh_extra = 0;                      // raw-DFHelper storage it does not count in its own memory
+    size_t dfh_integral = 0;                   // raw-DFHelper integral objects, also outside its memory
 };
 
 Ledger declared_ledger(const BasisSet& primary, const BasisSet& auxiliary, size_t o, size_t v, size_t pd, bool hyb,
@@ -1303,22 +1432,28 @@ Ledger declared_ledger(const BasisSet& primary, const BasisSet& auxiliary, size_
     Ledger L;
     L.resident = cadd({cmul(N, o), cmul(N, v), o, v, cmul(4, pd2), pd, hyb ? cmul(2, pd2) : 0});
 
-    // J_r, S_r, T J_r; then eigen check / Matrix::power (two n^2 copies, eigenvalues, work); dgecon.
-    L.stages["metric"] = cadd({T, cmax({cadd({cmul(2, pr2), T}), cadd({cmul(3, pd2), pd, eig_d}), cmul(5, pd)})});
+    // J_r, S_r, T J_r with the metric or overlap integral pass; then eigen check / Matrix::power (two
+    // n^2 copies, eigenvalues, work); dgecon. J_r is held for the raw DFHelper throughout.
+    L.integrals["metric"] = doubles_for(cmax({coulomb_pass_bytes(primary, auxiliary, t), overlap_bytes(auxiliary)}));
+    L.stages["metric"] = cadd({T, cmax({cadd({cmul(2, pr2), T, L.integrals["metric"]}),
+                                        cadd({pr2, cmul(3, pd2), pd, eig_d}), cadd({pr2, cmul(5, pd)})})});
 
     // Raw DIRECT_iaQ DFHelper at metric power 0: its memory share must admit the metric, one
-    // auxiliary shell of dense AOs with the worst half/final transforms, and one metric-contraction
-    // row; DFHelper additionally holds C buffers, sparsity masks and the power(0) transient.
+    // auxiliary shell of dense AOs with the worst half/final transforms, one metric-contraction
+    // row, and the second copy of each thread's C buffer while it is assigned; DFHelper
+    // additionally holds C buffers, sparsity masks, shell offsets, the supplied J_r, the power(0)
+    // transient and its integral objects.
     const size_t wtmp = hyb ? big : std::min(o, v), wfinal = hyb ? cmul(big, big) : n;
     const size_t qmax = auxiliary.max_function_per_shell(), nshell = primary.nshell();
     size_t dfh_min = cmax({pr2, cmul(qmax, cadd({cmul(N, N), cmul(wtmp, N), cmul(2, wfinal)})),
-                           cadd({pr2, cmul(cmul(2, pr), big)})});
+                           cadd({pr2, cmul(cmul(2, pr), big)}), cmul(t, cmul(N, wtmp))});
     if (subalgo == "INCORE")
         dfh_min = cmax({dfh_min, cadd({cmul(pr, cmul(N, N)), pr2, cmul(t, cmul(N, N)),
                                        cmul(3, cmul(qmax, cmul(N, N)))})});
     L.dfh_extra = cadd({T, cmul(t, cmul(N, wtmp)), cmul(2, cadd({cmul(nshell, nshell), cmul(N, N)})), cmul(5, N),
-                        cmul(3, pr2), pr, eig_r});
-    L.stages["raw_dfhelper"] = cadd({L.dfh_extra, dfh_min});
+                        3, nshell, (size_t)auxiliary.nshell(), 2, pr2, cmul(3, pr2), pr, eig_r});
+    L.dfh_integral = L.integrals["dfhelper"] = doubles_for(dfhelper_pass_bytes(primary, auxiliary, t));
+    L.stages["raw_dfhelper"] = cadd({L.dfh_extra, L.dfh_integral, dfh_min});
 
     // Declared pass: T, J_d^-1/2 (or its power() transient), one first-index block of raw/T/out rows.
     L.stages["declared_pass"] =
@@ -1379,6 +1514,7 @@ std::map<std::string, size_t> FDDS_Monomer::requirement(std::shared_ptr<BasisSet
                                       {"resident_bytes", cmul(L.resident, sizeof(double))}};
     for (const auto& kv : L.stages) ret["stage:" + kv.first] = cmul(kv.second, sizeof(double));
     for (const auto& kv : L.files) ret["disk:" + kv.first] = cmul(kv.second, sizeof(double));
+    for (const auto& kv : L.integrals) ret["integral:" + kv.first] = cmul(kv.second, sizeof(double));
     return ret;
 }
 
@@ -1456,10 +1592,12 @@ void FDDS_Monomer::prepare_declared(const FDDSResources& res, SharedMatrix T) {
     if (T) T = T->clone();
 
     // ==> Declared metric: T is applied before every power, factorization and QR <== //
-    auto J = form_coulomb_metric(auxiliary_, nthread_);
+    // J_r also replaces the raw DFHelper's FittingMetric, whose integrals use the global thread count.
+    auto Jr = form_coulomb_metric(auxiliary_, nthread_, true);
+    auto J = Jr;
     auto S = form_aux_overlap(auxiliary_);
     if (T) {
-        J = symmetrized(linalg::triplet(T, J, T, false, false, true));
+        J = symmetrized(linalg::triplet(T, Jr, T, false, false, true));
         S = symmetrized(linalg::triplet(T, S, T, false, false, true));
     }
     metric_ = J;
@@ -1512,7 +1650,10 @@ void FDDS_Monomer::prepare_declared(const FDDSResources& res, SharedMatrix T) {
     auto raw = std::make_shared<DFHelper>(primary_, auxiliary_);
     raw->set_scratch_path(res.scratch_dir);
     raw->set_subalgo(res.subalgo);
-    raw->set_memory(work_doubles_ - L.dfh_extra);
+    raw->set_memory(work_doubles_ - L.dfh_extra - L.dfh_integral);
+    raw->set_fitting_metric(Jr);
+    Jr.reset();  // the DFHelper releases it once the metric file is written
+    raw->set_libint2_eri(true);
     raw->set_method("DIRECT_iaQ");
     raw->set_nthreads(nthread_);
     raw->set_metric_pow(0.0);

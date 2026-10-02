@@ -42,7 +42,7 @@ namespace sapt {
 
 /// Explicit per-instance resources for the declared FDDS_Monomer path; every field is required.
 struct FDDSResources {
-    size_t memory_bytes = 0;  ///< cap on accounted numerical storage (matrices, blocks, LAPACK work arrays)
+    size_t memory_bytes = 0;  ///< cap on accounted numerical storage (matrices, blocks, LAPACK work, integral objects)
     size_t disk_bytes = 0;    ///< cap on this instance's peak scratch bytes
     std::string scratch_dir;  ///< existing writable caller-owned directory; only this instance's files are removed
     std::string subalgo = "OUT_OF_CORE";  ///< DFHelper AO integrals: INCORE (held) or OUT_OF_CORE (recomputed)
@@ -245,7 +245,8 @@ class FDDS_Monomer : public FDDS_Dispersion {
      * before any metric factorization, QR or response. Orbital inputs and T are copied; basis sets
      * are borrowed and must not be modified. Inputs are validated and storage admitted before any copy.
      * Global memory, options, threads and the PSIO path are never read or written for storage
-     * decisions; BLAS threading stays the vendor's. Sequential frequency calls only.
+     * decisions; BLAS threading stays the vendor's. ERIs are Libint2 whatever INTEGRAL_PACKAGE says,
+     * and their storage is charged. Sequential frequency calls only.
      */
     FDDS_Monomer(std::shared_ptr<BasisSet> primary, std::shared_ptr<BasisSet> auxiliary,
                  SharedMatrix Cocc, SharedMatrix Cvir, SharedVector eps_occ, SharedVector eps_vir, bool is_hybrid,
