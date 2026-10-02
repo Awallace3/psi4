@@ -31,6 +31,8 @@ import importlib
 import json
 import os
 import re
+import socket
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -63,10 +65,11 @@ __all__ = [
 ]
 
 SAPTDFT_CHECKPOINT_SCHEMA_VERSION = 1
-SAPTDFT_STAGE_DEFINITION_VERSION = 2
+SAPTDFT_STAGE_DEFINITION_VERSION = 3
 SAPTDFT_SCF_SNAPSHOT_VERSION = 1
 SAPTDFT_MANIFEST_FILENAME = "saptdft_state.json"
 SAPTDFT_LOCK_FILENAME = "saptdft_state.lock"
+SAPTDFT_STATUS_FILENAME = "saptdft_status.json"
 _ALLOWED_ARTIFACT_KINDS = {"array", "scf_snapshot", "wavefunction"}
 _SCF_SNAPSHOT_METADATA_KEY = "scf_snapshot"
 _SCF_SNAPSHOT_DIMENSION_KEYS = (
@@ -130,6 +133,12 @@ _RUNTIME_CONTROL_KEYS = {
     "verbosity",
 }
 
+# Keywords whose mere presence changes the computation: an explicitly set GRAC
+# shift pins that monomer's shift and suppresses its GRAC SCFs, even when the
+# value equals the 0.0 default. They are kept in the canonical keywords even
+# when equal to the default.
+_PRESENCE_SIGNIFICANT_KEYWORDS = {"sapt_dft_grac_shift_a", "sapt_dft_grac_shift_b"}
+
 _MOLECULE_IDENTITY_FIELDS = (
     "atom_labels",
     "atomic_numbers",
@@ -165,8 +174,10 @@ class StageDefinition:
 
 
 SAPTDFT_STAGE_DEFINITIONS: dict[str, StageDefinition] = {
-    "grac_monomer_a": StageDefinition(),
-    "grac_monomer_b": StageDefinition(),
+    "grac_monomer_a_neutral": StageDefinition(),
+    "grac_monomer_a": StageDefinition(dependencies=("grac_monomer_a_neutral",)),
+    "grac_monomer_b_neutral": StageDefinition(),
+    "grac_monomer_b": StageDefinition(dependencies=("grac_monomer_b_neutral",)),
     "hf_dimer_scf": StageDefinition(),
     "hf_monomer_a_scf": StageDefinition(dependencies=("hf_dimer_scf",)),
     "hf_monomer_b_scf": StageDefinition(dependencies=("hf_monomer_a_scf",)),
@@ -351,6 +362,11 @@ def _identity_method(identity: Mapping[str, Any]) -> str:
 
 
 def _selected_stage_options(identity: Mapping[str, Any]) -> dict[str, Any]:
+    """Mirror the branch decisions :func:`run_sapt_dft` makes, from the identity alone.
+
+    Canonical keywords omit values equal to the option defaults, so every
+    fallback here must equal the ``read_options.cc`` default.
+    """
     keywords = _identity_keywords(identity)
     method = _identity_method(identity)
     functional = str(keywords.get("sapt_dft_functional", "pbe0")).upper()
@@ -373,12 +389,20 @@ def _selected_stage_options(identity: Mapping[str, Any]) -> dict[str, Any]:
         do_delta_dft = do_dft and ("DFT-D3" in method_upper)
     fsapt_mode = str(keywords.get("sapt_dft_do_fsapt", "none")).upper()
     do_fsapt = fsapt_mode != "NONE"
-    do_grac = do_dft and str(keywords.get("sapt_dft_grac_compute", "none")).upper() != "NONE"
-    # Without delta-HF there is no dimer SCF yet, so ``run_sapt_dft`` runs the
-    # "Dimer for Localization" SCF to get dimer orbitals. It does so regardless of
-    # SAPT_DFT_DO_FSAPT, because ``build_sapt_jk_cache`` reads dimer orbitals on
-    # every path, so this stage tracks ``do_delta_hf`` alone.
-    localization_path = not do_delta_hf
+    induction_type = str(keywords.get("sapt_dft_induction_type", "cpks")).upper()
+    shift_only = _option_is_enabled(keywords.get("sapt_dft_grac_shift_only", False))
+    grac_requested = do_dft and str(keywords.get("sapt_dft_grac_compute", "none")).upper() != "NONE"
+    # A pinned shift (any explicit value, even the default 0.0) suppresses that
+    # monomer's GRAC; see _PRESENCE_SIGNIFICANT_KEYWORDS.
+    do_grac_a = grac_requested and "sapt_dft_grac_shift_a" not in keywords
+    do_grac_b = grac_requested and "sapt_dft_grac_shift_b" not in keywords
+    # CPHF induction needs the SAPT0 segment even without delta HF.
+    run_hf_segment = do_delta_hf or (induction_type == "CPHF" and do_dft)
+    # sapt_dft() solves the response equations only for CPKS, or for CPHF when
+    # the "functional" is HF; otherwise induction comes from the HF segment.
+    do_ind = induction_type == "CPKS" or (induction_type == "CPHF" and not do_dft)
+    # Without an HF dimer, F-SAPT still needs dimer orbitals for localization.
+    localization_path = do_fsapt and not run_hf_segment
     return {
         "do_dft": do_dft,
         "do_delta_hf": do_delta_hf,
@@ -388,23 +412,38 @@ def _selected_stage_options(identity: Mapping[str, Any]) -> dict[str, Any]:
         "do_d4": do_d4,
         "do_fsapt": do_fsapt,
         "fsapt_mode": fsapt_mode,
-        "do_grac": do_grac,
+        "do_grac_a": do_grac_a,
+        "do_grac_b": do_grac_b,
+        "do_ind": do_ind,
+        "induction_type": induction_type,
         "localization_path": localization_path,
         "method": method,
+        "run_hf_segment": run_hf_segment,
+        "shift_only": shift_only,
     }
+
+
+def _grac_stages(options: Mapping[str, Any]) -> list[str]:
+    stages = []
+    for monomer in ("a", "b"):
+        if options[f"do_grac_{monomer}"]:
+            stages.extend([f"grac_monomer_{monomer}_neutral", f"grac_monomer_{monomer}"])
+    return stages
 
 
 def selected_stages(identity: Mapping[str, Any]) -> tuple[str, ...]:
     options = _selected_stage_options(identity)
-    stages = []
+    stages = _grac_stages(options)
 
-    if options["do_grac"]:
-        stages.extend(["grac_monomer_a", "grac_monomer_b"])
+    if options["shift_only"]:
+        return tuple(stages + ["final"])
 
-    if options["do_delta_hf"]:
+    if options["run_hf_segment"]:
         stages.extend(["hf_dimer_scf", "hf_monomer_a_scf", "hf_monomer_b_scf"])
         if options["do_dft"]:
-            stages.extend(["hf_sapt_elst", "hf_sapt_exch", "hf_sapt_ind"])
+            stages.extend(["hf_sapt_elst", "hf_sapt_exch"])
+            if options["induction_type"] != "NONE":
+                stages.append("hf_sapt_ind")
 
     if options["localization_path"]:
         stages.append("dimer_localization_scf")
@@ -422,7 +461,9 @@ def selected_stages(identity: Mapping[str, Any]) -> tuple[str, ...]:
             ]
         )
 
-    stages.extend(["elst", "exch", "ind"])
+    stages.extend(["elst", "exch"])
+    if options["do_ind"]:
+        stages.append("ind")
 
     if options["do_disp"]:
         stages.append("disp")
@@ -443,8 +484,16 @@ def selected_stages(identity: Mapping[str, Any]) -> tuple[str, ...]:
 
 def selected_stage_dependencies(identity: Mapping[str, Any], stage: str) -> tuple[str, ...]:
     options = _selected_stage_options(identity)
-    grac_dependencies = ("grac_monomer_a", "grac_monomer_b") if options["do_grac"] else ()
+    grac_dependencies = tuple(
+        f"grac_monomer_{monomer}" for monomer in ("a", "b") if options[f"do_grac_{monomer}"]
+    )
+    # The last SAPT(DFT) JK-term stage: induction when sapt_dft() runs it.
+    last_jk_term = "ind" if options["do_ind"] else "exch"
 
+    if stage in ("grac_monomer_a", "grac_monomer_b"):
+        return (f"{stage}_neutral",)
+    if stage in ("grac_monomer_a_neutral", "grac_monomer_b_neutral"):
+        return ()
     if stage == "hf_dimer_scf":
         return grac_dependencies
     if stage == "hf_monomer_a_scf":
@@ -473,7 +522,7 @@ def selected_stage_dependencies(identity: Mapping[str, Any], stage: str) -> tupl
         return ("delta_dft_monomer_a_scf",)
     if stage == "delta_dft":
         return ("delta_dft_monomer_b_scf",)
-    if stage == "elst":
+    if stage in ("elst", "d3", "d4"):
         if options["do_delta_dft"]:
             return ("delta_dft",)
         if options["do_dft"] or not options["do_delta_hf"]:
@@ -484,21 +533,9 @@ def selected_stage_dependencies(identity: Mapping[str, Any], stage: str) -> tupl
     if stage == "ind":
         return ("exch",)
     if stage == "disp":
-        return ("ind",)
-    if stage == "d3":
-        if options["do_delta_dft"]:
-            return ("delta_dft",)
-        if options["do_dft"] or not options["do_delta_hf"]:
-            return ("monomer_b_dft_scf",)
-        return ("hf_monomer_b_scf",)
-    if stage == "d4":
-        if options["do_delta_dft"]:
-            return ("delta_dft",)
-        if options["do_dft"] or not options["do_delta_hf"]:
-            return ("monomer_b_dft_scf",)
-        return ("hf_monomer_b_scf",)
+        return (last_jk_term,)
     if stage == "fsapt_setup":
-        return ("ind",)
+        return (last_jk_term,)
     if stage == "fsapt_elst":
         return ("fsapt_setup",)
     if stage == "fsapt_exch":
@@ -510,11 +547,13 @@ def selected_stage_dependencies(identity: Mapping[str, Any], stage: str) -> tupl
     if stage == "fsapt_final":
         return ("fsapt_disp",) if options["do_disp"] else ("fsapt_ind",)
     if stage == "final":
+        if options["shift_only"]:
+            return grac_dependencies
         final_dependencies = []
         if options["do_fsapt"]:
             final_dependencies.append("fsapt_final")
         else:
-            final_dependencies.append("ind")
+            final_dependencies.append(last_jk_term)
         if options["do_d4"]:
             final_dependencies.append("d4")
         elif options["do_d3"]:
@@ -727,7 +766,7 @@ def _canonicalize_identity_keywords(keywords: Mapping[str, Any]) -> dict[str, An
     return {
         key: value
         for key, value in normalized_keywords.items()
-        if key not in keyword_defaults or value != keyword_defaults[key]
+        if key in _PRESENCE_SIGNIFICANT_KEYWORDS or key not in keyword_defaults or value != keyword_defaults[key]
     }
 
 
@@ -857,8 +896,13 @@ class SAPTDFTCheckpoint:
         self.identity = identity
         self.manifest_path = self.path / SAPTDFT_MANIFEST_FILENAME
         self.lock_path = self.path / SAPTDFT_LOCK_FILENAME
+        self.status_path = self.path / SAPTDFT_STATUS_FILENAME
         self._lock_acquired = False
         self._manifest = self._empty_manifest()
+        # Artifacts already checksummed by this process. Snapshots run to
+        # gigabytes on shared storage, so stage-completion queries must not
+        # re-hash them every time they are asked.
+        self._validated_artifacts: dict[str, str] = {}
 
     def _empty_manifest(self) -> dict[str, Any]:
         return {
@@ -877,12 +921,19 @@ class SAPTDFTCheckpoint:
                 self._manifest = self._read_manifest()
             else:
                 self._manifest = self._empty_manifest()
+            self._start_attempt()
         except Exception:
             self.close()
             raise
         return self
 
-    def close(self):
+    def close(self, *, outcome: str = "exited", error: Optional[BaseException] = None):
+        if self._lock_acquired:
+            try:
+                self._finish_attempt(outcome, error)
+            except Exception:
+                # Status is advisory; never let it mask the real outcome.
+                pass
         if self._lock_acquired and self.lock_path.exists():
             try:
                 metadata = json.loads(self.lock_path.read_text())
@@ -979,6 +1030,9 @@ class SAPTDFTCheckpoint:
         }
         self._write_manifest_atomic(next_manifest)
         self._manifest = next_manifest
+        for name in artifact_names:
+            self._validated_artifacts[name] = next_manifest["artifacts"][name]["sha256"]
+        self._write_status(state="running")
 
     def _require_known_stage(self, stage: str) -> None:
         if stage not in SAPTDFT_STAGE_DEFINITIONS:
@@ -998,33 +1052,141 @@ class SAPTDFTCheckpoint:
             artifact = self._manifest["artifacts"].get(artifact_name)
             if artifact is None:
                 return False
-            self._validate_artifact(artifact_name, artifact)
+            self._validate_artifact(artifact_name, artifact, cached=True)
         return True
 
     def _acquire_lock(self) -> None:
-        metadata = {
-            "created_at": time.time(),
-            "job_identity_sha256": self.identity["sha256"],
-            "pid": os.getpid(),
-        }
-        try:
-            file_descriptor = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
+        """Take the single-writer lock, breaking it only when its owner is provably gone.
+
+        The directory lives on shared storage and a resumed job usually lands on
+        another node, so the lock records host, SLURM job and process start time
+        alongside the PID. A lock is stale when its owner was on this host and
+        that process no longer exists, or was on another host under a SLURM job
+        that is no longer active. Anything else must be cleared by an operator
+        (``PSI4_CHECKPOINT_BREAK_LOCK=1``).
+        """
+        metadata = _lock_owner_metadata()
+        metadata["job_identity_sha256"] = self.identity["sha256"]
+        for _ in range(2):
             try:
-                existing = json.loads(self.lock_path.read_text())
-            except Exception:
-                existing = {}
-            existing_pid = existing.get("pid")
-            if isinstance(existing_pid, int) and _pid_exists(existing_pid):
-                raise ValidationError(
-                    f"SAPT(DFT) checkpoint lock at {self.lock_path} is held by live PID {existing_pid}."
-                )
-            raise ValidationError(f"SAPT(DFT) checkpoint lock at {self.lock_path} is stale and must be removed explicitly.")
-        with os.fdopen(file_descriptor, "w") as handle:
-            json.dump(metadata, handle, indent=2, sort_keys=True)
+                file_descriptor = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    existing = json.loads(self.lock_path.read_text())
+                except FileNotFoundError:
+                    continue
+                except Exception:
+                    existing = {}
+                stale, reason = _lock_is_stale(existing)
+                if not stale and _option_is_enabled(os.environ.get("PSI4_CHECKPOINT_BREAK_LOCK", "")):
+                    stale, reason = True, "PSI4_CHECKPOINT_BREAK_LOCK is set"
+                if not stale:
+                    raise ValidationError(
+                        f"SAPT(DFT) checkpoint lock at {self.lock_path} is held: {reason}. "
+                        "If that writer is known to be gone, rerun with PSI4_CHECKPOINT_BREAK_LOCK=1."
+                    )
+                self._break_lock(existing, reason)
+                continue
+            with os.fdopen(file_descriptor, "w") as handle:
+                json.dump(metadata, handle, indent=2, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            _fsync_directory(self.path)
+            self._lock_acquired = True
+            return
+        raise ValidationError(f"SAPT(DFT) checkpoint lock at {self.lock_path} changed hands while it was being acquired.")
+
+    def _break_lock(self, existing: Mapping[str, Any], reason: str) -> None:
+        # Renaming is atomic, so of two jobs racing to break the same stale lock
+        # exactly one moves it; the other sees FileNotFoundError and retries the
+        # exclusive create, which then fails against the winner's new lock.
+        broken = self.path / f".{SAPTDFT_LOCK_FILENAME}.broken-{uuid.uuid4().hex}"
+        try:
+            os.rename(self.lock_path, broken)
+        except FileNotFoundError:
+            return
+        message = (
+            f"\n  SAPT(DFT) checkpoint: removed stale lock at {self.lock_path} "
+            f"(owner pid={existing.get('pid')} host={existing.get('hostname')} "
+            f"slurm_job_id={existing.get('slurm_job_id')}): {reason}\n"
+        )
+        core.print_out(message)
+        broken.unlink(missing_ok=True)
+        self._broken_locks = getattr(self, "_broken_locks", []) + [{**dict(existing), "reason": reason}]
+
+    # -- operator status ----------------------------------------------------
+    #
+    # saptdft_status.json is advisory: it is written for people and job
+    # managers, never read back to decide what to compute. The manifest stays
+    # the only commit record.
+
+    def _read_status(self) -> dict[str, Any]:
+        try:
+            status = json.loads(self.status_path.read_text())
+        except Exception:
+            return {}
+        return status if isinstance(status, dict) else {}
+
+    def completed_stages(self) -> list[str]:
+        """Completed stages, in execution order."""
+        return [stage for stage in self._selected_stages() if stage in self._manifest["completed_stages"]]
+
+    def _start_attempt(self) -> None:
+        status = self._read_status()
+        attempts = status.get("attempts", []) if isinstance(status.get("attempts"), list) else []
+        for attempt in attempts:
+            if attempt.get("outcome") == "running":
+                # Its process never reached close(): killed, OOM, walltime.
+                attempt["outcome"] = "lost"
+        attempt = _lock_owner_metadata()
+        attempt.update(
+            {
+                "outcome": "running",
+                "completed_at_start": self.completed_stages(),
+                "broken_locks": getattr(self, "_broken_locks", []),
+            }
+        )
+        attempts.append(attempt)
+        self._status_attempts = attempts
+        self._write_status(state="running")
+
+    def _finish_attempt(self, outcome: str, error: Optional[BaseException]) -> None:
+        attempts = getattr(self, "_status_attempts", None)
+        if not attempts:
+            return
+        attempts[-1]["outcome"] = outcome
+        attempts[-1]["ended_at"] = time.time()
+        attempts[-1]["completed_at_end"] = self.completed_stages()
+        last_error = None
+        if error is not None:
+            last_error = {
+                "stage": self.next_unfinished_stage(),
+                "type": type(error).__name__,
+                "message": str(error)[:4000],
+            }
+            attempts[-1]["error"] = last_error
+        self._write_status(state=outcome, last_error=last_error)
+
+    def _write_status(self, *, state: str, last_error: Optional[Mapping[str, Any]] = None) -> None:
+        selected = list(self._selected_stages())
+        status = {
+            "schema_version": 1,
+            "job_identity_sha256": self.identity["sha256"],
+            "updated_at": time.time(),
+            "state": state,
+            "selected_stages": selected,
+            "completed_stages": self.completed_stages(),
+            "next_stage": next((stage for stage in selected if stage not in self._manifest["completed_stages"]), None),
+            "attempts": getattr(self, "_status_attempts", []),
+        }
+        if last_error is not None:
+            status["last_error"] = dict(last_error)
+        tmp_path = self.path / f".{SAPTDFT_STATUS_FILENAME}.{uuid.uuid4().hex}.tmp"
+        with tmp_path.open("w") as handle:
+            json.dump(_normalize_jsonable(status), handle, indent=2, sort_keys=True)
             handle.flush()
             os.fsync(handle.fileno())
-        self._lock_acquired = True
+        os.replace(tmp_path, self.status_path)
 
     def _read_manifest(self) -> dict[str, Any]:
         try:
@@ -1097,7 +1259,14 @@ class SAPTDFTCheckpoint:
                     )
                 self._validate_artifact(artifact_name, manifest["artifacts"][artifact_name])
 
-    def _validate_artifact(self, name: str, artifact: Mapping[str, Any]) -> Path:
+    def _validate_artifact(self, name: str, artifact: Mapping[str, Any], *, cached: bool = False) -> Path:
+        """Check an artifact against its manifest checksum and size.
+
+        ``cached`` accepts an artifact this process already verified with the
+        same checksum; reads of the artifact itself always re-verify.
+        """
+        if cached and self._validated_artifacts.get(name) == artifact.get("sha256"):
+            return self._resolve_artifact_path(name, artifact["path"])
         kind = artifact.get("kind")
         if kind not in _ALLOWED_ARTIFACT_KINDS:
             raise ValidationError(f"SAPT(DFT) checkpoint artifact {name} in {self.manifest_path} has unknown kind {kind!r}.")
@@ -1112,6 +1281,7 @@ class SAPTDFTCheckpoint:
             raise ValidationError(f"SAPT(DFT) checkpoint artifact {name} in {artifact_path} failed checksum validation.")
         if size != artifact.get("size"):
             raise ValidationError(f"SAPT(DFT) checkpoint artifact {name} in {artifact_path} failed size validation.")
+        self._validated_artifacts[name] = sha256
         return artifact_path
 
     def _resolve_artifact_path(self, name: str, relpath: str) -> Path:
@@ -1157,6 +1327,7 @@ class SAPTDFTCheckpoint:
         sha256, size = _file_digest_and_size(tmp_path)
         final_path = self.path / suffix
         os.replace(tmp_path, final_path)
+        _fsync_directory(self.path)
         return {"kind": "array", "path": final_path.name, "sha256": sha256, "size": size}
 
     def _write_wavefunction_artifact(self, name: str, wavefunction: Any) -> dict[str, Any]:
@@ -1169,6 +1340,7 @@ class SAPTDFTCheckpoint:
         sha256, size = _file_digest_and_size(tmp_path)
         final_path = self.path / f"{base_name}.npy"
         os.replace(tmp_path, final_path)
+        _fsync_directory(self.path)
         return {"kind": "wavefunction", "path": final_path.name, "sha256": sha256, "size": size}
 
     def _write_scf_snapshot_artifact(self, name: str, snapshot_input: Any) -> dict[str, Any]:
@@ -1204,6 +1376,7 @@ class SAPTDFTCheckpoint:
         sha256, size = _file_digest_and_size(tmp_path)
         final_path = self.path / suffix
         os.replace(tmp_path, final_path)
+        _fsync_directory(self.path)
         return {"kind": "scf_snapshot", "path": final_path.name, "sha256": sha256, "size": size}
 
     def _write_manifest_atomic(self, manifest: Mapping[str, Any]) -> None:
@@ -1213,6 +1386,7 @@ class SAPTDFTCheckpoint:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_path, self.manifest_path)
+        _fsync_directory(self.path)
 
 
 def _safe_artifact_stem(name: str) -> str:
@@ -1494,14 +1668,120 @@ def rehydrate_scf_wavefunction(
     return rehydrated
 
 
+def _fsync_directory(path: Path) -> None:
+    """Make preceding renames in ``path`` durable (a no-op where unsupported)."""
+    try:
+        file_descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(file_descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(file_descriptor)
+
+
 def _pid_exists(pid: int) -> bool:
     if pid <= 0:
         return False
     try:
         os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
     except OSError:
         return False
     return True
+
+
+def _process_start_ticks(pid: int) -> Optional[int]:
+    """Kernel start time of ``pid`` (clock ticks since boot), to detect PID reuse."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return None
+    # The command name may contain spaces; fields resume after its last ")".
+    fields = stat.rsplit(")", 1)[-1].split()
+    try:
+        return int(fields[19])
+    except (IndexError, ValueError):
+        return None
+
+
+def _boot_id() -> Optional[str]:
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        return None
+
+
+def _lock_owner_metadata() -> dict[str, Any]:
+    pid = os.getpid()
+    return {
+        "boot_id": _boot_id(),
+        "hostname": socket.gethostname(),
+        "pid": pid,
+        "process_start_ticks": _process_start_ticks(pid),
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+        "started_at": time.time(),
+    }
+
+
+def _slurm_job_active(job_id: str) -> Optional[bool]:
+    """Whether SLURM still runs ``job_id``; None when SLURM cannot be asked."""
+    try:
+        completed = subprocess.run(
+            ["squeue", "-h", "-j", str(job_id), "-o", "%T"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        # squeue rejects job ids that have left the controller's memory.
+        if "invalid job id" in (completed.stderr or "").lower():
+            return False
+        return None
+    states = {line.strip().upper() for line in completed.stdout.splitlines() if line.strip()}
+    return bool(states)
+
+
+def _lock_is_stale(existing: Mapping[str, Any]) -> tuple[bool, str]:
+    """Decide whether a lock's owner is provably gone; the reason is for messages."""
+    pid = existing.get("pid")
+    hostname = existing.get("hostname")
+    if not isinstance(pid, int):
+        return False, "lock metadata is unreadable"
+    if hostname is None:
+        # A lock from before hosts were recorded: only a local check is possible.
+        if _pid_exists(pid):
+            return False, f"PID {pid} is alive on this host and the lock does not name its host"
+        return True, f"PID {pid} no longer exists and the lock does not name its host"
+
+    if hostname == socket.gethostname() and existing.get("boot_id") in (None, _boot_id()):
+        if not _pid_exists(pid):
+            return True, f"PID {pid} no longer exists on {hostname}"
+        start_ticks = existing.get("process_start_ticks")
+        if start_ticks is not None and _process_start_ticks(pid) != start_ticks:
+            return True, f"PID {pid} on {hostname} now belongs to a different process"
+        return False, f"live PID {pid} on {hostname}"
+    if hostname == socket.gethostname():
+        return True, f"{hostname} rebooted since PID {pid} took the lock"
+
+    job_id = existing.get("slurm_job_id")
+    if not job_id:
+        return False, f"PID {pid} on {hostname} (no SLURM job recorded, cannot check another host)"
+    if job_id == os.environ.get("SLURM_JOB_ID"):
+        return False, f"PID {pid} on {hostname} belongs to this SLURM job {job_id}"
+    active = _slurm_job_active(job_id)
+    if active is False:
+        return True, f"SLURM job {job_id} on {hostname} is no longer running"
+    if active is True:
+        return False, f"SLURM job {job_id} on {hostname} is still active"
+    return False, f"PID {pid} on {hostname} under SLURM job {job_id}, whose state could not be queried"
 
 
 # ---------------------------------------------------------------------------
@@ -1658,15 +1938,21 @@ class CheckpointSession:
     def enabled(self) -> bool:
         return self.checkpoint is not None
 
-    def close(self) -> None:
+    def close(self, *, outcome: str = "exited", error: Optional[BaseException] = None) -> None:
         if self.checkpoint is not None:
-            self.checkpoint.close()
+            self.checkpoint.close(outcome=outcome, error=error)
 
     def __enter__(self) -> "CheckpointSession":
         return self
 
-    def __exit__(self, *exc_info) -> None:
-        self.close()
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        if exc is None:
+            outcome = "complete" if self.done("final") else "exited"
+        elif isinstance(exc, CheckpointStop):
+            outcome = "stopped"
+        else:
+            outcome = "failed"
+        self.close(outcome=outcome, error=exc if outcome == "failed" else None)
 
     # -- stage queries ------------------------------------------------------
 
@@ -1685,10 +1971,28 @@ class CheckpointSession:
         return self.checkpoint.next_unfinished_stage(stages=stages)
 
     def restored_scalars(self) -> dict[str, Any]:
-        """Scalars stored by previously completed stages."""
+        """SAPT(DFT) results stored by previously completed stages.
+
+        Keys starting with ``_`` are bookkeeping, read through
+        :meth:`private_scalars`, and never reach ``data`` or QCVariables.
+        """
         if self.checkpoint is None:
             return {}
-        return dict(self.checkpoint._manifest.get("scalars", {}))
+        return {
+            key: value
+            for key, value in self.checkpoint._manifest.get("scalars", {}).items()
+            if not key.startswith("_")
+        }
+
+    def private_scalars(self, prefix: str) -> dict[str, Any]:
+        """Stored scalars whose key starts with ``prefix``, with the prefix stripped."""
+        if self.checkpoint is None:
+            return {}
+        return {
+            key[len(prefix):]: value
+            for key, value in self.checkpoint._manifest.get("scalars", {}).items()
+            if key.startswith(prefix)
+        }
 
     # -- storing ------------------------------------------------------------
 
@@ -1709,7 +2013,6 @@ class CheckpointSession:
             scf_snapshots=scf_snapshots,
         )
         if self.stop_after == stage:
-            self.close()
             raise CheckpointStop(f"SAPT(DFT) checkpoint stop after {stage}")
 
     def commit_scf(self, stage: str, wfn, *, method: str, reference: str, scalars=None) -> None:
@@ -1735,23 +2038,69 @@ class CheckpointSession:
         reference: str,
         molecule=None,
         energy_key: Optional[str] = None,
+        energies: Optional[dict] = None,
+        scalar_prefix: str = "",
     ):
         """Return ``stage``'s SCF wavefunction, restoring it or running ``compute()``.
 
         On a fresh run ``compute()`` is called, the energy it left in ``CURRENT
-        ENERGY`` is filed under ``energy_key``, and the wavefunction is stored.
-        On a restart the snapshot is rehydrated instead and ``compute`` is never
-        called -- which is the whole point of the checkpoint.
+        ENERGY`` is filed under ``energy_key`` in ``energies`` (the bound ``data``
+        by default), and the wavefunction is stored. On a restart the snapshot is
+        rehydrated instead and ``compute`` is never called -- which is the whole
+        point of the checkpoint. ``scalar_prefix`` keeps an energy that is not a
+        SAPT(DFT) result out of the restored ``data``.
         """
+        energies = self.data if energies is None else energies
         if self.done(stage):
+            if energy_key is not None and (scalar_prefix + energy_key) in self.checkpoint._manifest["scalars"]:
+                energies[energy_key] = self.checkpoint._manifest["scalars"][scalar_prefix + energy_key]
             return self.restore_scf(stage, method=method, reference=reference, molecule=molecule)
         wfn = compute()
         scalars = None
         if energy_key is not None:
-            self.data[energy_key] = core.variable("CURRENT ENERGY")
-            scalars = {energy_key: self.data[energy_key]}
+            energies[energy_key] = core.variable("CURRENT ENERGY")
+            scalars = {scalar_prefix + energy_key: energies[energy_key]}
         self.commit_scf(stage, wfn, method=method, reference=reference, scalars=scalars)
         return wfn
+
+    def energy_stage(self, stage: str, compute, *, energy_key: str) -> float:
+        """Run ``compute()`` for its ``CURRENT ENERGY`` only, storing just that energy.
+
+        For SCFs (the delta-DFT supermolecular terms) whose wavefunction nothing
+        downstream reads, so no snapshot is written.
+        """
+        if self.done(stage):
+            self.data[energy_key] = self.checkpoint._manifest["scalars"][energy_key]
+            return self.data[energy_key]
+        compute()
+        self.data[energy_key] = core.variable("CURRENT ENERGY")
+        self.commit(stage, scalars={energy_key: self.data[energy_key]}, arrays={})
+        return self.data[energy_key]
+
+    def commit_data_arrays(self, stage: str) -> None:
+        """Commit ``stage`` with the bound ``data`` dict, arrays included.
+
+        Scalars go to the manifest; array-valued entries (pairwise dispersion
+        matrices) become artifacts that :meth:`restore_data_arrays` puts back.
+        """
+        arrays = {}
+        for key, value in self.data.items():
+            if isinstance(value, (core.Matrix, core.Vector)):
+                arrays[f"{stage}.data.{key}"] = np.asarray(value.np)
+            elif isinstance(value, np.ndarray):
+                arrays[f"{stage}.data.{key}"] = value
+        self.commit(stage, arrays=arrays)
+
+    def restore_data_arrays(self, stage: str) -> None:
+        """Put back the array-valued ``data`` entries :meth:`commit_data_arrays` stored."""
+        if self.checkpoint is None:
+            return
+        prefix = f"{stage}.data."
+        entry = self.checkpoint._manifest["completed_stages"].get(stage, {})
+        for name in entry.get("artifacts", []):
+            if name.startswith(prefix):
+                array = self.checkpoint.restore_array(name)
+                self.data[name[len(prefix):]] = core.Matrix.from_array(array) if array.ndim == 2 else array
 
     def restore_scf(self, stage: str, *, method: str, reference: str, molecule=None):
         """Rehydrate the SCF wavefunction snapshot stored by ``stage``.

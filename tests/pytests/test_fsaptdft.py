@@ -12,6 +12,7 @@ hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
 pytestmark = [pytest.mark.psi, pytest.mark.api]
 
 
+@pytest.mark.saptdft
 @uusing("pandas")
 def test_fsaptdft_timer():
     """Ensure SAPT(DFT) timer CSV output contains expected timing columns."""
@@ -48,16 +49,105 @@ units angstrom
     )
     psi4.core.clean_timers()
     _ = psi4.energy("sapt(dft)", molecule=mol)
-    compute_time_saptdft_fi_ein = psi4.core.get_timer_dict()["SAPT(DFT) Energy"]
-    psi4.driver.p4util.write_timer_csv("saptdft_fi_useEin_timers.csv")
+    compute_time_saptdft_fi_ein = next(
+        record
+        for record in psi4.core.get_timer_records().values()
+        if record["timer_name"] == "SAPT(DFT) Energy"
+    )
+    csv_text = psi4.driver.p4util.write_timer_csv("saptdft_fi_useEin_timers.csv")
     df = pd.read_csv("saptdft_fi_useEin_timers.csv")
     os.remove("saptdft_fi_useEin_timers.csv")
     print(f"compute_time_fi_ein: {compute_time_saptdft_fi_ein['wall_time']:.2f}s\n")
     print(df)
     timer_cols = ["timer_name", "wall_time", "user_time", "system_time", "n_calls"]
-    for col in timer_cols:
-        assert col in df.columns, f"Expected column '{col}' not found in timer CSV"
-    return
+    assert list(df.columns) == timer_cols
+    timer_row = df.loc[df["timer_name"] == "SAPT(DFT) Energy"]
+    assert len(timer_row) == 1
+    assert compute_time_saptdft_fi_ein["n_calls"] >= 1
+    assert compute_time_saptdft_fi_ein["wall_time"] >= 0.0
+    assert timer_row.iloc[0]["n_calls"] == compute_time_saptdft_fi_ein["n_calls"]
+    assert timer_row.iloc[0]["wall_time"] == pytest.approx(
+        compute_time_saptdft_fi_ein["wall_time"]
+    )
+    assert csv_text.startswith("timer_name,wall_time,user_time,system_time,n_calls\n")
+    assert "SAPT(DFT) Energy" in csv_text
+
+
+@pytest.mark.saptdft
+@pytest.mark.fsapt
+@pytest.mark.dftd4
+@uusing("dftd4")
+@pytest.mark.parametrize("do_delta_hf", [False, True])
+def test_fsaptdft_d4i_cphf_uses_sapt0_induction_partition(do_delta_hf):
+    molecule = psi4.geometry(
+        """
+0 1
+O  -0.702196054  -0.056060256   0.009942262
+H  -1.022193224   0.846775782  -0.011488714
+H   0.257521062   0.042121496   0.005218999
+--
+0 1
+O   2.268880784   0.026340101   0.000508029
+H   2.645502399  -0.412039965   0.766632411
+H   2.641145101  -0.449872874  -0.744894473
+units angstrom
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    common_options = {
+        "basis": "cc-pvdz",
+        "scf_type": "df",
+        "sapt_dft_grac_shift_a": 0.1307,
+        "sapt_dft_grac_shift_b": 0.1307,
+        "sapt_dft_do_dhf": do_delta_hf,
+        "sapt_dft_induction_type": "CPHF",
+        "sapt_dft_do_fsapt": "FISAPT",
+        "fisapt_fsapt_filepath": "none",
+        "orbital_optimizer_package": "internal",
+    }
+
+    induction_partitions = {}
+    for functional in ("hf", "pbe0"):
+        psi4.core.clean()
+        psi4.core.clean_variables()
+        psi4.set_options({**common_options, "sapt_dft_functional": functional})
+        _, wfn = psi4.energy("sapt(dft)-d4(i)", molecule=molecule, return_wfn=True)
+        induction_partitions[functional] = {
+            direction: np.asarray(wfn.variable(variable)).copy()
+            for direction, variable in {
+                "A<-B": "FSAPT_INDAB_AB",
+                "A->B": "FSAPT_INDBA_AB",
+                "ELST": "FSAPT_ELST_AB",
+                "EXCH": "FSAPT_EXCH_AB",
+            }.items()
+        }
+
+    for direction in ("A<-B", "A->B"):
+        hf_partition = induction_partitions["hf"][direction]
+        pbe0_partition = induction_partitions["pbe0"][direction]
+        assert np.any(hf_partition)
+        np.testing.assert_allclose(
+            pbe0_partition,
+            hf_partition,
+            rtol=0.0,
+            atol=1.0e-10,
+            err_msg=f"CPHF F-SAPT induction partition ({direction})",
+        )
+
+    assert not np.allclose(
+        induction_partitions["pbe0"]["ELST"],
+        induction_partitions["hf"]["ELST"],
+        rtol=0.0,
+        atol=1.0e-10,
+    )
+    assert not np.allclose(
+        induction_partitions["pbe0"]["EXCH"],
+        induction_partitions["hf"]["EXCH"],
+        rtol=0.0,
+        atol=1.0e-10,
+    )
 
 
 @pytest.mark.saptdft
@@ -270,13 +360,11 @@ no_com
 
 @pytest.mark.saptdft
 @pytest.mark.fsapt
-@uusing("pandas")
-@pytest.mark.saptdft
-@uusing("dftd4")
 @pytest.mark.dftd4
+@uusing("pandas")
 @uusing("dftd4")
 def test_fsaptdftd4_psivars():
-    """Validate SAPT(DFT)-D4(s) scalar variables and FSAPT terms vs references."""
+    """Validate SAPT(DFT)-D4(s) scalar variables and qualitative FSAPT terms."""
     import pandas as pd
 
     mol = psi4.geometry(
@@ -632,15 +720,15 @@ no_com
             0.0,
         ],
         "EDisp": [
-            -0.013635081934517781,
-            -0.2986013898239719,
-            -0.052012447785209845,
-            -3.3086784527471322,
-            -0.3122364717584897,
-            -3.360690900532342,
-            -0.06564752971972762,
-            -3.607279842571104,
-            -3.6729273722908315,
+            -0.013237448828860325,
+            -0.2823607191933717,
+            -0.04991058305999568,
+            -3.1467725043345403,
+            -0.295598168022232,
+            -3.1966830873945358,
+            -0.06314803188885601,
+            -3.429133223527912,
+            -3.492281255416768,
         ],
         "Elst": [
             0.6885821033339496,
@@ -709,15 +797,15 @@ no_com
             -0.07802976904432303,
         ],
         "Total": [
-            0.6667826558499702,
-            -0.3805542855363413,
-            -0.8399621403660978,
-            -0.5891098407707545,
-            0.2862283703136289,
-            -1.4290719811368522,
-            -0.17317948451612764,
-            -0.9696641263070958,
-            -1.1428436108232232,
+            0.6671802953775555,
+            -0.3643136023345064,
+            -0.8378602728703071,
+            -0.42720388737761317,
+            0.30286669304304914,
+            -1.2650641602479202,
+            -0.17067997749275154,
+            -0.7915174897121195,
+            -0.9621974672048711,
         ],
     }
 
@@ -994,6 +1082,7 @@ no_com
         }
     )
     _, wfn = psi4.energy("sapt(dft)-d4(i)", molecule=mol, return_wfn=True)
+    assert wfn.has_variable("FSAPT_EMPIRICAL_DISP")
 
     # Collect SAPT(DFT) energies
     saptdft_energies = {

@@ -11,8 +11,6 @@ list(APPEND sources
   get_address.cc
   get_filename.cc
   get_global_address.cc
-  get_numvols.cc
-  get_volpath.cc
   getpid.cc
   init.cc
   open.cc
@@ -33,6 +31,20 @@ list(APPEND sources
   write_entry.cc
   )
 psi4_add_module(lib psio sources)
+
+# The standalone round-trip test links a curated subset of static archives plus a
+# small stubs TU. That resolves with GNU/Clang on Linux/macOS but not with
+# clang-cl/lld-link, which emits inline and implicit functions that GCC discards
+# as unused, so the Windows objects carry undefined references the curated link
+# line does not provide: psio.lib wants DPDMOSpace::~DPDMOSpace (instantiated by
+# std::vector<DPDMOSpace> in dpd.h, reached via close.cc), and psi4util.lib wants
+# Molecule::Molecule(const Molecule&) (from inline Molecule::clone) and
+# ExternalPotential::print (from inline py_print). Not a unity or PCH artifact --
+# Linux is unity-built too, and Azure Windows builds with PCH off. Restrict the
+# test to non-Windows rather than drag in the full libmints/Libint closure.
+if(NOT WIN32)
+    add_subdirectory(test)
+endif()
 
 if (psi4_ENABLE_PRECOMPILE_HEADERS)
     # Clearly from the paths, libpsio is a weird place to be defining the pch. However, if one sensibly

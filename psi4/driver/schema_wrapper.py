@@ -726,7 +726,7 @@ def run_json_qcschema(
         "input_data": input_data,
         "extras": {"qcvars": {}},
         "provenance": {},
-        "molecule": mol.to_schema(dtype=3),
+        "molecule": mol.to_schema(dtype=3, quiet=True),
     }
 
     # Pull out a standard set of SCF properties
@@ -825,14 +825,19 @@ def run_json_qcschema(
         result_data["wavefunction"] = _convert_wavefunction(wfn)
 
     files = {
+        # Path(...).with_suffix("grad") overwrites PID
         "psi4.grad": Path(core.get_writer_file_prefix(wfn.molecule().name()) + ".grad"),
         "psi4.hess": Path(core.get_writer_file_prefix(wfn.molecule().name()) + ".hess"),
+        "psi4.vibrec": Path(core.get_writer_file_prefix(wfn.molecule().name()) + ".vibrec"),
+        "psi4.molden_normal_modes": Path(core.get_writer_file_prefix(wfn.molecule().name()) + ".molden_normal_modes"),
         # binary "psi4.180.npy": Path(core.get_writer_file_prefix(wfn.molecule().name()) + ".180.npy"),
-        "timer.dat": Path("timer.dat"),  # ok for `psi4 --qcschema` but no file collected for `qcengine.run_program(..., "psi4")`
+        # "timer.dat": Path("timer.dat"),  # ok for `psi4 --qcschema` but no file collected for `qcengine.run_program(..., "psi4")`
         "grid_esp.dat": Path("grid_esp.dat"),
         "grid_field.dat": Path("grid_field.dat"),
     }
     result_data["native_files"] = {fl: flpath.read_text() for fl, flpath in files.items() if flpath.exists()}
+    # in-memory "files"
+    result_data["native_files"]["timer.json"] = core.get_timer_records(compact=True)
 
     # Reset state
     _clean_psi_environ(clean)

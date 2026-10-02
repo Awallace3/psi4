@@ -151,9 +151,13 @@ jobs:
 
       # fetch-depth: 0 gets git history so Psi4 version is computable
     - name: Checkout Psi4
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0
+
+    # Forks do not automatically inherit upstream tags, which versioner.py requires.
+    - name: Fetch canonical Psi4 tags
+      run: git fetch --force https://github.com/psi4/psi4.git "refs/tags/*:refs/tags/*"
 
       # see CMAKE_OSX_SYSROOT and CMAKE_Fortran_FLAGS for use
       # mac_ver line returns, e.g., "10.15" for Catalina & "11.6" for Big Sur. but phracker doesn't support all minor, so some logic to hardcode.
@@ -216,11 +220,11 @@ jobs:
         fi
         if [[ "${{ runner.os }}" == "macOS" && "${{ matrix.cfg.python-version }}" == "3.14" ]]; then
           :
-          sed -E -i.bak "s;- qcfractal;#- qcfractal;g" env_p4build.yaml
+          # sed -E -i.bak "s;- qcfractal;#- qcfractal;g" env_p4build.yaml
         fi
         if [[ "${{ runner.os }}" != "macOS" && "${{ matrix.cfg.python-version }}" == "3.14" ]]; then
           :
-          sed -i "s;- qcfractal;#- qcfractal;g" env_p4build.yaml
+          # sed -i "s;- qcfractal;#- qcfractal;g" env_p4build.yaml
         fi
         if [[ "${{ runner.os }}" == "macOS" && "${{ matrix.cfg.label }}" == "Conda Clang (M-Intel)" ]]; then
           :
@@ -232,7 +236,7 @@ jobs:
           sed -E -i.bak "s;accelerate;openblas;g" env_p4build.yaml
           sed -E -i.bak "s;- memory_profiler;#- memory_profiler;g" env_p4build.yaml
           # memory leaks. accelerate is fine but openblas matches the scf-cholesky stored values
-          sed -E -i.bak "s;- ambit;- mctc-lib=0.4.1;g" env_p4build.yaml
+          sed -E -i.bak "s;- ambit;- mctc-lib=0.5.2;g" env_p4build.yaml
         fi
         if [[ "${{ runner.os }}" == "Windows" ]]; then
           :
@@ -341,7 +345,7 @@ jobs:
 
     - name: Special Config - Download MolSSI/QCFractal Repo
       if: runner.os == 'Linux'
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         repository: MolSSI/QCFractal
         path: qca
@@ -383,12 +387,7 @@ jobs:
         export PATH=../install/bin:$PATH
         #export KMP_DUPLICATE_LIB_OK=TRUE
         psi4 ../tests/tu1-h2o-energy/input.dat -o stdout
-    - name: MBIS-7
-      working-directory: ./objdir
-      run: |
-        export PATH=../install/bin:$PATH
-        #export KMP_DUPLICATE_LIB_OK=TRUE
-        psi4 ../tests/mbis-7/input.dat -o stdout
+
     - name: Psi4 Path Setup Diagnostics
       if: false
       working-directory: ./objdir
@@ -461,6 +460,26 @@ jobs:
       run: |
         conda install conda-tree -c conda-forge
         conda-tree deptree
+
+    - name: dlopen -- Remove Addons
+      if: matrix.cfg.python-version == '3.14' && runner.os != 'Windows'
+      run: conda remove qcmanybody --force -y
+
+    - name: dlopen -- Runtime Conda environment
+      if: matrix.cfg.python-version == '3.14' && runner.os != 'Windows'
+      working-directory: ./objdir
+      run: |
+        conda info
+        conda list
+        PYTHONPATH=stage/lib python -c "import psi4; print(psi4.__file__)"
+
+    - name: dlopen -- Test Addons with Pytest
+      if: matrix.cfg.python-version == '3.14' && runner.os != 'Windows'
+      working-directory: ./objdir
+      run: |
+        export PYTHONPATH=stage/lib
+        pytest --cache-clear -v -rws --color yes -n auto -m qcmanybody stage/lib/psi4/tests/
+        pytest --cache-clear -v -rws --color yes -n auto -k missing stage/lib/psi4/tests/
 
 # Notes
 # -----

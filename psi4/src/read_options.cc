@@ -172,16 +172,15 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     // Note that case-insensitive options are only functional as
     //   globals, not as module-level, and should be defined sparingly
 
-    /*- Base filename for text files written by PSI, such as the
-    MOLDEN output file, the Hessian file, the internal coordinate file,
-    etc. Use the add_str_i function to make this string case sensitive. -*/
+    /*- Base filename (case sensitive) for text files written by PSI, such as the
+    MOLDEN output file, the Hessian file, the internal coordinate file, etc. -*/
     options.add_str_i("WRITER_FILE_LABEL", "");
     /*- The density fitting basis to use in coupled cluster computations. -*/
     options.add_str("DF_BASIS_CC", "");
     /*- Assume external fields are arranged so that they have symmetry. It is up to the user to know what to do here.
        The code does NOT help you out in any way! !expert -*/
     options.add_bool("EXTERNAL_POTENTIAL_SYMMETRY", false);
-    /*- Text to be passed directly into CFOUR input files. May contain
+    /*- Text (case sensitive) to be passed directly into CFOUR input files. May contain
     molecule, options, percent blocks, etc. Access through ``cfour {...}``
     block. -*/
     options.add_str_i("LITERAL_CFOUR", "");
@@ -261,7 +260,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     Useful when comparing analytic and grid-based methods. !expert -*/
     options.add_bool("ZORA_NR_DEBUG", false);
 
-    /*- Directory to which to write cube files. Default is the input file
+    /*- Directory (case sensitive) to which to write cube files. Default is the input file
     directory. -*/
     options.add_str_i("CUBEPROP_FILEPATH", ".");
 
@@ -342,7 +341,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
 
         /*- Use total or separate potentials and charges in the PCM-SCF step. !expert -*/
         options.add_str("PCM_SCF_TYPE", "TOTAL", "TOTAL SEPARATE");
-        /*- Name of the PCMSolver input file as parsed by pcmsolver.py !expert -*/
+        /*- Name of the PCMSolver input file (case sensitive) as parsed by pcmsolver.py !expert -*/
         options.add_str_i("PCMSOLVER_PARSED_FNAME", "");
         /*- PCM-CCSD algorithm type. -*/
         options.add_str("PCM_CC_TYPE", "PTE", "PTE");
@@ -432,7 +431,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
     if (name == "PE" || options.read_globals()) {
         /*- MODULEDESCRIPTION Performs polarizable embedding model (PE) computations. -*/
 
-        /*- Name of the potential file OR contents of potential file to be written anonymously on-the-fly. -*/
+        /*- Name of the potential file (case sensitive) OR contents of potential file to be written anonymously on-the-fly. -*/
         options.add_str_i("POTFILE", "potfile.pot");
         /*- Threshold for induced moments convergence -*/
         options.add_double("INDUCED_CONVERGENCE", 1e-8);
@@ -1181,7 +1180,18 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
          options ("LEVEL_SHIFT", "LEVEL_SHIFT_CUTOFF") to attempt to converge
          the neutral/cation calculations. "ITERATIVE" will try 3 times to
          converge the cation before failing the SAPT(DFT) computation. -*/
-        options.add_str("SAPT_DFT_GRAC_COMPUTE", "NONE", "NONE SINGLE ITERATIVE");
+    options.add_str("SAPT_DFT_GRAC_COMPUTE", "NONE", "NONE SINGLE ITERATIVE");
+    /*- Compute or echo monomer GRAC shifts and stop before SAPT energies.
+    Requires SINGLE or ITERATIVE and a non-HF functional. The returned dimer
+    wavefunction has CURRENT ENERGY zero, not an interaction energy. -*/
+    options.add_bool("SAPT_DFT_GRAC_SHIFT_ONLY", false);
+    /*- Include only each monomer's own A/B external potential in its GRAC
+    SCFs; C is always excluded. Charges needed in both the shift and the
+    environment may be repeated in A/B and C: a point/diffuse row exactly
+    equal to a C row is trimmed from A/B before that monomer's SCF, so it is
+    not counted twice. Rows shared between A and B are never trimmed, since
+    the dimer field must stay the sum of the monomer fields. -*/
+    options.add_bool("SAPT_DFT_GRAC_USE_EXT_POT", false);
         /*- To ensure that the GRAC shift is computed with a sufficiently large
           basis set, the user can specify a larger basis set for the GRAC
           calculation, which can be different from the basis set used for the
@@ -1189,6 +1199,12 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_str("SAPT_DFT_GRAC_BASIS", "AUTO");
         /*- Compute the Delta-HF correction? -*/
         options.add_bool("SAPT_DFT_DO_DHF", true);
+        /*- Induction treatment for SAPT(DFT). ``CPKS`` computes DFT response,
+        ``CPHF`` reuses the SAPT0 induction terms computed from HF orbitals
+        (adding the Delta-HF correction only when |sapt__sapt_dft_do_dhf| is
+        true), and ``NONE`` omits second-order induction. ``CPHF`` and ``NONE``
+        are unavailable with F-SAPT. -*/
+        options.add_str("SAPT_DFT_INDUCTION_TYPE", "CPKS", "CPKS CPHF NONE");
         /*- Enables SAPT(DFT) to be run with PyEinsums if available -*/
         options.add_bool("SAPT_DFT_USE_EINSUMS", true);
         /*- Enables the hybrid xc kernel in dispersion? !expert -*/
@@ -1230,6 +1246,23 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_double("SAPT_FDDS_V2_RHO_CUTOFF", 1.e-6);
         /*- Which MP2 Exch-Disp module to use? !expert -*/
         options.add_str("SAPT_DFT_MP2_DISP_ALG", "SAPT", "FISAPT SAPT");
+        /*- DFHelper storage algorithm for the FDDS dispersion three-index
+        transformations.  STORE keeps the AO integrals in the Schwarz-screened
+        sparse layout and folds the fitting metric into them before the MO
+        transform, so no unscreened AO block is ever held and no pre-metric
+        copy of a transformed tensor is ever written.  DIRECT and DIRECT_IAQ
+        are the older paths, which write every transformed tensor twice and,
+        for DIRECT_IAQ, store the AO integrals densely.  LEGACY reproduces the
+        pre-screening choice exactly: DIRECT for the first round of a hybrid
+        functional, DIRECT_IAQ otherwise.  AUTO picks STORE. !expert -*/
+        options.add_str("SAPT_FDDS_DISP_DF_ALGORITHM", "AUTO", "AUTO STORE DIRECT DIRECT_IAQ LEGACY");
+        /*- Transform the hybrid FDDS dispersion second-round integrals one
+        monomer at a time.  QR, X and Y consume monomer A's (aa|R), (ar|R) and
+        (rr|R) and release them before monomer B's are ever read, so doing both
+        monomers in one pass only makes the two sets share scratch -- on a
+        protein-sized dimer (rr|R) and (ss|R) alone are 283 and 322 GiB.  The
+        split costs one extra AO integral build and metric fold. !expert -*/
+        options.add_bool("SAPT_FDDS_DISP_SPLIT_MONOMERS", true);
         /*- FSAPT localization through SAPT(DFT)? Set SAPTDFT for PyEinsums
          f-terms or use an FISAPT object (C++ side) for f-terms.
         -*/
@@ -1282,7 +1315,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("FISAPT_DO_FSAPT", true);
         /*- Do F-SAPT Dispersion? -*/
         options.add_bool("FISAPT_DO_FSAPT_DISP", true);
-        /*- Filepath to drop F-SAPT data within input file directory. To avoid files being written, set to 'none' -*/
+        /*- Filepath (case sensitive) to drop F-SAPT data within input file directory. To avoid files being written, set to 'none'. -*/
         options.add_str_i("FISAPT_FSAPT_FILEPATH", "fsapt/"); 
         /*- Do F-SAPT exchange scaling? (ratio of S^\infty to S^2) -*/
         options.add_bool("FISAPT_FSAPT_EXCH_SCALE", true);
@@ -1292,7 +1325,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         options.add_bool("FISAPT_FSAPT_IND_RESPONSE", false);
         /*- Do sSAPT0 exchange-scaling with F-SAPT -*/
         options.add_bool("SSAPT0_SCALE", false);
-        /*- Filepath to drop sSAPT0 exchange-scaling F-SAPT data within input file directory -*/
+        /*- Filepath (case sensitive) to drop sSAPT0 exchange-scaling F-SAPT data within input file directory. -*/
         options.add_str_i("FISAPT_FSSAPT_FILEPATH", "s-fsapt/");
 
         // => CubicScalarGrid options <= //
@@ -1310,7 +1343,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
 
         /*- Plot a scalar-field analysis -*/
         options.add_bool("FISAPT_DO_PLOT", false);
-        /*- Filepath to drop scalar data within input file directory -*/
+        /*- Filepath (case sensitive) to drop scalar data within input file directory. -*/
         options.add_str_i("FISAPT_PLOT_FILEPATH", "plot/");
 
         // => Localization Tech <= //
@@ -1509,7 +1542,9 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
             forcibly select a sub-algorithm (usually only for debugging or profiling).
             Presently, ``SCF_TYPE=DF``, ``SCF_TYPE=MEM_DF``, and ``SCF_TYPE=DISK_DF``
 	        can have ``INCORE`` and ``OUT_OF_CORE`` selected; and ``SCF_TYPE=PK``  can have ``INCORE``,
-	        ``OUT_OF_CORE``, ``YOSHIMINE_OUT_OF_CORE``, and ``REORDER_OUT_OF_CORE`` selected. !expert -*/
+	        ``OUT_OF_CORE``, ``YOSHIMINE_OUT_OF_CORE``, and ``REORDER_OUT_OF_CORE`` selected.
+	        ``SCF_TYPE=CD`` has no out-of-core sub-algorithm, so it accepts only ``AUTO`` and
+	        ``INCORE``; any other value raises an exception. !expert -*/
 	    options.add_str("SCF_SUBTYPE", "AUTO", "AUTO INCORE OUT_OF_CORE YOSHIMINE_OUT_OF_CORE REORDER_OUT_OF_CORE");
         /*- Keep JK object for later use? -*/
         options.add_bool("SAVE_JK", false);
@@ -1710,7 +1745,7 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
            directions -*/
         options.add("PERTURB_DIPOLE", new ArrayType());
         /*- The operator used to perturb the Hamiltonian, if requested.  DIPOLE_X, DIPOLE_Y and DIPOLE_Z will be
-            removed in favor of the DIPOLE option in the future -*/
+            removed in favor of the DIPOLE option in the future. SPHERE is also deprecated. -*/
         options.add_str("PERTURB_WITH", "DIPOLE", "DIPOLE DIPOLE_X DIPOLE_Y DIPOLE_Z EMBPOT SPHERE DX");
         /*- An ExternalPotential (built by Python or nullptr/None) -*/
         options.add_bool("EXTERN", false);
@@ -3110,17 +3145,22 @@ int read_options(const std::string &name, Options &options, bool suppress_printi
         /*- Do write a gradient output file?  If so, the filename will end in
         .grad, and the prefix is determined by |globals__writer_file_label|
         (if set), or else by the name of the output file plus the name of
-        the current molecule. -*/
+        the current molecule. This keyword applies to both analytic and
+        finite-difference gradient computations. -*/
         options.add_bool("GRADIENT_WRITE", false);
         /*- Do write a hessian output file?  If so, the filename will end in
         .hess, and the prefix is determined by |globals__writer_file_label|
         (if set), or else by the name of the output file plus the name of
-        the current molecule. -*/
+        the current molecule. This keyword applies to both analytic and
+        finite-difference Hessian computations. When a frequency analysis
+        is requested, a JSON file with extension .vibrec is also written
+        according to the same filename pattern. -*/
         options.add_bool("HESSIAN_WRITE", false);
         /*- Do write a file containing the normal modes in Molden format?
-       If so, the filename will end in .molden_normal_modes, and the prefix is
-       determined by |globals__writer_file_label| (if set), or else by the name
-       of the output file plus the name of the current molecule. -*/
+        If so, the filename will end in .molden_normal_modes, and the prefix is
+        determined by |globals__writer_file_label| (if set), or else by the name
+        of the output file plus the name of the current molecule. This keyword
+        applies to both analytic and finite-difference frequency analyses. -*/
         options.add_bool("NORMAL_MODES_WRITE", false);
         /*- Do discount rotational degrees of freedom in a finite difference
         frequency calculation. Turned off at non-stationary geometries and

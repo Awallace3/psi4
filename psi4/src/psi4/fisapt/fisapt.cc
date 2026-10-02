@@ -681,14 +681,11 @@ void FISAPT::nuclear() {
     // Apparently, we were using C full strength, but the others I think get scaled by 0.5 because Rob counts
     // A->B and B->A separately and adds them (see a few lines up this fn...maybe due to how FSAPT files are written) 
     matrices_["Enucs"] = Enucs;
-    Enucs->print();
     Etot += psi::sapt_nuclear_external_potential_matrix(
         reference_,
         matrices_,
         options_
     );
-    // Enucs->print();
-    Enucs = matrices_["Enucsp"];
 
     // => Print <= //
 
@@ -1118,9 +1115,6 @@ void FISAPT::unify() {
         vectors_["ZA"] = ZA;
         vectors_["ZB"] = ZB;
         vectors_["ZC"] = ZC;
-        vectors_["ZA"]->print();
-        vectors_["ZB"]->print();
-        vectors_["ZC"]->print();
         for (int i = 0; i < nlink; i++) {
           link_orbs.push_back(0);
           for (int k = 0; k < nm; k++) {
@@ -5643,8 +5637,15 @@ void FISAPT::felst() {
     }
 
 
-    // Prepare DFHelper object for the next module
+    // Prepare DFHelper object for the next module.  clear_spaces() drops the
+    // spaces and the transformation order but not the transformations
+    // themselves, so without this the next transform() would rebuild the order
+    // from the transformations registered here and recompute them against
+    // whatever spaces the next module binds to the same labels -- redundant
+    // work whose output is appended to, and then discarded from, the scratch
+    // file this pass already wrote.
     dfh_->clear_spaces();
+    dfh_->clear_transformations();
 
     // => Summation <= //
 
@@ -5880,8 +5881,15 @@ void FISAPT::fexch() {
         outfile->Printf("    Scaling F-SAPT Exch-Ind and Exch-Disp by %11.3E \n\n", sSAPT0_scale_);
     }
 
-    // Prepare DFHelper object for the next module
+    // Prepare DFHelper object for the next module.  clear_spaces() drops the
+    // spaces and the transformation order but not the transformations
+    // themselves, so without this the next transform() would rebuild the order
+    // from the transformations registered here and recompute them against
+    // whatever spaces the next module binds to the same labels -- redundant
+    // work whose output is appended to, and then discarded from, the scratch
+    // file this pass already wrote.
     dfh_->clear_spaces();
+    dfh_->clear_transformations();
 }
 
 // Compute fragment-fragment partitioning of induction contribution

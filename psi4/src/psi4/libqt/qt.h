@@ -38,9 +38,11 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
-#include <string>
 #include <map>
+#include <string>
+#include <vector>
 
 #include "psi4/pragma.h"
 #include "psi4/psi4-dec.h"
@@ -84,6 +86,20 @@ void stop_skip_timers();
 void clean_timers();
 PSI_API
 std::map<std::string, std::map<std::string, double>> get_timer_dict();
+
+struct TimerRecord {
+    std::string timer_id;
+    std::string parent_id;
+    std::string timer_name;
+    std::vector<std::string> timer_path;
+    int level;
+    double wall_time;
+    double user_time;
+    double system_time;
+    size_t n_calls;
+};
+PSI_API
+std::vector<TimerRecord> get_timer_records();
 
 int cc_excited(const char* wfn);
 int cc_excited(std::string wfn);

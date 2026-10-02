@@ -7,8 +7,10 @@ from qcelemental import constants
 from psi4 import compare_values
 import numpy as np
 import qcelemental as qcel
+from pathlib import Path
 from pprint import pprint as pp
 from addons import uusing
+from psi4.driver.procrouting.sapt import sapt_proc
 
 hartree_to_kcalmol = constants.conversion_factor("hartree", "kcal/mol")
 pytestmark = [pytest.mark.psi, pytest.mark.api]
@@ -36,6 +38,244 @@ def _saptdft_runtime_only_qcschema_extras():
 
 from fsaptdft_checkpoint_worker import run as _run_saptdft_checkpoint_worker
 
+
+@pytest.fixture
+def grac_dimer():
+    psi4.core.clean_options()
+    psi4.core.clean_variables()
+    mol = psi4.geometry(_sapt_testing_mols["neutral_water_dimer"])
+    psi4.set_options({
+        "basis": "sto-3g",
+        "sapt_dft_grac_compute": "single",
+        "sapt_dft_functional": "pbe0",
+        "sapt_dft_use_einsums": False,
+        "e_convergence": 1e-10,
+        "d_convergence": 1e-10,
+    })
+    yield mol
+    psi4.core.clean_options()
+    psi4.core.clean_variables()
+    psi4.core.clean()
+
+
+@pytest.mark.saptdft
+def test_grac_only_matches_full(grac_dimer):
+    energy, full = psi4.energy("sapt(dft)", molecule=grac_dimer, return_wfn=True)
+    full_vars = full.variables()
+    assert full_vars["SAPT DFT GRAC SHIFT ONLY"] == 0.0
+    for key, value in full_vars.items():
+        if key.startswith("SAPT DFT GRAC"):
+            assert psi4.core.variable(key) == value
+    psi4.core.clean_variables()
+    psi4.set_options({"sapt_dft_grac_shift_only": True})
+    zero, only = psi4.energy("sapt(dft)", molecule=grac_dimer, return_wfn=True)
+    assert zero == 0.0
+    assert only.molecule().natom() == grac_dimer.natom()
+    for variables in (psi4.core.variables(), only.variables()):
+        assert variables["CURRENT ENERGY"] == 0.0
+        assert variables["SAPT DFT GRAC SHIFT ONLY"] == 1.0
+        assert "SAPT TOTAL ENERGY" not in variables
+        assert "SAPT ELST ENERGY" not in variables
+        for label in ("A", "B"):
+            for quantity in ("SHIFT", "MONOMER ENERGY", "IONIZED MONOMER ENERGY", "HOMO", "IP"):
+                key = f"SAPT DFT GRAC {quantity} {label}"
+                assert variables[key] == pytest.approx(full_vars[key], abs=1e-10, rel=0)
+
+
+@pytest.mark.saptdft
+def test_grac_cached_shifts_reproduce_energy(grac_dimer, monkeypatch):
+    # Minimal/small bases have fewer occupied-virtual pairs than auxiliary
+    # functions in FDDS, triggering DORGQR errors. Use a larger basis for replay;
+    # the independent full/shift-only QCVariable comparison stays STO-3G.
+    psi4.set_options({"basis": "aug-cc-pvdz"})
+    energy, full = psi4.energy("sapt(dft)", molecule=grac_dimer, return_wfn=True)
+    full_vars = full.variables()
+    psi4.core.clean_variables()
+    psi4.set_options({
+        "sapt_dft_grac_shift_only": False,
+        "sapt_dft_grac_shift_a": full_vars["SAPT DFT GRAC SHIFT A"],
+        "sapt_dft_grac_shift_b": full_vars["SAPT DFT GRAC SHIFT B"],
+    })
+    def forbidden(*args, **kwargs):
+        pytest.fail("Supplied shifts must not be recomputed")
+    monkeypatch.setattr(sapt_proc, "compute_GRAC_shift", forbidden)
+    cached = psi4.energy("sapt(dft)", molecule=grac_dimer)
+    assert cached == pytest.approx(energy, abs=1e-10, rel=0)
+    assert not psi4.core.has_variable("SAPT DFT GRAC HOMO A")
+
+
+@pytest.mark.saptdft
+def test_grac_only_supplied_shift(grac_dimer):
+    psi4.set_options({"sapt_dft_grac_shift_only": True, "sapt_dft_grac_shift_a": 0.12})
+    _, wfn = psi4.energy("sapt(dft)", molecule=grac_dimer, return_wfn=True)
+    for variables in (psi4.core.variables(), wfn.variables()):
+        assert variables["SAPT DFT GRAC SHIFT A"] == 0.12
+        assert "SAPT DFT GRAC SHIFT B" in variables
+        assert "SAPT DFT GRAC HOMO A" not in variables
+        assert "SAPT DFT GRAC HOMO B" in variables
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize("options,match", [
+    ({"sapt_dft_grac_compute": "none"}, "contradicts"),
+    ({"sapt_dft_functional": "hf"}, "non-HF"),
+    ({"reference": "uhf"}, "restricted"),
+])
+def test_grac_only_rejects_before_scf(grac_dimer, monkeypatch, options, match):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Invalid input must be rejected before SCF")
+    monkeypatch.setattr(sapt_proc, "run_scf", forbidden)
+    psi4.set_options({"sapt_dft_grac_shift_only": True, **options})
+    with pytest.raises(psi4.ValidationError, match=match):
+        psi4.energy("sapt(dft)", molecule=grac_dimer)
+
+
+@pytest.mark.saptdft
+def test_grac_only_skips_interaction_work(grac_dimer, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("GRAC-only must not enter SCF or interaction work with supplied shifts")
+    for name in ("run_scf", "scf_helper", "sapt_dft", "edisp_interaction_energy"):
+        monkeypatch.setattr(sapt_proc, name, forbidden)
+    psi4.set_options({
+        "sapt_dft_grac_shift_only": True,
+        "sapt_dft_grac_shift_a": 0.12,
+        "sapt_dft_grac_shift_b": 0.13,
+    })
+    assert psi4.energy("sapt(dft)-d4(i)", molecule=grac_dimer) == 0.0
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize("mode,row", [
+    ("points", [0.1, 1.0, 2.0, 3.0]),
+    ("diffuse", [0.1, 1.0, 2.0, 3.0, 0.5]),
+])
+def test_grac_field_union(mode, row):
+    distinct = row.copy()
+    distinct[-1] = np.nextafter(distinct[-1], np.inf)
+    combine = sapt_proc.construct_external_potential_in_field_C
+    # Rows are never dropped: two equal rows are two equal charges, and the
+    # dimer field has to stay the sum of the monomer fields.
+    assert combine([{mode: [row, row]}, {mode: [row.copy(), distinct]}]) == {
+        mode: [row, row, row, distinct]}
+    assert combine([{"matrix": [[1., 2.], [2., 3.]]}] * 2) == {
+        "matrix": [[2., 4.], [4., 6.]]}
+    with pytest.raises(psi4.ValidationError, match="identical dimensions"):
+        combine([{"matrix": [[1.]]}, {"matrix": np.eye(2)}])
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize("mode,row", [
+    ("points", [0.1, 1.0, 2.0, 3.0]),
+    ("diffuse", [0.1, 1.0, 2.0, 3.0, 0.5]),
+])
+def test_drop_rows_carried_by(mode, row):
+    distinct = row.copy()
+    distinct[-1] = np.nextafter(distinct[-1], np.inf)
+    drop = sapt_proc.drop_rows_carried_by
+    # A copy of a C row is trimmed from A; a near-miss is a different charge.
+    assert drop({mode: [row.copy(), distinct]}, {mode: [row]}) == {mode: [distinct]}
+    assert drop({mode: [distinct]}, {mode: [row]}) == {mode: [distinct]}
+    # No reference field means nothing to trim against.
+    assert drop({mode: [row]}, None) == {mode: [row]}
+    assert drop(None, {mode: [row]}) is None
+    # Matrix operators are opaque and pass through.
+    assert drop({"matrix": [[1.]]}, {"matrix": [[1.]]}) == {"matrix": [[1.]]}
+
+
+@pytest.mark.saptdft
+@pytest.mark.extern
+def test_grac_only_external_potential(grac_dimer):
+    psi4.set_options({"sapt_dft_grac_shift_only": True})
+    potential = {"A": {"points": [[0.1, 0., 4., 0.]]}}
+    _, vacuum = psi4.energy("sapt(dft)", molecule=grac_dimer,
+                           external_potentials=potential, return_wfn=True)
+    psi4.core.clean_variables()
+    psi4.set_options({"sapt_dft_grac_use_ext_pot": True})
+    _, embedded = psi4.energy("sapt(dft)", molecule=grac_dimer,
+                             external_potentials=potential, return_wfn=True)
+    assert abs(vacuum.variable("SAPT DFT GRAC SHIFT A") -
+               embedded.variable("SAPT DFT GRAC SHIFT A")) > 1e-8
+    assert vacuum.variable("SAPT DFT GRAC SHIFT B") == pytest.approx(
+        embedded.variable("SAPT DFT GRAC SHIFT B"), abs=1e-10, rel=0)
+    # C must never enter either monomer's ionization calculation, including
+    # when the same charge is copied into A so that it does reach the shift.
+    copied = {"A": potential["A"],
+              "C": {"points": potential["A"]["points"] + [[-0.2, 0., -4., 0.]]}}
+    _, with_c = psi4.energy("sapt(dft)", molecule=grac_dimer,
+                           external_potentials=copied, return_wfn=True)
+    for label in ("A", "B"):
+        key = f"SAPT DFT GRAC SHIFT {label}"
+        assert with_c.variable(key) == pytest.approx(embedded.variable(key), abs=1e-10, rel=0)
+    # Two equal rows are two charges, so doubling A really does move the shift.
+    psi4.core.clean_variables()
+    doubled = {"A": {"points": potential["A"]["points"] * 2}}
+    _, twice = psi4.energy("sapt(dft)", molecule=grac_dimer,
+                          external_potentials=doubled, return_wfn=True)
+    assert abs(twice.variable("SAPT DFT GRAC SHIFT A") -
+               embedded.variable("SAPT DFT GRAC SHIFT A")) > 1e-8
+
+
+@pytest.mark.saptdft
+@pytest.mark.extern
+def test_dimer_field_is_sum_of_monomer_fields(grac_dimer):
+    # The dimer field must carry every monomer charge, including one written
+    # into both A and B, or the embedding fails to cancel in the decomposition.
+    shared = [0.1, 0., 4., 0.]
+    potential = {"A": {"points": [shared, [0.2, 1., 4., 0.]]},
+                 "B": {"points": [shared, [-0.2, -1., 4., 0.]]}}
+    psi4.set_options({"sapt_dft_grac_shift_a": 0.1, "sapt_dft_grac_shift_b": 0.1,
+                      "sapt_dft_do_disp": False})
+    _, dimer_wfn = psi4.energy("sapt(dft)", molecule=grac_dimer,
+                              external_potentials=potential, return_wfn=True)
+    charges = dimer_wfn.potential_variable("C").getCharges()
+    assert len(charges) == 4
+
+
+@pytest.mark.saptdft
+def test_grac_error_restores_options(grac_dimer, monkeypatch):
+    psi4.set_options({"sapt_dft_grac_basis": "6-31g"})
+    names = ["REFERENCE", "SAVE_JK", "MAXITER", "LEVEL_SHIFT",
+             "LEVEL_SHIFT_CUTOFF", "SCF_INITIAL_ACCELERATOR", "ORBITAL_OPTIMIZER_PACKAGE"]
+    before = {key: (psi4.core.get_option("SCF", key),
+                    psi4.core.has_local_option_changed("SCF", key)) for key in names}
+    basis = psi4.core.get_global_option("BASIS")
+    def fail(*args, **kwargs):
+        raise ValueError("injected SCF failure")
+    monkeypatch.setattr(sapt_proc, "run_scf", fail)
+    with pytest.raises(ValueError, match="injected"):
+        sapt_proc.compute_GRAC_shift(grac_dimer.extract_subsets(1), "SINGLE", "A")
+    assert psi4.core.get_global_option("BASIS") == basis
+    assert before == {key: (psi4.core.get_option("SCF", key),
+                           psi4.core.has_local_option_changed("SCF", key)) for key in names}
+
+
+@pytest.mark.saptdft
+def test_grac_only_schema_wfn_variables(grac_dimer):
+    result = psi4.schema_wrapper.run_qcschema({
+        "schema_name": "qcschema_input",
+        "schema_version": 1,
+        "molecule": grac_dimer.to_schema(dtype=2),
+        "driver": "energy",
+        "model": {"method": "sapt(dft)", "basis": "sto-3g"},
+        "keywords": {
+            "sapt_dft_grac_shift_only": True,
+            "sapt_dft_grac_compute": "single",
+            "sapt_dft_functional": "pbe0",
+            "sapt_dft_use_einsums": False,
+        },
+        "extras": {"wfn_qcvars_only": True},
+    })
+    assert result.success
+    # Exercise JSON serialization, not only the in-process wavefunction.
+    import json
+    serialized = json.loads(result.json())
+    assert serialized["return_result"] == 0.0
+    variables = serialized["extras"]["qcvars"]
+    assert float(variables["SAPT DFT GRAC SHIFT ONLY"]) == 1.0
+    assert "SAPT TOTAL ENERGY" not in variables
+    for label in ("A", "B"):
+        for quantity in ("SHIFT", "MONOMER ENERGY", "IONIZED MONOMER ENERGY", "HOMO", "IP"):
+            assert f"SAPT DFT GRAC {quantity} {label}" in variables
 
 _sapt_testing_mols = {
     "neutral_water_dimer": """
@@ -133,7 +373,7 @@ def test_sapt_dft_compute_ddft_d4():
     "method, expected_disp",
     [
         ("SAPT(DFT)-D4(S)", -0.003605830),
-        ("SAPT(DFT)-D4(I)", -0.0040379796),
+        ("SAPT(DFT)-D4(I)", -0.0042277709),
         ("DFT-D4(SAPT)", -0.0057317156),
     ],
 )
@@ -159,10 +399,33 @@ units bohr
             "ORBITAL_OPTIMIZER_PACKAGE": "INTERNAL",
         }
     )
+    managed_options = (
+        "SAPT_DFT_DO_DISP",
+        "SAPT_DFT_DO_DDFT",
+        "SAPT_DFT_D3_IE",
+        "SAPT_DFT_D4_IE",
+        "SAPT_DFT_D_TYPE",
+    )
+    before = {
+        option: (
+            psi4.core.get_option("SAPT", option),
+            psi4.core.has_option_changed("SAPT", option),
+        )
+        for option in managed_options
+    }
+
     psi4.energy(method)
     vars = psi4.core.variables()
     DISP = vars["SAPT DISP ENERGY"]
     assert compare_values(expected_disp, DISP, 8, f"{method} DISP")
+    after = {
+        option: (
+            psi4.core.get_option("SAPT", option),
+            psi4.core.has_option_changed("SAPT", option),
+        )
+        for option in managed_options
+    }
+    assert after == before
 
 
 @pytest.mark.saptdft
@@ -1425,7 +1688,21 @@ def test_charge_field_inputs():
     e_A = psi4.energy(
         "sapt(dft)", external_potentials={"a": Chargefield}, molecule=dimer
     )
+    e_A_structured, structured_wfn = psi4.energy(
+        "sapt(dft)",
+        external_potentials={"A": {"points": Chargefield.tolist()}},
+        molecule=dimer,
+        return_wfn=True,
+    )
     assert compare_values(e_A, e_a, 7, "e_A==e_a")
+    assert compare_values(e_A_structured, e_A, 7, "structured points == array")
+    for variable in ("SAPT ELST ENERGY", "SAPT IND ENERGY"):
+        assert compare_values(
+            psi4.core.variable(variable),
+            structured_wfn.variable(variable),
+            12,
+            f"global/wfn {variable}",
+        )
     e_b = psi4.energy(
         "sapt(dft)", external_potentials={"b": Chargefield}, molecule=dimer
     )
@@ -1433,6 +1710,218 @@ def test_charge_field_inputs():
         "sapt(dft)", external_potentials={"B": Chargefield}, molecule=dimer
     )
     assert compare_values(e_B, e_b, 7, "e_A==e_a")
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize(
+    "induction_type, delta_hf, expected_calls",
+    [
+        (None, True, 2),
+        ("CPHF", True, 1),
+        ("CPHF", False, 1),
+        ("NONE", True, 0),
+        ("NONE", False, 0),
+    ],
+)
+def test_saptdft_induction_routes(monkeypatch, induction_type, delta_hf, expected_calls):
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ne 1 4.5
+  units bohr
+    """)
+    options = {
+        "basis": "sto-3g",
+        "scf_type": "df",
+        "sapt_dft_grac_shift_a": 0.203293,
+        "sapt_dft_grac_shift_b": 0.203293,
+        "sapt_dft_do_dhf": delta_hf,
+        "sapt_dft_do_hybrid": False,
+        "sapt_dft_use_einsums": False,
+        "orbital_optimizer_package": "internal",
+    }
+    if induction_type is not None:
+        options["sapt_dft_induction_type"] = induction_type
+    psi4.set_options(options)
+
+    calls = []
+    induction = sapt_proc.sapt_jk_terms.induction
+
+    def wrapped_induction(*args, **kwargs):
+        result = induction(*args, **kwargs)
+        calls.append(result)
+        return result
+
+    monkeypatch.setattr(sapt_proc.sapt_jk_terms, "induction", wrapped_induction)
+    outfile = Path("pytest_output.dat")
+    offset = len(outfile.read_bytes()) if outfile.exists() else 0
+    energy, wfn = psi4.energy("sapt(dft)", molecule=mol, return_wfn=True)
+    assert len(calls) == expected_calls
+
+    mode = induction_type or "CPKS"
+    assert psi4.core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE") == mode
+    if mode == "CPHF":
+        assert compare_values(calls[0]["Ind20,r"], psi4.variable("Ind20,r"), 12, "SAPT0 Ind20")
+        expected = calls[0]["Ind20,r"] + calls[0]["Exch-Ind20,r"]
+        if delta_hf:
+            expected += psi4.variable("SAPT(DFT) DELTA HF")
+        else:
+            assert not psi4.core.has_variable("SAPT(DFT) DELTA HF")
+            assert not wfn.has_variable("SAPT(DFT) DELTA HF")
+            assert not psi4.core.has_variable("SAPT0 TOTAL ENERGY")
+            assert not wfn.has_variable("SAPT0 TOTAL ENERGY")
+        assert compare_values(expected, psi4.variable("SAPT IND ENERGY"), 12, "SAPT0 induction")
+    elif mode == "NONE":
+        if not delta_hf:
+            assert compare_values(0.0, psi4.variable("SAPT IND ENERGY"), 12, "omitted induction")
+        assert not psi4.core.has_variable("Ind20,r")
+        assert not psi4.core.has_variable("SAPT DFT INDUCTION ENERGY")
+        assert not wfn.has_variable("SAPT DFT INDUCTION ENERGY")
+
+    expected_total = sum(
+        psi4.variable(f"SAPT {term} ENERGY")
+        for term in ["ELST", "EXCH", "IND", "DISP"]
+    )
+    assert compare_values(expected_total, energy, 12, "returned total")
+    assert compare_values(
+        expected_total,
+        wfn.variable("SAPT(DFT) TOTAL ENERGY"),
+        12,
+        "wavefunction total",
+    )
+
+    psi4.core.flush_outfile()
+    with outfile.open() as fh:
+        fh.seek(offset)
+        output = fh.read()
+    assert "Dimer for Localization" not in output
+    assert ("     HF   (Dimer)\n" in output) is (delta_hf or mode == "CPHF")
+    assert ("SAPT(DFT): delta HF Dimer" in output) is delta_hf
+    expected_elst_calls = 1 + int(delta_hf or mode == "CPHF")
+    assert output.count("==> E10 Electostatics <==") == expected_elst_calls
+    if mode == "CPHF":
+        assert "Induction (SAPT0)" in output
+        assert ("delta HF,r (2)" in output) is delta_hf
+        assert ("SAPT0 induction only (no dHF)" in output) is not delta_hf
+        assert "Total SAPT(HF)" not in output
+    elif mode == "NONE":
+        assert "No second-order induction breakdown is available." in output
+
+
+@pytest.mark.saptdft
+def test_saptdft_none_delta_hf_matches_cphf_total_induction():
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ne 1 4.5
+  units bohr
+    """)
+    options = {
+        "basis": "sto-3g",
+        "scf_type": "df",
+        "sapt_dft_grac_shift_a": 0.203293,
+        "sapt_dft_grac_shift_b": 0.203293,
+        "sapt_dft_do_dhf": True,
+        "sapt_dft_do_hybrid": False,
+        "sapt_dft_use_einsums": False,
+        "orbital_optimizer_package": "internal",
+    }
+
+    results = {}
+    for mode in ["CPHF", "NONE"]:
+        psi4.core.clean()
+        psi4.core.clean_variables()
+        psi4.set_options({**options, "sapt_dft_induction_type": mode})
+        energy, wfn = psi4.energy("sapt(dft)", molecule=mol, return_wfn=True)
+        results[mode] = {
+            "induction": wfn.variable("SAPT IND ENERGY"),
+            "total": energy,
+        }
+
+    assert compare_values(
+        results["CPHF"]["induction"],
+        results["NONE"]["induction"],
+        12,
+        "NONE/CPHF total induction",
+    )
+    assert compare_values(
+        results["CPHF"]["total"],
+        results["NONE"]["total"],
+        12,
+        "NONE/CPHF total energy",
+    )
+    assert not psi4.core.has_variable("Ind20,r")
+
+
+@pytest.mark.saptdft
+@pytest.mark.dftd4
+@uusing("dftd4")
+def test_saptdft_d4i_cphf_no_delta_hf_reference():
+    molecule = psi4.geometry(
+        _sapt_testing_mols["neutral_water_dimer"]
+        + """
+symmetry c1
+no_reorient
+no_com
+"""
+    )
+    psi4.core.clean()
+    psi4.core.clean_variables()
+    psi4.set_options(
+        {
+            "basis": "cc-pvdz",
+            "scf_type": "df",
+            "sapt_dft_functional": "pbe0",
+            "sapt_dft_grac_shift_a": 0.1307,
+            "sapt_dft_grac_shift_b": 0.1307,
+            "sapt_dft_do_dhf": False,
+            "sapt_dft_induction_type": "CPHF",
+            "orbital_optimizer_package": "internal",
+        }
+    )
+
+    energy, wfn = psi4.energy("sapt(dft)-d4(i)", molecule=molecule, return_wfn=True)
+    expected = {
+        "SAPT ELST ENERGY": -0.012738658499742428,
+        "SAPT EXCH ENERGY": 0.011044055646125397,
+        "SAPT IND ENERGY": -0.001598107549445543,
+        "SAPT DISP ENERGY": -0.003609757702328654,
+        "SAPT(DFT) TOTAL ENERGY": -0.006902468105391228,
+    }
+    for variable, reference in expected.items():
+        assert compare_values(reference, wfn.variable(variable), 8, variable)
+
+    assert compare_values(expected["SAPT(DFT) TOTAL ENERGY"], energy, 8, "returned total")
+    assert not wfn.has_variable("SAPT(DFT) DELTA HF")
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize(
+    "options, message",
+    [
+        ({"sapt_dft_induction_type": "NONE", "sapt_dft_do_fsapt": "SAPTDFT"}, "F-SAPT requires induction"),
+        ({"sapt_dft_induction_type": "NONE", "sapt_dft_do_fsapt": "FISAPT"}, "F-SAPT requires induction"),
+        (
+            {"sapt_dft_induction_type": "CPHF", "sapt_dft_do_fsapt": "SAPTDFT"},
+            "F-SAPT requires SAPT\\(DFT\\) fragment induction",
+        ),
+    ],
+)
+def test_saptdft_induction_option_checks(monkeypatch, options, message):
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ne 1 4.5
+  units bohr
+    """)
+    psi4.set_options(options)
+    monkeypatch.setattr(
+        sapt_proc.proc_util,
+        "prepare_sapt_molecule",
+        lambda *args, **kwargs: pytest.fail("validation occurred after molecule preparation"),
+    )
+    with pytest.raises(psi4.ValidationError, match=message):
+        psi4.energy("sapt(dft)", molecule=mol)
 
 
 @pytest.mark.saptdft
@@ -1551,6 +2040,47 @@ symmetry c1
         7,
         "SAPT EXCH-DISP20(S^inf) ENERGY",
     )
+
+
+@pytest.mark.saptdft
+@pytest.mark.parametrize(
+    "induction_type, message",
+    [
+        ("CPHF", "SAPT_DFT_INDUCTION_TYPE=CPHF reuses the SAPT0 induction terms"),
+        ("NONE", "SAPT_DFT_INDUCTION_TYPE=NONE with delta HF"),
+    ],
+)
+def test_saptdft_sapt_dft_api_requires_hf_segment_data(induction_type, message):
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ne 1 4.5
+  units bohr
+    """)
+    psi4.set_options({"basis": "sto-3g", "sapt_dft_induction_type": induction_type})
+    wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
+    with pytest.raises(psi4.ValidationError, match=message):
+        sapt_proc.sapt_dft(wfn, wfn, wfn, delta_hf=True)
+
+
+@pytest.mark.saptdft
+def test_saptdft_sapt_dft_api_requires_cphf_fsapt_data():
+    mol = psi4.geometry("""
+  Ne
+  --
+  Ne 1 4.5
+  units bohr
+    """)
+    psi4.set_options(
+        {
+            "basis": "sto-3g",
+            "sapt_dft_induction_type": "CPHF",
+            "sapt_dft_do_fsapt": "FISAPT",
+        }
+    )
+    wfn = psi4.core.Wavefunction.build(mol, "sto-3g")
+    with pytest.raises(psi4.ValidationError, match="requires HF-backed fragment induction data"):
+        sapt_proc.sapt_dft(wfn, wfn, wfn, data={"Ind20,r": 0.0})
 
 
 if __name__ == "__main__":

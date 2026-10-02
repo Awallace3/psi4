@@ -35,7 +35,12 @@ from ...constants import constants
 from ...p4util.exceptions import ValidationError
 from ..empirical_disp import edisp_interaction_energy
 from .. import proc_util
-from ..proc import scf_helper, run_scf, _set_external_potentials_to_wavefunction
+from ..proc import (
+    _set_external_potentials_to_wavefunction,
+    run_scf,
+    scf_helper,
+    validate_external_potential,
+)
 from . import (
     sapt_jk_terms,
     sapt_mp2_terms,
@@ -48,7 +53,12 @@ from .saptdft_checkpoint import (
     prepare_restored_scf,
     wfn_jk,
 )
-from .sapt_util import print_sapt_dft_summary, print_sapt_hf_summary, print_sapt_var
+from .sapt_util import (
+    print_sapt_dft_summary,
+    print_sapt_hf_induction_summary,
+    print_sapt_hf_summary,
+    print_sapt_var,
+)
 import qcelemental as qcel
 from ...p4util.exceptions import ConvergenceError
 
@@ -70,19 +80,32 @@ __all__ = ["run_sapt_dft", "sapt_dft", "run_sf_sapt"]
 # SAPT(DFT) computational stages, in the order the driver reaches them. The
 # checkpoint session uses these to answer "what is still left to do?", which is
 # what lets the JK object and SAPT cache be skipped entirely on a late restart.
-_SAPT_STAGE_ORDER = ("elst", "exch", "ind")
 _FSAPT_STAGE_ORDER = ("fsapt_setup", "fsapt_elst", "fsapt_exch", "fsapt_ind")
 _FSAPT_CACHE_STAGES = _FSAPT_STAGE_ORDER + ("fsapt_disp",)
 
+# Checkpoint scalar prefixes for values that must survive a restart but are not
+# SAPT(DFT) results. Keys starting with "_" never reach ``data`` or QCVariables.
+_HF_DATA_PREFIX = "_hf_data::"
+_HF_IND_PREFIX = "_hf_ind::"
+_GRAC_PREFIX = "_grac::"
 
-def _sapt_stage_order(*, do_disp, do_fsapt):
+
+def _sapt_stage_order(*, do_disp, do_fsapt, do_dft=True, induction_type="CPKS"):
     """Computational stages of :func:`sapt_dft` for the requested SAPT(DFT) flavour."""
-    stages = list(_SAPT_STAGE_ORDER)
+    stages = ["elst", "exch"]
+    if _sapt_dft_runs_induction(do_dft=do_dft, induction_type=induction_type):
+        stages.append("ind")
     if do_disp:
         stages.append("disp")
     if do_fsapt:
         stages.extend(_fsapt_stage_order(do_disp=do_disp))
     return stages
+
+
+def _sapt_dft_runs_induction(*, do_dft, induction_type):
+    """Whether :func:`sapt_dft` solves the coupled induction equations itself."""
+    induction_type = induction_type.upper()
+    return induction_type == "CPKS" or (induction_type == "CPHF" and not do_dft)
 
 
 def _fsapt_stage_order(*, do_disp):
@@ -113,6 +136,26 @@ def _sapt_summary_qcvariables():
     return {
         label: core.variable(label) for label in _SAPT_SUMMARY_QCVARIABLES if core.has_variable(label)
     }
+
+
+def _replay_final_checkpoint(ckpt, data):
+    """Return the stored result of a run whose ``final`` stage is complete.
+
+    The stored wavefunction carries the matrix QCVariables (F-SAPT partitions,
+    pairwise dispersion) that the manifest cannot hold; the manifest carries the
+    scalars the summary published straight to Psi4.
+    """
+    dimer_wfn = ckpt.restore_wavefunction("dimer_wfn")
+    for k, v in dimer_wfn.variables().items():
+        core.set_variable(k, v)
+    for k, v in data.items():
+        core.set_variable(k, v)
+        dimer_wfn.set_variable(k, v)
+    current_energy = data.get("CURRENT ENERGY", data.get("SAPT TOTAL ENERGY", dimer_wfn.energy()))
+    core.set_variable("CURRENT ENERGY", current_energy)
+    dimer_wfn.set_variable("CURRENT ENERGY", current_energy)
+    dimer_wfn.set_energy(current_energy)
+    return dimer_wfn
 
 
 def _cache_fisapt_localization_aliases(cache):
@@ -157,6 +200,28 @@ def _absorb_fisapt_matrices(cache, FISAPT_obj):
 
 
 def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
+    """Run SAPT(DFT) while restoring all driver-managed options and timers."""
+    optstash = p4util.OptionsState(
+        ["DF_INTS_IO"],
+        ["SCF_TYPE"],
+        ["SCF", "REFERENCE"],
+        ["SCF", "DFT_GRAC_SHIFT"],
+        ["SCF", "SAVE_JK"],
+        ["SAPT", "SAPT_DFT_DO_DISP"],
+        ["SAPT", "SAPT_DFT_DO_DDFT"],
+        ["SAPT", "SAPT_DFT_D3_IE"],
+        ["SAPT", "SAPT_DFT_D4_IE"],
+        ["SAPT", "SAPT_DFT_D_TYPE"],
+    )
+    core.timer_on("SAPT(DFT) Energy")
+    try:
+        return _run_sapt_dft(name, **kwargs)
+    finally:
+        core.timer_off("SAPT(DFT) Energy")
+        optstash.restore()
+
+
+def _run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     """Run the SAPT(DFT) interaction energy calculation.
 
     Top-level driver function for SAPT(DFT). Sets up monomer SCF
@@ -177,13 +242,18 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     core.Wavefunction
         The dimer wavefunction with SAPT(DFT) results stored as variables.
     """
-    core.timer_on("SAPT(DFT) Energy")
-    optstash = p4util.OptionsState(
-        ["SCF_TYPE"],
-        ["SCF", "REFERENCE"],
-        ["SCF", "DFT_GRAC_SHIFT"],
-        ["SCF", "SAVE_JK"],
-    )
+    core.prepare_options_for_module("SAPT")
+    induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
+    do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
+    fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper()
+    do_fsapt = fsapt_type != "NONE"
+    if induction_type == "NONE" and do_fsapt:
+        raise ValidationError("F-SAPT requires induction; SAPT_DFT_INDUCTION_TYPE=NONE is unavailable.")
+    if induction_type == "CPHF" and fsapt_type == "SAPTDFT":
+        raise ValidationError(
+            "SAPTDFT F-SAPT requires SAPT(DFT) fragment induction; "
+            "use SAPT_DFT_DO_FSAPT=FISAPT with SAPT_DFT_INDUCTION_TYPE=CPHF."
+        )
 
     use_einsums = core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS")
 
@@ -200,7 +270,6 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     # Alter default algorithm
     if not core.has_global_option_changed("SCF_TYPE"):
         core.set_global_option("SCF_TYPE", "DF")
-    core.prepare_options_for_module("SAPT")
 
     # Get the molecule of interest
     ref_wfn = kwargs.get("ref_wfn", None)
@@ -232,6 +301,8 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     mon_a_shift = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_A")
     mon_b_shift = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_B")
     grac_compute = core.get_option("SAPT", "SAPT_DFT_GRAC_COMPUTE")
+    shift_only = core.get_option("SAPT", "SAPT_DFT_GRAC_SHIFT_ONLY")
+    grac_use_ext_pot = core.get_option("SAPT", "SAPT_DFT_GRAC_USE_EXT_POT")
 
     if (
         not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_A")
@@ -248,10 +319,9 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
     e_disp_param_name = None
     supported_functionals_edisp = ["hf", "pbe0", "b3lyp"]
 
-    # SAPT_DFT_D4_IE and SAPT_DFT_D3_IE are used to control whether to run
-    # -D3/-D4 later
-    core.set_global_option("SAPT_DFT_D4_IE", 0)
-    core.set_global_option("SAPT_DFT_D3_IE", 0)
+    # SAPT_DFT_D4_IE and SAPT_DFT_D3_IE control whether to run -D3/-D4.
+    # Explicit user settings are honored for plain SAPT(DFT); method aliases
+    # below temporarily override them and the public wrapper restores them.
     # Need to identify which flavor of -D we are using
     if "-D4" in name.upper():
         d4_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
@@ -262,9 +332,9 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                 if sapt_dft_functional.lower() != "hf"
                 else "hf"
             )
-            if sapt_dft_functional.lower() not in ["pbe0", "hf"]:
+            if sapt_dft_functional.lower() not in supported_functionals_edisp:
                 raise ValueError(
-                    "SAPT(DFT)-D4 with D4(S) parameters is currently only available for PBE0"
+                    "SAPT(DFT)-D4 with D4(S) parameters is currently only available for PBE0 and B3LYP."
                     f" Functional {sapt_dft_functional.lower()} does not have D4(S) parameters defined."
                 )
             core.set_global_option("SAPT_DFT_DO_DISP", 0)
@@ -273,8 +343,10 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             core.set_global_option("SAPT_DFT_D_TYPE", "supermolecular")
         elif "-D4(I)" in name.upper():
             core.print_out(r"SAPT(DFT)-D4(I): -D4(I) for dispersion")
+            # D4(I) uses intermolecular atom-pair summation together with the
+            # SAPT functional's dedicated (I) damping-parameter record.
             e_disp_param_name = (
-                f"sapt({sapt_dft_functional.lower()})(s)"
+                f"sapt({sapt_dft_functional.lower()})(i)"
                 if sapt_dft_functional.lower() != "hf"
                 else "hf"
             )
@@ -358,25 +430,87 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         # # Re-prepare options after local option changes
         # core.prepare_options_for_module("SAPT")
 
-    do_delta_hf = core.get_option("SAPT", "SAPT_DFT_DO_DHF")
     do_delta_dft = core.get_option("SAPT", "SAPT_DFT_DO_DDFT")
     do_disp = core.get_option("SAPT", "SAPT_DFT_DO_DISP")
     sapt_dft_D4_IE = core.get_option("SAPT", "SAPT_DFT_D4_IE")
     sapt_dft_D3_IE = core.get_option("SAPT", "SAPT_DFT_D3_IE")
     do_dft = sapt_dft_functional != "HF"
-    do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() != "NONE"
+    if shift_only and grac_compute == "NONE":
+        raise ValidationError("SAPT_DFT_GRAC_SHIFT_ONLY=true contradicts SAPT_DFT_GRAC_COMPUTE=NONE.")
+    if shift_only and not do_dft:
+        raise ValidationError("SAPT_DFT_GRAC_SHIFT_ONLY requires a non-HF SAPT_DFT_FUNCTIONAL.")
+    if not do_dft:
+        do_mon_grac_shift_A = do_mon_grac_shift_B = False
+
+    if do_fsapt and (sapt_dft_D4_IE or sapt_dft_D3_IE):
+        dispersion_type = core.get_option("SAPT", "SAPT_DFT_D_TYPE").lower()
+        if do_delta_dft or dispersion_type != "intermolecular":
+            core.print_out(
+                "\n    Warning: the empirical F-SAPT dispersion breakdown uses the "
+                "intermolecular atom-pair contributions from the dimer calculation. "
+                "For supermolecular and delta-DFT D3/D4 methods, this qualitative "
+                "breakdown does not in general sum to the scalar dispersion or total "
+                "interaction energy; the reported scalar energies remain authoritative.\n\n"
+            )
+
+    # CPHF needs the HF segment for the SAPT0 induction terms, even without delta HF.
+    run_hf_segment = do_delta_hf or (induction_type == "CPHF" and do_dft)
+    hf_segment_label = "delta HF" if do_delta_hf else "SAPT0 induction"
 
     # Because SAPT(DFT) FDDS Dispersion doesn't have FSAPT support currently,
     # catch this case when FISAPT is requested with SAPT_DFT_DO_DISP false
     if do_fsapt and do_disp and sapt_dft_functional != "HF":
         raise ValidationError(
-            "FSAPT(DFT) currently only supported with empircal dispersion methods"
+            "FSAPT(DFT) currently only supported with empirical dispersion methods "
             "(like SAPT(DFT)-D4(I)) or with SAPT_DFT_FUNCTIONAL=HF."
         )
 
+    raw_external_potentials = kwargs.pop("external_potentials", None)
+    do_ext_potential = raw_external_potentials is not None
+    external_potentials = (
+        validate_external_potential(raw_external_potentials)
+        if do_ext_potential
+        else {}
+    )
+    if do_ext_potential:
+        kwargs["external_potentials"] = {}
+    if grac_use_ext_pot and external_potentials.get("C"):
+        core.print_out(
+            "\n   Warning: SAPT_DFT_GRAC_USE_EXT_POT excludes C from GRAC shifts. "
+            "Place charges belonging in the shift in A/B; the consuming monomer DFT still includes C.\n"
+        )
+
+
+    if (
+        do_dft
+        and (
+            (not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_A"))
+            or (not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_B"))
+        )
+        and grac_compute == "NONE"
+    ):
+        raise ValidationError(
+            'SAPT(DFT): User must set both "SAPT_DFT_GRAC_SHIFT_A" and "_B".  Or, to automatically compute the GRAC shift, set SAPT_DFT_GRAC_COMPUTE to "ITERATIVE" or "SINGLE".'
+        )
+
+    if core.get_option("SCF", "REFERENCE") != "RHF":
+        raise ValidationError(
+            "SAPT(DFT) currently only supports restricted references."
+        )
+
+
     if do_mon_grac_shift_A or do_mon_grac_shift_B:
-        monomerA_mon_only_bf = sapt_dimer.extract_subsets(1)
-        monomerB_mon_only_bf = sapt_dimer.extract_subsets(2)
+        grac_dimer = sapt_dimer
+        if grac_use_ext_pot and getattr(sapt_dimer, "_initial_cartesian", None) is not None:
+            # Embedding coordinates are in the original input frame, just as
+            # in scf_helper. Do not derive a shift in a reoriented QM frame.
+            grac_dimer = sapt_dimer.clone()
+            grac_dimer.set_geometry(sapt_dimer._initial_cartesian)
+            grac_dimer.fix_com(True)
+            grac_dimer.fix_orientation(True)
+            grac_dimer.update_geometry()
+        monomerA_mon_only_bf = grac_dimer.extract_subsets(1)
+        monomerB_mon_only_bf = grac_dimer.extract_subsets(2)
 
     # Print out the title and some information
     core.print_out("\n")
@@ -399,26 +533,25 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
     core.print_out("  ==> Algorithm <==\n\n")
     core.print_out("   SAPT DFT Functional     %12s\n" % str(sapt_dft_functional))
-    core.print_out("   Monomer A GRAC Shift    %12.6f\n" % mon_a_shift)
-    core.print_out("   Monomer B GRAC Shift    %12.6f\n" % mon_b_shift)
     # fmt: off
     core.print_out("   Delta HF                %12s\n" % ("True" if do_delta_hf else "False"))
+    core.print_out("   Induction Type          %12s\n" % induction_type)
     core.print_out("   JK Algorithm            %12s\n" % core.get_global_option("SCF_TYPE"))
     # fmt: on
     core.print_out("\n")
     core.print_out("   Required computations:\n")
-    if do_delta_hf:
+    if run_hf_segment and not shift_only:
         core.print_out("     HF   (Dimer)\n")
         core.print_out("     HF   (Monomer A)\n")
         core.print_out("     HF   (Monomer B)\n")
-    if do_dft:
+    if do_dft and not shift_only:
         core.print_out("     DFT  (Monomer A)\n")
         core.print_out("     DFT  (Monomer B)\n")
     if do_mon_grac_shift_A:
         core.print_out("     GRAC (Monomer A)\n")
     if do_mon_grac_shift_B:
         core.print_out("     GRAC (Monomer B)\n")
-    if do_delta_dft:
+    if do_delta_dft and not shift_only:
         core.print_out("     Delta DFT Correction:\n")
         core.print_out("       DFT (Dimer)\n")
         core.print_out("       DFT (Monomer A: No Asymptotic Correction)\n")
@@ -428,12 +561,17 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
     identity_atomic_input = kwargs.pop(p4util.SAPTDFT_IDENTITY_ATOMIC_INPUT_KEY, None)
     checkpoint_dir, checkpoint_stop_after = CheckpointSession.controls(kwargs)
-    do_ext_potential = kwargs.get("external_potentials")
-    external_potentials = kwargs.pop("external_potentials", {})
-    # Ensure that external potential label is case-insentive
-    external_potentials = {k.upper(): v for k, v in external_potentials.items()}
-    if do_ext_potential:
-        kwargs["external_potentials"] = {}
+    if checkpoint_dir:
+        if do_ext_potential:
+            raise ValidationError(
+                "SAPT(DFT) checkpointing is not supported with external_potentials; "
+                "run embedded SAPT(DFT) jobs without a checkpoint directory."
+            )
+        if induction_type == "CPHF" and do_dft and fsapt_type == "FISAPT":
+            raise ValidationError(
+                "SAPT(DFT) checkpointing is not supported with SAPT_DFT_INDUCTION_TYPE=CPHF "
+                "and SAPT_DFT_DO_FSAPT=FISAPT; the HF-backed fragment induction cannot be restored."
+            )
 
     ckpt = CheckpointSession.start(
         name,
@@ -445,97 +583,71 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         data=data,
     )
     with ckpt:
-        if ckpt.enabled and do_ext_potential:
-            raise ValidationError("SAPT(DFT) checkpointing is not supported with external_potentials.")
         restored_scalars = ckpt.restored_scalars()
         data.update(restored_scalars)
         if "Delta HF Correction" in restored_scalars:
             core.set_variable("SAPT(DFT) Delta HF", restored_scalars["Delta HF Correction"])
         if "Delta DFT Correction" in restored_scalars:
             core.set_variable("SAPT(DFT) Delta DFT", restored_scalars["Delta DFT Correction"])
-        dimer_wfn = None
-        wfn_A = None
-        wfn_B = None
-        hf_wfn_dimer = None
-        hf_wfn_A = None
-        hf_wfn_B = None
         if ckpt.done("final"):
             # Everything was computed by an earlier run; replay the stored result.
-            dimer_wfn = ckpt.restore_wavefunction("dimer_wfn")
-            # The stored wavefunction carries the matrix QCVariables (F-SAPT
-            # partitions) that the manifest cannot hold; the manifest carries the
-            # scalars the summary published straight to Psi4.
-            for k, v in dimer_wfn.variables().items():
-                core.set_variable(k, v)
-            for k, v in data.items():
-                core.set_variable(k, v)
-                dimer_wfn.set_variable(k, v)
-            current_energy = data.get("CURRENT ENERGY", data.get("SAPT TOTAL ENERGY", dimer_wfn.energy()))
-            core.set_variable("CURRENT ENERGY", current_energy)
-            dimer_wfn.set_variable("CURRENT ENERGY", current_energy)
-            dimer_wfn.set_energy(current_energy)
-            core.timer_off("SAPT(DFT) Energy")
-            core.tstop()
-            optstash.restore()
-            return dimer_wfn
+            return _replay_final_checkpoint(ckpt, data)
 
         core.print_out("   Beginning setup computations\n")
 
         if do_mon_grac_shift_A:
             core.print_out("     GRAC (Monomer A)\n")
-            if ckpt.done("grac_monomer_a"):
-                mon_a_shift = data["SAPT DFT GRAC SHIFT A"]
-            else:
-                mon_a_shift = compute_GRAC_shift(
-                    monomerA_mon_only_bf,
-                    grac_compute,
-                    "Monomer A",
-                )
-                data["SAPT DFT GRAC SHIFT A"] = mon_a_shift
-                ckpt.commit("grac_monomer_a", scalars={"SAPT DFT GRAC SHIFT A": mon_a_shift})
+            mon_a_shift = compute_GRAC_shift(
+                monomerA_mon_only_bf,
+                grac_compute,
+                "A",
+                results=data,
+                external_potentials=external_potentials.get("A") if grac_use_ext_pot else None,
+                checkpoint=ckpt,
+            )
         if do_mon_grac_shift_B:
             core.print_out("     GRAC (Monomer B)\n")
-            if ckpt.done("grac_monomer_b"):
-                mon_b_shift = data["SAPT DFT GRAC SHIFT B"]
-            else:
-                mon_b_shift = compute_GRAC_shift(
-                    monomerB_mon_only_bf,
-                    grac_compute,
-                    "Monomer B",
-                )
-                data["SAPT DFT GRAC SHIFT B"] = mon_b_shift
-                ckpt.commit("grac_monomer_b", scalars={"SAPT DFT GRAC SHIFT B": mon_b_shift})
+            mon_b_shift = compute_GRAC_shift(
+                monomerB_mon_only_bf,
+                grac_compute,
+                "B",
+                results=data,
+                external_potentials=external_potentials.get("B") if grac_use_ext_pot else None,
+                checkpoint=ckpt,
+            )
 
         core.set_variable("SAPT DFT GRAC SHIFT A", mon_a_shift)  # P::e SAPT
         core.set_variable("SAPT DFT GRAC SHIFT B", mon_b_shift)  # P::e SAPT
+        data["SAPT DFT GRAC SHIFT A"] = mon_a_shift
+        data["SAPT DFT GRAC SHIFT B"] = mon_b_shift
+        core.print_out("\n  ==> SAPT(DFT) GRAC Shifts <==\n\n")
+        core.print_out("   Monomer   E(monomer) [Eh]   E(ionized) [Eh]     HOMO [Eh]     IP [Eh]   GRAC shift [Eh]\n")
+        for label, shift, computed in (("A", mon_a_shift, do_mon_grac_shift_A),
+                                        ("B", mon_b_shift, do_mon_grac_shift_B)):
+            if computed:
+                values = [data[f"SAPT DFT GRAC {quantity} {label}"] for quantity in
+                          ("MONOMER ENERGY", "IONIZED MONOMER ENERGY", "HOMO", "IP")]
+                core.print_out(f"         {label} {values[0]:18.8f} {values[1]:18.8f} {values[2]:13.8f} {values[3]:11.8f} {shift:17.8f}\n")
+            else:
+                core.print_out(f"         {label} {'':63s} {shift:17.8f}\n")
+                if do_dft:
+                    core.print_out(f"   Monomer {label} GRAC shift supplied by the user (not computed).\n")
+                else:
+                    core.print_out(f"   Monomer {label} GRAC shift not applicable for HF.\n")
+        core.print_out("   Monomer A GRAC Shift    %12.6f\n" % mon_a_shift)
+        core.print_out("   Monomer B GRAC Shift    %12.6f\n" % mon_b_shift)
+        data["SAPT DFT GRAC SHIFT ONLY"] = float(shift_only)  # P::e SAPT
+        core.set_variable("SAPT DFT GRAC SHIFT ONLY", float(shift_only))  # P::e SAPT
+        if shift_only:
+            wfn = core.Wavefunction.build(sapt_dimer, core.get_global_option("BASIS"))
+            for key, value in data.items():
+                wfn.set_variable(key, value)
+            core.set_variable("CURRENT ENERGY", 0.0)
+            wfn.set_variable("CURRENT ENERGY", 0.0)
+            core.print_out("\n   SAPT(DFT) stopped early by request: GRAC shifts only; no interaction energy computed.\n")
+            ckpt.commit("final", scalars={**data, "CURRENT ENERGY": 0.0}, wavefunctions={"dimer_wfn": wfn})
+            return wfn
         core.print_out("\n")
-
-        def construct_external_potential_in_field_C(arrays):
-            output = []
-            for i, array in enumerate(arrays):
-                if array is None:
-                    continue
-                for j, val in enumerate(array):
-                    output.append(val)
-            return output
-
-        if (
-            do_dft
-            and (
-                (not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_A"))
-                or (not core.has_option_changed("SAPT", "SAPT_DFT_GRAC_SHIFT_B"))
-            )
-            and grac_compute == "NONE"
-        ):
-            raise ValidationError(
-                'SAPT(DFT): User must set both "SAPT_DFT_GRAC_SHIFT_A" and "_B".  Or, to automatically compute the GRAC shift, set SAPT_DFT_GRAC_COMPUTE to "ITERATIVE" or "SINGLE".'
-            )
-
-        if core.get_option("SCF", "REFERENCE") != "RHF":
-            raise ValidationError(
-                "SAPT(DFT) currently only supports restricted references."
-            )
-
         # Save integrals
         # We want to try to re-use itegrals for the dimer and monomer SCF's. If we
         # are using Disk based DF (DISK_DF) then we can use the DF_INTS_IO option.
@@ -544,6 +656,11 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
         core.set_global_option("DF_INTS_IO", "SAVE")
 
         # Compute dimer wavefunction
+        dimer_wfn = None
+        wfn_A = None
+        wfn_B = None
+        hf_wfn_dimer = None
+        fsapt_induction_data = None
 
         # Need to collect external potentials (if exist) to properly set on each
         # SCF correctly. To use scf_helper for SAPT external potentials, we have to
@@ -556,10 +673,18 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             ext_pot_C = [np.array(x) for x in ext_pot_C]
         ext_pot_A = external_potentials.get("A")
         ext_pot_B = external_potentials.get("B")
-        if do_delta_hf:
+        # A charge may be copied into A/B to reach a GRAC shift while it also sits
+        # in C. Trim those copies once, here, so every union below stays additive
+        # and the dimer field remains the sum of the two monomer fields.
+        ext_pot_A_not_in_C = drop_rows_carried_by(ext_pot_A, ext_pot_C)
+        ext_pot_B_not_in_C = drop_rows_carried_by(ext_pot_B, ext_pot_C)
+        if run_hf_segment:
             core.set_global_option("DF_INTS_IO", "SAVE")
             core.timer_on("SAPT(DFT):Dimer SCF")
-            hf_data = {}
+            # The SAPT0 terms share their names with the SAPT(DFT) ones, so the
+            # checkpoint keeps them apart under a private prefix.
+            hf_data = ckpt.private_scalars(_HF_DATA_PREFIX)
+            ind = ckpt.private_scalars(_HF_IND_PREFIX)
 
             core.set_local_option("SCF", "SAVE_JK", True)
 
@@ -567,27 +692,27 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                 if do_ext_potential:
                     kwargs["external_potentials"]["C"] = (
                         construct_external_potential_in_field_C(
-                            [ext_pot_C, ext_pot_A, ext_pot_B]
+                            [ext_pot_C, ext_pot_A_not_in_C, ext_pot_B_not_in_C]
                         )
                     )
                 wfn = scf_helper(
-                    "SCF", molecule=sapt_dimer, banner="SAPT(DFT): delta HF Dimer", **kwargs
+                    "SCF", molecule=sapt_dimer, banner=f"SAPT(DFT): {hf_segment_label} Dimer", **kwargs
                 )
                 if do_ext_potential:
                     kwargs.pop("external_potentials")
                 return wfn
 
-            def run_hf_monomer(molecule, banner, ext_pot):
+            def run_hf_monomer(molecule, label, ext_pot, ext_pot_not_in_C):
                 if do_ext_potential and (ext_pot is not None or ext_pot_C is not None):
                     kwargs["external_potentials"] = {
-                        "C": construct_external_potential_in_field_C([ext_pot_C, ext_pot])
+                        "C": construct_external_potential_in_field_C([ext_pot_C, ext_pot_not_in_C])
                     }
                 # Monomers reuse the dimer JK object; a restored dimer wavefunction
                 # arrives without one, so build it on first use only.
                 wfn = scf_helper(
                     "SCF",
                     molecule=molecule,
-                    banner=banner,
+                    banner=f"SAPT(DFT): {hf_segment_label} Monomer {label}",
                     jk=wfn_jk(prepare_restored_scf(hf_wfn_dimer)),
                     **kwargs,
                 )
@@ -595,27 +720,20 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     kwargs.pop("external_potentials")
                 return wfn
 
+            hf_scf = dict(method="hf", reference="RHF", energies=hf_data, scalar_prefix=_HF_DATA_PREFIX)
             hf_wfn_dimer = ckpt.scf_stage(
-                "hf_dimer_scf",
-                run_hf_dimer,
-                method="hf",
-                reference="RHF",
-                molecule=sapt_dimer,
-                energy_key="HF DIMER",
+                "hf_dimer_scf", run_hf_dimer, molecule=sapt_dimer, energy_key="HF DIMER", **hf_scf
             )
-            hf_data["HF DIMER"] = data["HF DIMER"]
             core.timer_off("SAPT(DFT):Dimer SCF")
 
             core.timer_on("SAPT(DFT):Monomer A SCF")
             hf_wfn_A = ckpt.scf_stage(
                 "hf_monomer_a_scf",
-                lambda: run_hf_monomer(monomerA, "SAPT(DFT): delta HF Monomer A", ext_pot_A),
-                method="hf",
-                reference="RHF",
+                lambda: run_hf_monomer(monomerA, "A", ext_pot_A, ext_pot_A_not_in_C),
                 molecule=monomerA,
                 energy_key="HF MONOMER A",
+                **hf_scf,
             )
-            hf_data["HF MONOMER A"] = data["HF MONOMER A"]
             core.timer_off("SAPT(DFT):Monomer A SCF")
 
             core.timer_on("SAPT(DFT):Monomer B SCF")
@@ -623,13 +741,11 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
             hf_wfn_B = ckpt.scf_stage(
                 "hf_monomer_b_scf",
-                lambda: run_hf_monomer(monomerB, "SAPT(DFT): delta HF Monomer B", ext_pot_B),
-                method="hf",
-                reference="RHF",
+                lambda: run_hf_monomer(monomerB, "B", ext_pot_B, ext_pot_B_not_in_C),
                 molecule=monomerB,
                 energy_key="HF MONOMER B",
+                **hf_scf,
             )
-            hf_data["HF MONOMER B"] = data["HF MONOMER B"]
             core.set_global_option("SAVE_JK", False)
             core.timer_off("SAPT(DFT):Monomer B SCF")
 
@@ -647,7 +763,7 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             if do_dft:  # For SAPT(HF) do the JK terms in sapt_dft()
                 # Grab JK object and set to A (so we do not save many JK objects)
                 sapt_jk = wfn_jk(hf_wfn_B)
-                if sapt_jk is not None and hasattr(hf_wfn_A, "set_jk"):
+                if sapt_jk is not None:
                     hf_wfn_A.set_jk(sapt_jk)
                 core.set_global_option("SAVE_JK", False)
 
@@ -658,9 +774,8 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                 core.print_out(
                     "         ---------------------------------------------------------\n"
                 )
-                core.print_out(
-                    "         " + "SAPT(DFT): delta HF Segment".center(58) + "\n"
-                )
+                segment_name = f"SAPT(DFT): {hf_segment_label} Segment"
+                core.print_out("         " + segment_name.center(58) + "\n")
                 core.print_out("\n")
                 core.print_out(
                     "         " + "by Daniel G. A. Smith and Rob Parrish".center(58) + "\n"
@@ -687,15 +802,27 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                         kwargs["external_potentials"]["B"] = ext_pot_B
                         _set_external_potentials_to_wavefunction(ext_pot_B, hf_wfn_B)
 
-                # The last SAPT(HF) stage gates the whole segment: once induction is
-                # stored there is nothing here worth rebuilding the JK object for.
-                if ckpt.pending("hf_sapt_ind"):
+                def commit_hf_sapt(stage):
+                    ckpt.commit(
+                        stage,
+                        scalars={
+                            **{_HF_DATA_PREFIX + k: v for k, v in hf_data.items()},
+                            **{_HF_IND_PREFIX + k: v for k, v in ind.items()},
+                        },
+                    )
+
+                # The SAPT0 cache and JK are only rebuilt when a SAPT0 stage is
+                # still outstanding; once the last one is stored nothing here
+                # needs them.
+                hf_sapt_stages = ["hf_sapt_elst", "hf_sapt_exch"]
+                if induction_type != "NONE":
+                    hf_sapt_stages.append("hf_sapt_ind")
+                hf_cache_ein = None
+                if ckpt.next_stage(hf_sapt_stages) is not None:
                     if sapt_jk is None:
-                        sapt_jk = core.JK.build(hf_wfn_dimer.basisset())
-                        sapt_jk.set_do_J(True)
-                        sapt_jk.set_do_K(True)
-                        sapt_jk.initialize()
-                    # Build cache. JK/cache objects are deliberately regenerated on restart.
+                        sapt_jk = wfn_jk(prepare_restored_scf(hf_wfn_B))
+                        hf_wfn_A.set_jk(sapt_jk)
+                    # Build the SAPT0 cache needed for electrostatics and exchange.
                     hf_cache_ein = jk_terms.build_sapt_jk_cache(
                         hf_wfn_dimer,
                         hf_wfn_A,
@@ -711,10 +838,7 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                         elst, extern_extern_IE = jk_terms.electrostatics(hf_cache_ein, True)
                         hf_data["extern_extern_IE"] = extern_extern_IE
                         hf_data.update(elst)
-                        data.update(hf_data)
-                        ckpt.commit("hf_sapt_elst", scalars=hf_data)
-                    else:
-                        hf_data.update(data)
+                        commit_hf_sapt("hf_sapt_elst")
                     core.timer_off("SAPT(HF):elst")
 
                     # Exchange
@@ -722,55 +846,75 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     if ckpt.pending("hf_sapt_exch"):
                         exch = jk_terms.exchange(hf_cache_ein, sapt_jk, True)
                         hf_data.update(exch)
-                        data.update(hf_data)
-                        ckpt.commit("hf_sapt_exch", scalars=hf_data)
-                    else:
-                        hf_data.update(data)
+                        commit_hf_sapt("hf_sapt_exch")
                     core.timer_off("SAPT(HF):exch")
 
-                    # Induction
-                    core.timer_on("SAPT(HF):ind")
-                    ind = jk_terms.induction(
-                        hf_cache_ein,
-                        sapt_jk,
-                        True,
-                        maxiter=core.get_option("SAPT", "MAXITER"),
-                        conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
-                        Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
-                    )
-                    hf_data.update(ind)
-                    data.update(hf_data)
-                    ckpt.commit("hf_sapt_ind", scalars=hf_data)
-                    core.timer_off("SAPT(HF):ind")
-                else:
-                    hf_data.update(data)
+                    if induction_type != "NONE" and ckpt.pending("hf_sapt_ind"):
+                        core.timer_on("SAPT(HF):ind")
+                        ind = jk_terms.induction(
+                            hf_cache_ein,
+                            sapt_jk,
+                            True,
+                            maxiter=core.get_option("SAPT", "MAXITER"),
+                            conv=core.get_option("SAPT", "CPHF_R_CONVERGENCE"),
+                            Sinf=core.get_option("SAPT", "DO_IND_EXCH_SINF"),
+                        )
+                        hf_data.update(ind)
+                        commit_hf_sapt("hf_sapt_ind")
+                        core.timer_off("SAPT(HF):ind")
 
-                # Keep the SAPT(HF) component subtotal available for F-SAPT
-                # induction scaling. The SAPT(DFT) component values overwrite
-                # data later for the final SAPT(DFT) report, but the dHF term is
-                # defined as HF IE minus the SAPT(HF) subtotal.
                 dhf_value = (
                     hf_data["HF DIMER"] - hf_data["HF MONOMER A"] - hf_data["HF MONOMER B"]
                 )
-                # set for fisapt_obj.drop for saptdft_fisapt.py::setup_fisapt_object
-                data["DHF VALUE"] = dhf_value
+                if do_delta_hf:
+                    data["DHF VALUE"] = dhf_value
 
                 core.print_out("\n")
-                core.print_out(
-                    print_sapt_hf_summary(
-                        hf_data,
-                        "SAPT(HF)",
-                        dimer_wfn=hf_wfn_dimer,
-                        delta_hf=dhf_value,
+                if induction_type == "NONE":
+                    if do_delta_hf:
+                        data["Delta HF Correction"] = (
+                            dhf_value - hf_data["Elst10,r"] - hf_data["Exch10"]
+                        )
+                    core.print_out("   SAPT0 induction skipped; induction will be assigned from delta HF.\n")
+                elif do_delta_hf:
+                    core.print_out(
+                        print_sapt_hf_summary(
+                            hf_data,
+                            "SAPT(HF)",
+                            dimer_wfn=hf_wfn_dimer,
+                            delta_hf=dhf_value,
+                        )
                     )
-                )
-
-                if "Delta HF Correction" not in data and core.has_variable("SAPT(DFT) Delta HF"):
                     data["Delta HF Correction"] = core.variable("SAPT(DFT) Delta HF")
+                else:
+                    core.print_out(print_sapt_hf_induction_summary(hf_data, "SAPT(HF)"))
+                if induction_type == "CPHF":
+                    data.update(ind)
+                    if do_delta_hf:
+                        hf_data["Delta HF Correction"] = data["Delta HF Correction"]
+                    if fsapt_type == "FISAPT":
+                        # The einsums exchange-induction path retains JK-owned
+                        # J_P matrices. Clone them before finalizing the HF JK
+                        # object so the later FISAPT::find() cannot dereference
+                        # released storage.
+                        hf_cache_ein["J_P_A"] = hf_cache_ein["J_P_A"].clone()
+                        hf_cache_ein["J_P_B"] = hf_cache_ein["J_P_B"].clone()
+
+                        # Retain the SAPT0 cache and wavefunctions so FISAPT::find()
+                        # can partition the same HF induction used by CPHF.
+                        fsapt_induction_data = (
+                            hf_wfn_A,
+                            hf_wfn_B,
+                            hf_cache_ein,
+                            hf_data.copy(),
+                        )
                 if sapt_jk is not None:
                     sapt_jk.finalize()
 
-                del hf_wfn_A, hf_wfn_B, sapt_jk
+                del hf_wfn_A, hf_wfn_B, sapt_jk, hf_cache_ein
+                # The DFT segment below allocates its own caches; without this the arenas these
+                # wavefunctions leave behind are still resident when it does.
+                core.release_freed_memory()
 
             else:
                 wfn_A = hf_wfn_A
@@ -782,12 +926,11 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                 )
                 data["DHF VALUE"] = dhf_value
 
-        if hf_wfn_dimer is None and not core.get_option("SAPT", "SAPT_DFT_DO_FSAPT"):
-            if dimer_wfn is None:
-                dimer_wfn = core.Wavefunction.build(sapt_dimer, core.get_global_option("BASIS"))
+        if hf_wfn_dimer is None and not do_fsapt:
+            dimer_wfn = core.Wavefunction.build(sapt_dimer, core.get_global_option("BASIS"))
         # If we did not compute HF wavefunction, we still need orbital coefficients
         # for IBOLocalizer2
-        elif hf_wfn_dimer is None and core.get_option("SAPT", "SAPT_DFT_DO_FSAPT"):
+        elif hf_wfn_dimer is None and do_fsapt:
             dimer_wfn = ckpt.scf_stage(
                 "dimer_localization_scf",
                 lambda: scf_helper(
@@ -805,8 +948,9 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
 
         if do_dft or not do_delta_hf:
             # Set the primary functional
-            monomer_reference = "RKS" if do_dft else "RHF"
-            core.set_local_option("SCF", "REFERENCE", monomer_reference)
+            core.set_local_option("SCF", "REFERENCE", "RKS")
+            # An HF "functional" still builds an RHF wavefunction.
+            dft_scf = dict(method=sapt_dft_functional.lower(), reference="RKS" if do_dft else "RHF")
 
             # Compute Monomer A wavefunction
             core.timer_on("SAPT(DFT): Monomer A DFT")
@@ -816,7 +960,7 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             def run_dft_monomer_a():
                 if do_ext_potential and (ext_pot_A is not None or ext_pot_C is not None):
                     kwargs["external_potentials"] = {
-                        "C": construct_external_potential_in_field_C([ext_pot_C, ext_pot_A])
+                        "C": construct_external_potential_in_field_C([ext_pot_C, ext_pot_A_not_in_C])
                     }
                 elif do_ext_potential:
                     kwargs["external_potentials"] = {}
@@ -836,10 +980,9 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             wfn_A = ckpt.scf_stage(
                 "monomer_a_dft_scf",
                 run_dft_monomer_a,
-                method=sapt_dft_functional.lower(),
-                reference=monomer_reference,
                 molecule=monomerA,
                 energy_key="DFT MONOMERA",
+                **dft_scf,
             )
 
             core.set_global_option("DFT_GRAC_SHIFT", 0.0)
@@ -854,7 +997,7 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             def run_dft_monomer_b():
                 if do_ext_potential and (ext_pot_B is not None or ext_pot_C is not None):
                     kwargs["external_potentials"] = {
-                        "C": construct_external_potential_in_field_C([ext_pot_C, ext_pot_B])
+                        "C": construct_external_potential_in_field_C([ext_pot_C, ext_pot_B_not_in_C])
                     }
                 return scf_helper(
                     sapt_dft_functional,
@@ -869,10 +1012,9 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             wfn_B = ckpt.scf_stage(
                 "monomer_b_dft_scf",
                 run_dft_monomer_b,
-                method=sapt_dft_functional.lower(),
-                reference=monomer_reference,
                 molecule=monomerB,
                 energy_key="DFT MONOMERB",
+                **dft_scf,
             )
             core.timer_off("SAPT(DFT): Monomer B DFT")
             if do_ext_potential:
@@ -900,17 +1042,19 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                 kwargs["external_potentials"]["B"] = ext_pot_B
                 _set_external_potentials_to_wavefunction(ext_pot_B, wfn_B)
 
-        # Save JK object when available; serialized Wavefunctions do not retain JK
-        # objects. Rebuilding one is expensive, so only do it when a stage that
-        # actually needs a JK object is still outstanding.
+        # Save JK object when available; restored wavefunctions carry none.
+        # Rebuilding one is expensive, so only do it when a stage that actually
+        # needs a JK object is still outstanding.
         sapt_jk = wfn_jk(wfn_B)
-        pending_sapt_stage = ckpt.next_stage(_sapt_stage_order(do_disp=do_disp, do_fsapt=do_fsapt))
-        needs_restored_sapt_jk = do_dft and sapt_jk is None and (
-            (do_delta_dft and ckpt.pending("delta_dft")) or pending_sapt_stage not in {None, "fsapt_final"}
+        pending_sapt_stage = ckpt.next_stage(
+            _sapt_stage_order(do_disp=do_disp, do_fsapt=do_fsapt, do_dft=do_dft, induction_type=induction_type)
+        )
+        needs_restored_sapt_jk = sapt_jk is None and (
+            (do_delta_dft and do_dft and ckpt.pending("delta_dft")) or pending_sapt_stage not in {None, "fsapt_final"}
         )
         if needs_restored_sapt_jk:
             sapt_jk = wfn_jk(prepare_restored_scf(wfn_B))
-        if sapt_jk is not None and hasattr(wfn_A, "set_jk"):
+        if sapt_jk is not None:
             wfn_A.set_jk(sapt_jk)
 
         if do_delta_dft and do_dft:
@@ -931,25 +1075,41 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             core.print_out("\n")
             core.timer_on("SAPT(DFT):delta DFT")
 
-            def delta_dft_scf(stage, molecule, timer, energy_key):
-                """Supermolecular SCF for one term of the delta-DFT correction."""
+            dimer_dft_kwargs = {}
+            monomer_a_dft_kwargs = {}
+            monomer_b_dft_kwargs = {}
+            if do_ext_potential:
+                dimer_dft_kwargs["external_potentials"] = {
+                    "C": construct_external_potential_in_field_C(
+                        [ext_pot_C, ext_pot_A_not_in_C, ext_pot_B_not_in_C]
+                    )
+                }
+                monomer_a_dft_kwargs["external_potentials"] = {
+                    "C": construct_external_potential_in_field_C([ext_pot_C, ext_pot_A_not_in_C])
+                }
+                monomer_b_dft_kwargs["external_potentials"] = {
+                    "C": construct_external_potential_in_field_C([ext_pot_C, ext_pot_B_not_in_C])
+                }
+
+            def delta_dft_scf(stage, molecule, timer, energy_key, scf_kwargs):
+                """Supermolecular SCF for one term of the delta-DFT correction.
+
+                Only its energy is used downstream, so only the energy is stored.
+                """
                 core.timer_on(timer)
                 try:
-                    ckpt.scf_stage(
+                    ckpt.energy_stage(
                         stage,
-                        lambda: run_scf(sapt_dft_functional.lower(), molecule=molecule, jk=sapt_jk),
-                        method=sapt_dft_functional.lower(),
-                        reference="RKS",
-                        molecule=molecule,
+                        lambda: run_scf(sapt_dft_functional.lower(), molecule=molecule, jk=sapt_jk, **scf_kwargs),
                         energy_key=energy_key,
                     )
                 finally:
                     core.timer_off(timer)
 
             if ckpt.pending("delta_dft"):
-                delta_dft_scf("delta_dft_dimer_scf", sapt_dimer, "SAPT(DFT):Dimer DFT", "DFT DIMER ENERGY")
-                delta_dft_scf("delta_dft_monomer_a_scf", monomerA, "SAPT(DFT):Monomer A DFT", "DFT MONOMER A ENERGY")
-                delta_dft_scf("delta_dft_monomer_b_scf", monomerB, "SAPT(DFT):Monomer B DFT", "DFT MONOMER B ENERGY")
+                delta_dft_scf("delta_dft_dimer_scf", sapt_dimer, "SAPT(DFT):Dimer DFT", "DFT DIMER ENERGY", dimer_dft_kwargs)
+                delta_dft_scf("delta_dft_monomer_a_scf", monomerA, "SAPT(DFT):Monomer A DFT", "DFT MONOMER A ENERGY", monomer_a_dft_kwargs)
+                delta_dft_scf("delta_dft_monomer_b_scf", monomerB, "SAPT(DFT):Monomer B DFT", "DFT MONOMER B ENERGY", monomer_b_dft_kwargs)
 
                 data["DFT IE"] = (
                     data["DFT DIMER ENERGY"]
@@ -989,7 +1149,9 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     d4_type=d4_type,
                     data=data,
                 )
-                ckpt.commit("d4")
+                ckpt.commit_data_arrays("d4")
+            else:
+                ckpt.restore_data_arrays("d4")
             core.timer_off("SAPT(DFT):D4 Interaction Energy")
         elif sapt_dft_D3_IE:
             core.print_out("\n")
@@ -1013,7 +1175,9 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
                     d3_type=d3_type,
                     data=data,
                 )
-                ckpt.commit("d3")
+                ckpt.commit_data_arrays("d3")
+            else:
+                ckpt.restore_data_arrays("d3")
             core.timer_off("SAPT(DFT):D3 Interaction Energy")
 
         core.set_global_option("SAVE_JK", False)
@@ -1025,9 +1189,6 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             sapt_dft_functional, mon_a_shift, mon_b_shift, bool(do_delta_hf), scf_alg
         )
 
-        # Compute Delta HF for SAPT(HF)?
-        delta_hf = do_delta_hf and not do_dft
-
         # Call SAPT(DFT)
         sapt_jk = wfn_jk(wfn_B)
         sapt_dft(
@@ -1038,26 +1199,20 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             sapt_jk=sapt_jk,
             data=data,
             print_header=False,
-            delta_hf=delta_hf,
+            delta_hf=do_delta_hf,
             cleanup_jk=True,
             external_potentials=kwargs.get("external_potentials", None),
             do_delta_dft=do_delta_dft,
             do_disp=do_disp,
+            fsapt_induction_data=fsapt_induction_data,
             checkpoint=ckpt,
         )
-
-        data["SAPT(DFT) TOTAL ENERGY"] = core.variable("SAPT(DFT) TOTAL ENERGY")
-        data["SAPT TOTAL ENERGY"] = core.variable("SAPT TOTAL ENERGY")
-        data["CURRENT ENERGY"] = core.variable("CURRENT ENERGY")
 
         # Copy data back into globals
         for k, v in data.items():
             core.set_variable(k, v)
             dimer_wfn.set_variable(k, v)
 
-        core.timer_off("SAPT(DFT) Energy")
-        core.tstop()
-        optstash.restore()
         # The per-component QCVariables are published by the summary printer rather
         # than collected in `data`, so store them alongside it; a "final" restart has
         # nothing else to republish them from.
@@ -1067,6 +1222,58 @@ def run_sapt_dft(name: str, **kwargs) -> core.Wavefunction:
             wavefunctions={"dimer_wfn": dimer_wfn},
         )
         return dimer_wfn
+
+
+def drop_rows_carried_by(potential, reference):
+    """Drop point/diffuse rows of *potential* that *reference* already carries.
+
+    Used to copy a charge into A/B (so it enters that monomer's GRAC shift)
+    while it also sits in the environment field C, without charging the
+    consuming monomer twice. Only rows that are exactly equal to a reference
+    row are removed, and only against C: rows shared between A and B must be
+    left alone, since A and B partition the field the dimer sees.
+
+    Matrix operators are opaque and pass through untouched.
+    """
+    if not potential or not reference:
+        return potential
+    trimmed = {}
+    for mode, values in potential.items():
+        if mode == "matrix":
+            trimmed[mode] = values
+            continue
+        carried = {tuple(row) for row in reference.get(mode, [])}
+        trimmed[mode] = [row for row in values if tuple(row) not in carried]
+    return trimmed
+
+
+def construct_external_potential_in_field_C(potentials):
+    """Concatenate point/diffuse rows; sum opaque matrix operators.
+
+    Rows are never dropped here. The field the dimer sees has to equal the
+    sum of the fields the monomers see or the embedding contribution fails
+    to cancel in the SAPT decomposition, and two equal rows mean two equal
+    charges. Use :py:func:`drop_rows_carried_by` to remove a monomer's rows
+    that C already carries before combining.
+    """
+    combined = {}
+    for potential in potentials:
+        if not potential:
+            continue
+        for mode, values in potential.items():
+            if mode == "matrix":
+                matrix = np.asarray(values)
+                if mode in combined:
+                    if np.asarray(combined[mode]).shape != matrix.shape:
+                        raise ValidationError(
+                            "SAPT(DFT): external-potential matrices must have identical dimensions before combination."
+                        )
+                    combined[mode] = (np.asarray(combined[mode]) + matrix).tolist()
+                else:
+                    combined[mode] = matrix.tolist()
+            else:
+                combined.setdefault(mode, []).extend(values)
+    return combined
 
 
 sapt_dft_grac_convergence_tier_options = {
@@ -1106,6 +1313,9 @@ def compute_GRAC_shift(
     sapt_dft_grac_convergence_tier: str,
     label: str,
     jk_obj: core.JK | None = None,
+    results: dict | None = None,
+    external_potentials: dict | None = None,
+    checkpoint: CheckpointSession | None = None,
 ) -> float:
     """Compute the GRAC (gradient-regulated asymptotic correction) shift for a monomer.
 
@@ -1124,12 +1334,52 @@ def compute_GRAC_shift(
         Label identifying the monomer (e.g., ``'A'`` or ``'B'``).
     jk_obj : core.JK or None, optional
         Pre-built JK object, by default None.
+    results : dict or None, optional
+        Destination for computed intermediate QCVariables.
+    external_potentials : dict or None, optional
+        Monomer's own normalized potential, applied to both charge states.
+    checkpoint : CheckpointSession or None, optional
+        Open checkpoint session. The neutral and the electron-removed SCF are
+        separate stages, so a restart skips whichever of the two has finished.
 
     Returns
     -------
     float
         The GRAC shift value in Hartree.
     """
+    ckpt = checkpoint or CheckpointSession.disabled()
+    monomer_label = label
+    stage = f"grac_monomer_{monomer_label.lower()}"
+    neutral_stage = f"{stage}_neutral"
+    private_prefix = f"{_GRAC_PREFIX}{monomer_label}::"
+    label = f"Monomer {label}"
+
+    def publish(E_given, E_cation, HOMO):
+        values = {
+            f"SAPT DFT GRAC MONOMER ENERGY {monomer_label}": E_given,  # P::e SAPT
+            f"SAPT DFT GRAC IONIZED MONOMER ENERGY {monomer_label}": E_cation,  # P::e SAPT
+            f"SAPT DFT GRAC HOMO {monomer_label}": HOMO,  # P::e SAPT
+            f"SAPT DFT GRAC IP {monomer_label}": E_cation - E_given,  # P::e SAPT
+        }
+        for key, value in values.items():
+            core.set_variable(key, value)
+            if results is not None:
+                results[key] = value
+        return values
+
+    if ckpt.done(stage):
+        stored = ckpt.private_scalars(private_prefix)
+        grac = stored["E_cation"] - stored["E_given"] + stored["HOMO"]
+        core.print_out(f"\n   GRAC shift for {label} restored from checkpoint: {grac:.8f}\n")
+        publish(stored["E_given"], stored["E_cation"], stored["HOMO"])
+        return grac
+
+    # A neutral SCF stored by an earlier run converged at a known tier. The
+    # ladder resumes there, re-applying the earlier tiers' options so the
+    # electron-removed SCF sees exactly the settings it would have seen.
+    neutral = ckpt.private_scalars(private_prefix) if ckpt.done(neutral_stage) else {}
+    resume_tier = neutral.get("tier")
+
     optstash = p4util.OptionsState(
         ["SCF_TYPE"],
         ["SCF", "REFERENCE"],
@@ -1139,98 +1389,141 @@ def compute_GRAC_shift(
         ["SCF", "LEVEL_SHIFT"],
         ["SCF", "LEVEL_SHIFT_CUTOFF"],
         ["SCF", "SCF_INITIAL_ACCELERATOR"],
-        ["ORBITAL_OPTIMIZER_PACKAGE"],
+        ["SCF", "ORBITAL_OPTIMIZER_PACKAGE"],
         ["BASIS"],
     )
 
+    scf_kwargs = {}
+    if external_potentials is not None:
+        scf_kwargs["external_potentials"] = construct_external_potential_in_field_C([external_potentials])
     core.timer_on("SAPT(DFT):GRAC Shift " + label)
-    dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
-    grac_basis = core.get_option("SAPT", "SAPT_DFT_GRAC_BASIS")
-    if grac_basis != "AUTO":
-        core.set_global_option("BASIS", grac_basis)
-
-    core.print_out(
-        f"Computing GRAC shift for {label} using {sapt_dft_grac_convergence_tier}..."
-    )
-    grac_options = sapt_dft_grac_convergence_tier_options[
-        sapt_dft_grac_convergence_tier
-    ]
-    grac = None
-    for options in grac_options:
-        for key, val in options.items():
-            core.set_local_option("SCF", key, val)
-        core.set_local_option("SCF", "ORBITAL_OPTIMIZER_PACKAGE", "INTERNAL")
-        # Need to get the initial and cation to estimate ionization energy for
-        # GRAC shift
-        mol_qcel_dict = molecule.to_schema(dtype=3)
-        del mol_qcel_dict["fragment_charges"]
-        del mol_qcel_dict["fragment_multiplicities"]
-        del mol_qcel_dict["molecular_multiplicity"]
-
-        mol_given = core.Molecule.from_schema(mol_qcel_dict)
-        mol_qcel_dict["molecular_charge"] += 1
-        mol_cation = core.Molecule.from_schema(mol_qcel_dict)
+    try:
+        dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
+        grac_basis = core.get_option("SAPT", "SAPT_DFT_GRAC_BASIS")
+        if grac_basis != "AUTO":
+            core.set_global_option("BASIS", grac_basis)
 
         core.print_out(
-            f"\n\n  ==> GRAC {label} Given Molecule: charge={mol_given.molecular_charge()} mult={mol_given.multiplicity()} <==\n\n"
+            f"Computing GRAC shift for {label} using {sapt_dft_grac_convergence_tier}..."
         )
-        try:
-            if mol_given.multiplicity() != 1:
-                core.set_local_option("SCF", "REFERENCE", "UHF")
-            else:
-                core.set_local_option("SCF", "REFERENCE", "RHF")
-            # Set SAVE_JK=True so we can reuse the JK object for the cation calc
-            core.set_local_option("SCF", "SAVE_JK", True)
-            wfn_given = run_scf(
-                dft_functional.lower(),
-                molecule=mol_given,
-                jk=jk_obj,
-            )
-            # We don't want to keep re-computing JK objects if we can avoid it
-            if jk_obj is None:
-                jk_obj = wfn_given.jk()
-            if mol_cation.multiplicity() != 1:
-                core.set_local_option("SCF", "REFERENCE", "UHF")
-            else:
-                core.set_local_option("SCF", "REFERENCE", "RHF")
-            core.print_out(
-                f"\n\n  ==> GRAC {label} Electron Removed Molecule: charge={mol_cation.molecular_charge()} mult={mol_cation.multiplicity()} <==\n\n"
-            )
-            wfn_cation = run_scf(
-                dft_functional.lower(),
-                molecule=mol_cation,
-                jk=jk_obj,
-            )
-        except ConvergenceError:
-            if len(grac_options) == 1:
-                raise Exception(
-                    "Convergence error in GRAC shift calculation, please try a different convergence tier."
-                )
-            else:
-                core.print_out("Convergence error, trying next GRAC iteration...")
-            continue
-        occ_given = wfn_given.epsilon_a_subset(basis="SO", subset="OCC").to_array(
-            dense=True
-        )
-        HOMO = np.amax(occ_given)
+        grac_options = sapt_dft_grac_convergence_tier_options[
+            sapt_dft_grac_convergence_tier
+        ]
+        grac = None
+        for tier, options in enumerate(grac_options):
+            for key, val in options.items():
+                core.set_local_option("SCF", key, val)
+            core.set_local_option("SCF", "ORBITAL_OPTIMIZER_PACKAGE", "INTERNAL")
+            if resume_tier is not None and tier < resume_tier:
+                continue
+            # Need to get the initial and cation to estimate ionization energy for
+            # GRAC shift
+            mol_qcel_dict = molecule.to_schema(dtype=3)
+            del mol_qcel_dict["fragment_charges"]
+            del mol_qcel_dict["fragment_multiplicities"]
+            del mol_qcel_dict["molecular_multiplicity"]
 
-        E_given = wfn_given.energy()
-        E_cation = wfn_cation.energy()
-        grac = E_cation - E_given + HOMO
-        if grac >= 1 or grac <= -1:
-            raise ValueError(
-                f"The computed GRAC shift ({grac} [E_h]) for {label} exceeds the bounds of -1 < x < 1 and should not be used to approximate the ionization potential."
+            mol_given = core.Molecule.from_schema(mol_qcel_dict)
+            mol_qcel_dict["molecular_charge"] += 1
+            mol_cation = core.Molecule.from_schema(mol_qcel_dict)
+
+            core.print_out(
+                f"\n\n  ==> GRAC {label} Given Molecule: charge={mol_given.molecular_charge()} mult={mol_given.multiplicity()} <==\n\n"
             )
-        break
-    if grac is None:
-        raise ValueError(
-            "Failed to converge the input monomer or its cation for computing the GRAC shift for Monomer" + label
+            try:
+                if tier == resume_tier:
+                    E_given = neutral["E_given"]
+                    HOMO = neutral["HOMO"]
+                    core.print_out(f"   Neutral SCF restored from checkpoint: E = {E_given:.12f}\n")
+                else:
+                    if mol_given.multiplicity() != 1:
+                        core.set_local_option("SCF", "REFERENCE", "UHF")
+                    else:
+                        core.set_local_option("SCF", "REFERENCE", "RHF")
+                    # Set SAVE_JK=True so we can reuse the JK object for the cation calc
+                    core.set_local_option("SCF", "SAVE_JK", True)
+                    wfn_given = run_scf(
+                        dft_functional.lower(),
+                        molecule=mol_given,
+                        jk=jk_obj,
+                        **scf_kwargs,
+                    )
+                    # We don't want to keep re-computing JK objects if we can avoid it
+                    if jk_obj is None:
+                        jk_obj = wfn_given.jk()
+                    occ_given = wfn_given.epsilon_a_subset(basis="SO", subset="OCC").to_array(
+                        dense=True
+                    )
+                    HOMO = np.amax(occ_given)
+                    E_given = wfn_given.energy()
+                    wfn_given = None
+                    ckpt.commit(
+                        neutral_stage,
+                        scalars={
+                            private_prefix + "tier": tier,
+                            private_prefix + "E_given": E_given,
+                            private_prefix + "HOMO": HOMO,
+                        },
+                    )
+                if mol_cation.multiplicity() != 1:
+                    core.set_local_option("SCF", "REFERENCE", "UHF")
+                else:
+                    core.set_local_option("SCF", "REFERENCE", "RHF")
+                core.print_out(
+                    f"\n\n  ==> GRAC {label} Electron Removed Molecule: charge={mol_cation.molecular_charge()} mult={mol_cation.multiplicity()} <==\n\n"
+                )
+                wfn_cation = run_scf(
+                    dft_functional.lower(),
+                    molecule=mol_cation,
+                    jk=jk_obj,
+                    **scf_kwargs,
+                )
+            except ConvergenceError:
+                # A failed attempt's wavefunctions are still bound in this
+                # function's scope, so without dropping them here they stay
+                # resident -- grid data, collocation cache and all -- while the
+                # next convergence tier allocates its own from the full budget.
+                wfn_given = None
+                wfn_cation = None
+                if len(grac_options) == 1:
+                    raise Exception(
+                        "Convergence error in GRAC shift calculation, please try a different convergence tier."
+                    )
+                else:
+                    core.print_out("Convergence error, trying next GRAC iteration...")
+                continue
+
+            E_cation = wfn_cation.energy()
+            wfn_cation = None
+            grac = E_cation - E_given + HOMO
+            if grac >= 1 or grac <= -1:
+                raise ValueError(
+                    f"The computed GRAC shift ({grac} [E_h]) for {label} exceeds the bounds of -1 < x < 1 and should not be used to approximate the ionization potential."
+                    + (" Try disabling SAPT_DFT_GRAC_USE_EXT_POT."
+                       if core.get_option("SAPT", "SAPT_DFT_GRAC_USE_EXT_POT") else "")
+                )
+            break
+        if grac is None:
+            raise ValueError(
+                "Failed to converge the input monomer or its cation for computing the GRAC shift for Monomer" + label
+            )
+        core.print_out(f" GRAC shift {label}: {grac:.8f}\n")
+        core.print_out(f" {E_given = :.8f}, {E_cation = :.8f}, {HOMO = :.8f}\n")
+        values = publish(E_given, E_cation, HOMO)
+        ckpt.commit(
+            stage,
+            scalars={
+                **values,
+                f"SAPT DFT GRAC SHIFT {monomer_label}": grac,
+                private_prefix + "E_given": E_given,
+                private_prefix + "E_cation": E_cation,
+                private_prefix + "HOMO": HOMO,
+            },
         )
-    core.print_out(f" GRAC shift {label}: {grac:.8f}\n")
-    core.print_out(f" {E_given = :.8f}, {E_cation = :.8f}, {HOMO = :.8f}\n")
-    optstash.restore()
-    core.timer_off("SAPT(DFT):GRAC Shift " + label)
-    return grac
+        return grac
+    finally:
+        optstash.restore()
+        core.timer_off("SAPT(DFT):GRAC Shift " + label)
 
 
 def sapt_dft_header(
@@ -1304,6 +1597,7 @@ def sapt_dft(
     external_potentials: dict | None = None,
     do_delta_dft: bool = False,
     do_disp: bool = True,
+    fsapt_induction_data: tuple | None = None,
     checkpoint: CheckpointSession | None = None,
 ) -> dict:
     """Compute the SAPT(DFT) interaction energy components.
@@ -1340,6 +1634,9 @@ def sapt_dft(
         Whether to compute delta-DFT correction, by default False.
     do_disp : bool, optional
         Whether to compute dispersion, by default True.
+    fsapt_induction_data : tuple or None, optional
+        Private transport of SAPT0 monomer wavefunctions, cache, and scalar data
+        used to partition CPHF induction with the FISAPT implementation.
     checkpoint : CheckpointSession or None, optional
         Open checkpoint session from :func:`run_sapt_dft`. Stages it already
         holds are restored instead of recomputed. By default None, meaning
@@ -1371,15 +1668,57 @@ def sapt_dft(
     """
 
     # Handle the input options
+    if data is None:
+        data = {}
+
+    induction_type = core.get_option("SAPT", "SAPT_DFT_INDUCTION_TYPE").upper()
+    fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper()
+    if induction_type == "CPHF" and do_dft and "Ind20,r" not in data:
+        raise ValidationError(
+            "SAPT_DFT_INDUCTION_TYPE=CPHF reuses the SAPT0 induction terms computed by the "
+            "SAPT(DFT) delta HF segment, which sapt_dft() does not run. Call "
+            "energy('sapt(dft)') instead of sapt_dft() directly, or supply the SAPT0 "
+            "induction terms in `data`."
+        )
+    if (
+        induction_type == "CPHF"
+        and do_dft
+        and fsapt_type == "FISAPT"
+        and fsapt_induction_data is None
+    ):
+        raise ValidationError(
+            "SAPT_DFT_INDUCTION_TYPE=CPHF with FISAPT requires HF-backed fragment induction "
+            "data from the SAPT0 segment. Call energy('sapt(dft)') instead of sapt_dft() directly."
+        )
+    if induction_type == "NONE" and delta_hf and "Delta HF Correction" not in data:
+        # For SAPT(DFT) the delta HF segment owns the SAPT0 terms, so the
+        # correction can only come from there. For SAPT(HF) the SAPT0
+        # electrostatics and exchange are computed below in this very function,
+        # so only the total HF interaction energy has to be handed in.
+        if do_dft:
+            raise ValidationError(
+                "SAPT_DFT_INDUCTION_TYPE=NONE with delta HF needs the total SAPT0 induction "
+                "produced by the SAPT(DFT) delta HF segment, which sapt_dft() does not run. "
+                "Call energy('sapt(dft)') instead of sapt_dft() directly, or supply that "
+                "total as 'Delta HF Correction' in `data`."
+            )
+        if "DHF VALUE" not in data:
+            raise ValidationError(
+                "SAPT_DFT_INDUCTION_TYPE=NONE with delta HF needs the total HF interaction "
+                "energy produced by the delta HF segment, which sapt_dft() does not run. "
+                "Call energy('sapt(dft)') instead of sapt_dft() directly, or supply it as "
+                "'DHF VALUE' in `data`."
+            )
+
     if print_header:
         sapt_dft_header()
 
-    if data is None:
-        data = {}
     ckpt = (checkpoint or CheckpointSession.disabled()).bind(data=data)
-    fsapt_type = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT")
-    do_fsapt = core.get_option("SAPT", "SAPT_DFT_DO_FSAPT").upper() != "NONE"
-    pending_stage = ckpt.next_stage(_sapt_stage_order(do_disp=do_disp, do_fsapt=do_fsapt))
+    do_fsapt = fsapt_type != "NONE"
+    do_ind = _sapt_dft_runs_induction(do_dft=do_dft, induction_type=induction_type)
+    pending_stage = ckpt.next_stage(
+        _sapt_stage_order(do_disp=do_disp, do_fsapt=do_fsapt, do_dft=do_dft, induction_type=induction_type)
+    )
     pending_fsapt_stage = ckpt.next_stage(_fsapt_stage_order(do_disp=do_disp)) if do_fsapt else None
     use_einsums = core.get_option("SAPT", "SAPT_DFT_USE_EINSUMS")
 
@@ -1462,7 +1801,7 @@ def sapt_dft(
 
     # Induction
     core.timer_on("SAPT(DFT):ind")
-    if ckpt.pending("ind"):
+    if do_ind and ckpt.pending("ind"):
         ind = jk_terms.induction(
             cache,
             sapt_jk,
@@ -1474,24 +1813,37 @@ def sapt_dft(
         )
         data.update(ind)
         ckpt.commit("ind")
+    elif not do_ind:
+        core.print_out(f"\n   SAPT(DFT) induction skipped ({induction_type}).\n")
     ckpt.restore_cache(cache, ("exch",), only_missing=True)
 
-    # Delta HF is computed in the SAPT(HF) segment above. Do not recompute it
-    # from the SAPT(DFT) component subtotal here, as that changes the meaning
-    # of the dHF correction and the F-SAPT induction scaling.
-    if delta_hf and "Delta HF Correction" not in data:
+    if induction_type == "NONE":
+        if delta_hf:
+            if "Delta HF Correction" not in data:
+                # SAPT(HF): the delta HF segment computed only the HF dimer and
+                # monomer energies, so build the induction-carrying correction
+                # here from the electrostatics and exchange just computed. This
+                # is the same expression the SAPT(DFT) delta HF segment uses.
+                data["Delta HF Correction"] = data["DHF VALUE"] - (
+                    data["Elst10,r"] + data["Exch10"]
+                )
+            core.set_variable("SAPT(DFT) Delta HF", data["Delta HF Correction"])
+    elif delta_hf and "Delta HF Correction" not in data:
         total_sapt = (
             data["Elst10,r"] + data["Exch10"] + data["Ind20,r"] + data["Exch-Ind20,r"]
         )
         sapt_hf_delta = data["DHF VALUE"] - total_sapt
         core.set_variable("SAPT(DFT) Delta HF", sapt_hf_delta)
-        data["Delta HF Correction"] = core.variable("SAPT(DFT) Delta HF")
+        data["Delta HF Correction"] = sapt_hf_delta
 
     # Set Delta DFT for SAPT(DFT) if requested
     if do_delta_dft:
-        sapt_dft_elst_exch_indu = (
-            data["Elst10,r"] + data["Exch10"] + data["Ind20,r"] + data["Exch-Ind20,r"]
+        base_ind = (
+            0.0
+            if induction_type == "NONE"
+            else data["Ind20,r"] + data["Exch-Ind20,r"]
         )
+        sapt_dft_elst_exch_indu = data["Elst10,r"] + data["Exch10"] + base_ind
         sapt_dft_delta = data["DFT IE"] - sapt_dft_elst_exch_indu
         core.set_variable("SAPT(DFT) Delta DFT", sapt_dft_delta)
         data["Delta DFT Correction"] = core.variable("SAPT(DFT) Delta DFT")
@@ -1568,6 +1920,43 @@ def sapt_dft(
             core.get_global_option("BASIS"),
         )
 
+        # Partition CPHF induction with a short-lived HF-backed FISAPT object.
+        # Destroy it before constructing the DFT-backed object so their DFHelper
+        # scratch tensors cannot alias one another.
+        induction_matrices = None
+        if fsapt_induction_data is not None:
+            hf_wfn_A, hf_wfn_B, hf_cache, hf_scalars = fsapt_induction_data
+            core.timer_on("SAPT(DFT): F-SAPT Induction")
+            hf_FISAPT_obj = saptdft_fisapt.setup_fisapt_object(
+                dimer_wfn,
+                hf_wfn_A,
+                hf_wfn_B,
+                hf_cache,
+                hf_scalars,
+                aux_basis,
+                do_flocalize=True,
+            )
+            # felst() initializes the shared DFHelper state consumed by find();
+            # fexch() mirrors the complete FISAPT setup used by an HF-functional run.
+            hf_FISAPT_obj.felst()
+            hf_FISAPT_obj.fexch()
+            hf_FISAPT_obj.find()
+            hf_matrices = hf_FISAPT_obj.matrices()
+            induction_matrices = {
+                key: hf_matrices[key].clone()
+                for key in ("IndAB_AB", "IndBA_AB", "sIndAB_AB", "sIndBA_AB")
+                if key in hf_matrices
+            }
+            del hf_FISAPT_obj
+            core.timer_off("SAPT(DFT): F-SAPT Induction")
+
+            # FISAPT setup expects these exchange-induction Coulomb
+            # intermediates even though the DFT-backed find() is skipped.
+            cache["J_P_A"] = hf_cache["J_P_A"]
+            cache["J_P_B"] = hf_cache["J_P_B"]
+
+        # Create single FISAPT object with do_flocalize=True to handle IBO
+        # localization internally, unless a checkpoint already holds it.
         do_flocalize = ckpt.pending("fsapt_setup")
         if do_flocalize:
             core.timer_on("SAPT(DFT): F-SAPT Setup + Localization (IBO)")
@@ -1595,7 +1984,10 @@ def sapt_dft(
 
         if ckpt.pending("fsapt_ind"):
             core.timer_on("SAPT(DFT): F-SAPT Induction")
-            FISAPT_obj.find()
+            if induction_matrices is None:
+                FISAPT_obj.find()
+            else:
+                FISAPT_obj.set_matrix(induction_matrices)
             _absorb_fisapt_matrices(cache, FISAPT_obj)
             ckpt.commit("fsapt_ind")
             core.timer_off("SAPT(DFT): F-SAPT Induction")
@@ -1608,6 +2000,7 @@ def sapt_dft(
         sapt_jk.finalize()
         if sapt_jk_B is not None:
             sapt_jk_B.finalize()
+        core.release_freed_memory()
 
     if do_disp and ckpt.pending("disp"):
         # Hybrid xc kernel check
@@ -1779,6 +2172,7 @@ def sapt_dft(
             do_dft=do_dft,
             do_disp=do_disp,
             do_delta_dft=do_delta_dft,
+            induction_type=induction_type,
         )
     )
 

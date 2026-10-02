@@ -39,6 +39,7 @@
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libpsi4util/process.h"
+#include "psi4/libpsi4util/memory_ledger.h"
 #include "psi4/libscf_solver/sad.h"
 
 using namespace psi;
@@ -46,6 +47,20 @@ namespace py = pybind11;
 using namespace pybind11::literals;
 
 void export_fock(py::module &m) {
+    m.def("memory_committed", &MemoryClaim::committed,
+          "Number of doubles the large, long-lived buffers of this process are holding right now: the "
+          "in-core density-fitted integrals of every live JK object and the DFT collocation cache of every "
+          "live V object. get_memory() describes an empty process, so a driver that keeps earlier "
+          "wavefunctions alive -- SAPT(DFT), or a GRAC shift holding the neutral while the cation runs -- "
+          "must subtract this before dividing the SCF memory budget, or each SCF claims the whole budget again.");
+
+    m.def("release_freed_memory", &release_freed_memory,
+          "Hand memory that has already been freed back to the operating system. The big caches are "
+          "made of many small allocations, which glibc keeps in its arenas after the free, so a "
+          "driver that drops a wavefunction or finalizes a JK object sees memory_committed() fall "
+          "while the resident set does not move. Call this once after dropping something large; it "
+          "walks every arena, so it does not belong in a loop.");
+
     py::class_<JK, std::shared_ptr<JK>>(m, "JK", "docstring")
         .def_static("build_JK",
                     [](std::shared_ptr<BasisSet> basis, std::shared_ptr<BasisSet> aux) {
@@ -57,6 +72,9 @@ void export_fock(py::module &m) {
                     })
         .def("name", &JK::name)
         .def("memory_estimate", &JK::memory_estimate)
+        .def("memory", &JK::memory, "The memory this JK was granted, in doubles")
+        .def("memory_held", &JK::memory_held,
+             "The integrals this JK holds right now, in doubles, as reported to the memory ledger")
         .def("initialize", &JK::initialize)
         .def("basisset", &JK::basisset)
         .def("set_print", &JK::set_print)
@@ -94,7 +112,7 @@ void export_fock(py::module &m) {
         .def("D", &JK::D, py::return_value_policy::reference_internal)
         .def("computed_shells_per_iter", py::overload_cast<>(&JK::computed_shells_per_iter), "Array containing the number of ERI shell n-lets (triplets, quartets) computed (not screened out) during each compute call.")
         .def("computed_shells_per_iter", py::overload_cast<const std::string&>(&JK::computed_shells_per_iter), "Array containing the number of ERI shell n-lets (triplets, quartets) computed (not screened out) during each compute call.")
-        .def("print_header", &JK::print_header, "docstring");
+        .def("print_header", &JK::print_header, "Prints information about the type and config of the JK object into the output file. Print verbosity may depend on the value of JK::print\\_.");
 
     py::class_<LaplaceDenominator, std::shared_ptr<LaplaceDenominator>>(m, "LaplaceDenominator", "Computer class for a Laplace factorization of the four-index energy denominator in MP2 and coupled-cluster")
         .def(py::init<std::shared_ptr<Vector>, std::shared_ptr<Vector>, double>())
@@ -208,6 +226,10 @@ void export_fock(py::module &m) {
         .def("transform", &DFHelper::transform)
         .def("clear_spaces", &DFHelper::clear_spaces)
         .def("clear_all", &DFHelper::clear_all)
+        .def("release_AO", &DFHelper::release_AO,
+             "Give back the three-index AO integrals.  They are only read by transform(), so once the last\n"
+             "transform has run they are dead weight -- and on a large dimer they are the biggest thing\n"
+             "DFHelper owns.  initialize() must be called again before transforming any further.")
         .def("transpose", &DFHelper::transpose)
         .def("get_space_size", &DFHelper::get_space_size)
         .def("get_tensor_size", &DFHelper::get_tensor_size)
@@ -230,7 +252,12 @@ void export_fock(py::module &m) {
 
     py::class_<scf::SADGuess, std::shared_ptr<scf::SADGuess>>(m, "SADGuess", "docstring")
         .def_static("build_SAD",
-                    [](std::shared_ptr<BasisSet> basis, std::vector<std::shared_ptr<BasisSet>> atomic_bases) { return scf::SADGuess(basis, atomic_bases, Process::environment.options); })
+                    // Return by shared_ptr, not by value: SADGuess owns a std::unique_ptr<JK> and
+                    // declares a destructor, so it is neither copyable nor movable. pybind11 3.x wraps
+                    // the factory in detail::function_ref, whose constructor requires
+                    // is_convertible<return_type, Ret> -- and is_convertible<SADGuess, SADGuess> is
+                    // false for a non-movable, non-copyable type, so the by-value form fails to build.
+                    [](std::shared_ptr<BasisSet> basis, std::vector<std::shared_ptr<BasisSet>> atomic_bases) { return std::make_shared<scf::SADGuess>(basis, atomic_bases, Process::environment.options); })
         .def("compute_guess", &scf::SADGuess::compute_guess)
         .def("set_print", &scf::SADGuess::set_print)
         .def("set_debug", &scf::SADGuess::set_debug)

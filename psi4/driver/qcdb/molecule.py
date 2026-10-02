@@ -1462,11 +1462,11 @@ class Molecule(LibmintsMolecule):
             },
         }
         if func:
-            resinp['model']['method'] = func
+            resinp["specification"]["model"]["method"] = func
         else:
-            resinp['model']['method'] = ""
+            resinp["specification"]["model"]["method"] = ""
         if property:
-            resinp['keywords']['property'] = True
+            resinp["specification"]["keywords"]["property"] = True
         if dashlvl:
             resinp["specification"]['keywords']['level_hint'] = dashlvl
         if dashparam:
@@ -1616,10 +1616,10 @@ class Molecule(LibmintsMolecule):
         else:
             return Molecule.from_dict(molrec)
 
-    def to_schema(self, dtype, units='Bohr'):
+    def to_schema(self, dtype, units='Bohr', *, quiet=False):
         """Serializes instance into dictionary according to schema `dtype`."""
 
-        molrec = self.to_dict(np_out=True)
+        molrec = self.to_dict(np_out=True, quiet=quiet)
         schmol = qcel.molparse.to_schema(molrec, dtype=dtype, units=units)
         return schmol
 
