@@ -72,6 +72,8 @@ SAPTDFT_LOCK_FILENAME = "saptdft_state.lock"
 SAPTDFT_STATUS_FILENAME = "saptdft_status.json"
 _ALLOWED_ARTIFACT_KINDS = {"array", "scf_snapshot", "wavefunction"}
 _SCF_SNAPSHOT_METADATA_KEY = "scf_snapshot"
+# Assigned by HF::finalize from the converged orbital energies, not at construction.
+_SCF_SNAPSHOT_FINALIZED_DIMENSION_KEYS = ("frzcpi", "frzvpi")
 _SCF_SNAPSHOT_DIMENSION_KEYS = (
     "doccpi",
     "frzcpi",
@@ -1702,13 +1704,22 @@ def rehydrate_scf_wavefunction(
             f"SCF snapshot functional mismatch: expected {metadata.get('functional')!r}, got {rehydrated.functional().name()!r}."
         )
 
-    for key in _SCF_SNAPSHOT_DIMENSION_KEYS:
-        expected_dimension = tuple(snapshot_data["dimension"][key])
-        if getattr(rehydrated, key)().to_tuple() != expected_dimension:
-            raise ValidationError(f"SCF snapshot rehydrated dimensions mismatch for {key}.")
+    def check_dimensions(keys):
+        for key in keys:
+            expected_dimension = tuple(snapshot_data["dimension"][key])
+            if getattr(rehydrated, key)().to_tuple() != expected_dimension:
+                raise ValidationError(f"SCF snapshot rehydrated dimensions mismatch for {key}.")
+
+    check_dimensions(key for key in _SCF_SNAPSHOT_DIMENSION_KEYS if key not in _SCF_SNAPSHOT_FINALIZED_DIMENSION_KEYS)
 
     _copy_rehydrated_matrix_fields(rehydrated, loaded)
     _copy_rehydrated_vector_fields(rehydrated, loaded)
+    # HF::finalize assigns the frozen core/virtual orbitals from the orbital
+    # energies and the current FREEZE_CORE/NUM_FROZEN_DOCC options, exactly as
+    # it did when the SCF converged; comparing against the snapshot then
+    # refuses a resume whose frozen-core options changed.
+    rehydrated.finalize()
+    check_dimensions(_SCF_SNAPSHOT_FINALIZED_DIMENSION_KEYS)
     _copy_rehydrated_qcvariables(rehydrated, loaded)
     rehydrated.set_energy(loaded.energy())
 
@@ -1955,6 +1966,11 @@ class CheckpointSession:
             function_kwargs=identity_kwargs,
             atomic_input=atomic_input,
         )
+        if stop_after and stop_after not in selected_stages(identity):
+            raise ValidationError(
+                f"SAPT(DFT) checkpoint stop_after stage {stop_after!r} is not a stage of this job; "
+                f"stages are {', '.join(selected_stages(identity))}."
+            )
         checkpoint = SAPTDFTCheckpoint(Path(directory), identity).open()
         return cls(checkpoint, stop_after=stop_after, data=data)
 

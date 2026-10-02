@@ -63,6 +63,9 @@ _CHECKPOINT_SCENARIOS = {
     "lrc": {"sapt_dft_functional": "wb97x"},
     # None drops the base option (the pinned GRAC shifts), as in the worker.
     "prod_d4i": {
+        # AI3 production freezes the core; a rehydrated SCF only gets its
+        # frozen orbitals from HF::finalize, so this is the case that catches it.
+        "freeze_core": True,
         "sapt_dft_functional": "pbe0",
         "sapt_dft_do_ddft": False,
         "sapt_dft_induction_type": "NONE",
@@ -1810,3 +1813,25 @@ def test_saptdft_checkpoint_nonconvergence_is_a_hard_failure(tmp_path):
     assert status["last_error"]["stage"] in ("hf_dimer_scf", "hf_monomer_a_scf", "hf_monomer_b_scf")
     assert status["last_error"]["type"] == "SCFConvergenceError"
     assert not (tmp_path / "saptdft_state.lock").exists()
+
+
+@pytest.mark.saptdft
+def test_saptdft_checkpoint_rejects_unknown_stop_after(tmp_path):
+    """A misspelled stop stage must fail up front, not silently run the whole job."""
+    core.clean_options()
+    psi4.geometry("""
+    0 1
+    He 0.0 0.0 0.0
+    --
+    0 1
+    He 0.0 0.0 3.0
+    units angstrom
+    symmetry c1
+    no_reorient
+    no_com
+    """)
+    psi4.set_options({"basis": "cc-pvdz", "scf_type": "df", "sapt_dft_grac_shift_a": 0.1, "sapt_dft_grac_shift_b": 0.1})
+    with pytest.raises(psi4.ValidationError, match="not a stage of this job"):
+        psi4.energy("sapt(dft)", checkpoint_dir=str(tmp_path / "ckpt"), checkpoint_stop_after="dft_monomer_b_scf")
+    assert not (tmp_path / "ckpt").exists()
+    core.clean_options()

@@ -123,6 +123,9 @@ _SCENARIO_OPTIONS = {
     # the base option, so GRAC runs instead of using the pinned 0.0 shifts.
     # sapt(dft)-d4(i): delta HF supplies induction and GRAC runs the full ladder.
     "prod_d4i": {
+        # AI3 production freezes the core; a rehydrated SCF only gets its
+        # frozen orbitals from HF::finalize, so this is the case that catches it.
+        "freeze_core": True,
         "sapt_dft_functional": "pbe0",
         "sapt_dft_do_ddft": False,
         "sapt_dft_induction_type": "NONE",
