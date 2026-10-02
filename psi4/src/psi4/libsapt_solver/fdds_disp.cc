@@ -33,6 +33,7 @@
 #include "psi4/libmints/basisset.h"
 #include "psi4/libmints/integral.h"
 #include "psi4/libmints/eri.h"
+#include "psi4/libmints/coordentry.h"
 #include "psi4/libpsi4util/exception.h"
 #include "psi4/libsapt_solver/fdds_disp.h"
 #include "psi4/libmints/3coverlap.h"
@@ -1300,7 +1301,7 @@ SharedMatrix symmetrized(const SharedMatrix& M) {
 // at capacity <= 2 * count: libstdc++ and libc++ double the capacity and MSVC grows it by half; copies
 // and resizes from empty allocate exactly. A growth step briefly also holds the old buffer (fewer
 // than count elements). Objects are built one at a time, so each pass adds its largest such buffer.
-// Not bounded here: libint2::Engine scratch, allocator headers, names and the O(1) dummy basis.
+// Not bounded here: libint2::Engine scratch, allocator headers and names.
 size_t grown(size_t count, size_t elem) { return cmul(cmul(2, count), elem); }
 size_t tri(size_t n) { return cmul(n, cadd({n, 1})) / 2; }
 size_t ncart_of(size_t l) { return (l + 1) * (l + 2) / 2; }
@@ -1393,22 +1394,33 @@ size_t overlap_bytes(const BasisSet& a) {
                  sizeof(double*)});
 }
 
-// The declared metric pass: one factory, nthread separately constructed (Q0|P0) objects.
+// BasisSet::zero_ao_basis_set() (basisset.cc BasisSet()): seven one-entry or xyz double arrays, nine
+// one-entry index arrays, one libint2::Shell (small vectors inline, else one contraction and three
+// doubles), and the dummy atom's CartesianEntry and three NumberValue coordinates, each shared_ptr
+// owned. The BasisSet and Molecule objects hold scalars, names, pointers and empty containers only.
+size_t dummy_basis_bytes() {
+    return cadd({7 * sizeof(double), 9 * sizeof(int),
+                 sizeof(libint2::Shell) + sizeof(libint2::Shell::Contraction) + 3 * sizeof(double),
+                 sizeof(CartesianEntry) + 4 * sizeof(void*), 3 * (sizeof(NumberValue) + 4 * sizeof(void*))});
+}
+
+// The declared metric pass: one factory and dummy basis, nthread separately constructed (Q0|P0) objects.
 size_t coulomb_pass_bytes(const BasisSet& p, const BasisSet& a, size_t t) {
     const auto e = eri_bytes(p, a, 'm');
-    return cadd({factory_bytes(), cmul(t, cadd({e.own, e.pairs})),
+    return cadd({factory_bytes(), dummy_basis_bytes(), cmul(t, cadd({e.own, e.pairs})),
                  cmax({cmul(a.nshell(), kPair), max_primpairs_bytes(a)}), kListed});
 }
 
 // Raw DFHelper: prepare_sparsity's (mn|mn) object and its clone (two screening threads when t > 1),
-// then prepare_AO_core's (INCORE) and transform()'s (Q0|mn) object with t - 1 clones; each set is
-// released before the next is built.
+// then prepare_AO_core's (INCORE) and transform()'s (Q0|mn) object with t - 1 clones and a dummy
+// basis; each set is released before the next is built.
 size_t dfhelper_pass_bytes(const BasisSet& p, const BasisSet& a, size_t t) {
     const auto m = eri_bytes(p, a, 'p'), q = eri_bytes(p, a, 'q');
     const size_t screen = t == 1 ? 1 : 2;
     const size_t N = p.nbf();
     return cadd({factory_bytes(),
-                 cmax({cadd({m.pairs, cmul(screen, m.own)}), cadd({q.pairs, cmul(t, q.own)})}),
+                 cmax({cadd({m.pairs, cmul(screen, m.own)}),
+                       cadd({q.pairs, cmul(t, q.own), dummy_basis_bytes()})}),
                  cmax({cmul(tri(N), kPair), cmul(tri(p.nshell()), kPair), cmul(a.nshell(), kPair),
                        cmul(N, sizeof(int)), max_primpairs_bytes(p), max_primpairs_bytes(a)}),
                  kListed});

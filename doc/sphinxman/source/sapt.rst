@@ -625,7 +625,9 @@ unchanged::
 - Accounted storage includes the Psi4-owned storage of the integral objects:
   ERI screening values, pair lists, blocks and zero buffers, libint2 shell-pair
   data, the integral factories' spherical-transform tables and their setup
-  scratch, and the auxiliary overlap buffers. These are bounded from the basis
+  scratch, the auxiliary overlap buffers, and the exponent, coefficient, index
+  and coordinate arrays of the internally built one-function dummy basis
+  sets. These are bounded from the basis
   dimensions and primitive counts for every ``SCREENING`` choice. Vectors
   grown element by element are charged at twice their final length (the
   libstdc++, libc++ and MSVC growth factors are 2, 2 and 1.5) plus one old
@@ -634,14 +636,21 @@ unchanged::
 
   - BLAS/LAPACK internals and ``libint2::Engine`` scratch;
   - allocator overhead and bookkeeping such as tensor names, stream records,
-    timers and the one-function dummy basis sets;
+    timers and the dummy basis sets' object headers and names;
   - the per-thread engines and list headers of the auxiliary-overlap shell-pair
     builder, which uses the process thread count (``set_num_threads``). Its
     pair lists are charged independently of that count.
 
+  Total vendor memory and thread use are therefore not capped per instance.
+
   In tested builds with ``MAX_AM_ERI = 5`` the engine scratch was about 20 MB.
 - ``nthread`` fixes the OpenMP threads used for ERIs and blocking for the
   instance's lifetime. BLAS threading stays with the vendor library.
+- DFHelper blocking depends on the memory budget, so results can differ at
+  rounding level between budgets. In tested cases near the minimum budget the
+  sampled differences were up to about :math:`10^{-11}` relative, and no
+  admission or refusal changed; with generous budgets they were bitwise
+  identical. No accuracy bound is claimed for this.
 - Every ERI on this path is computed by Libint2, whatever ``INTEGRAL_PACKAGE``
   says. The raw DFHelper is given the instance's own Coulomb metric instead of
   forming its own. Integral screening still follows ``INTS_TOLERANCE`` and
@@ -649,7 +658,8 @@ unchanged::
 - Admission uses checked byte arithmetic. It runs after input validation and
   before any copy, integral or file.
 - Global memory, options, threads and the PSIO scratch path are neither read
-  for these resource decisions nor modified.
+  for these resource decisions nor modified. The auxiliary-overlap builder's
+  thread count above is the one exception.
 - Scratch files go in the caller's existing writable ``scratch_dir``. They
   are removed when the instance is destroyed, and the directory itself is
   kept.
