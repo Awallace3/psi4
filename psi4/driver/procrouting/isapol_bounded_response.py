@@ -594,16 +594,15 @@ class BoundedResponse:
         ledger.admit('native factor work reservation', 0,
                      8*p*(no+nv)**3+4*p*p*(no+nv)**2+2*p**3)
         ops = native_plain_df_operators(auxiliary, self._main.basis, self._coefficients, self._energies,
-            nocc=no, shell_count=len(recipe.shells), exact_exchange=.25,
-            tile_columns=512,
+            nocc=no, shell_count=len(recipe.shells), tile_columns=512,
             max_bytes=resources.max_bytes-ledger.reserved)
         ledger.admit('native factors', ops.construction_planned_bytes)
         for name, value in (('gaps', ops._gaps), ('oo', ops._oo), ('ov', ops._ov),
                             ('density', ops.plain_density_coefficients)):
             store.save(name, value)
-        tiles = (len(ops._dual_ov.tiles), len(ops._dual_vv.tiles))
+        tiles = (len(ops._dual_ov), len(ops._dual_vv))
         for kind in ('ov', 'vv'):
-            for i, tile in enumerate(getattr(ops, '_dual_'+kind).tiles):
+            for i, tile in enumerate(getattr(ops, '_dual_'+kind)):
                 store.save(f'dual{kind}{i}', tile)
         del tile, value
         for name, eta in (('anchor', self.anchor_metric_damping), ('target', 0.)):
@@ -707,9 +706,10 @@ class BoundedResponse:
         node_bytes = 8*(2*p*p+p*q+2*q*q)+8*1024**2
         node_work = estimates['node_work']+2*q*p*p+2*q*q*p
         persistent = memory+8*q*p+8*p*p
+        caller = self.response_grid.nbytes+self.input_bytes
         # Native admission, W formation (after construction) and every node, checked before any scratch.
-        if (persistent+inputs+self.input_bytes > resources.max_bytes
-                or persistent+32*p*p+self.input_bytes > resources.max_bytes
+        if (persistent+inputs+caller > resources.max_bytes
+                or persistent+32*p*p+caller > resources.max_bytes
                 or persistent+node_bytes+self._retained > resources.max_bytes):
             raise ValueError('complete native FDDS plan exceeds shared numeric byte resource limit')
         nao = main.basis.nfunction
@@ -771,7 +771,7 @@ class BoundedResponse:
         log.stage('Full-grid ALDA kernel', (('smoothing', repr(self.smoothing)), ('shell cutoff', self.shell_cutoff)))
         kernel = _kernel(auxiliary, density, grid, self.smoothing, self.shell_cutoff, ledger)
         del grid, density
-        self._hold(grid=0, kernel=kernel.nbytes)
+        self._hold(grid=self.response_grid.nbytes, kernel=kernel.nbytes)
 
         plan = self._fdds_plan
         memory = plan['requirement']['memory_bytes']

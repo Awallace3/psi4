@@ -198,7 +198,6 @@ void export_isapol(py::module& m) {
              "wavefunction"_a, "caller_converged"_a, "max_bytes"_a)
         .def("orbitals", &NativeRestrictedState::orbitals)
         .def("energies", &NativeRestrictedState::energies)
-        .def("density_alpha", &NativeRestrictedState::density_alpha)
         .def("basis_snapshot", &NativeRestrictedState::basis_snapshot)
         .def_property_readonly("nbf", &NativeRestrictedState::nbf)
         .def_property_readonly("nmo", &NativeRestrictedState::nmo)
@@ -375,8 +374,6 @@ void export_isapol(py::module& m) {
         .def(py::init<const IsaExplicitBasis&>(), "auxiliary"_a)
         .def("charges", &IsaAuxCoulomb::charges)
         .def("metric", &IsaAuxCoulomb::metric)
-        .def("point_potentials", &IsaAuxCoulomb::point_potentials,
-             "points"_a, "max_bytes"_a=512UL*1024*1024)
         .def("three_center", &IsaAuxCoulomb::three_center, "orbital"_a)
         .def("three_center_shell_block", &IsaAuxCoulomb::three_center_shell_block,
              "orbital"_a, "first_shell"_a, "shell_count"_a, "max_bytes"_a=512UL*1024*1024)

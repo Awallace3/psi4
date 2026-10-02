@@ -13,7 +13,6 @@ import numpy as np
 import pytest
 from psi4 import core
 from psi4.driver.procrouting import isapol_bounded_response as backend
-from psi4.driver.procrouting.isapol_factorized_response import FactorizedDFOperators
 
 
 def ledger():
@@ -58,17 +57,59 @@ def test_checkpoint_identity_and_duplicate_refusals(tmp_path):
         store.load('a')
 
 
+def _factor_action(gaps, oo, ov, dual_ov, dual_vv, exchange, rhs, first):
+    """Matrix-free H1 (first) or H2 action, one RHS column and AUX row at a time; rows a*nocc+i."""
+    nocc, nvir = ov.shape[1:]
+    result = gaps[:, None]*rhs
+    for col in range(rhs.shape[1]):
+        z = rhs[:, col].reshape(nvir, nocc).T
+        accum = np.zeros((nocc, nvir))
+        for p in range(len(ov)):
+            if first:
+                accum += 4*ov[p]*np.sum(dual_ov[p]*z)
+            x = (oo[p] @ z) @ dual_vv[p].T
+            y = (ov[p] @ z.T) @ dual_ov[p]
+            accum -= exchange*(x+y if first else x-y)
+        result[:, col] += accum.T.reshape(-1)
+    return result
+
+
+@pytest.mark.parametrize('exchange', [0., .25, 1.])
+@pytest.mark.parametrize('independent', [False, True])
+def test_factor_action_oracle_matches_explicit_four_index_contractions(independent, exchange):
+    rng = np.random.default_rng(17)
+    nocc, nvir, naux = 2, 3, 4
+    raw = rng.normal(size=(naux, nocc+nvir, nocc+nvir))
+    mo = (raw+raw.transpose(0, 2, 1))/2
+    dual = np.linalg.solve(np.diag([1., 2., 3., 4.]), mo.reshape(naux, -1)).reshape(mo.shape)
+    if independent:
+        mo, dual = raw[:, :, ::-1], rng.normal(size=mo.shape)
+    gaps = np.arange(1., 7.)
+    h1, h2 = np.diag(gaps), np.diag(gaps)
+    for a, i, b, j in itertools.product(range(nvir), range(nocc), range(nvir), range(nocc)):
+        v = sum(mo[p, i, nocc+a]*dual[p, j, nocc+b] for p in range(naux))
+        x = sum(mo[p, i, j]*dual[p, nocc+a, nocc+b] for p in range(naux))
+        y = sum(mo[p, i, nocc+b]*dual[p, j, nocc+a] for p in range(naux))
+        h1[a*nocc+i, b*nocc+j] += 4*v-exchange*(x+y)
+        h2[a*nocc+i, b*nocc+j] -= exchange*(x-y)
+    factors = (gaps, mo[:, :nocc, :nocc], mo[:, :nocc, nocc:], dual[:, :nocc, nocc:], dual[:, nocc:, nocc:])
+    rhs = rng.normal(size=(6, 3))
+    np.testing.assert_allclose(_factor_action(*factors, exchange, rhs, True), h1 @ rhs, atol=1e-12)
+    np.testing.assert_allclose(_factor_action(*factors, exchange, rhs, False), h2 @ rhs, atol=1e-12)
+
+
 @pytest.mark.parametrize('exchange', [0., .25, 1.])
 def test_exchange_indexing_matches_independent_factor_actions(exchange):
     rng = np.random.default_rng(818)
     oo, ov, dual, vv = [rng.normal(size=shape) for shape in
                         [(5, 2, 2), (5, 2, 3), (5, 2, 3), (5, 3, 3)]]
     gaps = np.arange(1., 7.)
-    ops = FactorizedDFOperators(gaps, oo, ov, dual, vv, exact_exchange=exchange)
+    h1 = _factor_action(gaps, oo, ov, dual, vv, exchange, np.eye(6), True)
+    h2 = _factor_action(gaps, oo, ov, dual, vv, exchange, np.eye(6), False)
     v, y = backend._gram_terms(ov, dual)
     x = backend._exchange_x(oo, [vv.reshape(5, 9)[:, :4], vv.reshape(5, 9)[:, 4:]], 3)
-    np.testing.assert_allclose(np.diag(gaps)+4*v-exchange*(x+y), ops.apply_h1(np.eye(6)), atol=1e-13)
-    np.testing.assert_allclose(np.diag(gaps)-exchange*(x-y), ops.apply_h2(np.eye(6)), atol=1e-13)
+    np.testing.assert_allclose(np.diag(gaps)+4*v-exchange*(x+y), h1, atol=1e-13)
+    np.testing.assert_allclose(np.diag(gaps)-exchange*(x-y), h2, atol=1e-13)
     with pytest.raises(ValueError, match='coverage'):
         backend._exchange_x(oo, [vv.reshape(5, 9)[:, :4]], 3)
 
@@ -436,7 +477,7 @@ def test_native_plain_density_is_the_factor_density(small_water):
     coefficients = main.transform @ np.asarray(wfn.Ca())
     no = wfn.nalpha()
     ops = native_plain_df_operators(auxiliary, main.basis, coefficients, np.asarray(wfn.epsilon_a()).copy(),
-                                    nocc=no, shell_count=len(recipe.shells), exact_exchange=.25, tile_columns=512)
+                                    nocc=no, shell_count=len(recipe.shells), tile_columns=512)
     density, planned = native_plain_density(auxiliary, main.basis, coefficients, nocc=no,
                                             shell_count=len(recipe.shells))
     np.testing.assert_array_equal(density, ops.plain_density_coefficients)
@@ -465,7 +506,7 @@ def _plain_operands(wfn, recipe):
     coefficients = main.transform @ np.asarray(wfn.Ca())
     no = wfn.nalpha()
     ops = native_plain_df_operators(auxiliary, main.basis, coefficients, np.asarray(wfn.epsilon_a()).copy(),
-                                    nocc=no, shell_count=len(recipe.shells), exact_exchange=0., tile_columns=512)
+                                    nocc=no, shell_count=len(recipe.shells), tile_columns=512)
     B = np.asarray(ops._ov).transpose(0, 2, 1).reshape(auxiliary.nfunction, -1)  # columns a*nocc+i
     return auxiliary, B, np.asarray(ops._gaps), np.asarray(core.IsaAuxCoulomb(auxiliary).metric()), \
         np.asarray(ops.plain_density_coefficients)
@@ -515,13 +556,13 @@ def test_fdds_zero_exchange_matches_reference_h2h1_with_plain_legs(small_water, 
     no = wfn.nalpha()
     ops = native_plain_df_operators(auxiliary, main.basis, main.transform @ np.asarray(wfn.Ca()),
                                     np.asarray(wfn.epsilon_a()).copy(), nocc=no, shell_count=len(recipe.shells),
-                                    exact_exchange=0., tile_columns=512)
+                                    tile_columns=512)
     p, nv = auxiliary.nfunction, wfn.nmo()-no
     J = np.asarray(core.IsaAuxCoulomb(auxiliary).metric())
     K = backend._kernel(auxiliary, np.asarray(ops.plain_density_coefficients), args['response_grid'],
                         args['smoothing'], args['shell_cutoff'], backend._Ledger(_resources()))
     # Plain legs (no charge constraint), rows a*nocc+i like the reference OV fits.
-    plain = np.column_stack(ops._dual_ov.tiles).reshape(p, no, nv).transpose(0, 2, 1).reshape(p, -1).T
+    plain = np.column_stack(ops._dual_ov).reshape(p, no, nv).transpose(0, 2, 1).reshape(p, -1).T
     raw, transform = core.IsaAuxCoulomb(auxiliary).native_auxiliary()
     monomer = _monomer(wfn, raw, transform, tmp_path)
     for c in (0., .75):
@@ -531,9 +572,9 @@ def test_fdds_zero_exchange_matches_reference_h2h1_with_plain_legs(small_water, 
                             ('anchor', plain), ('kernel', K)):
             store.save(name, np.asarray(value))
         for kind in ('ov', 'vv'):
-            for i, tile in enumerate(getattr(ops, '_dual_'+kind).tiles):
+            for i, tile in enumerate(getattr(ops, '_dual_'+kind)):
                 store.save(f'dual{kind}{i}', tile)
-        backend._assemble(store, (p, no, nv), (len(ops._dual_ov.tiles), len(ops._dual_vv.tiles)), 0., c)
+        backend._assemble(store, (p, no, nv), (len(ops._dual_ov), len(ops._dual_vv)), 0., c)
         reference = backend._H2H1Response(store, (p, no, nv), p)
         try:
             for omega in args['quadrature'].frequencies:
@@ -817,6 +858,40 @@ def test_fdds_one_byte_short_preflight_refuses_before_native_construction(small_
                             (_resources(peak, work, io), backend.NativeFDDSOptions(1, disk-1))):
         with pytest.raises(ValueError, match='resource limit|disk_bytes'):
             sweep(resources, fdds)
+        assert _nothing_left(tmp_path)
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_fdds_native_and_kernel_admissions_charge_the_caller_grid(small_water, tmp_path, monkeypatch):
+    """The caller's response_grid stays live through native construction and W: both admissions and
+    their preflight mirrors charge it, so one byte short refuses before scratch or native storage."""
+    wfn, recipe, args = small_water
+    frequencies = args['quadrature'].frequencies
+    held, runners = [], []
+    class Recording(core.FDDS_Monomer):
+        def __init__(self, *a, **k):
+            held.append(dict(runners[-1]._held))
+            super().__init__(*a, **k)
+    monkeypatch.setattr(core, 'FDDS_Monomer', Recording)
+    def sweep(max_bytes):
+        runner = _runner(wfn, recipe, dict(args, resources=_resources(max_bytes)), tmp_path, **_fdds())
+        runners.append(runner)
+        with runner:
+            runner.prepare()
+            for omega in frequencies:
+                runner.solve(omega)
+        return runner
+    full = sweep(512*1024**2)
+    stages = {s['stage']: s['numeric_bytes'] for s in full.ledger.stages}
+    memory = full.provenance['plan']['requirement']['memory_bytes']
+    assert held[0]['grid'] == args['response_grid'].nbytes
+    assert stages['native FDDS instance'] == sum(held[0].values())+memory
+    assert stages['FDDS kernel W'] == stages['native FDDS instance']-held[0]['native_inputs']+32*full.dimensions[0]**2
+    assert sweep(full.ledger.peak).ledger.peak == full.ledger.peak
+    monkeypatch.setattr(core, 'FDDS_Monomer', _Forbidden)
+    for stage in ('native FDDS instance', 'FDDS kernel W'):
+        with pytest.raises(ValueError, match='complete native FDDS plan exceeds shared numeric'):
+            sweep(stages[stage]-1)
         assert _nothing_left(tmp_path)
 
 

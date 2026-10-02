@@ -24,7 +24,6 @@ def test_restricted_state_snapshot_matches_native_wavefunction(water_state):
     assert (state.nbf, state.nmo, state.nocc, state.nvir, state.nov) == (7, 7, 5, 2, 10)
     np.testing.assert_array_equal(state.orbitals(), wfn.Ca())
     np.testing.assert_array_equal(state.energies(), wfn.epsilon_a())
-    np.testing.assert_array_equal(state.density_alpha(), wfn.Da())
 
 
 def test_state_basis_snapshot_excludes_unbounded_molecule_metadata(water_state):
@@ -45,10 +44,10 @@ def test_state_basis_snapshot_excludes_unbounded_molecule_metadata(water_state):
 def test_state_snapshot_excludes_caller_matrix_and_vector_names(water_state):
     from psi4.driver.procrouting.isapol_native_response import native_restricted_state_from_wavefunction
     marker = "irrelevant caller array metadata "*1024
-    for value in (water_state.Ca(), water_state.Da(), water_state.epsilon_a()):
+    for value in (water_state.Ca(), water_state.epsilon_a()):
         value.name = marker
     state = native_restricted_state_from_wavefunction(water_state, caller_converged=True)
-    for value in (state.orbitals(), state.density_alpha(), state.energies()):
+    for value in (state.orbitals(), state.energies()):
         assert len(value.name) < 128
 
 
@@ -59,13 +58,12 @@ def test_snapshot_budget_boundary_and_owned_arrays(water_state):
     with pytest.raises(ValueError, match="byte resource"):
         make(water_state, caller_converged=True, max_bytes=state.planned_bytes-1)
     original = [np.asarray(getter()).copy() for getter in
-                (state.orbitals, state.energies, state.density_alpha)]
-    for getter in (state.orbitals, state.energies, state.density_alpha):
+                (state.orbitals, state.energies)]
+    for getter in (state.orbitals, state.energies):
         np.asarray(getter())[:] = 0.
     np.asarray(water_state.Ca())[:] = 0.
     np.asarray(water_state.epsilon_a())[:] = 0.
-    np.asarray(water_state.Da())[:] = 0.
-    for getter, expected in zip((state.orbitals, state.energies, state.density_alpha), original):
+    for getter, expected in zip((state.orbitals, state.energies), original):
         np.testing.assert_array_equal(getter(), expected)
 
 

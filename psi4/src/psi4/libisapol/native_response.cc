@@ -206,7 +206,7 @@ void validate_restricted_state(const std::shared_ptr<Wavefunction>& wfn, const R
         require_native(std::isfinite(gap) && gap>0,"occupied-virtual gaps must be finite and positive");
     }
 }
-struct OwnedState { std::shared_ptr<BasisSet> basis; SharedMatrix c, da; SharedVector eps; };
+struct OwnedState { std::shared_ptr<BasisSet> basis; SharedMatrix c; SharedVector eps; };
 OwnedState own_restricted_state(const std::shared_ptr<Wavefunction>& wfn, const RestrictedDims& d,
                                bool bounded_geometry = false) {
     OwnedState s;
@@ -214,15 +214,12 @@ OwnedState own_restricted_state(const std::shared_ptr<Wavefunction>& wfn, const 
         // Copy numerical state only: caller-controlled matrix/vector names
         // and Dimension metadata are not bounded by scientific dimensions.
         s.c=std::make_shared<Matrix>(d.nbf,d.nmo);
-        s.da=std::make_shared<Matrix>(d.nbf,d.nbf);
         s.eps=std::make_shared<Vector>(d.nmo);
-        for(int mu=0;mu<d.nbf;++mu) {
+        for(int mu=0;mu<d.nbf;++mu)
             for(int p=0;p<d.nmo;++p) s.c->set(mu,p,wfn->Ca()->get(mu,p));
-            for(int nu=0;nu<d.nbf;++nu) s.da->set(mu,nu,wfn->Da()->get(mu,nu));
-        }
         for(int p=0;p<d.nmo;++p) s.eps->set(p,wfn->epsilon_a()->get(p));
     } else {
-        s.c=wfn->Ca()->clone(); s.da=wfn->Da()->clone();
+        s.c=wfn->Ca()->clone();
         s.eps=std::make_shared<Vector>(*wfn->epsilon_a());
     }
     s.basis=snapshot_basis(wfn->basisset(), bounded_geometry);
@@ -267,12 +264,11 @@ NativeRestrictedState::NativeRestrictedState(std::shared_ptr<Wavefunction> wfn,
     require_native(std::isfinite(wfn->energy()), "nonfinite wavefunction energy");
     auto owned = own_restricted_state(wfn, d, true);
     basis_ = std::move(owned.basis);
-    c_ = std::move(owned.c); da_ = std::move(owned.da); eps_ = std::move(owned.eps);
+    c_ = std::move(owned.c); eps_ = std::move(owned.eps);
     nbf_ = d.nbf; nmo_ = d.nmo; nocc_ = d.nocc; nvir_ = d.nvir; nov_ = d.nov;
 }
 SharedMatrix NativeRestrictedState::orbitals() const { return c_->clone(); }
 SharedVector NativeRestrictedState::energies() const { return std::make_shared<Vector>(*eps_); }
-SharedMatrix NativeRestrictedState::density_alpha() const { return da_->clone(); }
 std::shared_ptr<BasisSet> NativeRestrictedState::basis_snapshot() const {
     return snapshot_basis(basis_, true);
 }

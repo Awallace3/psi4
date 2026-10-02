@@ -140,6 +140,24 @@ def test_mo_shell_budget_includes_native_spherical_accumulation():
                               0, max_bytes=10800)
 
 
+def _factors(ops):
+    """Owned factor record: gaps, OO/OV and the gathered (naux, columns) dual OV/VV tiles."""
+    return (ops._gaps, ops._oo, ops._ov, np.column_stack(ops._dual_ov), np.column_stack(ops._dual_vv))
+
+
+def _factor_h1_h2(ops, exchange):
+    """Dense H1/H2 contracted directly from the record factors; rows a*nocc+i."""
+    gaps, oo, ov, dual_ov, dual_vv = _factors(ops)
+    na, no, nv = ov.shape
+    dual_ov, dual_vv = dual_ov.reshape(na, no, nv), dual_vv.reshape(na, nv, nv)
+    v = np.einsum("pia,pjb->aibj", ov, dual_ov)
+    x = np.einsum("pij,pab->aibj", oo, dual_vv)
+    y = np.einsum("pib,pja->aibj", ov, dual_ov)
+    shape = (no*nv, no*nv)
+    h1 = np.diag(gaps)+(4*v-exchange*(x+y)).reshape(shape)
+    return h1, np.diag(gaps)-exchange*(x-y).reshape(shape)
+
+
 @pytest.mark.parametrize("representation", [
     core.IsaBasisRepresentation.Cartesian, core.IsaBasisRepresentation.Spherical])
 @pytest.mark.parametrize("exchange", [0., .25, 1.])
@@ -167,8 +185,7 @@ def test_streamed_plain_df_operators_match_full_native_contractions(representati
         h2[2*a+i, 2*b+j] -= exchange*(x-y)
     # Neither six OV nor nine VV columns is divisible by four.
     streamed = native_plain_df_operators(
-        aux, main, coefficients, energies, nocc=2, shell_count=2,
-        exact_exchange=exchange, tile_columns=4)
+        aux, main, coefficients, energies, nocc=2, shell_count=2, tile_columns=4)
     expected_density = 2*sum(dual[:, i, i] for i in range(2))
     np.testing.assert_allclose(streamed.plain_density_coefficients, expected_density,
                                atol=2e-12, rtol=2e-12)
@@ -176,8 +193,9 @@ def test_streamed_plain_df_operators_match_full_native_contractions(representati
         streamed.plain_density_coefficients.setflags(write=True)
     coefficients[:] = 0.
     energies[:] = 0.
-    np.testing.assert_allclose(streamed.apply_h1(np.eye(6)), h1, atol=2e-12, rtol=2e-12)
-    np.testing.assert_allclose(streamed.apply_h2(np.eye(6)), h2, atol=2e-12, rtol=2e-12)
+    got1, got2 = _factor_h1_h2(streamed, exchange)
+    np.testing.assert_allclose(got1, h1, atol=2e-12, rtol=2e-12)
+    np.testing.assert_allclose(got2, h2, atol=2e-12, rtol=2e-12)
 
 
 def test_streamed_plain_df_admission_and_shell_coverage():
@@ -188,18 +206,19 @@ def test_streamed_plain_df_admission_and_shell_coverage():
                  representation=core.IsaBasisRepresentation.Spherical)
     coeff = np.eye(4)
     energies = np.array([-1., -.8, .2, .6])
-    kwargs = dict(nocc=2, shell_count=2, exact_exchange=.25, tile_columns=1)
+    kwargs = dict(nocc=2, shell_count=2, tile_columns=1)
     ops = native_plain_df_operators(aux, main, coeff, energies, **kwargs)
     budget = ops.construction_planned_bytes
     exact = native_plain_df_operators(aux, main, coeff, energies, **kwargs, max_bytes=budget)
-    np.testing.assert_array_equal(exact.apply_h1(np.eye(4)), ops.apply_h1(np.eye(4)))
+    for got, want in zip(_factors(exact), _factors(ops)):
+        np.testing.assert_array_equal(got, want)
     with pytest.raises(ValueError, match="byte resource"):
         native_plain_df_operators(aux, main, coeff, energies, **kwargs, max_bytes=budget-1)
     for change, message in [
         (dict(shell_count=1), "coverage"), (dict(shell_count=3), "range"),
         (dict(nocc=True), "nocc"), (dict(nocc=4), "nocc"),
         (dict(tile_columns=0), "tile_columns"), (dict(tile_columns=709), "tile_columns"),
-        (dict(exact_exchange=np.nan), "exchange"), (dict(max_bytes=True), "max_bytes"),
+        (dict(max_bytes=True), "max_bytes"),
     ]:
         with pytest.raises(ValueError, match=message):
             native_plain_df_operators(aux, main, coeff, energies, **(kwargs | change))
@@ -227,9 +246,7 @@ def test_tiled_constrained_ov_matches_dense_fit(representation, penalty, damping
     coefficients = np.random.default_rng(38).normal(scale=.1, size=(6, 5))[:, ::-1]
     ops = native_plain_df_operators(
         aux, main, coefficients, np.array([-1., -.8, .2, .6, 1.]),
-        nocc=2, shell_count=3, exact_exchange=.25, tile_columns=4)
-    original_h1 = ops.apply_h1(np.eye(6))
-    original_h2 = ops.apply_h2(np.eye(6))
+        nocc=2, shell_count=3, tile_columns=4)
     # Dense reference: A = (1-eta offsite) J + lambda q q^T, occupied-fast RHS.
     integrals = core.IsaAuxCoulomb(aux)
     q = np.asarray(integrals.charges())
@@ -249,8 +266,6 @@ def test_tiled_constrained_ov_matches_dense_fit(representation, penalty, damping
     assert fitted.offsite_metric_damping == damping
     with pytest.raises(ValueError):
         fitted.coefficients.setflags(write=True)
-    np.testing.assert_array_equal(ops.apply_h1(np.eye(6)), original_h1)
-    np.testing.assert_array_equal(ops.apply_h2(np.eye(6)), original_h2)
     if penalty == 0.:
         exact = native_constrained_ov(
             ops, charge_penalty=penalty, offsite_metric_damping=damping,
@@ -277,8 +292,7 @@ def test_tiled_constrained_ov_matches_dense_fit(representation, penalty, damping
 def test_constrained_ov_rejects_arbitrary_non_native_factors():
     from psi4.driver.procrouting.isapol_factorized_response import FactorizedDFOperators
     from psi4.driver.procrouting.isapol_native_factors import native_constrained_ov
-    zero = np.zeros((1, 1, 1))
-    ops = FactorizedDFOperators(np.ones(1), zero, zero, zero, zero, exact_exchange=0.)
+    ops = FactorizedDFOperators()
     with pytest.raises(ValueError, match="native plain-DF"):
         native_constrained_ov(ops, charge_penalty=1000., offsite_metric_damping=0.)
 
@@ -480,9 +494,9 @@ def test_spherical_aux_metric_and_charges_contract_the_cartesian_ones(l):
         assert np.max(np.abs(np.asarray(sph.charges())))<1e-13
 
 
-def _operands(aux, main, points):
+def _operands(aux, main):
     p=core.IsaAuxCoulomb(aux)
-    return [p.metric().np, p.point_potentials(core.Matrix.from_array(points)).np, p.three_center(main).np,
+    return [p.metric().np, p.three_center(main).np,
             np.concatenate([p.three_center_shell_block(main,i,1).np for i in range(len(aux.shell_layout()))])]
 
 
@@ -491,7 +505,6 @@ IDENTITY_CENTRES=[[0.,0.,0.],[.31,-.42,.53],[0.,0.,0.],[.01,0.,0.]]
 IDENTITY_AUX=[(2,2,[.73,1.91],[.37,-.12]),(0,1,[.43,2.3],[1.7,-.21]),(3,3,[.84],[.62]),
               (1,0,[.62,1.8],[-.8,.19]),(0,4,[.95],[.51]),(2,0,[1.1],[-.4])]
 IDENTITY_MAIN=[(3,1,[.91,1.81],[.42,-.17]),(0,2,[.75],[1.3]),(2,0,[1.03,1.9],[.31,-.12]),(1,1,[.69],[.55])]
-IDENTITY_POINTS=np.array(IDENTITY_CENTRES+[[.7,-.9,1.2]])
 
 
 @pytest.mark.parametrize("representation", [
@@ -506,18 +519,18 @@ def test_native_integrals_keep_explicit_shell_order_and_coincident_centres(repre
     """
     main=basis(IDENTITY_MAIN,IDENTITY_CENTRES,core.IsaBasisRole.Orbital,core.IsaBasisRepresentation.Spherical)
     aux=basis(IDENTITY_AUX,IDENTITY_CENTRES,representation=representation)
-    got=_operands(aux,main,IDENTITY_POINTS)
+    got=_operands(aux,main)
     order=sorted(range(len(IDENTITY_AUX)),key=lambda s:IDENTITY_AUX[s][0])
     assert order!=list(range(len(IDENTITY_AUX)))
     grouped=basis([IDENTITY_AUX[s] for s in order],IDENTITY_CENTRES,representation=representation)
     layout=aux.shell_layout()
     rows=np.concatenate([np.arange(layout[s][0],layout[s][0]+layout[s][1]) for s in order])
-    ref=_operands(grouped,main,IDENTITY_POINTS)
+    ref=_operands(grouped,main)
     np.testing.assert_allclose(got[0][np.ix_(rows,rows)],ref[0],rtol=1e-14,atol=1e-15)
     for g,r in zip(got[1:],ref[1:]):
         np.testing.assert_array_equal(g[rows],r)
     merged=[(0 if c==2 else c,l,a,d) for c,l,a,d in IDENTITY_AUX]
-    for g,r in zip(got,_operands(basis(merged,IDENTITY_CENTRES,representation=representation),main,IDENTITY_POINTS)):
+    for g,r in zip(got,_operands(basis(merged,IDENTITY_CENTRES,representation=representation),main)):
         np.testing.assert_array_equal(g,r)
 
 
@@ -526,12 +539,12 @@ def test_native_integrals_ignore_ambient_screening_options():
     import psi4
     main=basis(IDENTITY_MAIN,IDENTITY_CENTRES,core.IsaBasisRole.Orbital,core.IsaBasisRepresentation.Spherical)
     aux=basis(IDENTITY_AUX,IDENTITY_CENTRES)
-    ref=_operands(aux,main,IDENTITY_POINTS)
+    ref=_operands(aux,main)
     saved={k:(core.get_global_option(k),core.has_global_option_changed(k)) for k in ("INTS_TOLERANCE","SCREENING")}
     try:
         for tolerance,screening in [(1e-1,"SCHWARZ"),(1e-1,"CSAM"),(0.,"NONE")]:
             psi4.set_options({"ints_tolerance":tolerance,"screening":screening})
-            for g,r in zip(_operands(aux,main,IDENTITY_POINTS),ref):
+            for g,r in zip(_operands(aux,main),ref):
                 np.testing.assert_array_equal(g,r)
     finally:
         for k,(value,changed) in saved.items():

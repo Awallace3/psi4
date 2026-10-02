@@ -13,27 +13,10 @@ def _freeze(array):
     return np.frombuffer(array.tobytes(order="C"), dtype=np.float64).reshape(array.shape)
 
 
-class _ColumnTiles:
-    """Private immutable column tiles with bounded per-AUX gathering."""
-
-    def __init__(self, tiles, nrow, ncol):
-        self.tiles = tuple(tiles)
-        self.nrow, self.ncol = nrow, ncol
-
-    def __getitem__(self, auxiliary):
-        result = np.empty(self.nrow*self.ncol)
-        offset = 0
-        for tile in self.tiles:
-            width = tile.shape[1]
-            result[offset:offset+width] = tile[auxiliary]
-            offset += width
-        return result.reshape(self.nrow, self.ncol)
-
-
 def native_plain_df_operators(auxiliary, main, coefficients, energies, *,
-                              nocc, shell_count, exact_exchange,
+                              nocc, shell_count,
                               tile_columns=708, max_bytes=512*1024**2):
-    """Build independent, owned plain-DF H1/H2 actions from native integrals.
+    """Build independent, owned plain-DF H1/H2 factors from native integrals.
 
     Explicit coefficients are in MAIN order, with occupied columns first.
     This low-level operation does not certify SCF convergence, orthonormality,
@@ -76,9 +59,6 @@ def native_plain_df_operators(auxiliary, main, coefficients, energies, *,
     if (not isinstance(energies, np.ndarray) or energies.dtype != np.float64
             or energies.shape != (nmo,)):
         raise ValueError("energies must be float64 (nmo,)")
-    if (not np.isscalar(exact_exchange) or not np.isfinite(exact_exchange)
-            or not 0 <= exact_exchange <= 1):
-        raise ValueError("exact_exchange must be finite in [0,1]")
     nv, no = nmo-nocc, nocc
     nov = no*nv
     width = min(tile_columns, max(nv*nv, nov))
@@ -167,12 +147,8 @@ def native_plain_df_operators(auxiliary, main, coefficients, energies, *,
     result = FactorizedDFOperators.__new__(FactorizedDFOperators)
     result._gaps = _freeze(gaps)
     result._oo, result._ov = frozen_oo, frozen_ov
-    result._dual_ov = _ColumnTiles(dual_ov, no, nv)
-    result._dual_vv = _ColumnTiles(vv, nv, nv)
-    result._legs, result._kernel = None, None
+    result._dual_ov, result._dual_vv = tuple(dual_ov), tuple(vv)
     result.naux, result.nocc, result.nvir, result.nov = naux, no, nv, nov
-    result._nkernel, result._local_scale = 0, 0.
-    result._exchange = float(exact_exchange)
     result._max_bytes, result._storage = max_bytes, storage
     result.plain_density_coefficients = density
     result._native_auxiliary = auxiliary

@@ -21,7 +21,7 @@ struct IsaDrhoCResult {
 /// spans 2l+1 functions, a Cartesian one (l+1)(l+2)/2 -- so they give different
 /// fits, different partitions, and results that may never be quoted as agreeing.
 /// Not a DF solve or basis recipe.
-/// Integrals come from native Psi4 Libint2ERI/PotentialInt objects over raw
+/// Integrals come from native Psi4 Libint2ERI objects over raw
 /// Cartesian twins of the explicit bases (see native_basis); the GAMINT factor
 /// and DALTON transforms are applied here. No global ordering/normalization changes.
 class IsaAuxCoulomb {
@@ -33,17 +33,6 @@ class IsaAuxCoulomb {
     /// harmonically contracted afterwards when the declared AUX is spherical.
     /// Precision zero, no additional shell screening. No coefficient renormalization.
     std::shared_ptr<Matrix> metric() const;
-    /// Positive Coulomb potentials P(k,p) = integral chi_k(r)/|r-R_p| dr,
-    /// rows in this explicit AUX basis's own order, columns at caller points
-    /// (npoint x 3, bohr). Effective contractions and Cartesian GAMINT factors
-    /// or spherical DALTON transforms are preserved, with no renormalization.
-    /// No multipole truncation, nuclear term, electron sign or response solve.
-    /// This is an operand for -P^T C_aux(iw) P, NOT a fitted response producer.
-    /// Finite points at a basis centre are valid; no distance screening/repair.
-    /// At most 512 points; max_bytes bounds the returned dense matrix only,
-    /// not Libint shell workspace. No global option or wavefunction mutation.
-    std::shared_ptr<Matrix> point_potentials(const Matrix& points,
-                                            size_t max_bytes=512UL*1024*1024) const;
     /// Native (AUX|MAIN MAIN), rows AUX in the declared AUX representation,
     /// column mu*nmain+nu (nu fastest).
     /// MAIN must be explicit DALTON spherical Orbital S-G. No MO/charge factors.

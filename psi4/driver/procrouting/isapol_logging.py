@@ -2,23 +2,14 @@
 """Stage-record reporting; never reruns or mutates a scientific stage.
 
 StageLog verbosity: 0 silent, 1 banners/results, 2 diagnostics, 3 node detail.
-Long tables are elided and wide rows refused.
-
-QCVariable arrays use core.Matrix to avoid name-driven ndarray reshaping.
-QCVariables are not part of the wavefunction's SCF/state seals.
 """
-import dataclasses
 import time
 
 import numpy as np
 
 from psi4 import core
 
-#: Longest table body printed in full; longer tables are elided in the middle
-#: (both ends are kept) with an explicit count of the omitted rows.
-MAX_TABLE_ROWS = 60
-#: A row wider than this is bulk data, not a property table. Refused outright:
-#: reaching it means a caller handed a raw intermediate to the formatter.
+#: A sequence longer than this is bulk data and is summarized, never printed.
 MAX_ROW_CELLS = 24
 
 
@@ -47,7 +38,7 @@ def _fmt(value):
 
 
 class StageLog:
-    """Verbosity-gated writer with stage banners, wall clocks and small tables.
+    """Verbosity-gated writer with stage banners, wall clocks and aligned items.
 
     Holds no wavefunction and no scientific record. ``writer`` exists so tests
     can capture the text without touching the Psi4 output file; the production
@@ -99,43 +90,6 @@ class StageLog:
         for k, v in rendered:
             self._writer(self._pad + ' ' * int(indent) + k.ljust(width) + '   ' + v + '\n')
 
-    def table(self, title, headers, rows, level=1, indent=4, note=None):
-        """Print a small aligned table, eliding the middle of a long body.
-
-        Truncation is announced with the omitted row count; a row wider than
-        :data:`MAX_ROW_CELLS` is refused, because that is a raw intermediate.
-        """
-        headers = [str(h) for h in headers]
-        if len(headers) > MAX_ROW_CELLS:
-            raise ValueError('refusing to print a wide intermediate as a property table')
-        rows = list(rows)
-        for row in rows:
-            if len(row) != len(headers):
-                raise ValueError('table rows must match the declared header count')
-        if not self.enabled(level):
-            return
-        omitted = 0
-        if len(rows) > MAX_TABLE_ROWS:
-            head = MAX_TABLE_ROWS // 2
-            omitted = len(rows) - MAX_TABLE_ROWS
-            rows = rows[:head] + rows[len(rows) - (MAX_TABLE_ROWS - head):]
-        body = [[_fmt(c) for c in row] for row in rows]
-        widths = [max([len(h)] + [len(r[i]) for r in body]) for i, h in enumerate(headers)]
-        pad = self._pad + ' ' * int(indent)
-        if title:
-            self._writer(pad + str(title) + '\n')
-        rule = '  '.join('-' * w for w in widths)
-        self._writer(pad + '  '.join(h.rjust(w) for h, w in zip(headers, widths)) + '\n')
-        self._writer(pad + rule + '\n')
-        for i, row in enumerate(body):
-            if omitted and i == MAX_TABLE_ROWS // 2:
-                self._writer(pad + f'... {omitted} intermediate rows not printed; the full record is '
-                             'available through atomic_property_result(wfn)\n')
-            self._writer(pad + '  '.join(c.rjust(w) for c, w in zip(row, widths)) + '\n')
-        self._writer(pad + rule + '\n')
-        if note:
-            self._writer(pad + str(note) + '\n')
-
     def stage(self, name, parameters=(), level=1):
         """Close any open stage, then announce this one with all its parameters."""
         self.stage_end(level=level)
@@ -155,36 +109,3 @@ class StageLog:
         self._open, self._started = None, None
         self.line('Stage complete: %s (%.2f s)' % (name, seconds), level=level)
 
-
-def silent():
-    """The default log: accepts every call, writes nothing, records timings."""
-    return StageLog(0, writer=lambda text: None)
-
-
-def dataclass_parameters(obj, *, prefix='', skip=()):
-    """Every declared field of a recipe dataclass, in declaration order.
-
-    Enumerating the dataclass rather than a hand-written list is the point: a
-    stage banner that claims to list all tweakable parameters cannot silently
-    omit one that was added later. Bulk fields are reported by size.
-    """
-    out = []
-    for field in dataclasses.fields(obj):
-        value = getattr(obj, field.name)
-        if isinstance(value, (tuple, list)) and len(value) > MAX_ROW_CELLS:
-            value = f'<{len(value)} entries>'
-        if field.name in skip:
-            continue
-        out.append((prefix + field.name, value))
-    return tuple(out)
-
-
-def _matrix(array):
-    """Wrap for ``set_variable``: bypasses name-based ndarray reshaping."""
-    return core.Matrix.from_array(np.ascontiguousarray(np.asarray(array, dtype=float)))
-
-
-def _set(wfn, key, value):
-    if wfn is None:
-        return
-    wfn.set_variable(key, value)
