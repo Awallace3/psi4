@@ -119,6 +119,26 @@ def _ein_zeros(*dims, name: str = "zeros"):
     return ein.create_zero_tensor(name, [int(d) for d in dims])
 
 
+# Uninitialized scratch for fdisp0's per-block work buffers.  One pool for the
+# life of the process, grown as needed and never rebuilt: its arenas are
+# mimalloc's, which never hands one back and caps how many a process may hold,
+# so a pool per call would leak an arena each time fdisp0 ran.  Unpinned, the
+# pages of carves that have been freed purge back to the OS, so between calls
+# it holds address space, not memory.  Carves of a few GB do not fit an arena,
+# so this is for the block buffers only, not the packed DF tensors.
+_FDISP_POOL = None
+
+
+def _fdisp_pool(nbytes: int):
+    """The fdisp0 scratch pool, with room for ``nbytes`` more of carves."""
+    global _FDISP_POOL
+    if _FDISP_POOL is None:
+        _FDISP_POOL = ein.MemoryPool(nbytes, "fdisp0")
+    else:
+        _FDISP_POOL.reserve(_FDISP_POOL.bytes_used + nbytes)
+    return _FDISP_POOL
+
+
 def _ein_clone(x, name: str = "clone", scale: float = 1.0):
     """A fresh einsums tensor holding ``scale * x``, whatever ``x`` is."""
     out = ein.array(_arr(x), name=name)
@@ -2945,16 +2965,25 @@ def fdisp0(
         if key not in _bufs:
             M, N = nrb * na, nsb * nb
             Ms, Nr = nsb * na, nrb * nb
+            # Every one of these is written in full before it is read (a GEMM
+            # or elementwise kernel with beta = 0), so they are carved
+            # uninitialized rather than zeroed.  That skips a serial memset,
+            # and it leaves first touch to the threaded kernel that fills each
+            # buffer, which spreads its pages over both sockets the way
+            # numpy's lazily faulted np.zeros did for the v1 port.  A zeroed
+            # tensor is first touched by this thread alone, and the block's
+            # GEMMs then all read from one socket's memory.
+            pool = _fdisp_pool(8 * (6 * M * N + 3 * Ms * Nr))
             b = dict(
-                V=_ein_zeros(M, N, name="Vrs"),
-                T=_ein_zeros(M, N, name="Trs"),
-                I=_ein_zeros(M, N, name="Irs"),
-                T2=_ein_zeros(M, N, name="T2rs"),
-                V2=_ein_zeros(M, N, name="V2rs"),
-                D=_ein_zeros(M, N, name="Drs"),
-                W=_ein_zeros(Ms, Nr, name="Wsr"),
-                IW=_ein_zeros(Ms, Nr, name="IWsr"),
-                W2=_ein_zeros(Ms, Nr, name="W2sr"),
+                V=pool.empty([M, N], name="Vrs"),
+                T=pool.empty([M, N], name="Trs"),
+                I=pool.empty([M, N], name="Irs"),
+                T2=pool.empty([M, N], name="T2rs"),
+                V2=pool.empty([M, N], name="V2rs"),
+                D=pool.empty([M, N], name="Drs"),
+                W=pool.empty([Ms, Nr], name="Wsr"),
+                IW=pool.empty([Ms, Nr], name="IWsr"),
+                W2=pool.empty([Ms, Nr], name="W2sr"),
             )
             b["Dv"] = b["D"].reshape_view([na, nrb, nb, nsb])
             b["T2v"] = b["T2"].reshape_view([na, nrb, nb, nsb])
