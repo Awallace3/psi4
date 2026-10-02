@@ -154,9 +154,11 @@ void export_functional(py::module &m) {
         .def("vv10_b", &SuperFunctional::vv10_b, "The VV10 b parameter.")
         .def("vv10_c", &SuperFunctional::vv10_c, "The VV10 c parameter.")
         .def("grac_x_functional", &SuperFunctional::grac_x_functional,
-             "Actual attached GRAC exchange component, or None; no attachment setter.")
+             "Live handle (not a copy) to the attached GRAC exchange component, or None; edits change the "
+             "functional and fail a later SCF seal check. No attachment setter.")
         .def("grac_c_functional", &SuperFunctional::grac_c_functional,
-             "Actual attached GRAC correlation component, or None; no attachment setter.")
+             "Live handle (not a copy) to the attached GRAC correlation component, or None; edits change the "
+             "functional and fail a later SCF seal check. No attachment setter.")
         .def("grac_shift", &SuperFunctional::grac_shift, "Shift of the bulk potenital.")
         .def("grac_alpha", &SuperFunctional::grac_alpha, "GRAC Alpha.")
         .def("grac_beta", &SuperFunctional::grac_beta, "GRAC Beta.")
@@ -349,11 +351,13 @@ void export_functional(py::module &m) {
              py::arg("primary"), py::arg("auxiliary"), py::arg("Cocc"), py::arg("Cvir"),
              py::arg("eps_occ"), py::arg("eps_vir"), py::arg("is_hybrid"))
         .def("metric", &sapt::FDDS_Monomer::metric,
-             "Borrowed, read-only view of the instance's (declared) Coulomb metric; later responses use it.")
+             "Live internal handle (not a copy) to the instance's (declared) Coulomb metric; later responses use "
+             "it, so do not modify it. The bounded runner copies it.")
         .def("metric_inv", &sapt::FDDS_Monomer::metric_inv,
-             "Borrowed, read-only view of the instance's truncated metric inverse; later responses use it.")
+             "Live internal handle (not a copy) to the instance's truncated metric inverse; later responses use "
+             "it, so do not modify it.")
         .def("aux_overlap", &sapt::FDDS_Monomer::aux_overlap,
-             "Borrowed, read-only view of the instance's (declared) auxiliary overlap.")
+             "Live internal handle (not a copy) to the instance's (declared) auxiliary overlap; do not modify it.")
         .def("project_densities", &sapt::FDDS_Monomer::project_densities)
         .def("form_unc_amplitude", &sapt::FDDS_Monomer::form_unc_amplitude,
              "Positive uncoupled amplitude at imaginary frequency omega (atomic units).")

@@ -1434,6 +1434,7 @@ struct Ledger {
     std::map<std::string, size_t> files;      // disk, doubles
     std::map<std::string, size_t> integrals;  // integral-object storage inside stages, doubles
     size_t dfh_extra = 0;                      // raw-DFHelper storage it does not count in its own memory
+    size_t dfh_retained = 0;                   // the part of dfh_extra still held after transform()
     size_t dfh_integral = 0;                   // raw-DFHelper integral objects, also outside its memory
 };
 
@@ -1462,14 +1463,17 @@ Ledger declared_ledger(const BasisSet& primary, const BasisSet& auxiliary, size_
     if (subalgo == "INCORE")
         dfh_min = cmax({dfh_min, cadd({cmul(pr, cmul(N, N)), pr2, cmul(t, cmul(N, N)),
                                        cmul(3, cmul(qmax, cmul(N, N)))})});
-    L.dfh_extra = cadd({T, cmul(t, cmul(N, wtmp)), cmul(2, cadd({cmul(nshell, nshell), cmul(N, N)})), cmul(5, N),
-                        3, nshell, (size_t)auxiliary.nshell(), 2, pr2, cmul(3, pr2), pr, eig_r});
+    // After transform() it keeps the Schwarz shell mask/function index, skip arrays and shell offsets.
+    L.dfh_retained = cadd({cmul(nshell, nshell), cmul(N, N), cmul(5, N), 3, nshell, (size_t)auxiliary.nshell(), 2});
+    L.dfh_extra = cadd({T, cmul(t, cmul(N, wtmp)), cmul(nshell, nshell), cmul(N, N), L.dfh_retained, pr2,
+                        cmul(3, pr2), pr, eig_r});
     L.dfh_integral = L.integrals["dfhelper"] = doubles_for(dfhelper_pass_bytes(primary, auxiliary, t));
     L.stages["raw_dfhelper"] = cadd({L.dfh_extra, L.dfh_integral, dfh_min});
 
-    // Declared pass: T, J_d^-1/2 (or its power() transient), one first-index block of raw/T/out rows.
-    L.stages["declared_pass"] =
-        cadd({T, pd2, cmax({cmul(big, cadd({pr, cmul(2, pd)})), cadd({cmul(2, pd2), pd, eig_d})})});
+    // Declared pass, beside the still-live raw DFHelper: T, J_d^-1/2 (or its power() transient),
+    // one first-index block of raw/T/out rows.
+    L.stages["declared_pass"] = cadd({L.dfh_retained, T, pd2,
+                                      cmax({cmul(big, cadd({pr, cmul(2, pd)})), cadd({cmul(2, pd2), pd, eig_d})})});
 
     const size_t ov = n;
     if (hyb) {
@@ -1689,7 +1693,7 @@ void FDDS_Monomer::prepare_declared(const FDDSResources& res, SharedMatrix T) {
         half_inv = J->clone();
         half_inv->power(-0.5, metric_cutoff);
     }
-    declared_pass(raw, T, half_inv);
+    declared_pass(raw, T, half_inv, L.dfh_retained);
     raw.reset();  // removes the raw files
     T.reset();
     half_inv.reset();
@@ -1726,7 +1730,8 @@ void FDDS_Monomer::prepare_declared(const FDDSResources& res, SharedMatrix T) {
     }
 }
 
-void FDDS_Monomer::declared_pass(std::shared_ptr<DFHelper> raw, const SharedMatrix& T, const SharedMatrix& half_inv) {
+void FDDS_Monomer::declared_pass(std::shared_ptr<DFHelper> raw, const SharedMatrix& T, const SharedMatrix& half_inv,
+                                 size_t raw_retained) {
     // Streams raw (xy|P_r) blocks of the first index into declared tensors: B_d = B_r T^T, then
     // B_d, B_d J_d^-1 (LU solve), B_d J^+_d or B_d J_d^-1/2 (DFHelper's metric_pow -1/2 on J_d).
     enum Kind { Declared, Solve, Plus, Half };
@@ -1743,7 +1748,7 @@ void FDDS_Monomer::declared_pass(std::shared_ptr<DFHelper> raw, const SharedMatr
         jobs.push_back({"aaQ", o, o, {{"aaR", Half}}});
         jobs.push_back({"rrQ", v, v, {{"rrR", Half}}});
     }
-    const size_t fixed = cadd({cmul(pd, pr), cmul(pd, pd)});
+    const size_t fixed = cadd({raw_retained, cmul(pd, pr), cmul(pd, pd)});
     for (const auto& job : jobs) {
         size_t per = cmul(job.n2, cadd({pr, cmul(2, pd)}));
         size_t block = std::min(job.n1, (work_doubles_ - fixed) / per);

@@ -293,7 +293,8 @@ class FDDS_Monomer : public FDDS_Dispersion {
     std::vector<int> metric_ipiv_;
     SharedMatrix Rtinv_;      // pinv(R, 1e-13)^T
     void prepare_declared(const FDDSResources& resources, SharedMatrix T);
-    void declared_pass(std::shared_ptr<DFHelper> raw, const SharedMatrix& T, const SharedMatrix& half_inv);
+    void declared_pass(std::shared_ptr<DFHelper> raw, const SharedMatrix& T, const SharedMatrix& half_inv,
+                       size_t raw_retained);
     double native_dyson_ratio(double omega, double x_alpha, const SharedMatrix& W);
 };
 }  // namespace sapt

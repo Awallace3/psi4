@@ -726,8 +726,9 @@ check the metric resolution and the response themselves.
 condition estimate, the QR rank, the cutoffs, the resources and the
 conventions. The response dictionary reports both Dyson ratios, the solve
 residual and the masked-transition count. ``metric()``, ``metric_inv()`` and
-``aux_overlap()`` return the instance's own matrices, not copies. They are
-read-only: every later response uses them.
+``aux_overlap()`` return live handles to the instance's own matrices, not
+copies. Nothing prevents writes, but every later response uses them, so do not
+modify them; copy first (the bounded response runner does).
 
 Basic Keywords for SAPT(DFT)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~

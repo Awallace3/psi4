@@ -864,14 +864,23 @@ def test_fdds_one_byte_short_preflight_refuses_before_native_construction(small_
 @pytest.mark.parametrize('small_water', ['water'], indirect=True)
 def test_fdds_native_and_kernel_admissions_charge_the_caller_grid(small_water, tmp_path, monkeypatch):
     """The caller's response_grid stays live through native construction and W: both admissions and
-    their preflight mirrors charge it, so one byte short refuses before scratch or native storage."""
+    their preflight mirrors charge it, so one byte short refuses before scratch or native storage.
+    The native requirement is inflated so the FDDS plan, not the state snapshot, binds the budget."""
     wfn, recipe, args = small_water
     frequencies = args['quadrature'].frequencies
     held, runners = [], []
-    class Recording(core.FDDS_Monomer):
+    native = core.FDDS_Monomer
+    def requirement(*a):
+        result = dict(native.requirement(*a))
+        result['memory_bytes'] += 64*1024**2
+        return result
+    class Recording(native):
         def __init__(self, *a, **k):
             held.append(dict(runners[-1]._held))
             super().__init__(*a, **k)
+    class Forbidden(_Forbidden):
+        pass
+    Recording.requirement = Forbidden.requirement = staticmethod(requirement)
     monkeypatch.setattr(core, 'FDDS_Monomer', Recording)
     def sweep(max_bytes):
         runner = _runner(wfn, recipe, dict(args, resources=_resources(max_bytes)), tmp_path, **_fdds())
@@ -888,7 +897,7 @@ def test_fdds_native_and_kernel_admissions_charge_the_caller_grid(small_water, t
     assert stages['native FDDS instance'] == sum(held[0].values())+memory
     assert stages['FDDS kernel W'] == stages['native FDDS instance']-held[0]['native_inputs']+32*full.dimensions[0]**2
     assert sweep(full.ledger.peak).ledger.peak == full.ledger.peak
-    monkeypatch.setattr(core, 'FDDS_Monomer', _Forbidden)
+    monkeypatch.setattr(core, 'FDDS_Monomer', Forbidden)
     for stage in ('native FDDS instance', 'FDDS kernel W'):
         with pytest.raises(ValueError, match='complete native FDDS plan exceeds shared numeric'):
             sweep(stages[stage]-1)

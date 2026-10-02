@@ -665,6 +665,31 @@ def test_declared_resources_and_private_scratch(orbitals, tmp_path):
             psi4.core.has_global_option_changed("SCF_SUBTYPE"), psi4.core.get_num_threads(), watched()) == before
 
 
+@pytest.mark.parametrize("hybrid", [False, True])
+def test_declared_pass_charges_the_live_raw_dfhelper(orbitals, hybrid, tmp_path):
+    """The raw DFHelper keeps its Schwarz mask/function index (nshell^2 + N^2) and skip arrays (5N) through the
+    declared pass; that stage and its blocks are budgeted with them, and one byte short is refused."""
+    data = native_inputs(orbitals)
+    primary, auxiliary = data[:2]
+    n, nshell, pr = primary.nbf(), primary.nshell(), auxiliary.nbf()
+    req = psi4.core.FDDS_Monomer.requirement(primary, auxiliary, 5, 19, pr, hybrid, "OUT_OF_CORE", 1)
+    assert req["stage:declared_pass"] >= 8 * (n * n + nshell * nshell + 5 * n + 2 * pr * pr)
+    assert req["memory_bytes"] >= req["resident_bytes"] + req["stage:declared_pass"]
+    with pytest.raises(RuntimeError, match="memory_bytes"):
+        declared(data, hybrid, tmp_path, extra=-1)
+    assert os.listdir(tmp_path) == []
+    alpha = 0.25 if hybrid else 0.0
+    minimal = declared(data, hybrid, tmp_path)
+    kernel = psi4.core.Matrix.from_array(minimal.metric().np + 0.03 * minimal.aux_overlap().np)
+    chi = minimal.form_coefficient_response(0.4, alpha, kernel)["response"].np
+    generous = declared(data, hybrid, tmp_path, extra=10**8)
+    reference = generous.form_coefficient_response(0.4, alpha, kernel)["response"].np
+    np.testing.assert_allclose(chi, reference, rtol=0, atol=1.e-12 * np.abs(reference).max())
+    del minimal, generous
+    gc.collect()
+    assert os.listdir(tmp_path) == []
+
+
 def test_declared_integral_storage_is_charged(orbitals):
     primary, auxiliary = orbitals[:2]
 
