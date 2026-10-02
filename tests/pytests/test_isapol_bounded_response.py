@@ -5,7 +5,9 @@
 Small independent identities, not large reference fixtures. No PFIT, LW,
 dispersion or ISA code is used; toy admissions are not molecular acceptance.
 """
+from fractions import Fraction
 import itertools
+import math
 import weakref
 import numpy as np
 import pytest
@@ -494,11 +496,85 @@ def test_fdds_zero_exchange_kernel_factor_is_discriminated(small_water, tmp_path
             W = np.zeros_like(J) if c is None else J+c*K
             native = monomer.form_coefficient_response(omega, 0., core.Matrix.from_array(W))['response'].to_array()
             expected = _dense_zero_exchange(B, gaps, J, W, omega)
-            np.testing.assert_allclose(native, expected, rtol=0, atol=1e-9*np.abs(expected).max())
+            np.testing.assert_allclose(native, expected, rtol=0, atol=1e-10*np.abs(expected).max())
             results[c] = native
         scale = np.abs(results[.75]).max()
         for c in (None, 0., 1.):
             assert np.abs(results[c]-results[.75]).max() > 1e-4*scale
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_fdds_zero_exchange_matches_reference_h2h1_with_plain_legs(small_water, tmp_path):
+    """Same well-conditioned limit through the reference code: H1/H2 from _assemble at cx = 0
+    with plain legs D = (J^-1 B)^T, solved by _H2H1Response, equals native chi for W = J + cK."""
+    from psi4.driver.procrouting.isapol_basis import adapt_main
+    from psi4.driver.procrouting.isapol_native_factors import native_plain_df_operators
+    wfn, _, args = small_water
+    recipe = _recipe(wfn.molecule(), 'cc-pVDZ-RI', 'Spherical')
+    auxiliary, main = recipe.build('MolecularAux'), adapt_main(wfn, caller_converged=True)
+    no = wfn.nalpha()
+    ops = native_plain_df_operators(auxiliary, main.basis, main.transform @ np.asarray(wfn.Ca()),
+                                    np.asarray(wfn.epsilon_a()).copy(), nocc=no, shell_count=len(recipe.shells),
+                                    exact_exchange=0., tile_columns=512)
+    p, nv = auxiliary.nfunction, wfn.nmo()-no
+    J = np.asarray(core.IsaAuxCoulomb(auxiliary).metric())
+    K = backend._kernel(auxiliary, np.asarray(ops.plain_density_coefficients), args['response_grid'],
+                        args['smoothing'], args['shell_cutoff'], backend._Ledger(_resources()))
+    # Plain legs (no charge constraint), rows a*nocc+i like the reference OV fits.
+    plain = np.column_stack(ops._dual_ov.tiles).reshape(p, no, nv).transpose(0, 2, 1).reshape(p, -1).T
+    raw, transform = core.IsaAuxCoulomb(auxiliary).native_auxiliary()
+    monomer = _monomer(wfn, raw, transform, tmp_path)
+    for c in (0., .75):
+        (tmp_path/f'reference{c}').mkdir()
+        store = backend._Store(tmp_path/f'reference{c}', ledger())
+        for name, value in (('gaps', ops._gaps), ('oo', ops._oo), ('ov', ops._ov), ('target', plain),
+                            ('anchor', plain), ('kernel', K)):
+            store.save(name, np.asarray(value))
+        for kind in ('ov', 'vv'):
+            for i, tile in enumerate(getattr(ops, '_dual_'+kind).tiles):
+                store.save(f'dual{kind}{i}', tile)
+        backend._assemble(store, (p, no, nv), (len(ops._dual_ov.tiles), len(ops._dual_vv.tiles)), 0., c)
+        reference = backend._H2H1Response(store, (p, no, nv), p)
+        try:
+            for omega in args['quadrature'].frequencies:
+                expected, _, residual = reference.solve(omega)
+                native = monomer.form_coefficient_response(omega, 0., core.Matrix.from_array(J+c*K))
+                assert residual < 1e-12
+                np.testing.assert_allclose(native['response'].to_array(), expected, rtol=0,
+                                           atol=1e-10*np.abs(expected).max())
+        finally:
+            reference.close()
+
+
+@pytest.mark.parametrize('wrong', ['row_permuted', 'main_order'])
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_fdds_wrong_orbital_rows_are_refused_before_native_inputs(small_water, tmp_path, monkeypatch, wrong):
+    """A state whose AO-order orbitals are row-permuted, or in the DALTON MAIN order, is refused
+    by the bitwise Ca/epsilon_a equality before any native input, scratch or integral."""
+    from psi4.driver.procrouting.isapol_basis import adapt_main
+    wfn, recipe, args = small_water
+    C = np.asarray(wfn.Ca())
+    bad = np.roll(C, 1, axis=0) if wrong == 'row_permuted' else adapt_main(wfn, caller_converged=True).transform @ C
+    assert bad.shape == C.shape and not np.array_equal(bad, C)
+    original = backend.native_restricted_state_from_wavefunction
+
+    class WrongRows:
+        def __init__(self, state):
+            self._state = state
+        def __getattr__(self, name):
+            return getattr(self._state, name)
+        def orbitals(self):
+            return core.Matrix.from_array(bad)
+
+    monkeypatch.setattr(backend, 'native_restricted_state_from_wavefunction',
+                        lambda *a, **k: WrongRows(original(*a, **k)))
+    def forbidden(*a, **k):
+        pytest.fail('native requirement evaluated for a wrong-orbital state')
+    monkeypatch.setattr(core.FDDS_Monomer, 'requirement', forbidden)
+    runner = _runner(wfn, recipe, args, tmp_path, **_fdds())
+    with pytest.raises(ValueError, match='native FDDS state must equal the sealed wavefunction Ca/epsilon_a'):
+        runner.__enter__()
+    assert runner._fdds is None and runner._temporary is None and _nothing_left(tmp_path)
 
 
 def test_fdds_one_transition_analytic_limit(tmp_path):
@@ -522,6 +598,63 @@ def test_fdds_one_transition_analytic_limit(tmp_path):
 
 
 # ---------------------------------------------------------------- explicit native FDDS runner ----
+
+def _exact_contraction(Q, chi):
+    """-Q chi Q^T of the given float64 operands in exact integer arithmetic, rounded once."""
+    def exact_integers(a):
+        nonzero = a[a != 0]
+        shift = max(0, 53-min(math.frexp(x)[1] for x in nonzero.tolist())) if nonzero.size else 0
+        return np.array([int(Fraction(x)*(1 << shift)) for x in a.ravel().tolist()], dtype=object
+                        ).reshape(a.shape), shift
+    (q, sq), (c, sc) = exact_integers(np.asarray(Q, float)), exact_integers(np.asarray(chi, float))
+    denominator = 1 << (2*sq+sc)
+    return np.array([-n/denominator for n in q.dot(c).dot(q.T).ravel().tolist()]).reshape(len(Q), len(Q))
+
+
+def _contraction_bound(Q, chi):
+    """Componentwise a priori float64 bound gamma_(2p+1) |Q||chi||Q|^T for fl(fl(Q chi) Q^T), symmetrized."""
+    n, u = 2*Q.shape[1]+1, 2.**-53
+    return n*u/(1-n*u)*(np.abs(Q) @ np.abs(chi) @ np.abs(Q).T)
+
+
+def test_exact_contraction_oracle_is_exact():
+    rng = np.random.default_rng(17)
+    A = rng.integers(-9, 9, (4, 5)).astype(float)
+    C = rng.integers(-9, 9, (5, 5)).astype(float)
+    C = C+C.T
+    np.testing.assert_array_equal(_exact_contraction(A, C), -(A @ C @ A.T))
+    np.testing.assert_array_equal(_exact_contraction(A*2.**-60, C*2.**40), -(A @ C @ A.T)*2.**-80)
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_fdds_contraction_meets_forward_target_when_well_conditioned(small_water, tmp_path):
+    """The runner's own contraction, fed entrywise-positive Q and chi (no cancellation, kappa = 1),
+    meets the planned forward target |nonlocal - exact| <= 1e-13 max|exact|."""
+    wfn, recipe, args = small_water
+    omega = args['quadrature'].frequencies[0]
+    with _runner(wfn, recipe, args, tmp_path, **_fdds()) as runner:
+        runner.prepare()
+        p, q = runner._moments.shape[1], runner._moments.shape[0]
+        rng = np.random.default_rng(2026)
+        Q = rng.uniform(.5, 1.5, (q, p))
+        c = rng.uniform(.5, 1.5, (p, p))
+        chi = .5*(c+c.T)
+
+        class Positive:
+            def form_coefficient_response(self, *a):
+                return dict(response=core.Matrix.from_array(chi), native_dyson_ratio=1., s2_dyson_ratio=1.,
+                            solve_residual=0., masked_transitions=0)
+
+        native, moments = runner._fdds, runner._moments
+        runner._fdds, runner._moments = Positive(), Q
+        try:
+            result = runner.solve(omega)
+        finally:
+            runner._fdds, runner._moments = native, moments
+    exact = _exact_contraction(Q, chi)
+    np.testing.assert_allclose(np.abs(Q) @ np.abs(chi) @ np.abs(Q).T, -exact, rtol=1e-14, atol=0)  # kappa = 1
+    assert np.abs(result.nonlocal_response-exact).max() <= 1e-13*np.abs(exact).max()
+
 
 def test_fdds_toy_nodes_are_admitted_with_owned_outputs(small_water, tmp_path, monkeypatch):
     """Toy declared recipes (not molecular acceptance): every registered node is admitted."""
@@ -566,9 +699,10 @@ def test_fdds_toy_nodes_are_admitted_with_owned_outputs(small_water, tmp_path, m
         assert chi.shape == (p, p) and nonlocal_response.shape == (q, q)
         np.testing.assert_array_equal(chi, chi.T)
         np.testing.assert_array_equal(nonlocal_response, nonlocal_response.T)
-        expected = -np.einsum('ap,pq,bq->ab', Q, chi, Q)
-        rounding = (np.abs(Q) @ np.abs(chi) @ np.abs(Q).T).max()  # cancellation scale of the contraction
-        np.testing.assert_allclose(nonlocal_response, .5*(expected+expected.T), rtol=0, atol=1e-13*rounding)
+        # Not the planned 1e-13*max|output| forward target: this contraction cancels (kappa ~ 3e4-5e4),
+        # so it is checked against the exact value at the rigorous componentwise float64 bound.
+        exact = _exact_contraction(Q, chi)
+        np.testing.assert_array_less(np.abs(nonlocal_response-exact), _contraction_bound(Q, chi))
         arrays += [chi, nonlocal_response]
     assert all(a.base is None or a.base.flags.owndata for a in arrays)
     assert not any(np.shares_memory(a, b) for a, b in itertools.combinations(arrays, 2))
