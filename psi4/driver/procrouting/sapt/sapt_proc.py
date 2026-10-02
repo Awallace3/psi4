@@ -1117,6 +1117,7 @@ def compute_GRAC_shift(
     try:
         dft_functional = core.get_option("SAPT", "SAPT_DFT_FUNCTIONAL")
         grac_basis = core.get_option("SAPT", "SAPT_DFT_GRAC_BASIS")
+        seed_ion = core.get_option("SAPT", "SAPT_DFT_GRAC_SEED_ION")
         if grac_basis != "AUTO":
             core.set_global_option("BASIS", grac_basis)
 
@@ -1168,11 +1169,20 @@ def compute_GRAC_shift(
                 core.print_out(
                     f"\n\n  ==> GRAC {label} Electron Removed Molecule: charge={mol_cation.molecular_charge()} mult={mol_cation.multiplicity()} <==\n\n"
                 )
+                # The cation shares the neutral's geometry and basis and is one
+                # electron short, so the converged neutral orbitals are a far better
+                # start than a fresh SAD guess. It is a different starting point,
+                # though: a delocalized cation can settle on a different SCF solution
+                # than SAD would, moving the shift. SAPT_DFT_GRAC_SEED_ION=false
+                # recovers the SAD-guess result.
+                cation_kwargs = dict(scf_kwargs)
+                if seed_ion:
+                    cation_kwargs["guess_wfn"] = wfn_given
                 wfn_cation = run_scf(
                     dft_functional.lower(),
                     molecule=mol_cation,
                     jk=jk_obj,
-                    **scf_kwargs,
+                    **cation_kwargs,
                 )
             except ConvergenceError:
                 # A failed attempt's wavefunctions are still bound in this

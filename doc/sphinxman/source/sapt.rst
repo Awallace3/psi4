@@ -557,6 +557,14 @@ Computed shifts also publish ``SAPT DFT GRAC MONOMER ENERGY A/B``,
 same ``SAPT DFT GRAC`` prefix, in Hartree.
 Ionization removes one electron (charge +1, even for an anionic monomer);
 the shift equals the ionized-minus-given energy plus the given HOMO.
+The neutral monomer is restricted and the ionized one unrestricted, since
+removing one electron leaves an odd electron count.
+By default (|sapt__sapt_dft_grac_seed_ion|) the ionized SCF starts from the
+converged neutral orbitals rather than a fresh SAD guess, which is cheaper
+and usually reaches a lower SCF solution. Because it is a different starting
+point, a delocalized cation may converge to a different state than SAD does
+and shift the GRAC value; set the keyword to ``false`` to recover the
+SAD-guess result.
 Explicitly supplied shifts are echoed without recomputation; their
 intermediate variables are absent.
 
@@ -564,7 +572,8 @@ This permits a two-stage workflow: compute shifts in a small-memory job,
 then supply them through |sapt__sapt_dft_grac_shift_a| and
 |sapt__sapt_dft_grac_shift_b| in the full calculation.
 The caller must check that monomer geometry, functional, GRAC basis,
-convergence tier, and external-potential settings match before reusing shifts.
+convergence tier, ion-seeding, and external-potential settings match before
+reusing shifts.
 With GRAC basis ``AUTO``, this includes the orbital basis.
 Psi4 provides no persistent cache or dataset orchestration.
 
@@ -711,6 +720,7 @@ Advanced Keywords for SAPT(DFT)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. include:: autodir_options_c/sapt__sapt_dft_functional.rst
+.. include:: autodir_options_c/sapt__sapt_dft_grac_seed_ion.rst
 .. include:: autodir_options_c/sapt__sapt_dft_do_hybrid.rst
 .. include:: autodir_options_c/sapt__sapt_dft_exch_disp_fixed_scale.rst
 .. include:: autodir_options_c/sapt__sapt_dft_mp2_disp_alg.rst
