@@ -43,6 +43,10 @@ jobs:
       with:
         fetch-depth: 0
 
+      # fork-only: the fork carries no release tags, so the Psi4 version is "undef" and import fails
+    - name: Fetch upstream release tags (fork-only)
+      run: git fetch --no-recurse-submodules https://github.com/psi4/psi4.git "refs/tags/v1.*:refs/tags/v1.*" && git describe --tags
+
       # see CMAKE_OSX_SYSROOT and CMAKE_Fortran_FLAGS for use
       # mac_ver line returns, e.g., "10.15" for Catalina & "11.6" for Big Sur. but phracker doesn't support all minor, so some logic to hardcode.
     - name: Prepare compiler environment, SDK (M)
