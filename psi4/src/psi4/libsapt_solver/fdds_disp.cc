@@ -1142,7 +1142,7 @@ SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
 
     size_t doubles = budget_doubles();
     const size_t rp = work_doubles_ ? kRowPointer : 0;  // Qar, Q and R row pointers, declared budget only
-    size_t req_mem = 2 * nov * naux + naux * naux + naux + rp * (2 * naux + nov); 
+    size_t req_mem = 2 * nov * naux + naux * naux + naux + rp * (2 * naux + nov);
     if (doubles < req_mem) 
         throw PSIEXCEPTION("Too little static memory for FDDS_Dispersion::QR()");
 

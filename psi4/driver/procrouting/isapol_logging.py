@@ -108,4 +108,3 @@ class StageLog:
         self._stages.append((name, float(seconds)))
         self._open, self._started = None, None
         self.line('Stage complete: %s (%.2f s)' % (name, seconds), level=level)
-
