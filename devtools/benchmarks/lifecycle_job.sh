@@ -24,8 +24,11 @@ metadata="$run_root/metadata/$mode-$SLURM_JOB_ID"
         "$mode" "$commit" "$SLURM_JOB_ID" "$(hostname -f)" "$(date -Iseconds)"
     scontrol show job "$SLURM_JOB_ID" -o
 } > "$metadata.env"
+# Conda compiler hooks legitimately read unset variables such as HOST.
+set +u
 source "$root/miniconda/etc/profile.d/conda.sh"
 conda activate p4cuest_sapt
+set -u
 export PYTHONNOUSERSITE=1
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
