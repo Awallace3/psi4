@@ -11,6 +11,7 @@ import sys
 import time
 
 from saptdft_cuest_grac import atomic_json
+from build_receipt import verify
 
 CASES = [
     ("water", "cc-pvdz"), ("water", "aug-cc-pvdz"),
@@ -36,6 +37,8 @@ def main():
     parser.add_argument("--new-source", type=Path, required=True)
     parser.add_argument("--old-commit", required=True)
     parser.add_argument("--new-commit", required=True)
+    parser.add_argument("--old-receipt", type=Path, required=True)
+    parser.add_argument("--new-receipt", type=Path, required=True)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--memory", default="112 GiB")
@@ -53,9 +56,12 @@ def main():
         assert not subprocess.check_output(["git", "-C", str(source), "diff", "HEAD", "--",
                                             "psi4", "tests"], text=True).strip(), source
         package = getattr(args, f"{version}_package").resolve()
+        receipt = verify(json.loads(getattr(args, f"{version}_receipt").read_text()))
+        assert receipt["package"] == str(package) and receipt["source"] == str(source)
         core, = package.glob("core*.so")
         versions[version] = {"source": str(source), "commit": actual,
                              "package": str(package),
+                             "build_receipt": receipt,
                              "binary_sha256": hashlib.sha256(core.read_bytes()).hexdigest()}
     gpu = subprocess.check_output(["nvidia-smi", "--query-gpu=name,uuid,driver_version,memory.total",
                                     "--format=csv,noheader"], text=True).strip()
@@ -118,11 +124,12 @@ def main():
             for arm, result in paired.items():
                 errors = {key: abs(result["components_hartree"][key] - value)
                           for key, value in reference["components_hartree"].items()}
-                shift_error = max(abs(result["grac_shifts_hartree"][key] - value)
-                                  for key, value in reference["grac_shifts_hartree"].items())
+                shift_errors = [abs(result["grac_shifts_hartree"][key] - value)
+                                for key, value in reference["grac_shifts_hartree"].items()]
+                shift_error = max(shift_errors)
                 # Explicit scientific acceptance gate, not np.allclose defaults.
                 # Archive exact errors; stop instead of timing repeated wrong answers.
-                if (not all(math.isfinite(v) for v in [*errors.values(), shift_error])
+                if (not all(math.isfinite(v) for v in [*errors.values(), *shift_errors])
                         or max(errors.values()) > 1.e-6 or shift_error > 1.e-6):
                     atomic_json(args.output / "ACCURACY_FAILED.json",
                                 {"system": system, "basis": basis, "repeat": repeat + 1,

@@ -58,7 +58,7 @@ payload() {
         printf '%s\n' "$commit" > "$run_root/metadata/BUILD_COMMIT"
         return
     fi
-    test "$(head -n 1 "$run_root/metadata/BUILD_COMMIT")" = "$commit" || return 2
+    built_commit=$(head -n 1 "$run_root/metadata/BUILD_COMMIT") || return 2
     eval "$("$build/stage/bin/psi4" --psiapi)" || return $?
     export PYTHONPATH="$build/stage/lib"
     "$CONDA_PREFIX/bin/python" -c \
@@ -67,6 +67,12 @@ payload() {
     nvidia-smi --query-gpu=name,uuid,driver_version,memory.total --format=csv || return $?
     nvidia-smi --query-gpu=name --format=csv,noheader | grep -q H200 || return 2
     if [[ "$mode" == smoke ]]; then
+        "$CONDA_PREFIX/bin/python" devtools/benchmarks/build_receipt.py \
+            --source "$source_tree" --package "$build/stage/lib/psi4" \
+            --built-commit "$built_commit" --output "$run_root/metadata/new-build.json" || return $?
+        "$CONDA_PREFIX/bin/python" devtools/benchmarks/build_receipt.py \
+            --source "$old_source" --package "$old_source/build_saptdft_cuest_head/stage/lib/psi4" \
+            --built-commit "$old_commit" --output "$run_root/metadata/old-build.json" || return $?
         "$CONDA_PREFIX/bin/python" -m pytest -q \
             tests/pytests/test_cuest_sad.py tests/pytests/test_cuest_jk.py \
             tests/pytests/test_scf_lifecycle.py tests/pytests/test_basis_parse_reuse.py \
@@ -82,6 +88,8 @@ payload() {
             --old-source "$old_source" --old-commit "$old_commit" \
             --old-package "$old_source/build_saptdft_cuest_head/stage/lib/psi4" \
             --new-source "$source_tree" --new-commit "$commit" \
+            --old-receipt "$run_root/metadata/old-build.json" \
+            --new-receipt "$run_root/metadata/new-build.json" \
             --new-package "$build/stage/lib/psi4" --repeats 3 --threads 8 --memory "112 GiB"
     else
         echo "Unknown mode: $mode" >&2

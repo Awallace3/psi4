@@ -59,7 +59,7 @@ def geometry(system):
 def atomic_json(path, value):
     path = Path(path)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+    temporary.write_text(json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n")
     temporary.replace(path)
 
 
@@ -139,6 +139,11 @@ def run_case(args):
         start = time.perf_counter()
         energy = psi4.energy("sapt(dft)-d4(i)", molecule=molecule)
         record["wall_s"] = time.perf_counter() - start
+        record["host_memory"] = process_memory.host_report(
+            peak_reset_ok, rss_before, ledger_before, _memory_committed(psi4))
+        if sampler is not None:
+            record["device_memory"] = sampler.stop()
+            sampler = None
         record["timer_records"] = psi4.core.get_timer_records()
         record["returned_energy_hartree"] = energy
         record["components_hartree"] = {key: float(psi4.variable(key)) for key in COMPONENTS}
@@ -154,6 +159,8 @@ def run_case(args):
         record["sad_gpu_builder_seen"] = "SAD J/K backend: cuESTJK" in text
         if args.mode == "gpu" and args.sad_route == "gpu" and not record["sad_gpu_builder_seen"]:
             raise RuntimeError("Requested GPU SAD was not observed")
+        if args.sad_route == "cpu" and record["sad_gpu_builder_seen"]:
+            raise RuntimeError("CPU SAD requested but GPU SAD was observed")
         if args.mode == "gpu" and (not gpu_builder or cpu_builder):
             raise RuntimeError("GPU backend missing or CPU J/K fallback detected")
         if args.mode == "cpu" and gpu_builder:
@@ -168,13 +175,16 @@ def run_case(args):
         # exactly the case whose footprint is worth having.
         if sampler is not None:
             record["device_memory"] = sampler.stop()
+        if "host_memory" not in record:
+            record["host_memory"] = process_memory.host_report(
+                peak_reset_ok, rss_before, ledger_before, _memory_committed(psi4))
+            record["host_memory"]["peak_covers_timed_region_only"] = False
         # glibc keeps the freed caches in its arenas, so the resident set does not
         # fall on free alone and an untrimmed "after" reading says nothing.
         release = getattr(psi4.core, "release_freed_memory", None)
         if release is not None:
             release()
-        record["host_memory"] = process_memory.host_report(
-            peak_reset_ok, rss_before, ledger_before, _memory_committed(psi4))
+        record["host_memory"]["rss_after_trim_mib"] = process_memory.host_rss_mib()
         psi4.core.close_outfile()
         psi4.core.clean()
         atomic_json(output / "result.json", record)
