@@ -32,6 +32,8 @@
 #include "psi4/libmints/typedefs.h"
 
 #include <array>
+#include <map>
+#include <string>
 
 namespace psi {
 
@@ -60,6 +62,8 @@ struct FDDSModel {
     size_t qr_rank = 0;               ///< singular values of R kept by pinv(R, 1e-13); hybrid only
     size_t nthread = 0;
     size_t memory_bytes = 0, disk_bytes = 0, required_memory_bytes = 0, required_disk_bytes = 0;
+    /// Declared-pass loop counts per raw stream: dispatched blocks and peak block rows (not allocation/RSS)
+    std::map<std::string, std::array<size_t, 2>> declared_pass_blocks;
 };
 
 /// One frequency of the declared coefficient response.

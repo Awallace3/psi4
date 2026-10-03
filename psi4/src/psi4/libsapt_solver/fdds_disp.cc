@@ -1757,8 +1757,11 @@ void FDDS_Monomer::declared_pass(std::shared_ptr<DFHelper> raw, const SharedMatr
         auto Bd = T ? std::make_shared<Matrix>("declared", block * job.n2, pd) : in;
         auto out = std::make_shared<Matrix>("out", block * job.n2, pd);
         for (const auto& target : job.out) dfh_->add_disk_tensor(target.first, std::make_tuple(job.n1, job.n2, pd));
+        auto& seen = model_.declared_pass_blocks[job.raw];
         for (size_t start = 0; start < job.n1; start += block) {
             size_t nb = std::min(block, job.n1 - start), rows = nb * job.n2;
+            seen[0]++;
+            seen[1] = std::max(seen[1], rows);
             raw->fill_tensor(job.raw, in, {start, start + nb});
             if (T) C_DGEMM('N', 'T', rows, pd, pr, 1.0, in->pointer()[0], pr, T->pointer()[0], pr, 0.0,
                            Bd->pointer()[0], pd);

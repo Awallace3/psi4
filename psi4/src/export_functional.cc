@@ -409,9 +409,16 @@ void export_functional(py::module &m) {
                  r["disk_bytes"] = d.disk_bytes;
                  r["required_memory_bytes"] = d.required_memory_bytes;
                  r["required_disk_bytes"] = d.required_disk_bytes;
+                 py::dict blocks;
+                 for (const auto& kv : d.declared_pass_blocks)
+                     blocks[py::str(kv.first)] =
+                         py::dict(py::arg("blocks") = kv.second[0], py::arg("peak_rows") = kv.second[1]);
+                 r["declared_pass_blocks"] = blocks;
                  return r;
              },
-             "Declared-path construction record: truncations, QR rank, refusal policy and conventions.")
+             "Declared-path construction record: truncations, QR rank, refusal policy and conventions. "
+             "declared_pass_blocks counts the dispatched blocks and peak block rows per raw stream; it is a loop "
+             "diagnostic, not an allocation or RSS measurement.")
         .def(
             "form_coefficient_response",
             [](sapt::FDDS_Monomer& m, double omega, double x_alpha, SharedMatrix kernel) {

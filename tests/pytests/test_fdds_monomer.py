@@ -700,6 +700,58 @@ def test_declared_pass_charges_the_live_raw_dfhelper(orbitals, hybrid, tmp_path)
     assert os.listdir(tmp_path) == []
 
 
+def test_declared_pass_blocks_beside_the_retained_raw_storage(orbitals, tmp_path):
+    """Each declared-pass block holds n2 rows of raw/declared/out (pr + 2 pd doubles each) beside T, J_d^-1/2
+    and the raw DFHelper's retained storage. With 36 virtuals and an RI auxiliary basis the hybrid (rr|Q) stream
+    blocks at admitted budgets; the budget leaves it k blocks of rows plus one row short of k + 1, so blocks
+    sized without the retained storage would be k + 1 rows long."""
+    mol = orbitals[0].molecule()
+    psi4.set_options({"basis": "aug-cc-pvdz", "scf_type": "df", "e_convergence": 1.e-10, "d_convergence": 1.e-10})
+    _, wfn = psi4.energy("hf", molecule=mol, return_wfn=True)
+    primary, aux = wfn.basisset(), psi4.core.BasisSet.build(mol, "ORBITAL", "cc-pvdz-ri")
+    data = (primary, aux, wfn.Ca_subset("AO", "OCC"), wfn.Ca_subset("AO", "VIR"), wfn.epsilon_a_subset("AO", "OCC"),
+            wfn.epsilon_a_subset("AO", "VIR"))
+    o, v, pr = data[2].cols(), data[3].cols(), aux.nbf()
+    n, nshell = primary.nbf(), primary.nshell()
+    fixed = n * n + nshell * nshell + 5 * n + nshell + aux.nshell() + 5 + 2 * pr * pr
+    per = lambda n2: n2 * 3 * pr
+    streams = {"arQ": (o, v), "raQ": (v, o), "aaQ": (o, o), "rrQ": (v, v)}
+
+    def budget(hybrid):
+        req = psi4.core.FDDS_Monomer.requirement(primary, aux, o, v, pr, hybrid, "OUT_OF_CORE", 1)
+        return req, req["resident_bytes"] // 8, req["memory_bytes"] // 8 - req["resident_bytes"] // 8
+
+    def expected(work, jobs):
+        rows = {job: min(n1, (work - fixed) // per(n2)) for job, (n1, n2) in jobs.items()}
+        return {job: {"blocks": -(-streams[job][0] // r), "peak_rows": r * streams[job][1]} for job, r in rows.items()}
+
+    # Non-hybrid: the raw DFHelper stage leaves room for all nocc first-index rows of (ar|Q) in one block.
+    req, resident, work = budget(False)
+    nonhybrid = declared(data, False, tmp_path)
+    assert nonhybrid.model()["declared_pass_blocks"] == expected(work, {"arQ": (o, v)}) == {
+        "arQ": {"blocks": 1, "peak_rows": o * v}}
+
+    req, resident, minimum = budget(True)
+    k = -(-(minimum - fixed + 1) // per(v)) - 1
+    assert 1 <= k < v  # admitted and genuinely blocked
+    work = fixed + (k + 1) * per(v) - 1
+    mono = psi4.core.FDDS_Monomer(*data, True, memory_bytes=8 * (resident + work), disk_bytes=req["disk_bytes"],
+                                  scratch_dir=str(tmp_path), nthread=1)
+    blocks = mono.model()["declared_pass_blocks"]
+    assert blocks["rrQ"] == {"blocks": -(-v // k), "peak_rows": k * v}
+    assert blocks == expected(work, streams)
+
+    kernel = psi4.core.Matrix.from_array(mono.metric().np + 0.03 * mono.aux_overlap().np)
+    chi = mono.form_coefficient_response(0.4, 0.25, kernel)["response"].np
+    generous = declared(data, True, tmp_path, extra=10**8)
+    assert all(d["blocks"] == 1 for d in generous.model()["declared_pass_blocks"].values())
+    reference = generous.form_coefficient_response(0.4, 0.25, kernel)["response"].np
+    np.testing.assert_allclose(chi, reference, rtol=0, atol=1.e-12 * np.abs(reference).max())
+    del nonhybrid, mono, generous
+    gc.collect()
+    assert os.listdir(tmp_path) == []
+
+
 def test_declared_integral_storage_is_charged(orbitals):
     primary, auxiliary = orbitals[:2]
 
