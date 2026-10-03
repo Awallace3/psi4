@@ -1,0 +1,401 @@
+name: Basis parse reuse CI (fork-only)
+
+on:
+  push:
+    branches:
+      - basis-parse-reuse-ci
+  workflow_dispatch:
+
+permissions:
+  contents: read  #  to fetch code (actions/checkout)
+
+jobs:
+
+  ecosystem:
+    strategy:
+      fail-fast: false
+      matrix:
+        cfg:
+
+          - label: "Conda GNU (L)"
+            runs-on: ubuntu-latest
+            python-version: "3.14"
+            mkl-version: ""
+            platform: linux-64
+            pytest-marker-expr: "addon and not (medlong or long)"
+            pytest-name-expr: "not pe_ecp"
+            cmargs: >
+              -D CMAKE_VERBOSE_MAKEFILE=OFF
+              -D ENABLE_v2rdm_casscf=ON
+              -D CMAKE_DISABLE_FIND_PACKAGE_v2rdm_casscf=ON
+
+    name: "Eco • 🐍 ${{ matrix.cfg.python-version }} • ${{ matrix.cfg.label }}"
+    runs-on: ${{ matrix.cfg.runs-on }}
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+
+      # fetch-depth: 0 gets git history so Psi4 version is computable
+    - name: Checkout Psi4
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+      # see CMAKE_OSX_SYSROOT and CMAKE_Fortran_FLAGS for use
+      # mac_ver line returns, e.g., "10.15" for Catalina & "11.6" for Big Sur. but phracker doesn't support all minor, so some logic to hardcode.
+    - name: Prepare compiler environment, SDK (M)
+      #if: runner.os == 'macOS'
+      if: false
+      run: |
+        macos_Mm=$(SYSTEM_VERSION_COMPAT=0 python -c "import platform; Mmp = platform.mac_ver()[0]; Mm = '.'.join(Mmp.split('.')[:2]); print(Mm)")
+        macos_M=$(SYSTEM_VERSION_COMPAT=0 python -c "import platform; Mmp = platform.mac_ver()[0]; M = '.'.join(Mmp.split('.')[:1]); print(M)")
+        echo $macos_Mm $macos_M
+        if [[ "${macos_M}" == "11" ]]; then
+            macos_Mm=11.3
+        elif [[ "${macos_M}" == "12" ]]; then
+            # until phracker merges and releases 12 via https://github.com/phracker/MacOSX-SDKs/pull/44
+            macos_Mm=11.3
+        elif [[ "${macos_M}" == "13" ]]; then
+            macos_Mm=11.3
+        fi
+        echo $macos_Mm
+        curl -L https://github.com/phracker/MacOSX-SDKs/releases/download/${macos_Mm}/MacOSX${{ matrix.cfg.target-sdk }}.sdk.tar.xz | sudo tar xf - -C /opt/
+
+      # equivalent to `call vcvarsall.bat x64`. see Azure script to follow cmdline.
+    - name: Prepare compiler environment, vcvarsall (W)
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+
+      # see OpenMP_LIBRARY_DIRS for use
+      # no longer needed since intel-openmp conda package now provides dll & lib
+    - name: Prepare OpenMP build environment, libiomp5md.lib (W)
+      #if: runner.os == 'Windows'
+      if: false
+      run: git clone https://github.com/psi4/iomp5md.git
+
+    - name: Write Conda environment files
+      run: |
+        #
+        # Buildtime/Runtime (L, M, W)
+        #
+        echo "::group::Prepare OS Python"
+        which python
+        python --version
+        pip install PyYAML
+        echo "::endgroup::"
+        #
+        conda/psi4-path-advisor.py \
+          env \
+          --name p4build \
+          --python ${{ matrix.cfg.python-version }} \
+          --disable docs \
+          --offline-conda
+        echo "::group::View Env Spec File for Conda (from advisor)"
+        printf "\n<<<  env_p4build.yaml  >>>\n"
+        cat env_p4build.yaml
+        echo "::endgroup::"
+        #
+        if [[ "${{ runner.os }}" == "Linux" ]]; then
+          :
+        fi
+        if [[ "${{ runner.os }}" == "macOS" && "${{ matrix.cfg.python-version }}" == "3.14" ]]; then
+          :
+          # sed -E -i.bak "s;- qcfractal;#- qcfractal;g" env_p4build.yaml
+        fi
+        if [[ "${{ runner.os }}" != "macOS" && "${{ matrix.cfg.python-version }}" == "3.14" ]]; then
+          :
+          # sed -i "s;- qcfractal;#- qcfractal;g" env_p4build.yaml
+        fi
+        if [[ "${{ runner.os }}" == "macOS" && "${{ matrix.cfg.label }}" == "Conda Clang (M-Intel)" ]]; then
+          :
+          sed -E -i.bak "s;- memory_profiler;#- memory_profiler;g" env_p4build.yaml
+          # sed -E -i.bak "s;;;g" env_p4build.yaml
+        fi
+        if [[ "${{ runner.os }}" == "macOS" && "${{ matrix.cfg.label }}" == "Conda Clang (M-Silicon)" ]]; then
+          :
+          sed -E -i.bak "s;accelerate;openblas;g" env_p4build.yaml
+          sed -E -i.bak "s;- memory_profiler;#- memory_profiler;g" env_p4build.yaml
+          # memory leaks. accelerate is fine but openblas matches the scf-cholesky stored values
+        fi
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          :
+          # sed -i "s;#- dpcpp_linux-64;- clangdev ${{ matrix.cfg.llvm-version }};g" env_p4build.yaml
+        fi
+        echo "  - pygments" >> env_p4build.yaml
+        echo "::group::View Env Spec File for Conda (Edited)"
+        printf "\n<<<  env_p4build.yaml  >>>\n"
+        cat env_p4build.yaml
+        echo "::endgroup::"
+
+    - name: Setup Conda
+      uses: conda-incubator/setup-miniconda@v4
+      with:
+        activate-environment: p4build
+        environment-file: env_p4build.yaml
+        show-channel-urls: true
+        python-version: ${{ matrix.cfg.python-version }}
+        auto-activate-base: false
+        add-pip-as-python-dependency: true
+        channels: conda-forge
+        conda-remove-defaults: true
+
+    - name: Buildtime Conda environment
+      run: |
+        conda info
+        conda list
+
+    - name: Special Config - Force testing OpenOrbitalOptimizer
+      if: matrix.cfg.python-version == 3.14 && (matrix.cfg.label == 'Conda Clang (M-Silicon)')
+      run: |
+        grep OPENORBITALOPTIMIZER psi4/src/read_options.cc
+        if [[ "${{ runner.os }}" == "macOS" ]]; then
+          sed -E -i.bak 's;(options\.add_str\("ORBITAL_OPTIMIZER_PACKAGE", ")INTERNAL(", "INTERNAL OOO OPENORBITALOPTIMIZER");\1OOO\2;' psi4/src/read_options.cc
+        else
+          sed -i 's;\(options\.add_str("ORBITAL_OPTIMIZER_PACKAGE", "\)INTERNAL\(", "INTERNAL OOO OPENORBITALOPTIMIZER"\);\1OOO\2;' psi4/src/read_options.cc
+        fi
+        grep OPENORBITALOPTIMIZER psi4/src/read_options.cc
+
+    - name: Configure Psi4, ${{ matrix.cfg.label }}
+      run: |
+        conda/psi4-path-advisor.py \
+          cache \
+          --objdir objdir \
+          --insist
+        echo "::group::View Cache File for CMake"
+        printf "\n<<<  cache_p4build@objdir.cmake  >>>\n"
+        pygmentize -g -O style=friendly,linenos=1 cache_p4build@objdir.cmake
+        echo "::endgroup::"
+        #
+        # Note: using the cache file (-C below) is optional. See cmargs above.
+        #   The cache file is doing the -D ENABLE_<addon>=ON work.
+        cmake \
+          -S. \
+          -B objdir \
+          -G Ninja \
+          -C "${{ github.workspace }}/cache_p4build@objdir.cmake" \
+          -D CMAKE_INSTALL_PREFIX=./install \
+          -D psi4_ENABLE_PRECOMPILE_HEADERS=ON \
+          ${{ matrix.cfg.cmargs }}
+
+    - name: Compile & Install Psi4
+      run: cmake --build objdir --config Release --target install
+
+    - name: Linked dependencies, ldd (L)
+      if: runner.os == 'Linux'
+      run: ldd objdir/stage/lib/psi4/core.*.so
+
+    - name: Linked dependencies, otool (M)
+      if: runner.os == 'macOS'
+      run: otool -L objdir/stage/lib/psi4/core.*.so
+
+    - name: Linked dependencies, objdump (W)
+      if: runner.os == 'Windows'
+      shell: cmd /C CALL {0}
+      run: objdump.exe -p objdir\stage\lib\psi4\core.*.pyd | grep dll
+
+    - name: Special Config - QCElemental Dep
+      if: false
+      run: |
+        conda remove qcelemental --force
+        python -m pip install git+https://github.com/MolSSI/QCElemental.git@v0.50.1 --no-deps
+
+    - name: Special Config - QCEngine Dep
+      if: false  # needed for Windows + DFTD4
+      run: |
+        conda remove qcengine --force  # TODO UNDO after https://github.com/MolSSI/QCEngine/pull/472
+        python -m pip install git+https://github.com/loriab/QCEngine.git@d4why --no-deps
+
+    - name: Special Config - QCManyBody Dep
+      if: false
+      run: |
+        conda remove qcmanybody --force
+        python -m pip install git+https://github.com/loriab/QCManyBody.git@qcsk_v1v2_rearr --no-deps
+
+    - name: Special Config - OptKing Dep
+      if: false
+      run: |
+        conda remove optking --force || true
+
+    - name: Special Config - QCFractal Dep
+      if: false
+      run: |
+        conda remove qcfractal --force
+        python -m pip install -e 'git+https://github.com/MolSSI/QCFractal.git@main#egg=qcfractal&subdirectory=qcfractal'
+
+    - name: Special Config - Download MolSSI/QCFractal Repo
+      if: runner.os != 'Windows'
+      uses: actions/checkout@v6
+      with:
+        repository: MolSSI/QCFractal
+        path: qca
+        ref: main
+        fetch-depth: 0
+
+    - name: Install All QCArchive packages
+      if: runner.os != 'Windows'
+      working-directory: ./qca
+      run: |
+          pip install -e ./qcportal -e ./qcfractalcompute -e ./qcfractal[services,geoip,snowflake]
+
+    - name: Special Config - Patch Legacy QCFractal for Python
+      if: false
+      run: |
+        sed -E -i.bak "s;for result in self.queue.values\(\);for result in list(self.queue.values());g" /Users/runner/miniconda3/envs/p4build/lib/python${{ matrix.cfg.python-version }}/site-packages/qcfractal/queue/executor_adapter.py
+
+    - name: Special Config - Wrong Psi4
+      run: conda remove psi4 --force || true
+      # in case the conda package of a downstream addon (like resp) brings the psi4 conda package, which is not the psi4 we want to test
+
+    - name: Runtime Conda environment
+      working-directory: ./objdir
+      run: |
+        conda info
+        conda list
+        if [[ "${{ runner.os }}" != "Windows" ]]; then
+          # on Windows, cmd varies: `qcengine.exe`
+          qcengine info
+        fi
+
+    - name: Test OpenMP
+      working-directory: ./install/lib
+      run: python -c "from psi4 import core; core.set_num_threads(42); assert core.get_num_threads() == 42"
+
+    - name: Test Run, Spot, Run
+      working-directory: ./objdir
+      run: |
+        export PATH=../install/bin:$PATH
+        #export KMP_DUPLICATE_LIB_OK=TRUE
+        psi4 ../tests/tu1-h2o-energy/input.dat -o stdout
+
+    - name: Psi4 Path Setup Diagnostics
+      if: false
+      working-directory: ./objdir
+      run: |
+        ls -l
+        pwd
+        python -c "import sys;print(sys.path)"
+        echo ROUND1
+        python -c "import qcelemental as q;print(q.util.which('psi4'))" || true
+        psi4 --module || true
+        python -c "import qcelemental as q;print(q.util.which_import('psi4'))" || true
+        python -c "import psi4; print(psi4.executable)" || true
+        echo ROUND1NG
+        python -c "import qcengine as qcng; qcng.get_program('psi4')" || true
+        echo ROUNDE
+        PATH=stage/bin:$PATH python -c "import qcelemental as q;print(q.util.which('psi4'))" || true
+        PATH=stage/bin:$PATH psi4 --module || true
+        PATH=stage/bin:$PATH python -c "import qcelemental as q;print(q.util.which_import('psi4'))" || true
+        PATH=stage/bin:$PATH python -c "import psi4; print(psi4.executable)" || true
+        echo ROUNDE-NG
+        PATH=stage/bin:$PATH python -c "import qcengine as qcng; qcng.get_program('psi4')" || true
+        echo ROUNDP
+        PYTHONPATH=stage/lib python -c "import qcelemental as q;print(q.util.which('psi4'))" || true
+        PYTHONPATH=stage/lib psi4 --module || true
+        PYTHONPATH=stage/lib python -c "import qcelemental as q;print(q.util.which_import('psi4'))" || true
+        PYTHONPATH=stage/lib python -c "import psi4; print(psi4.executable)" || true
+        echo ROUNDP-NG
+        PYTHONPATH=stage/lib python -c "import qcengine as qcng; qcng.get_program('psi4')" || true
+        if [[ "${{ runner.os }}" != "Windows" ]]; then
+          echo EIN
+          python -c "import einsums"
+          echo END PLAIN EIN
+          python -c "import einsums as ein;print(ein.__file__)"
+          echo END EIN
+        fi
+        echo ROUND4
+        eval $(stage/bin/psi4 --psiapi)
+        python -c "import qcelemental as q;print(q.util.which('psi4'))" || true
+        psi4 --module || true
+        python -c "import qcelemental as q;print(q.util.which_import('psi4'))" || true
+        python -c "import psi4; print(psi4.executable)" || true
+        echo ROUND4-NG
+        python -c "import qcengine as qcng; qcng.get_program('psi4')" || true
+
+      # step works but for addons is redundant with next one; enable for debugging. enabled for Mac b/c core testing not covered by Azure DevOps
+    - name: Test Core with CTest (M)
+      if: runner.os == 'macOS'
+      working-directory: ./objdir
+      run: ctest -L quick -j2 --output-on-failure  # `-LE d2ints` needed for Windows
+
+      # Win runs out of memory on the geometric mp2(conv) tests, so run them with less parallelism
+    - name: Test Addons with Pytest (geomeTRIC)
+      working-directory: ./objdir
+      run: PYTHONPATH=stage/lib pytest --cache-clear -v -rws --durations=50 --durations-min=40 --strict-markers --color yes -n 2 -m "geometric" stage/lib/psi4/tests/
+
+    - name: Test basis construction (fork-only, non-addon)
+      working-directory: ./objdir
+      run: |
+        PYTHONPATH=stage/lib pytest --cache-clear -v -rws --strict-markers --color yes -n auto stage/lib/psi4/tests/test_basis_parse_reuse.py stage/lib/psi4/tests/test_weird_basis.py stage/lib/psi4/tests/test_mints.py stage/lib/psi4/tests/test_ecp.py stage/lib/psi4/tests/test_orbitalspace.py
+        PYTHONPATH=stage/lib pytest --cache-clear -q -rws --strict-markers --color yes -n auto -m "quick and not addon" stage/lib/psi4/tests/
+        ctest -R "mints|basis|decontract|ecp|sad|guess|castup|ghost|puream|psithon|scf5|scf6" -LE "long|longtests" -j 4 --output-on-failure
+
+    - name: Test Addons with Pytest
+      working-directory: ./objdir
+      run: PYTHONPATH=stage/lib pytest --cache-clear -v -rws --durations=50 --durations-min=40 --strict-markers --color yes -n auto -m "${{ matrix.cfg.pytest-marker-expr }} and not geometric" -k "${{ matrix.cfg.pytest-name-expr }}" stage/lib/psi4/tests/
+
+    - name: Write user Conda environment files
+      run: |
+        pygmentize -g env_p4build.yaml
+        pygmentize -g cache_p4build@objdir.cmake
+        conda/psi4-path-advisor.py -vv
+        cp env_p4build.yaml "devtools/conda-envs/${{ matrix.cfg.platform }}-buildrun.yaml"
+        git diff --color-words
+
+    - name: Analyze Conda dependencies
+      if: runner.os != 'Windows'
+      run: |
+        conda install conda-tree -c conda-forge
+        conda-tree deptree
+
+    - name: dlopen -- Remove Addons
+      if: matrix.cfg.python-version == '3.14' && runner.os != 'Windows'
+      run: conda remove qcmanybody --force -y
+
+    - name: dlopen -- Runtime Conda environment
+      if: matrix.cfg.python-version == '3.14' && runner.os != 'Windows'
+      working-directory: ./objdir
+      run: |
+        conda info
+        conda list
+        PYTHONPATH=stage/lib python -c "import psi4; print(psi4.__file__)"
+
+    - name: dlopen -- Test Addons with Pytest
+      if: matrix.cfg.python-version == '3.14' && runner.os != 'Windows'
+      working-directory: ./objdir
+      run: |
+        export PYTHONPATH=stage/lib
+        pytest --cache-clear -v -rws --color yes -n auto -m qcmanybody stage/lib/psi4/tests/
+        pytest --cache-clear -v -rws --color yes -n auto -k missing stage/lib/psi4/tests/
+
+# Notes
+# -----
+
+# Error: (W) "OMP: Error #15: Initializing libiomp5md.dll, but found libomp.dll already initialized." or analysis shows linked to libomp.dll
+# Soln: feed OpenMP_LIBRARY_DIRS so selects correct libiomp5md.lib so analysis shows linked to libiomp5md.dll
+# Apr 2025 Soln: this can also arise when a dep links in llvm-openmp instead of intel-openmp
+
+# Error (W) "  File "D:\a\psi4\psi4\objdir\stage\lib\psi4\__init__.py", line 55, in <module>
+#              from . import core
+#              ImportError: DLL load failed while importing core: The specified module could not be found."
+# Soln:
+#   Have mkl-devel=<mkl-version> -or- mkl=<mkl-version> in runtime environment to match mkl-devel=<mkl-version> in build env.
+#   Having intel-openmp=<mkl-version> in build and run seems fine but not necessary.
+#   one of mkl=${{ matrix.cfg.mkl-version }} or mkl-devel=${{ matrix.cfg.mkl-version }} needed to avoid DLL runtime error
+
+# Error: (W) "DLL load failed while importing _multiarray_umath: The specified module could not be found."
+# Soln: Add `C:\tools\miniconda3\Library\mingw-w64\bin` to PATH
+
+# Using Intel's OpenMP on Windows needs libiomp5md.lib (import library) and libiomp5md.dll at buildtime and libiomp5md.dll at runtime.
+#   No conda package provides libiomp5md.lib, so we stashed one from 2019.1 on GH and clone it here for the build.
+#   We feed the cloned path to the build via OpenMP_LIBRARY_DIRS. 2019.1 has been the iomp5 version for a long time.
+#   But by now, only defaults conda channel has a complementary intel-openmp=2019.1 package with the dll.
+#   In order to update the version and to allow a single channel base, conda-forge, using mkl-version=2021.4 still with that
+#   same 2019.1 iomp5, and it seems to work fine. Is all this really necessary? I don't know.
+#   There is another libiomp5md.lib that comes with llvm and lives at "C:\Program Files\LLVM\lib\libiomp5md.lib".
+#   Attempts to use it quickly fell off the narrow path-of-compilability-and-runability but should be explored again.
+# 2024: While MKL 2023 and 2024.1 (and probably 2022.1) work fine, 2024.2 causes DYSEV errors and other wrong answers on
+#   Windows, possibly intel-openmp needs restriction, too.
