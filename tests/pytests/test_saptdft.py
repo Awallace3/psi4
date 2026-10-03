@@ -2175,6 +2175,89 @@ def test_dft_vv10_sapt():
     assert VV10_IE < 0.0, f"VV10 IE should be negative for water dimer, got {VV10_IE}"
 
 
+@pytest.mark.saptdft
+@pytest.mark.parametrize("module", ["sapt_mp2_terms", "sapt_mp2_terms_ein"])
+def test_fdds_alda_kernel_range_separation(module):
+    """
+    The FDDS LDA exchange kernel keeps only the DFT share of exchange. For an
+    LRC functional that is (1 - x_alpha) at short range and (1 - x_alpha -
+    x_beta) at long range, so with 100% long-range exact exchange the kernel is
+    the erfc-attenuated LDA one. A global hybrid (x_beta = 0) is unchanged.
+    """
+    import importlib
+    import numpy as np
+
+    sapt_mod = importlib.import_module(f"psi4.driver.procrouting.sapt.{module}")
+    rho = np.array([1.0e-3, 1.0e-2, 1.0e-1, 1.0])
+    eye = psi4.core.Matrix.from_array(np.eye(rho.size))
+    PQrho = psi4.core.Matrix.from_array(np.diag(rho))
+
+    def kernel(name, omega=None):
+        inp = {"RHO_A": psi4.core.Vector.from_array(rho)}
+        out = {k: psi4.core.Vector(rho.size) for k in ["V", "V_RHO_A", "V_RHO_A_RHO_A"]}
+        func = psi4.core.LibXCFunctional(name, True)
+        if omega is not None:
+            func.set_omega(omega)
+        func.compute_functional(inp, out, rho.size, 2)
+        return out["V_RHO_A_RHO_A"].np.copy()
+
+    fx, fc = kernel("XC_LDA_X"), kernel("XC_LDA_C_VWN")
+
+    def fxc(**kw):
+        return np.diag(sapt_mod._compute_fxc(PQrho, eye, eye, rho_thresh=1.0e-12, **kw).np)
+
+    # Global hybrid (PBE0): unchanged from the pre-LRC kernel.
+    assert compare_values((1.0 - 0.25) * fx + fc, fxc(x_alpha=0.25), 12, "global hybrid kernel")
+    # wB97X: x_alpha + x_beta = 1, so only the short-range LDA exchange survives.
+    x_alpha, x_beta, omega = 0.157706, 0.842294, 0.3
+    sr = kernel("XC_LDA_X_ERF", omega)
+    assert compare_values((1.0 - x_alpha - x_beta) * fx + x_beta * sr + fc,
+                          fxc(x_alpha=x_alpha, x_beta=x_beta, omega=omega), 12, "wB97X kernel")
+    assert compare_values((1.0 - x_alpha) * sr + fc, fxc(x_alpha=x_alpha, x_beta=x_beta, omega=omega), 10,
+                          "100% long-range HF leaves (1 - x_alpha) of the short-range kernel")
+    # omega -> 0 attenuates nothing: the global-hybrid kernel with x_alpha only.
+    assert compare_values((1.0 - x_alpha) * fx + fc, fxc(x_alpha=x_alpha, x_beta=x_beta, omega=1.0e-10), 8,
+                          "omega -> 0 limit")
+
+
+
+@pytest.mark.saptdft
+def test_fdds_lrc_without_global_exchange_uses_hybrid_kernel():
+    """
+    LC-wPBE has no global exact exchange (x_alpha = 0, x_beta = 1), so it is not
+    is_x_hybrid(). Its FDDS kernel must still carry the long-range wK: Disp20
+    with the default hybrid kernel differs from the pure ALDA kernel
+    (SAPT_DFT_DO_HYBRID false). Before the fix the two were bitwise equal.
+    """
+    disp = {}
+    for hybrid in [True, False]:
+        psi4.core.clean()
+        psi4.core.clean_variables()
+        psi4.core.clean_options()
+        psi4.geometry("""
+He 0 0 0
+--
+He 0 0 3.0
+units angstrom
+symmetry c1
+""")
+        psi4.set_options({
+            "basis": "aug-cc-pvdz",
+            "df_basis_scf": "aug-cc-pv5z-ri",
+            "scf_type": "df",
+            "sapt_dft_functional": "lc-wpbe",
+            "sapt_dft_grac_shift_a": 0.0,
+            "sapt_dft_grac_shift_b": 0.0,
+            "sapt_dft_do_hybrid": hybrid,
+            "e_convergence": 1e-10,
+            "d_convergence": 1e-9,
+        })
+        psi4.energy("sapt(dft)")
+        disp[hybrid] = psi4.variable("DISP20")
+    assert disp[True] < 0.0 and disp[False] < 0.0
+    assert abs(disp[True] - disp[False]) > 1e-3 * abs(disp[False]), disp
+
+
 if __name__ == "__main__":
     psi4.set_memory("32 GB")
     psi4.set_num_threads(12)

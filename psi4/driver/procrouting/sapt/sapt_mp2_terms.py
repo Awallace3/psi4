@@ -44,9 +44,18 @@ def _symmetrize(mat):
     return tmp
 
 
-def _compute_fxc(PQrho, half_Saux, halfp_Saux, x_alpha, rho_thresh=1.e-8):
+def _compute_fxc(PQrho, half_Saux, halfp_Saux, x_alpha, rho_thresh=1.e-8, x_beta=0.0, omega=0.0):
     """
     Computes the gridless (P|fxc|Q) ALDA tensor.
+
+    The LDA exchange kernel carries only the DFT share of exchange. For a
+    range-separated functional, exact exchange is x_alpha at every range
+    plus x_beta at long range, so the DFT share is (1 - x_alpha) at short
+    range and (1 - x_alpha - x_beta) at long range:
+
+        fx = (1 - x_alpha - x_beta) fx(LDA) + x_beta fx(LDA, short range, omega)
+
+    which reduces to (1 - x_alpha) fx(LDA) for a global hybrid (x_beta = 0).
     """
 
     naux = PQrho.shape[0]
@@ -70,7 +79,16 @@ def _compute_fxc(PQrho, half_Saux, halfp_Saux, x_alpha, rho_thresh=1.e-8):
 
     func_x = core.LibXCFunctional('XC_LDA_X', True)
     func_x.compute_functional(inp, out, dft_size, 2)
-    out["V_RHO_A_RHO_A"].scale(1.0 - x_alpha)
+    out["V_RHO_A_RHO_A"].scale(1.0 - x_alpha - x_beta)
+
+    if x_beta != 0.0:
+        # Short-range (erfc-attenuated) LDA exchange: its DFT share x_beta is
+        # replaced at long range by the x_beta wK of the hybrid FDDS kernel.
+        sr = {"V": core.Vector(dft_size), "V_RHO_A": core.Vector(dft_size), "V_RHO_A_RHO_A": core.Vector(dft_size)}
+        func_x_sr = core.LibXCFunctional('XC_LDA_X_ERF', True)
+        func_x_sr.set_omega(omega)
+        func_x_sr.compute_functional(inp, sr, dft_size, 2)
+        out["V_RHO_A_RHO_A"].axpy(x_beta, sr["V_RHO_A_RHO_A"])
 
     func_c = core.LibXCFunctional('XC_LDA_C_VWN', True)
     func_c.compute_functional(inp, out, dft_size, 2)
@@ -95,6 +113,8 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, x_beta=0.0
         core.print_out("   Legendre Points:  % 10d\n" % leg_points)
         core.print_out("   Lambda Shift:     % 10.3f\n" % leg_lambda)
         core.print_out("   Fxc Kernal:       % 10s\n" % "ALDA")
+        if is_lrc and x_beta != 0.0:
+            core.print_out("   LDA X Kernel:     erfc-attenuated, omega = %.4f\n" % omega)
         core.print_out("   (P|Fxc|Q) Thresh: % 8.3e\n" % rho_thresh)
 
     # Build object
@@ -121,11 +141,13 @@ def df_fdds_dispersion(primary, auxiliary, cache, is_hybrid, x_alpha, x_beta=0.0
 
     # Builds potentials
     W_A = fdds_obj.metric().clone()
-    W_A.axpy(1.0, _compute_fxc(D[0], half_Saux, halfp_Saux, x_alpha, rho_thresh=rho_thresh))
+    W_A.axpy(1.0, _compute_fxc(D[0], half_Saux, halfp_Saux, x_alpha, rho_thresh=rho_thresh,
+                                x_beta=x_beta if is_lrc else 0.0, omega=omega))
     W_A = W_A.to_array()
 
     W_B = fdds_obj.metric().clone()
-    W_B.axpy(1.0, _compute_fxc(D[1], half_Saux, halfp_Saux, x_alpha, rho_thresh=rho_thresh))
+    W_B.axpy(1.0, _compute_fxc(D[1], half_Saux, halfp_Saux, x_alpha, rho_thresh=rho_thresh,
+                                x_beta=x_beta if is_lrc else 0.0, omega=omega))
     W_B = W_B.to_array()
 
     # Nuke the densities

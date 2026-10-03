@@ -1744,7 +1744,9 @@ def sapt_dft(
         is_x_lrc = wfn_B.functional().is_x_lrc()
         hybrid_specified = core.has_option_changed("SAPT", "SAPT_DFT_DO_HYBRID")
         if do_hybrid:
-            is_hybrid = is_x_hybrid
+            # An LRC functional with no global exact exchange (LC-wPBE, wB97: x_alpha = 0,
+            # x_beta = 1) is not is_x_hybrid(), but its kernel still needs the long-range wK.
+            is_hybrid = is_x_hybrid or is_x_lrc
         else:
             is_hybrid = False
 
