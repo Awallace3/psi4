@@ -63,6 +63,10 @@ FDDS_METRIC_RCOND_CUTOFF = 1e-14
 class NativeFDDSOptions:
     """Explicit native FDDS resources: OpenMP threads and peak scratch bytes.
 
+    ``nthread`` covers native integral generation and declared blocking only;
+    the per-frequency amplitude/aux-matrix loops and BLAS use the process
+    thread counts.
+
     ``disk_bytes`` is the native instance's peak private scratch size, enforced
     by native. ``max_io_bytes`` is charged a source-derived estimate of the
     native tensor-file traffic at admission (see ``_native_fdds_estimates``),
@@ -181,7 +185,9 @@ class _Store:
 def _gram_terms(ov, dual):
     p, no, nv = ov.shape
     v = ov.transpose(0, 2, 1).reshape(p, no*nv).T @ dual.transpose(0, 2, 1).reshape(p, no*nv)
-    y = v.reshape(nv, no, nv, no).transpose(2, 1, 0, 3).reshape(no*nv, no*nv).copy()
+    # Exactly one owned n x n copy: a bare reshape can return a view of v
+    # (no or nv equal to 1), and y must never alias v in the in-place combine.
+    y = np.array(v.reshape(nv, no, nv, no).transpose(2, 1, 0, 3), order='C', copy=True).reshape(no*nv, no*nv)
     return v, y
 
 
@@ -291,12 +297,20 @@ class _H2H1Response:
     reloading and re-multiplying H1/H2 per node. Each node factors its own
     shifted copy and gates the residual against the same shifted operator.
     """
+    BLOCK = 512
+
+    @classmethod
+    def plan_bytes(cls, n, p, q):
+        """(retained operator, construction transient, per-node) numeric bytes."""
+        return (8*(n*n+2*n*(p+q)), 8*(2*n*n+n*(p+q))+8*1024**2,
+                8*(n*n+2*n*(p+q)+3*n*cls.BLOCK+p*p+q*q+16*n)+8*1024**2)
+
     def __init__(self, store, dimensions, q):
         p, no, nv = dimensions
         n = no*nv
         self.ledger, self.p, self.q, self.n = store.ledger, p, q, n
-        self.retained = 8*(n*n+2*n*(p+q))
-        self.ledger.admit('H2H1 response operator', self.retained+8*(2*n*n+n*(p+q))+8*1024**2,
+        self.retained, construction, self.node_bytes = self.plan_bytes(n, p, q)
+        self.ledger.admit('H2H1 response operator', self.retained+construction,
                           int(2*n**3+2*n*n*(p+q)))
         h1, h2 = store.load('h1'), store.load('h2')
         self.matrix = h2 @ h1
@@ -313,9 +327,8 @@ class _H2H1Response:
         self.matrix = self.legs = self.rhs = None
 
     def solve(self, omega):
-        p, q, n, block = self.p, self.q, self.n, 512
-        self.ledger.admit('frequency response', 8*(n*n+2*n*(p+q)+3*n*block+p*p+q*q+16*n)+8*1024**2,
-                          int(2*n**3/3+6*n*n*(p+q)))
+        p, q, n, block = self.p, self.q, self.n, self.BLOCK
+        self.ledger.admit('frequency response', self.node_bytes, int(2*n**3/3+6*n*n*(p+q)))
         shifted = self.matrix.copy()
         shifted.flat[::n+1] += omega*omega
         with warnings.catch_warnings():
@@ -379,10 +392,21 @@ def _kernel(auxiliary, density, grid, smoothing, cutoff, ledger):
     return result
 
 
+def _streamed_sha256(array, value=None):
+    """SHA-256 of ``array.tobytes()`` (C order) without a full-array byte copy."""
+    value = hashlib.sha256() if value is None else value
+    if array.ndim < 2 or array.flags.c_contiguous:
+        value.update(memoryview(np.ascontiguousarray(array)).cast('B'))
+    else:
+        for row in array:
+            _streamed_sha256(row, value)
+    return value
+
+
 def _partition_record(moments):
     return dict(model=moments.model, provenance=moments.provenance,
                 labels=moments.labels, origins_bohr=moments.origins_bohr, rank=moments.rank,
-                q_shape=moments.values.shape, q_sha256=hashlib.sha256(moments.values.tobytes()).hexdigest(),
+                q_shape=moments.values.shape, q_sha256=_streamed_sha256(moments.values).hexdigest(),
                 auxiliary_sha256=moments.auxiliary_sha256, state_sha256=moments.state_sha256,
                 converged=moments.converged, convention=moments.convention,
                 diagnostics=dict(moments.diagnostics))
@@ -515,7 +539,7 @@ class BoundedResponse:
         self._fdds = self._fdds_kernel = self._moments = self._fdds_inputs = self._fdds_plan = None
         self._held = {}
         self._temporary = self._operator = self.partition = self.stability = None
-        self._prepared = self._released = False
+        self._prepare_attempted = self._prepared = self._released = False
 
     def __enter__(self):
         if self._temporary is not None or self._released:
@@ -546,7 +570,9 @@ class BoundedResponse:
         if self.response == 'native_fdds':
             self._fdds_preflight(state, grid, main)
         else:
-            frequency_plan = 8*(3*n*n+4*n*(p+q)+p*p+q*q+16*n)+8*1024**2
+            # Mirrors the first solve: operator formation, then each node beside the retained operator.
+            retained, construction, node = _H2H1Response.plan_bytes(n, p, q)
+            frequency_plan = retained+max(construction, node)
             if frequency_plan+self._retained > resources.max_bytes:
                 raise ValueError('complete frequency plan exceeds shared numeric byte resource limit')
             frequency_work = nf*int(2*n**3+2*n**3/3+8*n*n*(p+q))
@@ -573,11 +599,19 @@ class BoundedResponse:
 
     def prepare(self, provider=None):
         """Factors, both constrained OV fits, anchor legs, kernel, H1/H2 and gates."""
-        if self._temporary is None or self._prepared or self._released:
+        if self._temporary is None or self._prepare_attempted or self._released:
             raise RuntimeError('prepare once, inside the BoundedResponse context')
-        self._prepared = True
+        # A failed prepare is final: partial checkpoints or a refused native
+        # instance must never reach solve, and prepare is not retried.
+        self._prepare_attempted = True
         if self.response == 'native_fdds':
-            return self._prepare_fdds(provider)
+            self._prepare_fdds(provider)
+        else:
+            self._prepare_reference(provider)
+        self._prepared = True
+        return self
+
+    def _prepare_reference(self, provider):
         ledger, store, log, resources = self.ledger, self.store, self.log, self.resources
         moments = None if provider is None else provider(ledger)
         if provider is not None and not isinstance(moments, DistributedMoments):
@@ -740,15 +774,13 @@ class BoundedResponse:
         if provider is not None and not isinstance(moments, DistributedMoments):
             raise TypeError('provider must return DistributedMoments')
         if moments is None:
-            ledger.admit('distributed moments', 0, 2000*p*q)
+            # The closed-form Q and DistributedMoments' owned copy coexist briefly.
+            ledger.admit('distributed moments', 16*q*p, 2000*p*q)
             moments = analytic_df_moments(recipe, sites, 4)
-            supplied = 0
-        else:
-            supplied = moments.values.nbytes
         moments.validate_for(recipe, sites, 4, self.state_sha256)
         self.partition = _partition_record(moments)
-        # FDDS contracts Q at every node: an owned copy is retained and charged.
-        ledger.admit('retained distributed moments', 8*q*p+supplied)
+        # FDDS contracts Q at every node: an owned copy is retained beside moments.values.
+        ledger.admit('retained distributed moments', 8*q*p+moments.values.nbytes)
         values = np.array(moments.values, dtype=np.float64, order='C', copy=True)
         del moments
         if values.shape != (q, p) or not np.isfinite(values).all():

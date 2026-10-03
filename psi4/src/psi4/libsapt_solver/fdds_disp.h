@@ -48,7 +48,9 @@ struct FDDSResources {
     size_t disk_bytes = 0;    ///< cap on this instance's peak scratch bytes
     std::string scratch_dir;  ///< existing writable caller-owned directory; only this instance's files are removed
     std::string subalgo = "OUT_OF_CORE";  ///< DFHelper AO integrals: INCORE (held) or OUT_OF_CORE (recomputed)
-    size_t nthread = 0;       ///< OpenMP threads for integrals and blocking, frozen for the instance's lifetime
+    size_t nthread = 0;       ///< OpenMP threads for integral generation and the declared blocking loops; the
+                              ///< per-frequency form_unc_amplitude/form_aux_matrices loops and BLAS use the
+                              ///< process OpenMP/vendor thread counts, so this is not a total-thread cap
 };
 
 /// Construction record of a declared FDDS_Monomer. Ratios are relative to the largest |eigenvalue|.

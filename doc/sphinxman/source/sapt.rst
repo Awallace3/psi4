@@ -632,6 +632,11 @@ unchanged::
   grown element by element are charged at twice their final length (the
   libstdc++, libc++ and MSVC growth factors are 2, 2 and 1.5) plus one old
   buffer while growing.
+- Every matrix and block on this path is charged with its row-pointer array
+  (one pointer per row, rounded up to whole doubles), and both DFHelpers are
+  charged with their shell-offset arrays. The runtime block sizes of the
+  declared pass, the exchange intermediates, the per-frequency amplitude and
+  auxiliary matrices and the S2 response subtract the same costs.
 - The memory cap is not a process-memory cap. It does not count:
 
   - BLAS/LAPACK internals and ``libint2::Engine`` scratch;
@@ -644,8 +649,11 @@ unchanged::
   Total vendor memory and thread use are therefore not capped per instance.
 
   In tested builds with ``MAX_AM_ERI = 5`` the engine scratch was about 20 MB.
-- ``nthread`` fixes the OpenMP threads used for ERIs and blocking for the
-  instance's lifetime. BLAS threading stays with the vendor library.
+- ``nthread`` fixes the OpenMP threads used for ERIs and the declared blocking
+  loops for the instance's lifetime. It is not a total-thread cap: the
+  per-frequency amplitude and auxiliary-matrix loops (including the
+  ``native_dyson_ratio`` path) run at the process OpenMP thread count, and
+  BLAS threading stays with the vendor library.
 - DFHelper blocking depends on the memory budget, so results can differ at
   rounding level between budgets. In tested cases near the minimum budget the
   sampled differences were up to about :math:`10^{-11}` relative, and no

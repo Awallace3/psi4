@@ -64,6 +64,30 @@ namespace sapt {
 
 namespace {
 
+size_t cmul(size_t a, size_t b) {
+    size_t r;
+    if (__builtin_mul_overflow(a, b, &r)) throw PSIEXCEPTION("FDDS: resource size overflows size_t.");
+    return r;
+}
+size_t cadd(std::initializer_list<size_t> terms) {
+    size_t r = 0;
+    for (size_t t : terms)
+        if (__builtin_add_overflow(r, t, &r)) throw PSIEXCEPTION("FDDS: resource size overflows size_t.");
+    return r;
+}
+size_t cmax(std::initializer_list<size_t> terms) { return std::max(terms); }
+size_t doubles_for(size_t bytes) { return bytes / sizeof(double) + (bytes % sizeof(double) != 0); }
+
+// Declared-path storage beside the numerical payload, in doubles. A C1 Matrix also allocates one
+// row pointer per row (block_matrix); each is rounded up to whole doubles, so the charge is an
+// upper bound whatever the pointer width. Every DFHelper holds its Qshell_aggs_/pshell_aggs_ shell
+// offsets (nshell + 1 size_t each) from construction.
+constexpr size_t kRowPointer = (sizeof(double*) + sizeof(double) - 1) / sizeof(double);
+size_t mat(size_t rows, size_t cols) { return cmul(rows, cadd({cols, kRowPointer})); }
+size_t dfh_offsets(const BasisSet& primary, const BasisSet& auxiliary) {
+    return doubles_for(cmul(cadd({(size_t)primary.nshell(), (size_t)auxiliary.nshell(), 2}), sizeof(size_t)));
+}
+
 // Existing directory the process may create files in, checked without creating anything.
 // POSIX asks access(W_OK | X_OK); Windows _access(.., 2) on a directory reports existence only,
 // so the read-only attribute is checked there as well.
@@ -578,7 +602,9 @@ SharedMatrix FDDS_Dispersion::form_unc_amplitude(std::string monomer, double ome
 
     // Check on memory real quick
     size_t doubles = budget_doubles();
-    size_t mem_size = 2 * naux * nvir + naux * naux + nvir * nocc;
+    // Row pointers of ret, amp and the tmp slice are charged on the declared budget only.
+    const size_t rp = work_doubles_ ? kRowPointer : 0;
+    size_t mem_size = 2 * naux * nvir + naux * naux + nvir * nocc + rp * (2 * nvir + naux + nocc);
     if (mem_size > doubles) {
         std::stringstream message;
         double mem_gb = ((double)(mem_size) / 0.8 * sizeof(double));
@@ -612,8 +638,8 @@ SharedMatrix FDDS_Dispersion::form_unc_amplitude(std::string monomer, double ome
 
     // ==> Contract <==
 
-    size_t dmem = doubles - naux * naux - nvir * nocc;
-    size_t bsize = dmem / (naux * nvir);
+    size_t dmem = doubles - naux * naux - nvir * nocc - rp * (naux + nocc);
+    size_t bsize = dmem / (nvir * (naux + rp));
     if (bsize > nocc) {
         bsize = nocc;
     }
@@ -700,11 +726,13 @@ std::map<std::string, SharedMatrix> FDDS_Dispersion::form_aux_matrices(std::stri
     // => Blocking <= //
 
     size_t doubles = budget_doubles();
-    long long int rem = doubles - 2 * nocc * nvir - 6 * naux * naux;
+    // Row pointers of Lar/LDar, the targets and the seven slices are charged on the declared budget only.
+    const size_t rp = work_doubles_ ? kRowPointer : 0;
+    long long int rem = doubles - 2 * nocc * nvir - 6 * naux * naux - rp * (2 * nocc + 6 * naux);
     if (rem < 0)
         throw PSIEXCEPTION("Too little static memory for FDDS_Dispersion::form_aux_matrices()");
 
-    size_t maxo = rem / (7 * nvir * naux);
+    size_t maxo = rem / (7 * nvir * (naux + rp));
     maxo = (maxo > nocc ? nocc : maxo);
     if (maxo < 1)
         throw PSIEXCEPTION("Too little static memory for FDDS_Dispersion::form_aux_matrices()");
@@ -865,11 +893,13 @@ void FDDS_Dispersion::exchange_X(const std::string& arR_name, const std::array<s
 #endif
 
     size_t doubles = budget_doubles();
-    long long int rem = doubles - nthread * nvir * nvir;
+    // Row pointers of Vrr and the six slices are charged on the declared budget only.
+    const size_t rp = work_doubles_ ? kRowPointer : 0;
+    long long int rem = doubles - nthread * nvir * nvir - rp * nvir;
     if (rem < 0) 
         throw PSIEXCEPTION("Too little static memory for FDDS_Dispersion::form_X()");
 
-    size_t maxo = rem / (6 * nvir * naux);
+    size_t maxo = rem / (6 * nvir * (naux + rp));
     maxo = (maxo > nocc ? nocc : maxo);
     if (maxo < 1) 
         throw PSIEXCEPTION("Too little static memory for FDDS_Dispersion::form_X()");
@@ -993,12 +1023,15 @@ void FDDS_Dispersion::exchange_Y(const std::string& aaR_name, const std::string&
 #endif
 
     size_t doubles = budget_doubles();
-    long long int rem = doubles - nthread * nocc * nvir;
+    // Row pointers of Vra and the six slices are charged on the declared budget only; the slices
+    // hold at most (kov^2 + 4 kov + 1) nocc rows per occupied index, as their storage does.
+    const size_t rp = work_doubles_ ? kRowPointer : 0;
+    long long int rem = doubles - nthread * nocc * nvir - rp * nvir;
     if (rem < 0) 
         throw PSIEXCEPTION("Too little static memory for FDDS_Dispersion::form_Y()");
 
     size_t kov = std::max(size_t{1}, nvir / nocc) + 1; // Keep virtual blocks nonempty when v < o.
-    size_t maxo = rem / ((kov * kov + 4 * kov + 1) * nocc * naux);
+    size_t maxo = rem / ((kov * kov + 4 * kov + 1) * nocc * (naux + rp));
     size_t maxv = maxo * (kov - 1); 
     maxo = (maxo > nocc ? nocc : maxo);
     maxv = (maxv > nvir ? nvir : maxv);
@@ -1108,7 +1141,8 @@ SharedMatrix FDDS_Dispersion::QR(std::string monomer) {
     // => Meomry Check <= //
 
     size_t doubles = budget_doubles();
-    size_t req_mem = 2 * nov * naux + naux * naux + naux; 
+    const size_t rp = work_doubles_ ? kRowPointer : 0;  // Qar, Q and R row pointers, declared budget only
+    size_t req_mem = 2 * nov * naux + naux * naux + naux + rp * (2 * naux + nov); 
     if (doubles < req_mem) 
         throw PSIEXCEPTION("Too little static memory for FDDS_Dispersion::QR()");
 
@@ -1227,19 +1261,6 @@ void FDDS_Dispersion::print_tensor_pqQ(std::string tensor_name, std::string file
 // ==> Declared-basis FDDS_Monomer path <== //
 
 namespace {
-
-size_t cmul(size_t a, size_t b) {
-    size_t r;
-    if (__builtin_mul_overflow(a, b, &r)) throw PSIEXCEPTION("FDDS: resource size overflows size_t.");
-    return r;
-}
-size_t cadd(std::initializer_list<size_t> terms) {
-    size_t r = 0;
-    for (size_t t : terms)
-        if (__builtin_add_overflow(r, t, &r)) throw PSIEXCEPTION("FDDS: resource size overflows size_t.");
-    return r;
-}
-size_t cmax(std::initializer_list<size_t> terms) { return std::max(terms); }
 
 // LAPACK workspace queries use dimensions only; the dummy arrays are never read.
 size_t lwork_syev(size_t n) {
@@ -1426,8 +1447,6 @@ size_t dfhelper_pass_bytes(const BasisSet& p, const BasisSet& a, size_t t) {
                  kListed});
 }
 
-size_t doubles_for(size_t bytes) { return bytes / sizeof(double) + (bytes % sizeof(double) != 0); }
-
 struct Ledger {
     size_t resident = 0, memory = 0, disk = 0;
     std::map<std::string, size_t> stages;     // transient working sets, doubles
@@ -1440,16 +1459,20 @@ struct Ledger {
 
 Ledger declared_ledger(const BasisSet& primary, const BasisSet& auxiliary, size_t o, size_t v, size_t pd, bool hyb,
                        const std::string& subalgo, size_t t) {
-    const size_t N = primary.nbf(), pr = auxiliary.nbf(), n = cmul(o, v), pd2 = cmul(pd, pd), pr2 = cmul(pr, pr);
-    const size_t T = cmul(pd, pr), big = std::max(o, v), eig_d = lwork_syev(pd), eig_r = lwork_syev(pr);
+    const size_t N = primary.nbf(), pr = auxiliary.nbf(), n = cmul(o, v), pr2 = cmul(pr, pr);
+    const size_t big = std::max(o, v), eig_d = lwork_syev(pd), eig_r = lwork_syev(pr);
+    const size_t Md = mat(pd, pd), Mr = mat(pr, pr), MT = mat(pd, pr);
     Ledger L;
-    L.resident = cadd({cmul(N, o), cmul(N, v), o, v, cmul(4, pd2), pd, hyb ? cmul(2, pd2) : 0});
+    // Orbitals, energies, metric/overlap/inverse/LU and pivots (R and pinv(R)^T when hybrid), and the
+    // declared DFHelper's shell offsets, which it holds from the declared pass to destruction.
+    L.resident = cadd({mat(N, o), mat(N, v), o, v, cmul(4, Md), pd, hyb ? cmul(2, Md) : 0,
+                       dfh_offsets(primary, auxiliary)});
 
     // J_r, S_r, T J_r with the metric or overlap integral pass; then eigen check / Matrix::power (two
     // n^2 copies, eigenvalues, work); dgecon. J_r is held for the raw DFHelper throughout.
     L.integrals["metric"] = doubles_for(cmax({coulomb_pass_bytes(primary, auxiliary, t), overlap_bytes(auxiliary)}));
-    L.stages["metric"] = cadd({T, cmax({cadd({cmul(2, pr2), T, L.integrals["metric"]}),
-                                        cadd({pr2, cmul(3, pd2), pd, eig_d}), cadd({pr2, cmul(5, pd)})})});
+    L.stages["metric"] = cadd({MT, cmax({cadd({cmul(2, Mr), MT, L.integrals["metric"]}),
+                                         cadd({Mr, cmul(3, Md), pd, eig_d}), cadd({Mr, cmul(5, pd)})})});
 
     // Raw DIRECT_iaQ DFHelper at metric power 0: its memory share must admit the metric, one
     // auxiliary shell of dense AOs with the worst half/final transforms, one metric-contraction
@@ -1464,34 +1487,38 @@ Ledger declared_ledger(const BasisSet& primary, const BasisSet& auxiliary, size_
         dfh_min = cmax({dfh_min, cadd({cmul(pr, cmul(N, N)), pr2, cmul(t, cmul(N, N)),
                                        cmul(3, cmul(qmax, cmul(N, N)))})});
     // After transform() it keeps the Schwarz shell mask/function index, skip arrays and shell offsets.
-    L.dfh_retained = cadd({cmul(nshell, nshell), cmul(N, N), cmul(5, N), 3, nshell, (size_t)auxiliary.nshell(), 2});
-    L.dfh_extra = cadd({T, cmul(t, cmul(N, wtmp)), cmul(nshell, nshell), cmul(N, N), L.dfh_retained, pr2,
-                        cmul(3, pr2), pr, eig_r});
+    L.dfh_retained = cadd({cmul(nshell, nshell), cmul(N, N), cmul(5, N), 3, dfh_offsets(primary, auxiliary)});
+    L.dfh_extra = cadd({MT, cmul(t, cmul(N, wtmp)), cmul(nshell, nshell), cmul(N, N), L.dfh_retained, Mr,
+                        cmul(3, Mr), pr, eig_r});
     L.dfh_integral = L.integrals["dfhelper"] = doubles_for(dfhelper_pass_bytes(primary, auxiliary, t));
     L.stages["raw_dfhelper"] = cadd({L.dfh_extra, L.dfh_integral, dfh_min});
 
     // Declared pass, beside the still-live raw DFHelper: T, J_d^-1/2 (or its power() transient),
-    // one first-index block of raw/T/out rows.
-    L.stages["declared_pass"] = cadd({L.dfh_retained, T, pd2,
-                                      cmax({cmul(big, cadd({pr, cmul(2, pd)})), cadd({cmul(2, pd2), pd, eig_d})})});
+    // one first-index block of raw/T/out rows with their row pointers.
+    L.stages["declared_pass"] = cadd({L.dfh_retained, MT, Md,
+                                      cmax({cmul(big, cadd({pr, cmul(2, pd), cmul(3, kRowPointer)})),
+                                            cadd({cmul(2, Md), pd, eig_d})})});
 
     const size_t ov = n;
     if (hyb) {
         const size_t k = std::max(size_t{1}, v / o) + 1;
-        L.stages["qr"] = cmax({cadd({cmul(2, cmul(n, pd)), std::min(n, pd), lwork_qr(n, pd)}),
-                               cadd({cmul(2, cmul(n, pd)), pd2, pd}),
-                               cadd({cmul(3, pd2), cmul(9, pd), lwork_gesdd('S', pd)})});
-        L.stages["form_X"] = cadd({cmul(t, cmul(v, v)), cmul(6, cmul(v, pd))});
-        L.stages["form_Y"] = cadd({cmul(t, ov), cmul(cadd({cmul(k, k), cmul(4, k), 1}), cmul(o, pd))});
-        L.stages["dyson_diagnostic"] = cmax({cadd({cmul(2, ov), cmul(6, pd2), cmul(7, cmul(v, pd))}), cmul(7, pd2),
-                                            cadd({cmul(2, pd2), cmul(9, pd), lwork_gesdd('N', pd)})});
+        // Minimum blocks (one occupied index) of the runtime blocking in exchange_X/exchange_Y and
+        // form_aux_matrices, each slice and single-layer matrix with its row pointers.
+        L.stages["qr"] = cmax({cadd({mat(pd, n), mat(n, pd), std::min(n, pd), lwork_qr(n, pd)}),
+                               cadd({mat(pd, n), mat(n, pd), Md, pd}),
+                               cadd({cmul(3, Md), cmul(9, pd), lwork_gesdd('S', pd)})});
+        L.stages["form_X"] = cadd({cmul(t, cmul(v, v)), cmul(v, kRowPointer), cmul(6, mat(v, pd))});
+        L.stages["form_Y"] = cadd({cmul(t, ov), cmul(v, kRowPointer),
+                                   cmul(cadd({cmul(k, k), cmul(4, k), 1}), mat(o, pd))});
+        L.stages["dyson_diagnostic"] = cmax({cadd({cmul(2, mat(o, v)), cmul(6, Md), cmul(7, mat(v, pd))}),
+                                            cmul(7, Md), cadd({cmul(2, Md), cmul(9, pd), lwork_gesdd('N', pd)})});
     } else {
-        L.stages["dyson_diagnostic"] = cmax({cadd({cmul(2, cmul(pd, v)), pd2, ov}), cmul(3, pd2),
-                                            cadd({cmul(2, pd2), cmul(9, pd), lwork_gesdd('N', pd)})});
+        L.stages["dyson_diagnostic"] = cmax({cadd({cmul(2, mat(v, pd)), Md, mat(o, v)}), cmul(3, Md),
+                                            cadd({cmul(2, Md), cmul(9, pd), lwork_gesdd('N', pd)})});
     }
     // S2 blocks; then its J - J A admission SVD (chi0, A, the matrix and its copy); then the solve.
-    L.stages["s2_response"] = cmax({cadd({cmul(2, ov), cmul(5, pd2), cmul(hyb ? 8 : 3, cmul(v, pd))}),
-                                    cadd({cmul(4, pd2), cmul(9, pd), lwork_gesdd('N', pd)}), cadd({cmul(5, pd2), pd})});
+    L.stages["s2_response"] = cmax({cadd({cmul(2, ov), cmul(5, Md), cmul(hyb ? 8 : 3, mat(v, pd))}),
+                                    cadd({cmul(4, Md), cmul(9, pd), lwork_gesdd('N', pd)}), cadd({cmul(5, Md), pd})});
 
     // Disk: DIRECT_iaQ keeps a pre-metric and a final file per transform plus two metric files.
     const size_t npr = cmul(n, pr), npd = cmul(n, pd);
@@ -1748,9 +1775,9 @@ void FDDS_Monomer::declared_pass(std::shared_ptr<DFHelper> raw, const SharedMatr
         jobs.push_back({"aaQ", o, o, {{"aaR", Half}}});
         jobs.push_back({"rrQ", v, v, {{"rrR", Half}}});
     }
-    const size_t fixed = cadd({raw_retained, cmul(pd, pr), cmul(pd, pd)});
+    const size_t fixed = cadd({raw_retained, mat(pd, pr), mat(pd, pd)});
     for (const auto& job : jobs) {
-        size_t per = cmul(job.n2, cadd({pr, cmul(2, pd)}));
+        size_t per = cmul(job.n2, cadd({pr, cmul(2, pd), cmul(3, kRowPointer)}));
         size_t block = std::min(job.n1, (work_doubles_ - fixed) / per);
         if (block < 1) throw PSIEXCEPTION("FDDS: declared pass exceeds the admitted work budget.");
         auto in = std::make_shared<Matrix>("raw", block * job.n2, pr);
@@ -1858,8 +1885,8 @@ FDDSResponse FDDS_Monomer::form_coefficient_response(double omega, double x_alph
             }
         }
     const size_t nstream = is_hybrid_ ? 8 : 3;
-    const size_t fixed = cadd({cmul(2, o * v), cmul(5, p * p)});
-    size_t maxo = std::min(o, (work_doubles_ - fixed) / cmul(nstream, v * p));
+    const size_t fixed = cadd({cmul(2, o * v), cmul(5, mat(p, p))});
+    size_t maxo = std::min(o, (work_doubles_ - fixed) / cmul(nstream, mat(v, p)));
     if (maxo < 1) throw PSIEXCEPTION("FDDS: response exceeds the admitted work budget.");
     std::vector<SharedMatrix> buf(nstream);
     for (auto& m : buf) m = std::make_shared<Matrix>(maxo * v, p);

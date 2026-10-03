@@ -148,8 +148,13 @@ Bounded DF response
    the plain-DF PBE0 response of one sealed, restricted, closed-shell C1
    wavefunction at the declared quadrature nodes, under explicit
    ``BoundedResources`` (bytes, arithmetic work, cumulative I/O). Use it as a
-   context manager: enter (seal, state, complete preflight, private scratch),
-   ``prepare(provider)``, ``solve(omega)`` per node, then ``release()``. Leaving
+   context manager: enter (seal, state, preflight, private scratch),
+   ``prepare(provider)``, ``solve(omega)`` per node, then ``release()``. The
+   entry preflight mirrors the byte admissions of the frequency sweep (operator
+   formation and every node for the reference; native admission, W and every
+   node for FDDS) and the planned total work; ``prepare`` stages are admitted as
+   they are reached, so a budget can still be refused during ``prepare``. A
+   failed ``prepare`` is final: ``solve`` then refuses. Leaving
    the context removes the private scratch directory, on failure too. Each
    ``FrequencyResponse`` holds owned arrays: ``target_response`` (p x p, in
    response-AUX coefficient space) and ``nonlocal_response`` (site-major real

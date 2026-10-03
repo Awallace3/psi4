@@ -6,6 +6,7 @@ Small independent identities, not large reference fixtures. No PFIT, LW,
 dispersion or ISA code is used; toy admissions are not molecular acceptance.
 """
 from fractions import Fraction
+import hashlib
 import itertools
 import math
 import weakref
@@ -96,6 +97,29 @@ def test_factor_action_oracle_matches_explicit_four_index_contractions(independe
     rhs = rng.normal(size=(6, 3))
     np.testing.assert_allclose(_factor_action(*factors, exchange, rhs, True), h1 @ rhs, atol=1e-12)
     np.testing.assert_allclose(_factor_action(*factors, exchange, rhs, False), h2 @ rhs, atol=1e-12)
+
+
+@pytest.mark.parametrize('p,no,nv', [(3, 1, 4), (3, 4, 1), (2, 1, 1), (3, 2, 3)])
+def test_gram_exchange_term_is_one_owned_copy(p, no, nv):
+    """y is the same values as the transposed v, in its own buffer even when the reshape could be a view."""
+    rng = np.random.default_rng(no*10+nv)
+    ov, dual = rng.standard_normal((p, no, nv)), rng.standard_normal((p, no, nv))
+    v, y = backend._gram_terms(ov, dual)
+    n = no*nv
+    expected = v.reshape(nv, no, nv, no).transpose(2, 1, 0, 3).reshape(n, n).copy()
+    np.testing.assert_array_equal(y, expected)
+    assert y.shape == (n, n) and y.flags.c_contiguous and not np.shares_memory(y, v)
+    v += 1.
+    np.testing.assert_array_equal(y, expected)
+
+
+@pytest.mark.parametrize('array', [
+    np.arange(12.).reshape(3, 4), np.asfortranarray(np.arange(12.).reshape(3, 4)),
+    np.arange(40.).reshape(5, 8)[::2, 1::3], np.arange(7.), np.arange(30.)[::4],
+    np.arange(60.).reshape(3, 4, 5).transpose(2, 0, 1), np.arange(12, dtype=np.int64).reshape(4, 3).T],
+    ids=['c', 'fortran', 'strided', 'vector', 'strided-vector', 'transposed-3d', 'int'])
+def test_streamed_digest_is_the_tobytes_digest(array):
+    assert backend._streamed_sha256(array).hexdigest() == hashlib.sha256(array.tobytes()).hexdigest()
 
 
 @pytest.mark.parametrize('exchange', [0., .25, 1.])
@@ -365,6 +389,94 @@ def test_response_runner_failed_solve_cleans_scratch(small_water, tmp_path, monk
             response.prepare()
             response.solve(args['quadrature'].frequencies[0])
     assert response._operator is None and _nothing_left(tmp_path)
+
+
+@pytest.mark.parametrize('failure', ['provider', 'late'])
+@pytest.mark.parametrize('response', [{}, _fdds()], ids=['reference', 'fdds'])
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_failed_prepare_is_final(small_water, tmp_path, monkeypatch, response, failure):
+    """A prepare that raised is never retried and never reaches solve: late failures leave H1/H2 checkpoints
+    (reference stability gate) or a refused native instance (FDDS metric guard) behind."""
+    wfn, recipe, args = small_water
+    omega = args['quadrature'].frequencies[0]
+    def provider(ledger):
+        raise RuntimeError('injected provider failure')
+    if failure == 'late':
+        provider = None
+        if response:
+            monkeypatch.setattr(backend, 'FDDS_METRIC_RCOND_CUTOFF', 1.)
+        else:
+            def unstable(store, n):
+                assert {'h1', 'h2'} <= set(store.records)
+                raise ValueError('h1 reciprocity/stability gate')
+            monkeypatch.setattr(backend, '_stability', unstable)
+    with _runner(wfn, recipe, args, tmp_path, **response) as runner:
+        with pytest.raises((RuntimeError, ValueError), match='injected provider|stability gate|metric resolution'):
+            runner.prepare(provider)
+        with pytest.raises(RuntimeError, match='solve requires a prepared'):
+            runner.solve(omega)
+        with pytest.raises(RuntimeError, match='prepare once'):
+            runner.prepare()
+        assert runner._operator is None and runner._fdds is None
+    assert _nothing_left(tmp_path)
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_reference_preflight_mirrors_the_first_solve(small_water, tmp_path, monkeypatch):
+    """The entry preflight is the larger of the operator-formation and node admissions of the first solve,
+    so one byte less is refused at entry, before any factor or scratch. The toy's state snapshot outweighs
+    its operator, so both plans are inflated by the same constant to make the sweep bind the budget."""
+    wfn, recipe, args = small_water
+    frequencies = args['quadrature'].frequencies
+    plan_bytes, extra = backend._H2H1Response.plan_bytes, 64*1024**2
+    def inflated(n, p, q):
+        retained, construction, node = plan_bytes(n, p, q)
+        return retained, construction+extra, node+extra
+    monkeypatch.setattr(backend._H2H1Response, 'plan_bytes', staticmethod(inflated))
+    with _runner(wfn, recipe, args, tmp_path) as runner:
+        runner.prepare()
+        for omega in frequencies:
+            runner.solve(omega)
+    stages = {}
+    for stage in runner.ledger.stages:
+        stages[stage['stage']] = max(stages.get(stage['stage'], 0), stage['numeric_bytes'])
+    p, no, nv = runner.dimensions
+    retained, construction, node = inflated(no*nv, p, 25*len(args['sites']))
+    assert stages['H2H1 response operator'] == retained+construction+runner._retained
+    assert stages['frequency response'] == retained+node+runner._retained
+    plan = max(stages['H2H1 response operator'], stages['frequency response'])
+    n, q = no*nv, 25*len(args['sites'])
+    # The former preflight did not mirror these admissions (and was 8 (1536 n - n^2) bytes low for
+    # n < 1536): plan - 1 passed it.
+    assert n < 1536 and plan-1 >= 8*(3*n*n+4*n*(p+q)+p*p+q*q+16*n)+8*1024**2+runner._retained
+    def forbidden(*a, **k):
+        pytest.fail('factor construction happened before the preflight refusal')
+    monkeypatch.setattr(backend, 'native_plain_df_operators', forbidden)
+    with pytest.raises(ValueError, match='complete frequency plan'):
+        with _runner(wfn, recipe, dict(args, resources=_resources(plan-1)), tmp_path):
+            pass
+    with _runner(wfn, recipe, dict(args, resources=_resources(plan)), tmp_path):
+        pass
+    assert _nothing_left(tmp_path)
+
+
+@pytest.mark.parametrize('supplied', [False, True], ids=['analytic', 'supplied'])
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_fdds_charges_both_live_q_copies(small_water, tmp_path, supplied):
+    """moments.values and the owned FDDS copy are live together; the analytic producer is admitted for its
+    own value and copy before it runs."""
+    from psi4.driver.procrouting.isapol_distribution import analytic_df_moments
+    wfn, recipe, args = small_water
+    provider = (lambda ledger: analytic_df_moments(recipe, args['sites'], 4)) if supplied else None
+    with _runner(wfn, recipe, args, tmp_path, **_fdds()) as runner:
+        runner.prepare(provider)
+    stages = {s['stage']: s['numeric_bytes'] for s in runner.ledger.stages}
+    qp = 8*25*len(args['sites'])*runner.dimensions[0]
+    assert stages['retained distributed moments'] == stages['native FDDS inputs']+2*qp
+    assert ('distributed moments' in stages) is not supplied
+    if not supplied:
+        assert stages['distributed moments'] == stages['native FDDS inputs']+2*qp
+    assert _nothing_left(tmp_path)
 
 
 @pytest.mark.parametrize('response', [{}, _fdds()], ids=['reference', 'fdds'])

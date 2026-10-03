@@ -3,6 +3,7 @@
 import gc
 import os
 import re
+import struct
 
 import numpy as np
 import pytest
@@ -47,6 +48,15 @@ def isolate_state(orbitals):
     psi4.core.clean()
     psi4.core.clean_options()
     psi4.core.clean_variables()
+
+
+# Declared-path bookkeeping in whole doubles: one row pointer per matrix row, and a DFHelper's
+# Qshell_aggs_/pshell_aggs_ shell offsets (nshell + 1 size_t each).
+ROW_POINTER = -(-struct.calcsize("P") // 8)
+
+
+def shell_offsets(primary, auxiliary):
+    return -(-(primary.nshell() + auxiliary.nshell() + 2) * struct.calcsize("N") // 8)
 
 
 def native_inputs(orbitals, nocc=None, nvir=None, shift=0.0, zero_virtual=False):
@@ -644,11 +654,13 @@ def test_declared_resources_and_private_scratch(orbitals, tmp_path):
     assert size() == req["disk:steady"]  # every stream has been read back, so no stdio buffering remains
     psi4.set_options({"scf_subtype": "incore"})
     psi4.core.set_memory_bytes(10**6)  # far below what the legacy path would need
-    second = declared(data, True, tmp_path)
-    np.testing.assert_array_equal(second.form_coefficient_response(0.4, 0.25, kernel)["response"].np, expected)
-    assert size() == 2 * req["disk:steady"] and watched() == before[-1]
-    psi4.core.set_memory_bytes(before[0])
-    psi4.core.clean_options()
+    try:
+        second = declared(data, True, tmp_path)
+        np.testing.assert_array_equal(second.form_coefficient_response(0.4, 0.25, kernel)["response"].np, expected)
+        assert size() == 2 * req["disk:steady"] and watched() == before[-1]
+    finally:
+        psi4.core.set_memory_bytes(before[0])
+        psi4.core.clean_options()
 
     # A refusal leaves the instance usable; each instance removes only its own files.
     with pytest.raises(RuntimeError, match="Dyson admission refused"):
@@ -676,7 +688,7 @@ def test_declared_pass_charges_the_live_raw_dfhelper(orbitals, hybrid, tmp_path)
     def stage(basis):
         req = psi4.core.FDDS_Monomer.requirement(basis, auxiliary, 5, 19, auxiliary.nbf(), hybrid, "OUT_OF_CORE", 1)
         n, nshell = basis.nbf(), basis.nshell()
-        return req["stage:declared_pass"], 8 * (n * n + nshell * nshell + 5 * n + nshell)
+        return req["stage:declared_pass"], 8 * (n * n + nshell * nshell + 5 * n + shell_offsets(basis, auxiliary))
 
     (small, retained_small), (large, retained_large) = stage(primary), stage(larger)
     assert retained_large > retained_small
@@ -701,8 +713,8 @@ def test_declared_pass_charges_the_live_raw_dfhelper(orbitals, hybrid, tmp_path)
 
 
 def test_declared_pass_blocks_beside_the_retained_raw_storage(orbitals, tmp_path):
-    """Each declared-pass block holds n2 rows of raw/declared/out (pr + 2 pd doubles each) beside T, J_d^-1/2
-    and the raw DFHelper's retained storage. With 36 virtuals and an RI auxiliary basis the hybrid (rr|Q) stream
+    """Each declared-pass block holds n2 rows of raw/declared/out (pr + 2 pd doubles and three row pointers each)
+    beside T, J_d^-1/2 (with their row pointers) and the raw DFHelper's retained storage. With 36 virtuals and an RI auxiliary basis the hybrid (rr|Q) stream
     blocks at admitted budgets; the budget leaves it k blocks of rows plus one row short of k + 1, so blocks
     sized without the retained storage would be k + 1 rows long."""
     mol = orbitals[0].molecule()
@@ -713,8 +725,8 @@ def test_declared_pass_blocks_beside_the_retained_raw_storage(orbitals, tmp_path
             wfn.epsilon_a_subset("AO", "VIR"))
     o, v, pr = data[2].cols(), data[3].cols(), aux.nbf()
     n, nshell = primary.nbf(), primary.nshell()
-    fixed = n * n + nshell * nshell + 5 * n + nshell + aux.nshell() + 5 + 2 * pr * pr
-    per = lambda n2: n2 * 3 * pr
+    fixed = n * n + nshell * nshell + 5 * n + 3 + shell_offsets(primary, aux) + 2 * pr * (pr + ROW_POINTER)
+    per = lambda n2: n2 * 3 * (pr + ROW_POINTER)
     streams = {"arQ": (o, v), "raQ": (v, o), "aaQ": (o, o), "rrQ": (v, v)}
 
     def budget(hybrid):
@@ -750,6 +762,26 @@ def test_declared_pass_blocks_beside_the_retained_raw_storage(orbitals, tmp_path
     del nonhybrid, mono, generous
     gc.collect()
     assert os.listdir(tmp_path) == []
+
+
+@pytest.mark.parametrize("nthread", [1, 2])
+def test_declared_requirement_charges_row_pointers_and_shell_offsets(orbitals, nthread):
+    """Exact byte contract of the stages without LAPACK workspace terms: every matrix and block row carries
+    one row pointer, and the declared DFHelper's shell offsets are resident. Omitting either changes the
+    requirement, so these equalities fail."""
+    primary, auxiliary = orbitals[:2]
+    o, v, pd, N, P = 5, 19, auxiliary.nbf(), primary.nbf(), ROW_POINTER
+    k = max(1, v // o) + 1
+    for hybrid in (False, True):
+        req = psi4.core.FDDS_Monomer.requirement(primary, auxiliary, o, v, pd, hybrid, "OUT_OF_CORE", nthread)
+        resident = (N * (o + P) + N * (v + P) + o + v + 4 * pd * (pd + P) + pd + (2 * pd * (pd + P) if hybrid else 0)
+                    + shell_offsets(primary, auxiliary))
+        assert req["resident_bytes"] == 8 * resident
+        if hybrid:
+            assert req["stage:form_X"] == 8 * (nthread * v * v + v * P + 6 * v * (pd + P))
+            assert req["stage:form_Y"] == 8 * (nthread * o * v + v * P + (k * k + 4 * k + 1) * o * (pd + P))
+        else:
+            assert "stage:form_X" not in req and "stage:form_Y" not in req
 
 
 def test_declared_integral_storage_is_charged(orbitals):
