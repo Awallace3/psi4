@@ -1,10 +1,9 @@
 """cuBLAS matrix-chain multiplication (``core.cuest_chain_gemm``).
 
-The SAPT tensor code funnels every one of its matrix multiplications through
-``chain_gemm_einsums`` in psi4/driver/procrouting/sapt/sapt_jk_terms_ein.py, and
-``cuest_chain_gemm`` (psi4/src/cuest_gemm.cc) is the GPU implementation of that
-helper: it uploads the operands once, keeps the running product on the device
-across the whole chain, and copies back only the links that were asked for.
+The SAPT tensor code uses ``chain_gemm_einsums`` for left-associated matrix
+products. Its eligible chains dispatch to ``cuest_chain_gemm``
+(psi4/src/cuest_gemm.cc), which uploads each operand once, keeps intermediate
+products on the device, and downloads only requested products.
 
 The delicate part is that Psi4 stores matrices row-major while cuBLAS reads
 column-major, which the implementation handles by reversing the operand order
@@ -12,6 +11,9 @@ rather than transposing anything.  These tests pin that convention against NumPy
 for every combination of transpose flags, because getting it wrong produces a
 matrix of the right shape filled with the wrong numbers.
 """
+
+import importlib
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -117,3 +119,78 @@ def test_cuest_chain_gemm_rejects_nonconformable():
     B = psi4.core.Matrix.from_array(np.zeros((5, 6)))
     with pytest.raises(RuntimeError, match="conformable"):
         psi4.core.cuest_chain_gemm([A, B], ["N", "N"], [1.0], [True])
+
+
+def _sapt_chain_module():
+    pytest.importorskip("einsums")
+    return importlib.import_module("psi4.driver.procrouting.sapt.sapt_jk_terms_ein")
+
+
+@pytest.mark.parametrize("t1", ["N", "T"])
+@pytest.mark.parametrize("t2", ["N", "T"])
+def test_sapt_chain_work_transposes(t1, t2):
+    """The threshold uses the largest link's m*k*n, not a matrix-size bound."""
+    module = _sapt_chain_module()
+    m, k, n = 7, 5, 3
+    tensors = [
+        SimpleNamespace(shape=(k, m) if t1 == "T" else (m, k)),
+        SimpleNamespace(shape=(n, k) if t2 == "T" else (k, n)),
+        SimpleNamespace(shape=(11, n)),
+    ]
+    assert module._chain_gemm_work(tensors, [t1, t2, "T"]) == max(m * k * n, m * n * 11)
+
+
+@pytest.mark.parametrize(
+    "available,use_cuest,min_dim,beta,expected",
+    [
+        (True, True, 10, 0.0, True),
+        (True, True, 11, 0.0, False),
+        (True, True, 0, 0.0, True),
+        (True, True, 0, 1.0, False),
+        (True, False, 0, 0.0, False),
+        (False, True, 0, 0.0, False),
+    ],
+)
+def test_sapt_chain_gpu_eligibility(available, use_cuest, min_dim, beta, expected, monkeypatch):
+    module = _sapt_chain_module()
+    options = {"USE_CUEST": use_cuest, "CUEST_GEMM_MIN_DIM": min_dim}
+    monkeypatch.setattr(module, "_HAVE_CUEST_GEMM", available)
+    monkeypatch.setattr(module.core, "get_global_option", lambda name: options[name])
+    tensors = [SimpleNamespace(shape=(10, 10)), SimpleNamespace(shape=(10, 10))]
+    assert module._use_cuest_gemm(tensors, ["N", "N"], [beta]) is expected
+
+
+@pytest.mark.parametrize("return_flags", [None, [False, False, False], [True, False, True], [False, True]])
+def test_sapt_chain_dispatch_return_contract(return_flags, monkeypatch):
+    """Exercise GPU argument/return dispatch without requiring CUDA hardware."""
+    module = _sapt_chain_module()
+    rng = np.random.default_rng(11)
+    arrays = [
+        rng.standard_normal((6, 9)),
+        rng.standard_normal((6, 4)),
+        rng.standard_normal((5, 4)),
+        rng.standard_normal((5, 8)),
+    ]
+    tensors = [psi4.core.Matrix.from_array(a) for a in arrays]
+    transposes = ["T", "N", "T", "N"]
+    prefactors = [2.0, -0.5, 3.0]
+    calls = []
+
+    def gpu_chain(inputs, operations, scales, flags):
+        calls.append(flags)
+        products = _reference([a.np for a in inputs], operations, scales)
+        return [psi4.core.Matrix.from_array(p) for p, requested in zip(products, flags) if requested]
+
+    monkeypatch.setattr(module.core, "cuest_chain_gemm", gpu_chain, raising=False)
+    monkeypatch.setattr(module, "_use_cuest_gemm", lambda *args: True)
+    gpu = module.chain_gemm_einsums(tensors, transposes, prefactors_AB=prefactors, return_tensors=return_flags)
+    monkeypatch.setattr(module, "_use_cuest_gemm", lambda *args: False)
+    cpu = module.chain_gemm_einsums(tensors, transposes, prefactors_AB=prefactors, return_tensors=return_flags)
+
+    expected_flags = [False, False, True] if return_flags is None else return_flags + [False] * (3 - len(return_flags))
+    assert calls == [expected_flags]
+    if return_flags is None:
+        gpu, cpu = [gpu], [cpu]
+    assert len(gpu) == len(cpu)
+    for actual, reference in zip(gpu, cpu):
+        np.testing.assert_allclose(actual.np, reference.np, atol=1.e-12, rtol=0)

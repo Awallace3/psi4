@@ -32,18 +32,16 @@
 /*! \file cuest_gemm.cc
  *  \brief cuBLAS matrix-multiplication chains for the SAPT(DFT) tensor code.
  *
- *  Every GEMM in the SAPT electrostatics and exchange terms goes through one
- *  Python helper, ``chain_gemm_einsums`` in
- *  psi4/driver/procrouting/sapt/sapt_jk_terms_ein.py, which multiplies a list
- *  of matrices left to right.  That helper builds each intermediate as a host
- *  ``core.Matrix``, so a chain of L links costs L round trips through host
- *  memory even though only the last product (or a named few) is wanted.
+ *  The SAPT tensor code uses ``chain_gemm_einsums`` in
+ *  psi4/driver/procrouting/sapt/sapt_jk_terms_ein.py for left-associated matrix
+ *  products. Its CPU path stores each intermediate in a host ``core.Matrix``.
  *
  *  ``cuest_chain_gemm`` below is the GPU counterpart: it uploads the operands
- *  once, keeps the running product resident on the device across the whole
- *  chain, and copies back only the links the caller asked for.  The J/K builds
- *  that surround these terms are already on the GPU through cuEST, so this
- *  closes the remaining CPU gap in a SAPT(DFT)-D4(I) run.
+ *  once each, keeps intermediate products on the device across the whole
+ *  chain, and copies back only the products the caller requested. Unlike a
+ *  per-link GPU implementation, it does not upload/download the running
+ *  product at every link. This offloads eligible SAPT(DFT)-D4(I) tensor chains;
+ *  small chains and other host-side SAPT work remain on the CPU.
  *
  *  This file is compiled only when cuEST is enabled -- not because the code
  *  needs cuEST itself, but because that is the switch that guarantees a CUDA
@@ -171,10 +169,10 @@ struct Link {
 
 /*! Multiply a list of matrices left to right on the GPU.
  *
- *  Mirrors ``chain_gemm_einsums`` exactly, including its quirks: the transpose
- *  flag of the left operand only applies to the first link, because every later
- *  left operand is an intermediate that is already oriented; and the *i*-th
- *  link scales its product by ``prefactors_AB[i]``.
+ *  Follows ``chain_gemm_einsums``'s transpose and product-scaling conventions:
+ *  each input tensor's transpose flag is applied when it enters the chain.
+ *  Later left operands are already-oriented intermediate products, so they
+ *  are not transposed again. Link i scales its product by ``prefactors_AB[i]``.
  *
  *  \param tensors        the operands, at least two, all with one irrep.
  *  \param transposes     one flag per tensor, "N" or "T".

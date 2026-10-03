@@ -1425,6 +1425,7 @@ def build_functional_and_disp(name, restricted, save_pairwise_disp=False, **kwar
     else:
         return superfunc, None
 
+@p4util.timer("SCF: Wfn factory")
 def scf_wavefunction_factory(name, ref_wfn, reference, **kwargs):
     """Builds the correct (R/U/RO/CU HF/KS) wavefunction from the
     provided information, sets relevant auxiliary basis sets on it,
@@ -1432,20 +1433,22 @@ def scf_wavefunction_factory(name, ref_wfn, reference, **kwargs):
 
     """
     # Figure out functional and dispersion
-    superfunc, _disp_functor = build_functional_and_disp(name, restricted=(reference in ["RKS", "RHF"]), **kwargs)
+    with p4util.timer("SCF: Functional"):
+        superfunc, _disp_functor = build_functional_and_disp(name, restricted=(reference in ["RKS", "RHF"]), **kwargs)
 
     # Build the wavefunction
     core.prepare_options_for_module("SCF")
-    if reference in ["RHF", "RKS"]:
-        wfn = core.RHF(ref_wfn, superfunc)
-    elif reference == "ROHF":
-        wfn = core.ROHF(ref_wfn, superfunc)
-    elif reference in ["UHF", "UKS"]:
-        wfn = core.UHF(ref_wfn, superfunc)
-    elif reference == "CUHF":
-        wfn = core.CUHF(ref_wfn, superfunc)
-    else:
-        raise ValidationError("SCF: Unknown reference (%s) when building the Wavefunction." % reference)
+    with p4util.timer("SCF: Native constructor"):
+        if reference in ["RHF", "RKS"]:
+            wfn = core.RHF(ref_wfn, superfunc)
+        elif reference == "ROHF":
+            wfn = core.ROHF(ref_wfn, superfunc)
+        elif reference in ["UHF", "UKS"]:
+            wfn = core.UHF(ref_wfn, superfunc)
+        elif reference == "CUHF":
+            wfn = core.CUHF(ref_wfn, superfunc)
+        else:
+            raise ValidationError("SCF: Unknown reference (%s) when building the Wavefunction." % reference)
 
     if _disp_functor and _disp_functor.engine != 'nl':
         wfn._disp_functor = _disp_functor
@@ -1455,17 +1458,18 @@ def scf_wavefunction_factory(name, ref_wfn, reference, **kwargs):
     df_needed |= "DFDIRJ" in core.get_global_option("SCF_TYPE")
     df_needed |= (core.get_global_option("SCF_TYPE") == "DIRECT" and core.get_option("SCF", "DF_SCF_GUESS"))
     if df_needed:
-        if (dfbs := kwargs.get("_force_df_basis_scf", False)):
-            key, target, fitrole = dfbs
-            aux_basis = core.BasisSet.build(wfn.molecule(), key, target, fitrole,
-                                        core.get_global_option('BASIS'),
-                                        puream=wfn.basisset().has_puream())
-        else:
-            aux_basis = core.BasisSet.build(wfn.molecule(), "DF_BASIS_SCF",
-                                        core.get_option("SCF", "DF_BASIS_SCF"),
-                                        "JKFIT", core.get_global_option('BASIS'),
-                                        puream=wfn.basisset().has_puream())
-        wfn.set_basisset("DF_BASIS_SCF", aux_basis)
+        with p4util.timer("SCF: Auxiliary basis"):
+            if (dfbs := kwargs.get("_force_df_basis_scf", False)):
+                key, target, fitrole = dfbs
+                aux_basis = core.BasisSet.build(wfn.molecule(), key, target, fitrole,
+                                            core.get_global_option('BASIS'),
+                                            puream=wfn.basisset().has_puream())
+            else:
+                aux_basis = core.BasisSet.build(wfn.molecule(), "DF_BASIS_SCF",
+                                            core.get_option("SCF", "DF_BASIS_SCF"),
+                                            "JKFIT", core.get_global_option('BASIS'),
+                                            puream=wfn.basisset().has_puream())
+            wfn.set_basisset("DF_BASIS_SCF", aux_basis)
     else:
         wfn.set_basisset("DF_BASIS_SCF", core.BasisSet.zero_ao_basis_set())
 
@@ -1479,22 +1483,7 @@ def scf_wavefunction_factory(name, ref_wfn, reference, **kwargs):
 
     # Set the multitude of SAD basis sets
     if (core.get_option("SCF", "GUESS") in ["SAD", "SADNO", "HUCKEL", "MODHUCKEL"]):
-        sad_basis_list = core.BasisSet.build(wfn.molecule(), "ORBITAL",
-                                             core.get_global_option("BASIS"),
-                                             puream=wfn.basisset().has_puream(),
-                                             return_atomlist=True)
-        wfn.set_sad_basissets(sad_basis_list)
-
-        if ("DF" in core.get_option("SCF", "SAD_SCF_TYPE")):
-            # We need to force this to spherical regardless of any user or other demands.
-            optstash = p4util.OptionsState(['PUREAM'])
-            core.set_global_option('PUREAM', True)
-            sad_fitting_list = core.BasisSet.build(wfn.molecule(), "DF_BASIS_SAD",
-                                                   core.get_option("SCF", "DF_BASIS_SAD"),
-                                                   puream=True,
-                                                   return_atomlist=True)
-            wfn.set_sad_fitting_basissets(sad_fitting_list)
-            optstash.restore()
+        _set_sad_basissets(wfn)
 
     if core.get_option("SCF", "GUESS") == "SAPGAU":
         # Populate sapgau basis
@@ -1511,6 +1500,26 @@ def scf_wavefunction_factory(name, ref_wfn, reference, **kwargs):
         _set_external_potentials_to_wavefunction(ep, wfn)
 
     return wfn
+
+
+@p4util.timer("SCF: SAD bases")
+def _set_sad_basissets(wfn):
+    """Use identical SAD bases for an explicit guess and a missing READ file."""
+    sad_basis_list = core.BasisSet.build(wfn.molecule(), "ORBITAL",
+                                         core.get_global_option("BASIS"),
+                                         puream=wfn.basisset().has_puream(),
+                                         return_atomlist=True)
+    wfn.set_sad_basissets(sad_basis_list)
+    if "DF" in core.get_option("SCF", "SAD_SCF_TYPE"):
+        # The SAD fit is spherical even for Cartesian orbitals. This also
+        # satisfies the cuEST DF-plan contract when READ falls back to SAD.
+        with p4util.OptionsStateCM(['PUREAM']):
+            core.set_global_option('PUREAM', True)
+            sad_fitting_list = core.BasisSet.build(wfn.molecule(), "DF_BASIS_SAD",
+                                                   core.get_option("SCF", "DF_BASIS_SAD"),
+                                                   puream=True,
+                                                   return_atomlist=True)
+            wfn.set_sad_fitting_basissets(sad_fitting_list)
 
 
 def validate_external_potential(external_potential) -> Dict:
@@ -1752,6 +1761,7 @@ def _seed_scf_orbitals(scf_wfn, old_wfn, scf_molecule, source):
         scf_wfn.reset_occ_ = True
 
 
+@p4util.timer("SCF: Driver")
 def scf_helper(name, post_scf=True, **kwargs):
     """Function serving as helper to SCF, choosing whether to cast
     up or just run SCF with a standard guess. This preserves
@@ -1947,7 +1957,8 @@ def scf_helper(name, post_scf=True, **kwargs):
     # the FIRST scf call
     if cast:
         # Cast is a special case
-        base_wfn = core.Wavefunction.build(scf_molecule, core.get_global_option('BASIS'))
+        with p4util.timer("SCF: Wavefunction build"):
+            base_wfn = core.Wavefunction.build(scf_molecule, core.get_global_option('BASIS'))
         core.print_out("\n         ---------------------------------------------------------\n")
         if banner:
             core.print_out("         " + banner.center(58))
@@ -1977,7 +1988,8 @@ def scf_helper(name, post_scf=True, **kwargs):
 
     # the SECOND scf call
     _t_driver0 = time.perf_counter()
-    base_wfn = core.Wavefunction.build(scf_molecule, core.get_global_option('BASIS'))
+    with p4util.timer("SCF: Wavefunction build"):
+        base_wfn = core.Wavefunction.build(scf_molecule, core.get_global_option('BASIS'))
     if banner:
         core.print_out("\n         ---------------------------------------------------------\n")
         core.print_out("         " + banner.center(58))
@@ -1998,18 +2010,7 @@ def scf_helper(name, post_scf=True, **kwargs):
     elif (core.get_option('SCF', 'GUESS') == 'READ') and not os.path.isfile(read_filename):
         core.print_out(f"\n !!!  Unable to find file {read_filename}, defaulting to SAD guess. !!!\n\n")
         core.set_local_option('SCF', 'GUESS', 'SAD')
-        sad_basis_list = core.BasisSet.build(scf_wfn.molecule(), "ORBITAL",
-                                             core.get_global_option("BASIS"),
-                                             puream=scf_wfn.basisset().has_puream(),
-                                             return_atomlist=True)
-        scf_wfn.set_sad_basissets(sad_basis_list)
-
-        if ("DF" in core.get_option("SCF", "SAD_SCF_TYPE")):
-            sad_fitting_list = core.BasisSet.build(scf_wfn.molecule(), "DF_BASIS_SAD",
-                                                   core.get_option("SCF", "DF_BASIS_SAD"),
-                                                   puream=scf_wfn.basisset().has_puream(),
-                                                   return_atomlist=True)
-            scf_wfn.set_sad_fitting_basissets(sad_fitting_list)
+        _set_sad_basissets(scf_wfn)
 
 
     if cast:
@@ -2084,29 +2085,28 @@ def scf_helper(name, post_scf=True, **kwargs):
 
     # We always would like to print a little property information
     if kwargs.get('scf_do_properties', True):
-        oeprop = core.OEProp(scf_wfn)
-        oeprop.set_title("SCF")
+        with p4util.timer("SCF: Properties"):
+            oeprop = core.OEProp(scf_wfn)
+            oeprop.set_title("SCF")
 
-        # Figure our properties, if empty do dipole
-        props = [x.upper() for x in core.get_option("SCF", "SCF_PROPERTIES")]
-        if "DIPOLE" not in props:
-            props.append("DIPOLE")
+            # Figure our properties, if empty do dipole
+            props = [x.upper() for x in core.get_option("SCF", "SCF_PROPERTIES")]
+            if "DIPOLE" not in props:
+                props.append("DIPOLE")
 
-        proc_util.oeprop_validator(props)
-        for x in props:
-            oeprop.add(x)
+            proc_util.oeprop_validator(props)
+            for x in props:
+                oeprop.add(x)
 
-        # Populate free-atom volumes
-        # if we're doing MBIS
-        if 'MBIS_VOLUME_RATIOS' in props:
-            p4util.free_atom_volumes(scf_wfn)
+            # Populate free-atom volumes if we're doing MBIS
+            if 'MBIS_VOLUME_RATIOS' in props:
+                p4util.free_atom_volumes(scf_wfn)
 
-        # Compute properties
-        oeprop.compute()
-        for obj in [core, scf_wfn]:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-            obj.set_variable("CURRENT DIPOLE", obj.variable("SCF DIPOLE"))  # P::e SCF
+            oeprop.compute()
+            for obj in [core, scf_wfn]:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                obj.set_variable("CURRENT DIPOLE", obj.variable("SCF DIPOLE"))  # P::e SCF
 
     # Write out MO's
     if core.get_option("SCF", "PRINT_MOS"):
@@ -2128,18 +2128,20 @@ def scf_helper(name, post_scf=True, **kwargs):
 
     # Write checkpoint file (orbitals and basis); Can be disabled, e.g., for findif displacements
     if write_checkpoint_file and isinstance(_chkfile, str):
-        filename = kwargs['write_orbitals']
-        scf_wfn.to_file(filename)
+        with p4util.timer("SCF: Checkpoint"):
+            filename = kwargs['write_orbitals']
+            scf_wfn.to_file(filename)
         # core.set_local_option("SCF", "ORBITALS_WRITE", filename)
     elif write_checkpoint_file:
-        filename = scf_wfn.get_scratch_filename(180)
-        scf_wfn.to_file(filename)
-        extras.register_numpy_file(filename) # retain with -m (messy) option
+        with p4util.timer("SCF: Checkpoint"):
+            filename = scf_wfn.get_scratch_filename(180)
+            scf_wfn.to_file(filename)
+            extras.register_numpy_file(filename) # retain with -m (messy) option
 
     _t_driver4 = time.perf_counter()
     core.print_out("\n  ==> SCF Driver Timing <==\n\n")
-    core.print_out("    Wfn.build:       %7.3fs\n" % (_t_driver1 - _t_driver0))
-    core.print_out("    Wfn factory:     %7.3fs\n" % (_t_driver2 - _t_driver1))
+    core.print_out("    Build + factory: %7.3fs\n" % (_t_driver1 - _t_driver0))
+    core.print_out("    Driver setup:    %7.3fs\n" % (_t_driver2 - _t_driver1))
     core.print_out("    compute_energy:  %7.3fs\n" % (_t_driver3 - _t_driver2))
     core.print_out("    Post-SCF:        %7.3fs\n" % (_t_driver4 - _t_driver3))
     core.print_out("    Total driver:    %7.3fs\n\n" % (_t_driver4 - _t_driver0))

@@ -96,6 +96,8 @@ class PSI_API cuESTJK : public JK {
     void allocate_workspace(cuestWorkspaceDescriptor_t& desc, cuestWorkspace_t& ws);
     void free_workspace(cuestWorkspace_t& ws);
     void destroy_cuest_objects();
+    /// Restore this computation's requested mode on the shared cuEST handle.
+    void configure_math_mode();
     /// Tear down and re-create the DF integral plan; a no-op before initialize().
     void rebuild_cuest_plan();
 

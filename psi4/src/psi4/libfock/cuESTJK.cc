@@ -107,6 +107,8 @@ cuESTJK::~cuESTJK() {
 
 void cuESTJK::preiterations()
 {
+    configure_math_mode();
+
     auto mol = primary_->molecule();
     size_t natom = mol->natom();
 
@@ -219,14 +221,6 @@ void cuESTJK::preiterations()
         &dfk_moduli_,
         sizeof(uint64_t)));
 
-    // Set global math mode, if CUEST_NATIVE_FP64_MATH_MODE, all forms of mixed precision emulation will be turned off
-    if (!options_.get_bool("CUEST_MIXED_PRECISION")) {
-        CHECK_CUEST(cuestSetMathMode(
-            cuest_handle,
-            CUEST_NATIVE_FP64_MATH_MODE
-        ));
-    }
-
     initialized_ = true;
 
     if (print_) {
@@ -248,6 +242,15 @@ void cuESTJK::preiterations()
         }
         outfile->Printf("\n");
     }
+}
+
+void cuESTJK::configure_math_mode() {
+    // The handle outlives individual JK objects. Always set both directions:
+    // allowing emulation must undo native FP64 selected by an earlier build.
+    // Reapply before compute as well, since SAPT can reuse an initialized JK.
+    CHECK_CUEST(cuestSetMathMode(
+        cuest_handle,
+        options_.get_bool("CUEST_MIXED_PRECISION") ? CUEST_DEFAULT_MATH_MODE : CUEST_NATIVE_FP64_MATH_MODE));
 }
 
 void cuESTJK::destroy_cuest_objects() {
@@ -308,6 +311,8 @@ size_t cuESTJK::memory_estimate() {
 
 void cuESTJK::print_header() const {
     if (print_) {
+        cuestMathMode_t math_mode;
+        CHECK_CUEST(cuestGetMathMode(cuest_handle, &math_mode));
         outfile->Printf("  ==> cuESTJK: GPU-Accelerated Density-Fitted J/K Matrices <==\n\n");
         outfile->Printf("    J tasked:              %11s\n", (do_J_ ? "Yes" : "No"));
         outfile->Printf("    K tasked:              %11s\n", (do_K_ ? "Yes" : "No"));
@@ -316,16 +321,40 @@ void cuESTJK::print_header() const {
         outfile->Printf("    Omega:                 %11.3E\n", omega_);
         outfile->Printf("    Pseudoinverse cutoff:  %11.1E\n", condition_);
         outfile->Printf("    Threshold PQ:          %11.1E\n", pq_threshold_);
+        outfile->Printf("    Math mode:             %s\n",
+                        math_mode == CUEST_NATIVE_FP64_MATH_MODE ? "Native FP64"
+                                                               : "Default (mixed precision permitted)");
         outfile->Printf("\n");
     }
 }
 
 void cuESTJK::compute_JK() {
+    configure_math_mode();
+
     using clock = std::chrono::high_resolution_clock;
     auto t_total_start = clock::now();
  
     int nbf = primary_->nbf();
     size_t nbf2_bytes = static_cast<size_t>(nbf) * nbf * sizeof(double);
+
+    // One pair of coefficient buffers per build, not per density. SAPT cache
+    // builds carry several densities and SAD carries alpha/beta together.
+    // Keep the lifetime local so retained scratch cannot crowd out later SCFs.
+    size_t max_nocc = 0;
+    if (do_K_) {
+        for (size_t N = 0; N < D_ao_.size(); ++N) {
+            const int nocc = C_left_ao_[N]->ncol();
+            if (!lr_symmetric_ && C_right_ao_[N]->ncol() != nocc) {
+                throw PSIEXCEPTION("cuESTJK: C_left and C_right must have the same number of columns; "
+                                   "cuEST's nonsymmetric exchange kernel contracts them over a shared "
+                                   "occupied index.");
+            }
+            max_nocc = std::max(max_nocc, static_cast<size_t>(nocc));
+        }
+    }
+    const size_t max_coeffs = max_nocc * static_cast<size_t>(nbf);
+    std::vector<double> C_row_major(max_coeffs);
+    std::vector<double> C_right_row_major(lr_symmetric_ ? 0 : max_coeffs);
  
     auto t0 = clock::now();
     double* d_D = nullptr;
@@ -334,9 +363,16 @@ void cuESTJK::compute_JK() {
     double* d_C = nullptr;
     double* d_C_right = nullptr;
  
-    cudaMalloc(reinterpret_cast<void**>(&d_D), nbf2_bytes);
-    cudaMalloc(reinterpret_cast<void**>(&d_J), nbf2_bytes);
-    cudaMalloc(reinterpret_cast<void**>(&d_K), nbf2_bytes);
+    if (do_J_) {
+        cudaMalloc(reinterpret_cast<void**>(&d_D), nbf2_bytes);
+        cudaMalloc(reinterpret_cast<void**>(&d_J), nbf2_bytes);
+    }
+    if (do_K_) cudaMalloc(reinterpret_cast<void**>(&d_K), nbf2_bytes);
+    if (max_coeffs) {
+        cudaMalloc(reinterpret_cast<void**>(&d_C), max_coeffs * sizeof(double));
+        if (!lr_symmetric_)
+            cudaMalloc(reinterpret_cast<void**>(&d_C_right), max_coeffs * sizeof(double));
+    }
     auto t_alloc = clock::now();
  
     cuestWorkspaceDescriptor_t* j_temp_desc = (cuestWorkspaceDescriptor_t*) malloc(sizeof(cuestWorkspaceDescriptor_t));
@@ -454,7 +490,6 @@ void cuESTJK::compute_JK() {
                 };
  
                 auto tt0 = clock::now();
-                std::vector<double> C_row_major(nocc * nbf);
                 pack_transposed(C_left_ao_[N], C_row_major.data());
  
                 // C_left != C_right happens all over SAPT's exchange terms.  The
@@ -462,26 +497,11 @@ void cuESTJK::compute_JK() {
                 // twice, which is a wrong answer that still converges and still
                 // looks plausible -- so the two paths are selected here, never
                 // approximated by one another.
-                std::vector<double> C_right_row_major;
                 if (!lr_symmetric_) {
-                    if (C_right_ao_[N]->ncol() != nocc) {
-                        throw PSIEXCEPTION(
-                            "cuESTJK: C_left and C_right must have the same number of columns; "
-                            "cuEST's nonsymmetric exchange kernel contracts them over a shared "
-                            "occupied index.");
-                    }
-                    C_right_row_major.resize(static_cast<size_t>(nocc) * nbf);
                     pack_transposed(C_right_ao_[N], C_right_row_major.data());
                 }
                 auto tt1 = clock::now();
                 ms_transpose += std::chrono::duration<double, std::milli>(tt1 - tt0).count();
- 
-                cudaFree(d_C);
-                cudaMalloc(reinterpret_cast<void**>(&d_C), c_bytes);
-                if (!lr_symmetric_) {
-                    cudaFree(d_C_right);
-                    cudaMalloc(reinterpret_cast<void**>(&d_C_right), c_bytes);
-                }
  
                 auto tk0 = clock::now();
                 cudaMemcpy(d_C, C_row_major.data(), c_bytes, cudaMemcpyHostToDevice);
@@ -522,6 +542,10 @@ void cuESTJK::compute_JK() {
                 ms_memcpy_h2d += std::chrono::duration<double, std::milli>(tk1 - tk0).count();
                 ms_K_compute += std::chrono::duration<double, std::milli>(tk2 - tk1).count();
                 ms_memcpy_d2h += std::chrono::duration<double, std::milli>(tk3 - tk2).count();
+            } else {
+                // In particular, integer-occupation SAD on hydrogen has no
+                // beta occupied orbitals. Never leave a previous build's K.
+                K_ao_[N]->zero();
             }
         }
     }
@@ -546,7 +570,7 @@ void cuESTJK::compute_JK() {
     double ms_free = std::chrono::duration<double, std::milli>(t_free_end - t_free_start).count();
     double ms_total = std::chrono::duration<double, std::milli>(t_free_end - t_total_start).count();
  
-    outfile->Printf("    cuESTJK compute_JK: total=%7.2fms | alloc=%5.2fms ws=%5.2fms "
+    if (bench_) outfile->Printf("    cuESTJK compute_JK: total=%7.2fms | alloc=%5.2fms ws=%5.2fms "
                      "J=%6.2fms K=%6.2fms memcpy(H2D)=%5.2fms memcpy(D2H)=%5.2fms "
                      "transpose=%5.2fms free=%5.2fms\n",
                      ms_total, ms_alloc, ms_wsquery, ms_J_compute, ms_K_compute,

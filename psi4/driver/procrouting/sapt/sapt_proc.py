@@ -1170,11 +1170,11 @@ def compute_GRAC_shift(
                 )
                 cation_kwargs = dict(scf_kwargs)
                 if core.get_option("SAPT", "SAPT_DFT_GRAC_SEED_CATION"):
-                    # Same geometry and basis as the neutral, one electron short,
-                    # so its converged orbitals start much closer than a fresh SAD
-                    # guess.  Opt-in: that same closeness can hold the cation in
-                    # the neutral's state, which is what the convergence tiers
-                    # above are there to break out of.
+                    # Seed from the given monomer (which may already be charged),
+                    # with the same geometry/basis but one electron removed.
+                    # Occupations are reset for the target electron count by
+                    # _seed_scf_orbitals. This is opt-in because the starting
+                    # orbitals can bias which cation SCF solution is reached.
                     cation_kwargs["guess_wfn"] = wfn_given
                 wfn_cation = run_scf(
                     dft_functional.lower(),
@@ -1185,8 +1185,9 @@ def compute_GRAC_shift(
             except ConvergenceError:
                 # A failed attempt's wavefunctions are still bound in this
                 # function's scope, so without dropping them here they stay
-                # resident -- grid data, collocation cache and all -- while the
-                # next convergence tier allocates its own from the full budget.
+                # resident while the next tier allocates its own from the full
+                # budget. SCF failure already clears the collocation cache;
+                # dropping the wavefunctions releases their remaining grid/matrices.
                 wfn_given = None
                 wfn_cation = None
                 if len(grac_options) == 1:
@@ -1462,14 +1463,10 @@ def sapt_dft(
         sapt_jk.set_do_wK(True)
         sapt_jk.set_omega(wfn_A.functional().x_omega())
     else:
-        # SAPT's exchange formulas want the bare exchange operator, but this JK
-        # object is usually inherited from a monomer DFT SCF (`wfn_B.jk()`).
-        # Under cuEST the exact-exchange fraction is folded into the DF integral
-        # plan -- which is why RHF::form_G sets alpha to 1.0 for cuEST -- so an
-        # inherited builder hands back K already scaled by the functional's
-        # x_alpha (0.25 for PBE0), silently shrinking Exch10.  Asking for the
-        # unscaled operator here is a no-op for the CPU builders, whose K never
-        # carried the fraction in the first place.
+        # SAPT needs bare K, not the hybrid-weighted K used by the monomer SCF.
+        # cuEST folds x_alpha into its DF plan (0.25 for PBE0), so these setters
+        # must rebuild an inherited cuEST plan with weights (1, 0). CPU builders
+        # already return bare K for global hybrids.
         sapt_jk.set_omega_alpha(1.0)
         sapt_jk.set_omega_beta(0.0)
 

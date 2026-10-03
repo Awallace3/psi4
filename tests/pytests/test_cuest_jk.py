@@ -7,20 +7,15 @@ ever asks for.  SAPT is different: nearly every exchange term contracts one set
 of orbitals against a *different* one, and Psi4 expresses that by pushing
 distinct matrices through ``C_left_add`` and ``C_right_add``.
 
-cuEST has separate kernels for the two cases -- ``cuestDFSymmetricExchangeCompute``
-and, since v0.2.0, ``cuestDFNonsymmetricExchangeCompute``.  Handing an asymmetric
-request to the symmetric kernel is not an approximation with a small error: it
-silently computes K(C_left, C_left) and returns it as K(C_left, C_right).  The
-result is finite, smooth, and wrong, and in SAPT(DFT)-D4(I) it moved E_exch by
-38% while leaving E_elst -- which needs only J -- exact to every printed digit.
+cuEST provides separate symmetric and nonsymmetric exchange kernels. Using
+the symmetric kernel for an asymmetric request computes K(C_left, C_left)
+instead of K(C_left, C_right), changing SAPT exchange even when Coulomb agrees.
 
-A second, independent hazard lives in the same builder: cuEST compiles the
-exact-exchange fractions into its DF integral plan, so its K arrives pre-scaled
-by the functional's ``x_alpha``.  Inside an SCF that is accounted for (see the
-``use_cuest`` branch of ``RHF::form_G``), but a J/K object built by a PBE0
-monomer SCF and then inherited by SAPT hands K/4 to formulas that want the bare
-exchange operator -- again shrinking E_exch while leaving E_elst exact.  The last
-two tests pin that behaviour and the setter that undoes it.
+A separate contract is exchange weighting: cuEST compiles the exact-exchange
+fractions into its DF plan, so a global hybrid's K arrives scaled by x_alpha.
+The SCF accounts for this, but SAPT needs bare K. A builder inherited from PBE0
+must therefore change its plan's exchange weight from 0.25 to 1. These tests
+cover both the weighting and resetting it after initialization.
 
 These tests are deliberately at the J/K layer rather than at the SAPT layer,
 because a failure here says "the exchange builder is wrong" instead of "one of
@@ -107,6 +102,24 @@ def _run_jk(use_cuest, primary, aux, pairs, alpha_before=None, alpha_after=None)
 def _random_coeffs(nbf, ncol, seed):
     rng = np.random.default_rng(seed)
     return rng.standard_normal((nbf, ncol)) / np.sqrt(nbf)
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+def test_cuest_jk_varying_occupied_buffers():
+    """Shared per-build scratch handles growing, empty, and shrinking pairs."""
+    primary, aux = _basis_sets()
+    pairs = [
+        (_random_coeffs(primary.nbf(), ncol, 200 + i),
+         _random_coeffs(primary.nbf(), ncol, 300 + i))
+        for i, ncol in enumerate((1, 5, 0, 3))
+    ]
+    _, cpu_j, cpu_k = _run_jk(False, primary, aux, pairs)
+    _, gpu_j, gpu_k = _run_jk(True, primary, aux, pairs)
+    for ref, got in zip(cpu_j + cpu_k, gpu_j + gpu_k):
+        np.testing.assert_allclose(got, ref, atol=1.e-8, rtol=0)
+    np.testing.assert_array_equal(gpu_k[2], 0.0)
 
 
 @uusing("cuest")
@@ -228,8 +241,8 @@ def test_cuest_jk_exchange_fraction_is_resettable_after_initialize():
     This is what ``sapt_dft`` does to the J/K object it inherits from the monomer
     DFT SCF.  cuEST cannot simply store the new fraction -- it is compiled into
     the DF integral plan -- so ``cuESTJK::set_omega_alpha`` rebuilds that plan.
-    Before the fix the setter was a silent no-op and SAPT(DFT)-D4(I) with PBE0
-    reported ``SAPT EXCH ENERGY`` 23% low while every other component was exact.
+    This pins the inherited-builder contract without relying on a particular
+    dimer's total SAPT exchange energy.
     """
     primary, aux = _basis_sets()
     nbf = primary.nbf()
@@ -244,3 +257,55 @@ def test_cuest_jk_exchange_fraction_is_resettable_after_initialize():
         "K mismatch after resetting the exchange fraction: max |diff| = "
         f"{np.abs(cpu_K[0] - gpu_K[0]).max():.3e}"
     )
+
+
+@uusing("cuest")
+@uusing("cuda_cc8")
+@pytest.mark.cuest
+@pytest.mark.parametrize("symmetric", [False, True])
+def test_cuest_jk_math_mode_switching(symmetric, tmp_path):
+    """Pin the actual handle mode for fresh builders and an initialized, reused JK.
+
+    Numerical agreement cannot establish that mixed precision was permitted:
+    cuEST may legitimately choose native FP64 for small work even in default mode.
+    print_header queries the handle, rather than echoing the requested option.
+    """
+    primary, aux = _basis_sets()
+    nbf = primary.nbf()
+    left = psi4.core.Matrix.from_array(_random_coeffs(nbf, 5, 11))
+    right = psi4.core.Matrix.from_array(_random_coeffs(nbf, 5, 22))
+    jk = None
+    try:
+        for step, (mixed, rebuild) in enumerate(
+            [(False, True), (True, True), (False, False), (True, False), (False, False)]
+        ):
+            outfile = tmp_path / f"math-mode-{step}.out"
+            psi4.core.set_output_file(str(outfile), False)
+            psi4.set_options({"scf_type": "df", "USE_CUEST": True, "CUEST_MIXED_PRECISION": mixed})
+            if rebuild:
+                if jk is not None:
+                    jk.finalize()
+                jk = psi4.core.JK.build_JK(primary, aux)
+                jk.set_do_J(True)
+                jk.set_do_K(True)
+                jk.set_print(1)
+                jk.initialize()
+                jk.print_header()
+
+            jk.C_clear()
+            jk.C_left_add(left)
+            if not symmetric:
+                jk.C_right_add(right)
+            jk.compute()
+            jk.print_header()
+            assert np.all(np.isfinite(np.asarray(jk.K()[0])))
+            psi4.core.close_outfile()
+            text = outfile.read_text()
+            expected = "Default (mixed precision permitted)" if mixed else "Native FP64"
+            other = "Native FP64" if mixed else "Default (mixed precision permitted)"
+            assert text.count(expected) == (2 if rebuild else 1)
+            assert other not in text
+    finally:
+        if jk is not None:
+            jk.finalize()
+        psi4.core.close_outfile()

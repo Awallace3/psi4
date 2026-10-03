@@ -186,5 +186,7 @@ def OptionsStateCM(osd) -> Iterator[None]:
 
     """
     oso = OptionsState(osd)
-    yield
-    oso.restore()
+    try:
+        yield
+    finally:
+        oso.restore()

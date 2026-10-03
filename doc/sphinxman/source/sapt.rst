@@ -655,6 +655,60 @@ energy contribution is included in the printed SAPT(DFT) summary and stored in
 the dispersion QCVariable.
 
 
+cuEST SAD routing and SCF lifecycle timings
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In builds with cuEST support, ``USE_CUEST true`` and ``SCF_TYPE DF`` route
+molecular J/K through cuEST. With |globals__cuest_sad| (default true), the
+density-fitted atomic J/K builds used by SAD, SADNO, HUCKEL, and MODHUCKEL
+guesses also use cuEST, including the internal and OpenOrbitalOptimizer SAD
+solvers. The atomic calculations retain bare HF exchange and their original
+occupations and convergence criteria. The SAD fitting basis must be spherical;
+the driver constructs it that way even for Cartesian orbital functions.
+Explicit non-DF |scf__sad_scf_type| settings retain the CPU direct builder.
+The default GPU route uses cuEST pair screening. Explicit CPU screening modes
+other than ``SCHWARZ``, nonpositive integral tolerance, custom
+``DF_FITTING_CONDITION``, or Cartesian fitting functions retain CPU atomic
+J/K rather than silently ignoring those contracts. GPU runtime failures are
+reported as errors, not retried on CPU.
+``CUEST_SAD false`` keeps atomic J/K on CPU without disabling molecular GPU
+J/K. This is an important comparison control: tiny atomic calculations may
+cost more to initialize and transfer than the GPU saves. With ``SAD_PRINT``
+enabled, ``SAD J/K backend`` identifies the selected atomic builder.
+
+The hierarchical ``timer.dat`` report includes ``SCF: Driver`` and nested
+regions for wavefunction construction, functional setup, native constructors,
+auxiliary/SAD basis construction, initialization, iterations, finalization,
+properties, and checkpoint writes. Initialization separates JK factory,
+memory estimates, JK initialization, and collocation-cache construction;
+finalization separates native cleanup, variable publication, and cache release.
+Passed-in JK objects are still reused: no ``SCF: JK initialize`` call is
+recorded for such a reuse. The existing ``HF: Guess`` / ``SAD Guess`` timers
+measure the atomic-guess work; nested atomic timers remain suppressed.
+
+These regions include both Python and native work. Compute exclusive time by
+subtracting only immediate children; summing nested timers double counts work.
+Neither an SCF residual nor a GPU-backed wall-time region measures interpreter
+time or device occupancy. For those questions use native-aware sampling and
+GPU tracing alongside the timer tree. Set ``BENCH 1`` to print cuEST's detailed
+per-build J/K timing line; normal runs omit that high-frequency output.
+
+Repeated atoms reuse parsed basis-file entries within a single basis
+construction. Each assignment receives independent shell data, and the cache
+ends with that construction, so custom definitions and pure/cartesian choices
+are re-read on subsequent builds. This reduces host setup work on both CPU
+and GPU routes without retaining whole basis objects across SCFs.
+
+Benchmark paired fresh-process CPU/GPU runs on the same source, hardware
+allocation, precision, basis, grid, and convergence settings. Report absolute
+time as well as speedup, using several repeats and a size ladder: small systems
+test correctness and overhead, while larger peptide/nanotube and protein-like
+systems test throughput and memory scaling. Keep GRAC seeding, delta-HF,
+dispersion and induction choices fixed. In particular, ``INDUCTION_TYPE NONE``
+with delta-HF enabled still includes the three HF SCFs, but not explicit
+CPHF/CPKS response.
+
+
 Approximate SAPT Decomposition of DFT-D Methods
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

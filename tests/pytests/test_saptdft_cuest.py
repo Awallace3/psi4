@@ -6,14 +6,15 @@ The supported GPU configuration is deliberately narrow:
     SAPT_DFT_INDUCTION_TYPE = NONE   (induction comes from delta HF)
     dispersion              = -D4(I) (empirical, no TDDFT response needed)
 
-Every remaining electronic-structure step is an SCF that goes through
-``scf_helper`` -- three HF SCFs for the delta-HF segment (dimer, monomer A,
-monomer B) and two DFT SCFs for the monomers -- so turning on ``USE_CUEST``
-routes the whole method onto the GPU by way of the DF J/K builder.
+With explicit GRAC shifts, these tests run three HF SCFs for the delta-HF
+segment (dimer, monomer A, monomer B) and two monomer DFT SCFs. ``USE_CUEST``
+selects GPU DF J/K in those SCFs and in the SAPT tensor contractions. XC and
+eligible matrix chains have separate GPU switches; not every SAPT stage runs
+on the device. Automatic GRAC's additional monomer/cation SCFs are not covered.
 
 These tests pin five things:
   1. ``USE_CUEST`` is *optional*: the cuEST run must reproduce the CPU run.
-  2. ``USE_CUEST`` is *complete*: no CPU DF J/K object is constructed anywhere
+  2. GPU DF J/K coverage is complete: no CPU DF J/K object is constructed anywhere
      in the SAPT(DFT) driver when it is on.
   3. Nonzero monomer GRAC shifts with cuEST XC reproduce the CPU result,
      and differ from the unshifted result (the correction is not dropped).
@@ -22,10 +23,12 @@ These tests pin five things:
      ``CUEST_GEMM_MIN_DIM`` normally keeps switched off for a system this small,
      reproduces the einsums path when it is forced on.
 
-GRAC uses Psi4's SuperFunctional evaluator on the cuEST grid densities and
-passes the corrected grid potential to cuEST for AO integration. CPU grid
-blocks are not needed. Response-based induction/dispersion remain outside
-this GPU-XC configuration; these tests use delta HF and D4(I) instead.
+With GPU XC, GRAC uses CUDA LibXC when available, or SuperFunctional host
+evaluation on cuEST grid densities otherwise. Both routes pass the corrected
+potential to cuEST for AO integration without CPU collocation blocks.
+``CUEST_XC false`` instead uses the ordinary CPU grid. Response-based
+induction/dispersion remain outside this GPU-XC configuration; these tests use
+delta HF and D4(I) instead.
 """
 
 import pytest

@@ -68,6 +68,7 @@ class SADGuess {
     std::unique_ptr<JK> jk;
 
     void common_init();
+    void initialize_jk(std::shared_ptr<BasisSet> basis, std::shared_ptr<BasisSet> fit);
 
     void run_atomic_calculations(SharedMatrix& D_AO, SharedMatrix& Huckel_C, SharedVector& Huckel_E);
     void form_gradient(SharedMatrix grad, SharedMatrix F, SharedMatrix D, SharedMatrix S, SharedMatrix X);

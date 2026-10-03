@@ -16,7 +16,7 @@
 #
 # Psi4 is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU Lesser General Public License for more details.
 #
 # You should have received a copy of the GNU Lesser General Public License along
@@ -25,26 +25,24 @@
 #
 # @END LICENSE
 #
+"""Dependency-light, exception-safe access to native hierarchical timers."""
 
-"""
-Miscellaneous tools for driver and users.
-"""
+from contextlib import contextmanager
 
-# Needed by SCF decorators during the fcidump -> procrouting import cycle.
-from .timing import timer
-from .exceptions import *
-from .fchk import *
-from .fcidump import *
-from .inpsight import *
-from .numpy_helper import *
-from .optproc import *
-from .p4regex import *
-from .procutil import *
-from .prop_util import *
-from .python_helpers import *
-from .solvers import *
-from .spectrum import *
-from .testing import *
-from .text import *
-from .util import *
-from .writer import *
+from psi4 import core
+
+__all__ = ["timer"]
+
+
+@contextmanager
+def timer(name):
+    """Balance a native timer, including on exceptions; also usable as a decorator.
+
+    These are inclusive wall-time regions, not Python-exclusive or GPU-kernel
+    timings. Subtract immediate children only when computing self-time.
+    """
+    core.timer_on(name)
+    try:
+        yield
+    finally:
+        core.timer_off(name)

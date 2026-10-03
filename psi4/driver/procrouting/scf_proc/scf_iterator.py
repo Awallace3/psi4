@@ -55,6 +55,7 @@ from ..solvent.efp import get_qm_atoms_opts, modify_Fock_induced, modify_Fock_pe
 #    self.iterations(e_conv=1.e-5, d_conv=1.e-4)
 
 
+@p4util.timer("SCF: Release collocation")
 def _release_collocation_cache(self):
     """Free the DFT collocation cache held by this wavefunction's V_potential.
 
@@ -66,6 +67,7 @@ def _release_collocation_cache(self):
         self.V_potential().clear_collocation_cache()
 
 
+@p4util.timer("SCF: Compute energy")
 def scf_compute_energy(self):
     """Base class Wavefunction requires this function. Here it is
     simply a wrapper around initialize(), iterations(), finalize_energy(). It
@@ -115,6 +117,7 @@ def scf_compute_energy(self):
     return scf_energy
 
 
+@p4util.timer("SCF: JK factory")
 def _build_jk(wfn, memory):
     jk = core.JK.build(wfn.get_basisset("ORBITAL"),
                        aux=wfn.get_basisset("DF_BASIS_SCF"),
@@ -144,6 +147,7 @@ def _resident_doubles():
     return resident_pages * os.sysconf("SC_PAGE_SIZE") / 8
 
 
+@p4util.timer("SCF: Memory reserve")
 def _scf_memory_reserve(wfn):
     """Estimate, in doubles, what this SCF will spend *outside* the two budgets it hands out.
 
@@ -224,6 +228,7 @@ def _scf_memory_reserve(wfn):
     }
 
 
+@p4util.timer("SCF: JK initialize")
 def initialize_jk(self, memory, jk=None):
 
     functional = self.functional()
@@ -241,10 +246,12 @@ def initialize_jk(self, memory, jk=None):
     jk.set_omega_alpha(functional.x_alpha())
     jk.set_omega_beta(functional.x_beta())
 
-    jk.initialize()
+    with p4util.timer("SCF: JK native initialize"):
+        jk.initialize()
     jk.print_header()
 
 
+@p4util.timer("SCF: Initialize")
 def scf_initialize(self):
     """Specialized initialization, compute integrals and does everything to prepare for iterations"""
 
@@ -261,9 +268,10 @@ def scf_initialize(self):
         _release_collocation_cache(self)
     # Return whatever the caches we just dropped were still holding before measuring, so
     # that recoverable arena space is not mistaken for memory this SCF cannot have.
-    core.release_freed_memory()
-    committed_memory = core.memory_committed()
-    resident_memory = _resident_doubles()
+    with p4util.timer("SCF: Reclaim memory"):
+        core.release_freed_memory()
+        committed_memory = core.memory_committed()
+        resident_memory = _resident_doubles()
     unclaimed_memory = max(0.0, (core.get_memory() / 8) - committed_memory)
 
     # Set aside the undeclared-but-mandatory part before dividing up the rest.  Without
@@ -352,7 +360,8 @@ def scf_initialize(self):
         # means "unknown", not "nothing", so the remainder is not the cache's to take --
         # treating it that way is what lets an out-of-core SCF claim a *larger* collocation
         # cache than the DF one it was meant to be cheaper than.
-        jk_size = jk.memory_estimate()
+        with p4util.timer("SCF: JK estimate"):
+            jk_size = jk.memory_estimate()
         jk_size_known = jk_size > 0
     else:
         # A re-used JK's integrals are already counted in committed_memory, but the buffers it
@@ -363,7 +372,8 @@ def scf_initialize(self):
         # and monomer B after monomer A, then cached the full grid on top of a 70 GiB JK and
         # were killed in their first iteration.  Charge what the JK may still allocate.  JKs
         # that cannot predict their footprint report 0 and keep the old treatment.
-        reused_jk_predictable = jk.memory_estimate() > 0
+        with p4util.timer("SCF: JK estimate"):
+            reused_jk_predictable = jk.memory_estimate() > 0
         if reused_jk_predictable:
             jk_size = max(0, jk.memory() - jk.memory_held())
         else:
@@ -486,43 +496,36 @@ def scf_initialize(self):
 
     # Initialize all integrals and perform the first guess
     if self.attempt_number_ == 1:
-        mints = core.MintsHelper(self.basisset())
-
         if initialize_jk_obj:
             self.initialize_jk(self.memory_jk_, jk=jk)
         if self.V_potential():
-            self.V_potential().build_collocation_cache(self.memory_collocation_)
-        core.timer_on("HF: Form core H")
-        self.form_H()
-        core.timer_off("HF: Form core H")
+            with p4util.timer("SCF: Build collocation"):
+                self.V_potential().build_collocation_cache(self.memory_collocation_)
+        with p4util.timer("HF: Form core H"):
+            self.form_H()
 
         if efp_enabled:
             # EFP: Add in permanent moment contribution and cache
-            core.timer_on("HF: Form Vefp")
-            verbose = core.get_option('SCF', "PRINT")
-            Vefp = modify_Fock_permanent(self.molecule(), mints, verbose=verbose - 1)
-            Vefp = core.Matrix.from_array(Vefp)
-            self.H().add(Vefp)
-            Horig = self.H().clone()
-            self.Horig = Horig
-            core.print_out("  QM/EFP: iterating Total Energy including QM/EFP Induction\n")
-            core.timer_off("HF: Form Vefp")
+            with p4util.timer("HF: Form Vefp"):
+                mints = core.MintsHelper(self.basisset())
+                verbose = core.get_option('SCF', "PRINT")
+                Vefp = modify_Fock_permanent(self.molecule(), mints, verbose=verbose - 1)
+                Vefp = core.Matrix.from_array(Vefp)
+                self.H().add(Vefp)
+                Horig = self.H().clone()
+                self.Horig = Horig
+                core.print_out("  QM/EFP: iterating Total Energy including QM/EFP Induction\n")
 
-        core.timer_on("HF: Form S/X")
-        self.form_Shalf()
-        core.timer_off("HF: Form S/X")
+        with p4util.timer("HF: Form S/X"):
+            self.form_Shalf()
 
         core.print_out("\n  ==> Pre-Iterations <==\n\n")
 
         # force SCF_SUBTYPE to AUTO during SCF guess
-        optstash = p4util.OptionsState(["SCF", "SCF_SUBTYPE"])
-        core.set_local_option("SCF", "SCF_SUBTYPE", "AUTO")
-
-        core.timer_on("HF: Guess")
-        self.guess()
-        core.timer_off("HF: Guess")
-
-        optstash.restore()
+        with p4util.OptionsStateCM(["SCF", "SCF_SUBTYPE"]):
+            core.set_local_option("SCF", "SCF_SUBTYPE", "AUTO")
+            with p4util.timer("HF: Guess"):
+                self.guess()
 
         # Print out initial docc/socc/etc data
         if self.get_print():
@@ -554,7 +557,10 @@ def scf_initialize(self):
                    ("   " if is_dfjk else "", "RMS" if diis_rms else "MAX", "    Ints Tol" if variable_screening else ""))
 
 
+@p4util.timer("SCF: Iterations")
 def scf_iterate(self, e_conv=None, d_conv=None):
+
+    _validate_ooo_cuest(self)
 
     is_dfjk = core.get_global_option('SCF_TYPE').endswith('DF')
     verbose = core.get_option('SCF', "PRINT")
@@ -684,9 +690,8 @@ def scf_iterate(self, e_conv=None, d_conv=None):
             ints_tol_field = f" {itr_thresh:11.3e}"
 
         # Two-electron contribution to Fock matrix from self.jk()
-        core.timer_on("HF: Form G")
-        self.form_G()
-        core.timer_off("HF: Form G")
+        with p4util.timer("HF: Form G"):
+            self.form_G()
 
         # Check if special J/K construction algorithms were used
         incfock_performed = hasattr(self.jk(), "do_incfock_iter") and self.jk().do_incfock_iter()
@@ -734,14 +739,12 @@ def scf_iterate(self, e_conv=None, d_conv=None):
         self.set_variable("PE ENERGY", upe)  # P::e PE
         self.set_energies("PE Energy", upe)
 
-        core.timer_on("HF: Form F")
-        # SAD: since we don't have orbitals yet, we might not be able
-        # to form the real Fock matrix. Instead, build an initial one
-        if (self.iteration_ == 0) and self.sad_:
-            self.form_initial_F()
-        else:
-            self.form_F()
-        core.timer_off("HF: Form F")
+        with p4util.timer("HF: Form F"):
+            # SAD has no orbitals yet, so build an initial Fock matrix.
+            if (self.iteration_ == 0) and self.sad_:
+                self.form_initial_F()
+            else:
+                self.form_F()
 
         if verbose > 3:
             self.Fa().print_out()
@@ -792,9 +795,8 @@ def scf_iterate(self, e_conv=None, d_conv=None):
             else:
                 # need to ensure orthogonal orbitals and set epsilon
                 status.append(base_name + "conv")
-                core.timer_on("HF: Form C")
-                self.form_C()
-                core.timer_off("HF: Form C")
+                with p4util.timer("HF: Form C"):
+                    self.form_C()
                 soscf_performed = True  # Stops DIIS
 
         if not soscf_performed:
@@ -805,23 +807,22 @@ def scf_iterate(self, e_conv=None, d_conv=None):
             # nalpha_ and nbeta_ are not guaranteed physical.
             # From here on, the density matrices are correct.
             if (self.iteration_ == 0) and self.sad_:
-                self.form_initial_C()
+                with p4util.timer("HF: Form C"):
+                    self.form_initial_C()
                 self.reset_occupation()
                 self.find_occupation()
 
             else:
                 # Run DIIS
-                core.timer_on("HF: DIIS")
-                diis_performed = False
-                add_to_diis_subspace = self.diis_enabled_ and self.iteration_ >= self.diis_start_
+                with p4util.timer("HF: DIIS"):
+                    diis_performed = False
+                    add_to_diis_subspace = self.diis_enabled_ and self.iteration_ >= self.diis_start_
 
-                Dnorm = self.compute_orbital_gradient(add_to_diis_subspace, core.get_option('SCF', 'DIIS_MAX_VECS'))
+                    Dnorm = self.compute_orbital_gradient(add_to_diis_subspace, core.get_option('SCF', 'DIIS_MAX_VECS'))
 
-                if add_to_diis_subspace:
-                    for engine_used in self.diis(Dnorm):
-                        status.append(engine_used)
-
-                core.timer_off("HF: DIIS")
+                    if add_to_diis_subspace:
+                        for engine_used in self.diis(Dnorm):
+                            status.append(engine_used)
 
                 if verbose > 4 and diis_performed:
                     core.print_out("  After DIIS:\n")
@@ -829,14 +830,13 @@ def scf_iterate(self, e_conv=None, d_conv=None):
                     self.Fb().print_out()
 
                 # frac, MOM invoked here from Wfn::HF::find_occupation
-                core.timer_on("HF: Form C")
-                level_shift = core.get_option("SCF", "LEVEL_SHIFT")
-                if level_shift > 0 and Dnorm > core.get_option('SCF', 'LEVEL_SHIFT_CUTOFF'):
-                    status.append("SHIFT")
-                    self.form_C(level_shift)
-                else:
-                    self.form_C()
-                core.timer_off("HF: Form C")
+                with p4util.timer("HF: Form C"):
+                    level_shift = core.get_option("SCF", "LEVEL_SHIFT")
+                    if level_shift > 0 and Dnorm > core.get_option('SCF', 'LEVEL_SHIFT_CUTOFF'):
+                        status.append("SHIFT")
+                        self.form_C(level_shift)
+                    else:
+                        self.form_C()
 
                 if self.MOM_performed_:
                     status.append("MOM")
@@ -853,9 +853,8 @@ def scf_iterate(self, e_conv=None, d_conv=None):
                     self.find_occupation()
 
         # Form new density matrix
-        core.timer_on("HF: Form D")
-        self.form_D()
-        core.timer_off("HF: Form D")
+        with p4util.timer("HF: Form D"):
+            self.form_D()
 
         self.set_variable("SCF ITERATION ENERGY", SCFE)
         core.set_variable("SCF D NORM", Dnorm)
@@ -929,6 +928,7 @@ def scf_iterate(self, e_conv=None, d_conv=None):
             raise SCFConvergenceError("""SCF iterations""", self.iteration_, self, Ediff, Dnorm)
 
 
+@p4util.timer("SCF: Finalize energy")
 def scf_finalize_energy(self):
     """Performs stability analysis and calls back SCF with new guess
     if needed, Returns the SCF energy. This function should be called
@@ -1113,10 +1113,12 @@ def scf_finalize_energy(self):
     # save_orbitals()
 
     # Shove variables into global space
-    for k, v in self.variables().items():
-        core.set_variable(k, v)
+    with p4util.timer("SCF: Publish variables"):
+        for k, v in self.variables().items():
+            core.set_variable(k, v)
 
-    self.finalize()
+    with p4util.timer("SCF: Native finalize"):
+        self.finalize()
     _release_collocation_cache(self)
 
     core.print_out("\nComputation Completed\n")
@@ -1362,6 +1364,20 @@ def _validate_MOM():
             raise ValidationError('SCF MOM_START ({}) must be at least 1'.format(start))
 
     return enabled
+
+
+def _validate_ooo_cuest(self):
+    """Reject OOO DFT callbacks that do not update cuEST's occupied AO coefficients."""
+    if core.get_option("SCF", "ORBITAL_OPTIMIZER_PACKAGE") not in ["OOO", "OPENORBITALOPTIMIZER"]:
+        return
+    if (core.get_option("SCF", "USE_CUEST") and core.get_option("SCF", "CUEST_XC")
+            and self.functional().needs_xc()):
+        raise ValidationError(
+            "OpenOrbitalOptimizer with cuEST XC is not supported: its DFT callbacks do not update "
+            "the occupied AO coefficients used by the GPU XC evaluator. Set "
+            "ORBITAL_OPTIMIZER_PACKAGE INTERNAL, or set CUEST_XC false to keep cuEST J/K "
+            "with CPU XC."
+        )
 
 
 def _validate_soscf():
