@@ -10,7 +10,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=384G
-#SBATCH --time=08:00:00
+#SBATCH --time=04:00:00
 #SBATCH --signal=TERM@120
 set -euo pipefail
 umask 027
@@ -67,8 +67,12 @@ on_exit() {
 }
 trap on_term TERM
 trap on_exit EXIT
-srun --ntasks=1 --cpus-per-task=8 "$CONDA_PREFIX/bin/python" "$harness/devtools/benchmarks/lifecycle_campaign.py" \
-    --output "$run/results-$SLURM_JOB_ID" --protein157 --repeats 1 --gpu-first \
+# Phoenix resets TMPDIR on entering srun; restore the validated private path
+# after step creation rather than relying on inherited environment values.
+srun --ntasks=1 --cpus-per-task=8 env TMPDIR="$TMPDIR" SCRATCH="$TMPDIR" PSI_SCRATCH="$TMPDIR" \
+    "$CONDA_PREFIX/bin/python" "$harness/devtools/benchmarks/lifecycle_campaign.py" \
+    --output "$run/results-$SLURM_JOB_ID" --protein157 --repeats 1 \
+    --arms new-cpu new-gpu-gpu-sad \
     --threads 8 --memory "256 GiB" --case-timeout 10800 --require-in-core \
     --old-source "$old" --old-commit "$old_commit" \
     --old-package "$old/build_saptdft_cuest_head/stage/lib/psi4" \

@@ -45,6 +45,8 @@ def compare_arms(paired):
         ("new-gpu-cpu-sad", "old-gpu", "regression"),
         ("new-gpu-gpu-sad", "old-gpu", "regression"),
     ]:
+        if arm not in paired or reference_arm not in paired:
+            continue
         result, reference = paired[arm], paired[reference_arm]
         errors = {key: abs(result["components_hartree"][key] - value)
                   for key, value in reference["components_hartree"].items()}
@@ -80,12 +82,17 @@ def main():
     parser.add_argument("--require-in-core", action="store_true")
     parser.add_argument("--gpu-first", action="store_true",
                         help="Run all GPU arms before long CPU arms for preemption resilience")
+    parser.add_argument("--arms", nargs="+", choices=[a[0] for a in ARMS],
+                        help="Explicit recovery subset; never certified as a complete five-arm comparison")
     args = parser.parse_args()
     if args.repeats < 1 or args.threads < 1:
         parser.error("repeats and threads must be positive")
     if args.case_timeout < 1:
         parser.error("case timeout must be positive")
     cases = [("protein157", "6-31+g**")] if args.protein157 else CASES
+    arms = ARMS if args.arms is None else [next(a for a in ARMS if a[0] == name) for name in args.arms]
+    if len({a[0] for a in arms}) != len(arms):
+        parser.error("duplicate arms")
     args.output.mkdir(parents=True, exist_ok=False)
     script = Path(__file__).with_name("saptdft_cuest_grac.py").resolve()
     versions = {}
@@ -110,7 +117,7 @@ def main():
     manifest = {
         "versions": versions, "gpu": gpu,
         "cpu": subprocess.check_output(["lscpu"], text=True),
-        "job_id": os.environ.get("SLURM_JOB_ID"), "cases": cases, "arms": ARMS,
+        "job_id": os.environ.get("SLURM_JOB_ID"), "cases": cases, "arms": arms,
         "harness_commit": subprocess.check_output(
             ["git", "-C", str(script.parent), "rev-parse", "HEAD"], text=True).strip(),
         "case_timeout_s": args.case_timeout, "require_in_core": args.require_in_core,
@@ -127,7 +134,7 @@ def main():
     for system, basis in cases:
         for repeat in range(args.repeats):
             # Rotate/reverse arm order to reduce systematic warm-node bias.
-            order = ARMS[repeat % len(ARMS):] + ARMS[:repeat % len(ARMS)]
+            order = arms[repeat % len(arms):] + arms[:repeat % len(arms)]
             if repeat % 2:
                 order = list(reversed(order))
             if args.gpu_first:
@@ -184,12 +191,14 @@ def main():
                 if not comparison["within_tolerance"] and comparison["kind"] == "regression":
                     atomic_json(args.output / "ACCURACY_FAILED.json", comparison)
                     return 2
-    expected = len(cases) * len(ARMS) * args.repeats
+    expected = len(cases) * len(arms) * args.repeats
     assert len(manifest["records"]) == expected
     warnings = [x for x in manifest["accuracy"]
                 if x["kind"] == "baseline-cross-backend" and not x["within_tolerance"]]
     atomic_json(args.output / "COMPLETE.json", {
-        "ok": True, "count": expected, "same_backend_regressions_passed": True,
+        "ok": True, "count": expected, "full_five_arm_comparison": len(arms) == len(ARMS),
+        "same_backend_regressions_passed": (
+            True if len(arms) == len(ARMS) else None),
         "baseline_cross_backend_discrepancies": warnings})
     return 0
 

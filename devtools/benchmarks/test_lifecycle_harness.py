@@ -62,6 +62,11 @@ class TestReceipt(unittest.TestCase):
 
 
 class TestAccuracy(unittest.TestCase):
+    def test_missing_baselines_do_not_invent_regression_checks(self):
+        paired = self.paired()
+        checks = compare_arms({a: paired[a] for a in ("new-cpu", "new-gpu-gpu-sad")})
+        self.assertEqual(checks, [])
+
     def paired(self):
         def result(shift):
             return {"components_hartree": {"SAPT TOTAL ENERGY": -0.01},
