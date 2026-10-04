@@ -63,9 +63,10 @@ FDDS_METRIC_RCOND_CUTOFF = 1e-14
 class NativeFDDSOptions:
     """Explicit native FDDS resources: OpenMP threads and peak scratch bytes.
 
-    ``nthread`` covers native integral generation and declared blocking only;
-    the per-frequency amplitude/aux-matrix loops and BLAS use the process
-    thread counts.
+    ``nthread`` sets the threads of native metric and raw-DFHelper integral
+    generation and sizes the declared blocking buffers, whose loops are
+    otherwise serial apart from BLAS; the per-frequency amplitude/aux-matrix
+    loops and BLAS use the process thread counts.
 
     ``disk_bytes`` is the native instance's peak private scratch size, enforced
     by native. ``max_io_bytes`` is charged a source-derived estimate of the
@@ -774,8 +775,9 @@ class BoundedResponse:
         if provider is not None and not isinstance(moments, DistributedMoments):
             raise TypeError('provider must return DistributedMoments')
         if moments is None:
-            # The closed-form Q and DistributedMoments' owned copy coexist briefly.
-            ledger.admit('distributed moments', 16*q*p, 2000*p*q)
+            # Peak of three live Q arrays: the producer's values, the float copy in _owned and
+            # the immutable bytes backing it builds from that copy.
+            ledger.admit('distributed moments', 24*q*p, 2000*p*q)
             moments = analytic_df_moments(recipe, sites, 4)
         moments.validate_for(recipe, sites, 4, self.state_sha256)
         self.partition = _partition_record(moments)

@@ -463,8 +463,8 @@ def test_reference_preflight_mirrors_the_first_solve(small_water, tmp_path, monk
 @pytest.mark.parametrize('supplied', [False, True], ids=['analytic', 'supplied'])
 @pytest.mark.parametrize('small_water', ['water'], indirect=True)
 def test_fdds_charges_both_live_q_copies(small_water, tmp_path, supplied):
-    """moments.values and the owned FDDS copy are live together; the analytic producer is admitted for its
-    own value and copy before it runs."""
+    """moments.values and the owned FDDS copy are live together; the analytic producer is admitted before it
+    runs for its three live Q arrays (its values, _owned's float copy and the immutable bytes backing)."""
     from psi4.driver.procrouting.isapol_distribution import analytic_df_moments
     wfn, recipe, args = small_water
     provider = (lambda ledger: analytic_df_moments(recipe, args['sites'], 4)) if supplied else None
@@ -475,7 +475,7 @@ def test_fdds_charges_both_live_q_copies(small_water, tmp_path, supplied):
     assert stages['retained distributed moments'] == stages['native FDDS inputs']+2*qp
     assert ('distributed moments' in stages) is not supplied
     if not supplied:
-        assert stages['distributed moments'] == stages['native FDDS inputs']+2*qp
+        assert stages['distributed moments'] == stages['native FDDS inputs']+3*qp
     assert _nothing_left(tmp_path)
 
 

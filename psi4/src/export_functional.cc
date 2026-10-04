@@ -376,8 +376,9 @@ void export_functional(py::module &m) {
              py::arg("disk_bytes"), py::arg("scratch_dir"), py::arg("nthread"), py::arg("subalgo") = "OUT_OF_CORE",
              py::arg("aux_transform") = nullptr,
              "Declared-basis path with explicit per-instance resources in bytes, an OpenMP thread count for "
-             "integral generation and declared blocking (not the per-frequency amplitude/aux-matrix loops "
-             "or BLAS, which use the process thread counts) "
+             "the metric and raw-DFHelper integral generation that also sizes the declared blocking buffers "
+             "(those loops are otherwise serial apart from BLAS; the per-frequency amplitude/aux-matrix loops "
+             "and BLAS use the process thread counts) "
              "and a caller-owned scratch directory. aux_transform (naux_declared x naux_raw) maps the raw "
              "auxiliary basis before any metric power, factorization or QR; None is the identity. "
              "Inputs are copied.")

@@ -649,8 +649,10 @@ unchanged::
   Total vendor memory and thread use are therefore not capped per instance.
 
   In tested builds with ``MAX_AM_ERI = 5`` the engine scratch was about 20 MB.
-- ``nthread`` fixes the OpenMP threads used for ERIs and the declared blocking
-  loops for the instance's lifetime. It is not a total-thread cap: the
+- ``nthread`` fixes, for the instance's lifetime, the OpenMP threads of the
+  metric and raw-DFHelper integral generation. It also sizes the declared
+  blocking's per-thread buffers and hence its blocks; those loops are otherwise
+  serial apart from BLAS. It is not a total-thread cap: the
   per-frequency amplitude and auxiliary-matrix loops (including the
   ``native_dyson_ratio`` path) run at the process OpenMP thread count, and
   BLAS threading stays with the vendor library.
