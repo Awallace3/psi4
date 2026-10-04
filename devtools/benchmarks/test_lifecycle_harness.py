@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import build_receipt
+import node_scratch
 from lifecycle_campaign import compare_arms, scratch_status
 from saptdft_cuest_grac import atomic_json
 
@@ -91,6 +92,26 @@ class TestAccuracy(unittest.TestCase):
         paired["new-gpu-gpu-sad"]["grac_shifts_hartree"]["B"] = float("nan")
         with self.assertRaises(ValueError):
             compare_arms(paired)
+
+class TestNodeScratch(unittest.TestCase):
+    def test_unwritable_first_candidate_is_skipped(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as tmp:
+            blocked = Path(tmp) / "blocked"
+            blocked.mkdir()
+            with patch.object(node_scratch.os, "access", side_effect=lambda p, mode: Path(p) != blocked), \
+                 patch.object(node_scratch.subprocess, "check_output", return_value="xfs\n"), \
+                 patch.object(node_scratch.os, "statvfs", return_value=SimpleNamespace(
+                     f_bavail=100*1024**3, f_frsize=1, f_favail=10000)):
+                chosen = node_scratch.select([str(blocked), tmp], "test")
+                self.assertEqual(chosen.parent, Path(tmp))
+                self.assertFalse((chosen / ".write-probe").exists())
+
+    def test_network_scratch_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(node_scratch.subprocess, "check_output", return_value="nfs\n"):
+            with self.assertRaises(RuntimeError):
+                node_scratch.select([tmp], "test")
 
 
 if __name__ == "__main__":

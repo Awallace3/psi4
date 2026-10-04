@@ -35,10 +35,10 @@ set -u
 export PYTHONNOUSERSITE=1
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export OMP_NUM_THREADS=8 MKL_NUM_THREADS=8
-# The previous allocation inherited /tmp; use explicit node-local disk.
-# Never reuse another job's directory or remove shared scratch.
-export TMPDIR="/scratch/$USER/psi4-protein157-$SLURM_JOB_ID"
-mkdir -p "$TMPDIR"
+# Discover scratch on the allocated node, not the login node. Never create a
+# user directory under a root-owned /scratch or silently choose network space.
+TMPDIR=$("$CONDA_PREFIX/bin/python" "$harness/devtools/benchmarks/node_scratch.py")
+export TMPDIR
 export SCRATCH="$TMPDIR" PSI_SCRATCH="$TMPDIR"
 mkdir -p "$run/metadata"
 cd "$run"
@@ -67,7 +67,7 @@ on_exit() {
 }
 trap on_term TERM
 trap on_exit EXIT
-"$CONDA_PREFIX/bin/python" "$harness/devtools/benchmarks/lifecycle_campaign.py" \
+srun --ntasks=1 --cpus-per-task=8 "$CONDA_PREFIX/bin/python" "$harness/devtools/benchmarks/lifecycle_campaign.py" \
     --output "$run/results-$SLURM_JOB_ID" --protein157 --repeats 1 --gpu-first \
     --threads 8 --memory "256 GiB" --case-timeout 10800 --require-in-core \
     --old-source "$old" --old-commit "$old_commit" \
