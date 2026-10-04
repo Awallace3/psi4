@@ -58,6 +58,9 @@ payload() {
         printf '%s\n' "$commit" > "$run_root/metadata/BUILD_COMMIT"
         return
     fi
+    # Python -c/-m searches cwd before PYTHONPATH. Never run from the source
+    # root, where the unbuilt psi4/ package shadows stage/lib/psi4.
+    cd "$run_root"
     built_commit=$(head -n 1 "$run_root/metadata/BUILD_COMMIT") || return 2
     eval "$("$build/stage/bin/psi4" --psiapi)" || return $?
     export PYTHONPATH="$build/stage/lib"
@@ -67,15 +70,15 @@ payload() {
     nvidia-smi --query-gpu=name,uuid,driver_version,memory.total --format=csv || return $?
     nvidia-smi --query-gpu=name --format=csv,noheader | grep -q H200 || return 2
     if [[ "$mode" == smoke ]]; then
-        "$CONDA_PREFIX/bin/python" devtools/benchmarks/build_receipt.py \
+        "$CONDA_PREFIX/bin/python" "$source_tree/devtools/benchmarks/build_receipt.py" \
             --source "$source_tree" --package "$build/stage/lib/psi4" \
             --built-commit "$built_commit" --output "$run_root/metadata/new-build.json" || return $?
-        "$CONDA_PREFIX/bin/python" devtools/benchmarks/build_receipt.py \
+        "$CONDA_PREFIX/bin/python" "$source_tree/devtools/benchmarks/build_receipt.py" \
             --source "$old_source" --package "$old_source/build_saptdft_cuest_head/stage/lib/psi4" \
             --built-commit "$old_commit" --output "$run_root/metadata/old-build.json" || return $?
         "$CONDA_PREFIX/bin/python" -m pytest -q \
-            tests/pytests/test_cuest_sad.py tests/pytests/test_cuest_jk.py \
-            tests/pytests/test_scf_lifecycle.py tests/pytests/test_basis_parse_reuse.py \
+            "$source_tree/tests/pytests/test_cuest_sad.py" "$source_tree/tests/pytests/test_cuest_jk.py" \
+            "$source_tree/tests/pytests/test_scf_lifecycle.py" "$source_tree/tests/pytests/test_basis_parse_reuse.py" \
             --junitxml="$run_root/smoke.xml" || return $?
         "$CONDA_PREFIX/bin/python" -c \
             'import sys,xml.etree.ElementTree as E; t=E.parse(sys.argv[1]); cases=[c for c in t.iter("testcase") if "test_sad_gpu_density_matches_cpu" in c.get("name","")]; assert len(cases)==4 and all(len(c)==0 for c in cases), "GPU SAD coverage missing or skipped"' \
@@ -83,7 +86,7 @@ payload() {
         printf '%s\n' "$commit" > "$run_root/metadata/SMOKE_COMMIT"
     elif [[ "$mode" == campaign ]]; then
         test "$(head -n 1 "$run_root/metadata/SMOKE_COMMIT")" = "$commit" || return 2
-        "$CONDA_PREFIX/bin/python" devtools/benchmarks/lifecycle_campaign.py \
+        "$CONDA_PREFIX/bin/python" "$source_tree/devtools/benchmarks/lifecycle_campaign.py" \
             --output "$run_root/results-$SLURM_JOB_ID" \
             --old-source "$old_source" --old-commit "$old_commit" \
             --old-package "$old_source/build_saptdft_cuest_head/stage/lib/psi4" \
