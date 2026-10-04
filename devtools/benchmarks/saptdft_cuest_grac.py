@@ -156,6 +156,9 @@ def run_case(args):
         cpu_builder = any(s in text for s in ("MemDFJK: Density-Fitted", "DiskDFJK: Density-Fitted"))
         record["gpu_builder_seen"] = gpu_builder
         record["cpu_builder_seen"] = cpu_builder
+        record["disk_df_builder_seen"] = "DiskDFJK: Density-Fitted" in text
+        if args.require_in_core and record["disk_df_builder_seen"]:
+            raise RuntimeError("DiskDFJK detected: reject disk-spilling timing comparison")
         record["sad_gpu_builder_seen"] = "SAD J/K backend: cuESTJK" in text
         if args.mode == "gpu" and args.sad_route == "gpu" and not record["sad_gpu_builder_seen"]:
             raise RuntimeError("Requested GPU SAD was not observed")
@@ -272,6 +275,8 @@ def main():
     parser.add_argument("--sad-route", choices=["cpu", "gpu"])
     parser.add_argument("--source-commit")
     parser.add_argument("--expected-package")
+    parser.add_argument("--require-in-core", action="store_true",
+                        help="Reject results using disk-based DF, rather than label them in-core timings")
     args = parser.parse_args()
     if args.system == "protein157":
         if not args.case:

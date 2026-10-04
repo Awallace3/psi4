@@ -65,9 +65,16 @@ def main():
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--memory", default="112 GiB")
+    parser.add_argument("--protein157", action="store_true",
+                        help="Explicitly run only the separately resourced Protein157 case")
+    parser.add_argument("--case-timeout", type=int, default=2400)
+    parser.add_argument("--require-in-core", action="store_true")
     args = parser.parse_args()
     if args.repeats < 1 or args.threads < 1:
         parser.error("repeats and threads must be positive")
+    if args.case_timeout < 1:
+        parser.error("case timeout must be positive")
+    cases = [("protein157", "6-31+g**")] if args.protein157 else CASES
     args.output.mkdir(parents=True, exist_ok=False)
     script = Path(__file__).with_name("saptdft_cuest_grac.py").resolve()
     versions = {}
@@ -92,7 +99,10 @@ def main():
     manifest = {
         "versions": versions, "gpu": gpu,
         "cpu": subprocess.check_output(["lscpu"], text=True),
-        "job_id": os.environ.get("SLURM_JOB_ID"), "cases": CASES, "arms": ARMS,
+        "job_id": os.environ.get("SLURM_JOB_ID"), "cases": cases, "arms": ARMS,
+        "harness_commit": subprocess.check_output(
+            ["git", "-C", str(script.parent), "rev-parse", "HEAD"], text=True).strip(),
+        "case_timeout_s": args.case_timeout, "require_in_core": args.require_in_core,
         "repeats": args.repeats, "threads": args.threads, "memory": args.memory,
         "timing": "fresh-process energy() wall; inclusive backend/SCF setup, excludes import and pre-count bases",
         "script_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
@@ -102,7 +112,7 @@ def main():
         "records": [], "accuracy": [],
     }
     atomic_json(args.output / "campaign.json", manifest)
-    for system, basis in CASES:
+    for system, basis in cases:
         for repeat in range(args.repeats):
             # Rotate/reverse arm order to reduce systematic warm-node bias.
             order = ARMS[repeat % len(ARMS):] + ARMS[:repeat % len(ARMS)]
@@ -127,12 +137,16 @@ def main():
                        "--expected-package", versions[version]["package"]]
                 if sad:
                     cmd += ["--sad-route", sad]
+                if system == "protein157":
+                    cmd += ["--allow-protein157-cpu"]
+                if args.require_in_core:
+                    cmd += ["--require-in-core"]
                 print("START", name, flush=True)
                 start = time.perf_counter()
                 with (directory / "console.log").open("w") as stream:
                     try:
                         rc = subprocess.run(cmd, cwd=directory, env=env, stdout=stream,
-                                            stderr=subprocess.STDOUT, timeout=2400).returncode
+                                            stderr=subprocess.STDOUT, timeout=args.case_timeout).returncode
                     except subprocess.TimeoutExpired:
                         rc = 124
                 item = {"name": name, "arm": arm, "system": system, "basis": basis,
@@ -152,7 +166,7 @@ def main():
                 if not comparison["within_tolerance"] and comparison["kind"] == "regression":
                     atomic_json(args.output / "ACCURACY_FAILED.json", comparison)
                     return 2
-    expected = len(CASES) * len(ARMS) * args.repeats
+    expected = len(cases) * len(ARMS) * args.repeats
     assert len(manifest["records"]) == expected
     warnings = [x for x in manifest["accuracy"]
                 if x["kind"] == "baseline-cross-backend" and not x["within_tolerance"]]
