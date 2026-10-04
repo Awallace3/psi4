@@ -27,8 +27,15 @@ def _sad(tmp_path, use_cuest, cuest_sad=True, fractional=True, sad_type="DF",
     atoms = psi4.core.BasisSet.build(mol, "ORBITAL", "cc-pvdz",
                                     puream=puream, return_atomlist=True)
     # The production factory always forces spherical SAD fitting functions.
-    fits = psi4.core.BasisSet.build(mol, "DF_BASIS_SAD", "SAD-FIT",
-                                   puream=True, return_atomlist=True)
+    # Explicit global PUREAM overrides BasisSet.build's keyword. Mirror
+    # proc._set_sad_basissets even when the orbital basis is Cartesian.
+    from psi4.driver import p4util
+    with p4util.OptionsStateCM(["PUREAM"]):
+        psi4.core.set_global_option("PUREAM", True)
+        fits = psi4.core.BasisSet.build(mol, "DF_BASIS_SAD", "SAD-FIT",
+                                       puream=True, return_atomlist=True)
+    assert all(b.has_puream() for b in fits)
+    assert bool(psi4.core.get_global_option("PUREAM")) == puream
     sad = psi4.core.SADGuess.build_SAD(primary, atoms)
     sad.set_atomic_fit_bases(fits)
     sad.set_print(1)
@@ -51,10 +58,11 @@ def _sad(tmp_path, use_cuest, cuest_sad=True, fractional=True, sad_type="DF",
 
 
 @pytest.mark.parametrize("sad_type", ["DF", "DIRECT"])
-def test_sad_cpu_control(tmp_path, sad_type):
+@pytest.mark.parametrize("puream", [True, False])
+def test_sad_cpu_control(tmp_path, sad_type, puream):
     """CUEST_SAD has no effect unless USE_CUEST is enabled."""
-    reference, _ = _sad(tmp_path, False, False, sad_type=sad_type)
-    actual, text = _sad(tmp_path, False, True, sad_type=sad_type)
+    reference, _ = _sad(tmp_path, False, False, sad_type=sad_type, puream=puream)
+    actual, text = _sad(tmp_path, False, True, sad_type=sad_type, puream=puream)
     for ref, got in zip(reference, actual):
         np.testing.assert_allclose(got, ref, atol=1.e-12, rtol=0)
     assert "SAD J/K backend:" in text

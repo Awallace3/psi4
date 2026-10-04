@@ -79,10 +79,10 @@ payload() {
         "$CONDA_PREFIX/bin/python" -m pytest -q \
             "$source_tree/tests/pytests/test_cuest_sad.py" "$source_tree/tests/pytests/test_cuest_jk.py" \
             "$source_tree/tests/pytests/test_scf_lifecycle.py" "$source_tree/tests/pytests/test_basis_parse_reuse.py" \
-            --junitxml="$run_root/smoke.xml" || return $?
+            --junitxml="$run_root/smoke-$SLURM_JOB_ID.xml" || return $?
         "$CONDA_PREFIX/bin/python" -c \
             'import sys,xml.etree.ElementTree as E; t=E.parse(sys.argv[1]); cases=[c for c in t.iter("testcase") if "test_sad_gpu_density_matches_cpu" in c.get("name","")]; assert len(cases)==4 and all(len(c)==0 for c in cases), "GPU SAD coverage missing or skipped"' \
-            "$run_root/smoke.xml" || return $?
+            "$run_root/smoke-$SLURM_JOB_ID.xml" || return $?
         printf '%s\n' "$commit" > "$run_root/metadata/SMOKE_COMMIT"
     elif [[ "$mode" == campaign ]]; then
         test "$(head -n 1 "$run_root/metadata/SMOKE_COMMIT")" = "$commit" || return 2
