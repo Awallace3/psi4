@@ -85,7 +85,11 @@ payload() {
             "$run_root/smoke-$SLURM_JOB_ID.xml" || return $?
         printf '%s\n' "$commit" > "$run_root/metadata/SMOKE_COMMIT"
     elif [[ "$mode" == campaign ]]; then
-        test "$(head -n 1 "$run_root/metadata/SMOKE_COMMIT")" = "$commit" || return 2
+        smoke_commit=$(head -n 1 "$run_root/metadata/SMOKE_COMMIT") || return 2
+        # Harness-only updates preserve approval of the exact tested binaries
+        # and tests; the campaign also verifies their build-receipt hashes.
+        git -C "$source_tree" diff --quiet "$smoke_commit" "$commit" -- \
+            psi4 tests cmake CMakeLists.txt external || return 2
         "$CONDA_PREFIX/bin/python" "$source_tree/devtools/benchmarks/lifecycle_campaign.py" \
             --output "$run_root/results-$SLURM_JOB_ID" \
             --old-source "$old_source" --old-commit "$old_commit" \

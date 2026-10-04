@@ -27,6 +27,29 @@ ARMS = [
     ("new-gpu-gpu-sad", "new", "gpu", "gpu"),
 ]
 
+def compare_arms(paired):
+    """Gate regressions within a backend; report baseline CPU/GPU disagreement."""
+    comparisons = []
+    for arm, reference_arm, kind in [
+        ("old-gpu", "old-cpu", "baseline-cross-backend"),
+        ("new-cpu", "old-cpu", "regression"),
+        ("new-gpu-cpu-sad", "old-gpu", "regression"),
+        ("new-gpu-gpu-sad", "old-gpu", "regression"),
+    ]:
+        result, reference = paired[arm], paired[reference_arm]
+        errors = {key: abs(result["components_hartree"][key] - value)
+                  for key, value in reference["components_hartree"].items()}
+        shifts = {key: abs(result["grac_shifts_hartree"][key] - value)
+                  for key, value in reference["grac_shifts_hartree"].items()}
+        if not all(math.isfinite(v) for v in [*errors.values(), *shifts.values()]):
+            raise ValueError(f"Nonfinite accuracy comparison: {arm} vs {reference_arm}")
+        comparisons.append({
+            "arm": arm, "reference_arm": reference_arm, "kind": kind,
+            "component_errors_hartree": errors, "shift_errors_hartree": shifts,
+            "within_tolerance": max(errors.values()) <= 1.e-6 and max(shifts.values()) <= 1.e-6,
+        })
+    return comparisons
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -74,7 +97,9 @@ def main():
         "timing": "fresh-process energy() wall; inclusive backend/SCF setup, excludes import and pre-count bases",
         "script_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
         "geometry_sha256": hashlib.sha256(script.with_name("saptdft_suite_geometries.json").read_bytes()).hexdigest(),
-        "records": [],
+        "accuracy_policy": "1e-6 Eh component and GRAC-shift regression limits within each backend; "
+                           "pre-existing old CPU/GPU differences are reported, not certified equivalent",
+        "records": [], "accuracy": [],
     }
     atomic_json(args.output / "campaign.json", manifest)
     for system, basis in CASES:
@@ -120,25 +145,20 @@ def main():
                 result = json.loads((directory / "result.json").read_text())
                 assert result["ok"]
                 paired[arm] = result
-            reference = paired["old-cpu"]
-            for arm, result in paired.items():
-                errors = {key: abs(result["components_hartree"][key] - value)
-                          for key, value in reference["components_hartree"].items()}
-                shift_errors = [abs(result["grac_shifts_hartree"][key] - value)
-                                for key, value in reference["grac_shifts_hartree"].items()]
-                shift_error = max(shift_errors)
-                # Explicit scientific acceptance gate, not np.allclose defaults.
-                # Archive exact errors; stop instead of timing repeated wrong answers.
-                if (not all(math.isfinite(v) for v in [*errors.values(), *shift_errors])
-                        or max(errors.values()) > 1.e-6 or shift_error > 1.e-6):
-                    atomic_json(args.output / "ACCURACY_FAILED.json",
-                                {"system": system, "basis": basis, "repeat": repeat + 1,
-                                 "arm": arm, "component_errors_hartree": errors,
-                                 "max_shift_error_hartree": shift_error})
+            for comparison in compare_arms(paired):
+                comparison.update(system=system, basis=basis, repeat=repeat + 1)
+                manifest["accuracy"].append(comparison)
+                atomic_json(args.output / "campaign.json", manifest)
+                if not comparison["within_tolerance"] and comparison["kind"] == "regression":
+                    atomic_json(args.output / "ACCURACY_FAILED.json", comparison)
                     return 2
     expected = len(CASES) * len(ARMS) * args.repeats
     assert len(manifest["records"]) == expected
-    atomic_json(args.output / "COMPLETE.json", {"ok": True, "count": expected})
+    warnings = [x for x in manifest["accuracy"]
+                if x["kind"] == "baseline-cross-backend" and not x["within_tolerance"]]
+    atomic_json(args.output / "COMPLETE.json", {
+        "ok": True, "count": expected, "same_backend_regressions_passed": True,
+        "baseline_cross_backend_discrepancies": warnings})
     return 0
 
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import build_receipt
+from lifecycle_campaign import compare_arms
 from saptdft_cuest_grac import atomic_json
 
 
@@ -49,6 +50,39 @@ class TestReceipt(unittest.TestCase):
         self.assertFalse(target.exists())
         atomic_json(target, {"shift_B": 0.1})
         self.assertEqual(json.loads(target.read_text()), {"shift_B": 0.1})
+
+
+class TestAccuracy(unittest.TestCase):
+    def paired(self):
+        def result(shift):
+            return {"components_hartree": {"SAPT TOTAL ENERGY": -0.01},
+                    "grac_shifts_hartree": {"A": shift, "B": shift}}
+        return {arm: result(0.075 if "gpu" in arm else 0.07512) for arm in
+                ("old-cpu", "old-gpu", "new-cpu", "new-gpu-cpu-sad", "new-gpu-gpu-sad")}
+
+    def test_baseline_gap_remains_visible(self):
+        checks = compare_arms(self.paired())
+        self.assertFalse(checks[0]["within_tolerance"])
+        self.assertEqual(checks[0]["kind"], "baseline-cross-backend")
+        self.assertTrue(all(x["within_tolerance"] for x in checks[1:]))
+
+    def test_new_gpu_shift_regression_fails(self):
+        paired = self.paired()
+        paired["new-gpu-gpu-sad"]["grac_shifts_hartree"]["B"] += 2.e-6
+        check = compare_arms(paired)[-1]
+        self.assertEqual(check["kind"], "regression")
+        self.assertFalse(check["within_tolerance"])
+
+    def test_new_cpu_component_regression_fails(self):
+        paired = self.paired()
+        paired["new-cpu"]["components_hartree"]["SAPT TOTAL ENERGY"] += 2.e-6
+        self.assertFalse(compare_arms(paired)[1]["within_tolerance"])
+
+    def test_nan_shift_b_cannot_hide_behind_finite_a(self):
+        paired = self.paired()
+        paired["new-gpu-gpu-sad"]["grac_shifts_hartree"]["B"] = float("nan")
+        with self.assertRaises(ValueError):
+            compare_arms(paired)
 
 
 if __name__ == "__main__":
