@@ -31,10 +31,13 @@
 #include "psi4/libmints/vector.h"
 #include "psi4/libmints/basisset.h"
 #include "psi4/libisapol/casimir_grid.h"
+#include "psi4/libisapol/pfit.h"
+#include "psi4/libisapol/fit_points.h"
 #include "psi4/libisapol/isa_grid.h"
 #include "psi4/libisapol/explicit_basis.h"
 #include "psi4/libisapol/partitioned_response.h"
 #include "psi4/libisapol/multipole_transform.h"
+#include "psi4/libisapol/t_functions.h"
 #include "psi4/libisapol/lw_localization.h"
 #include "psi4/libisapol/aux_coulomb.h"
 #include "psi4/libmints/matrix.h"
@@ -43,6 +46,7 @@
 
 #include <pybind11/numpy.h>
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 #ifdef USING_LAPACK_MKL
 #include <mkl.h>
@@ -210,6 +214,171 @@ void export_isapol(py::module& m) {
         .def_property_readonly("convergence_evidence", [](const NativeRestrictedState&) {
             return "caller declaration only; restricted metadata, density and orthonormality checked";
         });
+
+    // PFIT value containers: every property read is an independent snapshot,
+    // including nested objects. Assign modified snapshots back explicitly.
+#define PFIT_CLASS(T) py::class_<T>(m, #T).def(py::init<>())
+#define PFIT_FIELD(T, F) .def_property(#F, [](const T& v) { return v.F; }, [](T& v, const decltype(T::F)& x) { v.F = x; })
+#define PFIT_GET(F) .def_property_readonly(#F, &IsaPfitResult::F)
+    py::enum_<IsaPfitTargetOrigin>(m, "IsaPfitTargetOrigin")
+        .value("Unspecified", IsaPfitTargetOrigin::Unspecified)
+        .value("SuppliedActualPointResponse", IsaPfitTargetOrigin::SuppliedActualPointResponse)
+        .value("SuppliedFittedPropagatorPointResponse", IsaPfitTargetOrigin::SuppliedFittedPropagatorPointResponse)
+        .value("NativeDirectActualPointResponse", IsaPfitTargetOrigin::NativeDirectActualPointResponse)
+        .value("NativeFittedPointResponse", IsaPfitTargetOrigin::NativeFittedPointResponse)
+        .value("SyntheticAnalyticTest", IsaPfitTargetOrigin::SyntheticAnalyticTest);
+    py::enum_<IsaPfitTargetConvention>(m, "IsaPfitTargetConvention")
+        .value("Unspecified", IsaPfitTargetConvention::Unspecified)
+        .value("NegativeInducedPotentialPerUnitSourceChargeAtomicUnits", IsaPfitTargetConvention::NegativeInducedPotentialPerUnitSourceChargeAtomicUnits);
+    py::enum_<IsaPfitSolver>(m, "IsaPfitSolver")
+        .value("NormalEquationsDSYSV", IsaPfitSolver::NormalEquationsDSYSV)
+        .value("StreamingQR", IsaPfitSolver::StreamingQR);
+    py::enum_<IsaPfitStatus>(m, "IsaPfitStatus")
+        .value("Solved", IsaPfitStatus::Solved).value("AllFixed", IsaPfitStatus::AllFixed)
+        .value("RankDeficient", IsaPfitStatus::RankDeficient).value("IllConditioned", IsaPfitStatus::IllConditioned)
+        .value("NumericalFailure", IsaPfitStatus::NumericalFailure);
+    PFIT_CLASS(IsaPfitMatrix)
+        PFIT_FIELD(IsaPfitMatrix, rows) PFIT_FIELD(IsaPfitMatrix, cols) PFIT_FIELD(IsaPfitMatrix, values);
+    PFIT_CLASS(IsaPfitTargetProvenance)
+        PFIT_FIELD(IsaPfitTargetProvenance, origin) PFIT_FIELD(IsaPfitTargetProvenance, convention)
+        PFIT_FIELD(IsaPfitTargetProvenance, source_id) PFIT_FIELD(IsaPfitTargetProvenance, response_representation)
+        PFIT_FIELD(IsaPfitTargetProvenance, auxiliary_basis_id) PFIT_FIELD(IsaPfitTargetProvenance, generation_record);
+    PFIT_CLASS(IsaPfitBatch)
+        PFIT_FIELD(IsaPfitBatch, label) PFIT_FIELD(IsaPfitBatch, points_bohr)
+        PFIT_FIELD(IsaPfitBatch, fields) PFIT_FIELD(IsaPfitBatch, targets);
+    PFIT_CLASS(IsaPfitModel)
+        PFIT_FIELD(IsaPfitModel, channel_labels) PFIT_FIELD(IsaPfitModel, parameter_labels)
+        PFIT_FIELD(IsaPfitModel, parameter_units) PFIT_FIELD(IsaPfitModel, parameter_tensors)
+        PFIT_FIELD(IsaPfitModel, fixed) PFIT_FIELD(IsaPfitModel, fixed_values) PFIT_FIELD(IsaPfitModel, provenance);
+    PFIT_CLASS(IsaPfitMatrixPenalty) PFIT_FIELD(IsaPfitMatrixPenalty, matrix) PFIT_FIELD(IsaPfitMatrixPenalty, anchor);
+    PFIT_CLASS(IsaPfitLinearPenalty) PFIT_FIELD(IsaPfitLinearPenalty, coefficients)
+        PFIT_FIELD(IsaPfitLinearPenalty, target) PFIT_FIELD(IsaPfitLinearPenalty, strength);
+    PFIT_CLASS(IsaPfitProblem) PFIT_FIELD(IsaPfitProblem, frequency_au) PFIT_FIELD(IsaPfitProblem, target_provenance)
+        PFIT_FIELD(IsaPfitProblem, model) PFIT_FIELD(IsaPfitProblem, batches)
+        PFIT_FIELD(IsaPfitProblem, penalty) PFIT_FIELD(IsaPfitProblem, linear_penalties);
+    PFIT_CLASS(IsaPfitRowModel)
+        PFIT_FIELD(IsaPfitRowModel, channel_labels) PFIT_FIELD(IsaPfitRowModel, parameter_labels)
+        PFIT_FIELD(IsaPfitRowModel, parameter_units) PFIT_FIELD(IsaPfitRowModel, fixed)
+        PFIT_FIELD(IsaPfitRowModel, fixed_values) PFIT_FIELD(IsaPfitRowModel, provenance);
+    PFIT_CLASS(IsaPfitCloudRows)
+        PFIT_FIELD(IsaPfitCloudRows, label) PFIT_FIELD(IsaPfitCloudRows, points)
+        PFIT_FIELD(IsaPfitCloudRows, full_row_count) PFIT_FIELD(IsaPfitCloudRows, maximum_block_rows);
+    PFIT_CLASS(IsaPfitRowProblem)
+        PFIT_FIELD(IsaPfitRowProblem, frequency_au) PFIT_FIELD(IsaPfitRowProblem, target_provenance)
+        PFIT_FIELD(IsaPfitRowProblem, model) PFIT_FIELD(IsaPfitRowProblem, cloud)
+        PFIT_FIELD(IsaPfitRowProblem, penalty) PFIT_FIELD(IsaPfitRowProblem, linear_penalties);
+    PFIT_CLASS(IsaPfitOptions) PFIT_FIELD(IsaPfitOptions, solver) PFIT_FIELD(IsaPfitOptions, qr_chunk_rows)
+        PFIT_FIELD(IsaPfitOptions, maximum_work_bytes) PFIT_FIELD(IsaPfitOptions, rank_relative_tolerance)
+        PFIT_FIELD(IsaPfitOptions, minimum_solver_rcond) PFIT_FIELD(IsaPfitOptions, retain_pair_predictions);
+    PFIT_CLASS(IsaPfitBatchDiagnostics) PFIT_FIELD(IsaPfitBatchDiagnostics, points) PFIT_FIELD(IsaPfitBatchDiagnostics, rows)
+        PFIT_FIELD(IsaPfitBatchDiagnostics, sse) PFIT_FIELD(IsaPfitBatchDiagnostics, rms) PFIT_FIELD(IsaPfitBatchDiagnostics, max_residual);
+    PFIT_CLASS(IsaPfitDiagnostics)
+        PFIT_FIELD(IsaPfitDiagnostics, data_rows) PFIT_FIELD(IsaPfitDiagnostics, augmented_rows)
+        PFIT_FIELD(IsaPfitDiagnostics, numerical_rank) PFIT_FIELD(IsaPfitDiagnostics, work_budget_bytes)
+        PFIT_FIELD(IsaPfitDiagnostics, free_indices) PFIT_FIELD(IsaPfitDiagnostics, batches)
+        PFIT_FIELD(IsaPfitDiagnostics, data_sse) PFIT_FIELD(IsaPfitDiagnostics, data_rms) PFIT_FIELD(IsaPfitDiagnostics, data_max_residual)
+        PFIT_FIELD(IsaPfitDiagnostics, matrix_objective) PFIT_FIELD(IsaPfitDiagnostics, lc_objective) PFIT_FIELD(IsaPfitDiagnostics, total_objective)
+        PFIT_FIELD(IsaPfitDiagnostics, stationarity_inf) PFIT_FIELD(IsaPfitDiagnostics, backward_residual)
+        PFIT_FIELD(IsaPfitDiagnostics, normal_h_rcond) PFIT_FIELD(IsaPfitDiagnostics, normal_h_norm1)
+        PFIT_FIELD(IsaPfitDiagnostics, condition_estimate_available) PFIT_FIELD(IsaPfitDiagnostics, qr_r_rcond)
+        PFIT_FIELD(IsaPfitDiagnostics, rank_smallest) PFIT_FIELD(IsaPfitDiagnostics, rank_largest)
+        PFIT_FIELD(IsaPfitDiagnostics, penalty_min_eigenvalue) PFIT_FIELD(IsaPfitDiagnostics, penalty_asymmetry)
+        PFIT_FIELD(IsaPfitDiagnostics, penalty_correction_max) PFIT_FIELD(IsaPfitDiagnostics, qr_discarded_rhs_sse)
+        PFIT_FIELD(IsaPfitDiagnostics, lapack_info) PFIT_FIELD(IsaPfitDiagnostics, rank_method)
+        PFIT_FIELD(IsaPfitDiagnostics, psd_policy) PFIT_FIELD(IsaPfitDiagnostics, objective_available)
+        PFIT_FIELD(IsaPfitDiagnostics, native_verified);
+    py::class_<IsaPfitResult>(m, "IsaPfitResult")
+        PFIT_GET(status) PFIT_GET(parameters) PFIT_GET(normal_matrix) PFIT_GET(normal_rhs)
+        PFIT_GET(effective_penalty_matrix) PFIT_GET(matrix_penalty_matrix) PFIT_GET(lc_penalty_matrix) PFIT_GET(matrix_penalty_rhs)
+        PFIT_GET(lc_penalty_rhs) PFIT_GET(effective_penalty_rhs) PFIT_GET(diagnostics) PFIT_GET(settings)
+        PFIT_GET(frequency_au) PFIT_GET(target_provenance) PFIT_GET(model_provenance) PFIT_GET(predictions)
+        PFIT_GET(parameter_labels) PFIT_GET(parameter_units) PFIT_GET(channel_labels) PFIT_GET(batch_labels);
+    m.def("isa_pfit_solve", &isa_pfit_solve, "problem"_a, "options"_a = IsaPfitOptions(),
+          "Supplied single-frequency PFIT; v=-d(phi_induced)/dq in Eh/e^2. Caller provenance is not native verification.");
+    // Value-copy declarations before callbacks; never release the GIL on
+    // these bindings. Producer arrays remain producer-owned budget items. The
+    // multi-problem source yields targets[rows][problems] (`matrix`).
+    auto solve_rows=[](std::vector<IsaPfitRowProblem> ps, py::function factory, IsaPfitOptions options, bool matrix) {
+        if(ps.empty()) throw py::value_error("PFIT requires at least one row problem");
+        const auto& p=ps.front(); const size_t nt=ps.size();
+        py::object iterator, design_hash, target_hash;
+        py::object sha256=py::module_::import("hashlib").attr("sha256");
+        size_t expected=0;
+        IsaPfitRowSource source;
+        source.begin_pass=[&](size_t) {
+            auto dimensions=std::to_string(p.cloud.points)+":"+
+                            std::to_string(p.model.parameter_labels.size());
+            if(matrix) dimensions+=":"+std::to_string(nt);
+            design_hash=sha256(py::bytes("design:"+dimensions));
+            target_hash=sha256(py::bytes("targets:"+dimensions));
+            expected=0;
+            iterator=py::iter(factory());
+        };
+        source.next=[&](size_t capacity,size_t np,double* design,double* targets) {
+            PyObject* raw=PyIter_Next(iterator.ptr());
+            if(!raw) {
+                if(PyErr_Occurred()) throw py::error_already_set();
+                return IsaPfitRowBlockInfo{expected,0};
+            }
+            auto item=py::reinterpret_steal<py::object>(raw);
+            if(!py::isinstance<py::tuple>(item) || py::len(item)!=3)
+                throw py::value_error("PFIT row source must yield (start, design, targets)");
+            auto tuple=py::reinterpret_borrow<py::tuple>(item);
+            if(!PyLong_Check(tuple[0].ptr()) || PyBool_Check(tuple[0].ptr()))
+                throw py::value_error("PFIT packed start must be an integer");
+            size_t start=py::cast<size_t>(tuple[0]);
+            if(!py::isinstance<py::array>(tuple[1]) || !py::isinstance<py::array>(tuple[2]))
+                throw py::value_error("PFIT rows require NumPy arrays, not converted lists");
+            auto a=py::reinterpret_borrow<py::array>(tuple[1]);
+            auto b=py::reinterpret_borrow<py::array>(tuple[2]);
+            if(!a.dtype().is(py::dtype::of<double>()) || !b.dtype().is(py::dtype::of<double>()) ||
+               !(a.flags()&py::array::c_style) || !(b.flags()&py::array::c_style) ||
+               a.ndim()!=2 || b.ndim()!=(matrix?2:1) || (matrix && b.shape(1)!=static_cast<py::ssize_t>(nt)) ||
+               a.shape(1)!=static_cast<py::ssize_t>(np) ||
+               a.shape(0)!=b.shape(0) || a.shape(0)<=0 ||
+               static_cast<size_t>(a.shape(0))>capacity)
+                throw py::value_error("PFIT row block must be bounded contiguous native float64 arrays");
+            size_t count=static_cast<size_t>(a.shape(0));
+            if(start!=expected || expected>p.cloud.full_row_count ||
+               count>p.cloud.full_row_count-expected)
+                throw py::value_error("PFIT row source has gap, duplicate or excess rows");
+            const size_t design_bytes=count*np*sizeof(double), target_bytes=count*nt*sizeof(double);
+            std::memcpy(design,a.data(),design_bytes);
+            std::memcpy(targets,b.data(),target_bytes);
+            // Digest the copied bytes actually consumed by C++; separate
+            // streams make identity independent of computational partition.
+            design_hash.attr("update")(py::memoryview::from_memory(
+                reinterpret_cast<const char*>(design),static_cast<py::ssize_t>(design_bytes)));
+            target_hash.attr("update")(py::memoryview::from_memory(
+                reinterpret_cast<const char*>(targets),static_cast<py::ssize_t>(target_bytes)));
+            expected+=count;
+            return IsaPfitRowBlockInfo{start,count};
+        };
+        source.finish_pass=[&]() {
+            std::string joined=py::cast<std::string>(design_hash.attr("digest")())+
+                               py::cast<std::string>(target_hash.attr("digest")());
+            std::string digest=py::cast<std::string>(sha256(py::bytes(joined)).attr("digest")());
+            std::array<unsigned char,32> result{};
+            if(digest.size()!=result.size()) throw py::value_error("PFIT invalid replay digest");
+            std::memcpy(result.data(),digest.data(),result.size());
+            return result;
+        };
+        return isa_pfit_solve_rows_multi(ps,source,options);
+    };
+    m.def("isa_pfit_solve_rows", [solve_rows](IsaPfitRowProblem p, py::function factory, IsaPfitOptions options) {
+        return solve_rows({p},factory,options,false).front();
+    }, "problem"_a, "block_factory"_a, "options"_a=IsaPfitOptions(),
+       "One complete supplied cloud; bounded float64 blocks and content-verified replay. "
+       "Problem/options are snapshotted; producer memory is external to the kernel budget.");
+    m.def("isa_pfit_solve_rows_multi", [solve_rows](std::vector<IsaPfitRowProblem> ps, py::function factory,
+                                                    IsaPfitOptions options) {
+        return solve_rows(ps,factory,options,true);
+    }, "problems"_a, "block_factory"_a, "options"_a=IsaPfitOptions(),
+       "Several problems over one shared cloud and model; blocks yield (start, design, targets[rows, problems]). "
+       "The design is traversed at most twice for all problems.");
+#undef PFIT_GET
+#undef PFIT_FIELD
+#undef PFIT_CLASS
     py::class_<IsaBondTransfer>(m, "IsaBondTransfer")
         .def_readonly("first", &IsaBondTransfer::first)
         .def_readonly("second", &IsaBondTransfer::second)
@@ -301,6 +470,17 @@ void export_isapol(py::module& m) {
           "R(F x)=D(F)R(x); finite proper orthogonal local-to-global Cartesian frame");
     m.def("isa_regular_multipoles", &isa_regular_multipoles, "rank"_a, "displacement"_a,
           "r^k C_kq for every rank through rank, Racah 00,10,11c,11s,...; rank zero is 1");
+    m.def("isa_irregular_solid_harmonics", &isa_irregular_solid_harmonics, "rank"_a, "displacement"_a,
+          "r^(-k-1) C_kq for every rank through rank, Racah 00,10,11c,11s,...; rank zero is 1/r, "
+          "not 1, and the displacement (bohr) must be nonzero");
+    m.def("isa_t_function_damping", &isa_t_function_damping, "rank"_a, "br"_a,
+          "Tang-Toennies factor 1-exp(-br)*sum_{n<=rank+1} br^n/n! for a whole rank block; the "
+          "reference protocol leaves damping off, so this branch has no reference artifact behind it");
+    m.def("isa_t_functions", &isa_t_functions, "rank"_a, "point_bohr"_a, "site_bohr"_a, "frame"_a,
+          "damping"_a = 0.0,
+          "One pfit T row: unit-charge interaction functions for a site's multipole components in "
+          "the site's LOCAL axes. frame maps local to global Cartesian (columns are the local axes), "
+          "as in isa_multipole_rotation; damping is CamCASP's Damping keyword in bohr^-1");
     py::class_<IsaMultipoleSamples>(m, "IsaMultipoleSamples")
         .def(py::init<>())
         .def_readwrite("points", &IsaMultipoleSamples::points)
@@ -377,6 +557,8 @@ void export_isapol(py::module& m) {
         .def("three_center", &IsaAuxCoulomb::three_center, "orbital"_a)
         .def("three_center_shell_block", &IsaAuxCoulomb::three_center_shell_block,
              "orbital"_a, "first_shell"_a, "shell_count"_a, "max_bytes"_a=512UL*1024*1024)
+        .def("point_potentials", &IsaAuxCoulomb::point_potentials,
+             "points"_a, "max_bytes"_a=512UL*1024*1024)
         .def("closed_shell_rhs", &IsaAuxCoulomb::closed_shell_rhs, "orbital"_a, "occupied_coefficients"_a)
         .def("fit_drho_c", &IsaAuxCoulomb::fit_drho_c, "orbital"_a, "occupied_coefficients"_a, "charge_penalty"_a=1000.)
         .def("native_auxiliary", &IsaAuxCoulomb::native_auxiliary,
@@ -421,10 +603,43 @@ void export_isapol(py::module& m) {
         .def("cp_weight", &CasimirGrid::cp_weight, "k"_a, "Weight of point k in the Casimir-Polder integral")
         .def("omegas", [](const CasimirGrid& g) { return py::array_t<double>(g.omegas().size(), g.omegas().data()); });
 
+    py::class_<MaclarenRng, std::shared_ptr<MaclarenRng>>(m, "MaclarenRng",
+                                                          "Maclaren (1992) generator, CamCASP's sdprnd/dprand")
+        .def(py::init<int>(), "seed"_a = 0)
+        .def("seed", &MaclarenRng::seed, "seed"_a)
+        .def("next", &MaclarenRng::next, "Next uniform deviate on (0, 1)")
+        .def("take", [](MaclarenRng& r, int n) {
+            if (n < 0) throw py::value_error("MaclarenRng.take requires a nonnegative count");
+            std::vector<double> v(n);
+            for (int i = 0; i < n; ++i) v[i] = r.next();
+            return py::array_t<double>(v.size(), v.data());
+        }, "n"_a, "Next n deviates");
+
+    py::class_<FitPointsOptions>(m, "FitPointsOptions", "Options controlling the ISA-Pol fit-point cloud")
+        .def(py::init<>())
+        .def_readwrite("npoints", &FitPointsOptions::npoints, "CamCASP nlat; number of points to accept")
+        .def_readwrite("lolim", &FitPointsOptions::lolim, "Inner cutoff in van der Waals radii")
+        .def_readwrite("hilim", &FitPointsOptions::hilim, "Outer cutoff in van der Waals radii")
+        .def_readwrite("seed", &FitPointsOptions::seed, "Seed for the point generator");
+
+    py::class_<FitPoints, std::shared_ptr<FitPoints>>(m, "FitPoints",
+                                                      "Points at which the point-response refinement samples the potential")
+        .def(py::init<std::shared_ptr<Molecule>, const FitPointsOptions&>(), "molecule"_a, "options"_a)
+        .def("npoints", &FitPoints::npoints)
+        .def("ncandidates", &FitPoints::ncandidates)
+        .def("dmax", &FitPoints::dmax)
+        .def("print_header", &FitPoints::print_header)
+        .def("centre", [](const FitPoints& f) { return py::array_t<double>(3, f.centre()); })
+        .def("x", [](const FitPoints& f) { return py::array_t<double>(f.npoints(), f.x()); })
+        .def("y", [](const FitPoints& f) { return py::array_t<double>(f.npoints(), f.y()); })
+        .def("z", [](const FitPoints& f) { return py::array_t<double>(f.npoints(), f.z()); });
+
     m.def("isapol_slater_radius", &slater_radius, "Z"_a,
           "CamCASP Bragg-Slater radius in bohr (a_o = 0.529177249)");
     m.def("isapol_vdw_radius_bondi", &vdw_radius_bondi, "Z"_a,
           "Bondi van der Waals radius in bohr, from AtomProp (float32-rounded)");
+    m.def("isapol_vdw_radius", &vdw_radius, "Z"_a,
+          "Bondi van der Waals radius in bohr, from MODULE radii (double); used by the fit points");
     m.def("isapol_vdw_radius_grimme", &vdw_radius_grimme, "Z"_a, "Grimme van der Waals radius in bohr");
     m.def("isapol_c6_grimme", &c6_grimme, "Z"_a, "Grimme C6 coefficient in atomic units");
     m.def("isapol_covalent_radius", &covalent_radius, "Z"_a, "Covalent radius in bohr");
