@@ -22,8 +22,9 @@ inline by file and line:
 No CamCASP source is executed, linked or vendored here.
 
 The point-response targets, rank limits and site types are the caller's;
-anchors are not symmetrized or repaired; the fit is not iterated.  Components below the cutoff are absent from the model, hence exactly
-zero in the refined tensors, as in a CamCASP ``.pdef``.
+anchors are not symmetrized or repaired; the fit is not iterated.  Components
+below the cutoff are absent from the model, hence exactly zero in the refined
+tensors, as in a CamCASP ``.pdef``.
 
 Conventions.  Multipole components are real Racah ``00,10,11c,11s,20,...``
 with no Condon-Shortley phase, the ordering of
@@ -590,7 +591,9 @@ def refinement_problem(model, points_bohr, packed_targets, *, target_origin=None
     ``packed_targets`` must already be in the solver's packing, one value per
     ``j <= i``.  ``target_origin``, ``source_id`` and ``generation_record`` are
     required: native direct-OV and supplied fitted-propagator responses are not
-    interchangeable targets.
+    interchangeable targets.  Supplied ``fields`` are used as given: ``damping``
+    applies only to fields computed here, so supplied fields must already carry
+    any damping.
     """
     if not isinstance(model, RefinementModel):
         raise ValueError('model must be a RefinementModel')
@@ -669,8 +672,10 @@ def refine(model, points_bohr, packed_targets, *, target_origin=None, source_id,
 
     Uses ``core.isa_pfit_solve`` with ``NormalEquationsDSYSV`` by default, as
     CamCASP's ``process.F90::solve`` does; ``options`` can select the more
-    accurate streaming QR.  A rank-deficient or ill-conditioned fit raises
-    ``RuntimeError``: the solver withholds its parameters.
+    accurate streaming QR.  ``fields`` and ``damping`` behave as in
+    :func:`refinement_problem`.  A rank-deficient or ill-conditioned fit raises
+    ``RuntimeError``: the solver withholds its parameters.  (The streamed
+    ``isapol_pfit_stream.refine_streamed`` raises ``ValueError`` instead.)
     """
     problem = refinement_problem(model, points_bohr, packed_targets, fields=fields,
                                  damping=damping, target_origin=target_origin,

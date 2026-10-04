@@ -33,7 +33,8 @@ IDENTITY = ((1., 0., 0.), (0., 1., 0.), (0., 0., 1.))
 #: diag(-1,-1,1).  This is what the reference case's own ``H2O.axes`` builds --
 #: ``H1  z global Z x from H2 to H1`` at this geometry, tracked as
 #: ``data_isapol/orient_local/H2O.axes`` -- and it is the frame that makes the
-#: two hydrogens share one set of variables with no sign changes.  Leaving both in global axes instead is what
+#: two hydrogens share one set of variables with no sign changes.  Leaving both
+#: in global axes instead is what
 #: ``test_a_copy_equivalence_reports_how_far_its_sites_disagree`` measures.
 H1_FRAME = ((-1., 0., 0.), (0., -1., 0.), (0., 0., 1.))
 #: ~/gits/CamCASP/tests/H2O_props/psi4/H2O-avtz.clt, bohr.

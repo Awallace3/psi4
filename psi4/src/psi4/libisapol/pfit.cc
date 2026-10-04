@@ -220,7 +220,11 @@ struct IsaPfitSolverImpl {
     if(o.retain_pair_predictions) each=add(each,rows);
     each=add(each,mul(16,clouds.size()));
     size_t scalars=mul(each,nt);
-    if(o.solver==IsaPfitSolver::StreamingQR && nf) scalars=add(scalars,mul(o.qr_chunk_rows,add(nf,nt)));
+    // StreamingQR keeps the shared chunk buffer alive while one per-problem
+    // column(t) copy solves, and that copy has its own chunk*(nf+1) buffer; its
+    // r and z are inside the 40*np^2 slack above, its buffer is not.
+    if(o.solver==IsaPfitSolver::StreamingQR && nf)
+        scalars=add(scalars,add(mul(o.qr_chunk_rows,add(nf,nt)),mul(o.qr_chunk_rows,add(nf,1))));
     require(block_rows>0,"row block capacity must be positive");
     scalars=add(scalars,mul(block_rows,add(nf,mul(2,nt))));
     Budget budget{add(mul(scalars,sizeof(double)),source_bytes),o.maximum_work_bytes};

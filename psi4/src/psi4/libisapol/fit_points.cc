@@ -46,6 +46,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <algorithm>
+#include <string>
 
 namespace psi {
 namespace isapol {
@@ -131,6 +132,14 @@ FitPoints::FitPoints(std::shared_ptr<Molecule> molecule, const FitPointsOptions&
     : molecule_(molecule), options_(options), natom_(molecule->natom()), ncandidates_(0), dmax_(0.0) {
     if (natom_ < 1) throw PSIEXCEPTION("FitPoints: molecule has no atoms");
     if (options_.npoints < 1) throw PSIEXCEPTION("FitPoints: npoints must be positive");
+    if (options_.npoints > kMaxCandidates) {
+        throw PSIEXCEPTION("FitPoints: npoints exceeds the " + std::to_string(kMaxCandidates) +
+                           " candidate draws allowed per cloud");
+    }
+    if (!std::isfinite(options_.lolim) || !std::isfinite(options_.hilim)) {
+        throw PSIEXCEPTION("FitPoints: lolim and hilim must be finite");
+    }
+    if (options_.lolim < 0.0) throw PSIEXCEPTION("FitPoints: lolim must be nonnegative");
     if (!(options_.hilim > options_.lolim)) {
         throw PSIEXCEPTION("FitPoints: hilim must exceed lolim, or no point can be accepted");
     }
@@ -154,6 +163,10 @@ FitPoints::FitPoints(std::shared_ptr<Molecule> molecule, const FitPointsOptions&
         cx_[i] = molecule_->x(i);
         cy_[i] = molecule_->y(i);
         cz_[i] = molecule_->z(i);
+    }
+    // With no positive radius nothing is ever inside hilim (all-ghost input).
+    if (*std::max_element(maxenv_.begin(), maxenv_.end()) <= 0.0) {
+        throw PSIEXCEPTION("FitPoints: no atom has a positive van der Waals radius (ghost atoms have none)");
     }
 
     // lattice.F90:551-563.  Note the accumulation order: CamCASP sums the first
@@ -179,11 +192,19 @@ FitPoints::FitPoints(std::shared_ptr<Molecule> molecule, const FitPointsOptions&
 
     // lattice.F90:570-580.  Three deviates per candidate, in the order x, y, z,
     // drawn before the accept test and consumed whether or not it passes.
+    // CamCASP draws without limit; here a cloud still short after kMaxCandidates
+    // draws is refused, which leaves every completed cloud draw for draw intact.
     MaclarenRng rng(options_.seed);
     x_.reserve(options_.npoints);
     y_.reserve(options_.npoints);
     z_.reserve(options_.npoints);
     while (static_cast<int>(x_.size()) < options_.npoints) {
+        if (ncandidates_ == kMaxCandidates) {
+            throw PSIEXCEPTION("FitPoints: only " + std::to_string(x_.size()) + " of " +
+                               std::to_string(options_.npoints) + " points accepted after " +
+                               std::to_string(kMaxCandidates) +
+                               " candidate draws; the shell between lolim and hilim is empty or too thin");
+        }
         double p[3];
         p[0] = centre_[0] + dmax_ * (2.0 * rng.next() - 1.0);
         p[1] = centre_[1] + dmax_ * (2.0 * rng.next() - 1.0);

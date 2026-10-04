@@ -17,10 +17,14 @@ generated from `src/casimir/casimir.f90`; `oracle/latticedump` the fit
 points, from `src/random.f90` and `src/lattice.F90`. Regenerating them needs a
 CamCASP checkout, which is why the results are committed rather than computed
 at test time. The regeneration tooling is not tracked and is not needed by the
-retained tests. `camcasp_fit_points.npz` is byte-identical (sha256
-`aa450134…86870f1`) to the copy tracked at candidate commit
-`4189ded9cc8f319c8bc21bbe78960f0fab7e2eff`, which took it from the
-`ccasp-cleanup` worktree at `202c42217138`.
+retained tests. `camcasp_fit_points.npz` has sha256 `aa450134…86870f1`. As
+provenance breadcrumbs only: it is byte-identical to the copy in the
+unpublished integration commit `4189ded9cc8f319c8bc21bbe78960f0fab7e2eff`,
+which took it from an unpublished local checkout at `202c42217138`. Neither
+commit is on a public remote and `latticedump` is untracked, so regenerating
+the clouds from this repository alone has not been demonstrated; the tests
+check against this committed copy and the Maclaren stream values in
+`../test_isapol.py`.
 
 The grid is deliberately small. On the local non-FMA build, the full production grid
 (`n_r = 80`, `n_a = 590`, 139 830 points) also matches bit for bit in every coordinate,

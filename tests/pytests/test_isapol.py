@@ -533,6 +533,79 @@ def test_fit_points_rejects_empty_shell(reffit):
         psi4.core.FitPoints(mol, options)
 
 
+#: Child for the refusal cases: it must print its own refusal, so a parent-side
+#: timeout (an endless draw loop holds the GIL) can never pass as a refusal.
+_FIT_REFUSAL_CHILD = """
+import json, sys, time
+import psi4
+spec = json.loads(sys.argv[1])
+mol = psi4.geometry(spec["geometry"])
+mol.update_geometry()
+options = psi4.core.FitPointsOptions()
+for key, value in spec["options"].items():
+    setattr(options, key, value)
+start = time.perf_counter()
+try:
+    psi4.core.FitPoints(mol, options)
+except RuntimeError as error:
+    print("REFUSED", round(time.perf_counter() - start, 3), error)
+    sys.exit(0)
+print("ACCEPTED")
+sys.exit(3)
+"""
+
+
+@pytest.mark.parametrize("case, options, message", [
+    ("ghost_only", {}, "no atom has a positive van der Waals radius"),
+    ("water", {"lolim": -1.0, "hilim": -0.5}, "lolim must be nonnegative"),
+    ("water", {"hilim": math.inf}, "lolim and hilim must be finite"),
+    ("water", {"lolim": math.nan}, "lolim and hilim must be finite"),
+    ("water", {"lolim": 2.0, "hilim": 2.0 + 1e-15}, "after 1000000 candidate draws"),
+    ("water", {"npoints": 1000001}, "exceeds the 1000000 candidate draws"),
+])
+def test_fit_points_refuses_unsatisfiable_shells_and_terminates(reffit, tmp_path, case, options, message):
+    """Each of these drew forever before the bounds and the 1,000,000-draw cap."""
+    import json
+    import os
+    import subprocess
+    import sys
+    header = "units bohr\nno_com\nno_reorient\nsymmetry c1\n"
+    if case == "ghost_only":
+        geometry = header + "@He 0 0 0\n@He 0 0 3"
+    else:
+        geometry = header + "\n".join(f"{int(Z)} {x} {y} {z}" for Z, x, y, z in reffit["h2o_geom"])
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join([str(pathlib.Path(psi4.__file__).resolve().parents[1]),
+                                         env.get("PYTHONPATH", "")])
+    try:
+        done = subprocess.run([sys.executable, "-c", _FIT_REFUSAL_CHILD,
+                               json.dumps({"geometry": geometry, "options": options})],
+                              cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"FitPoints did not terminate for {case} {options}")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert done.stdout.startswith("REFUSED") and message in done.stdout, done.stdout
+
+
+def test_fit_points_ghosts_beside_real_atoms_stay_invisible(reffit):
+    """A ghost has no radius, so it neither excludes nor admits points (CamCASP)."""
+    geom = reffit["h2o_geom"]
+    real = _fit_molecule(geom)
+    ghosted = psi4.geometry("units bohr\nno_com\nno_reorient\nsymmetry c1\n"
+                            + "\n".join(f"{int(Z)} {x} {y} {z}" for Z, x, y, z in geom)
+                            + "\n@He 0.0 0.0 9.0")
+    ghosted.update_geometry()
+    options = psi4.core.FitPointsOptions()
+    options.npoints = 300
+    assert psi4.core.FitPoints.max_candidates == 1000000
+    assert psi4.core.FitPoints(real, options).ncandidates() < 1000000
+    b = psi4.core.FitPoints(ghosted, options)
+    xyz = np.column_stack([b.x(), b.y(), b.z()])
+    radii = np.array([psi4.core.isapol_vdw_radius(int(Z)) for Z, *_ in geom])
+    d = np.linalg.norm(xyz[:, None, :] - geom[None, :, 1:], axis=2)
+    assert b.npoints() == 300 and (d >= 2.0 * radii).all() and (d < 4.0 * radii).any(axis=1).all()
+
+
 def test_vdw_radius_tables_are_distinct():
     """MODULE radii is double precision; AtomProp's copy is float32-rounded.
 

@@ -240,9 +240,13 @@ def refine_streamed(models, points_bohr, packed_targets, *, target_origin=None, 
     :func:`isapol_refine.pack_lower_triangle`) belongs to ``models[t]``, and all
     columns share one declared target provenance.  The design is replayed twice
     by :class:`PackedDesignRows` and solved by ``core.isa_pfit_solve_rows_multi``
-    with ``NormalEquationsDSYSV`` unless ``options`` says otherwise, so each
-    result is the dense :func:`isapol_refine.refine` of its column up to
-    rounding, without that function's point cap.
+    with ``NormalEquationsDSYSV`` unless ``options`` says otherwise.  Each result
+    is the dense :func:`isapol_refine.refine` of its column, without that
+    function's point cap, up to the conditioning of the fit: with StreamingQR
+    the two agree to rounding, while the default normal equations amplify the
+    difference by about cond(H) (1e-8 relative overall, up to 9e-7 per
+    parameter, at the cond(H) ~ 3e9 seen on test clouds).  Supplied ``fields``
+    are used as given: ``damping`` applies only to fields computed here.
 
     Resources: ``max_bytes`` bounds this function's planned Python buffers (the
     row producer's plan, the point copy, computed fields and block-sized target
@@ -250,7 +254,7 @@ def refine_streamed(models, points_bohr, packed_targets, *, target_origin=None, 
     ``fields`` are charged by the row producer, ``packed_targets`` stay the
     caller's.  Targets are copied block by block and the replay digest refuses
     any change between the two passes.  Any fit that is not ``Solved`` raises
-    ``ValueError``.
+    ``ValueError`` (the dense ``refine`` raises ``RuntimeError``).
     """
     models = tuple(models)
     if not models or any(not isinstance(m, RefinementModel) for m in models):

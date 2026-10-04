@@ -623,7 +623,9 @@ void export_isapol(py::module& m) {
         .def_readwrite("seed", &FitPointsOptions::seed, "Seed for the point generator");
 
     py::class_<FitPoints, std::shared_ptr<FitPoints>>(m, "FitPoints",
-                                                      "Points at which the point-response refinement samples the potential")
+                                                      "Points at which the point-response refinement samples the "
+                                                      "potential; refused if still short after max_candidates draws")
+        .def_readonly_static("max_candidates", &FitPoints::kMaxCandidates, "Fixed bound on candidate draws per cloud")
         .def(py::init<std::shared_ptr<Molecule>, const FitPointsOptions&>(), "molecule"_a, "options"_a)
         .def("npoints", &FitPoints::npoints)
         .def("ncandidates", &FitPoints::ncandidates)

@@ -337,9 +337,8 @@ def test_shared_design_problems_match_their_lone_fits(solver):
         core.isa_pfit_solve_rows_multi([problem, problem], lambda: iter([(0, design, targets)]), options)
 
 
-@pytest.mark.parametrize("solver", ["NormalEquationsDSYSV", "StreamingQR"])
-def test_rows_multi_fixed_parameter_and_linear_constraint(solver):
-    """Fixed values and LC rows on the streamed path, against one augmented lstsq per RHS."""
+def _constrained_pair(calls=None):
+    """Two RHS sharing one design, with one fixed parameter and one LC row."""
     from psi4 import core
     problem, design, targets = row_fixture()
     model = problem.model
@@ -356,9 +355,19 @@ def test_rows_multi_fixed_parameter_and_linear_constraint(solver):
     stacked = np.column_stack((targets, targets[::-1]-1.))
 
     def blocks():
+        if calls is not None:
+            calls.append(1)
         for start in range(0, 6, 2):
             yield start, design[start:start+2].copy(), stacked[start:start+2].copy()
 
+    return problem, second, design, stacked, blocks
+
+
+@pytest.mark.parametrize("solver", ["NormalEquationsDSYSV", "StreamingQR"])
+def test_rows_multi_fixed_parameter_and_linear_constraint(solver):
+    """Fixed values and LC rows on the streamed path, against one augmented lstsq per RHS."""
+    from psi4 import core
+    problem, second, design, stacked, blocks = _constrained_pair()
     options = core.IsaPfitOptions()
     options.solver = getattr(core.IsaPfitSolver, solver)
     results = core.isa_pfit_solve_rows_multi([problem, second], blocks, options)
@@ -371,6 +380,40 @@ def test_rows_multi_fixed_parameter_and_linear_constraint(solver):
         assert result.status == core.IsaPfitStatus.Solved
         np.testing.assert_allclose(result.parameters, [.25, free[0]], rtol=1e-12, atol=1e-13)
         assert result.parameters[0] == .25
+
+
+@pytest.mark.parametrize("chunk", [256, 100000])
+def test_streaming_qr_charges_the_live_column_copy(chunk):
+    """StreamingQR keeps its shared chunk buffer, chunk*(nf+nt), alive while each
+    problem's column copy, chunk*(nf+1), solves; both are charged before any row
+    is requested.  Here nf = 1 (one fixed parameter) and nt = 2."""
+    from psi4 import core
+    calls = []
+    problem, second, _, _, blocks = _constrained_pair(calls)
+    options = core.IsaPfitOptions()
+    options.solver = core.IsaPfitSolver.StreamingQR
+    options.qr_chunk_rows = 1
+    reference = core.isa_pfit_solve_rows_multi([problem, second], blocks, options)
+    options.qr_chunk_rows = chunk
+    results = core.isa_pfit_solve_rows_multi([problem, second], blocks, options)
+    required = results[0].diagnostics.work_budget_bytes
+    assert required == reference[0].diagnostics.work_budget_bytes+8*(chunk-1)*((1+2)+(1+1))
+    for got, want in zip(results, reference):  # chunking buffers rows; it never changes the arithmetic
+        assert got.status == core.IsaPfitStatus.Solved
+        assert got.diagnostics.work_budget_bytes == required
+        assert list(got.parameters) == list(want.parameters)
+    options.maximum_work_bytes = required
+    exact = core.isa_pfit_solve_rows_multi([problem, second], blocks, options)
+    assert [list(r.parameters) for r in exact] == [list(r.parameters) for r in results]
+    options.maximum_work_bytes = required-1
+    with pytest.raises(Exception, match="maximum_work_bytes"):
+        core.isa_pfit_solve_rows_multi([problem, second], blocks, options)
+    # What the omitted column-copy buffer used to admit is now refused up front.
+    del calls[:]
+    options.maximum_work_bytes = required-8*chunk*(1+1)
+    with pytest.raises(Exception, match="kernel numerical buffers exceed maximum_work_bytes"):
+        core.isa_pfit_solve_rows_multi([problem, second], blocks, options)
+    assert not calls
 
 
 def _water_like_models(frequencies=(0., .6)):

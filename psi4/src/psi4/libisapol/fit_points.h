@@ -117,8 +117,16 @@ struct FitPointsOptions {
 ///   * Rejected candidates still consume three deviates, drawn x, y, z.
 ///
 /// The probe charge (`LatticeCharge`) belongs to the refinement, not here.
+///
+/// Termination: at most kMaxCandidates candidates are drawn per cloud, and a
+/// cloud still short of npoints then throws.  Nonfinite or negative cutoffs,
+/// hilim <= lolim, npoints > kMaxCandidates and a molecule with no positive van
+/// der Waals radius (only ghosts) are refused before any draw.
 class FitPoints {
    public:
+    /// Fixed bound on candidate draws per cloud (3 deviates each).
+    static constexpr int kMaxCandidates = 1000000;
+
     FitPoints(std::shared_ptr<Molecule> molecule, const FitPointsOptions& options);
 
     int npoints() const { return static_cast<int>(x_.size()); }

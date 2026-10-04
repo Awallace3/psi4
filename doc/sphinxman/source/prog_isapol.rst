@@ -221,7 +221,12 @@ Point-response fitting (PFIT)
      from ``MaclarenRng``, CamCASP's ``sdprnd``/``dprand``, and reads the
      double-precision ``MODULE radii`` table (``isapol_vdw_radius``), not the
      float32 ``AtomProp`` copy (``isapol_vdw_radius_bondi``). Both the stream
-     and the clouds reproduce CamCASP bit for bit on the local build.
+     and the clouds reproduce CamCASP bit for bit on the local build. Unlike
+     CamCASP, which draws without limit, a cloud still short after
+     ``FitPoints.max_candidates`` (1,000,000) candidate draws is refused, as
+     are nonfinite or negative cutoffs and molecules with only ghost atoms;
+     completed clouds are unchanged. The point arrays and ``MaclarenRng.take``
+     allocate without a ``max_bytes`` plan.
    * ``psi4.core.isa_t_functions(rank, point, site, frame, damping=0)`` is one
      row of pfit's T matrix: the irregular solid harmonics
      (``isa_irregular_solid_harmonics``; rank 0 is 1/r) of the point in the
@@ -241,8 +246,12 @@ Point-response fitting (PFIT)
      several targets (typically one per frequency) over one complete cloud.
      ``PackedDesignRows`` replays the shared design rows in bounded blocks, and
      ``core.isa_pfit_solve_rows_multi`` traverses them twice in total and
-     refuses a second pass whose content differs. Each result equals the dense
-     fit of its column up to rounding.
+     refuses a second pass whose content differs. Each result is the dense fit
+     of its column up to the fit's conditioning: StreamingQR agrees to
+     rounding, while the default ``NormalEquationsDSYSV`` differs by about
+     cond(H) times rounding (1e-8 relative, up to 9e-7 per parameter, at the
+     cond(H) ~ 3e9 seen on test clouds). Supplied ``fields`` are used as given,
+     in both ``refine`` and here; ``damping`` applies only to computed fields.
    * ``isapol_pfit_stream.fitted_point_targets(auxiliary, points, C)`` turns
      p x p fitted AUX coefficient responses (for example a bounded response
      node's ``target_response``) into packed targets -P^T C P, where
@@ -255,7 +264,7 @@ Point-response fitting (PFIT)
      ``IsaPfitOptions.maximum_work_bytes``. These are plans, not measured RSS;
      caller-owned inputs, Libint workspace and interpreter overhead are not
      charged. A fit that is not ``Solved`` withholds its parameters, so
-     ``refine`` and ``refine_streamed`` raise.
+     ``refine`` raises ``RuntimeError`` and ``refine_streamed`` ``ValueError``.
    * The fit is not iterated, and anchors are neither symmetrized nor repaired.
      ``copy_anchor_discrepancy`` reports, rather than repairs, COPY-equivalent
      sites whose local anchors disagree. A refined tensor is a different model
