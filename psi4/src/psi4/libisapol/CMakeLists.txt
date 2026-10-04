@@ -23,6 +23,13 @@ target_link_libraries(isapol
     Libint2::cxx
   )
 
+# aux_coulomb.cc and orbital_coulomb.cc include the Libint2 engine and each take ~4.3 GiB
+# to compile, so throttle them like l2intf (libmints) to avoid OOM with Ninja parallelism.
+cmake_host_system_information(RESULT _numcore QUERY NUMBER_OF_PHYSICAL_CORES)
+if(_numcore LESS 5 AND UNIX AND NOT APPLE)
+  set_property(TARGET isapol PROPERTY JOB_POOL_COMPILE one_job)
+endif()
+
 # This module exists to reproduce another code's arithmetic bit for bit, so the
 # compiler must not be free to re-associate it.  Without this, GCC contracts
 # `r*x + c` (isa_grid.cc) into an FMA on any host that has one, which shifts
