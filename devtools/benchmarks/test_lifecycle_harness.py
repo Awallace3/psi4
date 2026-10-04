@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import build_receipt
-from lifecycle_campaign import compare_arms
+from lifecycle_campaign import compare_arms, scratch_status
 from saptdft_cuest_grac import atomic_json
 
 
@@ -50,6 +50,14 @@ class TestReceipt(unittest.TestCase):
         self.assertFalse(target.exists())
         atomic_json(target, {"shift_B": 0.1})
         self.assertEqual(json.loads(target.read_text()), {"shift_B": 0.1})
+
+    def test_missing_scratch_is_recorded(self):
+        missing = Path(self.temp.name) / "deleted-scratch"
+        self.assertFalse(scratch_status(missing)["exists"])
+        self.assertIn("error", scratch_status(missing))
+        existing = scratch_status(Path(self.temp.name))
+        self.assertTrue(existing["exists"])
+        self.assertGreater(existing["free_bytes"], 0)
 
 
 class TestAccuracy(unittest.TestCase):

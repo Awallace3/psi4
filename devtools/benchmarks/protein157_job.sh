@@ -35,9 +35,9 @@ set -u
 export PYTHONNOUSERSITE=1
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export OMP_NUM_THREADS=8 MKL_NUM_THREADS=8
-scratch_base="${TMPDIR:-/scratch}"
-[[ -d "$scratch_base" ]] || scratch_base=/scratch
-export TMPDIR="$scratch_base/psi4-protein157-$SLURM_JOB_ID"
+# The previous allocation inherited /tmp; use explicit node-local disk.
+# Never reuse another job's directory or remove shared scratch.
+export TMPDIR="/scratch/$USER/psi4-protein157-$SLURM_JOB_ID"
 mkdir -p "$TMPDIR"
 export SCRATCH="$TMPDIR" PSI_SCRATCH="$TMPDIR"
 mkdir -p "$run/metadata"
@@ -49,6 +49,8 @@ metadata="$run/metadata/$SLURM_JOB_ID"
     printf 'harness_commit=%s\nscientific_commit=%s\njob=%s\nstarted=%s\n' \
         "$harness_commit" "$new_commit" "$SLURM_JOB_ID" "$(date -Iseconds)"
     scontrol show job "$SLURM_JOB_ID" -o
+    df -h "$TMPDIR"
+    df -i "$TMPDIR"
 } > "$metadata.env"
 term_received=0
 child=
@@ -66,7 +68,7 @@ on_exit() {
 trap on_term TERM
 trap on_exit EXIT
 "$CONDA_PREFIX/bin/python" "$harness/devtools/benchmarks/lifecycle_campaign.py" \
-    --output "$run/results-$SLURM_JOB_ID" --protein157 --repeats 1 \
+    --output "$run/results-$SLURM_JOB_ID" --protein157 --repeats 1 --gpu-first \
     --threads 8 --memory "256 GiB" --case-timeout 10800 --require-in-core \
     --old-source "$old" --old-commit "$old_commit" \
     --old-package "$old/build_saptdft_cuest_head/stage/lib/psi4" \

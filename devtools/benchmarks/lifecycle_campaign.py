@@ -27,6 +27,15 @@ ARMS = [
     ("new-gpu-gpu-sad", "new", "gpu", "gpu"),
 ]
 
+def scratch_status(path):
+    try:
+        st = os.statvfs(path)
+        return {"path": str(path), "exists": True,
+                "writable": os.access(path, os.W_OK),
+                "free_bytes": st.f_bavail * st.f_frsize, "free_inodes": st.f_favail}
+    except OSError as exc:
+        return {"path": str(path), "exists": path.exists(), "error": str(exc)}
+
 def compare_arms(paired):
     """Gate regressions within a backend; report baseline CPU/GPU disagreement."""
     comparisons = []
@@ -69,6 +78,8 @@ def main():
                         help="Explicitly run only the separately resourced Protein157 case")
     parser.add_argument("--case-timeout", type=int, default=2400)
     parser.add_argument("--require-in-core", action="store_true")
+    parser.add_argument("--gpu-first", action="store_true",
+                        help="Run all GPU arms before long CPU arms for preemption resilience")
     args = parser.parse_args()
     if args.repeats < 1 or args.threads < 1:
         parser.error("repeats and threads must be positive")
@@ -103,6 +114,7 @@ def main():
         "harness_commit": subprocess.check_output(
             ["git", "-C", str(script.parent), "rev-parse", "HEAD"], text=True).strip(),
         "case_timeout_s": args.case_timeout, "require_in_core": args.require_in_core,
+        "gpu_first": args.gpu_first,
         "repeats": args.repeats, "threads": args.threads, "memory": args.memory,
         "timing": "fresh-process energy() wall; inclusive backend/SCF setup, excludes import and pre-count bases",
         "script_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
@@ -118,6 +130,8 @@ def main():
             order = ARMS[repeat % len(ARMS):] + ARMS[:repeat % len(ARMS)]
             if repeat % 2:
                 order = list(reversed(order))
+            if args.gpu_first:
+                order.sort(key=lambda arm: arm[2] != "gpu")
             paired = {}
             for arm, version, mode, sad in order:
                 name = f"{system}-{basis}-{arm}-{repeat + 1}"
@@ -130,6 +144,9 @@ def main():
                 scratch = Path(os.environ["TMPDIR"]) / name
                 scratch.mkdir()
                 env["PSI_SCRATCH"] = env["SCRATCH"] = str(scratch)
+                env["TMPDIR"] = str(scratch)
+                before_scratch = scratch_status(scratch)
+                atomic_json(directory / "scratch-before.json", before_scratch)
                 cmd = [sys.executable, str(script), "--case", "--system", system, "--basis", basis,
                        "--mode", mode, "--output", str(directory), "--threads", str(args.threads),
                        "--memory", args.memory, "--grac-compute", "ITERATIVE",
@@ -150,7 +167,8 @@ def main():
                     except subprocess.TimeoutExpired:
                         rc = 124
                 item = {"name": name, "arm": arm, "system": system, "basis": basis,
-                        "repeat": repeat + 1, "returncode": rc, "process_wall_s": time.perf_counter() - start}
+                        "repeat": repeat + 1, "returncode": rc, "process_wall_s": time.perf_counter() - start,
+                        "scratch_before": before_scratch, "scratch_after": scratch_status(scratch)}
                 manifest["records"].append(item)
                 atomic_json(args.output / "campaign.json", manifest)
                 print("END", name, rc, f"{item['process_wall_s']:.2f}s", flush=True)
