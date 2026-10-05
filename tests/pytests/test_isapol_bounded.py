@@ -414,3 +414,36 @@ def test_public_declaration_refusals(small_water, tmp_path, key, value, error, m
         driver.bounded_properties(wfn, recipe, **dict(args, **{key: value}), scratch_directory=tmp_path,
                                   publish_qcvariables=True, log=StageLog(0))
     assert not list(tmp_path.iterdir()) and not _owned_names(wfn)
+
+
+@pytest.mark.parametrize('small_water', ['water'], indirect=True)
+def test_reserved_publication_labels_refuse_before_any_report_but_the_model_keeps_them(small_water, tmp_path):
+    """TOTAL/INCOMPLETE labels refuse publication up front; unpublished runs keep them, look-alikes publish."""
+    from dataclasses import replace
+    wfn, recipe, args = small_water
+
+    def labelled(*labels):
+        return [replace(s, label=l) for s, l in zip(args['sites'], labels)]
+
+    driver.bounded_properties(wfn, recipe, **args, scratch_directory=tmp_path, publish_qcvariables=True,
+                              log=StageLog(0))
+    published = {key: wfn.variable(key) for key in _owned_names(wfn) if wfn.has_scalar_variable(key)}
+    for labels in (('O', 'Total', 'H2'), ('INCOMPLETE', 'H1', 'H2')):
+        messages = []
+        with pytest.raises(ValueError, match='reserved'):
+            driver.bounded_properties(wfn, recipe, **dict(args, sites=labelled(*labels)),
+                                      scratch_directory=tmp_path, publish_qcvariables=True,
+                                      log=StageLog(1, writer=messages.append))
+        text = ''.join(messages)
+        assert 'Stage FAILED: Bounded input validation' in text and text.count('Stage complete') == 0
+        assert {key: wfn.variable(key) for key in published} == published and not list(tmp_path.iterdir())
+    kept = driver.bounded_properties(wfn, recipe, **dict(args, sites=labelled('O', 'Total', 'incomplete')),
+                                     scratch_directory=tmp_path, log=StageLog(0))
+    assert kept.dispersion.labels == ('O', 'Total', 'incomplete')
+    assert {key: wfn.variable(key) for key in published} == published
+    similar = driver.bounded_properties(wfn, recipe, **dict(args, sites=labelled('O', 'Totals', 'H_TOTAL')),
+                                        scratch_directory=tmp_path, publish_qcvariables=True, log=StageLog(0))
+    assert similar.dispersion.labels == ('O', 'Totals', 'H_TOTAL')
+    assert wfn.has_variable('ATOMIC REFINED DISPERSION C6 O TOTALS')
+    assert wfn.has_variable('ATOM H_TOTAL C6 REFINED DISPERSION COEFFICIENT')
+    assert np.array_equal(_c6(kept), _c6(similar))

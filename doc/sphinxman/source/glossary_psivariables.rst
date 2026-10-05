@@ -263,9 +263,11 @@ PSI Variables by Alpha
    ``ATOMIC_REFINED_DISPERSION`` :py:func:`~psi4.driver.oeprop` request, and
    also by a direct ``isapol_bounded.bounded_properties`` or
    ``isapol_refine.refined_isotropic_dispersion`` call that publishes to a
-   wavefunction. The oeprop route removes them when an ``ATOMIC_*`` request
-   starts and when it fails; a failed direct call keeps the latest (possibly
-   partial) publication. See :ref:`sec:isapol`.
+   wavefunction. Publication is not transactional. The oeprop route removes
+   them when an ``ATOMIC_*`` request starts and when it raises an
+   ``Exception`` (not on an interrupt); a direct call that fails before
+   publication keeps the latest publication, and one failing during or after
+   it can leave a partial or its own set. See :ref:`sec:isapol`.
 
 .. psivar:: BRUECKNER CONVERGED
 

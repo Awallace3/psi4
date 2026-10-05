@@ -160,16 +160,17 @@ sites give a complete C6 and an ``INCOMPLETE`` C8.
 Every ``ATOMIC_*`` request first forgets the previous result: the attached
 record and every report-owned ``ATOMIC REFINED DISPERSION ...`` and
 ``ATOM <label> C<n> REFINED DISPERSION COEFFICIENT ...`` name are removed
-before anything is validated, and again if the request raises at any point,
-including after the coefficients were published (for example while the final
-resource totals are reported, or part-way through publication). A refused or
-failed request therefore leaves neither a stale record nor stale
-coefficients, and ``psi4.atomic_property_result`` raises. If that cleanup
+before anything is validated, and again if the request raises an
+``Exception`` at any point, including after the coefficients were published
+(for example while the final resource totals are reported, or part-way
+through publication, which is not transactional). A refused or failed request
+therefore leaves neither a stale record nor stale coefficients, and
+``psi4.atomic_property_result`` raises. This cleanup is not a rollback: if it
 itself fails, its error propagates (chained to the original) and owned names
-may remain. Every other variable, including the unrefined
-``ATOMIC DISPERSION`` names, other ``ATOM`` names and global variables, is
-left alone.
-A stage that fails is closed in the output as
+may remain, and an interrupt (``KeyboardInterrupt``, ``SystemExit``) is not
+caught, so names published before it remain. Every other variable, including
+the unrefined ``ATOMIC DISPERSION`` names, other ``ATOM`` names and global
+variables, is left alone. A stage that fails is closed in the output as
 ``Stage FAILED: <stage> (<s>): <error>`` and the error is re-raised. A
 property request without any ``ATOMIC_*`` name and without ``atomic_backend``
 is ordinary :py:func:`~psi4.driver.oeprop` and touches none of this.
@@ -340,10 +341,15 @@ For an already converged ``wfn`` and those explicit declarations:
 ``bounded_properties`` writes nothing to the wavefunction unless
 ``publish_qcvariables=True``, which the oeprop route sets for
 ``ATOMIC_REFINED_DISPERSION``. Called directly it keeps the stage-06
-publication semantics: names describe the latest successful publication, and
-a call that fails leaves the previous publication, or a partial one if the
-failure occurs while or after publishing. Only the oeprop route clears them on
-failure.
+publication semantics: names describe the latest successful publication; a
+call refused, or failing, before publication leaves the previous publication
+unchanged; publication itself is not transactional, so a failure while
+variables are being set can leave a partial set, and a failure after it leaves
+that call's publication. When publishing, labels that are ``TOTAL`` or
+``INCOMPLETE`` in any case, contain whitespace or collide when upper-cased are
+refused during ``Bounded input validation`` (closed as ``Stage FAILED``),
+before any response work or variable is written; without publication the
+model keeps its labels. Only the oeprop route clears the names on failure.
 
 The numerical settings above are a declaration, not transferable defaults or a
 claim of agreement for an arbitrary molecule. In particular, different kernel

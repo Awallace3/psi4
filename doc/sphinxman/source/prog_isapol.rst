@@ -372,11 +372,12 @@ Property orchestration
    node is declared at every node, node 1 included, so the stage-06 contraction
    sees one declared model; the explicit list reproduces node 1's cutoff scan
    exactly, which is checked; the parameter cap is admitted in a
-   ``Refinement model admission`` stage at node 1, before any targets, and each node's
-   targets have their own stage. A failed stage is closed as ``Stage FAILED``
-   and re-raised, with scratch removed and no result returned. Published
-   variables follow the stage-06 last-success semantics on the direct API; the
-   oeprop route additionally removes them on any failure.
+   ``Refinement model admission`` stage at node 1, before any targets, and
+   each node's targets have their own stage. A failed stage is closed as
+   ``Stage FAILED`` and re-raised, with scratch removed and no result
+   returned. Published variables follow the non-transactional, last-success
+   semantics above on the direct API; the oeprop route additionally removes
+   them when the request raises an ``Exception`` (not on an interrupt).
 
 The ISA and MBIS partitions (density partitions, not orbital rotations) are
 built on top of these blocks and are added separately; until then a request
